@@ -141,7 +141,13 @@ graph TD
 * **코드-주석 불일치 감지**: 소스코드에 삽입된 자연어 주석과 실제 실행되는 쿼리 연산 로직 사이에 모순이 감지되는 경우, 실제 쿼리 코드를 진실의 원천으로 삼아 명세서를 작성하되, 개요 섹션 최상단에 `[🚨 주석 불일치 경고] {모순내용}` 경고 문구를 포함시키도록 설계되었습니다.
 * **보완 스크립트 추출**: 분석 완료 시, AI가 역추론한 컬럼 설명 정보를 활용해 `sp_addextendedproperty` 및 `sp_updateextendedproperty` 쿼리가 조립된 SQL 정화 스크립트 파일(`*_MetadataCleansing.sql`)을 디렉토리에 항상 파일로 덤프해 보존합니다.
 
-### 4.3. 3단계 신뢰성 검증 파이프라인 (Verification Pipeline)
+### 4.3. T-SQL AST 정적 분석 고도화 (ScriptDom) 및 버전별 파서 팩토리
+* **T-SQL AST 구문 분석**: Microsoft 공식 TransactSql.ScriptDom 패키지를 이용해 SP DDL을 TSqlFragment AST로 파싱하고 `TSqlFragmentVisitor`를 상속받은 `SpStructureVisitor`를 기동하여 정적 메타데이터를 수집합니다.
+* **ExplicitVisit 기반 컨텍스트 스택**: AST 순회 시 Statement 및 Specification 구체적 노드(SelectStatement/QuerySpecification, InsertStatement/InsertSpecification 등)를 `ExplicitVisit` 오버라이드로 인터셉트하고 `_statementContext` 스택에 Push/Pop하여, 순회 대상인 `NamedTableReference`가 실질적으로 어떤 CRUD 성격의 쿼리 대상인지를 1:1로 정확하게 맵핑해 분류 수집합니다.
+* **UDF 및 Linked Server 원격 참조 수집**: `FunctionCall`에서 호출 타겟이 존재하는 스키마 수반 함수 호출(예: `dbo.fn_GetBonus`)을 UDF로 수집하고, `NamedTableReference`에서 `ServerIdentifier`가 존재하는 4파트 식별자 참조를 Linked Server로 수집하여 제어 흐름 요약에 경고를 인클루딩합니다.
+* **호환성 레벨 파서 다변화**: 레거시 DB 연결 시 호환성 수준(`compatibility_level`)을 자동 조회해 `TSql100Parser` ~ `TSql160Parser`를 동적으로 매핑 생성하여, 구버전 T-SQL 구문 구동 시 발생하는 컴파일/파싱 차단 예외를 원천 차단합니다.
+
+### 4.4. 3단계 신뢰성 검증 파이프라인 (Verification Pipeline)
 생성된 명세서의 무결성과 비즈니스 완성도를 보장하기 위해 L1, L2, L3 단계가 유기적으로 연결된 검증 아키텍처를 가동합니다.
 
 ```mermaid
@@ -205,12 +211,12 @@ graph TD
     L1ReCheck -- "성공" --> HumanReview
 ```
 
-#### 4.3.1. Level 1: 기계적 무결성 검증 (L1 Linter)
+#### 4.4.1. Level 1: 기계적 무결성 검증 (L1 Linter)
 * **정적 헤더 검사**: Markdig AST 파서를 가동해 명세서 내 5대 필수 대분류 헤더(`## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`)가 누락 없이 정확한 대소문자와 명칭으로 구성되었는지 점검합니다.
 * **다이어그램 문법 컴파일**: 명세서에 포함된 Mermaid 다이어그램 블록을 추출해 `mermaid-cli`로 백그라운드 컴파일을 수행하며, 문법 오류 감지 시 에러 메시지를 수집합니다.
 * **정적 자가 보완**: 정적 검증 실패 시, 구체적인 구문 오류 내용과 수정 방향이 가이드된 `SuggestedPromptFix`를 조립해 AI 모델에게 즉각 자가 수정을 재요청합니다.
 
-#### 4.3.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
+#### 4.4.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
 * **동적 모드 분기**: `ActorEffort` 설정값에 따라 검증 및 생성 경로가 이원화됩니다.
   * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후, 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 `maxAttempts` 한도 내에서 피드백 로그를 누적하며 자가 수정 루프를 가동합니다.
   * **dynamic 모드 (병렬 협업)**: 다형성 및 앙상블 효과를 극대화하는 dynamic 아키텍처 경로입니다. (상세 협업 시퀀스는 상위 통합 검증 파이프라인 흐름도 참고)
@@ -219,12 +225,12 @@ graph TD
 * **Critic 채점 및 Fast-Pass 판정 (2단계)**: Critic 에이전트가 각 후보에 대해 정량 채점(5대 기준 각 10점, 총 50점 만점)을 실시하고 100점 만점으로 정규화합니다. L1 검증을 통과하고 Critic 결함이 없으며 90점 이상인 후보가 있다면 **Fast-Pass로 최고 점수 후보를 즉시 채택**하고 합성을 생략합니다. (동점 시 저-Effort 우선순위)
 * **Consolidation 합성 (3단계)**: 완벽한 후보가 없을 시에만 구동됩니다. 영역별 최고 득점을 기록한 후보의 파트를 진실의 원천으로 조립하여 결점을 보완한 단일 통합 명세서를 합성합니다.
 
-#### 4.3.3. Level 3: 개발자 최종 검토 및 동기화 (L3 Human-in-the-loop)
+#### 4.4.3. Level 3: 개발자 최종 검토 및 동기화 (L3 Human-in-the-loop)
 * **피드백 수동 반영**: TUI 화면에 명세서 미리보기가 렌더링되며 개발자가 '승인', '취소', '피드백 입력' 중 하나를 선택합니다. 피드백 입력 시 사용자의 상세 요구사항을 컨텍스트에 추가하여 명세서를 재생성하고, 재생성된 결과물에 대해 L1 정적 검사 및 AI 자가 수정 루프를 1회 더 구동해 안정성을 유지합니다.
 * **DB 동기화 제어**: 최종 승인 단계에서 개발자에게 DB 역반영 동의 여부를 확인하여, 동의할 경우에만 보완 SQL 스크립트(`*_MetadataCleansing.sql`)를 호출하여 대상 데이터베이스의 Extended Properties 속성 주석을 정화합니다.
 * **추론 로그 보존**: 파이프라인 진행 과정에서 축적된 모든 AI 모델의 깊은 생각/추론 내용(Thinking log) 및 Critic/Consolidator 리뷰 추론 텍스트를 취합하여 `{Schema}.{Name}_Thinking.md` 파일로 자동 기록하여 보존합니다.
 
-### 4.4. 다중 AI 공급자(Multi-LLM Provider) 추상화
+### 4.5. 다중 AI 공급자(Multi-LLM Provider) 추상화
 * **Decoupling 계약**: LLM 통신과 페이로드 직렬화 사양을 `IAiClient` 계약 뒤로 격리하였습니다. 비즈니스 파이프라인인 `AiService`는 하위 전송 메커니즘을 인지하지 않습니다.
 * **공급자별 독립 클라이언트**:
   * **OpenAiClient**: OpenAI 공식 SDK, gpt-5 Responses API 지원, o1/o3 추론 모델 규격(`reasoning_effort` 기본값 "medium" 지정 등) 대응 및 스트리밍 폐지 대응.
@@ -234,7 +240,7 @@ graph TD
   * **ZaiClient**: Z.ai AI 플랫폼 연동 규격 및 추론 과정(Reasoning Process) 수집 대응.
 * **설정 기반 동적 DI**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입하는 런타임 다형성을 확보했습니다.
 
-### 4.5. 소스코드 정합성 검증 엔진 (Validator)
+### 4.6. 소스코드 정합성 검증 엔진 (Validator)
 마이그레이션된 소스코드가 원래의 비즈니스 기능 명세서(Spec) 및 기존 Legacy DB SP의 구동 결과 데이터와 일치하는지 판정하는 정합성 검증 시스템 흐름은 다음과 같습니다.
 
 ```mermaid
@@ -275,19 +281,13 @@ graph TD
   * **Java Process Runner**: 타겟 클래스나 JAR를 외부 Java 프로세스로 기동하고 입력 인자를 stdin JSON 스트림으로 전달하며 결과를 stdout으로 수집합니다. 30초 타임아웃을 연결해 CLI 무한 대기 교착을 차단합니다.
 * **유연한 1:1 데이터 동등성 비교**: 레거시 DB SP를 돌려 수집한 `_legacy_results.json`과 타겟 실행 결과를 덤프한 `_target_results.json`을 대조합니다. 단순 텍스트 비교 시 발생하는 실수 소수점 끝자리 차이 및 DateTime 날짜 포맷팅 문자 표현 차이는 타입 감지 후 `NormalizeValueString`을 통해 정형화한 후 동등성을 평가하여 False Positive(거짓 불일치) 경고를 방지합니다.
 
-### 4.6. 관계지향 모의 데이터 적재 및 수명주기 격리 (Sandbox Seeding)
+### 4.7. 관계지향 모의 데이터 적재 및 수명주기 격리 (Sandbox Seeding)
 * **관계지향 모의 데이터 생성**: 개발/검증용 실제 운영 데이터 반출이 불가능한 환경을 타개하기 위해, AI가 참조 테이블 스키마 및 JOIN 조건 등을 파악하여 상호 참조 무결성을 충족하는 모의 데이터를 `MockDataDto` 형태로 생성하고 로컬 캐싱합니다.
 * **Seeding 수명주기**: 데이터 정합성 수집 실행 직전 `SandboxSeedingService`가 가동되어 캐싱된 관계형 모의 데이터를 대상 샌드박스 데이터베이스에 적재(Seed)하며, 수집 작업이 종료되는 즉시 데이터를 자동으로 소거(Truncate/Delete)함으로써 샌드박스 DB의 무결 상태를 완벽하게 복원합니다.
 
-### 4.7. SHA-256 해시 기반 로컬 증분 캐싱
+### 4.8. SHA-256 해시 기반 로컬 증분 캐싱
 * **복합 시그니처 해시 계산**: 대상 SP의 DDL 본문 텍스트와 재귀적으로 수집된 모든 참조 UDF/SP/테이블의 DDL 메타데이터를 개체명 순서로 정렬 및 결합하여 단일 SHA-256 해시값으로 산출합니다.
 * **증분 분석 스킵**: 로컬 `./output/.sp_cache_index.json`에 기록된 기존 해시 시그니처와 대조하여 일치하고, 기존 저장된 명세서 마크다운 파일이 물리적으로 보존되어 있는 것이 확인되면 AI 모델 API 호출과 3단계 검증 프로세스 전체를 스킵하여 리소스 비용을 획기적으로 절약합니다.
-
-### 4.8. T-SQL AST 정적 분석 고도화 (ScriptDom) 및 버전별 파서 팩토리
-* **T-SQL AST 구문 분석**: Microsoft 공식 TransactSql.ScriptDom 패키지를 이용해 SP DDL을 TSqlFragment AST로 파싱하고 `TSqlFragmentVisitor`를 상속받은 `SpStructureVisitor`를 기동하여 정적 메타데이터를 수집합니다.
-* **ExplicitVisit 기반 컨텍스트 스택**: AST 순회 시 Statement 및 Specification 구체적 노드(SelectStatement/QuerySpecification, InsertStatement/InsertSpecification 등)를 `ExplicitVisit` 오버라이드로 인터셉트하고 `_statementContext` 스택에 Push/Pop하여, 순회 대상인 `NamedTableReference`가 실질적으로 어떤 CRUD 성격의 쿼리 대상인지를 1:1로 정확하게 맵핑해 분류 수집합니다.
-* **UDF 및 Linked Server 원격 참조 수집**: `FunctionCall`에서 호출 타겟이 존재하는 스키마 수반 함수 호출(예: `dbo.fn_GetBonus`)을 UDF로 수집하고, `NamedTableReference`에서 `ServerIdentifier`가 존재하는 4파트 식별자 참조를 Linked Server로 수집하여 제어 흐름 요약에 경고를 인클루딩합니다.
-* **호환성 레벨 파서 다변화**: 레거시 DB 연결 시 호환성 수준(`compatibility_level`)을 자동 조회해 `TSql100Parser` ~ `TSql160Parser`를 동적으로 매핑 생성하여, 구버전 T-SQL 구문 구동 시 발생하는 컴파일/파싱 차단 예외를 원천 차단합니다.
 
 ---
 
