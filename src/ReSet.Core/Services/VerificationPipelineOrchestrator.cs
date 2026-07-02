@@ -401,7 +401,12 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 이종 모델 합성 에이전트(Consolidator) 구동 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}, {_consolidatorEffort ?? "medium"} effort)...{scoreSummary}");
                     try
                     {
-                        var consolidatorResult = await _consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), null, _consolidatorEffort ?? "medium", cancellationToken);
+                        AiResult consolidatorResult;
+                        using (var progressScope = _userInteraction.CreateProgressScope("Consolidator 합성") ?? NullProgressScope.Instance)
+                        {
+                            progressScope.AddTask("cons", $"{_consolidatorService.ModelName} 합성 중...");
+                            consolidatorResult = await WrapWithProgress(_consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), null, _consolidatorEffort ?? "medium", cancellationToken), progressScope, "cons");
+                        }
                         specificationMarkdown = consolidatorResult.Content;
                         spDef.RawPromptContext = $"=== [System Prompt] ===\n{consolidatorResult.SystemPrompt}\n\n=== [User Prompt] ===\n{consolidatorResult.UserPrompt}";
 
@@ -432,7 +437,12 @@ namespace ReSet.Core.Services
                         _userInteraction.NotifyStatus("합성본에서 정적 에러가 검출되어 AI 자가 수정 1회 진행합니다.");
                         try
                         {
-                            var consolidatorSelfFixResult = await _consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), finalL1.SuggestedPromptFix, _consolidatorEffort ?? "medium", cancellationToken);
+                            AiResult consolidatorSelfFixResult;
+                            using (var progressScope = _userInteraction.CreateProgressScope("Consolidator 자가 수정") ?? NullProgressScope.Instance)
+                            {
+                                progressScope.AddTask("selffix", $"{_consolidatorService.ModelName} 자가 수정 중...");
+                                consolidatorSelfFixResult = await WrapWithProgress(_consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), finalL1.SuggestedPromptFix, _consolidatorEffort ?? "medium", cancellationToken), progressScope, "selffix");
+                            }
                             specificationMarkdown = consolidatorSelfFixResult.Content;
                             spDef.RawPromptContext = $"=== [System Prompt] ===\n{consolidatorSelfFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{consolidatorSelfFixResult.UserPrompt}";
 
@@ -471,7 +481,12 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
-                        var aiResult = await _aiService.GenerateSpecificationAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken);
+                        AiResult aiResult;
+                        using (var progressScope = _userInteraction.CreateProgressScope("명세서 생성") ?? NullProgressScope.Instance)
+                        {
+                            progressScope.AddTask("gen", $"{_aiService.ModelName} 분석 중...");
+                            aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "gen");
+                        }
                         specificationMarkdown = aiResult.Content;
                         spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
                         genSuccess = true;
@@ -540,7 +555,11 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
                     try
                     {
-                        l2Result = await _criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken);
+                        using (var progressScope = _userInteraction.CreateProgressScope("L2 교차 리뷰") ?? NullProgressScope.Instance)
+                        {
+                            progressScope.AddTask("review", $"{_criticService.ModelName} 리뷰 중...");
+                            l2Result = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "review");
+                        }
                         reviewSuccess = true;
                         accumulatedThinking.AppendLine($"### [Critic] Attempt {attempt} Review Thinking");
                         accumulatedThinking.AppendLine($"- **AI Provider**: {_criticService.ProviderName}");
@@ -656,7 +675,12 @@ namespace ReSet.Core.Services
                         string reSpec = string.Empty;
                         try
                         {
-                            var aiResult = await _aiService.GenerateSpecificationAsync(spDef, instructions, humanFeedbackLog, _actorEffort, cancellationToken);
+                            AiResult aiResult;
+                            using (var progressScope = _userInteraction.CreateProgressScope("L3 피드백 재생성") ?? NullProgressScope.Instance)
+                            {
+                                progressScope.AddTask("l3gen", $"{_aiService.ModelName} 피드백 반영 중...");
+                                aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "l3gen");
+                            }
                             reSpec = aiResult.Content;
                             spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
 
@@ -691,7 +715,12 @@ namespace ReSet.Core.Services
                             _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                             try
                             {
-                                var aiResult = await _aiService.GenerateSpecificationAsync(spDef, instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken);
+                                AiResult aiResult;
+                                using (var progressScope = _userInteraction.CreateProgressScope("L3 자가 수정") ?? NullProgressScope.Instance)
+                                {
+                                    progressScope.AddTask("l3fix", $"{_aiService.ModelName} L1 자가 수정 중...");
+                                    aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "l3fix");
+                                }
                                 reSpec = aiResult.Content;
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
 
@@ -748,7 +777,12 @@ namespace ReSet.Core.Services
                         specsCopy.Add(("Feedback_Log.txt", $"[이전 시도에 대한 검토 피드백]:\n{feedbackLog}\n위 에러/피드백 사항을 전적으로 수용하여 통합 설계서를 완성해 주세요."));
                     }
 
-                    var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                    AiResult aiResult;
+                    using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 수립") ?? NullProgressScope.Instance)
+                    {
+                        progressScope.AddTask("batch", $"{_consolidatorService.ModelName} 계획 수립 중...");
+                        aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "batch");
+                    }
                     consolidatedPlan = aiResult.Content;
                     genSuccess = true;
                 }
@@ -790,7 +824,11 @@ namespace ReSet.Core.Services
                 _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - AI 통합 계획 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
                 try
                 {
-                    l2Result = await _criticService.ReviewConsolidatedPlanAsync(specs, consolidatedPlan, jobName, _criticEffort, cancellationToken);
+                    using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 L2 리뷰") ?? NullProgressScope.Instance)
+                    {
+                        progressScope.AddTask("batchreview", $"{_criticService.ModelName} 통합 계획 리뷰 중...");
+                        l2Result = await WrapWithProgress(_criticService.ReviewConsolidatedPlanAsync(specs, consolidatedPlan, jobName, _criticEffort, cancellationToken), progressScope, "batchreview");
+                    }
                     reviewSuccess = true;
                 }
                 catch (Exception ex)
