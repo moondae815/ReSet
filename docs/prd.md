@@ -41,6 +41,11 @@
 *   **메타데이터 및 확장 속성 수집**:
     *   컬럼 데이터 타입, Null 여부, PK/FK 관계, DefaultValue, Identity 여부 및 테이블 인덱스 메타데이터를 정밀 수집해야 합니다.
     *   SQL Server 확장 속성(`MS_Description`)에 저장된 한글 설명을 맵핑하여 AI에 비즈니스 맥락으로 주입해야 합니다.
+*   **T-SQL AST 기반 정적 분석 (ScriptDom)**:
+    *   Microsoft 공식 `TransactSql.ScriptDom` 파서를 탑재하여 대상 SP의 DDL을 TFragment AST 구조로 정밀 정적 분석해야 합니다.
+    *   참조 테이블을 단순 수집하는 수준을 넘어 SELECT/INSERT/UPDATE/DELETE 구문 맥락별로 CRUD 테이블을 기계적으로 분류 맵핑해야 합니다.
+    *   IF/WHILE 제어 제어문의 중첩 수준에 따른 들여쓰기(Indentation) 제어 흐름 요약을 생성하고, sp_executesql/EXEC 동적 SQL, UDF 및 Linked Server(4파트 식별자) 원격 참조를 감지하여 AI 컨텍스트로 결합 전달해야 합니다.
+    *   대상 DB의 호환성 수준(Compatibility Level 100~160)에 대응하는 T-SQL 파서 인스턴스를 동적으로 기동하여 구문 오류(Parsing Error) 예외 발생을 최소화해야 합니다.
 *   **소프트 페일(Soft Fail) 처리**: 스키마 조회 시 권한 누락이나 쿼리 오류 발생 시, 프로세스를 강제 중단하지 않고 경고 목록(`Warnings`)에 누적하여 분석 프로세스를 계속 진행해야 합니다.
 
 ### 3.2. 3단계 신뢰성 검증 파이프라인 (Verification Pipeline)
