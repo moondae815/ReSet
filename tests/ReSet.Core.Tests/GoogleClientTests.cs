@@ -57,6 +57,8 @@ namespace ReSet.Core.Tests
                 Assert.True(genConfig.TryGetProperty("thinkingConfig", out var thinkingConfig));
                 Assert.True(thinkingConfig.TryGetProperty("thinkingBudget", out var budget));
                 Assert.Equal(4096, budget.GetInt32());
+                Assert.True(thinkingConfig.TryGetProperty("includeThoughts", out var incThoughts));
+                Assert.True(incThoughts.GetBoolean());
             }
         }
 
@@ -82,6 +84,8 @@ namespace ReSet.Core.Tests
                 Assert.True(genConfig.TryGetProperty("thinkingConfig", out var thinkingConfig));
                 Assert.True(thinkingConfig.TryGetProperty("thinkingLevel", out var level));
                 Assert.Equal("HIGH", level.GetString());
+                Assert.True(thinkingConfig.TryGetProperty("includeThoughts", out var incThoughts));
+                Assert.True(incThoughts.GetBoolean());
             }
         }
 

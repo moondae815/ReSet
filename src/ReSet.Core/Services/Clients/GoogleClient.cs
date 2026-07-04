@@ -69,7 +69,8 @@ namespace ReSet.Core.Services.Clients
 
                     thinkingConfig = new
                     {
-                        thinkingLevel = thinkingLevel
+                        thinkingLevel = thinkingLevel,
+                        includeThoughts = true
                     };
                 }
                 else
@@ -85,7 +86,8 @@ namespace ReSet.Core.Services.Clients
 
                     thinkingConfig = new
                     {
-                        thinkingBudget = thinkingBudget
+                        thinkingBudget = thinkingBudget,
+                        includeThoughts = true
                     };
                 }
 
