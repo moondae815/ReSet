@@ -580,7 +580,13 @@ namespace ReSet.Cli
                         }
                         else
                         {
-                            var planFileName = Path.Combine(outputDir, $"{cliArgs.JobName}_BatchMigrationPlan.md");
+                            var jobsOutputDir = Path.Combine(outputDir, "Jobs", cliArgs.JobName);
+                            if (!Directory.Exists(jobsOutputDir))
+                            {
+                                Directory.CreateDirectory(jobsOutputDir);
+                            }
+
+                            var planFileName = Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_BatchMigrationPlan.md");
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
@@ -592,9 +598,9 @@ namespace ReSet.Cli
                                 spDefs,
                                 consolidatedPlan,
                                 cliArgs.JobName,
-                                outputDir);
+                                jobsOutputDir);
 
-                            var instructionsPath = Path.Combine(outputDir, $"{cliArgs.JobName}_MigrationInstructions.md");
+                            var instructionsPath = Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_MigrationInstructions.md");
                             AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
 
                             // 외부 코딩 에이전트(Codegen) 기동
@@ -727,7 +733,7 @@ namespace ReSet.Cli
                             continue;
                         }
 
-                        var specFiles = Directory.GetFiles(outputDir, "*_Spec.md");
+                        var specFiles = Directory.GetFiles(outputDir, "*_Spec.md", SearchOption.AllDirectories);
                         if (specFiles.Length == 0)
                         {
                             AnsiConsole.MarkupLine("[yellow]경고: 출력 디렉터리에 기분석된 명세서(*_Spec.md)가 존재하지 않습니다.[/]");
@@ -738,7 +744,7 @@ namespace ReSet.Cli
                         var remainingFiles = new List<string>();
                         foreach (var file in specFiles)
                         {
-                            remainingFiles.Add(Path.GetFileName(file));
+                            remainingFiles.Add(Path.GetRelativePath(outputDir, file));
                         }
 
                         var isCompleted = false;
@@ -755,7 +761,7 @@ namespace ReSet.Cli
                             // 현재 구성된 배치 순서 시각화
                             if (selectedFiles.Count > 0)
                             {
-                                var sequenceStr = string.Join(" [bold green]➔[/] ", selectedFiles.Select(f => $"[yellow]{Markup.Escape(f.Replace("_Spec.md", ""))}[/]"));
+                                var sequenceStr = string.Join(" [bold green]➔[/] ", selectedFiles.Select(f => $"[yellow]{Markup.Escape(Path.GetFileName(f).Replace("_Spec.md", ""))}[/]"));
                                 AnsiConsole.Write(new Panel(new Markup(sequenceStr))
                                 {
                                     Header = new PanelHeader(" [bold cyan]현재 구성된 배치 Job 실행 순서[/] "),
@@ -786,7 +792,7 @@ namespace ReSet.Cli
                                     .Title($"[green]배치 스텝 #{selectedFiles.Count + 1}[/]로 추가할 명세서를 선택하거나 검색하세요:")
                                     .PageSize(12)
                                     .MoreChoicesText("[grey](더 많은 목록은 방향키를 누르세요)[/]")
-                                    .UseConverter(x => Markup.Escape(x))
+                                    .UseConverter(x => x.StartsWith("[--") ? Markup.Escape(x) : Markup.Escape(Path.GetFileName(x)))
                                     .AddChoices(choices)
                                     .EnableSearch()
                             );
@@ -843,7 +849,13 @@ namespace ReSet.Cli
                                 continue;
                             }
 
-                            var planFileName = Path.Combine(outputDir, $"{jobName}_BatchMigrationPlan.md");
+                            var jobsOutputDir = Path.Combine(outputDir, "Jobs", jobName);
+                            if (!Directory.Exists(jobsOutputDir))
+                            {
+                                Directory.CreateDirectory(jobsOutputDir);
+                            }
+
+                            var planFileName = Path.Combine(jobsOutputDir, $"{jobName}_BatchMigrationPlan.md");
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
@@ -885,9 +897,9 @@ namespace ReSet.Cli
                                     spDefs,
                                     consolidatedPlan,
                                     jobName,
-                                    outputDir);
+                                    jobsOutputDir);
 
-                                var instructionsPath = Path.Combine(outputDir, $"{jobName}_MigrationInstructions.md");
+                                var instructionsPath = Path.Combine(jobsOutputDir, $"{jobName}_MigrationInstructions.md");
                                 AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");
 
                                 // 외부 코딩 에이전트(Codegen) 기동
@@ -1087,6 +1099,12 @@ namespace ReSet.Cli
             string? effort = null,
             IConfiguration? configuration = null)
         {
+            var spOutputDir = Path.Combine(outputDir, $"{schema}.{name}");
+            if (!Directory.Exists(spOutputDir))
+            {
+                Directory.CreateDirectory(spOutputDir);
+            }
+
             if (spDef != null)
             {
                 try
@@ -1144,7 +1162,7 @@ namespace ReSet.Cli
                     await metadataExporter.ExportRawMetadataAsync(
                         spDef,
                         spDef.RawPromptContext ?? rawPromptContext,
-                        outputDir,
+                        spOutputDir,
                         saveRawJson,
                         saveRawContext,
                         saveRawFiles);
@@ -1175,12 +1193,12 @@ ExceptionScore: {review.ScoreException}/10
             var effortSuffix = string.IsNullOrWhiteSpace(effort) ? "" : $", Effort: {effort}";
             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n" + scoreHeader + "\n";
 
-            var outputFileName = Path.Combine(outputDir, $"{schema}.{name}_Spec.md");
+            var outputFileName = Path.Combine(spOutputDir, $"{schema}.{name}_Spec.md");
             await File.WriteAllTextAsync(outputFileName, yamlFrontMatter + metadataHeader + specMarkdown);
 
             if (!string.IsNullOrEmpty(migrationPlan))
             {
-                var planFileName = Path.Combine(outputDir, $"{schema}.{name}_BatchMigrationPlan.md");
+                var planFileName = Path.Combine(spOutputDir, $"{schema}.{name}_BatchMigrationPlan.md");
                 await File.WriteAllTextAsync(planFileName, metadataHeader + migrationPlan);
             }
 
@@ -1192,9 +1210,9 @@ ExceptionScore: {review.ScoreException}/10
                         spDef,
                         specMarkdown,
                         migrationPlan ?? string.Empty,
-                        outputDir);
+                        spOutputDir);
 
-                    AnsiConsole.MarkupLine($"[green]코딩 에이전트 가이드라인 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(Path.Combine(outputDir, $"{schema}.{name}_MigrationInstructions.md"))}");
+                    AnsiConsole.MarkupLine($"[green]코딩 에이전트 가이드라인 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(Path.Combine(spOutputDir, $"{schema}.{name}_MigrationInstructions.md"))}");
                 }
                 catch (Exception ex)
                 {
@@ -1206,10 +1224,10 @@ ExceptionScore: {review.ScoreException}/10
             {
                 try
                 {
-                    var thinkingFileName = Path.Combine(outputDir, $"{schema}.{name}_Thinking.md");
+                    var thinkingFileName = Path.Combine(spOutputDir, $"{schema}.{name}_Thinking.md");
                     
                     // 기존 .txt 파일이 있다면 삭제 처리
-                    var oldTxtFile = Path.Combine(outputDir, $"{schema}.{name}_Thinking.txt");
+                    var oldTxtFile = Path.Combine(spOutputDir, $"{schema}.{name}_Thinking.txt");
                     if (File.Exists(oldTxtFile))
                     {
                         try { File.Delete(oldTxtFile); } catch {}
