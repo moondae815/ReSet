@@ -104,12 +104,17 @@ ReSet/
 │   └── ReSet.Core.Tests/      # [단위 테스트 프로젝트] xUnit 기반 단위 테스트
 │
 └── output/                          # [산출물 폴더] 생성된 스펙, 계획서, 모의 데이터 및 정합성 리포트 저장소
-    ├── [SP이름]_Spec.md            # SP 개별 비즈니스 설계 명세서
-    ├── [SP이름]_MigrationInstructions.md # 개별 SP 마이그레이션 지시서 번들
-    ├── [SP이름]_Thinking.md            # AI 모델의 추론 과정 로그 (Critic/Consolidator 추론 과정 포함)
-    ├── [SP이름]_RawContext.md          # AI 모델에 실제 전송된 조립 완료 프롬프트 원문 마크다운
-    ├── [JobName]_BatchMigrationPlan.md   # 통합 배치 전환 계획서
-    ├── [JobName]_MigrationInstructions.md # 통합 마이그레이션 지시서 번들
+    ├── [Schema].[SP이름]/           # SP 개별 분석 산출물이 격리 보존되는 전용 하위 폴더
+    │   ├── [Schema].[SP이름]_Spec.md  # SP 개별 비즈니스 설계 명세서
+    │   ├── [Schema].[SP이름]_MigrationInstructions.md # 개별 SP 마이그레이션 지시서 번들
+    │   ├── [Schema].[SP이름]_Thinking.md  # AI 모델의 추론 과정 로그
+    │   ├── [Schema].[SP이름]_RawContext.md # AI 모델에 실제 전송된 조립 완료 프롬프트 원문 마크다운
+    │   └── [Schema].[SP이름]_Raw/     # 의존 테이블 스키마 및 참조 UDF/SP DDL 개별 분산 덤프 폴더
+    │
+    ├── Jobs/[JobName]/              # 통합 배치 작업용 산출물이 격리 보존되는 전용 하위 폴더
+    │   ├── [JobName]_BatchMigrationPlan.md   # 통합 배치 전환 계획서
+    │   └── [JobName]_MigrationInstructions.md # 통합 마이그레이션 지시서 번들
+    │
     └── validation/                 # 소스코드 정적 검증 및 데이터 정합성 리포트 저장 폴더
         ├── [SP이름]_CompareReport.md  # 1:1 데이터 정합성 비교 분석 보고서
         └── mock/
