@@ -235,5 +235,58 @@ namespace ReSet.Validator.Core.Services
                 return $"{{\"Tables\":[], \"Error\":\"AI를 통한 모의 데이터 생성 실패: {ex.Message}\"}}";
             }
         }
+
+        public async Task<string> GenerateUnitTestCodeAsync(string specContent, string procedureName, string targetLanguage, CancellationToken cancellationToken = default)
+        {
+            var isCSharp = targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase);
+            var testFramework = isCSharp ? "xUnit" : "JUnit 5";
+            var mockFramework = isCSharp ? "Moq" : "Mockito";
+
+            var systemPrompt = $@"당신은 Stored Procedure 설계서(*_Spec.md)를 바탕으로 마이그레이션된 소스코드의 기능 정합성을 검증하기 위한 단위 테스트 코드를 작성하는 전문 QA 엔지니어입니다.
+설계서의 비즈니스 로직, 입력값 규격, 출력값 데이터셋을 검증할 수 있는 단위 테스트 코드를 작성해 주십시오.
+
+[설계 및 작성 규칙]:
+1. 대상 언어: {targetLanguage} (테스트 프레임워크: {testFramework}, 모킹 라이브러리: {mockFramework})
+2. 검증 대상 구조: Hexagonal Architecture를 적용하여 비즈니스 도메인 서비스가 DB 포트(인터페이스)를 호출하는 구조를 전제합니다.
+3. 테스트 커버리지:
+   - 정상 케이스 (유효한 값 주입 시 정상 비즈니스 로직 수행 및 포트 호출 검증)
+   - 입력 파라미터 예외 케이스 (DbC 계약에 따른 Null, 빈 값, 잘못된 타입 주입 시 예외 발생 검증)
+   - 비즈니스 분기 조건별 검증
+4. 추가 아키텍처 검증 (ArchUnit 스타일):
+   - 해당 어셈블리/패키지 내 클래스들이 올바른 아키텍처 규칙(예: Domain이 Infrastructure를 직접 호출하지 않는지 등)을 위반하지 않는지 검사하는 간단한 아키텍처 정적 규칙 테스트 메서드도 1개 포함시켜 주십시오.
+5. 출력 포맷:
+   - 다른 설명, 서론, 결론은 절대 쓰지 마십시오.
+   - 오직 컴파일이 가능한 순수 {targetLanguage} 소스코드만 Markdown 코드 블록(```{targetLanguage.ToLower()} ... ```) 형식으로 감싸서 리턴해 주십시오.";
+
+            var userPrompt = $@"대상 객체 이름: {procedureName}
+            
+[비즈니스 기능 명세서]
+{specContent}
+
+위 명세서를 완벽히 분석하여 검증용 단위 테스트 클래스 코드를 작성해 주세요.";
+
+            try
+            {
+                Log.Debug("[ValidatorAI] 단위 테스트 코드 생성 AI 요청 시작 - Name: {SpName}, Language: {Language}", procedureName, targetLanguage);
+                var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.2f, effort: null, cancellationToken: cancellationToken);
+                Log.Debug("[ValidatorAI] 단위 테스트 코드 생성 AI 응답 수신 - 응답 길이: {Length}자", aiResult.Content.Length);
+
+                // markdown 코드 블록 정제
+                var cleanCode = aiResult.Content.Trim();
+                var blockRegex = new Regex(@"```(?:[A-Za-z0-9_#\-]+)?\s*([\s\S]+?)\s*```");
+                var match = blockRegex.Match(cleanCode);
+                if (match.Success)
+                {
+                    cleanCode = match.Groups[1].Value.Trim();
+                }
+
+                return cleanCode;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "[ValidatorAI] 단위 테스트 코드 생성 AI 요청 중 예외 발생");
+                return $"// AI를 통한 단위 테스트 코드 생성 실패: {ex.Message}";
+            }
+        }
     }
 }

@@ -33,5 +33,15 @@ namespace ReSet.Core.Services
             string consolidatedPlan,
             string jobName,
             string baseOutputDir);
+
+        /// <summary>
+        /// 지시서 마크다운 파일 하단에 L1/L2 피드백 내용을 안전하게 덧붙이거나 교체합니다.
+        /// </summary>
+        Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown);
+
+        /// <summary>
+        /// 생성된 단위 테스트 소스코드 코드를 타겟 디렉토리에 저장합니다.
+        /// </summary>
+        Task ExportUnitTestCodeAsync(string baseOutputDir, string procedureName, string targetLanguage, string testCodeContent);
     }
 }

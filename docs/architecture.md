@@ -58,6 +58,7 @@
 | | [ConsoleUserInteraction](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Cli/ConsoleUserInteraction.cs) | Spectre.Console 기반 TUI 렌더링. 탭(Tab) 자동완성 디렉토리 입력창(`ShowChoices(false)` 제어) 및 Gap 분석 결과 패널 렌더링. |
 | **ReSet.Validator.Core**<br/>(정합성 검증 레이어) | [CodeVerificationOrchestrator](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/CodeVerificationOrchestrator.cs) | L1 정적 검사 -> L2 AI 논리 Gap 검증 및 자가 수정 -> L3 개발자 승인을 조율하는 검증 오케스트레이터. |
 | | [FileMappingService](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/FileMappingService.cs) | 명세서 파일명 및 YAML Front Matter 기반 구현 소스 1:1 매핑 및 경로 자동 보정. |
+| | [ValidatorAiService](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/ValidatorAiService.cs) | AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스, TDD용 단위 테스트 및 ArchUnit 아키텍처 검증 코드 자동 생성. |
 | | [CSharpReflectionRunner](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/CSharpReflectionRunner.cs) | C# 프로젝트 DLL 동적 로딩 및 리플렉션 호출, DbTransaction 강제 롤백을 활용한 DB 격리 실행기. |
 | | [JavaProcessRunner](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/JavaProcessRunner.cs) | Java JAR/클래스를 외부 프로세스로 기동하여 stdin/stdout JSON 통신을 수행하는 격리 실행기. |
 | | [SpExecutionService](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/SpExecutionService.cs) | 테스트 케이스 파라미터를 활용해 Legacy DB에서 Stored Procedure를 실행하고 결과를 다중 ResultSet 구조 JSON으로 수집. |
@@ -126,6 +127,86 @@ graph TD
 * **대화형 TUI 모드**: 개발자가 직접 화면을 보며 분석할 SP를 원하는 순서대로 골라 담은 후 배치 전환 계획을 수립하고, AI 검증 결과와 피드백을 실시간 조율하며 승인 및 DB 동기화를 제어합니다.
 * **무인 배치 모드 (CI/CD)**: `--job-name` 인자가 공급되면 사용자의 대화형 개입 단계를 생략하고 L1/L2 검증을 통과한 산출물을 자동 생성 및 병합하며, 외부 코딩 에이전트 기동까지 파이프라인을 무정지로 실행합니다.
 
+### 3.3. 외부 코딩 에이전트 자가 수정 및 TDD 검증 흐름 (Codegen Self-Correction Flow)
+ReSet이 외부 코딩 에이전트를 가동하고 TDD 선제 검증(L0) 및 L1/L2 피드백 루프를 통해 코드를 고품질로 자가 교정하는 시퀀스 흐름은 다음과 같습니다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant RC as ReSet.Cli (Orchestrator)
+    participant ECE as External Coding CLI (Claude)
+    participant VAL as Validator Core (L1/L2)
+
+    RC->>RC: 마이그레이션 지시서 생성 (*_MigrationInstructions.md)
+    RC->>RC: TDD용 단위 테스트 및 ArchUnit 코드 자동 생성 (ValidatorAiService)
+    RC->>RC: target 프로젝트의 tests 폴더에 테스트 코드 선제 공급
+    loop 자가 수정 루프 (최대 MaxL2Attempts 회)
+        RC->>ECE: 코딩 에이전트 기동 (지시서 및 TDD 태스크 계획서 전달)
+        ECE->>ECE: 소스코드 파일 생성/수정 및 자체 빌드/단위테스트 수행
+        alt 자체 빌드 또는 단위테스트 실패 (L0 실패)
+            ECE->>ECE: 오류 분석 후 자체 자가 디버깅 시도
+        else 자체 빌드 및 테스트 통과 (L0 성공)
+            ECE-->>RC: 프로세스 종료 및 완료 보고 (ExitCode 0)
+            RC->>VAL: 생성된 소스코드 로드 및 L1 정적 검증 수행
+            alt L1 정적 검증 실패 (구문 및 중괄호 쌍 오류 등)
+                RC->>RC: 지시서 하단에 [L1 에러 피드백] 추가
+                Note over RC,ECE: L2 AI 검증 건너뛰고 즉시 재수정 요청 (L1 Shortcut)
+            else L1 정적 검증 성공
+                RC->>VAL: L2 AI 의미론적 일치성 분석 수행
+                alt L2 검증 결과 불일치 (MISMATCH / PARTIAL)
+                    RC->>RC: 지시서 하단에 [L2 Gap Report & Suggestions] 추가
+                else L2 검증 결과 일치 (MATCH)
+                    Note over RC,ECE: 자가 수정 루프 성공 탈출
+                end
+            end
+        end
+    end
+```
+
+### 3.4. 정합성 검증기 거시 실행 흐름 (Validator Macro Flow)
+마이그레이션된 소스코드와 레거시 DB Stored Procedure 간의 로직 일치성 및 결과 데이터 정합성을 검증하는 `ReSet.Validator` 프로그램의 거시 실행 흐름은 다음과 같습니다. 검증 과정은 단순 TUI 메뉴 분기 외에 선후행 파일의 의존성 관계에 의해 **구조 일치성 검증(A 트랙)** 및 **실행 데이터 정합성 검증(B 트랙)**으로 유기적으로 연결됩니다.
+
+```mermaid
+graph TD
+    %% 초기화 및 모드 판단
+    StartVal["검증기 시작 (Validator CLI)"] --> ParseVal["설정 로드 & 디렉토리 유효성 검사"]
+    ParseVal --> ModeCheckVal{"배치 모드인가?"}
+
+    %% 배치 모드
+    ModeCheckVal -- "예 (--batch)" --> ExecBatchVal["자동 배치 정합성 검증 실행<br/>(인자 조합에 따른 파이프라인 실행)"]
+    ExecBatchVal --> EndVal["종료"]
+
+    %% TUI 모드 진입
+    ModeCheckVal -- "아니오 (TUI)" --> TuiMenu["검증기 TUI 메인 메뉴 노출"]
+    
+    %% 구조적 일치성 흐름 (독립적 트랙)
+    TuiMenu --> StructTrack["[A 트랙] 소스코드 구조/논리 일치성 검증"]
+    StructTrack --> Menu1["1. 소스코드 일치성 검증 (L1/L2/L3)<br/>FileMapping 매핑 ➔ L1/L2 Gap 검사 ➔ L3 승인"]
+    Menu1 --> TuiMenu
+
+    %% 데이터 정합성 검증 흐름 (상호 의존적 파이프라인 트랙)
+    TuiMenu --> DataTrack["[B 트랙] 실행 결과 데이터 정합성 검증 파이프라인"]
+    
+    %% B-1단계: 테스트 자료 설계
+    DataTrack --> Step1["B-1. 테스트 설계 및 모의 데이터 생성 (AI)"]
+    Step1 --> Menu2["2. 테스트 파라미터 설계 (*_test_inputs.json)"]
+    Step1 --> Menu3["3. 모의 데이터 자동 생성 (*_mock_data.json)"]
+    
+    %% B-2단계: 실행 및 수집 (Seeding 포함)
+    Menu2 & Menu3 --> Step2["B-2. Sandbox DB 적재 및 실행 결과 수집"]
+    Step2 --> Menu4["4. 레거시 DB 실행 결과 수집 (*_legacy_results.json)"]
+    Step2 --> Menu5["5. 타겟 시스템 실행 결과 수집 (*_target_results.json)"]
+    
+    %% B-3단계: 최종 비교 대조
+    Menu4 & Menu5 --> Step3["B-3. 데이터 정합성 1:1 비교 대조"]
+    Step3 --> Menu6["6. 실행 결과 데이터 대조 (*_CompareReport.md)"]
+    
+    %% 루프백 및 종료
+    Menu6 --> TuiMenu
+    TuiMenu --> MenuExit["7. 종료"]
+    MenuExit --> EndVal
+```
+
 ---
 
 ## 4. 핵심 아키텍처 메커니즘 (Key Architectural Mechanisms)
@@ -157,9 +238,9 @@ graph TD
 
     %% dynamic 모드: 다중 Actor-Critic 병렬 협업 경로
     ModeCheck -- "예 (dynamic)" --> Sampler["1단계: 차등 Effort 기반 다중 Actor 병렬 구동"]
-    Sampler --> ActorA["후보 1: Low Effort<br/>(비즈니스 요약)"]
-    Sampler --> ActorB["후보 2: Medium Effort<br/>(CRUD 매핑)"]
-    Sampler --> ActorC["후보 3: High Effort<br/>(예외/시각화 상세)"]
+    Sampler --> ActorA["후보 1: Low Effort"]
+    Sampler --> ActorB["후보 2: Medium Effort"]
+    Sampler --> ActorC["후보 3: High Effort"]
     
     ActorA & ActorB & ActorC --> CriticEvaluator["2단계: Critic 에이전트 채점 및 결함 분석<br/>(100점 환산 점수 도출)"]
     CriticEvaluator --> CheckFastPass{"L1/L2 무결 &<br/>90점 이상 후보 존재?"}
@@ -303,6 +384,7 @@ graph TD
 * **마이그레이션 지시서 패키징**: 최종 승인된 통합 배치 계획과 개별 SP의 명세서, 참조하는 DDL 및 테이블 스키마 정보를 하나의 마크다운 파일(`{JobName}_MigrationInstructions.md`)로 빌드하여 외부 에이전트 복사/붙여넣기용 컨텍스트 프롬프트를 명시해 추출합니다.
 * **대화형 콘솔 상속**: Claude Code 등 대화형 CLI 에이전트 연동 실행 시 자식 프로세스의 입출력을 숨기지 않고 부모 콘솔 스트림을 상속 공유(`RedirectStandardInput/Output = false`)하여, 에이전트 기동 중 발생할 수 있는 자연어 상호작용 및 수동 승인 프롬프트를 동일 콘솔 상에서 자연스럽게 수행합니다.
 * **취소 및 프로세스 강제 정리**: 취소 토큰(`CancellationToken`) 수신 시 윈도우/리눅스 환경의 좀비 프로세스 방지를 위해 `process.Kill(true)`을 구동해 외부 에이전트 프로세스 트리 전체를 강제 정리합니다. 프롬프트 내 공백이 파이프라인 인자로 분해 해석되는 문제를 방지하도록 이스케이프 쌍따옴표(`\"...\"`)로 파라미터를 감싸 공급합니다.
+* **자가 수정 피드백 루프(Self-Correction Loop) 및 TDD L0 검증**: 코딩 에이전트 기동 시 타겟 단위 테스트 및 아키텍처 제약 테스트를 미리 생성해 배포하고, 빌드/테스트(L0) 성공 통과 시 정적 린터(L1) 및 AI 의미론적 대조(L2)를 거치며 스스로 코드를 고치는 자가 수정 루프(Self-Correction Loop) 브릿지를 탑재하여 최종 코드 품질을 엄격히 관리합니다.
 
 ### 5.4. 정합성 검증 실패 시의 3단계 복구 피드백 루프 (Failure Recovery Loops)
 * **루프 A (설계 재수립 - Spec Feedback)**: 레거시 비즈니스 규칙 해석 오류 등 명세서 자체에 결함이 있는 경우, L3 개발자 콘솔 피드백을 통해 기능 명세서(`*_Spec.md`)를 보완·재생성하고 이에 맞춰 코드를 재생성하도록 복구 흐름을 분기합니다.

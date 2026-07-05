@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ReSet.Core\ReSet.Core.csproj" />
+    <ProjectReference Include="..\ReSet.Validator.Core\ReSet.Validator.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

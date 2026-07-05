@@ -57,7 +57,7 @@
     *   [ValidatorConfig.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Models/ValidatorConfig.cs): 검증기 실행 설정을 바인딩하는 구성 모델.
 *   **검증 비즈니스 서비스 ([Services](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services))**
     *   [FileMappingService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/FileMappingService.cs): 설계서 파일(`*_Spec.md`)과 마이그레이션된 소스 파일을 스캔하여 1:1로 매핑하는 서비스.
-    *   [ValidatorAiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/ValidatorAiService.cs): AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스.
+    *   [ValidatorAiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/ValidatorAiService.cs): AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스 (TDD용 단위 테스트 및 ArchUnit 아키텍처 규칙 검증 테스트 코드 자동 설계 기능 추가 포함).
     *   [SpExecutionService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/SpExecutionService.cs): SQL Server DB에서 Stored Procedure를 동적으로 실행하고 결과를 JSON으로 덤프하는 서비스.
     *   [SandboxSeedingService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/SandboxSeedingService.cs): 모의 데이터를 샌드박스 DB에 적재(Insert)하고 실행 후 정리(Delete)하는 수명주기 서비스.
     *   [CSharpReflectionRunner.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Validator.Core/Services/CSharpReflectionRunner.cs): 마이그레이션된 C# DLL 리플렉션 로드 및 DbTransaction 롤백 자동 격리 실행기.
@@ -130,6 +130,7 @@
     *   **동적 코드 생성 시점 제약**: 개별 SP 분석 완료 직후에는 기동을 금지하며, 반드시 복수 SP가 엮인 통합 배치 전환 계획서 수립 및 최종 승인 완료 시점에만 외부 에이전트를 기동하십시오.
     *   **프로세스 양방향 제어**: [ExternalCliCodingEngine.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/ExternalCliCodingEngine.cs) 기동 시 대화형 흐름을 공유할 수 있도록 부모 콘솔 입출력 스트림을 직접 상속 공유하고, 취소(`CancellationToken`) 수신 시 좀비 프로세스를 예방하기 위해 하위 프로세스 트리를 강제 종료(`process.Kill(true)`)하십시오. 띄어쓰기가 포함된 프롬프트 파싱을 막기 위해 Arguments 전체를 쌍따옴표(`\"...\"`)로 래핑하여 공급하십시오.
     *   **무인 자동 기동**: CLI 배치 모드 실행 시 `--job-name` 인자가 공급되면 L3 대화형 단계를 건너뛰고 자동으로 통합 계획 및 지시서 번들을 생성해 외부 에이전트 프로세스 기동까지 연속 수행하는 CI/CD 무인 파이프라인을 지원하십시오.
+    *   **자가 수정 및 TDD 테스트 피드백 루프**: 외부 에이전트 기동 전 `ValidatorAiService`를 활용해 타겟 언어 단위 테스트 코드를 생성해 적재하고, 에이전트가 로컬 테스트를 통과(L0 성공)한 코드를 작성하면 L1 정적 검사(구문/컴파일 오류 발생 시 L2 AI 검증을 건너뛰는 숏컷 적용) 및 L2 AI 의미론적 일치성 분석을 순차 수행하십시오. 검증 불일치 시 마커 주석(`<!-- FEEDBACK_START -->`, `<!-- FEEDBACK_END -->`)을 활용해 지시서 파일에 피드백을 축적하고 재수정을 위해 외부 에이전트를 재기동하도록 파이프라인을 조율하십시오.
 
 ### 🧹 범주 7. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 9.  **메타데이터 정화 및 정책 문서 수립 가이드를 준수하십시오.**

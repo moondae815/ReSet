@@ -220,7 +220,10 @@ namespace ReSet.Core.Services
                 sb.AppendLine($"> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`{cleanSpName}_todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
                 sb.AppendLine("> 1. 설계서의 입출력 규격 및 비즈니스 로직 단계를 만족할 것.");
                 sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
-                sb.AppendLine("> 3. 구현이 완료되면 빌드가 통과하는지 검증하고 완료 메시지를 보여줘.\"");
+                sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
+                sb.AppendLine("> 4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
+                sb.AppendLine("> 5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
+                sb.AppendLine("> 6. 제공된 자가 검증용 단위 테스트 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.\"");
                 sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
@@ -232,11 +235,11 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine();
                 todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
                 todoSb.AppendLine();
-                todoSb.AppendLine("- [ ] 1. 프로젝트 폴더 구조 및 뼈대 코드 생성");
-                todoSb.AppendLine("- [ ] 2. 관련 DDL 반영 및 데이터 액세스(Repository/DAO) 레이어 빌드 검증");
-                todoSb.AppendLine("- [ ] 3. 비즈니스 로직 단계별 구현 및 유효성 검증");
-                todoSb.AppendLine("- [ ] 4. 예외 처리, 트랜잭션 격리 및 리소스 누수 방지 로직 보완");
-                todoSb.AppendLine("- [ ] 5. 전체 솔루션 빌드 확인 및 완료 보고");
+                todoSb.AppendLine("- [ ] 1. 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
+                todoSb.AppendLine("- [ ] 2. 관련 DDL 반영 및 데이터 액세스(Repository/DAO/Adapter) 레이어 구현");
+                todoSb.AppendLine("- [ ] 3. DbC(Design by Contract)에 따른 파라미터 사전 검증 및 비즈니스 로직 단계별 구현");
+                todoSb.AppendLine("- [ ] 4. 예외 처리, 트랜잭션 격리 및 멱등성(Upsert 패턴) 처리 보완");
+                todoSb.AppendLine("- [ ] 5. 공급된 단위 테스트 코드를 100% 통과(PASS)시키고 전체 로컬 빌드 성공 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
 
@@ -340,7 +343,10 @@ namespace ReSet.Core.Services
                 sb.AppendLine($"> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`{jobName}_todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
                 sb.AppendLine("> 1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 그대로 준수할 것.");
                 sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
-                sb.AppendLine("> 3. 구현이 완료되면 빌드가 통과하는지 검증하고 완료 메시지를 보여줘.\"");
+                sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
+                sb.AppendLine("> 4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
+                sb.AppendLine("> 5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
+                sb.AppendLine("> 6. 제공된 자가 검증용 단위 테스트 및 ArchUnit 아키텍처 검증 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.\"");
                 sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
@@ -352,13 +358,13 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine();
                 todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
                 todoSb.AppendLine();
-                todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성");
-                todoSb.AppendLine("- [ ] 2. 관련 데이터베이스 스냅샷/집계 DDL 테이블 적용 및 Repository/DAO 빌드 검증");
-                todoSb.AppendLine("- [ ] 3. Step 0: Run 초기화 Tasklet 구현");
-                todoSb.AppendLine("- [ ] 4. Step 1: 개별 배치 스냅샷 생성 Chunk Step 구현");
+                todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
+                todoSb.AppendLine("- [ ] 2. 관련 데이터베이스 스냅샷/집계 DDL 테이블 적용 및 Repository/DAO/Adapter 구현");
+                todoSb.AppendLine("- [ ] 3. Step 0: Run 초기화 Tasklet 및 DbC 사전 검증 구현");
+                todoSb.AppendLine("- [ ] 4. Step 1: 개별 배치 스냅샷 생성 Chunk Step 및 멱등성 보장 구현");
                 todoSb.AppendLine("- [ ] 5. Step 2: 통합 고객 상품 집계 Chunk Step 구현");
                 todoSb.AppendLine("- [ ] 6. Step 3 & 4: 검증/게시 및 최종 종료 처리 Tasklet 구현");
-                todoSb.AppendLine("- [ ] 7. 전체 솔루션 빌드 확인 및 최종 완료 보고");
+                todoSb.AppendLine("- [ ] 7. 공급된 단위 테스트 및 ArchUnit 정적 검증 통과, 솔루션 빌드 성공 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
 
@@ -416,6 +422,74 @@ namespace ReSet.Core.Services
                 }
             }
             return sb.ToString();
+        }
+
+        public async Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown)
+        {
+            if (!File.Exists(instructionsFilePath))
+            {
+                Log.Warning("지시서 파일이 존재하지 않아 피드백을 추가할 수 없습니다 - Path: {Path}", instructionsFilePath);
+                return;
+            }
+
+            try
+            {
+                var content = await File.ReadAllTextAsync(instructionsFilePath, Encoding.UTF8);
+
+                // 기존 피드백 마커가 있으면 제거
+                var startMarker = "<!-- FEEDBACK_START -->";
+                var endMarker = "<!-- FEEDBACK_END -->";
+                var startIndex = content.IndexOf(startMarker);
+                var endIndex = content.IndexOf(endMarker);
+
+                if (startIndex >= 0 && endIndex > startIndex)
+                {
+                    var before = content.Substring(0, startIndex).TrimEnd();
+                    var after = content.Substring(endIndex + endMarker.Length).TrimStart();
+                    content = before + "\n\n" + after;
+                }
+
+                var sb = new StringBuilder(content.TrimEnd());
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine(startMarker);
+                sb.AppendLine("## 🔍 검증 피드백 및 자가 수정 가이드");
+                sb.AppendLine("이전 빌드/테스트 또는 L1/L2 일치성 분석 결과, 다음 불일치 사항이 발견되었습니다. 이 문제를 최우선으로 해결하여 소스코드를 수정해 주십시오.");
+                sb.AppendLine();
+                sb.AppendLine(feedbackMarkdown);
+                sb.AppendLine(endMarker);
+
+                await File.WriteAllTextAsync(instructionsFilePath, sb.ToString(), Encoding.UTF8);
+                Log.Information("지시서에 L1/L2 검증 피드백 영역을 업데이트 완료 - Path: {Path}", instructionsFilePath);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "지시서 피드백 추가 중 오류 발생 - Path: {Path}", instructionsFilePath);
+            }
+        }
+
+        public async Task ExportUnitTestCodeAsync(string baseOutputDir, string procedureName, string targetLanguage, string testCodeContent)
+        {
+            try
+            {
+                var isCSharp = targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase);
+                var ext = isCSharp ? ".cs" : ".java";
+                var fileName = isCSharp ? $"{procedureName}Tests{ext}" : $"{procedureName}Test{ext}";
+
+                var testsFolder = Path.Combine(baseOutputDir, "tests");
+                if (!Directory.Exists(testsFolder))
+                {
+                    Directory.CreateDirectory(testsFolder);
+                }
+
+                var targetPath = Path.Combine(testsFolder, fileName);
+                await File.WriteAllTextAsync(targetPath, testCodeContent, Encoding.UTF8);
+                Log.Information("자가 검증용 단위 테스트 파일 내보내기 완료 - Path: {Path}", targetPath);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "단위 테스트 파일 저장 중 오류 발생 - SpName: {SpName}", procedureName);
+            }
         }
     }
 }
