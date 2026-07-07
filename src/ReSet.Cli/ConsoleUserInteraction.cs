@@ -114,11 +114,30 @@ namespace ReSet.Cli
                         {
                             var key = parts[0].Trim();
                             var val = parts[1].Trim();
-                            if (key == "AiConfidenceScore" && int.TryParse(val, out int scoreVal)) { score = scoreVal; scoreFound = true; }
-                            else if (key == "AccuracyScore" && int.TryParse(val.Split('/')[0], out int accVal)) acc = accVal;
-                            else if (key == "CrudScore" && int.TryParse(val.Split('/')[0], out int crudVal)) crud = crudVal;
-                            else if (key == "ReadabilityScore" && int.TryParse(val.Split('/')[0], out int readVal)) read = readVal;
-                            else if (key == "ExceptionScore" && int.TryParse(val.Split('/')[0], out int exVal)) ex = exVal;
+                            
+                            // # 주석 제거
+                            var commentIdx = val.IndexOf('#');
+                            if (commentIdx >= 0)
+                            {
+                                val = val.Substring(0, commentIdx).Trim();
+                            }
+
+                            // 괄호 설명 제거 (예: "95 (종합 신뢰도)" -> "95")
+                            var parenIdx = val.IndexOf('(');
+                            if (parenIdx >= 0)
+                            {
+                                val = val.Substring(0, parenIdx).Trim();
+                            }
+
+                            // '/'가 포함된 경우 첫 번째 부분 추출 (예: "9/10" -> "9")
+                            var slashIdx = val.IndexOf('/');
+                            var numberPart = slashIdx >= 0 ? val.Substring(0, slashIdx).Trim() : val;
+
+                            if ((key == "AiConfidenceScore" || key == "종합 신뢰도 점수" || key == "종합 신뢰도" || key == "종합신뢰도") && int.TryParse(numberPart, out int scoreVal)) { score = scoreVal; scoreFound = true; }
+                            else if ((key == "AccuracyScore" || key == "정합성 점수" || key == "정합성") && int.TryParse(numberPart, out int accVal)) acc = accVal;
+                            else if ((key == "CrudScore" || key == "CRUD 점수" || key == "CRUD") && int.TryParse(numberPart, out int crudVal)) crud = crudVal;
+                            else if ((key == "ReadabilityScore" || key == "가독성 점수" || key == "가독성") && int.TryParse(numberPart, out int readVal)) read = readVal;
+                            else if ((key == "ExceptionScore" || key == "예외처리 점수" || key == "예외처리" || key == "예외 처리 점수" || key == "예외 처리") && int.TryParse(numberPart, out int exVal)) ex = exVal;
                         }
                     }
                 }
