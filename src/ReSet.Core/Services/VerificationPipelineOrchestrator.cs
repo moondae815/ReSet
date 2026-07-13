@@ -25,6 +25,7 @@ namespace ReSet.Core.Services
         private readonly string? _actorEffort;
         private readonly string? _criticEffort;
         private readonly string? _consolidatorEffort;
+        private readonly int _criticScoreThreshold;
 
         public VerificationPipelineOrchestrator(
             IDbMetadataService dbService,
@@ -38,7 +39,8 @@ namespace ReSet.Core.Services
             IAiService? consolidatorService = null,
             string? actorEffort = null,
             string? criticEffort = null,
-            string? consolidatorEffort = null)
+            string? consolidatorEffort = null,
+            int criticScoreThreshold = 8)
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -51,6 +53,7 @@ namespace ReSet.Core.Services
             _actorEffort = actorEffort;
             _criticEffort = criticEffort;
             _consolidatorEffort = consolidatorEffort;
+            _criticScoreThreshold = criticScoreThreshold;
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -463,6 +466,90 @@ namespace ReSet.Core.Services
                         catch { }
                     }
 
+                    // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
+                    _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
+                    ReviewResult? finalL2Result = null;
+                    try
+                    {
+                        using (var progressScope = _userInteraction.CreateProgressScope("최종 L2 검토") ?? NullProgressScope.Instance)
+                        {
+                            progressScope.AddTask("final_review", "합성본 최종 L2 검토 중...");
+                            finalL2Result = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "final_review");
+                        }
+                        
+                        accumulatedThinking.AppendLine("### [Critic] Final Consolidated Spec Review Thinking");
+                        accumulatedThinking.AppendLine($"- **AI Provider**: {_criticService.ProviderName}");
+                        accumulatedThinking.AppendLine($"- **AI Model**: {_criticService.ModelName} (Effort: {_criticEffort ?? "default"})");
+                        accumulatedThinking.AppendLine();
+                        if (finalL2Result != null && !string.IsNullOrWhiteSpace(finalL2Result.ThinkingText))
+                        {
+                            accumulatedThinking.AppendLine(finalL2Result.ThinkingText);
+                        }
+                        else
+                        {
+                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                        }
+                        accumulatedThinking.AppendLine();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "최종 합성본 L2 Critic 검토 중 실패 (무시하고 계속 진행)");
+                    }
+
+                    if (finalL2Result != null)
+                    {
+                        finalReview = finalL2Result; // 우선 1차 검토 점수를 기본값으로 할당
+                    }
+
+                    if (finalL2Result != null && finalL2Result.HasDefects)
+                    {
+                        _userInteraction.NotifyStatus($"[yellow]최종 합성본에서 일부 결함 감지:[/] {EscapeMarkup(finalL2Result.FeedbackComment ?? "")}");
+                        _userInteraction.NotifyStatus($"결함을 반영한 1회 보완 최종 합성본을 생성합니다...");
+                        try
+                        {
+                            string finalFeedbackLog = $"[최종 합성본 L2 리뷰 피드백]: 합성본을 평가한 결과 다음 결함이 발견되었습니다. 이를 완벽하게 수정하여 최종 명세서를 보완해 주십시오:\n\n{finalL2Result.FeedbackComment}";
+                            
+                            AiResult finalConsolidatedFixResult;
+                            using (var progressScope = _userInteraction.CreateProgressScope("합성본 최종 보완") ?? NullProgressScope.Instance)
+                            {
+                                progressScope.AddTask("finalfix", "최종 보완 합성 중...");
+                                finalConsolidatedFixResult = await WrapWithProgress(_consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), finalFeedbackLog, _consolidatorEffort ?? "medium", cancellationToken), progressScope, "finalfix");
+                            }
+                            
+                            // 수정본 문법 L1 검증 진행
+                            var fixL1Result = _validator.Validate(finalConsolidatedFixResult.Content);
+                            if (fixL1Result.IsValid)
+                            {
+                                specificationMarkdown = finalConsolidatedFixResult.Content;
+                                spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
+
+                                // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신
+                                _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 보완된 최종 합성본 L2 재검토 중...");
+                                try
+                                {
+                                    using (var progressScope = _userInteraction.CreateProgressScope("보완본 재검토") ?? NullProgressScope.Instance)
+                                    {
+                                        progressScope.AddTask("refinal", "보완본 L2 재검토 중...");
+                                        var reFinalReview = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "refinal");
+                                        if (reFinalReview != null)
+                                        {
+                                            finalReview = reFinalReview;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                            else
+                            {
+                                _userInteraction.NotifyStatus("최종 보완본에서 정적 에러가 검출되어 이전 버전을 최종본으로 유지합니다.");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(ex, "최종 보완 합성 생성 실패 (기존 합성본 유지)");
+                        }
+                    }
+
                     _userInteraction.NotifyValidationSuccess(selectedOption);
                 }
             }
@@ -581,6 +668,35 @@ namespace ReSet.Core.Services
                     {
                         Log.Error(ex, "[파이프라인] L2 AI 교차 리뷰 예외 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                         _userInteraction.NotifyError($"{selectedOption} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
+                    }
+
+                    if (reviewSuccess && l2Result != null)
+                    {
+                        // 꼬리 잡기 방지를 위한 Decaying Threshold 및 Severity 구분 판정
+                        bool overriddenHasDefects = false;
+                        
+                        // 시도 횟수(attempt)에 비례하여 통과 기준 점수를 점진적으로 낮춤 (최소 5점)
+                        int decay = attempt - 1;
+                        int criticalThreshold = Math.Max(5, _criticScoreThreshold - decay); // ScoreAccuracy, ScoreCrud
+                        
+                        // 사소한(Minor) 결함 기준 완화폭은 2배로 넓게 가짐 (최소 4점)
+                        int minorDecay = (attempt - 1) * 2;
+                        int minorThreshold = Math.Max(4, _criticScoreThreshold - minorDecay); // ScoreInterface, ScoreException, ScoreReadability
+                        
+                        if (l2Result.ScoreAccuracy < criticalThreshold ||
+                            l2Result.ScoreCrud < criticalThreshold ||
+                            l2Result.ScoreInterface < minorThreshold ||
+                            l2Result.ScoreException < minorThreshold ||
+                            l2Result.ScoreReadability < minorThreshold)
+                        {
+                            overriddenHasDefects = true;
+                        }
+
+                        if (l2Result.HasDefects && !overriddenHasDefects)
+                        {
+                            Log.Information("[파이프라인] L2 AI 리뷰의 결함을 보정(Decaying Threshold / Severity 완화로 통과) 처리합니다. (시도 {Attempt})", attempt);
+                            l2Result.HasDefects = false;
+                        }
                     }
 
                     if (reviewSuccess && l2Result != null && l2Result.HasDefects)

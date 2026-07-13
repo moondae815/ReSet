@@ -377,7 +377,8 @@ namespace ReSet.Cli
                 consolidatorService,
                 actorEffort,
                 criticEffort,
-                consolidatorEffort
+                consolidatorEffort,
+                criticThresholdScore
             );
             ISettlementPolicyService policyService = new SettlementPolicyService(dbService, aiService);
 
