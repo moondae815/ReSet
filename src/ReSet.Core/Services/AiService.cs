@@ -13,14 +13,18 @@ namespace ReSet.Core.Services
     {
         private readonly IAiClient _aiClient;
         private readonly float _temperature;
+        private readonly bool _enableOllamaThinking;
+        private readonly int _criticScoreThreshold;
 
         public string ProviderName => _aiClient.ProviderName;
         public string ModelName => _aiClient.ModelName;
 
-        public AiService(IAiClient aiClient, float temperature)
+        public AiService(IAiClient aiClient, float temperature, bool enableOllamaThinking = false, int criticScoreThreshold = 8)
         {
             _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
             _temperature = temperature;
+            _enableOllamaThinking = enableOllamaThinking;
+            _criticScoreThreshold = criticScoreThreshold;
         }
 
         private string FormatTableSchemaToMarkdown(DependencyInfo dep)
@@ -110,19 +114,49 @@ namespace ReSet.Core.Services
                 {
                     staticAnalysisText.AppendLine("[Stored Procedure AST 정적 분석 정보 (AST Analysis Guidance)]");
                     staticAnalysisText.AppendLine($"- 식별된 참조 물리 테이블: {(spDef.StaticAnalysis.ReferencedTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.ReferencedTables) : "없음")}");
+                    
                     staticAnalysisText.AppendLine($"  * SELECT 대상 테이블: {(spDef.StaticAnalysis.SelectTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.SelectTables) : "없음")}");
+                    if (spDef.StaticAnalysis.SelectTables.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine("    (SELECT 대상 테이블은 CRUD 분석 표에 각각 독립적인 조회(SELECT) 참조 행으로 조건/참조 컬럼과 함께 완전하게 기술되어야 합니다.)");
+                    }
+                    
                     staticAnalysisText.AppendLine($"  * INSERT 대상 테이블: {(spDef.StaticAnalysis.InsertTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.InsertTables) : "없음")}");
+                    if (spDef.StaticAnalysis.InsertTables.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine("    (INSERT 대상 테이블은 삽입되는 모든 컬럼과 원천 데이터(SELECT 소스 컬럼, 하드코딩 상수, 함수 변환 등) 간의 1:1 대조 매핑 정보를 누락 없이 완전하게 표에 기술하십시오.)");
+                    }
+                    
                     staticAnalysisText.AppendLine($"  * UPDATE 대상 테이블: {(spDef.StaticAnalysis.UpdateTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.UpdateTables) : "없음")}");
                     staticAnalysisText.AppendLine($"  * DELETE 대상 테이블: {(spDef.StaticAnalysis.DeleteTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.DeleteTables) : "없음")}");
-                    staticAnalysisText.AppendLine($"- 식별된 생성/사용 임시 테이블: {(spDef.StaticAnalysis.CreatedTempTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.CreatedTempTables) : "없음")}");
+                    
+                    if (spDef.StaticAnalysis.CreatedTempTables.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine($"- 식별된 생성/사용 임시 테이블: {string.Join(", ", spDef.StaticAnalysis.CreatedTempTables)}");
+                    }
+                    else
+                    {
+                        staticAnalysisText.AppendLine("- 식별된 생성/사용 임시 테이블: 없음 (프로시저 내부에서 임시 테이블을 생성하거나 사용하지 않습니다. 이 사실을 ## CRUD 분석 섹션 등에 명시적으로 기재해 주십시오.)");
+                    }
+                    
                     if (spDef.StaticAnalysis.LinkedServerReferences.Count > 0)
                     {
                         staticAnalysisText.AppendLine($"- 식별된 Linked Server 원격 참조 목록: {string.Join(", ", spDef.StaticAnalysis.LinkedServerReferences)}");
                     }
+                    else
+                    {
+                        staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (프로시저 내부에서 Linked Server 원격 참조를 사용하지 않습니다. 이 사실을 ## CRUD 분석 또는 개요 섹션 등에 명시적으로 기재해 주십시오.)");
+                    }
+                    
                     if (spDef.StaticAnalysis.ReferencedFunctions.Count > 0)
                     {
                         staticAnalysisText.AppendLine($"- 식별된 UDF 사용자 정의 함수 호출 목록: {string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)}");
                     }
+                    else
+                    {
+                        staticAnalysisText.AppendLine("- 식별된 UDF 사용자 정의 함수 호출 목록: 없음 (프로시저 내부에서 UDF를 호출하지 않습니다. 이 사실을 ## CRUD 분석 섹션 등에 명시적으로 기재해 주십시오.)");
+                    }
+                    
                     if (spDef.StaticAnalysis.ControlFlowSummary.Count > 0)
                     {
                         staticAnalysisText.AppendLine("- 식별된 제어 흐름 구조 요약 (IF/WHILE):");
@@ -157,7 +191,7 @@ namespace ReSet.Core.Services
    - 노드 내부 텍스트에는 골뱅이(@)나 달러($) 같은 특수 변수명을 직접 사용할 때 이스케이프 처리가 복잡해지므로, 다이어그램 내부에서는 변수 기호를 빼고 일반 명칭으로 적으십시오. (예: 변수명 po_intRetVal 대신 '출력값 리턴' 또는 'po_intRetVal'로 기술)
 5. SP 내에 동적 SQL(예: EXEC, EXECUTE, sp_executesql을 통한 문자열 쿼리 실행)이 존재하는 경우, 동적으로 구성되어 실행되는 SQL의 목적과 대상 테이블을 코드 흐름 상에서 최대한 식별하여 CRUD 분석 및 비즈니스 로직 요약에 누락 없이 반영하십시오.
 6. SP 내에서 Linked Server를 통한 원격 참조(4파트 식별자: Server.Database.Schema.Table 형식을 사용하는 참조)가 발견되면, 해당 외부 DB/테이블 의존성과 데이터 연동 목적을 명확히 분석하여 포함하십시오.
-7. 응답 전체를 백틱(```markdown ... ```) 코드 블록으로 감싸지 마십시오. 반드시 마크다운 헤더(예: # 개요)로 시작하는 텍스트 형태로 직접 출력을 수행해야 합니다.
+7. 응답 전체를 백틱(```markdown ... ```) 코드 블록으로 감싸지 마십시오. 반드시 마크다운 헤더(예: ## 개요)로 시작하는 텍스트 형태로 직접 출력을 수행해야 합니다.
 8. 최종 작성된 마크다운 문서의 대분류(H2) 헤더는 반드시 다음 5가지 명칭을 정확히 그대로 사용해야 합니다: `## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`. 임의로 영어 명칭을 혼용하거나(예: `## 비즈니스 흐름 시각화 (Mermaid Diagram)`), 순번을 매기지 마십시오. (이를 준수하지 않을 시 기계적 린팅 오류가 발생합니다.)
 9. 문서 작성이 완료되면 추가 지원 제안, 인사말, 또는 향후 추가 분석 가능성에 대한 설명 등 본문 요건과 관련 없는 사족이나 안내 문구를 문서 끝에 절대 작성하지 마십시오. 문서의 정해진 필수 섹션 작성이 끝나는 즉시 깔끔하게 출력을 마쳐야 합니다.
 10. 테이블 컬럼의 상태값(예: OutState 등)이나 비즈니스 코드의 구체적인 의미가 메타데이터나 주석에 명시적으로 주어지지 않았다면, 임의로 업무 명칭(예: '지급완료' 등)을 단정하여 해석하지 말고 코드에 작성된 값 조건(예: 'OutState가 1, 5인 경우') 그대로 사실 기반으로 서술하십시오.
@@ -173,6 +207,85 @@ namespace ReSet.Core.Services
 {userInstructions}";
             
             var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(spDef);
+
+            // DDL 내 에러 반환코드 스캔 및 추출
+            var errorAssignments = new List<string>();
+            try
+            {
+                var ddlLines = spDef.DdlText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                int lineNum = 1;
+                foreach (var line in ddlLines)
+                {
+                    var trimmed = line.Trim();
+                    // 에러 코드 대입이나 RETURN 음수 구문 검색
+                    if (trimmed.Contains("@po_intRetVal", StringComparison.OrdinalIgnoreCase) && 
+                        (trimmed.Contains("-") || trimmed.Contains("=")) && 
+                        !trimmed.StartsWith("--"))
+                    {
+                        errorAssignments.Add($"Line {lineNum}: {trimmed}");
+                    }
+                    else if (trimmed.StartsWith("RETURN", StringComparison.OrdinalIgnoreCase) && 
+                             trimmed.Contains("-") && 
+                             !trimmed.StartsWith("--"))
+                    {
+                        errorAssignments.Add($"Line {lineNum}: {trimmed}");
+                    }
+                    lineNum++;
+                }
+            }
+            catch { }
+
+            var checklistSb = new StringBuilder();
+            checklistSb.AppendLine();
+
+            if (errorAssignments.Count > 0)
+            {
+                checklistSb.AppendLine("💡 [원본 DDL 소스코드 내 에러 반환 코드 감지 정보]");
+                foreach (var err in errorAssignments)
+                {
+                    checklistSb.AppendLine($"  * {err}");
+                }
+                checklistSb.AppendLine("  (위 에러 코드들이 발생하는 제어 흐름 위치와 음수 반환값들의 매핑 정보를 다이어그램 및 로직 흐름 요약에 오차 없이 정확히 기술했는지 검증하십시오.)");
+                checklistSb.AppendLine();
+            }
+
+            checklistSb.AppendLine("🎯 [최종 작성 전 필수 검증 체크리스트]");
+            
+            if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.CreatedTempTables.Count == 0)
+            {
+                checklistSb.AppendLine("- [ ] ## CRUD 분석 섹션 하단에 '임시 테이블 사용 여부: 임시 테이블을 생성하거나 사용하지 않습니다.'를 명시적으로 기재하셨습니까?");
+            }
+            else
+            {
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 생성/사용된 임시 테이블({string.Join(", ", spDef.StaticAnalysis.CreatedTempTables)})의 정의와 활용 목적을 기재하셨습니까?");
+            }
+
+            if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.ReferencedFunctions.Count == 0)
+            {
+                checklistSb.AppendLine("- [ ] ## CRUD 분석 섹션 하단에 '사용자 정의 함수(UDF) 호출 여부: UDF 사용자 정의 함수를 호출하지 않습니다.'를 명시적으로 기재하셨습니까?");
+            }
+            else
+            {
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+            }
+
+            if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
+            {
+                checklistSb.AppendLine("- [ ] ## CRUD 분석 섹션 또는 ## 개요에 'Linked Server 원격 참조 여부: Linked Server를 통한 원격 참조를 사용하지 않습니다.'를 명시적으로 기재하셨습니까?");
+            }
+
+            if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.SelectTables.Count > 0)
+            {
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 표에 SELECT 대상인 원천 테이블({string.Join(", ", spDef.StaticAnalysis.SelectTables)})이 각각 누락이나 '외 다수' 축약 없이 독립적인 행으로 기술되고, 참조 컬럼과 필터 조건이 정확히 작성되었습니까?");
+            }
+
+            if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.InsertTables.Count > 0)
+            {
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 표에 INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보(상수값, 변수, ISNULL 변환 등)가 1:1 대조 표로 완전하게 기술되었습니까?");
+            }
+
+            checklistSb.AppendLine("- [ ] Mermaid 흐름도 내부 노드의 한글 텍스트에 큰따옴표(\"\")를 사용하고 문법적 예약어 충돌이 없도록 작성하셨습니까?");
+            checklistSb.AppendLine("- [ ] SP 내부의 에러 처리 분기(예: DELETE/INSERT 실패 시 각각 @@ERROR 조건 분기 및 음수 반환 코드)와 트랜잭션 롤백 동작이 Mermaid 다이어그램 및 본문 설명에 충실히 반영되었습니까?");
 
             var userPrompt = $@"
 분석 대상 Stored Procedure 정보:
@@ -196,6 +309,7 @@ namespace ReSet.Core.Services
 ```
 
 위 모든 참조 정보와 원본 코드를 자세히 리버스 엔지니어링하여 지침에 맞게 마크다운 형식의 기능 명세서를 완성하십시오.
+{checklistSb.ToString()}
 ";
 
             if (!string.IsNullOrEmpty(feedbackLog))
@@ -257,7 +371,7 @@ namespace ReSet.Core.Services
         {
             var (systemPrompt, userPrompt) = BuildSpecificationPrompts(spDef, userInstructions, feedbackLog);
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
                 // Gemma 4 계열 모델의 추론(Thinking)을 강제 활성화하기 위해 시스템 프롬프트 첫 부분에 제어 토큰 삽입
                 systemPrompt = "<|think|>" + systemPrompt;
@@ -289,14 +403,19 @@ namespace ReSet.Core.Services
 [검토 및 채점 기준 (각 항목 0~10점 정수 채점)]
 1. 비즈니스 로직 및 제어 흐름 정합성 (ScoreAccuracy):
    - 원본 DDL 소스코드와 명세서의 비즈니스 로직(분기 조건, 중요 연산 수식 등)이 환각(왜곡) 없이 완벽히 일치하는가?
+   - 소스코드 주석과 실제 실행 쿼리 간의 모순이 감지되는 경우, 개요 하단에 `[🚨 주석 불일치 경고] {{모순내용}}` 형식의 경고 문구를 올바르게 포함시켰는가?
 2. 데이터 모델 및 CRUD 완전성 (ScoreCrud):
    - SP가 참조하는 테이블/컬럼들과 명세서 내 CRUD 분석 표가 누락 없이 매핑되었으며, 수집된 임시 테이블(#TempTable) 사용처 및 UDF 함수 호출 목록이 정확하게 반영되었는가?
+   - 임시 테이블이나 UDF, Linked Server를 사용하지 않는 프로시저인 경우, 명세서(## CRUD 분석 등)에 해당 미사용 사실을 명시적으로 기재하였는가?
 3. 연동 인터페이스 구체성 (ScoreInterface):
    - 입출력 파라미터와 반환 스키마 테이블의 컬럼명, 데이터 타입, 제약 조건이 임의 축약(예: '외 다수') 없이 완전하고 사실적으로 기술되었는가?
+   - 스키마 정보 상에서 `[설명 누락]` 컬럼이 존재하는 경우, 의미 유추를 수행하여 `[AI 추론 보완: Schema.Table.Column - 설명]` 형태로 본문에 누락 없이 기재했는가?
+   - DDL에 명시되지 않은 'NOT NULL'이나 'NULL 미허용' 등의 파라미터/컬럼 제약 조건을 주관적으로 단정하여 서술하지 않고 사실 기반으로 기술했는가?
 4. 예외 및 트랜잭션/격리성 정책 (ScoreException):
    - 오류 처리(TRY-CATCH), 트랜잭션 범위와 함께 DDL 내 NOLOCK 힌트 사용에 따른 데이터 격리성 영향이 예외 및 제약 설명에 잘 기술되었는가?
 5. 다이어그램 및 시각화 가독성 (ScoreReadability):
    - 비즈니스 흐름을 묘사하는 Mermaid flowchart가 문법 오류 없이 작성되었으며 흐름이 명료하고 직관적인가?
+   - 노드 한글 텍스트에 이중 큰따옴표(""text"")를 적절히 사용하였는지, 노드 ID가 영문자/숫자 조합의 고유 식별자이며 예약어 충돌이 없는지, 화살표 위에 특수기호/괄호/큰따옴표를 배제했는지, 그리고 노드 내부에 @ 나 $ 같은 변수 기호를 배제했는지 등의 문법 및 린팅 요건을 충족하는가?
 
 [결함(Defect) 판단 조건]
 - 5대 평가 기준 중 단 하나라도 8점 미만인 항목이 존재하거나, 명세서 5대 필수 대분류 헤더(## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화) 중 누락된 섹션이 있는 경우 HasDefects를 true로 판단하십시오.
@@ -312,6 +431,8 @@ namespace ReSet.Core.Services
   ""ScoreException"": 10,
   ""ScoreReadability"": 10
 }";
+
+            systemPrompt = systemPrompt.Replace("8점 미만", $"{_criticScoreThreshold}점 미만");
 
             var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(spDef);
 
@@ -418,7 +539,7 @@ namespace ReSet.Core.Services
 위 레거시 배치 SP 정보를 바탕으로 {targetLanguage} 기준의 '배치 전환 계획 설계서'를 작성해 주십시오.
 ";
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
                 systemPrompt = "<|think|>" + systemPrompt;
                 systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 또는 Gemma 4 표준 출력 포맷으로 상세히 기술하십시오. 최종 분석 명세서는 반드시 해당 태그 바깥에 작성해야 합니다.";
@@ -476,7 +597,7 @@ namespace ReSet.Core.Services
 
             userPrompt.AppendLine("위 개별 명세서들의 정보를 완벽히 분석하여, 지침에 맞추어 단일 통합 배치 전환 계획서를 구성해 주십시오.");
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
                 systemPrompt = "<|think|>" + systemPrompt;
                 systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 또는 Gemma 4 표준 출력 포맷으로 상세히 기술하십시오. 최종 분석 명세서는 반드시 해당 태그 바깥에 작성해야 합니다.";

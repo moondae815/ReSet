@@ -13,7 +13,7 @@ namespace ReSet.Core.Services.Clients
         public string ProviderName => "Ollama";
         public string ModelName => _openAiClient.ModelName;
 
-        public OllamaClient(HttpClient httpClient, string endpoint, string modelName)
+        public OllamaClient(HttpClient httpClient, string endpoint, string modelName, int? numCtx = null)
         {
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:11434" : endpoint.Trim();
             
@@ -24,7 +24,7 @@ namespace ReSet.Core.Services.Clients
             }
 
             // Ollama does not require an API key by default
-            _openAiClient = new OpenAiClient(httpClient, string.Empty, ep, modelName);
+            _openAiClient = new OpenAiClient(httpClient, string.Empty, ep, modelName, numCtx);
         }
 
         public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, CancellationToken cancellationToken = default)

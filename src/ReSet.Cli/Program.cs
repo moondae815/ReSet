@@ -295,8 +295,24 @@ namespace ReSet.Cli
                 timeoutSeconds = parsedTimeout;
             }
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
-            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient);
-            IAiService aiService = new AiService(aiClient, temp);
+
+            // Provider별 추가 옵션 로드
+            int? numCtx = null;
+            if (int.TryParse(configuration[$"AiSettings:Providers:{provider}:NumCtx"], out int parsedNumCtx) && parsedNumCtx > 0)
+            {
+                numCtx = parsedNumCtx;
+            }
+            bool.TryParse(configuration[$"AiSettings:Providers:{provider}:EnableThinking"] ?? "false", out bool enableOllamaThinking);
+
+            // Critic Threshold Score 로드
+            int criticThresholdScore = 8;
+            if (int.TryParse(configuration["AiSettings:Critic:ThresholdScore"], out int parsedThresholdScore) && parsedThresholdScore >= 0)
+            {
+                criticThresholdScore = parsedThresholdScore;
+            }
+
+            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx);
+            IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore);
 
             // 하이브리드 아키텍처: ActorEffort 파싱
             var actorEffort = configuration["AiSettings:ActorEffort"];
@@ -310,8 +326,16 @@ namespace ReSet.Cli
             {
                 var criticApiKey = configuration[$"AiSettings:Providers:{criticProvider}:ApiKey"] ?? string.Empty;
                 var criticEndpoint = configuration[$"AiSettings:Providers:{criticProvider}:Endpoint"] ?? string.Empty;
-                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient);
-                criticService = new AiService(criticClient, temp);
+
+                int? criticNumCtx = null;
+                if (int.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:NumCtx"], out int parsedCriticNumCtx) && parsedCriticNumCtx > 0)
+                {
+                    criticNumCtx = parsedCriticNumCtx;
+                }
+                bool.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:EnableThinking"] ?? "false", out bool criticEnableThinking);
+
+                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx);
+                criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore);
             }
 
             // 하이브리드 아키텍처: Consolidator 서비스 구성
@@ -323,8 +347,16 @@ namespace ReSet.Cli
             {
                 var consolidatorApiKey = configuration[$"AiSettings:Providers:{consolidatorProvider}:ApiKey"] ?? string.Empty;
                 var consolidatorEndpoint = configuration[$"AiSettings:Providers:{consolidatorProvider}:Endpoint"] ?? string.Empty;
-                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient);
-                consolidatorService = new AiService(consolidatorClient, temp);
+
+                int? consolidatorNumCtx = null;
+                if (int.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:NumCtx"], out int parsedConsolNumCtx) && parsedConsolNumCtx > 0)
+                {
+                    consolidatorNumCtx = parsedConsolNumCtx;
+                }
+                bool.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:EnableThinking"] ?? "false", out bool consolidatorEnableThinking);
+
+                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx);
+                consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore);
             }
 
             IMetadataExporter metadataExporter = new MetadataExporter();

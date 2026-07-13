@@ -18,15 +18,17 @@ namespace ReSet.Core.Services.Clients
         private readonly string _endpoint;
         private readonly string _modelName;
         private readonly bool _isOllama;
+        private readonly int? _numCtx;
 
         public string ProviderName => "OpenAI";
         public string ModelName => _modelName;
 
-        public OpenAiClient(HttpClient httpClient, string apiKey, string endpoint, string modelName)
+        public OpenAiClient(HttpClient httpClient, string apiKey, string endpoint, string modelName, int? numCtx = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _apiKey = apiKey;
             _modelName = modelName;
+            _numCtx = numCtx;
 
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "https://api.openai.com/v1" : endpoint.Trim();
             if (ep.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
@@ -201,6 +203,14 @@ namespace ReSet.Core.Services.Clients
                         }
                     }
                     requestBody.Add("think", thinkValue);
+
+                    if (_numCtx.HasValue)
+                    {
+                        requestBody.Add("options", new Dictionary<string, object>
+                        {
+                            { "num_ctx", _numCtx.Value }
+                        });
+                    }
                 }
 
                 if (isReasoningEnforcedModel)

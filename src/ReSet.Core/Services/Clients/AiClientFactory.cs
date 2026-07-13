@@ -5,7 +5,7 @@ namespace ReSet.Core.Services.Clients
 {
     public static class AiClientFactory
     {
-        public static IAiClient CreateClient(string provider, string modelName, string apiKey, string endpoint, HttpClient? httpClient = null)
+        public static IAiClient CreateClient(string provider, string modelName, string apiKey, string endpoint, HttpClient? httpClient = null, int? numCtx = null)
         {
             var client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(300) };
 
@@ -16,8 +16,8 @@ namespace ReSet.Core.Services.Clients
 
             return provider.ToLowerInvariant() switch
             {
-                "openai" => new OpenAiClient(client, apiKey, endpoint, modelName),
-                "ollama" => new OllamaClient(client, endpoint, modelName),
+                "openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
+                "ollama" => new OllamaClient(client, endpoint, modelName, numCtx),
                 "claude" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "anthropic" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "google" => new GoogleClient(client, apiKey, endpoint, modelName),
