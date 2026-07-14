@@ -43,6 +43,12 @@ namespace ReSet.Core.Services
                     if (fragment != null)
                     {
                         var visitor = new SpStructureVisitor();
+
+                        // Pre-scan table aliases to handle order-dependency (SELECT list before FROM clause)
+                        var aliasVisitor = new TableAliasVisitor();
+                        fragment.Accept(aliasVisitor);
+                        visitor.InitializeAliasMap(aliasVisitor.AliasToTableMap);
+
                         fragment.Accept(visitor);
 
                         result.IsParsedSuccessfully = true;
@@ -110,6 +116,15 @@ namespace ReSet.Core.Services
         private readonly Stack<string> _statementContext = new();
         private readonly Dictionary<string, string> _aliasToTableMap = new(StringComparer.OrdinalIgnoreCase);
         private int _indentLevel = 0;
+        private string? _currentInsertTarget = null;
+
+        public void InitializeAliasMap(Dictionary<string, string> aliasMap)
+        {
+            foreach (var kvp in aliasMap)
+            {
+                _aliasToTableMap[kvp.Key] = kvp.Value;
+            }
+        }
 
         // CRUD Statement 방문 감지 및 컨텍스트 스택 처리 (ExplicitVisit 적용)
         public override void ExplicitVisit(SelectStatement node)
@@ -122,7 +137,13 @@ namespace ReSet.Core.Services
         public override void ExplicitVisit(InsertStatement node)
         {
             _statementContext.Push("INSERT");
+            string? prevInsertTarget = _currentInsertTarget;
+            if (node.InsertSpecification != null && node.InsertSpecification.Target is NamedTableReference namedTarget && namedTarget.SchemaObject != null)
+            {
+                _currentInsertTarget = GetSchemaObjectString(namedTarget.SchemaObject);
+            }
             base.ExplicitVisit(node);
+            _currentInsertTarget = prevInsertTarget;
             _statementContext.Pop();
         }
 
@@ -144,7 +165,13 @@ namespace ReSet.Core.Services
         public override void ExplicitVisit(InsertSpecification node)
         {
             _statementContext.Push("INSERT");
+            string? prevInsertTarget = _currentInsertTarget;
+            if (node.Target is NamedTableReference namedTarget && namedTarget.SchemaObject != null)
+            {
+                _currentInsertTarget = GetSchemaObjectString(namedTarget.SchemaObject);
+            }
             base.ExplicitVisit(node);
+            _currentInsertTarget = prevInsertTarget;
             _statementContext.Pop();
         }
 
@@ -304,6 +331,10 @@ namespace ReSet.Core.Services
                         targetTable = tableQualifier;
                     }
                 }
+                else if (_statementContext.Count > 0 && _statementContext.Peek() == "INSERT" && !string.IsNullOrEmpty(_currentInsertTarget))
+                {
+                    targetTable = _currentInsertTarget;
+                }
                 else if (ReferencedTables.Count == 1)
                 {
                     targetTable = ReferencedTables[0];
@@ -392,6 +423,56 @@ namespace ReSet.Core.Services
             }
             var cond = sb.ToString().Trim();
             return string.IsNullOrWhiteSpace(cond) ? "Predicate Details" : cond;
+        }
+    }
+
+    internal class TableAliasVisitor : TSqlFragmentVisitor
+    {
+        public Dictionary<string, string> AliasToTableMap { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> FoundTables { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> FoundTemps { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public override void ExplicitVisit(NamedTableReference node)
+        {
+            base.ExplicitVisit(node);
+            if (node.SchemaObject != null)
+            {
+                var tableName = GetSchemaObjectString(node.SchemaObject);
+                if (!string.IsNullOrWhiteSpace(tableName))
+                {
+                    if (node.Alias != null && !string.IsNullOrWhiteSpace(node.Alias.Value))
+                    {
+                        AliasToTableMap[node.Alias.Value] = tableName;
+                    }
+                    // Map table name itself and its base name to the full name
+                    AliasToTableMap[tableName] = tableName;
+                    var parts = tableName.Split('.');
+                    if (parts.Length > 0)
+                    {
+                        AliasToTableMap[parts[parts.Length - 1]] = tableName;
+                    }
+
+                    if (tableName.StartsWith("#"))
+                    {
+                        FoundTemps.Add(tableName);
+                    }
+                    else
+                    {
+                        FoundTables.Add(tableName);
+                    }
+                }
+            }
+        }
+
+        private string GetSchemaObjectString(SchemaObjectName schemaObject)
+        {
+            var parts = new List<string>();
+            if (schemaObject.ServerIdentifier != null) parts.Add(schemaObject.ServerIdentifier.Value);
+            if (schemaObject.DatabaseIdentifier != null) parts.Add(schemaObject.DatabaseIdentifier.Value);
+            if (schemaObject.SchemaIdentifier != null) parts.Add(schemaObject.SchemaIdentifier.Value);
+            if (schemaObject.BaseIdentifier != null) parts.Add(schemaObject.BaseIdentifier.Value);
+
+            return string.Join(".", parts);
         }
     }
 }

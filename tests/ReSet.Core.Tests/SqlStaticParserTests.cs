@@ -257,5 +257,46 @@ END;
             Assert.StartsWith("    ", result.ControlFlowSummary[2]); // 4칸 들여쓰기
             Assert.Contains("IF", result.ControlFlowSummary[2]);
         }
+
+        [Fact]
+        public void Analyze_WithAliasesAndInsertTarget_ShouldResolveColumnsCorrectly()
+        {
+            // Arrange
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestColumnResolution
+AS
+BEGIN
+    INSERT INTO dbo.TSettleMst (YMD, AYMD, TxAmt)
+    SELECT @pi_strYMD, A.YMD, B.TxAmt
+    FROM PaymentDB.dbo.TTxMst A
+    JOIN SETTLE_POQ_DB.dbo.TSettleMst B ON A.PLTID = B.PLTID;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            // Act
+            var result = parser.Analyze(ddlText);
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            
+            // Check that SELECT columns with aliases are correctly resolved and associated
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("PaymentDB.dbo.TTxMst"));
+            var tTxMstCols = result.ReferencedColumnsPerTable["PaymentDB.dbo.TTxMst"];
+            Assert.Contains("YMD", tTxMstCols);
+            Assert.Contains("PLTID", tTxMstCols);
+
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("SETTLE_POQ_DB.dbo.TSettleMst"));
+            var tSettleMstCols = result.ReferencedColumnsPerTable["SETTLE_POQ_DB.dbo.TSettleMst"];
+            Assert.Contains("TxAmt", tSettleMstCols);
+            Assert.Contains("PLTID", tSettleMstCols);
+
+            // Check that INSERT columns are correctly associated with the insert target
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TSettleMst"));
+            var targetCols = result.ReferencedColumnsPerTable["dbo.TSettleMst"];
+            Assert.Contains("YMD", targetCols);
+            Assert.Contains("AYMD", targetCols);
+            Assert.Contains("TxAmt", targetCols);
+        }
     }
 }
