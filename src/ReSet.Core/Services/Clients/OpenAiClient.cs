@@ -179,6 +179,17 @@ namespace ReSet.Core.Services.Clients
                 {
                     targetTemp = 1.0f;
                 }
+                else if (_isOllama && !string.IsNullOrWhiteSpace(effort))
+                {
+                    targetTemp = effort.ToLowerInvariant() switch
+                    {
+                        "low" => 0.1f,
+                        "medium" => 0.4f,
+                        "high" => 0.7f,
+                        "max" => 0.9f,
+                        _ => targetTemp
+                    };
+                }
 
                 var requestBody = new System.Collections.Generic.Dictionary<string, object>
                 {
