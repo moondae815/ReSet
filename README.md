@@ -16,7 +16,7 @@
 ### 1. 지능형 역공학 및 의존성 분석 (Analyzer)
 * **재귀적 하이브리드 의존성 추적**: 깊이 우선 탐색(DFS) 방식으로 SP가 참조하는 테이블, 뷰, UDF 및 타 SP를 재귀 추적하여 전체 의존성 구조를 파악합니다. (권한 오류 발생 시 경고 기록 후 안전한 Soft Fail 제공)
 * **스키마 및 주석 자동 수집**: 데이터 타입, Null 여부, PK/FK 관계뿐만 아니라 컬럼의 Identity, 기본값 정의, 테이블 인덱스 메타데이터 및 시스템 설명(`MS_Description`)까지 긁어와 AI 분석용 도메인 맥락으로 자동 주입합니다.
-* **T-SQL AST 정적 분석 (ScriptDom)**: Microsoft 공식 ScriptDom 분석기를 탑재하여 DDL의 CRUD 성격별(SELECT/INSERT/UPDATE/DELETE) 테이블 분류, 중첩 분기(IF/WHILE) 들여쓰기 요약, 동적 SQL 및 UDF/Linked Server 원격 참조 자동 감지, 그리고 데이터베이스 호환성 수준별 파서 동적 매핑을 지원합니다.
+* **T-SQL AST 정적 분석 (ScriptDom)**: Microsoft 공식 ScriptDom 분석기를 탑재하여 DDL의 CRUD 성격별(SELECT/INSERT/UPDATE/DELETE) 테이블 분류, 테이블별 물리 참조 컬럼(Referenced Columns) 및 Alias 정보 추출, 중첩 분기(IF/WHILE) 들여쓰기 요약, 동적 SQL 및 UDF/Linked Server 원격 참조 자동 감지, 그리고 데이터베이스 호환성 수준별 파서 동적 매핑을 지원합니다.
 * **다중 포맷 메타데이터 수출**: 분석에 사용된 원천 데이터를 구조화된 JSON, 프롬프트 텍스트, 그리고 개별 객체 단위 DDL/MD 파일 구조로 자동 분산 저장(Dump)합니다.
 
 ### 2. 3단계 신뢰성 검증 파이프라인 (Verification)

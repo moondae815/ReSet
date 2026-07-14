@@ -165,6 +165,14 @@ namespace ReSet.Core.Services
                             staticAnalysisText.AppendLine($"  * {cf}");
                         }
                     }
+                    if (spDef.StaticAnalysis.ReferencedColumnsPerTable != null && spDef.StaticAnalysis.ReferencedColumnsPerTable.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine("- 식별된 테이블별 실제 쿼리 참조 컬럼 목록 (진실의 원천 - 이 컬럼들을 CRUD 및 파라미터 매핑에 반드시 축약 없이 기술하십시오):");
+                        foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
+                        {
+                            staticAnalysisText.AppendLine($"  * 테이블: {kvp.Key} -> 참조 컬럼: {string.Join(", ", kvp.Value)}");
+                        }
+                    }
                 }
                 else if (!string.IsNullOrEmpty(spDef.StaticAnalysis.ParserWarningMessage))
                 {
@@ -314,7 +322,7 @@ namespace ReSet.Core.Services
 
             if (!string.IsNullOrEmpty(feedbackLog))
             {
-                userPrompt += $"\n\n[이전 시도에 대한 검증 오류/수정 피드백 로그]:\n{feedbackLog}\n위 검토 및 수정 의견을 전적으로 수용하여 명세서 내용을 정교하게 수정하고 오류를 바로잡아 다시 작성해 주십시오.";
+                userPrompt += $"\n\n[이전 시도에 대한 검증 오류/수정 피드백 로그]:\n{feedbackLog}\n\n위 검토 및 수정 체크리스트의 모든 요건들을 전적으로 수용하여 명세서 내용을 정교하게 수정하고 오류를 바로잡아 다시 작성해 주십시오. 특히 이전 턴에서 정상적으로 분석되었던 다른 섹션이나 테이블 컬럼 목록이 이번 수정 과정에서 실수로 유실되거나 훼손되는 회귀 결함(Regression)이 절대 발생하지 않도록, 제공된 '진실의 원천' 메타데이터(참조 컬럼 목록 등)와 철저히 대조해 주십시오.";
             }
 
             return (systemPrompt, userPrompt);

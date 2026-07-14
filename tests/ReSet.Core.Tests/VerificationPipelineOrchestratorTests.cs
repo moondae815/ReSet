@@ -41,7 +41,7 @@ namespace ReSet.Core.Tests
             _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewSpecificationAsync(spDef, specMarkdown)
                 .Returns(Task.FromResult(reviewResult));
 
@@ -70,7 +70,7 @@ namespace ReSet.Core.Tests
             _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewSpecificationAsync(spDef, specMarkdown)
                 .Returns(Task.FromResult(reviewResult));
 
@@ -103,7 +103,7 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new AiResult { Content = goodSpec })  // 2차 호출
                 );
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewSpecificationAsync(spDef, goodSpec)
                 .Returns(Task.FromResult(reviewResult));
 
@@ -130,12 +130,12 @@ namespace ReSet.Core.Tests
             _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewSpecificationAsync(spDef, specMarkdown)
                 .Returns(Task.FromResult(reviewResult));
 
             // L3 상호작용: 1차 피드백 -> 2차 승인
-            _userInteraction.RequestHumanReviewAsync("dbo.USP_Test", specMarkdown)
+            _userInteraction.RequestHumanReviewAsync("dbo.USP_Test", Arg.Any<string>())
                 .Returns(
                     _ => Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "수정 의견" }),
                     _ => Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
@@ -164,11 +164,11 @@ namespace ReSet.Core.Tests
             _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = consolidatedPlan }));
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), consolidatedPlan, "Job_Test")
                 .Returns(Task.FromResult(reviewResult));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", consolidatedPlan)
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -194,11 +194,11 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new AiResult { Content = goodPlan })
                 );
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), goodPlan, "Job_Test")
                 .Returns(Task.FromResult(reviewResult));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", goodPlan)
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -223,10 +223,10 @@ namespace ReSet.Core.Tests
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
                 .Returns(
                     _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "L2 결함" }),
-                    _ => Task.FromResult(new ReviewResult { HasDefects = false })
+                    _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 })
                 );
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", plan)
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -251,7 +251,7 @@ namespace ReSet.Core.Tests
             _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
-            var reviewResult = new ReviewResult { HasDefects = false };
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
             _aiService.ReviewSpecificationAsync(spDef, specMarkdown)
                 .Returns(Task.FromResult(reviewResult));
 

@@ -55,6 +55,7 @@ namespace ReSet.Core.Services
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
                         result.ReferencedFunctions = visitor.ReferencedFunctions;
+                        result.ReferencedColumnsPerTable = visitor.ReferencedColumnsPerTable;
                     }
                 }
             }
@@ -93,6 +94,7 @@ namespace ReSet.Core.Services
 
         public List<string> LinkedServerReferences { get; } = new();
         public List<string> ReferencedFunctions { get; } = new();
+        public Dictionary<string, List<string>> ReferencedColumnsPerTable { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<string> _foundTables = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _foundTemps = new(StringComparer.OrdinalIgnoreCase);
@@ -106,6 +108,7 @@ namespace ReSet.Core.Services
         private readonly HashSet<string> _foundFuncs = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly Stack<string> _statementContext = new();
+        private readonly Dictionary<string, string> _aliasToTableMap = new(StringComparer.OrdinalIgnoreCase);
         private int _indentLevel = 0;
 
         // CRUD Statement 방문 감지 및 컨텍스트 스택 처리 (ExplicitVisit 적용)
@@ -202,6 +205,12 @@ namespace ReSet.Core.Services
                 var tableName = GetSchemaObjectString(node.SchemaObject);
                 if (!string.IsNullOrWhiteSpace(tableName))
                 {
+                    // Alias 등록
+                    if (node.Alias != null && !string.IsNullOrWhiteSpace(node.Alias.Value))
+                    {
+                        _aliasToTableMap[node.Alias.Value] = tableName;
+                    }
+
                     // Linked Server 감지 (ServerIdentifier가 있는 4파트 명칭 구조)
                     if (node.SchemaObject.ServerIdentifier != null)
                     {
@@ -268,6 +277,52 @@ namespace ReSet.Core.Services
                         {
                             ReferencedFunctions.Add(funcName);
                         }
+                    }
+                }
+            }
+        }
+
+        // ColumnReferenceExpression 방문 및 수집
+        public override void ExplicitVisit(ColumnReferenceExpression node)
+        {
+            base.ExplicitVisit(node);
+            if (node.MultiPartIdentifier != null && node.MultiPartIdentifier.Identifiers.Count > 0)
+            {
+                var idents = node.MultiPartIdentifier.Identifiers;
+                string columnName = idents[idents.Count - 1].Value;
+                string? tableQualifier = idents.Count > 1 ? idents[idents.Count - 2].Value : null;
+
+                string targetTable = "Unknown";
+                if (!string.IsNullOrEmpty(tableQualifier))
+                {
+                    if (_aliasToTableMap.TryGetValue(tableQualifier, out var mappedTable))
+                    {
+                        targetTable = mappedTable;
+                    }
+                    else if (_foundTables.Contains(tableQualifier) || _foundTemps.Contains(tableQualifier))
+                    {
+                        targetTable = tableQualifier;
+                    }
+                }
+                else if (ReferencedTables.Count == 1)
+                {
+                    targetTable = ReferencedTables[0];
+                }
+                else if (ReferencedTables.Count == 0 && CreatedTempTables.Count == 1)
+                {
+                    targetTable = CreatedTempTables[0];
+                }
+
+                if (targetTable != "Unknown")
+                {
+                    if (!ReferencedColumnsPerTable.TryGetValue(targetTable, out var columns))
+                    {
+                        columns = new List<string>();
+                        ReferencedColumnsPerTable[targetTable] = columns;
+                    }
+                    if (!columns.Contains(columnName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        columns.Add(columnName);
                     }
                 }
             }

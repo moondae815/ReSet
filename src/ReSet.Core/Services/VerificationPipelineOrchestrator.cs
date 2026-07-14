@@ -550,6 +550,13 @@ namespace ReSet.Core.Services
                         }
                     }
 
+                    // [추가] 최종 보완 후 여전히 결함이 감지된 경우(최종 Critic 검토 기준 점수 미달), 경고 배너 삽입
+                    if (finalReview != null && finalReview.HasDefects)
+                    {
+                        var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {finalReview.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {finalReview.ScoreAccuracy}/10, CRUD {finalReview.ScoreCrud}/10, 인터페이스 {finalReview.ScoreInterface}/10, 가독성 {finalReview.ScoreReadability}/10, 예외 {finalReview.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {finalReview.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
+                        specificationMarkdown = warningBanner + specificationMarkdown;
+                    }
+
                     _userInteraction.NotifyValidationSuccess(selectedOption);
                 }
             }
@@ -672,30 +679,21 @@ namespace ReSet.Core.Services
 
                     if (reviewSuccess && l2Result != null)
                     {
-                        // 꼬리 잡기 방지를 위한 Decaying Threshold 및 Severity 구분 판정
+                        // [수정] 감쇄 임계치(Decay)를 전면 비활성화하여 항상 설정된 기준 점수(_criticScoreThreshold)를 강제
                         bool overriddenHasDefects = false;
                         
-                        // 시도 횟수(attempt)에 비례하여 통과 기준 점수를 점진적으로 낮춤 (최소 5점)
-                        int decay = attempt - 1;
-                        int criticalThreshold = Math.Max(5, _criticScoreThreshold - decay); // ScoreAccuracy, ScoreCrud
-                        
-                        // 사소한(Minor) 결함 기준 완화폭은 2배로 넓게 가짐 (최소 4점)
-                        int minorDecay = (attempt - 1) * 2;
-                        int minorThreshold = Math.Max(4, _criticScoreThreshold - minorDecay); // ScoreInterface, ScoreException, ScoreReadability
-                        
-                        if (l2Result.ScoreAccuracy < criticalThreshold ||
-                            l2Result.ScoreCrud < criticalThreshold ||
-                            l2Result.ScoreInterface < minorThreshold ||
-                            l2Result.ScoreException < minorThreshold ||
-                            l2Result.ScoreReadability < minorThreshold)
+                        if (l2Result.ScoreAccuracy < _criticScoreThreshold ||
+                            l2Result.ScoreCrud < _criticScoreThreshold ||
+                            l2Result.ScoreInterface < _criticScoreThreshold ||
+                            l2Result.ScoreException < _criticScoreThreshold ||
+                            l2Result.ScoreReadability < _criticScoreThreshold)
                         {
                             overriddenHasDefects = true;
                         }
 
-                        if (l2Result.HasDefects && !overriddenHasDefects)
+                        if (overriddenHasDefects)
                         {
-                            Log.Information("[파이프라인] L2 AI 리뷰의 결함을 보정(Decaying Threshold / Severity 완화로 통과) 처리합니다. (시도 {Attempt})", attempt);
-                            l2Result.HasDefects = false;
+                            l2Result.HasDefects = true;
                         }
                     }
 
@@ -707,9 +705,10 @@ namespace ReSet.Core.Services
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                         if (canRetry)
                         {
-                            feedbackHistory.Add($"[시도 {attempt} L2 피드백]:\n{l2Result.FeedbackComment}");
-                            feedbackLog = "[L2 AI 리뷰 피드백 히스토리]: 다음 누적 결함/누락사항이 지적되었습니다. 이전의 실수를 반복하지 말고 지적 사항을 전면 반영해서 수정해 주십시오.\n\n" + 
-                                          string.Join("\n\n", feedbackHistory);
+                            feedbackHistory.Add($"### [시도 {attempt} L2 피드백 누적 체크리스트]\n{l2Result.FeedbackComment}");
+                            feedbackLog = "[L2 AI 리뷰 피드백 누적 체크리스트 (Stateful Checklist)]:\n" + 
+                                          string.Join("\n\n", feedbackHistory) +
+                                          "\n\n※ 지시사항: 위 체크리스트의 각 항목들이 최종 명세서에 어떻게 반영되었는지 본문을 생성할 때 철저히 비교 및 정합성을 체크하여 회귀 결함이 발생하지 않도록 하십시오.";
                             attempt++;
                             continue;
                         }
@@ -717,6 +716,11 @@ namespace ReSet.Core.Services
                         {
                             Log.Error("[파이프라인] L2 AI 교차 리뷰 최종 실패 - SP: {SpName}", selectedOption);
                             _userInteraction.NotifyError($"{selectedOption} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
+                            
+                            // 최종 품질 불합격 경고 배너 삽입
+                            finalReview = l2Result;
+                            var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {l2Result.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {l2Result.ScoreAccuracy}/10, CRUD {l2Result.ScoreCrud}/10, 인터페이스 {l2Result.ScoreInterface}/10, 가독성 {l2Result.ScoreReadability}/10, 예외 {l2Result.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {l2Result.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
+                            specificationMarkdown = warningBanner + specificationMarkdown;
                             break;
                         }
                     }
@@ -874,6 +878,7 @@ namespace ReSet.Core.Services
             CancellationToken cancellationToken = default)
         {
             string? feedbackLog = null;
+            var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
@@ -959,13 +964,20 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        feedbackLog = $"[L2 AI 리뷰 피드백]: 다음 결함/누락사항이 지적되었습니다. 전면 반영해서 수정해 주십시오.\n{l2Result.FeedbackComment}";
+                        feedbackHistory.Add($"### [시도 {attempt} L2 피드백 누적 체크리스트]\n{l2Result.FeedbackComment}");
+                        feedbackLog = "[L2 AI 리뷰 피드백 누적 체크리스트 (Stateful Checklist)]:\n" + 
+                                      string.Join("\n\n", feedbackHistory) +
+                                      "\n\n※ 지시사항: 위 체크리스트의 각 항목들이 최종 명세서에 어떻게 반영되었는지 본문을 생성할 때 철저히 비교 및 정합성을 체크하여 회귀 결함이 발생하지 않도록 하십시오.";
                         attempt++;
                         continue;
                     }
                     else
                     {
                         _userInteraction.NotifyError($"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
+                        
+                        // 최종 품질 불합격 경고 배너 삽입
+                        var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {l2Result.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {l2Result.ScoreAccuracy}/10, CRUD {l2Result.ScoreCrud}/10, 인터페이스 {l2Result.ScoreInterface}/10, 가독성 {l2Result.ScoreReadability}/10, 예외 {l2Result.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {l2Result.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
+                        consolidatedPlan = warningBanner + consolidatedPlan;
                         break;
                     }
                 }

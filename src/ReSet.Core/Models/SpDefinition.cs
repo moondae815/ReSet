@@ -26,5 +26,6 @@ namespace ReSet.Core.Models
         public List<string> DeleteTables { get; set; } = new();
         public List<string> LinkedServerReferences { get; set; } = new();
         public List<string> ReferencedFunctions { get; set; } = new();
+        public Dictionary<string, List<string>> ReferencedColumnsPerTable { get; set; } = new(System.StringComparer.OrdinalIgnoreCase);
     }
 }
