@@ -28,10 +28,10 @@
 *   **비즈니스 서비스 ([Services](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services))**
     *   [DbMetadataService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/DbMetadataService.cs): SQL Server 메타데이터(Extended Properties, DDL, 의존성 관계)를 DFS 재귀 탐색을 활용해 수집하는 인터페이스([IDbMetadataService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IDbMetadataService.cs)) 구현체.
     *   [SqlStaticParser.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/SqlStaticParser.cs): ScriptDom 라이브러리를 가동해 테이블 CRUD, 임시 테이블, 분기 들여쓰기 린팅, 동적 SQL, UDF 및 Linked Server 원격 참조를 정적으로 파싱하는 정적 분석기 서비스.
-    *   [AiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs): 수집한 정보를 프롬프트로 다듬어 AI 공급자에 분석 요청을 보내는 인터페이스([IAiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiService.cs)) 구현체.
+    *   [AiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs): 수집한 정보를 프롬프트로 다듬어 AI 공급자에 분석 요청을 보내는 인터페이스([IAiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiService.cs)) 구현체. AST 참조 컬럼 분석 기반 스키마 필터링 기능 및 Ollama 최적화 구역별 병렬 분할 생성 메소드(`GenerateSpecSectionAsync`) 구현을 포함합니다.
     *   [IAiClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiClient.cs): AI 모델 간의 공통 텍스트 통신 계약 정의 인터페이스 및 프로바이더별 클라이언트 팩토리([AiClientFactory.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/AiClientFactory.cs)).
-    *   [MechanicalValidator.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하는 클래스.
-    *   [VerificationPipelineOrchestrator.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당.
+    *   [MechanicalValidator.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하고, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`)를 기동하는 클래스.
+    *   [VerificationPipelineOrchestrator.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 1회차 구역별 병렬 생성 및 L1 자동 정화 마크다운 반영 오케스트레이션을 담당합니다.
     *   [MetadataExporter.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MetadataExporter.cs): 원본 DB 메타데이터를 JSON, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL/MD 파일 등으로 보존하고, 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 및 통합 마이그레이션 지시서 번들(`{JobName}_MigrationInstructions.md`)을 생성하는 기능 구현체 (SP 및 통합 Job별 전용 하위 디렉토리에 격리 분류 저장).
     *   [CacheManager.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/CacheManager.cs): SHA-256 해시 기반 로컬 증분 분석 캐싱 서비스 구현체 ([ICacheManager.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/ICacheManager.cs) 포함).
     *   AI 응답 수집 및 로그 격리: AI 클라이언트 호출 결과에서 추출된 추론(Thinking) 텍스트는 수집 후 TUI 화면을 오염시키지 않도록 `Log.Verbose` 또는 파일 전용 로그에만 기록되게 하고, 기본 실행 수준에서는 실시간 노출을 차단하여 TUI 화면 깨짐을 원천적으로 차단하십시오.
@@ -112,7 +112,9 @@
 ### ⚙️ 범주 4. 검증 오케스트레이션 및 파이프라인 흐름 (Verification Workflow)
 6.  **3단계 검증 파이프라인의 역할 분리 및 L2 Actor-Critic을 운용하십시오.**
     *   **L1 (정적)**: [MechanicalValidator.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs)에서 Markdig 파서 필수 섹션 검증 및 Mermaid 다이어그램 린팅을 수행하십시오.
+        - **Mermaid 다이어그램 자동 정화**: Mermaid 린팅 전 `CleanseMermaidCode`를 통해 화살표 라벨 따옴표 제거, 잘못된 화살표 기호 보정, 노드 ID 특수문자 제거, 특수문자 포함 라벨 큰따옴표 자동 래핑 등 자동 정화기가 구동되어 정화된 마크다운을 산출하도록 설계되어 있습니다. 이 정화된 내용을 훼손하거나 무력화하지 마십시오.
     *   **L2 (AI 교차 검토)**: [AiService.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs)의 자가 보완 루프(`MaxL2Attempts` 한도 준수)를 제어하고, 이전 실패 원인, `GapReport`, 그리고 누적 피드백 히스토리를 요건 체크리스트 포맷(Stateful Checklist)으로 관리 및 동적 주입하여 회귀 결함(Regression)을 예방하십시오.
+        - **Ollama 구역별 병렬 분할 생성**: Ollama 제공자 사용 시 1회차 생성은 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 구역으로 나누어 병렬로 구동 및 조립되도록 설계되어 있습니다. 분할 프롬프트 빌드 규칙 및 태스크 구성을 변경할 때는 이 오케스트레이션 정합성을 준수하십시오.
     *   **L2 Actor-Critic**: `ActorEffort: "dynamic"` 시 3종 차등 Effort 병렬 생성 ➔ Critic 채점 ➔ Fast-Pass 판정 ➔ Consolidator 앙상블 합성 ➔ **합성 완료 후 L2 최종 Critic 검증 및 1회 최종 보완 루프**를 순차 구동하십시오. 최종 합성본(또는 보완본)에 대한 최종 L2 Critic 리뷰 결과 점수는 명세서 파일 상단에 누락 없이 출력되어야 합니다.
     *   **품질 기준 엄격 강제 및 경고 표기**: 품질 향상을 위해 단일 모델 자가 수정 루프에서도 감쇄 임계치(Decaying Threshold)를 배제하고 설정된 기준 점수(Threshold)를 일관되게 적용하십시오. 만약 최종 시도 횟수를 소모한 후에도 점수 미달로 검증을 통과하지 못한 경우, 문서를 버리지 않고 채택하여 저장하되 문서 최상단에 `[!CAUTION]` 경고 배너와 상세한 Critic 점수 및 피드백 코멘트를 보존하여 후속 수정을 유도하도록 구현하십시오.
     *   **Mermaid 시스템 변수 예외 허용**: 다이어그램 린팅 시 `@@ERROR` 시스템 변수가 포함되어 있더라도 린팅 컴파일 검사에서 예외적으로 정상 패스하도록 정합성 규칙을 보완하십시오.
@@ -143,6 +145,7 @@
     *   **정산 정책서**: SP DDL의 상수 분기 조건 분석과 테이블 데이터 프로파일링 정보를 결합해 정산 정책서(Settlement Rulebook)를 도출하고, 지정된 5대 헤더 구조를 엄격히 준수하도록 설계하십시오.
     *   **컬럼 매핑 표 축약 금지**: CRUD 분석 및 데이터 컬럼 매핑 표 작성 시, '외 다수' 또는 '등'과 같이 컬럼 목록이나 매핑 관계를 임의로 축약하거나 생략하지 말고, 실제 대상 물리 컬럼과 이에 매핑되는 원천값을 누락 없이 1:1 대조 표에 완전하게 기술하십시오.
     *   **DDL 기반 제약 조건 작성**: 프로시저 파라미터나 컬럼 제약 조건에 대해 임의로 'NOT NULL'과 같은 주관적 단정을 짓지 말고, 오직 DDL 소스코드에 명시되어 있는 타입 제약 및 기본값 정의를 기반으로만 사실적으로 기술하십시오.
+    *   **의존 스키마 덤프 필터링**: 테이블 상세 스키마 정보를 마크다운 테이블로 덤프할 때, AST 정적 분석이 감지한 실제 참조 컬럼(`ReferencedColumnsPerTable`), PK/FK 컬럼, 인덱스 구성 컬럼만 선별적으로 필터링 출력(KeepCols 필터링)하여 AI 프롬프트 토큰을 절약하도록 구현되어 있습니다. 이 최적화 로직의 정합성을 유지해 주십시오.
     *   **NOLOCK 힌트 격리 반영**: 레거시 쿼리 내에서 `WITH(NOLOCK)` 또는 `NOLOCK` 등의 테이블 읽기 힌트가 사용된 경우, 그에 따른 더티 리드(Dirty Read) 가능성과 같은 데이터 격리 및 정합성 특성을 명세서 내 예외 처리/제약 사항 또는 트랜잭션 설명부에 반영하고, 배치 현대화 계획서 작성 시에도 타겟 프레임워크 ORM 상에서 이에 대칭되는 트랜잭션 격리 수준으로 포팅하기 위한 코딩 가이드라인을 수립하도록 하십시오.
     *   **복합 필터의 정확한 해석**: `NOT IN`, `ISNULL` 등이 결합된 복합 필터/분기 조건을 해석할 때 논리적 환각을 철저히 배제하고 정확하게 기술하십시오. (예: '특정 값만 포함'이 아니라 '제외된 값 외의 모든 값 및 NULL 치환값 포함'으로 정확히 서술)
     *   **Mermaid flowchart 생성 규칙화**: 기능 명세서 내의 Mermaid 다이어그램 작성 시, 화살표/연결선 조건 라벨에는 절대 큰따옴표를 쓰지 말아야 하며(예: `N1 -->|예| N2` 또는 `N1 -- 에러 --> N2`), 노드 내부 텍스트에는 SQL 변수 기호(`@`)를 포함하지 않고 자연어 또는 순화된 명칭으로 나타내어야 합니다. (단, `@@ERROR`는 예외 허용 및 전체 이중 따옴표 래핑)

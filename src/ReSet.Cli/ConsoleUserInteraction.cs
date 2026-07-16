@@ -206,6 +206,7 @@ namespace ReSet.Cli
         private readonly Task _progressTask;
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ProgressTask> _tasks = new();
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string desc, double val, bool comp, bool fail)> _pendingUpdates = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _originalDescriptions = new();
         private readonly System.Collections.Generic.List<string> _taskOrder = new();
         private readonly object _lock = new();
         private readonly TaskCompletionSource _tcs = new();
@@ -220,7 +221,7 @@ namespace ReSet.Cli
                     .Columns(new ProgressColumn[]
                     {
                         new SpinnerColumn(Spinner.Known.Dots),
-                        new TaskDescriptionColumn(),
+                        new TaskDescriptionColumn { Alignment = Justify.Left },
                         new ElapsedTimeColumn(),
                     })
                     .StartAsync(async ctx =>
@@ -302,28 +303,32 @@ namespace ReSet.Cli
                     _taskOrder.Add(taskName);
                 }
             }
+            _originalDescriptions[taskName] = description;
             _pendingUpdates[taskName] = (description, 0.0, false, false);
         }
 
         public void UpdateTask(string taskName, double value, string? description = null)
         {
+            var desc = description ?? (_originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName);
             _pendingUpdates.AddOrUpdate(taskName, 
-                (description ?? taskName, value, false, false),
-                (k, old) => (description ?? old.desc, value, old.comp, old.fail));
+                (desc, value, false, false),
+                (k, old) => (desc, value, old.comp, old.fail));
         }
 
         public void CompleteTask(string taskName)
         {
+            var desc = _originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName;
             _pendingUpdates.AddOrUpdate(taskName, 
-                (taskName, 100.0, true, false),
-                (k, old) => (old.desc, 100.0, true, false));
+                (desc, 100.0, true, false),
+                (k, old) => (desc, 100.0, true, false));
         }
 
         public void FailTask(string taskName)
         {
+            var desc = _originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName;
             _pendingUpdates.AddOrUpdate(taskName, 
-                (taskName, 0.0, false, true),
-                (k, old) => (old.desc, old.val, false, true));
+                (desc, 0.0, false, true),
+                (k, old) => (desc, old.val, false, true));
         }
 
         public void Dispose()

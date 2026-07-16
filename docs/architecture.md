@@ -45,11 +45,12 @@
 | | [CliArgs](file:///home/moondae/git-root/ReSet/src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbMetadataService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. |
 | | [SqlStaticParser](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. |
-| | [AiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론 및 코드-주석 불일치 감지 규칙 포함), 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
+| | [AiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론 및 코드-주석 불일치 감지 규칙 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
+| | [IAiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. |
 | | [Clients (OpenAi, Claude, Google, Ollama, Zai)](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. |
-| | [MechanicalValidator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석 및 mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증. |
-| | [VerificationPipelineOrchestrator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프 및 L3 인간 개입 워크플로우 오케스트레이션. |
+| | [MechanicalValidator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. |
+| | [VerificationPipelineOrchestrator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Ollama인 경우 1회차 구역별 병렬 분할 생성 지원), L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [MetadataExporter](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL 파일 내보내기 및 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 생성 (SP별 및 Job별 전용 하위 폴더에 격리 분류 저장). |
 | | [CacheManager](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
 | | [ExternalCliCodingEngine](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
@@ -217,7 +218,7 @@ graph TD
 * **소프트 페일(Soft Fail)**: 특정 UDF의 스키마나 DDL 조회 시 권한 누락 등으로 발생한 비치명적 예외는 프로세스를 정지시키지 않고 `SpDefinition.Warnings` 리스트에 누적하여 스킵 처리합니다. 경고 내역은 TUI 경고 패널과 AI 프롬프트에 동시 전달되어 불완전한 메타데이터 기반 하에서도 차선의 명세서를 도출하도록 돕습니다.
 
 ### 4.2. MS_Description 확장 속성 맵핑 및 AI 보완
-* **한글 도메인 지식 맵핑**: 데이터베이스의 확장 속성인 `MS_Description`에 등록된 컬럼 주석과 테이블 설명을 상세 스키마 정보 테이블에 자동 맵핑하여 AI에 전달합니다. 추가적으로 컬럼의 Identity 여부, 기본값 정의(`DefaultValue`), 그리고 테이블 인덱스 메타데이터(인덱스명, 타입, Unique/PK 여부, 구성 컬럼)까지 함께 수집하여 전달함으로써 분석의 정확도를 높입니다. 이를 통해 코드 분석 시 단순 영문 약어(예: `STAT_CD`)의 업무상 의미(예: `상태코드`)를 직관적으로 해석하게 돕습니다.
+* **한글 도메인 지식 맵핑 및 스키마 필터링**: 데이터베이스의 확장 속성인 `MS_Description`에 등록된 컬럼 주석과 테이블 설명을 상세 스키마 정보 테이블에 자동 맵핑하여 AI에 전달합니다. 추가적으로 컬럼의 Identity 여부, 기본값 정의(`DefaultValue`), 그리고 테이블 인덱스 메타데이터(인덱스명, 타입, Unique/PK 여부, 구성 컬럼)까지 함께 수집하여 전달함으로써 분석의 정확도를 높입니다. 특히, AST 분석에서 감지한 실제 참조 컬럼(`ReferencedColumnsPerTable`), PK/FK 컬럼, 인덱스 구성 컬럼만 상세 스키마 Markdown 테이블에 선별적으로 노출(KeepCols 필터링)하여 불필요한 스키마 주입에 따른 프롬프트 비대화를 차단합니다. 이 정보들은 코드 분석 시 단순 영문 약어(예: `STAT_CD`)의 업무상 의미(예: `상태코드`)를 직관적으로 해석하게 돕습니다.
 * **설명 누락 컬럼 역추론**: 스키마 조회 시 한글 주석이 누락된 항목은 `IsDescriptionMissing`으로 마킹됩니다. AI는 SP/뷰/UDF 연산 문맥을 분석하여 컬럼의 용도를 유추하며, 명세서 본문에 `[AI 추론 보완: Schema.Table.Column - 유추된설명]` 포맷으로 강제 노출하도록 프롬프트 규칙에 바인딩됩니다.
 * **코드-주석 불일치 감지**: 소스코드에 삽입된 자연어 주석과 실제 실행되는 쿼리 연산 로직 사이에 모순이 감지되는 경우, 실제 쿼리 코드를 진실의 원천으로 삼아 명세서를 작성하되, 개요 섹션 최상단에 `[🚨 주석 불일치 경고] {모순내용}` 경고 문구를 포함시키도록 설계되었습니다.
 * **보완 스크립트 추출**: 분석 완료 시, AI가 역추론한 컬럼 설명 정보를 활용해 `sp_addextendedproperty` 및 `sp_updateextendedproperty` 쿼리가 조립된 SQL 정화 스크립트 파일(`*_MetadataCleansing.sql`)을 디렉토리에 항상 파일로 덤프해 보존합니다.
@@ -225,7 +226,7 @@ graph TD
 ### 4.3. T-SQL AST 정적 분석 고도화 (ScriptDom) 및 버전별 파서 팩토리
 * **T-SQL AST 구문 분석**: Microsoft 공식 TransactSql.ScriptDom 패키지를 이용해 SP DDL을 TSqlFragment AST로 파싱하고 `TSqlFragmentVisitor`를 상속받은 `SpStructureVisitor`를 기동하여 정적 메타데이터를 수집합니다.
 * **ExplicitVisit 기반 컨텍스트 스택**: AST 순회 시 Statement 및 Specification 구체적 노드(SelectStatement/QuerySpecification, InsertStatement/InsertSpecification 등)를 `ExplicitVisit` 오버라이드로 인터셉트하고 `_statementContext` 스택에 Push/Pop하여, 순회 대상인 `NamedTableReference`가 실질적으로 어떤 CRUD 성격의 쿼리 대상인지를 1:1로 정확하게 맵핑해 분류 수집합니다.
-* **테이블별 참조 컬럼 및 Alias 추적 (Pre-pass)**: T-SQL AST 순회 시 SELECT 리스트가 FROM 절보다 먼저 탐색되어 별칭(Alias)을 참조하지 못하는 전위 순회 한계(Order-Dependency)를 극복하기 위해, 메인 순회 전에 `TableAliasVisitor`를 기동하는 **선행 별칭 스캔(Pre-pass)** 방식을 취합니다. 또한, INSERT 문 내의 한정자 없는(Unqualified) 타겟 컬럼들을 올바른 물리 테이블로 바인딩하기 위해 `_currentInsertTarget`을 트래킹하여 `ReferencedColumnsPerTable` 정보의 정밀도를 극대화하고 프롬프트의 '진실의 원천(Source of Truth)'으로 제공합니다.
+* **테이블별 참조 컬럼 및 Alias 추적 (Pre-pass)**: T-SQL AST 순회 시 SELECT 리스트가 FROM 절보다 먼저 탐색되어 별칭(Alias)을 참조하지 못하는 전위 순회 한계(Order-Dependency)를 극복하기 위해, 메인 순회 전에 `TableAliasVisitor`를 기동하는 **선행 별칭 스캔(Pre-pass)** 방식을 취합니다. 또한, INSERT 문 내의 한정자 없는(Unqualified) 타겟 컬럼들을 올바른 물리 테이블로 바인딩하기 위해 `_currentInsertTarget`을 트래킹하여 `ReferencedColumnsPerTable` 정보의 정밀도를 극대화하고 프롬프트의 '진실의 원천(Source of Truth)'으로 제공합니다. 이 실제 참조 컬럼 목록은 의존 테이블 스키마 덤프 시 필터 조건으로도 활용됩니다.
 * **UDF 및 Linked Server 원격 참조 수집**: `FunctionCall`에서 호출 타겟이 존재하는 스키마 수반 함수 호출(예: `dbo.fn_GetBonus`)을 UDF로 수집하고, `NamedTableReference`에서 `ServerIdentifier`가 존재하는 4파트 식별자 참조를 Linked Server로 수집하여 제어 흐름 요약에 경고를 인클루딩합니다.
 * **호환성 레벨 파서 다변화**: 레거시 DB 연결 시 호환성 수준(`compatibility_level`)을 자동 조회해 `TSql100Parser` ~ `TSql160Parser`를 동적으로 매핑 생성하여, 구버전 T-SQL 구문 구동 시 발생하는 컴파일/파싱 차단 예외를 원천 차단합니다.
 
@@ -256,8 +257,8 @@ graph TD
     CheckL1Final -- "성공" --> ReturnSpec
 
     %% 단일 모드: L1/L2 순차 자가 수정 루프 경로
-    ModeCheck -- "아니오 (단일)" --> CallAI["AI 리버스 엔지니어링 요청<br/>(GenerateSpecificationAsync)"]
-    CallAI --> L1Check{"L1: 기계적 무결성 검증<br/>(Markdig AST 구조 확인 & mmdc 컴파일)?"}
+    ModeCheck -- "아니오 (단일)" --> CallAI["AI 리버스 엔지니어링 요청<br/>(Ollama의 경우 1회차 구역별 병렬 분할 생성)"]
+    CallAI --> L1Check{"L1: 기계적 무결성 검증 & 자동 정화<br/>(Markdig 구조 검증 & Mermaid 자동 보정)?"}
     
     L1Check -- "실패" --> L1FailAttempt{"attempt < maxAttempts?"}
     L1FailAttempt -- "예" --> SetL1Feedback["L1 피드백 세팅 및 시도 횟수 증가"] --> CallAI
@@ -295,12 +296,12 @@ graph TD
 
 #### 4.4.1. Level 1: 기계적 무결성 검증 (L1 Linter)
 * **정적 헤더 검사**: Markdig AST 파서를 가동해 명세서 내 5대 필수 대분류 헤더(`## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`)가 누락 없이 정확한 대소문자와 명칭으로 구성되었는지 점검합니다.
-* **다이어그램 문법 컴파일**: 명세서에 포함된 Mermaid 다이어그램 블록을 추출해 `mermaid-cli`로 백그라운드 컴파일을 수행하며, 문법 오류 감지 시 에러 메시지를 수집합니다. 단, T-SQL의 `@@ERROR`와 같이 자주 쓰이는 시스템 에러 변수 기입 건에 대해서는 Mermaid 문법 오류 린팅 감점에서 제외하는 예외 규칙을 탑재해 불필요한 보완 요청을 차단합니다.
+* **Mermaid 다이어그램 자동 정화 및 문법 검증**: 명세서 내 Mermaid 다이어그램 블록을 감지해 `PostProcessMarkdown`을 수행합니다. 화살표 라벨 따옴표 제거, 잘못된 화살표 기호 보정, 노드 ID 특수문자 제거, 특수문자 포함 라벨 큰따옴표 자동 래핑 등 문법 교정을 수행한 정화 마크다운을 반환합니다. 이후 `mermaid-cli`로 백그라운드 컴파일을 수행하며 문법 오류 감지 시 에러 메시지를 수집합니다. 단, T-SQL의 `@@ERROR`와 같이 자주 쓰이는 시스템 에러 변수 기입 건에 대해서는 Mermaid 문법 오류 린팅 감점에서 제외하는 예외 규칙을 탑재해 불필요한 보완 요청을 차단합니다.
 * **정적 자가 보완**: 정적 검증 실패 시, 구체적인 구문 오류 내용과 수정 방향이 가이드된 `SuggestedPromptFix`를 조립해 AI 모델에게 즉각 자가 수정을 재요청합니다.
 
 #### 4.4.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
 * **동적 모드 분기**: `ActorEffort` 설정값에 따라 검증 및 생성 경로가 이원화됩니다.
-  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후, 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
+  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차에 한해 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 병렬 분할 생성 및 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
   * **dynamic 모드 (병렬 협업)**: 다형성 및 앙상블 효과를 극대화하는 dynamic 아키텍처 경로입니다. (상세 협업 시퀀스는 상위 통합 검증 파이프라인 흐름도 참고)
 
 * **차등 Effort 병렬 생성 (1단계)**: 동일한 SP 정의에 대해 `low`, `medium`, `high` 추론 강도를 병렬 구동하여 서로 다른 장점을 가진 3종의 후보 명세서를 확보합니다.

@@ -27,12 +27,12 @@ namespace ReSet.Core.Services
             _criticScoreThreshold = criticScoreThreshold;
         }
 
-        private string FormatTableSchemaToMarkdown(DependencyInfo dep)
+        private string FormatTableSchemaToMarkdown(DependencyInfo dep, SpDefinition spDef)
         {
             var sb = new System.Text.StringBuilder();
             var depFullName = string.IsNullOrEmpty(dep.Database)
-                ? $"{dep.Schema}.{dep.Name}"
-                : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
+                 ? $"{dep.Schema}.{dep.Name}"
+                 : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
             sb.AppendLine($"### 테이블: {depFullName} ({dep.Type}) - 발견 깊이: {dep.DiscoveryDepth}단계");
             if (!string.IsNullOrEmpty(dep.Description))
             {
@@ -42,8 +42,48 @@ namespace ReSet.Core.Services
             sb.AppendLine("| 컬럼명 | 데이터 타입 | Null 허용 | Identity | 기본값 | 제약 조건 | 설명 |");
             sb.AppendLine("| :--- | :--- | :---: | :---: | :--- | :--- | :--- |");
             
+            // 엄격한 필터링 대상 컬럼 식별
+            var keepCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            
+            // 1) AST에서 감지한 실제 참조 컬럼 추가
+            if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.ReferencedColumnsPerTable != null)
+            {
+                foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
+                {
+                    if (kvp.Key.Contains(dep.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var c in kvp.Value) keepCols.Add(c);
+                        break;
+                    }
+                }
+            }
+            
+            // 2) PK / FK 컬럼 추가
             foreach (var col in dep.Columns)
             {
+                if (col.IsPrimaryKey || col.IsForeignKey)
+                {
+                    keepCols.Add(col.ColumnName);
+                }
+            }
+
+            // 3) 인덱스 구성 컬럼 추가
+            if (dep.Indexes != null)
+            {
+                foreach (var idx in dep.Indexes)
+                {
+                    foreach (var c in idx.Columns) keepCols.Add(c);
+                }
+            }
+
+            foreach (var col in dep.Columns)
+            {
+                // 필터링 적용 (keepCols가 비어있는 경우는 정적 분석 정보가 없는 것으로 보고 폴백으로 모든 컬럼 출력)
+                if (keepCols.Count > 0 && !keepCols.Contains(col.ColumnName))
+                {
+                    continue;
+                }
+
                 var constraints = new System.Collections.Generic.List<string>();
                 if (col.IsPrimaryKey) constraints.Add("PRIMARY KEY");
                 if (col.IsForeignKey) constraints.Add("FOREIGN KEY");
@@ -87,7 +127,7 @@ namespace ReSet.Core.Services
                 
                 if (dep.Columns.Count > 0)
                 {
-                    tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep));
+                    tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep, spDef));
                     tableSchemasText.AppendLine();
                 }
 
@@ -403,6 +443,177 @@ namespace ReSet.Core.Services
             return aiResult;
         }
 
+        public async Task<AiResult> GenerateSpecSectionAsync(SpDefinition spDef, string sectionType, string userInstructions, string? effort = null, CancellationToken cancellationToken = default)
+        {
+            var (systemPrompt, userPrompt) = BuildSpecSectionPrompts(spDef, sectionType, userInstructions);
+
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            {
+                systemPrompt = "<|think|>" + systemPrompt;
+                systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 또는 Gemma 4 표준 출력 포맷으로 상세히 기술하십시오. 최종 분석 명세서는 반드시 해당 태그 바깥에 작성해야 합니다.";
+            }
+
+            Log.Information("AI 명세서 구역 분할 생성 요청 전송 - SP: {Schema}.{Name}, Section: {Section}, Effort: {Effort}", spDef.Schema, spDef.Name, sectionType, effort ?? "Default");
+            Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, _temperature, effort, cancellationToken);
+            if (aiResult == null)
+            {
+                aiResult = new AiResult();
+            }
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt;
+
+            Log.Information("AI 명세서 구역 분할 생성 응답 수신 완료 - SP: {Schema}.{Name}, Section: {Section}, 응답 길이: {Length}", spDef.Schema, spDef.Name, sectionType, aiResult.Content.Length);
+            Log.Debug("[AI 응답 내용]:\n{Response}", aiResult.Content);
+
+            return aiResult;
+        }
+
+        private (string SystemPrompt, string UserPrompt) BuildSpecSectionPrompts(SpDefinition spDef, string sectionType, string userInstructions)
+        {
+            var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(spDef);
+
+            string systemPrompt = "";
+            string checklistText = "";
+
+            if (sectionType == "OverviewAndParameters")
+            {
+                systemPrompt = $@"당신은 SQL Server Stored Procedure 분석 전문가입니다. 다음 규칙을 준수하여 마크다운 기능 명세서의 [## 개요] 및 [## 파라미터 목록] 섹션만을 작성하십시오.
+
+[작성 규칙]
+1. 기능 명세서의 대헤더는 오직 `## 개요`와 `## 파라미터 목록` 두 가지만 사용해야 하며, 이 순서대로 작성한 뒤 즉시 출력을 종료하십시오. 다른 H2 대헤더는 절대 포함하지 마십시오.
+2. SP 헤더 주석과 실제 구현 쿼리 사이에 모순이 감지되는 경우, 실제 코드를 최우선 기준으로 작성하고 `## 개요` 하단에 반드시 `[🚨 주석 불일치 경고] {{모순내용}}` 형식의 구체적 경고 문구를 포함하십시오.
+3. 파라미터 목록에는 DDL에 정의된 모든 매개변수의 데이터 타입, Null 허용 여부(DDL에 없으면 '명시 없음'), 용도 및 OUTPUT 파라미터 여부를 표(Table)로 기술하십시오. 임의로 'NOT NULL'을 단정해선 안 됩니다.
+4. 본 프로시저가 결과 셋(Rowset)을 반환하는지 여부를 명시하십시오. 만약 반환값이 명시적으로 제어되지 않거나 초기값에 의존하는 경우, 호출부의 초기화 책임이나 전제 조건을 정확히 서술하십시오.
+5. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.
+6. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.
+
+[사용자 지침]
+{userInstructions}";
+
+                checklistText = @"🎯 [필수 검증 체크리스트]
+- [ ] '## 개요' 및 '## 파라미터 목록' 헤더가 명확하게 작성되었습니까?
+- [ ] SP 헤더 주석과 실제 로직의 모순이 있을 시 `[🚨 주석 불일치 경고] ...`가 본문에 포함되었습니까?
+- [ ] 출력 파라미터의 역할 및 결과셋 반환 여부를 명확히 명시하셨습니까?";
+            }
+            else if (sectionType == "CrudAnalysis")
+            {
+                systemPrompt = $@"당신은 SQL Server Stored Procedure 분석 전문가입니다. 다음 규칙을 준수하여 마크다운 기능 명세서의 [## CRUD 분석] 섹션만을 작성하십시오.
+
+[작성 규칙]
+1. 기능 명세서의 대헤더는 오직 `## CRUD 분석` 하나만 사용해야 하며, CRUD 분석이 끝나면 즉시 출력을 종료하십시오. 다른 H2 대헤더는 절대 포함하지 마십시오.
+2. SELECT, INSERT, UPDATE, DELETE 대상 물리 테이블들을 CRUD별로 명시하십시오. 각 테이블에 대해 실제 쿼리에서 조회/수정하는 컬럼명과 조건/조인 키를 누락 없이 완전하게 기재하십시오.
+   - 제공된 [Stored Procedure AST 정적 분석 정보]의 '식별된 테이블별 실제 쿼리 참조 컬럼 목록'은 이 명세서 CRUD 분석 표의 진실의 원천(Source of Truth)입니다. 이 컬럼 목록을 누락 없이 그대로 매핑하여 작성하십시오.
+3. INSERT/UPDATE 대상 테이블의 모든 컬럼에 대해 매핑되는 원천 데이터(변수, 상수, 함수 등)를 축약 ('외 다수' 또는 '...') 없이 1:1 대조 표로 완전하게 기술하십시오.
+4. 임시 테이블(#TempTable) 생성/사용 여부, UDF 사용자 정의 함수 호출 여부, Linked Server 원격 참조 여부에 대해 각각 사용 목적을 기술하거나, 미사용 시 미사용 사실을 명시적으로 기재하십시오.
+   - SP에서 호출하는 UDF의 DDL이 제공된 경우에 한해 연산 알고리즘을 분석하여 포함시키고, 제공되지 않은 경우 'UDF 정의 미제공으로 상세 로직 분석 제외' 및 '호출 위치 및 사용 목적'만을 사실 기반으로 기록하십시오.
+   - SP 내에 동적 SQL이 존재하면, 동적으로 구성되어 실행되는 SQL의 목적과 대상 테이블을 식별하여 CRUD 분석에 누락 없이 반영하십시오.
+   - Linked Server를 통한 원격 참조(4파트 식별자 사용)가 발견되면 외부 DB/테이블 의존성과 연동 목적을 명확히 분석하여 포함하십시오. 동일 서버 내 크로스 데이터베이스 참조인 경우는 Linked Server가 아님을 사실적으로 구분해 표기하십시오.
+5. 제공된 스키마 정보에서 `[설명 누락]`인 컬럼이 SP 소스코드 내에서 사용된다면 연산식 및 대입 방식을 분석하여 의미를 유추하십시오. 그리고 기능 명세서 본문에 언급될 때 반드시 `[AI 추론 보완: {{Schema}}.{{Table}}.{{Column}} - {{유추된설명}}]` 형태로 기재하십시오.
+6. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.
+7. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.
+
+[사용자 지침]
+{userInstructions}";
+
+                var checklistSb = new StringBuilder();
+                checklistSb.AppendLine("🎯 [필수 검증 체크리스트]");
+                if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.CreatedTempTables.Count == 0)
+                {
+                    checklistSb.AppendLine("- [ ] '임시 테이블 사용 여부: 임시 테이블을 생성하거나 사용하지 않습니다.'를 명시적으로 기재하셨습니까?");
+                }
+                else
+                {
+                    checklistSb.AppendLine($"- [ ] 생성/사용된 임시 테이블({string.Join(", ", spDef.StaticAnalysis.CreatedTempTables)})의 활용 목적을 기재하셨습니까?");
+                }
+                if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.ReferencedFunctions.Count == 0)
+                {
+                    checklistSb.AppendLine("- [ ] '사용자 정의 함수(UDF) 호출 여부: UDF 사용자 정의 함수를 호출하지 않습니다.'를 명시적으로 기재하셨습니까?");
+                }
+                else
+                {
+                    checklistSb.AppendLine($"- [ ] 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+                }
+                if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
+                {
+                    checklistSb.AppendLine("- [ ] 'Linked Server 원격 참조 여부: Linked Server를 통한 원격 참조를 사용하지 않습니다.'를 명시적으로 기재하셨습니까?");
+                }
+                if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.SelectTables.Count > 0)
+                {
+                    checklistSb.AppendLine($"- [ ] SELECT 대상 원천 테이블({string.Join(", ", spDef.StaticAnalysis.SelectTables)})이 각각 누락이나 축약 없이 독립적인 행으로 기술되고, 참조 컬럼과 필터 조건이 정확히 작성되었습니까?");
+                }
+                if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.InsertTables.Count > 0)
+                {
+                    checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보가 1:1 대조 표로 완전하게 기술되었습니까?");
+                }
+                checklistText = checklistSb.ToString();
+            }
+            else // LogicAndVisualization
+            {
+                systemPrompt = $@"당신은 SQL Server Stored Procedure 분석 전문가입니다. 다음 규칙을 준수하여 마크다운 기능 명세서의 [## 로직 흐름 요약] 및 [## 비즈니스 흐름 시각화] 섹션만을 작성하십시오.
+
+[작성 규칙]
+1. 기능 명세서의 대헤더는 오직 `## 로직 흐름 요약`과 `## 비즈니스 흐름 시각화` 두 가지만 사용해야 하며, 이 순서대로 작성한 뒤 즉시 출력을 종료하십시오. 다른 H2 대헤더는 절대 포함하지 마십시오.
+2. 로직 흐름 요약에서는 트랜잭션 범위, 비즈니스 연산 단계, @@ERROR 등을 활용한 단계별 롤백 구조 및 실패 시 반환 코드를 상세히 서술하십시오.
+   - SP 내에 동적 SQL이 존재하면 문자열로 빌드되는 쿼리의 실행 목적과 흐름상의 비즈니스 목적을 로직 요약에 누락 없이 반영하십시오.
+   - Linked Server 원격 참조가 사용된 경우 해당 외부 DB와의 연동 흐름 및 분산 트랜잭션의 특성(있는 경우)을 로직 요약에 포함시키십시오.
+3. 소스 SELECT 등에 `WITH(NOLOCK)` 또는 `NOLOCK` 등의 테이블 읽기 힌트가 사용된 경우, 그에 따른 더티 리드(Dirty Read) 가능성과 같은 데이터 격리 및 정합성 특성을 명세서 내 예외 처리/제약 사항 또는 트랜잭션 설명부에 반드시 반영하십시오.
+4. 비즈니스 흐름 시각화에는 비즈니스 흐름을 묘사하는 Mermaid flowchart 다이어그램을 필수로 포함해 주십시오. 노드 텍스트 전체는 이중 큰따옴표로 감싸 구문 에러를 방지하고, 화살표 위에 조건 텍스트를 적을 때 기호/따옴표/괄호를 배제하십시오. 노드 ID는 영문/숫자 고유 ID를 사용하십시오.
+5. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.
+6. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.
+
+[사용자 지침]
+{userInstructions}";
+
+                checklistText = @"🎯 [필수 검증 체크리스트]
+- [ ] '## 로직 흐름 요약' 및 '## 비즈니스 흐름 시각화' 헤더가 명확하게 작성되었습니까?
+- [ ] 예외 처리 분기와 트랜잭션 제어 방식, NOLOCK에 의한 격리 수준 영향이 요약에 포함되었습니까?
+- [ ] Mermaid flowchart 다이어그램이 문법 오류 없이 flowchart TD 형태로 작성되었습니까?";
+            }
+
+            var promptSb = new StringBuilder();
+            promptSb.AppendLine("분석 대상 Stored Procedure 정보:");
+            promptSb.AppendLine($"- Schema: {spDef.Schema}");
+            promptSb.AppendLine($"- Name: {spDef.Name}");
+            promptSb.AppendLine();
+            promptSb.AppendLine("[DB에서 추출된 기계적 의존 관계 목록]");
+            promptSb.AppendLine(dependenciesText);
+
+            if (sectionType == "CrudAnalysis")
+            {
+                promptSb.AppendLine("[의존하는 참조 테이블 상세 스키마 정보 (Markdown Tables)]");
+                promptSb.AppendLine(tableSchemasText);
+                promptSb.AppendLine();
+            }
+
+            if (sectionType == "CrudAnalysis" || sectionType == "LogicAndVisualization")
+            {
+                if (!string.IsNullOrEmpty(referenceDdlsText))
+                {
+                    promptSb.AppendLine("[의존하는 참조 함수 및 Stored Procedure DDL 코드 목록]");
+                    promptSb.AppendLine(referenceDdlsText);
+                    promptSb.AppendLine();
+                }
+
+                if (!string.IsNullOrEmpty(staticAnalysisText))
+                {
+                    promptSb.AppendLine(staticAnalysisText);
+                    promptSb.AppendLine();
+                }
+            }
+
+            promptSb.AppendLine("[Stored Procedure DDL SQL 원본]");
+            promptSb.AppendLine("```sql");
+            promptSb.AppendLine(spDef.DdlText);
+            promptSb.AppendLine("```");
+            promptSb.AppendLine();
+            promptSb.AppendLine("위 정보를 바탕으로 지침에 맞게 해당 섹션을 리버스 엔지니어링하여 작성하십시오.");
+            promptSb.AppendLine(checklistText);
+
+            return (systemPrompt, promptSb.ToString());
+        }
+
         public async Task<ReviewResult> ReviewSpecificationAsync(SpDefinition spDef, string specMarkdown, string? effort = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = @"당신은 SQL Server Stored Procedure 기능 명세서의 완성도를 검증하는 수석 아키텍트이자 리뷰어 에이전트입니다.
@@ -511,7 +722,7 @@ namespace ReSet.Core.Services
                 
                 if (dep.Columns.Count > 0)
                 {
-                    tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep));
+                    tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep, spDef));
                     tableSchemasText.AppendLine();
                 }
 

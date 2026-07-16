@@ -339,6 +339,10 @@ namespace ReSet.Core.Services
                 for (int i = 0; i < candidates.Length; i++)
                 {
                     var l1Check = _validator.Validate(candidates[i]);
+                    if (l1Check.IsValid)
+                    {
+                        candidates[i] = l1Check.CleansedMarkdown ?? candidates[i];
+                    }
                     if (l1Check.IsValid && reviews![i] != null && !reviews![i]!.HasDefects && reviews![i]!.NormalizedScore >= 90)
                     {
                         if (reviews![i]!.NormalizedScore > highestScore)
@@ -435,6 +439,7 @@ namespace ReSet.Core.Services
 
                     // 합성본 기계적 검증 (L1) 1회 수행
                     var finalL1 = _validator.Validate(specificationMarkdown);
+                    specificationMarkdown = finalL1.CleansedMarkdown ?? specificationMarkdown;
                     if (!finalL1.IsValid)
                     {
                         _userInteraction.NotifyStatus("합성본에서 정적 에러가 검출되어 AI 자가 수정 1회 진행합니다.");
@@ -520,7 +525,7 @@ namespace ReSet.Core.Services
                             var fixL1Result = _validator.Validate(finalConsolidatedFixResult.Content);
                             if (fixL1Result.IsValid)
                             {
-                                specificationMarkdown = finalConsolidatedFixResult.Content;
+                                specificationMarkdown = fixL1Result.CleansedMarkdown ?? finalConsolidatedFixResult.Content;
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
 
                                 // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신
@@ -575,29 +580,65 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
-                        AiResult aiResult;
-                        using (var progressScope = _userInteraction.CreateProgressScope("명세서 생성") ?? NullProgressScope.Instance)
+                        if (attempt == 1 && string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
                         {
-                            progressScope.AddTask("gen", $"{_aiService.ModelName} 분석 중...");
-                            aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "gen");
-                        }
-                        specificationMarkdown = aiResult.Content;
-                        spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
-                        genSuccess = true;
-                        
-                        accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Generation Thinking");
-                        accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
-                        accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
-                        accumulatedThinking.AppendLine();
-                        if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
-                        {
-                            accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                            AiResult part1, part2, part3;
+                            using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성") ?? NullProgressScope.Instance)
+                            {
+                                progressScope.AddTask("part1", "1/3. 개요 및 파라미터 분석 중...");
+                                progressScope.AddTask("part2", "2/3. CRUD 상세 분석 중...");
+                                progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 분석 중...");
+
+                                var task1 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, _actorEffort, cancellationToken), progressScope, "part1");
+                                var task2 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, _actorEffort, cancellationToken), progressScope, "part2");
+                                var task3 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, _actorEffort, cancellationToken), progressScope, "part3");
+
+                                var results = await Task.WhenAll(task1, task2, task3);
+                                part1 = results[0];
+                                part2 = results[1];
+                                part3 = results[2];
+                            }
+
+                            specificationMarkdown = $"{part1.Content.Trim()}\n\n{part2.Content.Trim()}\n\n{part3.Content.Trim()}";
+                            spDef.RawPromptContext = $"=== [Part 1: System Prompt] ===\n{part1.SystemPrompt}\n\n=== [Part 2: System Prompt] ===\n{part2.SystemPrompt}\n\n=== [Part 3: System Prompt] ===\n{part3.SystemPrompt}";
+
+                            accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 1 (Overview & Parameters) Thinking");
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part1.ThinkingText) ? "*(추론 없음)*" : part1.ThinkingText);
+                            accumulatedThinking.AppendLine();
+                            accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 2 (CRUD Analysis) Thinking");
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part2.ThinkingText) ? "*(추론 없음)*" : part2.ThinkingText);
+                            accumulatedThinking.AppendLine();
+                            accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 3 (Logic & Visualization) Thinking");
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part3.ThinkingText) ? "*(추론 없음)*" : part3.ThinkingText);
+                            accumulatedThinking.AppendLine();
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            AiResult aiResult;
+                            using (var progressScope = _userInteraction.CreateProgressScope("명세서 수정") ?? NullProgressScope.Instance)
+                            {
+                                progressScope.AddTask("gen", $"{_aiService.ModelName} 분석 수정 중...");
+                                aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "gen");
+                            }
+                            specificationMarkdown = aiResult.Content;
+                            spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+
+                            accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Generation Thinking");
+                            accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
+                            accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
+                            accumulatedThinking.AppendLine();
+                            if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
+                            {
+                                accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                            }
+                            else
+                            {
+                                accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            }
+                            accumulatedThinking.AppendLine();
                         }
-                        accumulatedThinking.AppendLine();
+                        genSuccess = true;
+
 
                         Log.Debug("[파이프라인] AI 명세서 생성 성공 - SP: {SpName}, 시도: {Attempt}, 응답 길이: {Length}자",
                             selectedOption, attempt, specificationMarkdown.Length);
@@ -615,6 +656,7 @@ namespace ReSet.Core.Services
 
                     // L1: 기계적 무결성 검사
                     var l1Result = _validator.Validate(specificationMarkdown);
+                    specificationMarkdown = l1Result.CleansedMarkdown ?? specificationMarkdown;
                     if (!l1Result.IsValid)
                     {
                         Log.Warning("[파이프라인] L1 기계 검증 실패 - SP: {SpName}, 시도: {Attempt}, 오류 수: {ErrorCount}",
@@ -830,6 +872,7 @@ namespace ReSet.Core.Services
 
                         // 피드백 반영본에 대한 L1 정적 검사 1회 수행
                         var l1Re = _validator.Validate(reSpec);
+                        reSpec = l1Re.CleansedMarkdown ?? reSpec;
                         if (!l1Re.IsValid)
                         {
                             _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
@@ -919,6 +962,7 @@ namespace ReSet.Core.Services
 
                 // L1: 기계적 무결성 검사
                 var l1Result = _validator.ValidateConsolidated(consolidatedPlan);
+                consolidatedPlan = l1Result.CleansedMarkdown ?? consolidatedPlan;
                 if (!l1Result.IsValid)
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
@@ -1046,6 +1090,7 @@ namespace ReSet.Core.Services
 
                     // 피드백 반영본에 대한 L1 정적 검사 1회 수행
                     var l1Re = _validator.ValidateConsolidated(rePlan);
+                    rePlan = l1Re.CleansedMarkdown ?? rePlan;
                     if (!l1Re.IsValid)
                     {
                         _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");

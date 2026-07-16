@@ -66,7 +66,10 @@ namespace ReSet.Core.Services
 
             try
             {
-                ValidateMarkdownStructure(markdown, RequiredHeaders, result);
+                // Mermaid 후처리 및 정화 적용
+                var cleansed = PostProcessMarkdown(markdown);
+                result.CleansedMarkdown = cleansed;
+                ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
             }
             catch (Exception ex)
             {
@@ -75,6 +78,7 @@ namespace ReSet.Core.Services
                 result.Errors.Clear();
                 result.DetailedErrors.Clear();
                 result.IsValid = true;
+                result.CleansedMarkdown = markdown;
                 return result;
             }
 
@@ -100,7 +104,10 @@ namespace ReSet.Core.Services
 
             try
             {
-                ValidateMarkdownStructure(markdown, RequiredConsolidatedHeaders, result);
+                // Mermaid 후처리 및 정화 적용
+                var cleansed = PostProcessMarkdown(markdown);
+                result.CleansedMarkdown = cleansed;
+                ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
             }
             catch (Exception ex)
             {
@@ -108,6 +115,7 @@ namespace ReSet.Core.Services
                 result.Errors.Clear();
                 result.DetailedErrors.Clear();
                 result.IsValid = true;
+                result.CleansedMarkdown = markdown;
                 return result;
             }
 
@@ -298,12 +306,103 @@ namespace ReSet.Core.Services
                 }
             }
         }
+        public string PostProcessMarkdown(string markdown)
+        {
+            if (string.IsNullOrWhiteSpace(markdown)) return markdown;
+
+            try
+            {
+                // markdown 내의 ```mermaid ... ``` 블록을 찾아서 안의 내용을 치환합니다.
+                var regex = new Regex(@"```mermaid\s*\n([\s\S]*?)\n```", RegexOptions.Compiled);
+                return regex.Replace(markdown, m =>
+                {
+                    var originalMermaid = m.Groups[1].Value;
+                    var cleansedMermaid = CleanseMermaidCode(originalMermaid);
+                    return $"```mermaid\n{cleansedMermaid}\n```";
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Mermaid 코드 후처리 중 오류 발생 (원본 유지)");
+                return markdown;
+            }
+        }
+
+        private string CleanseMermaidCode(string mermaid)
+        {
+            var lines = mermaid.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+            var resultLines = new List<string>();
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("%%") || string.IsNullOrEmpty(trimmed))
+                {
+                    resultLines.Add(line);
+                    continue;
+                }
+
+                var processedLine = line;
+
+                // 1. 화살표 라벨 따옴표 제거 및 표준화
+                // -- "텍스트" --> 또는 -->| "텍스트" | 또는 -->|"텍스트"| 등을 -->|텍스트| 로 변환
+                processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", "-->|$1|");
+                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^""]+?)\s*""\s*-->", "-->|$1|");
+                processedLine = Regex.Replace(processedLine, @"--\s*([^""]+?)\s*-->", "-->|$1|");
+
+                // 2. 잘못된 화살표 기호 보정 ( -> 또는 - -> 를 --> 로 변환)
+                processedLine = Regex.Replace(processedLine, @"-\s*->", "-->");
+                processedLine = Regex.Replace(processedLine, @"-[^-]>", "-->");
+
+                // 3. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
+                processedLine = Regex.Replace(processedLine, @"([a-zA-Z0-9_ ]+?)\s*([\[\(\{>]+)(""[^""]+""|[^""\(\[\{]+?)([\]\)\}>]+)", match =>
+                {
+                    var nodeId = match.Groups[1].Value;
+                    var opening = match.Groups[2].Value;
+                    var label = match.Groups[3].Value;
+                    var closing = match.Groups[4].Value;
+
+                    var testId = nodeId.Trim();
+                    if (testId.Equals("graph", StringComparison.OrdinalIgnoreCase) ||
+                        testId.Equals("flowchart", StringComparison.OrdinalIgnoreCase) ||
+                        testId.Equals("subgraph", StringComparison.OrdinalIgnoreCase) ||
+                        testId.Equals("end", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return match.Value;
+                    }
+
+                    // 공백 및 언더스코어 제거
+                    var cleansedId = testId.Replace(" ", "").Replace("_", "");
+                    
+                    // 만약 라벨에 특수문자(괄호, 콜론, 대시 등)가 있는데 큰따옴표가 없으면 큰따옴표로 감싸주기
+                    var trimmedLabel = label.Trim();
+                    if (trimmedLabel.Contains("(") || trimmedLabel.Contains(")") || 
+                        trimmedLabel.Contains("[") || trimmedLabel.Contains("]") ||
+                        trimmedLabel.Contains("{") || trimmedLabel.Contains("}") ||
+                        trimmedLabel.Contains(",") || trimmedLabel.Contains("'") ||
+                        trimmedLabel.Contains(":") || trimmedLabel.Contains("-"))
+                    {
+                        if (!(trimmedLabel.StartsWith("\"") && trimmedLabel.EndsWith("\"")))
+                        {
+                            trimmedLabel = $"\"{trimmedLabel}\"";
+                        }
+                    }
+
+                    return $"{cleansedId}{opening}{trimmedLabel}{closing}";
+                });
+
+                resultLines.Add(processedLine);
+            }
+
+            return string.Join("\n", resultLines);
+        }
     }
 
     public class ValidationResult
     {
         public bool IsValid { get; set; }
         public bool IsConsolidated { get; set; }
+        public string? CleansedMarkdown { get; set; }
         public List<string> Errors { get; set; } = new();
         public List<DetailedError> DetailedErrors { get; set; } = new();
 
