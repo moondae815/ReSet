@@ -307,6 +307,10 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. 레거시 쿼리 내에서 `WITH(NOLOCK)` 또는 `NOLOCK` 등의 테이블 읽기 힌트가 사용된 경우, 그에 따른 더티 리드(Dirty Read) 가능성과 같은 데이터 격리 및 정합성 특성을 명세서 내 예외 처리/제약 사항 또는 트랜잭션 설명부에 반드시 반영하십시오.");
             rules.Add($"{ruleIndex++}. `NOT IN`, `ISNULL` 등이 결합된 복합 필터/분기 조건(예: `ISNULL(Col, 4) NOT IN (0,1,2,3)`)을 해석할 때 논리적 환각을 철저히 배제하고 정확하게 기술하십시오. (예: '특정 값만 포함'이 아니라 '제외된 값 외의 모든 값 및 NULL 치환값 포함'으로 정확히 서술)");
 
+            // [로컬 LLM 환각 방지 엄격 네거티브 규칙 추가]
+            rules.Add($"{ruleIndex++}. 제시된 정적 분석 정보(AST 분석 메타데이터) 및 테이블 스키마에 실제로 존재하지 않는 컬럼은 CRUD 분석 표에 절대 임의로 상상하여 기재하지 마십시오. 스키마에는 없으나 DDL 쿼리에 등장하는 불일치 현상이 발견되면, 임의 테이블 컬럼으로 단정 짓지 말고 스키마 불일치 사실을 기록하거나 규격 포맷인 `[AI 추론 보완: Schema.Table.Column - 설명]`으로 사실에 근거해 서술하십시오.");
+            rules.Add($"{ruleIndex++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
+
             var systemPrompt = string.Join("\n", rules);
             systemPrompt += $"\n\n[사용자 지침]\n{userInstructions}";
             
@@ -586,6 +590,7 @@ namespace ReSet.Core.Services
 
                 sbRules.Add($"{rIdx++}. 파라미터 목록에는 DDL에 정의된 모든 매개변수의 데이터 타입, Null 허용 여부(DDL에 없으면 '명시 없음'), 용도 및 OUTPUT 파라미터 여부를 표(Table)로 기술하십시오. 임의로 'NOT NULL'을 단정해선 안 됩니다.");
                 sbRules.Add($"{rIdx++}. 본 프로시저가 결과 셋(Rowset)을 반환하는지 여부를 명시하십시오. 만약 반환값이 명시적으로 제어되지 않거나 초기값에 의존하는 경우, 호출부의 초기화 책임이나 전제 조건을 정확히 서술하십시오.");
+                sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.");
                 sbRules.Add($"{rIdx++}. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.");
 
@@ -630,6 +635,7 @@ namespace ReSet.Core.Services
                     sbRules.Add("   * 올바른 기재 예시: `[AI 추론 보완: dbo.Orders.TotAmt - 주문 건의 할인 적용 후 최종 결제 금액]`");
                 }
 
+                sbRules.Add($"{rIdx++}. 제시된 정적 분석 정보(AST 분석 메타데이터) 및 테이블 스키마에 실제로 존재하지 않는 컬럼은 CRUD 분석 표에 절대 임의로 상상하여 기재하지 마십시오. 스키마에는 없으나 DDL 쿼리에 등장하는 불일치 현상이 발견되면, 임의 테이블 컬럼으로 단정 짓지 말고 스키마 불일치 사실을 기록하거나 규격 포맷인 `[AI 추론 보완: Schema.Table.Column - 설명]`으로 사실에 근거해 서술하십시오.");
                 sbRules.Add($"{rIdx++}. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.");
                 sbRules.Add($"{rIdx++}. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.");
 
@@ -664,7 +670,7 @@ namespace ReSet.Core.Services
                 }
                 if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.InsertTables.Count > 0)
                 {
-                    checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보(상수값, 변수, ISNULL 변환 등)가 1:1 대조 표로 완전하게 기술되었습니까?");
+                    checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보가 1:1 대조 표로 완전하게 기술되었습니까?");
                 }
                 checklistText = checklistSb.ToString();
             }
@@ -691,6 +697,7 @@ namespace ReSet.Core.Services
 
                 sbRules.Add($"{rIdx++}. 소스 SELECT 등에 `WITH(NOLOCK)` 또는 `NOLOCK` 등의 테이블 읽기 힌트가 사용된 경우, 그에 따른 더티 리드(Dirty Read) 가능성과 같은 데이터 격리 및 정합성 특성을 명세서 내 예외 처리/제약 사항 또는 트랜잭션 설명부에 반드시 반영하십시오.");
                 sbRules.Add($"{rIdx++}. 비즈니스 흐름 시각화에는 비즈니스 흐름을 묘사하는 Mermaid flowchart 다이어그램을 필수로 포함해 주십시오. 노드 텍스트 전체는 이중 큰따옴표로 감싸 구문 에러를 방지하고, 화살표 위에 조건 텍스트를 적을 때 기호/따옴표/괄호를 배제하십시오. 노드 ID는 영문/숫자 고유 ID를 사용하십시오.");
+                sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. 최종 작성 완료 후 사족이나 인사말은 절대 작성하지 마십시오.");
                 sbRules.Add($"{rIdx++}. 응답 전체를 백틱(```markdown ... ```)으로 감싸지 마십시오.");
 
@@ -749,7 +756,7 @@ namespace ReSet.Core.Services
             promptSb.AppendLine("  </sp-source-ddl>");
             promptSb.AppendLine("</stored-procedure-context>");
             promptSb.AppendLine();
-            promptSb.AppendLine("위 구조화된 참조 정보를 바탕으로 지침에 맞게 해당 섹션을 리버스 엔지니어링하여 작성하십시오.");
+            promptSb.AppendLine("위 구조화된 참조 정보를 바탕으로 지침에 맞게 해당 섹션을 리버스 엔정니어링하여 작성하십시오.");
             promptSb.AppendLine(checklistText);
 
             if (!string.IsNullOrEmpty(feedbackLog))
@@ -938,7 +945,7 @@ namespace ReSet.Core.Services
 1. 문서는 한글 마크다운 양식으로 작성하십시오.
 2. 아래 4가지 필수 대헤더(##) 구조를 반드시 준수하여 문서를 구성해야 하며, 그 외의 다른 대헤더는 추가하지 마십시오.
    - ## 통합 배치 아키텍처 개요: 제공된 여러 분석서 파일들이 어떤 순서(순차 체인, 조건 분기, 병렬 처리 등)로 구성되어 하나의 배치 Job 내의 Step들로 설계되는지 기술하십시오.
-   - ## Mermaid 기반 통합 흐름도: 전체 배치 Job의 데이터 파이프라인 및 수행 단계를 묘사하는 Mermaid Flowchart 다이어그램을 작성하십시오.
+   - ## Mermaid 기반 통합 흐름도: 전체 배치 Job의 데이터 파이프라인 및 수행 단계를 묘사하는 Mermaid flowchart 다이어그램을 작성하십시오.
      * 노드 정의 시 특수문자나 괄호가 들어가 린팅 에러가 발생하지 않도록 텍스트 전체를 반드시 이중 큰따옴표로 감싸십시오. (예: id1[""Step 1: 데이터 정제""] --> id2[""Step 2: 적재 수행""])
      * 괄호만으로 노드를 구성하거나 Mermaid 예약어(graph, flowchart, subgraph 등)를 노드 ID로 사용해서는 안 됩니다.
    - ## 단계별 이행 상세 및 의사코드: 각 단계를 처리하는 {targetLanguage} 클래스/컴포넌트 설계, 대용량 청크(Chunk) 페이징 의사코드, 그리고 공통 의존성에 대한 락/트랜잭션 설계 및 실패 시 재시작(Restartability)/복구 계획을 이 섹션 하위에 포함하여 제시하십시오.
@@ -1096,7 +1103,7 @@ namespace ReSet.Core.Services
         public async Task<AiResult> GenerateSettlementPolicyRulebookAsync(System.Collections.Generic.List<SpDefinition> spDefs, string profilingDataJson, CancellationToken cancellationToken = default)
         {
             var systemPrompt = @"당신은 레거시 DB 내 Stored Procedure 코드(DDL) 및 실제 코드값/설정 데이터(Data Profiling)를 종합하여, 비즈니스 관점의 통합 '정산 정책 문서(Settlement Rulebook)'를 도출해내는 수석 정산 정책 분석가입니다.
-제시된 SP들의 SQL 조건문 분기, 매핑 관계와 실제 적재된 마스터 데이터(코드값 등)를 결합하여, 실무자가 바로 읽고 이해할 수 있는 자연어 정책 정의서를 작성하십시오.
+제시된 SP들의 SQL 조건문 분기, 매핑 관계와 실제 적재된 마스터 데이터(코드값 등)를 결합하여, 실무자가 바로 읽고 이해할 수 있는 자연어 정책 정책서를 작성하십시오.
 
 [작성 규칙]
 1. 정적 코드(DDL) 상에 존재하는 하드코딩된 상수 분기 조건(예: WHERE Status = 'S02', WHERE Type = 'A10' 등)이, 함께 제공된 실제 공통 코드/마스터 데이터 상에서 어떤 의미(예: 'S02' = '정산보류', 'A10' = '신용카드 대행사')를 가지는지 1:1로 매핑하여 설명하십시오.
