@@ -427,7 +427,7 @@ namespace ReSet.Core.Services
   </sp-source-ddl>
 </stored-procedure-context>
 
-위 구조화된 참조 정보를 바탕으로 지침에 맞게 리버스 엔지니어링하여 마크다운 형식의 기능 명세서를 완성하십시오.
+Based on the structured reference context above, reverse engineer the stored procedure and write a comprehensive markdown specification in Korean following the checklist below:
 {checklistSb.ToString()}
 ";
 
@@ -596,7 +596,7 @@ namespace ReSet.Core.Services
 
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록, detail all parameters defined in the DDL including their data type, nullability (state '명시 없음' if not defined), purpose, and whether they are OUTPUT parameters in a table format. Do not arbitrarily assume 'NOT NULL'.");
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
-                sbRules.Add($"{rIdx++}. DO NOT invent arbitrary return codes (e.g., assuming -1, -2, etc. sequentially) if the RETURN statement in the DDL does not specify literal values. Map them factually (e.g., 'Returns error code on failure (actual value not specified in code)').");
+                sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
                 sbRules.Add("");
@@ -682,7 +682,7 @@ namespace ReSet.Core.Services
                 }
                 if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.InsertTables.Count > 0)
                 {
-                    checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보가 1:1 대조 표로 완전하게 기술되었습니까?");
+                    checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보(상수값, 변수, ISNULL 변환 등)가 1:1 대조 표로 완전하게 기술되었습니까?");
                 }
                 checklistText = checklistSb.ToString();
             }
@@ -709,7 +709,7 @@ namespace ReSet.Core.Services
 
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
                 sbRules.Add($"{rIdx++}. Visualized business flow using a Mermaid flowchart TD diagram: Node text labels must be wrapped in double quotes. Do not use double quotes, parentheses, or special characters on arrow condition text labels. Node IDs must be high-quality unique alphanumeric tokens.");
-                sbRules.Add($"{rIdx++}. DO NOT invent arbitrary return codes (e.g., assuming -1, -2, etc. sequentially) if the RETURN statement in the DDL does not specify literal values. Map them factually (e.g., 'Returns error code on failure (actual value not specified in code)').");
+                sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
                 sbRules.Add("");
@@ -771,7 +771,7 @@ namespace ReSet.Core.Services
             promptSb.AppendLine("  </sp-source-ddl>");
             promptSb.AppendLine("</stored-procedure-context>");
             promptSb.AppendLine();
-            promptSb.AppendLine("Please reverse engineer the stored procedure context and write the designated section following the rules.");
+            promptSb.AppendLine("Based on the structured reference context above, reverse engineer the designated section and write the markdown specification in Korean following the checklist below:");
             promptSb.AppendLine(checklistText);
 
             if (!string.IsNullOrEmpty(feedbackLog))
