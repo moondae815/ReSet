@@ -226,6 +226,7 @@ namespace ReSet.Core.Services
                                 {
                                     var stderr = process.StandardError.ReadToEnd().Trim();
                                     Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
+                                    
                                     result.Errors.Add($"Mermaid CLI 검증 실패: {stderr}");
                                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.MermaidCliError, Message = stderr });
                                 }

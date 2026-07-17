@@ -73,6 +73,19 @@ namespace ReSet.Core.Services.Clients
                         result.Content = (beforeThink + afterThink).Trim();
                     }
                 }
+                else
+                {
+                    // 시작 태그 <think>가 유실되었으나 </think>가 있는 경우 방어
+                    int endTag = content.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+                    if (endTag != -1)
+                    {
+                        var extractedThinking = content.Substring(0, endTag).Trim();
+                        result.ThinkingText = extractedThinking;
+
+                        var afterThink = content.Substring(endTag + 8);
+                        result.Content = afterThink.Trim();
+                    }
+                }
             }
             return result ?? new AiResult();
         }

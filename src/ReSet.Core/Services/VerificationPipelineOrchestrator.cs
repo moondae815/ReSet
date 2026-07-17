@@ -89,6 +89,9 @@ namespace ReSet.Core.Services
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
             var accumulatedThinking = new StringBuilder();
+            AiResult? ollamaPart1 = null;
+            AiResult? ollamaPart2 = null;
+            AiResult? ollamaPart3 = null;
 
             Log.Information("[파이프라인] SP 분석 시작 - SP: {SpName}, Provider: {Provider}, MaxDepth: {MaxDepth}, BatchMode: {IsBatchMode}",
                 selectedOption, provider, maxDepth, isBatchMode);
@@ -569,6 +572,7 @@ namespace ReSet.Core.Services
             {
                 // 기존 단일 생성 루프
                 int attempt = 1;
+
                 while (true)
                 {
                     var attemptText = attempt == 1 ? "1차 분석" : $"자가 수정 보완 ({attempt}회째)";
@@ -580,36 +584,111 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
-                        if (attempt == 1 && string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
                         {
-                            AiResult part1, part2, part3;
-                            using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성") ?? NullProgressScope.Instance)
+                            if (attempt == 1)
                             {
-                                progressScope.AddTask("part1", "1/3. 개요 및 파라미터 분석 중...");
-                                progressScope.AddTask("part2", "2/3. CRUD 상세 분석 중...");
-                                progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 분석 중...");
+                                using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성") ?? NullProgressScope.Instance)
+                                {
+                                    progressScope.AddTask("part1", "1/3. 개요 및 파라미터 분석 중...");
+                                    progressScope.AddTask("part2", "2/3. CRUD 상세 분석 중...");
+                                    progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 분석 중...");
 
-                                var task1 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, _actorEffort, cancellationToken), progressScope, "part1");
-                                var task2 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, _actorEffort, cancellationToken), progressScope, "part2");
-                                var task3 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, _actorEffort, cancellationToken), progressScope, "part3");
+                                    var task1 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, null, _actorEffort, cancellationToken), progressScope, "part1");
+                                    var task2 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, null, _actorEffort, cancellationToken), progressScope, "part2");
+                                    var task3 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, null, _actorEffort, cancellationToken), progressScope, "part3");
 
-                                var results = await Task.WhenAll(task1, task2, task3);
-                                part1 = results[0];
-                                part2 = results[1];
-                                part3 = results[2];
+                                    var results = await Task.WhenAll(task1, task2, task3);
+                                    ollamaPart1 = results[0];
+                                    ollamaPart2 = results[1];
+                                    ollamaPart3 = results[2];
+                                }
+                            }
+                            else
+                            {
+                                // 피드백 기반 구역별 선택적 재생성
+                                bool regenPart1 = false;
+                                bool regenPart2 = false;
+                                bool regenPart3 = false;
+
+                                if (!string.IsNullOrEmpty(feedbackLog))
+                                {
+                                    var logUpper = feedbackLog.ToUpper();
+                                    if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
+                                    {
+                                        regenPart1 = true;
+                                    }
+                                    if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
+                                    {
+                                        regenPart2 = true;
+                                    }
+                                    if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
+                                    {
+                                        regenPart3 = true;
+                                    }
+
+                                    // 이전 파트 분석 결과가 누락된 경우 전체 재생성
+                                    if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
+
+                                    // 만약 아무 구역도 매칭되지 않는다면 안전을 위해 전체 구역 재생성 (폴백)
+                                    if (!regenPart1 && !regenPart2 && !regenPart3)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
+                                }
+                                else
+                                {
+                                    regenPart1 = regenPart2 = regenPart3 = true;
+                                }
+
+                                var tasksList = new List<Task<AiResult>>();
+                                var taskOrder = new List<string>();
+
+                                using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 피드백 보완") ?? NullProgressScope.Instance)
+                                {
+                                    if (regenPart1)
+                                    {
+                                        progressScope.AddTask("part1", "1/3. 개요 및 파라미터 피드백 수정 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
+                                        taskOrder.Add("part1");
+                                    }
+                                    if (regenPart2)
+                                    {
+                                        progressScope.AddTask("part2", "2/3. CRUD 상세 피드백 수정 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
+                                        taskOrder.Add("part2");
+                                    }
+                                    if (regenPart3)
+                                    {
+                                        progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 피드백 수정 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
+                                        taskOrder.Add("part3");
+                                    }
+
+                                    var results = await Task.WhenAll(tasksList);
+                                    for (int i = 0; i < taskOrder.Count; i++)
+                                    {
+                                        if (taskOrder[i] == "part1") ollamaPart1 = results[i];
+                                        else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
+                                        else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
+                                    }
+                                }
                             }
 
-                            specificationMarkdown = $"{part1.Content.Trim()}\n\n{part2.Content.Trim()}\n\n{part3.Content.Trim()}";
-                            spDef.RawPromptContext = $"=== [Part 1: System Prompt] ===\n{part1.SystemPrompt}\n\n=== [Part 2: System Prompt] ===\n{part2.SystemPrompt}\n\n=== [Part 3: System Prompt] ===\n{part3.SystemPrompt}";
+                            specificationMarkdown = $"{ollamaPart1!.Content.Trim()}\n\n{ollamaPart2!.Content.Trim()}\n\n{ollamaPart3!.Content.Trim()}";
+                            spDef.RawPromptContext = $"=== [Part 1: System Prompt] ===\n{ollamaPart1.SystemPrompt}\n\n=== [Part 2: System Prompt] ===\n{ollamaPart2.SystemPrompt}\n\n=== [Part 3: System Prompt] ===\n{ollamaPart3.SystemPrompt}";
 
                             accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 1 (Overview & Parameters) Thinking");
-                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part1.ThinkingText) ? "*(추론 없음)*" : part1.ThinkingText);
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart1.ThinkingText) ? "*(추론 없음)*" : ollamaPart1.ThinkingText);
                             accumulatedThinking.AppendLine();
                             accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 2 (CRUD Analysis) Thinking");
-                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part2.ThinkingText) ? "*(추론 없음)*" : part2.ThinkingText);
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart2.ThinkingText) ? "*(추론 없음)*" : ollamaPart2.ThinkingText);
                             accumulatedThinking.AppendLine();
                             accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Part 3 (Logic & Visualization) Thinking");
-                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(part3.ThinkingText) ? "*(추론 없음)*" : part3.ThinkingText);
+                            accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart3.ThinkingText) ? "*(추론 없음)*" : ollamaPart3.ThinkingText);
                             accumulatedThinking.AppendLine();
                         }
                         else
@@ -837,28 +916,107 @@ namespace ReSet.Core.Services
                         string reSpec = string.Empty;
                         try
                         {
-                            AiResult aiResult;
-                            using (var progressScope = _userInteraction.CreateProgressScope("L3 피드백 재생성") ?? NullProgressScope.Instance)
+                            if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
                             {
-                                progressScope.AddTask("l3gen", $"{_aiService.ModelName} 피드백 반영 중...");
-                                aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "l3gen");
-                            }
-                            reSpec = aiResult.Content;
-                            spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+                                bool regenPart1 = false;
+                                bool regenPart2 = false;
+                                bool regenPart3 = false;
 
-                            accumulatedThinking.AppendLine("### [Actor] Human Feedback Refinement Thinking");
-                            accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
-                            accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
-                            accumulatedThinking.AppendLine();
-                            if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
-                            {
-                                accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                                var logUpper = humanFeedbackLog.ToUpper();
+                                if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
+                                {
+                                    regenPart1 = true;
+                                }
+                                if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
+                                {
+                                    regenPart2 = true;
+                                }
+                                if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
+                                {
+                                    regenPart3 = true;
+                                }
+
+                                if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
+                                {
+                                    regenPart1 = regenPart2 = regenPart3 = true;
+                                }
+
+                                if (!regenPart1 && !regenPart2 && !regenPart3)
+                                {
+                                    regenPart1 = regenPart2 = regenPart3 = true;
+                                }
+
+                                var tasksList = new List<Task<AiResult>>();
+                                var taskOrder = new List<string>();
+
+                                using (var progressScope = _userInteraction.CreateProgressScope("구역별 L3 피드백 재생성") ?? NullProgressScope.Instance)
+                                {
+                                    if (regenPart1)
+                                    {
+                                        progressScope.AddTask("part1", "1/3. 개요 및 파라미터 피드백 반영 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
+                                        taskOrder.Add("part1");
+                                    }
+                                    if (regenPart2)
+                                    {
+                                        progressScope.AddTask("part2", "2/3. CRUD 상세 피드백 반영 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
+                                        taskOrder.Add("part2");
+                                    }
+                                    if (regenPart3)
+                                    {
+                                        progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 피드백 반영 중...");
+                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
+                                        taskOrder.Add("part3");
+                                    }
+
+                                    var results = await Task.WhenAll(tasksList);
+                                    for (int i = 0; i < taskOrder.Count; i++)
+                                    {
+                                        if (taskOrder[i] == "part1") ollamaPart1 = results[i];
+                                        else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
+                                        else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
+                                    }
+                                }
+
+                                reSpec = $"{ollamaPart1!.Content.Trim()}\n\n{ollamaPart2!.Content.Trim()}\n\n{ollamaPart3!.Content.Trim()}";
+                                spDef.RawPromptContext = $"=== [Part 1: System Prompt] ===\n{ollamaPart1.SystemPrompt}\n\n=== [Part 2: System Prompt] ===\n{ollamaPart2.SystemPrompt}\n\n=== [Part 3: System Prompt] ===\n{ollamaPart3.SystemPrompt}";
+
+                                accumulatedThinking.AppendLine("### [Actor] Human Feedback Refinement Part 1 Thinking");
+                                accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart1.ThinkingText) ? "*(추론 없음)*" : ollamaPart1.ThinkingText);
+                                accumulatedThinking.AppendLine();
+                                accumulatedThinking.AppendLine("### [Actor] Human Feedback Refinement Part 2 Thinking");
+                                accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart2.ThinkingText) ? "*(추론 없음)*" : ollamaPart2.ThinkingText);
+                                accumulatedThinking.AppendLine();
+                                accumulatedThinking.AppendLine("### [Actor] Human Feedback Refinement Part 3 Thinking");
+                                accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart3.ThinkingText) ? "*(추론 없음)*" : ollamaPart3.ThinkingText);
+                                accumulatedThinking.AppendLine();
                             }
                             else
                             {
-                                accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                AiResult aiResult;
+                                using (var progressScope = _userInteraction.CreateProgressScope("L3 피드백 재생성") ?? NullProgressScope.Instance)
+                                {
+                                    progressScope.AddTask("l3gen", $"{_aiService.ModelName} 피드백 반영 중...");
+                                    aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "l3gen");
+                                }
+                                reSpec = aiResult.Content;
+                                spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+
+                                accumulatedThinking.AppendLine("### [Actor] Human Feedback Refinement Thinking");
+                                accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
+                                accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
+                                accumulatedThinking.AppendLine();
+                                if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
+                                {
+                                    accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                                }
+                                else
+                                {
+                                    accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                }
+                                accumulatedThinking.AppendLine();
                             }
-                            accumulatedThinking.AppendLine();
                         }
                         catch (Exception ex)
                         {
@@ -878,28 +1036,107 @@ namespace ReSet.Core.Services
                             _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                             try
                             {
-                                AiResult aiResult;
-                                using (var progressScope = _userInteraction.CreateProgressScope("L3 자가 수정") ?? NullProgressScope.Instance)
+                                if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    progressScope.AddTask("l3fix", $"{_aiService.ModelName} L1 자가 수정 중...");
-                                    aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "l3fix");
-                                }
-                                reSpec = aiResult.Content;
-                                spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+                                    bool regenPart1 = false;
+                                    bool regenPart2 = false;
+                                    bool regenPart3 = false;
 
-                                accumulatedThinking.AppendLine("### [Actor] Human Feedback Self-Correction Thinking");
-                                accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
-                                accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
-                                accumulatedThinking.AppendLine();
-                                if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
-                                {
-                                    accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                                    var logUpper = (l1Re.SuggestedPromptFix ?? "").ToUpper();
+                                    if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
+                                    {
+                                        regenPart1 = true;
+                                    }
+                                    if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
+                                    {
+                                        regenPart2 = true;
+                                    }
+                                    if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
+                                    {
+                                        regenPart3 = true;
+                                    }
+
+                                    if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
+
+                                    if (!regenPart1 && !regenPart2 && !regenPart3)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
+
+                                    var tasksList = new List<Task<AiResult>>();
+                                    var taskOrder = new List<string>();
+
+                                    using (var progressScope = _userInteraction.CreateProgressScope("구역별 L3 자가 수정") ?? NullProgressScope.Instance)
+                                    {
+                                        if (regenPart1)
+                                        {
+                                            progressScope.AddTask("part1", "1/3. 개요 및 파라미터 L1 수정 중...");
+                                            tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part1"));
+                                            taskOrder.Add("part1");
+                                        }
+                                        if (regenPart2)
+                                        {
+                                            progressScope.AddTask("part2", "2/3. CRUD 상세 L1 수정 중...");
+                                            tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part2"));
+                                            taskOrder.Add("part2");
+                                        }
+                                        if (regenPart3)
+                                        {
+                                            progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 L1 수정 중...");
+                                            tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part3"));
+                                            taskOrder.Add("part3");
+                                        }
+
+                                        var results = await Task.WhenAll(tasksList);
+                                        for (int i = 0; i < taskOrder.Count; i++)
+                                        {
+                                            if (taskOrder[i] == "part1") ollamaPart1 = results[i];
+                                            else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
+                                            else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
+                                        }
+                                    }
+
+                                    reSpec = $"{ollamaPart1!.Content.Trim()}\n\n{ollamaPart2!.Content.Trim()}\n\n{ollamaPart3!.Content.Trim()}";
+                                    spDef.RawPromptContext = $"=== [Part 1: System Prompt] ===\n{ollamaPart1.SystemPrompt}\n\n=== [Part 2: System Prompt] ===\n{ollamaPart2.SystemPrompt}\n\n=== [Part 3: System Prompt] ===\n{ollamaPart3.SystemPrompt}";
+
+                                    accumulatedThinking.AppendLine("### [Actor] Human Feedback L1 Correction Part 1 Thinking");
+                                    accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart1.ThinkingText) ? "*(추론 없음)*" : ollamaPart1.ThinkingText);
+                                    accumulatedThinking.AppendLine();
+                                    accumulatedThinking.AppendLine("### [Actor] Human Feedback L1 Correction Part 2 Thinking");
+                                    accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart2.ThinkingText) ? "*(추론 없음)*" : ollamaPart2.ThinkingText);
+                                    accumulatedThinking.AppendLine();
+                                    accumulatedThinking.AppendLine("### [Actor] Human Feedback L1 Correction Part 3 Thinking");
+                                    accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(ollamaPart3.ThinkingText) ? "*(추론 없음)*" : ollamaPart3.ThinkingText);
+                                    accumulatedThinking.AppendLine();
                                 }
                                 else
                                 {
-                                    accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                    AiResult aiResult;
+                                    using (var progressScope = _userInteraction.CreateProgressScope("L3 자가 수정") ?? NullProgressScope.Instance)
+                                    {
+                                        progressScope.AddTask("l3fix", $"{_aiService.ModelName} L1 자가 수정 중...");
+                                        aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "l3fix");
+                                    }
+                                    reSpec = aiResult.Content;
+                                    spDef.RawPromptContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+
+                                    accumulatedThinking.AppendLine("### [Actor] Human Feedback Self-Correction Thinking");
+                                    accumulatedThinking.AppendLine($"- **AI Provider**: {_aiService.ProviderName}");
+                                    accumulatedThinking.AppendLine($"- **AI Model**: {_aiService.ModelName} (Effort: {_actorEffort ?? "default"})");
+                                    accumulatedThinking.AppendLine();
+                                    if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.ThinkingText))
+                                    {
+                                        accumulatedThinking.AppendLine(aiResult.ThinkingText);
+                                    }
+                                    else
+                                    {
+                                        accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                    }
+                                    accumulatedThinking.AppendLine();
                                 }
-                                accumulatedThinking.AppendLine();
                             }
                             catch { }
                         }

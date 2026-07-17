@@ -21,7 +21,7 @@
 
 ### 2. 3단계 신뢰성 검증 파이프라인 (Verification)
 * **Level 1 (기계적 정적 검증 및 자동 정화)**: `Markdig` 파서로 구조적 필수 섹션을 검증하고, `mermaid-cli` 컴파일 테스트 또는 구문 린팅을 통해 Mermaid 다이어그램 오류를 방지합니다. 또한, 자체 **Mermaid 다이어그램 자동 정화기(Cleanse)**를 탑재하여 잘못된 화살표 기호 보정, 라벨 따옴표 정형화, 노드 ID 특수문자 제거, 특수문자 포함 라벨 큰따옴표 자동 래핑 등 자동 보정을 거친 정화된 마크다운을 최종 생성물로 채택합니다.
-* **Level 2 (Actor-Critic 및 자가 교정)**: `ActorEffort`가 `dynamic`으로 지정된 경우, Low/Medium/High Effort를 적용한 3종의 명세서 후보를 병렬 생성합니다. 이후, 설정에 따라 지정된 **Critic(리뷰어) 에이전트**가 각 후보에 대해 5대 기준(정합성, CRUD 완전성, 인터페이스 구체성, 예외/트랜잭션, 시각화 가독성 각 10점, 총 50점 만점)으로 정량 채점을 가동합니다. 결함이 없고 100점 환산 기준 90점 이상인 우수 후보는 즉시 채택(**스마트 Fast-Pass**)하며, 그렇지 않은 경우 **Consolidator(합성기) 에이전트**가 각 항목별 고득점 후보의 파트를 Source of Truth 삼아 병합 조립하는 Actor-Critic 앙상블 모델을 가동합니다. 특히 로컬 Ollama 모델 실행의 경우, 1회차 생성 단계에서 "개요 및 파라미터", "CRUD 분석", "로직 및 시각화"의 3개 영역을 병렬로 분할 생성하여 조립하는 최적화 파이프라인을 지원합니다. (단일 모델 가동 시에는 설정 한도 내에서 자가 수정 루프를 수행하며, 최종 합성/보완본에 대한 Critic 점수를 최종 산출물 상단에 보존)
+* **Level 2 (Actor-Critic 및 자가 교정)**: `ActorEffort`가 `dynamic`으로 지정된 경우, Low/Medium/High Effort를 적용한 3종의 명세서 후보를 병렬 생성합니다. 이후, 설정에 따라 지정된 **Critic(리뷰어) 에이전트**가 각 후보에 대해 5대 기준(정합성, CRUD 완전성, 인터페이스 구체성, 예외/트랜잭션, 시각화 가독성 각 10점, 총 50점 만점)으로 정량 채점을 가동합니다. 결함이 없고 100점 환산 기준 90점 이상인 우수 후보는 즉시 채택(**스마트 Fast-Pass**)하며, 그렇지 않은 경우 **Consolidator(합성기) 에이전트**가 각 항목별 고득점 후보의 파트를 Source of Truth 삼아 병합 조립하는 Actor-Critic 앙상블 모델을 가동합니다. 특히 로컬 Ollama 모델 실행의 경우, 1회차 생성 단계뿐만 아니라 피드백 보완 및 재생성 루프(L1/L2 자가 수정 및 L3 사용자 피드백)에서도 피드백 키워드를 분석하여 연관된 파트만 선택적으로 분할 재생성 및 조립하는 최적화 파이프라인을 지원합니다. (단일 모델 가동 시에는 설정 한도 내에서 자가 수정 루프를 수행하며, 최종 합성/보완본에 대한 Critic 점수를 최종 산출물 상단에 보존)
 * **Level 3 (인간 승인 피드백 루프)**: TUI 모드에서 실시간 문서 미리보기를 제공하며, 개발자의 자연어 보완 피드백을 수렴하여 완벽한 설계서가 나올 때까지 재생성 및 검증을 반복합니다. (무인 배치 모드에서는 생략)
 
 ### 3. 배치 현대화 설계 및 비용 최적화 (Modernization & Cache)
@@ -45,7 +45,7 @@
 * **정적/동적 하이브리드 정책 도출**: 레거시 DB 내 Stored Procedure 코드(DDL)에 숨겨진 비즈니스 분기 조건(예: `WHERE Status = 'S02'`)과 실제 공통 코드 및 마스터 설정 테이블에 적재되어 있는 데이터(예: `S02 = 정산보류`)를 1:1 결합 및 분석(Data Profiling)하여, 실무진과 개발진 모두 즉시 참고할 수 있는 통합 '정산 정책서(Settlement Rulebook)'를 자동 작성합니다.
 
 ### 7. 실시간 병렬 태스크 진행률 시각화 (CLI Progress)
-* **비결합 멀티태스크 진행률 추적**: 관심사 분리(Clean Architecture) 원칙에 입각하여 Core 비즈니스 로직은 화면 렌더링에 관여하지 않고, 추상화된 `IMultiProgressScope` 인터페이스와 `NullProgressScope`를 주입받아 비동기 진행률 정보를 통보합니다. TUI 프로젝트 단에서는 `Spectre.Console`의 `Progress` 컴포넌트와 연동되어 백그라운드 렌더링 스레드를 제어하며, 회전하는 도트 스피너(Spinner)와 누적 경과 시간(Elapsed Time) 정보 등을 직관적으로 출력해 대기 상태에 대한 피로감을 최소화합니다.
+* **비결합 멀티태스크 진행률 추적**: 관심사 분리(Clean Architecture) 원칙에 입각하여 Core 비즈니스 로직은 화면 렌더링에 관여하지 않고, 추상화된 `IMultiProgressScope` 인터페이스와 `NullProgressScope`를 주입받아 비동기 진행률 정보를 통보합니다. TUI 프로젝트 단에서는 `Spectre.Console`의 `Progress` 컴포넌트와 연동되어 백그라운드 렌더링 스레드를 제어하며, 회전하는 도트 스피너(Spinner)와 누적 경과 시간(Elapsed Time) 정보 등을 직관적으로 출력해 대기 상태에 대한 피로감을 최소화합니다. 특히 태스크 완료 및 실패 시에도 원래 설명(Description)을 보존해 화면 렌더링 유실을 방지합니다.
 
 ### 8. 영속적인 실행 로깅 시스템 (Serilog File Sink & Clean Logging)
 * **TUI 비파괴식 Serilog 파일 로깅**: TUI 대화형 화면 및 진행 바가 로깅 출력으로 인해 깨지지 않도록 Serilog는 **오직 파일 전용(File Sink)**으로만 분리 가동됩니다. `appsettings.json` 설정을 통해 로깅 대상 디렉토리, 기록 등급, 보존 주기를 자유롭게 지정할 수 있습니다.
@@ -224,7 +224,7 @@ ReSet/
 > * **활성화 조건**: `AiSettings:ActorEffort` 값을 `"dynamic"`으로 지정하면 Actor-Critic 및 점진적 조각 합성(Consolidation) 루프가 활성화됩니다.
 > * **다중 후보군 병렬 생성**: 활성화 시, 서로 다른 추론 깊이(`Low`, `Medium`, `High` Effort)를 할당받은 3종의 명세서 후보를 동시에 병렬 생성합니다.
 > * **이종 모델 앙상블 권장**: 자가 편향(Self-Confirmation Bias) 방지를 위해 기본 Actor/Consolidator와 Critic의 AI 제공자(`Provider`) 및 모델을 서로 다르게(예: Actor/Consolidator는 Claude, Critic은 OpenAI) 교차 지정하여 검증의 객관성을 극대화하기를 권장합니다.
-> * **단일 모델 모드 우회**: `ActorEffort`가 `"dynamic"`이 아닌 단일 값(예: `"low"`, `"medium"`, `"high"`)인 경우에는 Actor-Critic 합성을 건너뛰고, 설정 한도(`MaxL2Attempts`) 내에서 자가 수정(Self-Correction)만을 수행하는 단일 모델 모드로 자동 우회 구동됩니다.
+> * **단일 모델 모드 우회**: `ActorEffort`가 `"dynamic"`이 아닌 단일 값(예: `"low"`, `"medium"`, `"high"`)인 경우에는 Actor-Critic 합성을 건너뛰고, 설정 한도(`MaxL2Attempts`) 내에서 자가 수정(Self-Correction)만을 수행하는 단일 모델 모드로 자동 우회 구동됩니다. (Ollama 구동 시에는 effort에 따라 온도가 0.1~0.9 범위로 자동 대응됩니다.)
 
 #### 2) 검증기 설정 (`src/ReSet.Validator.Cli/appsettings.json`)
 마이그레이션된 소스 코드와 설계서의 일치성을 검증하기 위한 설정 파일입니다.

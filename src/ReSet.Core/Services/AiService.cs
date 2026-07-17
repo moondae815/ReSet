@@ -443,9 +443,9 @@ namespace ReSet.Core.Services
             return aiResult;
         }
 
-        public async Task<AiResult> GenerateSpecSectionAsync(SpDefinition spDef, string sectionType, string userInstructions, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> GenerateSpecSectionAsync(SpDefinition spDef, string sectionType, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default)
         {
-            var (systemPrompt, userPrompt) = BuildSpecSectionPrompts(spDef, sectionType, userInstructions);
+            var (systemPrompt, userPrompt) = BuildSpecSectionPrompts(spDef, sectionType, userInstructions, feedbackLog);
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
@@ -470,7 +470,7 @@ namespace ReSet.Core.Services
             return aiResult;
         }
 
-        private (string SystemPrompt, string UserPrompt) BuildSpecSectionPrompts(SpDefinition spDef, string sectionType, string userInstructions)
+        private (string SystemPrompt, string UserPrompt) BuildSpecSectionPrompts(SpDefinition spDef, string sectionType, string userInstructions, string? feedbackLog = null)
         {
             var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(spDef);
 
@@ -610,6 +610,15 @@ namespace ReSet.Core.Services
             promptSb.AppendLine();
             promptSb.AppendLine("위 정보를 바탕으로 지침에 맞게 해당 섹션을 리버스 엔지니어링하여 작성하십시오.");
             promptSb.AppendLine(checklistText);
+
+            if (!string.IsNullOrEmpty(feedbackLog))
+            {
+                promptSb.AppendLine();
+                promptSb.AppendLine("[이전 시도에 대한 검증 오류/수정 피드백 로그]:");
+                promptSb.AppendLine(feedbackLog);
+                promptSb.AppendLine();
+                promptSb.AppendLine("위 검토 및 수정 피드백 로그의 모든 요건들을 전적으로 수용하여 해당 섹션의 내용을 정교하게 수정하고 오류를 바로잡아 다시 작성해 주십시오. 특히 이전 턴에서 정상적으로 분석되었던 항목이 이번 수정 과정에서 실수로 유실되거나 훼손되는 회귀 결함(Regression)이 절대 발생하지 않도록 각별히 유의해 주십시오.");
+            }
 
             return (systemPrompt, promptSb.ToString());
         }
