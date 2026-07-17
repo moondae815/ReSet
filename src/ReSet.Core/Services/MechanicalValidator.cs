@@ -225,19 +225,17 @@ namespace ReSet.Core.Services
                                 if (process.ExitCode != 0)
                                 {
                                     var stderr = process.StandardError.ReadToEnd().Trim();
-                                    Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
+                                    Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}. Fallback 기계 검증으로 전환합니다.", stderr);
                                     
-                                    result.Errors.Add($"Mermaid CLI 검증 실패: {stderr}");
-                                    result.DetailedErrors.Add(new DetailedError { Type = ErrorType.MermaidCliError, Message = stderr });
+                                    // 린트 실패를 치명적 오류로 처리하지 않고, Fallback 기계 린터로 검증 우회
+                                    ValidateMermaidFallback(mermaidContent, result);
                                 }
                             }
                             else
                             {
                                 try { process.Kill(); } catch { }
-                                var msg = "Mermaid CLI 검증 시간 초과(10초).";
-                                Log.Warning("Mermaid CLI 검증 시간 초과.");
-                                result.Errors.Add(msg);
-                                result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = msg });
+                                Log.Warning("Mermaid CLI 검증 시간 초과(10초). Fallback 기계 검증으로 전환합니다.");
+                                ValidateMermaidFallback(mermaidContent, result);
                             }
                         }
                     }

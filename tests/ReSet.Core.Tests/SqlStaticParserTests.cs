@@ -298,5 +298,112 @@ END;
             Assert.Contains("AYMD", targetCols);
             Assert.Contains("TxAmt", targetCols);
         }
+
+        [Fact]
+        public void Analyze_WithUnionAllAndDuplicateAliases_ShouldResolveColumnsIndependently()
+        {
+            // Arrange
+            // UNION ALL의 서로 다른 절에서 동일한 별칭 E를 사용하여 서로 다른 테이블을 참조함
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUnionAllAliasCollision
+AS
+BEGIN
+    SELECT E.Col1
+    FROM dbo.TableA E
+    UNION ALL
+    SELECT E.Col2
+    FROM dbo.TableB E;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            // Act
+            var result = parser.Analyze(ddlText);
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+
+            // TableA의 E.Col1은 TableA의 컬럼으로 정상 매핑되어야 함
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TableA"));
+            Assert.Contains("Col1", result.ReferencedColumnsPerTable["dbo.TableA"]);
+            Assert.DoesNotContain("Col2", result.ReferencedColumnsPerTable["dbo.TableA"]);
+
+            // TableB의 E.Col2는 TableB의 컬럼으로 정상 매핑되어야 함
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TableB"));
+            Assert.Contains("Col2", result.ReferencedColumnsPerTable["dbo.TableB"]);
+            Assert.DoesNotContain("Col1", result.ReferencedColumnsPerTable["dbo.TableB"]);
+        }
+
+        [Fact]
+        public void Analyze_WithQualifierlessColumnsInInsertSelect_ShouldResolveToSourceTable()
+        {
+            // Arrange
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestQualifierlessColumns
+AS
+BEGIN
+    INSERT INTO dbo.TargetTable (Col1, Col2)
+    SELECT SourceCol1, SourceCol2
+    FROM dbo.SourceTable WITH(NOLOCK);
+END;
+";
+            var parser = new SqlStaticParser();
+
+            // Act
+            var result = parser.Analyze(ddlText);
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+
+            // SourceCol1, SourceCol2는 SourceTable의 참조 컬럼으로 수집되어야 함
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.SourceTable"));
+            var sourceCols = result.ReferencedColumnsPerTable["dbo.SourceTable"];
+            Assert.Contains("SourceCol1", sourceCols);
+            Assert.Contains("SourceCol2", sourceCols);
+
+            // TargetTable의 컬럼은 Col1, Col2로 수집되어야 함
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TargetTable"));
+            var targetCols = result.ReferencedColumnsPerTable["dbo.TargetTable"];
+            Assert.Contains("Col1", targetCols);
+            Assert.Contains("Col2", targetCols);
+        }
+
+        [Fact]
+        public void Analyze_WithMultipleTablesAndSchemaMetadata_ShouldResolveToCorrectTable()
+        {
+            // Arrange
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestMultipleTables
+AS
+BEGIN
+    SELECT ColA, ColB
+    FROM dbo.TableA A
+    JOIN dbo.TableB B ON A.ID = B.ID;
+END;
+";
+            // TableA는 ColA를 소유, TableB는 ColB를 소유하는 실제 DB 메타데이터 구성
+            var schemaMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "dbo.TableA", new List<string> { "ID", "ColA" } },
+                { "dbo.TableB", new List<string> { "ID", "ColB" } }
+            };
+            var parser = new SqlStaticParser();
+
+            // Act
+            var result = parser.Analyze(ddlText, 160, schemaMap);
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+
+            // ColA는 TableA의 컬럼으로 정상 해석
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TableA"));
+            Assert.Contains("ColA", result.ReferencedColumnsPerTable["dbo.TableA"]);
+            Assert.DoesNotContain("ColB", result.ReferencedColumnsPerTable["dbo.TableA"]);
+
+            // ColB는 TableB의 컬럼으로 정상 해석
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TableB"));
+            Assert.Contains("ColB", result.ReferencedColumnsPerTable["dbo.TableB"]);
+            Assert.DoesNotContain("ColA", result.ReferencedColumnsPerTable["dbo.TableB"]);
+        }
     }
 }

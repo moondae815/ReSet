@@ -10,7 +10,7 @@ namespace ReSet.Core.Services
 {
     public class SqlStaticParser
     {
-        public SpStaticAnalysisResult Analyze(string ddlText, int compatibilityLevel = 160)
+        public SpStaticAnalysisResult Analyze(string ddlText, int compatibilityLevel = 160, Dictionary<string, List<string>>? tableColumnsMap = null)
         {
             var result = new SpStaticAnalysisResult();
             if (string.IsNullOrWhiteSpace(ddlText))
@@ -42,12 +42,12 @@ namespace ReSet.Core.Services
 
                     if (fragment != null)
                     {
-                        var visitor = new SpStructureVisitor();
+                        var visitor = new SpStructureVisitor(tableColumnsMap);
 
                         // Pre-scan table aliases to handle order-dependency (SELECT list before FROM clause)
                         var aliasVisitor = new TableAliasVisitor();
                         fragment.Accept(aliasVisitor);
-                        visitor.InitializeAliasMap(aliasVisitor.AliasToTableMap);
+                        visitor.InitializeAliasMap(aliasVisitor.QueryLocalAliasMaps, aliasVisitor.GlobalAliasToTableMap);
 
                         fragment.Accept(visitor);
 
@@ -114,15 +114,32 @@ namespace ReSet.Core.Services
         private readonly HashSet<string> _foundFuncs = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly Stack<string> _statementContext = new();
-        private readonly Dictionary<string, string> _aliasToTableMap = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<QuerySpecification, Dictionary<string, string>> _queryLocalAliasMaps = new();
+        private readonly Dictionary<string, string> _globalAliasToTableMap = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Stack<QuerySpecification> _querySpecs = new();
         private int _indentLevel = 0;
         private string? _currentInsertTarget = null;
+        private readonly Dictionary<string, List<string>>? _tableColumnsMap;
 
-        public void InitializeAliasMap(Dictionary<string, string> aliasMap)
+        public SpStructureVisitor(Dictionary<string, List<string>>? tableColumnsMap = null)
         {
-            foreach (var kvp in aliasMap)
+            _tableColumnsMap = tableColumnsMap;
+        }
+
+        public void InitializeAliasMap(
+            Dictionary<QuerySpecification, Dictionary<string, string>> localMaps,
+            Dictionary<string, string> globalMap)
+        {
+            _queryLocalAliasMaps.Clear();
+            foreach (var kvp in localMaps)
             {
-                _aliasToTableMap[kvp.Key] = kvp.Value;
+                _queryLocalAliasMaps[kvp.Key] = kvp.Value;
+            }
+
+            _globalAliasToTableMap.Clear();
+            foreach (var kvp in globalMap)
+            {
+                _globalAliasToTableMap[kvp.Key] = kvp.Value;
             }
         }
 
@@ -191,9 +208,11 @@ namespace ReSet.Core.Services
 
         public override void ExplicitVisit(QuerySpecification node)
         {
+            _querySpecs.Push(node);
             _statementContext.Push("SELECT");
             base.ExplicitVisit(node);
             _statementContext.Pop();
+            _querySpecs.Pop();
         }
 
         // 동적 SQL 실행 노드 감지 및 경고 추가 (ExecuteStatement)
@@ -235,7 +254,17 @@ namespace ReSet.Core.Services
                     // Alias 등록
                     if (node.Alias != null && !string.IsNullOrWhiteSpace(node.Alias.Value))
                     {
-                        _aliasToTableMap[node.Alias.Value] = tableName;
+                        if (_querySpecs.Count > 0)
+                        {
+                            var currentSpec = _querySpecs.Peek();
+                            if (!_queryLocalAliasMaps.TryGetValue(currentSpec, out var localMap))
+                            {
+                                localMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                                _queryLocalAliasMaps[currentSpec] = localMap;
+                            }
+                            localMap[node.Alias.Value] = tableName;
+                        }
+                        _globalAliasToTableMap[node.Alias.Value] = tableName;
                     }
 
                     // Linked Server 감지 (ServerIdentifier가 있는 4파트 명칭 구조)
@@ -322,26 +351,102 @@ namespace ReSet.Core.Services
                 string targetTable = "Unknown";
                 if (!string.IsNullOrEmpty(tableQualifier))
                 {
-                    if (_aliasToTableMap.TryGetValue(tableQualifier, out var mappedTable))
+                    bool foundLocal = false;
+                    if (_querySpecs.Count > 0)
                     {
-                        targetTable = mappedTable;
+                        var currentSpec = _querySpecs.Peek();
+                        if (_queryLocalAliasMaps.TryGetValue(currentSpec, out var localMap))
+                        {
+                            if (localMap.TryGetValue(tableQualifier, out var mappedTable))
+                            {
+                                targetTable = mappedTable;
+                                foundLocal = true;
+                            }
+                        }
                     }
-                    else if (_foundTables.Contains(tableQualifier) || _foundTemps.Contains(tableQualifier))
+
+                    if (!foundLocal)
                     {
-                        targetTable = tableQualifier;
+                        if (_globalAliasToTableMap.TryGetValue(tableQualifier, out var mappedTable))
+                        {
+                            targetTable = mappedTable;
+                        }
+                        else if (_foundTables.Contains(tableQualifier) || _foundTemps.Contains(tableQualifier))
+                        {
+                            targetTable = tableQualifier;
+                        }
                     }
                 }
-                else if (_statementContext.Count > 0 && _statementContext.Peek() == "INSERT" && !string.IsNullOrEmpty(_currentInsertTarget))
+                else
                 {
-                    targetTable = _currentInsertTarget;
-                }
-                else if (ReferencedTables.Count == 1)
-                {
-                    targetTable = ReferencedTables[0];
-                }
-                else if (ReferencedTables.Count == 0 && CreatedTempTables.Count == 1)
-                {
-                    targetTable = CreatedTempTables[0];
+                    // 로컬 QuerySpecification 스코프 내의 단일 물리 테이블 매핑 시도
+                    bool resolvedLocally = false;
+                    if (_querySpecs.Count > 0)
+                    {
+                        var currentSpec = _querySpecs.Peek();
+                        if (_queryLocalAliasMaps.TryGetValue(currentSpec, out var localMap))
+                        {
+                            var localTables = new HashSet<string>(localMap.Values, StringComparer.OrdinalIgnoreCase);
+
+                            // 스키마 메타데이터 기반 대조 리졸버 작동
+                            if (_tableColumnsMap != null && _tableColumnsMap.Count > 0 && localTables.Count > 0)
+                            {
+                                string? matchedTable = null;
+                                int matchCount = 0;
+                                foreach (var t in localTables)
+                                {
+                                    if (TryFindColumnsForTable(t, out var columns))
+                                    {
+                                        bool hasCol = false;
+                                        foreach (var col in columns)
+                                        {
+                                            if (string.Equals(col, columnName, StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                hasCol = true;
+                                                break;
+                                            }
+                                        }
+                                        if (hasCol)
+                                        {
+                                            matchedTable = t;
+                                            matchCount++;
+                                        }
+                                    }
+                                }
+                                if (matchCount == 1 && !string.IsNullOrEmpty(matchedTable))
+                                {
+                                    targetTable = matchedTable;
+                                    resolvedLocally = true;
+                                }
+                            }
+
+                            if (!resolvedLocally && localTables.Count == 1)
+                            {
+                                foreach (var t in localTables)
+                                {
+                                    targetTable = t;
+                                    break;
+                                }
+                                resolvedLocally = true;
+                            }
+                        }
+                    }
+
+                    if (!resolvedLocally)
+                    {
+                        if (_statementContext.Count > 0 && _statementContext.Peek() == "INSERT" && !string.IsNullOrEmpty(_currentInsertTarget))
+                        {
+                            targetTable = _currentInsertTarget;
+                        }
+                        else if (ReferencedTables.Count == 1)
+                        {
+                            targetTable = ReferencedTables[0];
+                        }
+                        else if (ReferencedTables.Count == 0 && CreatedTempTables.Count == 1)
+                        {
+                            targetTable = CreatedTempTables[0];
+                        }
+                    }
                 }
 
                 if (targetTable != "Unknown")
@@ -357,6 +462,33 @@ namespace ReSet.Core.Services
                     }
                 }
             }
+        }
+
+        private bool TryFindColumnsForTable(string tableName, out List<string> columns)
+        {
+            columns = null!;
+            if (_tableColumnsMap == null) return false;
+
+            // 1. Exact Match (e.g. 'dbo.TPGCMRate')
+            if (_tableColumnsMap.TryGetValue(tableName, out var cols))
+            {
+                columns = cols;
+                return true;
+            }
+
+            // 2. Base Name Match (e.g. 'TPGCMRate'와 'dbo.TPGCMRate' 대조)
+            var cleanTableName = tableName.Split('.').Last().Replace("[", "").Replace("]", "");
+            foreach (var kvp in _tableColumnsMap)
+            {
+                var cleanKey = kvp.Key.Split('.').Last().Replace("[", "").Replace("]", "");
+                if (string.Equals(cleanKey, cleanTableName, StringComparison.OrdinalIgnoreCase))
+                {
+                    columns = kvp.Value;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private string GetCallTargetString(CallTarget callTarget)
@@ -428,9 +560,23 @@ namespace ReSet.Core.Services
 
     internal class TableAliasVisitor : TSqlFragmentVisitor
     {
-        public Dictionary<string, string> AliasToTableMap { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<QuerySpecification, Dictionary<string, string>> QueryLocalAliasMaps { get; } = new();
+        public Dictionary<string, string> GlobalAliasToTableMap { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> FoundTables { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> FoundTemps { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly Stack<QuerySpecification> _querySpecs = new();
+
+        public override void ExplicitVisit(QuerySpecification node)
+        {
+            _querySpecs.Push(node);
+            if (!QueryLocalAliasMaps.ContainsKey(node))
+            {
+                QueryLocalAliasMaps[node] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+            base.ExplicitVisit(node);
+            _querySpecs.Pop();
+        }
 
         public override void ExplicitVisit(NamedTableReference node)
         {
@@ -440,17 +586,18 @@ namespace ReSet.Core.Services
                 var tableName = GetSchemaObjectString(node.SchemaObject);
                 if (!string.IsNullOrWhiteSpace(tableName))
                 {
-                    if (node.Alias != null && !string.IsNullOrWhiteSpace(node.Alias.Value))
+                    // 로컬 맵 등록
+                    if (_querySpecs.Count > 0)
                     {
-                        AliasToTableMap[node.Alias.Value] = tableName;
+                        var currentSpec = _querySpecs.Peek();
+                        if (QueryLocalAliasMaps.TryGetValue(currentSpec, out var localMap))
+                        {
+                            RegisterAlias(localMap, node, tableName);
+                        }
                     }
-                    // Map table name itself and its base name to the full name
-                    AliasToTableMap[tableName] = tableName;
-                    var parts = tableName.Split('.');
-                    if (parts.Length > 0)
-                    {
-                        AliasToTableMap[parts[parts.Length - 1]] = tableName;
-                    }
+
+                    // 전역 맵 등록
+                    RegisterAlias(GlobalAliasToTableMap, node, tableName);
 
                     if (tableName.StartsWith("#"))
                     {
@@ -461,6 +608,20 @@ namespace ReSet.Core.Services
                         FoundTables.Add(tableName);
                     }
                 }
+            }
+        }
+
+        private void RegisterAlias(Dictionary<string, string> map, NamedTableReference node, string tableName)
+        {
+            if (node.Alias != null && !string.IsNullOrWhiteSpace(node.Alias.Value))
+            {
+                map[node.Alias.Value] = tableName;
+            }
+            map[tableName] = tableName;
+            var parts = tableName.Split('.');
+            if (parts.Length > 0)
+            {
+                map[parts[parts.Length - 1]] = tableName;
             }
         }
 

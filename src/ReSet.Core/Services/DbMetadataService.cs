@@ -222,6 +222,45 @@ namespace ReSet.Core.Services
             Log.Information("[DbMetadata] 재귀 의존성 탐색(DFS) 시작 - SP: {SpFullName}", spFullName);
             await GatherDependenciesRecursiveAsync(connectionString, null, schema, spName, 1, maxDepth, visited, spDef.Dependencies, spDef.Warnings, cancellationToken);
 
+            // 2차 정밀 정적 분석 재구동 (수집 완료된 실제 테이블 스키마 연동)
+            try
+            {
+                var tableColumnsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var dep in spDef.Dependencies)
+                {
+                    if ((dep.Type.Contains("TABLE") || dep.Type.Contains("VIEW")) && dep.Columns != null && dep.Columns.Count > 0)
+                    {
+                        var depFullName = string.IsNullOrEmpty(dep.Database)
+                            ? $"{dep.Schema}.{dep.Name}"
+                            : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
+
+                        var colNames = new List<string>();
+                        foreach (var col in dep.Columns)
+                        {
+                            colNames.Add(col.ColumnName);
+                        }
+                        tableColumnsMap[depFullName] = colNames;
+                    }
+                }
+
+                if (tableColumnsMap.Count > 0)
+                {
+                    Log.Information("[DbMetadata] 의존 테이블 스키마 메타데이터 기반 2차 정밀 정적 분석 재구동 시작 - SP: {SpFullName}", spFullName);
+                    int compatLevel = await GetDatabaseCompatibilityLevelAsync(connectionString, cancellationToken);
+                    var staticParser = new SqlStaticParser();
+                    var refinedAnalysis = staticParser.Analyze(spDef.DdlText, compatLevel, tableColumnsMap);
+                    if (refinedAnalysis.IsParsedSuccessfully)
+                    {
+                        spDef.StaticAnalysis = refinedAnalysis;
+                        Log.Information("[DbMetadata] 2차 정밀 정적 분석 재구동 성공 및 교체 완료 - SP: {SpFullName}", spFullName);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[DbMetadata] 2차 정밀 정적 분석 재구동 중 예외 발생 (기존 결과 유지)");
+            }
+
             Log.Information("[DbMetadata] SP 메타데이터 수집 완료 - SP: {SpFullName}, 의존 객체: {DepCount}개, 경고: {WarnCount}개",
                 spFullName, spDef.Dependencies.Count, spDef.Warnings.Count);
             return spDef;

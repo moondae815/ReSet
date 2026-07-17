@@ -291,24 +291,13 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
 
-            if (hasMissingDescription)
-            {
-                rules.Add($"{ruleIndex++}. For columns labeled as '[설명 누락]' (Description Missing) in schema metadata, deduce their meaning from assignments/expressions and label them in the text as `[AI 추론 보완: {{Schema}}.{{Table}}.{{Column}} - {{Explanation}}]`.");
-                rules.Add("   * Correct Example: `[AI 추론 보완: dbo.Orders.TotAmt - 주문 건의 할인 적용 후 최종 결제 금액]`");
-            }
-            if (hasComments)
-            {
-                rules.Add($"{ruleIndex++}. If there is a contradiction between the natural language developer comments and the actual SQL logic, analyze based on the actual SQL query as the source of truth, and add `[🚨 주석 불일치 경고] {{Description of Contradiction}}` directly under the H2 `## 개요` section.");
-                rules.Add("   * Correct Example: `[🚨 주석 불일치 경고] 수정이력 주석에는 '정상정산예정일 사용'으로 적혀있으나, 실제 WHERE 조건절에서는 취소거래예정일(CancelDate)을 기준으로 삼아 모순됨.`");
-            }
-
             rules.Add($"{ruleIndex++}. Never abbreviate column lists or mapping tables (e.g., using 'etc.' or '...'). Provide a complete 1:1 mapping table of all columns affected.");
             rules.Add($"{ruleIndex++}. Do not arbitrarily assume columns/parameters are 'NOT NULL' unless defined in the DDL.");
             rules.Add($"{ruleIndex++}. If `WITH(NOLOCK)` or `NOLOCK` hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
             rules.Add($"{ruleIndex++}. Prevent logical hallucinations when translating complex filters (e.g., NOT IN combined with ISNULL). Describe them factually.");
 
             // [Anti-Hallucination Constraints]
-            rules.Add($"{ruleIndex++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch or use the `[AI 추론 보완: {{Schema}}.{{Table}}.{{Column}} - {{explanation}}]` format.");
+            rules.Add($"{ruleIndex++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
             rules.Add($"{ruleIndex++}. DO NOT invent arbitrary return codes (e.g., assuming -1, -2, etc. sequentially) if the RETURN statement in the DDL does not specify literal values. Map them factually (e.g., 'Returns error code on failure (actual value not specified in code)').");
 
             // [Output Language Requirement]
@@ -588,12 +577,6 @@ Based on the structured reference context above, reverse engineer the stored pro
                 };
 
                 int rIdx = 2;
-                if (hasComments)
-                {
-                    sbRules.Add($"{rIdx++}. If there is a contradiction between header comments and actual logic, write the specification based on the actual code, and explicitly add `[🚨 주석 불일치 경고] {{description}}` under `## 개요`.");
-                    sbRules.Add("   * Correct Example: `[🚨 주석 불일치 경고] 수정이력 주석에는 '정상정산예정일 사용'으로 적혀있으나, 실제 WHERE 조건절에서는 취소거래예정일(CancelDate)을 기준으로 삼아 모순됨.`");
-                }
-
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록, detail all parameters defined in the DDL including their data type, nullability (state '명시 없음' if not defined), purpose, and whether they are OUTPUT parameters in a table format. Do not arbitrarily assume 'NOT NULL'.");
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
@@ -608,7 +591,6 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 checklistText = @"🎯 [필수 검증 체크리스트]
 - [ ] '## 개요' 및 '## 파라미터 목록' 헤더가 명확하게 작성되었습니까?
-- [ ] SP 헤더 주석과 실제 로직의 모순이 있을 시 `[🚨 주석 불일치 경고] ...`가 본문에 포함되었습니까?
 - [ ] 출력 파라미터의 역할 및 결과셋 반환 여부를 명확히 명시하셨습니까?";
             }
             else if (sectionType == "CrudAnalysis")
@@ -638,13 +620,8 @@ Based on the structured reference context above, reverse engineer the stored pro
                 {
                     sbRules.Add($"{rIdx++}. If Linked Server references (4-part identifier) are found, analyze the external DB dependencies. If it is a cross-database reference on the same server (3-part identifier), distinguish it clearly from a Linked Server.");
                 }
-                if (hasMissingDescription)
-                {
-                    sbRules.Add($"{rIdx++}. For columns labeled as '[설명 누락]' in schema metadata, deduce their meaning from code and format them as `[AI 추론 보완: {{Schema}}.{{Table}}.{{Column}} - {{Explanation}}]`.");
-                    sbRules.Add("   * Correct Example: `[AI 추론 보완: dbo.Orders.TotAmt - 주문 건의 할인 적용 후 최종 결제 금액]`");
-                }
 
-                sbRules.Add($"{rIdx++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch or use the `[AI 추론 보완: {{Schema}}.{{Table}}.{{Column}} - {{explanation}}]` format.");
+                sbRules.Add($"{rIdx++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
                 sbRules.Add("");
@@ -790,10 +767,8 @@ Based on the structured reference context above, reverse engineer the stored pro
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Check if the operations and branches of the source code are documented accurately without hallucination, arbitrary assumptions, or guesses.
-   - Verify if `[🚨 주석 불일치 경고]` is added under ## 개요 if developer comments contradict actual SQL code.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
-   - Check if `[AI 추론 보완: Schema.Table.Column - Explanation]` is applied strictly for columns missing description in the metadata.
    - Verify if temp tables, UDFs, and Linked Servers are factually detailed (or stated explicitly as not used).
 3. Integration and Interface Definition (ScoreInterface):
    - Verify if parameter names, types, nullability (use '명시 없음' if undefined), and descriptions are fully detailed in a table.
