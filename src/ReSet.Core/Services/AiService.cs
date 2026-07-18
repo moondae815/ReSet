@@ -311,13 +311,15 @@ namespace ReSet.Core.Services
 
             rules.Add($"{ruleIndex++}. Do not wrap the entire output in a markdown code block (```markdown ... ```). Output the markdown directly.");
             rules.Add($"{ruleIndex++}. The specification H2 headers must strictly use these exact Korean titles: `## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`. Do not change or add numbering to these headers.");
+            rules.Add($"{ruleIndex++}. In the `## 개요` section, you MUST state the exact procedure name provided in the metadata. Do NOT misspell it (e.g., watch out for missing letters like 'E').");
             rules.Add($"{ruleIndex++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
             rules.Add($"{ruleIndex++}. In ## CRUD 분석, state all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists. You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.");
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
 
-            rules.Add($"{ruleIndex++}. Never abbreviate column lists or mapping tables (e.g., using 'etc.' or '...'). Provide a complete 1:1 mapping table of all columns affected.");
+            rules.Add($"{ruleIndex++}. NEVER abbreviate column lists, logic, or mapping expressions (e.g., using 'etc.', '...', or '위와 동일(Same as above)'). You MUST copy the exact full expression for EVERY branch, even if they are identical. Abbreviation is a critical failure.");
+            rules.Add($"{ruleIndex++}. If a column description contains the exact tag `[AI 추론 보완: Schema.Table.Column - Description]`, you MUST output this tag exactly as is in the description column of the Markdown tables. Do NOT alter or translate this tag, and do not let it break the table format.");
             rules.Add($"{ruleIndex++}. Do not arbitrarily assume columns/parameters are 'NOT NULL' unless defined in the DDL.");
             rules.Add($"{ruleIndex++}. If `WITH(NOLOCK)` or `NOLOCK` hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
             rules.Add($"{ruleIndex++}. Prevent logical hallucinations when translating complex filters (e.g., NOT IN combined with ISNULL). Describe them factually.");
@@ -1034,6 +1036,7 @@ Based on the structured reference context above, reverse engineer the stored pro
    - Ensure the Mermaid flowchart TD diagram has no syntax errors.
    - Node text labels must be wrapped in double quotes. Arrow labels must NOT contain double quotes, parentheses, or special characters.
    - Avoid variable names with '@' in node labels (except system variables like '@@ERROR' wrapped in double quotes).
+   - Do NOT penalize the presence of `[AI 추론 보완: ...]` tags in the descriptions. This is a REQUIRED system tag for metadata cleansing SQL generation and its presence is expected and correct.
 
 [Defect Judgment]
 - If any of the 5 criteria scores less than 8 points, or if any of the 5 mandatory H2 headers (## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화) is missing, mark HasDefects as true.
