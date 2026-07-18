@@ -114,23 +114,46 @@ namespace ReSet.Validator.Core.Services
                     // 6. 파라미터 매핑 및 호출
                     var parameters = MapMethodParameters(method, testCase.Parameters, conn, transaction);
                     object? invokeResult = null;
+                    var rawResult = method.Invoke(instance, parameters);
 
-                    if (typeof(Task).IsAssignableFrom(method.ReturnType))
+                    if (rawResult != null)
                     {
-                        var task = (Task?)method.Invoke(instance, parameters);
-                        if (task != null)
+                        var returnType = method.ReturnType;
+                        if (typeof(Task).IsAssignableFrom(returnType))
                         {
+                            var task = (Task)rawResult;
                             await task;
                             var resultProperty = task.GetType().GetProperty("Result");
                             if (resultProperty != null)
                             {
                                 invokeResult = resultProperty.GetValue(task);
                             }
+                            else
+                            {
+                                invokeResult = rawResult;
+                            }
                         }
-                    }
-                    else
-                    {
-                        invokeResult = method.Invoke(instance, parameters);
+                        else if (returnType == typeof(ValueTask) || (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>)))
+                        {
+                            var asTaskMethod = returnType.GetMethod("AsTask");
+                            if (asTaskMethod != null)
+                            {
+                                var task = (Task?)asTaskMethod.Invoke(rawResult, null);
+                                if (task != null)
+                                {
+                                    await task;
+                                    var resultProperty = task.GetType().GetProperty("Result");
+                                    if (resultProperty != null)
+                                    {
+                                        invokeResult = resultProperty.GetValue(task);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            invokeResult = rawResult;
+                        }
                     }
 
                     // 7. 결과 덤프 (ResultSets 추출)

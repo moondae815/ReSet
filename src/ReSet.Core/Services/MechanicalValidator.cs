@@ -332,6 +332,15 @@ namespace ReSet.Core.Services
             var lines = mermaid.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             var resultLines = new List<string>();
 
+            // Keywords to ignore when normalizing node IDs
+            var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "flowchart", "graph", "subgraph", "end",
+                "td", "lr", "tb", "bt", "rl",
+                "style", "fill", "stroke", "stroke-width", "stroke-dasharray",
+                "linkstyle", "interpolate", "classdef", "class", "click", "default"
+            };
+
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
@@ -349,11 +358,14 @@ namespace ReSet.Core.Services
                 processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^""]+?)\s*""\s*-->", "-->|$1|");
                 processedLine = Regex.Replace(processedLine, @"--\s*([^""]+?)\s*-->", "-->|$1|");
 
-                // 2. 잘못된 화살표 기호 보정 ( -> 또는 - -> 를 --> 로 변환)
+                // 2. 비표준 화살표 조건절 및 누락된 화살표 보정 (예: 'A -- |label| B' -> 'A -->|label| B')
+                processedLine = Regex.Replace(processedLine, @"--\s*\|([^|]+)\|\s*([a-zA-Z0-9_]+)", "-->|$1| $2");
+
+                // 3. 잘못된 화살표 기호 보정 ( -> 또는 - -> 를 --> 로 변환)
                 processedLine = Regex.Replace(processedLine, @"-\s*->", "-->");
                 processedLine = Regex.Replace(processedLine, @"-[^-]>", "-->");
 
-                // 3. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
+                // 4. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
                 processedLine = Regex.Replace(processedLine, @"([a-zA-Z0-9_ ]+?)\s*([\[\(\{>]+)(""[^""]+""|[^""\(\[\{]+?)([\]\)\}>]+)", match =>
                 {
                     var nodeId = match.Groups[1].Value;
@@ -388,6 +400,30 @@ namespace ReSet.Core.Services
                     }
 
                     return $"{cleansedId}{opening}{trimmedLabel}{closing}";
+                });
+
+                // 5. 노드 ID의 언더스코어/공백 제거 일관성 확보 (정의부 및 참조부 전체 적용)
+                // 문자열과 조건절 내부(|...| 및 "...")는 건드리지 않고, 노드 ID 및 style 참조부에만 적용
+                var pattern = @"(""[^""]*"")|(\|[^|]*\|)|(\b[a-zA-Z_][a-zA-Z0-9_]*\b)";
+                processedLine = Regex.Replace(processedLine, pattern, match =>
+                {
+                    if (match.Groups[1].Success)
+                    {
+                        return match.Groups[1].Value; // 이중 따옴표 안은 그대로 둠
+                    }
+                    if (match.Groups[2].Success)
+                    {
+                        return match.Groups[2].Value; // 파이프 안은 그대로 둠
+                    }
+                    
+                    var word = match.Groups[3].Value;
+                    if (keywords.Contains(word))
+                    {
+                        return word; // 예약어는 그대로 둠
+                    }
+                    
+                    // 일반 단어(노드 ID)에서 공백 및 언더스코어 제거
+                    return word.Replace(" ", "").Replace("_", "");
                 });
 
                 resultLines.Add(processedLine);

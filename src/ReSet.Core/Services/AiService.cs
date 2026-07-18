@@ -273,6 +273,7 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. Include a Mermaid Flowchart diagram visualizing the business logic flow: ");
             rules.Add("   - Always wrap the entire text of node labels in double quotes to prevent syntax errors (e.g., id1[\"\"Text (Extra)\"\"] --> id2[\"\"Return Result\"\"]).");
             rules.Add("   - Node IDs must be unique alphanumeric characters (e.g., Node1, Node2). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
+            rules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another. Keep node IDs simple, using only uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG, INSPG, FAIL9, COMMIT).");
             rules.Add("   - When writing labels on arrows (e.g., -->|Label|), NEVER use double quotes, parentheses, or special characters inside the label.");
             rules.Add("   - Do not include variables prefixed with '@' inside the node text (except system variables like '@@ERROR', which must be wrapped in double quotes).");
 
@@ -287,6 +288,8 @@ namespace ReSet.Core.Services
 
             rules.Add($"{ruleIndex++}. Do not wrap the entire output in a markdown code block (```markdown ... ```). Output the markdown directly.");
             rules.Add($"{ruleIndex++}. The specification H2 headers must strictly use these exact Korean titles: `## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`. Do not change or add numbering to these headers.");
+            rules.Add($"{ruleIndex++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
+            rules.Add($"{ruleIndex++}. In ## CRUD 분석, state all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists. You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.");
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
@@ -578,6 +581,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 int rIdx = 2;
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록, detail all parameters defined in the DDL including their data type, nullability (state '명시 없음' if not defined), purpose, and whether they are OUTPUT parameters in a table format. Do not arbitrarily assume 'NOT NULL'.");
+                sbRules.Add($"{rIdx++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
@@ -601,8 +605,10 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "",
                     "[Rules]",
                     "1. The document must use only one H2 header: `## CRUD 분석`. Terminate immediately after writing this section. Do not include any other H2 headers.",
-                    "2. State all physical tables affected by SELECT, INSERT, UPDATE, DELETE. Detail the column names referenced and join/filter keys without abbreviation.",
-                    "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any.",
+                    "2. State all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists.",
+                    "   - You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.",
+                    "   - Detail the column names referenced and join/filter keys without abbreviation.",
+                    "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
                     "3. For target tables of INSERT/UPDATE operations, map all target columns to their source values (variables, constants, function results, etc.) in a 1:1 mapping table. Do not abbreviate with 'etc.' or '...'.",
                     "4. Factual state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used."
                 };
@@ -685,7 +691,11 @@ Based on the structured reference context above, reverse engineer the stored pro
                 }
 
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
-                sbRules.Add($"{rIdx++}. Visualized business flow using a Mermaid flowchart TD diagram: Node text labels must be wrapped in double quotes. Do not use double quotes, parentheses, or special characters on arrow condition text labels. Node IDs must be high-quality unique alphanumeric tokens.");
+                sbRules.Add($"{rIdx++}. Visualized business flow using a Mermaid flowchart TD diagram:");
+                sbRules.Add("   - Node text labels must be wrapped in double quotes.");
+                sbRules.Add("   - Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
+                sbRules.Add("   - Node IDs must be unique uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
+                sbRules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
@@ -803,6 +813,11 @@ Target Stored Procedure:
 - Schema: {spDef.Schema}
 - Name: {spDef.Name}
 
+[Target Stored Procedure Source DDL]
+```sql
+{spDef.DdlText}
+```
+
 [Dependencies List]
 {dependenciesText}
 
@@ -817,7 +832,7 @@ Target Stored Procedure:
 [Generated Specification Markdown]
 {specMarkdown}
 
-Review the generated specification markdown against the source metadata and output the review result in JSON.
+Review the generated specification markdown against the source metadata and source DDL, and output the review result in JSON.
 ";
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
