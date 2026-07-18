@@ -606,6 +606,8 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "[Rules]",
                     "1. The document must use only one H2 header: `## CRUD 분석`. Terminate immediately after writing this section. Do not include any other H2 headers.",
                     "2. State all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists.",
+                    "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. Analyze the exact computation (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) and document it fully.",
+                    "   - For INSERT/UPDATE operations, you must list EVERY single column mapped in the INSERT/UPDATE statement (e.g. CLVT, PGVT, CLTOTAL, etc.). Omission of any target column is considered a critical failure.",
                     "   - You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.",
                     "   - Detail the column names referenced and join/filter keys without abbreviation.",
                     "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
