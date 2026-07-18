@@ -14,6 +14,13 @@ namespace ReSet.Core.Models
         public DeconstructedSpLogic DeconstructedLogic { get; set; } = new();
     }
 
+    public class AstInsertMapping
+    {
+        public string TargetTable { get; set; } = string.Empty;
+        public List<string> TargetColumns { get; set; } = new();
+        public string SourceQueryBlock { get; set; } = string.Empty;
+    }
+
     public class SpStaticAnalysisResult
     {
         public bool IsParsedSuccessfully { get; set; }
@@ -23,6 +30,7 @@ namespace ReSet.Core.Models
         public List<string> ControlFlowSummary { get; set; } = new();
         public List<string> SelectTables { get; set; } = new();
         public List<string> InsertTables { get; set; } = new();
+        public List<AstInsertMapping> AstInsertMappings { get; set; } = new();
         public List<string> UpdateTables { get; set; } = new();
         public List<string> DeleteTables { get; set; } = new();
         public List<string> LinkedServerReferences { get; set; } = new();

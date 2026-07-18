@@ -57,6 +57,7 @@ namespace ReSet.Core.Services
                         result.ControlFlowSummary = visitor.ControlFlowSummary;
                         result.SelectTables = visitor.SelectTables;
                         result.InsertTables = visitor.InsertTables;
+                        result.AstInsertMappings = visitor.AstInsertMappings;
                         result.UpdateTables = visitor.UpdateTables;
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
@@ -95,6 +96,7 @@ namespace ReSet.Core.Services
 
         public List<string> SelectTables { get; } = new();
         public List<string> InsertTables { get; } = new();
+        public List<AstInsertMapping> AstInsertMappings { get; } = new();
         public List<string> UpdateTables { get; } = new();
         public List<string> DeleteTables { get; } = new();
 
@@ -186,10 +188,35 @@ namespace ReSet.Core.Services
             if (node.Target is NamedTableReference namedTarget && namedTarget.SchemaObject != null)
             {
                 _currentInsertTarget = GetSchemaObjectString(namedTarget.SchemaObject);
+
+                var mapping = new AstInsertMapping { TargetTable = _currentInsertTarget };
+                if (node.Columns != null)
+                {
+                    foreach (var col in node.Columns)
+                    {
+                        mapping.TargetColumns.Add(GetFragmentText(col));
+                    }
+                }
+                if (node.InsertSource != null)
+                {
+                    mapping.SourceQueryBlock = GetFragmentText(node.InsertSource);
+                }
+                AstInsertMappings.Add(mapping);
             }
             base.ExplicitVisit(node);
             _currentInsertTarget = prevInsertTarget;
             _statementContext.Pop();
+        }
+
+        private string GetFragmentText(TSqlFragment fragment)
+        {
+            if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
+            var sb = new StringBuilder();
+            for (int i = fragment.FirstTokenIndex; i <= fragment.LastTokenIndex; i++)
+            {
+                sb.Append(fragment.ScriptTokenStream[i].Text);
+            }
+            return sb.ToString().Trim();
         }
 
         public override void ExplicitVisit(UpdateSpecification node)

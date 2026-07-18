@@ -166,6 +166,29 @@ namespace ReSet.Core.Services
                     {
                         staticAnalysisText.AppendLine("    (INSERT 대상 테이블은 삽입되는 모든 컬럼과 원천 데이터(SELECT 소스 컬럼, 하드코딩 상수, 함수 변환 등) 간의 1:1 대조 매핑 정보를 누락 없이 완전하게 표에 기술하십시오.)");
                     }
+                    if (spDef.StaticAnalysis.AstInsertMappings != null && spDef.StaticAnalysis.AstInsertMappings.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine();
+                        staticAnalysisText.AppendLine("  [AST INSERT 타겟-소스 1:1 매핑 추출 데이터 (ABSOLUTE SOURCE OF TRUTH)]");
+                        staticAnalysisText.AppendLine("  * L1 정적 파서(SqlScriptDom)가 INSERT 타겟 컬럼명과 소스 SELECT 쿼리 블록을 기계적으로 정확히 추출했습니다.");
+                        staticAnalysisText.AppendLine("  * 아래 정보를 매핑 원천으로 절대적으로 신뢰하고 반영하십시오. 원본 쿼리에 없는 CAST 함수나 추가 논리를 임의로 지어내지(할루시네이션) 마십시오.");
+                        foreach (var mapping in spDef.StaticAnalysis.AstInsertMappings)
+                        {
+                            staticAnalysisText.AppendLine($"    <insert-target table=\"{mapping.TargetTable}\">");
+                            if (mapping.TargetColumns.Count > 0)
+                            {
+                                staticAnalysisText.AppendLine($"      <columns>{string.Join(", ", mapping.TargetColumns)}</columns>");
+                            }
+                            if (!string.IsNullOrEmpty(mapping.SourceQueryBlock))
+                            {
+                                staticAnalysisText.AppendLine($"      <source-query-block>");
+                                staticAnalysisText.AppendLine(mapping.SourceQueryBlock);
+                                staticAnalysisText.AppendLine($"      </source-query-block>");
+                            }
+                            staticAnalysisText.AppendLine($"    </insert-target>");
+                        }
+                        staticAnalysisText.AppendLine();
+                    }
                     
                     staticAnalysisText.AppendLine($"  * UPDATE 대상 테이블: {(spDef.StaticAnalysis.UpdateTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.UpdateTables) : "없음")}");
                     staticAnalysisText.AppendLine($"  * DELETE 대상 테이블: {(spDef.StaticAnalysis.DeleteTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.DeleteTables) : "없음")}");
