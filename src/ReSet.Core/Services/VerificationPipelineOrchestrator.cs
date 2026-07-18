@@ -586,95 +586,130 @@ namespace ReSet.Core.Services
                     {
                         if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (attempt == 1)
+                            bool shouldRunStage1 = true;
+                            if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
                             {
-                                using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성") ?? NullProgressScope.Instance)
+                                // 피드백 내용에 비즈니스 수식, 테이블, 칼럼, UDF 등 논리 오류가 있는지 검사합니다.
+                                var logUpper = feedbackLog.ToUpper();
+                                bool isLogicError = logUpper.Contains("COLUMN") || logUpper.Contains("UDF") || 
+                                                    logUpper.Contains("FORMULA") || logUpper.Contains("LOGIC") || 
+                                                    logUpper.Contains("SELECT") || logUpper.Contains("INSERT") || 
+                                                    logUpper.Contains("UNION") || logUpper.Contains("컬럼") || 
+                                                    logUpper.Contains("수식") || logUpper.Contains("조인") || 
+                                                    logUpper.Contains("필터") || logUpper.Contains("테이블") || 
+                                                    logUpper.Contains("함수") || logUpper.Contains("매핑") ||
+                                                    logUpper.Contains("오탈자") || logUpper.Contains("오역") || 
+                                                    logUpper.Contains("누락");
+
+                                if (!isLogicError)
                                 {
-                                    progressScope.AddTask("part1", "1/3. 개요 및 파라미터 분석 중...");
-                                    progressScope.AddTask("part2", "2/3. CRUD 상세 분석 중...");
-                                    progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 분석 중...");
-
-                                    var task1 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, null, _actorEffort, cancellationToken), progressScope, "part1");
-                                    var task2 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, null, _actorEffort, cancellationToken), progressScope, "part2");
-                                    var task3 = WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, null, _actorEffort, cancellationToken), progressScope, "part3");
-
-                                    var results = await Task.WhenAll(task1, task2, task3);
-                                    ollamaPart1 = results[0];
-                                    ollamaPart2 = results[1];
-                                    ollamaPart3 = results[2];
+                                    Log.Information("[파이프라인] 단순 포맷/Mermaid 교정이므로 1단계(추론) 스킵하고 기존 구조화 데이터 재사용");
+                                    shouldRunStage1 = false;
                                 }
                             }
-                            else
+
+                            if (shouldRunStage1)
                             {
-                                // 피드백 기반 구역별 선택적 재생성
-                                bool regenPart1 = false;
-                                bool regenPart2 = false;
-                                bool regenPart3 = false;
-
-                                if (!string.IsNullOrEmpty(feedbackLog))
+                                Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) 시작");
+                                AiResult deconstructResult;
+                                using (var progressScope = _userInteraction.CreateProgressScope("명세 구조화 분석 (Stage 1)") ?? NullProgressScope.Instance)
                                 {
-                                    var logUpper = feedbackLog.ToUpper();
-                                    if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
-                                    {
-                                        regenPart1 = true;
-                                    }
-                                    if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
-                                    {
-                                        regenPart2 = true;
-                                    }
-                                    if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
-                                    {
-                                        regenPart3 = true;
-                                    }
-
-                                    // 이전 파트 분석 결과가 누락된 경우 전체 재생성
-                                    if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
-                                    {
-                                        regenPart1 = regenPart2 = regenPart3 = true;
-                                    }
-
-                                    // 만약 아무 구역도 매칭되지 않는다면 안전을 위해 전체 구역 재생성 (폴백)
-                                    if (!regenPart1 && !regenPart2 && !regenPart3)
-                                    {
-                                        regenPart1 = regenPart2 = regenPart3 = true;
-                                    }
+                                    progressScope.AddTask("deconstruct", "저장 프로시저 논리 구조 분석 중...");
+                                    deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "deconstruct");
                                 }
-                                else
+
+                                spDef.DeconstructedLogic = ParseDeconstructedLogic(deconstructResult.Content);
+
+                                // 중간 구조화 JSON 파일 백업 보존
+                                try
+                                {
+                                    var rawFolder = System.IO.Path.Combine(outputDirectory, $"{selectedOption}_Raw");
+                                    if (!System.IO.Directory.Exists(rawFolder))
+                                    {
+                                        System.IO.Directory.CreateDirectory(rawFolder);
+                                    }
+                                    var deconstructedPath = System.IO.Path.Combine(rawFolder, "deconstructed_logic.json");
+                                    var options = new System.Text.Json.JsonSerializerOptions 
+                                    { 
+                                        WriteIndented = true, 
+                                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                    };
+                                    await System.IO.File.WriteAllTextAsync(deconstructedPath, System.Text.Json.JsonSerializer.Serialize(spDef.DeconstructedLogic, options), Encoding.UTF8);
+                                    Log.Information("[파이프라인] 1단계 결과 JSON 디스크 보존 완료: {Path}", deconstructedPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Warning(ex, "[파이프라인] 1단계 결과 JSON 디스크 보존 중 예외 발생 (격리됨)");
+                                }
+                            }
+
+                            // 2단계: 각 H2 섹션 명세서 작성 (Stage 2 Markdown 포맷터)
+                            bool regenPart1 = true;
+                            bool regenPart2 = true;
+                            bool regenPart3 = true;
+
+                            if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
+                            {
+                                var logUpper = feedbackLog.ToUpper();
+                                regenPart1 = false;
+                                regenPart2 = false;
+                                regenPart3 = false;
+
+                                if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
+                                {
+                                    regenPart1 = true;
+                                }
+                                if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
+                                {
+                                    regenPart2 = true;
+                                }
+                                if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
+                                {
+                                    regenPart3 = true;
+                                }
+
+                                // 이전 결과 누락 시 전체 재생성
+                                if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
                                 {
                                     regenPart1 = regenPart2 = regenPart3 = true;
                                 }
 
-                                var tasksList = new List<Task<AiResult>>();
-                                var taskOrder = new List<string>();
-
-                                using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 피드백 보완") ?? NullProgressScope.Instance)
+                                if (!regenPart1 && !regenPart2 && !regenPart3)
                                 {
-                                    if (regenPart1)
-                                    {
-                                        progressScope.AddTask("part1", "1/3. 개요 및 파라미터 피드백 수정 중...");
-                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
-                                        taskOrder.Add("part1");
-                                    }
-                                    if (regenPart2)
-                                    {
-                                        progressScope.AddTask("part2", "2/3. CRUD 상세 피드백 수정 중...");
-                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
-                                        taskOrder.Add("part2");
-                                    }
-                                    if (regenPart3)
-                                    {
-                                        progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 피드백 수정 중...");
-                                        tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
-                                        taskOrder.Add("part3");
-                                    }
+                                    regenPart1 = regenPart2 = regenPart3 = true;
+                                }
+                            }
 
-                                    var results = await Task.WhenAll(tasksList);
-                                    for (int i = 0; i < taskOrder.Count; i++)
-                                    {
-                                        if (taskOrder[i] == "part1") ollamaPart1 = results[i];
-                                        else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
-                                        else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
-                                    }
+                            var tasksList = new List<Task<AiResult>>();
+                            var taskOrder = new List<string>();
+
+                            using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성 (Stage 2)") ?? NullProgressScope.Instance)
+                            {
+                                if (regenPart1)
+                                {
+                                    progressScope.AddTask("part1", "1/3. 개요 및 파라미터 빌드 중...");
+                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
+                                    taskOrder.Add("part1");
+                                }
+                                if (regenPart2)
+                                {
+                                    progressScope.AddTask("part2", "2/3. CRUD 상세 명세 빌드 중...");
+                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
+                                    taskOrder.Add("part2");
+                                }
+                                if (regenPart3)
+                                {
+                                    progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 빌드 중...");
+                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
+                                    taskOrder.Add("part3");
+                                }
+
+                                var results = await Task.WhenAll(tasksList);
+                                for (int i = 0; i < taskOrder.Count; i++)
+                                {
+                                    if (taskOrder[i] == "part1") ollamaPart1 = results[i];
+                                    else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
+                                    else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
                                 }
                             }
 
@@ -1476,6 +1511,42 @@ namespace ReSet.Core.Services
         }
 
 
+
+        private DeconstructedSpLogic ParseDeconstructedLogic(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return new DeconstructedSpLogic();
+
+            string json = content.Trim();
+
+            // 만약 AI가 ```json ... ``` 으로 묶었다면 언래핑합니다.
+            if (json.StartsWith("```"))
+            {
+                int firstLineBreak = json.IndexOf('\n');
+                if (firstLineBreak >= 0)
+                {
+                    json = json.Substring(firstLineBreak + 1);
+                }
+                if (json.EndsWith("```"))
+                {
+                    json = json.Substring(0, json.Length - 3).Trim();
+                }
+            }
+
+            try
+            {
+                var options = new System.Text.Json.JsonSerializerOptions 
+                { 
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true
+                };
+                return System.Text.Json.JsonSerializer.Deserialize<DeconstructedSpLogic>(json, options) ?? new DeconstructedSpLogic();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Deconstructed JSON 역직렬화 실패. 원본 내용: {Content}", content);
+                return new DeconstructedSpLogic();
+            }
+        }
 
         private string EscapeMarkup(string text)
         {

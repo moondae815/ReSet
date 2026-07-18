@@ -506,6 +506,209 @@ Based on the structured reference context above, reverse engineer the stored pro
             return aiResult;
         }
 
+        public async Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default)
+        {
+            var (systemPrompt, userPrompt) = BuildDeconstructionPrompts(spDef, userInstructions, feedbackLog);
+
+            // 로컬 Ollama 구동 시 1단계(추론/추출) 온도는 0.05로 고정하여 엄격하고 결정론적인 JSON 출력을 유도합니다.
+            float temp = _temperature;
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            {
+                temp = 0.05f;
+            }
+
+            Log.Information("AI 명세 구조화 추론(Stage 1) 요청 전송 - SP: {Schema}.{Name}, Temperature: {Temp}", spDef.Schema, spDef.Name, temp);
+            Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, temp, effort, cancellationToken);
+            if (aiResult == null)
+            {
+                aiResult = new AiResult();
+            }
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt;
+
+            Log.Information("AI 명세 구조화 추론(Stage 1) 응답 수신 완료 - SP: {Schema}.{Name}, 응답 길이: {Length}", spDef.Schema, spDef.Name, aiResult.Content.Length);
+            Log.Debug("[AI 응답 내용]:\n{Response}", aiResult.Content);
+
+            return aiResult;
+        }
+
+        private (string SystemPrompt, string UserPrompt) BuildDeconstructionPrompts(SpDefinition spDef, string userInstructions, string? feedbackLog = null)
+        {
+            var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(spDef);
+
+            var systemPrompt = @"You are a principal database architect. Your task is to analyze the provided SQL Server Stored Procedure and output a structured JSON object representing its entire logical structure, schema mappings, and transaction flows.
+
+[Rules]
+1. You MUST respond ONLY with a strictly valid JSON object matching the JSON schema below.
+2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
+3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission.
+4. If there are UNION/UNION ALL blocks in the DML statements, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
+5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
+6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
+7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
+
+[JSON Schema Structure]
+{
+  ""Overview"": {
+    ""SpName"": ""string"",
+    ""Purpose"": ""string (Korean)"",
+    ""BusinessRole"": ""string (Korean)"",
+    ""ResultStyle"": ""string (Korean, e.g. Rowset/Non-rowset return behavior)""
+  },
+  ""Parameters"": [
+    {
+      ""Name"": ""string (including @)"",
+      ""DataType"": ""string"",
+      ""Nullability"": ""string"",
+      ""Purpose"": ""string (Korean)"",
+      ""IsOutput"": false
+    }
+  ],
+  ""Crud"": {
+    ""SelectTables"": [
+      {
+        ""TableName"": ""string"",
+        ""ReferencedColumns"": [""string""],
+        ""JoinAndFilterConditions"": [""string""]
+      }
+    ],
+    ""InsertTables"": [
+      {
+        ""TargetTable"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
+        ""Mappings"": [
+          {
+            ""TargetColumn"": ""string"",
+            ""SourceExpression"": ""string"",
+            ""Description"": ""string (Korean)""
+          }
+        ]
+      }
+    ],
+    ""UpdateTables"": [
+      {
+        ""TargetTable"": ""string"",
+        ""Mappings"": [
+          {
+            ""TargetColumn"": ""string"",
+            ""SourceExpression"": ""string"",
+            ""Description"": ""string (Korean)""
+          }
+        ]
+      }
+    ],
+    ""DeleteTables"": [
+      {
+        ""TableName"": ""string"",
+        ""FilterConditions"": [""string""]
+      }
+    ],
+    ""Udfs"": [
+      {
+        ""UdfName"": ""string"",
+        ""CallingLocation"": ""string"",
+        ""Purpose"": ""string (Korean)"",
+        ""ComputationLogic"": ""string""
+      }
+    ],
+    ""HasTempTables"": false,
+    ""TempTablesUsage"": ""string"",
+    ""HasLinkedServers"": false,
+    ""LinkedServersUsage"": ""string""
+  },
+  ""Logic"": {
+    ""TransactionControl"": ""string (Korean)"",
+    ""Steps"": [
+      {
+        ""StepNumber"": 1,
+        ""StepName"": ""string"",
+        ""StepDescription"": ""string (Korean)""
+      }
+    ],
+    ""ExceptionVulnerabilities"": [
+      {
+        ""VulnerabilityType"": ""string"",
+        ""Details"": ""string (Korean)""
+      }
+    ],
+    ""IsolationImplications"": [
+      {
+        ""RiskType"": ""string"",
+        ""Details"": ""string (Korean)""
+      }
+    ],
+    ""ReturnCodes"": [""string""],
+    ""ParameterValidation"": [""string (Korean)""]
+  },
+  ""Visualization"": {
+    ""Nodes"": [
+      {
+        ""Id"": ""string (unique uppercase)"",
+        ""Label"": ""string (Korean, no @)""
+      }
+    ],
+    ""Links"": [
+      {
+        ""FromId"": ""string"",
+        ""ToId"": ""string"",
+        ""Condition"": ""string (Korean, no quotes)""
+      }
+    ]
+  }
+}";
+
+            var promptSb = new StringBuilder();
+            promptSb.AppendLine("<stored-procedure-context>");
+            promptSb.AppendLine("  <basic-info>");
+            promptSb.AppendLine($"    <schema>{spDef.Schema}</schema>");
+            promptSb.AppendLine($"    <name>{spDef.Name}</name>");
+            promptSb.AppendLine("  </basic-info>");
+            promptSb.AppendLine();
+            promptSb.AppendLine("  <dependencies>");
+            promptSb.AppendLine(dependenciesText.Trim());
+            promptSb.AppendLine("  </dependencies>");
+            promptSb.AppendLine();
+            promptSb.AppendLine("  <referenced-table-schemas>");
+            promptSb.AppendLine(tableSchemasText.Trim());
+            promptSb.AppendLine("  </referenced-table-schemas>");
+
+            if (!string.IsNullOrEmpty(referenceDdlsText))
+            {
+                promptSb.AppendLine();
+                promptSb.AppendLine("  <referenced-ddl-source-code>");
+                promptSb.AppendLine(referenceDdlsText.Trim());
+                promptSb.AppendLine("  </referenced-ddl-source-code>");
+            }
+
+            if (!string.IsNullOrEmpty(staticAnalysisText))
+            {
+                promptSb.AppendLine();
+                promptSb.AppendLine("  <static-analysis-metadata>");
+                promptSb.AppendLine(staticAnalysisText.Trim());
+                promptSb.AppendLine("  </static-analysis-metadata>");
+            }
+
+            promptSb.AppendLine();
+            promptSb.AppendLine("  <sp-source-ddl>");
+            promptSb.AppendLine("```sql");
+            promptSb.AppendLine(spDef.DdlText.Trim());
+            promptSb.AppendLine("```");
+            promptSb.AppendLine("  </sp-source-ddl>");
+            promptSb.AppendLine("</stored-procedure-context>");
+            promptSb.AppendLine();
+            promptSb.AppendLine("Output strictly valid JSON according to the schema. Do not include markdown wraps.");
+
+            if (!string.IsNullOrEmpty(feedbackLog))
+            {
+                promptSb.AppendLine();
+                promptSb.AppendLine($"[CRITIC CORRECTION FEEDBACK LOG]:\n{feedbackLog}\n\nPlease fix the JSON data based on this feedback log. Make sure to keep the schema strictly valid.");
+            }
+
+            return (systemPrompt, promptSb.ToString());
+        }
+
         public async Task<AiResult> GenerateSpecSectionAsync(SpDefinition spDef, string sectionType, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default)
         {
             var (systemPrompt, userPrompt) = BuildSpecSectionPrompts(spDef, sectionType, userInstructions, feedbackLog);
@@ -758,7 +961,23 @@ Based on the structured reference context above, reverse engineer the stored pro
             promptSb.AppendLine(spDef.DdlText.Trim());
             promptSb.AppendLine("```");
             promptSb.AppendLine("  </sp-source-ddl>");
+            promptSb.AppendLine();
+            promptSb.AppendLine("  <deconstructed-logic-source-of-truth>");
+            promptSb.AppendLine("```json");
+            try
+            {
+                var options = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+                promptSb.AppendLine(JsonSerializer.Serialize(spDef.DeconstructedLogic, options));
+            }
+            catch (Exception ex)
+            {
+                promptSb.AppendLine($"{{ \"error\": \"Serialization failed: {ex.Message}\" }}");
+            }
+            promptSb.AppendLine("```");
+            promptSb.AppendLine("  </deconstructed-logic-source-of-truth>");
             promptSb.AppendLine("</stored-procedure-context>");
+            promptSb.AppendLine();
+            promptSb.AppendLine("IMPORTANT: You are a markdown formatter (Stage 2). You MUST strictly format the target H2 markdown sections using only the factual data extracted in `<deconstructed-logic-source-of-truth>` above. Do not skip any columns, parameters, or tables listed in the JSON. Translate formulas and columns exactly. Do not abbreviate or write placeholders like '(복잡한 식)'.");
             promptSb.AppendLine();
             promptSb.AppendLine("Based on the structured reference context above, reverse engineer the designated section and write the markdown specification in Korean following the checklist below:");
             promptSb.AppendLine(checklistText);

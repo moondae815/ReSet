@@ -11,6 +11,7 @@ namespace ReSet.Core.Models
         public List<string> Warnings { get; set; } = new();
         public string? RawPromptContext { get; set; }
         public SpStaticAnalysisResult StaticAnalysis { get; set; } = new();
+        public DeconstructedSpLogic DeconstructedLogic { get; set; } = new();
     }
 
     public class SpStaticAnalysisResult
