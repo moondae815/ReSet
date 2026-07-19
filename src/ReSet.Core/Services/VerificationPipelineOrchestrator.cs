@@ -680,36 +680,22 @@ namespace ReSet.Core.Services
                                 }
                             }
 
-                            var tasksList = new List<Task<AiResult>>();
-                            var taskOrder = new List<string>();
-
                             using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성 (Stage 2)") ?? NullProgressScope.Instance)
                             {
                                 if (regenPart1)
                                 {
                                     progressScope.AddTask("part1", "1/3. 개요 및 파라미터 빌드 중...");
-                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
-                                    taskOrder.Add("part1");
+                                    ollamaPart1 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1");
                                 }
                                 if (regenPart2)
                                 {
                                     progressScope.AddTask("part2", "2/3. CRUD 상세 명세 빌드 중...");
-                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
-                                    taskOrder.Add("part2");
+                                    ollamaPart2 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2");
                                 }
                                 if (regenPart3)
                                 {
                                     progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 빌드 중...");
-                                    tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
-                                    taskOrder.Add("part3");
-                                }
-
-                                var results = await Task.WhenAll(tasksList);
-                                for (int i = 0; i < taskOrder.Count; i++)
-                                {
-                                    if (taskOrder[i] == "part1") ollamaPart1 = results[i];
-                                    else if (taskOrder[i] == "part2") ollamaPart2 = results[i];
-                                    else if (taskOrder[i] == "part3") ollamaPart3 = results[i];
+                                    ollamaPart3 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3");
                                 }
                             }
 
@@ -861,10 +847,11 @@ namespace ReSet.Core.Services
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                         if (canRetry)
                         {
-                            feedbackHistory.Add($"### [시도 {attempt} L2 피드백 누적 체크리스트]\n{l2Result.FeedbackComment}");
-                            feedbackLog = "[L2 AI 리뷰 피드백 누적 체크리스트 (Stateful Checklist)]:\n" + 
+                            feedbackHistory.Clear(); // [컨텍스트 윈도우 오염 방지] 이전 실패 기록을 모두 지우고 최신 피드백만 주입
+                            feedbackHistory.Add($"### [시도 {attempt} L2 최신 피드백 체크리스트]\n{l2Result.FeedbackComment}");
+                            feedbackLog = "[L2 AI 리뷰 최신 피드백 (Stateful Checklist)]:\n" + 
                                           string.Join("\n\n", feedbackHistory) +
-                                          "\n\n※ 지시사항: 위 체크리스트의 각 항목들이 최종 명세서에 어떻게 반영되었는지 본문을 생성할 때 철저히 비교 및 정합성을 체크하여 회귀 결함이 발생하지 않도록 하십시오.";
+                                          "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 원본 DDL과 위 피드백만을 절대적 기준으로 삼으십시오.";
                             attempt++;
                             continue;
                         }
@@ -1280,10 +1267,11 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        feedbackHistory.Add($"### [시도 {attempt} L2 피드백 누적 체크리스트]\n{l2Result.FeedbackComment}");
-                        feedbackLog = "[L2 AI 리뷰 피드백 누적 체크리스트 (Stateful Checklist)]:\n" + 
+                        feedbackHistory.Clear(); // [컨텍스트 윈도우 오염 방지] 이전 실패 기록을 모두 지우고 최신 피드백만 주입
+                        feedbackHistory.Add($"### [시도 {attempt} L2 최신 피드백 체크리스트]\n{l2Result.FeedbackComment}");
+                        feedbackLog = "[L2 AI 리뷰 최신 피드백 (Stateful Checklist)]:\n" + 
                                       string.Join("\n\n", feedbackHistory) +
-                                      "\n\n※ 지시사항: 위 체크리스트의 각 항목들이 최종 명세서에 어떻게 반영되었는지 본문을 생성할 때 철저히 비교 및 정합성을 체크하여 회귀 결함이 발생하지 않도록 하십시오.";
+                                      "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 원본 DDL과 위 피드백만을 절대적 기준으로 삼으십시오.";
                         attempt++;
                         continue;
                     }

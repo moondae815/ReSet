@@ -180,6 +180,19 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // 1.5 Anti-Shortcut (축약/생략 방지) 기계적 검증
+            string[] forbiddenShortcuts = new[] { "이하 생략", "(생략)", "위와 동일", "기타 등등", "etc.", "TS[]" };
+            foreach (var forbidden in forbiddenShortcuts)
+            {
+                if (markdown.Contains(forbidden, StringComparison.OrdinalIgnoreCase))
+                {
+                    var msg = $"표 내부에 허용되지 않는 축약어/생략 기호('{forbidden}')가 감지되었습니다. 모든 컬럼과 매핑을 완벽히 기술해야 합니다.";
+                    Log.Warning("린트 에러 감지 (Anti-Shortcut 위반) - {Message}", msg);
+                    result.Errors.Add(msg);
+                    result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = msg });
+                }
+            }
+
             // 2. Mermaid 문법 검증
             foreach (var mContent in mermaidBlocks)
             {

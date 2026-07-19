@@ -314,11 +314,33 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. In the `## 개요` section, you MUST state the exact procedure name provided in the metadata. Do NOT misspell it (e.g., watch out for missing letters like 'E').");
             rules.Add($"{ruleIndex++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
             rules.Add($"{ruleIndex++}. In ## CRUD 분석, state all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists. You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.");
+            if (spDef.StaticAnalysis?.AstInsertMappings != null && spDef.StaticAnalysis.AstInsertMappings.Count > 0)
+            {
+                rules.Add($"{ruleIndex++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the INSERT tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. Do NOT skip any rows, do NOT use '...', and do NOT alter the `컬럼명` names. Your ONLY job is to fill in the `원천 데이터 (Mapping)` and `설명` columns for each row based on the AST Analysis Guidance:");
+                foreach (var mapping in spDef.StaticAnalysis.AstInsertMappings)
+                {
+                    rules.Add($"   ### INSERT 대상 테이블: {mapping.TargetTable}");
+                    rules.Add($"   | 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |");
+                    rules.Add($"   | :--- | :--- | :--- | :--- |");
+                    if (mapping.TargetColumns.Count > 0)
+                    {
+                        foreach (var col in mapping.TargetColumns)
+                        {
+                            rules.Add($"   | {mapping.TargetTable} | {col} | (FILL_SOURCE_DATA_HERE) | (FILL_DESCRIPTION_HERE) |");
+                        }
+                    }
+                    else 
+                    {
+                        rules.Add($"   | {mapping.TargetTable} | (COLUMN_NAME) | (FILL_SOURCE_DATA_HERE) | (FILL_DESCRIPTION_HERE) |");
+                    }
+                    rules.Add("");
+                }
+            }
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
 
-            rules.Add($"{ruleIndex++}. NEVER abbreviate column lists, logic, or mapping expressions (e.g., using 'etc.', '...', or '위와 동일(Same as above)'). You MUST copy the exact full expression for EVERY branch, even if they are identical. Abbreviation is a critical failure.");
+            rules.Add($"{ruleIndex++}. [CRITICAL ANTI-SHORTCUT RULE] NEVER use abbreviations, ellipses (...), or phrases like '이하 생략', '기타', 'etc'. You MUST map EVERY SINGLE COLUMN present in the DDL to the markdown table row by row, even if there are 100 columns. Failure to write every column will result in a fatal system crash and your output will be rejected. Do NOT use `dbo.TS[] (이하 생략 가능하나 매핑은 완벽히 수행됨)` or similar shortcut phrases.");
             rules.Add($"{ruleIndex++}. If a column description contains the exact tag `[AI 추론 보완: Schema.Table.Column - Description]`, you MUST output this tag exactly as is in the description column of the Markdown tables. Do NOT alter or translate this tag, and do not let it break the table format.");
             rules.Add($"{ruleIndex++}. Do not arbitrarily assume columns/parameters are 'NOT NULL' unless defined in the DDL.");
             rules.Add($"{ruleIndex++}. If `WITH(NOLOCK)` or `NOLOCK` hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");

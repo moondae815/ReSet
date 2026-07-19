@@ -45,12 +45,12 @@
 | | [CliArgs](file:///home/moondae/git-root/ReSet/src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbMetadataService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
 | | [SqlStaticParser](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. 접두사 없는 컬럼에 대한 로컬 스코프 정밀 분석 및 주입된 실제 스키마 메타데이터 기반 1:1 대조 리졸버 연동. |
-| | [AiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론 및 코드-주석 불일치 감지 규칙 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
+| | [AiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. |
 | | [Clients (OpenAi, Claude, Google, Ollama, Zai)](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. |
-| | [MechanicalValidator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
-| | [VerificationPipelineOrchestrator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Ollama인 경우 구역별 분할 생성 및 피드백 기반 선택적 재생성 지원), L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
+| | [MechanicalValidator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
+| | [VerificationPipelineOrchestrator](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Stateful Checklist 최신 피드백 주입에 의한 컨텍스트 윈도우 오염 방지 및 Ollama 구역별 순차 분할 재생성 지원), L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [MetadataExporter](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL 파일 내보내기 및 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 생성 (SP별 및 Job별 전용 하위 폴더에 격리 분류 저장). |
 | | [CacheManager](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
 | | [ExternalCliCodingEngine](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
@@ -259,7 +259,7 @@ graph TD
     CheckL1Final -- "성공" --> ReturnSpec
 
     %% 단일 모드: L1/L2 순차 자가 수정 루프 경로
-    ModeCheck -- "아니오 (단일)" --> CallAI["AI 리버스 엔지니어링 요청<br/>(Ollama의 경우 구역별 병렬 분할 생성 및 피드백 기반 선택 재생성)"]
+    ModeCheck -- "아니오 (단일)" --> CallAI["AI 리버스 엔지니어링 요청<br/>(Ollama의 경우 구역별 순차 분할 생성 및 피드백 기반 선택 재생성)"]
     CallAI --> L1Check{"L1: 기계적 무결성 검증 & 자동 정화<br/>(Markdig 구조 검증 & Mermaid 자동 보정)?"}
     
     L1Check -- "실패" --> L1FailAttempt{"attempt < maxAttempts?"}
@@ -304,7 +304,7 @@ graph TD
 
 #### 4.4.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
 * **동적 모드 분기**: `ActorEffort` 설정값에 따라 검증 및 생성 경로가 이원화됩니다.
-  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차 생성 및 자가 수정/피드백 루프에서 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 병렬 분할 생성 및 피드백 키워드 기반 선택적 재생성 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
+  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차 생성 및 자가 수정/피드백 루프에서 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 순차 분할 생성 및 피드백 키워드 기반 선택적 재생성 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
   * **dynamic 모드 (병렬 협업)**: 다형성 및 앙상블 효과를 극대화하는 dynamic 아키텍처 경로입니다. (상세 협업 시퀀스는 상위 통합 검증 파이프라인 흐름도 참고)
 
 * **차등 Effort 병렬 생성 (1단계)**: 동일한 SP 정의에 대해 `low`, `medium`, `high` 추론 강도를 병렬 구동하여 서로 다른 장점을 가진 3종의 후보 명세서를 확보합니다.
