@@ -835,7 +835,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
-                sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
+                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");
                 sbRules.Add("");
                 sbRules.Add("[Output Language Requirement]");
                 sbRules.Add("- You MUST write the final markdown specification in Korean.");
@@ -881,7 +881,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 sbRules.Add($"{rIdx++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
-                sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
+                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");
                 sbRules.Add("");
                 sbRules.Add("[Output Language Requirement]");
                 sbRules.Add("- You MUST write the final markdown specification in Korean.");
@@ -950,7 +950,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 sbRules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
-                sbRules.Add($"{rIdx++}. Do not wrap the output in markdown code blocks (```markdown ... ```).");
+                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");
                 sbRules.Add("");
                 sbRules.Add("[Output Language Requirement]");
                 sbRules.Add("- You MUST write the final markdown specification in Korean.");
@@ -1222,7 +1222,7 @@ Consolidate the provided specifications into a single unified batch job named '{
      * Wrap all node text labels in double quotes. Do not use double quotes or special characters in arrow labels. Node IDs must be unique alphanumeric words.
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
-3. Do not wrap the output in markdown code blocks (```markdown ... ```).
+3. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
 4. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
 
             var userPrompt = new StringBuilder();
@@ -1385,7 +1385,7 @@ Combine the conditional logic and data mappings of SPs with common code master d
    ## 4. 프로그램별 정산 영향도 매핑
    ## 5. 예외 처리 및 제약 사항
 3. Utilize tables and diagrams where possible to optimize readability.
-4. Do not wrap the output in markdown code blocks (```markdown ... ```).";
+4. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine("[Stored Procedure DDL & Dependecy Info]");
