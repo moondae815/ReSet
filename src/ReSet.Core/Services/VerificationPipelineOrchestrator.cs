@@ -625,7 +625,7 @@ namespace ReSet.Core.Services
                                 // 중간 구조화 JSON 파일 백업 보존
                                 try
                                 {
-                                    var rawFolder = System.IO.Path.Combine(outputDirectory, $"{selectedOption}_Raw");
+                                    var rawFolder = System.IO.Path.Combine(outputDirectory, "Procedures", selectedOption, "raw");
                                     if (!System.IO.Directory.Exists(rawFolder))
                                     {
                                         System.IO.Directory.CreateDirectory(rawFolder);
