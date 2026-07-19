@@ -120,6 +120,7 @@ ReSet/
     │       └── raw/
     │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
+    │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Jobs/[JobName]/              # 통합 배치 작업용 산출물이 격리 보존되는 전용 하위 폴더
     │   ├── [JobName]_BatchMigrationPlan.md   # 통합 배치 전환 계획서
