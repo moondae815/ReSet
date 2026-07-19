@@ -137,13 +137,13 @@ namespace ReSet.Cli
             var outputDir = configuration["OutputSettings:Directory"] ?? "./output";
             if (!Path.IsPathRooted(outputDir))
             {
-                outputDir = Path.Combine(AppContext.BaseDirectory, outputDir);
+                outputDir = Path.Combine(Directory.GetCurrentDirectory(), outputDir);
             }
 
             var instructionsFile = configuration["OutputSettings:InstructionsFile"] ?? "instructions.md";
             if (!Path.IsPathRooted(instructionsFile))
             {
-                instructionsFile = Path.Combine(AppContext.BaseDirectory, instructionsFile);
+                instructionsFile = Path.Combine(Directory.GetCurrentDirectory(), instructionsFile);
             }
 
             bool.TryParse(configuration["OutputSettings:SaveRawJson"] ?? "false", out bool saveRawJson);

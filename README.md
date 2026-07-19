@@ -107,6 +107,7 @@ ReSet/
 │
 └── output/                          # [산출물 폴더] 생성된 스펙, 계획서, 모의 데이터 및 정합성 리포트 저장소
     ├── logs/
+    ├── cleansing/                   # AI가 생성한 메타데이터 보정(Cleansing) SQL 스크립트 모음
     ├── Procedures/                  # SP 개별 분석 산출물이 격리 보존되는 최상위 폴더
     │   └── [Schema].[SP이름]/       # SP 식별자별 전용 하위 폴더
     │       ├── docs/
