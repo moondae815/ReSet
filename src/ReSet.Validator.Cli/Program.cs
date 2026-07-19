@@ -130,7 +130,7 @@ namespace ReSet.Validator.Cli
                         ? Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(slnRoot, "output")) 
                         : "./output";
                     var choices = GetDirectoryChoices(slnRoot);
-                    validatorConfig.SpecDirectory = ui.PromptDirectoryPath("설계서(*_Spec.md)가 위치한 올바른 디렉토리 경로를 입력해 주세요:", defaultSpecDir, choices);
+                    validatorConfig.SpecDirectory = ui.PromptDirectoryPath("설계서(Spec.md)가 위치한 올바른 디렉토리 경로를 입력해 주세요:", defaultSpecDir, choices);
                 }
 
                 if (!Directory.Exists(validatorConfig.SourceCodeDirectory))
@@ -520,22 +520,23 @@ namespace ReSet.Validator.Cli
         {
             AnsiConsole.MarkupLine("\n[bold blue]=== 2. 데이터 정합성 검증용 테스트 파라미터 설계 (AI) ===[/]");
             
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "*_Spec.md");
+            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
             if (specFiles.Length == 0)
             {
-                AnsiConsole.MarkupLine($"[red]에러: 설계서 디렉토리({Markup.Escape(config.SpecDirectory)})에 '*_Spec.md' 파일이 존재하지 않습니다.[/]");
+                AnsiConsole.MarkupLine($"[red]에러: 설계서 디렉토리({Markup.Escape(config.SpecDirectory)})에 'Spec.md' 파일이 존재하지 않습니다.[/]");
                 return;
             }
 
-            var fileChoices = specFiles.Select(f => Path.GetFileName(f)).ToList();
-            var selectedFile = AnsiConsole.Prompt(
+            var fileChoices = specFiles.Select(f => Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)).ToList();
+            var selectedSpName = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("테스트 파라미터를 설계할 설계서(*_Spec.md) 파일을 선택하세요:")
+                    .Title("테스트 파라미터를 설계할 설계서(Spec.md) 파일을 선택하세요:")
                     .PageSize(10)
                     .AddChoices(fileChoices));
 
-            var fullPath = Path.Combine(config.SpecDirectory, selectedFile);
-            var spName = selectedFile.Replace("_Spec.md", "");
+            var fullPath = specFiles.First(f => (Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)) == selectedSpName);
+            var spName = selectedSpName;
+            var rawJsonPath = Path.Combine(config.SpecDirectory, "Procedures", spName, "raw", "metadata.json");
 
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
@@ -561,10 +562,10 @@ namespace ReSet.Validator.Cli
         {
             AnsiConsole.MarkupLine("[bold blue]=== [Batch] 테스트 파라미터 설계 시작 ===[/]");
 
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "*_Spec.md");
+            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
             if (!string.IsNullOrEmpty(targetSp))
             {
-                specFiles = specFiles.Where(f => Path.GetFileName(f).StartsWith(targetSp, StringComparison.OrdinalIgnoreCase)).ToArray();
+                specFiles = specFiles.Where(f => (Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)).StartsWith(targetSp, StringComparison.OrdinalIgnoreCase)).ToArray();
             }
 
             if (specFiles.Length == 0)
@@ -577,7 +578,7 @@ namespace ReSet.Validator.Cli
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                var spName = Path.GetFileName(file).Replace("_Spec.md", "");
+                var spName = Directory.GetParent(file)?.Parent?.Name ?? Path.GetFileName(file).Replace(".md", "");
                 AnsiConsole.MarkupLine($"설계 분석 중: {Markup.Escape(spName)}");
                 
                 try
@@ -1113,23 +1114,24 @@ namespace ReSet.Validator.Cli
         {
             AnsiConsole.MarkupLine("\n[bold blue]=== 3. 검증용 모의 테이블 데이터(Mock Data) 자동 생성 및 캐싱 (AI) ===[/]");
             
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "*_Spec.md");
+            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
             if (specFiles.Length == 0)
             {
-                AnsiConsole.MarkupLine($"[red]에러: 설계서 디렉토리({Markup.Escape(config.SpecDirectory)})에 '*_Spec.md' 파일이 존재하지 않습니다.[/]");
+                AnsiConsole.MarkupLine($"[red]에러: 설계서 디렉토리({Markup.Escape(config.SpecDirectory)})에 'Spec.md' 파일이 존재하지 않습니다.[/]");
                 return;
             }
 
-            var fileChoices = specFiles.Select(f => Path.GetFileName(f)).ToList();
-            var selectedFile = AnsiConsole.Prompt(
+            var fileChoices = specFiles.Select(f => Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)).ToList();
+            var selectedSpName = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("모의 데이터를 생성할 대상 설계서(*_Spec.md) 파일을 선택하세요:")
+                    .Title("모의 데이터를 생성할 대상 설계서(Spec.md) 파일을 선택하세요:")
                     .PageSize(10)
                     .AddChoices(fileChoices));
 
-            var spName = selectedFile.Replace("_Spec.md", "");
+            var fullPath = specFiles.First(f => (Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)) == selectedSpName);
+            var spName = selectedSpName;
             
-            var rawJsonPath = Path.Combine(config.SpecDirectory, $"{spName}_Raw.json");
+            var rawJsonPath = Path.Combine(config.SpecDirectory, "Procedures", spName, "raw", "metadata.json");
             if (!File.Exists(rawJsonPath))
             {
                 AnsiConsole.MarkupLine($"[red]에러: '{spName}'의 원본 메타데이터 JSON 파일({Markup.Escape(rawJsonPath)})이 존재하지 않습니다. 먼저 SP 분석을 수행해 주십시오.[/]");
@@ -1140,7 +1142,7 @@ namespace ReSet.Validator.Cli
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync($"AI가 '{spName}'의 구조와 의존성을 분석하여 모의 테이블 데이터를 생성 중입니다...", async ctx =>
                 {
-                    var specContent = await File.ReadAllTextAsync(Path.Combine(config.SpecDirectory, selectedFile), cancellationToken);
+                    var specContent = await File.ReadAllTextAsync(fullPath, cancellationToken);
                     var rawJsonContent = await File.ReadAllTextAsync(rawJsonPath, cancellationToken);
                     
                     using var doc = JsonDocument.Parse(rawJsonContent);
@@ -1173,10 +1175,10 @@ namespace ReSet.Validator.Cli
         {
             AnsiConsole.MarkupLine("[bold blue]=== [Batch] 검증용 모의 테이블 데이터(Mock Data) 자동 생성 시작 ===[/]");
 
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "*_Spec.md");
+            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
             if (!string.IsNullOrEmpty(targetSp))
             {
-                specFiles = specFiles.Where(f => Path.GetFileName(f).StartsWith(targetSp, StringComparison.OrdinalIgnoreCase)).ToArray();
+                specFiles = specFiles.Where(f => (Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f)).StartsWith(targetSp, StringComparison.OrdinalIgnoreCase)).ToArray();
             }
 
             if (specFiles.Length == 0)
@@ -1189,8 +1191,8 @@ namespace ReSet.Validator.Cli
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                var spName = Path.GetFileName(file).Replace("_Spec.md", "");
-                var rawJsonPath = Path.Combine(config.SpecDirectory, $"{spName}_Raw.json");
+                var spName = Directory.GetParent(file)?.Parent?.Name ?? Path.GetFileName(file).Replace(".md", "");
+                var rawJsonPath = Path.Combine(config.SpecDirectory, "Procedures", spName, "raw", "metadata.json");
 
                 if (!File.Exists(rawJsonPath))
                 {

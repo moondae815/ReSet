@@ -34,7 +34,7 @@ namespace ReSet.Core.Tests
             await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, true, false, false);
 
             // Assert
-            var expectedJsonPath = Path.Combine(testOutputDir, "dbo.USP_TestExporter_Raw.json");
+            var expectedJsonPath = Path.Combine(testOutputDir, "raw", "metadata.json");
             Assert.True(File.Exists(expectedJsonPath));
 
             // Clean up
@@ -86,7 +86,7 @@ namespace ReSet.Core.Tests
             await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, false, false, true);
 
             // Assert
-            var expectedMdPath = Path.Combine(testOutputDir, "dbo.USP_TestExporterDesc_Raw", "tables", "dbo.TBL_TestDesc.md");
+            var expectedMdPath = Path.Combine(testOutputDir, "raw", "ddl", "tables", "dbo.TBL_TestDesc.md");
             Assert.True(File.Exists(expectedMdPath));
 
             var mdContent = await File.ReadAllTextAsync(expectedMdPath);
@@ -123,7 +123,7 @@ namespace ReSet.Core.Tests
             await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, false, true, false);
 
             // Assert
-            var expectedContextPath = Path.Combine(testOutputDir, "dbo.USP_TestExporterContext_RawContext.md");
+            var expectedContextPath = Path.Combine(testOutputDir, "raw", "prompt-context.md");
             Assert.True(File.Exists(expectedContextPath));
             var savedContext = await File.ReadAllTextAsync(expectedContextPath);
             Assert.Contains(rawContext, savedContext);
@@ -179,8 +179,8 @@ namespace ReSet.Core.Tests
             await exporter.ExportRawMetadataAsync(spDef, "dummy context", testOutputDir, false, false, true);
 
             // Assert
-            var expectedProcPath = Path.Combine(testOutputDir, "dbo.USP_TestExporterObjects_Raw", "procedures", "dbo.USP_ChildProc.sql");
-            var expectedFuncPath = Path.Combine(testOutputDir, "dbo.USP_TestExporterObjects_Raw", "functions", "dbo.UFN_ChildFunc.sql");
+            var expectedProcPath = Path.Combine(testOutputDir, "raw", "ddl", "procedures", "dbo.USP_ChildProc.sql");
+            var expectedFuncPath = Path.Combine(testOutputDir, "raw", "ddl", "functions", "dbo.UFN_ChildFunc.sql");
 
             Assert.True(File.Exists(expectedProcPath));
             Assert.True(File.Exists(expectedFuncPath));
@@ -242,8 +242,8 @@ namespace ReSet.Core.Tests
             await exporter.ExportMigrationInstructionsAsync(spDef, specMarkdown, migrationPlan, testOutputDir);
 
             // Assert
-            var expectedPath = Path.Combine(testOutputDir, "dbo.USP_TestInstructions_MigrationInstructions.md");
-            var expectedTodoPath = Path.Combine(testOutputDir, "dbo.USP_TestInstructions_todo.md");
+            var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");
+            var expectedTodoPath = Path.Combine(testOutputDir, "agent", "todo.md");
             Assert.True(File.Exists(expectedPath));
             Assert.True(File.Exists(expectedTodoPath));
 
@@ -254,7 +254,7 @@ namespace ReSet.Core.Tests
             Assert.Contains("CREATE PROCEDURE dbo.USP_TestInstructions AS SELECT 1;", content);
             Assert.Contains("TBL_TestDep", content);
             Assert.Contains("의존 테이블 설명", content);
-            Assert.Contains("dbo.USP_TestInstructions_todo.md", content);
+            Assert.Contains("todo.md", content);
 
             var todoContent = await File.ReadAllTextAsync(expectedTodoPath);
             Assert.Contains("# 📋 dbo.USP_TestInstructions 마이그레이션 구현 체크리스트", todoContent);

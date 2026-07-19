@@ -156,8 +156,8 @@ namespace ReSet.Core.Tests
             // Arrange
             var specs = new List<(string, string)>
             {
-                ("dbo.USP_Test1_Spec.md", "## 개요\n내용1"),
-                ("dbo.USP_Test2_Spec.md", "## 개요\n내용2")
+                ("dbo.USP_Test1", "## 개요\n내용1"),
+                ("dbo.USP_Test2", "## 개요\n내용2")
             };
             var consolidatedPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
 
@@ -184,7 +184,7 @@ namespace ReSet.Core.Tests
         public async Task RunConsolidatedPipelineAsync_L1ValidationError_AttemptsSelfCorrection()
         {
             // Arrange
-            var specs = new List<(string, string)> { ("dbo.USP_Test1_Spec.md", "내용") };
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
             var badPlan = "잘못된 문서";
             var goodPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
 
@@ -214,7 +214,7 @@ namespace ReSet.Core.Tests
         public async Task RunConsolidatedPipelineAsync_L2ValidationError_AttemptsSelfCorrection()
         {
             // Arrange
-            var specs = new List<(string, string)> { ("dbo.USP_Test1_Spec.md", "내용") };
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
 
             _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())

@@ -30,9 +30,15 @@ namespace ReSet.Core.Services
                 }
 
                 // 2. 단일 JSON 덤프 저장
+                var rawFolder = Path.Combine(baseOutputDir, "raw");
+                if (!Directory.Exists(rawFolder))
+                {
+                    Directory.CreateDirectory(rawFolder);
+                }
+
                 if (saveJson)
                 {
-                    var jsonPath = Path.Combine(baseOutputDir, $"{cleanSpName}_Raw.json");
+                    var jsonPath = Path.Combine(rawFolder, "metadata.json");
                     Log.Debug("Raw JSON 덤프 작성 중: {JsonPath}", jsonPath);
                     var options = new JsonSerializerOptions { WriteIndented = true };
                     var jsonContent = JsonSerializer.Serialize(spDef, options);
@@ -42,11 +48,11 @@ namespace ReSet.Core.Services
                 // 3. 프롬프트 컨텍스트 저장
                 if (saveContext)
                 {
-                    var contextPath = Path.Combine(baseOutputDir, $"{cleanSpName}_RawContext.md");
+                    var contextPath = Path.Combine(rawFolder, "prompt-context.md");
                     Log.Debug("Raw 프롬프트 컨텍스트 파일 작성 중: {ContextPath}", contextPath);
 
                     // 기존 .txt 파일이 있다면 삭제 처리
-                    var oldTxtFile = Path.Combine(baseOutputDir, $"{cleanSpName}_RawContext.txt");
+                    var oldTxtFile = Path.Combine(rawFolder, "prompt-context.txt");
                     if (File.Exists(oldTxtFile))
                     {
                         try { File.Delete(oldTxtFile); } catch {}
@@ -67,15 +73,15 @@ namespace ReSet.Core.Services
                 // 4. 개별 파일/폴더 분산 저장
                 if (saveFiles)
                 {
-                    var rawFolder = Path.Combine(baseOutputDir, $"{cleanSpName}_Raw");
-                    Log.Debug("개별 DDL/MD 분산 덤프 작성 중: {RawFolder}", rawFolder);
-                    if (!Directory.Exists(rawFolder))
+                    var ddlFolder = Path.Combine(rawFolder, "ddl");
+                    Log.Debug("개별 DDL/MD 분산 덤프 작성 중: {DdlFolder}", ddlFolder);
+                    if (!Directory.Exists(ddlFolder))
                     {
-                        Directory.CreateDirectory(rawFolder);
+                        Directory.CreateDirectory(ddlFolder);
                     }
 
                     // 메인 SP DDL 저장
-                    var spDdlPath = Path.Combine(rawFolder, "sp_definition.sql");
+                    var spDdlPath = Path.Combine(ddlFolder, "sp_definition.sql");
                     await File.WriteAllTextAsync(spDdlPath, spDef.DdlText, Encoding.UTF8);
 
                     // 의존성 순회하여 개별 덤프
@@ -88,7 +94,7 @@ namespace ReSet.Core.Services
                         // 테이블 스키마 md 저장
                         if (dep.Columns.Count > 0)
                         {
-                            var tablesFolder = Path.Combine(rawFolder, "tables");
+                            var tablesFolder = Path.Combine(ddlFolder, "tables");
                             if (!Directory.Exists(tablesFolder))
                             {
                                 Directory.CreateDirectory(tablesFolder);
@@ -102,7 +108,7 @@ namespace ReSet.Core.Services
                         if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
                         {
                             var subFolderType = dep.Type.Contains("PROCEDURE") ? "procedures" : "functions";
-                            var codeFolder = Path.Combine(rawFolder, subFolderType);
+                            var codeFolder = Path.Combine(ddlFolder, subFolderType);
                             if (!Directory.Exists(codeFolder))
                             {
                                 Directory.CreateDirectory(codeFolder);
@@ -127,17 +133,20 @@ namespace ReSet.Core.Services
             string baseOutputDir)
         {
             var cleanSpName = $"{spDef.Schema}.{spDef.Name}";
-            var instructionsPath = Path.Combine(baseOutputDir, $"{cleanSpName}_MigrationInstructions.md");
-            var todoPath = Path.Combine(baseOutputDir, $"{cleanSpName}_todo.md");
+            
+            var agentFolder = Path.Combine(baseOutputDir, "agent");
+            if (!Directory.Exists(agentFolder))
+            {
+                Directory.CreateDirectory(agentFolder);
+            }
+
+            var instructionsPath = Path.Combine(agentFolder, "MigrationInstructions.md");
+            var todoPath = Path.Combine(agentFolder, "todo.md");
 
             Log.Information("마이그레이션 지시서 번들 내보내기 시작 - SP: {SpName}, OutputDir: {OutputDir}", cleanSpName, baseOutputDir);
 
             try
             {
-                if (!Directory.Exists(baseOutputDir))
-                {
-                    Directory.CreateDirectory(baseOutputDir);
-                }
 
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine($"# 🚀 Migration Instructions for Coding Agent ({cleanSpName})");
@@ -216,8 +225,8 @@ namespace ReSet.Core.Services
                 sb.AppendLine("## 🔑 6. 코딩 에이전트 명령 가이드 (Prompt for Agent)");
                 sb.AppendLine("코딩 에이전트(Claude Code 등)에 입력할 때 아래 텍스트를 그대로 복사하여 사용하십시오:");
                 sb.AppendLine();
-                sb.AppendLine($"> \"이 파일(`{cleanSpName}_MigrationInstructions.md`)에 기술된 비즈니스 명세와 레거시 SQL DDL을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
-                sb.AppendLine($"> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`{cleanSpName}_todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
+                sb.AppendLine("> \"이 파일(`MigrationInstructions.md`)에 기술된 비즈니스 명세와 레거시 SQL DDL을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
+                sb.AppendLine("> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
                 sb.AppendLine("> 1. 설계서의 입출력 규격 및 비즈니스 로직 단계를 만족할 것.");
                 sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
                 sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");

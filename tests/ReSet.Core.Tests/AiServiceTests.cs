@@ -57,8 +57,8 @@ namespace ReSet.Core.Tests
             // Arrange
             var specs = new System.Collections.Generic.List<(string FileName, string Content)>
             {
-                ("dbo.USP_Test1_Spec.md", "## 개요\n내용1"),
-                ("dbo.USP_Test2_Spec.md", "## 개요\n내용2")
+                ("dbo.USP_Test1", "## 개요\n내용1"),
+                ("dbo.USP_Test2", "## 개요\n내용2")
             };
             
             var client = new OpenAiClient(new HttpClient(), "", "https://api.openai.com/v1", "gpt-4o");

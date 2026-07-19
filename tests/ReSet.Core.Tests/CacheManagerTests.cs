@@ -123,7 +123,8 @@ namespace ReSet.Core.Tests
             var specContent = "# Spec Report for TestSp";
 
             // Spec 파일 생성
-            var specFilePath = Path.Combine(_tempOutputDir, $"{spName}_Spec.md");
+            var specFilePath = Path.Combine(_tempOutputDir, "Procedures", spName, "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
             File.WriteAllText(specFilePath, specContent);
 
             // Act
@@ -140,7 +141,8 @@ namespace ReSet.Core.Tests
             // Arrange
             var spName = "dbo.TestSp";
             var specContent = "# Spec Report";
-            var specFilePath = Path.Combine(_tempOutputDir, $"{spName}_Spec.md");
+            var specFilePath = Path.Combine(_tempOutputDir, "Procedures", spName, "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
             File.WriteAllText(specFilePath, specContent);
 
             // Act

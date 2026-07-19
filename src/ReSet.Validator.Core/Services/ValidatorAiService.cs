@@ -21,7 +21,7 @@ namespace ReSet.Validator.Core.Services
 
         public async Task<GapReport> VerifyCodeAsync(string specContent, string sourceCodeContent, string targetLanguage, string? previousFeedback = null, CancellationToken cancellationToken = default)
         {
-            var systemPrompt = @"당신은 데이터베이스 Stored Procedure 역공학 명세서(*_Spec.md)와 이를 마이그레이션하여 구현한 프로그램 코드(C# 또는 Java)를 일대일 비교하여 기능적으로 완벽히 동일하게 구현되었는지 정밀 검증하는 전문 QA 에이전트입니다.
+            var systemPrompt = @"당신은 데이터베이스 Stored Procedure 역공학 명세서(Spec.md)와 이를 마이그레이션하여 구현한 프로그램 코드(C# 또는 Java)를 일대일 비교하여 기능적으로 완벽히 동일하게 구현되었는지 정밀 검증하는 전문 QA 에이전트입니다.
 
 비교 검증 시 다음 항목들에 주목하십시오:
 1. 입력 파라미터 매핑: 설계서에 명시된 파라미터들이 코드의 입력 인자나 객체 필드로 정확히 전달되는가?
@@ -112,7 +112,7 @@ namespace ReSet.Validator.Core.Services
 
         public async Task<string> GenerateTestParametersAsync(string specContent, string procedureName, CancellationToken cancellationToken = default)
         {
-            var systemPrompt = @"당신은 데이터베이스 Stored Procedure의 비즈니스 기능 명세서(*_Spec.md)를 분석하여 데이터 정합성 검증용 입력 테스트 케이스 파라미터 세트를 설계하는 전문 QA 테스트 엔지니어입니다.
+            var systemPrompt = @"당신은 데이터베이스 Stored Procedure의 비즈니스 기능 명세서(Spec.md)를 분석하여 데이터 정합성 검증용 입력 테스트 케이스 파라미터 세트를 설계하는 전문 QA 테스트 엔지니어입니다.
 
 명세서에 선언된 입력 파라미터명과 데이터 타입을 분석하여 다음 조건을 충족하는 테스트 케이스 세트를 JSON 형식으로 생성해 주세요:
 1. 정상 시나리오 (유효한 값 주입)
@@ -170,7 +170,7 @@ namespace ReSet.Validator.Core.Services
         {
             var systemPrompt = @"당신은 데이터베이스 Stored Procedure 마이그레이션 후 데이터 정합성을 검증하기 위해 고품질의 모의 테이블 데이터(Mock Data)를 기획하고 설계하는 전문 QA 데이터 엔지니어입니다.
 
-제공되는 SP DDL, 의존하는 테이블들의 컬럼 스펙(및 DDL), 그리고 비즈니스 기능 명세서(*_Spec.md)를 정밀 분석하여 각 테이블에 들어갈 가상 행(Row) 데이터를 JSON 형식으로 설계해 주십시오.
+제공되는 SP DDL, 의존하는 테이블들의 컬럼 스펙(및 DDL), 그리고 비즈니스 기능 명세서(Spec.md)를 정밀 분석하여 각 테이블에 들어갈 가상 행(Row) 데이터를 JSON 형식으로 설계해 주십시오.
 
 다음 설계 규칙을 반드시 엄격하게 준수하십시오:
 1. [논리 조인 정합성 (가장 중요)]: 
@@ -242,7 +242,7 @@ namespace ReSet.Validator.Core.Services
             var testFramework = isCSharp ? "xUnit" : "JUnit 5";
             var mockFramework = isCSharp ? "Moq" : "Mockito";
 
-            var systemPrompt = $@"당신은 Stored Procedure 설계서(*_Spec.md)를 바탕으로 마이그레이션된 소스코드의 기능 정합성을 검증하기 위한 단위 테스트 코드를 작성하는 전문 QA 엔지니어입니다.
+            var systemPrompt = $@"당신은 Stored Procedure 설계서(Spec.md)를 바탕으로 마이그레이션된 소스코드의 기능 정합성을 검증하기 위한 단위 테스트 코드를 작성하는 전문 QA 엔지니어입니다.
 설계서의 비즈니스 로직, 입력값 규격, 출력값 데이터셋을 검증할 수 있는 단위 테스트 코드를 작성해 주십시오.
 
 [설계 및 작성 규칙]:

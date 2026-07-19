@@ -83,7 +83,7 @@ graph TD
 
 ### 3.4. 통합 배치 현대화 계획 및 정산 정책서 (Modernization & Rulebook)
 *   **Multi-SP 배치 전환 계획서**:
-    *   분석이 완료된 개별 명세서(`*_Spec.md`) 목록 중, 사용자가 순서대로 지정 선택하여 단계를 구성하고 통합 배치 계획서(`[JobName]_BatchMigrationPlan.md`)를 작성해야 합니다. (순서 보장형 TUI 수집 루프 가동)
+    *   분석이 완료된 개별 명세서(`Spec.md`) 목록 중, 사용자가 순서대로 지정 선택하여 단계를 구성하고 통합 배치 계획서(`BatchMigrationPlan.md`)를 작성해야 합니다. (순서 보장형 TUI 수집 루프 가동)
 *   **통합 정산 정책서 (Settlement Policy Rulebook)**:
     *   SP DDL 코드 내부의 조건식 상수값(예: `WHERE Status = 'S02'`)과 실제 데이터베이스 마스터/공통 코드 테이블에 저장된 적재 값(예: `S02 = 정산보류`)을 1:1 대조 및 데이터 프로파일링(Data Profiling)하여 비즈니스 정책 정의 문서를 자동 도출해야 합니다.
 

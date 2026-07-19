@@ -28,7 +28,8 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(codeDir);
 
             // Spec 파일 생성
-            var specPath = Path.Combine(specDir, "dbo.CustOrderHist_Spec.md");
+            var specPath = Path.Combine(specDir, "Procedures", "dbo.CustOrderHist", "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
             File.WriteAllText(specPath, "# dbo.CustOrderHist Spec");
 
             // Code 파일 생성
@@ -73,7 +74,8 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(codeDir);
 
             // Spec 파일 생성 (YAML 메타데이터 포함)
-            var specPath = Path.Combine(specDir, "random_name_Spec.md");
+            var specPath = Path.Combine(specDir, "Procedures", "random_name", "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
             File.WriteAllText(specPath, @"---
 TargetCode: src/CustomMigration/TargetCode.cs
 ---

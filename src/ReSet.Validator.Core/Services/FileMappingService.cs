@@ -22,8 +22,8 @@ namespace ReSet.Validator.Core.Services
                 throw new DirectoryNotFoundException($"소스코드 디렉토리를 찾을 수 없습니다: {config.SourceCodeDirectory}");
             }
 
-            // 1. 설계서 파일 탐색 (*_Spec.md)
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "*_Spec.md", SearchOption.AllDirectories);
+            // 1. 설계서 파일 탐색 (Spec.md)
+            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
             
             // 2. 소스코드 파일 탐색 (C# 및 Java)
             var sourceFiles = new List<string>();
@@ -40,8 +40,8 @@ namespace ReSet.Validator.Core.Services
             foreach (var specPath in specFiles)
             {
                 var specFileName = Path.GetFileName(specPath);
-                // dbo.CustOrderHist_Spec.md -> dbo.CustOrderHist 추출
-                var baseName = specFileName.Replace("_Spec.md", "");
+                // 경로에서 SP 폴더명 추출 (Procedures/dbo.CustOrderHist/docs/Spec.md -> dbo.CustOrderHist)
+                var baseName = Directory.GetParent(specPath)?.Parent?.Name ?? specFileName.Replace(".md", "");
                 
                 // 스키마 제거 (dbo.CustOrderHist -> CustOrderHist)
                 var cleanName = baseName;

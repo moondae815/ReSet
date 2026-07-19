@@ -27,7 +27,9 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(specDir);
             Directory.CreateDirectory(codeDir);
 
-            File.WriteAllText(Path.Combine(specDir, "dbo.TestProc_Spec.md"), "# Spec");
+            var specPath = Path.Combine(specDir, "Procedures", "dbo.TestProc", "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
             File.WriteAllText(Path.Combine(codeDir, "TestProc.cs"), "public class TestProc {}");
 
             var config = new ValidatorConfig
@@ -89,7 +91,9 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(specDir);
             Directory.CreateDirectory(codeDir);
 
-            File.WriteAllText(Path.Combine(specDir, "dbo.TestProc_Spec.md"), "# Spec");
+            var specPath = Path.Combine(specDir, "Procedures", "dbo.TestProc", "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
             File.WriteAllText(Path.Combine(codeDir, "TestProc.cs"), "public class TestProc {}");
 
             var config = new ValidatorConfig
@@ -150,7 +154,9 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(specDir);
             Directory.CreateDirectory(codeDir);
 
-            File.WriteAllText(Path.Combine(specDir, "dbo.TestProc_Spec.md"), "# Spec");
+            var specPath = Path.Combine(specDir, "Procedures", "dbo.TestProc", "docs", "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
             File.WriteAllText(Path.Combine(codeDir, "TestProc.cs"), "public class TestProc {}");
 
             // 잘못된 폴더 경로를 OutputDirectory로 지정하여 쓰기 예외 강제 유도 (리눅스 루트 권한 필요 경로 활용)

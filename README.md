@@ -106,13 +106,20 @@ ReSet/
 │   └── ReSet.Core.Tests/      # [단위 테스트 프로젝트] xUnit 기반 단위 테스트
 │
 └── output/                          # [산출물 폴더] 생성된 스펙, 계획서, 모의 데이터 및 정합성 리포트 저장소
-    ├── [Schema].[SP이름]/           # SP 개별 분석 산출물이 격리 보존되는 전용 하위 폴더
-    │   ├── [Schema].[SP이름]_Spec.md  # SP 개별 비즈니스 설계 명세서
-    │   ├── [Schema].[SP이름]_MigrationInstructions.md # 개별 SP 마이그레이션 지시서 번들
-    │   ├── [Schema].[SP이름]_Thinking.md  # AI 모델의 추론 과정 로그
-    │   ├── [Schema].[SP이름]_RawContext.md # AI 모델에 실제 전송된 조립 완료 프롬프트 원문 마크다운
-    │   └── [Schema].[SP이름]_Raw/     # 의존 테이블 스키마 및 참조 UDF/SP DDL 개별 분산 덤프 폴더
-    │
+    ├── logs/
+    ├── Procedures/                  # SP 개별 분석 산출물이 격리 보존되는 최상위 폴더
+    │   └── [Schema].[SP이름]/       # SP 식별자별 전용 하위 폴더
+    │       ├── docs/
+    │       │   ├── Spec.md                 # 최종 비즈니스 명세서
+    │       │   ├── BatchMigrationPlan.md   # SP 개별 배치 전환 계획서
+    │       │   └── Thinking.md             # AI 모델의 추론 과정 로그
+    │       ├── agent/
+    │       │   ├── MigrationInstructions.md# 에이전트 전용 프롬프트 및 지시서
+    │       │   └── todo.md                 # 구현 체크리스트
+    │       └── raw/
+    │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
+    │           ├── prompt-context.md       # AI에 실제 주입된 원문
+    │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Jobs/[JobName]/              # 통합 배치 작업용 산출물이 격리 보존되는 전용 하위 폴더
     │   ├── [JobName]_BatchMigrationPlan.md   # 통합 배치 전환 계획서
     │   └── [JobName]_MigrationInstructions.md # 통합 마이그레이션 지시서 번들
@@ -359,9 +366,9 @@ dotnet run --project src/ReSet.Cli
 1. DB 계정(ID)과 패스워드를 입력하여 SQL Server에 로그인합니다.
 2. 로그인 성공 시 아래 **메인 메뉴**가 화면에 표시됩니다:
    * **`1. Stored Procedure 개별 분석 명세서 작성`**:
-     SP를 1개 선택하여, 해당 프로시저의 비즈니스 로직과 데이터 입출력 명세서(`*_Spec.md`)를 작성합니다. (이때 개별 SP 마이그레이션용 지시서 번들 `*_MigrationInstructions.md`도 자동 생성됩니다.)
+     SP를 1개 선택하여, 해당 프로시저의 비즈니스 로직과 데이터 입출력 명세서(`Spec.md`)를 작성합니다. (이때 개별 SP 마이그레이션용 지시서 번들 `MigrationInstructions.md`도 자동 생성됩니다.)
    * **`2. 기분석 명세서 통합 배치 전환 계획 수립 (Multi-SP)`**:
-     출력 디렉터리에 축적된 `*_Spec.md` 목록 중에서 통합할 대상들을 **원하는 순서대로 하나씩 선택**하여 배치 단계를 구성하고, Job 이름(예: `Daily_Order_Job`)을 입력하여 통합 배치 전환 계획서(`*_BatchMigrationPlan.md`)를 작성합니다.
+     출력 디렉터리에 축적된 `Spec.md` 목록 중에서 통합할 대상들을 **원하는 순서대로 하나씩 선택**하여 배치 단계를 구성하고, Job 이름(예: `Daily_Order_Job`)을 입력하여 통합 배치 전환 계획서(`BatchMigrationPlan.md`)를 작성합니다.
      * **이전 메뉴로 돌아가기**: 파일 선택 화면의 최상단에 제공되는 `[-- 메인 메뉴로 돌아가기 --]` 옵션을 선택하여 이전 메인 메뉴로 안전하게 되돌아올 수 있습니다.
      * **대칭형 검증 적용**: 전환 계획서가 생성된 후에는 1단계와 대칭되는 **3단계 검증 파이프라인(L1 린터 -> L2 AI 리뷰 -> L3 사용자 피드백 반영 및 컨펌)**을 수행하며, 최종 승인 시에만 파일로 저장됩니다.
      * **통합 소스 코드 자동 생성 및 에이전트 기동**: 최종 컨펌 및 저장이 완료되면, 복원된 SP 메타데이터들을 바탕으로 통합 마이그레이션 지시서 (`{JobName}_MigrationInstructions.md`)를 저장하고 외부 코딩 에이전트(Claude Code 등)를 자동/선택 기동하여 전체 코드를 생성합니다.
@@ -403,7 +410,7 @@ dotnet run --project src/ReSet.Cli
     dotnet run --project src/ReSet.Validator.Cli
     ```
     *   **1. 설계서 vs 마이그레이션 소스코드 일치성 검증 (L1/L2/L3)**: C#/Java 소스코드 정적 분석 및 AI 의미론적 Gap 분석, 인간 피드백 루프를 가동하여 검증합니다.
-    *   **2. 데이터 정합성 검증용 테스트 파라미터 설계 (AI)**: 설계서(`*_Spec.md`)를 분석해 AI가 정상/경계값/오류 시나리오 테스트 파라미터 JSON(`*_test_inputs.json`)을 생성합니다.
+    *   **2. 데이터 정합성 검증용 테스트 파라미터 설계 (AI)**: 설계서(`Spec.md`)를 분석해 AI가 정상/경계값/오류 시나리오 테스트 파라미터 JSON(`*_test_inputs.json`)을 생성합니다.
     *   **3. 검증용 모의 테이블 데이터(Mock Data) 자동 생성 및 캐싱 (AI)**: 원본 메타데이터 및 설계서를 분석해 테이블 간의 조인 키 난수 시드가 일치하는 모의 데이터(`*_mock_data.json`)를 생성하여 캐싱합니다.
     *   **4. 원본 Stored Procedure 실행 데이터 수집 (Legacy DB)**: 생성된 테스트 입력값 JSON을 기반으로 실제 Legacy DB에 접근해 SP를 호출하고, 다중 ResultSet 데이터를 JSON(`*_legacy_results.json`)으로 덤프 수집합니다. (모의 데이터가 있을 경우 자동 Seeding 및 Clean-up 실행)
     *   **5. 신규 마이그레이션 타겟 소스코드 실행 데이터 수집 (Target System)**: 마이그레이션된 C#(DLL 리플렉션 로드) 또는 Java(외부 JAR/클래스 프로세스 실행) 코드를 실제로 구동하여 실행 결과 JSON(`*_target_results.json`) 데이터를 수집합니다. (모의 데이터 자동 Seeding/Clean-up 및 트랜잭션 자동 롤백 적용)

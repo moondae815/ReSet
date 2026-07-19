@@ -131,7 +131,7 @@ namespace ReSet.Core.Services
                     {
                         Log.Information("[파이프라인] 캐시 히트 - AI 분석 건너뜀 - SP: {SpName}", selectedOption);
                         _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
-                        var specFilePath = System.IO.Path.Combine(outputDirectory, $"{selectedOption}_Spec.md");
+                        var specFilePath = System.IO.Path.Combine(outputDirectory, "Procedures", selectedOption, "docs", "Spec.md");
                         if (System.IO.File.Exists(specFilePath))
                         {
                             var cachedSpec = await System.IO.File.ReadAllTextAsync(specFilePath, cancellationToken);

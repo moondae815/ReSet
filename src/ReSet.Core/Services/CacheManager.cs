@@ -53,8 +53,8 @@ namespace ReSet.Core.Services
 
             Log.Information("캐시 유효성 검사 - SP: {ProcedureName}", procedureName);
 
-            // 1. 실제 출력 파일이 존재하는지 검증 (*_Spec.md)
-            var specFilePath = Path.Combine(outputDirectory, $"{procedureName}_Spec.md");
+            // 1. 실제 출력 파일이 존재하는지 검증 (docs/Spec.md)
+            var specFilePath = Path.Combine(outputDirectory, "Procedures", procedureName, "docs", "Spec.md");
             if (!File.Exists(specFilePath))
             {
                 Log.Debug("캐시 미스 (설계 명세서 파일이 존재하지 않음): {SpecFilePath}", specFilePath);
