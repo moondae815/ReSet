@@ -610,11 +610,13 @@ namespace ReSet.Core.Services
 
                             if (shouldRunStage1)
                             {
-                                Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) 시작");
+                                Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) {Action}", attempt == 1 ? "시작" : "수정 시작");
                                 AiResult deconstructResult;
-                                using (var progressScope = _userInteraction.CreateProgressScope("명세 구조화 분석 (Stage 1)") ?? NullProgressScope.Instance)
+                                string stage1Title = attempt == 1 ? "명세 구조화 분석 (Stage 1)" : "명세 구조화 수정 (Stage 1)";
+                                using (var progressScope = _userInteraction.CreateProgressScope(stage1Title) ?? NullProgressScope.Instance)
                                 {
-                                    progressScope.AddTask("deconstruct", "저장 프로시저 논리 구조 분석 중...");
+                                    string stage1Desc = attempt == 1 ? "저장 프로시저 논리 구조 분석 중..." : "저장 프로시저 논리 구조 수정 중...";
+                                    progressScope.AddTask("deconstruct", stage1Desc);
                                     deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "deconstruct");
                                 }
 
@@ -680,21 +682,23 @@ namespace ReSet.Core.Services
                                 }
                             }
 
-                            using (var progressScope = _userInteraction.CreateProgressScope("구역별 분할 명세서 생성 (Stage 2)") ?? NullProgressScope.Instance)
+                            string stage2Title = attempt == 1 ? "구역별 분할 명세서 생성 (Stage 2)" : "구역별 분할 명세서 수정 (Stage 2)";
+                            using (var progressScope = _userInteraction.CreateProgressScope(stage2Title) ?? NullProgressScope.Instance)
                             {
+                                string actWord = attempt == 1 ? "빌드" : "수정";
                                 if (regenPart1)
                                 {
-                                    progressScope.AddTask("part1", "1/3. 개요 및 파라미터 빌드 중...");
+                                    progressScope.AddTask("part1", $"1/3. 개요 및 파라미터 {actWord} 중...");
                                     ollamaPart1 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1");
                                 }
                                 if (regenPart2)
                                 {
-                                    progressScope.AddTask("part2", "2/3. CRUD 상세 명세 빌드 중...");
+                                    progressScope.AddTask("part2", $"2/3. CRUD 상세 명세 {actWord} 중...");
                                     ollamaPart2 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2");
                                 }
                                 if (regenPart3)
                                 {
-                                    progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 빌드 중...");
+                                    progressScope.AddTask("part3", $"3/3. 로직 요약 및 시각화 {actWord} 중...");
                                     ollamaPart3 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3");
                                 }
                             }
@@ -715,9 +719,11 @@ namespace ReSet.Core.Services
                         else
                         {
                             AiResult aiResult;
-                            using (var progressScope = _userInteraction.CreateProgressScope("명세서 수정") ?? NullProgressScope.Instance)
+                            string scopeTitle = attempt == 1 ? "명세서 분석 및 빌드" : "명세서 수정 (피드백 반영)";
+                            using (var progressScope = _userInteraction.CreateProgressScope(scopeTitle) ?? NullProgressScope.Instance)
                             {
-                                progressScope.AddTask("gen", $"{_aiService.ModelName} 분석 수정 중...");
+                                string taskDesc = attempt == 1 ? $"{_aiService.ModelName} 분석 및 초안 작성 중..." : $"{_aiService.ModelName} 분석 수정 중...";
+                                progressScope.AddTask("gen", taskDesc);
                                 aiResult = await WrapWithProgress(_aiService.GenerateSpecificationAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "gen");
                             }
                             specificationMarkdown = aiResult.Content;
