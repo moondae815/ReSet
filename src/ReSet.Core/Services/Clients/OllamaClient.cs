@@ -154,10 +154,17 @@ namespace ReSet.Core.Services.Clients
                 }
 
                 result.Content = contentElement.GetString() ?? string.Empty;
+                
+                if (messageElement.TryGetProperty("thinking", out var thinkingElement))
+                {
+                    result.ThinkingText = thinkingElement.GetString() ?? string.Empty;
+                }
             }
 
             var content = result.Content;
 
+            if (string.IsNullOrWhiteSpace(result.ThinkingText))
+            {
             // 1. Gemma 4의 공식 제어 토큰 파싱
             int gemmaStart = content.IndexOf("<|channel>thought", StringComparison.OrdinalIgnoreCase);
             if (gemmaStart != -1)
@@ -208,6 +215,7 @@ namespace ReSet.Core.Services.Clients
                     var afterThink = content.Substring(endTag + 8);
                     result.Content = afterThink.Trim();
                 }
+            }
             }
 
             if (!string.IsNullOrWhiteSpace(result.ThinkingText))
