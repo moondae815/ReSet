@@ -48,9 +48,9 @@
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](../src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. |
-| | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. |
+| | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. 특히 OllamaClient는 /api/chat 통신 및 모델별 다양한 추론 토큰(`<think>`, `<|end of thought|>` 등) 분리 파싱 처리를 지원합니다. |
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
-| | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Stateful Checklist 최신 피드백 주입에 의한 컨텍스트 윈도우 오염 방지 및 Ollama 구역별 순차 분할 재생성 지원), L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
+| | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Stateful Checklist 최신 피드백 주입, Ollama 구역별 분할 재생성), Stage 1 (Deconstruct) 추론 내역 수집 및 `Thinking.md` 로깅 제어, L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL 파일 내보내기 및 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 생성 (SP별 및 Job별 전용 하위 폴더에 격리 분류 저장). |
 | | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
 | | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |

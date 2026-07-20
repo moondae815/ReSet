@@ -207,12 +207,20 @@ namespace ReSet.Core.Services.Clients
             {
                 // 시작 태그 <think>가 유실되었으나 </think>가 있는 경우 방어
                 int endTag = content.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+                int endTagLength = 8;
+                
+                if (endTag == -1)
+                {
+                    endTag = content.IndexOf("<|end of thought|>", StringComparison.OrdinalIgnoreCase);
+                    endTagLength = 18;
+                }
+
                 if (endTag != -1)
                 {
                     var extractedThinking = content.Substring(0, endTag).Trim();
                     result.ThinkingText = extractedThinking;
 
-                    var afterThink = content.Substring(endTag + 8);
+                    var afterThink = content.Substring(endTag + endTagLength);
                     result.Content = afterThink.Trim();
                 }
             }

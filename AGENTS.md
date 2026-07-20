@@ -98,6 +98,7 @@
     *   반드시 `TryGetProperty`를 활용해 JSON 필드 유무를 안전하게 확인하고, 비정상 수신 시 `InvalidOperationException`을 던져 투명하게 거절 사유를 노출하십시오.
     *   **모델별 전송 규격 매핑**: OpenAI 추론 모델(o1/o3) 호출 시 `temperature`를 제외하고 `reasoning_effort`를 표준 매핑하고, Claude 4세대 모델 호출 시 `budget_tokens` 대신 `output_config.effort`에 강도를 위임해 400 에러를 방지하십시오.
     *   **Ollama 온도 매핑**: 로컬 Ollama 구동 시 effort(low/medium/high/max)가 전달될 경우, temperature 파라미터를 각각 0.1/0.4/0.7/0.9로 차등 적용하여 추론 다양성을 제어하십시오. 단, 모델명에 `gemma4` 또는 `qwen3.6`이 포함된 경우 이 매핑을 무시하고 내부적으로 각각 최적 샘플링 설정으로 하드코딩되도록 강제해야 합니다.
+    *   **Ollama 모델별 추론(Thinking) 제어 및 파싱 규칙**: Gemma 4에만 공식 추론 트리거인 `<|think|>`를 시스템 프롬프트 선두에 주입하고, 그 외의 모델(Qwen 등)은 프롬프트의 텍스트 지시(Instruction)로만 `<think>` 사용을 유도하여 텍스트 누수(Leakage)를 방지하십시오. 파싱 시 `</think>`뿐만 아니라 `<|end of thought|>` 토큰도 폴백(Fallback)으로 처리하여 추론 텍스트가 명세서에 노출되는 것을 원천 차단해야 합니다.
 
 ### 🎨 범주 3. 인터페이스 및 Spectre.Console 예외 회피 (UI/UX)
 4.  **TUI 인터페이스의 시각적 안정성 및 사용자 입력을 지원하십시오.**
@@ -118,6 +119,7 @@
         - **정화 결과 영속 반영**: L1 검증 단계에서 획득한 정화된 마크다운(CleansedMarkdown)은 검증 성공 여부에 관계없이 파이프라인 오케스트레이터에서 메모리 상의 명세서 및 계획서 원본 텍스트에 다시 덮어써 최종 파일로 영속 보존되도록 구현을 유지하십시오.
     *   **L2 (AI 교차 검토)**: [AiService.cs](./src/ReSet.Core/Services/AiService.cs)의 자가 보완 루프(`MaxL2Attempts` 한도 준수)를 제어하고, **컨텍스트 윈도우 오염 방지를 위해 누적된 이전 피드백을 지우고 최신 피드백만을 Stateful Checklist 포맷으로 단일 압축 주입**하여 회귀 결함(Regression)을 예방하십시오.
         - **Ollama 구역별 순차 분할 생성**: Ollama 제공자 사용 시 1회차 생성 및 자가 수정/피드백 재생성 루프는 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 구역으로 나누어 순차적으로 구동하되, 피드백 내용의 키워드 분석을 통해 연관된 파트만 선택적으로 재생성 및 조립되도록 설계되어 있습니다. 분할 프롬프트 빌드 규칙, 키워드 매칭 규칙 및 태스크 구성을 변경할 때는 이 오케스트레이션 정합성을 준수하십시오.
+        - **Stage 1 (Deconstruct) 추론 로깅 보존**: 분할 생성(Stage 2)뿐만 아니라 초기 JSON 논리 추출 단계(Stage 1 Deconstruct)의 추론 내용도 `Thinking.md`에 함께 누적(`accumulatedThinking`)되도록 보장하여, 추론 모델의 논리 추출 과정을 투명하게 디버깅할 수 있도록 유지하십시오.
     *   **L2 Actor-Critic**: `ActorEffort: "dynamic"` 시 3종 차등 Effort 병렬 생성 ➔ Critic 채점 ➔ Fast-Pass 판정 ➔ Consolidator 앙상블 합성 ➔ **합성 완료 후 L2 최종 Critic 검증 및 1회 최종 보완 루프**를 순차 구동하십시오. 최종 합성본(또는 보완본)에 대한 최종 L2 Critic 리뷰 결과 점수는 명세서 파일 상단에 누락 없이 출력되어야 합니다.
     *   **품질 기준 엄격 강제 및 경고 표기**: 품질 향상을 위해 단일 모델 자가 수정 루프에서도 감쇄 임계치(Decaying Threshold)를 배제하고 설정된 기준 점수(Threshold)를 일관되게 적용하십시오. 만약 최종 시도 횟수를 소모한 후에도 점수 미달로 검증을 통과하지 못한 경우, 문서를 버리지 않고 채택하여 저장하되 문서 최상단에 `[!CAUTION]` 경고 배너와 상세한 Critic 점수 및 피드백 코멘트를 보존하여 후속 수정을 유도하도록 구현하십시오.
     *   **Mermaid 시스템 변수 예외 허용**: 다이어그램 린팅 시 `@@ERROR` 시스템 변수가 포함되어 있더라도 린팅 컴파일 검사에서 예외적으로 정상 패스하도록 정합성 규칙을 보완하십시오.

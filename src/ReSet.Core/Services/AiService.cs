@@ -532,7 +532,10 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
                 // Gemma 4 계열 모델의 추론(Thinking)을 강제 활성화하기 위해 시스템 프롬프트 첫 부분에 제어 토큰 삽입
-                systemPrompt = "<|think|>" + systemPrompt;
+                if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    systemPrompt = "<|think|>" + systemPrompt;
+                }
                 systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 또는 Gemma 4 표준 출력 포맷으로 상세히 기술하십시오. 최종 분석 명세서는 반드시 해당 태그 바깥에 작성해야 합니다.";
             }
 
@@ -562,6 +565,15 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
             {
                 temp = 0.05f;
+            }
+
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            {
+                if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    systemPrompt = "<|think|>" + systemPrompt;
+                }
+                systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 영역에 상세히 기술하십시오. 최종 JSON은 반드시 추론 태그 바깥에 작성해야 합니다.";
             }
 
             Log.Information("AI 명세 구조화 추론(Stage 1) 요청 전송 - SP: {Schema}.{Name}, Temperature: {Temp}", spDef.Schema, spDef.Name, temp);
@@ -762,7 +774,10 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
-                systemPrompt = "<|think|>" + systemPrompt;
+                if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    systemPrompt = "<|think|>" + systemPrompt;
+                }
                 systemPrompt += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 또는 Gemma 4 표준 출력 포맷으로 상세히 기술하십시오. 최종 분석 명세서는 반드시 해당 태그 바깥에 작성해야 합니다.";
             }
 
@@ -835,7 +850,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
-                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");
+                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");
                 sbRules.Add("[Output Language Requirement]");
                 sbRules.Add("- You MUST write the final markdown specification in Korean.");
@@ -881,7 +896,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 sbRules.Add($"{rIdx++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
-                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");
+                sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");
                 sbRules.Add("[Output Language Requirement]");
                 sbRules.Add("- You MUST write the final markdown specification in Korean.");
@@ -1032,7 +1047,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (!string.IsNullOrEmpty(feedbackLog))
             {
                 promptSb.AppendLine();
-                promptSb.AppendLine($"[CRITIC CORRECTION FEEDBACK LOG]:\n{feedbackLog}\n\nPlease accommodate all feedback comments, refine the specification, and correct any defects in the designated section. Make sure not to introduce any regression defects.");
+                promptSb.AppendLine($"[CRITIC CORRECTION FEEDBACK LOG]:\n{feedbackLog}\n\nPlease accommodate all feedback comments, refine the specification, and correct any defects in the designated section. Note: The `<deconstructed-logic-source-of-truth>` JSON has already been corrected based on this feedback, so use the JSON as your primary source of truth for logic and data. Focus on correcting markdown formatting, structure, diagram syntax, and accurately translating the corrected JSON into the requested specification sections. Make sure not to introduce any regression defects.");
             }
 
             return (systemPrompt, promptSb.ToString());
@@ -1106,7 +1121,6 @@ Review the generated specification markdown against the source metadata and sour
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
-                systemPrompt = "<|think|>" + systemPrompt;
                 systemPrompt += "\n\n[Ollama System Prompt Requirements]\n- Before writing the JSON payload, write your step-by-step thinking process inside <think> and </think> tags. The final JSON must be placed outside the think tags.";
             }
 
@@ -1188,7 +1202,6 @@ Write the Batch Migration Plan for {targetLanguage} based on the legacy SQL SP d
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
-                systemPrompt = "<|think|>" + systemPrompt;
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
             }
 
@@ -1245,7 +1258,6 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
             {
-                systemPrompt = "<|think|>" + systemPrompt;
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
             }
 

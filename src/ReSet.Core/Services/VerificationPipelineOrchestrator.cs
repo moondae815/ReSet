@@ -620,6 +620,10 @@ namespace ReSet.Core.Services
                                     deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "deconstruct");
                                 }
 
+                                accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Stage 1 (Deconstruct) Thinking");
+                                accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(deconstructResult.ThinkingText) ? "*(추론 없음)*" : deconstructResult.ThinkingText);
+                                accumulatedThinking.AppendLine();
+
                                 spDef.DeconstructedLogic = ParseDeconstructedLogic(deconstructResult.Content);
 
                                 // 중간 구조화 JSON 파일 백업 보존
