@@ -17,8 +17,7 @@ namespace ReSet.Core.Services.Clients
         private readonly string _apiKey;
         private readonly string _endpoint;
         private readonly string _modelName;
-        private readonly bool _isOllama;
-        private readonly int? _numCtx;
+
 
         public string ProviderName => "OpenAI";
         public string ModelName => _modelName;
@@ -28,7 +27,6 @@ namespace ReSet.Core.Services.Clients
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _apiKey = apiKey;
             _modelName = modelName;
-            _numCtx = numCtx;
 
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "https://api.openai.com/v1" : endpoint.Trim();
             if (ep.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
@@ -37,8 +35,7 @@ namespace ReSet.Core.Services.Clients
             }
             _endpoint = ep;
 
-            // 로컬 Ollama 포트(11434) 포함 여부, API Key 공백 여부, 혹은 gemma4 등 로컬 모델 명칭을 기준으로 Ollama 여부 감지
-            _isOllama = ep.Contains("11434") || string.IsNullOrWhiteSpace(apiKey) || modelName.ToLowerInvariant().Contains("gemma4") || modelName.ToLowerInvariant().Contains("ollama");
+
         }
 
         public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, CancellationToken cancellationToken = default)
@@ -175,30 +172,9 @@ namespace ReSet.Core.Services.Clients
                     lowerModel.StartsWith("o1") || 
                     lowerModel.StartsWith("o3");
                 
-                // Gemma 4 모델은 베스트 프랙티스에 따라 temperature = 1.0f 강제
-                bool isGemma4 = lowerModel.Contains("gemma4");
-                
-                // Qwen3.6 모델은 베스트 프랙티스에 따라 temperature = 0.6f 강제
-                bool isQwen3_6 = lowerModel.Contains("qwen3.6") || lowerModel.Contains("qwen-3.6");
-
-                if (isReasoningEnforcedModel || isGemma4)
+                if (isReasoningEnforcedModel)
                 {
                     targetTemp = 1.0f;
-                }
-                else if (isQwen3_6)
-                {
-                    targetTemp = 0.6f;
-                }
-                else if (_isOllama && !string.IsNullOrWhiteSpace(effort))
-                {
-                    targetTemp = effort.ToLowerInvariant() switch
-                    {
-                        "low" => 0.1f,
-                        "medium" => 0.4f,
-                        "high" => 0.7f,
-                        "max" => 0.9f,
-                        _ => targetTemp
-                    };
                 }
 
                 var requestBody = new System.Collections.Generic.Dictionary<string, object>
@@ -211,42 +187,6 @@ namespace ReSet.Core.Services.Clients
                         }
                     }
                 };
-
-                if (_isOllama)
-                {
-                    object thinkValue = true;
-                    if (!string.IsNullOrWhiteSpace(effort))
-                    {
-                        var lowerEffort = effort.ToLowerInvariant();
-                        if (lowerEffort == "low" || lowerEffort == "medium" || lowerEffort == "high" || lowerEffort == "max")
-                        {
-                            thinkValue = lowerEffort;
-                        }
-                    }
-                    requestBody.Add("think", thinkValue);
-
-                    var optionsObj = new Dictionary<string, object>();
-                    if (_numCtx.HasValue)
-                    {
-                        optionsObj.Add("num_ctx", _numCtx.Value);
-                    }
-                    
-                    if (isGemma4)
-                    {
-                        optionsObj.Add("top_p", 0.95f);
-                        optionsObj.Add("top_k", 64);
-                    }
-                    else if (isQwen3_6)
-                    {
-                        optionsObj.Add("top_p", 0.95f);
-                        optionsObj.Add("top_k", 20);
-                    }
-
-                    if (optionsObj.Count > 0)
-                    {
-                        requestBody.Add("options", optionsObj);
-                    }
-                }
 
                 if (isReasoningEnforcedModel)
                 {
