@@ -174,8 +174,11 @@ namespace ReSet.Core.Services.Clients
                 bool isReasoningEnforcedModel = 
                     lowerModel.StartsWith("o1") || 
                     lowerModel.StartsWith("o3");
+                
+                // Gemma 4 모델은 베스트 프랙티스에 따라 temperature = 1.0f 강제
+                bool isGemma4 = lowerModel.Contains("gemma4");
 
-                if (isReasoningEnforcedModel)
+                if (isReasoningEnforcedModel || isGemma4)
                 {
                     targetTemp = 1.0f;
                 }
@@ -215,12 +218,21 @@ namespace ReSet.Core.Services.Clients
                     }
                     requestBody.Add("think", thinkValue);
 
+                    var optionsObj = new Dictionary<string, object>();
                     if (_numCtx.HasValue)
                     {
-                        requestBody.Add("options", new Dictionary<string, object>
-                        {
-                            { "num_ctx", _numCtx.Value }
-                        });
+                        optionsObj.Add("num_ctx", _numCtx.Value);
+                    }
+                    
+                    if (isGemma4)
+                    {
+                        optionsObj.Add("top_p", 0.95f);
+                        optionsObj.Add("top_k", 64);
+                    }
+
+                    if (optionsObj.Count > 0)
+                    {
+                        requestBody.Add("options", optionsObj);
                     }
                 }
 

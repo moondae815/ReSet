@@ -152,7 +152,7 @@ ReSet/
   "AiSettings": {
     "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai")
     "ModelName": "claude-sonnet-4-6", // 사용할 LLM 모델명
-    "Temperature": 0.2,            // 분석의 일관성을 위해 낮게(0.0 ~ 0.3) 설정을 권장합니다.
+    "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4의 경우 내부적으로 최적 설정(Temp=1.0, top_p=0.95, top_k=64)으로 하드코딩됩니다.
     "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
     "TimeoutSeconds": 300,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
     "ActorEffort": "dynamic",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
@@ -180,7 +180,9 @@ ReSet/
         "Endpoint": "https://api.anthropic.com"
       },
       "Ollama": {
-        "Endpoint": "http://localhost:11434" // 로컬 Ollama 엔드포인트
+        "Endpoint": "http://localhost:11434", // 로컬 Ollama 엔드포인트
+        "NumCtx": 32768,                     // 로컬 LLM의 최대 컨텍스트 윈도우 크기 지정
+        "EnableThinking": true               // Gemma 4 등 추론(Thinking) 유도 프롬프트 활성화 여부
       },
       "Z.ai": {
         "ApiKey": "",              // Z.ai API 키
