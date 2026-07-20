@@ -97,7 +97,7 @@
     *   [ClaudeClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/ClaudeClient.cs), [OpenAiClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/OpenAiClient.cs), [GoogleClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/GoogleClient.cs), [OllamaClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/OllamaClient.cs), [ZaiClient.cs](file:///home/moondae/git-root/ReSet/src/ReSet.Core/Services/Clients/ZaiClient.cs) 호출 파싱 시 안전 필터 차단이나 응답 누락으로 인해 `KeyNotFoundException` 크래시가 발생하는 것을 원천 차단하십시오.
     *   반드시 `TryGetProperty`를 활용해 JSON 필드 유무를 안전하게 확인하고, 비정상 수신 시 `InvalidOperationException`을 던져 투명하게 거절 사유를 노출하십시오.
     *   **모델별 전송 규격 매핑**: OpenAI 추론 모델(o1/o3) 호출 시 `temperature`를 제외하고 `reasoning_effort`를 표준 매핑하고, Claude 4세대 모델 호출 시 `budget_tokens` 대신 `output_config.effort`에 강도를 위임해 400 에러를 방지하십시오.
-    *   **Ollama 온도 매핑**: 로컬 Ollama 구동 시 effort(low/medium/high/max)가 전달될 경우, temperature 파라미터를 각각 0.1/0.4/0.7/0.9로 차등 적용하여 추론 다양성을 제어하십시오. 단, 모델명에 `gemma4`가 포함된 경우 이 매핑을 무시하고 내부적으로 최적 샘플링 설정(`temperature=1.0`, `top_p=0.95`, `top_k=64`)으로 하드코딩되도록 강제해야 합니다.
+    *   **Ollama 온도 매핑**: 로컬 Ollama 구동 시 effort(low/medium/high/max)가 전달될 경우, temperature 파라미터를 각각 0.1/0.4/0.7/0.9로 차등 적용하여 추론 다양성을 제어하십시오. 단, 모델명에 `gemma4` 또는 `qwen3.6`이 포함된 경우 이 매핑을 무시하고 내부적으로 각각 최적 샘플링 설정으로 하드코딩되도록 강제해야 합니다.
 
 ### 🎨 범주 3. 인터페이스 및 Spectre.Console 예외 회피 (UI/UX)
 4.  **TUI 인터페이스의 시각적 안정성 및 사용자 입력을 지원하십시오.**

@@ -324,7 +324,7 @@ graph TD
   * **ClaudeClient**: Anthropic Messages API 페이로드 규격 및 Claude 4세대/5세대(`output_config.effort` 및 `thinking` 내 `display = "summarized"` 옵션을 통한 빈 생각 블록 방지) 대응, temperature 생략 대응.
   * **GoogleClient**: Google AI Studio API Key 주입 및 SystemInstruction 구조 대응.
   * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama REST API 규격 대응 및 Gemma 4 공식 생각 토큰(<|channel>thought)과 일반 <think> 태그의 수동 파싱 및 본문 분리 지원.
-  * **OpenAiClient (for Ollama 호환)**: Ollama를 통한 구동 시 `ActorEffort` 설정에 따른 temperature 차등 매핑 처리를 지원합니다. 특히 모델명에 `gemma4`가 포함될 경우 이를 감지하여 `ActorEffort` 설정을 무시하고 최적 샘플링 설정(`temperature=1.0`, `top_p=0.95`, `top_k=64`)으로 자동 하드코딩하는 우회 로직을 포함합니다.
+  * **OpenAiClient (for Ollama 호환)**: Ollama를 통한 구동 시 `ActorEffort` 설정에 따른 temperature 차등 매핑 처리를 지원합니다. 특히 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 이를 감지하여 `ActorEffort` 설정을 무시하고 각각의 최적 샘플링 설정으로 자동 하드코딩하는 우회 로직을 포함합니다.
   * **ZaiClient**: Z.ai AI 플랫폼 연동 규격 및 추론 과정(Reasoning Process) 수집 대응.
 * **설정 기반 동적 DI**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입하는 런타임 다형성을 확보했습니다.
 

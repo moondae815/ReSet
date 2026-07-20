@@ -177,10 +177,17 @@ namespace ReSet.Core.Services.Clients
                 
                 // Gemma 4 모델은 베스트 프랙티스에 따라 temperature = 1.0f 강제
                 bool isGemma4 = lowerModel.Contains("gemma4");
+                
+                // Qwen3.6 모델은 베스트 프랙티스에 따라 temperature = 0.6f 강제
+                bool isQwen3_6 = lowerModel.Contains("qwen3.6") || lowerModel.Contains("qwen-3.6");
 
                 if (isReasoningEnforcedModel || isGemma4)
                 {
                     targetTemp = 1.0f;
+                }
+                else if (isQwen3_6)
+                {
+                    targetTemp = 0.6f;
                 }
                 else if (_isOllama && !string.IsNullOrWhiteSpace(effort))
                 {
@@ -228,6 +235,11 @@ namespace ReSet.Core.Services.Clients
                     {
                         optionsObj.Add("top_p", 0.95f);
                         optionsObj.Add("top_k", 64);
+                    }
+                    else if (isQwen3_6)
+                    {
+                        optionsObj.Add("top_p", 0.95f);
+                        optionsObj.Add("top_k", 20);
                     }
 
                     if (optionsObj.Count > 0)
