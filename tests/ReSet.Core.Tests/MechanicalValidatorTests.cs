@@ -58,7 +58,7 @@ graph TD
         }
 
         [Fact]
-        public void Validate_WithInvalidMermaidBrackets_ShouldReturnFalse()
+        public void Validate_WithInvalidMermaidBrackets_ShouldBeCleansedAndReturnTrue()
         {
             var invalidMarkdown = @"
 # SP 명세서
@@ -74,9 +74,9 @@ graph TD
 ";
             var result = _validator.Validate(invalidMarkdown);
 
-            Assert.False(result.IsValid);
-            Assert.NotEmpty(result.Errors);
-            Assert.Contains("큰따옴표", result.SuggestedPromptFix);
+            Assert.True(result.IsValid);
+            Assert.Empty(result.Errors);
+            Assert.Contains("A[\"시작 (사용자ID)\"]", result.CleansedMarkdown);
         }
 
         [Fact]

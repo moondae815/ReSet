@@ -26,6 +26,24 @@ namespace ReSet.Core.Services
 
     public class MechanicalValidator
     {
+        private static readonly string[] MermaidShapes = {
+            @"(\[\()(.*?)(\)\])",
+            @"(\[\[)(.*?)(\]\])",
+            @"(\[\/)(.*?)([\/\\]\])",
+            @"(\[\\)(.*?)([\/\\]\])",
+            @"(\(\[)(.*?)(\]\))",
+            @"(\(\()(.*?)(\)\))",
+            @"(\{\{)(.*?)(\}\})",
+            @"(\[)(.*?)(\])",
+            @"(\()(.*?)(\))",
+            @"(\{)(.*?)(\})",
+            @"(\>)(.*?)(\])"
+        };
+
+        private static readonly Regex MermaidNodeRegex = new Regex(
+            @"([a-zA-Z0-9_ ]+?)\s*(?:" + string.Join("|", MermaidShapes) + @")(?=\s*(?:-->|---|--|$))",
+            RegexOptions.Compiled);
+
         private static readonly string[] RequiredHeaders = new[]
         {
             "개요",
@@ -280,13 +298,21 @@ namespace ReSet.Core.Services
                 var trimmedLine = line.Trim();
                 if (trimmedLine.StartsWith("%%")) continue;
 
-                var nodeRegex = new Regex(@"([a-zA-Z0-9_]+)([\[\(\{>]+)(""(?:""""|[^""])*""|.*?)([\]\)\}>]+)");
-                var nodeMatches = nodeRegex.Matches(trimmedLine);
+                var nodeMatches = MermaidNodeRegex.Matches(trimmedLine);
 
                 foreach (Match nodeMatch in nodeMatches)
                 {
-                    var nodeId = nodeMatch.Groups[1].Value;
-                    var labelText = nodeMatch.Groups[3].Value.Trim();
+                    var nodeId = nodeMatch.Groups[1].Value.Trim();
+                    string labelText = "";
+
+                    for (int i = 2; i < nodeMatch.Groups.Count; i += 3)
+                    {
+                        if (nodeMatch.Groups[i].Success)
+                        {
+                            labelText = nodeMatch.Groups[i + 1].Value.Trim();
+                            break;
+                        }
+                    }
 
                     if (nodeId.Equals("graph", StringComparison.OrdinalIgnoreCase) ||
                         nodeId.Equals("flowchart", StringComparison.OrdinalIgnoreCase) ||
@@ -379,12 +405,20 @@ namespace ReSet.Core.Services
                 processedLine = Regex.Replace(processedLine, @"-[^-]>", "-->");
 
                 // 4. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
-                processedLine = Regex.Replace(processedLine, @"([a-zA-Z0-9_ ]+?)\s*([\[\(\{>]+)(""[^""]+""|[^""\(\[\{]+?)([\]\)\}>]+)", match =>
+                processedLine = MermaidNodeRegex.Replace(processedLine, match =>
                 {
                     var nodeId = match.Groups[1].Value;
-                    var opening = match.Groups[2].Value;
-                    var label = match.Groups[3].Value;
-                    var closing = match.Groups[4].Value;
+                    string opening = "", label = "", closing = "";
+                    for (int i = 2; i < match.Groups.Count; i += 3)
+                    {
+                        if (match.Groups[i].Success)
+                        {
+                            opening = match.Groups[i].Value;
+                            label = match.Groups[i+1].Value;
+                            closing = match.Groups[i+2].Value;
+                            break;
+                        }
+                    }
 
                     var testId = nodeId.Trim();
                     if (testId.Equals("graph", StringComparison.OrdinalIgnoreCase) ||
