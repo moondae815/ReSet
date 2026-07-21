@@ -21,18 +21,20 @@
 ### 2.1. 컴포넌트 레이어링 및 관계
 본 프로그램은 프레젠테이션 레이어(Cli)와 비즈니스 서비스 레이어(Core/Validator)로 구성되어 있습니다.
 
-```
-┌───────────────────────────────────┐    ┌───────────────────────────────────┐
-│          ReSet.Cli (TUI)          │    │      ReSet.Validator.Cli (TUI)    │
-│  (분석기 실행 엔트리 및 TUI 제어) │    │  (검증기 실행 엔트리 및 TUI 제어) │
-└───────────┬───────────────────────┘    └───────────────┬───────────────────┘
-            │ DI                                         │ DI
-            ▼                                            ▼
-┌───────────────────────────┐                ┌───────────────────────────────┐
-│        ReSet.Core         │                │     ReSet.Validator.Core      │
-│  (Metadata, AI Prompts,   │◄───────────────┤ (Target runner, Seeding,      │
-│   Orchestrator, Caching)  │                │  Data Comparison)             │
-└───────────────────────────┘                └───────────────────────────────┘
+```mermaid
+flowchart TD
+    %% TUI / CLI Layer
+    Cli["ReSet.Cli (TUI)<br/>(분석기 실행 엔트리 및 TUI 제어)"]
+    ValCli["ReSet.Validator.Cli (TUI)<br/>(검증기 실행 엔트리 및 TUI 제어)"]
+
+    %% Core Business & Validator Layer
+    Core["ReSet.Core<br/>(Metadata, AI Prompts,<br/>Orchestrator, Caching)"]
+    ValCore["ReSet.Validator.Core<br/>(Target runner, Seeding,<br/>Data Comparison)"]
+
+    %% Dependencies
+    Cli -. "DI" .-> Core
+    ValCli -. "DI" .-> ValCore
+    ValCore --> Core
 ```
 
 ### 2.2. 핵심 모듈 및 클래스 목록
@@ -294,6 +296,34 @@ graph TD
     RegenerateAI --> L1ReCheck{"L1 정적 검사 통과?"}
     L1ReCheck -- "실패" --> SetL1ReFeedback2["L1 자가 수정 (1회)"] --> HumanReview
     L1ReCheck -- "성공" --> HumanReview
+```
+
+* **단일 모드 명세서 생성 세부 흐름 (CallAI 단계)**: 상용 API(OpenAI, Claude 등)는 넓은 컨텍스트 윈도우를 활용해 전체 명세서를 한 번에 일괄 생성하는 반면, 로컬 Ollama 모델은 컨텍스트 한계와 인지 부하를 극복하기 위해 "논리 구조 추출(Deconstruct) ➔ 3개 구역 순차 분할 생성 ➔ 조립"의 파이프라인을 거치며, 피드백 보완 시에도 결함이 있는 파트만 선택적으로 재생성합니다.
+
+```mermaid
+graph TD
+    Start["CallAI: 리버스 엔지니어링 요청<br/>(SP 스키마 및 지침 주입)"] --> ProviderCheck{"제공자(Provider) 판별"}
+
+    %% 상용 AI (일괄 생성)
+    ProviderCheck -- "상용 AI<br/>(OpenAI, Claude, Google 등)" --> CommercialMono["단일 프롬프트 기반<br/>전체 명세서 일괄 생성"]
+    CommercialMono --> CheckFeedback1{"피드백/결함<br/>존재 여부?"}
+    CheckFeedback1 -- "최초 생성" --> ReturnSpec["명세서 텍스트 반환"]
+    CheckFeedback1 -- "피드백 있음" --> CommercialMonoRe["이전 피드백을 프롬프트에 주입하여<br/>전체 명세서 일괄 재생성"]
+    CommercialMonoRe --> ReturnSpec
+
+    %% 로컬 Ollama (분할 생성)
+    ProviderCheck -- "로컬 Ollama" --> OllamaDeconstruct["Stage 1: 논리 구조 파악<br/>(DeconstructSpLogic)<br/>- SP 분석 후 전체 뼈대를 JSON 추출"]
+    OllamaDeconstruct --> CheckFeedback2{"피드백/결함<br/>존재 여부?"}
+    
+    CheckFeedback2 -- "최초 생성 (1회차)" --> OllamaSeqAll["Stage 2: 3개 파트 순차 분할 생성<br/>1/3. 개요 및 파라미터<br/>2/3. CRUD 상세 명세<br/>3/3. 로직 요약 및 시각화"]
+    OllamaSeqAll --> OllamaAssemble["생성된 3개 파트 단순 마크다운 병합"]
+    
+    CheckFeedback2 -- "피드백 있음 (보완)" --> OllamaFeedbackParse["결함 피드백 텍스트 키워드 분석<br/>(Overview / Crud / Logic 매칭)"]
+    OllamaFeedbackParse --> OllamaSeqSelective["연관된 파트만 프롬프트에 피드백을<br/>주입하여 선택적으로 재생성<br/>(결함이 없는 파트는 생성 건너뜀)"]
+    OllamaSeqSelective --> OllamaAssembleSelective["재생성된 파트와 기존 정상 파트를<br/>최종 마크다운으로 재조립"]
+    
+    OllamaAssemble --> ReturnSpec
+    OllamaAssembleSelective --> ReturnSpec
 ```
 
 #### 4.4.1. Level 1: 기계적 무결성 검증 (L1 Linter)
