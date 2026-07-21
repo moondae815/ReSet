@@ -315,8 +315,19 @@ graph TD
     CommercialMonoRe --> ReturnSpec
 
     %% 로컬 Ollama (분할 생성)
-    ProviderCheck -- "로컬 Ollama" --> OllamaDeconstruct["Stage 1: 논리 구조 파악<br/>(DeconstructSpLogic)<br/>- SP 분석 후 전체 뼈대를 JSON 추출"]
-    OllamaDeconstruct --> CheckFeedback2{"피드백/결함<br/>존재 여부?"}
+    ProviderCheck -- "로컬 Ollama" --> OllamaDeconstruct["Stage 1: 논리 구조 파악<br/>(DeconstructSpLogic)"]
+
+    subgraph Stage1["Stage 1: 구조 분석 및 Chunking"]
+        OllamaDeconstruct --> SqlParser{"SqlStaticParser를 통한<br/>대용량 SQL 구문 분할"}
+        SqlParser -- "분할 불가 (단일)" --> ExtractMono["SP 전체 뼈대를 단일 JSON 추출"]
+        SqlParser -- "Chunk 1..N" --> ExtractChunks["각 Chunk별로 JSON 논리 구조<br/>순차 추출"]
+        ExtractChunks --> Consolidator["LocalAiConsolidator로<br/>모든 Chunk JSON을 단일 객체로 병합"]
+        
+        ExtractMono --> Stage1End(("Stage 1 완료"))
+        Consolidator --> Stage1End
+    end
+
+    Stage1End --> CheckFeedback2{"피드백/결함<br/>존재 여부?"}
     
     CheckFeedback2 -- "최초 생성 (1회차)" --> OllamaSeqAll["Stage 2: 3개 파트 순차 분할 생성<br/>1/3. 개요 및 파라미터<br/>2/3. CRUD 상세 명세<br/>3/3. 로직 요약 및 시각화"]
     OllamaSeqAll --> OllamaAssemble["생성된 3개 파트 단순 마크다운 병합"]
