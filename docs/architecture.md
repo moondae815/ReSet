@@ -23,13 +23,15 @@
 
 ```mermaid
 flowchart TD
-    %% TUI / CLI Layer
-    Cli["ReSet.Cli (TUI)<br/>(분석기 실행 엔트리 및 TUI 제어)"]
-    ValCli["ReSet.Validator.Cli (TUI)<br/>(검증기 실행 엔트리 및 TUI 제어)"]
+    subgraph Presentation["Presentation Layer (TUI / CLI)"]
+        Cli["ReSet.Cli (TUI)<br/>(분석기 실행 엔트리 및 TUI 제어)"]
+        ValCli["ReSet.Validator.Cli (TUI)<br/>(검증기 실행 엔트리 및 TUI 제어)"]
+    end
 
-    %% Core Business & Validator Layer
-    Core["ReSet.Core<br/>(Metadata, AI Prompts,<br/>Orchestrator, Caching)"]
-    ValCore["ReSet.Validator.Core<br/>(Target runner, Seeding,<br/>Data Comparison)"]
+    subgraph Business["Business & Validator Layer (Core)"]
+        Core["ReSet.Core<br/>(Metadata, AI Prompts,<br/>Orchestrator, Caching)"]
+        ValCore["ReSet.Validator.Core<br/>(Target runner, Seeding,<br/>Data Comparison)"]
+    end
 
     %% Dependencies
     Cli -. "DI" .-> Core
