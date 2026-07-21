@@ -86,6 +86,72 @@ namespace ReSet.Core.Services
             if (compatibilityLevel >= 110) return new TSql110Parser(true);
             return new TSql100Parser(true);
         }
+
+        public List<ChunkAnalysisResult> ExtractStatementChunks(string ddlText, int compatibilityLevel = 160)
+        {
+            var chunks = new List<ChunkAnalysisResult>();
+            if (string.IsNullOrWhiteSpace(ddlText)) return chunks;
+
+            try
+            {
+                var parser = CreateParser(compatibilityLevel);
+                using (var reader = new StringReader(ddlText))
+                {
+                    var fragment = parser.Parse(reader, out var errors);
+                    if (errors == null || errors.Count == 0)
+                    {
+                        var chunkVisitor = new StatementChunkVisitor(ddlText);
+                        fragment.Accept(chunkVisitor);
+                        chunks.AddRange(chunkVisitor.Chunks);
+                    }
+                    else
+                    {
+                        Log.Warning("[SqlStaticParser] ExtractStatementChunks 구문 오류로 청크 분할 실패.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "[SqlStaticParser] ExtractStatementChunks 예외 발생");
+            }
+            return chunks;
+        }
+    }
+
+    internal class StatementChunkVisitor : TSqlFragmentVisitor
+    {
+        private readonly string _ddlText;
+        public List<ChunkAnalysisResult> Chunks { get; } = new();
+
+        public StatementChunkVisitor(string ddlText)
+        {
+            _ddlText = ddlText;
+        }
+
+        public override void Visit(UpdateStatement node) { AddChunk(node); }
+        public override void Visit(InsertStatement node) { AddChunk(node); }
+        public override void Visit(DeleteStatement node) { AddChunk(node); }
+        public override void Visit(MergeStatement node) { AddChunk(node); }
+        public override void Visit(SelectStatement node) { AddChunk(node); }
+
+        private void AddChunk(TSqlStatement node)
+        {
+            string text = _ddlText.Substring(node.StartOffset, node.FragmentLength);
+            
+            var innerVisitor = new SpStructureVisitor(null);
+            var aliasVisitor = new TableAliasVisitor();
+            node.Accept(aliasVisitor);
+            innerVisitor.InitializeAliasMap(aliasVisitor.QueryLocalAliasMaps, aliasVisitor.GlobalAliasToTableMap);
+            node.Accept(innerVisitor);
+
+            var chunk = new ChunkAnalysisResult
+            {
+                StatementText = text,
+                ReferencedTables = innerVisitor.ReferencedTables,
+                ReferencedFunctions = innerVisitor.ReferencedFunctions
+            };
+            Chunks.Add(chunk);
+        }
     }
 
     internal class SpStructureVisitor : TSqlFragmentVisitor

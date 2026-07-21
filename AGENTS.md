@@ -33,6 +33,7 @@
     *   [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하고, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`)를 기동하는 클래스.
     *   [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영 오케스트레이션을 담당합니다.
     *   [MetadataExporter.cs](./src/ReSet.Core/Services/MetadataExporter.cs): 원본 DB 메타데이터를 JSON, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL/MD 파일 등으로 보존하고, 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 및 통합 마이그레이션 지시서 번들(`{JobName}_MigrationInstructions.md`)을 생성하는 기능 구현체 (SP 및 통합 Job별 전용 하위 디렉토리에 격리 분류 저장).
+    *   [LocalAiConsolidator.cs](./src/ReSet.Core/Services/LocalAiConsolidator.cs): 로컬 모델 환경에서 분할 생성 시 여러 청크(Chunk)로 추출된 논리 JSON 결과들을 단일 `DeconstructedSpLogic` 객체로 병합하는 병합기.
     *   [CacheManager.cs](./src/ReSet.Core/Services/CacheManager.cs): SHA-256 해시 기반 로컬 증분 분석 캐싱 서비스 구현체 ([ICacheManager.cs](./src/ReSet.Core/Services/ICacheManager.cs) 포함).
     *   AI 응답 수집 및 로그 격리: AI 클라이언트 호출 결과에서 추출된 추론(Thinking) 텍스트는 수집 후 TUI 화면을 오염시키지 않도록 `Log.Verbose` 또는 파일 전용 로그에만 기록되게 하고, 기본 실행 수준에서는 실시간 노출을 차단하여 TUI 화면 깨짐을 원천적으로 차단하십시오.
     *   [ExternalCliCodingEngine.cs](./src/ReSet.Core/Services/ExternalCliCodingEngine.cs): CLI 기반 외부 에이전트 프로세스(Claude, agy, codex 등) 기동 및 콘솔 상속 연동 구현체.
@@ -207,7 +208,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] `dotnet build` 명령어를 통한 컴파일 경고/에러가 0개인지 확인했는가?
-- [ ] `dotnet test` 명령어를 실행하여 108개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 110개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
 - [ ] DB 메타데이터, AI 결과 원문 등을 Spectre.Console TUI에 출력할 때 모든 출력 부에 `Markup.Escape()` 조치를 적용했는가?
 - [ ] Stored Procedure 실행 및 외부 샌드박스 데이터 수집 시, DB 연결 실패 시 예외 격리(Soft Fail 및 DTO FAIL 상태 주입) 처리가 정상 적용되었는가?

@@ -405,5 +405,44 @@ END;
             Assert.Contains("ColB", result.ReferencedColumnsPerTable["dbo.TableB"]);
             Assert.DoesNotContain("ColA", result.ReferencedColumnsPerTable["dbo.TableB"]);
         }
+
+        [Fact]
+        public void ExtractStatementChunks_ShouldReturnSeparateChunksForMultipleStatements()
+        {
+            // Arrange
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestProc
+AS
+BEGIN
+    UPDATE dbo.TableA SET Col1 = 1 WHERE ID = 1;
+
+    IF 1 = 1
+    BEGIN
+        INSERT INTO dbo.TableB (ID) VALUES (2);
+    END
+    
+    SELECT * FROM dbo.TableC;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            // Act
+            var chunks = parser.ExtractStatementChunks(ddlText);
+
+            // Assert
+            Assert.Equal(3, chunks.Count);
+            
+            // Chunk 1: UPDATE
+            Assert.Contains("UPDATE dbo.TableA", chunks[0].StatementText);
+            Assert.Contains("dbo.TableA", chunks[0].ReferencedTables);
+
+            // Chunk 2: INSERT
+            Assert.Contains("INSERT INTO dbo.TableB", chunks[1].StatementText);
+            Assert.Contains("dbo.TableB", chunks[1].ReferencedTables);
+
+            // Chunk 3: SELECT
+            Assert.Contains("SELECT * FROM dbo.TableC", chunks[2].StatementText);
+            Assert.Contains("dbo.TableC", chunks[2].ReferencedTables);
+        }
     }
 }

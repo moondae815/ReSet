@@ -556,7 +556,17 @@ Based on the structured reference context above, reverse engineer the stored pro
             return aiResult;
         }
 
-        public async Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default, Action<(int current, int total, string message)>? progressCallback = null)
+        {
+            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            {
+                return await DeconstructSpLogicWithChunkingAsync(spDef, userInstructions, feedbackLog, effort, cancellationToken, progressCallback);
+            }
+
+            return await DeconstructSpLogicMonolithicAsync(spDef, userInstructions, feedbackLog, effort, cancellationToken);
+        }
+
+        private async Task<AiResult> DeconstructSpLogicMonolithicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog, string? effort, CancellationToken cancellationToken)
         {
             var (systemPrompt, userPrompt) = BuildDeconstructionPrompts(spDef, userInstructions, feedbackLog);
 
@@ -591,6 +601,210 @@ Based on the structured reference context above, reverse engineer the stored pro
             Log.Debug("[AI 응답 내용]:\n{Response}", aiResult.Content);
 
             return aiResult;
+        }
+
+        private async Task<AiResult> DeconstructSpLogicWithChunkingAsync(SpDefinition spDef, string userInstructions, string? feedbackLog, string? effort, CancellationToken cancellationToken, Action<(int current, int total, string message)>? progressCallback = null)
+        {
+            Log.Information("Ollama 로컬 LLM 전용 분할(AST Chunking) 파이프라인 진입 - SP: {Schema}.{Name}", spDef.Schema, spDef.Name);
+            
+            var parser = new SqlStaticParser();
+            var chunks = parser.ExtractStatementChunks(spDef.DdlText);
+
+            if (chunks.Count == 0)
+            {
+                Log.Warning("분할된 청크가 없습니다. Monolithic 파이프라인으로 폴백합니다.");
+                return await DeconstructSpLogicMonolithicAsync(spDef, userInstructions, feedbackLog, effort, cancellationToken);
+            }
+
+            var chunkResults = new List<DeconstructedSpLogic>();
+            var consolidatedThinking = new StringBuilder();
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var chunk = chunks[i];
+                progressCallback?.Invoke((i + 1, chunks.Count, $"[Sub-task] 청크 분석 중 ({i + 1}/{chunks.Count})"));
+
+                // RAG 필터링된 프롬프트 생성
+                var (sys, usr) = BuildChunkDeconstructionPrompts(spDef, chunk, userInstructions);
+                
+                float temp = 0.05f;
+                if (_enableOllamaThinking && !string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    sys = "<|think|>" + sys;
+                }
+                if (_enableOllamaThinking) sys += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 영역에 상세히 기술하십시오. 최종 JSON은 반드시 추론 태그 바깥에 작성해야 합니다.";
+
+                var aiResult = await _aiClient.ChatAsync(sys, usr, temp, effort, cancellationToken);
+                
+                if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.Content))
+                {
+                    consolidatedThinking.AppendLine(aiResult.ThinkingText);
+                    
+                    try
+                    {
+                        string cleanJson = aiResult.Content.Trim();
+                        // AI 응답에 서론/결론 등 불필요한 텍스트가 포함되어 있을 수 있으므로 JSON 블록 추출
+                        int firstBrace = cleanJson.IndexOf('{');
+                        int lastBrace = cleanJson.LastIndexOf('}');
+                        if (firstBrace >= 0 && lastBrace > firstBrace)
+                        {
+                            cleanJson = cleanJson.Substring(firstBrace, lastBrace - firstBrace + 1).Trim();
+                        }
+
+                        var options = new System.Text.Json.JsonSerializerOptions 
+                        { 
+                            PropertyNameCaseInsensitive = true,
+                            AllowTrailingCommas = true,
+                            ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip
+                        };
+                        var chunkLogic = System.Text.Json.JsonSerializer.Deserialize<DeconstructedSpLogic>(cleanJson, options);
+                        if (chunkLogic != null) chunkResults.Add(chunkLogic);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "개별 청크 JSON 역직렬화 실패. 원본 내용: {Content}", aiResult.Content);
+                    }
+                }
+            }
+
+            // TODO: Extract global Overview and Parameters from a dedicated call or the first chunk
+            var globalOverview = new SpOverviewInfo { SpName = spDef.Name, Purpose = "AST Chunking Consolidated Result" };
+            var globalParams = new List<SpParameterInfo>();
+
+            var consolidator = new LocalAiConsolidator();
+            var finalLogic = consolidator.Consolidate(chunkResults, globalOverview, globalParams);
+
+            var finalJson = System.Text.Json.JsonSerializer.Serialize(finalLogic, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+            return new AiResult 
+            { 
+                Content = finalJson,
+                ThinkingText = consolidatedThinking.ToString(),
+                SystemPrompt = "AST Chunking Pipeline Used",
+                UserPrompt = "Multiple sequential calls were made."
+            };
+        }
+
+        private (string SystemPrompt, string UserPrompt) BuildChunkDeconstructionPrompts(SpDefinition spDef, ChunkAnalysisResult chunk, string userInstructions)
+        {
+            // TODO: chunk.ReferencedTables를 활용하여 spDef.Dependencies에서 필요한 테이블 스키마만 선별(RAG)
+            var systemPrompt = @"You are a database architect. Analyze the provided single SQL statement and output a JSON object representing its logic.
+[Rules]
+1. Output ONLY valid JSON matching the schema for DeconstructedSpLogic.
+2. Focus only on the provided statement.
+
+[JSON Schema Structure]
+{
+  ""Overview"": {
+    ""SpName"": ""string"",
+    ""Purpose"": ""string (Korean)"",
+    ""BusinessRole"": ""string (Korean)"",
+    ""ResultStyle"": ""string (Korean, e.g. Rowset/Non-rowset return behavior)""
+  },
+  ""Parameters"": [
+    {
+      ""Name"": ""string (including @)"",
+      ""DataType"": ""string"",
+      ""Nullability"": ""string"",
+      ""Purpose"": ""string (Korean)"",
+      ""IsOutput"": false
+    }
+  ],
+  ""Crud"": {
+    ""SelectTables"": [
+      {
+        ""TableName"": ""string"",
+        ""ReferencedColumns"": [""string""],
+        ""JoinAndFilterConditions"": [""string""]
+      }
+    ],
+    ""InsertTables"": [
+      {
+        ""TargetTable"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
+        ""Mappings"": [
+          {
+            ""TargetColumn"": ""string"",
+            ""SourceExpression"": ""string"",
+            ""Description"": ""string (Korean)""
+          }
+        ]
+      }
+    ],
+    ""UpdateTables"": [
+      {
+        ""TargetTable"": ""string"",
+        ""Mappings"": [
+          {
+            ""TargetColumn"": ""string"",
+            ""SourceExpression"": ""string"",
+            ""Description"": ""string (Korean)""
+          }
+        ]
+      }
+    ],
+    ""DeleteTables"": [
+      {
+        ""TableName"": ""string"",
+        ""FilterConditions"": [""string""]
+      }
+    ],
+    ""Udfs"": [
+      {
+        ""UdfName"": ""string"",
+        ""CallingLocation"": ""string"",
+        ""Purpose"": ""string (Korean)"",
+        ""ComputationLogic"": ""string""
+      }
+    ],
+    ""HasTempTables"": false,
+    ""TempTablesUsage"": ""string"",
+    ""HasLinkedServers"": false,
+    ""LinkedServersUsage"": ""string""
+  },
+  ""Logic"": {
+    ""TransactionControl"": ""string (Korean)"",
+    ""Steps"": [
+      {
+        ""StepNumber"": 1,
+        ""StepName"": ""string"",
+        ""StepDescription"": ""string (Korean)""
+      }
+    ],
+    ""ExceptionVulnerabilities"": [
+      {
+        ""VulnerabilityType"": ""string"",
+        ""Details"": ""string (Korean)""
+      }
+    ],
+    ""IsolationImplications"": [
+      {
+        ""RiskType"": ""string"",
+        ""Details"": ""string (Korean)""
+      }
+    ],
+    ""ReturnCodes"": [""string""],
+    ""ParameterValidation"": [""string (Korean)""]
+  },
+  ""Visualization"": {
+    ""Nodes"": [
+      {
+        ""Id"": ""string (unique uppercase)"",
+        ""Label"": ""string (Korean, no @)""
+      }
+    ],
+    ""Links"": [
+      {
+        ""FromId"": ""string"",
+        ""ToId"": ""string"",
+        ""Condition"": ""string (Korean, no quotes)""
+      }
+    ]
+  }
+}";
+            
+            var userPrompt = $"[SQL Statement Chunk]\n```sql\n{chunk.StatementText}\n```\n\n[User Instructions]\n{userInstructions}";
+            return (systemPrompt, userPrompt);
         }
 
         private (string SystemPrompt, string UserPrompt) BuildDeconstructionPrompts(SpDefinition spDef, string userInstructions, string? feedbackLog = null)

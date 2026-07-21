@@ -48,7 +48,7 @@ flowchart TD
 | | [SessionManager](../src/ReSet.Cli/SessionManager.cs) | 로컬 세션 파일(`.session.json`)을 활용한 직전 로그인 정보 관리 및 서버·DB명 즉시 수정 기능 제공. |
 | | [CliArgs](../src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
-| | [SqlStaticParser](../src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. 접두사 없는 컬럼에 대한 로컬 스코프 정밀 분석 및 주입된 실제 스키마 메타데이터 기반 1:1 대조 리졸버 연동. |
+| | [SqlStaticParser](../src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. 접두사 없는 컬럼에 대한 로컬 스코프 정밀 분석 및 주입된 실제 스키마 메타데이터 기반 1:1 대조 리졸버 연동 및 대용량 SQL 논리 구문 분할(Chunking) 지원. |
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](../src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. |
@@ -56,6 +56,7 @@ flowchart TD
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | CancellationToken을 전파하는 L1/L2 자동화 자가 수정 루프(Stateful Checklist 최신 피드백 주입, Ollama 구역별 분할 재생성), Stage 1 (Deconstruct) 추론 내역 수집 및 `Thinking.md` 로깅 제어, L1 정화 마크다운 반영, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운(`*_RawContext.md`), 개별 DDL 파일 내보내기 및 외부 코딩 에이전트용 가이드라인 번들(`*_MigrationInstructions.md`) 생성 (SP별 및 Job별 전용 하위 폴더에 격리 분류 저장). |
+| | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
 | | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
 | | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
 | | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |

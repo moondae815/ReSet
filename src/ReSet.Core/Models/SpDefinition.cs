@@ -37,4 +37,11 @@ namespace ReSet.Core.Models
         public List<string> ReferencedFunctions { get; set; } = new();
         public Dictionary<string, List<string>> ReferencedColumnsPerTable { get; set; } = new(System.StringComparer.OrdinalIgnoreCase);
     }
+
+    public class ChunkAnalysisResult
+    {
+        public string StatementText { get; set; } = string.Empty;
+        public List<string> ReferencedTables { get; set; } = new();
+        public List<string> ReferencedFunctions { get; set; } = new();
+    }
 }

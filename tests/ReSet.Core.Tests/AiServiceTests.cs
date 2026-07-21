@@ -183,6 +183,44 @@ namespace ReSet.Core.Tests
             Assert.True(result.HasDefects);
             Assert.Equal("마크다운 오류", result.FeedbackComment);
         }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_WithOllamaMarkdownWrappedChunk_ShouldUnwrapAndConsolidate()
+        {
+            // Arrange
+            var spDef = new SpDefinition 
+            { 
+                Schema = "dbo", 
+                Name = "USP_Test", 
+                DdlText = "UPDATE dbo.TableA SET Col1 = 1;" 
+            };
+
+            var mockResponseContent = @"```json
+{
+  ""Logic"": {
+    ""Steps"": [
+      { ""StepNumber"": 1, ""StepDescription"": ""Update TableA"" }
+    ]
+  }
+}
+```";
+            var ollamaJson = $"{{\"message\":{{\"role\":\"assistant\",\"content\":\"{mockResponseContent.Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "")}\"}}}}";
+
+            var mockHandler = new MockHttpMessageHandler(ollamaJson);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new ReSet.Core.Services.Clients.OllamaClient(httpClient, "http://localhost:11434", "llama3");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            int progressCalledCount = 0;
+            var result = await service.DeconstructSpLogicAsync(spDef, "instructions", null, null, default, info => progressCalledCount++);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("Update TableA", result.Content); // 병합된 결과에 내용이 잘 들어갔는지 확인
+            Assert.Equal(1, progressCalledCount); // 청크 개수(1개)만큼 콜백 호출 확인
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler

@@ -608,87 +608,91 @@ namespace ReSet.Core.Services
                                 }
                             }
 
-                            if (shouldRunStage1)
+                            string combinedTitle = attempt == 1 ? "로컬 LLM 명세서 분석 및 빌드 (Stage 1 & 2)" : "로컬 LLM 명세서 수정 (Stage 1 & 2)";
+                            using (var progressScope = _userInteraction.CreateProgressScope(combinedTitle) ?? NullProgressScope.Instance)
                             {
-                                Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) {Action}", attempt == 1 ? "시작" : "수정 시작");
-                                AiResult deconstructResult;
-                                string stage1Title = attempt == 1 ? "명세 구조화 분석 (Stage 1)" : "명세 구조화 수정 (Stage 1)";
-                                using (var progressScope = _userInteraction.CreateProgressScope(stage1Title) ?? NullProgressScope.Instance)
+                                if (shouldRunStage1)
                                 {
+                                    AiResult deconstructResult;
+                                    Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) {Action}", attempt == 1 ? "시작" : "수정 시작");
+                                    
                                     string stage1Desc = attempt == 1 ? "1/4. 저장 프로시저 논리 구조 분석 중..." : "1/4. 저장 프로시저 논리 구조 수정 중...";
                                     progressScope.AddTask("deconstruct", stage1Desc);
-                                    deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "deconstruct");
-                                }
 
-                                accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Stage 1 (Deconstruct) Thinking");
-                                accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(deconstructResult.ThinkingText) ? "*(추론 없음)*" : deconstructResult.ThinkingText);
-                                accumulatedThinking.AppendLine();
-
-                                spDef.DeconstructedLogic = ParseDeconstructedLogic(deconstructResult.Content);
-
-                                // 중간 구조화 JSON 파일 백업 보존
-                                try
-                                {
-                                    var rawFolder = System.IO.Path.Combine(outputDirectory, "Procedures", selectedOption, "raw");
-                                    if (!System.IO.Directory.Exists(rawFolder))
+                                    Action<(int current, int total, string message)> progressCallback = info => 
                                     {
-                                        System.IO.Directory.CreateDirectory(rawFolder);
-                                    }
-                                    var deconstructedPath = System.IO.Path.Combine(rawFolder, "deconstructed_logic.json");
-                                    var options = new System.Text.Json.JsonSerializerOptions 
-                                    { 
-                                        WriteIndented = true, 
-                                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                        var newDesc = $"{stage1Desc} (청크 {info.current}/{info.total})";
+                                        progressScope.UpdateTask("deconstruct", (double)info.current / info.total * 100, newDesc);
                                     };
-                                    await System.IO.File.WriteAllTextAsync(deconstructedPath, System.Text.Json.JsonSerializer.Serialize(spDef.DeconstructedLogic, options), Encoding.UTF8);
-                                    Log.Information("[파이프라인] 1단계 결과 JSON 디스크 보존 완료: {Path}", deconstructedPath);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Log.Warning(ex, "[파이프라인] 1단계 결과 JSON 디스크 보존 중 예외 발생 (격리됨)");
-                                }
-                            }
 
-                            // 2단계: 각 H2 섹션 명세서 작성 (Stage 2 Markdown 포맷터)
-                            bool regenPart1 = true;
-                            bool regenPart2 = true;
-                            bool regenPart3 = true;
+                                    deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken, progressCallback), progressScope, "deconstruct");
 
-                            if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
-                            {
-                                var logUpper = feedbackLog.ToUpper();
-                                regenPart1 = false;
-                                regenPart2 = false;
-                                regenPart3 = false;
+                                    accumulatedThinking.AppendLine($"### [Actor] Attempt {attempt} Stage 1 (Deconstruct) Thinking");
+                                    accumulatedThinking.AppendLine(string.IsNullOrWhiteSpace(deconstructResult.ThinkingText) ? "*(추론 없음)*" : deconstructResult.ThinkingText);
+                                    accumulatedThinking.AppendLine();
 
-                                if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
-                                {
-                                    regenPart1 = true;
-                                }
-                                if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
-                                {
-                                    regenPart2 = true;
-                                }
-                                if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
-                                {
-                                    regenPart3 = true;
+                                    spDef.DeconstructedLogic = ParseDeconstructedLogic(deconstructResult.Content);
+
+                                    // 중간 구조화 JSON 파일 백업 보존
+                                    try
+                                    {
+                                        var rawFolder = System.IO.Path.Combine(outputDirectory, "Procedures", selectedOption, "raw");
+                                        if (!System.IO.Directory.Exists(rawFolder))
+                                        {
+                                            System.IO.Directory.CreateDirectory(rawFolder);
+                                        }
+                                        var deconstructedPath = System.IO.Path.Combine(rawFolder, "deconstructed_logic.json");
+                                        var options = new System.Text.Json.JsonSerializerOptions 
+                                        { 
+                                            WriteIndented = true, 
+                                            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+                                        };
+                                        await System.IO.File.WriteAllTextAsync(deconstructedPath, System.Text.Json.JsonSerializer.Serialize(spDef.DeconstructedLogic, options), Encoding.UTF8);
+                                        Log.Information("[파이프라인] 1단계 결과 JSON 디스크 보존 완료: {Path}", deconstructedPath);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Log.Warning(ex, "[파이프라인] 1단계 결과 JSON 디스크 보존 중 예외 발생 (격리됨)");
+                                    }
                                 }
 
-                                // 이전 결과 누락 시 전체 재생성
-                                if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
+                                // 2단계: 각 H2 섹션 명세서 작성 (Stage 2 Markdown 포맷터)
+                                bool regenPart1 = true;
+                                bool regenPart2 = true;
+                                bool regenPart3 = true;
+
+                                if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
                                 {
-                                    regenPart1 = regenPart2 = regenPart3 = true;
+                                    var logUpper = feedbackLog.ToUpper();
+                                    regenPart1 = false;
+                                    regenPart2 = false;
+                                    regenPart3 = false;
+
+                                    if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
+                                    {
+                                        regenPart1 = true;
+                                    }
+                                    if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
+                                    {
+                                        regenPart2 = true;
+                                    }
+                                    if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
+                                    {
+                                        regenPart3 = true;
+                                    }
+
+                                    // 이전 결과 누락 시 전체 재생성
+                                    if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
+
+                                    if (!regenPart1 && !regenPart2 && !regenPart3)
+                                    {
+                                        regenPart1 = regenPart2 = regenPart3 = true;
+                                    }
                                 }
 
-                                if (!regenPart1 && !regenPart2 && !regenPart3)
-                                {
-                                    regenPart1 = regenPart2 = regenPart3 = true;
-                                }
-                            }
-
-                            string stage2Title = attempt == 1 ? "구역별 분할 명세서 생성 (Stage 2)" : "구역별 분할 명세서 수정 (Stage 2)";
-                            using (var progressScope = _userInteraction.CreateProgressScope(stage2Title) ?? NullProgressScope.Instance)
-                            {
                                 string actWord = attempt == 1 ? "빌드" : "수정";
                                 if (regenPart1)
                                 {
@@ -1516,18 +1520,13 @@ namespace ReSet.Core.Services
 
             string json = content.Trim();
 
-            // 만약 AI가 ```json ... ``` 으로 묶었다면 언래핑합니다.
-            if (json.StartsWith("```"))
+            // AI 응답에 서론/결론 등 불필요한 텍스트가 포함되어 있을 수 있으므로 JSON 블록 추출
+            int firstBrace = json.IndexOf('{');
+            int lastBrace = json.LastIndexOf('}');
+
+            if (firstBrace >= 0 && lastBrace > firstBrace)
             {
-                int firstLineBreak = json.IndexOf('\n');
-                if (firstLineBreak >= 0)
-                {
-                    json = json.Substring(firstLineBreak + 1);
-                }
-                if (json.EndsWith("```"))
-                {
-                    json = json.Substring(0, json.Length - 3).Trim();
-                }
+                json = json.Substring(firstBrace, lastBrace - firstBrace + 1).Trim();
             }
 
             try
