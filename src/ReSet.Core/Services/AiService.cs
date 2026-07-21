@@ -607,6 +607,10 @@ Based on the structured reference context above, reverse engineer the stored pro
 5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
 7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
+8. If multiple tables are joined in a single SELECT query, you MUST create a separate JSON object in the `SelectTables` array for EACH individual physical table. Do NOT group them together like ""TableA, TableB"".
+9. In `Logic.Steps`, explicitly capture any critical branching conditions involving `@@ROWCOUNT` or `EXISTS` checks (e.g., updating existing records vs inserting new ones).
+10. In `Visualization.Nodes`, do NOT use ""END"" as a Node Id. Use ""PROC_END"" instead to avoid Mermaid keyword conflicts.
+11. Ensure the logical flow for prophylactic rollbacks (e.g., `IF @@TRANCOUNT <> 0 ROLLBACK` at the start) correctly routes to the next step (e.g., `BEGIN TRAN`), rather than pointing directly to the end of the procedure.
 
 [JSON Schema Structure]
 {
@@ -874,6 +878,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. Analyze the exact computation (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) and document it fully.",
                     "   - For INSERT/UPDATE operations, you must list EVERY single column mapped in the INSERT/UPDATE statement (e.g. CLVT, PGVT, CLTOTAL, etc.). Omission of any target column is considered a critical failure.",
                     "   - You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.",
+                    "   - You must separate SELECT tables into individual rows. If the source JSON groups multiple tables in one string, you MUST manually separate them into distinct rows in the Markdown table, mapping only the specific columns referenced for each respective table.",
                     "   - Detail the column names referenced and join/filter keys without abbreviation.",
                     "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
                     "3. For target tables of INSERT/UPDATE operations, map all target columns to their source values (variables, constants, function results, etc.) in a 1:1 mapping table. Do not abbreviate with 'etc.' or '...'.",
@@ -961,8 +966,9 @@ Based on the structured reference context above, reverse engineer the stored pro
                 sbRules.Add($"{rIdx++}. Visualized business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
                 sbRules.Add("   - Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
-                sbRules.Add("   - Node IDs must be unique uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
+                sbRules.Add("   - Node IDs must be unique uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG). Do not use Mermaid reserved keywords (graph, flowchart, subgraph, end, END) as node IDs. You MUST use 'PROC_END' instead of 'END'.");
                 sbRules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another.");
+                sbRules.Add("   - Ensure prophylactic rollbacks (e.g., `IF @@TRANCOUNT <> 0 ROLLBACK` before the main logic) proceed to the main `BEGIN TRAN` node, not to the end of the procedure.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.");

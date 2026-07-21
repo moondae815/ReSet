@@ -615,7 +615,7 @@ namespace ReSet.Core.Services
                                 string stage1Title = attempt == 1 ? "명세 구조화 분석 (Stage 1)" : "명세 구조화 수정 (Stage 1)";
                                 using (var progressScope = _userInteraction.CreateProgressScope(stage1Title) ?? NullProgressScope.Instance)
                                 {
-                                    string stage1Desc = attempt == 1 ? "저장 프로시저 논리 구조 분석 중..." : "저장 프로시저 논리 구조 수정 중...";
+                                    string stage1Desc = attempt == 1 ? "1/4. 저장 프로시저 논리 구조 분석 중..." : "1/4. 저장 프로시저 논리 구조 수정 중...";
                                     progressScope.AddTask("deconstruct", stage1Desc);
                                     deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "deconstruct");
                                 }
@@ -692,17 +692,17 @@ namespace ReSet.Core.Services
                                 string actWord = attempt == 1 ? "빌드" : "수정";
                                 if (regenPart1)
                                 {
-                                    progressScope.AddTask("part1", $"1/3. 개요 및 파라미터 {actWord} 중...");
+                                    progressScope.AddTask("part1", $"2/4. 개요 및 파라미터 {actWord} 중...");
                                     ollamaPart1 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part1");
                                 }
                                 if (regenPart2)
                                 {
-                                    progressScope.AddTask("part2", $"2/3. CRUD 상세 명세 {actWord} 중...");
+                                    progressScope.AddTask("part2", $"3/4. CRUD 상세 명세 {actWord} 중...");
                                     ollamaPart2 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part2");
                                 }
                                 if (regenPart3)
                                 {
-                                    progressScope.AddTask("part3", $"3/3. 로직 요약 및 시각화 {actWord} 중...");
+                                    progressScope.AddTask("part3", $"4/4. 로직 요약 및 시각화 {actWord} 중...");
                                     ollamaPart3 = await WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, feedbackLog, _actorEffort, cancellationToken), progressScope, "part3");
                                 }
                             }
@@ -985,19 +985,19 @@ namespace ReSet.Core.Services
                                 {
                                     if (regenPart1)
                                     {
-                                        progressScope.AddTask("part1", "1/3. 개요 및 파라미터 피드백 반영 중...");
+                                        progressScope.AddTask("part1", "2/4. 개요 및 파라미터 피드백 반영 중...");
                                         tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part1"));
                                         taskOrder.Add("part1");
                                     }
                                     if (regenPart2)
                                     {
-                                        progressScope.AddTask("part2", "2/3. CRUD 상세 피드백 반영 중...");
+                                        progressScope.AddTask("part2", "3/4. CRUD 상세 피드백 반영 중...");
                                         tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part2"));
                                         taskOrder.Add("part2");
                                     }
                                     if (regenPart3)
                                     {
-                                        progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 피드백 반영 중...");
+                                        progressScope.AddTask("part3", "4/4. 로직 요약 및 시각화 피드백 반영 중...");
                                         tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, humanFeedbackLog, _actorEffort, cancellationToken), progressScope, "part3"));
                                         taskOrder.Add("part3");
                                     }
@@ -1105,19 +1105,19 @@ namespace ReSet.Core.Services
                                     {
                                         if (regenPart1)
                                         {
-                                            progressScope.AddTask("part1", "1/3. 개요 및 파라미터 L1 수정 중...");
+                                            progressScope.AddTask("part1", "2/4. 개요 및 파라미터 L1 수정 중...");
                                             tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part1"));
                                             taskOrder.Add("part1");
                                         }
                                         if (regenPart2)
                                         {
-                                            progressScope.AddTask("part2", "2/3. CRUD 상세 L1 수정 중...");
+                                            progressScope.AddTask("part2", "3/4. CRUD 상세 L1 수정 중...");
                                             tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part2"));
                                             taskOrder.Add("part2");
                                         }
                                         if (regenPart3)
                                         {
-                                            progressScope.AddTask("part3", "3/3. 로직 요약 및 시각화 L1 수정 중...");
+                                            progressScope.AddTask("part3", "4/4. 로직 요약 및 시각화 L1 수정 중...");
                                             tasksList.Add(WrapWithProgress(_aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", instructions, l1Re.SuggestedPromptFix, _actorEffort, cancellationToken), progressScope, "part3"));
                                             taskOrder.Add("part3");
                                         }

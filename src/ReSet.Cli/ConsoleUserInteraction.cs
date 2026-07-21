@@ -63,6 +63,7 @@ namespace ReSet.Cli
             {
                 AnsiConsole.MarkupLine($"  [red]=> {Markup.Escape(err)}[/]");
             }
+            AnsiConsole.WriteLine();
 
             Serilog.Log.Warning($"[{selectedOption}] L1 기계 검증 오류 발견 (시도 {attempt}/{maxStr}):");
             foreach (var err in errors)
@@ -83,6 +84,7 @@ namespace ReSet.Cli
                     AnsiConsole.MarkupLine($"  [red]=> {Markup.Escape(line)}[/]");
                 }
             }
+            AnsiConsole.WriteLine();
 
             Serilog.Log.Warning($"[{selectedOption}] L2 AI 리뷰 결함 발견 (시도 {attempt}/{maxStr}): {feedbackComment}");
         }
