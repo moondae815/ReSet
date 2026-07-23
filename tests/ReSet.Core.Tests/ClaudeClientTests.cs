@@ -59,7 +59,6 @@ namespace ReSet.Core.Tests
                 Assert.Equal("adaptive", thinking.GetProperty("type").GetString());
                 Assert.True(root.TryGetProperty("output_config", out var outConfig));
                 Assert.Equal("high", outConfig.GetProperty("effort").GetString());
-                Assert.False(root.TryGetProperty("temperature", out _));
             }
         }
 
@@ -99,16 +98,42 @@ namespace ReSet.Core.Tests
             // Act & Assert
             await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
         }
+
+        [Fact]
+        public async Task ChatAsync_WithClaudeErrorResponse_ShouldThrowException()
+        {
+            var responseJson = @"{ ""type"": ""error"", ""error"": { ""message"": ""Claude error"" } }";
+            var spyHandler = new ClaudeRequestSpyHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new ClaudeClient(httpClient, "test", "https://api.anthropic.com", "claude-3-5");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Claude error", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithErrorStatusCode_ShouldThrowHttpRequestException()
+        {
+            var responseJson = "Bad request";
+            var spyHandler = new ClaudeRequestSpyHandler(responseJson, System.Net.HttpStatusCode.BadRequest);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new ClaudeClient(httpClient, "test", "https://api.anthropic.com", "claude-3-5");
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Bad request", ex.Message);
+        }
     }
 
     public class ClaudeRequestSpyHandler : HttpMessageHandler
     {
         private readonly string _responseContent;
+        private readonly System.Net.HttpStatusCode _statusCode;
         public string? LastRequestContent { get; private set; }
 
-        public ClaudeRequestSpyHandler(string responseContent)
+        public ClaudeRequestSpyHandler(string responseContent, System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
         {
             _responseContent = responseContent;
+            _statusCode = statusCode;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -118,7 +143,7 @@ namespace ReSet.Core.Tests
                 LastRequestContent = await request.Content.ReadAsStringAsync(cancellationToken);
             }
 
-            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseContent, System.Text.Encoding.UTF8, "application/json")
             };

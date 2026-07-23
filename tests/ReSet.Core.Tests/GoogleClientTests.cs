@@ -111,16 +111,54 @@ namespace ReSet.Core.Tests
                 Assert.False(genConfig.TryGetProperty("thinkingConfig", out _));
             }
         }
+
+        [Fact]
+        public async Task ChatAsync_WithMissingCandidates_ShouldThrowInvalidOperationException()
+        {
+            var responseJson = @"{ ""some"": ""data"" }";
+            var spyHandler = new RequestSpyHttpMessageHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new GoogleClient(httpClient, "test", "https://generativelanguage.googleapis.com", "gemini-1.5-flash");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("생성된 후보군", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithPromptFeedbackBlock_ShouldThrowInvalidOperationException()
+        {
+            var responseJson = @"{ ""promptFeedback"": { ""blockReason"": ""SAFETY"" } }";
+            var spyHandler = new RequestSpyHttpMessageHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new GoogleClient(httpClient, "test", "https://generativelanguage.googleapis.com", "gemini-1.5-flash");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("안전 필터", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithErrorStatusCode_ShouldThrowHttpRequestException()
+        {
+            var responseJson = "Bad request";
+            var spyHandler = new RequestSpyHttpMessageHandler(responseJson, System.Net.HttpStatusCode.BadRequest);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new GoogleClient(httpClient, "test", "https://generativelanguage.googleapis.com", "gemini-1.5-flash");
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Bad request", ex.Message);
+        }
     }
 
     public class RequestSpyHttpMessageHandler : HttpMessageHandler
     {
         private readonly string _responseContent;
+        private readonly System.Net.HttpStatusCode _statusCode;
         public string? LastRequestContent { get; private set; }
 
-        public RequestSpyHttpMessageHandler(string responseContent)
+        public RequestSpyHttpMessageHandler(string responseContent, System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
         {
             _responseContent = responseContent;
+            _statusCode = statusCode;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -130,7 +168,7 @@ namespace ReSet.Core.Tests
                 LastRequestContent = await request.Content.ReadAsStringAsync(cancellationToken);
             }
 
-            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseContent, System.Text.Encoding.UTF8, "application/json")
             };

@@ -99,6 +99,29 @@ END;
         }
 
         [Fact]
+        public void Parse_WithLowCompatibilityLevel_UsesTSql100Parser()
+        {
+            var ddlText = "CREATE PROCEDURE dbo.USP_Test AS SELECT 1";
+            var parser = new SqlStaticParser();
+            
+            // Should fallback to TSql100Parser at line 89
+            var result = parser.Analyze(ddlText, compatibilityLevel: 100);
+            
+            Assert.True(result.IsParsedSuccessfully);
+        }
+
+        [Fact]
+        public void ExtractStatementChunks_SyntaxError_LogsWarningAndReturnsEmpty()
+        {
+            var ddlText = "CREATE PROCEDURE dbo.USP_Test AS SELECT FROM WHERE"; // Invalid SQL
+            var parser = new SqlStaticParser();
+            
+            var result = parser.ExtractStatementChunks(ddlText);
+            
+            Assert.Empty(result);
+        }
+
+        [Fact]
         public void Analyze_WithInvalidSqlSyntax_ShouldSoftFailAndReturnErrors()
         {
             // Arrange
@@ -404,6 +427,39 @@ END;
             Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TableB"));
             Assert.Contains("ColB", result.ReferencedColumnsPerTable["dbo.TableB"]);
             Assert.DoesNotContain("ColA", result.ReferencedColumnsPerTable["dbo.TableB"]);
+        }
+
+        [Fact]
+        public void Analyze_WithParametersAndVariables_ShouldExtractSymbolsCorrectly()
+        {
+            // Arrange
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestSymbols
+    @Param1 INT,
+    @Param2 VARCHAR(50) OUTPUT
+AS
+BEGIN
+    DECLARE @Var1 DATETIME;
+    DECLARE @Var2 DECIMAL(18,2) = 10.5;
+    
+    SET @Var1 = GETDATE();
+END;
+";
+            var parser = new SqlStaticParser();
+
+            // Act
+            var result = parser.Analyze(ddlText);
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            
+            // Check Parameters
+            Assert.Contains("@Param1 int", result.ProcedureParameters, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("@Param2 varchar(50)", result.ProcedureParameters, StringComparer.OrdinalIgnoreCase);
+
+            // Check Variables
+            Assert.Contains("@Var1 DATETIME", result.DeclaredVariables, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("@Var2 DECIMAL(18,2)", result.DeclaredVariables, StringComparer.OrdinalIgnoreCase);
         }
 
         [Fact]

@@ -104,17 +104,55 @@ namespace ReSet.Core.Tests
             // Act & Assert
             await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
         }
+
+        [Fact]
+        public async Task ChatAsync_WithGpt5ErrorResponse_ShouldThrowException()
+        {
+            var responseJson = @"{ ""error"": { ""message"": ""Gpt5 error"" } }";
+            var spyHandler = new OpenAiRequestSpyHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", "gpt-5");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Gpt5 error", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithRegularModelErrorResponse_ShouldThrowException()
+        {
+            var responseJson = @"{ ""error"": { ""message"": ""Regular error"" } }";
+            var spyHandler = new OpenAiRequestSpyHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", "gpt-4o");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Regular error", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithErrorStatusCode_ShouldThrowHttpRequestException()
+        {
+            var responseJson = "Bad request";
+            var spyHandler = new OpenAiRequestSpyHandler(responseJson, System.Net.HttpStatusCode.BadRequest);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", "gpt-4o");
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Bad request", ex.Message);
+        }
     }
 
     public class OpenAiRequestSpyHandler : HttpMessageHandler
     {
         private readonly string _responseContent;
+        private readonly System.Net.HttpStatusCode _statusCode;
         public string? LastRequestContent { get; private set; }
         public string? LastRequestUri { get; private set; }
 
-        public OpenAiRequestSpyHandler(string responseContent)
+        public OpenAiRequestSpyHandler(string responseContent, System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
         {
             _responseContent = responseContent;
+            _statusCode = statusCode;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -125,7 +163,7 @@ namespace ReSet.Core.Tests
                 LastRequestContent = await request.Content.ReadAsStringAsync(cancellationToken);
             }
 
-            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseContent, System.Text.Encoding.UTF8, "application/json")
             };

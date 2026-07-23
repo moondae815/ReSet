@@ -62,6 +62,8 @@ namespace ReSet.Core.Services
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
                         result.ReferencedFunctions = visitor.ReferencedFunctions;
+                        result.ProcedureParameters = visitor.ProcedureParameters;
+                        result.DeclaredVariables = visitor.DeclaredVariables;
                         result.ReferencedColumnsPerTable = visitor.ReferencedColumnsPerTable;
                     }
                 }
@@ -168,6 +170,8 @@ namespace ReSet.Core.Services
 
         public List<string> LinkedServerReferences { get; } = new();
         public List<string> ReferencedFunctions { get; } = new();
+        public List<string> ProcedureParameters { get; } = new();
+        public List<string> DeclaredVariables { get; } = new();
         public Dictionary<string, List<string>> ReferencedColumnsPerTable { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<string> _foundTables = new(StringComparer.OrdinalIgnoreCase);
@@ -648,6 +652,26 @@ namespace ReSet.Core.Services
             }
             var cond = sb.ToString().Trim();
             return string.IsNullOrWhiteSpace(cond) ? "Predicate Details" : cond;
+        }
+
+        public override void ExplicitVisit(ProcedureParameter node)
+        {
+            if (node.VariableName != null)
+            {
+                var typeStr = node.DataType != null ? GetFragmentText(node.DataType) : "Unknown";
+                ProcedureParameters.Add($"{node.VariableName.Value} {typeStr}");
+            }
+            base.ExplicitVisit(node);
+        }
+
+        public override void ExplicitVisit(DeclareVariableElement node)
+        {
+            if (node.VariableName != null)
+            {
+                var typeStr = node.DataType != null ? GetFragmentText(node.DataType) : "Unknown";
+                DeclaredVariables.Add($"{node.VariableName.Value} {typeStr}");
+            }
+            base.ExplicitVisit(node);
         }
     }
 

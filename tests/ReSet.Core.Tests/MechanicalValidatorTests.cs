@@ -10,6 +10,22 @@ namespace ReSet.Core.Tests
         private readonly MechanicalValidator _validator = new();
 
         [Fact]
+        public void Validate_WithEmptyMarkdown_ShouldReturnFalse()
+        {
+            var result = _validator.Validate("");
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("비어있습니다"));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WithEmptyMarkdown_ShouldReturnFalse()
+        {
+            var result = _validator.ValidateConsolidated("");
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("비어있습니다"));
+        }
+
+        [Fact]
         public void Validate_WithValidMarkdown_ShouldReturnTrue()
         {
             var validMarkdown = @"
@@ -37,6 +53,39 @@ graph TD
 ```
 ";
             var result = _validator.Validate(validMarkdown);
+
+            Assert.True(result.IsValid, "Validation failed with errors: " + string.Join(", ", result.Errors));
+            Assert.Empty(result.Errors);
+        }
+        [Fact]
+        public void Validate_WithMermaidCli_FallsBackWhenMmdcNotFound()
+        {
+            var validatorWithCli = new MechanicalValidator(useMermaidCli: true);
+            var validMarkdown = @"
+# SP 명세서
+## 개요
+이 프로시저는 사용자를 조회합니다.
+
+## 파라미터 목록
+| 이름 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| @UserId | INT | 사용자 ID |
+
+## CRUD 분석
+| 테이블 | CRUD |
+| :--- | :---: |
+| dbo.Users | R |
+
+## 로직 흐름 요약
+1. 사용자를 조회합니다.
+
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A[""시작""] --> B[""조회""]
+```
+";
+            var result = validatorWithCli.Validate(validMarkdown);
 
             Assert.True(result.IsValid, "Validation failed with errors: " + string.Join(", ", result.Errors));
             Assert.Empty(result.Errors);
@@ -142,6 +191,102 @@ SELECT COUNT(*) FROM dbo.Users;
             var result = _validator.ValidateConsolidated(null!);
             Assert.False(result.IsValid);
             Assert.Contains("비어있습니다", result.Errors[0]);
+        }
+
+        [Fact]
+        public void Validate_WithForbiddenShortcuts_ShouldReturnFalse()
+        {
+            var invalidMarkdown = @"
+# SP 명세서
+## 개요
+이하 생략
+## 파라미터 목록
+(생략)
+## CRUD 분석
+위와 동일
+## 로직 흐름 요약
+기타 등등
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A --> B
+```
+";
+            var result = _validator.Validate(invalidMarkdown);
+
+            Assert.False(result.IsValid);
+            Assert.NotEmpty(result.Errors);
+            Assert.Contains("허용되지 않는 축약어/생략 기호", string.Join(" ", result.Errors));
+        }
+
+        [Fact]
+        public void ValidationResult_SuggestedPromptFix_WithMermaidQuoteMissing_ShouldIncludeGuide()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                DetailedErrors = new List<DetailedError>
+                {
+                    new DetailedError { Type = ErrorType.MermaidQuoteMissing, Message = "Missing quotes", RawContext = "A[Invalid (Text)]" }
+                }
+            };
+
+            var promptFix = result.SuggestedPromptFix;
+            Assert.Contains("다이어그램의 노드 라벨 텍스트 안에 괄호", promptFix);
+            Assert.Contains("A[Invalid (Text)]", promptFix);
+        }
+
+        [Fact]
+        public void ValidationResult_SuggestedPromptFix_WithMermaidCliError_ShouldIncludeGuide()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                DetailedErrors = new List<DetailedError>
+                {
+                    new DetailedError { Type = ErrorType.MermaidCliError, Message = "Syntax error at line 3" }
+                }
+            };
+
+            var promptFix = result.SuggestedPromptFix;
+            Assert.Contains("Mermaid 렌더러 검증 결과, 구문 오류로 인해 다이어그램 컴파일에 실패했습니다", promptFix);
+            Assert.Contains("Syntax error at line 3", promptFix);
+        }
+
+        [Fact]
+        public void ValidationResult_SuggestedPromptFix_WithGeneralError_ShouldIncludeGuide()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                DetailedErrors = new List<DetailedError>
+                {
+                    new DetailedError { Type = ErrorType.General, Message = "Some general error" }
+                }
+            };
+
+            var promptFix = result.SuggestedPromptFix;
+            Assert.Contains("기타 정적 규격 검사 에러", promptFix);
+            Assert.Contains("Some general error", promptFix);
+        }
+
+        [Fact]
+        public void PostProcessMarkdown_ShouldCleanseMermaidCode()
+        {
+            var dirtyMarkdown = @"
+# SP 명세서
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A_1[Invalid (Text)] - -> B_2{Condition : Check}
+    C -- ""Label"" --> D
+```
+";
+            var result = _validator.PostProcessMarkdown(dirtyMarkdown);
+            
+            Assert.Contains("A1[\"Invalid (Text)\"]", result);
+            Assert.Contains("B2{\"Condition : Check\"}", result);
+            Assert.Contains("-->|Label|", result);
         }
     }
 }

@@ -105,6 +105,30 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Success_ReturnsContent()
+        {
+            // Arrange
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1"),
+                ("dbo.USP_Test2", "## 개요\n내용2")
+            };
+            
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.GenerateConsolidatedBatchPlanAsync(specs, "C#", "Test_Job");
+
+            // Assert
+            Assert.Equal("## 통합 배치 명세", result.Content);
+        }
+
+        [Fact]
         public async Task ReviewSpecificationAsync_Success_ReturnsReviewResult()
         {
             // Arrange
@@ -220,6 +244,325 @@ namespace ReSet.Core.Tests
             Assert.NotNull(result);
             Assert.Contains("Update TableA", result.Content); // 병합된 결과에 내용이 잘 들어갔는지 확인
             Assert.Equal(1, progressCalledCount); // 청크 개수(1개)만큼 콜백 호출 확인
+        }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_WithStaticAnalysis_ShouldMapGlobalParams()
+        {
+            // Arrange
+            var spDef = new SpDefinition 
+            { 
+                Schema = "dbo", 
+                Name = "USP_TestParams", 
+                DdlText = "CREATE PROCEDURE dbo.USP_TestParams AS BEGIN SELECT 1; END;",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            // SqlStaticParser에 의해 추출되었다고 가정
+            spDef.StaticAnalysis.ProcedureParameters.Add("@Param1 INT");
+            spDef.StaticAnalysis.ProcedureParameters.Add("@Param2 VARCHAR(50) OUTPUT");
+
+            var mockResponseContent = @"```json
+{
+  ""Logic"": { ""Steps"": [] }
+}
+```";
+            var mockJson = $"{{\"message\":{{\"role\":\"assistant\",\"content\":\"{mockResponseContent.Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "")}\"}}}}";
+
+            var mockHandler = new MockHttpMessageHandler(mockJson);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new ReSet.Core.Services.Clients.OllamaClient(httpClient, "http://localhost", "model");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.DeconstructSpLogicAsync(spDef, "instructions");
+
+            // Assert
+            Assert.NotNull(result);
+            Console.WriteLine("DEBUG_CONTENT: " + result.Content);
+            Assert.Contains("@Param1", result.Content);
+            Assert.Contains("INT", result.Content);
+            Assert.Contains("@Param2", result.Content);
+            Assert.Contains("VARCHAR(50)", result.Content);
+            Assert.Contains("OUTPUT", result.Content, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("USP_TestParams", result.Content);
+        }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_WithOllama_CallsChunking_ReturnsContent()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Large", DdlText = "SELECT 1;\nSELECT 2;\nSELECT 3;" };
+            
+            var mockResponse = "{\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"Logic\\\":{}}\"}}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new ReSet.Core.Services.Clients.OllamaClient(httpClient, "http://localhost", "llama3");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.DeconstructSpLogicAsync(spDef, "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("\"Overview\":", result.Content);
+        }
+        [Fact]
+        public async Task DeconstructSpLogicAsync_WithOllama_FeedbackLog_UsesRegenerationAndCache()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_LargeFeedback", DdlText = "SELECT 1;\nUPDATE dbo.TableA SET Col1 = 1;\nSELECT 3;" };
+            
+            var mockResponse = "{\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"Logic\\\":{}}\"}}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new ReSet.Core.Services.Clients.OllamaClient(httpClient, "http://localhost", "llama3");
+            IAiService service = new AiService(client, 0.2f);
+
+            var chunkCacheDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "output", "Procedures", "dbo.USP_LargeFeedback", "raw", "chunks");
+            if (!System.IO.Directory.Exists(chunkCacheDir))
+                System.IO.Directory.CreateDirectory(chunkCacheDir);
+            
+            // Create a fake cache for chunk 0 and 2
+            System.IO.File.WriteAllText(System.IO.Path.Combine(chunkCacheDir, "chunk_0.json"), "{\"Logic\":{\"Steps\":[]}}");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(chunkCacheDir, "chunk_2.json"), "{\"Logic\":{\"Steps\":[]}}");
+
+            // Act
+            // Feedback contains UPDATE keyword, which should match chunk 1 (UPDATE dbo.TableA). 
+            // So chunk 0 and 2 should be loaded from cache.
+            var result = await service.DeconstructSpLogicAsync(spDef, "지침", "Fix the UPDATE statement", null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("\"Overview\":", result.Content);
+        }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_Monolithic_Success_ReturnsDeconstructedLogic()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "SELECT 1;" };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"Overview\\\": {}}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.DeconstructSpLogicAsync(spDef, "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("\"Overview\":", result.Content);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_Success_ReturnsSectionMarkdown()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "SELECT 1;" };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\\n테스트\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var deconstructedLogic = "{\"Overview\": {\"Description\": \"Test\"}}";
+
+            // Act
+            var result = await service.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("## 개요", result.Content);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_Success()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "SELECT 1;" };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var client = new OpenAiClient(new HttpClient(mockHandler), "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+            var deconstructedLogic = "{\"Overview\": {}}";
+
+            // Act
+            var result = await service.GenerateSpecSectionAsync(spDef, "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_Success()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "SELECT 1;" };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 로직 흐름 요약\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var client = new OpenAiClient(new HttpClient(mockHandler), "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+            var deconstructedLogic = "{\"Overview\": {}}";
+
+            // Act
+            var result = await service.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithFeedback_IncludesFeedbackInPrompt()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "SELECT 1;" };
+            
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 생성된 명세서\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.GenerateSpecificationAsync(spDef, "지침", "피드백 수정내용");
+
+            // Assert
+            Assert.Equal("## 생성된 명세서", result.Content);
+            Assert.Contains("피드백 수정내용", result.SystemPrompt + result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_Success_ReturnsReviewResult()
+        {
+            // Arrange
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\": false, \\\"ScoreAccuracy\\\": 10}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.ReviewConsolidatedPlanAsync(specs, "## 통합 계획서", "Test_Job");
+
+            // Assert
+            Assert.False(result.HasDefects);
+            Assert.Equal(10, result.ScoreAccuracy);
+        }
+
+        [Fact]
+        public async Task GenerateSettlementPolicyRulebookAsync_Success_ReturnsContent()
+        {
+            // Arrange
+            var spDefs = new System.Collections.Generic.List<SpDefinition>
+            {
+                new SpDefinition 
+                { 
+                    Schema = "dbo", 
+                    Name = "USP_Test", 
+                    DdlText = "SELECT 1;",
+                    Dependencies = new System.Collections.Generic.List<DependencyInfo>
+                    {
+                        new DependencyInfo 
+                        { 
+                            Schema = "dbo", Name = "TestTable", Type = "TABLE",
+                            Columns = new System.Collections.Generic.List<ColumnInfo>
+                            {
+                                new ColumnInfo { ColumnName = "Id", DataType = "int", Description = "Primary Key" },
+                                new ColumnInfo { ColumnName = "Status", DataType = "varchar" }
+                            }
+                        }
+                    }
+                }
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 1. 개요 및 목적\\n테스트 정책서\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.GenerateSettlementPolicyRulebookAsync(spDefs, "{\"profiling\": {}}");
+
+            // Assert
+            Assert.Equal("## 1. 개요 및 목적\n테스트 정책서", result.Content);
+            Assert.Contains("TestTable", result.UserPrompt);
+            Assert.Contains("Primary Key", result.UserPrompt);
+            Assert.Contains("No description", result.UserPrompt);
+        }
+        [Fact]
+        public async Task DeconstructSpLogicAsync_WithRichSpDef_CoversFormattingMethods()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_RichTest", DdlText = "SELECT 1;" };
+            
+            // Add rich dependencies to trigger FormatTableSchemaToMarkdown and BuildSpMetadataTexts
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "OtherDb",
+                Schema = "dbo",
+                Name = "TBL_User",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "Id", DataType = "INT", IsPrimaryKey = true, Description = "User ID" },
+                    new ColumnInfo { ColumnName = "Name", DataType = "VARCHAR", Description = "User Name" }
+                },
+                Indexes = new System.Collections.Generic.List<TableIndexInfo>
+                {
+                    new TableIndexInfo { IndexName = "PK_User", IsPrimaryKey = true, IsUnique = true, Columns = new System.Collections.Generic.List<string> { "Id" } }
+                }
+            });
+            
+            // Add Static Analysis results
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedTables = new System.Collections.Generic.List<string> { "dbo.TBL_User" },
+                SelectTables = new System.Collections.Generic.List<string> { "dbo.TBL_User" },
+                InsertTables = new System.Collections.Generic.List<string> { "dbo.TBL_Log" },
+                AstInsertMappings = new System.Collections.Generic.List<AstInsertMapping>
+                {
+                    new AstInsertMapping { TargetTable = "dbo.TBL_Log", TargetColumns = new System.Collections.Generic.List<string> { "LogId" }, SourceQueryBlock = "SELECT 1" }
+                },
+                UpdateTables = new System.Collections.Generic.List<string> { "dbo.TBL_User" },
+                DeleteTables = new System.Collections.Generic.List<string> { "dbo.TBL_User" },
+                CreatedTempTables = new System.Collections.Generic.List<string> { "#TempLog" },
+                LinkedServerReferences = new System.Collections.Generic.List<string> { "LINKED_SRV.db.dbo.tbl" },
+                ReferencedFunctions = new System.Collections.Generic.List<string> { "dbo.UDF_GetDate" },
+                ControlFlowSummary = new System.Collections.Generic.List<string> { "IF @@ERROR <> 0" },
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "dbo.TBL_User", new System.Collections.Generic.List<string> { "Id" } }
+                }
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"Overview\\\": {}}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.DeconstructSpLogicAsync(spDef, "지침", null, null, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("\"Overview\":", result.Content);
         }
     }
 

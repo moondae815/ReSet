@@ -45,6 +45,31 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task AppendFeedbackToInstructionsAsync_ShouldAppendFeedback_WhenFileExists()
+        {
+            // Arrange
+            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_append");
+            if (!Directory.Exists(testOutputDir)) Directory.CreateDirectory(testOutputDir);
+
+            var instructionsPath = Path.Combine(testOutputDir, "MigrationInstructions.md");
+            await File.WriteAllTextAsync(instructionsPath, "# Original Content\n");
+
+            var exporter = new MetadataExporter();
+            var feedback = "This is a test feedback from AI";
+
+            // Act
+            await exporter.AppendFeedbackToInstructionsAsync(instructionsPath, feedback);
+
+            // Assert
+            var resultText = await File.ReadAllTextAsync(instructionsPath);
+            Assert.Contains("# Original Content", resultText);
+            Assert.Contains("This is a test feedback from AI", resultText);
+
+            // Clean up
+            if (Directory.Exists(testOutputDir)) Directory.Delete(testOutputDir, true);
+        }
+
+        [Fact]
         public async Task ExportRawMetadataAsync_ShouldIncludeDescriptionsInMarkdown_WhenSaveFilesIsTrue()
         {
             // Arrange
@@ -341,6 +366,70 @@ namespace ReSet.Core.Tests
             {
                 Directory.Delete(testOutputDir, true);
             }
+        }
+
+        [Fact]
+        public async Task ExportUnitTestCodeAsync_ShouldCreateTestFile_WithCorrectExtensionAndContent()
+        {
+            // Arrange
+            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_unittest");
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+
+            var procedureName = "USP_TestTarget";
+            var targetLanguage = "C#";
+            var testCodeContent = "public class USP_TestTargetTests { }";
+
+            IMetadataExporter exporter = new MetadataExporter();
+
+            // Act
+            await exporter.ExportUnitTestCodeAsync(testOutputDir, procedureName, targetLanguage, testCodeContent);
+
+            // Assert
+            var expectedDir = Path.Combine(testOutputDir, "tests");
+            var expectedPath = Path.Combine(expectedDir, $"{procedureName}Tests.cs");
+            Assert.True(Directory.Exists(expectedDir));
+            Assert.True(File.Exists(expectedPath));
+
+            var content = await File.ReadAllTextAsync(expectedPath);
+            Assert.Equal(testCodeContent, content);
+
+            // Clean up
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportUnitTestCodeAsync_Java_ShouldCreateTestFile_WithCorrectExtensionAndContent()
+        {
+            // Arrange
+            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_unittest_java");
+            if (Directory.Exists(testOutputDir)) Directory.Delete(testOutputDir, true);
+
+            var procedureName = "USP_TestTargetJava";
+            var targetLanguage = "Java";
+            var testCodeContent = "public class USP_TestTargetJavaTests { }";
+
+            IMetadataExporter exporter = new MetadataExporter();
+
+            // Act
+            await exporter.ExportUnitTestCodeAsync(testOutputDir, procedureName, targetLanguage, testCodeContent);
+
+            // Assert
+            var expectedDir = Path.Combine(testOutputDir, "tests");
+            var expectedPath = Path.Combine(expectedDir, $"{procedureName}Test.java");
+            Assert.True(Directory.Exists(expectedDir));
+            Assert.True(File.Exists(expectedPath));
+
+            var content = await File.ReadAllTextAsync(expectedPath);
+            Assert.Equal(testCodeContent, content);
+
+            // Clean up
+            if (Directory.Exists(testOutputDir)) Directory.Delete(testOutputDir, true);
         }
     }
 }

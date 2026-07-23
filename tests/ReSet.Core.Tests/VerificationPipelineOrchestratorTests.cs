@@ -37,7 +37,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(spDef));
 
             // 올바른 마크다운 명세서 형식 (MechanicalValidator 검증 필수 헤더 포함)
-            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```\n\n[AI 추론 보완: dbo.Users.Status - 상태를 나타냄]";
             _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
@@ -149,6 +149,784 @@ namespace ReSet.Core.Tests
             Assert.NotNull(resultSpec);
             await _userInteraction.Received(2).RequestHumanReviewAsync("dbo.USP_Test", Arg.Any<string>());
         }
+
+        [Fact]
+        public async Task RunPipelineAsync_DbServiceThrowsException_ReturnsNulls()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromException<SpDefinition>(new Exception("DB Connection Failed")));
+
+            // Act
+            var (resultSpec, resultDef, resultRev, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Exception", 3, "OpenAI", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.Null(resultSpec);
+            Assert.Null(resultDef);
+            Assert.Null(resultRev);
+            userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("DB 조회 실패")));
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_WithOllamaProvider_UsesSequentialPipeline()
+        {
+            // Arrange
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_OllamaTest", DdlText = "CREATE PROCEDURE USP_OllamaTest AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_OllamaTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            // Setup AI mock for 3 parts
+            _aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int, int, string)>?>())
+                .Returns(Task.FromResult(new AiResult { Content = "{\"Logic\":{}}" }));
+
+            _aiService.GenerateSpecSectionAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```" }));
+
+            // Final consolidation
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_OllamaTest", 3, "Ollama", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            _userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_OllamaTest");
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_WithDynamicEffort_UsesParallelGenerationAndCritic()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "dynamic", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_DynamicTest", DdlText = "CREATE PROCEDURE USP_DynamicTest AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_DynamicTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            // Dynamic effort calls GenerateSpecificationAsync 3 times (low, medium, high)
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            // Critic Review (called for each candidate)
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Consolidator uses GenerateSpecificationAsync which is already mocked above.
+                
+            // Final review
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_DynamicTest", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_DynamicTest");
+        }
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_L3ReviewApprove_ReturnsSpec()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_L3Test", DdlText = "CREATE PROCEDURE USP_L3Test AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_L3Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Setup L3 Human Review: First Provide Feedback, then Approve
+            var feedbackDecision = new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Make it better" };
+            var approveDecision = new HumanReviewResult { Decision = UserDecision.Approve };
+            userInteraction.RequestHumanReviewAsync("dbo.USP_L3Test", Arg.Any<string>())
+                .Returns(Task.FromResult(feedbackDecision), Task.FromResult(approveDecision));
+
+            // For the feedback iteration, AI should return a slightly different markdown
+            var fixedSpecMarkdown = "## 개요\nFixed Content\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Is<string>(s => s != null && s.Contains("Make it better")), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = fixedSpecMarkdown }));
+
+            // Act
+            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_L3Test", 3, "OpenAI", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Equal(fixedSpecMarkdown, resultSpec);
+            await userInteraction.Received(2).RequestHumanReviewAsync("dbo.USP_L3Test", Arg.Any<string>());
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_CacheManagerThrowsException_ContinuesPipeline()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var cacheManager = Substitute.For<ICacheManager>();
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", cacheManager, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_CacheThrow", DdlText = "CREATE PROCEDURE USP_CacheThrow AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheThrow", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            cacheManager.ComputeCompositeHash(Arg.Any<SpDefinition>()).Returns(x => { throw new Exception("Cache failure"); });
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
+
+            // Act
+            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_CacheThrow", 3, "OpenAI", "instructions", isBatchMode: true, enableCache: true);
+
+            // Assert
+            Assert.NotNull(resultSpec); // It should continue and generate spec despite cache exception
+            Assert.Equal(specMarkdown, resultSpec);
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_CacheHit_ReturnsCachedSpec()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", cacheManager, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_CacheTest" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            cacheManager.ComputeCompositeHash(spDef).Returns("fake-hash");
+            cacheManager.IsCacheValid("dbo.USP_CacheTest", "fake-hash", Arg.Any<string>()).Returns(true);
+
+            var outputDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ReSet_CacheTest_" + Guid.NewGuid().ToString());
+            var docsDir = System.IO.Path.Combine(outputDir, "Procedures", "dbo.USP_CacheTest", "docs");
+            System.IO.Directory.CreateDirectory(docsDir);
+            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(docsDir, "Spec.md"), "## Cached Spec");
+
+            try
+            {
+                // Act
+                var (resultSpec, resultDef, review, _) = await orchestrator.RunPipelineAsync(
+                    "connection_string", "dbo", "USP_CacheTest", 3, "OpenAI", "instructions", true, outputDir, true);
+
+                // Assert
+                Assert.Equal("## Cached Spec", resultSpec);
+                await aiService.DidNotReceiveWithAnyArgs().GenerateSpecificationAsync(default!, default!, default!, default!, default!);
+            }
+            finally
+            {
+                if (System.IO.Directory.Exists(outputDir)) System.IO.Directory.Delete(outputDir, true);
+            }
+        }
+        [Fact]
+        public async Task RunPipelineAsync_L2Fails_TriggersRetry()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_L2FailTest", DdlText = "CREATE PROCEDURE USP_L2FailTest AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_L2FailTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            // Return defective review first, successful review second
+            var defectiveReview = new ReviewResult { HasDefects = true, FeedbackComment = "Need more details", ScoreAccuracy = 5 };
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(defectiveReview), Task.FromResult(goodReview));
+
+            // Act
+            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_L2FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_L2FailTest");
+            await aiService.Received(2).GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+            await aiService.Received(2).ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_L1Fails_TriggersRetry()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_L1FailTest", DdlText = "CREATE PROCEDURE USP_L1FailTest AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_L1FailTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            // Return bad markdown first (missing 로직 흐름 요약 header), good markdown second
+            var badMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```"; 
+            var goodMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = badMarkdown }), Task.FromResult(new AiResult { Content = goodMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_L1FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_L1FailTest");
+            // Check that GenerateSpecificationAsync was called twice
+            await aiService.Received(2).GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_ExhaustsRetries_ReturnsFailedSpec()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            // MaxL2Attempts = 2
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_FailTest", DdlText = "CREATE PROCEDURE USP_FailTest AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_FailTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            // Critic Review always returns HasDefects = true
+            var reviewResult = new ReviewResult { HasDefects = true, ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5, FeedbackComment = "Bad spec" };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            // In batch mode with exhausted retries, it might adopt it with caution or just fail.
+            // But we just want coverage of the exhaustion path.
+            userInteraction.DidNotReceive().NotifyValidationSuccess("dbo.USP_FailTest");
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_WithDynamicEffort_FastPass_TriggersWhenScoreIsHigh()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "dynamic", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_DynamicFastPass", DdlText = "CREATE PROCEDURE USP_DynamicFastPass AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_DynamicFastPass", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            // One candidate gets a 95 score to trigger fast pass
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Consolidate uses GenerateSpecificationAsync which is mocked above.
+
+            // Final review should NOT be called again inside the consolidator block, but fast pass adopts the review.
+            
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_DynamicFastPass", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Equal(specMarkdown, resultSpec);
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_DynamicFastPass");
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_WithDynamicEffort_FailsFinalReview_AttemptsFinalFix()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "dynamic", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_DynamicFinalFix", DdlText = "CREATE PROCEDURE USP_DynamicFinalFix AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_DynamicFinalFix", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            // Critic Review (fails on final review)
+            var reviewResultFail = new ReviewResult { HasDefects = true, ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5, FeedbackComment = "Need fix" };
+            var reviewResultPass = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            
+            // Candidate scores below 90 to avoid fast-pass
+            var reviewResultLow = new ReviewResult { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8, FeedbackComment = "Minor issue" };
+
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(
+                    Task.FromResult(reviewResultLow), // Candidate 1
+                    Task.FromResult(reviewResultLow), // Candidate 2
+                    Task.FromResult(reviewResultLow), // Candidate 3
+                    Task.FromResult(reviewResultFail), // Final review
+                    Task.FromResult(reviewResultPass)  // Re-final review after fix
+                );
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_DynamicFinalFix", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received().NotifyStatus(Arg.Is<string>(s => s.Contains("최종 합성본에서 일부 결함 감지")));
+            userInteraction.Received().NotifyStatus(Arg.Is<string>(s => s.Contains("보완된 최종 합성본 L2 재검토 중")));
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_Approves_And_Syncs_Db()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Interactive", DdlText = "CREATE PROCEDURE USP_Interactive AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Interactive", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Setup L3 interaction
+            userInteraction.RequestHumanReviewAsync("dbo.USP_Interactive", Arg.Any<string>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+            userInteraction.ConfirmMetadataSyncAsync("dbo.USP_Interactive")
+                .Returns(Task.FromResult(false)); // skip DB sync for unit test
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Interactive", 3, "OpenAI", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            await userInteraction.Received(1).ConfirmMetadataSyncAsync("dbo.USP_Interactive");
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_L3ProvideFeedback_RegenerationFailsL1_Retries_OllamaMode()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_InteractiveL1Ollama", DdlText = "CREATE PROCEDURE USP_InteractiveL1Ollama AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_InteractiveL1Ollama", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var validMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var invalidMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\nJust Missing Visualization Header\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            // Step 1: Initial generation (Success)
+            aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int current, int total, string message)>>())
+                .Returns(Task.FromResult(new AiResult { Content = "{}" }));
+            aiService.GenerateSpecSectionAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록", ThinkingText = "Think" }), // Initial part 1
+                    Task.FromResult(new AiResult { Content = "## CRUD 분석", ThinkingText = "Think" }), // Initial part 2
+                    Task.FromResult(new AiResult { Content = "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```", ThinkingText = "Think" }), // Initial part 3
+                    // L3 Feedback regeneration part 1,2,3 - part 3 will fail L1
+                    Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록", ThinkingText = "Think" }),
+                    Task.FromResult(new AiResult { Content = "## CRUD 분석", ThinkingText = "Think" }),
+                    Task.FromResult(new AiResult { Content = "## 로직 흐름 요약\nJust Missing Visualization Header\n```mermaid\ngraph TD\nA-->B\n```", ThinkingText = "Think" }), // Missing header!
+                    // L1 retry generation part 1,2,3
+                    Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록", ThinkingText = "Think" }),
+                    Task.FromResult(new AiResult { Content = "## CRUD 분석", ThinkingText = "Think" }),
+                    Task.FromResult(new AiResult { Content = "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```", ThinkingText = "Think" })
+                );
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // L3 Interaction: Feedback -> L1 Fail -> Retry -> Success
+            userInteraction.RequestHumanReviewAsync("dbo.USP_InteractiveL1Ollama", Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Fix something" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_InteractiveL1Ollama", 3, "Ollama", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received().NotifyStatus(Arg.Is<string>(s => s.Contains("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_L3ProvideFeedback_RegenerationFailsL1_Retries_OpenAIMode()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_InteractiveL1OpenAI", DdlText = "CREATE PROCEDURE USP_InteractiveL1OpenAI AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_InteractiveL1OpenAI", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var validMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var invalidMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\nJust Missing Visualization Header\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = validMarkdown, ThinkingText = "Think" }), // initial
+                    Task.FromResult(new AiResult { Content = invalidMarkdown, ThinkingText = "Think" }), // L3 feedback regen (fails L1)
+                    Task.FromResult(new AiResult { Content = validMarkdown, ThinkingText = "Think" })    // L1 retry
+                );
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // L3 Interaction
+            userInteraction.RequestHumanReviewAsync("dbo.USP_InteractiveL1OpenAI", Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Change it" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_InteractiveL1OpenAI", 3, "OpenAI", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received().NotifyStatus(Arg.Is<string>(s => s.Contains("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_SyncsDb_CatchesSqlException()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_InteractiveSqlException", DdlText = "CREATE PROCEDURE USP_InteractiveSqlException AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_InteractiveSqlException", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Setup L3 interaction
+            userInteraction.RequestHumanReviewAsync("dbo.USP_InteractiveSqlException", Arg.Any<string>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+            userInteraction.ConfirmMetadataSyncAsync("dbo.USP_InteractiveSqlException")
+                .Returns(Task.FromResult(true)); // Allow DB sync!
+
+            // Create fake cleansing SQL to trigger ApplyMetadataCleansingSqlAsync
+            var currentDir = System.IO.Directory.GetCurrentDirectory();
+            var testDir = System.IO.Path.Combine(currentDir, "cleansing");
+            if (!System.IO.Directory.Exists(testDir)) System.IO.Directory.CreateDirectory(testDir);
+            var fakeSqlFile = System.IO.Path.Combine(testDir, "dbo.USP_InteractiveSqlException_MetadataCleansing.sql");
+            await System.IO.File.WriteAllTextAsync(fakeSqlFile, "SELECT 1;\nGO\n");
+
+            // Act
+            // The connection_string "invalid_connection" will cause a SqlException when it tries to run the cleansing sql
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "invalid_connection", "dbo", "USP_InteractiveSqlException", 3, "OpenAI", "instructions", isBatchMode: false, currentDir);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("DB 메타데이터 설명 역반영 중 오류 발생")));
+
+            // Cleanup
+            if (System.IO.File.Exists(fakeSqlFile)) System.IO.File.Delete(fakeSqlFile);
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_InteractiveMode_ProvidesFeedback_And_Regenerates()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_InteractiveFeedback", DdlText = "CREATE PROCEDURE USP_InteractiveFeedback AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_InteractiveFeedback", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var specMarkdown2 = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\nC-->D\n```";
+
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }), Task.FromResult(new AiResult { Content = specMarkdown2 }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Setup L3 interaction: 1st Feedback, 2nd Approve
+            userInteraction.RequestHumanReviewAsync("dbo.USP_InteractiveFeedback", Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "다이어그램 추가해줘" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            userInteraction.ConfirmMetadataSyncAsync("dbo.USP_InteractiveFeedback")
+                .Returns(Task.FromResult(false)); // no sync
+
+            // Act
+            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_InteractiveFeedback", 3, "OpenAI", "instructions", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Contains("C-->D", resultSpec); // should contain regenerated content
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_SingleGeneration_WithL2Defects_Regenerates()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_SingleGen", DdlText = "CREATE PROCEDURE USP_SingleGen AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_SingleGen", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var spec1 = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var spec2 = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\nC-->D\n```";
+
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = spec1 }), Task.FromResult(new AiResult { Content = spec2 }));
+
+            // 1st review fails, 2nd review passes
+            var review1 = new ReviewResult { HasDefects = true, ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5, FeedbackComment = "Bad" };
+            var review2 = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(review1), Task.FromResult(review2));
+
+            // Act
+            var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_SingleGen", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Equal(spec2, resultSpec); // should return the second generated spec
+            userInteraction.Received(1).NotifyL2Defects("dbo.USP_SingleGen", 1, 2, "Bad");
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_SingleGen");
+        }
+
+        [Fact]
+        public async Task RunPipelineAsync_OllamaMode_WithL2Defects_PerformsPartialRegeneration()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "llama3", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_OllamaRetry", DdlText = "CREATE PROCEDURE USP_OllamaRetry AS SELECT 1" };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_OllamaRetry", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int, int, string)>?>())
+                .Returns(Task.FromResult(new AiResult { Content = "{\"Logic\":{}}" }));
+
+            // 1st attempt generation (3 sections)
+            aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록\n" }));
+            aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## CRUD 분석\n" }));
+            aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```" }));
+
+            // 1st review fails (mentions CRUD)
+            var review1 = new ReviewResult { HasDefects = true, ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5, FeedbackComment = "CRUD 분석 쪽에 테이블 누락됨" };
+            
+            // 2nd review passes
+            var review2 = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(review1), Task.FromResult(review2));
+
+            // Final review skipped in Ollama path? No, ReviewSpecificationAsync is called twice in retry loop.
+            
+            // Act
+            var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_OllamaRetry", 3, "Ollama", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            userInteraction.Received(1).NotifyL2Defects("dbo.USP_OllamaRetry", 1, 2, "CRUD 분석 쪽에 테이블 누락됨");
+            
+        // Since feedback was "CRUD 분석 쪽에 테이블 누락됨", it should have regenerated CrudAnalysis.
+        // We can assert it called GenerateSpecSectionAsync more than 3 times (3 for first attempt, and at least 1 for retry).
+        await aiService.Received().GenerateSpecSectionAsync(spDef, "CrudAnalysis", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_OllamaMode_WithL3Feedback_PerformsPartialRegeneration()
+    {
+        // Arrange
+        var dbService = Substitute.For<IDbMetadataService>();
+        var aiService = Substitute.For<IAiService>();
+        var validator = new MechanicalValidator();
+        var userInteraction = Substitute.For<IVerificationUserInteraction>();
+        var orchestrator = new VerificationPipelineOrchestrator(
+            dbService, aiService, validator, userInteraction, "1", "llama3", null, aiService, aiService, "high", "high", "default", 8);
+
+        var spDef = new SpDefinition { Schema = "dbo", Name = "USP_OllamaL3Retry", DdlText = "CREATE PROCEDURE USP_OllamaL3Retry AS SELECT 1" };
+        dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_OllamaL3Retry", Arg.Any<int>())
+            .Returns(Task.FromResult(spDef));
+
+        aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int, int, string)>?>())
+            .Returns(Task.FromResult(new AiResult { Content = "{\"Logic\":{}}" }));
+
+        aiService.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록\n" }));
+        aiService.GenerateSpecSectionAsync(spDef, "CrudAnalysis", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(Task.FromResult(new AiResult { Content = "## CRUD 분석\n" }));
+        aiService.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(Task.FromResult(new AiResult { Content = "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```" }));
+
+        var reviewPass = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+        aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(Task.FromResult(reviewPass));
+
+        // Simulate interactive mode: First attempt returns false (requesting changes), second attempt returns true.
+        // And the feedback targets the '로직 흐름 요약' (LogicAndVisualization) part.
+        userInteraction.ConfirmMetadataSyncAsync(Arg.Any<string>())
+            .Returns(Task.FromResult(true));
+        
+        userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(
+                Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "로직 흐름 시각화에 내용 추가해주세요" }),
+                Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+            );
+
+        // Act
+        var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+            "connection_string", "dbo", "USP_OllamaL3Retry", 3, "Ollama", "instructions", isBatchMode: false);
+
+        // Assert
+        Assert.NotNull(resultSpec);
+        
+        // It should have called GenerateSpecSectionAsync for LogicAndVisualization again due to feedback keywords
+        await aiService.Received().GenerateSpecSectionAsync(spDef, "LogicAndVisualization", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+    }
 
         [Fact]
         public async Task RunConsolidatedPipelineAsync_SuccessOnFirstTry_ReturnsPlan()
@@ -273,6 +1051,281 @@ namespace ReSet.Core.Tests
 
             // Clean up
             try { System.IO.Directory.Delete(tempOutDir, true); } catch {}
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_Success_ReturnsConsolidatedPlan()
+        {
+            // Arrange
+            var specs = new List<(string, string)> { ("dbo.Test", "## 명세") };
+            
+            var aiResult = new AiResult { Content = "## 통합 계획서\n## 통합 배치 아키텍처 개요\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n## Mermaid 기반 통합 흐름도\n```mermaid\ngraph TD\nA-->B\n```" };
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(aiResult));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Contains("## 통합 계획서", result);
+            _userInteraction.Received(1).NotifyValidationSuccess("TestJob");
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L1Fails_TriggersRetry()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+
+            // Return bad markdown first (missing Mermaid 기반 통합 흐름도 header), good markdown second
+            var badMarkdown = "## 통합 배치 아키텍처 개요\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```"; 
+            var goodMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = badMarkdown }), Task.FromResult(new AiResult { Content = goodMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(result);
+            userInteraction.Received(1).NotifyValidationSuccess("TestJob");
+            await aiService.Received(2).GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L2Fails_TriggersRetry()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+
+            var goodMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = goodMarkdown }));
+
+            // Return defective review first, successful review second
+            var defectiveReview = new ReviewResult { HasDefects = true, FeedbackComment = "Need more details", ScoreAccuracy = 5 };
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(defectiveReview), Task.FromResult(goodReview));
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(result);
+            userInteraction.Received(1).NotifyValidationSuccess("TestJob");
+            await aiService.Received(2).GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3Interactive_Cancel_ReturnsNull()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var goodMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = goodMarkdown }));
+
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Cancel }));
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobCancel", "OpenAI", isBatchMode: false);
+
+            // Assert
+            Assert.Null(result);
+            await userInteraction.Received(1).RequestHumanReviewAsync("TestJobCancel", Arg.Any<string>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3Interactive_ProvideFeedback_Regenerates()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var initialMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            var regeneratedMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\nC-->D\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = initialMarkdown }), Task.FromResult(new AiResult { Content = regeneratedMarkdown }));
+
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10, FeedbackComment = "Minor tip" };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Add C to D" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobFeedback", "OpenAI", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(regeneratedMarkdown, result);
+            await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3Interactive_ProvideFeedback_RegenerationThrows_ContinuesToAsk()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var initialMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            // First call succeeds, second call throws exception
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = initialMarkdown }),
+                    Task.FromException<AiResult>(new Exception("Generation Error"))
+                );
+
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Try this" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobException", "OpenAI", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(initialMarkdown, result); // It reverted to initial markdown because regeneration failed
+            userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("재생성 실패")));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3Interactive_ProvideFeedback_RegenerationFailsL1_Retries()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var initialMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            // Re-generated markdown is missing required sections, so it fails L1 validation
+            var invalidMarkdown = "Just some random text\n```mermaid\ngraph TD\n```";
+            var fixedMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = initialMarkdown }), // initial
+                    Task.FromResult(new AiResult { Content = invalidMarkdown }), // regeneration 1
+                    Task.FromResult(new AiResult { Content = fixedMarkdown })    // regeneration 2 (after L1 failure)
+                );
+
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Try this" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobL1Fail", "OpenAI", isBatchMode: false);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(fixedMarkdown, result); // Returns fixed markdown
+            userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L2WarningComment_LogsComment()
+        {
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var goodMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = goodMarkdown }));
+
+            var warningReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10, FeedbackComment = "This is a warning\nSecond line" };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(warningReview));
+
+            // Act
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobWarning", "OpenAI", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(result);
+            userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("This is a warning")));
+            userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("Second line")));
         }
 
         [Theory]

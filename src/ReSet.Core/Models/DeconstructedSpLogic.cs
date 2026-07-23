@@ -58,6 +58,7 @@ namespace ReSet.Core.Models
     public class SpUpdateMappingInfo
     {
         public string TargetTable { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty; // e.g. "전체거래건", "부분취소건", "환불건"
         public List<ColumnMappingInfo> Mappings { get; set; } = new();
     }
 
@@ -71,6 +72,7 @@ namespace ReSet.Core.Models
     public class SpDeleteTableInfo
     {
         public string TableName { get; set; } = string.Empty;
+        public string BranchName { get; set; } = string.Empty; // e.g. "전체거래건", "부분취소건", "환불건"
         public List<string> FilterConditions { get; set; } = new();
     }
 

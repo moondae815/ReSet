@@ -564,9 +564,9 @@ namespace ReSet.Core.Services
                         var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {finalReview.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {finalReview.ScoreAccuracy}/10, CRUD {finalReview.ScoreCrud}/10, 인터페이스 {finalReview.ScoreInterface}/10, 가독성 {finalReview.ScoreReadability}/10, 예외 {finalReview.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {finalReview.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
                         specificationMarkdown = warningBanner + specificationMarkdown;
                     }
-
-                    _userInteraction.NotifyValidationSuccess(selectedOption);
                 }
+
+                _userInteraction.NotifyValidationSuccess(selectedOption);
             }
             else
             {

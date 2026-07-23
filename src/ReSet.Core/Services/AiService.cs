@@ -619,20 +619,101 @@ Based on the structured reference context above, reverse engineer the stored pro
             var chunkResults = new List<DeconstructedSpLogic>();
             var consolidatedThinking = new StringBuilder();
 
+            // 1. Setup Chunk Cache Directory
+            var chunkCacheDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "output", "Procedures", $"{spDef.Schema}.{spDef.Name}", "raw", "chunks");
+            if (!System.IO.Directory.Exists(chunkCacheDir))
+            {
+                System.IO.Directory.CreateDirectory(chunkCacheDir);
+            }
+
+            // 2. Heuristic Matching (Extract keywords from feedbackLog)
+            var uppercaseKeywords = new HashSet<string>();
+            bool isAttempt2OrLater = !string.IsNullOrWhiteSpace(feedbackLog);
+            if (isAttempt2OrLater)
+            {
+                var matches = System.Text.RegularExpressions.Regex.Matches(feedbackLog!, @"[A-Z0-9_]{3,}");
+                foreach (System.Text.RegularExpressions.Match match in matches)
+                {
+                    uppercaseKeywords.Add(match.Value);
+                }
+            }
+
+            // 3. Determine which chunks need regeneration
+            var chunksToRegen = new HashSet<int>();
+            if (isAttempt2OrLater)
+            {
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    bool needsRegen = false;
+                    foreach (var kw in uppercaseKeywords)
+                    {
+                        if (chunks[i].StatementText.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                        {
+                            needsRegen = true;
+                            break;
+                        }
+                    }
+                    if (needsRegen) chunksToRegen.Add(i);
+                }
+                
+                // Fallback: Regenerate all if 0 matches
+                if (chunksToRegen.Count == 0)
+                {
+                    Log.Information("피드백과 매칭되는 청크가 없어 전체 청크 재생성으로 폴백합니다.");
+                    for (int i = 0; i < chunks.Count; i++) chunksToRegen.Add(i);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < chunks.Count; i++) chunksToRegen.Add(i);
+            }
+
             for (int i = 0; i < chunks.Count; i++)
             {
                 var chunk = chunks[i];
+                var cacheFilePath = System.IO.Path.Combine(chunkCacheDir, $"chunk_{i}.json");
+
+                // 4. Try loading from cache if this chunk doesn't need regeneration
+                if (!chunksToRegen.Contains(i) && System.IO.File.Exists(cacheFilePath))
+                {
+                    progressCallback?.Invoke((i + 1, chunks.Count, $"[Sub-task] 청크 캐시 재사용 ({i + 1}/{chunks.Count})"));
+                    try
+                    {
+                        var json = await System.IO.File.ReadAllTextAsync(cacheFilePath, cancellationToken);
+                        var options = new System.Text.Json.JsonSerializerOptions 
+                        { 
+                            PropertyNameCaseInsensitive = true,
+                            AllowTrailingCommas = true,
+                            ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip
+                        };
+                        var cachedLogic = System.Text.Json.JsonSerializer.Deserialize<DeconstructedSpLogic>(json, options);
+                        if (cachedLogic != null)
+                        {
+                            chunkResults.Add(cachedLogic);
+                            Log.Information("청크 {Index} 기존 분석 결과 캐시 재사용", i + 1);
+                            continue;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "청크 {Index} 캐시 읽기 실패, 재생성으로 폴백합니다.", i + 1);
+                    }
+                }
+
                 progressCallback?.Invoke((i + 1, chunks.Count, $"[Sub-task] 청크 분석 중 ({i + 1}/{chunks.Count})"));
 
                 // RAG 필터링된 프롬프트 생성
-                var (sys, usr) = BuildChunkDeconstructionPrompts(spDef, chunk, userInstructions);
+                var (sys, usr) = BuildChunkDeconstructionPrompts(spDef, chunk, userInstructions, feedbackLog);
                 
                 float temp = 0.05f;
-                if (_enableOllamaThinking && !string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
                 {
-                    sys = "<|think|>" + sys;
+                    if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        sys = "<|think|>" + sys;
+                    }
+                    sys += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 영역에 상세히 기술하십시오. 최종 JSON은 반드시 추론 태그 바깥에 작성해야 합니다.";
                 }
-                if (_enableOllamaThinking) sys += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 영역에 상세히 기술하십시오. 최종 JSON은 반드시 추론 태그 바깥에 작성해야 합니다.";
 
                 var aiResult = await _aiClient.ChatAsync(sys, usr, temp, effort, cancellationToken);
                 
@@ -658,7 +739,20 @@ Based on the structured reference context above, reverse engineer the stored pro
                             ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip
                         };
                         var chunkLogic = System.Text.Json.JsonSerializer.Deserialize<DeconstructedSpLogic>(cleanJson, options);
-                        if (chunkLogic != null) chunkResults.Add(chunkLogic);
+                        if (chunkLogic != null) 
+                        {
+                            chunkResults.Add(chunkLogic);
+                            
+                            // 5. Save generated result to cache
+                            try
+                            {
+                                await System.IO.File.WriteAllTextAsync(cacheFilePath, cleanJson, cancellationToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning(ex, "청크 {Index} 캐시 파일 저장 실패", i + 1);
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -667,9 +761,33 @@ Based on the structured reference context above, reverse engineer the stored pro
                 }
             }
 
-            // TODO: Extract global Overview and Parameters from a dedicated call or the first chunk
-            var globalOverview = new SpOverviewInfo { SpName = spDef.Name, Purpose = "AST Chunking Consolidated Result" };
+            var globalOverview = new SpOverviewInfo 
+            { 
+                SpName = spDef.Name, 
+                Purpose = "AST 기반 분할 청크 분석 결과 병합본 (자동 추출)",
+                BusinessRole = "세부 로직 흐름 파악용",
+                ResultStyle = "내부 로직 참조"
+            };
+            
             var globalParams = new List<SpParameterInfo>();
+            if (spDef.StaticAnalysis?.ProcedureParameters != null)
+            {
+                foreach (var p in spDef.StaticAnalysis.ProcedureParameters)
+                {
+                    var parts = p.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                    string name = parts.Length > 0 ? parts[0] : p;
+                    string type = parts.Length > 1 ? parts[1] : "Unknown";
+                    
+                    globalParams.Add(new SpParameterInfo
+                    {
+                        Name = name,
+                        DataType = type,
+                        Nullability = "확인불가(AST 추출)",
+                        Purpose = "정적 파싱(AST)을 통해 자동 식별된 파라미터",
+                        IsOutput = p.Contains("OUTPUT", StringComparison.OrdinalIgnoreCase)
+                    });
+                }
+            }
 
             var consolidator = new LocalAiConsolidator();
             var finalLogic = consolidator.Consolidate(chunkResults, globalOverview, globalParams);
@@ -685,13 +803,61 @@ Based on the structured reference context above, reverse engineer the stored pro
             };
         }
 
-        private (string SystemPrompt, string UserPrompt) BuildChunkDeconstructionPrompts(SpDefinition spDef, ChunkAnalysisResult chunk, string userInstructions)
+        private (string SystemPrompt, string UserPrompt) BuildChunkDeconstructionPrompts(SpDefinition spDef, ChunkAnalysisResult chunk, string userInstructions, string? feedbackLog = null)
         {
-            // TODO: chunk.ReferencedTables를 활용하여 spDef.Dependencies에서 필요한 테이블 스키마만 선별(RAG)
+            var ragSchemas = new StringBuilder();
+            if (chunk.ReferencedTables.Count > 0 && spDef.Dependencies != null)
+            {
+                foreach (var refTable in chunk.ReferencedTables)
+                {
+                    var cleanRefTable = refTable.Replace("[", "").Replace("]", "");
+                    foreach (var dep in spDef.Dependencies)
+                    {
+                        var depFullName = string.IsNullOrEmpty(dep.Database)
+                            ? $"{dep.Schema}.{dep.Name}"
+                            : $"{dep.Database}.{dep.Schema}.{dep.Name}";
+
+                        if (depFullName.Contains(cleanRefTable, StringComparison.OrdinalIgnoreCase) || 
+                            cleanRefTable.Contains(dep.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ragSchemas.AppendLine(FormatTableSchemaToMarkdown(dep, spDef));
+                            ragSchemas.AppendLine();
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            var symbolContext = new StringBuilder();
+            if (spDef.StaticAnalysis != null)
+            {
+                if (spDef.StaticAnalysis.ProcedureParameters.Count > 0)
+                {
+                    symbolContext.AppendLine("[Procedure Parameters]");
+                    foreach (var p in spDef.StaticAnalysis.ProcedureParameters) symbolContext.AppendLine($"- {p}");
+                    symbolContext.AppendLine();
+                }
+                if (spDef.StaticAnalysis.DeclaredVariables.Count > 0)
+                {
+                    symbolContext.AppendLine("[Declared Variables]");
+                    foreach (var v in spDef.StaticAnalysis.DeclaredVariables) symbolContext.AppendLine($"- {v}");
+                    symbolContext.AppendLine();
+                }
+            }
+
             var systemPrompt = @"You are a database architect. Analyze the provided single SQL statement and output a JSON object representing its logic.
 [Rules]
-1. Output ONLY valid JSON matching the schema for DeconstructedSpLogic.
-2. Focus only on the provided statement.
+1. You MUST respond ONLY with a strictly valid JSON object matching the JSON schema below.
+2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
+3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission.
+4. If there are UNION/UNION ALL blocks, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
+5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
+6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
+7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
+8. If multiple tables are joined in a single SELECT query, you MUST create a separate JSON object in the `SelectTables` array for EACH individual physical table. Do NOT group them together like ""TableA, TableB"".
+9. In `Logic.Steps`, explicitly capture any critical branching conditions involving `@@ROWCOUNT` or `EXISTS` checks (e.g., updating existing records vs inserting new ones).
+10. In `Visualization.Nodes`, do NOT use ""END"" as a Node Id. Use ""PROC_END"" instead to avoid Mermaid keyword conflicts.
+11. Focus only on the provided SQL statement chunk.
 
 [JSON Schema Structure]
 {
@@ -734,6 +900,7 @@ Based on the structured reference context above, reverse engineer the stored pro
     ""UpdateTables"": [
       {
         ""TargetTable"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
         ""Mappings"": [
           {
             ""TargetColumn"": ""string"",
@@ -746,6 +913,7 @@ Based on the structured reference context above, reverse engineer the stored pro
     ""DeleteTables"": [
       {
         ""TableName"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
         ""FilterConditions"": [""string""]
       }
     ],
@@ -803,8 +971,40 @@ Based on the structured reference context above, reverse engineer the stored pro
   }
 }";
             
-            var userPrompt = $"[SQL Statement Chunk]\n```sql\n{chunk.StatementText}\n```\n\n[User Instructions]\n{userInstructions}";
-            return (systemPrompt, userPrompt);
+            var userPromptSb = new StringBuilder();
+            userPromptSb.AppendLine("[Global Symbol Context (Read-Only)]");
+            userPromptSb.AppendLine("Use this to understand the variables and parameters used in the chunk.");
+            if (symbolContext.Length > 0)
+            {
+                userPromptSb.AppendLine(symbolContext.ToString());
+            }
+            else
+            {
+                userPromptSb.AppendLine("No parameters or variables detected.\n");
+            }
+
+            if (ragSchemas.Length > 0)
+            {
+                userPromptSb.AppendLine("[Referenced Table Schemas (RAG)]");
+                userPromptSb.AppendLine(ragSchemas.ToString());
+            }
+
+            userPromptSb.AppendLine("[SQL Statement Chunk]");
+            userPromptSb.AppendLine("```sql");
+            userPromptSb.AppendLine(chunk.StatementText);
+            userPromptSb.AppendLine("```");
+            userPromptSb.AppendLine();
+            userPromptSb.AppendLine("[User Instructions]");
+            userPromptSb.AppendLine(userInstructions);
+
+            if (!string.IsNullOrWhiteSpace(feedbackLog))
+            {
+                userPromptSb.AppendLine();
+                userPromptSb.AppendLine("[L2 Critic Feedback to Fix (Critical)]");
+                userPromptSb.AppendLine(feedbackLog);
+            }
+
+            return (systemPrompt, userPromptSb.ToString());
         }
 
         private (string SystemPrompt, string UserPrompt) BuildDeconstructionPrompts(SpDefinition spDef, string userInstructions, string? feedbackLog = null)
@@ -817,7 +1017,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 1. You MUST respond ONLY with a strictly valid JSON object matching the JSON schema below.
 2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
 3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission.
-4. If there are UNION/UNION ALL blocks in the DML statements, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
+4. If there are UNION/UNION ALL blocks in the DML statements, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
 5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
 7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
@@ -867,6 +1067,7 @@ Based on the structured reference context above, reverse engineer the stored pro
     ""UpdateTables"": [
       {
         ""TargetTable"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
         ""Mappings"": [
           {
             ""TargetColumn"": ""string"",
@@ -879,6 +1080,7 @@ Based on the structured reference context above, reverse engineer the stored pro
     ""DeleteTables"": [
       {
         ""TableName"": ""string"",
+        ""BranchName"": ""string (Korean, e.g. 전체거래건)"",
         ""FilterConditions"": [""string""]
       }
     ],
@@ -1096,7 +1298,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "   - Detail the column names referenced and join/filter keys without abbreviation.",
                     "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
                     "3. For target tables of INSERT/UPDATE operations, map all target columns to their source values (variables, constants, function results, etc.) in a 1:1 mapping table. Do not abbreviate with 'etc.' or '...'.",
-                    "4. Factual state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used."
+                    "4. Factually state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used."
                 };
 
                 int rIdx = 5;
@@ -1177,7 +1379,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 }
 
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
-                sbRules.Add($"{rIdx++}. Visualized business flow using a Mermaid flowchart TD diagram:");
+                sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
                 sbRules.Add("   - Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
                 sbRules.Add("   - Node IDs must be unique uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG). Do not use Mermaid reserved keywords (graph, flowchart, subgraph, end, END) as node IDs. You MUST use 'PROC_END' instead of 'END'.");
@@ -1444,7 +1646,7 @@ Write the Batch Migration Plan for {targetLanguage} based on the legacy SQL SP d
 
         public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
         {
-            var systemPrompt = $@"You are a principal database modernization architect consolidation multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
+            var systemPrompt = $@"You are a principal database modernization architect consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
 Consolidate the provided specifications into a single unified batch job named '{jobName}'.
 
 [Required Content & Rules]
@@ -1655,10 +1857,17 @@ Combine the conditional logic and data mappings of SPs with common code master d
 
             var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort: null, cancellationToken: cancellationToken);
 
-            Log.Information("AI 정산 정책서 생성 완료 - 응답 길이: {Length}", aiResult?.Content?.Length ?? 0);
-            Log.Debug("[AI 응답 내용]:\n{Response}", aiResult?.Content);
+            if (aiResult == null)
+            {
+                aiResult = new AiResult();
+            }
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
 
-            return aiResult ?? new AiResult();
+            Log.Information("AI 정산 정책서 생성 완료 - 응답 길이: {Length}", aiResult.Content?.Length ?? 0);
+            Log.Debug("[AI 응답 내용]:\n{Response}", aiResult.Content);
+
+            return aiResult;
         }
     }
 }

@@ -66,5 +66,29 @@ namespace ReSet.Core.Tests
                 Assert.Equal("enabled", typeProp.GetString());
             }
         }
+
+        [Fact]
+        public async Task ChatAsync_WithErrorResponse_ShouldThrowInvalidOperationException()
+        {
+            var responseJson = @"{ ""error"": { ""message"": ""Zai error"" } }";
+            var spyHandler = new RequestSpyHttpMessageHandler(responseJson, System.Net.HttpStatusCode.OK);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new ZaiClient(httpClient, "test", "https://api.z.ai/api", "glm-4");
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Zai error", ex.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_WithErrorStatusCode_ShouldThrowHttpRequestException()
+        {
+            var responseJson = "Bad request";
+            var spyHandler = new RequestSpyHttpMessageHandler(responseJson, System.Net.HttpStatusCode.BadRequest);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new ZaiClient(httpClient, "test", "https://api.z.ai/api", "glm-4");
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+            Assert.Contains("Bad request", ex.Message);
+        }
     }
 }
