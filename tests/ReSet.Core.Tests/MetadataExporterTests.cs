@@ -344,19 +344,30 @@ namespace ReSet.Core.Tests
             await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir);
 
             // Assert
-            var expectedPath = Path.Combine(testOutputDir, $"{jobName}_MigrationInstructions.md");
-            var expectedTodoPath = Path.Combine(testOutputDir, $"{jobName}_todo.md");
+            var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");
+            var expectedTodoPath = Path.Combine(testOutputDir, "agent", "todo.md");
             Assert.True(File.Exists(expectedPath));
             Assert.True(File.Exists(expectedTodoPath));
 
             var content = await File.ReadAllTextAsync(expectedPath);
             Assert.Contains($"# 🚀 Consolidated Migration Instructions for Coding Agent ({jobName})", content);
             Assert.Contains(consolidatedPlan, content);
-            Assert.Contains("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", content);
-            Assert.Contains("CREATE PROCEDURE dbo.USP_Sp2 AS SELECT 2;", content);
-            Assert.Contains("TBL_TestDep", content);
-            Assert.Contains("의존 테이블 설명", content);
-            Assert.Contains($"{jobName}_todo.md", content);
+            var tableSchemasPath1 = Path.Combine(testOutputDir, "TableSchemas", "dbo.USP_Sp1_TableSchemas.md");
+            var tableSchemasPath2 = Path.Combine(testOutputDir, "TableSchemas", "dbo.USP_Sp2_TableSchemas.md");
+            
+            Assert.True(File.Exists(tableSchemasPath1));
+            Assert.True(File.Exists(tableSchemasPath2));
+
+            var context1 = await File.ReadAllTextAsync(tableSchemasPath1);
+            Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", context1);
+            Assert.Contains("TBL_TestDep", context1);
+            Assert.Contains("의존 테이블 설명", context1);
+
+            var context2 = await File.ReadAllTextAsync(tableSchemasPath2);
+            Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp2 AS SELECT 2;", context2);
+            
+            Assert.Contains("[TableSchemas/dbo.USP_Sp1_TableSchemas.md]", content);
+            Assert.Contains("todo.md", content);
 
             var todoContent = await File.ReadAllTextAsync(expectedTodoPath);
             Assert.Contains($"# 📋 {jobName} 통합 배치 마이그레이션 구현 체크리스트", todoContent);

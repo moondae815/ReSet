@@ -117,6 +117,7 @@ ReSet/
     │       ├── agent/
     │       │   ├── MigrationInstructions.md# 에이전트 전용 프롬프트 및 지시서
     │       │   └── todo.md                 # 구현 체크리스트
+    │       ├── TableSchemas/               # 코딩 에이전트 참조용 테이블 스키마 메타데이터
     │       └── raw/
     │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
@@ -124,7 +125,10 @@ ReSet/
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Jobs/[JobName]/              # 통합 배치 작업용 산출물이 격리 보존되는 전용 하위 폴더
     │   ├── [JobName]_BatchMigrationPlan.md   # 통합 배치 전환 계획서
-    │   └── [JobName]_MigrationInstructions.md # 통합 마이그레이션 지시서 번들
+    │   ├── agent/
+    │   │   ├── MigrationInstructions.md      # 통합 마이그레이션 지시서 번들
+    │   │   └── todo.md                       # 통합 배치 마이그레이션 체크리스트
+    │   └── TableSchemas/                     # 통합 배치 코딩 참조용 의존 테이블 스키마 모음
     │
     └── validation/                 # 소스코드 정적 검증 및 데이터 정합성 리포트 저장 폴더
         ├── [SP이름]_CompareReport.md  # 1:1 데이터 정합성 비교 분석 보고서

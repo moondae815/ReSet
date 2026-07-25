@@ -266,8 +266,14 @@ namespace ReSet.Core.Services
             string jobName,
             string baseOutputDir)
         {
-            var instructionsPath = Path.Combine(baseOutputDir, $"{jobName}_MigrationInstructions.md");
-            var todoPath = Path.Combine(baseOutputDir, $"{jobName}_todo.md");
+            var agentFolder = Path.Combine(baseOutputDir, "agent");
+            if (!Directory.Exists(agentFolder))
+            {
+                Directory.CreateDirectory(agentFolder);
+            }
+
+            var instructionsPath = Path.Combine(agentFolder, "MigrationInstructions.md");
+            var todoPath = Path.Combine(agentFolder, "todo.md");
 
             Log.Information("통합 마이그레이션 지시서 번들 내보내기 시작 - JobName: {JobName}, OutputDir: {OutputDir}", jobName, baseOutputDir);
 
@@ -293,63 +299,67 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
-                sb.AppendLine("## 📋 2. 대상 Stored Procedure 목록");
-                foreach (var spDef in spDefs)
+                var tableSchemasDir = Path.Combine(baseOutputDir, "TableSchemas");
+                if (!Directory.Exists(tableSchemasDir))
                 {
-                    sb.AppendLine($"- `{spDef.Schema}.{spDef.Name}`");
+                    Directory.CreateDirectory(tableSchemasDir);
                 }
+
+                sb.AppendLine("## 📋 2. 대상 Stored Procedure 및 테이블 스키마 참조 링크");
+                sb.AppendLine("아래 분리된 파일들을 읽어(Read) 데이터 엑세스 계층 구현 시 테이블 스키마와 데이터 타입을 확인하십시오. 핵심 비즈니스 로직 구현은 오직 1번 항목의 '통합 배치 전환 계획서(Plan)' 내용과 의사코드만을 엄격히 따라야 합니다.");
                 sb.AppendLine();
 
                 foreach (var spDef in spDefs)
                 {
                     var cleanSpName = $"{spDef.Schema}.{spDef.Name}";
-                    sb.AppendLine("---");
-                    sb.AppendLine();
-                    sb.AppendLine($"## 📄 3. `{cleanSpName}` 상세 명세");
-                    sb.AppendLine();
-                    sb.AppendLine($"### 💻 `{cleanSpName}` SQL Server DDL 원본");
-                    sb.AppendLine("```sql");
-                    sb.AppendLine(spDef.DdlText);
-                    sb.AppendLine("```");
-                    sb.AppendLine();
+                    var contextFileName = $"{cleanSpName}_TableSchemas.md";
+                    var contextFilePath = Path.Combine(tableSchemasDir, contextFileName);
+                    
+                    var contextSb = new System.Text.StringBuilder();
+                    contextSb.AppendLine($"# {cleanSpName} Dependencies & Table Schemas");
+                    contextSb.AppendLine();
 
                     if (spDef.Dependencies.Count > 0)
                     {
-                        sb.AppendLine($"### 📦 `{cleanSpName}` 의존성 주요 참조 스키마 및 소스코드");
-                        sb.AppendLine("SP 내에서 참조하는 테이블, 함수, 또는 하위 SP들의 메타데이터입니다. 소스코드 마이그레이션 시 데이터 엑세스 계층(Repository/DAO) 구현에 참고하십시오.");
-                        sb.AppendLine();
+                        contextSb.AppendLine($"### 📦 `{cleanSpName}` 의존성 주요 참조 스키마 및 소스코드");
+                        contextSb.AppendLine("SP 내에서 참조하는 테이블, 함수, 또는 하위 SP들의 메타데이터입니다. 소스코드 마이그레이션 시 데이터 엑세스 계층(Repository/DAO/Entity) 구현에 참고하십시오.");
+                        contextSb.AppendLine();
 
                         foreach (var dep in spDef.Dependencies)
                         {
                             var depFullName = string.IsNullOrEmpty(dep.Database)
                                 ? $"{dep.Schema}.{dep.Name}"
                                 : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
-                            sb.AppendLine($"#### 🔹 {dep.Type}: `{depFullName}`");
+                            contextSb.AppendLine($"#### 🔹 {dep.Type}: `{depFullName}`");
                             
                             if (dep.Columns.Count > 0)
                             {
-                                sb.AppendLine(FormatTableSchemaToMarkdown(dep));
+                                contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
                             }
                             
                             if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
                             {
-                                sb.AppendLine("##### Referenced SQL DDL:");
-                                sb.AppendLine("```sql");
-                                sb.AppendLine(dep.ReferencedDdlText);
-                                sb.AppendLine("```");
+                                contextSb.AppendLine("##### Referenced SQL DDL:");
+                                contextSb.AppendLine("```sql");
+                                contextSb.AppendLine(dep.ReferencedDdlText);
+                                contextSb.AppendLine("```");
                             }
-                            sb.AppendLine();
+                            contextSb.AppendLine();
                         }
                     }
+                    
+                    File.WriteAllText(contextFilePath, contextSb.ToString());
+                    sb.AppendLine($"- **{cleanSpName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
                 }
 
+                sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
-                sb.AppendLine("## 🔑 4. 코딩 에이전트 명령 가이드 (Prompt for Agent)");
+                sb.AppendLine("## 🔑 3. 코딩 에이전트 명령 가이드 (Prompt for Agent)");
                 sb.AppendLine("코딩 에이전트(Claude Code 등)에 입력할 때 아래 텍스트를 그대로 복사하여 사용하십시오:");
                 sb.AppendLine();
-                sb.AppendLine($"> \"이 파일(`{jobName}_MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 레거시 SQL DDL들을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
-                sb.AppendLine($"> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`{jobName}_todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
+                sb.AppendLine("> \"이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 레거시 SQL DDL들을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
+                sb.AppendLine("> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
                 sb.AppendLine("> 1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 그대로 준수할 것.");
                 sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
                 sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
