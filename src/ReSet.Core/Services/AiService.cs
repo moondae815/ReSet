@@ -805,6 +805,8 @@ Based on the structured reference context above, reverse engineer the stored pro
 
         private (string SystemPrompt, string UserPrompt) BuildChunkDeconstructionPrompts(SpDefinition spDef, ChunkAnalysisResult chunk, string userInstructions, string? feedbackLog = null)
         {
+            var (_, _, _, staticAnalysisText) = BuildSpMetadataTexts(spDef);
+
             var ragSchemas = new StringBuilder();
             if (chunk.ReferencedTables.Count > 0 && spDef.Dependencies != null)
             {
@@ -849,7 +851,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 [Rules]
 1. You MUST respond ONLY with a strictly valid JSON object matching the JSON schema below.
 2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
-3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission.
+3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission. For 'SourceExpression', you MUST extract the EXACT string/formula from the SQL or use the exact expression from `<static-analysis-metadata>`. Do NOT hallucinate, summarize, or invent values (e.g., do not replace a variable with `CAST(0 AS INT)` unless it explicitly exists in the SQL branch).
 4. If there are UNION/UNION ALL blocks, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
 5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
@@ -989,6 +991,15 @@ Based on the structured reference context above, reverse engineer the stored pro
                 userPromptSb.AppendLine(ragSchemas.ToString());
             }
 
+            if (!string.IsNullOrEmpty(staticAnalysisText))
+            {
+                userPromptSb.AppendLine();
+                userPromptSb.AppendLine("  <static-analysis-metadata>");
+                userPromptSb.AppendLine(staticAnalysisText.Trim());
+                userPromptSb.AppendLine("  </static-analysis-metadata>");
+            }
+
+            userPromptSb.AppendLine();
             userPromptSb.AppendLine("[SQL Statement Chunk]");
             userPromptSb.AppendLine("```sql");
             userPromptSb.AppendLine(chunk.StatementText);
@@ -1016,7 +1027,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 [Rules]
 1. You MUST respond ONLY with a strictly valid JSON object matching the JSON schema below.
 2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
-3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission.
+3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission. For 'SourceExpression', you MUST extract the EXACT string/formula from the SQL or use the exact expression from `<static-analysis-metadata>`. Do NOT hallucinate, summarize, or invent values.
 4. If there are UNION/UNION ALL blocks in the DML statements, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
 5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
@@ -1298,10 +1309,11 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "   - Detail the column names referenced and join/filter keys without abbreviation.",
                     "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
                     "3. For target tables of INSERT/UPDATE operations, map all target columns to their source values (variables, constants, function results, etc.) in a 1:1 mapping table. Do not abbreviate with 'etc.' or '...'.",
-                    "4. Factually state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used."
+                    "4. Factually state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used.",
+                    "5. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch."
                 };
 
-                int rIdx = 5;
+                int rIdx = 6;
                 if (hasUdf)
                 {
                     sbRules.Add($"{rIdx++}. If the DDL of the referenced UDF is provided, analyze its operation. If missing, output 'UDF definition not provided; detailed logic excluded from analysis' along with its calling location and purpose.");
@@ -1315,7 +1327,6 @@ Based on the structured reference context above, reverse engineer the stored pro
                     sbRules.Add($"{rIdx++}. If Linked Server references (4-part identifier) are found, analyze the external DB dependencies. If it is a cross-database reference on the same server (3-part identifier), distinguish it clearly from a Linked Server.");
                 }
 
-                sbRules.Add($"{rIdx++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");
@@ -1365,10 +1376,11 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "",
                     "[Rules]",
                     "1. The document must use only H2 headers: `## 로직 흐름 요약` and `## 비즈니스 흐름 시각화` in this exact order. Terminate immediately after writing them. Do not include other H2 headers.",
-                    "2. In ## 로직 흐름 요약, detail the transaction boundary, business operation steps, rollback patterns using @@ERROR, and failure return codes."
+                    "2. In ## 로직 흐름 요약, detail the transaction boundary, business operation steps, rollback patterns using @@ERROR, and failure return codes. If TRY-CATCH is NOT used for exception handling, explicitly mention its absence and the associated risks.",
+                    "3. When describing success or failure return values (e.g., @po_intRetVal), state ONLY what is EXPLICITLY assigned in the SQL code. Do not assume it returns 0 on success based solely on header comments if there is no explicit `SET` statement."
                 };
 
-                int rIdx = 3;
+                int rIdx = 4;
                 if (hasDynamicSql)
                 {
                     sbRules.Add($"{rIdx++}. If dynamic SQL is present, explain the execution and business flow purpose in the logic summary.");
@@ -1381,8 +1393,9 @@ Based on the structured reference context above, reverse engineer the stored pro
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
-                sbRules.Add("   - Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
+                sbRules.Add("   - You MUST add explicit condition labels on all branching arrows (e.g., `-->|Success|`, `-->|Failed: -1|`). Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
                 sbRules.Add("   - Node IDs must be unique uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG). Do not use Mermaid reserved keywords (graph, flowchart, subgraph, end, END) as node IDs. You MUST use 'PROC_END' instead of 'END'.");
+                sbRules.Add("   - For different failure return codes (e.g., -1, -2, -9), route them to distinct end nodes (e.g., `FAIL_1[\"Return -1\"]`, `FAIL_2[\"Return -2\"]`) instead of collapsing all failures into a single `PROC_END` node.");
                 sbRules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another.");
                 sbRules.Add("   - Ensure prophylactic rollbacks (e.g., `IF @@TRANCOUNT <> 0 ROLLBACK` before the main logic) proceed to the main `BEGIN TRAN` node, not to the end of the procedure.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
