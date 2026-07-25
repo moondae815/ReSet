@@ -1668,6 +1668,7 @@ Consolidate the provided specifications into a single unified batch job named '{
    - ## 통합 배치 아키텍처 개요: Define how the individual stored procedures translate into steps (sequential chain, conditional branches, parallel processing) within the unified batch job.
    - ## Mermaid 기반 통합 흐름도: Draw a Mermaid flowchart diagram depicting the data pipeline and steps.
      * Wrap all node text labels in double quotes. Do not use double quotes or special characters in arrow labels. Node IDs must be unique alphanumeric words.
+     * ALWAYS add a space between the 'subgraph' keyword and its ID (e.g., `subgraph SHARED_DB [""Label""]`). Do not write `subgraphSHARED_DB`.
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
 3. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
@@ -1676,6 +1677,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
             userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
+            userPrompt.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
             userPrompt.AppendLine();
             userPrompt.AppendLine("[Provided Stored Procedure Specifications]");
 

@@ -861,6 +861,18 @@ namespace ReSet.Cli
                             continue;
                         }
 
+                        AnsiConsole.Clear();
+                        AnsiConsole.Write(new FigletText("ReSet Analyzer").Color(Color.Green));
+                        AnsiConsole.MarkupLine("[bold green]=== SQL Server Stored Procedure Reverse Engineering Tool ===[/]");
+                        AnsiConsole.WriteLine();
+                        var finalSeqStr = string.Join(Environment.NewLine, selectedFiles.Select((f, index) => $"[bold green]{index + 1}.[/] [yellow]{Markup.Escape(Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f))}[/]"));
+                        AnsiConsole.Write(new Panel(new Markup(finalSeqStr))
+                        {
+                            Header = new PanelHeader(" [bold cyan]최종 구성된 배치 Job 실행 순서[/] "),
+                            Border = BoxBorder.Rounded
+                        });
+                        AnsiConsole.WriteLine();
+
                         var specsData = new List<(string FileName, string Content)>();
                         foreach (var fileName in selectedFiles)
                         {
