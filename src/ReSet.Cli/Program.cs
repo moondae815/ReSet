@@ -620,12 +620,19 @@ namespace ReSet.Cli
                         else
                         {
                             var jobsOutputDir = Path.Combine(outputDir, "Jobs", cliArgs.JobName);
-                            if (!Directory.Exists(jobsOutputDir))
+                            var docsDir = Path.Combine(jobsOutputDir, "docs");
+                            var rawDir = Path.Combine(jobsOutputDir, "raw");
+
+                            if (!Directory.Exists(docsDir))
                             {
-                                Directory.CreateDirectory(jobsOutputDir);
+                                Directory.CreateDirectory(docsDir);
+                            }
+                            if (!Directory.Exists(rawDir))
+                            {
+                                Directory.CreateDirectory(rawDir);
                             }
 
-                            var planFileName = Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_BatchMigrationPlan.md");
+                            var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
@@ -634,10 +641,10 @@ namespace ReSet.Cli
                             {
                                 if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
                                 {
-                                    await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, "Thinking.md"), aiResult.ThinkingText);
+                                    await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), aiResult.ThinkingText);
                                 }
                                 var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
-                                await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_RawContext.md"), rawContext);
+                                await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
                             }
 
                             AnsiConsole.MarkupLine($"[green]성공: 통합 배치 설계서 생성 완료![/] {Markup.Escape(planFileName)}");
@@ -963,12 +970,19 @@ namespace ReSet.Cli
                             }
 
                             var jobsOutputDir = Path.Combine(outputDir, "Jobs", jobName);
-                            if (!Directory.Exists(jobsOutputDir))
+                            var docsDir = Path.Combine(jobsOutputDir, "docs");
+                            var rawDir = Path.Combine(jobsOutputDir, "raw");
+
+                            if (!Directory.Exists(docsDir))
                             {
-                                Directory.CreateDirectory(jobsOutputDir);
+                                Directory.CreateDirectory(docsDir);
+                            }
+                            if (!Directory.Exists(rawDir))
+                            {
+                                Directory.CreateDirectory(rawDir);
                             }
 
-                            var planFileName = Path.Combine(jobsOutputDir, $"{jobName}_BatchMigrationPlan.md");
+                            var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
@@ -977,16 +991,17 @@ namespace ReSet.Cli
                             {
                                 if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
                                 {
-                                    await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, "Thinking.md"), aiResult.ThinkingText);
+                                    await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), aiResult.ThinkingText);
                                 }
                                 var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
-                                await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, $"{jobName}_RawContext.md"), rawContext);
+                                await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
                             }
                             AnsiConsole.Write(new Panel(new Markup($"[green]통합 배치 설계서가 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(planFileName)}"))
                             {
                                 Border = BoxBorder.Rounded,
                                 Header = new PanelHeader($" {jobName} 통합 마이그레이션 완료 ")
                             });
+
 
                             // SpDefinition들 복원 및 통합 마이그레이션 지시서 생성
                             var spDefs = new List<SpDefinition>();
