@@ -194,29 +194,43 @@ namespace ReSet.Core.Services
                     sb.AppendLine("---");
                     sb.AppendLine();
                     sb.AppendLine("## 📦 5. 의존하는 주요 참조 스키마 및 소스코드");
-                    sb.AppendLine("SP 내에서 참조하는 테이블, 함수, 또는 하위 SP들의 메타데이터입니다. 소스코드 마이그레이션 시 데이터 엑세스 계층(Repository/DAO) 구현에 참고하십시오.");
+                    sb.AppendLine("데이터 엑세스 계층(Repository/DAO) 구현에 참고해야 할 테이블 스키마 파일들의 링크입니다.");
                     sb.AppendLine();
+
+                    var tableSchemasDir = Path.Combine(baseOutputDir, "TableSchemas");
+                    if (!Directory.Exists(tableSchemasDir))
+                    {
+                        Directory.CreateDirectory(tableSchemasDir);
+                    }
 
                     foreach (var dep in spDef.Dependencies)
                     {
-                        var depFullName = string.IsNullOrEmpty(dep.Database)
+                        var cleanDepName = string.IsNullOrEmpty(dep.Database)
                             ? $"{dep.Schema}.{dep.Name}"
-                            : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
-                        sb.AppendLine($"### 🔹 {dep.Type}: `{depFullName}`");
+                            : $"{dep.Database}.{dep.Schema}.{dep.Name}";
+                        
+                        var contextFileName = $"{cleanDepName}.md";
+                        var contextFilePath = Path.Combine(tableSchemasDir, contextFileName);
+                        
+                        var contextSb = new System.Text.StringBuilder();
+                        contextSb.AppendLine($"# {dep.Type}: {cleanDepName}");
+                        contextSb.AppendLine();
                         
                         if (dep.Columns.Count > 0)
                         {
-                            sb.AppendLine(FormatTableSchemaToMarkdown(dep));
+                            contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
                         }
                         
                         if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
                         {
-                            sb.AppendLine("#### Referenced SQL DDL:");
-                            sb.AppendLine("```sql");
-                            sb.AppendLine(dep.ReferencedDdlText);
-                            sb.AppendLine("```");
+                            contextSb.AppendLine("## Referenced SQL DDL:");
+                            contextSb.AppendLine("```sql");
+                            contextSb.AppendLine(dep.ReferencedDdlText);
+                            contextSb.AppendLine("```");
                         }
-                        sb.AppendLine();
+                        
+                        File.WriteAllText(contextFilePath, contextSb.ToString());
+                        sb.AppendLine($"- **{cleanDepName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
                     }
                 }
 
@@ -307,47 +321,40 @@ namespace ReSet.Core.Services
                 sb.AppendLine("아래 분리된 파일들을 읽어(Read) 데이터 엑세스 계층 구현 시 테이블 스키마와 데이터 타입을 확인하십시오. 핵심 비즈니스 로직 구현은 오직 1번 항목의 '통합 배치 전환 계획서(Plan)' 내용과 의사코드만을 엄격히 따라야 합니다.");
                 sb.AppendLine();
 
-                foreach (var spDef in spDefs)
+                var distinctDependencies = spDefs
+                    .SelectMany(sp => sp.Dependencies)
+                    .GroupBy(d => $"{d.Database}.{d.Schema}.{d.Name}")
+                    .Select(g => g.First())
+                    .ToList();
+
+                foreach (var dep in distinctDependencies)
                 {
-                    var cleanSpName = $"{spDef.Schema}.{spDef.Name}";
-                    var contextFileName = $"{cleanSpName}_TableSchemas.md";
+                    var cleanDepName = string.IsNullOrEmpty(dep.Database) 
+                        ? $"{dep.Schema}.{dep.Name}" 
+                        : $"{dep.Database}.{dep.Schema}.{dep.Name}";
+                    
+                    var contextFileName = $"{cleanDepName}.md";
                     var contextFilePath = Path.Combine(tableSchemasDir, contextFileName);
                     
                     var contextSb = new System.Text.StringBuilder();
-                    contextSb.AppendLine($"# {cleanSpName} Dependencies & Table Schemas");
+                    contextSb.AppendLine($"# {dep.Type}: {cleanDepName}");
                     contextSb.AppendLine();
-
-                    if (spDef.Dependencies.Count > 0)
+                    
+                    if (dep.Columns.Count > 0)
                     {
-                        contextSb.AppendLine($"### 📦 `{cleanSpName}` 의존성 주요 참조 스키마 및 소스코드");
-                        contextSb.AppendLine("SP 내에서 참조하는 테이블, 함수, 또는 하위 SP들의 메타데이터입니다. 소스코드 마이그레이션 시 데이터 엑세스 계층(Repository/DAO/Entity) 구현에 참고하십시오.");
-                        contextSb.AppendLine();
-
-                        foreach (var dep in spDef.Dependencies)
-                        {
-                            var depFullName = string.IsNullOrEmpty(dep.Database)
-                                ? $"{dep.Schema}.{dep.Name}"
-                                : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
-                            contextSb.AppendLine($"#### 🔹 {dep.Type}: `{depFullName}`");
-                            
-                            if (dep.Columns.Count > 0)
-                            {
-                                contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
-                            }
-                            
-                            if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
-                            {
-                                contextSb.AppendLine("##### Referenced SQL DDL:");
-                                contextSb.AppendLine("```sql");
-                                contextSb.AppendLine(dep.ReferencedDdlText);
-                                contextSb.AppendLine("```");
-                            }
-                            contextSb.AppendLine();
-                        }
+                        contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
+                    }
+                    
+                    if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
+                    {
+                        contextSb.AppendLine("## Referenced SQL DDL:");
+                        contextSb.AppendLine("```sql");
+                        contextSb.AppendLine(dep.ReferencedDdlText);
+                        contextSb.AppendLine("```");
                     }
                     
                     File.WriteAllText(contextFilePath, contextSb.ToString());
-                    sb.AppendLine($"- **{cleanSpName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
+                    sb.AppendLine($"- **{cleanDepName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
                 }
 
                 sb.AppendLine();
