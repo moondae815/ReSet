@@ -1671,8 +1671,10 @@ Consolidate the provided specifications into a single unified batch job named '{
      * ALWAYS add a space between the 'subgraph' keyword and its ID (e.g., `subgraph SHARED_DB [""Label""]`). Do not write `subgraphSHARED_DB`.
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
-3. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-4. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
+3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
+4. [Transaction Isolation] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy (e.g., Session-level Read Uncommitted isolation blocking, or Staging Table + Partition Switch) to prevent intermediate partial data from being exposed to other real-time queries.
+5. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
+6. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");

@@ -391,11 +391,11 @@ namespace ReSet.Core.Services
 
                 var processedLine = line;
 
-                // 1. 화살표 라벨 따옴표 제거 및 표준화
-                // -- "텍스트" --> 또는 -->| "텍스트" | 또는 -->|"텍스트"| 등을 -->|텍스트| 로 변환
-                processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", "-->|$1|");
-                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^""]+?)\s*""\s*-->", "-->|$1|");
-                processedLine = Regex.Replace(processedLine, @"--\s*([^""]+?)\s*-->", "-->|$1|");
+                // 1. 화살표 라벨 따옴표 제거 및 표준화 (하이픈 제거 추가)
+                // -- "텍스트" --> 또는 -->| "텍스트" | 또는 -->|"텍스트"| 등을 -->|텍스트| 로 변환하되 하이픈(-)은 제거
+                processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^""]+?)\s*""\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*([^""]+?)\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
 
                 // 2. 비표준 화살표 조건절 및 누락된 화살표 보정 (예: 'A -- |label| B' -> 'A -->|label| B')
                 processedLine = Regex.Replace(processedLine, @"--\s*\|([^|]+)\|\s*([a-zA-Z0-9_]+)", "-->|$1| $2");
@@ -403,6 +403,9 @@ namespace ReSet.Core.Services
                 // 3. 잘못된 화살표 기호 보정 ( -> 또는 - -> 를 --> 로 변환)
                 processedLine = Regex.Replace(processedLine, @"-\s*->", "-->");
                 processedLine = Regex.Replace(processedLine, @"-[^-]>", "-->");
+
+                // 3.5. subgraph 와 식별자 사이 띄어쓰기 강제 보정 (subgraphSHAREDDB -> subgraph SHAREDDB)
+                processedLine = Regex.Replace(processedLine, @"^(\s*)subgraph([a-zA-Z0-9_]+)", "$1subgraph $2");
 
                 // 4. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
                 processedLine = MermaidNodeRegex.Replace(processedLine, match =>
