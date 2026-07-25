@@ -394,8 +394,8 @@ namespace ReSet.Core.Services
                 // 1. 화살표 라벨 따옴표 제거 및 표준화 (하이픈 제거 추가)
                 // -- "텍스트" --> 또는 -->| "텍스트" | 또는 -->|"텍스트"| 등을 -->|텍스트| 로 변환하되 하이픈(-)은 제거
                 processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
-                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^""]+?)\s*""\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
-                processedLine = Regex.Replace(processedLine, @"--\s*([^""]+?)\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^"">]+?)\s*""\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*([^"">]+?)\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
 
                 // 2. 비표준 화살표 조건절 및 누락된 화살표 보정 (예: 'A -- |label| B' -> 'A -->|label| B')
                 processedLine = Regex.Replace(processedLine, @"--\s*\|([^|]+)\|\s*([a-zA-Z0-9_]+)", "-->|$1| $2");
@@ -427,10 +427,20 @@ namespace ReSet.Core.Services
                     var testId = nodeId.Trim();
                     if (testId.Equals("graph", StringComparison.OrdinalIgnoreCase) ||
                         testId.Equals("flowchart", StringComparison.OrdinalIgnoreCase) ||
-                        testId.Equals("subgraph", StringComparison.OrdinalIgnoreCase) ||
                         testId.Equals("end", StringComparison.OrdinalIgnoreCase))
                     {
                         return match.Value;
+                    }
+
+                    bool isSubgraph = false;
+                    if (testId.StartsWith("subgraph ", StringComparison.OrdinalIgnoreCase) || 
+                        testId.Equals("subgraph", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isSubgraph = true;
+                        if (testId.Length > 8)
+                            testId = testId.Substring(9).Trim(); // Remove "subgraph "
+                        else
+                            testId = "";
                     }
 
                     // 공백 및 언더스코어 제거
@@ -442,12 +452,21 @@ namespace ReSet.Core.Services
                         trimmedLabel.Contains("[") || trimmedLabel.Contains("]") ||
                         trimmedLabel.Contains("{") || trimmedLabel.Contains("}") ||
                         trimmedLabel.Contains(",") || trimmedLabel.Contains("'") ||
-                        trimmedLabel.Contains(":") || trimmedLabel.Contains("-"))
+                        trimmedLabel.Contains(":") || trimmedLabel.Contains("-") ||
+                        trimmedLabel.Contains(">") || trimmedLabel.Contains("<") ||
+                        trimmedLabel.Contains("/") || trimmedLabel.Contains("\\"))
                     {
                         if (!(trimmedLabel.StartsWith("\"") && trimmedLabel.EndsWith("\"")))
                         {
                             trimmedLabel = $"\"{trimmedLabel}\"";
                         }
+                    }
+
+                    if (isSubgraph)
+                    {
+                        return string.IsNullOrEmpty(cleansedId) 
+                            ? $"subgraph{opening}{trimmedLabel}{closing}" 
+                            : $"subgraph {cleansedId}{opening}{trimmedLabel}{closing}";
                     }
 
                     return $"{cleansedId}{opening}{trimmedLabel}{closing}";

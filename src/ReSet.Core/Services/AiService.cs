@@ -1680,8 +1680,12 @@ Consolidate the provided specifications into a single unified batch job named '{
 7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
 8. [Preserve Chunking Filters] When chunking operations (e.g., `WHERE ID BETWEEN @start AND @end`), you MUST retain the original business logic filters (e.g., self-joins, cursor criteria, status checks) and combine them with the chunking range using `AND`. Do not delete the original filters.
 9. [Error Codes] DO NOT use continuous ranges for error codes (e.g., `-1~-23`). You MUST list the exact error codes individually (e.g., -1, -2, -4, -5...).
-10. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-11. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
+10. [NOLOCK Prohibition] Since SNAPSHOT isolation is used, you MUST explicitly remove all `WITH (NOLOCK)` or `NOLOCK` hints from the generated pseudocode. `NOLOCK` forces READ UNCOMMITTED and completely violates the SNAPSHOT isolation policy.
+11. [INSERT-only Rollback] For INSERT-only steps, do not use a Shadow table for rollback. Instead, rely solely on `ROLLBACK TRAN` for single transactions, or provide an explicit `DELETE WHERE [ChunkKey]` compensation logic. Do NOT perform `DELETE` immediately after `ROLLBACK TRAN` inside a CATCH block for a single transaction as it is redundant.
+12. [Chunk Key Validation] When defining a chunk key, ensure the key column (e.g., `CLIENTID`) actually exists in the target table. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
+13. [Output Parameters Interface] All output parameters (e.g., `@po_strErrMsg`, `@po_intRetVal`) from the original procedures MUST be accurately mapped in the unified batch context interface and error code tables. Do not omit them.
+14. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
+15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");

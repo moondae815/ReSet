@@ -288,5 +288,26 @@ graph TD
             Assert.Contains("B2{\"Condition : Check\"}", result);
             Assert.Contains("-->|Label|", result);
         }
+
+        [Fact]
+        public void PostProcessMarkdown_ShouldPreserveSubgraphAndChainedArrows()
+        {
+            var dirtyMarkdown = @"
+# 통합 계획서
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    subgraph SHARED_DB
+        A --> B --> C
+    end
+```
+";
+            var result = _validator.PostProcessMarkdown(dirtyMarkdown);
+            
+            Assert.Contains("subgraph SHAREDDB", result);
+            Assert.DoesNotContain("subgraphSHAREDDB", result);
+            Assert.Contains("A --> B --> C", result);
+            Assert.DoesNotContain("-->|>", result);
+        }
     }
 }

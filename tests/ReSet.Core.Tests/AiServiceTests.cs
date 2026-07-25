@@ -129,6 +129,32 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ContainsDomainConstraints()
+        {
+            // Arrange
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.GenerateConsolidatedBatchPlanAsync(specs, "C#", "Test_Job");
+
+            // Assert
+            Assert.Contains("[NOLOCK Prohibition]", result.SystemPrompt);
+            Assert.Contains("[INSERT-only Rollback]", result.SystemPrompt);
+            Assert.Contains("[Chunk Key Validation]", result.SystemPrompt);
+            Assert.Contains("[Output Parameters Interface]", result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task ReviewSpecificationAsync_Success_ReturnsReviewResult()
         {
             // Arrange
@@ -371,8 +397,6 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var deconstructedLogic = "{\"Overview\": {\"Description\": \"Test\"}}";
-
             // Act
             var result = await service.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", "지침", null, null, CancellationToken.None);
 
@@ -390,7 +414,7 @@ namespace ReSet.Core.Tests
             var mockHandler = new MockHttpMessageHandler(mockResponse);
             var client = new OpenAiClient(new HttpClient(mockHandler), "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
-            var deconstructedLogic = "{\"Overview\": {}}";
+            
 
             // Act
             var result = await service.GenerateSpecSectionAsync(spDef, "CrudAnalysis", "지침", null, null, CancellationToken.None);
@@ -408,7 +432,7 @@ namespace ReSet.Core.Tests
             var mockHandler = new MockHttpMessageHandler(mockResponse);
             var client = new OpenAiClient(new HttpClient(mockHandler), "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
-            var deconstructedLogic = "{\"Overview\": {}}";
+            
 
             // Act
             var result = await service.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", "지침", null, null, CancellationToken.None);
