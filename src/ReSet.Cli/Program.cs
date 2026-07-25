@@ -610,7 +610,9 @@ namespace ReSet.Cli
 
                     try
                     {
-                        var consolidatedPlan = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, isBatchMode: true, activeCts.Token);
+                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, isBatchMode: true, activeCts.Token);
+                        var consolidatedPlan = pipelineResult.Plan;
+                        var aiResult = pipelineResult.Result;
                         if (string.IsNullOrEmpty(consolidatedPlan))
                         {
                             AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
@@ -627,6 +629,17 @@ namespace ReSet.Cli
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
+                            
+                            if (aiResult != null)
+                            {
+                                if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
+                                {
+                                    await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, "Thinking.md"), aiResult.ThinkingText);
+                                }
+                                var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+                                await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_RawContext.md"), rawContext);
+                            }
+
                             AnsiConsole.MarkupLine($"[green]성공: 통합 배치 설계서 생성 완료![/] {Markup.Escape(planFileName)}");
 
                             // 통합 마이그레이션 지시서 생성
@@ -940,7 +953,9 @@ namespace ReSet.Cli
 
                         try
                         {
-                            consolidatedPlan = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, cancellationToken: activeCts.Token);
+                            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, cancellationToken: activeCts.Token);
+                            consolidatedPlan = pipelineResult.Plan;
+                            var aiResult = pipelineResult.Result;
                             if (string.IsNullOrEmpty(consolidatedPlan))
                             {
                                 AnsiConsole.MarkupLine("[red]통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
@@ -957,6 +972,16 @@ namespace ReSet.Cli
                             var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
                             var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
                             await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
+
+                            if (aiResult != null)
+                            {
+                                if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
+                                {
+                                    await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, "Thinking.md"), aiResult.ThinkingText);
+                                }
+                                var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+                                await File.WriteAllTextAsync(Path.Combine(jobsOutputDir, $"{jobName}_RawContext.md"), rawContext);
+                            }
                             AnsiConsole.Write(new Panel(new Markup($"[green]통합 배치 설계서가 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(planFileName)}"))
                             {
                                 Border = BoxBorder.Rounded,

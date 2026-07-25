@@ -953,8 +953,8 @@ namespace ReSet.Core.Tests
             var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(consolidatedPlan, result);
+            Assert.NotNull(result.Plan);
+            Assert.Equal(consolidatedPlan, result.Plan);
             _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
         }
 
@@ -983,8 +983,8 @@ namespace ReSet.Core.Tests
             var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(goodPlan, result);
+            Assert.NotNull(result.Plan);
+            Assert.Equal(goodPlan, result.Plan);
             _userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
         }
 
@@ -1011,7 +1011,7 @@ namespace ReSet.Core.Tests
             var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
 
             // Assert
-            Assert.NotNull(result);
+            Assert.NotNull(result.Plan);
             _userInteraction.Received(1).NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), "L2 결함");
         }
 
@@ -1071,8 +1071,8 @@ namespace ReSet.Core.Tests
             var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Contains("## 통합 계획서", result);
+            Assert.NotNull(result.Plan);
+            Assert.Contains("## 통합 계획서", result.Plan);
             _userInteraction.Received(1).NotifyValidationSuccess("TestJob");
         }
 
@@ -1105,7 +1105,7 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
 
             // Assert
-            Assert.NotNull(result);
+            Assert.NotNull(result.Plan);
             userInteraction.Received(1).NotifyValidationSuccess("TestJob");
             await aiService.Received(2).GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
@@ -1139,7 +1139,7 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
 
             // Assert
-            Assert.NotNull(result);
+            Assert.NotNull(result.Plan);
             userInteraction.Received(1).NotifyValidationSuccess("TestJob");
             await aiService.Received(2).GenerateConsolidatedBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
             await aiService.Received(2).ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
@@ -1173,7 +1173,7 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobCancel", "OpenAI", isBatchMode: false);
 
             // Assert
-            Assert.Null(result);
+            Assert.Null(result.Plan);
             await userInteraction.Received(1).RequestHumanReviewAsync("TestJobCancel", Arg.Any<string>());
         }
 
@@ -1209,8 +1209,8 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobFeedback", "OpenAI", isBatchMode: false);
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(regeneratedMarkdown, result);
+            Assert.NotNull(result.Plan);
+            Assert.Equal(regeneratedMarkdown, result.Plan);
             await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>());
         }
 
@@ -1249,8 +1249,8 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobException", "OpenAI", isBatchMode: false);
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(initialMarkdown, result); // It reverted to initial markdown because regeneration failed
+            Assert.NotNull(result.Plan);
+            Assert.Equal(initialMarkdown, result.Plan); // It reverted to initial markdown because regeneration failed
             userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("재생성 실패")));
         }
 
@@ -1293,8 +1293,8 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobL1Fail", "OpenAI", isBatchMode: false);
 
             // Assert
-            Assert.NotNull(result);
-            Assert.Equal(fixedMarkdown, result); // Returns fixed markdown
+            Assert.NotNull(result.Plan);
+            Assert.Equal(fixedMarkdown, result.Plan); // Returns fixed markdown
             userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
         }
 
@@ -1323,7 +1323,7 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobWarning", "OpenAI", isBatchMode: true);
 
             // Assert
-            Assert.NotNull(result);
+            Assert.NotNull(result.Plan);
             userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("This is a warning")));
             userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("Second line")));
         }

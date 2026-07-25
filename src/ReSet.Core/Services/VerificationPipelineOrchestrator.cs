@@ -1185,7 +1185,7 @@ namespace ReSet.Core.Services
             return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
         }
 
-        public async Task<string?> RunConsolidatedPipelineAsync(
+        public async Task<(string? Plan, AiResult? Result)> RunConsolidatedPipelineAsync(
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
@@ -1196,6 +1196,7 @@ namespace ReSet.Core.Services
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
+            AiResult? finalAiResult = null;
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
@@ -1221,6 +1222,7 @@ namespace ReSet.Core.Services
                         aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "batch");
                     }
                     consolidatedPlan = aiResult.Content;
+                    finalAiResult = aiResult;
                     genSuccess = true;
                 }
                 catch (Exception ex)
@@ -1230,7 +1232,7 @@ namespace ReSet.Core.Services
 
                 if (!genSuccess || string.IsNullOrEmpty(consolidatedPlan))
                 {
-                    return null;
+                    return (null, null);
                 }
 
                 // L1: 기계적 무결성 검사
@@ -1320,7 +1322,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return consolidatedPlan;
+                return (consolidatedPlan, finalAiResult);
             }
 
             while (true)
@@ -1329,11 +1331,11 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return consolidatedPlan;
+                    return (consolidatedPlan, finalAiResult);
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
-                    return null;
+                    return (null, null);
                 }
                 else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                 {
