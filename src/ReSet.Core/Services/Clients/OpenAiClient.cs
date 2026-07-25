@@ -259,18 +259,66 @@ namespace ReSet.Core.Services.Clients
                         throw new InvalidOperationException("OpenAI API 응답 choices 내에 message 속성이 존재하지 않습니다.");
                     }
 
+                    string contentValue = string.Empty;
+                    if (messageElement.TryGetProperty("content", out var contentElement))
+                    {
+                        if (contentElement.ValueKind == JsonValueKind.String)
+                        {
+                            contentValue = contentElement.GetString() ?? string.Empty;
+                        }
+                    }
+                    else
+                    {
+                        Log.Warning("OpenAI API 응답 message 내 content 속성이 누락되었습니다. 빈 문자열로 처리합니다.");
+                    }
+
+                    // 1차적으로 API 규격의 reasoning 필드 확인
                     string? reasoningContent = null;
-                    if (messageElement.TryGetProperty("reasoning_content", out var reasoningElement))
+                    if (messageElement.TryGetProperty("reasoning_content", out var reasoningElement) && reasoningElement.ValueKind == JsonValueKind.String)
                     {
                         reasoningContent = reasoningElement.GetString();
                     }
-                    else if (messageElement.TryGetProperty("reasoning", out var reasoningAltElement))
+                    else if (messageElement.TryGetProperty("reasoning", out var reasoningAltElement) && reasoningAltElement.ValueKind == JsonValueKind.String)
                     {
                         reasoningContent = reasoningAltElement.GetString();
                     }
-                    else if (messageElement.TryGetProperty("thinking", out var thinkingAltElement))
+                    else if (messageElement.TryGetProperty("thinking", out var thinkingAltElement) && thinkingAltElement.ValueKind == JsonValueKind.String)
                     {
                         reasoningContent = thinkingAltElement.GetString();
+                    }
+
+                    // 2차적으로 본문 내 <think> 태그 파싱 (Qwen 등 로컬 모델 대응)
+                    if (string.IsNullOrWhiteSpace(reasoningContent) && !string.IsNullOrWhiteSpace(contentValue))
+                    {
+                        int startTag = contentValue.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
+                        if (startTag != -1)
+                        {
+                            int endTag = contentValue.IndexOf("</think>", startTag + 7, StringComparison.OrdinalIgnoreCase);
+                            if (endTag != -1)
+                            {
+                                reasoningContent = contentValue.Substring(startTag + 7, endTag - (startTag + 7)).Trim();
+                                var beforeThink = contentValue.Substring(0, startTag);
+                                var afterThink = contentValue.Substring(endTag + 8);
+                                contentValue = (beforeThink + afterThink).Trim();
+                            }
+                        }
+                        else
+                        {
+                            int endTag = contentValue.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+                            int endTagLength = 8;
+                            
+                            if (endTag == -1)
+                            {
+                                endTag = contentValue.IndexOf("<|end of thought|>", StringComparison.OrdinalIgnoreCase);
+                                endTagLength = 18;
+                            }
+
+                            if (endTag != -1)
+                            {
+                                reasoningContent = contentValue.Substring(0, endTag).Trim();
+                                contentValue = contentValue.Substring(endTag + endTagLength).Trim();
+                            }
+                        }
                     }
 
                     if (!string.IsNullOrWhiteSpace(reasoningContent))
@@ -278,15 +326,9 @@ namespace ReSet.Core.Services.Clients
                         Log.Information("[OpenAI Reasoning Process]:\n{Reasoning}", reasoningContent);
                     }
 
-                    if (!messageElement.TryGetProperty("content", out var contentElement))
-                    {
-                        Log.Error("OpenAI API 응답 message 내 content 속성 누락");
-                        throw new InvalidOperationException("OpenAI API 응답 message 내에 content 속성이 존재하지 않습니다.");
-                    }
-
                     return new AiResult
                     {
-                        Content = contentElement.GetString() ?? string.Empty,
+                        Content = contentValue,
                         ThinkingText = reasoningContent
                     };
                 }
