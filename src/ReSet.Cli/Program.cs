@@ -785,6 +785,45 @@ namespace ReSet.Cli
                             remainingFiles.Add(Path.GetRelativePath(outputDir, file));
                         }
 
+                        var defaultSpOrder = new[]
+                        {
+                            "UP_UTIL_PG_CLIENT_CMRATE_INS",
+                            "UP_UTIL_SETTLE_INS",
+                            "UP_UTIL_SETTLE_CANCEL_INS",
+                            "UP_UTIL_SETTLE_EXCEPTION_PROC",
+                            "UP_UTIL_SETTLE_COMM_UPD",
+                            "UP_UTIL_SETTLE_EXPECT_PROC",
+                            "UP_UTIL_SETTLE_INS_EXTRA",
+                            "UP_Util_Settle_Ins_Extra4PLCard",
+                            "UP_Util_Stat_PGCollect_Ins",
+                            "UP_Util_Settle_Summary",
+                            "UP_Util_Settle_Summary_Etc",
+                            "UP_Util_Settle_Proc_Etc"
+                        };
+
+                        var defaultFilesToSelect = new List<string>();
+                        foreach (var sp in defaultSpOrder)
+                        {
+                            var match = remainingFiles.FirstOrDefault(f => f.Contains(sp, StringComparison.OrdinalIgnoreCase));
+                            if (match != null)
+                            {
+                                defaultFilesToSelect.Add(match);
+                            }
+                        }
+
+                        if (defaultFilesToSelect.Count > 0)
+                        {
+                            bool useDefault = AnsiConsole.Confirm($"[green]ReSet 정산 배치 기본 순서({defaultFilesToSelect.Count}개 SP)로 자동 구성하시겠습니까?[/]\n(선택 완료 후 개별적으로 취소/초기화하여 변경할 수 있습니다.)", true);
+                            if (useDefault)
+                            {
+                                foreach (var df in defaultFilesToSelect)
+                                {
+                                    selectedFiles.Add(df);
+                                    remainingFiles.Remove(df);
+                                }
+                            }
+                        }
+
                         var isCompleted = false;
                         var isCancelled = false;
 
@@ -816,11 +855,15 @@ namespace ReSet.Cli
                             // 선택지 빌드
                             var choices = new List<string>();
                             var completeOption = "[-- 선택 완료 및 계획 생성 --]";
+                            var undoOption = "[-- 마지막 선택 취소 (Undo) --]";
+                            var clearOption = "[-- 전체 선택 초기화 (Clear) --]";
                             var cancelOption = "[-- 메인 메뉴로 돌아가기 --]";
 
                             if (selectedFiles.Count > 0)
                             {
                                 choices.Add(completeOption);
+                                choices.Add(undoOption);
+                                choices.Add(clearOption);
                             }
                             choices.Add(cancelOption);
                             choices.AddRange(remainingFiles);
@@ -843,16 +886,21 @@ namespace ReSet.Cli
                             {
                                 isCompleted = true;
                             }
+                            else if (selectedChoice == undoOption)
+                            {
+                                var last = selectedFiles.Last();
+                                selectedFiles.RemoveAt(selectedFiles.Count - 1);
+                                remainingFiles.Add(last);
+                            }
+                            else if (selectedChoice == clearOption)
+                            {
+                                remainingFiles.AddRange(selectedFiles);
+                                selectedFiles.Clear();
+                            }
                             else
                             {
                                 selectedFiles.Add(selectedChoice);
                                 remainingFiles.Remove(selectedChoice);
-
-                                // 더 이상 선택할 파일이 없으면 자동 완료
-                                if (remainingFiles.Count == 0)
-                                {
-                                    isCompleted = true;
-                                }
                             }
                         }
 
