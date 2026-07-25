@@ -799,7 +799,7 @@ namespace ReSet.Cli
                             // 현재 구성된 배치 순서 시각화
                             if (selectedFiles.Count > 0)
                             {
-                                var sequenceStr = string.Join(" [bold green]➔[/] ", selectedFiles.Select(f => $"[yellow]{Markup.Escape(Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f))}[/]"));
+                                var sequenceStr = string.Join(Environment.NewLine, selectedFiles.Select((f, index) => $"[bold green]{index + 1}.[/] [yellow]{Markup.Escape(Directory.GetParent(f)?.Parent?.Name ?? Path.GetFileName(f))}[/]"));
                                 AnsiConsole.Write(new Panel(new Markup(sequenceStr))
                                 {
                                     Header = new PanelHeader(" [bold cyan]현재 구성된 배치 Job 실행 순서[/] "),

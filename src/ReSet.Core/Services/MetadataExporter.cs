@@ -368,11 +368,11 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
                 todoSb.AppendLine();
                 todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
-                todoSb.AppendLine("- [ ] 2. 관련 데이터베이스 스냅샷/집계 DDL 테이블 적용 및 Repository/DAO/Adapter 구현");
-                todoSb.AppendLine("- [ ] 3. Step 0: Run 초기화 Tasklet 및 DbC 사전 검증 구현");
-                todoSb.AppendLine("- [ ] 4. Step 1: 개별 배치 스냅샷 생성 Chunk Step 및 멱등성 보장 구현");
-                todoSb.AppendLine("- [ ] 5. Step 2: 통합 고객 상품 집계 Chunk Step 구현");
-                todoSb.AppendLine("- [ ] 6. Step 3 & 4: 검증/게시 및 최종 종료 처리 Tasklet 구현");
+                todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현");
+                todoSb.AppendLine("- [ ] 3. 계획서의 [통합 배치 아키텍처 개요]에 정의된 공통 초기화(사전 검증 등) 로직 구현");
+                todoSb.AppendLine("- [ ] 4. 계획서의 [단계별 이행 상세]에 정의된 첫 번째 Step(Chunk/Tasklet) 비즈니스 로직 및 멱등성 구현");
+                todoSb.AppendLine("- [ ] 5. 계획서에 정의된 나머지 후속 Step들을 순서대로 하나씩 점진적 구현 및 커밋");
+                todoSb.AppendLine("- [ ] 6. 모든 Step이 통합된 최종 Job 파이프라인 조립 및 예외/트랜잭션 롤백 처리 보완");
                 todoSb.AppendLine("- [ ] 7. 공급된 단위 테스트 및 ArchUnit 정적 검증 통과, 솔루션 빌드 성공 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
