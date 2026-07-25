@@ -454,7 +454,8 @@ namespace ReSet.Core.Services
                                 progressScope.AddTask("selffix", $"{_consolidatorService.ModelName} 자가 수정 중...");
                                 consolidatorSelfFixResult = await WrapWithProgress(_consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), finalL1.SuggestedPromptFix, _consolidatorEffort ?? "medium", cancellationToken), progressScope, "selffix");
                             }
-                            specificationMarkdown = consolidatorSelfFixResult.Content;
+                            var postFixL1 = _validator.Validate(consolidatorSelfFixResult.Content);
+                            specificationMarkdown = postFixL1.CleansedMarkdown ?? consolidatorSelfFixResult.Content;
                             spDef.RawPromptContext = $"=== [System Prompt] ===\n{consolidatorSelfFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{consolidatorSelfFixResult.UserPrompt}";
 
                             accumulatedThinking.AppendLine("### [Consolidator] Self-Correction Thinking");
@@ -584,7 +585,7 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
-                        if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
+                        if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
                         {
                             bool shouldRunStage1 = true;
                             if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
@@ -952,7 +953,7 @@ namespace ReSet.Core.Services
                         string reSpec = string.Empty;
                         try
                         {
-                            if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
+                            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
                             {
                                 bool regenPart1 = false;
                                 bool regenPart2 = false;
@@ -1072,7 +1073,7 @@ namespace ReSet.Core.Services
                             _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                             try
                             {
-                                if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
+                                if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
                                 {
                                     bool regenPart1 = false;
                                     bool regenPart2 = false;
@@ -1287,7 +1288,7 @@ namespace ReSet.Core.Services
                         feedbackHistory.Add($"### [시도 {attempt} L2 최신 피드백 체크리스트]\n{l2Result.FeedbackComment}");
                         feedbackLog = "[L2 AI 리뷰 최신 피드백 (Stateful Checklist)]:\n" + 
                                       string.Join("\n\n", feedbackHistory) +
-                                      "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 원본 DDL과 위 피드백만을 절대적 기준으로 삼으십시오.";
+                                      "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 제공된 '원본 명세서(Specifications)'와 위 피드백만을 절대적 기준으로 삼으십시오. 특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.";
                         attempt++;
                         continue;
                     }

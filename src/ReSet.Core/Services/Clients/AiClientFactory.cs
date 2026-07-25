@@ -5,6 +5,12 @@ namespace ReSet.Core.Services.Clients
 {
     public static class AiClientFactory
     {
+        public static bool IsLocalProvider(string provider)
+        {
+            var p = provider?.ToLowerInvariant();
+            return p == "ollama" || p == "local-openai" || p == "mlx" || p == "vllm";
+        }
+
         public static IAiClient CreateClient(string provider, string modelName, string apiKey, string endpoint, HttpClient? httpClient = null, int? numCtx = null)
         {
             var client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(300) };
@@ -17,6 +23,9 @@ namespace ReSet.Core.Services.Clients
             return provider.ToLowerInvariant() switch
             {
                 "openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
+                "local-openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
+                "mlx" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
+                "vllm" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
                 "ollama" => new OllamaClient(client, endpoint, modelName, numCtx),
                 "claude" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "anthropic" => new ClaudeClient(client, apiKey, endpoint, modelName),

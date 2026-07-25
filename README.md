@@ -2,7 +2,7 @@
 
 [![.NET 10.0](https://img.shields.io/badge/.NET-10.0-blueviolet.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![SQL Server](https://img.shields.io/badge/SQL%20Server-Database-red.svg)](https://www.microsoft.com/sql-server)
-[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20Z.ai-orange.svg)](#)
+[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20mlx%20%7C%20Z.ai-orange.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#)
 
 본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
@@ -150,7 +150,7 @@ ReSet/
     "MaxDependencyDepth": 3         // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
   },
   "AiSettings": {
-    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai")
+    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai")
     "ModelName": "claude-sonnet-4-6", // 사용할 LLM 모델명
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
@@ -183,6 +183,10 @@ ReSet/
         "Endpoint": "http://localhost:11434", // 로컬 Ollama 엔드포인트
         "NumCtx": 32768,                     // 로컬 LLM의 최대 컨텍스트 윈도우 크기 지정
         "EnableThinking": true               // Gemma 4 등 추론(Thinking) 유도 프롬프트 활성화 여부
+      },
+      "mlx": {
+        "ApiKey": "dummy",                   // mlx-lm, vLLM 등 로컬 OpenAI 호환 서버용 (키 검증 우회)
+        "Endpoint": "http://127.0.0.1:8080/v1" // 로컬 호환 API 엔드포인트 (Provider를 mlx 또는 local-openai로 지정 시 로컬 분할 파이프라인 가동)
       },
       "Z.ai": {
         "ApiKey": "",              // Z.ai API 키

@@ -341,6 +341,8 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
 
             rules.Add($"{ruleIndex++}. [CRITICAL ANTI-SHORTCUT RULE] NEVER use abbreviations, ellipses (...), or phrases like '이하 생략', '기타', 'etc'. You MUST map EVERY SINGLE COLUMN present in the DDL to the markdown table row by row, even if there are 100 columns. Failure to write every column will result in a fatal system crash and your output will be rejected. Do NOT use `dbo.TS[] (이하 생략 가능하나 매핑은 완벽히 수행됨)` or similar shortcut phrases.");
+            rules.Add($"{ruleIndex++}. [CRITICAL: 비즈니스 로직 원형 보존 원칙 - 다중 소스 결합 금지 해제] 원본 SQL이 `UNION`, `UNION ALL`, `JOIN`을 통해 여러 테이블에서 데이터를 수집한다면, 의사코드 및 설명에서도 모든 소스 테이블과 분모/분자 집계 수식(SUM 등)을 절대 생략하지 마십시오. (단일 테이블로 단순화하는 것은 치명적 결함으로 간주됩니다.)");
+            rules.Add($"{ruleIndex++}. [CRITICAL: 비즈니스 로직 원형 보존 원칙 - 청크 분할 시 조건 보존] 대상 테이블에 대용량 청킹(예: `ID BETWEEN @start AND @end`) 처리가 필요할 때, 원본의 WHERE 조건(자기조인, 커서 필터링, 상태값 검사 등)을 삭제하지 말고 청크 조건과 반드시 `AND` 구문으로 결합해야 합니다. 원본 필터를 누락하고 단순 `BETWEEN`만 남기는 것은 치명적 데이터 유실로 간주됩니다.");
             rules.Add($"{ruleIndex++}. If a column description contains the exact tag `[AI 추론 보완: Schema.Table.Column - Description]`, you MUST output this tag exactly as is in the description column of the Markdown tables. Do NOT alter or translate this tag, and do not let it break the table format.");
             rules.Add($"{ruleIndex++}. Do not arbitrarily assume columns/parameters are 'NOT NULL' unless defined in the DDL.");
             rules.Add($"{ruleIndex++}. If `WITH(NOLOCK)` or `NOLOCK` hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
@@ -529,7 +531,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var (systemPrompt, userPrompt) = BuildSpecificationPrompts(spDef, userInstructions, feedbackLog);
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 // Gemma 4 계열 모델의 추론(Thinking)을 강제 활성화하기 위해 시스템 프롬프트 첫 부분에 제어 토큰 삽입
                 if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -558,7 +560,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
         public async Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default, Action<(int current, int total, string message)>? progressCallback = null)
         {
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName))
             {
                 return await DeconstructSpLogicWithChunkingAsync(spDef, userInstructions, feedbackLog, effort, cancellationToken, progressCallback);
             }
@@ -572,12 +574,12 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             // 로컬 Ollama 구동 시 1단계(추론/추출) 온도는 0.05로 고정하여 엄격하고 결정론적인 JSON 출력을 유도합니다.
             float temp = _temperature;
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase))
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName))
             {
                 temp = 0.05f;
             }
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
@@ -706,7 +708,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 var (sys, usr) = BuildChunkDeconstructionPrompts(spDef, chunk, userInstructions, feedbackLog);
                 
                 float temp = 0.05f;
-                if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+                if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
                 {
                     if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
@@ -1203,7 +1205,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var (systemPrompt, userPrompt) = BuildSpecSectionPrompts(spDef, sectionType, userInstructions, feedbackLog);
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 if (!string.IsNullOrEmpty(ModelName) && ModelName.IndexOf("gemma4", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
@@ -1554,7 +1556,7 @@ Target Stored Procedure:
 Review the generated specification markdown against the source metadata and source DDL, and output the review result in JSON.
 ";
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 systemPrompt += "\n\n[Ollama System Prompt Requirements]\n- Before writing the JSON payload, write your step-by-step thinking process inside <think> and </think> tags. The final JSON must be placed outside the think tags.";
             }
@@ -1635,7 +1637,7 @@ Target Stored Procedure:
 Write the Batch Migration Plan for {targetLanguage} based on the legacy SQL SP details.
 ";
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
             }
@@ -1675,9 +1677,11 @@ Consolidate the provided specifications into a single unified batch job named '{
 4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback: (a) The Shadow strategy MUST cover ALL target tables modified by the step, (b) you MUST define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours), and (c) you MUST explicitly provide the Rollback/Restore pseudo-code (e.g., `INSERT INTO Target SELECT * FROM Shadow`) to revert committed chunks if a failure occurs mid-way.
 5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
 6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the original SP lacked `@@ERROR` checking, you MUST explicitly document how this vulnerability is resolved (e.g., using `TRY...CATCH` and `XACT_ABORT ON`).
-7. [Error Codes] DO NOT use continuous ranges for error codes (e.g., `-1~-23`). You MUST list the exact error codes individually (e.g., -1, -2, -4, -5...).
-8. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-9. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
+7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
+8. [Preserve Chunking Filters] When chunking operations (e.g., `WHERE ID BETWEEN @start AND @end`), you MUST retain the original business logic filters (e.g., self-joins, cursor criteria, status checks) and combine them with the chunking range using `AND`. Do not delete the original filters.
+9. [Error Codes] DO NOT use continuous ranges for error codes (e.g., `-1~-23`). You MUST list the exact error codes individually (e.g., -1, -2, -4, -5...).
+10. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
+11. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
@@ -1698,7 +1702,7 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             userPrompt.AppendLine("Please analyze all the specifications and draft the Consolidated Batch Modernization Plan.");
 
-            if (string.Equals(ProviderName, "Ollama", StringComparison.OrdinalIgnoreCase) && _enableOllamaThinking)
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
             }

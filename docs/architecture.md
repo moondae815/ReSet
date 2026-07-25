@@ -314,8 +314,8 @@ graph TD
     CheckFeedback1 -- "피드백 있음" --> CommercialMonoRe["이전 피드백을 프롬프트에 주입하여<br/>전체 명세서 일괄 재생성"]
     CommercialMonoRe --> ReturnSpec
 
-    %% 로컬 Ollama (분할 생성)
-    ProviderCheck -- "로컬 Ollama" --> OllamaDeconstruct["Stage 1: 논리 구조 파악<br/>(DeconstructSpLogic)"]
+    %% 로컬 AI (분할 생성 - Ollama, mlx-lm 등 IsLocalProvider 대상)
+    ProviderCheck -- "로컬 모델<br/>(Ollama, mlx, local-openai)" --> OllamaDeconstruct["Stage 1: 논리 구조 파악<br/>(DeconstructSpLogic)"]
 
     subgraph Stage1["Stage 1: 구조 분석 및 Chunking"]
         OllamaDeconstruct --> SqlParser{"SqlStaticParser를 통한<br/>대용량 SQL 구문 분할"}
@@ -368,7 +368,7 @@ graph TD
   * **GoogleClient**: Google AI Studio API Key 주입 및 SystemInstruction 구조 대응.
   * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama 네이티브 REST API(`/api/chat`) 규격 대응. 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 최적 샘플링(`num_ctx`, `top_p`, `top_k` 등)을 `options` 파라미터로 자동 할당하는 하드코딩 우회 로직 및 생각 토큰(<|channel>thought, <think> 등)의 수동 파싱과 본문 분리 기능 지원.
   * **ZaiClient**: Z.ai AI 플랫폼 연동 규격 및 추론 과정(Reasoning Process) 수집 대응.
-* **설정 기반 동적 DI**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입하는 런타임 다형성을 확보했습니다.
+* **설정 기반 동적 DI 및 로컬 프로바이더 라우팅**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입합니다. 특히 `mlx`, `local-openai`, `vllm` 등의 Alias를 사용할 경우 통신은 `OpenAiClient`를 재사용하면서도, 파이프라인 진입 시 `IsLocalProvider()` 검사를 통해 자동으로 **로컬 모델 전용 AST 분할(Chunking) 파이프라인**을 타도록 설계되어 있습니다.
 
 ### 4.6. 소스코드 정합성 검증 엔진 (Validator)
 마이그레이션된 소스코드가 원래의 비즈니스 기능 명세서(Spec) 및 기존 Legacy DB SP의 구동 결과 데이터와 일치하는지 판정하는 정합성 검증 시스템 흐름은 다음과 같습니다.

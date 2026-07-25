@@ -817,7 +817,7 @@ namespace ReSet.Cli
                         var defaultFilesToSelect = new List<string>();
                         foreach (var sp in defaultSpOrder)
                         {
-                            var match = remainingFiles.FirstOrDefault(f => f.Contains(sp, StringComparison.OrdinalIgnoreCase));
+                            var match = remainingFiles.FirstOrDefault(f => f.Replace('\\', '/').Contains($".{sp}/", StringComparison.OrdinalIgnoreCase));
                             if (match != null)
                             {
                                 defaultFilesToSelect.Add(match);
