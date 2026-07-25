@@ -17,7 +17,7 @@ namespace ReSet.Core.Services.Clients
         private readonly string _apiKey;
         private readonly string _endpoint;
         private readonly string _modelName;
-
+        private readonly int? _numCtx;
 
         public string ProviderName => "OpenAI";
         public string ModelName => _modelName;
@@ -27,6 +27,7 @@ namespace ReSet.Core.Services.Clients
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _apiKey = apiKey;
             _modelName = modelName;
+            _numCtx = numCtx;
 
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "https://api.openai.com/v1" : endpoint.Trim();
             if (ep.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
@@ -188,6 +189,11 @@ namespace ReSet.Core.Services.Clients
                     }
                 };
 
+                // mlx, vLLM 등의 로컬 호환 서버는 max_tokens 기본값이 512 등으로 낮게 설정되어 있어
+                // 긴 응답(통합 계획서 등) 생성 도중 잘리는 현상이 발생하므로, 명시적으로 높은 max_tokens 지정
+                bool isLocal = _endpoint.Contains("127.0.0.1") || _endpoint.Contains("localhost");
+                int? maxTokensValue = _numCtx ?? (isLocal ? 16384 : (int?)null);
+
                 if (isReasoningEnforcedModel)
                 {
                     var apiEffort = "medium";
@@ -203,10 +209,18 @@ namespace ReSet.Core.Services.Clients
                         };
                     }
                     requestBody.Add("reasoning_effort", apiEffort);
+                    if (maxTokensValue.HasValue)
+                    {
+                        requestBody.Add("max_completion_tokens", maxTokensValue.Value);
+                    }
                 }
                 else
                 {
                     requestBody.Add("temperature", targetTemp);
+                    if (maxTokensValue.HasValue)
+                    {
+                        requestBody.Add("max_tokens", maxTokensValue.Value);
+                    }
                 }
 
                 var jsonPayload = JsonSerializer.Serialize(requestBody);
