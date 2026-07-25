@@ -1729,12 +1729,16 @@ Consolidate the provided specifications into a single unified batch job named '{
    - Assess if the business logic and rules of individual specifications are accurately preserved in the consolidated batch job.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if table CRUD accesses are properly sequenced and chunked (Paging Reader) in the data pipeline.
+   - For chunked DELETE-INSERT patterns, verify if chunking keys are added to the DELETE filter to prevent unintended full-table deletions.
 3. Integration and Interface Definition (ScoreInterface):
    - Assess if parameter mapping, data exchange contracts, and API integration requirements are fully detailed.
 4. Exception Handling, Transaction and Isolation Policy (ScoreException):
-   - Verify if batch restartability, bulk transaction control, lock contention, and recovery plans are robustly defined.
+   - Check if Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` is used (Penalize heavily if `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` is proposed).
+   - Check if Checkpoint-based Step Skip logic (Restartability) is clearly defined so completed steps do not block restarts with pre-validation errors.
+   - Check if Shadow Table strategies cover all target tables, define capacity/purge policies, and include explicit Rollback/Restore pseudo-code.
 5. Diagram Syntax and Readability (ScoreReadability):
    - Ensure the Mermaid flowchart diagram has no syntax errors, wraps node labels in double quotes, and arrow labels are clean of special characters.
+   - Ensure 'subgraph' keyword and its ID are separated by a space (e.g., `subgraph SHARED_DB`).
 
 [Defect Judgment]
 - If any of the 5 criteria scores less than 8 points, or if any of the 4 mandatory H2 headers (## 통합 배치 아키텍처 개요, ## Mermaid 기반 통합 흐름도, ## 단계별 이행 상세 및 의사코드, ## 통합 데이터 정합성 검증 SQL 세트) is missing, mark HasDefects as true.
