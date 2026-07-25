@@ -222,17 +222,15 @@ namespace ReSet.Core.Services
 
                 sb.AppendLine("---");
                 sb.AppendLine();
-                sb.AppendLine("## 🔑 6. 코딩 에이전트 명령 가이드 (Prompt for Agent)");
-                sb.AppendLine("코딩 에이전트(Claude Code 등)에 입력할 때 아래 텍스트를 그대로 복사하여 사용하십시오:");
-                sb.AppendLine();
-                sb.AppendLine("> \"이 파일(`MigrationInstructions.md`)에 기술된 비즈니스 명세와 레거시 SQL DDL을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
-                sb.AppendLine("> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
-                sb.AppendLine("> 1. 설계서의 입출력 규격 및 비즈니스 로직 단계를 만족할 것.");
-                sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
-                sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
-                sb.AppendLine("> 4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
-                sb.AppendLine("> 5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
-                sb.AppendLine("> 6. 제공된 자가 검증용 단위 테스트 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.\"");
+                sb.AppendLine("## 🔑 6. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
+                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 비즈니스 명세와 하단의 레거시 SQL DDL을 분석하여 현대화된 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
+                sb.AppendLine("1. 설계서의 입출력 규격 및 비즈니스 로직 단계를 완벽히 만족할 것.");
+                sb.AppendLine("2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성할 것.");
+                sb.AppendLine("3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
+                sb.AppendLine("4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
+                sb.AppendLine("5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
+                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.");
                 sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
@@ -288,7 +286,7 @@ namespace ReSet.Core.Services
                 sb.AppendLine($"# 🚀 Consolidated Migration Instructions for Coding Agent ({jobName})");
                 sb.AppendLine();
                 sb.AppendLine("본 문서는 복수의 SQL Server Stored Procedure들을 하나의 통합 배치 작업으로 마이그레이션하기 위해 코딩 에이전트(Claude Code, Antigravity CLI 등)에 제공되는 지시서 및 컨텍스트입니다.");
-                sb.AppendLine("아래 통합 배치 전환 계획서(Consolidated Migration Plan)와 개별 SP들의 레거시 SQL DDL 및 의존성을 분석하여 현대화된 배치 소스 코드를 작성해 주십시오.");
+                sb.AppendLine("아래 통합 배치 전환 계획서(Consolidated Migration Plan)와 개별 의존성 테이블 스키마들을 분석하여 현대화된 배치 소스 코드를 작성해 주십시오.");
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
@@ -355,17 +353,15 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
-                sb.AppendLine("## 🔑 3. 코딩 에이전트 명령 가이드 (Prompt for Agent)");
-                sb.AppendLine("코딩 에이전트(Claude Code 등)에 입력할 때 아래 텍스트를 그대로 복사하여 사용하십시오:");
-                sb.AppendLine();
-                sb.AppendLine("> \"이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 레거시 SQL DDL들을 분석하여 현대화된 배치 소스 코드를 생성해줘.");
-                sb.AppendLine("> 단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 [x]로 업데이트하고 승인 받아줘.");
-                sb.AppendLine("> 1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 그대로 준수할 것.");
-                sb.AppendLine("> 2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성해줘.");
-                sb.AppendLine("> 3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
-                sb.AppendLine("> 4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
-                sb.AppendLine("> 5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
-                sb.AppendLine("> 6. 제공된 자가 검증용 단위 테스트 및 ArchUnit 아키텍처 검증 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.\"");
+                sb.AppendLine("## 🔑 3. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
+                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `TableSchemas/` 디렉토리에 정의된 의존성 스키마들을 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
+                sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 것.");
+                sb.AppendLine("2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성할 것.");
+                sb.AppendLine("3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
+                sb.AppendLine("4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
+                sb.AppendLine("5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
+                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 ArchUnit 아키텍처 검증 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.");
                 sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
