@@ -1672,9 +1672,10 @@ Consolidate the provided specifications into a single unified batch job named '{
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
 3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
-4. [Transaction Isolation] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy (e.g., Session-level Read Uncommitted isolation blocking, or Staging Table + Partition Switch) to prevent intermediate partial data from being exposed to other real-time queries.
-5. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-6. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
+4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback, you MUST clearly define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours).
+5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
+6. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
+7. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");

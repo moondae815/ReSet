@@ -404,8 +404,9 @@ namespace ReSet.Core.Services
                 processedLine = Regex.Replace(processedLine, @"-\s*->", "-->");
                 processedLine = Regex.Replace(processedLine, @"-[^-]>", "-->");
 
-                // 3.5. subgraph 와 식별자 사이 띄어쓰기 강제 보정 (subgraphSHAREDDB -> subgraph SHAREDDB)
+                // 3.5. subgraph 와 식별자 사이 띄어쓰기 강제 보정 및 식별자와 라벨 사이 띄어쓰기 보정
                 processedLine = Regex.Replace(processedLine, @"^(\s*)subgraph([a-zA-Z0-9_]+)", "$1subgraph $2");
+                processedLine = Regex.Replace(processedLine, @"^(\s*)subgraph\s+([a-zA-Z0-9_]+)\[", "$1subgraph $2 [");
 
                 // 4. 노드 ID 내에 공백이나 특수문자(언더스코어 포함)가 들어간 경우 보정 및 라벨 이스케이프
                 processedLine = MermaidNodeRegex.Replace(processedLine, match =>
