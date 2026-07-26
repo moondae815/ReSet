@@ -248,6 +248,12 @@ namespace ReSet.Core.Services.Clients
                         requestBody.Add("max_tokens", maxTokensValue.Value);
                     }
 
+                    if (isLocal)
+                    {
+                        requestBody.Add("frequency_penalty", 0.2f);
+                        requestBody.Add("repetition_penalty", 1.1f);
+                    }
+
                     if (isGemma4)
                     {
                         requestBody.Add("top_p", 0.95f);

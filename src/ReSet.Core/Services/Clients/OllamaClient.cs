@@ -71,7 +71,8 @@ namespace ReSet.Core.Services.Clients
 
             var optionsObj = new Dictionary<string, object>
             {
-                { "temperature", targetTemp }
+                { "temperature", targetTemp },
+                { "repeat_penalty", 1.1f }
             };
 
             if (_numCtx.HasValue)
@@ -83,11 +84,13 @@ namespace ReSet.Core.Services.Clients
             {
                 optionsObj["top_p"] = 0.95f;
                 optionsObj["top_k"] = 64;
+                optionsObj["repeat_penalty"] = 1.05f;
             }
             else if (isQwen3_6)
             {
                 optionsObj["top_p"] = 0.95f;
                 optionsObj["top_k"] = 20;
+                optionsObj["repeat_penalty"] = 1.1f;
             }
 
             var requestBody = new Dictionary<string, object>

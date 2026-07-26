@@ -1702,7 +1702,11 @@ DO NOT write code or detailed markdown plans. ONLY output your analysis: identif
         public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect. Based on the previous brainstorming, draft a detailed step-by-step structural plan (Table of Contents and execution flow) for the final '{jobName}' {targetLanguage} batch application document.
-Ensure the structure includes sections for Architecture Overview, Mermaid Flowchart, Step-by-Step implementation with pseudocode, and Validation SQL.";
+You MUST use exactly the following 4 mandatory H2 headers in Korean, and design the detailed sub-headers (H3, H4) beneath them:
+1. ## 통합 배치 아키텍처 개요
+2. ## Mermaid 기반 통합 흐름도
+3. ## 단계별 이행 상세 및 의사코드
+4. ## 통합 데이터 정합성 검증 SQL 세트";
 
             var userPrompt = new System.Text.StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
@@ -1861,10 +1865,12 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if table CRUD accesses are properly sequenced and chunked (Paging Reader) in the data pipeline.
    - For chunked DELETE-INSERT patterns, verify if chunking keys are added to the DELETE filter to prevent unintended full-table deletions.
+   - Verify if original business filters (e.g., `WHERE Status = 'P'`) are strictly preserved alongside chunking ranges. Penalize if original filters are omitted.
 3. Integration and Interface Definition (ScoreInterface):
    - Assess if parameter mapping, data exchange contracts, and API integration requirements are fully detailed.
 4. Exception Handling, Transaction and Isolation Policy (ScoreException):
    - Check if Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` is used (Penalize heavily if `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` is proposed).
+   - Check if `XACT_ABORT ON` is explicitly used with `TRY...CATCH`, and verify that the EXACT original error codes are preserved and returned (Penalize if error codes are remapped or omitted).
    - Check if Checkpoint-based Step Skip logic (Restartability) is clearly defined so completed steps do not block restarts with pre-validation errors.
    - Check if Shadow Table strategies cover all target tables, define capacity/purge policies, and include explicit Rollback/Restore pseudo-code.
 5. Diagram Syntax and Readability (ScoreReadability):
