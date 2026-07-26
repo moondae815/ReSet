@@ -19,15 +19,18 @@ namespace ReSet.Core.Services.Clients
         private readonly string _modelName;
         private readonly int? _numCtx;
 
-        public string ProviderName => "OpenAI";
+        private readonly string _providerName;
+
+        public string ProviderName => _providerName;
         public string ModelName => _modelName;
 
-        public OpenAiClient(HttpClient httpClient, string apiKey, string endpoint, string modelName, int? numCtx = null)
+        public OpenAiClient(HttpClient httpClient, string apiKey, string endpoint, string modelName, int? numCtx = null, string providerName = "OpenAI")
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _apiKey = apiKey;
             _modelName = modelName;
             _numCtx = numCtx;
+            _providerName = providerName;
 
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "https://api.openai.com/v1" : endpoint.Trim();
             if (ep.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))

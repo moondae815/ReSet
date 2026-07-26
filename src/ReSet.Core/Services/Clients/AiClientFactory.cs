@@ -22,10 +22,10 @@ namespace ReSet.Core.Services.Clients
 
             return provider.ToLowerInvariant() switch
             {
-                "openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
-                "local-openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
-                "mlx" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
-                "vllm" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx),
+                "openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "OpenAI"),
+                "local-openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "local-openai"),
+                "mlx" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "mlx"),
+                "vllm" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "vllm"),
                 "ollama" => new OllamaClient(client, endpoint, modelName, numCtx),
                 "claude" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "anthropic" => new ClaudeClient(client, apiKey, endpoint, modelName),
