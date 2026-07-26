@@ -302,26 +302,44 @@ namespace ReSet.Cli
 
         public void UpdateTask(string taskName, double value, string? description = null)
         {
-            var desc = description ?? (_originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName);
+            string desc = description ?? taskName;
+            if (description == null)
+            {
+                if (_tasks.TryGetValue(taskName, out var task))
+                    desc = task.Description;
+                else if (_originalDescriptions.TryGetValue(taskName, out var orig))
+                    desc = orig;
+            }
+
             _pendingUpdates.AddOrUpdate(taskName, 
                 (desc, value, false, false),
-                (k, old) => (desc, value, old.comp, old.fail));
+                (k, old) => (description ?? old.desc, value, old.comp, old.fail));
         }
 
         public void CompleteTask(string taskName)
         {
-            var desc = _originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName;
+            string desc = taskName;
+            if (_tasks.TryGetValue(taskName, out var task))
+                desc = task.Description;
+            else if (_originalDescriptions.TryGetValue(taskName, out var orig))
+                desc = orig;
+
             _pendingUpdates.AddOrUpdate(taskName, 
                 (desc, 100.0, true, false),
-                (k, old) => (desc, 100.0, true, false));
+                (k, old) => (old.desc, 100.0, true, false));
         }
 
         public void FailTask(string taskName)
         {
-            var desc = _originalDescriptions.TryGetValue(taskName, out var orig) ? orig : taskName;
+            string desc = taskName;
+            if (_tasks.TryGetValue(taskName, out var task))
+                desc = task.Description;
+            else if (_originalDescriptions.TryGetValue(taskName, out var orig))
+                desc = orig;
+
             _pendingUpdates.AddOrUpdate(taskName, 
                 (desc, 0.0, false, true),
-                (k, old) => (desc, old.val, false, true));
+                (k, old) => (old.desc, old.val, false, true));
         }
 
         public void Dispose()

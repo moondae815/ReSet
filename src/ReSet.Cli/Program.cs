@@ -171,11 +171,16 @@ namespace ReSet.Cli
             bool connectionSuccess = false;
 
             var offlinePath = configuration["DatabaseSettings:OfflineSnapshotPath"];
-            bool isOfflineMode = !string.IsNullOrWhiteSpace(offlinePath) && File.Exists(offlinePath);
+            bool isOfflineMode = !string.IsNullOrWhiteSpace(offlinePath);
             IDbMetadataService dbService;
 
             if (isOfflineMode)
             {
+                if (!File.Exists(offlinePath))
+                {
+                    AnsiConsole.MarkupLine($"[red]에러: 설정된 오프라인 스냅샷 파일('{offlinePath}')을 찾을 수 없습니다. 경로를 확인해주세요.[/]");
+                    return;
+                }
                 AnsiConsole.MarkupLine($"[blue]오프라인 모드로 동작합니다. 스냅샷 로드 중: {offlinePath}[/]");
                 var snapshot = await SnapshotManager.ImportSnapshotAsync(offlinePath!, globalCts.Token);
                 dbService = new OfflineDbMetadataService(snapshot);

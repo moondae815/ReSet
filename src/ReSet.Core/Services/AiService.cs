@@ -1739,7 +1739,7 @@ Consolidate the provided specifications into a single unified batch job named '{
    - ## 통합 배치 아키텍처 개요: Define how the individual stored procedures translate into steps (sequential chain, conditional branches, parallel processing) within the unified batch job.
    - ## Mermaid 기반 통합 흐름도: Draw a Mermaid flowchart diagram depicting the data pipeline and steps.
      * Wrap all node text labels in double quotes. Do not use double quotes or special characters in arrow labels. Node IDs must be unique alphanumeric words.
-     * ALWAYS add a space between the 'subgraph' keyword and its ID (e.g., `subgraph SHARED_DB [""Label""]`). Do not write `subgraphSHARED_DB`.
+     * ALWAYS add a space between the 'subgraph' keyword, its ID, and the bracket label (e.g., `subgraph SP1 [""Label""]`). Do not write `subgraph SP1[""Label""]`. Do not use parentheses '()' or brackets '[]' in arrow labels (e.g., use `|OutState IN 1, 5|` instead of `|OutState IN (1,5)|`).
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
 3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
@@ -1749,13 +1749,62 @@ Consolidate the provided specifications into a single unified batch job named '{
 6-1. [Precise Error Tracking] If the original SP lacked `@@ERROR` checking, you MUST resolve it using `TRY...CATCH` and `XACT_ABORT ON`. However, DO NOT just return a generic `-1` in the `CATCH` block. You MUST declare a state variable at the top (e.g., `DECLARE @v_currentStepId INT = 0;`), update it before each DML with the exact original error code (e.g., `SET @v_currentStepId = -101;`), and return that variable in the CATCH block to preserve the exact point of failure.
 7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
 8. [Preserve Chunking Filters] When chunking operations (e.g., `WHERE ID BETWEEN @start AND @end`), you MUST retain the original business logic filters (e.g., self-joins, cursor criteria, status checks) and combine them with the chunking range using `AND`. Do not delete the original filters.
-9. [Error Codes] DO NOT use continuous ranges for error codes (e.g., `-1~-23`). You MUST list the exact error codes individually (e.g., -1, -2, -4, -5...).
+9. [Error Codes] You MUST strictly reuse the EXACT original error codes from the source SPs. DO NOT remap or invent new error codes (e.g., changing -1 to -11). DO NOT use continuous ranges (e.g., `-1~-23`).
 10. [NOLOCK Prohibition] Since SNAPSHOT isolation is used, you MUST explicitly remove all `WITH (NOLOCK)` or `NOLOCK` hints from the generated pseudocode. `NOLOCK` forces READ UNCOMMITTED and completely violates the SNAPSHOT isolation policy.
 11. [INSERT-only Rollback] For INSERT-only steps, do not use a Shadow table for rollback. Instead, rely solely on `ROLLBACK TRAN` for single transactions, or provide an explicit `DELETE WHERE [ChunkKey]` compensation logic. Do NOT perform `DELETE` immediately after `ROLLBACK TRAN` inside a CATCH block for a single transaction as it is redundant.
-12. [Chunk Key Validation] When defining a chunk key, ensure the key column (e.g., `CLIENTID`) actually exists in the target table. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
+12. [Chunk Key Validation] You MUST CROSS-CHECK the provided DDL/Schema for the target table before writing the chunking key. Ensure the key column (e.g., `CLIENTID`) actually exists. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
 13. [Output Parameters Interface] All output parameters (e.g., `@po_strErrMsg`, `@po_intRetVal`) from the original procedures MUST be accurately mapped in the unified batch context interface and error code tables. Do not omit them.
 14. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.";
+15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.
+
+[Few-Shot Examples for Modernization Patterns]
+* Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
+```sql
+-- Create Shadow Table
+SELECT * INTO TargetTable_Shadow_YYYYMMDD FROM TargetTable WHERE 1=0;
+-- Bulk Insert into Shadow
+INSERT INTO TargetTable_Shadow_YYYYMMDD (Col1, Col2)
+SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+-- Single Transaction Swap
+BEGIN TRAN;
+  DELETE FROM TargetTable; -- Original target data purge
+  INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD;
+COMMIT TRAN;
+```
+
+* Chunking Pattern (Combining chunking keys with existing business filters):
+```sql
+DECLARE @MinID INT, @MaxID INT, @CurrentID INT, @ChunkSize INT = 10000;
+SELECT @MinID = MIN(ID), @MaxID = MAX(ID) FROM SourceTable WHERE Status = 'P'; -- Existing filter
+SET @CurrentID = @MinID;
+WHILE @CurrentID <= @MaxID
+BEGIN
+    BEGIN TRAN;
+    INSERT INTO TargetTable (ID, Col1)
+    SELECT ID, Col1 FROM SourceTable
+    WHERE Status = 'P' -- Preserve original filter!
+      AND ID >= @CurrentID AND ID < @CurrentID + @ChunkSize; -- Chunking condition
+    COMMIT TRAN;
+    SET @CurrentID = @CurrentID + @ChunkSize;
+END
+```
+
+* Shadow Table Restore in CATCH block for DELETE-INSERT patterns:
+```sql
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    -- MUST DELETE target data for the chunk range or specific YMD BEFORE inserting from shadow to avoid duplicates!
+    DELETE FROM TargetTable WHERE BatchDate = @BatchDate; 
+    INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD WHERE BatchDate = @BatchDate;
+    THROW;
+END CATCH
+```
+
+* INSERT-only Compensation (No Shadow table needed for rollback):
+```sql
+-- If an INSERT-only chunked batch fails in the middle, rollback committed chunks using business keys:
+DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
+```";
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");

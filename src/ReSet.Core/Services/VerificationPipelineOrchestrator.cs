@@ -1225,20 +1225,20 @@ namespace ReSet.Core.Services
                     {
                         if (string.IsNullOrEmpty(currentPlanStructure))
                         {
-                            progressScope.AddTask("phase1", $"{_consolidatorService.ModelName} (1/3) 브레인스토밍 중...");
+                            progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
                             var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
                             
                             var rawDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "output", "Jobs", jobName, "raw");
                             if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
 
-                            progressScope.AddTask("phase2", $"{_consolidatorService.ModelName} (2/3) 목차 설계 중...");
+                            progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
                             var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase2");
                             currentPlanStructure = planResult.Content;
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
-                        progressScope.AddTask("phase3", $"{_consolidatorService.ModelName} (3/3) 최종 생성 중...");
+                        progressScope.AddTask("phase3", "3/3. 최종 생성 중...");
                         aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3");
                     }
                     consolidatedPlan = aiResult.Content;
