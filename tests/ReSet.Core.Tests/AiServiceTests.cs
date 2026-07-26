@@ -269,7 +269,7 @@ namespace ReSet.Core.Tests
             // Assert
             Assert.NotNull(result);
             Assert.Contains("Update TableA", result.Content); // 병합된 결과에 내용이 잘 들어갔는지 확인
-            Assert.Equal(1, progressCalledCount); // 청크 개수(1개)만큼 콜백 호출 확인
+            Assert.Equal(2, progressCalledCount); // 청크 개수(1개) + 초기 상태(1개)만큼 콜백 호출 확인
         }
 
         [Fact]
