@@ -65,7 +65,7 @@ namespace ReSet.Core.Tests
             IAiService service = new AiService(client, 0.2f);
 
             // Act & Assert
-            await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateConsolidatedBatchPlanAsync(specs, "C#", "Test_Consolidated_Job"));
+            await Assert.ThrowsAsync<ArgumentException>(() => service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Consolidated_Job"));
         }
 
         [Fact]
@@ -122,7 +122,7 @@ namespace ReSet.Core.Tests
             IAiService service = new AiService(client, 0.2f);
 
             // Act
-            var result = await service.GenerateConsolidatedBatchPlanAsync(specs, "C#", "Test_Job");
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
 
             // Assert
             Assert.Equal("## 통합 배치 명세", result.Content);
@@ -145,7 +145,7 @@ namespace ReSet.Core.Tests
             IAiService service = new AiService(client, 0.2f);
 
             // Act
-            var result = await service.GenerateConsolidatedBatchPlanAsync(specs, "C#", "Test_Job");
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
 
             // Assert
             Assert.Contains("[NOLOCK Prohibition]", result.SystemPrompt);
