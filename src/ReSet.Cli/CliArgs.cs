@@ -12,7 +12,8 @@ namespace ReSet.Cli
         public string? JobName { get; set; }
         public bool GeneratePolicy { get; set; }
         public List<string> PolicyProcedures { get; set; } = new();
+        public string? ExtractSnapshotPath { get; set; }
 
-        public bool IsBatchMode => AnalyzeAll || TargetProcedures.Count > 0 || GeneratePolicy;
+        public bool IsBatchMode => AnalyzeAll || TargetProcedures.Count > 0 || GeneratePolicy || !string.IsNullOrEmpty(ExtractSnapshotPath);
     }
 }

@@ -77,6 +77,10 @@ namespace ReSet.Cli
                         }
                     }
                 }
+                else if (arg.Equals("--extract-snapshot", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    cliArgs.ExtractSnapshotPath = args[++i];
+                }
             }
 
             return cliArgs;
@@ -166,88 +170,30 @@ namespace ReSet.Cli
 
             bool connectionSuccess = false;
 
-            if (cliArgs.IsBatchMode)
+            var offlinePath = configuration["DatabaseSettings:OfflineSnapshotPath"];
+            bool isOfflineMode = !string.IsNullOrWhiteSpace(offlinePath) && File.Exists(offlinePath);
+            IDbMetadataService dbService;
+
+            if (isOfflineMode)
             {
-                // 배치 모드
-                AnsiConsole.MarkupLine("[bold blue]=== 배치 모드 자동 분석 시작 ===[/]");
-                if (string.IsNullOrEmpty(cliArgs.ConnectionString))
-                {
-                    AnsiConsole.MarkupLine("[red]에러: 배치 모드 실행 시 연결 문자열(--conn 또는 SP_ANALYZER_CONN_STR 환경 변수)은 필수입니다.[/]");
-                    return;
-                }
-                connectionString = cliArgs.ConnectionString;
-
-                // 연결 테스트
-                await AnsiConsole.Status()
-                    .StartAsync("데이터베이스 연결 시도 중...", async ctx =>
-                    {
-                        try
-                        {
-                            using (var conn = new SqlConnection(connectionString))
-                            {
-                                await conn.OpenAsync(globalCts.Token);
-                                connectionSuccess = true;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            AnsiConsole.WriteException(ex);
-                        }
-                    });
-
-                if (!connectionSuccess)
-                {
-                    AnsiConsole.MarkupLine("[red]데이터베이스 연결에 실패하였습니다. 종료합니다.[/]");
-                    return;
-                }
+                AnsiConsole.MarkupLine($"[blue]오프라인 모드로 동작합니다. 스냅샷 로드 중: {offlinePath}[/]");
+                var snapshot = await SnapshotManager.ImportSnapshotAsync(offlinePath!, globalCts.Token);
+                dbService = new OfflineDbMetadataService(snapshot);
             }
             else
             {
-                // 대화형 TUI 모드 - 로그인 성공 시까지 루프
-                while (true)
+                if (cliArgs.IsBatchMode)
                 {
-                    AnsiConsole.Clear();
-                    AnsiConsole.Write(new FigletText("ReSet Analyzer").Color(Color.Green));
-                    AnsiConsole.MarkupLine("[bold green]=== REverse engineering SETtlement Analyzer ===[/]");
-                    AnsiConsole.WriteLine();
-
-                    // 대화형 DB 서버 및 이름 변경 지원
-                    server = AnsiConsole.Prompt(
-                        new TextPrompt<string>("DB 서버 주소를 입력하세요:")
-                            .DefaultValue(server)
-                    );
-
-                    database = AnsiConsole.Prompt(
-                        new TextPrompt<string>("데이터베이스 이름을 입력하세요:")
-                            .DefaultValue(database)
-                    );
-
-                    // 대화형 ID/비밀번호 로그인 처리
-                    var lastUserId = SessionManager.LoadLastUsedUserId();
-                    userId = AnsiConsole.Prompt(
-                        new TextPrompt<string>("DB 계정을 입력하세요:")
-                            .DefaultValue(string.IsNullOrEmpty(lastUserId) ? "sa" : lastUserId)
-                    );
-
-                    var password = AnsiConsole.Prompt(
-                        new TextPrompt<string>("DB 비밀번호를 입력하세요:")
-                            .Secret()
-                    );
-
-                    // Connection String 빌드
-                    var connStrBuilder = new SqlConnectionStringBuilder
+                    // 배치 모드
+                    AnsiConsole.MarkupLine("[bold blue]=== 배치 모드 자동 분석 시작 ===[/]");
+                    if (string.IsNullOrEmpty(cliArgs.ConnectionString))
                     {
-                        DataSource = server,
-                        InitialCatalog = database,
-                        UserID = userId,
-                        Password = password,
-                        TrustServerCertificate = true,
-                        ConnectTimeout = 5
-                    };
-                    connectionString = connStrBuilder.ConnectionString;
+                        AnsiConsole.MarkupLine("[red]에러: 배치 모드 실행 시 연결 문자열(--conn 또는 SP_ANALYZER_CONN_STR 환경 변수)은 필수입니다.[/]");
+                        return;
+                    }
+                    connectionString = cliArgs.ConnectionString;
 
                     // 연결 테스트
-                    string? loginError = null;
                     await AnsiConsole.Status()
                         .StartAsync("데이터베이스 연결 시도 중...", async ctx =>
                         {
@@ -261,34 +207,116 @@ namespace ReSet.Cli
                             }
                             catch (Exception ex)
                             {
-                                loginError = ex.Message;
+                                AnsiConsole.WriteException(ex);
                             }
                         });
 
-                    if (connectionSuccess)
+                    if (!connectionSuccess)
                     {
-                        if (userId != null && server != null && database != null)
-                        {
-                            SessionManager.SaveSession(userId, server, database);
-                        }
-                        break;
+                        AnsiConsole.MarkupLine("[red]데이터베이스 연결에 실패하였습니다. 종료합니다.[/]");
+                        return;
                     }
+                }
+                else
+                {
+                    // 대화형 TUI 모드 - 로그인 성공 시까지 루프
+                    while (true)
+                    {
+                        AnsiConsole.Clear();
+                        AnsiConsole.Write(new FigletText("ReSet Analyzer").Color(Color.Green));
+                        AnsiConsole.MarkupLine("[bold green]=== REverse engineering SETtlement Analyzer ===[/]");
+                        AnsiConsole.WriteLine();
 
-                    AnsiConsole.MarkupLine("[red]로그인에 실패하였습니다. 계정 정보 또는 비밀번호를 확인해 주세요.[/]");
-                    if (!string.IsNullOrEmpty(loginError))
-                    {
-                        AnsiConsole.MarkupLine($"[grey](오류 상세: {Markup.Escape(loginError)})[/]");
+                        // 대화형 DB 서버 및 이름 변경 지원
+                        server = AnsiConsole.Prompt(
+                            new TextPrompt<string>("DB 서버 주소를 입력하세요:")
+                                .DefaultValue(server)
+                        );
+
+                        database = AnsiConsole.Prompt(
+                            new TextPrompt<string>("데이터베이스 이름을 입력하세요:")
+                                .DefaultValue(database)
+                        );
+
+                        // 대화형 ID/비밀번호 로그인 처리
+                        var lastUserId = SessionManager.LoadLastUsedUserId();
+                        userId = AnsiConsole.Prompt(
+                            new TextPrompt<string>("DB 계정을 입력하세요:")
+                                .DefaultValue(string.IsNullOrEmpty(lastUserId) ? "sa" : lastUserId)
+                        );
+
+                        var password = AnsiConsole.Prompt(
+                            new TextPrompt<string>("DB 비밀번호를 입력하세요:")
+                                .Secret()
+                        );
+
+                        // Connection String 빌드
+                        var connStrBuilder = new SqlConnectionStringBuilder
+                        {
+                            DataSource = server,
+                            InitialCatalog = database,
+                            UserID = userId,
+                            Password = password,
+                            TrustServerCertificate = true,
+                            ConnectTimeout = 5
+                        };
+                        connectionString = connStrBuilder.ConnectionString;
+
+                        // 연결 테스트
+                        string? loginError = null;
+                        await AnsiConsole.Status()
+                            .StartAsync("데이터베이스 연결 시도 중...", async ctx =>
+                            {
+                                try
+                                {
+                                    using (var conn = new SqlConnection(connectionString))
+                                    {
+                                        await conn.OpenAsync(globalCts.Token);
+                                        connectionSuccess = true;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    loginError = ex.Message;
+                                }
+                            });
+
+                        if (connectionSuccess)
+                        {
+                            if (userId != null && server != null && database != null)
+                            {
+                                SessionManager.SaveSession(userId, server, database);
+                            }
+                            break;
+                        }
+
+                        AnsiConsole.MarkupLine("[red]로그인에 실패하였습니다. 계정 정보 또는 비밀번호를 확인해 주세요.[/]");
+                        if (!string.IsNullOrEmpty(loginError))
+                        {
+                            AnsiConsole.MarkupLine($"[grey](오류 상세: {Markup.Escape(loginError)})[/]");
+                        }
+                        AnsiConsole.WriteLine();
+                        AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 로그인 화면으로 돌아갑니다...[/]");
+                        Console.ReadKey(true);
                     }
-                    AnsiConsole.WriteLine();
-                    AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 로그인 화면으로 돌아갑니다...[/]");
-                    Console.ReadKey(true);
+                }
+
+                AnsiConsole.MarkupLine("[green]데이터베이스 연결 성공![/]");
+                dbService = new DbMetadataService();
+
+                // 추출 모드(Extract Snapshot) 처리
+                if (!string.IsNullOrEmpty(cliArgs.ExtractSnapshotPath))
+                {
+                    AnsiConsole.MarkupLine("[yellow]오프라인 스냅샷 추출 모드를 시작합니다...[/]");
+                    using (var progressScope = new ConsoleProgressScope("스냅샷 추출"))
+                    {
+                        await SnapshotManager.ExportSnapshotAsync(dbService, connectionString, cliArgs.ExtractSnapshotPath, maxDepth, progressScope, globalCts.Token);
+                    }
+                    
+                    AnsiConsole.MarkupLine("[green]스냅샷 추출이 완료되었습니다. 프로그램을 종료합니다.[/]");
+                    return;
                 }
             }
-
-            AnsiConsole.MarkupLine("[green]데이터베이스 연결 성공![/]");
-
-            // 4. 서비스 구성
-            IDbMetadataService dbService = new DbMetadataService();
             var timeoutSeconds = 300;
             if (int.TryParse(configuration["AiSettings:TimeoutSeconds"], out int parsedTimeout) && parsedTimeout > 0)
             {
