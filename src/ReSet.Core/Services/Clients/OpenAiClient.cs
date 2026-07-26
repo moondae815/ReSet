@@ -167,15 +167,41 @@ namespace ReSet.Core.Services.Clients
             else
             {
                 float targetTemp = temperature;
+                var lowerModel = _modelName.ToLowerInvariant();
+                
+                bool isGemma4 = lowerModel.Contains("gemma4");
+                bool isQwen3_6 = lowerModel.Contains("qwen3.6") || lowerModel.Contains("qwen-3.6");
 
                 // o1, o3 모델은 temperature = 1.0f 필수 제약 적용
                 bool isReasoningEnforcedModel = 
                     lowerModel.StartsWith("o1") || 
                     lowerModel.StartsWith("o3");
                 
+                // mlx, vLLM 등의 로컬 호환 서버인지 여부 확인
+                bool isLocal = _endpoint.Contains("127.0.0.1") || _endpoint.Contains("localhost");
+
                 if (isReasoningEnforcedModel)
                 {
                     targetTemp = 1.0f;
+                }
+                else if (isGemma4)
+                {
+                    targetTemp = 1.0f;
+                }
+                else if (isQwen3_6)
+                {
+                    targetTemp = 0.6f;
+                }
+                else if (isLocal && !string.IsNullOrWhiteSpace(effort))
+                {
+                    targetTemp = effort.ToLowerInvariant() switch
+                    {
+                        "low" => 0.1f,
+                        "medium" => 0.4f,
+                        "high" => 0.7f,
+                        "max" => 0.9f,
+                        _ => targetTemp
+                    };
                 }
 
                 var requestBody = new System.Collections.Generic.Dictionary<string, object>
@@ -189,9 +215,8 @@ namespace ReSet.Core.Services.Clients
                     }
                 };
 
-                // mlx, vLLM 등의 로컬 호환 서버는 max_tokens 기본값이 512 등으로 낮게 설정되어 있어
+                // 로컬 호환 서버는 max_tokens 기본값이 512 등으로 낮게 설정되어 있어
                 // 긴 응답(통합 계획서 등) 생성 도중 잘리는 현상이 발생하므로, 명시적으로 높은 max_tokens 지정
-                bool isLocal = _endpoint.Contains("127.0.0.1") || _endpoint.Contains("localhost");
                 int? maxTokensValue = _numCtx ?? (isLocal ? 16384 : (int?)null);
 
                 if (isReasoningEnforcedModel)
@@ -220,6 +245,17 @@ namespace ReSet.Core.Services.Clients
                     if (maxTokensValue.HasValue)
                     {
                         requestBody.Add("max_tokens", maxTokensValue.Value);
+                    }
+
+                    if (isGemma4)
+                    {
+                        requestBody.Add("top_p", 0.95f);
+                        requestBody.Add("top_k", 64);
+                    }
+                    else if (isQwen3_6)
+                    {
+                        requestBody.Add("top_p", 0.95f);
+                        requestBody.Add("top_k", 20);
                     }
                 }
 
