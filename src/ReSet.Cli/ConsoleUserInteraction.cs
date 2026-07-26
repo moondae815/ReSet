@@ -278,17 +278,8 @@ namespace ReSet.Cli
                                 }
                             }
 
-                            // API 호출 대기 중인 활성 태스크들의 모의 진척률(Simulated Progress) 업데이트
-                            foreach (var kvp in _tasks)
-                            {
-                                var task = kvp.Value;
-                                if (!task.IsFinished && task.Value < 95.0)
-                                {
-                                    // 95%까지 매 100ms마다 남은 간격의 2%씩 점진적 증가
-                                    var increment = (95.0 - task.Value) * 0.02;
-                                    task.Increment(increment);
-                                }
-                            }
+                            // API 호출 대기 중인 활성 태스크들의 모의 진척률 업데이트는
+                            // 청크 단위의 실제 진척률(Value = val)과 충돌하여 프로그레스 바가 뒤로 가는 현상을 유발하므로 제거함.
 
                             await Task.Delay(100);
                         }
