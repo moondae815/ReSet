@@ -311,8 +311,11 @@ namespace ReSet.Cli
                 criticThresholdScore = parsedThresholdScore;
             }
 
+            // Local Chunking 활성화 여부
+            bool.TryParse(configuration["AiSettings:EnableLocalChunking"] ?? "true", out bool enableLocalChunking);
+
             IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx);
-            IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore);
+            IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking);
 
             // 하이브리드 아키텍처: ActorEffort 파싱
             var actorEffort = configuration["AiSettings:ActorEffort"];
@@ -335,7 +338,7 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:EnableThinking"] ?? "false", out bool criticEnableThinking);
 
                 var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx);
-                criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore);
+                criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 
             // 하이브리드 아키텍처: Consolidator 서비스 구성
@@ -356,7 +359,7 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:EnableThinking"] ?? "false", out bool consolidatorEnableThinking);
 
                 var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx);
-                consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore);
+                consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 
             IMetadataExporter metadataExporter = new MetadataExporter();

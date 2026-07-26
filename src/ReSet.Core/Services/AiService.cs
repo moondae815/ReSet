@@ -15,16 +15,18 @@ namespace ReSet.Core.Services
         private readonly float _temperature;
         private readonly bool _enableOllamaThinking;
         private readonly int _criticScoreThreshold;
+        private readonly bool _enableAstChunking;
 
         public string ProviderName => _aiClient.ProviderName;
         public string ModelName => _aiClient.ModelName;
 
-        public AiService(IAiClient aiClient, float temperature, bool enableOllamaThinking = false, int criticScoreThreshold = 8)
+        public AiService(IAiClient aiClient, float temperature, bool enableOllamaThinking = false, int criticScoreThreshold = 8, bool enableAstChunking = true)
         {
             _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
             _temperature = temperature;
             _enableOllamaThinking = enableOllamaThinking;
             _criticScoreThreshold = criticScoreThreshold;
+            _enableAstChunking = enableAstChunking;
         }
 
         private string FormatTableSchemaToMarkdown(DependencyInfo dep, SpDefinition spDef)
@@ -560,7 +562,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
         public async Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default, Action<(int current, int total, string message)>? progressCallback = null)
         {
-            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName))
+            if (_enableAstChunking && ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName))
             {
                 return await DeconstructSpLogicWithChunkingAsync(spDef, userInstructions, feedbackLog, effort, cancellationToken, progressCallback);
             }
