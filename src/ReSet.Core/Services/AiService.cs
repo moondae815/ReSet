@@ -609,6 +609,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             Log.Information("Ollama 로컬 LLM 전용 분할(AST Chunking) 파이프라인 진입 - SP: {Schema}.{Name}", spDef.Schema, spDef.Name);
             
+            progressCallback?.Invoke((0, 0, "SQL 구문 분석 및 청크 분할 중..."));
             var parser = new SqlStaticParser();
             var chunks = parser.ExtractStatementChunks(spDef.DdlText);
 

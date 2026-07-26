@@ -622,8 +622,11 @@ namespace ReSet.Core.Services
 
                                     Action<(int current, int total, string message)> progressCallback = info => 
                                     {
-                                        var newDesc = $"{stage1Desc} (청크 {info.current}/{info.total})";
-                                        progressScope.UpdateTask("deconstruct", (double)info.current / info.total * 100, newDesc);
+                                        var newDesc = info.total > 0 
+                                            ? $"{stage1Desc} (청크 {info.current}/{info.total})" 
+                                            : $"{stage1Desc} ({info.message})";
+                                        double percentage = info.total > 0 ? (double)(info.current - 1) / info.total * 100 : 0;
+                                        progressScope.UpdateTask("deconstruct", percentage, newDesc);
                                     };
 
                                     deconstructResult = await WrapWithProgress(_aiService.DeconstructSpLogicAsync(spDef, instructions, feedbackLog, _actorEffort, cancellationToken, progressCallback), progressScope, "deconstruct");
