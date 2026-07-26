@@ -25,6 +25,7 @@
     *   [ColumnInfo.cs](./src/ReSet.Core/Models/ColumnInfo.cs): 컬럼명, 데이터타입, PK/FK 정보, 한글 설명, 설명 누락 유무(IsDescriptionMissing) 및 Identity/DefaultValue 정보를 수집하는 모델.
     *   [TableIndexInfo.cs](./src/ReSet.Core/Models/TableIndexInfo.cs): 테이블 인덱스 메타데이터(인덱스명, 타입, Unique, PK 여부, 구성 컬럼)를 관리하는 모델.
     *   [AiResult.cs](./src/ReSet.Core/Models/AiResult.cs): AI 응답 내용(Content) 및 추론 텍스트(ThinkingText), 요청된 시스템/사용자 프롬프트 콘텍스트를 모아 관리하는 데이터 모델.
+    *   [DbSnapshot.cs](./src/ReSet.Core/Models/DbSnapshot.cs): 오프라인 모드를 위한 데이터베이스 메타데이터 스냅샷 모델.
 *   **비즈니스 서비스 ([Services](./src/ReSet.Core/Services))**
     *   [DbMetadataService.cs](./src/ReSet.Core/Services/DbMetadataService.cs): SQL Server 메타데이터(Extended Properties, DDL, 의존성 관계)를 DFS 재귀 탐색을 활용해 수집하는 인터페이스([IDbMetadataService.cs](./src/ReSet.Core/Services/IDbMetadataService.cs)) 구현체.
     *   [SqlStaticParser.cs](./src/ReSet.Core/Services/SqlStaticParser.cs): ScriptDom 라이브러리를 가동해 테이블 CRUD, 임시 테이블, 분기 들여쓰기 린팅, 동적 SQL, UDF 및 Linked Server 원격 참조를 정적으로 파싱하는 정적 분석기 서비스.
@@ -33,6 +34,8 @@
     *   [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하고, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`)를 기동하는 클래스.
     *   [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영 오케스트레이션을 담당하며, 통합 배치 전환 계획 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Multi-Step Agentic Workflow 흐름을 제어합니다.
     *   [MetadataExporter.cs](./src/ReSet.Core/Services/MetadataExporter.cs): 원본 DB 메타데이터를 JSON, Raw 프롬프트 마크다운(`raw/prompt-context.md`), 개별 DDL/MD 파일 및 테이블 스키마 파일(`raw/ddl/*.md`) 등으로 보존하고, 외부 코딩 에이전트용 마이그레이션 지시서 번들 및 체크리스트(`agent/MigrationInstructions.md`, `agent/todo.md`)를 생성하는 기능 구현체 (통합 Job 전용 하위 디렉토리에 생성).
+    *   [OfflineDbMetadataService.cs](./src/ReSet.Core/Services/OfflineDbMetadataService.cs): `DbSnapshot`을 메모리에 로드하여 DB 연결 없이 오프라인으로 메타데이터를 제공하는 인터페이스(`IDbMetadataService`) 구현체.
+    *   [SnapshotManager.cs](./src/ReSet.Core/Services/SnapshotManager.cs): 온라인 DB로부터 메타데이터를 추출하여 JSON 스냅샷으로 내보내거나(`ExportSnapshotAsync`) 오프라인 파일에서 다시 불러오는(`ImportSnapshotAsync`) 스냅샷 관리 서비스.
     *   [LocalAiConsolidator.cs](./src/ReSet.Core/Services/LocalAiConsolidator.cs): 로컬 모델 환경에서 분할 생성 시 여러 청크(Chunk)로 추출된 논리 JSON 결과들을 단일 `DeconstructedSpLogic` 객체로 병합하는 병합기.
     *   [CacheManager.cs](./src/ReSet.Core/Services/CacheManager.cs): SHA-256 해시 기반 로컬 증분 분석 캐싱 서비스 구현체 ([ICacheManager.cs](./src/ReSet.Core/Services/ICacheManager.cs) 포함).
     *   AI 응답 수집 및 로그 격리: AI 클라이언트 호출 결과에서 추출된 추론(Thinking) 텍스트는 수집 후 TUI 화면을 오염시키지 않도록 `Log.Verbose` 또는 파일 전용 로그에만 기록되게 하고, 기본 실행 수준에서는 실시간 노출을 차단하여 TUI 화면 깨짐을 원천적으로 차단하십시오.
@@ -208,7 +211,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] `dotnet build` 명령어를 통한 컴파일 경고/에러가 0개인지 확인했는가?
-- [ ] `dotnet test` 명령어를 실행하여 206개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 209개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
 - [ ] DB 메타데이터, AI 결과 원문 등을 Spectre.Console TUI에 출력할 때 모든 출력 부에 `Markup.Escape()` 조치를 적용했는가?
 - [ ] Stored Procedure 실행 및 외부 샌드박스 데이터 수집 시, DB 연결 실패 시 예외 격리(Soft Fail 및 DTO FAIL 상태 주입) 처리가 정상 적용되었는가?

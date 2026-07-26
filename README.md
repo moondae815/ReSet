@@ -27,6 +27,7 @@
 * **하이브리드 영문화 프롬프트 설계**: AI 행동 지침 및 제약 규칙은 100% 영어로 작성하여 명령 이행력(Instruction Following)과 환각 차단율을 극대화하되, 최종 산출물은 완벽한 한글로 작성되도록 설계하여 번역 편향과 오인 분석을 동시에 방어합니다.
 
 ### 3. 배치 현대화 설계 및 비용 최적화 (Modernization & Cache)
+* **오프라인 메타데이터 스냅샷 추출 및 구동**: SQL Server 도커(Docker) 구동 등으로 인한 로컬 메모리 점유 문제를 해결하기 위해, 원본 메타데이터를 정적 JSON 스냅샷으로 미리 추출(`--extract-snapshot`)하고, 이후 분석 시에는 DB 연결을 완전히 우회하여 스냅샷 파일 기반으로 구동(`OfflineSnapshotPath`)하는 초경량 오프라인 모드를 지원합니다.
 * **순차적 배치 현대화 계획 수립**: 분석된 여러 SP들의 명세서를 사용자가 선택한 순서대로 조합하여, 워크플로우 제어, 대용량 페이징, 오류 처리 정책이 설계된 통합 배치 계획서(`BatchMigrationPlan.md`)를 작성합니다. (배치 작업 단위는 `--job-name` 옵션을 통해 식별 관리됩니다.)
 * **코딩 에이전트 자동 기동 브릿지 및 자가 수정 피드백 루프**: 통합 배치 전환 계획 수립 및 최종 승인이 완료되면 Claude Code, Antigravity CLI 등 지정된 전문 코딩 에이전트를 자식 프로세스로 자동 기동하여 전체 배치 코드를 통합적으로 연쇄 생성합니다. 특히 기동 시 타겟 단위 테스트 및 아키텍처 제약 테스트를 미리 생성해 배포하고, 빌드/테스트(L0) 성공 통과 시 정적 린터(L1) 및 AI 의미론적 대조(L2)를 거치며 스스로 코드를 고치는 자가 수정 루프(Self-Correction Loop) 브릿지를 탑재하여 최종 코드 품질을 극대화합니다.
 * **하이브리드 동적 SQL 및 Linked Server 대응**: 정적 분석이 까다로운 동적 쿼리(EXEC, sp_executesql)에 대해 DDL 텍스트를 Regex로 2차 분석하여 동적 참조 테이블의 실시간 스키마까지 자동 병합 수집하며, Linked Server 식별자 패턴 감지를 결합해 안전하고 완벽한 현대화 전환 가이드를 제공합니다.
@@ -153,7 +154,8 @@ ReSet/
   "DatabaseSettings": {
     "Server": "localhost",          // SQL Server 주소
     "Database": "Northwind",        // 대상 데이터베이스 이름
-    "MaxDependencyDepth": 3         // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
+    "MaxDependencyDepth": 3,        // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
+    "OfflineSnapshotPath": "./output/offline_snapshot.json" // [설정] 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
     "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai")
@@ -398,6 +400,7 @@ dotnet run --project src/ReSet.Cli
 
 - **명령줄 옵션**:
   - `--conn <연결문자열>`: 분석용 데이터베이스 연결 문자열을 직접 지정합니다. (생략 시 `SP_ANALYZER_CONN_STR` 환경 변수 값을 조회합니다.)
+  - `--extract-snapshot <경로>`: 지정한 경로에 현재 연결된 DB의 전체 메타데이터(SP, 뷰, UDF, 테이블 등)를 덤프하여 오프라인 JSON 스냅샷으로 추출합니다. (예: `--extract-snapshot ./output/offline_snapshot.json`)
   - `--all`: 데이터베이스 내의 모든 Stored Procedure를 일괄 분석합니다.
   - `--sp <SP이름1,SP이름2,...>`: 특정 Stored Procedure들만 지정하여 분석합니다. 쉼표(`,`)로 구분하며 스키마명을 포함(`dbo.USP_1`)하거나 생략(`USP_1`)할 수 있습니다.
   - `--policy`: 정산 정책 문서 도출을 활성화합니다.

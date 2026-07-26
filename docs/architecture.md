@@ -47,7 +47,10 @@ flowchart TD
 | | [ConsoleUserInteraction](../src/ReSet.Cli/ConsoleUserInteraction.cs) | Spectre.Console 기반 TUI 렌더링, L3 인간 개입형 검토 UI 제공, Warnings 경고 패널 렌더링, DB 동기화 동의(`ConfirmMetadataSyncAsync`) 제어. 진행 태스크 완료/실패 시에도 원래 설명을 보관해 안정적으로 화면을 유지합니다. |
 | | [SessionManager](../src/ReSet.Cli/SessionManager.cs) | 로컬 세션 파일(`.session.json`)을 활용한 직전 로그인 정보 관리 및 서버·DB명 즉시 수정 기능 제공. |
 | | [CliArgs](../src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
-| **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
+| **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbSnapshot](../src/ReSet.Core/Models/DbSnapshot.cs) | 로컬 환경에서 DB 연결 없이 오프라인 메타데이터 캐싱을 지원하기 위한 직렬화 구조 스냅샷 모델. |
+| | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
+| | [OfflineDbMetadataService](../src/ReSet.Core/Services/OfflineDbMetadataService.cs) | 오프라인 모드 시 활성화되는 메타데이터 서비스. 로드된 JSON `DbSnapshot`에 기반해 SQL Server 연결 없이 스키마 정보를 반환합니다. |
+| | [SnapshotManager](../src/ReSet.Core/Services/SnapshotManager.cs) | 온라인 모드에서 `DbMetadataService`가 수집한 데이터를 `DbSnapshot` JSON 파일로 추출(`ExportSnapshotAsync`)하거나, 오프라인 시 파일을 읽어들여(`ImportSnapshotAsync`) 제공하는 관리 서비스. |
 | | [SqlStaticParser](../src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 프로시저 파라미터 및 선언 변수 수집, 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. 접두사 없는 컬럼에 대한 로컬 스코프 정밀 분석 및 주입된 실제 스키마 메타데이터 기반 1:1 대조 리졸버 연동 및 대용량 SQL 논리 구문 분할(Chunking) 지원. |
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 통합 배치 수립 시 Brainstorming 및 PlanStructure 설계 분할 요청 처리, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
@@ -88,18 +91,26 @@ graph TD
     %% 1단계: 초기화 및 연결
     subgraph Setup ["1. 초기 설정 및 DB 연결 (Setup)"]
         Start["시작 (CLI 실행)"] --> Parse["설정 로드 및 CLI 인자 파싱 (CliArgs)"]
-        Parse --> ModeCheck{"배치 모드 여부?"}
+        
+        Parse --> OfflineCheck{"오프라인<br/>모드인가?"}
+        
+        %% 오프라인 모드
+        OfflineCheck -- "예 (Snapshot)" --> Snapshot["SnapshotManager 파일 로드<br/>(DB 접속 생략)"]
+        Snapshot --> LoadOfflineSps["오프라인 DbSnapshot 객체에서<br/>Stored Procedure 목록 로드"]
+        
+        %% 온라인 모드
+        OfflineCheck -- "아니오" --> ModeCheck{"배치 모드 여부?"}
         
         ModeCheck -- "아니오 (TUI)" --> TUI["대화형 로그인 입력<br/>(세션 복구 및 실시간 연결 정보 수정)"]
         ModeCheck -- "예 (Batch)" --> Batch["연결 문자열 추출 (인자/환경변수)"]
         
         TUI & Batch --> ConnTest["데이터베이스 연결성 검증"]
-        ConnTest --> LoadSps["전체 Stored Procedure 목록 로드"]
+        ConnTest --> LoadSps["실제 DB에서 전체 SP 목록 로드"]
     end
     
     %% 2단계: 대상 필터링
     subgraph Selection ["2. 분석 대상 필터링 (Selection)"]
-        LoadSps --> TargetCheck{"배치 모드 여부?"}
+        LoadSps & LoadOfflineSps --> TargetCheck{"배치 모드 여부?"}
         
         TargetCheck -- "아니오" --> SelectTUI["개별 SP 선택 / Multi-SP 순차 선택 루프<br/>(물리 선택 순서 보장)"]
         TargetCheck -- "예" --> SelectBatch["--all 또는 --sp 기준으로 분석 대상 목록 필터링"]
