@@ -126,152 +126,6 @@ namespace ReSet.Core.Services
             }
         }
 
-        public async Task ExportMigrationInstructionsAsync(
-            SpDefinition spDef,
-            string specMarkdown,
-            string migrationPlan,
-            string baseOutputDir)
-        {
-            var cleanSpName = $"{spDef.Schema}.{spDef.Name}";
-            
-            var agentFolder = Path.Combine(baseOutputDir, "agent");
-            if (!Directory.Exists(agentFolder))
-            {
-                Directory.CreateDirectory(agentFolder);
-            }
-
-            var instructionsPath = Path.Combine(agentFolder, "MigrationInstructions.md");
-            var todoPath = Path.Combine(agentFolder, "todo.md");
-
-            Log.Information("마이그레이션 지시서 번들 내보내기 시작 - SP: {SpName}, OutputDir: {OutputDir}", cleanSpName, baseOutputDir);
-
-            try
-            {
-
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine($"# 🚀 Migration Instructions for Coding Agent ({cleanSpName})");
-                sb.AppendLine();
-                sb.AppendLine("본 문서는 SQL Server Stored Procedure에서 현대화된 배치 소스 코드로의 마이그레이션을 자동 수행하기 위해 코딩 에이전트(Claude Code, Antigravity CLI 등)에 제공되는 지시서 및 컨텍스트입니다.");
-                sb.AppendLine("아래 설계 문서(Specification)와 레거시 SQL DDL 소스코드를 읽고 지침에 따라 현대화된 타겟 소스코드를 작성해 주십시오.");
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 📋 1. 마이그레이션 기본 정보");
-                sb.AppendLine($"- **레거시 SP 개체**: `{cleanSpName}`");
-                sb.AppendLine($"- **수집된 의존성 개체 개수**: {spDef.Dependencies.Count}개");
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 📄 2. 현대화 비즈니스 설계서 (Business Specification)");
-                sb.AppendLine("이 설계서는 레거시 SP의 핵심 비즈니스 로직, 입출력 스펙, 예외 처리 규칙을 명시합니다. 구현 시 반드시 이 동작 방식을 1:1로 만족해야 합니다.");
-                sb.AppendLine();
-                sb.AppendLine(specMarkdown);
-                sb.AppendLine();
-                
-                if (!string.IsNullOrEmpty(migrationPlan))
-                {
-                    sb.AppendLine("---");
-                    sb.AppendLine();
-                    sb.AppendLine("## 🗺️ 3. 마이그레이션 전환 계획 (Migration Plan)");
-                    sb.AppendLine("배치 마이그레이션을 구성하기 위한 실행 계획입니다.");
-                    sb.AppendLine();
-                    sb.AppendLine(migrationPlan);
-                    sb.AppendLine();
-                }
-
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 💻 4. 레거시 SQL Server Stored Procedure DDL 원본");
-                sb.AppendLine("마이그레이션의 최종 로직 정합성을 유지하기 위해 참고해야 할 오리지널 SQL 코드입니다.");
-                sb.AppendLine();
-                sb.AppendLine("```sql");
-                sb.AppendLine(spDef.DdlText);
-                sb.AppendLine("```");
-                sb.AppendLine();
-
-                if (spDef.Dependencies.Count > 0)
-                {
-                    sb.AppendLine("---");
-                    sb.AppendLine();
-                    sb.AppendLine("## 📦 5. 의존하는 주요 참조 스키마 및 소스코드");
-                    sb.AppendLine("데이터 엑세스 계층(Repository/DAO) 구현에 참고해야 할 테이블 스키마 파일들의 링크입니다.");
-                    sb.AppendLine();
-
-                    var tableSchemasDir = Path.Combine(baseOutputDir, "TableSchemas");
-                    if (!Directory.Exists(tableSchemasDir))
-                    {
-                        Directory.CreateDirectory(tableSchemasDir);
-                    }
-
-                    foreach (var dep in spDef.Dependencies)
-                    {
-                        var cleanDepName = string.IsNullOrEmpty(dep.Database)
-                            ? $"{dep.Schema}.{dep.Name}"
-                            : $"{dep.Database}.{dep.Schema}.{dep.Name}";
-                        
-                        var contextFileName = $"{cleanDepName}.md";
-                        var contextFilePath = Path.Combine(tableSchemasDir, contextFileName);
-                        
-                        var contextSb = new System.Text.StringBuilder();
-                        contextSb.AppendLine($"# {dep.Type}: {cleanDepName}");
-                        contextSb.AppendLine();
-                        
-                        if (dep.Columns.Count > 0)
-                        {
-                            contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
-                        }
-                        
-                        if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
-                        {
-                            contextSb.AppendLine("## Referenced SQL DDL:");
-                            contextSb.AppendLine("```sql");
-                            contextSb.AppendLine(dep.ReferencedDdlText);
-                            contextSb.AppendLine("```");
-                        }
-                        
-                        File.WriteAllText(contextFilePath, contextSb.ToString());
-                        sb.AppendLine($"- **{cleanDepName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
-                    }
-                }
-
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 🔑 6. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
-                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 비즈니스 명세와 하단의 레거시 SQL DDL을 분석하여 현대화된 배치 소스 코드를 생성하십시오.");
-                sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
-                sb.AppendLine("1. 설계서의 입출력 규격 및 비즈니스 로직 단계를 완벽히 만족할 것.");
-                sb.AppendLine("2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성할 것.");
-                sb.AppendLine("3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
-                sb.AppendLine("4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
-                sb.AppendLine("5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
-                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.");
-                sb.AppendLine();
-
-                await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
-                Log.Debug("마이그레이션 지시서 파일 쓰기 성공: {InstructionsPath}", instructionsPath);
-
-                // _todo.md 생성
-                var todoSb = new StringBuilder();
-                todoSb.AppendLine($"# 📋 {cleanSpName} 마이그레이션 구현 체크리스트");
-                todoSb.AppendLine();
-                todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
-                todoSb.AppendLine();
-                todoSb.AppendLine("- [ ] 1. 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
-                todoSb.AppendLine("- [ ] 2. 관련 DDL 반영 및 데이터 액세스(Repository/DAO/Adapter) 레이어 구현");
-                todoSb.AppendLine("- [ ] 3. DbC(Design by Contract)에 따른 파라미터 사전 검증 및 비즈니스 로직 단계별 구현");
-                todoSb.AppendLine("- [ ] 4. 예외 처리, 트랜잭션 격리 및 멱등성(Upsert 패턴) 처리 보완");
-                todoSb.AppendLine("- [ ] 5. 공급된 단위 테스트 코드를 100% 통과(PASS)시키고 전체 로컬 빌드 성공 확인");
-                await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
-                Log.Debug("마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
-
-                Log.Information("마이그레이션 지시서 번들 내보내기 완료 - SP: {SpName}", cleanSpName);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "마이그레이션 지시서 내보내기 중 예외 발생 (격리됨) - SP: {SpName}", cleanSpName);
-            }
-        }
-
         public async Task ExportConsolidatedMigrationInstructionsAsync(
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
@@ -311,10 +165,10 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
-                var tableSchemasDir = Path.Combine(baseOutputDir, "TableSchemas");
-                if (!Directory.Exists(tableSchemasDir))
+                var rawDdlDir = Path.Combine(baseOutputDir, "raw", "ddl");
+                if (!Directory.Exists(rawDdlDir))
                 {
-                    Directory.CreateDirectory(tableSchemasDir);
+                    Directory.CreateDirectory(rawDdlDir);
                 }
 
                 sb.AppendLine("## 📋 2. 대상 Stored Procedure 및 테이블 스키마 참조 링크");
@@ -334,7 +188,7 @@ namespace ReSet.Core.Services
                         : $"{dep.Database}.{dep.Schema}.{dep.Name}";
                     
                     var contextFileName = $"{cleanDepName}.md";
-                    var contextFilePath = Path.Combine(tableSchemasDir, contextFileName);
+                    var contextFilePath = Path.Combine(rawDdlDir, contextFileName);
                     
                     var contextSb = new System.Text.StringBuilder();
                     contextSb.AppendLine($"# {dep.Type}: {cleanDepName}");
@@ -354,21 +208,21 @@ namespace ReSet.Core.Services
                     }
                     
                     File.WriteAllText(contextFilePath, contextSb.ToString());
-                    sb.AppendLine($"- **{cleanDepName}**: [TableSchemas/{contextFileName}](TableSchemas/{contextFileName})");
+                    sb.AppendLine($"- **{cleanDepName}**: [raw/ddl/{contextFileName}](raw/ddl/{contextFileName})");
                 }
 
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
                 sb.AppendLine("## 🔑 3. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
-                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `TableSchemas/` 디렉토리에 정의된 의존성 스키마들을 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마들을 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
                 sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
                 sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 것.");
-                sb.AppendLine("2. 생성할 파일 경로는 프로젝트 아키텍처 규칙에 맞춰 작성할 것.");
-                sb.AppendLine("3. Hexagonal Architecture를 적용하여 핵심 비즈니스 도메인과 DB 액세스 계층(Port/Adapter)을 엄격히 분리할 것.");
-                sb.AppendLine("4. Design by Contract를 준수하여 입력 인자 유효성 검증(가드 구문)을 확실히 반영할 것.");
-                sb.AppendLine("5. 배치의 재실행 가능성을 위해 Upsert(Merge) 패턴을 활용한 멱등성(Idempotency)을 보장할 것.");
-                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 ArchUnit 아키텍처 검증 코드(tests 폴더 내 위치)를 100% 통과(PASS)시키고 빌드가 성공함을 자체 검증할 것.");
+                sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 것.");
+                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 타겟 언어 및 프레임워크의 권장 패턴을 따를 것.");
+                sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 것.");
+                sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 것.");
+                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 것.");
                 sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);

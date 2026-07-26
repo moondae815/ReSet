@@ -114,10 +114,6 @@ ReSet/
     │       │   ├── Spec.md                 # 최종 비즈니스 명세서
     │       │   ├── BatchMigrationPlan.md   # SP 개별 배치 전환 계획서
     │       │   └── Thinking.md             # AI 모델의 추론 과정 로그
-    │       ├── agent/
-    │       │   ├── MigrationInstructions.md# 에이전트 전용 프롬프트 및 지시서
-    │       │   └── todo.md                 # 구현 체크리스트
-    │       ├── TableSchemas/               # 코딩 에이전트 참조용 테이블 스키마 메타데이터
     │       └── raw/
     │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
@@ -130,9 +126,9 @@ ReSet/
     │   ├── agent/
     │   │   ├── MigrationInstructions.md      # 통합 마이그레이션 지시서 번들
     │   │   └── todo.md                       # 통합 배치 마이그레이션 체크리스트
-    │   ├── TableSchemas/                     # 통합 배치 코딩 참조용 의존 테이블 스키마 모음
     │   └── raw/
-    │       └── prompt-context.md             # AI에 실제 주입된 통합 프롬프트 원문
+    │       ├── prompt-context.md             # AI에 실제 주입된 통합 프롬프트 원문
+    │       └── ddl/                          # 의존 테이블 스키마 메타데이터 모음
     │
     └── validation/                 # 소스코드 정적 검증 및 데이터 정합성 리포트 저장 폴더
         ├── [SP이름]_CompareReport.md  # 1:1 데이터 정합성 비교 분석 보고서
@@ -383,7 +379,7 @@ dotnet run --project src/ReSet.Cli
 1. DB 계정(ID)과 패스워드를 입력하여 SQL Server에 로그인합니다.
 2. 로그인 성공 시 아래 **메인 메뉴**가 화면에 표시됩니다:
    * **`1. Stored Procedure 개별 분석 명세서 작성`**:
-     SP를 1개 선택하여, 해당 프로시저의 비즈니스 로직과 데이터 입출력 명세서(`Spec.md`)를 작성합니다. (이때 개별 SP 마이그레이션용 지시서 번들 `MigrationInstructions.md`도 자동 생성됩니다.)
+     SP를 1개 선택하여, 해당 프로시저의 비즈니스 로직과 데이터 입출력 명세서(`Spec.md`)를 작성합니다.
    * **`2. 기분석 명세서 통합 배치 전환 계획 수립 (Multi-SP)`**:
      출력 디렉터리에 축적된 `Spec.md` 목록 중에서 통합할 대상들을 **원하는 순서대로 하나씩 선택**하여 배치 단계를 구성하고, Job 이름(예: `Daily_Order_Job`)을 입력하여 통합 배치 전환 계획서(`BatchMigrationPlan.md`)를 작성합니다.
      * **이전 메뉴로 돌아가기**: 파일 선택 화면의 최상단에 제공되는 `[-- 메인 메뉴로 돌아가기 --]` 옵션을 선택하여 이전 메인 메뉴로 안전하게 되돌아올 수 있습니다.

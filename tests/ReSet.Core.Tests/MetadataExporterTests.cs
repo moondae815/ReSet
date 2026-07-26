@@ -224,74 +224,6 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public async Task ExportMigrationInstructionsAsync_ShouldCreateInstructionsFile_WithCorrectContent()
-        {
-            // Arrange
-            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_instructions");
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-
-            var spDef = new SpDefinition
-            {
-                Schema = "dbo",
-                Name = "USP_TestInstructions",
-                DdlText = "CREATE PROCEDURE dbo.USP_TestInstructions AS SELECT 1;"
-            };
-
-            var tableDep = new DependencyInfo
-            {
-                Schema = "dbo",
-                Name = "TBL_TestDep",
-                Type = "USER_TABLE",
-                DiscoveryDepth = 1,
-                Description = "의존 테이블 설명"
-            };
-            tableDep.Columns.Add(new ColumnInfo
-            {
-                ColumnName = "ID",
-                DataType = "INT",
-                IsNullable = false,
-                IsPrimaryKey = true,
-                Description = "PK 컬럼"
-            });
-            spDef.Dependencies.Add(tableDep);
-
-            var specMarkdown = "# USP_TestInstructions Spec\n- Business Logic Steps...";
-            var migrationPlan = "# USP_TestInstructions Migration Plan\n- Steps to migrate...";
-
-            IMetadataExporter exporter = new MetadataExporter();
-
-            // Act
-            await exporter.ExportMigrationInstructionsAsync(spDef, specMarkdown, migrationPlan, testOutputDir);
-
-            // Assert
-            var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");
-            var expectedTodoPath = Path.Combine(testOutputDir, "agent", "todo.md");
-            Assert.True(File.Exists(expectedPath));
-            Assert.True(File.Exists(expectedTodoPath));
-
-            var content = await File.ReadAllTextAsync(expectedPath);
-            Assert.Contains("# 🚀 Migration Instructions for Coding Agent (dbo.USP_TestInstructions)", content);
-            Assert.Contains(specMarkdown, content);
-            Assert.Contains(migrationPlan, content);
-            Assert.Contains("CREATE PROCEDURE dbo.USP_TestInstructions AS SELECT 1;", content);
-            Assert.Contains("TBL_TestDep", content);
-            Assert.Contains("의존 테이블 설명", content);
-            Assert.Contains("todo.md", content);
-
-            var todoContent = await File.ReadAllTextAsync(expectedTodoPath);
-            Assert.Contains("# 📋 dbo.USP_TestInstructions 마이그레이션 구현 체크리스트", todoContent);
-
-            // Clean up
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-        }
-
-        [Fact]
         public async Task ExportConsolidatedMigrationInstructionsAsync_ShouldCreateInstructionsFile_WithCorrectContent()
         {
             // Arrange
@@ -352,21 +284,16 @@ namespace ReSet.Core.Tests
             var content = await File.ReadAllTextAsync(expectedPath);
             Assert.Contains($"# 🚀 Consolidated Migration Instructions for Coding Agent ({jobName})", content);
             Assert.Contains(consolidatedPlan, content);
-            var tableSchemasPath1 = Path.Combine(testOutputDir, "TableSchemas", "dbo.USP_Sp1_TableSchemas.md");
-            var tableSchemasPath2 = Path.Combine(testOutputDir, "TableSchemas", "dbo.USP_Sp2_TableSchemas.md");
+            var tableSchemasPath1 = Path.Combine(testOutputDir, "raw", "ddl", "dbo.TBL_TestDep.md");
             
             Assert.True(File.Exists(tableSchemasPath1));
-            Assert.True(File.Exists(tableSchemasPath2));
 
             var context1 = await File.ReadAllTextAsync(tableSchemasPath1);
             Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", context1);
             Assert.Contains("TBL_TestDep", context1);
             Assert.Contains("의존 테이블 설명", context1);
-
-            var context2 = await File.ReadAllTextAsync(tableSchemasPath2);
-            Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp2 AS SELECT 2;", context2);
             
-            Assert.Contains("[TableSchemas/dbo.USP_Sp1_TableSchemas.md]", content);
+            Assert.Contains("[raw/ddl/dbo.TBL_TestDep.md]", content);
             Assert.Contains("todo.md", content);
 
             var todoContent = await File.ReadAllTextAsync(expectedTodoPath);

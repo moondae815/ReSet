@@ -167,8 +167,6 @@ namespace ReSet.Core.Services.Clients
             else
             {
                 float targetTemp = temperature;
-                var lowerModel = _modelName.ToLowerInvariant();
-                
                 bool isGemma4 = lowerModel.Contains("gemma4");
                 bool isQwen3_6 = lowerModel.Contains("qwen3.6") || lowerModel.Contains("qwen-3.6");
 

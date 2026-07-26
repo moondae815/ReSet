@@ -1347,23 +1347,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 await File.WriteAllTextAsync(planFileName, metadataHeader + migrationPlan);
             }
 
-            if (spDef != null)
-            {
-                try
-                {
-                    await metadataExporter.ExportMigrationInstructionsAsync(
-                        spDef,
-                        specMarkdown,
-                        migrationPlan ?? string.Empty,
-                        spOutputDir);
 
-                    AnsiConsole.MarkupLine($"[green]코딩 에이전트 가이드라인 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(Path.Combine(spOutputDir, "agent", "MigrationInstructions.md"))}");
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]코딩 에이전트 가이드라인 번들 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
-                }
-            }
 
             if (!string.IsNullOrWhiteSpace(thinkingText))
             {
