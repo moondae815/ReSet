@@ -71,7 +71,7 @@ flowchart LR
 
 ## 🎯 마일스톤별 상세 비즈니스 목표
 
-각 마일스톤의 세부 기술적 메커니즘(DFS 탐색 알고리즘, Actor-Critic 앙상블 합성법, 1:1 결과 정합성 비교 대조 등)은 [architecture.md](file:///home/moondae/git-root/ReSet/docs/architecture.md)에 상세히 기술되어 있으며, 로드맵 상에서는 비즈니스적 마일스톤 목표 위주로 관리됩니다.
+각 마일스톤의 세부 기술적 메커니즘(DFS 탐색 알고리즘, Actor-Critic 앙상블 합성법, 1:1 결과 정합성 비교 대조 등)은 [architecture.md](./architecture.md)에 상세히 기술되어 있으며, 로드맵 상에서는 비즈니스적 마일스톤 목표 위주로 관리됩니다.
 
 ### 🗺️ Milestone 1: 기존 시스템 분석 및 수집 (Legacy 분석)
 *   **비즈니스 목적**: 레거시 DB에 분산된 SP DDL, 스키마, 한글 설명 및 동적 의존성을 빠짐없이 수집하여 AI 분석가에게 온전한 도메인 지식 컨텍스트를 공급합니다.

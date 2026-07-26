@@ -1,6 +1,6 @@
 # [구현 계획서] SP Reverse-Engineering 명세서 3단계 검증 파이프라인 (Verification Pipeline) 연동
 
-본 구현 계획서는 검증 설계서([2026-06-02-sp-verification-pipeline-design.md](file:///home/moondae/git-root/sp-reverse-engineering/docs/superpowers/specs/2026-06-02-sp-verification-pipeline-design.md))에 명세된 3단계 검증 아키텍처를 점진적이고 안전하게 연동하기 위한 상세 수행 일정 및 작업 단위 리스트를 제공합니다.
+본 구현 계획서는 검증 설계서([2026-06-02-sp-verification-pipeline-design.md](../specs/2026-06-02-sp-verification-pipeline-design.md))에 명세된 3단계 검증 아키텍처를 점진적이고 안전하게 연동하기 위한 상세 수행 일정 및 작업 단위 리스트를 제공합니다.
 
 ---
 

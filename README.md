@@ -60,7 +60,7 @@
 
 본 프로젝트는 깊이 우선 탐색(DFS) 및 동적 SQL Regex 추출을 결합한 하이브리드 의존성 탐색, 3단계 신뢰성 검증(L1: 정적, L2: Actor-Critic AI 검토, L3: 인간 승인), 그리고 1:1 런타임 결과 정합성 검증 엔진을 갖추고 있습니다.
 
-상세한 데이터 흐름 및 모듈 아키텍처는 [architecture.md](file:///home/moondae/git-root/ReSet/docs/architecture.md) 문서를, 프로젝트 일정 및 마일스톤 흐름은 [roadmap.md](file:///home/moondae/git-root/ReSet/docs/roadmap.md) 문서를 참고해 주십시오.
+상세한 데이터 흐름 및 모듈 아키텍처는 [architecture.md](./docs/architecture.md) 문서를, 프로젝트 일정 및 마일스톤 흐름은 [roadmap.md](./docs/roadmap.md) 문서를 참고해 주십시오.
 
 ---
 
