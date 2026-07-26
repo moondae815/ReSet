@@ -1659,7 +1659,73 @@ Write the Batch Migration Plan for {targetLanguage} based on the legacy SQL SP d
             return aiResult;
         }
 
-        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        
+        public async Task<AiResult> BrainstormBatchPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        {
+            var systemPrompt = $@"You are a principal database modernization architect. Your task is to brainstorm and analyze the overarching architecture for consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application named '{jobName}'.
+DO NOT write code or detailed markdown plans. ONLY output your analysis: identify common domain logic, dependencies, and propose whether a Tasklet or Chunk-based architecture is more suitable.";
+
+            var userPrompt = new System.Text.StringBuilder();
+            userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
+            userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
+            userPrompt.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("[Provided Stored Procedure Specifications]");
+            foreach (var spec in specs)
+            {
+                userPrompt.AppendLine($"---");
+                userPrompt.AppendLine($"Filename: {spec.FileName}");
+                userPrompt.AppendLine($"[Content Start]");
+                userPrompt.AppendLine(spec.Content);
+                userPrompt.AppendLine($"[Content End]");
+                userPrompt.AppendLine();
+            }
+            userPrompt.AppendLine("Please analyze the specifications and provide your architectural brainstorming.");
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the final analysis. The final text must be placed outside the think tags.";
+            }
+
+            Log.Information("AI 배치 계획 브레인스토밍 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}", jobName, targetLanguage, effort ?? "Default");
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            if (aiResult == null) aiResult = new AiResult();
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+            return aiResult;
+        }
+
+        public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        {
+            var systemPrompt = $@"You are a principal database modernization architect. Based on the previous brainstorming, draft a detailed step-by-step structural plan (Table of Contents and execution flow) for the final '{jobName}' {targetLanguage} batch application document.
+Ensure the structure includes sections for Architecture Overview, Mermaid Flowchart, Step-by-Step implementation with pseudocode, and Validation SQL.";
+
+            var userPrompt = new System.Text.StringBuilder();
+            userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
+            userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("[Brainstorming Analysis Result]");
+            userPrompt.AppendLine(brainstormingResult);
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Please draft the detailed structural plan and step-by-step instructions for the final markdown document.");
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags. The final text must be placed outside the think tags.";
+            }
+
+            Log.Information("AI 배치 계획 목차 수립 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}", jobName, targetLanguage, effort ?? "Default");
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            if (aiResult == null) aiResult = new AiResult();
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+            return aiResult;
+        }
+
+        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(string planStructure, System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+
         {
             var systemPrompt = $@"You are a principal database modernization architect consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
 Consolidate the provided specifications into a single unified batch job named '{jobName}'.
@@ -1705,7 +1771,11 @@ Consolidate the provided specifications into a single unified batch job named '{
                 userPrompt.AppendLine();
             }
 
-            userPrompt.AppendLine("Please analyze all the specifications and draft the Consolidated Batch Modernization Plan.");
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("[Approved Document Structure & Plan]");
+            userPrompt.AppendLine(planStructure);
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Please draft the Consolidated Batch Modernization Plan, STRICTLY adhering to the [Approved Document Structure & Plan] above.");
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
