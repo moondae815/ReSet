@@ -1198,6 +1198,7 @@ namespace ReSet.Core.Services
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
             AiResult? finalAiResult = null;
+            string currentPlanStructure = string.Empty;
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
@@ -1216,11 +1217,26 @@ namespace ReSet.Core.Services
                         specsCopy.Add(("Feedback_Log.txt", $"[이전 시도에 대한 검토 피드백]:\n{feedbackLog}\n위 에러/피드백 사항을 전적으로 수용하여 통합 설계서를 완성해 주세요."));
                     }
 
-                    AiResult aiResult;
+                    AiResult aiResult = new AiResult();
                     using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 수립") ?? NullProgressScope.Instance)
                     {
-                        progressScope.AddTask("batch", $"{_consolidatorService.ModelName} 계획 수립 중...");
-                        aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "batch");
+                        if (string.IsNullOrEmpty(currentPlanStructure))
+                        {
+                            progressScope.AddTask("phase1", $"{_consolidatorService.ModelName} (1/3) 브레인스토밍 중...");
+                            var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
+                            
+                            var rawDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "output", "Jobs", jobName, "raw");
+                            if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
+                            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
+
+                            progressScope.AddTask("phase2", $"{_consolidatorService.ModelName} (2/3) 목차 설계 중...");
+                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase2");
+                            currentPlanStructure = planResult.Content;
+                            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
+                        }
+
+                        progressScope.AddTask("phase3", $"{_consolidatorService.ModelName} (3/3) 최종 생성 중...");
+                        aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3");
                     }
                     consolidatedPlan = aiResult.Content;
                     finalAiResult = aiResult;
@@ -1352,7 +1368,7 @@ namespace ReSet.Core.Services
                     string rePlan = string.Empty;
                     try
                     {
-                        var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                        var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                         rePlan = aiResult.Content;
                     }
                     catch (Exception ex)
@@ -1375,7 +1391,7 @@ namespace ReSet.Core.Services
                         {
                             var specsRe = new System.Collections.Generic.List<(string FileName, string Content)>(specsCopy);
                             specsRe.Add(("L1_Re_Fix.txt", l1Re.SuggestedPromptFix ?? string.Empty));
-                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(specsRe, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsRe, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                             rePlan = aiResult.Content;
                         }
                         catch { }
