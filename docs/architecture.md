@@ -359,7 +359,7 @@ graph TD
 
 #### 4.4.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
 * **동적 모드 분기**: `ActorEffort` 설정값에 따라 검증 및 생성 경로가 이원화됩니다.
-  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차 생성 및 자가 수정/피드백 루프에서 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 순차 분할 생성 및 피드백 키워드 기반 선택적 재생성 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
+  * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차 생성 및 자가 수정/피드백 루프에서 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 순차 분할 생성 및 피드백 키워드 기반 선택적 재생성 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 특히 통합 배치 전환 계획의 경우 비즈니스 필터 보존 여부, XACT_ABORT ON 기반 TRY...CATCH 예외 처리, 그리고 원본 에러 코드 맵핑 무결성에 대해 더욱 가혹하게 감점 처리합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
   * **dynamic 모드 (병렬 협업)**: 다형성 및 앙상블 효과를 극대화하는 dynamic 아키텍처 경로입니다. (상세 협업 시퀀스는 상위 통합 검증 파이프라인 흐름도 참고)
     - **차등 Effort 병렬 생성 (1단계)**: 동일한 SP 정의에 대해 `low`, `medium`, `high` 추론 강도를 병렬 구동하여 서로 다른 장점을 가진 3종의 후보 명세서를 확보합니다.
     - **Critic 채점 및 Fast-Pass 판정 (2단계)**: Critic 에이전트가 각 후보에 대해 정량 채점(5대 기준 각 10점, 총 50점 만점)을 실시하고 100점 만점으로 정규화합니다. L1 검증을 통과하고 Critic 결함이 없으며 90점 이상인 후보가 있다면 **Fast-Pass로 최고 점수 후보를 즉시 채택**하고 합성을 생략합니다. (동점 시 저-Effort 우선순위)
@@ -377,9 +377,9 @@ graph TD
   * **OpenAiClient**: OpenAI 공식 SDK, gpt-5 Responses API 지원, o1/o3 추론 모델 규격(`reasoning_effort` 기본값 "medium" 지정 등) 대응 및 스트리밍 폐지 대응.
   * **ClaudeClient**: Anthropic Messages API 페이로드 규격 및 Claude 4세대/5세대(`output_config.effort` 및 `thinking` 내 `display = "summarized"` 옵션을 통한 빈 생각 블록 방지) 대응, temperature 생략 대응.
   * **GoogleClient**: Google AI Studio API Key 주입 및 SystemInstruction 구조 대응.
-  * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama 네이티브 REST API(`/api/chat`) 규격 대응. 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 최적 샘플링(`num_ctx`, `top_p`, `top_k` 등)을 `options` 파라미터로 자동 할당하는 하드코딩 우회 로직 및 생각 토큰(<|channel>thought, <think> 등)의 수동 파싱과 본문 분리 기능 지원.
+  * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama 네이티브 REST API(`/api/chat`) 규격 대응. 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 최적 샘플링(`num_ctx`, `top_p`, `top_k` 등)을 `options` 파라미터로 자동 할당하는 하드코딩 우회 로직 및 생각 토큰(<|channel>thought, <think> 등)의 수동 파싱과 본문 분리 기능 지원. 또한 텍스트 무한 반복 루프 방지를 위해 `repeat_penalty`가 자동 매핑됩니다.
   * **ZaiClient**: Z.ai AI 플랫폼 연동 규격 및 추론 과정(Reasoning Process) 수집 대응.
-* **설정 기반 동적 DI 및 로컬 프로바이더 라우팅**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입합니다. 특히 `mlx`, `local-openai`, `vllm` 등의 Alias를 사용할 경우 통신은 `OpenAiClient`를 재사용하면서도, 파이프라인 진입 시 `IsLocalProvider()` 검사를 통해 자동으로 **로컬 모델 전용 AST 분할(Chunking) 파이프라인**을 타도록 설계되어 있습니다.
+* **설정 기반 동적 DI 및 로컬 프로바이더 라우팅**: `appsettings.json` 내 `Providers` 맵핑 값을 읽어 `AiClientFactory`가 적합한 전용 클라이언트를 빌드해 `AiService`에 주입합니다. 특히 `mlx`, `local-openai`, `vllm` 등의 Alias를 사용할 경우 통신은 `OpenAiClient`를 재사용하면서도, 파이프라인 진입 시 `IsLocalProvider()` 검사를 통해 자동으로 **로컬 모델 전용 AST 분할(Chunking) 파이프라인**을 타고, `repetition_penalty` 및 `frequency_penalty` 파라미터를 주입하여 텍스트 무한 루프를 방어하도록 설계되어 있습니다.
 
 ### 4.6. 소스코드 정합성 검증 엔진 (Validator)
 마이그레이션된 소스코드가 원래의 비즈니스 기능 명세서(Spec) 및 기존 Legacy DB SP의 구동 결과 데이터와 일치하는지 판정하는 정합성 검증 시스템 흐름은 다음과 같습니다.
