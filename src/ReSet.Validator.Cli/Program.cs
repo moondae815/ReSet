@@ -386,11 +386,11 @@ namespace ReSet.Validator.Cli
         {
             var config = new ValidatorConfig();
 
-            // appsettings 로드
-            config.SpecDirectory = configuration["ValidationSettings:SpecDirectory"] ?? "./output";
-            config.SourceCodeDirectory = configuration["ValidationSettings:SourceCodeDirectory"] ?? "./src";
+            // 기본값 설정 (TUI 메뉴에서 덮어쓰여지거나 CLI 인자로 입력됨)
+            config.SpecDirectory = "";
+            config.SourceCodeDirectory = "";
+            config.OutputDirectory = "";
             config.TargetLanguage = configuration["ValidationSettings:TargetLanguage"] ?? "Auto";
-            config.OutputDirectory = configuration["ValidationSettings:OutputDirectory"] ?? "./output/validation";
 
             var maxL2AttemptsRaw = configuration["AiSettings:MaxL2Attempts"] ?? "2";
             int maxL2Attempts = 2;
