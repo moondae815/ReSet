@@ -207,7 +207,6 @@ ReSet/
   "CodegenSettings": {
     "Enabled": false,                     // [설정] 분석 완료 후 코딩 에이전트 브릿지 자동 실행 활성화 여부
     "Engine": "claude",                   // [설정] 기본 코딩 엔진 ("claude" | "agy" | "codex")
-    "TargetProjectDirectory": "./output/src", // [설정] 마이그레이션 코드가 저장될 대상 프로젝트 절대/상대 경로 (통합 Job 모드 시 ./output/Jobs/{JobName}/src 로 자동 덮어쓰기 됨)
     "Engines": {
       "claude": {
         "Command": "claude",              // 실행할 Claude CLI 명령어

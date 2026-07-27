@@ -160,7 +160,6 @@ namespace ReSet.Cli
 
             bool.TryParse(configuration["CodegenSettings:Enabled"] ?? "false", out bool codegenEnabled);
             var codegenEngine = configuration["CodegenSettings:Engine"] ?? "claude";
-            var targetProjectDir = configuration["CodegenSettings:TargetProjectDirectory"] ?? "./src";
 
             var isCodegenEnabled = cliArgs.EnableCodegen || codegenEnabled;
             var selectedEngine = cliArgs.Engine ?? codegenEngine;
@@ -1535,7 +1534,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 var spName = agentDirInfo?.Parent?.Name ?? "Unknown";
 
                 // 1. 대상 언어 감지
-                var targetLanguage = configuration["ValidationSettings:TargetLanguage"] ?? "C#";
+                var targetLanguage = configuration["MigrationSettings:TargetLanguage"] ?? "C#";
                 if (string.Equals(targetLanguage, "Auto", StringComparison.OrdinalIgnoreCase))
                 {
                     targetLanguage = "C#"; // Fallback 기본값
