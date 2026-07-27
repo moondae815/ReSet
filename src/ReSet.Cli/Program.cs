@@ -1529,7 +1529,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 var agentDirInfo = Directory.GetParent(instructionsPath);
                 var spName = agentDirInfo?.Parent?.Name ?? "Unknown";
 
-                // 1. 대상 언어 감지 및 TDD 자가 단위 테스트 코드 배포
+                // 1. 대상 언어 감지
                 var targetLanguage = configuration["ValidationSettings:TargetLanguage"] ?? "C#";
                 if (string.Equals(targetLanguage, "Auto", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1549,37 +1549,11 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 var batchPlanPath = Path.Combine(baseDir, "docs", "BatchMigrationPlan.md");
                 
                 var actualSpecPath = File.Exists(batchPlanPath) ? batchPlanPath : specPath;
+                var isBatchPlan = actualSpecPath == batchPlanPath;
 
-                if (File.Exists(actualSpecPath))
+                if (isBatchPlan)
                 {
-                    var isCSharp = targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase);
-                    var ext = isCSharp ? ".cs" : ".java";
-                    var testFileName = isCSharp ? $"{spName}Tests{ext}" : $"{spName}Test{ext}";
-                    var testFilePath = Path.Combine(targetProjectDir, "tests", testFileName);
-
-                    if (File.Exists(testFilePath))
-                    {
-                        AnsiConsole.MarkupLine($"[grey]TDD 사전 테스트 파일이 이미 존재하여 AI 코드 작성을 스킵합니다: {testFileName}[/]");
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[grey]TDD 사전 테스트 설계 중: {spName} ({targetLanguage})...[/]");
-                        try
-                        {
-                            var specContent = await File.ReadAllTextAsync(actualSpecPath, cancellationToken);
-                            var validatorAi = new ValidatorAiService(aiClient);
-                            var testCode = await validatorAi.GenerateUnitTestCodeAsync(specContent, spName, targetLanguage, cancellationToken);
-                            
-                            var exporter = new MetadataExporter();
-                            await exporter.ExportUnitTestCodeAsync(targetProjectDir, spName, targetLanguage, testCode);
-                            AnsiConsole.MarkupLine($"[green]✔ TDD 단위 테스트 코드가 타겟 프로젝트에 적재되었습니다.[/]");
-                        }
-                        catch (Exception testEx)
-                        {
-                            Log.Error(testEx, "TDD 테스트 코드 선제 배포 중 예외 발생 (스킵 및 진행)");
-                            AnsiConsole.MarkupLine($"[yellow]경고: TDD 단위 테스트 코드 생성 중 오류가 발생했으나 마이그레이션을 계속 진행합니다: {Markup.Escape(testEx.Message)}[/]");
-                        }
-                    }
+                    AnsiConsole.MarkupLine("[grey]통합 배치 마이그레이션 모드이므로 전체 테스트(L0) 구조 생성은 코딩 에이전트에 자율 위임합니다.[/]");
                 }
 
                 // 2. 최대 시도 횟수 설정 로드

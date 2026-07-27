@@ -33,9 +33,5 @@ namespace ReSet.Core.Services
         /// </summary>
         Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown);
 
-        /// <summary>
-        /// 생성된 단위 테스트 소스코드 코드를 타겟 디렉토리에 저장합니다.
-        /// </summary>
-        Task ExportUnitTestCodeAsync(string baseOutputDir, string procedureName, string targetLanguage, string testCodeContent);
     }
 }

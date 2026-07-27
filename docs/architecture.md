@@ -154,12 +154,11 @@ sequenceDiagram
     participant ECE as External Coding CLI (Claude)
     participant VAL as Validator Core (L1/L2)
 
-    RC->>RC: 마이그레이션 지시서 생성 (MigrationInstructions.md)
-    RC->>RC: 대상 언어(C#/Java)별 TDD 테스트 및 ArchUnit 뼈대(Dummy) 자동 생성 (MetadataExporter)
-    RC->>RC: target 프로젝트의 tests 폴더에 뼈대 코드 선제 공급
+    RC->>RC: 마이그레이션 지시서(MigrationInstructions.md) 및 todo.md 생성
+    RC->>RC: 대상 언어 감지 및 전체 테스트/프로젝트 구조 생성 책임 에이전트에 자율 위임
     loop 자가 수정 루프 (최대 MaxL2Attempts 회)
         RC->>ECE: 코딩 에이전트 기동 (지시서 및 TDD 태스크 계획서 전달)
-        ECE->>ECE: 소스코드 파일 생성/수정 및 자체 빌드/단위테스트 수행
+        ECE->>ECE: 소스코드 파일 생성/수정, 자체 테스트 구조 구축 및 단위테스트 수행
         alt 자체 빌드 또는 단위테스트 실패 (L0 실패)
             ECE->>ECE: 오류 분석 후 자체 자가 디버깅 시도
         else 자체 빌드 및 테스트 통과 (L0 성공)

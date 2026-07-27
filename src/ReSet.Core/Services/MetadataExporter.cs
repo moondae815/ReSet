@@ -483,29 +483,5 @@ public class ArchitectureTests {
                 Log.Error(ex, "지시서 피드백 추가 중 오류 발생 - Path: {Path}", instructionsFilePath);
             }
         }
-
-        public async Task ExportUnitTestCodeAsync(string baseOutputDir, string procedureName, string targetLanguage, string testCodeContent)
-        {
-            try
-            {
-                var isCSharp = targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase);
-                var ext = isCSharp ? ".cs" : ".java";
-                var fileName = isCSharp ? $"{procedureName}Tests{ext}" : $"{procedureName}Test{ext}";
-
-                var testsFolder = Path.Combine(baseOutputDir, "tests");
-                if (!Directory.Exists(testsFolder))
-                {
-                    Directory.CreateDirectory(testsFolder);
-                }
-
-                var targetPath = Path.Combine(testsFolder, fileName);
-                await File.WriteAllTextAsync(targetPath, testCodeContent, Encoding.UTF8);
-                Log.Information("자가 검증용 단위 테스트 파일 내보내기 완료 - Path: {Path}", targetPath);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "단위 테스트 파일 저장 중 오류 발생 - SpName: {SpName}", procedureName);
-            }
-        }
     }
 }
