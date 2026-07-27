@@ -69,11 +69,44 @@ namespace ReSet.Validator.Core.Services
                     pair.MappedName, pair.SpecFilePath, pair.SourceCodePath);
 
                 string specContent = await File.ReadAllTextAsync(pair.SpecFilePath, cancellationToken);
-                string codeContent = await File.ReadAllTextAsync(pair.SourceCodePath, cancellationToken);
+                string codeContent = "";
+                string language = _config.TargetLanguage;
+
+                if (Directory.Exists(pair.SourceCodePath))
+                {
+                    var sb = new System.Text.StringBuilder();
+                    var files = Directory.GetFiles(pair.SourceCodePath, "*.*", SearchOption.AllDirectories)
+                        .Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".java", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (files.Count > 0)
+                    {
+                        var firstExt = Path.GetExtension(files.First()).ToLower();
+                        if (string.Equals(language, "Auto", StringComparison.OrdinalIgnoreCase))
+                        {
+                            language = firstExt == ".cs" ? "C#" : "Java";
+                        }
+
+                        foreach (var file in files)
+                        {
+                            sb.AppendLine($"// File: {Path.GetFileName(file)}");
+                            sb.AppendLine(await File.ReadAllTextAsync(file, cancellationToken));
+                            sb.AppendLine();
+                        }
+                    }
+                    codeContent = sb.ToString();
+                }
+                else
+                {
+                    codeContent = await File.ReadAllTextAsync(pair.SourceCodePath, cancellationToken);
+                    var extension = Path.GetExtension(pair.SourceCodePath).ToLower();
+                    if (string.Equals(language, "Auto", StringComparison.OrdinalIgnoreCase))
+                    {
+                        language = extension == ".cs" ? "C#" : "Java";
+                    }
+                }
 
                 // --- Level 1: 정적 검증 ---
-                var extension = Path.GetExtension(pair.SourceCodePath).ToLower();
-                var language = extension == ".cs" ? "C#" : "Java";
                 var plugin = _plugins.FirstOrDefault(p => p.SupportedLanguage.Equals(language, StringComparison.OrdinalIgnoreCase));
 
                 if (plugin != null)
@@ -89,8 +122,8 @@ namespace ReSet.Validator.Core.Services
                 else
                 {
                     pair.L1Passed = false;
-                    pair.L1Message = $"지원되지 않는 언어 확장자입니다: {extension}";
-                    Log.Warning("[코드검증] L1 정적 검증 플러그인 없음 - Name: {MappedName}, Extension: {Extension}", pair.MappedName, extension);
+                    pair.L1Message = $"지원되지 않는 언어 또는 대상입니다: {language}";
+                    Log.Warning("[코드검증] L1 정적 검증 플러그인 없음 - Name: {MappedName}, Language: {Language}", pair.MappedName, language);
                     _ui?.ShowWarning($"[L1 경고] {pair.MappedName} - 지원 플러그인 없음");
                 }
 

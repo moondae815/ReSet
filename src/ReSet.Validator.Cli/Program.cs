@@ -138,11 +138,19 @@ namespace ReSet.Validator.Cli
                         var customOption = "[-- 사용자 지정 경로 직접 입력 --]";
                         var jobChoices = new List<string>(jobs) { customOption };
 
-                        var selectedJob = AnsiConsole.Prompt(
-                            new SelectionPrompt<string>()
-                                .Title("검증할 [green]통합 배치 작업(Job)[/]을 선택해 주세요:")
-                                .AddChoices(jobChoices)
-                        );
+                        string selectedJob = customOption;
+                        if (AnsiConsole.Profile.Capabilities.Interactive)
+                        {
+                            selectedJob = AnsiConsole.Prompt(
+                                new SelectionPrompt<string>()
+                                    .Title("검증할 [green]통합 배치 작업(Job)[/]을 선택해 주세요:")
+                                    .AddChoices(jobChoices)
+                            );
+                        }
+                        else
+                        {
+                            selectedJob = jobs.First(); // 샌드박스에서 자동 선택
+                        }
 
                         if (selectedJob != customOption)
                         {
