@@ -393,7 +393,9 @@ dotnet run --project src/ReSet.Cli
      * **통합 소스 코드 자동 생성 및 에이전트 기동**: 최종 컨펌 및 저장이 완료되면, 복원된 SP 메타데이터들을 바탕으로 통합 마이그레이션 지시서 (`{JobName}_MigrationInstructions.md`)를 저장하고 외부 코딩 에이전트(Claude Code 등)를 자동/선택 기동하여 전체 코드를 생성합니다.
    * **`3. 정산 정책 문서 도출 (Settlement Policy Rulebook)`**:
      정산 로직 및 데이터를 활용하여 비즈니스 관점의 통합 정책 정의서(`*_Settlement_Policy_Rulebook.md`)를 도출합니다. 분석할 SP들을 순차 선택하고 Job 이름을 입력하여 정책서를 생성합니다.
-   * **`4. 종료 (Exit)`**: 도구를 완전히 종료합니다.
+   * **`4. 기작성된 지시서로 외부 코딩 에이전트 구동 (Standalone Codegen)`**:
+     이미 생성된 통합 배치 마이그레이션 지시서(`*_MigrationInstructions.md`)를 선택하여 코딩 에이전트를 독립적으로 기동합니다. 분석 단계를 건너뛰고 코드 생성만 재수행하거나 분리 실행할 때 유용합니다.
+   * **`5. 종료 (Exit)`**: 도구를 완전히 종료합니다.
 
 ### 2. 배치 모드 및 CLI 자동화 실행 (Batch Mode)
 명령줄 아규먼트(`--conn`, `--all`, `--sp`, `--policy`) 또는 환경 변수(`SP_ANALYZER_CONN_STR`)를 통해 로그인 및 TUI 메뉴 단계를 완전히 건너뛰고 무인 대량 일괄 처리가 가능합니다.
