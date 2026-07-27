@@ -729,7 +729,8 @@ namespace ReSet.Cli
                         "1. Stored Procedure 개별 분석 명세서 작성",
                         "2. 기분석 명세서 통합 배치 전환 계획 수립 (Multi-SP)",
                         "3. 정산 정책 문서 도출 (Settlement Policy Rulebook)",
-                        "4. 종료 (Exit)"
+                        "4. 기작성된 지시서로 외부 코딩 에이전트 구동 (Standalone Codegen)",
+                        "5. 종료 (Exit)"
                     };
 
                     var selectedMenu = AnsiConsole.Prompt(
@@ -738,10 +739,81 @@ namespace ReSet.Cli
                             .AddChoices(choicesMenu)
                     );
 
-                    if (selectedMenu.StartsWith("4"))
+                    if (selectedMenu.StartsWith("5"))
                     {
                         AnsiConsole.MarkupLine("[blue]도구를 종료합니다.[/]");
                         break;
+                    }
+                    else if (selectedMenu.StartsWith("4"))
+                    {
+                        var jobsDir = Path.Combine(outputDir, "Jobs");
+                        if (!Directory.Exists(jobsDir))
+                        {
+                            AnsiConsole.MarkupLine("[yellow]경고: Jobs 디렉터리가 존재하지 않습니다. 통합 배치 전환 계획을 먼저 수립하세요.[/]");
+                            continue;
+                        }
+
+                        var instructionFiles = Directory.GetFiles(jobsDir, "*_MigrationInstructions.md", SearchOption.AllDirectories);
+                        if (instructionFiles.Length == 0)
+                        {
+                            AnsiConsole.MarkupLine("[yellow]경고: 기작성된 마이그레이션 지시서(*_MigrationInstructions.md)를 찾을 수 없습니다.[/]");
+                            continue;
+                        }
+
+                        var cancelOption = "[-- 메인 메뉴로 돌아가기 --]";
+                        var choices = new List<string> { cancelOption };
+                        choices.AddRange(instructionFiles);
+
+                        var selectedInstruction = AnsiConsole.Prompt(
+                            new SelectionPrompt<string>()
+                                .Title("\n구동할 [green]마이그레이션 지시서(Job)[/]를 선택하세요:")
+                                .PageSize(12)
+                                .MoreChoicesText("[grey](더 많은 목록은 방향키를 누르세요)[/]")
+                                .UseConverter(x => x == cancelOption ? Markup.Escape(x) : Markup.Escape(Path.GetRelativePath(jobsDir, x)))
+                                .AddChoices(choices)
+                                .EnableSearch()
+                        );
+
+                        if (selectedInstruction == cancelOption)
+                        {
+                            continue;
+                        }
+
+                        using var activeCts = new CancellationTokenSource();
+                        _currentCts = activeCts;
+
+                        try
+                        {
+                            await RunCodegenEngineAsync(
+                                selectedInstruction,
+                                isBatchMode: false,
+                                enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
+                                engineName: selectedEngine,
+                                targetProjectDir: targetProjectDir,
+                                configuration: configuration,
+                                aiClient: aiClient,
+                                cancellationToken: activeCts.Token);
+                            
+                            AnsiConsole.WriteLine();
+                            AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 메인 메뉴로 돌아갑니다...[/]");
+                            Console.ReadKey(true);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            AnsiConsole.MarkupLine("\n[yellow]외부 코딩 에이전트 구동이 중단되었습니다. 메인 메뉴로 돌아갑니다.[/]");
+                            AnsiConsole.WriteLine();
+                            Console.ReadKey(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            AnsiConsole.MarkupLine($"[red]에러:[/] 외부 코딩 에이전트 구동 중 오류 발생: {Markup.Escape(ex.Message)}");
+                            AnsiConsole.WriteLine();
+                            Console.ReadKey(true);
+                        }
+                        finally
+                        {
+                            _currentCts = globalCts; // 전역 CTS 복원
+                        }
                     }
                     else if (selectedMenu.StartsWith("1"))
                     {
