@@ -73,6 +73,28 @@ namespace ReSet.Validator.Core.Services
                     }
                 }
 
+                // 규칙 3: 다중 파일 프로젝트 (폴더 매치) - 배치 마이그레이션 대응
+                if (string.IsNullOrEmpty(mappedSourcePath))
+                {
+                    var noUnderscore = cleanName.Replace("_", "");
+                    var possibleDirs = new[]
+                    {
+                        Path.Combine(config.SourceCodeDirectory, $"{noUnderscore}.Batch"),
+                        Path.Combine(config.SourceCodeDirectory, $"{cleanName}.Batch"),
+                        Path.Combine(config.SourceCodeDirectory, noUnderscore),
+                        Path.Combine(config.SourceCodeDirectory, cleanName)
+                    };
+
+                    foreach (var dir in possibleDirs)
+                    {
+                        if (Directory.Exists(dir))
+                        {
+                            mappedSourcePath = dir;
+                            break;
+                        }
+                    }
+                }
+
                 if (!string.IsNullOrEmpty(mappedSourcePath))
                 {
                     results.Add(new ValidationResult

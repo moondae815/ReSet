@@ -1653,14 +1653,34 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     });
 
                     var currentPair = mappedPairs.FirstOrDefault(p => p.MappedName.Equals(spName, StringComparison.OrdinalIgnoreCase));
-                    if (currentPair == null || !File.Exists(currentPair.SourceCodePath))
+                    if (currentPair == null || (!File.Exists(currentPair.SourceCodePath) && !Directory.Exists(currentPair.SourceCodePath)))
                     {
-                        AnsiConsole.MarkupLine("[yellow]경고: 매핑된 타겟 소스코드를 찾을 수 없어 자가 검증을 스킵합니다.[/]");
+                        AnsiConsole.MarkupLine("[yellow]경고: 매핑된 타겟 소스코드 또는 프로젝트 폴더를 찾을 수 없어 자가 검증을 스킵합니다.[/]");
                         break;
                     }
 
                     var specContentForVerification = await File.ReadAllTextAsync(currentPair.SpecFilePath, cancellationToken);
-                    var sourceCodeContent = await File.ReadAllTextAsync(currentPair.SourceCodePath, cancellationToken);
+                    string sourceCodeContent = "";
+
+                    if (Directory.Exists(currentPair.SourceCodePath))
+                    {
+                        var ext = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) ? "*.java" : "*.cs";
+                        var files = Directory.GetFiles(currentPair.SourceCodePath, ext, SearchOption.AllDirectories);
+                        var sb = new System.Text.StringBuilder();
+                        foreach (var file in files)
+                        {
+                            // ignore auto-generated obj folders or Tests
+                            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") || file.Contains(".Tests")) continue;
+                            sb.AppendLine($"// File: {Path.GetFileName(file)}");
+                            sb.AppendLine(await File.ReadAllTextAsync(file, cancellationToken));
+                            sb.AppendLine();
+                        }
+                        sourceCodeContent = sb.ToString();
+                    }
+                    else
+                    {
+                        sourceCodeContent = await File.ReadAllTextAsync(currentPair.SourceCodePath, cancellationToken);
+                    }
 
                     // --- Level 1: 정적 검증 (L1 숏컷 적용) ---
                     IValidatorPlugin plugin = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) 
