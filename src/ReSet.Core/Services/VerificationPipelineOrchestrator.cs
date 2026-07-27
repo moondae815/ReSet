@@ -930,11 +930,15 @@ namespace ReSet.Core.Services
                             _cacheManager.UpdateCache(selectedOption, spDef, compositeHash, outputDirectory);
                         }
 
-                        // 사용자가 승인하면 DB 역반영 동기화 수행
-                        var syncApproved = await _userInteraction.ConfirmMetadataSyncAsync(selectedOption);
-                        if (syncApproved)
+                        // 생성된 DB 역반영 쿼리가 존재할 경우에만 동기화 수행 여부 묻기
+                        var sqlPath = System.IO.Path.Combine(outputDirectory, "cleansing", $"{selectedOption}_MetadataCleansing.sql");
+                        if (System.IO.File.Exists(sqlPath))
                         {
-                            await ApplyMetadataCleansingSqlAsync(connectionString, selectedOption, outputDirectory, cancellationToken);
+                            var syncApproved = await _userInteraction.ConfirmMetadataSyncAsync(selectedOption);
+                            if (syncApproved)
+                            {
+                                await ApplyMetadataCleansingSqlAsync(connectionString, selectedOption, outputDirectory, cancellationToken);
+                            }
                         }
 
                         return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
