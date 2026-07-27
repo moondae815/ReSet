@@ -222,12 +222,12 @@ ReSet/
     "TargetLanguage": "C#"         // [설정] 제안할 신규 시스템의 배치 프레임워크 언어 (C# | Java 등)
   },
   "ValidationSettings": {
-    "UseMermaidCli": false         // [설정] mmdc(mermaid-cli)를 이용한 Mermaid 실시간 렌더링 검사 수행 여부 (기본값: false)
+    "UseMermaidCli": true          // [설정] mmdc(mermaid-cli)를 이용한 Mermaid 실시간 렌더링 검사 수행 여부 (기본값: true)
   },
   "CodegenSettings": {
     "Enabled": false,                     // [설정] 분석 완료 후 코딩 에이전트 브릿지 자동 실행 활성화 여부
     "Engine": "claude",                   // [설정] 기본 코딩 엔진 ("claude" | "agy" | "codex")
-    "TargetProjectDirectory": "./src",    // [설정] 마이그레이션 코드가 저장될 대상 프로젝트 절대/상대 경로
+    "TargetProjectDirectory": "./output/src", // [설정] 마이그레이션 코드가 저장될 대상 프로젝트 절대/상대 경로
     "Engines": {
       "claude": {
         "Command": "claude",              // 실행할 Claude CLI 명령어
@@ -235,7 +235,7 @@ ReSet/
       },
       "agy": {
         "Command": "agy",                 // Antigravity CLI 명령어 (https://antigravity.google/docs/cli-overview)
-        "Arguments": "run {instructions}"
+        "Arguments": "--prompt-interactive \"{instructions} 파일을 읽고 지시사항과 체크리스트에 따라 점진적으로 통합 배치 코드를 작성해줘.\""
       },
       "codex": {
         "Command": "codex",               // Codex CLI 명령어 (https://developers.openai.com/codex/cli/features)
@@ -466,7 +466,7 @@ dotnet run --project src/ReSet.Cli
 > [!TIP]
 > **Q. Mermaid 다이어그램 이미지 컴파일(Level 1 검증) 중에 오류가 납니다.**
 > * **원인**: 시스템에 Node.js 전역 패키지인 `mermaid-cli (mmdc)`가 설치되어 있지 않거나 경로에 등록되지 않았기 때문입니다.
-> * **해결**: `npm install -g @mermaid-js/mermaid-cli` 명령을 통해 설치를 완료하거나, `appsettings.json` 내 `"UseMermaidCli": false`로 설정을 변경하여 텍스트 정적 린팅만 수행하도록 설정을 완화할 수 있습니다.
+> * **해결**: `npm install -g @mermaid-js/mermaid-cli` 명령을 통해 설치를 완료하거나, `appsettings.json` 내 `"UseMermaidCli": false`로 설정을 변경하여 텍스트 정적 린팅만 수행하도록 우회할 수 있습니다.
 
 > [!WARNING]
 > **Q. AI 분석(리버스 엔지니어링) 중 HttpClient.Timeout 관련 취소(Cancellation) 오류가 발생합니다.**
