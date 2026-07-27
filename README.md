@@ -95,18 +95,15 @@ ReSet/
 │   │   ├── appsettings.json        # 기본 설정 파일
 │   │   └── instructions.md         # AI 분석 세부 마크다운 지침 템플릿
 │   │
-│   ├── ReSet.Validator.Core/  # [클래스 라이브러리] 구현 정적/논리 검사 및 데이터 대조 서비스
-│   │   ├── Models/                 # ValidationResult, MockDataDto 모델
 │   │   └── Services/               # FileMapping, SandboxSeeding, DataComparison 서비스
 │   │
 │   └── ReSet.Validator.Cli/   # [콘솔 애플리케이션] TUI 및 배치 모드 (소스코드 및 데이터 정합성 대조 검증기)
 │       ├── Program.cs              # 검증기 CLI 진입점 및 흐름 제어
-│       └── appsettings.json        # 검증기용 설정 파일
-│
-├── tests/
-│   └── ReSet.Core.Tests/      # [단위 테스트 프로젝트] xUnit 기반 단위 테스트
-│
-└── output/                          # [산출물 폴더] 생성된 스펙, 계획서, 모의 데이터 및 정합성 리포트 저장소
+│       └── appsettings.json        # [설정] DB/LLM 자격 증명 설정 (추적 관리됨)
+├── appsettings.local.json           # [설정] 로컬 보안 자격 증명 (API 키 등 보관, Git 무시)
+└── output/                          # [산출물 폴더] 역공학 명세서 및 마이그레이션 생성물 보관
+    ├── Jobs/                        # 생성된 통합 전환 계획서(BatchMigrationPlan.md) 및 마이그레이션 소스코드(src/) 격리 보관소
+    ├── validation/                  # 설계서-코드 간의 논리 Gap 및 데이터 정합성 대조 리포트 저장소
     ├── logs/
     ├── cleansing/                   # AI가 생성한 메타데이터 보정(Cleansing) SQL 스크립트 모음
     ├── Procedures/                  # SP 개별 분석 산출물이 격리 보존되는 최상위 폴더
@@ -120,23 +117,6 @@ ReSet/
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
-    ├── Jobs/[JobName]/              # 통합 배치 작업용 산출물이 격리 보존되는 전용 하위 폴더
-    │   ├── docs/
-    │   │   ├── BatchMigrationPlan.md         # 통합 배치 전환 계획서
-    │   │   └── Thinking.md                   # AI 모델의 추론 과정 로그
-    │   ├── agent/
-    │   │   ├── MigrationInstructions.md      # 통합 마이그레이션 지시서 번들
-    │   │   └── todo.md                       # 통합 배치 마이그레이션 체크리스트
-    │   └── raw/
-    │       ├── Brainstorming.md              # 1단계: AI 배치 전략 및 브레인스토밍 중간 결과물
-    │       ├── PlanStructure.md              # 2단계: 구조화된 배치 목차 및 뼈대 설계 중간 결과물
-    │       ├── prompt-context.md             # AI에 실제 주입된 통합 프롬프트 원문
-    │       └── ddl/                          # 의존 테이블 스키마 메타데이터 모음
-    │
-    └── validation/                 # 소스코드 정적 검증 및 데이터 정합성 리포트 저장 폴더
-        ├── [SP이름]_CompareReport.md  # 1:1 데이터 정합성 비교 분석 보고서
-        └── mock/
-            └── [SP이름]_mock_data.json # 검증에 활용된 관계형 모의 데이터 캐시
 ```
 
 ---
@@ -227,7 +207,7 @@ ReSet/
   "CodegenSettings": {
     "Enabled": false,                     // [설정] 분석 완료 후 코딩 에이전트 브릿지 자동 실행 활성화 여부
     "Engine": "claude",                   // [설정] 기본 코딩 엔진 ("claude" | "agy" | "codex")
-    "TargetProjectDirectory": "./output/src", // [설정] 마이그레이션 코드가 저장될 대상 프로젝트 절대/상대 경로
+    "TargetProjectDirectory": "./output/src", // [설정] 마이그레이션 코드가 저장될 대상 프로젝트 절대/상대 경로 (통합 Job 모드 시 ./output/Jobs/{JobName}/src 로 자동 덮어쓰기 됨)
     "Engines": {
       "claude": {
         "Command": "claude",              // 실행할 Claude CLI 명령어
@@ -286,8 +266,8 @@ ReSet/
     }
   },
   "ValidationSettings": {
-    "SpecDirectory": "./output",          // [설정] 검증에 쓰일 명세서 폴더
-    "SourceCodeDirectory": "./src",       // [설정] 검증에 쓰일 구현 소스코드 폴더
+    "SpecDirectory": "./output/Jobs",     // [설정] 검증에 쓰일 명세서 폴더 (통합 설계서 탐색 최적화)
+    "SourceCodeDirectory": "./output/Jobs", // [설정] 검증에 쓰일 구현 소스코드 폴더 (Job 단위 소스코드 스캔용)
     "TargetLanguage": "Auto",             // [설정] 검증 대상 언어 ("Auto" | "C#" | "Java")
     "OutputDirectory": "./output/validation" // [설정] 일치성 Gap 보고서 저장 경로
   }
@@ -441,13 +421,13 @@ dotnet run --project src/ReSet.Cli
 *   **배치 검증 자동화 모드 실행 (CI/CD 무인 모드)**:
     ```bash
     # 소스코드 일치성 자동 검증 (L3 인간 개입 생략)
-    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output" --code "./src/Migration" --batch
+    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output/Jobs" --code "./output/Jobs" --batch
 
     # 데이터 정합성 테스트 파라미터 설계 배치 모드
-    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output" --gen-inputs --batch
+    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output/Jobs" --gen-inputs --batch
 
     # 검증용 모의 테이블 데이터(Mock Data) 자동 생성 배치 모드
-    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output" --gen-mock-data --batch
+    dotnet run --project src/ReSet.Validator.Cli -- --spec "./output/Jobs" --gen-mock-data --batch
 
     # 레거시 DB 실행 결과 덤프 배치 모드
     dotnet run --project src/ReSet.Validator.Cli -- --exec-legacy --conn "Server=localhost;Database=Northwind;User ID=sa;Password=your_password;TrustServerCertificate=true" --batch
