@@ -265,10 +265,7 @@ ReSet/
     }
   },
   "ValidationSettings": {
-    "SpecDirectory": "./output/Jobs",     // [설정] 검증에 쓰일 명세서 폴더 (통합 설계서 탐색 최적화)
-    "SourceCodeDirectory": "./output/Jobs", // [설정] 검증에 쓰일 구현 소스코드 폴더 (Job 단위 소스코드 스캔용)
-    "TargetLanguage": "Auto",             // [설정] 검증 대상 언어 ("Auto" | "C#" | "Java")
-    "OutputDirectory": "./output/validation" // [설정] 일치성 Gap 보고서 저장 경로
+    "TargetLanguage": "Auto"              // [설정] 검증 대상 언어 ("Auto" | "C#" | "Java")
   }
 }
 ```
