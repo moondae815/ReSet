@@ -58,7 +58,7 @@ flowchart TD
 | | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. 특히 OllamaClient는 /api/chat 통신 및 모델별 다양한 추론 토큰(`<think>`, `<|end of thought|>` 등) 분리 파싱 처리를 지원합니다. |
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영, 통합 배치 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Agentic Workflow 흐름 제어, L3 인간 개입 워크플로우 오케스트레이션. |
-| | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 외부 코딩 에이전트용 가이드라인 번들(`agent/MigrationInstructions.md`)은 통합 배치(Job) 분석 단계에서만 생성합니다. |
+| | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 통합 배치(Job) 분석 단계에서 타겟 언어(C#/Java) 기반의 기술 스택 가이드 및 테스트 뼈대를 동적 구성하여 외부 코딩 에이전트용 지시서 번들(`MigrationInstructions.md`, `todo.md`)을 생성합니다. |
 | | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
 | | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
 | | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
@@ -155,8 +155,8 @@ sequenceDiagram
     participant VAL as Validator Core (L1/L2)
 
     RC->>RC: 마이그레이션 지시서 생성 (*_MigrationInstructions.md)
-    RC->>RC: TDD용 단위 테스트 및 ArchUnit 코드 자동 생성 (ValidatorAiService)
-    RC->>RC: target 프로젝트의 tests 폴더에 테스트 코드 선제 공급
+    RC->>RC: 대상 언어(C#/Java)별 TDD 테스트 및 ArchUnit 뼈대(Dummy) 자동 생성 (MetadataExporter)
+    RC->>RC: target 프로젝트의 tests 폴더에 뼈대 코드 선제 공급
     loop 자가 수정 루프 (최대 MaxL2Attempts 회)
         RC->>ECE: 코딩 에이전트 기동 (지시서 및 TDD 태스크 계획서 전달)
         ECE->>ECE: 소스코드 파일 생성/수정 및 자체 빌드/단위테스트 수행
