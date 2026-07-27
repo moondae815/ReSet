@@ -119,13 +119,42 @@ namespace ReSet.Validator.Cli
             var validatorConfig = GetValidatorConfig(configuration, cliArgs);
             var ui = new ConsoleUserInteraction();
 
-            // TUI 대화형 모드인 경우 유효하지 않은 디렉토리에 대해 사용자 재요청
+            // TUI 대화형 모드인 경우 유효하지 않은 디렉토리에 대해 사용자 재요청 및 Job 선택 지원
             if (!cliArgs.IsBatchMode)
             {
+                var slnRoot = FindSolutionRoot();
+                var jobsBaseDir = slnRoot != null ? Path.Combine(slnRoot, "output", "Jobs") : "./output/Jobs";
+
+                if (Directory.Exists(jobsBaseDir))
+                {
+                    var jobs = Directory.GetDirectories(jobsBaseDir)
+                        .Select(Path.GetFileName)
+                        .Where(name => !string.IsNullOrEmpty(name))
+                        .Cast<string>()
+                        .ToList();
+
+                    if (jobs.Any())
+                    {
+                        var customOption = "[-- 사용자 지정 경로 직접 입력 --]";
+                        var jobChoices = new List<string>(jobs) { customOption };
+
+                        var selectedJob = AnsiConsole.Prompt(
+                            new SelectionPrompt<string>()
+                                .Title("검증할 [green]통합 배치 작업(Job)[/]을 선택해 주세요:")
+                                .AddChoices(jobChoices)
+                        );
+
+                        if (selectedJob != customOption)
+                        {
+                            validatorConfig.SpecDirectory = Path.Combine(jobsBaseDir, selectedJob, "docs");
+                            validatorConfig.SourceCodeDirectory = Path.Combine(jobsBaseDir, selectedJob, "src");
+                        }
+                    }
+                }
+
                 if (!Directory.Exists(validatorConfig.SpecDirectory))
                 {
                     AnsiConsole.MarkupLine($"[yellow]⚠️ 설정된 설계서 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SpecDirectory)}[/]");
-                    var slnRoot = FindSolutionRoot();
                     var defaultSpecDir = slnRoot != null 
                         ? Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(slnRoot, "output")) 
                         : "./output";
@@ -136,7 +165,6 @@ namespace ReSet.Validator.Cli
                 if (!Directory.Exists(validatorConfig.SourceCodeDirectory))
                 {
                     AnsiConsole.MarkupLine($"[yellow]⚠️ 설정된 소스코드 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SourceCodeDirectory)}[/]");
-                    var slnRoot = FindSolutionRoot();
                     var defaultSrcDir = slnRoot != null 
                         ? Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(slnRoot, "src")) 
                         : "./src";
