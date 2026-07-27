@@ -1543,13 +1543,18 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     }
                 }
 
-                var specPath = Path.Combine(Directory.GetParent(instructionsPath)?.Parent?.FullName ?? "", "docs", "Spec.md");
-                if (File.Exists(specPath))
+                var baseDir = Directory.GetParent(instructionsPath)?.FullName ?? "";
+                var specPath = Path.Combine(baseDir, "docs", "Spec.md");
+                var batchPlanPath = Path.Combine(baseDir, "docs", "BatchMigrationPlan.md");
+                
+                var actualSpecPath = File.Exists(batchPlanPath) ? batchPlanPath : specPath;
+
+                if (File.Exists(actualSpecPath))
                 {
                     AnsiConsole.MarkupLine($"[grey]TDD 사전 테스트 설계 중: {spName} ({targetLanguage})...[/]");
                     try
                     {
-                        var specContent = await File.ReadAllTextAsync(specPath, cancellationToken);
+                        var specContent = await File.ReadAllTextAsync(actualSpecPath, cancellationToken);
                         var validatorAi = new ValidatorAiService(aiClient);
                         var testCode = await validatorAi.GenerateUnitTestCodeAsync(specContent, spName, targetLanguage, cancellationToken);
                         
@@ -1630,7 +1635,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     var mappingService = new FileMappingService();
                     var mappedPairs = mappingService.ResolveMappings(new ValidatorConfig 
                     { 
-                        SpecDirectory = Path.GetDirectoryName(specPath) ?? "./output", 
+                        SpecDirectory = Path.GetDirectoryName(actualSpecPath) ?? "./output", 
                         SourceCodeDirectory = targetProjectDir 
                     });
 

@@ -22,8 +22,10 @@ namespace ReSet.Validator.Core.Services
                 throw new DirectoryNotFoundException($"소스코드 디렉토리를 찾을 수 없습니다: {config.SourceCodeDirectory}");
             }
 
-            // 1. 설계서 파일 탐색 (Spec.md)
-            var specFiles = Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories);
+            // 1. 설계서 파일 탐색 (Spec.md 및 BatchMigrationPlan.md)
+            var specFiles = new List<string>();
+            specFiles.AddRange(Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories));
+            specFiles.AddRange(Directory.GetFiles(config.SpecDirectory, "BatchMigrationPlan.md", SearchOption.AllDirectories));
             
             // 2. 소스코드 파일 탐색 (C# 및 Java)
             var sourceFiles = new List<string>();
