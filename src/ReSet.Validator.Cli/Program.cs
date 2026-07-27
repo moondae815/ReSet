@@ -135,7 +135,7 @@ namespace ReSet.Validator.Cli
 
                     if (jobs.Any())
                     {
-                        var customOption = "[-- 사용자 지정 경로 직접 입력 --]";
+                        var customOption = "<-- 사용자 지정 경로 직접 입력 -->";
                         var jobChoices = new List<string>(jobs) { customOption };
 
                         string selectedJob = customOption;
@@ -144,6 +144,7 @@ namespace ReSet.Validator.Cli
                             selectedJob = AnsiConsole.Prompt(
                                 new SelectionPrompt<string>()
                                     .Title("검증할 [green]통합 배치 작업(Job)[/]을 선택해 주세요:")
+                                    .UseConverter(name => Markup.Escape(name))
                                     .AddChoices(jobChoices)
                             );
                         }
