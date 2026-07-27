@@ -25,7 +25,8 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
             string jobName,
-            string baseOutputDir);
+            string baseOutputDir,
+            string targetLanguage);
 
         /// <summary>
         /// 지시서 마크다운 파일 하단에 L1/L2 피드백 내용을 안전하게 덧붙이거나 교체합니다.

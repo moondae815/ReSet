@@ -691,7 +691,8 @@ namespace ReSet.Cli
                                 spDefs,
                                 consolidatedPlan,
                                 cliArgs.JobName,
-                                jobsOutputDir);
+                                jobsOutputDir,
+                                targetLanguage);
 
                             var instructionsPath = Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_MigrationInstructions.md");
                             AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
@@ -1071,7 +1072,8 @@ namespace ReSet.Cli
                                     spDefs,
                                     consolidatedPlan,
                                     jobName,
-                                    jobsOutputDir);
+                                    jobsOutputDir,
+                                    targetLanguage);
 
                                 var instructionsPath = Path.Combine(jobsOutputDir, $"{jobName}_MigrationInstructions.md");
                                 AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");

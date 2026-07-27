@@ -273,7 +273,7 @@ namespace ReSet.Core.Tests
             IMetadataExporter exporter = new MetadataExporter();
 
             // Act
-            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir);
+            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir, "C#");
 
             // Assert
             var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");

@@ -130,7 +130,8 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
             string jobName,
-            string baseOutputDir)
+            string baseOutputDir,
+            string targetLanguage)
         {
             var agentFolder = Path.Combine(baseOutputDir, "agent");
             if (!Directory.Exists(agentFolder))
@@ -224,6 +225,41 @@ namespace ReSet.Core.Services
                 sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 것.");
                 sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 것.");
                 sb.AppendLine();
+                
+                sb.AppendLine("## 🛠️ 4. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
+                if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.AppendLine("* **Data Access 및 프레임워크**: 데이터베이스 접근은 ADO.NET(또는 Dapper)을 사용하고, 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
+                    sb.AppendLine("* **멀티 DB 커넥션 설정**: `appsettings.json` 내에 다음과 같은 `ConnectionStrings` 구조를 구성하고, `RetryableSqlExecutor`에서 분기 처리하여 주입받을 수 있도록 모델링하십시오.");
+                    sb.AppendLine("  ```json");
+                    sb.AppendLine("  {");
+                    sb.AppendLine("    \"ConnectionStrings\": {");
+                    sb.AppendLine("      \"PaymentDB\": \"Server=...;Database=PaymentDB;...\",");
+                    sb.AppendLine("      \"SettleCardDB\": \"Server=...;Database=SETTLE_CARD_DB;...\",");
+                    sb.AppendLine("      \"PLCardDB\": \"Server=...;Database=PLCardDB;...\",");
+                    sb.AppendLine("      \"SettlePoqDB\": \"Server=...;Database=SETTLE_POQ_DB;...\"");
+                    sb.AppendLine("    }");
+                    sb.AppendLine("  }");
+                    sb.AppendLine("  ```");
+                }
+                else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.AppendLine("* **Data Access 및 프레임워크**: 데이터베이스 접근은 MyBatis(또는 Spring Data JDBC)를 사용하고, 배치 호스팅은 Spring Batch (Spring Boot 기반)로 작성하며, 의존성 주입을 활용하십시오.");
+                    sb.AppendLine("* **멀티 DB 커넥션 설정**: `application.yml` 내에 다음과 같은 다중 DataSource 구조를 구성하고, 각 Step이 알맞은 TransactionManager와 JdbcTemplate을 주입받을 수 있도록 모델링하십시오.");
+                    sb.AppendLine("  ```yaml");
+                    sb.AppendLine("  spring:");
+                    sb.AppendLine("    datasource:");
+                    sb.AppendLine("      payment:");
+                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PaymentDB");
+                    sb.AppendLine("      settle-card:");
+                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_CARD_DB");
+                    sb.AppendLine("      pl-card:");
+                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PLCardDB");
+                    sb.AppendLine("      settle-poq:");
+                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_POQ_DB");
+                    sb.AppendLine("  ```");
+                }
+                sb.AppendLine();
 
                 await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 지시서 파일 쓰기 성공: {InstructionsPath}", instructionsPath);
@@ -234,6 +270,16 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine();
                 todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
                 todoSb.AppendLine();
+                todoSb.AppendLine("## ⚠️ [필수 행동 수칙: SP 구현 5단계 루프]");
+                todoSb.AppendLine("각 Step(`SP_NAME`)을 구현할 때, 반드시 아래의 **5단계 자율 루프**를 내부적으로 완료한 뒤에만 체크박스에 `[x]` 표시를 하십시오.");
+                todoSb.AppendLine("1. **TDD 시작**: 테스트 클래스 생성 및 실패하는 단위 테스트 작성");
+                todoSb.AppendLine("2. **로직 구현**: Tasklet/Chunk 기반 DML 로직 및 트랜잭션 구현");
+                todoSb.AppendLine("3. **멱등성 보장**: Checkpoint 기반 멱등성 및 스킵 로직 적용");
+                todoSb.AppendLine("4. **파이프라인 등록**: 통합 파이프라인(Orchestrator)에 Step 등록 및 빌드 확인");
+                todoSb.AppendLine("5. **자율 코드 리뷰 & 점진적 커밋**: 스스로 작성한 코드를 점검(성능/보안/가독성)하여 리팩토링 후, 의미 있는 단위로 `git commit`을 수행하여 세이브포인트 생성");
+                todoSb.AppendLine();
+                
+                todoSb.AppendLine("- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 (예: Dapper, Moq, MyBatis, ArchUnit 등)");
                 todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
                 todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현");
                 todoSb.AppendLine("- [ ] 3. 계획서의 [통합 배치 아키텍처 개요]에 정의된 공통 초기화(사전 검증 등) 로직 구현");
@@ -241,14 +287,102 @@ namespace ReSet.Core.Services
                 int stepCounter = 4;
                 foreach (var sp in spDefs)
                 {
-                    todoSb.AppendLine($"- [ ] {stepCounter}. Step: `{sp.Name}` 기반의 비즈니스 로직(Chunk/Tasklet) 및 멱등성 구현 완료");
+                    todoSb.AppendLine($"- [ ] {stepCounter}. Step: `{sp.Name}` 기반 비즈니스 로직 구현 (필수 행동 수칙 5단계 완료 포함)");
                     stepCounter++;
                 }
                 
                 todoSb.AppendLine($"- [ ] {stepCounter}. 모든 Step이 통합된 최종 Job 파이프라인 조립 및 예외/트랜잭션 롤백 처리 보완");
-                todoSb.AppendLine($"- [ ] {stepCounter + 1}. 공급된 단위 테스트 및 ArchUnit 정적 검증 통과, 솔루션 빌드 성공 확인");
+                todoSb.AppendLine($"- [ ] {stepCounter + 1}. 최종 Job 파이프라인 End-to-End 빌드 및 정적 검증(ArchUnit) 통과 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
+
+                // 테스트 뼈대 및 NetArchTest 더미 생성
+                var agentTestsFolder = Path.Combine(agentFolder, "tests");
+                if (!Directory.Exists(agentTestsFolder))
+                {
+                    Directory.CreateDirectory(agentTestsFolder);
+                }
+                if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
+                {
+                    var xUnitStub = @"using Xunit;
+using Moq;
+using System.Threading.Tasks;
+
+namespace ReSet.Batch.Tests
+{
+    public class StepLogicTests
+    {
+        [Fact]
+        public async Task Step_ShouldExecuteDml_WhenPreCheckPasses()
+        {
+            // Arrange
+            
+            // Act
+            
+            // Assert
+        }
+    }
+}";
+                    var archUnitStub = @"using NetArchTest.Rules;
+using Xunit;
+
+namespace ReSet.Batch.Tests.Architecture
+{
+    public class ArchitectureTests
+    {
+        [Fact]
+        public void DomainLayer_ShouldNotDependOn_InfrastructureLayer()
+        {
+            // Arrange
+            // var result = Types.InCurrentDomain()
+            //     .That().ResideInNamespace(""ReSet.Batch.Domain"")
+            //     .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
+            //     .GetResult();
+            
+            // Assert
+            // Assert.True(result.IsSuccessful);
+        }
+    }
+}";
+                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
+                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                }
+                else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
+                {
+                    var jUnitStub = @"package com.reset.batch.tests;
+
+import org.junit.jupiter.api.Test;
+import org.mockito.Mock;
+import static org.mockito.Mockito.*;
+
+public class StepLogicTests {
+    @Test
+    public void step_ShouldExecuteDml_WhenPreCheckPasses() {
+        // Arrange
+        
+        // Act
+        
+        // Assert
+    }
+}";
+                    var archUnitStub = @"package com.reset.batch.tests.architecture;
+
+import com.tngtech.archunit.junit.AnalyzeClasses;
+import com.tngtech.archunit.junit.ArchTest;
+import com.tngtech.archunit.lang.ArchRule;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+
+@AnalyzeClasses(packages = ""com.reset.batch"")
+public class ArchitectureTests {
+    @ArchTest
+    public static final ArchRule domainLayer_ShouldNotDependOn_InfrastructureLayer = 
+        classes()
+            .that().resideInAPackage(""..domain.."")
+            .should().onlyDependOnClassesThat().resideInAnyPackage(""..domain.."", ""java.."");
+}";
+                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Encoding.UTF8);
+                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Encoding.UTF8);
+                }
 
                 Log.Information("통합 마이그레이션 지시서 번들 내보내기 완료 - JobName: {JobName}", jobName);
             }
