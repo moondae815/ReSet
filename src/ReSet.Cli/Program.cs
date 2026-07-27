@@ -698,12 +698,13 @@ namespace ReSet.Cli
                             AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
 
                             // 외부 코딩 에이전트(Codegen) 기동
+                            var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
                             await RunCodegenEngineAsync(
                                 instructionsPath,
                                 isBatchMode: true,
                                 enableCodegen: isCodegenEnabled,
                                 engineName: selectedEngine,
-                                targetProjectDir: targetProjectDir,
+                                targetProjectDir: jobSpecificSrcDir,
                                 configuration: configuration,
                                 aiClient: aiClient,
                                 cancellationToken: activeCts.Token);
@@ -784,12 +785,15 @@ namespace ReSet.Cli
 
                         try
                         {
+                            var jobSpecificOutputDir = Directory.GetParent(Directory.GetParent(selectedInstruction)!.FullName)!.FullName;
+                            var jobSpecificSrcDir = Path.Combine(jobSpecificOutputDir, "src");
+
                             await RunCodegenEngineAsync(
                                 selectedInstruction,
                                 isBatchMode: false,
                                 enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
                                 engineName: selectedEngine,
-                                targetProjectDir: targetProjectDir,
+                                targetProjectDir: jobSpecificSrcDir,
                                 configuration: configuration,
                                 aiClient: aiClient,
                                 cancellationToken: activeCts.Token);
@@ -1151,12 +1155,13 @@ namespace ReSet.Cli
                                 AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");
 
                                 // 외부 코딩 에이전트(Codegen) 기동
+                                var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
                                 await RunCodegenEngineAsync(
                                     instructionsPath,
                                     isBatchMode: false,
                                     enableCodegen: isCodegenEnabled,
                                     engineName: selectedEngine,
-                                    targetProjectDir: targetProjectDir,
+                                    targetProjectDir: jobSpecificSrcDir,
                                     configuration: configuration,
                                     aiClient: aiClient,
                                     cancellationToken: activeCts.Token);
