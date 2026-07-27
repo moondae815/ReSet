@@ -694,7 +694,7 @@ namespace ReSet.Cli
                                 jobsOutputDir,
                                 targetLanguage);
 
-                            var instructionsPath = Path.Combine(jobsOutputDir, $"{cliArgs.JobName}_MigrationInstructions.md");
+                            var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
                             AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
 
                             // 외부 코딩 에이전트(Codegen) 기동
@@ -753,10 +753,10 @@ namespace ReSet.Cli
                             continue;
                         }
 
-                        var instructionFiles = Directory.GetFiles(jobsDir, "*_MigrationInstructions.md", SearchOption.AllDirectories);
+                        var instructionFiles = Directory.GetFiles(jobsDir, "MigrationInstructions.md", SearchOption.AllDirectories);
                         if (instructionFiles.Length == 0)
                         {
-                            AnsiConsole.MarkupLine("[yellow]경고: 기작성된 마이그레이션 지시서(*_MigrationInstructions.md)를 찾을 수 없습니다.[/]");
+                            AnsiConsole.MarkupLine("[yellow]경고: 기작성된 마이그레이션 지시서(MigrationInstructions.md)를 찾을 수 없습니다.[/]");
                             continue;
                         }
 
@@ -1147,7 +1147,7 @@ namespace ReSet.Cli
                                     jobsOutputDir,
                                     targetLanguage);
 
-                                var instructionsPath = Path.Combine(jobsOutputDir, $"{jobName}_MigrationInstructions.md");
+                                var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
                                 AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");
 
                                 // 외부 코딩 에이전트(Codegen) 기동
@@ -1526,7 +1526,8 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 }
 
                 var fileName = Path.GetFileName(instructionsPath);
-                var spName = fileName.Replace("_MigrationInstructions.md", "");
+                var agentDirInfo = Directory.GetParent(instructionsPath);
+                var spName = agentDirInfo?.Parent?.Name ?? "Unknown";
 
                 // 1. 대상 언어 감지 및 TDD 자가 단위 테스트 코드 배포
                 var targetLanguage = configuration["ValidationSettings:TargetLanguage"] ?? "C#";
@@ -1543,7 +1544,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     }
                 }
 
-                var baseDir = Directory.GetParent(instructionsPath)?.FullName ?? "";
+                var baseDir = agentDirInfo?.Parent?.FullName ?? "";
                 var specPath = Path.Combine(baseDir, "docs", "Spec.md");
                 var batchPlanPath = Path.Combine(baseDir, "docs", "BatchMigrationPlan.md");
                 
