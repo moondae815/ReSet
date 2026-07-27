@@ -157,6 +157,7 @@ namespace ReSet.Validator.Cli
                         {
                             validatorConfig.SpecDirectory = Path.Combine(jobsBaseDir, selectedJob, "docs");
                             validatorConfig.SourceCodeDirectory = Path.Combine(jobsBaseDir, selectedJob, "src");
+                            validatorConfig.OutputDirectory = Path.Combine(jobsBaseDir, selectedJob, "validation");
                         }
                     }
                 }
