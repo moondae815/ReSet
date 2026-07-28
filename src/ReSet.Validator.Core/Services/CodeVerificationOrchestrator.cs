@@ -156,28 +156,36 @@ namespace ReSet.Validator.Core.Services
 
                     _ui?.ShowL2Result(pair.MappedName, gapReport);
 
-                    // --- Level 3: 인간 최종 검토 --- (L2 완료 후 L3 태스크 등록)
-                    scope.AddTask("L3", "Level 3: 개발자 승인 판정 중...");
-                    if (!isBatchMode && _ui != null)
+                    // --- Level 3: 인간 최종 검토 ---
+                    // 배치 모드: scope 내에서 즉시 자동 승인
+                    if (isBatchMode || _ui == null)
                     {
-                        scope.CompleteTask("L3"); // 인간 대기 중에는 스코프 종료 (또는 대기)
-                        var approved = await _ui.ConfirmValidationAsync(pair.MappedName, pair.SourceCodePath, gapReport);
-                        pair.IsApproved = approved;
-                        Log.Information("[코드검증] L3 인간 검토 결과 - Name: {MappedName}, Approved: {Approved}", pair.MappedName, approved);
-
-                        if (!approved)
-                        {
-                            var feedback = await _ui.PromptFeedbackAsync(pair.MappedName);
-                            pair.HumanFeedback = feedback;
-                        }
-                    }
-                    else
-                    {
-                        // 배치 모드일 때는 AI가 일치 판정을 내렸다면 자동 승인 처리
+                        scope.AddTask("L3", "Level 3: 자동 승인 처리 중...");
                         pair.IsApproved = pair.L2Passed;
                         Log.Information("[코드검증] L3 배치 자동 처리 - Name: {MappedName}, AutoApproved: {IsApproved}", pair.MappedName, pair.IsApproved);
                         scope.CompleteTask("L3");
                         _ui?.ShowInfo($" - [L3 자동 처리] 배치 모드로 인한 자동 승인 상태: {pair.IsApproved}");
+                    }
+                    else
+                    {
+                        // 대화형 모드: L3 Progress 태스크는 "대기 중" 표시만 하고 즉시 Complete 후 scope 종료
+                        // → scope.Dispose() 이후에 프롬프트를 출력해야 Spectre 독점 모드 충돌이 없음
+                        scope.AddTask("L3", "Level 3: 개발자 승인 대기 중...");
+                        scope.CompleteTask("L3");
+                    }
+                } // ← scope.Dispose(): Progress 디스플레이 완전 종료
+
+                // 대화형 L3 인터랙션은 Progress scope 밖에서 실행 (ExclusivityMode 충돌 방지)
+                if (!isBatchMode && _ui != null)
+                {
+                    var approved = await _ui.ConfirmValidationAsync(pair.MappedName, pair.SourceCodePath, pair.GapReport);
+                    pair.IsApproved = approved;
+                    Log.Information("[코드검증] L3 인간 검토 결과 - Name: {MappedName}, Approved: {Approved}", pair.MappedName, approved);
+
+                    if (!approved)
+                    {
+                        var feedback = await _ui.PromptFeedbackAsync(pair.MappedName);
+                        pair.HumanFeedback = feedback;
                     }
                 }
             }
