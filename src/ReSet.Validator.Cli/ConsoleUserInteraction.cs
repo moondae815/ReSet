@@ -97,7 +97,7 @@ namespace ReSet.Validator.Cli
         {
             AnsiConsole.WriteLine();
             var table = new Table()
-                .Title("[bold white][최종 마일스톤 검증 요약 보고서][/]")
+                .Title("[bold white][[최종 마일스톤 검증 요약 보고서]][/]")
                 .Border(TableBorder.Rounded)
                 .AddColumn("[bold]검증 대상[/]")
                 .AddColumn("[bold]L1 정적 검증[/]")
