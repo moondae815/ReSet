@@ -14,8 +14,8 @@ namespace ReSet.Validator.Cli
         public void ShowL1Result(string specName, L1ValidationResult result)
         {
             var statusStr = result.Passed 
-                ? "[green][PASS][/]" 
-                : $"[red][FAIL][/] ({Markup.Escape(result.ErrorMessage)})";
+                ? "[green][[PASS]][/]" 
+                : $"[red][[FAIL]][/] ({Markup.Escape(result.ErrorMessage)})";
 
             AnsiConsole.MarkupLine($"[bold]Level 1 정적 검증 결과:[/] {statusStr}");
             if (result.Passed)
@@ -107,9 +107,9 @@ namespace ReSet.Validator.Cli
 
             foreach (var r in results)
             {
-                var l1 = r.L1Passed ? "[green][PASS][/]" : "[red][FAIL][/]";
-                var l2 = r.L2Passed ? "[green][MATCH][/]" : "[yellow][GAP][/]";
-                var l3 = r.IsApproved ? "[green][APPROVED][/]" : "[red][REJECTED][/]";
+                var l1 = r.L1Passed ? "[green][[PASS]][/]" : "[red][[FAIL]][/]";
+                var l2 = r.L2Passed ? "[green][[MATCH]][/]" : "[yellow][[GAP]][/]";
+                var l3 = r.IsApproved ? "[green][[APPROVED]][/]" : "[red][[REJECTED]][/]";
                 
                 var displayStatus = r.IsApproved 
                     ? "[green]Approved[/]" 
