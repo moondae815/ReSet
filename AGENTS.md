@@ -81,6 +81,8 @@
     *   [JavaProcessRunnerTests.cs](./tests/ReSet.Core.Tests/JavaProcessRunnerTests.cs): Java 프로세스 타임아웃(30초) 및 stdin/stdout 스트림 격리 실행 검증.
     *   [SandboxSeedingServiceTests.cs](./tests/ReSet.Core.Tests/SandboxSeedingServiceTests.cs): 모의 데이터 샌드박스 DB 적재 및 라이프사이클 소거 검증.
     *   [CodeVerificationOrchestratorTests.cs](./tests/ReSet.Core.Tests/CodeVerificationOrchestratorTests.cs): L1/L2/L3 오케스트레이션 및 자가 보완 루프 검증.
+    *   [ValidatorAiServiceTests.cs](./tests/ReSet.Core.Tests/ValidatorAiServiceTests.cs): AI 응답 파싱 및 L2 Gap 분석기, 마크다운 코드 블록 정제 무결성 검증.
+    *   [DataComparisonServiceTests.cs](./tests/ReSet.Core.Tests/DataComparisonServiceTests.cs): 레거시/타겟 JSON 결과값 1:1 대조 및 예외(JsonException) 핸들링 검증.
 
 ---
 
@@ -213,7 +215,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] `dotnet build` 명령어를 통한 컴파일 경고/에러가 0개인지 확인했는가?
-- [ ] `dotnet test` 명령어를 실행하여 209개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 215개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
 - [ ] DB 메타데이터, AI 결과 원문 등을 Spectre.Console TUI에 출력할 때 모든 출력 부에 `Markup.Escape()` 조치를 적용했는가?
 - [ ] Stored Procedure 실행 및 외부 샌드박스 데이터 수집 시, DB 연결 실패 시 예외 격리(Soft Fail 및 DTO FAIL 상태 주입) 처리가 정상 적용되었는가?
