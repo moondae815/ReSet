@@ -17,6 +17,12 @@ namespace ReSet.Validator.Core.Models
         public string AiThinking { get; set; } = string.Empty;
         public string AiRawResponse { get; set; } = string.Empty;
 
+        // --- AI 메타 정보 (문서 상단 표기용) ---
+        public string AiProviderName { get; set; } = string.Empty;
+        public string AiModelName { get; set; } = string.Empty;
+        public string AiEffort { get; set; } = string.Empty;
+        public DateTime GeneratedAt { get; set; } = DateTime.Now;
+
         public bool HasGaps => OverallStatus != "MATCH" || 
                               !string.IsNullOrEmpty(InputParametersGap) || 
                               !string.IsNullOrEmpty(OutputResultSetsGap) || 

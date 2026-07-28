@@ -13,10 +13,12 @@ namespace ReSet.Validator.Core.Services
     public class ValidatorAiService
     {
         private readonly IAiClient _aiClient;
+        private readonly string? _effort;
 
-        public ValidatorAiService(IAiClient aiClient)
+        public ValidatorAiService(IAiClient aiClient, string? effort = null)
         {
             _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
+            _effort = effort;
         }
 
         public async Task<GapReport> VerifyCodeAsync(string specContent, string sourceCodeContent, string targetLanguage, string? previousFeedback = null, CancellationToken cancellationToken = default)
@@ -65,6 +67,10 @@ namespace ReSet.Validator.Core.Services
                 report.UserPrompt = userPrompt;
                 report.AiThinking = aiResult.ThinkingText ?? string.Empty;
                 report.AiRawResponse = aiResult.Content ?? string.Empty;
+                report.AiProviderName = _aiClient.ProviderName;
+                report.AiModelName = _aiClient.ModelName;
+                report.AiEffort = _effort ?? string.Empty;
+                report.GeneratedAt = DateTime.Now;
                 return report;
             }
             catch (Exception ex)

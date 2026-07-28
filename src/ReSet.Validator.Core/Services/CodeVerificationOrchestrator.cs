@@ -215,7 +215,20 @@ namespace ReSet.Validator.Core.Services
                     if (res.GapReport == null) continue;
 
                     var mdPath = Path.Combine(docsDir, "ValidationReport.md");
-                    var content = $@"# 🔍 코드 일치성 검증 상세 보고서 - {res.MappedName}
+
+                    // AI 메타 블록 구성
+                    var aiInfoLine = string.IsNullOrEmpty(res.GapReport.AiProviderName)
+                        ? "(AI 정보 없음)"
+                        : $"{res.GapReport.AiProviderName} ({res.GapReport.AiModelName}" +
+                          (string.IsNullOrEmpty(res.GapReport.AiEffort) ? ")" : $", Effort: {res.GapReport.AiEffort})");
+
+                    var metaBlock = $@"> [!NOTE]
+> **문서 작성일시**: {res.GapReport.GeneratedAt:yyyy-MM-dd HH:mm:ss}
+> **분석 AI 정보**: {aiInfoLine}
+
+";
+
+                    var content = metaBlock + $@"# 🔍 코드 일치성 검증 상세 보고서 - {res.MappedName}
 
 - **설계서 경로**: `{res.SpecFilePath}`
 - **소스코드 경로**: `{res.SourceCodePath}`
