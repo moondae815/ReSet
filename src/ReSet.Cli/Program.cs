@@ -1533,34 +1533,12 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 var agentDirInfo = Directory.GetParent(instructionsPath);
                 var spName = agentDirInfo?.Parent?.Name ?? "Unknown";
 
-                // 1. 대상 언어 감지
                 var targetLanguage = configuration["MigrationSettings:TargetLanguage"] ?? "C#";
-                if (string.Equals(targetLanguage, "Auto", StringComparison.OrdinalIgnoreCase))
-                {
-                    targetLanguage = "C#"; // Fallback 기본값
-                    if (Directory.Exists(targetProjectDir))
-                    {
-                        if (Directory.GetFiles(targetProjectDir, "*.csproj", SearchOption.AllDirectories).Length > 0)
-                            targetLanguage = "C#";
-                        else if (Directory.GetFiles(targetProjectDir, "pom.xml", SearchOption.AllDirectories).Length > 0 ||
-                                 Directory.GetFiles(targetProjectDir, "build.gradle", SearchOption.AllDirectories).Length > 0)
-                            targetLanguage = "Java";
-                    }
-                }
 
                 var baseDir = agentDirInfo?.Parent?.FullName ?? "";
-                var specPath = Path.Combine(baseDir, "docs", "Spec.md");
-                var batchPlanPath = Path.Combine(baseDir, "docs", "BatchMigrationPlan.md");
-                
-                var actualSpecPath = File.Exists(batchPlanPath) ? batchPlanPath : specPath;
-                var isBatchPlan = actualSpecPath == batchPlanPath;
+                var specDir = Path.Combine(baseDir, "docs");
 
-                if (isBatchPlan)
-                {
-                    AnsiConsole.MarkupLine("[grey]통합 배치 마이그레이션 모드이므로 전체 테스트(L0) 구조 생성은 코딩 에이전트에 자율 위임합니다.[/]");
-                }
-
-                // 2. 최대 시도 횟수 설정 로드
+                // 최대 시도 횟수 설정 로드
                 var maxL2AttemptsRaw = configuration["AiSettings:MaxL2Attempts"] ?? "2";
                 int maxL2Attempts = 2;
                 if (string.Equals(maxL2AttemptsRaw, "unlimited", StringComparison.OrdinalIgnoreCase) || maxL2AttemptsRaw == "-1")
@@ -1572,135 +1550,41 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     maxL2Attempts = parsed;
                 }
 
-                // 3. 자가 수정 피드백 루프 구동
-                int attempt = 0;
-                bool isMatch = false;
-                string? previousFeedback = null;
-                var exporterHelper = new MetadataExporter();
-
-                while (!isMatch)
+                // Validator 및 Codegen Workflow Orchestrator 설정
+                var validatorConfig = new ValidatorConfig
                 {
-                    if (maxL2Attempts != -1 && attempt >= maxL2Attempts)
-                    {
-                        if (!isBatchMode)
-                        {
-                            var retryConfirm = AnsiConsole.Confirm($"[yellow]자가 수정 시도 횟수({maxL2Attempts}회)를 초과했습니다. 추가 교정 시도를 계속하시겠습니까?[/]");
-                            if (retryConfirm)
-                            {
-                                attempt = 0; // 횟수 초기화
-                                continue;
-                            }
-                        }
-                        AnsiConsole.MarkupLine("[red]❌ 자가 수정 최대 횟수에 도달하여 루프를 중단합니다. 최종 코드는 사후 검증(Validator) 단계에서 검토해 주십시오.[/]");
-                        break;
-                    }
+                    MaxL2Attempts = maxL2Attempts, // 단방향 검증용 설정 (이제 내부적으로 반복하지 않음)
+                    SpecDirectory = specDir,
+                    SourceCodeDirectory = targetProjectDir
+                };
 
-                    attempt++;
-                    var attemptsText = maxL2Attempts == -1 ? "무제한" : maxL2Attempts.ToString();
-                    AnsiConsole.MarkupLine($"\n[yellow]자가 수정 루프 실행 중 (시도 {attempt}/{attemptsText})[/]");
-                    AnsiConsole.MarkupLine($"[grey]지시서 경로: {instructionsPath}[/]");
-                    AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
-                    AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 테스트 통과까지 대기합니다)[/]\n");
+                var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null);
+                var codegenWorkflowOrchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, maxL2Attempts);
 
-                    var success = await engine.GenerateCodeAsync(null, instructionsPath, targetProjectDir, cancellationToken);
+                AnsiConsole.MarkupLine($"[grey]지시서 경로: {instructionsPath}[/]");
+                AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
+                AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 자가수정 루프)[/]\n");
 
-                    if (!success)
-                    {
-                        AnsiConsole.MarkupLine("[red]❌ 외부 코딩 에이전트 프로세스가 실패했습니다 (L0 빌드/테스트 실패).[/]");
-                        if (!isBatchMode)
-                        {
-                            var cont = AnsiConsole.Confirm("[yellow]에이전트가 코드를 완성하지 못했거나 오류가 있습니다. 그대로 다음 단계를 진행할까요?[/]");
-                            if (cont) break;
-                        }
-                        else
-                        {
-                            break; // 배치 모드일 때는 루프 중단
-                        }
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine("\n[green]✔ 외부 코딩 에이전트 정상 종료 (L0 빌드/테스트 통과).[/]");
-                    }
+                bool isSuccess = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
+                    jobOrSpName: spName,
+                    instructionsFilePath: instructionsPath,
+                    specDir: specDir,
+                    codeDir: targetProjectDir,
+                    isBatchMode: isBatchMode,
+                    cancellationToken: cancellationToken);
 
-                    // L1/L2 검증을 위해 매핑 관계 분석
-                    var mappingService = new FileMappingService();
-                    var mappedPairs = mappingService.ResolveMappings(new ValidatorConfig 
-                    { 
-                        SpecDirectory = Path.GetDirectoryName(actualSpecPath) ?? "./output", 
-                        SourceCodeDirectory = targetProjectDir 
-                    });
-
-                    var currentPair = mappedPairs.FirstOrDefault(p => p.MappedName.Equals(spName, StringComparison.OrdinalIgnoreCase));
-                    if (currentPair == null || (!File.Exists(currentPair.SourceCodePath) && !Directory.Exists(currentPair.SourceCodePath)))
-                    {
-                        AnsiConsole.MarkupLine("[yellow]경고: 매핑된 타겟 소스코드 또는 프로젝트 폴더를 찾을 수 없어 자가 검증을 스킵합니다.[/]");
-                        break;
-                    }
-
-                    var specContentForVerification = await File.ReadAllTextAsync(currentPair.SpecFilePath, cancellationToken);
-                    string sourceCodeContent = "";
-
-                    if (Directory.Exists(currentPair.SourceCodePath))
-                    {
-                        var ext = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) ? "*.java" : "*.cs";
-                        var files = Directory.GetFiles(currentPair.SourceCodePath, ext, SearchOption.AllDirectories);
-                        var sb = new System.Text.StringBuilder();
-                        foreach (var file in files)
-                        {
-                            // ignore auto-generated obj folders or Tests
-                            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") || file.Contains(".Tests")) continue;
-                            sb.AppendLine($"// File: {Path.GetFileName(file)}");
-                            sb.AppendLine(await File.ReadAllTextAsync(file, cancellationToken));
-                            sb.AppendLine();
-                        }
-                        sourceCodeContent = sb.ToString();
-                    }
-                    else
-                    {
-                        sourceCodeContent = await File.ReadAllTextAsync(currentPair.SourceCodePath, cancellationToken);
-                    }
-
-                    // --- Level 1: 정적 검증 (L1 숏컷 적용) ---
-                    IValidatorPlugin plugin = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) 
-                        ? new JavaValidatorPlugin() 
-                        : new CsValidatorPlugin();
-
-                    var l1Result = await plugin.ValidateStaticAsync(specContentForVerification, sourceCodeContent);
-                    if (!l1Result.Passed)
-                    {
-                        AnsiConsole.MarkupLine($"[red]❌ L1 정적 검증 실패: {l1Result.ErrorMessage} (L1 숏컷 적용)[/]");
-                        var l1Feedback = $"[L1 정적 검증(구문/컴파일) 실패]:\n- 원인: {l1Result.ErrorMessage}\n\n위 구문 오류를 해결할 수 있도록 코드를 수정해 주십시오.";
-                        await exporterHelper.AppendFeedbackToInstructionsAsync(instructionsPath, l1Feedback);
-                        previousFeedback = l1Feedback;
-                        continue; // L2 분석 건너뛰고 즉시 재수정 루프 수행 (Shortcut)
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine("[green]✔ L1 정적 검증 통과 (구문 및 기본 구조 정상)[/]");
-                    }
-
-                    // --- Level 2: AI 비즈니스 로직 의미론적 일치성 분석 ---
-                    AnsiConsole.MarkupLine("[grey]L2 AI 의미론적 일치성 분석 요청 중...[/]");
-                    var validatorAi = new ValidatorAiService(aiClient);
-                    var gapReport = await validatorAi.VerifyCodeAsync(specContentForVerification, sourceCodeContent, targetLanguage, previousFeedback, cancellationToken);
-
-                    if (gapReport.OverallStatus == "MATCH")
-                    {
-                        isMatch = true;
-                        AnsiConsole.MarkupLine("[green]✔ [L2 일치 성공] 설계서와 생성된 소스코드가 완벽히 일치합니다![/]");
-                        break;
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[red]❌ L2 검증 불일치 발견 - 상태: {gapReport.OverallStatus}[/]");
-                        AnsiConsole.MarkupLine($"[grey]수정 제안: {gapReport.Suggestions}[/]");
-
-                        var feedback = $"- 종합 상태: {gapReport.OverallStatus}\n- 입력 파라미터 불일치: {gapReport.InputParametersGap}\n- 출력 데이터셋 불일치: {gapReport.OutputResultSetsGap}\n- 비즈니스 로직 불일치: {gapReport.BusinessLogicGap}\n- 예외 및 트랜잭션 불일치: {gapReport.ExceptionHandlingGap}\n- 수정 제안: {gapReport.Suggestions}";
-
-                        await exporterHelper.AppendFeedbackToInstructionsAsync(instructionsPath, feedback);
-                        previousFeedback = feedback;
-                    }
+                if (isSuccess)
+                {
+                    AnsiConsole.MarkupLine("\n[bold green]✔ 코딩 에이전트 자가 수정 루프 통과 (MATCH)[/]");
                 }
+                else
+                {
+                    AnsiConsole.MarkupLine("\n[bold red]❌ 코딩 에이전트 검증 완전 통과 실패. (최종 결과 확인 요망)[/]");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // 상위에서 잡도록 던짐
             }
             catch (Exception ex)
             {

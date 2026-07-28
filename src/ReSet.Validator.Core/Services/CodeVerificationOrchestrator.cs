@@ -106,6 +106,9 @@ namespace ReSet.Validator.Core.Services
                     }
                 }
 
+                pair.SpecContent = specContent;
+                pair.CodeContent = codeContent;
+
                 // --- Level 1: 정적 검증 ---
                 var plugin = _plugins.FirstOrDefault(p => p.SupportedLanguage.Equals(language, StringComparison.OrdinalIgnoreCase));
 
@@ -132,22 +135,7 @@ namespace ReSet.Validator.Core.Services
                 var gapReport = await _aiService.VerifyCodeAsync(specContent, codeContent, language, null, cancellationToken);
                 Log.Debug("[코드검증] L2 AI 분석 완료 - Name: {MappedName}, Status: {Status}", pair.MappedName, gapReport.OverallStatus);
                 
-                // L2 자체 교정 (Self-Correction) 시도 (선택)
-                int attempt = 1;
-                while (gapReport.OverallStatus != "MATCH" && (_config.MaxL2Attempts == -1 || attempt < _config.MaxL2Attempts))
-                {
-                    attempt++;
-                    var attemptsTotalText = _config.MaxL2Attempts == -1 ? "무제한" : _config.MaxL2Attempts.ToString();
-                    Log.Debug("[코드검증] L2 자체 교정 루프 - Name: {MappedName}, 시도: {Attempt}, 상태: {Status}",
-                        pair.MappedName, attempt, gapReport.OverallStatus);
-                    _ui?.ShowInfo($"   [L2 자체 교정 루프] AI 재검토 요청 중... (시도 {attempt}/{attemptsTotalText})");
-                    
-                    var feedback = $"- 종합 상태: {gapReport.OverallStatus}\n- 입력 파라미터 불일치: {gapReport.InputParametersGap}\n- 출력 데이터셋 불일치: {gapReport.OutputResultSetsGap}\n- 비즈니스 로직 불일치: {gapReport.BusinessLogicGap}\n- 예외 및 트랜잭션 불일치: {gapReport.ExceptionHandlingGap}\n- 수정 제안: {gapReport.Suggestions}";
-                    
-                    gapReport = await _aiService.VerifyCodeAsync(specContent, codeContent, language, feedback, cancellationToken);
-                    Log.Debug("[코드검증] L2 자체 교정 후 상태 - Name: {MappedName}, 시도: {Attempt}, 상태: {Status}",
-                        pair.MappedName, attempt, gapReport.OverallStatus);
-                }
+                // L2는 단방향 평가(Critic)만 수행 (자동 수정은 외부 CodegenWorkflowOrchestrator에서 담당)
 
                 pair.GapReport = gapReport;
                 pair.L2Passed = gapReport.OverallStatus == "MATCH";
@@ -190,17 +178,18 @@ namespace ReSet.Validator.Core.Services
             Log.Information("[코드검증] 검증 리포트 내보내기 시작 - 총 {Count}개, OutputDir: {OutputDir}", results.Count, _config.OutputDirectory);
             try
             {
-                if (!Directory.Exists(_config.OutputDirectory))
-                {
-                    Directory.CreateDirectory(_config.OutputDirectory);
-                }
+                var docsDir = Path.Combine(_config.OutputDirectory, "docs");
+                var rawDir = Path.Combine(_config.OutputDirectory, "raw");
+
+                if (!Directory.Exists(docsDir)) Directory.CreateDirectory(docsDir);
+                if (!Directory.Exists(rawDir)) Directory.CreateDirectory(rawDir);
 
                 // 1. 개별 Gap Report 마크다운 파일 저장
                 foreach (var res in results)
                 {
                     if (res.GapReport == null) continue;
 
-                    var mdPath = Path.Combine(_config.OutputDirectory, $"{res.MappedName}_ValidationReport.md");
+                    var mdPath = Path.Combine(docsDir, "ValidationReport.md");
                     var content = $@"# 🔍 코드 일치성 검증 상세 보고서 - {res.MappedName}
 
 - **설계서 경로**: `{res.SpecFilePath}`
@@ -232,10 +221,43 @@ namespace ReSet.Validator.Core.Services
 ";
                     File.WriteAllText(mdPath, content);
                     Log.Debug("[코드검증] 개별 검증 리포트 저장 - {ReportPath}", mdPath);
+
+                    // AI 추론 응답 저장
+                    var aiResponsePath = Path.Combine(docsDir, "AI_Response.md");
+                    var aiResponseContent = $@"# AI 분석 추론 결과 ({res.MappedName})
+
+## 🧠 추론 (Thinking)
+```text
+{res.GapReport.AiThinking}
+```
+
+## 📝 응답 (Response)
+```json
+{res.GapReport.AiRawResponse}
+```
+";
+                    File.WriteAllText(aiResponsePath, aiResponseContent);
+
+                    // raw 저장 (설계서, 소스코드, AI 요청 프롬프트)
+                    var specPath = Path.Combine(rawDir, "Spec.md");
+                    File.WriteAllText(specPath, res.SpecContent);
+
+                    var ext = _config.TargetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) ? "java" : "cs";
+                    var codePath = Path.Combine(rawDir, $"Source.{ext}");
+                    File.WriteAllText(codePath, res.CodeContent);
+
+                    var promptPath = Path.Combine(rawDir, "AI_Prompt.md");
+                    var promptContent = $@"# System Prompt
+{res.GapReport.SystemPrompt}
+
+# User Prompt
+{res.GapReport.UserPrompt}
+";
+                    File.WriteAllText(promptPath, promptContent);
                 }
 
                 // 2. 종합 검증 요약 보고서 저장 (validation_summary.md)
-                var summaryPath = Path.Combine(_config.OutputDirectory, "validation_summary.md");
+                var summaryPath = Path.Combine(docsDir, "validation_summary.md");
                 var summaryContent = $@"# 📋 코드 마일스톤 검증 요약 보고서
 
 - **검증 대상 디렉토리**: `{_config.SourceCodeDirectory}`
@@ -251,7 +273,7 @@ namespace ReSet.Validator.Core.Services
 ## 🔍 개별 파일 검증 상태
 | 대상 이름 | L1 정적 검증 | L2 AI 일치여부 | L3 최종 승인 | 상세 보고서 링크 |
 | :--- | :---: | :---: | :---: | :--- |
-{string.Join("\n", results.Select(r => $"| {r.MappedName} | {(r.L1Passed ? "✅ PASS" : "❌ FAIL")} | {(r.L2Passed ? "✅ MATCH" : "⚠️ GAP")} | {(r.IsApproved ? "✅ APPROVED" : "❌ REJECTED")} | [{r.MappedName}_ValidationReport.md](./{r.MappedName}_ValidationReport.md) |"))}
+{string.Join("\n", results.Select(r => $"| {r.MappedName} | {(r.L1Passed ? "✅ PASS" : "❌ FAIL")} | {(r.L2Passed ? "✅ MATCH" : "⚠️ GAP")} | {(r.IsApproved ? "✅ APPROVED" : "❌ REJECTED")} | [ValidationReport.md](./ValidationReport.md) |"))}
 ";
                 File.WriteAllText(summaryPath, summaryContent);
                 Log.Information("[코드검증] 종합 검증 요약 리포트 저장 완료 - {SummaryPath}", summaryPath);

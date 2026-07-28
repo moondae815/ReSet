@@ -27,10 +27,10 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(specDir);
             Directory.CreateDirectory(codeDir);
 
-            var specPath = Path.Combine(specDir, "Procedures", "dbo.TestProc", "docs", "Spec.md");
+            var specPath = Path.Combine(specDir, "Jobs", "Consolidated_Batch_Job", "docs", "BatchMigrationPlan.md");
             Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
             File.WriteAllText(specPath, "# Spec");
-            File.WriteAllText(Path.Combine(codeDir, "TestProc.cs"), "public class TestProc {}");
+            File.WriteAllText(Path.Combine(codeDir, "Consolidated_Batch_Job.cs"), "public class Consolidated_Batch_Job {}");
 
             var config = new ValidatorConfig
             {
@@ -79,69 +79,7 @@ namespace ReSet.Core.Tests
             }
         }
 
-        [Fact]
-        public async Task RunVerificationAsync_ShouldLoopSelfCorrection_UntilMaxL2Attempts()
-        {
-            // Arrange
-            var tempBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            var specDir = Path.Combine(tempBase, "output");
-            var codeDir = Path.Combine(tempBase, "src");
-            var outDir = Path.Combine(tempBase, "reports");
 
-            Directory.CreateDirectory(specDir);
-            Directory.CreateDirectory(codeDir);
-
-            var specPath = Path.Combine(specDir, "Procedures", "dbo.TestProc", "docs", "Spec.md");
-            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
-            File.WriteAllText(specPath, "# Spec");
-            File.WriteAllText(Path.Combine(codeDir, "TestProc.cs"), "public class TestProc {}");
-
-            var config = new ValidatorConfig
-            {
-                SpecDirectory = specDir,
-                SourceCodeDirectory = codeDir,
-                OutputDirectory = outDir,
-                MaxL2Attempts = 3 // 3회 제한
-            };
-
-            var mockAiClient = Substitute.For<IAiClient>();
-            var mismatchResponse = @"```json
-{
-  ""OverallStatus"": ""MISMATCH"",
-  ""InputParametersGap"": ""Gap"",
-  ""OutputResultSetsGap"": """",
-  ""BusinessLogicGap"": """",
-  ""ExceptionHandlingGap"": """",
-  ""Suggestions"": ""Fix it""
-}
-```";
-            // 계속 MISMATCH만 반환하도록 설정
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult(new AiResult { Content = mismatchResponse }));
-
-            var mockUi = Substitute.For<IValidationUserInterface>();
-            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, mockUi);
-
-            try
-            {
-                // Act
-                var results = await orchestrator.RunVerificationAsync(isBatchMode: true, CancellationToken.None);
-
-                // Assert
-                Assert.Single(results);
-                var result = results[0];
-                Assert.False(result.L2Passed);
-                // 3회 시도되었는지 확인 (첫 시도 1회 + 교정 루프 2회)
-                await mockAiClient.Received(3).ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-            }
-            finally
-            {
-                if (Directory.Exists(tempBase))
-                {
-                    Directory.Delete(tempBase, true);
-                }
-            }
-        }
 
         [Fact]
         public async Task RunVerificationAsync_WithExportWriteError_ShouldSoftFailWithoutCrash()

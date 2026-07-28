@@ -60,7 +60,12 @@ namespace ReSet.Validator.Core.Services
                     targetLanguage, !string.IsNullOrEmpty(previousFeedback));
                 var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort: null, cancellationToken: cancellationToken);
                 Log.Debug("[ValidatorAI] 코드 검증 AI 응답 수신 - 응답 길이: {Length}자", aiResult.Content.Length);
-                return ParseGapReport(aiResult.Content);
+                var report = ParseGapReport(aiResult.Content);
+                report.SystemPrompt = systemPrompt;
+                report.UserPrompt = userPrompt;
+                report.AiThinking = aiResult.ThinkingText ?? string.Empty;
+                report.AiRawResponse = aiResult.Content ?? string.Empty;
+                return report;
             }
             catch (Exception ex)
             {

@@ -16,6 +16,9 @@ namespace ReSet.Validator.Core.Models
         public bool L2Passed { get; set; }
         public GapReport? GapReport { get; set; }
         
+        public string SpecContent { get; set; } = string.Empty;
+        public string CodeContent { get; set; } = string.Empty;
+        
         // Level 3: Human Review
         public bool IsApproved { get; set; }
         public string HumanFeedback { get; set; } = string.Empty;

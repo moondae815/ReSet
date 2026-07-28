@@ -584,6 +584,11 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
             userInteraction.ConfirmMetadataSyncAsync("dbo.USP_Interactive")
                 .Returns(Task.FromResult(false)); // skip DB sync for unit test
+                
+            // Create dummy SQL file so ConfirmMetadataSyncAsync is triggered
+            var cleansingDir = Path.Combine("./output", "cleansing");
+            Directory.CreateDirectory(cleansingDir);
+            File.WriteAllText(Path.Combine(cleansingDir, "dbo.USP_Interactive_MetadataCleansing.sql"), "DUMMY");
 
             // Act
             var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
@@ -609,8 +614,7 @@ namespace ReSet.Core.Tests
             dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_InteractiveL1Ollama", Arg.Any<int>())
                 .Returns(Task.FromResult(spDef));
 
-            var validMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
-            var invalidMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\nJust Missing Visualization Header\n```mermaid\ngraph TD\nA-->B\n```";
+
             
             // Step 1: Initial generation (Success)
             aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int current, int total, string message)>>())

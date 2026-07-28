@@ -11,6 +11,12 @@ namespace ReSet.Validator.Core.Models
         public string ExceptionHandlingGap { get; set; } = string.Empty;
         public string Suggestions { get; set; } = string.Empty;
 
+        // --- 원본 프롬프트 및 응답 (raw 저장용) ---
+        public string SystemPrompt { get; set; } = string.Empty;
+        public string UserPrompt { get; set; } = string.Empty;
+        public string AiThinking { get; set; } = string.Empty;
+        public string AiRawResponse { get; set; } = string.Empty;
+
         public bool HasGaps => OverallStatus != "MATCH" || 
                               !string.IsNullOrEmpty(InputParametersGap) || 
                               !string.IsNullOrEmpty(OutputResultSetsGap) || 

@@ -103,7 +103,10 @@ ReSet/
 ├── appsettings.local.json           # [설정] 로컬 보안 자격 증명 (API 키 등 보관, Git 무시)
 └── output/                          # [산출물 폴더] 역공학 명세서 및 마이그레이션 생성물 보관
     ├── Jobs/                        # 생성된 통합 전환 계획서(BatchMigrationPlan.md) 및 마이그레이션 소스코드(src/) 격리 보관소
-    ├── validation/                  # 설계서-코드 간의 논리 Gap 및 데이터 정합성 대조 리포트 저장소
+    │   └── [Job이름]/               # 각 통합 Job 식별자 하위 폴더
+    │       ├── docs/                # BatchMigrationPlan.md 및 Job 설계 문서
+    │       ├── src/                 # 외부 코딩 에이전트가 자동 생성한 마이그레이션 소스코드
+    │       └── validation/          # 검증 문서(docs) 및 원본(raw) 리포트 격리 저장소
     ├── logs/
     ├── cleansing/                   # AI가 생성한 메타데이터 보정(Cleansing) SQL 스크립트 모음
     ├── Procedures/                  # SP 개별 분석 산출물이 격리 보존되는 최상위 폴더

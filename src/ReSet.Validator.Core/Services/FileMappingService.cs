@@ -22,9 +22,8 @@ namespace ReSet.Validator.Core.Services
                 throw new DirectoryNotFoundException($"소스코드 디렉토리를 찾을 수 없습니다: {config.SourceCodeDirectory}");
             }
 
-            // 1. 설계서 파일 탐색 (Spec.md 및 BatchMigrationPlan.md)
+            // 1. 설계서 파일 탐색 (BatchMigrationPlan.md)
             var specFiles = new List<string>();
-            specFiles.AddRange(Directory.GetFiles(config.SpecDirectory, "Spec.md", SearchOption.AllDirectories));
             specFiles.AddRange(Directory.GetFiles(config.SpecDirectory, "BatchMigrationPlan.md", SearchOption.AllDirectories));
             
             // 2. 소스코드 파일 탐색 (C# 및 Java)
@@ -55,25 +54,19 @@ namespace ReSet.Validator.Core.Services
 
                 string? mappedSourcePath = null;
 
-                // 규칙 1: YAML Front Matter 검사
-                mappedSourcePath = TryGetPathFromYaml(specPath, config.SourceCodeDirectory);
-
-                // 규칙 2: 규칙 기반 파일명 매치
-                if (string.IsNullOrEmpty(mappedSourcePath))
+                // 규칙 1: 규칙 기반 파일명 매치
+                foreach (var srcPath in sourceFiles)
                 {
-                    foreach (var srcPath in sourceFiles)
+                    var srcFileName = Path.GetFileNameWithoutExtension(srcPath);
+                    if (srcFileName.Equals(cleanName, StringComparison.OrdinalIgnoreCase) || 
+                        srcFileName.Equals(baseName, StringComparison.OrdinalIgnoreCase))
                     {
-                        var srcFileName = Path.GetFileNameWithoutExtension(srcPath);
-                        if (srcFileName.Equals(cleanName, StringComparison.OrdinalIgnoreCase) || 
-                            srcFileName.Equals(baseName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            mappedSourcePath = srcPath;
-                            break;
-                        }
+                        mappedSourcePath = srcPath;
+                        break;
                     }
                 }
 
-                // 규칙 3: 다중 파일 프로젝트 (폴더 매치) - 배치 마이그레이션 대응
+                // 규칙 2: 다중 파일 프로젝트 (폴더 매치) - 배치 마이그레이션 대응
                 if (string.IsNullOrEmpty(mappedSourcePath))
                 {
                     var noUnderscore = cleanName.Replace("_", "");
@@ -107,64 +100,6 @@ namespace ReSet.Validator.Core.Services
             }
 
             return results;
-        }
-
-        private string? TryGetPathFromYaml(string specPath, string sourceBaseDir)
-        {
-            try
-            {
-                using var reader = new StreamReader(specPath);
-                var firstLine = reader.ReadLine();
-                if (firstLine != null && firstLine.Trim() == "---")
-                {
-                    string? line;
-                    while ((line = reader.ReadLine()) != null && line.Trim() != "---")
-                    {
-                        // TargetCode: src/Migration/CustOrderHist.cs
-                        var match = Regex.Match(line, @"^\s*(TargetCode|TargetFile)\s*:\s*(.+)$", RegexOptions.IgnoreCase);
-                        if (match.Success)
-                        {
-                            var relativePath = match.Groups[2].Value.Trim();
-                            // 따옴표 제거
-                            relativePath = relativePath.Trim('\'', '"');
-                            
-                            var fullPath = Path.Combine(sourceBaseDir, relativePath);
-                            if (File.Exists(fullPath))
-                            {
-                                return fullPath;
-                            }
-                            
-                            // 보정: relativePath가 "src/" 등으로 시작하고 sourceBaseDir의 폴더명과 겹치는 경우
-                            var sourceBaseDirName = Path.GetFileName(sourceBaseDir);
-                            if (!string.IsNullOrEmpty(sourceBaseDirName))
-                            {
-                                var prefix = sourceBaseDirName + "/";
-                                var normalizedRel = relativePath.Replace('\\', '/');
-                                if (normalizedRel.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    var slicedPath = relativePath.Substring(prefix.Length);
-                                    var altFullPath = Path.Combine(sourceBaseDir, slicedPath);
-                                    if (File.Exists(altFullPath))
-                                    {
-                                        return altFullPath;
-                                    }
-                                }
-                            }
-                            
-                            // 절대 경로이거나 프로젝트 내 독립적 경로인 경우 검사
-                            if (File.Exists(relativePath))
-                            {
-                                return Path.GetFullPath(relativePath);
-                            }
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // YAML 분석 중 오류는 조용히 넘어가고 규칙 기반 매핑 시도
-            }
-            return null;
         }
     }
 }

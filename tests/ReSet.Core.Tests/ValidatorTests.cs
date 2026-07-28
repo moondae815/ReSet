@@ -28,13 +28,13 @@ namespace ReSet.Core.Tests
             Directory.CreateDirectory(codeDir);
 
             // Spec 파일 생성
-            var specPath = Path.Combine(specDir, "Procedures", "dbo.CustOrderHist", "docs", "Spec.md");
+            var specPath = Path.Combine(specDir, "Jobs", "Consolidated_Batch_Job", "docs", "BatchMigrationPlan.md");
             Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
-            File.WriteAllText(specPath, "# dbo.CustOrderHist Spec");
+            File.WriteAllText(specPath, "# Consolidated_Batch_Job Spec");
 
             // Code 파일 생성
-            var codePath = Path.Combine(codeDir, "CustOrderHist.cs");
-            File.WriteAllText(codePath, "public class CustOrderHist {}");
+            var codePath = Path.Combine(codeDir, "Consolidated_Batch_Job.cs");
+            File.WriteAllText(codePath, "public class Consolidated_Batch_Job {}");
 
             var config = new ValidatorConfig
             {
@@ -53,7 +53,7 @@ namespace ReSet.Core.Tests
                 Assert.Single(mappings);
                 Assert.Equal(specPath, mappings[0].SpecFilePath);
                 Assert.Equal(codePath, mappings[0].SourceCodePath);
-                Assert.Equal("dbo.CustOrderHist", mappings[0].MappedName);
+                Assert.Equal("Consolidated_Batch_Job", mappings[0].MappedName);
             }
             finally
             {
@@ -62,56 +62,7 @@ namespace ReSet.Core.Tests
             }
         }
 
-        [Fact]
-        public void FileMappingService_ShouldMap_ByYamlFrontMatter()
-        {
-            // Arrange
-            var tempBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            var specDir = Path.Combine(tempBase, "output");
-            var codeDir = Path.Combine(tempBase, "src");
-            
-            Directory.CreateDirectory(specDir);
-            Directory.CreateDirectory(codeDir);
 
-            // Spec 파일 생성 (YAML 메타데이터 포함)
-            var specPath = Path.Combine(specDir, "Procedures", "random_name", "docs", "Spec.md");
-            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
-            File.WriteAllText(specPath, @"---
-TargetCode: src/CustomMigration/TargetCode.cs
----
-# Some Spec");
-
-            // Code 파일 생성 (YAML에 지정된 상대 경로에 위치시킴)
-            var targetRelPath = Path.Combine("CustomMigration", "TargetCode.cs");
-            var targetFullDir = Path.Combine(codeDir, "CustomMigration");
-            Directory.CreateDirectory(targetFullDir);
-            var codePath = Path.Combine(targetFullDir, "TargetCode.cs");
-            File.WriteAllText(codePath, "public class TargetCode {}");
-
-            var config = new ValidatorConfig
-            {
-                SpecDirectory = specDir,
-                SourceCodeDirectory = codeDir
-            };
-
-            var service = new FileMappingService();
-
-            try
-            {
-                // Act
-                var mappings = service.ResolveMappings(config);
-
-                // Assert
-                Assert.Single(mappings);
-                Assert.Equal(specPath, mappings[0].SpecFilePath);
-                Assert.Equal(codePath, mappings[0].SourceCodePath);
-            }
-            finally
-            {
-                // Cleanup
-                Directory.Delete(tempBase, true);
-            }
-        }
 
         [Fact]
         public async Task CsValidatorPlugin_ShouldPass_OnValidSyntax()
