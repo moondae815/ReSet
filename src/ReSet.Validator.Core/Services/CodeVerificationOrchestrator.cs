@@ -61,107 +61,122 @@ namespace ReSet.Validator.Core.Services
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                _ui?.ShowInfo($"\n--------------------------------------------");
-                _ui?.ShowInfo($"🔍 검증 대상 분석 시작: {pair.MappedName}");
-                _ui?.ShowInfo($" - 설계서: {Path.GetFileName(pair.SpecFilePath)}");
-                _ui?.ShowInfo($" - 소스코드: {Path.GetFileName(pair.SourceCodePath)}");
-                Log.Information("[코드검증] 검증 대상 처리 시작 - Name: {MappedName}, Spec: {SpecFile}, Code: {CodeFile}",
-                    pair.MappedName, pair.SpecFilePath, pair.SourceCodePath);
-
-                string specContent = await File.ReadAllTextAsync(pair.SpecFilePath, cancellationToken);
-                string codeContent = "";
-                string language = _config.TargetLanguage;
-
-                if (Directory.Exists(pair.SourceCodePath))
+                using (var scope = _ui?.CreateProgressScope($"🔍 검증 대상 분석 시작: {pair.MappedName}") ?? NullProgressScope.Instance)
                 {
-                    var sb = new System.Text.StringBuilder();
-                    var files = Directory.GetFiles(pair.SourceCodePath, "*.*", SearchOption.AllDirectories)
-                        .Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".java", StringComparison.OrdinalIgnoreCase))
-                        .ToList();
+                    scope.AddTask("L1", "Level 1: 정적 검증 (구조/문법/명칭) 진행 중...");
+                    scope.AddTask("L2", "Level 2: AI 비즈니스 로직 일치성 분석 대기 중...");
+                    scope.AddTask("L3", "Level 3: 승인 판정 중...");
 
-                    if (files.Count > 0)
+                    Log.Information("[코드검증] 검증 대상 처리 시작 - Name: {MappedName}, Spec: {SpecFile}, Code: {CodeFile}",
+                        pair.MappedName, pair.SpecFilePath, pair.SourceCodePath);
+
+                    string specContent = await File.ReadAllTextAsync(pair.SpecFilePath, cancellationToken);
+                    string codeContent = "";
+                    string language = _config.TargetLanguage;
+
+                    if (Directory.Exists(pair.SourceCodePath))
                     {
-                        var firstExt = Path.GetExtension(files.First()).ToLower();
+                        var sb = new System.Text.StringBuilder();
+                        var files = Directory.GetFiles(pair.SourceCodePath, "*.*", SearchOption.AllDirectories)
+                            .Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".java", StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+
+                        if (files.Count > 0)
+                        {
+                            var firstExt = Path.GetExtension(files.First()).ToLower();
+                            if (string.Equals(language, "Auto", StringComparison.OrdinalIgnoreCase))
+                            {
+                                language = firstExt == ".cs" ? "C#" : "Java";
+                            }
+
+                            foreach (var file in files)
+                            {
+                                sb.AppendLine($"// File: {Path.GetFileName(file)}");
+                                sb.AppendLine(await File.ReadAllTextAsync(file, cancellationToken));
+                                sb.AppendLine();
+                            }
+                        }
+                        codeContent = sb.ToString();
+                    }
+                    else
+                    {
+                        codeContent = await File.ReadAllTextAsync(pair.SourceCodePath, cancellationToken);
+                        var extension = Path.GetExtension(pair.SourceCodePath).ToLower();
                         if (string.Equals(language, "Auto", StringComparison.OrdinalIgnoreCase))
                         {
-                            language = firstExt == ".cs" ? "C#" : "Java";
+                            language = extension == ".cs" ? "C#" : "Java";
                         }
+                    }
 
-                        foreach (var file in files)
+                    pair.SpecContent = specContent;
+                    pair.CodeContent = codeContent;
+
+                    // --- Level 1: 정적 검증 ---
+                    var plugin = _plugins.FirstOrDefault(p => p.SupportedLanguage.Equals(language, StringComparison.OrdinalIgnoreCase));
+
+                    if (plugin != null)
+                    {
+                        Log.Debug("[코드검증] L1 정적 검증 시작 - Name: {MappedName}, Language: {Language}", pair.MappedName, language);
+                        var l1Result = await plugin.ValidateStaticAsync(specContent, codeContent);
+                        pair.L1Passed = l1Result.Passed;
+                        pair.L1Message = l1Result.ErrorMessage;
+                        Log.Debug("[코드검증] L1 정적 검증 완료 - Name: {MappedName}, Passed: {Passed}, Message: {Message}",
+                            pair.MappedName, l1Result.Passed, l1Result.ErrorMessage);
+                        
+                        if (l1Result.Passed) scope.CompleteTask("L1");
+                        else scope.FailTask("L1");
+                        
+                        _ui?.ShowL1Result(pair.MappedName, l1Result);
+                    }
+                    else
+                    {
+                        pair.L1Passed = false;
+                        pair.L1Message = $"지원되지 않는 언어 또는 대상입니다: {language}";
+                        Log.Warning("[코드검증] L1 정적 검증 플러그인 없음 - Name: {MappedName}, Language: {Language}", pair.MappedName, language);
+                        
+                        scope.FailTask("L1");
+                        _ui?.ShowWarning($"[L1 경고] {pair.MappedName} - 지원 플러그인 없음");
+                    }
+
+                    scope.UpdateTask("L2", 10.0, "Level 2: AI 비즈니스 로직 일치성 분석 진행 중...");
+                    Log.Information("[코드검증] L2 AI 분석 시작 - Name: {MappedName}", pair.MappedName);
+                    var gapReport = await _aiService.VerifyCodeAsync(specContent, codeContent, language, null, cancellationToken);
+                    Log.Debug("[코드검증] L2 AI 분석 완료 - Name: {MappedName}, Status: {Status}", pair.MappedName, gapReport.OverallStatus);
+                    
+                    // L2는 단방향 평가(Critic)만 수행 (자동 수정은 외부 CodegenWorkflowOrchestrator에서 담당)
+
+                    pair.GapReport = gapReport;
+                    pair.L2Passed = gapReport.OverallStatus == "MATCH";
+                    Log.Information("[코드검증] L2 최종 판정 - Name: {MappedName}, Status: {Status}, L2Passed: {L2Passed}",
+                        pair.MappedName, gapReport.OverallStatus, pair.L2Passed);
+                    
+                    if (pair.L2Passed || gapReport.OverallStatus == "PARTIAL") scope.CompleteTask("L2");
+                    else scope.FailTask("L2");
+
+                    _ui?.ShowL2Result(pair.MappedName, gapReport);
+
+                    // --- Level 3: 인간 최종 검토 ---
+                    if (!isBatchMode && _ui != null)
+                    {
+                        scope.CompleteTask("L3"); // 인간 대기 중에는 스코프 종료 (또는 대기)
+                        var approved = await _ui.ConfirmValidationAsync(pair.MappedName, pair.SourceCodePath, gapReport);
+                        pair.IsApproved = approved;
+                        Log.Information("[코드검증] L3 인간 검토 결과 - Name: {MappedName}, Approved: {Approved}", pair.MappedName, approved);
+
+                        if (!approved)
                         {
-                            sb.AppendLine($"// File: {Path.GetFileName(file)}");
-                            sb.AppendLine(await File.ReadAllTextAsync(file, cancellationToken));
-                            sb.AppendLine();
+                            var feedback = await _ui.PromptFeedbackAsync(pair.MappedName);
+                            pair.HumanFeedback = feedback;
                         }
                     }
-                    codeContent = sb.ToString();
-                }
-                else
-                {
-                    codeContent = await File.ReadAllTextAsync(pair.SourceCodePath, cancellationToken);
-                    var extension = Path.GetExtension(pair.SourceCodePath).ToLower();
-                    if (string.Equals(language, "Auto", StringComparison.OrdinalIgnoreCase))
+                    else
                     {
-                        language = extension == ".cs" ? "C#" : "Java";
+                        // 배치 모드일 때는 AI가 일치 판정을 내렸다면 자동 승인 처리
+                        pair.IsApproved = pair.L2Passed;
+                        Log.Information("[코드검증] L3 배치 자동 처리 - Name: {MappedName}, AutoApproved: {IsApproved}", pair.MappedName, pair.IsApproved);
+                        scope.CompleteTask("L3");
+                        _ui?.ShowInfo($" - [L3 자동 처리] 배치 모드로 인한 자동 승인 상태: {pair.IsApproved}");
                     }
-                }
-
-                pair.SpecContent = specContent;
-                pair.CodeContent = codeContent;
-
-                // --- Level 1: 정적 검증 ---
-                var plugin = _plugins.FirstOrDefault(p => p.SupportedLanguage.Equals(language, StringComparison.OrdinalIgnoreCase));
-
-                if (plugin != null)
-                {
-                    Log.Debug("[코드검증] L1 정적 검증 시작 - Name: {MappedName}, Language: {Language}", pair.MappedName, language);
-                    var l1Result = await plugin.ValidateStaticAsync(specContent, codeContent);
-                    pair.L1Passed = l1Result.Passed;
-                    pair.L1Message = l1Result.ErrorMessage;
-                    Log.Debug("[코드검증] L1 정적 검증 완료 - Name: {MappedName}, Passed: {Passed}, Message: {Message}",
-                        pair.MappedName, l1Result.Passed, l1Result.ErrorMessage);
-                    _ui?.ShowL1Result(pair.MappedName, l1Result);
-                }
-                else
-                {
-                    pair.L1Passed = false;
-                    pair.L1Message = $"지원되지 않는 언어 또는 대상입니다: {language}";
-                    Log.Warning("[코드검증] L1 정적 검증 플러그인 없음 - Name: {MappedName}, Language: {Language}", pair.MappedName, language);
-                    _ui?.ShowWarning($"[L1 경고] {pair.MappedName} - 지원 플러그인 없음");
-                }
-
-                _ui?.ShowInfo(" - Level 2: AI 비즈니스 로직 일치성 분석 요청 중...");
-                Log.Information("[코드검증] L2 AI 분석 시작 - Name: {MappedName}", pair.MappedName);
-                var gapReport = await _aiService.VerifyCodeAsync(specContent, codeContent, language, null, cancellationToken);
-                Log.Debug("[코드검증] L2 AI 분석 완료 - Name: {MappedName}, Status: {Status}", pair.MappedName, gapReport.OverallStatus);
-                
-                // L2는 단방향 평가(Critic)만 수행 (자동 수정은 외부 CodegenWorkflowOrchestrator에서 담당)
-
-                pair.GapReport = gapReport;
-                pair.L2Passed = gapReport.OverallStatus == "MATCH";
-                Log.Information("[코드검증] L2 최종 판정 - Name: {MappedName}, Status: {Status}, L2Passed: {L2Passed}",
-                    pair.MappedName, gapReport.OverallStatus, pair.L2Passed);
-                _ui?.ShowL2Result(pair.MappedName, gapReport);
-
-                // --- Level 3: 인간 최종 검토 ---
-                if (!isBatchMode && _ui != null)
-                {
-                    var approved = await _ui.ConfirmValidationAsync(pair.MappedName, pair.SourceCodePath, gapReport);
-                    pair.IsApproved = approved;
-                    Log.Information("[코드검증] L3 인간 검토 결과 - Name: {MappedName}, Approved: {Approved}", pair.MappedName, approved);
-
-                    if (!approved)
-                    {
-                        var feedback = await _ui.PromptFeedbackAsync(pair.MappedName);
-                        pair.HumanFeedback = feedback;
-                    }
-                }
-                else
-                {
-                    // 배치 모드일 때는 AI가 일치 판정을 내렸다면 자동 승인 처리
-                    pair.IsApproved = pair.L2Passed;
-                    Log.Information("[코드검증] L3 배치 자동 처리 - Name: {MappedName}, AutoApproved: {IsApproved}", pair.MappedName, pair.IsApproved);
-                    _ui?.ShowInfo($" - [L3 자동 처리] 배치 모드로 인한 자동 승인 상태: {pair.IsApproved}");
                 }
             }
 

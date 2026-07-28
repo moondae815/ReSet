@@ -164,7 +164,7 @@ namespace ReSet.Validator.Cli
 
                 if (!Directory.Exists(validatorConfig.SpecDirectory))
                 {
-                    AnsiConsole.MarkupLine($"[yellow]⚠️ 설정된 설계서 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SpecDirectory)}[/]");
+                    AnsiConsole.MarkupLine($"[yellow]설정된 설계서 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SpecDirectory)}[/]");
                     var defaultSpecDir = slnRoot != null 
                         ? Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(slnRoot, "output")) 
                         : "./output";
@@ -174,7 +174,7 @@ namespace ReSet.Validator.Cli
 
                 if (!Directory.Exists(validatorConfig.SourceCodeDirectory))
                 {
-                    AnsiConsole.MarkupLine($"[yellow]⚠️ 설정된 소스코드 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SourceCodeDirectory)}[/]");
+                    AnsiConsole.MarkupLine($"[yellow]설정된 소스코드 디렉토리가 존재하지 않습니다: {Markup.Escape(validatorConfig.SourceCodeDirectory)}[/]");
                     var defaultSrcDir = slnRoot != null 
                         ? Path.GetRelativePath(Directory.GetCurrentDirectory(), Path.Combine(slnRoot, "src")) 
                         : "./src";
@@ -256,7 +256,7 @@ namespace ReSet.Validator.Cli
                     else
                     {
                         await orchestrator.RunVerificationAsync(true, globalCts.Token);
-                        AnsiConsole.MarkupLine("\n[bold green]🎉 배치 검증 작업 완료![/]");
+                        AnsiConsole.MarkupLine("\n[bold green]배치 검증 작업 완료![/]");
                     }
                 }
                 catch (Exception ex)
@@ -591,7 +591,7 @@ namespace ReSet.Validator.Cli
                     var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_test_inputs.json");
                     await File.WriteAllTextAsync(outputPath, jsonResult, System.Text.Encoding.UTF8, cancellationToken);
                     
-                    AnsiConsole.MarkupLine($"[green]✔ 테스트 파라미터 JSON 생성 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]테스트 파라미터 JSON 생성 완료:[/] {Markup.Escape(outputPath)}");
                 });
         }
 
@@ -631,11 +631,11 @@ namespace ReSet.Validator.Cli
 
                     var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_test_inputs.json");
                     await File.WriteAllTextAsync(outputPath, jsonResult, System.Text.Encoding.UTF8, cancellationToken);
-                    AnsiConsole.MarkupLine($"[green]✔ 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]완료:[/] {Markup.Escape(outputPath)}");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]❌ 오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[red]오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
                 }
             }
         }
@@ -682,12 +682,12 @@ namespace ReSet.Validator.Cli
                     {
                         AnsiConsole.MarkupLine("[grey]모의 테이블 데이터(Mock Data)를 데이터베이스에 적재 중...[/]");
                         await seedingService.SeedMockDataAsync(connectionString, mockData);
-                        AnsiConsole.MarkupLine("[green]✔ 모의 데이터 적재 완료.[/]");
+                        AnsiConsole.MarkupLine("[green]모의 데이터 적재 완료.[/]");
                     }
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[yellow]⚠️ 경고: 모의 데이터 적재 실패 (테스트가 실패하거나 데이터가 부정합할 수 있음): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[yellow]경고: 모의 데이터 적재 실패 (테스트가 실패하거나 데이터가 부정합할 수 있음): {Markup.Escape(ex.Message)}[/]");
                 }
             }
 
@@ -703,7 +703,7 @@ namespace ReSet.Validator.Cli
                         var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_legacy_results.json");
                         await File.WriteAllTextAsync(outputPath, rawResultsJson, System.Text.Encoding.UTF8, cancellationToken);
                         
-                        AnsiConsole.MarkupLine($"[green]✔ Legacy 결과 수집 완료:[/] {Markup.Escape(outputPath)}");
+                        AnsiConsole.MarkupLine($"[green]Legacy 결과 수집 완료:[/] {Markup.Escape(outputPath)}");
                     });
             }
             finally
@@ -714,11 +714,11 @@ namespace ReSet.Validator.Cli
                     {
                         AnsiConsole.MarkupLine("[grey]모의 테이블 데이터(Mock Data)를 데이터베이스에서 제거 중...[/]");
                         await seedingService.CleanupMockDataAsync(connectionString, mockData);
-                        AnsiConsole.MarkupLine("[green]✔ 모의 데이터 제거 완료.[/]");
+                        AnsiConsole.MarkupLine("[green]모의 데이터 제거 완료.[/]");
                     }
                     catch (Exception ex)
                     {
-                        AnsiConsole.MarkupLine($"[red]❌ 오류: 모의 데이터 제거 실패 (수동 정리가 필요할 수 있음): {Markup.Escape(ex.Message)}[/]");
+                        AnsiConsole.MarkupLine($"[red]오류: 모의 데이터 제거 실패 (수동 정리가 필요할 수 있음): {Markup.Escape(ex.Message)}[/]");
                     }
                 }
             }
@@ -767,12 +767,12 @@ namespace ReSet.Validator.Cli
                         if (mockData != null)
                         {
                             await seedingService.SeedMockDataAsync(connectionString, mockData);
-                            AnsiConsole.MarkupLine("[green]✔ 모의 데이터 적재 완료.[/]");
+                            AnsiConsole.MarkupLine("[green]모의 데이터 적재 완료.[/]");
                         }
                     }
                     catch (Exception ex)
                     {
-                        AnsiConsole.MarkupLine($"[yellow]⚠️ 경고: 모의 데이터 적재 실패 ({spName}): {Markup.Escape(ex.Message)}[/]");
+                        AnsiConsole.MarkupLine($"[yellow]경고: 모의 데이터 적재 실패 ({spName}): {Markup.Escape(ex.Message)}[/]");
                     }
                 }
 
@@ -783,11 +783,11 @@ namespace ReSet.Validator.Cli
 
                     var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_legacy_results.json");
                     await File.WriteAllTextAsync(outputPath, rawResultsJson, System.Text.Encoding.UTF8, cancellationToken);
-                    AnsiConsole.MarkupLine($"[green]✔ 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]완료:[/] {Markup.Escape(outputPath)}");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]❌ 오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[red]오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
                 }
                 finally
                 {
@@ -796,11 +796,11 @@ namespace ReSet.Validator.Cli
                         try
                         {
                             await seedingService.CleanupMockDataAsync(connectionString, mockData);
-                            AnsiConsole.MarkupLine("[green]✔ 모의 데이터 제거 완료.[/]");
+                            AnsiConsole.MarkupLine("[green]모의 데이터 제거 완료.[/]");
                         }
                         catch (Exception ex)
                         {
-                            AnsiConsole.MarkupLine($"[red]❌ 오류 ({spName}): 모의 데이터 제거 실패: {Markup.Escape(ex.Message)}[/]");
+                            AnsiConsole.MarkupLine($"[red]오류 ({spName}): 모의 데이터 제거 실패: {Markup.Escape(ex.Message)}[/]");
                         }
                     }
                 }
@@ -841,7 +841,7 @@ namespace ReSet.Validator.Cli
                 }
                 else
                 {
-                    choices.Add($"{spName} (⚠️ 타겟 결과 파일 없음)");
+                    choices.Add($"{spName} (타겟 결과 파일 없음)");
                 }
             }
 
@@ -851,7 +851,7 @@ namespace ReSet.Validator.Cli
                     .PageSize(10)
                     .AddChoices(choices));
 
-            if (selectedSp.Contains("⚠️"))
+            if (selectedSp.Contains("(타겟 결과 파일 없음)"))
             {
                 AnsiConsole.MarkupLine("[red]에러: 타겟 실행 결과 JSON 파일이 있어야 정합성 비교를 할 수 있습니다.[/]");
                 AnsiConsole.MarkupLine($"[grey]주의: '{Markup.Escape(selectedSp.Split(' ')[0])}_target_results.json' 또는 '{Markup.Escape(selectedSp.Split(' ')[0])}_new_results.json' 형식의 파일이 필요합니다.[/]");
@@ -875,7 +875,7 @@ namespace ReSet.Validator.Cli
             var reportPath = Path.Combine(config.OutputDirectory, $"{spNameClean}_CompareReport.md");
             await File.WriteAllTextAsync(reportPath, reportMarkdown, System.Text.Encoding.UTF8);
 
-            AnsiConsole.MarkupLine($"[green]✔ 정합성 비교 완료! 보고서가 저장되었습니다:[/] {Markup.Escape(reportPath)}");
+            AnsiConsole.MarkupLine($"[green]정합성 비교 완료! 보고서가 저장되었습니다:[/] {Markup.Escape(reportPath)}");
 
             // TUI에 요약 표시
             var summaryLines = reportMarkdown.Split('\n');
@@ -940,11 +940,11 @@ namespace ReSet.Validator.Cli
                     var reportPath = Path.Combine(config.OutputDirectory, $"{spName}_CompareReport.md");
                     await File.WriteAllTextAsync(reportPath, reportMarkdown, System.Text.Encoding.UTF8);
 
-                    AnsiConsole.MarkupLine($"[green]✔ 정합성 비교 및 보고서 작성 완료:[/] {Markup.Escape(reportPath)}");
+                    AnsiConsole.MarkupLine($"[green]정합성 비교 및 보고서 작성 완료:[/] {Markup.Escape(reportPath)}");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]❌ 오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[red]오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
                 }
             }
         }
@@ -1007,12 +1007,12 @@ namespace ReSet.Validator.Cli
                     {
                         AnsiConsole.MarkupLine("[grey]모의 테이블 데이터(Mock Data)를 데이터베이스에 적재 중...[/]");
                         await seedingService.SeedMockDataAsync(connectionString, mockData);
-                        AnsiConsole.MarkupLine("[green]✔ 모의 데이터 적재 완료.[/]");
+                        AnsiConsole.MarkupLine("[green]모의 데이터 적재 완료.[/]");
                     }
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[yellow]⚠️ 경고: 모의 데이터 적재 실패 (테스트가 실패할 수 있음): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[yellow]경고: 모의 데이터 적재 실패 (테스트가 실패할 수 있음): {Markup.Escape(ex.Message)}[/]");
                 }
             }
 
@@ -1028,7 +1028,7 @@ namespace ReSet.Validator.Cli
                         var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_target_results.json");
                         await File.WriteAllTextAsync(outputPath, rawResultsJson, System.Text.Encoding.UTF8, cancellationToken);
                         
-                        AnsiConsole.MarkupLine($"[green]✔ Target 결과 수집 완료:[/] {Markup.Escape(outputPath)}");
+                        AnsiConsole.MarkupLine($"[green]Target 결과 수집 완료:[/] {Markup.Escape(outputPath)}");
                     });
             }
             finally
@@ -1039,11 +1039,11 @@ namespace ReSet.Validator.Cli
                     {
                         AnsiConsole.MarkupLine("[grey]모의 테이블 데이터(Mock Data)를 데이터베이스에서 제거 중...[/]");
                         await seedingService.CleanupMockDataAsync(connectionString, mockData);
-                        AnsiConsole.MarkupLine("[green]✔ 모의 데이터 제거 완료.[/]");
+                        AnsiConsole.MarkupLine("[green]모의 데이터 제거 완료.[/]");
                     }
                     catch (Exception ex)
                     {
-                        AnsiConsole.MarkupLine($"[red]❌ 오류: 모의 데이터 제거 실패 (수동 정리가 필요할 수 있음): {Markup.Escape(ex.Message)}[/]");
+                        AnsiConsole.MarkupLine($"[red]오류: 모의 데이터 제거 실패 (수동 정리가 필요할 수 있음): {Markup.Escape(ex.Message)}[/]");
                     }
                 }
             }
@@ -1102,12 +1102,12 @@ namespace ReSet.Validator.Cli
                         if (mockData != null)
                         {
                             await seedingService.SeedMockDataAsync(connectionString, mockData);
-                            AnsiConsole.MarkupLine("[green]✔ 모의 데이터 적재 완료.[/]");
+                            AnsiConsole.MarkupLine("[green]모의 데이터 적재 완료.[/]");
                         }
                     }
                     catch (Exception ex)
                     {
-                        AnsiConsole.MarkupLine($"[yellow]⚠️ 경고: 모의 데이터 적재 실패 ({spName}): {Markup.Escape(ex.Message)}[/]");
+                        AnsiConsole.MarkupLine($"[yellow]경고: 모의 데이터 적재 실패 ({spName}): {Markup.Escape(ex.Message)}[/]");
                     }
                 }
 
@@ -1123,11 +1123,11 @@ namespace ReSet.Validator.Cli
 
                     var outputPath = Path.Combine(config.OutputDirectory, $"{spName}_target_results.json");
                     await File.WriteAllTextAsync(outputPath, rawResultsJson, System.Text.Encoding.UTF8, cancellationToken);
-                    AnsiConsole.MarkupLine($"[green]✔ 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]완료:[/] {Markup.Escape(outputPath)}");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]❌ 오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[red]오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
                 }
                 finally
                 {
@@ -1136,11 +1136,11 @@ namespace ReSet.Validator.Cli
                         try
                         {
                             await seedingService.CleanupMockDataAsync(connectionString, mockData);
-                            AnsiConsole.MarkupLine("[green]✔ 모의 데이터 제거 완료.[/]");
+                            AnsiConsole.MarkupLine("[green]모의 데이터 제거 완료.[/]");
                         }
                         catch (Exception ex)
                         {
-                            AnsiConsole.MarkupLine($"[red]❌ 오류 ({spName}): 모의 데이터 제거 실패: {Markup.Escape(ex.Message)}[/]");
+                            AnsiConsole.MarkupLine($"[red]오류 ({spName}): 모의 데이터 제거 실패: {Markup.Escape(ex.Message)}[/]");
                         }
                     }
                 }
@@ -1204,7 +1204,7 @@ namespace ReSet.Validator.Cli
                     var outputPath = Path.Combine(mockOutputDir, $"{spName}_mock_data.json");
                     await File.WriteAllTextAsync(outputPath, mockDataJson, System.Text.Encoding.UTF8, cancellationToken);
                     
-                    AnsiConsole.MarkupLine($"[green]✔ 모의 테이블 데이터(Mock Data) 캐시 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]모의 테이블 데이터(Mock Data) 캐시 완료:[/] {Markup.Escape(outputPath)}");
                 });
         }
 
@@ -1265,11 +1265,11 @@ namespace ReSet.Validator.Cli
 
                     var outputPath = Path.Combine(mockOutputDir, $"{spName}_mock_data.json");
                     await File.WriteAllTextAsync(outputPath, mockDataJson, System.Text.Encoding.UTF8, cancellationToken);
-                    AnsiConsole.MarkupLine($"[green]✔ 완료:[/] {Markup.Escape(outputPath)}");
+                    AnsiConsole.MarkupLine($"[green]완료:[/] {Markup.Escape(outputPath)}");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[red]❌ 오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
+                    AnsiConsole.MarkupLine($"[red]오류 ({Markup.Escape(spName)}): {Markup.Escape(ex.Message)}[/]");
                 }
             }
         }

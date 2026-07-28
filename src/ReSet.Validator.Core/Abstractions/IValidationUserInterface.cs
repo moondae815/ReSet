@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using ReSet.Validator.Core.Models;
+using ReSet.Core.Services;
 
 namespace ReSet.Validator.Core.Abstractions
 {
@@ -12,8 +13,9 @@ namespace ReSet.Validator.Core.Abstractions
         Task<bool> ConfirmValidationAsync(string specName, string codePath, GapReport? gapReport);
         Task<string> PromptFeedbackAsync(string specName);
         string PromptDirectoryPath(string promptMessage, string defaultPath, List<string> choices);
-        void ShowSummary(List<ValidationResult> results);
+        void ShowSummary(List<Models.ValidationResult> results);
         void ShowWarning(string message);
         void ShowInfo(string message);
+        IMultiProgressScope CreateProgressScope(string title);
     }
 }
