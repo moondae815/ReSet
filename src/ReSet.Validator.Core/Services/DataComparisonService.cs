@@ -15,8 +15,18 @@ namespace ReSet.Validator.Core.Services
             var sb = new StringBuilder();
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
-            var legacy = JsonSerializer.Deserialize<ExecutionOutput>(legacyJson, options);
-            var target = JsonSerializer.Deserialize<ExecutionOutput>(newJson, options);
+            ExecutionOutput? legacy = null;
+            ExecutionOutput? target = null;
+            
+            try
+            {
+                legacy = JsonSerializer.Deserialize<ExecutionOutput>(legacyJson, options);
+                target = JsonSerializer.Deserialize<ExecutionOutput>(newJson, options);
+            }
+            catch (JsonException)
+            {
+                // Fallthrough to null check below
+            }
 
             if (legacy == null || target == null)
             {

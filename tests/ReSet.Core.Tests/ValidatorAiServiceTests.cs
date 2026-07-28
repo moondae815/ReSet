@@ -1,0 +1,109 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using NSubstitute;
+using Xunit;
+using ReSet.Core.Models;
+using ReSet.Core.Services;
+using ReSet.Validator.Core.Services;
+
+namespace ReSet.Core.Tests
+{
+    public class ValidatorAiServiceTests
+    {
+        [Fact]
+        public async Task VerifyCodeAsync_WithValidMatchJson_ShouldParseSuccessfully()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"```json
+{
+  ""OverallStatus"": ""MATCH"",
+  ""InputParametersGap"": """",
+  ""OutputResultSetsGap"": """",
+  ""BusinessLogicGap"": """",
+  ""ExceptionHandlingGap"": """",
+  ""Suggestions"": ""Perfect match.""
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var report = await service.VerifyCodeAsync("spec", "code", "C#");
+
+            Assert.Equal("MATCH", report.OverallStatus);
+            Assert.Equal("Perfect match.", report.Suggestions);
+            Assert.NotNull(report.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task VerifyCodeAsync_WithMalformedJson_ShouldReturnMismatch()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"I am an AI. I cannot output JSON properly.";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var report = await service.VerifyCodeAsync("spec", "code", "C#");
+
+            Assert.Equal("MISMATCH", report.OverallStatus);
+            Assert.Contains("AI 응답 파싱 실패", report.Suggestions);
+        }
+
+        [Fact]
+        public async Task GenerateTestParametersAsync_ShouldReturnCleanJson()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"```json
+{
+  ""ProcedureName"": ""Test"",
+  ""TestCases"": []
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var result = await service.GenerateTestParametersAsync("spec", "proc");
+
+            Assert.StartsWith("{", result);
+            Assert.Contains("Test", result);
+        }
+
+        [Fact]
+        public async Task GenerateMockTableDataAsync_ShouldReturnCleanJson()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"```json
+{
+  ""Tables"": []
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var result = await service.GenerateMockTableDataAsync("spec", "ddl", "deps");
+
+            Assert.StartsWith("{", result);
+            Assert.Contains("Tables", result);
+        }
+
+        [Fact]
+        public async Task GenerateUnitTestCodeAsync_ShouldReturnCleanCode()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var codeResponse = @"```csharp
+public class Test {}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = codeResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var result = await service.GenerateUnitTestCodeAsync("spec", "proc", "C#");
+
+            Assert.Equal("public class Test {}", result);
+        }
+    }
+}
