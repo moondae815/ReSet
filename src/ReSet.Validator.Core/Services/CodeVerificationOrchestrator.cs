@@ -63,9 +63,8 @@ namespace ReSet.Validator.Core.Services
 
                 using (var scope = _ui?.CreateProgressScope($"🔍 검증 대상 분석 시작: {pair.MappedName}") ?? NullProgressScope.Instance)
                 {
+                    // L1 태스크만 먼저 등록 - L2/L3는 이전 단계 완료 후 순차 등록
                     scope.AddTask("L1", "Level 1: 정적 검증 (구조/문법/명칭) 진행 중...");
-                    scope.AddTask("L2", "Level 2: AI 비즈니스 로직 일치성 분석 대기 중...");
-                    scope.AddTask("L3", "Level 3: 승인 판정 중...");
 
                     Log.Information("[코드검증] 검증 대상 처리 시작 - Name: {MappedName}, Spec: {SpecFile}, Code: {CodeFile}",
                         pair.MappedName, pair.SpecFilePath, pair.SourceCodePath);
@@ -138,6 +137,8 @@ namespace ReSet.Validator.Core.Services
                         _ui?.ShowWarning($"[L1 경고] {pair.MappedName} - 지원 플러그인 없음");
                     }
 
+                    // L1 완료 후 L2 태스크 등록 및 시작
+                    scope.AddTask("L2", "Level 2: AI 비즈니스 로직 일치성 분석 진행 중...");
                     scope.UpdateTask("L2", 10.0, "Level 2: AI 비즈니스 로직 일치성 분석 진행 중...");
                     Log.Information("[코드검증] L2 AI 분석 시작 - Name: {MappedName}", pair.MappedName);
                     var gapReport = await _aiService.VerifyCodeAsync(specContent, codeContent, language, null, cancellationToken);
@@ -155,7 +156,8 @@ namespace ReSet.Validator.Core.Services
 
                     _ui?.ShowL2Result(pair.MappedName, gapReport);
 
-                    // --- Level 3: 인간 최종 검토 ---
+                    // --- Level 3: 인간 최종 검토 --- (L2 완료 후 L3 태스크 등록)
+                    scope.AddTask("L3", "Level 3: 개발자 승인 판정 중...");
                     if (!isBatchMode && _ui != null)
                     {
                         scope.CompleteTask("L3"); // 인간 대기 중에는 스코프 종료 (또는 대기)
