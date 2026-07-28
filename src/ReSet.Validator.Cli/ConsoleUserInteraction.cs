@@ -44,7 +44,7 @@ namespace ReSet.Validator.Cli
                     $"[bold]2. 출력 데이터셋/DTO Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.OutputResultSetsGap) ? "일치" : report.OutputResultSetsGap)}\n" +
                     $"[bold]3. 비즈니스 로직 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.BusinessLogicGap) ? "일치" : report.BusinessLogicGap)}\n" +
                     $"[bold]4. 예외/트랜잭션 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.ExceptionHandlingGap) ? "일치" : report.ExceptionHandlingGap)}\n\n" +
-                    $"[bold yellow][코드 수정 제안 사항][/]\n{Markup.Escape(report.Suggestions)}"
+                    $"[bold yellow][[코드 수정 제안 사항]][/]\n{Markup.Escape(report.Suggestions)}"
                 )
             )
             {
