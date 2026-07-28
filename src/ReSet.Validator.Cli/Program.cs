@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Spectre.Console;
+using Serilog;
 using ReSet.Core.Services;
 using ReSet.Core.Services.Clients;
 using ReSet.Validator.Core.Abstractions;
@@ -115,9 +116,14 @@ namespace ReSet.Validator.Cli
             // 2. 설정 로드
             var configuration = LoadConfiguration();
 
+            // 2.5 로깅 초기화
+            ConfigureLogging();
+
             // 3. 검증 환경 설정
             var validatorConfig = GetValidatorConfig(configuration, cliArgs);
             var ui = new ConsoleUserInteraction();
+
+            Log.Information("=== ReSet Validator 시작 ===");
 
             // TUI 대화형 모드인 경우 유효하지 않은 디렉토리에 대해 사용자 재요청 및 Job 선택 지원
             if (!cliArgs.IsBatchMode)
@@ -318,14 +324,61 @@ namespace ReSet.Validator.Cli
                     catch (OperationCanceledException)
                     {
                         AnsiConsole.MarkupLine("\n[yellow]작업이 취소되었습니다.[/]");
+                        Log.Warning("사용자 요청으로 작업이 취소되었습니다.");
                     }
                     catch (Exception ex)
                     {
+                        Log.Error(ex, "검증 작업 실행 중 오류 발생");
                         AnsiConsole.WriteException(ex);
                     }
                 }
             }
+
+            Log.Information("=== ReSet Validator 종료 ===");
+            Log.CloseAndFlush();
         }
+
+        private static void ConfigureLogging()
+        {
+            // 솔루션 루트 기반으로 로그 디렉토리를 결정합니다.
+            var slnRoot = FindSolutionRoot();
+            var logDirectory = slnRoot != null
+                ? Path.Combine(slnRoot, "output", "logs")
+                : Path.GetFullPath("./output/logs");
+
+            try
+            {
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]경고: 로그 디렉터리 생성 실패 ({Markup.Escape(logDirectory)}): {Markup.Escape(ex.Message)}[/]");
+            }
+
+            // 마크업 태그 자동 정화 포매터
+            var outputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+            var logFilePath = Path.Combine(logDirectory, "reset-validator-.log");
+
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Information()
+                .WriteTo.File(
+                    path: logFilePath,
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: 31,
+                    outputTemplate: outputTemplate,
+                    hooks: new StripMarkupHooks(),
+                    encoding: System.Text.Encoding.UTF8)
+                .CreateLogger();
+
+            Log.Information("로그 파일 경로: {LogDirectory}", logDirectory);
+        }
+
+        /// <summary>
+        /// Serilog FileSink 전처리 훅: 빈 훅으로 로그를 문자열로 사용할 때 Markup.Escape()를
+        /// 호출하면 Spectre 마크업 태그가 로그 파일에 노출되지 않습니다.
+        /// </summary>
+        private sealed class StripMarkupHooks : Serilog.Sinks.File.FileLifecycleHooks { }
 
         private static string? FindSolutionRoot()
         {
