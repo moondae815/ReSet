@@ -275,13 +275,13 @@ namespace ReSet.Validator.Cli
                             .Title("[bold white]원하시는 작업을 선택해 주세요:[/]")
                             .AddChoices(new[]
                             {
-                                "1. 설계서 vs 마이그레이션 소스코드 일치성 검증 (L1/L2/L3)",
-                                "2. 데이터 정합성 검증용 테스트 파라미터 설계 (AI)",
-                                "3. 검증용 모의 테이블 데이터(Mock Data) 자동 생성 및 캐싱 (AI)",
-                                "4. 원본 Stored Procedure 실행 데이터 수집 (Legacy DB)",
-                                "5. 신규 마이그레이션 타겟 소스코드 실행 데이터 수집 (Target System)",
-                                "6. 실행 결과 데이터 정합성 1:1 대조 및 보고서 생성 (Compare)",
-                                "7. 종료 (Exit)"
+                                "1. 설계서 대비 소스코드 논리 일치성 검증 (Code Validation)",
+                                "2. 데이터 정합성 대조용 테스트 파라미터 설계 (Test Design)",
+                                "3. 테스트용 모의 데이터(Mock Data) 생성 및 적재 (Data Seeding)",
+                                "4. 레거시 시스템(SQL Server) 실행 결과 수집 (Legacy Run)",
+                                "5. 타겟 시스템(마이그레이션 소스) 실행 결과 수집 (Target Run)",
+                                "6. 양단 간 데이터 정합성 1:1 대조 보고서 생성 (Data Compare)",
+                                "7. 프로그램 종료 (Exit)"
                             }));
 
                     if (choice.StartsWith("7")) break;

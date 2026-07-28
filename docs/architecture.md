@@ -198,7 +198,7 @@ graph TD
     
     %% 구조적 일치성 흐름 (독립적 트랙)
     TuiMenu --> StructTrack["[A 트랙] 소스코드 구조/논리 일치성 검증"]
-    StructTrack --> Menu1["1. 소스코드 일치성 검증 (L1/L2/L3)<br/>FileMapping 매핑 ➔ L1/L2 Gap 검사 ➔ L3 승인"]
+    StructTrack --> Menu1["1. 설계서 대비 소스코드 논리 일치성 검증 (Code Validation)<br/>FileMapping 매핑 ➔ L1/L2 Gap 검사 ➔ L3 승인"]
     Menu1 --> TuiMenu
 
     %% 데이터 정합성 검증 흐름 (상호 의존적 파이프라인 트랙)
@@ -206,17 +206,17 @@ graph TD
     
     %% B-1단계: 테스트 자료 설계
     DataTrack --> Step1["B-1. 테스트 설계 및 모의 데이터 생성 (AI)"]
-    Step1 --> Menu2["2. 테스트 파라미터 설계 (*_test_inputs.json)"]
-    Step1 --> Menu3["3. 모의 데이터 자동 생성 (*_mock_data.json)"]
+    Step1 --> Menu2["2. 데이터 정합성 대조용 테스트 파라미터 설계 (Test Design)"]
+    Step1 --> Menu3["3. 테스트용 모의 데이터 생성 및 적재 (Data Seeding)"]
     
     %% B-2단계: 실행 및 수집 (Seeding 포함)
     Menu2 & Menu3 --> Step2["B-2. Sandbox DB 적재 및 실행 결과 수집"]
-    Step2 --> Menu4["4. 레거시 DB 실행 결과 수집 (*_legacy_results.json)"]
-    Step2 --> Menu5["5. 타겟 시스템 실행 결과 수집 (*_target_results.json)"]
+    Step2 --> Menu4["4. 레거시 시스템 실행 결과 수집 (Legacy Run)"]
+    Step2 --> Menu5["5. 타겟 시스템 실행 결과 수집 (Target Run)"]
     
     %% B-3단계: 최종 비교 대조
     Menu4 & Menu5 --> Step3["B-3. 데이터 정합성 1:1 비교 대조"]
-    Step3 --> Menu6["6. 실행 결과 데이터 대조 (*_CompareReport.md)"]
+    Step3 --> Menu6["6. 양단 간 데이터 정합성 1:1 대조 보고서 생성 (Data Compare)"]
     
     %% 루프백 및 종료
     Menu6 --> TuiMenu

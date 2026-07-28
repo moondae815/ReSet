@@ -726,11 +726,11 @@ namespace ReSet.Cli
                 {
                     var choicesMenu = new[]
                     {
-                        "1. Stored Procedure 개별 분석 명세서 작성",
-                        "2. 기분석 명세서 통합 배치 전환 계획 수립 (Multi-SP)",
-                        "3. 정산 정책 문서 도출 (Settlement Policy Rulebook)",
-                        "4. 기작성된 지시서로 외부 코딩 에이전트 구동 (Standalone Codegen)",
-                        "5. 종료 (Exit)"
+                        "1. 개별 Stored Procedure 역공학 분석 (SP Analysis)",
+                        "2. 통합 배치 마이그레이션 설계 (Batch Design)",
+                        "3. 마이그레이션 코딩 에이전트 구동 (Code Generation)",
+                        "4. 통합 정산 정책 문서 도출 (Policy Extraction)",
+                        "5. 프로그램 종료 (Exit)"
                     };
 
                     var selectedMenu = AnsiConsole.Prompt(
@@ -744,7 +744,7 @@ namespace ReSet.Cli
                         AnsiConsole.MarkupLine("[blue]도구를 종료합니다.[/]");
                         break;
                     }
-                    else if (selectedMenu.StartsWith("4"))
+                    else if (selectedMenu.StartsWith("3"))
                     {
                         var jobsDir = Path.Combine(outputDir, "Jobs");
                         if (!Directory.Exists(jobsDir))
@@ -1190,7 +1190,7 @@ namespace ReSet.Cli
                             _currentCts = globalCts; // 전역 CTS 복원
                         }
                     }
-                    else if (selectedMenu.StartsWith("3"))
+                    else if (selectedMenu.StartsWith("4"))
                     {
                         var remainingFiles = new List<string>(spNames);
                         var selectedFiles = new List<string>();

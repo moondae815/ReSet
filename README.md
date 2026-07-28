@@ -362,19 +362,19 @@ dotnet run --project src/ReSet.Cli
 ```
 1. DB 계정(ID)과 패스워드를 입력하여 SQL Server에 로그인합니다.
 2. 로그인 성공 시 아래 **메인 메뉴**가 화면에 표시됩니다:
-   * **`1. Stored Procedure 개별 분석 명세서 작성`**:
+   * **`1. 개별 Stored Procedure 역공학 분석 (SP Analysis)`**:
      SP를 1개 선택하여, 해당 프로시저의 비즈니스 로직과 데이터 입출력 명세서(`Spec.md`)를 작성합니다.
-   * **`2. 기분석 명세서 통합 배치 전환 계획 수립 (Multi-SP)`**:
+   * **`2. 통합 배치 마이그레이션 설계 (Batch Design)`**:
      출력 디렉터리에 축적된 `Spec.md` 목록 중에서 통합할 대상들을 **원하는 순서대로 하나씩 선택**하여 배치 단계를 구성하고, Job 이름(예: `Daily_Order_Job`)을 입력하여 통합 배치 전환 계획서(`BatchMigrationPlan.md`)를 작성합니다.
      * **Multi-Step Agentic Workflow 적용**: 단일 프롬프트 기반 생성을 넘어, **브레인스토밍(전략 도출) ➔ 목차 및 구조 설계 ➔ 최종 계획서 생성**의 3단계 파이프라인으로 동작하여 심층적인 아키텍처 설계를 자동 수행합니다. (중간 산출물은 `raw/` 디렉터리에 보존)
      * **이전 메뉴로 돌아가기**: 파일 선택 화면의 최상단에 제공되는 `[-- 메인 메뉴로 돌아가기 --]` 옵션을 선택하여 이전 메인 메뉴로 안전하게 되돌아올 수 있습니다.
      * **대칭형 검증 적용**: 전환 계획서가 생성된 후에는 1단계와 대칭되는 **3단계 검증 파이프라인(L1 린터 -> L2 AI 리뷰 -> L3 사용자 피드백 반영 및 컨펌)**을 수행하며, 최종 승인 시에만 파일로 저장됩니다.
      * **통합 소스 코드 자동 생성 및 에이전트 기동**: 최종 컨펌 및 저장이 완료되면, 복원된 SP 메타데이터들을 바탕으로 통합 마이그레이션 지시서 (`agent/MigrationInstructions.md`)를 저장하고 외부 코딩 에이전트(Claude Code 등)를 자동/선택 기동하여 전체 코드를 생성합니다.
-   * **`3. 정산 정책 문서 도출 (Settlement Policy Rulebook)`**:
-     정산 로직 및 데이터를 활용하여 비즈니스 관점의 통합 정책 정의서(`*_Settlement_Policy_Rulebook.md`)를 도출합니다. 분석할 SP들을 순차 선택하고 Job 이름을 입력하여 정책서를 생성합니다.
-   * **`4. 기작성된 지시서로 외부 코딩 에이전트 구동 (Standalone Codegen)`**:
+   * **`3. 마이그레이션 코딩 에이전트 구동 (Code Generation)`**:
      이미 생성된 통합 배치 마이그레이션 지시서(`agent/MigrationInstructions.md`)를 선택하여 코딩 에이전트를 독립적으로 기동합니다. 분석 단계를 건너뛰고 코드 생성만 재수행하거나 분리 실행할 때 유용합니다.
-   * **`5. 종료 (Exit)`**: 도구를 완전히 종료합니다.
+   * **`4. 통합 정산 정책 문서 도출 (Policy Extraction)`**:
+     정산 로직 및 데이터를 활용하여 비즈니스 관점의 통합 정책 정의서(`*_Settlement_Policy_Rulebook.md`)를 도출합니다. 분석할 SP들을 순차 선택하고 Job 이름을 입력하여 정책서를 생성합니다.
+   * **`5. 프로그램 종료 (Exit)`**: 도구를 완전히 종료합니다.
 
 ### 2. 배치 모드 및 CLI 자동화 실행 (Batch Mode)
 명령줄 아규먼트(`--conn`, `--all`, `--sp`, `--policy`) 또는 환경 변수(`SP_ANALYZER_CONN_STR`)를 통해 로그인 및 TUI 메뉴 단계를 완전히 건너뛰고 무인 대량 일괄 처리가 가능합니다.
@@ -410,12 +410,12 @@ dotnet run --project src/ReSet.Cli
     ```bash
     dotnet run --project src/ReSet.Validator.Cli
     ```
-    *   **1. 설계서 vs 마이그레이션 소스코드 일치성 검증 (L1/L2/L3)**: C#/Java 소스코드 정적 분석 및 AI 의미론적 Gap 분석, 인간 피드백 루프를 가동하여 검증합니다.
-    *   **2. 데이터 정합성 검증용 테스트 파라미터 설계 (AI)**: 설계서(`Spec.md`)를 분석해 AI가 정상/경계값/오류 시나리오 테스트 파라미터 JSON(`*_test_inputs.json`)을 생성합니다.
-    *   **3. 검증용 모의 테이블 데이터(Mock Data) 자동 생성 및 캐싱 (AI)**: 원본 메타데이터 및 설계서를 분석해 테이블 간의 조인 키 난수 시드가 일치하는 모의 데이터(`*_mock_data.json`)를 생성하여 캐싱합니다.
-    *   **4. 원본 Stored Procedure 실행 데이터 수집 (Legacy DB)**: 생성된 테스트 입력값 JSON을 기반으로 실제 Legacy DB에 접근해 SP를 호출하고, 다중 ResultSet 데이터를 JSON(`*_legacy_results.json`)으로 덤프 수집합니다. (모의 데이터가 있을 경우 자동 Seeding 및 Clean-up 실행)
-    *   **5. 신규 마이그레이션 타겟 소스코드 실행 데이터 수집 (Target System)**: 마이그레이션된 C#(DLL 리플렉션 로드) 또는 Java(외부 JAR/클래스 프로세스 실행) 코드를 실제로 구동하여 실행 결과 JSON(`*_target_results.json`) 데이터를 수집합니다. (모의 데이터 자동 Seeding/Clean-up 및 트랜잭션 자동 롤백 적용)
-    *   **6. 실행 결과 데이터 정합성 1:1 대조 및 보고서 생성 (Compare)**: 수집된 레거시 결과와 신규 타겟 결과(`*_target_results.json`)를 상세 1:1 비교 대조하여 데이터 정합성 분석 보고서(`*_CompareReport.md`)를 작성합니다.
+    *   **1. 설계서 대비 소스코드 논리 일치성 검증 (Code Validation)**: C#/Java 소스코드 정적 분석 및 AI 의미론적 Gap 분석, 인간 피드백 루프를 가동하여 검증합니다.
+    *   **2. 데이터 정합성 대조용 테스트 파라미터 설계 (Test Design)**: 설계서(`BatchMigrationPlan.md`)를 분석해 AI가 정상/경계값/오류 시나리오 테스트 파라미터 JSON(`*_test_inputs.json`)을 생성합니다.
+    *   **3. 테스트용 모의 데이터 생성 및 적재 (Data Seeding)**: 원본 메타데이터 및 설계서를 분석해 테이블 간의 조인 키 난수 시드가 일치하는 모의 데이터(`*_mock_data.json`)를 생성하여 캐싱합니다.
+    *   **4. 레거시 시스템 실행 결과 수집 (Legacy Run)**: 생성된 테스트 입력값 JSON을 기반으로 실제 Legacy DB에 접근해 SP를 호출하고, 다중 ResultSet 데이터를 JSON(`*_legacy_results.json`)으로 덤프 수집합니다. (모의 데이터가 있을 경우 자동 Seeding 및 Clean-up 실행)
+    *   **5. 타겟 시스템 실행 결과 수집 (Target Run)**: 마이그레이션된 C#(DLL 리플렉션 로드) 또는 Java(외부 JAR/클래스 프로세스 실행) 코드를 실제로 구동하여 실행 결과 JSON(`*_target_results.json`) 데이터를 수집합니다. (모의 데이터 자동 Seeding/Clean-up 및 트랜잭션 자동 롤백 적용)
+    *   **6. 양단 간 데이터 정합성 1:1 대조 보고서 생성 (Data Compare)**: 수집된 레거시 결과와 신규 타겟 결과(`*_target_results.json`)를 상세 1:1 비교 대조하여 데이터 정합성 분석 보고서(`*_CompareReport.md`)를 작성합니다.
 
 *   **배치 검증 자동화 모드 실행 (CI/CD 무인 모드)**:
     ```bash
