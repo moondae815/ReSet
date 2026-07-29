@@ -242,6 +242,7 @@ ReSet/
   "AiSettings": {
     "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai")
     "ModelName": "claude-sonnet-4-6",
+    "ActorEffort": "medium",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
     "Temperature": 0.1,
     "MaxL2Attempts": 2,
     "TimeoutSeconds": 300,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)

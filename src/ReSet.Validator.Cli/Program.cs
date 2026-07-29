@@ -229,7 +229,7 @@ namespace ReSet.Validator.Cli
 
             // 5. 오케스트레이터 및 개별 서비스 구성
             var effort = configuration["AiSettings:ActorEffort"] ?? configuration["AiSettings:Effort"] ?? string.Empty;
-            var orchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, ui);
+            var orchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, effort, ui);
             var aiService = new ValidatorAiService(aiClient, effort);
             var execService = new SpExecutionService();
             var compareService = new DataComparisonService();

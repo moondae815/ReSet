@@ -24,11 +24,12 @@ namespace ReSet.Validator.Core.Services
         public CodeVerificationOrchestrator(
             ValidatorConfig config,
             IAiClient aiClient,
+            string? effort = null,
             IValidationUserInterface? ui = null)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _mappingService = new FileMappingService();
-            _aiService = new ValidatorAiService(aiClient);
+            _aiService = new ValidatorAiService(aiClient, effort);
             _ui = ui;
 
             // 기본 플러그인 로드
