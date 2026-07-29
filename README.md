@@ -142,21 +142,22 @@ ReSet/
   },
   "AiSettings": {
     "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai")
-    "ModelName": "claude-sonnet-4-6", // 사용할 LLM 모델명
+    "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
     "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
-    "TimeoutSeconds": 300,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
-    "ActorEffort": "dynamic",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
+    "TimeoutSeconds": 3600,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
+    "ActorEffort": "high",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
     "Critic": {
       "Provider": "OpenAI",        // [Actor-Critic] 평가를 담당할 Critic의 AI 제공자
-      "ModelName": "gpt-5.4",
-      "Effort": "high"             // [Actor-Critic] Critic의 추론 강도 (low | medium | high)
+      "ModelName": "gpt-5.5-terra",
+      "Effort": "high",             // [Actor-Critic] Critic의 추론 강도 (low | medium | high)
+      "ThresholdScore": 8          // [Actor-Critic] 결함(Defect) 판단 기준 점수
     },
     "Consolidator": {
       "Provider": "Claude",        // [Actor-Critic] 최종 합성을 담당할 Consolidator의 AI 제공자
-      "ModelName": "claude-sonnet-4-6",
-      "Effort": "medium"           // [Actor-Critic] Consolidator의 추론 강도
+      "ModelName": "claude-sonnet-5",
+      "Effort": "high"           // [Actor-Critic] Consolidator의 추론 강도
     },
     "Providers": {
       "OpenAI": {
@@ -241,11 +242,11 @@ ReSet/
 {
   "AiSettings": {
     "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai")
-    "ModelName": "claude-sonnet-4-6",
-    "ActorEffort": "medium",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
+    "ModelName": "claude-sonnet-5",
+    "ActorEffort": "high",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
     "Temperature": 0.1,
     "MaxL2Attempts": 2,
-    "TimeoutSeconds": 300,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
+    "TimeoutSeconds": 3600,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
     "Providers": {
       "OpenAI": {
         "ApiKey": "",
