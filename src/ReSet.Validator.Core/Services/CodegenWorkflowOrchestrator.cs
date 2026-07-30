@@ -14,15 +14,18 @@ namespace ReSet.Validator.Core.Services
     {
         private readonly ICodingEngine _codingEngine;
         private readonly CodeVerificationOrchestrator _verifier;
+        private readonly IMetadataExporter _metadataExporter;
         private readonly int _maxL2Attempts;
 
         public CodegenWorkflowOrchestrator(
             ICodingEngine codingEngine,
             CodeVerificationOrchestrator verifier,
+            IMetadataExporter metadataExporter,
             int maxL2Attempts)
         {
             _codingEngine = codingEngine;
             _verifier = verifier;
+            _metadataExporter = metadataExporter;
             _maxL2Attempts = maxL2Attempts;
         }
 
@@ -104,7 +107,7 @@ namespace ReSet.Validator.Core.Services
                     
                     if (File.Exists(instructionsFilePath))
                     {
-                        await File.AppendAllTextAsync(instructionsFilePath, feedbackBuilder.ToString(), cancellationToken);
+                        await _metadataExporter.AppendFeedbackToInstructionsAsync(instructionsFilePath, feedbackBuilder.ToString());
                     }
                     else
                     {

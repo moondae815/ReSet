@@ -1559,8 +1559,9 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     OutputDirectory = Path.Combine(baseDir, "validation")
                 };
 
+                var metadataExporter = new ReSet.Core.Services.MetadataExporter();
                 var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
-                var codegenWorkflowOrchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, maxL2Attempts);
+                var codegenWorkflowOrchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts);
 
                 AnsiConsole.MarkupLine($"[grey]지시서 경로: {instructionsPath}[/]");
                 AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
