@@ -150,7 +150,7 @@ ReSet/
     "ActorEffort": "high",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
     "Critic": {
       "Provider": "OpenAI",        // [Actor-Critic] 평가를 담당할 Critic의 AI 제공자
-      "ModelName": "gpt-5.5-terra",
+      "ModelName": "gpt-5.6-terra",
       "Effort": "high",             // [Actor-Critic] Critic의 추론 강도 (low | medium | high)
       "ThresholdScore": 8          // [Actor-Critic] 결함(Defect) 판단 기준 점수
     },
