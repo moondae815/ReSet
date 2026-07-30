@@ -57,6 +57,7 @@ namespace ReSet.Core.Services.Clients
                 var requestBody = new Dictionary<string, object>
                 {
                     { "model", _modelName },
+                    { "prompt_cache_key", "reset:sp-analysis:v1" },
                     { "input", new[]
                         {
                             new { role = "system", content = systemPrompt },

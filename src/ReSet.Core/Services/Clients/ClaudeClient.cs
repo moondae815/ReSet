@@ -64,6 +64,18 @@ namespace ReSet.Core.Services.Clients
             }
 
             bool enableThinking = version >= 3.7 && (!string.IsNullOrWhiteSpace(effort) || lowerModel.Contains("opus-4-8") || lowerModel.Contains("sonnet-4-6") || version >= 5.0);
+
+            // 프롬프트 캐싱 적용 (System 영역 전체를 ephemeral 캐시로 지정)
+            var systemBlocks = new[]
+            {
+                new
+                {
+                    type = "text",
+                    text = systemPrompt,
+                    cache_control = new { type = "ephemeral" }
+                }
+            };
+
             object requestBody;
 
             if (enableThinking)
@@ -86,7 +98,7 @@ namespace ReSet.Core.Services.Clients
                     var requestMap = new System.Collections.Generic.Dictionary<string, object>
                     {
                         { "model", _modelName },
-                        { "system", systemPrompt },
+                        { "system", systemBlocks },
                         { "messages", new[] { new { role = "user", content = userPrompt } } },
                         { "max_tokens", maxTokens },
                         { "thinking", new { type = "adaptive", display = "summarized" } },
@@ -119,7 +131,7 @@ namespace ReSet.Core.Services.Clients
                     requestBody = new
                     {
                         model = _modelName,
-                        system = systemPrompt,
+                        system = systemBlocks,
                         messages = new[]
                         {
                             new { role = "user", content = userPrompt }
@@ -141,7 +153,7 @@ namespace ReSet.Core.Services.Clients
                     requestBody = new
                     {
                         model = _modelName,
-                        system = systemPrompt,
+                        system = systemBlocks,
                         messages = new[]
                         {
                             new { role = "user", content = userPrompt }
@@ -154,7 +166,7 @@ namespace ReSet.Core.Services.Clients
                     requestBody = new
                     {
                         model = _modelName,
-                        system = systemPrompt,
+                        system = systemBlocks,
                         messages = new[]
                         {
                             new { role = "user", content = userPrompt }
@@ -176,6 +188,7 @@ namespace ReSet.Core.Services.Clients
 
             request.Headers.Add("x-api-key", _apiKey);
             request.Headers.Add("anthropic-version", "2023-06-01");
+            request.Headers.Add("anthropic-beta", "prompt-caching-2024-07-31");
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
