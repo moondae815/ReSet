@@ -215,7 +215,12 @@ namespace ReSet.Validator.Core.Services
                 {
                     if (res.GapReport == null) continue;
 
-                    var mdPath = Path.Combine(docsDir, "ValidationReport.md");
+                    var spDocsDir = Path.Combine(docsDir, res.MappedName);
+                    var spRawDir = Path.Combine(rawDir, res.MappedName);
+                    if (!Directory.Exists(spDocsDir)) Directory.CreateDirectory(spDocsDir);
+                    if (!Directory.Exists(spRawDir)) Directory.CreateDirectory(spRawDir);
+
+                    var mdPath = Path.Combine(spDocsDir, "ValidationReport.md");
 
                     // AI 메타 블록 구성
                     var aiInfoLine = string.IsNullOrEmpty(res.GapReport.AiProviderName)
@@ -262,7 +267,7 @@ namespace ReSet.Validator.Core.Services
                     Log.Debug("[코드검증] 개별 검증 리포트 저장 - {ReportPath}", mdPath);
 
                     // AI 추론 응답 저장
-                    var aiResponsePath = Path.Combine(docsDir, "AI_Response.md");
+                    var aiResponsePath = Path.Combine(spDocsDir, "AI_Response.md");
                     var aiResponseContent = $@"# AI 분석 추론 결과 ({res.MappedName})
 
 ## 🧠 추론 (Thinking)
@@ -278,14 +283,14 @@ namespace ReSet.Validator.Core.Services
                     File.WriteAllText(aiResponsePath, aiResponseContent);
 
                     // raw 저장 (설계서, 소스코드, AI 요청 프롬프트)
-                    var specPath = Path.Combine(rawDir, "Spec.md");
+                    var specPath = Path.Combine(spRawDir, "Spec.md");
                     File.WriteAllText(specPath, res.SpecContent);
 
                     var ext = _config.TargetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) ? "java" : "cs";
-                    var codePath = Path.Combine(rawDir, $"Source.{ext}");
+                    var codePath = Path.Combine(spRawDir, $"Source.{ext}");
                     File.WriteAllText(codePath, res.CodeContent);
 
-                    var promptPath = Path.Combine(rawDir, "AI_Prompt.md");
+                    var promptPath = Path.Combine(spRawDir, "AI_Prompt.md");
                     var promptContent = $@"# System Prompt
 {res.GapReport.SystemPrompt}
 
@@ -312,7 +317,7 @@ namespace ReSet.Validator.Core.Services
 ## 🔍 개별 파일 검증 상태
 | 대상 이름 | L1 정적 검증 | L2 AI 일치여부 | L3 최종 승인 | 상세 보고서 링크 |
 | :--- | :---: | :---: | :---: | :--- |
-{string.Join("\n", results.Select(r => $"| {r.MappedName} | {(r.L1Passed ? "✅ PASS" : "❌ FAIL")} | {(r.L2Passed ? "✅ MATCH" : "⚠️ GAP")} | {(r.IsApproved ? "✅ APPROVED" : "❌ REJECTED")} | [ValidationReport.md](./ValidationReport.md) |"))}
+{string.Join("\n", results.Select(r => $"| {r.MappedName} | {(r.L1Passed ? "✅ PASS" : "❌ FAIL")} | {(r.L2Passed ? "✅ MATCH" : "⚠️ GAP")} | {(r.IsApproved ? "✅ APPROVED" : "❌ REJECTED")} | [ValidationReport.md](./{r.MappedName}/ValidationReport.md) |"))}
 ";
                 File.WriteAllText(summaryPath, summaryContent);
                 Log.Information("[코드검증] 종합 검증 요약 리포트 저장 완료 - {SummaryPath}", summaryPath);
