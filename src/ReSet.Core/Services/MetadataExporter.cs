@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
 using Serilog;
@@ -303,7 +304,7 @@ namespace ReSet.Core.Services
                 int stepCounter = 4;
                 foreach (var sp in spDefs)
                 {
-                    todoSb.AppendLine($"- [ ] {stepCounter}. Step: `{sp.Name}` 기반 비즈니스 로직 구현 (필수 행동 수칙 5단계 완료 포함)");
+                    todoSb.AppendLine($"- [ ] {stepCounter}. Step: `{sp.Name}` 기반 비즈니스 로직 구현 (Agentic Workflow 루프 완료 포함)");
                     stepCounter++;
                 }
                 
@@ -564,7 +565,7 @@ public class ArchitectureTests {
             return sb.ToString();
         }
 
-        public async Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown)
+        public async Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown, CancellationToken cancellationToken = default)
         {
             if (!File.Exists(instructionsFilePath))
             {
@@ -574,7 +575,7 @@ public class ArchitectureTests {
 
             try
             {
-                var content = await File.ReadAllTextAsync(instructionsFilePath, Encoding.UTF8);
+                var content = await File.ReadAllTextAsync(instructionsFilePath, Encoding.UTF8, cancellationToken);
 
                 // 기존 피드백 마커가 있으면 제거
                 var startMarker = "<!-- FEEDBACK_START -->";
@@ -599,7 +600,7 @@ public class ArchitectureTests {
                 sb.AppendLine(feedbackMarkdown);
                 sb.AppendLine(endMarker);
 
-                await File.WriteAllTextAsync(instructionsFilePath, sb.ToString(), Encoding.UTF8);
+                await File.WriteAllTextAsync(instructionsFilePath, sb.ToString(), Encoding.UTF8, cancellationToken);
                 Log.Information("지시서에 L1/L2 검증 피드백 영역을 업데이트 완료 - Path: {Path}", instructionsFilePath);
             }
             catch (Exception ex)

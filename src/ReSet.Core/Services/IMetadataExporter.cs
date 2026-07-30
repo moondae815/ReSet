@@ -1,6 +1,6 @@
+using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
-
 namespace ReSet.Core.Services
 {
     public interface IMetadataExporter
@@ -31,7 +31,7 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 지시서 마크다운 파일 하단에 L1/L2 피드백 내용을 안전하게 덧붙이거나 교체합니다.
         /// </summary>
-        Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown);
+        Task AppendFeedbackToInstructionsAsync(string instructionsFilePath, string feedbackMarkdown, CancellationToken cancellationToken = default);
 
     }
 }

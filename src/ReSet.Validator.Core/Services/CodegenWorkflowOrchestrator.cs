@@ -107,7 +107,7 @@ namespace ReSet.Validator.Core.Services
                     
                     if (File.Exists(instructionsFilePath))
                     {
-                        await _metadataExporter.AppendFeedbackToInstructionsAsync(instructionsFilePath, feedbackBuilder.ToString());
+                        await _metadataExporter.AppendFeedbackToInstructionsAsync(instructionsFilePath, feedbackBuilder.ToString(), cancellationToken);
                     }
                     else
                     {
