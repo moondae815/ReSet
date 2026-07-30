@@ -341,7 +341,7 @@ namespace ReSet.Batch.Core
 
         public StepResult Execute(SettleContext context)
         {
-            if (context.Checkpoint.IsStepCompleted(StepName, context.Ymd))
+            if (context.Checkpoint?.IsStepCompleted(StepName, context.Ymd) == true)
             {
                 return new StepResult { Code = 0, Message = ""이미 완료된 Step 재시작 스킵"", SourceProcName = SourceProcName };
             }
