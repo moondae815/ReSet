@@ -5,19 +5,17 @@ This document outlines the design to improve the external coding agent's perform
 
 We will implement three specific architectural improvements to control the agent's behavior and enhance code generation quality: Divide & Conquer prompting, Self-Healing feedback injection, and Base Class template provisioning.
 
-## 1. Divide & Conquer Prompting (Checklist Grouping)
+## 1. Agentic Workflow Injection (Superpowers Skills)
 
 ### Problem
-The agent receives a `todo.md` checklist containing up to 13 steps (one for each Phase + setup steps). Attempting to implement all steps in a single generation turn leads to excessive placeholders (`// implementation omitted`) and dropped constraints (e.g., `bypassPreCheck`).
+The agent receives a `todo.md` checklist containing up to 13 steps (one for each Phase + setup steps). Attempting to implement all steps linearly in a single generation turn leads to excessive placeholders (`// implementation omitted`) and dropped constraints (e.g., `bypassPreCheck`). Grouping them and forcing stops is rigid and breaks autonomy.
 
 ### Solution
-Update `MetadataExporter.cs` to group the checklist into logical batches (e.g., Setup, Phase 0-1, Phase 2-3, etc.).
-- Modify `MigrationInstructions.md` to instruct the agent to **STOP** after completing a single group and request user permission before continuing.
-- Grouping logic:
-  - Group 1: Setup & Data Access (Steps 0-3)
-  - Group 2: Phase 0 ~ Phase 1
-  - Group 3: Phase 2 ~ Phase 3
-  - Group 4: Phase 4 ~ Phase 5, Final Integration
+Instead of rigid grouping, we will instruct the external coding agent (e.g., `agy`) to utilize advanced agentic workflows to distribute the complexity.
+Update `MetadataExporter.cs` to embed explicit instructions in `MigrationInstructions.md`:
+- **Subagent-Driven Development**: Instruct the lead agent to spawn isolated subagents for each major Phase (e.g., Phase0, Phase1a) to distribute context limits.
+- **Test-Driven Development (TDD)**: Instruct the agent (or its subagents) to write unit tests (e.g., `PreCheck` logic) *before* implementing the Tasklet.
+- **Requesting Code Review**: Instruct the lead agent to act as a reviewer, using a code-review workflow to verify the subagents' work against the Spec before moving to the next Phase.
 
 ## 2. Self-Healing Feedback Injection
 
