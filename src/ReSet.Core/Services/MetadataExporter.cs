@@ -312,15 +312,17 @@ namespace ReSet.Core.Services
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
 
-                var agentSrcFolder = Path.Combine(agentFolder, "src");
-                if (!Directory.Exists(agentSrcFolder))
+                try
                 {
-                    Directory.CreateDirectory(agentSrcFolder);
-                }
+                    var agentSrcFolder = Path.Combine(agentFolder, "src");
+                    if (!Directory.Exists(agentSrcFolder))
+                    {
+                        Directory.CreateDirectory(agentSrcFolder);
+                    }
 
-                if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
-                {
-                    var baseClassStub = @"using System;
+                    if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var baseClassStub = @"using System;
 using System.Data;
 
 namespace ReSet.Batch.Core
@@ -410,7 +412,12 @@ namespace ReSet.Batch.Core
         void MarkStepCompleted(string stepName, string ymd);
     }
 }";
-                    File.WriteAllText(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), baseClassStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), baseClassStub, Encoding.UTF8);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "AbstractSettleTasklet.cs 템플릿 생성 중 오류가 발생했습니다. 진행은 계속합니다.");
                 }
 
                 // 테스트 뼈대 및 NetArchTest 더미 생성
