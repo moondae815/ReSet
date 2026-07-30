@@ -1555,7 +1555,8 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                 {
                     MaxL2Attempts = maxL2Attempts, // 단방향 검증용 설정 (이제 내부적으로 반복하지 않음)
                     SpecDirectory = specDir,
-                    SourceCodeDirectory = targetProjectDir
+                    SourceCodeDirectory = targetProjectDir,
+                    OutputDirectory = Path.Combine(baseDir, "validation")
                 };
 
                 var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
