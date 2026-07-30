@@ -241,6 +241,7 @@ namespace ReSet.Core.Services
                 sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
                 sb.AppendLine("7. [중요] 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 반드시 명세서에 있는 원본 DML(SELECT/INSERT/UPDATE/DELETE) 로직을 모두 프로그래밍 언어(C# 등)의 텍스트 쿼리로 풀어서 100% 완전하게 작성해야 합니다.");
                 sb.AppendLine("8. [중요] Worker.cs 구성 시 반드시 IConfiguration 등을 통해 명세된 모든 DB Factory 의존성(예: `MainDb`, `PaymentDb`, `SettleCardDb`, `PlCardDb` 등)을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
+                sb.AppendLine("9. [중요] 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.");
                 sb.AppendLine();
                 
                 sb.AppendLine("## 🛠️ 5. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
@@ -310,6 +311,107 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine($"- [ ] {stepCounter + 1}. 최종 Job 파이프라인 End-to-End 빌드 및 정적 검증(ArchUnit) 통과 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
+
+                var agentSrcFolder = Path.Combine(agentFolder, "src");
+                if (!Directory.Exists(agentSrcFolder))
+                {
+                    Directory.CreateDirectory(agentSrcFolder);
+                }
+
+                if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
+                {
+                    var baseClassStub = @"using System;
+using System.Data;
+
+namespace ReSet.Batch.Core
+{
+    public interface ISettleStep
+    {
+        string StepName { get; }
+        StepResult Execute(SettleContext context);
+    }
+
+    public abstract class AbstractSettleTasklet : ISettleStep
+    {
+        public abstract string StepName { get; }
+        protected abstract string SourceProcName { get; }
+
+        public StepResult Execute(SettleContext context)
+        {
+            if (context.Checkpoint.IsStepCompleted(StepName, context.Ymd))
+            {
+                return new StepResult { Code = 0, Message = ""이미 완료된 Step 재시작 스킵"", SourceProcName = SourceProcName };
+            }
+
+            int stateCode = 0;
+            using var conn = context.MainDb.CreateConnection();
+            conn.Open();
+            using (var cmdIso = conn.CreateCommand())
+            {
+                cmdIso.CommandText = ""SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SNAPSHOT;"";
+                cmdIso.ExecuteNonQuery();
+            }
+
+            try
+            {
+                var preCheckFail = PreCheck(conn, context, ref stateCode);
+                if (preCheckFail != null) return preCheckFail;
+
+                using var tran = conn.BeginTransaction();
+                try
+                {
+                    RunBusinessSteps(conn, tran, context, ref stateCode);
+                    tran.Commit();
+                    context.Checkpoint.MarkStepCompleted(StepName, context.Ymd);
+                    return new StepResult { Code = 0, Message = ""정상 완료"", SourceProcName = SourceProcName };
+                }
+                catch
+                {
+                    if (tran.Connection != null) tran.Rollback();
+                    OnFailureCompensation(context, stateCode);
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                return new StepResult { Code = stateCode, Message = ex.Message, SourceProcName = SourceProcName };
+            }
+        }
+
+        protected abstract StepResult PreCheck(IDbConnection conn, SettleContext context, ref int stateCode);
+        protected abstract void RunBusinessSteps(IDbConnection conn, IDbTransaction tran, SettleContext context, ref int stateCode);
+        protected virtual void OnFailureCompensation(SettleContext context, int failedStateCode) { }
+    }
+
+    public class SettleContext
+    {
+        public string Ymd { get; set; }
+        public bool BypassPreCheck { get; set; }
+        public IDbConnectionFactory MainDb { get; set; }
+        public IDbConnectionFactory PaymentDb { get; set; }
+        public IDbConnectionFactory SettleCardDb { get; set; }
+        public IDbConnectionFactory PlCardDb { get; set; }
+        public ICheckpointRepository Checkpoint { get; set; }
+    }
+
+    public class StepResult
+    {
+        public int Code { get; set; }
+        public string Message { get; set; }
+        public string SourceProcName { get; set; }
+        public string PoStrErrMsg { get; set; }
+        public bool IsSuccess => Code == 0;
+    }
+
+    public interface IDbConnectionFactory { IDbConnection CreateConnection(); }
+    public interface ICheckpointRepository 
+    { 
+        bool IsStepCompleted(string stepName, string ymd);
+        void MarkStepCompleted(string stepName, string ymd);
+    }
+}";
+                    File.WriteAllText(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), baseClassStub, Encoding.UTF8);
+                }
 
                 // 테스트 뼈대 및 NetArchTest 더미 생성
                 var agentTestsFolder = Path.Combine(agentFolder, "tests");
