@@ -1558,7 +1558,7 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
                     SourceCodeDirectory = targetProjectDir
                 };
 
-                var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null);
+                var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
                 var codegenWorkflowOrchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, maxL2Attempts);
 
                 AnsiConsole.MarkupLine($"[grey]지시서 경로: {instructionsPath}[/]");

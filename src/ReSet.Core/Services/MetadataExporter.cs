@@ -215,18 +215,32 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
                 sb.AppendLine("---");
                 sb.AppendLine();
-                sb.AppendLine("## 🔑 3. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
-                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마들을 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("## 📚 3. 원본 Stored Procedure 설계 명세서");
+                sb.AppendLine("개별 프로시저의 세부적인 비즈니스 로직(예: UPDATE 수식 등)을 확인해야 할 경우 아래 링크된 개별 설계서(Spec.md)를 참조하십시오.");
+                sb.AppendLine();
+                foreach (var spDef in spDefs)
+                {
+                    var spCleanName = $"{spDef.Schema}.{spDef.Name}";
+                    var specPath = $"../../../Procedures/{spDef.Schema}.{spDef.Name}/docs/Spec.md";
+                    sb.AppendLine($"- **{spCleanName}**:");
+                    sb.AppendLine($"  - [Spec.md]({specPath}) (UPDATE/INSERT 상세 매핑 수식 포함)");
+                }
+
+                sb.AppendLine();
+                sb.AppendLine("---");
+                sb.AppendLine();
+                sb.AppendLine("## 🔑 4. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
+                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마, 그리고 원본 명세서를 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
                 sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
-                sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 것.");
-                sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 것.");
-                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 타겟 언어 및 프레임워크의 권장 패턴을 따를 것.");
-                sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 것.");
-                sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 것.");
-                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 것.");
+                sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 일.");
+                sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 일.");
+                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 타겟 언어 및 프레임워크의 권장 패턴을 따를 일.");
+                sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 일.");
+                sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 일.");
+                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
                 sb.AppendLine();
                 
-                sb.AppendLine("## 🛠️ 4. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
+                sb.AppendLine("## 🛠️ 5. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
                 if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                 {
                     sb.AppendLine("* **Data Access 및 프레임워크**: 데이터베이스 접근은 ADO.NET(또는 Dapper)을 사용하고, 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
