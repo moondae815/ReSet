@@ -287,13 +287,11 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine();
                 todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
                 todoSb.AppendLine();
-                todoSb.AppendLine("## ⚠️ [필수 행동 수칙: SP 구현 5단계 루프]");
-                todoSb.AppendLine("각 Step(`SP_NAME`)을 구현할 때, 반드시 아래의 **5단계 자율 루프**를 내부적으로 완료한 뒤에만 체크박스에 `[x]` 표시를 하십시오.");
-                todoSb.AppendLine("1. **TDD 시작**: 테스트 클래스 생성 및 실패하는 단위 테스트 작성");
-                todoSb.AppendLine("2. **로직 구현**: Tasklet/Chunk 기반 DML 로직 및 트랜잭션 구현");
-                todoSb.AppendLine("3. **멱등성 보장**: Checkpoint 기반 멱등성 및 스킵 로직 적용");
-                todoSb.AppendLine("4. **파이프라인 등록**: 통합 파이프라인(Orchestrator)에 Step 등록 및 빌드 확인");
-                todoSb.AppendLine("5. **자율 코드 리뷰 & 점진적 커밋**: 스스로 작성한 코드를 점검(성능/보안/가독성)하여 리팩토링 후, 의미 있는 단위로 `git commit`을 수행하여 세이브포인트 생성");
+                todoSb.AppendLine("## ⚠️ [필수 행동 수칙: Agentic Workflow 루프]");
+                todoSb.AppendLine("각 Step(`SP_NAME`)을 구현할 때, 반드시 아래의 **Superpowers Skills** 워크플로우를 활용하십시오.");
+                todoSb.AppendLine("1. **Subagent-Driven Development**: 복잡한 Phase(Tasklet) 구현 시, 주 에이전트가 직접 모든 코드를 작성하지 말고 `invoke_subagent` 도구를 사용해 서브에이전트에게 구현을 위임하십시오.");
+                todoSb.AppendLine("2. **Test-Driven Development (TDD)**: 서브에이전트는 반드시 비즈니스 로직(예: PreCheck)을 작성하기 전에 실패하는 XUnit 테스트를 먼저 작성하고 통과시켜야 합니다.");
+                todoSb.AppendLine("3. **Requesting Code Review**: 서브에이전트가 구현을 완료하면, 주 에이전트는 코드 리뷰를 수행하여 Spec.md의 모든 예외 처리 및 쿼리 조건이 누락 없이 반영되었는지 검증하십시오.");
                 todoSb.AppendLine();
                 
                 todoSb.AppendLine("- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 (예: Dapper, Moq, MyBatis, ArchUnit 등)");
