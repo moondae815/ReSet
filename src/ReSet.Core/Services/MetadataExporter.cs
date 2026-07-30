@@ -239,6 +239,8 @@ namespace ReSet.Core.Services
                 sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 일.");
                 sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 일.");
                 sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
+                sb.AppendLine("7. [중요] 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 반드시 명세서에 있는 원본 DML(SELECT/INSERT/UPDATE/DELETE) 로직을 모두 프로그래밍 언어(C# 등)의 텍스트 쿼리로 풀어서 100% 완전하게 작성해야 합니다.");
+                sb.AppendLine("8. [중요] Worker.cs 구성 시 반드시 IConfiguration 등을 통해 명세된 모든 DB Factory 의존성(예: `MainDb`, `PaymentDb`, `SettleCardDb`, `PlCardDb` 등)을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
                 sb.AppendLine();
                 
                 sb.AppendLine("## 🛠️ 5. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
