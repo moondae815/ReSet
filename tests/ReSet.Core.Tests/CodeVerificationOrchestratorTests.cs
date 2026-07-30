@@ -55,7 +55,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();
-            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, mockUi);
+            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, ui: mockUi);
 
             try
             {
@@ -121,7 +121,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();
-            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, mockUi);
+            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, ui: mockUi);
 
             try
             {

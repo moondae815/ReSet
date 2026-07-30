@@ -173,7 +173,7 @@ namespace ReSet.Core.Services
                 }
 
                 sb.AppendLine("## 📋 2. 대상 Stored Procedure 및 테이블 스키마 참조 링크");
-                sb.AppendLine("아래 분리된 파일들을 읽어(Read) 데이터 엑세스 계층 구현 시 테이블 스키마와 데이터 타입을 확인하십시오. 핵심 비즈니스 로직 구현은 오직 1번 항목의 '통합 배치 전환 계획서(Plan)' 내용과 의사코드만을 엄격히 따라야 합니다.");
+                sb.AppendLine("아래 분리된 파일들을 읽어(Read) 데이터 엑세스 계층 구현 시 테이블 스키마와 데이터 타입을 확인하십시오. 핵심 비즈니스 로직 구현은 오직 1번 항목의 '통합 배치 전환 계획서(Plan)' 내용과 의사코드만을 엄격히 따라야 하며, 원본 SQL 코드를 조회하려고 시도해서는 안 됩니다.");
                 sb.AppendLine();
 
                 var distinctDependencies = spDefs
@@ -230,7 +230,8 @@ namespace ReSet.Core.Services
                 sb.AppendLine("---");
                 sb.AppendLine();
                 sb.AppendLine("## 🔑 4. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
-                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마, 그리고 원본 명세서를 분석하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마, 그리고 원본 명세서(Spec.md)만을 참조하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
+                sb.AppendLine("**[경고] 원본 Stored Procedure(.sql) 파일은 레거시 코드이므로 절대 검색(find 명령어 등)하거나 직접 참조하지 마십시오. 모든 비즈니스 로직은 이미 분석 완료된 Spec.md 문서에 정의되어 있습니다.**");
                 sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
                 sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 일.");
                 sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 일.");
