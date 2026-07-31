@@ -77,6 +77,29 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_PreservesRootReviewAndThinkingForCliOutput()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var review = new ReviewResult { ScoreAccuracy = 9 };
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                Review = review,
+                ThinkingText = "private reasoning"
+            }));
+
+        var result = await sut.AnalyzeAsync(root, Request(), CancellationToken.None);
+        var rootAnalysis = Assert.Single(result.AnalysisResults);
+
+        Assert.Same(review, rootAnalysis.Review);
+        Assert.Equal("private reasoning", rootAnalysis.ThinkingText);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum()
     {
         var rootA = Key("USP_A", CodeObjectType.Procedure);

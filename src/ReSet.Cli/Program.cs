@@ -154,6 +154,13 @@ namespace ReSet.Cli
             bool.TryParse(configuration["OutputSettings:SaveRawContext"] ?? "false", out bool saveRawContext);
             bool.TryParse(configuration["OutputSettings:SaveRawFiles"] ?? "false", out bool saveRawFiles);
             bool.TryParse(configuration["OutputSettings:EnableCache"] ?? "false", out bool enableCache);
+            bool.TryParse(configuration["AnalysisSettings:AnalyzeReferencedCodeObjects"] ?? "false", out bool analyzeReferencedCodeObjects);
+            var dependencyArtifactMode = Enum.TryParse<DependencyArtifactMode>(
+                configuration["OutputSettings:DependencyArtifactMode"],
+                ignoreCase: true,
+                out var parsedDependencyArtifactMode)
+                ? parsedDependencyArtifactMode
+                : DependencyArtifactMode.Reference;
 
             bool.TryParse(configuration["MigrationSettings:Enabled"] ?? "true", out bool migrationEnabled);
             var targetLanguage = configuration["MigrationSettings:TargetLanguage"] ?? "C#";
@@ -415,6 +422,9 @@ namespace ReSet.Cli
                 consolidatorEffort,
                 criticThresholdScore
             );
+            IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
+                dbService,
+                orchestrator);
             ISettlementPolicyService policyService = new SettlementPolicyService(dbService, aiService);
 
             string instructions = "기본 마크다운 규칙을 적용하여 분석해 주세요.";
@@ -583,8 +593,22 @@ namespace ReSet.Cli
                         var schema = parts[0];
                         var name = parts[1];
 
-                        var (specMarkdown, spDef, reviewResult, thinkingText) = await orchestrator.RunPipelineAsync(
-                            connectionString, schema, name, maxDepth, provider, instructions, isBatchMode: true, outputDir, enableCache, globalCts.Token);
+                        var (specMarkdown, spDef, reviewResult, thinkingText) = await RunConfiguredAnalysisAsync(
+                            analyzeReferencedCodeObjects,
+                            dependencyAnalysisOrchestrator,
+                            orchestrator,
+                            connectionString,
+                            database ?? string.Empty,
+                            schema,
+                            name,
+                            maxDepth,
+                            provider,
+                            instructions,
+                            isBatchMode: true,
+                            outputDir,
+                            enableCache,
+                            dependencyArtifactMode,
+                            globalCts.Token);
 
                         if (string.IsNullOrEmpty(specMarkdown))
                         {
@@ -618,7 +642,8 @@ namespace ReSet.Cli
 
                         await SaveOutputsAsync(
                             spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
-                            metadataExporter, saveRawJson, saveRawContext, saveRawFiles,
+                            metadataExporter, saveRawJson, saveRawContext,
+                            saveRawFiles && (!analyzeReferencedCodeObjects || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
                             schema, name, provider, modelName, reviewResult, thinkingText, actorEffort, configuration);
 
                         AnsiConsole.MarkupLine($"[green]성공:[/] {selectedOption} 분석 완료 및 저장!");
@@ -838,6 +863,10 @@ namespace ReSet.Cli
                             continue;
                         }
 
+                        var analyzeSelectedReferences = AnsiConsole.Confirm(
+                            "선택한 SP가 참조하는 SP/UDF도 함께 분석하시겠습니까?",
+                            analyzeReferencedCodeObjects);
+
                         var parts = selectedOption.Split('.', 2);
                         var schema = parts[0];
                         var name = parts[1];
@@ -847,8 +876,22 @@ namespace ReSet.Cli
 
                         try
                         {
-                            var (specMarkdown, spDef, reviewResult, thinkingText) = await orchestrator.RunPipelineAsync(
-                                connectionString, schema, name, maxDepth, provider, instructions, isBatchMode: false, outputDir, enableCache, activeCts.Token);
+                            var (specMarkdown, spDef, reviewResult, thinkingText) = await RunConfiguredAnalysisAsync(
+                                analyzeSelectedReferences,
+                                dependencyAnalysisOrchestrator,
+                                orchestrator,
+                                connectionString,
+                                database ?? string.Empty,
+                                schema,
+                                name,
+                                maxDepth,
+                                provider,
+                                instructions,
+                                isBatchMode: false,
+                                outputDir,
+                                enableCache,
+                                dependencyArtifactMode,
+                                activeCts.Token);
 
                             if (string.IsNullOrEmpty(specMarkdown))
                             {
@@ -866,7 +909,8 @@ namespace ReSet.Cli
 
                             await SaveOutputsAsync(
                                 spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
-                                metadataExporter, saveRawJson, saveRawContext, saveRawFiles,
+                                metadataExporter, saveRawJson, saveRawContext,
+                                saveRawFiles && (!analyzeSelectedReferences || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
                                 schema, name, provider, modelName, reviewResult, thinkingText, actorEffort, configuration);
 
                             var outputFileName = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs", "Spec.md");
@@ -1332,6 +1376,105 @@ namespace ReSet.Cli
             }
         }
 
+
+        private static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunConfiguredAnalysisAsync(
+            bool analyzeReferencedCodeObjects,
+            IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator,
+            VerificationPipelineOrchestrator verificationPipelineOrchestrator,
+            string connectionString,
+            string configuredDatabase,
+            string schema,
+            string name,
+            int maxDepth,
+            string provider,
+            string instructions,
+            bool isBatchMode,
+            string outputDirectory,
+            bool enableCache,
+            DependencyArtifactMode dependencyArtifactMode,
+            CancellationToken cancellationToken)
+        {
+            if (!analyzeReferencedCodeObjects)
+            {
+                return await verificationPipelineOrchestrator.RunPipelineAsync(
+                    connectionString,
+                    schema,
+                    name,
+                    maxDepth,
+                    provider,
+                    instructions,
+                    isBatchMode,
+                    outputDirectory,
+                    enableCache,
+                    cancellationToken);
+            }
+
+            var database = ResolveAnalysisDatabase(connectionString, configuredDatabase);
+            var rootKey = CodeObjectKey.Create(database, schema, name, CodeObjectType.Procedure);
+            var result = await dependencyAnalysisOrchestrator.AnalyzeAsync(
+                rootKey,
+                new DependencyAnalysisRequest
+                {
+                    ConnectionString = connectionString,
+                    MaxDepth = maxDepth,
+                    Provider = provider,
+                    Instructions = instructions,
+                    IsBatchMode = isBatchMode,
+                    OutputDirectory = outputDirectory,
+                    EnableCache = enableCache,
+                    DependencyArtifactMode = dependencyArtifactMode
+                },
+                cancellationToken);
+
+            RenderDependencyAnalysisProgress(result);
+
+            var rootAnalysis = result.AnalysisResults
+                .FirstOrDefault(analysis => analysis.Key == rootKey);
+            return rootAnalysis is null
+                ? (null, null, null, null)
+                : (rootAnalysis.SpecMarkdown, rootAnalysis.Definition, rootAnalysis.Review, rootAnalysis.ThinkingText);
+        }
+
+        private static string ResolveAnalysisDatabase(string connectionString, string configuredDatabase)
+        {
+            try
+            {
+                var initialCatalog = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+                if (!string.IsNullOrWhiteSpace(initialCatalog))
+                {
+                    return initialCatalog;
+                }
+            }
+            catch (ArgumentException)
+            {
+                // 오프라인 모드는 연결 문자열 없이 설정 DB 이름을 사용합니다.
+            }
+
+            return configuredDatabase;
+        }
+
+        private static void RenderDependencyAnalysisProgress(CodeObjectPipelineResult result)
+        {
+            var orderedNodes = result.Nodes
+                .OrderBy(node => node.Key.CanonicalName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var total = orderedNodes.Count;
+
+            for (var index = 0; index < total; index++)
+            {
+                var node = orderedNodes[index];
+                var objectKind = node.Key.Type == CodeObjectType.Function ? "UDF" : "SP";
+                var objectName = $"{node.Key.Schema}.{node.Key.Name}";
+                AnsiConsole.MarkupLine($"[grey]{index + 1}/{total}. {objectKind} {Markup.Escape(objectName)} 분석 중[/]");
+
+                if (node.Status == AnalysisNodeStatus.Failed)
+                {
+                    var error = string.IsNullOrWhiteSpace(node.Error) ? "알 수 없는 오류" : node.Error;
+                    AnsiConsole.MarkupLine($"[yellow]경고:[/] {Markup.Escape(objectName)} 분석 실패 - {Markup.Escape(error)}");
+                    AnsiConsole.WriteLine();
+                }
+            }
+        }
 
         private static async Task SaveOutputsAsync(
             ReSet.Core.Models.SpDefinition? spDef,

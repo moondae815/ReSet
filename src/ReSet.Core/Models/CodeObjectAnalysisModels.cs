@@ -72,6 +72,8 @@ public sealed class CodeObjectAnalysisResult
     public SpDefinition Definition { get; set; } = new();
     public FunctionReturnInfo? FunctionReturn { get; set; }
     public string? SpecMarkdown { get; set; }
+    public ReviewResult? Review { get; set; }
+    public string? ThinkingText { get; set; }
     public string? SpecPath { get; set; }
     public string? DdlPath { get; set; }
 }

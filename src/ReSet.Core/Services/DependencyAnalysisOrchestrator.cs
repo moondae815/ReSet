@@ -182,7 +182,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     Key = key,
                     Definition = pipelineResult.SpDef,
                     FunctionReturn = pipelineResult.SpDef.FunctionReturn,
-                    SpecMarkdown = pipelineResult.SpecMarkdown
+                    SpecMarkdown = pipelineResult.SpecMarkdown,
+                    Review = pipelineResult.Review,
+                    ThinkingText = pipelineResult.ThinkingText
                 });
             }
             catch (OperationCanceledException)
