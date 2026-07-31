@@ -1452,8 +1452,7 @@ namespace ReSet.Cli
                     IsBatchMode = isBatchMode,
                     OutputDirectory = outputDirectory,
                     EnableCache = enableCache,
-                    DependencyArtifactMode = dependencyArtifactMode,
-                    Progress = RenderDependencyAnalysisProgress
+                    DependencyArtifactMode = dependencyArtifactMode
                 },
                 cancellationToken);
 
@@ -1504,13 +1503,6 @@ namespace ReSet.Cli
             }
 
             return configuredDatabase;
-        }
-
-        private static void RenderDependencyAnalysisProgress(DependencyAnalysisProgress progress)
-        {
-            var objectKind = progress.Key.Type == CodeObjectType.Function ? "UDF" : "SP";
-            var objectName = $"{progress.Key.Schema}.{progress.Key.Name}";
-            AnsiConsole.MarkupLine($"[grey]{progress.Current}/{progress.Total}. {objectKind} {Markup.Escape(objectName)} 분석 중[/]");
         }
 
         private static void RenderDependencyAnalysisFailures(CodeObjectPipelineResult result)
@@ -1826,11 +1818,10 @@ namespace ReSet.Cli
 
             Serilog.Log.Information("=== ReSet CLI 실행 로거 시작 ===");
         }
-    }
 
     /// <summary>
-    /// 재귀 분석의 하위 파이프라인 상태를 콘솔에 출력하지 않는 UI 어댑터입니다.
-    /// 사람 검토가 필요한 대화형 L3 단계만 원래 UI에 위임합니다.
+    /// 재귀 분석 하위 파이프라인의 진행 상태를 원래 대화형 UI에 위임합니다.
+    /// 사람 검토가 필요한 대화형 L3 단계도 원래 UI에 위임합니다.
     /// </summary>
     internal sealed class RecursiveAnalysisUserInteraction : IVerificationUserInteraction
     {
@@ -1841,7 +1832,7 @@ namespace ReSet.Cli
             _interactiveUserInteraction = interactiveUserInteraction;
         }
 
-        public void NotifyStatus(string message) { }
+        public void NotifyStatus(string message) => _interactiveUserInteraction.NotifyStatus(message);
         public void NotifyError(string message) { }
         public void NotifyWarnings(string selectedOption, List<string> warnings) { }
         public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
@@ -1854,6 +1845,9 @@ namespace ReSet.Cli
         public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
             _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);
 
-        public IMultiProgressScope CreateProgressScope(string title) => NullProgressScope.Instance;
+        public IMultiProgressScope CreateProgressScope(string title) =>
+            _interactiveUserInteraction.CreateProgressScope(title);
+    }
+
     }
 }

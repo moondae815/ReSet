@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 using ReSet.Cli;
@@ -68,6 +69,26 @@ namespace ReSet.Core.Tests
             Assert.Equal("SnapshotDB", result.SpDef?.ObjectKey?.Database);
         }
 
+        [Fact]
+        public void RecursiveAnalysisUserInteraction_ForwardsStatusAndProgressScope()
+        {
+            var interactiveUserInteraction = new RecordingUserInteraction();
+            var nestedType = typeof(Program).GetNestedType(
+                "RecursiveAnalysisUserInteraction",
+                BindingFlags.NonPublic);
+            Assert.NotNull(nestedType);
+
+            var adapter = Assert.IsAssignableFrom<IVerificationUserInteraction>(
+                Activator.CreateInstance(nestedType!, interactiveUserInteraction));
+
+            adapter.NotifyStatus("UDF: dbo.Child - 검증 중...");
+            var progressScope = adapter.CreateProgressScope("Critic 검토");
+
+            Assert.Equal("UDF: dbo.Child - 검증 중...", interactiveUserInteraction.LastStatus);
+            Assert.Same(interactiveUserInteraction.ProgressScope, progressScope);
+            Assert.Equal("Critic 검토", interactiveUserInteraction.LastProgressTitle);
+        }
+
         private static IConfiguration LoadCliConfiguration()
         {
             var repositoryRoot = FindRepositoryRoot();
@@ -127,6 +148,37 @@ namespace ReSet.Core.Tests
                     }
                 });
             }
+        }
+
+        private sealed class RecordingUserInteraction : IVerificationUserInteraction
+        {
+            public string? LastStatus { get; private set; }
+            public string? LastProgressTitle { get; private set; }
+            public IMultiProgressScope ProgressScope { get; } = new RecordingProgressScope();
+
+            public void NotifyStatus(string message) => LastStatus = message;
+            public void NotifyError(string message) { }
+            public void NotifyWarnings(string selectedOption, List<string> warnings) { }
+            public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
+            public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) { }
+            public void NotifyValidationSuccess(string selectedOption) { }
+            public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown) =>
+                Task.FromResult(new HumanReviewResult());
+            public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) => Task.FromResult(false);
+            public IMultiProgressScope CreateProgressScope(string title)
+            {
+                LastProgressTitle = title;
+                return ProgressScope;
+            }
+        }
+
+        private sealed class RecordingProgressScope : IMultiProgressScope
+        {
+            public void AddTask(string taskName, string description) { }
+            public void UpdateTask(string taskName, double value, string? description = null) { }
+            public void CompleteTask(string taskName) { }
+            public void FailTask(string taskName) { }
+            public void Dispose() { }
         }
     }
 }
