@@ -33,6 +33,18 @@
 - 집중: `SpecificationLinkerTests`, `ExportCodeObjectArtifactsAsync`, 재귀 아티팩트 통합 테스트 8건 통과.
 - 전체 회귀: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 274건 통과, 실패 0건.
 
+## Fix round 3 — SQL/CLR type_desc 별칭
+
+- `SQL_INLINE_TABLE_VALUED_FUNCTION`, `CLR_SCALAR_FUNCTION`, `CLR_TABLE_VALUED_FUNCTION`을 functions로 정규화했다.
+- `CLR_STORED_PROCEDURE`를 procedures로 정규화했다.
+- SQL Server의 기존 코드 값 및 SQL type_desc 별칭은 계속 허용하고, 비코드 객체 차단 규칙은 유지한다.
+
+### Fix round 3 테스트
+
+- RED: inline table-valued 함수 DDL이 복제되지 않음을 확인했다.
+- 집중: Task 6 관련 15건 통과.
+- 전체 회귀: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 274건 통과, 실패 0건.
+
 ## Fix round 2 — PortableBundle 코드 객체 한정
 
 - PortableBundle의 참조 DDL 복제는 정규화된 Procedure/Function 타입만 허용하도록 제한했다.

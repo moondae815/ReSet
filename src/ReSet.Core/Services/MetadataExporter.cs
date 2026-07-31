@@ -133,8 +133,10 @@ namespace ReSet.Core.Services
         private static string? NormalizeCodeObjectDdlFolder(string? dependencyType) =>
             dependencyType?.Trim().ToUpperInvariant() switch
             {
-                "PROCEDURE" or "PROC" or "P" or "PC" or "SQL_STORED_PROCEDURE" => "procedures",
-                "FUNCTION" or "FN" or "IF" or "TF" or "FS" or "FT" or "SQL_SCALAR_FUNCTION" or "SQL_TABLE_VALUED_FUNCTION" => "functions",
+                "PROCEDURE" or "PROC" or "P" or "PC" or "SQL_STORED_PROCEDURE" or "CLR_STORED_PROCEDURE" => "procedures",
+                "FUNCTION" or "FN" or "IF" or "TF" or "FS" or "FT" or
+                    "SQL_SCALAR_FUNCTION" or "SQL_TABLE_VALUED_FUNCTION" or "SQL_INLINE_TABLE_VALUED_FUNCTION" or
+                    "CLR_SCALAR_FUNCTION" or "CLR_TABLE_VALUED_FUNCTION" => "functions",
                 _ => null
             };
 

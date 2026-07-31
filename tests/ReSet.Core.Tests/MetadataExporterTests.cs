@@ -374,6 +374,34 @@ namespace ReSet.Core.Tests
                 Type = "VIEW",
                 ReferencedDdlText = "CREATE VIEW dbo.VW_ShouldNotCopy AS SELECT 1 AS Id;"
             });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "IF_Inline",
+                Type = "SQL_INLINE_TABLE_VALUED_FUNCTION",
+                ReferencedDdlText = "CREATE FUNCTION dbo.IF_Inline() RETURNS TABLE AS RETURN SELECT 1 AS Id;"
+            });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "FS_ClrScalar",
+                Type = "CLR_SCALAR_FUNCTION",
+                ReferencedDdlText = "EXTERNAL NAME Assembly.[Type].Scalar;"
+            });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "FT_ClrTable",
+                Type = "CLR_TABLE_VALUED_FUNCTION",
+                ReferencedDdlText = "EXTERNAL NAME Assembly.[Type].Table;"
+            });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "PC_ClrProcedure",
+                Type = "CLR_STORED_PROCEDURE",
+                ReferencedDdlText = "EXTERNAL NAME Assembly.[Type].Procedure;"
+            });
 
             try
             {
@@ -387,7 +415,11 @@ namespace ReSet.Core.Tests
                 var rawDirectory = Path.Combine(outputRoot, "Objects", "dbo.USP_Portable.Procedure", "raw");
                 Assert.True(File.Exists(Path.Combine(rawDirectory, "object_definition.sql")));
                 Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.FN_X.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.IF_Inline.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.FS_ClrScalar.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.FT_ClrTable.sql")));
                 Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "procedures", "dbo.USP_Child.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "procedures", "dbo.PC_ClrProcedure.sql")));
                 Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.TBL_ShouldNotCopy.sql")));
                 Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.VW_ShouldNotCopy.sql")));
                 Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "sp_definition.sql")));
