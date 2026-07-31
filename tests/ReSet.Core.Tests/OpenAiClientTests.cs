@@ -52,6 +52,52 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task ChatAsync_WithGpt5MixedReasoningSummaries_ShouldPreserveNonEmptyReasoningText()
+        {
+            // Arrange: 실제 Responses API는 summary가 비어 있는 reasoning 항목을 함께 반환할 수 있다.
+            var responseJson = @"{
+                ""output"": [
+                    {
+                        ""type"": ""reasoning"",
+                        ""summary"": [
+                            { ""type"": ""summary_text"", ""text"": ""첫 번째 추론"" }
+                        ]
+                    },
+                    {
+                        ""type"": ""reasoning"",
+                        ""summary"": []
+                    },
+                    {
+                        ""type"": ""reasoning"",
+                        ""summary"": [
+                            { ""type"": ""summary_text"", ""text"": ""두 번째 추론"" }
+                        ]
+                    },
+                    {
+                        ""type"": ""reasoning"",
+                        ""summary"": []
+                    },
+                    {
+                        ""type"": ""message"",
+                        ""content"": [
+                            { ""type"": ""output_text"", ""text"": ""Gpt5 response"" }
+                        ]
+                    }
+                ]
+            }";
+            var spyHandler = new OpenAiRequestSpyHandler(responseJson);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", "gpt-5-model");
+
+            // Act
+            var result = await client.ChatAsync("System", "User", 0.7f, effort: "high");
+
+            // Assert
+            Assert.Equal("Gpt5 response", result.Content);
+            Assert.Equal("첫 번째 추론두 번째 추론", result.ThinkingText);
+        }
+
+        [Fact]
         public async Task ChatAsync_WithReasoningModel_ShouldForceTemperature1AndIncludeReasoningEffort()
         {
             // Arrange

@@ -118,6 +118,7 @@ namespace ReSet.Core.Services.Clients
                     {
                         string? resultText = null;
                         string? reasoningText = null;
+                        var reasoningBuilder = new StringBuilder();
 
                         foreach (var item in outputElem.EnumerateArray())
                         {
@@ -126,15 +127,13 @@ namespace ReSet.Core.Services.Clients
                                 var typeStr = typeElem.GetString();
                                 if (typeStr == "reasoning" && item.TryGetProperty("summary", out var summaryElem) && summaryElem.ValueKind == JsonValueKind.Array)
                                 {
-                                    var sb = new StringBuilder();
                                     foreach (var sumItem in summaryElem.EnumerateArray())
                                     {
                                         if (sumItem.TryGetProperty("type", out var sumType) && sumType.GetString() == "summary_text" && sumItem.TryGetProperty("text", out var textElem))
                                         {
-                                            sb.Append(textElem.GetString());
+                                            reasoningBuilder.Append(textElem.GetString());
                                         }
                                     }
-                                    reasoningText = sb.ToString();
                                 }
                                 else if (typeStr == "message" && item.TryGetProperty("content", out var contentElem) && contentElem.ValueKind == JsonValueKind.Array)
                                 {
@@ -149,6 +148,11 @@ namespace ReSet.Core.Services.Clients
                                     resultText = sb.ToString();
                                 }
                             }
+                        }
+
+                        if (reasoningBuilder.Length > 0)
+                        {
+                            reasoningText = reasoningBuilder.ToString();
                         }
 
                         if (!string.IsNullOrWhiteSpace(reasoningText))
