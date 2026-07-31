@@ -120,11 +120,23 @@ namespace ReSet.Core.Services
                 connectionString,
                 schema,
                 name);
-            var outputPaths = cacheObjectKey == null
-                ? null
-                : new OutputPathResolver(
-                    cacheObjectKey.Database,
-                    outputDirectory);
+            OutputPathResolver? outputPaths = null;
+            if (enableCache && cacheObjectKey != null)
+            {
+                try
+                {
+                    outputPaths = new OutputPathResolver(
+                        cacheObjectKey.Database,
+                        outputDirectory);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(
+                        ex,
+                        "[파이프라인] 캐시 출력 경로를 확인할 수 없어 캐시를 건너뜁니다 - SP: {SpName}",
+                        selectedOption);
+                }
+            }
 
             if (spDef.Warnings.Count > 0)
             {

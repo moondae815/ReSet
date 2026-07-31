@@ -75,7 +75,7 @@ public class OutputPathResolverTests
             "/tmp/output/Objects/dbo.usp_Settle.Procedure/raw/object_definition.sql",
             paths.ResolveCanonicalDdlPath(currentProcedure));
         Assert.Equal(
-            "/tmp/output/Objects/AuditDB/calc.FN_Fee.Function/raw/object_definition.sql",
+            "/tmp/output/External/AuditDB/Objects/calc.FN_Fee.Function/raw/object_definition.sql",
             paths.ResolveCanonicalDdlPath(externalFunction));
         Assert.Equal(
             "/tmp/output/External/AuditDB/Functions/calc.FN_Fee/raw/dependency-manifest.json",

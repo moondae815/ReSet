@@ -334,6 +334,66 @@ namespace ReSet.Core.Tests
             Assert.Equal(specMarkdown, resultSpec);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task RunPipelineAsync_InvalidCacheOutputDirectory_ContinuesPipeline(
+            bool enableCache)
+        {
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "PaymentDB",
+                    "dbo",
+                    "USP_NoCacheOutput",
+                    CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "USP_NoCacheOutput",
+                DdlText = "CREATE PROCEDURE dbo.USP_NoCacheOutput AS SELECT 1;"
+            };
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            _dbService.GetSpDetailsAsync(
+                    Arg.Any<string>(),
+                    spDef.Schema,
+                    spDef.Name,
+                    Arg.Any<int>())
+                .Returns(spDef);
+            _aiService.GenerateSpecificationAsync(
+                    spDef,
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = specMarkdown });
+            _aiService.ReviewSpecificationAsync(
+                    spDef,
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10,
+                    ScoreCrud = 10,
+                    ScoreInterface = 10,
+                    ScoreException = 10,
+                    ScoreReadability = 10
+                });
+
+            var result = await _orchestrator.RunPipelineAsync(
+                "connection_string",
+                spDef.Schema,
+                spDef.Name,
+                3,
+                "OpenAI",
+                "instructions",
+                isBatchMode: true,
+                outputDirectory: " ",
+                enableCache: enableCache);
+
+            Assert.Equal(specMarkdown, result.SpecMarkdown);
+        }
+
         [Fact]
         public async Task RunPipelineAsync_CacheHit_ReturnsCachedSpec()
         {

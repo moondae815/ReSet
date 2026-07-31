@@ -50,8 +50,9 @@ public sealed class OutputPathResolver
                 CanonicalDdlFileName)
             : Path.Combine(
                 OutputRoot,
-                "Objects",
+                "External",
                 SanitizeSegment(objectKey.Database),
+                "Objects",
                 objectDirectoryName,
                 "raw",
                 CanonicalDdlFileName);
