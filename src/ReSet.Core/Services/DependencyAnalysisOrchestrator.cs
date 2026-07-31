@@ -55,7 +55,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         cancellationToken.ThrowIfCancellationRequested();
 
         var execution = new ExecutionState(rootKey.Database);
-        await QueueOrReuseAsync(rootKey, 0, request, execution, cancellationToken);
+        await DiscoverAsync(rootKey, 0, request, execution, cancellationToken);
+        await ExecuteDiscoveredNodesAsync(request, execution, cancellationToken);
 
         var result = new CodeObjectPipelineResult
         {
@@ -67,7 +68,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         return result;
     }
 
-    private Task<AnalysisNode> QueueOrReuseAsync(
+    private async Task DiscoverAsync(
         CodeObjectKey key,
         int depth,
         DependencyAnalysisRequest request,
@@ -77,37 +78,12 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         cancellationToken.ThrowIfCancellationRequested();
         var node = execution.GetOrAddNode(key);
 
-        if (execution.Visiting.Contains(key))
+        if (!execution.Discovered.Add(key))
         {
-            return Task.FromResult(node);
+            return;
         }
 
-        if (execution.Tasks.TryGetValue(key, out var existingTask))
-        {
-            return existingTask;
-        }
-
-        var task = AnalyzeNodeAsync(key, depth, request, execution, cancellationToken);
-        execution.Tasks[key] = task;
-        return task;
-    }
-
-    private async Task<AnalysisNode> AnalyzeNodeAsync(
-        CodeObjectKey key,
-        int depth,
-        DependencyAnalysisRequest request,
-        ExecutionState execution,
-        CancellationToken cancellationToken)
-    {
-        // The task must be registered before a synchronously-completed metadata
-        // lookup can discover a cycle back to this key.
-        await Task.Yield();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var node = execution.GetOrAddNode(key);
         node.Status = AnalysisNodeStatus.Running;
-        node.AnalysisAttempts++;
-        execution.Visiting.Add(key);
 
         try
         {
@@ -126,17 +102,19 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             }
             catch (Exception exception)
             {
+                node.AnalysisAttempts++;
                 MarkFailed(node, exception, "메타데이터 수집");
-                return node;
+                return;
             }
 
             if (definition is null)
             {
+                node.AnalysisAttempts++;
                 MarkFailed(
                     node,
                     new InvalidOperationException("코드 객체 메타데이터가 비어 있습니다."),
                     "메타데이터 수집");
-                return node;
+                return;
             }
 
             foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
@@ -164,9 +142,40 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     continue;
                 }
 
-                await QueueOrReuseAsync(target, targetDepth, request, execution, cancellationToken);
+                await DiscoverAsync(target, targetDepth, request, execution, cancellationToken);
             }
 
+            node.Status = AnalysisNodeStatus.Queued;
+            execution.ExecutionOrder.Add(key);
+        }
+        catch (OperationCanceledException)
+        {
+            node.Status = AnalysisNodeStatus.Cancelled;
+            throw;
+        }
+        catch (Exception exception)
+        {
+            node.AnalysisAttempts++;
+            MarkFailed(node, exception, "의존성 그래프 처리");
+        }
+    }
+
+    private async Task ExecuteDiscoveredNodesAsync(
+        DependencyAnalysisRequest request,
+        ExecutionState execution,
+        CancellationToken cancellationToken)
+    {
+        foreach (var key in execution.ExecutionOrder)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var node = execution.GetOrAddNode(key);
+            if (node.Status != AnalysisNodeStatus.Queued)
+            {
+                continue;
+            }
+
+            node.Status = AnalysisNodeStatus.Running;
+            node.AnalysisAttempts++;
             try
             {
                 ReportProgress(request, execution, key);
@@ -174,7 +183,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 if (pipelineResult.SpDef is null)
                 {
                     MarkFailed(node, new InvalidOperationException("분석 파이프라인이 코드 객체 정의를 반환하지 않았습니다."), "분석 파이프라인");
-                    return node;
+                    continue;
                 }
 
                 node.Status = AnalysisNodeStatus.Succeeded;
@@ -197,22 +206,6 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             {
                 MarkFailed(node, exception, "분석 파이프라인");
             }
-
-            return node;
-        }
-        catch (OperationCanceledException)
-        {
-            node.Status = AnalysisNodeStatus.Cancelled;
-            throw;
-        }
-        catch (Exception exception)
-        {
-            MarkFailed(node, exception, "의존성 그래프 처리");
-            return node;
-        }
-        finally
-        {
-            execution.Visiting.Remove(key);
         }
     }
 
@@ -301,7 +294,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         {
             progress(new DependencyAnalysisProgress(
                 ++execution.PipelineStartCount,
-                execution.Nodes.Count,
+                execution.ExecutionOrder.Count,
                 key));
         }
         catch (Exception exception)
@@ -375,9 +368,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
         public string CurrentDatabase { get; }
         public Dictionary<CodeObjectKey, AnalysisNode> Nodes { get; } = new();
-        public Dictionary<CodeObjectKey, Task<AnalysisNode>> Tasks { get; } = new();
-        public HashSet<CodeObjectKey> Visiting { get; } = new();
+        public HashSet<CodeObjectKey> Discovered { get; } = new();
         public List<DependencyEdge> Edges { get; } = new();
+        public List<CodeObjectKey> ExecutionOrder { get; } = new();
         public List<CodeObjectAnalysisResult> AnalysisResults { get; } = new();
         public int PipelineStartCount { get; set; }
 

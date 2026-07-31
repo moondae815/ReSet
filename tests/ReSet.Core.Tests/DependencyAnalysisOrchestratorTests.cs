@@ -147,6 +147,36 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_ReportsFixedTotalAfterDiscoveringAllAnalysisTargets()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var firstChild = Key("FN_First", CodeObjectType.Function);
+        var secondChild = Key("FN_Second", CodeObjectType.Function);
+        var progress = new List<DependencyAnalysisProgress>();
+        var metadata = CreateMetadataService(
+            Definition(root, firstChild, secondChild),
+            Definition(firstChild),
+            Definition(secondChild));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        await sut.AnalyzeAsync(root, new DependencyAnalysisRequest
+        {
+            ConnectionString = "Server=(local);Database=PaymentDB",
+            MaxDepth = 3,
+            Provider = "OpenAI",
+            Instructions = "rules",
+            IsBatchMode = true,
+            Progress = progress.Add
+        });
+
+        Assert.Equal(3, progress.Count);
+        Assert.All(progress, item => Assert.Equal(3, item.Total));
+        Assert.Equal(new[] { firstChild, secondChild, root }, progress.Select(item => item.Key));
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum()
     {
         var rootA = Key("USP_A", CodeObjectType.Procedure);

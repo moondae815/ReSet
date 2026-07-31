@@ -41,3 +41,15 @@ dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj
 
 1. `AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts`를 추가했고, 진행 타입·콜백 속성 부재의 컴파일 실패를 확인했다.
 2. `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter FullyQualifiedName~ReportsEachCodeObjectBeforeItsPipelineStarts` — 1 통과, 0 실패.
+
+## Fix 2: 전체 발견 뒤 고정 진행 합계
+
+- `AnalyzeAsync`를 발견 단계와 실행 단계로 분리했다.
+- 발견 단계는 직접 메타데이터로 전체 그래프와 자식 우선 실행 순서를 먼저 수집하고, 순환·중복·최대 깊이·외부 DB 제외 상태를 기존처럼 유지한다.
+- 실행 단계는 수집 완료된 실행 순서를 순회하며 고정된 `ExecutionOrder.Count`를 진행 콜백의 total로 사용한다.
+- `AnalyzeAsync_ReportsFixedTotalAfterDiscoveringAllAnalysisTargets`는 형제 노드가 있는 그래프에서 모든 진행 이벤트가 처음부터 `3`이라는 동일 total을 보고하는지 검증한다.
+
+### Fix 2 TDD·검증
+
+1. 고정 total 테스트는 기존 혼합 탐색/실행 구현에서 첫 이벤트가 `1/2`로 보고되어 실패함을 확인했다.
+2. 발견/실행 분리 후 `DependencyAnalysisOrchestratorTests` focused 실행 9건이 통과했다.
