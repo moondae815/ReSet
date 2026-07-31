@@ -26,6 +26,7 @@ public sealed class AnalysisNode
 
     public CodeObjectKey Key { get; }
     public AnalysisNodeStatus Status { get; set; } = AnalysisNodeStatus.Queued;
+    public int AnalysisAttempts { get; set; }
     public string? Error { get; set; }
     public string? SpecPath { get; set; }
 }
@@ -53,7 +54,15 @@ public sealed class CodeObjectPipelineResult
     public string? ThinkingText { get; set; }
     public List<AnalysisNode> Nodes { get; set; } = new();
     public List<DependencyEdge> DependencyEdges { get; set; } = new();
+    public List<DependencyEdge> Edges
+    {
+        get => DependencyEdges;
+        set => DependencyEdges = value ?? new();
+    }
     public List<CodeObjectAnalysisResult> AnalysisResults { get; set; } = new();
+
+    public AnalysisNode GetNode(CodeObjectKey key) =>
+        Nodes.Single(node => node.Key == key);
 }
 
 public sealed class CodeObjectAnalysisResult
