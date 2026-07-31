@@ -2,6 +2,8 @@ using ReSet.Core.Models;
 
 namespace ReSet.Core.Services;
 
+public sealed record DependencyAnalysisProgress(int Current, int Total, CodeObjectKey Key);
+
 public sealed class DependencyAnalysisRequest
 {
     public string ConnectionString { get; init; } = string.Empty;
@@ -13,6 +15,7 @@ public sealed class DependencyAnalysisRequest
     public bool EnableCache { get; init; }
     public bool AllowExternalDatabaseConnections { get; init; }
     public DependencyArtifactMode DependencyArtifactMode { get; init; } = DependencyArtifactMode.Reference;
+    public Action<DependencyAnalysisProgress>? Progress { get; init; }
 }
 
 public delegate Task<CodeObjectPipelineResult> DependencyAnalysisPipelineRunner(

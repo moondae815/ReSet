@@ -28,4 +28,16 @@ dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj
 
 ## 우려 사항
 
-- 재귀 오케스트레이터가 의존 그래프를 동적으로 수집하므로 전체 객체 수는 분석 종료 시 확정된다. CLI는 확정된 노드 목록을 기준으로 `n/total. SP|UDF 객체명 분석 중` 상태를 출력한다.
+- 재귀 오케스트레이터가 의존 그래프를 동적으로 수집하므로 진행 이벤트의 `total`은 해당 이벤트 발생 시점까지 발견된 객체 수다.
+
+## Fix 1: 실시간 진행 UI와 무음 하위 파이프라인
+
+- `DependencyAnalysisRequest.Progress` 콜백과 `DependencyAnalysisProgress`를 추가했다. 각 객체의 검증 파이프라인 바로 전에 발생하므로 완료 후 상태를 재생하지 않는다.
+- CLI는 콜백마다 `n/total. SP|UDF 객체명 분석 중` 한 줄만 출력한다.
+- 재귀 분석 전용 `RecursiveAnalysisUserInteraction`은 하위 파이프라인의 상태, L1/L2, 경고, 오류 출력을 무음 처리한다. 대화형 L3 인간 검토와 DB 동기화 확인만 기존 UI에 위임한다.
+- 실패 노드는 분석 완료 뒤 `Markup.Escape` 처리된 경고와 빈 줄을 출력한다.
+
+### Fix 1 TDD·검증
+
+1. `AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts`를 추가했고, 진행 타입·콜백 속성 부재의 컴파일 실패를 확인했다.
+2. `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter FullyQualifiedName~ReportsEachCodeObjectBeforeItsPipelineStarts` — 1 통과, 0 실패.

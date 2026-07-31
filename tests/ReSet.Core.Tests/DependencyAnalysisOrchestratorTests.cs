@@ -100,6 +100,53 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var progress = new List<DependencyAnalysisProgress>();
+        var progressVisibleWhenPipelineStarts = new List<CodeObjectKey>();
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                if (progress.Any(item => item.Key == key))
+                {
+                    progressVisibleWhenPipelineStarts.Add(key);
+                }
+
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        await sut.AnalyzeAsync(root, new DependencyAnalysisRequest
+        {
+            ConnectionString = "Server=(local);Database=PaymentDB",
+            MaxDepth = 3,
+            Provider = "OpenAI",
+            Instructions = "rules",
+            IsBatchMode = true,
+            Progress = progress.Add
+        });
+
+        Assert.Collection(
+            progress,
+            item =>
+            {
+                Assert.Equal(child, item.Key);
+                Assert.Equal(1, item.Current);
+                Assert.Equal(2, item.Total);
+            },
+            item =>
+            {
+                Assert.Equal(root, item.Key);
+                Assert.Equal(2, item.Current);
+                Assert.Equal(2, item.Total);
+            });
+        Assert.Equal(new[] { child, root }, progressVisibleWhenPipelineStarts);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum()
     {
         var rootA = Key("USP_A", CodeObjectType.Procedure);

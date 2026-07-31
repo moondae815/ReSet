@@ -422,9 +422,24 @@ namespace ReSet.Cli
                 consolidatorEffort,
                 criticThresholdScore
             );
+            var recursiveOrchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                aiService,
+                validator,
+                new RecursiveAnalysisUserInteraction(userInteraction),
+                maxL2Attempts,
+                modelName,
+                null,
+                criticService,
+                consolidatorService,
+                actorEffort,
+                criticEffort,
+                consolidatorEffort,
+                criticThresholdScore
+            );
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
                 dbService,
-                orchestrator);
+                recursiveOrchestrator);
             ISettlementPolicyService policyService = new SettlementPolicyService(dbService, aiService);
 
             string instructions = "기본 마크다운 규칙을 적용하여 분석해 주세요.";
@@ -1422,11 +1437,12 @@ namespace ReSet.Cli
                     IsBatchMode = isBatchMode,
                     OutputDirectory = outputDirectory,
                     EnableCache = enableCache,
-                    DependencyArtifactMode = dependencyArtifactMode
+                    DependencyArtifactMode = dependencyArtifactMode,
+                    Progress = RenderDependencyAnalysisProgress
                 },
                 cancellationToken);
 
-            RenderDependencyAnalysisProgress(result);
+            RenderDependencyAnalysisFailures(result);
 
             var rootAnalysis = result.AnalysisResults
                 .FirstOrDefault(analysis => analysis.Key == rootKey);
@@ -1453,26 +1469,21 @@ namespace ReSet.Cli
             return configuredDatabase;
         }
 
-        private static void RenderDependencyAnalysisProgress(CodeObjectPipelineResult result)
+        private static void RenderDependencyAnalysisProgress(DependencyAnalysisProgress progress)
         {
-            var orderedNodes = result.Nodes
-                .OrderBy(node => node.Key.CanonicalName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var total = orderedNodes.Count;
+            var objectKind = progress.Key.Type == CodeObjectType.Function ? "UDF" : "SP";
+            var objectName = $"{progress.Key.Schema}.{progress.Key.Name}";
+            AnsiConsole.MarkupLine($"[grey]{progress.Current}/{progress.Total}. {objectKind} {Markup.Escape(objectName)} 분석 중[/]");
+        }
 
-            for (var index = 0; index < total; index++)
+        private static void RenderDependencyAnalysisFailures(CodeObjectPipelineResult result)
+        {
+            foreach (var node in result.Nodes.Where(node => node.Status == AnalysisNodeStatus.Failed))
             {
-                var node = orderedNodes[index];
-                var objectKind = node.Key.Type == CodeObjectType.Function ? "UDF" : "SP";
                 var objectName = $"{node.Key.Schema}.{node.Key.Name}";
-                AnsiConsole.MarkupLine($"[grey]{index + 1}/{total}. {objectKind} {Markup.Escape(objectName)} 분석 중[/]");
-
-                if (node.Status == AnalysisNodeStatus.Failed)
-                {
-                    var error = string.IsNullOrWhiteSpace(node.Error) ? "알 수 없는 오류" : node.Error;
-                    AnsiConsole.MarkupLine($"[yellow]경고:[/] {Markup.Escape(objectName)} 분석 실패 - {Markup.Escape(error)}");
-                    AnsiConsole.WriteLine();
-                }
+                var error = string.IsNullOrWhiteSpace(node.Error) ? "알 수 없는 오류" : node.Error;
+                AnsiConsole.MarkupLine($"[yellow]경고:[/] {Markup.Escape(objectName)} 분석 실패 - {Markup.Escape(error)}");
+                AnsiConsole.WriteLine();
             }
         }
 
@@ -1784,5 +1795,34 @@ CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
 
             Serilog.Log.Information("=== ReSet CLI 실행 로거 시작 ===");
         }
+    }
+
+    /// <summary>
+    /// 재귀 분석의 하위 파이프라인 상태를 콘솔에 출력하지 않는 UI 어댑터입니다.
+    /// 사람 검토가 필요한 대화형 L3 단계만 원래 UI에 위임합니다.
+    /// </summary>
+    internal sealed class RecursiveAnalysisUserInteraction : IVerificationUserInteraction
+    {
+        private readonly IVerificationUserInteraction _interactiveUserInteraction;
+
+        public RecursiveAnalysisUserInteraction(IVerificationUserInteraction interactiveUserInteraction)
+        {
+            _interactiveUserInteraction = interactiveUserInteraction;
+        }
+
+        public void NotifyStatus(string message) { }
+        public void NotifyError(string message) { }
+        public void NotifyWarnings(string selectedOption, List<string> warnings) { }
+        public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
+        public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) { }
+        public void NotifyValidationSuccess(string selectedOption) { }
+
+        public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown) =>
+            _interactiveUserInteraction.RequestHumanReviewAsync(selectedOption, specificationMarkdown);
+
+        public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
+            _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);
+
+        public IMultiProgressScope CreateProgressScope(string title) => NullProgressScope.Instance;
     }
 }

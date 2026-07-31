@@ -169,6 +169,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
             try
             {
+                ReportProgress(request, execution, key);
                 var pipelineResult = await _pipelineRunner(request, key, cancellationToken);
                 if (pipelineResult.SpDef is null)
                 {
@@ -285,6 +286,30 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         Log.Warning(exception, "[의존성 분석] {Stage} 실패 - 코드 객체: {ObjectKey}", stage, node.Key.CanonicalName);
     }
 
+    private static void ReportProgress(
+        DependencyAnalysisRequest request,
+        ExecutionState execution,
+        CodeObjectKey key)
+    {
+        var progress = request.Progress;
+        if (progress is null)
+        {
+            return;
+        }
+
+        try
+        {
+            progress(new DependencyAnalysisProgress(
+                ++execution.PipelineStartCount,
+                execution.Nodes.Count,
+                key));
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "[의존성 분석] 진행 상태 보고 실패 (계속 진행): {ObjectKey}", key.CanonicalName);
+        }
+    }
+
     private async Task PersistArtifactsAsync(
         CodeObjectKey rootKey,
         DependencyAnalysisRequest request,
@@ -354,6 +379,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         public HashSet<CodeObjectKey> Visiting { get; } = new();
         public List<DependencyEdge> Edges { get; } = new();
         public List<CodeObjectAnalysisResult> AnalysisResults { get; } = new();
+        public int PipelineStartCount { get; set; }
 
         public AnalysisNode GetOrAddNode(CodeObjectKey key)
         {
