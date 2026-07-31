@@ -26,14 +26,21 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task GetSpDetailsAsync_ReturnsSpDefinition()
         {
-            var snapshot = new DbSnapshot();
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
             var expectedDef = new SpDefinition { Name = "TestSp", Schema = "dbo" };
             snapshot.StoredProcedures.Add("dbo.TestSp", expectedDef);
             
             var service = new OfflineDbMetadataService(snapshot);
             var sp = await service.GetSpDetailsAsync("dummy", "dbo", "TestSp", 1, CancellationToken.None);
-            
+
             Assert.Equal(expectedDef, sp);
+            Assert.Equal(
+                CodeObjectKey.Create(
+                    "PaymentDB",
+                    "dbo",
+                    "TestSp",
+                    CodeObjectType.Procedure),
+                sp.ObjectKey);
         }
 
         [Fact]
@@ -64,6 +71,23 @@ namespace ReSet.Core.Tests
                 .GetCodeObjectDetailsAsync("ignored", key, 2);
 
             Assert.Equal("usp_Legacy", result.Name);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsAsync_DoesNotUseCurrentDatabaseLegacyEntryForExternalKey()
+        {
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
+            snapshot.StoredProcedures["dbo.usp_Legacy"] =
+                new SpDefinition { Name = "usp_Legacy" };
+            var externalKey = CodeObjectKey.Create(
+                "AuditDB",
+                "dbo",
+                "usp_Legacy",
+                CodeObjectType.Procedure);
+
+            await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+                new OfflineDbMetadataService(snapshot)
+                    .GetCodeObjectDetailsAsync("ignored", externalKey, 2));
         }
 
         [Fact]

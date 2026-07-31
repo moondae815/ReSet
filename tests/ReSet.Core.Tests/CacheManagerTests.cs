@@ -175,7 +175,8 @@ namespace ReSet.Core.Tests
                 key,
                 new SpDefinition { DdlText = "CREATE PROC" },
                 "somehash",
-                _paths);
+                _paths,
+                "# Spec");
             isValid = _cacheManager.IsCacheValid(key, "somehash", _paths);
             Assert.False(isValid); // Spec.md가 없어 false
         }
@@ -202,7 +203,8 @@ namespace ReSet.Core.Tests
                 key,
                 new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
                 hash,
-                _paths);
+                _paths,
+                specContent);
             var isValid = _cacheManager.IsCacheValid(key, hash, _paths);
 
             // Assert
@@ -228,7 +230,8 @@ namespace ReSet.Core.Tests
                 key,
                 new SpDefinition { DdlText = "CREATE PROC" },
                 "hash_a",
-                _paths);
+                _paths,
+                specContent);
             var isValid = _cacheManager.IsCacheValid(key, "hash_b", _paths); // 다른 해시로 조회
 
             // Assert
@@ -255,7 +258,8 @@ namespace ReSet.Core.Tests
                 procedureKey,
                 new SpDefinition { DdlText = "CREATE PROCEDURE dbo.Calculate AS SELECT 1;" },
                 "procedure-hash",
-                _paths);
+                _paths,
+                "# Spec");
             _cacheManager.UpdateCache(
                 functionKey,
                 new SpDefinition
@@ -264,7 +268,8 @@ namespace ReSet.Core.Tests
                     DdlText = "CREATE FUNCTION dbo.Calculate() RETURNS int AS BEGIN RETURN 1 END"
                 },
                 "function-hash",
-                _paths);
+                _paths,
+                "# Spec");
 
             Assert.True(_cacheManager.IsCacheValid(procedureKey, "procedure-hash", _paths));
             Assert.True(_cacheManager.IsCacheValid(functionKey, "function-hash", _paths));
@@ -294,7 +299,8 @@ namespace ReSet.Core.Tests
                 key,
                 new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Archive AS SELECT 1;" },
                 "external-hash",
-                _paths);
+                _paths,
+                "# Spec");
 
             Assert.True(_cacheManager.IsCacheValid(key, "external-hash", _paths));
             Assert.True(File.Exists(Path.Combine(
@@ -305,6 +311,86 @@ namespace ReSet.Core.Tests
                 "dbo.usp_Archive",
                 "docs",
                 "Spec.md")));
+        }
+
+        [Fact]
+        public void IsCacheValid_ReturnsFalseWhenAnotherDatabaseOverwritesSharedProcedureSpec()
+        {
+            var paymentKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "usp_Shared",
+                CodeObjectType.Procedure);
+            var auditKey = CodeObjectKey.Create(
+                "AuditDB",
+                "dbo",
+                "usp_Shared",
+                CodeObjectType.Procedure);
+            var paymentPaths = new OutputPathResolver(
+                paymentKey.Database,
+                _tempOutputDir);
+            var auditPaths = new OutputPathResolver(
+                auditKey.Database,
+                _tempOutputDir);
+            Assert.Equal(
+                paymentPaths.ResolveSpecPath(paymentKey),
+                auditPaths.ResolveSpecPath(auditKey));
+
+            var sharedSpecPath = paymentPaths.ResolveSpecPath(paymentKey);
+            Directory.CreateDirectory(Path.GetDirectoryName(sharedSpecPath)!);
+            File.WriteAllText(sharedSpecPath, "# PaymentDB specification");
+            _cacheManager.UpdateCache(
+                paymentKey,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Shared AS SELECT 'PaymentDB';" },
+                "payment-hash",
+                paymentPaths,
+                "# PaymentDB specification");
+
+            File.WriteAllText(sharedSpecPath, "# AuditDB specification");
+            _cacheManager.UpdateCache(
+                auditKey,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Shared AS SELECT 'AuditDB';" },
+                "audit-hash",
+                auditPaths,
+                "# AuditDB specification");
+
+            Assert.False(_cacheManager.IsCacheValid(
+                paymentKey,
+                "payment-hash",
+                paymentPaths));
+            Assert.True(_cacheManager.IsCacheValid(
+                auditKey,
+                "audit-hash",
+                auditPaths));
+        }
+
+        [Fact]
+        public void UpdateCache_BeforeDecoratedSpecIsSaved_ValidatesFinalSpecBody()
+        {
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "usp_Decorated",
+                CodeObjectType.Procedure);
+            var specBody = "## 개요\nPaymentDB specification";
+
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Decorated AS SELECT 1;" },
+                "decorated-hash",
+                _paths,
+                specBody);
+
+            var specPath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(
+                specPath,
+                "---\n종합 신뢰도: 100\n---\n\n> [!NOTE]\n> metadata\n\n" + specBody);
+
+            Assert.True(_cacheManager.IsCacheValid(
+                key,
+                "decorated-hash",
+                _paths));
         }
 
         [Fact]

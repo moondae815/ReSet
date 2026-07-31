@@ -4,6 +4,7 @@ namespace ReSet.Core.Models
 {
     public class SpDefinition
     {
+        public CodeObjectKey? ObjectKey { get; set; }
         public CodeObjectType ObjectType { get; set; } = CodeObjectType.Procedure;
         public FunctionReturnInfo? FunctionReturn { get; set; }
         public string Schema { get; set; } = "dbo";

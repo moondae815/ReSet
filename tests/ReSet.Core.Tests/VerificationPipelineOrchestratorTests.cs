@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -300,7 +301,17 @@ namespace ReSet.Core.Tests
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "1", "gpt-4", cacheManager, aiService, aiService, "high", "high", "default", 8);
 
-            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_CacheThrow", DdlText = "CREATE PROCEDURE USP_CacheThrow AS SELECT 1" };
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "PaymentDB",
+                    "dbo",
+                    "USP_CacheThrow",
+                    CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "USP_CacheThrow",
+                DdlText = "CREATE PROCEDURE USP_CacheThrow AS SELECT 1"
+            };
             dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheThrow", Arg.Any<int>())
                 .Returns(Task.FromResult(spDef));
 
@@ -336,7 +347,16 @@ namespace ReSet.Core.Tests
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "1", "gpt-4", cacheManager, aiService, aiService, "high", "high", "default", 8);
 
-            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_CacheTest" };
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "PaymentDB",
+                    "dbo",
+                    "USP_CacheTest",
+                    CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "USP_CacheTest"
+            };
             dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheTest", Arg.Any<int>())
                 .Returns(Task.FromResult(spDef));
 
@@ -370,6 +390,78 @@ namespace ReSet.Core.Tests
                 if (System.IO.Directory.Exists(outputDir)) System.IO.Directory.Delete(outputDir, true);
             }
         }
+
+        [Fact]
+        public async Task RunPipelineAsync_CacheUsesMetadataObjectKeyWhenInitialCatalogIsMissing()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var objectKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "USP_CacheDatabase",
+                CodeObjectType.Procedure);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = objectKey,
+                Schema = objectKey.Schema,
+                Name = objectKey.Name
+            };
+            dbService.GetSpDetailsAsync(
+                    Arg.Any<string>(),
+                    objectKey.Schema,
+                    objectKey.Name,
+                    3)
+                .Returns(spDef);
+            cacheManager.ComputeCompositeHash(spDef, 3).Returns("fake-hash");
+            cacheManager.IsCacheValid(
+                    Arg.Any<CodeObjectKey>(),
+                    "fake-hash",
+                    Arg.Any<OutputPathResolver>())
+                .Returns(true);
+
+            var outputDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "ReSet_CacheDatabase_" + Guid.NewGuid().ToString("N"));
+            var paths = new OutputPathResolver(objectKey.Database, outputDirectory);
+            var specPath = paths.ResolveSpecPath(objectKey);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(specPath, "## Cached Spec");
+
+            try
+            {
+                var orchestrator = new VerificationPipelineOrchestrator(
+                    dbService,
+                    aiService,
+                    new MechanicalValidator(),
+                    Substitute.For<IVerificationUserInteraction>(),
+                    cacheManager: cacheManager);
+
+                var result = await orchestrator.RunPipelineAsync(
+                    "Server=.;Integrated Security=true",
+                    objectKey.Schema,
+                    objectKey.Name,
+                    3,
+                    "OpenAI",
+                    "instructions",
+                    isBatchMode: true,
+                    outputDirectory,
+                    enableCache: true);
+
+                Assert.Equal("## Cached Spec", result.SpecMarkdown);
+                cacheManager.Received(1).IsCacheValid(
+                    objectKey,
+                    "fake-hash",
+                    Arg.Is<OutputPathResolver>(resolver =>
+                        resolver.ResolveSpecPath(objectKey) == specPath));
+            }
+            finally
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
+
         [Fact]
         public async Task RunPipelineAsync_L2Fails_TriggersRetry()
         {

@@ -98,5 +98,25 @@ namespace ReSet.Core.Tests
             Assert.Equal("AuditDB", result.LookupDatabase);
             Assert.Null(result.StoredDatabase);
         }
+
+        [Theory]
+        [InlineData("", "PaymentDB", "PaymentDB")]
+        [InlineData("ConfiguredDB", "ConnectedDB", "ConfiguredDB")]
+        public void ResolveCurrentDatabase_UsesConnectedDatabaseWhenCatalogIsMissing(
+            string configuredDatabase,
+            string connectedDatabase,
+            string expected)
+        {
+            var method = typeof(DbMetadataService).GetMethod(
+                "ResolveCurrentDatabase",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            Assert.NotNull(method);
+            Assert.Equal(
+                expected,
+                method.Invoke(
+                    null,
+                    new object[] { configuredDatabase, connectedDatabase }));
+        }
     }
 }

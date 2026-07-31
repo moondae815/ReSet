@@ -11,6 +11,8 @@ namespace ReSet.Core.Models
         public string SourceHash { get; set; } = string.Empty;
         public Dictionary<string, string> DependencyHashes { get; set; } = new();
         public string CompositeHash { get; set; } = string.Empty;
+        public string SpecContentHash { get; set; } = string.Empty;
+        public int SpecContentLength { get; set; }
     }
 
     public class CacheIndex

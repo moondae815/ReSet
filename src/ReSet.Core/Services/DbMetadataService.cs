@@ -356,12 +356,28 @@ namespace ReSet.Core.Services
             int maxDepth,
             CancellationToken cancellationToken = default)
         {
+            if (string.IsNullOrWhiteSpace(objectKey.Database))
+            {
+                var configuredDatabase =
+                    new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+                using var connection = new SqlConnection(connectionString);
+                await connection.OpenAsync(cancellationToken);
+                objectKey = CodeObjectKey.Create(
+                    ResolveCurrentDatabase(
+                        configuredDatabase,
+                        connection.Database),
+                    objectKey.Schema,
+                    objectKey.Name,
+                    objectKey.Type);
+            }
+
             var database = string.IsNullOrWhiteSpace(objectKey.Database) ? null : objectKey.Database;
             var typeCode = await GetCodeObjectTypeCodeAsync(
                 connectionString, database, objectKey.Schema, objectKey.Name, cancellationToken);
             var objectType = NormalizeCodeObjectType(typeCode);
             var objectDefinition = new SpDefinition
             {
+                ObjectKey = objectKey,
                 Schema = objectKey.Schema,
                 Name = objectKey.Name,
                 ObjectType = objectType
@@ -502,6 +518,22 @@ namespace ReSet.Core.Services
                 objectDefinition.Dependencies.Count,
                 objectDefinition.Warnings.Count);
             return objectDefinition;
+        }
+
+        private static string ResolveCurrentDatabase(
+            string configuredDatabase,
+            string connectedDatabase)
+        {
+            var database = string.IsNullOrWhiteSpace(configuredDatabase)
+                ? connectedDatabase
+                : configuredDatabase;
+            if (string.IsNullOrWhiteSpace(database))
+            {
+                throw new InvalidOperationException(
+                    "The current SQL Server database could not be determined.");
+            }
+
+            return database.Trim();
         }
 
         // 재귀 호출 메서드 (DFS)

@@ -77,8 +77,21 @@ namespace ReSet.Core.Services
                 if (cacheIndex != null &&
                     TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))
                 {
+                    var specFileContent = File.ReadAllText(specFilePath);
+                    var currentSpecContentHash =
+                        entry.SpecContentLength > 0 &&
+                        specFileContent.Length >= entry.SpecContentLength
+                            ? ComputeSha256(
+                                specFileContent[
+                                    (specFileContent.Length - entry.SpecContentLength)..])
+                            : string.Empty;
                     var isValid =
-                        (entry.ObjectKey == null || entry.ObjectKey == objectKey) &&
+                        entry.ObjectKey == objectKey &&
+                        !string.IsNullOrWhiteSpace(entry.SpecContentHash) &&
+                        string.Equals(
+                            entry.SpecContentHash,
+                            currentSpecContentHash,
+                            StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(
                             entry.CompositeHash,
                             compositeHash,
@@ -120,12 +133,14 @@ namespace ReSet.Core.Services
             CodeObjectKey objectKey,
             SpDefinition spDef,
             string compositeHash,
-            OutputPathResolver outputPaths)
+            OutputPathResolver outputPaths,
+            string specificationMarkdown)
         {
             if (objectKey == null ||
                 spDef == null ||
                 string.IsNullOrWhiteSpace(compositeHash) ||
-                outputPaths == null)
+                outputPaths == null ||
+                string.IsNullOrEmpty(specificationMarkdown))
             {
                 return;
             }
@@ -158,7 +173,9 @@ namespace ReSet.Core.Services
                         LastAnalyzed = DateTime.UtcNow,
                         SourceHash = ComputeSha256(spDef.DdlText),
                         DependencyHashes = depHashes,
-                        CompositeHash = compositeHash
+                        CompositeHash = compositeHash,
+                        SpecContentHash = ComputeSha256(specificationMarkdown),
+                        SpecContentLength = specificationMarkdown.Length
                     };
 
                     cacheIndex.Entries[cacheKey] = entry;
@@ -273,5 +290,6 @@ namespace ReSet.Core.Services
                 return sb.ToString();
             }
         }
+
     }
 }

@@ -13,6 +13,7 @@ namespace ReSet.Core.Services
             CodeObjectKey objectKey,
             SpDefinition spDef,
             string compositeHash,
-            OutputPathResolver outputPaths);
+            OutputPathResolver outputPaths,
+            string specificationMarkdown);
     }
 }

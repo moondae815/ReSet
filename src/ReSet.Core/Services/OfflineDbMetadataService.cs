@@ -38,20 +38,34 @@ namespace ReSet.Core.Services
             int maxDepth,
             CancellationToken cancellationToken = default)
         {
-            if (_snapshot.CodeObjects.TryGetValue(objectKey.CanonicalName, out var definition))
+            var resolvedKey = CodeObjectKey.Create(
+                string.IsNullOrWhiteSpace(objectKey.Database)
+                    ? _snapshot.Database
+                    : objectKey.Database,
+                objectKey.Schema,
+                objectKey.Name,
+                objectKey.Type);
+
+            if (_snapshot.CodeObjects.TryGetValue(resolvedKey.CanonicalName, out var definition))
             {
+                definition.ObjectKey = resolvedKey;
                 return Task.FromResult(definition);
             }
 
-            var legacyKey = $"{objectKey.Schema}.{objectKey.Name}";
-            if (objectKey.Type == CodeObjectType.Procedure &&
+            var legacyKey = $"{resolvedKey.Schema}.{resolvedKey.Name}";
+            if (resolvedKey.Type == CodeObjectType.Procedure &&
+                string.Equals(
+                    resolvedKey.Database,
+                    _snapshot.Database,
+                    StringComparison.OrdinalIgnoreCase) &&
                 _snapshot.StoredProcedures.TryGetValue(legacyKey, out definition))
             {
+                definition.ObjectKey = resolvedKey;
                 return Task.FromResult(definition);
             }
 
             throw new KeyNotFoundException(
-                $"Code object '{objectKey.CanonicalName}' not found in the offline snapshot.");
+                $"Code object '{resolvedKey.CanonicalName}' not found in the offline snapshot.");
         }
 
         public Task<List<Dictionary<string, object>>> GetTableDataPreviewAsync(string connectionString, string? database, string schema, string tableName, int limit = 100, CancellationToken cancellationToken = default)

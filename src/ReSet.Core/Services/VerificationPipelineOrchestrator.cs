@@ -86,15 +86,6 @@ namespace ReSet.Core.Services
             CancellationToken cancellationToken = default)
         {
             var selectedOption = $"{schema}.{name}";
-            var currentDatabase = ResolveCurrentDatabase(connectionString);
-            var cacheObjectKey = CodeObjectKey.Create(
-                currentDatabase,
-                schema,
-                name,
-                CodeObjectType.Procedure);
-            var outputPaths = new OutputPathResolver(
-                currentDatabase,
-                outputDirectory);
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
             var accumulatedThinking = new StringBuilder();
@@ -124,6 +115,17 @@ namespace ReSet.Core.Services
                 return (null, null, null, null);
             }
 
+            var cacheObjectKey = ResolveCacheObjectKey(
+                spDef,
+                connectionString,
+                schema,
+                name);
+            var outputPaths = cacheObjectKey == null
+                ? null
+                : new OutputPathResolver(
+                    cacheObjectKey.Database,
+                    outputDirectory);
+
             if (spDef.Warnings.Count > 0)
             {
                 _userInteraction.NotifyWarnings(selectedOption, spDef.Warnings);
@@ -131,7 +133,7 @@ namespace ReSet.Core.Services
 
             // 캐시 유효성 확인
             string? compositeHash = null;
-            if (enableCache)
+            if (enableCache && cacheObjectKey != null && outputPaths != null)
             {
                 try
                 {
@@ -169,6 +171,12 @@ namespace ReSet.Core.Services
                     Log.Warning(ex, "[파이프라인] 캐시 확인 중 예외 발생 (무시됨) - SP: {SpName}", selectedOption);
                     _userInteraction.NotifyStatus($"[yellow]경고: 캐시 확인 중 오류가 발생하여 무시하고 분석을 진행합니다. ({ex.Message})[/]");
                 }
+            }
+            else if (enableCache)
+            {
+                Log.Warning(
+                    "[파이프라인] 실제 데이터베이스를 확인할 수 없어 캐시를 건너뜁니다 - SP: {SpName}",
+                    selectedOption);
             }
 
             var feedbackHistory = new System.Collections.Generic.List<string>();
@@ -916,16 +924,20 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-
             // 배치 모드 성공 완료 시 캐시 업데이트
-            if (isBatchMode && enableCache && !string.IsNullOrEmpty(compositeHash))
+            if (isBatchMode &&
+                enableCache &&
+                cacheObjectKey != null &&
+                outputPaths != null &&
+                !string.IsNullOrEmpty(compositeHash))
             {
                 Log.Debug("[파이프라인] 배치 모드 캐시 업데이트 - SP: {SpName}", selectedOption);
                 _cacheManager.UpdateCache(
                     cacheObjectKey,
                     spDef,
                     compositeHash,
-                    outputPaths);
+                    outputPaths,
+                    specificationMarkdown);
             }
 
             // DB 역반영 여부 선택과 관계없이 항상 파일로 스크립트 저장
@@ -941,13 +953,17 @@ namespace ReSet.Core.Services
                     if (reviewResult.Decision == UserDecision.Approve)
                     {
                         // 최종 승인 시 캐시 업데이트
-                        if (enableCache && !string.IsNullOrEmpty(compositeHash))
+                        if (enableCache &&
+                            cacheObjectKey != null &&
+                            outputPaths != null &&
+                            !string.IsNullOrEmpty(compositeHash))
                         {
                             _cacheManager.UpdateCache(
                                 cacheObjectKey,
                                 spDef,
                                 compositeHash,
-                                outputPaths);
+                                outputPaths,
+                                specificationMarkdown);
                         }
 
                         // 생성된 DB 역반영 쿼리가 존재할 경우에만 동기화 수행 여부 묻기
@@ -1213,19 +1229,40 @@ namespace ReSet.Core.Services
             return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
         }
 
-        private static string ResolveCurrentDatabase(string connectionString)
+        private static CodeObjectKey? ResolveCacheObjectKey(
+            SpDefinition spDefinition,
+            string connectionString,
+            string schema,
+            string name)
+        {
+            if (spDefinition.ObjectKey != null)
+            {
+                return spDefinition.ObjectKey;
+            }
+
+            var database = ResolveCurrentDatabase(connectionString);
+            return string.IsNullOrWhiteSpace(database)
+                ? null
+                : CodeObjectKey.Create(
+                    database,
+                    schema,
+                    name,
+                    CodeObjectType.Procedure);
+        }
+
+        private static string? ResolveCurrentDatabase(string connectionString)
         {
             try
             {
                 var database = new SqlConnectionStringBuilder(connectionString)
                     .InitialCatalog;
                 return string.IsNullOrWhiteSpace(database)
-                    ? "__current__"
+                    ? null
                     : database;
             }
             catch (ArgumentException)
             {
-                return "__current__";
+                return null;
             }
         }
 
