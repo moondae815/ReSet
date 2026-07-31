@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using ReSet.Core.Models;
 using Serilog;
 
@@ -15,6 +16,9 @@ namespace ReSet.Core.Services
         private static readonly object FileLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+        private static readonly Regex ReferenceSectionRegex = new(
+            @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
+            RegexOptions.Compiled);
 
         public string ComputeCompositeHash(SpDefinition spDef, int maxDepth)
         {
@@ -77,7 +81,8 @@ namespace ReSet.Core.Services
                 if (cacheIndex != null &&
                     TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))
                 {
-                    var specFileContent = File.ReadAllText(specFilePath);
+                    var specFileContent = NormalizeSpecificationForCache(
+                        File.ReadAllText(specFilePath));
                     var currentSpecContentHash =
                         entry.SpecContentLength > 0 &&
                         specFileContent.Length >= entry.SpecContentLength
@@ -166,6 +171,8 @@ namespace ReSet.Core.Services
                         }
                     }
 
+                    var cacheableSpecification = NormalizeSpecificationForCache(
+                        specificationMarkdown);
                     var entry = new CacheEntry
                     {
                         ProcedureName = $"{objectKey.Schema}.{objectKey.Name}",
@@ -174,8 +181,8 @@ namespace ReSet.Core.Services
                         SourceHash = ComputeSha256(spDef.DdlText),
                         DependencyHashes = depHashes,
                         CompositeHash = compositeHash,
-                        SpecContentHash = ComputeSha256(specificationMarkdown),
-                        SpecContentLength = specificationMarkdown.Length
+                        SpecContentHash = ComputeSha256(cacheableSpecification),
+                        SpecContentLength = cacheableSpecification.Length
                     };
 
                     cacheIndex.Entries[cacheKey] = entry;
@@ -251,6 +258,13 @@ namespace ReSet.Core.Services
                 return true;
             }
 
+            if (cacheIndex.Entries.TryGetValue(
+                    objectKey.LegacyCanonicalName,
+                    out entry!))
+            {
+                return true;
+            }
+
             var legacyKey = $"{objectKey.Schema}.{objectKey.Name}";
             return objectKey.Type == CodeObjectType.Procedure &&
                 outputPaths.IsCurrentDatabase(objectKey.Database) &&
@@ -260,11 +274,17 @@ namespace ReSet.Core.Services
         private static string BuildDependencyKey(DependencyInfo dependency) =>
             string.Join(
                     ".",
-                    dependency.Database ?? string.Empty,
-                    dependency.Schema,
-                    dependency.Name,
-                    dependency.Type)
+                    CodeObjectKey.EncodeCanonicalSegment(dependency.Database ?? string.Empty),
+                    CodeObjectKey.EncodeCanonicalSegment(dependency.Schema),
+                    CodeObjectKey.EncodeCanonicalSegment(dependency.Name),
+                    CodeObjectKey.EncodeCanonicalSegment(dependency.Type))
                 .ToUpperInvariant();
+
+        private static string NormalizeSpecificationForCache(string specificationMarkdown) =>
+            ReferenceSectionRegex.Replace(
+                    specificationMarkdown ?? string.Empty,
+                    string.Empty)
+                .TrimEnd();
 
         private static JsonSerializerOptions CreateJsonOptions()
         {

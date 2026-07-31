@@ -117,9 +117,16 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var dependencyName = string.IsNullOrEmpty(dependency.Database)
-                    ? $"{dependency.Schema}.{dependency.Name}"
-                    : $"{dependency.Database}.{dependency.Schema}.{dependency.Name}";
+                var dependencyName = string.Join(
+                    ".",
+                    new[]
+                    {
+                        dependency.Database,
+                        dependency.Schema,
+                        dependency.Name
+                    }
+                    .Where(segment => !string.IsNullOrWhiteSpace(segment))
+                    .Select(segment => OutputPathResolver.EncodePathSegment(segment!)));
                 var folder = Path.Combine(rawDirectory, "ddl", folderName);
                 Directory.CreateDirectory(folder);
                 await File.WriteAllTextAsync(

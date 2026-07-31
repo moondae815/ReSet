@@ -26,7 +26,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.EnableCache,
                 cancellationToken,
                 directDependenciesOnly: true,
-                includeExternalCodeObjects: request.AllowExternalDatabaseConnections),
+                includeExternalCodeObjects: true),
             new MetadataExporter(),
             new MechanicalValidator())
     {
@@ -78,7 +78,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         cancellationToken.ThrowIfCancellationRequested();
         var node = execution.GetOrAddNode(key);
 
-        if (!execution.Discovered.Add(key))
+        if (!execution.TryRegisterDepth(key, depth))
         {
             return;
         }
@@ -131,7 +131,16 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
                 if (targetDepth > request.MaxDepth)
                 {
-                    Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                    if (!execution.HasDepthAtMost(target, request.MaxDepth))
+                    {
+                        Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                    }
+                    continue;
+                }
+
+                if (target.Type == CodeObjectType.Unresolved)
+                {
+                    Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다.");
                     continue;
                 }
 
@@ -146,7 +155,10 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             }
 
             node.Status = AnalysisNodeStatus.Queued;
-            execution.ExecutionOrder.Add(key);
+            if (!execution.ExecutionOrder.Contains(key))
+            {
+                execution.ExecutionOrder.Add(key);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -186,6 +198,12 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     continue;
                 }
 
+                if (string.IsNullOrWhiteSpace(pipelineResult.SpecMarkdown))
+                {
+                    MarkFailed(node, new InvalidOperationException("분석 파이프라인이 유효한 명세서를 반환하지 않았습니다."), "분석 파이프라인");
+                    continue;
+                }
+
                 node.Status = AnalysisNodeStatus.Succeeded;
                 execution.AnalysisResults.Add(new CodeObjectAnalysisResult
                 {
@@ -214,25 +232,51 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         CodeObjectKey sourceKey) =>
         definition.Dependencies.Where(dependency =>
             dependency.SourceObjectKey == sourceKey &&
-            TryParseCodeObjectType(dependency.Type, out _));
+            (TryParseCodeObjectType(dependency.Type, out _) ||
+             IsUnresolvedExternalDependency(dependency, sourceKey.Database)));
 
     private static CodeObjectKey? CreateDependencyKey(
         DependencyInfo dependency,
         string currentDatabase)
     {
-        if (!TryParseCodeObjectType(dependency.Type, out var type) ||
-            string.IsNullOrWhiteSpace(dependency.Schema) ||
+        if (string.IsNullOrWhiteSpace(dependency.Schema) ||
             string.IsNullOrWhiteSpace(dependency.Name))
         {
             return null;
         }
 
+        var dependencyDatabase = string.IsNullOrWhiteSpace(dependency.Database)
+            ? currentDatabase
+            : dependency.Database;
+        var type = TryParseCodeObjectType(dependency.Type, out var parsedType)
+            ? parsedType
+            : IsUnresolvedExternalDependency(dependency, currentDatabase)
+                ? CodeObjectType.Unresolved
+                : (CodeObjectType?)null;
+        if (type is null)
+        {
+            return null;
+        }
+
         return CodeObjectKey.Create(
-            string.IsNullOrWhiteSpace(dependency.Database) ? currentDatabase : dependency.Database,
+            dependencyDatabase,
             dependency.Schema,
             dependency.Name,
-            type);
+            type.Value);
     }
+
+    private static bool IsUnresolvedExternalDependency(
+        DependencyInfo dependency,
+        string currentDatabase) =>
+        string.Equals(
+            dependency.Type?.Trim(),
+            "UNKNOWN",
+            StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(dependency.Database) &&
+        !string.Equals(
+            dependency.Database,
+            currentDatabase,
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseCodeObjectType(string? dependencyType, out CodeObjectType type)
     {
@@ -243,6 +287,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             case "P":
             case "PC":
             case "SQL_STORED_PROCEDURE":
+            case "CLR_STORED_PROCEDURE":
                 type = CodeObjectType.Procedure;
                 return true;
             case "FUNCTION":
@@ -253,6 +298,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             case "FT":
             case "SQL_SCALAR_FUNCTION":
             case "SQL_TABLE_VALUED_FUNCTION":
+            case "SQL_INLINE_TABLE_VALUED_FUNCTION":
+            case "CLR_SCALAR_FUNCTION":
+            case "CLR_TABLE_VALUED_FUNCTION":
                 type = CodeObjectType.Function;
                 return true;
             default:
@@ -313,12 +361,10 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         {
             var paths = new OutputPathResolver(rootKey.Database, request.OutputDirectory);
             var linker = new SpecificationLinker(paths, _validator);
-            foreach (var analysis in graph.AnalysisResults
-                         .OrderBy(result => result.Key.CanonicalName, StringComparer.OrdinalIgnoreCase))
+            foreach (var analysis in graph.AnalysisResults)
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 var node = graph.Nodes.SingleOrDefault(candidate => candidate.Key == analysis.Key);
-                if (node?.Status != AnalysisNodeStatus.Succeeded)
+                if (node is null)
                 {
                     continue;
                 }
@@ -327,21 +373,55 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 node.DdlPath = paths.ResolveCanonicalDdlPath(analysis.Key);
                 analysis.SpecPath = node.SpecPath;
                 analysis.DdlPath = node.DdlPath;
-                analysis.SpecMarkdown = await linker.UpdateReferencesAsync(
-                    analysis.Key,
-                    analysis.SpecMarkdown ?? string.Empty,
-                    graph,
-                    cancellationToken);
+            }
 
-                try
+            bool statusChanged;
+            do
+            {
+                statusChanged = false;
+                foreach (var analysis in graph.AnalysisResults)
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(node.SpecPath)!);
-                    await File.WriteAllTextAsync(node.SpecPath, analysis.SpecMarkdown, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var node = graph.Nodes.Single(candidate => candidate.Key == analysis.Key);
+                    if (node.Status != AnalysisNodeStatus.Succeeded)
+                    {
+                        continue;
+                    }
+
+                    analysis.SpecMarkdown = await linker.UpdateReferencesAsync(
+                        analysis.Key,
+                        analysis.SpecMarkdown ?? string.Empty,
+                        graph,
+                        cancellationToken);
+
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(node.SpecPath!)!);
+                        await File.WriteAllTextAsync(
+                            node.SpecPath!,
+                            BuildPersistedSpecification(analysis),
+                            cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        MarkFailed(node, ex, "명세서 파일 저장");
+                        statusChanged = true;
+                        Log.Warning(ex, "[의존성 분석] 명세서 파일 저장 실패 (계속 진행): {ObjectKey}", analysis.Key.CanonicalName);
+                    }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+            }
+            while (statusChanged);
+
+            foreach (var analysis in graph.AnalysisResults)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var node = graph.Nodes.Single(candidate => candidate.Key == analysis.Key);
+                if (node.Status != AnalysisNodeStatus.Succeeded)
                 {
-                    Log.Warning(ex, "[의존성 분석] 명세서 파일 저장 실패 (계속 진행): {ObjectKey}", analysis.Key.CanonicalName);
+                    continue;
                 }
+
+                await PersistThinkingAsync(analysis, paths, cancellationToken);
 
                 await _metadataExporter.ExportCodeObjectArtifactsAsync(
                     analysis.Definition,
@@ -362,17 +442,86 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         }
     }
 
+    private static string BuildPersistedSpecification(CodeObjectAnalysisResult analysis)
+    {
+        if (analysis.Review is null)
+        {
+            return analysis.SpecMarkdown ?? string.Empty;
+        }
+
+        var review = analysis.Review;
+        return $"""
+            ---
+            종합 신뢰도: {review.NormalizedScore} # 100점 만점 기준 AI 최종 신뢰도
+            정합성 점수: {review.ScoreAccuracy}/10 # SQL 대비 기능 정합성
+            CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
+            인터페이스 점수: {review.ScoreInterface}/10 # 파라미터 및 반환셋 정합성
+            가독성 점수: {review.ScoreReadability}/10 # 코드 가독성 및 표준 준수
+            예외처리 점수: {review.ScoreException}/10 # 트랜잭션 격리 및 에러 처리
+            ---
+
+            > **AI 최종 신뢰도**: {review.NormalizedScore}/100점
+
+            {analysis.SpecMarkdown}
+            """;
+    }
+
+    private static async Task PersistThinkingAsync(
+        CodeObjectAnalysisResult analysis,
+        OutputPathResolver paths,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(analysis.ThinkingText))
+        {
+            return;
+        }
+
+        try
+        {
+            var thinkingPath = Path.Combine(
+                paths.ResolveDocsDirectory(analysis.Key),
+                "Thinking.md");
+            await File.WriteAllTextAsync(
+                thinkingPath,
+                "# AI 추론 과정 로그 (Thinking Process Log)\n\n---\n\n" +
+                analysis.ThinkingText,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warning(
+                ex,
+                "[의존성 분석] 추론 로그 저장 실패 (계속 진행): {ObjectKey}",
+                analysis.Key.CanonicalName);
+        }
+    }
+
     private sealed class ExecutionState
     {
         public ExecutionState(string currentDatabase) => CurrentDatabase = currentDatabase;
 
         public string CurrentDatabase { get; }
         public Dictionary<CodeObjectKey, AnalysisNode> Nodes { get; } = new();
-        public HashSet<CodeObjectKey> Discovered { get; } = new();
+        public Dictionary<CodeObjectKey, int> MinimumDepths { get; } = new();
         public List<DependencyEdge> Edges { get; } = new();
         public List<CodeObjectKey> ExecutionOrder { get; } = new();
         public List<CodeObjectAnalysisResult> AnalysisResults { get; } = new();
         public int PipelineStartCount { get; set; }
+
+        public bool TryRegisterDepth(CodeObjectKey key, int depth)
+        {
+            if (MinimumDepths.TryGetValue(key, out var minimumDepth) &&
+                minimumDepth <= depth)
+            {
+                return false;
+            }
+
+            MinimumDepths[key] = depth;
+            return true;
+        }
+
+        public bool HasDepthAtMost(CodeObjectKey key, int maxDepth) =>
+            MinimumDepths.TryGetValue(key, out var depth) && depth <= maxDepth;
 
         public AnalysisNode GetOrAddNode(CodeObjectKey key)
         {

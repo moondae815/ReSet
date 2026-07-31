@@ -93,8 +93,37 @@ public class OutputPathResolverTests
             CodeObjectType.Function);
 
         Assert.Equal(
-            "/tmp/output/External/Audit_DB/Functions/sales_team.FN_Calc/docs/Spec.md",
+            "/tmp/output/External/Audit%2FDB/Functions/sales%2Fteam.FN%2FCalc/docs/Spec.md",
             paths.ResolveSpecPath(key));
+    }
+
+    [Fact]
+    public void ResolveSpecPath_DoesNotCollideAfterEscapingIdentifierSegments()
+    {
+        var paths = new OutputPathResolver("PaymentDB", "/tmp/output");
+        var slashName = CodeObjectKey.Create(
+            "PaymentDB",
+            "dbo",
+            "A/B",
+            CodeObjectType.Procedure);
+        var underscoreName = CodeObjectKey.Create(
+            "PaymentDB",
+            "dbo",
+            "A_B",
+            CodeObjectType.Procedure);
+        var dottedSchema = CodeObjectKey.Create(
+            "PaymentDB",
+            "a.b",
+            "c",
+            CodeObjectType.Procedure);
+        var dottedName = CodeObjectKey.Create(
+            "PaymentDB",
+            "a",
+            "b.c",
+            CodeObjectType.Procedure);
+
+        Assert.NotEqual(paths.ResolveSpecPath(slashName), paths.ResolveSpecPath(underscoreName));
+        Assert.NotEqual(paths.ResolveSpecPath(dottedSchema), paths.ResolveSpecPath(dottedName));
     }
 
     [Fact]
@@ -108,7 +137,7 @@ public class OutputPathResolverTests
             CodeObjectType.Procedure);
 
         Assert.Equal(
-            "/tmp/output/External/__/Procedures/dbo.usp_External/docs/Spec.md",
+            "/tmp/output/External/%2E%2E/Procedures/dbo.usp_External/docs/Spec.md",
             paths.ResolveSpecPath(key));
     }
 

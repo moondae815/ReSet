@@ -411,6 +411,36 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void UpdateCache_BeforeRecursiveLinksAreSaved_ValidatesFinalLinkedSpec()
+        {
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "usp_Recursive",
+                CodeObjectType.Procedure);
+            var specBody = "## 개요\nPaymentDB specification";
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Recursive AS SELECT 1;" },
+                "recursive-hash",
+                _paths,
+                specBody);
+
+            var specPath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(
+                specPath,
+                specBody +
+                "\n\n## 참조 코드 객체\n\n" +
+                "- [dbo.FN_Fee](../../../Functions/dbo.FN_Fee/docs/Spec.md)\n");
+
+            Assert.True(_cacheManager.IsCacheValid(
+                key,
+                "recursive-hash",
+                _paths));
+        }
+
+        [Fact]
         public void CacheEntry_DeserializesLegacyProcedureNameWithoutObjectKey()
         {
             var entry = JsonSerializer.Deserialize<CacheEntry>(

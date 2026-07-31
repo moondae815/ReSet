@@ -612,6 +612,7 @@ namespace ReSet.Cli
                             analyzeReferencedCodeObjects,
                             dependencyAnalysisOrchestrator,
                             orchestrator,
+                            dbService,
                             connectionString,
                             database ?? string.Empty,
                             schema,
@@ -895,6 +896,7 @@ namespace ReSet.Cli
                                 analyzeSelectedReferences,
                                 dependencyAnalysisOrchestrator,
                                 orchestrator,
+                                dbService,
                                 connectionString,
                                 database ?? string.Empty,
                                 schema,
@@ -1392,10 +1394,11 @@ namespace ReSet.Cli
         }
 
 
-        private static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunConfiguredAnalysisAsync(
+        public static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunConfiguredAnalysisAsync(
             bool analyzeReferencedCodeObjects,
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator,
             VerificationPipelineOrchestrator verificationPipelineOrchestrator,
+            IDbMetadataService metadataService,
             string connectionString,
             string configuredDatabase,
             string schema,
@@ -1424,7 +1427,11 @@ namespace ReSet.Cli
                     cancellationToken);
             }
 
-            var database = ResolveAnalysisDatabase(connectionString, configuredDatabase);
+            var database = await ResolveAnalysisDatabaseAsync(
+                connectionString,
+                configuredDatabase,
+                metadataService,
+                cancellationToken);
             var rootKey = CodeObjectKey.Create(database, schema, name, CodeObjectType.Procedure);
             var result = await dependencyAnalysisOrchestrator.AnalyzeAsync(
                 rootKey,
@@ -1451,7 +1458,11 @@ namespace ReSet.Cli
                 : (rootAnalysis.SpecMarkdown, rootAnalysis.Definition, rootAnalysis.Review, rootAnalysis.ThinkingText);
         }
 
-        private static string ResolveAnalysisDatabase(string connectionString, string configuredDatabase)
+        private static async Task<string> ResolveAnalysisDatabaseAsync(
+            string connectionString,
+            string configuredDatabase,
+            IDbMetadataService metadataService,
+            CancellationToken cancellationToken)
         {
             try
             {
@@ -1463,7 +1474,25 @@ namespace ReSet.Cli
             }
             catch (ArgumentException)
             {
-                // 오프라인 모드는 연결 문자열 없이 설정 DB 이름을 사용합니다.
+                // 오프라인 모드는 연결 문자열이 없을 수 있습니다.
+            }
+
+            try
+            {
+                var metadataDatabase = await metadataService.GetCurrentDatabaseNameAsync(
+                    connectionString,
+                    cancellationToken);
+                if (!string.IsNullOrWhiteSpace(metadataDatabase))
+                {
+                    return metadataDatabase;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warning(
+                    ex,
+                    "분석 대상 데이터베이스 조회 실패 - 설정값으로 폴백: {ConfiguredDatabase}",
+                    configuredDatabase);
             }
 
             return configuredDatabase;

@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using ReSet.Core.Models;
 using Serilog;
@@ -258,17 +259,12 @@ namespace ReSet.Core.Services
                         var specFilePath = outputPaths.ResolveSpecPath(cacheObjectKey);
                         if (System.IO.File.Exists(specFilePath))
                         {
-                            var cachedSpec = await System.IO.File.ReadAllTextAsync(specFilePath, cancellationToken);
-                            var mockReview = new ReviewResult
-                            {
-                                HasDefects = false,
-                                ScoreAccuracy = 10,
-                                ScoreCrud = 10,
-                                ScoreInterface = 10,
-                                ScoreException = 10,
-                                ScoreReadability = 10
-                            };
-                            return (cachedSpec, spDef, mockReview, null);
+                            var cachedArtifact = await System.IO.File.ReadAllTextAsync(
+                                specFilePath,
+                                cancellationToken);
+                            var (cachedSpec, cachedReview) = ParseCachedSpecification(
+                                cachedArtifact);
+                            return (cachedSpec, spDef, cachedReview, null);
                         }
                     }
                     else
@@ -1373,6 +1369,74 @@ namespace ReSet.Core.Services
             }
 
             return requestedKey;
+        }
+
+        private static (string Specification, ReviewResult Review)
+            ParseCachedSpecification(string cachedArtifact)
+        {
+            var review = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10,
+                ScoreCrud = 10,
+                ScoreInterface = 10,
+                ScoreException = 10,
+                ScoreReadability = 10
+            };
+            var specification = cachedArtifact ?? string.Empty;
+            var yaml = Regex.Match(
+                specification,
+                @"\A---\r?\n(?<content>.*?)\r?\n---(?:\r?\n|\z)",
+                RegexOptions.Singleline);
+            if (yaml.Success)
+            {
+                var yamlContent = yaml.Groups["content"].Value;
+                review.ScoreAccuracy = ParseCachedScore(
+                    yamlContent,
+                    "정합성 점수",
+                    review.ScoreAccuracy);
+                review.ScoreCrud = ParseCachedScore(
+                    yamlContent,
+                    "CRUD 점수",
+                    review.ScoreCrud);
+                review.ScoreInterface = ParseCachedScore(
+                    yamlContent,
+                    "인터페이스 점수",
+                    review.ScoreInterface);
+                review.ScoreReadability = ParseCachedScore(
+                    yamlContent,
+                    "가독성 점수",
+                    review.ScoreReadability);
+                review.ScoreException = ParseCachedScore(
+                    yamlContent,
+                    "예외처리 점수",
+                    review.ScoreException);
+                specification = specification[yaml.Length..];
+            }
+
+            specification = Regex.Replace(
+                specification.TrimStart('\r', '\n'),
+                @"\A> \[!NOTE\][^\r\n]*(?:\r?\n)(?:>[^\r\n]*(?:\r?\n|$))*\s*",
+                string.Empty);
+            specification = Regex.Replace(
+                specification,
+                @"\A> \*\*AI 최종 신뢰도\*\*:[^\r\n]*(?:\r?\n|\z)\s*",
+                string.Empty);
+            return (specification.TrimStart('\r', '\n'), review);
+        }
+
+        private static int ParseCachedScore(
+            string yamlContent,
+            string label,
+            int fallback)
+        {
+            var match = Regex.Match(
+                yamlContent,
+                $@"(?m)^{Regex.Escape(label)}:\s*(?<score>\d+)/10\b");
+            return match.Success &&
+                   int.TryParse(match.Groups["score"].Value, out var score)
+                ? score
+                : fallback;
         }
 
         private static string? ResolveCurrentDatabase(string connectionString)

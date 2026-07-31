@@ -243,9 +243,10 @@ graph TD
 * **소프트 페일(Soft Fail)**: 특정 UDF의 스키마나 DDL 조회 시 권한 누락 등으로 발생한 비치명적 예외는 프로세스를 정지시키지 않고 `SpDefinition.Warnings` 리스트에 누적하여 스킵 처리합니다. 경고 내역은 TUI 경고 패널과 AI 프롬프트에 동시 전달되어 불완전한 메타데이터 기반 하에서도 차선의 명세서를 도출하도록 돕습니다.
 
 ### 4.1.1. 코드 객체 그래프 분석과 산출물 연결
-* **객체 단위 경계**: `AnalysisSettings:AnalyzeReferencedCodeObjects`가 활성화되면 `DependencyAnalysisOrchestrator`가 루트 SP와 직접·간접 참조 SP/UDF를 그래프로 발견합니다. `CodeObjectKey`의 대소문자 비구분 식별을 사용해 공유 객체는 한 번만 분석하며, 이미 발견한 객체는 재순회하지 않아 순환 호출을 차단합니다.
-* **상태 격리와 링크**: 객체별 메타데이터 수집이나 검증 실패는 그 노드에만 남기고 다음 객체를 계속 처리합니다. 깊이 제한과 외부 DB 차단도 노드별 사유로 보존하며, `SpecificationLinker`는 성공한 직접 참조 객체에만 상대 `Spec.md` 링크를 추가합니다.
-* **경로 및 DDL 정책**: `OutputPathResolver`는 현재 DB의 SP/UDF 산출물을 유형별 경로에, 외부 DB 객체는 `External/[Database]/`에 격리합니다. `Reference` 모드에서는 객체별 표준 DDL을 한 번만 저장하고 의존성 매니페스트가 경로를 가리키며, `PortableBundle` 모드에서만 참조 SP/UDF DDL 사본을 `raw/ddl/`에 추가합니다.
+* **객체 단위 경계**: `AnalysisSettings:AnalyzeReferencedCodeObjects`가 활성화되면 `DependencyAnalysisOrchestrator`가 루트 SP와 직접·간접 참조 SP/UDF를 그래프로 발견합니다. `CodeObjectKey`의 대소문자 비구분 식별을 사용해 공유 객체는 한 번만 분석하며, 여러 경로로 발견된 객체는 최소 깊이를 우선하고 순환 호출은 재실행하지 않습니다.
+* **상태 격리와 링크**: 객체별 메타데이터 수집·검증 또는 `Spec.md` 저장 실패는 그 노드에만 남기고 다음 객체를 계속 처리합니다. 깊이 제한과 외부 DB 차단도 노드별 사유로 보존하며, `SpecificationLinker`는 실제 문서 저장에 성공한 직접 참조 객체에만 상대 링크를 추가합니다. 성공한 하위 객체도 루트와 동일하게 최종 Critic 점수와 `Thinking.md`를 보존합니다.
+* **직접 메타데이터 경계**: 객체별 AI 분석에는 현재 DB의 직접 참조 테이블 스키마·설명·인덱스와 참조 SP/UDF DDL을 제공하되, 외부 DB 객체는 추가 메타데이터 조회 없이 `SkippedExternal` 상태만 남깁니다. 오프라인 재귀 분석의 루트 DB는 세션 설정이 아니라 스냅샷의 DB 식별자를 사용합니다.
+* **경로 및 DDL 정책**: `OutputPathResolver`는 현재 DB의 SP/UDF 산출물을 유형별 경로에, 외부 DB 객체는 `External/[Database]/`에 격리합니다. 식별자 구성 요소와 파일명은 percent encoding으로 구분자·금지 문자 충돌을 방지합니다. `Reference` 모드에서는 객체별 표준 DDL을 한 번만 저장하고 의존성 매니페스트가 경로를 가리키며, `PortableBundle` 모드에서만 참조 SP/UDF DDL 사본을 `raw/ddl/`에 추가합니다.
 
 ### 4.2. MS_Description 확장 속성 맵핑 및 AI 보완
 * **한글 도메인 지식 맵핑 및 스키마 필터링**: 데이터베이스의 확장 속성인 `MS_Description`에 등록된 컬럼 주석과 테이블 설명을 상세 스키마 정보 테이블에 자동 맵핑하여 AI에 전달합니다. 추가적으로 컬럼의 Identity 여부, 기본값 정의(`DefaultValue`), 그리고 테이블 인덱스 메타데이터(인덱스명, 타입, Unique/PK 여부, 구성 컬럼)까지 함께 수집하여 전달함으로써 분석의 정확도를 높입니다. 특히, AST 분석에서 감지한 실제 참조 컬럼(`ReferencedColumnsPerTable`), PK/FK 컬럼, 인덱스 구성 컬럼만 상세 스키마 Markdown 테이블에 선별적으로 노출(KeepCols 필터링)하여 불필요한 스키마 주입에 따른 프롬프트 비대화를 차단합니다. 이 정보들은 코드 분석 시 단순 영문 약어(예: `STAT_CD`)의 업무상 의미(예: `상태코드`)를 직관적으로 해석하게 돕습니다.

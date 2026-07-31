@@ -582,6 +582,102 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunPipelineAsync_CacheHit_ReturnsUndecoratedBodyAndPreservesReviewScores()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                aiService,
+                new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(),
+                "1",
+                "gpt-4",
+                cacheManager,
+                aiService,
+                aiService);
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "USP_CachedDecorated",
+                CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = key.Schema,
+                Name = key.Name
+            };
+            dbService.GetSpDetailsAsync(
+                    Arg.Any<string>(),
+                    key.Schema,
+                    key.Name,
+                    Arg.Any<int>())
+                .Returns(definition);
+            cacheManager.ComputeCompositeHash(definition, 3).Returns("hash");
+            cacheManager.IsCacheValid(
+                    key,
+                    "hash",
+                    Arg.Any<OutputPathResolver>())
+                .Returns(true);
+            var outputRoot = Path.Combine(
+                Path.GetTempPath(),
+                $"ReSet-CachedDecorated-{Guid.NewGuid():N}");
+            var specPath = new OutputPathResolver(key.Database, outputRoot)
+                .ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(
+                specPath,
+                """
+                ---
+                종합 신뢰도: 78
+                정합성 점수: 7/10
+                CRUD 점수: 8/10
+                인터페이스 점수: 9/10
+                가독성 점수: 8/10
+                예외처리 점수: 7/10
+                ---
+
+                > [!NOTE]
+                > **문서 작성일시**: 2026-07-31
+                > **분석 AI 정보**: OpenAI
+
+                ## 개요
+                cached body
+
+                ## 참조 코드 객체
+
+                - 직접 참조하는 코드 객체가 없습니다.
+                """);
+
+            try
+            {
+                var result = await orchestrator.RunPipelineAsync(
+                    "connection_string",
+                    key.Schema,
+                    key.Name,
+                    3,
+                    "OpenAI",
+                    "rules",
+                    isBatchMode: true,
+                    outputRoot,
+                    enableCache: true);
+
+                Assert.StartsWith("## 개요", result.SpecMarkdown);
+                Assert.DoesNotContain("종합 신뢰도", result.SpecMarkdown);
+                Assert.DoesNotContain("[!NOTE]", result.SpecMarkdown);
+                Assert.Equal(7, result.Review?.ScoreAccuracy);
+                Assert.Equal(8, result.Review?.ScoreCrud);
+                Assert.Equal(9, result.Review?.ScoreInterface);
+                Assert.Contains("## 참조 코드 객체", result.SpecMarkdown);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_CacheUsesMetadataObjectKeyWhenInitialCatalogIsMissing()
         {
             var dbService = Substitute.For<IDbMetadataService>();

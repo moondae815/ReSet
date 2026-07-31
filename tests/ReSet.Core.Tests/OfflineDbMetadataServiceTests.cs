@@ -145,6 +145,54 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GetCodeObjectDetailsDirectAsync_PreservesDirectSchemaAndReferencedDdlContext()
+        {
+            var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "usp_Root", CodeObjectType.Procedure);
+            var tableDependency = new DependencyInfo
+            {
+                SourceObjectKey = rootKey,
+                Schema = "dbo",
+                Name = "Payments",
+                Type = "USER_TABLE",
+                Description = "결제 원장",
+                Columns = new List<ColumnInfo>
+                {
+                    new() { ColumnName = "PaymentId", DataType = "bigint" }
+                },
+                Indexes = new List<TableIndexInfo>
+                {
+                    new() { IndexName = "PK_Payments", IsPrimaryKey = true }
+                }
+            };
+            var functionDependency = new DependencyInfo
+            {
+                SourceObjectKey = rootKey,
+                Schema = "dbo",
+                Name = "FN_Fee",
+                Type = "SQL_SCALAR_FUNCTION",
+                ReferencedDdlText = "CREATE FUNCTION dbo.FN_Fee() RETURNS int AS BEGIN RETURN 1 END"
+            };
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
+            snapshot.CodeObjects[rootKey.CanonicalName] = new SpDefinition
+            {
+                ObjectKey = rootKey,
+                Schema = rootKey.Schema,
+                Name = rootKey.Name,
+                Dependencies = new List<DependencyInfo> { tableDependency, functionDependency }
+            };
+
+            var result = await new OfflineDbMetadataService(snapshot)
+                .GetCodeObjectDetailsDirectAsync("ignored", rootKey);
+
+            var table = Assert.Single(result.Dependencies, dependency => dependency.Name == "Payments");
+            Assert.Equal("결제 원장", table.Description);
+            Assert.Equal("PaymentId", Assert.Single(table.Columns).ColumnName);
+            Assert.Equal("PK_Payments", Assert.Single(table.Indexes).IndexName);
+            var function = Assert.Single(result.Dependencies, dependency => dependency.Name == "FN_Fee");
+            Assert.StartsWith("CREATE FUNCTION", function.ReferencedDdlText);
+        }
+
+        [Fact]
         public async Task GetCodeObjectDetailsAsync_WhenMissing_IncludesCanonicalNameInException()
         {
             var key = CodeObjectKey.Create("PaymentDB", "dbo", "FN_Missing", CodeObjectType.Function);

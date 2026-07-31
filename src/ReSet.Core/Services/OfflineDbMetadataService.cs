@@ -54,7 +54,8 @@ namespace ReSet.Core.Services
                 objectKey.Name,
                 objectKey.Type);
 
-            if (_snapshot.CodeObjects.TryGetValue(resolvedKey.CanonicalName, out var definition))
+            if ((_snapshot.CodeObjects.TryGetValue(resolvedKey.CanonicalName, out var definition) ||
+                 _snapshot.CodeObjects.TryGetValue(resolvedKey.LegacyCanonicalName, out definition)))
             {
                 definition.ObjectKey = resolvedKey;
                 return Task.FromResult(definition);
@@ -123,11 +124,6 @@ namespace ReSet.Core.Services
                          dependency.Database,
                          resolvedKey.Database,
                          StringComparison.OrdinalIgnoreCase)))
-                .Select(dependency =>
-                {
-                    dependency.ReferencedDdlText = null;
-                    return dependency;
-                })
                 .ToList();
 
             return directDefinition;

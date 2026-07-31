@@ -23,4 +23,21 @@ public class CodeObjectKeyTests
 
         Assert.Equal(AnalysisNodeStatus.Queued, node.Status);
     }
+
+    [Fact]
+    public void CanonicalName_DoesNotCollideWhenDotsBelongToDifferentIdentifierSegments()
+    {
+        var dottedDatabase = CodeObjectKey.Create(
+            "a.b",
+            "c",
+            "Name",
+            CodeObjectType.Procedure);
+        var dottedSchema = CodeObjectKey.Create(
+            "a",
+            "b.c",
+            "Name",
+            CodeObjectType.Procedure);
+
+        Assert.NotEqual(dottedDatabase.CanonicalName, dottedSchema.CanonicalName);
+    }
 }

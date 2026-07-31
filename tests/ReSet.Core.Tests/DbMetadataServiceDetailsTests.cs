@@ -118,5 +118,25 @@ namespace ReSet.Core.Tests
                     null,
                     new object[] { configuredDatabase, connectedDatabase }));
         }
+
+        [Theory]
+        [InlineData("SQL_TABLE_VALUED_FUNCTION")]
+        [InlineData("SQL_INLINE_TABLE_VALUED_FUNCTION")]
+        [InlineData("CLR_TABLE_VALUED_FUNCTION")]
+        public void DirectDependencyClassification_TreatsTableValuedFunctionsAsCodeObjects(
+            string dependencyType)
+        {
+            var tableMethod = typeof(DbMetadataService).GetMethod(
+                "IsTableOrViewType",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var codeMethod = typeof(DbMetadataService).GetMethod(
+                "IsCodeObjectType",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            Assert.NotNull(tableMethod);
+            Assert.NotNull(codeMethod);
+            Assert.False((bool)tableMethod.Invoke(null, new object?[] { dependencyType })!);
+            Assert.True((bool)codeMethod.Invoke(null, new object?[] { dependencyType })!);
+        }
     }
 }

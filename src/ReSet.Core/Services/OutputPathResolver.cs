@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 using ReSet.Core.Models;
 
 namespace ReSet.Core.Services;
@@ -51,7 +52,7 @@ public sealed class OutputPathResolver
             : Path.Combine(
                 OutputRoot,
                 "External",
-                SanitizeSegment(objectKey.Database),
+                EncodePathSegment(objectKey.Database),
                 "Objects",
                 objectDirectoryName,
                 "raw",
@@ -69,6 +70,7 @@ public sealed class OutputPathResolver
         {
             CodeObjectType.Procedure => "Procedures",
             CodeObjectType.Function => "Functions",
+            CodeObjectType.Unresolved => "Unresolved",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(objectKey),
                 objectKey.Type,
@@ -76,15 +78,15 @@ public sealed class OutputPathResolver
         };
         var objectDirectoryName = string.Join(
             ".",
-            SanitizeSegment(objectKey.Schema),
-            SanitizeSegment(objectKey.Name));
+            EncodePathSegment(objectKey.Schema),
+            EncodePathSegment(objectKey.Name));
 
         return IsCurrentDatabase(objectKey.Database)
             ? Path.Combine(OutputRoot, objectTypeDirectory, objectDirectoryName)
             : Path.Combine(
                 OutputRoot,
                 "External",
-                SanitizeSegment(objectKey.Database),
+                EncodePathSegment(objectKey.Database),
                 objectTypeDirectory,
                 objectDirectoryName);
     }
@@ -92,9 +94,9 @@ public sealed class OutputPathResolver
     private string ResolveObjectDirectoryName(CodeObjectKey objectKey) =>
         string.Join(
             ".",
-            SanitizeSegment(objectKey.Schema),
-            SanitizeSegment(objectKey.Name),
-            SanitizeSegment(objectKey.Type.ToString()));
+            EncodePathSegment(objectKey.Schema),
+            EncodePathSegment(objectKey.Name),
+            EncodePathSegment(objectKey.Type.ToString()));
 
     internal bool IsCurrentDatabase(string database) =>
         string.Equals(
@@ -102,7 +104,7 @@ public sealed class OutputPathResolver
             database?.Trim(),
             StringComparison.OrdinalIgnoreCase);
 
-    private static string SanitizeSegment(string value)
+    internal static string EncodePathSegment(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -110,14 +112,30 @@ public sealed class OutputPathResolver
         }
 
         var trimmedValue = value.Trim();
-        if (trimmedValue is "." or "..")
+        var invalidCharacters = Path.GetInvalidFileNameChars();
+        var encoded = new StringBuilder();
+        foreach (var character in trimmedValue)
         {
-            return new string('_', trimmedValue.Length);
+            if (character == '.' ||
+                character == '%' ||
+                character == Path.DirectorySeparatorChar ||
+                character == Path.AltDirectorySeparatorChar ||
+                character == '/' ||
+                character == '\\' ||
+                invalidCharacters.Contains(character))
+            {
+                foreach (var valueByte in Encoding.UTF8.GetBytes(character.ToString()))
+                {
+                    encoded.Append('%');
+                    encoded.Append(valueByte.ToString("X2"));
+                }
+            }
+            else
+            {
+                encoded.Append(character);
+            }
         }
 
-        var invalidCharacters = Path.GetInvalidFileNameChars();
-        return new string(trimmedValue
-            .Select(character => invalidCharacters.Contains(character) ? '_' : character)
-            .ToArray());
+        return encoded.ToString();
     }
 }

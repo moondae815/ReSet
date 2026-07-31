@@ -210,7 +210,11 @@ namespace ReSet.Core.Services
             string database,
             string schema,
             string objectName) =>
-            $"{database}.{schema}.{objectName}";
+            string.Join(
+                ".",
+                CodeObjectKey.EncodeCanonicalSegment(database),
+                CodeObjectKey.EncodeCanonicalSegment(schema),
+                CodeObjectKey.EncodeCanonicalSegment(objectName));
 
         private static string ResolveDependencyDatabase(
             string? dependencyDatabase,
@@ -611,23 +615,90 @@ namespace ReSet.Core.Services
                     sourceObjectKey.Schema,
                     sourceObjectKey.Name,
                     cancellationToken);
-                dependencies.AddRange(directDependencies
-                    .Where(dependency =>
-                        includeExternalCodeObjects ||
-                        string.IsNullOrWhiteSpace(dependency.Database) ||
-                        string.Equals(
+
+                foreach (var dependency in directDependencies)
+                {
+                    var dependencyDatabase = ResolveDependencyDatabase(
+                        dependency.Database,
+                        sourceObjectKey);
+                    var isExternalDependency =
+                        !string.IsNullOrWhiteSpace(dependency.Database) &&
+                        !string.Equals(
                             dependency.Database,
                             sourceObjectKey.Database,
+                            StringComparison.OrdinalIgnoreCase);
+                    if (!includeExternalCodeObjects && isExternalDependency)
+                    {
+                        continue;
+                    }
+
+                    if (!isExternalDependency &&
+                        string.Equals(
+                            dependency.Type,
+                            "UNKNOWN",
                             StringComparison.OrdinalIgnoreCase))
-                    .Select(dependency => new DependencyInfo
-                {
-                    SourceObjectKey = sourceObjectKey,
-                    Database = dependency.Database,
-                    Schema = dependency.Schema,
-                    Name = dependency.Name,
-                    Type = dependency.Type,
-                    DiscoveryDepth = 1
-                }));
+                    {
+                        dependency.Type = await GetObjectTypeAsync(
+                            connectionString,
+                            dependencyDatabase,
+                            dependency.Schema,
+                            dependency.Name,
+                            cancellationToken);
+                    }
+
+                    var directDependency = new DependencyInfo
+                    {
+                        SourceObjectKey = sourceObjectKey,
+                        Database = dependency.Database,
+                        Schema = dependency.Schema,
+                        Name = dependency.Name,
+                        Type = dependency.Type,
+                        DiscoveryDepth = 1
+                    };
+
+                    try
+                    {
+                        if (!isExternalDependency &&
+                            IsTableOrViewType(directDependency.Type))
+                        {
+                            directDependency.Columns = await GetTableColumnsAsync(
+                                connectionString,
+                                dependencyDatabase,
+                                directDependency.Schema,
+                                directDependency.Name,
+                                cancellationToken);
+                            directDependency.Description = await GetTableDescriptionAsync(
+                                connectionString,
+                                dependencyDatabase,
+                                directDependency.Schema,
+                                directDependency.Name,
+                                cancellationToken);
+                            directDependency.Indexes = await GetTableIndexesAsync(
+                                connectionString,
+                                dependencyDatabase,
+                                directDependency.Schema,
+                                directDependency.Name,
+                                cancellationToken);
+                        }
+                        else if (!isExternalDependency &&
+                                 IsCodeObjectType(directDependency.Type))
+                        {
+                            directDependency.ReferencedDdlText = await GetObjectDdlAsync(
+                                connectionString,
+                                dependencyDatabase,
+                                directDependency.Schema,
+                                directDependency.Name,
+                                cancellationToken);
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        warnings.Add(
+                            $"[{dependencyDatabase}.{directDependency.Schema}.{directDependency.Name}] 직접 의존 메타데이터 수집 실패: {exception.Message}");
+                    }
+
+                    dependencies.Add(directDependency);
+                }
             }
             catch (Exception exception)
             {
@@ -635,6 +706,15 @@ namespace ReSet.Core.Services
                 warnings.Add($"[{sourceObjectKey.CanonicalName}] 직접 의존성 정보 수집 실패: {exception.Message}");
             }
         }
+
+        private static bool IsTableOrViewType(string? dependencyType) =>
+            !IsCodeObjectType(dependencyType) &&
+            (dependencyType?.Contains("TABLE", StringComparison.OrdinalIgnoreCase) == true ||
+             dependencyType?.Contains("VIEW", StringComparison.OrdinalIgnoreCase) == true);
+
+        private static bool IsCodeObjectType(string? dependencyType) =>
+            dependencyType?.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase) == true ||
+            dependencyType?.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase) == true;
 
         // 재귀 호출 메서드 (DFS)
         private async Task GatherDependenciesRecursiveAsync(

@@ -3,6 +3,8 @@ using System.IO;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 using ReSet.Cli;
+using ReSet.Core.Models;
+using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
@@ -35,6 +37,35 @@ namespace ReSet.Core.Tests
             Assert.True(result.IsBatchMode);
         }
 
+        [Fact]
+        public async Task RunConfiguredAnalysisAsync_UsesOfflineSnapshotDatabaseForRecursiveRoot()
+        {
+            var snapshot = new DbSnapshot { Database = "SnapshotDB" };
+            var metadata = new OfflineDbMetadataService(snapshot);
+            var dependencyOrchestrator = new CapturingDependencyAnalysisOrchestrator();
+
+            var result = await Program.RunConfiguredAnalysisAsync(
+                analyzeReferencedCodeObjects: true,
+                dependencyOrchestrator,
+                verificationPipelineOrchestrator: null!,
+                metadata,
+                connectionString: string.Empty,
+                configuredDatabase: "ConfiguredDB",
+                schema: "dbo",
+                name: "usp_Root",
+                maxDepth: 2,
+                provider: "OpenAI",
+                instructions: "rules",
+                isBatchMode: true,
+                outputDirectory: "/tmp/output",
+                enableCache: false,
+                DependencyArtifactMode.Reference,
+                CancellationToken.None);
+
+            Assert.Equal("SnapshotDB", dependencyOrchestrator.LastRootKey?.Database);
+            Assert.Equal("SnapshotDB", result.SpDef?.ObjectKey?.Database);
+        }
+
         private static IConfiguration LoadCliConfiguration()
         {
             var repositoryRoot = FindRepositoryRoot();
@@ -58,6 +89,42 @@ namespace ReSet.Core.Tests
             }
 
             throw new DirectoryNotFoundException("ReSet 저장소 루트를 찾을 수 없습니다.");
+        }
+
+        private sealed class CapturingDependencyAnalysisOrchestrator
+            : IDependencyAnalysisOrchestrator
+        {
+            public CodeObjectKey? LastRootKey { get; private set; }
+
+            public Task<CodeObjectPipelineResult> AnalyzeAsync(
+                CodeObjectKey rootKey,
+                DependencyAnalysisRequest request,
+                CancellationToken cancellationToken = default)
+            {
+                LastRootKey = rootKey;
+                var definition = new SpDefinition
+                {
+                    ObjectKey = rootKey,
+                    Schema = rootKey.Schema,
+                    Name = rootKey.Name
+                };
+                return Task.FromResult(new CodeObjectPipelineResult
+                {
+                    Nodes = new List<AnalysisNode>
+                    {
+                        new(rootKey) { Status = AnalysisNodeStatus.Succeeded }
+                    },
+                    AnalysisResults = new List<CodeObjectAnalysisResult>
+                    {
+                        new()
+                        {
+                            Key = rootKey,
+                            Definition = definition,
+                            SpecMarkdown = "# Spec"
+                        }
+                    }
+                });
+            }
         }
     }
 }

@@ -2,7 +2,10 @@ namespace ReSet.Core.Models;
 
 public sealed record CodeObjectKey(string Database, string Schema, string Name, CodeObjectType Type)
 {
-    public string CanonicalName => $"{Database}.{Schema}.{Name}.{Type}";
+    public string CanonicalName =>
+        $"{EncodeCanonicalSegment(Database)}.{EncodeCanonicalSegment(Schema)}.{EncodeCanonicalSegment(Name)}.{Type}";
+
+    public string LegacyCanonicalName => $"{Database}.{Schema}.{Name}.{Type}";
 
     public static CodeObjectKey Create(string database, string schema, string name, CodeObjectType type) =>
         new(database.Trim(), schema.Trim(), name.Trim(), type);
@@ -23,4 +26,8 @@ public sealed record CodeObjectKey(string Database, string Schema, string Name, 
         hash.Add(Type);
         return hash.ToHashCode();
     }
+
+    internal static string EncodeCanonicalSegment(string value) =>
+        value.Replace("%", "%25", StringComparison.Ordinal)
+            .Replace(".", "%2E", StringComparison.Ordinal);
 }
