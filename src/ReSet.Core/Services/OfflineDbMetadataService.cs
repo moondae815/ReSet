@@ -75,6 +75,12 @@ namespace ReSet.Core.Services
                 $"Code object '{resolvedKey.CanonicalName}' not found in the offline snapshot.");
         }
 
+        public Task<SpDefinition> GetCodeObjectDetailsDirectAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            CancellationToken cancellationToken = default) =>
+            GetCodeObjectDetailsAsync(connectionString, objectKey, 0, cancellationToken);
+
         public Task<List<Dictionary<string, object>>> GetTableDataPreviewAsync(string connectionString, string? database, string schema, string tableName, int limit = 100, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException("GetTableDataPreviewAsync is not supported in offline mode because table data is not cached in the snapshot.");

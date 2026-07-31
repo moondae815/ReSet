@@ -110,7 +110,8 @@ namespace ReSet.Core.Services
             bool isBatchMode,
             string outputDirectory,
             bool enableCache = false,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool directDependenciesOnly = false)
         {
             var (specMarkdown, spDef, review, thinkingText) = await RunCodeObjectPipelineCoreAsync(
                 connectionString,
@@ -121,7 +122,8 @@ namespace ReSet.Core.Services
                 isBatchMode,
                 outputDirectory,
                 enableCache,
-                cancellationToken);
+                cancellationToken,
+                directDependenciesOnly);
 
             return new CodeObjectPipelineResult
             {
@@ -141,7 +143,8 @@ namespace ReSet.Core.Services
             bool isBatchMode,
             string outputDirectory,
             bool enableCache,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool directDependenciesOnly)
         {
             var selectedOption = $"{key.Schema}.{key.Name}";
             var objectKind = key.Type == CodeObjectType.Function ? "UDF" : "SP";
@@ -159,8 +162,10 @@ namespace ReSet.Core.Services
             _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - DB 메타데이터 및 의존성 분석 중 (최대 깊이: {maxDepth}단계)...");
             try
             {
-                spDef = await _dbService.GetCodeObjectDetailsAsync(connectionString, key, maxDepth, cancellationToken);
-                if (spDef == null && key.Type == CodeObjectType.Procedure)
+                spDef = directDependenciesOnly
+                    ? await _dbService.GetCodeObjectDetailsDirectAsync(connectionString, key, cancellationToken)
+                    : await _dbService.GetCodeObjectDetailsAsync(connectionString, key, maxDepth, cancellationToken);
+                if (spDef == null && !directDependenciesOnly && key.Type == CodeObjectType.Procedure)
                 {
                     // Preserve compatibility with legacy metadata adapters while the
                     // common code-object query remains the primary entry point.

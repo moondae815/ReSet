@@ -22,7 +22,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.IsBatchMode,
                 request.OutputDirectory,
                 request.EnableCache,
-                cancellationToken))
+                cancellationToken,
+                directDependenciesOnly: true))
     {
         ArgumentNullException.ThrowIfNull(pipelineOrchestrator);
     }
@@ -102,10 +103,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             SpDefinition definition;
             try
             {
-                definition = await _metadataService.GetCodeObjectDetailsAsync(
+                definition = await _metadataService.GetCodeObjectDetailsDirectAsync(
                     request.ConnectionString,
                     key,
-                    request.MaxDepth,
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -138,9 +138,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
                 execution.AddEdge(key, target, dependency.IsDynamicSqlCandidate);
                 var child = execution.GetOrAddNode(target);
-                var targetDepth = dependency.DiscoveryDepth > 0
-                    ? dependency.DiscoveryDepth
-                    : depth + 1;
+                var targetDepth = depth + 1;
 
                 if (targetDepth > request.MaxDepth)
                 {

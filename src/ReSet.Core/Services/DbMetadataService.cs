@@ -374,6 +374,32 @@ namespace ReSet.Core.Services
             int maxDepth,
             CancellationToken cancellationToken = default)
         {
+            return await GetCodeObjectDetailsCoreAsync(
+                connectionString,
+                objectKey,
+                maxDepth,
+                includeTransitiveDependencies: true,
+                cancellationToken);
+        }
+
+        public Task<SpDefinition> GetCodeObjectDetailsDirectAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            CancellationToken cancellationToken = default) =>
+            GetCodeObjectDetailsCoreAsync(
+                connectionString,
+                objectKey,
+                maxDepth: 1,
+                includeTransitiveDependencies: false,
+                cancellationToken);
+
+        private async Task<SpDefinition> GetCodeObjectDetailsCoreAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            int maxDepth,
+            bool includeTransitiveDependencies,
+            CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(objectKey.Database))
             {
                 objectKey = CodeObjectKey.Create(
@@ -460,32 +486,45 @@ namespace ReSet.Core.Services
                     objectKey.Name)
             };
 
-            // 2.5 최상위 코드 객체 내 동적 SQL 의존성 선행 분석
-            await ResolveDynamicSqlDependenciesAsync(
-                connectionString,
-                database,
-                objectKey,
-                objectDefinition.DdlText,
-                1,
-                visited,
-                objectDefinition.Dependencies,
-                objectDefinition.Warnings,
-                cancellationToken);
-            
-            // 3. 재귀 수집 시작
-            Log.Information("[DbMetadata] 재귀 의존성 탐색(DFS) 시작 - 객체: {ObjectFullName}", objectFullName);
-            await GatherDependenciesRecursiveAsync(
-                connectionString,
-                database,
-                objectKey.Schema,
-                objectKey.Name,
-                objectKey,
-                1,
-                maxDepth,
-                visited,
-                objectDefinition.Dependencies,
-                objectDefinition.Warnings,
-                cancellationToken);
+            if (includeTransitiveDependencies)
+            {
+                // 2.5 최상위 코드 객체 내 동적 SQL 의존성 선행 분석
+                await ResolveDynamicSqlDependenciesAsync(
+                    connectionString,
+                    database,
+                    objectKey,
+                    objectDefinition.DdlText,
+                    1,
+                    visited,
+                    objectDefinition.Dependencies,
+                    objectDefinition.Warnings,
+                    cancellationToken);
+
+                // 3. 재귀 수집 시작
+                Log.Information("[DbMetadata] 재귀 의존성 탐색(DFS) 시작 - 객체: {ObjectFullName}", objectFullName);
+                await GatherDependenciesRecursiveAsync(
+                    connectionString,
+                    database,
+                    objectKey.Schema,
+                    objectKey.Name,
+                    objectKey,
+                    1,
+                    maxDepth,
+                    visited,
+                    objectDefinition.Dependencies,
+                    objectDefinition.Warnings,
+                    cancellationToken);
+            }
+            else
+            {
+                await GatherDirectDependenciesAsync(
+                    connectionString,
+                    database,
+                    objectKey,
+                    objectDefinition.Dependencies,
+                    objectDefinition.Warnings,
+                    cancellationToken);
+            }
 
             // 2차 정밀 정적 분석 재구동 (수집 완료된 실제 테이블 스키마 연동)
             try
@@ -548,6 +587,39 @@ namespace ReSet.Core.Services
             }
 
             return database.Trim();
+        }
+
+        private async Task GatherDirectDependenciesAsync(
+            string connectionString,
+            string? database,
+            CodeObjectKey sourceObjectKey,
+            List<DependencyInfo> dependencies,
+            List<string> warnings,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var directDependencies = await GetRawDependenciesAsync(
+                    connectionString,
+                    database,
+                    sourceObjectKey.Schema,
+                    sourceObjectKey.Name,
+                    cancellationToken);
+                dependencies.AddRange(directDependencies.Select(dependency => new DependencyInfo
+                {
+                    SourceObjectKey = sourceObjectKey,
+                    Database = dependency.Database,
+                    Schema = dependency.Schema,
+                    Name = dependency.Name,
+                    Type = dependency.Type,
+                    DiscoveryDepth = 1
+                }));
+            }
+            catch (Exception exception)
+            {
+                Log.Warning(exception, "[DbMetadata] 직접 의존성 수집 실패 (Soft Fail) - 객체: {ObjectKey}", sourceObjectKey.CanonicalName);
+                warnings.Add($"[{sourceObjectKey.CanonicalName}] 직접 의존성 정보 수집 실패: {exception.Message}");
+            }
         }
 
         // 재귀 호출 메서드 (DFS)

@@ -52,3 +52,46 @@
 
 - 실제 SQL Server 다중 DB 연결 환경은 제공되지 않아, 외부 DB 건너뛰기와 공통 파이프라인 위임은 단위 테스트 대역과 키/상태 계약으로 검증했다.
 - 기본 샌드박스는 VSTest 통신 소켓 바인딩을 허용하지 않아 전체 회귀는 승인된 실행 환경에서 수행했다.
+
+## Fix Round 1/5
+
+### 변경 사항
+
+- `DependencyInfo.DiscoveryDepth`가 각 직접 메타데이터 조회에서 다시 1로 시작하는 값을 신뢰하지 않고, 오케스트레이터가 전달한 실제 DFS 경로 깊이(`parent + 1`)로 깊이 제한을 판정하도록 수정했다.
+- `IDbMetadataService.GetCodeObjectDetailsDirectAsync`를 추가했다. 온라인 구현은 최상위 객체와 `sys.sql_expression_dependencies`의 직접 의존성만 수집하며, 직접 의존 객체의 DDL/하위 의존성에는 접근하지 않는다. 오프라인 구현은 기존 스냅샷 조회로 호환된다.
+- 재귀 그래프 오케스트레이터와 그 공통 검증 파이프라인 경로는 직접 메타데이터 조회를 사용한다. 따라서 외부 DB가 허용되지 않을 때 외부 객체는 `SkippedExternal`으로 기록된 뒤 추가 메타데이터/AI 실행 없이 종료된다.
+- `A → B → C`, `MaxDepth = 1`에서 C가 `SkippedDepth`이고 메타데이터/AI 실행 목록에 없는지, 외부 UDF가 `SkippedExternal` 사유와 함께 직접 조회 이후 추가 조회·AI 실행 없이 남는지 회귀 테스트를 추가했다.
+
+### RED/GREEN 증거
+
+1. RED — 직접 조회 계약 부재
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter FullyQualifiedName~DependencyAnalysisOrchestratorTests --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   `IDbMetadataService.GetCodeObjectDetailsDirectAsync` 미정의(`CS1061`)로 컴파일 실패했다.
+
+2. RED — 실제 경로 깊이
+
+   같은 집중 테스트에서 `AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum`은 기대 `SkippedDepth`, 실제 `Succeeded`로 실패했다. 이는 하위 호출에서 다시 1이 되는 `DependencyInfo.DiscoveryDepth`를 사용한 결함을 재현한다.
+
+3. GREEN — Task 5 집중 테스트
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter FullyQualifiedName~DependencyAnalysisOrchestratorTests --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   5건 통과, 실패 0건.
+
+4. GREEN — Core 전체 회귀
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   264건 통과, 실패 0건.
+
+### 우려
+
+- 온라인 직접 조회는 실제 SQL Server 인스턴스 없이 구현·대역 계약으로 검증했다. 직접 조회가 `sys.sql_expression_dependencies`에서 외부 DB 이름을 반환하는 실제 권한 환경의 통합 검증은 후속으로 필요하다.

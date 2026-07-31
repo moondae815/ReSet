@@ -76,10 +76,105 @@ public sealed class DependencyAnalysisOrchestratorTests
         Assert.Equal(AnalysisNodeStatus.Succeeded, result.GetNode(rootA).Status);
     }
 
-    private static DependencyAnalysisRequest Request() => new()
+    [Fact]
+    public async Task AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum()
+    {
+        var rootA = Key("USP_A", CodeObjectType.Procedure);
+        var childB = Key("USP_B", CodeObjectType.Procedure);
+        var grandchildC = Key("FN_C", CodeObjectType.Function);
+        var definitions = new Dictionary<CodeObjectKey, SpDefinition>
+        {
+            [rootA] = Definition(rootA, childB),
+            [childB] = Definition(childB, grandchildC),
+            [grandchildC] = Definition(grandchildC)
+        };
+        var metadataRequests = new List<CodeObjectKey>();
+        var pipelineRequests = new List<CodeObjectKey>();
+        var metadata = Substitute.For<IDbMetadataService>();
+        metadata.GetCodeObjectDetailsAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<int>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var key = callInfo.ArgAt<CodeObjectKey>(1);
+                metadataRequests.Add(key);
+                return Task.FromResult(definitions[key]);
+            });
+        metadata.GetCodeObjectDetailsDirectAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var key = callInfo.ArgAt<CodeObjectKey>(1);
+                metadataRequests.Add(key);
+                return Task.FromResult(definitions[key]);
+            });
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                pipelineRequests.Add(key);
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        var result = await sut.AnalyzeAsync(rootA, Request(maxDepth: 1), CancellationToken.None);
+
+        var skipped = result.GetNode(grandchildC);
+        Assert.Equal(AnalysisNodeStatus.SkippedDepth, skipped.Status);
+        Assert.Contains("최대 의존성 깊이(1)", skipped.Error);
+        Assert.DoesNotContain(grandchildC, metadataRequests);
+        Assert.DoesNotContain(grandchildC, pipelineRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_UsesDirectMetadataAndSkipsExternalObjectBeforeAdditionalLookup()
+    {
+        var rootA = Key("USP_A", CodeObjectType.Procedure);
+        var externalFunction = CodeObjectKey.Create("AuditDB", "dbo", "FN_Audit", CodeObjectType.Function);
+        var directMetadataRequests = new List<CodeObjectKey>();
+        var pipelineRequests = new List<CodeObjectKey>();
+        var metadata = Substitute.For<IDbMetadataService>();
+        metadata.GetCodeObjectDetailsAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<int>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<SpDefinition>(
+                new InvalidOperationException("재귀 메타데이터 조회를 사용하면 안 됩니다.")));
+        metadata.GetCodeObjectDetailsDirectAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var key = callInfo.ArgAt<CodeObjectKey>(1);
+                directMetadataRequests.Add(key);
+                return Task.FromResult(Definition(rootA, externalFunction));
+            });
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                pipelineRequests.Add(key);
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        var result = await sut.AnalyzeAsync(rootA, Request(), CancellationToken.None);
+
+        var skipped = result.GetNode(externalFunction);
+        Assert.Equal(AnalysisNodeStatus.SkippedExternal, skipped.Status);
+        Assert.Contains("외부 데이터베이스 연결", skipped.Error);
+        Assert.Equal(new[] { rootA }, directMetadataRequests);
+        Assert.DoesNotContain(externalFunction, pipelineRequests);
+    }
+
+    private static DependencyAnalysisRequest Request(int maxDepth = 3) => new()
     {
         ConnectionString = "Server=(local);Database=PaymentDB",
-        MaxDepth = 3,
+        MaxDepth = maxDepth,
         Provider = "OpenAI",
         Instructions = "rules",
         IsBatchMode = true,
@@ -115,6 +210,11 @@ public sealed class DependencyAnalysisOrchestratorTests
                 Arg.Any<string>(),
                 Arg.Any<CodeObjectKey>(),
                 Arg.Any<int>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult(definitionsByKey[callInfo.ArgAt<CodeObjectKey>(1)]));
+        metadata.GetCodeObjectDetailsDirectAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(definitionsByKey[callInfo.ArgAt<CodeObjectKey>(1)]));
         return metadata;
