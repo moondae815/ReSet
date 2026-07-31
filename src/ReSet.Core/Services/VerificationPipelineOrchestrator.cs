@@ -111,7 +111,8 @@ namespace ReSet.Core.Services
             string outputDirectory,
             bool enableCache = false,
             CancellationToken cancellationToken = default,
-            bool directDependenciesOnly = false)
+            bool directDependenciesOnly = false,
+            bool includeExternalCodeObjects = true)
         {
             var (specMarkdown, spDef, review, thinkingText) = await RunCodeObjectPipelineCoreAsync(
                 connectionString,
@@ -123,7 +124,8 @@ namespace ReSet.Core.Services
                 outputDirectory,
                 enableCache,
                 cancellationToken,
-                directDependenciesOnly);
+                directDependenciesOnly,
+                includeExternalCodeObjects);
 
             return new CodeObjectPipelineResult
             {
@@ -144,7 +146,8 @@ namespace ReSet.Core.Services
             string outputDirectory,
             bool enableCache,
             CancellationToken cancellationToken,
-            bool directDependenciesOnly)
+            bool directDependenciesOnly,
+            bool includeExternalCodeObjects)
         {
             var selectedOption = $"{key.Schema}.{key.Name}";
             var objectKind = key.Type == CodeObjectType.Function ? "UDF" : "SP";
@@ -163,7 +166,11 @@ namespace ReSet.Core.Services
             try
             {
                 spDef = directDependenciesOnly
-                    ? await _dbService.GetCodeObjectDetailsDirectAsync(connectionString, key, cancellationToken)
+                    ? await _dbService.GetCodeObjectDetailsDirectAsync(
+                        connectionString,
+                        key,
+                        cancellationToken,
+                        includeExternalCodeObjects)
                     : await _dbService.GetCodeObjectDetailsAsync(connectionString, key, maxDepth, cancellationToken);
                 if (spDef == null && !directDependenciesOnly && key.Type == CodeObjectType.Procedure)
                 {

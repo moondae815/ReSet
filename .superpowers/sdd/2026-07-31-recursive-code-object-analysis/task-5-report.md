@@ -95,3 +95,41 @@
 ### 우려
 
 - 온라인 직접 조회는 실제 SQL Server 인스턴스 없이 구현·대역 계약으로 검증했다. 직접 조회가 `sys.sql_expression_dependencies`에서 외부 DB 이름을 반환하는 실제 권한 환경의 통합 검증은 후속으로 필요하다.
+
+## Fix Round 2/5
+
+### 변경 사항
+
+- 직접 메타데이터 조회 계약에 `includeExternalCodeObjects` 선택 인자를 추가했다. 기본값은 기존 호환을 위해 `true`이며, 재귀 오케스트레이터의 공통 분석 파이프라인은 `AllowExternalDatabaseConnections` 설정을 전달한다.
+- `OfflineDbMetadataService.GetCodeObjectDetailsDirectAsync`는 스냅샷 정의를 JSON 깊은 복제로 분리한 뒤, 현재 `SourceObjectKey`의 직접 의존성만 남긴다. 외부 객체가 허용되지 않으면 외부 직접 의존성도 제거하고, 남는 직접 의존성의 `ReferencedDdlText` 및 이전 `RawPromptContext`를 제거한다.
+- 따라서 오프라인 스냅샷에 기존 재귀 수집 결과가 들어 있어도 외부 함수/그 하위 테이블 DDL이 재귀 분석 파이프라인의 AI 입력으로 전달되지 않는다.
+
+### RED/GREEN 증거
+
+1. RED
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter FullyQualifiedName~OfflineDbMetadataServiceTests --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   외부 코드 객체 포함 여부를 지정하는 인자가 없어 `CS1739` 컴파일 오류가 발생했다.
+
+2. GREEN — 집중 회귀
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~DependencyAnalysisOrchestratorTests|FullyQualifiedName~OfflineDbMetadataServiceTests" --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   13건 통과, 실패 0건. 새 테스트는 외부 함수와 하위 테이블의 재귀 DDL을 가진 스냅샷 정의에서 직접 결과가 외부 의존성·`RawPromptContext` 없이 반환되고 원본 스냅샷은 변경되지 않는지 검증한다.
+
+3. GREEN — Core 전체 회귀
+
+   ```text
+   dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --no-restore --verbosity minimal -m:1 --disable-build-servers
+   ```
+
+   265건 통과, 실패 0건.
+
+### 우려
+
+- 깊은 복제는 스냅샷 DTO의 직렬화 계약을 사용한다. DTO에 비직렬화 가능 필드가 추가될 경우 이 직접 조회 복제 경로도 함께 갱신해야 한다.

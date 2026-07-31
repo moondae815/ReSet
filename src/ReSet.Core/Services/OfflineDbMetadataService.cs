@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
@@ -78,8 +79,59 @@ namespace ReSet.Core.Services
         public Task<SpDefinition> GetCodeObjectDetailsDirectAsync(
             string connectionString,
             CodeObjectKey objectKey,
-            CancellationToken cancellationToken = default) =>
-            GetCodeObjectDetailsAsync(connectionString, objectKey, 0, cancellationToken);
+            CancellationToken cancellationToken = default,
+            bool includeExternalCodeObjects = true)
+        {
+            return GetDirectDefinitionAsync(
+                connectionString,
+                objectKey,
+                cancellationToken,
+                includeExternalCodeObjects);
+        }
+
+        private async Task<SpDefinition> GetDirectDefinitionAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            CancellationToken cancellationToken,
+            bool includeExternalCodeObjects)
+        {
+            var resolvedKey = CodeObjectKey.Create(
+                string.IsNullOrWhiteSpace(objectKey.Database)
+                    ? _snapshot.Database
+                    : objectKey.Database,
+                objectKey.Schema,
+                objectKey.Name,
+                objectKey.Type);
+            var definition = await GetCodeObjectDetailsAsync(
+                connectionString,
+                resolvedKey,
+                0,
+                cancellationToken);
+            var directDefinition = JsonSerializer.Deserialize<SpDefinition>(
+                JsonSerializer.Serialize(definition)) ??
+                throw new InvalidOperationException(
+                    $"Code object '{resolvedKey.CanonicalName}' could not be copied from the offline snapshot.");
+
+            directDefinition.ObjectKey = resolvedKey;
+            directDefinition.RawPromptContext = null;
+            directDefinition.Dependencies = directDefinition.Dependencies
+                .Where(dependency =>
+                    dependency.SourceObjectKey == resolvedKey &&
+                    (includeExternalCodeObjects ||
+                     string.IsNullOrWhiteSpace(dependency.Database) ||
+                     string.Equals(
+                         dependency.Database,
+                         resolvedKey.Database,
+                         StringComparison.OrdinalIgnoreCase)))
+                .Select(dependency =>
+                {
+                    dependency.ReferencedDdlText = null;
+                    return dependency;
+                })
+                .ToList();
+
+            return directDefinition;
+        }
 
         public Task<List<Dictionary<string, object>>> GetTableDataPreviewAsync(string connectionString, string? database, string schema, string tableName, int limit = 100, CancellationToken cancellationToken = default)
         {

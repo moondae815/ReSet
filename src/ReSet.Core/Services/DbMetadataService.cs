@@ -379,18 +379,21 @@ namespace ReSet.Core.Services
                 objectKey,
                 maxDepth,
                 includeTransitiveDependencies: true,
+                includeExternalCodeObjects: true,
                 cancellationToken);
         }
 
         public Task<SpDefinition> GetCodeObjectDetailsDirectAsync(
             string connectionString,
             CodeObjectKey objectKey,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default,
+            bool includeExternalCodeObjects = true) =>
             GetCodeObjectDetailsCoreAsync(
                 connectionString,
                 objectKey,
                 maxDepth: 1,
                 includeTransitiveDependencies: false,
+                includeExternalCodeObjects,
                 cancellationToken);
 
         private async Task<SpDefinition> GetCodeObjectDetailsCoreAsync(
@@ -398,6 +401,7 @@ namespace ReSet.Core.Services
             CodeObjectKey objectKey,
             int maxDepth,
             bool includeTransitiveDependencies,
+            bool includeExternalCodeObjects,
             CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(objectKey.Database))
@@ -523,6 +527,7 @@ namespace ReSet.Core.Services
                     objectKey,
                     objectDefinition.Dependencies,
                     objectDefinition.Warnings,
+                    includeExternalCodeObjects,
                     cancellationToken);
             }
 
@@ -595,6 +600,7 @@ namespace ReSet.Core.Services
             CodeObjectKey sourceObjectKey,
             List<DependencyInfo> dependencies,
             List<string> warnings,
+            bool includeExternalCodeObjects,
             CancellationToken cancellationToken)
         {
             try
@@ -605,7 +611,15 @@ namespace ReSet.Core.Services
                     sourceObjectKey.Schema,
                     sourceObjectKey.Name,
                     cancellationToken);
-                dependencies.AddRange(directDependencies.Select(dependency => new DependencyInfo
+                dependencies.AddRange(directDependencies
+                    .Where(dependency =>
+                        includeExternalCodeObjects ||
+                        string.IsNullOrWhiteSpace(dependency.Database) ||
+                        string.Equals(
+                            dependency.Database,
+                            sourceObjectKey.Database,
+                            StringComparison.OrdinalIgnoreCase))
+                    .Select(dependency => new DependencyInfo
                 {
                     SourceObjectKey = sourceObjectKey,
                     Database = dependency.Database,

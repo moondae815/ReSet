@@ -23,7 +23,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.OutputDirectory,
                 request.EnableCache,
                 cancellationToken,
-                directDependenciesOnly: true))
+                directDependenciesOnly: true,
+                includeExternalCodeObjects: request.AllowExternalDatabaseConnections))
     {
         ArgumentNullException.ThrowIfNull(pipelineOrchestrator);
     }
