@@ -1,0 +1,56 @@
+namespace ReSet.Core.Models;
+
+public sealed class FunctionReturnInfo
+{
+    public string DataType { get; set; } = string.Empty;
+    public bool IsTableValued { get; set; }
+    public List<ColumnInfo> Columns { get; set; } = new();
+}
+
+public enum AnalysisNodeStatus
+{
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    SkippedExternal,
+    SkippedDepth,
+    Cancelled
+}
+
+public sealed class AnalysisNode
+{
+    public AnalysisNode(CodeObjectKey key) => Key = key;
+
+    public CodeObjectKey Key { get; }
+    public AnalysisNodeStatus Status { get; set; } = AnalysisNodeStatus.Queued;
+    public string? Error { get; set; }
+    public string? SpecPath { get; set; }
+}
+
+public sealed class DependencyEdge
+{
+    public DependencyEdge(CodeObjectKey source, CodeObjectKey target)
+    {
+        Source = source;
+        Target = target;
+    }
+
+    public CodeObjectKey Source { get; }
+    public CodeObjectKey Target { get; }
+    public bool IsDynamicSqlCandidate { get; set; }
+}
+
+public sealed class CodeObjectPipelineResult
+{
+    public List<AnalysisNode> Nodes { get; set; } = new();
+    public List<DependencyEdge> DependencyEdges { get; set; } = new();
+    public List<CodeObjectAnalysisResult> AnalysisResults { get; set; } = new();
+}
+
+public sealed class CodeObjectAnalysisResult
+{
+    public CodeObjectKey Key { get; set; } = null!;
+    public SpDefinition Definition { get; set; } = new();
+    public FunctionReturnInfo? FunctionReturn { get; set; }
+}
