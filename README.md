@@ -14,7 +14,7 @@
 본 도구는 크게 **Stored Procedure 역공학(Analyzer)**과 **구현 코드/데이터 검증(Validator)**의 유기적인 결합을 통해, 레거시 DB 비즈니스 로직을 현대적인 아키텍처로 안전하게 마이그레이션하도록 돕는 강력한 개발자용 TUI 도구입니다.
 
 ### 1. 지능형 역공학 및 의존성 분석 (Analyzer)
-* **재귀적 코드 객체 분석**: `AnalyzeReferencedCodeObjects`를 활성화하면 루트 SP와 그 하위 SP/UDF를 코드 객체별로 분석·검증하여 각각의 `Spec.md`를 생성합니다. 대소문자를 구분하지 않는 DB·스키마·이름·유형 식별자로 공유 객체와 순환 참조를 한 번만 처리하고, 깊이 제한·외부 DB·개별 실패 사유는 그래프 상태와 상위 명세서에 남깁니다.
+* **재귀적 코드 객체 분석**: `AnalyzeReferencedCodeObjects`를 활성화하면 루트 SP와 그 하위 SP/UDF를 코드 객체별로 분석·검증하여 각각의 `Spec.md`를 생성합니다. 대소문자를 구분하지 않는 DB·스키마·이름·유형 식별자로 공유 객체와 순환 참조를 한 번만 처리하고, 깊이 제한·개별 실패 사유는 그래프 상태와 상위 명세서에 남깁니다. 현재 CLI는 외부 DB 객체를 `SkippedExternal`으로 건너뜁니다.
 * **스키마 및 주석 자동 수집 및 최적화 필터링**: 데이터 타입, Null 여부, PK/FK 관계뿐만 아니라 컬럼의 Identity, 기본값 정의, 테이블 인덱스 메타데이터 및 시스템 설명(`MS_Description`)까지 수집하여 도메인 맥락으로 자동 주입합니다. 특히 AST 분석 정보와 연동하여 실제 참조 컬럼, PK/FK, 인덱스 구성 컬럼만 상세 스키마에 선별적으로 노출함으로써 프롬프트 토큰을 획기적으로 절약합니다.
 * **T-SQL AST 정적 분석 (ScriptDom)**: Microsoft 공식 ScriptDom 분석기를 탑재하여 프로시저 파라미터 및 변수 수집, DDL의 CRUD 성격별(SELECT/INSERT/UPDATE/DELETE) 테이블 분류, 테이블별 물리 참조 컬럼(Referenced Columns) 및 Alias 정보 추출(Pre-pass 선행 별칭 스캔), 중첩 분기(IF/WHILE) 들여쓰기 요약, 동적 SQL 및 UDF/Linked Server 원격 참조 자동 감지, 그리고 접두사 없는 컬럼에 대해 실제 수집된 DB 스키마 메타데이터와 대조하는 2차 정밀 분석 재구동 및 스키마 대조 리졸버(Exact/Base-Name 매칭)를 지원합니다.
 * **다중 포맷 메타데이터 수출**: 분석에 사용된 원천 데이터를 구조화된 JSON, 프롬프트 텍스트, 그리고 개별 객체 단위 DDL/MD 파일 구조로 자동 분산 저장(Dump)합니다.
@@ -123,7 +123,7 @@ ReSet/
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
     ├── Objects/                     # 코드 객체별 표준 DDL(object_definition.sql) 보관소
-    └── External/[Database]/         # 외부 DB 객체가 허용되어 분석된 경우의 격리 산출물
+    └── External/[Database]/         # API 및 향후 외부 연결 허용 요청을 위한 표준 격리 경로 (현재 CLI는 사용하지 않음)
 ```
 
 ---
