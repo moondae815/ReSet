@@ -5,7 +5,7 @@
 [![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20mlx%20%7C%20Z.ai-orange.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#)
 
-본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
+본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)와 사용자 정의 함수(UDF)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
 
 ---
 
@@ -14,7 +14,7 @@
 본 도구는 크게 **Stored Procedure 역공학(Analyzer)**과 **구현 코드/데이터 검증(Validator)**의 유기적인 결합을 통해, 레거시 DB 비즈니스 로직을 현대적인 아키텍처로 안전하게 마이그레이션하도록 돕는 강력한 개발자용 TUI 도구입니다.
 
 ### 1. 지능형 역공학 및 의존성 분석 (Analyzer)
-* **재귀적 하이브리드 의존성 추적**: 깊이 우선 탐색(DFS) 방식으로 SP가 참조하는 테이블, 뷰, UDF 및 타 SP를 재귀 추적하여 전체 의존성 구조를 파악합니다. (권한 오류 발생 시 경고 기록 후 안전한 Soft Fail 제공)
+* **재귀적 코드 객체 분석**: `AnalyzeReferencedCodeObjects`를 활성화하면 루트 SP와 그 하위 SP/UDF를 코드 객체별로 분석·검증하여 각각의 `Spec.md`를 생성합니다. 대소문자를 구분하지 않는 DB·스키마·이름·유형 식별자로 공유 객체와 순환 참조를 한 번만 처리하고, 깊이 제한·외부 DB·개별 실패 사유는 그래프 상태와 상위 명세서에 남깁니다.
 * **스키마 및 주석 자동 수집 및 최적화 필터링**: 데이터 타입, Null 여부, PK/FK 관계뿐만 아니라 컬럼의 Identity, 기본값 정의, 테이블 인덱스 메타데이터 및 시스템 설명(`MS_Description`)까지 수집하여 도메인 맥락으로 자동 주입합니다. 특히 AST 분석 정보와 연동하여 실제 참조 컬럼, PK/FK, 인덱스 구성 컬럼만 상세 스키마에 선별적으로 노출함으로써 프롬프트 토큰을 획기적으로 절약합니다.
 * **T-SQL AST 정적 분석 (ScriptDom)**: Microsoft 공식 ScriptDom 분석기를 탑재하여 프로시저 파라미터 및 변수 수집, DDL의 CRUD 성격별(SELECT/INSERT/UPDATE/DELETE) 테이블 분류, 테이블별 물리 참조 컬럼(Referenced Columns) 및 Alias 정보 추출(Pre-pass 선행 별칭 스캔), 중첩 분기(IF/WHILE) 들여쓰기 요약, 동적 SQL 및 UDF/Linked Server 원격 참조 자동 감지, 그리고 접두사 없는 컬럼에 대해 실제 수집된 DB 스키마 메타데이터와 대조하는 2차 정밀 분석 재구동 및 스키마 대조 리졸버(Exact/Base-Name 매칭)를 지원합니다.
 * **다중 포맷 메타데이터 수출**: 분석에 사용된 원천 데이터를 구조화된 JSON, 프롬프트 텍스트, 그리고 개별 객체 단위 DDL/MD 파일 구조로 자동 분산 저장(Dump)합니다.
@@ -110,7 +110,7 @@ ReSet/
     │       └── validation/          # 검증 문서(docs) 및 원본(raw) 리포트 격리 저장소
     ├── logs/
     ├── cleansing/                   # AI가 생성한 메타데이터 보정(Cleansing) SQL 스크립트 모음
-    ├── Procedures/                  # SP 개별 분석 산출물이 격리 보존되는 최상위 폴더
+    ├── Procedures/                  # SP 개별 분석 산출물
     │   └── [Schema].[SP이름]/       # SP 식별자별 전용 하위 폴더
     │       ├── docs/
     │       │   ├── Spec.md                 # 최종 비즈니스 명세서
@@ -121,6 +121,9 @@ ReSet/
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
+    ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
+    ├── Objects/                     # 코드 객체별 표준 DDL(object_definition.sql) 보관소
+    └── External/[Database]/         # 외부 DB 객체가 허용되어 분석된 경우의 격리 산출물
 ```
 
 ---
@@ -139,7 +142,7 @@ ReSet/
     "Server": "localhost",          // SQL Server 주소
     "Database": "Northwind",        // 대상 데이터베이스 이름
     "MaxDependencyDepth": 3,        // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
-    "OfflineSnapshotPath": "./output/offline_snapshot.json" // [설정] 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
+    "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
     "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai")
@@ -194,13 +197,17 @@ ReSet/
     "MinimumLevel": "Information",         // 최소 기록 로그 레벨 (Verbose | Debug | Information | Warning | Error | Fatal)
     "RetainedFileCountLimit": 31           // 로그 파일 최대 보존 개수 (일별 롤링 파일 갯수)
   },
+  "AnalysisSettings": {
+    "AnalyzeReferencedCodeObjects": false  // [설정] 루트 SP가 참조하는 SP/UDF까지 재귀 분석할지 여부
+  },
   "OutputSettings": {
     "Directory": "./output",       // 명세서 파일이 저장될 출력 디렉터리
     "InstructionsFile": "./instructions.md", // 분석 규칙 지침 파일 명칭
     "SaveRawJson": true,           // [설정] SpDefinition JSON 파일 저장 여부
     "SaveRawContext": true,        // [설정] 조립된 프롬프트 마크다운 원문 저장 여부
     "SaveRawFiles": true,          // [설정] 의존성 개별 객체 파일/폴더 분산 덤프 여부
-    "EnableCache": true            // [설정] DDL 해시 기반 로컬 증분 분석 캐싱 활성화 여부
+    "EnableCache": false,          // [설정] DDL 해시 기반 로컬 증분 분석 캐싱 활성화 여부
+    "DependencyArtifactMode": "Reference" // [설정] 참조 객체 DDL 저장 방식 (Reference | PortableBundle)
   },
   "MigrationSettings": {
     "Enabled": true,               // [설정] 신규 시스템 현대화 설계서 추가 생성 활성화 여부
@@ -229,6 +236,11 @@ ReSet/
   }
 }
 ```
+
+> [!TIP]
+> **💡 재귀 분석 산출물 모드**
+> * `AnalyzeReferencedCodeObjects`는 기본적으로 `false`입니다. 활성화하면 하위 SP/UDF도 각각 검증 파이프라인을 거쳐 객체별 `Spec.md`와 의존성 매니페스트를 생성합니다.
+> * `DependencyArtifactMode`의 기본값 `Reference`는 각 코드 객체의 표준 DDL을 한 번만 저장하고 명세서·매니페스트의 상대 경로로 연결합니다. `PortableBundle`은 이 표준 DDL에 더해, 참조된 SP/UDF DDL 사본을 각 객체의 `raw/ddl/`에 포함합니다.
 
 > [!TIP]
 > **💡 Actor-Critic 및 점진적 합성 가동 가이드**
