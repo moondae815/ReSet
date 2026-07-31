@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using Xunit;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
@@ -11,6 +12,7 @@ namespace ReSet.Core.Tests
     {
         private readonly string _tempOutputDir;
         private readonly CacheManager _cacheManager;
+        private readonly OutputPathResolver _paths;
 
         public CacheManagerTests()
         {
@@ -18,6 +20,7 @@ namespace ReSet.Core.Tests
             _tempOutputDir = Path.Combine(Path.GetTempPath(), "ReSetTests_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempOutputDir);
             _cacheManager = new CacheManager();
+            _paths = new OutputPathResolver("PaymentDB", _tempOutputDir);
         }
 
         public void Dispose()
@@ -66,8 +69,8 @@ namespace ReSet.Core.Tests
             };
 
             // Act
-            var hash1 = _cacheManager.ComputeCompositeHash(sp1);
-            var hash2 = _cacheManager.ComputeCompositeHash(sp2);
+            var hash1 = _cacheManager.ComputeCompositeHash(sp1, 3);
+            var hash2 = _cacheManager.ComputeCompositeHash(sp2, 3);
 
             // Assert
             Assert.False(string.IsNullOrEmpty(hash1));
@@ -93,24 +96,87 @@ namespace ReSet.Core.Tests
             };
 
             // Act
-            var hash1 = _cacheManager.ComputeCompositeHash(sp1);
-            var hash2 = _cacheManager.ComputeCompositeHash(sp2);
+            var hash1 = _cacheManager.ComputeCompositeHash(sp1, 3);
+            var hash2 = _cacheManager.ComputeCompositeHash(sp2, 3);
 
             // Assert
             Assert.NotEqual(hash1, hash2);
         }
 
         [Fact]
+        public void ComputeCompositeHash_DependencyIdentityIsCaseInsensitive()
+        {
+            var upperCaseDefinition = new SpDefinition
+            {
+                DdlText = "CREATE PROCEDURE dbo.TestSp AS SELECT 1;",
+                Dependencies = new List<DependencyInfo>
+                {
+                    new()
+                    {
+                        Database = "PaymentDB",
+                        Schema = "dbo",
+                        Name = "TableA",
+                        Type = "TABLE",
+                        ReferencedDdlText = "CREATE TABLE dbo.TableA (Id int);"
+                    }
+                }
+            };
+            var lowerCaseDefinition = new SpDefinition
+            {
+                DdlText = upperCaseDefinition.DdlText,
+                Dependencies = new List<DependencyInfo>
+                {
+                    new()
+                    {
+                        Database = "paymentdb",
+                        Schema = "DBO",
+                        Name = "tablea",
+                        Type = "table",
+                        ReferencedDdlText = "CREATE TABLE dbo.TableA (Id int);"
+                    }
+                }
+            };
+
+            Assert.Equal(
+                _cacheManager.ComputeCompositeHash(upperCaseDefinition, 3),
+                _cacheManager.ComputeCompositeHash(lowerCaseDefinition, 3));
+        }
+
+        [Fact]
+        public void ComputeCompositeHash_DifferentMaxDepth_ReturnsDifferentHash()
+        {
+            var definition = new SpDefinition
+            {
+                DdlText = "CREATE PROCEDURE dbo.TestSp AS SELECT 1;"
+            };
+
+            var shallowHash = _cacheManager.ComputeCompositeHash(definition, 1);
+            var deepHash = _cacheManager.ComputeCompositeHash(definition, 3);
+
+            Assert.NotEqual(shallowHash, deepHash);
+        }
+
+        [Fact]
         public void IsCacheValid_ReturnsFalse_WhenCacheIndexOrSpecMissing()
         {
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "TestSp",
+                CodeObjectType.Procedure);
+
             // Act & Assert
             // 1. 인덱스도 파일도 없는 상태
-            var isValid = _cacheManager.IsCacheValid("dbo.TestSp", "somehash", _tempOutputDir);
+            var isValid = _cacheManager.IsCacheValid(key, "somehash", _paths);
             Assert.False(isValid);
 
             // 2. 인덱스는 존재하지만, Spec.md 파일이 존재하지 않는 상태
-            _cacheManager.UpdateCache("dbo.TestSp", new SpDefinition { DdlText = "CREATE PROC" }, "somehash", _tempOutputDir);
-            isValid = _cacheManager.IsCacheValid("dbo.TestSp", "somehash", _tempOutputDir);
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC" },
+                "somehash",
+                _paths);
+            isValid = _cacheManager.IsCacheValid(key, "somehash", _paths);
             Assert.False(isValid); // Spec.md가 없어 false
         }
 
@@ -118,18 +184,26 @@ namespace ReSet.Core.Tests
         public void UpdateCache_And_IsCacheValid_ReturnsTrue_WhenBothExistAndMatch()
         {
             // Arrange
-            var spName = "dbo.TestSp";
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "TestSp",
+                CodeObjectType.Procedure);
             var hash = "expectedcompositehash12345";
             var specContent = "# Spec Report for TestSp";
 
             // Spec 파일 생성
-            var specFilePath = Path.Combine(_tempOutputDir, "Procedures", spName, "docs", "Spec.md");
+            var specFilePath = _paths.ResolveSpecPath(key);
             Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
             File.WriteAllText(specFilePath, specContent);
 
             // Act
-            _cacheManager.UpdateCache(spName, new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" }, hash, _tempOutputDir);
-            var isValid = _cacheManager.IsCacheValid(spName, hash, _tempOutputDir);
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
+                hash,
+                _paths);
+            var isValid = _cacheManager.IsCacheValid(key, hash, _paths);
 
             // Assert
             Assert.True(isValid);
@@ -139,18 +213,116 @@ namespace ReSet.Core.Tests
         public void IsCacheValid_ReturnsFalse_WhenHashMismatches()
         {
             // Arrange
-            var spName = "dbo.TestSp";
+            var key = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "TestSp",
+                CodeObjectType.Procedure);
             var specContent = "# Spec Report";
-            var specFilePath = Path.Combine(_tempOutputDir, "Procedures", spName, "docs", "Spec.md");
+            var specFilePath = _paths.ResolveSpecPath(key);
             Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
             File.WriteAllText(specFilePath, specContent);
 
             // Act
-            _cacheManager.UpdateCache(spName, new SpDefinition { DdlText = "CREATE PROC" }, "hash_a", _tempOutputDir);
-            var isValid = _cacheManager.IsCacheValid(spName, "hash_b", _tempOutputDir); // 다른 해시로 조회
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC" },
+                "hash_a",
+                _paths);
+            var isValid = _cacheManager.IsCacheValid(key, "hash_b", _paths); // 다른 해시로 조회
 
             // Assert
             Assert.False(isValid);
+        }
+
+        [Fact]
+        public void UpdateCache_SeparatesSameNamedProcedureAndFunction()
+        {
+            var procedureKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "Calculate",
+                CodeObjectType.Procedure);
+            var functionKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "Calculate",
+                CodeObjectType.Function);
+            WriteSpec(procedureKey);
+            WriteSpec(functionKey);
+
+            _cacheManager.UpdateCache(
+                procedureKey,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.Calculate AS SELECT 1;" },
+                "procedure-hash",
+                _paths);
+            _cacheManager.UpdateCache(
+                functionKey,
+                new SpDefinition
+                {
+                    ObjectType = CodeObjectType.Function,
+                    DdlText = "CREATE FUNCTION dbo.Calculate() RETURNS int AS BEGIN RETURN 1 END"
+                },
+                "function-hash",
+                _paths);
+
+            Assert.True(_cacheManager.IsCacheValid(procedureKey, "procedure-hash", _paths));
+            Assert.True(_cacheManager.IsCacheValid(functionKey, "function-hash", _paths));
+            Assert.False(_cacheManager.IsCacheValid(procedureKey, "function-hash", _paths));
+
+            using var index = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")));
+            var entries = index.RootElement.GetProperty("Entries");
+            Assert.True(entries.TryGetProperty(procedureKey.CanonicalName, out var procedureEntry));
+            Assert.True(entries.TryGetProperty(functionKey.CanonicalName, out _));
+            Assert.Equal(
+                CodeObjectType.Procedure.ToString(),
+                procedureEntry.GetProperty("ObjectKey").GetProperty("Type").GetString());
+        }
+
+        [Fact]
+        public void IsCacheValid_UsesExternalPathFromResolver()
+        {
+            var key = CodeObjectKey.Create(
+                "AuditDB",
+                "dbo",
+                "usp_Archive",
+                CodeObjectType.Procedure);
+            WriteSpec(key);
+
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROCEDURE dbo.usp_Archive AS SELECT 1;" },
+                "external-hash",
+                _paths);
+
+            Assert.True(_cacheManager.IsCacheValid(key, "external-hash", _paths));
+            Assert.True(File.Exists(Path.Combine(
+                _tempOutputDir,
+                "External",
+                "AuditDB",
+                "Procedures",
+                "dbo.usp_Archive",
+                "docs",
+                "Spec.md")));
+        }
+
+        [Fact]
+        public void CacheEntry_DeserializesLegacyProcedureNameWithoutObjectKey()
+        {
+            var entry = JsonSerializer.Deserialize<CacheEntry>(
+                """{"ProcedureName":"dbo.Legacy","CompositeHash":"hash"}""");
+
+            Assert.NotNull(entry);
+            Assert.Equal("dbo.Legacy", entry.ProcedureName);
+            Assert.Null(entry.ObjectKey);
+        }
+
+        private void WriteSpec(CodeObjectKey key)
+        {
+            var specPath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
         }
     }
 }

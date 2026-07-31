@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ReSet.Core.Models;
 using Serilog;
 
@@ -13,8 +14,9 @@ namespace ReSet.Core.Services
     {
         private static readonly object FileLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
+        private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-        public string ComputeCompositeHash(SpDefinition spDef)
+        public string ComputeCompositeHash(SpDefinition spDef, int maxDepth)
         {
             if (spDef == null) return string.Empty;
 
@@ -27,7 +29,7 @@ namespace ReSet.Core.Services
             {
                 foreach (var dep in spDef.Dependencies)
                 {
-                    var key = $"{dep.Schema}.{dep.Name}".ToLower();
+                    var key = BuildDependencyKey(dep);
                     var ddl = dep.ReferencedDdlText ?? string.Empty;
                     depHashes[key] = ComputeSha256(ddl);
                 }
@@ -36,6 +38,7 @@ namespace ReSet.Core.Services
             // 3. 결합 문자열 구성
             var sb = new StringBuilder();
             sb.AppendLine($"Source:{sourceHash}");
+            sb.AppendLine($"MaxDepth:{maxDepth}");
             foreach (var kvp in depHashes)
             {
                 sb.AppendLine($"Dep:{kvp.Key}:{kvp.Value}");
@@ -44,17 +47,23 @@ namespace ReSet.Core.Services
             return ComputeSha256(sb.ToString());
         }
 
-        public bool IsCacheValid(string procedureName, string compositeHash, string outputDirectory)
+        public bool IsCacheValid(
+            CodeObjectKey objectKey,
+            string compositeHash,
+            OutputPathResolver outputPaths)
         {
-            if (string.IsNullOrWhiteSpace(procedureName) || string.IsNullOrWhiteSpace(compositeHash))
+            if (objectKey == null ||
+                string.IsNullOrWhiteSpace(compositeHash) ||
+                outputPaths == null)
             {
                 return false;
             }
 
-            Log.Information("캐시 유효성 검사 - SP: {ProcedureName}", procedureName);
+            var cacheKey = objectKey.CanonicalName;
+            Log.Information("캐시 유효성 검사 - 코드 객체: {ObjectKey}", cacheKey);
 
             // 1. 실제 출력 파일이 존재하는지 검증 (docs/Spec.md)
-            var specFilePath = Path.Combine(outputDirectory, "Procedures", procedureName, "docs", "Spec.md");
+            var specFilePath = outputPaths.ResolveSpecPath(objectKey);
             if (!File.Exists(specFilePath))
             {
                 Log.Debug("캐시 미스 (설계 명세서 파일이 존재하지 않음): {SpecFilePath}", specFilePath);
@@ -64,17 +73,29 @@ namespace ReSet.Core.Services
             // 2. 캐시 인덱스 파일 로드 및 해시 대조
             try
             {
-                var cacheIndex = LoadCacheIndex(outputDirectory);
-                if (cacheIndex != null && cacheIndex.Entries.TryGetValue(procedureName, out var entry))
+                var cacheIndex = LoadCacheIndex(outputPaths.OutputRoot);
+                if (cacheIndex != null &&
+                    TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))
                 {
-                    bool isValid = string.Equals(entry.CompositeHash, compositeHash, StringComparison.OrdinalIgnoreCase);
+                    var isValid =
+                        (entry.ObjectKey == null || entry.ObjectKey == objectKey) &&
+                        string.Equals(
+                            entry.CompositeHash,
+                            compositeHash,
+                            StringComparison.OrdinalIgnoreCase);
                     if (isValid)
                     {
-                        Log.Information("캐시 히트 - SP: {ProcedureName} (분석 생략 가능)", procedureName);
+                        Log.Information(
+                            "캐시 히트 - 코드 객체: {ObjectKey} (분석 생략 가능)",
+                            cacheKey);
                     }
                     else
                     {
-                        Log.Debug("캐시 미스 (복합 해시 불일치) - SP: {ProcedureName}, EntryHash: {EntryHash}, CurrentHash: {CurrentHash}", procedureName, entry.CompositeHash, compositeHash);
+                        Log.Debug(
+                            "캐시 미스 (객체 키 또는 복합 해시 불일치) - 코드 객체: {ObjectKey}, EntryHash: {EntryHash}, CurrentHash: {CurrentHash}",
+                            cacheKey,
+                            entry.CompositeHash,
+                            compositeHash);
                     }
                     return isValid;
                 }
@@ -82,26 +103,41 @@ namespace ReSet.Core.Services
             catch (Exception ex)
             {
                 // 캐시 로드 실패 시 안전하게 Soft Fail (false 반환하여 재분석 진행)
-                Log.Warning(ex, "캐시 인덱스 파일 로드 중 오류 발생 - SP: {ProcedureName}", procedureName);
+                Log.Warning(
+                    ex,
+                    "캐시 인덱스 파일 로드 중 오류 발생 - 코드 객체: {ObjectKey}",
+                    cacheKey);
                 return false;
             }
 
-            Log.Debug("캐시 미스 (캐시 인덱스 내 항목 없음) - SP: {ProcedureName}", procedureName);
+            Log.Debug(
+                "캐시 미스 (캐시 인덱스 내 항목 없음) - 코드 객체: {ObjectKey}",
+                cacheKey);
             return false;
         }
 
-        public void UpdateCache(string procedureName, SpDefinition spDef, string compositeHash, string outputDirectory)
+        public void UpdateCache(
+            CodeObjectKey objectKey,
+            SpDefinition spDef,
+            string compositeHash,
+            OutputPathResolver outputPaths)
         {
-            if (string.IsNullOrWhiteSpace(procedureName) || spDef == null || string.IsNullOrWhiteSpace(compositeHash))
+            if (objectKey == null ||
+                spDef == null ||
+                string.IsNullOrWhiteSpace(compositeHash) ||
+                outputPaths == null)
             {
                 return;
             }
 
+            var cacheKey = objectKey.CanonicalName;
             try
             {
                 lock (FileLock)
                 {
-                    var cacheIndex = LoadCacheIndex(outputDirectory) ?? new CacheIndex();
+                    var cacheIndex =
+                        LoadCacheIndex(outputPaths.OutputRoot) ??
+                        new CacheIndex();
 
                     // 의존성 개별 해시 구성
                     var depHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -109,7 +145,7 @@ namespace ReSet.Core.Services
                     {
                         foreach (var dep in spDef.Dependencies)
                         {
-                            var key = $"{dep.Schema}.{dep.Name}";
+                            var key = BuildDependencyKey(dep);
                             var ddl = dep.ReferencedDdlText ?? string.Empty;
                             depHashes[key] = ComputeSha256(ddl);
                         }
@@ -117,23 +153,29 @@ namespace ReSet.Core.Services
 
                     var entry = new CacheEntry
                     {
-                        ProcedureName = procedureName,
+                        ProcedureName = $"{objectKey.Schema}.{objectKey.Name}",
+                        ObjectKey = objectKey,
                         LastAnalyzed = DateTime.UtcNow,
                         SourceHash = ComputeSha256(spDef.DdlText),
                         DependencyHashes = depHashes,
                         CompositeHash = compositeHash
                     };
 
-                    cacheIndex.Entries[procedureName] = entry;
+                    cacheIndex.Entries[cacheKey] = entry;
 
-                    SaveCacheIndex(outputDirectory, cacheIndex);
-                    Log.Information("캐시 인덱스 갱신 성공 - SP: {ProcedureName}", procedureName);
+                    SaveCacheIndex(outputPaths.OutputRoot, cacheIndex);
+                    Log.Information(
+                        "캐시 인덱스 갱신 성공 - 코드 객체: {ObjectKey}",
+                        cacheKey);
                 }
             }
             catch (Exception ex)
             {
                 // 캐시 쓰기 실패 시 예외 격리 (분석은 통과했으므로 로깅 외 무시)
-                Log.Warning(ex, "캐시 인덱스 갱신 실패 (예외 격리) - SP: {ProcedureName}", procedureName);
+                Log.Warning(
+                    ex,
+                    "캐시 인덱스 갱신 실패 (예외 격리) - 코드 객체: {ObjectKey}",
+                    cacheKey);
             }
         }
 
@@ -148,7 +190,18 @@ namespace ReSet.Core.Services
             lock (FileLock)
             {
                 var json = File.ReadAllText(cacheIndexPath);
-                return JsonSerializer.Deserialize<CacheIndex>(json);
+                var cacheIndex = JsonSerializer.Deserialize<CacheIndex>(
+                    json,
+                    JsonOptions);
+                if (cacheIndex == null)
+                {
+                    return null;
+                }
+
+                cacheIndex.Entries = new Dictionary<string, CacheEntry>(
+                    cacheIndex.Entries,
+                    StringComparer.OrdinalIgnoreCase);
+                return cacheIndex;
             }
         }
 
@@ -160,8 +213,7 @@ namespace ReSet.Core.Services
             }
 
             var cacheIndexPath = Path.Combine(outputDirectory, CacheIndexFileName);
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(cacheIndex, options);
+            var json = JsonSerializer.Serialize(cacheIndex, JsonOptions);
 
             lock (FileLock)
             {
@@ -169,7 +221,42 @@ namespace ReSet.Core.Services
             }
         }
 
-        private string ComputeSha256(string input)
+        private static bool TryGetEntry(
+            CacheIndex cacheIndex,
+            CodeObjectKey objectKey,
+            OutputPathResolver outputPaths,
+            out CacheEntry entry)
+        {
+            if (cacheIndex.Entries.TryGetValue(
+                    objectKey.CanonicalName,
+                    out entry!))
+            {
+                return true;
+            }
+
+            var legacyKey = $"{objectKey.Schema}.{objectKey.Name}";
+            return objectKey.Type == CodeObjectType.Procedure &&
+                outputPaths.IsCurrentDatabase(objectKey.Database) &&
+                cacheIndex.Entries.TryGetValue(legacyKey, out entry!);
+        }
+
+        private static string BuildDependencyKey(DependencyInfo dependency) =>
+            string.Join(
+                    ".",
+                    dependency.Database ?? string.Empty,
+                    dependency.Schema,
+                    dependency.Name,
+                    dependency.Type)
+                .ToUpperInvariant();
+
+        private static JsonSerializerOptions CreateJsonOptions()
+        {
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            options.Converters.Add(new JsonStringEnumConverter());
+            return options;
+        }
+
+        private static string ComputeSha256(string input)
         {
             if (string.IsNullOrEmpty(input)) return string.Empty;
 

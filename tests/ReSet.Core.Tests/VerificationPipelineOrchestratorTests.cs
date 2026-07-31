@@ -304,7 +304,8 @@ namespace ReSet.Core.Tests
             dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheThrow", Arg.Any<int>())
                 .Returns(Task.FromResult(spDef));
 
-            cacheManager.ComputeCompositeHash(Arg.Any<SpDefinition>()).Returns(x => { throw new Exception("Cache failure"); });
+            cacheManager.ComputeCompositeHash(Arg.Any<SpDefinition>(), Arg.Any<int>())
+                .Returns(x => { throw new Exception("Cache failure"); });
 
             var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
             aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
@@ -339,8 +340,15 @@ namespace ReSet.Core.Tests
             dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_CacheTest", Arg.Any<int>())
                 .Returns(Task.FromResult(spDef));
 
-            cacheManager.ComputeCompositeHash(spDef).Returns("fake-hash");
-            cacheManager.IsCacheValid("dbo.USP_CacheTest", "fake-hash", Arg.Any<string>()).Returns(true);
+            cacheManager.ComputeCompositeHash(spDef, 3).Returns("fake-hash");
+            cacheManager.IsCacheValid(
+                    Arg.Is<CodeObjectKey>(key =>
+                        key.Schema == "dbo" &&
+                        key.Name == "USP_CacheTest" &&
+                        key.Type == CodeObjectType.Procedure),
+                    "fake-hash",
+                    Arg.Any<OutputPathResolver>())
+                .Returns(true);
 
             var outputDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ReSet_CacheTest_" + Guid.NewGuid().ToString());
             var docsDir = System.IO.Path.Combine(outputDir, "Procedures", "dbo.USP_CacheTest", "docs");

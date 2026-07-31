@@ -86,6 +86,15 @@ namespace ReSet.Core.Services
             CancellationToken cancellationToken = default)
         {
             var selectedOption = $"{schema}.{name}";
+            var currentDatabase = ResolveCurrentDatabase(connectionString);
+            var cacheObjectKey = CodeObjectKey.Create(
+                currentDatabase,
+                schema,
+                name,
+                CodeObjectType.Procedure);
+            var outputPaths = new OutputPathResolver(
+                currentDatabase,
+                outputDirectory);
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
             var accumulatedThinking = new StringBuilder();
@@ -126,12 +135,15 @@ namespace ReSet.Core.Services
             {
                 try
                 {
-                    compositeHash = _cacheManager.ComputeCompositeHash(spDef);
-                    if (_cacheManager.IsCacheValid(selectedOption, compositeHash, outputDirectory))
+                    compositeHash = _cacheManager.ComputeCompositeHash(spDef, maxDepth);
+                    if (_cacheManager.IsCacheValid(
+                            cacheObjectKey,
+                            compositeHash,
+                            outputPaths))
                     {
                         Log.Information("[파이프라인] 캐시 히트 - AI 분석 건너뜀 - SP: {SpName}", selectedOption);
                         _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
-                        var specFilePath = System.IO.Path.Combine(outputDirectory, "Procedures", selectedOption, "docs", "Spec.md");
+                        var specFilePath = outputPaths.ResolveSpecPath(cacheObjectKey);
                         if (System.IO.File.Exists(specFilePath))
                         {
                             var cachedSpec = await System.IO.File.ReadAllTextAsync(specFilePath, cancellationToken);
@@ -909,7 +921,11 @@ namespace ReSet.Core.Services
             if (isBatchMode && enableCache && !string.IsNullOrEmpty(compositeHash))
             {
                 Log.Debug("[파이프라인] 배치 모드 캐시 업데이트 - SP: {SpName}", selectedOption);
-                _cacheManager.UpdateCache(selectedOption, spDef, compositeHash, outputDirectory);
+                _cacheManager.UpdateCache(
+                    cacheObjectKey,
+                    spDef,
+                    compositeHash,
+                    outputPaths);
             }
 
             // DB 역반영 여부 선택과 관계없이 항상 파일로 스크립트 저장
@@ -927,7 +943,11 @@ namespace ReSet.Core.Services
                         // 최종 승인 시 캐시 업데이트
                         if (enableCache && !string.IsNullOrEmpty(compositeHash))
                         {
-                            _cacheManager.UpdateCache(selectedOption, spDef, compositeHash, outputDirectory);
+                            _cacheManager.UpdateCache(
+                                cacheObjectKey,
+                                spDef,
+                                compositeHash,
+                                outputPaths);
                         }
 
                         // 생성된 DB 역반영 쿼리가 존재할 경우에만 동기화 수행 여부 묻기
@@ -1191,6 +1211,22 @@ namespace ReSet.Core.Services
             }
 
             return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
+        }
+
+        private static string ResolveCurrentDatabase(string connectionString)
+        {
+            try
+            {
+                var database = new SqlConnectionStringBuilder(connectionString)
+                    .InitialCatalog;
+                return string.IsNullOrWhiteSpace(database)
+                    ? "__current__"
+                    : database;
+            }
+            catch (ArgumentException)
+            {
+                return "__current__";
+            }
         }
 
         public async Task<(string? Plan, AiResult? Result)> RunConsolidatedPipelineAsync(

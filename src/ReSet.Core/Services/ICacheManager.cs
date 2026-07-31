@@ -4,8 +4,15 @@ namespace ReSet.Core.Services
 {
     public interface ICacheManager
     {
-        string ComputeCompositeHash(SpDefinition spDef);
-        bool IsCacheValid(string procedureName, string compositeHash, string outputDirectory);
-        void UpdateCache(string procedureName, SpDefinition spDef, string compositeHash, string outputDirectory);
+        string ComputeCompositeHash(SpDefinition spDef, int maxDepth);
+        bool IsCacheValid(
+            CodeObjectKey objectKey,
+            string compositeHash,
+            OutputPathResolver outputPaths);
+        void UpdateCache(
+            CodeObjectKey objectKey,
+            SpDefinition spDef,
+            string compositeHash,
+            OutputPathResolver outputPaths);
     }
 }
