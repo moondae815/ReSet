@@ -1,13 +1,4 @@
 <Solution>
-  <Folder Name="/output/" />
-  <Folder Name="/output/Jobs/" />
-  <Folder Name="/output/Jobs/Settle_Proc_Daily_Agy/" />
-  <Folder Name="/output/Jobs/Settle_Proc_Daily_Agy/src/">
-    <Project Path="output/Jobs/Settle_Proc_Daily_Agy/src/SettleProcDaily.Batch/SettleProcDaily.Batch.csproj" />
-    <Project Path="output/Jobs/Settle_Proc_Daily_Agy/src/SettleProcDaily.Tests/SettleProcDaily.Tests.csproj" />
-  </Folder>
-  <Folder Name="/output/Jobs/Settle_Proc_Daily_codex/" />
-  <Folder Name="/output/Jobs/Settle_Proc_Daily_codex/src/" />
   <Folder Name="/src/">
     <Project Path="src/ReSet.Cli/ReSet.Cli.csproj" />
     <Project Path="src/ReSet.Core/ReSet.Core.csproj" />
