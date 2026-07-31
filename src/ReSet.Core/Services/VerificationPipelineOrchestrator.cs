@@ -85,7 +85,67 @@ namespace ReSet.Core.Services
             bool enableCache = false,
             CancellationToken cancellationToken = default)
         {
-            var selectedOption = $"{schema}.{name}";
+            var database = ResolveCurrentDatabase(connectionString) ?? string.Empty;
+            var key = CodeObjectKey.Create(database, schema, name, CodeObjectType.Procedure);
+            var result = await RunCodeObjectPipelineAsync(
+                connectionString,
+                key,
+                maxDepth,
+                provider,
+                instructions,
+                isBatchMode,
+                outputDirectory,
+                enableCache,
+                cancellationToken);
+
+            return (result.SpecMarkdown, result.SpDef, result.Review, result.ThinkingText);
+        }
+
+        public async Task<CodeObjectPipelineResult> RunCodeObjectPipelineAsync(
+            string connectionString,
+            CodeObjectKey key,
+            int maxDepth,
+            string provider,
+            string instructions,
+            bool isBatchMode,
+            string outputDirectory,
+            bool enableCache = false,
+            CancellationToken cancellationToken = default)
+        {
+            var (specMarkdown, spDef, review, thinkingText) = await RunCodeObjectPipelineCoreAsync(
+                connectionString,
+                key,
+                maxDepth,
+                provider,
+                instructions,
+                isBatchMode,
+                outputDirectory,
+                enableCache,
+                cancellationToken);
+
+            return new CodeObjectPipelineResult
+            {
+                SpDef = spDef,
+                SpecMarkdown = specMarkdown,
+                Review = review,
+                ThinkingText = thinkingText
+            };
+        }
+
+        private async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunCodeObjectPipelineCoreAsync(
+            string connectionString,
+            CodeObjectKey key,
+            int maxDepth,
+            string provider,
+            string instructions,
+            bool isBatchMode,
+            string outputDirectory,
+            bool enableCache,
+            CancellationToken cancellationToken)
+        {
+            var selectedOption = $"{key.Schema}.{key.Name}";
+            var objectKind = key.Type == CodeObjectType.Function ? "UDF" : "SP";
+            var objectStatus = $"{objectKind}: {key.CanonicalName}";
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
             var accumulatedThinking = new StringBuilder();
@@ -93,15 +153,30 @@ namespace ReSet.Core.Services
             AiResult? ollamaPart2 = null;
             AiResult? ollamaPart3 = null;
 
-            Log.Information("[파이프라인] SP 분석 시작 - SP: {SpName}, Provider: {Provider}, MaxDepth: {MaxDepth}, BatchMode: {IsBatchMode}",
-                selectedOption, provider, maxDepth, isBatchMode);
+            Log.Information("[파이프라인] 코드 객체 분석 시작 - Type: {ObjectType}, Key: {ObjectKey}, Provider: {Provider}, MaxDepth: {MaxDepth}, BatchMode: {IsBatchMode}",
+                objectKind, key.CanonicalName, provider, maxDepth, isBatchMode);
 
-            _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - DB 메타데이터 및 의존성 분석 중 (최대 깊이: {maxDepth}단계)...");
+            _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - DB 메타데이터 및 의존성 분석 중 (최대 깊이: {maxDepth}단계)...");
             try
             {
-                spDef = await _dbService.GetSpDetailsAsync(connectionString, schema, name, maxDepth, cancellationToken);
-                Log.Debug("[파이프라인] DB 메타데이터 수집 완료 - SP: {SpName}, 의존성 수: {DepCount}, 경고 수: {WarningCount}",
-                    selectedOption, spDef?.Dependencies?.Count ?? 0, spDef?.Warnings?.Count ?? 0);
+                spDef = await _dbService.GetCodeObjectDetailsAsync(connectionString, key, maxDepth, cancellationToken);
+                if (spDef == null && key.Type == CodeObjectType.Procedure)
+                {
+                    // Preserve compatibility with legacy metadata adapters while the
+                    // common code-object query remains the primary entry point.
+                    Log.Warning("[파이프라인] 공통 코드 객체 조회가 빈 결과를 반환해 레거시 SP 조회로 보완합니다 - SP: {SpName}", selectedOption);
+                    spDef = await _dbService.GetSpDetailsAsync(connectionString, key.Schema, key.Name, maxDepth, cancellationToken);
+                }
+
+                if (spDef == null)
+                {
+                    throw new InvalidOperationException($"코드 객체 메타데이터가 비어 있습니다: {key.CanonicalName}");
+                }
+
+                spDef.ObjectKey ??= key;
+                Log.Debug("[파이프라인] DB 메타데이터 수집 완료 - 코드 객체: {ObjectKey}, 의존성 수: {DepCount}, 경고 수: {WarningCount}",
+                    key.CanonicalName,
+                    spDef?.Dependencies?.Count ?? 0, spDef?.Warnings?.Count ?? 0);
             }
             catch (Exception ex)
             {
@@ -117,9 +192,7 @@ namespace ReSet.Core.Services
 
             var cacheObjectKey = ResolveCacheObjectKey(
                 spDef,
-                connectionString,
-                schema,
-                name);
+                key);
             OutputPathResolver? outputPaths = null;
             if (enableCache && cacheObjectKey != null)
             {
@@ -156,7 +229,7 @@ namespace ReSet.Core.Services
                             outputPaths))
                     {
                         Log.Information("[파이프라인] 캐시 히트 - AI 분석 건너뜀 - SP: {SpName}", selectedOption);
-                        _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
+                        _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
                         var specFilePath = outputPaths.ResolveSpecPath(cacheObjectKey);
                         if (System.IO.File.Exists(specFilePath))
                         {
@@ -201,7 +274,7 @@ namespace ReSet.Core.Services
                 AiResult[]? candidatesResult = null;
                 var actorInfo = $"Actor: {_aiService.ProviderName} - {_aiService.ModelName}(dynamic effort)";
                 var criticInfo = $"Critic: {_criticService.ProviderName} - {_criticService.ModelName}({_criticEffort ?? "high"} effort)";
-                _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 하이브리드 다중 후보군 병렬 생성 및 검토 중... ({actorInfo} / {criticInfo})");
+                _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 하이브리드 다중 후보군 병렬 생성 및 검토 중... ({actorInfo} / {criticInfo})");
                 
                 using (var progressScope = _userInteraction.CreateProgressScope("하이브리드 다중 후보군 생성") ?? NullProgressScope.Instance)
                 {
@@ -336,7 +409,7 @@ namespace ReSet.Core.Services
 
                 if (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null)
                 {
-                    _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - Effort별 Spec 검토 완료:");
+                    _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - Effort별 Spec 검토 완료:");
                     _userInteraction.NotifyStatus($"  - Low Spec: [bold]{reviews[0]!.NormalizedScore}[/]점 (정합성:{reviews[0]!.ScoreAccuracy}, CRUD:{reviews[0]!.ScoreCrud}, 연동:{reviews[0]!.ScoreInterface}, 예외:{reviews[0]!.ScoreException}, 시각화:{reviews[0]!.ScoreReadability})");
                     if (!string.IsNullOrWhiteSpace(reviews[0]!.FeedbackComment))
                     {
@@ -393,7 +466,7 @@ namespace ReSet.Core.Services
                     string scoreSummary = (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null) 
                         ? $" (Low: {reviews[0].NormalizedScore}점, Medium: {reviews[1].NormalizedScore}점, High: {reviews[2].NormalizedScore}점)"
                         : string.Empty;
-                    _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 완벽한 후보군(후보 {bestCandidateIndex + 1}, AI 신뢰도: [bold green]{highestScore}[/]/100점)이 발견되어 즉시 채택합니다.{scoreSummary}");
+                    _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - 완벽한 후보군(후보 {bestCandidateIndex + 1}, AI 신뢰도: [bold green]{highestScore}[/]/100점)이 발견되어 즉시 채택합니다.{scoreSummary}");
                     specificationMarkdown = candidates[bestCandidateIndex];
                     finalReview = reviews![bestCandidateIndex];
                     fastPassTriggered = true;
@@ -440,7 +513,7 @@ namespace ReSet.Core.Services
                     string scoreSummary = (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null) 
                         ? $" (Low: {reviews[0].NormalizedScore}점, Medium: {reviews[1].NormalizedScore}점, High: {reviews[2].NormalizedScore}점)"
                         : string.Empty;
-                    _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 이종 모델 합성 에이전트(Consolidator) 구동 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}, {_consolidatorEffort ?? "medium"} effort)...{scoreSummary}");
+                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 이종 모델 합성 에이전트(Consolidator) 구동 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}, {_consolidatorEffort ?? "medium"} effort)...{scoreSummary}");
                     try
                     {
                         AiResult consolidatorResult;
@@ -508,7 +581,7 @@ namespace ReSet.Core.Services
                     }
 
                     // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
-                    _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
+                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
                     ReviewResult? finalL2Result = null;
                     try
                     {
@@ -565,7 +638,7 @@ namespace ReSet.Core.Services
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
 
                                 // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신
-                                _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 보완된 최종 합성본 L2 재검토 중...");
+                                _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 보완된 최종 합성본 L2 재검토 중...");
                                 try
                                 {
                                     using (var progressScope = _userInteraction.CreateProgressScope("보완본 재검토") ?? NullProgressScope.Instance)
@@ -614,10 +687,10 @@ namespace ReSet.Core.Services
                     Log.Information("[파이프라인] AI 명세서 생성 시작 - SP: {SpName}, 시도: {Attempt}, Provider: {Provider}, Model: {Model}",
                         selectedOption, attempt, provider, _modelName);
                     var effortText = !string.IsNullOrWhiteSpace(_actorEffort) ? $", Effort: {_actorEffort}" : "";
-                    _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
+                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
-                        if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
+                        if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                         {
                             bool shouldRunStage1 = true;
                             if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
@@ -838,7 +911,7 @@ namespace ReSet.Core.Services
 
                     Log.Information("[파이프라인] L2 AI 교차 리뷰 시작 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                     var criticEffortText = !string.IsNullOrWhiteSpace(_criticEffort) ? $", Effort: {_criticEffort}" : "";
-                    _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - AI 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
+                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - AI 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
                     try
                     {
                         using (var progressScope = _userInteraction.CreateProgressScope("L2 교차 리뷰") ?? NullProgressScope.Instance)
@@ -1002,13 +1075,13 @@ namespace ReSet.Core.Services
                             continue;
                         }
 
-                        _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - 피드백 반영 재생성 중...");
+                        _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 피드백 반영 재생성 중...");
                         var humanFeedbackLog = $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}";
 
                         string reSpec = string.Empty;
                         try
                         {
-                            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
+                            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                             {
                                 bool regenPart1 = false;
                                 bool regenPart2 = false;
@@ -1128,7 +1201,7 @@ namespace ReSet.Core.Services
                             _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                             try
                             {
-                                if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider))
+                                if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                                 {
                                     bool regenPart1 = false;
                                     bool regenPart2 = false;
@@ -1241,25 +1314,16 @@ namespace ReSet.Core.Services
             return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
         }
 
-        private static CodeObjectKey? ResolveCacheObjectKey(
+        private static CodeObjectKey ResolveCacheObjectKey(
             SpDefinition spDefinition,
-            string connectionString,
-            string schema,
-            string name)
+            CodeObjectKey requestedKey)
         {
             if (spDefinition.ObjectKey != null)
             {
                 return spDefinition.ObjectKey;
             }
 
-            var database = ResolveCurrentDatabase(connectionString);
-            return string.IsNullOrWhiteSpace(database)
-                ? null
-                : CodeObjectKey.Create(
-                    database,
-                    schema,
-                    name,
-                    CodeObjectType.Procedure);
+            return requestedKey;
         }
 
         private static string? ResolveCurrentDatabase(string connectionString)

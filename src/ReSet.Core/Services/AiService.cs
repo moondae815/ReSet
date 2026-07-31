@@ -251,6 +251,11 @@ namespace ReSet.Core.Services
 
         private (string SystemPrompt, string UserPrompt) BuildSpecificationPrompts(SpDefinition spDef, string userInstructions, string? feedbackLog)
         {
+            if (spDef.ObjectType == CodeObjectType.Function)
+            {
+                return BuildFunctionSpecificationPrompts(spDef, userInstructions, feedbackLog);
+            }
+
             // 동적 Pruning 조건 체크
             bool hasUdf = spDef.StaticAnalysis?.ReferencedFunctions?.Count > 0;
             bool hasLinkedServers = spDef.StaticAnalysis?.LinkedServerReferences?.Count > 0;
@@ -477,6 +482,65 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (!string.IsNullOrEmpty(feedbackLog))
             {
                 userPrompt += $"\n\n[이전 시도에 대한 검증 오류/수정 피드백 로그]:\n{feedbackLog}\n\n위 검토 및 수정 체크리스트의 모든 요건들을 전적으로 수용하여 명세서 내용을 정교하게 수정하고 오류를 바로잡아 다시 작성해 주십시오. 특히 이전 턴에서 정상적으로 분석되었던 다른 섹션이나 테이블 컬럼 목록이 이번 수정 과정에서 실수로 유실되거나 훼손되는 회귀 결함(Regression)이 절대 발생하지 않도록, 제공된 '진실의 원천' 메타데이터(참조 컬럼 목록 등)와 철저히 대조해 주십시오.";
+            }
+
+            return (systemPrompt, userPrompt);
+        }
+
+        private (string SystemPrompt, string UserPrompt) BuildFunctionSpecificationPrompts(SpDefinition functionDef, string userInstructions, string? feedbackLog)
+        {
+            var systemPrompt = @"You are an expert SQL Server User Defined Function analyzer. Analyze the provided function metadata and write a comprehensive reverse-engineered specification in Markdown.
+
+[Essential Rules]
+1. Analyze the return contract, including scalar return type or TVF result schema.
+2. Determine and document determinism, observable side effects, and every business formula or transformation only from the supplied DDL and metadata.
+3. Identify all referenced tables and functions, their factual roles, and missing metadata without inventing columns or behavior.
+4. For a table-valued function, document every result column, data type, nullability when known, and derivation source.
+5. Include a Mermaid flowchart with quoted node labels and safe alphanumeric node identifiers.
+6. Do not use abbreviations, ellipses, or conversational filler. Do not invent undefined columns, error codes, or behavior.
+7. The required H2 headers are exactly: `## 개요`, `## 파라미터 목록`, `## CRUD 분석`, `## 로직 흐름 요약`, `## 비즈니스 흐름 시각화`.
+
+[Output Language Requirement]
+- You MUST write the final markdown specification in Korean.";
+            systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
+
+            var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(functionDef);
+            var returnInfo = functionDef.FunctionReturn;
+            var returnContract = returnInfo == null
+                ? "Return metadata is not available. Derive only what is explicit in the DDL."
+                : returnInfo.IsTableValued
+                    ? $"Table-valued function. Result columns:\n{string.Join("\n", returnInfo.Columns.Select(column => $"- {column.ColumnName}: {column.DataType}"))}"
+                    : $"Scalar function return type: {returnInfo.DataType}";
+
+            var userPrompt = $@"
+<user-defined-function-context>
+  <basic-info>
+    <schema>{functionDef.Schema}</schema>
+    <name>{functionDef.Name}</name>
+  </basic-info>
+  <return-contract>
+{returnContract}
+  </return-contract>
+  <dependencies>
+{dependenciesText}  </dependencies>
+  <referenced-table-schemas>
+{tableSchemasText}  </referenced-table-schemas>
+  <referenced-function-ddl-source-code>
+{referenceDdlsText}  </referenced-function-ddl-source-code>
+  <static-analysis-metadata>
+{staticAnalysisText}  </static-analysis-metadata>
+  <function-source-ddl>
+```sql
+{functionDef.DdlText}
+```
+  </function-source-ddl>
+</user-defined-function-context>
+
+Based on the reference context above, reverse engineer the user defined function and write the Korean markdown specification.";
+
+            if (!string.IsNullOrWhiteSpace(feedbackLog))
+            {
+                userPrompt += $"\n\n[VALIDATION CORRECTION FEEDBACK]\n{feedbackLog}\nCorrect the documented function contract, formulas, referenced objects, and TVF schema without introducing regressions.";
             }
 
             return (systemPrompt, userPrompt);
@@ -1495,6 +1559,11 @@ Based on the structured reference context above, reverse engineer the stored pro
 
         public async Task<ReviewResult> ReviewSpecificationAsync(SpDefinition spDef, string specMarkdown, string? effort = null, CancellationToken cancellationToken = default)
         {
+            if (spDef.ObjectType == CodeObjectType.Function)
+            {
+                return await ReviewFunctionSpecificationAsync(spDef, specMarkdown, effort, cancellationToken);
+            }
+
             var systemPrompt = @"You are a principal database architect and critic agent reviewing a generated stored procedure specification in Markdown. Evaluate the accuracy, completeness, and formatting of the document against the original metadata.
 
 [Evaluation Criteria (Score 0-10 for each item)]
@@ -1572,6 +1641,68 @@ Review the generated specification markdown against the source metadata and sour
             Log.Information("AI 명세서 리뷰 응답 수신 완료 - SP: {Schema}.{Name}, 응답 길이: {Length}", spDef.Schema, spDef.Name, aiResult?.Content?.Length ?? 0);
             Log.Debug("[AI 응답 내용]:\n{Response}", aiResult?.Content);
             var reviewResult = ParseReviewResult(aiResult?.Content, $"{spDef.Schema}.{spDef.Name}");
+            reviewResult.ThinkingText = aiResult?.ThinkingText;
+            return reviewResult;
+        }
+
+        private async Task<ReviewResult> ReviewFunctionSpecificationAsync(SpDefinition functionDef, string specMarkdown, string? effort, CancellationToken cancellationToken)
+        {
+            var systemPrompt = @"You are a principal database architect and critic agent reviewing a generated SQL Server User Defined Function specification in Markdown. Evaluate it against the supplied source metadata.
+
+[Evaluation Criteria (Score 0-10 for each item)]
+1. Business Logic and Formula Accuracy (ScoreAccuracy): Verify branches, formulas, transformations, and determinism are factual.
+2. Referenced Object Completeness (ScoreCrud): Verify every referenced table and function is documented without shortcuts or invented columns.
+3. Return Contract (ScoreInterface): Verify scalar return type or TVF result schema, parameters, nullability when known, and output derivations.
+4. Side Effects and Constraints (ScoreException): Verify observable side effects, data access constraints, and prerequisite assumptions are accurately described.
+5. Diagram Syntax and Readability (ScoreReadability): Verify Mermaid syntax and readability.
+
+[Defect Judgment]
+- Mark HasDefects true when any criterion is below 8 or a mandatory H2 header is missing.
+
+[Output Format]
+Output ONLY raw JSON with HasDefects, FeedbackComment, ScoreAccuracy, ScoreCrud, ScoreInterface, ScoreException, and ScoreReadability.";
+
+            var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(functionDef);
+            var returnInfo = functionDef.FunctionReturn;
+            var returnContract = returnInfo == null
+                ? "Return metadata unavailable"
+                : returnInfo.IsTableValued
+                    ? string.Join(", ", returnInfo.Columns.Select(column => $"{column.ColumnName} {column.DataType}"))
+                    : returnInfo.DataType;
+            var userPrompt = $@"
+Target User Defined Function:
+- Schema: {functionDef.Schema}
+- Name: {functionDef.Name}
+- Return contract: {returnContract}
+
+[Target Function Source DDL]
+```sql
+{functionDef.DdlText}
+```
+
+[Dependencies List]
+{dependenciesText}
+
+[Referenced Table Schemas]
+{tableSchemasText}
+
+[Referenced Function DDL Codes]
+{referenceDdlsText}
+
+{staticAnalysisText}
+
+[Generated Specification Markdown]
+{specMarkdown}
+
+Review the generated function specification against the source metadata and DDL, and output the review result in JSON.";
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama System Prompt Requirements]\n- Before writing the JSON payload, write your step-by-step thinking process inside <think> and </think> tags. The final JSON must be placed outside the think tags.";
+            }
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort, cancellationToken);
+            var reviewResult = ParseReviewResult(aiResult?.Content, $"{functionDef.Schema}.{functionDef.Name}");
             reviewResult.ThinkingText = aiResult?.ThinkingText;
             return reviewResult;
         }

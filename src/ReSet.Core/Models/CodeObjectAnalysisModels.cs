@@ -1,3 +1,5 @@
+using ReSet.Core.Services;
+
 namespace ReSet.Core.Models;
 
 public sealed class FunctionReturnInfo
@@ -43,6 +45,12 @@ public sealed class DependencyEdge
 
 public sealed class CodeObjectPipelineResult
 {
+    // A single-object verification run result. The existing collections below are
+    // retained for recursive graph analysis consumers.
+    public SpDefinition? SpDef { get; set; }
+    public string? SpecMarkdown { get; set; }
+    public ReviewResult? Review { get; set; }
+    public string? ThinkingText { get; set; }
     public List<AnalysisNode> Nodes { get; set; } = new();
     public List<DependencyEdge> DependencyEdges { get; set; } = new();
     public List<CodeObjectAnalysisResult> AnalysisResults { get; set; } = new();

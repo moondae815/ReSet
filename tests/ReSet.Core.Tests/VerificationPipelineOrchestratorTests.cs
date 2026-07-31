@@ -27,6 +27,71 @@ namespace ReSet.Core.Tests
             _userInteraction = Substitute.For<IVerificationUserInteraction>();
             _orchestrator = new VerificationPipelineOrchestrator(
                 _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4");
+
+            // Existing SP-focused tests retain their metadata fixtures while the
+            // production path now enters through the common code-object API.
+            _dbService.GetCodeObjectDetailsAsync(
+                    Arg.Any<string>(),
+                    Arg.Any<CodeObjectKey>(),
+                    Arg.Any<int>(),
+                    Arg.Any<System.Threading.CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    var key = callInfo.ArgAt<CodeObjectKey>(1);
+                    return _dbService.GetSpDetailsAsync(
+                        callInfo.ArgAt<string>(0),
+                        key.Schema,
+                        key.Name,
+                        callInfo.ArgAt<int>(2));
+                });
+        }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_UsesFunctionMetadata()
+        {
+            // This fails if functions are fetched through the legacy SP-only metadata entry point.
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "FN_Calc", CodeObjectType.Function);
+            var functionDef = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = "dbo",
+                Name = "FN_Calc",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS int AS BEGIN RETURN 1 END"
+            };
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+
+            _dbService.GetCodeObjectDetailsAsync(Arg.Any<string>(), key, Arg.Any<int>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(functionDef));
+            _aiService.GenerateSpecificationAsync(
+                    Arg.Is<SpDefinition>(x => x.ObjectType == CodeObjectType.Function),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+            _aiService.ReviewSpecificationAsync(functionDef, specMarkdown)
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10,
+                    ScoreCrud = 10,
+                    ScoreInterface = 10,
+                    ScoreException = 10,
+                    ScoreReadability = 10
+                }));
+
+            var result = await _orchestrator.RunCodeObjectPipelineAsync(
+                "conn", key, 2, "OpenAI", "rules", true, "/tmp/out");
+
+            Assert.NotNull(result.SpecMarkdown);
+            Assert.Equal(functionDef, result.SpDef);
+            await _aiService.Received().GenerateSpecificationAsync(
+                Arg.Is<SpDefinition>(x => x.ObjectType == CodeObjectType.Function),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Threading.CancellationToken>());
         }
 
         [Fact]

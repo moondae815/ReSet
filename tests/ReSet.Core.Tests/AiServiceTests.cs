@@ -105,6 +105,31 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateSpecificationAsync_FunctionPrompt_DoesNotRequireTransaction()
+        {
+            // This fails if the stored-procedure prompt is reused for a UDF.
+            var functionDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "FN_Calc",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS int AS BEGIN RETURN 1 END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 함수 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(functionDef, "rules");
+
+            Assert.DoesNotContain("BEGIN TRAN", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ROLLBACK", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("error return code", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("return contract", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("determinism", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("TVF result schema", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Success_ReturnsContent()
         {
             // Arrange
