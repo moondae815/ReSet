@@ -509,7 +509,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             var returnContract = returnInfo == null
                 ? "Return metadata is not available. Derive only what is explicit in the DDL."
                 : returnInfo.IsTableValued
-                    ? $"Table-valued function. Result columns:\n{string.Join("\n", returnInfo.Columns.Select(column => $"- {column.ColumnName}: {column.DataType}"))}"
+                    ? $"Table-valued function. Result columns:\n{string.Join("\n", returnInfo.Columns.Select(FormatFunctionReturnColumn))}"
                     : $"Scalar function return type: {returnInfo.DataType}";
 
             var userPrompt = $@"
@@ -545,6 +545,9 @@ Based on the reference context above, reverse engineer the user defined function
 
             return (systemPrompt, userPrompt);
         }
+
+        private static string FormatFunctionReturnColumn(ColumnInfo column) =>
+            $"- {column.ColumnName}: {column.DataType} ({(column.IsNullable ? "nullable" : "not nullable")})";
 
         private ReviewResult ParseReviewResult(string? responseContent, string contextName)
         {
@@ -1667,7 +1670,7 @@ Output ONLY raw JSON with HasDefects, FeedbackComment, ScoreAccuracy, ScoreCrud,
             var returnContract = returnInfo == null
                 ? "Return metadata unavailable"
                 : returnInfo.IsTableValued
-                    ? string.Join(", ", returnInfo.Columns.Select(column => $"{column.ColumnName} {column.DataType}"))
+                    ? string.Join(", ", returnInfo.Columns.Select(column => $"{column.ColumnName} {column.DataType} ({(column.IsNullable ? "nullable" : "not nullable")})"))
                     : returnInfo.DataType;
             var userPrompt = $@"
 Target User Defined Function:

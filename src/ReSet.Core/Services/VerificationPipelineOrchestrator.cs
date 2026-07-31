@@ -173,7 +173,20 @@ namespace ReSet.Core.Services
                     throw new InvalidOperationException($"코드 객체 메타데이터가 비어 있습니다: {key.CanonicalName}");
                 }
 
-                spDef.ObjectKey ??= key;
+                if (spDef.ObjectType != key.Type)
+                {
+                    Log.Warning(
+                        "[파이프라인] 메타데이터 객체 유형과 요청 키가 불일치해 요청 유형을 적용합니다 - Key: {ObjectKey}, MetadataType: {MetadataType}, RequestedType: {RequestedType}",
+                        key.CanonicalName,
+                        spDef.ObjectType,
+                        key.Type);
+                    spDef.ObjectType = key.Type;
+                    spDef.ObjectKey = key;
+                }
+                else
+                {
+                    spDef.ObjectKey ??= key;
+                }
                 Log.Debug("[파이프라인] DB 메타데이터 수집 완료 - 코드 객체: {ObjectKey}, 의존성 수: {DepCount}, 경고 수: {WarningCount}",
                     key.CanonicalName,
                     spDef?.Dependencies?.Count ?? 0, spDef?.Warnings?.Count ?? 0);
@@ -482,7 +495,10 @@ namespace ReSet.Core.Services
                 {
                     // 영역별 합성 가이드 및 프롬프트 조립
                     var sbConsolidation = new StringBuilder();
-                    sbConsolidation.AppendLine("당신은 제공된 여러 개의 Stored Procedure 분석 명세서 후보를 종합하여, 각 후보의 우수 영역을 취합하고 결점을 개선하여 단일한 완벽한 명세서로 합성(Consolidation)하는 전문 조립 아키텍트입니다.");
+                    var isFunction = spDef.ObjectType == CodeObjectType.Function;
+                    sbConsolidation.AppendLine(isFunction
+                        ? "You are a specialist consolidator for SQL Server User Defined Function specifications. Combine the strongest candidate evidence into one accurate function specification."
+                        : "당신은 제공된 여러 개의 Stored Procedure 분석 명세서 후보를 종합하여, 각 후보의 우수 영역을 취합하고 결점을 개선하여 단일한 완벽한 명세서로 합성(Consolidation)하는 전문 조립 아키텍트입니다.");
                     sbConsolidation.AppendLine();
                     sbConsolidation.AppendLine("[제공된 명세서 후보 목록 및 평가 점수]");
                     for (int i = 0; i < candidates.Length; i++)
@@ -491,11 +507,22 @@ namespace ReSet.Core.Services
                         if (rev == null) continue;
                         sbConsolidation.AppendLine($"--- [후보 {i+1}] ---");
                         sbConsolidation.AppendLine($"- 종합 평가 점수: {rev.NormalizedScore}점 / 100점 (50점 만점 기준 {rev.TotalScore}점)");
-                        sbConsolidation.AppendLine($"  * 비즈니스 로직 및 제어 흐름 정합성 (ScoreAccuracy): {rev.ScoreAccuracy}/10점");
-                        sbConsolidation.AppendLine($"  * 데이터 모델 및 CRUD 완전성 (ScoreCrud): {rev.ScoreCrud}/10점");
-                        sbConsolidation.AppendLine($"  * 연동 인터페이스 구체성 (ScoreInterface): {rev.ScoreInterface}/10점");
-                        sbConsolidation.AppendLine($"  * 예외 및 트랜잭션/격리성 정책 (ScoreException): {rev.ScoreException}/10점");
-                        sbConsolidation.AppendLine($"  * 다이어그램 및 시각화 가독성 (ScoreReadability): {rev.ScoreReadability}/10점");
+                        if (isFunction)
+                        {
+                            sbConsolidation.AppendLine($"  * Formula and business logic accuracy (ScoreAccuracy): {rev.ScoreAccuracy}/10");
+                            sbConsolidation.AppendLine($"  * Referenced tables/functions completeness (ScoreCrud): {rev.ScoreCrud}/10");
+                            sbConsolidation.AppendLine($"  * Return contract and TVF schema completeness (ScoreInterface): {rev.ScoreInterface}/10");
+                            sbConsolidation.AppendLine($"  * Determinism and observable side effects accuracy (ScoreException): {rev.ScoreException}/10");
+                            sbConsolidation.AppendLine($"  * Diagram and specification readability (ScoreReadability): {rev.ScoreReadability}/10");
+                        }
+                        else
+                        {
+                            sbConsolidation.AppendLine($"  * 비즈니스 로직 및 제어 흐름 정합성 (ScoreAccuracy): {rev.ScoreAccuracy}/10점");
+                            sbConsolidation.AppendLine($"  * 데이터 모델 및 CRUD 완전성 (ScoreCrud): {rev.ScoreCrud}/10점");
+                            sbConsolidation.AppendLine($"  * 연동 인터페이스 구체성 (ScoreInterface): {rev.ScoreInterface}/10점");
+                            sbConsolidation.AppendLine($"  * 예외 및 트랜잭션/격리성 정책 (ScoreException): {rev.ScoreException}/10점");
+                            sbConsolidation.AppendLine($"  * 다이어그램 및 시각화 가독성 (ScoreReadability): {rev.ScoreReadability}/10점");
+                        }
                         sbConsolidation.AppendLine($"- Critic 결함 피드백: {rev.FeedbackComment ?? "결함 없음"}");
                         sbConsolidation.AppendLine();
                         sbConsolidation.AppendLine("[본문 내용]");
@@ -504,11 +531,21 @@ namespace ReSet.Core.Services
                     }
                     sbConsolidation.AppendLine();
                     sbConsolidation.AppendLine("[합성 및 병합 지침]");
-                    sbConsolidation.AppendLine("1. 각 카테고리별 세부 평가 점수를 바탕으로, 해당 부문에서 가장 높은 점수(만점에 가까운 점수)를 받은 후보의 내용을 '진실의 원천(Source of Truth)'으로 채택하여 조립하십시오.");
-                    sbConsolidation.AppendLine("   - 예: ScoreAccuracy(정합성)가 가장 높은 후보의 로직 설명을 바탕으로 삼고, ScoreReadability(다이어그램)가 가장 높은 후보의 Mermaid 다이어그램을 병합합니다.");
-                    sbConsolidation.AppendLine("2. 각 후보에 지적된 Critic 결함 피드백(Critic Feedback) 내용을 명밀히 분석하여 최종 합성 명세서에서 완전히 수정 및 보완하십시오.");
-                    sbConsolidation.AppendLine("3. 5대 필수 대분류 헤더 명칭(## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화)을 그대로 사용하여 문서를 구성하십시오.");
-                    sbConsolidation.AppendLine("4. 최종 결과물만 다듬어 마크다운으로 직접 출력하십시오. 추가적인 사족이나 인사말은 절대 포함하지 마십시오.");
+                    if (isFunction)
+                    {
+                        sbConsolidation.AppendLine("1. Preserve the exact function return contract, including every TVF column, data type, and nullability when supplied.");
+                        sbConsolidation.AppendLine("2. Select the most factual candidate evidence for formulas, determinism, side effects, and referenced tables/functions; correct every critic defect without inventing behavior.");
+                        sbConsolidation.AppendLine("3. Keep the required Korean H2 headers: ## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화.");
+                        sbConsolidation.AppendLine("4. Output only the final Korean Markdown specification without conversational filler.");
+                    }
+                    else
+                    {
+                        sbConsolidation.AppendLine("1. 각 카테고리별 세부 평가 점수를 바탕으로, 해당 부문에서 가장 높은 점수(만점에 가까운 점수)를 받은 후보의 내용을 '진실의 원천(Source of Truth)'으로 채택하여 조립하십시오.");
+                        sbConsolidation.AppendLine("   - 예: ScoreAccuracy(정합성)가 가장 높은 후보의 로직 설명을 바탕으로 삼고, ScoreReadability(다이어그램)가 가장 높은 후보의 Mermaid 다이어그램을 병합합니다.");
+                        sbConsolidation.AppendLine("2. 각 후보에 지적된 Critic 결함 피드백(Critic Feedback) 내용을 명밀히 분석하여 최종 합성 명세서에서 완전히 수정 및 보완하십시오.");
+                        sbConsolidation.AppendLine("3. 5대 필수 대분류 헤더 명칭(## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화)을 그대로 사용하여 문서를 구성하십시오.");
+                        sbConsolidation.AppendLine("4. 최종 결과물만 다듬어 마크다운으로 직접 출력하십시오. 추가적인 사족이나 인사말은 절대 포함하지 마십시오.");
+                    }
 
                     string scoreSummary = (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null) 
                         ? $" (Low: {reviews[0].NormalizedScore}점, Medium: {reviews[1].NormalizedScore}점, High: {reviews[2].NormalizedScore}점)"

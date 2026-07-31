@@ -56,7 +56,8 @@ namespace ReSet.Core.Tests
                 ObjectKey = key,
                 Schema = "dbo",
                 Name = "FN_Calc",
-                ObjectType = CodeObjectType.Function,
+                // Simulates a legacy metadata adapter that omits the object type.
+                ObjectType = CodeObjectType.Procedure,
                 DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS int AS BEGIN RETURN 1 END"
             };
             var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
@@ -86,9 +87,73 @@ namespace ReSet.Core.Tests
 
             Assert.NotNull(result.SpecMarkdown);
             Assert.Equal(functionDef, result.SpDef);
+            Assert.Equal(CodeObjectType.Function, result.SpDef!.ObjectType);
             await _aiService.Received().GenerateSpecificationAsync(
                 Arg.Is<SpDefinition>(x => x.ObjectType == CodeObjectType.Function),
                 Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Threading.CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_DynamicFunctionConsolidation_ExcludesProcedureInstructions()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var actorService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var consolidatorService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                actorService,
+                new MechanicalValidator(),
+                userInteraction,
+                "1",
+                "gpt-4",
+                null,
+                criticService,
+                consolidatorService,
+                "dynamic",
+                "high",
+                "medium",
+                8);
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "FN_Calc", CodeObjectType.Function);
+            var functionDef = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = "dbo",
+                Name = "FN_Calc",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS int AS BEGIN RETURN 1 END"
+            };
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var candidateReview = new ReviewResult { HasDefects = true, FeedbackComment = "Needs formula detail", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 };
+            var finalReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+
+            dbService.GetCodeObjectDetailsAsync(Arg.Any<string>(), key, Arg.Any<int>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(functionDef));
+            actorService.GenerateSpecificationAsync(functionDef, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+            criticService.ReviewSpecificationAsync(functionDef, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(finalReview));
+            consolidatorService.GenerateSpecificationAsync(functionDef, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "conn", key, 2, "OpenAI", "rules", true, "/tmp/out");
+
+            Assert.NotNull(result.SpecMarkdown);
+            await consolidatorService.Received().GenerateSpecificationAsync(
+                functionDef,
+                Arg.Is<string>(instructions =>
+                    !instructions.Contains("Stored Procedure", StringComparison.OrdinalIgnoreCase) &&
+                    !instructions.Contains("transaction", StringComparison.OrdinalIgnoreCase) &&
+                    !instructions.Contains("isolation", StringComparison.OrdinalIgnoreCase)),
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
                 Arg.Any<System.Threading.CancellationToken>());

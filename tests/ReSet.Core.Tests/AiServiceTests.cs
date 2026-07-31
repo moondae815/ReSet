@@ -113,7 +113,15 @@ namespace ReSet.Core.Tests
                 Schema = "dbo",
                 Name = "FN_Calc",
                 ObjectType = CodeObjectType.Function,
-                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS int AS BEGIN RETURN 1 END"
+                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS TABLE AS RETURN SELECT CAST(1 AS decimal(18,2)) AS Amount",
+                FunctionReturn = new FunctionReturnInfo
+                {
+                    IsTableValued = true,
+                    Columns = new System.Collections.Generic.List<ColumnInfo>
+                    {
+                        new ColumnInfo { ColumnName = "Amount", DataType = "decimal(18,2)", IsNullable = true }
+                    }
+                }
             };
             var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 함수 명세서\"}}]}";
             var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "test_key", "https://api.openai.com/v1", "gpt-4o");
@@ -127,6 +135,37 @@ namespace ReSet.Core.Tests
             Assert.Contains("return contract", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("determinism", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("TVF result schema", result.SystemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("- Amount: decimal(18,2) (nullable)", result.UserPrompt, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public async Task ReviewSpecificationAsync_FunctionPrompt_UsesTvfNullabilityWithoutProcedureInstructions()
+        {
+            var functionDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "FN_Calc",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.FN_Calc() RETURNS TABLE AS RETURN SELECT CAST(1 AS decimal(18,2)) AS Amount",
+                FunctionReturn = new FunctionReturnInfo
+                {
+                    IsTableValued = true,
+                    Columns = new System.Collections.Generic.List<ColumnInfo>
+                    {
+                        new ColumnInfo { ColumnName = "Amount", DataType = "decimal(18,2)", IsNullable = true }
+                    }
+                }
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\",\\\"ScoreAccuracy\\\":10,\\\"ScoreCrud\\\":10,\\\"ScoreInterface\\\":10,\\\"ScoreException\\\":10,\\\"ScoreReadability\\\":10}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            IAiService service = new AiService(new OpenAiClient(new HttpClient(handler), "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var result = await service.ReviewSpecificationAsync(functionDef, "## 개요");
+
+            Assert.False(result.HasDefects);
+            Assert.Contains("Amount decimal(18,2) (nullable)", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("BEGIN TRAN", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("return codes", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -619,6 +658,7 @@ namespace ReSet.Core.Tests
     {
         private readonly string _responseContent;
         private readonly System.Net.HttpStatusCode _statusCode;
+        public string LastRequestBody { get; private set; } = string.Empty;
 
         public MockHttpMessageHandler(string responseContent, System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
         {
@@ -626,13 +666,16 @@ namespace ReSet.Core.Tests
             _statusCode = statusCode;
         }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
         {
+            LastRequestBody = request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
             var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_responseContent, System.Text.Encoding.UTF8, "application/json")
             };
-            return Task.FromResult(response);
+            return response;
         }
     }
 }
