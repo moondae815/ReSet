@@ -179,7 +179,7 @@ namespace ReSet.Core.Services
 
         private static CodeObjectType NormalizeCodeObjectType(string sqlServerType)
         {
-            return sqlServerType.ToUpperInvariant() switch
+            return sqlServerType.Trim().ToUpperInvariant() switch
             {
                 "P" or "PC" => CodeObjectType.Procedure,
                 "FN" or "IF" or "TF" or "FS" or "FT" => CodeObjectType.Function,
@@ -198,6 +198,23 @@ namespace ReSet.Core.Services
             string? dependencyDatabase,
             CodeObjectKey sourceObjectKey) =>
             dependencyDatabase ?? sourceObjectKey.Database;
+
+        private static (string LookupDatabase, string? StoredDatabase)
+            ResolveDynamicDependencyDatabases(
+                string? dependencyDatabase,
+                CodeObjectKey sourceObjectKey)
+        {
+            var lookupDatabase = ResolveDependencyDatabase(
+                dependencyDatabase,
+                sourceObjectKey);
+            var storedDatabase = string.Equals(
+                lookupDatabase,
+                sourceObjectKey.Database,
+                StringComparison.OrdinalIgnoreCase)
+                ? null
+                : lookupDatabase;
+            return (lookupDatabase, storedDatabase);
+        }
 
         private async Task<string> GetCodeObjectTypeCodeAsync(
             string connectionString,
@@ -543,7 +560,7 @@ namespace ReSet.Core.Services
                 // 동일 DB 또는 타 DB 개체의 타입을 알 수 없는 경우 동적 확인
                 if (rawDep.Type == "UNKNOWN")
                 {
-                    rawDep.Type = await GetObjectTypeAsync(connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, cancellationToken);
+                    rawDep.Type = await GetObjectTypeAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
                     depInfo.Type = rawDep.Type;
                 }
 
@@ -907,11 +924,16 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                var depFullName = string.IsNullOrEmpty(depDb) 
+                var databaseResolution = ResolveDynamicDependencyDatabases(
+                    depDb,
+                    sourceObjectKey);
+                var lookupDatabase = databaseResolution.LookupDatabase;
+                var storedDatabase = databaseResolution.StoredDatabase;
+                var depFullName = string.IsNullOrEmpty(storedDatabase)
                     ? $"{schema}.{name}" 
-                    : $"[{depDb}].[{schema}].[{name}]";
+                    : $"[{storedDatabase}].[{schema}].[{name}]";
                 var visitedName = BuildVisitedObjectName(
-                    depDb ?? sourceObjectKey.Database,
+                    lookupDatabase,
                     schema,
                     name);
 
@@ -919,7 +941,9 @@ namespace ReSet.Core.Services
 
                 // 데이터베이스 실제 개체 여부 및 타입 조회
                 string? objectType = null;
-                var cleanDb = string.IsNullOrEmpty(depDb) ? "" : $"[{depDb.Replace("]", "]]")}].";
+                var cleanDb = string.IsNullOrEmpty(lookupDatabase)
+                    ? ""
+                    : $"[{lookupDatabase.Replace("]", "]]")}].";
                 var checkQuery = $@"
                     SELECT o.type_desc 
                     FROM {cleanDb}sys.objects o
@@ -931,17 +955,6 @@ namespace ReSet.Core.Services
                     using (var conn = new SqlConnection(connectionString))
                     {
                         await conn.OpenAsync(cancellationToken);
-                        if (depDb != null &&
-                            string.Equals(
-                                depDb,
-                                sourceObjectKey.Database,
-                                StringComparison.OrdinalIgnoreCase))
-                        {
-                            depDb = null;
-                            cleanDb = "";
-                            depFullName = $"{schema}.{name}";
-                        }
-
                         using (var cmd = new SqlCommand(checkQuery, conn))
                         {
                             cmd.Parameters.AddWithValue("@ObjectName", name);
@@ -967,7 +980,7 @@ namespace ReSet.Core.Services
                     {
                         SourceObjectKey = sourceObjectKey,
                         IsDynamicSqlCandidate = true,
-                        Database = depDb,
+                        Database = storedDatabase,
                         Schema = schema,
                         Name = name,
                         Type = objectType,
@@ -977,9 +990,9 @@ namespace ReSet.Core.Services
 
                     try
                     {
-                        depInfo.Columns = await GetTableColumnsAsync(connectionString, depDb, schema, name, cancellationToken);
-                        depInfo.Description = await GetTableDescriptionAsync(connectionString, depDb, schema, name, cancellationToken);
-                        depInfo.Indexes = await GetTableIndexesAsync(connectionString, depDb, schema, name, cancellationToken);
+                        depInfo.Columns = await GetTableColumnsAsync(connectionString, lookupDatabase, schema, name, cancellationToken);
+                        depInfo.Description = await GetTableDescriptionAsync(connectionString, lookupDatabase, schema, name, cancellationToken);
+                        depInfo.Indexes = await GetTableIndexesAsync(connectionString, lookupDatabase, schema, name, cancellationToken);
                         if (string.IsNullOrEmpty(depInfo.Description))
                         {
                             depInfo.Description = "Dynamic SQL에 의해 동적 감지된 테이블";

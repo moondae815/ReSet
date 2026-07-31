@@ -23,6 +23,7 @@ namespace ReSet.Core.Tests
 
         [Theory]
         [InlineData("P", CodeObjectType.Procedure)]
+        [InlineData("P ", CodeObjectType.Procedure)]
         [InlineData("PC", CodeObjectType.Procedure)]
         [InlineData("FN", CodeObjectType.Function)]
         [InlineData("IF", CodeObjectType.Function)]
@@ -78,6 +79,24 @@ namespace ReSet.Core.Tests
             Assert.Equal(
                 expected,
                 method.Invoke(null, new object?[] { dependencyDatabase, sourceKey }));
+        }
+
+        [Fact]
+        public void ResolveDynamicDependencyDatabases_UsesSourceForLookupAndNullForStorage()
+        {
+            var method = typeof(DbMetadataService).GetMethod(
+                "ResolveDynamicDependencyDatabases",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var sourceKey = CodeObjectKey.Create(
+                "AuditDB", "dbo", "usp_Source", CodeObjectType.Procedure);
+
+            Assert.NotNull(method);
+            var result = ((string LookupDatabase, string? StoredDatabase))method.Invoke(
+                null,
+                new object?[] { null, sourceKey })!;
+
+            Assert.Equal("AuditDB", result.LookupDatabase);
+            Assert.Null(result.StoredDatabase);
         }
     }
 }
