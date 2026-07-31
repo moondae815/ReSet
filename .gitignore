@@ -38,3 +38,6 @@ appsettings.local.json
 
 # Scratch folder
 scratch/
+
+# Local Git worktrees
+.worktrees/
