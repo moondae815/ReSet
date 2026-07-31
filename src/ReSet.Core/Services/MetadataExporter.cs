@@ -2,6 +2,9 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
@@ -11,6 +14,178 @@ namespace ReSet.Core.Services
 {
     public class MetadataExporter : IMetadataExporter
     {
+        public Task ExportCodeObjectArtifactsAsync(
+            SpDefinition definition,
+            CodeObjectKey objectKey,
+            CodeObjectPipelineResult graph,
+            DependencyArtifactMode artifactMode,
+            string outputRoot,
+            string? rawPromptContext = null,
+            CancellationToken cancellationToken = default) =>
+            ExportCodeObjectArtifactsAsync(
+                definition,
+                objectKey,
+                graph,
+                artifactMode,
+                new OutputPathResolver(objectKey.Database, outputRoot),
+                rawPromptContext,
+                cancellationToken);
+
+        public async Task ExportCodeObjectArtifactsAsync(
+            SpDefinition definition,
+            CodeObjectKey objectKey,
+            CodeObjectPipelineResult graph,
+            DependencyArtifactMode artifactMode,
+            OutputPathResolver paths,
+            string? rawPromptContext = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(definition);
+            ArgumentNullException.ThrowIfNull(objectKey);
+            ArgumentNullException.ThrowIfNull(graph);
+            ArgumentNullException.ThrowIfNull(paths);
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                PopulateArtifactPaths(graph, paths);
+
+                var canonicalDdlPath = paths.ResolveCanonicalDdlPath(objectKey);
+                Directory.CreateDirectory(Path.GetDirectoryName(canonicalDdlPath)!);
+                await File.WriteAllTextAsync(
+                    canonicalDdlPath,
+                    definition.DdlText ?? string.Empty,
+                    Encoding.UTF8,
+                    cancellationToken);
+
+                if (!string.IsNullOrEmpty(rawPromptContext))
+                {
+                    var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
+                    await File.WriteAllTextAsync(
+                        Path.Combine(rawDirectory, "prompt-context.md"),
+                        rawPromptContext,
+                        Encoding.UTF8,
+                        cancellationToken);
+                }
+
+                if (artifactMode == DependencyArtifactMode.PortableBundle)
+                {
+                    var objectDirectory = Path.GetDirectoryName(Path.GetDirectoryName(canonicalDdlPath)!)!;
+                    await ExportRawMetadataAsync(
+                        definition,
+                        rawPromptContext ?? string.Empty,
+                        objectDirectory,
+                        saveJson: false,
+                        saveContext: false,
+                        saveFiles: true);
+                }
+
+                var manifestPath = paths.ResolveManifestPath(objectKey);
+                Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+                var objectDirectoryForManifest = Path.GetDirectoryName(Path.GetDirectoryName(manifestPath)!)!;
+                var manifest = BuildManifest(definition, objectKey, graph, paths, objectDirectoryForManifest);
+                var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(manifestPath, json, Encoding.UTF8, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "코드 객체 아티팩트 저장 중 오류가 발생했습니다 (격리됨): {ObjectKey}", objectKey.CanonicalName);
+            }
+        }
+
+        private static void PopulateArtifactPaths(CodeObjectPipelineResult graph, OutputPathResolver paths)
+        {
+            foreach (var node in graph.Nodes)
+            {
+                node.SpecPath ??= paths.ResolveSpecPath(node.Key);
+                node.DdlPath ??= paths.ResolveCanonicalDdlPath(node.Key);
+            }
+
+            foreach (var result in graph.AnalysisResults)
+            {
+                result.SpecPath ??= paths.ResolveSpecPath(result.Key);
+                result.DdlPath ??= paths.ResolveCanonicalDdlPath(result.Key);
+            }
+        }
+
+        private static DependencyManifest BuildManifest(
+            SpDefinition definition,
+            CodeObjectKey objectKey,
+            CodeObjectPipelineResult graph,
+            OutputPathResolver paths,
+            string objectDirectory)
+        {
+            var definitions = graph.AnalysisResults
+                .Where(result => result.Key is not null)
+                .ToDictionary(result => result.Key, result => result.Definition);
+            definitions[objectKey] = definition;
+
+            return new DependencyManifest
+            {
+                Key = objectKey.CanonicalName,
+                Nodes = graph.Nodes
+                    .OrderBy(node => node.Key.CanonicalName, StringComparer.OrdinalIgnoreCase)
+                    .Select(node => new DependencyManifestNode
+                    {
+                        Key = node.Key.CanonicalName,
+                        Sha256 = definitions.TryGetValue(node.Key, out var nodeDefinition)
+                            ? ComputeSha256(nodeDefinition.DdlText)
+                            : null,
+                        Status = node.Status.ToString(),
+                        Error = node.Error,
+                        SpecPath = ToRelativePath(objectDirectory, node.SpecPath ?? paths.ResolveSpecPath(node.Key)),
+                        DdlPath = ToRelativePath(objectDirectory, node.DdlPath ?? paths.ResolveCanonicalDdlPath(node.Key))
+                    })
+                    .ToList(),
+                Calls = graph.DependencyEdges
+                    .OrderBy(edge => edge.Source.CanonicalName, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(edge => edge.Target.CanonicalName, StringComparer.OrdinalIgnoreCase)
+                    .Select(edge => new DependencyManifestEdge
+                    {
+                        Source = edge.Source.CanonicalName,
+                        Target = edge.Target.CanonicalName,
+                        IsDynamicSqlCandidate = edge.IsDynamicSqlCandidate
+                    })
+                    .ToList()
+            };
+        }
+
+        private static string ComputeSha256(string? value) =>
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value ?? string.Empty))).ToLowerInvariant();
+
+        private static string ToRelativePath(string baseDirectory, string path) =>
+            Path.GetRelativePath(baseDirectory, path)
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
+
+        private sealed class DependencyManifest
+        {
+            public string Key { get; init; } = string.Empty;
+            public List<DependencyManifestNode> Nodes { get; init; } = new();
+            public List<DependencyManifestEdge> Calls { get; init; } = new();
+        }
+
+        private sealed class DependencyManifestNode
+        {
+            public string Key { get; init; } = string.Empty;
+            public string? Sha256 { get; init; }
+            public string Status { get; init; } = string.Empty;
+            public string? Error { get; init; }
+            public string SpecPath { get; init; } = string.Empty;
+            public string DdlPath { get; init; } = string.Empty;
+        }
+
+        private sealed class DependencyManifestEdge
+        {
+            public string Source { get; init; } = string.Empty;
+            public string Target { get; init; } = string.Empty;
+            public bool IsDynamicSqlCandidate { get; init; }
+        }
+
         public async Task ExportRawMetadataAsync(
             SpDefinition spDef, 
             string rawPromptContext, 

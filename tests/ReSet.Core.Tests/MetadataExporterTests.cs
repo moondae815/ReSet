@@ -224,6 +224,66 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_ReferenceModeWritesCanonicalDdlOnly()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var resolver = new OutputPathResolver("PaymentDB", outputRoot);
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Parent", CodeObjectType.Procedure);
+            var childKey = CodeObjectKey.Create("PaymentDB", "dbo", "FN_X", CodeObjectType.Function);
+            var definition = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "USP_Parent",
+                DdlText = "CREATE PROCEDURE dbo.USP_Parent AS SELECT dbo.FN_X();"
+            };
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "FN_X",
+                Type = "SQL_SCALAR_FUNCTION",
+                ReferencedDdlText = "CREATE FUNCTION dbo.FN_X() RETURNS INT AS BEGIN RETURN 1; END;"
+            });
+            var graph = new CodeObjectPipelineResult
+            {
+                Nodes = new System.Collections.Generic.List<AnalysisNode>
+                {
+                    new(key) { Status = AnalysisNodeStatus.Succeeded },
+                    new(childKey) { Status = AnalysisNodeStatus.Succeeded }
+                },
+                DependencyEdges = new System.Collections.Generic.List<DependencyEdge> { new(key, childKey) }
+            };
+
+            try
+            {
+                IMetadataExporter exporter = new MetadataExporter();
+
+                await exporter.ExportCodeObjectArtifactsAsync(
+                    definition,
+                    key,
+                    graph,
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                Assert.True(File.Exists(resolver.ResolveCanonicalDdlPath(key)));
+                Assert.False(File.Exists(Path.Combine(
+                    outputRoot,
+                    "Procedures",
+                    "dbo.USP_Parent",
+                    "raw",
+                    "ddl",
+                    "functions",
+                    "dbo.FN_X.sql")));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot))
+                {
+                    Directory.Delete(outputRoot, true);
+                }
+            }
+        }
+
+        [Fact]
         public async Task ExportConsolidatedMigrationInstructionsAsync_ShouldCreateInstructionsFile_WithCorrectContent()
         {
             // Arrange

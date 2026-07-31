@@ -29,6 +29,7 @@ public sealed class AnalysisNode
     public int AnalysisAttempts { get; set; }
     public string? Error { get; set; }
     public string? SpecPath { get; set; }
+    public string? DdlPath { get; set; }
 }
 
 public sealed class DependencyEdge
@@ -70,4 +71,6 @@ public sealed class CodeObjectAnalysisResult
     public CodeObjectKey Key { get; set; } = null!;
     public SpDefinition Definition { get; set; } = new();
     public FunctionReturnInfo? FunctionReturn { get; set; }
+    public string? SpecPath { get; set; }
+    public string? DdlPath { get; set; }
 }

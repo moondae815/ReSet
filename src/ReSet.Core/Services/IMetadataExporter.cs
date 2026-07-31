@@ -3,6 +3,12 @@ using System.Threading.Tasks;
 using ReSet.Core.Models;
 namespace ReSet.Core.Services
 {
+    public enum DependencyArtifactMode
+    {
+        Reference,
+        PortableBundle
+    }
+
     public interface IMetadataExporter
     {
         /// <summary>
@@ -15,6 +21,30 @@ namespace ReSet.Core.Services
             bool saveJson, 
             bool saveContext, 
             bool saveFiles);
+
+        /// <summary>
+        /// 코드 객체별 표준 DDL과 의존성 그래프 매니페스트를 저장합니다.
+        /// </summary>
+        Task ExportCodeObjectArtifactsAsync(
+            SpDefinition definition,
+            CodeObjectKey objectKey,
+            CodeObjectPipelineResult graph,
+            DependencyArtifactMode artifactMode,
+            string outputRoot,
+            string? rawPromptContext = null,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 호출자가 이미 계산한 객체 경로 정책을 사용하여 코드 객체 아티팩트를 저장합니다.
+        /// </summary>
+        Task ExportCodeObjectArtifactsAsync(
+            SpDefinition definition,
+            CodeObjectKey objectKey,
+            CodeObjectPipelineResult graph,
+            DependencyArtifactMode artifactMode,
+            OutputPathResolver paths,
+            string? rawPromptContext = null,
+            CancellationToken cancellationToken = default);
 
 
 
