@@ -171,14 +171,45 @@ public sealed class DependencyAnalysisOrchestratorTests
         Assert.DoesNotContain(externalFunction, pipelineRequests);
     }
 
-    private static DependencyAnalysisRequest Request(int maxDepth = 3) => new()
+    [Fact]
+    public async Task AnalyzeAsync_PersistsArtifactsAndLinksAfterRecursiveAnalysisCompletes()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-RecursiveArtifacts-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)),
+            new MetadataExporter(),
+            new MechanicalValidator());
+        var request = Request(outputDirectory: outputRoot);
+
+        try
+        {
+            await sut.AnalyzeAsync(root, request, CancellationToken.None);
+
+            var rootDirectory = Path.Combine(outputRoot, "Procedures", "dbo.USP_Root");
+            Assert.True(File.Exists(Path.Combine(rootDirectory, "docs", "Spec.md")));
+            Assert.True(File.Exists(Path.Combine(outputRoot, "Objects", "dbo.USP_Root.Procedure", "raw", "object_definition.sql")));
+            Assert.True(File.Exists(Path.Combine(outputRoot, "Procedures", "dbo.USP_Root", "raw", "dependency-manifest.json")));
+            var rootSpec = await File.ReadAllTextAsync(Path.Combine(rootDirectory, "docs", "Spec.md"));
+            Assert.Contains("[dbo.FN\\_Child](../../../Functions/dbo.FN_Child/docs/Spec.md)", rootSpec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    private static DependencyAnalysisRequest Request(int maxDepth = 3, string outputDirectory = "/tmp/output") => new()
     {
         ConnectionString = "Server=(local);Database=PaymentDB",
         MaxDepth = maxDepth,
         Provider = "OpenAI",
         Instructions = "rules",
         IsBatchMode = true,
-        OutputDirectory = "/tmp/output"
+        OutputDirectory = outputDirectory
     };
 
     private static CodeObjectKey Key(string name, CodeObjectType type) =>

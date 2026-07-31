@@ -71,6 +71,7 @@ public sealed class CodeObjectAnalysisResult
     public CodeObjectKey Key { get; set; } = null!;
     public SpDefinition Definition { get; set; } = new();
     public FunctionReturnInfo? FunctionReturn { get; set; }
+    public string? SpecMarkdown { get; set; }
     public string? SpecPath { get; set; }
     public string? DdlPath { get; set; }
 }

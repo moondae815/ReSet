@@ -284,6 +284,97 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Prompt", CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                Schema = key.Schema,
+                Name = key.Name,
+                DdlText = "SELECT 1;",
+                RawPromptContext = "actual prompt body"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    definition,
+                    key,
+                    new CodeObjectPipelineResult { Nodes = new System.Collections.Generic.List<AnalysisNode> { new(key) { Status = AnalysisNodeStatus.Succeeded } } },
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_Prompt.Procedure", "raw", "prompt-context.md");
+                Assert.Equal("actual prompt body", await File.ReadAllTextAsync(promptPath));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_CreatesEmptyPromptContextFileWhenNoPromptExists()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_EmptyPrompt", CodeObjectType.Procedure);
+
+            try
+            {
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    new SpDefinition { Schema = key.Schema, Name = key.Name, DdlText = "SELECT 1;" },
+                    key,
+                    new CodeObjectPipelineResult { Nodes = new System.Collections.Generic.List<AnalysisNode> { new(key) { Status = AnalysisNodeStatus.Succeeded } } },
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_EmptyPrompt.Procedure", "raw", "prompt-context.md");
+                Assert.True(File.Exists(promptPath));
+                Assert.Equal(string.Empty, await File.ReadAllTextAsync(promptPath));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_PortableBundleWritesOnlyReferencedDdlAlongsideCanonicalDdl()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Portable", CodeObjectType.Procedure);
+            var childKey = CodeObjectKey.Create("PaymentDB", "dbo", "FN_X", CodeObjectType.Function);
+            var definition = new SpDefinition { Schema = key.Schema, Name = key.Name, DdlText = "CREATE PROCEDURE dbo.USP_Portable AS SELECT 1;" };
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = childKey.Schema,
+                Name = childKey.Name,
+                Type = "SQL_SCALAR_FUNCTION",
+                ReferencedDdlText = "CREATE FUNCTION dbo.FN_X() RETURNS INT AS BEGIN RETURN 1; END;"
+            });
+
+            try
+            {
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    definition,
+                    key,
+                    new CodeObjectPipelineResult { Nodes = new System.Collections.Generic.List<AnalysisNode> { new(key) { Status = AnalysisNodeStatus.Succeeded }, new(childKey) { Status = AnalysisNodeStatus.Succeeded } } },
+                    DependencyArtifactMode.PortableBundle,
+                    outputRoot);
+
+                var rawDirectory = Path.Combine(outputRoot, "Objects", "dbo.USP_Portable.Procedure", "raw");
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "object_definition.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.FN_X.sql")));
+                Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "sp_definition.sql")));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task ExportConsolidatedMigrationInstructionsAsync_ShouldCreateInstructionsFile_WithCorrectContent()
         {
             // Arrange

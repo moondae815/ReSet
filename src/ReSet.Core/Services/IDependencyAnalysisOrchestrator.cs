@@ -12,6 +12,7 @@ public sealed class DependencyAnalysisRequest
     public string OutputDirectory { get; init; } = "./output";
     public bool EnableCache { get; init; }
     public bool AllowExternalDatabaseConnections { get; init; }
+    public DependencyArtifactMode DependencyArtifactMode { get; init; } = DependencyArtifactMode.Reference;
 }
 
 public delegate Task<CodeObjectPipelineResult> DependencyAnalysisPipelineRunner(

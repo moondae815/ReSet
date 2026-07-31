@@ -58,26 +58,17 @@ namespace ReSet.Core.Services
                     Encoding.UTF8,
                     cancellationToken);
 
-                if (!string.IsNullOrEmpty(rawPromptContext))
-                {
-                    var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
-                    await File.WriteAllTextAsync(
-                        Path.Combine(rawDirectory, "prompt-context.md"),
-                        rawPromptContext,
-                        Encoding.UTF8,
-                        cancellationToken);
-                }
+                var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
+                var promptContext = rawPromptContext ?? definition.RawPromptContext ?? string.Empty;
+                await File.WriteAllTextAsync(
+                    Path.Combine(rawDirectory, "prompt-context.md"),
+                    promptContext,
+                    Encoding.UTF8,
+                    cancellationToken);
 
                 if (artifactMode == DependencyArtifactMode.PortableBundle)
                 {
-                    var objectDirectory = Path.GetDirectoryName(Path.GetDirectoryName(canonicalDdlPath)!)!;
-                    await ExportRawMetadataAsync(
-                        definition,
-                        rawPromptContext ?? string.Empty,
-                        objectDirectory,
-                        saveJson: false,
-                        saveContext: false,
-                        saveFiles: true);
+                    await ExportReferencedCodeDdlsAsync(definition, rawDirectory, cancellationToken);
                 }
 
                 var manifestPath = paths.ResolveManifestPath(objectKey);
@@ -109,6 +100,30 @@ namespace ReSet.Core.Services
             {
                 result.SpecPath ??= paths.ResolveSpecPath(result.Key);
                 result.DdlPath ??= paths.ResolveCanonicalDdlPath(result.Key);
+            }
+        }
+
+        private static async Task ExportReferencedCodeDdlsAsync(
+            SpDefinition definition,
+            string rawDirectory,
+            CancellationToken cancellationToken)
+        {
+            foreach (var dependency in definition.Dependencies.Where(dependency =>
+                         !string.IsNullOrWhiteSpace(dependency.ReferencedDdlText)))
+            {
+                var dependencyName = string.IsNullOrEmpty(dependency.Database)
+                    ? $"{dependency.Schema}.{dependency.Name}"
+                    : $"{dependency.Database}.{dependency.Schema}.{dependency.Name}";
+                var folderName = dependency.Type.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase)
+                    ? "procedures"
+                    : "functions";
+                var folder = Path.Combine(rawDirectory, "ddl", folderName);
+                Directory.CreateDirectory(folder);
+                await File.WriteAllTextAsync(
+                    Path.Combine(folder, $"{dependencyName}.sql"),
+                    dependency.ReferencedDdlText!,
+                    Encoding.UTF8,
+                    cancellationToken);
             }
         }
 

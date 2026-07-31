@@ -7,6 +7,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 {
     private readonly IDbMetadataService _metadataService;
     private readonly DependencyAnalysisPipelineRunner _pipelineRunner;
+    private readonly IMetadataExporter _metadataExporter;
+    private readonly MechanicalValidator _validator;
 
     public DependencyAnalysisOrchestrator(
         IDbMetadataService metadataService,
@@ -24,17 +26,23 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.EnableCache,
                 cancellationToken,
                 directDependenciesOnly: true,
-                includeExternalCodeObjects: request.AllowExternalDatabaseConnections))
+                includeExternalCodeObjects: request.AllowExternalDatabaseConnections),
+            new MetadataExporter(),
+            new MechanicalValidator())
     {
         ArgumentNullException.ThrowIfNull(pipelineOrchestrator);
     }
 
     public DependencyAnalysisOrchestrator(
         IDbMetadataService metadataService,
-        DependencyAnalysisPipelineRunner pipelineRunner)
+        DependencyAnalysisPipelineRunner pipelineRunner,
+        IMetadataExporter? metadataExporter = null,
+        MechanicalValidator? validator = null)
     {
         _metadataService = metadataService ?? throw new ArgumentNullException(nameof(metadataService));
         _pipelineRunner = pipelineRunner ?? throw new ArgumentNullException(nameof(pipelineRunner));
+        _metadataExporter = metadataExporter ?? new MetadataExporter();
+        _validator = validator ?? new MechanicalValidator();
     }
 
     public async Task<CodeObjectPipelineResult> AnalyzeAsync(
@@ -49,12 +57,14 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         var execution = new ExecutionState(rootKey.Database);
         await QueueOrReuseAsync(rootKey, 0, request, execution, cancellationToken);
 
-        return new CodeObjectPipelineResult
+        var result = new CodeObjectPipelineResult
         {
             Nodes = execution.Nodes.Values.ToList(),
             DependencyEdges = execution.Edges,
             AnalysisResults = execution.AnalysisResults
         };
+        await PersistArtifactsAsync(rootKey, request, result, cancellationToken);
+        return result;
     }
 
     private Task<AnalysisNode> QueueOrReuseAsync(
@@ -171,7 +181,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 {
                     Key = key,
                     Definition = pipelineResult.SpDef,
-                    FunctionReturn = pipelineResult.SpDef.FunctionReturn
+                    FunctionReturn = pipelineResult.SpDef.FunctionReturn,
+                    SpecMarkdown = pipelineResult.SpecMarkdown
                 });
             }
             catch (OperationCanceledException)
@@ -270,6 +281,65 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         node.Status = AnalysisNodeStatus.Failed;
         node.Error = exception.Message;
         Log.Warning(exception, "[의존성 분석] {Stage} 실패 - 코드 객체: {ObjectKey}", stage, node.Key.CanonicalName);
+    }
+
+    private async Task PersistArtifactsAsync(
+        CodeObjectKey rootKey,
+        DependencyAnalysisRequest request,
+        CodeObjectPipelineResult graph,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var paths = new OutputPathResolver(rootKey.Database, request.OutputDirectory);
+            var linker = new SpecificationLinker(paths, _validator);
+            foreach (var analysis in graph.AnalysisResults
+                         .OrderBy(result => result.Key.CanonicalName, StringComparer.OrdinalIgnoreCase))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var node = graph.Nodes.SingleOrDefault(candidate => candidate.Key == analysis.Key);
+                if (node?.Status != AnalysisNodeStatus.Succeeded)
+                {
+                    continue;
+                }
+
+                node.SpecPath = paths.ResolveSpecPath(analysis.Key);
+                node.DdlPath = paths.ResolveCanonicalDdlPath(analysis.Key);
+                analysis.SpecPath = node.SpecPath;
+                analysis.DdlPath = node.DdlPath;
+                analysis.SpecMarkdown = await linker.UpdateReferencesAsync(
+                    analysis.Key,
+                    analysis.SpecMarkdown ?? string.Empty,
+                    graph,
+                    cancellationToken);
+
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(node.SpecPath)!);
+                    await File.WriteAllTextAsync(node.SpecPath, analysis.SpecMarkdown, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Log.Warning(ex, "[의존성 분석] 명세서 파일 저장 실패 (계속 진행): {ObjectKey}", analysis.Key.CanonicalName);
+                }
+
+                await _metadataExporter.ExportCodeObjectArtifactsAsync(
+                    analysis.Definition,
+                    analysis.Key,
+                    graph,
+                    request.DependencyArtifactMode,
+                    paths,
+                    cancellationToken: cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "[의존성 분석] 객체 아티팩트 저장 중 오류가 발생했습니다 (계속 진행): {ObjectKey}", rootKey.CanonicalName);
+        }
     }
 
     private sealed class ExecutionState

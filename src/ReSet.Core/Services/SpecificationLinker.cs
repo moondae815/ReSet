@@ -8,7 +8,7 @@ public sealed class SpecificationLinker
 {
     private const string ReferenceHeader = "## 참조 코드 객체";
     private static readonly Regex ReferenceSectionRegex = new(
-        @"(?ms)^## 참조 코드 객체\s*\r?\n.*?(?=^##\s|\z)",
+        @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
         RegexOptions.Compiled);
 
     private readonly OutputPathResolver _paths;
@@ -97,13 +97,19 @@ public sealed class SpecificationLinker
 
     private static string EscapeMarkdownText(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal)
+            .Replace("*", "\\*", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
             .Replace("[", "\\[", StringComparison.Ordinal)
             .Replace("]", "\\]", StringComparison.Ordinal)
             .Replace("(", "\\(", StringComparison.Ordinal)
-            .Replace(")", "\\)", StringComparison.Ordinal);
+            .Replace(")", "\\)", StringComparison.Ordinal)
+            .Replace("#", "\\#", StringComparison.Ordinal)
+            .Replace("<", "\\<", StringComparison.Ordinal)
+            .Replace(">", "\\>", StringComparison.Ordinal);
 
     private static string EscapeMarkdownUrl(string value) =>
-        value.Replace(" ", "%20", StringComparison.Ordinal)
-            .Replace("(", "%28", StringComparison.Ordinal)
-            .Replace(")", "%29", StringComparison.Ordinal);
+        string.Join(
+            "/",
+            value.Split('/', StringSplitOptions.None).Select(Uri.EscapeDataString));
 }
