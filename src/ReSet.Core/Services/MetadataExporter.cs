@@ -111,12 +111,15 @@ namespace ReSet.Core.Services
             foreach (var dependency in definition.Dependencies.Where(dependency =>
                          !string.IsNullOrWhiteSpace(dependency.ReferencedDdlText)))
             {
+                var folderName = NormalizeCodeObjectDdlFolder(dependency.Type);
+                if (folderName is null)
+                {
+                    continue;
+                }
+
                 var dependencyName = string.IsNullOrEmpty(dependency.Database)
                     ? $"{dependency.Schema}.{dependency.Name}"
                     : $"{dependency.Database}.{dependency.Schema}.{dependency.Name}";
-                var folderName = dependency.Type.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase)
-                    ? "procedures"
-                    : "functions";
                 var folder = Path.Combine(rawDirectory, "ddl", folderName);
                 Directory.CreateDirectory(folder);
                 await File.WriteAllTextAsync(
@@ -126,6 +129,14 @@ namespace ReSet.Core.Services
                     cancellationToken);
             }
         }
+
+        private static string? NormalizeCodeObjectDdlFolder(string? dependencyType) =>
+            dependencyType?.Trim().ToUpperInvariant() switch
+            {
+                "PROCEDURE" or "PROC" or "P" or "PC" or "SQL_STORED_PROCEDURE" => "procedures",
+                "FUNCTION" or "FN" or "IF" or "TF" or "FS" or "FT" or "SQL_SCALAR_FUNCTION" or "SQL_TABLE_VALUED_FUNCTION" => "functions",
+                _ => null
+            };
 
         private static DependencyManifest BuildManifest(
             SpDefinition definition,

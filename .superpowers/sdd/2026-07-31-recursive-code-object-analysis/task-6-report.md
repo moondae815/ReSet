@@ -32,3 +32,15 @@
 - 신규 RED: 재귀 완료 아티팩트 연결용 생성자 부재로 컴파일 실패를 확인했다.
 - 집중: `SpecificationLinkerTests`, `ExportCodeObjectArtifactsAsync`, 재귀 아티팩트 통합 테스트 8건 통과.
 - 전체 회귀: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 274건 통과, 실패 0건.
+
+## Fix round 2 — PortableBundle 코드 객체 한정
+
+- PortableBundle의 참조 DDL 복제는 정규화된 Procedure/Function 타입만 허용하도록 제한했다.
+- `USER_TABLE`, `VIEW` 등 비코드 객체는 `ReferencedDdlText`가 있어도 raw DDL에 복제하지 않는다.
+- `SQL_STORED_PROCEDURE`, `SQL_SCALAR_FUNCTION` 등 기존 코드 객체 별칭은 각각 procedures/functions 저장을 유지한다.
+
+### Fix round 2 테스트
+
+- RED: 테이블 DDL이 `functions` 폴더에 잘못 생성됨을 확인했다.
+- 집중: Task 6 관련 15건 통과.
+- 전체 회귀: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 274건 통과, 실패 0건.

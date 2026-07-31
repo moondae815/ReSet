@@ -353,6 +353,27 @@ namespace ReSet.Core.Tests
                 Type = "SQL_SCALAR_FUNCTION",
                 ReferencedDdlText = "CREATE FUNCTION dbo.FN_X() RETURNS INT AS BEGIN RETURN 1; END;"
             });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "USP_Child",
+                Type = "SQL_STORED_PROCEDURE",
+                ReferencedDdlText = "CREATE PROCEDURE dbo.USP_Child AS SELECT 1;"
+            });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TBL_ShouldNotCopy",
+                Type = "USER_TABLE",
+                ReferencedDdlText = "CREATE TABLE dbo.TBL_ShouldNotCopy (Id int);"
+            });
+            definition.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "VW_ShouldNotCopy",
+                Type = "VIEW",
+                ReferencedDdlText = "CREATE VIEW dbo.VW_ShouldNotCopy AS SELECT 1 AS Id;"
+            });
 
             try
             {
@@ -366,6 +387,9 @@ namespace ReSet.Core.Tests
                 var rawDirectory = Path.Combine(outputRoot, "Objects", "dbo.USP_Portable.Procedure", "raw");
                 Assert.True(File.Exists(Path.Combine(rawDirectory, "object_definition.sql")));
                 Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.FN_X.sql")));
+                Assert.True(File.Exists(Path.Combine(rawDirectory, "ddl", "procedures", "dbo.USP_Child.sql")));
+                Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.TBL_ShouldNotCopy.sql")));
+                Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "functions", "dbo.VW_ShouldNotCopy.sql")));
                 Assert.False(File.Exists(Path.Combine(rawDirectory, "ddl", "sp_definition.sql")));
             }
             finally
