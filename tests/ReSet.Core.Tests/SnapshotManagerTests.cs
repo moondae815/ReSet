@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -77,6 +78,113 @@ namespace ReSet.Core.Tests
                 if (File.Exists(outputPath))
                 {
                     File.Delete(outputPath);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task ExportSnapshotAsync_WithoutInitialCatalog_UsesActualDatabaseInOfflinePipeline()
+        {
+            const string connectionString =
+                "Server=localhost;Integrated Security=true;TrustServerCertificate=true;";
+            var rootKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "usp_Root",
+                CodeObjectType.Procedure);
+            var rootDefinition = new SpDefinition
+            {
+                ObjectKey = rootKey,
+                Name = rootKey.Name,
+                Schema = rootKey.Schema,
+                DdlText = "CREATE PROCEDURE dbo.usp_Root AS SELECT 1;"
+            };
+            var onlineService = Substitute.For<IDbMetadataService>();
+            onlineService.GetCurrentDatabaseNameAsync(
+                    connectionString,
+                    Arg.Any<CancellationToken>())
+                .Returns("PaymentDB");
+            onlineService.GetStoredProcedureNamesAsync(
+                    connectionString,
+                    Arg.Any<CancellationToken>())
+                .Returns(new[] { "dbo.usp_Root" }.ToList());
+            onlineService.GetCodeObjectDetailsAsync(
+                    connectionString,
+                    rootKey,
+                    2,
+                    Arg.Any<CancellationToken>())
+                .Returns(rootDefinition);
+
+            var snapshotPath = Path.Combine(
+                Path.GetTempPath(),
+                $"reset-snapshot-no-catalog-{Guid.NewGuid():N}.json");
+            var outputRoot = Path.Combine(
+                Path.GetTempPath(),
+                $"reset-offline-output-{Guid.NewGuid():N}");
+
+            try
+            {
+                await SnapshotManager.ExportSnapshotAsync(
+                    onlineService,
+                    connectionString,
+                    snapshotPath,
+                    2,
+                    NullProgressScope.Instance);
+                var snapshot = await SnapshotManager.ImportSnapshotAsync(snapshotPath);
+
+                Assert.Equal("PaymentDB", snapshot.Database);
+                Assert.True(snapshot.CodeObjects.ContainsKey(rootKey.CanonicalName));
+
+                var cacheManager = Substitute.For<ICacheManager>();
+                cacheManager.ComputeCompositeHash(
+                        Arg.Any<SpDefinition>(),
+                        2)
+                    .Returns("offline-hash");
+                cacheManager.IsCacheValid(
+                        rootKey,
+                        "offline-hash",
+                        Arg.Any<OutputPathResolver>())
+                    .Returns(true);
+                var paths = new OutputPathResolver(snapshot.Database, outputRoot);
+                var specPath = paths.ResolveSpecPath(rootKey);
+                Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+                await File.WriteAllTextAsync(specPath, "## Cached offline spec");
+
+                var orchestrator = new VerificationPipelineOrchestrator(
+                    new OfflineDbMetadataService(snapshot),
+                    Substitute.For<IAiService>(),
+                    new MechanicalValidator(),
+                    Substitute.For<IVerificationUserInteraction>(),
+                    cacheManager: cacheManager);
+
+                var result = await orchestrator.RunPipelineAsync(
+                    connectionString,
+                    rootKey.Schema,
+                    rootKey.Name,
+                    2,
+                    "OpenAI",
+                    "instructions",
+                    isBatchMode: true,
+                    outputRoot,
+                    enableCache: true);
+
+                Assert.Equal("## Cached offline spec", result.SpecMarkdown);
+                cacheManager.Received(1).IsCacheValid(
+                    rootKey,
+                    "offline-hash",
+                    Arg.Is<OutputPathResolver>(resolver =>
+                        resolver.ResolveSpecPath(rootKey) == specPath));
+            }
+            finally
+            {
+                if (File.Exists(snapshotPath))
+                {
+                    File.Delete(snapshotPath);
+                }
+
+                if (Directory.Exists(outputRoot))
+                {
+                    Directory.Delete(outputRoot, recursive: true);
                 }
             }
         }

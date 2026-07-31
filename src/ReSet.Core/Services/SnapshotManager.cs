@@ -21,14 +21,27 @@ namespace ReSet.Core.Services
         {
             var taskName = "extract_snapshot";
             progress.AddTask(taskName, "SP 목록 조회 중...");
-            
-            var spNames = await dbService.GetStoredProcedureNamesAsync(connectionString, cancellationToken);
+
             var connectionBuilder = new SqlConnectionStringBuilder(connectionString);
+            var database = await dbService.GetCurrentDatabaseNameAsync(
+                connectionString,
+                cancellationToken);
+            if (string.IsNullOrWhiteSpace(database))
+            {
+                database = connectionBuilder.InitialCatalog;
+            }
+            if (string.IsNullOrWhiteSpace(database))
+            {
+                throw new InvalidOperationException(
+                    "The current database could not be determined for snapshot export.");
+            }
+
+            var spNames = await dbService.GetStoredProcedureNamesAsync(connectionString, cancellationToken);
             var snapshot = new DbSnapshot
             {
                 ExportedAt = DateTime.UtcNow,
                 Server = connectionBuilder.DataSource,
-                Database = connectionBuilder.InitialCatalog
+                Database = database.Trim()
             };
 
             int current = 0;

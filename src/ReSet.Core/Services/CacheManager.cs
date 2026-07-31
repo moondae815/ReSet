@@ -62,17 +62,17 @@ namespace ReSet.Core.Services
             var cacheKey = objectKey.CanonicalName;
             Log.Information("캐시 유효성 검사 - 코드 객체: {ObjectKey}", cacheKey);
 
-            // 1. 실제 출력 파일이 존재하는지 검증 (docs/Spec.md)
-            var specFilePath = outputPaths.ResolveSpecPath(objectKey);
-            if (!File.Exists(specFilePath))
-            {
-                Log.Debug("캐시 미스 (설계 명세서 파일이 존재하지 않음): {SpecFilePath}", specFilePath);
-                return false;
-            }
-
-            // 2. 캐시 인덱스 파일 로드 및 해시 대조
             try
             {
+                // 1. 실제 출력 파일이 존재하는지 검증 (docs/Spec.md)
+                var specFilePath = outputPaths.ResolveSpecPath(objectKey);
+                if (!File.Exists(specFilePath))
+                {
+                    Log.Debug("캐시 미스 (설계 명세서 파일이 존재하지 않음): {SpecFilePath}", specFilePath);
+                    return false;
+                }
+
+                // 2. 캐시 인덱스 파일 로드 및 해시 대조
                 var cacheIndex = LoadCacheIndex(outputPaths.OutputRoot);
                 if (cacheIndex != null &&
                     TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))

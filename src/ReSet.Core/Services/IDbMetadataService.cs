@@ -7,6 +7,7 @@ namespace ReSet.Core.Services
 {
     public interface IDbMetadataService
     {
+        Task<string> GetCurrentDatabaseNameAsync(string connectionString, CancellationToken cancellationToken = default);
         Task<List<string>> GetStoredProcedureNamesAsync(string connectionString, CancellationToken cancellationToken = default);
         Task<SpDefinition> GetSpDetailsAsync(string connectionString, string schema, string spName, int maxDepth, CancellationToken cancellationToken = default);
         Task<SpDefinition> GetCodeObjectDetailsAsync(string connectionString, CodeObjectKey objectKey, int maxDepth, CancellationToken cancellationToken = default);

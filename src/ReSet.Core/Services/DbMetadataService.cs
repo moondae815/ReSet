@@ -10,6 +10,24 @@ namespace ReSet.Core.Services
 {
     public class DbMetadataService : IDbMetadataService
     {
+        public async Task<string> GetCurrentDatabaseNameAsync(
+            string connectionString,
+            CancellationToken cancellationToken = default)
+        {
+            var configuredDatabase =
+                new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+            if (!string.IsNullOrWhiteSpace(configuredDatabase))
+            {
+                return configuredDatabase.Trim();
+            }
+
+            using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            return ResolveCurrentDatabase(
+                configuredDatabase,
+                connection.Database);
+        }
+
         public async Task<List<string>> GetStoredProcedureNamesAsync(string connectionString, CancellationToken cancellationToken = default)
         {
             Log.Information("[DbMetadata] SP 목록 조회 시작");
@@ -358,14 +376,10 @@ namespace ReSet.Core.Services
         {
             if (string.IsNullOrWhiteSpace(objectKey.Database))
             {
-                var configuredDatabase =
-                    new SqlConnectionStringBuilder(connectionString).InitialCatalog;
-                using var connection = new SqlConnection(connectionString);
-                await connection.OpenAsync(cancellationToken);
                 objectKey = CodeObjectKey.Create(
-                    ResolveCurrentDatabase(
-                        configuredDatabase,
-                        connection.Database),
+                    await GetCurrentDatabaseNameAsync(
+                        connectionString,
+                        cancellationToken),
                     objectKey.Schema,
                     objectKey.Name,
                     objectKey.Type);

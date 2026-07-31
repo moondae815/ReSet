@@ -182,6 +182,23 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void IsCacheValid_ReturnsFalse_WhenObjectKeyCannotResolveToAPath()
+        {
+            var invalidKey = CodeObjectKey.Create(
+                "PaymentDB",
+                " ",
+                "TestSp",
+                CodeObjectType.Procedure);
+
+            var isValid = _cacheManager.IsCacheValid(
+                invalidKey,
+                "somehash",
+                _paths);
+
+            Assert.False(isValid);
+        }
+
+        [Fact]
         public void UpdateCache_And_IsCacheValid_ReturnsTrue_WhenBothExistAndMatch()
         {
             // Arrange

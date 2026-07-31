@@ -16,6 +16,13 @@ namespace ReSet.Core.Services
             _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         }
 
+        public Task<string> GetCurrentDatabaseNameAsync(
+            string connectionString,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_snapshot.Database);
+        }
+
         public Task<List<string>> GetStoredProcedureNamesAsync(string connectionString, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(_snapshot.StoredProcedures.Keys.ToList());
