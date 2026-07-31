@@ -399,7 +399,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                         Directory.CreateDirectory(Path.GetDirectoryName(node.SpecPath!)!);
                         await File.WriteAllTextAsync(
                             node.SpecPath!,
-                            BuildPersistedSpecification(analysis),
+                            BuildPersistedSpecification(analysis, request),
                             cancellationToken);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -442,29 +442,16 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         }
     }
 
-    private static string BuildPersistedSpecification(CodeObjectAnalysisResult analysis)
-    {
-        if (analysis.Review is null)
-        {
-            return analysis.SpecMarkdown ?? string.Empty;
-        }
-
-        var review = analysis.Review;
-        return $"""
-            ---
-            종합 신뢰도: {review.NormalizedScore} # 100점 만점 기준 AI 최종 신뢰도
-            정합성 점수: {review.ScoreAccuracy}/10 # SQL 대비 기능 정합성
-            CRUD 점수: {review.ScoreCrud}/10 # 데이터 변경 및 조회 검증
-            인터페이스 점수: {review.ScoreInterface}/10 # 파라미터 및 반환셋 정합성
-            가독성 점수: {review.ScoreReadability}/10 # 코드 가독성 및 표준 준수
-            예외처리 점수: {review.ScoreException}/10 # 트랜잭션 격리 및 에러 처리
-            ---
-
-            > **AI 최종 신뢰도**: {review.NormalizedScore}/100점
-
-            {analysis.SpecMarkdown}
-            """;
-    }
+    private static string BuildPersistedSpecification(
+        CodeObjectAnalysisResult analysis,
+        DependencyAnalysisRequest request) =>
+        SpecificationDocumentFormatter.Format(
+            analysis.SpecMarkdown ?? string.Empty,
+            analysis.Review,
+            request.Provider,
+            request.ModelName,
+            request.ActorEffort,
+            DateTime.Now);
 
     private static async Task PersistThinkingAsync(
         CodeObjectAnalysisResult analysis,

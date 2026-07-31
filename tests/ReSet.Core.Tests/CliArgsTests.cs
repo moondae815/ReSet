@@ -55,6 +55,8 @@ namespace ReSet.Core.Tests
                 name: "usp_Root",
                 maxDepth: 2,
                 provider: "OpenAI",
+                modelName: "gpt-test",
+                actorEffort: "high",
                 instructions: "rules",
                 isBatchMode: true,
                 outputDirectory: "/tmp/output",

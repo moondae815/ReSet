@@ -9,6 +9,8 @@ public sealed class DependencyAnalysisRequest
     public string ConnectionString { get; init; } = string.Empty;
     public int MaxDepth { get; init; }
     public string Provider { get; init; } = string.Empty;
+    public string ModelName { get; init; } = string.Empty;
+    public string? ActorEffort { get; init; }
     public string Instructions { get; init; } = string.Empty;
     public bool IsBatchMode { get; init; }
     public string OutputDirectory { get; init; } = "./output";

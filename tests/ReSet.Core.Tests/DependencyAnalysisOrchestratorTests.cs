@@ -149,7 +149,10 @@ public sealed class DependencyAnalysisOrchestratorTests
         {
             await sut.AnalyzeAsync(
                 root,
-                Request(outputDirectory: outputRoot),
+                Request(
+                    outputDirectory: outputRoot,
+                    modelName: "gpt-test",
+                    actorEffort: "high"),
                 CancellationToken.None);
 
             var docsDirectory = new OutputPathResolver(root.Database, outputRoot)
@@ -157,6 +160,11 @@ public sealed class DependencyAnalysisOrchestratorTests
             var childSpec = await File.ReadAllTextAsync(Path.Combine(docsDirectory, "Spec.md"));
             Assert.Contains("종합 신뢰도:", childSpec);
             Assert.Contains("정합성 점수: 9/10", childSpec);
+            Assert.Contains("> [!NOTE]", childSpec);
+            Assert.Contains("> **분석 AI 정보**: OpenAI (gpt-test, Effort: high)", childSpec);
+            Assert.Contains(
+                "> **AI 최종 신뢰도**: 82/100점 (정합성: 9, CRUD: 8, 연동: 7, 가독성: 9, 예외: 8)",
+                childSpec);
             var thinking = await File.ReadAllTextAsync(Path.Combine(docsDirectory, "Thinking.md"));
             Assert.Contains("child private reasoning", thinking);
         }
@@ -509,7 +517,9 @@ public sealed class DependencyAnalysisOrchestratorTests
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",
-        bool allowExternalDatabaseConnections = false) => new()
+        bool allowExternalDatabaseConnections = false,
+        string modelName = "",
+        string? actorEffort = null) => new()
     {
         ConnectionString = "Server=(local);Database=PaymentDB",
         MaxDepth = maxDepth,
@@ -517,6 +527,8 @@ public sealed class DependencyAnalysisOrchestratorTests
         Instructions = "rules",
         IsBatchMode = true,
         OutputDirectory = outputDirectory,
+        ModelName = modelName,
+        ActorEffort = actorEffort,
         AllowExternalDatabaseConnections = allowExternalDatabaseConnections
     };
 
