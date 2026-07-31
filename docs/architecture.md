@@ -57,7 +57,7 @@ flowchart TD
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 통합 배치 수립 시 Brainstorming 및 PlanStructure 설계 분할 요청 처리, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](../src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. |
-| | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. 특히 OllamaClient는 /api/chat 통신 및 모델별 다양한 추론 토큰(`<think>`, `<|end of thought|>` 등) 분리 파싱 처리를 지원합니다. |
+| | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. OpenAiClient는 gpt-5 Responses API의 복수 reasoning summary를 누적 보존하며, OllamaClient는 /api/chat 통신 및 모델별 다양한 추론 토큰(`<think>`, `<|end of thought|>` 등) 분리 파싱을 지원합니다. |
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영, 통합 배치 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Agentic Workflow 흐름 제어, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [DependencyAnalysisOrchestrator](../src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs) | 설정으로 활성화된 재귀 코드 객체 분석에서 하위 SP/UDF를 중복 없이 발견하고, 객체별 기존 검증 파이프라인 실행과 실패 격리를 조율합니다. |
@@ -245,7 +245,7 @@ graph TD
 
 ### 4.1.1. 코드 객체 그래프 분석과 산출물 연결
 * **객체 단위 경계**: `AnalysisSettings:AnalyzeReferencedCodeObjects`가 활성화되면 `DependencyAnalysisOrchestrator`가 루트 SP와 직접·간접 참조 SP/UDF를 그래프로 발견합니다. `CodeObjectKey`의 대소문자 비구분 식별을 사용해 공유 객체는 한 번만 분석하며, 여러 경로로 발견된 객체는 최소 깊이를 우선하고 순환 호출은 재실행하지 않습니다.
-* **상태 격리와 링크**: 객체별 메타데이터 수집·검증 또는 `Spec.md` 저장 실패는 그 노드에만 남기고 다음 객체를 계속 처리합니다. 깊이 제한과 외부 DB 차단도 노드별 사유로 보존하며, `SpecificationLinker`는 실제 문서 저장에 성공한 직접 참조 객체에만 상대 링크를 추가합니다. 성공한 하위 객체도 루트와 동일한 YAML 신뢰도 헤더, NOTE 메타데이터, 최종 Critic 점수 및 `Thinking.md`를 보존합니다.
+* **상태 격리와 링크**: 객체별 메타데이터 수집·검증 또는 `Spec.md` 저장 실패는 그 노드에만 남기고 다음 객체를 계속 처리합니다. 깊이 제한과 외부 DB 차단도 노드별 사유로 보존하며, `SpecificationLinker`는 실제 문서 저장에 성공한 직접 참조 객체에만 상대 링크를 추가합니다. 성공한 하위 객체도 루트와 동일한 YAML 신뢰도 헤더, NOTE 메타데이터, 최종 Critic 점수 및 `Thinking.md`를 보존합니다. 하위 파이프라인의 생성·검증 상태는 일반 TUI 진행 스코프에 위임되어 스피너와 경과시간으로 표시됩니다.
 * **직접 메타데이터 경계**: 객체별 AI 분석에는 현재 DB의 직접 참조 테이블 스키마·설명·인덱스와 참조 SP/UDF DDL을 제공하되, 외부 DB 객체는 추가 메타데이터 조회 없이 `SkippedExternal` 상태만 남깁니다. 오프라인 재귀 분석의 루트 DB는 세션 설정이 아니라 스냅샷의 DB 식별자를 사용합니다.
 * **경로 및 DDL 정책**: `OutputPathResolver`는 현재 DB의 SP/UDF 산출물을 유형별 경로에, 외부 DB 객체는 `External/[Database]/`에 격리합니다. 식별자 구성 요소와 파일명은 percent encoding으로 구분자·금지 문자 충돌을 방지합니다. `Reference` 모드에서는 객체별 표준 DDL을 한 번만 저장하고 의존성 매니페스트가 경로를 가리키며, `PortableBundle` 모드에서만 참조 SP/UDF DDL 사본을 `raw/ddl/`에 추가합니다.
 
@@ -390,7 +390,7 @@ graph TD
 ### 4.5. 다중 AI 공급자(Multi-LLM Provider) 추상화
 * **Decoupling 계약**: LLM 통신과 페이로드 직렬화 사양을 `IAiClient` 계약 뒤로 격리하였습니다. 비즈니스 파이프라인인 `AiService`는 하위 전송 메커니즘을 인지하지 않습니다.
 * **공급자별 독립 클라이언트**:
-  * **OpenAiClient**: OpenAI 공식 SDK 통신, gpt-5 Responses API 지원 및 gpt-4o 등 최신 모델에 대한 자동 프롬프트 캐싱, Responses API의 `prompt_cache_key` 명시적 라우팅 지원, o1/o3 추론 모델 규격(`reasoning_effort` 등) 대응.
+  * **OpenAiClient**: OpenAI 공식 SDK 통신, gpt-5 Responses API 지원 및 gpt-4o 등 최신 모델에 대한 자동 프롬프트 캐싱, Responses API의 `prompt_cache_key` 명시적 라우팅 지원, 복수 `reasoning.summary`의 비어 있지 않은 요약 누적 보존, o1/o3 추론 모델 규격(`reasoning_effort` 등) 대응.
   * **ClaudeClient**: Anthropic Messages API 페이로드 규격 대응, System 영역 `cache_control` 적용 및 헤더 추가를 통한 프롬프트 캐싱 지원, Claude 4/5세대 추론 토큰 대응 및 temperature 생략 처리.
   * **GoogleClient**: Google AI Studio API Key 주입 및 SystemInstruction 구조 대응.
   * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama 네이티브 REST API(`/api/chat`) 규격 대응. 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 최적 샘플링(`num_ctx`, `top_p`, `top_k` 등)을 `options` 파라미터로 자동 할당하는 하드코딩 우회 로직 및 생각 토큰(<|channel>thought, <think> 등)의 수동 파싱과 본문 분리 기능 지원. 또한 텍스트 무한 반복 루프 방지를 위해 `repeat_penalty`가 자동 매핑됩니다.
