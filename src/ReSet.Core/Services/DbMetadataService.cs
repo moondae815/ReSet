@@ -121,7 +121,7 @@ namespace ReSet.Core.Services
             using (var conn = new SqlConnection(connectionString))
             {
                 await conn.OpenAsync(cancellationToken);
-                var currentDb = conn.Database;
+                var sourceDatabase = database ?? conn.Database;
                 using (var cmd = new SqlCommand(query, conn))
                 {
                     cmd.Parameters.AddWithValue("@ObjectName", objectName);
@@ -131,7 +131,8 @@ namespace ReSet.Core.Services
                         while (await reader.ReadAsync(cancellationToken))
                         {
                             var rawDb = reader.IsDBNull(0) ? null : reader.GetString(0);
-                            if (rawDb != null && string.Equals(rawDb, currentDb, StringComparison.OrdinalIgnoreCase))
+                            if (rawDb != null &&
+                                string.Equals(rawDb, sourceDatabase, StringComparison.OrdinalIgnoreCase))
                             {
                                 rawDb = null;
                             }
@@ -176,23 +177,214 @@ namespace ReSet.Core.Services
             return 160;
         }
 
-        // 메인 재귀 탐색 진입점
-        public async Task<SpDefinition> GetSpDetailsAsync(string connectionString, string schema, string spName, int maxDepth, CancellationToken cancellationToken = default)
+        private static CodeObjectType NormalizeCodeObjectType(string sqlServerType)
         {
-            var spDef = new SpDefinition { Schema = schema, Name = spName };
-            var spFullName = $"{schema}.{spName}";
-            Log.Information("[DbMetadata] SP 상세 메타데이터 수집 시작 - SP: {SpFullName}, MaxDepth: {MaxDepth}", spFullName, maxDepth);
+            return sqlServerType.ToUpperInvariant() switch
+            {
+                "P" or "PC" => CodeObjectType.Procedure,
+                "FN" or "IF" or "TF" or "FS" or "FT" => CodeObjectType.Function,
+                _ => throw new InvalidOperationException(
+                    $"SQL Server object type '{sqlServerType}' is not a supported procedure or function type.")
+            };
+        }
 
-            // 1. 메인 SP의 DDL 조회
+        private static string BuildVisitedObjectName(
+            string database,
+            string schema,
+            string objectName) =>
+            $"{database}.{schema}.{objectName}";
+
+        private static string ResolveDependencyDatabase(
+            string? dependencyDatabase,
+            CodeObjectKey sourceObjectKey) =>
+            dependencyDatabase ?? sourceObjectKey.Database;
+
+        private async Task<string> GetCodeObjectTypeCodeAsync(
+            string connectionString,
+            string? database,
+            string schema,
+            string objectName,
+            CancellationToken cancellationToken)
+        {
+            var cleanDb = string.IsNullOrEmpty(database) ? "" : $"[{database.Replace("]", "]]")}].";
+            var query = $@"
+                SELECT o.type
+                FROM {cleanDb}sys.objects o
+                INNER JOIN {cleanDb}sys.schemas s ON o.schema_id = s.schema_id
+                WHERE o.name = @ObjectName AND s.name = @Schema;";
+
+            using var conn = new SqlConnection(connectionString);
+            await conn.OpenAsync(cancellationToken);
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@ObjectName", objectName);
+            cmd.Parameters.AddWithValue("@Schema", schema);
+            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+
+            if (result == null || result == DBNull.Value)
+            {
+                var fullName = string.IsNullOrEmpty(database)
+                    ? $"{schema}.{objectName}"
+                    : $"[{database}].[{schema}].[{objectName}]";
+                throw new InvalidOperationException($"'{fullName}'의 SQL Server 객체 타입을 찾을 수 없습니다.");
+            }
+
+            return result.ToString() ?? string.Empty;
+        }
+
+        private async Task<FunctionReturnInfo> GetFunctionReturnInfoAsync(
+            string connectionString,
+            string? database,
+            string schema,
+            string objectName,
+            string typeCode,
+            CancellationToken cancellationToken)
+        {
+            var returnInfo = new FunctionReturnInfo
+            {
+                IsTableValued = typeCode is "IF" or "TF" or "FT"
+            };
+            var cleanDb = string.IsNullOrEmpty(database) ? "" : $"[{database.Replace("]", "]]")}].";
+
+            using var conn = new SqlConnection(connectionString);
+            await conn.OpenAsync(cancellationToken);
+
+            if (!returnInfo.IsTableValued)
+            {
+                var scalarQuery = $@"
+                    SELECT
+                        t.name +
+                        CASE
+                            WHEN t.name IN ('char', 'varchar', 'binary', 'varbinary') THEN
+                                '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length AS VARCHAR(10)) END + ')'
+                            WHEN t.name IN ('nchar', 'nvarchar') THEN
+                                '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length / 2 AS VARCHAR(10)) END + ')'
+                            WHEN t.name IN ('decimal', 'numeric') THEN
+                                '(' + CAST(p.precision AS VARCHAR(10)) + ',' + CAST(p.scale AS VARCHAR(10)) + ')'
+                            ELSE ''
+                        END
+                    FROM {cleanDb}sys.parameters p
+                    INNER JOIN {cleanDb}sys.objects o ON p.object_id = o.object_id
+                    INNER JOIN {cleanDb}sys.schemas s ON o.schema_id = s.schema_id
+                    INNER JOIN {cleanDb}sys.types t ON p.user_type_id = t.user_type_id
+                    WHERE o.name = @ObjectName
+                      AND s.name = @Schema
+                      AND p.parameter_id = 0;";
+
+                using var cmd = new SqlCommand(scalarQuery, conn);
+                cmd.Parameters.AddWithValue("@ObjectName", objectName);
+                cmd.Parameters.AddWithValue("@Schema", schema);
+                var result = await cmd.ExecuteScalarAsync(cancellationToken);
+                returnInfo.DataType = result == null || result == DBNull.Value
+                    ? string.Empty
+                    : result.ToString() ?? string.Empty;
+                return returnInfo;
+            }
+
+            var tableQuery = $@"
+                SELECT
+                    c.name,
+                    t.name +
+                    CASE
+                        WHEN t.name IN ('char', 'varchar', 'binary', 'varbinary') THEN
+                            '(' + CASE WHEN c.max_length = -1 THEN 'MAX' ELSE CAST(c.max_length AS VARCHAR(10)) END + ')'
+                        WHEN t.name IN ('nchar', 'nvarchar') THEN
+                            '(' + CASE WHEN c.max_length = -1 THEN 'MAX' ELSE CAST(c.max_length / 2 AS VARCHAR(10)) END + ')'
+                        WHEN t.name IN ('decimal', 'numeric') THEN
+                            '(' + CAST(c.precision AS VARCHAR(10)) + ',' + CAST(c.scale AS VARCHAR(10)) + ')'
+                        ELSE ''
+                    END,
+                    CAST(c.is_nullable AS BIT)
+                FROM {cleanDb}sys.columns c
+                INNER JOIN {cleanDb}sys.objects o ON c.object_id = o.object_id
+                INNER JOIN {cleanDb}sys.schemas s ON o.schema_id = s.schema_id
+                INNER JOIN {cleanDb}sys.types t ON c.user_type_id = t.user_type_id
+                WHERE o.name = @ObjectName AND s.name = @Schema
+                ORDER BY c.column_id;";
+
+            using (var cmd = new SqlCommand(tableQuery, conn))
+            {
+                cmd.Parameters.AddWithValue("@ObjectName", objectName);
+                cmd.Parameters.AddWithValue("@Schema", schema);
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    returnInfo.Columns.Add(new ColumnInfo
+                    {
+                        ColumnName = reader.GetString(0),
+                        DataType = reader.GetString(1),
+                        IsNullable = reader.GetBoolean(2)
+                    });
+                }
+            }
+
+            return returnInfo;
+        }
+
+        public Task<SpDefinition> GetSpDetailsAsync(
+            string connectionString,
+            string schema,
+            string spName,
+            int maxDepth,
+            CancellationToken cancellationToken = default)
+        {
+            var database = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
+            var objectKey = CodeObjectKey.Create(database, schema, spName, CodeObjectType.Procedure);
+            return GetCodeObjectDetailsAsync(connectionString, objectKey, maxDepth, cancellationToken);
+        }
+
+        // 메인 재귀 탐색 진입점
+        public async Task<SpDefinition> GetCodeObjectDetailsAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            int maxDepth,
+            CancellationToken cancellationToken = default)
+        {
+            var database = string.IsNullOrWhiteSpace(objectKey.Database) ? null : objectKey.Database;
+            var typeCode = await GetCodeObjectTypeCodeAsync(
+                connectionString, database, objectKey.Schema, objectKey.Name, cancellationToken);
+            var objectType = NormalizeCodeObjectType(typeCode);
+            var objectDefinition = new SpDefinition
+            {
+                Schema = objectKey.Schema,
+                Name = objectKey.Name,
+                ObjectType = objectType
+            };
+            var objectFullName = objectKey.CanonicalName;
+            Log.Information(
+                "[DbMetadata] 코드 객체 상세 메타데이터 수집 시작 - 객체: {ObjectFullName}, MaxDepth: {MaxDepth}",
+                objectFullName,
+                maxDepth);
+
+            // 1. 최상위 코드 객체의 DDL 조회
             try
             {
-                spDef.DdlText = await GetObjectDdlAsync(connectionString, null, schema, spName, cancellationToken);
+                objectDefinition.DdlText = await GetObjectDdlAsync(
+                    connectionString, database, objectKey.Schema, objectKey.Name, cancellationToken);
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "[DbMetadata] 메인 SP DDL 수집 실패 - SP: {SpFullName}", spFullName);
-                spDef.Warnings.Add($"[{spFullName}] 메인 프로시저 DDL 수집 실패: {ex.Message}");
+                Log.Error(ex, "[DbMetadata] 최상위 코드 객체 DDL 수집 실패 - 객체: {ObjectFullName}", objectFullName);
+                objectDefinition.Warnings.Add($"[{objectFullName}] 최상위 코드 객체 DDL 수집 실패: {ex.Message}");
                 throw;
+            }
+
+            if (objectType == CodeObjectType.Function)
+            {
+                try
+                {
+                    objectDefinition.FunctionReturn = await GetFunctionReturnInfoAsync(
+                        connectionString,
+                        database,
+                        objectKey.Schema,
+                        objectKey.Name,
+                        typeCode,
+                        cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "[DbMetadata] UDF 반환 메타데이터 수집 실패 (Soft Fail) - 객체: {ObjectFullName}", objectFullName);
+                    objectDefinition.Warnings.Add($"[{objectFullName}] UDF 반환 메타데이터 수집 실패: {ex.Message}");
+                }
             }
 
             // T-SQL 정적 분석 구동 (AST 기반 메타데이터 추출, 호환성 수준 적용)
@@ -200,12 +392,12 @@ namespace ReSet.Core.Services
             {
                 int compatLevel = await GetDatabaseCompatibilityLevelAsync(connectionString, cancellationToken);
                 var staticParser = new SqlStaticParser();
-                spDef.StaticAnalysis = staticParser.Analyze(spDef.DdlText, compatLevel);
+                objectDefinition.StaticAnalysis = staticParser.Analyze(objectDefinition.DdlText, compatLevel);
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "[DbMetadata] SQL 정적 분석 구동 중 예외 발생 (Soft Fail)");
-                spDef.StaticAnalysis = new SpStaticAnalysisResult
+                objectDefinition.StaticAnalysis = new SpStaticAnalysisResult
                 {
                     IsParsedSuccessfully = false,
                     ParserWarningMessage = $"정적 분석기 기동 예외: {ex.Message}"
@@ -213,20 +405,46 @@ namespace ReSet.Core.Services
             }
 
             // 2. 중복 방지 방문 해시셋 및 재귀 리스트 생성
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { spFullName };
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                BuildVisitedObjectName(
+                    objectKey.Database,
+                    objectKey.Schema,
+                    objectKey.Name)
+            };
 
-            // 2.5 메인 SP 내 동적 SQL 의존성 선행 분석
-            await ResolveDynamicSqlDependenciesAsync(connectionString, null, spDef.DdlText, 1, visited, spDef.Dependencies, spDef.Warnings, cancellationToken);
+            // 2.5 최상위 코드 객체 내 동적 SQL 의존성 선행 분석
+            await ResolveDynamicSqlDependenciesAsync(
+                connectionString,
+                database,
+                objectKey,
+                objectDefinition.DdlText,
+                1,
+                visited,
+                objectDefinition.Dependencies,
+                objectDefinition.Warnings,
+                cancellationToken);
             
             // 3. 재귀 수집 시작
-            Log.Information("[DbMetadata] 재귀 의존성 탐색(DFS) 시작 - SP: {SpFullName}", spFullName);
-            await GatherDependenciesRecursiveAsync(connectionString, null, schema, spName, 1, maxDepth, visited, spDef.Dependencies, spDef.Warnings, cancellationToken);
+            Log.Information("[DbMetadata] 재귀 의존성 탐색(DFS) 시작 - 객체: {ObjectFullName}", objectFullName);
+            await GatherDependenciesRecursiveAsync(
+                connectionString,
+                database,
+                objectKey.Schema,
+                objectKey.Name,
+                objectKey,
+                1,
+                maxDepth,
+                visited,
+                objectDefinition.Dependencies,
+                objectDefinition.Warnings,
+                cancellationToken);
 
             // 2차 정밀 정적 분석 재구동 (수집 완료된 실제 테이블 스키마 연동)
             try
             {
                 var tableColumnsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-                foreach (var dep in spDef.Dependencies)
+                foreach (var dep in objectDefinition.Dependencies)
                 {
                     if ((dep.Type.Contains("TABLE") || dep.Type.Contains("VIEW")) && dep.Columns != null && dep.Columns.Count > 0)
                     {
@@ -245,14 +463,14 @@ namespace ReSet.Core.Services
 
                 if (tableColumnsMap.Count > 0)
                 {
-                    Log.Information("[DbMetadata] 의존 테이블 스키마 메타데이터 기반 2차 정밀 정적 분석 재구동 시작 - SP: {SpFullName}", spFullName);
+                    Log.Information("[DbMetadata] 의존 테이블 스키마 메타데이터 기반 2차 정밀 정적 분석 재구동 시작 - 객체: {ObjectFullName}", objectFullName);
                     int compatLevel = await GetDatabaseCompatibilityLevelAsync(connectionString, cancellationToken);
                     var staticParser = new SqlStaticParser();
-                    var refinedAnalysis = staticParser.Analyze(spDef.DdlText, compatLevel, tableColumnsMap);
+                    var refinedAnalysis = staticParser.Analyze(objectDefinition.DdlText, compatLevel, tableColumnsMap);
                     if (refinedAnalysis.IsParsedSuccessfully)
                     {
-                        spDef.StaticAnalysis = refinedAnalysis;
-                        Log.Information("[DbMetadata] 2차 정밀 정적 분석 재구동 성공 및 교체 완료 - SP: {SpFullName}", spFullName);
+                        objectDefinition.StaticAnalysis = refinedAnalysis;
+                        Log.Information("[DbMetadata] 2차 정밀 정적 분석 재구동 성공 및 교체 완료 - 객체: {ObjectFullName}", objectFullName);
                     }
                 }
             }
@@ -261,14 +479,18 @@ namespace ReSet.Core.Services
                 Log.Warning(ex, "[DbMetadata] 2차 정밀 정적 분석 재구동 중 예외 발생 (기존 결과 유지)");
             }
 
-            Log.Information("[DbMetadata] SP 메타데이터 수집 완료 - SP: {SpFullName}, 의존 객체: {DepCount}개, 경고: {WarnCount}개",
-                spFullName, spDef.Dependencies.Count, spDef.Warnings.Count);
-            return spDef;
+            Log.Information(
+                "[DbMetadata] 코드 객체 메타데이터 수집 완료 - 객체: {ObjectFullName}, 의존 객체: {DepCount}개, 경고: {WarnCount}개",
+                objectFullName,
+                objectDefinition.Dependencies.Count,
+                objectDefinition.Warnings.Count);
+            return objectDefinition;
         }
 
         // 재귀 호출 메서드 (DFS)
         private async Task GatherDependenciesRecursiveAsync(
-            string connectionString, string? database, string schema, string name, 
+            string connectionString, string? database, string schema, string name,
+            CodeObjectKey sourceObjectKey,
             int currentDepth, int maxDepth, 
             HashSet<string> visited, List<DependencyInfo> dependencies,
             List<string> warnings, CancellationToken cancellationToken)
@@ -296,13 +518,21 @@ namespace ReSet.Core.Services
                 var depFullName = string.IsNullOrEmpty(rawDep.Database) 
                     ? $"{rawDep.Schema}.{rawDep.Name}" 
                     : $"[{rawDep.Database}].[{rawDep.Schema}].[{rawDep.Name}]";
-                    
-                if (visited.Contains(depFullName)) continue;
+                var dependencyDatabase = ResolveDependencyDatabase(
+                    rawDep.Database,
+                    sourceObjectKey);
+                var visitedName = BuildVisitedObjectName(
+                    dependencyDatabase,
+                    rawDep.Schema,
+                    rawDep.Name);
 
-                visited.Add(depFullName);
+                if (visited.Contains(visitedName)) continue;
+
+                visited.Add(visitedName);
 
                 var depInfo = new DependencyInfo
                 {
+                    SourceObjectKey = sourceObjectKey,
                     Database = rawDep.Database,
                     Schema = rawDep.Schema,
                     Name = rawDep.Name,
@@ -322,9 +552,9 @@ namespace ReSet.Core.Services
                 {
                     try
                     {
-                        depInfo.Columns = await GetTableColumnsAsync(connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, cancellationToken);
-                        depInfo.Description = await GetTableDescriptionAsync(connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, cancellationToken);
-                        depInfo.Indexes = await GetTableIndexesAsync(connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, cancellationToken);
+                        depInfo.Columns = await GetTableColumnsAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
+                        depInfo.Description = await GetTableDescriptionAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
+                        depInfo.Indexes = await GetTableIndexesAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -336,15 +566,36 @@ namespace ReSet.Core.Services
                 {
                     try
                     {
-                        depInfo.ReferencedDdlText = await GetObjectDdlAsync(connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, cancellationToken);
-                        
+                        depInfo.ReferencedDdlText = await GetObjectDdlAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
+
+                        var childType = rawDep.Type.Contains("FUNCTION")
+                            ? CodeObjectType.Function
+                            : CodeObjectType.Procedure;
+                        var childKey = CodeObjectKey.Create(
+                            dependencyDatabase,
+                            rawDep.Schema,
+                            rawDep.Name,
+                            childType);
+
                         // 참조 DDL 내 동적 SQL 의존성 분석 수행
                         await ResolveDynamicSqlDependenciesAsync(
-                            connectionString, rawDep.Database, depInfo.ReferencedDdlText, currentDepth, visited, dependencies, warnings, cancellationToken);
+                            connectionString,
+                            dependencyDatabase,
+                            childKey,
+                            depInfo.ReferencedDdlText,
+                            currentDepth,
+                            visited,
+                            dependencies,
+                            warnings,
+                            cancellationToken);
 
                         // 하위 재귀 수집 호출
                         await GatherDependenciesRecursiveAsync(
-                            connectionString, rawDep.Database, rawDep.Schema, rawDep.Name, 
+                            connectionString,
+                            dependencyDatabase,
+                            rawDep.Schema,
+                            rawDep.Name,
+                            childKey,
                             currentDepth + 1, maxDepth, visited, dependencies, warnings, cancellationToken);
                     }
                     catch (Exception ex)
@@ -589,7 +840,11 @@ namespace ReSet.Core.Services
 
         // 동적 SQL DDL 텍스트 분석 및 누락된 의존 테이블 수집 헬퍼
         private async Task ResolveDynamicSqlDependenciesAsync(
-            string connectionString, string? database, string ddlText, int currentDepth,
+            string connectionString,
+            string? database,
+            CodeObjectKey sourceObjectKey,
+            string ddlText,
+            int currentDepth,
             HashSet<string> visited, List<DependencyInfo> dependencies,
             List<string> warnings, CancellationToken cancellationToken)
         {
@@ -655,8 +910,12 @@ namespace ReSet.Core.Services
                 var depFullName = string.IsNullOrEmpty(depDb) 
                     ? $"{schema}.{name}" 
                     : $"[{depDb}].[{schema}].[{name}]";
-                    
-                if (visited.Contains(depFullName)) continue;
+                var visitedName = BuildVisitedObjectName(
+                    depDb ?? sourceObjectKey.Database,
+                    schema,
+                    name);
+
+                if (visited.Contains(visitedName)) continue;
 
                 // 데이터베이스 실제 개체 여부 및 타입 조회
                 string? objectType = null;
@@ -672,8 +931,11 @@ namespace ReSet.Core.Services
                     using (var conn = new SqlConnection(connectionString))
                     {
                         await conn.OpenAsync(cancellationToken);
-                        var currentDb = conn.Database;
-                        if (depDb != null && string.Equals(depDb, currentDb, StringComparison.OrdinalIgnoreCase))
+                        if (depDb != null &&
+                            string.Equals(
+                                depDb,
+                                sourceObjectKey.Database,
+                                StringComparison.OrdinalIgnoreCase))
                         {
                             depDb = null;
                             cleanDb = "";
@@ -699,10 +961,12 @@ namespace ReSet.Core.Services
 
                 if (objectType != null && (objectType.Contains("TABLE") || objectType.Contains("VIEW")))
                 {
-                    visited.Add(depFullName);
+                    visited.Add(visitedName);
 
                     var depInfo = new DependencyInfo
                     {
+                        SourceObjectKey = sourceObjectKey,
+                        IsDynamicSqlCandidate = true,
                         Database = depDb,
                         Schema = schema,
                         Name = name,

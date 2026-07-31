@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Data.SqlClient;
 using ReSet.Core.Models;
 using Serilog;
 
@@ -22,10 +23,12 @@ namespace ReSet.Core.Services
             progress.AddTask(taskName, "SP 목록 조회 중...");
             
             var spNames = await dbService.GetStoredProcedureNamesAsync(connectionString, cancellationToken);
+            var connectionBuilder = new SqlConnectionStringBuilder(connectionString);
             var snapshot = new DbSnapshot
             {
                 ExportedAt = DateTime.UtcNow,
-                Server = "Extracted_from_online_DB",
+                Server = connectionBuilder.DataSource,
+                Database = connectionBuilder.InitialCatalog
             };
 
             int current = 0;
@@ -43,8 +46,56 @@ namespace ReSet.Core.Services
 
                 try
                 {
-                    var spDetails = await dbService.GetSpDetailsAsync(connectionString, schema, spName, maxDepth, cancellationToken);
+                    var rootKey = CodeObjectKey.Create(
+                        snapshot.Database,
+                        schema,
+                        spName,
+                        CodeObjectType.Procedure);
+                    var spDetails = await dbService.GetCodeObjectDetailsAsync(
+                        connectionString,
+                        rootKey,
+                        maxDepth,
+                        cancellationToken);
                     snapshot.StoredProcedures[name] = spDetails;
+                    snapshot.CodeObjects[rootKey.CanonicalName] = spDetails;
+
+                    foreach (var dependency in spDetails.Dependencies)
+                    {
+                        var dependencyType = GetDependencyCodeObjectType(dependency.Type);
+                        if (dependencyType == null)
+                        {
+                            continue;
+                        }
+
+                        var dependencyKey = CodeObjectKey.Create(
+                            dependency.Database ??
+                                dependency.SourceObjectKey?.Database ??
+                                snapshot.Database,
+                            dependency.Schema,
+                            dependency.Name,
+                            dependencyType.Value);
+                        if (snapshot.CodeObjects.ContainsKey(dependencyKey.CanonicalName))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            snapshot.CodeObjects[dependencyKey.CanonicalName] =
+                                await dbService.GetCodeObjectDetailsAsync(
+                                    connectionString,
+                                    dependencyKey,
+                                    maxDepth,
+                                    cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(
+                                ex,
+                                "[SnapshotManager] Failed to extract code object dependency: {ObjectKey}",
+                                dependencyKey.CanonicalName);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -63,7 +114,11 @@ namespace ReSet.Core.Services
             
             await File.WriteAllTextAsync(outputPath, json, cancellationToken);
             progress.CompleteTask(taskName);
-            Log.Information("[SnapshotManager] Offline snapshot saved to {Path} with {Count} SPs.", outputPath, snapshot.StoredProcedures.Count);
+            Log.Information(
+                "[SnapshotManager] Offline snapshot saved to {Path} with {SpCount} SPs and {CodeObjectCount} code objects.",
+                outputPath,
+                snapshot.StoredProcedures.Count,
+                snapshot.CodeObjects.Count);
         }
 
         public static async Task<DbSnapshot> ImportSnapshotAsync(string inputPath, CancellationToken cancellationToken = default)
@@ -76,8 +131,30 @@ namespace ReSet.Core.Services
             
             if (snapshot == null)
                 throw new InvalidOperationException("Failed to deserialize the snapshot file.");
-                
+
+            snapshot.StoredProcedures = new(
+                snapshot.StoredProcedures ?? new(),
+                StringComparer.OrdinalIgnoreCase);
+            snapshot.CodeObjects = new(
+                snapshot.CodeObjects ?? new(),
+                StringComparer.OrdinalIgnoreCase);
+
             return snapshot;
+        }
+
+        private static CodeObjectType? GetDependencyCodeObjectType(string type)
+        {
+            if (type.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase))
+            {
+                return CodeObjectType.Procedure;
+            }
+
+            if (type.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase))
+            {
+                return CodeObjectType.Function;
+            }
+
+            return null;
         }
     }
 }

@@ -21,14 +21,37 @@ namespace ReSet.Core.Services
             return Task.FromResult(_snapshot.StoredProcedures.Keys.ToList());
         }
 
-        public Task<SpDefinition> GetSpDetailsAsync(string connectionString, string schema, string spName, int maxDepth, CancellationToken cancellationToken = default)
+        public Task<SpDefinition> GetSpDetailsAsync(
+            string connectionString,
+            string schema,
+            string spName,
+            int maxDepth,
+            CancellationToken cancellationToken = default)
         {
-            var key = $"{schema}.{spName}";
-            if (_snapshot.StoredProcedures.TryGetValue(key, out var definition))
+            var objectKey = CodeObjectKey.Create(_snapshot.Database, schema, spName, CodeObjectType.Procedure);
+            return GetCodeObjectDetailsAsync(connectionString, objectKey, maxDepth, cancellationToken);
+        }
+
+        public Task<SpDefinition> GetCodeObjectDetailsAsync(
+            string connectionString,
+            CodeObjectKey objectKey,
+            int maxDepth,
+            CancellationToken cancellationToken = default)
+        {
+            if (_snapshot.CodeObjects.TryGetValue(objectKey.CanonicalName, out var definition))
             {
                 return Task.FromResult(definition);
             }
-            throw new KeyNotFoundException($"Stored procedure '{key}' not found in the offline snapshot.");
+
+            var legacyKey = $"{objectKey.Schema}.{objectKey.Name}";
+            if (objectKey.Type == CodeObjectType.Procedure &&
+                _snapshot.StoredProcedures.TryGetValue(legacyKey, out definition))
+            {
+                return Task.FromResult(definition);
+            }
+
+            throw new KeyNotFoundException(
+                $"Code object '{objectKey.CanonicalName}' not found in the offline snapshot.");
         }
 
         public Task<List<Dictionary<string, object>>> GetTableDataPreviewAsync(string connectionString, string? database, string schema, string tableName, int limit = 100, CancellationToken cancellationToken = default)
