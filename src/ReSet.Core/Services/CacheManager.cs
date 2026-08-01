@@ -68,41 +68,69 @@ namespace ReSet.Core.Services
 
             try
             {
-                // 1. 실제 출력 파일이 존재하는지 검증 (docs/Spec.md)
+                // 1. 실제 출력 파일 경로 확인 (존재하지 않아도 File Copy를 위해 진행)
                 var specFilePath = outputPaths.ResolveSpecPath(objectKey);
-                if (!File.Exists(specFilePath))
-                {
-                    Log.Debug("캐시 미스 (설계 명세서 파일이 존재하지 않음): {SpecFilePath}", specFilePath);
-                    return false;
-                }
 
                 // 2. 캐시 인덱스 파일 로드 및 해시 대조
-                var cacheIndex = LoadCacheIndex(outputPaths.OutputRoot);
+                var globalCacheDir = GetGlobalCacheDirectory(outputPaths.OutputRoot);
+                var cacheIndex = LoadCacheIndex(globalCacheDir);
                 if (cacheIndex != null &&
                     TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))
                 {
-                    var specFileContent = NormalizeSpecificationForCache(
-                        File.ReadAllText(specFilePath));
-                    var currentSpecContentHash =
-                        entry.SpecContentLength > 0 &&
-                        specFileContent.Length >= entry.SpecContentLength
-                            ? ComputeSha256(
-                                specFileContent[
-                                    (specFileContent.Length - entry.SpecContentLength)..])
-                            : string.Empty;
+                    string currentSpecContentHash = string.Empty;
+                    if (File.Exists(specFilePath))
+                    {
+                        var specFileContent = NormalizeSpecificationForCache(
+                            File.ReadAllText(specFilePath));
+                        currentSpecContentHash =
+                            entry.SpecContentLength > 0 &&
+                            specFileContent.Length >= entry.SpecContentLength
+                                ? ComputeSha256(
+                                    specFileContent[
+                                        (specFileContent.Length - entry.SpecContentLength)..])
+                                : string.Empty;
+                    }
+
                     var isValid =
                         entry.ObjectKey == objectKey &&
                         !string.IsNullOrWhiteSpace(entry.SpecContentHash) &&
-                        string.Equals(
+                        (!File.Exists(specFilePath) || string.Equals(
                             entry.SpecContentHash,
                             currentSpecContentHash,
-                            StringComparison.OrdinalIgnoreCase) &&
+                            StringComparison.OrdinalIgnoreCase)) &&
                         string.Equals(
                             entry.CompositeHash,
                             compositeHash,
                             StringComparison.OrdinalIgnoreCase);
+
                     if (isValid)
                     {
+                        // Copy the original file to the new destination if they differ
+                        if (!string.IsNullOrEmpty(entry.OriginalSpecPath) && 
+                            File.Exists(entry.OriginalSpecPath) &&
+                            !string.Equals(entry.OriginalSpecPath, specFilePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                var destDir = Path.GetDirectoryName(specFilePath);
+                                if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir)) 
+                                    Directory.CreateDirectory(destDir);
+                                File.Copy(entry.OriginalSpecPath, specFilePath, overwrite: true);
+                                Log.Information("캐시 파일 복사 완료: {Src} -> {Dest}", entry.OriginalSpecPath, specFilePath);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning(ex, "캐시 파일 복사 실패, Cache Miss로 간주합니다: {Dest}", specFilePath);
+                                return false;
+                            }
+                        }
+                        else if (!File.Exists(specFilePath))
+                        {
+                            // We hit the cache but the file doesn't exist AND we have no OriginalSpecPath to copy from
+                            Log.Debug("캐시 히트이나 원본 파일이 존재하지 않아 Cache Miss 처리");
+                            return false;
+                        }
+
                         Log.Information(
                             "캐시 히트 - 코드 객체: {ObjectKey} (분석 생략 가능)",
                             cacheKey);
@@ -155,8 +183,9 @@ namespace ReSet.Core.Services
             {
                 lock (FileLock)
                 {
+                    var globalCacheDir = GetGlobalCacheDirectory(outputPaths.OutputRoot);
                     var cacheIndex =
-                        LoadCacheIndex(outputPaths.OutputRoot) ??
+                        LoadCacheIndex(globalCacheDir) ??
                         new CacheIndex();
 
                     // 의존성 개별 해시 구성
@@ -182,12 +211,13 @@ namespace ReSet.Core.Services
                         DependencyHashes = depHashes,
                         CompositeHash = compositeHash,
                         SpecContentHash = ComputeSha256(cacheableSpecification),
-                        SpecContentLength = cacheableSpecification.Length
+                        SpecContentLength = cacheableSpecification.Length,
+                        OriginalSpecPath = outputPaths.ResolveSpecPath(objectKey)
                     };
 
                     cacheIndex.Entries[cacheKey] = entry;
 
-                    SaveCacheIndex(outputPaths.OutputRoot, cacheIndex);
+                    SaveCacheIndex(globalCacheDir, cacheIndex);
                     Log.Information(
                         "캐시 인덱스 갱신 성공 - 코드 객체: {ObjectKey}",
                         cacheKey);
@@ -201,6 +231,16 @@ namespace ReSet.Core.Services
                     "캐시 인덱스 갱신 실패 (예외 격리) - 코드 객체: {ObjectKey}",
                     cacheKey);
             }
+        }
+
+        private string GetGlobalCacheDirectory(string outputRoot)
+        {
+            var parent = Directory.GetParent(outputRoot);
+            if (parent != null && parent.Name.Equals("output", StringComparison.OrdinalIgnoreCase))
+            {
+                return parent.FullName;
+            }
+            return outputRoot;
         }
 
         private CacheIndex? LoadCacheIndex(string outputDirectory)
