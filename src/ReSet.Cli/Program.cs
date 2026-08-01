@@ -974,19 +974,16 @@ namespace ReSet.Cli
                             continue;
                         }
 
-                        var specFiles = Directory.GetFiles(outputDir, "Spec.md", SearchOption.AllDirectories);
-                        if (specFiles.Length == 0)
+                        var specFiles = BatchStepCatalog.FindStepCandidates(outputDir);
+                        if (specFiles.Count == 0)
                         {
-                            AnsiConsole.MarkupLine("[yellow]경고: 출력 디렉터리에 기분석된 명세서(Spec.md)가 존재하지 않습니다.[/]");
+                            AnsiConsole.MarkupLine("[yellow]경고: 출력 디렉터리에 기분석된 프로시저 명세서(Spec.md)가 존재하지 않습니다. UDF와 Job 산출물은 배치 스텝이 될 수 없습니다.[/]");
                             continue;
                         }
 
                         var selectedFiles = new List<string>();
                         var remainingFiles = new List<string>();
-                        foreach (var file in specFiles)
-                        {
-                            remainingFiles.Add(Path.GetRelativePath(outputDir, file));
-                        }
+                        remainingFiles.AddRange(specFiles);
 
                         var defaultSpOrder = new[]
                         {
@@ -1187,28 +1184,22 @@ namespace ReSet.Cli
 
 
                             // SpDefinition들 복원 및 통합 마이그레이션 지시서 생성
-                            var spDefs = new List<SpDefinition>();
-                            foreach (var fileName in selectedFiles)
+                            var loadResult = await BatchStepCatalog.LoadDefinitionsAsync(
+                                outputDir,
+                                selectedFiles,
+                                activeCts.Token);
+                            var spDefs = loadResult.Definitions.ToList();
+
+                            foreach (var missing in loadResult.MissingMetadata)
                             {
-                                var rawFileName = fileName.Replace(Path.Combine("docs", "Spec.md"), Path.Combine("raw", "metadata.json"));
-                                var rawPath = Path.Combine(outputDir, rawFileName);
-                                if (File.Exists(rawPath))
-                                {
-                                    try
-                                    {
-                                        var jsonContent = await File.ReadAllTextAsync(rawPath);
-                                        var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                                        var spDef = System.Text.Json.JsonSerializer.Deserialize<SpDefinition>(jsonContent, options);
-                                        if (spDef != null)
-                                        {
-                                            spDefs.Add(spDef);
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        AnsiConsole.MarkupLine($"[yellow]경고: {rawFileName} 파일에서 메타데이터 복원 중 오류:[/] {Markup.Escape(ex.Message)}");
-                                    }
-                                }
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]경고: {Markup.Escape(missing)} 의 메타데이터(raw/metadata.json)가 없어 참조 테이블 스키마 없이 지시서에 포함됩니다. 해당 SP를 1번 메뉴로 다시 분석하면 채워집니다.[/]");
+                            }
+
+                            foreach (var failed in loadResult.FailedToParse)
+                            {
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]경고: {Markup.Escape(failed)} 의 메타데이터를 읽지 못했습니다. 참조 테이블 스키마 없이 지시서에 포함됩니다.[/]");
                             }
 
                             try
