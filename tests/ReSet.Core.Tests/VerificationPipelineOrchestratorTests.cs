@@ -2075,6 +2075,77 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_SectionalPath_MarksSpecWhenFinalReviewIsQualityRejected()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_SectionalRejected", CodeObjectType.Procedure);
+
+            // 구역별(하이브리드 다중 후보군) 경로 진입 조건은 actorEffort == "dynamic" 이다.
+            aiService.ProviderName.Returns("Ollama");
+            criticService.ProviderName.Returns("Ollama");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_SectionalRejected", DdlText = "SELECT 1;"
+                }));
+
+            // Low/Medium/High 후보 생성과 합성(Consolidator) 생성, 그리고 결함 보완 재합성 모두
+            // 이 대역 하나로 충분하다(항상 유효한 마크다운을 반환).
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = ValidSpecificationMarkdown() }));
+
+            // 후보 채점 3회는 성공시키되 Fast-pass 임계치(90점) 미만으로 유지해 합성 단계까지 도달시키고,
+            // 네 번째 호출(최종 합성본 L2 검토)부터는 결함(HasDefects=true, 저점수)이 있는 리뷰를 반환한다.
+            // NSubstitute는 지정된 값 목록을 넘어서는 호출에 대해 마지막 값을 계속 반환하므로,
+            // 결함 보완 후 재검토(다섯 번째 호출)에서도 동일하게 결함 있는 리뷰가 반환된다.
+            var candidateReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 7,
+                ScoreCrud = 7,
+                ScoreInterface = 7,
+                ScoreException = 7,
+                ScoreReadability = 7
+            };
+            var lowScoreReview = new ReviewResult
+            {
+                HasDefects = true,
+                FeedbackComment = "정합성 및 CRUD 매핑이 기준에 미달합니다.",
+                ScoreAccuracy = 3,
+                ScoreCrud = 3,
+                ScoreInterface = 3,
+                ScoreException = 3,
+                ScoreReadability = 3
+            };
+            criticService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(lowScoreReview));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "ollama-test", criticService: criticService, actorEffort: "dynamic");
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "Server=(local);Database=PaymentDB", key, 1, "Ollama", "rules", true,
+                Path.Combine(Path.GetTempPath(), $"ReSet-Outcome-{Guid.NewGuid():N}"), false,
+                cancellationToken: CancellationToken.None, directDependenciesOnly: true);
+
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.Contains("[품질 불합격]", result.SpecMarkdown);
+            userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+        }
+
+        [Fact]
         public async Task RunCodeObjectPipelineAsync_MarksSpecWhenL1RetriesAreExhausted()
         {
             var dbService = Substitute.For<IDbMetadataService>();

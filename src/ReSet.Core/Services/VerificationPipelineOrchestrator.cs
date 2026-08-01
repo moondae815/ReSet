@@ -752,6 +752,12 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyError(
                         $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 명세서를 확정합니다.");
                 }
+                else if (verificationOutcome == VerificationOutcome.QualityRejected)
+                {
+                    // 표준 재시도 루프와 동일하게, 품질 기준을 통과하지 못한 명세서는
+                    // 통과로 알리지 않는다.
+                    _userInteraction.NotifyError($"{selectedOption} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
+                }
                 else
                 {
                     _userInteraction.NotifyValidationSuccess(selectedOption);
