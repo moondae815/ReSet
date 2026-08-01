@@ -52,7 +52,7 @@ namespace ReSet.Core.Tests
             var method = typeof(DbMetadataService).GetMethod("GetDatabaseCompatibilityLevelAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (method != null)
             {
-                var task = (Task<int>)method.Invoke(service, new object[] { invalidConnString, CancellationToken.None });
+                var task = (Task<int>)method.Invoke(service, new object?[] { invalidConnString, null, CancellationToken.None });
                 var result = await task;
                 Assert.Equal(160, result);
             }

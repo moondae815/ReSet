@@ -170,16 +170,26 @@ namespace ReSet.Core.Services
             return rawDeps;
         }
 
-        private async Task<int> GetDatabaseCompatibilityLevelAsync(string connectionString, CancellationToken cancellationToken)
+        private async Task<int> GetDatabaseCompatibilityLevelAsync(
+            string connectionString,
+            string? database,
+            CancellationToken cancellationToken)
         {
             try
             {
                 using (var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString))
                 {
                     await conn.OpenAsync(cancellationToken);
-                    var sql = "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();";
+                    var sql = string.IsNullOrWhiteSpace(database)
+                        ? "SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME();"
+                        : "SELECT compatibility_level FROM sys.databases WHERE name = @Database;";
                     using (var cmd = new Microsoft.Data.SqlClient.SqlCommand(sql, conn))
                     {
+                        if (!string.IsNullOrWhiteSpace(database))
+                        {
+                            cmd.Parameters.AddWithValue("@Database", database);
+                        }
+
                         var result = await cmd.ExecuteScalarAsync(cancellationToken);
                         if (result != null && result != DBNull.Value)
                         {
@@ -471,7 +481,8 @@ namespace ReSet.Core.Services
             // T-SQL 정적 분석 구동 (AST 기반 메타데이터 추출, 호환성 수준 적용)
             try
             {
-                int compatLevel = await GetDatabaseCompatibilityLevelAsync(connectionString, cancellationToken);
+                int compatLevel = await GetDatabaseCompatibilityLevelAsync(
+                    connectionString, database, cancellationToken);
                 var staticParser = new SqlStaticParser();
                 objectDefinition.StaticAnalysis = staticParser.Analyze(objectDefinition.DdlText, compatLevel);
             }
@@ -559,7 +570,8 @@ namespace ReSet.Core.Services
                 if (tableColumnsMap.Count > 0)
                 {
                     Log.Information("[DbMetadata] 의존 테이블 스키마 메타데이터 기반 2차 정밀 정적 분석 재구동 시작 - 객체: {ObjectFullName}", objectFullName);
-                    int compatLevel = await GetDatabaseCompatibilityLevelAsync(connectionString, cancellationToken);
+                    int compatLevel = await GetDatabaseCompatibilityLevelAsync(
+                        connectionString, database, cancellationToken);
                     var staticParser = new SqlStaticParser();
                     var refinedAnalysis = staticParser.Analyze(objectDefinition.DdlText, compatLevel, tableColumnsMap);
                     if (refinedAnalysis.IsParsedSuccessfully)

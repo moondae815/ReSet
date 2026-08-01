@@ -138,5 +138,25 @@ namespace ReSet.Core.Tests
             Assert.False((bool)tableMethod.Invoke(null, new object?[] { dependencyType })!);
             Assert.True((bool)codeMethod.Invoke(null, new object?[] { dependencyType })!);
         }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("AuditDB")]
+        public async Task GetDatabaseCompatibilityLevelAsync_WithInvalidConnection_FallsBackTo160(
+            string? database)
+        {
+            var method = typeof(DbMetadataService).GetMethod(
+                "GetDatabaseCompatibilityLevelAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Assert.NotNull(method);
+            var invalidConnString =
+                "Server=invalid_server;Database=invalid_db;Integrated Security=true;TrustServerCertificate=true;Connection Timeout=1;";
+            var task = (Task<int>)method.Invoke(
+                new DbMetadataService(),
+                new object?[] { invalidConnString, database, CancellationToken.None })!;
+
+            Assert.Equal(160, await task);
+        }
     }
 }
