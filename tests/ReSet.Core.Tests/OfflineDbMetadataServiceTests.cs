@@ -61,6 +61,33 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GetCodeObjectDetailsAsync_NormalizesObjectKeyToSnapshotObjectNameCasing()
+        {
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
+            var storedKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "UF_GET_WORKDAY2",
+                CodeObjectType.Function);
+            snapshot.CodeObjects[storedKey.CanonicalName] = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UF_GET_WORKDAY2",
+                ObjectType = CodeObjectType.Function
+            };
+            var callSiteKey = CodeObjectKey.Create(
+                "PaymentDB",
+                "dbo",
+                "UF_Get_WorkDay2",
+                CodeObjectType.Function);
+
+            var result = await new OfflineDbMetadataService(snapshot)
+                .GetCodeObjectDetailsAsync("ignored", callSiteKey, 2);
+
+            Assert.Equal("UF_GET_WORKDAY2", result.ObjectKey!.Name);
+        }
+
+        [Fact]
         public async Task GetCodeObjectDetailsAsync_FallsBackToLegacyStoredProcedureKey()
         {
             var snapshot = new DbSnapshot { Database = "PaymentDB" };

@@ -24,7 +24,8 @@ public sealed class AnalysisNode
 {
     public AnalysisNode(CodeObjectKey key) => Key = key;
 
-    public CodeObjectKey Key { get; }
+    // 카탈로그가 알려주는 실제 객체명을 확보하면 그래프 소유자가 표기를 한 번 교체한다.
+    public CodeObjectKey Key { get; internal set; }
     public AnalysisNodeStatus Status { get; set; } = AnalysisNodeStatus.Queued;
     public int AnalysisAttempts { get; set; }
     public string? Error { get; set; }
@@ -40,8 +41,8 @@ public sealed class DependencyEdge
         Target = target;
     }
 
-    public CodeObjectKey Source { get; }
-    public CodeObjectKey Target { get; }
+    public CodeObjectKey Source { get; internal set; }
+    public CodeObjectKey Target { get; internal set; }
     public bool IsDynamicSqlCandidate { get; set; }
 }
 

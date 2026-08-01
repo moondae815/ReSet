@@ -57,7 +57,7 @@ namespace ReSet.Core.Services
             if ((_snapshot.CodeObjects.TryGetValue(resolvedKey.CanonicalName, out var definition) ||
                  _snapshot.CodeObjects.TryGetValue(resolvedKey.LegacyCanonicalName, out definition)))
             {
-                definition.ObjectKey = resolvedKey;
+                definition.ObjectKey = NormalizeToStoredName(resolvedKey, definition);
                 return Task.FromResult(definition);
             }
 
@@ -69,13 +69,26 @@ namespace ReSet.Core.Services
                     StringComparison.OrdinalIgnoreCase) &&
                 _snapshot.StoredProcedures.TryGetValue(legacyKey, out definition))
             {
-                definition.ObjectKey = resolvedKey;
+                definition.ObjectKey = NormalizeToStoredName(resolvedKey, definition);
                 return Task.FromResult(definition);
             }
 
             throw new KeyNotFoundException(
                 $"Code object '{resolvedKey.CanonicalName}' not found in the offline snapshot.");
         }
+
+        /// <summary>
+        /// 스냅샷 조회는 대소문자를 무시하므로, 호출부 표기 대신 스냅샷에 기록된 실제
+        /// 스키마·객체명을 키로 되돌려 산출물 경로와 캐시 키가 갈라지지 않게 한다.
+        /// </summary>
+        private static CodeObjectKey NormalizeToStoredName(
+            CodeObjectKey resolvedKey,
+            SpDefinition definition) =>
+            CodeObjectKey.Create(
+                resolvedKey.Database,
+                string.IsNullOrWhiteSpace(definition.Schema) ? resolvedKey.Schema : definition.Schema,
+                string.IsNullOrWhiteSpace(definition.Name) ? resolvedKey.Name : definition.Name,
+                resolvedKey.Type);
 
         public Task<SpDefinition> GetCodeObjectDetailsDirectAsync(
             string connectionString,
@@ -113,6 +126,7 @@ namespace ReSet.Core.Services
                 throw new InvalidOperationException(
                     $"Code object '{resolvedKey.CanonicalName}' could not be copied from the offline snapshot.");
 
+            resolvedKey = definition.ObjectKey ?? resolvedKey;
             directDefinition.ObjectKey = resolvedKey;
             directDefinition.RawPromptContext = null;
             directDefinition.Dependencies = directDefinition.Dependencies

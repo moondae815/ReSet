@@ -708,6 +708,27 @@ public sealed class DependencyAnalysisOrchestratorTests
         }
     }
 
+    [Fact]
+    public async Task AnalyzeAsync_NormalizesGraphKeysToCatalogObjectNameCasing()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var catalogKey = Key("UF_GET_WORKDAY2", CodeObjectType.Function);
+        var callSiteKey = Key("UF_Get_WorkDay2", CodeObjectType.Function);
+        var metadata = CreateMetadataService(
+            Definition(root, callSiteKey),
+            Definition(catalogKey));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        var result = await sut.AnalyzeAsync(root, Request(), CancellationToken.None);
+
+        Assert.Equal("UF_GET_WORKDAY2", result.GetNode(catalogKey).Key.Name);
+        Assert.Equal(
+            "UF_GET_WORKDAY2",
+            result.Edges.Single(edge => edge.Source == root).Target.Name);
+    }
+
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",

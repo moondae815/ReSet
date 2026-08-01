@@ -62,6 +62,47 @@ namespace ReSet.Core.Tests
             Assert.NotEqual(paymentObject, auditObject);
         }
 
+        [Fact]
+        public void ResolveCatalogKey_AdoptsCatalogSchemaAndObjectNameCasing()
+        {
+            var method = typeof(DbMetadataService).GetMethod(
+                "ResolveCatalogKey",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var requestedKey = CodeObjectKey.Create(
+                "PaymentDB", "DBO", "UF_Get_WorkDay2", CodeObjectType.Function);
+
+            Assert.NotNull(method);
+            var resolved = (CodeObjectKey)method.Invoke(
+                null,
+                new object?[] { requestedKey, "dbo", "UF_GET_WORKDAY2" })!;
+
+            Assert.Equal("dbo", resolved.Schema);
+            Assert.Equal("UF_GET_WORKDAY2", resolved.Name);
+            Assert.Equal("PaymentDB", resolved.Database);
+        }
+
+        [Theory]
+        [InlineData(null, null)]
+        [InlineData("", "  ")]
+        public void ResolveCatalogKey_KeepsRequestedNameWhenCatalogValuesAreMissing(
+            string? catalogSchema,
+            string? catalogName)
+        {
+            var method = typeof(DbMetadataService).GetMethod(
+                "ResolveCatalogKey",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var requestedKey = CodeObjectKey.Create(
+                "PaymentDB", "dbo", "UF_Get_WorkDay2", CodeObjectType.Function);
+
+            Assert.NotNull(method);
+            var resolved = (CodeObjectKey)method.Invoke(
+                null,
+                new object?[] { requestedKey, catalogSchema, catalogName })!;
+
+            Assert.Equal("dbo", resolved.Schema);
+            Assert.Equal("UF_Get_WorkDay2", resolved.Name);
+        }
+
         [Theory]
         [InlineData(null, "AuditDB")]
         [InlineData("PaymentDB", "PaymentDB")]

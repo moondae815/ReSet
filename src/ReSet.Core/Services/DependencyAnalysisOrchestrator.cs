@@ -62,6 +62,11 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
         var execution = new ExecutionState(rootKey.Database);
         await DiscoverAsync(rootKey, 0, effectiveRequest, execution, cancellationToken);
+
+        // 호출부 표기(sys.sql_expression_dependencies·AST)가 아니라 카탈로그의 실제 객체명을
+        // 그래프의 단일 표기로 확정한다. 파이프라인 실행 전에 적용해야 캐시 키와 산출물 경로가
+        // 호출한 SP마다 갈라지지 않는다.
+        execution.ApplyCanonicalKeys();
         await ExecuteDiscoveredNodesAsync(effectiveRequest, execution, cancellationToken);
 
         var result = new CodeObjectPipelineResult
@@ -122,6 +127,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     "메타데이터 수집");
                 return;
             }
+
+            execution.RegisterCanonicalKey(definition.ObjectKey);
 
             foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
             {
@@ -493,6 +500,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
     {
         public ExecutionState(string currentDatabase) => CurrentDatabase = currentDatabase;
 
+        private readonly Dictionary<CodeObjectKey, CodeObjectKey> _canonicalKeys = new();
+
         public string CurrentDatabase { get; }
         public Dictionary<CodeObjectKey, AnalysisNode> Nodes { get; } = new();
         public Dictionary<CodeObjectKey, int> MinimumDepths { get; } = new();
@@ -515,6 +524,63 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
         public bool HasDepthAtMost(CodeObjectKey key, int maxDepth) =>
             MinimumDepths.TryGetValue(key, out var depth) && depth <= maxDepth;
+
+        /// <summary>
+        /// 메타데이터 서비스가 확정한 실제 객체명을 해당 객체의 표준 표기로 등록한다.
+        /// </summary>
+        public void RegisterCanonicalKey(CodeObjectKey? resolvedKey)
+        {
+            if (resolvedKey is not null)
+            {
+                _canonicalKeys[resolvedKey] = resolvedKey;
+            }
+        }
+
+        /// <summary>
+        /// 등록된 표준 표기를 노드·간선·실행 순서·깊이 기록 전체에 반영한다.
+        /// </summary>
+        public void ApplyCanonicalKeys()
+        {
+            if (_canonicalKeys.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var node in Nodes.Values)
+            {
+                node.Key = Canonicalize(node.Key);
+            }
+
+            // Dictionary는 동등한 키를 다시 넣어도 기존 키 인스턴스를 유지하므로,
+            // 표기를 바꾸려면 항목을 비운 뒤 다시 채워야 한다.
+            var nodes = Nodes.Values.ToList();
+            Nodes.Clear();
+            foreach (var node in nodes)
+            {
+                Nodes[node.Key] = node;
+            }
+
+            var depths = MinimumDepths.ToList();
+            MinimumDepths.Clear();
+            foreach (var depth in depths)
+            {
+                MinimumDepths[Canonicalize(depth.Key)] = depth.Value;
+            }
+
+            foreach (var edge in Edges)
+            {
+                edge.Source = Canonicalize(edge.Source);
+                edge.Target = Canonicalize(edge.Target);
+            }
+
+            for (var index = 0; index < ExecutionOrder.Count; index++)
+            {
+                ExecutionOrder[index] = Canonicalize(ExecutionOrder[index]);
+            }
+        }
+
+        private CodeObjectKey Canonicalize(CodeObjectKey key) =>
+            _canonicalKeys.TryGetValue(key, out var canonicalKey) ? canonicalKey : key;
 
         public AnalysisNode GetOrAddNode(CodeObjectKey key)
         {

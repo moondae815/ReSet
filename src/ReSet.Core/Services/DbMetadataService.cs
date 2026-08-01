@@ -254,16 +254,31 @@ namespace ReSet.Core.Services
             return (lookupDatabase, storedDatabase);
         }
 
-        private async Task<string> GetCodeObjectTypeCodeAsync(
-            string connectionString,
-            string? database,
-            string schema,
-            string objectName,
-            CancellationToken cancellationToken)
+        /// <summary>
+        /// SQL Server 식별자 비교는 대소문자를 구분하지 않으므로, 호출부 표기 대신
+        /// 카탈로그에 등록된 실제 스키마·객체명을 키의 표준 표기로 채택한다.
+        /// </summary>
+        private static CodeObjectKey ResolveCatalogKey(
+            CodeObjectKey requestedKey,
+            string? catalogSchema,
+            string? catalogName) =>
+            CodeObjectKey.Create(
+                requestedKey.Database,
+                string.IsNullOrWhiteSpace(catalogSchema) ? requestedKey.Schema : catalogSchema,
+                string.IsNullOrWhiteSpace(catalogName) ? requestedKey.Name : catalogName,
+                requestedKey.Type);
+
+        private async Task<(string TypeCode, string? CatalogSchema, string? CatalogName)>
+            GetCodeObjectCatalogEntryAsync(
+                string connectionString,
+                string? database,
+                string schema,
+                string objectName,
+                CancellationToken cancellationToken)
         {
             var cleanDb = string.IsNullOrEmpty(database) ? "" : $"[{database.Replace("]", "]]")}].";
             var query = $@"
-                SELECT o.type
+                SELECT o.type, s.name AS SchemaName, o.name AS ObjectName
                 FROM {cleanDb}sys.objects o
                 INNER JOIN {cleanDb}sys.schemas s ON o.schema_id = s.schema_id
                 WHERE o.name = @ObjectName AND s.name = @Schema;";
@@ -273,9 +288,9 @@ namespace ReSet.Core.Services
             using var cmd = new SqlCommand(query, conn);
             cmd.Parameters.AddWithValue("@ObjectName", objectName);
             cmd.Parameters.AddWithValue("@Schema", schema);
-            var result = await cmd.ExecuteScalarAsync(cancellationToken);
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
-            if (result == null || result == DBNull.Value)
+            if (!await reader.ReadAsync(cancellationToken) || await reader.IsDBNullAsync(0, cancellationToken))
             {
                 var fullName = string.IsNullOrEmpty(database)
                     ? $"{schema}.{objectName}"
@@ -283,7 +298,10 @@ namespace ReSet.Core.Services
                 throw new InvalidOperationException($"'{fullName}'의 SQL Server 객체 타입을 찾을 수 없습니다.");
             }
 
-            return result.ToString() ?? string.Empty;
+            return (
+                reader.GetString(0),
+                await reader.IsDBNullAsync(1, cancellationToken) ? null : reader.GetString(1),
+                await reader.IsDBNullAsync(2, cancellationToken) ? null : reader.GetString(2));
         }
 
         private async Task<FunctionReturnInfo> GetFunctionReturnInfoAsync(
@@ -436,9 +454,13 @@ namespace ReSet.Core.Services
             }
 
             var database = string.IsNullOrWhiteSpace(objectKey.Database) ? null : objectKey.Database;
-            var typeCode = await GetCodeObjectTypeCodeAsync(
+            var catalogEntry = await GetCodeObjectCatalogEntryAsync(
                 connectionString, database, objectKey.Schema, objectKey.Name, cancellationToken);
+            var typeCode = catalogEntry.TypeCode;
             var objectType = NormalizeCodeObjectType(typeCode);
+
+            // 이후 모든 조회·산출물 경로·캐시 키가 카탈로그 표기 하나만 쓰도록 여기서 확정한다.
+            objectKey = ResolveCatalogKey(objectKey, catalogEntry.CatalogSchema, catalogEntry.CatalogName);
             var objectDefinition = new SpDefinition
             {
                 ObjectKey = objectKey,
