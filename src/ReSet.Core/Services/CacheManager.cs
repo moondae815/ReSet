@@ -14,6 +14,8 @@ namespace ReSet.Core.Services
     public class CacheManager : ICacheManager
     {
         private static readonly object FileLock = new object();
+        private static bool _hasMigrated = false;
+        private static readonly object _migrationLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
@@ -56,6 +58,11 @@ namespace ReSet.Core.Services
             string compositeHash,
             OutputPathResolver outputPaths)
         {
+            if (outputPaths != null)
+            {
+                EnsureMigrated(outputPaths.OutputRoot);
+            }
+
             if (objectKey == null ||
                 string.IsNullOrWhiteSpace(compositeHash) ||
                 outputPaths == null)
@@ -169,6 +176,11 @@ namespace ReSet.Core.Services
             OutputPathResolver outputPaths,
             string specificationMarkdown)
         {
+            if (outputPaths != null)
+            {
+                EnsureMigrated(outputPaths.OutputRoot);
+            }
+
             if (objectKey == null ||
                 spDef == null ||
                 string.IsNullOrWhiteSpace(compositeHash) ||
@@ -230,6 +242,78 @@ namespace ReSet.Core.Services
                     ex,
                     "캐시 인덱스 갱신 실패 (예외 격리) - 코드 객체: {ObjectKey}",
                     cacheKey);
+            }
+        }
+
+        private void EnsureMigrated(string outputRoot)
+        {
+            if (_hasMigrated) return;
+            lock (_migrationLock)
+            {
+                if (_hasMigrated) return;
+                MigrateLegacyCaches(outputRoot);
+                _hasMigrated = true;
+            }
+        }
+
+        public void MigrateLegacyCaches(string outputRoot)
+        {
+            var globalDir = GetGlobalCacheDirectory(outputRoot);
+            if (!Directory.Exists(globalDir)) return;
+
+            var globalIndexPath = Path.Combine(globalDir, CacheIndexFileName);
+            var globalIndex = LoadCacheIndex(globalDir) ?? new CacheIndex();
+            bool migratedAny = false;
+
+            // Search for all .sp_cache_index.json files in subdirectories
+            var legacyFiles = Directory.GetFiles(globalDir, CacheIndexFileName, SearchOption.AllDirectories);
+            foreach (var file in legacyFiles)
+            {
+                if (string.Equals(file, globalIndexPath, StringComparison.OrdinalIgnoreCase)) continue;
+
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var legacyIndex = JsonSerializer.Deserialize<CacheIndex>(json, JsonOptions);
+                    if (legacyIndex?.Entries != null)
+                    {
+                        var legacyDir = Path.GetDirectoryName(file);
+                        var legacyResolver = new OutputPathResolver("legacy", legacyDir!); // Used just to resolve SpecPaths if needed
+
+                        foreach (var kvp in legacyIndex.Entries)
+                        {
+                            // Update OriginalSpecPath if it was missing in legacy
+                            if (string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && kvp.Value.ObjectKey != null)
+                            {
+                                var expectedPath = legacyResolver.ResolveSpecPath(kvp.Value.ObjectKey);
+                                if (File.Exists(expectedPath))
+                                {
+                                    kvp.Value.OriginalSpecPath = expectedPath;
+                                }
+                            }
+
+                            // Only merge if the file actually exists
+                            if (!string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && File.Exists(kvp.Value.OriginalSpecPath))
+                            {
+                                globalIndex.Entries[kvp.Key] = kvp.Value;
+                                migratedAny = true;
+                            }
+                        }
+                    }
+                    
+                    // Optionally delete or rename the legacy file to prevent re-migration
+                    File.Move(file, file + ".migrated", overwrite: true);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "레거시 캐시 마이그레이션 실패: {File}", file);
+                }
+            }
+
+            if (migratedAny)
+            {
+                SaveCacheIndex(globalDir, globalIndex);
+                Log.Information("레거시 캐시 마이그레이션 완료 (통합 캐시에 병합됨)");
             }
         }
 
