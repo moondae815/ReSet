@@ -155,10 +155,12 @@ External/<DB>/Procedures/<객체>/docs/Spec.md
 
 | 지점 | 실패 시 |
 |---|---|
-| `FindStepCandidates` 디렉터리 열거 IO 오류 | 경고 로그 후 수집분 반환. 예외 전파 없음 |
+| `FindStepCandidates` 디렉터리 열거 IO 오류 | 경고 로그 후 빈 목록 반환. 예외 전파 없음 |
 | `LoadDefinitionsAsync` 파일 단위 실패 | 해당 항목만 `FailedToParse`로 격리, 나머지 계속 |
 | `metadata.json` 쓰기 실패 | 기존 try/catch(`MetadataExporter.cs:85`) 안에서 소프트 페일 |
 | L2 리뷰 예외 | 계속 진행하되 ④로 사실 표시 |
+
+`Directory.GetFiles(SearchOption.AllDirectories)`는 하위 디렉터리 하나가 막히면 이미 수집한 결과까지 버리고 예외를 던진다. 이 기능에서는 그 편이 안전하다. 배치 스텝은 순서 있는 목록이라, 조용히 잘린 후보로 설계서를 만들면 스텝이 빠진 채 진행되어 발견이 늦다. 명확한 실패가 부분 결과보다 낫다.
 
 **취소는 예외다.** `OperationCanceledException`은 세 지점 모두 재던진다. `ExportCodeObjectArtifactsAsync`가 이미 `:81`에서 그렇게 하며, 취소를 소프트 페일로 삼키면 Ctrl+C가 동작하지 않는다.
 
