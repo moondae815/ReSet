@@ -62,6 +62,7 @@ namespace ReSet.Core.Tests
                 isBatchMode: true,
                 outputDirectory: "/tmp/output",
                 enableCache: false,
+                allowExternalDatabaseConnections: false,
                 DependencyArtifactMode.Reference,
                 CancellationToken.None);
 

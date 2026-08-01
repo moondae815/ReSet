@@ -142,6 +142,7 @@ ReSet/
     "Server": "localhost",          // SQL Server 주소
     "Database": "Northwind",        // 대상 데이터베이스 이름
     "MaxDependencyDepth": 3,        // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
+    "AllowExternalDatabaseConnections": false, // 같은 인스턴스 내 다른 DB의 코드 객체까지 분석 (기본값: false)
     "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {

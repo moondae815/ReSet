@@ -138,6 +138,10 @@ namespace ReSet.Cli
             var depthStr = configuration["DatabaseSettings:MaxDependencyDepth"] ?? "3";
             int.TryParse(depthStr, out int maxDepth);
 
+            var allowExternalDbStr =
+                configuration["DatabaseSettings:AllowExternalDatabaseConnections"] ?? "false";
+            bool.TryParse(allowExternalDbStr, out bool allowExternalDatabaseConnections);
+
             var outputDir = configuration["OutputSettings:Directory"] ?? "./output";
             if (!Path.IsPathRooted(outputDir))
             {
@@ -625,6 +629,7 @@ namespace ReSet.Cli
                             isBatchMode: true,
                             outputDir,
                             enableCache,
+                            allowExternalDatabaseConnections,
                             dependencyArtifactMode,
                             globalCts.Token);
 
@@ -911,6 +916,7 @@ namespace ReSet.Cli
                                 isBatchMode: false,
                                 outputDir,
                                 enableCache,
+                                allowExternalDatabaseConnections,
                                 dependencyArtifactMode,
                                 activeCts.Token);
 
@@ -1415,6 +1421,7 @@ namespace ReSet.Cli
             bool isBatchMode,
             string outputDirectory,
             bool enableCache,
+            bool allowExternalDatabaseConnections,
             DependencyArtifactMode dependencyArtifactMode,
             CancellationToken cancellationToken)
         {
@@ -1452,6 +1459,7 @@ namespace ReSet.Cli
                     IsBatchMode = isBatchMode,
                     OutputDirectory = outputDirectory,
                     EnableCache = enableCache,
+                    AllowExternalDatabaseConnections = allowExternalDatabaseConnections,
                     DependencyArtifactMode = dependencyArtifactMode
                 },
                 cancellationToken);
