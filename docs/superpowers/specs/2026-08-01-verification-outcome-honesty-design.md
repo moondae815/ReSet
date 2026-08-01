@@ -22,7 +22,7 @@
 `RunCodeObjectPipelineCoreAsync`는 142~1384행, 약 1,240줄이며 그 안에 독립된 종료 영역이 둘 있다.
 
 ```
-if (구역별 순차 생성 경로)        // Ollama 등 — 후보 생성 → Critic 채점 → 합성
+if (_actorEffort == "dynamic")    // 다중 후보 생성 → Critic 채점 → 합성
 {
     ...
     NotifyValidationSuccess(selectedOption);   // :737 — 무조건 호출
@@ -46,7 +46,7 @@ if (l1Result.IsValid && (l2Result == null || !l2Result.HasDefects))
 
 Critic 호출이 예외로 실패하면 `l2Result`가 null로 남고, 이 조건이 성공 분기를 탄다. 직전 작업에서 통합 경로의 같은 결함(④)을 고쳤으나 단일 SP 경로는 그대로였다.
 
-구역별 경로는 더 노골적이다. 최종 L2 검토가 `catch (Exception ex) { Log.Warning(ex, "최종 합성본 L2 Critic 검토 중 실패 (무시하고 계속 진행)"); }`(`:660-664`)로 삼켜져 `finalReview`가 null로 남고, 배너 조건(`finalReview != null && HasDefects`)도 통과하지 못한 채 `:737`이 조건 없이 성공을 알린다.
+dynamic effort 경로는 더 노골적이다. 최종 L2 검토가 `catch (Exception ex) { Log.Warning(ex, "최종 합성본 L2 Critic 검토 중 실패 (무시하고 계속 진행)"); }`(`:660-664`)로 삼켜져 `finalReview`가 null로 남고, 배너 조건(`finalReview != null && HasDefects`)도 통과하지 못한 채 `:737`이 조건 없이 성공을 알린다.
 
 파급이 통합 경로보다 넓다.
 
@@ -120,9 +120,9 @@ public static class VerificationBanner
 
 `Passed`용 메서드는 두지 않는다. 통과 시 붙일 배너가 없으므로 없는 것을 표현하는 메서드는 군더더기다.
 
-세 종료 영역(구역별 `:500~737`, 표준 루프 `:940~1070`, 통합 `:1548~1650`)이 각 종료 분기에서 `VerificationOutcome`을 확정하고 같은 렌더러를 호출한다.
+세 종료 영역(dynamic effort `:302~757`, 표준 루프 `:940~1070`, 통합 `:1548~1650`)이 각 종료 분기에서 `VerificationOutcome`을 확정하고 같은 렌더러를 호출한다.
 
-**구역별 경로는 세 상태만 쓴다.** 그 경로에는 L1 재시도 소진에 해당하는 종료가 없다 — 정적 오류가 남으면 이전 버전을 최종본으로 유지하고 계속 진행할 뿐이다(`:711`). 매핑은 이렇다.
+**dynamic effort 경로는 세 상태만 쓴다.** 그 경로에는 L1 재시도 소진에 해당하는 종료가 없다 — 정적 오류가 남으면 이전 버전을 최종본으로 유지하고 계속 진행할 뿐이다(`:711`). 매핑은 이렇다.
 
 | 조건 | Outcome |
 |---|---|
@@ -203,7 +203,7 @@ External DB 프로시저는 리솔버가 `External/<DB>/Procedures/...`로 보�
 | `SpecificationDocumentFormatter` | 네 Outcome × YAML `검증 상태` + 점수 필드 유무. `ReviewNotRun`·`L1Exhausted`에 점수가 새어나오지 않을 것 |
 | 헤더 파서 (신규 추출) | `검증 상태` 파싱, 필드 없는 구버전 문서, YAML 없는 문서 |
 | `VerificationPipelineOrchestrator` (표준 루프) | Critic 예외 → `ReviewNotRun` + `NotifyValidationSuccess` 미호출 / L1 소진 → 배너 삽입. 통합 경로에 이미 있는 테스트의 대칭형 |
-| `VerificationPipelineOrchestrator` (구역별 경로) | 최종 L2 검토 예외 → `ReviewNotRun` + `NotifyValidationSuccess` 미호출 + 배너 삽입 |
+| `VerificationPipelineOrchestrator` (dynamic effort 경로) | 최종 L2 검토 예외 → `ReviewNotRun` + `NotifyValidationSuccess` 미호출 + 배너 삽입 |
 | `MetadataExporter` | External DB 프로시저가 `External/<DB>/Procedures/...`로 링크 / `Spec.md` 부재 시 링크 대신 사유 |
 
 가장 중요한 것은 첫 줄이다. 세 곳에 복제된 문자열을 하나로 합치는 것이 이번 변경의 실질이고, 그 과정에서 문구가 미묘하게 달라지면 기존 산출물과 어긋난다.
