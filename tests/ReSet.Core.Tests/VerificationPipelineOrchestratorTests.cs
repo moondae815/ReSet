@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using NSubstitute;
 using Xunit;
 using ReSet.Core.Models;
@@ -1978,5 +1979,90 @@ namespace ReSet.Core.Tests
                 if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
             }
         }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_MarksSpecWhenCriticReviewCouldNotRun()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_NoReview", CodeObjectType.Procedure);
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_NoReview", DdlText = "SELECT 1;"
+                }));
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = ValidSpecificationMarkdown() }));
+            criticService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromException<ReviewResult>(new InvalidOperationException("critic endpoint down")));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-test", criticService: criticService);
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "Server=(local);Database=PaymentDB", key, 1, "OpenAI", "rules", true,
+                Path.Combine(Path.GetTempPath(), $"ReSet-Outcome-{Guid.NewGuid():N}"), false,
+                cancellationToken: CancellationToken.None, directDependenciesOnly: true);
+
+            Assert.Equal(VerificationOutcome.ReviewNotRun, result.Outcome);
+            Assert.Contains("L2 AI 교차 리뷰가 수행되지 않았습니다", result.SpecMarkdown);
+            userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+        }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_MarksSpecWhenL1RetriesAreExhausted()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_BadL1", CodeObjectType.Procedure);
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_BadL1", DdlText = "SELECT 1;"
+                }));
+            // 필수 H2 헤더가 없어 L1이 항상 실패한다.
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "# 헤더가 없는 본문" }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-test", criticService: criticService);
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "Server=(local);Database=PaymentDB", key, 1, "OpenAI", "rules", true,
+                Path.Combine(Path.GetTempPath(), $"ReSet-Outcome-{Guid.NewGuid():N}"), false,
+                cancellationToken: CancellationToken.None, directDependenciesOnly: true);
+
+            Assert.Equal(VerificationOutcome.L1Exhausted, result.Outcome);
+            Assert.Contains("L1 기계 검증을 통과하지 못했습니다", result.SpecMarkdown);
+            userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+        }
+
+        private static readonly string[] RequiredSpecHeaderNames =
+        {
+            "개요",
+            "파라미터 목록",
+            "CRUD 분석",
+            "로직 흐름 요약",
+            "비즈니스 흐름 시각화"
+        };
+
+        private static string ValidSpecificationMarkdown() =>
+            string.Join("\n", RequiredSpecHeaders().Select(header => header + "\n\n내용"));
+
+        private static IEnumerable<string> RequiredSpecHeaders() =>
+            RequiredSpecHeaderNames.Select(h => "## " + h);
     }
 }

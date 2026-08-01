@@ -116,7 +116,7 @@ namespace ReSet.Core.Services
             bool includeExternalCodeObjects = true,
             string? analysisDatabase = null)
         {
-            var (specMarkdown, spDef, review, thinkingText) = await RunCodeObjectPipelineCoreAsync(
+            var (specMarkdown, spDef, review, thinkingText, outcome) = await RunCodeObjectPipelineCoreAsync(
                 connectionString,
                 key,
                 maxDepth,
@@ -135,11 +135,12 @@ namespace ReSet.Core.Services
                 SpDef = spDef,
                 SpecMarkdown = specMarkdown,
                 Review = review,
-                ThinkingText = thinkingText
+                ThinkingText = thinkingText,
+                Outcome = outcome
             };
         }
 
-        private async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunCodeObjectPipelineCoreAsync(
+        private async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunCodeObjectPipelineCoreAsync(
             string connectionString,
             CodeObjectKey key,
             int maxDepth,
@@ -160,6 +161,7 @@ namespace ReSet.Core.Services
             var objectStatus = $"{objectKind}: {key.CanonicalName}";
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
+            var verificationOutcome = VerificationOutcome.Passed;
             var accumulatedThinking = new StringBuilder();
             AiResult? ollamaPart1 = null;
             AiResult? ollamaPart2 = null;
@@ -218,7 +220,7 @@ namespace ReSet.Core.Services
             if (spDef == null)
             {
                 Log.Warning("[파이프라인] SP 정의를 가져오지 못해 파이프라인을 중단합니다 - SP: {SpName}", selectedOption);
-                return (null, null, null, null);
+                return (null, null, null, null, verificationOutcome);
             }
 
             var cacheObjectKey = ResolveCacheObjectKey(
@@ -272,7 +274,7 @@ namespace ReSet.Core.Services
                                 cancellationToken);
                             var (cachedSpec, cachedReview) = ParseCachedSpecification(
                                 cachedArtifact);
-                            return (cachedSpec, spDef, cachedReview, null);
+                            return (cachedSpec, spDef, cachedReview, null, verificationOutcome);
                         }
                     }
                     else
@@ -371,7 +373,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 하이브리드 후보 생성 중 실패: {ex.Message}");
-                        return (null, spDef, null, null);
+                        return (null, spDef, null, null, verificationOutcome);
                     }
                 }
 
@@ -432,7 +434,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - Critic 검토 중 실패: {ex.Message}");
-                        return (null, spDef, null, null);
+                        return (null, spDef, null, null, verificationOutcome);
                     }
                 }
 
@@ -595,7 +597,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 최종 합성 생성 실패: {ex.Message}");
-                        return (null, spDef, null, null);
+                        return (null, spDef, null, null, verificationOutcome);
                     }
 
                     // 합성본 기계적 검증 (L1) 1회 수행
@@ -936,7 +938,7 @@ namespace ReSet.Core.Services
 
                     if (!genSuccess || string.IsNullOrEmpty(specificationMarkdown))
                     {
-                        return (null, spDef, null, null);
+                        return (null, spDef, null, null, verificationOutcome);
                     }
 
                     // L1: 기계적 무결성 검사
@@ -959,6 +961,8 @@ namespace ReSet.Core.Services
                         {
                             Log.Error("[파이프라인] L1 기계 검증 최종 실패 - SP: {SpName}", selectedOption);
                             _userInteraction.NotifyError($"{selectedOption} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
+                            verificationOutcome = VerificationOutcome.L1Exhausted;
+                            specificationMarkdown = VerificationBanner.L1Exhausted(l1Result.Errors ?? new System.Collections.Generic.List<string>()) + specificationMarkdown;
                             break;
                         }
                     }
@@ -970,6 +974,7 @@ namespace ReSet.Core.Services
                     // L2: AI 교차 리뷰
                     ReviewResult? l2Result = null;
                     bool reviewSuccess = false;
+                    string? reviewFailureReason = null;
 
                     Log.Information("[파이프라인] L2 AI 교차 리뷰 시작 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                     var criticEffortText = !string.IsNullOrWhiteSpace(_criticEffort) ? $", Effort: {_criticEffort}" : "";
@@ -1001,6 +1006,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         Log.Error(ex, "[파이프라인] L2 AI 교차 리뷰 예외 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
+                        reviewFailureReason = ex.Message;
                         _userInteraction.NotifyError($"{selectedOption} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
                     }
 
@@ -1047,10 +1053,22 @@ namespace ReSet.Core.Services
                             
                             // 최종 품질 불합격 경고 배너 삽입
                             finalReview = l2Result;
-                            var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {l2Result.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {l2Result.ScoreAccuracy}/10, CRUD {l2Result.ScoreCrud}/10, 인터페이스 {l2Result.ScoreInterface}/10, 가독성 {l2Result.ScoreReadability}/10, 예외 {l2Result.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {l2Result.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
-                            specificationMarkdown = warningBanner + specificationMarkdown;
+                            verificationOutcome = VerificationOutcome.QualityRejected;
+                            specificationMarkdown =
+                                VerificationBanner.QualityRejected(l2Result, _criticScoreThreshold) + specificationMarkdown;
                             break;
                         }
+                    }
+
+                    // 리뷰를 수행하지 못한 경우: 소프트 페일로 계속 진행하되 통과와 구분해 표시한다.
+                    if (!reviewSuccess)
+                    {
+                        _userInteraction.NotifyError(
+                            $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 명세서를 확정합니다.");
+                        verificationOutcome = VerificationOutcome.ReviewNotRun;
+                        specificationMarkdown =
+                            VerificationBanner.ReviewNotRun(reviewFailureReason ?? "사유가 기록되지 않았습니다.") + specificationMarkdown;
+                        break;
                     }
 
                     // 검증을 통과한 경우 루프 탈출
@@ -1130,11 +1148,11 @@ namespace ReSet.Core.Services
                             }
                         }
 
-                        return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
+                        return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString(), verificationOutcome);
                     }
                     else if (reviewResult.Decision == UserDecision.Cancel)
                     {
-                        return (null, spDef, null, null);
+                        return (null, spDef, null, null, verificationOutcome);
                     }
                     else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                     {
@@ -1379,7 +1397,7 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
+            return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString(), verificationOutcome);
         }
 
         private static CodeObjectKey ResolveCacheObjectKey(
