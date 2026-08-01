@@ -258,62 +258,69 @@ namespace ReSet.Core.Services
 
         public void MigrateLegacyCaches(string outputRoot)
         {
-            var globalDir = GetGlobalCacheDirectory(outputRoot);
-            if (!Directory.Exists(globalDir)) return;
-
-            var globalIndexPath = Path.Combine(globalDir, CacheIndexFileName);
-            var globalIndex = LoadCacheIndex(globalDir) ?? new CacheIndex();
-            bool migratedAny = false;
-
-            // Search for all .sp_cache_index.json files in subdirectories
-            var legacyFiles = Directory.GetFiles(globalDir, CacheIndexFileName, SearchOption.AllDirectories);
-            foreach (var file in legacyFiles)
+            try
             {
-                if (string.Equals(file, globalIndexPath, StringComparison.OrdinalIgnoreCase)) continue;
+                var globalDir = GetGlobalCacheDirectory(outputRoot);
+                if (!Directory.Exists(globalDir)) return;
 
-                try
+                var globalIndexPath = Path.Combine(globalDir, CacheIndexFileName);
+                var globalIndex = LoadCacheIndex(globalDir) ?? new CacheIndex();
+                bool migratedAny = false;
+
+                // Search for all .sp_cache_index.json files in subdirectories
+                var legacyFiles = Directory.GetFiles(globalDir, CacheIndexFileName, SearchOption.AllDirectories);
+                foreach (var file in legacyFiles)
                 {
-                    var json = File.ReadAllText(file);
-                    var legacyIndex = JsonSerializer.Deserialize<CacheIndex>(json, JsonOptions);
-                    if (legacyIndex?.Entries != null)
-                    {
-                        var legacyDir = Path.GetDirectoryName(file);
-                        var legacyResolver = new OutputPathResolver("legacy", legacyDir!); // Used just to resolve SpecPaths if needed
+                    if (string.Equals(file, globalIndexPath, StringComparison.OrdinalIgnoreCase)) continue;
 
-                        foreach (var kvp in legacyIndex.Entries)
+                    try
+                    {
+                        var json = File.ReadAllText(file);
+                        var legacyIndex = JsonSerializer.Deserialize<CacheIndex>(json, JsonOptions);
+                        if (legacyIndex?.Entries != null)
                         {
-                            // Update OriginalSpecPath if it was missing in legacy
-                            if (string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && kvp.Value.ObjectKey != null)
+                            var legacyDir = Path.GetDirectoryName(file);
+                            var legacyResolver = new OutputPathResolver("legacy", legacyDir!); // Used just to resolve SpecPaths if needed
+
+                            foreach (var kvp in legacyIndex.Entries)
                             {
-                                var expectedPath = legacyResolver.ResolveSpecPath(kvp.Value.ObjectKey);
-                                if (File.Exists(expectedPath))
+                                // Update OriginalSpecPath if it was missing in legacy
+                                if (string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && kvp.Value.ObjectKey != null)
                                 {
-                                    kvp.Value.OriginalSpecPath = expectedPath;
+                                    var expectedPath = legacyResolver.ResolveSpecPath(kvp.Value.ObjectKey);
+                                    if (File.Exists(expectedPath))
+                                    {
+                                        kvp.Value.OriginalSpecPath = expectedPath;
+                                    }
+                                }
+
+                                // Only merge if the file actually exists
+                                if (!string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && File.Exists(kvp.Value.OriginalSpecPath))
+                                {
+                                    globalIndex.Entries[kvp.Key] = kvp.Value;
+                                    migratedAny = true;
                                 }
                             }
-
-                            // Only merge if the file actually exists
-                            if (!string.IsNullOrEmpty(kvp.Value.OriginalSpecPath) && File.Exists(kvp.Value.OriginalSpecPath))
-                            {
-                                globalIndex.Entries[kvp.Key] = kvp.Value;
-                                migratedAny = true;
-                            }
                         }
+                        
+                        // Optionally delete or rename the legacy file to prevent re-migration
+                        File.Move(file, file + ".migrated", overwrite: true);
                     }
-                    
-                    // Optionally delete or rename the legacy file to prevent re-migration
-                    File.Move(file, file + ".migrated", overwrite: true);
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "레거시 캐시 마이그레이션 실패 (파일 수준): {File}", file);
+                    }
                 }
-                catch (Exception ex)
+
+                if (migratedAny)
                 {
-                    Log.Warning(ex, "레거시 캐시 마이그레이션 실패: {File}", file);
+                    SaveCacheIndex(globalDir, globalIndex);
+                    Log.Information("레거시 캐시 마이그레이션 완료 (통합 캐시에 병합됨)");
                 }
             }
-
-            if (migratedAny)
+            catch (Exception ex)
             {
-                SaveCacheIndex(globalDir, globalIndex);
-                Log.Information("레거시 캐시 마이그레이션 완료 (통합 캐시에 병합됨)");
+                Log.Warning(ex, "레거시 캐시 마이그레이션 중 오류가 발생하여 중단되었습니다.");
             }
         }
 
