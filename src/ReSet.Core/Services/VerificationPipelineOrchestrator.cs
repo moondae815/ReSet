@@ -1483,9 +1483,16 @@ namespace ReSet.Core.Services
             string targetLanguage,
             string jobName,
             string provider,
+            string outputRoot,
             bool isBatchMode = false,
             CancellationToken cancellationToken = default)
         {
+            // 호출부 결함이므로 CWD로 조용히 폴백하지 않고 즉시 드러낸다.
+            if (string.IsNullOrWhiteSpace(outputRoot))
+            {
+                throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
+            }
+
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
@@ -1517,7 +1524,7 @@ namespace ReSet.Core.Services
                             progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
                             var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
                             
-                            var rawDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "output", "Jobs", jobName, "raw");
+                            var rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
                             if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
 

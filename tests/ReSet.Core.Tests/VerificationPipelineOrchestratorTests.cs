@@ -11,13 +11,18 @@ using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
-    public class VerificationPipelineOrchestratorTests
+    public class VerificationPipelineOrchestratorTests : IDisposable
     {
         private readonly IDbMetadataService _dbService;
         private readonly IAiService _aiService;
         private readonly MechanicalValidator _validator;
         private readonly IVerificationUserInteraction _userInteraction;
         private readonly VerificationPipelineOrchestrator _orchestrator;
+
+        // RunConsolidatedPipelineAsync 호출부가 산출물을 기록할 임시 출력 루트.
+        // 테스트마다 고유 경로를 쓰고 Dispose에서 정리한다.
+        private readonly string _consolidatedOutputRoot =
+            Path.Combine(Path.GetTempPath(), $"ReSet-ConsolidatedTest-{Guid.NewGuid():N}");
 
         public VerificationPipelineOrchestratorTests()
         {
@@ -44,6 +49,11 @@ namespace ReSet.Core.Tests
                         key.Name,
                         callInfo.ArgAt<int>(2));
                 });
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(_consolidatedOutputRoot)) Directory.Delete(_consolidatedOutputRoot, true);
         }
 
         [Fact]
@@ -1431,7 +1441,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
-            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1463,7 +1473,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
-            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1493,7 +1503,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
-            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI");
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1555,7 +1565,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1591,7 +1601,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1627,7 +1637,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(defectiveReview), Task.FromResult(goodReview));
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", isBatchMode: true);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1663,7 +1673,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Cancel }));
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobCancel", "OpenAI", isBatchMode: false);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobCancel", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             // Assert
             Assert.Null(result.Plan);
@@ -1701,7 +1711,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobFeedback", "OpenAI", isBatchMode: false);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobFeedback", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1743,7 +1753,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobException", "OpenAI", isBatchMode: false);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobException", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1789,7 +1799,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobL1Fail", "OpenAI", isBatchMode: false);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobL1Fail", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1821,7 +1831,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(warningReview));
 
             // Act
-            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobWarning", "OpenAI", isBatchMode: true);
+            var result = await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "TestJobWarning", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // Assert
             Assert.NotNull(result.Plan);
@@ -1847,6 +1857,76 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.Equal(expectedL2Attempts, actual);
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_WritesIntermediateArtifactsUnderProvidedOutputRoot()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Consolidated-{Guid.NewGuid():N}");
+            var jobName = $"Job_{Guid.NewGuid():N}";
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+
+            aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "brainstorm body" }));
+            aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "structure body" }));
+            aiService.GenerateConsolidatedBatchPlanAsync(
+                    Arg.Any<string>(), Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult
+                {
+                    Content = "## 통합 배치 아키텍처 개요\n\n## Mermaid 기반 통합 흐름도\n\n## 단계별 이행 상세 및 의사코드\n\n## 통합 데이터 정합성 검증 SQL 세트\n"
+                }));
+            aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string FileName, string Content)>>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction, "1", "gpt-test");
+            var strayDirectory = Path.Combine(Directory.GetCurrentDirectory(), "output", "Jobs", jobName);
+
+            try
+            {
+                await orchestrator.RunConsolidatedPipelineAsync(
+                    new List<(string FileName, string Content)> { ("dbo.USP_Test", "## 개요") },
+                    "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+                Assert.True(File.Exists(Path.Combine(outputRoot, "Jobs", jobName, "raw", "Brainstorming.md")));
+                Assert.True(File.Exists(Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md")));
+
+                // CWD 폴백이 살아 있으면 여기에도 생긴다. 생성 여부만 보면 버그를 놓친다.
+                Assert.False(Directory.Exists(strayDirectory), $"CWD에 산출물이 생겼습니다: {strayDirectory}");
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+                if (Directory.Exists(strayDirectory)) Directory.Delete(strayDirectory, true);
+            }
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_RejectsEmptyOutputRoot()
+        {
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(),
+                Substitute.For<IAiService>(),
+                new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(),
+                "1", "gpt-test");
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                orchestrator.RunConsolidatedPipelineAsync(
+                    new List<(string FileName, string Content)> { ("dbo.USP_Test", "## 개요") },
+                    "C#", "Job", "OpenAI", "   ", isBatchMode: true));
         }
     }
 }

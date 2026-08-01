@@ -693,7 +693,7 @@ namespace ReSet.Cli
 
                     try
                     {
-                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, isBatchMode: true, activeCts.Token);
+                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, activeCts.Token);
                         var consolidatedPlan = pipelineResult.Plan;
                         var aiResult = pipelineResult.Result;
                         if (string.IsNullOrEmpty(consolidatedPlan))
@@ -1140,7 +1140,7 @@ namespace ReSet.Cli
 
                         try
                         {
-                            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, cancellationToken: activeCts.Token);
+                            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, outputDir, cancellationToken: activeCts.Token);
                             consolidatedPlan = pipelineResult.Plan;
                             var aiResult = pipelineResult.Result;
                             if (string.IsNullOrEmpty(consolidatedPlan))
