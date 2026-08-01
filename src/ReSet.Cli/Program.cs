@@ -612,7 +612,7 @@ namespace ReSet.Cli
                         var schema = parts[0];
                         var name = parts[1];
 
-                        var (specMarkdown, spDef, reviewResult, thinkingText) = await RunConfiguredAnalysisAsync(
+                        var (specMarkdown, spDef, reviewResult, thinkingText, outcome) = await RunConfiguredAnalysisAsync(
                             analyzeReferencedCodeObjects,
                             dependencyAnalysisOrchestrator,
                             orchestrator,
@@ -667,7 +667,7 @@ namespace ReSet.Cli
                             spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
                             metadataExporter, saveRawJson, saveRawContext,
                             saveRawFiles && (!analyzeReferencedCodeObjects || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
-                            schema, name, provider, modelName, reviewResult, thinkingText, actorEffort, configuration);
+                            schema, name, provider, modelName, reviewResult, outcome, thinkingText, actorEffort, configuration);
 
                         AnsiConsole.MarkupLine($"[green]성공:[/] {selectedOption} 분석 완료 및 저장!");
                     }
@@ -899,7 +899,7 @@ namespace ReSet.Cli
 
                         try
                         {
-                            var (specMarkdown, spDef, reviewResult, thinkingText) = await RunConfiguredAnalysisAsync(
+                            var (specMarkdown, spDef, reviewResult, thinkingText, outcome) = await RunConfiguredAnalysisAsync(
                                 analyzeSelectedReferences,
                                 dependencyAnalysisOrchestrator,
                                 orchestrator,
@@ -938,7 +938,7 @@ namespace ReSet.Cli
                                 spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
                                 metadataExporter, saveRawJson, saveRawContext,
                                 saveRawFiles && (!analyzeSelectedReferences || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
-                                schema, name, provider, modelName, reviewResult, thinkingText, actorEffort, configuration);
+                                schema, name, provider, modelName, reviewResult, outcome, thinkingText, actorEffort, configuration);
 
                             var outputFileName = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs", "Spec.md");
                             AnsiConsole.Write(new Panel(new Markup($"[green]성공적으로 파일이 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(outputFileName)}"))
@@ -1395,7 +1395,7 @@ namespace ReSet.Cli
         }
 
 
-        public static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunConfiguredAnalysisAsync(
+        public static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunConfiguredAnalysisAsync(
             bool analyzeReferencedCodeObjects,
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator,
             VerificationPipelineOrchestrator verificationPipelineOrchestrator,
@@ -1460,8 +1460,8 @@ namespace ReSet.Cli
             var rootAnalysis = result.AnalysisResults
                 .FirstOrDefault(analysis => analysis.Key == rootKey);
             return rootAnalysis is null
-                ? (null, null, null, null)
-                : (rootAnalysis.SpecMarkdown, rootAnalysis.Definition, rootAnalysis.Review, rootAnalysis.ThinkingText);
+                ? (null, null, null, null, VerificationOutcome.ReviewNotRun)
+                : (rootAnalysis.SpecMarkdown, rootAnalysis.Definition, rootAnalysis.Review, rootAnalysis.ThinkingText, rootAnalysis.Outcome);
         }
 
         private static async Task<string> ResolveAnalysisDatabaseAsync(
@@ -1530,6 +1530,7 @@ namespace ReSet.Cli
             string provider,
             string modelName,
             ReviewResult? review,
+            VerificationOutcome outcome,
             string? thinkingText = null,
             string? effort = null,
             IConfiguration? configuration = null)
@@ -1626,6 +1627,7 @@ namespace ReSet.Cli
                 SpecificationDocumentFormatter.Format(
                     specMarkdown,
                     review,
+                    outcome,
                     provider,
                     modelName,
                     effort,

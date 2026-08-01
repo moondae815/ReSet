@@ -188,7 +188,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -217,7 +217,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -250,7 +250,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -284,7 +284,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -307,7 +307,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromException<SpDefinition>(new Exception("DB Connection Failed")));
 
             // Act
-            var (resultSpec, resultDef, resultRev, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, resultRev, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Exception", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -337,7 +337,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_OllamaTest", 3, "Ollama", "instructions", isBatchMode: true);
 
             // Assert
@@ -377,7 +377,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_DynamicTest", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -420,7 +420,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new AiResult { Content = fixedSpecMarkdown }));
 
             // Act
-            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_L3Test", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -467,7 +467,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
             // Act
-            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_CacheThrow", 3, "OpenAI", "instructions", isBatchMode: true, enableCache: true);
 
             // Assert
@@ -579,7 +579,7 @@ namespace ReSet.Core.Tests
             try
             {
                 // Act
-                var (resultSpec, resultDef, review, _) = await orchestrator.RunPipelineAsync(
+                var (resultSpec, resultDef, review, _, _) = await orchestrator.RunPipelineAsync(
                     "connection_string", "dbo", "USP_CacheTest", 3, "OpenAI", "instructions", true, outputDir, true);
 
                 // Assert
@@ -875,7 +875,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(defectiveReview), Task.FromResult(goodReview));
 
             // Act
-            var (resultSpec, _, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_L2FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -913,7 +913,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_L1FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -949,7 +949,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_FailTest", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -988,7 +988,7 @@ namespace ReSet.Core.Tests
             // Final review should NOT be called again inside the consolidator block, but fast pass adopts the review.
             
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_DynamicFastPass", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -1033,7 +1033,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_DynamicFinalFix", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -1077,7 +1077,7 @@ namespace ReSet.Core.Tests
             File.WriteAllText(Path.Combine(cleansingDir, "dbo.USP_Interactive_MetadataCleansing.sql"), "DUMMY");
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Interactive", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -1132,7 +1132,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_InteractiveL1Ollama", 3, "Ollama", "instructions", isBatchMode: false);
 
             // Assert
@@ -1177,7 +1177,7 @@ namespace ReSet.Core.Tests
                 );
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_InteractiveL1OpenAI", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -1223,7 +1223,7 @@ namespace ReSet.Core.Tests
 
             // Act
             // The connection_string "invalid_connection" will cause a SqlException when it tries to run the cleansing sql
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "invalid_connection", "dbo", "USP_InteractiveSqlException", 3, "OpenAI", "instructions", isBatchMode: false, currentDir);
 
             // Assert
@@ -1270,7 +1270,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(false)); // no sync
 
             // Act
-            var (resultSpec, resultDef, _, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_InteractiveFeedback", 3, "OpenAI", "instructions", isBatchMode: false);
 
             // Assert
@@ -1307,7 +1307,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(review1), Task.FromResult(review2));
 
             // Act
-            var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, finalRev, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_SingleGen", 3, "OpenAI", "instructions", isBatchMode: true);
 
             // Assert
@@ -1355,7 +1355,7 @@ namespace ReSet.Core.Tests
             // Final review skipped in Ollama path? No, ReviewSpecificationAsync is called twice in retry loop.
             
             // Act
-            var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, finalRev, _, _) = await orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_OllamaRetry", 3, "Ollama", "instructions", isBatchMode: true);
 
             // Assert
@@ -1408,7 +1408,7 @@ namespace ReSet.Core.Tests
             );
 
         // Act
-        var (resultSpec, resultDef, finalRev, _) = await orchestrator.RunPipelineAsync(
+        var (resultSpec, resultDef, finalRev, _, _) = await orchestrator.RunPipelineAsync(
             "connection_string", "dbo", "USP_OllamaL3Retry", 3, "Ollama", "instructions", isBatchMode: false);
 
         // Assert
@@ -1530,7 +1530,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(reviewResult));
 
             // Act
-            var (resultSpec, resultDef, _, _) = await _orchestrator.RunPipelineAsync(
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
                 "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true, outputDirectory: tempOutDir);
 
             // Assert

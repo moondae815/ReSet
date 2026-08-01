@@ -74,7 +74,7 @@ namespace ReSet.Core.Services
             _maxAttempts = _maxL2Attempts == -1 ? -1 : 1 + _maxL2Attempts;
         }
 
-        public async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText)> RunPipelineAsync(
+        public async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunPipelineAsync(
             string connectionString,
             string schema,
             string name,
@@ -99,7 +99,7 @@ namespace ReSet.Core.Services
                 enableCache,
                 cancellationToken);
 
-            return (result.SpecMarkdown, result.SpDef, result.Review, result.ThinkingText);
+            return (result.SpecMarkdown, result.SpDef, result.Review, result.ThinkingText, result.Outcome);
         }
 
         public async Task<CodeObjectPipelineResult> RunCodeObjectPipelineAsync(

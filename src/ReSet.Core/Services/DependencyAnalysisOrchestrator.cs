@@ -225,6 +225,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     FunctionReturn = pipelineResult.SpDef.FunctionReturn,
                     SpecMarkdown = pipelineResult.SpecMarkdown,
                     Review = pipelineResult.Review,
+                    Outcome = pipelineResult.Outcome,
                     ThinkingText = pipelineResult.ThinkingText
                 });
             }
@@ -461,6 +462,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         SpecificationDocumentFormatter.Format(
             analysis.SpecMarkdown ?? string.Empty,
             analysis.Review,
+            analysis.Outcome,
             request.Provider,
             request.ModelName,
             request.ActorEffort,
