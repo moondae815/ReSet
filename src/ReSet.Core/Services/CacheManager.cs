@@ -14,7 +14,7 @@ namespace ReSet.Core.Services
     public class CacheManager : ICacheManager
     {
         private static readonly object FileLock = new object();
-        private static bool _hasMigrated = false;
+        private static volatile bool _hasMigrated = false;
         private static readonly object _migrationLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -120,7 +120,7 @@ namespace ReSet.Core.Services
                             try
                             {
                                 var destDir = Path.GetDirectoryName(specFilePath);
-                                if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir)) 
+                                if (!string.IsNullOrEmpty(destDir)) 
                                     Directory.CreateDirectory(destDir);
                                 File.Copy(entry.OriginalSpecPath, specFilePath, overwrite: true);
                                 Log.Information("캐시 파일 복사 완료: {Src} -> {Dest}", entry.OriginalSpecPath, specFilePath);
