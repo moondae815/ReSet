@@ -749,6 +749,95 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_AnalysisDatabaseDiffersFromObjectDatabase_ResolvesCacheUnderExternalDirectory()
+        {
+            // analysisDatabase가 실제로 소비되지 않으면(예: 인자 누락) 캐시 경로가 External/ 아래가 아니라
+            // 루트(Procedures/) 아래로 계산되어 캐시 히트가 발생하지 않는다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var externalKey = CodeObjectKey.Create(
+                "AuditDB",
+                "dbo",
+                "USP_ExternalCache",
+                CodeObjectType.Procedure);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = externalKey,
+                Schema = externalKey.Schema,
+                Name = externalKey.Name,
+                ObjectType = CodeObjectType.Procedure
+            };
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(),
+                    externalKey,
+                    Arg.Any<CancellationToken>(),
+                    Arg.Any<bool>())
+                .Returns(Task.FromResult(spDef));
+            cacheManager.ComputeCompositeHash(spDef, 2).Returns("fake-hash");
+            cacheManager.IsCacheValid(
+                    Arg.Any<CodeObjectKey>(),
+                    "fake-hash",
+                    Arg.Any<OutputPathResolver>())
+                .Returns(true);
+
+            var outputDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "ReSet_ExternalAnalysisDatabase_" + Guid.NewGuid().ToString("N"));
+            var expectedSpecPath = Path.Combine(
+                outputDirectory,
+                "External",
+                "AuditDB",
+                "Procedures",
+                "dbo.USP_ExternalCache",
+                "docs",
+                "Spec.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(expectedSpecPath)!);
+            await File.WriteAllTextAsync(expectedSpecPath, "## 외부 DB 캐시 명세");
+
+            try
+            {
+                var orchestrator = new VerificationPipelineOrchestrator(
+                    dbService,
+                    aiService,
+                    new MechanicalValidator(),
+                    Substitute.For<IVerificationUserInteraction>(),
+                    cacheManager: cacheManager);
+
+                var result = await orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=.;Database=PaymentDB;Integrated Security=true",
+                    externalKey,
+                    2,
+                    "OpenAI",
+                    "instructions",
+                    isBatchMode: true,
+                    outputDirectory,
+                    enableCache: true,
+                    cancellationToken: CancellationToken.None,
+                    directDependenciesOnly: true,
+                    includeExternalCodeObjects: true,
+                    analysisDatabase: "PaymentDB");
+
+                Assert.Equal("## 외부 DB 캐시 명세", result.SpecMarkdown);
+                cacheManager.Received(1).IsCacheValid(
+                    externalKey,
+                    "fake-hash",
+                    Arg.Is<OutputPathResolver>(resolver =>
+                        resolver.ResolveSpecPath(externalKey) == expectedSpecPath));
+                await aiService.DidNotReceive().GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>());
+            }
+            finally
+            {
+                Directory.Delete(outputDirectory, recursive: true);
+            }
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_L2Fails_TriggersRetry()
         {
             // Arrange

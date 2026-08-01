@@ -542,6 +542,85 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void DependencyAnalysisRequest_ToString_MasksConnectionString()
+    {
+        // record 자동 생성 ToString에 자격 증명이 섞여 로그로 새는 것을 막는다.
+        var request = Request() with
+        {
+            ConnectionString = "Server=(local);Database=PaymentDB;User Id=sa;Password=super-secret"
+        };
+
+        var text = request.ToString();
+
+        Assert.DoesNotContain("super-secret", text);
+        Assert.DoesNotContain("Password", text);
+        Assert.Contains("ConnectionString = ***", text);
+        Assert.Contains("MaxDepth = 3", text);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ProductionPipelineWiring_ResolvesExternalObjectCacheUnderExternalDirectory()
+    {
+        // 델리게이트가 아닌 실제 VerificationPipelineOrchestrator를 사용해
+        // AnalysisDatabase가 프로덕션 생성자를 통해 OutputPathResolver까지 도달하는지 확인한다.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ExternalWiring-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var externalFunction = CodeObjectKey.Create(
+            "AuditDB", "dbo", "FN_Audit", CodeObjectType.Function);
+        var metadata = CreateMetadataService(
+            Definition(root, externalFunction),
+            Definition(externalFunction));
+        var cacheManager = Substitute.For<ICacheManager>();
+        cacheManager.ComputeCompositeHash(Arg.Any<SpDefinition>(), Arg.Any<int>())
+            .Returns("fake-hash");
+        cacheManager.IsCacheValid(
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<string>(),
+                Arg.Any<OutputPathResolver>())
+            .Returns(true);
+
+        var paths = new OutputPathResolver(root.Database, outputRoot);
+        var rootSpecPath = paths.ResolveSpecPath(root);
+        var externalSpecPath = paths.ResolveSpecPath(externalFunction);
+        Directory.CreateDirectory(Path.GetDirectoryName(rootSpecPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(externalSpecPath)!);
+        await File.WriteAllTextAsync(rootSpecPath, "# 루트 캐시 명세");
+        await File.WriteAllTextAsync(externalSpecPath, "# 외부 캐시 명세");
+
+        var pipeline = new VerificationPipelineOrchestrator(
+            metadata,
+            Substitute.For<IAiService>(),
+            new MechanicalValidator(),
+            Substitute.For<IVerificationUserInteraction>(),
+            cacheManager: cacheManager);
+        var sut = new DependencyAnalysisOrchestrator(metadata, pipeline);
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot, allowExternalDatabaseConnections: true)
+                    with { EnableCache = true },
+                CancellationToken.None);
+
+            Assert.Equal(AnalysisNodeStatus.Succeeded, result.GetNode(externalFunction).Status);
+            Assert.Equal(
+                Path.Combine(
+                    outputRoot, "External", "AuditDB", "Functions", "dbo.FN_Audit", "docs", "Spec.md"),
+                externalSpecPath);
+            cacheManager.Received(1).IsCacheValid(
+                externalFunction,
+                "fake-hash",
+                Arg.Is<OutputPathResolver>(resolver =>
+                    resolver.ResolveSpecPath(externalFunction) == externalSpecPath));
+        }
+        finally
+        {
+            Directory.Delete(outputRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_AllowingExternalDatabasesWritesSpecUnderExternalDirectory()
     {
         var outputRoot = Path.Combine(
