@@ -97,53 +97,13 @@ namespace ReSet.Cli
 
         public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown)
         {
-            int score = 100;
-            int acc = 10, crud = 10, read = 10, ex = 10;
-            bool scoreFound = false;
-
-            // YAML Front Matter에서 점수 추출 시도
-            if (specificationMarkdown.StartsWith("---"))
-            {
-                var endOfYaml = specificationMarkdown.IndexOf("---", 3);
-                if (endOfYaml > 0)
-                {
-                    var yamlBlock = specificationMarkdown.Substring(3, endOfYaml - 3);
-                    var lines = yamlBlock.Split('\n');
-                    foreach (var line in lines)
-                    {
-                        var parts = line.Split(':', 2);
-                        if (parts.Length == 2)
-                        {
-                            var key = parts[0].Trim();
-                            var val = parts[1].Trim();
-                            
-                            // # 주석 제거
-                            var commentIdx = val.IndexOf('#');
-                            if (commentIdx >= 0)
-                            {
-                                val = val.Substring(0, commentIdx).Trim();
-                            }
-
-                            // 괄호 설명 제거 (예: "95 (종합 신뢰도)" -> "95")
-                            var parenIdx = val.IndexOf('(');
-                            if (parenIdx >= 0)
-                            {
-                                val = val.Substring(0, parenIdx).Trim();
-                            }
-
-                            // '/'가 포함된 경우 첫 번째 부분 추출 (예: "9/10" -> "9")
-                            var slashIdx = val.IndexOf('/');
-                            var numberPart = slashIdx >= 0 ? val.Substring(0, slashIdx).Trim() : val;
-
-                            if ((key == "AiConfidenceScore" || key == "종합 신뢰도 점수" || key == "종합 신뢰도" || key == "종합신뢰도") && int.TryParse(numberPart, out int scoreVal)) { score = scoreVal; scoreFound = true; }
-                            else if ((key == "AccuracyScore" || key == "정합성 점수" || key == "정합성") && int.TryParse(numberPart, out int accVal)) acc = accVal;
-                            else if ((key == "CrudScore" || key == "CRUD 점수" || key == "CRUD") && int.TryParse(numberPart, out int crudVal)) crud = crudVal;
-                            else if ((key == "ReadabilityScore" || key == "가독성 점수" || key == "가독성") && int.TryParse(numberPart, out int readVal)) read = readVal;
-                            else if ((key == "ExceptionScore" || key == "예외처리 점수" || key == "예외처리" || key == "예외 처리 점수" || key == "예외 처리") && int.TryParse(numberPart, out int exVal)) ex = exVal;
-                        }
-                    }
-                }
-            }
+            var header = SpecHeaderReader.Read(specificationMarkdown);
+            var score = header.NormalizedScore ?? 0;
+            var acc = header.Accuracy ?? 0;
+            var crud = header.Crud ?? 0;
+            var read = header.Readability ?? 0;
+            var ex = header.Exception ?? 0;
+            var scoreFound = header.NormalizedScore.HasValue;
 
             string scoreText = "";
             if (scoreFound)
