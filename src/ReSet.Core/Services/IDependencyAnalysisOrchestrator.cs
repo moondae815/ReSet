@@ -27,6 +27,28 @@ public sealed record DependencyAnalysisRequest
 
     public DependencyArtifactMode DependencyArtifactMode { get; init; } = DependencyArtifactMode.Reference;
     public Action<DependencyAnalysisProgress>? Progress { get; init; }
+
+    /// <summary>
+    /// record가 자동 생성하는 <see cref="object.ToString"/>에 접속 문자열(자격 증명 포함)이
+    /// 노출되지 않도록 <see cref="ConnectionString"/>만 마스킹한다. 나머지 속성은 그대로 출력한다.
+    /// </summary>
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("ConnectionString = ***");
+        builder.Append(", MaxDepth = ").Append(MaxDepth);
+        builder.Append(", Provider = ").Append(Provider);
+        builder.Append(", ModelName = ").Append(ModelName);
+        builder.Append(", ActorEffort = ").Append(ActorEffort);
+        builder.Append(", Instructions = ").Append(Instructions);
+        builder.Append(", IsBatchMode = ").Append(IsBatchMode);
+        builder.Append(", OutputDirectory = ").Append(OutputDirectory);
+        builder.Append(", EnableCache = ").Append(EnableCache);
+        builder.Append(", AllowExternalDatabaseConnections = ").Append(AllowExternalDatabaseConnections);
+        builder.Append(", AnalysisDatabase = ").Append(AnalysisDatabase);
+        builder.Append(", DependencyArtifactMode = ").Append(DependencyArtifactMode);
+        builder.Append(", Progress = ").Append(Progress);
+        return true;
+    }
 }
 
 public delegate Task<CodeObjectPipelineResult> DependencyAnalysisPipelineRunner(

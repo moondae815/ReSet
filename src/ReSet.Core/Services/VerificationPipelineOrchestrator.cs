@@ -154,6 +154,8 @@ namespace ReSet.Core.Services
             string? analysisDatabase = null)
         {
             var selectedOption = $"{key.Schema}.{key.Name}";
+            // 정제 SQL 파일명은 분석 기준 DB와 다른 DB의 객체끼리 서로 덮어쓰지 않도록 DB 성분을 포함한다.
+            var cleansingFileBaseName = ResolveCleansingFileBaseName(key, analysisDatabase);
             var objectKind = key.Type == CodeObjectType.Function ? "UDF" : "SP";
             var objectStatus = $"{objectKind}: {key.CanonicalName}";
             SpDefinition? spDef = null;
@@ -228,7 +230,10 @@ namespace ReSet.Core.Services
                 try
                 {
                     outputPaths = new OutputPathResolver(
-                        analysisDatabase ?? cacheObjectKey.Database,
+                        // 빈 문자열·공백도 미지정으로 간주해야 캐시가 조용히 비활성화되지 않는다.
+                        string.IsNullOrWhiteSpace(analysisDatabase)
+                            ? cacheObjectKey.Database
+                            : analysisDatabase,
                         outputDirectory);
                 }
                 catch (Exception ex)
@@ -1083,7 +1088,7 @@ namespace ReSet.Core.Services
             }
 
             // DB 역반영 여부 선택과 관계없이 항상 파일로 스크립트 저장
-            ExportMetadataCleansingSql(specificationMarkdown, selectedOption, outputDirectory);
+            ExportMetadataCleansingSql(specificationMarkdown, selectedOption, cleansingFileBaseName, outputDirectory);
 
             // L3: 인간 개입형 승인 (TUI 모드 한정)
             if (!isBatchMode)
@@ -1109,13 +1114,19 @@ namespace ReSet.Core.Services
                         }
 
                         // 생성된 DB 역반영 쿼리가 존재할 경우에만 동기화 수행 여부 묻기
-                        var sqlPath = System.IO.Path.Combine(outputDirectory, "cleansing", $"{selectedOption}_MetadataCleansing.sql");
+                        var sqlPath = System.IO.Path.Combine(outputDirectory, "cleansing", $"{cleansingFileBaseName}_MetadataCleansing.sql");
                         if (System.IO.File.Exists(sqlPath))
                         {
                             var syncApproved = await _userInteraction.ConfirmMetadataSyncAsync(selectedOption);
                             if (syncApproved)
                             {
-                                await ApplyMetadataCleansingSqlAsync(connectionString, selectedOption, outputDirectory, cancellationToken);
+                                await ApplyMetadataCleansingSqlAsync(
+                                    connectionString,
+                                    key,
+                                    selectedOption,
+                                    cleansingFileBaseName,
+                                    outputDirectory,
+                                    cancellationToken);
                             }
                         }
 
@@ -1683,7 +1694,27 @@ namespace ReSet.Core.Services
             }
         }
 
-        private void ExportMetadataCleansingSql(string specificationMarkdown, string selectedOption, string outputDirectory)
+        private static string ResolveCleansingFileBaseName(CodeObjectKey key, string? analysisDatabase)
+        {
+            var localName = $"{key.Schema}.{key.Name}";
+            if (string.IsNullOrWhiteSpace(analysisDatabase) ||
+                string.IsNullOrWhiteSpace(key.Database) ||
+                string.Equals(
+                    key.Database.Trim(),
+                    analysisDatabase.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return localName;
+            }
+
+            return $"{key.Database.Trim()}.{localName}";
+        }
+
+        private void ExportMetadataCleansingSql(
+            string specificationMarkdown,
+            string selectedOption,
+            string cleansingFileBaseName,
+            string outputDirectory)
         {
             if (string.IsNullOrEmpty(specificationMarkdown)) return;
 
@@ -1743,7 +1774,7 @@ namespace ReSet.Core.Services
                     System.IO.Directory.CreateDirectory(cleansingDir);
                 }
 
-                var sqlPath = System.IO.Path.Combine(cleansingDir, $"{selectedOption}_MetadataCleansing.sql");
+                var sqlPath = System.IO.Path.Combine(cleansingDir, $"{cleansingFileBaseName}_MetadataCleansing.sql");
                 System.IO.File.WriteAllText(sqlPath, sb.ToString(), System.Text.Encoding.UTF8);
                 Log.Debug("[파이프라인] 메타데이터 보완 SQL 스크립트 저장 성공 - SP: {SpName}, 경로: {SqlPath}", selectedOption, sqlPath);
                 _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 메타데이터 보완 SQL 스크립트가 저장되었습니다: [blue]{sqlPath}[/]");
@@ -1755,10 +1786,35 @@ namespace ReSet.Core.Services
             }
         }
 
-        private async Task ApplyMetadataCleansingSqlAsync(string connectionString, string selectedOption, string outputDirectory, CancellationToken cancellationToken)
+        private async Task ApplyMetadataCleansingSqlAsync(
+            string connectionString,
+            CodeObjectKey key,
+            string selectedOption,
+            string cleansingFileBaseName,
+            string outputDirectory,
+            CancellationToken cancellationToken)
         {
-            var sqlPath = System.IO.Path.Combine(outputDirectory, "cleansing", $"{selectedOption}_MetadataCleansing.sql");
+            var sqlPath = System.IO.Path.Combine(outputDirectory, "cleansing", $"{cleansingFileBaseName}_MetadataCleansing.sql");
             if (!System.IO.File.Exists(sqlPath)) return;
+
+            // 정제 SQL은 DB 한정자가 없으므로 접속 DB(Initial Catalog)에 그대로 적용된다.
+            // 객체가 다른 DB 소속이면 루트 DB의 동명 객체에 잘못 기록될 수 있어 적용 자체를 건너뛴다.
+            var currentDatabase = ResolveCurrentDatabase(connectionString);
+            if (!string.IsNullOrWhiteSpace(key.Database) &&
+                !string.IsNullOrWhiteSpace(currentDatabase) &&
+                !string.Equals(
+                    key.Database.Trim(),
+                    currentDatabase.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Warning(
+                    "[파이프라인] 객체 소속 DB와 접속 DB가 달라 메타데이터 역반영을 건너뜁니다 - 객체: {ObjectKey}, 객체 DB: {ObjectDatabase}, 접속 DB: {ConnectionDatabase}, SqlPath: {SqlPath}",
+                    key.CanonicalName,
+                    key.Database,
+                    currentDatabase,
+                    sqlPath);
+                return;
+            }
 
             Log.Information("[파이프라인] DB 메타데이터 역반영 SQL 실행 시작 - SP: {SpName}, SqlPath: {SqlPath}", selectedOption, sqlPath);
 
