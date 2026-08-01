@@ -1997,6 +1997,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Assess if the business logic and rules of individual specifications are accurately preserved in the consolidated batch job.
+   - Verify that queries using `UNION`, `UNION ALL`, or multi-table JOINs are preserved in full. Penalize if source tables or aggregation formulas were simplified, merged, or omitted.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if table CRUD accesses are properly sequenced and chunked (Paging Reader) in the data pipeline.
    - For chunked DELETE-INSERT patterns, verify if chunking keys are added to the DELETE filter to prevent unintended full-table deletions.
@@ -2008,6 +2009,9 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - Check if `XACT_ABORT ON` is explicitly used with `TRY...CATCH`, and verify that the EXACT original error codes are preserved and returned (Penalize if error codes are remapped or omitted).
    - Check if Checkpoint-based Step Skip logic (Restartability) is clearly defined so completed steps do not block restarts with pre-validation errors.
    - Check if Shadow Table strategies cover all target tables, define capacity/purge policies, and include explicit Rollback/Restore pseudo-code.
+   - Check that no `WITH (NOLOCK)` or `NOLOCK` hints remain anywhere in the generated pseudocode. They force READ UNCOMMITTED and violate the SNAPSHOT isolation policy. Penalize heavily if any remain.
+   - For INSERT-only steps, verify the rollback relies on `ROLLBACK TRAN` or an explicit `DELETE WHERE [ChunkKey]` compensation rather than a Shadow table.
+   - Verify that Shadow restore logic DELETEs the affected target range before re-inserting from the Shadow table. Restoring without the preceding DELETE duplicates rows.
 5. Diagram Syntax and Readability (ScoreReadability):
    - Ensure the Mermaid flowchart diagram has no syntax errors, wraps node labels in double quotes, and arrow labels are clean of special characters.
    - Ensure 'subgraph' keyword and its ID are separated by a space (e.g., `subgraph SHARED_DB`).

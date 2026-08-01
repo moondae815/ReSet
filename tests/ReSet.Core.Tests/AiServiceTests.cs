@@ -275,6 +275,44 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task ReviewConsolidatedPlanAsync_Prompt_ChecksNolockAndInsertOnlyRollback()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\": false}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job");
+
+            Assert.Contains("NOLOCK", mockHandler.LastRequestBody);
+            Assert.Contains("INSERT-only", mockHandler.LastRequestBody);
+        }
+
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_Prompt_ChecksUnionAndJoinPreservation()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\": false}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job");
+
+            Assert.Contains("UNION ALL", mockHandler.LastRequestBody);
+            Assert.Contains("multi-table JOINs", mockHandler.LastRequestBody);
+        }
+
+        [Fact]
         public async Task ReviewSpecificationAsync_Success_ReturnsReviewResult()
         {
             // Arrange
