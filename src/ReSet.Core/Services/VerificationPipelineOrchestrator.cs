@@ -1611,6 +1611,7 @@ namespace ReSet.Core.Services
                     else
                     {
                         _userInteraction.NotifyError($"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
+                        consolidatedPlan = VerificationBanner.L1Exhausted(l1Result.Errors) + consolidatedPlan;
                         break;
                     }
                 }
@@ -1618,6 +1619,7 @@ namespace ReSet.Core.Services
                 // L2: AI 교차 리뷰
                 ReviewResult? l2Result = null;
                 bool reviewSuccess = false;
+                string? reviewFailureReason = null;
 
                 var criticEffortText = !string.IsNullOrWhiteSpace(_criticEffort) ? $", Effort: {_criticEffort}" : "";
                 _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - AI 통합 계획 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
@@ -1633,6 +1635,7 @@ namespace ReSet.Core.Services
                 catch (Exception ex)
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
+                    reviewFailureReason = ex.Message;
                 }
 
                 if (reviewSuccess && l2Result != null && l2Result.HasDefects)
@@ -1655,8 +1658,8 @@ namespace ReSet.Core.Services
                         _userInteraction.NotifyError($"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
                         
                         // 최종 품질 불합격 경고 배너 삽입
-                        var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {l2Result.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {l2Result.ScoreAccuracy}/10, CRUD {l2Result.ScoreCrud}/10, 인터페이스 {l2Result.ScoreInterface}/10, 가독성 {l2Result.ScoreReadability}/10, 예외 {l2Result.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {l2Result.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
-                        consolidatedPlan = warningBanner + consolidatedPlan;
+                        consolidatedPlan =
+                            VerificationBanner.QualityRejected(l2Result, _criticScoreThreshold) + consolidatedPlan;
                         break;
                     }
                 }
@@ -1667,8 +1670,7 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyError(
                         $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
                     consolidatedPlan =
-                        "> [!NOTE]\n> **L2 AI 교차 리뷰가 수행되지 않았습니다.** 리뷰 호출이 실패하여 정합성 검증 없이 확정된 문서입니다. 내용을 직접 검토하십시오.\n\n" +
-                        consolidatedPlan;
+                        VerificationBanner.ReviewNotRun(reviewFailureReason ?? "사유가 기록되지 않았습니다.") + consolidatedPlan;
                     break;
                 }
 

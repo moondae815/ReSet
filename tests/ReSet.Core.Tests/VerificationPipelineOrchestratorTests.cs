@@ -1931,6 +1931,46 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunConsolidatedPipelineAsync_MarksPlanWhenL1RetriesAreExhausted()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Consolidated-{Guid.NewGuid():N}");
+            var jobName = $"Job_{Guid.NewGuid():N}";
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+
+            aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "brainstorm body" }));
+            aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "structure body" }));
+            // 필수 H2 헤더가 없어 L1이 항상 실패한다.
+            aiService.GenerateConsolidatedBatchPlanAsync(
+                    Arg.Any<string>(), Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 엉뚱한 헤더\n\n내용" }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction, "1", "gpt-test");
+
+            try
+            {
+                var (plan, _) = await orchestrator.RunConsolidatedPipelineAsync(
+                    new List<(string FileName, string Content)> { ("dbo.USP_Test", "## 개요") },
+                    "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+                Assert.Contains("L1 기계 검증을 통과하지 못했습니다", plan);
+                userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task RunConsolidatedPipelineAsync_MarksPlanWhenCriticReviewCouldNotRun()
         {
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Consolidated-{Guid.NewGuid():N}");
