@@ -1928,5 +1928,55 @@ namespace ReSet.Core.Tests
                     new List<(string FileName, string Content)> { ("dbo.USP_Test", "## 개요") },
                     "C#", "Job", "OpenAI", "   ", isBatchMode: true));
         }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_MarksPlanWhenCriticReviewCouldNotRun()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Consolidated-{Guid.NewGuid():N}");
+            var jobName = $"Job_{Guid.NewGuid():N}";
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+
+            aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "brainstorm body" }));
+            aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "structure body" }));
+            aiService.GenerateConsolidatedBatchPlanAsync(
+                    Arg.Any<string>(), Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult
+                {
+                    Content = "## 통합 배치 아키텍처 개요\n\n## Mermaid 기반 통합 흐름도\n\n## 단계별 이행 상세 및 의사코드\n\n## 통합 데이터 정합성 검증 SQL 세트\n"
+                }));
+            aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string FileName, string Content)>>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromException<ReviewResult>(new InvalidOperationException("critic endpoint down")));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction, "1", "gpt-test");
+
+            try
+            {
+                var (plan, _) = await orchestrator.RunConsolidatedPipelineAsync(
+                    new List<(string FileName, string Content)> { ("dbo.USP_Test", "## 개요") },
+                    "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+                Assert.Contains("[!NOTE]", plan);
+                Assert.Contains("L2 AI 교차 리뷰가 수행되지 않았습니다", plan);
+                userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
     }
 }

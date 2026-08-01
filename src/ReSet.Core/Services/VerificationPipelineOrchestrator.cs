@@ -1618,6 +1618,17 @@ namespace ReSet.Core.Services
                     }
                 }
 
+                // 리뷰를 수행하지 못한 경우: 소프트 페일로 계속 진행하되 통과와 구분해 표시한다.
+                if (!reviewSuccess)
+                {
+                    _userInteraction.NotifyError(
+                        $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
+                    consolidatedPlan =
+                        "> [!NOTE]\n> **L2 AI 교차 리뷰가 수행되지 않았습니다.** 리뷰 호출이 실패하여 정합성 검증 없이 확정된 문서입니다. 내용을 직접 검토하십시오.\n\n" +
+                        consolidatedPlan;
+                    break;
+                }
+
                 // 검증을 통과한 경우 루프 탈출
                 if (l1Result.IsValid && (l2Result == null || !l2Result.HasDefects))
                 {
