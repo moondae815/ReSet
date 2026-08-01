@@ -589,7 +589,15 @@ namespace ReSet.Core.Tests
 
                 var instructions = await File.ReadAllTextAsync(
                     Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
-                Assert.Contains("External/AuditDB/Procedures/dbo.USP_External/docs/Spec.md", instructions);
+
+                // 지시서는 outputRoot/Jobs/Job1/agent/MigrationInstructions.md 에 쓰인다.
+                // agent 폴더는 outputRoot 로부터 3단계 아래(Jobs, Job1, agent)이므로,
+                // agent 폴더를 기준으로 상대화하면 반드시 "../../../"로 시작해야 한다.
+                // (Path.GetRelativePath 를 여기서 호출해 계산하지 않는다 — 구현이 잘못된
+                // 기준 디렉터리를 쓰더라도 같은 계산식이면 테스트가 그 오류에 동의해버린다.)
+                Assert.Contains(
+                    "../../../External/AuditDB/Procedures/dbo.USP_External/docs/Spec.md",
+                    instructions);
                 Assert.DoesNotContain("../../../Procedures/dbo.USP_External/docs/Spec.md", instructions);
             }
             finally
