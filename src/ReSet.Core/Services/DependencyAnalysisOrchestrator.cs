@@ -26,7 +26,8 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.EnableCache,
                 cancellationToken,
                 directDependenciesOnly: true,
-                includeExternalCodeObjects: true),
+                includeExternalCodeObjects: true,
+                analysisDatabase: request.AnalysisDatabase),
             new MetadataExporter(),
             new MechanicalValidator())
     {
@@ -54,9 +55,14 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // 호출자가 무엇을 넣었든 루트 객체의 DB가 분석 기준이 된다.
+        // 캐시 판정(VerificationPipelineOrchestrator)과 최종 저장(PersistArtifactsAsync)이
+        // 같은 OutputPathResolver 기준을 쓰도록 보장하는 지점이다.
+        var effectiveRequest = request with { AnalysisDatabase = rootKey.Database };
+
         var execution = new ExecutionState(rootKey.Database);
-        await DiscoverAsync(rootKey, 0, request, execution, cancellationToken);
-        await ExecuteDiscoveredNodesAsync(request, execution, cancellationToken);
+        await DiscoverAsync(rootKey, 0, effectiveRequest, execution, cancellationToken);
+        await ExecuteDiscoveredNodesAsync(effectiveRequest, execution, cancellationToken);
 
         var result = new CodeObjectPipelineResult
         {
@@ -64,7 +70,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             DependencyEdges = execution.Edges,
             AnalysisResults = execution.AnalysisResults
         };
-        await PersistArtifactsAsync(rootKey, request, result, cancellationToken);
+        await PersistArtifactsAsync(rootKey, effectiveRequest, result, cancellationToken);
         return result;
     }
 

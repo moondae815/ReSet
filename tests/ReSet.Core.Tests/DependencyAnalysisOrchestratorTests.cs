@@ -514,6 +514,33 @@ public sealed class DependencyAnalysisOrchestratorTests
         }
     }
 
+    [Fact]
+    public async Task AnalyzeAsync_PropagatesRootDatabaseAsAnalysisDatabaseToPipeline()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var externalFunction = CodeObjectKey.Create(
+            "AuditDB", "dbo", "FN_Audit", CodeObjectType.Function);
+        var metadata = CreateMetadataService(
+            Definition(root, externalFunction),
+            Definition(externalFunction));
+        var analysisDatabases = new List<string?>();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (request, key, _) =>
+            {
+                analysisDatabases.Add(request.AnalysisDatabase);
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        await sut.AnalyzeAsync(
+            root,
+            Request(allowExternalDatabaseConnections: true),
+            CancellationToken.None);
+
+        Assert.Equal(2, analysisDatabases.Count);
+        Assert.All(analysisDatabases, database => Assert.Equal("PaymentDB", database));
+    }
+
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",

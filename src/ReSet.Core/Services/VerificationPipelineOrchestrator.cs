@@ -113,7 +113,8 @@ namespace ReSet.Core.Services
             bool enableCache = false,
             CancellationToken cancellationToken = default,
             bool directDependenciesOnly = false,
-            bool includeExternalCodeObjects = true)
+            bool includeExternalCodeObjects = true,
+            string? analysisDatabase = null)
         {
             var (specMarkdown, spDef, review, thinkingText) = await RunCodeObjectPipelineCoreAsync(
                 connectionString,
@@ -126,7 +127,8 @@ namespace ReSet.Core.Services
                 enableCache,
                 cancellationToken,
                 directDependenciesOnly,
-                includeExternalCodeObjects);
+                includeExternalCodeObjects,
+                analysisDatabase);
 
             return new CodeObjectPipelineResult
             {
@@ -148,7 +150,8 @@ namespace ReSet.Core.Services
             bool enableCache,
             CancellationToken cancellationToken,
             bool directDependenciesOnly,
-            bool includeExternalCodeObjects)
+            bool includeExternalCodeObjects,
+            string? analysisDatabase = null)
         {
             var selectedOption = $"{key.Schema}.{key.Name}";
             var objectKind = key.Type == CodeObjectType.Function ? "UDF" : "SP";
@@ -225,7 +228,7 @@ namespace ReSet.Core.Services
                 try
                 {
                     outputPaths = new OutputPathResolver(
-                        cacheObjectKey.Database,
+                        analysisDatabase ?? cacheObjectKey.Database,
                         outputDirectory);
                 }
                 catch (Exception ex)
