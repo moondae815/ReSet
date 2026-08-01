@@ -98,11 +98,11 @@ namespace ReSet.Cli
         public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown)
         {
             var header = SpecHeaderReader.Read(specificationMarkdown);
-            var score = header.NormalizedScore ?? 0;
-            var acc = header.Accuracy ?? 0;
-            var crud = header.Crud ?? 0;
-            var read = header.Readability ?? 0;
-            var ex = header.Exception ?? 0;
+            var score = header.NormalizedScore ?? 100;
+            var acc = header.Accuracy ?? 10;
+            var crud = header.Crud ?? 10;
+            var read = header.Readability ?? 10;
+            var ex = header.Exception ?? 10;
             var scoreFound = header.NormalizedScore.HasValue;
 
             string scoreText = "";
