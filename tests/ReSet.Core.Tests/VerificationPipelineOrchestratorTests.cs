@@ -2017,6 +2017,64 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_SectionalPath_MarksSpecWhenFinalReviewCouldNotRun()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Sectional", CodeObjectType.Procedure);
+
+            // 구역별(하이브리드 다중 후보군) 경로 진입 조건은 actorEffort == "dynamic" 이다.
+            aiService.ProviderName.Returns("Ollama");
+            criticService.ProviderName.Returns("Ollama");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_Sectional", DdlText = "SELECT 1;"
+                }));
+
+            // Low/Medium/High 후보 생성과 합성(Consolidator) 생성 모두 이 대역 하나로 충분하다.
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = ValidSpecificationMarkdown() }));
+
+            // 후보 채점 3회는 성공시키되 Fast-pass 임계치(90점) 미만으로 유지해 합성 단계까지 도달시키고,
+            // 네 번째 호출(최종 합성본 L2 검토)에서 예외를 던지게 한다.
+            var candidateReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 7,
+                ScoreCrud = 7,
+                ScoreInterface = 7,
+                ScoreException = 7,
+                ScoreReadability = 7
+            };
+            criticService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromResult(candidateReview),
+                    Task.FromException<ReviewResult>(new InvalidOperationException("critic endpoint down")));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "ollama-test", criticService: criticService, actorEffort: "dynamic");
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "Server=(local);Database=PaymentDB", key, 1, "Ollama", "rules", true,
+                Path.Combine(Path.GetTempPath(), $"ReSet-Outcome-{Guid.NewGuid():N}"), false,
+                cancellationToken: CancellationToken.None, directDependenciesOnly: true);
+
+            Assert.Equal(VerificationOutcome.ReviewNotRun, result.Outcome);
+            Assert.Contains("L2 AI 교차 리뷰가 수행되지 않았습니다", result.SpecMarkdown);
+            userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
+        }
+
+        [Fact]
         public async Task RunCodeObjectPipelineAsync_MarksSpecWhenL1RetriesAreExhausted()
         {
             var dbService = Substitute.For<IDbMetadataService>();

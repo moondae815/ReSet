@@ -638,6 +638,7 @@ namespace ReSet.Core.Services
                     // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
                     _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
                     ReviewResult? finalL2Result = null;
+                    string? finalReviewFailureReason = null;
                     try
                     {
                         using (var progressScope = _userInteraction.CreateProgressScope("최종 L2 검토") ?? NullProgressScope.Instance)
@@ -660,9 +661,10 @@ namespace ReSet.Core.Services
                         }
                         accumulatedThinking.AppendLine();
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        Log.Warning(ex, "최종 합성본 L2 Critic 검토 중 실패 (무시하고 계속 진행)");
+                        Log.Warning(ex, "최종 합성본 L2 Critic 검토 중 실패 (검증 미수행으로 표시하고 계속 진행)");
+                        finalReviewFailureReason = ex.Message;
                     }
 
                     if (finalL2Result != null)
@@ -722,8 +724,17 @@ namespace ReSet.Core.Services
                     // [추가] 최종 보완 후 여전히 결함이 감지된 경우(최종 Critic 검토 기준 점수 미달), 경고 배너 삽입
                     if (finalReview != null && finalReview.HasDefects)
                     {
-                        var warningBanner = $"\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: {finalReview.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {finalReview.ScoreAccuracy}/10, CRUD {finalReview.ScoreCrud}/10, 인터페이스 {finalReview.ScoreInterface}/10, 가독성 {finalReview.ScoreReadability}/10, 예외 {finalReview.ScoreException}/10 (기준 점수: {_criticScoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {finalReview.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
-                        specificationMarkdown = warningBanner + specificationMarkdown;
+                        verificationOutcome = VerificationOutcome.QualityRejected;
+                        specificationMarkdown =
+                            VerificationBanner.QualityRejected(finalReview, _criticScoreThreshold) + specificationMarkdown;
+                    }
+                    else if (finalReview == null)
+                    {
+                        // 최종 L2 검토를 수행하지 못했다. 통과로 표시하지 않는다.
+                        verificationOutcome = VerificationOutcome.ReviewNotRun;
+                        specificationMarkdown =
+                            VerificationBanner.ReviewNotRun(finalReviewFailureReason ?? "사유가 기록되지 않았습니다.")
+                            + specificationMarkdown;
                     }
                 }
                 
@@ -736,7 +747,15 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                _userInteraction.NotifyValidationSuccess(selectedOption);
+                if (verificationOutcome == VerificationOutcome.ReviewNotRun)
+                {
+                    _userInteraction.NotifyError(
+                        $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 명세서를 확정합니다.");
+                }
+                else
+                {
+                    _userInteraction.NotifyValidationSuccess(selectedOption);
+                }
             }
             else
             {
