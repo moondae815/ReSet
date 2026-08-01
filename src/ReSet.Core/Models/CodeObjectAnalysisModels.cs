@@ -53,6 +53,7 @@ public sealed class CodeObjectPipelineResult
     public SpDefinition? SpDef { get; set; }
     public string? SpecMarkdown { get; set; }
     public ReviewResult? Review { get; set; }
+    public VerificationOutcome Outcome { get; set; } = VerificationOutcome.Passed;
     public string? ThinkingText { get; set; }
     public List<AnalysisNode> Nodes { get; set; } = new();
     public List<DependencyEdge> DependencyEdges { get; set; } = new();
@@ -74,6 +75,7 @@ public sealed class CodeObjectAnalysisResult
     public FunctionReturnInfo? FunctionReturn { get; set; }
     public string? SpecMarkdown { get; set; }
     public ReviewResult? Review { get; set; }
+    public VerificationOutcome Outcome { get; set; } = VerificationOutcome.Passed;
     public string? ThinkingText { get; set; }
     public string? SpecPath { get; set; }
     public string? DdlPath { get; set; }
