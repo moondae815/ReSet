@@ -253,7 +253,7 @@ namespace ReSet.Core.Tests
 
             var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
 
-            Assert.Contains("GOTO", result.SystemPrompt);
+            Assert.Contains("NEVER use legacy `GOTO`-based error branching", result.SystemPrompt);
         }
 
         [Fact]
@@ -291,6 +291,30 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("NOLOCK", mockHandler.LastRequestBody);
             Assert.Contains("INSERT-only", mockHandler.LastRequestBody);
+        }
+
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_Prompt_ChecksChunkTransactionBoundaryAndForbidsGoto()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\": false}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job");
+
+            Assert.Contains("iteration of a chunking", mockHandler.LastRequestBody);
+            Assert.Contains("BEGIN TRAN", mockHandler.LastRequestBody);
+            Assert.Contains("COMMIT TRAN", mockHandler.LastRequestBody);
+            Assert.Contains("boundary, rather than wrapping the entire loop in a single outer transaction", mockHandler.LastRequestBody);
+            Assert.Contains("legacy", mockHandler.LastRequestBody);
+            Assert.Contains("GOTO", mockHandler.LastRequestBody);
+            Assert.Contains("based error branching is used anywhere in the pseudocode", mockHandler.LastRequestBody);
         }
 
         [Fact]

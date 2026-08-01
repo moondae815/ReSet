@@ -2012,6 +2012,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - Check that no `WITH (NOLOCK)` or `NOLOCK` hints remain anywhere in the generated pseudocode. They force READ UNCOMMITTED and violate the SNAPSHOT isolation policy. Penalize heavily if any remain.
    - For INSERT-only steps, verify the rollback relies on `ROLLBACK TRAN` or an explicit `DELETE WHERE [ChunkKey]` compensation rather than a Shadow table.
    - Verify that Shadow restore logic DELETEs the affected target range before re-inserting from the Shadow table. Restoring without the preceding DELETE duplicates rows.
+   - Check that every iteration of a chunking `WHILE` loop opens and closes its own explicit `BEGIN TRAN` / `COMMIT TRAN` boundary, rather than wrapping the entire loop in a single outer transaction. Penalize if chunks are not committed independently.
+   - Check that error handling relies exclusively on structured `TRY...CATCH`. Penalize if legacy `GOTO`-based error branching is used anywhere in the pseudocode.
 5. Diagram Syntax and Readability (ScoreReadability):
    - Ensure the Mermaid flowchart diagram has no syntax errors, wraps node labels in double quotes, and arrow labels are clean of special characters.
    - Ensure 'subgraph' keyword and its ID are separated by a space (e.g., `subgraph SHARED_DB`).

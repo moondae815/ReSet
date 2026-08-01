@@ -100,7 +100,7 @@ External/<DB>/Procedures/<객체>/docs/Spec.md
 
 **`LoadDefinitionsAsync`는 입력 순서를 보존한다.** `selectedFiles`의 순서가 곧 배치 스텝 실행 순서이고 그대로 지시서에 반영되므로, 반환하는 `Definitions`는 입력 경로 순서와 일치해야 한다. 복원에 실패한 항목은 목록에서 빠지되 나머지의 상대 순서는 유지된다.
 
-**`MissingMetadata`를 분리 반환하는 이유**는 ③의 근본 수정이 앞으로의 산출물에만 적용되기 때문이다. 이미 디스크에 있는 산출물과 `SaveRawJson=false` 설정은 여전히 구멍을 남기므로, Program.cs가 "이 SP들은 스키마 컨텍스트 없이 지시서에 들어갑니다"라고 경고할 수 있어야 한다.
+**`MissingMetadata`를 분리 반환하는 이유**는 ③의 근본 수정이 앞으로의 산출물에만 적용되기 때문이다. 이미 디스크에 있는 산출물과 `SaveRawJson=false` 설정은 여전히 구멍을 남기므로, Program.cs가 "이 SP들은 지시서에서 제외됩니다(스키마 컨텍스트와 Spec.md 링크 모두 누락, 해당 배치 스텝은 구현 대상에서 빠짐)"라고 경고할 수 있어야 한다.
 
 ### 2. Program.cs 변경
 

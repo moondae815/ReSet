@@ -1193,13 +1193,13 @@ namespace ReSet.Cli
                             foreach (var missing in loadResult.MissingMetadata)
                             {
                                 AnsiConsole.MarkupLine(
-                                    $"[yellow]경고: {Markup.Escape(missing)} 의 메타데이터(raw/metadata.json)가 없어 참조 테이블 스키마 없이 지시서에 포함됩니다. 해당 SP를 1번 메뉴로 다시 분석하면 채워집니다.[/]");
+                                    $"[yellow]경고: {Markup.Escape(missing)} 의 메타데이터(raw/metadata.json)가 없어 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다). 해당 SP를 1번 메뉴로 다시 분석하면 채워집니다.[/]");
                             }
 
                             foreach (var failed in loadResult.FailedToParse)
                             {
                                 AnsiConsole.MarkupLine(
-                                    $"[yellow]경고: {Markup.Escape(failed)} 의 메타데이터를 읽지 못했습니다. 참조 테이블 스키마 없이 지시서에 포함됩니다.[/]");
+                                    $"[yellow]경고: {Markup.Escape(failed)} 의 메타데이터를 읽지 못해 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다).[/]");
                             }
 
                             try
