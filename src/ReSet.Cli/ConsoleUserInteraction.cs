@@ -112,15 +112,26 @@ namespace ReSet.Cli
                 scoreText = $" | [bold {color}]AI 신뢰도: {score}/100점 (정합성:{acc}, CRUD:{crud}, 가독성:{read}, 예외:{ex})[/]";
             }
 
+            // 검증 상태가 통과가 아니면 승인 직전에 눈에 띄어야 한다.
+            // 필드가 없는 기존 문서는 표시하지 않는다. 정상 문서까지 경고처럼 보이면 신호가 죽는다.
+            var statusText = "";
+            var isVerified = header.VerificationStatus is null or "통과";
+            if (header.VerificationStatus is not null && !isVerified)
+            {
+                statusText = $" | [bold red]검증 상태: {Markup.Escape(header.VerificationStatus)}[/]";
+            }
+
             AnsiConsole.WriteLine();
-            AnsiConsole.Write(new Rule($"[yellow]{selectedOption}{scoreText}[/]") { Justification = Justify.Left });
+            AnsiConsole.Write(new Rule($"[yellow]{selectedOption}{scoreText}{statusText}[/]") { Justification = Justify.Left });
             AnsiConsole.Write(new Text(specificationMarkdown));
             AnsiConsole.Write(new Rule().RuleStyle("grey"));
             AnsiConsole.WriteLine();
 
             var menuChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title($"[bold blue]{selectedOption} 명세서 검증 완료.[/] 다음 작업을 선택하세요:")
+                    .Title(isVerified
+                        ? $"[bold blue]{selectedOption} 명세서 검증 완료.[/] 다음 작업을 선택하세요:"
+                        : $"[bold red]{selectedOption} 명세서가 검증을 완료하지 못했습니다.[/] 다음 작업을 선택하세요:")
                     .AddChoices(new[] { "1. 승인 및 최종 저장 (Approve)", "2. 추가 보완 요청 피드백 입력 (Feedback)", "3. 저장 없이 이탈 (Cancel)" })
             );
 
