@@ -20,7 +20,7 @@
 ### 1. Core 라이브러리: [ReSet.Core](./src/ReSet.Core)
 *   **도메인 모델 ([Models](./src/ReSet.Core/Models))**
     *   [SpDefinition.cs](./src/ReSet.Core/Models/SpDefinition.cs): 분석된 SP 메타데이터(소스코드 DDL, 컬럼, 의존성 등)를 관리하는 루트 데이터 클래스.
-        *   [SpStaticAnalysisResult](./src/ReSet.Core/Models/SpDefinition.cs#L16): 테이블 CRUD, 임시 테이블, UDF 및 Linked Server 등 정적 분석 결과 구조를 홀딩하는 도메인 모델.
+        *   [SpStaticAnalysisResult](./src/ReSet.Core/Models/SpDefinition.cs): 테이블 CRUD, 임시 테이블, UDF 및 Linked Server 등 정적 분석 결과 구조를 홀딩하는 도메인 모델.
     *   [CodeObjectKey.cs](./src/ReSet.Core/Models/CodeObjectKey.cs): 데이터베이스·스키마·이름·유형(SP/UDF)을 대소문자 비구분으로 식별하여 재귀 그래프의 중복 분석과 순환을 차단하는 코드 객체 키.
     *   [CodeObjectAnalysisModels.cs](./src/ReSet.Core/Models/CodeObjectAnalysisModels.cs): 코드 객체 그래프의 노드 상태, 의존 간선 및 객체별 분석 결과를 표현하는 모델.
     *   [DependencyInfo.cs](./src/ReSet.Core/Models/DependencyInfo.cs): 재귀적으로 수집된 DB 개체(테이블, 뷰, 다른 SP 등) 의존성을 표현하는 모델.
@@ -147,7 +147,7 @@
     *   **L3 (인간 승인)**: [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)에서 미리보기 및 DB 역동기화를 제어하되, 무인 배치 모드(`isBatchMode: true`) 환경에서는 L3 프롬프트 단계를 생략하고 자동으로 우회 승인하십시오.
     *   **진행도 시각화**: 진행률 시각화([IMultiProgressScope.cs](./src/ReSet.Core/Services/IMultiProgressScope.cs)) 통합 시 Core가 UI에 직접 의존하지 않는 비결합 설계를 유지하고, TUI 구현부(`ConsoleProgressScope`)에서는 렌더링 루프와의 충돌 방지를 위해 `ConcurrentDictionary`와 `TaskCompletionSource`를 적용하여 백그라운드 태스크 방식으로 격리 갱신하십시오.
     *   **신규 공급자 확장**: 새로운 LLM 공급자 연동 시, [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 상속받아 클라이언트를 구현하고 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
-    *   **리뷰(검증) 시 풍부한 컨텍스트 유지**: AI 리뷰어(Critic)가 기능 명세서의 정확성과 CRUD/인터페이스 완전성을 정상 검증할 수 있도록, 리뷰 요청([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs#L277)) 시에도 분석 요청 시와 동일하게 테이블 스키마, 참조 UDF DDL, AST 정적 분석 등의 원본 메타데이터 컨텍스트 정보(`BuildSpMetadataTexts` 헬퍼 이용) 및 대상 stored procedure의 실제 SQL DDL 소스코드(`spDef.DdlText`)를 누락 없이 빌드하여 리뷰 프롬프트(`userPrompt`)에 포함해 전달해야 합니다.
+    *   **리뷰(검증) 시 풍부한 컨텍스트 유지**: AI 리뷰어(Critic)가 기능 명세서의 정확성과 CRUD/인터페이스 완전성을 정상 검증할 수 있도록, 리뷰 요청([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs)) 시에도 분석 요청 시와 동일하게 테이블 스키마, 참조 UDF DDL, AST 정적 분석 등의 원본 메타데이터 컨텍스트 정보(`BuildSpMetadataTexts` 헬퍼 이용) 및 대상 stored procedure의 실제 SQL DDL 소스코드(`spDef.DdlText`)를 누락 없이 빌드하여 리뷰 프롬프트(`userPrompt`)에 포함해 전달해야 합니다.
     *   **재귀 객체별 검증과 산출물 모드**: `AnalysisSettings:AnalyzeReferencedCodeObjects`가 활성화되면 SP/UDF마다 기존 L1/L2/L3 파이프라인과 캐시 경로를 그대로 적용하십시오. 직접 의존 메타데이터에는 테이블 스키마·설명·인덱스와 참조 코드 DDL을 유지하되, 외부 DB 테이블·뷰의 컬럼·인덱스 상세는 조회하지 마십시오. `DatabaseSettings:AllowExternalDatabaseConnections`가 켜진 경우에만 다른 DB의 코드 객체 유형·DDL을 3부 이름으로 해석해 분석 대상에 포함하고, 분석 루트 DB는 `DependencyAnalysisRequest`를 통해 파이프라인에 전파하여 산출물 경로와 캐시 키가 어긋나지 않게 하십시오. 링크드 서버(4부 식별자)는 지원 대상이 아닙니다. `OutputSettings:DependencyArtifactMode`의 `Reference` 모드에서는 표준 DDL을 객체당 한 번만 저장하고, `PortableBundle`에서만 참조 SP/UDF DDL 사본을 `raw/ddl/`에 추가하십시오.
     *   **하이브리드 영문 프롬프트 구조 준수**: `AiService.cs` 내부의 시스템 프롬프트(`systemPrompt`)는 반드시 영문(English) 작성을 원칙으로 하고, 최종 출력 및 체크리스트 동작 지시만 한국어 출력 조건 및 영어 매칭 트리거를 사용해야 합니다. 이를 임의로 한국어 프롬프트로 전면 번역하거나 되돌려 규칙 준수 강도를 떨어뜨리지 마십시오.
     *   **스키마 및 환각/숏컷(Shortcut) 차단 룰 유지**: 프롬프트 규칙 내의 "의존 메타데이터 외 컬럼 창작 금지" 및 "DDL 미정의 임의 에러 반환 상숫값 가작 금지" 규정은 로컬 LLM의 안전장치입니다. 또한 통합 배치 전환 계획 수립 시, UNION/JOIN이나 에러 코드 분기 처리(Chunking Key) 로직을 모델이 자의적으로 축약(Shortcut)하지 못하도록 하는 "Anti-Shortcut" 프롬프트 제약 규칙을 절대 간소화하거나 누락하지 마십시오.
