@@ -122,7 +122,7 @@ namespace ReSet.Cli
             // 세션에서 이전 연결 정보 복원
             var session = SessionManager.LoadSession();
             var server = !string.IsNullOrEmpty(session.LastUsedServer) ? session.LastUsedServer : (configuration["DatabaseSettings:Server"] ?? "localhost");
-            var database = !string.IsNullOrEmpty(session.LastUsedDatabase) ? session.LastUsedDatabase : (configuration["DatabaseSettings:Database"] ?? "master");
+            string database = !string.IsNullOrEmpty(session.LastUsedDatabase) ? session.LastUsedDatabase : (configuration["DatabaseSettings:Database"] ?? "master");
 
             // 3. 서비스 구성 변수 준비
             var provider = configuration["AiSettings:Provider"] ?? "OpenAI";
@@ -251,7 +251,7 @@ namespace ReSet.Cli
                         database = AnsiConsole.Prompt(
                             new TextPrompt<string>("데이터베이스 이름을 입력하세요:")
                                 .DefaultValue(database)
-                        );
+                        ) ?? database;
 
                         // 대화형 ID/비밀번호 로그인 처리
                         var lastUserId = SessionManager.LoadLastUsedUserId();
@@ -332,6 +332,15 @@ namespace ReSet.Cli
                     return;
                 }
             }
+
+            // database는 위 오프라인/대화형/배치 분기 전체에서 항상 비어있지 않은 값으로
+            // 결정된다. async 상태 머신이 await 지점을 넘나들며 지역 변수를 호이스팅하면 널
+            // 가능성 흐름 분석의 정밀도가 떨어지므로, 분기가 합류하는 이 지점에서 한 번
+            // 명시적으로 단언해 이후의 모든 사용처(예: OutputPathResolver 생성)가 non-null로
+            // 흐르도록 한다.
+            ArgumentException.ThrowIfNullOrEmpty(database);
+            var resolvedDatabase = database;
+
             var timeoutSeconds = 300;
             if (int.TryParse(configuration["AiSettings:TimeoutSeconds"], out int parsedTimeout) && parsedTimeout > 0)
             {
@@ -740,7 +749,7 @@ namespace ReSet.Cli
                                 cliArgs.JobName,
                                 jobsOutputDir,
                                 targetLanguage,
-                                new OutputPathResolver(database, outputDir));
+                                new OutputPathResolver(resolvedDatabase, outputDir));
 
                             var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
                             AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
@@ -1212,7 +1221,7 @@ namespace ReSet.Cli
                                     jobName,
                                     jobsOutputDir,
                                     targetLanguage,
-                                    new OutputPathResolver(database, outputDir));
+                                    new OutputPathResolver(resolvedDatabase, outputDir));
 
                                 var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
                                 AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");
