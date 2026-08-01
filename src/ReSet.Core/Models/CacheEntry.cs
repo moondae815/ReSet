@@ -13,6 +13,7 @@ namespace ReSet.Core.Models
         public string CompositeHash { get; set; } = string.Empty;
         public string SpecContentHash { get; set; } = string.Empty;
         public int SpecContentLength { get; set; }
+        public string OriginalSpecPath { get; set; } = string.Empty;
     }
 
     public class CacheIndex

@@ -451,6 +451,22 @@ namespace ReSet.Core.Tests
             Assert.Null(entry.ObjectKey);
         }
 
+        [Fact]
+        public void CacheEntry_SupportsOriginalSpecPathProperty()
+        {
+            var entry = new CacheEntry
+            {
+                ProcedureName = "dbo.TestProc",
+                OriginalSpecPath = "output/PaymentDB/Procedures/dbo.TestProc/docs/Spec.md"
+            };
+
+            var json = JsonSerializer.Serialize(entry);
+            var deserialized = JsonSerializer.Deserialize<CacheEntry>(json);
+
+            Assert.NotNull(deserialized);
+            Assert.Equal("output/PaymentDB/Procedures/dbo.TestProc/docs/Spec.md", deserialized.OriginalSpecPath);
+        }
+
         private void WriteSpec(CodeObjectKey key)
         {
             var specPath = _paths.ResolveSpecPath(key);
