@@ -195,6 +195,12 @@ namespace ReSet.Core.Services
                         {
                             return Convert.ToInt32(result);
                         }
+
+                        // sys.databases.name은 서버 콜레이션을 따르므로 대소문자 구분 인스턴스에서는
+                        // 설정된 DB 이름의 casing이 다르면 예외 없이 빈 결과가 나온다.
+                        Log.Warning(
+                            "[DbMetadata] 데이터베이스 호환성 수준 조회 결과가 비어 있습니다 - 대상 DB: {Database} (이름 표기/권한 확인 필요). 기본값 160으로 폴백합니다.",
+                            string.IsNullOrWhiteSpace(database) ? "(연결의 기본 DB)" : database);
                     }
                 }
             }
@@ -644,8 +650,9 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    if (!isExternalDependency &&
-                        string.Equals(
+                    // SQL Server는 크로스 DB 참조의 referenced_id를 NULL로 두므로 카탈로그 조인만으로는
+                    // 외부 개체의 타입을 알 수 없다. 외부 의존성도 UNKNOWN이면 3-part 조회로 타입을 확정한다.
+                    if (string.Equals(
                             dependency.Type,
                             "UNKNOWN",
                             StringComparison.OrdinalIgnoreCase))
@@ -692,8 +699,9 @@ namespace ReSet.Core.Services
                                 directDependency.Name,
                                 cancellationToken);
                         }
-                        else if (!isExternalDependency &&
-                                 IsCodeObjectType(directDependency.Type))
+                        // 외부 DB 코드 객체의 DDL은 부모 프롬프트 컨텍스트에 필요하므로 함께 수집한다.
+                        // (바로 위 테이블/뷰 분기는 외부 DB 스키마 수집이 범위 밖이라 기존 가드를 유지한다.)
+                        else if (IsCodeObjectType(directDependency.Type))
                         {
                             directDependency.ReferencedDdlText = await GetObjectDdlAsync(
                                 connectionString,
