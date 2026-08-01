@@ -634,11 +634,17 @@ Expected: 경고 0개, 전체 테스트 통과
 
 `appsettings.local.json`(git 미추적)에 `"DatabaseSettings": { "AllowExternalDatabaseConnections": true }`를 설정하고 `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC`를 재분석하여 확인한다.
 
+> **반드시 라이브 SQL Server 연결로 실행할 것.** `OfflineSnapshotPath`를 비워 오프라인 스냅샷 모드가 아님을 확인한 뒤 검증한다. 오프라인 스냅샷에는 의존성 타입이 이미 해석되어 있어 라이브 경로의 결함을 가린다. 최종 리뷰에서 실제로 이 차이 때문에 크로스 DB 타입 미해석 결함(`GatherDirectDependenciesAsync`의 `!isExternalDependency` 가드)이 모든 테스트와 기존 산출물을 통과한 채 남아 있었다.
+
 1. `output/External/SETTLE_CARD_DB/Functions/dbo.UF_GET_COMM4CLIENT/docs/Spec.md` 등 5개 파일이 생성된다.
 2. `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md`의 참조 코드 객체 섹션에서 5개 UDF가 `분석 생략(외부 객체)` 대신 상대 경로 링크로 표시된다.
 3. `raw/dependency-manifest.json`의 해당 노드 `Status`가 `SkippedExternal` → `Succeeded`로 바뀌고 `Sha256`이 채워진다.
 4. 같은 조건으로 재실행하면 외부 객체 5개가 모두 캐시 적중하여 LLM 호출이 발생하지 않는다 (로그에서 확인).
 5. 설정을 `false`로 되돌려 재실행하면 기존과 동일하게 `분석 생략(외부 객체)`로 표시된다.
+
+6. 외부 UDF의 호환성 수준이 `SETTLE_CARD_DB` 기준으로 조회되는지 로그에서 확인한다 (Task 3의 `@Database` 분기는 실 연결이 없으면 CI에서 실행되지 않는다).
+
+1번의 판정 기준은 파일 존재 여부가 아니라 `dependency-manifest.json`의 노드 `Status`다. 파일이 없더라도 `Status`가 `SkippedExternal`로 남아 있고 사유가 `외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다`라면, 타입 해석이 아니라 다른 단계에서 막힌 것이다.
 
 4번이 Task 1의 경로 정합성을 실제로 확인하는 항목이다. 여기서 캐시가 매번 미스 나면 `analysisDatabase` 전파가 어딘가에서 끊긴 것이다.
 
