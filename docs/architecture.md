@@ -65,7 +65,7 @@ flowchart TD
 | | [OutputPathResolver](../src/ReSet.Core/Services/OutputPathResolver.cs), [SpecificationLinker](../src/ReSet.Core/Services/SpecificationLinker.cs) | 현재/외부 DB를 구분한 객체별 출력 경로를 계산하고, 성공한 직접 참조 객체에만 상대 명세서 링크를 생성합니다. |
 | | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 재귀 분석에서는 객체별 표준 DDL·의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 통합 배치(Job) 분석 단계에서는 Agentic Workflow 지시서 및 `AbstractSettleTasklet.cs` 추상 템플릿을 동적 생성하여 외부 코딩 에이전트용 지시서 번들(`MigrationInstructions.md`, `todo.md`)을 구성합니다. |
 | | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
-| | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱 및 색인(`.sp_cache_index.json`) 보존/조회 관리. |
+| | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱, 글로벌 색인(`.sp_cache_index.json`) 보존/조회 및 레거시 격리 캐시 자동 마이그레이션 관리. |
 | | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
 | | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |
 | **ReSet.Validator.Cli**<br/>(TUI/CLI 레이어) | [Program](../src/ReSet.Validator.Cli/Program.cs) | 검증기 CLI 진입점. 디렉토리 사전 유효성 확인, 솔루션 루트 스캔, Ctrl+C 취소 연동 및 무인 배치 검증 흐름 제어, 통합 Job 대화형 선택 메뉴 제공. |
@@ -444,7 +444,8 @@ graph TD
 
 ### 4.8. SHA-256 해시 기반 로컬 증분 캐싱
 * **복합 시그니처 해시 계산**: 대상 SP의 DDL 본문 텍스트와 재귀적으로 수집된 모든 참조 UDF/SP/테이블의 DDL 메타데이터를 개체명 순서로 정렬 및 결합하여 단일 SHA-256 해시값으로 산출합니다.
-* **증분 분석 스킵**: 로컬 `./output/.sp_cache_index.json`에 기록된 기존 해시 시그니처와 대조하여 일치하고, 기존 저장된 명세서 마크다운 파일이 물리적으로 보존되어 있는 것이 확인되면 AI 모델 API 호출과 3단계 검증 프로세스 전체를 스킵하여 리소스 비용을 획기적으로 절약합니다.
+* **글로벌 캐시 인덱스 및 재사용**: 기존 개별 루트 디렉토리 기반 캐싱에서 전역(Global) 기반 인덱스(`.sp_cache_index.json`)로 구조를 개선하여, 서로 다른 루트 SP 구동 시에도 공통으로 호출되는 참조 UDF/SP 객체의 분석 산출물(`Spec.md`)을 물리적으로 복사해 재사용(Cache Hit)합니다.
+* **레거시 캐시 자동 마이그레이션**: 시스템 기동 시 기존에 분산 생성되었던 하위 폴더들의 로컬 캐시를 스캔하고 글로벌 인덱스로 병합하는 백그라운드 자동 마이그레이션을 지원합니다.
 
 ### 4.9. 하이브리드 영문화 프롬프트 및 환각 차단 메커니즘 (Prompt Engineering & Negative Constraints)
 * **영문 지침 기반의 명령 지배력 확보**: AI 모델의 사전 학습 비중이 높은 영어로 시스템 행동 지침(System Prompt)을 설계하여 복잡한 제약 사항 준수율을 최대로 끌어올립니다.
