@@ -142,6 +142,10 @@ public sealed class DependencyAnalysisOrchestratorTests
                         ScoreException = 8
                     }
                     : null,
+                // VerificationOutcome의 0번(기본) 값은 ReviewNotRun이므로, 이 픽스처가 실제로
+                // 의도하는 "정상 통과"를 명시적으로 밝혀야 SpecificationDocumentFormatter가
+                // 점수를 숨기지 않는다.
+                Outcome = VerificationOutcome.Passed,
                 ThinkingText = key == child ? "child private reasoning" : null
             }));
 

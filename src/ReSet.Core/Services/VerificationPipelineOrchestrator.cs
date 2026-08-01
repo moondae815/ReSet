@@ -603,6 +603,8 @@ namespace ReSet.Core.Services
                     // 합성본 기계적 검증 (L1) 1회 수행
                     var finalL1 = _validator.Validate(specificationMarkdown);
                     specificationMarkdown = finalL1.CleansedMarkdown ?? specificationMarkdown;
+                    var consolidatedL1Valid = finalL1.IsValid;
+                    var consolidatedL1Errors = finalL1.Errors;
                     if (!finalL1.IsValid)
                     {
                         _userInteraction.NotifyStatus("합성본에서 정적 에러가 검출되어 AI 자가 수정 1회 진행합니다.");
@@ -616,6 +618,11 @@ namespace ReSet.Core.Services
                             }
                             var postFixL1 = _validator.Validate(consolidatorSelfFixResult.Content);
                             specificationMarkdown = postFixL1.CleansedMarkdown ?? consolidatorSelfFixResult.Content;
+                            // 자가 수정 1회 후에도 여전히 L1을 통과하지 못하면 표준 재시도 루프와
+                            // 동일하게 L1Exhausted로 확정한다. 이후의 L2 재검토 결과가 이를
+                            // Passed로 덮어써서는 안 되므로 최종 배너 삽입부에서 최우선으로 처리한다.
+                            consolidatedL1Valid = postFixL1.IsValid;
+                            consolidatedL1Errors = postFixL1.Errors;
                             spDef.RawPromptContext = $"=== [System Prompt] ===\n{consolidatorSelfFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{consolidatorSelfFixResult.UserPrompt}";
 
                             accumulatedThinking.AppendLine("### [Consolidator] Self-Correction Thinking");
@@ -708,21 +715,28 @@ namespace ReSet.Core.Services
                                         }
                                     }
                                 }
-                                catch { }
+                                catch (Exception ex) when (ex is not OperationCanceledException) { }
                             }
                             else
                             {
                                 _userInteraction.NotifyStatus("최종 보완본에서 정적 에러가 검출되어 이전 버전을 최종본으로 유지합니다.");
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (ex is not OperationCanceledException)
                         {
                             Log.Warning(ex, "최종 보완 합성 생성 실패 (기존 합성본 유지)");
                         }
                     }
 
-                    // [추가] 최종 보완 후 여전히 결함이 감지된 경우(최종 Critic 검토 기준 점수 미달), 경고 배너 삽입
-                    if (finalReview != null && finalReview.HasDefects)
+                    // [추가] 최종 배너 삽입. L1 미통과가 최우선 순위이며, 뒤이은 L2 재검토
+                    // 결과(QualityRejected/ReviewNotRun/Passed)가 이를 덮어써서는 안 된다.
+                    if (!consolidatedL1Valid)
+                    {
+                        verificationOutcome = VerificationOutcome.L1Exhausted;
+                        specificationMarkdown =
+                            VerificationBanner.L1Exhausted(consolidatedL1Errors ?? new System.Collections.Generic.List<string>()) + specificationMarkdown;
+                    }
+                    else if (finalReview != null && finalReview.HasDefects)
                     {
                         verificationOutcome = VerificationOutcome.QualityRejected;
                         specificationMarkdown =
@@ -747,7 +761,13 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                if (verificationOutcome == VerificationOutcome.ReviewNotRun)
+                if (verificationOutcome == VerificationOutcome.L1Exhausted)
+                {
+                    // 표준 재시도 루프와 동일하게, L1을 통과하지 못한 명세서는
+                    // 통과로 알리지 않는다.
+                    _userInteraction.NotifyError($"{selectedOption} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
+                }
+                else if (verificationOutcome == VerificationOutcome.ReviewNotRun)
                 {
                     _userInteraction.NotifyError(
                         $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 명세서를 확정합니다.");
@@ -1028,7 +1048,7 @@ namespace ReSet.Core.Services
                         Log.Debug("[파이프라인] L2 AI 교차 리뷰 완료 - SP: {SpName}, 결함 감지: {HasDefects}",
                             selectedOption, l2Result?.HasDefects);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Log.Error(ex, "[파이프라인] L2 AI 교차 리뷰 예외 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                         reviewFailureReason = ex.Message;
@@ -1114,12 +1134,16 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            // 배치 모드 성공 완료 시 캐시 업데이트
+            // 배치 모드 성공 완료 시 캐시 업데이트.
+            // 검증되지 않은 문서(L1 미통과/품질 미달/리뷰 미수행)를 캐시하면 다음 실행이
+            // 캐시 히트로 그 문서를 그대로 재사용하면서 "통과"로 재포장하게 된다.
+            // 재분석 비용은 감수해도 거짓 통과는 안 되므로 통과 상태에서만 캐시를 쓴다.
             if (isBatchMode &&
                 enableCache &&
                 cacheObjectKey != null &&
                 outputPaths != null &&
-                !string.IsNullOrEmpty(compositeHash))
+                !string.IsNullOrEmpty(compositeHash) &&
+                verificationOutcome == VerificationOutcome.Passed)
             {
                 Log.Debug("[파이프라인] 배치 모드 캐시 업데이트 - SP: {SpName}", selectedOption);
                 _cacheManager.UpdateCache(
@@ -1138,15 +1162,17 @@ namespace ReSet.Core.Services
             {
                 while (true)
                 {
-                    var reviewResult = await _userInteraction.RequestHumanReviewAsync(selectedOption, specificationMarkdown);
+                    var reviewResult = await _userInteraction.RequestHumanReviewAsync(selectedOption, specificationMarkdown, verificationOutcome);
 
                     if (reviewResult.Decision == UserDecision.Approve)
                     {
-                        // 최종 승인 시 캐시 업데이트
+                        // 최종 승인 시 캐시 업데이트. 검증되지 않은(통과가 아닌) 문서를
+                        // 통과처럼 캐시하지 않는다 — 재분석 비용은 감수해도 거짓 통과는 안 된다.
                         if (enableCache &&
                             cacheObjectKey != null &&
                             outputPaths != null &&
-                            !string.IsNullOrEmpty(compositeHash))
+                            !string.IsNullOrEmpty(compositeHash) &&
+                            verificationOutcome == VerificationOutcome.Passed)
                         {
                             _cacheManager.UpdateCache(
                                 cacheObjectKey,
@@ -1417,7 +1443,14 @@ namespace ReSet.Core.Services
                             catch { }
                         }
 
+                        // 피드백 반영본은 전체가 재생성되어 이전 배너/본문이 사라지고,
+                        // L1만 다시 확인했을 뿐 L2는 재수행되지 않는다. 이전 검토 결과(finalReview)와
+                        // 통과 판정(verificationOutcome)을 그대로 들고 가면 "재생성된, 한 번도
+                        // 리뷰받지 않은 문서가 이전 문서의 점수로 통과를 자칭"하는 새 거짓 주장이
+                        // 된다. 리뷰 미수행으로 명시하고 점수를 비운다.
                         specificationMarkdown = reSpec;
+                        finalReview = null;
+                        verificationOutcome = VerificationOutcome.ReviewNotRun;
                     }
                 }
             }
@@ -1440,14 +1473,18 @@ namespace ReSet.Core.Services
         private static (string Specification, ReviewResult Review)
             ParseCachedSpecification(string cachedArtifact)
         {
+            // 캐시는 통과(Passed) 문서만 쓰이므로(위 캐시 저장부 참고) 정상적으로는 이
+            // 폴백이 쓰일 일이 없다. 그럼에도 필드가 비어 있는 경우 만점(10)을 지어내지
+            // 않는다 — 검증되지 않은 사실을 완벽한 점수로 둔갑시키는 것이 바로 이 결함의
+            // 본질이었다. 0으로 안전하게 폴백한다.
             var review = new ReviewResult
             {
                 HasDefects = false,
-                ScoreAccuracy = 10,
-                ScoreCrud = 10,
-                ScoreInterface = 10,
-                ScoreException = 10,
-                ScoreReadability = 10
+                ScoreAccuracy = 0,
+                ScoreCrud = 0,
+                ScoreInterface = 0,
+                ScoreException = 0,
+                ScoreReadability = 0
             };
             var specification = cachedArtifact ?? string.Empty;
             var yaml = Regex.Match(
@@ -1541,6 +1578,10 @@ namespace ReSet.Core.Services
             string consolidatedPlan = string.Empty;
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
+            // 이 통합 계획 문서에는 아직 검증 상태 YAML 헤더를 씌우지 않는다(별도로 정리된 항목).
+            // 다만 승인 화면(RequestHumanReviewAsync)에는 실제 종료 상태를 전달해야 하므로
+            // 아래 배너 삽입 지점과 함께 로컬로 추적한다.
+            var planOutcome = VerificationOutcome.Passed;
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
@@ -1611,6 +1652,7 @@ namespace ReSet.Core.Services
                     else
                     {
                         _userInteraction.NotifyError($"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
+                        planOutcome = VerificationOutcome.L1Exhausted;
                         consolidatedPlan = VerificationBanner.L1Exhausted(l1Result.Errors) + consolidatedPlan;
                         break;
                     }
@@ -1632,7 +1674,7 @@ namespace ReSet.Core.Services
                     }
                     reviewSuccess = true;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
                     reviewFailureReason = ex.Message;
@@ -1656,8 +1698,9 @@ namespace ReSet.Core.Services
                     else
                     {
                         _userInteraction.NotifyError($"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
-                        
+
                         // 최종 품질 불합격 경고 배너 삽입
+                        planOutcome = VerificationOutcome.QualityRejected;
                         consolidatedPlan =
                             VerificationBanner.QualityRejected(l2Result, _criticScoreThreshold) + consolidatedPlan;
                         break;
@@ -1669,6 +1712,7 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyError(
                         $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
+                    planOutcome = VerificationOutcome.ReviewNotRun;
                     consolidatedPlan =
                         VerificationBanner.ReviewNotRun(reviewFailureReason ?? "사유가 기록되지 않았습니다.") + consolidatedPlan;
                     break;
@@ -1699,7 +1743,7 @@ namespace ReSet.Core.Services
 
             while (true)
             {
-                var reviewResult = await _userInteraction.RequestHumanReviewAsync(jobName, consolidatedPlan);
+                var reviewResult = await _userInteraction.RequestHumanReviewAsync(jobName, consolidatedPlan, planOutcome);
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {

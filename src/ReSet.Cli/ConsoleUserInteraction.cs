@@ -95,8 +95,12 @@ namespace ReSet.Cli
             Serilog.Log.Information($"[{selectedOption}] L1/L2 자동 검증 모두 통과!");
         }
 
-        public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown)
+        public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome)
         {
+            // 점수 필드는 여전히 문서 본문의 YAML 헤더에서 읽는다. 파이프라인 진행 중에는
+            // 아직 헤더가 씌워지지 않아 항상 비어 있지만(SpecificationDocumentFormatter가
+            // 파이프라인 종료 후에 헤더를 붙이므로), 헤더가 이미 포함된 문자열이 들어오는
+            // 호출 경로(예: 캐시 히트 재확인)에서는 여전히 유효하다.
             var header = SpecHeaderReader.Read(specificationMarkdown);
             var score = header.NormalizedScore ?? 100;
             var acc = header.Accuracy ?? 10;
@@ -113,12 +117,19 @@ namespace ReSet.Cli
             }
 
             // 검증 상태가 통과가 아니면 승인 직전에 눈에 띄어야 한다.
-            // 필드가 없는 기존 문서는 표시하지 않는다. 정상 문서까지 경고처럼 보이면 신호가 죽는다.
+            // 문자열 파싱이 아니라 파이프라인이 넘겨준 실제 종료 상태(outcome)를 그대로 신뢰한다.
+            var isVerified = outcome == VerificationOutcome.Passed;
             var statusText = "";
-            var isVerified = header.VerificationStatus is null or "통과";
-            if (header.VerificationStatus is not null && !isVerified)
+            if (!isVerified)
             {
-                statusText = $" | [bold red]검증 상태: {Markup.Escape(header.VerificationStatus)}[/]";
+                var statusLabel = outcome switch
+                {
+                    VerificationOutcome.L1Exhausted => "L1 미통과",
+                    VerificationOutcome.QualityRejected => "품질 미달",
+                    VerificationOutcome.ReviewNotRun => "리뷰 미수행",
+                    _ => "알 수 없음"
+                };
+                statusText = $" | [bold red]검증 상태: {statusLabel}[/]";
             }
 
             AnsiConsole.WriteLine();

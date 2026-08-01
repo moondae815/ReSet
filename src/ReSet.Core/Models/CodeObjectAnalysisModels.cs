@@ -53,7 +53,11 @@ public sealed class CodeObjectPipelineResult
     public SpDefinition? SpDef { get; set; }
     public string? SpecMarkdown { get; set; }
     public ReviewResult? Review { get; set; }
-    public VerificationOutcome Outcome { get; set; } = VerificationOutcome.Passed;
+    // 명시적 기본값을 두지 않는다: DependencyAnalysisOrchestrator가 재귀 그래프 결과를
+    // 구성할 때 이 최상위 필드는 실제로 채워지지 않는 채 방치되어 있었다(그래프 결과의
+    // 진짜 상태는 AnalysisResults[i].Outcome에 있다). enum의 0번 값이 ReviewNotRun이므로
+    // 이 필드를 놓친 생성부는 이제 "통과"가 아니라 "검증되지 않음"으로 안전하게 대체된다.
+    public VerificationOutcome Outcome { get; set; }
     public string? ThinkingText { get; set; }
     public List<AnalysisNode> Nodes { get; set; } = new();
     public List<DependencyEdge> DependencyEdges { get; set; } = new();
@@ -75,7 +79,11 @@ public sealed class CodeObjectAnalysisResult
     public FunctionReturnInfo? FunctionReturn { get; set; }
     public string? SpecMarkdown { get; set; }
     public ReviewResult? Review { get; set; }
-    public VerificationOutcome Outcome { get; set; } = VerificationOutcome.Passed;
+    // 유일한 프로덕션 생성부(DependencyAnalysisOrchestrator)는 항상 파이프라인 결과의
+    // Outcome을 명시적으로 대입하므로 이 기본값은 실질적으로 쓰이지 않는다. 그럼에도
+    // 명시적 Passed 기본값을 남겨두면 향후 생성부가 대입을 빠뜨렸을 때 조용히 "통과"를
+    // 자칭하는 함정이 되므로, enum의 안전한 0번 값(ReviewNotRun)을 그대로 물려받게 한다.
+    public VerificationOutcome Outcome { get; set; }
     public string? ThinkingText { get; set; }
     public string? SpecPath { get; set; }
     public string? DdlPath { get; set; }

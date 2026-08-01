@@ -25,7 +25,10 @@ namespace ReSet.Core.Services
         void NotifyValidationSuccess(string selectedOption);
 
         // L3 인간 개입형 검증 화면 제공 및 승인/피드백 결과 대기
-        Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown);
+        // outcome은 파이프라인이 실제로 도달한 종료 상태를 명시적으로 전달한다.
+        // specificationMarkdown 문자열을 파싱해 상태를 되짚는 방식은 문서 헤더가
+        // 아직 씌워지지 않은 시점(파이프라인 진행 중)에는 항상 실패하므로 쓰지 않는다.
+        Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome);
 
         // AI가 유추한 메타데이터 설명을 DB에 동기화할지 사용자 동의 요청
         Task<bool> ConfirmMetadataSyncAsync(string selectedOption);
