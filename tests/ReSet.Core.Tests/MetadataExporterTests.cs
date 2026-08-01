@@ -526,9 +526,10 @@ namespace ReSet.Core.Tests
             var jobName = "TestConsolidatedJob";
 
             IMetadataExporter exporter = new MetadataExporter();
+            var paths = new OutputPathResolver("TestDB", testOutputDir);
 
             // Act
-            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir, "C#");
+            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir, "C#", paths);
 
             // Assert
             var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");
@@ -558,6 +559,74 @@ namespace ReSet.Core.Tests
             if (Directory.Exists(testOutputDir))
             {
                 Directory.Delete(testOutputDir, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_LinksExternalProcedureUnderExternalDirectory()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Instructions-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("AuditDB", "dbo", "USP_External", CodeObjectType.Procedure);
+            var paths = new OutputPathResolver("PaymentDB", outputRoot);
+            var specPath = paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(specPath, "# Spec");
+
+            var spDef = new SpDefinition
+            {
+                ObjectKey = key, Schema = "dbo", Name = "USP_External", DdlText = "SELECT 1;"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    new System.Collections.Generic.List<SpDefinition> { spDef },
+                    "## 통합 배치 아키텍처 개요",
+                    "Job1",
+                    Path.Combine(outputRoot, "Jobs", "Job1"),
+                    "C#",
+                    paths);
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
+                Assert.Contains("External/AuditDB/Procedures/dbo.USP_External/docs/Spec.md", instructions);
+                Assert.DoesNotContain("../../../Procedures/dbo.USP_External/docs/Spec.md", instructions);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_WritesReasonWhenSpecFileIsMissing()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Instructions-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Gone", CodeObjectType.Procedure);
+            var paths = new OutputPathResolver("PaymentDB", outputRoot);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = key, Schema = "dbo", Name = "USP_Gone", DdlText = "SELECT 1;"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    new System.Collections.Generic.List<SpDefinition> { spDef },
+                    "## 통합 배치 아키텍처 개요",
+                    "Job1",
+                    Path.Combine(outputRoot, "Jobs", "Job1"),
+                    "C#",
+                    paths);
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
+                Assert.Contains("명세서 파일을 찾을 수 없습니다", instructions);
+                Assert.DoesNotContain("[Spec.md](", instructions);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
             }
         }
     }

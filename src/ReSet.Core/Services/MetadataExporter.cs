@@ -353,7 +353,8 @@ namespace ReSet.Core.Services
             string consolidatedPlan,
             string jobName,
             string baseOutputDir,
-            string targetLanguage)
+            string targetLanguage,
+            OutputPathResolver paths)
         {
             var agentFolder = Path.Combine(baseOutputDir, "agent");
             if (!Directory.Exists(agentFolder))
@@ -443,9 +444,25 @@ namespace ReSet.Core.Services
                 foreach (var spDef in spDefs)
                 {
                     var spCleanName = $"{spDef.Schema}.{spDef.Name}";
-                    var specPath = $"../../../Procedures/{spDef.Schema}.{spDef.Name}/docs/Spec.md";
                     sb.AppendLine($"- **{spCleanName}**:");
-                    sb.AppendLine($"  - [Spec.md]({specPath}) (UPDATE/INSERT 상세 매핑 수식 포함)");
+
+                    // 경로 규칙은 OutputPathResolver 한 곳에만 둔다. External DB 분기와
+                    // 식별자 인코딩이 함께 따라온다.
+                    var objectKey = spDef.ObjectKey ?? CodeObjectKey.Create(
+                        paths.CurrentDatabase, spDef.Schema, spDef.Name, CodeObjectType.Procedure);
+                    var absoluteSpecPath = paths.ResolveSpecPath(objectKey);
+
+                    if (File.Exists(absoluteSpecPath))
+                    {
+                        var relativeSpecPath = Path.GetRelativePath(agentFolder, absoluteSpecPath)
+                            .Replace(Path.DirectorySeparatorChar, '/')
+                            .Replace(Path.AltDirectorySeparatorChar, '/');
+                        sb.AppendLine($"  - [Spec.md]({relativeSpecPath}) (UPDATE/INSERT 상세 매핑 수식 포함)");
+                    }
+                    else
+                    {
+                        sb.AppendLine("  - 명세서 파일을 찾을 수 없습니다. 이 스텝의 비즈니스 로직은 참조할 수 없습니다.");
+                    }
                 }
 
                 sb.AppendLine();

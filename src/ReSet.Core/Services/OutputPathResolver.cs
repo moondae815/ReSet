@@ -31,6 +31,9 @@ public sealed class OutputPathResolver
 
     internal string OutputRoot { get; }
 
+    /// <summary>산출물 레이아웃의 기준이 되는 분석 루트 DB.</summary>
+    public string CurrentDatabase => _currentDatabase;
+
     public string ResolveSpecPath(CodeObjectKey objectKey) =>
         Path.Combine(ResolveDocsDirectory(objectKey), SpecFileName);
 
