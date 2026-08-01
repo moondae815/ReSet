@@ -541,6 +541,94 @@ public sealed class DependencyAnalysisOrchestratorTests
         Assert.All(analysisDatabases, database => Assert.Equal("PaymentDB", database));
     }
 
+    [Fact]
+    public async Task AnalyzeAsync_AllowingExternalDatabasesWritesSpecUnderExternalDirectory()
+    {
+        var outputRoot = Path.Combine(
+            Path.GetTempPath(), $"ReSet-ExternalDatabase-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var externalFunction = CodeObjectKey.Create(
+            "AuditDB", "dbo", "FN_Audit", CodeObjectType.Function);
+        var metadata = CreateMetadataService(
+            Definition(root, externalFunction),
+            Definition(externalFunction));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)),
+            new MetadataExporter(),
+            new MechanicalValidator());
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot, allowExternalDatabaseConnections: true),
+                CancellationToken.None);
+
+            var node = result.GetNode(externalFunction);
+            Assert.Equal(AnalysisNodeStatus.Succeeded, node.Status);
+            Assert.Equal(
+                Path.Combine(
+                    outputRoot, "External", "AuditDB", "Functions", "dbo.FN_Audit", "docs", "Spec.md"),
+                node.SpecPath);
+            Assert.True(File.Exists(node.SpecPath));
+
+            var rootSpec = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Procedures", "dbo.USP_Root", "docs", "Spec.md"));
+            Assert.Contains(
+                "[dbo.FN\\_Audit](../../../External/AuditDB/Functions/dbo.FN_Audit/docs/Spec.md)",
+                rootSpec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ExternalMetadataFailureIsSurfacedAsFailedNode()
+    {
+        var outputRoot = Path.Combine(
+            Path.GetTempPath(), $"ReSet-ExternalDatabaseFailure-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var externalFunction = CodeObjectKey.Create(
+            "AuditDB", "dbo", "FN_Audit", CodeObjectType.Function);
+        var metadata = Substitute.For<IDbMetadataService>();
+        metadata.GetCodeObjectDetailsDirectAsync(
+                Arg.Any<string>(),
+                Arg.Any<CodeObjectKey>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo => callInfo.ArgAt<CodeObjectKey>(1) == root
+                ? Task.FromResult(Definition(root, externalFunction))
+                : Task.FromException<SpDefinition>(new InvalidOperationException(
+                    "'[AuditDB].[dbo].[FN_Audit]'의 SQL Server 객체 타입을 찾을 수 없습니다.")));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)),
+            new MetadataExporter(),
+            new MechanicalValidator());
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot, allowExternalDatabaseConnections: true),
+                CancellationToken.None);
+
+            Assert.Equal(AnalysisNodeStatus.Failed, result.GetNode(externalFunction).Status);
+            Assert.Equal(AnalysisNodeStatus.Succeeded, result.GetNode(root).Status);
+
+            var rootSpec = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Procedures", "dbo.USP_Root", "docs", "Spec.md"));
+            Assert.Contains("분석 불가", rootSpec);
+            Assert.DoesNotContain("분석 생략", rootSpec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",
