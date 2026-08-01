@@ -1796,7 +1796,13 @@ namespace ReSet.Core.Services
                         catch { }
                     }
 
+                    // 이 계획서도 전체가 재생성되어 L1만 재검사할 뿐 L2는 재수행되지 않는다.
+                    // planOutcome을 그대로 두면 재생성된, 한 번도 리뷰받지 않은 계획서가
+                    // 이전 계획서의 통과 판정을 그대로 자칭하게 된다. 리뷰 미수행으로 명시한다.
+                    // (이 메서드에는 단일 객체 파이프라인의 finalReview에 대응하는 리뷰 상태
+                    // 변수가 없다 - 반환 튜플이 ReviewResult를 포함하지 않는다.)
                     consolidatedPlan = rePlan;
+                    planOutcome = VerificationOutcome.ReviewNotRun;
                 }
             }
         }

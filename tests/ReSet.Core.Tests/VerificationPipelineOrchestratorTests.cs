@@ -2459,6 +2459,53 @@ namespace ReSet.Core.Tests
             userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
         }
 
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3Interactive_ProvideFeedback_MarksRegeneratedPlanReviewNotRun()
+        {
+            // 재검토(scoped re-review) 잔여 항목: RunConsolidatedPipelineAsync의 피드백 경로도
+            // I4와 동일한 결함을 갖고 있었다 - 계획서 전체를 재생성하고 L1만 재검사할 뿐
+            // L2는 재수행하지 않는데, planOutcome(이번 웨이브에서 C1을 위해 추가된 변수)은
+            // 그대로 남아 있었다. 재생성된, 한 번도 리뷰받지 않은 계획서가 이전 계획서의
+            // 통과 판정을 그대로 물려받아 승인 화면에 표시되면 안 된다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var initialMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            var regeneratedMarkdown = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\nC-->D\n```";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = initialMarkdown }), Task.FromResult(new AiResult { Content = regeneratedMarkdown }));
+
+            var goodReview = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Add C to D" }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
+                );
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "TestJobFeedbackOutcome", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            Assert.Equal(regeneratedMarkdown, result.Plan);
+            // 1차 호출: 표준 루프에서 L1+L2 모두 통과한 초안 -> Passed.
+            await userInteraction.Received(1).RequestHumanReviewAsync(
+                "TestJobFeedbackOutcome", initialMarkdown, VerificationOutcome.Passed);
+            // 2차 호출: 피드백으로 전면 재생성된, 한 번도 리뷰받지 않은 계획서 -> ReviewNotRun.
+            await userInteraction.Received(1).RequestHumanReviewAsync(
+                "TestJobFeedbackOutcome", regeneratedMarkdown, VerificationOutcome.ReviewNotRun);
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",
