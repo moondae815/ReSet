@@ -315,6 +315,54 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_WritesMetadataJsonNextToManifest()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Meta", CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                Schema = key.Schema,
+                Name = key.Name,
+                DdlText = "SELECT 1;",
+                Dependencies = new System.Collections.Generic.List<DependencyInfo>
+                {
+                    new() { SourceObjectKey = key, Schema = "dbo", Name = "TOrder", Type = "TABLE" }
+                }
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    definition,
+                    key,
+                    new CodeObjectPipelineResult
+                    {
+                        Nodes = new System.Collections.Generic.List<AnalysisNode>
+                        {
+                            new(key) { Status = AnalysisNodeStatus.Succeeded }
+                        }
+                    },
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                var metadataPath = Path.Combine(
+                    outputRoot, "Procedures", "dbo.USP_Meta", "raw", "metadata.json");
+                Assert.True(File.Exists(metadataPath), $"metadata.json이 없습니다: {metadataPath}");
+
+                // 지시서 번들이 실제로 쓰는 payload는 Dependencies다. 왕복이 되어야 한다.
+                var restored = System.Text.Json.JsonSerializer.Deserialize<SpDefinition>(
+                    await File.ReadAllTextAsync(metadataPath),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                Assert.NotNull(restored);
+                Assert.Equal("TOrder", Assert.Single(restored!.Dependencies).Name);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task ExportCodeObjectArtifactsAsync_CreatesEmptyPromptContextFileWhenNoPromptExists()
         {
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");

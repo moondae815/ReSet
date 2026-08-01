@@ -77,6 +77,17 @@ namespace ReSet.Core.Services
                 var manifest = BuildManifest(definition, objectKey, graph, paths, objectDirectoryForManifest);
                 var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(manifestPath, json, Encoding.UTF8, cancellationToken);
+
+                // 지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천이다.
+                // 매니페스트와 같은 디렉터리에 두어야 Spec.md 경로에서 규칙적으로 찾을 수 있다.
+                var metadataPath = Path.Combine(
+                    Path.GetDirectoryName(manifestPath)!,
+                    "metadata.json");
+                await File.WriteAllTextAsync(
+                    metadataPath,
+                    JsonSerializer.Serialize(definition, new JsonSerializerOptions { WriteIndented = true }),
+                    Encoding.UTF8,
+                    cancellationToken);
             }
             catch (OperationCanceledException)
             {
