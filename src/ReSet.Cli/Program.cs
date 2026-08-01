@@ -1833,11 +1833,11 @@ namespace ReSet.Cli
         }
 
         public void NotifyStatus(string message) => _interactiveUserInteraction.NotifyStatus(message);
-        public void NotifyError(string message) { }
-        public void NotifyWarnings(string selectedOption, List<string> warnings) { }
-        public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
-        public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) { }
-        public void NotifyValidationSuccess(string selectedOption) { }
+        public void NotifyError(string message) => _interactiveUserInteraction.NotifyError(message);
+        public void NotifyWarnings(string selectedOption, List<string> warnings) => _interactiveUserInteraction.NotifyWarnings(selectedOption, warnings);
+        public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) => _interactiveUserInteraction.NotifyL1Errors(selectedOption, attempt, maxAttempts, errors);
+        public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) => _interactiveUserInteraction.NotifyL2Defects(selectedOption, attempt, maxAttempts, feedbackComment);
+        public void NotifyValidationSuccess(string selectedOption) => _interactiveUserInteraction.NotifyValidationSuccess(selectedOption);
 
         public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown) =>
             _interactiveUserInteraction.RequestHumanReviewAsync(selectedOption, specificationMarkdown);

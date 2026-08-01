@@ -716,6 +716,15 @@ namespace ReSet.Core.Services
                         specificationMarkdown = warningBanner + specificationMarkdown;
                     }
                 }
+                
+                if (finalReview != null && !string.IsNullOrWhiteSpace(finalReview.FeedbackComment))
+                {
+                    var commentLines = finalReview.FeedbackComment.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var line in commentLines)
+                    {
+                        _userInteraction.NotifyStatus($"  [grey]* Critic 피드백: {EscapeMarkup(line)}[/]");
+                    }
+                }
 
                 _userInteraction.NotifyValidationSuccess(selectedOption);
             }
