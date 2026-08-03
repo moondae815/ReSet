@@ -167,12 +167,14 @@ ReSet이 외부 코딩 에이전트를 가동하고 TDD 선제 검증(L0) 및 L1
 ```mermaid
 sequenceDiagram
     autonumber
+    participant CLI as ReSet.Cli + Core (Program / MetadataExporter)
     participant RC as Validator Core (CodegenWorkflowOrchestrator)
     participant ECE as External Coding CLI (Claude)
     participant VAL as Validator Core (CodeVerificationOrchestrator)
 
-    RC->>RC: 마이그레이션 지시서(MigrationInstructions.md) 및 todo.md 생성
-    RC->>RC: 대상 언어 감지 및 전체 테스트/프로젝트 구조 생성 책임 에이전트에 자율 위임
+    CLI->>CLI: 통합 배치 설계서 확정 후 지시서(MigrationInstructions.md) 및 todo.md 생성
+    Note over CLI: 설정된 대상 언어(MigrationSettings:TargetLanguage)를 지시서에 각인하고 테스트/프로젝트 구조 생성 책임은 에이전트에 자율 위임
+    CLI->>RC: 지시서 경로와 코드 생성 디렉터리를 넘겨 자가 수정 루프 위임
     loop 자가 수정 루프 (최대 MaxL2Attempts 회)
         RC->>ECE: 코딩 에이전트 기동 (지시서 및 TDD 태스크 계획서 전달)
         ECE->>ECE: 소스코드 파일 생성/수정, 자체 테스트 구조 구축 및 단위테스트 수행
