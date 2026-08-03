@@ -212,38 +212,44 @@ return result;   // 예외를 다시 던지지 않는다
 
 `persistCts`는 취소된 원본 토큰이 아니라 별도의 grace 토큰이다. 취소된 토큰을 넘기면 `PersistArtifactsAsync` 내부의 `ThrowIfCancellationRequested`(`:398`, `:431`)가 즉시 던져 아무것도 쓰지 못한다. `CancellationToken.None`을 쓰지 않는 이유는 네트워크 드라이브에서 저장이 무한정 매달릴 수 있기 때문이다. 30초는 파일 수십 개 쓰기에 충분하고, 사용자가 두 번째 Ctrl+C로 빠져나오려 할 때의 인내 한계이기도 하다.
 
-#### 부분 분석 배너
+#### 취소는 문서가 아니라 화면으로 보고한다
 
-취소 시점에 이미 분석을 마친 자식 명세서는 그 자체로 완전하다. 따라서 배너는 **자기 참조 목록에 미완료(`Cancelled`/`Queued`) 항목이 있는 문서에만** 붙인다. 완료된 리프 객체에는 붙이지 않는다.
+`DiscoverAsync`는 자식을 모두 재귀한 **뒤에** 자기를 `ExecutionOrder`에 넣는다(`:170-174`). 후위 순회다. `ExecuteDiscoveredNodesAsync`는 첫 취소에서 멈추므로, 성공한 노드의 자식은 이미 처리된 상태다. 즉 **취소로 인해 "미완료 자식을 가진 성공 문서"가 생기는 일은 일반적으로 없다.** 저장되는 문서는 저마다 정확하고, 저장되지 않은 문서는 아예 없다.
+
+그러므로 취소의 실제 위험은 문서 수준이 아니라 실행 수준이다 — 사용자가 출력 디렉터리를 보고 "이것이 이 SP의 전체 그래프"라고 오해하는 것. 이는 `Program`의 부분 완료 패널이 담당한다(아래 「4: 저장 실패 표면화」).
+
+#### 참조 미완 배너 (엣지 케이스)
+
+후위 순회 규칙에는 예외가 둘 있고, 이때는 문서 수준 경고가 필요하다.
+
+- **순환 의존성**: `root→A→root`이면 `TryRegisterDepth`가 두 번째 `root` 진입을 막아 순서가 `[A, root]`가 된다. A의 자식인 `root`가 A보다 뒤에 온다.
+- **깊이 재등록**: 어떤 객체가 처음에 깊이 제한으로 `SkippedDepth`가 되었다가 더 얕은 경로로 재발견되면, 부모가 이미 `ExecutionOrder`에 들어간 뒤에 추가된다.
+
+이 두 경우에만 성공한 문서의 참조 목록에 미완료 항목이 남는다. 배너는 그 문서에만 붙인다.
 
 ```csharp
 // VerificationBanner
-public static string PartialGraph(int succeeded, int total) =>
-    "\n> [!CAUTION]\n> **[부분 분석] 사용자 취소로 의존성 그래프 분석이 중단되었습니다.**\n"
-    + $"> - **완료**: {succeeded}/{total} 객체\n"
-    + "> - 미완료 객체는 아래 참조 목록에 '분석 취소'로 표기됩니다.\n\n";
+public static string UnresolvedReferences(IReadOnlyList<string> objectNames) =>
+    "\n> [!CAUTION]\n> **[참조 미완] 사용자 취소로 아래 참조 객체가 분석되지 않았습니다.**\n"
+    + string.Join("\n", objectNames.Select(name => $">   - {name}"))
+    + "\n\n";
 ```
 
-`succeeded`/`total`은 그래프 전체 기준이다. 문서마다 다른 수를 계산하지 않는다 — 읽는 사람이 알아야 하는 것은 "이 실행이 어디까지 갔는가"이지 "이 문서의 직계 자식 중 몇 개인가"가 아니다.
+`L1Exhausted`의 오류 목록과 같은 형태다. 개수 대신 이름을 싣는 이유는, 이 배너를 읽는 사람이 다음에 할 일이 "그 객체를 다시 분석하는 것"이기 때문이다.
 
-- `total` = `graph.Nodes.Count` (발견된 코드 객체 전체). `ExecutionOrder.Count`가 아니다 — 깊이 제한과 외부 DB로 스킵된 객체도 사용자가 알아야 할 그래프의 일부다.
-- `succeeded` = `Status == Succeeded`인 노드 수.
+배너를 붙이는 곳은 `PersistArtifactsAsync`다. `linker.UpdateReferencesAsync`로 참조 섹션을 갱신한 **직후**, `BuildPersistedSpecification`이 포매터를 호출하기 **전에** 본문 앞에 붙인다. 기존 `VerificationBanner` 삽입부와 같은 순서이므로 최종 문서 구조는 `YAML → NOTE 블록 → CAUTION 배너 → 본문`이 된다.
 
-배너를 붙이는 곳은 `PersistArtifactsAsync`다. `linker.UpdateReferencesAsync`로 참조 섹션을 갱신한 **직후**, `BuildPersistedSpecification`이 포매터를 호출하기 **전에** 본문 앞에 붙인다. 기존 `VerificationBanner` 삽입부와 같은 순서이므로(배너가 본문 앞, 포매터 헤더가 그 앞) 최종 문서 구조는 `YAML → NOTE 블록 → CAUTION 배너 → 본문`이 된다.
+판정은 참조 섹션 생성에 이미 쓰이는 자식 노드 상태로 한다 — `graph.DependencyEdges`에서 이 문서의 자식을 찾아 `Status`가 `Cancelled` 또는 `Queued`인 것을 모은다. 비어 있으면 배너를 붙이지 않는다.
 
-붙일지 여부는 참조 섹션 생성에 이미 쓰이는 자식 노드 상태로 판정한다 — `graph.DependencyEdges`에서 이 문서의 자식을 찾아 `Status`가 `Cancelled` 또는 `Queued`인 것이 하나라도 있으면 붙인다.
+### 2: YAML 확장 — `분석 범위`
 
-### 2: YAML 확장 — `AnalysisProvenance`
-
-A~E가 만드는 `VerificationDocumentFormatter.FormatSpecification`은 이미 파라미터가 7개다. 두 개를 더 붙이면 유지되지 않으므로 하나로 묶는다.
+A~E가 만드는 `VerificationDocumentFormatter.FormatSpecification`에 파라미터를 하나만 추가한다.
 
 ```csharp
-public sealed record AnalysisProvenance(AnalysisScope Scope, GraphCompletion Completion);
-
 public static string FormatSpecification(
     string body, ReviewResult? review, VerificationOutcome outcome,
     string provider, string modelName, string? effort, DateTime timestamp,
-    AnalysisProvenance? provenance = null);
+    AnalysisScope? scope = null);
 ```
 
 출력:
@@ -251,18 +257,18 @@ public static string FormatSpecification(
 ```
 ---
 검증 상태: 통과
-분석 범위: 직접 의존성            # 참조 SP/UDF 재귀 분석 모드
-그래프 완결성: 부분(사용자 취소)    # 완결이면 이 줄을 내지 않는다
+분석 범위: 직접 의존성      # 참조 SP/UDF 재귀 분석 모드
 종합 신뢰도: 92
 정합성 점수: 9/10
 ---
 ```
 
-- `분석 범위`는 `provenance`가 있으면 항상 낸다. 값은 `직접 의존성` 또는 `전이 의존성`.
-- `그래프 완결성`은 `PartialCancelled`일 때만 낸다. A~E의 `statusNote`가 `Passed`에서 빈 문자열인 것과 같은 규칙이다 — 정상 상태에 줄을 추가하면 비정상 상태의 신호가 묻힌다.
-- `provenance == null`이면 두 줄 다 내지 않는다. 통합 계획서 경로(`FormatConsolidatedPlan`, `FormatUnverifiedPlan`)는 영향받지 않는다.
+- 값은 `직접 의존성`(`Direct`) 또는 `전이 의존성`(`Transitive`).
+- `scope == null`이면 줄을 내지 않는다. 통합 계획서 경로(`FormatConsolidatedPlan`, `FormatUnverifiedPlan`)는 영향받지 않는다.
 
-`SpecHeaderReader`(`ReSet.Cli/SpecHeaderReader.cs`)는 인식하지 못하는 키를 무시하므로 변경이 필요 없다. 이번 사이클에서 이 두 키를 읽는 소비부는 없다.
+`GraphCompletion`은 **YAML에 싣지 않는다.** 그것은 실행 단위 사실이라 문서 단위 헤더에 넣으면 어긋난다 — 취소된 실행에서도 저장된 문서 각각은 완전하다. 실행 상태는 화면이 보고한다.
+
+`SpecHeaderReader`(`ReSet.Cli/SpecHeaderReader.cs`)는 인식하지 못하는 키를 무시하므로 변경이 필요 없다. 이번 사이클에서 `분석 범위`를 읽는 소비부는 없다 — 사람이 읽는 기록이다.
 
 ### 3: 저장 일원화
 
@@ -295,7 +301,19 @@ public DateTime? AnalyzedAt { get; set; }
 - `Persistence == Failed`이면 `PersistenceErrors`
 - `SkippedDepth` / `SkippedExternal` 노드 요약 (개수와 사유별 집계)
 
-`Program`은 `Persistence == Failed`이면 성공 패널 대신 실패 패널을, `Completion == PartialCancelled`이면 부분 완료 패널을 낸다.
+`Program`은 `Persistence == Failed`이면 성공 패널 대신 실패 패널을 낸다.
+
+`Completion == PartialCancelled`이면 부분 완료 패널을 낸다. **취소 보고의 본체가 여기다.** 저장된 문서는 저마다 정확하므로 문서에 남길 것이 없고, 사용자가 알아야 하는 것은 "출력 디렉터리에 있는 것이 이 SP의 전체 그래프가 아니다"라는 실행 수준 사실이다.
+
+```
+┌─ dbo.USP_Settle 부분 완료 ─────────────────────────┐
+│ 사용자 취소로 분석이 중단되었습니다.                 │
+│ 완료: 3 / 발견: 7 객체                              │
+│ 저장되지 않은 객체: dbo.USP_Calc, dbo.FN_Rate, ...  │
+└────────────────────────────────────────────────────┘
+```
+
+`발견`은 `graph.Nodes.Count`다. `ExecutionOrder.Count`가 아니다 — 깊이 제한과 외부 DB로 스킵된 객체도 사용자가 알아야 할 그래프의 일부다. `저장되지 않은 객체`는 `Status != Succeeded`인 노드 이름이며, 10개를 넘으면 앞 10개와 `외 N건`으로 줄인다.
 
 ### 5: 캐시 히트
 
@@ -352,8 +370,10 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 `DependencyAnalysisOrchestratorTests`
 
 - 취소 시 완료 노드의 `Spec.md`가 디스크에 남고 `Completion == PartialCancelled`
+- 취소 시 미완료 노드의 `Spec.md`는 생기지 않음
 - 취소 시 미완료 노드가 참조 목록에 "분석 취소"로 표기
-- 부분 분석 배너가 미완료 자식을 가진 문서에만 붙고, 완료된 리프 자식에는 붙지 않음
+- **순환 의존성** 그래프(`root→A→root`)에서 취소하면 A의 문서에 참조 미완 배너가 붙고 미분석 객체 이름이 실림
+- 취소 없이 완료한 그래프에서는 어느 문서에도 참조 미완 배너가 붙지 않음
 - 저장 실패 시 `Persistence == Failed`이고 `PersistenceErrors`가 사유를 담음
 - 빈 DB명이면 `AnalyzeAsync`가 즉시 throw
 - 캐시 히트 노드가 원본 `AnalyzedAt`으로 렌더링됨
@@ -372,9 +392,9 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 
 `VerificationDocumentFormatterTests` (A~E 파일 확장)
 
-- `provenance == null`이면 `분석 범위`·`그래프 완결성` 두 줄 다 없음
+- `scope == null`이면 `분석 범위` 줄이 없음
 - `Direct` → `분석 범위: 직접 의존성`, `Transitive` → `분석 범위: 전이 의존성`
-- `Complete` → `그래프 완결성` 줄 없음, `PartialCancelled` → 줄 있음
+- `분석 범위` 줄이 YAML 블록 안에 들어가고 점수 줄과 공존함
 
 `VerificationPipelineOrchestratorTests`
 
@@ -387,7 +407,7 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 
 `VerificationBannerTests`
 
-- `PartialGraph(3, 7)`이 완료 수와 전체 수를 렌더링
+- `UnresolvedReferences`가 객체 이름을 목록으로 렌더링하고 `[!CAUTION]`으로 시작
 
 ## 범위 밖
 
