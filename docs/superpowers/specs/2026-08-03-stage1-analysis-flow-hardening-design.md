@@ -220,12 +220,13 @@ return result;   // 예외를 다시 던지지 않는다
 
 #### 참조 미완 배너 (엣지 케이스)
 
-후위 순회 규칙에는 예외가 둘 있고, 이때는 문서 수준 경고가 필요하다.
+후위 순회 규칙에는 예외가 하나 있고, 이때는 문서 수준 경고가 필요하다.
 
 - **순환 의존성**: `root→A→root`이면 `TryRegisterDepth`가 두 번째 `root` 진입을 막아 순서가 `[A, root]`가 된다. A의 자식인 `root`가 A보다 뒤에 온다.
-- **깊이 재등록**: 어떤 객체가 처음에 깊이 제한으로 `SkippedDepth`가 되었다가 더 얕은 경로로 재발견되면, 부모가 이미 `ExecutionOrder`에 들어간 뒤에 추가된다.
 
-이 두 경우에만 성공한 문서의 참조 목록에 미완료 항목이 남는다. 배너는 그 문서에만 붙인다.
+> **정정(최종 리뷰).** 초안은 여기에 "깊이 재등록"이라는 두 번째 발화 경로를 적었다 — 깊이 제한으로 `SkippedDepth`가 된 객체가 더 얕은 경로로 재발견되면 부모보다 늦게 `ExecutionOrder`에 들어간다는 것. **이 시나리오는 존재하지 않는다.** `DiscoverAsync`가 `node.Status = Queued`와 `ExecutionOrder.Add`를 같은 지점에서 수행하므로 `Queued` 노드는 반드시 `ExecutionOrder`에 있고, 완주 실행은 그 목록을 전부 소진한다. 재등록이 일어나도 그 노드는 실행되며 `Queued`로 남지 않는다. 따라서 배너는 **순환 의존성과 취소가 함께 걸려야만** 발화한다. 이 문장을 남겨 두면 다음 사이클이 존재하지 않는 시나리오를 테스트하려 든다.
+
+이 경우에만 성공한 문서의 참조 목록에 미완료 항목이 남는다. 배너는 그 문서에만 붙인다.
 
 ```csharp
 // VerificationBanner
@@ -363,7 +364,13 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 | 빈 DB명으로 `OutputPathResolver` 생성 불가 | `AnalyzeAsync` 진입부에서 즉시 throw. 호출부 결함을 조용히 삼키지 않는 선례(`VerificationPipelineOrchestrator.cs:1570-1574`의 `outputRoot` 검사)를 따른다. `Program`의 일반 catch가 잡아 에러를 표시한다 |
 | 개별 노드 저장 실패 | 기존 do/while 재링크 루프 유지. 해당 노드만 `Failed`, 나머지는 계속 |
 | 캐시 `문서 작성일시` 파싱 실패 | `AnalyzedAt = null` → `DateTime.Now` 폴백 + `Log.Warning`. A가 레거시 캐시를 전량 무효화하므로 히트하는 문서는 반드시 신형 포맷이다. 이 경로에 도달했다면 포매터 출력이 깨졌다는 뜻이고, 그 사실이 날짜보다 중요하다 |
-| 저장 중 두 번째 Ctrl+C | grace CTS는 `_currentCts`와 별개라 영향받지 않는다. 30초 상한이 유일한 탈출구다. `_currentCts`에 연결하려면 orchestrator가 CLI의 전역 CTS를 알아야 하는데, 파일 쓰기 30초에 그 결합을 만들 값어치가 없다 |
+| 저장 중 두 번째 Ctrl+C | **정정됨(아래 참조).** 이제 핸들러가 이미 취소 요청된 상태에서도 `e.Cancel = true`를 설정하고 "산출물을 저장 중입니다" 안내를 낸다. 두 번째 이후의 Ctrl+C는 프로세스를 죽이지 못하며, 30초 grace 상한이 실제로 유일한 탈출구가 된다 |
+
+> **정정(최종 리뷰).** 위 행의 초안은 "grace CTS는 `_currentCts`와 별개라 영향받지 않는다. 30초 상한이 유일한 탈출구다"였다. **틀렸다.** grace CTS가 `_currentCts`와 별개인 것은 맞지만, 그것이 프로세스가 살아 있다는 뜻은 아니었다. `Console.CancelKeyPress` 핸들러가 `if (_currentCts != null && !_currentCts.IsCancellationRequested)` 안에서만 `e.Cancel = true`를 설정했으므로, 첫 Ctrl+C 이후의 입력은 조건을 통과하지 못하고 **.NET 기본 동작(프로세스 즉시 종료)**을 탔다. 즉 두 번째 Ctrl+C가 즉시 탈출구였고, 그 대가는 `File.WriteAllTextAsync`가 중간에 죽어 남는 **truncate된 `Spec.md`** 였다. 게다가 재링크 do/while이 성공 노드를 전부 다시 쓰므로 **이전 실행의 멀쩡한 명세서까지** 손상됐다 — 이 사이클이 지키려던 AI 비용을 정반대로 파괴하는 경로다.
+>
+> 이 위험이 초안 시점에는 실제로 없었다는 점은 짚어 둘 만하다. 이전에는 취소 후 남은 일이 스택 되감기뿐이라 즉시 종료가 무해했다. 취소 뒤에 최대 30초짜리 파일 쓰기 구간을 **새로 만든 것이 이 사이클 자신**이고, 그러면서 핸들러의 조건을 갱신하지 않아 무해했던 동작이 유해해졌다.
+>
+> 수정은 핸들러 안에서 끝난다. `_currentCts == null`이면 그대로 반환하고, 그렇지 않으면 첫 입력(취소 요청 + 정리 안내)과 두 번째 이후 입력(저장 중이니 기다리라는 안내)을 구분한 뒤 **두 경우 모두** `e.Cancel = true`를 설정한다. orchestrator가 CLI의 전역 CTS를 알 필요는 여전히 없다 — 초안의 그 판단은 유효하다.
 
 ## 테스트 전략
 
@@ -390,6 +397,12 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 
 `PipelineTestExtensions` 이전은 별도 테스트를 만들지 않는다. 기존 40여 개 `RunPipelineAsync_*` 테스트가 한 줄도 바뀌지 않은 채 통과하는 것이 곧 검증이다.
 
+> **정정(최종 리뷰).** 위 문장은 **틀렸다.** 시그니처가 같아 테스트가 컴파일되고 통과한 것은 맞지만, 그 테스트들이 무엇을 검증하는지가 바뀌었다. 이전에는 `RunPipelineAsync_*`가 **프로덕션 코드**(`VerificationPipelineOrchestrator.RunPipelineAsync`)를 실행했다. 이전 후에는 **테스트 전용 사본**(`PipelineTestExtensions`)을 실행하고, 프로덕션의 대응 경로(`Program.RunConfiguredAnalysisAsync`의 비재귀 분기)는 같은 로직을 따로 갖게 되었다. 그 결과 40여 개 테스트가 통과해도 프로덕션 경로가 옳다는 보장이 사라졌다 — 두 사본이 갈라지면 테스트는 계속 초록불이다.
+>
+> 최종 수정에서 키 조립을 `VerificationPipelineOrchestrator.CreateProcedureKey(connectionString, schema, name)` 하나로 뽑고 확장 메서드와 `Program`이 **같은 것**을 호출하게 해 이 갭을 닫았다. 이제 위 문장이 다시 참이 된다.
+>
+> 교훈은 일반적이다. "얇은 위임을 프로덕션에 남기지 않는다"보다 **"테스트가 프로덕션을 검증한다"가 상위 원칙**이다. 프로덕션 코드를 테스트로 옮길 때는 옮긴 쪽이 아니라 남은 쪽이 무엇으로 검증되는지를 먼저 확인해야 한다.
+
 `VerificationDocumentFormatterTests` (A~E 파일 확장)
 
 - `scope == null`이면 `분석 범위` 줄이 없음
@@ -403,7 +416,13 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 - 캐시 히트 시 결과의 `FromCache == true`이고 `AnalyzedAt`이 원본 값을 담음
 - 캐시 미스 시 `FromCache == false`, `AnalyzedAt == null`
 
-`Program`의 저장 분기(`SaveRawArtifactsAsync` / `SaveDocumentsAsync`)는 자동 테스트 대상이 아니다. `RunConfiguredAnalysisAsync`가 구상 타입 의존을 갖는 한 이 구간은 테스트 하네스에 올릴 수 없고, 그것을 푸는 일은 범위 밖(C안)이다. 대신 분기 조건을 `Persistence`/`FromCache` 두 필드로만 구성해 판단 로직 자체를 없앴다 — 테스트할 로직이 남지 않는 것이 이 구간의 방어책이다.
+`Program`의 저장 분기(`SaveRawArtifactsAsync` / `SaveDocumentsAsync`)는 자동 테스트 대상이 아니다. `RunConfiguredAnalysisAsync`가 구상 타입 의존을 갖는 한 이 구간은 테스트 하네스에 올릴 수 없고, 그것을 푸는 일은 범위 밖(C안)이다. 분기 조건을 `Persistence`/`FromCache` 같은 결과 필드로만 구성해 각 조건 안의 판단은 없앴다.
+
+> **정정(최종 리뷰).** 초안은 여기에 "분기 조건을 두 필드로만 구성해 **판단 로직 자체를 없앴다** — 테스트할 로직이 남지 않는 것이 이 구간의 방어책이다"라고 적었다. **절반만 사실이다.** 개별 조건이 단순해진 것은 맞지만 조건의 **개수**가 줄지 않았다 — 대화형 블록은 세 조건(`Completion`, 빈 명세서, `Persistence`), 배치 블록은 다섯 조건(`Completion`, 빈 명세서, `Persistence`, `FromCache`, `migrationPlan` 유무)을 갖는다. 없어진 것은 조건 **안**의 판단이고, 남은 것은 조건 **사이의 순서**라는 판단이다.
+>
+> 그리고 정확히 그 지점에서 이 사이클에 **두 번** 버그가 났다. 배치 블록은 빈 명세서 검사가 취소 판정보다 앞에 있어 사용자 취소를 "명세서 획득 실패"로 오보했고(실행 중 발견), 대화형 블록은 같은 결함이 고쳐지지 않은 채 남았다(최종 리뷰에서 발견). 세 번째로 계획서 저장이 `Persistence` 게이트 **안**에 놓여 재귀 경로에서 산출물을 버렸다.
+>
+> 정확한 자평은 이렇다: **판단 로직이 조건 안에서 조건 사이의 순서로 옮겨갔고, 그 순서는 테스트되지 않는다.** 이 구간의 실질적 방어책은 "테스트할 로직이 없음"이 아니라 코드 리뷰와 「완료 확인」의 수동 검증이며, 그 둘이 실제로 세 건을 모두 잡았다. 순서를 테스트 가능하게 만들려면 `Program`의 분기를 순수 함수로 뽑아야 하고, 그것은 C안(범위 밖)에 속한다.
 
 `VerificationBannerTests`
 
@@ -417,4 +436,9 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 - `SaveOutputsAsync`의 경로 조립이 `OutputPathResolver.EncodePathSegment`를 쓰지 않아 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회 경로와 저장 경로가 갈라지는 문제. 발생률이 낮고 이번 네 결함과 독립적이다.
 - SP 목록이 시작 시 1회만 로드되어 세션 중 DB 변경이 반영되지 않는 문제.
 - L2 리뷰 호출 재시도 인프라. A~E 스펙이 이미 별도 사이클로 남겨둔 항목이다.
-- 배치 모드에서 참조분석과 `MigrationSettings:Enabled`를 동시에 켜면 단일 SP의 `BatchMigrationPlan.md`가 생성되지 않는다. 저장 책임이 오케스트레이터로 넘어갔는데 오케스트레이터는 계획서 개념을 갖지 않기 때문이다. A~E의 결함 D가 지적했듯 이 계획서는 애초에 검증을 거치지 않으므로 손실이 크지 않다고 판단했다. 필요하면 별도 사이클에서 계획서 생성을 파이프라인 안으로 옮긴다.
+
+> **정정(최종 리뷰).** 이 목록에는 "배치 모드에서 참조분석과 `MigrationSettings:Enabled`를 동시에 켜면 단일 SP의 `BatchMigrationPlan.md`가 생성되지 않는다"는 항목이 있었고, 근거로 "저장 책임이 오케스트레이터로 넘어갔는데 오케스트레이터는 계획서 개념을 갖지 않기 때문"을 들었다. **근거가 사실이 아니었다.** `SaveMigrationPlanAsync`가 쓰는 `{outputDir}/Procedures/{schema}.{name}/docs/BatchMigrationPlan.md`는 `OutputPathResolver.ResolveDocsDirectory`와 같은 경로이고, 오케스트레이터는 그 파일을 읽지도 쓰지도 않는다. 소유권 충돌이 없으므로 `Persistence` 게이트 밖에서 저장하면 그만이었다.
+>
+> 실제 증상은 "생성되지 않는다"보다 나빴다. `GenerateBatchMigrationPlanAsync`는 `Persistence`와 무관하게 호출되므로 재귀 경로에서도 **AI 비용은 그대로 냈고**, 그 결과를 게이트 안의 `SaveMigrationPlanAsync`가 받지 못해 **버렸으며**, 그러고도 `[green]성공:[/] … 분석 완료 및 저장!`을 출력했다. "저장하지 않음"이 아니라 "버리고 저장했다고 보고함"이다.
+>
+> 최종 수정에서 `SaveMigrationPlanAsync` 호출을 `Persistence` 게이트 밖으로 옮겨 해소했다. `migrationPlan`이 비어 있으면 아무것도 하지 않는 가드는 유지된다. **이 항목은 더 이상 범위 밖이 아니다.**

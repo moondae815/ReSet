@@ -2271,6 +2271,8 @@ CLI 메뉴 1번은 실 DB 연결과 AI 호출이 필요해 자동 검증 대상�
 - 참조분석 ON으로 분석하면 `분석 범위: 직접 의존성`이 있고 루트 `Spec.md`가 한 번만 기록된다
 - 분석 도중 Ctrl+C를 누르면 부분 완료 패널이 뜨고, 완료된 하위 객체의 `Spec.md`가 디스크에 남아 있다
 - `EnableCache: true`로 같은 SP를 두 번 분석하면 두 번째에 "캐시 재사용" 표시가 뜨고 `문서 작성일시`가 바뀌지 않는다
+- **Ctrl+C를 두 번 눌러도 이미 기록된 명세서가 손상되지 않는다** (두 번째 입력에 "저장 중입니다" 안내가 뜨고 프로세스가 죽지 않는다)
+- **재귀 분석 + `MigrationSettings:Enabled`에서 `BatchMigrationPlan.md`가 생성된다**
 
 - [ ] **Step 10: 커밋**
 
@@ -2301,7 +2303,25 @@ EOF
 모든 태스크를 마친 뒤 실행한다.
 
 - [ ] `dotnet build -v q --nologo` — 오류 0
-- [ ] `dotnet test --nologo -v q` — 실패 0, 통과 수가 기준선 355보다 크다
+- [ ] `dotnet test --nologo -v q` — 실패 0, 통과 수가 기준선보다 크다
 - [ ] `grep -rn "RunPipelineAsync" src/` — 출력 없음
 - [ ] `grep -rn "SaveOutputsAsync\|RenderDependencyAnalysisFailures" src/` — 출력 없음
 - [ ] `docs/superpowers/specs/2026-08-03-stage1-analysis-flow-hardening-design.md`의 「테스트 전략」 항목이 전부 대응 테스트를 갖는다
+
+---
+
+## 실행 중 정정
+
+이 계획서는 실행 전에 작성되어 **폐기되거나 틀린 것으로 드러난 지시를 그대로 담고 있다.** 다음 사이클이 이 문서를 입력으로 삼을 때 아래를 함께 읽어야 한다. 본문은 당시 판단의 기록으로 남겨 둔다.
+
+**1. 기준선 테스트 수 355는 낡았다.** 이 계획을 쓴 시점은 선행 사이클(A~E, 검증 정직성 후속 과제)이 병합되기 전이다. A~E가 36개를 더해 main이 391이 되었고, 이 브랜치가 병합한 뒤의 최종 수는 **417**이다. 본문의 태스크별 예상 수(360, 362, …)는 모두 355 기준이므로 실행 시 그대로 쓸 수 없다.
+
+**2. Task 8과 Task 9의 순서가 잘못됐다.** Task 8은 "`RunPipelineAsync`의 프로덕션 호출부가 0이 된다"를 전제하지만, 그 호출부를 없애는 것은 Task 9다. 계획대로 Task 8을 먼저 실행하면 빌드가 깨진다. 실행 시에는 Task 8이 `Program.cs`에 임시 인라인을 넣어 빌드를 유지하고 Task 9가 그것을 흡수했다. 두 태스크를 합치거나 순서를 뒤집는 편이 낫다.
+
+**3. Task 9 Step 6의 배치 모드 코드는 취소 판정을 잘못된 위치에 둔다.** 본문은 `[green]성공:[/] … 분석 완료 및 저장!` 출력 **뒤에** `Completion == PartialCancelled` 판정을 둔다. 그런데 `ExecutionOrder`가 후위 순회라 취소 시 루트는 대개 미분석 상태이고, 그러면 그보다 앞에 있는 빈 명세서 `throw`가 먼저 터져 사용자 취소가 "검증 파이프라인을 통과한 명세서 획득 실패"로 오보된다. 취소 판정은 **빈 명세서 검사보다 앞**에 와야 한다. 같은 결함이 대화형 블록에도 있었고 최종 리뷰에서야 발견됐다.
+
+**4. Task 9 Step 3의 `SaveDocumentsAsync(specMarkdown, migrationPlan, ...)` 시그니처는 폐기됐다.** 계획서 저장이 `!FromCache` 게이트 안에 있으면, 캐시 히트 시 방금 AI가 만든 `BatchMigrationPlan.md`를 버리면서 "저장!"이라고 보고한다. 계획서는 이번 실행의 새 산출물이므로 캐시 상태와 무관하다. 실행 시 `SaveMigrationPlanAsync`로 분리해 `Persistence` 게이트 밖에서 호출하도록 고쳤다.
+
+**5. Task 8의 "기존 40여 개 테스트가 수정 없이 통과하는 것이 곧 검증" 근거는 성립하지 않았다.** 이전 후 그 테스트들은 프로덕션이 아니라 테스트 전용 사본을 실행하게 된다. 최종 수정에서 `VerificationPipelineOrchestrator.CreateProcedureKey`를 공유 팩토리로 뽑아 양쪽이 같은 코드를 부르게 하고서야 근거가 회복됐다.
+
+**6. 설계 문서에도 정정 5건이 있다.** `docs/superpowers/specs/2026-08-03-stage1-analysis-flow-hardening-design.md`의 「정정(최종 리뷰)」 인용 블록들을 참조하라 — 배너 발화 경로, 저장 중 두 번째 Ctrl+C, 배치+재귀 계획서, `Program` 분기의 테스트 가능성 자평, 위 5번.
