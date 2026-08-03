@@ -129,5 +129,62 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("PATH", exception.Message);
         }
+
+        // ---- 스텁으로 조립된 호출을 실제로 실행한다 ----
+        // BuildArguments / ParseResponse 단위 테스트만으로는 인자 순서, command 배선,
+        // 실패 분류가 실제로 이어지는지 알 수 없다. 진짜 claude 바이너리는 부르지 않는다.
+
+        [Fact]
+        public async Task ChatAsync_StubReturnsSuccessJson_ContentIsTheResultText()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody: "cat > /dev/null\necho '{\"is_error\":false,\"result\":\"PONG\"}'\n",
+                windowsBody: "more > nul\r\necho {\"is_error\":false,\"result\":\"PONG\"}\r\n");
+
+            var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
+
+            var result = await client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f);
+
+            Assert.Equal("PONG", result.Content);
+        }
+
+        [Fact]
+        public async Task ChatAsync_StubExitsNonZeroWithQuotaMessage_ThrowsClassifiedException()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody: "cat > /dev/null\necho 'Claude usage limit reached' 1>&2\nexit 1\n",
+                windowsBody: "more > nul\r\necho Claude usage limit reached 1>&2\r\nexit 1\r\n");
+
+            var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
+
+            // 분류된 안내(구독 한도 소진 → provider 교체)와 원문이 모두 있어야 한다.
+            Assert.Contains("claude-cli", exception.Message);
+            Assert.Contains("구독", exception.Message);
+            Assert.Contains("usage limit reached", exception.Message);
+        }
+
+        // 종료 코드 0인데 JSON 안에만 오류가 담긴 경우도 분류기를 거쳐야 한다.
+        [Fact]
+        public async Task ChatAsync_StubReturnsInBandError_IsClassifiedAsQuota()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody:
+                    "cat > /dev/null\n" +
+                    "echo '{\"is_error\":true,\"subtype\":\"error\",\"api_error_status\":\"rate_limit_error\",\"result\":null}'\n",
+                windowsBody:
+                    "more > nul\r\n" +
+                    "echo {\"is_error\":true,\"subtype\":\"error\",\"api_error_status\":\"rate_limit_error\",\"result\":null}\r\n");
+
+            var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
+
+            Assert.Contains("구독", exception.Message);
+            Assert.Contains("rate_limit_error", exception.Message);
+        }
     }
 }
