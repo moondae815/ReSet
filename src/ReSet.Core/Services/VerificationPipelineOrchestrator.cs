@@ -356,7 +356,10 @@ namespace ReSet.Core.Services
                         }
                         accumulatedThinking.AppendLine();
                     }
-                    catch (Exception ex)
+                    // 토큰이 await에 직접 들어가지 않고 위에서 만든 tasks를 거쳐
+                    // Task.WhenAll로 간접 전달된다. 아키텍처 테스트는 await 인자에서
+                    // 토큰 모양을 찾으므로 이 자리를 보지 못한다 - 필터는 사람이 지켜야 한다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 하이브리드 후보 생성 중 실패: {ex.Message}");
                         return Result(null, spDef, null, null);
@@ -417,7 +420,9 @@ namespace ReSet.Core.Services
                             }
                         }
                     }
-                    catch (Exception ex)
+                    // 위와 같다 - 토큰은 reviewTasks를 거쳐 Task.WhenAll로 간접 전달되므로
+                    // 아키텍처 테스트가 이 자리를 세지 못한다. 필터를 지우지 마십시오.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - Critic 검토 중 실패: {ex.Message}");
                         return Result(null, spDef, null, null);
