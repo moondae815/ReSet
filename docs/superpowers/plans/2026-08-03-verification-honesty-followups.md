@@ -717,18 +717,22 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: `ConsolidatedPipelineResult` 도입과 `planReview` 추적
+### Task 4: `ConsolidatedPipelineResult` 도입, `planReview` 추적, 산출물 배선
 
 **Files:**
 - Create: `src/ReSet.Core/Models/ConsolidatedPipelineResult.cs`
 - Modify: `src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs:1561-1807`
+- Modify: `src/ReSet.Cli/Program.cs:727-730`, `:1175-1178`, `:1629-1633`, `:1647-1651`
 - Test: `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`
 
 **Interfaces:**
 - Consumes: `VerificationOutcome`, `ReviewResult`, `AiResult`
+- Consumes (배선 단계): `VerificationDocumentFormatter.FormatConsolidatedPlan` / `FormatUnverifiedPlan` (Task 1)
 - Produces:
   - `ReSet.Core.Models.ConsolidatedPipelineResult(string? Plan, AiResult? Result, ReviewResult? Review, VerificationOutcome Outcome)`
   - `VerificationPipelineOrchestrator.RunConsolidatedPipelineAsync(...) → Task<ConsolidatedPipelineResult>` (파라미터는 불변)
+
+**이 태스크는 반환 타입 변경과 호출부 배선을 함께 담는다.** 둘을 나누면 중간 커밋이 솔루션 전체 빌드를 깨뜨려 `git bisect`가 그 지점에서 쓸모없어진다. 리뷰어가 한쪽만 승인하는 것도 불가능하다 — 타입만 바꾼 상태로는 컴파일되지 않는다.
 
 **참고:** `RunConsolidatedPipelineAsync`는 인터페이스에 선언되어 있지 않다. 구상 클래스만 수정하면 된다.
 
@@ -911,50 +915,14 @@ public sealed record ConsolidatedPipelineResult(
                     planOutcome = VerificationOutcome.ReviewNotRun;
 ```
 
-- [ ] **Step 5: 테스트를 실행해 통과를 확인한다**
+- [ ] **Step 5: Core 테스트가 통과하는지 확인한다**
 
 Run: `dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~RunConsolidatedPipelineAsync"`
 Expected: 전부 통과. 기존 통합 파이프라인 테스트들도 `result.Plan` / `result.Result` 접근이 그대로 유지되므로 통과해야 한다
 
-- [ ] **Step 6: 커밋**
+이 시점에 `src/ReSet.Cli`는 컴파일되지 않는다 — 호출부가 아직 튜플을 기대한다. **여기서 커밋하지 않는다.** 다음 세 단계에서 배선을 마친 뒤 하나의 커밋으로 남긴다.
 
-`Program.cs`는 이 시점에 컴파일되지 않는다 — 호출부가 아직 튜플을 기대한다. Task 5에서 배선하므로 여기서는 `ReSet.Core`만 커밋한다.
-
-```bash
-dotnet build src/ReSet.Core
-```
-Expected: 성공
-
-```bash
-git add src/ReSet.Core tests/ReSet.Core.Tests
-git commit -m "feat(verification): return the plan outcome and its review to callers
-
-RunConsolidatedPipelineAsync tracked planOutcome correctly but the tuple
-could not carry it out, so BatchMigrationPlan.md recorded no verification
-state at all - least of all in batch mode, which returns before the L3 loop.
-
-planReview completes the symmetry with the specification path: both now
-clear the review when a document is regenerated without being re-reviewed.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 5: `Program.cs` 산출물 배선
-
-**Files:**
-- Modify: `src/ReSet.Cli/Program.cs:727-730` (배치 통합 경로)
-- Modify: `src/ReSet.Cli/Program.cs:1175-1178` (TUI 통합 경로)
-- Modify: `src/ReSet.Cli/Program.cs:1629-1633`, `:1647-1651` (단일 SP 경로)
-
-**Interfaces:**
-- Consumes: `VerificationDocumentFormatter.FormatConsolidatedPlan` / `FormatUnverifiedPlan` (Task 1), `ConsolidatedPipelineResult` (Task 4)
-- Produces: 없음
-
-**테스트에 관한 정직한 한계:** `Program.cs`의 이 구간은 최상위 문 안의 지역 흐름과 `SaveOutputsAsync` 지역 함수라 단위 테스트로 격리할 수 없다. 이 태스크의 검증은 (a) 렌더링 동작을 이미 고정한 Task 1의 포매터 테스트, (b) 컴파일, (c) 옛 조립 코드가 남아 있지 않은지 확인하는 grep 세 가지다. 새 자동화 테스트를 만들지 않는다.
-
-- [ ] **Step 1: 배치 통합 경로를 교체한다**
+- [ ] **Step 6: 배치 통합 경로를 교체한다**
 
 `src/ReSet.Cli/Program.cs:727-730`을 다음으로 바꾼다.
 
@@ -972,11 +940,11 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
                                     DateTime.Now));
 ```
 
-`effortSuffix`와 `metadataHeader` 지역 변수는 이 블록에서만 쓰이므로 함께 지운다. 지운 뒤 해당 블록에 남은 참조가 없는지 확인한다.
+`effortSuffix`와 `metadataHeader` 지역 변수는 이 블록에서만 쓰이므로 함께 지운다.
 
-- [ ] **Step 2: TUI 통합 경로를 교체한다**
+- [ ] **Step 7: TUI 통합 경로를 교체한다**
 
-`src/ReSet.Cli/Program.cs:1175-1178`을 Step 1과 **동일한 코드**로 바꾼다. 두 경로는 같은 산출물을 쓰며 같은 헤더를 가져야 한다.
+`src/ReSet.Cli/Program.cs:1175-1178`을 Step 6과 **동일한 코드**로 바꾼다. 두 경로는 같은 산출물을 쓰며 같은 헤더를 가져야 한다.
 
 ```csharp
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
@@ -994,7 +962,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 여기서도 그 블록의 `effortSuffix`와 `metadataHeader`를 지운다.
 
-- [ ] **Step 3: 단일 SP 경로를 교체한다**
+- [ ] **Step 8: 단일 SP 경로를 교체한다**
 
 `src/ReSet.Cli/Program.cs:1630-1633`에서 `scoreHeader`와 `metadataHeader` 선언을 지운다.
 
@@ -1016,7 +984,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
             }
 ```
 
-- [ ] **Step 4: 빌드하고 잔재를 확인한다**
+- [ ] **Step 9: 클린 빌드하고 잔재를 확인한다**
 
 ```bash
 dotnet clean && dotnet build 2>&1 | grep -E "error|warning" | sort | uniq -c
@@ -1033,31 +1001,39 @@ grep -n "effortSuffix" src/ReSet.Cli/Program.cs
 ```
 Expected: `:1629` 선언과 `:1669` 부근 `thinkingHeader` 사용 2곳만 남음
 
-- [ ] **Step 5: 전체 테스트를 실행한다**
+- [ ] **Step 10: 전체 테스트를 실행한다**
 
 Run: `dotnet test`
 Expected: 전부 통과
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 11: 커밋**
 
 ```bash
 git add -A
-git commit -m "fix(cli): stop stamping the specification's score on plan documents
+git commit -m "feat(verification): carry the plan outcome into the plan documents
 
-The single-SP BatchMigrationPlan.md never enters the pipeline (Program.cs:662)
-yet carried '> **AI 최종 신뢰도**: 87/100점' - a number earned by Spec.md.
-Gating that on the outcome would have left the false claim intact whenever
-the specification passed, so the score is gone and the source is named.
+RunConsolidatedPipelineAsync tracked planOutcome correctly but the tuple
+could not carry it out, so BatchMigrationPlan.md recorded no verification
+state at all - least of all in batch mode, which returns before the L3 loop.
+planReview completes the symmetry with the specification path: both now
+clear the review when a document is regenerated without being re-reviewed.
 
-The two consolidated paths had byte-identical header assembly duplicated in
-place; both now call one formatter.
+The single-SP plan never enters the pipeline (Program.cs:662) yet carried
+'> **AI 최종 신뢰도**: 87/100점' - a number earned by Spec.md. Gating that on
+the outcome would have left the false claim intact whenever the specification
+passed, so the score is gone and the source is named.
+
+The type change and the wiring ship together: split apart, the intermediate
+commit does not compile.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
+**테스트에 관한 정직한 한계:** `Program.cs`의 배선 구간은 최상위 문 안의 지역 흐름과 `SaveOutputsAsync` 지역 함수라 단위 테스트로 격리할 수 없다. 배선의 검증은 (a) 렌더링 동작을 이미 고정한 Task 1의 포매터 테스트, (b) 클린 빌드, (c) 옛 조립 코드가 남아 있지 않은지 확인하는 grep 세 가지다. 배선 자체를 위한 새 자동화 테스트를 만들지 않는다.
+
 ---
 
-### Task 6: `SpecHeaderReader` 별칭 커버리지
+### Task 5: `SpecHeaderReader` 별칭 커버리지
 
 **Files:**
 - Test: `tests/ReSet.Core.Tests/SpecHeaderReaderTests.cs`
@@ -1181,14 +1157,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: 문서 갱신
+### Task 6: 문서 갱신
 
 **Files:**
 - Modify: `AGENTS.md` (테스트 수, 포매터 타입 이름)
 - Modify: `docs/architecture.md` (포매터 타입 이름, 통합 파이프라인 반환 타입)
 
 **Interfaces:**
-- Consumes: Task 1~6의 최종 상태
+- Consumes: Task 1~5의 최종 상태
 - Produces: 없음
 
 - [ ] **Step 1: 실제 테스트 수를 확인한다**
@@ -1234,14 +1210,13 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## 실행 순서와 의존 관계
 
 ```
-Task 1 (포매터) ──┐
-Task 4 (반환 타입) ─┴─→ Task 5 (배선) ─→ Task 7 (문서)
-Task 2 (캐시)   ────────────────────────┘
-Task 3 (L1 플래그) ─────────────────────┘
-Task 6 (별칭)   ────────────────────────┘
+Task 1 (포매터) ──→ Task 4 (반환 타입 + 배선) ─┐
+Task 2 (캐시)   ──────────────────────────────┤
+Task 3 (L1 플래그) ───────────────────────────┼─→ Task 6 (문서)
+Task 5 (별칭)   ──────────────────────────────┘
 ```
 
-Task 2, 3, 6은 서로 독립이며 Task 1/4/5와도 독립이다. Task 5는 Task 1과 Task 4가 모두 끝난 뒤에만 시작할 수 있다 — Task 4 이후 `Program.cs`는 일시적으로 컴파일되지 않는다.
+Task 2, 3, 5는 서로 독립이며 Task 1/4와도 독립이다. Task 4만 Task 1을 기다린다 — 포매터 진입점이 있어야 배선할 수 있다.
 
 ## 자체 검토 결과
 
@@ -1251,10 +1226,10 @@ Task 2, 3, 6은 서로 독립이며 Task 1/4/5와도 독립이다. Task 5는 Tas
 |---|---|
 | A 캐시 포맷 버전 (`!=` 비교, `MigrateLegacyCaches` 불변) | Task 2 |
 | B dynamic 영역 L1 플래그 | Task 3 |
-| C `ConsolidatedPipelineResult` + `planReview` 5개 지점 | Task 4 |
-| C `Program.cs` 3개 호출부 | Task 5 |
-| D 단일 SP 계획서 점수 제거 | Task 5 Step 3 |
-| E 별칭 19개 + 정규화 순서 | Task 6 |
+| C `ConsolidatedPipelineResult` + `planReview` 5개 지점 | Task 4 Step 1-5 |
+| C `Program.cs` 3개 호출부 | Task 4 Step 6-8 |
+| D 단일 SP 계획서 점수 제거 | Task 4 Step 8 |
+| E 별칭 19개 + 정규화 순서 | Task 5 |
 | `VerificationDocumentFormatter` 개명, 3개 진입점, `ScoreLabels` | Task 1 |
 | `FormatConsolidatedPlan`의 `showScores` 규칙 | Task 1 Step 2 두 번째 테스트 |
 | `ConsoleUserInteraction.cs:101` 주석 갱신 | Task 1 Step 5 |
@@ -1263,10 +1238,10 @@ Task 2, 3, 6은 서로 독립이며 Task 1/4/5와도 독립이다. Task 5는 Tas
 
 **타입 일관성**
 
-`FormatSpecification` / `FormatConsolidatedPlan` / `FormatUnverifiedPlan`, `ConsolidatedPipelineResult(Plan, Result, Review, Outcome)`, `CacheEntry.FormatVersion`, `CurrentCacheFormatVersion` — Task 1·2·4에서 정의한 이름이 Task 5에서 그대로 쓰인다.
+`FormatSpecification` / `FormatConsolidatedPlan` / `FormatUnverifiedPlan`, `ConsolidatedPipelineResult(Plan, Result, Review, Outcome)`, `CacheEntry.FormatVersion`, `CurrentCacheFormatVersion` — Task 1과 2에서 정의한 이름이 Task 4에서 그대로 쓰인다.
 
 **계획 수립 중 확인한 함정 세 가지**
 
 1. `MechanicalValidator`는 인터페이스가 없고 메서드가 `virtual`이 아니라 NSubstitute로 대체할 수 없다. Task 3의 L1 통과/실패는 실제 마크다운 본문으로 유도해야 한다 (Global Constraints에 필수 H2 목록을 명시했다).
-2. `Program.cs:1629`의 `effortSuffix`는 `:1669`의 `thinkingHeader`에서도 쓰인다. `metadataHeader`와 함께 지우면 빌드가 깨진다 (Task 5 Step 3에 명시했다).
+2. `Program.cs:1629`의 `effortSuffix`는 `:1669`의 `thinkingHeader`에서도 쓰인다. `metadataHeader`와 함께 지우면 빌드가 깨진다 (Task 4 Step 8에 명시했다).
 3. Task 2의 테스트 초안이 문자열 치환으로 `FormatVersion` 키를 지우려 했다. 필드가 클래스 마지막에 선언되면 후행 쉼표가 남아 JSON이 깨지고, `LoadCacheIndex`의 예외를 `IsCacheValid`의 soft-fail이 삼켜 `false`를 반환한다 — 게이트를 검증하지 않은 채 **테스트가 통과하는 거짓 통과**다. `JsonNode`로 구조를 다루고, 재작성된 JSON이 파싱 가능한지 단언하도록 고쳤다.
