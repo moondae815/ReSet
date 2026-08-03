@@ -2896,6 +2896,110 @@ namespace ReSet.Core.Tests
                     specs, "C#", "TestJobCancelRefix", "OpenAI", _consolidatedOutputRoot, isBatchMode: false));
         }
 
+        // 위 세 테스트가 자가 수정(두 번째) 재생성을 고정한다면, 아래 두 테스트는 그보다 한 번
+        // 앞선 L3 첫 피드백 재생성을 고정한다. 이쪽 catch는 bare catch가 아니라 NotifyError를
+        // 동반해 눈에 덜 띄었을 뿐, 취소를 삼키고 continue로 같은 승인 화면을 다시 띄우는
+        // 동일한 결함이었다.
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_CancelDuringL3FirstFeedbackRegeneration_Propagates()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CancelL3First", CodeObjectType.Procedure);
+
+            aiService.ProviderName.Returns("OpenAI");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_CancelL3First", DdlText = "SELECT 1;"
+                }));
+
+            var l1Valid =
+                "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+
+            // 호출 순서: 1차 생성(L1 통과), L3 첫 피드백 재생성(취소).
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = l1Valid }),
+                    Task.FromException<AiResult>(new OperationCanceledException()));
+
+            var cleanReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+            aiService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(cleanReview));
+
+            // 두 번째 응답이 승인인 이유는 위 자가 수정 테스트와 같다. 취소를 삼키면 승인 화면이
+            // 한 번 더 뜨고 테스트는 예외 없이 끝난다.
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback, UserFeedback = "보완해 주세요"
+                    }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction, "1", "gpt-4");
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB", key, 1, "OpenAI", "rules", false,
+                    Path.Combine(Path.GetTempPath(), $"ReSet-CancelL3First-{Guid.NewGuid():N}"), false,
+                    cancellationToken: CancellationToken.None, directDependenciesOnly: true));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_CancelDuringL3FirstFeedbackRegeneration_Propagates()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var validPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Structure" });
+
+            // 호출 순서: 1차 생성(L1 통과), L3 첫 피드백 재생성(취소).
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = validPlan }),
+                    Task.FromException<AiResult>(new OperationCanceledException()));
+
+            var goodReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback, UserFeedback = "보완해 주세요"
+                    }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunConsolidatedPipelineAsync(
+                    specs, "C#", "TestJobCancelFirstRegen", "OpenAI", _consolidatedOutputRoot, isBatchMode: false));
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",
