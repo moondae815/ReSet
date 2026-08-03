@@ -449,6 +449,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         MarkFailed(node, ex, "명세서 파일 저장");
+                        graph.PersistenceErrors.Add($"{analysis.Key.Schema}.{analysis.Key.Name}: {ex.Message}");
                         statusChanged = true;
                         Log.Warning(ex, "[의존성 분석] 명세서 파일 저장 실패 (계속 진행): {ObjectKey}", analysis.Key.CanonicalName);
                     }
@@ -465,7 +466,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     continue;
                 }
 
-                await PersistThinkingAsync(analysis, paths, cancellationToken);
+                await PersistThinkingAsync(analysis, paths, request, cancellationToken);
 
                 await _metadataExporter.ExportCodeObjectArtifactsAsync(
                     analysis.Definition,
@@ -475,14 +476,28 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     paths,
                     cancellationToken: cancellationToken);
             }
+
+            // 노드 하나라도 저장에 실패했으면 전체를 Failed로 부른다. 사용자가
+            // 알아야 하는 것은 "일부가 디스크에 없다"는 사실이고, 어느 노드인지는
+            // PersistenceErrors와 노드 Status가 말해 준다.
+            graph.Persistence = graph.PersistenceErrors.Count > 0
+                ? ArtifactPersistence.Failed
+                : ArtifactPersistence.Persisted;
         }
         catch (OperationCanceledException)
         {
-            throw;
+            // AnalyzeAsync가 30초 grace 토큰을 넘기므로 이 취소는 사용자 Ctrl+C가
+            // 아니라 저장 제한 시간 초과다. 다시 던지면 호출부가 결과를 못 받아
+            // "저장에 실패했다"는 사실조차 전달되지 않으므로 상태로 바꾼다.
+            graph.Persistence = ArtifactPersistence.Failed;
+            graph.PersistenceErrors.Add("저장 제한 시간(30초)을 초과했습니다.");
+            Log.Warning("[의존성 분석] 저장 제한 시간 초과: {ObjectKey}", rootKey.CanonicalName);
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "[의존성 분석] 객체 아티팩트 저장 중 오류가 발생했습니다 (계속 진행): {ObjectKey}", rootKey.CanonicalName);
+            graph.Persistence = ArtifactPersistence.Failed;
+            graph.PersistenceErrors.Add(ex.Message);
+            Log.Warning(ex, "[의존성 분석] 객체 아티팩트 저장 중 오류가 발생했습니다: {ObjectKey}", rootKey.CanonicalName);
         }
     }
 
@@ -501,6 +516,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
     private static async Task PersistThinkingAsync(
         CodeObjectAnalysisResult analysis,
         OutputPathResolver paths,
+        DependencyAnalysisRequest request,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(analysis.ThinkingText))
@@ -513,10 +529,19 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             var thinkingPath = Path.Combine(
                 paths.ResolveDocsDirectory(analysis.Key),
                 "Thinking.md");
+            var effortSuffix = string.IsNullOrWhiteSpace(request.ActorEffort)
+                ? string.Empty
+                : $", Effort: {request.ActorEffort}";
+            var header =
+                "# AI 추론 과정 로그 (Thinking Process Log)\n\n" +
+                $"- **기본 분석 AI 정보**: {request.Provider} ({request.ModelName}{effortSuffix})\n" +
+                $"- **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n" +
+                "본 문서는 저장 프로시저 역공학 및 검증 파이프라인 수행 중 사용된 AI 모델들의 추론 과정(Thinking Process)을 기록한 마크다운 문서입니다.\n\n" +
+                "---\n\n";
+
             await File.WriteAllTextAsync(
                 thinkingPath,
-                "# AI 추론 과정 로그 (Thinking Process Log)\n\n---\n\n" +
-                analysis.ThinkingText,
+                header + analysis.ThinkingText,
                 cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

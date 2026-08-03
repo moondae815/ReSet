@@ -179,6 +179,99 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_ArtifactRootUnwritable_ReportsPersistenceFailureInsteadOfLoggingSilently()
+    {
+        // 저장이 통째로 실패했는데 화면에 성공 패널이 뜨던 결함.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-PersistFail-{Guid.NewGuid():N}");
+        // 출력 루트 자리에 파일을 만들어 하위 디렉터리 생성을 실패시킨다.
+        await File.WriteAllTextAsync(outputRoot, "not a directory");
+
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot),
+                CancellationToken.None);
+
+            Assert.Equal(ArtifactPersistence.Failed, result.Persistence);
+            Assert.NotEmpty(result.PersistenceErrors);
+        }
+        finally
+        {
+            if (File.Exists(outputRoot)) File.Delete(outputRoot);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_SuccessfulRun_ReportsPersisted()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Persisted-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot),
+                CancellationToken.None);
+
+            Assert.Equal(ArtifactPersistence.Persisted, result.Persistence);
+            Assert.Empty(result.PersistenceErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ThinkingLogCarriesTheAnalysisModelIdentity()
+    {
+        // 재귀 모드의 하위 객체 Thinking.md가 루트보다 정보가 적을 이유가 없다.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Thinking-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                ThinkingText = "private reasoning"
+            }));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot, modelName: "gpt-test", actorEffort: "high"),
+                CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+            var thinking = await File.ReadAllTextAsync(thinkingPath);
+
+            Assert.Contains("**기본 분석 AI 정보**: OpenAI (gpt-test, Effort: high)", thinking);
+            Assert.Contains("**문서 작성일시**:", thinking);
+            Assert.Contains("private reasoning", thinking);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts()
     {
         var root = Key("USP_Root", CodeObjectType.Procedure);
