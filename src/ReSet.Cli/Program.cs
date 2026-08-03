@@ -93,12 +93,26 @@ namespace ReSet.Cli
             // 0. Ctrl+C 이벤트 바인딩 (활성화된 CancellationTokenSource를 취소하도록 함)
             Console.CancelKeyPress += (sender, e) =>
             {
-                if (_currentCts != null && !_currentCts.IsCancellationRequested)
+                if (_currentCts == null)
+                {
+                    return;
+                }
+
+                if (!_currentCts.IsCancellationRequested)
                 {
                     AnsiConsole.MarkupLine("\n[red]사용자에 의해 작업 취소 요청이 발생했습니다. 안전하게 정리 중...[/]");
                     _currentCts.Cancel();
-                    e.Cancel = true; // 프로세스 즉시 종료 방지 및 OperationCanceledException 유도
                 }
+                else
+                {
+                    // 취소 이후 구간은 최대 30초짜리 산출물 저장(AnalyzeAsync의 grace CTS)이고
+                    // 그동안 화면은 조용하다. 여기서 e.Cancel을 설정하지 않으면 .NET 기본 동작이
+                    // 프로세스를 즉시 죽여 쓰던 Spec.md가 truncate된 채 남고, 재링크가 성공 노드를
+                    // 다시 쓰므로 이전 실행의 멀쩡한 명세서까지 손상된다.
+                    AnsiConsole.MarkupLine("\n[yellow]이미 취소를 요청했습니다. 완료된 산출물을 저장 중입니다. 잠시만 기다려 주세요...[/]");
+                }
+
+                e.Cancel = true; // 프로세스 즉시 종료 방지 및 OperationCanceledException 유도
             };
 
             // 초기 전역 CancellationTokenSource 생성
@@ -700,15 +714,21 @@ namespace ReSet.Cli
                                     provider, modelName, result.Review, result.Outcome,
                                     thinkingText, actorEffort, result.Scope);
                             }
+                        }
 
-                            // 계획서는 이번 실행이 방금 만든 산출물이라 캐시에서 나올 수 없다.
-                            // 명세서의 캐시 상태에 묶으면 AI 비용만 내고 파일을 버리게 된다.
-                            if (!string.IsNullOrEmpty(migrationPlan))
-                            {
-                                await SaveMigrationPlanAsync(
-                                    migrationPlan, outputDir, schema, name,
-                                    provider, modelName, result.Outcome, actorEffort);
-                            }
+                        // 계획서는 이번 실행이 방금 만든 산출물이라 캐시에서 나올 수 없다.
+                        // 명세서의 캐시 상태에 묶으면 AI 비용만 내고 파일을 버리게 된다.
+                        // Persistence 게이트 밖에 둔다 — GenerateBatchMigrationPlanAsync는
+                        // Persistence와 무관하게 호출되므로, 게이트 안에 두면 재귀 경로에서
+                        // AI 비용을 내고 결과를 버린 뒤 "분석 완료 및 저장!"이라고 보고하게 된다.
+                        // 저장 경로({outputDir}/Procedures/{schema}.{name}/docs/BatchMigrationPlan.md)는
+                        // OutputPathResolver.ResolveDocsDirectory와 같고 오케스트레이터는 이 파일을
+                        // 쓰지 않으므로 소유권이 겹치지 않는다.
+                        if (!string.IsNullOrEmpty(migrationPlan))
+                        {
+                            await SaveMigrationPlanAsync(
+                                migrationPlan, outputDir, schema, name,
+                                provider, modelName, result.Outcome, actorEffort);
                         }
 
                         // 저장이 실패했는데 "저장!"이라고 말하면 배치 로그가 거짓이 된다.
@@ -983,6 +1003,22 @@ namespace ReSet.Cli
                                 allowExternalDatabaseConnections,
                                 dependencyArtifactMode,
                                 activeCts.Token);
+
+                            // 취소 판정을 명세서 검사보다 먼저 한다(배치 블록과 같은 순서).
+                            // ExecutionOrder는 후위 순회라 루트가 마지막에 실행되므로 재귀 취소 시
+                            // 루트 명세서는 거의 항상 비어 있고, 순서를 뒤집으면 사용자 Ctrl+C가
+                            // "명세서 생성 실패"라는 분석 오류로 오보된다.
+                            // 완료분은 오케스트레이터가 이미 저장했으므로(PartialCancelled ⟹ 재귀 ⟹
+                            // Persistence != NotAttempted) 여기서 빠져나가도 잃는 산출물이 없다.
+                            // 정지 없이 continue하면 메뉴와 SP 목록이 방금 낸 부분 완료 패널을 밀어낸다.
+                            if (result.Completion == GraphCompletion.PartialCancelled)
+                            {
+                                AnsiConsole.MarkupLine("\n[yellow]분석 작업이 사용자에 의해 중단되었습니다. 메인 메뉴로 돌아갑니다.[/]");
+                                AnsiConsole.WriteLine();
+                                AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 계속합니다...[/]");
+                                Console.ReadKey(true);
+                                continue;
+                            }
 
                             var specMarkdown = result.SpecMarkdown;
                             if (string.IsNullOrEmpty(specMarkdown))
