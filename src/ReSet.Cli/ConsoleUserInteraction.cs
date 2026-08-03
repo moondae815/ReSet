@@ -122,13 +122,10 @@ namespace ReSet.Cli
             var statusText = "";
             if (!isVerified)
             {
-                var statusLabel = outcome switch
-                {
-                    VerificationOutcome.L1Exhausted => "L1 미통과",
-                    VerificationOutcome.QualityRejected => "품질 미달",
-                    VerificationOutcome.ReviewNotRun => "리뷰 미수행",
-                    _ => "알 수 없음"
-                };
+                // 표기는 VerificationDocumentFormatter가 단독으로 소유한다. 같은 switch를
+                // 복제하면 VerificationOutcome에 상태가 추가됐을 때 한 곳이 빠뜨릴 수 있고,
+                // 그러면 승인 화면만 다른 말을 하게 된다.
+                var statusLabel = VerificationDocumentFormatter.StatusLabel(outcome);
                 statusText = $" | [bold red]검증 상태: {statusLabel}[/]";
             }
 
