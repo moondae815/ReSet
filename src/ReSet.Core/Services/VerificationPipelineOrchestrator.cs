@@ -74,34 +74,6 @@ namespace ReSet.Core.Services
             _maxAttempts = _maxL2Attempts == -1 ? -1 : 1 + _maxL2Attempts;
         }
 
-        public async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunPipelineAsync(
-            string connectionString,
-            string schema,
-            string name,
-            int maxDepth,
-            string provider,
-            string instructions,
-            bool isBatchMode,
-            string outputDirectory = "./output",
-            bool enableCache = false,
-            CancellationToken cancellationToken = default)
-        {
-            var database = ResolveCurrentDatabase(connectionString) ?? string.Empty;
-            var key = CodeObjectKey.Create(database, schema, name, CodeObjectType.Procedure);
-            var result = await RunCodeObjectPipelineAsync(
-                connectionString,
-                key,
-                maxDepth,
-                provider,
-                instructions,
-                isBatchMode,
-                outputDirectory,
-                enableCache,
-                cancellationToken);
-
-            return (result.SpecMarkdown, result.SpDef, result.Review, result.ThinkingText, result.Outcome);
-        }
-
         public async Task<CodeObjectPipelineResult> RunCodeObjectPipelineAsync(
             string connectionString,
             CodeObjectKey key,

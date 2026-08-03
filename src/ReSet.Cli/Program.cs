@@ -1429,10 +1429,17 @@ namespace ReSet.Cli
         {
             if (!analyzeReferencedCodeObjects)
             {
-                return await verificationPipelineOrchestrator.RunPipelineAsync(
+                // Task 8에서 튜플 반환 파이프라인 헬퍼가 프로덕션에서 제거되어, 기존에
+                // 그 메서드가 하던 키 조립·호출을 여기서 그대로 인라인한다. 반환 타입과
+                // 동작은 동일하다(Task 9에서 SpAnalysisOutcome으로 정식 교체 예정).
+                var singleObjectDatabase =
+                    VerificationPipelineOrchestrator.ResolveCurrentDatabase(connectionString)
+                    ?? string.Empty;
+                var singleObjectKey = CodeObjectKey.Create(
+                    singleObjectDatabase, schema, name, CodeObjectType.Procedure);
+                var pipelineResult = await verificationPipelineOrchestrator.RunCodeObjectPipelineAsync(
                     connectionString,
-                    schema,
-                    name,
+                    singleObjectKey,
                     maxDepth,
                     provider,
                     instructions,
@@ -1440,6 +1447,8 @@ namespace ReSet.Cli
                     outputDirectory,
                     enableCache,
                     cancellationToken);
+
+                return (pipelineResult.SpecMarkdown, pipelineResult.SpDef, pipelineResult.Review, pipelineResult.ThinkingText, pipelineResult.Outcome);
             }
 
             var database = await ResolveAnalysisDatabaseAsync(
