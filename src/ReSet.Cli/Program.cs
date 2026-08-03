@@ -753,6 +753,7 @@ namespace ReSet.Cli
                             await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
                                 spDefs,
                                 consolidatedPlan,
+                                pipelineResult.Outcome,
                                 cliArgs.JobName,
                                 jobsOutputDir,
                                 targetLanguage,
@@ -1232,6 +1233,7 @@ namespace ReSet.Cli
                                 await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
                                     spDefs,
                                     consolidatedPlan,
+                                    pipelineResult.Outcome,
                                     jobName,
                                     jobsOutputDir,
                                     targetLanguage,

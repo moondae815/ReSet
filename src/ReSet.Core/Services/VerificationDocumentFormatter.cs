@@ -143,7 +143,12 @@ CRUD 점수: {review.ScoreCrud}/10 # {labels.Crud}
         return $"> [!NOTE]\n> **문서 작성일시**: {timestamp:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n{scoreHeader}{statusNote}\n";
     }
 
-    private static string StatusLabel(VerificationOutcome outcome) => outcome switch
+    /// <summary>
+    /// 종료 상태의 한국어 표기. 지시서 번들(MetadataExporter)도 같은 표기를 써야 하므로
+    /// 공개한다 - 같은 switch를 여러 곳에 복제하면 한 곳이 새 상태를 빠뜨렸을 때
+    /// 그 문서만 조용히 다른 말을 하게 된다.
+    /// </summary>
+    public static string StatusLabel(VerificationOutcome outcome) => outcome switch
     {
         VerificationOutcome.Passed => "통과",
         VerificationOutcome.QualityRejected => "품질 미달",

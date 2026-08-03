@@ -348,9 +348,54 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// 지시서 번들 상단에 들어갈 검증 상태 고지를 만든다.
+        ///
+        /// 번들은 계획서 본문을 그대로 심는다. L1 소진/품질 미달/리뷰 미수행 세 상태는
+        /// 배너가 계획서 문자열 자체에 붙어 번들까지 따라오지만, L3 피드백 재생성 경로는
+        /// 계획서를 통째로 교체하므로 배너가 사라지고 YAML 헤더에만 의존한다 - 그리고
+        /// 그 헤더는 번들에 들어가지 않는다. 그 결과 한 번도 리뷰받지 않은 계획서가
+        /// 아무 표기 없이 자동 코딩 에이전트에게 전달되어 왔다.
+        ///
+        /// 그래서 문자열에 무엇이 우연히 들어 있는지 살피지 않고 종료 상태 값에서
+        /// 직접 고지를 만든다. 앞으로 어떤 종료 분기가 배너를 빠뜨려도 번들은 사실을 말한다.
+        /// </summary>
+        private static string BuildPlanVerificationSection(VerificationOutcome planOutcome)
+        {
+            var label = VerificationDocumentFormatter.StatusLabel(planOutcome);
+            var sb = new System.Text.StringBuilder();
+
+            if (planOutcome == VerificationOutcome.Passed)
+            {
+                sb.AppendLine("## ✅ 0. 이 계획서의 검증 상태");
+                sb.AppendLine();
+                sb.AppendLine($"**{label}** — L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과한 계획입니다.");
+                return sb.ToString();
+            }
+
+            var reason = planOutcome switch
+            {
+                VerificationOutcome.QualityRejected =>
+                    "L2 AI 교차 리뷰의 품질 기준을 통과하지 못한 계획입니다.",
+                VerificationOutcome.ReviewNotRun =>
+                    "L2 AI 교차 리뷰를 거치지 않은 계획입니다.",
+                VerificationOutcome.L1Exhausted =>
+                    "L1 기계 검증을 통과하지 못한 채 확정된 계획입니다.",
+                _ =>
+                    "검증 상태를 확인할 수 없는 계획입니다."
+            };
+
+            sb.AppendLine("## ⚠️ 0. 이 계획서의 검증 상태");
+            sb.AppendLine();
+            sb.AppendLine($"**{label}** — {reason}");
+            sb.AppendLine("아래 계획을 그대로 구현하기 전에 사람의 검토가 필요합니다.");
+            return sb.ToString();
+        }
+
         public async Task ExportConsolidatedMigrationInstructionsAsync(
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
+            VerificationOutcome planOutcome,
             string jobName,
             string baseOutputDir,
             string targetLanguage,
@@ -380,6 +425,12 @@ namespace ReSet.Core.Services
                 sb.AppendLine("본 문서는 복수의 SQL Server Stored Procedure들을 하나의 통합 배치 작업으로 마이그레이션하기 위해 코딩 에이전트(Claude Code, Antigravity CLI 등)에 제공되는 지시서 및 컨텍스트입니다.");
                 sb.AppendLine("아래 통합 배치 전환 계획서(Consolidated Migration Plan)와 개별 의존성 테이블 스키마들을 분석하여 현대화된 배치 소스 코드를 작성해 주십시오.");
                 sb.AppendLine();
+                sb.AppendLine("---");
+                sb.AppendLine();
+                // 계획 본문보다 먼저 온다. 코딩 에이전트는 위에서부터 읽으므로 계획을
+                // 소비한 뒤에 경고를 만나면 이미 늦다. 통과일 때도 침묵하지 않는다 -
+                // "표기 부재 = 검증됨"이라는 추론이 이 계열 결함의 뿌리다.
+                sb.AppendLine(BuildPlanVerificationSection(planOutcome));
                 sb.AppendLine("---");
                 sb.AppendLine();
                 sb.AppendLine("## 🗺️ 1. 통합 배치 전환 계획 (Consolidated Migration Plan)");
