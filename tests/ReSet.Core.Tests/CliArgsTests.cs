@@ -67,7 +67,7 @@ namespace ReSet.Core.Tests
                 CancellationToken.None);
 
             Assert.Equal("SnapshotDB", dependencyOrchestrator.LastRootKey?.Database);
-            Assert.Equal("SnapshotDB", result.SpDef?.ObjectKey?.Database);
+            Assert.Equal("SnapshotDB", result.Definition?.ObjectKey?.Database);
         }
 
         [Fact]

@@ -417,3 +417,4 @@ private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
 - `SaveOutputsAsync`의 경로 조립이 `OutputPathResolver.EncodePathSegment`를 쓰지 않아 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회 경로와 저장 경로가 갈라지는 문제. 발생률이 낮고 이번 네 결함과 독립적이다.
 - SP 목록이 시작 시 1회만 로드되어 세션 중 DB 변경이 반영되지 않는 문제.
 - L2 리뷰 호출 재시도 인프라. A~E 스펙이 이미 별도 사이클로 남겨둔 항목이다.
+- 배치 모드에서 참조분석과 `MigrationSettings:Enabled`를 동시에 켜면 단일 SP의 `BatchMigrationPlan.md`가 생성되지 않는다. 저장 책임이 오케스트레이터로 넘어갔는데 오케스트레이터는 계획서 개념을 갖지 않기 때문이다. A~E의 결함 D가 지적했듯 이 계획서는 애초에 검증을 거치지 않으므로 손실이 크지 않다고 판단했다. 필요하면 별도 사이클에서 계획서 생성을 파이프라인 안으로 옮긴다.

@@ -621,7 +621,7 @@ namespace ReSet.Cli
                         var schema = parts[0];
                         var name = parts[1];
 
-                        var (specMarkdown, spDef, reviewResult, thinkingText, outcome) = await RunConfiguredAnalysisAsync(
+                        var result = await RunConfiguredAnalysisAsync(
                             analyzeReferencedCodeObjects,
                             dependencyAnalysisOrchestrator,
                             orchestrator,
@@ -642,6 +642,7 @@ namespace ReSet.Cli
                             dependencyArtifactMode,
                             globalCts.Token);
 
+                        var specMarkdown = result.SpecMarkdown;
                         if (string.IsNullOrEmpty(specMarkdown))
                         {
                             throw new Exception("검증 파이프라인을 통과한 명세서 획득 실패");
@@ -650,16 +651,17 @@ namespace ReSet.Cli
                         // 수집된 사양서 데이터를 메모리에 보관
                         var specFileName = "docs/Spec.md";
                         specsData.Add((specFileName, specMarkdown));
-                        if (spDef != null)
+                        if (result.Definition != null)
                         {
-                            spDefs.Add(spDef);
+                            spDefs.Add(result.Definition);
                         }
 
+                        var thinkingText = result.ThinkingText;
                         string? migrationPlan = null;
-                        if (migrationEnabled && spDef != null)
+                        if (migrationEnabled && result.Definition != null)
                         {
                             AnsiConsole.MarkupLine($"[yellow]{schema}.{name}[/] - 배치 전환 계획 설계서 작성 중 ({targetLanguage})...");
-                            var migrationResult = await aiService.GenerateBatchMigrationPlanAsync(spDef, targetLanguage, globalCts.Token);
+                            var migrationResult = await aiService.GenerateBatchMigrationPlanAsync(result.Definition, targetLanguage, globalCts.Token);
                             migrationPlan = migrationResult.Content;
                             if (!string.IsNullOrWhiteSpace(migrationResult.ThinkingText))
                             {
@@ -672,13 +674,39 @@ namespace ReSet.Cli
                             Directory.CreateDirectory(outputDir);
                         }
 
-                        await SaveOutputsAsync(
-                            spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
-                            metadataExporter, saveRawJson, saveRawContext,
-                            saveRawFiles && (!analyzeReferencedCodeObjects || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
-                            schema, name, provider, modelName, reviewResult, outcome, thinkingText, actorEffort, configuration);
+                        // 재귀 경로는 오케스트레이터가 이미 저장했다(Persistence != NotAttempted).
+                        if (result.Persistence == ArtifactPersistence.NotAttempted)
+                        {
+                            await SaveRawArtifactsAsync(
+                                result.Definition, outputDir, instructionsFile, metadataExporter,
+                                saveRawJson, saveRawContext, saveRawFiles, schema, name);
 
-                        AnsiConsole.MarkupLine($"[green]성공:[/] {selectedOption} 분석 완료 및 저장!");
+                            if (!result.FromCache)
+                            {
+                                await SaveDocumentsAsync(
+                                    specMarkdown, migrationPlan, outputDir, schema, name,
+                                    provider, modelName, result.Review, result.Outcome,
+                                    thinkingText, actorEffort, result.Scope);
+                            }
+                        }
+
+                        // 저장이 실패했는데 "저장!"이라고 말하면 배치 로그가 거짓이 된다.
+                        // 상세 사유는 RenderAnalysisDiagnostics가 이미 냈다.
+                        if (result.Persistence == ArtifactPersistence.Failed)
+                        {
+                            AnsiConsole.MarkupLine($"[red]실패:[/] {selectedOption} 산출물 저장에 실패했습니다.");
+                        }
+                        else
+                        {
+                            AnsiConsole.MarkupLine($"[green]성공:[/] {selectedOption} 분석 완료 및 저장!");
+                        }
+
+                        // AnalyzeAsync가 더 이상 예외로 취소를 알리지 않으므로 상태로 판정한다.
+                        if (result.Completion == GraphCompletion.PartialCancelled)
+                        {
+                            AnsiConsole.MarkupLine("\n[red]사용자에 의해 배치 분석 작업이 중단되었습니다. 프로세스를 종료합니다.[/]");
+                            break;
+                        }
                     }
                     catch (OperationCanceledException)
                     {
@@ -904,6 +932,10 @@ namespace ReSet.Cli
                             continue;
                         }
 
+                        AnsiConsole.MarkupLine(
+                            "[grey]참조 분석을 켜면 참조 객체마다 별도 명세서와 승인 화면이 생기고,[/]");
+                        AnsiConsole.MarkupLine(
+                            "[grey]루트 SP는 직접 의존성만으로 분석됩니다(하위 SP가 쓰는 테이블 스키마는 루트 컨텍스트에서 제외).[/]");
                         var analyzeSelectedReferences = AnsiConsole.Confirm(
                             "선택한 SP가 참조하는 SP/UDF도 함께 분석하시겠습니까?",
                             analyzeReferencedCodeObjects);
@@ -917,7 +949,7 @@ namespace ReSet.Cli
 
                         try
                         {
-                            var (specMarkdown, spDef, reviewResult, thinkingText, outcome) = await RunConfiguredAnalysisAsync(
+                            var result = await RunConfiguredAnalysisAsync(
                                 analyzeSelectedReferences,
                                 dependencyAnalysisOrchestrator,
                                 orchestrator,
@@ -938,32 +970,36 @@ namespace ReSet.Cli
                                 dependencyArtifactMode,
                                 activeCts.Token);
 
+                            var specMarkdown = result.SpecMarkdown;
                             if (string.IsNullOrEmpty(specMarkdown))
                             {
                                 AnsiConsole.MarkupLine("[red]분석이 중단되었거나 명세서 생성에 실패했습니다.[/]");
                                 continue;
                             }
 
-                            // 분석과 전환 분리 요구에 따라, 개별 분석 시에는 배치 전환 설계서를 생성하지 않음 (null 지정)
-                            string? migrationPlan = null;
-
                             if (!Directory.Exists(outputDir))
                             {
                                 Directory.CreateDirectory(outputDir);
                             }
 
-                            await SaveOutputsAsync(
-                                spDef, specMarkdown, migrationPlan, outputDir, instructionsFile,
-                                metadataExporter, saveRawJson, saveRawContext,
-                                saveRawFiles && (!analyzeSelectedReferences || dependencyArtifactMode == DependencyArtifactMode.PortableBundle),
-                                schema, name, provider, modelName, reviewResult, outcome, thinkingText, actorEffort, configuration);
-
-                            var outputFileName = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs", "Spec.md");
-                            AnsiConsole.Write(new Panel(new Markup($"[green]성공적으로 파일이 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(outputFileName)}"))
+                            // 재귀 경로는 오케스트레이터가 이미 저장했다(Persistence != NotAttempted).
+                            if (result.Persistence == ArtifactPersistence.NotAttempted)
                             {
-                                Border = BoxBorder.Rounded,
-                                Header = new PanelHeader($" {selectedOption} 분석 완료 ")
-                            });
+                                await SaveRawArtifactsAsync(
+                                    result.Definition, outputDir, instructionsFile, metadataExporter,
+                                    saveRawJson, saveRawContext, saveRawFiles, schema, name);
+
+                                if (!result.FromCache)
+                                {
+                                    // 분석과 전환 분리 요구에 따라, 개별 분석 시에는 배치 전환 설계서를 생성하지 않음 (null 지정)
+                                    await SaveDocumentsAsync(
+                                        specMarkdown, migrationPlan: null, outputDir, schema, name,
+                                        provider, modelName, result.Review, result.Outcome,
+                                        result.ThinkingText, actorEffort, result.Scope);
+                                }
+                            }
+
+                            RenderAnalysisResultPanel(selectedOption, outputDir, schema, name, result);
                         }
                         catch (OperationCanceledException)
                         {
@@ -1422,7 +1458,7 @@ namespace ReSet.Cli
         }
 
 
-        public static async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunConfiguredAnalysisAsync(
+        public static async Task<SpAnalysisOutcome> RunConfiguredAnalysisAsync(
             bool analyzeReferencedCodeObjects,
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator,
             VerificationPipelineOrchestrator verificationPipelineOrchestrator,
@@ -1445,9 +1481,8 @@ namespace ReSet.Cli
         {
             if (!analyzeReferencedCodeObjects)
             {
-                // Task 8에서 튜플 반환 파이프라인 헬퍼가 프로덕션에서 제거되어, 기존에
-                // 그 메서드가 하던 키 조립·호출을 여기서 그대로 인라인한다. 반환 타입과
-                // 동작은 동일하다(Task 9에서 SpAnalysisOutcome으로 정식 교체 예정).
+                // 참조분석 OFF 경로. 단일 객체 파이프라인은 저장을 하지 않으므로
+                // 결과의 Persistence는 NotAttempted이고, 저장 책임은 호출부에 남는다.
                 var singleObjectDatabase =
                     VerificationPipelineOrchestrator.ResolveCurrentDatabase(connectionString)
                     ?? string.Empty;
@@ -1464,7 +1499,7 @@ namespace ReSet.Cli
                     enableCache,
                     cancellationToken);
 
-                return (pipelineResult.SpecMarkdown, pipelineResult.SpDef, pipelineResult.Review, pipelineResult.ThinkingText, pipelineResult.Outcome);
+                return SpAnalysisOutcome.FromSingleObjectPipeline(pipelineResult);
             }
 
             var database = await ResolveAnalysisDatabaseAsync(
@@ -1491,13 +1526,9 @@ namespace ReSet.Cli
                 },
                 cancellationToken);
 
-            RenderDependencyAnalysisFailures(result);
+            RenderAnalysisDiagnostics(result);
 
-            var rootAnalysis = result.AnalysisResults
-                .FirstOrDefault(analysis => analysis.Key == rootKey);
-            return rootAnalysis is null
-                ? (null, null, null, null, VerificationOutcome.ReviewNotRun)
-                : (rootAnalysis.SpecMarkdown, rootAnalysis.Definition, rootAnalysis.Review, rootAnalysis.ThinkingText, rootAnalysis.Outcome);
+            return SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
         }
 
         private static async Task<string> ResolveAnalysisDatabaseAsync(
@@ -1540,7 +1571,11 @@ namespace ReSet.Cli
             return configuredDatabase;
         }
 
-        private static void RenderDependencyAnalysisFailures(CodeObjectPipelineResult result)
+        /// <summary>
+        /// 그래프 분석 중 사용자가 알아야 할 사실을 모두 화면에 낸다.
+        /// 실패 노드만 보여주던 기존 렌더러는 스킵·부분 완료·저장 실패를 놓쳤다.
+        /// </summary>
+        private static void RenderAnalysisDiagnostics(CodeObjectPipelineResult result)
         {
             foreach (var node in result.Nodes.Where(node => node.Status == AnalysisNodeStatus.Failed))
             {
@@ -1549,12 +1584,54 @@ namespace ReSet.Cli
                 AnsiConsole.MarkupLine($"[yellow]경고:[/] {Markup.Escape(objectName)} 분석 실패 - {Markup.Escape(error)}");
                 AnsiConsole.WriteLine();
             }
+
+            foreach (var group in result.Nodes
+                .Where(node => node.Status is AnalysisNodeStatus.SkippedDepth or AnalysisNodeStatus.SkippedExternal)
+                .GroupBy(node => node.Status))
+            {
+                var label = group.Key == AnalysisNodeStatus.SkippedDepth ? "깊이 제한" : "외부 객체";
+                AnsiConsole.MarkupLine($"[grey]안내:[/] {label}으로 {group.Count()}개 객체를 분석하지 않았습니다.");
+            }
+
+            if (result.Completion == GraphCompletion.PartialCancelled)
+            {
+                var succeeded = result.Nodes.Count(node => node.Status == AnalysisNodeStatus.Succeeded);
+                var unpersisted = result.Nodes
+                    .Where(node => node.Status != AnalysisNodeStatus.Succeeded)
+                    .Select(node => $"{node.Key.Schema}.{node.Key.Name}")
+                    .OrderBy(objectName => objectName, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var shown = string.Join(", ", unpersisted.Take(10));
+                var suffix = unpersisted.Count > 10 ? $" 외 {unpersisted.Count - 10}건" : string.Empty;
+
+                AnsiConsole.Write(new Panel(new Markup(
+                    "[yellow]사용자 취소로 분석이 중단되었습니다.[/]\n" +
+                    $"[bold]완료:[/] {succeeded} / [bold]발견:[/] {result.Nodes.Count} 객체\n" +
+                    $"[bold]저장되지 않은 객체:[/] {Markup.Escape(shown)}{suffix}"))
+                {
+                    Border = BoxBorder.Rounded,
+                    Header = new PanelHeader(" 부분 완료 ")
+                });
+            }
+
+            if (result.Persistence == ArtifactPersistence.Failed)
+            {
+                foreach (var error in result.PersistenceErrors)
+                {
+                    AnsiConsole.MarkupLine($"[red]저장 실패:[/] {Markup.Escape(error)}");
+                }
+
+                AnsiConsole.WriteLine();
+            }
         }
 
-        private static async Task SaveOutputsAsync(
+        /// <summary>
+        /// 원천 산출물(raw/*)을 저장한다. 캐시 히트에도 실행한다 — raw는 타임스탬프를
+        /// 담지 않아 거짓 주장을 만들 수 없고, SaveRawJson을 뒤늦게 켠 사용자에게
+        /// metadata.json이 영영 생기지 않는 함정을 막는다.
+        /// </summary>
+        private static async Task SaveRawArtifactsAsync(
             ReSet.Core.Models.SpDefinition? spDef,
-            string specMarkdown,
-            string? migrationPlan,
             string outputDir,
             string instructionsFile,
             IMetadataExporter metadataExporter,
@@ -1562,65 +1639,52 @@ namespace ReSet.Cli
             bool saveRawContext,
             bool saveRawFiles,
             string schema,
-            string name,
-            string provider,
-            string modelName,
-            ReviewResult? review,
-            VerificationOutcome outcome,
-            string? thinkingText = null,
-            string? effort = null,
-            IConfiguration? configuration = null)
+            string name)
         {
+            if (spDef == null)
+            {
+                return;
+            }
+
             var spOutputDir = Path.Combine(outputDir, "Procedures", $"{schema}.{name}");
-            if (!Directory.Exists(spOutputDir))
-            {
-                Directory.CreateDirectory(spOutputDir);
-            }
-            
-            var docsDir = Path.Combine(spOutputDir, "docs");
-            if (!Directory.Exists(docsDir))
-            {
-                Directory.CreateDirectory(docsDir);
-            }
+            Directory.CreateDirectory(spOutputDir);
 
-            if (spDef != null)
+            try
             {
-                try
+                var dependenciesText = new System.Text.StringBuilder();
+                var tableSchemasText = new System.Text.StringBuilder();
+                var referenceDdlsText = new System.Text.StringBuilder();
+                var warningsText = new System.Text.StringBuilder();
+
+                if (spDef.Warnings.Count > 0)
                 {
-                    var dependenciesText = new System.Text.StringBuilder();
-                    var tableSchemasText = new System.Text.StringBuilder();
-                    var referenceDdlsText = new System.Text.StringBuilder();
-                    var warningsText = new System.Text.StringBuilder();
-
-                    if (spDef.Warnings.Count > 0)
+                    warningsText.AppendLine("[DB 메타데이터 수집 중 발생한 경고/오류 목록]");
+                    foreach (var warn in spDef.Warnings)
                     {
-                        warningsText.AppendLine("[DB 메타데이터 수집 중 발생한 경고/오류 목록]");
-                        foreach (var warn in spDef.Warnings)
-                        {
-                            warningsText.AppendLine($"- {warn}");
-                        }
-                        warningsText.AppendLine();
+                        warningsText.AppendLine($"- {warn}");
                     }
+                    warningsText.AppendLine();
+                }
 
-                    foreach (var dep in spDef.Dependencies)
+                foreach (var dep in spDef.Dependencies)
+                {
+                    dependenciesText.AppendLine($"- Schema: {dep.Schema}, Name: {dep.Name}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
+                    if (dep.Columns.Count > 0)
                     {
-                        dependenciesText.AppendLine($"- Schema: {dep.Schema}, Name: {dep.Name}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
-                        if (dep.Columns.Count > 0)
+                        tableSchemasText.AppendLine($"### 테이블: {dep.Schema}.{dep.Name} ({dep.Type})");
+                        foreach (var col in dep.Columns)
                         {
-                            tableSchemasText.AppendLine($"### 테이블: {dep.Schema}.{dep.Name} ({dep.Type})");
-                            foreach (var col in dep.Columns)
-                            {
-                                tableSchemasText.AppendLine($"| {col.ColumnName} | {col.DataType} | {(col.IsNullable ? "Yes" : "No")} |");
-                            }
-                        }
-                        if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
-                        {
-                            referenceDdlsText.AppendLine($"### {dep.Type}: {dep.Schema}.{dep.Name}");
-                            referenceDdlsText.AppendLine(dep.ReferencedDdlText);
+                            tableSchemasText.AppendLine($"| {col.ColumnName} | {col.DataType} | {(col.IsNullable ? "Yes" : "No")} |");
                         }
                     }
+                    if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
+                    {
+                        referenceDdlsText.AppendLine($"### {dep.Type}: {dep.Schema}.{dep.Name}");
+                        referenceDdlsText.AppendLine(dep.ReferencedDdlText);
+                    }
+                }
 
-                    var rawPromptContext = $@"
+                var rawPromptContext = $@"
 [시스템 규칙 지침]
 {(File.Exists(instructionsFile) ? await File.ReadAllTextAsync(instructionsFile) : "기본 마크다운 규칙을 적용하여 분석해 주세요.")}
 
@@ -1637,25 +1701,43 @@ namespace ReSet.Cli
 [Stored Procedure DDL SQL 원본]
 {spDef.DdlText}
 ";
-                    await metadataExporter.ExportRawMetadataAsync(
-                        spDef,
-                        spDef.RawPromptContext ?? rawPromptContext,
-                        spOutputDir,
-                        saveRawJson,
-                        saveRawContext,
-                        saveRawFiles);
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]원천 산출물(Raw Metadata) 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
-                }
+                await metadataExporter.ExportRawMetadataAsync(
+                    spDef,
+                    spDef.RawPromptContext ?? rawPromptContext,
+                    spOutputDir,
+                    saveRawJson,
+                    saveRawContext,
+                    saveRawFiles);
             }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]원천 산출물(Raw Metadata) 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
+            }
+        }
 
-            var effortSuffix = string.IsNullOrWhiteSpace(effort) ? "" : $", Effort: {effort}";
+        /// <summary>
+        /// 사람이 읽는 문서(docs/*)를 저장한다. 캐시 히트면 호출하지 않는다 —
+        /// 파일이 이미 그 내용이고, 다시 쓰면 분석하지 않은 날짜가 찍힌다.
+        /// </summary>
+        private static async Task SaveDocumentsAsync(
+            string specMarkdown,
+            string? migrationPlan,
+            string outputDir,
+            string schema,
+            string name,
+            string provider,
+            string modelName,
+            ReviewResult? review,
+            VerificationOutcome outcome,
+            string? thinkingText,
+            string? effort,
+            AnalysisScope scope)
+        {
+            var docsDir = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs");
+            Directory.CreateDirectory(docsDir);
 
-            var outputFileName = Path.Combine(docsDir, "Spec.md");
             await File.WriteAllTextAsync(
-                outputFileName,
+                Path.Combine(docsDir, "Spec.md"),
                 VerificationDocumentFormatter.FormatSpecification(
                     specMarkdown,
                     review,
@@ -1663,48 +1745,91 @@ namespace ReSet.Cli
                     provider,
                     modelName,
                     effort,
-                    DateTime.Now));
+                    DateTime.Now,
+                    scope));
 
             if (!string.IsNullOrEmpty(migrationPlan))
             {
                 // 이 계획서는 GenerateBatchMigrationPlanAsync가 만든 그대로이며 L1도 L2도
                 // 거치지 않는다. 명세서의 점수를 여기에 실으면 계획서가 그 점수를 받은
                 // 것처럼 읽히므로, 검증 없음을 밝히고 근거 명세서의 상태만 전달한다.
-                var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                 await File.WriteAllTextAsync(
-                    planFileName,
+                    Path.Combine(docsDir, "BatchMigrationPlan.md"),
                     VerificationDocumentFormatter.FormatUnverifiedPlan(
                         migrationPlan, outcome, provider, modelName, effort, DateTime.Now));
             }
 
-
-
-            if (!string.IsNullOrWhiteSpace(thinkingText))
+            if (string.IsNullOrWhiteSpace(thinkingText))
             {
-                try
-                {
-                    var thinkingFileName = Path.Combine(docsDir, "Thinking.md");
-                    
-                    // 기존 .txt 파일이 있다면 삭제 처리
-                    var oldTxtFile = Path.Combine(docsDir, "Thinking.txt");
-                    if (File.Exists(oldTxtFile))
-                    {
-                        try { File.Delete(oldTxtFile); } catch {}
-                    }
-
-                    var thinkingHeader = $"# AI 추론 과정 로그 (Thinking Process Log)\n\n" +
-                                         $"- **기본 분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n" +
-                                         $"- **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n" +
-                                         "본 문서는 저장 프로시저 역공학 및 검증 파이프라인 수행 중 사용된 AI 모델들의 추론 과정(Thinking Process)을 기록한 마크다운 문서입니다.\n\n" +
-                                         "---\n\n";
-                    await File.WriteAllTextAsync(thinkingFileName, thinkingHeader + thinkingText);
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[yellow]추론 로그(Thinking Log) 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
-                }
+                return;
             }
 
+            try
+            {
+                // 기존 .txt 파일이 있다면 삭제 처리
+                var oldTxtFile = Path.Combine(docsDir, "Thinking.txt");
+                if (File.Exists(oldTxtFile))
+                {
+                    try { File.Delete(oldTxtFile); } catch {}
+                }
+
+                var effortSuffix = string.IsNullOrWhiteSpace(effort) ? "" : $", Effort: {effort}";
+                var thinkingHeader = $"# AI 추론 과정 로그 (Thinking Process Log)\n\n" +
+                                     $"- **기본 분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n" +
+                                     $"- **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n" +
+                                     "본 문서는 저장 프로시저 역공학 및 검증 파이프라인 수행 중 사용된 AI 모델들의 추론 과정(Thinking Process)을 기록한 마크다운 문서입니다.\n\n" +
+                                     "---\n\n";
+                await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), thinkingHeader + thinkingText);
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[yellow]추론 로그(Thinking Log) 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
+            }
+        }
+
+        /// <summary>
+        /// 분석 종료 후 사용자에게 낼 최종 패널. 저장이 실패했으면 성공을 주장하지 않는다.
+        /// </summary>
+        private static void RenderAnalysisResultPanel(
+            string selectedOption,
+            string outputDir,
+            string schema,
+            string name,
+            SpAnalysisOutcome result)
+        {
+            if (result.Persistence == ArtifactPersistence.Failed)
+            {
+                var detail = result.PersistenceErrors.Count > 0
+                    ? string.Join("\n", result.PersistenceErrors)
+                    : "상세 사유가 기록되지 않았습니다.";
+                AnsiConsole.Write(new Panel(new Markup(
+                    $"[red]산출물 저장에 실패했습니다.[/]\n{Markup.Escape(detail)}"))
+                {
+                    Border = BoxBorder.Rounded,
+                    Header = new PanelHeader($" {Markup.Escape(selectedOption)} 저장 실패 ")
+                });
+                return;
+            }
+
+            // 부분 완료 패널은 RenderAnalysisDiagnostics가 이미 냈다.
+            if (result.Completion == GraphCompletion.PartialCancelled)
+            {
+                return;
+            }
+
+            var specPath = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs", "Spec.md");
+            var cacheNote = result.FromCache
+                ? result.AnalyzedAt is { } analyzedAt
+                    ? $"\n[grey]캐시 재사용 (원본 분석: {analyzedAt:yyyy-MM-dd HH:mm:ss})[/]"
+                    : "\n[grey]캐시 재사용 (원본 분석 시각 불명)[/]"
+                : string.Empty;
+
+            AnsiConsole.Write(new Panel(new Markup(
+                $"[green]성공적으로 파일이 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(specPath)}{cacheNote}"))
+            {
+                Border = BoxBorder.Rounded,
+                Header = new PanelHeader($" {Markup.Escape(selectedOption)} 분석 완료 ")
+            });
         }
 
         private static async Task RunCodegenEngineAsync(
