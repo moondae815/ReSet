@@ -830,6 +830,113 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_CacheMiss_ReportsNoCacheReuseAndNoAnalysisTimestamp()
+        {
+            // FromCache는 이제 "Spec.md를 쓸 것인가"를 결정하는 게이트다(Program.cs의 !FromCache 분기).
+            // 캐시 미스인데 참이 되면 방금 AI가 만든 명세서가 디스크에 한 번도 쓰이지 않은 채
+            // "성공적으로 파일이 생성되었습니다!"가 뜬다. 위 캐시 히트 테스트의 짝이다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                aiService,
+                new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(),
+                "1",
+                "gpt-4",
+                cacheManager,
+                aiService,
+                aiService);
+            var key = CodeObjectKey.Create(
+                "PaymentDB", "dbo", "USP_CacheMiss", CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = key.Schema,
+                Name = key.Name,
+                DdlText = "CREATE PROCEDURE USP_CacheMiss AS SELECT 1"
+            };
+            dbService.GetCodeObjectDetailsAsync(
+                    Arg.Any<string>(), key, Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(definition);
+            cacheManager.ComputeCompositeHash(definition, 3).Returns("hash");
+
+            // 해시는 계산되지만 캐시는 무효다. 실행 경로는 캐시 판정을 거친 뒤 실제 분석으로 간다.
+            cacheManager.IsCacheValid(key, "hash", Arg.Any<OutputPathResolver>()).Returns(false);
+
+            var freshSpec = ValidSpecificationMarkdown();
+            aiService.GenerateSpecificationAsync(
+                    definition,
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = freshSpec }));
+            aiService.ReviewSpecificationAsync(
+                    definition, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 9,
+                    ScoreCrud = 9,
+                    ScoreInterface = 9,
+                    ScoreException = 9,
+                    ScoreReadability = 9
+                }));
+
+            var outputRoot = Path.Combine(
+                Path.GetTempPath(), $"ReSet-CacheMiss-{Guid.NewGuid():N}");
+
+            // 이전 실행이 남긴 명세서가 디스크에 그대로 있다. 캐시가 무효인데도 이 파일의
+            // 타임스탬프를 읽어오면 하지도 않은 분석 날짜를 사용자에게 보고하게 된다.
+            var specPath = new OutputPathResolver(key.Database, outputRoot).ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(
+                specPath,
+                """
+                ---
+                검증 상태: 통과
+                종합 신뢰도: 78
+                ---
+
+                > [!NOTE]
+                > **문서 작성일시**: 2026-08-01 14:22:03
+                > **분석 AI 정보**: OpenAI
+
+                ## 개요
+                stale body
+                """);
+
+            try
+            {
+                var result = await orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB",
+                    key,
+                    3,
+                    "OpenAI",
+                    "rules",
+                    isBatchMode: true,
+                    outputRoot,
+                    enableCache: true);
+
+                Assert.False(result.FromCache);
+                Assert.Null(result.AnalyzedAt);
+                Assert.Equal(freshSpec, result.SpecMarkdown);
+                await aiService.Received(1).GenerateSpecificationAsync(
+                    definition,
+                    Arg.Any<string>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>());
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_CacheUsesMetadataObjectKeyWhenInitialCatalogIsMissing()
         {
             var dbService = Substitute.For<IDbMetadataService>();
