@@ -98,64 +98,83 @@ flowchart TD
 ## 3. 전체 실행 라이프사이클 및 데이터 흐름 (Visual Execution Flow)
 
 ### 3.1. 프로그램 거시 실행 흐름
-ReSet 프로그램이 기동되어 설정을 파싱하고, 대상 DB 메타데이터를 수집하여 AI 분석 파이프라인을 구동하고 산출물을 저장하기까지의 거시적인(Macro) 흐름은 다음과 같습니다.
+ReSet 프로그램이 기동되어 설정을 파싱하고 DB에 연결한 뒤, 사용자가 고른 실행 경로에 따라 분기하는 거시적인(Macro) 흐름은 다음과 같습니다. 네 갈래 중 개별 SP 역공학 분석의 상세 파이프라인만 아래에 접어 두었으며, 나머지 경로의 상세 흐름은 3.3절과 4.6절에 있습니다.
 
 ```mermaid
 graph TD
     %% 1단계: 초기화 및 연결
     subgraph Setup ["1. 초기 설정 및 DB 연결 (Setup)"]
         Start["시작 (CLI 실행)"] --> Parse["설정 로드 및 CLI 인자 파싱 (CliArgs)"]
-        
+
         Parse --> OfflineCheck{"오프라인<br/>모드인가?"}
-        
+
         %% 오프라인 모드
         OfflineCheck -- "예 (Snapshot)" --> Snapshot["SnapshotManager 파일 로드<br/>(DB 접속 생략)"]
-        Snapshot --> LoadOfflineSps["오프라인 DbSnapshot 객체에서<br/>Stored Procedure 목록 로드"]
-        
+
         %% 온라인 모드
         OfflineCheck -- "아니오" --> ModeCheck{"배치 모드 여부?"}
-        
+
         ModeCheck -- "아니오 (TUI)" --> TUI["대화형 로그인 입력<br/>(세션 복구 및 실시간 연결 정보 수정)"]
-        ModeCheck -- "예 (Batch)" --> Batch["연결 문자열 추출 (인자/환경변수)"]
-        
-        TUI & Batch --> ConnTest["데이터베이스 연결성 검증"]
-        ConnTest --> LoadSps["실제 DB에서 전체 SP 목록 로드"]
+        ModeCheck -- "예 (Batch)" --> BatchConn["연결 문자열 추출 (인자/환경변수)"]
+
+        TUI & BatchConn --> ConnTest["데이터베이스 연결성 검증"]
     end
-    
+
+    %% 2단계: 실행 경로 분기
+    Snapshot & ConnTest --> Entry{"실행 경로 선택<br/>(TUI 메인 메뉴 / 배치 인자)"}
+
+    Entry -- "1. 개별 SP 역공학 분석" --> PathAnalysis["SP 목록 로드 및 대상 선택 ➔ 메타데이터 수집 ➔<br/>3단계 검증 ➔ 객체별 Spec.md 및 계획서 저장"]
+    Entry -- "2. 통합 배치 마이그레이션 설계" --> PathBatch["저장된 Spec.md 조합 ➔ 통합 계획 파이프라인 ➔<br/>Jobs 하위 산출물 및 지시서 번들 생성"]
+    Entry -- "3. 코딩 에이전트 구동" --> PathCodegen["기작성 지시서 선택 ➔ 외부 에이전트 자가 수정 루프<br/>(상세 흐름은 3.3절 참고)"]
+    Entry -- "4. 통합 정산 정책 문서 도출" --> PathPolicy["DDL 상수 분기 분석 + 마스터 데이터 프로파일링 ➔<br/>정산 정책서 저장"]
+
+    %% 통합 설계가 만든 지시서를 코딩 에이전트 경로가 소비한다
+    PathBatch --> PathCodegen
+    PathAnalysis & PathCodegen & PathPolicy --> End["종료<br/>(TUI는 메인 메뉴로 복귀)"]
+```
+
+<details>
+<summary><b>1번 경로 상세 — 개별 SP 역공학 분석 파이프라인 (클릭하여 펼치기)</b></summary>
+
+```mermaid
+graph TD
     %% 2단계: 대상 필터링
     subgraph Selection ["2. 분석 대상 필터링 (Selection)"]
-        LoadSps & LoadOfflineSps --> TargetCheck{"배치 모드 여부?"}
-        
-        TargetCheck -- "아니오" --> SelectTUI["개별 SP 선택 / Multi-SP 순차 선택 루프<br/>(물리 선택 순서 보장)"]
+        Enter["개별 SP 역공학 분석 경로 진입"] --> LoadSps["SP 목록 로드<br/>(온라인 DB 조회 또는 오프라인 DbSnapshot)"]
+        LoadSps --> TargetCheck{"배치 모드 여부?"}
+
+        TargetCheck -- "아니오" --> SelectTUI["TUI에서 분석할 SP 선택"]
         TargetCheck -- "예" --> SelectBatch["--all 또는 --sp 기준으로 분석 대상 목록 필터링"]
     end
-    
+
     %% 3단계: 메인 분석 및 검증 파이프라인
     subgraph Pipeline ["3. 분석 및 검증 파이프라인 (Pipeline)"]
         SelectTUI & SelectBatch --> LoopStart["분석 루프 시작 (SP 개별 단위 예외 격리)"]
-        
+
         LoopStart --> RecursiveCheck{"참조 코드 객체<br/>재귀 분석 사용?"}
-        RecursiveCheck -- "아니오" --> QueryMeta["루트 SP 메타데이터 수집 및 정적 파싱"]
         RecursiveCheck -- "예" --> Discover["DependencyAnalysisOrchestrator<br/>SP/UDF 그래프 발견·중복 제거·깊이/외부 경계 적용"]
-        Discover --> QueryMeta["객체별 메타데이터 수집 및 정적 파싱<br/>- DbMetadataService 스키마 & 한글 주석 수집<br/>- SqlStaticParser CRUD 분류, 중첩 제어 구조 요약,<br/>동적 SQL, UDF/Linked Server 감지"]
+        Discover --> QueryMeta["대상 객체 메타데이터 수집 및 정적 파싱<br/>- DbMetadataService 스키마 & 한글 주석 수집<br/>- SqlStaticParser CRUD 분류, 중첩 제어 구조 요약,<br/>동적 SQL, UDF/Linked Server 감지"]
+        RecursiveCheck -- "아니오 (루트 SP만)" --> QueryMeta
         QueryMeta --> GeneratePrompt["AI 프롬프트 컨텍스트 조립 (System 규칙 + 사용자 지침)"]
-        
+
         GeneratePrompt --> VerificationPipeline["3단계 검증 파이프라인 실행<br/>(L1 기계검증 / L2 AI리뷰 / L3 개발자검토)"]
     end
-    
+
     %% 4단계: 산출물 내보내기 및 현대화 전환 설계
     subgraph Save ["4. 결과 저장 및 현대화 설계 (Export)"]
         VerificationPipeline -- "승인 및 완료" --> ExportRaw["객체별 원천 데이터·표준 DDL·의존성 매니페스트 저장"]
         ExportRaw --> SaveSpec["SpecificationLinker로 성공 참조만 연결한<br/>SP/UDF별 Spec.md 저장"]
-        SaveSpec --> GenMigrationCheck{"현대화 전환 계획 생성 활성화?"}
-        GenMigrationCheck -- "예" --> GenMigration["배치 전환 계획서 작성<br/>(SP별 하위 폴더)"]
+        SaveSpec --> GenMigrationCheck{"현대화 전환 계획 생성 활성화?<br/>(MigrationSettings:Enabled)"}
+        GenMigrationCheck -- "예" --> GenMigration["SP별 배치 전환 계획서 저장<br/>(Procedures 하위 docs 폴더, 검증 없음으로 표기)"]
         GenMigrationCheck -- "아니오" --> CheckNext
         GenMigration --> CheckNext
     end
-    
-    CheckNext -- "예" --> LoopStart
-    CheckNext -- "아니오" --> End["종료"]
+
+    CheckNext{"다음 분석 대상이<br/>남았는가?"} -- "예" --> LoopStart
+    CheckNext -- "아니오" --> PathEnd["경로 종료 (메인 메뉴 복귀)"]
 ```
+
+</details>
 
 ### 3.2. 실행 모드 분기
 * **대화형 TUI 모드**: 개발자가 직접 화면을 보며 분석할 SP를 원하는 순서대로 골라 담은 후 배치 전환 계획을 수립하고, AI 검증 결과와 피드백을 실시간 조율하며 승인 및 DB 동기화를 제어합니다.
@@ -163,6 +182,9 @@ graph TD
 
 ### 3.3. 외부 코딩 에이전트 자가 수정 및 TDD 검증 흐름 (Codegen Self-Correction Flow)
 ReSet이 외부 코딩 에이전트를 가동하고 TDD 선제 검증(L0) 및 L1/L2 피드백 루프를 통해 코드를 고품질로 자가 교정하는 시퀀스 흐름은 다음과 같습니다.
+
+<details>
+<summary><b>시퀀스 다이어그램 (클릭하여 펼치기)</b></summary>
 
 ```mermaid
 sequenceDiagram
@@ -198,8 +220,13 @@ sequenceDiagram
     end
 ```
 
+</details>
+
 ### 3.4. 정합성 검증기 거시 실행 흐름 (Validator Macro Flow)
 마이그레이션된 소스코드와 레거시 DB Stored Procedure 간의 로직 일치성 및 결과 데이터 정합성을 검증하는 `ReSet.Validator` 프로그램의 거시 실행 흐름은 다음과 같습니다. 검증 과정은 단순 TUI 메뉴 분기 외에 선후행 파일의 의존성 관계에 의해 **구조 일치성 검증(A 트랙)** 및 **실행 데이터 정합성 검증(B 트랙)**으로 유기적으로 연결됩니다.
+
+<details>
+<summary><b>검증기 거시 흐름도 (클릭하여 펼치기)</b></summary>
 
 ```mermaid
 graph TD
@@ -241,6 +268,8 @@ graph TD
     TuiMenu --> MenuExit["7. 종료"]
     MenuExit --> EndVal
 ```
+
+</details>
 
 ---
 
