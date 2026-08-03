@@ -2733,6 +2733,169 @@ namespace ReSet.Core.Tests
             Assert.Null(result.Review);
         }
 
+        // 아래 세 테스트는 취소가 삼켜지지 않는지 확인한다. 세 지점 모두 cancellationToken을
+        // 받는 AI 호출을 catch { }로 감싸고 있어, 사용자가 Ctrl-C를 눌러도 작업이 계속되고
+        // 승인 화면까지 도달했다. 상위 호출부(Program.cs:968, :1262)는 이미
+        // OperationCanceledException을 받아 메뉴로 돌아가므로 전파만 하면 된다.
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_Sectional_CancelDuringSelfFix_Propagates()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CancelSelfFix", CodeObjectType.Procedure);
+
+            aiService.ProviderName.Returns("Ollama");
+            criticService.ProviderName.Returns("Ollama");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_CancelSelfFix", DdlText = "SELECT 1;"
+                }));
+
+            // 필수 H2 헤더가 없어 L1을 통과하지 못한다 - 이것이 자가 수정 경로의 진입 조건이다.
+            var l1Invalid = "# 헤더가 없는 본문";
+
+            // 호출 순서: 후보 3개, 합성본, 자가 수정. 다섯 번째에서 취소한다.
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = l1Invalid }),
+                    Task.FromResult(new AiResult { Content = l1Invalid }),
+                    Task.FromResult(new AiResult { Content = l1Invalid }),
+                    Task.FromResult(new AiResult { Content = l1Invalid }),
+                    Task.FromException<AiResult>(new OperationCanceledException()));
+
+            var candidateReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7
+            };
+            criticService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(candidateReview));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "ollama-test", criticService: criticService, actorEffort: "dynamic");
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB", key, 1, "Ollama", "rules", true,
+                    Path.Combine(Path.GetTempPath(), $"ReSet-CancelSelfFix-{Guid.NewGuid():N}"), false,
+                    cancellationToken: CancellationToken.None, directDependenciesOnly: true));
+        }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_CancelDuringL3FeedbackSelfFix_Propagates()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CancelL3", CodeObjectType.Procedure);
+
+            aiService.ProviderName.Returns("OpenAI");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_CancelL3", DdlText = "SELECT 1;"
+                }));
+
+            var l1Valid =
+                "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var l1Invalid = "# 헤더가 없는 본문";
+
+            // 호출 순서: 1차 생성(L1 통과), L3 피드백 재생성(L1 실패), L3 자가 수정(취소).
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = l1Valid }),
+                    Task.FromResult(new AiResult { Content = l1Invalid }),
+                    Task.FromException<AiResult>(new OperationCanceledException()));
+
+            var cleanReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+            aiService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(cleanReview));
+
+            // 두 번째 응답이 승인인 이유: 취소가 삼켜지던 시절의 증상이 바로 "같은 승인
+            // 화면을 다시 받는다"이므로, 승인으로 루프를 끊어야 테스트가 끝난다. 수정 후에는
+            // 두 번째 질문 자체가 오지 않는다.
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback, UserFeedback = "보완해 주세요"
+                    }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction, "1", "gpt-4");
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB", key, 1, "OpenAI", "rules", false,
+                    Path.Combine(Path.GetTempPath(), $"ReSet-CancelL3-{Guid.NewGuid():N}"), false,
+                    cancellationToken: CancellationToken.None, directDependenciesOnly: true));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_CancelDuringL3FeedbackL1Refix_Propagates()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var validPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+            var l1InvalidPlan = "# 헤더가 없는 계획서";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Structure" });
+
+            // 호출 순서: 1차 생성(L1 통과), L3 피드백 재생성(L1 실패), L1 재보완(취소).
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = validPlan }),
+                    Task.FromResult(new AiResult { Content = l1InvalidPlan }),
+                    Task.FromException<AiResult>(new OperationCanceledException()));
+
+            var goodReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(goodReview));
+
+            // 명세서 쪽과 같은 이유로 두 번째 응답은 승인이다. 취소를 삼키면 승인 화면이
+            // 한 번 더 뜨고 - 이것이 이 결함의 증상이다 - 테스트는 예외 없이 끝난다.
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback, UserFeedback = "보완해 주세요"
+                    }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunConsolidatedPipelineAsync(
+                    specs, "C#", "TestJobCancelRefix", "OpenAI", _consolidatedOutputRoot, isBatchMode: false));
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",

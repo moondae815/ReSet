@@ -639,7 +639,10 @@ namespace ReSet.Core.Services
                             }
                             accumulatedThinking.AppendLine();
                         }
-                        catch { }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            Log.Warning(ex, "합성본 자가 수정 실패 (이전 버전 유지)");
+                        }
                     }
 
                     // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
@@ -1444,7 +1447,10 @@ namespace ReSet.Core.Services
                                     accumulatedThinking.AppendLine();
                                 }
                             }
-                            catch { }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                Log.Warning(ex, "명세서 L3 피드백 반영 재생성 실패");
+                            }
                         }
 
                         // 피드백 반영본은 전체가 재생성되어 이전 배너/본문이 사라지고,
@@ -1800,7 +1806,10 @@ namespace ReSet.Core.Services
                             var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsRe, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                             rePlan = aiResult.Content;
                         }
-                        catch { }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            Log.Warning(ex, "통합 계획서 L1 재보완 실패 (직전 버전 유지)");
+                        }
                     }
 
                     // 이 계획서도 전체가 재생성되어 L1만 재검사할 뿐 L2는 재수행되지 않는다.
