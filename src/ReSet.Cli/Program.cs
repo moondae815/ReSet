@@ -1498,11 +1498,10 @@ namespace ReSet.Cli
             {
                 // 참조분석 OFF 경로. 단일 객체 파이프라인은 저장을 하지 않으므로
                 // 결과의 Persistence는 NotAttempted이고, 저장 책임은 호출부에 남는다.
-                var singleObjectDatabase =
-                    VerificationPipelineOrchestrator.ResolveCurrentDatabase(connectionString)
-                    ?? string.Empty;
-                var singleObjectKey = CodeObjectKey.Create(
-                    singleObjectDatabase, schema, name, CodeObjectType.Procedure);
+                // 키 조립은 VerificationPipelineOrchestrator의 단일 헬퍼에 둔다.
+                // 여기와 테스트가 각자 사본을 가지면 테스트가 프로덕션 경로를 지키지 못한다.
+                var singleObjectKey = VerificationPipelineOrchestrator.CreateProcedureKey(
+                    connectionString, schema, name);
                 var pipelineResult = await verificationPipelineOrchestrator.RunCodeObjectPipelineAsync(
                     connectionString,
                     singleObjectKey,

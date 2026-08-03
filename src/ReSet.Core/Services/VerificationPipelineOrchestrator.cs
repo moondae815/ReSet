@@ -1568,6 +1568,23 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// 비재귀(참조분석 OFF) 경로가 <see cref="RunCodeObjectPipelineAsync"/>에 넘길
+        /// 프로시저 키를 만든다. 연결 문자열에서 DB명을 못 얻으면 빈 문자열을 쓴다.
+        /// </summary>
+        /// <remarks>
+        /// 프로덕션 호출부와 테스트가 각자 같은 조립 로직을 갖고 있으면 테스트가
+        /// 프로덕션이 아니라 사본을 검증하게 된다. 그 사본을 없애기 위한 단일 지점이다.
+        /// </remarks>
+        public static CodeObjectKey CreateProcedureKey(
+            string connectionString,
+            string schema,
+            string name)
+        {
+            var database = ResolveCurrentDatabase(connectionString) ?? string.Empty;
+            return CodeObjectKey.Create(database, schema, name, CodeObjectType.Procedure);
+        }
+
         public async Task<ConsolidatedPipelineResult> RunConsolidatedPipelineAsync(
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
