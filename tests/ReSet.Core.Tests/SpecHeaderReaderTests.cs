@@ -128,8 +128,9 @@ public sealed class SpecHeaderReaderTests
     [Fact]
     public void Read_NormalizesRealArtifactScoreLines()
     {
-        // 실제 산출물(VerificationDocumentFormatter)은 분모, 괄호, 주석을 함께 싣는다.
-        // 이 테스트는 분모/괄호/주석이 결합된 실제 형식들이 올바르게 파싱되는지 검증한다.
+        // 주석 제거 로직은 계속 필요하다. 현재 산출물은 점수 줄에 설명 주석을 붙이지
+        // 않지만, 디스크에 남아 있는 기존 문서와 손으로 편집한 헤더에는 붙어 있고
+        // '검증 상태' 줄에는 지금도 붙는다. 이 테스트는 그 입력들을 다룬다.
         var markdown =
             "---\n" +
             "종합 신뢰도: 80 # 100점 만점 기준 AI 최종 신뢰도\n" +

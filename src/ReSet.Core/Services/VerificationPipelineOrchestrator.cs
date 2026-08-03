@@ -621,7 +621,10 @@ namespace ReSet.Core.Services
                             }
                             accumulatedThinking.AppendLine();
                         }
-                        catch { }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            Log.Warning(ex, "합성본 자가 수정 실패 (이전 버전 유지)");
+                        }
                     }
 
                     // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
@@ -1306,7 +1309,9 @@ namespace ReSet.Core.Services
                                 accumulatedThinking.AppendLine();
                             }
                         }
-                        catch (Exception ex)
+                        // 여기서 취소를 삼키면 아래 continue가 돌아 같은 승인 화면을 다시 띄운다.
+                        // 사용자의 Ctrl-C가 무시되고 같은 질문을 다시 받는 것이므로 취소는 전파한다.
+                        catch (Exception ex) when (ex is not OperationCanceledException)
                         {
                             _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
                         }
@@ -1426,7 +1431,10 @@ namespace ReSet.Core.Services
                                     accumulatedThinking.AppendLine();
                                 }
                             }
-                            catch { }
+                            catch (Exception ex) when (ex is not OperationCanceledException)
+                            {
+                                Log.Warning(ex, "명세서 L3 피드백 반영 재생성 실패");
+                            }
                         }
 
                         // 피드백 반영본은 전체가 재생성되어 이전 배너/본문이 사라지고,
@@ -1606,7 +1614,7 @@ namespace ReSet.Core.Services
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
-            // 산출물 헤더(VerificationDocumentFormatter.FormatConsolidatedPlan)와
+            // 산출물 헤더(VerificationDocumentFormatter.FormatVerifiedDocument)와
             // 승인 화면(RequestHumanReviewAsync)이 같은 사실을 쓴다.
             var planOutcome = VerificationOutcome.Passed;
             ReviewResult? planReview = null;
@@ -1800,7 +1808,9 @@ namespace ReSet.Core.Services
                         var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                         rePlan = aiResult.Content;
                     }
-                    catch (Exception ex)
+                    // 명세서 경로와 같은 이유로 취소는 전파한다. 삼키면 아래 continue가 돌아
+                    // 취소한 사용자에게 같은 승인 화면을 한 번 더 내민다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
                     }
@@ -1823,7 +1833,10 @@ namespace ReSet.Core.Services
                             var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsRe, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                             rePlan = aiResult.Content;
                         }
-                        catch { }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            Log.Warning(ex, "통합 계획서 L1 재보완 실패 (직전 버전 유지)");
+                        }
                     }
 
                     // 이 계획서도 전체가 재생성되어 L1만 재검사할 뿐 L2는 재수행되지 않는다.

@@ -566,10 +566,14 @@ namespace ReSet.Cli
 
                         var rulebookName = string.IsNullOrEmpty(cliArgs.JobName) ? "Settlement_Policy_Rulebook.md" : $"{cliArgs.JobName}_Settlement_Policy_Rulebook.md";
                         var rulebookPath = Path.Combine(outputDir, rulebookName);
-                        var effortSuffix = string.IsNullOrWhiteSpace(actorEffort) ? "" : $", Effort: {actorEffort}";
-                        var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
 
-                        await File.WriteAllTextAsync(rulebookPath, metadataHeader + rulebook);
+                        // 이 문서는 SettlementPolicyService가 AI 결과를 그대로 반환한 것이며
+                        // L1도 L2도 거치지 않는다. 검증 파이프라인 산출물과 같은 형식의
+                        // 헤더를 쓰되, 검증되지 않았다는 사실을 명시한다.
+                        await File.WriteAllTextAsync(
+                            rulebookPath,
+                            VerificationDocumentFormatter.FormatUnverifiedDocument(
+                                rulebook, null, provider, modelName, actorEffort, DateTime.Now));
                         AnsiConsole.MarkupLine($"[green]성공: 정산 정책 문서 생성 완료![/] {Markup.Escape(rulebookPath)}");
                     }
                     catch (Exception ex)
@@ -789,7 +793,7 @@ namespace ReSet.Cli
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             await File.WriteAllTextAsync(
                                 planFileName,
-                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                VerificationDocumentFormatter.FormatVerifiedDocument(
                                     consolidatedPlan,
                                     pipelineResult.Review,
                                     pipelineResult.Outcome,
@@ -1270,7 +1274,7 @@ namespace ReSet.Cli
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             await File.WriteAllTextAsync(
                                 planFileName,
-                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                VerificationDocumentFormatter.FormatVerifiedDocument(
                                     consolidatedPlan,
                                     pipelineResult.Review,
                                     pipelineResult.Outcome,
@@ -1468,10 +1472,14 @@ namespace ReSet.Cli
 
                             var rulebookName = $"{jobName}_Settlement_Policy_Rulebook.md";
                             var rulebookPath = Path.Combine(outputDir, rulebookName);
-                            var effortSuffix = string.IsNullOrWhiteSpace(actorEffort) ? "" : $", Effort: {actorEffort}";
-                            var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
 
-                            await File.WriteAllTextAsync(rulebookPath, metadataHeader + rulebook);
+                            // 이 문서는 SettlementPolicyService가 AI 결과를 그대로 반환한 것이며
+                            // L1도 L2도 거치지 않는다. 검증 파이프라인 산출물과 같은 형식의
+                            // 헤더를 쓰되, 검증되지 않았다는 사실을 명시한다.
+                            await File.WriteAllTextAsync(
+                                rulebookPath,
+                                VerificationDocumentFormatter.FormatUnverifiedDocument(
+                                    rulebook, null, provider, modelName, actorEffort, DateTime.Now));
                             AnsiConsole.Write(new Panel(new Markup($"[green]정산 정책 문서가 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(rulebookPath)}"))
                             {
                                 Border = BoxBorder.Rounded,
@@ -1789,7 +1797,7 @@ namespace ReSet.Cli
 
             await File.WriteAllTextAsync(
                 Path.Combine(docsDir, "Spec.md"),
-                VerificationDocumentFormatter.FormatSpecification(
+                VerificationDocumentFormatter.FormatVerifiedDocument(
                     specMarkdown,
                     review,
                     outcome,
@@ -1850,7 +1858,7 @@ namespace ReSet.Cli
             // 것처럼 읽히므로, 검증 없음을 밝히고 근거 명세서의 상태만 전달한다.
             await File.WriteAllTextAsync(
                 Path.Combine(docsDir, "BatchMigrationPlan.md"),
-                VerificationDocumentFormatter.FormatUnverifiedPlan(
+                VerificationDocumentFormatter.FormatUnverifiedDocument(
                     migrationPlan, sourceOutcome, provider, modelName, effort, DateTime.Now));
         }
 

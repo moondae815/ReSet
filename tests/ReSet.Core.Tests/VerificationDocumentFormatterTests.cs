@@ -17,7 +17,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreException = 6
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문",
             review,
             VerificationOutcome.Passed,
@@ -45,7 +45,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 7, ScoreException = 6
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", review, VerificationOutcome.Passed,
             "OpenAI", "gpt-test", "high", new DateTime(2026, 7, 31, 19, 4, 19));
 
@@ -64,7 +64,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 10, ScoreException = 10
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", staleReview, VerificationOutcome.ReviewNotRun,
             "OpenAI", "gpt-test", null, new DateTime(2026, 7, 31, 19, 4, 19));
 
@@ -78,7 +78,7 @@ public sealed class VerificationDocumentFormatterTests
     {
         var staleReview = new ReviewResult { ScoreAccuracy = 9 };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", staleReview, VerificationOutcome.L1Exhausted,
             "OpenAI", "gpt-test", null, new DateTime(2026, 7, 31, 19, 4, 19));
 
@@ -95,7 +95,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 5, ScoreException = 5
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", review, VerificationOutcome.QualityRejected,
             "OpenAI", "gpt-test", null, new DateTime(2026, 7, 31, 19, 4, 19));
 
@@ -104,10 +104,9 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatConsolidatedPlan_UsesPlanSpecificScoreDescriptions()
+    public void FormatVerifiedDocument_OmitsScoresWhenTheOutcomeIsNotScored()
     {
-        // 통합 계획서의 Critic 기준(AiService.cs:1997-2017)은 명세서 기준과 다르다.
-        // 명세서 설명 주석을 계획서에 그대로 쓰면 문서가 거짓말을 한다.
+        // 점수 노출 규칙은 다른 종료 상태와 동일하다: Passed 또는 QualityRejected에서만 싣는다.
         var review = new ReviewResult
         {
             HasDefects = false,
@@ -115,27 +114,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 9, ScoreException = 9
         };
 
-        var result = VerificationDocumentFormatter.FormatConsolidatedPlan(
-            "## 통합 배치 아키텍처 개요", review, VerificationOutcome.Passed,
-            "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
-
-        Assert.Contains("가독성 점수: 9/10 # 다이어그램 문법 및 가독성", result);
-        Assert.DoesNotContain("코드 가독성 및 표준 준수", result);
-        Assert.Contains("검증 상태: 통과", result);
-    }
-
-    [Fact]
-    public void FormatConsolidatedPlan_OmitsScoresWhenTheOutcomeIsNotScored()
-    {
-        // 점수 노출 규칙은 FormatSpecification과 동일하다: Passed 또는 QualityRejected에서만 싣는다.
-        var review = new ReviewResult
-        {
-            HasDefects = false,
-            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9,
-            ScoreReadability = 9, ScoreException = 9
-        };
-
-        var result = VerificationDocumentFormatter.FormatConsolidatedPlan(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "## 통합 배치 아키텍처 개요", review, VerificationOutcome.ReviewNotRun,
             "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
 
@@ -145,24 +124,25 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatUnverifiedPlan_StatesThatTheDocumentItselfWasNeverVerified()
+    public void FormatUnverifiedDocument_StatesThatTheDocumentItselfWasNeverVerified()
     {
         // 단일 SP의 BatchMigrationPlan.md는 L1도 L2도 거치지 않는다(Program.cs:662).
-        var result = VerificationDocumentFormatter.FormatUnverifiedPlan(
+        var result = VerificationDocumentFormatter.FormatUnverifiedDocument(
             "# 배치 전환 계획", VerificationOutcome.Passed,
             "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
 
         Assert.Contains("검증 상태: 검증 없음", result);
         Assert.Contains("근거 명세서 검증 상태: 통과", result);
-        Assert.Contains("이 계획서는 검증 파이프라인을 거치지 않았습니다", result);
+        // 같은 메서드가 정산 정책 문서(계획서가 아니다)도 처리하게 되어 문구를 중립화했다.
+        Assert.Contains("이 문서는 검증 파이프라인을 거치지 않았습니다", result);
         Assert.Contains("# 배치 전환 계획", result);
     }
 
     [Fact]
-    public void FormatUnverifiedPlan_NeverEmitsAnyScore()
+    public void FormatUnverifiedDocument_NeverEmitsAnyScore()
     {
         // 이 진입점은 ReviewResult 파라미터를 받지 않는다. 점수가 실릴 경로 자체가 없어야 한다.
-        var result = VerificationDocumentFormatter.FormatUnverifiedPlan(
+        var result = VerificationDocumentFormatter.FormatUnverifiedDocument(
             "# 배치 전환 계획", VerificationOutcome.QualityRejected,
             "anthropic", "claude-opus-5", null, new DateTime(2026, 8, 3, 14, 22, 1));
 
@@ -173,9 +153,12 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatSpecification_KeepsSpecificationScoreDescriptions()
+    public void FormatVerifiedDocument_EmitsScoreLinesWithoutDescriptiveComments()
     {
-        // 개명 과정에서 명세서 설명이 계획서 설명으로 오염되지 않았는지 고정한다.
+        // 점수 줄의 설명 주석은 Critic 프롬프트를 사람이 옮겨 적은 것이었고, 둘의 연결을
+        // 강제하는 장치가 없어 드리프트했다 - 가독성 설명("코드 가독성 및 표준 준수")은
+        // 실제로 거짓이 되어 있었다(AiService.cs:1585-1589는 Mermaid 문법을 채점한다).
+        // 주석 자체를 없앴으므로 거짓이 될 문구가 존재하지 않는다.
         var review = new ReviewResult
         {
             HasDefects = false,
@@ -183,19 +166,45 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 9, ScoreException = 9
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "## 개요", review, VerificationOutcome.Passed,
             "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
 
-        Assert.Contains("가독성 점수: 9/10 # 코드 가독성 및 표준 준수", result);
-        Assert.Contains("정합성 점수: 9/10 # SQL 대비 기능 정합성", result);
+        Assert.Contains("가독성 점수: 9/10", result);
+        Assert.DoesNotContain("가독성 점수: 9/10 #", result);
+        Assert.DoesNotContain("코드 가독성 및 표준 준수", result);
         Assert.DoesNotContain("다이어그램 문법 및 가독성", result);
+        Assert.DoesNotContain("SQL 대비 기능 정합성", result);
+
+        // 필드 자체를 설명하는 이 주석은 남는다 - 프롬프트에서 복제한 것이 아니라
+        // 드리프트할 대상이 없다.
+        Assert.Contains("검증 상태: 통과 # 검증 파이프라인 종료 상태", result);
     }
 
     [Fact]
-    public void FormatSpecification_WithoutScope_OmitsTheScopeLine()
+    public void FormatUnverifiedDocument_WithNoSource_StatesNoVerificationAndCitesNothing()
     {
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        // 정산 정책 문서는 SP 정의와 프로파일링 데이터에서 직접 생성되어 명세서를
+        // 거치지 않는다. 인용할 근거가 없으므로 근거 명세서 줄을 내서는 안 된다.
+        var result = VerificationDocumentFormatter.FormatUnverifiedDocument(
+            "# 정산 정책 룰북", null,
+            "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
+
+        Assert.Contains("검증 상태: 검증 없음", result);
+        Assert.Contains("이 문서는 검증 파이프라인을 거치지 않았습니다", result);
+        Assert.Contains("내용을 직접 검토하십시오", result);
+        Assert.DoesNotContain("근거 명세서", result);
+        Assert.Contains("# 정산 정책 룰북", result);
+
+        // 점수는 어떤 경로로도 실릴 수 없다.
+        Assert.DoesNotContain("종합 신뢰도", result);
+        Assert.DoesNotContain("/10", result);
+    }
+
+    [Fact]
+    public void FormatVerifiedDocument_WithoutScope_OmitsTheScopeLine()
+    {
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", null, VerificationOutcome.Passed,
             "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0));
 
@@ -203,9 +212,9 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatSpecification_DirectScope_WritesTheRecursiveModeLabel()
+    public void FormatVerifiedDocument_DirectScope_WritesTheRecursiveModeLabel()
     {
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", null, VerificationOutcome.Passed,
             "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
             AnalysisScope.Direct);
@@ -214,9 +223,9 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatSpecification_TransitiveScope_WritesTheSingleObjectLabel()
+    public void FormatVerifiedDocument_TransitiveScope_WritesTheSingleObjectLabel()
     {
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", null, VerificationOutcome.Passed,
             "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
             AnalysisScope.Transitive);
@@ -225,7 +234,7 @@ public sealed class VerificationDocumentFormatterTests
     }
 
     [Fact]
-    public void FormatSpecification_ScopeLineLivesInsideTheYamlBlockAlongsideScores()
+    public void FormatVerifiedDocument_ScopeLineLivesInsideTheYamlBlockAlongsideScores()
     {
         var review = new ReviewResult
         {
@@ -233,7 +242,7 @@ public sealed class VerificationDocumentFormatterTests
             ScoreReadability = 7, ScoreException = 6
         };
 
-        var result = VerificationDocumentFormatter.FormatSpecification(
+        var result = VerificationDocumentFormatter.FormatVerifiedDocument(
             "# 본문", review, VerificationOutcome.Passed,
             "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
             AnalysisScope.Direct);

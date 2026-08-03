@@ -518,7 +518,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             body = VerificationBanner.UnresolvedReferences(unresolved) + body;
         }
 
-        return VerificationDocumentFormatter.FormatSpecification(
+        return VerificationDocumentFormatter.FormatVerifiedDocument(
             body,
             analysis.Review,
             analysis.Outcome,
