@@ -201,8 +201,12 @@ namespace ReSet.Validator.Cli
             // 기존 ReSet.Cli appsettings.local.json이 있을 경우 API Key를 가져오기 위한 대체 탐색 적용
             var apiKey = LoadApiKeyWithFallback(configuration, provider);
             var endpoint = configuration[$"AiSettings:Providers:{provider}:Endpoint"] ?? string.Empty;
+            var cliCommand = configuration[$"AiSettings:Providers:{provider}:Command"];
 
-            if (string.IsNullOrEmpty(apiKey) && !provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+            // CLI provider는 CLI에 로그인된 구독 계정을 쓰므로 API 키가 없다.
+            if (string.IsNullOrEmpty(apiKey)
+                && !provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
+                && !AiClientFactory.IsCliProvider(provider))
             {
                 AnsiConsole.MarkupLine($"[red]에러: {provider} AI 클라이언트를 구동하기 위한 API Key가 설정되어 있지 않습니다.[/]");
                 AnsiConsole.MarkupLine("[yellow]src/ReSet.Validator.Cli/appsettings.local.json 에 ApiKey를 지정해 주세요.[/]");
@@ -219,7 +223,7 @@ namespace ReSet.Validator.Cli
             IAiClient aiClient;
             try
             {
-                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient);
+                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, null, cliCommand);
             }
             catch (Exception ex)
             {
