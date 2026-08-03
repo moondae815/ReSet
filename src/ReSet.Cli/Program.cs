@@ -1516,6 +1516,13 @@ namespace ReSet.Cli
                 }
             }
             }
+            // 이 안쪽의 어떤 catch도 취소를 가로채지 못했을 때의 마지막 정류장이다.
+            // 이게 없으면 배치 모드처럼 돌아갈 메뉴가 없는 경로에서 Ctrl-C가
+            // .NET의 날것 스택 트레이스와 의도치 않은 종료 코드로 끝나 버린다.
+            catch (OperationCanceledException)
+            {
+                AnsiConsole.MarkupLine("\n[yellow]작업이 사용자에 의해 취소되었습니다.[/]");
+            }
             finally
             {
                 Serilog.Log.CloseAndFlush();
