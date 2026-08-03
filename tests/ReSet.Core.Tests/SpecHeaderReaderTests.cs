@@ -126,17 +126,17 @@ public sealed class SpecHeaderReaderTests
     }
 
     [Fact]
-    public void Read_StripsCommentThenParenthesisThenDenominatorInThatOrder()
+    public void Read_NormalizesRealArtifactScoreLines()
     {
-        // 실제 산출물은 분모와 주석을 함께 싣는다
-        // (VerificationDocumentFormatter: "정합성 점수: 9/10 # SQL 대비 기능 정합성").
-        // 세 정규화가 이 순서로 적용되지 않으면 값이 어긋난다.
+        // 실제 산출물(VerificationDocumentFormatter)은 분모, 괄호, 주석을 함께 싣는다.
+        // 이 테스트는 분모/괄호/주석이 결합된 실제 형식들이 올바르게 파싱되는지 검증한다.
         var markdown =
             "---\n" +
             "종합 신뢰도: 80 # 100점 만점 기준 AI 최종 신뢰도\n" +
             "정합성 점수: 9/10 # SQL 대비 기능 정합성\n" +
             "CRUD 점수: 8 (양호)\n" +
             "가독성 점수: 7/10 (우수) # 코드 가독성 및 표준 준수\n" +
+            "예외처리 점수: 8 (양호) / 10\n" +
             "---\n\n# 본문";
 
         var header = SpecHeaderReader.Read(markdown);
@@ -145,5 +145,8 @@ public sealed class SpecHeaderReaderTests
         Assert.Equal(9, header.Accuracy);
         Assert.Equal(8, header.Crud);
         Assert.Equal(7, header.Readability);
+        // 괄호 제거(paren strip)가 분모 분할(slash split) 전에 실행되어야 한다.
+        // slash split이 먼저 실행되면 numberPart는 "8 (양호)"가 되어 int.TryParse 실패 → null이 되었을 것이다.
+        Assert.Equal(8, header.Exception);
     }
 }
