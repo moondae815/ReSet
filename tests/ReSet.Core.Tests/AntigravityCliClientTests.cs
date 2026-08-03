@@ -87,6 +87,7 @@ namespace ReSet.Core.Tests
         [Fact]
         public void EnsureCommandLineFits_OverLimit_ThrowsWithActionableMessage()
         {
+            // 문자 수로도 바이트 수로도 확실히 넘는 크기.
             var huge = new string('가', AntigravityCliClient.MaxCommandLineLength + 1000);
             var arguments = new List<string> { "-p", huge };
 
@@ -97,20 +98,71 @@ namespace ReSet.Core.Tests
             Assert.Contains("claude-cli", exception.Message);
         }
 
+        // OS 한계는 바이트 단위다. UTF-16 문자 수로 재면 한글(UTF-8 3바이트) 프롬프트가
+        // 검사를 통과한 뒤 execve가 E2BIG로 거절하고, 그것이 "명령을 찾지 못했습니다 -
+        // PATH 확인" 이라는 엉뚱한 안내로 둔갑한다.
         [Fact]
-        public void ParseResult_Success_ExtractsResponseText()
+        public void EnsureCommandLineFits_KoreanUnderCharLimitButOverByteLimit_Throws()
         {
-            Assert.Equal("PONG", AntigravityCliClient.ParseResult(SuccessJson).Trim());
+            // 문자 수는 한계의 절반, 바이트 수는 한계의 1.5배.
+            var korean = new string('가', AntigravityCliClient.MaxCommandLineLength / 2);
+            Assert.True(korean.Length < AntigravityCliClient.MaxCommandLineLength);
+
+            var arguments = new List<string> { "-p", korean };
+
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                AntigravityCliClient.EnsureCommandLineFits("agy", arguments));
+
+            Assert.Contains("바이트", exception.Message);
+        }
+
+        // 경계의 반대편: 바이트로 재도 한계 아래인 한글 프롬프트는 통과해야 한다.
+        [Fact]
+        public void EnsureCommandLineFits_KoreanUnderByteLimit_DoesNotThrow()
+        {
+            var korean = new string('가', (AntigravityCliClient.MaxCommandLineLength / 3) - 100);
+            var arguments = new List<string> { "-p", korean };
+
+            AntigravityCliClient.EnsureCommandLineFits("agy", arguments);
         }
 
         [Fact]
-        public void ParseResult_NonSuccessStatus_Throws()
+        public void ParseResult_Success_ExtractsResponseText()
+        {
+            var response = AntigravityCliClient.ParseResult(SuccessJson);
+
+            Assert.True(response.IsSuccess);
+            Assert.Equal("PONG", response.Response?.Trim());
+        }
+
+        // ParseResult는 더 이상 실패를 스스로 예외로 만들지 않는다. 손으로 만든 예외는
+        // CliFailureClassifier를 우회해 종류 판정과 provider 전환 안내를 잃기 때문이다.
+        // 상태를 값으로 돌려주고, 예외 생성은 ChatAsync가 분류기를 통해 한다.
+        [Fact]
+        public void ParseResult_NonSuccessStatus_IsReportedAsValueNotException()
         {
             const string failureJson =
                 "{\"conversation_id\":\"x\",\"status\":\"ERROR\",\"response\":\"\"}";
 
-            Assert.Throws<InvalidOperationException>(() =>
-                AntigravityCliClient.ParseResult(failureJson));
+            var response = AntigravityCliClient.ParseResult(failureJson);
+
+            Assert.False(response.IsSuccess);
+            Assert.Equal("ERROR", response.Status);
+        }
+
+        // status/response가 문자열이 아닌 JSON 종류로 오면 GetString()이
+        // InvalidOperationException을 던지는데, 그것은 catch (JsonException)에 걸리지
+        // 않아 출력 덤프 없는 프레임워크 메시지로 새어 나갔다.
+        [Fact]
+        public void ParseResult_NonStringJsonKinds_AreGuardedNotThrown()
+        {
+            const string oddJson = "{\"status\":123,\"response\":{\"text\":\"hi\"}}";
+
+            var response = AntigravityCliClient.ParseResult(oddJson);
+
+            Assert.Null(response.Status);
+            Assert.Null(response.Response);
+            Assert.False(response.IsSuccess);
         }
 
         [Fact]
@@ -140,6 +192,60 @@ namespace ReSet.Core.Tests
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
             Assert.Contains("PATH", exception.Message);
+        }
+
+        // ---- 스텁으로 조립된 호출을 실제로 실행한다 ----
+        // 진짜 agy 바이너리는 부르지 않는다.
+
+        [Fact]
+        public async Task ChatAsync_StubReturnsSuccessJson_ContentIsTheResponseText()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody: "echo '{\"status\":\"SUCCESS\",\"response\":\"PONG\"}'\n",
+                windowsBody: "echo {\"status\":\"SUCCESS\",\"response\":\"PONG\"}\r\n");
+
+            var client = new AntigravityCliClient(stub.Path, "gemini", TimeSpan.FromSeconds(60));
+
+            var result = await client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f);
+
+            Assert.Equal("PONG", result.Content);
+        }
+
+        // agy는 쿼터 소진을 종료 코드 0 + stdout JSON으로 보고한다. 분류기가 stdout을
+        // 보지 않게 된 뒤에도 클라이언트가 원문 JSON을 extraDetail로 넘기므로
+        // claude-cli와 같은 계약(종류 판정 + provider 전환 안내)이 유지되어야 한다.
+        [Fact]
+        public async Task ChatAsync_StubReportsQuotaInBandWithExitCodeZero_IsClassifiedAsQuota()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody: "echo '{\"status\":\"ERROR\",\"response\":\"\",\"error\":\"usage limit reached\"}'\n",
+                windowsBody: "echo {\"status\":\"ERROR\",\"response\":\"\",\"error\":\"usage limit reached\"}\r\n");
+
+            var client = new AntigravityCliClient(stub.Path, "gemini", TimeSpan.FromSeconds(60));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
+
+            Assert.Contains("agy-cli", exception.Message);
+            Assert.Contains("구독", exception.Message);
+            // 원문 JSON도 함께 실려야 진단이 된다.
+            Assert.Contains("usage limit reached", exception.Message);
+        }
+
+        [Fact]
+        public async Task ChatAsync_StubExitsNonZeroWithAuthMessage_ThrowsClassifiedException()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody: "echo 'Not logged in' 1>&2\nexit 1\n",
+                windowsBody: "echo Not logged in 1>&2\r\nexit 1\r\n");
+
+            var client = new AntigravityCliClient(stub.Path, "gemini", TimeSpan.FromSeconds(60));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
+
+            Assert.Contains("로그인", exception.Message);
+            Assert.Contains("Not logged in", exception.Message);
         }
     }
 }

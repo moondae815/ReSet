@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +10,19 @@ using Serilog;
 
 namespace ReSet.Core.Services.Clients.Cli
 {
+    /// <summary>
+    /// agy의 JSON 응답에서 뽑아낸 값. 실패 판정은 여기서 하지 않는다 -
+    /// 판정과 예외 생성은 CliFailureClassifier를 거쳐야 하기 때문이다.
+    /// </summary>
+    public sealed class AntigravityCliResponse
+    {
+        public string? Status { get; init; }
+        public string? Response { get; init; }
+
+        public bool IsSuccess =>
+            string.Equals(Status, "SUCCESS", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Antigravity CLI를 print 모드로 기동한다.
     ///
@@ -83,11 +97,15 @@ namespace ReSet.Core.Services.Clients.Cli
 
         public static void EnsureCommandLineFits(string command, IReadOnlyList<string> arguments)
         {
+            // OS의 명령행 한계는 바이트 단위다. UTF-16 문자 수로 재면 한글(UTF-8 3바이트)
+            // 프롬프트에서 3배까지 과소 평가한다. 35만 자짜리 한글 프롬프트가 100만 검사를
+            // 통과한 뒤 execve가 E2BIG로 거절하고, 그것이 Win32Exception으로 올라와
+            // "명령을 찾지 못했습니다 - PATH를 확인하십시오"라는 엉뚱한 안내가 된다.
             // 인용부호와 구분 공백을 감안해 인자마다 여유를 더한다.
-            var length = command.Length;
+            var length = Encoding.UTF8.GetByteCount(command);
             foreach (var argument in arguments)
             {
-                length += argument.Length + 3;
+                length += Encoding.UTF8.GetByteCount(argument) + 3;
             }
 
             if (length <= MaxCommandLineLength)
@@ -97,39 +115,28 @@ namespace ReSet.Core.Services.Clients.Cli
 
             throw new InvalidOperationException(
                 $"이 프롬프트는 agy-cli로 처리할 수 없습니다 " +
-                $"(명령행 {length:N0}자, 플랫폼 한계 {MaxCommandLineLength:N0}자). " +
+                $"(명령행 {length:N0}바이트, 플랫폼 한계 {MaxCommandLineLength:N0}바이트). " +
                 "agy는 프롬프트를 표준 입력으로 받지 못해 명령행으로 넘겨야 하며, 우회로가 없습니다. " +
                 "claude-cli 또는 API provider를 사용하십시오.");
         }
 
-        public static string ParseResult(string standardOutput)
+        /// <summary>
+        /// JSON을 값으로만 옮긴다. 실패라도 여기서 예외를 만들지 않는다 -
+        /// 손으로 만든 예외는 CliFailureClassifier를 우회해 종류 판정과
+        /// "다른 provider로 바꾸라"는 안내를 통째로 잃는다.
+        /// </summary>
+        public static AntigravityCliResponse ParseResult(string standardOutput)
         {
             try
             {
                 using var document = JsonDocument.Parse(standardOutput);
                 var root = document.RootElement;
 
-                var status = root.TryGetProperty("status", out var statusElement)
-                    ? statusElement.GetString()
-                    : null;
-
-                if (!string.Equals(status, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+                return new AntigravityCliResponse
                 {
-                    throw new InvalidOperationException(
-                        $"agy-cli가 실패 상태를 반환했습니다 (status: {status}).\n[출력]\n{standardOutput}");
-                }
-
-                var response = root.TryGetProperty("response", out var responseElement)
-                    ? responseElement.GetString()
-                    : null;
-
-                if (string.IsNullOrWhiteSpace(response))
-                {
-                    throw new InvalidOperationException(
-                        $"agy-cli 응답에 response 속성이 없거나 비어 있습니다.\n[출력]\n{standardOutput}");
-                }
-
-                return response;
+                    Status = ReadString(root, "status"),
+                    Response = ReadString(root, "response")
+                };
             }
             catch (JsonException ex)
             {
@@ -137,6 +144,16 @@ namespace ReSet.Core.Services.Clients.Cli
                     $"agy-cli 응답을 JSON으로 해석할 수 없습니다.\n[출력]\n{standardOutput}", ex);
             }
         }
+
+        /// <summary>
+        /// 문자열이 아닌 JSON 종류에 GetString()을 부르면 InvalidOperationException이 나는데,
+        /// 그것은 위의 catch (JsonException)에 걸리지 않는다. 스키마가 바뀌면 출력 덤프 없이
+        /// 프레임워크 기본 메시지만 튀어나온다. ClaudeCliClient.ReadString과 같은 방식으로 막는다.
+        /// </summary>
+        private static string? ReadString(JsonElement root, string propertyName) =>
+            root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
         public async Task<AiResult> ChatAsync(
             string systemPrompt,
@@ -171,7 +188,28 @@ namespace ReSet.Core.Services.Clients.Cli
                 throw CliFailureClassifier.ToException(ProviderName, _command, processResult, null);
             }
 
-            return new AiResult { Content = ParseResult(processResult.StandardOutput) };
+            var response = ParseResult(processResult.StandardOutput);
+
+            // agy는 쿼터 소진 같은 실패도 종료 코드 0으로 끝내면서 stdout JSON에만 담는다.
+            // 분류기는 stdout을 보지 않으므로(오진 방지) 원문 JSON을 extraDetail로 직접 넘긴다.
+            // 이렇게 해야 claude-cli와 같은 계약(종류 판정 + provider 전환 안내)이 유지된다.
+            if (!response.IsSuccess)
+            {
+                throw CliFailureClassifier.ToException(
+                    ProviderName, _command, processResult,
+                    $"agy-cli가 실패 상태를 반환했습니다 (status: {response.Status}).\n" +
+                    $"[출력]\n{processResult.StandardOutput}");
+            }
+
+            if (string.IsNullOrWhiteSpace(response.Response))
+            {
+                throw CliFailureClassifier.ToException(
+                    ProviderName, _command, processResult,
+                    $"agy-cli 응답에 response 속성이 없거나 비어 있습니다.\n" +
+                    $"[출력]\n{processResult.StandardOutput}");
+            }
+
+            return new AiResult { Content = response.Response };
         }
     }
 }
