@@ -16,7 +16,7 @@
 - Spectre.Console 출력에 들어가는 런타임 값은 `Markup.Escape()`로 감싼다
 - `OperationCanceledException`은 절대 삼키지 않는다. IO/DB/AI 오류는 soft-fail한다
 - 모든 신규 주석과 사용자 노출 문자열은 한국어로 작성한다
-- 작업 시작 시점의 테스트는 **396개 전부 통과**. 클린 빌드 경고는 **고유 8건**(전부 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602). 이 수를 늘리지 않는다
+- 작업 시작 시점의 테스트는 **422개 전부 통과**. 클린 빌드 경고는 **고유 8건**(전부 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602). 이 수를 늘리지 않는다
 - **경고 개수를 셀 때 중복을 제거한다.** `dotnet build`는 각 경고를 두 번 출력하므로 `grep -c`는 16을 반환한다. `grep -E "warning CS" | sort -u | wc -l`로 고유 개수를 확인한다
 - 경고 확인은 반드시 클린 빌드(`dotnet clean && dotnet build`)로 한다
 - 솔루션 파일은 `ReSet.slnx`다 (`.sln`은 없다)
@@ -562,7 +562,7 @@ Expected: FAIL. 메시지에 `→ 고쳤다면 기준선을 N으로 내리십시
 dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l
 dotnet test
 ```
-Expected: 고유 경고 8건, 전체 통과 (396 + 6 = 402)
+Expected: 고유 경고 8건, 전체 통과 (422 + 6 = 428)
 
 Roslyn 패키지가 새 경고를 유발하면 그 사실을 보고하라. 경고를 억제하지 말고 먼저 보고할 것.
 
