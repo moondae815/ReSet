@@ -48,8 +48,12 @@ flowchart TD
 | | [SessionManager](../src/ReSet.Cli/SessionManager.cs) | 로컬 세션 파일(`.session.json`)을 활용한 직전 로그인 정보 관리 및 서버·DB명 즉시 수정 기능 제공. |
 | | [CliArgs](../src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
 | | [ValidationUiProxy](../src/ReSet.Cli/ValidationUiProxy.cs) | 검증기(Validator)의 L1/L2/L3 요약 보고서를 Spectre.Console을 활용하여 렌더링하는 TUI 브릿지 구현체. |
+| | [BatchStepCatalog](../src/ReSet.Cli/BatchStepCatalog.cs) | 통합 배치 설계의 스텝 후보 명세서를 선별하고 각 스텝의 분석 메타데이터를 복원하며, 복원 실패를 누락·파싱 실패로 나누어 호출부가 사유를 그대로 알릴 수 있게 합니다. |
+| | [SpecHeaderReader](../src/ReSet.Cli/SpecHeaderReader.cs) | 저장된 `Spec.md` 상단의 YAML 헤더에서 검증 종료 상태와 Critic 점수를 되읽어, 캐시로 복원된 명세서도 신규 분석과 동일하게 보고되도록 합니다. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbSnapshot](../src/ReSet.Core/Models/DbSnapshot.cs) | 로컬 환경에서 DB 연결 없이 오프라인 메타데이터 캐싱을 지원하기 위한 직렬화 구조 스냅샷 모델. |
 | | [CodeObjectKey](../src/ReSet.Core/Models/CodeObjectKey.cs), [CodeObjectAnalysisModels](../src/ReSet.Core/Models/CodeObjectAnalysisModels.cs) | DB·스키마·이름·유형으로 SP/UDF를 식별하고, 재귀 분석 그래프의 노드 상태·간선·객체별 분석 결과를 보존합니다. |
+| | [VerificationOutcome](../src/ReSet.Core/Models/VerificationOutcome.cs) | 검증 파이프라인이 어디서 끝났는지를 네 가지 값(리뷰 미수행·L1 미통과·품질 미달·통과)으로 구분하는 열거형. 기본값이 `ReviewNotRun`이라 상태를 설정하지 않은 경로는 통과가 아닌 쪽으로 기웁니다. |
+| | [SpAnalysisOutcome](../src/ReSet.Core/Models/SpAnalysisOutcome.cs), [ConsolidatedPipelineResult](../src/ReSet.Core/Models/ConsolidatedPipelineResult.cs) | 1단계 개별 SP 분석과 통합 계획 수립의 결과 계약. 명세서·검증 종료 상태·분석 범위·캐시 출처·아티팩트 저장 결과를 한 레코드에 담아 호출부가 보고 내용을 추측하지 않게 합니다. |
 | | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
 | | [OfflineDbMetadataService](../src/ReSet.Core/Services/OfflineDbMetadataService.cs) | 오프라인 모드 시 활성화되는 메타데이터 서비스. 로드된 JSON `DbSnapshot`에 기반해 SQL Server 연결 없이 스키마 정보를 반환합니다. |
 | | [SnapshotManager](../src/ReSet.Core/Services/SnapshotManager.cs) | 온라인 모드에서 `DbMetadataService`가 수집한 데이터를 `DbSnapshot` JSON 파일로 추출(`ExportSnapshotAsync`)하거나, 오프라인 시 파일을 읽어들여(`ImportSnapshotAsync`) 제공하는 관리 서비스. |
@@ -61,7 +65,8 @@ flowchart TD
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영, 통합 배치 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Agentic Workflow 흐름 제어, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [DependencyAnalysisOrchestrator](../src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs) | 설정으로 활성화된 재귀 코드 객체 분석에서 하위 SP/UDF를 중복 없이 발견하고, 객체별 기존 검증 파이프라인 실행과 실패 격리를 조율합니다. |
-| | [VerificationDocumentFormatter](../src/ReSet.Core/Services/VerificationDocumentFormatter.cs) | 루트와 재귀 SP/UDF 명세서의 YAML 신뢰도 헤더 및 NOTE 메타데이터(작성일시·분석 AI 정보·최종 Critic 점수)를 일관되게 렌더링합니다. |
+| | [VerificationDocumentFormatter](../src/ReSet.Core/Services/VerificationDocumentFormatter.cs) | 산출물 상단의 YAML 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·검증 종료 상태)를 렌더링합니다. 진입점은 문서 종류가 아니라 보장 수준으로 나뉘어, 파이프라인을 통과한 명세서·통합 계획서와 파이프라인에 진입한 적 없는 단일 SP 계획서·정산 정책서를 구분하며, Critic 점수는 종료 상태가 통과 또는 품질 미달일 때만 싣습니다. |
+| | [VerificationBanner](../src/ReSet.Core/Services/VerificationBanner.cs) | L1 미통과, 품질 미달, 리뷰 미수행, 참조 미완 상태를 문서 본문 앞의 경고 배너로 조립하는 단일 렌더러. 통과 상태에는 배너가 없으므로 해당 메서드를 두지 않습니다. |
 | | [OutputPathResolver](../src/ReSet.Core/Services/OutputPathResolver.cs), [SpecificationLinker](../src/ReSet.Core/Services/SpecificationLinker.cs) | 현재/외부 DB를 구분한 객체별 출력 경로를 계산하고, 성공한 직접 참조 객체에만 상대 명세서 링크를 생성합니다. |
 | | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 재귀 분석에서는 객체별 표준 DDL·의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 통합 배치(Job) 분석 단계에서는 Agentic Workflow 지시서 및 `AbstractSettleTasklet.cs` 추상 템플릿을 동적 생성하여 외부 코딩 에이전트용 지시서 번들(`MigrationInstructions.md`, `todo.md`)을 구성합니다. |
 | | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
@@ -86,6 +91,7 @@ flowchart TD
 | | [CodeVerificationOrchestratorTests](../tests/ReSet.Core.Tests/CodeVerificationOrchestratorTests.cs) | L1(정적) -> L2(AI 논리 Gap검사) -> L3(사용자 승인) 흐름 제어 및 자가 수정 오케스트레이션 검증. |
 | | [ValidatorAiServiceTests](../tests/ReSet.Core.Tests/ValidatorAiServiceTests.cs) | 검증기 AI 응답 파싱 무결성(마크다운 블록 정제) 및 L2 Gap 분석 검증. |
 | | [DataComparisonServiceTests](../tests/ReSet.Core.Tests/DataComparisonServiceTests.cs) | 레거시/신규 JSON 결과값 1:1 대조 정합성 및 예외 핸들링 검증. |
+| | [CancellationPolicyTests](../tests/ReSet.Core.Tests/CancellationPolicyTests.cs) | Roslyn 구문 트리로 `src/` 전체를 훑어 취소 예외를 삼킬 수 있는 `catch`를 찾아내는 아키텍처 게이트. 파일별 허용 개수를 [기준선 파일](../tests/ReSet.Core.Tests/cancellation-policy-baseline.txt)에 고정해, 새 위반이 생겼을 때뿐 아니라 고치고도 숫자를 내리지 않았을 때도 실패합니다. |
 
 ---
 
@@ -388,6 +394,12 @@ graph TD
 * **피드백 수동 반영**: TUI 화면에 명세서 미리보기가 렌더링되며 개발자가 '승인', '취소', '피드백 입력' 중 하나를 선택합니다. 피드백 입력 시 사용자의 상세 요구사항을 컨텍스트에 추가하여 명세서를 재생성하고, 재생성된 결과물에 대해 L1 정적 검사 및 AI 자가 수정 루프를 1회 더 구동해 안정성을 유지합니다.
 * **DB 동기화 제어**: 최종 승인 단계에서 보완 SQL 스크립트(`*_MetadataCleansing.sql`)가 물리적으로 존재할 경우에 한하여 개발자에게 DB 역반영 동의 여부를 묻고, 동의할 경우 스크립트를 호출하여 대상 데이터베이스의 Extended Properties 속성 주석을 정화합니다.
 * **추론 로그 보존**: 파이프라인 진행 과정에서 축적된 모든 AI 모델의 깊은 생각/추론 내용(Thinking log) 및 Critic/Consolidator 리뷰 추론 텍스트를 취합하여 `docs/Thinking.md` 파일로 자동 기록하여 보존합니다.
+
+#### 4.4.4. 검증 종료 상태 모델 (Verification Outcome)
+* **네 가지 종료 지점**: 파이프라인이 어디서 끝났는지를 `VerificationOutcome` 열거형이 구분합니다. `ReviewNotRun`(L2 리뷰 호출 자체가 실패), `L1Exhausted`(재시도를 소진하고도 기계 검증 미통과), `QualityRejected`(리뷰는 돌았으나 기준 점수 미달), `Passed`(전 단계 통과). 열거형의 0번 값이 `ReviewNotRun`이므로 상태를 설정하지 않은 경로는 통과가 아닌 쪽으로 기울어집니다.
+* **표기의 단일 출처**: 상태의 한국어 표기는 `VerificationDocumentFormatter.StatusLabel` 한 곳에서만 만들어집니다. 명세서·통합 계획서의 YAML 헤더, L3 승인 화면, 캐시로 복원된 문서의 재보고, 외부 코딩 에이전트 지시서 번들의 `## ⚠️ 0. 이 계획서의 검증 상태` 블록이 모두 이 표기를 공유하므로, 문서마다 다른 말을 하는 상황이 생기지 않습니다.
+* **점수 노출의 게이팅**: Critic 점수는 종료 상태가 `Passed` 또는 `QualityRejected`일 때만 문서에 실립니다. 1차 시도의 리뷰 결과가 메모리에 남아 있더라도 최종적으로 검증되지 않은 문서에는 점수를 싣지 않습니다. 파이프라인에 진입한 적 없는 문서(단일 SP 계획서, 정산 정책서)는 애초에 `ReviewResult`를 받지 않는 별도 진입점으로 렌더링되어, 호출부가 점수를 유출시킬 수단 자체가 없습니다.
+* **캐시 경계**: 종료 상태 게이팅이 도입되기 전에 기록된 캐시 항목은 검증 상태를 담고 있지 않으므로 무효 처리하여 재분석합니다. 이후 항목은 상태를 함께 보존해, 캐시로 복원된 산출물도 신규 분석과 동일한 상태로 보고됩니다.
 
 ### 4.5. 다중 AI 공급자(Multi-LLM Provider) 추상화
 * **Decoupling 계약**: LLM 통신과 페이로드 직렬화 사양을 `IAiClient` 계약 뒤로 격리하였습니다. 비즈니스 파이프라인인 `AiService`는 하위 전송 메커니즘을 인지하지 않습니다.

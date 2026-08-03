@@ -23,6 +23,8 @@
         *   [SpStaticAnalysisResult](./src/ReSet.Core/Models/SpDefinition.cs): 테이블 CRUD, 임시 테이블, UDF 및 Linked Server 등 정적 분석 결과 구조를 홀딩하는 도메인 모델.
     *   [CodeObjectKey.cs](./src/ReSet.Core/Models/CodeObjectKey.cs): 데이터베이스·스키마·이름·유형(SP/UDF)을 대소문자 비구분으로 식별하여 재귀 그래프의 중복 분석과 순환을 차단하는 코드 객체 키.
     *   [CodeObjectAnalysisModels.cs](./src/ReSet.Core/Models/CodeObjectAnalysisModels.cs): 코드 객체 그래프의 노드 상태, 의존 간선 및 객체별 분석 결과를 표현하는 모델.
+    *   [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs): 검증 파이프라인이 어디서 끝났는지를 리뷰 미수행·L1 미통과·품질 미달·통과의 네 값으로 구분하는 열거형. 0번 값이 `ReviewNotRun`이라 상태를 설정하지 않은 경로는 통과가 아닌 쪽으로 기웁니다.
+    *   [SpAnalysisOutcome.cs](./src/ReSet.Core/Models/SpAnalysisOutcome.cs), [ConsolidatedPipelineResult.cs](./src/ReSet.Core/Models/ConsolidatedPipelineResult.cs): 1단계 개별 SP 분석과 통합 계획 수립의 결과 계약. 명세서, 검증 종료 상태, 분석 범위, 캐시 출처, 아티팩트 저장 결과를 한 레코드에 담아 CLI가 보고 내용을 추측하지 않게 합니다.
     *   [DependencyInfo.cs](./src/ReSet.Core/Models/DependencyInfo.cs): 재귀적으로 수집된 DB 개체(테이블, 뷰, 다른 SP 등) 의존성을 표현하는 모델.
     *   [ColumnInfo.cs](./src/ReSet.Core/Models/ColumnInfo.cs): 컬럼명, 데이터타입, PK/FK 정보, 한글 설명, 설명 누락 유무(IsDescriptionMissing) 및 Identity/DefaultValue 정보를 수집하는 모델.
     *   [TableIndexInfo.cs](./src/ReSet.Core/Models/TableIndexInfo.cs): 테이블 인덱스 메타데이터(인덱스명, 타입, Unique, PK 여부, 구성 컬럼)를 관리하는 모델.
@@ -36,7 +38,8 @@
     *   [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하고, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`)를 기동하는 클래스.
     *   [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영 오케스트레이션을 담당하며, 통합 배치 전환 계획 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Multi-Step Agentic Workflow 흐름을 제어합니다.
     *   [DependencyAnalysisOrchestrator.cs](./src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs): 루트 SP에서 발견한 하위 SP/UDF 코드 객체 그래프를 중복 없이 순회하고, 객체별 검증 파이프라인 실행·실패 격리·아티팩트 저장을 조율합니다.
-    *   [VerificationDocumentFormatter.cs](./src/ReSet.Core/Services/VerificationDocumentFormatter.cs): 루트 및 재귀 SP/UDF 명세서에 동일한 YAML 신뢰도 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·최종 Critic 점수)를 렌더링합니다.
+    *   [VerificationDocumentFormatter.cs](./src/ReSet.Core/Services/VerificationDocumentFormatter.cs): 산출물 상단의 YAML 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·검증 종료 상태)를 렌더링합니다. 진입점은 문서 종류가 아니라 보장 수준으로 나뉘며(파이프라인 통과 문서 / 파이프라인에 진입한 적 없는 문서), Critic 점수는 종료 상태가 통과 또는 품질 미달일 때만 실립니다. 상태의 한국어 표기(`StatusLabel`)는 이 클래스가 단일 소유합니다.
+    *   [VerificationBanner.cs](./src/ReSet.Core/Services/VerificationBanner.cs): L1 미통과, 품질 미달, 리뷰 미수행, 참조 미완 상태를 문서 본문 앞 경고 배너로 조립하는 단일 렌더러. 경로마다 다른 문구가 생기지 않도록 배너 문구를 이곳에서만 만드십시오.
     *   [OutputPathResolver.cs](./src/ReSet.Core/Services/OutputPathResolver.cs): 현재 DB와 외부 DB를 구분해 객체별 명세서, 표준 DDL, 의존성 매니페스트의 안전한 출력 경로를 계산합니다.
     *   [SpecificationLinker.cs](./src/ReSet.Core/Services/SpecificationLinker.cs): 성공한 직접 참조 객체에만 상대 `Spec.md` 링크를 추가하고, 실패·외부 DB·깊이 제한 상태는 사유로 표기합니다.
     *   [MetadataExporter.cs](./src/ReSet.Core/Services/MetadataExporter.cs): 원본 DB 메타데이터를 JSON, Raw 프롬프트 마크다운(`raw/prompt-context.md`), 개별 DDL/MD 파일 및 테이블 스키마 파일(`raw/ddl/*.md`) 등으로 보존합니다. 재귀 코드 객체 분석에서는 객체별 표준 DDL과 의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 외부 코딩 에이전트용 마이그레이션 지시서 번들 및 체크리스트(`agent/MigrationInstructions.md`, `agent/todo.md`)도 생성합니다.
@@ -54,6 +57,8 @@
 *   [Program.cs](./src/ReSet.Cli/Program.cs): CLI 진입점이자 TUI 메뉴 제어 및 흐름 오케스트레이션을 담당합니다.
 *   [ConsoleUserInteraction.cs](./src/ReSet.Cli/ConsoleUserInteraction.cs): TUI와 사용자 간의 인터랙션 콘솔 처리 및 DB 동기화 여부 확인(ConfirmMetadataSyncAsync)을 정의한 구현체.
 *   [ValidationUiProxy.cs](./src/ReSet.Cli/ValidationUiProxy.cs): 검증기(Validator)의 L1/L2/L3 요약 보고서 등을 Spectre.Console을 활용하여 TUI에 렌더링하는 브릿지 인터페이스 구현체.
+*   [BatchStepCatalog.cs](./src/ReSet.Cli/BatchStepCatalog.cs): 통합 배치 설계의 스텝 후보 명세서를 선별하고 스텝별 분석 메타데이터를 복원하며, 복원 실패를 메타데이터 누락과 파싱 실패로 나누어 반환합니다.
+*   [SpecHeaderReader.cs](./src/ReSet.Cli/SpecHeaderReader.cs): 저장된 `Spec.md` 상단 YAML 헤더에서 검증 종료 상태와 Critic 점수를 되읽어, 캐시로 복원된 명세서도 신규 분석과 동일하게 보고되도록 합니다.
 
 ### 3. 코드 검증 Core 라이브러리: [ReSet.Validator.Core](./src/ReSet.Validator.Core)
 *   **추상화 및 도메인 모델 ([Abstractions](./src/ReSet.Validator.Core/Abstractions), [Models](./src/ReSet.Validator.Core/Models))**
@@ -91,6 +96,7 @@
     *   [ValidatorAiServiceTests.cs](./tests/ReSet.Core.Tests/ValidatorAiServiceTests.cs): AI 응답 파싱 및 L2 Gap 분석기, 마크다운 코드 블록 정제 무결성 검증.
     *   [DataComparisonServiceTests.cs](./tests/ReSet.Core.Tests/DataComparisonServiceTests.cs): 레거시/타겟 JSON 결과값 1:1 대조 및 예외(JsonException) 핸들링 검증.
     *   [DependencyAnalysisOrchestratorTests.cs](./tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs), [SpecificationLinkerTests.cs](./tests/ReSet.Core.Tests/SpecificationLinkerTests.cs), [OutputPathResolverTests.cs](./tests/ReSet.Core.Tests/OutputPathResolverTests.cs): 재귀 SP/UDF 그래프의 중복 제거·실패 격리, 성공 대상 링크 및 객체별 출력 경로를 검증.
+    *   [CancellationPolicyTests.cs](./tests/ReSet.Core.Tests/CancellationPolicyTests.cs): Roslyn 구문 트리로 `src/` 전체를 훑어 취소 예외를 삼킬 수 있는 `catch`를 찾아내는 아키텍처 게이트. 파일별 허용 개수를 [기준선 파일](./tests/ReSet.Core.Tests/cancellation-policy-baseline.txt)에 고정해, 새 위반이 생겼을 때뿐 아니라 고치고도 숫자를 내리지 않았을 때도 실패합니다.
 
 ---
 
@@ -110,6 +116,7 @@
     *   **캐싱 및 서브 시스템**: [CacheManager.cs](./src/ReSet.Core/Services/CacheManager.cs)의 글로벌 해시 캐시 조작 및 레거시 마이그레이션(MigrateLegacyCaches) 파일 복사 시 발생하는 모든 IO 예외는 try-catch로 격리하여 메인 파이프라인 중단을 예방하십시오.
     *   **재귀 코드 객체 분석**: [DependencyAnalysisOrchestrator.cs](./src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs)에서 하위 SP/UDF의 메타데이터·분석·`Spec.md` 저장 실패는 해당 노드만 `Failed` 상태와 사유로 남기고 다른 객체 분석을 계속해야 합니다. 깊이 제한 객체는 `SkippedDepth`로, 크로스 DB 분석이 꺼져 있어 진입하지 않은 다른 DB 객체는 `SkippedExternal`로 표기하십시오. 크로스 DB 분석이 켜진 상태에서 발생한 접근 실패는 `SkippedExternal`로 덮지 말고 `Failed`로 노출해야 합니다. 동일 객체의 여러 경로 중 최소 깊이를 우선하며, 성공하지 않은 객체에는 명세서 링크를 만들지 마십시오. 객체 키와 출력 경로는 구분자·파일명 문자를 충돌 없이 인코딩하고, 성공한 모든 하위 객체의 최종 Critic 점수와 `Thinking.md`를 보존해야 합니다. 객체명 표기는 호출부(`sys.sql_expression_dependencies`·AST)가 아니라 카탈로그(`sys.objects`)나 오프라인 스냅샷에 등록된 실제 이름을 따라야 하며, 같은 객체가 호출한 SP마다 다른 표기로 저장되어 케이스 민감 파일시스템에서 링크가 깨지지 않게 하십시오.
     *   **오프라인 스냅샷 파일 검증 (Fail-Fast)**: `appsettings.json`에 `OfflineSnapshotPath`가 설정되어 있으나 실제 파일이 존재하지 않는 경우, 사용자 DB 연결 프롬프트로 우회(Fallback)하지 말고 즉각 예외를 발생시켜 프로그램을 종료함으로써 사용자가 설정 오기입을 바로 인지할 수 있도록 하십시오.
+    *   **취소는 소프트 페일 대상이 아님**: `OperationCanceledException`은 실패가 아니라 사용자의 지시입니다. 취소 토큰을 넘기는 `await`를 감싸는 광범위 `catch`(`Exception`, `SystemException`, 타입 미지정)에는 반드시 `when (ex is not OperationCanceledException)` 필터를 달아 취소가 경고 목록으로 흡수되거나 다른 예외 타입으로 세탁되지 않게 하십시오. 취소를 실제로 흡수하는 지점은 [Program.cs](./src/ReSet.Cli/Program.cs)의 최상위 핸들러 하나뿐이며, 거기서 사용자에게 취소 사실을 알리고 Serilog를 정리한 뒤 종료합니다. 취소 이후에는 의존성 그래프 순회나 후속 생성을 계속하지 말고 즉시 되돌아가되, 이미 완료된 객체의 산출물은 보존하고 미분석 참조는 문서에 표기하십시오. 이 규칙은 `CancellationPolicyTests`가 Roslyn 구문 트리로 자동 검사합니다.
 3.  **AI API 응답 널 가드(TryGetProperty) 및 모델 파라미터 매핑을 준수하십시오.**
     *   [ClaudeClient.cs](./src/ReSet.Core/Services/Clients/ClaudeClient.cs), [OpenAiClient.cs](./src/ReSet.Core/Services/Clients/OpenAiClient.cs), [GoogleClient.cs](./src/ReSet.Core/Services/Clients/GoogleClient.cs), [OllamaClient.cs](./src/ReSet.Core/Services/Clients/OllamaClient.cs), [ZaiClient.cs](./src/ReSet.Core/Services/Clients/ZaiClient.cs) 호출 파싱 시 안전 필터 차단이나 응답 누락으로 인해 `KeyNotFoundException` 크래시가 발생하는 것을 원천 차단하십시오.
     *   반드시 `TryGetProperty`를 활용해 JSON 필드 유무를 안전하게 확인하고, 비정상 수신 시 `InvalidOperationException`을 던져 투명하게 거절 사유를 노출하십시오.
@@ -143,6 +150,7 @@
         - **Stage 1 (Deconstruct) 추론 로깅 보존**: 로컬 모델의 분할 생성(Stage 2)뿐만 아니라 초기 JSON 논리 추출 단계(Stage 1 Deconstruct)의 추론 내용도 `Thinking.md`에 함께 누적(`accumulatedThinking`)되도록 보장하여, 추론 모델의 논리 추출 과정을 투명하게 디버깅할 수 있도록 유지하십시오.
     *   **L2 Actor-Critic**: `ActorEffort: "dynamic"` 시 3종 차등 Effort 병렬 생성 ➔ Critic 채점 ➔ Fast-Pass 판정 ➔ Consolidator 앙상블 합성 ➔ **합성 완료 후 L2 최종 Critic 검증 및 1회 최종 보완 루프**를 순차 구동하십시오. 최종 합성본(또는 보완본)에 대한 최종 L2 Critic 리뷰 결과 점수는 명세서 파일 상단에 누락 없이 출력되어야 합니다.
     *   **품질 기준 엄격 강제 및 경고 표기**: 품질 향상을 위해 단일 모델 자가 수정 루프에서도 감쇄 임계치(Decaying Threshold)를 배제하고 설정된 기준 점수(Threshold)를 일관되게 적용하십시오. 만약 최종 시도 횟수를 소모한 후에도 점수 미달로 검증을 통과하지 못한 경우, 문서를 버리지 않고 채택하여 저장하되 문서 최상단에 `[!CAUTION]` 경고 배너와 상세한 Critic 점수 및 피드백 코멘트를 보존하여 후속 수정을 유도하도록 구현하십시오.
+    *   **검증 종료 상태 정직성**: 파이프라인이 어디서 끝났는지는 [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs)의 네 값으로만 표현하고, `bool` 플래그나 `ReviewResult`의 널 여부로 대체 판정하지 마십시오. 리뷰 호출이 실패해 점수가 없는 상태를 통과로 보고하는 것을 금지하며, Critic 점수는 종료 상태가 `Passed` 또는 `QualityRejected`일 때만 문서에 실어야 합니다. 상태의 한국어 표기는 `VerificationDocumentFormatter.StatusLabel`에서만 만들고, 명세서 헤더·L3 승인 화면·캐시 복원 보고·지시서 번들이 모두 같은 표기를 쓰도록 유지하십시오. 파이프라인에 진입한 적 없는 문서(단일 SP 계획서, 정산 정책서)는 점수를 받을 수 없는 별도 진입점(`FormatUnverifiedDocument`)으로 렌더링하고, 근거 명세서가 있다면 그 상태를 인용하십시오. 캐시 항목에도 종료 상태를 함께 보존해 복원된 산출물이 신규 분석과 다르게 보고되지 않게 하십시오.
     *   **Mermaid 시스템 변수 예외 허용**: 다이어그램 린팅 시 `@@ERROR` 시스템 변수가 포함되어 있더라도 린팅 컴파일 검사에서 예외적으로 정상 패스하도록 정합성 규칙을 보완하십시오.
     *   **L3 (인간 승인)**: [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)에서 미리보기 및 DB 역동기화를 제어하되, 무인 배치 모드(`isBatchMode: true`) 환경에서는 L3 프롬프트 단계를 생략하고 자동으로 우회 승인하십시오.
     *   **진행도 시각화**: 진행률 시각화([IMultiProgressScope.cs](./src/ReSet.Core/Services/IMultiProgressScope.cs)) 통합 시 Core가 UI에 직접 의존하지 않는 비결합 설계를 유지하고, TUI 구현부(`ConsoleProgressScope`)에서는 렌더링 루프와의 충돌 방지를 위해 `ConcurrentDictionary`와 `TaskCompletionSource`를 적용하여 백그라운드 태스크 방식으로 격리 갱신하십시오.
