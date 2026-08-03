@@ -1,5 +1,6 @@
 using System;
 using System.Net.Http;
+using ReSet.Core.Services.Clients.Cli;
 
 namespace ReSet.Core.Services.Clients
 {
@@ -11,16 +12,51 @@ namespace ReSet.Core.Services.Clients
             return p == "ollama" || p == "local-openai" || p == "mlx" || p == "vllm";
         }
 
-        public static IAiClient CreateClient(string provider, string modelName, string apiKey, string endpoint, HttpClient? httpClient = null, int? numCtx = null)
+        /// <summary>
+        /// 로컬에 설치된 CLI 코딩 에이전트를 백엔드로 쓰는 provider인가.
+        /// API 키가 필요 없고, 무인 배치 모드에서는 사용할 수 없다.
+        /// </summary>
+        public static bool IsCliProvider(string provider)
         {
-            var client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(300) };
+            var p = provider?.ToLowerInvariant();
+            return p == "claude-cli" || p == "codex-cli" || p == "agy-cli";
+        }
 
+        public static IAiClient CreateClient(
+            string provider,
+            string modelName,
+            string apiKey,
+            string endpoint,
+            HttpClient? httpClient = null,
+            int? numCtx = null,
+            string? command = null)
+        {
             if (string.IsNullOrWhiteSpace(provider))
             {
                 throw new ArgumentException("AI Provider가 지정되지 않았습니다.", nameof(provider));
             }
 
-            return provider.ToLowerInvariant() switch
+            var normalizedProvider = provider.ToLowerInvariant();
+
+            // CLI provider는 HttpClient를 쓰지 않는다. 아래에서 새로 만들기 전에 분기한다.
+            // 타임아웃은 호출부가 AiSettings:TimeoutSeconds로 구성한 HttpClient에서
+            // 읽어, 설정이 한 곳에서만 관리되도록 한다.
+            if (IsCliProvider(normalizedProvider))
+            {
+                var timeout = httpClient?.Timeout ?? TimeSpan.FromSeconds(300);
+
+                return normalizedProvider switch
+                {
+                    "claude-cli" => new ClaudeCliClient(command ?? "claude", modelName, timeout),
+                    "codex-cli" => new CodexCliClient(command ?? "codex", modelName, timeout),
+                    "agy-cli" => new AntigravityCliClient(command ?? "agy", modelName, timeout),
+                    _ => throw new NotSupportedException($"지원되지 않는 AI Provider입니다: {provider}")
+                };
+            }
+
+            var client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(300) };
+
+            return normalizedProvider switch
             {
                 "openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "OpenAI"),
                 "local-openai" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "local-openai"),
