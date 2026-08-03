@@ -8,7 +8,6 @@ ReSet.Core/Services/DbMetadataService.cs=16
 ReSet.Core/Services/MetadataExporter.cs=1
 ReSet.Core/Services/SettlementPolicyService.cs=1
 ReSet.Core/Services/SnapshotManager.cs=2
-ReSet.Core/Services/VerificationPipelineOrchestrator.cs=6
 ReSet.Validator.Cli/Program.cs=9
 ReSet.Validator.Core/Services/CSharpReflectionRunner.cs=2
 ReSet.Validator.Core/Services/JavaProcessRunner.cs=1

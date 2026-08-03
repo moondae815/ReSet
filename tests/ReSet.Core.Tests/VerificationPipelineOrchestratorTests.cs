@@ -3248,6 +3248,41 @@ namespace ReSet.Core.Tests
                     specs, "C#", "TestJobCancelFirstRegen", "OpenAI", _consolidatedOutputRoot, isBatchMode: false));
         }
 
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_CancelDuringCacheCheck_Propagates()
+        {
+            // 캐시 확인 중 취소가 삼켜지면 파이프라인이 전체 AI 분석으로 진행한다.
+            // 사용자가 멈추라고 한 직후에 가장 긴 작업이 시작되는 셈이다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CancelCache", CodeObjectType.Procedure);
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_CancelCache", DdlText = "SELECT 1;"
+                }));
+
+            cacheManager.ComputeCompositeHash(Arg.Any<SpDefinition>(), Arg.Any<int>()).Returns("hash");
+            cacheManager
+                .When(manager => manager.IsCacheValid(
+                    Arg.Any<CodeObjectKey>(), Arg.Any<string>(), Arg.Any<OutputPathResolver>()))
+                .Do(_ => throw new OperationCanceledException());
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-4", cacheManager);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB", key, 1, "OpenAI", "rules", true,
+                    Path.Combine(Path.GetTempPath(), $"ReSet-CancelCache-{Guid.NewGuid():N}"), true,
+                    cancellationToken: CancellationToken.None, directDependenciesOnly: true));
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",

@@ -191,7 +191,9 @@ namespace ReSet.Core.Services
                     key.CanonicalName,
                     spDef?.Dependencies?.Count ?? 0, spDef?.Warnings?.Count ?? 0);
             }
-            catch (Exception ex)
+            // 취소를 삼키면 spDef가 null로 남아 파이프라인이 "메타데이터 없음"으로
+            // 조용히 종료된다 - 사용자가 멈추라고 한 것이 아니라 실패로 보고된다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Error(ex, "[파이프라인] DB 메타데이터 수집 실패 - SP: {SpName}", selectedOption);
                 _userInteraction.NotifyError($"{selectedOption} - DB 조회 실패: {ex.Message}");
@@ -264,7 +266,9 @@ namespace ReSet.Core.Services
                         Log.Debug("[파이프라인] 캐시 미스 - AI 분석 진행 - SP: {SpName}", selectedOption);
                     }
                 }
-                catch (Exception ex)
+                // 캐시 확인이 취소되었는데 삼키면 파이프라인이 전체 AI 분석으로 진행한다.
+                // 사용자가 멈추라고 한 직후에 가장 비싼 작업이 시작되는 셈이다.
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Log.Warning(ex, "[파이프라인] 캐시 확인 중 예외 발생 (무시됨) - SP: {SpName}", selectedOption);
                     _userInteraction.NotifyStatus($"[yellow]경고: 캐시 확인 중 오류가 발생하여 무시하고 분석을 진행합니다. ({ex.Message})[/]");
@@ -576,7 +580,8 @@ namespace ReSet.Core.Services
                         }
                         accumulatedThinking.AppendLine();
                     }
-                    catch (Exception ex)
+                    // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 최종 합성 생성 실패: {ex.Message}");
                         return Result(null, spDef, null, null);
@@ -964,7 +969,9 @@ namespace ReSet.Core.Services
                         Log.Debug("[파이프라인] AI 명세서 생성 성공 - SP: {SpName}, 시도: {Attempt}, 응답 길이: {Length}자",
                             selectedOption, attempt, specificationMarkdown.Length);
                     }
-                    catch (Exception ex)
+                    // 취소를 삼키면 genSuccess가 false로 남아 실패로 위장한 정상
+                    // 반환(Result(null,...))이 되어 취소 사실이 사라진다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Log.Error(ex, "[파이프라인] AI 명세서 생성 실패 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                         _userInteraction.NotifyError($"{selectedOption} - AI 분석 실패 (시도 {attempt}): {ex.Message}");
@@ -1661,7 +1668,8 @@ namespace ReSet.Core.Services
                     finalAiResult = aiResult;
                     genSuccess = true;
                 }
-                catch (Exception ex)
+                // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 통합 계획 생성 실패 (시도 {attempt}): {ex.Message}");
                 }
@@ -2001,7 +2009,9 @@ namespace ReSet.Core.Services
                 Log.Information("[파이프라인] DB 메타데이터 역반영 완료 - SP: {SpName}", selectedOption);
                 _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - DB 메타데이터 설명 역반영 완료!");
             }
-            catch (Exception ex)
+            // 취소를 삼키면 DB 역반영이 중단됐다는 사실이 감춰지고 호출부는
+            // 정상 완료(Result)로만 본다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Error(ex, "[파이프라인] DB 메타데이터 역반영 중 예외 발생 - SP: {SpName}", selectedOption);
                 _userInteraction.NotifyError($"DB 메타데이터 설명 역반영 중 오류 발생: {ex.Message}");
