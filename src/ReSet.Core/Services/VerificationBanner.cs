@@ -22,7 +22,7 @@ public static class VerificationBanner
 
     public static string L1Exhausted(IReadOnlyList<string> errors)
     {
-        var errorLines = RenderBulletList(errors, "상세 오류가 기록되지 않았습니다.");
+        var errorLines = RenderBulletList(errors, "(상세 오류가 기록되지 않았습니다.)");
 
         return "\n> [!CAUTION]\n> **[검증 미완료] L1 기계 검증을 통과하지 못했습니다.**"
             + " 재시도를 모두 소진하여 마지막 작성 버전을 그대로 사용합니다.\n"
@@ -45,7 +45,7 @@ public static class VerificationBanner
     /// </summary>
     public static string UnresolvedReferences(IReadOnlyList<string> objectNames)
     {
-        var nameLines = RenderBulletList(objectNames, "미분석 객체명이 기록되지 않았습니다.");
+        var nameLines = RenderBulletList(objectNames, "(미분석 객체명이 기록되지 않았습니다.)");
 
         return "\n> [!CAUTION]\n> **[참조 미완] 사용자 취소로 아래 참조 객체가 분석되지 않았습니다.**\n"
             + nameLines

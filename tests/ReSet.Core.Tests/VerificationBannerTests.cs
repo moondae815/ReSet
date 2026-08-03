@@ -83,4 +83,21 @@ public sealed class VerificationBannerTests
         Assert.Contains("[참조 미완]", banner);
         Assert.DoesNotContain(">   - \n", banner);
     }
+
+    [Fact]
+    public void L1Exhausted_EmptyList_RendersThePlaceholderVerbatim()
+    {
+        // 헬퍼 리팩터링이 이 문자열을 바꾸면 즉시 드러나야 한다.
+        var banner = VerificationBanner.L1Exhausted(Array.Empty<string>());
+
+        Assert.Contains(">   - (상세 오류가 기록되지 않았습니다.)", banner);
+    }
+
+    [Fact]
+    public void UnresolvedReferences_EmptyList_RendersThePlaceholderVerbatim()
+    {
+        var banner = VerificationBanner.UnresolvedReferences(Array.Empty<string>());
+
+        Assert.Contains(">   - (미분석 객체명이 기록되지 않았습니다.)", banner);
+    }
 }
