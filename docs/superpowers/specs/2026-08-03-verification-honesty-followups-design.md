@@ -170,19 +170,23 @@ var showScores = review is not null &&
 
 #### 왜 명세서와 계획서의 포매터를 나누는가
 
-두 문서는 같은 5개 점수 필드를 쓰지만 의미가 다르다. `AiService.cs:1997-2017`의 통합 계획서 평가 기준과 명세서 기준을 비교하면:
+두 문서는 같은 5개 점수 필드를 쓴다. `AiService.cs`의 두 Critic 프롬프트를 직접 읽으면 **표제 기준명은 5개 모두 문자 그대로 동일하고, 차이는 하위 불릿에만 있다**:
 
-| 필드 | 명세서 YAML 주석 | 통합 계획서 평가 기준 |
+| 필드 | 명세서 Critic 기준 (`AiService.cs:1573-1589`) | 통합 계획서 Critic 기준 (`AiService.cs:1998-2020`) |
 |---|---|---|
-| `ScoreAccuracy` | SQL 대비 기능 정합성 | Business Logic and Flow Accuracy |
-| `ScoreCrud` | 데이터 변경 및 조회 검증 | 파이프라인 청킹/순서(Paging Reader) 검증 |
-| `ScoreInterface` | 파라미터 및 반환셋 정합성 | Integration and Interface Definition |
-| `ScoreReadability` | 코드 가독성 및 표준 준수 | **Diagram Syntax** and Readability |
-| `ScoreException` | 트랜잭션 격리 및 에러 처리 | Exception Handling, Transaction and Isolation Policy |
+| `ScoreAccuracy` | Business Logic and Flow Accuracy | Business Logic and Flow Accuracy (하위 불릿에 `UNION`/다중 JOIN 보존 항목 추가) |
+| `ScoreCrud` | Data Model and CRUD Completeness (SELECT/INSERT/UPDATE/DELETE 표 1:1, 임시 테이블·UDF·Linked Server) | Data Model and CRUD Completeness (청킹/Paging Reader 순서, DELETE 필터에 청킹 키, 원본 필터 보존) |
+| `ScoreInterface` | Integration and Interface Definition (파라미터 표·Rowset 반환) | Integration and Interface Definition (파라미터 매핑·데이터 교환 계약·API 연동) |
+| `ScoreException` | Exception Handling, Transaction and Isolation Policy (BEGIN/COMMIT/ROLLBACK, TRY-CATCH, NOLOCK 리스크) | Exception Handling, Transaction and Isolation Policy (SNAPSHOT 격리, `XACT_ABORT`, 체크포인트 재시작, Shadow 테이블, 청크별 트랜잭션) |
+| `ScoreReadability` | Diagram Syntax and Readability (Mermaid flowchart TD 문법) | Diagram Syntax and Readability (Mermaid 문법 + `subgraph` 키워드 띄어쓰기) |
 
-`SpecificationDocumentFormatter`를 그대로 재사용하면 계획서에 틀린 설명 주석이 박힌다. 반대로 골격까지 복제하면 직전 사이클의 교훈 — 같은 결함이 중복된 삽입부를 따라 다섯 번 반복됐다 — 을 그대로 재현한다.
+**이전 판의 표는 "명세서" 열에 Critic 기준이 아니라 포매터 자신의 라벨 문자열(`SpecificationLabels`)을 옮겨 적었다.** 그래서 실제보다 큰 차이가 있는 것처럼 보였다. 정정한다.
 
-따라서 **차이나는 것만 분리한다.** 5개 설명 문자열을 담는 내부 테이블을 두고, 골격은 공유한다.
+이 표를 놓고 보면 **분리의 근거는 이전 판이 주장한 것보다 좁다.** 표제 기준이 같으므로 라벨을 나누는 실익은 하위 불릿 수준의 어감 차이(예: `ScoreCrud`를 계획서에서는 청킹/순서로 읽는 것)이고, 유일하게 *사실과 다른* 라벨은 `ScoreReadability`의 `코드 가독성 및 표준 준수` 하나다 — 두 Critic 모두 여기서 코드 가독성이 아니라 **Mermaid 다이어그램 문법**을 채점한다. 즉 이 라벨은 계획서뿐 아니라 **명세서에서도 틀렸다**. 라벨 문자열은 테스트로 고정되어 있어 이 웨이브에서 바꾸지 않지만, 별도 판단 대상으로 남겨둔다.
+
+또 하나: `FormatSpecification`은 UDF/함수 명세서에도 쓰이는데, UDF는 **세 번째 Critic 기준 변형**(`ReviewFunctionSpecificationAsync`, `AiService.cs:1656-1660`)을 쓴다 — `Business Logic and Formula Accuracy` / `Referenced Object Completeness` / `Return Contract` / `Side Effects and Constraints` / `Diagram Syntax and Readability`. 따라서 단일 `SpecificationLabels` 세트는 이미 서로 다른 두 Critic(SP·UDF)을 하나로 뭉뚱그리고 있다. `ScoreInterface`의 `파라미터 및 반환셋 정합성`은 UDF의 `Return Contract`에 그럭저럭 맞지만, `ScoreCrud`의 `데이터 변경 및 조회 검증`은 UDF의 `Referenced Object Completeness`와 어긋난다.
+
+정리하면, 골격까지 복제하면 직전 사이클의 교훈 — 같은 결함이 중복된 삽입부를 따라 다섯 번 반복됐다 — 을 그대로 재현하므로 **차이나는 것만 분리한다**는 결론 자체는 유지한다. 다만 그 분리는 "두 Critic이 서로 다른 것을 채점한다"가 아니라 "문서 종류별로 읽는 사람에게 더 정확한 문구를 준다"는, 더 약한 근거 위에 서 있다. 5개 설명 문자열을 담는 내부 테이블을 두고, 골격은 공유한다.
 
 ```csharp
 private sealed record ScoreLabels(
