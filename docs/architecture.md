@@ -176,6 +176,56 @@ graph TD
 
 </details>
 
+<details>
+<summary><b>2번 경로 상세 — 통합 배치 마이그레이션 설계 파이프라인 (클릭하여 펼치기)</b></summary>
+
+```mermaid
+graph TD
+    %% 1단계: 이미 저장된 명세서를 모은다 - 이 경로는 SP를 다시 분석하지 않는다
+    subgraph Collect ["1. 대상 명세서 수집 (Collection)"]
+        EnterB["통합 배치 마이그레이션 설계 경로 진입"] --> ModeB{"배치 모드 여부?"}
+        ModeB -- "아니오 (TUI)" --> PickSpecs["순차 단일 선택 루프로 저장된 Spec.md를 큐에 적재<br/>(물리 선택 순서 보장, 5.2절)"]
+        ModeB -- "예 (--job-name)" --> AutoSpecs["BatchStepCatalog으로 스텝 후보 선별 및<br/>스텝별 분석 메타데이터 복원"]
+        PickSpecs & AutoSpecs --> JobName["Job 이름 확정 및 출력 루트 결정<br/>(output/Jobs 하위)"]
+    end
+
+    %% 2단계: 명세서 경로의 dynamic/단일 분기와 달리 항상 3단계 순차 생성이다
+    subgraph Agentic ["2. 3단계 Agentic Workflow (생성)"]
+        JobName --> StructCheck{"목차(PlanStructure)가<br/>이미 있는가?"}
+        StructCheck -- "아니오 (1회차)" --> P1["1/3. 브레인스토밍<br/>(raw/Brainstorming.md 보존)"]
+        P1 --> P2["2/3. 목차 설계<br/>(raw/PlanStructure.md 보존)"]
+        P2 --> P3
+        StructCheck -- "예 (재시도)" --> P3["3/3. 통합 계획 본문 생성<br/>(목차 재사용, 최신 피드백만 주입)"]
+    end
+
+    subgraph VerifyB ["3. 검증 및 종료 상태 판정"]
+        P3 --> L1B{"L1 기계 검증 통과?"}
+        L1B -- "실패 (재시도 여력 있음)" --> Retry["피드백 세팅 후 3/3 단계만 재생성"]
+        Retry --> P3
+        L1B -- "실패 (재시도 소진)" --> OutL1["종료 상태: L1 미통과<br/>경고 배너 삽입"]
+        L1B -- "성공" --> L2B{"L2 Critic 교차 리뷰<br/>(ReviewConsolidatedPlanAsync)"}
+        L2B -- "리뷰 호출 실패" --> OutNR["종료 상태: 리뷰 미수행"]
+        L2B -- "결함 (재시도 여력 있음)" --> Retry
+        L2B -- "결함 (재시도 소진)" --> OutQR["종료 상태: 품질 미달<br/>점수·피드백 배너 삽입"]
+        L2B -- "통과" --> OutPass["종료 상태: 통과"]
+    end
+
+    subgraph ExportB ["4. 산출물 저장 및 지시서 번들 (Export)"]
+        OutL1 & OutNR & OutQR & OutPass --> L3B{"배치 모드인가?"}
+        L3B -- "예 (Batch)" --> SavePlan["BatchMigrationPlan.md 저장<br/>(종료 상태와 점수를 헤더에 기록)"]
+        L3B -- "아니오 (TUI)" --> Human{"L3 사용자 결정?"}
+        Human -- "1. 승인" --> SavePlan
+        Human -- "2. 피드백" --> Regen["목차는 유지한 채 본문만 재생성<br/>L2를 다시 거치지 않으므로<br/>종료 상태를 리뷰 미수행으로 되돌림"]
+        Regen --> Human
+        Human -- "3. 취소" --> AbortB["저장 없이 이탈"]
+        SavePlan --> Bundle["지시서 번들 생성<br/>agent/MigrationInstructions.md, todo.md<br/>(계획서 검증 상태를 0번 섹션에 명시)"]
+    end
+
+    Bundle --> ToCodegen["코딩 에이전트 구동 경로로 연결 (3.3절)"]
+```
+
+</details>
+
 ### 3.2. 실행 모드 분기
 * **대화형 TUI 모드**: 개발자가 직접 화면을 보며 분석할 SP를 원하는 순서대로 골라 담은 후 배치 전환 계획을 수립하고, AI 검증 결과와 피드백을 실시간 조율하며 승인 및 DB 동기화를 제어합니다.
 * **무인 배치 모드 (CI/CD)**: `--job-name` 인자가 공급되면 사용자의 대화형 개입 단계를 생략하고 L1/L2 검증을 통과한 산출물을 자동 생성 및 병합하며, 외부 코딩 에이전트 기동까지 파이프라인을 무정지로 실행합니다.
