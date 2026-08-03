@@ -9,11 +9,20 @@ namespace ReSet.Core.Services;
 /// </summary>
 public static class VerificationBanner
 {
+    /// <summary>
+    /// 배너 간 불릿 리스트 형식 계약을 한 곳에서 지킨다. 여러 배너가 동일한
+    /// 불릿 형식(">   - {item}")을 사용하므로 중앙에서 관리한다.
+    /// </summary>
+    private static string RenderBulletList(IReadOnlyList<string> items, string emptyPlaceholder)
+    {
+        return items is { Count: > 0 }
+            ? string.Join("\n", items.Select(item => $">   - {item}"))
+            : $">   - {emptyPlaceholder}";
+    }
+
     public static string L1Exhausted(IReadOnlyList<string> errors)
     {
-        var errorLines = errors is { Count: > 0 }
-            ? string.Join("\n", errors.Select(error => $">   - {error}"))
-            : ">   - (상세 오류가 기록되지 않았습니다.)";
+        var errorLines = RenderBulletList(errors, "상세 오류가 기록되지 않았습니다.");
 
         return "\n> [!CAUTION]\n> **[검증 미완료] L1 기계 검증을 통과하지 못했습니다.**"
             + " 재시도를 모두 소진하여 마지막 작성 버전을 그대로 사용합니다.\n"
@@ -36,9 +45,7 @@ public static class VerificationBanner
     /// </summary>
     public static string UnresolvedReferences(IReadOnlyList<string> objectNames)
     {
-        var nameLines = objectNames is { Count: > 0 }
-            ? string.Join("\n", objectNames.Select(name => $">   - {name}"))
-            : ">   - (미분석 객체명이 기록되지 않았습니다.)";
+        var nameLines = RenderBulletList(objectNames, "미분석 객체명이 기록되지 않았습니다.");
 
         return "\n> [!CAUTION]\n> **[참조 미완] 사용자 취소로 아래 참조 객체가 분석되지 않았습니다.**\n"
             + nameLines
