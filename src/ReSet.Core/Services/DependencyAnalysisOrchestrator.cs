@@ -256,7 +256,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                     SpecMarkdown = pipelineResult.SpecMarkdown,
                     Review = pipelineResult.Review,
                     Outcome = pipelineResult.Outcome,
-                    ThinkingText = pipelineResult.ThinkingText
+                    ThinkingText = pipelineResult.ThinkingText,
+                    FromCache = pipelineResult.FromCache,
+                    AnalyzedAt = pipelineResult.AnalyzedAt
                 });
             }
             catch (OperationCanceledException)
@@ -443,7 +445,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                         Directory.CreateDirectory(Path.GetDirectoryName(node.SpecPath!)!);
                         await File.WriteAllTextAsync(
                             node.SpecPath!,
-                            BuildPersistedSpecification(analysis, request),
+                            BuildPersistedSpecification(analysis, request, graph),
                             cancellationToken);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -503,15 +505,51 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
     private static string BuildPersistedSpecification(
         CodeObjectAnalysisResult analysis,
-        DependencyAnalysisRequest request) =>
-        VerificationDocumentFormatter.FormatSpecification(
-            analysis.SpecMarkdown ?? string.Empty,
+        DependencyAnalysisRequest request,
+        CodeObjectPipelineResult graph)
+    {
+        var body = analysis.SpecMarkdown ?? string.Empty;
+
+        // 배너는 analysis.SpecMarkdown에 되쓰지 않는다. 재링크 루프가 이 메서드를
+        // 여러 번 부를 수 있는데, 되쓰면 배너가 겹겹이 쌓인다.
+        var unresolved = CollectUnresolvedReferences(analysis.Key, graph);
+        if (unresolved.Count > 0)
+        {
+            body = VerificationBanner.UnresolvedReferences(unresolved) + body;
+        }
+
+        return VerificationDocumentFormatter.FormatSpecification(
+            body,
             analysis.Review,
             analysis.Outcome,
             request.Provider,
             request.ModelName,
             request.ActorEffort,
-            DateTime.Now);
+            analysis.AnalyzedAt ?? DateTime.Now,
+            AnalysisScope.Direct);
+    }
+
+    /// <summary>
+    /// 이 문서가 참조하는 객체 중 분석이 끝나지 않은 것들의 이름을 모은다.
+    /// 참조 섹션 생성과 같은 상태(자식 노드 Status)를 보므로 두 표기가 어긋나지 않는다.
+    /// </summary>
+    private static IReadOnlyList<string> CollectUnresolvedReferences(
+        CodeObjectKey parentKey,
+        CodeObjectPipelineResult graph)
+    {
+        var nodesByKey = graph.Nodes.ToDictionary(node => node.Key);
+
+        return graph.DependencyEdges
+            .Where(edge => edge.Source.Equals(parentKey))
+            .Select(edge => edge.Target)
+            .Distinct()
+            .Where(target =>
+                nodesByKey.TryGetValue(target, out var node) &&
+                node.Status is AnalysisNodeStatus.Cancelled or AnalysisNodeStatus.Queued)
+            .Select(target => $"{target.Schema}.{target.Name}")
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     private static async Task PersistThinkingAsync(
         CodeObjectAnalysisResult analysis,

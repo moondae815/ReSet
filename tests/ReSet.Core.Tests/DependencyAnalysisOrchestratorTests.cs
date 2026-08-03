@@ -900,6 +900,141 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_CyclicGraphCancelled_AddsTheUnresolvedReferenceBannerToTheSurvivingDocument()
+    {
+        // 후위 순회라 보통은 부모가 자식보다 뒤에 실행되지만, 순환에서는
+        // TryRegisterDepth가 재진입을 막아 자식이 부모보다 뒤에 온다.
+        // 이때만 성공한 문서의 참조 목록에 미완료 항목이 남는다.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-CycleBanner-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var partner = Key("USP_Partner", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(
+            Definition(root, partner),
+            Definition(partner, root));
+        using var cts = new CancellationTokenSource();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                if (key == root)
+                {
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                }
+
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot),
+                cts.Token);
+
+            Assert.Equal(GraphCompletion.PartialCancelled, result.Completion);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var partnerSpec = await File.ReadAllTextAsync(paths.ResolveSpecPath(partner));
+
+            Assert.Contains("[참조 미완]", partnerSpec);
+            Assert.Contains("dbo.USP_Root", partnerSpec);
+            // 배너와 참조 섹션이 같은 사실을 말해야 한다.
+            Assert.Contains("분석 취소", partnerSpec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_CompletedGraph_LeavesNoUnresolvedReferenceBanner()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-NoBanner-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var rootSpec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+
+            Assert.DoesNotContain("[참조 미완]", rootSpec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_WritesDirectAnalysisScopeIntoEverySpecification()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Scope-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+
+            Assert.Contains("분석 범위: 직접 의존성", await File.ReadAllTextAsync(paths.ResolveSpecPath(root)));
+            Assert.Contains("분석 범위: 직접 의존성", await File.ReadAllTextAsync(paths.ResolveSpecPath(child)));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_CachedNode_KeepsTheOriginalAnalysisTimestamp()
+    {
+        // 캐시 히트는 AI를 호출하지 않았다. 링크 갱신 때문에 파일은 다시
+        // 써야 하지만 작성일시까지 새로 찍으면 거짓 주장이 된다.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-CacheStampGraph-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var analyzedAt = new DateTime(2026, 8, 1, 14, 22, 3);
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                FromCache = true,
+                AnalyzedAt = analyzedAt
+            }));
+
+        try
+        {
+            await sut.AnalyzeAsync(root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+
+            Assert.Contains("**문서 작성일시**: 2026-08-01 14:22:03", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_EmptyRootDatabase_ThrowsInsteadOfSilentlySkippingAllArtifacts()
     {
         // 빈 DB명은 OutputPathResolver 생성을 막아 모든 산출물을 조용히
