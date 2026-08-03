@@ -110,7 +110,7 @@ namespace ReSet.Core.Services
                         }
                     }
                 }
-                catch {}
+                catch (Exception ex) when (ex is not OperationCanceledException) {}
             }
 
             Log.Warning("[DbMetadata] 객체 DDL 조회 실패 - 대상 객체가 존재하지 않습니다: {FullName}", fullName);
@@ -204,7 +204,7 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Warning(ex, "[DbMetadata] 데이터베이스 호환성 수준 조회 실패 (Soft Fail) - 기본값 160으로 폴백합니다.");
             }
@@ -499,7 +499,7 @@ namespace ReSet.Core.Services
                         typeCode,
                         cancellationToken);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Log.Warning(ex, "[DbMetadata] UDF 반환 메타데이터 수집 실패 (Soft Fail) - 객체: {ObjectFullName}", objectFullName);
                     objectDefinition.Warnings.Add($"[{objectFullName}] UDF 반환 메타데이터 수집 실패: {ex.Message}");
@@ -514,7 +514,7 @@ namespace ReSet.Core.Services
                 var staticParser = new SqlStaticParser();
                 objectDefinition.StaticAnalysis = staticParser.Analyze(objectDefinition.DdlText, compatLevel);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Warning(ex, "[DbMetadata] SQL 정적 분석 구동 중 예외 발생 (Soft Fail)");
                 objectDefinition.StaticAnalysis = new SpStaticAnalysisResult
@@ -609,7 +609,7 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Warning(ex, "[DbMetadata] 2차 정밀 정적 분석 재구동 중 예외 발생 (기존 결과 유지)");
             }
@@ -733,7 +733,9 @@ namespace ReSet.Core.Services
                                 cancellationToken);
                         }
                     }
-                    catch (Exception exception)
+                    // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+                    // 남은 의존성을 전부 걷고 나서야 반환된다.
+                    catch (Exception exception) when (exception is not OperationCanceledException)
                     {
                         warnings.Add(
                             $"[{dependencyDatabase}.{directDependency.Schema}.{directDependency.Name}] 직접 의존 메타데이터 수집 실패: {exception.Message}");
@@ -742,7 +744,9 @@ namespace ReSet.Core.Services
                     dependencies.Add(directDependency);
                 }
             }
-            catch (Exception exception)
+            // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+            // 남은 의존성을 전부 걷고 나서야 반환된다.
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 Log.Warning(exception, "[DbMetadata] 직접 의존성 수집 실패 (Soft Fail) - 객체: {ObjectKey}", sourceObjectKey.CanonicalName);
                 warnings.Add($"[{sourceObjectKey.CanonicalName}] 직접 의존성 정보 수집 실패: {exception.Message}");
@@ -777,7 +781,9 @@ namespace ReSet.Core.Services
             {
                 rawDeps = await GetRawDependenciesAsync(connectionString, database, schema, name, cancellationToken);
             }
-            catch (Exception ex)
+            // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+            // 남은 의존성을 전부 걷고 나서야 반환된다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Warning(ex, "[DbMetadata] 의존 관계 수집 실패 (Soft Fail) - Target: {TargetName}", targetName);
                 warnings.Add($"[{targetName}] 의존 관계 정보 수집 실패: {ex.Message}");
@@ -827,7 +833,9 @@ namespace ReSet.Core.Services
                         depInfo.Description = await GetTableDescriptionAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
                         depInfo.Indexes = await GetTableIndexesAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
                     }
-                    catch (Exception ex)
+                    // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+                    // 남은 의존성을 전부 걷고 나서야 반환된다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         warnings.Add($"[{depFullName}] 테이블 스키마, 코멘트 및 인덱스 정보 수집 실패: {ex.Message}");
                     }
@@ -869,7 +877,9 @@ namespace ReSet.Core.Services
                             childKey,
                             currentDepth + 1, maxDepth, visited, dependencies, warnings, cancellationToken);
                     }
-                    catch (Exception ex)
+                    // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+                    // 남은 의존성을 전부 걷고 나서야 반환된다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         warnings.Add($"[{depFullName}] 참조 객체 DDL 수집 실패: {ex.Message}");
                     }
@@ -1004,7 +1014,7 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Warning(ex, "[DbMetadata] 인덱스 정보 수집 실패 (Soft Fail) - Table: {Schema}.{Table}", schema, tableName);
             }
@@ -1042,7 +1052,7 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 권한 오류 등 무시
             }
@@ -1075,7 +1085,7 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 권한 오류 시 소프트 스킵
             }
@@ -1103,7 +1113,7 @@ namespace ReSet.Core.Services
                         }
                     }
                 }
-                catch {}
+                catch (Exception ex) when (ex is not OperationCanceledException) {}
             }
 
             return "UNKNOWN";
@@ -1221,7 +1231,9 @@ namespace ReSet.Core.Services
                         }
                     }
                 }
-                catch
+                // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+                // 남은 의존성을 전부 걷고 나서야 반환된다.
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     // 조회 에러 시 소프트 페일로 스킵
                 }
@@ -1252,7 +1264,9 @@ namespace ReSet.Core.Services
                             depInfo.Description = "Dynamic SQL에 의해 동적 감지된 테이블";
                         }
                     }
-                    catch (Exception ex)
+                    // 취소를 삼키면 그래프 순회가 계속된다. 사용자가 멈추라고 한 뒤에도
+                    // 남은 의존성을 전부 걷고 나서야 반환된다.
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         warnings.Add($"[Dynamic SQL: {depFullName}] 테이블 스키마 수집 실패: {ex.Message}");
                     }

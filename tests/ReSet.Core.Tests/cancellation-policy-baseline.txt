@@ -4,7 +4,6 @@
 # 이 숫자는 부채다. 고칠 때마다 함께 내려야 하며, 내리지 않으면 테스트가 실패한다.
 # 새 위반이 생겨도 실패한다. 양방향으로 잠겨 있어야 목록이 썩지 않는다.
 ReSet.Core/Services/AiService.cs=3
-ReSet.Core/Services/DbMetadataService.cs=16
 ReSet.Core/Services/MetadataExporter.cs=1
 ReSet.Core/Services/SettlementPolicyService.cs=1
 ReSet.Core/Services/SnapshotManager.cs=2
