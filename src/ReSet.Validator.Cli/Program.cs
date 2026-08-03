@@ -216,6 +216,10 @@ namespace ReSet.Validator.Cli
                         $"[red]에러: 배치 모드에서는 CLI provider를 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
                     AnsiConsole.MarkupLine(
                         "[yellow]CLI provider는 구독 쿼터 소진이나 권한 프롬프트로 무인 실행 도중 중단될 수 있습니다. appsettings.json에서 API provider로 변경해 주십시오.[/]");
+
+                    // 이 가드의 존재 이유는 무인 CI 실행을 세우는 것이다. 종료 코드 0으로
+                    // 끝나면 아무것도 만들지 않았는데도 파이프라인이 초록으로 통과한다.
+                    Environment.ExitCode = 1;
                     return;
                 }
             }
