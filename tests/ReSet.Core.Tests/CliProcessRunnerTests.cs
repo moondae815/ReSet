@@ -86,6 +86,29 @@ namespace ReSet.Core.Tests
             }
         }
 
+        // 자식이 stdin을 다 읽기 전에 끝나면 파이프가 끊겨 IOException(EPIPE)이 난다.
+        // 이것이 그대로 올라가면 호출자는 Win32Exception만 잡으므로 "Broken pipe"라는
+        // 원시 메시지가 사용자에게 가고, 진짜 원인인 종료 코드와 stderr는 영영 회수되지
+        // 않는다. ReSet의 실제 프롬프트는 191KB로 파이프 버퍼(보통 64KB)를 넘기므로
+        // 이 경로는 실제 워크로드에서만 밟힌다 - 한 줄짜리 입력으로는 재현되지 않는다.
+        [Fact]
+        public async Task RunAsync_ChildExitsBeforeDrainingLargeStdin_StillReportsExitCodeAndStderr()
+        {
+            var (command, arguments) = Shell(
+                "echo 'not logged in' 1>&2; exit 7",
+                "echo not logged in 1>&2 & exit 7");
+
+            // 파이프 버퍼를 확실히 넘긴다. 한글은 UTF-8 3바이트이므로 약 900KB다.
+            var oversizedPrompt = new string('가', 300_000);
+
+            var result = await CliProcessRunner.RunAsync(
+                command, arguments, oversizedPrompt, Path.GetTempPath(), Generous, CancellationToken.None);
+
+            Assert.Equal(7, result.ExitCode);
+            Assert.False(result.TimedOut);
+            Assert.Contains("not logged in", result.StandardError);
+        }
+
         [Fact]
         public async Task RunAsync_Timeout_ReturnsTimedOutResult()
         {

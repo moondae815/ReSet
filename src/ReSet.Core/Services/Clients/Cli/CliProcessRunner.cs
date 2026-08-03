@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,14 +67,34 @@ namespace ReSet.Core.Services.Clients.Cli
 
             try
             {
-                if (standardInput != null)
+                try
                 {
-                    await process.StandardInput.WriteAsync(
-                        standardInput.AsMemory(), linkedCts.Token);
-                }
+                    if (standardInput != null)
+                    {
+                        await process.StandardInput.WriteAsync(
+                            standardInput.AsMemory(), linkedCts.Token);
+                    }
 
-                // 항상 닫는다. 닫지 않으면 자식이 입력을 계속 기다린다.
-                process.StandardInput.Close();
+                    // 항상 닫는다. 닫지 않으면 자식이 입력을 계속 기다린다.
+                    process.StandardInput.Close();
+                }
+                catch (IOException pipeException)
+                {
+                    // 자식이 stdin을 다 읽기 전에 끝나면 파이프가 끊겨 EPIPE(IOException)가 난다.
+                    // 잘못된 플래그, 미로그인, 즉시 거절 같은 경우가 여기에 해당한다.
+                    // ReSet의 실제 프롬프트는 191KB로 파이프 버퍼(보통 64KB)를 넘기므로
+                    // 이 경로가 실제로 밟힌다.
+                    //
+                    // 여기서 예외를 올리면 호출자는 Win32Exception만 잡으므로 "Broken pipe"라는
+                    // 원시 메시지가 그대로 사용자에게 간다. 진짜 원인인 종료 코드와 stderr는
+                    // 아직 회수되지 않았다. 따라서 판정을 중단하지 않고 WaitForExitAsync로
+                    // 내려가 종료 코드와 stderr를 확보해 CliFailureClassifier에 넘긴다.
+                    Log.Debug(pipeException,
+                        "CLI 표준 입력 파이프가 끊겼습니다. 자식이 먼저 종료한 것으로 보고 종료 코드를 기다립니다 - Command: {Command}",
+                        command);
+
+                    TryCloseStandardInput(process, command);
+                }
 
                 await process.WaitForExitAsync(linkedCts.Token);
             }
@@ -109,6 +130,27 @@ namespace ReSet.Core.Services.Clients.Cli
                 StandardError = standardError,
                 TimedOut = false
             };
+        }
+
+        /// <summary>
+        /// 파이프가 이미 끊긴 뒤 표준 입력을 닫는다. 닫기(flush)에서 같은 IOException이
+        /// 다시 날 수 있는데, 이 시점에는 닫는 것 자체가 목적이므로 무시해도 안전하다.
+        /// </summary>
+        private static void TryCloseStandardInput(Process process, string command)
+        {
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch (IOException closeException)
+            {
+                Log.Debug(closeException,
+                    "CLI 표준 입력 닫기 실패 (무시됨) - Command: {Command}", command);
+            }
+            catch (ObjectDisposedException)
+            {
+                // 이미 닫힘
+            }
         }
 
         private static void TryKillTree(Process process, string command)
