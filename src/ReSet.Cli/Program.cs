@@ -1635,7 +1635,7 @@ namespace ReSet.Cli
             var outputFileName = Path.Combine(docsDir, "Spec.md");
             await File.WriteAllTextAsync(
                 outputFileName,
-                SpecificationDocumentFormatter.Format(
+                VerificationDocumentFormatter.FormatSpecification(
                     specMarkdown,
                     review,
                     outcome,
