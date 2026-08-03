@@ -733,6 +733,96 @@ public sealed class DependencyAnalysisOrchestratorTests
             result.Edges.Single(edge => edge.Source == root).Target.Name);
     }
 
+    [Fact]
+    public async Task AnalyzeAsync_CancelledMidGraph_PersistsCompletedObjectsAndReportsPartialCompletion()
+    {
+        // 완료된 객체의 AI 비용이 취소로 버려지면 안 된다.
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Cancel-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var doneChild = Key("FN_Done", CodeObjectType.Function);
+        var cancelledChild = Key("FN_Cancelled", CodeObjectType.Function);
+        var metadata = CreateMetadataService(
+            Definition(root, doneChild, cancelledChild),
+            Definition(doneChild),
+            Definition(cancelledChild));
+        using var cts = new CancellationTokenSource();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                if (key == cancelledChild)
+                {
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                }
+
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot),
+                cts.Token);
+
+            Assert.Equal(GraphCompletion.PartialCancelled, result.Completion);
+            Assert.Equal(AnalysisNodeStatus.Succeeded, result.GetNode(doneChild).Status);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            Assert.True(File.Exists(paths.ResolveSpecPath(doneChild)));
+            Assert.False(File.Exists(paths.ResolveSpecPath(cancelledChild)));
+            Assert.False(File.Exists(paths.ResolveSpecPath(root)));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_CompletedGraph_ReportsCompleteCompletion()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Complete-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot),
+                CancellationToken.None);
+
+            Assert.Equal(GraphCompletion.Complete, result.Completion);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_EmptyRootDatabase_ThrowsInsteadOfSilentlySkippingAllArtifacts()
+    {
+        // 빈 DB명은 OutputPathResolver 생성을 막아 모든 산출물을 조용히
+        // 사라지게 했다. 호출부 결함이므로 즉시 드러낸다.
+        var root = CodeObjectKey.Create("", "dbo", "USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(
+            () => sut.AnalyzeAsync(root, Request(), CancellationToken.None));
+
+        Assert.Contains("데이터베이스", exception.Message);
+    }
+
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",

@@ -53,6 +53,16 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
     {
         ArgumentNullException.ThrowIfNull(rootKey);
         ArgumentNullException.ThrowIfNull(request);
+
+        // 빈 DB명은 OutputPathResolver 생성을 막아 모든 산출물 저장을 조용히
+        // 무산시킨다. 호출부 결함이므로 폴백하지 않고 즉시 드러낸다.
+        if (string.IsNullOrWhiteSpace(rootKey.Database))
+        {
+            throw new ArgumentException(
+                "분석 기준 데이터베이스를 확인할 수 없어 산출물 경로를 계산할 수 없습니다.",
+                nameof(rootKey));
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         // 호출자가 무엇을 넣었든 루트 객체의 DB가 분석 기준이 된다.
@@ -61,21 +71,41 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         var effectiveRequest = request with { AnalysisDatabase = rootKey.Database };
 
         var execution = new ExecutionState(rootKey.Database);
-        await DiscoverAsync(rootKey, 0, effectiveRequest, execution, cancellationToken);
+        var completion = GraphCompletion.Complete;
 
-        // 호출부 표기(sys.sql_expression_dependencies·AST)가 아니라 카탈로그의 실제 객체명을
-        // 그래프의 단일 표기로 확정한다. 파이프라인 실행 전에 적용해야 캐시 키와 산출물 경로가
-        // 호출한 SP마다 갈라지지 않는다.
-        execution.ApplyCanonicalKeys();
-        await ExecuteDiscoveredNodesAsync(effectiveRequest, execution, cancellationToken);
+        try
+        {
+            await DiscoverAsync(rootKey, 0, effectiveRequest, execution, cancellationToken);
+
+            // 호출부 표기(sys.sql_expression_dependencies·AST)가 아니라 카탈로그의 실제 객체명을
+            // 그래프의 단일 표기로 확정한다. 파이프라인 실행 전에 적용해야 캐시 키와 산출물 경로가
+            // 호출한 SP마다 갈라지지 않는다.
+            execution.ApplyCanonicalKeys();
+            await ExecuteDiscoveredNodesAsync(effectiveRequest, execution, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // 취소를 예외로 흘려보내면 "완료분은 저장됐다"는 사실이 호출부에
+            // 도달하지 못한다. 결과 레코드가 계약이므로 상태로 바꾼다.
+            completion = GraphCompletion.PartialCancelled;
+            Log.Information(
+                "[의존성 분석] 사용자 취소 - 완료된 객체만 저장합니다: {ObjectKey}",
+                rootKey.CanonicalName);
+        }
 
         var result = new CodeObjectPipelineResult
         {
             Nodes = execution.Nodes.Values.ToList(),
             DependencyEdges = execution.Edges,
-            AnalysisResults = execution.AnalysisResults
+            AnalysisResults = execution.AnalysisResults,
+            Completion = completion
         };
-        await PersistArtifactsAsync(rootKey, effectiveRequest, result, cancellationToken);
+
+        // 취소된 토큰을 그대로 넘기면 저장부의 ThrowIfCancellationRequested가
+        // 즉시 던져 아무것도 쓰지 못한다. CancellationToken.None은 네트워크
+        // 드라이브에서 무한정 매달릴 수 있으므로 상한을 둔다.
+        using var persistCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await PersistArtifactsAsync(rootKey, effectiveRequest, result, persistCts.Token);
         return result;
     }
 
