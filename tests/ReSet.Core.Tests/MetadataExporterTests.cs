@@ -529,7 +529,7 @@ namespace ReSet.Core.Tests
             var paths = new OutputPathResolver("TestDB", testOutputDir);
 
             // Act
-            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, jobName, testOutputDir, "C#", paths);
+            await exporter.ExportConsolidatedMigrationInstructionsAsync(spDefs, consolidatedPlan, VerificationOutcome.Passed, jobName, testOutputDir, "C#", paths);
 
             // Assert
             var expectedPath = Path.Combine(testOutputDir, "agent", "MigrationInstructions.md");
@@ -582,6 +582,7 @@ namespace ReSet.Core.Tests
                 await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
                     new System.Collections.Generic.List<SpDefinition> { spDef },
                     "## 통합 배치 아키텍처 개요",
+                    VerificationOutcome.Passed,
                     "Job1",
                     Path.Combine(outputRoot, "Jobs", "Job1"),
                     "C#",
@@ -622,6 +623,7 @@ namespace ReSet.Core.Tests
                 await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
                     new System.Collections.Generic.List<SpDefinition> { spDef },
                     "## 통합 배치 아키텍처 개요",
+                    VerificationOutcome.Passed,
                     "Job1",
                     Path.Combine(outputRoot, "Jobs", "Job1"),
                     "C#",
@@ -631,6 +633,96 @@ namespace ReSet.Core.Tests
                     Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
                 Assert.Contains("명세서 파일을 찾을 수 없습니다", instructions);
                 Assert.DoesNotContain("[Spec.md](", instructions);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        // 지시서 번들은 계획서 본문을 그대로 심는다(MetadataExporter.cs의 1번 항목).
+        // L1 소진/품질 미달/리뷰 미수행 세 상태는 배너가 계획서 문자열 자체에 붙어
+        // 번들까지 따라오지만, L3 피드백 재생성 경로는 계획서를 통째로 교체하므로
+        // 배너가 사라지고 YAML 헤더에만 의존한다 - 그 헤더는 번들에 들어가지 않는다.
+        // 그래서 번들은 문자열에 무엇이 우연히 들어 있는지가 아니라 종료 상태 값을
+        // 직접 받아 자기 검증 상태를 밝힌다.
+        [Theory]
+        [InlineData(VerificationOutcome.ReviewNotRun, "리뷰 미수행")]
+        [InlineData(VerificationOutcome.QualityRejected, "품질 미달")]
+        [InlineData(VerificationOutcome.L1Exhausted, "L1 미통과")]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_StatesTheOutcomeAndWarnsWhenNotVerified(
+            VerificationOutcome outcome,
+            string expectedLabel)
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Instructions-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Unverified", CodeObjectType.Procedure);
+            var paths = new OutputPathResolver("PaymentDB", outputRoot);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = key, Schema = "dbo", Name = "USP_Unverified", DdlText = "SELECT 1;"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    new System.Collections.Generic.List<SpDefinition> { spDef },
+                    // 배너가 전혀 없는 계획서 본문. L3 재생성 경로가 만들어내는 모양이다.
+                    "## 통합 배치 아키텍처 개요",
+                    outcome,
+                    "Job1",
+                    Path.Combine(outputRoot, "Jobs", "Job1"),
+                    "C#",
+                    paths);
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
+
+                Assert.Contains("0. 이 계획서의 검증 상태", instructions);
+                Assert.Contains(expectedLabel, instructions);
+                Assert.Contains("사람의 검토가 필요합니다", instructions);
+
+                // 상태 고지가 계획 본문보다 먼저 와야 한다. 코딩 에이전트는 위에서부터
+                // 읽으므로, 계획을 소비한 뒤에 경고를 만나면 이미 늦다.
+                Assert.True(
+                    instructions.IndexOf("0. 이 계획서의 검증 상태", StringComparison.Ordinal) <
+                    instructions.IndexOf("1. 통합 배치 전환 계획", StringComparison.Ordinal));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_StatesPassedExplicitlyRatherThanStayingSilent()
+        {
+            // 통과일 때 아무것도 쓰지 않으면 "표기 부재 = 검증됨"이라는 추론을 낳는다.
+            // 그것이 이 계열 결함의 뿌리이므로 네 상태를 모두 명시한다.
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Instructions-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Ok", CodeObjectType.Procedure);
+            var paths = new OutputPathResolver("PaymentDB", outputRoot);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = key, Schema = "dbo", Name = "USP_Ok", DdlText = "SELECT 1;"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    new System.Collections.Generic.List<SpDefinition> { spDef },
+                    "## 통합 배치 아키텍처 개요",
+                    VerificationOutcome.Passed,
+                    "Job1",
+                    Path.Combine(outputRoot, "Jobs", "Job1"),
+                    "C#",
+                    paths);
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
+
+                Assert.Contains("0. 이 계획서의 검증 상태", instructions);
+                Assert.Contains("통과", instructions);
+                Assert.DoesNotContain("사람의 검토가 필요합니다", instructions);
             }
             finally
             {

@@ -17,6 +17,7 @@ namespace ReSet.Core.Services
         private static volatile bool _hasMigrated = false;
         private static readonly object _migrationLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
+        private const int CurrentCacheFormatVersion = 1;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
@@ -84,6 +85,18 @@ namespace ReSet.Core.Services
                 if (cacheIndex != null &&
                     TryGetEntry(cacheIndex, objectKey, outputPaths, out var entry))
                 {
+                    // 파일 읽기와 해시 계산보다 먼저 판정한다. 해석할 수 없는 스키마의
+                    // 엔트리는 내용이 일치하더라도 신뢰할 근거가 없다.
+                    if (entry.FormatVersion != CurrentCacheFormatVersion)
+                    {
+                        Log.Information(
+                            "캐시 미스(포맷 버전 {EntryVersion} != {CurrentVersion}) - 코드 객체: {ObjectKey}",
+                            entry.FormatVersion,
+                            CurrentCacheFormatVersion,
+                            cacheKey);
+                        return false;
+                    }
+
                     string currentSpecContentHash = string.Empty;
                     if (File.Exists(specFilePath))
                     {
@@ -217,6 +230,7 @@ namespace ReSet.Core.Services
                     var entry = new CacheEntry
                     {
                         ProcedureName = $"{objectKey.Schema}.{objectKey.Name}",
+                        FormatVersion = CurrentCacheFormatVersion,
                         ObjectKey = objectKey,
                         LastAnalyzed = DateTime.UtcNow,
                         SourceHash = ComputeSha256(spDef.DdlText),

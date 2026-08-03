@@ -98,7 +98,7 @@ namespace ReSet.Cli
         public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome)
         {
             // 점수 필드는 여전히 문서 본문의 YAML 헤더에서 읽는다. 파이프라인 진행 중에는
-            // 아직 헤더가 씌워지지 않아 항상 비어 있지만(SpecificationDocumentFormatter가
+            // 아직 헤더가 씌워지지 않아 항상 비어 있지만(VerificationDocumentFormatter가
             // 파이프라인 종료 후에 헤더를 붙이므로), 헤더가 이미 포함된 문자열이 들어오는
             // 호출 경로(예: 캐시 히트 재확인)에서는 여전히 유효하다.
             var header = SpecHeaderReader.Read(specificationMarkdown);

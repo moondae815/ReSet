@@ -54,6 +54,7 @@ namespace ReSet.Core.Services
         Task ExportConsolidatedMigrationInstructionsAsync(
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
+            VerificationOutcome planOutcome,
             string jobName,
             string baseOutputDir,
             string targetLanguage,
