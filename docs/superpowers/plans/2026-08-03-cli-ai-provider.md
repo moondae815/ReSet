@@ -47,6 +47,7 @@
 | `CliProcessRunner.cs` | 프로세스 기동, stdin 주입, stdout/stderr 동시 수집, 타임아웃, 취소 |
 | `CliWorkspace.cs` | 호출별 빈 임시 작업 디렉토리 생성·파일 쓰기·정리 |
 | `CliEffort.cs` | ReSet effort → CLI effort 매핑과 클램프 |
+| `CliPrompt.cs` | 시스템·사용자 프롬프트 결합 (codex/agy 공용) |
 | `CliFailureClassifier.cs` | 실패 원인 분류(미설치/미인증/쿼터/타임아웃)와 메시지 조립 |
 | `ClaudeCliClient.cs` | `claude -p --output-format json` |
 | `CodexCliClient.cs` | `codex exec -` |
@@ -513,20 +514,23 @@ EOF
 
 ---
 
-## Task 2: effort 매핑과 실패 분류
+## Task 2: effort 매핑, 프롬프트 결합, 실패 분류
 
-순수 함수 두 묶음. 세 클라이언트가 공유한다.
+순수 함수 세 묶음. 세 클라이언트가 공유한다.
 
 **Files:**
 - Create: `src/ReSet.Core/Services/Clients/Cli/CliEffort.cs`
+- Create: `src/ReSet.Core/Services/Clients/Cli/CliPrompt.cs`
 - Create: `src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs`
 - Test: `tests/ReSet.Core.Tests/CliEffortTests.cs`
+- Test: `tests/ReSet.Core.Tests/CliPromptTests.cs`
 - Test: `tests/ReSet.Core.Tests/CliFailureClassifierTests.cs`
 
 **Interfaces:**
 - Consumes: `CliProcessResult` (Task 1)
 - Produces:
   - `CliEffort.ForClaude(string? effort) -> string?`
+  - `CliPrompt.Combine(string systemPrompt, string userPrompt) -> string`
   - `CliEffort.ForThreeLevel(string? effort, out bool clamped) -> string?`
   - `CliFailureKind` — `enum { NotAuthenticated, QuotaExhausted, Timeout, Unknown }`
   - `CliFailureClassifier.Classify(CliProcessResult result, string? extraDetail) -> CliFailureKind`
@@ -599,7 +603,41 @@ namespace ReSet.Core.Tests
 }
 ```
 
-- [ ] **Step 2: 실패 분류의 실패하는 테스트를 작성한다**
+- [ ] **Step 2: 프롬프트 결합의 실패하는 테스트를 작성한다**
+
+`codex`와 `agy`는 둘 다 시스템 프롬프트를 따로 받지 않아 하나로 합쳐야 한다. 두 클라이언트 중 한쪽에 두면 다른 쪽이 그것을 참조하게 되므로 공용으로 둔다.
+
+`tests/ReSet.Core.Tests/CliPromptTests.cs`:
+
+```csharp
+using Xunit;
+using ReSet.Core.Services.Clients.Cli;
+
+namespace ReSet.Core.Tests
+{
+    public class CliPromptTests
+    {
+        [Fact]
+        public void Combine_JoinsSystemAndUserPrompt()
+        {
+            var combined = CliPrompt.Combine("규칙입니다", "본문입니다");
+
+            Assert.StartsWith("규칙입니다", combined);
+            Assert.EndsWith("본문입니다", combined);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("   ")]
+        public void Combine_BlankSystemPrompt_ReturnsUserPromptOnly(string systemPrompt)
+        {
+            Assert.Equal("본문입니다", CliPrompt.Combine(systemPrompt, "본문입니다"));
+        }
+    }
+}
+```
+
+- [ ] **Step 3: 실패 분류의 실패하는 테스트를 작성한다**
 
 `tests/ReSet.Core.Tests/CliFailureClassifierTests.cs`:
 
@@ -707,12 +745,12 @@ namespace ReSet.Core.Tests
 }
 ```
 
-- [ ] **Step 3: 테스트가 실패하는지 확인한다**
+- [ ] **Step 4: 테스트가 실패하는지 확인한다**
 
-Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~CliEffortTests|FullyQualifiedName~CliFailureClassifierTests"`
-Expected: 컴파일 실패 — `CliEffort`, `CliFailureKind`, `CliFailureClassifier` 형식을 찾을 수 없음
+Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~CliEffortTests|FullyQualifiedName~CliPromptTests|FullyQualifiedName~CliFailureClassifierTests"`
+Expected: 컴파일 실패 — `CliEffort`, `CliPrompt`, `CliFailureKind`, `CliFailureClassifier` 형식을 찾을 수 없음
 
-- [ ] **Step 4: CliEffort를 구현한다**
+- [ ] **Step 5: CliEffort를 구현한다**
 
 `src/ReSet.Core/Services/Clients/Cli/CliEffort.cs`:
 
@@ -772,7 +810,30 @@ namespace ReSet.Core.Services.Clients.Cli
 }
 ```
 
-- [ ] **Step 5: CliFailureClassifier를 구현한다**
+- [ ] **Step 6: CliPrompt를 구현한다**
+
+`src/ReSet.Core/Services/Clients/Cli/CliPrompt.cs`:
+
+```csharp
+namespace ReSet.Core.Services.Clients.Cli
+{
+    /// <summary>
+    /// codex와 agy는 시스템 프롬프트를 별도로 받지 않는다. 둘 다 하나로 합쳐
+    /// 넘겨야 하므로, 어느 한 클라이언트에 두지 않고 공용으로 둔다.
+    /// </summary>
+    public static class CliPrompt
+    {
+        public static string Combine(string systemPrompt, string userPrompt)
+        {
+            return string.IsNullOrWhiteSpace(systemPrompt)
+                ? userPrompt
+                : $"{systemPrompt}\n\n{userPrompt}";
+        }
+    }
+}
+```
+
+- [ ] **Step 7: CliFailureClassifier를 구현한다**
 
 `src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs`:
 
@@ -900,22 +961,24 @@ namespace ReSet.Core.Services.Clients.Cli
 }
 ```
 
-- [ ] **Step 6: 테스트가 통과하는지 확인한다**
+- [ ] **Step 8: 테스트가 통과하는지 확인한다**
 
-Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~CliEffortTests|FullyQualifiedName~CliFailureClassifierTests"`
-Expected: PASS (30건)
+Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~CliEffortTests|FullyQualifiedName~CliPromptTests|FullyQualifiedName~CliFailureClassifierTests"`
+Expected: PASS (33건)
 
-- [ ] **Step 7: 전체 테스트를 돌린다**
+- [ ] **Step 9: 전체 테스트를 돌린다**
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 468건
+Expected: PASS, 471건
 
-- [ ] **Step 8: 커밋한다**
+- [ ] **Step 10: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/Clients/Cli/CliEffort.cs \
+        src/ReSet.Core/Services/Clients/Cli/CliPrompt.cs \
         src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs \
         tests/ReSet.Core.Tests/CliEffortTests.cs \
+        tests/ReSet.Core.Tests/CliPromptTests.cs \
         tests/ReSet.Core.Tests/CliFailureClassifierTests.cs
 git commit -F - <<'EOF'
 feat(cli-provider): classify CLI failures and map effort levels
@@ -943,7 +1006,7 @@ EOF
 **Interfaces:**
 - Consumes: `CliProcessRunner.RunAsync`, `CliWorkspace`, `CliEffort.ForClaude`, `CliFailureClassifier` (Task 1·2), `IAiClient`, `AiResult`
 - Produces:
-  - `ClaudeCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현
+  - `ClaudeCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현, `TimeSpan Timeout { get; }` 노출
   - `ClaudeCliClient.BuildArguments(string modelName, string? effort, string systemPromptFilePath) -> IReadOnlyList<string>`
   - `ClaudeCliResponse` — `bool IsError`, `string? Result`, `string? Subtype`, `string? ApiErrorStatus`
   - `ClaudeCliClient.ParseResponse(string standardOutput) -> ClaudeCliResponse`
@@ -1054,12 +1117,13 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void ProviderNameAndModelName_AreExposed()
+        public void ProviderNameModelNameAndTimeout_AreExposed()
         {
             var client = new ClaudeCliClient("claude", "sonnet", TimeSpan.FromSeconds(30));
 
             Assert.Equal("claude-cli", client.ProviderName);
             Assert.Equal("sonnet", client.ModelName);
+            Assert.Equal(30, client.Timeout.TotalSeconds);
         }
 
         // ProviderName이 로컬 프로바이더로 오인되면 AiService가 로컬 분할 파이프라인을
@@ -1127,6 +1191,9 @@ namespace ReSet.Core.Services.Clients.Cli
 
         public string ProviderName => "claude-cli";
         public string ModelName => _modelName;
+
+        /// <summary>팩토리가 HttpClient에서 읽어 넘긴 제한 시간. 배선이 끊기면 테스트가 잡는다.</summary>
+        public TimeSpan Timeout => _timeout;
 
         public ClaudeCliClient(string command, string modelName, TimeSpan timeout)
         {
@@ -1249,7 +1316,7 @@ Expected: PASS (11건)
 - [ ] **Step 5: 전체 테스트를 돌린다**
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 479건
+Expected: PASS, 482건
 
 - [ ] **Step 6: 커밋한다**
 
@@ -1282,9 +1349,8 @@ EOF
 **Interfaces:**
 - Consumes: Task 1·2의 전부
 - Produces:
-  - `CodexCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현
+  - `CodexCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현, `TimeSpan Timeout { get; }` 노출
   - `CodexCliClient.BuildArguments(string modelName, string? effort, string outputFilePath) -> IReadOnlyList<string>`
-  - `CodexCliClient.CombinePrompt(string systemPrompt, string userPrompt) -> string`
 
 - [ ] **Step 1: 실패하는 테스트를 작성한다**
 
@@ -1363,29 +1429,14 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("-m", arguments);
         }
 
-        // codex는 시스템 프롬프트를 따로 받지 않으므로 하나로 합친다.
         [Fact]
-        public void CombinePrompt_JoinsSystemAndUserPrompt()
-        {
-            var combined = CodexCliClient.CombinePrompt("규칙입니다", "본문입니다");
-
-            Assert.StartsWith("규칙입니다", combined);
-            Assert.EndsWith("본문입니다", combined);
-        }
-
-        [Fact]
-        public void CombinePrompt_BlankSystemPrompt_ReturnsUserPromptOnly()
-        {
-            Assert.Equal("본문입니다", CodexCliClient.CombinePrompt("   ", "본문입니다"));
-        }
-
-        [Fact]
-        public void ProviderNameAndModelName_AreExposed()
+        public void ProviderNameModelNameAndTimeout_AreExposed()
         {
             var client = new CodexCliClient("codex", "gpt-5.6-terra", TimeSpan.FromSeconds(30));
 
             Assert.Equal("codex-cli", client.ProviderName);
             Assert.Equal("gpt-5.6-terra", client.ModelName);
+            Assert.Equal(30, client.Timeout.TotalSeconds);
         }
 
         [Fact]
@@ -1439,6 +1490,9 @@ namespace ReSet.Core.Services.Clients.Cli
         public string ProviderName => "codex-cli";
         public string ModelName => _modelName;
 
+        /// <summary>팩토리가 HttpClient에서 읽어 넘긴 제한 시간. 배선이 끊기면 테스트가 잡는다.</summary>
+        public TimeSpan Timeout => _timeout;
+
         public CodexCliClient(string command, string modelName, TimeSpan timeout)
         {
             _command = string.IsNullOrWhiteSpace(command) ? "codex" : command;
@@ -1486,13 +1540,6 @@ namespace ReSet.Core.Services.Clients.Cli
             return arguments;
         }
 
-        public static string CombinePrompt(string systemPrompt, string userPrompt)
-        {
-            return string.IsNullOrWhiteSpace(systemPrompt)
-                ? userPrompt
-                : $"{systemPrompt}\n\n{userPrompt}";
-        }
-
         public async Task<AiResult> ChatAsync(
             string systemPrompt,
             string userPrompt,
@@ -1503,7 +1550,7 @@ namespace ReSet.Core.Services.Clients.Cli
             using var workspace = new CliWorkspace();
             var outputFilePath = Path.Combine(workspace.Path, ResultFileName);
             var arguments = BuildArguments(_modelName, effort, outputFilePath);
-            var prompt = CombinePrompt(systemPrompt ?? string.Empty, userPrompt ?? string.Empty);
+            var prompt = CliPrompt.Combine(systemPrompt ?? string.Empty, userPrompt ?? string.Empty);
 
             CliProcessResult processResult;
             try
@@ -1545,12 +1592,12 @@ namespace ReSet.Core.Services.Clients.Cli
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj --filter "FullyQualifiedName~CodexCliClientTests"`
-Expected: PASS (10건)
+Expected: PASS (8건)
 
 - [ ] **Step 5: 전체 테스트를 돌린다**
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 489건
+Expected: PASS, 490건
 
 - [ ] **Step 6: 커밋한다**
 
@@ -1582,7 +1629,7 @@ EOF
 **Interfaces:**
 - Consumes: Task 1·2의 전부
 - Produces:
-  - `AntigravityCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현
+  - `AntigravityCliClient(string command, string modelName, TimeSpan timeout)` — `IAiClient` 구현, `TimeSpan Timeout { get; }` 노출
   - `AntigravityCliClient.BuildArguments(string prompt, string modelName, string? effort, TimeSpan timeout) -> IReadOnlyList<string>`
   - `AntigravityCliClient.MaxCommandLineLength -> int` (정적 속성, 플랫폼별)
   - `AntigravityCliClient.EnsureCommandLineFits(string command, IReadOnlyList<string> arguments)` — 초과 시 `InvalidOperationException`
@@ -1716,12 +1763,13 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void ProviderNameAndModelName_AreExposed()
+        public void ProviderNameModelNameAndTimeout_AreExposed()
         {
             var client = new AntigravityCliClient("agy", "gemini", TimeSpan.FromSeconds(30));
 
             Assert.Equal("agy-cli", client.ProviderName);
             Assert.Equal("gemini", client.ModelName);
+            Assert.Equal(30, client.Timeout.TotalSeconds);
         }
 
         [Fact]
@@ -1781,6 +1829,9 @@ namespace ReSet.Core.Services.Clients.Cli
 
         public string ProviderName => "agy-cli";
         public string ModelName => _modelName;
+
+        /// <summary>팩토리가 HttpClient에서 읽어 넘긴 제한 시간. 배선이 끊기면 테스트가 잡는다.</summary>
+        public TimeSpan Timeout => _timeout;
 
         public static int MaxCommandLineLength =>
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
@@ -1894,8 +1945,7 @@ namespace ReSet.Core.Services.Clients.Cli
             CancellationToken cancellationToken = default)
         {
             // agy도 시스템 프롬프트를 따로 받지 않으므로 합친다.
-            var prompt = CodexCliClient.CombinePrompt(
-                systemPrompt ?? string.Empty, userPrompt ?? string.Empty);
+            var prompt = CliPrompt.Combine(systemPrompt ?? string.Empty, userPrompt ?? string.Empty);
 
             var arguments = BuildArguments(prompt, _modelName, effort, _timeout);
 
@@ -1934,7 +1984,7 @@ Expected: PASS (12건)
 - [ ] **Step 5: 전체 테스트를 돌린다**
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 501건
+Expected: PASS, 502건
 
 - [ ] **Step 6: 커밋한다**
 
@@ -2024,7 +2074,18 @@ EOF
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(1234) };
             var client = AiClientFactory.CreateClient("claude-cli", "sonnet", "", "", httpClient);
 
-            Assert.IsType<ReSet.Core.Services.Clients.Cli.ClaudeCliClient>(client);
+            var cliClient = Assert.IsType<ReSet.Core.Services.Clients.Cli.ClaudeCliClient>(client);
+            Assert.Equal(1234, cliClient.Timeout.TotalSeconds);
+        }
+
+        // HttpClient를 주지 않으면 팩토리 기본값 300초를 쓴다.
+        [Fact]
+        public void CreateClient_CliProvider_WithoutHttpClient_FallsBackToDefaultTimeout()
+        {
+            var client = AiClientFactory.CreateClient("codex-cli", "gpt-5.6-terra", "", "");
+
+            var cliClient = Assert.IsType<ReSet.Core.Services.Clients.Cli.CodexCliClient>(client);
+            Assert.Equal(300, cliClient.Timeout.TotalSeconds);
         }
 
         [Fact]
@@ -2237,7 +2298,7 @@ Run: `dotnet build ReSet.slnx`
 Expected: 빌드 성공
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 523건
+Expected: PASS, 525건
 
 - [ ] **Step 9: 커밋한다**
 
@@ -2474,7 +2535,7 @@ Run: `dotnet build ReSet.slnx`
 Expected: 빌드 성공, 새 경고 없음
 
 Run: `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj`
-Expected: PASS, 529건
+Expected: PASS, 531건
 
 - [ ] **Step 8: 배치 가드가 실제로 동작하는지 확인한다**
 
@@ -2525,7 +2586,7 @@ EOF
 
 ## 완료 기준
 
-- [ ] `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 529건 전부 통과
+- [ ] `dotnet test tests/ReSet.Core.Tests/ReSet.Core.Tests.csproj` — 531건 전부 통과
 - [ ] `dotnet build ReSet.slnx` — 새 경고 없음
 - [ ] `CancellationPolicyTests` 통과, `cancellation-policy-baseline.txt` 변경 없음
 - [ ] `appsettings.json`의 `Provider`를 `claude-cli`로 두고 TUI로 SP 하나를 실제 분석해 명세서가 나오는지 확인
