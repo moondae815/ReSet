@@ -1583,7 +1583,7 @@ namespace ReSet.Core.Services
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
-            // 산출물 헤더(VerificationDocumentFormatter.FormatConsolidatedPlan)와
+            // 산출물 헤더(VerificationDocumentFormatter.FormatVerifiedDocument)와
             // 승인 화면(RequestHumanReviewAsync)이 같은 사실을 쓴다.
             var planOutcome = VerificationOutcome.Passed;
             ReviewResult? planReview = null;

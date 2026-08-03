@@ -459,7 +459,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
     private static string BuildPersistedSpecification(
         CodeObjectAnalysisResult analysis,
         DependencyAnalysisRequest request) =>
-        VerificationDocumentFormatter.FormatSpecification(
+        VerificationDocumentFormatter.FormatVerifiedDocument(
             analysis.SpecMarkdown ?? string.Empty,
             analysis.Review,
             analysis.Outcome,

@@ -727,7 +727,7 @@ namespace ReSet.Cli
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             await File.WriteAllTextAsync(
                                 planFileName,
-                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                VerificationDocumentFormatter.FormatVerifiedDocument(
                                     consolidatedPlan,
                                     pipelineResult.Review,
                                     pipelineResult.Outcome,
@@ -1183,7 +1183,7 @@ namespace ReSet.Cli
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                             await File.WriteAllTextAsync(
                                 planFileName,
-                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                VerificationDocumentFormatter.FormatVerifiedDocument(
                                     consolidatedPlan,
                                     pipelineResult.Review,
                                     pipelineResult.Outcome,
@@ -1647,7 +1647,7 @@ namespace ReSet.Cli
             var outputFileName = Path.Combine(docsDir, "Spec.md");
             await File.WriteAllTextAsync(
                 outputFileName,
-                VerificationDocumentFormatter.FormatSpecification(
+                VerificationDocumentFormatter.FormatVerifiedDocument(
                     specMarkdown,
                     review,
                     outcome,
@@ -1664,7 +1664,7 @@ namespace ReSet.Cli
                 var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
                 await File.WriteAllTextAsync(
                     planFileName,
-                    VerificationDocumentFormatter.FormatUnverifiedPlan(
+                    VerificationDocumentFormatter.FormatUnverifiedDocument(
                         migrationPlan, outcome, provider, modelName, effort, DateTime.Now));
             }
 
