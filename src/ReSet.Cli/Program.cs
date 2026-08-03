@@ -642,6 +642,16 @@ namespace ReSet.Cli
                             dependencyArtifactMode,
                             globalCts.Token);
 
+                        // 취소 판정을 명세서 검사보다 먼저 한다. ExecutionOrder는 후위 순회라
+                        // 루트가 마지막에 실행되므로, 취소 시 루트 명세서는 대개 비어 있다.
+                        // 순서를 뒤집으면 사용자 취소가 "명세서 획득 실패"라는 분석 오류로 오보된다.
+                        // 완료분은 오케스트레이터가 이미 저장했으므로 여기서 빠져나가도 잃는 산출물이 없다.
+                        if (result.Completion == GraphCompletion.PartialCancelled)
+                        {
+                            AnsiConsole.MarkupLine("\n[red]사용자에 의해 배치 분석 작업이 중단되었습니다. 프로세스를 종료합니다.[/]");
+                            break;
+                        }
+
                         var specMarkdown = result.SpecMarkdown;
                         if (string.IsNullOrEmpty(specMarkdown))
                         {
@@ -681,12 +691,23 @@ namespace ReSet.Cli
                                 result.Definition, outputDir, instructionsFile, metadataExporter,
                                 saveRawJson, saveRawContext, saveRawFiles, schema, name);
 
+                            // 캐시 게이트는 캐시에서 나온 문서(Spec.md/Thinking.md)만 덮는다.
+                            // 그것을 다시 쓰면 분석하지 않은 날짜가 찍히기 때문이다.
                             if (!result.FromCache)
                             {
                                 await SaveDocumentsAsync(
-                                    specMarkdown, migrationPlan, outputDir, schema, name,
+                                    specMarkdown, outputDir, schema, name,
                                     provider, modelName, result.Review, result.Outcome,
                                     thinkingText, actorEffort, result.Scope);
+                            }
+
+                            // 계획서는 이번 실행이 방금 만든 산출물이라 캐시에서 나올 수 없다.
+                            // 명세서의 캐시 상태에 묶으면 AI 비용만 내고 파일을 버리게 된다.
+                            if (!string.IsNullOrEmpty(migrationPlan))
+                            {
+                                await SaveMigrationPlanAsync(
+                                    migrationPlan, outputDir, schema, name,
+                                    provider, modelName, result.Outcome, actorEffort);
                             }
                         }
 
@@ -699,13 +720,6 @@ namespace ReSet.Cli
                         else
                         {
                             AnsiConsole.MarkupLine($"[green]성공:[/] {selectedOption} 분석 완료 및 저장!");
-                        }
-
-                        // AnalyzeAsync가 더 이상 예외로 취소를 알리지 않으므로 상태로 판정한다.
-                        if (result.Completion == GraphCompletion.PartialCancelled)
-                        {
-                            AnsiConsole.MarkupLine("\n[red]사용자에 의해 배치 분석 작업이 중단되었습니다. 프로세스를 종료합니다.[/]");
-                            break;
                         }
                     }
                     catch (OperationCanceledException)
@@ -991,9 +1005,10 @@ namespace ReSet.Cli
 
                                 if (!result.FromCache)
                                 {
-                                    // 분석과 전환 분리 요구에 따라, 개별 분석 시에는 배치 전환 설계서를 생성하지 않음 (null 지정)
+                                    // 분석과 전환 분리 요구에 따라, 개별 분석 시에는 배치 전환 설계서를 생성하지 않음
+                                    // (SaveMigrationPlanAsync를 부르지 않는다)
                                     await SaveDocumentsAsync(
-                                        specMarkdown, migrationPlan: null, outputDir, schema, name,
+                                        specMarkdown, outputDir, schema, name,
                                         provider, modelName, result.Review, result.Outcome,
                                         result.ThinkingText, actorEffort, result.Scope);
                                 }
@@ -1589,8 +1604,9 @@ namespace ReSet.Cli
                 .Where(node => node.Status is AnalysisNodeStatus.SkippedDepth or AnalysisNodeStatus.SkippedExternal)
                 .GroupBy(node => node.Status))
             {
-                var label = group.Key == AnalysisNodeStatus.SkippedDepth ? "깊이 제한" : "외부 객체";
-                AnsiConsole.MarkupLine($"[grey]안내:[/] {label}으로 {group.Count()}개 객체를 분석하지 않았습니다.");
+                // 조사는 라벨에 포함시킨다. "외부 객체"는 받침이 없어 "으로"가 붙으면 어색하다.
+                var label = group.Key == AnalysisNodeStatus.SkippedDepth ? "깊이 제한으로" : "외부 객체로";
+                AnsiConsole.MarkupLine($"[grey]안내:[/] {label} {group.Count()}개 객체를 분석하지 않았습니다.");
             }
 
             if (result.Completion == GraphCompletion.PartialCancelled)
@@ -1716,12 +1732,12 @@ namespace ReSet.Cli
         }
 
         /// <summary>
-        /// 사람이 읽는 문서(docs/*)를 저장한다. 캐시 히트면 호출하지 않는다 —
+        /// 캐시에서 나올 수 있는 문서(Spec.md/Thinking.md)를 저장한다. 캐시 히트면 호출하지 않는다 —
         /// 파일이 이미 그 내용이고, 다시 쓰면 분석하지 않은 날짜가 찍힌다.
+        /// 배치 전환 계획 설계서는 이 게이트에 걸리지 않는다(SaveMigrationPlanAsync 참조).
         /// </summary>
         private static async Task SaveDocumentsAsync(
             string specMarkdown,
-            string? migrationPlan,
             string outputDir,
             string schema,
             string name,
@@ -1747,17 +1763,6 @@ namespace ReSet.Cli
                     effort,
                     DateTime.Now,
                     scope));
-
-            if (!string.IsNullOrEmpty(migrationPlan))
-            {
-                // 이 계획서는 GenerateBatchMigrationPlanAsync가 만든 그대로이며 L1도 L2도
-                // 거치지 않는다. 명세서의 점수를 여기에 실으면 계획서가 그 점수를 받은
-                // 것처럼 읽히므로, 검증 없음을 밝히고 근거 명세서의 상태만 전달한다.
-                await File.WriteAllTextAsync(
-                    Path.Combine(docsDir, "BatchMigrationPlan.md"),
-                    VerificationDocumentFormatter.FormatUnverifiedPlan(
-                        migrationPlan, outcome, provider, modelName, effort, DateTime.Now));
-            }
 
             if (string.IsNullOrWhiteSpace(thinkingText))
             {
@@ -1785,6 +1790,33 @@ namespace ReSet.Cli
             {
                 AnsiConsole.MarkupLine($"[yellow]추론 로그(Thinking Log) 저장 중 경고:[/] {Markup.Escape(ex.Message)}");
             }
+        }
+
+        /// <summary>
+        /// 배치 전환 계획 설계서를 저장한다. 캐시 게이트 밖에서 호출한다 —
+        /// 계획서는 이번 실행이 방금 만든 산출물이라 캐시에서 나올 수 없고,
+        /// 명세서의 캐시 상태에 묶으면 만들어 놓고 버리는 결과가 된다.
+        /// </summary>
+        private static async Task SaveMigrationPlanAsync(
+            string migrationPlan,
+            string outputDir,
+            string schema,
+            string name,
+            string provider,
+            string modelName,
+            VerificationOutcome sourceOutcome,
+            string? effort)
+        {
+            var docsDir = Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs");
+            Directory.CreateDirectory(docsDir);
+
+            // 이 계획서는 GenerateBatchMigrationPlanAsync가 만든 그대로이며 L1도 L2도
+            // 거치지 않는다. 명세서의 점수를 여기에 실으면 계획서가 그 점수를 받은
+            // 것처럼 읽히므로, 검증 없음을 밝히고 근거 명세서의 상태만 전달한다.
+            await File.WriteAllTextAsync(
+                Path.Combine(docsDir, "BatchMigrationPlan.md"),
+                VerificationDocumentFormatter.FormatUnverifiedPlan(
+                    migrationPlan, sourceOutcome, provider, modelName, effort, DateTime.Now));
         }
 
         /// <summary>
