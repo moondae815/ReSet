@@ -699,6 +699,10 @@ namespace ReSet.Core.Services
                             if (fixL1Result.IsValid)
                             {
                                 specificationMarkdown = fixL1Result.CleansedMarkdown ?? finalConsolidatedFixResult.Content;
+                                // 보완본이 L1을 통과했으므로 이전 시도의 L1 판정을 그대로 들고
+                                // 가면 안 된다. 최종 배너 삽입부가 이 플래그를 본다.
+                                consolidatedL1Valid = true;
+                                consolidatedL1Errors = fixL1Result.Errors;
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
 
                                 // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신
@@ -1558,7 +1562,7 @@ namespace ReSet.Core.Services
             }
         }
 
-        public async Task<(string? Plan, AiResult? Result)> RunConsolidatedPipelineAsync(
+        public async Task<ConsolidatedPipelineResult> RunConsolidatedPipelineAsync(
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
@@ -1578,10 +1582,11 @@ namespace ReSet.Core.Services
             string consolidatedPlan = string.Empty;
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
-            // 이 통합 계획 문서에는 아직 검증 상태 YAML 헤더를 씌우지 않는다(별도로 정리된 항목).
-            // 다만 승인 화면(RequestHumanReviewAsync)에는 실제 종료 상태를 전달해야 하므로
-            // 아래 배너 삽입 지점과 함께 로컬로 추적한다.
+            // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
+            // 산출물 헤더(VerificationDocumentFormatter.FormatConsolidatedPlan)와
+            // 승인 화면(RequestHumanReviewAsync)이 같은 사실을 쓴다.
             var planOutcome = VerificationOutcome.Passed;
+            ReviewResult? planReview = null;
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
@@ -1632,7 +1637,7 @@ namespace ReSet.Core.Services
 
                 if (!genSuccess || string.IsNullOrEmpty(consolidatedPlan))
                 {
-                    return (null, null);
+                    return new ConsolidatedPipelineResult(null, null, null, planOutcome);
                 }
 
                 // L1: 기계적 무결성 검사
@@ -1701,6 +1706,7 @@ namespace ReSet.Core.Services
 
                         // 최종 품질 불합격 경고 배너 삽입
                         planOutcome = VerificationOutcome.QualityRejected;
+                        planReview = l2Result;
                         consolidatedPlan =
                             VerificationBanner.QualityRejected(l2Result, _criticScoreThreshold) + consolidatedPlan;
                         break;
@@ -1729,6 +1735,7 @@ namespace ReSet.Core.Services
                             _userInteraction.NotifyStatus($"  [grey]* Critic 피드백: {EscapeMarkup(line)}[/]");
                         }
                     }
+                    planReview = l2Result;
                     _userInteraction.NotifyValidationSuccess(jobName);
                     break;
                 }
@@ -1738,7 +1745,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return (consolidatedPlan, finalAiResult);
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome);
             }
 
             while (true)
@@ -1747,11 +1754,11 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return (consolidatedPlan, finalAiResult);
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome);
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
-                    return (null, null);
+                    return new ConsolidatedPipelineResult(null, null, null, planOutcome);
                 }
                 else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                 {
@@ -1797,11 +1804,11 @@ namespace ReSet.Core.Services
                     }
 
                     // 이 계획서도 전체가 재생성되어 L1만 재검사할 뿐 L2는 재수행되지 않는다.
-                    // planOutcome을 그대로 두면 재생성된, 한 번도 리뷰받지 않은 계획서가
-                    // 이전 계획서의 통과 판정을 그대로 자칭하게 된다. 리뷰 미수행으로 명시한다.
-                    // (이 메서드에는 단일 객체 파이프라인의 finalReview에 대응하는 리뷰 상태
-                    // 변수가 없다 - 반환 튜플이 ReviewResult를 포함하지 않는다.)
+                    // 이전 판정과 점수를 그대로 들고 가면 재생성된, 한 번도 리뷰받지 않은
+                    // 계획서가 이전 계획서의 통과 판정을 자칭하게 된다. 명세서 경로
+                    // (:1451-1453)와 동일하게 리뷰를 비우고 미수행으로 명시한다.
                     consolidatedPlan = rePlan;
+                    planReview = null;
                     planOutcome = VerificationOutcome.ReviewNotRun;
                 }
             }

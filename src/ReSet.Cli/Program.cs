@@ -725,10 +725,17 @@ namespace ReSet.Cli
                             }
 
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
-                            var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
-                            var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
-                            await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
-                            
+                            await File.WriteAllTextAsync(
+                                planFileName,
+                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                    consolidatedPlan,
+                                    pipelineResult.Review,
+                                    pipelineResult.Outcome,
+                                    provider,
+                                    modelName,
+                                    consolidatorEffort,
+                                    DateTime.Now));
+
                             if (aiResult != null)
                             {
                                 if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
@@ -1173,9 +1180,16 @@ namespace ReSet.Cli
                             }
 
                             var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
-                            var effortSuffix = string.IsNullOrWhiteSpace(consolidatorEffort) ? "" : $", Effort: {consolidatorEffort}";
-                            var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n\n";
-                            await File.WriteAllTextAsync(planFileName, metadataHeader + consolidatedPlan);
+                            await File.WriteAllTextAsync(
+                                planFileName,
+                                VerificationDocumentFormatter.FormatConsolidatedPlan(
+                                    consolidatedPlan,
+                                    pipelineResult.Review,
+                                    pipelineResult.Outcome,
+                                    provider,
+                                    modelName,
+                                    consolidatorEffort,
+                                    DateTime.Now));
 
                             if (aiResult != null)
                             {
@@ -1627,15 +1641,11 @@ namespace ReSet.Cli
             }
 
             var effortSuffix = string.IsNullOrWhiteSpace(effort) ? "" : $", Effort: {effort}";
-            var scoreHeader = review is null
-                ? ""
-                : $"> **AI 최종 신뢰도**: {review.NormalizedScore}/100점 (정합성: {review.ScoreAccuracy}, CRUD: {review.ScoreCrud}, 연동: {review.ScoreInterface}, 가독성: {review.ScoreReadability}, 예외: {review.ScoreException})\n";
-            var metadataHeader = $"> [!NOTE]\n> **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n> **분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n" + scoreHeader + "\n";
 
             var outputFileName = Path.Combine(docsDir, "Spec.md");
             await File.WriteAllTextAsync(
                 outputFileName,
-                SpecificationDocumentFormatter.Format(
+                VerificationDocumentFormatter.FormatSpecification(
                     specMarkdown,
                     review,
                     outcome,
@@ -1646,8 +1656,14 @@ namespace ReSet.Cli
 
             if (!string.IsNullOrEmpty(migrationPlan))
             {
+                // 이 계획서는 GenerateBatchMigrationPlanAsync가 만든 그대로이며 L1도 L2도
+                // 거치지 않는다. 명세서의 점수를 여기에 실으면 계획서가 그 점수를 받은
+                // 것처럼 읽히므로, 검증 없음을 밝히고 근거 명세서의 상태만 전달한다.
                 var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
-                await File.WriteAllTextAsync(planFileName, metadataHeader + migrationPlan);
+                await File.WriteAllTextAsync(
+                    planFileName,
+                    VerificationDocumentFormatter.FormatUnverifiedPlan(
+                        migrationPlan, outcome, provider, modelName, effort, DateTime.Now));
             }
 
 

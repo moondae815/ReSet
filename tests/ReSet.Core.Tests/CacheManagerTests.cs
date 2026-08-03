@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Xunit;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
@@ -472,6 +474,102 @@ namespace ReSet.Core.Tests
             var specPath = _paths.ResolveSpecPath(key);
             Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
             File.WriteAllText(specPath, "# Spec");
+        }
+
+        [Fact]
+        public void IsCacheValid_ReturnsFalse_ForEntriesWrittenBeforeTheFormatVersionExisted()
+        {
+            // 수정 이전 코드는 종료 상태와 무관하게 캐시를 썼다. 그 엔트리가 히트하면
+            // 파이프라인은 무조건 Passed를 반환하고(VerificationPipelineOrchestrator.cs:164, :277)
+            // 미검증 문서가 "통과"로 재발행된다. 어느 레거시 엔트리가 미검증이었는지
+            // 판별할 방법이 없으므로 전량 무효화한다.
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "TestSp", CodeObjectType.Procedure);
+            var hash = "expectedcompositehash12345";
+            var specContent = "# Spec Report for TestSp";
+
+            var specFilePath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
+            File.WriteAllText(specFilePath, specContent);
+
+            // 정상 엔트리를 만든 뒤 FormatVersion만 제거해 레거시 JSON을 재현한다.
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
+                hash,
+                _paths,
+                specContent);
+
+            var indexPath = Path.Combine(_tempOutputDir, ".sp_cache_index.json");
+            var root = JsonNode.Parse(File.ReadAllText(indexPath))!;
+            foreach (var pair in root["Entries"]!.AsObject())
+            {
+                pair.Value!.AsObject().Remove("FormatVersion");
+            }
+            File.WriteAllText(indexPath, root.ToJsonString());
+
+            // 인덱스가 여전히 유효한 JSON이어야 한다. 깨진 JSON이면 soft-fail 경로가
+            // false를 반환해 게이트를 검증하지 않은 채 테스트가 통과해 버린다.
+            var rewritten = File.ReadAllText(indexPath);
+            Assert.DoesNotContain("FormatVersion", rewritten);
+            Assert.NotNull(JsonNode.Parse(rewritten));
+
+            // 해시도 경로도 파일 내용도 전부 일치하지만 포맷 버전이 없으므로 미스여야 한다.
+            Assert.False(_cacheManager.IsCacheValid(key, hash, _paths));
+        }
+
+        [Fact]
+        public void UpdateCache_StampsTheCurrentFormatVersion()
+        {
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "TestSp", CodeObjectType.Procedure);
+            var specContent = "# Spec Report for TestSp";
+            var specFilePath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
+            File.WriteAllText(specFilePath, specContent);
+
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
+                "hash",
+                _paths,
+                specContent);
+
+            // CacheManager는 JsonStringEnumConverter로 직렬화하므로 기본 옵션의
+            // Deserialize<CacheIndex>는 문자열 enum에서 실패한다. JsonNode로 읽는다.
+            var root = JsonNode.Parse(
+                File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
+            var entry = root["Entries"]!.AsObject().Single().Value!;
+
+            Assert.Equal(1, (int)entry["FormatVersion"]!);
+        }
+
+        [Fact]
+        public void IsCacheValid_ReturnsFalse_ForEntriesFromAFutureFormatVersion()
+        {
+            // 신버전으로 캐시를 쌓은 뒤 구버전 바이너리로 롤백하면, '보다 작음' 검사는
+            // 구버전이 해석할 수 없는 엔트리를 히트시킨다. 정확히 일치할 때만 신뢰한다.
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "TestSp", CodeObjectType.Procedure);
+            var hash = "hash";
+            var specContent = "# Spec Report for TestSp";
+            var specFilePath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
+            File.WriteAllText(specFilePath, specContent);
+
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
+                hash,
+                _paths,
+                specContent);
+
+            var indexPath = Path.Combine(_tempOutputDir, ".sp_cache_index.json");
+            var root = JsonNode.Parse(File.ReadAllText(indexPath))!;
+            foreach (var pair in root["Entries"]!.AsObject())
+            {
+                pair.Value!["FormatVersion"] = 99;
+            }
+            File.WriteAllText(indexPath, root.ToJsonString());
+
+            Assert.False(_cacheManager.IsCacheValid(key, hash, _paths));
         }
     }
 }

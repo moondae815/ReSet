@@ -699,7 +699,7 @@ Expected: FAIL — `Assert.DoesNotContain` 실패. 최종 마크다운에 "L1 �
 - [ ] **Step 4: 테스트를 실행해 통과를 확인한다**
 
 Run: `dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~VerificationPipelineOrchestratorTests"`
-Expected: 전부 통과. 특히 기존 `...L1Exhausted` 테스트가 계속 통과해야 한다 — 그 테스트는 모든 생성물이 L1을 통과하지 못하므로 `fixL1Result.IsValid`가 false로 남아 영향을 받지 않는다
+Expected: 전부 통과. 특히 기존 `...L1Exhausted` 테스트가 계속 통과해야 한다 — 그 테스트의 Critic 스텁은 `HasDefects = false`를 돌려주므로 `:682`의 `if (finalL2Result != null && finalL2Result.HasDefects)` 가드에서 단락되어 L2 결함 보완 블록 자체가 실행되지 않는다. 즉 `fixL1Result`는 계산조차 되지 않으며(“`fixL1Result.IsValid`가 false로 남는다”는 설명은 사실이 아니다), 새 분기는 애초에 도달 불가라서 영향을 받지 않는다
 
 - [ ] **Step 5: 커밋**
 
