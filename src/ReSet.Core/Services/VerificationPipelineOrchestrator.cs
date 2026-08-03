@@ -699,6 +699,10 @@ namespace ReSet.Core.Services
                             if (fixL1Result.IsValid)
                             {
                                 specificationMarkdown = fixL1Result.CleansedMarkdown ?? finalConsolidatedFixResult.Content;
+                                // 보완본이 L1을 통과했으므로 이전 시도의 L1 판정을 그대로 들고
+                                // 가면 안 된다. 최종 배너 삽입부가 이 플래그를 본다.
+                                consolidatedL1Valid = true;
+                                consolidatedL1Errors = fixL1Result.Errors;
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
 
                                 // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신

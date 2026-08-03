@@ -2460,6 +2460,80 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_Sectional_L2FixThatPassesL1_DropsTheL1ExhaustedBanner()
+        {
+            // consolidatedL1Valid는 자가 수정 직후까지만 갱신되고, L2 결함 보완 재생성본이
+            // L1을 통과해도 그대로 false로 남아 있었다. 그 결과 L1을 통과한 최종 문서에
+            // "L1 미통과" 배너가 붙는다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var criticService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_SectionalL2Recovers", CodeObjectType.Procedure);
+
+            aiService.ProviderName.Returns("Ollama");
+            criticService.ProviderName.Returns("Ollama");
+
+            dbService.GetCodeObjectDetailsDirectAsync(
+                    Arg.Any<string>(), Arg.Any<CodeObjectKey>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new SpDefinition
+                {
+                    ObjectKey = key, Schema = "dbo", Name = "USP_SectionalL2Recovers", DdlText = "SELECT 1;"
+                }));
+
+            // 필수 H2 헤더 5종과 mermaid 블록이 전부 있는 본문만 L1을 통과한다.
+            var l1Invalid = "# 헤더가 없는 본문";
+            var l1Valid =
+                "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+
+            // 이 경로에서 GenerateSpecificationAsync는 순서대로: 후보 3개, 합성본,
+            // 자가 수정본, 그리고 L2 결함 보완본으로 호출된다. 마지막만 L1을 통과시킨다.
+            aiService.GenerateSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(new AiResult { Content = l1Invalid }),   // 후보 1
+                    Task.FromResult(new AiResult { Content = l1Invalid }),   // 후보 2
+                    Task.FromResult(new AiResult { Content = l1Invalid }),   // 후보 3
+                    Task.FromResult(new AiResult { Content = l1Invalid }),   // 합성본
+                    Task.FromResult(new AiResult { Content = l1Invalid }),   // 자가 수정본 (여전히 실패)
+                    Task.FromResult(new AiResult { Content = l1Valid }));    // L2 결함 보완본 (통과)
+
+            var defectiveReview = new ReviewResult
+            {
+                HasDefects = true, FeedbackComment = "결함이 있습니다",
+                ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5
+            };
+            var cleanReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+
+            // 후보 채점 3회 → 최종 합성본 검토(결함) → 보완본 재검토(통과) 순으로 호출된다.
+            criticService.ReviewSpecificationAsync(
+                    Arg.Any<SpDefinition>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    Task.FromResult(defectiveReview),   // 후보 1 채점
+                    Task.FromResult(defectiveReview),   // 후보 2 채점
+                    Task.FromResult(defectiveReview),   // 후보 3 채점
+                    Task.FromResult(defectiveReview),   // 최종 합성본 L2 검토 (결함 → 보완 유발)
+                    Task.FromResult(cleanReview));      // 보완본 L2 재검토 (통과)
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), userInteraction,
+                "1", "ollama-test", criticService: criticService, actorEffort: "dynamic");
+
+            var result = await orchestrator.RunCodeObjectPipelineAsync(
+                "Server=(local);Database=PaymentDB", key, 1, "Ollama", "rules", true,
+                Path.Combine(Path.GetTempPath(), $"ReSet-L2Recovers-{Guid.NewGuid():N}"), false,
+                cancellationToken: CancellationToken.None, directDependenciesOnly: true);
+
+            // 최종 문서는 L1을 통과했다. L1 미통과 배너가 붙어서는 안 된다.
+            Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", result.SpecMarkdown);
+            Assert.NotEqual(VerificationOutcome.L1Exhausted, result.Outcome);
+        }
+
+        [Fact]
         public async Task RunConsolidatedPipelineAsync_L3Interactive_ProvideFeedback_MarksRegeneratedPlanReviewNotRun()
         {
             // 재검토(scoped re-review) 잔여 항목: RunConsolidatedPipelineAsync의 피드백 경로도
