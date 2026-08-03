@@ -28,4 +28,20 @@ public static class VerificationBanner
     public static string ReviewNotRun(string reason) =>
         "> [!NOTE]\n> **L2 AI 교차 리뷰가 수행되지 않았습니다.** 리뷰 호출이 실패하여 정합성 검증 없이 확정된 문서입니다. 내용을 직접 검토하십시오.\n"
         + $"> - **실패 사유**: {reason}\n\n";
+
+    /// <summary>
+    /// 사용자 취소로 이 문서의 참조 객체 일부가 분석되지 않았음을 알린다.
+    /// 개수 대신 이름을 싣는다 — 읽는 사람이 다음에 할 일이 그 객체를 다시
+    /// 분석하는 것이기 때문이다.
+    /// </summary>
+    public static string UnresolvedReferences(IReadOnlyList<string> objectNames)
+    {
+        var nameLines = objectNames is { Count: > 0 }
+            ? string.Join("\n", objectNames.Select(name => $">   - {name}"))
+            : ">   - (미분석 객체명이 기록되지 않았습니다.)";
+
+        return "\n> [!CAUTION]\n> **[참조 미완] 사용자 취소로 아래 참조 객체가 분석되지 않았습니다.**\n"
+            + nameLines
+            + "\n\n";
+    }
 }

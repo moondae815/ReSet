@@ -60,4 +60,27 @@ public sealed class VerificationBannerTests
         Assert.Contains("헤더 누락", banner);
         Assert.Contains("Mermaid 구문 오류", banner);
     }
+
+    [Fact]
+    public void UnresolvedReferences_ListsEveryUnanalyzedObjectName()
+    {
+        var banner = VerificationBanner.UnresolvedReferences(
+            new[] { "dbo.USP_Calc", "dbo.FN_Rate" });
+
+        Assert.Contains("> [!CAUTION]", banner);
+        Assert.Contains("[참조 미완]", banner);
+        Assert.Contains(">   - dbo.USP_Calc", banner);
+        Assert.Contains(">   - dbo.FN_Rate", banner);
+    }
+
+    [Fact]
+    public void UnresolvedReferences_EmptyList_StillRendersTheHeadingWithoutBlankBullets()
+    {
+        // 호출부가 빈 목록으로 부르는 일은 없어야 하지만, 부르더라도
+        // 내용 없는 불릿이 문서에 남지 않아야 한다.
+        var banner = VerificationBanner.UnresolvedReferences(Array.Empty<string>());
+
+        Assert.Contains("[참조 미완]", banner);
+        Assert.DoesNotContain(">   - \n", banner);
+    }
 }
