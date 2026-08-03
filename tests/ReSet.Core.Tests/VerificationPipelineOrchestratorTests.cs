@@ -689,6 +689,147 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunCodeObjectPipelineAsync_CacheHit_ReportsCacheReuseAndTheOriginalAnalysisTimestamp()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                aiService,
+                new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(),
+                "1",
+                "gpt-4",
+                cacheManager,
+                aiService,
+                aiService);
+            var key = CodeObjectKey.Create(
+                "PaymentDB", "dbo", "USP_CacheStamp", CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = key.Schema,
+                Name = key.Name
+            };
+            dbService.GetCodeObjectDetailsAsync(
+                    Arg.Any<string>(), key, Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(definition);
+            cacheManager.ComputeCompositeHash(definition, 3).Returns("hash");
+            cacheManager.IsCacheValid(key, "hash", Arg.Any<OutputPathResolver>()).Returns(true);
+
+            var outputRoot = Path.Combine(
+                Path.GetTempPath(), $"ReSet-CacheStamp-{Guid.NewGuid():N}");
+            var specPath = new OutputPathResolver(key.Database, outputRoot).ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(
+                specPath,
+                """
+                ---
+                검증 상태: 통과
+                종합 신뢰도: 78
+                ---
+
+                > [!NOTE]
+                > **문서 작성일시**: 2026-08-01 14:22:03
+                > **분석 AI 정보**: OpenAI
+
+                ## 개요
+                cached body
+                """);
+
+            try
+            {
+                var result = await orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB",
+                    key,
+                    3,
+                    "OpenAI",
+                    "rules",
+                    isBatchMode: true,
+                    outputRoot,
+                    enableCache: true);
+
+                Assert.True(result.FromCache);
+                Assert.Equal(new DateTime(2026, 8, 1, 14, 22, 3), result.AnalyzedAt);
+                Assert.StartsWith("## 개요", result.SpecMarkdown);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
+        public async Task RunCodeObjectPipelineAsync_CacheHitWithUnparsableTimestamp_LeavesAnalyzedAtNull()
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var cacheManager = Substitute.For<ICacheManager>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService,
+                aiService,
+                new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(),
+                "1",
+                "gpt-4",
+                cacheManager,
+                aiService,
+                aiService);
+            var key = CodeObjectKey.Create(
+                "PaymentDB", "dbo", "USP_CacheNoStamp", CodeObjectType.Procedure);
+            var definition = new SpDefinition
+            {
+                ObjectKey = key,
+                Schema = key.Schema,
+                Name = key.Name
+            };
+            dbService.GetCodeObjectDetailsAsync(
+                    Arg.Any<string>(), key, Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(definition);
+            cacheManager.ComputeCompositeHash(definition, 3).Returns("hash");
+            cacheManager.IsCacheValid(key, "hash", Arg.Any<OutputPathResolver>()).Returns(true);
+
+            var outputRoot = Path.Combine(
+                Path.GetTempPath(), $"ReSet-CacheNoStamp-{Guid.NewGuid():N}");
+            var specPath = new OutputPathResolver(key.Database, outputRoot).ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            await File.WriteAllTextAsync(
+                specPath,
+                """
+                ---
+                검증 상태: 통과
+                ---
+
+                > [!NOTE]
+                > **분석 AI 정보**: OpenAI
+
+                ## 개요
+                cached body
+                """);
+
+            try
+            {
+                var result = await orchestrator.RunCodeObjectPipelineAsync(
+                    "Server=(local);Database=PaymentDB",
+                    key,
+                    3,
+                    "OpenAI",
+                    "rules",
+                    isBatchMode: true,
+                    outputRoot,
+                    enableCache: true);
+
+                Assert.True(result.FromCache);
+                Assert.Null(result.AnalyzedAt);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_CacheUsesMetadataObjectKeyWhenInitialCatalogIsMissing()
         {
             var dbService = Substitute.For<IDbMetadataService>();

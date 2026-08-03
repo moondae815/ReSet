@@ -114,9 +114,8 @@ namespace ReSet.Core.Services
             CancellationToken cancellationToken = default,
             bool directDependenciesOnly = false,
             bool includeExternalCodeObjects = true,
-            string? analysisDatabase = null)
-        {
-            var (specMarkdown, spDef, review, thinkingText, outcome) = await RunCodeObjectPipelineCoreAsync(
+            string? analysisDatabase = null) =>
+            await RunCodeObjectPipelineCoreAsync(
                 connectionString,
                 key,
                 maxDepth,
@@ -130,17 +129,7 @@ namespace ReSet.Core.Services
                 includeExternalCodeObjects,
                 analysisDatabase);
 
-            return new CodeObjectPipelineResult
-            {
-                SpDef = spDef,
-                SpecMarkdown = specMarkdown,
-                Review = review,
-                ThinkingText = thinkingText,
-                Outcome = outcome
-            };
-        }
-
-        private async Task<(string? SpecMarkdown, SpDefinition? SpDef, ReviewResult? Review, string? ThinkingText, VerificationOutcome Outcome)> RunCodeObjectPipelineCoreAsync(
+        private async Task<CodeObjectPipelineResult> RunCodeObjectPipelineCoreAsync(
             string connectionString,
             CodeObjectKey key,
             int maxDepth,
@@ -162,6 +151,25 @@ namespace ReSet.Core.Services
             SpDefinition? spDef = null;
             ReviewResult? finalReview = null;
             var verificationOutcome = VerificationOutcome.Passed;
+
+            // 9곳의 반환 지점이 같은 형태를 쓰도록 모은다. verificationOutcome은
+            // 호출 시점 값이 읽히므로 각 지점에서 따로 넘기지 않는다.
+            CodeObjectPipelineResult Result(
+                string? spec,
+                SpDefinition? definition,
+                ReviewResult? review,
+                string? thinking,
+                bool fromCache = false,
+                DateTime? analyzedAt = null) => new()
+            {
+                SpecMarkdown = spec,
+                SpDef = definition,
+                Review = review,
+                ThinkingText = thinking,
+                Outcome = verificationOutcome,
+                FromCache = fromCache,
+                AnalyzedAt = analyzedAt
+            };
             var accumulatedThinking = new StringBuilder();
             AiResult? ollamaPart1 = null;
             AiResult? ollamaPart2 = null;
@@ -220,7 +228,7 @@ namespace ReSet.Core.Services
             if (spDef == null)
             {
                 Log.Warning("[파이프라인] SP 정의를 가져오지 못해 파이프라인을 중단합니다 - SP: {SpName}", selectedOption);
-                return (null, null, null, null, verificationOutcome);
+                return Result(null, null, null, null);
             }
 
             var cacheObjectKey = ResolveCacheObjectKey(
@@ -272,9 +280,11 @@ namespace ReSet.Core.Services
                             var cachedArtifact = await System.IO.File.ReadAllTextAsync(
                                 specFilePath,
                                 cancellationToken);
-                            var (cachedSpec, cachedReview) = ParseCachedSpecification(
-                                cachedArtifact);
-                            return (cachedSpec, spDef, cachedReview, null, verificationOutcome);
+                            var (cachedSpec, cachedReview, cachedAnalyzedAt) =
+                                ParseCachedSpecification(cachedArtifact);
+                            return Result(
+                                cachedSpec, spDef, cachedReview, null,
+                                fromCache: true, analyzedAt: cachedAnalyzedAt);
                         }
                     }
                     else
@@ -373,7 +383,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 하이브리드 후보 생성 중 실패: {ex.Message}");
-                        return (null, spDef, null, null, verificationOutcome);
+                        return Result(null, spDef, null, null);
                     }
                 }
 
@@ -434,7 +444,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - Critic 검토 중 실패: {ex.Message}");
-                        return (null, spDef, null, null, verificationOutcome);
+                        return Result(null, spDef, null, null);
                     }
                 }
 
@@ -597,7 +607,7 @@ namespace ReSet.Core.Services
                     catch (Exception ex)
                     {
                         _userInteraction.NotifyError($"{selectedOption} - 최종 합성 생성 실패: {ex.Message}");
-                        return (null, spDef, null, null, verificationOutcome);
+                        return Result(null, spDef, null, null);
                     }
 
                     // 합성본 기계적 검증 (L1) 1회 수행
@@ -983,7 +993,7 @@ namespace ReSet.Core.Services
 
                     if (!genSuccess || string.IsNullOrEmpty(specificationMarkdown))
                     {
-                        return (null, spDef, null, null, verificationOutcome);
+                        return Result(null, spDef, null, null);
                     }
 
                     // L1: 기계적 무결성 검사
@@ -1199,11 +1209,11 @@ namespace ReSet.Core.Services
                             }
                         }
 
-                        return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString(), verificationOutcome);
+                        return Result(specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
                     }
                     else if (reviewResult.Decision == UserDecision.Cancel)
                     {
-                        return (null, spDef, null, null, verificationOutcome);
+                        return Result(null, spDef, null, null);
                     }
                     else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                     {
@@ -1455,7 +1465,7 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return (specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString(), verificationOutcome);
+            return Result(specificationMarkdown, spDef, finalReview, accumulatedThinking.ToString());
         }
 
         private static CodeObjectKey ResolveCacheObjectKey(
@@ -1470,7 +1480,7 @@ namespace ReSet.Core.Services
             return requestedKey;
         }
 
-        private static (string Specification, ReviewResult Review)
+        private static (string Specification, ReviewResult Review, DateTime? AnalyzedAt)
             ParseCachedSpecification(string cachedArtifact)
         {
             // 캐시는 통과(Passed) 문서만 쓰이므로(위 캐시 저장부 참고) 정상적으로는 이
@@ -1517,6 +1527,29 @@ namespace ReSet.Core.Services
                 specification = specification[yaml.Length..];
             }
 
+            // NOTE 블록을 지우기 전에 원본 분석 시각을 확보한다. 캐시 히트는 AI를
+            // 호출하지 않았으므로 이 값을 그대로 다시 써야 새 날짜가 찍히지 않는다.
+            DateTime? analyzedAt = null;
+            var stampMatch = Regex.Match(
+                specification,
+                @"(?m)^>\s*\*\*문서 작성일시\*\*:\s*(?<stamp>[^\r\n]+?)\s*$");
+            if (stampMatch.Success &&
+                DateTime.TryParse(
+                    stampMatch.Groups["stamp"].Value,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var parsedStamp))
+            {
+                analyzedAt = parsedStamp;
+            }
+            else
+            {
+                // A가 레거시 캐시를 전량 무효화하므로 히트하는 문서는 반드시 신형
+                // 포맷이다. 여기 도달했다면 포매터 출력이 깨졌다는 뜻이고, 그 사실이
+                // 날짜보다 중요하다.
+                Log.Warning("[파이프라인] 캐시 문서에서 작성일시를 읽지 못했습니다.");
+            }
+
             specification = Regex.Replace(
                 specification.TrimStart('\r', '\n'),
                 @"\A> \[!NOTE\][^\r\n]*(?:\r?\n)(?:>[^\r\n]*(?:\r?\n|$))*\s*",
@@ -1525,7 +1558,7 @@ namespace ReSet.Core.Services
                 specification,
                 @"\A> \*\*AI 최종 신뢰도\*\*:[^\r\n]*(?:\r?\n|\z)\s*",
                 string.Empty);
-            return (specification.TrimStart('\r', '\n'), review);
+            return (specification.TrimStart('\r', '\n'), review, analyzedAt);
         }
 
         private static int ParseCachedScore(
@@ -1542,7 +1575,8 @@ namespace ReSet.Core.Services
                 : fallback;
         }
 
-        private static string? ResolveCurrentDatabase(string connectionString)
+        /// <summary>연결 문자열의 InitialCatalog를 꺼낸다. 없거나 파싱 불가면 null.</summary>
+        public static string? ResolveCurrentDatabase(string connectionString)
         {
             try
             {
