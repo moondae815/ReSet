@@ -43,8 +43,9 @@ public static class VerificationDocumentFormatter
         string provider,
         string modelName,
         string? effort,
-        DateTime timestamp) =>
-        FormatVerified(body, review, outcome, SpecificationLabels, provider, modelName, effort, timestamp);
+        DateTime timestamp,
+        AnalysisScope? scope = null) =>
+        FormatVerified(body, review, outcome, SpecificationLabels, provider, modelName, effort, timestamp, scope);
 
     public static string FormatConsolidatedPlan(
         string body,
@@ -54,7 +55,7 @@ public static class VerificationDocumentFormatter
         string modelName,
         string? effort,
         DateTime timestamp) =>
-        FormatVerified(body, review, outcome, PlanLabels, provider, modelName, effort, timestamp);
+        FormatVerified(body, review, outcome, PlanLabels, provider, modelName, effort, timestamp, scope: null);
 
     /// <summary>
     /// 검증 파이프라인을 거치지 않은 계획서용. 자기 자신의 검증 상태가 없으므로
@@ -92,7 +93,8 @@ public static class VerificationDocumentFormatter
         string provider,
         string modelName,
         string? effort,
-        DateTime timestamp)
+        DateTime timestamp,
+        AnalysisScope? scope)
     {
         // 점수 노출 여부는 review의 null 여부가 아니라 종료 상태가 결정한다.
         // 1차 시도의 리뷰 결과가 남아 있어도 최종적으로 검증되지 않았다면 점수를 실으면 안 된다.
@@ -109,8 +111,17 @@ CRUD 점수: {review.ScoreCrud}/10 # {labels.Crud}
 예외처리 점수: {review.ScoreException}/10 # {labels.Exception}"
             : string.Empty;
 
+        // 참조분석 ON/OFF에 따라 루트 SP가 본 의존성 범위가 달라진다. 계획서 진입점에서는
+        // scope가 항상 null이라 이 줄 자체가 생기지 않는다 - 분석 범위는 명세서 단위 개념이다.
+        var scopeLine = scope switch
+        {
+            AnalysisScope.Direct => "\n분석 범위: 직접 의존성 # 참조 SP/UDF 재귀 분석 모드",
+            AnalysisScope.Transitive => "\n분석 범위: 전이 의존성 # 단일 객체 분석 모드",
+            _ => string.Empty
+        };
+
         var yamlFrontMatter = $@"---
-검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scoreLines}
+검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scopeLine}{scoreLines}
 ---
 
 ";

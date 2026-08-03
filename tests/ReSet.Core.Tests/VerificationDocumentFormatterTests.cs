@@ -191,4 +191,58 @@ public sealed class VerificationDocumentFormatterTests
         Assert.Contains("정합성 점수: 9/10 # SQL 대비 기능 정합성", result);
         Assert.DoesNotContain("다이어그램 문법 및 가독성", result);
     }
+
+    [Fact]
+    public void FormatSpecification_WithoutScope_OmitsTheScopeLine()
+    {
+        var result = VerificationDocumentFormatter.FormatSpecification(
+            "# 본문", null, VerificationOutcome.Passed,
+            "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0));
+
+        Assert.DoesNotContain("분석 범위", result);
+    }
+
+    [Fact]
+    public void FormatSpecification_DirectScope_WritesTheRecursiveModeLabel()
+    {
+        var result = VerificationDocumentFormatter.FormatSpecification(
+            "# 본문", null, VerificationOutcome.Passed,
+            "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
+            AnalysisScope.Direct);
+
+        Assert.Contains("분석 범위: 직접 의존성", result);
+    }
+
+    [Fact]
+    public void FormatSpecification_TransitiveScope_WritesTheSingleObjectLabel()
+    {
+        var result = VerificationDocumentFormatter.FormatSpecification(
+            "# 본문", null, VerificationOutcome.Passed,
+            "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
+            AnalysisScope.Transitive);
+
+        Assert.Contains("분석 범위: 전이 의존성", result);
+    }
+
+    [Fact]
+    public void FormatSpecification_ScopeLineLivesInsideTheYamlBlockAlongsideScores()
+    {
+        var review = new ReviewResult
+        {
+            ScoreAccuracy = 10, ScoreCrud = 9, ScoreInterface = 8,
+            ScoreReadability = 7, ScoreException = 6
+        };
+
+        var result = VerificationDocumentFormatter.FormatSpecification(
+            "# 본문", review, VerificationOutcome.Passed,
+            "OpenAI", "gpt-test", null, new DateTime(2026, 8, 3, 10, 0, 0),
+            AnalysisScope.Direct);
+
+        var yamlEnd = result.IndexOf("\n---", 3, StringComparison.Ordinal);
+        var yaml = result[..yamlEnd];
+
+        Assert.Contains("검증 상태: 통과", yaml);
+        Assert.Contains("분석 범위: 직접 의존성", yaml);
+        Assert.Contains("종합 신뢰도: 80", yaml);
+    }
 }
