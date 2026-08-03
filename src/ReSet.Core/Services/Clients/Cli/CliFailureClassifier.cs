@@ -109,13 +109,63 @@ namespace ReSet.Core.Services.Clients.Cli
         {
             foreach (var marker in markers)
             {
-                if (haystack.Contains(marker, StringComparison.Ordinal))
+                if (ContainsMarker(haystack, marker))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        // "429", "401" 같은 숫자 마커는 단어 경계 없이 매칭하면 "14293"이나 "40100ms" 같은
+        // 무관한 숫자에도 걸린다. 숫자로만 이루어진 마커는 앞뒤가 숫자가 아닐 때만 인정한다.
+        // 한 위치에서 경계 검사에 실패해도 뒤에 다른 위치가 있을 수 있으므로 계속 찾는다.
+        private static bool ContainsMarker(string haystack, string marker)
+        {
+            if (!IsAllAsciiDigits(marker))
+            {
+                return haystack.Contains(marker, StringComparison.Ordinal);
+            }
+
+            var searchStart = 0;
+            while (true)
+            {
+                var index = haystack.IndexOf(marker, searchStart, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return false;
+                }
+
+                var beforeIsBoundary = index == 0 || !char.IsAsciiDigit(haystack[index - 1]);
+                var afterPosition = index + marker.Length;
+                var afterIsBoundary = afterPosition >= haystack.Length || !char.IsAsciiDigit(haystack[afterPosition]);
+
+                if (beforeIsBoundary && afterIsBoundary)
+                {
+                    return true;
+                }
+
+                searchStart = index + 1;
+            }
+        }
+
+        private static bool IsAllAsciiDigits(string value)
+        {
+            if (value.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var c in value)
+            {
+                if (!char.IsAsciiDigit(c))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

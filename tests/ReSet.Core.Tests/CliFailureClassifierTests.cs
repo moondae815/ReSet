@@ -67,6 +67,26 @@ namespace ReSet.Core.Tests
                 CliFailureClassifier.Classify(Failed("segmentation fault"), null));
         }
 
+        [Theory]
+        [InlineData("child process exited with code 14293")]
+        [InlineData("retry backoff 40100ms")]
+        public void Classify_NumericMarkerWithoutWordBoundary_ReturnsUnknown(string standardError)
+        {
+            // "429"와 "401"은 숫자로만 된 마커다. "14293"이나 "40100"처럼 더 긴 숫자의
+            // 일부로 나타나면 오진이므로 앞뒤가 숫자가 아닐 때만 매칭되어야 한다.
+            Assert.Equal(CliFailureKind.Unknown,
+                CliFailureClassifier.Classify(Failed(standardError), null));
+        }
+
+        [Fact]
+        public void Classify_NumericMarker_ScansPastEarlierBoundaryFailure()
+        {
+            // 앞부분의 "14293"은 경계 검사에 실패하지만, 뒤에 독립된 "429"가 있으므로
+            // 검색이 첫 실패에서 멈추지 않고 계속되어야 한다.
+            var result = Failed("code 14293; http 429");
+            Assert.Equal(CliFailureKind.QuotaExhausted, CliFailureClassifier.Classify(result, null));
+        }
+
         [Fact]
         public void ToException_QuotaExhausted_MentionsProviderSwitch()
         {
