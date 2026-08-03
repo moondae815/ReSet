@@ -66,6 +66,27 @@ class C
     }
 
     [Fact]
+    public void Scanner_FlagsACatchWhoseFilterSelectsCancellation()
+    {
+        // not 하나가 빠지면 뜻이 정반대가 된다 - 취소만 골라서 삼킨다.
+        // 이 저장소에 올바른 형태가 40곳 넘게 있어 복사 대상이 되므로,
+        // 방향이 뒤집힌 복사본이 조용히 통과하면 규칙이 무의미해진다.
+        var source = @"
+class C
+{
+    async System.Threading.Tasks.Task M(System.Threading.CancellationToken cancellationToken)
+    {
+        try { await Work(cancellationToken); }
+        catch (System.Exception ex) when (ex is System.OperationCanceledException) { }
+    }
+    async System.Threading.Tasks.Task Work(System.Threading.CancellationToken ct) { }
+}";
+
+        var offender = Assert.Single(CancellationPolicyScanner.ScanSource(source, "Fake.cs"));
+        Assert.Equal("M", offender.Member);
+    }
+
+    [Fact]
     public void Scanner_DoesNotFlagABroadCatchPrecededByAnOperationCanceledClause()
     {
         // C#은 catch 절을 위에서부터 매칭하므로 뒤의 넓은 catch는 OCE를 볼 수 없다.

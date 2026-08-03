@@ -125,9 +125,69 @@ public static class CancellationPolicyScanner
         return BroadCatchTypes.Contains(typeName);
     }
 
-    private static bool FiltersCancellation(CatchClauseSyntax clause) =>
-        clause.Filter is not null &&
-        CancellationTypes.Any(type => clause.Filter.FilterExpression.ToString().Contains(type, StringComparison.Ordinal));
+    /// <summary>
+    /// 필터가 취소를 실제로 "제외"할 때만 면제한다.
+    ///
+    /// when (ex is not OperationCanceledException) → 취소를 빼고 잡는다. 면제.
+    /// when (ex is OperationCanceledException)     → 오히려 취소만 골라 삼킨다. 위반.
+    ///
+    /// 이전 구현은 필터 문자열에 취소 타입 이름이 들어 있는지만 봤기 때문에 두
+    /// 형태를 구분하지 못했다. not 하나를 빠뜨려도 조용히 통과했다는 뜻이다.
+    /// 이 저장소에는 올바른 형태가 40곳 넘게 있어 복사 대상이 되므로, 방향이
+    /// 뒤집힌 복사본은 반드시 잡혀야 한다.
+    ///
+    /// 문자열 대신 구문 트리를 본다. `is not X`는 UnaryPatternSyntax(not)이고,
+    /// `!(x is X)`는 논리 부정 아래의 is 식이다. `not A and not B` 같은 조합도
+    /// 하위 노드를 훑으므로 함께 인식된다.
+    /// </summary>
+    private static bool FiltersCancellation(CatchClauseSyntax clause)
+    {
+        if (clause.Filter is null) return false;
+
+        return clause.Filter.FilterExpression
+            .DescendantNodesAndSelf()
+            .Any(ExcludesCancellation);
+    }
+
+    private static bool ExcludesCancellation(SyntaxNode node) =>
+        node switch
+        {
+            // ex is not OperationCanceledException
+            UnaryPatternSyntax unary when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword) =>
+                IsCancellationPattern(unary.Pattern),
+            // !(ex is OperationCanceledException) — 같은 뜻의 드문 표기
+            PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.LogicalNotExpression) =>
+                NegatedOperandTestsCancellation(Unparenthesize(prefix.Operand)),
+            _ => false
+        };
+
+    private static bool NegatedOperandTestsCancellation(ExpressionSyntax operand) =>
+        operand switch
+        {
+            // ex is OperationCanceledException — 타입 검사는 is 이항식으로 파싱된다
+            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.IsExpression) =>
+                IsCancellationTypeName(binary.Right),
+            // ex is OperationCanceledException oce
+            IsPatternExpressionSyntax pattern => IsCancellationPattern(pattern.Pattern),
+            _ => false
+        };
+
+    private static ExpressionSyntax Unparenthesize(ExpressionSyntax expression) =>
+        expression is ParenthesizedExpressionSyntax parenthesized
+            ? Unparenthesize(parenthesized.Expression)
+            : expression;
+
+    private static bool IsCancellationPattern(PatternSyntax pattern) =>
+        pattern switch
+        {
+            TypePatternSyntax type => IsCancellationTypeName(type.Type),
+            DeclarationPatternSyntax declaration => IsCancellationTypeName(declaration.Type),
+            ConstantPatternSyntax constant => IsCancellationTypeName(constant.Expression),
+            _ => false
+        };
+
+    private static bool IsCancellationTypeName(SyntaxNode node) =>
+        CancellationTypes.Contains(node.ToString());
 
     /// <summary>
     /// 본문에 맨 throw(rethrow)가 있으면 취소를 끝내지 않는다.
