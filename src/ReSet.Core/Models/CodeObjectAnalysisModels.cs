@@ -20,6 +20,33 @@ public enum AnalysisNodeStatus
     Cancelled
 }
 
+/// <summary>루트 객체를 분석할 때 AI가 실제로 본 의존성의 범위.</summary>
+public enum AnalysisScope
+{
+    /// <summary>maxDepth까지 전이 의존성을 포함한다(참조분석 OFF 경로).</summary>
+    Transitive,
+
+    /// <summary>직접 의존성만 포함한다(참조분석 ON 경로. 하위 객체는 각자 명세서를 갖는다).</summary>
+    Direct
+}
+
+/// <summary>의존성 그래프 순회가 끝까지 갔는지 여부. 실행 단위 사실이며 문서 단위가 아니다.</summary>
+public enum GraphCompletion
+{
+    Complete,
+    PartialCancelled
+}
+
+/// <summary>산출물 저장을 오케스트레이터가 수행했는지, 그리고 성공했는지.</summary>
+public enum ArtifactPersistence
+{
+    /// <summary>오케스트레이터가 저장하지 않았다. 호출부가 저장 책임을 갖는다.</summary>
+    NotAttempted,
+
+    Persisted,
+    Failed
+}
+
 public sealed class AnalysisNode
 {
     public AnalysisNode(CodeObjectKey key) => Key = key;
@@ -68,6 +95,20 @@ public sealed class CodeObjectPipelineResult
     }
     public List<CodeObjectAnalysisResult> AnalysisResults { get; set; } = new();
 
+    /// <summary>그래프 순회가 사용자 취소로 중단되었는지. 비재귀 경로는 항상 Complete.</summary>
+    public GraphCompletion Completion { get; set; }
+
+    /// <summary>오케스트레이터가 산출물을 저장했는지. NotAttempted면 호출부가 저장해야 한다.</summary>
+    public ArtifactPersistence Persistence { get; set; }
+
+    public List<string> PersistenceErrors { get; set; } = new();
+
+    /// <summary>이 결과가 AI 호출 없이 캐시에서 나왔는지(단일 객체 경로).</summary>
+    public bool FromCache { get; set; }
+
+    /// <summary>캐시에서 나온 경우 원본 문서의 분석 시각. 새로 분석했으면 null.</summary>
+    public DateTime? AnalyzedAt { get; set; }
+
     public AnalysisNode GetNode(CodeObjectKey key) =>
         Nodes.Single(node => node.Key == key);
 }
@@ -87,4 +128,10 @@ public sealed class CodeObjectAnalysisResult
     public string? ThinkingText { get; set; }
     public string? SpecPath { get; set; }
     public string? DdlPath { get; set; }
+
+    /// <summary>이 객체가 AI 호출 없이 캐시에서 나왔는지.</summary>
+    public bool FromCache { get; set; }
+
+    /// <summary>캐시에서 나온 경우 원본 문서의 분석 시각. 새로 분석했으면 null.</summary>
+    public DateTime? AnalyzedAt { get; set; }
 }
