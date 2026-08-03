@@ -180,4 +180,24 @@ public sealed class VerificationDocumentFormatterTests
         // 드리프트할 대상이 없다.
         Assert.Contains("검증 상태: 통과 # 검증 파이프라인 종료 상태", result);
     }
+
+    [Fact]
+    public void FormatUnverifiedDocument_WithNoSource_StatesNoVerificationAndCitesNothing()
+    {
+        // 정산 정책 문서는 SP 정의와 프로파일링 데이터에서 직접 생성되어 명세서를
+        // 거치지 않는다. 인용할 근거가 없으므로 근거 명세서 줄을 내서는 안 된다.
+        var result = VerificationDocumentFormatter.FormatUnverifiedDocument(
+            "# 정산 정책 룰북", null,
+            "anthropic", "claude-opus-5", "high", new DateTime(2026, 8, 3, 14, 22, 1));
+
+        Assert.Contains("검증 상태: 검증 없음", result);
+        Assert.Contains("이 문서는 검증 파이프라인을 거치지 않았습니다", result);
+        Assert.Contains("내용을 직접 검토하십시오", result);
+        Assert.DoesNotContain("근거 명세서", result);
+        Assert.Contains("# 정산 정책 룰북", result);
+
+        // 점수는 어떤 경로로도 실릴 수 없다.
+        Assert.DoesNotContain("종합 신뢰도", result);
+        Assert.DoesNotContain("/10", result);
+    }
 }
