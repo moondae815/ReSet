@@ -201,8 +201,33 @@ namespace ReSet.Validator.Cli
             // 기존 ReSet.Cli appsettings.local.json이 있을 경우 API Key를 가져오기 위한 대체 탐색 적용
             var apiKey = LoadApiKeyWithFallback(configuration, provider);
             var endpoint = configuration[$"AiSettings:Providers:{provider}:Endpoint"] ?? string.Empty;
+            var cliCommand = configuration[$"AiSettings:Providers:{provider}:Command"];
 
-            if (string.IsNullOrEmpty(apiKey) && !provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
+            // 무인 배치 도중 구독 쿼터가 소진되거나 권한 프롬프트에서 멈추면 장시간
+            // 실행이 통째로 날아간다. 시작 직후에 막는다. Validator에는 Critic/Consolidator
+            // 역할이 없으므로 Actor(단일 provider)만 검사한다.
+            if (cliArgs.IsBatchMode)
+            {
+                var blockedRole = ReSet.Core.Services.Clients.Cli.CliProviderBatchGuard.FindBlockedRole(provider, null, null);
+
+                if (blockedRole != null)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]에러: 배치 모드에서는 CLI provider를 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
+                    AnsiConsole.MarkupLine(
+                        "[yellow]CLI provider는 구독 쿼터 소진이나 권한 프롬프트로 무인 실행 도중 중단될 수 있습니다. appsettings.json에서 API provider로 변경해 주십시오.[/]");
+
+                    // 이 가드의 존재 이유는 무인 CI 실행을 세우는 것이다. 종료 코드 0으로
+                    // 끝나면 아무것도 만들지 않았는데도 파이프라인이 초록으로 통과한다.
+                    Environment.ExitCode = 1;
+                    return;
+                }
+            }
+
+            // CLI provider는 CLI에 로그인된 구독 계정을 쓰므로 API 키가 없다.
+            if (string.IsNullOrEmpty(apiKey)
+                && !provider.Equals("Ollama", StringComparison.OrdinalIgnoreCase)
+                && !AiClientFactory.IsCliProvider(provider))
             {
                 AnsiConsole.MarkupLine($"[red]에러: {provider} AI 클라이언트를 구동하기 위한 API Key가 설정되어 있지 않습니다.[/]");
                 AnsiConsole.MarkupLine("[yellow]src/ReSet.Validator.Cli/appsettings.local.json 에 ApiKey를 지정해 주세요.[/]");
@@ -219,7 +244,7 @@ namespace ReSet.Validator.Cli
             IAiClient aiClient;
             try
             {
-                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient);
+                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, null, cliCommand);
             }
             catch (Exception ex)
             {

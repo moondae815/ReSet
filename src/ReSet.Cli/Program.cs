@@ -145,7 +145,31 @@ namespace ReSet.Cli
             // 프로바이더별 ApiKey와 Endpoint 로드
             var apiKey = configuration[$"AiSettings:Providers:{provider}:ApiKey"] ?? string.Empty;
             var endpoint = configuration[$"AiSettings:Providers:{provider}:Endpoint"] ?? string.Empty;
-            
+            var cliCommand = configuration[$"AiSettings:Providers:{provider}:Command"];
+
+            // 무인 배치 도중 구독 쿼터가 소진되거나 권한 프롬프트에서 멈추면 장시간
+            // 실행이 통째로 날아간다. 시작 직후에 막는다.
+            if (cliArgs.IsBatchMode)
+            {
+                var blockedRole = ReSet.Core.Services.Clients.Cli.CliProviderBatchGuard.FindBlockedRole(
+                    provider,
+                    configuration["AiSettings:Critic:Provider"],
+                    configuration["AiSettings:Consolidator:Provider"]);
+
+                if (blockedRole != null)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]에러: 배치 모드에서는 CLI provider를 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
+                    AnsiConsole.MarkupLine(
+                        "[yellow]CLI provider는 구독 쿼터 소진이나 권한 프롬프트로 무인 실행 도중 중단될 수 있습니다. appsettings.json에서 API provider로 변경해 주십시오.[/]");
+
+                    // 이 가드의 존재 이유는 무인 CI 실행을 세우는 것이다. 종료 코드 0으로
+                    // 끝나면 아무것도 만들지 않았는데도 파이프라인이 초록으로 통과한다.
+                    Environment.ExitCode = 1;
+                    return;
+                }
+            }
+
             var tempStr = configuration["AiSettings:Temperature"] ?? "0.2";
             float.TryParse(tempStr, out float temp);
 
@@ -380,7 +404,7 @@ namespace ReSet.Cli
             // Local Chunking 활성화 여부
             bool.TryParse(configuration["AiSettings:EnableLocalChunking"] ?? "true", out bool enableLocalChunking);
 
-            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx);
+            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx, cliCommand);
             IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking);
 
             // 하이브리드 아키텍처: ActorEffort 파싱
@@ -403,7 +427,8 @@ namespace ReSet.Cli
                 }
                 bool.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:EnableThinking"] ?? "false", out bool criticEnableThinking);
 
-                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx);
+                var criticCommand = configuration[$"AiSettings:Providers:{criticProvider}:Command"];
+                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx, criticCommand);
                 criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 
@@ -424,7 +449,8 @@ namespace ReSet.Cli
                 }
                 bool.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:EnableThinking"] ?? "false", out bool consolidatorEnableThinking);
 
-                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx);
+                var consolidatorCommand = configuration[$"AiSettings:Providers:{consolidatorProvider}:Command"];
+                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx, consolidatorCommand);
                 consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 
