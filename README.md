@@ -2,7 +2,7 @@
 
 [![.NET 10.0](https://img.shields.io/badge/.NET-10.0-blueviolet.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![SQL Server](https://img.shields.io/badge/SQL%20Server-Database-red.svg)](https://www.microsoft.com/sql-server)
-[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20mlx%20%7C%20Z.ai-orange.svg)](#)
+[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20mlx%20%7C%20Z.ai%20%7C%20claude--cli%20%7C%20codex--cli%20%7C%20agy--cli-orange.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#)
 
 본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)와 사용자 정의 함수(UDF)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
@@ -35,12 +35,13 @@
 * **코딩 에이전트 자동 기동 브릿지 및 자가 수정 피드백 루프**: 통합 배치 전환 계획 수립 시 Agentic Workflow 기반 마이그레이션 지시서와 추상 템플릿(`AbstractSettleTasklet.cs`)을 자동 생성하여 전문 코딩 에이전트(Claude Code, Antigravity CLI 등)에 전달 및 기동합니다. 에이전트가 자체 단위테스트(L0)를 통과한 코드를 배출하면, 이를 정적 린터(L1)와 AI 의미론적 대조(L2)를 통해 다시 피드백을 주입해 고품질 코드로 자가 교정하는 완벽한 폐쇄 루프를 탑재했습니다.
 * **하이브리드 동적 SQL 및 Linked Server 대응**: 정적 분석이 까다로운 동적 쿼리(EXEC, sp_executesql)에 대해 DDL 텍스트를 Regex로 2차 분석하여 동적 참조 테이블의 실시간 스키마까지 자동 병합 수집하며, Linked Server 식별자 패턴 감지를 결합해 안전하고 완벽한 현대화 전환 가이드를 제공합니다.
 * **해시 기반 글로벌 증분 캐싱 (Global Cache)**: SP 및 관련 의존성 DDL의 복합 SHA-256 해시를 체크하여 변경이 없을 시 AI 분석을 건너뜁니다. 특히 글로벌 캐시 인덱스를 통해 서로 다른 루트 SP 분석 시에도 공유되는 하위 SP/UDF의 이전 분석 산출물(`Spec.md`)을 복원 및 재사용하여 중복 분석 비용을 획기적으로 절감하며, 기존 격리형 캐시들을 시작 시 자동으로 병합 마이그레이션합니다.
+* **CLI 코딩 에이전트 기반 AI 제공자 (`claude-cli` | `codex-cli` | `agy-cli`)**: 로컬에 설치되고 정액제 구독 계정으로 로그인된 코딩 에이전트 CLI(Claude Code, Codex CLI, Antigravity CLI)를 통해 분석·리뷰를 수행하여, 종량제 API 키 대신 구독 비용만으로 운용할 수 있습니다. `AiSettings:Provider`(및 `Critic`/`Consolidator`)에서 기존 API 제공자와 동일하게 선택하며, `ApiKey`가 아예 없고 CLI가 로그인된 계정을 그대로 사용하므로 설정값은 실행 파일 경로(`Command`)뿐입니다. 대화형 TUI 전용이라 무인 배치 모드에서는 권한 프롬프트 정지나 쿼터 소진으로 장시간 실행이 통째로 날아가는 것을 막기 위해 시작 즉시 중단되며, 호출이 실패해도 다른 제공자로 자동 전환하지 않고 원인(미설치·미로그인·쿼터 소진·타임아웃)과 CLI 원본 출력을 그대로 보고합니다. `agy-cli`는 프롬프트를 표준 입력이 아닌 명령행으로 전달해야 해서 Windows에서는 32,767자 한도에 걸려 대형 SP(ReSet 최대 실측 프롬프트 191KB)를 분석할 수 없습니다(macOS/Linux는 약 1MB 한도라 영향이 없습니다).
 
 ### 4. 코드 일치성 및 데이터 정합성 검증 (Validator)
 * **설계서 vs 구현 소스코드 일치성**: C#/Java 코드를 정적으로 분석하고 AI Gap 분석을 실행하여, 명세서 대비 입출력 파라미터, 연산 분기, 트랜잭션 구현 불일치점(Gap Report)을 도출합니다.
 * **관계지향 모의 데이터(Mock Data) 자동 생성 및 격리 적재**: 보안 규정으로 인해 운영 데이터를 활용할 수 없는 상황에 대처하여, AI가 테이블 DDL과 JOIN문을 파싱해 조인 컬럼 시드 값이 연결된 고품질 모의 데이터(`--gen-mock-data`)를 자동 생성하고, 테스트 실행 시 데이터베이스에 임시 Seeding 한 후 완료 시 자동 복구(Clean-up)합니다.
 * **하이브리드 런타임 수집 & 1:1 대조**: 테스트 케이스 입력을 자동 설계하여 Legacy DB의 SP를 호출하고, 마이그레이션된 소스코드(C# DLL 리플렉션 로드 및 ValueTask 비동기 대기 지원 / Java 외부 프로세스 실행)를 안전하게 트랜잭션 격리(Rollback) 및 타임아웃 하에 구동한 뒤 결과셋 데이터를 1:1로 정밀 비교 대조(`*_CompareReport.md`)합니다.
-* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Z.ai를 지원하며, 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)가 적용되어 있습니다.
+* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Z.ai, `claude-cli`/`codex-cli`/`agy-cli` CLI 기반 제공자를 지원하며, 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)가 적용되어 있습니다.
 
 ### 5. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 * **테이블 스키마 설명 누락 역추론**: 테이블 및 컬럼 설명(`MS_Description`)이 누락된 항목을 `[설명 누락]`으로 식별한 뒤, 해당 컬럼이 활용되는 SP/UDF/뷰 쿼리의 연산 및 대입 문맥을 추론하여 AI가 `[AI 추론 보완: {Schema}.{Table}.{Column} - {설명}]` 형태로 의미를 자동 역추론합니다.
@@ -77,6 +78,7 @@
     ```bash
     npm install -g @mermaid-js/mermaid-cli
     ```
+*   **(선택) CLI 코딩 에이전트**: `claude-cli` | `codex-cli` | `agy-cli` 제공자를 사용하려면 해당 CLI(Claude Code, Codex CLI, Antigravity CLI)가 로컬에 설치되고 구독 계정으로 로그인되어 있어야 합니다.
 
 ---
 
@@ -151,7 +153,7 @@ ReSet/
     "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
-    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai")
+    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
     "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
@@ -195,6 +197,15 @@ ReSet/
       "Z.ai": {
         "ApiKey": "",              // Z.ai API 키
         "Endpoint": "https://api.z.ai/api"
+      },
+      "claude-cli": {
+        "Command": "claude"        // Claude Code CLI 명령어. PATH에 없으면 절대 경로 지정. API 키 불필요(CLI 로그인 계정 사용)
+      },
+      "codex-cli": {
+        "Command": "codex"         // Codex CLI 명령어
+      },
+      "agy-cli": {
+        "Command": "agy"           // Antigravity CLI 명령어. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
       }
     }
   },
@@ -260,7 +271,7 @@ ReSet/
 ```json
 {
   "AiSettings": {
-    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai")
+    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
     "ModelName": "claude-sonnet-5",
     "ActorEffort": "high",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
     "Temperature": 0.1,
@@ -285,6 +296,15 @@ ReSet/
       "Z.ai": {
         "ApiKey": "",
         "Endpoint": "https://api.z.ai/api"
+      },
+      "claude-cli": {
+        "Command": "claude"            // Claude Code CLI 명령어. API 키 불필요(CLI 로그인 계정 사용)
+      },
+      "codex-cli": {
+        "Command": "codex"             // Codex CLI 명령어
+      },
+      "agy-cli": {
+        "Command": "agy"               // Antigravity CLI 명령어. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
       }
     }
   },
@@ -424,6 +444,9 @@ dotnet run --project src/ReSet.Cli
 > [!NOTE]
 > 배치 모드로 대량 실행 중 특정 SP에 대한 메타데이터 조회 실패 또는 AI 통신 에러가 발생하더라도, 해당 SP만 에러 로그가 출력되고 스킵(try-catch 격리)되며 전체 배치 작업은 중단 없이 다음 SP 분석을 계속 수행합니다.
 
+> [!NOTE]
+> `AiSettings:Provider`(또는 `Critic`/`Consolidator`)에 CLI 제공자(`claude-cli`, `codex-cli`, `agy-cli`)가 지정되어 있으면 배치 모드는 DB 연결 전에 즉시 중단되고 원인을 안내합니다. CLI는 대화형 TUI 전용이며, 권한 프롬프트에서 멈추거나 구독 쿼터가 소진되면 무인 실행 전체가 날아가기 때문입니다.
+
 ### 3. 코드 일치성 검증 및 데이터 정합성 검증 (ReSet.Validator)
 역공학 마이그레이션이 끝난 뒤, 생성된 명세서와 실제 마이그레이션 소스코드가 동일하게 구현되었는지 검증하고, 레거시 DB와 실제 실행 결과 정합성을 대조할 때 실행합니다.
 
@@ -477,6 +500,11 @@ dotnet run --project src/ReSet.Cli
 > **Q. Stored Procedure 실행 결과 수집 단계에서 데이터베이스 연결 예외가 발생하며 수집이 실패합니다.**
 > * **원인**: 일시적인 DB 네트워크 차단, 잘못된 연결 문자열 또는 계정 권한 부족 등이 원인입니다.
 > * **해결**: 프로그램은 **Soft Fail**을 채택하여 DB 실행 오류가 나더라도 크래시되지 않고 결과 JSON에 `FAIL` 상태를 기록하여 리턴합니다. 연결 대상 데이터베이스가 샌드박스 또는 적절한 테스트 DB에 접근할 수 있도록 `--conn` 파라미터나 `appsettings.local.json` 내 정보를 점검해 주십시오.
+
+> [!WARNING]
+> **Q. CLI 제공자(`claude-cli`, `codex-cli`, `agy-cli`) 호출이 실패합니다.**
+> * **원인**: 해당 CLI가 설치되어 있지 않거나, 로그인되어 있지 않거나, 구독 사용 한도가 소진되었거나, 응답이 제한 시간을 초과했기 때문입니다.
+> * **해결**: 이 경우 다른 제공자로 자동 대체(Fallback)되지 않습니다. 오류 메시지에 원인 분류와 CLI 원본 출력이 함께 표시되므로 이를 확인해 CLI 설치·로그인 상태를 점검하거나, `appsettings.json`에서 다른 제공자로 변경한 뒤 다시 실행하십시오.
 
 ---
 
