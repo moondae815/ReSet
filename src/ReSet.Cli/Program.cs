@@ -234,7 +234,7 @@ namespace ReSet.Cli
                                     connectionSuccess = true;
                                 }
                             }
-                            catch (Exception ex)
+                            catch (Exception ex) when (ex is not OperationCanceledException)
                             {
                                 AnsiConsole.WriteException(ex);
                             }
@@ -304,7 +304,7 @@ namespace ReSet.Cli
                                         connectionSuccess = true;
                                     }
                                 }
-                                catch (Exception ex)
+                                catch (Exception ex) when (ex is not OperationCanceledException)
                                 {
                                     loginError = ex.Message;
                                 }
@@ -484,7 +484,7 @@ namespace ReSet.Cli
                     {
                         spNames = await dbService.GetStoredProcedureNamesAsync(connectionString, globalCts.Token);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         AnsiConsole.MarkupLine("[red]SP 목록 조회 중 오류 발생:[/]");
                         AnsiConsole.WriteException(ex);
@@ -576,7 +576,7 @@ namespace ReSet.Cli
                                 rulebook, null, provider, modelName, actorEffort, DateTime.Now));
                         AnsiConsole.MarkupLine($"[green]성공: 정산 정책 문서 생성 완료![/] {Markup.Escape(rulebookPath)}");
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         AnsiConsole.MarkupLine($"[red]에러: 정산 정책 문서 도출 실패:[/] {Markup.Escape(ex.Message)}");
                     }
@@ -841,7 +841,10 @@ namespace ReSet.Cli
                                 cancellationToken: activeCts.Token);
                         }
                     }
-                    catch (Exception ex)
+                    // 이 안쪽 catch가 RunCodegenEngineAsync가 다시 던진 취소를 먼저 삼키면,
+                    // "코딩 에이전트 실행 중 오류"로 둔갑해 보고되고 사용자의 Ctrl-C가
+                    // 무시된 채 배치 작업이 그대로 끝난다(가로챌 상위 OCE 핸들러가 없다).
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         AnsiConsole.MarkupLine($"[red]에러: 배치 통합 설계서 작성 또는 코딩 에이전트 실행 중 오류 발생: {Markup.Escape(ex.Message)}[/]");
                     }
@@ -1345,7 +1348,10 @@ namespace ReSet.Cli
                                     aiClient: aiClient,
                                     cancellationToken: activeCts.Token);
                             }
-                            catch (Exception ex)
+                            // 이 안쪽 catch가 취소를 먼저 소비하면, 바깥 try의
+                            // catch (OperationCanceledException)가 영영 도달하지 못한다.
+                            // 사용자의 Ctrl-C가 무시되고 흐름이 메인 메뉴로 그냥 떨어진다.
+                            catch (Exception ex) when (ex is not OperationCanceledException)
                             {
                                 AnsiConsole.MarkupLine($"[red]에러:[/] 통합 마이그레이션 지시서 생성 또는 코딩 에이전트 실행 중 오류 발생: {Markup.Escape(ex.Message)}");
                             }

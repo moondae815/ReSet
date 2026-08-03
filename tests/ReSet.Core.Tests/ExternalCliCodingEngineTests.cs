@@ -67,7 +67,9 @@ namespace ReSet.Core.Tests
 
             // Act
             // Act & Assert
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(async () => await engine.GenerateCodeAsync(null, "dummy.txt", "", cts.Token));
+            // 취소는 더 이상 InvalidOperationException으로 세탁되지 않는다 - 하류의
+            // catch (OperationCanceledException) 핸들러가 매칭할 수 있도록 그대로 올라온다.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await engine.GenerateCodeAsync(null, "dummy.txt", "", cts.Token));
         }
     }
 }

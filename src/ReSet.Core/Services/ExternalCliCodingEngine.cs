@@ -103,7 +103,10 @@ namespace ReSet.Core.Services
                     }
                 }
             }
-            catch (Exception ex)
+            // 취소를 InvalidOperationException으로 감싸면 하류의 올바른 핸들러
+            // (Program.cs의 catch (OperationCanceledException))가 전부 매칭에 실패한다.
+            // 사용자가 Ctrl-C를 눌러도 "엔진 기동 오류"로 보고되고 작업이 계속된다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log.Error(ex, "외부 코딩 에이전트 기동 중 예외 발생 - Engine: {EngineName}, Command: {Command}", Name, _command);
                 throw new InvalidOperationException($"외부 코딩 엔진({Name}) 기동 중 오류가 발생했습니다. 명령어가 설치되어 있는지 확인해 주십시오. (오류: {ex.Message})", ex);
