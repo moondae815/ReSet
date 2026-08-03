@@ -2409,6 +2409,12 @@ namespace ReSet.Core.Tests
             // 여전히 실패하면, 표준 재시도 루프와 동일하게 L1Exhausted로 확정해야 한다.
             // 이 시점 이전에는 L1 무결성 확인 없이 그대로 다음 단계로 넘어가
             // 깨진 문서가 Passed로 끝나는 경우가 있었다.
+            //
+            // 이 테스트는 L2 결함 보완 블록(:682~)의 변경에 영향을 받지 않는다. 이유는
+            // "fixL1Result.IsValid가 false로 남아서"가 아니라 - fixL1Result는 여기서 아예
+            // 계산되지 않는다 - 아래 candidateReview가 HasDefects = false이므로 :682의
+            // `if (finalL2Result != null && finalL2Result.HasDefects)` 가드에서 단락되어
+            // 보완 블록 전체가 실행되지 않기 때문이다.
             var dbService = Substitute.For<IDbMetadataService>();
             var aiService = Substitute.For<IAiService>();
             var criticService = Substitute.For<IAiService>();
@@ -2531,6 +2537,12 @@ namespace ReSet.Core.Tests
             // 최종 문서는 L1을 통과했다. L1 미통과 배너가 붙어서는 안 된다.
             Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", result.SpecMarkdown);
             Assert.NotEqual(VerificationOutcome.L1Exhausted, result.Outcome);
+            // 위 두 단언만으로는 :718의 `finalReview = reFinalReview;` 재리뷰 할당이 고정되지
+            // 않는다. 그 줄을 지우면 보완본(=최종 문서)이 아니라 보완 전 문서를 평가한
+            // defectiveReview가 그대로 최종 리뷰로 남아 Outcome이 조용히 QualityRejected로
+            // 뒤집히는데, 배너 문구도 L1Exhausted도 아니므로 두 단언은 여전히 통과한다.
+            // 이 줄이 "재리뷰한 문서의 판정만 최종 판정이 된다"는 불변식을 고정한다.
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
         }
 
         [Fact]
@@ -2610,6 +2622,47 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(VerificationOutcome.Passed, result.Outcome);
             Assert.Same(goodReview, result.Review);
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_QualityRejected_ReportsTheDefectiveReviewToTheCaller()
+        {
+            // 설계의 outcome/review 짝 표에서 QualityRejected 행만 테스트로 고정되어 있지
+            // 않았다. :1709의 `planReview = l2Result;`를 지워도 오케스트레이터 테스트가 전부
+            // 통과했다 - 즉 품질 불합격으로 확정된 계획서가 review == null인 채 반환되어도
+            // 아무도 잡지 못했다. Outcome은 QualityRejected인데 근거가 되는 리뷰가 없으면
+            // 호출부는 "왜 불합격인지" 기록할 수 없다.
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            // maxL2Attempts = "1" 이므로 첫 결함 리뷰에서 재시도 여지가 없어 곧바로 확정된다.
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            // 본문 자체는 L1을 통과해야 L2 단계까지 도달한다.
+            var validPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n```mermaid\ngraph TD\nA-->B\n```";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Structure" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = validPlan }));
+
+            var defectiveReview = new ReviewResult
+            {
+                HasDefects = true,
+                FeedbackComment = "정합성 검증 SQL이 비어 있습니다",
+                ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4
+            };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(defectiveReview));
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "TestJobQualityRejected", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.Same(defectiveReview, result.Review);
         }
 
         [Fact]
