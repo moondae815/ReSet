@@ -60,6 +60,59 @@ namespace ReSet.Core.Tests
                 CliFailureClassifier.Classify(result, "rate_limit_error"));
         }
 
+        // stdout은 haystack에서 빠져야 한다. codex exec는 프롬프트와 추론을 stdout으로
+        // 흘리고 agy/claude는 답변 본문을 stdout JSON으로 돌려준다. 이 저장소의 도메인은
+        // 정산 프로시저라 "한도"(거래 한도, 결제 한도)와 "사용량"이 일상 어휘다.
+        [Fact]
+        public void Classify_KoreanPromptWithLimitVocabularyOnStdout_IsNotQuota()
+        {
+            var result = new CliProcessResult
+            {
+                ExitCode = 1,
+                StandardOutput =
+                    "프롬프트: 거래 한도와 결제 한도를 검증하고 일별 사용량을 집계하는 프로시저입니다.",
+                StandardError = "unexpected end of stream",
+                TimedOut = false
+            };
+
+            Assert.NotEqual(CliFailureKind.QuotaExhausted,
+                CliFailureClassifier.Classify(result, null));
+            Assert.Equal(CliFailureKind.Unknown, CliFailureClassifier.Classify(result, null));
+        }
+
+        // 오진의 실제 피해 시나리오: 인증 실패인데 stdout의 "한도" 때문에 쿼터로 분류되면
+        // 사용자는 로그인 대신 provider를 갈아엎는다.
+        [Fact]
+        public void Classify_AuthFailureWithLimitVocabularyOnStdout_StaysNotAuthenticated()
+        {
+            var result = new CliProcessResult
+            {
+                ExitCode = 1,
+                StandardOutput = "결제 한도 계산 로직을 설명하십시오.",
+                StandardError = "Not logged in. Please run `codex login`.",
+                TimedOut = false
+            };
+
+            Assert.Equal(CliFailureKind.NotAuthenticated,
+                CliFailureClassifier.Classify(result, null));
+        }
+
+        // stdout 자체는 보지 않지만, 클라이언트가 stdout 안의 오류를 extraDetail로
+        // 명시해 넘기면 분류는 그대로 살아 있어야 한다 (agy의 종료 코드 0 실패).
+        [Fact]
+        public void Classify_StdoutErrorRoutedThroughExtraDetail_IsStillClassified()
+        {
+            var result = new CliProcessResult
+            {
+                ExitCode = 0,
+                StandardOutput = "{\"status\":\"ERROR\",\"error\":\"usage limit reached\"}",
+                TimedOut = false
+            };
+
+            Assert.Equal(CliFailureKind.QuotaExhausted,
+                CliFailureClassifier.Classify(result, result.StandardOutput));
+        }
+
         [Fact]
         public void Classify_UnrecognizedMessage_ReturnsUnknown()
         {
@@ -105,6 +158,49 @@ namespace ReSet.Core.Tests
                 "codex-cli", "codex", Failed("something nobody predicted"), null);
 
             Assert.Contains("something nobody predicted", exception.Message);
+        }
+
+        // codex는 진행 로그를 stderr로 흘리므로 stderr가 비는 일이 드물다. 둘 중
+        // 하나만 실으면 "codex가 결과 파일을 남기지 않았습니다" 같은 가장 구체적인
+        // 진단이 진행 로그에 밀려 사라지고, 이유 없는 "종료 코드: 0 실패"만 남는다.
+        [Fact]
+        public void ToException_BothStandardErrorAndExtraDetail_AreIncluded()
+        {
+            var result = new CliProcessResult
+            {
+                ExitCode = 0,
+                StandardError = "[2026-08-03] thinking... tokens used 1200",
+                TimedOut = false
+            };
+
+            var exception = CliFailureClassifier.ToException(
+                "codex-cli", "codex", result, "codex가 결과 파일을 남기지 않았습니다.");
+
+            Assert.Contains("thinking... tokens used 1200", exception.Message);
+            Assert.Contains("codex가 결과 파일을 남기지 않았습니다.", exception.Message);
+        }
+
+        [Fact]
+        public void ToException_ExtraDetailOnly_IsIncluded()
+        {
+            var result = new CliProcessResult { ExitCode = 0 };
+
+            var exception = CliFailureClassifier.ToException(
+                "codex-cli", "codex", result, "codex가 빈 응답을 반환했습니다.");
+
+            Assert.Contains("codex가 빈 응답을 반환했습니다.", exception.Message);
+        }
+
+        [Fact]
+        public void ToException_NeitherDetailPresent_IsSummaryOnly()
+        {
+            var result = new CliProcessResult { ExitCode = 4 };
+
+            var exception = CliFailureClassifier.ToException("agy-cli", "agy", result, null);
+
+            Assert.Contains("종료 코드: 4", exception.Message);
+            Assert.DoesNotContain("[CLI 출력]", exception.Message);
+            Assert.DoesNotContain("[추가 진단]", exception.Message);
         }
 
         [Fact]

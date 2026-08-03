@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 
 namespace ReSet.Core.Services.Clients.Cli
 {
@@ -41,7 +42,15 @@ namespace ReSet.Core.Services.Clients.Cli
                 return CliFailureKind.Timeout;
             }
 
-            var haystack = $"{result.StandardError}\n{result.StandardOutput}\n{extraDetail}"
+            // stdout은 절대 보지 않는다. codex exec는 프롬프트와 추론 과정을 stdout으로
+            // 흘리고, agy와 claude는 답변 본문을 stdout의 JSON에 담아 돌려준다. 이 저장소의
+            // 도메인은 정산 프로시저이므로 "한도"(거래 한도, 결제 한도)와 "사용량"은 프롬프트와
+            // 답변에 일상적으로 등장한다. stdout을 훑으면 로그인만 하면 될 상황을 "구독 한도
+            // 소진"으로 오진해 사용자가 provider를 갈아엎게 만든다.
+            //
+            // 대신 stdout 안에만 담기는 오류(claude의 subtype/api_error_status, agy의 status
+            // JSON)는 각 클라이언트가 extraDetail로 명시해 넘긴다.
+            var haystack = $"{result.StandardError}\n{extraDetail}"
                 .ToLowerInvariant();
 
             if (ContainsAny(haystack, QuotaMarkers))
@@ -81,15 +90,24 @@ namespace ReSet.Core.Services.Clients.Cli
             };
 
             // 분류를 못 맞힌 경우에도 진단이 가능해야 한다. 원문을 자르지 않는다.
-            var detail = string.IsNullOrWhiteSpace(result.StandardError)
-                ? extraDetail
-                : result.StandardError;
+            //
+            // 둘 중 하나만 싣던 이전 구현은 codex가 stderr에 진행 로그를 한 줄이라도 남기면
+            // "codex가 결과 파일을 남기지 않았습니다" 같은 가장 구체적인 진단을 버렸다.
+            // 종료 코드 0을 실패로 부르면서 이유를 말하지 않는 메시지가 남았다.
+            // 둘 다 있으면 각각 자기 구획에 싣는다.
+            var builder = new StringBuilder(summary);
 
-            var message = string.IsNullOrWhiteSpace(detail)
-                ? summary
-                : $"{summary}\n[CLI 출력]\n{detail}";
+            if (!string.IsNullOrWhiteSpace(result.StandardError))
+            {
+                builder.Append("\n[CLI 출력]\n").Append(result.StandardError);
+            }
 
-            return new InvalidOperationException(message);
+            if (!string.IsNullOrWhiteSpace(extraDetail))
+            {
+                builder.Append("\n[추가 진단]\n").Append(extraDetail);
+            }
+
+            return new InvalidOperationException(builder.ToString());
         }
 
         public static InvalidOperationException CommandNotFound(
