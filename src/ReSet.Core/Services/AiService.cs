@@ -1719,7 +1719,7 @@ Analyze the target Stored Procedure source code and table/UDF schemas, and write
 1. Write the document in Korean Markdown format.
 2. **배치 전환 아키텍처 개요**: Propose a new scheduler framework to replace the SQL Server Agent Job (e.g., Quartz.NET/Hangfire for C# Worker Service, Spring Batch + Quartz for Java).
 3. **대량 데이터 청크(Chunk) 처리 전략**: Propose paging reader patterns and bulk write guidelines to prevent Out-Of-Memory (OOM) errors.
-4. **비즈니스 전환 설계 및 의사코드(Pseudocode)**: Provide modern OOP/ORM pseudocode structural examples converting the stored procedure logic.
+4. **비즈니스 전환 설계 및 의사코드(Pseudocode)**: Provide modern OOP pseudocode structural examples converting the stored procedure logic.
    - If dynamic SQL is present, provide modern parameterized queries or safe query builders to avoid SQL injection.
    - If Linked Server references (4-part identifiers) are found, provide distributed transaction strategies, API gateway alternatives, or multi-datasource configurations.
    - If `WITH(NOLOCK)` read hints are used, suggest transaction isolation controls (e.g., Read Uncommitted isolation or specific ORM read-only options) to align with performance and data integrity properties.

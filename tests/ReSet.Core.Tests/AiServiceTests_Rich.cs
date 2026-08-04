@@ -152,5 +152,32 @@ namespace ReSet.Core.Tests
             // Assert
             Assert.Equal("## 배치 전환 계획", result.Content);
         }
+
+        [Fact]
+        public async Task GenerateBatchMigrationPlanAsync_DoesNotAskForOrmPseudocode()
+        {
+            // 지시서가 ORM을 허용 목록 4가지로 제한하므로, 계획 프롬프트가 ORM 의사코드를
+            // 요구하면 두 문서가 서로 다른 기준을 말하게 된다.
+            // Arrange
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "USP_Plan",
+                DdlText = "SELECT 1;",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 배치 전환 계획\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            // Act
+            var result = await service.GenerateBatchMigrationPlanAsync(spDef, "C#");
+
+            // Assert
+            Assert.DoesNotContain("ORM pseudocode", result.SystemPrompt);
+            Assert.Contains("OOP pseudocode", result.SystemPrompt);
+        }
     }
 }
