@@ -324,7 +324,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
 
@@ -338,7 +338,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
 
@@ -352,7 +352,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
                     }
@@ -414,7 +414,7 @@ namespace ReSet.Core.Services
                                 }
                                 else
                                 {
-                                    accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                    accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_criticService.ProviderName));
                                 }
                                 accumulatedThinking.AppendLine();
                             }
@@ -581,7 +581,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_consolidatorService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
                     }
@@ -627,7 +627,7 @@ namespace ReSet.Core.Services
                             }
                             else
                             {
-                                accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_consolidatorService.ProviderName));
                             }
                             accumulatedThinking.AppendLine();
                         }
@@ -659,7 +659,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_criticService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
                     }
@@ -964,7 +964,7 @@ namespace ReSet.Core.Services
                             }
                             else
                             {
-                                accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                             }
                             accumulatedThinking.AppendLine();
                         }
@@ -1043,7 +1043,7 @@ namespace ReSet.Core.Services
                         }
                         else
                         {
-                            accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                            accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_criticService.ProviderName));
                         }
                         accumulatedThinking.AppendLine();
                         Log.Debug("[파이프라인] L2 AI 교차 리뷰 완료 - SP: {SpName}, 결함 감지: {HasDefects}",
@@ -1316,7 +1316,7 @@ namespace ReSet.Core.Services
                                 }
                                 else
                                 {
-                                    accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                    accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                                 }
                                 accumulatedThinking.AppendLine();
                             }
@@ -1438,7 +1438,7 @@ namespace ReSet.Core.Services
                                     }
                                     else
                                     {
-                                        accumulatedThinking.AppendLine("*(추론 비활성화 또는 추론 기능을 지원하지 않는 모델입니다.)*");
+                                        accumulatedThinking.AppendLine(ThinkingLogPlaceholder.For(_aiService.ProviderName));
                                     }
                                     accumulatedThinking.AppendLine();
                                 }
