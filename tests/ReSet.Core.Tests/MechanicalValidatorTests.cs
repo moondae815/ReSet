@@ -303,11 +303,45 @@ graph TD
 ```
 ";
             var result = _validator.PostProcessMarkdown(dirtyMarkdown);
-            
+
             Assert.Contains("subgraph SHAREDDB", result);
             Assert.DoesNotContain("subgraphSHAREDDB", result);
             Assert.Contains("A --> B --> C", result);
             Assert.DoesNotContain("-->|>", result);
+        }
+
+        // 따옴표 없는 @는 Mermaid 파스 에러를 낸다(실측: mermaid-cli 11.16.0,
+        // "got 'LINK_ID'"). 따옴표만 씌우면 정상 렌더링된다.
+        [Fact]
+        public void PostProcessMarkdown_ShouldQuoteLabelsContainingAtSign()
+        {
+            var dirtyMarkdown = @"
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+    DELPG[TPGSettleRate 삭제] --> CHK{@@ERROR 확인}
+```
+";
+            var result = _validator.PostProcessMarkdown(dirtyMarkdown);
+
+            Assert.Contains("CHK{\"@@ERROR 확인\"}", result);
+        }
+
+        // 이미 따옴표가 있으면 이중으로 감싸지 않는다.
+        [Fact]
+        public void PostProcessMarkdown_ShouldNotDoubleQuoteAtSignLabels()
+        {
+            var markdown = @"
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+    CHK{""@@ERROR 확인""} --> DONE[종료]
+```
+";
+            var result = _validator.PostProcessMarkdown(markdown);
+
+            Assert.Contains("CHK{\"@@ERROR 확인\"}", result);
+            Assert.DoesNotContain("\"\"@@ERROR", result);
         }
     }
 }

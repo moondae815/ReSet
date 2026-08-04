@@ -448,13 +448,16 @@ namespace ReSet.Core.Services
                     
                     // 만약 라벨에 특수문자(괄호, 콜론, 대시 등)가 있는데 큰따옴표가 없으면 큰따옴표로 감싸주기
                     var trimmedLabel = label.Trim();
-                    if (trimmedLabel.Contains("(") || trimmedLabel.Contains(")") || 
+                    if (trimmedLabel.Contains("(") || trimmedLabel.Contains(")") ||
                         trimmedLabel.Contains("[") || trimmedLabel.Contains("]") ||
                         trimmedLabel.Contains("{") || trimmedLabel.Contains("}") ||
                         trimmedLabel.Contains(",") || trimmedLabel.Contains("'") ||
                         trimmedLabel.Contains(":") || trimmedLabel.Contains("-") ||
                         trimmedLabel.Contains(">") || trimmedLabel.Contains("<") ||
-                        trimmedLabel.Contains("/") || trimmedLabel.Contains("\\"))
+                        trimmedLabel.Contains("/") || trimmedLabel.Contains("\\") ||
+                        // Mermaid 11에서 따옴표 없는 '@'는 링크 ID 문법으로 해석돼
+                        // 파스 에러가 난다(실측: "got 'LINK_ID'"). 따옴표만 씌우면 정상이다.
+                        trimmedLabel.Contains("@"))
                     {
                         if (!(trimmedLabel.StartsWith("\"") && trimmedLabel.EndsWith("\"")))
                         {
