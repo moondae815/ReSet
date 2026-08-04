@@ -8,6 +8,7 @@ namespace ReSet.Core.Services.Clients.Cli
         NotAuthenticated,
         QuotaExhausted,
         Timeout,
+        ToolPermissionDenied,
         Unknown
     }
 
@@ -33,6 +34,21 @@ namespace ReSet.Core.Services.Clients.Cli
             "not logged in", "unauthorized", "401", "authentication",
             "invalid api key", "credential", "please log in", "please login",
             "로그인", "인증"
+        };
+
+        // 툴을 끄지 못하는 CLI(agy)에서 모델이 툴을 잡으면, 헤드리스 모드는 권한을 물을
+        // 수 없어 자동 거부하고 빈 응답을 남긴다. 종료 코드는 0, status도 SUCCESS다.
+        //
+        // 마커를 "permission"이나 "권한" 같은 일반 단어로 잡으면 안 된다. 이 분류의
+        // haystack에는 extraDetail을 통해 CLI의 stdout 전문이 들어오고, ReSet의 도메인은
+        // 정산 프로시저라 GRANT/DENY와 "권한"은 명세서 본문에 일상적으로 등장한다.
+        // CLI 안내문에만 나타나는 고유 문구로 좁힌다.
+        private static readonly string[] ToolPermissionMarkers =
+        {
+            "auto-denied", "auto denied",
+            "--dangerously-skip-permissions",
+            "permissions.allow",
+            "headless mode cannot prompt"
         };
 
         public static CliFailureKind Classify(CliProcessResult result, string? extraDetail)
@@ -63,6 +79,12 @@ namespace ReSet.Core.Services.Clients.Cli
                 return CliFailureKind.NotAuthenticated;
             }
 
+            // 쿼터·인증 뒤에 둔다. 기존 판정을 한 건도 바꾸지 않고 Unknown만 가져간다.
+            if (ContainsAny(haystack, ToolPermissionMarkers))
+            {
+                return CliFailureKind.ToolPermissionDenied;
+            }
+
             return CliFailureKind.Unknown;
         }
 
@@ -85,6 +107,13 @@ namespace ReSet.Core.Services.Clients.Cli
                 CliFailureKind.NotAuthenticated =>
                     $"{providerName}이(가) 로그인되어 있지 않습니다. " +
                     $"터미널에서 '{command}'를 직접 실행해 로그인을 완료하십시오.",
+                // 종료 코드를 싣지 않는다. 이 실패는 종료 코드 0으로 도착하므로
+                // "실패했습니다 (종료 코드: 0)"이라고 쓰면 자기모순이 된다.
+                CliFailureKind.ToolPermissionDenied =>
+                    $"{providerName}이(가) 헤드리스 모드에서 툴 권한 요청을 자동 거부해 빈 응답을 " +
+                    "반환했습니다. 이 provider는 툴을 끄는 인자를 제공하지 않아 분석용 순수 LLM으로 " +
+                    "사용할 수 없습니다. claude-cli 또는 API provider로 변경하십시오. " +
+                    "(툴을 자동 승인하는 우회는 무인 배치에서 임의 명령 실행을 허용하므로 권장하지 않습니다.)",
                 _ =>
                     $"{providerName} 호출이 실패했습니다 (종료 코드: {result.ExitCode})."
             };

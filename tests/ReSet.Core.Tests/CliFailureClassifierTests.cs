@@ -42,6 +42,53 @@ namespace ReSet.Core.Tests
                 CliFailureClassifier.Classify(Failed(standardError), null));
         }
 
+        // 2026-08-04에 agy 1.1.10을 빈 임시 디렉터리에서 실제로 호출해 받은 stderr.
+        // agy는 툴을 끄는 인자가 없어 모델이 툴을 잡으면 이 경로를 밟는다.
+        // 종료 코드는 0, stdout의 status도 SUCCESS인데 response만 비어 있어,
+        // 분류가 없으면 "호출이 실패했습니다 (종료 코드: 0)"라는 자기모순 문구가 남는다.
+        private const string AgyPermissionDeniedStderr =
+            "jetski: no output produced — a tool required the \"command\" permission that " +
+            "headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under " +
+            "permissions.allow in settings.json (e.g. command(<target>)). Alternatively, " +
+            "re-run with --dangerously-skip-permissions to auto-approve all tools.";
+
+        [Fact]
+        public void Classify_HeadlessToolPermissionDenied_ReturnsToolPermissionDenied()
+        {
+            var result = new CliProcessResult { ExitCode = 0, StandardError = AgyPermissionDeniedStderr };
+
+            Assert.Equal(CliFailureKind.ToolPermissionDenied,
+                CliFailureClassifier.Classify(result, null));
+        }
+
+        [Fact]
+        public void ToException_ToolPermissionDenied_ExplainsWhyAndNamesAWorkingProvider()
+        {
+            var result = new CliProcessResult { ExitCode = 0, StandardError = AgyPermissionDeniedStderr };
+
+            var exception = CliFailureClassifier.ToException("agy-cli", "agy", result, null);
+
+            Assert.Contains("툴 권한", exception.Message);
+            Assert.Contains("claude-cli", exception.Message);
+            // 종료 코드 0을 실패로 부르는 자기모순 문구가 헤드라인에 남으면 안 된다.
+            Assert.DoesNotContain("종료 코드: 0", exception.Message);
+        }
+
+        // 이 분류의 haystack에는 extraDetail을 통해 agy의 stdout 전문이 들어온다.
+        // ReSet의 도메인은 정산 프로시저이고 GRANT/DENY 같은 권한 구문과 "권한"이라는
+        // 단어는 명세서 본문에 일상적으로 등장한다. 일반 단어로 매칭하면 멀쩡한 분석이
+        // "툴 권한 거부"로 오진된다. 마커는 agy 안내문 고유 문구로만 잡는다.
+        [Theory]
+        [InlineData("이 프로시저는 실행 권한이 필요합니다. permission denied on TSettleMst.")]
+        [InlineData("GRANT EXECUTE 권한을 부여해야 합니다.")]
+        public void Classify_AnalysisTextMentioningPermissions_IsNotMisreadAsToolDenial(string text)
+        {
+            var result = new CliProcessResult { ExitCode = 0 };
+
+            Assert.NotEqual(CliFailureKind.ToolPermissionDenied,
+                CliFailureClassifier.Classify(result, text));
+        }
+
         [Fact]
         public void Classify_QuotaWinsOverAuth_WhenBothPresent()
         {
