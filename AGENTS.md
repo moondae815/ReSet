@@ -70,6 +70,7 @@
 ### 3. 코드 검증 Core 라이브러리: [ReSet.Validator.Core](./src/ReSet.Validator.Core)
 *   **추상화 및 도메인 모델 ([Abstractions](./src/ReSet.Validator.Core/Abstractions), [Models](./src/ReSet.Validator.Core/Models))**
     *   [IValidatorPlugin.cs](./src/ReSet.Validator.Core/Abstractions/IValidatorPlugin.cs): C#([CsValidatorPlugin.cs](./src/ReSet.Validator.Core/Plugins/CsValidatorPlugin.cs)), Java([JavaValidatorPlugin.cs](./src/ReSet.Validator.Core/Plugins/JavaValidatorPlugin.cs)) 등 언어별 L1 정적 구조 및 명칭 검증을 구현하는 플러그인 인터페이스.
+    *   [TransactionEnlistmentCheck.cs](./src/ReSet.Validator.Core/Plugins/TransactionEnlistmentCheck.cs): 데이터 액세스 경계의 항상 조항 1(ORM을 전달받은 커넥션/트랜잭션에 참여시킬 것)만 L1에서 기계적으로 판정하는 검사. 두 언어 플러그인이 모두 호출합니다. 이 조항을 AI 판단에서 떼어낸 이유는 위반 시 검증기의 Rollback 격리가 깨져 정합성 대조 결과 자체가 오염되기 때문입니다. 오탐이 정상 코드를 막으므로 명백한 위반만 잡으며, 특히 `conn.BeginTransaction()`은 ReSet이 생성하는 `AbstractSettleTasklet` 스텁의 정상 형태이므로 위반으로 보지 마십시오. 새 패턴을 추가할 때도 이 기준을 유지하십시오.
     *   [IRuntimeRunner.cs](./src/ReSet.Validator.Core/Abstractions/IRuntimeRunner.cs): 타겟 런타임 코드 실행을 위한 인터페이스 규격 정의.
     *   [IValidationUserInterface.cs](./src/ReSet.Validator.Core/Abstractions/IValidationUserInterface.cs): 검증기 TUI 사용자 인터랙션을 추상화한 인터페이스.
     *   [L1ValidationResult.cs](./src/ReSet.Validator.Core/Abstractions/L1ValidationResult.cs): L1 정적 구문 검증 결과를 담는 모델.

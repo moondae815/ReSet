@@ -238,9 +238,18 @@ systemPrompt = PromptHead + DataAccessPolicy.VerificationCriteria + PromptTail
 
 ## 잔여 리스크
 
-경계 준수의 최종 판정자가 LLM이다. 특히 항상 조항 1(외부 트랜잭션 참여)은 컴파일러나 정적 분석이 잡을 수 있는 성질인데도 AI 판단에 의존한다. 기계 검증을 배제한 선택의 직접적 결과다.
+경계 준수의 최종 판정자는 대체로 LLM이다. 허용 목록 위반과 SQL 필수 항목 위반은 L2의 AI 판단에 남아 있다.
 
-향후 승격 지점: `MetadataExporter.cs:740-760`의 ArchUnit 스텁은 현재 주석 처리된 더미다. 여기에 "ORM 컨텍스트는 외부 `IDbTransaction`에 참여해야 한다" 규칙을 자동 생성하면 컴파일 타임 게이트로 승격할 수 있다.
+**항상 조항 1(외부 트랜잭션 참여)은 기계 검증으로 승격됐다.** 이 조항만 떼어낸 이유는 위반의 결과가 다르기 때문이다. 다른 조항 위반은 코드 품질 문제지만, 이 조항 위반은 검증기의 Rollback 격리(`CSharpReflectionRunner`)를 깨뜨려 1:1 정합성 대조 결과 자체를 신뢰할 수 없게 만든다.
+
+승격 위치는 당초 계획한 생성 프로젝트의 아키텍처 테스트가 아니라 ReSet 자신의 L1이다. `TransactionEnlistmentCheck`가 `CsValidatorPlugin`·`JavaValidatorPlugin`에서 호출된다. 이유 두 가지:
+
+- 에이전트는 생성된 테스트 파일을 지울 수 있지만 ReSet의 검증기는 지울 수 없다.
+- 두 언어 플러그인이 이미 있어 대칭적으로 적용되고, 생성 프로젝트에 새 종속성이 붙지 않는다.
+
+당초 승격 지점으로 적었던 NetArchTest 경로는 전제가 틀렸다. NetArchTest의 내장 fluent 조건은 타입 수준(이름·상속·수정자·네임스페이스·직접 타입 의존)만 다루므로 "컨텍스트 생성이 주입된 트랜잭션을 받는지"를 표현할 수 없다. `MeetCustomRule`로 Mono.Cecil `TypeDefinition`을 받아 IL을 직접 걷는다면 가능하지만, 그 IL 분석 코드를 ReSet이 생성해 유지해야 한다.
+
+기계 검사는 명백한 위반만 잡는다. 오탐이 정상 코드를 파이프라인에서 막기 때문이다. 남는 구멍: DI로 주입된 컨텍스트가 참여하지 않는 경우는 파일 단위 검사로 판정할 수 없어 L2에 남는다.
 
 ## 작업 공간과 문서 동기화
 
