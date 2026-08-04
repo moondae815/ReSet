@@ -6,27 +6,72 @@ namespace ReSet.Core.Tests;
 
 public sealed class VerificationBannerTests
 {
+    // 실패 사유는 실제로 기준에 미달한 항목에서 계산해야 한다.
+    // 이전에는 "정합성/가독성"이 하드코딩되어 있어, 가독성 8/10으로 통과한 문서에도
+    // "가독성 기준 미달"이라고 적혔다. 헤더가 자기모순이면 읽는 사람이 어느 항목을
+    // 고쳐야 하는지 알 수 없다.
     [Fact]
-    public void QualityRejected_MatchesTheTextTheOrchestratorUsedBefore()
+    public void QualityRejected_NamesEveryCategoryBelowThreshold_InScoreLineOrder()
     {
         var review = new ReviewResult
         {
             ScoreAccuracy = 6,
             ScoreCrud = 7,
             ScoreInterface = 5,
-            ScoreReadability = 8,
+            ScoreReadability = 8,   // 유일하게 기준(8)을 만족한다
             ScoreException = 4,
             FeedbackComment = "첫 줄\n둘째 줄"
         };
 
         var banner = VerificationBanner.QualityRejected(review, 8);
 
-        // 아래 기대값은 통합 전 세 호출부가 만들던 문자열과 글자 단위로 같아야 한다.
         var expected =
-            "\n> [!CAUTION]\n> **[품질 불합격] 정합성/가독성 기준 미달 (최종 신뢰도 점수: 60/100)**\n"
+            "\n> [!CAUTION]\n> **[품질 불합격] 정합성/CRUD/인터페이스/예외 기준 미달 (최종 신뢰도 점수: 60/100)**\n"
             + "> - **평가 점수**: 정합성 6/10, CRUD 7/10, 인터페이스 5/10, 가독성 8/10, 예외 4/10 (기준 점수: 8/10)\n"
             + "> - **최종 Critic 결함 피드백**:\n>   첫 줄\n>   둘째 줄\n\n";
         Assert.Equal(expected, banner);
+    }
+
+    // 2026-08-04 dbo.UP_Util_PG_Client_CMRate_Ins 산출물에서 실제로 나온 점수 조합.
+    // 다섯 항목 중 인터페이스 하나만 미달인데 배너는 "정합성/가독성 미달"이라고 적었다.
+    [Fact]
+    public void QualityRejected_SingleFailingCategory_DoesNotNameThePassingOnes()
+    {
+        var review = new ReviewResult
+        {
+            ScoreAccuracy = 9,
+            ScoreCrud = 10,
+            ScoreInterface = 7,
+            ScoreReadability = 10,
+            ScoreException = 8
+        };
+
+        var banner = VerificationBanner.QualityRejected(review, 8);
+
+        Assert.Contains("**[품질 불합격] 인터페이스 기준 미달", banner);
+        Assert.DoesNotContain("정합성 기준 미달", banner);
+        Assert.DoesNotContain("가독성 기준 미달", banner);
+    }
+
+    // 점수는 모두 기준을 넘겼는데 Critic이 결함을 지적한 경우다. 미달 항목이 없으므로
+    // 항목명을 지어내면 안 된다.
+    [Fact]
+    public void QualityRejected_NoCategoryBelowThreshold_ReportsCriticDefectInstead()
+    {
+        var review = new ReviewResult
+        {
+            HasDefects = true,
+            ScoreAccuracy = 9,
+            ScoreCrud = 9,
+            ScoreInterface = 9,
+            ScoreReadability = 9,
+            ScoreException = 9
+        };
+
+        var banner = VerificationBanner.QualityRejected(review, 8);
+
+        Assert.Contains("**[품질 불합격] Critic 결함 지적", banner);
+        Assert.DoesNotContain("기준 미달", banner);
     }
 
     [Fact]
