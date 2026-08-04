@@ -1774,6 +1774,9 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
+                        // 마지막이 아니라 최고점을 채택한다. 이 분기에 도달했다는 것은
+                        // 직전 시도의 리뷰가 성공했다는 뜻이므로 후보는 반드시 존재하지만,
+                        // 앞으로 이 루프가 바뀌어도 깨지지 않도록 폴백을 둔다.
                         var adoptedReview = bestAttempt.Review ?? l2Result;
                         var adoptedPlan = bestAttempt.Markdown ?? consolidatedPlan;
 

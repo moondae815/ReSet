@@ -201,7 +201,7 @@ graph TD
         StructCheck -- "아니오 (1회차)" --> P1["1/3. 브레인스토밍<br/>(raw/Brainstorming.md 보존)"]
         P1 --> P2["2/3. 목차 설계<br/>(raw/PlanStructure.md 보존)"]
         P2 --> P3
-        StructCheck -- "예 (재시도)" --> P3["3/3. 통합 계획 본문 생성<br/>(목차 재사용, 최신 피드백만 주입)"]
+        StructCheck -- "예 (재시도)" --> P3["3/3. 통합 계획 본문 생성<br/>(목차 재사용, 누적 피드백 최근 3회차 주입)"]
     end
 
     subgraph VerifyB ["3. 검증 및 종료 상태 판정"]
