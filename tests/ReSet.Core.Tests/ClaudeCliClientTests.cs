@@ -31,6 +31,22 @@ namespace ReSet.Core.Tests
             Assert.Equal(string.Empty, arguments[toolsIndex + 1]);
         }
 
+        // --tools ""는 도움말 그대로 '내장 도구'만 끈다. 사용자 스코프 MCP 서버와
+        // settings.json의 플러그인(SessionStart 훅)은 그대로 살아 남아, 분석 프롬프트에
+        // 코딩 에이전트용 지시문이 얹힌다. 실측: 이 두 인자가 없으면 빈 작업 디렉터리에서도
+        // 외부 컨텍스트 약 1,760 토큰이 주입되고, 붙이면 0이 된다.
+        [Fact]
+        public void BuildArguments_IsolatesFromUserScopedMcpServersAndPlugins()
+        {
+            var arguments = ClaudeCliClient.BuildArguments("sonnet", null, "/tmp/sys.txt");
+
+            Assert.Contains("--strict-mcp-config", arguments);
+
+            var index = arguments.ToList().IndexOf("--setting-sources");
+            Assert.True(index >= 0);
+            Assert.Equal(string.Empty, arguments[index + 1]);
+        }
+
         // 기본 시스템 프롬프트를 '추가'가 아니라 '교체'해야 한다.
         // 실측: append는 호출당 10,186 토큰, 교체는 1,451 토큰.
         [Fact]
@@ -89,6 +105,15 @@ namespace ReSet.Core.Tests
             Assert.True(response.IsError);
             Assert.Equal("error_max_turns", response.Subtype);
             Assert.Equal("rate_limit_error", response.ApiErrorStatus);
+        }
+
+        [Fact]
+        public void ParseResponse_ExposesStopReason()
+        {
+            var response = ClaudeCliClient.ParseResponse(
+                "{\"is_error\":false,\"stop_reason\":\"max_tokens\",\"result\":\"## 개요\"}");
+
+            Assert.Equal("max_tokens", response.StopReason);
         }
 
         [Fact]
@@ -185,6 +210,48 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("구독", exception.Message);
             Assert.Contains("rate_limit_error", exception.Message);
+        }
+
+        // claude-cli의 sonnet-5 출력 한도는 64,000 토큰으로 고정되어 있고(CLAUDE_CODE_MAX_OUTPUT_TOKENS는
+        // 무시된다) API 경로의 128,000과 다르다. 잘린 명세서를 그대로 돌려주면 Critic이 "누락"을
+        // 결함으로 채점해, 원인이 모델 품질인지 출력 절단인지 구분할 수 없게 된다.
+        [Fact]
+        public async Task ChatAsync_StubTruncatedByMaxTokens_ThrowsInsteadOfReturningPartialContent()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody:
+                    "cat > /dev/null\n" +
+                    "echo '{\"is_error\":false,\"stop_reason\":\"max_tokens\",\"result\":\"## 개요\"}'\n",
+                windowsBody:
+                    "more > nul\r\n" +
+                    "echo {\"is_error\":false,\"stop_reason\":\"max_tokens\",\"result\":\"## 개요\"}\r\n");
+
+            var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
+
+            Assert.Contains("claude-cli", exception.Message);
+            Assert.Contains("출력 한도", exception.Message);
+        }
+
+        // 정상 종료 사유에는 절단 판정을 걸지 않는다. 과탐지는 멀쩡한 분석을 실패로 만든다.
+        [Fact]
+        public async Task ChatAsync_StubEndsNormally_ReturnsContent()
+        {
+            using var stub = CliStubScript.Create(
+                posixBody:
+                    "cat > /dev/null\n" +
+                    "echo '{\"is_error\":false,\"stop_reason\":\"end_turn\",\"result\":\"PONG\"}'\n",
+                windowsBody:
+                    "more > nul\r\n" +
+                    "echo {\"is_error\":false,\"stop_reason\":\"end_turn\",\"result\":\"PONG\"}\r\n");
+
+            var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
+
+            var result = await client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f);
+
+            Assert.Equal("PONG", result.Content);
         }
     }
 }

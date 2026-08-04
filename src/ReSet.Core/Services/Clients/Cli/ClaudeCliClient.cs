@@ -14,6 +14,9 @@ namespace ReSet.Core.Services.Clients.Cli
         public string? Result { get; init; }
         public string? Subtype { get; init; }
         public string? ApiErrorStatus { get; init; }
+
+        /// <summary>턴이 끝난 사유. "max_tokens"면 본문이 잘린 것이다.</summary>
+        public string? StopReason { get; init; }
     }
 
     /// <summary>
@@ -54,6 +57,15 @@ namespace ReSet.Core.Services.Clients.Cli
                 "--tools", string.Empty,
                 "--disable-slash-commands",
                 "--no-session-persistence",
+                // CliWorkspace는 작업 디렉터리 기준 파일(CLAUDE.md/AGENTS.md)만 막는다.
+                // 사용자 스코프 설정은 그대로 살아 남는다. --tools ""는 도움말 그대로
+                // '내장 도구'만 끄므로 MCP 서버는 남고, --disable-slash-commands는 스킬
+                // 호출만 막을 뿐 플러그인의 SessionStart 훅이 밀어 넣는 지시문 본문은
+                // 그대로 들어온다. 아래 두 인자가 그 두 경로를 각각 끊는다.
+                // 실측: 빈 작업 디렉터리에서 이 둘이 없으면 외부 컨텍스트 약 1,760 토큰이
+                // 주입되고, 붙이면 0이 된다.
+                "--strict-mcp-config",
+                "--setting-sources", string.Empty,
                 // 기본 시스템 프롬프트를 '교체'한다. 추가(append)하면 코딩 에이전트
                 // 프롬프트가 그대로 얹혀 호출당 오버헤드가 7배가 된다.
                 "--system-prompt-file", systemPromptFilePath
@@ -88,7 +100,8 @@ namespace ReSet.Core.Services.Clients.Cli
                               && isError.ValueKind == JsonValueKind.True,
                     Result = ReadString(root, "result"),
                     Subtype = ReadString(root, "subtype"),
-                    ApiErrorStatus = ReadString(root, "api_error_status")
+                    ApiErrorStatus = ReadString(root, "api_error_status"),
+                    StopReason = ReadString(root, "stop_reason")
                 };
             }
             catch (JsonException ex)
@@ -132,6 +145,19 @@ namespace ReSet.Core.Services.Clients.Cli
             {
                 var detail = $"{response.Subtype} {response.ApiErrorStatus}".Trim();
                 throw CliFailureClassifier.ToException(ProviderName, _command, processResult, detail);
+            }
+
+            // CLI는 출력 한도를 노출하지 않는다. sonnet-5 기준 64,000 토큰으로 고정되어 있고
+            // CLAUDE_CODE_MAX_OUTPUT_TOKENS도 무시되므로, API 경로(128,000)에서는 통과하던
+            // 대형 SP가 여기서만 잘린다. 잘린 본문을 그대로 돌려주면 Critic이 누락된 절을
+            // 결함으로 채점해, 원인이 모델 품질인지 출력 절단인지 구분할 수 없게 된다.
+            if (string.Equals(response.StopReason, "max_tokens", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"{ProviderName} 응답이 CLI 출력 한도에 걸려 잘렸습니다 (stop_reason: max_tokens). " +
+                    "CLI는 출력 한도를 조절할 수단을 제공하지 않으므로, 이 대상은 API provider로 " +
+                    "분석하거나 더 작은 단위로 나누어 실행하십시오.\n" +
+                    $"[잘린 본문 {response.Result.Length}자]\n{response.Result}");
             }
 
             return new AiResult { Content = response.Result };
