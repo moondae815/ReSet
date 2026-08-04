@@ -46,7 +46,17 @@ namespace ReSet.Validator.Core.Plugins
                     return Task.FromResult(result);
                 }
 
-                // 3. 설계서 내 입출력 정의와 소스코드 정적 매핑 검사 (예: 메서드 시그니처나 인자 확인)
+                // 3. 데이터 액세스 경계의 항상 조항 1(전달받은 트랜잭션 참여) 검사.
+                // 이 조항 위반은 검증기의 Rollback 격리를 깨뜨려 정합성 대조 결과 자체를
+                // 오염시키므로, L2의 AI 판단을 기다리지 않고 여기서 막는다.
+                var boundaryViolation = TransactionEnlistmentCheck.FindCSharpViolation(sourceCodeContent);
+                if (boundaryViolation != null)
+                {
+                    result.ErrorMessage = boundaryViolation;
+                    return Task.FromResult(result);
+                }
+
+                // 4. 설계서 내 입출력 정의와 소스코드 정적 매핑 검사 (예: 메서드 시그니처나 인자 확인)
                 // 설계서에서 매핑 정보 추출 (간단히 정규식으로 파라미터 명칭 추출)
                 var paramRegex = new Regex(@"-\s*`@([A-Za-z0-9_]+)`", RegexOptions.Compiled);
                 var specParams = new List<string>();

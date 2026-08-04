@@ -106,6 +106,52 @@ namespace App {
         }
 
         [Fact]
+        public async Task CsValidatorPlugin_ShouldFail_OnTransactionEnlistmentViolation()
+        {
+            // 이 조항을 어기면 검증기의 Rollback 격리가 깨져 정합성 대조 결과가 오염된다.
+            // 그래서 AI 판단(L2)에 맡기지 않고 L1에서 기계적으로 막는다.
+            // Arrange
+            var plugin = new CsValidatorPlugin();
+            var spec = "# Spec";
+            var code = @"
+public class SettleTasklet {
+    public void Run(SettleContextDb db) {
+        using var tx = db.Database.BeginTransaction();
+        db.SaveChanges();
+    }
+}";
+
+            // Act
+            var result = await plugin.ValidateStaticAsync(spec, code);
+
+            // Assert
+            Assert.False(result.Passed);
+            Assert.Contains("데이터 액세스 경계 위반", result.ErrorMessage);
+        }
+
+        [Fact]
+        public async Task JavaValidatorPlugin_ShouldFail_OnTransactionEnlistmentViolation()
+        {
+            // Arrange
+            var plugin = new JavaValidatorPlugin();
+            var spec = "# Spec";
+            var code = @"
+package com.example;
+public class SettleTasklet {
+    public void run() {
+        entityManager.getTransaction().begin();
+    }
+}";
+
+            // Act
+            var result = await plugin.ValidateStaticAsync(spec, code);
+
+            // Assert
+            Assert.False(result.Passed);
+            Assert.Contains("데이터 액세스 경계 위반", result.ErrorMessage);
+        }
+
+        [Fact]
         public async Task JavaValidatorPlugin_ShouldPass_OnValidSyntax()
         {
             // Arrange

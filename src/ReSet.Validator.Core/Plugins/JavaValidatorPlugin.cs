@@ -45,8 +45,18 @@ namespace ReSet.Validator.Core.Plugins
                     return Task.FromResult(result);
                 }
 
+                // 3. 데이터 액세스 경계의 항상 조항 1(전달받은 트랜잭션 참여) 검사.
+                // 이 조항 위반은 검증기의 Rollback 격리를 깨뜨려 정합성 대조 결과 자체를
+                // 오염시키므로, L2의 AI 판단을 기다리지 않고 여기서 막는다.
+                var boundaryViolation = TransactionEnlistmentCheck.FindJavaViolation(sourceCodeContent);
+                if (boundaryViolation != null)
+                {
+                    result.ErrorMessage = boundaryViolation;
+                    return Task.FromResult(result);
+                }
+
                 result.ExtractedMetadata.Add("ClassName", className);
-                
+
                 // L1 통과
                 result.Passed = true;
             }
