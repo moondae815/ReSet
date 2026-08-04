@@ -35,7 +35,7 @@
 * **코딩 에이전트 자동 기동 브릿지 및 자가 수정 피드백 루프**: 통합 배치 전환 계획 수립 시 Agentic Workflow 기반 마이그레이션 지시서와 추상 템플릿(`AbstractSettleTasklet.cs`)을 자동 생성하여 전문 코딩 에이전트(Claude Code, Antigravity CLI 등)에 전달 및 기동합니다. 에이전트가 자체 단위테스트(L0)를 통과한 코드를 배출하면, 이를 정적 린터(L1)와 AI 의미론적 대조(L2)를 통해 다시 피드백을 주입해 고품질 코드로 자가 교정하는 완벽한 폐쇄 루프를 탑재했습니다.
 * **하이브리드 동적 SQL 및 Linked Server 대응**: 정적 분석이 까다로운 동적 쿼리(EXEC, sp_executesql)에 대해 DDL 텍스트를 Regex로 2차 분석하여 동적 참조 테이블의 실시간 스키마까지 자동 병합 수집하며, Linked Server 식별자 패턴 감지를 결합해 안전하고 완벽한 현대화 전환 가이드를 제공합니다.
 * **해시 기반 글로벌 증분 캐싱 (Global Cache)**: SP 및 관련 의존성 DDL의 복합 SHA-256 해시를 체크하여 변경이 없을 시 AI 분석을 건너뜁니다. 특히 글로벌 캐시 인덱스를 통해 서로 다른 루트 SP 분석 시에도 공유되는 하위 SP/UDF의 이전 분석 산출물(`Spec.md`)을 복원 및 재사용하여 중복 분석 비용을 획기적으로 절감하며, 기존 격리형 캐시들을 시작 시 자동으로 병합 마이그레이션합니다.
-* **CLI 코딩 에이전트 기반 AI 제공자 (`claude-cli` | `codex-cli` | `agy-cli`)**: 로컬에 설치되고 정액제 구독 계정으로 로그인된 코딩 에이전트 CLI(Claude Code, Codex CLI, Antigravity CLI)를 통해 분석·리뷰를 수행하여, 종량제 API 키 대신 구독 비용만으로 운용할 수 있습니다. `AiSettings:Provider`(및 `Critic`/`Consolidator`)에서 기존 API 제공자와 동일하게 선택하며, `ApiKey`가 아예 없고 CLI가 로그인된 계정을 그대로 사용하므로 설정값은 실행 파일 경로(`Command`)뿐입니다. CLI 에이전트 자체는 헤드리스로 정상 동작하지만, 무인 배치 도중 권한 프롬프트에서 멈추거나 구독 쿼터가 소진되면 장시간 실행이 통째로 날아갈 수 있어 ReSet의 무인 배치 모드에서는 시작 즉시 중단되며, 호출이 실패해도 다른 제공자로 자동 전환하지 않고 원인(미설치·미로그인·쿼터 소진·타임아웃)과 CLI 원본 출력을 그대로 보고합니다. `agy-cli`는 프롬프트를 표준 입력이 아닌 명령행으로 전달해야 해서 Windows에서는 32,767자 한도에 걸려 대형 SP(ReSet 최대 실측 프롬프트 191KB)를 분석할 수 없습니다(macOS/Linux는 약 1MB 한도라 영향이 없습니다).
+* **CLI 코딩 에이전트 기반 AI 제공자 (`claude-cli` | `codex-cli` | `agy-cli`)**: 로컬에 설치되고 정액제 구독 계정으로 로그인된 코딩 에이전트 CLI(Claude Code, Codex CLI, Antigravity CLI)를 통해 분석·리뷰를 수행하여, 종량제 API 키 대신 구독 비용만으로 운용할 수 있습니다. `AiSettings:Provider`(및 `Critic`/`Consolidator`)에서 기존 API 제공자와 동일하게 선택하며, `ApiKey`가 아예 없고 CLI가 로그인된 계정을 그대로 사용하므로 제공자별 설정값은 실행 파일 경로(`Command`) 하나뿐입니다. 모델은 API 제공자와 똑같이 `AiSettings:ModelName`(Critic/Consolidator는 각자의 `ModelName`)으로 지정하며, 이 값이 그대로 CLI의 모델 인자(`claude-cli`·`agy-cli`는 `--model`, `codex-cli`는 `-m`)로 전달됩니다. 비워 두면 인자를 생략해 각 CLI의 기본 모델이 쓰이고, 이름은 API 모델 ID가 아니라 해당 CLI가 받아들이는 표기여야 합니다. `Temperature`는 세 CLI 모두 노출하지 않아 무시되며(생성 시 경고 로그), `Effort`는 지원하되 `codex-cli`/`agy-cli`는 low/medium/high 세 단계뿐이라 `xhigh`가 `high`로 낮춰집니다. CLI 에이전트 자체는 헤드리스로 정상 동작하지만, 무인 배치 도중 권한 프롬프트에서 멈추거나 구독 쿼터가 소진되면 장시간 실행이 통째로 날아갈 수 있어 ReSet의 무인 배치 모드에서는 시작 즉시 중단되며, 호출이 실패해도 다른 제공자로 자동 전환하지 않고 원인(미설치·미로그인·쿼터 소진·타임아웃)과 CLI 원본 출력을 그대로 보고합니다. `agy-cli`는 프롬프트를 표준 입력이 아닌 명령행으로 전달해야 해서 Windows에서는 32,767자 한도에 걸려 대형 SP(ReSet 최대 실측 프롬프트 191KB)를 분석할 수 없습니다(macOS/Linux는 약 1MB 한도라 영향이 없습니다).
 
 ### 4. 코드 일치성 및 데이터 정합성 검증 (Validator)
 * **설계서 vs 구현 소스코드 일치성**: C#/Java 코드를 정적으로 분석하고 AI Gap 분석을 실행하여, 명세서 대비 입출력 파라미터, 연산 분기, 트랜잭션 구현 불일치점(Gap Report)을 도출합니다.
@@ -154,7 +154,7 @@ ReSet/
   },
   "AiSettings": {
     "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
-    "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명
+    "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달되며, 비워 두면 인자를 생략해 해당 CLI의 기본 모델이 쓰입니다
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
     "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
@@ -198,14 +198,16 @@ ReSet/
         "ApiKey": "",              // Z.ai API 키
         "Endpoint": "https://api.z.ai/api"
       },
+      // CLI 제공자는 ApiKey 없이 Command만 씁니다. 모델은 여기가 아니라 AiSettings:ModelName
+      // (Critic/Consolidator는 각자의 ModelName)이 아래 인자로 전달됩니다.
       "claude-cli": {
-        "Command": "claude"        // Claude Code CLI 명령어. PATH에 없으면 절대 경로 지정. API 키 불필요(CLI 로그인 계정 사용)
+        "Command": "claude"        // Claude Code CLI 명령어. PATH에 없으면 절대 경로 지정. API 키 불필요(CLI 로그인 계정 사용). 모델은 --model 인자로 전달
       },
       "codex-cli": {
-        "Command": "codex"         // Codex CLI 명령어
+        "Command": "codex"         // Codex CLI 명령어. 모델은 -m 인자로 전달
       },
       "agy-cli": {
-        "Command": "agy"           // Antigravity CLI 명령어. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
+        "Command": "agy"           // Antigravity CLI 명령어. 모델은 --model 인자로 전달. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
       }
     }
   },
@@ -272,7 +274,7 @@ ReSet/
 {
   "AiSettings": {
     "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
-    "ModelName": "claude-sonnet-5",
+    "ModelName": "claude-sonnet-5",     // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달됨
     "ActorEffort": "high",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
     "Temperature": 0.1,
     "MaxL2Attempts": 2,
@@ -297,14 +299,16 @@ ReSet/
         "ApiKey": "",
         "Endpoint": "https://api.z.ai/api"
       },
+      // CLI 제공자는 ApiKey 없이 Command만 씁니다. 모델은 여기가 아니라 AiSettings:ModelName이
+      // 아래 인자로 전달됩니다.
       "claude-cli": {
-        "Command": "claude"            // Claude Code CLI 명령어. API 키 불필요(CLI 로그인 계정 사용)
+        "Command": "claude"            // Claude Code CLI 명령어. API 키 불필요(CLI 로그인 계정 사용). 모델은 --model 인자로 전달
       },
       "codex-cli": {
-        "Command": "codex"             // Codex CLI 명령어
+        "Command": "codex"             // Codex CLI 명령어. 모델은 -m 인자로 전달
       },
       "agy-cli": {
-        "Command": "agy"               // Antigravity CLI 명령어. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
+        "Command": "agy"               // Antigravity CLI 명령어. 모델은 --model 인자로 전달. 프롬프트를 명령행으로 넘기므로 Windows에서 32KB를 넘는 대형 SP는 처리할 수 없음
       }
     }
   },
@@ -503,7 +507,7 @@ dotnet run --project src/ReSet.Cli
 
 > [!WARNING]
 > **Q. CLI 제공자(`claude-cli`, `codex-cli`, `agy-cli`) 호출이 실패합니다.**
-> * **원인**: 해당 CLI가 설치되어 있지 않거나, 로그인되어 있지 않거나, 구독 사용 한도가 소진되었거나, 응답이 제한 시간을 초과했기 때문입니다.
+> * **원인**: 해당 CLI가 설치되어 있지 않거나, 로그인되어 있지 않거나, 구독 사용 한도가 소진되었거나, 응답이 제한 시간을 초과했기 때문입니다. `ModelName`에 그 CLI가 모르는 모델명(예: API 전용 모델 ID)이 들어 있어도 CLI가 거부합니다.
 > * **해결**: 이 경우 다른 제공자로 자동 대체(Fallback)되지 않습니다. 오류 메시지에 원인 분류와 CLI 원본 출력이 함께 표시되므로 이를 확인해 CLI 설치·로그인 상태를 점검하거나, `appsettings.json`에서 다른 제공자로 변경한 뒤 다시 실행하십시오.
 
 ---
