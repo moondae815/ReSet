@@ -1650,6 +1650,7 @@ namespace ReSet.Core.Services
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
+            var bestAttempt = new BestAttempt();
             while (true)
             {
                 var attemptText = attempt == 1 ? "1차 분석" : $"자가 수정 보완 ({attempt}회째)";
@@ -1746,6 +1747,12 @@ namespace ReSet.Core.Services
                     reviewFailureReason = ex.Message;
                 }
 
+                // 불합격 여부와 무관하게 후보로 등록한다.
+                if (reviewSuccess && l2Result != null)
+                {
+                    bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result);
+                }
+
                 if (reviewSuccess && l2Result != null && l2Result.HasDefects)
                 {
                     _userInteraction.NotifyL2Defects(jobName, attempt, _maxAttempts, l2Result.FeedbackComment ?? string.Empty);
@@ -1763,13 +1770,17 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
-                        _userInteraction.NotifyError($"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. 마지막 리뷰 반영 버전을 사용합니다.");
+                        var adoptedReview = bestAttempt.Review ?? l2Result;
+                        var adoptedPlan = bestAttempt.Markdown ?? consolidatedPlan;
 
-                        // 최종 품질 불합격 경고 배너 삽입
+                        _userInteraction.NotifyError(
+                            $"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. " +
+                            $"가장 높은 점수를 받은 {bestAttempt.AttemptNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
+
                         planOutcome = VerificationOutcome.QualityRejected;
-                        planReview = l2Result;
+                        planReview = adoptedReview;
                         consolidatedPlan =
-                            VerificationBanner.QualityRejected(l2Result, _criticScoreThreshold) + consolidatedPlan;
+                            VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + adoptedPlan;
                         break;
                     }
                 }
