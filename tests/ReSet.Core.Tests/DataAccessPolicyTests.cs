@@ -86,7 +86,7 @@ namespace ReSet.Core.Tests
                 {
                     continue;
                 }
-                Assert.StartsWith("//", line.Trim());
+                Assert.StartsWith("        //", line);
             }
         }
     }
