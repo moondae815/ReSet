@@ -1093,11 +1093,12 @@ namespace ReSet.Core.Services
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                         if (canRetry)
                         {
-                            feedbackHistory.Clear(); // [컨텍스트 윈도우 오염 방지] 이전 실패 기록을 모두 지우고 최신 피드백만 주입
-                            feedbackHistory.Add($"### [시도 {attempt} L2 최신 피드백 체크리스트]\n{l2Result.FeedbackComment}");
-                            feedbackLog = "[L2 AI 리뷰 최신 피드백 (Stateful Checklist)]:\n" + 
-                                          string.Join("\n\n", feedbackHistory) +
-                                          "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 원본 DDL과 위 피드백만을 절대적 기준으로 삼으십시오.";
+                            CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
+                            feedbackLog = CriticFeedbackLog.Compose(
+                                feedbackHistory,
+                                "※ 지시사항: 위 지적사항을 모두 반영하여 본문을 수정하십시오. " +
+                                "이전 라운드에서 이미 기준 점수를 통과한 항목의 서술 수준을 낮추지 마십시오. " +
+                                "원본 DDL과 위 피드백을 절대적 기준으로 삼으십시오.");
                             attempt++;
                             continue;
                         }
@@ -1760,11 +1761,14 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        feedbackHistory.Clear(); // [컨텍스트 윈도우 오염 방지] 이전 실패 기록을 모두 지우고 최신 피드백만 주입
-                        feedbackHistory.Add($"### [시도 {attempt} L2 최신 피드백 체크리스트]\n{l2Result.FeedbackComment}");
-                        feedbackLog = "[L2 AI 리뷰 최신 피드백 (Stateful Checklist)]:\n" + 
-                                      string.Join("\n\n", feedbackHistory) +
-                                      "\n\n※ 지시사항: 위 최신 지적사항을 반드시 반영하여 본문을 수정하십시오. 이전에 생성된 실패한 응답의 잔재에 영향을 받지 말고, 제공된 '원본 명세서(Specifications)'와 위 피드백만을 절대적 기준으로 삼으십시오. 특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.";
+                        CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
+                        feedbackLog = CriticFeedbackLog.Compose(
+                            feedbackHistory,
+                            "※ 지시사항: 위 지적사항을 모두 반영하여 본문을 수정하십시오. " +
+                            "이전 라운드에서 이미 기준 점수를 통과한 항목의 서술 수준을 낮추지 마십시오. " +
+                            "제공된 '원본 명세서(Specifications)'와 위 피드백을 절대적 기준으로 삼으십시오. " +
+                            "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
+                            "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
                         attempt++;
                         continue;
                     }

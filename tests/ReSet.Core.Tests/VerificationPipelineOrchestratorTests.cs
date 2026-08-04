@@ -3397,6 +3397,52 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("계획3고유표시", result.Plan);
         }
 
+        // 3번째 시도의 프롬프트에 1·2차 지적이 모두 살아 있어야 한다.
+        [Fact]
+        public async Task RunPipelineAsync_CarriesEveryPriorRoundFeedbackIntoTheNextPrompt()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var spec = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var capturedFeedback = new List<string?>();
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    capturedFeedback.Add(callInfo.ArgAt<string>(2));
+                    return Task.FromResult(new AiResult { Content = spec });
+                });
+
+            var round = 0;
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>())
+                .Returns(_ =>
+                {
+                    round++;
+                    return Task.FromResult(new ReviewResult
+                    {
+                        HasDefects = true,
+                        FeedbackComment = $"{round}차 고유지적",
+                        ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7
+                    });
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.Equal(3, capturedFeedback.Count);
+            var thirdPrompt = capturedFeedback[2];
+            Assert.NotNull(thirdPrompt);
+            Assert.Contains("1차 고유지적", thirdPrompt);
+            Assert.Contains("2차 고유지적", thirdPrompt);
+            Assert.Contains("정합성 7", thirdPrompt);
+            Assert.DoesNotContain("잔재에 영향을 받지", thirdPrompt);
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",
