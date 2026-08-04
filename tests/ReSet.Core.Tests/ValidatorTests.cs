@@ -138,6 +138,7 @@ public class CustOrderHistBatch {
   ""OutputResultSetsGap"": """",
   ""BusinessLogicGap"": """",
   ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": """",
   ""Suggestions"": ""Perfect match.""
 }
 ```";

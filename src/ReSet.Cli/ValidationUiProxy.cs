@@ -78,7 +78,8 @@ namespace ReSet.Cli
                     $"[bold]1. 입력 파라미터 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.InputParametersGap) ? "일치" : report.InputParametersGap)}\n" +
                     $"[bold]2. 출력 데이터셋/DTO Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.OutputResultSetsGap) ? "일치" : report.OutputResultSetsGap)}\n" +
                     $"[bold]3. 비즈니스 로직 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.BusinessLogicGap) ? "일치" : report.BusinessLogicGap)}\n" +
-                    $"[bold]4. 예외/트랜잭션 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.ExceptionHandlingGap) ? "일치" : report.ExceptionHandlingGap)}\n\n" +
+                    $"[bold]4. 예외/트랜잭션 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.ExceptionHandlingGap) ? "일치" : report.ExceptionHandlingGap)}\n" +
+                    $"[bold]5. 데이터 액세스 경계 Gap:[/] {Markup.Escape(string.IsNullOrEmpty(report.DataAccessBoundaryGap) ? "일치" : report.DataAccessBoundaryGap)}\n\n" +
                     $"[bold yellow][[코드 수정 제안 사항]][/]\n{Markup.Escape(report.Suggestions)}"
                 )
             )

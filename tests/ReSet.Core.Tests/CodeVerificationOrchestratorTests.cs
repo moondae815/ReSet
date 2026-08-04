@@ -48,6 +48,7 @@ namespace ReSet.Core.Tests
   ""OutputResultSetsGap"": """",
   ""BusinessLogicGap"": """",
   ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": """",
   ""Suggestions"": ""Matched""
 }
 ```";
@@ -114,6 +115,7 @@ namespace ReSet.Core.Tests
   ""OutputResultSetsGap"": """",
   ""BusinessLogicGap"": """",
   ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": """",
   ""Suggestions"": ""Matched""
 }
 ```";
@@ -130,6 +132,71 @@ namespace ReSet.Core.Tests
                 var exception = await Record.ExceptionAsync(() => orchestrator.RunVerificationAsync(isBatchMode: true, CancellationToken.None));
                 Assert.Null(exception); // 예외가 던져지지 않아야 함
                 mockUi.Received(1).ShowWarning(Arg.Any<string>()); // 경고 로그가 표시되었는지 확인
+            }
+            finally
+            {
+                if (Directory.Exists(tempBase))
+                {
+                    Directory.Delete(tempBase, true);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task RunVerificationAsync_WritesTheBoundaryGapIntoTheReport()
+        {
+            var tempBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            var specDir = Path.Combine(tempBase, "output");
+            var codeDir = Path.Combine(tempBase, "src");
+            var outDir = Path.Combine(tempBase, "reports");
+
+            Directory.CreateDirectory(specDir);
+            Directory.CreateDirectory(codeDir);
+
+            var specPath = Path.Combine(specDir, "Jobs", "Consolidated_Batch_Job", "docs", "BatchMigrationPlan.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
+            File.WriteAllText(Path.Combine(codeDir, "Consolidated_Batch_Job.cs"), "public class Consolidated_Batch_Job {}");
+
+            var config = new ValidatorConfig
+            {
+                SpecDirectory = specDir,
+                SourceCodeDirectory = codeDir,
+                OutputDirectory = outDir,
+                MaxL2Attempts = 1
+            };
+
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"```json
+{
+  ""OverallStatus"": ""PARTIAL"",
+  ""InputParametersGap"": """",
+  ""OutputResultSetsGap"": """",
+  ""BusinessLogicGap"": """",
+  ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": ""청킹 루프 내부 INSERT가 EF Core SaveChanges로 구현됨"",
+  ""Suggestions"": ""청킹 INSERT를 파라미터 바인딩 SQL로 되돌리십시오.""
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var mockUi = Substitute.For<IValidationUserInterface>();
+            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, ui: mockUi);
+
+            try
+            {
+                var results = await orchestrator.RunVerificationAsync(isBatchMode: true, CancellationToken.None);
+
+                Assert.Single(results);
+                Assert.False(results[0].L2Passed);
+
+                var reportPath = Path.Combine(outDir, "docs", results[0].MappedName, "ValidationReport.md");
+                Assert.True(File.Exists(reportPath));
+
+                var report = await File.ReadAllTextAsync(reportPath);
+                Assert.Contains("데이터 액세스 경계", report);
+                Assert.Contains("EF Core SaveChanges", report);
             }
             finally
             {

@@ -22,6 +22,7 @@ namespace ReSet.Core.Tests
   ""OutputResultSetsGap"": """",
   ""BusinessLogicGap"": """",
   ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": """",
   ""Suggestions"": ""Perfect match.""
 }
 ```";

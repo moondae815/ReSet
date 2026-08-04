@@ -87,6 +87,7 @@ namespace ReSet.Validator.Core.Services
                             feedbackBuilder.AppendLine($"- 출력 데이터셋 불일치: {gap.OutputResultSetsGap}");
                             feedbackBuilder.AppendLine($"- 비즈니스 로직 불일치: {gap.BusinessLogicGap}");
                             feedbackBuilder.AppendLine($"- 예외 및 트랜잭션 불일치: {gap.ExceptionHandlingGap}");
+                            feedbackBuilder.AppendLine($"- 데이터 액세스 경계 위반: {gap.DataAccessBoundaryGap}");
                             feedbackBuilder.AppendLine($"- 💡 **수정 제안**: {gap.Suggestions}");
                         }
                         feedbackBuilder.AppendLine();

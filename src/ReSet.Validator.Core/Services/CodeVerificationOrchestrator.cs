@@ -260,6 +260,9 @@ namespace ReSet.Validator.Core.Services
 ### 4. 예외 및 트랜잭션 처리 Gap
 {(string.IsNullOrEmpty(res.GapReport.ExceptionHandlingGap) ? "일치함 (차이점 없음)" : res.GapReport.ExceptionHandlingGap)}
 
+### 5. 데이터 액세스 경계 Gap
+{(string.IsNullOrEmpty(res.GapReport.DataAccessBoundaryGap) ? "일치함 (차이점 없음)" : res.GapReport.DataAccessBoundaryGap)}
+
 ## 💡 수정 제안 사항 (Suggestions)
 {res.GapReport.Suggestions}
 ";
