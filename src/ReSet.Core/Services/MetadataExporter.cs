@@ -586,7 +586,15 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine("3. **Requesting Code Review**: 서브에이전트가 구현을 완료하면, 주 에이전트는 코드 리뷰를 수행하여 Spec.md의 모든 예외 처리 및 쿼리 조건이 누락 없이 반영되었는지 검증하십시오.");
                 todoSb.AppendLine();
                 
-                todoSb.AppendLine("- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 (C#: Dapper, EF Core, Moq, NetArchTest / Java: MyBatis, Spring Data JPA, ArchUnit)");
+                // 체크리스트는 타겟 언어의 스택만 말해야 한다. 두 스택을 함께 나열하면 5장의
+                // 언어별 스택 표(DataAccessPolicy)와 모순되고, 에이전트가 쓰지 않을 패키지를 설치한다.
+                var toolingPackages = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                    ? "MyBatis, Spring Data JPA, Mockito, ArchUnit"
+                    : "Dapper, EF Core, Moq, NetArchTest";
+                var staticAnalysisTool = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                    ? "ArchUnit"
+                    : "NetArchTest";
+                todoSb.AppendLine($"- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 ({toolingPackages})");
                 todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
                 todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현 (지시서 5장의 SQL/ORM 경계 규칙 준수)");
                 todoSb.AppendLine("- [ ] 3. 계획서의 [통합 배치 아키텍처 개요]에 정의된 공통 초기화(사전 검증 등) 로직 구현");
@@ -599,7 +607,7 @@ namespace ReSet.Core.Services
                 }
                 
                 todoSb.AppendLine($"- [ ] {stepCounter}. 모든 Step이 통합된 최종 Job 파이프라인 조립 및 예외/트랜잭션 롤백 처리 보완");
-                todoSb.AppendLine($"- [ ] {stepCounter + 1}. 최종 Job 파이프라인 End-to-End 빌드 및 정적 검증(ArchUnit) 통과 확인");
+                todoSb.AppendLine($"- [ ] {stepCounter + 1}. 최종 Job 파이프라인 End-to-End 빌드 및 정적 검증({staticAnalysisTool}) 통과 확인");
                 await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
                 Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
 

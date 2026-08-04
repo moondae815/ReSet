@@ -790,5 +790,75 @@ namespace ReSet.Core.Tests
                 }
             }
         }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_ForCSharp_NamesOnlyTheCSharpTooling()
+        {
+            // 체크리스트가 두 스택을 모두 나열하면, C# 작업을 맡은 에이전트가 MyBatis를 설치하려 하고
+            // 바로 앞 장에 실린 언어별 스택 표(DataAccessPolicy)와 모순된다.
+            var todo = await ExportAndReadTodoAsync("C#", "cs");
+
+            Assert.Contains("Dapper", todo);
+            Assert.Contains("EF Core", todo);
+            Assert.Contains("NetArchTest", todo);
+            Assert.DoesNotContain("MyBatis", todo);
+            Assert.DoesNotContain("Spring Data JPA", todo);
+            Assert.DoesNotContain("ArchUnit", todo);
+        }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_ForJava_NamesOnlyTheJavaTooling()
+        {
+            var todo = await ExportAndReadTodoAsync("Java", "java");
+
+            Assert.Contains("MyBatis", todo);
+            Assert.Contains("Spring Data JPA", todo);
+            Assert.Contains("ArchUnit", todo);
+            Assert.DoesNotContain("Dapper", todo);
+            Assert.DoesNotContain("EF Core", todo);
+            Assert.DoesNotContain("NetArchTest", todo);
+        }
+
+        private static async Task<string> ExportAndReadTodoAsync(string targetLanguage, string dirSuffix)
+        {
+            var testOutputDir = Path.Combine(
+                Directory.GetCurrentDirectory(), $"test_output_exporter_tooling_{dirSuffix}");
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+
+            try
+            {
+                var spDefs = new System.Collections.Generic.List<SpDefinition>
+                {
+                    new SpDefinition
+                    {
+                        Schema = "dbo",
+                        Name = "USP_Sp1",
+                        DdlText = "CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;"
+                    }
+                };
+
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    spDefs,
+                    "# Plan",
+                    VerificationOutcome.Passed,
+                    "ToolingJob",
+                    testOutputDir,
+                    targetLanguage,
+                    new OutputPathResolver("TestDB", testOutputDir));
+
+                return await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "todo.md"));
+            }
+            finally
+            {
+                if (Directory.Exists(testOutputDir))
+                {
+                    Directory.Delete(testOutputDir, true);
+                }
+            }
+        }
     }
 }
