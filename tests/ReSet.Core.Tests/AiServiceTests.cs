@@ -713,7 +713,7 @@ namespace ReSet.Core.Tests
         {
             // Arrange
             var spDef = new SpDefinition { Schema = "dbo", Name = "USP_RichTest", DdlText = "SELECT 1;" };
-            
+
             // Add rich dependencies to trigger FormatTableSchemaToMarkdown and BuildSpMetadataTexts
             spDef.Dependencies.Add(new DependencyInfo
             {
@@ -732,7 +732,7 @@ namespace ReSet.Core.Tests
                     new TableIndexInfo { IndexName = "PK_User", IsPrimaryKey = true, IsUnique = true, Columns = new System.Collections.Generic.List<string> { "Id" } }
                 }
             });
-            
+
             // Add Static Analysis results
             spDef.StaticAnalysis = new SpStaticAnalysisResult
             {
@@ -769,6 +769,26 @@ namespace ReSet.Core.Tests
             // Assert
             Assert.NotNull(result);
             Assert.Contains("\"Overview\":", result.Content);
+        }
+
+        [Fact]
+        public void MermaidAtSignRule_LeadsWithTheQuotingRequirementAndBansParaphrase()
+        {
+            // 이전 문구는 "@를 쓰지 마라(단, @@ERROR는 예외)"로 금지를 앞세웠다.
+            // 모델이 과잉 적용해 @@ERROR를 "at at ERROR"로 풀어 썼고 가독성 점수를 깎았다.
+            // 규칙은 허용을 앞세우고, 역설명을 명시적으로 금지해야 한다.
+            var fullPath = System.IO.Path.Combine(
+                RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/AiService.cs");
+            var source = System.IO.File.ReadAllText(fullPath);
+
+            // 생성 프롬프트와 Critic 채점 기준 양쪽이 같은 기준을 말해야 한다.
+            Assert.Contains("MUST be wrapped in double quotes", source);
+            Assert.Contains("never paraphrase or spell out", source);
+            Assert.Contains("Flag any paraphrased or spelled-out", source);
+
+            // 과잉 회피를 유발하던 옛 문구가 남아 있으면 안 된다.
+            Assert.DoesNotContain("Do not include variables prefixed with '@'", source);
+            Assert.DoesNotContain("Avoid variable names with '@'", source);
         }
     }
 

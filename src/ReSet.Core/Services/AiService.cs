@@ -305,7 +305,7 @@ namespace ReSet.Core.Services
             rules.Add("   - Node IDs must be unique alphanumeric characters (e.g., Node1, Node2). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
             rules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another. Keep node IDs simple, using only uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG, INSPG, FAIL9, COMMIT).");
             rules.Add("   - When writing labels on arrows (e.g., -->|Label|), NEVER use double quotes, parentheses, or special characters inside the label.");
-            rules.Add("   - Do not include variables prefixed with '@' inside the node text (except system variables like '@@ERROR', which must be wrapped in double quotes).");
+            rules.Add("   - Node labels containing '@' (e.g. '@@ERROR', '@po_intRetVal') MUST be wrapped in double quotes. Write the identifier exactly as it appears in the source - never paraphrase or spell out '@' (writing 'at ERROR' for '@@ERROR' is a defect).");
 
             if (hasDynamicSql)
             {
@@ -1584,7 +1584,7 @@ Based on the reference context above, reverse engineer the user defined function
 5. Diagram Syntax and Readability (ScoreReadability):
    - Ensure the Mermaid flowchart TD diagram has no syntax errors.
    - Node text labels must be wrapped in double quotes. Arrow labels must NOT contain double quotes, parentheses, or special characters.
-   - Avoid variable names with '@' in node labels (except system variables like '@@ERROR' wrapped in double quotes).
+   - Node labels containing '@' must be wrapped in double quotes, with the identifier written exactly as in the source. Flag any paraphrased or spelled-out '@' (e.g. 'at ERROR' for '@@ERROR').
    - Do NOT penalize the presence of `[AI 추론 보완: ...]` tags in the descriptions. This is a REQUIRED system tag for metadata cleansing SQL generation and its presence is expected and correct.
 
 [Defect Judgment]
