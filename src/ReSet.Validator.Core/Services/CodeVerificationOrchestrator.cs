@@ -148,7 +148,11 @@ namespace ReSet.Validator.Core.Services
                     // L2는 단방향 평가(Critic)만 수행 (자동 수정은 외부 CodegenWorkflowOrchestrator에서 담당)
 
                     pair.GapReport = gapReport;
-                    pair.L2Passed = gapReport.OverallStatus == "MATCH";
+                    // AI가 "기능적으로 동일함(MATCH)"으로 판단하면서도 데이터 액세스 경계 위반(DataAccessBoundaryGap)을
+                    // 함께 보고하는 경우가 있다 (예: 청크 INSERT를 SaveChanges로 재작성해도 결과 행은 동일할 수 있음).
+                    // 이 조건이 없으면 그런 위반이 아무 신호 없이 L2를 통과해 버린다.
+                    pair.L2Passed = gapReport.OverallStatus == "MATCH"
+                                    && string.IsNullOrEmpty(gapReport.DataAccessBoundaryGap);
                     Log.Information("[코드검증] L2 최종 판정 - Name: {MappedName}, Status: {Status}, L2Passed: {L2Passed}",
                         pair.MappedName, gapReport.OverallStatus, pair.L2Passed);
                     

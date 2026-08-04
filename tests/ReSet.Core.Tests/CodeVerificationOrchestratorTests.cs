@@ -206,5 +206,70 @@ namespace ReSet.Core.Tests
                 }
             }
         }
+
+        [Fact]
+        public async Task RunVerificationAsync_WithMatchButBoundaryGap_FailsL2()
+        {
+            // Arrange
+            var tempBase = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            var specDir = Path.Combine(tempBase, "output");
+            var codeDir = Path.Combine(tempBase, "src");
+            var outDir = Path.Combine(tempBase, "reports");
+
+            Directory.CreateDirectory(specDir);
+            Directory.CreateDirectory(codeDir);
+
+            var specPath = Path.Combine(specDir, "Jobs", "Consolidated_Batch_Job", "docs", "BatchMigrationPlan.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(specPath)!);
+            File.WriteAllText(specPath, "# Spec");
+            File.WriteAllText(Path.Combine(codeDir, "Consolidated_Batch_Job.cs"), "public class Consolidated_Batch_Job {}");
+
+            var config = new ValidatorConfig
+            {
+                SpecDirectory = specDir,
+                SourceCodeDirectory = codeDir,
+                OutputDirectory = outDir,
+                MaxL2Attempts = 1
+            };
+
+            var mockAiClient = Substitute.For<IAiClient>();
+            // AI가 기능적으로는 동일하다고 판단(MATCH)하면서도 데이터 액세스 경계 위반은 함께 보고하는 경우
+            var jsonResponse = @"```json
+{
+  ""OverallStatus"": ""MATCH"",
+  ""InputParametersGap"": """",
+  ""OutputResultSetsGap"": """",
+  ""BusinessLogicGap"": """",
+  ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": ""청킹 루프 내부 INSERT가 EF Core SaveChanges로 구현됨"",
+  ""Suggestions"": ""청킹 INSERT를 파라미터 바인딩 SQL로 되돌리십시오.""
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var mockUi = Substitute.For<IValidationUserInterface>();
+            var orchestrator = new CodeVerificationOrchestrator(config, mockAiClient, ui: mockUi);
+
+            try
+            {
+                // Act
+                var results = await orchestrator.RunVerificationAsync(isBatchMode: true, CancellationToken.None);
+
+                // Assert
+                Assert.Single(results);
+                var result = results[0];
+                Assert.Equal("MATCH", result.GapReport!.OverallStatus);
+                Assert.False(result.L2Passed); // OverallStatus가 MATCH여도 경계 위반이 있으면 L2는 실패해야 함
+                Assert.False(result.IsApproved); // 배치 모드 + L2 Failed -> 자동 승인 안 됨
+            }
+            finally
+            {
+                if (Directory.Exists(tempBase))
+                {
+                    Directory.Delete(tempBase, true);
+                }
+            }
+        }
     }
 }
