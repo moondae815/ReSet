@@ -3283,6 +3283,72 @@ namespace ReSet.Core.Tests
                     cancellationToken: CancellationToken.None, directDependenciesOnly: true));
         }
 
+        // 2026-08-04 사고 재현. 시도 1=70점, 시도 2=90점, 시도 3=78점이었고
+        // 마지막인 78점이 채택됐다. 90점짜리를 채택해야 한다.
+        [Fact]
+        public async Task RunPipelineAsync_RetriesExhausted_AdoptsHighestScoringAttemptNotTheLast()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            const string body = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```\n\n";
+            var spec1 = body + "시도1고유표시";
+            var spec2 = body + "시도2고유표시";
+            var spec3 = body + "시도3고유표시";
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = spec1 }),
+                    _ => Task.FromResult(new AiResult { Content = spec2 }),
+                    _ => Task.FromResult(new AiResult { Content = spec3 }));
+
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도1고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 7, ScoreReadability = 5, ScoreException = 7 }));
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도2고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 10, ScoreCrud = 9, ScoreInterface = 9, ScoreReadability = 10, ScoreException = 7 }));
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도3고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 9, ScoreInterface = 6, ScoreReadability = 7, ScoreException = 9 }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.NotNull(resultSpec);
+            Assert.Contains("시도2고유표시", resultSpec);
+            Assert.DoesNotContain("시도3고유표시", resultSpec);
+            Assert.Contains("90/100", resultSpec);
+        }
+
+        // 후보가 하나도 없으면(리뷰 자체가 전부 실패) 현행 경로를 유지한다.
+        [Fact]
+        public async Task RunPipelineAsync_AllReviewsFail_KeepsReviewNotRunPath()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var spec = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = spec }));
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>())
+                .Returns<Task<ReviewResult>>(_ => throw new InvalidOperationException("critic down"));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.NotNull(resultSpec);
+            Assert.Contains("L2 AI 교차 리뷰가 수행되지 않았습니다", resultSpec);
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",
