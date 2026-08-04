@@ -15,22 +15,18 @@ namespace ReSet.Validator.Core.Services
         private readonly IAiClient _aiClient;
         private readonly string? _effort;
 
-        public ValidatorAiService(IAiClient aiClient, string? effort = null)
-        {
-            _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
-            _effort = effort;
-        }
-
-        public async Task<GapReport> VerifyCodeAsync(string specContent, string sourceCodeContent, string targetLanguage, string? previousFeedback = null, CancellationToken cancellationToken = default)
-        {
-            var systemPrompt = @"당신은 데이터베이스 Stored Procedure 역공학 명세서(Spec.md)와 이를 마이그레이션하여 구현한 프로그램 코드(C# 또는 Java)를 일대일 비교하여 기능적으로 완벽히 동일하게 구현되었는지 정밀 검증하는 전문 QA 에이전트입니다.
+        // 프롬프트를 보간($@"...")으로 조립하면 JSON 예시의 중괄호를 전부 {{ }}로
+        // 이스케이프해야 한다(AGENTS.md 범주 7). 연결 방식으로 그 함정을 피한다.
+        private const string VerifyPromptHead = @"당신은 데이터베이스 Stored Procedure 역공학 명세서(Spec.md)와 이를 마이그레이션하여 구현한 프로그램 코드(C# 또는 Java)를 일대일 비교하여 기능적으로 완벽히 동일하게 구현되었는지 정밀 검증하는 전문 QA 에이전트입니다.
 
 비교 검증 시 다음 항목들에 주목하십시오:
 1. 입력 파라미터 매핑: 설계서에 명시된 파라미터들이 코드의 입력 인자나 객체 필드로 정확히 전달되는가?
 2. 출력 데이터셋/반환값: 쿼리 조회 결과나 DTO 반환 필드가 누락 없이 매핑되는가?
 3. 핵심 비즈니스 로직: 조건문 분기, 연산 로직, 주요 쿼리 실행 등이 설계서와 의미론적으로 완벽히 동일한가?
 4. 예외 처리 및 트랜잭션: 오류 제어 구조 및 트랜잭션 제어 여부가 설계 사양서와 부합하는가?
+";
 
+        private const string VerifyPromptTail = @"
 당신의 분석 결과는 반드시 다음 JSON 형식으로만 응답해야 합니다. 다른 텍스트나 서론, 결론은 절대 포함하지 마십시오.
 
 {
@@ -39,8 +35,19 @@ namespace ReSet.Validator.Core.Services
   ""OutputResultSetsGap"": ""출력 컬럼/DTO 필드 불일치 내용 기술 (없으면 빈 문자열)"",
   ""BusinessLogicGap"": ""비즈니스 로직 및 쿼리 조건 불일치 내용 기술 (없으면 빈 문자열)"",
   ""ExceptionHandlingGap"": ""예외 및 트랜잭션 처리 불일치 내용 기술 (없으면 빈 문자열)"",
+  ""DataAccessBoundaryGap"": ""데이터 액세스 경계 규칙 위반 내용 기술 (없으면 빈 문자열)"",
   ""Suggestions"": ""불일치 해결을 위한 구체적인 코드 수정 가이드라인""
 }";
+
+        public ValidatorAiService(IAiClient aiClient, string? effort = null)
+        {
+            _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
+            _effort = effort;
+        }
+
+        public async Task<GapReport> VerifyCodeAsync(string specContent, string sourceCodeContent, string targetLanguage, string? previousFeedback = null, CancellationToken cancellationToken = default)
+        {
+            var systemPrompt = VerifyPromptHead + DataAccessPolicy.VerificationCriteria + VerifyPromptTail;
 
             var feedbackPart = string.IsNullOrEmpty(previousFeedback)
                 ? ""

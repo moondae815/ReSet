@@ -9,6 +9,7 @@ namespace ReSet.Validator.Core.Models
         public string OutputResultSetsGap { get; set; } = string.Empty;
         public string BusinessLogicGap { get; set; } = string.Empty;
         public string ExceptionHandlingGap { get; set; } = string.Empty;
+        public string DataAccessBoundaryGap { get; set; } = string.Empty;
         public string Suggestions { get; set; } = string.Empty;
 
         // --- 원본 프롬프트 및 응답 (raw 저장용) ---
@@ -23,10 +24,11 @@ namespace ReSet.Validator.Core.Models
         public string AiEffort { get; set; } = string.Empty;
         public DateTime GeneratedAt { get; set; } = DateTime.Now;
 
-        public bool HasGaps => OverallStatus != "MATCH" || 
-                              !string.IsNullOrEmpty(InputParametersGap) || 
-                              !string.IsNullOrEmpty(OutputResultSetsGap) || 
-                              !string.IsNullOrEmpty(BusinessLogicGap) || 
-                              !string.IsNullOrEmpty(ExceptionHandlingGap);
+        public bool HasGaps => OverallStatus != "MATCH" ||
+                              !string.IsNullOrEmpty(InputParametersGap) ||
+                              !string.IsNullOrEmpty(OutputResultSetsGap) ||
+                              !string.IsNullOrEmpty(BusinessLogicGap) ||
+                              !string.IsNullOrEmpty(ExceptionHandlingGap) ||
+                              !string.IsNullOrEmpty(DataAccessBoundaryGap);
     }
 }

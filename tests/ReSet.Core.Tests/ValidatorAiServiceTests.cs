@@ -91,6 +91,51 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task VerifyCodeAsync_SendsTheDataAccessBoundaryCriteria()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"{
+  ""OverallStatus"": ""MATCH"",
+  ""Suggestions"": ""ok""
+}";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var report = await service.VerifyCodeAsync("spec", "code", "C#");
+
+            // 규칙 문구는 DataAccessPolicy가 단독 소유한다. 프롬프트는 그것을 그대로 싣는다.
+            Assert.Contains(DataAccessPolicy.VerificationCriteria, report.SystemPrompt);
+            Assert.Contains("DataAccessBoundaryGap", report.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task VerifyCodeAsync_ParsesTheBoundaryGapField()
+        {
+            var mockAiClient = Substitute.For<IAiClient>();
+            var jsonResponse = @"```json
+{
+  ""OverallStatus"": ""PARTIAL"",
+  ""InputParametersGap"": """",
+  ""OutputResultSetsGap"": """",
+  ""BusinessLogicGap"": """",
+  ""ExceptionHandlingGap"": """",
+  ""DataAccessBoundaryGap"": ""정산 집계 UPDATE가 EF Core ExecuteUpdate로 구현됨"",
+  ""Suggestions"": ""집계 UPDATE를 파라미터 바인딩 SQL로 되돌리십시오.""
+}
+```";
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
+
+            var service = new ValidatorAiService(mockAiClient);
+            var report = await service.VerifyCodeAsync("spec", "code", "C#");
+
+            Assert.Equal("PARTIAL", report.OverallStatus);
+            Assert.Contains("EF Core ExecuteUpdate", report.DataAccessBoundaryGap);
+            Assert.True(report.HasGaps);
+        }
+
+        [Fact]
         public async Task GenerateUnitTestCodeAsync_ShouldReturnCleanCode()
         {
             var mockAiClient = Substitute.For<IAiClient>();

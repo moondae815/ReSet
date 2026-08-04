@@ -287,5 +287,19 @@ public class CustOrderHistBatch {
             Assert.Contains("FAIL", resultJson);
             Assert.Contains("dbo.TestProc", resultJson);
         }
+
+        [Fact]
+        public void GapReport_WithOnlyBoundaryGap_ReportsHasGaps()
+        {
+            // 경계 위반만 있는 상태를 "차이 없음"으로 보고하면, 이후 HasGaps를 게이트로
+            // 쓰는 코드가 생겼을 때 경계 위반만 조용히 누락된다.
+            var report = new GapReport
+            {
+                OverallStatus = "MATCH",
+                DataAccessBoundaryGap = "체크포인트 외 경로에서 ORM 사용"
+            };
+
+            Assert.True(report.HasGaps);
+        }
     }
 }
