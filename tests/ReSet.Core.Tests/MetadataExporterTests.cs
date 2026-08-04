@@ -729,5 +729,66 @@ namespace ReSet.Core.Tests
                 if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
             }
         }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_CarriesTheDataAccessBoundaryRules()
+        {
+            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_boundary");
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+
+            try
+            {
+                var spDefs = new System.Collections.Generic.List<SpDefinition>
+                {
+                    new SpDefinition
+                    {
+                        Schema = "dbo",
+                        Name = "USP_Sp1",
+                        DdlText = "CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;"
+                    }
+                };
+
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    spDefs,
+                    "# Plan",
+                    VerificationOutcome.Passed,
+                    "BoundaryJob",
+                    testOutputDir,
+                    "C#",
+                    new OutputPathResolver("TestDB", testOutputDir));
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "MigrationInstructions.md"));
+
+                // 규칙 문구는 DataAccessPolicy가 단독 소유한다. 지시서는 그것을 그대로 싣는다.
+                Assert.Contains(DataAccessPolicy.InstructionRules("C#"), instructions);
+                // 지침 7번의 placeholder 금지는 경계 규칙 도입 후에도 유지되어야 한다.
+                Assert.Contains("Placeholder", instructions);
+                Assert.Contains("허용 목록", instructions);
+                // 배치 호스팅과 멀티 DB 설정 안내는 그대로 남는다.
+                Assert.Contains("Worker Service", instructions);
+                Assert.Contains("ConnectionStrings", instructions);
+
+                var todo = await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "todo.md"));
+                Assert.Contains("EF Core", todo);
+                Assert.Contains("경계 규칙", todo);
+
+                var stub = await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "src", "AbstractSettleTasklet.cs"));
+                Assert.Contains("UseTransaction", stub);
+                Assert.DoesNotContain("[[ORM_BOUNDARY]]", stub);
+            }
+            finally
+            {
+                if (Directory.Exists(testOutputDir))
+                {
+                    Directory.Delete(testOutputDir, true);
+                }
+            }
+        }
     }
 }

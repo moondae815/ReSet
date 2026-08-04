@@ -525,19 +525,20 @@ namespace ReSet.Core.Services
                 sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
                 sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 일.");
                 sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 일.");
-                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 타겟 언어 및 프레임워크의 권장 패턴을 따를 일.");
+                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 5장의 데이터 액세스 경계 규칙을 준수하며 타겟 언어 및 프레임워크의 권장 패턴을 따를 일.");
                 sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 일.");
                 sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 일.");
                 sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
-                sb.AppendLine("7. [중요] 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 반드시 명세서에 있는 원본 DML(SELECT/INSERT/UPDATE/DELETE) 로직을 모두 프로그래밍 언어(C# 등)의 텍스트 쿼리로 풀어서 100% 완전하게 작성해야 합니다.");
+                sb.AppendLine("7. [중요] 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 5장의 경계 규칙에 따라 SQL 경로로 분류된 DML은 명세서에 있는 원본 로직(조건절·집계식·에러 코드)을 축약 없이 파라미터 바인딩 SQL로 100% 완전하게 작성해야 하며, ORM은 5장의 허용 목록에 한해 사용해야 합니다.");
                 sb.AppendLine("8. [중요] Worker.cs 구성 시 반드시 IConfiguration 등을 통해 명세된 모든 DB Factory 의존성(예: `MainDb`, `PaymentDb`, `SettleCardDb`, `PlCardDb` 등)을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
                 sb.AppendLine("9. [중요] 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.");
                 sb.AppendLine();
                 
                 sb.AppendLine("## 🛠️ 5. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
+                sb.AppendLine(DataAccessPolicy.InstructionRules(targetLanguage));
                 if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                 {
-                    sb.AppendLine("* **Data Access 및 프레임워크**: 데이터베이스 접근은 ADO.NET(또는 Dapper)을 사용하고, 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
+                    sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
                     sb.AppendLine("* **멀티 DB 커넥션 설정**: `appsettings.json` 내에 다음과 같은 `ConnectionStrings` 구조를 구성하고, `RetryableSqlExecutor`에서 분기 처리하여 주입받을 수 있도록 모델링하십시오.");
                     sb.AppendLine("  ```json");
                     sb.AppendLine("  {");
@@ -552,7 +553,7 @@ namespace ReSet.Core.Services
                 }
                 else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                 {
-                    sb.AppendLine("* **Data Access 및 프레임워크**: 데이터베이스 접근은 MyBatis(또는 Spring Data JDBC)를 사용하고, 배치 호스팅은 Spring Batch (Spring Boot 기반)로 작성하며, 의존성 주입을 활용하십시오.");
+                    sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 Spring Batch (Spring Boot 기반)로 작성하며, 의존성 주입을 활용하십시오.");
                     sb.AppendLine("* **멀티 DB 커넥션 설정**: `application.yml` 내에 다음과 같은 다중 DataSource 구조를 구성하고, 각 Step이 알맞은 TransactionManager와 JdbcTemplate을 주입받을 수 있도록 모델링하십시오.");
                     sb.AppendLine("  ```yaml");
                     sb.AppendLine("  spring:");
@@ -585,9 +586,9 @@ namespace ReSet.Core.Services
                 todoSb.AppendLine("3. **Requesting Code Review**: 서브에이전트가 구현을 완료하면, 주 에이전트는 코드 리뷰를 수행하여 Spec.md의 모든 예외 처리 및 쿼리 조건이 누락 없이 반영되었는지 검증하십시오.");
                 todoSb.AppendLine();
                 
-                todoSb.AppendLine("- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 (예: Dapper, Moq, MyBatis, ArchUnit 등)");
+                todoSb.AppendLine("- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 (C#: Dapper, EF Core, Moq, NetArchTest / Java: MyBatis, Spring Data JPA, ArchUnit)");
                 todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
-                todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현");
+                todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현 (지시서 5장의 SQL/ORM 경계 규칙 준수)");
                 todoSb.AppendLine("- [ ] 3. 계획서의 [통합 배치 아키텍처 개요]에 정의된 공통 초기화(사전 검증 등) 로직 구현");
                 
                 int stepCounter = 4;
@@ -671,6 +672,7 @@ namespace ReSet.Batch.Core
         }
 
         protected abstract StepResult PreCheck(IDbConnection conn, SettleContext context, ref int stateCode);
+[[ORM_BOUNDARY]]
         protected abstract void RunBusinessSteps(IDbConnection conn, IDbTransaction tran, SettleContext context, ref int stateCode);
         protected virtual void OnFailureCompensation(SettleContext context, int failedStateCode) { }
     }
@@ -702,7 +704,10 @@ namespace ReSet.Batch.Core
         void MarkStepCompleted(string stepName, string ymd);
     }
 }";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), baseClassStub, Encoding.UTF8);
+                        // 스텁은 System.Data만 참조하는 상태를 유지한다. ORM 패턴은 실행 코드가
+                        // 아니라 주석으로만 넣어야 스텁이 특정 ORM 구현에 결합되지 않는다.
+                        var stubWithBoundary = baseClassStub.Replace("[[ORM_BOUNDARY]]", DataAccessPolicy.TaskletOrmComment);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), stubWithBoundary, Encoding.UTF8);
                     }
                 }
                 catch (Exception ex)
