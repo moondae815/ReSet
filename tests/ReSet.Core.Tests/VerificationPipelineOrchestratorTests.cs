@@ -3435,7 +3435,7 @@ namespace ReSet.Core.Tests
             Assert.Contains("88/100", resultSpec);
             // RetryRescue가 이미 배너를 붙여 돌려주므로 호출부가 또 붙이면 배너가 둘이 된다.
             // 기존 Assert.Contains는 그 경우에도 통과하므로 개수를 직접 센다.
-            Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(resultSpec!, @"\[품질 불합격\]").Count);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(resultSpec!, @"\[품질 불합격\]"));
         }
 
         // 후보가 하나도 없으면 구제할 것이 없다. 현행대로 전체 실패다.
@@ -3501,7 +3501,7 @@ namespace ReSet.Core.Tests
             Assert.Contains("계획2고유표시", result.Plan);
             Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", result.Plan);
             // 배치 쌍둥이도 같은 함정을 갖는다.
-            Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result.Plan!, @"\[품질 불합격\]").Count);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(result.Plan!, @"\[품질 불합격\]"));
         }
 
         // 후보가 하나도 없으면 구제할 것이 없다. 현행대로 잡 전체 실패다.
