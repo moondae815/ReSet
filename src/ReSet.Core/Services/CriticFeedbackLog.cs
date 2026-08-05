@@ -43,5 +43,32 @@ namespace ReSet.Core.Services
             $"[L2 AI 리뷰 누적 피드백 (최근 {history.Count}개 라운드)]:\n" +
             string.Join("\n\n", history) +
             "\n\n" + instruction;
+
+        /// <summary>
+        /// L1 실패 회차의 프롬프트를 조립한다. 이번 회차에 반드시 해소해야 할 형식 오류를
+        /// 앞에 두고, 지금까지 누적된 Critic 지적을 뒤에 붙인다.
+        ///
+        /// 이전에는 호출부가 L1 수정 지시로 feedbackLog를 통째로 덮어썼다. Actor는 매번
+        /// 백지에서 다시 쓰므로 그 회차는 내용 교정 이력이 전부 빠진 채 생성됐다.
+        /// history 자체는 살아남아 다음 L2 실패 때 되살아나므로 영구 손실은 아니었지만,
+        /// 한 회차가 비어서 나가는 것만으로도 품질이 무너진다.
+        ///
+        /// 아직 L2 라운드가 없으면 l1Fix를 그대로 돌려준다 — 가장 흔한 경우의 프롬프트가
+        /// 달라지지 않아야 한다.
+        /// </summary>
+        public static string ComposeAfterL1Failure(string? l1Fix, IReadOnlyList<string> history)
+        {
+            var fix = l1Fix ?? string.Empty;
+
+            if (history == null || history.Count == 0)
+            {
+                return fix;
+            }
+
+            return $"[L1 기계 검증 오류 — 이번 회차에 반드시 해소]\n{fix}\n\n" +
+                Compose(history,
+                    "※ 지시사항: 위 형식 오류를 먼저 해소하고, 누적 피드백에서 이미 반영한 " +
+                    "내용 교정의 서술 수준을 낮추지 마십시오. 원본 DDL을 절대적 기준으로 삼으십시오.");
+        }
     }
 }

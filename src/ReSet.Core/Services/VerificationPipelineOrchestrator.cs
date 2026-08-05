@@ -1016,7 +1016,7 @@ namespace ReSet.Core.Services
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                         if (canRetry)
                         {
-                            feedbackLog = l1Result.SuggestedPromptFix;
+                            feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
                             attempt++;
                             continue;
                         }
@@ -1778,7 +1778,7 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        feedbackLog = l1Result.SuggestedPromptFix;
+                        feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
                         attempt++;
                         continue;
                     }
