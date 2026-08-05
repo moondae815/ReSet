@@ -144,7 +144,7 @@ public static string ComposeAfterL1Failure(string? l1Fix, IReadOnlyList<string> 
 
 | 상황 | 동작 |
 |---|---|
-| 구제본의 결함 여부 | 반드시 `HasDefects=true`. 결함이 없었다면 그 자리에서 루프를 빠져나갔으므로 `QualityRejected`는 항상 정확하다 |
+| 구제본의 결함 여부 | 반드시 `HasDefects=true`. 결함 없는 시도도 `:1082`에서 후보로 기록되지만 그 직후 루프가 통과로 빠져나가 구제 자리에 도달하지 않는다. 따라서 `QualityRejected`는 항상 정확하다 |
 | 점수 노출 | 상태가 `QualityRejected`라 `VerificationDocumentFormatter`의 `showScores`가 켜진다. 채택된 문서 자신의 점수이므로 정확하다 |
 | 캐시 | 배치 모드(`:1165`)와 TUI 승인(`:1194`) 모두 `Passed`일 때만 갱신한다. 구제본은 캐시되지 않는다 — 의도대로다 |
 | 사용자 취소 | `OperationCanceledException`은 잡지 않아 그대로 전파된다. 구제하지 않는다. 기존 정책 유지 |
