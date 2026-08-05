@@ -1106,20 +1106,22 @@ namespace ReSet.Core.Services
                         {
                             Log.Error("[파이프라인] L2 AI 교차 리뷰 최종 실패 - SP: {SpName}", selectedOption);
 
-                            // 마지막이 아니라 최고점을 채택한다. 이 분기에 도달했다는 것은
-                            // 직전 시도의 리뷰가 성공했다는 뜻이므로 후보는 반드시 존재하지만,
-                            // 앞으로 이 루프가 바뀌어도 깨지지 않도록 폴백을 둔다.
-                            var adoptedReview = bestAttempt.Review ?? l2Result;
-                            var adoptedMarkdown = bestAttempt.Markdown ?? specificationMarkdown;
+                            // 마지막이 아니라 최고점을 채택한다. 채택 규칙은 RetryRescue가
+                            // 단독으로 소유한다. 정상 소진이므로 중단 사유는 null이다.
+                            // 이 분기에 도달했다는 것은 직전 시도의 리뷰가 성공했다는 뜻이라
+                            // 후보는 반드시 존재하지만, 루프가 바뀌어도 깨지지 않도록 폴백을 둔다.
+                            var rescued = RetryRescue.TryRescue(bestAttempt, _criticScoreThreshold, attempt, null);
+                            var adoptedReview = rescued?.Review ?? l2Result;
+                            var adoptedNumber = rescued?.AttemptNumber ?? attempt;
 
                             _userInteraction.NotifyError(
                                 $"{selectedOption} - [[L2 AI 리뷰]] 최종 보완 실패. " +
-                                $"가장 높은 점수를 받은 {bestAttempt.AttemptNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
+                                $"가장 높은 점수를 받은 {adoptedNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
 
                             finalReview = adoptedReview;
                             verificationOutcome = VerificationOutcome.QualityRejected;
-                            specificationMarkdown =
-                                VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + adoptedMarkdown;
+                            specificationMarkdown = rescued?.Markdown
+                                ?? VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + specificationMarkdown;
                             break;
                         }
                     }
@@ -1774,20 +1776,20 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
-                        // 마지막이 아니라 최고점을 채택한다. 이 분기에 도달했다는 것은
-                        // 직전 시도의 리뷰가 성공했다는 뜻이므로 후보는 반드시 존재하지만,
-                        // 앞으로 이 루프가 바뀌어도 깨지지 않도록 폴백을 둔다.
-                        var adoptedReview = bestAttempt.Review ?? l2Result;
-                        var adoptedPlan = bestAttempt.Markdown ?? consolidatedPlan;
+                        // 마지막이 아니라 최고점을 채택한다. 채택 규칙은 RetryRescue가
+                        // 단독으로 소유한다. 정상 소진이므로 중단 사유는 null이다.
+                        var rescued = RetryRescue.TryRescue(bestAttempt, _criticScoreThreshold, attempt, null);
+                        var adoptedReview = rescued?.Review ?? l2Result;
+                        var adoptedNumber = rescued?.AttemptNumber ?? attempt;
 
                         _userInteraction.NotifyError(
                             $"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. " +
-                            $"가장 높은 점수를 받은 {bestAttempt.AttemptNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
+                            $"가장 높은 점수를 받은 {adoptedNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
 
                         planOutcome = VerificationOutcome.QualityRejected;
                         planReview = adoptedReview;
-                        consolidatedPlan =
-                            VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + adoptedPlan;
+                        consolidatedPlan = rescued?.Markdown
+                            ?? VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + consolidatedPlan;
                         break;
                     }
                 }
