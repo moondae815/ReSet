@@ -985,7 +985,23 @@ namespace ReSet.Core.Services
 
                     if (!genSuccess || string.IsNullOrEmpty(specificationMarkdown))
                     {
-                        return Result(null, spDef, null, null);
+                        // 여기서 그냥 돌아가면 앞선 시도가 만든 검증된 문서까지 함께 사라진다.
+                        // 이것이 이 파일에서 가장 큰 손실이었다 — 나쁜 문서가 아니라 무(無)가 나갔다.
+                        var rescued = RetryRescue.TryRescue(
+                            bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.GenerationFailed);
+                        if (rescued == null)
+                        {
+                            return Result(null, spDef, null, null);
+                        }
+
+                        _userInteraction.NotifyError(
+                            $"{selectedOption} - AI 생성이 중단되어 가장 높은 점수를 받은 " +
+                            $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                        finalReview = rescued.Review;
+                        verificationOutcome = VerificationOutcome.QualityRejected;
+                        specificationMarkdown = rescued.Markdown;
+                        break;
                     }
 
                     // L1: 기계적 무결성 검사
@@ -1702,7 +1718,22 @@ namespace ReSet.Core.Services
 
                 if (!genSuccess || string.IsNullOrEmpty(consolidatedPlan))
                 {
-                    return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                    // 여기서 그냥 돌아가면 앞선 시도가 만든 검증된 계획서까지 함께 사라진다.
+                    var rescued = RetryRescue.TryRescue(
+                        bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.GenerationFailed);
+                    if (rescued == null)
+                    {
+                        return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                    }
+
+                    _userInteraction.NotifyError(
+                        $"{jobName} - AI 생성이 중단되어 가장 높은 점수를 받은 " +
+                        $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                    planReview = rescued.Review;
+                    planOutcome = VerificationOutcome.QualityRejected;
+                    consolidatedPlan = rescued.Markdown;
+                    break;
                 }
 
                 // L1: 기계적 무결성 검사

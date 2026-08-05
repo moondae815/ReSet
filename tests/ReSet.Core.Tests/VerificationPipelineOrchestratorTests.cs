@@ -3397,6 +3397,108 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("계획3고유표시", result.Plan);
         }
 
+        // 3차 시도의 생성 호출이 죽으면 2차가 만든 검증된 문서까지 함께 사라졌다.
+        // 변수에는 그 내용이 그대로 남아 있는데 genSuccess가 false라 버려졌다.
+        [Fact]
+        public async Task RunPipelineAsync_LastGenerationThrows_AdoptsTheBestScoredAttemptInsteadOfReturningNull()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            const string body = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```\n\n";
+            var spec1 = body + "시도1고유표시";
+            var spec2 = body + "시도2고유표시";
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = spec1 }),
+                    _ => Task.FromResult(new AiResult { Content = spec2 }),
+                    _ => throw new InvalidOperationException("generation timed out"));
+
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도1고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 7, ScoreReadability = 5, ScoreException = 7 }));
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도2고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.NotNull(resultSpec);
+            Assert.Contains("시도2고유표시", resultSpec);
+            Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", resultSpec);
+            Assert.Contains("88/100", resultSpec);
+        }
+
+        // 후보가 하나도 없으면 구제할 것이 없다. 현행대로 전체 실패다.
+        [Fact]
+        public async Task RunPipelineAsync_FirstGenerationThrows_StillReturnsNull()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns<Task<AiResult>>(_ => throw new InvalidOperationException("generation timed out"));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.Null(resultSpec);
+        }
+
+        // 배치 계획 루프도 같은 결함을 갖는다. 한쪽만 고치면 증상이 이쪽에 남는다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_LastGenerationThrows_AdoptsTheBestScoredAttempt()
+        {
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+
+            const string body = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n\n";
+            var plan1 = body + "계획1고유표시";
+            var plan2 = body + "계획2고유표시";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = plan1 }),
+                    _ => Task.FromResult(new AiResult { Content = plan2 }),
+                    _ => throw new InvalidOperationException("generation timed out"));
+
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 7, ScoreReadability = 5, ScoreException = 7 }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            Assert.Contains("계획2고유표시", result.Plan);
+            Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", result.Plan);
+        }
+
         // 3번째 시도의 프롬프트에 1·2차 지적이 모두 살아 있어야 한다.
         [Fact]
         public async Task RunPipelineAsync_CarriesEveryPriorRoundFeedbackIntoTheNextPrompt()
