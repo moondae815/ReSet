@@ -27,19 +27,20 @@ namespace ReSet.Core.Services
         public static RescuedAttempt? TryRescue(
             BestAttempt best, int scoreThreshold, int abortedAttempt, RetryAbortReason? reason)
         {
-            if (best?.Review == null || best.Markdown == null)
+            var candidate = best?.Current;
+            if (candidate == null)
             {
                 return null;
             }
 
             var context = reason.HasValue
-                ? new RescueContext(reason.Value, abortedAttempt, best.AttemptNumber)
+                ? new RescueContext(reason.Value, abortedAttempt, candidate.AttemptNumber)
                 : null;
 
             return new RescuedAttempt(
-                VerificationBanner.QualityRejected(best.Review, scoreThreshold, context) + best.Markdown,
-                best.Review,
-                best.AttemptNumber);
+                VerificationBanner.QualityRejected(candidate.Review, scoreThreshold, context) + candidate.Markdown,
+                candidate.Review,
+                candidate.AttemptNumber);
         }
     }
 }

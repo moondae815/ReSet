@@ -1,6 +1,15 @@
 namespace ReSet.Core.Services
 {
     /// <summary>
+    /// 재시도 루프가 만든 후보 하나. 네 값이 함께 움직이므로 한 덩어리로 든다.
+    ///
+    /// 흩어 두면 두 가지가 깨진다. "후보가 있는가"를 물을 때마다 어느 필드를 봐야
+    /// 하는지 정해야 하고(그 판단이 두 곳에 복제됐다), 채택된 시도를 가리키는 값들
+    /// 중 하나만 갱신되어 서로 어긋날 수 있다.
+    /// </summary>
+    public sealed record AttemptCandidate(string Markdown, ReviewResult Review, int AttemptNumber);
+
+    /// <summary>
     /// 재시도 루프가 만들어 낸 후보 중 가장 점수가 높은 하나를 보관한다.
     ///
     /// 이 클래스가 존재하는 이유: 재시도가 소진되면 파이프라인이 마지막 시도를 그대로
@@ -13,11 +22,8 @@ namespace ReSet.Core.Services
     /// </summary>
     public sealed class BestAttempt
     {
-        public string? Markdown { get; private set; }
-        public ReviewResult? Review { get; private set; }
-        public int AttemptNumber { get; private set; }
-
-        public bool HasCandidate => Review != null;
+        /// <summary>보관 중인 최고 점수 후보. 아직 없으면 null.</summary>
+        public AttemptCandidate? Current { get; private set; }
 
         /// <summary>
         /// 후보를 제시한다. 기존 최고보다 점수가 높을 때만 교체하고 교체 여부를 돌려준다.
@@ -31,14 +37,12 @@ namespace ReSet.Core.Services
                 return false;
             }
 
-            if (Review != null && review.NormalizedScore <= Review.NormalizedScore)
+            if (Current != null && review.NormalizedScore <= Current.Review.NormalizedScore)
             {
                 return false;
             }
 
-            Markdown = markdown;
-            Review = review;
-            AttemptNumber = attemptNumber;
+            Current = new AttemptCandidate(markdown, review, attemptNumber);
             return true;
         }
     }

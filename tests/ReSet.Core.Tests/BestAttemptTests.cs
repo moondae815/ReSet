@@ -21,9 +21,7 @@ namespace ReSet.Core.Tests
         {
             var best = new BestAttempt();
 
-            Assert.False(best.HasCandidate);
-            Assert.Null(best.Markdown);
-            Assert.Null(best.Review);
+            Assert.Null(best.Current);
         }
 
         [Fact]
@@ -32,9 +30,10 @@ namespace ReSet.Core.Tests
             var best = new BestAttempt();
 
             Assert.True(best.TryRecord(1, "문서1", Attempt1()));
-            Assert.True(best.HasCandidate);
-            Assert.Equal("문서1", best.Markdown);
-            Assert.Equal(1, best.AttemptNumber);
+            Assert.NotNull(best.Current);
+            Assert.Equal("문서1", best.Current!.Markdown);
+            Assert.Equal(1, best.Current.AttemptNumber);
+            Assert.Equal(70, best.Current.Review.NormalizedScore);
         }
 
         [Fact]
@@ -44,9 +43,9 @@ namespace ReSet.Core.Tests
             best.TryRecord(1, "문서1", Attempt1());
 
             Assert.True(best.TryRecord(2, "문서2", Attempt2()));
-            Assert.Equal("문서2", best.Markdown);
-            Assert.Equal(2, best.AttemptNumber);
-            Assert.Equal(90, best.Review!.NormalizedScore);
+            Assert.Equal("문서2", best.Current!.Markdown);
+            Assert.Equal(2, best.Current.AttemptNumber);
+            Assert.Equal(90, best.Current.Review.NormalizedScore);
         }
 
         // 이번 사고의 핵심. 78점짜리가 90점짜리를 밀어내면 안 된다.
@@ -58,8 +57,8 @@ namespace ReSet.Core.Tests
             best.TryRecord(2, "문서2", Attempt2());
 
             Assert.False(best.TryRecord(3, "문서3", Attempt3()));
-            Assert.Equal("문서2", best.Markdown);
-            Assert.Equal(2, best.AttemptNumber);
+            Assert.Equal("문서2", best.Current!.Markdown);
+            Assert.Equal(2, best.Current.AttemptNumber);
         }
 
         // 나중 시도가 더 낫다는 근거가 없고, 실제로 후속 시도가 다른 축을 망가뜨렸다.
@@ -70,8 +69,23 @@ namespace ReSet.Core.Tests
             best.TryRecord(1, "문서1", Attempt2());
 
             Assert.False(best.TryRecord(2, "문서2", Attempt2()));
-            Assert.Equal("문서1", best.Markdown);
-            Assert.Equal(1, best.AttemptNumber);
+            Assert.Equal("문서1", best.Current!.Markdown);
+            Assert.Equal(1, best.Current.AttemptNumber);
+        }
+
+        // 네 값이 한 덩어리로 움직인다 — 하나만 갱신되어 어긋날 자리가 없다.
+        [Fact]
+        public void Current_CarriesEveryValueOfTheSameAttempt()
+        {
+            var best = new BestAttempt();
+            best.TryRecord(2, "문서2", Attempt2());
+
+            var candidate = best.Current;
+
+            Assert.NotNull(candidate);
+            Assert.Equal("문서2", candidate!.Markdown);
+            Assert.Equal(2, candidate.AttemptNumber);
+            Assert.Equal(90, candidate.Review.NormalizedScore);
         }
     }
 }
