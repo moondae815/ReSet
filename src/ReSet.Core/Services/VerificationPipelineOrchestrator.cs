@@ -1023,6 +1023,23 @@ namespace ReSet.Core.Services
                         else
                         {
                             Log.Error("[파이프라인] L1 기계 검증 최종 실패 - SP: {SpName}", selectedOption);
+
+                            // 앞선 시도가 이미 L1을 통과하고 채점까지 받았다면, L1이 깨진
+                            // 마지막 시도보다 그쪽이 낫다. 후보가 없을 때만 현행 경로로 간다.
+                            var rescued = RetryRescue.TryRescue(
+                                bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.L1Exhausted);
+                            if (rescued != null)
+                            {
+                                _userInteraction.NotifyError(
+                                    $"{selectedOption} - [[L1 기계 검증]] 최종 보완 실패. 가장 높은 점수를 받은 " +
+                                    $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                                finalReview = rescued.Review;
+                                verificationOutcome = VerificationOutcome.QualityRejected;
+                                specificationMarkdown = rescued.Markdown;
+                                break;
+                            }
+
                             _userInteraction.NotifyError($"{selectedOption} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
                             verificationOutcome = VerificationOutcome.L1Exhausted;
                             specificationMarkdown = VerificationBanner.L1Exhausted(l1Result.Errors ?? new System.Collections.Generic.List<string>()) + specificationMarkdown;
@@ -1752,6 +1769,20 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
+                        var rescued = RetryRescue.TryRescue(
+                            bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.L1Exhausted);
+                        if (rescued != null)
+                        {
+                            _userInteraction.NotifyError(
+                                $"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 가장 높은 점수를 받은 " +
+                                $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                            planReview = rescued.Review;
+                            planOutcome = VerificationOutcome.QualityRejected;
+                            consolidatedPlan = rescued.Markdown;
+                            break;
+                        }
+
                         _userInteraction.NotifyError($"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
                         planOutcome = VerificationOutcome.L1Exhausted;
                         consolidatedPlan = VerificationBanner.L1Exhausted(l1Result.Errors) + consolidatedPlan;

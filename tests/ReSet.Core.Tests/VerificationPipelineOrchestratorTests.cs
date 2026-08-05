@@ -3499,6 +3499,102 @@ namespace ReSet.Core.Tests
             Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", result.Plan);
         }
 
+        // 1차가 채점을 마쳤는데 2·3차가 L1에서 깨지면, 검증된 1차를 버리고
+        // L1이 깨진 3차에 "통과 못 함" 경고를 붙여 내보냈다.
+        [Fact]
+        public async Task RunPipelineAsync_L1Exhausted_AdoptsTheEarlierScoredAttempt()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            const string body = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```\n\n";
+            var goodSpec = body + "시도1고유표시";
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = goodSpec }),
+                    _ => Task.FromResult(new AiResult { Content = "헤더가 없는 잘못된 문서" }),
+                    _ => Task.FromResult(new AiResult { Content = "헤더가 없는 잘못된 문서" }));
+
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Is<string>(s => s.Contains("시도1고유표시")))
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.NotNull(resultSpec);
+            Assert.Contains("시도1고유표시", resultSpec);
+            Assert.Contains("3차 시도가 L1 기계 검증 실패로 중단되어", resultSpec);
+            Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", resultSpec);
+        }
+
+        // 채점된 시도가 하나도 없으면 순위를 매길 수 없다. 현행 L1 소진 경로를 유지한다.
+        [Fact]
+        public async Task RunPipelineAsync_L1ExhaustedWithNoScoredAttempt_KeepsTheL1ExhaustedBanner()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Test", DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "헤더가 없는 잘못된 문서" }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            Assert.NotNull(resultSpec);
+            Assert.Contains("L1 기계 검증을 통과하지 못했습니다", resultSpec);
+        }
+
+        // 배치 계획 루프도 같은 결함을 갖는다. 한쪽만 고치면 증상이 이쪽에 남는다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L1Exhausted_AdoptsTheEarlierScoredAttempt()
+        {
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+
+            const string body = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n\n";
+            var goodPlan = body + "계획1고유표시";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = goodPlan }),
+                    _ => Task.FromResult(new AiResult { Content = "헤더가 없는 잘못된 계획" }),
+                    _ => Task.FromResult(new AiResult { Content = "헤더가 없는 잘못된 계획" }));
+
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            Assert.Contains("계획1고유표시", result.Plan);
+            Assert.Contains("3차 시도가 L1 기계 검증 실패로 중단되어", result.Plan);
+            Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", result.Plan);
+        }
+
         // 3번째 시도의 프롬프트에 1·2차 지적이 모두 살아 있어야 한다.
         [Fact]
         public async Task RunPipelineAsync_CarriesEveryPriorRoundFeedbackIntoTheNextPrompt()
