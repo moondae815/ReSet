@@ -807,6 +807,11 @@ namespace ReSet.Core.Services
                         if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                         {
                             bool shouldRunStage1 = true;
+                            // 주의: feedbackLog는 L2 재시도 회차뿐 아니라 L1 실패 회차에도
+                            // CriticFeedbackLog가 조립한 누적 블록을 담을 수 있다. 그 블록은
+                            // 항목별 점수 줄("정합성 … CRUD … 예외")을 항상 포함하므로 아래
+                            // 키워드 검사는 그 단어들에 무조건 걸린다. 재생성 범위를 좁히려면
+                            // 이 검사에 원문 피드백이 아니라 L1 지시만 넘기도록 바꿔야 한다.
                             if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
                             {
                                 // 피드백 내용에 비즈니스 수식, 테이블, 칼럼, UDF 등 논리 오류가 있는지 검사합니다.

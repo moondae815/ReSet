@@ -3433,6 +3433,9 @@ namespace ReSet.Core.Tests
             Assert.Contains("시도2고유표시", resultSpec);
             Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", resultSpec);
             Assert.Contains("88/100", resultSpec);
+            // RetryRescue가 이미 배너를 붙여 돌려주므로 호출부가 또 붙이면 배너가 둘이 된다.
+            // 기존 Assert.Contains는 그 경우에도 통과하므로 개수를 직접 센다.
+            Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(resultSpec!, @"\[품질 불합격\]").Count);
         }
 
         // 후보가 하나도 없으면 구제할 것이 없다. 현행대로 전체 실패다.
@@ -3497,6 +3500,33 @@ namespace ReSet.Core.Tests
             Assert.NotNull(result.Plan);
             Assert.Contains("계획2고유표시", result.Plan);
             Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", result.Plan);
+            // 배치 쌍둥이도 같은 함정을 갖는다.
+            Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(result.Plan!, @"\[품질 불합격\]").Count);
+        }
+
+        // 후보가 하나도 없으면 구제할 것이 없다. 현행대로 잡 전체 실패다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_FirstGenerationThrows_StillReturnsNull()
+        {
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns<Task<AiResult>>(_ => throw new InvalidOperationException("generation timed out"));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.Null(result.Plan);
         }
 
         // 1차가 채점을 마쳤는데 2·3차가 L1에서 깨지면, 검증된 1차를 버리고
