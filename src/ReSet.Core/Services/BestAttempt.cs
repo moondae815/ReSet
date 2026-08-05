@@ -36,7 +36,7 @@ namespace ReSet.Core.Services
         /// 추론을 누적해 내보내므로 채택본 하나를 가리킬 필요가 없다. 단일 AiResult를
         /// 스냅샷하는 배치 루프만 실제 값을 넘긴다.
         /// </summary>
-        public bool TryRecord(int attemptNumber, string markdown, ReviewResult review, AiResult? generation = null)
+        public bool TryRecord(int attemptNumber, string markdown, ReviewResult review, AiResult? generation)
         {
             if (review == null)
             {

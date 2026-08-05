@@ -29,7 +29,7 @@ namespace ReSet.Core.Tests
         {
             var best = new BestAttempt();
 
-            Assert.True(best.TryRecord(1, "문서1", Attempt1()));
+            Assert.True(best.TryRecord(1, "문서1", Attempt1(), null));
             Assert.NotNull(best.Current);
             Assert.Equal("문서1", best.Current!.Markdown);
             Assert.Equal(1, best.Current.AttemptNumber);
@@ -40,9 +40,9 @@ namespace ReSet.Core.Tests
         public void HigherScore_ReplacesTheCurrentBest()
         {
             var best = new BestAttempt();
-            best.TryRecord(1, "문서1", Attempt1());
+            best.TryRecord(1, "문서1", Attempt1(), null);
 
-            Assert.True(best.TryRecord(2, "문서2", Attempt2()));
+            Assert.True(best.TryRecord(2, "문서2", Attempt2(), null));
             Assert.Equal("문서2", best.Current!.Markdown);
             Assert.Equal(2, best.Current.AttemptNumber);
             Assert.Equal(90, best.Current.Review.NormalizedScore);
@@ -53,10 +53,10 @@ namespace ReSet.Core.Tests
         public void LowerScore_DoesNotReplaceTheCurrentBest()
         {
             var best = new BestAttempt();
-            best.TryRecord(1, "문서1", Attempt1());
-            best.TryRecord(2, "문서2", Attempt2());
+            best.TryRecord(1, "문서1", Attempt1(), null);
+            best.TryRecord(2, "문서2", Attempt2(), null);
 
-            Assert.False(best.TryRecord(3, "문서3", Attempt3()));
+            Assert.False(best.TryRecord(3, "문서3", Attempt3(), null));
             Assert.Equal("문서2", best.Current!.Markdown);
             Assert.Equal(2, best.Current.AttemptNumber);
         }
@@ -66,9 +66,9 @@ namespace ReSet.Core.Tests
         public void EqualScore_KeepsTheEarlierAttempt()
         {
             var best = new BestAttempt();
-            best.TryRecord(1, "문서1", Attempt2());
+            best.TryRecord(1, "문서1", Attempt2(), null);
 
-            Assert.False(best.TryRecord(2, "문서2", Attempt2()));
+            Assert.False(best.TryRecord(2, "문서2", Attempt2(), null));
             Assert.Equal("문서1", best.Current!.Markdown);
             Assert.Equal(1, best.Current.AttemptNumber);
         }
@@ -78,7 +78,7 @@ namespace ReSet.Core.Tests
         public void Current_CarriesEveryValueOfTheSameAttempt()
         {
             var best = new BestAttempt();
-            best.TryRecord(2, "문서2", Attempt2());
+            best.TryRecord(2, "문서2", Attempt2(), null);
 
             var candidate = best.Current;
 

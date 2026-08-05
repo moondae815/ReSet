@@ -32,7 +32,7 @@ namespace ReSet.Core.Tests
         public void TryRescue_WithCandidate_PrefixesTheBannerToTheStoredMarkdown()
         {
             var best = new BestAttempt();
-            best.TryRecord(2, "본문내용", Review());
+            best.TryRecord(2, "본문내용", Review(), null);
 
             var rescued = RetryRescue.TryRescue(best, 8, 3, RetryAbortReason.GenerationFailed);
 
@@ -50,7 +50,7 @@ namespace ReSet.Core.Tests
         public void TryRescue_WithNullReason_OmitsTheAdoptionLine()
         {
             var best = new BestAttempt();
-            best.TryRecord(2, "본문내용", Review());
+            best.TryRecord(2, "본문내용", Review(), null);
 
             var rescued = RetryRescue.TryRescue(best, 8, 3, null);
 
