@@ -1,3 +1,5 @@
+using ReSet.Core.Models;
+
 namespace ReSet.Core.Services
 {
     /// <summary>
@@ -7,7 +9,7 @@ namespace ReSet.Core.Services
     /// 하는지 정해야 하고(그 판단이 두 곳에 복제됐다), 채택된 시도를 가리키는 값들
     /// 중 하나만 갱신되어 서로 어긋날 수 있다.
     /// </summary>
-    public sealed record AttemptCandidate(string Markdown, ReviewResult Review, int AttemptNumber);
+    public sealed record AttemptCandidate(string Markdown, ReviewResult Review, int AttemptNumber, AiResult? Generation);
 
     /// <summary>
     /// 재시도 루프가 만들어 낸 후보 중 가장 점수가 높은 하나를 보관한다.
@@ -29,8 +31,12 @@ namespace ReSet.Core.Services
         /// 후보를 제시한다. 기존 최고보다 점수가 높을 때만 교체하고 교체 여부를 돌려준다.
         /// 동점이면 교체하지 않는다 — 나중 시도가 더 낫다는 근거가 없고, 실제로 후속
         /// 시도가 이미 만점이던 항목을 망가뜨리는 사례가 관찰됐다.
+        ///
+        /// generation이 nullable인 이유: 순차 SP 루프는 accumulatedThinking에 모든 시도의
+        /// 추론을 누적해 내보내므로 채택본 하나를 가리킬 필요가 없다. 단일 AiResult를
+        /// 스냅샷하는 배치 루프만 실제 값을 넘긴다.
         /// </summary>
-        public bool TryRecord(int attemptNumber, string markdown, ReviewResult review)
+        public bool TryRecord(int attemptNumber, string markdown, ReviewResult review, AiResult? generation = null)
         {
             if (review == null)
             {
@@ -42,7 +48,7 @@ namespace ReSet.Core.Services
                 return false;
             }
 
-            Current = new AttemptCandidate(markdown, review, attemptNumber);
+            Current = new AttemptCandidate(markdown, review, attemptNumber, generation);
             return true;
         }
     }

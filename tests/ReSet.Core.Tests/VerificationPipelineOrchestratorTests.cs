@@ -3529,6 +3529,57 @@ namespace ReSet.Core.Tests
             Assert.Null(result.Plan);
         }
 
+        // finalAiResult는 생성이 성공할 때만 갱신되므로 채택본과 어긋날 수 있었다.
+        // 1차가 최고점인데 2차 생성이 성공(점수는 더 낮음)하고 3차가 죽으면,
+        // 채택본은 1차인데 Thinking.md/prompt-context.md는 2차를 서술했다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_RescuedPlan_CarriesTheAdoptedAttemptsAiResult()
+        {
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+
+            const string body = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트\n\n";
+            var plan1 = body + "계획1고유표시";
+            var plan2 = body + "계획2고유표시";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = plan1, ThinkingText = "생각1", SystemPrompt = "시스템1", UserPrompt = "사용자1" }),
+                    _ => Task.FromResult(new AiResult { Content = plan2, ThinkingText = "생각2", SystemPrompt = "시스템2", UserPrompt = "사용자2" }),
+                    _ => throw new InvalidOperationException("generation timed out"));
+
+            // 1차 88점이 최고, 2차는 생성에 성공하지만 64점.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
+                .Returns(Task.FromResult(new ReviewResult
+                { HasDefects = true, ScoreAccuracy = 6, ScoreCrud = 5, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7 }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            Assert.Contains("계획1고유표시", result.Plan);
+
+            // 산출물이 서술하는 시도와 채택된 시도가 같아야 한다.
+            Assert.NotNull(result.Result);
+            Assert.Equal("생각1", result.Result!.ThinkingText);
+            Assert.Equal("시스템1", result.Result.SystemPrompt);
+        }
+
         // 1차가 채점을 마쳤는데 2·3차가 L1에서 깨지면, 검증된 1차를 버리고
         // L1이 깨진 3차에 "통과 못 함" 경고를 붙여 내보냈다.
         [Fact]

@@ -1125,7 +1125,7 @@ namespace ReSet.Core.Services
                     // specificationMarkdown은 이 시점에 L1 정화가 끝난 값이다.
                     if (reviewSuccess && l2Result != null)
                     {
-                        bestAttempt.TryRecord(attempt, specificationMarkdown, l2Result);
+                        bestAttempt.TryRecord(attempt, specificationMarkdown, l2Result, null);
                     }
 
                     if (reviewSuccess && l2Result != null && l2Result.HasDefects)
@@ -1772,6 +1772,7 @@ namespace ReSet.Core.Services
                         $"{jobName} - AI 생성이 중단되어 가장 높은 점수를 받은 " +
                         $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
+                    finalAiResult = rescued.Generation ?? finalAiResult;
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
                     consolidatedPlan = rescued.Markdown;
@@ -1802,6 +1803,7 @@ namespace ReSet.Core.Services
                                 $"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 가장 높은 점수를 받은 " +
                                 $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
+                            finalAiResult = rescued.Generation ?? finalAiResult;
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
                             consolidatedPlan = rescued.Markdown;
@@ -1840,7 +1842,7 @@ namespace ReSet.Core.Services
                 // 불합격 여부와 무관하게 후보로 등록한다.
                 if (reviewSuccess && l2Result != null)
                 {
-                    bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result);
+                    bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
                 }
 
                 if (reviewSuccess && l2Result != null && l2Result.HasDefects)
@@ -1873,6 +1875,7 @@ namespace ReSet.Core.Services
                             $"{jobName} - [[L2 AI 리뷰]] 최종 보완 실패. " +
                             $"가장 높은 점수를 받은 {adoptedNumber}차 시도({adoptedReview.NormalizedScore}/100)를 채택합니다.");
 
+                        finalAiResult = rescued?.Generation ?? finalAiResult;
                         planOutcome = VerificationOutcome.QualityRejected;
                         planReview = adoptedReview;
                         consolidatedPlan = rescued?.Markdown
@@ -1892,6 +1895,7 @@ namespace ReSet.Core.Services
                             $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 가장 높은 점수를 받은 " +
                             $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
+                        finalAiResult = rescued.Generation ?? finalAiResult;
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
                         consolidatedPlan = rescued.Markdown;

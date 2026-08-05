@@ -1,7 +1,9 @@
+using ReSet.Core.Models;
+
 namespace ReSet.Core.Services
 {
     /// <summary>구제로 채택된 문서와 그 리뷰. Markdown에는 배너가 이미 붙어 있다.</summary>
-    public sealed record RescuedAttempt(string Markdown, ReviewResult Review, int AttemptNumber);
+    public sealed record RescuedAttempt(string Markdown, ReviewResult Review, int AttemptNumber, AiResult? Generation);
 
     /// <summary>
     /// 재시도 루프가 끝났을 때 보관 중인 최선본을 채택할지 결정한다.
@@ -40,7 +42,8 @@ namespace ReSet.Core.Services
             return new RescuedAttempt(
                 VerificationBanner.QualityRejected(candidate.Review, scoreThreshold, context) + candidate.Markdown,
                 candidate.Review,
-                candidate.AttemptNumber);
+                candidate.AttemptNumber,
+                candidate.Generation);
         }
     }
 }
