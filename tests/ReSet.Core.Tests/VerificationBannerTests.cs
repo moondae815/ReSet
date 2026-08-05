@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ReSet.Core.Services;
 using Xunit;
@@ -144,5 +145,71 @@ public sealed class VerificationBannerTests
         var banner = VerificationBanner.UnresolvedReferences(Array.Empty<string>());
 
         Assert.Contains(">   - (미분석 객체명이 기록되지 않았습니다.)", banner);
+    }
+
+    // 구제가 아닐 때 배너가 한 글자도 달라지면 안 된다.
+    // Task 3의 통일 리팩터링이 정상 소진 경로의 출력을 바꾸지 않았음을 지키는 안전망이다.
+    [Fact]
+    public void QualityRejected_WithoutRescue_OmitsTheAdoptionLine()
+    {
+        var review = new ReviewResult
+        {
+            ScoreAccuracy = 9,
+            ScoreCrud = 10,
+            ScoreInterface = 9,
+            ScoreReadability = 9,
+            ScoreException = 7,
+            FeedbackComment = "예외 처리를 보완하십시오."
+        };
+
+        var banner = VerificationBanner.QualityRejected(review, 8);
+
+        Assert.DoesNotContain("채택 경위", banner);
+    }
+
+    // 구제본은 마지막 시도가 아니다. 뒤따르는 점수표가 어느 시도의 것인지 먼저 밝혀야 한다.
+    [Fact]
+    public void QualityRejected_WithRescue_LeadsWithTheAdoptionLine()
+    {
+        var review = new ReviewResult
+        {
+            ScoreAccuracy = 9,
+            ScoreCrud = 10,
+            ScoreInterface = 9,
+            ScoreReadability = 9,
+            ScoreException = 7,
+            FeedbackComment = "예외 처리를 보완하십시오."
+        };
+
+        var banner = VerificationBanner.QualityRejected(
+            review, 8, new RescueContext(RetryAbortReason.GenerationFailed, 3, 2));
+
+        var lines = banner.Split('\n');
+        var headerIndex = Array.FindIndex(lines, line => line.Contains("[품질 불합격]"));
+
+        Assert.Contains("채택 경위", lines[headerIndex + 1]);
+        Assert.Contains("3차 시도가 AI 생성 호출 실패로 중단되어", lines[headerIndex + 1]);
+        Assert.Contains("2차 시도를 채택했습니다", lines[headerIndex + 1]);
+        Assert.Contains("평가 점수", lines[headerIndex + 2]);
+    }
+
+    [Theory]
+    [InlineData(RetryAbortReason.GenerationFailed, "AI 생성 호출 실패")]
+    [InlineData(RetryAbortReason.L1Exhausted, "L1 기계 검증 실패")]
+    [InlineData(RetryAbortReason.ReviewFailed, "L2 리뷰 호출 실패")]
+    public void QualityRejected_NamesTheAbortCause(RetryAbortReason reason, string expectedCause)
+    {
+        var review = new ReviewResult
+        {
+            ScoreAccuracy = 9,
+            ScoreCrud = 10,
+            ScoreInterface = 9,
+            ScoreReadability = 9,
+            ScoreException = 7
+        };
+
+        var banner = VerificationBanner.QualityRejected(review, 8, new RescueContext(reason, 3, 2));
+
+        Assert.Contains(expectedCause, banner);
     }
 }

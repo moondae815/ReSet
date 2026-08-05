@@ -31,8 +31,10 @@ public static class VerificationBanner
             + "\n\n";
     }
 
-    public static string QualityRejected(ReviewResult review, int scoreThreshold) =>
-        $"\n> [!CAUTION]\n> **[품질 불합격] {RejectionReason(review, scoreThreshold)} (최종 신뢰도 점수: {review.NormalizedScore}/100)**\n> - **평가 점수**: 정합성 {review.ScoreAccuracy}/10, CRUD {review.ScoreCrud}/10, 인터페이스 {review.ScoreInterface}/10, 가독성 {review.ScoreReadability}/10, 예외 {review.ScoreException}/10 (기준 점수: {scoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {review.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
+    public static string QualityRejected(ReviewResult review, int scoreThreshold, RescueContext? rescue = null) =>
+        $"\n> [!CAUTION]\n> **[품질 불합격] {RejectionReason(review, scoreThreshold)} (최종 신뢰도 점수: {review.NormalizedScore}/100)**\n"
+        + RescueLine(rescue)
+        + $"> - **평가 점수**: 정합성 {review.ScoreAccuracy}/10, CRUD {review.ScoreCrud}/10, 인터페이스 {review.ScoreInterface}/10, 가독성 {review.ScoreReadability}/10, 예외 {review.ScoreException}/10 (기준 점수: {scoreThreshold}/10)\n> - **최종 Critic 결함 피드백**:\n>   {review.FeedbackComment?.Replace("\n", "\n>   ")}\n\n";
 
     /// <summary>
     /// 불합격 사유를 실제 점수에서 계산한다.
@@ -60,6 +62,32 @@ public static class VerificationBanner
         return failed.Count > 0
             ? $"{string.Join("/", failed)} 기준 미달"
             : "Critic 결함 지적";
+    }
+
+    /// <summary>
+    /// 구제 시에만 붙는 첫 불릿. 뒤따르는 점수표가 어느 시도의 것인지 먼저 밝힌다.
+    ///
+    /// "다시 돌리면 나아진다" 같은 조언은 넣지 않는다. 사실만 적고 판단은 읽는
+    /// 사람에게 맡긴다 — 3차가 쿼터로 죽은 경우와 정상 수행한 경우는 재실행 가치가
+    /// 다른데, 그 판단에 필요한 사실이 바로 중단 사유다.
+    /// </summary>
+    private static string RescueLine(RescueContext? rescue)
+    {
+        if (rescue == null)
+        {
+            return string.Empty;
+        }
+
+        var cause = rescue.Reason switch
+        {
+            RetryAbortReason.GenerationFailed => "AI 생성 호출 실패",
+            RetryAbortReason.L1Exhausted => "L1 기계 검증 실패",
+            RetryAbortReason.ReviewFailed => "L2 리뷰 호출 실패",
+            _ => "알 수 없는 사유"
+        };
+
+        return $"> - **채택 경위**: {rescue.AbortedAttempt}차 시도가 {cause}로 중단되어, "
+            + $"검증을 마친 {rescue.AdoptedAttempt}차 시도를 채택했습니다.\n";
     }
 
     public static string ReviewNotRun(string reason) =>
