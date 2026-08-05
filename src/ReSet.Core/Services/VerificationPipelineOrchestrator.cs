@@ -288,6 +288,9 @@ namespace ReSet.Core.Services
 
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string? feedbackLog = null;
+            // 재생성 범위는 feedbackLog와 같은 자리에서 정해진다. 둘 다 "직전 회차가
+            // 무엇을 지적당했나"를 표현하지만, 이쪽은 산문이 아니라 구조화된 값이다.
+            RegenerationScope? regenScope = null;
             string specificationMarkdown = string.Empty;
 
             if (string.Equals(_actorEffort, "dynamic", StringComparison.OrdinalIgnoreCase))
@@ -806,31 +809,11 @@ namespace ReSet.Core.Services
                     {
                         if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                         {
-                            bool shouldRunStage1 = true;
-                            // 주의: feedbackLog는 L2 재시도 회차뿐 아니라 L1 실패 회차에도
-                            // CriticFeedbackLog가 조립한 누적 블록을 담을 수 있다. 그 블록은
-                            // 항목별 점수 줄("정합성 … CRUD … 예외")을 항상 포함하므로 아래
-                            // 키워드 검사는 그 단어들에 무조건 걸린다. 재생성 범위를 좁히려면
-                            // 이 검사에 원문 피드백이 아니라 L1 지시만 넘기도록 바꿔야 한다.
-                            if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
+                            var scope = regenScope ?? RegenerationScope.Everything;
+                            bool shouldRunStage1 = scope.RunStage1;
+                            if (!shouldRunStage1)
                             {
-                                // 피드백 내용에 비즈니스 수식, 테이블, 칼럼, UDF 등 논리 오류가 있는지 검사합니다.
-                                var logUpper = feedbackLog.ToUpper();
-                                bool isLogicError = logUpper.Contains("COLUMN") || logUpper.Contains("UDF") || 
-                                                    logUpper.Contains("FORMULA") || logUpper.Contains("LOGIC") || 
-                                                    logUpper.Contains("SELECT") || logUpper.Contains("INSERT") || 
-                                                    logUpper.Contains("UNION") || logUpper.Contains("컬럼") || 
-                                                    logUpper.Contains("수식") || logUpper.Contains("조인") || 
-                                                    logUpper.Contains("필터") || logUpper.Contains("테이블") || 
-                                                    logUpper.Contains("함수") || logUpper.Contains("매핑") ||
-                                                    logUpper.Contains("오탈자") || logUpper.Contains("오역") || 
-                                                    logUpper.Contains("누락");
-
-                                if (!isLogicError)
-                                {
-                                    Log.Information("[파이프라인] 단순 포맷/Mermaid 교정이므로 1단계(추론) 스킵하고 기존 구조화 데이터 재사용");
-                                    shouldRunStage1 = false;
-                                }
+                                Log.Information("[파이프라인] 재생성 범위가 표현 계층에 한정되어 1단계(추론)를 건너뛰고 기존 구조화 데이터 재사용");
                             }
 
                             string combinedTitle = attempt == 1 ? "로컬 LLM 명세서 분석 및 빌드 (Stage 1 & 2)" : "로컬 LLM 명세서 수정 (Stage 1 & 2)";
@@ -885,40 +868,15 @@ namespace ReSet.Core.Services
                                 }
 
                                 // 2단계: 각 H2 섹션 명세서 작성 (Stage 2 Markdown 포맷터)
-                                bool regenPart1 = true;
-                                bool regenPart2 = true;
-                                bool regenPart3 = true;
+                                bool regenPart1 = scope.Overview;
+                                bool regenPart2 = scope.Crud;
+                                bool regenPart3 = scope.Logic;
 
-                                if (attempt > 1 && !string.IsNullOrEmpty(feedbackLog))
+                                // 이전 결과 누락 시 전체 재생성. 이 조건만 호출부의 지역
+                                // 상태에 달려 있어 RegenerationScopeSelector가 알 수 없다.
+                                if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
                                 {
-                                    var logUpper = feedbackLog.ToUpper();
-                                    regenPart1 = false;
-                                    regenPart2 = false;
-                                    regenPart3 = false;
-
-                                    if (logUpper.Contains("## 개요") || logUpper.Contains("## 파라미터 목록") || logUpper.Contains("개요") || logUpper.Contains("파라미터") || logUpper.Contains("PARAMETER") || logUpper.Contains("OVERVIEW"))
-                                    {
-                                        regenPart1 = true;
-                                    }
-                                    if (logUpper.Contains("## CRUD 분석") || logUpper.Contains("CRUD") || logUpper.Contains("테이블") || logUpper.Contains("컬럼") || logUpper.Contains("매핑") || logUpper.Contains("TABLE") || logUpper.Contains("COLUMN") || logUpper.Contains("MAPPING"))
-                                    {
-                                        regenPart2 = true;
-                                    }
-                                    if (logUpper.Contains("## 로직 흐름 요약") || logUpper.Contains("## 비즈니스 흐름 시각화") || logUpper.Contains("로직 흐름") || logUpper.Contains("시각화") || logUpper.Contains("MERMAID") || logUpper.Contains("다이어그램") || logUpper.Contains("FLOWCHART") || logUpper.Contains("DIAGRAM") || logUpper.Contains("LOGIC") || logUpper.Contains("VISUALIZATION"))
-                                    {
-                                        regenPart3 = true;
-                                    }
-
-                                    // 이전 결과 누락 시 전체 재생성
-                                    if (ollamaPart1 == null || ollamaPart2 == null || ollamaPart3 == null)
-                                    {
-                                        regenPart1 = regenPart2 = regenPart3 = true;
-                                    }
-
-                                    if (!regenPart1 && !regenPart2 && !regenPart3)
-                                    {
-                                        regenPart1 = regenPart2 = regenPart3 = true;
-                                    }
+                                    regenPart1 = regenPart2 = regenPart3 = true;
                                 }
 
                                 string actWord = attempt == 1 ? "빌드" : "수정";
@@ -1027,6 +985,7 @@ namespace ReSet.Core.Services
                         if (canRetry)
                         {
                             feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
+                            regenScope = RegenerationScopeSelector.FromL1Errors(l1Result.DetailedErrors);
                             attempt++;
                             continue;
                         }
@@ -1136,6 +1095,7 @@ namespace ReSet.Core.Services
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                         if (canRetry)
                         {
+                            regenScope = RegenerationScopeSelector.FromReview(l2Result, _criticScoreThreshold);
                             CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
                             feedbackLog = CriticFeedbackLog.Compose(
                                 feedbackHistory,

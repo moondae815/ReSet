@@ -346,6 +346,64 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunPipelineAsync_LocalProvider_ReadabilityOnlyDefect_RegeneratesOnlyTheLogicSection()
+        {
+            // 가독성만 미달인 리뷰는 표현 계층 결함이지 구조 결함이 아니다. 옛 구현은
+            // CriticFeedbackLog가 매 회차 앞에 붙이는 항목별 점수 줄("CRUD ...")의
+            // "CRUD"라는 글자에 걸려, 지적 대상이 아닌 CRUD 섹션까지 재생성했다.
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "USP_ReadabilityOnly", DdlText = "CREATE PROCEDURE USP_ReadabilityOnly AS SELECT 1" };
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_ReadabilityOnly", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            _aiService.DeconstructSpLogicAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>(), Arg.Any<Action<(int, int, string)>?>())
+                .Returns(Task.FromResult(new AiResult { Content = "{\"Logic\":{}}" }));
+
+            _aiService.GenerateSpecSectionAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```" }));
+
+            // 1차 리뷰: 가독성만 기준(8) 미달. 나머지 네 항목은 만점.
+            var readabilityOnlyDefect = new ReviewResult
+            {
+                HasDefects = true,
+                ScoreAccuracy = 10,
+                ScoreCrud = 10,
+                ScoreInterface = 10,
+                ScoreException = 10,
+                ScoreReadability = 5,
+                FeedbackComment = "다이어그램 가독성을 높이십시오."
+            };
+            // 2차 리뷰: 전부 만점이라 루프가 2회 시도로 종료된다.
+            var noDefects = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            _aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>())
+                .Returns(Task.FromResult(readabilityOnlyDefect), Task.FromResult(noDefects));
+
+            // Act
+            var (resultSpec, resultDef, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_ReadabilityOnly", 3, "Ollama", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+
+            // 가독성만 미달이면 2차 시도는 part3만 다시 만들어야 한다.
+            // 옛 구현은 CriticFeedbackLog의 점수 줄에 들어 있는 "CRUD"라는 글자에 걸려
+            // CRUD 섹션을 무조건 재생성했다.
+            await _aiService.Received(1).GenerateSpecSectionAsync(
+                spDef, "CrudAnalysis", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await _aiService.Received(1).GenerateSpecSectionAsync(
+                spDef, "OverviewAndParameters", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await _aiService.Received(2).GenerateSpecSectionAsync(
+                spDef, "LogicAndVisualization", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+            // 표현 계층 결함(가독성)은 구조화 데이터 자체를 다시 뽑을 이유가 없다 —
+            // Stage 1(추론)은 1차 시도에서 한 번만 돌아야 한다.
+            await _aiService.Received(1).DeconstructSpLogicAsync(
+                spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<Action<(int, int, string)>?>());
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_WithDynamicEffort_UsesParallelGenerationAndCritic()
         {
             // Arrange
