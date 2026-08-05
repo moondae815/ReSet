@@ -51,6 +51,15 @@ namespace ReSet.Core.Services
                 Crud: crud,
                 Logic: accuracy || readability || exception);
 
+            // Stage 1이 구조화 데이터를 다시 뽑으면, 재생성하지 않은 섹션은 폐기된 JSON의
+            // 렌더링으로 남는다. 세 섹션 모두 <deconstructed-logic-source-of-truth>에서
+            // 만들어지므로(AiService.cs), 일부만 갱신하면 문서가 자기모순에 빠진다.
+            // 지역화로 아끼는 비용은 Stage 1을 돌지 않는 표현 계층 항목에서 나온다.
+            if (scope.RunStage1)
+            {
+                return RegenerationScope.Everything;
+            }
+
             // 점수는 모두 기준을 넘겼는데 결함이 지적된 경로가 있다.
             // 어느 섹션인지 지역화할 근거가 없으므로 전부 다시 만든다.
             return scope.Overview || scope.Crud || scope.Logic

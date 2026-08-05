@@ -810,8 +810,7 @@ namespace ReSet.Core.Services
                         if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
                         {
                             var scope = regenScope ?? RegenerationScope.Everything;
-                            bool shouldRunStage1 = scope.RunStage1;
-                            if (!shouldRunStage1)
+                            if (!scope.RunStage1)
                             {
                                 Log.Information("[파이프라인] 재생성 범위가 표현 계층에 한정되어 1단계(추론)를 건너뛰고 기존 구조화 데이터 재사용");
                             }
@@ -819,7 +818,7 @@ namespace ReSet.Core.Services
                             string combinedTitle = attempt == 1 ? "로컬 LLM 명세서 분석 및 빌드 (Stage 1 & 2)" : "로컬 LLM 명세서 수정 (Stage 1 & 2)";
                             using (var progressScope = _userInteraction.CreateProgressScope(combinedTitle) ?? NullProgressScope.Instance)
                             {
-                                if (shouldRunStage1)
+                                if (scope.RunStage1)
                                 {
                                     AiResult deconstructResult;
                                     Log.Information("[파이프라인] 1단계: 명세 구조화 추론(Stage 1 JSON 추출) {Action}", attempt == 1 ? "시작" : "수정 시작");
@@ -868,6 +867,9 @@ namespace ReSet.Core.Services
                                 }
 
                                 // 2단계: 각 H2 섹션 명세서 작성 (Stage 2 Markdown 포맷터)
+                                // 셋이 모두 false가 되는 경우는 RegenerationScopeSelector가
+                                // 막는다(어떤 팩터리도 빈 범위를 돌려주지 않는다). 그 불변식이
+                                // 깨지면 이전 회차 섹션을 그대로 재제출해 재시도만 소모한다.
                                 bool regenPart1 = scope.Overview;
                                 bool regenPart2 = scope.Crud;
                                 bool regenPart3 = scope.Logic;

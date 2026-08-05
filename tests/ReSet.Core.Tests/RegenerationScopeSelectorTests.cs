@@ -26,10 +26,12 @@ namespace ReSet.Core.Tests
 
             var scope = RegenerationScopeSelector.FromReview(review, 8);
 
+            // Stage 1을 다시 돌면 구조화 데이터가 바뀌므로, 그 위에서 만들어지는
+            // 세 섹션 전부가 무효화되어 전체 재생성으로 강제된다.
             Assert.True(scope.RunStage1);
             Assert.True(scope.Logic);
-            Assert.False(scope.Overview);
-            Assert.False(scope.Crud);
+            Assert.True(scope.Overview);
+            Assert.True(scope.Crud);
         }
 
         [Fact]
@@ -40,10 +42,12 @@ namespace ReSet.Core.Tests
 
             var scope = RegenerationScopeSelector.FromReview(review, 8);
 
+            // Stage 1을 다시 돌면 구조화 데이터가 바뀌므로, 그 위에서 만들어지는
+            // 세 섹션 전부가 무효화되어 전체 재생성으로 강제된다.
             Assert.True(scope.RunStage1);
             Assert.True(scope.Crud);
-            Assert.False(scope.Overview);
-            Assert.False(scope.Logic);
+            Assert.True(scope.Overview);
+            Assert.True(scope.Logic);
         }
 
         // 인터페이스는 파라미터·반환 정의라 개요 섹션의 문제다. 구조는 멀쩡하다.
@@ -98,10 +102,12 @@ namespace ReSet.Core.Tests
 
             var scope = RegenerationScopeSelector.FromReview(review, 8);
 
+            // CRUD 미달이 RunStage1을 켜므로, 원래라면 표현 문제일 뿐인 인터페이스
+            // 섹션(Overview)뿐 아니라 Logic까지 Stage 1 재실행에 의해 전부 강제된다.
             Assert.True(scope.RunStage1);
             Assert.True(scope.Overview);
             Assert.True(scope.Crud);
-            Assert.False(scope.Logic);
+            Assert.True(scope.Logic);
         }
 
         // 점수는 다 통과했는데 Critic이 결함을 지적한 경로가 있다.
