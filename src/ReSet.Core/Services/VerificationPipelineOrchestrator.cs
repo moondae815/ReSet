@@ -71,6 +71,11 @@ namespace ReSet.Core.Services
                 _maxL2Attempts = 1; // 기본값
             }
 
+            // 이 예산은 L1 실패와 L2 실패가 공유한다. 설정 이름(MaxL2Attempts)과 달리
+            // L2 전용이 아니다 — L1에서 소진되면 채점된 후보 수가 설정값보다 적어진다.
+            // 2026-08-05 실행에서 3회 예산 중 1회를 L1 실패가 가져가 채점된 시도가 2회뿐이었다.
+            // 예산을 나누지 않기로 한 이유는 RetryRescue가 최고점 후보를 구제하므로
+            // 남는 손해가 "좋은 문서 상실"이 아니라 "개선 기회 1회 상실"이기 때문이다.
             _maxAttempts = _maxL2Attempts == -1 ? -1 : 1 + _maxL2Attempts;
         }
 
