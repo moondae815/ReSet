@@ -1162,6 +1162,21 @@ namespace ReSet.Core.Services
                     // 리뷰를 수행하지 못한 경우: 소프트 페일로 계속 진행하되 통과와 구분해 표시한다.
                     if (!reviewSuccess)
                     {
+                        // 앞선 시도가 리뷰를 마쳤다면 미검토 문서보다 그쪽이 낫다.
+                        var rescued = RetryRescue.TryRescue(
+                            bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.ReviewFailed);
+                        if (rescued != null)
+                        {
+                            _userInteraction.NotifyError(
+                                $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 가장 높은 점수를 받은 " +
+                                $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                            finalReview = rescued.Review;
+                            verificationOutcome = VerificationOutcome.QualityRejected;
+                            specificationMarkdown = rescued.Markdown;
+                            break;
+                        }
+
                         _userInteraction.NotifyError(
                             $"{selectedOption} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 명세서를 확정합니다.");
                         verificationOutcome = VerificationOutcome.ReviewNotRun;
@@ -1859,6 +1874,20 @@ namespace ReSet.Core.Services
                 // 리뷰를 수행하지 못한 경우: 소프트 페일로 계속 진행하되 통과와 구분해 표시한다.
                 if (!reviewSuccess)
                 {
+                    var rescued = RetryRescue.TryRescue(
+                        bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.ReviewFailed);
+                    if (rescued != null)
+                    {
+                        _userInteraction.NotifyError(
+                            $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 가장 높은 점수를 받은 " +
+                            $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                        planReview = rescued.Review;
+                        planOutcome = VerificationOutcome.QualityRejected;
+                        consolidatedPlan = rescued.Markdown;
+                        break;
+                    }
+
                     _userInteraction.NotifyError(
                         $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
                     planOutcome = VerificationOutcome.ReviewNotRun;
