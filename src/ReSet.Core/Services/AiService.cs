@@ -2059,6 +2059,65 @@ Consolidate the provided specifications into a single unified batch job named '{
         }
 
         /// <summary>
+        /// 단계 본문을 뺀 골격을 만든다. H2 4개를 모두 쓰되, 단계 상세 H2 아래에는
+        /// 모든 단계가 공유할 공통 규약 소절과 단계별 자리표시자만 남긴다.
+        ///
+        /// 공통 규약을 여기서 한 번 확정하는 이유: 단계별로 각자 쓰게 하면 13개
+        /// 단계가 서로 다른 오류 처리·Shadow·Chunk 관례를 선언한다.
+        /// </summary>
+        public async Task<AiResult> GenerateBatchPlanSkeletonAsync(
+            IReadOnlyList<BatchStepPlan> steps,
+            string planStructure,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            string? effort = null,
+            CancellationToken cancellationToken = default)
+        {
+            var placeholders = new StringBuilder();
+            foreach (var step in steps)
+            {
+                placeholders.AppendLine($"<!-- STEP:{step.Code} -->");
+            }
+
+            var systemPrompt = $@"You are a principal database modernization architect writing the SKELETON of the '{jobName}' consolidated {targetLanguage} batch migration plan.
+Consolidate the provided specifications into a single unified batch job named '{jobName}'.
+
+[Skeleton Contract]
+- Write ALL four mandatory H2 sections in full, EXCEPT for the individual step bodies.
+- Under `{BatchPlanAssembler.StepDetailHeader}`, write ONLY the shared subsections that every step relies on: the common SQL error-tracking pattern, the Shadow Table and recovery policy, and the chunk-paging policy.
+- After those shared subsections, emit the following placeholder lines VERBATIM, in this exact order, and write NOTHING else under that H2. Each step body is generated separately and will replace these lines.
+
+{placeholders}
+- Do NOT write any `###` step section under that H2 yourself.
+- The Mermaid flowchart and the architecture overview MUST cover every step in the approved step list.
+
+" + ConsolidatedPlanRules;
+
+            var userPrompt = new StringBuilder();
+            AppendSharedStepContext(userPrompt, steps, string.Empty, specs, targetLanguage, jobName);
+            userPrompt.AppendLine("[Approved Document Structure & Plan]");
+            userPrompt.AppendLine(planStructure);
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Please draft the skeleton, STRICTLY adhering to the [Skeleton Contract] and the [Approved Document Structure & Plan] above.");
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
+            }
+
+            Log.Information("AI 배치 계획 골격 생성 요청 전송 - JobName: {JobName}, 단계 수: {Count}개", jobName, steps.Count);
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            if (aiResult == null) aiResult = new AiResult();
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+
+            Log.Information("AI 배치 계획 골격 생성 응답 수신 완료 - JobName: {JobName}, 응답 길이: {Length}", jobName, aiResult.Content.Length);
+            return aiResult;
+        }
+
+        /// <summary>
         /// 단계 섹션 하나를 생성한다.
         ///
         /// 문서를 통째로 만드는 GenerateConsolidatedBatchPlanAsync를 플래그로

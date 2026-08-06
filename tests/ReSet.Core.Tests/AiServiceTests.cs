@@ -974,6 +974,31 @@ namespace ReSet.Core.Tests
 
             Assert.True(feedback > marker, "피드백은 지시문 뒤에 붙어야 한다");
         }
+
+        [Fact]
+        public async Task GenerateBatchPlanSkeletonAsync_RequestsPlaceholdersInsteadOfStepBodies()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchPlanSkeletonAsync(
+                steps, "## 목차 산문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.SystemPrompt);
+            Assert.NotNull(result.UserPrompt);
+            var systemPrompt = result.SystemPrompt!;
+            var userPrompt = result.UserPrompt!;
+
+            Assert.Contains("<!-- STEP:S01 -->", systemPrompt);
+            Assert.Contains("<!-- STEP:S02 -->", systemPrompt);
+            Assert.Contains("단계별 이행 상세 및 의사코드", systemPrompt);
+            // 문서 전체 규칙이 함께 실려야 골격의 공통 규약이 그 규칙을 따른다.
+            Assert.Contains("[Required Content & Rules]", systemPrompt);
+            Assert.Contains("## 목차 산문", userPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler
