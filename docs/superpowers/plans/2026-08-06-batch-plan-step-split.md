@@ -1612,7 +1612,7 @@ git commit -m "feat: let the critic name the defective steps as structured outpu
 
 ---
 
-## Task 8: 오케스트레이터에 분할 생성 배선과 폴백
+## Task 8: 오케스트레이터 분할 생성 배선 · 폴백 · 단계 하한 재시도
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs` (`RunConsolidatedPipelineAsync`, 1648행부터. 지역 변수 선언부 ~1683행, 생성 블록 1703~1724행)
@@ -1623,7 +1623,7 @@ git commit -m "feat: let the critic name the defective steps as structured outpu
 - Produces: 오케스트레이터 private 멤버
   - `private sealed record SplitGeneration(string Markdown, AiResult Generation, string Skeleton, Dictionary<string, string> Sections, List<string> FloorViolations)`
   - `private async Task<SplitGeneration?> GenerateBySplitAsync(...)`
-  - `private async Task<string> GenerateStepSectionWithFloorRetryAsync(...)`
+  - `private async Task<string> GenerateStepSectionWithFloorRetryAsync(...)` — 하한 검사와 단계당 1회 재시도를 포함한 **완성형**. `floorViolations`에 `"{Code} (하한 미달)"` / `"{Code} (생성 실패)"`가 쌓인다
 
 - [ ] **Step 1: 실패 테스트 작성**
 
@@ -1743,9 +1743,101 @@ SELECT 1;
                 Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepExactlyOnce()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01은 코드 블록이 없어 하한 미달, S02는 정상.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            // S01은 2회(최초 + 재시도 1회), S02는 1회. 3회 이상이면 재시도 상한이 깨진 것이다.
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_SendsFloorFeedbackOnRetry()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Is<string?>(f => f != null && f.Contains("의사코드 블록이 없습니다")),
+                Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepGenerationThrows_InsertsWarningAndKeepsGoing()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01") throw new InvalidOperationException("쿼터 초과");
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Contains("이 단계는 생성에 실패했습니다", result.Markdown);
+            Assert.Contains("### S02 단계", result.Markdown);
+        }
 ```
 
-**`RunBatchPipeline` 도우미**: 이 파일에는 이미 배치 파이프라인을 세우는 패턴이 1730~1960행에 반복되어 있다. 그 패턴(오케스트레이터 생성 + `RunConsolidatedPipelineAsync` 호출 + 임시 출력 디렉터리)을 그대로 따라 private 도우미로 뽑고, 위 테스트 3건과 Task 9·10의 테스트가 공유한다. 반환은 `ConsolidatedPipelineResult`이며 테스트에서 `result.Markdown`으로 문서를 읽는다. 기존 테스트는 건드리지 않는다.
+**`RunBatchPipeline` 도우미**: 이 파일에는 이미 배치 파이프라인을 세우는 패턴이 1730~1960행에 반복되어 있다. 그 패턴(오케스트레이터 생성 + `RunConsolidatedPipelineAsync` 호출 + 임시 출력 디렉터리)을 그대로 따라 private 도우미로 뽑고, 위 테스트 6건과 Task 9·10의 테스트가 공유한다. 반환은 `ConsolidatedPipelineResult`이며 테스트에서 `result.Markdown`으로 문서를 읽는다. 기존 테스트는 건드리지 않는다.
 
 - [ ] **Step 2: 테스트가 실패하는지 확인**
 
@@ -1941,158 +2033,7 @@ Expected: FAIL — 분할 경로가 없어 `GenerateBatchStepSectionAsync`가 0�
 
 파일 상단 `using`에 `using System.Linq;` 과 `using System.Collections.Generic;` 이 없으면 추가한다.
 
-**(d)** `GenerateStepSectionWithFloorRetryAsync`는 Task 9에서 구현한다. 이 태스크에서는 하한 검사 없이 1회 호출만 하는 최소 구현을 넣는다.
-
-```csharp
-        private async Task<string> GenerateStepSectionWithFloorRetryAsync(
-            BatchStepPlan step,
-            IReadOnlyList<BatchStepPlan> steps,
-            string conventions,
-            System.Collections.Generic.List<(string FileName, string Content)> specs,
-            string targetLanguage,
-            string jobName,
-            List<string> floorViolations,
-            CancellationToken cancellationToken)
-        {
-            var result = await _consolidatorService.GenerateBatchStepSectionAsync(
-                step, steps, conventions, specs, targetLanguage, jobName,
-                _consolidatorEffort, null, cancellationToken);
-
-            return result?.Content ?? string.Empty;
-        }
-```
-
-- [ ] **Step 4: 테스트 통과 확인**
-
-Run: `dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~VerificationPipelineOrchestratorTests"`
-Expected: PASS (기존 전부 + 신규 3건)
-
-- [ ] **Step 5: 전체 회귀 확인 후 커밋**
-
-```bash
-dotnet test
-git add src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs
-git commit -m "feat: build the consolidated plan from a skeleton plus per-step calls"
-```
-
----
-
-## Task 9: 단계 하한 재시도와 실패 마커
-
-**Files:**
-- Modify: `src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs` (`GenerateStepSectionWithFloorRetryAsync`)
-- Test: `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`
-
-**Interfaces:**
-- Consumes: `MechanicalValidator.ValidateBatchStep` (Task 2), `StepValidationResult.SuggestedPromptFix` (Task 2), `GenerateBatchStepSectionAsync`의 `floorFeedback` 인자 (Task 5)
-- Produces: `floorViolations` 목록에 `"{Code} (하한 미달)"` 또는 `"{Code} (생성 실패)"` 항목이 쌓인다
-
-- [ ] **Step 1: 실패 테스트 작성**
-
-`tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`에 추가:
-
-```csharp
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepExactlyOnce()
-        {
-            var aiService = Substitute.For<IAiService>();
-            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Brainstorm" });
-            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
-            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = SkeletonMarkdown });
-
-            // S01은 코드 블록이 없어 하한 미달, S02는 정상.
-            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var step = call.Arg<BatchStepPlan>();
-                    return step.Code == "S01"
-                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
-                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
-                });
-            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
-
-            await RunBatchPipeline(aiService);
-
-            // S01은 2회(최초 + 재시도 1회), S02는 1회. 3회 이상이면 재시도 상한이 깨진 것이다.
-            await aiService.Received(2).GenerateBatchStepSectionAsync(
-                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
-                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
-            await aiService.Received(1).GenerateBatchStepSectionAsync(
-                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
-                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
-        }
-
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_SendsFloorFeedbackOnRetry()
-        {
-            var aiService = Substitute.For<IAiService>();
-            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Brainstorm" });
-            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
-            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = SkeletonMarkdown });
-            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var step = call.Arg<BatchStepPlan>();
-                    return step.Code == "S01"
-                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
-                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
-                });
-            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
-
-            await RunBatchPipeline(aiService);
-
-            await aiService.Received(1).GenerateBatchStepSectionAsync(
-                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
-                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Is<string?>(f => f != null && f.Contains("의사코드 블록이 없습니다")),
-                Arg.Any<CancellationToken>());
-        }
-
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenStepGenerationThrows_InsertsWarningAndKeepsGoing()
-        {
-            var aiService = Substitute.For<IAiService>();
-            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Brainstorm" });
-            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
-            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = SkeletonMarkdown });
-            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var step = call.Arg<BatchStepPlan>();
-                    if (step.Code == "S01") throw new InvalidOperationException("쿼터 초과");
-                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
-                });
-            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
-
-            var result = await RunBatchPipeline(aiService);
-
-            Assert.Contains("이 단계는 생성에 실패했습니다", result.Markdown);
-            Assert.Contains("### S02 단계", result.Markdown);
-        }
-```
-
-- [ ] **Step 2: 테스트가 실패하는지 확인**
-
-Run: `dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~WhenStep"`
-Expected: FAIL — S01이 1회만 호출됨 / 경고 마커 없음
-
-- [ ] **Step 3: 구현**
-
-Task 8에서 넣은 최소 구현 `GenerateStepSectionWithFloorRetryAsync`를 아래로 교체:
+**(d)** `GenerateStepSectionWithFloorRetryAsync`를 추가한다.
 
 ```csharp
         /// <summary>
@@ -2168,19 +2109,20 @@ Task 8에서 넣은 최소 구현 `GenerateStepSectionWithFloorRetryAsync`를 �
 - [ ] **Step 4: 테스트 통과 확인**
 
 Run: `dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~VerificationPipelineOrchestratorTests"`
-Expected: PASS
+Expected: PASS (기존 전부 + 신규 6건)
 
-- [ ] **Step 5: 취소 정책 확인 후 커밋**
+- [ ] **Step 5: 취소 정책·전체 회귀 확인 후 커밋**
 
 ```bash
 dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~CancellationPolicyTests"
+dotnet test
 git add src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs
-git commit -m "feat: retry a step section once when it misses the floor"
+git commit -m "feat: build the consolidated plan from a skeleton plus per-step calls"
 ```
 
 ---
 
-## Task 10: L2 지목 재생성 배선
+## Task 9: L2 지목 재생성 배선
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs` (L2 결함 + 재시도 가능 분기, 현재 1838~1871행)
@@ -2323,7 +2265,7 @@ git commit -m "feat: repair only the steps the critic named"
 
 ---
 
-## Task 11: 하한 미달 단계를 배너에 표기
+## Task 10: 하한 미달 단계를 배너에 표기
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/VerificationBanner.cs`
@@ -2331,7 +2273,7 @@ git commit -m "feat: repair only the steps the critic named"
 - Test: `tests/ReSet.Core.Tests/VerificationBannerTests.cs`, `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`
 
 **Interfaces:**
-- Consumes: `stepFloorViolations` 목록 (Task 8·9)
+- Consumes: `stepFloorViolations` 목록 (Task 8)
 - Produces: `VerificationBanner.StepFloorViolations(IReadOnlyList<string> steps) → string`
 
 - [ ] **Step 1: 실패 테스트 작성**
@@ -2450,7 +2392,7 @@ git commit -m "feat: surface steps that stayed below the floor in the banner"
 
 ---
 
-## Task 12: 문서 동기화
+## Task 11: 문서 동기화
 
 **Files:**
 - Modify: `docs/architecture.md` (§3.1 배치 Mermaid, §4.4.5)
@@ -2458,7 +2400,7 @@ git commit -m "feat: surface steps that stayed below the floor in the banner"
 - Modify: `README.md` (Multi-Step Agentic Workflow 설명)
 
 **Interfaces:**
-- Consumes: Task 1~11의 최종 동작
+- Consumes: Task 1~10의 최종 동작
 - Produces: 없음
 
 - [ ] **Step 1: `docs/architecture.md` §3.1 배치 Mermaid 갱신**
@@ -2541,19 +2483,19 @@ git commit -m "docs: record step-split generation and the per-step floor"
 | §3 3c 조립 | Task 3, Task 8 |
 | §3 진행률 `3/3 (S05 · 5/13)` | Task 8 |
 | §4 하한 검사 4항목 + 대조 규칙 2건 | Task 2 |
-| §5 실패 경로 9종 | Task 8 (폴백 3종), Task 9 (단계 실패·미달), Task 10 (지목/통짜), 나머지는 기존 코드 그대로 |
-| §6 기존 계약 정합 (재수립 시 캐시 무효화 포함) | Task 10 |
-| §8 설정 키 없음, 하드코딩 | Task 1 (`MaxSteps`), Task 9 (`maxTries`) |
-| 테스트 목록 | Task 1~11 각 Step 1 |
-| 문서 동기화 | Task 12 |
+| §5 실패 경로 9종 | Task 8 (폴백 3종 + 단계 실패·미달), Task 9 (지목/통짜), 나머지는 기존 코드 그대로 |
+| §6 기존 계약 정합 (재수립 시 캐시 무효화 포함) | Task 9 |
+| §8 설정 키 없음, 하드코딩 | Task 1 (`MaxSteps`), Task 8 (`maxTries`) |
+| 테스트 목록 | Task 1~10 각 Step 1 |
+| 문서 동기화 | Task 11 |
 
 **2. Placeholder scan** — "TBD"·"TODO"·"Similar to Task N" 없음. Task 5 Step 3-a의 `... (잘라낸 원문 그대로) ...`는 자리표시자가 아니라 **의도적 지시**다. 70줄 규칙 블록을 이 문서에 다시 옮겨 적으면 원문과 갈라질 위험이 실제 이득보다 크므로, 정확한 시작·끝 앵커(1904행 `[Required Content & Rules]` ~ 1976행 마지막 펜스)와 검증 방법(기존 `GenerateConsolidatedBatchPlanAsync_Prompt_*` 테스트 통과)을 대신 명시했다.
 
 **3. Type consistency** — 확인한 항목:
 - `BatchStepPlan` 생성자 인자 순서가 Task 1 정의, Task 2 테스트, Task 5 테스트에서 모두 `(Code, Name, LegacyProcedures, TargetTables, ErrorCodes, Chunkable)`로 일치.
 - `GenerateBatchPlanSkeletonAsync`의 인자 순서를 `(steps, planStructure, specs, ...)`로 확정하고 Task 6 Step 3에서 테스트를 그 순서에 맞추도록 명시.
-- `GenerateBatchStepSectionAsync`의 인자 개수(9개)가 Task 5 정의와 Task 8~11의 모든 NSubstitute `Arg.Any<>` 나열에서 일치.
-- `StepValidationResult`가 Task 2에서 정의되고 Task 9에서만 소비됨.
+- `GenerateBatchStepSectionAsync`의 인자 개수(9개)가 Task 5 정의와 Task 8~10의 모든 NSubstitute `Arg.Any<>` 나열에서 일치.
+- `StepValidationResult`가 Task 2에서 정의되고 Task 8에서만 소비됨.
 - `SplitGeneration` 레코드 필드가 Task 8 정의와 사용처에서 일치.
 
-**발견해 고친 것**: Task 8 초안은 `GenerateStepSectionWithFloorRetryAsync`를 Task 9에서 처음 정의하면서 Task 8에서 이미 호출하고 있었다. Task 8에 하한 검사 없는 최소 구현을 넣고 Task 9가 교체하도록 바꿔, 각 태스크가 독립적으로 빌드·테스트되도록 했다.
+**발견해 고친 것**: 초안은 분할 배선(Task 8)과 하한 재시도(옛 Task 9)를 나누고, Task 8에는 `floorViolations`와 `_validator`를 쓰지 않는 최소 구현을 넣었다. 그 최소 구현은 미사용 매개변수이자 이름/동작 불일치라 리뷰 루브릭과 정면으로 충돌한다. 사전 스캔에서 사용자에게 확인해 두 태스크를 하나로 합쳤고, 이제 `GenerateStepSectionWithFloorRetryAsync`는 처음부터 완성형으로 들어간다. 태스크는 12개에서 11개가 되었다.
