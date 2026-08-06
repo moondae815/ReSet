@@ -277,6 +277,12 @@ namespace ReSet.Core.Tests
             Assert.Contains("\"Steps\"", result.SystemPrompt);
             Assert.Contains("TargetTables", result.SystemPrompt);
             Assert.Contains("ErrorCodes", result.SystemPrompt);
+
+            // 부분 문자열 일치만으로는 이스케이프 오류(예: `""""`가 `""`를 대신하는 경우)를
+            // 잡지 못한다. 실제 파서에 태워 유효한 JSON과 올바른 키를 검증한다.
+            var steps = BatchStepPlanParser.TryParse(result.SystemPrompt);
+            Assert.NotNull(steps);
+            Assert.Contains(steps!, s => s.Code == "S01" && !string.IsNullOrWhiteSpace(s.Name));
         }
 
         // 재수립 모드에서도 유지돼야 한다. 여기서 빠지면 재수립 이후 회차가
@@ -298,6 +304,11 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("\"Steps\"", result.SystemPrompt);
             Assert.Contains("[Redraft]", result.SystemPrompt);
+
+            // 재수립 모드도 같은 계약으로 고정한다 — 문자열 존재가 아니라 파서 통과.
+            var steps = BatchStepPlanParser.TryParse(result.SystemPrompt);
+            Assert.NotNull(steps);
+            Assert.Contains(steps!, s => s.Code == "S01" && !string.IsNullOrWhiteSpace(s.Name));
         }
 
         [Fact]
