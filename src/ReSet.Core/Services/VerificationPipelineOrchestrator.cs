@@ -2030,7 +2030,24 @@ namespace ReSet.Core.Services
                 return currentStructure;
             }
 
-            await PreserveSupersededStructureAsync(outputRoot, jobName, currentStructure, redrafted, cancellationToken);
+            try
+            {
+                await PreserveSupersededStructureAsync(outputRoot, jobName, currentStructure, redrafted, cancellationToken);
+            }
+            // 취소는 실패가 아니라 사용자의 지시이므로 전파한다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 여기서 재설계 목차를 채택하면 PlanStructure.md(이전 목차를 가리킴)와
+                // 실제로 본문을 만들 목차가 어긋난다. 기록에 실패한 재설계는 아예
+                // 없었던 것으로 치고 기존 목차를 그대로 쓴다 — superseded 파일이
+                // 먼저 쓰이는 순서이므로 PlanStructure.md는 아직 손대지 않았거나
+                // (그 실패라면 기존 그대로), 그 다음 쓰기가 실패했더라도
+                // PlanStructure.md는 여전히 기존 목차를 가리키므로 일관성이 유지된다.
+                _userInteraction.NotifyError(
+                    $"{jobName} - 목차 재설계 결과 기록 실패 (재설계 폐기, 기존 목차 유지): {ex.Message}");
+                return currentStructure;
+            }
+
             return redrafted;
         }
 

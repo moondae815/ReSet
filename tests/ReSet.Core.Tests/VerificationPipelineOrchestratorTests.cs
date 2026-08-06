@@ -3998,6 +3998,39 @@ namespace ReSet.Core.Tests
                 Arg.Any<string?>(), Arg.Any<CancellationToken>());
         }
 
+        // 재설계 응답이 공백뿐이면 빈 목차로 본문을 만들 수 없다. 기존 목차를 유지하고
+        // superseded 파일도 남기지 않는다 — 아무 교체도 일어나지 않았기 때문이다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_RedraftReturnsBlank_KeepsExistingStructureAndSkipsSupersededFile()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "첫 목차" }, new AiResult { Content = "  " });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "RedraftBlankJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            await aiService.Received().GenerateConsolidatedBatchPlanAsync(
+                "첫 목차", Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "RedraftBlankJob", "raw");
+            Assert.False(File.Exists(Path.Combine(rawDir, "PlanStructure.superseded-1.md")));
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",
