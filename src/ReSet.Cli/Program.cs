@@ -2117,8 +2117,13 @@ namespace ReSet.Cli
         public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) => _interactiveUserInteraction.NotifyL2Defects(selectedOption, attempt, maxAttempts, feedbackComment);
         public void NotifyValidationSuccess(string selectedOption) => _interactiveUserInteraction.NotifyValidationSuccess(selectedOption);
 
-        public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome) =>
-            _interactiveUserInteraction.RequestHumanReviewAsync(selectedOption, specificationMarkdown, outcome);
+        public Task<HumanReviewResult> RequestHumanReviewAsync(
+            string selectedOption,
+            string specificationMarkdown,
+            VerificationOutcome outcome,
+            bool structureRedraftSupported = false) =>
+            _interactiveUserInteraction.RequestHumanReviewAsync(
+                selectedOption, specificationMarkdown, outcome, structureRedraftSupported);
 
         public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
             _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);
