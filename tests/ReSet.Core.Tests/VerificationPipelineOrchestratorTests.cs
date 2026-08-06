@@ -4031,6 +4031,80 @@ namespace ReSet.Core.Tests
             Assert.False(File.Exists(Path.Combine(rawDir, "PlanStructure.superseded-1.md")));
         }
 
+        // 사용자가 구조를 바꾸라고 하면 목차부터 다시 세운다. 목차를 고정한 채
+        // 피드백만 넣으면 "STRICTLY adhering to the Approved Structure"와 충돌한다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3StructuralFeedback_RedraftsBeforeRegenerating()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "1", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "첫 목차" }, new AiResult { Content = "사용자 반영 목차" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
+
+            userInteraction.RequestHumanReviewAsync("L3StructJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Step 3을 둘로 쪼개라", RedraftStructure = true }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "L3StructJob", "OpenAI", _consolidatedOutputRoot);
+
+            // 사용자 피드백이 재수립 입력으로 실린다.
+            await aiService.Received(1).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                "첫 목차", Arg.Is<string?>(f => f != null && f.Contains("Step 3을 둘로 쪼개라")), Arg.Any<CancellationToken>());
+            // 재생성 본문은 새 목차를 받는다.
+            await aiService.Received().GenerateConsolidatedBatchPlanAsync(
+                "사용자 반영 목차", Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        // 오타 수정 같은 피드백에까지 재수립 비용을 물리지 않는다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L3NonStructuralFeedback_KeepsPlanStructure()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "1", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "첫 목차" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
+
+            userInteraction.RequestHumanReviewAsync("L3PlainJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>())
+                .Returns(
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "오타 수정", RedraftStructure = false }),
+                    Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "L3PlainJob", "OpenAI", _consolidatedOutputRoot);
+
+            await aiService.Received(1).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
         private static readonly string[] RequiredSpecHeaderNames =
         {
             "개요",

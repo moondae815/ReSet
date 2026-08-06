@@ -1934,6 +1934,21 @@ namespace ReSet.Core.Services
                     }
 
                     _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - 피드백 반영 재생성 중...");
+
+                    // 사용자가 구조까지 바꾸라고 했다면 목차부터 다시 세운다.
+                    // 목차를 고정한 채로는 3/3의 "STRICTLY adhering to the [Approved
+                    // Document Structure & Plan]" 지시와 사용자 피드백이 충돌하고,
+                    // STRICTLY가 붙은 쪽이 이겨 사용자 요구가 조용히 무시된다.
+                    //
+                    // 이 경로는 StructureRedraftPolicy를 거치지 않는다. 사용자의 명시적
+                    // 지시를 자동화 예산으로 막지 않는다.
+                    if (reviewResult.RedraftStructure)
+                    {
+                        currentPlanStructure = await RedraftPlanStructureAsync(
+                            currentPlanStructure, currentBrainstorming, reviewResult.UserFeedback,
+                            targetLanguage, jobName, outputRoot, cancellationToken);
+                    }
+
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
                     specsCopy.Add(("User_Feedback_Log.txt", $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}\n사용자 의견을 수용하여 설계 내용을 수정 및 보완해 주십시오."));
 
