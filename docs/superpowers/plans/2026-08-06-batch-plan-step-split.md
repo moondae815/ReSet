@@ -1060,6 +1060,7 @@ Task<AiResult> GenerateBatchStepSectionAsync(
 ```
   - 반환 `AiResult.Content`는 **H3 섹션 하나**의 마크다운이다 (H2 없음).
   - `floorFeedback`은 프롬프트 **말미**에 붙는다. 캐시 접두사를 깨지 않기 위해서다.
+  - **시스템 프롬프트에는 `step`에서 파생된 값이 하나도 들어가지 않는다.** 시스템 메시지는 요청의 맨 앞이므로, 단계마다 달라지면 그 뒤 전부 — 규칙 블록 8,000자와 명세서 수백 KB — 가 매 호출 캐시 미스가 된다. 13단계 기준 입력이 약 110k에서 약 1.4M 토큰으로 뛰어, 분할 설계의 비용 근거 자체가 무너진다. 단계 정체는 user 프롬프트 마지막 줄이 이미 나르므로 정보 손실은 없다. 두 단계의 시스템 프롬프트가 바이트 단위로 같은지 단언하는 테스트가 이 불변식을 지킨다.
 
 - [ ] **Step 1: 실패 테스트 작성**
 
@@ -1225,7 +1226,7 @@ Consolidate the provided specifications into a single unified batch job named '{
 
 [Output Contract]
 - Output ONLY the markdown for the single requested step section. Do NOT output any H2 header, any other step, or any conversational text.
-- The section MUST begin with a level-3 heading that contains the step code, e.g. `### {step.Code} {step.Name}`.
+- The section MUST begin with a level-3 heading that contains the step code given at the END of the user message.
 - The section MUST contain at least one fenced SQL or pseudocode block. A bullet list alone is not an implementation instruction.
 - EVERY target table listed for this step MUST appear in the section.
 - EVERY original error code listed for this step MUST appear verbatim in the section.
