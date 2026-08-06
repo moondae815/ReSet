@@ -629,6 +629,8 @@ Expected: 컴파일 실패 — `ValidateBatchStep` 메서드 없음
         }
 ```
 
+**실제 구현은 `RegexOptions.IgnoreCase | RegexOptions.ECMAScript`를 쓴다(`MechanicalValidator.cs`).** .NET 기본 유니코드 `\w`는 한글을 단어 문자로 취급하므로, 테이블명이나 오류코드 바로 뒤에 한글 조사가 붙으면(`dbo.T1이`, `-1을`) `(?!\w)` 경계가 실패해 정상 문서가 하한 미달로 오판된다. `ECMAScript` 옵션은 `\w`를 ASCII(`[a-zA-Z0-9_]`)로 좁혀 한글 조사를 경계로 인식하게 한다.
+
 같은 파일의 `ValidationResult` 클래스 **뒤**(현재 507행 `}` 이후, 네임스페이스 닫기 전)에 추가:
 
 ```csharp

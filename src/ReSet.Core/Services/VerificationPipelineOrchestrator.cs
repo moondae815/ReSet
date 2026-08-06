@@ -1673,6 +1673,13 @@ namespace ReSet.Core.Services
             // 재수립 이전 후보를 채택하는데, 그때 PlanStructure.md에 최신 목차가 남아
             // 있으면 산출된 문서를 한 번도 만든 적 없는 목차를 가리키게 된다.
             string bestAttemptStructure = string.Empty;
+            // 최고점 후보를 실제로 만들어 낸 회차의 stepFloorViolations 스냅샷.
+            // bestAttemptStructure와 같은 이유로, 같은 자리에서만 함께 갱신한다.
+            // 배너는 루프 종료 후 살아있는 stepFloorViolations를 읽는데, 구제로
+            // 채택되는 문서(rescued.Markdown)는 이 스냅샷이 찍힌 바로 그 회차의
+            // 문서다 — 더 나중/이전 회차의 살아있는 위반 기록을 읽으면 과다 보고
+            // (없는 결함을 표시)나 과소 보고(있는 결함을 누락)가 생긴다.
+            var bestAttemptStepFloorViolations = new Dictionary<string, string>();
             // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
             var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
@@ -1685,6 +1692,11 @@ namespace ReSet.Core.Services
             // 회차를 넘어 살아 있어야 한다.
             IReadOnlyList<BatchStepPlan>? currentSteps = null;
             string? lastSkeleton = null;
+            // 골격 호출 자체의 AiResult. lastSkeleton과 한 몸으로 움직여야 한다 —
+            // 지목 재생성은 골격 호출을 건너뛰므로, 이 값이 없으면 그 회차의
+            // finalAiResult가 SystemPrompt/UserPrompt/ThinkingText 없는 빈 스텁이
+            // 되어 raw/prompt-context.md와 docs/Thinking.md가 텅 빈 채 나간다.
+            AiResult? lastSkeletonResult = null;
             Dictionary<string, string>? lastStepSections = null;
             // Code -> "{Code} (하한 미달)" 형식의 표시 문자열. 사전으로 두는 이유는
             // 지목 재생성이 건드리지 않은 단계의 항목을 그대로 보존해야 하기
@@ -1740,7 +1752,7 @@ namespace ReSet.Core.Services
                         {
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
-                                progressScope, lastSkeleton, lastStepSections, stepFloorViolations,
+                                progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
                                 pendingDefectiveSteps, cancellationToken);
 
                             if (split != null)
@@ -1748,12 +1760,19 @@ namespace ReSet.Core.Services
                                 splitMarkdown = split.Markdown;
                                 aiResult = split.Generation;
                                 lastSkeleton = split.Skeleton;
+                                lastSkeletonResult = split.Generation;
                                 lastStepSections = split.Sections;
                                 stepFloorViolations = split.FloorViolations;
                             }
                             else
                             {
                                 _userInteraction.NotifyError($"{jobName} - 골격 생성에 실패하여 단일 호출로 계획서를 생성합니다.");
+                                // 골격 재시도가 실패해 이번 회차는 완전히 다른 구조(단일
+                                // 호출 문서)로 만들어진다. 이전 분할 시도가 남긴 하한 위반
+                                // 기록은 그 문서의 어느 섹션과도 대응하지 않으므로 여기서
+                                // 지운다 — 안 지우면 배너가 이번 문서에 존재하지도 않는
+                                // 단계를 가리킨다.
+                                stepFloorViolations = new Dictionary<string, string>();
                             }
                         }
 
@@ -1794,6 +1813,10 @@ namespace ReSet.Core.Services
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
                     consolidatedPlan = rescued.Markdown;
+                    // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반 스냅샷으로
+                    // 갈아탄다 — 살아있는(다른 회차의) stepFloorViolations를 그대로
+                    // 두면 배너가 채택되지 않은 문서를 서술한다.
+                    stepFloorViolations = bestAttemptStepFloorViolations;
                     break;
                 }
 
@@ -1827,6 +1850,9 @@ namespace ReSet.Core.Services
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
                             consolidatedPlan = rescued.Markdown;
+                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
+                            // 스냅샷으로 갈아탄다.
+                            stepFloorViolations = bestAttemptStepFloorViolations;
                             break;
                         }
 
@@ -1867,9 +1893,10 @@ namespace ReSet.Core.Services
                     improvedThisAttempt = bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
                     if (improvedThisAttempt)
                     {
-                        // 후보가 교체되는 바로 그 자리에서 목차도 함께 붙잡는다.
-                        // 다른 곳에서 갱신하면 둘이 어긋나는 순간이 생긴다.
+                        // 후보가 교체되는 바로 그 자리에서 목차도, 하한 위반 스냅샷도
+                        // 함께 붙잡는다. 다른 곳에서 갱신하면 셋이 어긋나는 순간이 생긴다.
                         bestAttemptStructure = currentPlanStructure;
+                        bestAttemptStepFloorViolations = new Dictionary<string, string>(stepFloorViolations);
                     }
                 }
 
@@ -1909,7 +1936,7 @@ namespace ReSet.Core.Services
                                 // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
                                 // 재사용하면 새 목차가 없는 단계를 계속 실어 나른다.
                                 ClearSplitGenerationCacheAfterRedraft(
-                                    out lastSkeleton, out lastStepSections, out currentSteps,
+                                    out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
                                     out stepFloorViolations, pendingDefectiveSteps);
                             }
                         }
@@ -1946,6 +1973,9 @@ namespace ReSet.Core.Services
                         {
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
                                 outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
+                            // 스냅샷으로 갈아탄다.
+                            stepFloorViolations = bestAttemptStepFloorViolations;
                         }
 
                         finalAiResult = rescued?.Generation ?? finalAiResult;
@@ -1974,6 +2004,9 @@ namespace ReSet.Core.Services
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
                         consolidatedPlan = rescued.Markdown;
+                        // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
+                        // 스냅샷으로 갈아탄다.
+                        stepFloorViolations = bestAttemptStepFloorViolations;
                         break;
                     }
 
@@ -2228,12 +2261,14 @@ namespace ReSet.Core.Services
         /// </summary>
         private static void ClearSplitGenerationCacheAfterRedraft(
             out string? lastSkeleton,
+            out AiResult? lastSkeletonResult,
             out Dictionary<string, string>? lastStepSections,
             out IReadOnlyList<BatchStepPlan>? currentSteps,
             out Dictionary<string, string> stepFloorViolations,
             List<string> pendingDefectiveSteps)
         {
             lastSkeleton = null;
+            lastSkeletonResult = null;
             lastStepSections = null;
             currentSteps = null;
             stepFloorViolations = new Dictionary<string, string>();
@@ -2251,6 +2286,13 @@ namespace ReSet.Core.Services
         /// 단계만 다시 뽑는다. 골격 호출은 하지 않는다.
         ///
         /// 골격을 얻지 못하면 null을 돌려주고 호출부가 단일 호출로 폴백한다.
+        ///
+        /// 지목 재생성(targeted)은 골격 호출을 건너뛰므로 그 자신의 AiResult가
+        /// 없다 — previousSkeletonResult로 넘겨받은, 골격을 실제로 생성했던 회차의
+        /// AiResult를 그대로 재사용한다. 빈 스텁을 새로 만들지 않는 이유: AGENTS.md가
+        /// 문서화한 계약대로 raw/prompt-context.md와 docs/Thinking.md는 채택된
+        /// 시도가 실제로 무엇을 프롬프트/사고했는지를 서술해야 하고, SystemPrompt·
+        /// UserPrompt·ThinkingText가 전부 null인 스텁은 그 계약을 어긴다.
         /// </summary>
         private async Task<SplitGeneration?> GenerateBySplitAsync(
             string planStructure,
@@ -2260,12 +2302,14 @@ namespace ReSet.Core.Services
             string jobName,
             IMultiProgressScope progressScope,
             string? previousSkeleton,
+            AiResult? previousSkeletonResult,
             Dictionary<string, string>? previousSections,
             Dictionary<string, string> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             CancellationToken cancellationToken)
         {
-            var targeted = previousSkeleton != null && previousSections != null && defectiveSteps.Count > 0;
+            var targeted = previousSkeleton != null && previousSkeletonResult != null &&
+                previousSections != null && defectiveSteps.Count > 0;
 
             string skeleton;
             AiResult generation;
@@ -2273,7 +2317,7 @@ namespace ReSet.Core.Services
             if (targeted)
             {
                 skeleton = previousSkeleton!;
-                generation = new AiResult { Content = skeleton };
+                generation = previousSkeletonResult!;
                 // 골격 호출을 건너뛰므로 WrapWithProgress가 이 태스크를 완료 처리할
                 // 기회가 없다. 여기서 직접 완료하지 않으면 화면에 미완료 행이 남는다.
                 progressScope.CompleteTask("phase3");

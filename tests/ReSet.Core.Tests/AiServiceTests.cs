@@ -1000,6 +1000,50 @@ namespace ReSet.Core.Tests
             Assert.Contains("## 목차 산문", userPrompt);
         }
 
+        /// <summary>
+        /// 코드 리뷰 지적 사항(Finding 8) 픽스: 골격 호출(GenerateBatchPlanSkeletonAsync)은
+        /// 공통 규약을 아직 갖고 있지 않다 — 그 골격 호출 자신이 문서에 그 규약을
+        /// 처음 써넣는 쪽이다. 그런데 AppendSharedStepContext는 예전에 sharedConventions가
+        /// 빈 문자열이어도 "[Shared Conventions Already Written In The Document]" 헤더를
+        /// 무조건 찍었다 — 규약을 써야 할 호출에게 "이미 문서에 있다"는 거짓 전제를
+        /// 준 것이다. 헤더는 내용이 있을 때만 나와야 한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBatchPlanSkeletonAsync_OmitsSharedConventionsHeaderWhenConventionsAreEmpty()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchPlanSkeletonAsync(
+                steps, "## 목차 산문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            Assert.DoesNotContain("[Shared Conventions Already Written In The Document]", result.UserPrompt!);
+        }
+
+        // 단계 섹션 호출(GenerateBatchStepSectionAsync)은 골격이 이미 써 둔 공통 규약을
+        // 넘겨받으므로, 그 헤더는 여전히 나와야 한다 — Finding 8 픽스가 헤더를
+        // 완전히 없앤 게 아니라 "내용이 있을 때만" 조건부로 만들었는지 확인한다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_KeepsSharedConventionsHeaderWhenConventionsArePresent()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            Assert.Contains("[Shared Conventions Already Written In The Document]", result.UserPrompt!);
+            Assert.Contains("공통 규약 본문", result.UserPrompt!);
+        }
+
         // 산문 피드백에서 단계 코드를 키워드 매칭으로 뽑지 않는다.
         // RegenerationScopeSelector의 클래스 주석이 그 방식의 실패를 이미 기록하고 있다 —
         // LLM이 쓴 산문에 키워드를 걸면 프롬프트 문구가 바뀔 때 아무 신호 없이 오작동한다.

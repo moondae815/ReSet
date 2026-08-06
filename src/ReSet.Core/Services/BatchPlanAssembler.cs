@@ -55,8 +55,9 @@ namespace ReSet.Core.Services
             var body = string.Join("\n\n", sections);
             var (headerIndex, endIndex) = LocateStepDetailBlock(lines);
 
-            // 골격이 H2를 빠뜨렸더라도 단계 본문을 잃지 않는다. 문서 레벨 L1이
-            // 그 누락을 별도로 잡으므로 여기서 조용히 버리면 안 된다.
+            // 골격이 H2를 빠뜨렸더라도 단계 본문을 잃지 않는다. 아래에서 헤더를
+            // 직접 합성해 붙이므로 문서 레벨 L1은 이 누락을 볼 수 없다 — 그래서
+            // 여기서 조용히 버리면 그 결함을 잡아낼 곳이 아무 데도 없다.
             if (headerIndex < 0)
             {
                 return string.Join("\n", lines).TrimEnd() + "\n\n" + StepDetailHeader + "\n\n" + body + "\n";
@@ -98,6 +99,13 @@ namespace ReSet.Core.Services
         /// 펜스(```)로 둘러싸인 줄은 건너뛰고 조건을 만족하는 첫 줄의 인덱스를
         /// 찾는다. 공통 규약 소절에 실린 SQL 코드 블록 안에 "## "로 시작하는
         /// 줄이 있어도 헤더나 블록 경계로 오인하지 않기 위함이다.
+        ///
+        /// 펜스가 끝까지 닫히지 않으면(모델이 ``` 하나를 빠뜨린 경우) inFence가
+        /// 참인 채로 끝까지 스캔이 끝난다 — 그러면 이후 모든 줄이 "펜스 안"으로
+        /// 오인되어 다음 H2를 영영 못 찾고, 공통 규약 소절이 문서 나머지 전부를
+        /// (검증 SQL H2까지 포함해) 삼켜 버린다. 이 경우 펜스 상태를 신뢰할 수
+        /// 없으므로 펜스를 무시하고 다시 스캔한다 — 오탐(코드 안의 "## ")보다
+        /// 미탐(전체 삼킴)이 훨씬 나쁘다.
         /// </summary>
         private static int FindIndexOutsideFence(List<string> lines, int startIndex, Func<string, bool> predicate)
         {
@@ -113,6 +121,17 @@ namespace ReSet.Core.Services
                 if (!inFence && predicate(lines[i]))
                 {
                     return i;
+                }
+            }
+
+            if (inFence)
+            {
+                for (var i = startIndex; i < lines.Count; i++)
+                {
+                    if (predicate(lines[i]))
+                    {
+                        return i;
+                    }
                 }
             }
 

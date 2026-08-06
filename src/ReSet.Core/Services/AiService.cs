@@ -2237,9 +2237,15 @@ Consolidate the provided specifications into a single unified batch job named '{
             }
             builder.AppendLine();
 
-            builder.AppendLine("[Shared Conventions Already Written In The Document]");
-            builder.AppendLine(sharedConventions);
-            builder.AppendLine();
+            // 골격 호출은 sharedConventions를 아직 갖고 있지 않다(자신이 그것을
+            // 써야 하는 쪽이다). 그 호출에도 이 헤더를 무조건 찍으면 "규약이 이미
+            // 문서에 있다"고 거짓 전제를 주게 되므로, 내용이 있을 때만 낸다.
+            if (!string.IsNullOrWhiteSpace(sharedConventions))
+            {
+                builder.AppendLine("[Shared Conventions Already Written In The Document]");
+                builder.AppendLine(sharedConventions);
+                builder.AppendLine();
+            }
         }
 
         public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default)

@@ -270,6 +270,57 @@ SELECT 1;
             Assert.DoesNotContain("검증 SQL 본문.", conventions);
         }
 
+        // 공통 규약 소절 안, SQL 코드 블록의 여는 펜스(```)만 있고 닫는 펜스가
+        // 없는 골격. 펜스 상태를 그대로 신뢰하는 스캐너는 이후 모든 줄(검증 SQL
+        // H2 포함)을 "펜스 안"으로 오인해 다음 H2를 영영 못 찾는다.
+        private const string SkeletonWithUnterminatedFence = @"# 계획서
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+```sql
+SELECT 1;
+-- 닫는 펜스가 없다
+
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
+        [Fact]
+        public void ExtractSharedConventions_WithUnterminatedFence_StopsAtNextRealHeader()
+        {
+            var conventions = BatchPlanAssembler.ExtractSharedConventions(SkeletonWithUnterminatedFence);
+
+            Assert.Contains("공통 규약 본문.", conventions);
+            // 펜스가 닫히지 않아도 검증 SQL H2 이후 내용을 공통 규약으로 오인해
+            // 끌어오면 안 된다 — 오인하면 그 내용이 N개 단계 프롬프트 전부에
+            // 잘못 복사된다.
+            Assert.DoesNotContain("검증 SQL 본문.", conventions);
+            Assert.DoesNotContain("## 통합 데이터 정합성 검증 SQL 세트", conventions);
+        }
+
+        [Fact]
+        public void Assemble_WithUnterminatedFence_InsertsBeforeValidationHeaderNotAtDocumentEnd()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithUnterminatedFence,
+                new[] { "### S01 첫 단계\n\n본문1" });
+
+            var s01 = result.IndexOf("### S01 첫 단계");
+            var validation = result.IndexOf("## 통합 데이터 정합성 검증 SQL 세트");
+
+            Assert.True(s01 >= 0);
+            Assert.True(validation >= 0);
+            Assert.True(s01 < validation,
+                "펜스가 닫히지 않아도 단계 본문은 검증 SQL 헤더보다 앞, 올바른 블록 안에 들어가야 한다 — " +
+                "문서 맨 끝(검증 SQL 아래)에 붙으면 안 된다");
+        }
+
         [Fact]
         public void Assemble_WithNullSkeleton_AppendsHeaderAndSections()
         {
