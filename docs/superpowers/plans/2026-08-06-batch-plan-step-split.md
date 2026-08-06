@@ -1172,8 +1172,7 @@ Expected: 컴파일 실패 — `IAiService`에 `GenerateBatchStepSectionAsync` �
         /// SQL 예시의 중괄호를 이스케이프할 필요가 없다.
         /// </summary>
         private const string ConsolidatedPlanRules = @"[Required Content & Rules]
-... (잘라낸 원문 그대로) ...
-```";
+... (잘라낸 원문을 한 글자도 바꾸지 않고 그대로. 마지막 few-shot 예시의 닫는 펜스까지 포함하고, 그 뒤에 문자열 종결자) ...";
 ```
 
 그리고 원래 자리에는 이렇게 남긴다.
