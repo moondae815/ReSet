@@ -939,13 +939,19 @@ namespace ReSet.Core.Tests
                 steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
 
             const string marker = "Now write the section for step";
+            Assert.NotNull(first.UserPrompt);
+            Assert.NotNull(second.UserPrompt);
             var firstUserPrompt = first.UserPrompt!;
             var secondUserPrompt = second.UserPrompt!;
             var firstPrefix = firstUserPrompt.Substring(0, firstUserPrompt.IndexOf(marker, StringComparison.Ordinal));
             var secondPrefix = secondUserPrompt.Substring(0, secondUserPrompt.IndexOf(marker, StringComparison.Ordinal));
 
             Assert.Equal(firstPrefix, secondPrefix);
-            Assert.Equal(first.SystemPrompt!.Replace("S01", "S02").Replace("수수료율 스냅샷", "정산 원장 생성"), second.SystemPrompt);
+
+            // 시스템 프롬프트는 step 인자에서 파생되는 내용이 전혀 없어야 한다.
+            // .Replace(...)로 맞춰보는 비교는 구현의 보간 지점을 그대로 베낀 것이라
+            // 우연한 부분 문자열 충돌에도 통과할 수 있다 — 완전 동일성이 더 강한 회귀 가드다.
+            Assert.Equal(first.SystemPrompt, second.SystemPrompt);
         }
 
         // 하한 미달 재시도 피드백은 접두사 뒤(말미)에 붙어야 캐시가 유지된다.
@@ -962,6 +968,7 @@ namespace ReSet.Core.Tests
                 steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job",
                 effort: null, floorFeedback: "코드 블록이 없습니다");
 
+            Assert.NotNull(result.UserPrompt);
             var marker = result.UserPrompt!.IndexOf("Now write the section for step", StringComparison.Ordinal);
             var feedback = result.UserPrompt!.IndexOf("코드 블록이 없습니다", StringComparison.Ordinal);
 

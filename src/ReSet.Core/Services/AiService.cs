@@ -2084,7 +2084,7 @@ Consolidate the provided specifications into a single unified batch job named '{
 
 [Output Contract]
 - Output ONLY the markdown for the single requested step section. Do NOT output any H2 header, any other step, or any conversational text.
-- The section MUST begin with a level-3 heading that contains the step code, e.g. `### {step.Code} {step.Name}`.
+- The section MUST begin with a level-3 heading that contains the step code given at the END of the user message.
 - The section MUST contain at least one fenced SQL or pseudocode block. A bullet list alone is not an implementation instruction.
 - EVERY target table listed for this step MUST appear in the section.
 - EVERY original error code listed for this step MUST appear verbatim in the section.
