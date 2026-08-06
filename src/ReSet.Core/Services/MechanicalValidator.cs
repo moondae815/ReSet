@@ -142,6 +142,126 @@ namespace ReSet.Core.Services
             return result;
         }
 
+        /// <summary>
+        /// 단계 섹션 하나가 구현 지시서로서의 최소 요건을 갖췄는지 검사한다.
+        ///
+        /// 이 검사가 필요한 이유: 실측한 산출물에서 L2가 88점을 준 문서의 S10이
+        /// 12줄이고 코드 블록이 하나도 없었다. 문서 레벨 L1은 H2 4개 존재만 보고,
+        /// L2는 12개 프로시저의 오류코드를 전수 대조하지 못한다. 문자열 대조는
+        /// 기계의 일인데 지금까지 기계가 그 일을 하지 않았다.
+        ///
+        /// AI 호출이 없으므로 비용이 0이다. 단계마다 돌려도 무료다.
+        /// </summary>
+        public StepValidationResult ValidateBatchStep(string? stepMarkdown, BatchStepPlan step)
+        {
+            var result = new StepValidationResult();
+
+            if (string.IsNullOrWhiteSpace(stepMarkdown))
+            {
+                result.Errors.Add($"{step.Code} 섹션 내용이 비어있습니다.");
+                result.IsValid = false;
+                return result;
+            }
+
+            var firstLine = FirstNonEmptyLine(stepMarkdown);
+            if (!firstLine.StartsWith("### ", StringComparison.Ordinal))
+            {
+                result.Errors.Add($"{step.Code} 섹션이 '### ' 헤딩으로 시작하지 않습니다.");
+            }
+            else if (firstLine.IndexOf(step.Code, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                result.Errors.Add($"{step.Code} 섹션의 헤딩에 단계 코드가 없습니다: \"{firstLine}\"");
+            }
+
+            // 펜스는 열고 닫으므로 2개 미만이면 블록이 하나도 없다는 뜻이다.
+            if (Regex.Matches(stepMarkdown, @"(?m)^\s*```").Count < 2)
+            {
+                result.Errors.Add($"{step.Code} 섹션에 SQL 또는 의사코드 블록이 없습니다.");
+            }
+
+            foreach (var table in step.TargetTables)
+            {
+                var bareName = BareObjectName(table);
+                if (bareName.Length == 0)
+                {
+                    continue;
+                }
+
+                if (!ContainsToken(stepMarkdown, bareName))
+                {
+                    result.Errors.Add($"{step.Code} 섹션에 대상 테이블 '{table}'이 등장하지 않습니다.");
+                }
+            }
+
+            foreach (var errorCode in step.ErrorCodes)
+            {
+                if (string.IsNullOrWhiteSpace(errorCode))
+                {
+                    continue;
+                }
+
+                if (!ContainsToken(stepMarkdown, errorCode.Trim()))
+                {
+                    result.Errors.Add($"{step.Code} 섹션에 원본 오류코드 '{errorCode}'가 등장하지 않습니다.");
+                }
+            }
+
+            result.IsValid = result.Errors.Count == 0;
+            return result;
+        }
+
+        private static string FirstNonEmptyLine(string markdown)
+        {
+            foreach (var line in markdown.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length > 0)
+                {
+                    return trimmed;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// 스키마·DB 접두사를 뗀 이름. `SETTLE_POQ_DB.dbo.TSettleMst` → `TSettleMst`.
+        /// 실제 문서가 같은 테이블을 접두사 있이/없이 섞어 쓰므로 접두사까지
+        /// 대조하면 정상 문서가 실패한다.
+        /// </summary>
+        private static string BareObjectName(string qualifiedName)
+        {
+            var trimmed = (qualifiedName ?? string.Empty).Trim().Trim('[', ']');
+            var lastDot = trimmed.LastIndexOf('.');
+            return (lastDot >= 0 ? trimmed[(lastDot + 1)..] : trimmed).Trim('[', ']').Trim();
+        }
+
+        /// <summary>
+        /// 단어 경계 대조.
+        ///
+        /// 단순 부분 문자열 대조로 하면 `-1`이 `-10`·`-13` 안에서 걸려 오류코드
+        /// 검사가 통째로 무력해진다. 실제로 S08의 오류코드가 -1부터 -17까지
+        /// 11개라 정확히 이 함정에 빠진다.
+        ///
+        /// RegexOptions.ECMAScript를 쓰는 이유: .NET의 기본 `\w`는 유니코드
+        /// 문자 범주를 따라 한글 음절도 단어 문자로 취급한다. 그러면 "TSettleMst만"처럼
+        /// 테이블명이 조사(만, 가, 이 등)에 구분자 없이 바로 붙는 실제 문서에서
+        /// 경계 검사가 항상 실패한다. ECMAScript 옵션은 `\w`를 [a-zA-Z0-9_]로
+        /// 제한해 한글 조사를 경계로 인식하게 한다.
+        /// </summary>
+        private static bool ContainsToken(string haystack, string token)
+        {
+            if (token.Length == 0)
+            {
+                return true;
+            }
+
+            return Regex.IsMatch(
+                haystack,
+                $@"(?<!\w){Regex.Escape(token)}(?!\w)",
+                RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
+        }
+
         private void ValidateMarkdownStructure(string markdown, string[] requiredHeaders, ValidationResult result)
         {
             var doc = Markdown.Parse(markdown);
@@ -611,6 +731,39 @@ namespace ReSet.Core.Services
 
             sb.AppendLine("지적된 모든 결함 사항을 수렴 및 교정한 최종 설계서 문서를 작성해 주십시오.");
             return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// 단계 섹션 하한 검사 결과.
+    ///
+    /// ValidationResult를 재사용하지 않는 이유: 그 타입의 SuggestedPromptFix는
+    /// 문서 전체의 H2 템플릿을 제안하도록 만들어져 있어, 단계 섹션 하나를 고치라는
+    /// 지시에는 엉뚱한 교정 가이드가 붙는다.
+    /// </summary>
+    public class StepValidationResult
+    {
+        public bool IsValid { get; set; }
+        public List<string> Errors { get; set; } = new();
+
+        public string? SuggestedPromptFix
+        {
+            get
+            {
+                if (IsValid)
+                {
+                    return null;
+                }
+
+                var builder = new System.Text.StringBuilder();
+                builder.AppendLine("[L1 Step Floor Check]: This step section does not meet the minimum requirements for an implementation instruction. Rewrite the WHOLE section, resolving every item below.");
+                foreach (var error in Errors)
+                {
+                    builder.AppendLine($"  - {error}");
+                }
+
+                return builder.ToString();
+            }
         }
     }
 }
