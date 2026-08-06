@@ -1833,7 +1833,7 @@ DO NOT write code or detailed markdown plans. ONLY output your analysis: identif
             return aiResult;
         }
 
-        public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, string? effort = null, string? previousStructure = null, string? redraftFeedback = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect. Based on the previous brainstorming, draft a detailed step-by-step structural plan (Table of Contents and execution flow) for the final '{jobName}' {targetLanguage} batch application document.
 You MUST use exactly the following 4 mandatory H2 headers in Korean, and design the detailed sub-headers (H3, H4) beneath them:
@@ -1842,6 +1842,21 @@ You MUST use exactly the following 4 mandatory H2 headers in Korean, and design 
 3. ## 단계별 이행 상세 및 의사코드
 4. ## 통합 데이터 정합성 검증 SQL 세트";
 
+            // 재수립 모드. 이전 구조로 만든 본문이 리뷰를 반복 통과하지 못했다는 뜻이므로
+            // 같은 구조를 다시 내면 재시도 예산만 소진된다. 4개 H2 강제는 유지한다 —
+            // MechanicalValidator가 같은 헤더를 요구하므로 여기서 풀면 L1이 깨진다.
+            var isRedraft = !string.IsNullOrWhiteSpace(previousStructure);
+            if (isRedraft)
+            {
+                systemPrompt += @"
+
+[Redraft]
+The previous structure below repeatedly failed cross-review. Do NOT reproduce it.
+- Diagnose which structural decision caused the reported defects: a missing step, a step placed under the wrong architecture (e.g. chunking a GROUP BY aggregation that cannot be chunked), or an execution order that breaks data consistency.
+- Change that decision. Reordering sub-headers without changing the underlying step design is not an acceptable redraft.
+- Keep the 4 mandatory H2 headers exactly as specified above.";
+            }
+
             var userPrompt = new System.Text.StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
             userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
@@ -1849,6 +1864,21 @@ You MUST use exactly the following 4 mandatory H2 headers in Korean, and design 
             userPrompt.AppendLine("[Brainstorming Analysis Result]");
             userPrompt.AppendLine(brainstormingResult);
             userPrompt.AppendLine();
+
+            if (isRedraft)
+            {
+                userPrompt.AppendLine("[Previous Structure That Failed Review]");
+                userPrompt.AppendLine(previousStructure);
+                userPrompt.AppendLine();
+
+                if (!string.IsNullOrWhiteSpace(redraftFeedback))
+                {
+                    userPrompt.AppendLine("[Accumulated Review Feedback]");
+                    userPrompt.AppendLine(redraftFeedback);
+                    userPrompt.AppendLine();
+                }
+            }
+
             userPrompt.AppendLine("Please draft the detailed structural plan and step-by-step instructions for the final markdown document.");
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
@@ -1856,7 +1886,7 @@ You MUST use exactly the following 4 mandatory H2 headers in Korean, and design 
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags. The final text must be placed outside the think tags.";
             }
 
-            Log.Information("AI 배치 계획 목차 수립 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}", jobName, targetLanguage, effort ?? "Default");
+            Log.Information("AI 배치 계획 목차 수립 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}, Redraft: {IsRedraft}", jobName, targetLanguage, effort ?? "Default", isRedraft);
 
             var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
             if (aiResult == null) aiResult = new AiResult();

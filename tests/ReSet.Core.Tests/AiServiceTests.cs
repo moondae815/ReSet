@@ -218,6 +218,47 @@ namespace ReSet.Core.Tests
             Assert.Contains("[Output Parameters Interface]", result.SystemPrompt);
         }
 
+        // 재수립 모드가 아니면 프롬프트가 지금과 똑같아야 한다.
+        // 1회차 목차 설계는 이번 변경의 영향을 받지 않는다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_WithoutPreviousStructure_HasNoRedraftInstruction()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            Assert.DoesNotContain("[Redraft]", result.SystemPrompt);
+            // 4개 필수 H2 강제는 두 모드 모두에서 유지된다.
+            Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
+        }
+
+        // 재수립 모드에서는 이전 구조를 반복하지 말라는 지시와,
+        // 그 판단 근거인 누적 피드백이 프롬프트에 실려야 한다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_WithPreviousStructure_CarriesRedraftInstructionAndFeedback()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job",
+                effort: null,
+                previousStructure: "## 낡은 목차",
+                redraftFeedback: "청킹 불가 스텝이 청킹으로 배치됨");
+
+            Assert.Contains("[Redraft]", result.SystemPrompt);
+            Assert.Contains("## 낡은 목차", result.UserPrompt);
+            Assert.Contains("청킹 불가 스텝이 청킹으로 배치됨", result.UserPrompt);
+            Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
+        }
+
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ShadowRestoreDeletesBeforeInsert()
         {
