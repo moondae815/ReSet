@@ -1906,7 +1906,25 @@ namespace ReSet.Core.Services
                                     "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
                             {
                                 currentPlanStructure = redrafted;
+                                // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
+                                // 재사용하면 새 목차가 없는 단계를 계속 실어 나른다.
+                                ClearSplitGenerationCacheAfterRedraft(
+                                    out lastSkeleton, out lastStepSections, out currentSteps,
+                                    out stepFloorViolations, pendingDefectiveSteps);
                             }
+                        }
+
+                        // 어느 단계가 문제인지 Critic이 구조화 신호로 알려줬다면
+                        // 골격과 통과한 단계를 재사용하고 그 단계만 다시 뽑는다.
+                        // FeedbackComment 산문에서 코드를 파싱하지 않는다 —
+                        // RegenerationScopeSelector가 그 방식의 실패를 이미 기록했다.
+                        pendingDefectiveSteps.Clear();
+                        if (currentSteps != null && l2Result.DefectiveSteps.Count > 0)
+                        {
+                            pendingDefectiveSteps.AddRange(
+                                l2Result.DefectiveSteps.Where(code =>
+                                    currentSteps.Any(step =>
+                                        string.Equals(step.Code, code, StringComparison.OrdinalIgnoreCase))));
                         }
 
                         attempt++;
@@ -2179,6 +2197,29 @@ namespace ReSet.Core.Services
             string Skeleton,
             Dictionary<string, string> Sections,
             Dictionary<string, string> FloorViolations);
+
+        /// <summary>
+        /// 목차 재수립 직후 분할 생성 캐시를 통째로 무효화한다.
+        ///
+        /// 네 항목을 한곳에서 지우는 이유: 목차가 바뀌면 단계 코드도 바뀐다. 골격·섹션·
+        /// 지목 목록·하한 위반 기록 중 하나라도 남겨두면 새 목차에 없는 옛 단계 코드를
+        /// 계속 실어 나른다. stepFloorViolations를 빠뜨리면 GenerateBySplitAsync는 이번
+        /// 회차에 다시 만드는 단계(pending)의 기록만 지우므로, 더 이상 존재하지 않는
+        /// 옛 코드의 기록은 절대 지워지지 않고 영원히 남는다 — 실제로 그런 실수가 있었다.
+        /// </summary>
+        private static void ClearSplitGenerationCacheAfterRedraft(
+            out string? lastSkeleton,
+            out Dictionary<string, string>? lastStepSections,
+            out IReadOnlyList<BatchStepPlan>? currentSteps,
+            out Dictionary<string, string> stepFloorViolations,
+            List<string> pendingDefectiveSteps)
+        {
+            lastSkeleton = null;
+            lastStepSections = null;
+            currentSteps = null;
+            stepFloorViolations = new Dictionary<string, string>();
+            pendingDefectiveSteps.Clear();
+        }
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.

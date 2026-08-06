@@ -4663,5 +4663,129 @@ SELECT 1;
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithDefectiveSteps_RegeneratesOnlyThoseSteps()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1회차는 S02를 지목해 결함, 2회차는 통과.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => reviewCall++ == 0
+                    ? new ReviewResult { HasDefects = true, FeedbackComment = "S02 결함", DefectiveSteps = { "S02" }, ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            // 골격은 1회만. 지목 재생성은 골격을 다시 만들지 않는다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            // S01은 1회차에만, S02는 1회차 + 지목 재생성으로 2회.
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithoutDefectiveSteps_RegeneratesTheWholeDocument()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => reviewCall++ == 0
+                    ? new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            // 지목이 없으면 골격부터 다시 만든다.
+            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// C3(Task 9 보정)를 고정하는 테스트.
+        ///
+        /// stepFloorViolations는 아직(Task 10 이전) 최종 문서나 어떤 AI 호출 인자에도
+        /// 반영되지 않는다 — RunConsolidatedPipelineAsync 안의 지역 변수로만 존재하고
+        /// 파이프라인이 끝나면 버려진다. 그래서 공개 진입점을 통해서는 "재수립 후 옛
+        /// 코드의 위반 기록이 안 남는다"를 직접 관찰할 방법이 없다 — GenerateBySplitAsync
+        /// 자신은 pending(이번 회차에 다시 만들 단계) 목록에 없는 코드는 원래 절대
+        /// 건드리지 않으므로, previousViolations로 무엇을 넘기든 그 경계만으로는 이
+        /// 픽스의 유무를 구분할 수 없다(직접 확인함 — 이 테스트를 오케스트레이터 픽스
+        /// 없이 돌려도 통과한다).
+        ///
+        /// 그래서 픽스 자체를 ClearSplitGenerationCacheAfterRedraft라는 이름의 private
+        /// static 메서드로 뽑아 리플렉션으로 직접 고정한다. 동작을 바꾸지 않는 순수한
+        /// 추출이며, 이 테스트는 그 메서드가 네 항목(골격/섹션/단계 목록/하한 위반 기록)을
+        /// 전부 지우는지 — 특히 이전에 빠뜨렸던 stepFloorViolations를 지우는지 — 를
+        /// 고정한다. 다만 RunConsolidatedPipelineAsync 루프가 재수립 시점에 실제로 이
+        /// 메서드를 호출하는지는 이 테스트가 아니라 코드 리뷰로 확인해야 한다.
+        /// </summary>
+        [Fact]
+        public void ClearSplitGenerationCacheAfterRedraft_ClearsAllFourCachedItemsIncludingFloorViolations()
+        {
+            var method = typeof(VerificationPipelineOrchestrator).GetMethod(
+                "ClearSplitGenerationCacheAfterRedraft",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.NotNull(method);
+
+            var pendingDefectiveSteps = new List<string> { "S02" };
+            var args = new object?[]
+            {
+                "골격 텍스트",                                                    // lastSkeleton (out)
+                new Dictionary<string, string> { ["S01"] = "섹션" },              // lastStepSections (out)
+                new List<BatchStepPlan>                                            // currentSteps (out)
+                {
+                    new("S01", "첫 단계", Array.Empty<string>(), new[] { "dbo.T1" }, new[] { "-1" }, false),
+                },
+                new Dictionary<string, string> { ["S01"] = "S01 (하한 미달)" },   // stepFloorViolations (out)
+                pendingDefectiveSteps,
+            };
+
+            method!.Invoke(null, args);
+
+            Assert.Null(args[0]);
+            Assert.Null(args[1]);
+            Assert.Null(args[2]);
+            // 이전에 빠뜨렸던 바로 그 항목: 재수립 후 stepFloorViolations는 통째로
+            // 새 빈 사전이어야 하고, 옛 코드("S01")를 담고 있으면 안 된다.
+            var clearedViolations = Assert.IsType<Dictionary<string, string>>(args[3]);
+            Assert.Empty(clearedViolations);
+            Assert.Empty(pendingDefectiveSteps);
+        }
     }
 }
