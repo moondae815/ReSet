@@ -1840,7 +1840,33 @@ You MUST use exactly the following 4 mandatory H2 headers in Korean, and design 
 1. ## 통합 배치 아키텍처 개요
 2. ## Mermaid 기반 통합 흐름도
 3. ## 단계별 이행 상세 및 의사코드
-4. ## 통합 데이터 정합성 검증 SQL 세트";
+4. ## 통합 데이터 정합성 검증 SQL 세트
+
+[Machine-Readable Step List — MANDATORY]
+In ADDITION to the prose outline, you MUST emit exactly one fenced ```json block containing the ordered step list. The downstream pipeline generates one document section per entry, so an omitted step is never written at all.
+
+```json
+{{
+  ""Steps"": [
+    {{
+      ""Code"": ""S01"",
+      ""Name"": ""Short Korean step name"",
+      ""LegacyProcedures"": [""UP_SOURCE_PROC""],
+      ""TargetTables"": [""dbo.TargetTable""],
+      ""ErrorCodes"": [""-1"", ""-2""],
+      ""Chunkable"": false
+    }}
+  ]
+}}
+```
+
+Rules for the step list:
+- One entry per executable step. NEVER collapse several steps into one entry (no `S01~S04` style ranges).
+- `Code` must be unique and must also appear in the prose outline heading for that step.
+- `TargetTables` must list every table the step creates or modifies, as written in the source specifications.
+- `ErrorCodes` must reproduce the EXACT original return codes of the source procedure. Do not invent, remap, or compress them into ranges.
+- `Chunkable` is false when the step is an aggregation or cross-DB join that cannot be chunked by a single key.
+- Emit the block once. Do not wrap the whole answer in a code block.";
 
             // 재수립 모드. 이전 구조로 만든 본문이 리뷰를 반복 통과하지 못했다는 뜻이므로
             // 같은 구조를 다시 내면 재시도 예산만 소진된다. 4개 H2 강제는 유지한다 —

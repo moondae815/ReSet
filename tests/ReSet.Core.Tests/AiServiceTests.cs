@@ -259,6 +259,47 @@ namespace ReSet.Core.Tests
             Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
         }
 
+        // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
+        // 헤딩 파싱은 대안이 아니다 — 실측한 두 목차가 단계를 각각 H3/H4에 뒀고,
+        // 한쪽은 `### P20~P23.`으로 4개 단계를 헤딩 하나에 묶었다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_AlwaysRequestsStructuredStepList()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            Assert.Contains("```json", result.SystemPrompt);
+            Assert.Contains("\"Steps\"", result.SystemPrompt);
+            Assert.Contains("TargetTables", result.SystemPrompt);
+            Assert.Contains("ErrorCodes", result.SystemPrompt);
+        }
+
+        // 재수립 모드에서도 유지돼야 한다. 여기서 빠지면 재수립 이후 회차가
+        // 조용히 폴백해 분할이 사라진다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_RedraftAlsoRequestsStructuredStepList()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job",
+                effort: null,
+                previousStructure: "## 낡은 목차",
+                redraftFeedback: "스텝 누락");
+
+            Assert.Contains("\"Steps\"", result.SystemPrompt);
+            Assert.Contains("[Redraft]", result.SystemPrompt);
+        }
+
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ShadowRestoreDeletesBeforeInsert()
         {
