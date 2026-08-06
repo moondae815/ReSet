@@ -212,4 +212,24 @@ public sealed class VerificationBannerTests
 
         Assert.Contains(expectedCause, banner);
     }
+
+    // Task 10: 하한 미달 단계를 배너에 표기. stepFloorViolations(Task 8)의 값은
+    // 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다.
+    [Fact]
+    public void StepFloorViolations_ListsEveryStep()
+    {
+        var banner = VerificationBanner.StepFloorViolations(new[] { "S10 (하한 미달)", "S06 (생성 실패)" });
+
+        Assert.Contains("하한 미달", banner);
+        Assert.Contains(">   - S10 (하한 미달)", banner);
+        Assert.Contains(">   - S06 (생성 실패)", banner);
+    }
+
+    [Fact]
+    public void StepFloorViolations_WithEmptyList_StillRendersPlaceholder()
+    {
+        var banner = VerificationBanner.StepFloorViolations(new string[0]);
+
+        Assert.Contains(">   - ", banner);
+    }
 }

@@ -4787,5 +4787,205 @@ SELECT 1;
             Assert.Empty(clearedViolations);
             Assert.Empty(pendingDefectiveSteps);
         }
+
+        // Task 10: 하한 미달 단계가 배너로 노출된다. 지금까지 stepFloorViolations는
+        // 기록만 됐지 어디에도 읽히지 않았다 — 이 테스트가 그 소비자다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAStepStaysBelowFloor_PrependsWarningBanner()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            // S01은 재시도해도 코드 블록이 없다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Contains("하한 미달", result.Plan);
+            Assert.Contains("S01", result.Plan);
+        }
+
+        // 배너는 건강한 경로에서 절대 나타나면 안 된다. 부재를 확인하는 테스트가
+        // 존재를 확인하는 테스트만큼 중요하다 — 그래야 향후 리팩터링이 조건을
+        // 뒤집어 배너가 늘 붙는 사고를 잡는다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAllStepsPassFloor_DoesNotPrependWarningBanner()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.DoesNotContain("하한 미달", result.Plan);
+            Assert.DoesNotContain("[!WARNING]", result.Plan);
+        }
+
+        // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와
+        // 목차에 없는 코드("S99")를 함께 지목해도, 실제 존재하는 단계만 대소문자
+        // 무시 매칭으로 재생성되고 지어낸 코드는 조용히 버려져야 한다.
+        // 리뷰어가 이 필터를 제거하는 버그를 재현해 세 테스트가 모두 초록으로
+        // 남는 것을 확인했다 — 오케스트레이터 레벨에서 이를 고정하는 테스트가
+        // 없었기 때문이다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithDefectiveSteps_MatchesCaseInsensitivelyAndDropsInventedCode()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1회차는 "s01"(대소문자 다름)과 "S99"(존재하지 않는 코드)를 함께 지목,
+            // 2회차는 통과.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => reviewCall++ == 0
+                    ? new ReviewResult { HasDefects = true, FeedbackComment = "S01 결함", DefectiveSteps = { "s01", "S99" }, ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            // 골격은 1회만. 지목 재생성이 실제로 targeted 분기를 탔다는 증거이며,
+            // 그것은 "s01"이 "S01"과 대소문자 무시로 매칭됐을 때만 일어난다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            // S01(지목, 대소문자 다름)은 1회차 + 지목 재생성 = 2회.
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            // S02는 지목되지 않아 1회차에만 생성되고, 지목 재생성에서는 캐시를
+            // 재사용한다. "S99"는 목차에 없는 코드라 애초에 어떤 BatchStepPlan과도
+            // 매칭될 수 없다 — 재생성 호출이 일어나지 않는다는 사실 자체가
+            // "조용히 버려짐"의 증거다.
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        // 재수립된 목차용 골격. 코드가 다른 목차로 문서가 다시 조립될 때 배너가
+        // 무엇을 실어야/실으면 안 되는지를 R1이 검증한다.
+        private static string SkeletonMarkdownFor(params string[] codes) =>
+            SkeletonMarkdown.Replace(
+                "<!-- STEP:S01 -->\n<!-- STEP:S02 -->",
+                string.Join("\n", codes.Select(c => $"<!-- STEP:{c} -->")));
+
+        // 재수립 후 새 목차. S01/S02와 겹치지 않는 코드(T01/T02)를 써서, 옛 코드의
+        // 흔적이 남아 있으면 즉시 드러나게 한다.
+        private const string StepsJsonRedrafted = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""T01"", ""Name"": ""새 첫 단계"", ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""T02"", ""Name"": ""새 둘째 단계"", ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+
+        /// <summary>
+        /// R1 (Task 9 리뷰에서 이월): Task 9는 ClearSplitGenerationCacheAfterRedraft의
+        /// 본문만 리플렉션으로 고정했다. RunConsolidatedPipelineAsync가 재수립 지점에서
+        /// 그 메서드를 실제로 호출하고 네 out 값(특히 stepFloorViolations)을 살아있는
+        /// 지역 변수에 진짜로 되묻는지는 아무 테스트도 지키지 않았다 — 리뷰어가
+        /// "메서드는 옳지만 호출부에서 stepFloorViolations의 out 값을 버린다"는 배선
+        /// 버그를 재현했을 때 기존 세 테스트가 전부 초록으로 남았다.
+        ///
+        /// 이제 배너가 그 사전을 렌더링하므로 공개 진입점을 통해 관찰할 수 있다.
+        /// 첫 목차(S01/S02)에서 S01이 하한 미달로 기록된 뒤, 정체로 인해 목차가
+        /// 재수립되어 코드가 겹치지 않는 새 목차(T01/T02)로 바뀐다. 배선이 옳다면
+        /// stepFloorViolations는 재수립 시점에 통째로 비워지고, T01/T02는 둘 다
+        /// 건강하므로 최종 문서에는 하한 미달 기록이 전혀 남지 않는다. 배선이 버그가
+        /// 있다면(사전을 그대로 들고 넘어가면) 문서에 더 이상 존재하지 않는 S01을
+        /// 가리키는 배너가 남는다 — 그것이 바로 이 픽스가 막아야 할 사용자 가시
+        /// 증상이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_AfterStructureRedraft_BannerOmitsStepCodeFromSupersededOutline()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            // 최초 목차(S01/S02), 재수립 목차(T01/T02) 순서로 반환된다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 목차\n" + StepsJsonRedrafted });
+            // 골격은 그때그때 요청받은 단계 코드로 만든다 — 첫 목차든 재수립된
+            // 목차든 같은 목으로 처리한다.
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var steps = call.Arg<IReadOnlyList<BatchStepPlan>>();
+                    return new AiResult { Content = SkeletonMarkdownFor(steps.Select(s => s.Code).ToArray()) };
+                });
+            // S01은 몇 번을 다시 만들어도 하한 미달. 그 외 코드(S02, T01, T02)는 건강하다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1·2회차는 60점으로 정체(최고점 갱신 없음) → 2회차에서 목차 재수립이
+            // 발동한다(StructureRedraftPolicy: 미갱신 1회로 발동). 3회차는 새 목차로
+            // 통과.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call < 2
+                        ? new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
+                        : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+                });
+
+            var result = await RunBatchPipeline(aiService);
+
+            // 목차가 실제로 재수립되어 새 코드로 문서가 조립됐는지 먼저 확인한다.
+            Assert.Contains("T01", result.Plan);
+            Assert.Contains("T02", result.Plan);
+            // 핵심 불변식: 더 이상 존재하지 않는 옛 목차의 코드가 배너에 남으면
+            // 안 된다. 배선이 옳다면 하한 미달 기록 자체가 재수립 시점에 비워지고
+            // T01/T02는 둘 다 건강하므로 배너가 아예 붙지 않는다.
+            Assert.DoesNotContain("S01", result.Plan);
+            Assert.DoesNotContain("하한 미달", result.Plan);
+        }
     }
 }

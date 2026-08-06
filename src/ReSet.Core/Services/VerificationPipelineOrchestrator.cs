@@ -2002,6 +2002,25 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
+            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
+            //
+            // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
+            // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
+            // Dictionary로 바꾸지 않고 표시 문자열 목록으로 투영하는 이유는 둘이다.
+            // 다른 배너 메서드(L1Exhausted, UnresolvedReferences)가 모두
+            // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
+            // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
+            // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
+            var stepFloorViolationMessages = stepFloorViolations
+                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+                .Select(kvp => kvp.Value)
+                .ToList();
+            if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
+            }
+
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
             {
