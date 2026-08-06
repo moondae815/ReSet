@@ -652,10 +652,23 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     var scoreException = resultRoot.TryGetProperty("ScoreException", out var exProp) ? exProp.GetInt32() : 0;
                     var scoreReadability = resultRoot.TryGetProperty("ScoreReadability", out var readProp) ? readProp.GetInt32() : 0;
 
+                    var defectiveSteps = new List<string>();
+                    if (resultRoot.TryGetProperty("DefectiveSteps", out var stepsProp) &&
+                        stepsProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in stepsProp.EnumerateArray())
+                        {
+                            if (item.ValueKind != JsonValueKind.String) continue;
+                            var code = item.GetString();
+                            if (!string.IsNullOrWhiteSpace(code)) defectiveSteps.Add(code.Trim());
+                        }
+                    }
+
                     return new ReviewResult
                     {
                         HasDefects = hasDefects,
                         FeedbackComment = feedbackComment,
+                        DefectiveSteps = defectiveSteps,
                         ScoreAccuracy = scoreAccuracy,
                         ScoreCrud = scoreCrud,
                         ScoreInterface = scoreInterface,
@@ -2260,11 +2273,17 @@ Consolidate the provided specifications into a single unified batch job named '{
 [Defect Judgment]
 - If any of the 5 criteria scores less than 8 points, or if any of the 4 mandatory H2 headers (## 통합 배치 아키텍처 개요, ## Mermaid 기반 통합 흐름도, ## 단계별 이행 상세 및 의사코드, ## 통합 데이터 정합성 검증 SQL 세트) is missing, mark HasDefects as true.
 
+[Defective Step Attribution]
+- `DefectiveSteps` MUST list the step codes (e.g. `S08`) of the `###` sections under `## 단계별 이행 상세 및 의사코드` that caused the defects, using the exact codes as written in the document.
+- Include a step ONLY when rewriting that one section would fix the defect. Leave the array EMPTY when the defect is document-wide (a missing H2, a broken flowchart, an inconsistency across steps).
+- An empty array causes the whole document to be regenerated, so listing steps precisely is what makes the repair cheap.
+
 [Output Format]
 Output ONLY the final JSON payload. Do not include markdown block markers (```json) or conversational text. Output raw JSON:
 {
   ""HasDefects"": true or false (boolean),
   ""FeedbackComment"": ""Detailed correction instructions if defects are found. Return empty string if HasDefects is false."",
+  ""DefectiveSteps"": [""S08"", ""S10""],
   ""ScoreAccuracy"": 10,
   ""ScoreCrud"": 10,
   ""ScoreInterface"": 10,

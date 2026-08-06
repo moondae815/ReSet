@@ -28,7 +28,16 @@ namespace ReSet.Core.Services
         public bool HasDefects { get; set; }
         public string? FeedbackComment { get; set; }
         public string? ThinkingText { get; set; }
-        
+
+        /// <summary>
+        /// 통합 배치 계획서에서 결함이 있는 단계 코드. 단일 SP 명세서 리뷰에서는 늘 빈 목록이다.
+        ///
+        /// 이 필드가 있어야 결함 하나 때문에 문서를 통째로 다시 만들지 않는다.
+        /// FeedbackComment 산문에서 코드를 파싱하지 않는 이유는
+        /// RegenerationScopeSelector의 클래스 주석에 기록되어 있다.
+        /// </summary>
+        public List<string> DefectiveSteps { get; set; } = new();
+
         // 5대 기준별 정량적 평가 점수 (각 0~10점)
         public int ScoreAccuracy { get; set; }     // 비즈니스 정합성
         public int ScoreCrud { get; set; }         // CRUD 및 데이터 매핑

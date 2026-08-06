@@ -999,6 +999,50 @@ namespace ReSet.Core.Tests
             Assert.Contains("[Required Content & Rules]", systemPrompt);
             Assert.Contains("## 목차 산문", userPrompt);
         }
+
+        // 산문 피드백에서 단계 코드를 키워드 매칭으로 뽑지 않는다.
+        // RegenerationScopeSelector의 클래스 주석이 그 방식의 실패를 이미 기록하고 있다 —
+        // LLM이 쓴 산문에 키워드를 걸면 프롬프트 문구가 바뀔 때 아무 신호 없이 오작동한다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_ParsesDefectiveStepsFromJson()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":true,\\\"FeedbackComment\\\":\\\"S08 SQL 누락\\\"," +
+                "\\\"DefectiveSteps\\\":[\\\"S08\\\",\\\"S10\\\"]," +
+                "\\\"ScoreAccuracy\\\":7,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            Assert.Equal(new[] { "S08", "S10" }, review.DefectiveSteps);
+        }
+
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_WithoutDefectiveSteps_ReturnsEmptyList()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\"," +
+                "\\\"ScoreAccuracy\\\":9,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            Assert.Empty(review.DefectiveSteps);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler
