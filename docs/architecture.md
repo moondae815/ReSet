@@ -66,7 +66,9 @@ flowchart TD
 | | [CliProcessRunner](../src/ReSet.Core/Services/Clients/Cli/CliProcessRunner.cs), [CliWorkspace](../src/ReSet.Core/Services/Clients/Cli/CliWorkspace.cs) | CLI 클라이언트 공용 인프라. CliProcessRunner는 CLI 프로세스를 헤드리스로 기동해 표준 입출력 전달, 타임아웃, 취소를 처리하고, CliWorkspace는 호출마다 빈 임시 디렉터리를 만들어 CLI가 리포지토리 자체의 CLAUDE.md/AGENTS.md를 컨텍스트로 흡수하지 않도록 격리합니다. |
 | | [CliEffort](../src/ReSet.Core/Services/Clients/Cli/CliEffort.cs), [CliPrompt](../src/ReSet.Core/Services/Clients/Cli/CliPrompt.cs), [CliFailureClassifier](../src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs) | CLI 클라이언트 공용 헬퍼. CliEffort는 ReSet의 effort 값을 각 CLI가 받는 단계로 매핑(codex/agy는 low/medium/high만 지원해 xhigh를 high로 낮추고 로그를 남김)하며, CliPrompt는 시스템/사용자 프롬프트를 결합하고, CliFailureClassifier는 CLI 실패를 미인증·쿼터 소진·타임아웃·알 수 없음으로 분류해 원본 CLI 출력과 함께 예외 메시지를 구성합니다. |
 | | [CliProviderBatchGuard](../src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs) | Actor/Critic/Consolidator 중 CLI 제공자가 지정된 상태로 ReSet.Cli 또는 ReSet.Validator.Cli의 배치 모드가 실행되는 것을 판정하는 가드. CLI 에이전트 자체는 헤드리스로 정상 동작하지만, 무인 실행 중 권한 프롬프트 정지나 쿼터 소진이 발생하면 장시간 작업이 통째로 소실되므로, DB 연결 전에 실행을 즉시 중단시킵니다. |
-| | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. |
+| | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. 통합 배치 단계 섹션 하나가 구현 지시서로서의 최소 요건(SQL/의사코드 블록, 대상 테이블, 원본 오류코드)을 갖췄는지 검사하는 `ValidateBatchStep`도 이 클래스가 제공하며, AI 호출이 없어 비용이 0입니다. |
+| | [BatchStepPlan](../src/ReSet.Core/Services/BatchStepPlan.cs), [BatchStepPlanParser](../src/ReSet.Core/Services/BatchStepPlan.cs) | 목차(`raw/PlanStructure.md`)의 ` ```json ` 블록에서 통합 배치 단계 목록(`Steps[]`, 최대 40개)을 읽어 `BatchStepPlan` 레코드(Code, Name, LegacyProcedures, TargetTables, ErrorCodes, Chunkable)로 반환하는 파서. 목차 헤딩 레벨이 산출물마다 달라 헤딩 파싱으로는 단계 목록을 얻을 수 없어 만들어졌으며, 파싱 실패는 예외가 아니라 null이라 호출부가 단일 호출 경로로 조용히 폴백합니다. |
+| | [BatchPlanAssembler](../src/ReSet.Core/Services/BatchPlanAssembler.cs) | 골격 문서의 공통 규약 소절을 추출(`ExtractSharedConventions`)하고, 단계별로 생성된 섹션을 모델의 자리표시자 위치가 아니라 단계 목록 순서대로 결정적으로 이어붙여(`Assemble`) 최종 계획서를 조립합니다. 펜스(```) 내부의 유사 헤더 줄을 헤더나 블록 경계로 오인하지 않도록 펜스 인지 탐색을 사용합니다. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영, 통합 배치 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Agentic Workflow 흐름 제어, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [DependencyAnalysisOrchestrator](../src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs) | 설정으로 활성화된 재귀 코드 객체 분석에서 하위 SP/UDF를 중복 없이 발견하고, 객체별 기존 검증 파이프라인 실행과 실패 격리를 조율합니다. |
 | | [VerificationDocumentFormatter](../src/ReSet.Core/Services/VerificationDocumentFormatter.cs) | 산출물 상단의 YAML 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·검증 종료 상태)를 렌더링합니다. 진입점은 문서 종류가 아니라 보장 수준으로 나뉘어, 파이프라인을 통과한 명세서·통합 계획서와 파이프라인에 진입한 적 없는 단일 SP 계획서·정산 정책서를 구분하며, Critic 점수는 종료 상태가 통과 또는 품질 미달일 때만 싣습니다. |
@@ -201,11 +203,20 @@ graph TD
         StructCheck -- "아니오 (1회차)" --> P1["1/3. 브레인스토밍<br/>(raw/Brainstorming.md 보존)"]
         P1 --> P2["2/3. 목차 설계<br/>(raw/PlanStructure.md 보존)"]
         P2 --> P3
-        StructCheck -- "예 (재시도)" --> P3["3/3. 통합 계획 본문 생성<br/>(목차 재사용, 누적 피드백 최근 3회차 주입)"]
+        StructCheck -- "예 (재시도)" --> P3["3/3. 최종 생성 진입<br/>(목차 재사용, 누적 피드백 최근 3회차 주입)"]
+        P3 --> StepParse{"단계 목록(Steps[]) 파싱 및<br/>골격 생성 성공?"}
+        StepParse -- "예" --> StepGen["단계별 본문 생성<br/>(단계 목록 순서대로 N회)"]
+        StepGen --> StepFloor{"단계 하한 검사<br/>(SQL/의사코드·대상테이블·오류코드)"}
+        StepFloor -- "미달 (재시도 여력 있음)" --> StepRetry["해당 단계만 1회 재시도"]
+        StepRetry --> StepGen
+        StepFloor -- "미달 (재시도 소진)" --> StepAdopt["미달 상태로 채택<br/>(하한 미달 배너 기록)"]
+        StepFloor -- "통과" --> Asm["결정적 조립<br/>(BatchPlanAssembler)"]
+        StepAdopt --> Asm
+        StepParse -- "아니오 (파싱/골격 실패)" --> Single["단일 호출로 전체 본문 생성"]
     end
 
     subgraph VerifyB ["3. 검증 및 종료 상태 판정"]
-        P3 --> L1B{"L1 기계 검증 통과?"}
+        Asm & Single --> L1B{"L1 기계 검증 통과?"}
         L1B -- "실패 (재시도 여력 있음)" --> Retry["피드백 세팅 후 3/3 단계만 재생성"]
         Retry --> P3
         L1B -- "실패 (재시도 소진)" --> OutL1["종료 상태: L1 미통과<br/>경고 배너 삽입"]
@@ -493,8 +504,10 @@ graph TD
 * **캐시 경계**: 종료 상태 게이팅이 도입되기 전에 기록된 캐시 항목은 검증 상태를 담고 있지 않으므로 무효 처리하여 재분석합니다. 이후 항목은 상태를 함께 보존해, 캐시로 복원된 산출물도 신규 분석과 동일한 상태로 보고됩니다.
 
 #### 4.4.5. 통합 배치 계획의 목차 재설계와 기록 계약
-* **재설계 트리거와 상한**: 통합 배치 경로는 목차(`PlanStructure`)를 재시도 루프 밖에 고정하므로, 목차 자체가 원인인 결함(스텝 누락, 청킹 불가 스텝의 오배치)은 본문만 다시 써서는 고쳐지지 않습니다. 재시도가 최고점을 갱신하지 못한 정체 상태에서만 목차를 다시 세우며, Job당 1회로 제한합니다. L3에서 사용자가 직접 구조 변경을 요청하는 경로는 이 예산을 거치지 않습니다.
+* **재설계 트리거와 상한**: 통합 배치 경로는 목차(`PlanStructure`)를 재시도 루프 밖에 고정하므로, 목차 자체가 원인인 결함(스텝 누락, 청킹 불가 스텝의 오배치)은 본문만 다시 써서는 고쳐지지 않습니다. 재시도가 최고점을 갱신하지 못한 정체 상태에서만 목차를 다시 세우며, Job당 1회로 제한합니다. L3에서 사용자가 직접 구조 변경을 요청하는 경로는 이 예산을 거치지 않습니다. 목차를 재설계하면 캐시해 둔 골격·단계 섹션·하한 위반 기록도 함께 지웁니다 — 남겨두면 새 목차에 없는 옛 단계 코드를 계속 실어 나릅니다.
 * **목차 기록의 계약**: `raw/PlanStructure.md`는 파이프라인이 종료하거나 문서를 사용자에게 건네는 모든 지점에서 **그 산출물을 실제로 만든 목차**를 담고 있어야 합니다. 따라서 목차를 만드는 일과 기록하는 일을 분리해, 재설계한 목차는 그 목차로 본문이 실제로 나온 것이 확정된 뒤에만 기록합니다. 재생성이 실패하거나 기록 자체가 실패하면 재설계는 통째로 폐기되고 이전 목차가 그대로 유효하며, 재설계 실패가 파이프라인을 중단시키지는 않습니다.
+* **단계 목록과 분할 생성**: 목차는 산문과 함께 기계가 읽을 수 있는 단계 목록(`Steps[]`)을 같은 파일에 담습니다. 본문 생성은 이 목록을 단위로 나뉘어, 골격 1회와 단계마다 1회의 호출로 만들어진 뒤 결정적으로 조립됩니다. 단일 호출은 하나의 출력 예산 안에서 앞 단계가 예산을 선점하면 뒤쪽 단계가 구현 지시서로 쓸 수 없을 만큼 얇아지는데, 호출을 나누면 그 경쟁 자체가 사라집니다. 목록을 읽지 못하면 분할을 포기하고 단일 호출로 되돌아가므로 이 경로가 파이프라인을 막지는 않습니다.
+* **단계 하한과 국소 보수**: 각 단계 섹션은 생성 직후 SQL·의사코드 블록 1개 이상, 선언된 대상 테이블 전부, 원본 오류코드 전부를 기계적으로 검사받고, 미달이면 그 단계만 1회 다시 만듭니다. 이 재시도는 Actor-Critic의 문서 레벨 재시도 예산과 별개입니다. 재시도 후에도 미달이면 그 사실을 배너에 남기고 진행합니다 — 문서 전체를 다시 만들게 하면 같은 결함으로 비용만 커집니다. L2가 결함 단계를 구조화 신호로 지목하면 골격과 나머지 단계를 재사용한 채 지목된 단계만 다시 만듭니다.
 * **구제 채택과의 정합**: 재설계 이후 회차가 더 낮은 점수를 내 구제 채택(`RetryRescue`)이 재설계 이전 시도를 최종 선택하면, 그 시도를 만든 목차를 현행으로 되돌리고 밀려나는 목차를 `raw/PlanStructure.superseded-n.md`로 남깁니다. 이 파일들은 어떤 목차가 시도되고 왜 채택되지 않았는지를 `raw/` 디렉터리만으로 재구성하기 위한 이력이므로, 재설계로 밀려난 목차와 구제 채택으로 되돌려진 목차를 모두 담습니다.
 
 ### 4.5. 다중 AI 공급자(Multi-LLM Provider) 추상화
