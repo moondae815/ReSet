@@ -28,6 +28,106 @@ namespace ReSet.Core.Tests
 
 검증 SQL 본문.";
 
+        // 자리표시자 뒤에 산문이 더 있는 골격. "자리표시자 위치에 치환" 구현은
+        // 이 산문보다 앞에 단계 본문을 끼워 넣지만, 올바른 구현(블록 끝에
+        // 결정적으로 덧붙이기)은 산문 뒤에 붙여야 한다.
+        private const string SkeletonWithTrailingProse = @"# 계획서
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+<!-- STEP:S01 -->
+<!-- STEP:S02 -->
+
+여기부터는 자리표시자 뒤에 오는 후행 산문이다.
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
+        // 자리표시자 순서(S02, S01)와 전달되는 섹션 순서(S01, S02)가 어긋난 골격.
+        // "자리표시자 위치에 치환" 구현은 출력 순서를 S02, S01로 뒤집지만, 목록
+        // 순서를 따르는 구현은 S01, S02 순서를 지킨다.
+        private const string SkeletonWithReversedPlaceholders = @"# 계획서
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+<!-- STEP:S02 -->
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
+        // 자리표시자가 하나뿐인데 단계 섹션은 둘인 골격. "자리표시자 위치에
+        // 치환" 구현은 두 번째 섹션을 놓치지만, 목록 전체를 덧붙이는 구현은
+        // 둘 다 포함한다.
+        private const string SkeletonWithSinglePlaceholder = @"# 계획서
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
+        // 단계 상세 블록 안, 펜스(```) 코드 블록 내부에 "## "로 시작하는 줄이
+        // 있는 골격. 펜스를 인식하지 못하는 스캐너는 이 줄을 다음 H2로 오인해
+        // 블록을 조기 종료한다.
+        private const string SkeletonWithFencedHeading = @"# 계획서
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+```sql
+## 이것은 코드 블록 안의 주석이라 헤더가 아니다
+SELECT 1;
+```
+
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
+        // 진짜 헤더보다 앞, 펜스 코드 블록 안에 헤더와 똑같은 텍스트가 있는
+        // 골격. 펜스를 인식하지 못하는 스캐너는 이 가짜 헤더를 진짜로 착각해
+        // 블록 시작 지점을 잘못 잡는다.
+        private const string SkeletonWithFencedHeaderLookalike = @"# 계획서
+
+## 통합 배치 아키텍처 개요
+
+```text
+## 단계별 이행 상세 및 의사코드
+```
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문.";
+
         [Fact]
         public void Assemble_InsertsSectionsBeforeNextH2()
         {
@@ -90,6 +190,125 @@ namespace ReSet.Core.Tests
         public void ExtractSharedConventions_WithoutHeader_ReturnsEmpty()
         {
             Assert.Equal(string.Empty, BatchPlanAssembler.ExtractSharedConventions("# 계획서\n\n본문만."));
+        }
+
+        [Fact]
+        public void Assemble_AppendsAfterTrailingProseNotAtPlaceholderPosition()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithTrailingProse,
+                new[] { "### S01 첫 단계\n\n본문1", "### S02 둘째 단계\n\n본문2" });
+
+            var trailingProse = result.IndexOf("여기부터는 자리표시자 뒤에 오는 후행 산문이다.");
+            var s01 = result.IndexOf("### S01 첫 단계");
+            var s02 = result.IndexOf("### S02 둘째 단계");
+            var validation = result.IndexOf("## 통합 데이터 정합성 검증 SQL 세트");
+
+            Assert.True(trailingProse >= 0);
+            Assert.True(trailingProse < s01, "부착된 단계는 자리표시자 위치가 아니라 후행 산문 뒤, 블록 끝에 와야 한다");
+            Assert.True(s01 < s02, "단계는 목록 순서를 지켜야 한다");
+            Assert.True(s02 < validation, "단계는 다음 H2 앞에 삽입돼야 한다");
+        }
+
+        [Fact]
+        public void Assemble_FollowsSuppliedSectionOrderNotPlaceholderOrder()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithReversedPlaceholders,
+                new[] { "### S01 첫 단계\n\n본문1", "### S02 둘째 단계\n\n본문2" });
+
+            var s01 = result.IndexOf("### S01 첫 단계");
+            var s02 = result.IndexOf("### S02 둘째 단계");
+
+            Assert.True(s01 < s02, "출력 순서는 자리표시자 순서(S02, S01)가 아니라 전달된 섹션 목록 순서(S01, S02)를 따라야 한다");
+        }
+
+        [Fact]
+        public void Assemble_WithFewerPlaceholdersThanSections_StillIncludesAllSections()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithSinglePlaceholder,
+                new[] { "### S01 첫 단계\n\n본문1", "### S02 둘째 단계\n\n본문2" });
+
+            Assert.Contains("### S01 첫 단계", result);
+            Assert.Contains("### S02 둘째 단계", result);
+        }
+
+        [Fact]
+        public void ExtractSharedConventions_IgnoresHeadingLookingLinesInsideFencedBlock()
+        {
+            var conventions = BatchPlanAssembler.ExtractSharedConventions(SkeletonWithFencedHeading);
+
+            Assert.Contains("공통 규약 본문.", conventions);
+            Assert.Contains("SELECT 1;", conventions);
+            Assert.Contains("## 이것은 코드 블록 안의 주석이라 헤더가 아니다", conventions);
+            Assert.DoesNotContain("검증 SQL 본문.", conventions);
+        }
+
+        [Fact]
+        public void Assemble_IgnoresHeadingLookingLinesInsideFencedBlockWhenLocatingBlockEnd()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithFencedHeading,
+                new[] { "### S01 첫 단계\n\n본문1" });
+
+            var fencedHeading = result.IndexOf("## 이것은 코드 블록 안의 주석이라 헤더가 아니다");
+            var s01 = result.IndexOf("### S01 첫 단계");
+            var validation = result.IndexOf("## 통합 데이터 정합성 검증 SQL 세트");
+
+            Assert.True(fencedHeading >= 0);
+            Assert.True(fencedHeading < s01, "펜스 안의 '## ' 유사 줄 때문에 블록이 조기 종료되면 안 된다");
+            Assert.True(s01 < validation, "단계는 실제 다음 H2 앞에 삽입돼야 한다");
+        }
+
+        [Fact]
+        public void ExtractSharedConventions_IgnoresHeaderLookalikeInsideFencedBlock()
+        {
+            var conventions = BatchPlanAssembler.ExtractSharedConventions(SkeletonWithFencedHeaderLookalike);
+
+            Assert.Contains("공통 규약 본문.", conventions);
+            Assert.DoesNotContain("검증 SQL 본문.", conventions);
+        }
+
+        [Fact]
+        public void Assemble_WithNullSkeleton_AppendsHeaderAndSections()
+        {
+            var result = BatchPlanAssembler.Assemble(null, new[] { "### S01 첫 단계\n\n본문1" });
+
+            Assert.Contains(BatchPlanAssembler.StepDetailHeader, result);
+            Assert.Contains("### S01 첫 단계", result);
+        }
+
+        [Fact]
+        public void ExtractSharedConventions_WithNullSkeleton_ReturnsEmpty()
+        {
+            Assert.Equal(string.Empty, BatchPlanAssembler.ExtractSharedConventions(null));
+        }
+
+        [Fact]
+        public void Assemble_IgnoresNullAndWhitespaceOnlySections()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                Skeleton,
+                new[] { "### S01 첫 단계\n\n본문1", null!, "   \n  ", "### S02 둘째 단계\n\n본문2" });
+
+            Assert.Contains("### S01 첫 단계", result);
+            Assert.Contains("### S02 둘째 단계", result);
+            Assert.DoesNotContain("<!-- STEP:", result);
+        }
+
+        [Fact]
+        public void Assemble_HandlesCrlfLineEndings()
+        {
+            var crlfSkeleton = Skeleton.Replace("\n", "\r\n");
+
+            var result = BatchPlanAssembler.Assemble(
+                crlfSkeleton,
+                new[] { "### S01 첫 단계\n\n본문1" });
+
+            Assert.Contains("### S01 첫 단계", result);
+            Assert.DoesNotContain("<!-- STEP:", result);
+            Assert.Contains("### 공통 SQL 오류 추적 패턴", result);
         }
     }
 }

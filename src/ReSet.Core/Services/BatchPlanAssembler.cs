@@ -79,18 +79,44 @@ namespace ReSet.Core.Services
         /// </summary>
         private static (int HeaderIndex, int EndIndex) LocateStepDetailBlock(List<string> lines)
         {
-            var headerIndex = lines.FindIndex(line => line.Trim() == StepDetailHeader);
+            var headerIndex = FindIndexOutsideFence(lines, 0, line => line.Trim() == StepDetailHeader);
             if (headerIndex < 0)
             {
                 return (-1, -1);
             }
 
             // "### "는 인덱스 2가 '#'이라 StartsWith("## ")에 걸리지 않는다.
-            var endIndex = lines.FindIndex(
+            var endIndex = FindIndexOutsideFence(
+                lines,
                 headerIndex + 1,
                 line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 펜스(```)로 둘러싸인 줄은 건너뛰고 조건을 만족하는 첫 줄의 인덱스를
+        /// 찾는다. 공통 규약 소절에 실린 SQL 코드 블록 안에 "## "로 시작하는
+        /// 줄이 있어도 헤더나 블록 경계로 오인하지 않기 위함이다.
+        /// </summary>
+        private static int FindIndexOutsideFence(List<string> lines, int startIndex, Func<string, bool> predicate)
+        {
+            var inFence = false;
+            for (var i = startIndex; i < lines.Count; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("```", StringComparison.Ordinal))
+                {
+                    inFence = !inFence;
+                    continue;
+                }
+
+                if (!inFence && predicate(lines[i]))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
     }
 }
