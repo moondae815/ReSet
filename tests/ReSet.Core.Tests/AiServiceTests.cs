@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Xunit;
@@ -882,6 +883,89 @@ namespace ReSet.Core.Tests
             // 과잉 회피를 유발하던 옛 문구가 남아 있으면 안 된다.
             Assert.DoesNotContain("Do not include variables prefixed with '@'", source);
             Assert.DoesNotContain("Avoid variable names with '@'", source);
+        }
+
+        private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
+        {
+            new BatchStepPlan("S01", "수수료율 스냅샷",
+                new[] { "UP_Util_PG_Client_CMRate_Ins" }, new[] { "dbo.TPGSettleRate" }, new[] { "-1" }, false),
+            new BatchStepPlan("S02", "정산 원장 생성",
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-2" }, true)
+        };
+
+        private static IAiService StepService()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"### S01 수수료율 스냅샷\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            return new AiService(new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_CarriesStepContract()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            Assert.Contains("S02", result.UserPrompt);
+            Assert.Contains("공통 규약 본문", result.UserPrompt);
+            Assert.Contains("dbo.TSettleMst", result.UserPrompt);
+            // 단계 하나만 쓰라는 계약이 시스템 프롬프트에 있어야 한다.
+            Assert.Contains("ONE step section", result.SystemPrompt);
+            // 문서 전체 규칙(오류코드 원본 재사용 등)도 함께 실려야 한다.
+            Assert.Contains("[Required Content & Rules]", result.SystemPrompt);
+        }
+
+        // 접두사가 갈라지면 프롬프트 캐시가 매 단계 미스가 되어 분할 비용이 N배로 뛴다.
+        // 이 테스트가 그 회귀를 막는 유일한 장치다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_KeepsIdenticalPromptPrefixAcrossSteps()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+            var service = StepService();
+
+            var first = await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+            var second = await service.GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            const string marker = "Now write the section for step";
+            var firstUserPrompt = first.UserPrompt!;
+            var secondUserPrompt = second.UserPrompt!;
+            var firstPrefix = firstUserPrompt.Substring(0, firstUserPrompt.IndexOf(marker, StringComparison.Ordinal));
+            var secondPrefix = secondUserPrompt.Substring(0, secondUserPrompt.IndexOf(marker, StringComparison.Ordinal));
+
+            Assert.Equal(firstPrefix, secondPrefix);
+            Assert.Equal(first.SystemPrompt!.Replace("S01", "S02").Replace("수수료율 스냅샷", "정산 원장 생성"), second.SystemPrompt);
+        }
+
+        // 하한 미달 재시도 피드백은 접두사 뒤(말미)에 붙어야 캐시가 유지된다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_AppendsFloorFeedbackAfterThePrefix()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job",
+                effort: null, floorFeedback: "코드 블록이 없습니다");
+
+            var marker = result.UserPrompt!.IndexOf("Now write the section for step", StringComparison.Ordinal);
+            var feedback = result.UserPrompt!.IndexOf("코드 블록이 없습니다", StringComparison.Ordinal);
+
+            Assert.True(feedback > marker, "피드백은 지시문 뒤에 붙어야 한다");
         }
     }
 
