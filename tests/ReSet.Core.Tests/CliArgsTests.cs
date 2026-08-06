@@ -163,7 +163,7 @@ namespace ReSet.Core.Tests
             public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
             public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) { }
             public void NotifyValidationSuccess(string selectedOption) { }
-            public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome) =>
+            public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome, bool structureRedraftSupported = false) =>
                 Task.FromResult(new HumanReviewResult());
             public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) => Task.FromResult(false);
             public IMultiProgressScope CreateProgressScope(string title)

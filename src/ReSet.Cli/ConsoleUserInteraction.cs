@@ -95,7 +95,11 @@ namespace ReSet.Cli
             Serilog.Log.Information($"[{selectedOption}] L1/L2 자동 검증 모두 통과!");
         }
 
-        public async Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome)
+        public async Task<HumanReviewResult> RequestHumanReviewAsync(
+            string selectedOption,
+            string specificationMarkdown,
+            VerificationOutcome outcome,
+            bool structureRedraftSupported = false)
         {
             // 점수 필드는 여전히 문서 본문의 YAML 헤더에서 읽는다. 파이프라인 진행 중에는
             // 아직 헤더가 씌워지지 않아 항상 비어 있지만(VerificationDocumentFormatter가
@@ -162,11 +166,19 @@ namespace ReSet.Cli
                 return new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = null };
             }
 
+            // 구조를 바꾸는 피드백은 본문만 다시 써서는 반영되지 않는다. 통합 배치
+            // 계획서는 목차를 고정한 채 본문을 생성하므로 목차부터 다시 세워야 한다.
+            // 반대로 목차가 없는 단일 SP 명세서 경로에서는 답을 받아도 쓸 곳이 없으므로
+            // 아예 묻지 않는다 — 사용자에게 무의미한 질문을 한 번 더 던지지 않는다.
+            var redraftStructure = structureRedraftSupported && AnsiConsole.Confirm(
+                "이 피드백이 문서 구조(목차)까지 바꾸나요? (단계 추가/분할/순서 변경 등)", false);
+
             AnsiConsole.MarkupLine("[blue]사용자 피드백을 적용하여 보완 분석 프로세스를 재가동합니다...[/]");
             return new HumanReviewResult
             {
                 Decision = UserDecision.ProvideFeedback,
-                UserFeedback = userFeedback
+                UserFeedback = userFeedback,
+                RedraftStructure = redraftStructure
             };
         }
 
