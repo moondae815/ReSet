@@ -1743,13 +1743,17 @@ namespace ReSet.Core.Services
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
-                        progressScope.AddTask("phase3", "3/3. 최종 생성 중...");
-
                         // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 조용히
                         // 현행 단일 호출로 폴백한다 — 분할은 개선이지 필수가 아니다.
                         currentSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
                         if (currentSteps != null)
                         {
+                            // 골격은 개요·흐름도·검증 SQL을 완성하고, 단계 상세 H2에는
+                            // 모든 단계가 공유할 공통 규약만 남긴다. 이 행을 "최종 생성"으로
+                            // 표기하면 뒤따르는 단계별 행과 겹쳐 읽혀, 무엇이 이미 끝났고
+                            // 무엇이 남았는지 화면만으로는 알 수 없다.
+                            progressScope.AddTask("phase3", "3/3. 골격 생성 중 (공통 규약·흐름도)...");
+
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
@@ -1785,7 +1789,11 @@ namespace ReSet.Core.Services
 
                         if (splitMarkdown == null)
                         {
-                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3");
+                            // 분할하지 못했거나 골격이 실패한 경로. 이때만 문서 전체를 한 번에
+                            // 만든다. 골격 행과 키를 나눠 두 행이 나란히 남게 한다 — 분할을
+                            // 시도했다가 폴백했다는 사실이 화면에 보여야 한다.
+                            progressScope.AddTask("phase3single", "3/3. 최종 생성 중 (단일 호출)...");
+                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3single");
                         }
                     }
                     consolidatedPlan = splitMarkdown ?? aiResult.Content;
@@ -2488,7 +2496,7 @@ namespace ReSet.Core.Services
             {
                 var step = pending[index];
                 var taskKey = $"step_{step.Code}";
-                progressScope.AddTask(taskKey, $"3/3. 최종 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
+                progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
                 sections[step.Code] = await GenerateStepSectionWithFloorRetryAsync(
                     step, steps, conventions, specs, targetLanguage, jobName, floorViolations, cancellationToken);
