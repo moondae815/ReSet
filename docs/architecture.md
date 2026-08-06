@@ -211,7 +211,10 @@ graph TD
         L1B -- "실패 (재시도 소진)" --> OutL1["종료 상태: L1 미통과<br/>경고 배너 삽입"]
         L1B -- "성공" --> L2B{"L2 Critic 교차 리뷰<br/>(ReviewConsolidatedPlanAsync)"}
         L2B -- "리뷰 호출 실패" --> OutNR["종료 상태: 리뷰 미수행"]
-        L2B -- "결함 (재시도 여력 있음)" --> Retry
+        L2B -- "결함 (재시도 여력 있음)" --> Stall{"최고점을 갱신했는가?<br/>(BestAttempt.TryRecord)"}
+        Stall -- "예 (개선 중)" --> Retry
+        Stall -- "아니오 (정체) + 재수립 미소진" --> Redraft["2/3 재실행 — 이전 목차와<br/>누적 피드백을 넣어 구조 재설계<br/>(Job당 1회, 직전 목차는<br/>PlanStructure.superseded-n.md로 보존)"]
+        Redraft --> P3
         L2B -- "결함 (재시도 소진)" --> OutQR["종료 상태: 품질 미달<br/>점수·피드백 배너 삽입"]
         L2B -- "통과" --> OutPass["종료 상태: 통과"]
     end
@@ -221,7 +224,7 @@ graph TD
         L3B -- "예 (Batch)" --> SavePlan["BatchMigrationPlan.md 저장<br/>(종료 상태와 점수를 헤더에 기록)"]
         L3B -- "아니오 (TUI)" --> Human{"L3 사용자 결정?"}
         Human -- "1. 승인" --> SavePlan
-        Human -- "2. 피드백" --> Regen["목차는 유지한 채 본문만 재생성<br/>L2를 다시 거치지 않으므로<br/>종료 상태를 리뷰 미수행으로 되돌림"]
+        Human -- "2. 피드백" --> Regen["구조 변경 피드백이면 목차부터 재수립,<br/>아니면 목차는 유지한 채 본문만 재생성<br/>L2를 다시 거치지 않으므로<br/>종료 상태를 리뷰 미수행으로 되돌림"]
         Regen --> Human
         Human -- "3. 취소" --> AbortB["저장 없이 이탈"]
         SavePlan --> Bundle["지시서 번들 생성<br/>agent/MigrationInstructions.md, todo.md<br/>(계획서 검증 상태를 0번 섹션에 명시)"]
