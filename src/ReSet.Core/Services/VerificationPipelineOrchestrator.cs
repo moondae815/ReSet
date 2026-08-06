@@ -1681,6 +1681,14 @@ namespace ReSet.Core.Services
             var planOutcome = VerificationOutcome.Passed;
             ReviewResult? planReview = null;
 
+            // 분할 생성 상태. 지목 재생성이 골격과 통과한 단계를 재사용하려면
+            // 회차를 넘어 살아 있어야 한다.
+            IReadOnlyList<BatchStepPlan>? currentSteps = null;
+            string? lastSkeleton = null;
+            Dictionary<string, string>? lastStepSections = null;
+            var stepFloorViolations = new List<string>();
+            var pendingDefectiveSteps = new List<string>();
+
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
             var bestAttempt = new BestAttempt();
@@ -1700,13 +1708,14 @@ namespace ReSet.Core.Services
                     }
 
                     AiResult aiResult = new AiResult();
+                    string? splitMarkdown = null;
                     using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 수립") ?? NullProgressScope.Instance)
                     {
                         if (string.IsNullOrEmpty(currentPlanStructure))
                         {
                             progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
                             var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
-                            
+
                             var rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
                             if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
@@ -1719,9 +1728,38 @@ namespace ReSet.Core.Services
                         }
 
                         progressScope.AddTask("phase3", "3/3. 최종 생성 중...");
-                        aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3");
+
+                        // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 조용히
+                        // 현행 단일 호출로 폴백한다 — 분할은 개선이지 필수가 아니다.
+                        currentSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                        if (currentSteps != null)
+                        {
+                            var split = await GenerateBySplitAsync(
+                                currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
+                                progressScope, lastSkeleton, lastStepSections, pendingDefectiveSteps, cancellationToken);
+
+                            if (split != null)
+                            {
+                                splitMarkdown = split.Markdown;
+                                aiResult = split.Generation;
+                                lastSkeleton = split.Skeleton;
+                                lastStepSections = split.Sections;
+                                stepFloorViolations = split.FloorViolations;
+                            }
+                            else
+                            {
+                                _userInteraction.NotifyError($"{jobName} - 골격 생성에 실패하여 단일 호출로 계획서를 생성합니다.");
+                            }
+                        }
+
+                        pendingDefectiveSteps.Clear();
+
+                        if (splitMarkdown == null)
+                        {
+                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3");
+                        }
                     }
-                    consolidatedPlan = aiResult.Content;
+                    consolidatedPlan = splitMarkdown ?? aiResult.Content;
                     finalAiResult = aiResult;
                     genSuccess = true;
                 }
@@ -2119,6 +2157,182 @@ namespace ReSet.Core.Services
             }
 
             return redrafted;
+        }
+
+        /// <summary>
+        /// 분할 생성 1회분의 결과. 골격과 단계 섹션을 함께 들고 나오는 이유는
+        /// 다음 회차의 지목 재생성이 그 둘을 재사용하기 때문이다.
+        /// </summary>
+        private sealed record SplitGeneration(
+            string Markdown,
+            AiResult Generation,
+            string Skeleton,
+            Dictionary<string, string> Sections,
+            List<string> FloorViolations);
+
+        /// <summary>
+        /// 골격 1회 + 단계 N회로 계획서를 만든다.
+        ///
+        /// 이 경로가 존재하는 이유: 단일 호출은 모델이 하나의 출력 예산 안에서
+        /// 앞 단계에 66%를 쓰고 뒤를 굶겼다(실측). 단계마다 독립 호출이면 그
+        /// 경쟁 자체가 사라진다.
+        ///
+        /// defectiveSteps가 비어 있지 않고 이전 골격·섹션이 남아 있으면 지목된
+        /// 단계만 다시 뽑는다. 골격 호출은 하지 않는다.
+        ///
+        /// 골격을 얻지 못하면 null을 돌려주고 호출부가 단일 호출로 폴백한다.
+        /// </summary>
+        private async Task<SplitGeneration?> GenerateBySplitAsync(
+            string planStructure,
+            IReadOnlyList<BatchStepPlan> steps,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            IMultiProgressScope progressScope,
+            string? previousSkeleton,
+            Dictionary<string, string>? previousSections,
+            IReadOnlyList<string> defectiveSteps,
+            CancellationToken cancellationToken)
+        {
+            var targeted = previousSkeleton != null && previousSections != null && defectiveSteps.Count > 0;
+
+            string skeleton;
+            AiResult generation;
+
+            if (targeted)
+            {
+                skeleton = previousSkeleton!;
+                generation = new AiResult { Content = skeleton };
+            }
+            else
+            {
+                try
+                {
+                    var skeletonResult = await WrapWithProgress(
+                        _consolidatorService.GenerateBatchPlanSkeletonAsync(
+                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, cancellationToken),
+                        progressScope, "phase3");
+
+                    if (skeletonResult == null || string.IsNullOrWhiteSpace(skeletonResult.Content))
+                    {
+                        return null;
+                    }
+
+                    skeleton = skeletonResult.Content;
+                    generation = skeletonResult;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _userInteraction.NotifyError($"{jobName} - 배치 계획 골격 생성 실패: {ex.Message}");
+                    return null;
+                }
+            }
+
+            var conventions = BatchPlanAssembler.ExtractSharedConventions(skeleton);
+            var sections = previousSections != null
+                ? new Dictionary<string, string>(previousSections)
+                : new Dictionary<string, string>();
+            var floorViolations = new List<string>();
+
+            // 지목 재생성이면 지목된 단계만, 아니면 전부 만든다.
+            // 지목 코드가 목록에 없으면(모델이 지어낸 코드) 무시한다.
+            var pending = targeted
+                ? steps.Where(step => defectiveSteps.Contains(step.Code, StringComparer.OrdinalIgnoreCase)).ToList()
+                : steps.ToList();
+
+            for (int index = 0; index < pending.Count; index++)
+            {
+                var step = pending[index];
+                var taskKey = $"step_{step.Code}";
+                progressScope.AddTask(taskKey, $"3/3. 최종 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
+
+                sections[step.Code] = await GenerateStepSectionWithFloorRetryAsync(
+                    step, steps, conventions, specs, targetLanguage, jobName, floorViolations, cancellationToken);
+
+                progressScope.CompleteTask(taskKey);
+            }
+
+            // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
+            var ordered = steps
+                .Select(step => sections.TryGetValue(step.Code, out var markdown) ? markdown : string.Empty)
+                .Where(markdown => !string.IsNullOrWhiteSpace(markdown))
+                .ToList();
+
+            return new SplitGeneration(
+                BatchPlanAssembler.Assemble(skeleton, ordered),
+                generation,
+                skeleton,
+                sections,
+                floorViolations);
+        }
+
+        /// <summary>
+        /// 단계 섹션 하나를 만들고 하한을 검사한다. 미달이면 그 단계만 1회 재시도한다.
+        ///
+        /// 이 재시도는 MaxL2Attempts를 소모하지 않는다. 그 예산은 Actor-Critic 문서
+        /// 레벨의 것이고, 이 보수는 리뷰 호출이 0인 국소 작업이라 성격이 다르다.
+        /// 대신 단계당 1회로 하드 캡해 폭주를 막는다.
+        ///
+        /// 재시도 후에도 미달이면 채택하고 기록만 한다. 여기서 문서 L1을 실패시키면
+        /// 같은 결함으로 골격+단계 전체 재생성을 유발해 비용만 태운다.
+        /// </summary>
+        private async Task<string> GenerateStepSectionWithFloorRetryAsync(
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan> steps,
+            string conventions,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            List<string> floorViolations,
+            CancellationToken cancellationToken)
+        {
+            const int maxTries = 2;   // 최초 1회 + 재시도 1회
+            string? adopted = null;
+            string? floorFeedback = null;
+
+            for (int tries = 0; tries < maxTries; tries++)
+            {
+                string? content = null;
+                try
+                {
+                    var result = await _consolidatorService.GenerateBatchStepSectionAsync(
+                        step, steps, conventions, specs, targetLanguage, jobName,
+                        _consolidatorEffort, floorFeedback, cancellationToken);
+                    content = result?.Content;
+                }
+                // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
+                }
+
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    floorFeedback = null;
+                    continue;
+                }
+
+                adopted = content;
+
+                var stepResult = _validator.ValidateBatchStep(content, step);
+                if (stepResult.IsValid)
+                {
+                    return content;
+                }
+
+                _userInteraction.NotifyStatus(
+                    $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {string.Join(" / ", stepResult.Errors)}[/]");
+                floorFeedback = stepResult.SuggestedPromptFix;
+            }
+
+            if (adopted == null)
+            {
+                floorViolations.Add($"{step.Code} (생성 실패)");
+                return $"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n";
+            }
+
+            floorViolations.Add($"{step.Code} (하한 미달)");
+            return adopted;
         }
 
         /// <summary>
