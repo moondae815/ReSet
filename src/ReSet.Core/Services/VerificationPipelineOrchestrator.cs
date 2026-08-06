@@ -1768,11 +1768,16 @@ namespace ReSet.Core.Services
                             {
                                 _userInteraction.NotifyError($"{jobName} - 골격 생성에 실패하여 단일 호출로 계획서를 생성합니다.");
                                 // 골격 재시도가 실패해 이번 회차는 완전히 다른 구조(단일
-                                // 호출 문서)로 만들어진다. 이전 분할 시도가 남긴 하한 위반
-                                // 기록은 그 문서의 어느 섹션과도 대응하지 않으므로 여기서
-                                // 지운다 — 안 지우면 배너가 이번 문서에 존재하지도 않는
-                                // 단계를 가리킨다.
-                                stepFloorViolations = new Dictionary<string, string>();
+                                // 호출 문서)로 만들어진다. stepFloorViolations만 지우고
+                                // lastSkeleton/lastStepSections를 남겨두면, 이번 회차와
+                                // 무관한 나중 회차의 지목 재생성이 그 캐시를 재사용해
+                                // 하한 미달 기록이 없는 옛 섹션을 조용히 되살릴 수 있다
+                                // (실제로 재현됨: 위반 기록 없는 하한 미달 섹션이 배너
+                                // 없이 최종 문서에 실렸다). 캐시 전체를 한 번에 지워
+                                // 기록과 그 기록이 가리키던 섹션이 함께 죽게 한다.
+                                ClearSplitGenerationCacheAfterRedraft(
+                                    out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
+                                    out stepFloorViolations, pendingDefectiveSteps);
                             }
                         }
 
@@ -2054,6 +2059,44 @@ namespace ReSet.Core.Services
                 consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
             }
 
+            // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
+            // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
+            // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
+            // 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만, 9개
+            // 프로시저는 최종 문서 어디에도 흔적이 없다 — 부실 섹션보다 더
+            // 나쁘다. 부실 섹션은 최소한 존재를 알리기라도 한다.
+            //
+            // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
+            // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
+            // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
+            // 거쳐 bestAttemptStructure로 정확히 갈아타지만, currentSteps는 그
+            // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
+            // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
+            // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
+            // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
+            // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
+            // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
+            // bestAttemptStepFloorViolations라는 스냅샷을 따로 두는 이유(단계
+            // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
+            // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
+            // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
+            // 무관하므로 별도 스냅샷이 필요 없다.
+            var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+            var uncoveredProcedures = adoptedSteps != null
+                ? FindUncoveredProcedures(adoptedSteps, specs)
+                : Array.Empty<string>();
+            if (uncoveredProcedures.Count > 0)
+            {
+                Log.Warning(
+                    "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
+                    jobName, uncoveredProcedures.Count, string.Join(", ", uncoveredProcedures));
+
+                if (!string.IsNullOrEmpty(consolidatedPlan))
+                {
+                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
+                }
+            }
+
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
             {
@@ -2251,13 +2294,17 @@ namespace ReSet.Core.Services
             Dictionary<string, string> FloorViolations);
 
         /// <summary>
-        /// 목차 재수립 직후 분할 생성 캐시를 통째로 무효화한다.
+        /// 분할 생성 캐시를 통째로 무효화한다.
         ///
-        /// 네 항목을 한곳에서 지우는 이유: 목차가 바뀌면 단계 코드도 바뀐다. 골격·섹션·
-        /// 지목 목록·하한 위반 기록 중 하나라도 남겨두면 새 목차에 없는 옛 단계 코드를
-        /// 계속 실어 나른다. stepFloorViolations를 빠뜨리면 GenerateBySplitAsync는 이번
-        /// 회차에 다시 만드는 단계(pending)의 기록만 지우므로, 더 이상 존재하지 않는
-        /// 옛 코드의 기록은 절대 지워지지 않고 영원히 남는다 — 실제로 그런 실수가 있었다.
+        /// 호출 자리가 둘이다: (1) 목차 재수립 직후 — 목차가 바뀌면 단계 코드도
+        /// 바뀐다. (2) 골격 재시도가 실패해 단일 호출로 폴백할 때 — 이번 회차의
+        /// 문서가 분할 문서와 완전히 다른 구조가 된다. 두 경우 모두 골격·섹션·
+        /// 지목 목록·하한 위반 기록 중 하나라도 남겨두면, 이번 회차나 나중 회차의
+        /// 지목 재생성이 더 이상 유효하지 않은 옛 단계 코드·섹션을 계속 실어
+        /// 나른다. stepFloorViolations만 지우고 lastSkeleton/lastStepSections를
+        /// 남겨두면, 그 위반 기록이 사라진 뒤에도 캐시된 섹션 자체는 살아남아
+        /// 나중 회차의 지목 재생성이 하한 미달 섹션을 위반 기록 없이(=배너 없이)
+        /// 그대로 재조립할 수 있다 — 실제로 그런 실수가 있었다.
         /// </summary>
         private static void ClearSplitGenerationCacheAfterRedraft(
             out string? lastSkeleton,
@@ -2273,6 +2320,73 @@ namespace ReSet.Core.Services
             currentSteps = null;
             stepFloorViolations = new Dictionary<string, string>();
             pendingDefectiveSteps.Clear();
+        }
+
+        // 명세서 FileName에서 흔히 붙는 확장자. BareObjectName은 스키마 접두사(마지막
+        // '.' 앞)만 떼도록 설계됐다 — "dbo.UP_X.sql"에 그대로 적용하면 마지막 '.'
+        // 뒤의 "sql"을 프로시저명으로 착각한다. 알려진 확장자만 먼저 떼어 그 함정을
+        // 피한다. 실제 프로시저명(UP_ 접두사, 언더스코어 포함)이 이 목록과 겹칠 일은
+        // 없다.
+        private static readonly string[] KnownSpecFileExtensions = { ".sql", ".md", ".txt" };
+
+        private static string StripKnownSpecExtension(string fileName)
+        {
+            foreach (var extension in KnownSpecFileExtensions)
+            {
+                if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    return fileName[..^extension.Length];
+                }
+            }
+
+            return fileName;
+        }
+
+        /// <summary>
+        /// 목차의 스텝이 원본 명세서 전부를 커버하는지 검사해, 어느 스텝의
+        /// LegacyProcedures에도 등장하지 않는 명세서를 돌려준다.
+        ///
+        /// 이 검사가 필요한 이유: 분할 생성의 전체 계약이 목차의 스텝 목록에
+        /// 기대고 있다. 12개 프로시저에 목차가 3개 스텝만 냈다면, 분할은 3개의
+        /// 통통하고 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만
+        /// 나머지 9개는 최종 문서 어디에도 없다 — 아무 신호도 없이.
+        ///
+        /// 비교는 "맨 이름"(스키마·DB 접두사와 확장자를 뗀 이름, 대소문자 무시)
+        /// 기준이다. MechanicalValidator.BareObjectName이 접두사 제거 규칙을
+        /// 이미 갖고 있어 그대로 재사용한다 — 별도로 다시 구현하면 두 로직이
+        /// 미묘하게 갈라질 수 있다.
+        /// </summary>
+        private static IReadOnlyList<string> FindUncoveredProcedures(
+            IReadOnlyList<BatchStepPlan> steps,
+            List<(string FileName, string Content)> specs)
+        {
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var step in steps)
+            {
+                foreach (var legacyProcedure in step.LegacyProcedures)
+                {
+                    var bareName = MechanicalValidator.BareObjectName(legacyProcedure);
+                    if (bareName.Length > 0)
+                    {
+                        covered.Add(bareName);
+                    }
+                }
+            }
+
+            var uncovered = new List<string>();
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var spec in specs)
+            {
+                var bareName = MechanicalValidator.BareObjectName(StripKnownSpecExtension(spec.FileName));
+                if (bareName.Length == 0 || covered.Contains(bareName) || !reported.Add(bareName))
+                {
+                    continue;
+                }
+
+                uncovered.Add(spec.FileName);
+            }
+
+            return uncovered;
         }
 
         /// <summary>

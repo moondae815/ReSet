@@ -228,8 +228,13 @@ namespace ReSet.Core.Services
         /// 스키마·DB 접두사를 뗀 이름. `SETTLE_POQ_DB.dbo.TSettleMst` → `TSettleMst`.
         /// 실제 문서가 같은 테이블을 접두사 있이/없이 섞어 쓰므로 접두사까지
         /// 대조하면 정상 문서가 실패한다.
+        ///
+        /// internal인 이유: <see cref="VerificationPipelineOrchestrator"/>의 목차
+        /// 커버리지 검사(스텝의 LegacyProcedures가 원본 명세서 전부를 가리키는지)가
+        /// 같은 접두사 제거 규칙을 쓴다. 별도로 다시 구현하면 두 로직이 미묘하게
+        /// 갈라질 수 있어, 여기 한 곳의 규칙을 그대로 재사용하게 한다.
         /// </summary>
-        private static string BareObjectName(string qualifiedName)
+        internal static string BareObjectName(string qualifiedName)
         {
             var trimmed = (qualifiedName ?? string.Empty).Trim().Trim('[', ']');
             var lastDot = trimmed.LastIndexOf('.');
