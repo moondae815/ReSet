@@ -4558,5 +4558,110 @@ SELECT 1;
             Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
         }
+
+        /// <summary>
+        /// GenerateBySplitAsync는 private이고, 지목 재생성 분기(targeted branch)는
+        /// Task 9의 L2 배선이 붙기 전까지 공개 진입점(RunConsolidatedPipelineAsync)에서는
+        /// 도달할 수 없다 — pendingDefectiveSteps가 매 시도 뒤 무조건 비워지기 때문이다.
+        /// 그래서 이 도우미는 리플렉션으로 그 분기를 직접 두 번 호출해, 손대지 않은
+        /// 단계의 하한 위반 기록이 살아남는지를 지금 시점에서 고정한다.
+        /// </summary>
+        private static async Task<object?> InvokeGenerateBySplitAsync(
+            VerificationPipelineOrchestrator orchestrator,
+            string planStructure,
+            IReadOnlyList<BatchStepPlan> steps,
+            List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            IMultiProgressScope progressScope,
+            string? previousSkeleton,
+            Dictionary<string, string>? previousSections,
+            Dictionary<string, string> previousViolations,
+            IReadOnlyList<string> defectiveSteps,
+            CancellationToken cancellationToken)
+        {
+            var method = typeof(VerificationPipelineOrchestrator).GetMethod(
+                "GenerateBySplitAsync",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Assert.NotNull(method);
+
+            var task = (Task)method!.Invoke(orchestrator, new object?[]
+            {
+                planStructure, steps, specs, targetLanguage, jobName, progressScope,
+                previousSkeleton, previousSections, previousViolations, defectiveSteps, cancellationToken
+            })!;
+
+            await task;
+
+            var resultProperty = task.GetType().GetProperty("Result");
+            return resultProperty!.GetValue(task);
+        }
+
+        private static Dictionary<string, string> GetFloorViolations(object splitGeneration) =>
+            (Dictionary<string, string>)splitGeneration.GetType().GetProperty("FloorViolations")!.GetValue(splitGeneration)!;
+
+        private static Dictionary<string, string> GetSections(object splitGeneration) =>
+            (Dictionary<string, string>)splitGeneration.GetType().GetProperty("Sections")!.GetValue(splitGeneration)!;
+
+        private static string GetSkeleton(object splitGeneration) =>
+            (string)splitGeneration.GetType().GetProperty("Skeleton")!.GetValue(splitGeneration)!;
+
+        [Fact]
+        public async Task GenerateBySplitAsync_TargetedRegeneration_PreservesUntouchedStepFloorViolation()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            // S01은 몇 번을 다시 만들어도 코드 블록이 없어 하한 미달. S02는 항상 정상.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            var steps = BatchStepPlanParser.TryParse(StepsJson);
+            Assert.NotNull(steps);
+            var specs = new List<(string FileName, string Content)> { ("spec1.md", "content1") };
+
+            // 1회차: 지목 없이 전부 생성한다. S01은 재시도해도 하한 미달로 남는다.
+            var first = await InvokeGenerateBySplitAsync(
+                orchestrator, "목차", steps!, specs, "C#", "Job_Test",
+                NullProgressScope.Instance, null, null, new Dictionary<string, string>(),
+                Array.Empty<string>(), CancellationToken.None);
+            Assert.NotNull(first);
+
+            var firstViolations = GetFloorViolations(first!);
+            Assert.True(firstViolations.ContainsKey("S01"));
+            Assert.False(firstViolations.ContainsKey("S02"));
+
+            // 2회차: S02만 지목해 재생성한다. S01은 이 회차에서 전혀 건드리지 않는다.
+            var second = await InvokeGenerateBySplitAsync(
+                orchestrator, "목차", steps!, specs, "C#", "Job_Test",
+                NullProgressScope.Instance, GetSkeleton(first!), GetSections(first!), firstViolations,
+                new[] { "S02" }, CancellationToken.None);
+            Assert.NotNull(second);
+
+            var secondViolations = GetFloorViolations(second!);
+
+            // 불변식: 지목 재생성이 건드리지 않은 S01의 하한 미달 기록이 여전히 살아 있어야 한다.
+            Assert.True(secondViolations.ContainsKey("S01"));
+            Assert.False(secondViolations.ContainsKey("S02"));
+
+            // 지목 재생성이 실제로 골격 호출 없이 일어났는지 확인해, 이 테스트가
+            // targeted 분기를 정말로 탔는지(가짜 커버리지가 아닌지) 검증한다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
     }
 }

@@ -1686,7 +1686,11 @@ namespace ReSet.Core.Services
             IReadOnlyList<BatchStepPlan>? currentSteps = null;
             string? lastSkeleton = null;
             Dictionary<string, string>? lastStepSections = null;
-            var stepFloorViolations = new List<string>();
+            // Code -> "{Code} (하한 미달)" 형식의 표시 문자열. 사전으로 두는 이유는
+            // 지목 재생성이 건드리지 않은 단계의 항목을 그대로 보존해야 하기
+            // 때문이다 — 목록을 통째로 교체하면 재생성되지 않은 단계의 하한 미달
+            // 기록이 조용히 사라진다.
+            var stepFloorViolations = new Dictionary<string, string>();
             var pendingDefectiveSteps = new List<string>();
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
@@ -1736,7 +1740,8 @@ namespace ReSet.Core.Services
                         {
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
-                                progressScope, lastSkeleton, lastStepSections, pendingDefectiveSteps, cancellationToken);
+                                progressScope, lastSkeleton, lastStepSections, stepFloorViolations,
+                                pendingDefectiveSteps, cancellationToken);
 
                             if (split != null)
                             {
@@ -2162,13 +2167,18 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 분할 생성 1회분의 결과. 골격과 단계 섹션을 함께 들고 나오는 이유는
         /// 다음 회차의 지목 재생성이 그 둘을 재사용하기 때문이다.
+        ///
+        /// FloorViolations를 Code로 키를 잡는 이유: 지목 재생성이 건드리지 않은
+        /// 단계의 위반 기록은 조립된 문서에 여전히 그 단계의 저질 본문이 실려
+        /// 있는 한 함께 살아 있어야 한다. 목록이었다면 통째 교체 시 그 기록이
+        /// 사라져 배너가 조용히 과소 보고했을 것이다.
         /// </summary>
         private sealed record SplitGeneration(
             string Markdown,
             AiResult Generation,
             string Skeleton,
             Dictionary<string, string> Sections,
-            List<string> FloorViolations);
+            Dictionary<string, string> FloorViolations);
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
@@ -2191,6 +2201,7 @@ namespace ReSet.Core.Services
             IMultiProgressScope progressScope,
             string? previousSkeleton,
             Dictionary<string, string>? previousSections,
+            Dictionary<string, string> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             CancellationToken cancellationToken)
         {
@@ -2203,6 +2214,9 @@ namespace ReSet.Core.Services
             {
                 skeleton = previousSkeleton!;
                 generation = new AiResult { Content = skeleton };
+                // 골격 호출을 건너뛰므로 WrapWithProgress가 이 태스크를 완료 처리할
+                // 기회가 없다. 여기서 직접 완료하지 않으면 화면에 미완료 행이 남는다.
+                progressScope.CompleteTask("phase3");
             }
             else
             {
@@ -2232,13 +2246,22 @@ namespace ReSet.Core.Services
             var sections = previousSections != null
                 ? new Dictionary<string, string>(previousSections)
                 : new Dictionary<string, string>();
-            var floorViolations = new List<string>();
+            // 이전 회차의 위반 기록을 그대로 이어받는다. 지금 회차에서 다시 만들
+            // 단계의 기록은 새로 만들기 직전에 지운다 — 통과하면 조용히 사라지고,
+            // 다시 미달하면 아래에서 새로 채워진다. 손대지 않는 단계의 기록은
+            // 절대 건드리지 않는다.
+            var floorViolations = new Dictionary<string, string>(previousViolations);
 
             // 지목 재생성이면 지목된 단계만, 아니면 전부 만든다.
             // 지목 코드가 목록에 없으면(모델이 지어낸 코드) 무시한다.
             var pending = targeted
                 ? steps.Where(step => defectiveSteps.Contains(step.Code, StringComparer.OrdinalIgnoreCase)).ToList()
                 : steps.ToList();
+
+            foreach (var step in pending)
+            {
+                floorViolations.Remove(step.Code);
+            }
 
             for (int index = 0; index < pending.Count; index++)
             {
@@ -2283,7 +2306,7 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
-            List<string> floorViolations,
+            Dictionary<string, string> floorViolations,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
@@ -2327,11 +2350,11 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
-                floorViolations.Add($"{step.Code} (생성 실패)");
+                floorViolations[step.Code] = $"{step.Code} (생성 실패)";
                 return $"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n";
             }
 
-            floorViolations.Add($"{step.Code} (하한 미달)");
+            floorViolations[step.Code] = $"{step.Code} (하한 미달)";
             return adopted;
         }
 
