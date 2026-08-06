@@ -702,8 +702,19 @@ namespace ReSet.Cli
                             throw new Exception("검증 파이프라인을 통과한 명세서 획득 실패");
                         }
 
-                        // 수집된 사양서 데이터를 메모리에 보관
-                        var specFileName = "docs/Spec.md";
+                        // 수집된 사양서 데이터를 메모리에 보관. FileName은 "docs/Spec.md"
+                        // 같은 고정 문자열이면 안 된다 — 통합 배치 파이프라인의 목차
+                        // 커버리지 검사(VerificationPipelineOrchestrator)와 AI 프롬프트의
+                        // "Filename:" 레이블이 둘 다 이 값으로 명세서를 구분하는데,
+                        // 고정 문자열은 N개 명세서를 전부 한 항목으로 뭉갠다(실측된 결함).
+                        // result.Definition이 있으면 그 스키마.이름을 쓰고, 없으면(드묾)
+                        // 이미 파싱해 둔 schema/name으로 대체한다 — 두 값 모두 항상
+                        // 채워져 있으므로 "docs/Spec.md" 같은 모호한 자리표시자로
+                        // 떨어질 일이 없고, 따라서 커버리지 검사가 이 항목을 가짜
+                        // 누락으로 잘못 보고할 일도 없다.
+                        var specFileName = result.Definition != null
+                            ? $"{result.Definition.Schema}.{result.Definition.Name}"
+                            : $"{schema}.{name}";
                         specsData.Add((specFileName, specMarkdown));
                         if (result.Definition != null)
                         {
@@ -1264,7 +1275,16 @@ namespace ReSet.Cli
                         {
                             var fullPath = Path.Combine(outputDir, fileName);
                             var content = await File.ReadAllTextAsync(fullPath);
-                            specsData.Add((fileName, content));
+                            // fileName은 outputDir 기준 상대 경로(예:
+                            // "Procedures/dbo.USP_X/docs/Spec.md")라서 마지막 세그먼트가
+                            // 항상 "Spec.md"다. 그대로 쓰면 목차 커버리지 검사와 AI
+                            // 프롬프트의 "Filename:" 레이블이 명세서를 구분하지 못한다.
+                            // 식별자는 selectedFiles를 만든 BatchStepCatalog.FindStepCandidates와
+                            // 같은 판정(ExtractProcedureIdentifier)으로 뽑는다 — selectedFiles가
+                            // 바로 그 메서드의 결과에서 골라졌으므로 여기서 null이 나올 수
+                            // 없지만, 방어적으로 fileName 자체로 대체한다.
+                            var specFileName = BatchStepCatalog.ExtractProcedureIdentifier(fileName) ?? fileName;
+                            specsData.Add((specFileName, content));
                         }
 
                         var jobName = AnsiConsole.Prompt(

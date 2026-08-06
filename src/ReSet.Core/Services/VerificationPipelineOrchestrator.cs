@@ -2081,6 +2081,19 @@ namespace ReSet.Core.Services
             // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
             // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
             // 무관하므로 별도 스냅샷이 필요 없다.
+            //
+            // 유지보수 불변식(재검토 시 반드시 지킬 것): (1) 이 재계산은 재시도
+            // 루프가 완전히 끝난 뒤, currentPlanStructure 하나에서만 파싱해야
+            // 한다 — 루프 중간의 어느 지역 변수(특히 currentSteps)도 다시 쓰지
+            // 않는다. (2) 앞으로 채택 문서를 이전 회차로 되돌리는 새 종료 경로를
+            // 추가한다면, 그 경로는 반드시 currentPlanStructure를 그 회차의 목차로
+            // 되감아야 한다 — 안 그러면 이 재계산이 채택되지 않은 문서를 서술한다.
+            //
+            // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
+            // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
+            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
+            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
+            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             var uncoveredProcedures = adoptedSteps != null
                 ? FindUncoveredProcedures(adoptedSteps, specs)
@@ -2322,26 +2335,6 @@ namespace ReSet.Core.Services
             pendingDefectiveSteps.Clear();
         }
 
-        // 명세서 FileName에서 흔히 붙는 확장자. BareObjectName은 스키마 접두사(마지막
-        // '.' 앞)만 떼도록 설계됐다 — "dbo.UP_X.sql"에 그대로 적용하면 마지막 '.'
-        // 뒤의 "sql"을 프로시저명으로 착각한다. 알려진 확장자만 먼저 떼어 그 함정을
-        // 피한다. 실제 프로시저명(UP_ 접두사, 언더스코어 포함)이 이 목록과 겹칠 일은
-        // 없다.
-        private static readonly string[] KnownSpecFileExtensions = { ".sql", ".md", ".txt" };
-
-        private static string StripKnownSpecExtension(string fileName)
-        {
-            foreach (var extension in KnownSpecFileExtensions)
-            {
-                if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                {
-                    return fileName[..^extension.Length];
-                }
-            }
-
-            return fileName;
-        }
-
         /// <summary>
         /// 목차의 스텝이 원본 명세서 전부를 커버하는지 검사해, 어느 스텝의
         /// LegacyProcedures에도 등장하지 않는 명세서를 돌려준다.
@@ -2351,10 +2344,20 @@ namespace ReSet.Core.Services
         /// 통통하고 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만
         /// 나머지 9개는 최종 문서 어디에도 없다 — 아무 신호도 없이.
         ///
-        /// 비교는 "맨 이름"(스키마·DB 접두사와 확장자를 뗀 이름, 대소문자 무시)
-        /// 기준이다. MechanicalValidator.BareObjectName이 접두사 제거 규칙을
-        /// 이미 갖고 있어 그대로 재사용한다 — 별도로 다시 구현하면 두 로직이
-        /// 미묘하게 갈라질 수 있다.
+        /// 비교는 "맨 이름"(스키마·DB 접두사를 뗀 이름, 대소문자 무시) 기준이다.
+        /// MechanicalValidator.BareObjectName이 그 규칙을 이미 갖고 있어 그대로
+        /// 재사용한다 — 별도로 다시 구현하면 두 로직이 미묘하게 갈라질 수 있다.
+        ///
+        /// FileName에서 확장자를 따로 떼지 않는다. 이 메서드의 두 호출부
+        /// (Program.cs의 --batch 경로와 TUI 경로)는 모두 확장자 없는 "스키마.이름"
+        /// 식별자(OutputPathResolver가 쓰는 것과 같은 형태, 예: "dbo.UP_UTIL_SETTLE_INS")
+        /// 를 넘긴다 — 코드 리뷰에서 실측된 결함(두 호출부 모두 모든 명세서에
+        /// "docs/Spec.md"라는 같은 파일명 또는 파일명의 마지막 경로 세그먼트를
+        /// 넘겨 N개 명세서가 전부 한 항목으로 뭉개졌다)의 수정이다. 앞으로 확장자
+        /// 있는 FileName을 넘기는 호출부가 생기면 이 메서드에 확장자 제거 단계를
+        /// 다시 추가하십시오 — BareObjectName은 스키마 접두사(마지막 '.' 앞)만
+        /// 떼도록 설계됐으므로 "dbo.UP_X.sql"에 그대로 적용하면 "sql"을
+        /// 프로시저명으로 착각한다.
         /// </summary>
         private static IReadOnlyList<string> FindUncoveredProcedures(
             IReadOnlyList<BatchStepPlan> steps,
@@ -2377,7 +2380,7 @@ namespace ReSet.Core.Services
             var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var spec in specs)
             {
-                var bareName = MechanicalValidator.BareObjectName(StripKnownSpecExtension(spec.FileName));
+                var bareName = MechanicalValidator.BareObjectName(spec.FileName);
                 if (bareName.Length == 0 || covered.Contains(bareName) || !reported.Add(bareName))
                 {
                     continue;

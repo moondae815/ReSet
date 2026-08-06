@@ -4336,13 +4336,13 @@ namespace ReSet.Core.Tests
         // 분할 생성 배선(Task 8) 테스트가 공유하는 픽스처와 도우미.
 
         // LegacyProcedures: 이 클래스 대부분의 배치 테스트가 쓰는 명세서
-        // ("spec1.md")를 S01이 커버하도록 선언한다 — 목차 커버리지 검사(Task 11)가
+        // ("dbo.USP_Spec1")를 S01이 커버하도록 선언한다 — 목차 커버리지 검사(Task 11)가
         // 도입된 뒤, 커버리지를 의도적으로 검사하지 않는 기존 테스트에서 예기치
         // 않은 "[커버리지 누락]" 배너가 섞여 나오지 않게 하기 위함이다.
         private const string StepsJson = @"```json
 {
   ""Steps"": [
-    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
     { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
   ]
 }
@@ -4385,7 +4385,7 @@ SELECT 1;
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
-            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
             return await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
         }
@@ -4639,7 +4639,7 @@ SELECT 1;
 
             var steps = BatchStepPlanParser.TryParse(StepsJson);
             Assert.NotNull(steps);
-            var specs = new List<(string FileName, string Content)> { ("spec1.md", "content1") };
+            var specs = new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") };
 
             // 1회차: 지목 없이 전부 생성한다. S01은 재시도해도 하한 미달로 남는다.
             var first = await InvokeGenerateBySplitAsync(
@@ -4714,7 +4714,7 @@ SELECT 1;
 
             var steps = BatchStepPlanParser.TryParse(StepsJson);
             Assert.NotNull(steps);
-            var specs = new List<(string FileName, string Content)> { ("spec1.md", "content1") };
+            var specs = new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") };
 
             // 1회차: 골격을 실제로 만든다.
             var first = await InvokeGenerateBySplitAsync(
@@ -5169,7 +5169,7 @@ SELECT 1;
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "1", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
-            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -5240,7 +5240,7 @@ SELECT 1;
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "1", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
-            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -5382,7 +5382,7 @@ SELECT 1;
         private const string StepsJsonRedrafted = @"```json
 {
   ""Steps"": [
-    { ""Code"": ""T01"", ""Name"": ""새 첫 단계"", ""LegacyProcedures"": [""spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""T01"", ""Name"": ""새 첫 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
     { ""Code"": ""T02"", ""Name"": ""새 둘째 단계"", ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
   ]
 }
@@ -5465,12 +5465,12 @@ SELECT 1;
         // 잡는다 — 목차가 3개 스텝만 내고 명세서가 12개면 부실 스텝보다 더
         // 나쁜, 아무 흔적 없는 누락이 생긴다.
         //
-        // S01만 "spec1"을 커버하는 목차. S02는 다른 프로시저를 다룬다는 설정으로
+        // S01만 "USP_Spec1"(dbo.USP_Spec1)을 커버하는 목차. S02는 다른 프로시저를 다룬다는 설정으로
         // 아무것도 선언하지 않는다.
         private const string StepsJsonPartialCoverage = @"```json
 {
   ""Steps"": [
-    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
     { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
   ]
 }
@@ -5501,8 +5501,8 @@ SELECT 1;
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
-            // spec2.md는 어느 스텝의 LegacyProcedures에도 등장하지 않는다.
-            var specs = new List<(string, string)> { ("spec1.md", "content1"), ("spec2.md", "content2") };
+            // dbo.USP_Spec2는 어느 스텝의 LegacyProcedures에도 등장하지 않는다.
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1"), ("dbo.USP_Spec2", "content2") };
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -5511,10 +5511,10 @@ SELECT 1;
             // 누락은 그와 별개로 배너가 붙어야 한다.
             Assert.Equal(VerificationOutcome.Passed, result.Outcome);
             Assert.Contains("[커버리지 누락]", result.Plan);
-            Assert.Contains("spec2.md", result.Plan);
-            // 커버된 spec1.md는 이 배너에 이름이 오르면 안 된다.
-            var bannerLine = result.Plan!.Split('\n').First(line => line.Contains("spec2.md"));
-            Assert.DoesNotContain("spec1.md", bannerLine);
+            Assert.Contains("dbo.USP_Spec2", result.Plan);
+            // 커버된 dbo.USP_Spec1은 이 배너에 이름이 오르면 안 된다.
+            var bannerLine = result.Plan!.Split('\n').First(line => line.Contains("dbo.USP_Spec2"));
+            Assert.DoesNotContain("dbo.USP_Spec1", bannerLine);
         }
 
         [Fact]
@@ -5523,12 +5523,12 @@ SELECT 1;
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = "Brainstorm" });
-            // S01은 "spec1", S02는 "spec2"를 커버한다 — 둘 다 커버됨.
+            // S01은 "USP_Spec1", S02는 "USP_Spec2"를 커버한다 — 둘 다 커버됨.
             var stepsJsonFullCoverage = @"```json
 {
   ""Steps"": [
-    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
-    { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""LegacyProcedures"": [""spec2""], ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""LegacyProcedures"": [""USP_Spec2""], ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
   ]
 }
 ```";
@@ -5551,7 +5551,7 @@ SELECT 1;
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
-            var specs = new List<(string, string)> { ("spec1.md", "content1"), ("spec2.md", "content2") };
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1"), ("dbo.USP_Spec2", "content2") };
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -5624,8 +5624,8 @@ SELECT 1;
         /// 루프 종료 후 currentPlanStructure에서 매번 새로 파싱해도 항상 옳다.
         /// 이 테스트가 그 결정을 검증한다.
         ///
-        /// 1회차(목차 A, S01이 spec1을 커버)가 최고점 후보가 된다. 2회차(같은
-        /// 목차 A, 점수가 오르지 못함)가 목차 재수립을 유발해 목차 B(T01, spec1을
+        /// 1회차(목차 A, S01이 USP_Spec1을 커버)가 최고점 후보가 된다. 2회차(같은
+        /// 목차 A, 점수가 오르지 못함)가 목차 재수립을 유발해 목차 B(T01, USP_Spec1을
         /// 커버하지 않음 — 의도적 커버리지 공백)로 바뀐다. 3회차(목차 B)도 결함이
         /// 있고 재시도 예산이 소진되어, 구제(RetryRescue)가 여전히 최고점인
         /// 1회차(목차 A, 완전히 커버됨)를 채택한다.
@@ -5642,7 +5642,7 @@ SELECT 1;
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = "Brainstorm" });
 
-            // 목차 B(재수립본)는 T01 하나뿐이고, spec1이 아닌 다른 프로시저를
+            // 목차 B(재수립본)는 T01 하나뿐이고, USP_Spec1이 아닌 다른 프로시저를
             // 다룬다는 설정으로 LegacyProcedures를 선언하지 않는다 — 의도적
             // 커버리지 공백.
             const string outlineBJson = @"```json
@@ -5652,7 +5652,7 @@ SELECT 1;
   ]
 }
 ```";
-            // 최초 목차(A: StepsJson, spec1을 S01이 커버), 재수립 목차(B: 커버 공백).
+            // 최초 목차(A: StepsJson, USP_Spec1을 S01이 커버), 재수립 목차(B: 커버 공백).
             aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(
                     new AiResult { Content = "## 목차\n" + StepsJson },
