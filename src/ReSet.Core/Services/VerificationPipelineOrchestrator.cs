@@ -1665,6 +1665,11 @@ namespace ReSet.Core.Services
             string consolidatedPlan = string.Empty;
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
+            // 재수립 시점에 필요한데 기존에는 if 블록 안에서만 살아 있었다.
+            // 목차가 있으면 브레인스토밍도 반드시 있다(둘은 한 몸으로만 실행된다).
+            string currentBrainstorming = string.Empty;
+            // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
+            var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
             // 산출물 헤더(VerificationDocumentFormatter.FormatVerifiedDocument)와
             // 승인 화면(RequestHumanReviewAsync)이 같은 사실을 쓴다.
@@ -1700,6 +1705,7 @@ namespace ReSet.Core.Services
                             var rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
                             if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
+                            currentBrainstorming = brainstormResult.Content;
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
                             var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
@@ -1802,9 +1808,11 @@ namespace ReSet.Core.Services
                 }
 
                 // 불합격 여부와 무관하게 후보로 등록한다.
+                // 반환값은 "이번 회차가 최고점을 갱신했는가"이며, 그것이 곧 정체 신호다.
+                bool improvedThisAttempt = false;
                 if (reviewSuccess && l2Result != null)
                 {
-                    bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
+                    improvedThisAttempt = bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
                 }
 
                 if (reviewSuccess && l2Result != null && l2Result.HasDefects)
@@ -1822,6 +1830,16 @@ namespace ReSet.Core.Services
                             "제공된 '원본 명세서(Specifications)'와 위 피드백을 절대적 기준으로 삼으십시오. " +
                             "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
                             "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
+
+                        // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
+                        // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
+                        if (redraftPolicy.TryConsume(improvedThisAttempt))
+                        {
+                            currentPlanStructure = await RedraftPlanStructureAsync(
+                                currentPlanStructure, currentBrainstorming, feedbackLog,
+                                targetLanguage, jobName, outputRoot, cancellationToken);
+                        }
+
                         attempt++;
                         continue;
                     }
@@ -1965,6 +1983,86 @@ namespace ReSet.Core.Services
                     planOutcome = VerificationOutcome.ReviewNotRun;
                 }
             }
+        }
+
+        /// <summary>
+        /// 목차를 다시 세운다. 실패하면 기존 목차를 그대로 돌려준다 — 재수립은 개선
+        /// 시도이지 필수 단계가 아니므로 여기서 파이프라인을 죽이지 않는다.
+        /// </summary>
+        private async Task<string> RedraftPlanStructureAsync(
+            string currentStructure,
+            string brainstorming,
+            string? redraftFeedback,
+            string targetLanguage,
+            string jobName,
+            string outputRoot,
+            CancellationToken cancellationToken)
+        {
+            _userInteraction.NotifyStatus(
+                $"[yellow]{jobName}[/] - 재시도가 점수를 개선하지 못해 목차를 다시 설계합니다...");
+
+            string redrafted;
+            try
+            {
+                using (var progressScope = _userInteraction.CreateProgressScope("목차 재설계") ?? NullProgressScope.Instance)
+                {
+                    // 3단계 중 하나가 아니므로 n/3. 순번을 붙이지 않는다.
+                    progressScope.AddTask("redraft", "목차 재설계 중...");
+                    var result = await WrapWithProgress(
+                        _consolidatorService.DraftBatchPlanStructureAsync(
+                            brainstorming, targetLanguage, jobName, _consolidatorEffort,
+                            currentStructure, redraftFeedback, cancellationToken),
+                        progressScope, "redraft");
+                    redrafted = result.Content;
+                }
+            }
+            // 취소는 실패가 아니라 사용자의 지시이므로 전파한다.
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _userInteraction.NotifyError($"{jobName} - 목차 재설계 실패 (기존 목차 유지): {ex.Message}");
+                return currentStructure;
+            }
+
+            // 빈 목차로 본문을 만들면 3/3이 아무 구조 없이 생성된다.
+            if (string.IsNullOrWhiteSpace(redrafted))
+            {
+                _userInteraction.NotifyError($"{jobName} - 목차 재설계 응답이 비어 있어 기존 목차를 유지합니다.");
+                return currentStructure;
+            }
+
+            await PreserveSupersededStructureAsync(outputRoot, jobName, currentStructure, redrafted, cancellationToken);
+            return redrafted;
+        }
+
+        /// <summary>
+        /// 교체되는 직전 목차를 superseded 파일로 남기고 PlanStructure.md를 최종본으로
+        /// 갱신한다. PlanStructure.md는 항상 본문을 실제로 만든 목차를 가리켜야 하므로
+        /// 이전 목차를 그 자리에 남기지 않는다.
+        /// </summary>
+        private static async Task PreserveSupersededStructureAsync(
+            string outputRoot,
+            string jobName,
+            string previousStructure,
+            string redrafted,
+            CancellationToken cancellationToken)
+        {
+            var rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
+            if (!System.IO.Directory.Exists(rawDir))
+            {
+                System.IO.Directory.CreateDirectory(rawDir);
+            }
+
+            // L2 정체로 1회, L3 사용자 요청으로 n회가 가능하므로 번호를 이어 붙인다.
+            var index = 1;
+            while (System.IO.File.Exists(System.IO.Path.Combine(rawDir, $"PlanStructure.superseded-{index}.md")))
+            {
+                index++;
+            }
+
+            await System.IO.File.WriteAllTextAsync(
+                System.IO.Path.Combine(rawDir, $"PlanStructure.superseded-{index}.md"), previousStructure, cancellationToken);
+            await System.IO.File.WriteAllTextAsync(
+                System.IO.Path.Combine(rawDir, "PlanStructure.md"), redrafted, cancellationToken);
         }
 
         private static string ResolveCleansingFileBaseName(CodeObjectKey key, string? analysisDatabase)
