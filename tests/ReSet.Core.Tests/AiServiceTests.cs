@@ -1007,7 +1007,7 @@ namespace ReSet.Core.Tests
         public async Task ReviewConsolidatedPlanAsync_ParsesDefectiveStepsFromJson()
         {
             var reviewJson = "{\\\"HasDefects\\\":true,\\\"FeedbackComment\\\":\\\"S08 SQL 누락\\\"," +
-                "\\\"DefectiveSteps\\\":[\\\"S08\\\",\\\"S10\\\"]," +
+                "\\\"DefectiveSteps\\\":[\\\" S08 \\\",\\\"S10\\\"]," +
                 "\\\"ScoreAccuracy\\\":7,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
             var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
             var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
@@ -1041,6 +1041,10 @@ namespace ReSet.Core.Tests
 
             var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
 
+            // HasDefects도 함께 확인한다 — DefectiveSteps만 보면 파싱 성공 경로의 빈 배열과
+            // catch 폴백의 빈 배열(파싱 자체가 실패했을 때)을 구분할 수 없다.
+            // catch 폴백은 HasDefects를 무조건 true로 두므로, false 확인은 성공 경로에서만 통과한다.
+            Assert.False(review.HasDefects);
             Assert.Empty(review.DefectiveSteps);
         }
     }
