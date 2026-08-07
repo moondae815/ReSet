@@ -6783,5 +6783,95 @@ SELECT 1;
             Assert.NotNull(result.Plan);
             Assert.Null(result.Layout);
         }
+
+        /// <summary>
+        /// Task 5 리뷰 발견 사항 회귀: BuildLayout()이 살아있는 currentSteps 대신
+        /// 채택된 목차에서 다시 파싱한 adoptedSteps를 써야 한다.
+        ///
+        /// 시나리오: 1회차(S01/S02 분할, 결함 있으나 고득점)가 최고점 후보/구제
+        /// 채택 상태로 기록된다. 2회차는 점수가 못 올라 목차 재수립이 발동해
+        /// 코드가 겹치지 않는 3회차 목차(T01/T02)로 넘어간다. 3회차도 점수를
+        /// 못 올리고 재시도 예산(maxL2Attempts="2" → 총 3회)을 소진해, 구제
+        /// 채택이 1회차의 lastSkeleton/lastStepSections/stepFloorViolations로
+        /// 되감는다. 그러나 3회차의 currentSteps(T01/T02)는 되감기 대상이 아닌
+        /// 살아있는 루프 변수라 그대로 남는다. BuildLayout이 이 currentSteps를
+        /// 쓰면 Sections는 S01/S02인데 Steps는 T01/T02를 서술하는 내부 모순이
+        /// 생긴다 — adoptedSteps(루프 종료 후 currentPlanStructure 하나에서
+        /// 다시 파싱)를 쓰면 항상 일치한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_Layout_StaysConsistentAfterRedraftThenRescue()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 최초 목차(S01/S02), 재수립 목차(T01/T02) 순서로 반환된다.
+            aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 목차\n" + StepsJsonRedrafted });
+
+            // 골격은 그때그때 요청받은 단계 코드로 만든다 — 첫 목차든 재수립된
+            // 목차든 같은 목으로 처리한다(기존 AfterStructureRedraft 테스트와 동일 패턴).
+            aiService.GenerateBatchPlanSkeletonAsync(
+                    Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var steps = call.Arg<IReadOnlyList<BatchStepPlan>>();
+                    return new AiResult { Content = SkeletonMarkdownFor(steps.Select(s => s.Code).ToArray()) };
+                });
+
+            // 모든 단계는 건강한 섹션을 낸다 — 하한 미달 배너가 섞여 재현 시나리오를
+            // 흐리지 않게 한다.
+            aiService.GenerateBatchStepSectionAsync(
+                    Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1회차=9점(최고, 채택 상태로 기록), 2회차=5점(정체 → 목차 재수립 발동),
+            // 3회차=5점(정체, 재시도 소진 → 1회차로 구제 채택). 셋 다 HasDefects=true라야
+            // 루프가 통과로 조기 탈출하지 않고 계획대로 진행한다.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call == 0
+                        ? new ReviewResult { HasDefects = true, FeedbackComment = "1회차 결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                        : new ReviewResult { HasDefects = true, FeedbackComment = "정체", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 };
+                });
+
+            var result = await RunBatchPipeline(aiService);
+
+            // 목차가 실제로 재수립을 거쳤다가 1회차로 되돌아왔는지 먼저 확인한다 —
+            // 그렇지 않으면 이 테스트는 아무것도 고정하지 못한다.
+            Assert.NotNull(result.Plan);
+            Assert.Contains("S01", result.Plan);
+            Assert.DoesNotContain("T01", result.Plan);
+
+            Assert.NotNull(result.Layout);
+            Assert.NotNull(result.Layout!.Sections);
+            Assert.NotNull(result.Layout.Steps);
+            var sectionKeys = result.Layout.Sections!.Keys.ToHashSet();
+            var stepCodes = result.Layout.Steps!.Select(s => s.Code).ToHashSet();
+            // 핵심 불변식: Steps가 서술하는 회차와 Sections가 서술하는 회차가
+            // 같아야 한다. currentSteps(T01/T02)를 쓰면 이 비교가 깨진다.
+            Assert.Equal(sectionKeys, stepCodes);
+            Assert.Equal(new HashSet<string> { "S01", "S02" }, stepCodes);
+        }
     }
 }

@@ -1728,13 +1728,22 @@ namespace ReSet.Core.Services
             // 조각을 호출부로 내보낸다. 산출물 분할이 이 값들을 경계 앵커로 쓴다.
             // splitMarkdown이 null이면 단일 호출 경로였다는 뜻이고, 그때는 조각이
             // 아예 없으므로 null을 그대로 내보내 호출부가 폴백을 취하게 한다.
-            PlanLayout? BuildLayout() =>
+            //
+            // steps는 매개변수로 받는다 — currentSteps를 여기서 직접 읽으면 안 된다.
+            // 구제 채택(RestoreAdoptedGenerationState)은 lastSkeleton/lastStepSections/
+            // stepFloorViolations를 채택된 회차의 스냅샷으로 되돌리지만 currentSteps는
+            // 되돌리지 않는다 — 매 회차 갱신되고 목차 재수립 시 지워지는 살아있는 루프
+            // 변수라서다. 구제 채택 뒤에는 currentSteps가 폐기된 회차(또는 null)를
+            // 가리킬 수 있어, 그걸 쓰면 Sections는 채택된 회차의 것인데 Steps는 폐기된
+            // 회차를 서술하는 내부 모순이 생긴다. 호출부는 항상 currentPlanStructure
+            // 하나에서 다시 파싱한 adoptedSteps를 넘겨야 한다.
+            PlanLayout? BuildLayout(IReadOnlyList<BatchStepPlan>? steps) =>
                 lastSkeleton == null || lastStepSections == null
                     ? null
                     : new PlanLayout(
                         lastSkeleton,
                         new Dictionary<string, string>(lastStepSections),
-                        currentSteps,
+                        steps,
                         new Dictionary<string, string>(stepFloorViolations));
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
@@ -2097,7 +2106,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout());
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps));
             }
 
             while (true)
@@ -2111,7 +2120,7 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout());
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps));
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
