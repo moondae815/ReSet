@@ -819,7 +819,11 @@ public class ArchitectureTests {
             }
         }
 
-        private string FormatTableSchemaToMarkdown(DependencyInfo dep)
+        /// <summary>
+        /// InstructionBundleWriter가 같은 스키마 표를 써야 한다. 표 형식이 두 벌이 되면
+        /// 지시서와 다른 산출물이 같은 테이블을 다르게 보여준다.
+        /// </summary>
+        internal static string FormatTableSchemaToMarkdown(DependencyInfo dep)
         {
             var sb = new StringBuilder();
             var depFullName = string.IsNullOrEmpty(dep.Database)
