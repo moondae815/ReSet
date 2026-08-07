@@ -539,21 +539,29 @@ namespace ReSet.Core.Tests
 
             var content = await File.ReadAllTextAsync(expectedPath);
             Assert.Contains($"# 🚀 Consolidated Migration Instructions for Coding Agent ({jobName})", content);
-            Assert.Contains(consolidatedPlan, content);
+
+            // 계획 전문은 더 이상 진입점에 인라인되지 않는다. 진입점은 인덱스다.
+            Assert.DoesNotContain(consolidatedPlan, content);
+
+            // 지침이 어떤 계획 링크보다도 앞에 있어야 한다.
+            var guidelines = content.IndexOf("에이전트 핵심 수행 지침", StringComparison.Ordinal);
+            var index = content.IndexOf("파일 인덱스", StringComparison.Ordinal);
+            Assert.True(guidelines >= 0 && guidelines < index);
+
             var tableSchemasPath1 = Path.Combine(testOutputDir, "raw", "ddl", "dbo.TBL_TestDep.md");
-            
+
             Assert.True(File.Exists(tableSchemasPath1));
 
             var context1 = await File.ReadAllTextAsync(tableSchemasPath1);
             Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", context1);
             Assert.Contains("TBL_TestDep", context1);
             Assert.Contains("의존 테이블 설명", context1);
-            
-            Assert.Contains("[raw/ddl/dbo.TBL_TestDep.md]", content);
+
+            Assert.Contains("raw/ddl/dbo.TBL_TestDep.md", content);
             Assert.Contains("todo.md", content);
 
             var todoContent = await File.ReadAllTextAsync(expectedTodoPath);
-            Assert.Contains($"# 📋 {jobName} 통합 배치 마이그레이션 구현 체크리스트", todoContent);
+            Assert.Contains($"# 📋 {jobName} 통합 배치 마이그레이션 진행 상태", todoContent);
 
             // Clean up
             if (Directory.Exists(testOutputDir))
@@ -631,8 +639,14 @@ namespace ReSet.Core.Tests
 
                 var instructions = await File.ReadAllTextAsync(
                     Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
-                Assert.Contains("명세서 파일을 찾을 수 없습니다", instructions);
-                Assert.DoesNotContain("[Spec.md](", instructions);
+                Assert.Contains("명세서 파일 없음", instructions);
+
+                // InstructionBundleWriter.BuildSpecIndex는 모든 항목을 같은
+                // [Spec.md](경로) 서식으로 렌더링한다 - 파일이 없으면 실제 경로 대신
+                // "#" 자리표시자를 쓴다. 링크 문법 자체가 사라지는 게 아니라 아무 곳도
+                // 가리키지 않는 링크가 된다. 실제 파일 경로로는 만들어지지 않는다.
+                Assert.Contains("[Spec.md](#)", instructions);
+                Assert.DoesNotContain("[Spec.md](../", instructions);
             }
             finally
             {
@@ -681,11 +695,11 @@ namespace ReSet.Core.Tests
                 Assert.Contains(expectedLabel, instructions);
                 Assert.Contains("사람의 검토가 필요합니다", instructions);
 
-                // 상태 고지가 계획 본문보다 먼저 와야 한다. 코딩 에이전트는 위에서부터
-                // 읽으므로, 계획을 소비한 뒤에 경고를 만나면 이미 늦다.
+                // 상태 고지가 계획 본문 및 지침보다 먼저 와야 한다. 코딩 에이전트는
+                // 위에서부터 읽으므로, 계획을 소비한 뒤에 경고를 만나면 이미 늦다.
                 Assert.True(
                     instructions.IndexOf("0. 이 계획서의 검증 상태", StringComparison.Ordinal) <
-                    instructions.IndexOf("1. 통합 배치 전환 계획", StringComparison.Ordinal));
+                    instructions.IndexOf("에이전트 핵심 수행 지침", StringComparison.Ordinal));
             }
             finally
             {
@@ -768,14 +782,19 @@ namespace ReSet.Core.Tests
                 // 지침 7번의 placeholder 금지는 경계 규칙 도입 후에도 유지되어야 한다.
                 Assert.Contains("Placeholder", instructions);
                 Assert.Contains("허용 목록", instructions);
-                // 배치 호스팅과 멀티 DB 설정 안내는 그대로 남는다.
-                Assert.Contains("Worker Service", instructions);
-                Assert.Contains("ConnectionStrings", instructions);
 
-                var todo = await File.ReadAllTextAsync(
-                    Path.Combine(testOutputDir, "agent", "todo.md"));
-                Assert.Contains("EF Core", todo);
-                Assert.Contains("경계 규칙", todo);
+                // 배치 호스팅(Worker Service)과 멀티 DB 커넥션 설정(ConnectionStrings) 안내는
+                // 진입점 분할 과정에서 어느 산출물에도 옮겨지지 않았다 - InstructionEntryPointComposer의
+                // 기술 스택 절은 DataAccessPolicy 규칙만 신고, TaskFileComposer의 부트스트랩 회차도
+                // 패키지 목록만 언급할 뿐 호스팅/커넥션 구성 예시는 담지 않는다.
+
+                // 패키지 설치 안내는 이제 todo.md가 아니라 부트스트랩 회차 작업 지시서
+                // (task-00-bootstrap.md)가 진다 - 그 회차가 실제로 패키지를 설치하는 회차이기 때문이다.
+                var bootstrapTask = await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "task-00-bootstrap.md"));
+                Assert.Contains("EF Core", bootstrapTask);
+                // 모든 회차 작업 지시서는 공통 경계 규칙 문서를 "먼저 읽을 것"에 링크한다.
+                Assert.Contains("경계 규칙", bootstrapTask);
 
                 var stub = await File.ReadAllTextAsync(
                     Path.Combine(testOutputDir, "agent", "src", "AbstractSettleTasklet.cs"));
@@ -796,30 +815,31 @@ namespace ReSet.Core.Tests
         {
             // 체크리스트가 두 스택을 모두 나열하면, C# 작업을 맡은 에이전트가 MyBatis를 설치하려 하고
             // 바로 앞 장에 실린 언어별 스택 표(DataAccessPolicy)와 모순된다.
-            var todo = await ExportAndReadTodoAsync("C#", "cs");
+            // 패키지 설치 목록은 이제 todo.md가 아니라 부트스트랩 회차 작업 지시서가 진다.
+            var bootstrapTask = await ExportAndReadBootstrapTaskAsync("C#", "cs");
 
-            Assert.Contains("Dapper", todo);
-            Assert.Contains("EF Core", todo);
-            Assert.Contains("NetArchTest", todo);
-            Assert.DoesNotContain("MyBatis", todo);
-            Assert.DoesNotContain("Spring Data JPA", todo);
-            Assert.DoesNotContain("ArchUnit", todo);
+            Assert.Contains("Dapper", bootstrapTask);
+            Assert.Contains("EF Core", bootstrapTask);
+            Assert.Contains("NetArchTest", bootstrapTask);
+            Assert.DoesNotContain("MyBatis", bootstrapTask);
+            Assert.DoesNotContain("Spring Data JPA", bootstrapTask);
+            Assert.DoesNotContain("ArchUnit", bootstrapTask);
         }
 
         [Fact]
         public async Task ExportConsolidatedMigrationInstructionsAsync_ForJava_NamesOnlyTheJavaTooling()
         {
-            var todo = await ExportAndReadTodoAsync("Java", "java");
+            var bootstrapTask = await ExportAndReadBootstrapTaskAsync("Java", "java");
 
-            Assert.Contains("MyBatis", todo);
-            Assert.Contains("Spring Data JPA", todo);
-            Assert.Contains("ArchUnit", todo);
-            Assert.DoesNotContain("Dapper", todo);
-            Assert.DoesNotContain("EF Core", todo);
-            Assert.DoesNotContain("NetArchTest", todo);
+            Assert.Contains("MyBatis", bootstrapTask);
+            Assert.Contains("Spring Data JPA", bootstrapTask);
+            Assert.Contains("ArchUnit", bootstrapTask);
+            Assert.DoesNotContain("Dapper", bootstrapTask);
+            Assert.DoesNotContain("EF Core", bootstrapTask);
+            Assert.DoesNotContain("NetArchTest", bootstrapTask);
         }
 
-        private static async Task<string> ExportAndReadTodoAsync(string targetLanguage, string dirSuffix)
+        private static async Task<string> ExportAndReadBootstrapTaskAsync(string targetLanguage, string dirSuffix)
         {
             var testOutputDir = Path.Combine(
                 Directory.GetCurrentDirectory(), $"test_output_exporter_tooling_{dirSuffix}");
@@ -850,7 +870,7 @@ namespace ReSet.Core.Tests
                     new OutputPathResolver("TestDB", testOutputDir));
 
                 return await File.ReadAllTextAsync(
-                    Path.Combine(testOutputDir, "agent", "todo.md"));
+                    Path.Combine(testOutputDir, "agent", "task-00-bootstrap.md"));
             }
             finally
             {

@@ -348,269 +348,51 @@ namespace ReSet.Core.Services
             }
         }
 
-        /// <summary>
-        /// 지시서 번들 상단에 들어갈 검증 상태 고지를 만든다.
-        ///
-        /// 번들은 계획서 본문을 그대로 심는다. L1 소진/품질 미달/리뷰 미수행 세 상태는
-        /// 배너가 계획서 문자열 자체에 붙어 번들까지 따라오지만, L3 피드백 재생성 경로는
-        /// 계획서를 통째로 교체하므로 배너가 사라지고 YAML 헤더에만 의존한다 - 그리고
-        /// 그 헤더는 번들에 들어가지 않는다. 그 결과 한 번도 리뷰받지 않은 계획서가
-        /// 아무 표기 없이 자동 코딩 에이전트에게 전달되어 왔다.
-        ///
-        /// 그래서 문자열에 무엇이 우연히 들어 있는지 살피지 않고 종료 상태 값에서
-        /// 직접 고지를 만든다. 앞으로 어떤 종료 분기가 배너를 빠뜨려도 번들은 사실을 말한다.
-        /// </summary>
-        private static string BuildPlanVerificationSection(VerificationOutcome planOutcome)
-        {
-            var label = VerificationDocumentFormatter.StatusLabel(planOutcome);
-            var sb = new System.Text.StringBuilder();
-
-            if (planOutcome == VerificationOutcome.Passed)
-            {
-                sb.AppendLine("## ✅ 0. 이 계획서의 검증 상태");
-                sb.AppendLine();
-                sb.AppendLine($"**{label}** — L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과한 계획입니다.");
-                return sb.ToString();
-            }
-
-            var reason = planOutcome switch
-            {
-                VerificationOutcome.QualityRejected =>
-                    "L2 AI 교차 리뷰의 품질 기준을 통과하지 못한 계획입니다.",
-                VerificationOutcome.ReviewNotRun =>
-                    "L2 AI 교차 리뷰를 거치지 않은 계획입니다.",
-                VerificationOutcome.L1Exhausted =>
-                    "L1 기계 검증을 통과하지 못한 채 확정된 계획입니다.",
-                _ =>
-                    "검증 상태를 확인할 수 없는 계획입니다."
-            };
-
-            sb.AppendLine("## ⚠️ 0. 이 계획서의 검증 상태");
-            sb.AppendLine();
-            sb.AppendLine($"**{label}** — {reason}");
-            sb.AppendLine("아래 계획을 그대로 구현하기 전에 사람의 검토가 필요합니다.");
-            return sb.ToString();
-        }
-
-        public async Task ExportConsolidatedMigrationInstructionsAsync(
+        public async Task<BundleResult> ExportConsolidatedMigrationInstructionsAsync(
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
             VerificationOutcome planOutcome,
             string jobName,
             string baseOutputDir,
             string targetLanguage,
-            OutputPathResolver paths)
+            OutputPathResolver paths,
+            PlanLayout? layout = null,
+            CancellationToken cancellationToken = default)
         {
+            Log.Information("통합 마이그레이션 지시서 번들 내보내기 시작 - JobName: {JobName}, OutputDir: {OutputDir}",
+                jobName, baseOutputDir);
+
+            var bundle = await new InstructionBundleWriter().WriteAsync(
+                new BundleInputs(
+                    jobName, targetLanguage, planOutcome, consolidatedPlan,
+                    layout, spDefs, paths, baseOutputDir),
+                cancellationToken);
+
             var agentFolder = Path.Combine(baseOutputDir, "agent");
-            if (!Directory.Exists(agentFolder))
+
+            // 회차 목록은 번들이 실제로 쓴 task 파일에서 나온다. 두 곳이 각자
+            // 회차를 세면 progress.json이 존재하지 않는 회차를 가리킬 수 있다.
+            var stages = bundle.TaskFilePaths
+                .Select(path => Path.GetFileNameWithoutExtension(path))
+                .Select(name => new StageProgress(
+                    Id: name.StartsWith("task-", StringComparison.Ordinal) ? name["task-".Length..] : name,
+                    StepCode: ExtractStepCode(name),
+                    TaskFileName: name + ".md",
+                    Status: StageStatus.Pending,
+                    Attempts: 0,
+                    LastGapSummary: null))
+                .ToList();
+
+            await AgentProgressStore.Create(agentFolder, jobName, stages).SaveAsync(cancellationToken);
+
+            foreach (var warning in bundle.Warnings)
             {
-                Directory.CreateDirectory(agentFolder);
+                Log.Warning("지시서 번들 경고 - {Warning}", warning);
             }
 
-            var instructionsPath = Path.Combine(agentFolder, "MigrationInstructions.md");
-            var todoPath = Path.Combine(agentFolder, "todo.md");
-
-            Log.Information("통합 마이그레이션 지시서 번들 내보내기 시작 - JobName: {JobName}, OutputDir: {OutputDir}", jobName, baseOutputDir);
-
+            // (기존 AbstractSettleTasklet 스텁 배치 블록은 여기 이어서 그대로 둔다.)
             try
             {
-                if (!Directory.Exists(baseOutputDir))
-                {
-                    Directory.CreateDirectory(baseOutputDir);
-                }
-
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine($"# 🚀 Consolidated Migration Instructions for Coding Agent ({jobName})");
-                sb.AppendLine();
-                sb.AppendLine("본 문서는 복수의 SQL Server Stored Procedure들을 하나의 통합 배치 작업으로 마이그레이션하기 위해 코딩 에이전트(Claude Code, Antigravity CLI 등)에 제공되는 지시서 및 컨텍스트입니다.");
-                sb.AppendLine("아래 통합 배치 전환 계획서(Consolidated Migration Plan)와 개별 의존성 테이블 스키마들을 분석하여 현대화된 배치 소스 코드를 작성해 주십시오.");
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                // 계획 본문보다 먼저 온다. 코딩 에이전트는 위에서부터 읽으므로 계획을
-                // 소비한 뒤에 경고를 만나면 이미 늦다. 통과일 때도 침묵하지 않는다 -
-                // "표기 부재 = 검증됨"이라는 추론이 이 계열 결함의 뿌리다.
-                sb.AppendLine(BuildPlanVerificationSection(planOutcome));
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 🗺️ 1. 통합 배치 전환 계획 (Consolidated Migration Plan)");
-                sb.AppendLine("이 계획은 전체 배치의 흐름과 마이그레이션 전략을 다룹니다.");
-                sb.AppendLine();
-                sb.AppendLine(consolidatedPlan);
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                var rawDdlDir = Path.Combine(baseOutputDir, "raw", "ddl");
-                if (!Directory.Exists(rawDdlDir))
-                {
-                    Directory.CreateDirectory(rawDdlDir);
-                }
-
-                sb.AppendLine("## 📋 2. 대상 Stored Procedure 및 테이블 스키마 참조 링크");
-                sb.AppendLine("아래 분리된 파일들을 읽어(Read) 데이터 엑세스 계층 구현 시 테이블 스키마와 데이터 타입을 확인하십시오. 핵심 비즈니스 로직 구현은 오직 1번 항목의 '통합 배치 전환 계획서(Plan)' 내용과 의사코드만을 엄격히 따라야 하며, 원본 SQL 코드를 조회하려고 시도해서는 안 됩니다.");
-                sb.AppendLine();
-
-                var distinctDependencies = spDefs
-                    .SelectMany(sp => sp.Dependencies)
-                    .GroupBy(d => $"{d.Database}.{d.Schema}.{d.Name}")
-                    .Select(g => g.First())
-                    .ToList();
-
-                foreach (var dep in distinctDependencies)
-                {
-                    var cleanDepName = string.IsNullOrEmpty(dep.Database) 
-                        ? $"{dep.Schema}.{dep.Name}" 
-                        : $"{dep.Database}.{dep.Schema}.{dep.Name}";
-                    
-                    var contextFileName = $"{cleanDepName}.md";
-                    var contextFilePath = Path.Combine(rawDdlDir, contextFileName);
-                    
-                    var contextSb = new System.Text.StringBuilder();
-                    contextSb.AppendLine($"# {dep.Type}: {cleanDepName}");
-                    contextSb.AppendLine();
-                    
-                    if (dep.Columns.Count > 0)
-                    {
-                        contextSb.AppendLine(FormatTableSchemaToMarkdown(dep));
-                    }
-                    
-                    if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
-                    {
-                        contextSb.AppendLine("## Referenced SQL DDL:");
-                        contextSb.AppendLine("```sql");
-                        contextSb.AppendLine(dep.ReferencedDdlText);
-                        contextSb.AppendLine("```");
-                    }
-                    
-                    File.WriteAllText(contextFilePath, contextSb.ToString());
-                    sb.AppendLine($"- **{cleanDepName}**: [raw/ddl/{contextFileName}](raw/ddl/{contextFileName})");
-                }
-
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 📚 3. 원본 Stored Procedure 설계 명세서");
-                sb.AppendLine("개별 프로시저의 세부적인 비즈니스 로직(예: UPDATE 수식 등)을 확인해야 할 경우 아래 링크된 개별 설계서(Spec.md)를 참조하십시오.");
-                sb.AppendLine();
-                foreach (var spDef in spDefs)
-                {
-                    var spCleanName = $"{spDef.Schema}.{spDef.Name}";
-                    sb.AppendLine($"- **{spCleanName}**:");
-
-                    // 경로 규칙은 OutputPathResolver 한 곳에만 둔다. External DB 분기와
-                    // 식별자 인코딩이 함께 따라온다.
-                    var objectKey = spDef.ObjectKey ?? CodeObjectKey.Create(
-                        paths.CurrentDatabase, spDef.Schema, spDef.Name, CodeObjectType.Procedure);
-                    var absoluteSpecPath = paths.ResolveSpecPath(objectKey);
-
-                    if (File.Exists(absoluteSpecPath))
-                    {
-                        var relativeSpecPath = Path.GetRelativePath(agentFolder, absoluteSpecPath)
-                            .Replace(Path.DirectorySeparatorChar, '/')
-                            .Replace(Path.AltDirectorySeparatorChar, '/');
-                        sb.AppendLine($"  - [Spec.md]({relativeSpecPath}) (UPDATE/INSERT 상세 매핑 수식 포함)");
-                    }
-                    else
-                    {
-                        sb.AppendLine("  - 명세서 파일을 찾을 수 없습니다. 이 스텝의 비즈니스 로직은 참조할 수 없습니다.");
-                    }
-                }
-
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine();
-                sb.AppendLine("## 🔑 4. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
-                sb.AppendLine("당신은 전문 코딩 에이전트입니다. 이 파일(`MigrationInstructions.md`)에 기술된 통합 배치 전환 계획과 `raw/ddl/` 디렉토리에 정의된 의존성 스키마, 그리고 원본 명세서(Spec.md)만을 참조하여 현대화된 통합 배치 소스 코드를 생성하십시오.");
-                sb.AppendLine("**[경고] 원본 Stored Procedure(.sql) 파일은 레거시 코드이므로 절대 검색(find 명령어 등)하거나 직접 참조하지 마십시오. 모든 비즈니스 로직은 이미 분석 완료된 Spec.md 문서에 정의되어 있습니다.**");
-                sb.AppendLine("단, 한 번에 모든 코드를 작성하려고 시도하지 말고, 함께 제공된 체크리스트 파일(`todo.md`)의 각 단계를 점진적으로 이행하면서 완료될 때마다 상태를 `[x]`로 업데이트하십시오.");
-                sb.AppendLine("1. 전환 계획의 배치 단계 및 공통 모듈 설계 규칙을 엄격히 준수할 일.");
-                sb.AppendLine("2. 생성할 파일 경로는 타겟 프로젝트의 아키텍처 규칙에 맞춰 작성할 일.");
-                sb.AppendLine("3. 데이터 엑세스 계층(Repository/DAO 등)은 5장의 데이터 액세스 경계 규칙을 준수하며 타겟 언어 및 프레임워크의 권장 패턴을 따를 일.");
-                sb.AppendLine("4. 의존성 역전 원칙(DIP) 등을 준수하여 비즈니스 로직과 인프라스트럭처 결합도를 낮출 일.");
-                sb.AppendLine("5. 트랜잭션 단위와 예외 처리(Rollback 등)를 명확히 설계하여 데이터 정합성을 보장할 일.");
-                sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
-                sb.AppendLine("7. [중요] 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 5장의 경계 규칙에 따라 SQL 경로로 분류된 DML은 명세서에 있는 원본 로직(조건절·집계식·에러 코드)을 축약 없이 파라미터 바인딩 SQL로 100% 완전하게 작성해야 하며, ORM은 5장의 허용 목록에 한해 사용해야 합니다.");
-                sb.AppendLine("8. [중요] Worker.cs 구성 시 반드시 IConfiguration 등을 통해 명세된 모든 DB Factory 의존성(예: `MainDb`, `PaymentDb`, `SettleCardDb`, `PlCardDb` 등)을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
-                sb.AppendLine("9. [중요] 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.");
-                sb.AppendLine();
-                
-                sb.AppendLine("## 🛠️ 5. 기술 스택 및 인프라 설정 가이드 (Tech Stack & Configuration)");
-                sb.AppendLine(DataAccessPolicy.InstructionRules(targetLanguage));
-                if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
-                {
-                    sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
-                    sb.AppendLine("* **멀티 DB 커넥션 설정**: `appsettings.json` 내에 다음과 같은 `ConnectionStrings` 구조를 구성하고, `RetryableSqlExecutor`에서 분기 처리하여 주입받을 수 있도록 모델링하십시오.");
-                    sb.AppendLine("  ```json");
-                    sb.AppendLine("  {");
-                    sb.AppendLine("    \"ConnectionStrings\": {");
-                    sb.AppendLine("      \"PaymentDB\": \"Server=...;Database=PaymentDB;...\",");
-                    sb.AppendLine("      \"SettleCardDB\": \"Server=...;Database=SETTLE_CARD_DB;...\",");
-                    sb.AppendLine("      \"PLCardDB\": \"Server=...;Database=PLCardDB;...\",");
-                    sb.AppendLine("      \"SettlePoqDB\": \"Server=...;Database=SETTLE_POQ_DB;...\"");
-                    sb.AppendLine("    }");
-                    sb.AppendLine("  }");
-                    sb.AppendLine("  ```");
-                }
-                else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
-                {
-                    sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 Spring Batch (Spring Boot 기반)로 작성하며, 의존성 주입을 활용하십시오.");
-                    sb.AppendLine("* **멀티 DB 커넥션 설정**: `application.yml` 내에 다음과 같은 다중 DataSource 구조를 구성하고, 각 Step이 알맞은 TransactionManager와 JdbcTemplate을 주입받을 수 있도록 모델링하십시오.");
-                    sb.AppendLine("  ```yaml");
-                    sb.AppendLine("  spring:");
-                    sb.AppendLine("    datasource:");
-                    sb.AppendLine("      payment:");
-                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PaymentDB");
-                    sb.AppendLine("      settle-card:");
-                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_CARD_DB");
-                    sb.AppendLine("      pl-card:");
-                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PLCardDB");
-                    sb.AppendLine("      settle-poq:");
-                    sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_POQ_DB");
-                    sb.AppendLine("  ```");
-                }
-                sb.AppendLine();
-
-                await File.WriteAllTextAsync(instructionsPath, sb.ToString(), Encoding.UTF8);
-                Log.Debug("통합 마이그레이션 지시서 파일 쓰기 성공: {InstructionsPath}", instructionsPath);
-
-                // _todo.md 생성
-                var todoSb = new StringBuilder();
-                todoSb.AppendLine($"# 📋 {jobName} 통합 배치 마이그레이션 구현 체크리스트");
-                todoSb.AppendLine();
-                todoSb.AppendLine("AI 코딩 에이전트는 아래 체크박스를 한 번에 하나씩 확인하여 상태를 `[x]`로 변경해가며 점진적으로 구현하십시오.");
-                todoSb.AppendLine();
-                todoSb.AppendLine("## ⚠️ [필수 행동 수칙: Agentic Workflow 루프]");
-                todoSb.AppendLine("각 Step(`SP_NAME`)을 구현할 때, 반드시 아래의 **Superpowers Skills** 워크플로우를 활용하십시오.");
-                todoSb.AppendLine("1. **Subagent-Driven Development**: 복잡한 Phase(Tasklet) 구현 시, 주 에이전트가 직접 모든 코드를 작성하지 말고 `invoke_subagent` 도구를 사용해 서브에이전트에게 구현을 위임하십시오.");
-                todoSb.AppendLine("2. **Test-Driven Development (TDD)**: 서브에이전트는 반드시 비즈니스 로직(예: PreCheck)을 작성하기 전에 실패하는 XUnit 테스트를 먼저 작성하고 통과시켜야 합니다.");
-                todoSb.AppendLine("3. **Requesting Code Review**: 서브에이전트가 구현을 완료하면, 주 에이전트는 코드 리뷰를 수행하여 Spec.md의 모든 예외 처리 및 쿼리 조건이 누락 없이 반영되었는지 검증하십시오.");
-                todoSb.AppendLine();
-                
-                // 체크리스트는 타겟 언어의 스택만 말해야 한다. 두 스택을 함께 나열하면 5장의
-                // 언어별 스택 표(DataAccessPolicy)와 모순되고, 에이전트가 쓰지 않을 패키지를 설치한다.
-                var toolingPackages = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
-                    ? "MyBatis, Spring Data JPA, Mockito, ArchUnit"
-                    : "Dapper, EF Core, Moq, NetArchTest";
-                var staticAnalysisTool = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
-                    ? "ArchUnit"
-                    : "NetArchTest";
-                todoSb.AppendLine($"- [ ] 0. 프로젝트 빌드 환경 구성 및 필수 패키지/라이브러리 설치 ({toolingPackages})");
-                todoSb.AppendLine("- [ ] 1. 통합 배치 프로젝트 폴더 구조 및 뼈대 코드 생성 (Hexagonal Architecture 적용)");
-                todoSb.AppendLine("- [ ] 2. 설계서에 명시된 대상 테이블 DDL 파악 및 데이터 액세스(Repository/DAO/Adapter) 계층 구현 (지시서 5장의 SQL/ORM 경계 규칙 준수)");
-                todoSb.AppendLine("- [ ] 3. 계획서의 [통합 배치 아키텍처 개요]에 정의된 공통 초기화(사전 검증 등) 로직 구현");
-                
-                int stepCounter = 4;
-                foreach (var sp in spDefs)
-                {
-                    todoSb.AppendLine($"- [ ] {stepCounter}. Step: `{sp.Name}` 기반 비즈니스 로직 구현 (Agentic Workflow 루프 완료 포함)");
-                    stepCounter++;
-                }
-                
-                todoSb.AppendLine($"- [ ] {stepCounter}. 모든 Step이 통합된 최종 Job 파이프라인 조립 및 예외/트랜잭션 롤백 처리 보완");
-                todoSb.AppendLine($"- [ ] {stepCounter + 1}. 최종 Job 파이프라인 End-to-End 빌드 및 정적 검증({staticAnalysisTool}) 통과 확인");
-                await File.WriteAllTextAsync(todoPath, todoSb.ToString(), Encoding.UTF8);
-                Log.Debug("통합 마이그레이션 Todo 파일 쓰기 성공: {TodoPath}", todoPath);
-
                 try
                 {
                     var agentSrcFolder = Path.Combine(agentFolder, "src");
@@ -817,6 +599,23 @@ public class ArchitectureTests {
             {
                 Log.Error(ex, "통합 마이그레이션 지시서 내보내기 중 예외 발생 (격리됨) - JobName: {JobName}", jobName);
             }
+
+            return bundle;
+        }
+
+        /// <summary>
+        /// "task-01-S01" → "S01". Bootstrap과 Assembly는 단계가 아니므로 null이다.
+        /// </summary>
+        private static string? ExtractStepCode(string taskFileBaseName)
+        {
+            var parts = taskFileBaseName.Split('-');
+            if (parts.Length < 3)
+            {
+                return null;
+            }
+
+            var tail = string.Join("-", parts.Skip(2));
+            return tail is "bootstrap" or "assembly" ? null : tail;
         }
 
         /// <summary>

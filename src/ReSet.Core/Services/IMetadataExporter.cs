@@ -49,16 +49,19 @@ namespace ReSet.Core.Services
 
 
         /// <summary>
-        /// 다중 SP와 통합 배치 전환 계획을 기반으로 통합 마이그레이션 지시서 번들을 저장합니다.
+        /// 다중 SP와 통합 배치 전환 계획을 기반으로 코딩 에이전트용 번들을 저장한다.
+        /// layout이 null이면 계획서를 분할하지 않고 단일 파일로 남긴다.
         /// </summary>
-        Task ExportConsolidatedMigrationInstructionsAsync(
+        Task<BundleResult> ExportConsolidatedMigrationInstructionsAsync(
             System.Collections.Generic.List<SpDefinition> spDefs,
             string consolidatedPlan,
             VerificationOutcome planOutcome,
             string jobName,
             string baseOutputDir,
             string targetLanguage,
-            OutputPathResolver paths);
+            OutputPathResolver paths,
+            PlanLayout? layout = null,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
         /// 지시서 마크다운 파일 하단에 L1/L2 피드백 내용을 안전하게 덧붙이거나 교체합니다.
