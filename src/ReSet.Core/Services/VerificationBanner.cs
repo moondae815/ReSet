@@ -95,6 +95,54 @@ public static class VerificationBanner
         + $"> - **실패 사유**: {reason}\n\n";
 
     /// <summary>
+    /// 하한 검사를 통과하지 못한 단계를 알린다.
+    ///
+    /// VerificationOutcome에 상태를 새로 만들지 않는다. L2를 통과한 문서의 종료
+    /// 상태는 Passed가 맞고, 미달 사실은 이 배너가 나른다. 이것은 절대적 보장이
+    /// 아니라 가시성 확보다 — 강제로 막으려면 골격+단계 전체 재생성을 유발해야
+    /// 해서 비용이 맞지 않는다.
+    ///
+    /// 개수 대신 단계명을 싣는다. 읽는 사람이 다음에 할 일이 그 단계의 원본
+    /// 프로시저를 직접 보는 것이기 때문이다.
+    /// </summary>
+    public static string StepFloorViolations(IReadOnlyList<string> steps)
+    {
+        var stepLines = RenderBulletList(steps, "(단계명이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[하한 미달] 아래 단계 섹션이 최소 요건을 충족하지 못했습니다.**"
+            + " 최소 요건은 SQL 또는 의사코드 블록 1개 이상, 선언된 대상 테이블 전부, 원본 오류코드 전부입니다."
+            + " 해당 단계는 원본 프로시저를 직접 확인해야 합니다.\n"
+            + stepLines
+            + "\n\n";
+    }
+
+    /// <summary>
+    /// 목차가 어느 단계에도 담지 못한 원본 프로시저를 알린다.
+    ///
+    /// StepFloorViolations와 다른 사실을 나른다 — 저건 "단계는 있는데 내용이
+    /// 부실하다"이고 이건 "그 프로시저를 다룰 단계 자체가 목차에 없다"이다.
+    /// 후자가 더 심각하다. 부실 단계는 최소한 존재를 알리기라도 하지만,
+    /// 커버되지 않은 프로시저는 최종 문서 어디에도 흔적이 없다.
+    ///
+    /// VerificationOutcome에 상태를 새로 만들지 않고 목차 재수립도 유발하지
+    /// 않는다 — StepFloorViolations와 같은 이유다: 이것은 절대적 보장이 아니라
+    /// 가시성 확보이고, 재수립 예산은 다른 결함(점수 정체)을 위해 남겨둔다.
+    ///
+    /// 개수 대신 프로시저명을 싣는다. 읽는 사람이 다음에 할 일이 그 프로시저를
+    /// 직접 확인하거나 목차를 손으로 보완하는 것이기 때문이다.
+    /// </summary>
+    public static string UncoveredProcedures(IReadOnlyList<string> procedureNames)
+    {
+        var nameLines = RenderBulletList(procedureNames, "(프로시저명이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[커버리지 누락] 목차가 아래 프로시저를 어느 단계에도 포함하지 않았습니다.**"
+            + " 해당 프로시저는 최종 문서 어디에도 반영되지 않았을 가능성이 높습니다."
+            + " 원본 프로시저를 직접 확인하거나 목차를 보완하십시오.\n"
+            + nameLines
+            + "\n\n";
+    }
+
+    /// <summary>
     /// 사용자 취소로 이 문서의 참조 객체 일부가 분석되지 않았음을 알린다.
     /// 개수 대신 이름을 싣는다 — 읽는 사람이 다음에 할 일이 그 객체를 다시
     /// 분석하는 것이기 때문이다.

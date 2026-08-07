@@ -36,6 +36,84 @@ namespace ReSet.Core.Tests
             }
         }
 
+        // 회귀 재현: 통합 배치 파이프라인의 목차 커버리지 검사와 AI 프롬프트의
+        // "Filename:" 레이블이 명세서를 구분하는 유일한 근거가 이 식별자다.
+        // FindStepCandidates가 실제로 돌려주는 두 레이아웃(현재 DB / External DB)
+        // 모두에서, 마지막 세그먼트("Spec.md")가 아니라 "Procedures" 바로 다음
+        // 세그먼트("스키마.이름")가 나와야 한다.
+        [Theory]
+        [InlineData("Procedures/dbo.USP_Root/docs/Spec.md", "dbo.USP_Root")]
+        [InlineData("External/AuditDB/Procedures/dbo.USP_External/docs/Spec.md", "dbo.USP_External")]
+        public void ExtractProcedureIdentifier_ReturnsTheBareProcedureNameNotTheFilename(
+            string relativePath, string expectedIdentifier)
+        {
+            var normalized = relativePath.Replace('/', Path.DirectorySeparatorChar);
+
+            var identifier = BatchStepCatalog.ExtractProcedureIdentifier(normalized);
+
+            Assert.Equal(expectedIdentifier, identifier);
+            Assert.NotEqual("Spec.md", identifier);
+        }
+
+        // 실측 결함 재현: 재검토가 지적한 바로 그 결함은 "마지막 경로 세그먼트를
+        // 쓴다"는 순진한 접근이었다 — 어느 레이아웃에서든 마지막 세그먼트는 항상
+        // "Spec.md"이므로, 이걸 식별자로 쓰면 서로 다른 프로시저 두 개가 같은
+        // 값으로 뭉개진다. 목차 커버리지 검사는 이 값을 기준으로 명세서를
+        // 구분하므로, 뭉개지면 N개 명세서가 1개로 보여 하나만 빼고 전부 "커버
+        // 안 됨"으로 잘못 보고되거나(또는 그 반대로 과소 보고) 검사가 무의미해진다.
+        // 이 테스트는 그 순진한 접근이 실제로 충돌한다는 사실과, 우리 픽스가
+        // 그 충돌을 피한다는 사실을 나란히 고정한다.
+        [Fact]
+        public void ExtractProcedureIdentifier_UnlikeTakingTheLastPathSegment_DoesNotCollapseDifferentProceduresToTheSameValue()
+        {
+            var plain = "Procedures/dbo.USP_Root/docs/Spec.md".Replace('/', Path.DirectorySeparatorChar);
+            var external = "External/AuditDB/Procedures/dbo.USP_External/docs/Spec.md".Replace('/', Path.DirectorySeparatorChar);
+
+            // 순진한 접근("마지막 세그먼트를 쓴다", 코드 리뷰가 지목한 원래 결함의
+            // 본질)은 두 서로 다른 프로시저를 같은 값으로 충돌시킨다.
+            Assert.Equal(Path.GetFileName(plain), Path.GetFileName(external));
+            Assert.Equal("Spec.md", Path.GetFileName(plain));
+
+            // 픽스(ExtractProcedureIdentifier)는 충돌하지 않는다.
+            var plainIdentifier = BatchStepCatalog.ExtractProcedureIdentifier(plain);
+            var externalIdentifier = BatchStepCatalog.ExtractProcedureIdentifier(external);
+            Assert.NotEqual(plainIdentifier, externalIdentifier);
+            Assert.Equal("dbo.USP_Root", plainIdentifier);
+            Assert.Equal("dbo.USP_External", externalIdentifier);
+        }
+
+        [Theory]
+        [InlineData("Jobs/Nightly/validation/raw/Spec.md")]
+        [InlineData("Functions/dbo.UF_Helper/docs/Spec.md")]
+        [InlineData("Spec.md")]
+        public void ExtractProcedureIdentifier_ReturnsNullForShapesItDoesNotRecognize(string relativePath)
+        {
+            var normalized = relativePath.Replace('/', Path.DirectorySeparatorChar);
+
+            Assert.Null(BatchStepCatalog.ExtractProcedureIdentifier(normalized));
+        }
+
+        // FindStepCandidates가 통과시킨 모든 경로는 IsProcedureSpec을 만족했다.
+        // IsProcedureSpec이 이제 ExtractProcedureIdentifier에 판정을 위임하므로, 이
+        // 테스트는 그 위임이 실제로 유지되는지(즉 FindStepCandidates가 절대 식별자를
+        // 뽑을 수 없는 경로를 흘려보내지 않는지)를 고정한다.
+        [Fact]
+        public void FindStepCandidates_EveryReturnedPathYieldsANonNullIdentifier()
+        {
+            var root = CreateOutputTree();
+            try
+            {
+                var candidates = BatchStepCatalog.FindStepCandidates(root);
+
+                Assert.NotEmpty(candidates);
+                Assert.All(candidates, path => Assert.NotNull(BatchStepCatalog.ExtractProcedureIdentifier(path)));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         [Fact]
         public void FindStepCandidates_ExcludesFunctionsAndJobArtifacts()
         {

@@ -549,6 +549,90 @@ Based on the reference context above, reverse engineer the user defined function
         private static string FormatFunctionReturnColumn(ColumnInfo column) =>
             $"- {column.ColumnName}: {column.DataType} ({(column.IsNullable ? "nullable" : "not nullable")})";
 
+        /// <summary>
+        /// 통합 배치 계획서의 SQL 안전성 규칙과 few-shot 예시.
+        ///
+        /// 골격 생성과 단계 본문 생성이 같은 규칙을 써야 한다. 문구가 갈라지면
+        /// 단계마다 다른 오류 처리·트랜잭션 관례가 나오고, 그것이 정확히 이
+        /// 파이프라인이 없애려는 결함이다.
+        ///
+        /// 보간 문자열이 아니다. 이 블록에는 치환할 값이 없고, 상수로 두어야
+        /// SQL 예시의 중괄호를 이스케이프할 필요가 없다.
+        /// </summary>
+        private const string ConsolidatedPlanRules = @"[Required Content & Rules]
+1. Write the document in Korean Markdown format.
+2. The document must use only 4 mandatory H2 headers:
+   - ## 통합 배치 아키텍처 개요: Define how the individual stored procedures translate into steps (sequential chain, conditional branches, parallel processing) within the unified batch job.
+   - ## Mermaid 기반 통합 흐름도: Draw a Mermaid flowchart diagram depicting the data pipeline and steps.
+     * Wrap all node text labels in double quotes. Do not use double quotes or special characters in arrow labels. Node IDs must be unique alphanumeric words.
+     * ALWAYS add a space between the 'subgraph' keyword, its ID, and the bracket label (e.g., `subgraph SP1 [""Label""]`). Do not write `subgraph SP1[""Label""]`. Do not use parentheses '()' or brackets '[]' in arrow labels (e.g., use `|OutState IN 1, 5|` instead of `|OutState IN (1,5)|`).
+   - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
+   - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
+3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
+4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback: (a) The Shadow strategy MUST cover ALL target tables modified by the step, (b) you MUST define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours), and (c) you MUST explicitly provide Rollback/Restore pseudo-code that DELETEs the affected range FIRST and only then re-inserts from the Shadow table (e.g., `DELETE FROM Target WHERE BatchDate = @BatchDate;` followed by `INSERT INTO Target SELECT * FROM Shadow WHERE BatchDate = @BatchDate;`). Restoring without the preceding DELETE duplicates rows.
+5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
+6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
+6-1. [Precise Error Tracking] If the original SP lacked `@@ERROR` checking, you MUST resolve it using `TRY...CATCH` and `XACT_ABORT ON`. However, DO NOT just return a generic `-1` in the `CATCH` block. You MUST declare a state variable at the top (e.g., `DECLARE @v_currentStepId INT = 0;`), update it before each DML with the exact original error code (e.g., `SET @v_currentStepId = -101;`), and return that variable in the CATCH block to preserve the exact point of failure. Use structured `TRY...CATCH` exclusively for error handling; NEVER use legacy `GOTO`-based error branching.
+7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
+8. [Preserve Chunking Filters] When chunking operations (e.g., `WHERE ID BETWEEN @start AND @end`), you MUST retain the original business logic filters (e.g., self-joins, cursor criteria, status checks) and combine them with the chunking range using `AND`. Do not delete the original filters.
+8-1. [Chunk Transaction Boundary] Every iteration of a chunking `WHILE` loop MUST open and close its own explicit `BEGIN TRAN` / `COMMIT TRAN` boundary so that each chunk commits independently and a mid-run failure leaves earlier chunks durably committed. Do NOT wrap the entire loop in a single outer transaction.
+9. [Error Codes] You MUST strictly reuse the EXACT original error codes from the source SPs. DO NOT remap or invent new error codes (e.g., changing -1 to -11). DO NOT use continuous ranges (e.g., `-1~-23`).
+10. [NOLOCK Prohibition] Since SNAPSHOT isolation is used, you MUST explicitly remove all `WITH (NOLOCK)` or `NOLOCK` hints from the generated pseudocode. `NOLOCK` forces READ UNCOMMITTED and completely violates the SNAPSHOT isolation policy.
+11. [INSERT-only Rollback] For INSERT-only steps, do not use a Shadow table for rollback. Instead, rely solely on `ROLLBACK TRAN` for single transactions, or provide an explicit `DELETE WHERE [ChunkKey]` compensation logic. Do NOT perform `DELETE` immediately after `ROLLBACK TRAN` inside a CATCH block for a single transaction as it is redundant.
+12. [Chunk Key Validation] You MUST CROSS-CHECK the provided DDL/Schema for the target table before writing the chunking key. Ensure the key column (e.g., `CLIENTID`) actually exists. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
+13. [Output Parameters Interface] All output parameters (e.g., `@po_strErrMsg`, `@po_intRetVal`) from the original procedures MUST be accurately mapped in the unified batch context interface and error code tables. Do not omit them.
+14. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
+15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.
+
+[Few-Shot Examples for Modernization Patterns]
+* Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
+```sql
+-- Create Shadow Table
+SELECT * INTO TargetTable_Shadow_YYYYMMDD FROM TargetTable WHERE 1=0;
+-- Bulk Insert into Shadow
+INSERT INTO TargetTable_Shadow_YYYYMMDD (Col1, Col2)
+SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+-- Single Transaction Swap
+BEGIN TRAN;
+  DELETE FROM TargetTable; -- Original target data purge
+  INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD;
+COMMIT TRAN;
+```
+
+* Chunking Pattern (Combining chunking keys with existing business filters):
+```sql
+DECLARE @MinID INT, @MaxID INT, @CurrentID INT, @ChunkSize INT = 10000;
+SELECT @MinID = MIN(ID), @MaxID = MAX(ID) FROM SourceTable WHERE Status = 'P'; -- Existing filter
+SET @CurrentID = @MinID;
+WHILE @CurrentID <= @MaxID
+BEGIN
+    BEGIN TRAN;
+    INSERT INTO TargetTable (ID, Col1)
+    SELECT ID, Col1 FROM SourceTable
+    WHERE Status = 'P' -- Preserve original filter!
+      AND ID >= @CurrentID AND ID < @CurrentID + @ChunkSize; -- Chunking condition
+    COMMIT TRAN;
+    SET @CurrentID = @CurrentID + @ChunkSize;
+END
+```
+
+* Shadow Table Restore in CATCH block for DELETE-INSERT patterns:
+```sql
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    -- MUST DELETE target data for the chunk range or specific YMD BEFORE inserting from shadow to avoid duplicates!
+    DELETE FROM TargetTable WHERE BatchDate = @BatchDate; 
+    INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD WHERE BatchDate = @BatchDate;
+    THROW;
+END CATCH
+```
+
+* INSERT-only Compensation (No Shadow table needed for rollback):
+```sql
+-- If an INSERT-only chunked batch fails in the middle, rollback committed chunks using business keys:
+DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
+```";
+
         private ReviewResult ParseReviewResult(string? responseContent, string contextName)
         {
             try
@@ -568,10 +652,23 @@ Based on the reference context above, reverse engineer the user defined function
                     var scoreException = resultRoot.TryGetProperty("ScoreException", out var exProp) ? exProp.GetInt32() : 0;
                     var scoreReadability = resultRoot.TryGetProperty("ScoreReadability", out var readProp) ? readProp.GetInt32() : 0;
 
+                    var defectiveSteps = new List<string>();
+                    if (resultRoot.TryGetProperty("DefectiveSteps", out var stepsProp) &&
+                        stepsProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in stepsProp.EnumerateArray())
+                        {
+                            if (item.ValueKind != JsonValueKind.String) continue;
+                            var code = item.GetString();
+                            if (!string.IsNullOrWhiteSpace(code)) defectiveSteps.Add(code.Trim());
+                        }
+                    }
+
                     return new ReviewResult
                     {
                         HasDefects = hasDefects,
                         FeedbackComment = feedbackComment,
+                        DefectiveSteps = defectiveSteps,
                         ScoreAccuracy = scoreAccuracy,
                         ScoreCrud = scoreCrud,
                         ScoreInterface = scoreInterface,
@@ -1840,7 +1937,33 @@ You MUST use exactly the following 4 mandatory H2 headers in Korean, and design 
 1. ## 통합 배치 아키텍처 개요
 2. ## Mermaid 기반 통합 흐름도
 3. ## 단계별 이행 상세 및 의사코드
-4. ## 통합 데이터 정합성 검증 SQL 세트";
+4. ## 통합 데이터 정합성 검증 SQL 세트
+
+[Machine-Readable Step List — MANDATORY]
+In ADDITION to the prose outline, you MUST emit exactly one fenced ```json block containing the ordered step list. The downstream pipeline generates one document section per entry, so an omitted step is never written at all.
+
+```json
+{{
+  ""Steps"": [
+    {{
+      ""Code"": ""S01"",
+      ""Name"": ""Short Korean step name"",
+      ""LegacyProcedures"": [""UP_SOURCE_PROC""],
+      ""TargetTables"": [""dbo.TargetTable""],
+      ""ErrorCodes"": [""-1"", ""-2""],
+      ""Chunkable"": false
+    }}
+  ]
+}}
+```
+
+Rules for the step list:
+- One entry per executable step. NEVER collapse several steps into one entry (no `S01~S04` style ranges).
+- `Code` must be unique and must also appear in the prose outline heading for that step.
+- `TargetTables` must list every table the step creates or modifies, as written in the source specifications.
+- `ErrorCodes` must reproduce the EXACT original return codes of the source procedure. Do not invent, remap, or compress them into ranges.
+- `Chunkable` is false when the step is an aggregation or cross-DB join that cannot be chunked by a single key.
+- Emit the block once. Do not wrap the whole answer in a code block.";
 
             // 재수립 모드. 이전 구조로 만든 본문이 리뷰를 반복 통과하지 못했다는 뜻이므로
             // 같은 구조를 다시 내면 재시도 예산만 소진된다. 4개 H2 강제는 유지한다 —
@@ -1901,79 +2024,7 @@ The previous structure below repeatedly failed cross-review. Do NOT reproduce it
             var systemPrompt = $@"You are a principal database modernization architect consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
 Consolidate the provided specifications into a single unified batch job named '{jobName}'.
 
-[Required Content & Rules]
-1. Write the document in Korean Markdown format.
-2. The document must use only 4 mandatory H2 headers:
-   - ## 통합 배치 아키텍처 개요: Define how the individual stored procedures translate into steps (sequential chain, conditional branches, parallel processing) within the unified batch job.
-   - ## Mermaid 기반 통합 흐름도: Draw a Mermaid flowchart diagram depicting the data pipeline and steps.
-     * Wrap all node text labels in double quotes. Do not use double quotes or special characters in arrow labels. Node IDs must be unique alphanumeric words.
-     * ALWAYS add a space between the 'subgraph' keyword, its ID, and the bracket label (e.g., `subgraph SP1 [""Label""]`). Do not write `subgraph SP1[""Label""]`. Do not use parentheses '()' or brackets '[]' in arrow labels (e.g., use `|OutState IN 1, 5|` instead of `|OutState IN (1,5)|`).
-   - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
-   - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
-3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
-4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback: (a) The Shadow strategy MUST cover ALL target tables modified by the step, (b) you MUST define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours), and (c) you MUST explicitly provide Rollback/Restore pseudo-code that DELETEs the affected range FIRST and only then re-inserts from the Shadow table (e.g., `DELETE FROM Target WHERE BatchDate = @BatchDate;` followed by `INSERT INTO Target SELECT * FROM Shadow WHERE BatchDate = @BatchDate;`). Restoring without the preceding DELETE duplicates rows.
-5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
-6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
-6-1. [Precise Error Tracking] If the original SP lacked `@@ERROR` checking, you MUST resolve it using `TRY...CATCH` and `XACT_ABORT ON`. However, DO NOT just return a generic `-1` in the `CATCH` block. You MUST declare a state variable at the top (e.g., `DECLARE @v_currentStepId INT = 0;`), update it before each DML with the exact original error code (e.g., `SET @v_currentStepId = -101;`), and return that variable in the CATCH block to preserve the exact point of failure. Use structured `TRY...CATCH` exclusively for error handling; NEVER use legacy `GOTO`-based error branching.
-7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
-8. [Preserve Chunking Filters] When chunking operations (e.g., `WHERE ID BETWEEN @start AND @end`), you MUST retain the original business logic filters (e.g., self-joins, cursor criteria, status checks) and combine them with the chunking range using `AND`. Do not delete the original filters.
-8-1. [Chunk Transaction Boundary] Every iteration of a chunking `WHILE` loop MUST open and close its own explicit `BEGIN TRAN` / `COMMIT TRAN` boundary so that each chunk commits independently and a mid-run failure leaves earlier chunks durably committed. Do NOT wrap the entire loop in a single outer transaction.
-9. [Error Codes] You MUST strictly reuse the EXACT original error codes from the source SPs. DO NOT remap or invent new error codes (e.g., changing -1 to -11). DO NOT use continuous ranges (e.g., `-1~-23`).
-10. [NOLOCK Prohibition] Since SNAPSHOT isolation is used, you MUST explicitly remove all `WITH (NOLOCK)` or `NOLOCK` hints from the generated pseudocode. `NOLOCK` forces READ UNCOMMITTED and completely violates the SNAPSHOT isolation policy.
-11. [INSERT-only Rollback] For INSERT-only steps, do not use a Shadow table for rollback. Instead, rely solely on `ROLLBACK TRAN` for single transactions, or provide an explicit `DELETE WHERE [ChunkKey]` compensation logic. Do NOT perform `DELETE` immediately after `ROLLBACK TRAN` inside a CATCH block for a single transaction as it is redundant.
-12. [Chunk Key Validation] You MUST CROSS-CHECK the provided DDL/Schema for the target table before writing the chunking key. Ensure the key column (e.g., `CLIENTID`) actually exists. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
-13. [Output Parameters Interface] All output parameters (e.g., `@po_strErrMsg`, `@po_intRetVal`) from the original procedures MUST be accurately mapped in the unified batch context interface and error code tables. Do not omit them.
-14. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
-15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.
-
-[Few-Shot Examples for Modernization Patterns]
-* Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
-```sql
--- Create Shadow Table
-SELECT * INTO TargetTable_Shadow_YYYYMMDD FROM TargetTable WHERE 1=0;
--- Bulk Insert into Shadow
-INSERT INTO TargetTable_Shadow_YYYYMMDD (Col1, Col2)
-SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
--- Single Transaction Swap
-BEGIN TRAN;
-  DELETE FROM TargetTable; -- Original target data purge
-  INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD;
-COMMIT TRAN;
-```
-
-* Chunking Pattern (Combining chunking keys with existing business filters):
-```sql
-DECLARE @MinID INT, @MaxID INT, @CurrentID INT, @ChunkSize INT = 10000;
-SELECT @MinID = MIN(ID), @MaxID = MAX(ID) FROM SourceTable WHERE Status = 'P'; -- Existing filter
-SET @CurrentID = @MinID;
-WHILE @CurrentID <= @MaxID
-BEGIN
-    BEGIN TRAN;
-    INSERT INTO TargetTable (ID, Col1)
-    SELECT ID, Col1 FROM SourceTable
-    WHERE Status = 'P' -- Preserve original filter!
-      AND ID >= @CurrentID AND ID < @CurrentID + @ChunkSize; -- Chunking condition
-    COMMIT TRAN;
-    SET @CurrentID = @CurrentID + @ChunkSize;
-END
-```
-
-* Shadow Table Restore in CATCH block for DELETE-INSERT patterns:
-```sql
-BEGIN CATCH
-    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
-    -- MUST DELETE target data for the chunk range or specific YMD BEFORE inserting from shadow to avoid duplicates!
-    DELETE FROM TargetTable WHERE BatchDate = @BatchDate; 
-    INSERT INTO TargetTable SELECT * FROM TargetTable_Shadow_YYYYMMDD WHERE BatchDate = @BatchDate;
-    THROW;
-END CATCH
-```
-
-* INSERT-only Compensation (No Shadow table needed for rollback):
-```sql
--- If an INSERT-only chunked batch fails in the middle, rollback committed chunks using business keys:
-DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
-```";
+" + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
@@ -2020,6 +2071,183 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
             return aiResult;
         }
 
+        /// <summary>
+        /// 단계 본문을 뺀 골격을 만든다. H2 4개를 모두 쓰되, 단계 상세 H2 아래에는
+        /// 모든 단계가 공유할 공통 규약 소절과 단계별 자리표시자만 남긴다.
+        ///
+        /// 공통 규약을 여기서 한 번 확정하는 이유: 단계별로 각자 쓰게 하면 13개
+        /// 단계가 서로 다른 오류 처리·Shadow·Chunk 관례를 선언한다.
+        /// </summary>
+        public async Task<AiResult> GenerateBatchPlanSkeletonAsync(
+            IReadOnlyList<BatchStepPlan> steps,
+            string planStructure,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            string? effort = null,
+            CancellationToken cancellationToken = default)
+        {
+            var placeholders = new StringBuilder();
+            foreach (var step in steps)
+            {
+                placeholders.AppendLine($"<!-- STEP:{step.Code} -->");
+            }
+
+            var systemPrompt = $@"You are a principal database modernization architect writing the SKELETON of the '{jobName}' consolidated {targetLanguage} batch migration plan.
+Consolidate the provided specifications into a single unified batch job named '{jobName}'.
+
+[Skeleton Contract]
+- Write ALL four mandatory H2 sections in full, EXCEPT for the individual step bodies.
+- Under `{BatchPlanAssembler.StepDetailHeader}`, write ONLY the shared subsections that every step relies on: the common SQL error-tracking pattern, the Shadow Table and recovery policy, and the chunk-paging policy.
+- After those shared subsections, emit the following placeholder lines VERBATIM, in this exact order, and write NOTHING else under that H2. Each step body is generated separately and will replace these lines.
+
+{placeholders}
+- Do NOT write any `###` step section under that H2 yourself.
+- The Mermaid flowchart and the architecture overview MUST cover every step in the approved step list.
+
+" + ConsolidatedPlanRules;
+
+            var userPrompt = new StringBuilder();
+            AppendSharedStepContext(userPrompt, steps, string.Empty, specs, targetLanguage, jobName);
+            userPrompt.AppendLine("[Approved Document Structure & Plan]");
+            userPrompt.AppendLine(planStructure);
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("Please draft the skeleton, STRICTLY adhering to the [Skeleton Contract] and the [Approved Document Structure & Plan] above.");
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
+            }
+
+            Log.Information("AI 배치 계획 골격 생성 요청 전송 - JobName: {JobName}, 단계 수: {Count}개", jobName, steps.Count);
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            if (aiResult == null) aiResult = new AiResult();
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+
+            Log.Information("AI 배치 계획 골격 생성 응답 수신 완료 - JobName: {JobName}, 응답 길이: {Length}", jobName, aiResult.Content.Length);
+            return aiResult;
+        }
+
+        /// <summary>
+        /// 단계 섹션 하나를 생성한다.
+        ///
+        /// 문서를 통째로 만드는 GenerateConsolidatedBatchPlanAsync를 플래그로
+        /// 확장하지 않고 메서드를 나눈 이유: 반환 계약이 다르다. 저쪽은 H2 4개를
+        /// 갖춘 완결 문서를, 이쪽은 H3 섹션 하나를 돌려준다. 같은 메서드에 두
+        /// 계약을 겹치면 L1 검증 대상이 호출부마다 달라진다.
+        ///
+        /// floorFeedback은 반드시 프롬프트 말미에 붙는다. 앞에 끼우면 캐시
+        /// 접두사가 깨져 분할의 비용 이점이 사라진다.
+        /// </summary>
+        public async Task<AiResult> GenerateBatchStepSectionAsync(
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            string sharedConventions,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            string? effort = null,
+            string? floorFeedback = null,
+            CancellationToken cancellationToken = default)
+        {
+            var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
+
+[Output Contract]
+- Output ONLY the markdown for the single requested step section. Do NOT output any H2 header, any other step, or any conversational text.
+- The section MUST begin with a level-3 heading that contains the step code given at the END of the user message.
+- The section MUST contain at least one fenced SQL or pseudocode block. A bullet list alone is not an implementation instruction.
+- EVERY target table listed for this step MUST appear in the section.
+- EVERY original error code listed for this step MUST appear verbatim in the section.
+- Write the section body in Korean.
+- The shared conventions below are ALREADY written elsewhere in the document. Follow them; do not restate them.
+
+" + ConsolidatedPlanRules;
+
+            var userPrompt = new StringBuilder();
+            AppendSharedStepContext(userPrompt, allSteps, sharedConventions, specs, targetLanguage, jobName);
+            userPrompt.AppendLine($"Now write the section for step {step.Code} ({step.Name}) ONLY.");
+
+            if (!string.IsNullOrWhiteSpace(floorFeedback))
+            {
+                userPrompt.AppendLine();
+                userPrompt.AppendLine("[Previous Attempt Rejected]");
+                userPrompt.AppendLine(floorFeedback);
+            }
+
+            if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
+            {
+                systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags. The final markdown must be placed outside the think tags.";
+            }
+
+            Log.Information("AI 배치 단계 섹션 생성 요청 전송 - JobName: {JobName}, Step: {Step}, 재시도 피드백: {HasFeedback}",
+                jobName, step.Code, !string.IsNullOrWhiteSpace(floorFeedback));
+
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            if (aiResult == null) aiResult = new AiResult();
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+
+            Log.Information("AI 배치 단계 섹션 생성 응답 수신 완료 - JobName: {JobName}, Step: {Step}, 응답 길이: {Length}",
+                jobName, step.Code, aiResult.Content.Length);
+            return aiResult;
+        }
+
+        /// <summary>
+        /// 단계별 호출이 공유하는 프롬프트 접두사.
+        ///
+        /// 이 메서드가 만드는 부분은 단계마다 완전히 동일해야 한다. 여기에
+        /// 단계별 값이 섞여 들어가면 프롬프트 캐시가 매 호출 미스가 되어,
+        /// 분할 생성의 입력 비용이 1배에서 N배로 뛴다.
+        /// </summary>
+        private static void AppendSharedStepContext(
+            StringBuilder builder,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            string sharedConventions,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName)
+        {
+            builder.AppendLine($"Unified Batch Job Name: {jobName}");
+            builder.AppendLine($"Target Language Stack: {targetLanguage}");
+            builder.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
+            builder.AppendLine();
+            builder.AppendLine("[Provided Stored Procedure Specifications]");
+
+            foreach (var spec in specs)
+            {
+                builder.AppendLine("---");
+                builder.AppendLine($"Filename: {spec.FileName}");
+                builder.AppendLine("[Content Start]");
+                builder.AppendLine(spec.Content);
+                builder.AppendLine("[Content End]");
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("[Approved Step List]");
+            foreach (var candidate in allSteps)
+            {
+                builder.AppendLine(
+                    $"- {candidate.Code} | {candidate.Name} " +
+                    $"| Legacy: {string.Join(", ", candidate.LegacyProcedures)} " +
+                    $"| Tables: {string.Join(", ", candidate.TargetTables)} " +
+                    $"| ErrorCodes: {string.Join(", ", candidate.ErrorCodes)} " +
+                    $"| Chunkable: {candidate.Chunkable}");
+            }
+            builder.AppendLine();
+
+            // 골격 호출은 sharedConventions를 아직 갖고 있지 않다(자신이 그것을
+            // 써야 하는 쪽이다). 그 호출에도 이 헤더를 무조건 찍으면 "규약이 이미
+            // 문서에 있다"고 거짓 전제를 주게 되므로, 내용이 있을 때만 낸다.
+            if (!string.IsNullOrWhiteSpace(sharedConventions))
+            {
+                builder.AppendLine("[Shared Conventions Already Written In The Document]");
+                builder.AppendLine(sharedConventions);
+                builder.AppendLine();
+            }
+        }
+
         public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = @"You are a principal database architect and critic agent reviewing a Consolidated Batch Modernization Plan. Assess if the plan accurately reflects the requirements and logic of the individual stored procedure specifications and meets modern technical criteria.
@@ -2051,11 +2279,17 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 [Defect Judgment]
 - If any of the 5 criteria scores less than 8 points, or if any of the 4 mandatory H2 headers (## 통합 배치 아키텍처 개요, ## Mermaid 기반 통합 흐름도, ## 단계별 이행 상세 및 의사코드, ## 통합 데이터 정합성 검증 SQL 세트) is missing, mark HasDefects as true.
 
+[Defective Step Attribution]
+- `DefectiveSteps` MUST list the step codes (e.g. `S08`) of the `###` sections under `## 단계별 이행 상세 및 의사코드` that caused the defects, using the exact codes as written in the document.
+- Include a step ONLY when rewriting that one section would fix the defect. Leave the array EMPTY when the defect is document-wide (a missing H2, a broken flowchart, an inconsistency across steps).
+- An empty array causes the whole document to be regenerated, so listing steps precisely is what makes the repair cheap.
+
 [Output Format]
 Output ONLY the final JSON payload. Do not include markdown block markers (```json) or conversational text. Output raw JSON:
 {
   ""HasDefects"": true or false (boolean),
   ""FeedbackComment"": ""Detailed correction instructions if defects are found. Return empty string if HasDefects is false."",
+  ""DefectiveSteps"": [""S08"", ""S10""],
   ""ScoreAccuracy"": 10,
   ""ScoreCrud"": 10,
   ""ScoreInterface"": 10,

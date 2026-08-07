@@ -343,5 +343,127 @@ graph TD
             Assert.Contains("CHK{\"@@ERROR 확인\"}", result);
             Assert.DoesNotContain("\"\"@@ERROR", result);
         }
+
+        // ── ValidateBatchStep: 단계 섹션 하한 검사 ─────────────────────────
+        //
+        // 픽스처는 실제 산출물에서 가져온다. output/jobs/POQSettleProcDaily의
+        // S10은 12줄에 코드 블록이 하나도 없어 붕괴한 단계이고, S12는 24줄로 짧지만
+        // 자기 조인 SQL과 원본 오류코드를 갖춰 통과해야 하는 단계다. 이 둘을
+        // 갈라내지 못하면 검사가 조준되지 않은 것이다.
+
+        private static BatchStepPlan S10Plan() => new(
+            "S10", "PG 회수 통계 생성",
+            new[] { "UP_UTIL_STAT_PGCOLLECT_INS" },
+            new[] { "dbo.TStatPGCollect", "dbo.TSettleMst" },
+            new[] { "-1" },
+            Chunkable: false);
+
+        private const string S10CollapsedSection = @"### 14. S10 PG 회수 통계 생성
+
+`S10`은 `TSettleMst`, `TTArsPGCollect`, `TBArsPGCollect`를 `UNION ALL`로 결합한다.
+
+- `TSettleMst`: `INYMD = @pi_strYMD AND INSTATE = 1`
+- 고객사, PG, MallID는 소문자 변환 후 집계
+
+복잡한 `UNION ALL` 집계이므로 chunking하지 않고 `TStatPGCollect`에 대한 Single-Transaction Shadow Swap을 사용한다. 오류코드 `-1`을 보존한다.";
+
+        private const string S10HealthySection = @"### 14. S10 PG 회수 통계 생성
+
+`S10`은 `TStatPGCollect`를 재생성한다. `TSettleMst`가 원천이다.
+
+```sql
+SET XACT_ABORT ON;
+DECLARE @v_currentStepId int = -1;
+INSERT INTO dbo.TStatPGCollect SELECT 1;
+```";
+
+        [Fact]
+        public void ValidateBatchStep_WithCodeBlockAndAllTokens_IsValid()
+        {
+            var result = _validator.ValidateBatchStep(S10HealthySection, S10Plan());
+
+            Assert.True(result.IsValid, string.Join(" / ", result.Errors));
+            Assert.Null(result.SuggestedPromptFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutCodeBlock_Fails()
+        {
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan());
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("의사코드 블록이 없습니다"));
+            Assert.NotNull(result.SuggestedPromptFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithBareTableName_SatisfiesQualifiedRequirement()
+        {
+            // 실제 문서는 같은 테이블을 dbo.TSettleMst와 TSettleMst로 섞어 쓴다.
+            // 접두사까지 포함해 대조하면 정상 문서가 실패한다.
+            var section = "### S02 기본 정산 원장 생성\n\n본문은 TSettleMst만 적었다. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
+            var plan = new BatchStepPlan("S02", "기본 정산 원장 생성",
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false);
+
+            var result = _validator.ValidateBatchStep(section, plan);
+
+            Assert.True(result.IsValid, string.Join(" / ", result.Errors));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithErrorCodeSubstringOnly_Fails()
+        {
+            // -1을 요구하는데 본문에 -10만 있으면 실패해야 한다. 부분 문자열 대조로
+            // 회귀하면 -1이 -10 안에서 걸려 이 검사가 통째로 무력해진다.
+            var section = "### S08 회수일 산정\n\n대상은 TSettleMst이고 오류코드는 -10뿐이다.\n\n```sql\nSELECT 1;\n```";
+            var plan = new BatchStepPlan("S08", "회수일 산정",
+                new[] { "UP_UTIL_SETTLE_EXPECT_PROC" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false);
+
+            var result = _validator.ValidateBatchStep(section, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("-1"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithMissingTargetTable_Fails()
+        {
+            var section = "### S10 PG 회수 통계 생성\n\nTStatPGCollect만 적었다. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
+
+            var result = _validator.ValidateBatchStep(section, S10Plan());
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("TSettleMst"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithWrongHeading_Fails()
+        {
+            var section = "## S10 PG 회수 통계 생성\n\nTStatPGCollect와 TSettleMst. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
+
+            var result = _validator.ValidateBatchStep(section, S10Plan());
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("헤딩"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithHeadingMissingStepCode_Fails()
+        {
+            var section = "### PG 회수 통계 생성\n\nTStatPGCollect와 TSettleMst. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
+
+            var result = _validator.ValidateBatchStep(section, S10Plan());
+
+            Assert.False(result.IsValid);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithEmptyMarkdown_Fails()
+        {
+            var result = _validator.ValidateBatchStep("", S10Plan());
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("비어있습니다"));
+        }
     }
 }

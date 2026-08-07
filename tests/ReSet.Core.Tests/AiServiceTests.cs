@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Xunit;
@@ -257,6 +258,58 @@ namespace ReSet.Core.Tests
             Assert.Contains("## 낡은 목차", result.UserPrompt);
             Assert.Contains("청킹 불가 스텝이 청킹으로 배치됨", result.UserPrompt);
             Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
+        }
+
+        // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
+        // 헤딩 파싱은 대안이 아니다 — 실측한 두 목차가 단계를 각각 H3/H4에 뒀고,
+        // 한쪽은 `### P20~P23.`으로 4개 단계를 헤딩 하나에 묶었다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_AlwaysRequestsStructuredStepList()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            Assert.Contains("```json", result.SystemPrompt);
+            Assert.Contains("\"Steps\"", result.SystemPrompt);
+            Assert.Contains("TargetTables", result.SystemPrompt);
+            Assert.Contains("ErrorCodes", result.SystemPrompt);
+
+            // 부분 문자열 일치만으로는 이스케이프 오류(예: `""""`가 `""`를 대신하는 경우)를
+            // 잡지 못한다. 실제 파서에 태워 유효한 JSON과 올바른 키를 검증한다.
+            var steps = BatchStepPlanParser.TryParse(result.SystemPrompt);
+            Assert.NotNull(steps);
+            Assert.Contains(steps!, s => s.Code == "S01" && !string.IsNullOrWhiteSpace(s.Name));
+        }
+
+        // 재수립 모드에서도 유지돼야 한다. 여기서 빠지면 재수립 이후 회차가
+        // 조용히 폴백해 분할이 사라진다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_RedraftAlsoRequestsStructuredStepList()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job",
+                effort: null,
+                previousStructure: "## 낡은 목차",
+                redraftFeedback: "스텝 누락");
+
+            Assert.Contains("\"Steps\"", result.SystemPrompt);
+            Assert.Contains("[Redraft]", result.SystemPrompt);
+
+            // 재수립 모드도 같은 계약으로 고정한다 — 문자열 존재가 아니라 파서 통과.
+            var steps = BatchStepPlanParser.TryParse(result.SystemPrompt);
+            Assert.NotNull(steps);
+            Assert.Contains(steps!, s => s.Code == "S01" && !string.IsNullOrWhiteSpace(s.Name));
         }
 
         [Fact]
@@ -830,6 +883,213 @@ namespace ReSet.Core.Tests
             // 과잉 회피를 유발하던 옛 문구가 남아 있으면 안 된다.
             Assert.DoesNotContain("Do not include variables prefixed with '@'", source);
             Assert.DoesNotContain("Avoid variable names with '@'", source);
+        }
+
+        private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
+        {
+            new BatchStepPlan("S01", "수수료율 스냅샷",
+                new[] { "UP_Util_PG_Client_CMRate_Ins" }, new[] { "dbo.TPGSettleRate" }, new[] { "-1" }, false),
+            new BatchStepPlan("S02", "정산 원장 생성",
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-2" }, true)
+        };
+
+        private static IAiService StepService()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"### S01 수수료율 스냅샷\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            return new AiService(new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_CarriesStepContract()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            Assert.Contains("S02", result.UserPrompt);
+            Assert.Contains("공통 규약 본문", result.UserPrompt);
+            Assert.Contains("dbo.TSettleMst", result.UserPrompt);
+            // 단계 하나만 쓰라는 계약이 시스템 프롬프트에 있어야 한다.
+            Assert.Contains("ONE step section", result.SystemPrompt);
+            // 문서 전체 규칙(오류코드 원본 재사용 등)도 함께 실려야 한다.
+            Assert.Contains("[Required Content & Rules]", result.SystemPrompt);
+        }
+
+        // 접두사가 갈라지면 프롬프트 캐시가 매 단계 미스가 되어 분할 비용이 N배로 뛴다.
+        // 이 테스트가 그 회귀를 막는 유일한 장치다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_KeepsIdenticalPromptPrefixAcrossSteps()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+            var service = StepService();
+
+            var first = await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+            var second = await service.GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            const string marker = "Now write the section for step";
+            Assert.NotNull(first.UserPrompt);
+            Assert.NotNull(second.UserPrompt);
+            var firstUserPrompt = first.UserPrompt!;
+            var secondUserPrompt = second.UserPrompt!;
+            var firstPrefix = firstUserPrompt.Substring(0, firstUserPrompt.IndexOf(marker, StringComparison.Ordinal));
+            var secondPrefix = secondUserPrompt.Substring(0, secondUserPrompt.IndexOf(marker, StringComparison.Ordinal));
+
+            Assert.Equal(firstPrefix, secondPrefix);
+
+            // 시스템 프롬프트는 step 인자에서 파생되는 내용이 전혀 없어야 한다.
+            // .Replace(...)로 맞춰보는 비교는 구현의 보간 지점을 그대로 베낀 것이라
+            // 우연한 부분 문자열 충돌에도 통과할 수 있다 — 완전 동일성이 더 강한 회귀 가드다.
+            Assert.Equal(first.SystemPrompt, second.SystemPrompt);
+        }
+
+        // 하한 미달 재시도 피드백은 접두사 뒤(말미)에 붙어야 캐시가 유지된다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_AppendsFloorFeedbackAfterThePrefix()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job",
+                effort: null, floorFeedback: "코드 블록이 없습니다");
+
+            Assert.NotNull(result.UserPrompt);
+            var marker = result.UserPrompt!.IndexOf("Now write the section for step", StringComparison.Ordinal);
+            var feedback = result.UserPrompt!.IndexOf("코드 블록이 없습니다", StringComparison.Ordinal);
+
+            Assert.True(feedback > marker, "피드백은 지시문 뒤에 붙어야 한다");
+        }
+
+        [Fact]
+        public async Task GenerateBatchPlanSkeletonAsync_RequestsPlaceholdersInsteadOfStepBodies()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchPlanSkeletonAsync(
+                steps, "## 목차 산문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.SystemPrompt);
+            Assert.NotNull(result.UserPrompt);
+            var systemPrompt = result.SystemPrompt!;
+            var userPrompt = result.UserPrompt!;
+
+            Assert.Contains("<!-- STEP:S01 -->", systemPrompt);
+            Assert.Contains("<!-- STEP:S02 -->", systemPrompt);
+            Assert.Contains("단계별 이행 상세 및 의사코드", systemPrompt);
+            // 문서 전체 규칙이 함께 실려야 골격의 공통 규약이 그 규칙을 따른다.
+            Assert.Contains("[Required Content & Rules]", systemPrompt);
+            Assert.Contains("## 목차 산문", userPrompt);
+        }
+
+        /// <summary>
+        /// 코드 리뷰 지적 사항(Finding 8) 픽스: 골격 호출(GenerateBatchPlanSkeletonAsync)은
+        /// 공통 규약을 아직 갖고 있지 않다 — 그 골격 호출 자신이 문서에 그 규약을
+        /// 처음 써넣는 쪽이다. 그런데 AppendSharedStepContext는 예전에 sharedConventions가
+        /// 빈 문자열이어도 "[Shared Conventions Already Written In The Document]" 헤더를
+        /// 무조건 찍었다 — 규약을 써야 할 호출에게 "이미 문서에 있다"는 거짓 전제를
+        /// 준 것이다. 헤더는 내용이 있을 때만 나와야 한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBatchPlanSkeletonAsync_OmitsSharedConventionsHeaderWhenConventionsAreEmpty()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchPlanSkeletonAsync(
+                steps, "## 목차 산문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            Assert.DoesNotContain("[Shared Conventions Already Written In The Document]", result.UserPrompt!);
+        }
+
+        // 단계 섹션 호출(GenerateBatchStepSectionAsync)은 골격이 이미 써 둔 공통 규약을
+        // 넘겨받으므로, 그 헤더는 여전히 나와야 한다 — Finding 8 픽스가 헤더를
+        // 완전히 없앤 게 아니라 "내용이 있을 때만" 조건부로 만들었는지 확인한다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_KeepsSharedConventionsHeaderWhenConventionsArePresent()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            Assert.Contains("[Shared Conventions Already Written In The Document]", result.UserPrompt!);
+            Assert.Contains("공통 규약 본문", result.UserPrompt!);
+        }
+
+        // 산문 피드백에서 단계 코드를 키워드 매칭으로 뽑지 않는다.
+        // RegenerationScopeSelector의 클래스 주석이 그 방식의 실패를 이미 기록하고 있다 —
+        // LLM이 쓴 산문에 키워드를 걸면 프롬프트 문구가 바뀔 때 아무 신호 없이 오작동한다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_ParsesDefectiveStepsFromJson()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":true,\\\"FeedbackComment\\\":\\\"S08 SQL 누락\\\"," +
+                "\\\"DefectiveSteps\\\":[\\\" S08 \\\",\\\"S10\\\"]," +
+                "\\\"ScoreAccuracy\\\":7,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            Assert.Equal(new[] { "S08", "S10" }, review.DefectiveSteps);
+        }
+
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_WithoutDefectiveSteps_ReturnsEmptyList()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\"," +
+                "\\\"ScoreAccuracy\\\":9,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            // HasDefects도 함께 확인한다 — DefectiveSteps만 보면 파싱 성공 경로의 빈 배열과
+            // catch 폴백의 빈 배열(파싱 자체가 실패했을 때)을 구분할 수 없다.
+            // catch 폴백은 HasDefects를 무조건 true로 두므로, false 확인은 성공 경로에서만 통과한다.
+            Assert.False(review.HasDefects);
+            Assert.Empty(review.DefectiveSteps);
         }
     }
 

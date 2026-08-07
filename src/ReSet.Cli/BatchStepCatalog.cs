@@ -110,7 +110,28 @@ namespace ReSet.Cli
 
         // 객체 유형은 OutputPathResolver가 디렉터리 이름으로 인코딩하므로
         // 파일을 열지 않고 경로 형태만으로 판정할 수 있다.
-        private static bool IsProcedureSpec(string relativePath)
+        //
+        // ExtractProcedureIdentifier가 인식하는 형태인지로 판정을 위임한다 — 두 메서드가
+        // 각자 레이아웃을 다시 판정하면 한쪽만 고쳐질 때 조용히 어긋난다(실제로 그런
+        // 사고가 있었다: FindStepCandidates가 통과시킨 경로에서 정작 식별자를 뽑지
+        // 못하는 경로가 있었다). "이 경로가 프로시저 명세서인가"와 "그렇다면 식별자가
+        // 무엇인가"는 같은 판정을 공유해야 한다.
+        private static bool IsProcedureSpec(string relativePath) =>
+            ExtractProcedureIdentifier(relativePath) != null;
+
+        /// <summary>
+        /// FindStepCandidates가 돌려주는 outputRoot 기준 상대 경로에서 객체 식별자
+        /// ("스키마.이름", OutputPathResolver가 쓰는 것과 같은 형태)를 뽑는다. 인식하지
+        /// 못하는 형태면 null을 돌려준다.
+        ///
+        /// 이 메서드가 필요한 이유: 통합 배치 파이프라인(`VerificationPipelineOrchestrator`)의
+        /// 목차 커버리지 검사와 AI 프롬프트의 "Filename:" 레이블이 명세서를 구분하는
+        /// 유일한 근거가 (FileName, Content) 튜플의 FileName이다. 이 상대 경로를 그대로
+        /// 쓰면 마지막 세그먼트가 항상 "Spec.md"라서 모든 명세서가 같은 값으로 뭉개진다
+        /// (실측된 결함). 식별자는 경로의 "Procedures" 세그먼트 바로 다음 세그먼트에
+        /// 있으므로, 마지막 세그먼트가 아니라 그 자리를 읽어야 한다.
+        /// </summary>
+        public static string? ExtractProcedureIdentifier(string relativePath)
         {
             var segments = relativePath
                 .Replace(Path.DirectorySeparatorChar, '/')
@@ -122,14 +143,19 @@ namespace ReSet.Cli
                 segments[0].Equals("Procedures", StringComparison.OrdinalIgnoreCase) &&
                 segments[2].Equals("docs", StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                return segments[1];
             }
 
             // External/<DB>/Procedures/<객체>/docs/Spec.md
-            return segments.Length == 6 &&
-                   segments[0].Equals("External", StringComparison.OrdinalIgnoreCase) &&
-                   segments[2].Equals("Procedures", StringComparison.OrdinalIgnoreCase) &&
-                   segments[4].Equals("docs", StringComparison.OrdinalIgnoreCase);
+            if (segments.Length == 6 &&
+                segments[0].Equals("External", StringComparison.OrdinalIgnoreCase) &&
+                segments[2].Equals("Procedures", StringComparison.OrdinalIgnoreCase) &&
+                segments[4].Equals("docs", StringComparison.OrdinalIgnoreCase))
+            {
+                return segments[3];
+            }
+
+            return null;
         }
     }
 }
