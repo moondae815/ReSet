@@ -5988,5 +5988,80 @@ SELECT 1;
             // 지목된 S02는 L3에서 다시 만들어져 3번째 회차 표식을 실어야 한다.
             Assert.Contains("생성 회차 3.", result.Plan);
         }
+
+        // L3에서 구조 재수립(RedraftStructure=true)에 응하면 단계 코드 자체가
+        // 바뀔 수 있다. 재수립 전 목차에서 하한 미달로 기록된 단계 코드가 새
+        // 목차에는 없는데도 그 기록이 살아남아 배너로 새어 나오면, 사용자는
+        // 문서 어디에도 없는 단계를 찾아 헤매게 된다. 재시도 루프의
+        // ClearSplitGenerationCacheAfterRedraft가 막아 둔 것과 같은 부류의
+        // 결함을 L3 재수립 경로에서도 막는다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3StructureRedraft_DropsFloorViolationsFromTheOldOutline()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 재수립 후 목차는 S01/S02 대신 완전히 다른 코드 S05를 낸다.
+            const string redraftedStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S05"", ""Name"": ""재설계 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T5""], ""ErrorCodes"": [""-5""] }
+  ]
+}
+```";
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차\n" + redraftedStepsJson });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01은 대상 테이블·오류코드를 일부러 빠뜨려 하한 검사를 통과하지
+            // 못하게 한다 — 최초 문서에 "S01 (하한 미달)" 기록을 남기기 위해서다.
+            // S02와 재수립 후의 S05는 정상적으로 하한을 통과한다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01")
+                    {
+                        return new AiResult { Content = "### S01 단계\n\n본문.\n\n```sql\nSELECT 1;\n```" };
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "구조를 다시 짜줘",
+                        RedraftStructure = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RedraftDropsFloorJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 새 목차(S05)의 문서에는 하한 미달 배너 자체가 없어야 한다 — S01의
+            // 옛 기록이 새어 나오면 여기서 잡힌다.
+            Assert.DoesNotContain("하한 미달", result.Plan);
+            Assert.DoesNotContain("S01", result.Plan);
+            Assert.Contains("### S05 단계", result.Plan);
+        }
     }
 }

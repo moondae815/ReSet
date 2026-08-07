@@ -2148,14 +2148,30 @@ namespace ReSet.Core.Services
                             ? reviewResult.TargetStepCodes
                             : stepsForRegeneration.Select(step => step.Code).ToList();
 
+                        // 골격을 재사용하지 않는 경우(구조 재수립·골격 지목·캐시 없음) 목차의
+                        // 단계 코드 자체가 바뀔 수 있다. 그때 살아있는 stepFloorViolations를
+                        // 그대로 넘기면, GenerateBySplitAsync는 이번에 다시 만드는 코드의
+                        // 기록만 지우고 나머지는 그대로 복사한다 — 새 목차에 없는 옛 코드의
+                        // "하한 미달" 기록이 살아남아 아래 배너 재부착에서 문서에 없는 단계를
+                        // 지목하게 된다. 재시도 루프의 ClearSplitGenerationCacheAfterRedraft가
+                        // 같은 부류의 결함을 이미 한 번 겪고 막아 둔 자리다.
+                        var violationsForRegeneration = reuseSkeleton
+                            ? stepFloorViolations
+                            : new Dictionary<string, string>();
+
                         using var progressScopeForL3 = _userInteraction.CreateProgressScope("피드백 반영 재생성") ?? NullProgressScope.Instance;
+                        // GenerateBySplitAsync는 "phase3" 키로 진행률을 기록한다(재사용이면
+                        // 즉시 완료 처리, 재생성이면 실제 골격 호출 진행률). 호출 전에 등록해
+                        // 두지 않으면 IMultiProgressScope 구현체가 원시 키 문자열 "phase3"을
+                        // 그대로 화면에 찍는다 — 재시도 루프의 골격 행(:1752)과 같은 실수다.
+                        progressScopeForL3.AddTask("phase3", "피드백 반영: 골격 확인/생성 중 (공통 규약·흐름도)...");
                         var split = await GenerateBySplitAsync(
                             structureForRegeneration, stepsForRegeneration, specsCopy, targetLanguage, jobName,
                             progressScopeForL3,
                             reuseSkeleton ? lastSkeleton : null,
                             reuseSkeleton ? lastSkeletonResult : null,
                             reuseSkeleton ? lastStepSections : null,
-                            stepFloorViolations,
+                            violationsForRegeneration,
                             reuseSkeleton ? stepsToRegenerate : new List<string>(),
                             cancellationToken);
 
@@ -2416,12 +2432,11 @@ namespace ReSet.Core.Services
         ///
         /// 테스트 커버리지 상태: PlanStructure·FloorViolations의 되감기는
         /// VerificationPipelineOrchestratorTests에서 관찰 가능하다(구제 문서와
-        /// 배너가 채택 회차를 서술하는지 검증하는 기존 테스트들). 그러나 Skeleton·
-        /// SkeletonResult·StepSections의 되감기는 오늘 회귀 테스트가 없다 — 이
-        /// 세 값은 RunConsolidatedPipelineAsync 바깥에서 아무 데도 읽히지 않는
-        /// 지역 변수라 블랙박스로 관찰할 방법이 없기 때문이다. L3가 지목
-        /// 재생성을 위해 이 값들을 읽기 시작하는 시점(그 값을 읽는 캐시 재사용
-        /// 로직)에 그 테스트가 함께 생긴다.
+        /// 배너가 채택 회차를 서술하는지 검증하는 기존 테스트들). Skeleton·
+        /// SkeletonResult·StepSections의 되감기도 이제
+        /// RunConsolidatedPipeline_L3FeedbackAfterRescue_ReusesTheAdoptedAttemptsStepSections가
+        /// 관찰한다 — L3 지목 재생성이 이 값들을 읽기 시작하면서(그 값을 읽는
+        /// 캐시 재사용 로직) 이 세 값도 더 이상 블랙박스가 아니게 됐다.
         /// </summary>
         private sealed record AdoptedGenerationState(
             string PlanStructure,
