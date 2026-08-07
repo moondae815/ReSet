@@ -27,6 +27,7 @@ namespace ReSet.Core.Services
         private readonly string? _criticEffort;
         private readonly string? _consolidatorEffort;
         private readonly int _criticScoreThreshold;
+        private readonly int _stepConcurrency;
 
         public VerificationPipelineOrchestrator(
             IDbMetadataService dbService,
@@ -41,7 +42,8 @@ namespace ReSet.Core.Services
             string? actorEffort = null,
             string? criticEffort = null,
             string? consolidatorEffort = null,
-            int criticScoreThreshold = 8)
+            int criticScoreThreshold = 8,
+            int stepConcurrency = 1)     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -55,6 +57,8 @@ namespace ReSet.Core.Services
             _criticEffort = criticEffort;
             _consolidatorEffort = consolidatorEffort;
             _criticScoreThreshold = criticScoreThreshold;
+            // 0·음수는 1로 절상한다. 상한은 두지 않는다 — 사용자가 12를 원하면 12를 쓴다.
+            _stepConcurrency = Math.Max(1, stepConcurrency);
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -1658,6 +1662,25 @@ namespace ReSet.Core.Services
             if (string.IsNullOrWhiteSpace(outputRoot))
             {
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
+            }
+
+            // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
+            // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
+            // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
+            //
+            // 로컬 모델은 보통 단일 GPU를 공유하므로 동시 실행이 순차보다 느리거나
+            // 메모리가 터진다. 값을 조용히 1로 뒤집지 않는 이유: 사용자가 명시한
+            // 설정을 말없이 무시하는 것보다 이유를 말하고 그대로 두는 편이 정직하고,
+            // 증상이 "그냥 느림"이라 경고가 없으면 원인을 찾을 길이 없다.
+            //
+            // provider 매개변수(Actor)가 아니라 Consolidator를 보는 이유: 단계 본문을
+            // 실제로 만드는 것은 _consolidatorService다.
+            if (_stepConcurrency > 1 &&
+                ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(_consolidatorService.ProviderName))
+            {
+                _userInteraction.NotifyStatus(
+                    $"[yellow]{jobName}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
+                    "단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족할 수 있습니다 — appsettings.json의 AiSettings:StepConcurrency를 1로 낮추는 것을 권장합니다.");
             }
 
             string? feedbackLog = null;
