@@ -4,7 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ReSet.Core.Models;
 using ReSet.Core.Services;
+using ReSet.Core.Services.Clients.Cli;
 using ReSet.Validator.Core.Models;
 using Serilog;
 
@@ -29,7 +31,7 @@ namespace ReSet.Validator.Core.Services
             _maxL2Attempts = maxL2Attempts;
         }
 
-        public async Task<bool> RunSelfHealingWorkflowAsync(
+        public async Task<CodegenWorkflowResult> RunSelfHealingWorkflowAsync(
             string jobOrSpName,
             string instructionsFilePath, // agent/MigrationInstructions.md
             string specDir,              // 설계서가 있는 폴더
@@ -48,13 +50,23 @@ namespace ReSet.Validator.Core.Services
                 // 1. External Coding Engine 기동 (Actor)
                 var run = await _codingEngine.GenerateCodeAsync(null, instructionsFilePath, codeDir, cancellationToken);
 
-                // 이 태스크에서는 기존 판정을 그대로 유지한다. 산출물 유무와 실패 분류를
-                // 쓰는 루프 제어는 Task 5에서 이 자리를 대체한다.
-                bool engineSuccess = run.ExitCode == 0;
+                var decision = CodegenLoopPolicy.Decide(run);
 
-                if (!engineSuccess)
+                if (decision == CodegenLoopDecision.Abort)
                 {
-                    Log.Warning("[SelfHealing] 코딩 에이전트 비정상 종료. 검증을 건너뛰고 다음 시도를 준비하거나 종료합니다.");
+                    var abortReason = BuildAbortReason(run);
+                    Log.Error("[SelfHealing] 재시도해도 결과가 같은 실패입니다. 루프를 중단합니다. {AbortReason}", abortReason);
+                    return new CodegenWorkflowResult(false, abortReason);
+                }
+
+                if (decision == CodegenLoopDecision.RetryWithoutValidation)
+                {
+                    // 검증할 산출물이 없다. 지시서도 손대지 않고 그대로 재시도한다.
+                    Log.Warning(
+                        "[SelfHealing] 코딩 에이전트가 산출물을 남기지 않았습니다. 검증을 건너뛰고 다음 시도를 준비합니다. (종료 코드: {ExitCode}, 분류: {FailureKind})",
+                        run.ExitCode, run.FailureKind);
+                    attempt++;
+                    continue;
                 }
 
                 // 2. Validator Core 기동 (Critic) - L1/L2 검증
@@ -127,7 +139,24 @@ namespace ReSet.Validator.Core.Services
                 attempt++;
             }
 
-            return isSuccess;
+            return new CodegenWorkflowResult(isSuccess, null);
+        }
+
+        /// <summary>
+        /// 중단 안내문은 CliFailureClassifier가 이미 분류별로 갖고 있다.
+        /// 같은 말을 두 곳에서 다르게 쓰지 않기 위해 그것을 그대로 가져온다.
+        /// </summary>
+        private string BuildAbortReason(CodegenRunResult run)
+        {
+            var probe = new CliProcessResult
+            {
+                ExitCode = run.ExitCode,
+                StandardError = run.Diagnostic ?? string.Empty
+            };
+
+            return CliFailureClassifier
+                .ToException(_codingEngine.Name, _codingEngine.Command, probe, extraDetail: null)
+                .Message;
         }
     }
 }

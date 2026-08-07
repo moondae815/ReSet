@@ -2042,7 +2042,7 @@ namespace ReSet.Cli
                 AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
                 AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 자가수정 루프)[/]\n");
 
-                bool isSuccess = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
+                var workflowResult = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
                     jobOrSpName: spName,
                     instructionsFilePath: instructionsPath,
                     specDir: specDir,
@@ -2050,13 +2050,19 @@ namespace ReSet.Cli
                     isBatchMode: isBatchMode,
                     cancellationToken: cancellationToken);
 
-                if (isSuccess)
+                if (workflowResult.Succeeded)
                 {
                     AnsiConsole.MarkupLine("\n[bold green]✔ 코딩 에이전트 자가 수정 루프 통과 (MATCH)[/]");
                 }
                 else
                 {
                     AnsiConsole.MarkupLine("\n[bold red]❌ 코딩 에이전트 검증 완전 통과 실패. (최종 결과 확인 요망)[/]");
+
+                    // 무인 배치에서는 화면이 유일한 창구다. 중단 사유를 로그에만 두지 않는다.
+                    if (!string.IsNullOrWhiteSpace(workflowResult.AbortReason))
+                    {
+                        AnsiConsole.MarkupLine($"[red]중단 사유:[/] {Markup.Escape(workflowResult.AbortReason)}");
+                    }
                 }
             }
             catch (OperationCanceledException)
