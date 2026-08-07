@@ -2601,6 +2601,12 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
+        /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
+        /// </summary>
+        private sealed record StepSectionResult(string Code, string Markdown, string? FloorViolation);
+
+        /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
         ///
         /// 이 경로가 존재하는 이유: 단일 호출은 모델이 하나의 출력 예산 안에서
@@ -2692,22 +2698,66 @@ namespace ReSet.Core.Services
                 floorViolations.Remove(step.Code);
             }
 
-            for (int index = 0; index < pending.Count; index++)
+            // 동시 실행 수 제한. Dispose하지 않는다 — AvailableWaitHandle을 쓰지 않아
+            // Dispose가 필요 없고, 취소로 Task.WhenAll이 먼저 빠져나간 뒤에도 아직
+            // 돌고 있는 단계 태스크가 finally에서 Release를 호출하므로, 여기서
+            // Dispose하면 그 태스크가 ObjectDisposedException으로 죽어 관측되지 않는
+            // 예외가 된다.
+            var gate = new SemaphoreSlim(_stepConcurrency);
+
+            async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)
             {
-                var step = pending[index];
-                var taskKey = $"step_{step.Code}";
-                progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
-
-                var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
-                    step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
-
-                sections[step.Code] = markdown;
-                if (violation != null)
+                await gate.WaitAsync(cancellationToken);
+                try
                 {
-                    floorViolations[step.Code] = violation;
-                }
+                    // 진행률 행은 슬롯을 잡은 뒤에 추가한다. 먼저 추가하면 대기 중인
+                    // 단계까지 전부 "생성 중"으로 떠서, 실제로는 넷만 돌고 있다는
+                    // 사실이 화면에서 사라진다.
+                    var taskKey = $"step_{step.Code}";
+                    progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                progressScope.CompleteTask(taskKey);
+                    var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                        step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
+
+                    progressScope.CompleteTask(taskKey);
+                    return new StepSectionResult(step.Code, markdown, violation);
+                }
+                finally
+                {
+                    // 슬롯은 단계당 재시도 2회를 모두 감싼 채 유지했다가 여기서 놓는다.
+                    // 재시도 사이에 놓으면 다른 단계가 끼어들어 동시 요청 수가 설정값을 넘는다.
+                    gate.Release();
+                }
+            }
+
+            // 워밍: 첫 단계를 끝까지 기다린 뒤에야 나머지를 띄운다. 프롬프트 접두사
+            // 캐시는 요청이 "완료돼야" 채워지므로, N개를 동시에 쏘면 N개 전부 미스다.
+            // 13단계·동시 4 기준으로 워밍이 있든 없든 4라운드로 같지만, 미스는
+            // 4회에서 1회로 준다 — 벽시계를 쓰지 않고 얻는 이득이다.
+            //
+            // 이 await가 워밍의 유일한 보증이다. 세마포어가 아니다 — 슬롯이 여러
+            // 개여도 두 번째 호출은 여기서 시작조차 하지 않는다. 지우지 말 것.
+            var stepResults = new List<StepSectionResult>(pending.Count);
+            if (pending.Count > 0)
+            {
+                stepResults.Add(await RunStepAsync(pending[0], 0));
+            }
+
+            if (pending.Count > 1)
+            {
+                var rest = pending.Skip(1).Select((step, offset) => RunStepAsync(step, offset + 1)).ToList();
+                stepResults.AddRange(await Task.WhenAll(rest));
+            }
+
+            // 병합은 단일 스레드에서 목록 순서대로. Task.WhenAll은 완료 순서가 아니라
+            // 넘긴 순서로 결과를 돌려주므로, 사전에 들어가는 순서가 결정적이다.
+            foreach (var stepResult in stepResults)
+            {
+                sections[stepResult.Code] = stepResult.Markdown;
+                if (stepResult.FloorViolation != null)
+                {
+                    floorViolations[stepResult.Code] = stepResult.FloorViolation;
+                }
             }
 
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
