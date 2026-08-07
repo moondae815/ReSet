@@ -213,6 +213,25 @@ namespace ReSet.Cli
             var isCodegenEnabled = cliArgs.EnableCodegen || codegenEnabled;
             var selectedEngine = cliArgs.Engine ?? codegenEngine;
 
+            // 무인 배치에서 codegen이 켜져 있는데 선택된 엔진에 BatchArguments가 없으면
+            // (예: agy) CodingEngineFactory.CreateEngine이 던진다. 이전에는 그 실패 지점이
+            // RunCodegenEngineAsync 안쪽이라, 분석 파이프라인 전체를 다 돌리고 지시서까지
+            // 쓴 뒤에야 드러났다. 같은 검증을 시작 시점으로 앞당긴다 - 검증 로직 자체는
+            // CodingEngineFactory 한 곳에만 있고 여기서 다시 적지 않는다.
+            if (cliArgs.IsBatchMode && isCodegenEnabled)
+            {
+                try
+                {
+                    new CodingEngineFactory(configuration).CreateEngine(selectedEngine, isBatchMode: true);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    AnsiConsole.MarkupLine($"[red]에러: 무인 배치용 코딩 엔진 설정이 올바르지 않습니다.[/] {Markup.Escape(ex.Message)}");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+            }
+
             string connectionString = string.Empty;
             string? userId = null;
 
@@ -2014,7 +2033,7 @@ namespace ReSet.Cli
             {
                 AnsiConsole.MarkupLine($"\n[bold blue]=== 외부 코딩 에이전트 기동 ({engineName}) ===[/]");
                 var factory = new CodingEngineFactory(configuration);
-                var engine = factory.CreateEngine(engineName ?? "claude");
+                var engine = factory.CreateEngine(engineName ?? "claude", isBatchMode);
 
                 if (!File.Exists(instructionsPath))
                 {
@@ -2060,7 +2079,7 @@ namespace ReSet.Cli
                 AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
                 AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 자가수정 루프)[/]\n");
 
-                bool isSuccess = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
+                var workflowResult = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
                     jobOrSpName: spName,
                     instructionsFilePath: instructionsPath,
                     specDir: specDir,
@@ -2068,22 +2087,45 @@ namespace ReSet.Cli
                     isBatchMode: isBatchMode,
                     cancellationToken: cancellationToken);
 
-                if (isSuccess)
+                if (workflowResult.Succeeded)
                 {
                     AnsiConsole.MarkupLine("\n[bold green]✔ 코딩 에이전트 자가 수정 루프 통과 (MATCH)[/]");
                 }
                 else
                 {
                     AnsiConsole.MarkupLine("\n[bold red]❌ 코딩 에이전트 검증 완전 통과 실패. (최종 결과 확인 요망)[/]");
+
+                    // 무인 배치에서는 화면이 유일한 창구다. 중단 사유를 로그에만 두지 않는다.
+                    if (!string.IsNullOrWhiteSpace(workflowResult.AbortReason))
+                    {
+                        AnsiConsole.MarkupLine($"[red]중단 사유:[/] {Markup.Escape(workflowResult.AbortReason)}");
+                    }
+
+                    // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 실패를 초록으로 읽는다.
+                    // 이 함수는 원래 실패를 삼키고 화면에만 찍었다 - Program.cs:166-168의
+                    // 원칙(빈 산출물이 종료 코드 0으로 성공 취급되면 안 된다)이 여기도 적용된다.
+                    // 대화형 모드는 사용자가 화면을 직접 보므로 건드리지 않는다.
+                    if (isBatchMode)
+                    {
+                        Environment.ExitCode = 1;
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
                 throw; // 상위에서 잡도록 던짐
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 AnsiConsole.MarkupLine($"\n[red]외부 코딩 에이전트 실행 중 오류 발생:[/] {Markup.Escape(ex.Message)}");
+
+                // 팩토리의 배치 거부(예: agy의 빈 BatchArguments)도 이 catch로 떨어진다 -
+                // 화면에는 "보이지만" 종료 코드는 여전히 0이었다. 무인 배치에서는 그 코드가
+                // CI가 보는 유일한 신호다.
+                if (isBatchMode)
+                {
+                    Environment.ExitCode = 1;
+                }
             }
         }
 

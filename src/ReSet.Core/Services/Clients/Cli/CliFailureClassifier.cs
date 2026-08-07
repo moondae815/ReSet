@@ -13,6 +13,17 @@ namespace ReSet.Core.Services.Clients.Cli
     }
 
     /// <summary>
+    /// 안내문의 구제책이 가리켜야 할 설정 키 계열. 같은 CliFailureKind라도 호출 경로에
+    /// 따라 실제로 만질 설정 키가 다르다 - 분석 경로는 AiSettings:Providers:*/AiSettings:Provider,
+    /// 코딩 에이전트 브릿지는 CodegenSettings:Engine/CodegenSettings:Engines:&lt;name&gt;:*.
+    /// </summary>
+    public enum CliFailureContext
+    {
+        Analysis,
+        Codegen
+    }
+
+    /// <summary>
     /// CLI 실패의 원인을 분류한다.
     ///
     /// 자동 폴백을 만들지 않기로 했으므로, 사람이 로그만 보고 "다른 CLI로 갈지
@@ -95,25 +106,74 @@ namespace ReSet.Core.Services.Clients.Cli
             string? extraDetail)
         {
             var kind = Classify(result, extraDetail);
+            return BuildException(providerName, command, kind, result, extraDetail, CliFailureContext.Analysis);
+        }
+
+        /// <summary>
+        /// 코딩 에이전트 브릿지(CodegenWorkflowOrchestrator)가 중단 사유 문구를 만들 때 쓴다.
+        /// ExternalCliCodingEngine이 실행 직후 이미 한 번 분류해 둔 CliFailureKind를 그대로
+        /// 받는다 - stderr는 배치 모드에서만 캡처되므로 여기서 다시 Classify를 돌리면
+        /// 대화형 실행에서는 아무 근거 없이 재분류하게 된다.
+        ///
+        /// 분석 경로용 ToException과 문구 뼈대(스위치)를 공유한다. 코딩 에이전트 브릿지에서
+        /// 실제로 만질 설정 키는 CodegenSettings:Engine/CodegenSettings:Engines:&lt;name&gt;:*이고
+        /// 분석 경로의 AiSettings:Providers:*와는 다르므로, 그 구제책 문구만 갈라 낸다
+        /// (CliFailureContext.Codegen). 메시지를 두 곳에 따로 적지 않기 위해 BuildException
+        /// 하나로 합류시킨다.
+        /// </summary>
+        public static InvalidOperationException ToCodegenAbortException(
+            string engineName,
+            string command,
+            CliFailureKind kind,
+            int exitCode,
+            string? diagnostic)
+        {
+            var result = new CliProcessResult
+            {
+                ExitCode = exitCode,
+                StandardError = diagnostic ?? string.Empty
+            };
+
+            return BuildException(engineName, command, kind, result, extraDetail: null, CliFailureContext.Codegen);
+        }
+
+        private static InvalidOperationException BuildException(
+            string providerName,
+            string command,
+            CliFailureKind kind,
+            CliProcessResult result,
+            string? extraDetail,
+            CliFailureContext context)
+        {
+            var isCodegen = context == CliFailureContext.Codegen;
 
             var summary = kind switch
             {
                 CliFailureKind.Timeout =>
                     $"{providerName} 호출이 제한 시간을 초과해 프로세스를 강제 종료했습니다. " +
                     "AiSettings:TimeoutSeconds 값을 늘리거나 더 작은 대상으로 나누어 실행하십시오.",
-                CliFailureKind.QuotaExhausted =>
-                    $"{providerName}의 구독 사용 한도가 소진되었습니다. " +
-                    "appsettings.json에서 다른 CLI provider 또는 API provider로 변경한 뒤 다시 실행하십시오.",
+                CliFailureKind.QuotaExhausted => isCodegen
+                    ? $"{providerName}의 구독 사용 한도가 소진되었습니다. " +
+                      $"appsettings.json의 CodegenSettings:Engine(또는 CodegenSettings:Engines:{providerName}:*)을 " +
+                      "다른 코딩 엔진으로 변경한 뒤 다시 실행하십시오."
+                    : $"{providerName}의 구독 사용 한도가 소진되었습니다. " +
+                      "appsettings.json에서 다른 CLI provider 또는 API provider로 변경한 뒤 다시 실행하십시오.",
                 CliFailureKind.NotAuthenticated =>
                     $"{providerName}이(가) 로그인되어 있지 않습니다. " +
                     $"터미널에서 '{command}'를 직접 실행해 로그인을 완료하십시오.",
                 // 종료 코드를 싣지 않는다. 이 실패는 종료 코드 0으로 도착하므로
                 // "실패했습니다 (종료 코드: 0)"이라고 쓰면 자기모순이 된다.
-                CliFailureKind.ToolPermissionDenied =>
-                    $"{providerName}이(가) 헤드리스 모드에서 툴 권한 요청을 자동 거부해 빈 응답을 " +
-                    "반환했습니다. 이 provider는 툴을 끄는 인자를 제공하지 않아 분석용 순수 LLM으로 " +
-                    "사용할 수 없습니다. claude-cli 또는 API provider로 변경하십시오. " +
-                    "(툴을 자동 승인하는 우회는 무인 배치에서 임의 명령 실행을 허용하므로 권장하지 않습니다.)",
+                CliFailureKind.ToolPermissionDenied => isCodegen
+                    ? $"{providerName}이(가) 헤드리스 모드에서 툴 권한 요청을 자동 거부해 빈 응답을 " +
+                      "반환했습니다. 코딩 에이전트 브릿지는 툴이 켜져 있는 것이 정상이므로 다른 provider로 " +
+                      "바꿔도 해결되지 않습니다. CodegenSettings:Engines:" + providerName + ":BatchArguments에 " +
+                      "권한을 자동 승인하는 인자(예: claude의 --permission-mode acceptEdits, codex의 " +
+                      "--full-auto)가 지정되어 있는지 확인하거나, CodegenSettings:Engine을 그런 인자를 " +
+                      "지원하는 다른 엔진으로 변경하십시오."
+                    : $"{providerName}이(가) 헤드리스 모드에서 툴 권한 요청을 자동 거부해 빈 응답을 " +
+                      "반환했습니다. 이 provider는 툴을 끄는 인자를 제공하지 않아 분석용 순수 LLM으로 " +
+                      "사용할 수 없습니다. claude-cli 또는 API provider로 변경하십시오. " +
+                      "(툴을 자동 승인하는 우회는 무인 배치에서 임의 명령 실행을 허용하므로 권장하지 않습니다.)",
                 _ =>
                     $"{providerName} 호출이 실패했습니다 (종료 코드: {result.ExitCode})."
             };
