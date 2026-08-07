@@ -20,7 +20,7 @@
 - `BatchArguments`가 비었을 때 `Arguments`로 **폴백하지 않는다.** 대화형 인자로 무인 실행하면 TTY 오류로 조용히 실패한다.
 - 대화형 모드의 스트림 상속(`RedirectStandard* = false`)을 바꾸지 않는다. AGENTS.md 범주 6 "프로세스 양방향 제어" 규칙이다.
 - 타임아웃을 추가하지 않는다. 코딩 에이전트가 수십 분 도는 것은 정상이다.
-- 착수 시점 실측값: `dotnet test` **753건 통과**, 빌드 경고 **8건**(`DbMetadataServiceTests`의 CS8600/CS8602). 경고를 늘리지 않는다.
+- 착수 시점 실측값(워크트리 `worktree-codegen-headless`, 베이스 `origin/main` 9e13c04): `dotnet test` **746건 통과**, 빌드 경고 **8건**(`DbMetadataServiceTests`의 CS8600/CS8602). 경고를 늘리지 않는다.
 
 ---
 
@@ -774,7 +774,9 @@ Modify `tests/ReSet.Core.Tests/CodingEngineTests.cs:56` — 생성자에 인자�
 - [ ] **Step 5: 전체 테스트를 돌린다**
 
 Run: `dotnet test`
-Expected: 753건 통과, 경고 8건 (착수 시점과 동일)
+Expected: 759건 통과, 경고 8건
+
+내역: 착수 746 + Task 1의 6 + Task 2의 7 = 759. 이 태스크 자체는 테스트를 추가하지 않고 기존 3건을 새 시그니처에 맞추기만 한다.
 
 - [ ] **Step 6: 커밋한다**
 
@@ -1306,9 +1308,9 @@ Modify `src/ReSet.Cli/Program.cs:2045-2060` — 다음 블록을
 - [ ] **Step 8: 전체 테스트를 돌린다**
 
 Run: `dotnet test`
-Expected: **778건 통과**, 경고 8건
+Expected: **771건 통과**, 경고 8건
 
-내역: 착수 753 + Task 1의 6 + Task 2의 7 + Task 4의 3(기존 3건이 6건으로) + Task 5의 9 = 778.
+내역: 착수 746 + Task 1의 6 + Task 2의 7 + Task 4의 3(기존 3건이 6건으로) + Task 5의 9 = 771.
 
 판정 기준은 **실패 0건**과 **경고 8건 유지**다.
 
