@@ -80,6 +80,16 @@ S02 본문
             }
         };
 
+        private static SpDefinition SpDefWithDependency(string procedureName, string dependencyTable) => new()
+        {
+            Schema = "dbo",
+            Name = procedureName,
+            Dependencies = new List<DependencyInfo>
+            {
+                new() { Database = string.Empty, Schema = "dbo", Name = dependencyTable, Type = "Table" }
+            }
+        };
+
         private BundleInputs Inputs(PlanLayout? layout) => new(
             JobName: "TestJob",
             TargetLanguage: "C#",
@@ -298,6 +308,72 @@ S02 본문
 
             Assert.Contains("task-00-bootstrap.md", names);
             Assert.Contains("task-99-assembly.md", names);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldScopeStepDependenciesToItsOwnTargetTables()
+        {
+            // 각 단계는 서로 다른 테이블을 건드린다 - S01 지시서에는 S01의 테이블만,
+            // S02 지시서에는 S02의 테이블만 있어야 한다. Job 전체 의존성을 그대로
+            // 물려주면 "한 회차의 지시서는 그 회차가 읽어야 할 것만 가리켜야 한다"는
+            // 원칙이 깨진다.
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string>
+                {
+                    ["S01"] = "### S01 스냅샷 생성\n조각 본문",
+                    ["S02"] = "### S02 원장 생성\n조각 본문",
+                },
+                new[]
+                {
+                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false),
+                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, new[] { "dbo.TLedger" }, new[] { "-1" }, false),
+                },
+                null);
+
+            var inputs = Inputs(layout) with
+            {
+                SpDefs = new List<SpDefinition>
+                {
+                    SpDefWithDependency("UP_S01", "TClient"),
+                    SpDefWithDependency("UP_S02", "TLedger"),
+                },
+            };
+
+            await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+
+            var s01Task = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-01-S01.md"));
+            var s02Task = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-02-S02.md"));
+
+            Assert.Contains("dbo.TClient", s01Task);
+            Assert.DoesNotContain("dbo.TLedger", s01Task);
+
+            Assert.Contains("dbo.TLedger", s02Task);
+            Assert.DoesNotContain("dbo.TClient", s02Task);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldNotIncludeDependenciesSection_InBootstrapTaskFile()
+        {
+            // 부트스트랩은 "단계 상세 문서를 읽지 마십시오"라고 지시하면서 작업
+            // 전체 스키마를 붙이면 모순이다. 부트스트랩 지시서에는 스키마 섹션 자체가
+            // 없어야 한다.
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { ["S01"] = "### S01 스냅샷 생성\n조각 본문" },
+                new[] { new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false) },
+                null);
+
+            var inputs = Inputs(layout) with
+            {
+                SpDefs = new List<SpDefinition> { SpDefWithDependency("UP_S01", "TClient") },
+            };
+
+            await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+
+            var bootstrap = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-00-bootstrap.md"));
+
+            Assert.DoesNotContain("## 참조할 스키마", bootstrap);
         }
     }
 }

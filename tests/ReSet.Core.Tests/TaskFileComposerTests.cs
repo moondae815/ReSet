@@ -40,6 +40,28 @@ namespace ReSet.Core.Tests
             Assert.Equal("task-12-S12.md", TaskFileComposer.FileName(StageKind.Step, 12, "S12"));
         }
 
+        [Theory]
+        [InlineData("..")]
+        [InlineData("../x")]
+        [InlineData("/abs/path")]
+        [InlineData("a/b")]
+        [InlineData("")]
+        [InlineData("!!!")]
+        public void FileName_ShouldSanitizeUnsafeStepCodes(string unsafeCode)
+        {
+            // stepCode는 계획서 텍스트에서 뽑아낸 값이라 신뢰할 수 없다. 그대로
+            // 파일명에 꽂으면 "../"나 경로 구분자, 절대 경로 조각으로 agent/
+            // 바깥에 파일을 쓸 수 있다 - Task 7의 steps/{code}.md 쓰기 경로에
+            // 있던 것과 같은 결함을 여기서 반복하지 않는다는 것을 고정한다.
+            var fileName = TaskFileComposer.FileName(StageKind.Step, 1, unsafeCode);
+
+            Assert.DoesNotContain("..", fileName);
+            Assert.DoesNotContain("/", fileName);
+            Assert.DoesNotContain("\\", fileName);
+            Assert.StartsWith("task-01-", fileName);
+            Assert.EndsWith(".md", fileName);
+        }
+
         [Fact]
         public void Compose_ShouldLinkEntryPointFirst()
         {

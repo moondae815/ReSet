@@ -133,6 +133,11 @@ namespace ReSet.Core.Services
             var dependencies = await WriteDependencySchemasAsync(inputs, agentDir, cancellationToken);
             var specs = BuildSpecIndex(inputs, agentDir);
 
+            // 진입점과 task-*.md 양쪽이 같은 폴백 경로를 가리켜야 하므로 한 번만 계산한다.
+            var singlePlanRelative = slices.StepsSplit
+                ? null
+                : RelativeToAgent(agentDir, Path.Combine(inputs.JobOutputDir, "docs", "BatchMigrationPlan.md"));
+
             var entryPoint = InstructionEntryPointComposer.Compose(new EntryPointInputs(
                 inputs.JobName,
                 inputs.TargetLanguage,
@@ -144,8 +149,7 @@ namespace ReSet.Core.Services
                 specs,
                 HasStepContract: slices.StepContract != null,
                 HasVerification: slices.Verification != null,
-                SinglePlanRelativePath: slices.StepsSplit ? null : RelativeToAgent(agentDir,
-                    Path.Combine(inputs.JobOutputDir, "docs", "BatchMigrationPlan.md"))));
+                SinglePlanRelativePath: singlePlanRelative));
 
             var entryPointPath = Path.Combine(agentDir, "MigrationInstructions.md");
             await WriteAsync(entryPointPath, entryPoint, cancellationToken);
@@ -153,12 +157,16 @@ namespace ReSet.Core.Services
             // 회차 전환은 코딩 엔진에 다른 task-*.md 경로를 넘기는 것으로 끝난다.
             // 여기서 회차 0(부트스트랩)·단계별·회차 99(조립)까지 한 벌을 미리 써 둔다.
             var taskFiles = new List<string>();
-            var singlePlanRelative = slices.StepsSplit
-                ? null
-                : RelativeToAgent(agentDir, Path.Combine(inputs.JobOutputDir, "docs", "BatchMigrationPlan.md"));
 
             async Task WriteTaskAsync(StageKind kind, int ordinal, string? code, string? name, string? specRelative)
             {
+                // 부트스트랩·조립 회차는 특정 단계에 매인 스키마가 없다 - 작업 전체
+                // 스키마를 붙이면 "단계 상세 문서를 읽지 마십시오"(부트스트랩)와
+                // 모순된다. Step 회차만 그 단계의 TargetTables로 좁힌다.
+                var stepDependencies = kind == StageKind.Step && code != null
+                    ? DependenciesForStep(dependencies, inputs.Layout, code)
+                    : Array.Empty<IndexEntry>();
+
                 var taskInputs = new TaskFileInputs(
                     Kind: kind,
                     JobName: inputs.JobName,
@@ -167,7 +175,7 @@ namespace ReSet.Core.Services
                     StepName: name,
                     StepRelativePath: code != null && slices.StepsSplit ? $"steps/{code}.md" : null,
                     SpecRelativePath: specRelative,
-                    Dependencies: dependencies,
+                    Dependencies: stepDependencies,
                     HasStepContract: slices.StepContract != null,
                     HasVerification: slices.Verification != null,
                     // 회차 실행 전이므로 실패 단계는 아직 없다. 오케스트레이터가
@@ -276,6 +284,92 @@ namespace ReSet.Core.Services
             {
                 Log.Information("이전 실행의 단계 파일을 정리했습니다 - 현재 목차에 없는 파일 삭제, 대상: {Count}개", removed);
             }
+        }
+
+        /// <summary>
+        /// 단계 하나가 실제로 건드리는 테이블 스키마로 의존성 목록을 좁힌다.
+        ///
+        /// 좁히지 않으면 Job 전체의 의존성이 모든 회차의 지시서에 실린다 - S01
+        /// 지시서가 S02만 건드리는 테이블의 DDL까지 가리키는 식이다. "한 회차의
+        /// 지시서는 그 회차가 읽어야 할 것만 가리켜야 한다"는 이 작업의 목적과
+        /// 정면으로 어긋난다.
+        ///
+        /// 목차가 없거나(레이아웃 폴백) 이 단계의 TargetTables를 특정할 수 없거나,
+        /// 특정했는데도 일치하는 의존성이 하나도 없으면 전체 목록으로 떨어뜨리고
+        /// 경고를 남긴다. 빈 목록을 조용히 내보내면 "이 단계는 스키마를 안 쓴다"와
+        /// "일치 규칙이 틀렸다"를 구분할 방법이 없어진다 - 데이터 액세스 코드를
+        /// 쓰다가 필요한 테이블의 컬럼 정의를 찾지 못하는 쪽이, 몇 개 더 실리는
+        /// 쪽보다 훨씬 나쁘다.
+        /// </summary>
+        private static IReadOnlyList<IndexEntry> DependenciesForStep(
+            IReadOnlyList<IndexEntry> dependencies, PlanLayout? layout, string stepCode)
+        {
+            var step = layout?.Steps?.FirstOrDefault(s =>
+                string.Equals(s.Code, stepCode, StringComparison.OrdinalIgnoreCase));
+            if (step == null || step.TargetTables.Count == 0)
+            {
+                return dependencies;
+            }
+
+            var matched = dependencies
+                .Where(dep => step.TargetTables.Any(target => TableTokensMatch(dep.Label, target)))
+                .ToList();
+
+            if (matched.Count == 0)
+            {
+                Log.Warning(
+                    "단계의 TargetTables와 일치하는 의존성 스키마를 찾지 못해 전체 목록으로 대체합니다 - " +
+                    "Step: {StepCode}, TargetTables: {TargetTables}",
+                    stepCode, string.Join(", ", step.TargetTables));
+                return dependencies;
+            }
+
+            return matched;
+        }
+
+        /// <summary>
+        /// 테이블 식별자 두 개(의존성 라벨 "dbo.TClient" 또는 "SettleDB.dbo.TClient",
+        /// 목차의 TargetTables 표기 "dbo.Ledger"·"[dbo].[Ledger]"·"Ledger")가 같은
+        /// 테이블을 가리키는지 비교한다.
+        ///
+        /// 대괄호를 벗기고 마지막 두 조각(스키마.테이블)만 본다 - 의존성 라벨은
+        /// Database가 있으면 3조각, 없으면 2조각이라 위치가 고정돼 있지 않다.
+        /// 양쪽 다 스키마 표기가 있으면 스키마까지 일치해야 하고, 한쪽이라도
+        /// 스키마를 안 적었으면(목차가 테이블명만 쓴 경우) 테이블명만으로 판단한다 -
+        /// 스키마가 없다고 매칭을 포기하면 "일치 없음"과 "표기 생략"을 구분할 수
+        /// 없는 문제가 그대로 반복된다.
+        /// </summary>
+        private static bool TableTokensMatch(string dependencyLabel, string targetTable)
+        {
+            var (depSchema, depTable) = ParseTableToken(dependencyLabel);
+            var (targetSchema, targetTableName) = ParseTableToken(targetTable);
+
+            if (depTable.Length == 0 || !string.Equals(depTable, targetTableName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (depSchema != null && targetSchema != null)
+            {
+                return string.Equals(depSchema, targetSchema, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return true;
+        }
+
+        private static (string? Schema, string Table) ParseTableToken(string raw)
+        {
+            var cleaned = raw.Replace("[", string.Empty).Replace("]", string.Empty).Trim();
+            var parts = cleaned.Split('.', StringSplitOptions.RemoveEmptyEntries);
+
+            return parts.Length switch
+            {
+                0 => (null, string.Empty),
+                1 => (null, parts[0]),
+                // 2조각(스키마.테이블)이든 3조각(DB.스키마.테이블)이든 뒤에서
+                // 두 조각을 스키마.테이블로 본다.
+                _ => (parts[^2], parts[^1]),
+            };
         }
 
         /// <summary>
