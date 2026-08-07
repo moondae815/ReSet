@@ -6631,5 +6631,157 @@ SELECT 1;
             Assert.DoesNotContain("하한 미달", result.Plan);
             Assert.DoesNotContain("S01", result.Plan);
         }
+
+        // 목차가 단계 목록 JSON을 내야 분할 경로로 들어간다. BatchStepPlanParser는
+        // ```json 블록 안의 Steps 배열만 읽는다.
+        private const string PlanStructureWithSteps = """
+## 최종 문서 목차
+
+```json
+{
+  "Steps": [
+    { "Code": "S01", "Name": "스냅샷 생성", "LegacyProcedures": ["UP_A"],
+      "TargetTables": ["dbo.T1"], "ErrorCodes": ["-1"], "Chunkable": false },
+    { "Code": "S02", "Name": "원장 생성", "LegacyProcedures": ["UP_B"],
+      "TargetTables": ["dbo.T2"], "ErrorCodes": ["-2"], "Chunkable": false }
+  ]
+}
+```
+""";
+
+        private const string SplitSkeletonMarkdown = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### 공통 Tasklet 실행 계약
+
+공통 규약 본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+""";
+
+        private void ArrangeSplitGeneration()
+        {
+            _aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+
+            _aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = PlanStructureWithSteps });
+
+            _aiService.GenerateBatchPlanSkeletonAsync(
+                    Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                    Arg.Any<List<(string FileName, string Content)>>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SplitSkeletonMarkdown });
+
+            _aiService.GenerateBatchStepSectionAsync(
+                    Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(),
+                    Arg.Any<string>(), Arg.Any<List<(string FileName, string Content)>>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    var step = callInfo.ArgAt<BatchStepPlan>(0);
+                    return Task.FromResult(new AiResult
+                    {
+                        Content = $"### {step.Code} {step.Name}\n\n{step.Code} 단계 본문"
+                    });
+                });
+
+            _aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10,
+                    ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                }));
+
+            _userInteraction.RequestHumanReviewAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(),
+                    Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ShouldExposeLayout_WhenPlanWasSplit()
+        {
+            ArrangeSplitGeneration();
+            var specs = new List<(string, string)> { ("dbo.USP_A", "## 개요\n내용") };
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Split", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Layout);
+            Assert.Equal(SplitSkeletonMarkdown, result.Layout!.Skeleton);
+            Assert.NotNull(result.Layout.Sections);
+            Assert.Equal(2, result.Layout.Sections!.Count);
+            Assert.True(result.Layout.Sections.ContainsKey("S01"));
+            Assert.True(result.Layout.Sections.ContainsKey("S02"));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ShouldExposeStepsFromStructure()
+        {
+            ArrangeSplitGeneration();
+            var specs = new List<(string, string)> { ("dbo.USP_A", "## 개요\n내용") };
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Split", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Layout?.Steps);
+            Assert.Equal(new[] { "S01", "S02" }, result.Layout!.Steps!.Select(s => s.Code));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ShouldLeaveLayoutNull_WhenPlanWasNotSplit()
+        {
+            // 목차에 단계 목록 JSON이 없으면 단일 호출로 떨어지고, 그때는 조각이 없다.
+            var specs = new List<(string, string)> { ("dbo.USP_A", "## 개요\n내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n"
+                     + "## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "JSON 없는 목차" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(
+                    Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_NoSplit",
+                    Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            _aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string, string)>>(), plan, "Job_NoSplit")
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10,
+                    ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                }));
+            _userInteraction.RequestHumanReviewAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(),
+                    Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_NoSplit", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Plan);
+            Assert.Null(result.Layout);
+        }
     }
 }

@@ -1725,6 +1725,18 @@ namespace ReSet.Core.Services
             var stepFloorViolations = new Dictionary<string, string>();
             var pendingDefectiveSteps = new List<string>();
 
+            // 조각을 호출부로 내보낸다. 산출물 분할이 이 값들을 경계 앵커로 쓴다.
+            // splitMarkdown이 null이면 단일 호출 경로였다는 뜻이고, 그때는 조각이
+            // 아예 없으므로 null을 그대로 내보내 호출부가 폴백을 취하게 한다.
+            PlanLayout? BuildLayout() =>
+                lastSkeleton == null || lastStepSections == null
+                    ? null
+                    : new PlanLayout(
+                        lastSkeleton,
+                        new Dictionary<string, string>(lastStepSections),
+                        currentSteps,
+                        new Dictionary<string, string>(stepFloorViolations));
+
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
             var bestAttempt = new BestAttempt();
@@ -2085,7 +2097,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome);
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout());
             }
 
             while (true)
@@ -2099,7 +2111,7 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome);
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout());
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
