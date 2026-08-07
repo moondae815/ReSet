@@ -57,8 +57,12 @@ namespace ReSet.Core.Services
         /// 통합 계획서가 반드시 가져야 할 H2 네 개. L1이 이 존재를 강제하므로
         /// PlanBoundaryResolver가 골격을 자를 때 같은 목록을 근거로 삼는다.
         /// 두 곳이 서로 다른 이름을 말하면 분할이 조용히 실패한다.
+        ///
+        /// IReadOnlyList로 노출한다. MechanicalValidator와 PlanBoundaryResolver 두 클래스가
+        /// 이 배열을 공유하는데, string[]이면 어느 한쪽이 원소를 실수로 고쳐 써도 컴파일이
+        /// 통과해 L1 검증과 골격 분할이 동시에, 조용히 오염된다.
         /// </summary>
-        public static readonly string[] RequiredConsolidatedHeaders = new[]
+        public static readonly IReadOnlyList<string> RequiredConsolidatedHeaders = new[]
         {
             "통합 배치 아키텍처 개요",
             "Mermaid 기반 통합 흐름도",
@@ -272,7 +276,7 @@ namespace ReSet.Core.Services
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
         }
 
-        private void ValidateMarkdownStructure(string markdown, string[] requiredHeaders, ValidationResult result)
+        private void ValidateMarkdownStructure(string markdown, IReadOnlyList<string> requiredHeaders, ValidationResult result)
         {
             var doc = Markdown.Parse(markdown);
             var headings = new List<string>();

@@ -10,6 +10,10 @@ namespace ReSet.Core.Tests
     {
         // 조각의 본문과 최종 문서의 본문을 일부러 다르게 둔다. 결과가 어느 쪽에서
         // 왔는지 구별할 수 없으면 이 설계의 핵심 성질을 검증할 수 없다.
+        //
+        // "Mermaid 기반 통합 흐름도" H2를 포함시킨다. MechanicalValidator.RequiredConsolidatedHeaders가
+        // 요구하는 4개 H2를 이 픽스처가 모두 갖춰야 SkeletonSplit == true 경로(4개 전부 성공)를
+        // 검증할 수 있다 - 하나라도 빠지면 모든 Resolve_* 성공 케이스가 실패 폴백으로 떨어진다.
         private const string FinalPlan = """
 ## 통합 배치 아키텍처 개요
 
@@ -329,6 +333,25 @@ SELECT 1;
             Assert.False(slices.StepsSplit);
             Assert.Null(slices.StepContract);
             Assert.Contains("정제된 S01 본문", slices.Architecture);
+        }
+
+        [Fact]
+        public void Resolve_ShouldFallBackToWholeDocument_WhenBothSplitsFail()
+        {
+            // 골격 헤딩도 단계 헤딩도 없는 완전히 망가진 문서. 두 판정이 동시에 실패해도
+            // 크래시 없이 문서 전체를 Architecture에 그대로 보존해야 한다.
+            var garbled = """
+그냥 평범한 텍스트입니다.
+
+헤딩도 없고 단계도 없습니다.
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(garbled, null);
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.False(slices.StepsSplit);
+            Assert.Equal(garbled.Trim(), slices.Architecture);
+            Assert.Empty(slices.Steps);
         }
     }
 }
