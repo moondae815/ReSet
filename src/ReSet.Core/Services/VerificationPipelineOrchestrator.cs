@@ -2068,8 +2068,11 @@ namespace ReSet.Core.Services
             while (true)
             {
                 // 이 경로에만 다시 세울 목차가 있으므로 구조 변경 질문을 여기서만 허용한다.
+                // 단계 목록도 함께 넘긴다 — 사용자가 피드백 대상을 고를 수 있어야 한다.
+                // adoptedSteps는 채택된 문서를 만든 목차에서 파싱한 것이다(AttachPipelineBanners
+                // 앞에서 계산됨). 살아있는 currentSteps를 쓰면 폐기된 회차의 목록을 보여줄 수 있다.
                 var reviewResult = await _userInteraction.RequestHumanReviewAsync(
-                    jobName, consolidatedPlan, planOutcome, structureRedraftSupported: true);
+                    jobName, consolidatedPlan, planOutcome, structureRedraftSupported: true, steps: adoptedSteps);
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
@@ -2117,24 +2120,84 @@ namespace ReSet.Core.Services
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
                     specsCopy.Add(("User_Feedback_Log.txt", $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}\n사용자 의견을 수용하여 설계 내용을 수정 및 보완해 주십시오."));
 
+                    // 분할 상태가 있으면 분할로 재생성한다. 통짜 단일 호출은 단계마다
+                    // 확보한 본문을 한 번에 무너뜨린다 — 이 경로가 존재하는 이유다.
                     string rePlan = string.Empty;
-                    try
+                    Dictionary<string, string> reViolations = stepFloorViolations;
+
+                    var stepsForRegeneration = BatchStepPlanParser.TryParse(structureForRegeneration);
+                    if (stepsForRegeneration != null)
                     {
-                        var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
-                        rePlan = aiResult.Content;
+                        // 구조 재수립·골격 지목이면 골격부터 다시 만든다. 그 외에는
+                        // 캐시된 골격을 재사용하되, 지목이 없으면 전 단계를 다시 만든다.
+                        var reuseSkeleton =
+                            !reviewResult.RedraftStructure &&
+                            !reviewResult.RegenerateSkeleton &&
+                            lastSkeleton != null &&
+                            lastStepSections != null;
+
+                        // GenerateBySplitAsync는 "골격 재사용"과 "지목된 단계만 재생성"을
+                        // defectiveSteps 하나로 함께 결정한다(재시도 루프가 요구하는 계약 —
+                        // 지목이 비면 골격까지 새로 만든다, 아래 테스트가 고정: WithoutDefectiveSteps_
+                        // RegeneratesTheWholeDocument). L3의 "지목 없음"은 뜻이 다르다 — 목차·골격은
+                        // 그대로 두고 전 단계만 다시 쓰라는 것이다. 그래서 지목이 비어 있으면 목차의
+                        // 전체 코드를 defectiveSteps로 넘긴다: targeted 판정(Count>0)은 참이 되어
+                        // 골격 호출을 건너뛰고, pending 필터는 모든 코드를 통과시켜 전 단계가
+                        // 재생성된다.
+                        var stepsToRegenerate = reviewResult.TargetStepCodes.Count > 0
+                            ? reviewResult.TargetStepCodes
+                            : stepsForRegeneration.Select(step => step.Code).ToList();
+
+                        using var progressScopeForL3 = _userInteraction.CreateProgressScope("피드백 반영 재생성") ?? NullProgressScope.Instance;
+                        var split = await GenerateBySplitAsync(
+                            structureForRegeneration, stepsForRegeneration, specsCopy, targetLanguage, jobName,
+                            progressScopeForL3,
+                            reuseSkeleton ? lastSkeleton : null,
+                            reuseSkeleton ? lastSkeletonResult : null,
+                            reuseSkeleton ? lastStepSections : null,
+                            stepFloorViolations,
+                            reuseSkeleton ? stepsToRegenerate : new List<string>(),
+                            cancellationToken);
+
+                        if (split != null)
+                        {
+                            rePlan = split.Markdown;
+                            reViolations = split.FloorViolations;
+                            lastSkeleton = split.Skeleton;
+                            lastSkeletonResult = split.Generation;
+                            lastStepSections = split.Sections;
+                            currentSteps = stepsForRegeneration;
+                            finalAiResult = split.Generation;
+                        }
                     }
-                    // 명세서 경로와 같은 이유로 취소는 전파한다. 삼키면 아래 continue가 돌아
-                    // 취소한 사용자에게 같은 승인 화면을 한 번 더 내민다.
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    else
                     {
-                        _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
+                        // 목차가 단계 목록을 못 냈다. 분할 자체가 불가능하므로
+                        // 기존 단일 호출로 간다 — 이 경로의 문서는 애초에 분할로
+                        // 만들어지지 않았다.
+                        try
+                        {
+                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(
+                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                            rePlan = aiResult.Content;
+                            finalAiResult = aiResult;
+                        }
+                        // 취소는 전파한다. 삼키면 아래 continue가 돌아 취소한
+                        // 사용자에게 같은 승인 화면을 한 번 더 내민다.
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
+                        }
                     }
 
                     if (string.IsNullOrEmpty(rePlan))
                     {
                         // 재생성이 실패했으므로 새 목차는 아무 문서도 만들지 않았다.
                         // 기록하지 않은 채 되돌아가면 화면의 문서와 PlanStructure.md가
-                        // 계속 같은 목차를 가리킨다.
+                        // 계속 같은 목차를 가리킨다. 분할이 null을 돌려준 경우에도
+                        // 여기로 들어온다 — 통짜 폴백을 추가하지 않는다. L3에는 이미
+                        // 승인 대기 중인 좋은 문서가 있고, 그것을 통짜로 갈아엎는 것은
+                        // 개선이 아니다.
                         continue;
                     }
 
@@ -2156,8 +2219,12 @@ namespace ReSet.Core.Services
                     // 피드백 반영본에 대한 L1 정적 검사 1회 수행
                     var l1Re = _validator.ValidateConsolidated(rePlan);
                     rePlan = l1Re.CleansedMarkdown ?? rePlan;
-                    if (!l1Re.IsValid)
+                    if (!l1Re.IsValid && stepsForRegeneration == null)
                     {
+                        // 분할로 만든 문서에는 이 보완을 적용하지 않는다. 문서 전체를
+                        // 한 번에 다시 써서 단계마다 확보한 본문을 무너뜨리기 때문이다.
+                        // 분할 경로에서 L1이 실패하는 원인(H2 누락·Mermaid 문법)은
+                        // 골격이 만드는 것이므로, 사용자가 골격을 지목해 다시 시도하면 된다.
                         _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                         try
                         {
@@ -2179,6 +2246,10 @@ namespace ReSet.Core.Services
                     consolidatedPlan = rePlan;
                     planReview = null;
                     planOutcome = VerificationOutcome.ReviewNotRun;
+                    stepFloorViolations = reViolations;
+                    var reSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                    consolidatedPlan = AttachPipelineBanners(
+                        consolidatedPlan, stepFloorViolations, reSteps, specs, jobName);
                 }
             }
         }
