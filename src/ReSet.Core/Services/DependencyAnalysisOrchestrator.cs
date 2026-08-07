@@ -557,29 +557,22 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
         DependencyAnalysisRequest request,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(analysis.ThinkingText))
-        {
-            return;
-        }
-
         try
         {
             var thinkingPath = Path.Combine(
                 paths.ResolveDocsDirectory(analysis.Key),
                 "Thinking.md");
-            var effortSuffix = string.IsNullOrWhiteSpace(request.ActorEffort)
-                ? string.Empty
-                : $", Effort: {request.ActorEffort}";
-            var header =
-                "# AI 추론 과정 로그 (Thinking Process Log)\n\n" +
-                $"- **기본 분석 AI 정보**: {request.Provider} ({request.ModelName}{effortSuffix})\n" +
-                $"- **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n" +
-                "본 문서는 저장 프로시저 역공학 및 검증 파이프라인 수행 중 사용된 AI 모델들의 추론 과정(Thinking Process)을 기록한 마크다운 문서입니다.\n\n" +
-                "---\n\n";
 
+            // 추론 본문이 비어도 쓴다. 이 자리는 성공한 노드에만 닿으므로, 파일이 없다는
+            // 것과 추론이 없었다는 것을 산출물만 보고 구분할 수 있어야 한다.
             await File.WriteAllTextAsync(
                 thinkingPath,
-                header + analysis.ThinkingText,
+                ThinkingLogDocument.Compose(
+                    analysis.ThinkingText,
+                    request.Provider,
+                    request.ModelName,
+                    request.ActorEffort,
+                    DateTime.Now),
                 cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

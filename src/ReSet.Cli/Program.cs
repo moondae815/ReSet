@@ -878,10 +878,12 @@ namespace ReSet.Cli
 
                             if (aiResult != null)
                             {
-                                if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
-                                {
-                                    await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), aiResult.ThinkingText);
-                                }
+                                // 추론 본문이 비어도 쓴다. 두 산출물은 한 쌍이라, 한쪽만 나가면
+                                // 채택된 시도가 무엇을 사고했는지 되짚을 길이 사라진다.
+                                await File.WriteAllTextAsync(
+                                    Path.Combine(docsDir, "Thinking.md"),
+                                    ThinkingLogDocument.Compose(
+                                        aiResult.ThinkingText, provider, modelName, consolidatorEffort, DateTime.Now));
                                 var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
                                 await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
                             }
@@ -1371,10 +1373,12 @@ namespace ReSet.Cli
 
                             if (aiResult != null)
                             {
-                                if (!string.IsNullOrWhiteSpace(aiResult.ThinkingText))
-                                {
-                                    await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), aiResult.ThinkingText);
-                                }
+                                // 추론 본문이 비어도 쓴다. 두 산출물은 한 쌍이라, 한쪽만 나가면
+                                // 채택된 시도가 무엇을 사고했는지 되짚을 길이 사라진다.
+                                await File.WriteAllTextAsync(
+                                    Path.Combine(docsDir, "Thinking.md"),
+                                    ThinkingLogDocument.Compose(
+                                        aiResult.ThinkingText, provider, modelName, consolidatorEffort, DateTime.Now));
                                 var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
                                 await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
                             }
@@ -1903,11 +1907,6 @@ namespace ReSet.Cli
                     DateTime.Now,
                     scope));
 
-            if (string.IsNullOrWhiteSpace(thinkingText))
-            {
-                return;
-            }
-
             try
             {
                 // 기존 .txt 파일이 있다면 삭제 처리
@@ -1917,13 +1916,10 @@ namespace ReSet.Cli
                     try { File.Delete(oldTxtFile); } catch {}
                 }
 
-                var effortSuffix = string.IsNullOrWhiteSpace(effort) ? "" : $", Effort: {effort}";
-                var thinkingHeader = $"# AI 추론 과정 로그 (Thinking Process Log)\n\n" +
-                                     $"- **기본 분석 AI 정보**: {provider} ({modelName}{effortSuffix})\n" +
-                                     $"- **문서 작성일시**: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n" +
-                                     "본 문서는 저장 프로시저 역공학 및 검증 파이프라인 수행 중 사용된 AI 모델들의 추론 과정(Thinking Process)을 기록한 마크다운 문서입니다.\n\n" +
-                                     "---\n\n";
-                await File.WriteAllTextAsync(Path.Combine(docsDir, "Thinking.md"), thinkingHeader + thinkingText);
+                // 추론 본문이 비어도 쓴다 — 본문이 없다는 사실 자체가 기록할 정보다.
+                await File.WriteAllTextAsync(
+                    Path.Combine(docsDir, "Thinking.md"),
+                    ThinkingLogDocument.Compose(thinkingText, provider, modelName, effort, DateTime.Now));
             }
             catch (Exception ex)
             {
