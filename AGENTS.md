@@ -57,7 +57,10 @@
     *   [LocalAiConsolidator.cs](./src/ReSet.Core/Services/LocalAiConsolidator.cs): 로컬 모델 환경에서 분할 생성 시 여러 청크(Chunk)로 추출된 논리 JSON 결과들을 단일 `DeconstructedSpLogic` 객체로 병합하는 병합기.
     *   [CacheManager.cs](./src/ReSet.Core/Services/CacheManager.cs): SHA-256 해시 기반 로컬 증분 분석 글로벌 캐싱 및 레거시 자동 병합 마이그레이션 서비스 구현체.
     *   AI 응답 수집 및 로그 격리: AI 클라이언트 호출 결과에서 추출된 추론(Thinking) 텍스트는 수집 후 TUI 화면을 오염시키지 않도록 `Log.Verbose` 또는 파일 전용 로그에만 기록되게 하고, 기본 실행 수준에서는 실시간 노출을 차단하여 TUI 화면 깨짐을 원천적으로 차단하십시오.
-    *   [ExternalCliCodingEngine.cs](./src/ReSet.Core/Services/ExternalCliCodingEngine.cs): CLI 기반 외부 에이전트 프로세스(Claude, agy, codex 등) 기동 및 콘솔 상속 연동 구현체.
+    *   [ExternalCliCodingEngine.cs](./src/ReSet.Core/Services/ExternalCliCodingEngine.cs): CLI 기반 외부 에이전트 프로세스(Claude, agy, codex 등) 기동 구현체. 대화형은 콘솔 상속, 무인 배치는 stdin 차단 및 stderr 캡처.
+    *   [ArgumentTemplateResolver.cs](./src/ReSet.Core/Services/ArgumentTemplateResolver.cs): 엔진 인자 템플릿의 `{instructions}`·`{jobDir}` 자리표시자를 절대 경로로 단일 패스 치환. 따옴표는 템플릿이 소유합니다.
+    *   [ArtifactChangeDetector.cs](./src/ReSet.Core/Services/ArtifactChangeDetector.cs): 기동 전후 작업 디렉터리를 스냅샷 대조해 산출물 변화를 판정. `bin`·`obj` 등 빌드 부산물은 제외.
+    *   [CodegenRunResult.cs](./src/ReSet.Core/Models/CodegenRunResult.cs): 엔진 1회 기동 결과(산출물 변화, 종료 코드, 실패 분류, 진단 원문).
     *   **CLI 기반 AI 제공자 ([Clients/Cli](./src/ReSet.Core/Services/Clients/Cli))**: HTTP API 대신 로컬에 로그인된 코딩 에이전트 CLI를 헤드리스로 기동해 `IAiClient`를 구현하는 클라이언트군.
         *   [ClaudeCliClient.cs](./src/ReSet.Core/Services/Clients/Cli/ClaudeCliClient.cs), [CodexCliClient.cs](./src/ReSet.Core/Services/Clients/Cli/CodexCliClient.cs), [AntigravityCliClient.cs](./src/ReSet.Core/Services/Clients/Cli/AntigravityCliClient.cs): `claude-cli`/`codex-cli`/`agy-cli` 제공자 구현체. `ApiKey` 없이 `Command`만 사용하고, 모델은 API 제공자와 같은 `ModelName`을 받아 `--model`(codex는 `-m`)로 넘기되 값이 비면 인자를 생략하며, temperature 미지원 경고를 생성 시 로깅. ClaudeCliClient는 `stop_reason`이 `max_tokens`면 잘린 본문을 반환하지 않고 실패시킵니다 - CLI의 출력 한도(sonnet-5 기준 64,000)는 API 경로(128,000)보다 낮고 조절 인자가 없어, 잘린 명세서를 넘기면 Critic이 출력 절단을 모델 결함으로 오채점합니다. AntigravityCliClient는 프롬프트를 명령행으로 전달하므로 기동 전 플랫폼별 명령행 길이를 검사합니다.
         *   **[제약] `agy-cli`는 분석 역할(Actor/Critic/Consolidator)에 사용하지 마십시오.** `--tools ""`에 해당하는 인자가 없어 툴 22종을 끌 수 없고, 모델이 툴을 잡으면 헤드리스 모드가 권한을 자동 거부해 종료 코드 0·`status: SUCCESS`인 채로 빈 응답만 남깁니다. 사소한 프롬프트에도 에이전트 스캐폴딩 8,000토큰 이상이 얹히며 `--disable-slash-commands`로도 줄지 않으므로(실측), 이 플래그를 추가하지 마십시오. 이 실패는 `CliFailureKind.ToolPermissionDenied`로 분류됩니다. `CodegenSettings:Engines:agy`(코딩 에이전트 브릿지)도 헤드리스에서는 같은 자동 거부에 걸리므로 무인 배치 대상이 아닙니다. 대화형 기동만 지원하며 `BatchArguments`를 비워 둡니다.
@@ -90,6 +93,8 @@
     *   [ValidatorConfig.cs](./src/ReSet.Validator.Core/Models/ValidatorConfig.cs): 검증기 실행 설정을 바인딩하는 구성 모델.
 *   **검증 비즈니스 서비스 ([Services](./src/ReSet.Validator.Core/Services))**
     *   [CodegenWorkflowOrchestrator.cs](./src/ReSet.Validator.Core/Services/CodegenWorkflowOrchestrator.cs): 외부 코딩 에이전트(Actor)와 코드 검증기(Critic) 간의 자가 수정 워크플로우 루프를 전담하는 독립 오케스트레이터.
+    *   [CodegenLoopPolicy.cs](./src/ReSet.Validator.Core/Services/CodegenLoopPolicy.cs): 기동 결과로 루프 진행을 판단하는 순수 함수(검증 / 검증 생략 재시도 / 즉시 중단). 검증기에 의존하지 않아 프로세스 없이 테스트됩니다.
+    *   [CodegenWorkflowResult.cs](./src/ReSet.Validator.Core/Models/CodegenWorkflowResult.cs): 자가 수정 워크플로우 최종 결과. 재시도 불가 실패로 끊은 경우 중단 사유를 함께 전달합니다.
     *   [CodeVerificationOrchestrator.cs](./src/ReSet.Validator.Core/Services/CodeVerificationOrchestrator.cs): L1(정적) -> L2(AI Gap판정) -> L3(사용자 승인)을 단방향으로 조율하는 코드 검증 오케스트레이터 (루프 기능 제외).
     *   [FileMappingService.cs](./src/ReSet.Validator.Core/Services/FileMappingService.cs): 마이그레이션된 소스 파일과 통합 작업 계획서(`BatchMigrationPlan.md`)를 스캔하여 1:1로 매핑하고 경로를 보정하는 서비스.
     *   [ValidatorAiService.cs](./src/ReSet.Validator.Core/Services/ValidatorAiService.cs): AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스. L2 프롬프트의 5번 판정 기준은 [DataAccessPolicy.cs](./src/ReSet.Core/Services/DataAccessPolicy.cs)의 `VerificationCriteria`를 그대로 사용하며, 데이터 액세스 경계 위반이 하나라도 있으면 `OverallStatus`를 최소 `PARTIAL`로 판정하도록 지시합니다.
@@ -264,7 +269,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] 컴파일 에러가 0개이고, 경고가 **정확히 8건**(모두 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 0건으로 보이므로 반드시 `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`로 세야 한다. 8건보다 많으면 이번 변경이 새 경고를 넣은 것이다.
-- [ ] `dotnet test` 명령어를 실행하여 783개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 821개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
 - [ ] DB 메타데이터, AI 결과 원문 등을 Spectre.Console TUI에 출력할 때 모든 출력 부에 `Markup.Escape()` 조치를 적용했는가?

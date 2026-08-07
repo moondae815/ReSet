@@ -78,11 +78,16 @@ flowchart TD
 | | [DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) | SQL/ORM 데이터 액세스 경계 규칙 문구를 단독 소유하는 정적 클래스. `InstructionRules`는 마이그레이션 지시서 5장에, `VerificationCriteria`는 L2 Gap 판정 프롬프트 5번 항목에, `TaskletOrmComment`는 `AbstractSettleTasklet` 스텁 주석에 실려 `MetadataExporter`와 `ValidatorAiService`가 동일한 규칙을 공유하게 합니다. |
 | | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
 | | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱, 글로벌 색인(`.sp_cache_index.json`) 보존/조회 및 레거시 격리 캐시 자동 마이그레이션 관리. |
-| | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동, 콘솔 입출력 스트림 공유 및 CancellationToken 기반 강제 프로세스 정리. |
+| | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동. 대화형은 부모 콘솔 스트림을 상속하고 무인 배치는 stdin을 닫고 stderr를 캡처하며, CancellationToken 기반 강제 프로세스 정리를 수행합니다. |
+| | [ArgumentTemplateResolver](../src/ReSet.Core/Services/ArgumentTemplateResolver.cs) | 코딩 엔진 인자 템플릿의 `{instructions}`·`{jobDir}` 자리표시자를 절대 경로로 단일 패스 치환. 따옴표는 템플릿이 소유하므로 공백이 든 경로도 인자 하나로 유지됩니다. |
+| | [ArtifactChangeDetector](../src/ReSet.Core/Services/ArtifactChangeDetector.cs) | 기동 전후 작업 디렉터리를 재귀 스냅샷해 산출물 변화 여부를 판정. `bin`·`obj` 등 빌드 부산물은 제외해 빌드만 돌린 실행이 성공으로 잡히지 않게 합니다. |
+| | [CodegenRunResult](../src/ReSet.Core/Models/CodegenRunResult.cs) | 엔진 1회 기동의 결과(산출물 변화 여부, 종료 코드, 실패 분류, 진단 원문). 성공 여부를 단정하는 속성을 두지 않아 판단을 호출자에게 남깁니다. |
 | | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |
 | **ReSet.Validator.Cli**<br/>(TUI/CLI 레이어) | [Program](../src/ReSet.Validator.Cli/Program.cs) | 검증기 CLI 진입점. 디렉토리 사전 유효성 확인, 솔루션 루트 스캔, Ctrl+C 취소 연동 및 무인 배치 검증 흐름 제어, 통합 Job 대화형 선택 메뉴 제공. |
 | | [ConsoleUserInteraction](../src/ReSet.Validator.Cli/ConsoleUserInteraction.cs) | Spectre.Console 기반 TUI 렌더링. 탭(Tab) 자동완성 디렉토리 입력창(`ShowChoices(false)` 제어), Gap 분석 결과 패널 렌더링 및 분석기와 통일된 `ConsoleProgressScope` 스피너 UI 제공. |
 | **ReSet.Validator.Core**<br/>(정합성 검증 레이어) | [CodegenWorkflowOrchestrator](../src/ReSet.Validator.Core/Services/CodegenWorkflowOrchestrator.cs) | 외부 코딩 에이전트(Actor)와 코드 검증기(Critic) 간의 자가 수정 워크플로우 루프를 전담하는 독립 오케스트레이터. |
+| | [CodegenLoopPolicy](../src/ReSet.Validator.Core/Services/CodegenLoopPolicy.cs) | 기동 결과로 자가 수정 루프의 진행 여부를 판단하는 순수 함수(검증 진행 / 검증 생략 후 재시도 / 즉시 중단). 검증기에 의존하지 않아 프로세스 없이 조합을 전부 테스트할 수 있습니다. |
+| | [CodegenWorkflowResult](../src/ReSet.Validator.Core/Models/CodegenWorkflowResult.cs) | 자가 수정 워크플로우의 최종 결과. 재시도 불가 실패로 루프를 끊은 경우 중단 사유를 함께 전달합니다. |
 | | [CodeVerificationOrchestrator](../src/ReSet.Validator.Core/Services/CodeVerificationOrchestrator.cs) | L1 정적 검사(매핑 경로가 디렉토리일 경우 하위 소스코드 전체 병합) -> L2 AI 논리 Gap 판정(Critic 역할 및 지정된 effort 적용) -> L3 개발자 승인을 조율하는 단방향 검증 오케스트레이터. |
 | | [FileMappingService](../src/ReSet.Validator.Core/Services/FileMappingService.cs) | 마이그레이션된 소스 파일과 통합 작업 계획서(`BatchMigrationPlan.md`)를 스캔하여 1:1로 매핑하고 경로를 자동 보정하는 서비스. |
 | | [ValidatorAiService](../src/ReSet.Validator.Core/Services/ValidatorAiService.cs) | AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스, TDD용 단위 테스트 및 ArchUnit 아키텍처 검증 코드 자동 생성. |
@@ -273,17 +278,25 @@ sequenceDiagram
         alt 자체 빌드 또는 단위테스트 실패 (L0 실패)
             ECE->>ECE: 오류 분석 후 자체 자가 디버깅 시도
         else 자체 빌드 및 테스트 통과 (L0 성공)
-            ECE-->>RC: 프로세스 종료 및 완료 보고 (ExitCode 0)
-            RC->>VAL: 생성된 소스코드 로드 및 L1 정적 검증 수행
-            alt L1 정적 검증 실패 (구문·중괄호 쌍 오류, 트랜잭션 참여 위반 등)
-                RC->>RC: 지시서 하단에 [L1 에러 피드백] 추가
-                Note over RC,ECE: L2 AI 검증 건너뛰고 즉시 재수정 요청 (L1 Shortcut)
-            else L1 정적 검증 성공
-                RC->>VAL: L2 AI 의미론적 일치성 분석 수행
-                alt L2 검증 결과 불일치 (MISMATCH / PARTIAL)
-                    RC->>RC: 지시서 하단에 [L2 Gap Report & Suggestions] 추가
-                else L2 검증 결과 일치 (MATCH)
-                    Note over RC,ECE: 자가 수정 루프 성공 탈출
+            ECE-->>RC: 프로세스 종료 (종료 코드 및 배치 모드에서 캡처한 stderr 반환)
+            RC->>RC: 작업 디렉터리 전후 스냅샷을 대조해 산출물 변화 판정
+            Note over RC: 종료 코드 0은 성공의 근거가 아니다. 에이전트가 아무것도 쓰지 못한 채 0으로 끝나는 경우가 실재한다.
+            alt 산출물 없음 + 쿼터 소진 / 미인증 / 툴 권한 거부
+                Note over RC,ECE: 재시도해도 결과가 같으므로 중단 사유를 실어 루프 즉시 종료
+            else 산출물 없음 + 그 외 원인
+                Note over RC,ECE: 검증을 건너뛰고 지시서를 그대로 둔 채 재기동 (연속 2회 초과 시 중단)
+            else 산출물 있음
+                RC->>VAL: 생성된 소스코드 로드 및 L1 정적 검증 수행
+                alt L1 정적 검증 실패 (구문·중괄호 쌍 오류, 트랜잭션 참여 위반 등)
+                    RC->>RC: 지시서 하단에 [L1 에러 피드백] 추가
+                    Note over RC,ECE: L2 AI 검증 건너뛰고 즉시 재수정 요청 (L1 Shortcut)
+                else L1 정적 검증 성공
+                    RC->>VAL: L2 AI 의미론적 일치성 분석 수행
+                    alt L2 검증 결과 불일치 (MISMATCH / PARTIAL)
+                        RC->>RC: 지시서 하단에 [L2 Gap Report & Suggestions] 추가
+                    else L2 검증 결과 일치 (MATCH)
+                        Note over RC,ECE: 자가 수정 루프 성공 탈출
+                    end
                 end
             end
         end
@@ -605,9 +618,11 @@ graph TD
 
 ### 5.3. 외부 코딩 에이전트 연동용 마이그레이션 지시서 번들링 및 자동 기동 브릿지
 * **마이그레이션 지시서 패키징**: 최종 승인된 통합 배치 계획과 개별 SP의 명세서, 참조하는 DDL 및 테이블 스키마 정보를 하나의 마크다운 파일(`agent/MigrationInstructions.md`)로 빌드하여 외부 에이전트 복사/붙여넣기용 컨텍스트 프롬프트를 명시해 추출합니다. 지시서 5장에는 [DataAccessPolicy.InstructionRules](../src/ReSet.Core/Services/DataAccessPolicy.cs)가 생성하는 SQL/ORM 경계 규칙이 삽입되고, 함께 생성되는 `AbstractSettleTasklet.cs` 스텁에는 `TaskletOrmComment`가 ORM 사용 시 지켜야 할 커넥션/트랜잭션 참여 방법을 실행 코드가 아닌 주석으로만 남깁니다.
-* **대화형 콘솔 상속**: Claude Code 등 대화형 CLI 에이전트 연동 실행 시 자식 프로세스의 입출력을 숨기지 않고 부모 콘솔 스트림을 상속 공유(`RedirectStandardInput/Output = false`)하여, 에이전트 기동 중 발생할 수 있는 자연어 상호작용 및 수동 승인 프롬프트를 동일 콘솔 상에서 자연스럽게 수행합니다.
-* **취소 및 프로세스 강제 정리**: 취소 토큰(`CancellationToken`) 수신 시 윈도우/리눅스 환경의 좀비 프로세스 방지를 위해 `process.Kill(true)`을 구동해 외부 에이전트 프로세스 트리 전체를 강제 정리합니다. 프롬프트 내 공백이 파이프라인 인자로 분해 해석되는 문제를 방지하도록 이스케이프 쌍따옴표(`\"...\"`)로 파라미터를 감싸 공급합니다.
+* **대화형/무인 배치 인자 분리**: 엔진 인자는 `Arguments`(대화형)와 `BatchArguments`(무인)로 나뉩니다. 대화형 TUI 형식은 무인 실행에서 TTY를 열지 못해 종료 코드 0인 채 조용히 실패하므로 폴백하지 않으며, `BatchArguments`가 비면 그 엔진은 무인 배치 미지원으로 간주해 기동 전에 거부합니다. 지시서가 작업 디렉터리 바깥에 있으므로 `{jobDir}` 자리표시자로 접근 범위를 열어 줍니다.
+* **모드별 콘솔 스트림 처리**: 대화형에서는 자식 프로세스의 입출력을 숨기지 않고 부모 콘솔 스트림을 상속 공유(`RedirectStandardInput/Output = false`)하여 자연어 상호작용과 수동 승인 프롬프트를 동일 콘솔에서 수행합니다. 무인 배치에서는 CLI가 대화형으로 오인하지 않도록 stdin을 닫고 stderr를 캡처해 실패 원인 분류에 사용하되, 진행 상황이 CI 로그에 남도록 stdout은 양쪽 모두 상속합니다.
+* **취소 및 프로세스 강제 정리**: 취소 토큰(`CancellationToken`) 수신 시 윈도우/리눅스 환경의 좀비 프로세스 방지를 위해 `process.Kill(true)`을 구동해 외부 에이전트 프로세스 트리 전체를 강제 정리합니다. 인자의 따옴표는 치환기가 아니라 템플릿이 소유하며, 자리표시자를 감싸는 형태(`--add-dir "{jobDir}"`)로 두어 공백이 든 경로도 인자 하나로 유지됩니다.
 * **자가 수정 피드백 루프(Self-Correction Loop) 및 TDD L0 검증**: 코딩 에이전트 기동 시 타겟 단위 테스트 및 아키텍처 제약 테스트를 미리 생성해 배포하고, 빌드/테스트(L0) 성공 통과 시 정적 린터(L1) 및 AI 의미론적 대조(L2)를 거치며 스스로 코드를 고치는 자가 수정 루프(Self-Correction Loop) 브릿지를 탑재하여 최종 코드 품질을 엄격히 관리합니다.
+* **산출물 기반 성공 판정 및 조기 중단**: 성공 여부는 종료 코드가 아니라 작업 디렉터리의 산출물 변화로 판정합니다. 에이전트가 아무것도 쓰지 못한 채 0으로 끝나는 경우가 실재하며, 이를 성공으로 읽으면 빈 디렉터리를 상대로 L2 AI 검증을 재시도 한도까지 반복하게 됩니다. 산출물이 없을 때는 캡처한 stderr를 분류해, 쿼터 소진·미인증·툴 권한 거부처럼 재시도가 무의미한 실패는 사유와 함께 루프를 즉시 끝내고 무인 배치에서는 종료 코드 1로 종료합니다.
 
 ### 5.4. 정합성 검증 실패 시의 3단계 복구 피드백 루프 (Failure Recovery Loops)
 * **루프 A (설계 재수립 - Spec Feedback)**: 레거시 비즈니스 규칙 해석 오류 등 명세서 자체에 결함이 있는 경우, L3 개발자 콘솔 피드백을 통해 기능 명세서(`Spec.md`)를 보완·재생성하고 이에 맞춰 코드를 재생성하도록 복구 흐름을 분기합니다.
