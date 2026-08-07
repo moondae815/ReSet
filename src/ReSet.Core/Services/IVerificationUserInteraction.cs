@@ -38,7 +38,8 @@ namespace ReSet.Core.Services
             string selectedOption,
             string specificationMarkdown,
             VerificationOutcome outcome,
-            bool structureRedraftSupported = false);
+            bool structureRedraftSupported = false,
+            IReadOnlyList<BatchStepPlan>? steps = null);
 
         // AI가 유추한 메타데이터 설명을 DB에 동기화할지 사용자 동의 요청
         Task<bool> ConfirmMetadataSyncAsync(string selectedOption);
