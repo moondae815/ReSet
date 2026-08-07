@@ -654,12 +654,13 @@ namespace ReSet.Core.Tests
             }
         }
 
-        // 지시서 번들은 계획서 본문을 그대로 심는다(MetadataExporter.cs의 1번 항목).
-        // L1 소진/품질 미달/리뷰 미수행 세 상태는 배너가 계획서 문자열 자체에 붙어
-        // 번들까지 따라오지만, L3 피드백 재생성 경로는 계획서를 통째로 교체하므로
+        // 검증 상태 배너(InstructionEntryPointComposer §0)는 계획 본문이 인라인되어
+        // 있는지와 무관하게 항상 진입점에 실린다 - planOutcome 값에서 직접 만들어지기
+        // 때문이다(계획 문자열에 무엇이 들어 있는지 살피지 않는다). L1 소진/품질 미달/
+        // 리뷰 미수행 세 상태는 예전에는 배너가 계획서 문자열 자체에 붙어 있어야만
+        // 번들까지 따라왔지만, L3 피드백 재생성 경로는 계획서를 통째로 교체하므로
         // 배너가 사라지고 YAML 헤더에만 의존한다 - 그 헤더는 번들에 들어가지 않는다.
-        // 그래서 번들은 문자열에 무엇이 우연히 들어 있는지가 아니라 종료 상태 값을
-        // 직접 받아 자기 검증 상태를 밝힌다.
+        // 그래서 번들은 종료 상태 값을 직접 받아 자기 검증 상태를 밝힌다.
         [Theory]
         [InlineData(VerificationOutcome.ReviewNotRun, "리뷰 미수행")]
         [InlineData(VerificationOutcome.QualityRejected, "품질 미달")]
@@ -783,11 +784,6 @@ namespace ReSet.Core.Tests
                 Assert.Contains("Placeholder", instructions);
                 Assert.Contains("허용 목록", instructions);
 
-                // 배치 호스팅(Worker Service)과 멀티 DB 커넥션 설정(ConnectionStrings) 안내는
-                // 진입점 분할 과정에서 어느 산출물에도 옮겨지지 않았다 - InstructionEntryPointComposer의
-                // 기술 스택 절은 DataAccessPolicy 규칙만 신고, TaskFileComposer의 부트스트랩 회차도
-                // 패키지 목록만 언급할 뿐 호스팅/커넥션 구성 예시는 담지 않는다.
-
                 // 패키지 설치 안내는 이제 todo.md가 아니라 부트스트랩 회차 작업 지시서
                 // (task-00-bootstrap.md)가 진다 - 그 회차가 실제로 패키지를 설치하는 회차이기 때문이다.
                 var bootstrapTask = await File.ReadAllTextAsync(
@@ -795,6 +791,16 @@ namespace ReSet.Core.Tests
                 Assert.Contains("EF Core", bootstrapTask);
                 // 모든 회차 작업 지시서는 공통 경계 규칙 문서를 "먼저 읽을 것"에 링크한다.
                 Assert.Contains("경계 규칙", bootstrapTask);
+
+                // 배치 호스팅(Worker Service)과 멀티 DB 커넥션 설정(ConnectionStrings) 안내는
+                // common/03-hosting-and-config.md로 복원됐다. 스캐폴딩을 세우는 것은
+                // Bootstrap 회차의 일이므로 그 회차의 작업 지시서만 이 파일을 가리킨다.
+                Assert.Contains("common/03-hosting-and-config.md", bootstrapTask);
+
+                var hostingConfig = await File.ReadAllTextAsync(
+                    Path.Combine(testOutputDir, "agent", "common", "03-hosting-and-config.md"));
+                Assert.Contains("Worker Service", hostingConfig);
+                Assert.Contains("ConnectionStrings", hostingConfig);
 
                 var stub = await File.ReadAllTextAsync(
                     Path.Combine(testOutputDir, "agent", "src", "AbstractSettleTasklet.cs"));

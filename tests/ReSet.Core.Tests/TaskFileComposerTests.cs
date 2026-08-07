@@ -109,6 +109,30 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Compose_ShouldLinkHostingAndConfig_OnlyForBootstrap()
+        {
+            // 배치 호스팅/DI와 멀티 DB 연결 문자열 구성은 스캐폴딩을 세우는 Bootstrap
+            // 회차의 일이다. Step/Assembly 회차 지시서는 이미 구성된 것을 다시
+            // 참조할 이유가 없으므로 이 링크를 받지 않는다.
+            var bootstrap = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null,
+            });
+            Assert.Contains("common/03-hosting-and-config.md", bootstrap);
+
+            var step = TaskFileComposer.Compose(StepInputs());
+            Assert.DoesNotContain("common/03-hosting-and-config.md", step);
+
+            var assembly = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Assembly, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null,
+            });
+            Assert.DoesNotContain("common/03-hosting-and-config.md", assembly);
+        }
+
+        [Fact]
         public void Compose_ShouldTellAssemblyToSkipFailedSteps()
         {
             var markdown = TaskFileComposer.Compose(StepInputs() with

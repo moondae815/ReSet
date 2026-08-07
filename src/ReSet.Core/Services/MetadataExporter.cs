@@ -362,6 +362,15 @@ namespace ReSet.Core.Services
             Log.Information("통합 마이그레이션 지시서 번들 내보내기 시작 - JobName: {JobName}, OutputDir: {OutputDir}",
                 jobName, baseOutputDir);
 
+            // 아래 번들 쓰기와 진행 상태 저장은 일부러 try/catch로 감싸지 않는다. 옛
+            // 메서드는 전체를 삼키고 로그만 남겼지만, 그 결과 지시서가 없거나 절반만
+            // 쓰인 채로 "성공"이라고 호출자에게 보고되는 일이 있었다. 지시서를 못
+            // 쓴 Job은 애초에 코딩 에이전트에게 넘길 수 없으므로, 예외를 삼켜 계속
+            // 진행하는 것보다 여기서 그대로 올려 호출자가 실패를 알게 하는 편이
+            // 낫다. 이후의 AbstractSettleTasklet 스텁 배치 블록만 격리된 채로 남아
+            // 있는 것은 그것이 부가 산출물(스캐폴딩 예시 코드)이라 실패해도 Job
+            // 자체는 여전히 쓸 수 있기 때문이다 - 여기 위쪽을 다시 감싸고 싶어지면
+            // 그 차이를 먼저 확인할 것.
             var bundle = await new InstructionBundleWriter().WriteAsync(
                 new BundleInputs(
                     jobName, targetLanguage, planOutcome, consolidatedPlan,

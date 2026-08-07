@@ -77,6 +77,16 @@ namespace ReSet.Core.Services
                 "# 데이터 액세스 경계 규칙\n\n" + DataAccessPolicy.InstructionRules(inputs.TargetLanguage),
                 cancellationToken);
 
+            // 배치 호스팅(Worker Service/Spring Batch)과 멀티 DB 연결 문자열 안내는
+            // 예전에는 진입점 §5에 있었다가 Phase B 분할 때 어디에도 옮겨지지 않고
+            // 유실됐다. 스캐폴딩을 세우는 것은 Bootstrap 회차의 일이므로 그 회차만
+            // 이 파일을 가리킨다(TaskFileComposer.AppendBootstrap) - 매 회차가 공통으로
+            // 읽는 00~02와 달리 이 파일은 Bootstrap 전용이라 진입점 인덱스에는 넣지 않는다.
+            await WriteAsync(
+                Path.Combine(commonDir, "03-hosting-and-config.md"),
+                BuildHostingAndConfigMarkdown(inputs.TargetLanguage),
+                cancellationToken);
+
             var verificationDir = Path.Combine(agentDir, "verification");
             if (slices.Verification != null)
             {
@@ -453,6 +463,55 @@ namespace ReSet.Core.Services
             }
 
             return entries;
+        }
+
+        /// <summary>
+        /// 배치 호스팅/DI와 멀티 DB 연결 문자열 안내. 문구는 구 MetadataExporter가
+        /// 진입점 §5에 심던 것을 글자 그대로 옮겼다(96ad2d7^의 MetadataExporter.cs) -
+        /// 리뷰에서 다시 쓰지 말고 원문을 그대로 가져오라고 확정됐다. DataAccessPolicy의
+        /// SQL/ORM 경계 규칙과는 다른 관심사라 그 클래스에는 두지 않는다.
+        /// 알 수 없는 언어는 기존 §5와 마찬가지로 언어별 블록 없이 헤더만 남긴다.
+        /// </summary>
+        private static string BuildHostingAndConfigMarkdown(string targetLanguage)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# 배치 호스팅 및 인프라 설정 가이드");
+            sb.AppendLine();
+
+            if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 .NET 10 Worker Service 기반으로 작성하며, Microsoft.Extensions.DependencyInjection을 통해 의존성을 주입하십시오.");
+                sb.AppendLine("* **멀티 DB 커넥션 설정**: `appsettings.json` 내에 다음과 같은 `ConnectionStrings` 구조를 구성하고, `RetryableSqlExecutor`에서 분기 처리하여 주입받을 수 있도록 모델링하십시오.");
+                sb.AppendLine("  ```json");
+                sb.AppendLine("  {");
+                sb.AppendLine("    \"ConnectionStrings\": {");
+                sb.AppendLine("      \"PaymentDB\": \"Server=...;Database=PaymentDB;...\",");
+                sb.AppendLine("      \"SettleCardDB\": \"Server=...;Database=SETTLE_CARD_DB;...\",");
+                sb.AppendLine("      \"PLCardDB\": \"Server=...;Database=PLCardDB;...\",");
+                sb.AppendLine("      \"SettlePoqDB\": \"Server=...;Database=SETTLE_POQ_DB;...\"");
+                sb.AppendLine("    }");
+                sb.AppendLine("  }");
+                sb.AppendLine("  ```");
+            }
+            else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine("* **배치 호스팅 및 DI**: 배치 호스팅은 Spring Batch (Spring Boot 기반)로 작성하며, 의존성 주입을 활용하십시오.");
+                sb.AppendLine("* **멀티 DB 커넥션 설정**: `application.yml` 내에 다음과 같은 다중 DataSource 구조를 구성하고, 각 Step이 알맞은 TransactionManager와 JdbcTemplate을 주입받을 수 있도록 모델링하십시오.");
+                sb.AppendLine("  ```yaml");
+                sb.AppendLine("  spring:");
+                sb.AppendLine("    datasource:");
+                sb.AppendLine("      payment:");
+                sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PaymentDB");
+                sb.AppendLine("      settle-card:");
+                sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_CARD_DB");
+                sb.AppendLine("      pl-card:");
+                sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=PLCardDB");
+                sb.AppendLine("      settle-poq:");
+                sb.AppendLine("        jdbc-url: jdbc:sqlserver://...;databaseName=SETTLE_POQ_DB");
+                sb.AppendLine("  ```");
+            }
+
+            return sb.ToString();
         }
 
         private static List<IndexEntry> BuildSpecIndex(BundleInputs inputs, string agentDir)

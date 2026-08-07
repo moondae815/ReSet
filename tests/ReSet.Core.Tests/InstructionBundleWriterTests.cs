@@ -147,6 +147,47 @@ S02 본문
         }
 
         [Fact]
+        public async Task WriteAsync_ShouldWriteHostingAndConfigFile_ForCSharp()
+        {
+            // 배치 호스팅(Worker Service)과 멀티 DB 연결 문자열(ConnectionStrings) 안내는
+            // 구 MetadataExporter §5에 있다가 Phase B 분할 때 유실됐던 것을 여기로 복원했다.
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var hostingConfig = await File.ReadAllTextAsync(
+                Path.Combine(_agentDir, "common", "03-hosting-and-config.md"));
+
+            Assert.Contains("Worker Service", hostingConfig);
+            Assert.Contains("ConnectionStrings", hostingConfig);
+            Assert.DoesNotContain("Spring Batch", hostingConfig);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldWriteHostingAndConfigFile_ForJava()
+        {
+            var inputs = Inputs(Layout()) with { TargetLanguage = "Java" };
+            await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+
+            var hostingConfig = await File.ReadAllTextAsync(
+                Path.Combine(_agentDir, "common", "03-hosting-and-config.md"));
+
+            Assert.Contains("Spring Batch", hostingConfig);
+            Assert.Contains("application.yml", hostingConfig);
+            Assert.DoesNotContain("Worker Service", hostingConfig);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldNotLinkHostingAndConfigFile_FromEntryPoint()
+        {
+            // 호스팅/설정 안내는 스캐폴딩을 세우는 Bootstrap 회차 전용이다. 모든 회차가
+            // 읽는 진입점 인덱스(00~02)와 달리 여기에는 실리지 않는다 - 링크는
+            // task-00-bootstrap.md만 갖는다(TaskFileComposerTests에서 검증).
+            var result = await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var entry = await File.ReadAllTextAsync(result.EntryPointPath);
+            Assert.DoesNotContain("03-hosting-and-config.md", entry);
+        }
+
+        [Fact]
         public async Task WriteAsync_ShouldBannerOnlyTheViolatingStep()
         {
             var violations = new Dictionary<string, string> { ["S02"] = "의사코드가 없습니다." };

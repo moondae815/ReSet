@@ -123,7 +123,11 @@ namespace ReSet.Core.Services
             sb.AppendLine("- 프로젝트 골격과 폴더 구조 (Hexagonal Architecture)");
             sb.AppendLine($"- 빌드 환경 구성 및 필수 패키지 설치 ({ToolingPackages(inputs.TargetLanguage)})");
             sb.AppendLine("- 의존성 주입 등록과 Worker 진입점");
-            sb.AppendLine("- 커넥션 문자열 설정 파일과 `IDbConnectionFactory` 구현체");
+            // 배치 호스팅과 멀티 DB 연결 문자열 구성은 스캐폴딩을 세우는 이 회차에서만
+            // 필요하다. Step/Assembly 회차는 이 링크를 받지 않는다 - 이미 구성된
+            // 호스팅/DI를 다시 참조할 이유가 없고, "단계 상세 문서를 읽지 마십시오"와
+            // 같은 이유로 회차별 지시서는 그 회차가 읽어야 할 것만 가리켜야 한다.
+            sb.AppendLine("- 커넥션 문자열 설정 파일과 `IDbConnectionFactory` 구현체: [common/03-hosting-and-config.md](common/03-hosting-and-config.md)의 호스팅/DI 및 멀티 DB 연결 문자열 안내를 따를 것");
             sb.AppendLine("- `ICheckpointRepository` 구현체");
             sb.AppendLine("- `src/AbstractSettleTasklet.cs`를 프로젝트에 배치 (내용은 수정 금지)");
             sb.AppendLine("- `tests/ArchitectureTests.cs`를 프로젝트에 배치하고 통과시킬 것");
