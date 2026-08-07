@@ -49,8 +49,8 @@ namespace ReSet.Core.Tests
 
             var input = InputOf(spy);
             Assert.Equal(3, input.GetArrayLength());
-            Assert.Equal("SharedContext", input[1].GetProperty("content").GetString());
-            Assert.Equal("Now write step S01 ONLY.", input[2].GetProperty("content").GetString());
+            Assert.Equal("SharedContext", input[1].GetProperty("content")[0].GetProperty("text").GetString());
+            Assert.Equal("Now write step S01 ONLY.", input[2].GetProperty("content")[0].GetProperty("text").GetString());
             Assert.Equal("user", input[2].GetProperty("role").GetString());
         }
 
@@ -71,6 +71,80 @@ namespace ReSet.Core.Tests
             Assert.Equal(a[0].GetRawText(), b[0].GetRawText());
             Assert.Equal(a[1].GetRawText(), b[1].GetRawText());
             Assert.NotEqual(a[2].GetRawText(), b[2].GetRawText());
+        }
+
+        // 메시지를 나누는 것만으로는 부족했다 — 실측에서 cached_tokens가 2,062에서
+        // 2,060으로 그대로였다. 암묵적 breakpoint는 마지막 메시지 하나에만 놓이므로
+        // 공통 메시지 경계에는 아무것도 생기지 않는다. 캐시를 살리려면 그 경계를
+        // explicit breakpoint로 직접 표시해야 하고, breakpoint는 메시지가 아니라
+        // content 블록에 붙으므로 content가 타입 블록 배열이어야 한다.
+        [Fact]
+        public async Task Gpt5_MarksTheSharedMessageWithAnExplicitCacheBreakpoint()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync(
+                "SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S01 ONLY.");
+
+            var shared = InputOf(spy)[1].GetProperty("content")[0];
+            Assert.Equal("input_text", shared.GetProperty("type").GetString());
+            Assert.Equal("SharedContext", shared.GetProperty("text").GetString());
+            Assert.Equal(
+                "explicit",
+                shared.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
+        }
+
+        // breakpoint는 공통 메시지 경계 하나뿐이어야 한다. 가변 메시지에도 붙이면
+        // 그 지점의 접두사가 매번 달라 캐시가 살지 않고, 쓰기 비용만 늘어난다.
+        [Fact]
+        public async Task Gpt5_DoesNotMarkTheVolatileMessageWithABreakpoint()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync(
+                "SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S01 ONLY.");
+
+            var input = InputOf(spy);
+            Assert.False(input[2].GetProperty("content")[0].TryGetProperty(
+                "prompt_cache_breakpoint", out _));
+            Assert.False(input[0].GetProperty("content")[0].TryGetProperty(
+                "prompt_cache_breakpoint", out _));
+        }
+
+        // 블록 배열로 보낼 때는 세 메시지의 표현을 통일한다. 한 요청 안에서 문자열
+        // content와 블록 배열을 섞는 형태는 문서가 보증하지 않는다.
+        [Fact]
+        public async Task Gpt5_WithABreakpoint_SendsEveryMessageAsTypedBlocks()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync(
+                "SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S01 ONLY.");
+
+            foreach (var message in InputOf(spy).EnumerateArray())
+            {
+                Assert.Equal("message", message.GetProperty("type").GetString());
+                Assert.Equal(JsonValueKind.Array, message.GetProperty("content").ValueKind);
+                Assert.Equal("input_text", message.GetProperty("content")[0].GetProperty("type").GetString());
+            }
+        }
+
+        // 접미사가 없는 호출(브레인스토밍·목차·골격·리뷰)은 형식을 바꾸지 않는다.
+        // 얻을 캐시 이득이 없는데 표현만 바꾸면 400의 위험만 떠안는다.
+        [Fact]
+        public async Task Gpt5_WithoutAVolatileSuffix_KeepsThePlainStringContent()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 1.0f, effort: "high");
+
+            foreach (var message in InputOf(spy).EnumerateArray())
+            {
+                Assert.Equal(JsonValueKind.String, message.GetProperty("content").ValueKind);
+            }
         }
 
         [Fact]

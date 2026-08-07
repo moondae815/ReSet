@@ -42,6 +42,25 @@ namespace ReSet.Core.Services.Clients
 
         }
 
+        /// <summary>
+        /// Responses API의 타입 블록 메시지를 만든다. <paramref name="markBreakpoint"/>가
+        /// 참이면 그 블록에 explicit cache breakpoint를 달아, 이 블록과 그 앞의 모든 내용을
+        /// 캐시 접두사의 끝으로 지정한다.
+        /// </summary>
+        private static object TypedMessage(string role, string text, bool markBreakpoint)
+        {
+            object block = markBreakpoint
+                ? new
+                {
+                    type = "input_text",
+                    text,
+                    prompt_cache_breakpoint = new { mode = "explicit" }
+                }
+                : new { type = "input_text", text };
+
+            return new { type = "message", role, content = new[] { block } };
+        }
+
         public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, string? volatileUserSuffix = null, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(_apiKey) && _endpoint.Contains("openai.com"))
@@ -54,22 +73,36 @@ namespace ReSet.Core.Services.Clients
 
             if (isResponsesApi)
             {
-                // 가변 지시는 별개 메시지로 둔다. 여기에 이어 붙이면 공통 컨텍스트가
-                // 담긴 메시지의 내용이 요청마다 달라지고, 암묵적 cache breakpoint가
-                // 비교하는 접두사가 통째로 어긋나 캐시가 죽는다. 실측으로 113,142 토큰
-                // 중 2,062(system 크기)만 살아남았다.
+                // 가변 지시는 별개 메시지로 두고, 공통 메시지 경계를 explicit cache
+                // breakpoint로 직접 표시한다. 두 가지가 다 필요하다.
                 //
-                // 접미사가 비면 메시지를 만들지 않는다 — 빈 메시지 하나가 늘어나는 것
-                // 자체가 접두사를 바꿔, 접미사를 쓰지 않는 호출들끼리의 캐시를 깬다.
-                var messages = new List<object>
-                {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userPrompt }
-                };
+                // 이어 붙이면 공통 컨텍스트를 담은 메시지의 내용이 요청마다 달라져
+                // 캐시가 죽는다(실측 113,142 중 2,062만 생존). 그런데 메시지를 나누기만
+                // 해도 살지 않았다(2,060) — 암묵적 breakpoint는 **마지막 메시지 하나**에만
+                // 놓이므로 공통 메시지 경계에는 아무것도 생기지 않기 때문이다. 그 경계를
+                // 직접 찍어야 그 앞이 캐시된다.
+                //
+                // breakpoint는 메시지가 아니라 content 블록에 붙으므로, 찍는 요청은
+                // content를 타입 블록 배열로 보낸다. 표현은 세 메시지 모두 통일한다 —
+                // 한 요청 안에서 문자열과 블록 배열을 섞는 형태는 문서가 보증하지 않는다.
+                //
+                // 접미사가 비면 메시지를 만들지 않고 형식도 바꾸지 않는다. 빈 메시지
+                // 하나가 늘어나는 것 자체가 접두사를 바꿔 접미사 없는 호출들끼리의 캐시를
+                // 깨고, 얻을 이득이 없는 곳에서 표현만 바꾸면 위험만 떠안는다.
+                var hasVolatileSuffix = !string.IsNullOrWhiteSpace(volatileUserSuffix);
 
-                if (!string.IsNullOrWhiteSpace(volatileUserSuffix))
+                var messages = new List<object>();
+
+                if (hasVolatileSuffix)
                 {
-                    messages.Add(new { role = "user", content = volatileUserSuffix });
+                    messages.Add(TypedMessage("system", systemPrompt, markBreakpoint: false));
+                    messages.Add(TypedMessage("user", userPrompt, markBreakpoint: true));
+                    messages.Add(TypedMessage("user", volatileUserSuffix!, markBreakpoint: false));
+                }
+                else
+                {
+                    messages.Add(new { role = "system", content = systemPrompt });
+                    messages.Add(new { role = "user", content = userPrompt });
                 }
 
                 var requestBody = new Dictionary<string, object>
