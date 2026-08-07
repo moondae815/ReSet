@@ -2698,8 +2698,14 @@ namespace ReSet.Core.Services
                 var taskKey = $"step_{step.Code}";
                 progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                sections[step.Code] = await GenerateStepSectionWithFloorRetryAsync(
-                    step, steps, conventions, specs, targetLanguage, jobName, floorViolations, cancellationToken);
+                var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                    step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
+
+                sections[step.Code] = markdown;
+                if (violation != null)
+                {
+                    floorViolations[step.Code] = violation;
+                }
 
                 progressScope.CompleteTask(taskKey);
             }
@@ -2727,15 +2733,19 @@ namespace ReSet.Core.Services
         ///
         /// 재시도 후에도 미달이면 채택하고 기록만 한다. 여기서 문서 L1을 실패시키면
         /// 같은 결함으로 골격+단계 전체 재생성을 유발해 비용만 태운다.
+        ///
+        /// 위반 기록을 바깥 사전에 쓰지 않고 돌려주는 이유: 이 메서드는 여러 단계에
+        /// 대해 동시에 돈다. 공유 사전에 쓰면 잠금이 필요하고, 잠금이 있어도 기록이
+        /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
+        /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<string> GenerateStepSectionWithFloorRetryAsync(
+        private async Task<(string Markdown, string? FloorViolation)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
-            Dictionary<string, string> floorViolations,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
@@ -2769,7 +2779,7 @@ namespace ReSet.Core.Services
                 var stepResult = _validator.ValidateBatchStep(content, step);
                 if (stepResult.IsValid)
                 {
-                    return content;
+                    return (content, null);
                 }
 
                 _userInteraction.NotifyStatus(
@@ -2779,12 +2789,11 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
-                floorViolations[step.Code] = $"{step.Code} (생성 실패)";
-                return $"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n";
+                return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
+                    $"{step.Code} (생성 실패)");
             }
 
-            floorViolations[step.Code] = $"{step.Code} (하한 미달)";
-            return adopted;
+            return (adopted, $"{step.Code} (하한 미달)");
         }
 
         /// <summary>
