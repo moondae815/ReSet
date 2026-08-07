@@ -15,6 +15,10 @@ namespace ReSet.Core.Tests
 
 개요 본문
 
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
 ## 단계별 이행 상세 및 의사코드
 
 ### 공통 Tasklet 실행 계약
@@ -203,6 +207,128 @@ SELECT 1;
             Assert.True(result.Split);
             Assert.Contains("진짜 S01 본문", result.Steps["S01"]);
             Assert.Contains("진짜 S02 본문", result.Steps["S02"]);
+        }
+
+        [Fact]
+        public void Resolve_ShouldPutOverviewAndMermaidIntoArchitecture()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.True(slices.SkeletonSplit);
+            Assert.Contains("## 통합 배치 아키텍처 개요", slices.Architecture);
+            Assert.Contains("개요 본문", slices.Architecture);
+        }
+
+        [Fact]
+        public void Resolve_ShouldNotLeakStepDetailIntoArchitecture()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.DoesNotContain("정제된 S01 본문", slices.Architecture);
+            Assert.DoesNotContain("공통 규약 본문", slices.Architecture);
+        }
+
+        [Fact]
+        public void Resolve_ShouldExtractSharedConventionsIntoStepContract()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.NotNull(slices.StepContract);
+            Assert.Contains("공통 규약 본문", slices.StepContract!);
+            Assert.DoesNotContain("정제된 S01 본문", slices.StepContract!);
+        }
+
+        [Fact]
+        public void Resolve_ShouldExtractVerificationSql()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.NotNull(slices.Verification);
+            Assert.Contains("검증 SQL 본문", slices.Verification!);
+            Assert.DoesNotContain("정제된 S02 본문", slices.Verification!);
+        }
+
+        [Fact]
+        public void Resolve_ShouldCaptureBannerAsPreamble()
+        {
+            // L1Exhausted 배너는 문서 선두에 삽입된다. 첫 H2 앞의 내용을 버리면
+            // 그 경고가 산출물에서 사라진다.
+            var withBanner = "> 경고: 검증을 소진했습니다.\n\n" + FinalPlan;
+
+            var slices = PlanBoundaryResolver.Resolve(withBanner, LayoutWithSections());
+
+            Assert.Contains("검증을 소진했습니다", slices.Preamble);
+            Assert.DoesNotContain("검증을 소진했습니다", slices.Architecture);
+        }
+
+        [Fact]
+        public void Resolve_ShouldKeepSkeletonWhole_WhenAnH2IsMissing()
+        {
+            var missingVerification = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(missingVerification, LayoutWithSections());
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.Null(slices.Verification);
+            Assert.Null(slices.StepContract);
+            Assert.Contains("개요 본문", slices.Architecture);
+        }
+
+        [Fact]
+        public void Resolve_ShouldStillSplitSteps_WhenSkeletonSplitFails()
+        {
+            // 두 판정은 독립이다. 골격이 통짜로 남아도 회차당 입력에서 가장 큰 몫인
+            // 단계 상세는 여전히 분리되어야 한다.
+            var missingVerification = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(missingVerification, LayoutWithSections());
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.True(slices.StepsSplit);
+            Assert.Equal(2, slices.Steps.Count);
+        }
+
+        [Fact]
+        public void Resolve_ShouldKeepSkeletonWhole_WhenStepSplitFails()
+        {
+            // 단계 경계를 못 찾으면 StepContract를 잘라낼 기준점도 없다.
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, null);
+
+            Assert.False(slices.StepsSplit);
+            Assert.Null(slices.StepContract);
+            Assert.Contains("정제된 S01 본문", slices.Architecture);
         }
     }
 }

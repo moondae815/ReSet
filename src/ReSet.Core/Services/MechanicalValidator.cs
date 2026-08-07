@@ -53,7 +53,12 @@ namespace ReSet.Core.Services
             "비즈니스 흐름 시각화"
         };
 
-        private static readonly string[] RequiredConsolidatedHeaders = new[]
+        /// <summary>
+        /// 통합 계획서가 반드시 가져야 할 H2 네 개. L1이 이 존재를 강제하므로
+        /// PlanBoundaryResolver가 골격을 자를 때 같은 목록을 근거로 삼는다.
+        /// 두 곳이 서로 다른 이름을 말하면 분할이 조용히 실패한다.
+        /// </summary>
+        public static readonly string[] RequiredConsolidatedHeaders = new[]
         {
             "통합 배치 아키텍처 개요",
             "Mermaid 기반 통합 흐름도",

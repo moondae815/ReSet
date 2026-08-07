@@ -12,9 +12,30 @@ namespace ReSet.Core.Services
     /// <param name="Steps">단계 코드 → 최종 문서에서 잘라낸 본문. 실패하면 비어 있다.</param>
     /// <param name="Split">분할에 성공했는가. false면 호출부는 단일 파일 폴백을 취한다.</param>
     /// <param name="Warnings">사용자에게 보여줄 경고. 성공해도 2순위로 내려왔다면 비어 있지 않다.</param>
+    /// <param name="FirstStepLineIndex">첫 단계 헤딩의 줄 인덱스. 공통 규약을 잘라내는
+    /// 끝점이 된다. 분할에 실패하면 -1이다.</param>
     public sealed record StepBoundaryResult(
         IReadOnlyDictionary<string, string> Steps,
         bool Split,
+        IReadOnlyList<string> Warnings,
+        int FirstStepLineIndex);
+
+    /// <summary>
+    /// 최종 계획서를 산출물 파일 단위로 자른 결과.
+    /// </summary>
+    /// <param name="Preamble">첫 H2 앞의 내용. L1Exhausted 배너가 여기 실린다.</param>
+    /// <param name="Architecture">개요 + Mermaid 흐름도. 골격 분할이 실패하면 계획서 전문.</param>
+    /// <param name="StepContract">모든 단계가 공유하는 실행 계약. 잘라내지 못했으면 null.</param>
+    /// <param name="Verification">정합성 검증 SQL 세트. 잘라내지 못했으면 null.</param>
+    /// <param name="Steps">단계 코드 → 본문. 분할에 실패하면 비어 있다.</param>
+    public sealed record PlanSlices(
+        string Preamble,
+        string Architecture,
+        string? StepContract,
+        string? Verification,
+        IReadOnlyDictionary<string, string> Steps,
+        bool SkeletonSplit,
+        bool StepsSplit,
         IReadOnlyList<string> Warnings);
 
     /// <summary>
@@ -47,8 +68,8 @@ namespace ReSet.Core.Services
                 var anchored = TryLocateByAnchor(lines, layout.Sections!, warnings);
                 if (anchored != null)
                 {
-                    Log.Information("단계 경계를 조각 앵커로 결정했습니다 - 단계 수: {Count}개", anchored.Count);
-                    return new StepBoundaryResult(anchored, true, warnings);
+                    Log.Information("단계 경계를 조각 앵커로 결정했습니다 - 단계 수: {Count}개", anchored.Value.Steps.Count);
+                    return new StepBoundaryResult(anchored.Value.Steps, true, warnings, anchored.Value.FirstIndex);
                 }
             }
 
@@ -59,17 +80,17 @@ namespace ReSet.Core.Services
                 var byCode = TryLocateByCode(lines, layout.Steps, warnings);
                 if (byCode != null)
                 {
-                    Log.Information("단계 경계를 목차 단계 코드로 결정했습니다 - 단계 수: {Count}개", byCode.Count);
-                    return new StepBoundaryResult(byCode, true, warnings);
+                    Log.Information("단계 경계를 목차 단계 코드로 결정했습니다 - 단계 수: {Count}개", byCode.Value.Steps.Count);
+                    return new StepBoundaryResult(byCode.Value.Steps, true, warnings, byCode.Value.FirstIndex);
                 }
             }
 
             warnings.Add("단계 경계를 찾지 못했습니다. 계획서를 분할하지 않고 단일 파일로 유지합니다.");
             Log.Warning("단계 경계 결정 실패 - 단일 파일 폴백");
-            return new StepBoundaryResult(NoSteps, false, warnings);
+            return new StepBoundaryResult(NoSteps, false, warnings, -1);
         }
 
-        private static Dictionary<string, string>? TryLocateByAnchor(
+        private static (Dictionary<string, string> Steps, int FirstIndex)? TryLocateByAnchor(
             List<string> lines, IReadOnlyDictionary<string, string> sections, List<string> warnings)
         {
             var located = new List<(string Code, int Index)>();
@@ -97,7 +118,7 @@ namespace ReSet.Core.Services
             return Materialize(lines, located, warnings);
         }
 
-        private static Dictionary<string, string>? TryLocateByCode(
+        private static (Dictionary<string, string> Steps, int FirstIndex)? TryLocateByCode(
             List<string> lines, IReadOnlyList<BatchStepPlan> steps, List<string> warnings)
         {
             var located = new List<(string Code, int Index)>();
@@ -138,7 +159,7 @@ namespace ReSet.Core.Services
         /// 찾아낸 시작 인덱스들로 실제 본문을 잘라낸다. 각 단계는 다음 단계의 시작 직전까지이며,
         /// 마지막 단계는 다음 H2(= 검증 SQL 세트)에서 끝난다.
         /// </summary>
-        private static Dictionary<string, string>? Materialize(
+        private static (Dictionary<string, string> Steps, int FirstIndex)? Materialize(
             List<string> lines, List<(string Code, int Index)> located, List<string> warnings)
         {
             if (located.Count == 0)
@@ -189,7 +210,7 @@ namespace ReSet.Core.Services
                 result[ordered[i].Code] = body;
             }
 
-            return result;
+            return (result, ordered[0].Index);
         }
 
         /// <summary>조각에서 첫 헤딩 줄을 뽑는다. 이 줄이 최종 문서를 찾을 앵커가 된다.</summary>
@@ -200,6 +221,135 @@ namespace ReSet.Core.Services
                 lines, 0, line => line.TrimStart().StartsWith("#", StringComparison.Ordinal));
 
             return index < 0 ? null : lines[index].Trim();
+        }
+
+        /// <summary>
+        /// 최종 계획서를 산출물 파일 단위로 자른다.
+        ///
+        /// 골격 분할과 단계 분할은 독립적으로 판정한다. 골격의 H2 하나를 못 찾았다고
+        /// 단계 분할까지 포기하면, 회차당 입력에서 가장 큰 몫을 차지하는 단계 상세가
+        /// 통짜로 남아 이 작업의 목적 자체가 사라진다.
+        /// </summary>
+        public static PlanSlices Resolve(string finalPlanMarkdown, PlanLayout? layout)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(finalPlanMarkdown);
+            var steps = ResolveSteps(finalPlanMarkdown, layout);
+            var warnings = new List<string>(steps.Warnings);
+
+            var headings = MechanicalValidator.RequiredConsolidatedHeaders;
+            var positions = new int[headings.Length];
+            var allFound = true;
+
+            for (var i = 0; i < headings.Length; i++)
+            {
+                positions[i] = LocateH2(lines, headings[i]);
+                if (positions[i] < 0)
+                {
+                    warnings.Add($"골격 H2를 찾지 못했습니다: {headings[i]}");
+                    allFound = false;
+                }
+            }
+
+            // 순서가 어긋나면 헤딩 판정이 엉뚱한 줄을 잡은 것이다.
+            if (allFound)
+            {
+                for (var i = 1; i < positions.Length; i++)
+                {
+                    if (positions[i] <= positions[i - 1])
+                    {
+                        warnings.Add("골격 H2의 문서 내 순서가 기대와 달라 골격을 분할하지 않습니다.");
+                        allFound = false;
+                        break;
+                    }
+                }
+            }
+
+            var preamble = positions[0] > 0
+                ? Join(lines, 0, positions[0])
+                : string.Empty;
+
+            if (!allFound)
+            {
+                Log.Warning("골격 H2 탐색 실패 - 골격을 통짜로 유지합니다. 단계 분할 여부: {StepsSplit}", steps.Split);
+                return new PlanSlices(
+                    preamble,
+                    Join(lines, positions[0] > 0 ? positions[0] : 0, lines.Count),
+                    null,
+                    null,
+                    steps.Steps,
+                    SkeletonSplit: false,
+                    StepsSplit: steps.Split,
+                    warnings);
+            }
+
+            // 개요 + Mermaid = [H2①, H2③). 단, 단계 분할이 실패해 공통 규약을 잘라낼
+            // 기준점(첫 단계 헤딩)이 없으면 "단계별 이행 상세" 섹션 전체를 골격에 통짜로
+            // 남긴다. 그러지 않으면 그 구간이 어느 조각에도 속하지 못하고 사라진다.
+            var architectureEnd = steps.Split ? positions[2] : positions[3];
+            var architecture = Join(lines, positions[0], architectureEnd);
+
+            // 공통 규약 = (H2③, 첫 단계 헤딩). 단계 경계를 모르면 끝점을 정할 수 없다.
+            string? stepContract = null;
+            if (steps.Split && steps.FirstStepLineIndex > positions[2])
+            {
+                stepContract = Join(lines, positions[2] + 1, steps.FirstStepLineIndex);
+                if (stepContract.Length == 0)
+                {
+                    stepContract = null;
+                }
+            }
+
+            // 검증 SQL = [H2④, 다음 H2 또는 문서 끝)
+            var verificationEnd = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, positions[3] + 1,
+                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+            var verification = Join(lines, positions[3], verificationEnd < 0 ? lines.Count : verificationEnd);
+
+            Log.Information(
+                "골격을 분할했습니다 - 공통 규약: {HasContract}, 검증 SQL: {HasVerification}",
+                stepContract != null, verification.Length > 0);
+
+            return new PlanSlices(
+                preamble,
+                architecture,
+                stepContract,
+                verification.Length > 0 ? verification : null,
+                steps.Steps,
+                SkeletonSplit: true,
+                StepsSplit: steps.Split,
+                warnings);
+        }
+
+        /// <summary>
+        /// H2 헤딩을 찾는다. 정확 일치를 먼저 보고, 실패하면 이름 포함으로 완화한다.
+        /// 정제가 헤딩에 번호나 이모지를 덧붙이는 경우가 있어 정확 일치만으로는 놓친다.
+        /// </summary>
+        private static int LocateH2(IReadOnlyList<string> lines, string headingName)
+        {
+            var exact = "## " + headingName;
+            var index = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == exact);
+            if (index >= 0)
+            {
+                return index;
+            }
+
+            return MarkdownSectionLocator.FindIndexOutsideFence(lines, 0, line =>
+            {
+                var trimmed = line.TrimStart();
+                return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                    && trimmed.Contains(headingName, StringComparison.Ordinal);
+            });
+        }
+
+        private static string Join(IReadOnlyList<string> lines, int start, int end)
+        {
+            if (start < 0 || end <= start)
+            {
+                return string.Empty;
+            }
+
+            return string.Join("\n", lines.Skip(start).Take(end - start)).Trim();
         }
     }
 }
