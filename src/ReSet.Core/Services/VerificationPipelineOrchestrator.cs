@@ -1676,7 +1676,7 @@ namespace ReSet.Core.Services
             // provider 매개변수(Actor)가 아니라 Consolidator를 보는 이유: 단계 본문을
             // 실제로 만드는 것은 _consolidatorService다.
             if (_stepConcurrency > 1 &&
-                ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(_consolidatorService.ProviderName))
+                ReSet.Core.Services.Clients.AiClientFactory.IsSingleGpuLocalProvider(_consolidatorService.ProviderName))
             {
                 _userInteraction.NotifyStatus(
                     $"[yellow]{jobName}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
@@ -2804,9 +2804,23 @@ namespace ReSet.Core.Services
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
             string? adopted = null;
             string? floorFeedback = null;
+            // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
+            // rate limit 쪽뿐이다.
+            bool previousTryThrew = false;
 
             for (int tries = 0; tries < maxTries; tries++)
             {
+                if (previousTryThrew)
+                {
+                    // 동시 실행 중에는 429가 여러 단계를 같은 창에서 때린다. 무지연으로
+                    // 재시도하면 네 단계가 두 번의 시도를 모두 그 창 안에 쏟아붓고 함께
+                    // 강등된다. 무작위 지연이 상관된 폭풍을 흩트러진 재시도로 바꾼다.
+                    // 13분짜리 구간에서 1초는 무시할 만하다.
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(Random.Shared.Next(500, 1500)), cancellationToken);
+                }
+
+                previousTryThrew = false;
                 string? content = null;
                 try
                 {
@@ -2818,6 +2832,7 @@ namespace ReSet.Core.Services
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    previousTryThrew = true;
                     _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
                 }
 

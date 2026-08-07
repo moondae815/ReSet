@@ -4429,6 +4429,26 @@ SELECT 1;
         }
 
         /// <summary>
+        /// count개 단계짜리 분할 생성 fake의 공통 골격(브레인스토밍, 단계 JSON을 낸 목차,
+        /// 골격, 결함 없는 리뷰)만 배선한다. GenerateBatchStepSectionAsync는 배선하지
+        /// 않으므로 호출부가 직접 붙인다 — 동시성 관측(ConcurrencyProbe)이 필요 없는
+        /// 호출부(예: 취소 전파 테스트)가 죽은 인자 없이 이 fake를 쓸 수 있게 한다.
+        /// </summary>
+        private static IAiService ManyStepAiServiceBase(int count)
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + ManyStepsJson(count) });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonFor(count) });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+            return aiService;
+        }
+
+        /// <summary>
         /// count개 단계를 내는 분할 생성 fake. sectionFor가 null이면 전부 하한을 통과하는 섹션을 낸다.
         /// delayFor는 단계 코드별 지연(ms)을 정한다 — 완료 순서를 조작하는 데 쓴다.
         /// </summary>
@@ -4438,13 +4458,7 @@ SELECT 1;
             Func<string, int> delayFor,
             Func<string, string>? sectionFor = null)
         {
-            var aiService = Substitute.For<IAiService>();
-            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Brainstorm" });
-            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "## 목차\n" + ManyStepsJson(count) });
-            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = SkeletonFor(count) });
+            var aiService = ManyStepAiServiceBase(count);
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
                 {
@@ -4454,8 +4468,6 @@ SELECT 1;
                         : HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]);
                     return probe.RunAsync(step.Code, content, delayFor(step.Code));
                 });
-            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
             return aiService;
         }
 
@@ -4584,6 +4596,24 @@ SELECT 1;
             ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
         }
 
+        /// <summary>
+        /// vLLM은 IsLocalProvider(청킹 파이프라인 라우팅)에는 걸리지만, 연속 배칭
+        /// (continuous batching) 덕에 동시 실행이 오히려 유리한 백엔드라 "동시성을
+        /// 낮추라"는 이 경고의 대상이 아니다. AiClientFactory.IsSingleGpuLocalProvider가
+        /// vLLM을 제외해야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConsolidatorIsVllmAndConcurrencyAboveOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("vllm");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
         [Fact]
         public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyIsOne_DoesNotWarn()
         {
@@ -4681,7 +4711,7 @@ SELECT 1;
         {
             using var cts = new CancellationTokenSource();
             var calls = 0;
-            var aiService = ManyStepAiService(13, new ConcurrencyProbe(), _ => 30);
+            var aiService = ManyStepAiServiceBase(13);
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(async call =>
                 {
@@ -4870,6 +4900,93 @@ SELECT 1;
 
             Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 예외로 실패한 재시도만 지터 지연을 받는다(설계 판정 커밋 86413bf). 동시 실행 중
+        /// 429 하나가 여러 단계를 같은 창에서 때리는 상황을 무작위 지연으로 흩트러뜨리기
+        /// 위함이다. S01은 첫 호출에서 예외를 던지고 재시도에서 성공한다 — 두 호출 사이
+        /// 간격이 최소 지터(500ms)에 여유를 둔 400ms 이상이어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    if (s01CallTimestamps.Count == 1)
+                    {
+                        throw new InvalidOperationException("쿼터 초과");
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs >= 400,
+                $"예외 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 최소 지터(500ms)에 여유를 둔 400ms 하한에 못 미친다.");
+            Assert.Contains("### S01 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 하한 미달 재시도는 rate limit이 아니라 모델 출력 품질 문제이므로 지연이 없어야
+        /// 한다(설계 판정 커밋 86413bf). 예외 재시도 지터 테스트와 대비된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesWithoutDelay()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    return s01CallTimestamps.Count == 1
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs < 400,
+                $"하한 미달 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 지연이 없어야 하는데 지터가 섞여 들어간 것으로 보인다.");
         }
 
         /// <summary>
