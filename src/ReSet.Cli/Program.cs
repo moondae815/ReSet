@@ -2141,9 +2141,10 @@ namespace ReSet.Cli
             string selectedOption,
             string specificationMarkdown,
             VerificationOutcome outcome,
-            bool structureRedraftSupported = false) =>
+            bool structureRedraftSupported = false,
+            IReadOnlyList<BatchStepPlan>? steps = null) =>
             _interactiveUserInteraction.RequestHumanReviewAsync(
-                selectedOption, specificationMarkdown, outcome, structureRedraftSupported);
+                selectedOption, specificationMarkdown, outcome, structureRedraftSupported, steps);
 
         public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
             _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);

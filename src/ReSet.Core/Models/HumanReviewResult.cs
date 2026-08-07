@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace ReSet.Core.Models
 {
     public enum UserDecision
@@ -20,5 +22,23 @@ namespace ReSet.Core.Models
         /// 움직이는 값이므로 이미 피드백을 나르는 이 자리에 싣는다.
         /// </summary>
         public bool RedraftStructure { get; set; }
+
+        /// <summary>
+        /// 사용자가 지목한 재생성 대상 단계 코드. Decision이 ProvideFeedback이고
+        /// RedraftStructure가 false일 때만 의미가 있다.
+        ///
+        /// 비어 있으면 전체 재생성이다 — "아무것도 안 고름"과 "전체"를 같은 뜻으로
+        /// 둔다. 골격을 고른 경우에도 비운다(RegenerateSkeleton 주석 참조).
+        /// </summary>
+        public List<string> TargetStepCodes { get; set; } = new();
+
+        /// <summary>
+        /// 골격(개요·Mermaid 흐름도·검증 SQL 세트)도 다시 만들지 여부.
+        ///
+        /// 공통 규약이 골격에 있고 모든 단계 섹션이 그것을 전제로 쓰였으므로,
+        /// 이 값이 true면 TargetStepCodes는 비어야 한다 — 규약이 바뀌면 그것을
+        /// 인용한 섹션도 전부 다시 써야 한다.
+        /// </summary>
+        public bool RegenerateSkeleton { get; set; }
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Spectre.Console;
 using ReSet.Core.Models;
@@ -95,11 +96,47 @@ namespace ReSet.Cli
             Serilog.Log.Information($"[{selectedOption}] L1/L2 자동 검증 모두 통과!");
         }
 
+        /// <summary>
+        /// 단계 선택 목록에서 골격을 가리키는 항목. 매핑과 프롬프트가 같은
+        /// 문자열을 써야 하므로 상수로 둔다.
+        /// </summary>
+        public const string SkeletonSelectionLabel = "(골격) 개요 · Mermaid 흐름도 · 검증 SQL 세트";
+
+        /// <summary>
+        /// 다중 선택 결과를 재생성 대상으로 옮긴다.
+        ///
+        /// 프롬프트에서 분리한 이유: AnsiConsole은 단위 테스트에서 구동하기 어렵고,
+        /// 정작 틀리기 쉬운 것은 프롬프트가 아니라 이 매핑 규칙이다.
+        /// </summary>
+        public static (List<string> TargetStepCodes, bool RegenerateSkeleton) MapStepSelection(
+            IReadOnlyList<string> selectedLabels,
+            IReadOnlyList<BatchStepPlan> steps)
+        {
+            var regenerateSkeleton = selectedLabels.Contains(SkeletonSelectionLabel);
+
+            // 골격을 고르면 공통 규약이 바뀌므로 그것을 인용한 섹션이 전부 낡는다.
+            // 단계를 함께 골랐더라도 전체 재생성으로 승격한다.
+            if (regenerateSkeleton)
+            {
+                return (new List<string>(), true);
+            }
+
+            var codes = steps
+                .Where(step => selectedLabels.Contains(StepSelectionLabel(step)))
+                .Select(step => step.Code)
+                .ToList();
+
+            return (codes, false);
+        }
+
+        private static string StepSelectionLabel(BatchStepPlan step) => $"{step.Code}  {step.Name}";
+
         public async Task<HumanReviewResult> RequestHumanReviewAsync(
             string selectedOption,
             string specificationMarkdown,
             VerificationOutcome outcome,
-            bool structureRedraftSupported = false)
+            bool structureRedraftSupported = false,
+            IReadOnlyList<BatchStepPlan>? steps = null)
         {
             // 점수 필드는 여전히 문서 본문의 YAML 헤더에서 읽는다. 파이프라인 진행 중에는
             // 아직 헤더가 씌워지지 않아 항상 비어 있지만(VerificationDocumentFormatter가
@@ -173,12 +210,33 @@ namespace ReSet.Cli
             var redraftStructure = structureRedraftSupported && AnsiConsole.Confirm(
                 "이 피드백이 문서 구조(목차)까지 바꾸나요? (단계 추가/분할/순서 변경 등)", false);
 
+            // 구조가 바뀌면 단계 목록 자체가 바뀌므로 지금 고른 단계는 의미가 없다.
+            // 답을 쓸 곳이 있을 때만 묻는다 — 위 구조 질문과 같은 원칙이다.
+            var targetStepCodes = new List<string>();
+            var regenerateSkeleton = false;
+            if (!redraftStructure && steps is { Count: > 0 })
+            {
+                var choices = new List<string> { SkeletonSelectionLabel };
+                choices.AddRange(steps.Select(StepSelectionLabel));
+
+                var selected = AnsiConsole.Prompt(
+                    new MultiSelectionPrompt<string>()
+                        .Title("어느 단계에 대한 피드백입니까? [grey](Space로 선택, Enter로 확정, 미선택 시 전체)[/]")
+                        .NotRequired()
+                        .PageSize(20)
+                        .AddChoices(choices));
+
+                (targetStepCodes, regenerateSkeleton) = MapStepSelection(selected, steps);
+            }
+
             AnsiConsole.MarkupLine("[blue]사용자 피드백을 적용하여 보완 분석 프로세스를 재가동합니다...[/]");
             return new HumanReviewResult
             {
                 Decision = UserDecision.ProvideFeedback,
                 UserFeedback = userFeedback,
-                RedraftStructure = redraftStructure
+                RedraftStructure = redraftStructure,
+                TargetStepCodes = targetStepCodes,
+                RegenerateSkeleton = regenerateSkeleton
             };
         }
 
