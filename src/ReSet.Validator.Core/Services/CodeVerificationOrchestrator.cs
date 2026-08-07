@@ -40,13 +40,26 @@ namespace ReSet.Validator.Core.Services
             };
         }
 
-        public async Task<List<ValidationResult>> RunVerificationAsync(bool isBatchMode, CancellationToken cancellationToken = default)
+        public Task<List<ValidationResult>> RunVerificationAsync(
+            bool isBatchMode, CancellationToken cancellationToken = default) =>
+            RunVerificationAsync(isBatchMode, null, cancellationToken);
+
+        /// <summary>
+        /// explicitPairs가 주어지면 그 쌍만 검증한다. null이면 기존처럼 자동 탐색한다.
+        /// 회차 단위 실행이 L2 입력을 Job 전체가 아니라 단계 하나로 좁히기 위한 통로다.
+        /// </summary>
+        public async Task<List<ValidationResult>> RunVerificationAsync(
+            bool isBatchMode,
+            IReadOnlyList<ExplicitPair>? explicitPairs,
+            CancellationToken cancellationToken = default)
         {
-            Log.Information("[코드검증] 검증 오케스트레이션 시작 - BatchMode: {IsBatchMode}, SpecDir: {SpecDir}, CodeDir: {CodeDir}",
-                isBatchMode, _config.SpecDirectory, _config.SourceCodeDirectory);
+            Log.Information("[코드검증] 검증 오케스트레이션 시작 - BatchMode: {IsBatchMode}, SpecDir: {SpecDir}, CodeDir: {CodeDir}, 명시적 쌍: {HasExplicit}",
+                isBatchMode, _config.SpecDirectory, _config.SourceCodeDirectory, explicitPairs != null);
 
             _ui?.ShowInfo("1. 설계서 및 소스코드 매핑 구성 중...");
-            var mappedPairs = _mappingService.ResolveMappings(_config);
+            var mappedPairs = explicitPairs != null
+                ? _mappingService.ResolveMappings(_config, explicitPairs)
+                : _mappingService.ResolveMappings(_config);
 
             if (mappedPairs.Count == 0)
             {
