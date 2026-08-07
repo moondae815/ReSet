@@ -158,6 +158,12 @@ ReSet/
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
     "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
+    // [통합 배치] 단계 본문 동시 생성 수 (기본값: 4, 1이면 순차인 종전 동작). 첫 단계는 설정값과
+    // 무관하게 항상 단독 실행되어 프롬프트 접두사 캐시를 채운 뒤 나머지를 이 수만큼 동시 생성하며,
+    // 값을 올려도 전체 벽시계는 골격 호출(약 2분) 아래로 내려가지 않습니다. 로컬 모델(Ollama·mlx·
+    // local-openai)에서는 1을 권장 — 단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족해질
+    // 수 있고, 1을 넘기면 실행 시작 시 경고가 표시되지만 값이 강제로 바뀌지는 않습니다
+    "StepConcurrency": 4,
     "TimeoutSeconds": 3600,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
     "ActorEffort": "high",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
     "Critic": {

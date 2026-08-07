@@ -459,7 +459,23 @@ namespace ReSet.Cli
             var validator = new MechanicalValidator(useMermaidCli);
             var userInteraction = new ConsoleUserInteraction();
             var maxL2Attempts = configuration["AiSettings:MaxL2Attempts"] ?? "1";
-            
+            // 설정 키가 없거나 숫자가 아니면 실사용 기본값 4. 생성자 기본값(1)과 다른 것은
+            // 의도된 것이다 — 자세한 근거는 설계 문서 §4를 보라.
+            var stepConcurrencyRaw = configuration["AiSettings:StepConcurrency"];
+            if (!int.TryParse(stepConcurrencyRaw, out int stepConcurrency))
+            {
+                // 키가 아예 없으면 정상적인 기본값 사용이므로 조용히 넘어간다. 키는
+                // 있는데 숫자가 아니면(예: MaxL2Attempts를 따라 "unlimited"를 적었을 때)
+                // 값이 말없이 4로 바뀌는 것이므로 알린다.
+                if (!string.IsNullOrEmpty(stepConcurrencyRaw))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]경고: AiSettings:StepConcurrency 값('{Markup.Escape(stepConcurrencyRaw)}')이 숫자가 아니어서 기본값 4를 사용합니다.[/]");
+                }
+
+                stepConcurrency = 4;
+            }
+
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, 
                 aiService, 
@@ -473,7 +489,8 @@ namespace ReSet.Cli
                 actorEffort,
                 criticEffort,
                 consolidatorEffort,
-                criticThresholdScore
+                criticThresholdScore,
+                stepConcurrency
             );
             var recursiveOrchestrator = new VerificationPipelineOrchestrator(
                 dbService,
@@ -488,7 +505,8 @@ namespace ReSet.Cli
                 actorEffort,
                 criticEffort,
                 consolidatorEffort,
-                criticThresholdScore
+                criticThresholdScore,
+                stepConcurrency
             );
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
                 dbService,

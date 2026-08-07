@@ -13,6 +13,21 @@ namespace ReSet.Core.Services.Clients
         }
 
         /// <summary>
+        /// 단일 GPU를 공유해 동시 실행이 순차보다 느려지거나 메모리가 터질 수 있는
+        /// 로컬 provider인가. <see cref="IsLocalProvider"/>와 달리 vLLM은 제외한다 —
+        /// vLLM은 연속 배칭(continuous batching)이 강점이라 동시 요청을 묶어 처리량을
+        /// 올리므로, "동시성을 낮추라"는 조언이 다른 로컬 provider와 반대로 뒤집힌다.
+        /// StepConcurrency 경고처럼 "동시 실행을 줄이라"는 조언이 맞는지 여부를
+        /// 판정할 때만 쓰고, 청킹 파이프라인 등 다른 로컬 전용 분기는 계속
+        /// <see cref="IsLocalProvider"/>를 써야 한다.
+        /// </summary>
+        public static bool IsSingleGpuLocalProvider(string provider)
+        {
+            var p = provider?.ToLowerInvariant();
+            return p == "ollama" || p == "local-openai" || p == "mlx";
+        }
+
+        /// <summary>
         /// 로컬에 설치된 CLI 코딩 에이전트를 백엔드로 쓰는 provider인가.
         /// API 키가 필요 없고, 무인 배치 모드에서는 사용할 수 없다.
         /// </summary>

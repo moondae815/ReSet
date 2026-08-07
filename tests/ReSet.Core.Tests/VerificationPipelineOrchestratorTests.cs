@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -4372,6 +4373,104 @@ SELECT 1;
         private static string HealthyStepSection(string code, string table, string errorCode) =>
             $"### {code} 단계\n\n대상은 {table}이고 오류코드는 {errorCode}이다.\n\n```sql\nSELECT 1;\n```";
 
+        /// <summary>하한을 통과하지 못하는 섹션 — 코드 블록이 없다.</summary>
+        private static string SubFloorStepSection(string code) =>
+            $"### {code} 단계\n\n산문만 있고 코드 블록이 없다.\n";
+
+        /// <summary>S01..S{count} 짜리 단계 목록 JSON. 각 단계의 대상 테이블·오류코드는 코드에서 파생된다.</summary>
+        private static string ManyStepsJson(int count)
+        {
+            var items = Enumerable.Range(1, count).Select(i =>
+                $@"    {{ ""Code"": ""S{i:D2}"", ""Name"": ""{i}번 단계"", ""TargetTables"": [""dbo.T{i:D2}""], ""ErrorCodes"": [""-{i}""] }}");
+            return "```json\n{\n  \"Steps\": [\n" + string.Join(",\n", items) + "\n  ]\n}\n```";
+        }
+
+        /// <summary>단계 목록에 맞는 골격. 각 단계 자리에 STEP 플레이스홀더를 둔다.</summary>
+        private static string SkeletonFor(int count)
+        {
+            var placeholders = string.Join("\n", Enumerable.Range(1, count).Select(i => $"<!-- STEP:S{i:D2} -->"));
+            return SkeletonMarkdown.Replace("<!-- STEP:S01 -->\n<!-- STEP:S02 -->", placeholders);
+        }
+
+        /// <summary>
+        /// 단계 본문 생성 호출의 동시 실행 수와 시간 구간을 관측한다.
+        /// 테스트 ①(상한), ②(워밍이 단독인가), ③(완료 순서 무관)이 공유한다.
+        /// </summary>
+        private sealed class ConcurrencyProbe
+        {
+            private int _current;
+            private int _max;
+            private readonly List<(string Code, long Start, long End)> _spans = new();
+            private readonly object _lock = new();
+
+            public int MaxObserved => Volatile.Read(ref _max);
+
+            public IReadOnlyList<(string Code, long Start, long End)> Spans
+            {
+                get { lock (_lock) { return _spans.ToList(); } }
+            }
+
+            public async Task<AiResult> RunAsync(string code, string content, int delayMs)
+            {
+                var now = Interlocked.Increment(ref _current);
+                int seen;
+                while (now > (seen = Volatile.Read(ref _max)) &&
+                       Interlocked.CompareExchange(ref _max, now, seen) != seen)
+                {
+                }
+
+                var start = Stopwatch.GetTimestamp();
+                await Task.Delay(delayMs);
+                var end = Stopwatch.GetTimestamp();
+                Interlocked.Decrement(ref _current);
+                lock (_lock) { _spans.Add((code, start, end)); }
+                return new AiResult { Content = content };
+            }
+        }
+
+        /// <summary>
+        /// count개 단계짜리 분할 생성 fake의 공통 골격(브레인스토밍, 단계 JSON을 낸 목차,
+        /// 골격, 결함 없는 리뷰)만 배선한다. GenerateBatchStepSectionAsync는 배선하지
+        /// 않으므로 호출부가 직접 붙인다 — 동시성 관측(ConcurrencyProbe)이 필요 없는
+        /// 호출부(예: 취소 전파 테스트)가 죽은 인자 없이 이 fake를 쓸 수 있게 한다.
+        /// </summary>
+        private static IAiService ManyStepAiServiceBase(int count)
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + ManyStepsJson(count) });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonFor(count) });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+            return aiService;
+        }
+
+        /// <summary>
+        /// count개 단계를 내는 분할 생성 fake. sectionFor가 null이면 전부 하한을 통과하는 섹션을 낸다.
+        /// delayFor는 단계 코드별 지연(ms)을 정한다 — 완료 순서를 조작하는 데 쓴다.
+        /// </summary>
+        private static IAiService ManyStepAiService(
+            int count,
+            ConcurrencyProbe probe,
+            Func<string, int> delayFor,
+            Func<string, string>? sectionFor = null)
+        {
+            var aiService = ManyStepAiServiceBase(count);
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    var content = sectionFor != null
+                        ? sectionFor(step.Code)
+                        : HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]);
+                    return probe.RunAsync(step.Code, content, delayFor(step.Code));
+                });
+            return aiService;
+        }
+
         /// <summary>
         /// 배치 파이프라인을 세우는 반복 패턴(오케스트레이터 생성 + RunConsolidatedPipelineAsync
         /// 호출 + 임시 출력 디렉터리)을 뽑은 도우미. isBatchMode: true가 필수다 —
@@ -4408,6 +4507,23 @@ SELECT 1;
             var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
             return await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: isBatchMode);
+        }
+
+        /// <summary>
+        /// RunBatchPipeline과 같되 stepConcurrency를 명시적으로 넘긴다.
+        /// 기본값 1에 기대는 99개 기존 호출부를 건드리지 않기 위해 별도 도우미로 둔다.
+        /// </summary>
+        private async Task<ConsolidatedPipelineResult> RunBatchPipelineWithConcurrency(
+            IAiService aiService, IVerificationUserInteraction userInteraction, int stepConcurrency)
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8, stepConcurrency);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            return await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
         }
 
         /// <summary>
@@ -4466,6 +4582,185 @@ SELECT 1;
             Assert.Contains("### S01 단계", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
             Assert.DoesNotContain("<!-- STEP:", result.Plan);
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyAboveOne_WarnsOnce()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        /// <summary>
+        /// vLLM은 IsLocalProvider(청킹 파이프라인 라우팅)에는 걸리지만, 연속 배칭
+        /// (continuous batching) 덕에 동시 실행이 오히려 유리한 백엔드라 "동시성을
+        /// 낮추라"는 이 경고의 대상이 아니다. AiClientFactory.IsSingleGpuLocalProvider가
+        /// vLLM을 제외해야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConsolidatorIsVllmAndConcurrencyAboveOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("vllm");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyIsOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 1);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        /// <summary>
+        /// ① 동시 실행 수가 설정값을 넘지 않는다. 세마포어를 지우면 13을 관측하고 실패한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithStepConcurrencyFour_NeverExceedsFourInFlight()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(13, probe, _ => 60);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            Assert.True(probe.MaxObserved <= 4, $"관측된 최대 동시 실행 수가 {probe.MaxObserved}였다.");
+            Assert.True(probe.MaxObserved > 1, "병렬이 전혀 일어나지 않았다 — 팬아웃이 동작하지 않는다.");
+        }
+
+        /// <summary>
+        /// ② 첫 단계는 항상 단독으로 돈다. 이것이 프롬프트 접두사 캐시 이점의
+        /// 유일한 기계적 보증이다 — 없으면 누군가 워밍을 "불필요한 직렬화"로 보고 지운다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WarmsCacheBeforeFanningOut()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(13, probe, _ => 60);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            var spans = probe.Spans;
+            var first = spans.Single(s => s.Code == "S01");
+            var earliestOther = spans.Where(s => s.Code != "S01").Min(s => s.Start);
+            Assert.True(first.End <= earliestOther,
+                "S01이 끝나기 전에 다른 단계가 시작됐다 — 캐시 워밍이 깨졌다.");
+        }
+
+        /// <summary>
+        /// ③④ 완료 순서와 동시 실행 수가 산출물을 바꾸지 않는다.
+        /// 순차(1), 팬아웃(4, 정방향 지연), 팬아웃(4, 역방향 지연) 세 실행이 같은 문서를 낸다.
+        /// 병렬화가 산출물을 바꾸지 않는다는 것이 이 설계의 전제이므로 전제 자체를 단언한다.
+        ///
+        /// 이 테스트가 잡는 것은 병합 "순서"가 아니다 — 문서 본문은 steps 목록에서 다시
+        /// 조립되고 배너는 Key로 정렬되므로, 병합이 완료 순서였어도 이 단언들은 통과한다.
+        /// 실제로 잡는 것은 잠금 없는 Dictionary 동시 쓰기로 인한 유실·손상과,
+        /// 동시 실행이 산출물을 바꾸지 않는다는 종단 간 불변식이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_ProducesSameDocumentRegardlessOfConcurrencyOrCompletionOrder()
+        {
+            const int count = 8;
+            // S03과 S06은 하한을 통과하지 못한다 — 배너 내용까지 비교 대상에 넣기 위함.
+            Func<string, string> sections = code =>
+                code is "S03" or "S06"
+                    ? SubFloorStepSection(code)
+                    : HealthyStepSection(code, $"dbo.T{code.Substring(1)}", $"-{int.Parse(code.Substring(1))}");
+
+            var sequential = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), _ => 1, sections),
+                Substitute.For<IVerificationUserInteraction>(), 1);
+
+            var forward = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), code => int.Parse(code.Substring(1)) * 10, sections),
+                Substitute.For<IVerificationUserInteraction>(), 4);
+
+            // 역방향: S08이 가장 먼저, S01이 가장 늦게 끝난다.
+            var reverse = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), code => (count + 1 - int.Parse(code.Substring(1))) * 10, sections),
+                Substitute.For<IVerificationUserInteraction>(), 4);
+
+            Assert.Equal(sequential.Plan, forward.Plan);
+            Assert.Equal(sequential.Plan, reverse.Plan);
+            // 셋 다 실제로 하한 배너를 달고 있어야 비교가 의미를 갖는다.
+            Assert.Contains("[하한 미달]", sequential.Plan);
+            Assert.Contains("S03 (하한 미달)", sequential.Plan);
+            Assert.Contains("S06 (하한 미달)", sequential.Plan);
+        }
+
+        /// <summary>
+        /// ⑤ 팬아웃 도중의 취소가 삼켜지지 않고 호출부까지 올라온다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenCancelledDuringFanOut_PropagatesCancellation()
+        {
+            using var cts = new CancellationTokenSource();
+            var calls = 0;
+            var aiService = ManyStepAiServiceBase(13);
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(async call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (Interlocked.Increment(ref calls) >= 3)
+                    {
+                        cts.Cancel();
+                    }
+                    await Task.Delay(30, call.Arg<CancellationToken>());
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), Substitute.For<IVerificationUserInteraction>(),
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8, 4);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                orchestrator.RunConsolidatedPipelineAsync(
+                    specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot,
+                    isBatchMode: true, cancellationToken: cts.Token));
+        }
+
+        /// <summary>
+        /// ⑥ 생성자의 Math.Max(1, ...) 절상이 실제로 막는 것. 절상이 없으면
+        /// new SemaphoreSlim(0)이 슬롯을 하나도 내주지 않아 단계 생성이 영구 대기한다 —
+        /// StepConcurrency에 0을 적은 사용자의 실행이 그대로 멈춘다는 뜻이다.
+        /// 절상이 살아 있으면 슬롯 1개짜리 완전 순차로 정상 완주한다.
+        ///
+        /// Task 1에서 이 커버리지를 만들 수 없었던 이유: 그 시점에는 _stepConcurrency가
+        /// 로컬 공급자 경고(> 1일 때만 발동)에만 쓰여, 원값 0·-5가 절상 전에도 이미
+        /// > 1이 아니라 어떤 단언도 절상의 유무를 구분하지 못했다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConcurrencyIsZero_ClampsToOneAndCompletes()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(4, probe, _ => 1);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            var run = RunBatchPipelineWithConcurrency(aiService, ui, 0);
+            var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)));
+            Assert.Same(run, finished);   // 절상이 없으면 여기서 타임아웃한다
+
+            var result = await run;
+            Assert.Equal(1, probe.MaxObserved);   // 슬롯 1개 = 완전 순차
+            Assert.Contains("### S01 단계", result.Plan);
+            Assert.Contains("### S04 단계", result.Plan);
         }
 
         [Fact]
@@ -4605,6 +4900,93 @@ SELECT 1;
 
             Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 예외로 실패한 재시도만 지터 지연을 받는다(설계 판정 커밋 86413bf). 동시 실행 중
+        /// 429 하나가 여러 단계를 같은 창에서 때리는 상황을 무작위 지연으로 흩트러뜨리기
+        /// 위함이다. S01은 첫 호출에서 예외를 던지고 재시도에서 성공한다 — 두 호출 사이
+        /// 간격이 최소 지터(500ms)에 여유를 둔 400ms 이상이어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    if (s01CallTimestamps.Count == 1)
+                    {
+                        throw new InvalidOperationException("쿼터 초과");
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs >= 400,
+                $"예외 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 최소 지터(500ms)에 여유를 둔 400ms 하한에 못 미친다.");
+            Assert.Contains("### S01 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 하한 미달 재시도는 rate limit이 아니라 모델 출력 품질 문제이므로 지연이 없어야
+        /// 한다(설계 판정 커밋 86413bf). 예외 재시도 지터 테스트와 대비된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesWithoutDelay()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    return s01CallTimestamps.Count == 1
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs < 400,
+                $"하한 미달 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 지연이 없어야 하는데 지터가 섞여 들어간 것으로 보인다.");
         }
 
         /// <summary>

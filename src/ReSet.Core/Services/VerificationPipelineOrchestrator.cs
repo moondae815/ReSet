@@ -27,6 +27,7 @@ namespace ReSet.Core.Services
         private readonly string? _criticEffort;
         private readonly string? _consolidatorEffort;
         private readonly int _criticScoreThreshold;
+        private readonly int _stepConcurrency;
 
         public VerificationPipelineOrchestrator(
             IDbMetadataService dbService,
@@ -41,7 +42,8 @@ namespace ReSet.Core.Services
             string? actorEffort = null,
             string? criticEffort = null,
             string? consolidatorEffort = null,
-            int criticScoreThreshold = 8)
+            int criticScoreThreshold = 8,
+            int stepConcurrency = 1)     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -55,6 +57,8 @@ namespace ReSet.Core.Services
             _criticEffort = criticEffort;
             _consolidatorEffort = consolidatorEffort;
             _criticScoreThreshold = criticScoreThreshold;
+            // 0·음수는 1로 절상한다. 상한은 두지 않는다 — 사용자가 12를 원하면 12를 쓴다.
+            _stepConcurrency = Math.Max(1, stepConcurrency);
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -1660,6 +1664,25 @@ namespace ReSet.Core.Services
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
             }
 
+            // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
+            // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
+            // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
+            //
+            // 로컬 모델은 보통 단일 GPU를 공유하므로 동시 실행이 순차보다 느리거나
+            // 메모리가 터진다. 값을 조용히 1로 뒤집지 않는 이유: 사용자가 명시한
+            // 설정을 말없이 무시하는 것보다 이유를 말하고 그대로 두는 편이 정직하고,
+            // 증상이 "그냥 느림"이라 경고가 없으면 원인을 찾을 길이 없다.
+            //
+            // provider 매개변수(Actor)가 아니라 Consolidator를 보는 이유: 단계 본문을
+            // 실제로 만드는 것은 _consolidatorService다.
+            if (_stepConcurrency > 1 &&
+                ReSet.Core.Services.Clients.AiClientFactory.IsSingleGpuLocalProvider(_consolidatorService.ProviderName))
+            {
+                _userInteraction.NotifyStatus(
+                    $"[yellow]{jobName}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
+                    "단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족할 수 있습니다 — appsettings.json의 AiSettings:StepConcurrency를 1로 낮추는 것을 권장합니다.");
+            }
+
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
@@ -2578,6 +2601,12 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
+        /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
+        /// </summary>
+        private sealed record StepSectionResult(string Code, string Markdown, string? FloorViolation);
+
+        /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
         ///
         /// 이 경로가 존재하는 이유: 단일 호출은 모델이 하나의 출력 예산 안에서
@@ -2669,16 +2698,69 @@ namespace ReSet.Core.Services
                 floorViolations.Remove(step.Code);
             }
 
-            for (int index = 0; index < pending.Count; index++)
+            // 동시 실행 수 제한. Dispose하지 않는다 — SemaphoreSlim이 Dispose로 놓는
+            // 자원은 지연 할당되는 AvailableWaitHandle뿐이고 이 코드는 그것을 쓰지
+            // 않으므로, 놓을 것이 애초에 없다.
+            //
+            // (Dispose가 위험해서가 아니다. 아래 Task.WhenAll은 넘긴 태스크가 전부
+            // 끝난 뒤에야 반환하거나 던지므로 — 조기 이탈 경로가 없다 — 그 시점에
+            // Release를 호출할 태스크는 남아 있지 않다. 할 일이 없는 using은 그것이
+            // 필요하다는 인상만 남긴다.)
+            var gate = new SemaphoreSlim(_stepConcurrency);
+
+            async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)
             {
-                var step = pending[index];
-                var taskKey = $"step_{step.Code}";
-                progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
+                await gate.WaitAsync(cancellationToken);
+                try
+                {
+                    // 진행률 행은 슬롯을 잡은 뒤에 추가한다. 먼저 추가하면 대기 중인
+                    // 단계까지 전부 "생성 중"으로 떠서, 실제로는 넷만 돌고 있다는
+                    // 사실이 화면에서 사라진다.
+                    var taskKey = $"step_{step.Code}";
+                    progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                sections[step.Code] = await GenerateStepSectionWithFloorRetryAsync(
-                    step, steps, conventions, specs, targetLanguage, jobName, floorViolations, cancellationToken);
+                    var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                        step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
 
-                progressScope.CompleteTask(taskKey);
+                    progressScope.CompleteTask(taskKey);
+                    return new StepSectionResult(step.Code, markdown, violation);
+                }
+                finally
+                {
+                    // 슬롯은 단계당 재시도 2회를 모두 감싼 채 유지했다가 여기서 놓는다.
+                    // 재시도 사이에 놓으면 다른 단계가 끼어들어 동시 요청 수가 설정값을 넘는다.
+                    gate.Release();
+                }
+            }
+
+            // 워밍: 첫 단계를 끝까지 기다린 뒤에야 나머지를 띄운다. 프롬프트 접두사
+            // 캐시는 요청이 "완료돼야" 채워지므로, N개를 동시에 쏘면 N개 전부 미스다.
+            // 13단계·동시 4 기준으로 워밍이 있든 없든 4라운드로 같지만, 미스는
+            // 4회에서 1회로 준다 — 벽시계를 쓰지 않고 얻는 이득이다.
+            //
+            // 이 await가 워밍의 유일한 보증이다. 세마포어가 아니다 — 슬롯이 여러
+            // 개여도 두 번째 호출은 여기서 시작조차 하지 않는다. 지우지 말 것.
+            var stepResults = new List<StepSectionResult>(pending.Count);
+            if (pending.Count > 0)
+            {
+                stepResults.Add(await RunStepAsync(pending[0], 0));
+            }
+
+            if (pending.Count > 1)
+            {
+                var rest = pending.Skip(1).Select((step, offset) => RunStepAsync(step, offset + 1)).ToList();
+                stepResults.AddRange(await Task.WhenAll(rest));
+            }
+
+            // 병합은 단일 스레드에서 목록 순서대로. Task.WhenAll은 완료 순서가 아니라
+            // 넘긴 순서로 결과를 돌려주므로, 사전에 들어가는 순서가 결정적이다.
+            foreach (var stepResult in stepResults)
+            {
+                sections[stepResult.Code] = stepResult.Markdown;
+                if (stepResult.FloorViolation != null)
+                {
+                    floorViolations[stepResult.Code] = stepResult.FloorViolation;
+                }
             }
 
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
@@ -2704,23 +2786,41 @@ namespace ReSet.Core.Services
         ///
         /// 재시도 후에도 미달이면 채택하고 기록만 한다. 여기서 문서 L1을 실패시키면
         /// 같은 결함으로 골격+단계 전체 재생성을 유발해 비용만 태운다.
+        ///
+        /// 위반 기록을 바깥 사전에 쓰지 않고 돌려주는 이유: 이 메서드는 여러 단계에
+        /// 대해 동시에 돈다. 공유 사전에 쓰면 잠금이 필요하고, 잠금이 있어도 기록이
+        /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
+        /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<string> GenerateStepSectionWithFloorRetryAsync(
+        private async Task<(string Markdown, string? FloorViolation)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
-            Dictionary<string, string> floorViolations,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
             string? adopted = null;
             string? floorFeedback = null;
+            // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
+            // rate limit 쪽뿐이다.
+            bool previousTryThrew = false;
 
             for (int tries = 0; tries < maxTries; tries++)
             {
+                if (previousTryThrew)
+                {
+                    // 동시 실행 중에는 429가 여러 단계를 같은 창에서 때린다. 무지연으로
+                    // 재시도하면 네 단계가 두 번의 시도를 모두 그 창 안에 쏟아붓고 함께
+                    // 강등된다. 무작위 지연이 상관된 폭풍을 흩트러진 재시도로 바꾼다.
+                    // 13분짜리 구간에서 1초는 무시할 만하다.
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(Random.Shared.Next(500, 1500)), cancellationToken);
+                }
+
+                previousTryThrew = false;
                 string? content = null;
                 try
                 {
@@ -2732,6 +2832,7 @@ namespace ReSet.Core.Services
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    previousTryThrew = true;
                     _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
                 }
 
@@ -2746,7 +2847,7 @@ namespace ReSet.Core.Services
                 var stepResult = _validator.ValidateBatchStep(content, step);
                 if (stepResult.IsValid)
                 {
-                    return content;
+                    return (content, null);
                 }
 
                 _userInteraction.NotifyStatus(
@@ -2756,12 +2857,11 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
-                floorViolations[step.Code] = $"{step.Code} (생성 실패)";
-                return $"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n";
+                return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
+                    $"{step.Code} (생성 실패)");
             }
 
-            floorViolations[step.Code] = $"{step.Code} (하한 미달)";
-            return adopted;
+            return (adopted, $"{step.Code} (하한 미달)");
         }
 
         /// <summary>
