@@ -236,20 +236,30 @@ ReSet/
     "UseMermaidCli": true          // [설정] mmdc(mermaid-cli)를 이용한 Mermaid 실시간 렌더링 검사 수행 여부 (기본값: true)
   },
   "CodegenSettings": {
-    "Enabled": false,                     // [설정] 분석 완료 후 코딩 에이전트 브릿지 자동 실행 활성화 여부
-    "Engine": "claude",                   // [설정] 기본 코딩 엔진 ("claude" | "agy" | "codex")
+    "Enabled": false,                      // [설정] 분석 완료 후 코딩 에이전트 브릿지 자동 실행 활성화 여부
+    "Engine": "claude",                    // [설정] 기본 코딩 엔진 ("claude" | "agy" | "codex")
     "Engines": {
       "claude": {
-        "Command": "claude",              // 실행할 Claude CLI 명령어
-        "Arguments": "\"write code using {instructions}\"" // 인자 양식 ({instructions}에 지시서 절대 경로가 자동 바인딩)
+        "Command": "claude",                // 실행할 Claude CLI 명령어
+        "Arguments": "--model claude-sonnet-5 \"write code using {instructions}\"", // 대화형 기동 인자
+        // 무인 배치 인자. {jobDir}은 지시서가 cwd(<job>/src) 바깥에 있어 필요하다.
+        // [주의] --add-dir는 가변 인자라 반드시 프롬프트보다 앞에 두어야 한다.
+        "BatchArguments": "--add-dir {jobDir} --model claude-sonnet-5 --permission-mode acceptEdits -p \"write code using {instructions}\""
       },
       "agy": {
-        "Command": "agy",                 // Antigravity CLI 명령어 (https://antigravity.google/docs/cli-overview)
-        "Arguments": "--prompt-interactive \"{instructions} 파일을 읽고 지시사항과 체크리스트에 따라 점진적으로 통합 배치 코드를 작성해줘.\""
+        "Command": "agy",                   // Antigravity CLI 명령어. gemini-3.1-pro는 --effort(low|high) 동반 필수
+        "Arguments": "--model gemini-3.1-pro --effort high --prompt-interactive \"{instructions} 파일을 읽고 지시사항과 체크리스트에 따라 점진적으로 통합 배치 코드를 작성해줘.\"",
+        // [무인 배치 미지원] agy에는 claude의 acceptEdits나 codex의 샌드박스에 해당하는
+        // 중간 단계가 없다. --dangerously-skip-permissions는 툴 22종(run_command 포함)을
+        // 무조건 승인해 무인 배치에서 임의 명령 실행을 허용하므로 기본값으로 두지 않는다.
+        "BatchArguments": ""
       },
       "codex": {
-        "Command": "codex",               // Codex CLI 명령어 (https://developers.openai.com/codex/cli/features)
-        "Arguments": "\"{instructions}\""
+        "Command": "codex",                 // Codex CLI 명령어
+        "Arguments": "-m gpt-5.6-terra \"{instructions}\"", // 대화형 기동 인자
+        // --full-auto가 없으면 git 저장소가 아닌 job 디렉터리에서 읽기 전용 샌드박스로
+        // 떨어져 파일을 쓰지 못한다.
+        "BatchArguments": "exec -m gpt-5.6-terra --skip-git-repo-check --full-auto \"{instructions}\""
       }
     }
   }
