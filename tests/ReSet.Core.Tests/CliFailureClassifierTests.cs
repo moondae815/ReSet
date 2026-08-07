@@ -250,6 +250,46 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("[추가 진단]", exception.Message);
         }
 
+        // Finding 2: BuildAbortReason(CodegenWorkflowOrchestrator)이 재사용하던 ToException은
+        // 분석 경로(AiSettings:Providers:*)용 구제책 문구를 담고 있었다. 코딩 에이전트
+        // 브릿지에서는 CodegenSettings:Engine을 가리켜야 하고, "claude-cli 또는 API provider로
+        // 변경하십시오" 같은 문구는 애초에 코딩 에이전트 브릿지에는 툴이 켜져 있는 것이
+        // 정상이라는 전제와 모순된다.
+        [Fact]
+        public void ToCodegenAbortException_ToolPermissionDenied_PointsAtCodegenSettingsEngine()
+        {
+            var exception = CliFailureClassifier.ToCodegenAbortException(
+                "agy", "agy", CliFailureKind.ToolPermissionDenied, exitCode: 0, diagnostic: AgyPermissionDeniedStderr);
+
+            Assert.Contains("CodegenSettings:Engines:agy:BatchArguments", exception.Message);
+            Assert.Contains("CodegenSettings:Engine", exception.Message);
+            // 분석 경로 전용 구제책("claude-cli 또는 API provider로 변경")이 새어 들어오면
+            // codegen에서는 claude-cli가 유효한 CodegenSettings:Engine 값이 아니므로 오도한다.
+            Assert.DoesNotContain("API provider로 변경하십시오", exception.Message);
+            Assert.DoesNotContain("종료 코드: 0", exception.Message);
+        }
+
+        [Fact]
+        public void ToCodegenAbortException_QuotaExhausted_PointsAtCodegenSettingsEngine()
+        {
+            var exception = CliFailureClassifier.ToCodegenAbortException(
+                "codex", "codex", CliFailureKind.QuotaExhausted, exitCode: 1, diagnostic: "usage limit reached");
+
+            Assert.Contains("CodegenSettings:Engine", exception.Message);
+            Assert.DoesNotContain("다른 CLI provider 또는 API provider로 변경", exception.Message);
+        }
+
+        [Fact]
+        public void ToCodegenAbortException_DoesNotReclassify_UsesGivenKindAsIs()
+        {
+            // diagnostic이 null(대화형 실행)이어도 이미 알려진 FailureKind를 그대로 써야 한다.
+            // 여기서 다시 Classify를 돌리면 빈 문자열에서 Unknown만 나온다.
+            var exception = CliFailureClassifier.ToCodegenAbortException(
+                "claude", "claude", CliFailureKind.NotAuthenticated, exitCode: 1, diagnostic: null);
+
+            Assert.Contains("로그인되어 있지 않습니다", exception.Message);
+        }
+
         [Fact]
         public void CommandNotFound_MentionsCommandAndPath()
         {
