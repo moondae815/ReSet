@@ -41,6 +41,11 @@ namespace ReSet.Core.Services
             var agentDir = Path.Combine(inputs.JobOutputDir, "agent");
             Directory.CreateDirectory(agentDir);
 
+            // agent/ 직하의 파일(진입점 자신, 이후 태스크가 쓸 task-*.md·todo.md·progress.json,
+            // 코딩 에이전트가 만든 산출물)은 이 메서드가 정리하지 않는다. 여기서 지우는 것은
+            // 이 클래스가 전적으로 새로 쓰는 하위 디렉터리(common/01, verification/, steps/)
+            // 뿐이다 - agentDir을 통째로 비우거나 재생성하면 지시서를 다시 쓰는 것만으로
+            // 진행 상태와 에이전트 산출물이 함께 사라진다.
             var slices = PlanBoundaryResolver.Resolve(inputs.FinalPlanMarkdown, inputs.Layout);
             var warnings = new List<string>(slices.Warnings);
 
@@ -49,9 +54,18 @@ namespace ReSet.Core.Services
 
             await WriteAsync(Path.Combine(commonDir, "00-architecture.md"), slices.Architecture, cancellationToken);
 
+            var stepContractPath = Path.Combine(commonDir, "01-step-contract.md");
             if (slices.StepContract != null)
             {
-                await WriteAsync(Path.Combine(commonDir, "01-step-contract.md"), slices.StepContract, cancellationToken);
+                await WriteAsync(stepContractPath, slices.StepContract, cancellationToken);
+            }
+            else if (File.Exists(stepContractPath))
+            {
+                // 이번 회차는 공통 규약을 잘라내지 못했다. 이전 실행이 남긴 파일을 그대로
+                // 두면 진입점 인덱스(HasStepContract=false, 링크 없음)와 디스크 상태가
+                // 어긋나 에이전트가 인덱스에 없는 오래된 파일을 몰래 읽을 길이 열린다.
+                File.Delete(stepContractPath);
+                Log.Information("이전 실행의 공통 규약 파일을 정리했습니다 - Path: {Path}", stepContractPath);
             }
 
             // 경계 규칙은 계획서가 아니라 DataAccessPolicy에서 온다. 계획 분할이 실패해도
@@ -61,21 +75,36 @@ namespace ReSet.Core.Services
                 "# 데이터 액세스 경계 규칙\n\n" + DataAccessPolicy.InstructionRules(inputs.TargetLanguage),
                 cancellationToken);
 
+            var verificationDir = Path.Combine(agentDir, "verification");
             if (slices.Verification != null)
             {
-                var verificationDir = Path.Combine(agentDir, "verification");
                 Directory.CreateDirectory(verificationDir);
                 await WriteAsync(
                     Path.Combine(verificationDir, "integrity-sql.md"), slices.Verification, cancellationToken);
             }
+            else if (Directory.Exists(verificationDir))
+            {
+                // verification/ 아래에는 integrity-sql.md 하나만 존재한다. 이번 회차가
+                // 검증 SQL을 잘라내지 못했으면 디렉터리째 지운다 - 비워 두면 "이전에는
+                // 검증 SQL이 있었는데 이번엔 없다"는 사실이 조용히 사라진다.
+                var staleVerificationFiles = Directory.GetFiles(verificationDir, "*", SearchOption.AllDirectories).Length;
+                Directory.Delete(verificationDir, recursive: true);
+                Log.Information(
+                    "이전 실행의 검증 SQL 파일을 정리했습니다 - 대상: {Count}개", staleVerificationFiles);
+            }
 
             var stepCodes = new List<string>();
             var stepIndex = new List<IndexEntry>();
+            var stepsDir = Path.Combine(agentDir, "steps");
 
             if (slices.StepsSplit)
             {
-                var stepsDir = Path.Combine(agentDir, "steps");
                 Directory.CreateDirectory(stepsDir);
+
+                // 단계 집합이 이전 실행보다 줄었을 수 있다(예: S01-S03 → S01-S02). 이번
+                // 목차에 없는 파일을 먼저 지워야, 사라진 단계의 낡은 지침이 --add-dir로
+                // 스코프된 에이전트에게 계속 보이는 일이 없다.
+                CleanupStaleStepFiles(stepsDir, slices.Steps.Keys);
 
                 foreach (var code in OrderedStepCodes(inputs.Layout, slices.Steps))
                 {
@@ -87,6 +116,16 @@ namespace ReSet.Core.Services
                     stepCodes.Add(code);
                     stepIndex.Add(new IndexEntry(DescribeStep(inputs.Layout, code), $"steps/{code}.md"));
                 }
+            }
+            else if (Directory.Exists(stepsDir))
+            {
+                // 이번 회차는 폴백이라 steps/ 전체가 무효하다. 지우지 않으면 진입점은
+                // 단일 파일을 가리키는데 steps/ 아래 이전 회차 파일이 그대로 남아, 그
+                // 파일들만 보고 작업을 시작하는 에이전트가 생길 수 있다.
+                var staleStepFiles = Directory.GetFiles(stepsDir, "*.md").Length;
+                Directory.Delete(stepsDir, recursive: true);
+                Log.Information(
+                    "이전 실행의 단계 파일을 정리했습니다 - 폴백 전환으로 전체 삭제, 대상: {Count}개", staleStepFiles);
             }
 
             var dependencies = await WriteDependencySchemasAsync(inputs, agentDir, cancellationToken);
@@ -168,6 +207,31 @@ namespace ReSet.Core.Services
             sb.AppendLine("> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오.");
             sb.AppendLine();
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// 이전 실행이 남긴 단계 파일 중 이번 목차에 없는 것을 지운다. 목차 앵커로만
+        /// 쓰는 규칙과 마찬가지로, 무엇을 지울지도 언제나 이번 회차의 최종 결과
+        /// (<paramref name="currentCodes"/>)를 기준으로 판단한다.
+        /// </summary>
+        private static void CleanupStaleStepFiles(string stepsDir, IEnumerable<string> currentCodes)
+        {
+            var keep = new HashSet<string>(currentCodes, StringComparer.OrdinalIgnoreCase);
+            var removed = 0;
+
+            foreach (var file in Directory.GetFiles(stepsDir, "*.md"))
+            {
+                if (!keep.Contains(Path.GetFileNameWithoutExtension(file)))
+                {
+                    File.Delete(file);
+                    removed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                Log.Information("이전 실행의 단계 파일을 정리했습니다 - 현재 목차에 없는 파일 삭제, 대상: {Count}개", removed);
+            }
         }
 
         private static async Task<List<IndexEntry>> WriteDependencySchemasAsync(

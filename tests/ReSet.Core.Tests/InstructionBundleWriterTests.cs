@@ -187,17 +187,25 @@ S02 본문
         [Fact]
         public async Task WriteAsync_ShouldProduceRelativeLinksThatResolve()
         {
+            // Spec.md가 실제로 있는 경우의 분기(File.Exists 참)도 검증한다 - 없을 때의
+            // 폴백 분기만 타는 9건짜리 원래 스위트는 이 경로를 한 번도 실행하지 않았다.
+            var specDir = Path.Combine(_outputRoot, "Procedures", "dbo.UP_A", "docs");
+            Directory.CreateDirectory(specDir);
+            await File.WriteAllTextAsync(Path.Combine(specDir, "Spec.md"), "명세서 본문");
+
             var result = await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
             var entry = await File.ReadAllTextAsync(result.EntryPointPath);
 
             // 진입점이 가리키는 링크는 진입점 위치 기준으로 실제 파일에 닿아야 한다.
-            // raw/ddl은 agent/가 아니라 Job 루트 아래에 있으므로 "../"로 올라간다 -
-            // 이 경로가 어긋나면 에이전트는 스키마를 영영 읽지 못한다.
+            // raw/ddl과 Spec.md는 agent/가 아니라 각각 Job 루트와 출력 루트 아래에
+            // 있으므로 "../"로 올라간다 - 이 경로가 어긋나면 에이전트는 스키마나
+            // 명세서를 영영 읽지 못한다.
             foreach (var relative in new[]
             {
                 "common/00-architecture.md", "common/01-step-contract.md",
                 "common/02-data-access-boundary.md", "verification/integrity-sql.md",
                 "steps/S01.md", "steps/S02.md", "../raw/ddl/dbo.TClient.md",
+                "../../../Procedures/dbo.UP_A/docs/Spec.md",
             })
             {
                 Assert.Contains(relative, entry);
@@ -206,6 +214,51 @@ S02 본문
                     Path.Combine(_agentDir, relative.Replace('/', Path.DirectorySeparatorChar)));
                 Assert.True(File.Exists(resolved), $"링크 대상이 없다: {relative}");
             }
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldRemoveStaleStepFiles_WhenRerunFallsBackToSingleFile()
+        {
+            var writer = new InstructionBundleWriter();
+
+            // 1차: 분할 성공 - steps/S01.md, steps/S02.md가 생긴다.
+            await writer.WriteAsync(Inputs(Layout()), CancellationToken.None);
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", "S01.md")));
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", "S02.md")));
+
+            // 2차: 같은 Job 디렉터리에 목차 없이 재실행 - 단일 파일 폴백.
+            var result = await writer.WriteAsync(Inputs(null), CancellationToken.None);
+
+            Assert.False(result.StepsSplit);
+            Assert.False(
+                Directory.Exists(Path.Combine(_agentDir, "steps")),
+                "폴백 전환 후에도 이전 실행의 steps/ 디렉터리가 남아 있다.");
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldRemoveStaleStepFiles_WhenStepSetShrinks()
+        {
+            var writer = new InstructionBundleWriter();
+
+            // 1차: S01, S02 모두 분할.
+            await writer.WriteAsync(Inputs(Layout()), CancellationToken.None);
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", "S01.md")));
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", "S02.md")));
+
+            // 2차: 재수립으로 S02가 사라지고 S01만 남은 목차로 재실행.
+            var shrunkLayout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { ["S01"] = "### S01 스냅샷 생성\n조각 본문" },
+                new[] { Step("S01", "스냅샷 생성") },
+                null);
+
+            var result = await writer.WriteAsync(Inputs(shrunkLayout), CancellationToken.None);
+
+            Assert.True(result.StepsSplit);
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", "S01.md")));
+            Assert.False(
+                File.Exists(Path.Combine(_agentDir, "steps", "S02.md")),
+                "목차에서 빠진 S02의 파일이 정리되지 않고 남아 있다.");
         }
     }
 }
