@@ -2698,11 +2698,14 @@ namespace ReSet.Core.Services
                 floorViolations.Remove(step.Code);
             }
 
-            // 동시 실행 수 제한. Dispose하지 않는다 — AvailableWaitHandle을 쓰지 않아
-            // Dispose가 필요 없고, 취소로 Task.WhenAll이 먼저 빠져나간 뒤에도 아직
-            // 돌고 있는 단계 태스크가 finally에서 Release를 호출하므로, 여기서
-            // Dispose하면 그 태스크가 ObjectDisposedException으로 죽어 관측되지 않는
-            // 예외가 된다.
+            // 동시 실행 수 제한. Dispose하지 않는다 — SemaphoreSlim이 Dispose로 놓는
+            // 자원은 지연 할당되는 AvailableWaitHandle뿐이고 이 코드는 그것을 쓰지
+            // 않으므로, 놓을 것이 애초에 없다.
+            //
+            // (Dispose가 위험해서가 아니다. 아래 Task.WhenAll은 넘긴 태스크가 전부
+            // 끝난 뒤에야 반환하거나 던지므로 — 조기 이탈 경로가 없다 — 그 시점에
+            // Release를 호출할 태스크는 남아 있지 않다. 할 일이 없는 using은 그것이
+            // 필요하다는 인상만 남긴다.)
             var gate = new SemaphoreSlim(_stepConcurrency);
 
             async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)

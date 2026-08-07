@@ -4636,6 +4636,11 @@ SELECT 1;
         /// ③④ 완료 순서와 동시 실행 수가 산출물을 바꾸지 않는다.
         /// 순차(1), 팬아웃(4, 정방향 지연), 팬아웃(4, 역방향 지연) 세 실행이 같은 문서를 낸다.
         /// 병렬화가 산출물을 바꾸지 않는다는 것이 이 설계의 전제이므로 전제 자체를 단언한다.
+        ///
+        /// 이 테스트가 잡는 것은 병합 "순서"가 아니다 — 문서 본문은 steps 목록에서 다시
+        /// 조립되고 배너는 Key로 정렬되므로, 병합이 완료 순서였어도 이 단언들은 통과한다.
+        /// 실제로 잡는 것은 잠금 없는 Dictionary 동시 쓰기로 인한 유실·손상과,
+        /// 동시 실행이 산출물을 바꾸지 않는다는 종단 간 불변식이다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipeline_ProducesSameDocumentRegardlessOfConcurrencyOrCompletionOrder()
