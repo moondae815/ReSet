@@ -278,7 +278,7 @@ C#은 NetArchTest, Java는 ArchUnit으로 같은 규칙을 표현한다.
 
 경계 규칙 조항 1의 후반부 — **"EF Core를 쓰면 반드시 `RunBusinessSteps`가 받은 `conn`/`tran`에 참여시킬 것"** — 은 NetArchTest/ArchUnit으로 검증할 수 없다. 메서드 호출 그래프 분석이 필요하다.
 
-이 항목은 **L1 정적 검증 플러그인**(`plugin.ValidateStaticAsync`, `CodeVerificationOrchestrator.cs:120`)의 규칙으로 배치한다. 아키텍처 테스트가 이를 잡아준다고 착각해서는 안 된다. 위반 시 `CSharpReflectionRunner`의 Rollback 격리가 깨져 정합성 대조 결과가 오염되는데, 이는 조용히 잘못된 검증 통과로 이어지므로 어느 계층이 이를 책임지는지 명확해야 한다.
+이 항목은 **L1 정적 검증 플러그인**(`plugin.ValidateStaticAsync`, `CodeVerificationOrchestrator.cs:120`)의 책임이며, `src/ReSet.Validator.Core/Plugins/TransactionEnlistmentCheck.cs`에 **이미 구현되어 있다**(`TransactionEnlistmentCheckTests.cs`가 고정한다). 따라서 새로 만들 것은 없고, 아키텍처 테스트가 이를 잡아준다는 착각만 막으면 된다. 위반 시 `CSharpReflectionRunner`의 Rollback 격리가 깨져 정합성 대조 결과가 오염되는데, 이는 조용히 잘못된 검증 통과로 이어지므로 어느 계층이 이를 책임지는지 명확해야 한다.
 
 ### 9. 진행 상태 소유권
 
