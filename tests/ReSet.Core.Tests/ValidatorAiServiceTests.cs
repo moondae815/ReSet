@@ -26,7 +26,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""Perfect match.""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -42,7 +42,7 @@ namespace ReSet.Core.Tests
         {
             var mockAiClient = Substitute.For<IAiClient>();
             var jsonResponse = @"I am an AI. I cannot output JSON properly.";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -62,7 +62,7 @@ namespace ReSet.Core.Tests
   ""TestCases"": []
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -81,7 +81,7 @@ namespace ReSet.Core.Tests
   ""Tables"": []
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -99,7 +99,7 @@ namespace ReSet.Core.Tests
   ""OverallStatus"": ""MATCH"",
   ""Suggestions"": ""ok""
 }";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -125,7 +125,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""집계 UPDATE를 파라미터 바인딩 SQL로 되돌리십시오.""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var service = new ValidatorAiService(mockAiClient);
@@ -143,7 +143,7 @@ namespace ReSet.Core.Tests
             var codeResponse = @"```csharp
 public class Test {}
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = codeResponse }));
 
             var service = new ValidatorAiService(mockAiClient);

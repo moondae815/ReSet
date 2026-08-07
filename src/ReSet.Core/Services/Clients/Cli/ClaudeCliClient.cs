@@ -116,8 +116,11 @@ namespace ReSet.Core.Services.Clients.Cli
             string userPrompt,
             float temperature,
             string? effort = null,
+            string? volatileUserSuffix = null,
             CancellationToken cancellationToken = default)
         {
+            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
             using var workspace = new CliWorkspace();
             var systemPromptFile = workspace.WriteFile("system-prompt.txt", systemPrompt ?? string.Empty);
             var arguments = BuildArguments(_modelName, effort, systemPromptFile);

@@ -52,7 +52,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""Matched""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();
@@ -119,7 +119,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""Matched""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();
@@ -178,7 +178,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""청킹 INSERT를 파라미터 바인딩 SQL로 되돌리십시오.""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();
@@ -245,7 +245,7 @@ namespace ReSet.Core.Tests
   ""Suggestions"": ""청킹 INSERT를 파라미터 바인딩 SQL로 되돌리십시오.""
 }
 ```";
-            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            mockAiClient.ChatAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = jsonResponse }));
 
             var mockUi = Substitute.For<IValidationUserInterface>();

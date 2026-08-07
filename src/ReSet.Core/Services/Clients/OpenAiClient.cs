@@ -42,7 +42,7 @@ namespace ReSet.Core.Services.Clients
 
         }
 
-        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, string? volatileUserSuffix = null, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(_apiKey) && _endpoint.Contains("openai.com"))
             {
@@ -54,16 +54,29 @@ namespace ReSet.Core.Services.Clients
 
             if (isResponsesApi)
             {
+                // 가변 지시는 별개 메시지로 둔다. 여기에 이어 붙이면 공통 컨텍스트가
+                // 담긴 메시지의 내용이 요청마다 달라지고, 암묵적 cache breakpoint가
+                // 비교하는 접두사가 통째로 어긋나 캐시가 죽는다. 실측으로 113,142 토큰
+                // 중 2,062(system 크기)만 살아남았다.
+                //
+                // 접미사가 비면 메시지를 만들지 않는다 — 빈 메시지 하나가 늘어나는 것
+                // 자체가 접두사를 바꿔, 접미사를 쓰지 않는 호출들끼리의 캐시를 깬다.
+                var messages = new List<object>
+                {
+                    new { role = "system", content = systemPrompt },
+                    new { role = "user", content = userPrompt }
+                };
+
+                if (!string.IsNullOrWhiteSpace(volatileUserSuffix))
+                {
+                    messages.Add(new { role = "user", content = volatileUserSuffix });
+                }
+
                 var requestBody = new Dictionary<string, object>
                 {
                     { "model", _modelName },
                     { "prompt_cache_key", "reset:sp-analysis:v1" },
-                    { "input", new[]
-                        {
-                            new { role = "system", content = systemPrompt },
-                            new { role = "user", content = userPrompt }
-                        }
-                    },
+                    { "input", messages },
                     { "reasoning", new { effort = effort?.ToLowerInvariant() switch
                         {
                             "low" => "low",
@@ -174,6 +187,10 @@ namespace ReSet.Core.Services.Clients
             }
             else
             {
+                // Chat Completions에는 메시지를 나눠 얻을 캐시 이득이 없다. 이어 붙여
+                // 모델이 받는 내용을 Responses API 경로와 같게 유지한다.
+                userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
                 float targetTemp = temperature;
                 bool isGemma4 = lowerModel.Contains("gemma4");
                 bool isQwen3_6 = lowerModel.Contains("qwen3.6") || lowerModel.Contains("qwen-3.6");

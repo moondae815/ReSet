@@ -79,8 +79,11 @@ namespace ReSet.Core.Services.Clients.Cli
             string userPrompt,
             float temperature,
             string? effort = null,
+            string? volatileUserSuffix = null,
             CancellationToken cancellationToken = default)
         {
+            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
             using var workspace = new CliWorkspace();
             var outputFilePath = Path.Combine(workspace.Path, ResultFileName);
             var arguments = BuildArguments(_modelName, effort, outputFilePath);

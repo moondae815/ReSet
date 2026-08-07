@@ -160,8 +160,11 @@ namespace ReSet.Core.Services.Clients.Cli
             string userPrompt,
             float temperature,
             string? effort = null,
+            string? volatileUserSuffix = null,
             CancellationToken cancellationToken = default)
         {
+            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
             // agy도 시스템 프롬프트를 따로 받지 않으므로 합친다.
             var prompt = CliPrompt.Combine(systemPrompt ?? string.Empty, userPrompt ?? string.Empty);
 

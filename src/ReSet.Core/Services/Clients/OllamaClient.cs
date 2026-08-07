@@ -41,8 +41,10 @@ namespace ReSet.Core.Services.Clients
             _endpoint = ep;
         }
 
-        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, string? volatileUserSuffix = null, CancellationToken cancellationToken = default)
         {
+            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
             float targetTemp = temperature;
             var lowerModel = _modelName.ToLowerInvariant();
             

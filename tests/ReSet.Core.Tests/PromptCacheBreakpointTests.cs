@@ -1,0 +1,202 @@
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using NSubstitute;
+using ReSet.Core.Models;
+using ReSet.Core.Services;
+using ReSet.Core.Services.Clients;
+using Xunit;
+
+namespace ReSet.Core.Tests
+{
+    /// <summary>
+    /// gpt-5.6 이후 모델은 암묵적 cache breakpoint를 **마지막 메시지**에 놓고, 그 지점의
+    /// 접두사 전체가 일치해야 캐시가 산다. 12개 단계 요청이 공유하는 243KB 컨텍스트 뒤에
+    /// 단계 지시 107자를 이어 붙이면 그 한 줄이 breakpoint 접두사를 매번 깨뜨려,
+    /// 실측에서 113,142 토큰 중 2,062(=system 크기)만 히트했다.
+    ///
+    /// 가변 문구를 별도 메시지로 떼면 공통 메시지 경계가 그대로 남아 캐시가 산다.
+    /// </summary>
+    public class PromptCacheBreakpointTests
+    {
+        private const string Gpt5Response = @"{
+            ""output"": [
+                { ""type"": ""message"", ""content"": [ { ""type"": ""output_text"", ""text"": ""ok"" } ] }
+            ]
+        }";
+
+        private static (OpenAiClient Client, OpenAiRequestSpyHandler Spy) NewGpt5Client()
+        {
+            var spy = new OpenAiRequestSpyHandler(Gpt5Response);
+            var client = new OpenAiClient(
+                new HttpClient(spy), "test_api_key", "https://api.openai.com/v1", "gpt-5.6-terra");
+            return (client, spy);
+        }
+
+        private static JsonElement InputOf(OpenAiRequestSpyHandler spy) =>
+            JsonDocument.Parse(spy.LastRequestContent!).RootElement.GetProperty("input");
+
+        [Fact]
+        public async Task Gpt5_KeepsTheVolatileSuffixOutOfTheSharedUserMessage()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync(
+                "SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S01 ONLY.");
+
+            var input = InputOf(spy);
+            Assert.Equal(3, input.GetArrayLength());
+            Assert.Equal("SharedContext", input[1].GetProperty("content").GetString());
+            Assert.Equal("Now write step S01 ONLY.", input[2].GetProperty("content").GetString());
+            Assert.Equal("user", input[2].GetProperty("role").GetString());
+        }
+
+        // 캐시가 사는 조건 그 자체: 공통 두 메시지가 요청 간 바이트 단위로 같아야 한다.
+        [Fact]
+        public async Task Gpt5_TwoStepsShareAByteIdenticalPrefixUpToTheVolatileMessage()
+        {
+            var (client1, spy1) = NewGpt5Client();
+            var (client2, spy2) = NewGpt5Client();
+
+            await client1.ChatAsync("SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S01 ONLY.");
+            await client2.ChatAsync("SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "Now write step S02 ONLY.");
+
+            var a = InputOf(spy1);
+            var b = InputOf(spy2);
+            Assert.Equal(a[0].GetRawText(), b[0].GetRawText());
+            Assert.Equal(a[1].GetRawText(), b[1].GetRawText());
+            Assert.NotEqual(a[2].GetRawText(), b[2].GetRawText());
+        }
+
+        [Fact]
+        public async Task Gpt5_WithoutAVolatileSuffix_StillSendsTwoMessages()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 1.0f, effort: "high");
+
+            Assert.Equal(2, InputOf(spy).GetArrayLength());
+        }
+
+        // 빈 접미사로 메시지를 하나 더 만들면 그 자체가 캐시 접두사를 바꾼다.
+        [Fact]
+        public async Task Gpt5_WithABlankVolatileSuffix_StillSendsTwoMessages()
+        {
+            var (client, spy) = NewGpt5Client();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 1.0f,
+                effort: "high", volatileUserSuffix: "   ");
+
+            Assert.Equal(2, InputOf(spy).GetArrayLength());
+        }
+
+        // Responses API를 쓰지 않는 경로는 메시지를 나눌 수 없다. 프롬프트가 잘리지 않도록
+        // 이어 붙여, 모델이 받는 내용이 분리 이전과 같아야 한다.
+        [Fact]
+        public async Task ChatCompletions_AppendsTheVolatileSuffixToTheUserMessage()
+        {
+            var spy = new OpenAiRequestSpyHandler(
+                @"{ ""choices"": [ { ""message"": { ""content"": ""ok"" } } ] }");
+            var client = new OpenAiClient(
+                new HttpClient(spy), "test_api_key", "https://api.openai.com/v1", "gpt-4o");
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.7f,
+                volatileUserSuffix: "Now write step S01 ONLY.");
+
+            var messages = JsonDocument.Parse(spy.LastRequestContent!)
+                .RootElement.GetProperty("messages");
+            Assert.Equal(2, messages.GetArrayLength());
+            Assert.Equal(
+                "SharedContext\n\nNow write step S01 ONLY.",
+                messages[1].GetProperty("content").GetString());
+        }
+
+        private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
+        {
+            new BatchStepPlan("S01", "수수료율 스냅샷",
+                new[] { "UP_Util_PG_Client_CMRate_Ins" }, new[] { "dbo.TPGSettleRate" }, new[] { "-1" }, false),
+            new BatchStepPlan("S02", "정산 원장 생성",
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-2" }, true)
+        };
+
+        private static readonly List<(string FileName, string Content)> Specs = new()
+        {
+            ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+        };
+
+        private static (IAiService Service, IAiClient Client) NewSpyService()
+        {
+            var client = Substitute.For<IAiClient>();
+            client.ProviderName.Returns("OpenAI");
+            client.ModelName.Returns("gpt-5.6-terra");
+            client.ChatAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "### S01 수수료율 스냅샷\n\n```sql\nSELECT 1;\n```" });
+            return (new AiService(client, 0.2f), client);
+        }
+
+        // 공통 컨텍스트를 담은 메시지에 단계 지시가 섞이면 캐시가 죽는다. 지시는
+        // volatileUserSuffix로만 나가야 한다.
+        [Fact]
+        public async Task StepSection_SendsTheStepInstructionOutsideTheSharedUserMessage()
+        {
+            var (service, client) = NewSpyService();
+            var steps = TwoSteps();
+
+            await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job");
+
+            await client.Received(1).ChatAsync(
+                Arg.Any<string>(),
+                Arg.Is<string>(shared => !shared.Contains("Now write the section for step")),
+                Arg.Any<float>(),
+                Arg.Any<string>(),
+                Arg.Is<string>(volatileSuffix =>
+                    volatileSuffix.Contains("Now write the section for step S01")),
+                Arg.Any<CancellationToken>());
+        }
+
+        // 재시도 피드백도 회차마다 달라지므로 공통 메시지에 남으면 캐시를 깬다.
+        [Fact]
+        public async Task StepSection_SendsTheFloorFeedbackOutsideTheSharedUserMessage()
+        {
+            var (service, client) = NewSpyService();
+            var steps = TwoSteps();
+
+            await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job",
+                effort: null, floorFeedback: "코드 블록이 없습니다");
+
+            await client.Received(1).ChatAsync(
+                Arg.Any<string>(),
+                Arg.Is<string>(shared => !shared.Contains("코드 블록이 없습니다")),
+                Arg.Any<float>(),
+                Arg.Any<string>(),
+                Arg.Is<string>(volatileSuffix => volatileSuffix.Contains("코드 블록이 없습니다")),
+                Arg.Any<CancellationToken>());
+        }
+
+        // 두 메시지로 나뉘어도 raw/prompt-context.md는 모델이 실제로 받은 것을 서술해야
+        // 한다. AGENTS.md가 문서화한 계약이다.
+        [Fact]
+        public async Task StepSection_RecordsTheMergedPromptSoThePromptContextStaysTruthful()
+        {
+            var (service, _) = NewSpyService();
+            var steps = TwoSteps();
+
+            var result = await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job",
+                effort: null, floorFeedback: "코드 블록이 없습니다");
+
+            Assert.Contains("공통 규약 본문", result.UserPrompt);
+            Assert.Contains("Now write the section for step S01", result.UserPrompt);
+            Assert.Contains("코드 블록이 없습니다", result.UserPrompt);
+        }
+    }
+}

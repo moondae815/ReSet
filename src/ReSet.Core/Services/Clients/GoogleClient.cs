@@ -29,8 +29,10 @@ namespace ReSet.Core.Services.Clients
             _endpoint = ep;
         }
 
-        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, string? volatileUserSuffix = null, CancellationToken cancellationToken = default)
         {
+            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
+
             if (string.IsNullOrWhiteSpace(_apiKey))
             {
                 throw new ArgumentException("Google API 키가 설정되지 않았습니다.");

@@ -710,7 +710,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
             Log.Information("AI 명세서 생성 요청 전송 - SP: {Schema}.{Name}, Effort: {Effort}", spDef.Schema, spDef.Name, effort ?? "Default");
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null)
             {
                 aiResult = new AiResult();
@@ -757,7 +757,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
             Log.Information("AI 명세 구조화 추론(Stage 1) 요청 전송 - SP: {Schema}.{Name}, Temperature: {Temp}", spDef.Schema, spDef.Name, temp);
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, temp, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, temp, effort, cancellationToken: cancellationToken);
             if (aiResult == null)
             {
                 aiResult = new AiResult();
@@ -884,7 +884,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sys += "\n\n[Ollama 추론 유도 규칙]\n- 최종 답변을 작성하기 전에, 반드시 분석 단계와 생각 흐름을 <think>와 </think> 태그 영역에 상세히 기술하십시오. 최종 JSON은 반드시 추론 태그 바깥에 작성해야 합니다.";
                 }
 
-                var aiResult = await _aiClient.ChatAsync(sys, usr, temp, effort, cancellationToken);
+                var aiResult = await _aiClient.ChatAsync(sys, usr, temp, effort, cancellationToken: cancellationToken);
                 
                 if (aiResult != null && !string.IsNullOrWhiteSpace(aiResult.Content))
                 {
@@ -1384,7 +1384,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
             Log.Information("AI 명세서 구역 분할 생성 요청 전송 - SP: {Schema}.{Name}, Section: {Section}, Effort: {Effort}", spDef.Schema, spDef.Name, sectionType, effort ?? "Default");
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null)
             {
                 aiResult = new AiResult();
@@ -1736,7 +1736,7 @@ Review the generated specification markdown against the source metadata and sour
             Log.Information("AI 명세서 리뷰 요청 전송 - SP: {Schema}.{Name}, Effort: {Effort}", spDef.Schema, spDef.Name, effort ?? "Default");
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort, cancellationToken: cancellationToken);
 
             Log.Information("AI 명세서 리뷰 응답 수신 완료 - SP: {Schema}.{Name}, 응답 길이: {Length}", spDef.Schema, spDef.Name, aiResult?.Content?.Length ?? 0);
             Log.Debug("[AI 응답 내용]:\n{Response}", aiResult?.Content);
@@ -1801,7 +1801,7 @@ Review the generated function specification against the source metadata and DDL,
                 systemPrompt += "\n\n[Ollama System Prompt Requirements]\n- Before writing the JSON payload, write your step-by-step thinking process inside <think> and </think> tags. The final JSON must be placed outside the think tags.";
             }
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt, 0.1f, effort, cancellationToken: cancellationToken);
             var reviewResult = ParseReviewResult(aiResult?.Content, $"{functionDef.Schema}.{functionDef.Name}");
             reviewResult.ThinkingText = aiResult?.ThinkingText;
             return reviewResult;
@@ -1923,7 +1923,7 @@ DO NOT write code or detailed markdown plans. ONLY output your analysis: identif
 
             Log.Information("AI 배치 계획 브레인스토밍 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}", jobName, targetLanguage, effort ?? "Default");
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null) aiResult = new AiResult();
             aiResult.SystemPrompt = systemPrompt;
             aiResult.UserPrompt = userPrompt.ToString();
@@ -2011,7 +2011,7 @@ The previous structure below repeatedly failed cross-review. Do NOT reproduce it
 
             Log.Information("AI 배치 계획 목차 수립 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}, Redraft: {IsRedraft}", jobName, targetLanguage, effort ?? "Default", isRedraft);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null) aiResult = new AiResult();
             aiResult.SystemPrompt = systemPrompt;
             aiResult.UserPrompt = userPrompt.ToString();
@@ -2057,7 +2057,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             Log.Information("AI 통합 배치 계획서 생성 요청 전송 - JobName: {JobName}, TargetLanguage: {TargetLanguage}, Effort: {Effort}", jobName, targetLanguage, effort ?? "Default");
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt.ToString());
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null)
             {
                 aiResult = new AiResult();
@@ -2121,7 +2121,7 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             Log.Information("AI 배치 계획 골격 생성 요청 전송 - JobName: {JobName}, 단계 수: {Count}개", jobName, steps.Count);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null) aiResult = new AiResult();
             aiResult.SystemPrompt = systemPrompt;
             aiResult.UserPrompt = userPrompt.ToString();
@@ -2156,7 +2156,7 @@ Consolidate the provided specifications into a single unified batch job named '{
 
 [Output Contract]
 - Output ONLY the markdown for the single requested step section. Do NOT output any H2 header, any other step, or any conversational text.
-- The section MUST begin with a level-3 heading that contains the step code given at the END of the user message.
+- The section MUST begin with a level-3 heading that contains the step code given in the FINAL user message.
 - The section MUST contain at least one fenced SQL or pseudocode block. A bullet list alone is not an implementation instruction.
 - EVERY target table listed for this step MUST appear in the section.
 - EVERY original error code listed for this step MUST appear verbatim in the section.
@@ -2167,13 +2167,19 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             var userPrompt = new StringBuilder();
             AppendSharedStepContext(userPrompt, allSteps, sharedConventions, specs, targetLanguage, jobName);
-            userPrompt.AppendLine($"Now write the section for step {step.Code} ({step.Name}) ONLY.");
+
+            // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
+            // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
+            // 그 지점의 접두사 전체를 비교하므로, 243KB 컨텍스트 뒤에 이 몇 줄이 붙으면
+            // 12단계가 공유하던 캐시가 통째로 죽는다.
+            var volatileSuffix = new StringBuilder();
+            volatileSuffix.AppendLine($"Now write the section for step {step.Code} ({step.Name}) ONLY.");
 
             if (!string.IsNullOrWhiteSpace(floorFeedback))
             {
-                userPrompt.AppendLine();
-                userPrompt.AppendLine("[Previous Attempt Rejected]");
-                userPrompt.AppendLine(floorFeedback);
+                volatileSuffix.AppendLine();
+                volatileSuffix.AppendLine("[Previous Attempt Rejected]");
+                volatileSuffix.AppendLine(floorFeedback);
             }
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
@@ -2184,10 +2190,15 @@ Consolidate the provided specifications into a single unified batch job named '{
             Log.Information("AI 배치 단계 섹션 생성 요청 전송 - JobName: {JobName}, Step: {Step}, 재시도 피드백: {HasFeedback}",
                 jobName, step.Code, !string.IsNullOrWhiteSpace(floorFeedback));
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(
+                systemPrompt, userPrompt.ToString(), _temperature, effort,
+                volatileUserSuffix: volatileSuffix.ToString(), cancellationToken: cancellationToken);
             if (aiResult == null) aiResult = new AiResult();
             aiResult.SystemPrompt = systemPrompt;
-            aiResult.UserPrompt = userPrompt.ToString();
+            // 기록은 병합본으로 남긴다 — raw/prompt-context.md는 모델이 실제로 받은 것을
+            // 서술해야 하며, 전송이 두 메시지로 나뉘었다는 사정은 그 계약을 바꾸지 않는다.
+            aiResult.UserPrompt = PromptComposition.MergeVolatileSuffix(
+                userPrompt.ToString(), volatileSuffix.ToString());
 
             Log.Information("AI 배치 단계 섹션 생성 응답 수신 완료 - JobName: {JobName}, Step: {Step}, 응답 길이: {Length}",
                 jobName, step.Code, aiResult.Content.Length);
@@ -2318,7 +2329,7 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
             Log.Information("AI 통합 배치 계획서 리뷰 요청 전송 - JobName: {JobName}, Effort: {Effort}", jobName, effort ?? "Default");
             Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt.ToString());
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), 0.1f, effort, cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), 0.1f, effort, cancellationToken: cancellationToken);
 
             Log.Information("AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: {JobName}, 응답 길이: {Length}", jobName, aiResult?.Content?.Length ?? 0);
             Log.Debug("[AI 응답 내용]:\n{Response}", aiResult?.Content);
