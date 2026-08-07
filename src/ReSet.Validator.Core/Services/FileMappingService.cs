@@ -55,10 +55,20 @@ namespace ReSet.Validator.Core.Services
                         Path.GetFileNameWithoutExtension(f).Equals(hint, StringComparison.OrdinalIgnoreCase))
                     : null;
 
-                // 힌트로 못 찾으면 파일명에 단계 코드가 든 것을 찾는다.
+                // 힌트로 못 찾으면 파일명이 단계 코드로 시작하는 것을 찾는다. 단계 코드는
+                // AI가 생성한 계획서 텍스트에서 나오는 자유 형식 문자열이라 자릿수 고정이
+                // 강제되지 않는다(S1/S10/S11 혼재 가능). 앵커 없는 Contains는 "S1"이
+                // "S10Tasklet"의 부분 문자열이라는 이유만으로 다른 회차의 파일을 집어
+                // 삼켜, 그 회차가 엉뚱한 코드로 게이트를 통과하게 만든다. StartsWith로
+                // 접두사를 고정하고, 접두사 바로 다음 문자가 숫자가 아닐 때만(코드
+                // 번호가 거기서 끝났을 때만) 인정해 "S1"이 "S10"/"S11"을 삼키지 못하게
+                // 막는다.
                 matched ??= sourceFiles.FirstOrDefault(f =>
-                    Path.GetFileNameWithoutExtension(f)
-                        .Contains(pair.MappedName, StringComparison.OrdinalIgnoreCase));
+                {
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    if (!name.StartsWith(pair.MappedName, StringComparison.OrdinalIgnoreCase)) return false;
+                    return name.Length == pair.MappedName.Length || !char.IsDigit(name[pair.MappedName.Length]);
+                });
 
                 if (matched == null)
                 {
@@ -72,6 +82,14 @@ namespace ReSet.Validator.Core.Services
                     SourceCodePath = matched,
                     MappedName = pair.MappedName,
                 });
+            }
+
+            // 요청한 쌍이 하나도 안 남으면 "검증할 게 없어서 게이트를 통과함"과
+            // "실제로 검증해서 통과함"이 반환값만으로는 구별되지 않는다. 회차 게이트
+            // 판정(Task 13)이 이 둘을 갈라야 하므로, 최소한 로그로 그 사실을 남긴다.
+            if (explicitPairs.Count > 0 && results.Count == 0)
+            {
+                Log.Warning("요청한 회차 검증 쌍이 모두 매칭 실패했습니다 - 요청 수: {RequestedCount}", explicitPairs.Count);
             }
 
             return results;
