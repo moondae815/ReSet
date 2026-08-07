@@ -5698,11 +5698,15 @@ SELECT 1;
             Assert.DoesNotContain("[커버리지 누락]", result.Plan);
         }
 
-        // 구제 채택은 문서·목차·하한 위반을 채택 회차로 되돌리지만, 캐시된
-        // 골격과 단계 섹션은 되돌리지 않았다. L3가 그 캐시를 재사용하기 시작하면
-        // 화면의 문서가 아니라 폐기된 회차의 섹션 위에 피드백이 얹힌다.
+        // 구제(RetryRescue)가 이전 회차를 채택하면 반환되는 AiResult도 그 회차의
+        // 것이어야 한다 — BestAttempt가 후보 등록 시점에 finalAiResult를 함께
+        // 스냅샷하므로, 마지막으로 생성된 회차가 아니라 채택된 회차의 AiResult가
+        // 나온다. 주의: 이 테스트는 lastSkeleton·lastSkeletonResult·lastStepSections
+        // 캐시가 채택 회차로 되감기는지는 검증하지 않는다 — 그 값들은 오늘 아무
+        // 데도 읽히지 않는 지역 변수라 관찰할 방법이 없다(AdoptedGenerationState
+        // 선언부의 설명 참고).
         [Fact]
-        public async Task RunConsolidatedPipeline_WhenRescueAdoptsEarlierAttempt_RewindsCachedSkeletonAndSections()
+        public async Task RunConsolidatedPipeline_WhenRescueAdoptsEarlierAttempt_ReportsThatAttemptsAiResult()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -5738,7 +5742,7 @@ SELECT 1;
 
             var result = await RunBatchPipeline(aiService);
 
-            // 채택된 것은 1차이므로 finalAiResult도 1차 골격의 것이어야 한다.
+            // 채택된 것은 1차이므로 반환되는 AiResult도 1차 골격 호출의 것이어야 한다.
             Assert.NotNull(result.Result);
             Assert.Equal("골격 시스템 프롬프트 #1", result.Result!.SystemPrompt);
         }

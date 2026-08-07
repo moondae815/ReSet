@@ -2320,6 +2320,15 @@ namespace ReSet.Core.Services
         /// 유지보수 불변식: 채택 문서를 이전 회차로 되돌리는 종료 경로를 새로
         /// 추가한다면 반드시 이 레코드를 통째로 되돌려야 한다. 개별 필드만 되돌리는
         /// 코드를 쓰지 말 것 — 그러려고 묶었다.
+        ///
+        /// 테스트 커버리지 상태: PlanStructure·FloorViolations의 되감기는
+        /// VerificationPipelineOrchestratorTests에서 관찰 가능하다(구제 문서와
+        /// 배너가 채택 회차를 서술하는지 검증하는 기존 테스트들). 그러나 Skeleton·
+        /// SkeletonResult·StepSections의 되감기는 오늘 회귀 테스트가 없다 — 이
+        /// 세 값은 RunConsolidatedPipelineAsync 바깥에서 아무 데도 읽히지 않는
+        /// 지역 변수라 블랙박스로 관찰할 방법이 없기 때문이다. L3가 지목
+        /// 재생성을 위해 이 값들을 읽기 시작하는 시점(그 값을 읽는 캐시 재사용
+        /// 로직)에 그 테스트가 함께 생긴다.
         /// </summary>
         private sealed record AdoptedGenerationState(
             string PlanStructure,
