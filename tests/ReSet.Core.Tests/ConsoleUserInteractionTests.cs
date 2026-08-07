@@ -14,7 +14,10 @@ namespace ReSet.Core.Tests
             new BatchStepPlan("S03", "취소 원장 반영", new[] { "UP_C" }, new[] { "dbo.T3" }, new[] { "-3" }, false)
         };
 
-        private static string LabelOf(BatchStepPlan step) => $"{step.Code}  {step.Name}";
+        // 프로덕션 헬퍼를 그대로 부른다 — 여기서 직접 포맷을 복제하면, 프롬프트가
+        // 이스케이프하도록 바뀌어도 이 테스트는 대괄호 없는 픽스처에서 항등을
+        // 유지해 그 어긋남을 가려 버린다.
+        private static string LabelOf(BatchStepPlan step) => ConsoleUserInteraction.StepSelectionLabel(step);
 
         [Fact]
         public void MapStepSelection_WithNoSelection_MeansFullRegeneration()
@@ -68,6 +71,31 @@ namespace ReSet.Core.Tests
                 new[] { "존재하지 않는 라벨" }, ThreeSteps());
 
             Assert.Empty(codes);
+            Assert.False(skeleton);
+        }
+
+        // 단계 이름은 모델이 쓴 목차 JSON에서 그대로 온다. 대괄호가 섞이면
+        // Spectre가 마크업 태그로 오인해 프롬프트를 죽인다(Program.cs의 다른
+        // 선택지 렌더링 자리처럼 Markup.Escape가 필요한 이유). 프롬프트가 보여주는
+        // 라벨(StepSelectionLabel)과 매핑이 찾는 라벨이 같은 헬퍼를 쓰는 한, 이스케이프된
+        // 문자열끼리도 정상적으로 일치해야 한다.
+        [Fact]
+        public void MapStepSelection_WithBracketInStepName_StillMatchesTheEscapedLabel()
+        {
+            var steps = new[]
+            {
+                new BatchStepPlan("S01", "[긴급] 수수료율 스냅샷", new[] { "UP_A" }, new[] { "dbo.T1" }, new[] { "-1" }, false)
+            };
+
+            var label = ConsoleUserInteraction.StepSelectionLabel(steps[0]);
+
+            // Spectre.Console의 이스케이프 규약(대괄호를 두 배로 늘림)을 그대로 썼는지
+            // 확인한다 — Program.cs:940/:999가 이미 쓰는 Markup.Escape와 동일해야 한다.
+            Assert.Equal("S01  [[긴급]] 수수료율 스냅샷", label);
+
+            var (codes, skeleton) = ConsoleUserInteraction.MapStepSelection(new[] { label }, steps);
+
+            Assert.Equal(new[] { "S01" }, codes);
             Assert.False(skeleton);
         }
 

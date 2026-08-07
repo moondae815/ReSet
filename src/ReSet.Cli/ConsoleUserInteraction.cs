@@ -129,7 +129,17 @@ namespace ReSet.Cli
             return (codes, false);
         }
 
-        private static string StepSelectionLabel(BatchStepPlan step) => $"{step.Code}  {step.Name}";
+        /// <summary>
+        /// 단계 이름은 모델이 쓴 목차 JSON에서 그대로 온 임의의 텍스트다. Spectre의
+        /// MultiSelectionPrompt는 선택지 텍스트를 마크업으로 렌더링하므로, 이름에
+        /// 대괄호가 섞이면 이스케이프 없이는 "Could not find color or style" 예외로
+        /// 죽는다 — 48분짜리 생성 실행 하나를 통째로 날린다. 프롬프트와 매핑 로직
+        /// (MapStepSelection)이 같은 문자열을 써야 어긋나지 않으므로, 같은 클래스의
+        /// 다른 헬퍼(SkeletonSelectionLabel, MapStepSelection)처럼 public으로 두어
+        /// 단위 테스트가 이 이스케이프를 직접 검증할 수 있게 한다.
+        /// </summary>
+        public static string StepSelectionLabel(BatchStepPlan step) =>
+            Markup.Escape($"{step.Code}  {step.Name}");
 
         public async Task<HumanReviewResult> RequestHumanReviewAsync(
             string selectedOption,
