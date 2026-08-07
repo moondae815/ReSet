@@ -57,7 +57,7 @@ codex는 종료 코드 1이라 경고 로그는 남지만(`:53`), 그마저도 �
 "claude": {
   "Command": "claude",
   "Arguments":      "--model claude-sonnet-5 \"write code using {instructions}\"",
-  "BatchArguments": "--add-dir {jobDir} --model claude-sonnet-5 --permission-mode acceptEdits -p \"write code using {instructions}\""
+  "BatchArguments": "--add-dir \"{jobDir}\" --model claude-sonnet-5 --permission-mode acceptEdits -p \"write code using {instructions}\""
 },
 "codex": {
   "Command": "codex",
@@ -83,8 +83,19 @@ codex는 종료 코드 1이라 경고 로그는 남지만(`:53`), 그마저도 �
 
 | 자리표시자 | 치환값 | 따옴표 |
 |---|---|---|
-| `{instructions}` | 지시서 절대 경로 | 포함 (현행 유지) |
-| `{jobDir}` | Job 루트 절대 경로 | 포함 (경로에 공백 가능) |
+| `{instructions}` | 지시서 절대 경로 | **없음 — 템플릿이 쥔다** |
+| `{jobDir}` | Job 루트 절대 경로 | **없음 — 템플릿이 쥔다** |
+
+**인용 계약은 템플릿이 소유한다.** 이 설계는 처음에 치환기가 값을 쌍따옴표로 감싸도록 정했는데, 그건 틀렸다. 템플릿들이 자리표시자를 자기 따옴표 **안에** 다시 넣어 두기 때문에(`-p "write code using {instructions}"`) 따옴표가 중첩되고, 경로에 공백이 있으면 토글이 경로 중간에서 풀려 argv가 쪼개진다:
+
+```
+-p "write code using "/tmp/My Output/Jobs/Settle Job/agent/MigrationInstructions.md""
+  → [-p] [write code using /tmp/My] [Output/Jobs/Settle] [Job/agent/MigrationInstructions.md]
+```
+
+공백 없는 경로에서만 인자 하나로 합쳐지므로 오래 숨는다. `--job-name "Q3 Settle"`이면 바로 걸리고, 그 결과는 에이전트가 지시서를 못 읽고 아무것도 안 쓴 채 **종료 코드 0으로 끝나는 것** — 이 설계가 없애려는 바로 그 실패다.
+
+그래서 치환값은 원문 그대로 넣고, 따옴표는 템플릿이 직접 쓴다(`--add-dir "{jobDir}"`). 치환은 단일 패스로 수행해, 치환된 경로가 우연히 자리표시자 리터럴을 담고 있어도 재치환되지 않게 한다.
 
 `--add-dir`는 가변 인자라 프롬프트보다 앞에 와야 한다. 이 제약은 설정 파일 주석으로 경고하고, **코드가 인자 순서를 강제하지는 않는다** — 강제하는 순간 "설정으로 자유롭게 조정"이라는 이 구조의 이점이 사라진다.
 
@@ -200,7 +211,7 @@ public sealed record CodegenWorkflowResult(bool Succeeded, string? AbortReason);
 
 | 대상 | 뽑아낼 단위 | 테스트 |
 |---|---|---|
-| 인자 치환 | `ArgumentTemplateResolver.Resolve(template, instructionsPath)` | `{instructions}`·`{jobDir}` 각각 치환, 둘 다 있는 경우, 공백 포함 경로가 따옴표로 감싸지는지 |
+| 인자 치환 | `ArgumentTemplateResolver.Resolve(template, instructionsPath)` | `{instructions}`·`{jobDir}` 각각 치환, 둘 다 있는 경우, **자리표시자를 감싸는 템플릿 + 공백 포함 경로가 argv 토큰 하나로 남는지**, 치환값에 자리표시자 리터럴이 있어도 재치환되지 않는지 |
 | 산출물 감지 | `ArtifactChangeDetector.Snapshot(dir)` / `HasChanged(before, after)` | 추가·수정·삭제 감지, `bin`/`obj` 변화는 무시, 빈 디렉터리는 변화 없음 |
 | 루프 판단 | `Decide(CodegenRunResult)` → `Validate` \| `RetryWithoutValidation` \| `Abort` | 산출물 있으면 항상 `Validate`, 산출물 없고 Quota/Auth/ToolPerm이면 `Abort`, 산출물 없고 Unknown이면 `RetryWithoutValidation` |
 | 팩토리 | 기존 `CodingEngineTests` 확장 | 배치는 `BatchArguments` 선택, 대화형은 `Arguments` 선택, 배치인데 `BatchArguments`가 비면 예외 |

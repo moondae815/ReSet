@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-07-codegen-headless-design.md`
 
+> **[실행 후 정정]** 이 계획서는 `ArgumentTemplateResolver`가 치환값을 쌍따옴표로 감싸는 인용 계약을 전제로 쓰였고, 그 전제는 **틀렸다.** 템플릿이 자리표시자를 자기 따옴표 안에 다시 넣기 때문에 공백이 든 경로에서 argv가 쪼개진다. 최종 리뷰에서 발견돼 계약을 뒤집었다 — 치환값은 원문 그대로, 따옴표는 템플릿이 쥔다. 아래 Task 1의 테스트 코드와 Task 4의 설정 블록은 정정 **이전** 형태이니 그대로 베끼지 말 것. 현행 계약은 스펙 §2와 `src/ReSet.Cli/appsettings.json`을 보라.
+
 ## Global Constraints
 
 - 대상 프레임워크 `net10.0`, `<Nullable>enable</Nullable>`, `<ImplicitUsings>enable</ImplicitUsings>`.
