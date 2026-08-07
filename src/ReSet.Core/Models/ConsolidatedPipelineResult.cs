@@ -12,8 +12,12 @@ namespace ReSet.Core.Models;
 /// <param name="Review">최종 판정의 근거가 된 L2 리뷰. 리뷰를 수행하지 못했거나
 /// L3 피드백으로 재생성된 경우 null이며, 이때 점수를 실어서는 안 된다.</param>
 /// <param name="Outcome">검증 파이프라인 종료 상태.</param>
+/// <param name="Layout">계획서를 만든 조각들. 산출물 분할의 경계 근거이며, 단일 호출로
+/// 생성됐거나 파이프라인이 실패하면 null이다. 기본값이 null이므로 이 값을 쓰지 않는
+/// 호출부는 변경할 필요가 없다.</param>
 public sealed record ConsolidatedPipelineResult(
     string? Plan,
     AiResult? Result,
     ReviewResult? Review,
-    VerificationOutcome Outcome);
+    VerificationOutcome Outcome,
+    PlanLayout? Layout = null);
