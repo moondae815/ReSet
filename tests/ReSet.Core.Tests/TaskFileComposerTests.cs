@@ -1,0 +1,130 @@
+using System;
+using System.Collections.Generic;
+using ReSet.Core.Services;
+using Xunit;
+
+namespace ReSet.Core.Tests
+{
+    public class TaskFileComposerTests
+    {
+        private static TaskFileInputs StepInputs() => new(
+            Kind: StageKind.Step,
+            JobName: "TestJob",
+            TargetLanguage: "C#",
+            StepCode: "S01",
+            StepName: "스냅샷 생성",
+            StepRelativePath: "steps/S01.md",
+            SpecRelativePath: "../../Procedures/dbo.UP_A/docs/Spec.md",
+            Dependencies: new List<IndexEntry> { new("dbo.TClient", "../raw/ddl/dbo.TClient.md") },
+            HasStepContract: true,
+            HasVerification: true,
+            FailedStepCodes: Array.Empty<string>(),
+            SinglePlanRelativePath: null);
+
+        [Fact]
+        public void FileName_ShouldPlaceTaskFilesFlatUnderAgent()
+        {
+            // agent/ 직하가 아니면 ResolveJobDirectory(두 단계 위)가 {jobDir}을
+            // agent/로 해석해 --add-dir이 raw/ddl과 Spec.md를 덮지 못한다.
+            Assert.Equal("task-00-bootstrap.md", TaskFileComposer.FileName(StageKind.Bootstrap, 0, null));
+            Assert.Equal("task-01-S01.md", TaskFileComposer.FileName(StageKind.Step, 1, "S01"));
+            Assert.Equal("task-99-assembly.md", TaskFileComposer.FileName(StageKind.Assembly, 99, null));
+            Assert.DoesNotContain("/", TaskFileComposer.FileName(StageKind.Step, 1, "S01"));
+        }
+
+        [Fact]
+        public void FileName_ShouldPadOrdinalToTwoDigits()
+        {
+            // 파일 목록이 사전 순으로 보일 때 회차 순서와 어긋나지 않게 한다.
+            Assert.Equal("task-02-S02.md", TaskFileComposer.FileName(StageKind.Step, 2, "S02"));
+            Assert.Equal("task-12-S12.md", TaskFileComposer.FileName(StageKind.Step, 12, "S12"));
+        }
+
+        [Fact]
+        public void Compose_ShouldLinkEntryPointFirst()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            var entry = markdown.IndexOf("MigrationInstructions.md", StringComparison.Ordinal);
+            var step = markdown.IndexOf("steps/S01.md", StringComparison.Ordinal);
+
+            Assert.True(entry >= 0 && entry < step);
+        }
+
+        [Fact]
+        public void Compose_ShouldScopeToOneStepOnly()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains("S01", markdown);
+            Assert.Contains("이번 회차에서 구현할 것", markdown);
+            Assert.Contains("다른 Step의 코드를 작성하지 마십시오", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldLinkTheStepSpecAndSchemas()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains("steps/S01.md", markdown);
+            Assert.Contains("Procedures/dbo.UP_A/docs/Spec.md", markdown);
+            Assert.Contains("../raw/ddl/dbo.TClient.md", markdown);
+            Assert.Contains("common/01-step-contract.md", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldTellBootstrapToBuildTheSkeletonOnly()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null,
+            });
+
+            Assert.Contains("공통 인프라", markdown);
+            Assert.Contains("Tasklet을 구현하지 마십시오", markdown);
+            Assert.DoesNotContain("steps/", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldTellAssemblyToSkipFailedSteps()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Assembly, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null,
+                FailedStepCodes = new[] { "S05", "S09" },
+            });
+
+            Assert.Contains("S05", markdown);
+            Assert.Contains("S09", markdown);
+            Assert.Contains("손대지 마십시오", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNotClaimAllStepsSucceeded_WhenNoneFailed()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Assembly, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null,
+            });
+
+            Assert.Contains("파이프라인", markdown);
+            Assert.DoesNotContain("손대지 마십시오", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldPointAtSinglePlanFile_WhenNotSplit()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                StepRelativePath = null,
+                SinglePlanRelativePath = "../docs/BatchMigrationPlan.md",
+            });
+
+            Assert.Contains("BatchMigrationPlan.md", markdown);
+            Assert.Contains("S01", markdown);
+        }
+    }
+}

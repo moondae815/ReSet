@@ -260,5 +260,44 @@ S02 본문
                 File.Exists(Path.Combine(_agentDir, "steps", "S02.md")),
                 "목차에서 빠진 S02의 파일이 정리되지 않고 남아 있다.");
         }
+
+        [Fact]
+        public async Task WriteAsync_ShouldWriteTaskFilesFlatUnderAgent()
+        {
+            var result = await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            Assert.Equal(4, result.TaskFilePaths.Count); // bootstrap + S01 + S02 + assembly
+            foreach (var path in result.TaskFilePaths)
+            {
+                Assert.True(File.Exists(path));
+                // agent/ 직하여야 ResolveJobDirectory가 Job 루트를 반환한다.
+                Assert.Equal(_agentDir, Path.GetDirectoryName(path));
+            }
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldOrderTaskFilesByStructureOrder()
+        {
+            var result = await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var names = result.TaskFilePaths.Select(Path.GetFileName).ToList();
+
+            Assert.Equal(
+                new[] { "task-00-bootstrap.md", "task-01-S01.md", "task-02-S02.md", "task-99-assembly.md" },
+                names);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldStillWriteBootstrapAndAssembly_WhenNotSplit()
+        {
+            // 분할이 실패해도 회차 구조 자체는 유지한다 - 한 세션에 전부 몰아넣는
+            // 것이 이 작업이 없애려는 바로 그 문제다.
+            var result = await new InstructionBundleWriter().WriteAsync(Inputs(null), CancellationToken.None);
+
+            var names = result.TaskFilePaths.Select(Path.GetFileName).ToList();
+
+            Assert.Contains("task-00-bootstrap.md", names);
+            Assert.Contains("task-99-assembly.md", names);
+        }
     }
 }

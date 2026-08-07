@@ -21,11 +21,13 @@ namespace ReSet.Core.Services
         string JobOutputDir);
 
     /// <param name="StepCodes">실제로 파일이 쓰인 단계 코드. 회차 정의의 근거가 된다.</param>
+    /// <param name="TaskFilePaths">회차 순서대로의 작업 지시서 절대 경로. 회차 정의의 근거.</param>
     public sealed record BundleResult(
         string EntryPointPath,
         IReadOnlyList<string> StepCodes,
         IReadOnlyList<string> Warnings,
-        bool StepsSplit);
+        bool StepsSplit,
+        IReadOnlyList<string> TaskFilePaths);
 
     /// <summary>
     /// 코딩 에이전트에 넘길 `agent/` 번들을 디스크에 쓴다.
@@ -148,11 +150,53 @@ namespace ReSet.Core.Services
             var entryPointPath = Path.Combine(agentDir, "MigrationInstructions.md");
             await WriteAsync(entryPointPath, entryPoint, cancellationToken);
 
+            // 회차 전환은 코딩 엔진에 다른 task-*.md 경로를 넘기는 것으로 끝난다.
+            // 여기서 회차 0(부트스트랩)·단계별·회차 99(조립)까지 한 벌을 미리 써 둔다.
+            var taskFiles = new List<string>();
+            var singlePlanRelative = slices.StepsSplit
+                ? null
+                : RelativeToAgent(agentDir, Path.Combine(inputs.JobOutputDir, "docs", "BatchMigrationPlan.md"));
+
+            async Task WriteTaskAsync(StageKind kind, int ordinal, string? code, string? name, string? specRelative)
+            {
+                var taskInputs = new TaskFileInputs(
+                    Kind: kind,
+                    JobName: inputs.JobName,
+                    TargetLanguage: inputs.TargetLanguage,
+                    StepCode: code,
+                    StepName: name,
+                    StepRelativePath: code != null && slices.StepsSplit ? $"steps/{code}.md" : null,
+                    SpecRelativePath: specRelative,
+                    Dependencies: dependencies,
+                    HasStepContract: slices.StepContract != null,
+                    HasVerification: slices.Verification != null,
+                    // 회차 실행 전이므로 실패 단계는 아직 없다. 오케스트레이터가
+                    // 조립 회차 직전에 이 파일을 다시 쓴다(Task 13).
+                    FailedStepCodes: Array.Empty<string>(),
+                    SinglePlanRelativePath: singlePlanRelative);
+
+                var path = Path.Combine(agentDir, TaskFileComposer.FileName(kind, ordinal, code));
+                await WriteAsync(path, TaskFileComposer.Compose(taskInputs), cancellationToken);
+                taskFiles.Add(path);
+            }
+
+            await WriteTaskAsync(StageKind.Bootstrap, 0, null, null, null);
+
+            var ordinal = 1;
+            foreach (var code in stepCodes)
+            {
+                await WriteTaskAsync(
+                    StageKind.Step, ordinal, code, DescribeStep(inputs.Layout, code), SpecPathForStep(inputs, agentDir, code));
+                ordinal++;
+            }
+
+            await WriteTaskAsync(StageKind.Assembly, 99, null, null, null);
+
             Log.Information(
                 "지시서 번들을 작성했습니다 - Job: {JobName}, 단계 분할: {StepsSplit}, 단계 수: {StepCount}개, 경고: {WarningCount}건",
                 inputs.JobName, slices.StepsSplit, stepCodes.Count, warnings.Count);
 
-            return new BundleResult(entryPointPath, stepCodes, warnings, slices.StepsSplit);
+            return new BundleResult(entryPointPath, stepCodes, warnings, slices.StepsSplit, taskFiles);
         }
 
         /// <summary>
@@ -232,6 +276,44 @@ namespace ReSet.Core.Services
             {
                 Log.Information("이전 실행의 단계 파일을 정리했습니다 - 현재 목차에 없는 파일 삭제, 대상: {Count}개", removed);
             }
+        }
+
+        /// <summary>
+        /// 단계가 유래한 레거시 프로시저의 Spec.md 경로. 목차의 LegacyProcedures가
+        /// 그 대응을 갖고 있으므로 이름 추측을 하지 않는다. 찾지 못하면 null이며,
+        /// 그때 작업 지시서는 명세서 링크 없이 단계 상세만 가리킨다.
+        /// </summary>
+        private static string? SpecPathForStep(BundleInputs inputs, string agentDir, string stepCode)
+        {
+            var step = inputs.Layout?.Steps?.FirstOrDefault(s =>
+                string.Equals(s.Code, stepCode, StringComparison.OrdinalIgnoreCase));
+            if (step == null || step.LegacyProcedures.Count == 0)
+            {
+                return null;
+            }
+
+            foreach (var procedure in step.LegacyProcedures)
+            {
+                var bare = procedure.Contains('.') ? procedure[(procedure.LastIndexOf('.') + 1)..] : procedure;
+
+                var spDef = inputs.SpDefs.FirstOrDefault(sp =>
+                    string.Equals(sp.Name, bare, StringComparison.OrdinalIgnoreCase));
+                if (spDef == null)
+                {
+                    continue;
+                }
+
+                var objectKey = spDef.ObjectKey ?? CodeObjectKey.Create(
+                    inputs.Paths.CurrentDatabase, spDef.Schema, spDef.Name, CodeObjectType.Procedure);
+                var specPath = inputs.Paths.ResolveSpecPath(objectKey);
+
+                if (File.Exists(specPath))
+                {
+                    return RelativeToAgent(agentDir, specPath);
+                }
+            }
+
+            return null;
         }
 
         private static async Task<List<IndexEntry>> WriteDependencySchemasAsync(
