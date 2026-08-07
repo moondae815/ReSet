@@ -381,15 +381,21 @@ namespace ReSet.Core.Services
 
             // 회차 목록은 번들이 실제로 쓴 task 파일에서 나온다. 두 곳이 각자
             // 회차를 세면 progress.json이 존재하지 않는 회차를 가리킬 수 있다.
+            // 식별자·회차 종류 판별은 TaskFileComposer.ParseStageIdentity 하나로
+            // 모아 둔다 - CodegenStagePlan(Task 12)도 같은 것을 쓴다.
             var stages = bundle.TaskFilePaths
                 .Select(path => Path.GetFileNameWithoutExtension(path))
-                .Select(name => new StageProgress(
-                    Id: name.StartsWith("task-", StringComparison.Ordinal) ? name["task-".Length..] : name,
-                    StepCode: ExtractStepCode(name),
-                    TaskFileName: name + ".md",
-                    Status: StageStatus.Pending,
-                    Attempts: 0,
-                    LastGapSummary: null))
+                .Select(name =>
+                {
+                    var identity = TaskFileComposer.ParseStageIdentity(name);
+                    return new StageProgress(
+                        Id: identity.Id,
+                        StepCode: identity.StepCode,
+                        TaskFileName: name + ".md",
+                        Status: StageStatus.Pending,
+                        Attempts: 0,
+                        LastGapSummary: null);
+                })
                 .ToList();
 
             await AgentProgressStore.Create(agentFolder, jobName, stages).SaveAsync(cancellationToken);
@@ -610,21 +616,6 @@ public class ArchitectureTests {
             }
 
             return bundle;
-        }
-
-        /// <summary>
-        /// "task-01-S01" → "S01". Bootstrap과 Assembly는 단계가 아니므로 null이다.
-        /// </summary>
-        private static string? ExtractStepCode(string taskFileBaseName)
-        {
-            var parts = taskFileBaseName.Split('-');
-            if (parts.Length < 3)
-            {
-                return null;
-            }
-
-            var tail = string.Join("-", parts.Skip(2));
-            return tail is "bootstrap" or "assembly" ? null : tail;
         }
 
         /// <summary>

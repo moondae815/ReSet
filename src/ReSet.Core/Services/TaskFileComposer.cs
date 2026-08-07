@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -10,6 +12,11 @@ namespace ReSet.Core.Services
         Step,
         Assembly
     }
+
+    /// <param name="Id">"01-S01" 형태. task-*.md 파일명에서 "task-" 접두와 확장자를 뗀 것.
+    /// progress.json의 회차 식별자와 같다.</param>
+    /// <param name="StepCode">단계 회차면 그 코드(파일명에서 되짚어낸 정화된 값), Bootstrap/Assembly면 null.</param>
+    public sealed record TaskStageIdentity(string Id, StageKind Kind, string? StepCode);
 
     public sealed record TaskFileInputs(
         StageKind Kind,
@@ -44,6 +51,42 @@ namespace ReSet.Core.Services
             StageKind.Assembly => "task-99-assembly.md",
             _ => $"task-{ordinal:D2}-{SanitizeStepCode(stepCode)}.md",
         };
+
+        /// <summary>
+        /// FileName이 회차 종류·코드를 파일명으로 인코딩하는 것의 역변환이다.
+        ///
+        /// progress.json을 채우는 MetadataExporter와 회차 실행 계획을 세우는
+        /// CodegenStagePlan(Task 12)은 둘 다 bundle.TaskFilePaths에서 같은 회차 목록을
+        /// 다시 읽어낸다. 이 로직을 두 곳에서 각자 구현하면 서수 자릿수나 회차 종류가
+        /// 하나 늘었을 때 둘만 조용히 어긋나 progress.json과 실행 계획이 다른 회차를
+        /// 가리키게 된다 - 그래서 여기 하나로 모은다.
+        /// </summary>
+        public static TaskStageIdentity ParseStageIdentity(string taskFileBaseName)
+        {
+            var id = taskFileBaseName.StartsWith("task-", StringComparison.Ordinal)
+                ? taskFileBaseName["task-".Length..]
+                : taskFileBaseName;
+
+            var parts = taskFileBaseName.Split('-');
+            if (parts.Length < 3)
+            {
+                // task-<서수>-<코드> 형태를 벗어난 파일명이다. 조용히 Step으로 치부하면
+                // 부트스트랩/조립 판별이 틀렸는지 알 방법이 없다.
+                Log.Warning(
+                    "작업 파일명이 예상된 회차 이름 형식(task-서수-코드)이 아닙니다 - 파일명: {FileName}",
+                    taskFileBaseName);
+                return new TaskStageIdentity(id, StageKind.Step, null);
+            }
+
+            var tail = string.Join("-", parts.Skip(2));
+
+            return tail switch
+            {
+                "bootstrap" => new TaskStageIdentity(id, StageKind.Bootstrap, null),
+                "assembly" => new TaskStageIdentity(id, StageKind.Assembly, null),
+                _ => new TaskStageIdentity(id, StageKind.Step, tail),
+            };
+        }
 
         /// <summary>
         /// stepCode는 AI가 생성한 계획서 텍스트에서 뽑아낸 값이라 신뢰할 수 없다.

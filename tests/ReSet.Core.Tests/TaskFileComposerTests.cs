@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -60,6 +61,48 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("\\", fileName);
             Assert.StartsWith("task-01-", fileName);
             Assert.EndsWith(".md", fileName);
+        }
+
+        [Fact]
+        public void ParseStageIdentity_ShouldRoundTripFileNameForEachStageKind()
+        {
+            // MetadataExporter(progress.json)와 CodegenStagePlan은 둘 다 이 메서드로
+            // FileName의 인코딩을 되짚는다. 인코딩·디코딩이 어긋나면 두 산출물이
+            // 서로 다른 회차를 가리키게 된다.
+            var bootstrap = TaskFileComposer.ParseStageIdentity(
+                Path.GetFileNameWithoutExtension(TaskFileComposer.FileName(StageKind.Bootstrap, 0, null)));
+            Assert.Equal(new TaskStageIdentity("00-bootstrap", StageKind.Bootstrap, null), bootstrap);
+
+            var step = TaskFileComposer.ParseStageIdentity(
+                Path.GetFileNameWithoutExtension(TaskFileComposer.FileName(StageKind.Step, 1, "S01")));
+            Assert.Equal(new TaskStageIdentity("01-S01", StageKind.Step, "S01"), step);
+
+            var assembly = TaskFileComposer.ParseStageIdentity(
+                Path.GetFileNameWithoutExtension(TaskFileComposer.FileName(StageKind.Assembly, 99, null)));
+            Assert.Equal(new TaskStageIdentity("99-assembly", StageKind.Assembly, null), assembly);
+        }
+
+        [Fact]
+        public void ParseStageIdentity_ShouldKeepMultiHyphenStepCodeIntact()
+        {
+            // 정화 후에도 "-"는 살아남는 문자다(SanitizeStepCode 참고). tail을
+            // 두 번째 부분까지만 잘라내면 "S01-A"가 "S01"로 잘린다.
+            var identity = TaskFileComposer.ParseStageIdentity("task-01-S01-A");
+
+            Assert.Equal(StageKind.Step, identity.Kind);
+            Assert.Equal("S01-A", identity.StepCode);
+        }
+
+        [Fact]
+        public void ParseStageIdentity_ShouldFallBackToStepForMalformedFileName()
+        {
+            // "task-<서수>-<코드>" 형태를 벗어난 파일명은 회차 종류를 판별할 근거가
+            // 없다. 조용히 넘어가지 않고 Step으로 물러서되(부트스트랩/조립으로
+            // 잘못 단정하지 않음) StepCode는 비워 둔다.
+            var identity = TaskFileComposer.ParseStageIdentity("weird-name");
+
+            Assert.Equal(StageKind.Step, identity.Kind);
+            Assert.Null(identity.StepCode);
         }
 
         [Fact]

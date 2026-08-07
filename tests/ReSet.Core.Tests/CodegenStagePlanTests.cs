@@ -84,5 +84,33 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "00-bootstrap", "01-S01", "02-S02", "99-assembly" },
                 plan.Stages.Select(s => s.Id));
         }
+
+        [Fact]
+        public void FromBundle_ShouldBuildStepSpecPathFromRawStepCode_WhenSanitizedDiffersFromRaw()
+        {
+            // 단계 코드는 AI가 생성한 계획서 텍스트에서 온다. 공백·콜론·슬래시처럼
+            // 파일명에 안전하지 않은 문자가 실제로 나타날 수 있다(예: "S01: 회원 이관/추가").
+            // task-*.md 파일명은 정화된 코드를 쓰지만, steps/{코드}.md 파일 자체는
+            // InstructionBundleWriter가 원본 코드로 쓴다. StepSpecPath가 정화된
+            // 파일명을 되짚어 조합하면 존재하지 않는 파일을 가리킨다.
+            var rawCode = "S01: 회원 이관/추가";
+            var taskFileName = TaskFileComposer.FileName(StageKind.Step, 1, rawCode);
+
+            var bundle = new BundleResult(
+                EntryPointPath: Path.Combine(Agent, "MigrationInstructions.md"),
+                StepCodes: new[] { rawCode },
+                Warnings: Array.Empty<string>(),
+                StepsSplit: true,
+                TaskFilePaths: new[]
+                {
+                    Path.Combine(Agent, "task-00-bootstrap.md"),
+                    Path.Combine(Agent, taskFileName),
+                    Path.Combine(Agent, "task-99-assembly.md"),
+                });
+
+            var plan = CodegenStagePlan.FromBundle(bundle, Agent);
+
+            Assert.Equal(Path.Combine(Agent, "steps", $"{rawCode}.md"), plan.Stages[1].StepSpecPath);
+        }
     }
 }
