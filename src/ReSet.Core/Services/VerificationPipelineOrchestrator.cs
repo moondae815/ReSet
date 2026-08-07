@@ -1668,18 +1668,15 @@ namespace ReSet.Core.Services
             // 재수립 시점에 필요한데 기존에는 if 블록 안에서만 살아 있었다.
             // 목차가 있으면 브레인스토밍도 반드시 있다(둘은 한 몸으로만 실행된다).
             string currentBrainstorming = string.Empty;
-            // 최고점 후보(BestAttempt.Current)를 실제로 만들어 낸 목차. 후보와 한 몸으로
-            // 움직여야 한다. 목차 재수립 뒤 회차가 더 낮은 점수를 내면 RetryRescue가
-            // 재수립 이전 후보를 채택하는데, 그때 PlanStructure.md에 최신 목차가 남아
-            // 있으면 산출된 문서를 한 번도 만든 적 없는 목차를 가리키게 된다.
-            string bestAttemptStructure = string.Empty;
-            // 최고점 후보를 실제로 만들어 낸 회차의 stepFloorViolations 스냅샷.
-            // bestAttemptStructure와 같은 이유로, 같은 자리에서만 함께 갱신한다.
-            // 배너는 루프 종료 후 살아있는 stepFloorViolations를 읽는데, 구제로
-            // 채택되는 문서(rescued.Markdown)는 이 스냅샷이 찍힌 바로 그 회차의
-            // 문서다 — 더 나중/이전 회차의 살아있는 위반 기록을 읽으면 과다 보고
-            // (없는 결함을 표시)나 과소 보고(있는 결함을 누락)가 생긴다.
-            var bestAttemptStepFloorViolations = new Dictionary<string, string>();
+            // 최고점 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
+            // 목차·골격·골격 AiResult·단계 섹션·하한 위반이 한 몸으로 움직인다.
+            //
+            // 목차가 어긋나면 산출된 문서를 한 번도 만든 적 없는 목차가 기록으로
+            // 남고, 하한 위반이 어긋나면 배너가 과다·과소 보고하며, 골격과 섹션이
+            // 어긋나면 L3 지목 재생성이 화면의 문서가 아닌 폐기된 회차 위에 얹힌다.
+            // 셋 다 실제로 발생했던 결함이라 개별 변수로 두지 않는다.
+            var adoptedState = new AdoptedGenerationState(
+                string.Empty, null, null, null, new Dictionary<string, string>());
             // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
             var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
@@ -1821,15 +1818,13 @@ namespace ReSet.Core.Services
                         $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                     currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                        outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                        outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                    RestoreAdoptedGenerationState(
+                        adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                     finalAiResult = rescued.Generation ?? finalAiResult;
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
                     consolidatedPlan = rescued.Markdown;
-                    // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반 스냅샷으로
-                    // 갈아탄다 — 살아있는(다른 회차의) stepFloorViolations를 그대로
-                    // 두면 배너가 채택되지 않은 문서를 서술한다.
-                    stepFloorViolations = bestAttemptStepFloorViolations;
                     break;
                 }
 
@@ -1858,14 +1853,13 @@ namespace ReSet.Core.Services
                                 $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            RestoreAdoptedGenerationState(
+                                adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                             finalAiResult = rescued.Generation ?? finalAiResult;
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
                             consolidatedPlan = rescued.Markdown;
-                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                            // 스냅샷으로 갈아탄다.
-                            stepFloorViolations = bestAttemptStepFloorViolations;
                             break;
                         }
 
@@ -1906,10 +1900,14 @@ namespace ReSet.Core.Services
                     improvedThisAttempt = bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
                     if (improvedThisAttempt)
                     {
-                        // 후보가 교체되는 바로 그 자리에서 목차도, 하한 위반 스냅샷도
-                        // 함께 붙잡는다. 다른 곳에서 갱신하면 셋이 어긋나는 순간이 생긴다.
-                        bestAttemptStructure = currentPlanStructure;
-                        bestAttemptStepFloorViolations = new Dictionary<string, string>(stepFloorViolations);
+                        // 후보가 교체되는 바로 그 자리에서 그 후보를 만든 상태를
+                        // 통째로 붙잡는다. 다른 곳에서 갱신하면 어긋나는 순간이 생긴다.
+                        adoptedState = new AdoptedGenerationState(
+                            currentPlanStructure,
+                            lastSkeleton,
+                            lastSkeletonResult,
+                            lastStepSections == null ? null : new Dictionary<string, string>(lastStepSections),
+                            new Dictionary<string, string>(stepFloorViolations));
                     }
                 }
 
@@ -1985,10 +1983,9 @@ namespace ReSet.Core.Services
                         if (rescued != null)
                         {
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
-                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                            // 스냅샷으로 갈아탄다.
-                            stepFloorViolations = bestAttemptStepFloorViolations;
+                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            RestoreAdoptedGenerationState(
+                                adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         }
 
                         finalAiResult = rescued?.Generation ?? finalAiResult;
@@ -2012,14 +2009,13 @@ namespace ReSet.Core.Services
                             $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                        RestoreAdoptedGenerationState(
+                            adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         finalAiResult = rescued.Generation ?? finalAiResult;
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
                         consolidatedPlan = rescued.Markdown;
-                        // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                        // 스냅샷으로 갈아탄다.
-                        stepFloorViolations = bestAttemptStepFloorViolations;
                         break;
                     }
 
@@ -2077,14 +2073,14 @@ namespace ReSet.Core.Services
             // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
             // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
             // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
-            // 거쳐 bestAttemptStructure로 정확히 갈아타지만, currentSteps는 그
+            // 거쳐 adoptedState.PlanStructure로 정확히 갈아타지만, currentSteps는 그
             // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
             // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
             // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
             // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
             // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
             // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
-            // bestAttemptStepFloorViolations라는 스냅샷을 따로 두는 이유(단계
+            // adoptedState.FloorViolations라는 스냅샷을 따로 두는 이유(단계
             // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
             // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
             // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
@@ -2313,6 +2309,43 @@ namespace ReSet.Core.Services
             string Skeleton,
             Dictionary<string, string> Sections,
             Dictionary<string, string> FloorViolations);
+
+        /// <summary>
+        /// 채택 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
+        /// 후보가 교체되는 그 자리에서 통째로 붙잡고, 구제 채택 시 통째로 되돌린다.
+        ///
+        /// 다섯 값을 개별 변수로 두면 "함께 움직여야 한다"가 규율이 되고, 규율은
+        /// 깨진다 — 이 파이프라인에서 이미 세 번 깨졌다. 레코드로 묶으면 구조가 된다.
+        ///
+        /// 유지보수 불변식: 채택 문서를 이전 회차로 되돌리는 종료 경로를 새로
+        /// 추가한다면 반드시 이 레코드를 통째로 되돌려야 한다. 개별 필드만 되돌리는
+        /// 코드를 쓰지 말 것 — 그러려고 묶었다.
+        /// </summary>
+        private sealed record AdoptedGenerationState(
+            string PlanStructure,
+            string? Skeleton,
+            AiResult? SkeletonResult,
+            IReadOnlyDictionary<string, string>? StepSections,
+            IReadOnlyDictionary<string, string> FloorViolations);
+
+        /// <summary>
+        /// 채택 상태를 살아있는 지역 변수들로 되돌린다. 사전은 복사해서 넘긴다 —
+        /// 스냅샷을 그대로 참조시키면 이후 변형이 스냅샷을 오염시킨다.
+        /// </summary>
+        private static void RestoreAdoptedGenerationState(
+            AdoptedGenerationState adopted,
+            out string? skeleton,
+            out AiResult? skeletonResult,
+            out Dictionary<string, string>? stepSections,
+            out Dictionary<string, string> floorViolations)
+        {
+            skeleton = adopted.Skeleton;
+            skeletonResult = adopted.SkeletonResult;
+            stepSections = adopted.StepSections == null
+                ? null
+                : new Dictionary<string, string>(adopted.StepSections);
+            floorViolations = new Dictionary<string, string>(adopted.FloorViolations);
+        }
 
         /// <summary>
         /// 분할 생성 캐시를 통째로 무효화한다.

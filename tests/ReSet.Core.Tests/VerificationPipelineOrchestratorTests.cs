@@ -5697,5 +5697,50 @@ SELECT 1;
             // 채택되지도 않은 목차 B의 커버리지 공백이 배너로 새어 나오면 안 된다.
             Assert.DoesNotContain("[커버리지 누락]", result.Plan);
         }
+
+        // 구제 채택은 문서·목차·하한 위반을 채택 회차로 되돌리지만, 캐시된
+        // 골격과 단계 섹션은 되돌리지 않았다. L3가 그 캐시를 재사용하기 시작하면
+        // 화면의 문서가 아니라 폐기된 회차의 섹션 위에 피드백이 얹힌다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenRescueAdoptsEarlierAttempt_RewindsCachedSkeletonAndSections()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+
+            // 1차 골격과 3차 골격을 구분 가능하게 만든다.
+            var skeletonCall = 0;
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => new AiResult
+                {
+                    Content = SkeletonMarkdown,
+                    SystemPrompt = $"골격 시스템 프롬프트 #{++skeletonCall}"
+                });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1차는 통과 점수, 2차는 더 낮은 점수(재수립 유발), 3차는 결함 →
+            // 예산 소진 시 RetryRescue가 최고점인 1차를 채택한다.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => ++reviewCall switch
+                {
+                    1 => new ReviewResult { HasDefects = true, FeedbackComment = "보완", ScoreAccuracy = 7, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    _ => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                });
+
+            var result = await RunBatchPipeline(aiService);
+
+            // 채택된 것은 1차이므로 finalAiResult도 1차 골격의 것이어야 한다.
+            Assert.NotNull(result.Result);
+            Assert.Equal("골격 시스템 프롬프트 #1", result.Result!.SystemPrompt);
+        }
     }
 }
