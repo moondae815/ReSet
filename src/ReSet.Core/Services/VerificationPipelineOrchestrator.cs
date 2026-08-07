@@ -2044,47 +2044,9 @@ namespace ReSet.Core.Services
                 }
             }
 
-            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
-            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
-            //
-            // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
-            // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
-            // Dictionary로 바꾸지 않고 표시 문자열 목록으로 투영하는 이유는 둘이다.
-            // 다른 배너 메서드(L1Exhausted, UnresolvedReferences)가 모두
-            // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
-            // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
-            // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
-            var stepFloorViolationMessages = stepFloorViolations
-                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
-                .Select(kvp => kvp.Value)
-                .ToList();
-            if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
-            {
-                consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
-            }
-
-            // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
-            // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
-            // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
-            // 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만, 9개
-            // 프로시저는 최종 문서 어디에도 흔적이 없다 — 부실 섹션보다 더
-            // 나쁘다. 부실 섹션은 최소한 존재를 알리기라도 한다.
-            //
-            // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
-            // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
-            // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
-            // 거쳐 adoptedState.PlanStructure로 정확히 갈아타지만, currentSteps는 그
-            // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
-            // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
-            // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
-            // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
-            // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
-            // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
-            // adoptedState.FloorViolations라는 스냅샷을 따로 두는 이유(단계
-            // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
-            // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
-            // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
-            // 무관하므로 별도 스냅샷이 필요 없다.
+            // 목차 파싱을 호출부에 두는 이유: L3(Task 4)가 같은 결과를 승인 화면의
+            // 단계 선택 목록에도 넘겨야 한다. 메서드 안에서 파싱하면 두 번 파싱하거나
+            // 시그니처를 다시 바꾸게 된다.
             //
             // 유지보수 불변식(재검토 시 반드시 지킬 것): (1) 이 재계산은 재시도
             // 루프가 완전히 끝난 뒤, currentPlanStructure 하나에서만 파싱해야
@@ -2092,27 +2054,9 @@ namespace ReSet.Core.Services
             // 않는다. (2) 앞으로 채택 문서를 이전 회차로 되돌리는 새 종료 경로를
             // 추가한다면, 그 경로는 반드시 currentPlanStructure를 그 회차의 목차로
             // 되감아야 한다 — 안 그러면 이 재계산이 채택되지 않은 문서를 서술한다.
-            //
-            // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
-            // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
-            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
-            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
-            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
-            var uncoveredProcedures = adoptedSteps != null
-                ? FindUncoveredProcedures(adoptedSteps, specs)
-                : Array.Empty<string>();
-            if (uncoveredProcedures.Count > 0)
-            {
-                Log.Warning(
-                    "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
-                    jobName, uncoveredProcedures.Count, string.Join(", ", uncoveredProcedures));
-
-                if (!string.IsNullOrEmpty(consolidatedPlan))
-                {
-                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
-                }
-            }
+            consolidatedPlan = AttachPipelineBanners(
+                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
@@ -2237,6 +2181,84 @@ namespace ReSet.Core.Services
                     planOutcome = VerificationOutcome.ReviewNotRun;
                 }
             }
+        }
+
+        /// <summary>
+        /// 파이프라인이 문서를 사용자에게 건네기 직전에 붙는 배너를 모두 부착한다.
+        ///
+        /// 재시도 루프 종료 직후와 L3 피드백 재생성 직후, 두 자리에서 호출된다.
+        /// 두 벌로 두면 한쪽만 고쳐지는 날이 온다.
+        /// </summary>
+        private string AttachPipelineBanners(
+            string consolidatedPlan,
+            IReadOnlyDictionary<string, string> stepFloorViolations,
+            IReadOnlyList<BatchStepPlan>? adoptedSteps,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string jobName)
+        {
+            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
+            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
+            //
+            // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
+            // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
+            // Dictionary로 바꾸지 않고 표시 문자열 목록으로 투영하는 이유는 둘이다.
+            // 다른 배너 메서드(L1Exhausted, UnresolvedReferences)가 모두
+            // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
+            // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
+            // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
+            var stepFloorViolationMessages = stepFloorViolations
+                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+                .Select(kvp => kvp.Value)
+                .ToList();
+            if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
+            }
+
+            // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
+            // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
+            // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
+            // 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만, 9개
+            // 프로시저는 최종 문서 어디에도 흔적이 없다 — 부실 섹션보다 더
+            // 나쁘다. 부실 섹션은 최소한 존재를 알리기라도 한다.
+            //
+            // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
+            // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
+            // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
+            // 거쳐 adoptedState.PlanStructure로 정확히 갈아타지만, currentSteps는 그
+            // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
+            // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
+            // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
+            // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
+            // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
+            // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
+            // adoptedState.FloorViolations라는 스냅샷을 따로 두는 이유(단계
+            // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
+            // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
+            // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
+            // 무관하므로 별도 스냅샷이 필요 없다.
+            //
+            // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
+            // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
+            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
+            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
+            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
+            var uncoveredProcedures = adoptedSteps != null
+                ? FindUncoveredProcedures(adoptedSteps, specs)
+                : Array.Empty<string>();
+            if (uncoveredProcedures.Count > 0)
+            {
+                Log.Warning(
+                    "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
+                    jobName, uncoveredProcedures.Count, string.Join(", ", uncoveredProcedures));
+
+                if (!string.IsNullOrEmpty(consolidatedPlan))
+                {
+                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
+                }
+            }
+
+            return consolidatedPlan;
         }
 
         /// <summary>
