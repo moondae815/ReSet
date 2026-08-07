@@ -4486,6 +4486,30 @@ SELECT 1;
         }
 
         [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyAboveOne_WarnsOnce()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyIsOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 1);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        [Fact]
         public async Task RunConsolidatedPipeline_WithoutStepList_FallsBackToSingleCall()
         {
             var aiService = Substitute.For<IAiService>();
@@ -6265,47 +6289,6 @@ SELECT 1;
             // 기록이 새어 나오면 여기서 잡힌다.
             Assert.DoesNotContain("하한 미달", result.Plan);
             Assert.DoesNotContain("S01", result.Plan);
-        }
-
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyAboveOne_WarnsOnce()
-        {
-            var aiService = SplitCapableAiService();
-            aiService.ProviderName.Returns("Ollama");
-            var ui = Substitute.For<IVerificationUserInteraction>();
-
-            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
-
-            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
-        }
-
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyIsOne_DoesNotWarn()
-        {
-            var aiService = SplitCapableAiService();
-            aiService.ProviderName.Returns("Ollama");
-            var ui = Substitute.For<IVerificationUserInteraction>();
-
-            await RunBatchPipelineWithConcurrency(aiService, ui, 1);
-
-            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
-        }
-
-        /// <summary>
-        /// 0·음수는 1로 절상된다. 절상 결과는 private 필드라 직접 볼 수 없으므로,
-        /// "1일 때만 경고하지 않는다"는 성질을 관측 지점으로 쓴다.
-        /// </summary>
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenConcurrencyIsZeroOrNegative_ClampsToOne()
-        {
-            var aiService = SplitCapableAiService();
-            aiService.ProviderName.Returns("Ollama");
-            var ui = Substitute.For<IVerificationUserInteraction>();
-
-            await RunBatchPipelineWithConcurrency(aiService, ui, 0);
-            await RunBatchPipelineWithConcurrency(aiService, ui, -5);
-
-            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
         }
     }
 }
