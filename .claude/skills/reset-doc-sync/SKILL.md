@@ -29,19 +29,39 @@ ReSet의 소스 코드 변화를 3개의 핵심 문서에 정확하게 반영하
 세 문서는 합계 1,200줄이 넘는다. **전문을 읽지 말고 목차부터 확보한 뒤 필요한 섹션만 부분 읽기**를 한다.
 전문 읽기는 "문서 전면 개편" 요청일 때만 허용한다.
 
-**1-1. 기준점 산정** — 비교 기준은 `origin/main`이 아니라 *마지막 문서 갱신 시점*이다.
+**1-1. 기준점 산정** — 비교 기준은 `origin/main`이 아니라 *마지막 문서 동기화 시점*이다.
 (로컬 `main`이 원격보다 여러 커밋 앞서 있을 수 있어 `origin/main..HEAD`는 과도한 범위를 낳는다.)
 
 세 문서를 한 번에 `git log`에 넘기면 **가장 최신** 갱신 커밋이 나와, 뒤처진 문서의 누락 구간을 놓친다.
-문서별 최종 갱신 커밋 중 **가장 오래된 것**을 기준점으로 삼는다.
+문서별 동기화 지점을 각각 구한 뒤 그중 **가장 이른 것**을 기준점으로 삼는다.
+
+각 문서 하단에는 동기화 지점이 주석으로 박혀 있다(4-2에서 갱신한다). 이 값을 우선 사용한다.
 
 ```bash
-BASE=$(for f in README.md AGENTS.md docs/architecture.md; do
-         git log -n 1 --format='%ct %H' -- "$f"
-       done | sort -n | head -1 | cut -d' ' -f2)
+BASE=$(grep -ho 'synced-through: [0-9a-f]\{7,40\}' README.md AGENTS.md docs/architecture.md \
+       | awk '{print $2}' | xargs git merge-base)
 git log --oneline "$BASE"..HEAD
 git diff --stat "$BASE"..HEAD -- src/ tests/
 ```
+
+주석이 아직 없는 문서가 있으면 그 문서만 최종 갱신 커밋으로 대체한다.
+
+```bash
+BASE=$(git merge-base $(for f in README.md AGENTS.md docs/architecture.md; do
+         grep -ho 'synced-through: [0-9a-f]\{7,40\}' "$f" | awk '{print $2}' \
+           || git log -n 1 --format=%H -- "$f"
+       done))
+```
+
+**타임스탬프로 정렬하지 않는다.** `%ct`(author date) 정렬은 위상 순서와 어긋난다 —
+오래 살아 있던 브랜치의 커밋은 날짜가 옛날이면서 병합은 늦게 되므로, 날짜순 최솟값이
+실제 공통 조상보다 뒤일 수 있고 그만큼 구간이 잘린다. `git merge-base`는 어떤 문서의
+동기화 지점보다도 늦어지지 않으므로 선형 히스토리에서는 같은 답을, 갈라진 히스토리에서는
+안전한 답을 준다.
+
+**갱신 커밋을 동기화 지점으로 추정하는 것의 한계**를 알아 둔다. 오타 수정 한 번이면
+그 문서의 최종 갱신 커밋이 앞으로 점프하고, 그 이전 구간의 진짜 누락은 영영 스캔 범위
+밖으로 나간다. `synced-through` 주석은 이 추정을 사실로 바꾸기 위해 존재한다.
 
 **1-2. 소스 변경 파악** — 위 diff에서 신규/변경된 클래스·인터페이스·서비스 파일을 추린다.
 설정 키가 늘었는지는 `git diff "$BASE"..HEAD -- src/ReSet.Cli/appsettings.json`으로 별도 확인한다.
@@ -59,6 +79,31 @@ grep -n "^#\{1,3\} " README.md AGENTS.md docs/architecture.md
 grep -rn "NewClassName\|NewSettingKey" README.md AGENTS.md docs/architecture.md
 ```
 
+**1-5. 역검색: 바뀐 식별자로 문서를 훑는다** — 1-4까지는 "새로 생긴 것이 문서에 있는가"를 묻는다.
+그 방향으로는 **기존 서술이 거짓이 된 곳을 원리상 찾을 수 없다.** 누락이 아니라 오염이기 때문이다.
+방향을 뒤집어, 코드에서 바뀐 식별자를 뽑아 문서에서 되짚는다.
+
+```bash
+git diff "$BASE"..HEAD -- src/ \
+  | grep -E "^[+-]" | grep -v "^[+-][+-]" \
+  | grep -oE '\b[A-Z][A-Za-z0-9]{3,}\b' | sort -u > /tmp/changed-symbols.txt
+
+grep -nFf /tmp/changed-symbols.txt README.md AGENTS.md docs/architecture.md
+```
+
+여기 걸린 줄은 **바뀐 동작을 서술하는 문장**이므로 예외 없이 다시 읽는다.
+빈도 상위 식별자부터 보면 효율이 높다.
+
+```bash
+git diff "$BASE"..HEAD -- src/ | grep -E "^[+-]" | grep -v "^[+-][+-]" \
+  | grep -oE '\b[A-Z][A-Za-z0-9]{3,}\b' | sort | uniq -c | sort -rn | head -15
+```
+
+실측 사례: 코딩 에이전트 헤드리스 작업에서 `ExitCode`가 최다 변경 식별자였고,
+그 한 단어로 `architecture.md`의 시퀀스 다이어그램이 "종료 코드 0 = 성공"이라는
+**이미 폐기된 전제**를 그리고 있다는 사실이 즉시 드러났다. 신규 클래스 검색으로는
+끝까지 나오지 않던 결함이다.
+
 ### 2단계: 일관성 점검
 
 1단계 결과를 바탕으로 문서 간의 괴리를 항목별로 특정한다.
@@ -69,7 +114,20 @@ grep -rn "NewClassName\|NewSettingKey" README.md AGENTS.md docs/architecture.md
 - `AGENTS.md`의 참조 링크가 존재하지 않는 파일을 가리키는가? (4단계 검증 커맨드로 확인)
 - `AGENTS.md` 체크리스트의 단위 테스트 개수가 실제와 다른가? (4단계 검증 커맨드로 확인)
 - Mermaid 다이어그램이 신규 모듈 연동이나 흐름 변경을 반영하지 못하고 과거 구조에 머물러 있는가?
-- **기존 서술이 이제 거짓이 된 곳은 없는가?** (누락보다 잡기 어렵다. 예: "현재 사용하지 않음"으로 적힌 경로가 실제로 쓰이기 시작한 경우)
+- **1-5 역검색에 걸린 줄을 전부 확인했는가?** 이 목록이 "기존 서술이 거짓이 된 곳"의 1차 후보다.
+
+**부정형 서술 집중 점검** — 가장 위험한 문장은 무언가를 하지 *않는다*고 단언하는 문장이다.
+코드가 그 반대로 바뀌어도 문법적으로는 멀쩡해 눈으로 훑을 때 그대로 지나간다.
+
+```bash
+grep -nE "무관|하지 않|않습니다|사용하지|없습니다|불가능|미지원|제외" \
+  README.md AGENTS.md docs/architecture.md
+```
+
+건수가 많으면 1-5 역검색 결과와 겹치는 줄부터 본다. 부정형 단언은 근거를 확인하기 전까지
+참으로 취급하지 않는다 — 실측 사례로 `AGENTS.md`가 "`CodegenSettings:Engines:agy`는 이
+제약과 무관합니다"라고 단언했으나, 실제로 CLI를 돌려 보니 같은 자동 거부에 걸렸다.
+문서에 적혀 있다는 사실은 그것이 참이라는 근거가 아니다.
 
 ### 3단계: 업데이트 안(案) 작성
 
@@ -120,6 +178,20 @@ grep -rn "NewClassName\|NewSettingKey" README.md AGENTS.md docs/architecture.md
 
 **4-2. 적용** — 승인된 항목만, 해당 섹션만 부분 치환한다. 일부만 승인하거나 수정을 요청하면 그 부분만 재작성 후 다시 제안한다.
 
+적용을 마치면 **손댄 문서의 `synced-through` 주석을 현재 `HEAD`로 갱신한다.** 이 줄이 다음 회차의
+기준점이 되므로, 빠뜨리면 다음 동기화가 이미 반영한 구간을 다시 훑거나(무해) 오타 수정에 밀려
+누락 구간을 건너뛴다(유해).
+
+```bash
+HEAD_SHA=$(git rev-parse --short HEAD)
+# 각 문서 하단의 다음 줄을 새 SHA로 치환한다
+#   <!-- synced-through: 9861fad -->
+```
+
+**변경하지 않은 문서의 주석은 건드리지 않는다.** "검토했으나 변경 불필요"와 "동기화됨"은 다르다 —
+전자를 후자로 기록하면 다음 회차가 그 구간을 다시 보지 않는다. 세 문서를 모두 실제로 검토했고
+변경이 불필요하다고 판정한 경우에만 함께 갱신한다.
+
 **4-3. 검증** — 적용 직후 반드시 실행한다.
 
 ```bash
@@ -134,9 +206,24 @@ grep -ho '](\./[^)]*)' AGENTS.md README.md | sed 's/](\(.*\))/\1/' \
 # 단위 테스트 개수 대조 — AGENTS.md 체크리스트 숫자와 일치해야 함
 dotnet test 2>&1 | tail -1
 grep -n "개의 단위 테스트" AGENTS.md
+
+# 동기화 지점 갱신 확인 — 손댄 문서가 현재 HEAD를 가리켜야 함
+git rev-parse --short HEAD
+grep -n 'synced-through' README.md AGENTS.md docs/architecture.md
 ```
 
-깨진 링크나 개수 불일치가 나오면 그 자리에서 고치고 재검증한다.
+Mermaid 블록을 수정했다면 렌더링까지 확인한다. `alt`/`loop` 중첩을 바꾼 경우 `end` 짝이
+어긋나도 눈으로는 드러나지 않는다.
+
+```bash
+awk '/^```mermaid/{f=1;next}/^```$/{f=0}f' docs/architecture.md > /tmp/d.mmd
+mmdc -i /tmp/d.mmd -o /tmp/d.svg && echo "MERMAID OK"
+```
+
+(문서에 Mermaid 블록이 여러 개면 수정한 절만 잘라 검사한다. `mmdc`가 없으면 건너뛰되
+그 사실을 보고에 남긴다.)
+
+깨진 링크·개수 불일치·렌더링 실패가 나오면 그 자리에서 고치고 재검증한다.
 
 ## ⚠️ 주의사항
 

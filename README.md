@@ -537,3 +537,5 @@ dotnet run --project src/ReSet.Cli
 ```bash
 dotnet test
 ```
+
+<!-- synced-through: 9861fad -->
