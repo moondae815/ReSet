@@ -53,7 +53,7 @@ namespace ReSet.Core.Tests
         public async Task ExternalCliCodingEngine_ShouldThrow_WhenCommandDoesNotExist()
         {
             // Arrange
-            var engine = new ExternalCliCodingEngine("test-engine", "non-existent-command-12345", "--help");
+            var engine = new ExternalCliCodingEngine("test-engine", "non-existent-command-12345", "--help", isHeadless: false);
             var spDef = new SpDefinition { Schema = "dbo", Name = "TestSp" };
             
             var tempFile = Path.GetTempFileName();

@@ -34,7 +34,9 @@ namespace ReSet.Cli
                 throw new InvalidOperationException($"코딩 엔진 '{engineName}'의 실행 파일명(Command)이 누락되었습니다.");
             }
 
-            return new ExternalCliCodingEngine(engineName, command, arguments);
+            // isHeadless 분기(대화형/배치 인자 분리)는 Task 4에서 다룬다. 지금은
+            // 생성자 시그니처 변경에 맞춰 기존 대화형 동작만 유지한다.
+            return new ExternalCliCodingEngine(engineName, command, arguments, isHeadless: false);
         }
     }
 }

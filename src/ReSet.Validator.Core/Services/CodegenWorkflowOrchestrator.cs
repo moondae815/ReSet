@@ -46,8 +46,12 @@ namespace ReSet.Validator.Core.Services
                 Log.Information("[SelfHealing] 자가 수정 루프 시작 - 시도: {Attempt}/{MaxAttempts}, 대상: {Target}", attempt, _maxL2Attempts == -1 ? "무제한" : maxAttempts.ToString(), jobOrSpName);
 
                 // 1. External Coding Engine 기동 (Actor)
-                bool engineSuccess = await _codingEngine.GenerateCodeAsync(null, instructionsFilePath, codeDir, cancellationToken);
-                
+                var run = await _codingEngine.GenerateCodeAsync(null, instructionsFilePath, codeDir, cancellationToken);
+
+                // 이 태스크에서는 기존 판정을 그대로 유지한다. 산출물 유무와 실패 분류를
+                // 쓰는 루프 제어는 Task 5에서 이 자리를 대체한다.
+                bool engineSuccess = run.ExitCode == 0;
+
                 if (!engineSuccess)
                 {
                     Log.Warning("[SelfHealing] 코딩 에이전트 비정상 종료. 검증을 건너뛰고 다음 시도를 준비하거나 종료합니다.");
