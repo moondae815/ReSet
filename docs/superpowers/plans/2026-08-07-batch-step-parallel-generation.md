@@ -492,6 +492,11 @@ Task 1이 추가한 테스트들 아래에 이어 쓴다.
         /// ③④ 완료 순서와 동시 실행 수가 산출물을 바꾸지 않는다.
         /// 순차(1), 팬아웃(4, 정방향 지연), 팬아웃(4, 역방향 지연) 세 실행이 같은 문서를 낸다.
         /// 병렬화가 산출물을 바꾸지 않는다는 것이 이 설계의 전제이므로 전제 자체를 단언한다.
+        ///
+        /// 이 테스트가 잡는 것은 병합 "순서"가 아니다 — 문서 본문은 steps 목록에서 다시
+        /// 조립되고 배너는 Key로 정렬되므로, 병합이 완료 순서였어도 이 단언들은 통과한다.
+        /// 실제로 잡는 것은 잠금 없는 Dictionary 동시 쓰기로 인한 유실·손상과,
+        /// 동시 실행이 산출물을 바꾸지 않는다는 종단 간 불변식이다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipeline_ProducesSameDocumentRegardlessOfConcurrencyOrCompletionOrder()
@@ -609,11 +614,14 @@ Expected: ①이 `관측된 최대 동시 실행 수가 1이었다`(또는 `병�
 Task 2가 만든 `for` 루프 전체를 다음으로 교체한다. (`foreach (var step in pending) { floorViolations.Remove(step.Code); }` 블록은 그대로 둔다.)
 
 ```csharp
-            // 동시 실행 수 제한. Dispose하지 않는다 — AvailableWaitHandle을 쓰지 않아
-            // Dispose가 필요 없고, 취소로 Task.WhenAll이 먼저 빠져나간 뒤에도 아직
-            // 돌고 있는 단계 태스크가 finally에서 Release를 호출하므로, 여기서
-            // Dispose하면 그 태스크가 ObjectDisposedException으로 죽어 관측되지 않는
-            // 예외가 된다.
+            // 동시 실행 수 제한. Dispose하지 않는다 — SemaphoreSlim이 Dispose로 놓는
+            // 자원은 지연 할당되는 AvailableWaitHandle뿐이고 이 코드는 그것을 쓰지
+            // 않으므로, 놓을 것이 애초에 없다.
+            //
+            // (Dispose가 위험해서가 아니다. 아래 Task.WhenAll은 넘긴 태스크가 전부
+            // 끝난 뒤에야 반환하거나 던지므로 — 조기 이탈 경로가 없다 — 그 시점에
+            // Release를 호출할 태스크는 남아 있지 않다. 할 일이 없는 using은 그것이
+            // 필요하다는 인상만 남긴다.)
             var gate = new SemaphoreSlim(_stepConcurrency);
 
             async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)
