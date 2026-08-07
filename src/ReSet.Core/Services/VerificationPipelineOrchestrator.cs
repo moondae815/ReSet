@@ -27,6 +27,7 @@ namespace ReSet.Core.Services
         private readonly string? _criticEffort;
         private readonly string? _consolidatorEffort;
         private readonly int _criticScoreThreshold;
+        private readonly int _stepConcurrency;
 
         public VerificationPipelineOrchestrator(
             IDbMetadataService dbService,
@@ -41,7 +42,8 @@ namespace ReSet.Core.Services
             string? actorEffort = null,
             string? criticEffort = null,
             string? consolidatorEffort = null,
-            int criticScoreThreshold = 8)
+            int criticScoreThreshold = 8,
+            int stepConcurrency = 1)     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -55,6 +57,8 @@ namespace ReSet.Core.Services
             _criticEffort = criticEffort;
             _consolidatorEffort = consolidatorEffort;
             _criticScoreThreshold = criticScoreThreshold;
+            // 0·음수는 1로 절상한다. 상한은 두지 않는다 — 사용자가 12를 원하면 12를 쓴다.
+            _stepConcurrency = Math.Max(1, stepConcurrency);
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -1660,6 +1664,25 @@ namespace ReSet.Core.Services
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
             }
 
+            // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
+            // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
+            // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
+            //
+            // 로컬 모델은 보통 단일 GPU를 공유하므로 동시 실행이 순차보다 느리거나
+            // 메모리가 터진다. 값을 조용히 1로 뒤집지 않는 이유: 사용자가 명시한
+            // 설정을 말없이 무시하는 것보다 이유를 말하고 그대로 두는 편이 정직하고,
+            // 증상이 "그냥 느림"이라 경고가 없으면 원인을 찾을 길이 없다.
+            //
+            // provider 매개변수(Actor)가 아니라 Consolidator를 보는 이유: 단계 본문을
+            // 실제로 만드는 것은 _consolidatorService다.
+            if (_stepConcurrency > 1 &&
+                ReSet.Core.Services.Clients.AiClientFactory.IsSingleGpuLocalProvider(_consolidatorService.ProviderName))
+            {
+                _userInteraction.NotifyStatus(
+                    $"[yellow]{jobName}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
+                    "단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족할 수 있습니다 — appsettings.json의 AiSettings:StepConcurrency를 1로 낮추는 것을 권장합니다.");
+            }
+
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
@@ -1668,18 +1691,15 @@ namespace ReSet.Core.Services
             // 재수립 시점에 필요한데 기존에는 if 블록 안에서만 살아 있었다.
             // 목차가 있으면 브레인스토밍도 반드시 있다(둘은 한 몸으로만 실행된다).
             string currentBrainstorming = string.Empty;
-            // 최고점 후보(BestAttempt.Current)를 실제로 만들어 낸 목차. 후보와 한 몸으로
-            // 움직여야 한다. 목차 재수립 뒤 회차가 더 낮은 점수를 내면 RetryRescue가
-            // 재수립 이전 후보를 채택하는데, 그때 PlanStructure.md에 최신 목차가 남아
-            // 있으면 산출된 문서를 한 번도 만든 적 없는 목차를 가리키게 된다.
-            string bestAttemptStructure = string.Empty;
-            // 최고점 후보를 실제로 만들어 낸 회차의 stepFloorViolations 스냅샷.
-            // bestAttemptStructure와 같은 이유로, 같은 자리에서만 함께 갱신한다.
-            // 배너는 루프 종료 후 살아있는 stepFloorViolations를 읽는데, 구제로
-            // 채택되는 문서(rescued.Markdown)는 이 스냅샷이 찍힌 바로 그 회차의
-            // 문서다 — 더 나중/이전 회차의 살아있는 위반 기록을 읽으면 과다 보고
-            // (없는 결함을 표시)나 과소 보고(있는 결함을 누락)가 생긴다.
-            var bestAttemptStepFloorViolations = new Dictionary<string, string>();
+            // 최고점 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
+            // 목차·골격·골격 AiResult·단계 섹션·하한 위반이 한 몸으로 움직인다.
+            //
+            // 목차가 어긋나면 산출된 문서를 한 번도 만든 적 없는 목차가 기록으로
+            // 남고, 하한 위반이 어긋나면 배너가 과다·과소 보고하며, 골격과 섹션이
+            // 어긋나면 L3 지목 재생성이 화면의 문서가 아닌 폐기된 회차 위에 얹힌다.
+            // 셋 다 실제로 발생했던 결함이라 개별 변수로 두지 않는다.
+            var adoptedState = new AdoptedGenerationState(
+                string.Empty, null, null, null, new Dictionary<string, string>());
             // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
             var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
@@ -1821,15 +1841,13 @@ namespace ReSet.Core.Services
                         $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                     currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                        outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                        outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                    RestoreAdoptedGenerationState(
+                        adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                     finalAiResult = rescued.Generation ?? finalAiResult;
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
                     consolidatedPlan = rescued.Markdown;
-                    // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반 스냅샷으로
-                    // 갈아탄다 — 살아있는(다른 회차의) stepFloorViolations를 그대로
-                    // 두면 배너가 채택되지 않은 문서를 서술한다.
-                    stepFloorViolations = bestAttemptStepFloorViolations;
                     break;
                 }
 
@@ -1858,14 +1876,13 @@ namespace ReSet.Core.Services
                                 $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            RestoreAdoptedGenerationState(
+                                adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                             finalAiResult = rescued.Generation ?? finalAiResult;
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
                             consolidatedPlan = rescued.Markdown;
-                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                            // 스냅샷으로 갈아탄다.
-                            stepFloorViolations = bestAttemptStepFloorViolations;
                             break;
                         }
 
@@ -1906,10 +1923,14 @@ namespace ReSet.Core.Services
                     improvedThisAttempt = bestAttempt.TryRecord(attempt, consolidatedPlan, l2Result, finalAiResult);
                     if (improvedThisAttempt)
                     {
-                        // 후보가 교체되는 바로 그 자리에서 목차도, 하한 위반 스냅샷도
-                        // 함께 붙잡는다. 다른 곳에서 갱신하면 셋이 어긋나는 순간이 생긴다.
-                        bestAttemptStructure = currentPlanStructure;
-                        bestAttemptStepFloorViolations = new Dictionary<string, string>(stepFloorViolations);
+                        // 후보가 교체되는 바로 그 자리에서 그 후보를 만든 상태를
+                        // 통째로 붙잡는다. 다른 곳에서 갱신하면 어긋나는 순간이 생긴다.
+                        adoptedState = new AdoptedGenerationState(
+                            currentPlanStructure,
+                            lastSkeleton,
+                            lastSkeletonResult,
+                            lastStepSections == null ? null : new Dictionary<string, string>(lastStepSections),
+                            new Dictionary<string, string>(stepFloorViolations));
                     }
                 }
 
@@ -1985,10 +2006,9 @@ namespace ReSet.Core.Services
                         if (rescued != null)
                         {
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
-                            // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                            // 스냅샷으로 갈아탄다.
-                            stepFloorViolations = bestAttemptStepFloorViolations;
+                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            RestoreAdoptedGenerationState(
+                                adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         }
 
                         finalAiResult = rescued?.Generation ?? finalAiResult;
@@ -2012,14 +2032,13 @@ namespace ReSet.Core.Services
                             $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, bestAttemptStructure, cancellationToken);
+                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                        RestoreAdoptedGenerationState(
+                            adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         finalAiResult = rescued.Generation ?? finalAiResult;
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
                         consolidatedPlan = rescued.Markdown;
-                        // 채택 문서가 바뀌므로 그 문서를 만든 회차의 하한 위반
-                        // 스냅샷으로 갈아탄다.
-                        stepFloorViolations = bestAttemptStepFloorViolations;
                         break;
                     }
 
@@ -2048,47 +2067,9 @@ namespace ReSet.Core.Services
                 }
             }
 
-            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
-            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
-            //
-            // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
-            // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
-            // Dictionary로 바꾸지 않고 표시 문자열 목록으로 투영하는 이유는 둘이다.
-            // 다른 배너 메서드(L1Exhausted, UnresolvedReferences)가 모두
-            // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
-            // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
-            // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
-            var stepFloorViolationMessages = stepFloorViolations
-                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
-                .Select(kvp => kvp.Value)
-                .ToList();
-            if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
-            {
-                consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
-            }
-
-            // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
-            // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
-            // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
-            // 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만, 9개
-            // 프로시저는 최종 문서 어디에도 흔적이 없다 — 부실 섹션보다 더
-            // 나쁘다. 부실 섹션은 최소한 존재를 알리기라도 한다.
-            //
-            // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
-            // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
-            // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
-            // 거쳐 bestAttemptStructure로 정확히 갈아타지만, currentSteps는 그
-            // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
-            // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
-            // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
-            // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
-            // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
-            // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
-            // bestAttemptStepFloorViolations라는 스냅샷을 따로 두는 이유(단계
-            // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
-            // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
-            // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
-            // 무관하므로 별도 스냅샷이 필요 없다.
+            // 목차 파싱을 호출부에 두는 이유: L3(Task 4)가 같은 결과를 승인 화면의
+            // 단계 선택 목록에도 넘겨야 한다. 메서드 안에서 파싱하면 두 번 파싱하거나
+            // 시그니처를 다시 바꾸게 된다.
             //
             // 유지보수 불변식(재검토 시 반드시 지킬 것): (1) 이 재계산은 재시도
             // 루프가 완전히 끝난 뒤, currentPlanStructure 하나에서만 파싱해야
@@ -2096,27 +2077,9 @@ namespace ReSet.Core.Services
             // 않는다. (2) 앞으로 채택 문서를 이전 회차로 되돌리는 새 종료 경로를
             // 추가한다면, 그 경로는 반드시 currentPlanStructure를 그 회차의 목차로
             // 되감아야 한다 — 안 그러면 이 재계산이 채택되지 않은 문서를 서술한다.
-            //
-            // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
-            // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
-            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
-            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
-            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
-            var uncoveredProcedures = adoptedSteps != null
-                ? FindUncoveredProcedures(adoptedSteps, specs)
-                : Array.Empty<string>();
-            if (uncoveredProcedures.Count > 0)
-            {
-                Log.Warning(
-                    "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
-                    jobName, uncoveredProcedures.Count, string.Join(", ", uncoveredProcedures));
-
-                if (!string.IsNullOrEmpty(consolidatedPlan))
-                {
-                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
-                }
-            }
+            consolidatedPlan = AttachPipelineBanners(
+                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
@@ -2128,8 +2091,11 @@ namespace ReSet.Core.Services
             while (true)
             {
                 // 이 경로에만 다시 세울 목차가 있으므로 구조 변경 질문을 여기서만 허용한다.
+                // 단계 목록도 함께 넘긴다 — 사용자가 피드백 대상을 고를 수 있어야 한다.
+                // adoptedSteps는 채택된 문서를 만든 목차에서 파싱한 것이다(AttachPipelineBanners
+                // 앞에서 계산됨). 살아있는 currentSteps를 쓰면 폐기된 회차의 목록을 보여줄 수 있다.
                 var reviewResult = await _userInteraction.RequestHumanReviewAsync(
-                    jobName, consolidatedPlan, planOutcome, structureRedraftSupported: true);
+                    jobName, consolidatedPlan, planOutcome, structureRedraftSupported: true, steps: adoptedSteps);
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
@@ -2177,24 +2143,110 @@ namespace ReSet.Core.Services
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
                     specsCopy.Add(("User_Feedback_Log.txt", $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}\n사용자 의견을 수용하여 설계 내용을 수정 및 보완해 주십시오."));
 
+                    // 분할 상태가 있으면 분할로 재생성한다. 통짜 단일 호출은 단계마다
+                    // 확보한 본문을 한 번에 무너뜨린다 — 이 경로가 존재하는 이유다.
                     string rePlan = string.Empty;
-                    try
+                    Dictionary<string, string> reViolations = stepFloorViolations;
+
+                    var stepsForRegeneration = BatchStepPlanParser.TryParse(structureForRegeneration);
+                    if (stepsForRegeneration != null)
                     {
-                        var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
-                        rePlan = aiResult.Content;
+                        // 구조 재수립·골격 지목이면 골격부터 다시 만든다. 그 외에는
+                        // 캐시된 골격을 재사용하되, 지목이 없으면 전 단계를 다시 만든다.
+                        var reuseSkeleton =
+                            !reviewResult.RedraftStructure &&
+                            !reviewResult.RegenerateSkeleton &&
+                            lastSkeleton != null &&
+                            lastStepSections != null;
+
+                        // GenerateBySplitAsync는 "골격 재사용"과 "지목된 단계만 재생성"을
+                        // defectiveSteps 하나로 함께 결정한다(재시도 루프가 요구하는 계약 —
+                        // 지목이 비면 골격까지 새로 만든다, 아래 테스트가 고정: WithoutDefectiveSteps_
+                        // RegeneratesTheWholeDocument). L3의 "지목 없음"은 뜻이 다르다 — 목차·골격은
+                        // 그대로 두고 전 단계만 다시 쓰라는 것이다. 그래서 지목이 비어 있으면 목차의
+                        // 전체 코드를 defectiveSteps로 넘긴다: targeted 판정(Count>0)은 참이 되어
+                        // 골격 호출을 건너뛰고, pending 필터는 모든 코드를 통과시켜 전 단계가
+                        // 재생성된다.
+                        var stepsToRegenerate = reviewResult.TargetStepCodes.Count > 0
+                            ? reviewResult.TargetStepCodes
+                            : stepsForRegeneration.Select(step => step.Code).ToList();
+
+                        // 골격을 재사용하지 않는 경우(구조 재수립·골격 지목·캐시 없음) 목차의
+                        // 단계 코드 자체가 바뀔 수 있다. 그때 살아있는 stepFloorViolations를
+                        // 그대로 넘기면, GenerateBySplitAsync는 이번에 다시 만드는 코드의
+                        // 기록만 지우고 나머지는 그대로 복사한다 — 새 목차에 없는 옛 코드의
+                        // "하한 미달" 기록이 살아남아 아래 배너 재부착에서 문서에 없는 단계를
+                        // 지목하게 된다. 재시도 루프의 ClearSplitGenerationCacheAfterRedraft가
+                        // 같은 부류의 결함을 이미 한 번 겪고 막아 둔 자리다.
+                        var violationsForRegeneration = reuseSkeleton
+                            ? stepFloorViolations
+                            : new Dictionary<string, string>();
+
+                        using var progressScopeForL3 = _userInteraction.CreateProgressScope("피드백 반영 재생성") ?? NullProgressScope.Instance;
+                        // GenerateBySplitAsync는 "phase3" 키로 진행률을 기록한다(재사용이면
+                        // 즉시 완료 처리, 재생성이면 실제 골격 호출 진행률). 호출 전에 등록해
+                        // 두지 않으면 IMultiProgressScope 구현체가 원시 키 문자열 "phase3"을
+                        // 그대로 화면에 찍는다 — 재시도 루프의 골격 행(:1752)과 같은 실수다.
+                        progressScopeForL3.AddTask("phase3", "피드백 반영: 골격 확인/생성 중 (공통 규약·흐름도)...");
+                        var split = await GenerateBySplitAsync(
+                            structureForRegeneration, stepsForRegeneration, specsCopy, targetLanguage, jobName,
+                            progressScopeForL3,
+                            reuseSkeleton ? lastSkeleton : null,
+                            reuseSkeleton ? lastSkeletonResult : null,
+                            reuseSkeleton ? lastStepSections : null,
+                            violationsForRegeneration,
+                            reuseSkeleton ? stepsToRegenerate : new List<string>(),
+                            cancellationToken);
+
+                        if (split != null)
+                        {
+                            rePlan = split.Markdown;
+                            reViolations = split.FloorViolations;
+                            lastSkeleton = split.Skeleton;
+                            lastSkeletonResult = split.Generation;
+                            lastStepSections = split.Sections;
+                            currentSteps = stepsForRegeneration;
+                            finalAiResult = split.Generation;
+                        }
                     }
-                    // 명세서 경로와 같은 이유로 취소는 전파한다. 삼키면 아래 continue가 돌아
-                    // 취소한 사용자에게 같은 승인 화면을 한 번 더 내민다.
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    else
                     {
-                        _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
+                        // 목차가 단계 목록을 못 냈다. 분할 자체가 불가능하므로
+                        // 기존 단일 호출로 간다 — 이 경로의 문서는 애초에 분할로
+                        // 만들어지지 않았다.
+                        if (pendingPlanStructure != null)
+                        {
+                            // 구조 재수립이 성공했지만 새 목차는 단계 목록을 못 냈다.
+                            // reViolations는 아직 초기화(:2126)에서 물려받은 stepFloorViolations,
+                            // 즉 옛 목차의 살아있는 기록이다. 그대로 두면 아래 배너 재부착이
+                            // 새 목차에 없는 단계 코드를 지목한다 — 분할 분기(:2158-2160)가
+                            // 이미 막아 둔 것과 같은 부류의 결함이다.
+                            reViolations = new Dictionary<string, string>();
+                        }
+
+                        try
+                        {
+                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(
+                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                            rePlan = aiResult.Content;
+                            finalAiResult = aiResult;
+                        }
+                        // 취소는 전파한다. 삼키면 아래 continue가 돌아 취소한
+                        // 사용자에게 같은 승인 화면을 한 번 더 내민다.
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _userInteraction.NotifyError($"피드백 반영 재생성 실패: {ex.Message}");
+                        }
                     }
 
                     if (string.IsNullOrEmpty(rePlan))
                     {
                         // 재생성이 실패했으므로 새 목차는 아무 문서도 만들지 않았다.
                         // 기록하지 않은 채 되돌아가면 화면의 문서와 PlanStructure.md가
-                        // 계속 같은 목차를 가리킨다.
+                        // 계속 같은 목차를 가리킨다. 분할이 null을 돌려준 경우에도
+                        // 여기로 들어온다 — 통짜 폴백을 추가하지 않는다. L3에는 이미
+                        // 승인 대기 중인 좋은 문서가 있고, 그것을 통짜로 갈아엎는 것은
+                        // 개선이 아니다.
                         continue;
                     }
 
@@ -2216,8 +2268,12 @@ namespace ReSet.Core.Services
                     // 피드백 반영본에 대한 L1 정적 검사 1회 수행
                     var l1Re = _validator.ValidateConsolidated(rePlan);
                     rePlan = l1Re.CleansedMarkdown ?? rePlan;
-                    if (!l1Re.IsValid)
+                    if (!l1Re.IsValid && stepsForRegeneration == null)
                     {
+                        // 분할로 만든 문서에는 이 보완을 적용하지 않는다. 문서 전체를
+                        // 한 번에 다시 써서 단계마다 확보한 본문을 무너뜨리기 때문이다.
+                        // 분할 경로에서 L1이 실패하는 원인(H2 누락·Mermaid 문법)은
+                        // 골격이 만드는 것이므로, 사용자가 골격을 지목해 다시 시도하면 된다.
                         _userInteraction.NotifyStatus("피드백 적용본에서 정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다.");
                         try
                         {
@@ -2239,8 +2295,107 @@ namespace ReSet.Core.Services
                     consolidatedPlan = rePlan;
                     planReview = null;
                     planOutcome = VerificationOutcome.ReviewNotRun;
+                    stepFloorViolations = reViolations;
+                    // reSteps로 그림자 지역 변수를 새로 두지 않고 바깥 adoptedSteps에
+                    // 그대로 대입한다 — 다음 루프 회차의 RequestHumanReviewAsync(:2074)가
+                    // 이 값을 그대로 읽는다. 그림자로 두면 화면의 다중 선택 목록이 이번
+                    // 회차에서 사라졌거나 새로 생긴 단계 코드를 반영하지 못한 채 낡은
+                    // 목록을 계속 보여준다.
+                    adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                    consolidatedPlan = AttachPipelineBanners(
+                        consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+
+                    // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
+                    // 일부러 건너뛴다 — 통짜 재작성이 단계별로 확보한 본문을 무너뜨리기
+                    // 때문이다. 하지만 건너뛴 채로 L1이 여전히 실패 중이라면, 그 사실이
+                    // 화면 어디에도 남지 않은 채 승인 화면에 도달한다. 재시도 루프가
+                    // 예산을 소진했을 때 붙이는 것과 같은 배너로 그 사실을 알린다 —
+                    // planOutcome은 ReviewNotRun을 그대로 유지한다(L2 리뷰 미수행이라는
+                    // 별개의 사실이다).
+                    if (!l1Re.IsValid && stepsForRegeneration != null)
+                    {
+                        consolidatedPlan = VerificationBanner.L1Exhausted(l1Re.Errors) + consolidatedPlan;
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// 파이프라인이 문서를 사용자에게 건네기 직전에 붙는 배너를 모두 부착한다.
+        ///
+        /// 재시도 루프 종료 직후와 L3 피드백 재생성 직후, 두 자리에서 호출된다.
+        /// 두 벌로 두면 한쪽만 고쳐지는 날이 온다.
+        /// </summary>
+        private string AttachPipelineBanners(
+            string consolidatedPlan,
+            IReadOnlyDictionary<string, string> stepFloorViolations,
+            IReadOnlyList<BatchStepPlan>? adoptedSteps,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string jobName)
+        {
+            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
+            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
+            //
+            // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
+            // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
+            // Dictionary로 바꾸지 않고 표시 문자열 목록으로 투영하는 이유는 둘이다.
+            // 다른 배너 메서드(L1Exhausted, UnresolvedReferences)가 모두
+            // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
+            // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
+            // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
+            var stepFloorViolationMessages = stepFloorViolations
+                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+                .Select(kvp => kvp.Value)
+                .ToList();
+            if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
+            }
+
+            // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
+            // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
+            // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
+            // 하한을 통과하는 섹션을 만들고 문서는 Passed로 끝나지만, 9개
+            // 프로시저는 최종 문서 어디에도 흔적이 없다 — 부실 섹션보다 더
+            // 나쁘다. 부실 섹션은 최소한 존재를 알리기라도 한다.
+            //
+            // 라이브 루프 변수 currentSteps를 재사용하지 않고 currentPlanStructure에서
+            // 새로 파싱하는 이유: 구제(RetryRescue)가 채택 문서를 이전 회차로
+            // 되돌릴 때 currentPlanStructure는 AdoptPlanStructureForRescueAsync를
+            // 거쳐 adoptedState.PlanStructure로 정확히 갈아타지만, currentSteps는 그
+            // 시점에 다시 파싱되지 않는다 — 실패한 마지막 회차의 목차를 여전히
+            // 가리킬 수 있다(stepFloorViolations가 겪었던 것과 같은 종류의
+            // 문제). currentPlanStructure는 이미 모든 재수립·구제 채택 지점에서
+            // "이 문서를 실제로 만든 목차"로 정확히 유지되므로(라인 1810 부근
+            // 구제 채택, 라인 1938 재수립 등), 거기서 매번 새로 파싱하면 별도의
+            // 스냅샷 변수 없이도 항상 채택된 문서의 목차와 일치한다. stepFloorViolations가
+            // adoptedState.FloorViolations라는 스냅샷을 따로 두는 이유(단계
+            // 본문의 실제 생성 품질은 회차마다 달라 어느 회차의 것인지가 중요)와
+            // 달리, 이 값은 목차(currentSteps의 LegacyProcedures)와 불변 인자
+            // specs에만 좌우되고 어느 회차가 그 목차로 무엇을 생성했는지와는
+            // 무관하므로 별도 스냅샷이 필요 없다.
+            //
+            // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
+            // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
+            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
+            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
+            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
+            var uncoveredProcedures = adoptedSteps != null
+                ? FindUncoveredProcedures(adoptedSteps, specs)
+                : Array.Empty<string>();
+            if (uncoveredProcedures.Count > 0)
+            {
+                Log.Warning(
+                    "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
+                    jobName, uncoveredProcedures.Count, string.Join(", ", uncoveredProcedures));
+
+                if (!string.IsNullOrEmpty(consolidatedPlan))
+                {
+                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
+                }
+            }
+
+            return consolidatedPlan;
         }
 
         /// <summary>
@@ -2313,6 +2468,51 @@ namespace ReSet.Core.Services
             string Skeleton,
             Dictionary<string, string> Sections,
             Dictionary<string, string> FloorViolations);
+
+        /// <summary>
+        /// 채택 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
+        /// 후보가 교체되는 그 자리에서 통째로 붙잡고, 구제 채택 시 통째로 되돌린다.
+        ///
+        /// 다섯 값을 개별 변수로 두면 "함께 움직여야 한다"가 규율이 되고, 규율은
+        /// 깨진다 — 이 파이프라인에서 이미 세 번 깨졌다. 레코드로 묶으면 구조가 된다.
+        ///
+        /// 유지보수 불변식: 채택 문서를 이전 회차로 되돌리는 종료 경로를 새로
+        /// 추가한다면 반드시 이 레코드를 통째로 되돌려야 한다. 개별 필드만 되돌리는
+        /// 코드를 쓰지 말 것 — 그러려고 묶었다.
+        ///
+        /// 테스트 커버리지 상태: PlanStructure·FloorViolations의 되감기는
+        /// VerificationPipelineOrchestratorTests에서 관찰 가능하다(구제 문서와
+        /// 배너가 채택 회차를 서술하는지 검증하는 기존 테스트들). Skeleton·
+        /// SkeletonResult·StepSections의 되감기도 이제
+        /// RunConsolidatedPipeline_L3FeedbackAfterRescue_ReusesTheAdoptedAttemptsStepSections가
+        /// 관찰한다 — L3 지목 재생성이 이 값들을 읽기 시작하면서(그 값을 읽는
+        /// 캐시 재사용 로직) 이 세 값도 더 이상 블랙박스가 아니게 됐다.
+        /// </summary>
+        private sealed record AdoptedGenerationState(
+            string PlanStructure,
+            string? Skeleton,
+            AiResult? SkeletonResult,
+            IReadOnlyDictionary<string, string>? StepSections,
+            IReadOnlyDictionary<string, string> FloorViolations);
+
+        /// <summary>
+        /// 채택 상태를 살아있는 지역 변수들로 되돌린다. 사전은 복사해서 넘긴다 —
+        /// 스냅샷을 그대로 참조시키면 이후 변형이 스냅샷을 오염시킨다.
+        /// </summary>
+        private static void RestoreAdoptedGenerationState(
+            AdoptedGenerationState adopted,
+            out string? skeleton,
+            out AiResult? skeletonResult,
+            out Dictionary<string, string>? stepSections,
+            out Dictionary<string, string> floorViolations)
+        {
+            skeleton = adopted.Skeleton;
+            skeletonResult = adopted.SkeletonResult;
+            stepSections = adopted.StepSections == null
+                ? null
+                : new Dictionary<string, string>(adopted.StepSections);
+            floorViolations = new Dictionary<string, string>(adopted.FloorViolations);
+        }
 
         /// <summary>
         /// 분할 생성 캐시를 통째로 무효화한다.
@@ -2399,6 +2599,12 @@ namespace ReSet.Core.Services
 
             return uncovered;
         }
+
+        /// <summary>
+        /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
+        /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
+        /// </summary>
+        private sealed record StepSectionResult(string Code, string Markdown, string? FloorViolation);
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
@@ -2492,16 +2698,69 @@ namespace ReSet.Core.Services
                 floorViolations.Remove(step.Code);
             }
 
-            for (int index = 0; index < pending.Count; index++)
+            // 동시 실행 수 제한. Dispose하지 않는다 — SemaphoreSlim이 Dispose로 놓는
+            // 자원은 지연 할당되는 AvailableWaitHandle뿐이고 이 코드는 그것을 쓰지
+            // 않으므로, 놓을 것이 애초에 없다.
+            //
+            // (Dispose가 위험해서가 아니다. 아래 Task.WhenAll은 넘긴 태스크가 전부
+            // 끝난 뒤에야 반환하거나 던지므로 — 조기 이탈 경로가 없다 — 그 시점에
+            // Release를 호출할 태스크는 남아 있지 않다. 할 일이 없는 using은 그것이
+            // 필요하다는 인상만 남긴다.)
+            var gate = new SemaphoreSlim(_stepConcurrency);
+
+            async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)
             {
-                var step = pending[index];
-                var taskKey = $"step_{step.Code}";
-                progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
+                await gate.WaitAsync(cancellationToken);
+                try
+                {
+                    // 진행률 행은 슬롯을 잡은 뒤에 추가한다. 먼저 추가하면 대기 중인
+                    // 단계까지 전부 "생성 중"으로 떠서, 실제로는 넷만 돌고 있다는
+                    // 사실이 화면에서 사라진다.
+                    var taskKey = $"step_{step.Code}";
+                    progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                sections[step.Code] = await GenerateStepSectionWithFloorRetryAsync(
-                    step, steps, conventions, specs, targetLanguage, jobName, floorViolations, cancellationToken);
+                    var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                        step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
 
-                progressScope.CompleteTask(taskKey);
+                    progressScope.CompleteTask(taskKey);
+                    return new StepSectionResult(step.Code, markdown, violation);
+                }
+                finally
+                {
+                    // 슬롯은 단계당 재시도 2회를 모두 감싼 채 유지했다가 여기서 놓는다.
+                    // 재시도 사이에 놓으면 다른 단계가 끼어들어 동시 요청 수가 설정값을 넘는다.
+                    gate.Release();
+                }
+            }
+
+            // 워밍: 첫 단계를 끝까지 기다린 뒤에야 나머지를 띄운다. 프롬프트 접두사
+            // 캐시는 요청이 "완료돼야" 채워지므로, N개를 동시에 쏘면 N개 전부 미스다.
+            // 13단계·동시 4 기준으로 워밍이 있든 없든 4라운드로 같지만, 미스는
+            // 4회에서 1회로 준다 — 벽시계를 쓰지 않고 얻는 이득이다.
+            //
+            // 이 await가 워밍의 유일한 보증이다. 세마포어가 아니다 — 슬롯이 여러
+            // 개여도 두 번째 호출은 여기서 시작조차 하지 않는다. 지우지 말 것.
+            var stepResults = new List<StepSectionResult>(pending.Count);
+            if (pending.Count > 0)
+            {
+                stepResults.Add(await RunStepAsync(pending[0], 0));
+            }
+
+            if (pending.Count > 1)
+            {
+                var rest = pending.Skip(1).Select((step, offset) => RunStepAsync(step, offset + 1)).ToList();
+                stepResults.AddRange(await Task.WhenAll(rest));
+            }
+
+            // 병합은 단일 스레드에서 목록 순서대로. Task.WhenAll은 완료 순서가 아니라
+            // 넘긴 순서로 결과를 돌려주므로, 사전에 들어가는 순서가 결정적이다.
+            foreach (var stepResult in stepResults)
+            {
+                sections[stepResult.Code] = stepResult.Markdown;
+                if (stepResult.FloorViolation != null)
+                {
+                    floorViolations[stepResult.Code] = stepResult.FloorViolation;
+                }
             }
 
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
@@ -2527,23 +2786,41 @@ namespace ReSet.Core.Services
         ///
         /// 재시도 후에도 미달이면 채택하고 기록만 한다. 여기서 문서 L1을 실패시키면
         /// 같은 결함으로 골격+단계 전체 재생성을 유발해 비용만 태운다.
+        ///
+        /// 위반 기록을 바깥 사전에 쓰지 않고 돌려주는 이유: 이 메서드는 여러 단계에
+        /// 대해 동시에 돈다. 공유 사전에 쓰면 잠금이 필요하고, 잠금이 있어도 기록이
+        /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
+        /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<string> GenerateStepSectionWithFloorRetryAsync(
+        private async Task<(string Markdown, string? FloorViolation)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
-            Dictionary<string, string> floorViolations,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
             string? adopted = null;
             string? floorFeedback = null;
+            // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
+            // rate limit 쪽뿐이다.
+            bool previousTryThrew = false;
 
             for (int tries = 0; tries < maxTries; tries++)
             {
+                if (previousTryThrew)
+                {
+                    // 동시 실행 중에는 429가 여러 단계를 같은 창에서 때린다. 무지연으로
+                    // 재시도하면 네 단계가 두 번의 시도를 모두 그 창 안에 쏟아붓고 함께
+                    // 강등된다. 무작위 지연이 상관된 폭풍을 흩트러진 재시도로 바꾼다.
+                    // 13분짜리 구간에서 1초는 무시할 만하다.
+                    await Task.Delay(
+                        TimeSpan.FromMilliseconds(Random.Shared.Next(500, 1500)), cancellationToken);
+                }
+
+                previousTryThrew = false;
                 string? content = null;
                 try
                 {
@@ -2555,6 +2832,7 @@ namespace ReSet.Core.Services
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    previousTryThrew = true;
                     _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
                 }
 
@@ -2569,7 +2847,7 @@ namespace ReSet.Core.Services
                 var stepResult = _validator.ValidateBatchStep(content, step);
                 if (stepResult.IsValid)
                 {
-                    return content;
+                    return (content, null);
                 }
 
                 _userInteraction.NotifyStatus(
@@ -2579,12 +2857,11 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
-                floorViolations[step.Code] = $"{step.Code} (생성 실패)";
-                return $"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n";
+                return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
+                    $"{step.Code} (생성 실패)");
             }
 
-            floorViolations[step.Code] = $"{step.Code} (하한 미달)";
-            return adopted;
+            return (adopted, $"{step.Code} (하한 미달)");
         }
 
         /// <summary>

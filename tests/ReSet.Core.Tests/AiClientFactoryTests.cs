@@ -122,5 +122,38 @@ namespace ReSet.Core.Tests
 
             Assert.IsType<ReSet.Core.Services.Clients.Cli.ClaudeCliClient>(client);
         }
+
+        // 단일 GPU 공유가 실제로 문제인 provider들 — StepConcurrency 경고 대상.
+        [Theory]
+        [InlineData("ollama")]
+        [InlineData("Ollama")]
+        [InlineData("local-openai")]
+        [InlineData("mlx")]
+        public void IsSingleGpuLocalProvider_WithSingleGpuProviders_ReturnsTrue(string provider)
+        {
+            Assert.True(AiClientFactory.IsSingleGpuLocalProvider(provider));
+        }
+
+        // vLLM은 IsLocalProvider에는 걸리지만(청킹 파이프라인 라우팅), 연속 배칭
+        // (continuous batching) 덕에 동시 실행이 유리한 백엔드라 "동시성을 낮추라"는
+        // 조언의 대상이 아니다 — IsSingleGpuLocalProvider는 vLLM을 제외해야 한다.
+        [Theory]
+        [InlineData("vllm")]
+        [InlineData("claude")]
+        [InlineData("openai")]
+        [InlineData("")]
+        [InlineData(null)]
+        public void IsSingleGpuLocalProvider_WithVllmOrNonLocalProviders_ReturnsFalse(string? provider)
+        {
+            Assert.False(AiClientFactory.IsSingleGpuLocalProvider(provider!));
+        }
+
+        [Fact]
+        public void IsLocalProvider_WithVllm_StillReturnsTrue()
+        {
+            // IsLocalProvider는 청킹 파이프라인 라우팅에 쓰이며 vLLM도 그 대상이다.
+            // IsSingleGpuLocalProvider 도입이 이 계약을 건드리지 않았음을 고정한다.
+            Assert.True(AiClientFactory.IsLocalProvider("vllm"));
+        }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -1744,7 +1745,7 @@ namespace ReSet.Core.Tests
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), consolidatedPlan, "Job_Test")
                 .Returns(Task.FromResult(reviewResult));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -1776,7 +1777,7 @@ namespace ReSet.Core.Tests
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), goodPlan, "Job_Test")
                 .Returns(Task.FromResult(reviewResult));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -1806,7 +1807,7 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 })
                 );
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             // Act
@@ -1976,7 +1977,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Cancel }));
 
             // Act
@@ -1984,7 +1985,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.Null(result.Plan);
-            await userInteraction.Received(1).RequestHumanReviewAsync("TestJobCancel", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>());
+            await userInteraction.Received(1).RequestHumanReviewAsync("TestJobCancel", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         [Fact]
@@ -2011,7 +2012,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Add C to D" }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
@@ -2023,7 +2024,7 @@ namespace ReSet.Core.Tests
             // Assert
             Assert.NotNull(result.Plan);
             Assert.Equal(regeneratedMarkdown, result.Plan);
-            await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>());
+            await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         [Fact]
@@ -2053,7 +2054,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Try this" }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
@@ -2099,7 +2100,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Try this" }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
@@ -2879,7 +2880,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Add C to D" }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve })
@@ -2892,10 +2893,10 @@ namespace ReSet.Core.Tests
             Assert.Equal(regeneratedMarkdown, result.Plan);
             // 1차 호출: 표준 루프에서 L1+L2 모두 통과한 초안 -> Passed.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", initialMarkdown, VerificationOutcome.Passed, Arg.Any<bool>());
+                "TestJobFeedbackOutcome", initialMarkdown, VerificationOutcome.Passed, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
             // 2차 호출: 피드백으로 전면 재생성된, 한 번도 리뷰받지 않은 계획서 -> ReviewNotRun.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", regeneratedMarkdown, VerificationOutcome.ReviewNotRun, Arg.Any<bool>());
+                "TestJobFeedbackOutcome", regeneratedMarkdown, VerificationOutcome.ReviewNotRun, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         [Fact]
@@ -3027,7 +3028,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Add C to D" }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -3189,7 +3190,7 @@ namespace ReSet.Core.Tests
 
             // 명세서 쪽과 같은 이유로 두 번째 응답은 승인이다. 취소를 삼키면 승인 화면이
             // 한 번 더 뜨고 - 이것이 이 결함의 증상이다 - 테스트는 예외 없이 끝난다.
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult
                     {
@@ -3293,7 +3294,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(goodReview));
 
-            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult
                     {
@@ -3441,7 +3442,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult
                 { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 9, ScoreInterface = 6, ScoreReadability = 7, ScoreException = 9 }));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             var orchestrator = new VerificationPipelineOrchestrator(
@@ -3546,7 +3547,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult
                 { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             var orchestrator = new VerificationPipelineOrchestrator(
@@ -3620,7 +3621,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult
                 { HasDefects = true, ScoreAccuracy = 6, ScoreCrud = 5, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7 }));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             var orchestrator = new VerificationPipelineOrchestrator(
@@ -3719,7 +3720,7 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new ReviewResult
                 { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             var orchestrator = new VerificationPipelineOrchestrator(
@@ -3798,7 +3799,7 @@ namespace ReSet.Core.Tests
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
                 .Returns<Task<ReviewResult>>(_ => throw new InvalidOperationException("critic down"));
 
-            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             var orchestrator = new VerificationPipelineOrchestrator(
@@ -4062,7 +4063,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
-            userInteraction.RequestHumanReviewAsync("L3StructJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync("L3StructJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Step 3을 둘로 쪼개라", RedraftStructure = true }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4101,7 +4102,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
-            userInteraction.RequestHumanReviewAsync("L3PlainJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync("L3PlainJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "오타 수정", RedraftStructure = false }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4136,13 +4137,13 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
-            userInteraction.RequestHumanReviewAsync("L3FlagJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync("L3FlagJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
 
             await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "L3FlagJob", "OpenAI", _consolidatedOutputRoot);
 
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "L3FlagJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), true);
+                "L3FlagJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), true, Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         // 단일 SP 명세서 경로에는 다시 세울 목차가 없다. 여기서 구조 변경을 물으면
@@ -4256,7 +4257,7 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
                     _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }));
 
-            userInteraction.RequestHumanReviewAsync("L2L3RedraftJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync("L2L3RedraftJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Step 2를 둘로 쪼개라", RedraftStructure = true }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4301,7 +4302,7 @@ namespace ReSet.Core.Tests
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
 
-            userInteraction.RequestHumanReviewAsync("L3RegenFailJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>())
+            userInteraction.RequestHumanReviewAsync("L3RegenFailJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "Step 3을 둘로 쪼개라", RedraftStructure = true }),
                     Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4372,6 +4373,104 @@ SELECT 1;
         private static string HealthyStepSection(string code, string table, string errorCode) =>
             $"### {code} 단계\n\n대상은 {table}이고 오류코드는 {errorCode}이다.\n\n```sql\nSELECT 1;\n```";
 
+        /// <summary>하한을 통과하지 못하는 섹션 — 코드 블록이 없다.</summary>
+        private static string SubFloorStepSection(string code) =>
+            $"### {code} 단계\n\n산문만 있고 코드 블록이 없다.\n";
+
+        /// <summary>S01..S{count} 짜리 단계 목록 JSON. 각 단계의 대상 테이블·오류코드는 코드에서 파생된다.</summary>
+        private static string ManyStepsJson(int count)
+        {
+            var items = Enumerable.Range(1, count).Select(i =>
+                $@"    {{ ""Code"": ""S{i:D2}"", ""Name"": ""{i}번 단계"", ""TargetTables"": [""dbo.T{i:D2}""], ""ErrorCodes"": [""-{i}""] }}");
+            return "```json\n{\n  \"Steps\": [\n" + string.Join(",\n", items) + "\n  ]\n}\n```";
+        }
+
+        /// <summary>단계 목록에 맞는 골격. 각 단계 자리에 STEP 플레이스홀더를 둔다.</summary>
+        private static string SkeletonFor(int count)
+        {
+            var placeholders = string.Join("\n", Enumerable.Range(1, count).Select(i => $"<!-- STEP:S{i:D2} -->"));
+            return SkeletonMarkdown.Replace("<!-- STEP:S01 -->\n<!-- STEP:S02 -->", placeholders);
+        }
+
+        /// <summary>
+        /// 단계 본문 생성 호출의 동시 실행 수와 시간 구간을 관측한다.
+        /// 테스트 ①(상한), ②(워밍이 단독인가), ③(완료 순서 무관)이 공유한다.
+        /// </summary>
+        private sealed class ConcurrencyProbe
+        {
+            private int _current;
+            private int _max;
+            private readonly List<(string Code, long Start, long End)> _spans = new();
+            private readonly object _lock = new();
+
+            public int MaxObserved => Volatile.Read(ref _max);
+
+            public IReadOnlyList<(string Code, long Start, long End)> Spans
+            {
+                get { lock (_lock) { return _spans.ToList(); } }
+            }
+
+            public async Task<AiResult> RunAsync(string code, string content, int delayMs)
+            {
+                var now = Interlocked.Increment(ref _current);
+                int seen;
+                while (now > (seen = Volatile.Read(ref _max)) &&
+                       Interlocked.CompareExchange(ref _max, now, seen) != seen)
+                {
+                }
+
+                var start = Stopwatch.GetTimestamp();
+                await Task.Delay(delayMs);
+                var end = Stopwatch.GetTimestamp();
+                Interlocked.Decrement(ref _current);
+                lock (_lock) { _spans.Add((code, start, end)); }
+                return new AiResult { Content = content };
+            }
+        }
+
+        /// <summary>
+        /// count개 단계짜리 분할 생성 fake의 공통 골격(브레인스토밍, 단계 JSON을 낸 목차,
+        /// 골격, 결함 없는 리뷰)만 배선한다. GenerateBatchStepSectionAsync는 배선하지
+        /// 않으므로 호출부가 직접 붙인다 — 동시성 관측(ConcurrencyProbe)이 필요 없는
+        /// 호출부(예: 취소 전파 테스트)가 죽은 인자 없이 이 fake를 쓸 수 있게 한다.
+        /// </summary>
+        private static IAiService ManyStepAiServiceBase(int count)
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + ManyStepsJson(count) });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonFor(count) });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+            return aiService;
+        }
+
+        /// <summary>
+        /// count개 단계를 내는 분할 생성 fake. sectionFor가 null이면 전부 하한을 통과하는 섹션을 낸다.
+        /// delayFor는 단계 코드별 지연(ms)을 정한다 — 완료 순서를 조작하는 데 쓴다.
+        /// </summary>
+        private static IAiService ManyStepAiService(
+            int count,
+            ConcurrencyProbe probe,
+            Func<string, int> delayFor,
+            Func<string, string>? sectionFor = null)
+        {
+            var aiService = ManyStepAiServiceBase(count);
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    var content = sectionFor != null
+                        ? sectionFor(step.Code)
+                        : HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]);
+                    return probe.RunAsync(step.Code, content, delayFor(step.Code));
+                });
+            return aiService;
+        }
+
         /// <summary>
         /// 배치 파이프라인을 세우는 반복 패턴(오케스트레이터 생성 + RunConsolidatedPipelineAsync
         /// 호출 + 임시 출력 디렉터리)을 뽑은 도우미. isBatchMode: true가 필수다 —
@@ -4388,6 +4487,67 @@ SELECT 1;
             var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
             return await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+        }
+
+        /// <summary>
+        /// RunBatchPipeline과 같되 IVerificationUserInteraction을 인자로 받고
+        /// isBatchMode를 그대로 넘긴다. L3 인간 개입 루프에 닿아야 하는 테스트
+        /// (L3 피드백의 단계 지목 배선 등)가 쓴다. 기존 RunBatchPipeline은 isBatchMode:
+        /// true로 고정돼 있어 그 루프에 닿지 못한다 — 94개 호출부가 걸려 있어 건드리지
+        /// 않는다.
+        /// </summary>
+        private async Task<ConsolidatedPipelineResult> RunBatchPipelineWithUi(
+            IAiService aiService, IVerificationUserInteraction userInteraction, bool isBatchMode)
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            return await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: isBatchMode);
+        }
+
+        /// <summary>
+        /// RunBatchPipeline과 같되 stepConcurrency를 명시적으로 넘긴다.
+        /// 기본값 1에 기대는 99개 기존 호출부를 건드리지 않기 위해 별도 도우미로 둔다.
+        /// </summary>
+        private async Task<ConsolidatedPipelineResult> RunBatchPipelineWithConcurrency(
+            IAiService aiService, IVerificationUserInteraction userInteraction, int stepConcurrency)
+        {
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8, stepConcurrency);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            return await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+        }
+
+        /// <summary>
+        /// 기존 테스트들이 반복해 온 분할 생성 fake 설정(브레인스토밍, 단계 JSON을
+        /// 낸 목차, 골격, 정상 단계 섹션, 결함 없는 리뷰)을 한 곳으로 뽑은 도우미.
+        /// </summary>
+        private static IAiService SplitCapableAiService()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+            return aiService;
         }
 
         [Fact]
@@ -4422,6 +4582,185 @@ SELECT 1;
             Assert.Contains("### S01 단계", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
             Assert.DoesNotContain("<!-- STEP:", result.Plan);
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyAboveOne_WarnsOnce()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        /// <summary>
+        /// vLLM은 IsLocalProvider(청킹 파이프라인 라우팅)에는 걸리지만, 연속 배칭
+        /// (continuous batching) 덕에 동시 실행이 오히려 유리한 백엔드라 "동시성을
+        /// 낮추라"는 이 경고의 대상이 아니다. AiClientFactory.IsSingleGpuLocalProvider가
+        /// vLLM을 제외해야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConsolidatorIsVllmAndConcurrencyAboveOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("vllm");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenLocalProviderAndConcurrencyIsOne_DoesNotWarn()
+        {
+            var aiService = SplitCapableAiService();
+            aiService.ProviderName.Returns("Ollama");
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 1);
+
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
+        }
+
+        /// <summary>
+        /// ① 동시 실행 수가 설정값을 넘지 않는다. 세마포어를 지우면 13을 관측하고 실패한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithStepConcurrencyFour_NeverExceedsFourInFlight()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(13, probe, _ => 60);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            Assert.True(probe.MaxObserved <= 4, $"관측된 최대 동시 실행 수가 {probe.MaxObserved}였다.");
+            Assert.True(probe.MaxObserved > 1, "병렬이 전혀 일어나지 않았다 — 팬아웃이 동작하지 않는다.");
+        }
+
+        /// <summary>
+        /// ② 첫 단계는 항상 단독으로 돈다. 이것이 프롬프트 접두사 캐시 이점의
+        /// 유일한 기계적 보증이다 — 없으면 누군가 워밍을 "불필요한 직렬화"로 보고 지운다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WarmsCacheBeforeFanningOut()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(13, probe, _ => 60);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            await RunBatchPipelineWithConcurrency(aiService, ui, 4);
+
+            var spans = probe.Spans;
+            var first = spans.Single(s => s.Code == "S01");
+            var earliestOther = spans.Where(s => s.Code != "S01").Min(s => s.Start);
+            Assert.True(first.End <= earliestOther,
+                "S01이 끝나기 전에 다른 단계가 시작됐다 — 캐시 워밍이 깨졌다.");
+        }
+
+        /// <summary>
+        /// ③④ 완료 순서와 동시 실행 수가 산출물을 바꾸지 않는다.
+        /// 순차(1), 팬아웃(4, 정방향 지연), 팬아웃(4, 역방향 지연) 세 실행이 같은 문서를 낸다.
+        /// 병렬화가 산출물을 바꾸지 않는다는 것이 이 설계의 전제이므로 전제 자체를 단언한다.
+        ///
+        /// 이 테스트가 잡는 것은 병합 "순서"가 아니다 — 문서 본문은 steps 목록에서 다시
+        /// 조립되고 배너는 Key로 정렬되므로, 병합이 완료 순서였어도 이 단언들은 통과한다.
+        /// 실제로 잡는 것은 잠금 없는 Dictionary 동시 쓰기로 인한 유실·손상과,
+        /// 동시 실행이 산출물을 바꾸지 않는다는 종단 간 불변식이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_ProducesSameDocumentRegardlessOfConcurrencyOrCompletionOrder()
+        {
+            const int count = 8;
+            // S03과 S06은 하한을 통과하지 못한다 — 배너 내용까지 비교 대상에 넣기 위함.
+            Func<string, string> sections = code =>
+                code is "S03" or "S06"
+                    ? SubFloorStepSection(code)
+                    : HealthyStepSection(code, $"dbo.T{code.Substring(1)}", $"-{int.Parse(code.Substring(1))}");
+
+            var sequential = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), _ => 1, sections),
+                Substitute.For<IVerificationUserInteraction>(), 1);
+
+            var forward = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), code => int.Parse(code.Substring(1)) * 10, sections),
+                Substitute.For<IVerificationUserInteraction>(), 4);
+
+            // 역방향: S08이 가장 먼저, S01이 가장 늦게 끝난다.
+            var reverse = await RunBatchPipelineWithConcurrency(
+                ManyStepAiService(count, new ConcurrencyProbe(), code => (count + 1 - int.Parse(code.Substring(1))) * 10, sections),
+                Substitute.For<IVerificationUserInteraction>(), 4);
+
+            Assert.Equal(sequential.Plan, forward.Plan);
+            Assert.Equal(sequential.Plan, reverse.Plan);
+            // 셋 다 실제로 하한 배너를 달고 있어야 비교가 의미를 갖는다.
+            Assert.Contains("[하한 미달]", sequential.Plan);
+            Assert.Contains("S03 (하한 미달)", sequential.Plan);
+            Assert.Contains("S06 (하한 미달)", sequential.Plan);
+        }
+
+        /// <summary>
+        /// ⑤ 팬아웃 도중의 취소가 삼켜지지 않고 호출부까지 올라온다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenCancelledDuringFanOut_PropagatesCancellation()
+        {
+            using var cts = new CancellationTokenSource();
+            var calls = 0;
+            var aiService = ManyStepAiServiceBase(13);
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(async call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (Interlocked.Increment(ref calls) >= 3)
+                    {
+                        cts.Cancel();
+                    }
+                    await Task.Delay(30, call.Arg<CancellationToken>());
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, new MechanicalValidator(), Substitute.For<IVerificationUserInteraction>(),
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8, 4);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                orchestrator.RunConsolidatedPipelineAsync(
+                    specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot,
+                    isBatchMode: true, cancellationToken: cts.Token));
+        }
+
+        /// <summary>
+        /// ⑥ 생성자의 Math.Max(1, ...) 절상이 실제로 막는 것. 절상이 없으면
+        /// new SemaphoreSlim(0)이 슬롯을 하나도 내주지 않아 단계 생성이 영구 대기한다 —
+        /// StepConcurrency에 0을 적은 사용자의 실행이 그대로 멈춘다는 뜻이다.
+        /// 절상이 살아 있으면 슬롯 1개짜리 완전 순차로 정상 완주한다.
+        ///
+        /// Task 1에서 이 커버리지를 만들 수 없었던 이유: 그 시점에는 _stepConcurrency가
+        /// 로컬 공급자 경고(> 1일 때만 발동)에만 쓰여, 원값 0·-5가 절상 전에도 이미
+        /// > 1이 아니라 어떤 단언도 절상의 유무를 구분하지 못했다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConcurrencyIsZero_ClampsToOneAndCompletes()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(4, probe, _ => 1);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            var run = RunBatchPipelineWithConcurrency(aiService, ui, 0);
+            var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)));
+            Assert.Same(run, finished);   // 절상이 없으면 여기서 타임아웃한다
+
+            var result = await run;
+            Assert.Equal(1, probe.MaxObserved);   // 슬롯 1개 = 완전 순차
+            Assert.Contains("### S01 단계", result.Plan);
+            Assert.Contains("### S04 단계", result.Plan);
         }
 
         [Fact]
@@ -4561,6 +4900,93 @@ SELECT 1;
 
             Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
             Assert.Contains("### S02 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 예외로 실패한 재시도만 지터 지연을 받는다(설계 판정 커밋 86413bf). 동시 실행 중
+        /// 429 하나가 여러 단계를 같은 창에서 때리는 상황을 무작위 지연으로 흩트러뜨리기
+        /// 위함이다. S01은 첫 호출에서 예외를 던지고 재시도에서 성공한다 — 두 호출 사이
+        /// 간격이 최소 지터(500ms)에 여유를 둔 400ms 이상이어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    if (s01CallTimestamps.Count == 1)
+                    {
+                        throw new InvalidOperationException("쿼터 초과");
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs >= 400,
+                $"예외 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 최소 지터(500ms)에 여유를 둔 400ms 하한에 못 미친다.");
+            Assert.Contains("### S01 단계", result.Plan);
+        }
+
+        /// <summary>
+        /// 하한 미달 재시도는 rate limit이 아니라 모델 출력 품질 문제이므로 지연이 없어야
+        /// 한다(설계 판정 커밋 86413bf). 예외 재시도 지터 테스트와 대비된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesWithoutDelay()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01CallTimestamps = new List<long>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    lock (s01CallTimestamps) { s01CallTimestamps.Add(Stopwatch.GetTimestamp()); }
+                    return s01CallTimestamps.Count == 1
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            Assert.Equal(2, s01CallTimestamps.Count);
+            var elapsedMs = (s01CallTimestamps[1] - s01CallTimestamps[0]) * 1000.0 / Stopwatch.Frequency;
+            Assert.True(elapsedMs < 400,
+                $"하한 미달 재시도 사이 간격이 {elapsedMs:F0}ms였다 — 지연이 없어야 하는데 지터가 섞여 들어간 것으로 보인다.");
         }
 
         /// <summary>
@@ -5696,6 +6122,514 @@ SELECT 1;
             // 핵심 불변식: 채택된 문서는 목차 A(완전히 커버됨)로 만들어졌으므로,
             // 채택되지도 않은 목차 B의 커버리지 공백이 배너로 새어 나오면 안 된다.
             Assert.DoesNotContain("[커버리지 누락]", result.Plan);
+        }
+
+        // 구제(RetryRescue)가 이전 회차를 채택하면 반환되는 AiResult도 그 회차의
+        // 것이어야 한다 — BestAttempt가 후보 등록 시점에 finalAiResult를 함께
+        // 스냅샷하므로, 마지막으로 생성된 회차가 아니라 채택된 회차의 AiResult가
+        // 나온다. 주의: 이 테스트는 lastSkeleton·lastSkeletonResult·lastStepSections
+        // 캐시가 채택 회차로 되감기는지는 검증하지 않는다 — 그 값들은 오늘 아무
+        // 데도 읽히지 않는 지역 변수라 관찰할 방법이 없다(AdoptedGenerationState
+        // 선언부의 설명 참고).
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenRescueAdoptsEarlierAttempt_ReportsThatAttemptsAiResult()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+
+            // 1차 골격과 3차 골격을 구분 가능하게 만든다.
+            var skeletonCall = 0;
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => new AiResult
+                {
+                    Content = SkeletonMarkdown,
+                    SystemPrompt = $"골격 시스템 프롬프트 #{++skeletonCall}"
+                });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 1차는 통과 점수, 2차는 더 낮은 점수(재수립 유발), 3차는 결함 →
+            // 예산 소진 시 RetryRescue가 최고점인 1차를 채택한다.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => ++reviewCall switch
+                {
+                    1 => new ReviewResult { HasDefects = true, FeedbackComment = "보완", ScoreAccuracy = 7, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    _ => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                });
+
+            var result = await RunBatchPipeline(aiService);
+
+            // 채택된 것은 1차이므로 반환되는 AiResult도 1차 골격 호출의 것이어야 한다.
+            Assert.NotNull(result.Result);
+            Assert.Equal("골격 시스템 프롬프트 #1", result.Result!.SystemPrompt);
+        }
+
+        // L3 피드백이 통짜 단일 호출로 가면 분할이 확보한 단계 본문이 무너진다.
+        // 지목이 있으면 그 단계만, 골격은 재사용해야 한다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3FeedbackWithTargetedSteps_RegeneratesOnlyThoseSteps()
+        {
+            var aiService = SplitCapableAiService();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "S02의 트랜잭션 경계를 명시해줘",
+                        RedraftStructure = false,
+                        TargetStepCodes = new List<string> { "S02" }
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var result = await RunBatchPipelineWithUi(aiService, userInteraction, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 통짜 호출은 한 번도 일어나지 않아야 한다.
+            await aiService.DidNotReceive().GenerateConsolidatedBatchPlanAsync(
+                Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            // 골격은 최초 1회뿐 — 지목 재생성은 재사용한다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            // S02는 최초 1회 + 피드백 1회 = 2회, S01은 1회.
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3FeedbackWithNoTargets_RegeneratesEveryStepButReusesSkeleton()
+        {
+            var aiService = SplitCapableAiService();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "전반적으로 트랜잭션 서술을 강화해줘",
+                        RedraftStructure = false
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            await RunBatchPipelineWithUi(aiService, userInteraction, isBatchMode: false);
+
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3FeedbackWithSkeletonSelected_RegeneratesSkeletonAndEveryStep()
+        {
+            var aiService = SplitCapableAiService();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "검증 SQL 세트에 제어합계를 추가해줘",
+                        RedraftStructure = false,
+                        RegenerateSkeleton = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            await RunBatchPipelineWithUi(aiService, userInteraction, isBatchMode: false);
+
+            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+
+        // 단계 목록은 사용자에게 전달돼야 고를 수 있다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_PassesStepListToTheReviewPrompt()
+        {
+            var aiService = SplitCapableAiService();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(new HumanReviewResult { Decision = UserDecision.Approve });
+
+            await RunBatchPipelineWithUi(aiService, userInteraction, isBatchMode: false);
+
+            await userInteraction.Received(1).RequestHumanReviewAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(),
+                Arg.Is<bool>(b => b),
+                Arg.Is<IReadOnlyList<BatchStepPlan>?>(s => s != null && s.Count == 2));
+        }
+
+        // Task 1이 AdoptedGenerationState에 Skeleton·SkeletonResult·StepSections를 묶으면서
+        // 남긴 커버리지 공백을 메운다(선언부 주석 참고): 그 세 값은 이 배선(Task 4)이
+        // 생기기 전까지는 아무 데도 읽히지 않는 지역 변수라 관찰할 방법이 없었다.
+        //
+        // 구제(RetryRescue)가 더 이른 회차를 채택하는데, 그 회차 이후에 캐시된
+        // lastSkeleton/lastStepSections는 더 나중(폐기된) 회차의 것으로 이미 덮어써져
+        // 있다. RestoreAdoptedGenerationState가 그 되감기를 하지 않으면, 이어지는 L3
+        // 지목 재생성이 폐기된 회차의 섹션을 "재사용"해 화면에도 없던 본문이 새어
+        // 나온다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3FeedbackAfterRescue_ReusesTheAdoptedAttemptsStepSections()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // 코드별 생성 회차를 센다. 1차 시도는 두 단계 모두 회차 1을 낸다. 정체로
+            // 인한 2차 시도는 (지목 없이 전면 재생성이므로) 두 단계 모두 회차 2를
+            // 내지만 점수가 더 낮아 채택되지 않는다. 구제는 1차를 채택해야 하므로,
+            // 뒤이은 L3 지목 재생성에서 지목되지 않은 S01은 "회차 1"을 그대로 실어야
+            // 한다 — 캐시가 되감기지 않으면 "회차 2"가 새어 나온다.
+            var sectionCallCounts = new Dictionary<string, int>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    sectionCallCounts.TryGetValue(step.Code, out var n);
+                    n++;
+                    sectionCallCounts[step.Code] = n;
+                    return new AiResult
+                    {
+                        Content = $"### {step.Code} 단계\n\n대상은 {step.TargetTables[0]}이고 오류코드는 {step.ErrorCodes[0]}이다. 생성 회차 {n}.\n\n```sql\nSELECT 1;\n```"
+                    };
+                });
+
+            // 1차는 결함이 있지만 최고점, 2차는 결함이 있고 더 낮은 점수 → maxL2Attempts="1"
+            // (=_maxAttempts 2)이므로 2차에서 예산이 소진돼 RetryRescue가 1차를 채택한다.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => ++reviewCall switch
+                {
+                    1 => new ReviewResult { HasDefects = true, FeedbackComment = "보완", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    _ => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 }
+                });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "S02만 보완해줘",
+                        RedraftStructure = false,
+                        TargetStepCodes = new List<string> { "S02" }
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RescueThenL3Job", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 지목되지 않은 S01은 채택(1차)의 섹션을 그대로 실어야 한다.
+            Assert.Contains("### S01 단계", result.Plan);
+            Assert.Contains("생성 회차 1.", result.Plan);
+            // 폐기된 2차 회차의 내용은 어디에도 새어 나오면 안 된다.
+            Assert.DoesNotContain("생성 회차 2.", result.Plan);
+            // 지목된 S02는 L3에서 다시 만들어져 3번째 회차 표식을 실어야 한다.
+            Assert.Contains("생성 회차 3.", result.Plan);
+        }
+
+        // L3에서 구조 재수립(RedraftStructure=true)에 응하면 단계 코드 자체가
+        // 바뀔 수 있다. 재수립 전 목차에서 하한 미달로 기록된 단계 코드가 새
+        // 목차에는 없는데도 그 기록이 살아남아 배너로 새어 나오면, 사용자는
+        // 문서 어디에도 없는 단계를 찾아 헤매게 된다. 재시도 루프의
+        // ClearSplitGenerationCacheAfterRedraft가 막아 둔 것과 같은 부류의
+        // 결함을 L3 재수립 경로에서도 막는다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3StructureRedraft_DropsFloorViolationsFromTheOldOutline()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 재수립 후 목차는 S01/S02 대신 완전히 다른 코드 S05를 낸다.
+            const string redraftedStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S05"", ""Name"": ""재설계 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T5""], ""ErrorCodes"": [""-5""] }
+  ]
+}
+```";
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차\n" + redraftedStepsJson });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01은 대상 테이블·오류코드를 일부러 빠뜨려 하한 검사를 통과하지
+            // 못하게 한다 — 최초 문서에 "S01 (하한 미달)" 기록을 남기기 위해서다.
+            // S02와 재수립 후의 S05는 정상적으로 하한을 통과한다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01")
+                    {
+                        return new AiResult { Content = "### S01 단계\n\n본문.\n\n```sql\nSELECT 1;\n```" };
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "구조를 다시 짜줘",
+                        RedraftStructure = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RedraftDropsFloorJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 새 목차(S05)의 문서에는 하한 미달 배너 자체가 없어야 한다 — S01의
+            // 옛 기록이 새어 나오면 여기서 잡힌다.
+            Assert.DoesNotContain("하한 미달", result.Plan);
+            Assert.DoesNotContain("S01", result.Plan);
+            Assert.Contains("### S05 단계", result.Plan);
+        }
+
+        // Finding 2 회귀: 재수립 이후 다음 회차의 RequestHumanReviewAsync가 새 목차의
+        // 단계 코드를 받아야 한다. adoptedSteps를 그림자 지역 변수로 덮으면(수정 전
+        // 코드가 그랬듯) 다음 회차의 다중 선택 목록이 옛 코드(S01/S02)를 계속
+        // 보여준다 — 리뷰어가 더 이상 존재하지 않는 코드를 골라도 pending 필터가
+        // 조용히 빈 결과를 내고 어떤 AI 호출도 일어나지 않는데, rePlan은 비어 있지
+        // 않으므로 빈-가드도 발동하지 않아 아무 메시지 없이 같은 문서를 다시 보여준다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3SecondRoundAfterRedraft_OffersTheNewStepCodes()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 재수립 후 목차는 S01/S02 대신 완전히 다른 코드 S05를 낸다.
+            const string redraftedStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S05"", ""Name"": ""재설계 단계"", ""LegacyProcedures"": [""USP_Spec1""], ""TargetTables"": [""dbo.T5""], ""ErrorCodes"": [""-5""] }
+  ]
+}
+```";
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차\n" + redraftedStepsJson });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+
+            var reviewCount = 0;
+            IReadOnlyList<BatchStepPlan>? secondRoundSteps = null;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(call =>
+                {
+                    reviewCount++;
+                    if (reviewCount == 2)
+                    {
+                        secondRoundSteps = call.ArgAt<IReadOnlyList<BatchStepPlan>?>(4);
+                    }
+                    return reviewCount == 1
+                        ? new HumanReviewResult { Decision = UserDecision.ProvideFeedback, UserFeedback = "구조를 다시 짜줘", RedraftStructure = true }
+                        : new HumanReviewResult { Decision = UserDecision.Approve };
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "L3SecondRoundOffersNewCodesJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(secondRoundSteps);
+            Assert.Contains(secondRoundSteps!, s => s.Code == "S05");
+            Assert.DoesNotContain(secondRoundSteps!, s => s.Code == "S01");
+            Assert.DoesNotContain(secondRoundSteps!, s => s.Code == "S02");
+        }
+
+        // Finding 3 회귀: 분할 경로에서는 통짜 재작성으로 L1을 되살리는 자가 수정을
+        // 일부러 건너뛴다(:2248 `stepsForRegeneration == null` 가드) — 그 재작성이
+        // 단계별로 확보한 본문을 무너뜨리기 때문이다. 하지만 건너뛴 채로 L1이 여전히
+        // 실패 중이면, 그 사실이 승인 화면 어디에도 적히지 않은 채로 문서가 나간다.
+        //
+        // L1(ValidateConsolidated)은 문서 레벨 필수 헤더 4종만 본다(단계 섹션의 '### '
+        // 헤딩은 보지 않는다). 그래서 이 테스트는 L3에서 골격을 지목(RegenerateSkeleton
+        // =true)해 골격이 실제로 다시 생성되게 하고, 그 두 번째 골격 호출이 필수 헤더
+        // 하나가 빠진 골격을 내도록 만든다 — 조립된 문서가 L1을 어기게 하는 유일한 길이다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3SplitRegenerationStillFailsL1_AttachesL1ExhaustedBanner()
+        {
+            var aiService = SplitCapableAiService();
+
+            // 1차(최초 생성)는 정상 골격, 2차(L3 골격 지목 재생성)는 "통합 데이터
+            // 정합성 검증 SQL 세트" 헤더가 통째로 빠진 골격을 낸다.
+            var malformedSkeleton = SkeletonMarkdown.Substring(
+                0, SkeletonMarkdown.IndexOf("## 통합 데이터 정합성 검증 SQL 세트", StringComparison.Ordinal));
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = SkeletonMarkdown },
+                    new AiResult { Content = malformedSkeleton });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "검증 SQL 세트를 보완해줘",
+                        RedraftStructure = false,
+                        RegenerateSkeleton = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var result = await RunBatchPipelineWithUi(aiService, userInteraction, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            Assert.Contains("L1 기계 검증을 통과하지 못했습니다", result.Plan);
+            Assert.Equal(VerificationOutcome.ReviewNotRun, result.Outcome);
+        }
+
+        // Finding 4 회귀: 구조 재수립이 성공했지만 새 목차가 단계 목록을 파싱하지
+        // 못해(산문만 있는 목차 등) 통짜 단일 호출로 폴백하는 경우, reViolations가
+        // 옛 목차의 살아있는 stepFloorViolations를 그대로 물려받으면 안 된다. 그대로
+        // 두면 배너가 새 문서에 없는 옛 단계 코드(S01)를 지목한다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3RedraftFallsBackToSingleCall_DropsStaleFloorViolations()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 최초 목차는 파싱 가능(S01/S02). 재수립 후 목차는 산문만 있어 단계
+            // 목록을 파싱할 수 없다 — 통짜 단일 호출 폴백을 강제한다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차 산문만 있다" });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01은 대상 테이블·오류코드를 빠뜨려 하한 검사를 통과하지 못하게 한다 —
+            // 최초 문서에 "S01 (하한 미달)" 기록을 남기기 위해서다. S02는 정상.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01")
+                    {
+                        return new AiResult { Content = "### S01 단계\n\n본문.\n\n```sql\nSELECT 1;\n```" };
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // 통짜 재생성 호출(폴백)이 반환하는 본문에는 S01/S02 어느 코드도
+            // 등장하지 않는다 — 완전히 새로 쓴 문서라는 뜻이다.
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 재작성된 통짜 문서\n\n본문에는 옛 코드가 없다." });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "구조를 다시 짜줘",
+                        RedraftStructure = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RedraftFallbackDropsFloorJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 새 통짜 문서에는 하한 미달 배너 자체가 없어야 한다 — 옛 S01의
+            // 기록이 새어 나오면 여기서 잡힌다.
+            Assert.DoesNotContain("하한 미달", result.Plan);
+            Assert.DoesNotContain("S01", result.Plan);
         }
     }
 }
