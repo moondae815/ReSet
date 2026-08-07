@@ -13,7 +13,7 @@ namespace ReSet.Cli
             _configuration = configuration;
         }
 
-        public ICodingEngine CreateEngine(string engineName)
+        public ICodingEngine CreateEngine(string engineName, bool isBatchMode)
         {
             if (string.IsNullOrEmpty(engineName))
             {
@@ -27,16 +27,27 @@ namespace ReSet.Cli
             }
 
             var command = section["Command"];
-            var arguments = section["Arguments"] ?? string.Empty;
-
             if (string.IsNullOrEmpty(command))
             {
                 throw new InvalidOperationException($"코딩 엔진 '{engineName}'의 실행 파일명(Command)이 누락되었습니다.");
             }
 
-            // isHeadless 분기(대화형/배치 인자 분리)는 Task 4에서 다룬다. 지금은
-            // 생성자 시그니처 변경에 맞춰 기존 대화형 동작만 유지한다.
-            return new ExternalCliCodingEngine(engineName, command, arguments, isHeadless: false);
+            var interactiveArguments = section["Arguments"] ?? string.Empty;
+            var batchArguments = section["BatchArguments"] ?? string.Empty;
+
+            // 대화형 인자로 폴백하지 않는다. 대화형 형식은 무인 실행에서 TTY를 열지 못해
+            // 종료 코드 0인 채로 조용히 실패한다.
+            if (isBatchMode && string.IsNullOrWhiteSpace(batchArguments))
+            {
+                throw new InvalidOperationException(
+                    $"'{engineName}' 엔진은 무인 배치 모드를 지원하지 않습니다(BatchArguments 미지정). " +
+                    $"CodegenSettings:Engine을 배치를 지원하는 엔진으로 변경하거나, " +
+                    $"CodegenSettings:Engines:{engineName}:BatchArguments를 채우십시오.");
+            }
+
+            var arguments = isBatchMode ? batchArguments : interactiveArguments;
+
+            return new ExternalCliCodingEngine(engineName, command, arguments, isHeadless: isBatchMode);
         }
     }
 }

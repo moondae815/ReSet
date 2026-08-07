@@ -1996,7 +1996,7 @@ namespace ReSet.Cli
             {
                 AnsiConsole.MarkupLine($"\n[bold blue]=== 외부 코딩 에이전트 기동 ({engineName}) ===[/]");
                 var factory = new CodingEngineFactory(configuration);
-                var engine = factory.CreateEngine(engineName ?? "claude");
+                var engine = factory.CreateEngine(engineName ?? "claude", isBatchMode);
 
                 if (!File.Exists(instructionsPath))
                 {
