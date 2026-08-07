@@ -115,7 +115,7 @@ public VerificationPipelineOrchestrator(
 _stepConcurrency = Math.Max(1, stepConcurrency);
 ```
 
-로컬 공급자에서 1을 넘기면 실행 시점에 한 번 경고한다(`AiClientFactory.IsLocalProvider`). **자동으로 1로 강제하지 않는다** — 사용자가 명시한 값을 조용히 뒤집는 것보다 이유를 말하고 그대로 두는 편이 정직하고, 증상이 "그냥 느림"이라 경고가 없으면 원인을 찾기 어렵다.
+로컬 공급자에서 1을 넘기면 실행 시점에 한 번 경고한다(`AiClientFactory.IsSingleGpuLocalProvider`). **자동으로 1로 강제하지 않는다** — 사용자가 명시한 값을 조용히 뒤집는 것보다 이유를 말하고 그대로 두는 편이 정직하고, 증상이 "그냥 느림"이라 경고가 없으면 원인을 찾기 어렵다. vLLM은 연속 배칭이 강점이라 동시 실행이 오히려 유리하므로 이 판정에서 제외되었다.
 
 ### 5. 공유 가변 상태를 제거한다 (잠그지 않는다)
 
