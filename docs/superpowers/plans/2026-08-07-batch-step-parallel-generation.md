@@ -328,7 +328,7 @@ Expected: 실패 0건. 특히 하한 미달 배너를 검사하는 테스트(`St
 dotnet clean && dotnet build 2>&1 | tail -5
 dotnet test 2>&1 | tail -3
 ```
-Expected: 경고 8개 · 오류 0개, 766건 통과 (Task 1과 동일 — 이 태스크는 테스트를 늘리지 않는다)
+Expected: 경고 8개 · 오류 0개, 765건 통과 (Task 1과 동일 — 이 태스크는 테스트를 늘리지 않는다)
 
 - [ ] **Step 4: 커밋**
 
