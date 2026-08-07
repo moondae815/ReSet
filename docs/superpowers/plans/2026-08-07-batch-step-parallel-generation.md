@@ -38,6 +38,8 @@
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
+새 테스트는 `RunConsolidatedPipeline_WithStepList_GeneratesOneSectionPerStep` 바로 뒤, 분할 생성 테스트 묶음 안에 넣는다.
+
 `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`의 `RunBatchPipelineWithUi` 도우미 바로 아래에 도우미를 추가한다.
 
 ```csharp
@@ -86,23 +88,9 @@
             ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
         }
 
-        /// <summary>
-        /// 0·음수는 1로 절상된다. 절상 결과는 private 필드라 직접 볼 수 없으므로,
-        /// "1일 때만 경고하지 않는다"는 성질을 관측 지점으로 쓴다.
-        /// </summary>
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenConcurrencyIsZeroOrNegative_ClampsToOne()
-        {
-            var aiService = SplitCapableAiService();
-            aiService.ProviderName.Returns("Ollama");
-            var ui = Substitute.For<IVerificationUserInteraction>();
-
-            await RunBatchPipelineWithConcurrency(aiService, ui, 0);
-            await RunBatchPipelineWithConcurrency(aiService, ui, -5);
-
-            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(m => m.Contains("StepConcurrency")));
-        }
 ```
+
+**절상(`Math.Max(1, …)`)에 대한 테스트는 이 태스크에 두지 않는다.** 이 시점에는 관측 지점이 없다 — 경고는 `_stepConcurrency > 1`일 때만 뜨는데 원값 `0`·`-5`는 절상 전에도 이미 `> 1`이 아니므로, 절상을 통째로 지워도 어떤 단언이든 그대로 통과한다. 절상이 실제로 하는 일은 Task 3에서 관측 가능해진다: 절상이 없으면 `new SemaphoreSlim(0)`이 슬롯을 하나도 내주지 않아 단계 생성이 영구 대기한다. 그 테스트는 Task 3 Step 2의 다섯 번째 테스트로 배정돼 있다.
 
 - [ ] **Step 2: 테스트가 실패하는 것을 확인한다**
 
@@ -201,7 +189,7 @@ Expected: `stepConcurrency`가 뒤따르는 줄이 2개
 dotnet clean && dotnet build 2>&1 | tail -5
 dotnet test 2>&1 | tail -3
 ```
-Expected: 경고 8개 · 오류 0개, 766건 통과 (763 + 신규 3)
+Expected: 경고 8개 · 오류 0개, 765건 통과 (763 + 신규 2)
 
 - [ ] **Step 9: 커밋 — `appsettings.json`은 blob 스테이징으로만**
 
@@ -363,6 +351,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: Task 1의 `_stepConcurrency`와 `RunBatchPipelineWithConcurrency`, Task 2의 튜플 반환 헬퍼
 - Produces: 없음 (내부 구현). 새 private 레코드 `StepSectionResult(string Code, string Markdown, string? FloorViolation)`.
 
+Task 1이 배선한 `Math.Max(1, stepConcurrency)` 절상의 커버리지가 이 태스크로 이월돼 있다(Task 1 Step 1의 각주 참조). 절상이 실제로 무엇을 막는지가 이 태스크에서 처음 관측 가능해지기 때문이다 — 테스트 ⑥이 그것이다.
+
 - [ ] **Step 1: 테스트 픽스처를 추가한다**
 
 `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`의 `HealthyStepSection` 정의 바로 아래에 추가한다. 파일 상단에 `using System.Diagnostics;`가 없으면 더한다.
@@ -457,7 +447,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 `ManyStepsJson`은 `LegacyProcedures`를 넣지 않으므로, 이 fake로 만든 문서에는 목차 커버리지 배너(`dbo.USP_Spec1`이 어느 단계에도 담기지 않았다는 경고)가 항상 붙는다. 아래 테스트들의 단언 대상이 아니며, 세 실행 모두에 동일하게 붙으므로 문서 비교(③)도 영향을 받지 않는다.
 
-- [ ] **Step 2: 실패하는 테스트 4개를 쓴다**
+- [ ] **Step 2: 실패하는 테스트 5개를 쓴다**
 
 Task 1이 추가한 테스트들 아래에 이어 쓴다.
 
@@ -565,6 +555,33 @@ Task 1이 추가한 테스트들 아래에 이어 쓴다.
                 orchestrator.RunConsolidatedPipelineAsync(
                     specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot,
                     isBatchMode: true, cancellationToken: cts.Token));
+        }
+
+        /// <summary>
+        /// ⑥ 생성자의 Math.Max(1, ...) 절상이 실제로 막는 것. 절상이 없으면
+        /// new SemaphoreSlim(0)이 슬롯을 하나도 내주지 않아 단계 생성이 영구 대기한다 —
+        /// StepConcurrency에 0을 적은 사용자의 실행이 그대로 멈춘다는 뜻이다.
+        /// 절상이 살아 있으면 슬롯 1개짜리 완전 순차로 정상 완주한다.
+        ///
+        /// Task 1에서 이 커버리지를 만들 수 없었던 이유: 그 시점에는 _stepConcurrency가
+        /// 로컬 공급자 경고(> 1일 때만 발동)에만 쓰여, 원값 0·-5가 절상 전에도 이미
+        /// > 1이 아니라 어떤 단언도 절상의 유무를 구분하지 못했다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenConcurrencyIsZero_ClampsToOneAndCompletes()
+        {
+            var probe = new ConcurrencyProbe();
+            var aiService = ManyStepAiService(4, probe, _ => 1);
+            var ui = Substitute.For<IVerificationUserInteraction>();
+
+            var run = RunBatchPipelineWithConcurrency(aiService, ui, 0);
+            var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30)));
+            Assert.Same(run, finished);   // 절상이 없으면 여기서 타임아웃한다
+
+            var result = await run;
+            Assert.Equal(1, probe.MaxObserved);   // 슬롯 1개 = 완전 순차
+            Assert.Contains("### S01 단계", result.Plan);
+            Assert.Contains("### S04 단계", result.Plan);
         }
 ```
 
@@ -680,13 +697,20 @@ dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~WarmsCacheBefore
 ```
 Expected: FAIL (`S01이 끝나기 전에 다른 단계가 시작됐다`)
 
+세 번째로, 생성자의 `Math.Max(1, stepConcurrency)`를 `stepConcurrency`로 바꿔 테스트 ⑥이 실패하는지 확인하고 **반드시 원복한다.**
+
+```bash
+dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~ClampsToOneAndCompletes" 2>&1 | tail -5
+```
+Expected: FAIL (`Assert.Same` 실패 — 30초 타임아웃. 절상이 없으면 `SemaphoreSlim(0)`에서 영구 대기한다.) 이 뮤테이션은 매달린 태스크를 남기므로 확인 즉시 원복하고 필터 없이 한 번 더 돌려 정상 상태를 확인한다.
+
 - [ ] **Step 8: 전체 빌드·테스트**
 
 ```bash
 dotnet clean && dotnet build 2>&1 | tail -5
 dotnet test 2>&1 | tail -3
 ```
-Expected: 경고 8개 · 오류 0개, 770건 통과 (766 + 신규 4)
+Expected: 경고 8개 · 오류 0개, 770건 통과 (765 + 신규 5)
 
 `CancellationPolicyTests`가 통과해야 한다 — 새로 추가한 `catch`는 없지만 스캔 대상이 넓어졌다.
 
