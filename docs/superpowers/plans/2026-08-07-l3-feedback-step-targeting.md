@@ -227,7 +227,9 @@ git commit -m "fix: rewind the whole adopted generation state, not three fifths 
 
 **Interfaces:**
 - Consumes: Task 1의 변경과 무관 (독립)
-- Produces: `private string AttachPipelineBanners(string consolidatedPlan, IReadOnlyDictionary<string, string> stepFloorViolations, string currentPlanStructure, List<(string FileName, string Content)> specs, string jobName)` — 배너가 붙은 마크다운을 돌려준다. Task 4가 L3에서 같은 메서드를 호출한다
+- Produces: `private string AttachPipelineBanners(string consolidatedPlan, IReadOnlyDictionary<string, string> stepFloorViolations, IReadOnlyList<BatchStepPlan>? adoptedSteps, List<(string FileName, string Content)> specs, string jobName)` — 배너가 붙은 마크다운을 돌려준다. Task 4가 L3에서 같은 메서드를 호출한다
+
+**목차 파싱은 이 메서드 안이 아니라 호출부에 남긴다.** Task 4의 L3 경로가 같은 파싱 결과를 승인 화면에도 넘겨야 하므로, 안에서 파싱하면 두 번 파싱하거나 시그니처를 다시 바꾸게 된다.
 
 ### 왜 추출하는가
 
@@ -252,22 +254,30 @@ Expected: PASS. 이 테스트들이 추출 전후의 동작 동일성을 보증�
         private string AttachPipelineBanners(
             string consolidatedPlan,
             IReadOnlyDictionary<string, string> stepFloorViolations,
-            string currentPlanStructure,
+            IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string jobName)
         {
             // ... 잘라낸 본문을 한 글자도 바꾸지 않고 그대로 ...
-            // 단, 마지막에 consolidatedPlan을 return 한다.
+            // 단, 안에 있던 `var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);`
+            // 한 줄만 지운다 — 이제 매개변수로 들어온다.
+            // 마지막에 consolidatedPlan을 return 한다.
             return consolidatedPlan;
         }
 ```
 
-원래 자리에는 호출만 남긴다.
+원래 자리에는 파싱과 호출을 남긴다.
 
 ```csharp
+            // 목차 파싱을 호출부에 두는 이유: L3(Task 4)가 같은 결과를 승인 화면의
+            // 단계 선택 목록에도 넘겨야 한다. 메서드 안에서 파싱하면 두 번 파싱하거나
+            // 시그니처를 다시 바꾸게 된다.
+            var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             consolidatedPlan = AttachPipelineBanners(
-                consolidatedPlan, stepFloorViolations, currentPlanStructure, specs, jobName);
+                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 ```
+
+**커버리지 재계산의 유지보수 불변식 주석**(「이 재계산은 재시도 루프가 완전히 끝난 뒤, `currentPlanStructure` 하나에서만 파싱해야 한다」로 시작하는 긴 주석)은 파싱이 일어나는 **호출부로 함께 옮긴다.** 그 주석이 지키려는 것이 바로 이 파싱의 위치다.
 
 **주의**: 잘라낸 블록 안의 긴 주석들(특히 커버리지 재계산의 유지보수 불변식 주석)을 반드시 함께 옮긴다. 그 주석들이 이 코드가 왜 이 모양인지에 대한 유일한 기록이다.
 
@@ -715,15 +725,7 @@ Expected: FAIL — 통짜 `GenerateConsolidatedBatchPlanAsync`가 호출됨 / `s
                     jobName, consolidatedPlan, planOutcome, structureRedraftSupported: true, steps: adoptedSteps);
 ```
 
-`adoptedSteps`는 Task 2에서 `AttachPipelineBanners` 안으로 옮겨졌다. **L3에서도 필요하므로 메서드 밖으로 다시 끌어낸다** — `AttachPipelineBanners` 호출 앞에서 계산해 인자로 넘기고, 지역 변수로도 남긴다.
-
-```csharp
-            var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
-            consolidatedPlan = AttachPipelineBanners(
-                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
-```
-
-`AttachPipelineBanners`의 시그니처에서 `currentPlanStructure`를 `IReadOnlyList<BatchStepPlan>? adoptedSteps`로 바꾸고, 내부의 `TryParse` 호출을 지운다. **커버리지 재계산의 유지보수 불변식 주석은 호출부로 옮긴다** — 이제 파싱이 그쪽에서 일어나므로.
+`adoptedSteps`는 Task 2가 이미 `AttachPipelineBanners` 호출부의 지역 변수로 만들어 둔 값이다. **추가 작업 없이 그대로 쓴다** — 승인 화면 호출이 그 지역 변수의 스코프 안에 있는지만 확인하고, 아니면 선언을 L3 루프보다 앞으로 올린다.
 
 - [ ] **Step 4: 재생성 블록을 분할 경로로 교체**
 
