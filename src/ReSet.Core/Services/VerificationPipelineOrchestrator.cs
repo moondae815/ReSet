@@ -2191,6 +2191,16 @@ namespace ReSet.Core.Services
                         // 목차가 단계 목록을 못 냈다. 분할 자체가 불가능하므로
                         // 기존 단일 호출로 간다 — 이 경로의 문서는 애초에 분할로
                         // 만들어지지 않았다.
+                        if (pendingPlanStructure != null)
+                        {
+                            // 구조 재수립이 성공했지만 새 목차는 단계 목록을 못 냈다.
+                            // reViolations는 아직 초기화(:2126)에서 물려받은 stepFloorViolations,
+                            // 즉 옛 목차의 살아있는 기록이다. 그대로 두면 아래 배너 재부착이
+                            // 새 목차에 없는 단계 코드를 지목한다 — 분할 분기(:2158-2160)가
+                            // 이미 막아 둔 것과 같은 부류의 결함이다.
+                            reViolations = new Dictionary<string, string>();
+                        }
+
                         try
                         {
                             var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(
@@ -2263,9 +2273,26 @@ namespace ReSet.Core.Services
                     planReview = null;
                     planOutcome = VerificationOutcome.ReviewNotRun;
                     stepFloorViolations = reViolations;
-                    var reSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                    // reSteps로 그림자 지역 변수를 새로 두지 않고 바깥 adoptedSteps에
+                    // 그대로 대입한다 — 다음 루프 회차의 RequestHumanReviewAsync(:2074)가
+                    // 이 값을 그대로 읽는다. 그림자로 두면 화면의 다중 선택 목록이 이번
+                    // 회차에서 사라졌거나 새로 생긴 단계 코드를 반영하지 못한 채 낡은
+                    // 목록을 계속 보여준다.
+                    adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
                     consolidatedPlan = AttachPipelineBanners(
-                        consolidatedPlan, stepFloorViolations, reSteps, specs, jobName);
+                        consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+
+                    // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
+                    // 일부러 건너뛴다 — 통짜 재작성이 단계별로 확보한 본문을 무너뜨리기
+                    // 때문이다. 하지만 건너뛴 채로 L1이 여전히 실패 중이라면, 그 사실이
+                    // 화면 어디에도 남지 않은 채 승인 화면에 도달한다. 재시도 루프가
+                    // 예산을 소진했을 때 붙이는 것과 같은 배너로 그 사실을 알린다 —
+                    // planOutcome은 ReviewNotRun을 그대로 유지한다(L2 리뷰 미수행이라는
+                    // 별개의 사실이다).
+                    if (!l1Re.IsValid && stepsForRegeneration != null)
+                    {
+                        consolidatedPlan = VerificationBanner.L1Exhausted(l1Re.Errors) + consolidatedPlan;
+                    }
                 }
             }
         }
