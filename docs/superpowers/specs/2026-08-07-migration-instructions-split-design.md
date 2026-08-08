@@ -373,3 +373,63 @@ C#은 NetArchTest, Java는 ArchUnit으로 같은 규칙을 표현한다.
 - `2026-08-06-batch-plan-step-split-design.md` — 이 설계가 소비하는 조각을 만드는 쪽
 - `2026-08-07-batch-step-parallel-generation-design.md` — 조각 생성의 병렬화
 - `2026-08-07-codegen-headless-design.md` — 무인 기동 경로
+
+## 구현 후 기록 (2026-08-08)
+
+15개 태스크 전부 구현·리뷰 완료. 브랜치 `fix/thinking-log-always-written`, `2b965d5..9716ca7`,
+전체 스위트 1033건 통과, 빌드 경고 8개 / 오류 0개(기준선 유지).
+
+### 이 설계에서 정정된 것
+
+- **`{jobDir}`가 `Spec.md`를 덮는다는 서술은 틀렸다.** `Spec.md`는
+  `<outputRoot>/Procedures/<schema.name>/docs/`에 있고 Job 루트는 `<outputRoot>/Jobs/<job>`이므로
+  **형제이지 하위가 아니다.** `task-*.md`를 `agent/` 직하에 두는 제약 자체는 `raw/ddl/` 때문에
+  여전히 옳지만, 근거로 든 `Spec.md`는 처음부터 범위 밖이었다. `BatchArguments`에 `{specRoot}`
+  (`<outputRoot>/Procedures`) `--add-dir`를 추가해 해결했다.
+- **경계 규칙 조항 1의 L1 검사는 이미 존재했다** — `TransactionEnlistmentCheck.cs`.
+  이 설계가 "새로 만들어야 한다"고 쓴 것은 오류였다.
+- **설계 §8 규칙 5는 명세대로 구현할 수 없다.** 아키텍처 테스트 안에서 DI 컨테이너의 할당을
+  관측할 수단이 없다. 전제 둘(팩토리가 외부에서 설정 가능할 것, 구현이 존재할 것)만 구현했고
+  잔여 간극은 산출 스텁 주석에 명시했다.
+
+### 사람 판정으로 결정된 것
+
+| 지점 | 결정 |
+|---|---|
+| `MechanicalValidator.RequiredConsolidatedHeaders` | 두 클래스가 공유하므로 `IReadOnlyList<string>`로 노출 |
+| `BuildLayout()`의 `Steps` 출처 | `currentSteps`가 아니라 `adoptedSteps` — 구제 채택이 되돌리지 않는 변수라 회차가 어긋난다 |
+| 회차 지시서의 스키마 의존성 | `BatchStepPlan.TargetTables`로 회차별 스코프. Bootstrap·Assembly는 없음 |
+| 번들 쓰기 실패 | 삼키지 않고 전파 — 지시서를 못 썼으면 그 Job은 쓸 수 없다 |
+| 호스팅·DI·연결문자열 안내 | 전환 중 유실된 것을 `common/03-hosting-and-config.md`로 복원 |
+| Assembly의 Job 전체 L2 | 모든 Step 통과 시에만 실행, 실패 Step 있으면 사유 기록 후 건너뜀 |
+| 회차 무관 실패(할당량·인증·권한) | 남은 회차를 중단. 실패는 `Failed`, 미실행은 `Pending` |
+| Java 기반 타입 | C#과 대칭이 되게 `ISettleStep.java`·`AbstractSettleTasklet.java` 등을 생성 |
+
+### 남은 후속 작업
+
+- `PlanBoundaryResolver`의 `allFound == true` 분기에도 같은 모양의 공백이 있다 — 마지막 단계가
+  필수 H2가 아닌 헤딩에서 끝나면 그 구간이 어느 조각에도 속하지 않는다. `!allFound` 쪽은 해결됨.
+- 레거시 전체 Job 경로는 `MaxL2Attempts: "unlimited"`에서 `nothingVerified`가 무한 재시도한다.
+  회차 경로에는 상한이 있으나 레거시에는 없다.
+- C# 아키텍처 규칙 5가 단일 어셈블리 스코프라, 계약과 구현을 다른 프로젝트에 두는
+  Hexagonal 배치에서 오탐이 난다. Java 쪽은 클래스패스 전체를 본다.
+- `{specRoot}`가 `<outputRoot>/Procedures`만 덮는다. External DB(`External/<db>/Procedures/`)와
+  `Functions/`의 명세서는 여전히 범위 밖이다.
+- Job 이름에 `.`이 들어가면 조립 지시서가 안내하는 디렉터리명과 게이트가 실제로 탐색하는
+  이름이 어긋난다(게이트는 마지막 점 앞을 버린다). 진입점 파일명 경로는 여전히 성립한다.
+- `agent/` 직하의 낡은 `task-*.md`가 재구성에서 걸러지긴 하나, 같은 코드의 서수 다른 중복이
+  있으면 `FirstOrDefault`가 열거 순서에 의존한다. 진입점보다 나중에 쓰인 파일만 남기면 해결된다.
+- `StepLogicTests` 배치 위치가 어떤 지시서에도 없다(C#·Java 공통).
+- 기존 플래키: `ArtifactChangeDetector.Snapshot`의 `EnumerateFiles` → `FileInfo.Length` TOCTOU.
+
+### 사람이 직접 확인해야 하는 것
+
+자동 테스트가 덮을 수 없는 것들이다. `ICodingEngine`은 모든 테스트에서 스텁이고
+`src/ReSet.Cli`에는 테스트 프로젝트가 없다.
+
+1. 실제 배치 실행 1회 — `claude` CLI가 `--add-dir` 두 개를 받는지, 그리고 에이전트가
+   `task-NN-*.md`에서 링크된 `Spec.md`를 실제로 읽을 수 있는지
+2. 산출된 Java가 실제 JDK에서 컴파일되는지 — 개발 기계에 JDK가 없어 소스 대조로만 검증했다
+   (C# 산출물은 실제 컴파일해 확인했다)
+3. 모든 Step이 통과한 실행에서 Assembly가 초록으로 끝나는지, 배치 종료 코드가 0인지
+4. 이 브랜치 이전에 만들어진 Job이 메뉴 3에서 `Legacy`로 분류되어 기존 경로로 도는지
