@@ -670,5 +670,50 @@ END;
             Assert.True(result.IsParsedSuccessfully);
             Assert.Contains("TSettleMst", result.UpdateTables);
         }
+
+        [Fact]
+        public void Analyze_UpdateWithLinkedServerTarget_ShouldRecordTargetAndLinkedServerWarning()
+        {
+            // 대상 노드를 건너뛰는 가드가 앞쪽에 있으면 링크드 서버 감지 블록까지
+            // 함께 건너뛴다. 대상이어도 링크드 서버 신호는 죽으면 안 된다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateLinkedServerTarget
+AS
+BEGIN
+    UPDATE MyServer.RemoteDb.dbo.Orders
+    SET    OrderStatus = 1
+    WHERE  OrderID = 1001;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "MyServer.RemoteDb.dbo.Orders" }, result.UpdateTables);
+            Assert.Contains("MyServer.RemoteDb.dbo.Orders", result.LinkedServerReferences);
+            Assert.Contains(result.ControlFlowSummary, s => s.Contains("Linked Server 원격 테이블 참조 감지됨") && s.Contains("MyServer.RemoteDb.dbo.Orders"));
+        }
+
+        [Fact]
+        public void Analyze_DeleteWithLinkedServerTarget_ShouldRecordTargetAndLinkedServerWarning()
+        {
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDeleteLinkedServerTarget
+AS
+BEGIN
+    DELETE MyServer.RemoteDb.dbo.Orders
+    WHERE  OrderID = 1001;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "MyServer.RemoteDb.dbo.Orders" }, result.DeleteTables);
+            Assert.Contains("MyServer.RemoteDb.dbo.Orders", result.LinkedServerReferences);
+            Assert.Contains(result.ControlFlowSummary, s => s.Contains("Linked Server 원격 테이블 참조 감지됨") && s.Contains("MyServer.RemoteDb.dbo.Orders"));
+        }
     }
 }

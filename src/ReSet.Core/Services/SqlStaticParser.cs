@@ -441,10 +441,6 @@ namespace ReSet.Core.Services
         {
             base.ExplicitVisit(node);
 
-            // DML 대상 노드는 RecordDmlTarget이 이미 해석해 기록했다. 여기서 다시 보면
-            // UPDATE A 의 'A' 같은 별칭이 테이블 이름으로 새어 들어간다.
-            if (_dmlTargetResolved && ReferenceEquals(node, _currentDmlTargetNode)) return;
-
             if (node.SchemaObject != null)
             {
                 var tableName = GetSchemaObjectString(node.SchemaObject);
@@ -467,6 +463,8 @@ namespace ReSet.Core.Services
                     }
 
                     // Linked Server 감지 (ServerIdentifier가 있는 4파트 명칭 구조)
+                    // 대상 노드라도 이 신호는 죽으면 안 된다 - DML 대상이 링크드 서버를
+                    // 가리키는 경우도 실존한다.
                     if (node.SchemaObject.ServerIdentifier != null)
                     {
                         var linkedName = GetSchemaObjectString(node.SchemaObject);
@@ -478,6 +476,12 @@ namespace ReSet.Core.Services
                             ControlFlowSummary.Add($"{indent}Line {line}: [🚨 경고: Linked Server 원격 테이블 참조 감지됨 - {linkedName}]");
                         }
                     }
+
+                    // DML 대상 노드는 RecordDmlTarget이 이미 해석해 기록했다. 여기서
+                    // 또 ReferencedTables/CRUD 분류에 넣으면 UPDATE A 의 'A' 같은
+                    // 별칭이 테이블 이름으로 새어 들어간다. 별칭 등록과 링크드 서버
+                    // 감지는 위에서 이미 끝났으니 그 둘만 보존하고 여기서 멈춘다.
+                    if (_dmlTargetResolved && ReferenceEquals(node, _currentDmlTargetNode)) return;
 
                     if (tableName.StartsWith("#"))
                     {
