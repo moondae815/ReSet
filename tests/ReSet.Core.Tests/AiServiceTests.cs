@@ -1289,6 +1289,52 @@ namespace ReSet.Core.Tests
             Assert.Contains("| OwnColumn |", result.UserPrompt);
             Assert.DoesNotContain("| OtherDbColumn |", result.UserPrompt);
         }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldFallBackToBaseNameMatchWhenObjectKeyHasNoDatabaseEvenIfDependencyDoes()
+        {
+            // dep.Database가 있어도 ReferencedColumnsPerTable의 원시 키(예: "TSettleMst")를
+            // 한정하는 데는 쓰이지 않는다 - 그 비한정 키의 암묵적 DB는 분석 대상 객체
+            // 자신의 DB(spDef.ObjectKey.Database)이지, 지금 비교 중인 의존성의 DB가
+            // 아니다. 그래서 키 쪽 한정 가능 여부는 오직 spDef.ObjectKey?.Database에만
+            // 달려 있고, dep.Database는 이 판단에 기여하지 않는다. ObjectKey가 없으면
+            // dep.Database가 있어도 폴백(베이스 이름 비교)으로 가야 한다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "PaymentDB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler

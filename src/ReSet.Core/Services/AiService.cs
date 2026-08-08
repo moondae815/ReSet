@@ -57,15 +57,31 @@ namespace ReSet.Core.Services
             // break를 두지 않는 것은 폴백 대비다. 정규화가 DB 컨텍스트를 못 얻으면
             // 키가 갈라진 채 남는데, 그때도 컬럼이 유실되면 안 된다.
             //
-            // DB 컨텍스트(dep.Database도 spDef.ObjectKey?.Database도 없음)가 아예 없으면
-            // canonical 한정 자체가 불가능해서 3-part 정확 비교가 항상 어긋난다. 이
-            // 필터는 토큰 절약용 최적화일 뿐 정확성 장치가 아니다 - 과다 포함(다른
-            // 테이블 컬럼이 섞임)은 표에 불필요한 행을 몇 개 더할 뿐이지만, 과소 포함은
-            // 모델이 그 컬럼을 "존재하지 않는다"고 잘못 기록한다(14개 명세서를 망가뜨린
-            // 바로 그 결함). 그래서 컨텍스트가 없을 때만 베이스 이름(마지막 세그먼트)
-            // 비교로 과다 포함 쪽으로 기운다. 컨텍스트가 있는 정상 경로는 3-part 정확
-            // 비교를 유지해야 한다 - dbo.TPGProperty와 PaymentDB.dbo.TPGProperty를
-            // 베이스 이름만으로 합치면 서로 다른 물리 테이블의 컬럼이 섞인다.
+            // 엄격 3-part 비교가 성립하려면 "키" 쪽이 한정 가능해야 한다. 비교 양변의
+            // 한정 가능한 출처가 다르다:
+            //  - 의존성 쪽: dep.Database가 있으면 그것으로, 없으면 spDef.ObjectKey로 한정된다.
+            //  - 키 쪽: ReferencedColumnsPerTable의 원시 키는 SP DDL에 적힌 그대로다.
+            //    비한정 키(예: "TSettleMst")의 암묵적 DB는 "분석 대상 객체 자신의 DB"
+            //    (spDef.ObjectKey.Database)이지, 하필 지금 비교 중인 의존성의 DB가
+            //    아니다. dep.Database로 키를 한정하면 존재하지 않는 테이블을 지어내는
+            //    것과 같다(이 브랜치가 막으려는 "이름 날조"). 그래서 키 쪽 한정 가능
+            //    여부는 오직 spDef.ObjectKey?.Database 하나로만 결정되고, dep.Database는
+            //    이 판단에 기여하지 않는다.
+            //
+            // spDef.ObjectKey?.Database가 없으면 canonical 한정 자체가 불가능해서 3-part
+            // 정확 비교가 항상 어긋난다. 이 필터는 토큰 절약용 최적화일 뿐 정확성
+            // 장치가 아니다 - 과다 포함(다른 테이블 컬럼이 섞임)은 표에 불필요한 행을
+            // 몇 개 더할 뿐이지만, 과소 포함은 모델이 그 컬럼을 "존재하지 않는다"고
+            // 잘못 기록한다(14개 명세서를 망가뜨린 바로 그 결함). 그래서 컨텍스트가
+            // 없을 때만 베이스 이름(마지막 세그먼트) 비교로 과다 포함 쪽으로 기운다.
+            // 단, 이 폴백은 완전히 무해하지 않다 - 베이스 이름만 보므로 스키마가 다른
+            // 진짜 다른 테이블의 컬럼이 섞여 들어올 수 있다(같은 객체의 여분 행이
+            // 아니라, 대상 테이블에 없는 컬럼이 있는 것처럼 보일 위험). 그래도 거짓
+            // "컬럼 없음"보다는 낫다고 판단해 이 방향을 택한다.
+            //
+            // 컨텍스트가 있는 정상 경로는 3-part 정확 비교를 유지해야 한다 -
+            // dbo.TPGProperty와 PaymentDB.dbo.TPGProperty를 베이스 이름만으로 합치면
+            // 서로 다른 물리 테이블의 컬럼이 섞인다.
             if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.ReferencedColumnsPerTable != null)
             {
                 var depCanonicalName = StaticAnalysisNormalizer.CanonicalizeParts(
@@ -75,8 +91,7 @@ namespace ReSet.Core.Services
                     spDef.ObjectKey?.Database,
                     spDef.Schema);
 
-                bool hasDbContext = !string.IsNullOrWhiteSpace(dep.Database) ||
-                    !string.IsNullOrWhiteSpace(spDef.ObjectKey?.Database);
+                bool hasDbContext = !string.IsNullOrWhiteSpace(spDef.ObjectKey?.Database);
                 var depBaseName = hasDbContext ? null : ExtractBaseName(dep.Name);
 
                 foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
