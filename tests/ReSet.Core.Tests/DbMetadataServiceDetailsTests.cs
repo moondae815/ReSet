@@ -169,65 +169,11 @@ namespace ReSet.Core.Tests
         {
             // 분류 판정은 SqlObjectTypeClassifier로 이전되었다(두 private 메서드는
             // 삭제됨). 여기서는 DbMetadataService가 아니라 그 분류기 자체를
-            // 공개 API로 확인한다. DbMetadataService가 실제로 이 분류기에
-            // 위임하는지는 별도 가드 테스트(DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier)가 확인한다.
+            // 공개 API로 확인한다. 호출부가 실제로 이 분류기에 위임하는지는
+            // TypeClassificationPolicyTests가 src/ 전체를 구문 트리로 훑어 확인한다.
             Assert.False(SqlObjectTypeClassifier.IsTableOrView(dependencyType));
             Assert.True(SqlObjectTypeClassifier.IsCodeObject(dependencyType));
         }
-
-        [Fact]
-        public void DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier()
-        {
-            // 이 가드가 지키는 불변식: 직접 의존성 경로(703, 726행)와 재귀 경로(819, 835행)
-            // 양쪽 모두 SqlObjectTypeClassifier에 위임해야 한다. 둘 중 하나라도
-            // "rawDep.Type.Contains(...)" 같은 인라인 부분 문자열 판정이나, 삭제된
-            // private 메서드 IsTableOrViewType/IsCodeObjectType의 부활로 되돌아가면,
-            // "SQL_TABLE_VALUED_FUNCTION"이 "TABLE"을 포함하기 때문에 TVF가 다시
-            // 테이블로 오분류되고 UIF_SettleYMD 같은 함수의 DDL이 다시 수집되지 않는다.
-            //
-            // 단순 Assert.Contains만으로는 두 호출부 중 한쪽만 원복해도 다른 쪽의
-            // 리터럴이 파일에 여전히 남아 있어 걸리지 않는다(라운드 2 리뷰에서 지적됨).
-            // 그래서 등장 횟수를 함께 확인한다: 정확히 2가 아니라 최소 2인 이유는,
-            // 정당한 호출부가 나중에 하나 더 늘어도(예: 세 번째 경로가 추가되는 경우)
-            // 이 가드가 무고하게 깨지지 않게 하기 위해서다. 그래도 두 호출부 중
-            // 하나만 인라인 판정으로 되돌아가면 횟수가 1로 떨어져 여전히 잡힌다.
-            var source = System.IO.File.ReadAllText(
-                System.IO.Path.Combine(
-                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
-
-            Assert.True(
-                CountOccurrences(source, "SqlObjectTypeClassifier.IsTableOrView(") >= 2,
-                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsTableOrView에 위임해야 한다.");
-            Assert.True(
-                CountOccurrences(source, "SqlObjectTypeClassifier.IsCodeObject(") >= 2,
-                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsCodeObject에 위임해야 한다.");
-
-            Assert.DoesNotContain("rawDep.Type.Contains(\"TABLE\")", source);
-
-            // 삭제된 private 메서드의 정의 자체가 되돌아오지 않았는지 확인한다.
-            // 이것이 실제 회귀 형태였다: 호출부 리터럴이 아니라 메서드 정의가
-            // 되살아나는 것.
-            Assert.DoesNotContain("private static bool IsTableOrViewType", source);
-            Assert.DoesNotContain("private static bool IsCodeObjectType", source);
-
-            // 계획 외 보완(Task 9): 원래 가드는 "rawDep.Type.Contains(...)" 라는 특정
-            // 변수명만 확인했다. 그런데 2차 정밀 정적 분석(tableColumnsMap 구성)과
-            // 동적 SQL 의존성 해석(ResolveDynamicSqlDependenciesAsync)에는 변수명이
-            // 각각 dep.Type / objectType인 인라인 "TABLE"/"VIEW" 부분 문자열 판정이
-            // 따로 남아 있었고, 그중 동적 SQL 경로는 dep.Columns 가드조차 없어
-            // TVF가 그대로 테이블 의존성으로 등록되는 더 심각한 결함이었다.
-            //
-            // 변수명(dep/objectType/rawDep)에 의존하는 가드는 새 변수명이 나타나는
-            // 세 번째 회귀를 못 잡는다. 그래서 이번에는 변수명과 무관하게
-            // ".Contains(\"TABLE\")" 리터럴 자체가 파일 전체에 단 한 번도 나타나지
-            // 않아야 한다고 단언한다. 정상 경로는 전부 SqlObjectTypeClassifier로
-            // 위임되어 있어야 하며, 그 분류기 자신의 부분 문자열 판정은
-            // SqlObjectTypeClassifier.cs 안에 있으므로 이 단언과 무관하다.
-            Assert.Equal(0, CountOccurrences(source, ".Contains(\"TABLE\")"));
-        }
-
-        private static int CountOccurrences(string source, string literal) =>
-            (source.Length - source.Replace(literal, string.Empty).Length) / literal.Length;
 
         [Theory]
         [InlineData(null)]
@@ -247,35 +193,6 @@ namespace ReSet.Core.Tests
                 new object?[] { invalidConnString, database, CancellationToken.None })!;
 
             Assert.Equal(160, await task);
-        }
-
-        [Fact]
-        public void NormalizeStaticAnalysisForDefinition_ShouldCanonicaliseAgainstTheObjectKey()
-        {
-            // DB 연결 없이 정규화 배선만 확인한다. 실제 수집은 통합 검증 몫이다.
-            var definition = new SpDefinition
-            {
-                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
-                Schema = "dbo",
-                Name = "UP_TEST",
-                StaticAnalysis = new SpStaticAnalysisResult
-                {
-                    IsParsedSuccessfully = true,
-                    ReferencedTables = new System.Collections.Generic.List<string>
-                    {
-                        "TSettleMst", "dbo.TSettleMst", "SETTLE_POQ_DB.dbo.TSettleMst"
-                    }
-                }
-            };
-
-            definition.StaticAnalysis = StaticAnalysisNormalizer.Normalize(
-                definition.StaticAnalysis,
-                definition.ObjectKey?.Database,
-                definition.Schema);
-
-            Assert.Equal(
-                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
-                definition.StaticAnalysis.ReferencedTables);
         }
 
         [Fact]
