@@ -2887,6 +2887,20 @@ namespace ReSet.Core.Services
                     return (content, null);
                 }
 
+                // 목차가 대조할 재료를 내지 않은 경우다. 본문을 다시 써도 프롬프트에
+                // 넣을 코드·테이블이 여전히 없어 같은 자리로 돌아오므로, 재시도로
+                // 호출을 버리지 않고 기록만 남긴다. 이 기록이 배너가 되어 "검사가
+                // 실행되지 않았다"는 사실이 문서와 회차 파일에 남는다.
+                if (!stepResult.RegenerationCanFix)
+                {
+                    var reason = string.Join(" / ", stepResult.Errors);
+                    _userInteraction.NotifyStatus(
+                        $"  [yellow]* {step.Code} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {reason}[/]");
+                    Log.Warning(
+                        "단계 하한 검사를 실행하지 못했습니다 - Step: {StepCode}, 사유: {Reason}", step.Code, reason);
+                    return (content, $"{step.Code} ({reason})");
+                }
+
                 _userInteraction.NotifyStatus(
                     $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {string.Join(" / ", stepResult.Errors)}[/]");
                 floorFeedback = stepResult.SuggestedPromptFix;

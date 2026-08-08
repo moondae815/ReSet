@@ -465,5 +465,90 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("비어있습니다"));
         }
+
+        // ── 목차가 검사 재료를 안 냈을 때 ────────────────────────────────
+        //
+        // 실측: POQSettleProcDaily5는 12단계 전부 "ErrorCodes": []로 나왔다.
+        // 계획서 본문에는 S01 `-9`~`-10`, S04 16개가 다 적혀 있는데 기계 판독
+        // 배열만 비어 있었다. foreach가 0회 돌아 오류코드 검증이 12/12 무실행이
+        // 됐고, 로그에는 "에러 개수: 0개"로 찍혔다. 재료가 없는 것과 대조해서
+        // 깨끗한 것은 다른 사건인데 결과가 같으면 게이트가 아니다.
+
+        [Fact]
+        public void ValidateBatchStep_WithEmptyErrorCodes_Fails()
+        {
+            var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("ErrorCodes"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithEmptyTargetTables_Fails()
+        {
+            var plan = S10Plan() with { TargetTables = Array.Empty<string>() };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("TargetTables"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithBlankOnlyErrorCodes_Fails()
+        {
+            // 배열은 있는데 원소가 전부 공백이면 기존 루프가 continue로 전부
+            // 건너뛰어 빈 배열과 똑같이 무실행이 된다.
+            var plan = S10Plan() with { ErrorCodes = new[] { "", "  " } };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("ErrorCodes"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithEmptyPlanArrays_IsNotFixableByRegeneration()
+        {
+            // 빈 배열은 목차의 결함이다. 단계 본문을 다시 생성해도 프롬프트에
+            // 넘길 코드가 애초에 없으므로 결과가 같다. 재시도를 걸면 단계마다
+            // AI 호출 1회를 버리고 같은 자리로 돌아온다.
+            var plan = S10Plan() with
+            {
+                ErrorCodes = Array.Empty<string>(),
+                TargetTables = Array.Empty<string>(),
+            };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.False(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithBodyDefect_IsFixableByRegeneration()
+        {
+            // 본문에 코드 블록이 없는 것은 재생성으로 고쳐진다 - 기존 재시도가
+            // 존재하는 이유이고, 그 경로가 살아 있어야 한다.
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan());
+
+            Assert.False(result.IsValid);
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithBothDefects_IsFixableByRegeneration()
+        {
+            // 목차 결함이 섞였다고 본문 결함까지 포기하지 않는다. 하나라도
+            // 재생성으로 고칠 수 있으면 재시도할 값어치가 있다.
+            var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
+
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.True(result.RegenerationCanFix);
+        }
     }
 }

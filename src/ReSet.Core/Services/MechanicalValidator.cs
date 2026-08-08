@@ -188,6 +188,26 @@ namespace ReSet.Core.Services
                 result.Errors.Add($"{step.Code} 섹션에 SQL 또는 의사코드 블록이 없습니다.");
             }
 
+            // 대조할 토큰이 하나도 없으면 아래 두 루프는 0회 돌고 통과한다. 그러면
+            // "대조해서 깨끗함"과 "대조할 것이 없었음"이 결과로 구별되지 않는다.
+            // 실측: 한 Job의 12단계 전부가 ErrorCodes를 빈 배열로 냈고 — 계획서
+            // 본문에는 코드가 다 적혀 있었다 — 오류코드 검증이 12/12 무실행인 채
+            // "에러 개수: 0개"로 기록됐다. 재료가 없다는 사실 자체를 결함으로 든다.
+            //
+            // 이 둘은 목차(PlanStructure)의 결함이라 단계 본문을 다시 생성해도
+            // 고쳐지지 않는다 - PlanDefects에 따로 담아 재시도 여부를 가른다.
+            if (!step.TargetTables.Any(table => BareObjectName(table).Length > 0))
+            {
+                result.PlanDefects.Add(
+                    $"{step.Code}의 목차 TargetTables가 비어 있어 대상 테이블 대조를 실행할 수 없습니다.");
+            }
+
+            if (!step.ErrorCodes.Any(code => !string.IsNullOrWhiteSpace(code)))
+            {
+                result.PlanDefects.Add(
+                    $"{step.Code}의 목차 ErrorCodes가 비어 있어 원본 오류코드 대조를 실행할 수 없습니다.");
+            }
+
             foreach (var table in step.TargetTables)
             {
                 var bareName = BareObjectName(table);
@@ -214,6 +234,10 @@ namespace ReSet.Core.Services
                     result.Errors.Add($"{step.Code} 섹션에 원본 오류코드 '{errorCode}'가 등장하지 않습니다.");
                 }
             }
+
+            // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
+            // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
+            result.Errors.AddRange(result.PlanDefects);
 
             result.IsValid = result.Errors.Count == 0;
             return result;
@@ -760,18 +784,37 @@ namespace ReSet.Core.Services
         public bool IsValid { get; set; }
         public List<string> Errors { get; set; } = new();
 
+        /// <summary>
+        /// Errors 중 목차(PlanStructure)가 원인인 것들. 단계 본문을 다시 생성해도
+        /// 사라지지 않는다 - 재생성 프롬프트에 넘길 재료 자체가 목차에 없기 때문이다.
+        /// Errors의 부분집합이다.
+        /// </summary>
+        public List<string> PlanDefects { get; } = new();
+
+        /// <summary>
+        /// 이 실패를 단계 본문 재생성으로 고칠 수 있는가.
+        ///
+        /// 전부 목차 결함이면 false다. 그때 재시도를 걸면 같은 프롬프트로 같은
+        /// 결과를 받아 단계마다 AI 호출 1회를 버린다 - 12단계면 12회다.
+        /// 본문 결함이 하나라도 섞여 있으면 재시도할 값어치가 있으므로 true다.
+        /// </summary>
+        public bool RegenerationCanFix => Errors.Count > PlanDefects.Count;
+
         public string? SuggestedPromptFix
         {
             get
             {
-                if (IsValid)
+                if (IsValid || !RegenerationCanFix)
                 {
                     return null;
                 }
 
                 var builder = new System.Text.StringBuilder();
                 builder.AppendLine("[L1 Step Floor Check]: This step section does not meet the minimum requirements for an implementation instruction. Rewrite the WHOLE section, resolving every item below.");
-                foreach (var error in Errors)
+
+                // 목차 결함은 빼고 넘긴다. 고칠 수 없는 항목을 지시로 주면 모델이
+                // 고쳐진 척하는 문장을 만들어 넣는 쪽으로 유도된다.
+                foreach (var error in Errors.Except(PlanDefects))
                 {
                     builder.AppendLine($"  - {error}");
                 }
