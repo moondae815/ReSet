@@ -194,7 +194,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("## 완료 조건");
             sb.AppendLine();
             sb.AppendLine("- 빌드가 성공한다.");
-            sb.AppendLine("- 아키텍처 테스트가 통과한다. 이 시점에는 Tasklet이 없으므로 Tasklet 관련 규칙은 대상 0건으로 통과한다 — 그것을 검증 통과로 오해하지 마십시오.");
+            sb.AppendLine("- 아키텍처 테스트가 통과한다. 이 시점에는 Tasklet이 없으므로 Tasklet 관련 규칙은 대상 0건으로 통과한다 — 그것을 검증 통과로 오해하지 마십시오. 이 회차에서 실제로 검사되는 것은 Domain/Infrastructure 의존 방향과 `SettleContext`의 커넥션 팩토리 주입 가능성(구현체 존재 포함) 두 가지뿐입니다.");
             sb.AppendLine();
         }
 

@@ -105,6 +105,7 @@ ORM은 아래 4가지 용도에만 허용합니다. 목록에 없는 모든 데�
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using NetArchTest.Rules;
 using Xunit;
 
@@ -169,31 +170,103 @@ namespace ReSet.Batch.Tests.Architecture
         public void EveryTasklet_MustDeclare_StepNameAndSourceProcName()
         {
             // 검증기는 이 이름으로 설계서와 코드를 짝짓는다. 비어 있으면 매핑이 끊긴다.
-            // 생성자 주입(예: ISettleRepository)을 쓰는 Tasklet은 매개변수 없는
-            // Activator.CreateInstance가 실패한다. 그 예외가 테스트 실행 자체를
-            // 무너뜨리면 원래 잡으려던 위반이 조용히 넘어가므로, 인스턴스화 실패도
-            // 위반 목록에 담아 보고한다.
+            //
+            // 생성자 주입(예: ISettleRepository)을 쓰는 Tasklet은 지침 4번(DIP)과
+            // common/03-hosting-and-config.md가 권장하는 형태다. 매개변수 없는
+            // Activator.CreateInstance가 실패한다는 이유로 그것을 위반으로 기록하면,
+            // 도구가 권장한 설계를 도구가 벌하는 셈이 된다 - 에이전트는 이 파일을
+            // 통과시키라는 지시를 받으므로 매개변수 없는 생성자로 물러서거나 이
+            // 테스트를 고치는 쪽으로 떠밀린다. 그래서 생성자를 부를 수 없으면
+            // 생성자를 거치지 않고 인스턴스를 만들어 값만 읽는다.
+            //
+            // 그 결과로 이 규칙은 ""StepName/SourceProcName은 상수여야 한다""는 요구를
+            // 함께 강제한다. 생성자에서 주입받은 필드를 돌려주는 구현은 여기서 빈 값으로
+            // 보인다. 검증기는 DI 컨테이너 없이 이 이름만으로 설계서와 코드를 짝짓기
+            // 때문에 그 요구 자체가 옳다.
+            //
+            // SourceProcName은 protected다. 리플렉션은 BindingFlags.NonPublic으로
+            // 그 값을 읽을 수 있다 - 이름만 약속하고 실제로는 검사하지 않는 규칙을
+            // 남겨 두지 않는다.
             var offenders = new List<string>();
             foreach (var t in Target.GetTypes()
                 .Where(t => typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract))
             {
+                object instance;
                 try
                 {
-                    var instance = (ReSet.Batch.Core.ISettleStep)Activator.CreateInstance(t)!;
-                    if (string.IsNullOrWhiteSpace(instance.StepName))
-                    {
-                        offenders.Add(t.FullName + "" (StepName이 비어 있음)"");
-                    }
+                    instance = Activator.CreateInstance(t)!;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    offenders.Add(t.FullName + $"" (매개변수 없는 생성자로 인스턴스화 실패: {ex.GetType().Name})"");
+                    instance = RuntimeHelpers.GetUninitializedObject(t);
+                }
+
+                foreach (var member in new[]
+                {
+                    (Name: ""StepName"", Flags: BindingFlags.Public | BindingFlags.Instance),
+                    (Name: ""SourceProcName"", Flags: BindingFlags.NonPublic | BindingFlags.Instance),
+                })
+                {
+                    var property = t.GetProperty(member.Name, member.Flags);
+                    if (property == null)
+                    {
+                        offenders.Add(t.FullName + $"" ({member.Name}을 선언하지 않음)"");
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (string.IsNullOrWhiteSpace(property.GetValue(instance) as string))
+                        {
+                            offenders.Add(t.FullName + $"" ({member.Name}이 비어 있음 - 상수로 선언하십시오)"");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        offenders.Add(t.FullName +
+                            $"" ({member.Name} 읽기 실패: {ex.GetType().Name} - 주입 필드가 아니라 상수로 선언하십시오)"");
+                    }
                 }
             }
 
             Assert.True(offenders.Count == 0,
-                ""StepName 검증에 실패한 Tasklet: "" + string.Join("", "", offenders));
+                ""StepName/SourceProcName 검증에 실패한 Tasklet: "" + string.Join("", "", offenders));
+        }
+
+        [Fact]
+        public void SettleContext_MustExposeInjectableConnectionFactories()
+        {
+            // 회차 0에는 Tasklet이 아직 없어 위 규칙 1·2·4가 대상 0건으로 통과한다.
+            // 그 시점에 실제로 무언가를 검사하는 규칙이 이것과 Domain 규칙뿐이다.
+            //
+            // ""DI에서 할당된다""를 컨테이너 없이 그대로 확인할 수는 없다. 대신 그것이
+            // 성립하기 위한 두 조건을 검사한다: (1) 팩토리 속성이 밖에서 채워질 수 있는가,
+            // (2) 채워 넣을 구현체가 실제로 존재하는가. 둘 중 하나라도 없으면 Tasklet은
+            // 커넥션을 스스로 만드는 수밖에 없고, 그러면 검증기의 Rollback 격리가 깨진다.
+            var factories = typeof(ReSet.Batch.Core.SettleContext)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => typeof(ReSet.Batch.Core.IDbConnectionFactory).IsAssignableFrom(p.PropertyType))
+                .ToList();
+
+            Assert.True(factories.Count > 0,
+                ""SettleContext에 IDbConnectionFactory 속성이 하나도 없습니다 - 공통 계약 파일이 수정되었습니다."");
+
+            var notInjectable = factories
+                .Where(p => p.SetMethod == null || !p.SetMethod.IsPublic)
+                .Select(p => p.Name)
+                .ToList();
+
+            Assert.True(notInjectable.Count == 0,
+                ""DI가 채울 수 없는(공개 설정자가 없는) 커넥션 팩토리 속성: "" + string.Join("", "", notInjectable));
+
+            var implementations = Target.GetTypes()
+                .Where(t => typeof(ReSet.Batch.Core.IDbConnectionFactory).IsAssignableFrom(t))
+                .Where(t => t.IsClass && !t.IsAbstract)
+                .ToList();
+
+            Assert.True(implementations.Count > 0,
+                ""IDbConnectionFactory 구현체가 없습니다 - 회차 0이 DB별 커넥션 팩토리를 만들어야 합니다."");
         }
     }
 }
@@ -201,11 +274,20 @@ namespace ReSet.Batch.Tests.Architecture
 
         private const string JavaArchitectureTests = @"package com.reset.batch.tests.architecture;
 
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaModifier;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition;
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 지시서가 ""반드시""라고 말한 것을 ArchUnit이 강제한다.
@@ -257,6 +339,106 @@ class ArchitectureTests {
             .should().dependOnClassesThat().resideInAPackage(""..infrastructure.."")
             .allowEmptyShould(true)
             .check(classes);
+    }
+
+    @Test
+    void everyTaskletMustDeclareStepNameAndSourceProcName() {
+        // 검증기는 이 이름으로 설계서와 코드를 짝짓는다. 비어 있으면 매핑이 끊긴다.
+        //
+        // 생성자 주입(예: ISettleRepository)을 쓰는 Tasklet은 지침 4번(DIP)이 권장하는
+        // 형태다. 인스턴스를 만들 수 없다는 이유로 위반으로 기록하면 도구가 권장한 설계를
+        // 도구가 벌한다. [알려진 한계] Java에는 생성자를 건너뛰고 객체를 만드는 표준 API가
+        // 없다(C# 쪽은 RuntimeHelpers.GetUninitializedObject를 쓴다). 그래서 매개변수 없는
+        // 생성자가 있으면 값까지 확인하고, 없으면 선언 여부까지만 확인한다.
+        //
+        // ArchUnit의 규칙 DSL 대신 여기서만 리플렉션을 쓰는 이유: 메서드의 반환 ""값""은
+        // 바이트코드 분석으로 알 수 없다. 대상 클래스를 찾는 데에만 ArchUnit을 쓴다.
+        List<String> offenders = new ArrayList<>();
+
+        for (JavaClass javaClass : classes) {
+            Class<?> clazz = javaClass.reflect();
+            if (!com.reset.batch.core.AbstractSettleTasklet.class.isAssignableFrom(clazz)) continue;
+            if (clazz.isInterface() || Modifier.isAbstract(clazz.getModifiers())) continue;
+
+            Object instance = null;
+            try {
+                instance = clazz.getDeclaredConstructor().newInstance();
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // 생성자 주입 Tasklet이다. 값 확인은 포기하되 위반으로 기록하지 않는다.
+            }
+
+            for (String name : new String[] { ""getStepName"", ""getSourceProcName"" }) {
+                Method method = null;
+                try {
+                    method = clazz.getMethod(name);
+                } catch (NoSuchMethodException outer) {
+                    try {
+                        // getSourceProcName은 protected라 getMethod로는 찾지 못한다.
+                        method = clazz.getDeclaredMethod(name);
+                    } catch (NoSuchMethodException inner) {
+                        offenders.add(clazz.getName() + ""이 "" + name + ""()을 선언하지 않았습니다"");
+                    }
+                }
+
+                if (method == null || instance == null) continue;
+
+                method.setAccessible(true);
+                try {
+                    Object value = method.invoke(instance);
+                    if (value == null || value.toString().trim().isEmpty()) {
+                        offenders.add(clazz.getName() + ""의 "" + name + ""()이 비어 있습니다 - 상수로 선언하십시오"");
+                    }
+                } catch (ReflectiveOperationException e) {
+                    offenders.add(clazz.getName() + ""의 "" + name + ""() 호출 실패: "" + e.getClass().getSimpleName());
+                }
+            }
+        }
+
+        assertTrue(offenders.isEmpty(),
+            ""StepName/SourceProcName 검증에 실패한 Tasklet: "" + String.join("", "", offenders));
+    }
+
+    @Test
+    void settleContextMustExposeInjectableConnectionFactories() {
+        // 회차 0에는 Tasklet이 아직 없어 위 규칙들이 대상 0건으로 통과한다. 그 시점에
+        // 실제로 무언가를 검사하는 규칙이 이것과 domain 규칙뿐이다.
+        //
+        // ""DI에서 할당된다""를 컨테이너 없이 그대로 확인할 수는 없다. 대신 그것이 성립하기
+        // 위한 두 조건을 본다: (1) 팩토리 필드가 밖에서 채워질 수 있는가, (2) 채워 넣을
+        // 구현체가 실제로 존재하는가. 둘 중 하나라도 없으면 Tasklet은 커넥션을 스스로
+        // 만드는 수밖에 없고, 그러면 검증기의 Rollback 격리가 깨진다.
+        List<String> offenders = new ArrayList<>();
+        int factoryFields = 0;
+
+        for (Field field : com.reset.batch.core.SettleContext.class.getDeclaredFields()) {
+            if (!com.reset.batch.core.IDbConnectionFactory.class.isAssignableFrom(field.getType())) continue;
+            factoryFields++;
+
+            String setter = ""set"" + Character.toUpperCase(field.getName().charAt(0)) + field.getName().substring(1);
+            try {
+                com.reset.batch.core.SettleContext.class.getMethod(
+                    setter, com.reset.batch.core.IDbConnectionFactory.class);
+            } catch (NoSuchMethodException e) {
+                offenders.add(field.getName() + ""에 공개 설정자("" + setter + "")가 없어 DI가 채울 수 없습니다"");
+            }
+        }
+
+        assertTrue(factoryFields > 0,
+            ""SettleContext에 IDbConnectionFactory 필드가 하나도 없습니다 - 공통 계약 파일이 수정되었습니다."");
+        assertTrue(offenders.isEmpty(), ""DI가 채울 수 없는 커넥션 팩토리: "" + String.join("", "", offenders));
+
+        boolean hasImplementation = false;
+        for (JavaClass javaClass : classes) {
+            Class<?> clazz = javaClass.reflect();
+            if (com.reset.batch.core.IDbConnectionFactory.class.isAssignableFrom(clazz)
+                    && !clazz.isInterface() && !Modifier.isAbstract(clazz.getModifiers())) {
+                hasImplementation = true;
+                break;
+            }
+        }
+
+        assertTrue(hasImplementation,
+            ""IDbConnectionFactory 구현체가 없습니다 - 회차 0이 DB별 커넥션 팩토리를 만들어야 합니다."");
     }
 }
 ";
