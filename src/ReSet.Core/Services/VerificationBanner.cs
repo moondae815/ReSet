@@ -117,6 +117,28 @@ public static class VerificationBanner
     }
 
     /// <summary>
+    /// 하한 검사가 대조할 재료를 얻지 못한 단계를 알린다.
+    ///
+    /// StepFloorViolations와 다른 사실을 나른다 - 저건 "섹션이 부실하다"이고
+    /// 이건 "섹션은 멀쩡할 수 있는데 검사를 돌리지 못했다"이다. 실측에서 14개
+    /// 단계 중 13개가 후자였는데 전자의 문구로 나갔고, 그 결과 진입점의
+    /// "모두 통과"와 배너가 정면으로 모순됐다.
+    ///
+    /// "원본 프로시저를 직접 확인하십시오" 같은 지시를 붙이지 않는다. 섹션이
+    /// 부실하다는 근거가 없으므로 과잉이다.
+    /// </summary>
+    public static string UnverifiableSteps(IReadOnlyList<string> steps)
+    {
+        var stepLines = RenderBulletList(steps, "(단계명이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[검증 불가] 아래 단계는 대조할 재료가 목차에 없어 검증되지 못했습니다.**"
+            + " 섹션 내용이 부실하다는 뜻은 아닙니다 - 선언된 대상 테이블이나 원본 오류코드가 없어"
+            + " 기계 대조를 실행할 수 없었다는 뜻입니다.\n"
+            + stepLines
+            + "\n\n";
+    }
+
+    /// <summary>
     /// 목차가 어느 단계에도 담지 못한 원본 프로시저를 알린다.
     ///
     /// StepFloorViolations와 다른 사실을 나른다 — 저건 "단계는 있는데 내용이

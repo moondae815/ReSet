@@ -289,6 +289,12 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 하한 미달 기록이 있는 단계에만 배너를 붙인다. 이전에는 문서 전체 상단에
         /// 배너 하나만 있어 어느 단계가 부실한지 에이전트가 알 수 없었다.
+        ///
+        /// Kind에 따라 문구를 가른다. QualityFloor는 섹션이 실제로 최소 요건을
+        /// 못 채운 경우이고, Unverifiable은 섹션은 멀쩡할 수 있는데 대조할
+        /// 재료(대상 테이블·원본 오류코드)가 목차에 없어 검사 자체가 못 돈
+        /// 경우다 - 후자에 "부실하다"거나 "원본 명세서를 확인하라"는 문구를
+        /// 붙이면 근거 없는 지시가 된다.
         /// </summary>
         private static string BuildFloorBanner(PlanLayout? layout, string code)
         {
@@ -299,12 +305,22 @@ namespace ReSet.Core.Services
                 return string.Empty;
             }
 
+            var (headline, tail) = defect.Kind switch
+            {
+                StepDefectKind.Unverifiable => (
+                    "> ⚠️ **이 단계는 대조할 재료가 없어 검증되지 못했습니다.**",
+                    "> 섹션 내용이 부실하다는 뜻은 아닙니다. 목차가 대상 테이블이나 원본 오류코드를 선언하지 않아 기계 대조를 실행하지 못했습니다."),
+                _ => (
+                    "> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**",
+                    "> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오."),
+            };
+
             var sb = new StringBuilder();
-            sb.AppendLine("> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**");
+            sb.AppendLine(headline);
             sb.AppendLine("> ");
             sb.AppendLine($"> {defect.Reason.Trim()}");
             sb.AppendLine("> ");
-            sb.AppendLine("> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오.");
+            sb.AppendLine(tail);
             sb.AppendLine();
             return sb.ToString();
         }

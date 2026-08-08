@@ -211,6 +211,25 @@ S02 본문
         }
 
         [Fact]
+        public async Task WriteAsync_ShouldUseDifferentBannerWordingPerDefectKind()
+        {
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S01"] = new StepDefect(StepDefectKind.QualityFloor, "S01 (하한 미달)"),
+                ["S02"] = new StepDefect(StepDefectKind.Unverifiable, "S02 (ErrorCodes가 비어 있음)"),
+            };
+
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout(violations)), CancellationToken.None);
+
+            var s01 = await File.ReadAllTextAsync(Path.Combine(_agentDir, "steps", "S01.md"));
+            var s02 = await File.ReadAllTextAsync(Path.Combine(_agentDir, "steps", "S02.md"));
+
+            Assert.Contains("품질 미달", s01);
+            Assert.DoesNotContain("품질 미달", s02);
+            Assert.Contains("검증되지", s02);
+        }
+
+        [Fact]
         public async Task WriteAsync_ShouldFallBackToSinglePlanFile_WhenLayoutMissing()
         {
             var result = await new InstructionBundleWriter().WriteAsync(Inputs(null), CancellationToken.None);

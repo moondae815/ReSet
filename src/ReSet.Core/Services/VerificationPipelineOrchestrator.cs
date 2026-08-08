@@ -1718,10 +1718,11 @@ namespace ReSet.Core.Services
             // 되어 raw/prompt-context.md와 docs/Thinking.md가 텅 빈 채 나간다.
             AiResult? lastSkeletonResult = null;
             Dictionary<string, string>? lastStepSections = null;
-            // Code -> "{Code} (하한 미달)" 형식의 표시 문자열. 사전으로 두는 이유는
-            // 지목 재생성이 건드리지 않은 단계의 항목을 그대로 보존해야 하기
-            // 때문이다 — 목록을 통째로 교체하면 재생성되지 않은 단계의 하한 미달
-            // 기록이 조용히 사라진다.
+            // Code -> StepDefect(Kind, "{Code} (사유)" 형식의 표시 문자열). Kind가
+            // QualityFloor/Unverifiable을 가른다. 사전으로 두는 이유는 지목
+            // 재생성이 건드리지 않은 단계의 항목을 그대로 보존해야 하기 때문이다
+            // — 목록을 통째로 교체하면 재생성되지 않은 단계의 판정 기록이
+            // 조용히 사라진다.
             var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
 
@@ -2380,8 +2381,14 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string jobName)
         {
-            // 하한 미달은 파이프라인을 막지 않지만, 조용히 넘어가지도 않는다.
-            // 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한 이유다.
+            // 하한 미달·검증 불가는 파이프라인을 막지 않지만, 조용히 넘어가지도
+            // 않는다. 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한
+            // 이유다.
+            //
+            // Kind별로 다른 배너를 붙인다. 실측에서 14개 단계 중 13개가
+            // "섹션은 멀쩡한데 대조할 재료가 없어 검사가 못 돈" 경우였는데도
+            // "품질 미달" 배너 하나로 뭉뚱그려 나갔다 - 진입점의 "모두 통과"와
+            // 정면으로 모순됐다.
             //
             // 사전 값은 이미 "{Code} (사유)" 형식으로 완성된 표시 문자열이다
             // (GenerateStepSectionWithFloorRetryAsync 참조). 배너 시그니처를
@@ -2390,10 +2397,20 @@ namespace ReSet.Core.Services
             // IReadOnlyList<string>을 받아 계약이 일관되고, Dictionary의 열거
             // 순서는 Remove/재삽입(지목 재생성)을 거치며 보장되지 않으므로 Key
             // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
-            var stepFloorViolationMessages = stepFloorViolations
+            var byKind = stepFloorViolations
                 .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
-                .Select(kvp => kvp.Value.Reason)
-                .ToList();
+                .ToLookup(kvp => kvp.Value.Kind, kvp => kvp.Value.Reason);
+
+            // 붙이는 순서와 읽히는 순서는 반대다 - 앞에 붙일수록 문서 위로 간다.
+            // 검증 불가를 먼저 붙여 품질 미달이 맨 위에 오게 한다(더 심각한
+            // 쪽을 먼저 읽게 하려는 의도).
+            var unverifiableSteps = byKind[StepDefectKind.Unverifiable].ToList();
+            if (unverifiableSteps.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.UnverifiableSteps(unverifiableSteps) + consolidatedPlan;
+            }
+
+            var stepFloorViolationMessages = byKind[StepDefectKind.QualityFloor].ToList();
             if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
             {
                 consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;

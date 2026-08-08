@@ -233,6 +233,29 @@ public sealed class VerificationBannerTests
         Assert.Contains(">   - ", banner);
     }
 
+    // Task 6: 하한 검사가 대조할 재료를 못 얻은 단계는 "품질 미달"과 다른 배너를 쓴다.
+    [Fact]
+    public void UnverifiableSteps_ShouldNotClaimTheSectionIsSubstandard()
+    {
+        // 이 단계들의 섹션은 멀쩡할 수 있다. 부실하다고 단정하거나 원본 프로시저를
+        // 확인하라고 지시하면 과잉이다 - 검사가 못 돌았다는 사실만 전한다.
+        var banner = VerificationBanner.UnverifiableSteps(new[] { "S06 (ErrorCodes가 비어 있음)" });
+
+        Assert.Contains("S06", banner);
+        Assert.DoesNotContain("하한 미달", banner);
+        Assert.DoesNotContain("최소 요건", banner);
+        Assert.DoesNotContain("원본 프로시저를 직접 확인", banner);
+    }
+
+    [Fact]
+    public void StepFloorViolations_ShouldStillClaimTheSectionIsSubstandard()
+    {
+        var banner = VerificationBanner.StepFloorViolations(new[] { "S10 (하한 미달)" });
+
+        Assert.Contains("하한 미달", banner);
+        Assert.Contains("최소 요건", banner);
+    }
+
     // 목차 커버리지 누락: StepFloorViolations(내용이 부실한 단계)와 다른 사실이다 —
     // 이건 그 프로시저를 다룰 단계 자체가 목차에 없다는 뜻이다. 개수 대신
     // 프로시저명을 실어야 읽는 사람이 무엇을 직접 확인할지 안다.
