@@ -69,6 +69,8 @@ flowchart TD
 | | [CliProviderBatchGuard](../src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs) | Actor/Critic/Consolidator 중 CLI 제공자가 지정된 상태로 ReSet.Cli 또는 ReSet.Validator.Cli의 배치 모드가 실행되는 것을 판정하는 가드. CLI 에이전트 자체는 헤드리스로 정상 동작하지만, 무인 실행 중 권한 프롬프트 정지나 쿼터 소진이 발생하면 장시간 작업이 통째로 소실되므로, DB 연결 전에 실행을 즉시 중단시킵니다. |
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. 통합 배치 단계 섹션 하나가 구현 지시서로서의 최소 요건(SQL/의사코드 블록, 대상 테이블, 원본 오류코드)을 갖췄는지 검사하는 `ValidateBatchStep`도 이 클래스가 제공하며, AI 호출이 없어 비용이 0입니다. |
 | | [BatchStepPlan](../src/ReSet.Core/Services/BatchStepPlan.cs), [BatchStepPlanParser](../src/ReSet.Core/Services/BatchStepPlan.cs) | 목차(`raw/PlanStructure.md`)의 ` ```json ` 블록에서 통합 배치 단계 목록(`Steps[]`, 최대 40개)을 읽어 `BatchStepPlan` 레코드(Code, Name, LegacyProcedures, TargetTables, ErrorCodes, Chunkable)로 반환하는 파서. 목차 헤딩 레벨이 산출물마다 달라 헤딩 파싱으로는 단계 목록을 얻을 수 없어 만들어졌으며, 파싱 실패는 예외가 아니라 null이라 호출부가 단일 호출 경로로 조용히 폴백합니다. |
+| | [SpecReturnCodeExtractor](../src/ReSet.Core/Services/SpecReturnCodeExtractor.cs) | 명세서 본문의 `@po_intRetVal` 대입에서 원본 반환 오류코드를 뽑는다 |
+| | [PlanStructureEnricher](../src/ReSet.Core/Services/PlanStructureEnricher.cs) | 목차의 `ErrorCodes`를 추출된 코드로 채워 하한 검사에 대조 기준을 준다 |
 | | [BatchPlanAssembler](../src/ReSet.Core/Services/BatchPlanAssembler.cs) | 골격 문서의 공통 규약 소절을 추출(`ExtractSharedConventions`)하고, 단계별로 생성된 섹션을 모델의 자리표시자 위치가 아니라 단계 목록 순서대로 결정적으로 이어붙여(`Assemble`) 최종 계획서를 조립합니다. 펜스(```) 내부의 유사 헤더 줄을 헤더나 블록 경계로 오인하지 않도록 펜스 인지 탐색을 사용합니다. |
 | | [VerificationPipelineOrchestrator](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs) | 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영, 통합 배치 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Agentic Workflow 흐름 제어, L3 인간 개입 워크플로우 오케스트레이션. |
 | | [DependencyAnalysisOrchestrator](../src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs) | 설정으로 활성화된 재귀 코드 객체 분석에서 하위 SP/UDF를 중복 없이 발견하고, 객체별 기존 검증 파이프라인 실행과 실패 격리를 조율합니다. |
@@ -628,6 +630,13 @@ graph TD
 * **회차별 검증 범위**: 검증은 그 회차가 만든 산출물만 대상으로 삼습니다. 검증할 대상을 찾지 못한 회차는 통과가 아니라 실패로 기록됩니다 — "검증할 것이 없어서 통과"와 "실제로 통과"를 구별하지 못하면 코드가 생성되지 않은 회차가 게이트를 통과합니다. 0회차는 대조할 설계서가 없어 검증을 걸지 않고 산출물 생성 여부만 보며, 조립 회차는 모든 단계가 통과했을 때만 Job 전체 L2를 걸고 그렇지 않으면 사유를 남기고 건너뜁니다.
 * **명세서 접근 범위**: 원본 명세서는 `<출력루트>/Procedures/<스키마.이름>/docs/Spec.md`에, Job 루트는 `<출력루트>/Jobs/<Job이름>`에 있어 **서로 형제**입니다. 회차 지시서가 상대 경로로 명세서를 가리키므로 `{jobDir}` 하나로는 덮이지 않아, 무인 배치 인자에 `{specRoot}`(= `<출력루트>/Procedures`)를 따로 엽니다. 출력 루트 전체가 아니라 `Procedures/`만 여는 이유는, 통째로 열면 다른 Job의 번들과 진행 상태까지 쓰기 범위에 들어오기 때문입니다.
 * **AI가 만든 이름을 파일명으로 쓰지 않기**: 단계 코드는 AI가 생성한 목차에서 오므로 경로 구분자나 `..`가 들어올 수 있습니다. 파일명으로 쓰기 전에 영숫자·`_`·`-`만 남기도록 정화하며, 정화 결과가 충돌하면 부분 분할을 만들지 않고 분할 전체를 포기합니다.
+
+### 4.12. 단계 하한 검사 대조 기준의 결정론적 보강 (Step Floor Check Materials)
+목차(`raw/PlanStructure.md`)의 각 단계가 선언하는 `ErrorCodes`는 AI가 채우는 필드였다. 실측 두 회차에서 26개 단계 중 25개가 이 배열을 비운 채로 냈고, 하한 검사(`MechanicalValidator.ValidateBatchStep`)는 그 배열을 `foreach`로 훑으므로 0회 반복하고 조용히 통과했다. 코드가 사라진 것은 아니었다 — 같은 단계의 본문 산문에는 반환 코드가 이미 다 적혀 있었다. 그래서 AI에게 다시 채우라고 요구하는 대신, 원본 명세서에서 결정론적으로 뽑아 목차에 되먹인다.
+
+* **명세서에서 추출**: `SpecReturnCodeExtractor`가 원본 프로시저 명세서 본문의 `@po_intRetVal = <숫자>` 대입만 골라 반환 코드를 뽑는다. 변수명을 이 하나로 고정하는 이유는 좁히기 위해서가 아니라 노이즈를 배제하기 위해서다 — 명세서 산문에는 "-1배 처리" 같은 서술과 날짜의 음수가 흔해, 일반 음수 패턴으로 훑으면 그 전부를 코드로 오인한다.
+* **목차에 되먹임**: `PlanStructureEnricher`가 추출된 코드를 각 단계의 `LegacyProcedures`와 대조해 `ErrorCodes`를 채운 목차 마크다운을 다시 만든다. 파싱된 객체가 아니라 마크다운 문자열을 받고 돌려주는 이유는, 파이프라인이 목차를 문자열 하나로 들고 다니며 그 문자열이 파일 기록·파싱·프롬프트의 단일 출처이기 때문이다. 레거시 출신이 없는 단계(`LegacyProcedures`가 빈 배열)는 보존할 원본 코드가 애초에 없으므로 그대로 비워 둔다.
+* **"품질 미달"과 "검증 불가"와 "해당 없음"은 다른 사실**: `StepDefectKind`는 본문이 최소 요건을 못 채운 경우(`QualityFloor`, 재생성으로 고쳐진다)와 대조할 재료가 목차에 없어 검사 자체가 돌지 못한 경우(`Unverifiable`, 재생성으로 고쳐지지 않는다)를 가른다. 여기에 더해 레거시 출신이 없어 대조 항목이 원래 0개인 단계는 결함이 아니다 — 세 사실을 하나의 배너로 뭉치면 읽는 사람이 재시도할 가치가 있는지 판단할 수 없다.
 
 ---
 
