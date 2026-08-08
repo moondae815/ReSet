@@ -41,7 +41,11 @@ namespace ReSet.Core.Services
     ///
     /// 파일은 반드시 agent/ 직하에 놓는다. 하위 디렉터리에 두면
     /// ArgumentTemplateResolver.ResolveJobDirectory(두 단계 위 = Job 루트)가
-    /// {jobDir}을 agent/로 해석해 --add-dir이 raw/ddl과 Spec.md를 덮지 못한다.
+    /// {jobDir}을 agent/로 해석해 --add-dir이 raw/ddl(Job 루트 직하)을 덮지 못한다.
+    ///
+    /// Spec.md는 이 근거에 포함되지 않는다 - 명세서는 &lt;outputRoot&gt;/Procedures/... 에
+    /// 있어 Job 루트의 자손이 아니라 형제이며(지시서 링크가 ../../../Procedures/...로
+    /// 시작한다), {jobDir}이 아니라 별도 자리표시자 {specRoot}로 스코프를 받는다.
     /// </summary>
     public static class TaskFileComposer
     {

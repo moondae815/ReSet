@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -24,15 +25,20 @@ namespace ReSet.Core.Services
         // 치환된 값이 우연히 "{jobDir}" 같은 리터럴 문자열을 담고 있을 때 그 값이 다음
         // Replace 호출에서 다시 치환 대상이 될 수 있다.
         private static readonly Regex PlaceholderPattern =
-            new Regex("\\{instructions\\}|\\{jobDir\\}", RegexOptions.Compiled);
+            new Regex("\\{instructions\\}|\\{jobDir\\}|\\{specRoot\\}", RegexOptions.Compiled);
 
         public static string Resolve(string argumentsTemplate, string instructionsFilePath)
         {
             var instructions = Path.GetFullPath(instructionsFilePath);
             var jobDir = ResolveJobDirectory(instructions);
+            var specRoot = ResolveSpecRootDirectory(instructions);
 
-            return PlaceholderPattern.Replace(argumentsTemplate, match =>
-                match.Value == "{instructions}" ? instructions : jobDir);
+            return PlaceholderPattern.Replace(argumentsTemplate, match => match.Value switch
+            {
+                "{instructions}" => instructions,
+                "{specRoot}" => specRoot,
+                _ => jobDir,
+            });
         }
 
         /// <summary>
@@ -51,6 +57,36 @@ namespace ReSet.Core.Services
 
             var jobDir = Path.GetDirectoryName(agentDir);
             return string.IsNullOrEmpty(jobDir) ? agentDir : jobDir;
+        }
+
+        /// <summary>
+        /// 원본 명세서(Spec.md)가 놓이는 루트. <c>{jobDir}</c>이 덮지 못하는 유일한 링크다.
+        ///
+        /// OutputPathResolver는 명세서를 &lt;outputRoot&gt;/Procedures/&lt;스키마.이름&gt;/docs/Spec.md에
+        /// 두는데, Job 루트는 &lt;outputRoot&gt;/Jobs/&lt;job&gt;이다. 즉 <b>Spec.md는 Jobs/의
+        /// 자손이 아니라 형제</b>다(회차 지시서의 링크가 실제로 ../../../Procedures/...로
+        /// 시작한다). --add-dir이 Job 루트 하나만 주면, 회차마다 UPDATE/INSERT 매핑 수식의
+        /// 유일한 출처인 그 파일이 무인 배치에서 스코프 밖에 있다.
+        ///
+        /// 출력 루트 전체가 아니라 Procedures/만 준다. 출력 루트를 통째로 주면 다른 Job의
+        /// 번들과 진행 상태까지 쓰기 권한 안에 들어온다(배치는 acceptEdits로 돈다).
+        ///
+        /// 관례를 벗어난 경로(두 단계 위가 Jobs/가 아닌 경우)에서는 Job 루트를 그대로
+        /// 돌려준다 - 짐작해서 엉뚱한 디렉터리를 여는 것보다 중복 부여가 낫다.
+        /// </summary>
+        public static string ResolveSpecRootDirectory(string instructionsFilePath)
+        {
+            var jobDir = ResolveJobDirectory(instructionsFilePath);
+            var jobsDir = Path.GetDirectoryName(jobDir);
+
+            if (string.IsNullOrEmpty(jobsDir) ||
+                !string.Equals(Path.GetFileName(jobsDir), "Jobs", StringComparison.OrdinalIgnoreCase))
+            {
+                return jobDir;
+            }
+
+            var outputRoot = Path.GetDirectoryName(jobsDir);
+            return string.IsNullOrEmpty(outputRoot) ? jobDir : Path.Combine(outputRoot, "Procedures");
         }
     }
 }

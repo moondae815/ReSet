@@ -26,7 +26,9 @@ namespace ReSet.Core.Tests
         public void FileName_ShouldPlaceTaskFilesFlatUnderAgent()
         {
             // agent/ 직하가 아니면 ResolveJobDirectory(두 단계 위)가 {jobDir}을
-            // agent/로 해석해 --add-dir이 raw/ddl과 Spec.md를 덮지 못한다.
+            // agent/로 해석해 --add-dir이 raw/ddl(Job 루트 직하)을 덮지 못한다.
+            // Spec.md는 이 근거가 아니다 - 명세서는 Job 루트의 형제라 {jobDir}이
+            // 아니라 {specRoot}가 덮는다(ArgumentTemplateResolverTests 참고).
             Assert.Equal("task-00-bootstrap.md", TaskFileComposer.FileName(StageKind.Bootstrap, 0, null));
             Assert.Equal("task-01-S01.md", TaskFileComposer.FileName(StageKind.Step, 1, "S01"));
             Assert.Equal("task-99-assembly.md", TaskFileComposer.FileName(StageKind.Assembly, 99, null));

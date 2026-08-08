@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using ReSet.Core.Services;
@@ -115,6 +116,67 @@ namespace ReSet.Core.Tests
             var jobDir = ArgumentTemplateResolver.ResolveJobDirectory(shallow);
 
             Assert.False(string.IsNullOrEmpty(jobDir));
+        }
+
+        /// <summary>
+        /// Spec.md는 Job 루트의 자손이 아니라 형제다(&lt;outputRoot&gt;/Procedures/... vs
+        /// &lt;outputRoot&gt;/Jobs/&lt;job&gt;). {jobDir} 하나만 주는 동안에는 회차마다
+        /// UPDATE/INSERT 매핑 수식의 유일한 출처가 무인 배치에서 스코프 밖에 있었다.
+        /// </summary>
+        [Fact]
+        public void ResolveSpecRoot_ShouldPointAtProceduresSiblingOfJobs()
+        {
+            var expected = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Procedures"));
+
+            Assert.Equal(expected, ArgumentTemplateResolver.ResolveSpecRootDirectory(InstructionsPath));
+        }
+
+        [Fact]
+        public void ResolveSpecRoot_ShouldCoverTheSpecLinkTheStepTaskFileEmits()
+        {
+            // 회차 지시서의 링크는 agent/ 기준 ../../../Procedures/<스키마.이름>/docs/Spec.md다.
+            // 그 링크를 실제로 해석한 절대 경로가 부여된 스코프 안에 있어야 한다.
+            var agentDir = Path.GetDirectoryName(Path.GetFullPath(InstructionsPath))!;
+            var linked = Path.GetFullPath(
+                Path.Combine(agentDir, "..", "..", "..", "Procedures", "dbo.UP_A", "docs", "Spec.md"));
+
+            var specRoot = ArgumentTemplateResolver.ResolveSpecRootDirectory(InstructionsPath);
+
+            Assert.StartsWith(specRoot + Path.DirectorySeparatorChar, linked);
+        }
+
+        [Fact]
+        public void ResolveSpecRoot_ShouldNotGrantTheWholeOutputRoot()
+        {
+            // 출력 루트를 통째로 주면 다른 Job의 번들과 진행 상태까지
+            // --permission-mode acceptEdits의 쓰기 범위에 들어온다.
+            var specRoot = ArgumentTemplateResolver.ResolveSpecRootDirectory(InstructionsPath);
+            var otherJob = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Jobs", "OtherJob"));
+
+            Assert.False(otherJob.StartsWith(specRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ResolveSpecRoot_ShouldFallBackToJobDir_WhenLayoutIsNotConventional()
+        {
+            // 관례 밖 경로에서 짐작해 엉뚱한 디렉터리를 여는 것보다 중복 부여가 낫다.
+            var unconventional = Path.Combine(Path.GetTempPath(), "Somewhere", "agent", "MigrationInstructions.md");
+
+            Assert.Equal(
+                ArgumentTemplateResolver.ResolveJobDirectory(unconventional),
+                ArgumentTemplateResolver.ResolveSpecRootDirectory(unconventional));
+        }
+
+        [Fact]
+        public void Resolve_ShouldReplaceSpecRootPlaceholder_AlongsideJobDir()
+        {
+            var jobDir = ArgumentTemplateResolver.ResolveJobDirectory(InstructionsPath);
+            var specRoot = ArgumentTemplateResolver.ResolveSpecRootDirectory(InstructionsPath);
+
+            var resolved = ArgumentTemplateResolver.Resolve(
+                "--add-dir \"{jobDir}\" --add-dir \"{specRoot}\"", InstructionsPath);
+
+            Assert.Equal($"--add-dir \"{jobDir}\" --add-dir \"{specRoot}\"", resolved);
         }
     }
 }

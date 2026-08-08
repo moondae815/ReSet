@@ -99,7 +99,9 @@ output/Jobs/<job>/agent/
   tests/ArchitectureTests.cs             실제 규칙 (아래 6절)
 ```
 
-`task-*.md`를 하위 디렉터리가 아니라 `agent/` **직하**에 두는 것은 임의 선택이 아니다. `ArgumentTemplateResolver.ResolveJobDirectory`는 "지시서의 두 단계 위가 Job 루트"라는 관례에 묶여 있고(`ArgumentTemplateResolver.cs:39-41`), `{jobDir}`은 `--add-dir`에 바인딩된다. `agent/tasks/` 아래에 두면 `{jobDir}`이 `agent/`를 가리켜 에이전트가 `raw/ddl/`과 `Procedures/*/docs/Spec.md`에 접근하지 못한다.
+`task-*.md`를 하위 디렉터리가 아니라 `agent/` **직하**에 두는 것은 임의 선택이 아니다. `ArgumentTemplateResolver.ResolveJobDirectory`는 "지시서의 두 단계 위가 Job 루트"라는 관례에 묶여 있고(`ArgumentTemplateResolver.cs`), `{jobDir}`은 `--add-dir`에 바인딩된다. `agent/tasks/` 아래에 두면 `{jobDir}`이 `agent/`를 가리켜 에이전트가 **`raw/ddl/`에 접근하지 못한다**(`raw/`는 Job 루트 직하이므로 `agent/`의 자손이 아니다).
+
+> **정정**: 이 문단은 원래 `{jobDir}`이 `Procedures/*/docs/Spec.md`도 덮는다고 적었는데 사실이 아니다. `OutputPathResolver.ResolveSpecPath`는 명세서를 `<outputRoot>/Procedures/<스키마.이름>/docs/Spec.md`에 두고 Job 루트는 `<outputRoot>/Jobs/<job>`이므로, **`Spec.md`는 `Jobs/`의 자손이 아니라 형제다** — 회차 지시서의 링크가 실제로 `../../../Procedures/...`로 시작한다. 즉 `{jobDir}` 하나만으로는 어떤 배치에서도 `Spec.md`가 스코프 밖이었다. `task-*.md`의 평평한 배치라는 **결론은 `raw/ddl/` 때문에 그대로 유효하지만**, 근거에서 `Spec.md`는 빠져야 한다. 명세서 접근은 별도 자리표시자 `{specRoot}`(= `<outputRoot>/Procedures`)와 두 번째 `--add-dir`로 해결한다. 출력 루트 전체가 아니라 `Procedures/`만 주는 이유는, 통째로 주면 다른 Job의 번들과 진행 상태까지 `--permission-mode acceptEdits`의 쓰기 범위에 들어오기 때문이다.
 
 #### 회차당 컨텍스트 예산
 
