@@ -253,6 +253,90 @@ class C
         }
     }
 
+    [Theory]
+    [InlineData("dependencyType?.Trim().ToUpperInvariant().Contains(\"TABLE\")")]
+    [InlineData("dependencyType?.ToUpperInvariant().StartsWith(\"FUNCTION\")")]
+    [InlineData("dependencyType?.Trim().Contains(\"VIEW\")")]
+    public void Scanner_FlagsANullConditionalNormalizedIdentifierTypeCheck(string expression)
+    {
+        // 재리뷰 발견: 언래핑이 MemberBindingExpressionSyntax(널 조건부 체인의
+        // 첫 호출, 예: `?.Trim`)를 만나면 거기서 멈췄다. 그 노드에는 더 안쪽
+        // 표현식이 없기 때문이다 - 진짜 수신자는 감싸는
+        // ConditionalAccessExpressionSyntax.Expression에 있다. 실제 재현 지점
+        // (DependencyAnalysisOrchestrator.cs:329, MetadataExporter.cs:160)이
+        // 정확히 이 모양(dependencyType?.Trim().ToUpperInvariant())이다.
+        var source = $@"
+class C
+{{
+    bool M(string dependencyType) => {expression};
+}}";
+
+        Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Theory]
+    [InlineData("dep.Type?.Trim().ToUpperInvariant().Contains(\"TABLE\")")]
+    [InlineData("dep.Type?.ToUpper().Contains(\"TABLE\")")]
+    public void Scanner_FlagsANullConditionalNormalizedMemberAccessTypeCheck(string expression)
+    {
+        var source = $@"
+class C
+{{
+    bool M(D dep) => {expression};
+}}
+class D {{ public string Type {{ get; set; }} }}";
+
+        Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Theory]
+    [InlineData("logUpper?.Trim().Contains(\"TABLE\")")]
+    [InlineData("logUpper?.ToUpper().Contains(\"TABLE\")")]
+    [InlineData("logUpper?.Trim().ToUpperInvariant().StartsWith(\"VIEW\")")]
+    public void Scanner_DoesNotFlagANullConditionalNormalizedLogTextMatch(string expression)
+    {
+        // 언래핑이 조건부 접근 안으로 들어가도 수신자 관문(조건 3)은 여전히
+        // 살아 있어야 한다 - 풀어낸 최종 수신자가 logUpper면 타입 이름이 아니다.
+        var source = $@"
+class C
+{{
+    bool M(string logUpper) => {expression} == true;
+}}";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_DoesNotFlagANullConditionalNormalizedTypeCheckWithAnUnrelatedLiteral()
+    {
+        // 리터럴 관문(조건 2)도 널 조건부·정규화 경로에서 여전히 작동해야 한다.
+        var source = @"
+class C
+{
+    bool M(D dep) => dep.Type?.Trim().Contains(""SYNONYM"") == true;
+}
+class D { public string Type { get; set; } }";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Theory]
+    [InlineData("dep.Type?.ToString().Contains(\"TABLE\")")]
+    [InlineData("dep.Type?.Substring(0).Contains(\"TABLE\")")]
+    public void Scanner_DoesNotFlagANullConditionalTypeReceiverWrappedByANonNormalizationMethod(string expression)
+    {
+        // ToString/Substring은 정규화 언래핑 목록 밖이다. 감싼 형태라고
+        // 무조건 풀면 임의의 메서드 뒤에서도 게이트가 뚫려 정밀도가 무너진다.
+        var source = $@"
+class C
+{{
+    bool M(D dep) => {expression} == true;
+}}
+class D {{ public string Type {{ get; set; }} }}";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
     [Fact]
     public void NoRawSqlTypeClassificationRemainsInSource()
     {

@@ -39,14 +39,29 @@ public sealed record TypeClassificationOffender(string RelativePath, int Line, s
 /// `EndsWith`도 같은 판정으로 다룬다 - 넷 다 타입 문자열에 대한 부분 문자열/
 /// 접두·접미 판정이고, 수신자 관문(조건 3)이 정밀도를 지켜 준다.
 ///
-/// 알려진 한계(실험으로 확인): `var t = dep.Type; t.Contains("TABLE")`처럼 타입
-/// 문자열을 이름이 다른 지역 변수로 옮겨 담으면 놓친다 - 수신자 이름만 보고
-/// 대입 체인을 추적하지 않기 때문이다. `a?.b?.Contains(...)`처럼 조건부 접근이
-/// 여러 번 이어지는 경우는 가장 가까운 감싸는 조건부 접근식만 수신자로 본다 -
-/// 이 저장소의 실제 호출부는 한 단계 이상 이어지지 않으므로 실용적으로 충분하다.
-/// `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드(`Equals`,
-/// 정규식 등)로 타입을 판정하는 새 형태도 놓친다 - 지금까지 이 저장소에서
-/// 관측된 결함은 전부 이 넷의 조합이었다.
+/// 이 언래핑은 널 조건부 체인 안에서도 작동한다
+/// (`dependencyType?.Trim().ToUpperInvariant().Contains("TABLE")`) - 위 세
+/// 근거 지점 중 두 곳(Orchestrator:329, Exporter:160)이 실제로 이 모양이다
+/// (`dependencyType?.Trim().ToUpperInvariant()`). 정규화 호출의 *첫* 호출이
+/// `?.`로 시작하면 그 호출은 `MemberBindingExpressionSyntax`로 파싱되고 더
+/// 안쪽 표현식이 없으므로, 그 경우에는 감싸는
+/// `ConditionalAccessExpressionSyntax.Expression`을 진짜 수신자로 본다
+/// (`TryFindEnclosingConditionalAccess`).
+///
+/// 알려진 한계(전부 실험으로 확인 - 임의로 적지 않았다):
+/// - `var t = dep.Type; t.Contains("TABLE")`처럼 타입 문자열을 이름이 다른
+///   지역 변수로 옮겨 담으면 놓친다 - 수신자 이름만 보고 대입 체인을 추적하지
+///   않기 때문이다.
+/// - `dep?.Type?.Trim().Contains("TABLE")`처럼 조건부 접근이 두 번 이상
+///   이어지면 가장 안쪽 조건부 접근식의 `Expression`(`MemberBindingExpressionSyntax`)
+///   에서 멈추고 더 풀지 않는다 - 이 저장소의 실제 호출부는 한 단계 이상
+///   이어지지 않으므로 실용적으로 충분하다.
+/// - `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드(`Equals`,
+///   정규식 등)로 타입을 판정하는 형태는 놓친다 - 지금까지 이 저장소에서
+///   관측된 결함은 전부 이 넷의 조합이었다.
+/// - `ToString`/`Substring`처럼 정규화 목록(Trim/ToUpper류) 밖의 메서드로 감싼
+///   수신자는 풀지 않는다 - 목록을 무제한으로 넓히면 임의의 변환 뒤에서도
+///   게이트가 뚫려 정밀도가 무너진다.
 /// </summary>
 public static class TypeClassificationPolicyScanner
 {
@@ -194,18 +209,60 @@ public static class TypeClassificationPolicyScanner
     /// `expression`이 `x.Trim()`/`x.ToUpper()`/... 형태의 정규화 호출이면 안쪽
     /// 수신자 `x`를 꺼낸다. 여러 겹(`x.Trim().ToUpperInvariant()`)은 호출부가
     /// 반복 호출해 겹을 하나씩 벗긴다.
+    ///
+    /// 두 형태를 구분해야 한다. 일반 멤버 접근(`x.Trim()`)은
+    /// `invocation.Expression`이 `MemberAccessExpressionSyntax`이고, 안쪽
+    /// 수신자가 `member.Expression`에 그대로 있다. 그런데 널 조건부 체인의
+    /// *첫* 호출(`dependencyType?.Trim()`의 `?.Trim` 부분)은
+    /// `MemberBindingExpressionSyntax`로 파싱되고, 그 노드에는 더 안쪽
+    /// 표현식이 없다 - 진짜 수신자(`dependencyType`)는 감싸는
+    /// `ConditionalAccessExpressionSyntax.Expression`에 있다. 이 갈래를
+    /// 놓치면 `dependencyType?.Trim().ToUpperInvariant().Contains("TABLE")`
+    /// 처럼 이 저장소의 실제 정규화 관용구(DependencyAnalysisOrchestrator.cs:329,
+    /// MetadataExporter.cs:160)와 같은 모양이 통째로 사각지대가 된다.
     /// </summary>
     private static bool TryUnwrapNormalizationCall(ExpressionSyntax expression, out ExpressionSyntax inner)
     {
-        if (expression is InvocationExpressionSyntax invocation &&
-            invocation.Expression is MemberAccessExpressionSyntax member &&
-            ReceiverNormalizationMethods.Contains(member.Name.Identifier.ValueText))
+        if (expression is InvocationExpressionSyntax invocation)
         {
-            inner = member.Expression;
-            return true;
+            switch (invocation.Expression)
+            {
+                case MemberAccessExpressionSyntax member
+                    when ReceiverNormalizationMethods.Contains(member.Name.Identifier.ValueText):
+                    inner = member.Expression;
+                    return true;
+
+                case MemberBindingExpressionSyntax binding
+                    when ReceiverNormalizationMethods.Contains(binding.Name.Identifier.ValueText) &&
+                         TryFindEnclosingConditionalAccess(invocation, out var conditional):
+                    inner = conditional.Expression;
+                    return true;
+            }
         }
 
         inner = null!;
+        return false;
+    }
+
+    /// <summary>
+    /// `node`를 감싸는 가장 가까운 `ConditionalAccessExpressionSyntax`를 찾는다.
+    /// `MemberBindingExpressionSyntax`는 항상 그 조건부 접근식의 `WhenNotNull`
+    /// 안에서만 나타나므로, 부모를 따라 올라가면 반드시 만난다.
+    /// </summary>
+    private static bool TryFindEnclosingConditionalAccess(
+        SyntaxNode node,
+        out ConditionalAccessExpressionSyntax conditional)
+    {
+        for (var current = node.Parent; current != null; current = current.Parent)
+        {
+            if (current is ConditionalAccessExpressionSyntax candidate)
+            {
+                conditional = candidate;
+                return true;
+            }
+        }
+
+        conditional = null!;
         return false;
     }
 
