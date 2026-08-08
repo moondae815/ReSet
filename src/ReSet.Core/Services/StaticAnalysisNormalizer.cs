@@ -178,6 +178,11 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 대괄호 안의 점은 구분자가 아니다. [my.table] 같은 이름을 쪼개지 않는다.
+        ///
+        /// 대괄호는 구분자 판단에만 쓰고 문자는 보존한다. 예전 구현은 ']'를
+        /// 무조건 버려서 my]table을 mytable로 손상시켰다 - 미지원이 아니라 손상이다.
+        /// ScriptDom이 이미 ']]' 이스케이프를 해제하므로 입력에 ']]'는 오지 않고,
+        /// 따라서 T-SQL 이스케이프 파싱은 구현하지 않는다.
         /// </summary>
         private static List<string> SplitIdentifier(string name)
         {
@@ -187,19 +192,29 @@ namespace ReSet.Core.Services
 
             foreach (var ch in name)
             {
-                if (ch == '[') { inBracket = true; continue; }
-                if (ch == ']') { inBracket = false; continue; }
-                if (ch == '.' && !inBracket)
+                if (ch == '[') inBracket = true;
+                else if (ch == ']') inBracket = false;
+                else if (ch == '.' && !inBracket)
                 {
-                    parts.Add(current.ToString().Trim());
+                    parts.Add(UnwrapBrackets(current.ToString()));
                     current.Clear();
                     continue;
                 }
+
                 current.Append(ch);
             }
 
-            parts.Add(current.ToString().Trim());
+            parts.Add(UnwrapBrackets(current.ToString()));
             return parts;
+        }
+
+        /// <summary>조각 전체를 감싼 대괄호만 벗긴다. 이름 속의 대괄호는 남긴다.</summary>
+        private static string UnwrapBrackets(string part)
+        {
+            var trimmed = part.Trim();
+            return trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']'
+                ? trimmed[1..^1].Trim()
+                : trimmed;
         }
     }
 }

@@ -188,5 +188,22 @@ namespace ReSet.Core.Tests
 
             Assert.Equal("PaymentDB.dbo.TTxMst", result);
         }
+
+        [Theory]
+        // 감싼 대괄호는 여전히 벗겨져야 한다 - 이것이 원래 기능이다.
+        [InlineData("[PaymentDB].[dbo].[TTxMst]", "PaymentDB.dbo.TTxMst")]
+        [InlineData("[dbo].[TTxMst]", "SETTLE_POQ_DB.dbo.TTxMst")]
+        // 대괄호 안의 점은 구분자가 아니다.
+        [InlineData("[my.table]", "SETTLE_POQ_DB.dbo.my.table")]
+        // 이름의 일부인 ']'는 보존되어야 한다. 예전 구현은 이것을 버려
+        // my]table을 mytable로 손상시켰다.
+        [InlineData("my]table", "SETTLE_POQ_DB.dbo.my]table")]
+        [InlineData("dbo.my]table", "SETTLE_POQ_DB.dbo.my]table")]
+        public void Canonicalize_PreservesBracketCharactersThatAreNotWrappers(
+            string writtenName,
+            string expected)
+        {
+            Assert.Equal(expected, StaticAnalysisNormalizer.Canonicalize(writtenName, "SETTLE_POQ_DB", "dbo"));
+        }
     }
 }
