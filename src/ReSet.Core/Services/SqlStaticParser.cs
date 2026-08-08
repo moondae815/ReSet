@@ -191,6 +191,8 @@ namespace ReSet.Core.Services
         private readonly Stack<QuerySpecification> _querySpecs = new();
         private int _indentLevel = 0;
         private string? _currentInsertTarget = null;
+        private TSqlFragment? _currentDmlTargetNode = null;
+        private bool _dmlTargetResolved = false;
         private readonly Dictionary<string, List<string>>? _tableColumnsMap;
 
         public SpStructureVisitor(Dictionary<string, List<string>>? tableColumnsMap = null)
@@ -292,15 +294,110 @@ namespace ReSet.Core.Services
         public override void ExplicitVisit(UpdateSpecification node)
         {
             _statementContext.Push("UPDATE");
+            var prevTargetNode = _currentDmlTargetNode;
+            var prevResolved = _dmlTargetResolved;
+
+            _currentDmlTargetNode = node.Target;
+            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, UpdateTables, _foundUpdate);
+
             base.ExplicitVisit(node);
+
+            _currentDmlTargetNode = prevTargetNode;
+            _dmlTargetResolved = prevResolved;
             _statementContext.Pop();
         }
 
         public override void ExplicitVisit(DeleteSpecification node)
         {
             _statementContext.Push("DELETE");
+            var prevTargetNode = _currentDmlTargetNode;
+            var prevResolved = _dmlTargetResolved;
+
+            _currentDmlTargetNode = node.Target;
+            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, DeleteTables, _foundDelete);
+
             base.ExplicitVisit(node);
+
+            _currentDmlTargetNode = prevTargetNode;
+            _dmlTargetResolved = prevResolved;
             _statementContext.Pop();
+        }
+
+        /// <summary>
+        /// UPDATE·DELETE의 대상 테이블 하나만 기록한다. INSERT가 이미 하는 것과 대칭이다.
+        ///
+        /// 대상이 별칭이면(UPDATE A SET ... FROM T A) 그 문장의 FROM 절에서 푼다.
+        /// 전역 별칭 사전을 쓰지 않는 이유: 마지막 등록이 이기므로, 같은 별칭을 다른
+        /// 문장이 다른 테이블에 쓰면 엉뚱한 테이블로 풀린다.
+        ///
+        /// 풀지 못하면 false를 돌려주고 호출부는 그 문장에 한해 기존 동작(문맥 내 전체
+        /// 수집)으로 돌아간다. 대상을 통째로 잃는 것보다 과다 보고가 낫다.
+        /// </summary>
+        private bool RecordDmlTarget(
+            TableReference? target,
+            FromClause? fromClause,
+            List<string> targetList,
+            HashSet<string> seen)
+        {
+            if (target is not NamedTableReference named || named.SchemaObject == null) return false;
+
+            var written = GetSchemaObjectString(named.SchemaObject);
+            if (string.IsNullOrWhiteSpace(written)) return false;
+
+            var resolved = ResolveDmlTargetName(written, fromClause);
+
+            if (resolved.StartsWith("#", StringComparison.Ordinal))
+            {
+                if (_foundTemps.Add(resolved)) CreatedTempTables.Add(resolved);
+                return true;
+            }
+
+            if (_foundTables.Add(resolved)) ReferencedTables.Add(resolved);
+            if (seen.Add(resolved)) targetList.Add(resolved);
+            return true;
+        }
+
+        private static string ResolveDmlTargetName(string written, FromClause? fromClause)
+        {
+            // 한정된 이름은 별칭일 수 없다.
+            if (written.Contains('.')) return written;
+
+            var fromAlias = ResolveAliasWithinFromClause(fromClause, written);
+            return string.IsNullOrWhiteSpace(fromAlias) ? written : fromAlias!;
+        }
+
+        private static string? ResolveAliasWithinFromClause(FromClause? fromClause, string alias)
+        {
+            if (fromClause == null) return null;
+
+            var finder = new AliasTargetFinder(alias);
+            fromClause.Accept(finder);
+            return finder.ResolvedTableName;
+        }
+
+        /// <summary>
+        /// FROM 절 하나 안에서 주어진 별칭이 가리키는 테이블을 찾는다.
+        /// </summary>
+        private sealed class AliasTargetFinder : TSqlFragmentVisitor
+        {
+            private readonly string _alias;
+
+            public string? ResolvedTableName { get; private set; }
+
+            public AliasTargetFinder(string alias)
+            {
+                _alias = alias;
+            }
+
+            public override void Visit(NamedTableReference node)
+            {
+                if (ResolvedTableName != null) return;
+                if (node.SchemaObject == null) return;
+                if (node.Alias == null || string.IsNullOrWhiteSpace(node.Alias.Value)) return;
+                if (!string.Equals(node.Alias.Value, _alias, StringComparison.OrdinalIgnoreCase)) return;
+
+                ResolvedTableName = GetSchemaObjectString(node.SchemaObject);
+            }
         }
 
         public override void ExplicitVisit(QuerySpecification node)
@@ -343,6 +440,11 @@ namespace ReSet.Core.Services
         public override void ExplicitVisit(NamedTableReference node)
         {
             base.ExplicitVisit(node);
+
+            // DML 대상 노드는 RecordDmlTarget이 이미 해석해 기록했다. 여기서 다시 보면
+            // UPDATE A 의 'A' 같은 별칭이 테이블 이름으로 새어 들어간다.
+            if (_dmlTargetResolved && ReferenceEquals(node, _currentDmlTargetNode)) return;
+
             if (node.SchemaObject != null)
             {
                 var tableName = GetSchemaObjectString(node.SchemaObject);
@@ -402,10 +504,26 @@ namespace ReSet.Core.Services
                                 if (_foundInsert.Add(tableName)) InsertTables.Add(tableName);
                                 break;
                             case "UPDATE":
-                                if (_foundUpdate.Add(tableName)) UpdateTables.Add(tableName);
+                                // FROM 절 조인 원본은 읽기일 뿐 갱신 대상이 아니다.
+                                // 대상은 RecordDmlTarget이 이미 기록했다.
+                                if (_dmlTargetResolved)
+                                {
+                                    if (_foundSelect.Add(tableName)) SelectTables.Add(tableName);
+                                }
+                                else if (_foundUpdate.Add(tableName))
+                                {
+                                    UpdateTables.Add(tableName);
+                                }
                                 break;
                             case "DELETE":
-                                if (_foundDelete.Add(tableName)) DeleteTables.Add(tableName);
+                                if (_dmlTargetResolved)
+                                {
+                                    if (_foundSelect.Add(tableName)) SelectTables.Add(tableName);
+                                }
+                                else if (_foundDelete.Add(tableName))
+                                {
+                                    DeleteTables.Add(tableName);
+                                }
                                 break;
                         }
                     }
@@ -628,7 +746,7 @@ namespace ReSet.Core.Services
             _indentLevel--;
         }
 
-        private string GetSchemaObjectString(SchemaObjectName schemaObject)
+        private static string GetSchemaObjectString(SchemaObjectName schemaObject)
         {
             var parts = new List<string>();
             if (schemaObject.ServerIdentifier != null) parts.Add(schemaObject.ServerIdentifier.Value);

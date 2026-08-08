@@ -500,5 +500,175 @@ END;
             Assert.Contains("SELECT * FROM dbo.TableC", chunks[2].StatementText);
             Assert.Contains("dbo.TableC", chunks[2].ReferencedTables);
         }
+
+        [Fact]
+        public void Analyze_UpdateWithAliasTarget_ShouldRecordOnlyTheResolvedTarget()
+        {
+            // EXPECT_PROC 2-6절의 형태다. 예전에는 별칭 'A' 자체가 테이블로 등록되고
+            // FROM 절 조인 원본까지 전부 UPDATE 대상이 됐다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateTarget
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutYMD = B.OutYMD
+    FROM   SETTLE_POQ_DB.dbo.TSettleMst A
+    JOIN   SETTLE_POQ_DB.dbo.TClientCMRate C ON A.ClientID = C.ClientID
+    JOIN   SETTLE_POQ_DB.dbo.TSettleMst B ON A.MPLTID = B.PLTID;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "SETTLE_POQ_DB.dbo.TSettleMst" }, result.UpdateTables);
+            Assert.DoesNotContain("A", result.ReferencedTables);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TClientCMRate", result.SelectTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateWithFromSources_ShouldFileJoinSourcesAsReads()
+        {
+            // COMM_UPD의 지배적 형태. 대상은 TSettleMst 하나뿐이고 나머지는 읽기다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateFrom
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    CLCOMM = B.CommissionAmt
+    FROM   TSettleMst        A
+          ,TClientSettleRate B
+          ,TPGSettleRate     C
+    WHERE  A.ClientID = B.ClientID
+    AND    A.PGName   = C.PGName;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "TSettleMst" }, result.UpdateTables);
+            Assert.Contains("TClientSettleRate", result.SelectTables);
+            Assert.Contains("TPGSettleRate", result.SelectTables);
+            Assert.DoesNotContain("TClientSettleRate", result.UpdateTables);
+            Assert.DoesNotContain("TPGSettleRate", result.UpdateTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetAlsoInFromClause_ShouldAppearAsBothTargetAndRead()
+        {
+            // 대상이 FROM 절에도 나타나면 실제로 읽고 쓴다. 양쪽에 기록하는 게 사실이다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateSelfRead
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    CLTotal = A.CLComm + A.CLVT
+    FROM   TSettleMst A
+    WHERE  A.YMD = '20260808';
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "TSettleMst" }, result.UpdateTables);
+            Assert.Contains("TSettleMst", result.SelectTables);
+        }
+
+        [Fact]
+        public void Analyze_DeleteWithAliasTarget_ShouldRecordOnlyTheResolvedTarget()
+        {
+            // 4PLCARD의 형태. DeleteTables가 ['A','TSettleMst','TPGProperty']였다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDeleteTarget
+AS
+BEGIN
+    DELETE A
+    FROM   TSettleMst A
+    INNER JOIN TPGProperty AS PG ON A.PGName = PG.PGName
+    WHERE  A.TxAmt = 0;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "TSettleMst" }, result.DeleteTables);
+            Assert.DoesNotContain("A", result.ReferencedTables);
+            Assert.Contains("TPGProperty", result.SelectTables);
+        }
+
+        [Fact]
+        public void Analyze_DeleteWithQualifiedFromSource_ShouldNotDoubleCountTheTarget()
+        {
+            // AcqManual의 형태. 한정 없는 대상과 3파트 FROM 원본이 같은 테이블이다.
+            // 표기 통일은 정규화기 몫이고, 여기서는 대상이 하나만 잡히면 된다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDeleteQualified
+AS
+BEGIN
+    DELETE TSettleByOUT
+    FROM   SETTLE_POQ_DB.dbo.TSettleByOUT
+    WHERE  OutYMD = '20260808';
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "TSettleByOUT" }, result.DeleteTables);
+        }
+
+        [Fact]
+        public void Analyze_PlainUpdateWithoutFromClause_ShouldStillRecordTheTarget()
+        {
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestPlainUpdate
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    PGComm = 0
+    WHERE  YMD = '20260808';
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Equal(new[] { "dbo.TSettleMst" }, result.UpdateTables);
+            Assert.Contains("dbo.TSettleMst", result.ReferencedTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetingTableVariable_ShouldFallBackToOldBehaviour()
+        {
+            // 대상을 해석할 수 없으면 그 문장에 한해 예전처럼 문맥 내 전체를 수집한다.
+            // 대상을 통째로 잃는 것보다 과다 보고가 낫다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateTableVariable
+AS
+BEGIN
+    DECLARE @Buffer TABLE (Id INT, Amt INT);
+
+    UPDATE @Buffer
+    SET    Amt = S.TxAmt
+    FROM   @Buffer B
+    JOIN   TSettleMst S ON B.Id = S.ID;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Contains("TSettleMst", result.UpdateTables);
+        }
     }
 }
