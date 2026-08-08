@@ -44,18 +44,27 @@ public sealed record TypeClassificationOffender(string RelativePath, int Line, s
 /// 근거 지점 중 두 곳(Orchestrator:329, Exporter:160)이 실제로 이 모양이다
 /// (`dependencyType?.Trim().ToUpperInvariant()`). 정규화 호출의 *첫* 호출이
 /// `?.`로 시작하면 그 호출은 `MemberBindingExpressionSyntax`로 파싱되고 더
-/// 안쪽 표현식이 없으므로, 그 경우에는 감싸는
-/// `ConditionalAccessExpressionSyntax.Expression`을 진짜 수신자로 본다
-/// (`TryFindEnclosingConditionalAccess`).
+/// 안쪽 표현식이 없으므로, 그 경우에는 그 호출을 실제로 소유하는(그 호출이
+/// `WhenNotNull`인) `ConditionalAccessExpressionSyntax`를 부모를 거슬러 올라가
+/// 찾아, 그 `.Expression`을 진짜 수신자로 본다(`TryFindOwningConditionalAccess`).
+/// `dep?.Type.Contains(...)`처럼 언래핑을 거치지 않고 수신자 자체가 곧장
+/// `MemberBindingExpressionSyntax`로 들어오는 경우도 별도로 잡는다
+/// (`IsSqlTypeExpression`의 `MemberBindingExpressionSyntax` 분기) - 이쪽은
+/// 조상 탐색이 필요 없다.
+///
+/// `?.`가 두 번 이상 이어져도(`a?.Trim()?.Contains(...)`, `dep?.Type?.Trim()?.Contains(...)`)
+/// 소유 관계를 정확히 계산하면 안전하게 끝까지 풀린다 - 실험으로 세 겹·네 겹
+/// (`a?.Trim()?.ToUpper()?.ToLowerInvariant()?.Contains(...)`)까지 확인했고
+/// 매번 밀리초 단위로 끝났다. `IsSqlTypeExpression`의 while 루프에는 그와
+/// 별개로 방어적 루프 안전장치(직전과 같은 노드가 돌아오면 중단)가 있다 -
+/// 조상 탐색이 정확해도 남겨 둔 것이다. 구문 트리 형태는 앞으로도 예상 밖이
+/// 나올 수 있고, 게이트가 무응답이 되는 것은 판정을 놓치는 것보다 나쁘기
+/// 때문이다.
 ///
 /// 알려진 한계(전부 실험으로 확인 - 임의로 적지 않았다):
 /// - `var t = dep.Type; t.Contains("TABLE")`처럼 타입 문자열을 이름이 다른
 ///   지역 변수로 옮겨 담으면 놓친다 - 수신자 이름만 보고 대입 체인을 추적하지
 ///   않기 때문이다.
-/// - `dep?.Type?.Trim().Contains("TABLE")`처럼 조건부 접근이 두 번 이상
-///   이어지면 가장 안쪽 조건부 접근식의 `Expression`(`MemberBindingExpressionSyntax`)
-///   에서 멈추고 더 풀지 않는다 - 이 저장소의 실제 호출부는 한 단계 이상
-///   이어지지 않으므로 실용적으로 충분하다.
 /// - `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드(`Equals`,
 ///   정규식 등)로 타입을 판정하는 형태는 놓친다 - 지금까지 이 저장소에서
 ///   관측된 결함은 전부 이 넷의 조합이었다.
@@ -192,6 +201,18 @@ public static class TypeClassificationPolicyScanner
     {
         while (TryUnwrapNormalizationCall(receiver, out var inner))
         {
+            // 방어적 루프 안전장치(재리뷰 Critical): 언래핑이 직전과 같은 노드를
+            // 돌려주면(조상 탐색이 잘못 계산되는 등 예상 밖 구문 트리 형태에서)
+            // 무한 루프 대신 여기서 멈춘다. Equals는 Roslyn SyntaxNode에서 같은
+            // 위치의 같은 그린 노드를 가리키면 true다(래퍼 객체 참조가 달라도) -
+            // ReferenceEquals보다 이 판정에 맞다. 아래 TryFindOwningConditionalAccess를
+            // 바로잡아도 이 장치는 유지한다 - 게이트가 무응답이 되는 것은 판정을
+            // 놓치는 것보다 나쁘고, 구문 트리 형태는 앞으로도 예상 밖이 나올 수 있다.
+            if (receiver.Equals(inner))
+            {
+                break;
+            }
+
             receiver = inner;
         }
 
@@ -201,6 +222,9 @@ public static class TypeClassificationPolicyScanner
             IdentifierNameSyntax identifier => IsTypeName(identifier.Identifier.ValueText),
             // dep.Type, d.Type, rawDep.Type
             MemberAccessExpressionSyntax member => IsTypeName(member.Name.Identifier.ValueText),
+            // dep?.Type (첫 널 조건부 접근 자체가 수신자일 때 - 언래핑을 거치지
+            // 않고 곧장 이 모양으로 들어올 수 있다. 예: dep?.Type.Contains(...))
+            MemberBindingExpressionSyntax binding => IsTypeName(binding.Name.Identifier.ValueText),
             _ => false
         };
     }
@@ -234,7 +258,7 @@ public static class TypeClassificationPolicyScanner
 
                 case MemberBindingExpressionSyntax binding
                     when ReceiverNormalizationMethods.Contains(binding.Name.Identifier.ValueText) &&
-                         TryFindEnclosingConditionalAccess(invocation, out var conditional):
+                         TryFindOwningConditionalAccess(invocation, out var conditional):
                     inner = conditional.Expression;
                     return true;
             }
@@ -245,21 +269,45 @@ public static class TypeClassificationPolicyScanner
     }
 
     /// <summary>
-    /// `node`를 감싸는 가장 가까운 `ConditionalAccessExpressionSyntax`를 찾는다.
-    /// `MemberBindingExpressionSyntax`는 항상 그 조건부 접근식의 `WhenNotNull`
-    /// 안에서만 나타나므로, 부모를 따라 올라가면 반드시 만난다.
+    /// `node`를 실제로 소유하는 `ConditionalAccessExpressionSyntax`를 찾는다 -
+    /// 즉 `node`(또는 그것을 감싸는 체인)가 그 조건부 접근식의 `WhenNotNull`인
+    /// 경우다.
+    ///
+    /// 재리뷰 Critical: 이전 구현은 부모를 따라 올라가다 "처음 만나는" 조건부
+    /// 접근식을 무조건 소유자로 봤다. `a?.Trim()?.Contains(...)`처럼 `?.`가
+    /// 두 번 이어지면, 안쪽 CA의 `Expression`이 바로 `?.Trim()` 호출 자신이므로
+    /// "처음 만나는" CA가 오히려 자기 자신을 감싸는 CA였다 - `conditional.Expression`이
+    /// 언래핑 대상 노드 자신을 돌려주며 `IsSqlTypeExpression`의 while 루프가
+    /// 무한히 반복됐다.
+    ///
+    /// 노드가 어떤 CA의 `Expression`(수신자 체인) 쪽에 있다면, 그 CA는 소유자가
+    /// 아니다 - 소유자를 찾으려면 그 CA 자체를 새 시작점 삼아 계속 올라가야
+    /// 한다(그 CA 전체가 다시 누군가의 WhenNotNull일 수 있으므로). 노드가
+    /// `WhenNotNull` 쪽에 있을 때만 그 CA가 진짜 소유자다.
     /// </summary>
-    private static bool TryFindEnclosingConditionalAccess(
+    private static bool TryFindOwningConditionalAccess(
         SyntaxNode node,
         out ConditionalAccessExpressionSyntax conditional)
     {
-        for (var current = node.Parent; current != null; current = current.Parent)
+        var current = node;
+        while (current.Parent != null)
         {
-            if (current is ConditionalAccessExpressionSyntax candidate)
+            if (current.Parent is ConditionalAccessExpressionSyntax candidate)
             {
-                conditional = candidate;
-                return true;
+                if (candidate.WhenNotNull == current)
+                {
+                    conditional = candidate;
+                    return true;
+                }
+
+                // current는 candidate의 Expression(수신자) 쪽이다 - candidate
+                // 자신이 다시 다른 CA의 WhenNotNull일 수 있으니 candidate를
+                // 새 current로 삼아 계속 올라간다.
+                current = candidate;
+                continue;
             }
+
+            current = current.Parent;
         }
 
         conditional = null!;

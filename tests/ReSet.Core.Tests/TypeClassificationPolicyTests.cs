@@ -1,12 +1,30 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace ReSet.Core.Tests;
 
 public sealed class TypeClassificationPolicyTests
 {
+    /// <summary>
+    /// 별도 스레드에서 스캔을 실행하고 제한 시간을 둔다. 재리뷰 Critical(무한
+    /// 루프) 회귀 테스트 전용이다 - 버그가 재발해도 이 테스트가 실패로
+    /// 끝나야지, CI를 영원히 멈추게 해서는 안 된다. `ScanSource`는 동기·CPU
+    /// 바운드라 취소 토큰으로 중단시킬 수 없으므로, 시간이 다 되면 백그라운드
+    /// 스레드는 계속 돌더라도(누수) 테스트 자체는 타임아웃으로 실패 처리한다 -
+    /// 게이트가 무응답이 되는 것보다는 낫다.
+    /// </summary>
+    private static (bool Completed, IReadOnlyList<TypeClassificationOffender> Offenders) ScanWithTimeout(
+        string source, TimeSpan timeout)
+    {
+        var task = Task.Run(() => TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+        var completed = task.Wait(timeout);
+        return (completed, completed ? task.Result : Array.Empty<TypeClassificationOffender>());
+    }
+
     // 규칙: SQL 객체 타입 문자열에 대한 원시 부분 문자열 판정은 위반이다.
     // "SQL_TABLE_VALUED_FUNCTION"이 "TABLE"을 포함하므로, 호출부마다 따로
     // 판정하면 TVF가 테이블로 오분류된다. 판정은 SqlObjectTypeClassifier
@@ -335,6 +353,93 @@ class C
 class D {{ public string Type {{ get; set; }} }}";
 
         Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Theory]
+    [InlineData("logUpper?.Trim()?.Contains(\"TABLE\")", false)]
+    [InlineData("logUpper?.Trim()?.ToUpperInvariant().Contains(\"VIEW\")", false)]
+    [InlineData("sb?.ToString()?.Trim()?.Contains(\"TABLE\")", false)]
+    public void Scanner_TerminatesOnDoubleNullConditionalChainAndDoesNotFlagNonTypeReceivers(
+        string expression, bool expectFlag)
+    {
+        // Critical(재리뷰): `?.`가 두 번 이상 이어지면(`a?.Trim()?.Contains(...)`)
+        // 이전 조상 탐색이 안쪽 조건부 접근식을 소유자로 오인해 `conditional.Expression`이
+        // 언래핑 대상 자기 자신을 돌려줬다 - IsSqlTypeExpression의 while 루프가
+        // 무한히 반복됐다. 이 테스트는 수정 전에는 실패가 아니라 "멈춘다" -
+        // ScanWithTimeout이 5초 제한을 두는 이유다.
+        var source = $@"
+class C
+{{
+    bool M(string logUpper, object sb) => {expression} == true;
+}}";
+
+        var (completed, offenders) = ScanWithTimeout(source, TimeSpan.FromSeconds(5));
+
+        Assert.True(completed, $"5초 안에 끝나지 않았다 - 무한 루프 회귀: {expression}");
+        Assert.Equal(expectFlag, offenders.Count > 0);
+    }
+
+    [Theory]
+    [InlineData("dependencyType?.Trim()?.ToUpperInvariant().Contains(\"TABLE\")")]
+    public void Scanner_TerminatesOnDoubleNullConditionalChainAndFlagsATypeReceiver(string expression)
+    {
+        // 조상 탐색을 바로잡으면(가장 안쪽이 아니라 실제 소유자를 찾으면) 이
+        // 모양도 정상적으로 dependencyType까지 풀린다 - 무한 루프의 원인과
+        // 판정 능력은 같은 수정으로 함께 고쳐진다. 5초 제한은 회귀 방지용이다.
+        var source = $@"
+class C
+{{
+    bool M(string dependencyType) => {expression} == true;
+}}";
+
+        var (completed, offenders) = ScanWithTimeout(source, TimeSpan.FromSeconds(5));
+
+        Assert.True(completed, $"5초 안에 끝나지 않았다 - 무한 루프 회귀: {expression}");
+        Assert.Single(offenders);
+    }
+
+    [Theory]
+    [InlineData("a?.M(logUpper.Trim().Contains(\"TABLE\"))")]
+    [InlineData("logType?.M(logUpper.Trim().Contains(\"TABLE\"))")]
+    public void Scanner_DoesNotFlagAnUnrelatedContainsCallInsideAConditionalInvocationArgument(string expression)
+    {
+        // 조상 탐색이 과도하게 넓으면, 무관한 바깥 조건부 호출의 인자 안에 있는
+        // Contains 호출을 그 바깥 조건부의 수신자(a, logType)에 잘못 결부시킬
+        // 위험이 있다. 이 인자 안 Contains 호출은 애초에 `?.`를 전혀 안 쓰므로
+        // MemberBindingExpressionSyntax 경로를 타지 않지만, 회귀 방지로 고정한다.
+        var source = $@"
+class C
+{{
+    void M(object logUpper) {{ }}
+    bool M2(object a, object logType, string logUpper) => {expression} == true;
+}}";
+
+        var (completed, offenders) = ScanWithTimeout(source, TimeSpan.FromSeconds(5));
+
+        Assert.True(completed, $"5초 안에 끝나지 않았다: {expression}");
+        Assert.Empty(offenders);
+    }
+
+    [Theory]
+    [InlineData("dep?.Type.Contains(\"TABLE\")")]
+    [InlineData("dep?.Type.Trim().ToUpperInvariant().Contains(\"TABLE\")")]
+    public void Scanner_FlagsAMemberBindingTypeReceiverWithoutFurtherUnwrapping(string expression)
+    {
+        // Important B-2(재리뷰): dep?.Type.Contains(...)의 수신자는 언래핑을
+        // 거치지 않고 곧장 MemberBindingExpressionSyntax(Name=Type)로 들어온다
+        // (`.Type`이 dep에 대한 첫 널 조건부 접근 자체이기 때문). 조상 탐색
+        // 없이 그 노드의 Name만 보면 되므로, 무한 루프 위험 없이 안전하게 고칠
+        // 수 있는 형태였다.
+        var source = $@"
+class C
+{{
+    bool M(D dep) => {expression} == true;
+}}
+class D {{ public string Type {{ get; set; }} }}";
+
+        var offenders = TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs");
+
+        Assert.Single(offenders);
     }
 
     [Fact]

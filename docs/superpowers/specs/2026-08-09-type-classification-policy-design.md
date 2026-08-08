@@ -70,6 +70,14 @@
 
 **정정 2(재리뷰, 발견 1 - 부분적으로 닫힘):** 위 1차 수정은 불완전했다. `DependencyAnalysisOrchestrator.cs:329`와 `MetadataExporter.cs:160`이 실제로 쓰는 모양은 `dependencyType?.Trim().ToUpperInvariant()` — 즉 **널 조건부**(`?.`) 뒤에 정규화 호출이 이어지는 형태다. 1차 수정의 언래핑은 `invocation.Expression is MemberAccessExpressionSyntax`만 처리했는데, 널 조건부 체인의 *첫* 호출(`?.Trim`)은 `MemberBindingExpressionSyntax`로 파싱되고 더 안쪽 표현식이 없어 그 자리에서 멈췄다 - 근거로 인용한 두 지점의 실제 모양을 정작 못 잡는 상태로 "고쳐졌다"고 적은 것이었다. `TryUnwrapNormalizationCall`이 `MemberBindingExpressionSyntax`를 만나면 감싸는 `ConditionalAccessExpressionSyntax.Expression`을 진짜 수신자로 보도록 고쳐, 이제 두 지점의 실제 모양이 잡힌다(실측 확인). `var t = dep.Type; t.Contains(...)`처럼 이름이 다른 지역 변수로 옮겨 담는 형태, `dep?.Type?.Trim().Contains(...)`처럼 조건부 접근이 두 번 이상 이어지는 형태, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드(`ToString`, `Substring` 등)로 감싼 수신자는 여전히 놓친다 - 전부 실측으로 확인했다(이 코드베이스에 해당 형태가 없거나, 인위적으로 만든 소스에서 놓치는 것을 직접 관찰했다).
 
+**정정 3(재리뷰 Critical, 발견 1 - 완전히 닫힘):** 위 정정 2의 "조건부 접근이 두 번 이상 이어지는 형태는 놓친다"는 문장이 사실과 달랐다 - 실제로는 "놓치는" 것이 아니라 **무한 루프**였다. 2차 수정이 추가한 조상 탐색(`TryFindEnclosingConditionalAccess`)이 부모를 따라 올라가다 "처음 만나는" 조건부 접근식을 무조건 소유자로 봤는데, `a?.Trim()?.Contains(...)`처럼 `?.`가 두 번 이어지면 안쪽 조건부 접근식의 `Expression`이 바로 `?.Trim()` 호출 자신이라 "처음 만나는" 조건부 접근식이 오히려 자기 자신을 감싸는 것이었다 - `conditional.Expression`이 언래핑 대상 노드 자신을 돌려주고, `IsSqlTypeExpression`의 while 루프가 같은 노드를 영원히 반복했다. 재현·워치독 실측은 실행 보고에 남아 있다(4개 형태가 5초 타임아웃 안에 안 끝남, 수정 후 전부 25ms 이내로 종료).
+
+고친 내용은 두 가지다. (1) 조상 탐색을 "처음 만나는 CA"가 아니라 "실제로 `WhenNotNull`을 소유하는 CA"로 바로잡았다(`TryFindOwningConditionalAccess`) - 노드가 어떤 CA의 `Expression`(수신자) 쪽에 있으면 그 CA는 소유자가 아니므로, 그 CA 자체를 새 시작점 삼아 계속 올라간다. 이 수정만으로 `?.`가 몇 번 이어지든(세 번·네 번까지 실측) 안전하게 끝까지 풀리고, 밀리초 단위로 끝난다. (2) 그와 별개로 `IsSqlTypeExpression`의 while 루프에 방어적 루프 안전장치(직전과 같은 노드가 돌아오면 중단)를 추가했다 - 조상 탐색이 정확해도 남겨 뒀다. 게이트가 무응답이 되는 것은 판정을 놓치는 것보다 나쁘고, 구문 트리 형태는 앞으로도 예상 밖이 나올 수 있기 때문이다.
+
+같은 재리뷰에서 `dep?.Type.Contains("TABLE")`(첫 널 조건부 접근 자체가 수신자, 언래핑을 거치지 않는 경우)도 안 잡히는 것이 발견됐다. 조상 탐색 없이 `IsSqlTypeExpression`의 switch에 `MemberBindingExpressionSyntax` 분기 하나를 추가하는 것으로 안전하게 고쳐졌다(무한 루프를 일으킨 조상 탐색 로직과는 무관한 별개의 코드 경로다).
+
+이번 라운드의 방침은 지난 두 라운드와 달랐다 - 탐지 능력을 넓히지 않고 Critical과 위 두 가지만 고쳤다. 남는 한계는 위 정정 2의 목록에서 "이중 널 조건부 체인" 항목만 제외한 나머지 그대로다: 지역 변수 재대입, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드로 감싼 수신자.
+
 `SqlObjectTypeClassifier.cs`는 스캐너가 건너뛴다. 그 파일이 정책의 구현체다.
 
 스캔 대상은 `src/` 아래 모든 프로젝트(`ReSet.Core` · `ReSet.Cli` · `ReSet.Validator.Core` · `ReSet.Validator.Cli`)의 `.cs` 파일이며, 빌드 산출물(`bin/` · `obj/`)은 제외한다. 산출물을 훑으면 생성 코드가 오탐을 만들고 스캔이 느려진다.
