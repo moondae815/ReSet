@@ -152,8 +152,14 @@ namespace ReSet.Core.Services
 
                 return steps;
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // JsonException만 잡으면 부족하다. Steps 배열 원소가 객체가 아니면
+                // TryGetProperty가 InvalidOperationException을 던지는데, 이는
+                // JsonException이 아니다. 이 구멍을 열어두면 여기서는 null을 돌려주는
+                // 대신 예외가 TryLocateStepsBlock을 거쳐 TryParse와 Enrich 밖으로
+                // 그대로 새 나간다 - 둘 다 "실패는 예외가 아니다"라는 계약을 진다.
+                Log.Warning(ex, "단계 목록 JSON 블록 파싱 중 예상치 못한 오류가 발생했습니다. 이 블록은 버립니다.");
                 return null;
             }
         }

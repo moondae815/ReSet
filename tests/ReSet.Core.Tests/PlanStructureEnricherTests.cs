@@ -157,6 +157,24 @@ namespace ReSet.Core.Tests
             Assert.Equal(broken, PlanStructureEnricher.Enrich(broken, Codes()));
         }
 
+        /// <summary>
+        /// Steps 배열 원소가 객체가 아니면 선택기가 부르는 TryParseBlock 안에서
+        /// InvalidOperationException이 난다. 클래스 docstring의 계약("실패는 예외가
+        /// 아니라 원본 반환이다")대로 Enrich는 이 입력에서도 원본을 그대로 돌려줘야
+        /// 한다 - 예외가 호출부(재수립 헬퍼 포함)까지 뚫고 나가면 안 된다.
+        /// </summary>
+        [Theory]
+        [InlineData("\"S01\"")]
+        [InlineData("null")]
+        public void Enrich_ShouldReturnInputUnchangedWhenAStepElementIsNotAnObject(string element)
+        {
+            var markdown = "# 목차\n\n```json\n{ \"Steps\": [ " + element + " ] }\n```\n";
+
+            var enriched = PlanStructureEnricher.Enrich(markdown, Codes());
+
+            Assert.Equal(markdown, enriched);
+        }
+
         [Fact]
         public void Enrich_ShouldEnrichTheSameBlockTheParserReads()
         {

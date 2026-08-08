@@ -89,6 +89,21 @@ namespace ReSet.Core.Tests
                 "```json\n{ \"Steps\": [ { \"Name\": \"이름만 있다\" } ] }\n```"));
         }
 
+        /// <summary>
+        /// Steps 배열 원소가 객체가 아니면 ReadString의 TryGetProperty가
+        /// InvalidOperationException을 던진다. JsonException만 잡던 TryParseBlock은
+        /// 이 예외를 놓친다 - null을 돌려주는 대신 예외가 호출부까지 뚫고 나간다.
+        /// </summary>
+        [Theory]
+        [InlineData("\"S01\"")]
+        [InlineData("null")]
+        public void TryParse_WithNonObjectStepElement_ReturnsNull(string element)
+        {
+            var markdown = "```json\n{ \"Steps\": [ " + element + " ] }\n```";
+
+            Assert.Null(BatchStepPlanParser.TryParse(markdown));
+        }
+
         [Fact]
         public void TryParse_SkipsUnrelatedJsonBlockAndFindsStepsBlock()
         {
