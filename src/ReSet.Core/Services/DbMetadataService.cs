@@ -580,7 +580,10 @@ namespace ReSet.Core.Services
                 var tableColumnsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (var dep in objectDefinition.Dependencies)
                 {
-                    if ((dep.Type.Contains("TABLE") || dep.Type.Contains("VIEW")) && dep.Columns != null && dep.Columns.Count > 0)
+                    // "SQL_TABLE_VALUED_FUNCTION"이 부분 문자열 "TABLE"을 포함하므로
+                    // 인라인 Contains 판정을 쓰면 TVF가 테이블로 오분류된다.
+                    // SqlObjectTypeClassifier.IsTableOrView로 위임한다.
+                    if (SqlObjectTypeClassifier.IsTableOrView(dep.Type) && dep.Columns != null && dep.Columns.Count > 0)
                     {
                         var depFullName = string.IsNullOrEmpty(dep.Database)
                             ? $"{dep.Schema}.{dep.Name}"
@@ -613,6 +616,13 @@ namespace ReSet.Core.Services
             {
                 Log.Warning(ex, "[DbMetadata] 2차 정밀 정적 분석 재구동 중 예외 발생 (기존 결과 유지)");
             }
+
+            // 정적 분석은 SQL에 적힌 표기를 그대로 남긴다. 여기서 canonical 3-part로
+            // 통일해 두면 metadata.json·스냅샷·프롬프트가 같은 이름을 쓰게 된다.
+            objectDefinition.StaticAnalysis = StaticAnalysisNormalizer.Normalize(
+                objectDefinition.StaticAnalysis,
+                objectDefinition.ObjectKey?.Database,
+                objectDefinition.Schema);
 
             Log.Information(
                 "[DbMetadata] 코드 객체 메타데이터 수집 완료 - 객체: {ObjectFullName}, 의존 객체: {DepCount}개, 경고: {WarnCount}개",
@@ -700,7 +710,7 @@ namespace ReSet.Core.Services
                     try
                     {
                         if (!isExternalDependency &&
-                            IsTableOrViewType(directDependency.Type))
+                            SqlObjectTypeClassifier.IsTableOrView(directDependency.Type))
                         {
                             directDependency.Columns = await GetTableColumnsAsync(
                                 connectionString,
@@ -723,7 +733,7 @@ namespace ReSet.Core.Services
                         }
                         // 외부 DB 코드 객체의 DDL은 부모 프롬프트 컨텍스트에 필요하므로 함께 수집한다.
                         // (바로 위 테이블/뷰 분기는 외부 DB 스키마 수집이 범위 밖이라 기존 가드를 유지한다.)
-                        else if (IsCodeObjectType(directDependency.Type))
+                        else if (SqlObjectTypeClassifier.IsCodeObject(directDependency.Type))
                         {
                             directDependency.ReferencedDdlText = await GetObjectDdlAsync(
                                 connectionString,
@@ -752,15 +762,6 @@ namespace ReSet.Core.Services
                 warnings.Add($"[{sourceObjectKey.CanonicalName}] 직접 의존성 정보 수집 실패: {exception.Message}");
             }
         }
-
-        private static bool IsTableOrViewType(string? dependencyType) =>
-            !IsCodeObjectType(dependencyType) &&
-            (dependencyType?.Contains("TABLE", StringComparison.OrdinalIgnoreCase) == true ||
-             dependencyType?.Contains("VIEW", StringComparison.OrdinalIgnoreCase) == true);
-
-        private static bool IsCodeObjectType(string? dependencyType) =>
-            dependencyType?.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase) == true ||
-            dependencyType?.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase) == true;
 
         // 재귀 호출 메서드 (DFS)
         private async Task GatherDependenciesRecursiveAsync(
@@ -825,7 +826,7 @@ namespace ReSet.Core.Services
                 }
 
                 // 스키마 조회 분기 (테이블, 뷰)
-                if (rawDep.Type.Contains("TABLE") || rawDep.Type.Contains("VIEW"))
+                if (SqlObjectTypeClassifier.IsTableOrView(rawDep.Type))
                 {
                     try
                     {
@@ -841,15 +842,13 @@ namespace ReSet.Core.Services
                     }
                 }
                 // 코드 수집 및 하위 재귀 분기 (UDF, SP)
-                else if (rawDep.Type.Contains("FUNCTION") || rawDep.Type.Contains("PROCEDURE"))
+                else if (SqlObjectTypeClassifier.IsCodeObject(rawDep.Type))
                 {
                     try
                     {
                         depInfo.ReferencedDdlText = await GetObjectDdlAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
 
-                        var childType = rawDep.Type.Contains("FUNCTION")
-                            ? CodeObjectType.Function
-                            : CodeObjectType.Procedure;
+                        var childType = SqlObjectTypeClassifier.ResolveCodeObjectType(rawDep.Type);
                         var childKey = CodeObjectKey.Create(
                             dependencyDatabase,
                             rawDep.Schema,
@@ -1238,7 +1237,12 @@ namespace ReSet.Core.Services
                     // 조회 에러 시 소프트 페일로 스킵
                 }
 
-                if (objectType != null && (objectType.Contains("TABLE") || objectType.Contains("VIEW")))
+                // objectType != null 검사는 IsTableOrView가 null에 false를 돌려주므로
+                // 기능적으로는 중복이지만, "조회 실패 시 스킵한다"는 의도를 코드에서
+                // 바로 드러내므로 남겨 둔다. 실제 판정은 SqlObjectTypeClassifier에
+                // 위임한다 - 여기 가드가 없으면 동적 SQL로 발견된 TVF가 그대로
+                // 테이블/뷰 의존성으로 등록되어 DDL이 수집되지 않는다.
+                if (objectType != null && SqlObjectTypeClassifier.IsTableOrView(objectType))
                 {
                     visited.Add(visitedName);
 

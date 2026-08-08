@@ -33,7 +33,10 @@ namespace ReSet.Core.Tests
             var service = new OfflineDbMetadataService(snapshot);
             var sp = await service.GetSpDetailsAsync("dummy", "dbo", "TestSp", 1, CancellationToken.None);
 
-            Assert.Equal(expectedDef, sp);
+            // 조회는 이제 스냅샷 인스턴스를 복제해 돌려준다(공유 상태 오염 방지) — 그래서
+            // 저장된 expectedDef 자체와의 전체 동일성이 아니라 실려온 값이 같은지를 본다.
+            Assert.Equal(expectedDef.Name, sp.Name);
+            Assert.Equal(expectedDef.Schema, sp.Schema);
             Assert.Equal(
                 CodeObjectKey.Create(
                     "PaymentDB",
@@ -41,6 +44,22 @@ namespace ReSet.Core.Tests
                     "TestSp",
                     CodeObjectType.Procedure),
                 sp.ObjectKey);
+        }
+
+        [Fact]
+        public async Task GetSpDetailsAsync_DoesNotMutateStoredSnapshotInstance()
+        {
+            // 위 테스트가 완화된 이유를 직접 증명한다: 조회 후에도 스냅샷 원본의
+            // ObjectKey는 null로 남아 있어야 한다. 남아 있지 않다면 반환값이 원본을
+            // 그대로 변형한 것이고, 두 번째 조회가 첫 번째 조회에 오염된다.
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
+            var storedDef = new SpDefinition { Name = "TestSp", Schema = "dbo" };
+            snapshot.StoredProcedures.Add("dbo.TestSp", storedDef);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            await service.GetSpDetailsAsync("dummy", "dbo", "TestSp", 1, CancellationToken.None);
+
+            Assert.Null(storedDef.ObjectKey);
         }
 
         [Fact]
@@ -235,8 +254,254 @@ namespace ReSet.Core.Tests
         public async Task GetTableDataPreviewAsync_ThrowsNotSupportedException()
         {
             var service = new OfflineDbMetadataService(new DbSnapshot());
-            await Assert.ThrowsAsync<NotSupportedException>(() => 
+            await Assert.ThrowsAsync<NotSupportedException>(() =>
                 service.GetTableDataPreviewAsync("dummy", null, "dbo", "Table1", 100, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsDirectAsync_ShouldReparseStoredDdlInsteadOfReplayingStaleAnalysis()
+        {
+            // 스냅샷에 저장된 StaticAnalysis는 옛 파서가 만든 것이다. 그대로 재생하면
+            // 파서를 고쳐도 오프라인 모드는 영원히 예전 결과를 낸다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = @"
+CREATE PROCEDURE dbo.UP_TEST
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutYMD = '20260808'
+    FROM   TSettleMst A
+    JOIN   TClientCMRate C ON A.ClientID = C.ClientID;
+END;
+",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    // 옛 파서의 산출물을 흉내 낸다.
+                    UpdateTables = new List<string> { "A", "TSettleMst", "TClientCMRate" }
+                }
+            };
+            snapshot.StoredProcedures.Add("dbo.UP_TEST", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            var objectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure);
+
+            var definition = await service.GetCodeObjectDetailsDirectAsync(
+                "dummy", objectKey, CancellationToken.None);
+
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                definition.StaticAnalysis.UpdateTables);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TClientCMRate", definition.StaticAnalysis.SelectTables);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsDirectAsync_ShouldRelinkCodeObjectDdlFromSnapshot()
+        {
+            // UIF_SettleYMD의 DDL은 CodeObjects에 들어 있는데 의존성 항목의 링크만 비어 있다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var functionKey = CodeObjectKey.Create(
+                "SETTLE_POQ_DB", "dbo", "UIF_SettleYMD", CodeObjectType.Function);
+            snapshot.CodeObjects.Add(
+                functionKey.CanonicalName,
+                new SpDefinition
+                {
+                    Schema = "dbo",
+                    Name = "UIF_SettleYMD",
+                    DdlText = "CREATE FUNCTION dbo.UIF_SettleYMD() RETURNS TABLE AS RETURN SELECT 1 AS OutYMD;"
+                });
+
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "CREATE PROCEDURE dbo.UP_TEST AS BEGIN SELECT 1; END;"
+            };
+            stored.Dependencies.Add(new DependencyInfo
+            {
+                SourceObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UIF_SettleYMD",
+                Type = "SQL_TABLE_VALUED_FUNCTION",
+                ReferencedDdlText = null
+            });
+            snapshot.StoredProcedures.Add("dbo.UP_TEST", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            var objectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure);
+
+            var definition = await service.GetCodeObjectDetailsDirectAsync(
+                "dummy", objectKey, CancellationToken.None);
+
+            var dependency = Assert.Single(definition.Dependencies);
+            Assert.Contains("RETURNS TABLE", dependency.ReferencedDdlText);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsDirectAsync_WhenDdlCannotBeParsed_ShouldKeepStoredAnalysis()
+        {
+            // 재파싱이 실패해도 오프라인 모드가 지금보다 나빠지면 안 된다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_BROKEN",
+                // SELECT 뒤에 선택 목록 없이 FROM이 오면 T-SQL 문법 오류다.
+                DdlText = "CREATE PROCEDURE dbo.UP_BROKEN AS BEGIN SELECT FROM; END;",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    UpdateTables = new List<string> { "TSettleMst" }
+                }
+            };
+            snapshot.StoredProcedures.Add("dbo.UP_BROKEN", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            var objectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_BROKEN", CodeObjectType.Procedure);
+
+            var definition = await service.GetCodeObjectDetailsDirectAsync(
+                "dummy", objectKey, CancellationToken.None);
+
+            // 저장본이 살아남되 표기는 통일된다.
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                definition.StaticAnalysis.UpdateTables);
+        }
+
+        [Fact]
+        public async Task GetSpDetailsAsync_ShouldReparseStoredDdlInsteadOfReplayingStaleAnalysis()
+        {
+            // 기본 설정(AnalyzeReferencedCodeObjects=false)에서는 GetCodeObjectDetailsDirectAsync가
+            // 아니라 GetSpDetailsAsync/GetCodeObjectDetailsAsync 경로를 탄다. 그 경로도
+            // 재파싱을 거치지 않으면 스냅샷 시점의 옛 분석이 계속 재생된다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = @"
+CREATE PROCEDURE dbo.UP_TEST
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutYMD = '20260808'
+    FROM   TSettleMst A
+    JOIN   TClientCMRate C ON A.ClientID = C.ClientID;
+END;
+",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    // 옛 파서의 산출물을 흉내 낸다.
+                    UpdateTables = new List<string> { "A", "TSettleMst", "TClientCMRate" }
+                }
+            };
+            snapshot.StoredProcedures.Add("dbo.UP_TEST", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+
+            var definition = await service.GetSpDetailsAsync(
+                "dummy", "dbo", "UP_TEST", 1, CancellationToken.None);
+
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                definition.StaticAnalysis.UpdateTables);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TClientCMRate", definition.StaticAnalysis.SelectTables);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsAsync_ShouldRelinkCodeObjectDdlFromSnapshot()
+        {
+            // UIF_SettleYMD의 DDL은 CodeObjects에 들어 있는데 의존성 항목의 링크만 비어 있다.
+            // 이 경로(재귀 기본 경로)에서도 재링크가 일어나야 한다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var functionKey = CodeObjectKey.Create(
+                "SETTLE_POQ_DB", "dbo", "UIF_SettleYMD", CodeObjectType.Function);
+            snapshot.CodeObjects.Add(
+                functionKey.CanonicalName,
+                new SpDefinition
+                {
+                    Schema = "dbo",
+                    Name = "UIF_SettleYMD",
+                    DdlText = "CREATE FUNCTION dbo.UIF_SettleYMD() RETURNS TABLE AS RETURN SELECT 1 AS OutYMD;"
+                });
+
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "CREATE PROCEDURE dbo.UP_TEST AS BEGIN SELECT 1; END;"
+            };
+            stored.Dependencies.Add(new DependencyInfo
+            {
+                SourceObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UIF_SettleYMD",
+                Type = "SQL_TABLE_VALUED_FUNCTION",
+                ReferencedDdlText = null
+            });
+            snapshot.StoredProcedures.Add("dbo.UP_TEST", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            var objectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure);
+
+            var definition = await service.GetCodeObjectDetailsAsync("dummy", objectKey, 1, CancellationToken.None);
+
+            var dependency = Assert.Single(definition.Dependencies);
+            Assert.Contains("RETURNS TABLE", dependency.ReferencedDdlText);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsAsync_CalledTwice_ReturnsIndependentReanalyzedCopiesWithoutMutatingSnapshot()
+        {
+            // GetCodeObjectDetailsAsync는 스냅샷 딕셔너리가 들고 있는 바로 그 인스턴스를
+            // 돌려주고 그 위에 ObjectKey를 대입해 왔다. 재분석 결과까지 그 위에 얹으면
+            // 다음 조회가 오염되고, 같은 객체를 두 번 조회할 때 결과가 달라질 수 있다.
+            var snapshot = new DbSnapshot { Database = "SETTLE_POQ_DB" };
+            var stored = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = @"
+CREATE PROCEDURE dbo.UP_TEST
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutYMD = '20260808'
+    FROM   TSettleMst A;
+END;
+",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    UpdateTables = new List<string> { "A", "TSettleMst" }
+                }
+            };
+            snapshot.StoredProcedures.Add("dbo.UP_TEST", stored);
+
+            var service = new OfflineDbMetadataService(snapshot);
+            var objectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure);
+
+            var first = await service.GetCodeObjectDetailsAsync("dummy", objectKey, 1, CancellationToken.None);
+            var second = await service.GetCodeObjectDetailsAsync("dummy", objectKey, 1, CancellationToken.None);
+
+            Assert.NotSame(first, second);
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                first.StaticAnalysis.UpdateTables);
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                second.StaticAnalysis.UpdateTables);
+
+            // 스냅샷 원본 엔트리는 여전히 옛(재파싱 이전) 분석을 그대로 담고 있어야 한다 —
+            // 조회가 원본을 변형했다면 이 값이 이미 정규화된 값으로 바뀌어 있을 것이다.
+            Assert.Equal(new[] { "A", "TSettleMst" }, stored.StaticAnalysis.UpdateTables);
         }
     }
 }

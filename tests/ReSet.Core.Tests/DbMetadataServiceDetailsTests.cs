@@ -164,21 +164,70 @@ namespace ReSet.Core.Tests
         [InlineData("SQL_TABLE_VALUED_FUNCTION")]
         [InlineData("SQL_INLINE_TABLE_VALUED_FUNCTION")]
         [InlineData("CLR_TABLE_VALUED_FUNCTION")]
-        public void DirectDependencyClassification_TreatsTableValuedFunctionsAsCodeObjects(
+        public void SqlObjectTypeClassifier_TreatsTableValuedFunctionsAsCodeObjects(
             string dependencyType)
         {
-            var tableMethod = typeof(DbMetadataService).GetMethod(
-                "IsTableOrViewType",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            var codeMethod = typeof(DbMetadataService).GetMethod(
-                "IsCodeObjectType",
-                BindingFlags.NonPublic | BindingFlags.Static);
-
-            Assert.NotNull(tableMethod);
-            Assert.NotNull(codeMethod);
-            Assert.False((bool)tableMethod.Invoke(null, new object?[] { dependencyType })!);
-            Assert.True((bool)codeMethod.Invoke(null, new object?[] { dependencyType })!);
+            // 분류 판정은 SqlObjectTypeClassifier로 이전되었다(두 private 메서드는
+            // 삭제됨). 여기서는 DbMetadataService가 아니라 그 분류기 자체를
+            // 공개 API로 확인한다. DbMetadataService가 실제로 이 분류기에
+            // 위임하는지는 별도 가드 테스트(DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier)가 확인한다.
+            Assert.False(SqlObjectTypeClassifier.IsTableOrView(dependencyType));
+            Assert.True(SqlObjectTypeClassifier.IsCodeObject(dependencyType));
         }
+
+        [Fact]
+        public void DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier()
+        {
+            // 이 가드가 지키는 불변식: 직접 의존성 경로(703, 726행)와 재귀 경로(819, 835행)
+            // 양쪽 모두 SqlObjectTypeClassifier에 위임해야 한다. 둘 중 하나라도
+            // "rawDep.Type.Contains(...)" 같은 인라인 부분 문자열 판정이나, 삭제된
+            // private 메서드 IsTableOrViewType/IsCodeObjectType의 부활로 되돌아가면,
+            // "SQL_TABLE_VALUED_FUNCTION"이 "TABLE"을 포함하기 때문에 TVF가 다시
+            // 테이블로 오분류되고 UIF_SettleYMD 같은 함수의 DDL이 다시 수집되지 않는다.
+            //
+            // 단순 Assert.Contains만으로는 두 호출부 중 한쪽만 원복해도 다른 쪽의
+            // 리터럴이 파일에 여전히 남아 있어 걸리지 않는다(라운드 2 리뷰에서 지적됨).
+            // 그래서 등장 횟수를 함께 확인한다: 정확히 2가 아니라 최소 2인 이유는,
+            // 정당한 호출부가 나중에 하나 더 늘어도(예: 세 번째 경로가 추가되는 경우)
+            // 이 가드가 무고하게 깨지지 않게 하기 위해서다. 그래도 두 호출부 중
+            // 하나만 인라인 판정으로 되돌아가면 횟수가 1로 떨어져 여전히 잡힌다.
+            var source = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(
+                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
+
+            Assert.True(
+                CountOccurrences(source, "SqlObjectTypeClassifier.IsTableOrView(") >= 2,
+                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsTableOrView에 위임해야 한다.");
+            Assert.True(
+                CountOccurrences(source, "SqlObjectTypeClassifier.IsCodeObject(") >= 2,
+                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsCodeObject에 위임해야 한다.");
+
+            Assert.DoesNotContain("rawDep.Type.Contains(\"TABLE\")", source);
+
+            // 삭제된 private 메서드의 정의 자체가 되돌아오지 않았는지 확인한다.
+            // 이것이 실제 회귀 형태였다: 호출부 리터럴이 아니라 메서드 정의가
+            // 되살아나는 것.
+            Assert.DoesNotContain("private static bool IsTableOrViewType", source);
+            Assert.DoesNotContain("private static bool IsCodeObjectType", source);
+
+            // 계획 외 보완(Task 9): 원래 가드는 "rawDep.Type.Contains(...)" 라는 특정
+            // 변수명만 확인했다. 그런데 2차 정밀 정적 분석(tableColumnsMap 구성)과
+            // 동적 SQL 의존성 해석(ResolveDynamicSqlDependenciesAsync)에는 변수명이
+            // 각각 dep.Type / objectType인 인라인 "TABLE"/"VIEW" 부분 문자열 판정이
+            // 따로 남아 있었고, 그중 동적 SQL 경로는 dep.Columns 가드조차 없어
+            // TVF가 그대로 테이블 의존성으로 등록되는 더 심각한 결함이었다.
+            //
+            // 변수명(dep/objectType/rawDep)에 의존하는 가드는 새 변수명이 나타나는
+            // 세 번째 회귀를 못 잡는다. 그래서 이번에는 변수명과 무관하게
+            // ".Contains(\"TABLE\")" 리터럴 자체가 파일 전체에 단 한 번도 나타나지
+            // 않아야 한다고 단언한다. 정상 경로는 전부 SqlObjectTypeClassifier로
+            // 위임되어 있어야 하며, 그 분류기 자신의 부분 문자열 판정은
+            // SqlObjectTypeClassifier.cs 안에 있으므로 이 단언과 무관하다.
+            Assert.Equal(0, CountOccurrences(source, ".Contains(\"TABLE\")"));
+        }
+
+        private static int CountOccurrences(string source, string literal) =>
+            (source.Length - source.Replace(literal, string.Empty).Length) / literal.Length;
 
         [Theory]
         [InlineData(null)]
@@ -198,6 +247,72 @@ namespace ReSet.Core.Tests
                 new object?[] { invalidConnString, database, CancellationToken.None })!;
 
             Assert.Equal(160, await task);
+        }
+
+        [Fact]
+        public void NormalizeStaticAnalysisForDefinition_ShouldCanonicaliseAgainstTheObjectKey()
+        {
+            // DB 연결 없이 정규화 배선만 확인한다. 실제 수집은 통합 검증 몫이다.
+            var definition = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ReferencedTables = new System.Collections.Generic.List<string>
+                    {
+                        "TSettleMst", "dbo.TSettleMst", "SETTLE_POQ_DB.dbo.TSettleMst"
+                    }
+                }
+            };
+
+            definition.StaticAnalysis = StaticAnalysisNormalizer.Normalize(
+                definition.StaticAnalysis,
+                definition.ObjectKey?.Database,
+                definition.Schema);
+
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                definition.StaticAnalysis.ReferencedTables);
+        }
+
+        [Fact]
+        public void DbMetadataService_ShouldNormaliseStaticAnalysisBeforeReturning()
+        {
+            // 배선이 빠지면 조용히 예전 표기가 저장된다. 호출이 존재하는지뿐 아니라
+            // 그 호출에 넘기는 인자까지 고정한다: DB 컨텍스트는 ObjectKey에서,
+            // 스키마는 정의 자체에서 와야 한다. 호출만 있고 엉뚱한 인자(예: null, null)를
+            // 넘기면 컴파일은 되지만 정규화가 무력화되는데, Assert.Contains 하나로는
+            // 그 실수를 잡지 못한다(Task 3 리뷰에서 지적된 것과 같은 종류의 약한 가드).
+            var source = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(
+                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
+
+            const string callPrefix = "StaticAnalysisNormalizer.Normalize(";
+            Assert.Contains(callPrefix, source);
+
+            var callStart = source.IndexOf(callPrefix, StringComparison.Ordinal);
+            var callEnd = source.IndexOf(");", callStart, StringComparison.Ordinal);
+            Assert.True(callEnd > callStart, "StaticAnalysisNormalizer.Normalize 호출의 닫는 괄호를 찾지 못했다.");
+            var callSite = source.Substring(callStart, callEnd - callStart);
+
+            Assert.Contains("objectDefinition.ObjectKey?.Database", callSite);
+            Assert.Contains("objectDefinition.Schema", callSite);
+
+            // 존재 확인만으로는 두 인자가 자리를 바꿔도 (Normalize(analysis,
+            // objectDefinition.Schema, objectDefinition.ObjectKey?.Database)) 잡히지
+            // 않는다 - 두 리터럴이 여전히 callSite 안에 있기 때문이다. 계약(§3)은
+            // 첫 인자가 DB, 둘째가 스키마이므로, 자리가 바뀌면 컴파일은 되지만
+            // 정규화가 조용히 틀린 컨텍스트로 수행된다. 두 리터럴이 서로의 부분
+            // 문자열이 아니므로(하나가 "ObjectKey?.Database"로 끝나고 다른 하나는
+            // "Schema"로 끝난다) 등장 순서를 그대로 인자 순서로 볼 수 있다.
+            var databaseArgIndex = callSite.IndexOf("objectDefinition.ObjectKey?.Database", StringComparison.Ordinal);
+            var schemaArgIndex = callSite.IndexOf("objectDefinition.Schema", StringComparison.Ordinal);
+            Assert.True(
+                databaseArgIndex < schemaArgIndex,
+                "DB 인자(ObjectKey?.Database)는 스키마 인자(Schema)보다 먼저 나와야 한다.");
         }
     }
 }

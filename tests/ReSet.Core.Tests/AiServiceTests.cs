@@ -1091,6 +1091,315 @@ namespace ReSet.Core.Tests
             Assert.False(review.HasDefects);
             Assert.Empty(review.DefectiveSteps);
         }
+
+        private static SpDefinition SchemaFilterSpDef(
+            System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>> referencedColumns,
+            string dependencyName)
+        {
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = dependencyName,
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" },
+                    new ColumnInfo { ColumnName = "NonSettleAmt", DataType = "money" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = referencedColumns
+            };
+
+            return spDef;
+        }
+
+        private static IAiService SpecService()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            return new AiService(client, 0.2f);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldKeepColumnsFromEveryCanonicalMatch()
+        {
+            // 정규화가 한정을 못 한 경우(ObjectKey 없음 등) 키가 갈라진 채 남을 수 있다.
+            // 첫 매치에서 멈추면 INSERT 전용 컬럼이 스키마 표에서 사라진다.
+            var spDef = SchemaFilterSpDef(
+                new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD", "NonSettleAmt" } }
+                },
+                "TSettleMst");
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+            Assert.Contains("| NonSettleAmt |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldNotMatchATableWhoseNameMerelyContainsTheDependency()
+        {
+            // dep.Name = "TSettleMst" 가 "TSettleMstBackup" 키에 부분 매칭되던 버그.
+            // 백업 테이블의 참조 컬럼이 본 테이블의 필터를 통과시켜선 안 된다.
+            var spDef = SchemaFilterSpDef(
+                new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMstBackup", new System.Collections.Generic.List<string> { "CYMD" } },
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } }
+                },
+                "TSettleMst");
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.DoesNotContain("| CYMD |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldQualifyDependencyListWithItsDatabase()
+        {
+            // 의존성 목록이 DB를 안 찍으면 PaymentDB.dbo.TTxMst 와 dbo.TTxMst 가
+            // 프롬프트에서 구별되지 않는다. 바로 아래 스키마 블록은 3파트로 찍는다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TTxMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("PaymentDB.dbo.TTxMst", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldFallBackToBaseNameMatchWhenNoDatabaseContext()
+        {
+            // ObjectKey가 없으면 CanonicalizeParts가 DB를 못 채워 키가 갈라진 채 남는다.
+            // 이 필터는 토큰 절약용 최적화일 뿐 정확성 장치가 아니다 - 과다 포함은
+            // 표에 불필요한 행을 몇 개 더할 뿐이지만, 과소 포함은 모델이 "존재하지
+            // 않는 컬럼"이라고 잘못 기록한다(14개 명세서를 망가뜨린 바로 그 결함).
+            // 그래서 DB 컨텍스트가 없을 때는 베이스 이름 비교로 과다 포함 쪽으로 기운다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldNotLetBaseNameFallbackMergeDifferentDatabasesWhenContextExists()
+        {
+            // ObjectKey가 있어 DB 컨텍스트를 확보한 정상 경로에서는 폴백이 적용되면 안 된다.
+            // dbo.TPGProperty(현재 DB)와 PaymentDB.dbo.TPGProperty(다른 DB)를 베이스
+            // 이름만으로 합치면 서로 다른 물리 테이블의 컬럼이 섞인다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TPGProperty",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "OwnColumn", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "OtherDbColumn", DataType = "varchar(20)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TPGProperty", new System.Collections.Generic.List<string> { "OwnColumn" } },
+                    { "PaymentDB.dbo.TPGProperty", new System.Collections.Generic.List<string> { "OtherDbColumn" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| OwnColumn |", result.UserPrompt);
+            Assert.DoesNotContain("| OtherDbColumn |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldFallBackToBaseNameMatchWhenObjectKeyHasNoDatabaseEvenIfDependencyDoes()
+        {
+            // dep.Database가 있어도 ReferencedColumnsPerTable의 원시 키(예: "TSettleMst")를
+            // 한정하는 데는 쓰이지 않는다 - 그 비한정 키의 암묵적 DB는 분석 대상 객체
+            // 자신의 DB(spDef.ObjectKey.Database)이지, 지금 비교 중인 의존성의 DB가
+            // 아니다. 그래서 키 쪽 한정 가능 여부는 오직 spDef.ObjectKey?.Database에만
+            // 달려 있고, dep.Database는 이 판단에 기여하지 않는다. ObjectKey가 없으면
+            // dep.Database가 있어도 폴백(베이스 이름 비교)으로 가야 한다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "PaymentDB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldUseSameQualifiedNameInDependencyListAndSchemaHeaderWhenDependencyHasDatabase()
+        {
+            // 설계서 §5: 의존성 목록과 스키마 블록 헤더가 같은 물리 테이블을 다른
+            // 표기로 찍으면 모델이 그 둘을 서로 다른 테이블로 읽을 수 있다. dep.Database가
+            // 있어 [DB].[Schema].[Name] 대괄호 표기로 갈라지던 경우를 덮는다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TTxMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "TxId", DataType = "int" }
+                }
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("- Name: PaymentDB.dbo.TTxMst, Type:", result.UserPrompt);
+            Assert.Contains("### 테이블: PaymentDB.dbo.TTxMst (", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldUseSameQualifiedNameInDependencyListAndSchemaHeaderWhenDependencyHasNoDatabase()
+        {
+            // dep.Database가 없어 spDef.ObjectKey로 한정되는 경우도 두 블록의 표기가
+            // 같아야 한다. 이전에는 스키마 블록 헤더만 DB 없이 "dbo.TSettleMst"로
+            // 남아 의존성 목록의 "SETTLE_POQ_DB.dbo.TSettleMst"와 어긋났다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" }
+                }
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("- Name: SETTLE_POQ_DB.dbo.TSettleMst, Type:", result.UserPrompt);
+            Assert.Contains("### 테이블: SETTLE_POQ_DB.dbo.TSettleMst (", result.UserPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler

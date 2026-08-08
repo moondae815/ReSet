@@ -17,7 +17,9 @@ namespace ReSet.Core.Services
         private static volatile bool _hasMigrated = false;
         private static readonly object _migrationLock = new object();
         private const string CacheIndexFileName = ".sp_cache_index.json";
-        private const int CurrentCacheFormatVersion = 1;
+        // 2: 정적 분석 식별자 정규화. DDL이 안 바뀌어도 프롬프트에 들어가는 스키마 표와
+        //    테이블 목록이 달라지므로, 이전 버전으로 만든 산출물은 전부 다시 만들어야 한다.
+        private const int CurrentCacheFormatVersion = 2;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
