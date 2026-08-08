@@ -180,20 +180,39 @@ namespace ReSet.Core.Tests
         {
             // 이 가드가 지키는 불변식: 직접 의존성 경로(703, 726행)와 재귀 경로(819, 835행)
             // 양쪽 모두 SqlObjectTypeClassifier에 위임해야 한다. 둘 중 하나라도
-            // "rawDep.Type.Contains(...)"나 "directDependency.Type.Contains(...)" 같은
-            // 인라인 부분 문자열 판정으로 되돌아가면, "SQL_TABLE_VALUED_FUNCTION"이
-            // "TABLE"을 포함하기 때문에 TVF가 다시 테이블로 오분류되고
-            // UIF_SettleYMD 같은 함수의 DDL이 다시 수집되지 않는다.
+            // "rawDep.Type.Contains(...)" 같은 인라인 부분 문자열 판정이나, 삭제된
+            // private 메서드 IsTableOrViewType/IsCodeObjectType의 부활로 되돌아가면,
+            // "SQL_TABLE_VALUED_FUNCTION"이 "TABLE"을 포함하기 때문에 TVF가 다시
+            // 테이블로 오분류되고 UIF_SettleYMD 같은 함수의 DDL이 다시 수집되지 않는다.
+            //
+            // 단순 Assert.Contains만으로는 두 호출부 중 한쪽만 원복해도 다른 쪽의
+            // 리터럴이 파일에 여전히 남아 있어 걸리지 않는다(라운드 2 리뷰에서 지적됨).
+            // 그래서 등장 횟수를 함께 확인한다: 정확히 2가 아니라 최소 2인 이유는,
+            // 정당한 호출부가 나중에 하나 더 늘어도(예: 세 번째 경로가 추가되는 경우)
+            // 이 가드가 무고하게 깨지지 않게 하기 위해서다. 그래도 두 호출부 중
+            // 하나만 인라인 판정으로 되돌아가면 횟수가 1로 떨어져 여전히 잡힌다.
             var source = System.IO.File.ReadAllText(
                 System.IO.Path.Combine(
                     RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
 
-            Assert.Contains("SqlObjectTypeClassifier.IsTableOrView(", source);
-            Assert.Contains("SqlObjectTypeClassifier.IsCodeObject(", source);
+            Assert.True(
+                CountOccurrences(source, "SqlObjectTypeClassifier.IsTableOrView(") >= 2,
+                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsTableOrView에 위임해야 한다.");
+            Assert.True(
+                CountOccurrences(source, "SqlObjectTypeClassifier.IsCodeObject(") >= 2,
+                "직접 의존성 경로와 재귀 경로 양쪽 모두 IsCodeObject에 위임해야 한다.");
 
             Assert.DoesNotContain("rawDep.Type.Contains(\"TABLE\")", source);
-            Assert.DoesNotContain("directDependency.Type.Contains(", source);
+
+            // 삭제된 private 메서드의 정의 자체가 되돌아오지 않았는지 확인한다.
+            // 이것이 실제 회귀 형태였다: 호출부 리터럴이 아니라 메서드 정의가
+            // 되살아나는 것.
+            Assert.DoesNotContain("private static bool IsTableOrViewType", source);
+            Assert.DoesNotContain("private static bool IsCodeObjectType", source);
         }
+
+        private static int CountOccurrences(string source, string literal) =>
+            (source.Length - source.Replace(literal, string.Empty).Length) / literal.Length;
 
         [Theory]
         [InlineData(null)]
