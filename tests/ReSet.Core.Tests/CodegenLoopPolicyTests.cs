@@ -58,6 +58,13 @@ namespace ReSet.Core.Tests
             // 이름 규약을 말해 주지 않으면 에이전트가 무엇을 고쳐야 할지 모른다.
             Assert.Contains("스키마", feedback);
             Assert.Contains("CustOrderHist", feedback);
+            // 파일 규칙: ResolveMappings는 .cs/.java로 확장자를 제한한 뒤 이름을 비교한다.
+            // "확장자 무관"이라고 말하면 실제로 매치되지 않는 파일을 매치된다고 속이는 것이다.
+            Assert.Contains(".cs", feedback);
+            Assert.Contains(".java", feedback);
+            Assert.DoesNotContain("확장자 무관", feedback);
+            // 폴더 규칙: JobProjectDirectoryNames는 맨 이름뿐 아니라 `.Batch` 접미사 형태도 인정한다.
+            Assert.Contains(".Batch", feedback);
         }
 
         /// <summary>

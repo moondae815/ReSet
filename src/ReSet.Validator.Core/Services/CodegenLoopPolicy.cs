@@ -63,11 +63,18 @@ namespace ReSet.Validator.Core.Services
             sb.AppendLine($"- 설계서 디렉터리: `{specDir}`");
             sb.AppendLine($"- 소스 디렉터리: `{codeDir}`");
             sb.AppendLine();
+            // 아래 규약 문구는 두 판정부의 요약이다: 파일 쪽은 FileMappingService.ResolveMappings가,
+            // 폴더 쪽은 CodegenArtifactNaming.JobProjectDirectoryNames가 단독으로 소유한다. 그 파일
+            // 자신의 주석이 이미 경고하듯("예시를 손으로 적으면 판정부와 조용히 갈라진다") 이것도
+            // 손으로 옮겨 적은 요약이라 원본이 바뀌면 같이 고쳐야 한다. 그럼에도 여기서 다시 옮겨
+            // 적는 이유는 이 함수가 두 디렉터리 경로만 가질 뿐 Job 이름을 몰라 소유자 함수를
+            // 직접 호출할 수 없기 때문이다.
             sb.AppendLine(
                 "검증기는 설계서 폴더명에서 스키마를 뗀 이름으로 짝을 찾습니다. " +
                 "예를 들어 설계서가 `dbo.CustOrderHist/docs/Spec.md`에 있으면 " +
-                "소스 디렉터리에서 `CustOrderHist`라는 이름의 **파일**(확장자 무관) 또는 " +
-                "같은 이름의 **폴더**를 찾습니다.");
+                "소스 디렉터리에서 `CustOrderHist`라는 이름의 `.cs` 또는 `.java` **파일**(다른 확장자는 " +
+                "인정되지 않습니다) 또는 같은 이름(혹은 `CustOrderHist.Batch`처럼 `.Batch`가 붙은 " +
+                "형태)의 **폴더**를 찾습니다.");
             sb.AppendLine();
             sb.AppendLine("생성한 파일과 폴더의 이름이 이 규약을 따르는지 확인하고, 어긋나면 이름을 고치십시오.");
 
