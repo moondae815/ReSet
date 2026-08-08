@@ -46,6 +46,10 @@ namespace ReSet.Core.Services
 
             if (codesByProcedure == null || codesByProcedure.Count == 0)
             {
+                // 명세서 추출이 통째로 0건이면 원본을 그대로 돌려주되 흔적을 남긴다.
+                // 이게 없으면 "보강이 돌았는데 못 채운 것"과 "추출이 0건이라 시작조차
+                // 안 된 것"을 운영자가 로그만 보고 구별할 수 없다.
+                Log.Warning("명세서에서 추출한 오류코드가 없어 목차 보강을 건너뜁니다.");
                 return planStructureMarkdown;
             }
 
@@ -71,54 +75,61 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 유효한 Steps 블록이면 보강된 JSON 문자열을, 아니면 null을 돌려준다.
+        ///
+        /// 본문 전체를 감싸는 이유: `JsonNode.Parse`가 통과시킨 입력이라도
+        /// 프로퍼티 이름이 중복되면 이후 `TryGetPropertyValue`가 `JsonException`이
+        /// 아닌 `ArgumentException`을 던진다("An item with the same key has
+        /// already been added"). AI 산출 목차는 이 결함이 실재하는 산출물이라,
+        /// try를 Parse 한 줄에만 두면 그 예외가 그대로 새 나가 Enrich를 호출한
+        /// 파이프라인(재수립 헬퍼 포함)이 통째로 죽는다.
         /// </summary>
         private static string? TryRewriteBlock(
             string json, IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
         {
-            JsonNode? root;
             try
             {
-                root = JsonNode.Parse(json);
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
+                var root = JsonNode.Parse(json);
 
-            if (root is not JsonObject obj ||
-                !obj.TryGetPropertyValue("Steps", out var stepsNode) ||
-                stepsNode is not JsonArray steps)
-            {
-                return null;
-            }
-
-            var enrichedCount = 0;
-            foreach (var stepNode in steps)
-            {
-                if (stepNode is not JsonObject step)
+                if (root is not JsonObject obj ||
+                    !obj.TryGetPropertyValue("Steps", out var stepsNode) ||
+                    stepsNode is not JsonArray steps)
                 {
-                    continue;
+                    return null;
                 }
 
-                var merged = MergeCodes(step, codesByProcedure);
-                if (merged == null)
+                var enrichedCount = 0;
+                foreach (var stepNode in steps)
                 {
-                    continue;
+                    if (stepNode is not JsonObject step)
+                    {
+                        continue;
+                    }
+
+                    var merged = MergeCodes(step, codesByProcedure);
+                    if (merged == null)
+                    {
+                        continue;
+                    }
+
+                    // ErrorCodes만 교체한다. 객체를 새로 만들면 Chunkable처럼 이미
+                    // 있는 필드나 나중에 늘어날 필드가 조용히 사라진다.
+                    step["ErrorCodes"] = new JsonArray(Array.ConvertAll(merged, c => (JsonNode?)JsonValue.Create(c)));
+                    enrichedCount++;
                 }
 
-                // ErrorCodes만 교체한다. 객체를 새로 만들면 Chunkable처럼 이미
-                // 있는 필드나 나중에 늘어날 필드가 조용히 사라진다.
-                step["ErrorCodes"] = new JsonArray(Array.ConvertAll(merged, c => (JsonNode?)JsonValue.Create(c)));
-                enrichedCount++;
-            }
+                if (enrichedCount > 0)
+                {
+                    Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedCount);
+                }
 
-            if (enrichedCount > 0)
+                // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
+                return root.ToJsonString(WriteOptions) + "\n";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedCount);
+                Log.Warning(ex, "목차 단계 목록 JSON 블록 보강 중 오류가 발생했습니다. 이 블록은 원본을 유지합니다.");
+                return null;
             }
-
-            // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
-            return root.ToJsonString(WriteOptions) + "\n";
         }
 
         /// <summary>

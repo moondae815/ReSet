@@ -214,6 +214,14 @@ namespace ReSet.Core.Services
                 result.PlanDefects.Add(
                     $"{step.Code}의 목차 ErrorCodes가 비어 있어 원본 오류코드 대조를 실행할 수 없습니다.");
             }
+            else if (step.LegacyProcedures.Count == 0)
+            {
+                // 결함으로 들지 않는다고 흔적까지 지우면 "대조 항목 0개"가 "대조해서
+                // 깨끗함"과 로그에서 구별되지 않는다 - 이 브랜치가 고치는 결함이
+                // 다른 모습으로 되살아나는 것을 막기 위한 최소한의 한 줄이다.
+                Log.Information(
+                    "{Code}는 레거시 출신 프로시저가 없어 원본 오류코드 대조 대상이 아닙니다.", step.Code);
+            }
 
             foreach (var table in step.TargetTables)
             {

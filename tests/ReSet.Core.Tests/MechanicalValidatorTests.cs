@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class MechanicalValidatorTests
     {
         private readonly MechanicalValidator _validator = new();
@@ -570,6 +574,33 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         }
 
         [Fact]
+        public void ValidateBatchStep_WithNoLegacyProcedure_LogsInsteadOfStayingSilent()
+        {
+            // "해당 없음"이 결함은 아니지만 침묵과 구별되지 않으면 "대조 항목 0개"가
+            // "대조해서 깨끗함"과 로그에서 같아 보이는 결함이 되살아난다.
+            var plan = S10Plan() with
+            {
+                LegacyProcedures = Array.Empty<string>(),
+                ErrorCodes = Array.Empty<string>(),
+            };
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                _validator.ValidateBatchStep(S10HealthySection, plan);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m => m.Contains("S10") && m.Contains("오류코드 대조 대상이 아닙니다"));
+        }
+
+        [Fact]
         public void ValidateBatchStep_WithLegacyProcedureButNoErrorCodes_StillFails()
         {
             // 출신이 있는데 코드가 비었다면 보강이 실패한 것이다. 그 사실은 남아야 한다.
@@ -598,6 +629,12 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Assert.False(result.IsValid);
             Assert.Contains(result.PlanDefects, d => d.Contains("TargetTables"));
             Assert.DoesNotContain(result.PlanDefects, d => d.Contains("ErrorCodes"));
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
     }
 }

@@ -9,6 +9,12 @@ namespace ReSet.Core.Services
 
     /// <param name="Preamble">최종 계획서의 첫 H2 앞 내용. L1Exhausted 배너가 여기 실린다.</param>
     /// <param name="SinglePlanRelativePath">분할 실패 시 계획서 전문의 상대 경로. 분할했으면 null.</param>
+    /// <param name="HasUnverifiableSteps">
+    /// 목차 보강 후에도 "검증 불가"로 남은 단계가 하나라도 있는가
+    /// (<see cref="ReSet.Core.Models.StepDefectKind.Unverifiable"/>). PlanOutcome이
+    /// Passed라도 이 값이 true면 §0은 "모두 통과"만 말해서는 안 된다 - 그 아래
+    /// 실제로 실리는 미검증 단계 목록과 정면으로 모순되기 때문이다.
+    /// </param>
     public sealed record EntryPointInputs(
         string JobName,
         string TargetLanguage,
@@ -20,7 +26,8 @@ namespace ReSet.Core.Services
         IReadOnlyList<IndexEntry> Specs,
         bool HasStepContract,
         bool HasVerification,
-        string? SinglePlanRelativePath);
+        string? SinglePlanRelativePath,
+        bool HasUnverifiableSteps);
 
     /// <summary>
     /// 진입점 `MigrationInstructions.md`를 조립한다.
@@ -58,7 +65,7 @@ namespace ReSet.Core.Services
             sb.AppendLine();
 
             // 검증 상태가 맨 앞에 온다. 계획을 소비한 뒤에 경고를 만나면 이미 늦다.
-            sb.AppendLine(PlanVerificationSection(inputs.PlanOutcome));
+            sb.AppendLine(PlanVerificationSection(inputs.PlanOutcome, inputs.HasUnverifiableSteps));
 
             if (!string.IsNullOrWhiteSpace(inputs.Preamble))
             {
@@ -87,17 +94,26 @@ namespace ReSet.Core.Services
         /// 계획서의 검증 상태 배너. `MetadataExporter.BuildPlanVerificationSection`을 그대로
         /// 옮겨 왔다. 통과일 때도 침묵하지 않는다 - "표기 부재 = 검증됨"이라는 추론이
         /// 이 계열 결함의 뿌리다.
+        ///
+        /// <paramref name="hasUnverifiableSteps"/>가 true면 Passed여도 "모두 통과"만
+        /// 말하지 않는다. 목차 보강이 실패해 "검증 불가" 단계가 남는 회차에는 이
+        /// 섹션 바로 아래 미검증 단계 목록이 실리는데, "모두 통과" 한 줄만 찍히면
+        /// 그 목록과 정면으로 모순된다(스펙 §6, 완료 기준 3).
         /// </summary>
-        public static string PlanVerificationSection(VerificationOutcome planOutcome)
+        public static string PlanVerificationSection(VerificationOutcome planOutcome, bool hasUnverifiableSteps)
         {
             var label = VerificationDocumentFormatter.StatusLabel(planOutcome);
             var sb = new StringBuilder();
 
             if (planOutcome == VerificationOutcome.Passed)
             {
-                sb.AppendLine("## ✅ 0. 이 계획서의 검증 상태");
+                sb.AppendLine(hasUnverifiableSteps ? "## ⚠️ 0. 이 계획서의 검증 상태" : "## ✅ 0. 이 계획서의 검증 상태");
                 sb.AppendLine();
                 sb.AppendLine($"**{label}** — L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과한 계획입니다.");
+                if (hasUnverifiableSteps)
+                {
+                    sb.AppendLine("다만 일부 단계는 대조할 재료(대상 테이블·원본 오류코드)가 목차에 없어 검증되지 못한 단계가 있습니다. 아래 단계별 배너에서 어느 단계인지 확인하십시오.");
+                }
                 return sb.ToString();
             }
 

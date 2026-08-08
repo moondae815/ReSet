@@ -195,7 +195,12 @@ namespace ReSet.Core.Services
                 specs,
                 HasStepContract: slices.StepContract != null,
                 HasVerification: slices.Verification != null,
-                SinglePlanRelativePath: singlePlanRelative));
+                SinglePlanRelativePath: singlePlanRelative,
+                // 목차 보강 후에도 "검증 불가"로 남은 단계가 있으면 §0이 "모두
+                // 통과"만 말해서는 안 된다 - 바로 아래 실리는 미검증 단계 목록과
+                // 모순된다(스펙 §6).
+                HasUnverifiableSteps: inputs.Layout?.FloorViolations?.Values
+                    .Any(defect => defect.Kind == StepDefectKind.Unverifiable) ?? false));
 
             var entryPointPath = Path.Combine(agentDir, "MigrationInstructions.md");
             await WriteAsync(entryPointPath, entryPoint, cancellationToken);

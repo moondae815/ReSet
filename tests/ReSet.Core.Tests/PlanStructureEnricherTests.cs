@@ -1,10 +1,14 @@
 using System.Collections.Generic;
 using System.Linq;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using ReSet.Core.Services;
 using Xunit;
 
 namespace ReSet.Core.Tests
 {
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class PlanStructureEnricherTests
     {
         private const string Structure = @"# 목차
@@ -165,6 +169,94 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Enrich_ShouldReturnInputUnchangedWhenAStepObjectHasADuplicateKey()
+        {
+            // JsonNode.Parse는 중복 프로퍼티 이름 자체는 통과시키지만, 나중에
+            // TryGetPropertyValue를 부르는 순간 ArgumentException을 던진다
+            // (JsonException이 아니다). 이 경로를 못 잡으면 예외가 Enrich 밖으로
+            // 새 나가 파이프라인을 죽인다.
+            const string duplicateKey = @"# 목차
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""중복 키 단계"",
+      ""LegacyProcedures"": [""UP_Util_PG_Client_CMRate_Ins""],
+      ""TargetTables"": [""dbo.TPGSettleRate""],
+      ""ErrorCodes"": [],
+      ""ErrorCodes"": [],
+      ""Chunkable"": true
+    }
+  ]
+}
+```
+";
+
+            var enriched = PlanStructureEnricher.Enrich(duplicateKey, Codes());
+
+            Assert.Equal(duplicateKey, enriched);
+        }
+
+        [Fact]
+        public void Enrich_ShouldIgnoreNonStringItemsInLegacyProcedures()
+        {
+            // ReadStringArray의 `item is not JsonValue value || !value.TryGetValue(out
+            // string? text)` 방어가 실제로 도는지 확인한다. 숫자 항목은 프로시저명이
+            // 될 수 없으므로 무시되고, 나머지 문자열 항목만으로 보강이 진행되어야 한다.
+            const string mixed = @"# 목차
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""혼합 배열 단계"",
+      ""LegacyProcedures"": [""UP_Util_PG_Client_CMRate_Ins"", 123],
+      ""TargetTables"": [""dbo.TPGSettleRate""],
+      ""ErrorCodes"": [],
+      ""Chunkable"": true
+    }
+  ]
+}
+```
+";
+
+            var enriched = PlanStructureEnricher.Enrich(mixed, Codes());
+
+            Assert.Equal(new[] { "-1", "-9", "-10" }, Step(enriched, "S01").ErrorCodes);
+        }
+
+        [Fact]
+        public void Enrich_ShouldIgnoreNullItemsInErrorCodes()
+        {
+            // JSON null은 JsonValue가 아니므로 같은 방어가 걸러야 한다. 나머지 선언값과
+            // 명세서 추출분은 정상적으로 합쳐져야 한다.
+            const string mixed = @"# 목차
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""혼합 배열 단계"",
+      ""LegacyProcedures"": [""UP_Util_PG_Client_CMRate_Ins""],
+      ""TargetTables"": [""dbo.TPGSettleRate""],
+      ""ErrorCodes"": [""-9"", null],
+      ""Chunkable"": true
+    }
+  ]
+}
+```
+";
+
+            var enriched = PlanStructureEnricher.Enrich(mixed, Codes());
+
+            Assert.Equal(new[] { "-9", "-1", "-10" }, Step(enriched, "S01").ErrorCodes);
+        }
+
+        [Fact]
         public void Enrich_RoundTripsThroughTheParser()
         {
             // 이 계약이 깨지면 파일에 기록된 값과 검사에 쓰인 값이 갈라진다 -
@@ -175,6 +267,37 @@ namespace ReSet.Core.Tests
             Assert.NotNull(parsed);
             Assert.Equal(3, parsed!.Count);
             Assert.Equal(new[] { "-1", "-2" }, parsed.Single(s => s.Code == "S02").ErrorCodes);
+        }
+
+        [Fact]
+        public void Enrich_ShouldLogWhenExtractionYieldedNoCodesAtAll()
+        {
+            // codesByProcedure가 통째로 비면 원본을 그대로 돌려주는데, 흔적이 없으면
+            // "보강이 돌았는데 못 채운 것"과 "추출이 0건이라 시작조차 안 된 것"을
+            // 운영자가 로그만 보고 구별할 수 없다.
+            var empty = new Dictionary<string, IReadOnlyList<string>>();
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Warning().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                var enriched = PlanStructureEnricher.Enrich(Structure, empty);
+                Assert.Equal(Structure, enriched);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m => m.Contains("오류코드") && m.Contains("보강을 건너뜁니다"));
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
     }
 }

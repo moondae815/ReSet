@@ -19,7 +19,8 @@ namespace ReSet.Core.Tests
             Specs: new List<IndexEntry> { new("dbo.UP_A", "../../Procedures/dbo.UP_A/docs/Spec.md") },
             HasStepContract: true,
             HasVerification: true,
-            SinglePlanRelativePath: null);
+            SinglePlanRelativePath: null,
+            HasUnverifiableSteps: false);
 
         private static EntryPointInputs Fallback() => Split() with
         {
@@ -158,10 +159,34 @@ namespace ReSet.Core.Tests
         public void PlanVerificationSection_ShouldSpeakEvenWhenPassed()
         {
             // 표기 부재를 "검증됨"으로 추론하는 것이 이 계열 결함의 뿌리다.
-            var section = InstructionEntryPointComposer.PlanVerificationSection(VerificationOutcome.Passed);
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed, hasUnverifiableSteps: false);
 
             Assert.Contains("이 계획서의 검증 상태", section);
             Assert.NotEmpty(section.Trim());
+        }
+
+        [Fact]
+        public void PlanVerificationSection_ShouldStateBothPassedAndUnverifiableSteps_WhenBothTrue()
+        {
+            // 스펙 §6: "모두 통과"와 미검증 단계의 존재가 §0에 함께 나오지 않는 것이
+            // 결함이다. 보강이 실패해 "검증 불가" 단계가 남는 회차에는 "모두 통과"
+            // 한 줄만 찍혀 그 아래 미검증 단계 목록과 정면으로 모순됐다.
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed, hasUnverifiableSteps: true);
+
+            Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", section);
+            Assert.Contains("검증되지 못한 단계가 있습니다", section);
+        }
+
+        [Fact]
+        public void Compose_ShouldStateBothPassedAndUnverifiableSteps_InSection0()
+        {
+            var markdown = InstructionEntryPointComposer.Compose(
+                Split() with { HasUnverifiableSteps = true });
+
+            Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", markdown);
+            Assert.Contains("검증되지 못한 단계가 있습니다", markdown);
         }
 
         /// <summary>
