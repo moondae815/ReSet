@@ -119,7 +119,15 @@ namespace ReSet.Validator.Core.Services
 
                 // 3. 검증 결과 확인
                 var failedResults = validationResults.Where(r => !r.L1Passed || !r.L2Passed).ToList();
-                bool allPassed = failedResults.Count == 0;
+
+                // 빈 목록에 대한 "실패 0건"은 공허하게 참이다. ResolveMappings(config)는
+                // SpecDirectory에 BatchMigrationPlan.md가 없거나 소스 트리에서 짝을 찾지
+                // 못하면 아무 예외 없이 빈 목록을 돌려주므로, 개수만 보면 코드가 한 줄도
+                // 검증되지 않았는데 "모든 검증 통과"로 끝난다. 회차 경로는 이 구멍을
+                // 세 곳에서 닫았고, 이 경로만 열려 있었다(메뉴 3에서 브랜치 이전의 모든
+                // Job이 여전히 여기로 온다).
+                bool nothingVerified = validationResults.Count == 0;
+                bool allPassed = !nothingVerified && failedResults.Count == 0;
 
                 if (allPassed)
                 {
@@ -128,21 +136,35 @@ namespace ReSet.Validator.Core.Services
                     break;
                 }
 
-                // 4. 실패 시 피드백을 지시서에 Append
+                if (nothingVerified)
+                {
+                    // 에이전트에게 붙일 L1/L2 피드백이 없다(대조 자체를 못 했다).
+                    // 조용히 재시도하면 무엇이 잘못됐는지 어디에도 남지 않는다.
+                    Log.Error(
+                        "[SelfHealing] 검증 대상을 하나도 찾지 못했습니다(통과 아님) - 설계서 디렉터리: {SpecDir}, 소스 디렉터리: {CodeDir}",
+                        specDir, codeDir);
+                }
+
+                // 4. 실패 시 피드백을 지시서에 Append.
+                // 대조 자체를 못 한 경우(failedResults가 비어 있는데 통과도 아닌 경우)는
+                // 붙일 L1/L2 결과가 없다 - 머리글만 남는 빈 피드백을 쓰지 않는다.
                 if (attempt < maxAttempts)
                 {
-                    Log.Information("[SelfHealing] 검증 실패. 피드백을 지시서에 추가하고 에이전트를 재기동합니다.");
-                    
-                    if (File.Exists(instructionsFilePath))
+                    if (failedResults.Count > 0)
                     {
-                        await _metadataExporter.AppendFeedbackToInstructionsAsync(
-                            instructionsFilePath,
-                            BuildCriticFeedback($"## 🚨 [AI L1/L2 Critic Feedback - Attempt {attempt}] 🚨", failedResults),
-                            cancellationToken);
-                    }
-                    else
-                    {
-                        Log.Warning("[SelfHealing] 지시서 파일을 찾을 수 없습니다: {Path}", instructionsFilePath);
+                        Log.Information("[SelfHealing] 검증 실패. 피드백을 지시서에 추가하고 에이전트를 재기동합니다.");
+
+                        if (File.Exists(instructionsFilePath))
+                        {
+                            await _metadataExporter.AppendFeedbackToInstructionsAsync(
+                                instructionsFilePath,
+                                BuildCriticFeedback($"## 🚨 [AI L1/L2 Critic Feedback - Attempt {attempt}] 🚨", failedResults),
+                                cancellationToken);
+                        }
+                        else
+                        {
+                            Log.Warning("[SelfHealing] 지시서 파일을 찾을 수 없습니다: {Path}", instructionsFilePath);
+                        }
                     }
                 }
                 else

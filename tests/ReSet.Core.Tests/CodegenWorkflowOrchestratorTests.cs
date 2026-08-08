@@ -18,10 +18,13 @@ namespace ReSet.Core.Tests
     /// 실제 RunSelfHealingWorkflowAsync 루프로 검증한다.
     ///
     /// CodeVerificationOrchestrator는 구상 클래스라 통째로 목으로 감쌀 수 없다(CodegenLoopPolicy.cs
-    /// 참조). 대신 SpecDirectory/SourceCodeDirectory를 빈 임시 폴더로 두면 ResolveMappings가
-    /// 매핑 대상 0개를 돌려주고, 그러면 RunVerificationAsync가 빈 목록을 반환해 allPassed가
-    /// 항상 참이 된다 - 이 성질을 이용해 "산출물이 나와 검증까지 갔고, 통과했다"를 실제
-    /// 코드 경로로 재현한다. 정적/AI 검증 자체(L1/L2 판정)는 이 테스트의 대상이 아니다.
+    /// 참조). 그래서 실제 매핑·L1·L2 경로를 그대로 태우되, 계획서와 소스 파일을 규약대로
+    /// 심고(<see cref="SeedVerifiableJob"/>) L2를 항상 MATCH로 세운 AI 클라이언트를 쓴다.
+    ///
+    /// 예전에는 SpecDirectory/SourceCodeDirectory를 빈 폴더로 두어 "매핑 0건 → 실패 0건 →
+    /// 통과"를 이용했다. 그 성질 자체가 결함이었다(빈 목록에 대한 실패 0건은 공허하게 참이다).
+    /// 그것을 픽스처로 쓰면 결함을 고치는 순간 테스트가 함께 무너지므로, 통과 경로는 진짜
+    /// 매핑으로 재현한다.
     /// </summary>
     public class CodegenWorkflowOrchestratorTests : IDisposable
     {
@@ -48,6 +51,31 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// 자동 탐색이 짝지을 수 있는 계획서와 소스를 심는다. 매핑명은 계획서의 조부모
+        /// 디렉터리 이름(= 이 픽스처의 임시 루트 이름)이므로 소스 파일도 그 이름을 쓴다.
+        /// </summary>
+        private void SeedVerifiableJob()
+        {
+            var mappedName = Path.GetFileName(_tempRoot);
+            File.WriteAllText(Path.Combine(_specDir, "BatchMigrationPlan.md"), "# 통합 계획\n\n본문");
+            File.WriteAllText(
+                Path.Combine(_codeDir, mappedName + ".cs"),
+                "public class JobEntryPoint { }");
+        }
+
+        private static IAiClient MatchingAiClient()
+        {
+            var client = Substitute.For<IAiClient>();
+            client.ProviderName.Returns("stub");
+            client.ModelName.Returns("stub-model");
+            client.ChatAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ => Task.FromResult(new AiResult { Content = "{\"OverallStatus\": \"MATCH\"}" }));
+            return client;
+        }
+
         private CodegenWorkflowOrchestrator BuildOrchestrator(ICodingEngine engine, int maxL2Attempts)
         {
             var validatorConfig = new ValidatorConfig
@@ -56,8 +84,7 @@ namespace ReSet.Core.Tests
                 SourceCodeDirectory = _codeDir,
                 OutputDirectory = Path.Combine(_tempRoot, "validation")
             };
-            var aiClient = Substitute.For<IAiClient>();
-            var verifier = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, null);
+            var verifier = new CodeVerificationOrchestrator(validatorConfig, MatchingAiClient(), null, null);
             var metadataExporter = Substitute.For<IMetadataExporter>();
 
             return new CodegenWorkflowOrchestrator(engine, verifier, metadataExporter, maxL2Attempts);
@@ -135,9 +162,10 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task RunSelfHealingWorkflowAsync_ArtifactsAfterOneNoArtifactRetry_ResetsCounterAndSucceeds()
         {
-            // 1회차: 산출물 없음(캡 카운터 1) -> 2회차: 산출물 있음(카운터 리셋, 매핑 0건이라
-            // 검증이 트리비얼하게 통과) -> 성공. 캡이 리셋되지 않았다면 2회차에서 카운터가
-            // 이미 2에 도달해 검증 없이 중단됐을 것이다.
+            // 1회차: 산출물 없음(캡 카운터 1) -> 2회차: 산출물 있음(카운터 리셋, 실제 매핑을
+            // 검증해 통과) -> 성공. 캡이 리셋되지 않았다면 2회차에서 카운터가 이미 2에
+            // 도달해 검증 없이 중단됐을 것이다.
+            SeedVerifiableJob();
             var noArtifact = new CodegenRunResult(false, 0, CliFailureKind.Unknown, "일시적 실패");
             var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
             var engine = new ScriptedCodingEngine(noArtifact, withArtifact, withArtifact);
@@ -166,6 +194,52 @@ namespace ReSet.Core.Tests
 
             Assert.NotNull(result.AbortReason);
             Assert.DoesNotContain("AiSettings:Providers", result.AbortReason);
+        }
+
+        /// <summary>
+        /// 빈 검증 결과에 대한 "실패 0건"은 공허하게 참이다. ResolveMappings(config)는
+        /// SpecDirectory에 BatchMigrationPlan.md가 없거나 소스 트리에서 짝을 찾지 못하면
+        /// 예외 없이 빈 목록을 돌려주므로, 코드가 한 줄도 검증되지 않았는데 "모든 검증
+        /// 통과"로 끝났다. 회차 경로는 이 구멍을 닫았고 전체 Job 경로만 열려 있었다 -
+        /// 메뉴 3에서 브랜치 이전의 모든 Job이 여전히 이 경로로 온다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_NothingWasVerified_ShouldNotReportSuccess()
+        {
+            // 계획서도 소스도 심지 않는다 - 매핑이 0건이 되는 실제 조건 그대로다.
+            var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
+            var engine = new ScriptedCodingEngine(withArtifact, withArtifact);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: 2);
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            // 산출물은 나왔으므로 "산출물을 못 만들었다"는 중단 사유 경로가 아니다.
+            Assert.Null(result.AbortReason);
+            // 통과로 읽었다면 1회에 끊겼을 것이다. 시도를 모두 소진했어야 한다.
+            Assert.Equal(2, engine.CallCount);
+        }
+
+        /// <summary>
+        /// 반대로 진짜 매핑이 있고 검증을 통과했다면 그 자리에서 끝나야 한다.
+        /// 위 가드가 정상 통과 경로까지 막지 않는다는 것을 함께 고정한다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_RealMappingPasses_ShouldStopAtFirstAttempt()
+        {
+            SeedVerifiableJob();
+            var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
+            var engine = new ScriptedCodingEngine(withArtifact, withArtifact, withArtifact);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: 3);
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(1, engine.CallCount);
         }
     }
 }
