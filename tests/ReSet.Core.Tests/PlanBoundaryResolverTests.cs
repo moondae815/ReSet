@@ -466,6 +466,195 @@ SELECT 1;
         }
 
         /// <summary>
+        /// 골격 분할이 성공한 경로에서도 모든 줄이 어느 조각엔가 담겨야 한다.
+        /// 담기지 않은 줄은 코딩 에이전트가 읽을 방법이 아예 없다.
+        ///
+        /// 부록을 두 자리에 둔다 - 마지막 단계와 검증 SQL 사이, 그리고 검증 SQL 뒤.
+        /// 두 자리 모두 종전에는 조각 사이로 샜다.
+        /// </summary>
+        [Fact]
+        public void Resolve_SkeletonSplitSucceeded_ShouldPlaceEveryLineInSomeSlice()
+        {
+            var document = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+공통 규약 본문
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 성능 고려사항
+
+성능 메모 본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+
+## 부록 - 운영 메모
+
+운영 메모 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(document, LayoutWithSections());
+
+            Assert.True(slices.SkeletonSplit);
+            Assert.True(slices.StepsSplit);
+
+            var covered = string.Join(
+                "\n",
+                new[] { slices.Preamble, slices.Architecture, slices.StepContract ?? "", slices.Verification ?? "" }
+                    .Concat(slices.Steps.Values));
+
+            foreach (var line in document.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0))
+            {
+                Assert.Contains(line, covered);
+            }
+        }
+
+        /// <summary>
+        /// 고아 구간은 개요로 간다. 개요(common/00-architecture.md)는 모든 회차가 무조건
+        /// 읽는 유일한 파일이라, 어느 회차가 그것을 필요로 하는지 판별하지 못한 상태에서
+        /// 고를 수 있는 유일한 자리다.
+        /// </summary>
+        [Fact]
+        public void Resolve_OrphanRegions_ShouldBeAbsorbedIntoArchitecture()
+        {
+            var document = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+공통 규약 본문
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 성능 고려사항
+
+성능 메모 본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+
+## 부록 - 운영 메모
+
+운영 메모 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(document, LayoutWithSections());
+
+            Assert.Contains("성능 메모 본문", slices.Architecture);
+            Assert.Contains("운영 메모 본문", slices.Architecture);
+
+            // 흡수는 담기지 않은 것만 담는다. 이미 다른 조각이 가진 내용을 개요에
+            // 다시 실으면 회차마다 읽는 파일이 조용히 부푼다.
+            Assert.DoesNotContain("정제된 S01 본문", slices.Architecture);
+            Assert.DoesNotContain("검증 SQL 본문", slices.Architecture);
+            Assert.DoesNotContain("공통 규약 본문", slices.Architecture);
+        }
+
+        /// <summary>
+        /// 공통 규약 조각이 자기 제목을 갖는다. 종전에는 이 H2 줄이 개요의 끝과 공통 규약의
+        /// 시작 사이에 끼어 어느 조각에도 없었다.
+        /// </summary>
+        [Fact]
+        public void Resolve_StepContract_ShouldBeginWithItsOwnHeading()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.NotNull(slices.StepContract);
+            Assert.StartsWith("## 단계별 이행 상세 및 의사코드", slices.StepContract!);
+            Assert.Contains("공통 규약 본문", slices.StepContract!);
+        }
+
+        /// <summary>
+        /// 산문이 없으면 공통 규약 조각을 만들지 않는다. 헤딩을 무조건 붙이면 헤딩 한 줄짜리
+        /// 파일이 생기고 진입점이 그것을 링크한다(InstructionBundleWriter.cs:61) - 회차마다
+        /// 읽히는 빈 파일이 하나 는다. 남겨진 헤딩 줄은 개요가 받는다.
+        /// </summary>
+        [Fact]
+        public void Resolve_StepContractWithoutProse_ShouldStayNullAndLeaveHeadingToArchitecture()
+        {
+            var noProse = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(noProse, LayoutWithSections());
+
+            Assert.True(slices.SkeletonSplit);
+            Assert.Null(slices.StepContract);
+            Assert.Contains("## 단계별 이행 상세 및 의사코드", slices.Architecture);
+        }
+
+        /// <summary>
+        /// 고아 구간이 없는 정상 문서에서는 개요가 종전과 똑같아야 한다. 흡수 기계를 넣고
+        /// 나서 정상 문서의 개요가 달라지면 회차 입력이 조용히 부푼 것이다.
+        /// </summary>
+        [Fact]
+        public void Resolve_DocumentWithoutOrphans_ShouldLeaveArchitectureUnchanged()
+        {
+            var slices = PlanBoundaryResolver.Resolve(FinalPlan, LayoutWithSections());
+
+            Assert.Equal(
+                """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+""",
+                slices.Architecture);
+        }
+
+        /// <summary>
         /// 반대로 단계 분할까지 실패했다면 끊을 기준점이 없다. 그때는 문서 끝까지
         /// 남겨야 어느 조각에도 속하지 못한 구간이 사라지지 않는다.
         /// </summary>
