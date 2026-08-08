@@ -64,7 +64,9 @@
 
 `CancellationPolicyScanner`와 같이 시맨틱 모델 없이 구문 트리만 본다. 그 스캐너가 근거를 이미 적어 두었다 — 빠르고, 프로젝트 참조가 필요 없고, 이 저장소의 명명 규약이 일관되어 실용적으로 충분하다.
 
-알려진 한계: `var t = dep.Type; t.Contains("TABLE")`은 놓친다. 가드는 휴리스틱이며, 이 형태는 자연스러운 리팩터링에서 나오지 않는다.
+알려진 한계: `var t = dep.Type; t.Contains("TABLE")`은 놓친다. 가드는 휴리스틱이다.
+
+**정정(최종 브랜치 리뷰, 발견 1):** 위 문단은 원래 "이 형태는 자연스러운 리팩터링에서 나오지 않는다"고 적었다. 이 코드베이스에 대해 사실이 아니다 — `dep.Type.ToUpper().Contains(...)`처럼 정규화 호출로 감싼 수신자는 실제로 나온다. 이 저장소가 타입 문자열을 정규화한 뒤 매칭하는 관용구를 이미 세 곳에서 쓰기 때문이다(`DependencyAnalysisOrchestrator.cs:329`, `MetadataExporter.cs:160`, `DbMetadataService.cs:216` — 전부 `Trim().ToUpperInvariant()` 뒤에 매칭한다). 이 형태 중 어느 곳에 `Contains` 기반 분기 하나만 덧붙이는 것이 다음 편집으로 자연스러웠을 것이고, 스캐너가 감싼 수신자를 못 보면 게이트가 침묵한 채 원래의 TVF 오분류 결함이 되살아났을 것이다. 스캐너는 이후 Trim/ToUpper/ToUpperInvariant/ToLower/ToLowerInvariant로 감싼 수신자를 풀어(중첩 포함) 안쪽 수신자로 재판정하도록 고쳐졌고, `Contains` 외에 `IndexOf`/`StartsWith`/`EndsWith`도 같은 판정으로 다루도록 넓어졌다. `var t = dep.Type; t.Contains(...)`처럼 이름이 다른 지역 변수로 옮겨 담는 형태는 여전히 놓친다 — 이것까지 잡으려면 대입 체인을 추적해야 하고, 실측으로는 이 코드베이스에 이 형태가 없다.
 
 `SqlObjectTypeClassifier.cs`는 스캐너가 건너뛴다. 그 파일이 정책의 구현체다.
 
@@ -167,3 +169,5 @@ ScriptDom이 이미 `]]`를 해제하므로 입력에 `]]`는 오지 않는다. 
 1. **`DependencyInfo.Type`의 타입화** — 문자열 가드가 아니라 타입 시스템으로 원시 판정을 차단한다. 근본적이지만 직렬화·스냅샷 호환성까지 번진다.
 2. **프롬프트 계약 강화 3건** — UPDATE 컬럼 매핑표, `UPDATE ... FROM` 자기참조 의미, `SET` 절 동시평가.
 3. **명세서 재발 방지 검증 게이트** — 남은 항목 중 가장 시급하다는 것이 선행 브랜치 최종 리뷰어의 평가다. 14개 명세서가 88~94점으로 검증을 통과하는 동안 이번 결함들이 하나도 걸리지 않았고, 선행 브랜치의 어떤 변경도 같은 종류의 허위 "컬럼 없음" 주장이 다시 만점권으로 통과하는 것을 막지 못한다.
+4. **정확 일치 테이블 두 곳을 분류기로 통합**(출처: 최종 브랜치 리뷰) — `DependencyAnalysisOrchestrator.TryParseCodeObjectType`과 `MetadataExporter.NormalizeCodeObjectDdlFolder`가 `SqlObjectTypeClassifier` 밖에서 각자 정확 일치 `switch` 테이블로 코드 객체 여부를 판정한다. 두 권위가 가장자리에서 어긋난다 — `"P"`/`"FN"`/`"TF"`는 두 테이블에서 Procedure/Function이지만 분류기에서는 `Unresolved`이고, 반대로 `AGGREGATE_FUNCTION`/`EXTENDED_STORED_PROCEDURE`는 분류기에서는 코드 객체이지만 두 테이블은 모른다. `MetadataExporter`는 같은 `procedures`/`functions` 판정에 두 메커니즘을 함께 돌리고 있다(159행의 `NormalizeCodeObjectDdlFolder`와 341행의 분류기 위임). 스캐너는 원시 부분 문자열 판정만 잡으므로 이 정확 일치 테이블은 못 본다 — 오늘 오작동하지 않는 것은 실제 `Type` 값이 전부 `type_desc`에서 오기 때문이지, 게이트가 막고 있어서가 아니다.
+5. **`DbMetadataService`의 재귀 의존성 경로에 대한 동작 테스트 부재**(출처: 최종 브랜치 리뷰) — §4는 "위임이 통째로 사라지는" 경우를 각 지점의 동작 테스트가 잡는다고 적었지만, `DbMetadataService`의 재귀 의존성 경로는 라이브 DB가 있어야 실행되어 커버되지 않는다. 그래서 이 경로에서 분류기 위임을 통째로 되돌리는 편집이 있어도 지금은 테스트로 잡히지 않는다.

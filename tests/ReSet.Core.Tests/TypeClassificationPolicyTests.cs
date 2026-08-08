@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Linq;
 using Xunit;
 
@@ -140,6 +142,115 @@ class C
 class D { public string Type { get; set; } }";
 
         Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_FlagsAContainsCallOnAnUpperCasedTypeReceiver()
+    {
+        // 최종 브랜치 리뷰 발견 1: 감싼 수신자가 게이트를 우회했다.
+        // dep.Type.ToUpper()는 여전히 dep.Type을 판정하는 것이고, 정규화 호출이
+        // 껴 있다는 이유로 놓치면 원래의 TVF 오분류 결함이 되살아난다.
+        var source = @"
+class C
+{
+    bool M(D dep) => dep.Type.ToUpper().Contains(""TABLE"");
+}
+class D { public string Type { get; set; } }";
+
+        var offender = Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+        Assert.Contains("dep.Type.ToUpper().Contains", offender.Expression);
+    }
+
+    [Fact]
+    public void Scanner_FlagsAContainsCallOnANestedlyNormalizedTypeReceiver()
+    {
+        // 정규화 호출이 여러 겹 이어져도(Trim().ToUpperInvariant()) 전부 풀려야
+        // 한다. 이 저장소의 정규화 관용구가 실제로 이 모양이다
+        // (DependencyAnalysisOrchestrator.cs:329, MetadataExporter.cs:160,
+        // DbMetadataService.cs:216이 전부 Trim().ToUpperInvariant()를 쓴다).
+        var source = @"
+class C
+{
+    bool M(D dep) => dep.Type.Trim().ToUpperInvariant().Contains(""VIEW"");
+}
+class D { public string Type { get; set; } }";
+
+        Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_FlagsAnIndexOfCallOnATypeReceiver()
+    {
+        // Contains 외에 IndexOf도 같은 판정이다 - 둘 다 타입 문자열에 대한
+        // 부분 문자열 판정이며 수신자 관문이 정밀도를 지킨다.
+        var source = @"
+class C
+{
+    bool M(D dep) => dep.Type.IndexOf(""PROCEDURE"") >= 0;
+}
+class D { public string Type { get; set; } }";
+
+        Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_DoesNotFlagAStartsWithCallWithALiteralOutsideTheSet()
+    {
+        // 리터럴 관문이 StartsWith 확장 이후에도 여전히 작동하는지 고정한다.
+        // "SQL_"은 TABLE/VIEW/FUNCTION/PROCEDURE 집합에 없으므로 잡히면 안 된다.
+        var source = @"
+class C
+{
+    bool M(string objectType) => objectType.StartsWith(""SQL_"");
+}";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_DoesNotFlagANormalizedLogTextMatch()
+    {
+        // 수신자 언래핑을 시작하면 logUpper.Trim().Contains("TABLE") 같은 형태도
+        // 생각해야 한다. 언래핑 후 최종 수신자 이름이 여전히 logUpper이므로
+        // (타입 이름이 아니므로) 잡히면 안 된다.
+        var source = @"
+class C
+{
+    bool M(string logUpper) => logUpper.Trim().Contains(""TABLE"");
+}";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void ScanDirectory_ExemptsOnlyTheCanonicalClassifierRelativePath()
+    {
+        // 발견 3: 면제가 파일명 기준이면 src/ 아래 어디에 두든 같은 이름이면
+        // 빠져나간다. 상대 경로 기준으로 바뀌었는지 확인한다.
+        var root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var classifierDir = Path.Combine(root, "ReSet.Core", "Services");
+            Directory.CreateDirectory(classifierDir);
+            File.WriteAllText(
+                Path.Combine(classifierDir, "SqlObjectTypeClassifier.cs"),
+                @"class C { bool M(D dep) => dep.Type.Contains(""TABLE""); } class D { public string Type { get; set; } }");
+
+            var impostorDir = Path.Combine(root, "Somewhere", "Else");
+            Directory.CreateDirectory(impostorDir);
+            File.WriteAllText(
+                Path.Combine(impostorDir, "SqlObjectTypeClassifier.cs"),
+                @"class C { bool M(D dep) => dep.Type.Contains(""TABLE""); } class D { public string Type { get; set; } }");
+
+            var offenders = TypeClassificationPolicyScanner.ScanDirectory(root);
+
+            var offender = Assert.Single(offenders);
+            Assert.Equal("Somewhere/Else/SqlObjectTypeClassifier.cs", offender.RelativePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
