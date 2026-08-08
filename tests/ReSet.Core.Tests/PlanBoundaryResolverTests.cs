@@ -324,6 +324,71 @@ SELECT 1;
             Assert.Equal(2, slices.Steps.Count);
         }
 
+        /// <summary>
+        /// 골격 분할이 실패해도 <c>common/00-architecture.md</c>가 단계 구간을 삼키면 안 된다.
+        /// 이 파일은 모든 회차가 무조건 읽는 항목이라(TaskFileComposer의 "먼저 읽을 것"),
+        /// 문서 끝까지 담으면 이 작업이 없애려던 통짜 문서가 회차마다 한 번씩 되살아나고
+        /// 단계 슬라이스가 그 안에 통째로 중복된다 - 단일 파일 폴백보다도 나쁘다.
+        /// </summary>
+        [Fact]
+        public void Resolve_ShouldNotSwallowStepsIntoArchitecture_WhenSkeletonSplitFails()
+        {
+            var missingVerification = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(missingVerification, LayoutWithSections());
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.True(slices.StepsSplit);
+            Assert.Contains("개요 본문", slices.Architecture);
+            Assert.DoesNotContain("정제된 S01 본문", slices.Architecture);
+            Assert.DoesNotContain("정제된 S02 본문", slices.Architecture);
+
+            // 잘라낸 구간은 steps/*.md가 그대로 덮는다 - 내용이 유실되지 않는다.
+            Assert.Contains("정제된 S01 본문", slices.Steps["S01"]);
+            Assert.Contains("정제된 S02 본문", slices.Steps["S02"]);
+        }
+
+        /// <summary>
+        /// 반대로 단계 분할까지 실패했다면 끊을 기준점이 없다. 그때는 문서 끝까지
+        /// 남겨야 어느 조각에도 속하지 못한 구간이 사라지지 않는다.
+        /// </summary>
+        [Fact]
+        public void Resolve_ShouldKeepWholeDocument_WhenBothSkeletonAndStepSplitFail()
+        {
+            var missingVerification = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(missingVerification, null);
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.False(slices.StepsSplit);
+            Assert.Contains("개요 본문", slices.Architecture);
+            Assert.Contains("정제된 S01 본문", slices.Architecture);
+        }
+
         [Fact]
         public void Resolve_ShouldKeepSkeletonWhole_WhenStepSplitFails()
         {

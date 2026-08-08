@@ -273,10 +273,27 @@ namespace ReSet.Core.Services
 
             if (!allFound)
             {
-                Log.Warning("골격 H2 탐색 실패 - 골격을 통짜로 유지합니다. 단계 분할 여부: {StepsSplit}", steps.Split);
+                // 골격을 통짜로 남기더라도 단계 구간까지 삼키면 안 된다.
+                // common/00-architecture.md는 <b>모든</b> 회차가 무조건 읽는 파일이라
+                // (TaskFileComposer.Compose의 "먼저 읽을 것" 2번), 여기서 문서 끝까지
+                // 담으면 이 작업이 없애려던 85k 토큰짜리 문서가 회차마다 한 번씩
+                // 되살아난다 - 게다가 단계 슬라이스가 그 안에 통째로 중복된다.
+                // 단계 분할이 성공했으면 그 뒤는 steps/*.md가 이미 덮으므로 첫 단계
+                // 헤딩에서 끊는다. (01-step-contract.md는 골격 분할 성공 경로에서만
+                // 만들어지고 끝점이 이미 첫 단계 헤딩이며, 02-data-access-boundary.md는
+                // 계획서가 아니라 DataAccessPolicy에서 오므로 같은 문제가 없다.)
+                var skeletonStart = positions[0] > 0 ? positions[0] : 0;
+                var skeletonEnd = steps.Split && steps.FirstStepLineIndex > skeletonStart
+                    ? steps.FirstStepLineIndex
+                    : lines.Count;
+
+                Log.Warning(
+                    "골격 H2 탐색 실패 - 골격을 통짜로 유지합니다. 단계 분할 여부: {StepsSplit}, 개요 끝 줄: {ArchitectureEnd}",
+                    steps.Split, skeletonEnd);
+
                 return new PlanSlices(
                     preamble,
-                    Join(lines, positions[0] > 0 ? positions[0] : 0, lines.Count),
+                    Join(lines, skeletonStart, skeletonEnd),
                     null,
                     null,
                     steps.Steps,
