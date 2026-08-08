@@ -12,7 +12,8 @@
 
 - 설계 원본: `docs/superpowers/specs/2026-08-08-static-analysis-identity-design.md` (브랜치 `fix/static-analysis-identity`, 커밋 `ef22f57`)
 - 작업 브랜치: `fix/static-analysis-identity` (이미 체크아웃되어 있음)
-- 기준선: `dotnet build` 경고 0건 · 오류 0건, `dotnet test` 1,040건 통과. **모든 태스크가 끝날 때 이 기준선이 유지되어야 한다.**
+- 기준선: `dotnet clean && dotnet build` 경고 **정확히 8건** · 오류 0건, `dotnet test` 1,040건 통과. **모든 태스크가 끝날 때 이 기준선이 유지되어야 한다.**
+- 그 8건은 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602이며 이번 작업 범위 밖이다. 이 저장소의 기존 설계 문서 3건이 같은 값을 기록하고 있다. **증분 빌드는 변경 없는 프로젝트의 경고를 다시 내지 않으므로 경고 수를 증분 빌드로 판정하지 말 것.**
 - **소프트 페일 원칙(PRD §4.2)**: 이번 변경 중 어느 것도 새로운 예외 경로를 만들지 않는다. 해석 실패는 폴백으로 처리하며, 폴백은 반드시 현재 동작과 같거나 더 낫다.
 - **이름을 지어내지 않는다.** DB·스키마 컨텍스트가 없으면 한정하지 않고 그대로 통과시킨다.
 - **베이스 이름만으로 테이블을 병합하지 않는다.** 3-part 전체가 같아야 같은 테이블이다. (`dbo.TPGProperty`와 `PaymentDB.dbo.TPGProperty`는 컬럼 구성이 동일하지만 서로 다른 테이블이다.)
@@ -471,7 +472,7 @@ namespace ReSet.Core.Services
 - [ ] **Step 4: 테스트가 통과하는지 확인한다**
 
 실행: `dotnet test --filter "FullyQualifiedName~StaticAnalysisNormalizerTests"`
-기대: 13건 전부 PASS
+기대: 12건 전부 PASS
 
 - [ ] **Step 5: 커밋한다**
 
@@ -1119,7 +1120,7 @@ namespace ReSet.Core.Services
 - [ ] **Step 6: 빌드와 전체 테스트를 확인한다**
 
 실행: `dotnet build`
-기대: 경고 0건, 오류 0건
+기대: 오류 0건. 경고는 기존 8건(`DbMetadataServiceTests`의 CS8600/CS8602)만 남고 새 경고가 없어야 한다
 
 실행: `dotnet test`
 기대: 실패 0건
@@ -1491,7 +1492,7 @@ END;
 - [ ] **Step 5: 빌드와 전체 테스트를 확인한다**
 
 실행: `dotnet build`
-기대: 경고 0건, 오류 0건
+기대: 오류 0건. 경고는 기존 8건(`DbMetadataServiceTests`의 CS8600/CS8602)만 남고 새 경고가 없어야 한다
 
 실행: `dotnet test`
 기대: 실패 0건
@@ -1715,7 +1716,7 @@ EOF
 - [ ] **Step 6: 빌드와 전체 테스트를 확인한다**
 
 실행: `dotnet build`
-기대: 경고 0건, 오류 0건
+기대: 오류 0건. 경고는 기존 8건(`DbMetadataServiceTests`의 CS8600/CS8602)만 남고 새 경고가 없어야 한다
 
 실행: `dotnet test`
 기대: 실패 0건
@@ -1865,7 +1866,7 @@ EOF
 - [ ] **Step 5: 빌드와 전체 테스트로 기준선을 확인한다**
 
 실행: `dotnet build`
-기대: 경고 0건, 오류 0건
+기대: 오류 0건. 경고는 기존 8건(`DbMetadataServiceTests`의 CS8600/CS8602)만 남고 새 경고가 없어야 한다
 
 실행: `dotnet test`
 기대: 실패 0건
@@ -1909,7 +1910,7 @@ EOF
 
 ## 완료 기준
 
-- `dotnet build`에서 경고 0건, 오류 0건
+- `dotnet clean && dotnet build`에서 오류 0건, 경고 정확히 8건 (기존 `DbMetadataServiceTests`의 CS8600/CS8602)
 - `dotnet test`가 기존 1,040건 + 신규 40건 내외 전부 통과
 - 문서 3종(`docs/architecture.md`, `AGENTS.md`, `README.md`) 동기화 완료
 - 수동 검증 체크리스트 8항목 전부 충족

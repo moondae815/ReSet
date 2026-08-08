@@ -260,7 +260,7 @@ TDD로 진행한다. 각 단위마다 실패하는 테스트를 먼저 쓴다.
 
 ## 완료 기준
 
-- `dotnet build`에서 경고 0건, 오류 0건 (현재 기준선 유지)
+- `dotnet clean && dotnet build`에서 오류 0건, 경고 정확히 8건 (기존 `DbMetadataServiceTests`의 CS8600/CS8602 — 현재 기준선 유지)
 - `dotnet test`가 기존 1,040건 + 신규분 전부 통과
 - 위 문서 4종 동기화 완료
 - 수동 검증 체크리스트 8항목 전부 충족
