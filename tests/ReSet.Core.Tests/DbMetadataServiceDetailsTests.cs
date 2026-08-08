@@ -285,6 +285,19 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("objectDefinition.ObjectKey?.Database", callSite);
             Assert.Contains("objectDefinition.Schema", callSite);
+
+            // 존재 확인만으로는 두 인자가 자리를 바꿔도 (Normalize(analysis,
+            // objectDefinition.Schema, objectDefinition.ObjectKey?.Database)) 잡히지
+            // 않는다 - 두 리터럴이 여전히 callSite 안에 있기 때문이다. 계약(§3)은
+            // 첫 인자가 DB, 둘째가 스키마이므로, 자리가 바뀌면 컴파일은 되지만
+            // 정규화가 조용히 틀린 컨텍스트로 수행된다. 두 리터럴이 서로의 부분
+            // 문자열이 아니므로(하나가 "ObjectKey?.Database"로 끝나고 다른 하나는
+            // "Schema"로 끝난다) 등장 순서를 그대로 인자 순서로 볼 수 있다.
+            var databaseArgIndex = callSite.IndexOf("objectDefinition.ObjectKey?.Database", StringComparison.Ordinal);
+            var schemaArgIndex = callSite.IndexOf("objectDefinition.Schema", StringComparison.Ordinal);
+            Assert.True(
+                databaseArgIndex < schemaArgIndex,
+                "DB 인자(ObjectKey?.Database)는 스키마 인자(Schema)보다 먼저 나와야 한다.");
         }
     }
 }
