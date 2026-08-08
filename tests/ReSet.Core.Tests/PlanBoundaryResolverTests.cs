@@ -571,6 +571,17 @@ SELECT 1;
         }
 
         [Fact]
+        public void FindUncoveredRanges_RangeFullyContainedInEarlierRange_ShouldNotInventGaps()
+        {
+            // 뒤에 정렬된 범위가 앞선 범위 안에 완전히 포함되면 커서가 뒤로 물러나면 안 된다.
+            // 커서가 물러나면 앞선 범위의 꼬리(여기서는 [5, 10))가 덮이지 않은 것처럼 보이는데,
+            // 그 구간은 이미 (0, 10) 조각에 실려 있으므로 다시 실으면 개요에 중복으로 붙는다.
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (0, 10), (2, 5) });
+
+            Assert.Empty(gaps);
+        }
+
+        [Fact]
         public void FindUncoveredRanges_ShouldIgnoreEmptyRanges()
         {
             // End <= Start는 "그 조각은 만들어지지 않았다"는 뜻이다. 덮은 것으로 세지 않는다.
