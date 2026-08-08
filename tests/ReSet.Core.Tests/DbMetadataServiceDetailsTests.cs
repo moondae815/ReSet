@@ -164,14 +164,35 @@ namespace ReSet.Core.Tests
         [InlineData("SQL_TABLE_VALUED_FUNCTION")]
         [InlineData("SQL_INLINE_TABLE_VALUED_FUNCTION")]
         [InlineData("CLR_TABLE_VALUED_FUNCTION")]
-        public void DirectDependencyClassification_TreatsTableValuedFunctionsAsCodeObjects(
+        public void SqlObjectTypeClassifier_TreatsTableValuedFunctionsAsCodeObjects(
             string dependencyType)
         {
             // 분류 판정은 SqlObjectTypeClassifier로 이전되었다(두 private 메서드는
-            // 삭제됨). 여기서는 DbMetadataService가 그 분류기에 위임한다는 것을
-            // 공개 API로 확인한다.
+            // 삭제됨). 여기서는 DbMetadataService가 아니라 그 분류기 자체를
+            // 공개 API로 확인한다. DbMetadataService가 실제로 이 분류기에
+            // 위임하는지는 별도 가드 테스트(DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier)가 확인한다.
             Assert.False(SqlObjectTypeClassifier.IsTableOrView(dependencyType));
             Assert.True(SqlObjectTypeClassifier.IsCodeObject(dependencyType));
+        }
+
+        [Fact]
+        public void DbMetadataService_DelegatesClassificationToSqlObjectTypeClassifier()
+        {
+            // 이 가드가 지키는 불변식: 직접 의존성 경로(703, 726행)와 재귀 경로(819, 835행)
+            // 양쪽 모두 SqlObjectTypeClassifier에 위임해야 한다. 둘 중 하나라도
+            // "rawDep.Type.Contains(...)"나 "directDependency.Type.Contains(...)" 같은
+            // 인라인 부분 문자열 판정으로 되돌아가면, "SQL_TABLE_VALUED_FUNCTION"이
+            // "TABLE"을 포함하기 때문에 TVF가 다시 테이블로 오분류되고
+            // UIF_SettleYMD 같은 함수의 DDL이 다시 수집되지 않는다.
+            var source = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(
+                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
+
+            Assert.Contains("SqlObjectTypeClassifier.IsTableOrView(", source);
+            Assert.Contains("SqlObjectTypeClassifier.IsCodeObject(", source);
+
+            Assert.DoesNotContain("rawDep.Type.Contains(\"TABLE\")", source);
+            Assert.DoesNotContain("directDependency.Type.Contains(", source);
         }
 
         [Theory]
