@@ -31,7 +31,8 @@ namespace ReSet.Core.Services
     /// <param name="Architecture">개요 + Mermaid 흐름도. 골격 분할이 실패하면 계획서 전문.
     /// 골격 분할은 성공했는데 단계 분할이 실패한 경우("단계별 이행 상세" 섹션을 어디서
     /// 자를지 모르는 경우)에는 그 섹션 전체까지 흡수한다 - 잘라낼 기준점이 없는 내용을
-    /// 버리는 것보다는 여기 통짜로 남기는 편이 낫다.</param>
+    /// 버리는 것보다는 여기 통짜로 남기는 편이 낫다. 두 분할이 모두 성공한 경로에서도,
+    /// 다른 어느 조각도 덮지 않은 구간(예: 검증 SQL 뒤 부록)은 전부 여기로 흡수된다.</param>
     /// <param name="StepContract">모든 단계가 공유하는 실행 계약. 잘라내지 못했으면 null.</param>
     /// <param name="Verification">정합성 검증 SQL 세트. 잘라내지 못했으면 null.</param>
     /// <param name="Steps">단계 코드 → 본문. 분할에 실패하면 비어 있다.</param>

@@ -655,6 +655,51 @@ SELECT 1;
         }
 
         /// <summary>
+        /// 골격 분할은 성공했지만 단계 분할이 실패한 경로도 흡수를 탄다. 이 경로는 단계
+        /// 경계를 몰라 "단계별 이행 상세" 섹션 전체를 개요가 통짜로 삼키므로(위 주석 참고),
+        /// covered 목록에 단계 구간이 빠진다 - 그래도 검증 SQL 뒤의 고아 구간은 여전히
+        /// 계산되고 흡수돼야 한다. layout을 null로 줘 단계 경계를 못 찾게 하되, 골격 H2
+        /// 넷은 모두 갖춰 SkeletonSplit은 여전히 성공하게 한다.
+        /// </summary>
+        [Fact]
+        public void Resolve_SkeletonSplitSucceededButStepsSplitFailed_ShouldAbsorbTrailingOrphan()
+        {
+            var document = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+
+## 부록 - 운영 메모
+
+운영 메모 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(document, null);
+
+            Assert.True(slices.SkeletonSplit);
+            Assert.False(slices.StepsSplit);
+            Assert.Contains("운영 메모 본문", slices.Architecture);
+        }
+
+        /// <summary>
         /// 반대로 단계 분할까지 실패했다면 끊을 기준점이 없다. 그때는 문서 끝까지
         /// 남겨야 어느 조각에도 속하지 못한 구간이 사라지지 않는다.
         /// </summary>
