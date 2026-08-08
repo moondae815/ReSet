@@ -75,12 +75,20 @@ flowchart TD
 | | [VerificationDocumentFormatter](../src/ReSet.Core/Services/VerificationDocumentFormatter.cs) | 산출물 상단의 YAML 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·검증 종료 상태)를 렌더링합니다. 진입점은 문서 종류가 아니라 보장 수준으로 나뉘어, 파이프라인을 통과한 명세서·통합 계획서와 파이프라인에 진입한 적 없는 단일 SP 계획서·정산 정책서를 구분하며, Critic 점수는 종료 상태가 통과 또는 품질 미달일 때만 싣습니다. |
 | | [VerificationBanner](../src/ReSet.Core/Services/VerificationBanner.cs) | L1 미통과, 품질 미달, 리뷰 미수행, 참조 미완, 단계 하한 미달, 목차 커버리지 누락 상태를 문서 본문 앞의 경고 배너로 조립하는 단일 렌더러. `StepFloorViolations`와 `UncoveredProcedures`는 예외입니다 — 문서 자체는 `Passed`로 종료돼도, 전자는 개별 단계가 재시도 후에도 기계적 하한을 못 채웠음을, 후자는 목차의 어느 단계도 특정 원본 프로시저를 다루겠다고 선언하지 않았음을 각각 조용히 알립니다. 두 사실은 다릅니다 — 부실한 단계는 최소한 존재는 알리지만, 커버되지 않은 프로시저는 최종 문서 어디에도 흔적이 없습니다. |
 | | [OutputPathResolver](../src/ReSet.Core/Services/OutputPathResolver.cs), [SpecificationLinker](../src/ReSet.Core/Services/SpecificationLinker.cs) | 현재/외부 DB를 구분한 객체별 출력 경로를 계산하고, 성공한 직접 참조 객체에만 상대 명세서 링크를 생성합니다. |
-| | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 재귀 분석에서는 객체별 표준 DDL·의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 통합 배치(Job) 분석 단계에서는 Agentic Workflow 지시서 및 `AbstractSettleTasklet.cs` 추상 템플릿을 동적 생성하여 외부 코딩 에이전트용 지시서 번들(`MigrationInstructions.md`, `todo.md`)을 구성합니다. |
-| | [DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) | SQL/ORM 데이터 액세스 경계 규칙 문구를 단독 소유하는 정적 클래스. `InstructionRules`는 마이그레이션 지시서 5장에, `VerificationCriteria`는 L2 Gap 판정 프롬프트 5번 항목에, `TaskletOrmComment`는 `AbstractSettleTasklet` 스텁 주석에 실려 `MetadataExporter`와 `ValidatorAiService`가 동일한 규칙을 공유하게 합니다. |
+| | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 재귀 분석에서는 객체별 표준 DDL·의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 통합 배치(Job) 분석 단계에서는 언어별 기반 계약 스텁(`AbstractSettleTasklet`, `SettleContracts` 등)을 내보내고, 지시서 번들 구성 자체는 `InstructionBundleWriter`에 위임합니다. |
+| | [DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) | SQL/ORM 데이터 액세스 경계 규칙 문구와 생성 프로젝트용 테스트·계약 스텁을 단독 소유하는 정적 클래스. `InstructionRules`는 진입점 지시서에, `VerificationCriteria`는 L2 Gap 판정 프롬프트 5번 항목에, `TaskletOrmComment`는 `AbstractSettleTasklet` 스텁 주석에 실립니다. `ArchitectureTestStub`·`RepositoryContractStub`은 대상 언어에 따라 NetArchTest(C#) 또는 ArchUnit(Java) 본문을 각각 별도 상수로 내보냅니다 — 한쪽을 치환해 다른 쪽을 만들면 컴파일되지 않기 때문입니다. |
+| | [PlanBoundaryResolver](../src/ReSet.Core/Services/PlanBoundaryResolver.cs) | 확정된 계획서를 골격·단계·검증 조각으로 자르는 경계 결정기. 생성 단계의 조각은 **경계 앵커로만** 쓰고 본문은 언제나 최종 정제 문서에서 잘라냅니다(조각이 나온 뒤에도 정제·자가 교정·구제 채택으로 문서가 계속 바뀌기 때문). 앵커 → 단계 코드 → 단일 파일의 3단 폴백을 거치며, 단계 하나라도 경계를 못 찾으면 부분 분할을 남기지 않고 전체를 단일 파일로 되돌립니다. |
+| | [MarkdownSectionLocator](../src/ReSet.Core/Services/MarkdownSectionLocator.cs) | 코드 펜스 안의 헤딩을 오인하지 않는 마크다운 섹션 탐색기. 닫히지 않은 펜스에 대한 재스캔 폴백을 포함하며 `BatchPlanAssembler`와 경계 결정기가 공유합니다. |
+| | [PlanLayout](../src/ReSet.Core/Models/PlanLayout.cs) | 계획서를 만든 조각(골격·단계별 섹션·단계 목록·하한 미달 사유)을 산출물 작성부까지 나르는 계약. `ConsolidatedPipelineResult`에 기본값 `null`로 실려, 단일 호출로 생성된 계획서도 그대로 흐릅니다. |
+| | [InstructionEntryPointComposer](../src/ReSet.Core/Services/InstructionEntryPointComposer.cs) | 진입점 지시서를 조립하는 순수 함수. 검증 배너 → 지침 → 읽기 계약 → 기술 스택 → 목차 순서가 분할 성공 여부와 **무관하게** 고정이라, 분할이 실패해도 지켜야 할 규칙이 문서 앞에 남습니다. |
+| | [TaskFileComposer](../src/ReSet.Core/Services/TaskFileComposer.cs) | 회차별 작업 지시서(`task-NN-<코드>.md`)를 조립하는 순수 함수. 한 회차가 읽어야 할 것만 가리키며, 스키마 의존성은 그 단계의 `TargetTables`로 좁힙니다. AI가 만든 단계 코드를 파일명에 그대로 쓰지 않도록 정화하는 책임도 함께 집니다. |
+| | [InstructionBundleWriter](../src/ReSet.Core/Services/InstructionBundleWriter.cs) | 번들을 디스크에 배치하는 I/O 경계. `common/`·`steps/`·`verification/`과 `agent/` 직하의 회차 지시서를 쓰고, 이전 실행이 남긴 조각 파일을 표적 정리합니다. `agent/` 직하 파일은 건드리지 않습니다 — 진행 상태와 에이전트 산출물이 그곳에 살기 때문입니다. |
+| | [AgentProgressStore](../src/ReSet.Core/Services/AgentProgressStore.cs) | 회차 진행 상태(`progress.json`)를 도구가 소유하게 하는 저장소. `todo.md`는 이 상태에서 렌더링되는 파생 산출물이라, 에이전트가 자기 체크리스트를 채점하지 않습니다. 쓰기는 임시 파일 교체로 원자적이며, 읽지 못한 상태 파일은 지우지 않고 `.corrupt`로 보존합니다. |
+| | [CodegenArtifactNaming](../src/ReSet.Core/Services/CodegenArtifactNaming.cs) | 조립 산출물의 이름 규약을 단독 소유. 검증기의 자동 탐색이 짝지을 수 있는 이름 목록과, 에이전트에게 주는 안내 문구를 같은 곳에서 만들어 둘이 어긋나지 않게 합니다. |
 | | [LocalAiConsolidator](../src/ReSet.Core/Services/LocalAiConsolidator.cs) | 로컬 모델(Ollama 등)의 논리 구조 분석(Deconstruct) 단계에서 분할 추출된 개별 구조화 JSON 청크(Chunk)들을 취합해 단일 `DeconstructedSpLogic` 객체로 병합하는 통합기. |
 | | [CacheManager](../src/ReSet.Core/Services/CacheManager.cs) | SHA-256 해시 기반 로컬 증분 분석 캐싱, 글로벌 색인(`.sp_cache_index.json`) 보존/조회 및 레거시 격리 캐시 자동 마이그레이션 관리. |
 | | [ExternalCliCodingEngine](../src/ReSet.Core/Services/ExternalCliCodingEngine.cs) | CLI 기반 외부 코딩 에이전트(Claude Code, agy 등) 기동. 대화형은 부모 콘솔 스트림을 상속하고 무인 배치는 stdin을 닫고 stderr를 캡처하며, CancellationToken 기반 강제 프로세스 정리를 수행합니다. |
-| | [ArgumentTemplateResolver](../src/ReSet.Core/Services/ArgumentTemplateResolver.cs) | 코딩 엔진 인자 템플릿의 `{instructions}`·`{jobDir}` 자리표시자를 절대 경로로 단일 패스 치환. 따옴표는 템플릿이 소유하므로 공백이 든 경로도 인자 하나로 유지됩니다. |
+| | [ArgumentTemplateResolver](../src/ReSet.Core/Services/ArgumentTemplateResolver.cs) | 코딩 엔진 인자 템플릿의 `{instructions}`·`{jobDir}`·`{specRoot}` 자리표시자를 절대 경로로 단일 패스 치환. 따옴표는 템플릿이 소유하므로 공백이 든 경로도 인자 하나로 유지됩니다. `{specRoot}`가 따로 있는 이유는 원본 명세서가 Job 루트의 하위가 아니라 형제이기 때문입니다(4.11절). |
 | | [ArtifactChangeDetector](../src/ReSet.Core/Services/ArtifactChangeDetector.cs) | 기동 전후 작업 디렉터리를 재귀 스냅샷해 산출물 변화 여부를 판정. `bin`·`obj` 등 빌드 부산물은 제외해 빌드만 돌린 실행이 성공으로 잡히지 않게 합니다. |
 | | [CodegenRunResult](../src/ReSet.Core/Models/CodegenRunResult.cs) | 엔진 1회 기동의 결과(산출물 변화 여부, 종료 코드, 실패 분류, 진단 원문). 성공 여부를 단정하는 속성을 두지 않아 판단을 호출자에게 남깁니다. |
 | | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |
@@ -89,6 +97,7 @@ flowchart TD
 | **ReSet.Validator.Core**<br/>(정합성 검증 레이어) | [CodegenWorkflowOrchestrator](../src/ReSet.Validator.Core/Services/CodegenWorkflowOrchestrator.cs) | 외부 코딩 에이전트(Actor)와 코드 검증기(Critic) 간의 자가 수정 워크플로우 루프를 전담하는 독립 오케스트레이터. |
 | | [CodegenLoopPolicy](../src/ReSet.Validator.Core/Services/CodegenLoopPolicy.cs) | 기동 결과로 자가 수정 루프의 진행 여부를 판단하는 순수 함수(검증 진행 / 검증 생략 후 재시도 / 즉시 중단). 검증기에 의존하지 않아 프로세스 없이 조합을 전부 테스트할 수 있습니다. |
 | | [CodegenWorkflowResult](../src/ReSet.Validator.Core/Models/CodegenWorkflowResult.cs) | 자가 수정 워크플로우의 최종 결과. 재시도 불가 실패로 루프를 끊은 경우 중단 사유를 함께 전달합니다. |
+| | [CodegenStage](../src/ReSet.Validator.Core/Models/CodegenStage.cs) | 코드 생성 회차 하나와 그 목록(`CodegenStagePlan`). 회차 목록은 번들이 **실제로 쓴** 작업 지시서에서만 도출됩니다 — 두 곳이 각자 회차를 세면 진행 상태가 존재하지 않는 회차를 가리키게 되기 때문입니다. |
 | | [CodeVerificationOrchestrator](../src/ReSet.Validator.Core/Services/CodeVerificationOrchestrator.cs) | L1 정적 검사(매핑 경로가 디렉토리일 경우 하위 소스코드 전체 병합) -> L2 AI 논리 Gap 판정(Critic 역할 및 지정된 effort 적용) -> L3 개발자 승인을 조율하는 단방향 검증 오케스트레이터. |
 | | [FileMappingService](../src/ReSet.Validator.Core/Services/FileMappingService.cs) | 마이그레이션된 소스 파일과 통합 작업 계획서(`BatchMigrationPlan.md`)를 스캔하여 1:1로 매핑하고 경로를 자동 보정하는 서비스. |
 | | [ValidatorAiService](../src/ReSet.Validator.Core/Services/ValidatorAiService.cs) | AI에게 설계서와 소스코드를 전달하여 의미론적 일치성을 검사하고 GapReport 구조로 파싱하는 서비스, TDD용 단위 테스트 및 ArchUnit 아키텍처 검증 코드 자동 생성. |
@@ -244,7 +253,7 @@ graph TD
         Human -- "2. 피드백" --> Regen["구조 변경이면 목차부터 재수립,<br/>아니면 사용자가 지목한 단계만 분할 재생성<br/>(지목이 없거나 골격을 고르면 전 단계)<br/>L2를 다시 거치지 않으므로<br/>종료 상태를 리뷰 미수행으로 되돌림"]
         Regen --> Human
         Human -- "3. 취소" --> AbortB["저장 없이 이탈"]
-        SavePlan --> Bundle["지시서 번들 생성<br/>agent/MigrationInstructions.md, todo.md<br/>(계획서 검증 상태를 0번 섹션에 명시)"]
+        SavePlan --> Bundle["지시서 번들 생성<br/>진입점 + common/ + steps/ + 회차별 task-*.md<br/>(계획서 검증 상태를 0번 섹션에 명시)"]
     end
 
     Bundle --> ToCodegen["코딩 에이전트 구동 경로로 연결 (3.3절)"]
@@ -270,11 +279,11 @@ sequenceDiagram
     participant ECE as External Coding CLI (Claude)
     participant VAL as Validator Core (CodeVerificationOrchestrator)
 
-    CLI->>CLI: 통합 배치 설계서 확정 후 지시서(MigrationInstructions.md) 및 todo.md 생성
+    CLI->>CLI: 통합 배치 설계서 확정 후 지시서 번들 생성 (진입점·공통 문서·단계 본문·회차별 task-*.md·progress.json)
     Note over CLI: 설정된 대상 언어(MigrationSettings:TargetLanguage)를 지시서에 각인하고 테스트/프로젝트 구조 생성 책임은 에이전트에 자율 위임
-    CLI->>RC: 지시서 경로와 코드 생성 디렉터리를 넘겨 자가 수정 루프 위임
-    loop 자가 수정 루프 (최대 MaxL2Attempts 회)
-        RC->>ECE: 코딩 에이전트 기동 (지시서 및 TDD 태스크 계획서 전달)
+    CLI->>RC: 회차 목록과 코드 생성 디렉터리를 넘겨 순차 회차 실행 위임
+    loop 회차 (0회차 골격 ➔ 단계 1..N ➔ 조립), 각 회차마다 최대 MaxL2Attempts 회
+        RC->>ECE: 코딩 에이전트 기동 (그 회차의 task-*.md 하나만 전달)
         ECE->>ECE: 소스코드 파일 생성/수정, 자체 테스트 구조 구축 및 단위테스트 수행
         alt 자체 빌드 또는 단위테스트 실패 (L0 실패)
             ECE->>ECE: 오류 분석 후 자체 자가 디버깅 시도
@@ -287,20 +296,23 @@ sequenceDiagram
             else 산출물 없음 + 그 외 원인
                 Note over RC,ECE: 검증을 건너뛰고 지시서를 그대로 둔 채 재기동 (연속 2회 초과 시 중단)
             else 산출물 있음
-                RC->>VAL: 생성된 소스코드 로드 및 L1 정적 검증 수행
+                RC->>VAL: 그 회차의 산출물만 범위로 잡아 L1 정적 검증 수행
+                Note over RC,VAL: 0회차는 대조할 설계서가 없어 검증을 걸지 않고, 조립 회차는 모든 단계가 통과했을 때만 Job 전체 L2를 건다
                 alt L1 정적 검증 실패 (구문·중괄호 쌍 오류, 트랜잭션 참여 위반 등)
-                    RC->>RC: 지시서 하단에 [L1 에러 피드백] 추가
+                    RC->>RC: 그 회차의 task-*.md 하단에 [L1 에러 피드백] 추가
                     Note over RC,ECE: L2 AI 검증 건너뛰고 즉시 재수정 요청 (L1 Shortcut)
                 else L1 정적 검증 성공
                     RC->>VAL: L2 AI 의미론적 일치성 분석 수행
                     alt L2 검증 결과 불일치 (MISMATCH / PARTIAL)
-                        RC->>RC: 지시서 하단에 [L2 Gap Report & Suggestions] 추가
+                        RC->>RC: 그 회차의 task-*.md 하단에 [L2 Gap Report & Suggestions] 추가
                     else L2 검증 결과 일치 (MATCH)
-                        Note over RC,ECE: 자가 수정 루프 성공 탈출
+                        Note over RC,ECE: 이 회차 통과, progress.json에 기록 후 다음 회차로
                     end
                 end
             end
         end
+        RC->>RC: 회차 결과를 progress.json에 기록하고 todo.md를 다시 렌더링
+        Note over RC: 한 회차가 실패해도 사유를 남기고 다음 회차로 넘어간다. 다만 쿼터 소진·미인증처럼 회차와 무관한 실패는 남은 회차를 중단한다.
     end
 ```
 
@@ -607,6 +619,16 @@ graph TD
 * **누락 경고의 이중 고지**: 수집된 경고는 TUI 콘솔에 즉시 알리는 동시에 문서 최상단에 `[!WARNING]` 블록으로 병합됩니다. 마스터 데이터가 비어 있으면 정책 추론의 근거 자체가 사라지므로, 결과 문서만 보고도 어느 테이블을 보완해야 하는지 알 수 있어야 하기 때문입니다.
 * **검증 파이프라인 밖의 산출물**: 이 문서는 L1도 L2도 거치지 않고 AI 응답을 그대로 담습니다. `FormatUnverifiedDocument`로 렌더링되어 '검증 없음'으로 표기되며, SP 정의와 프로파일링 데이터에서 직접 생성되어 인용할 근거 명세서가 없으므로 근거 상태 줄도 내지 않습니다(4.4.4절). 출력 루트 바로 아래에 `{Job이름}_Settlement_Policy_Rulebook.md`로 저장되고, 다른 경로의 입력으로 이어지지 않는 종착 산출물입니다.
 
+### 4.11. 지시서 번들 분할과 회차 단위 코드 생성 (Instruction Bundling & Staged Codegen)
+외부 코딩 에이전트에게 계획서 전체를 한 번에 넘기던 경로를, 읽을 것과 실행 단위를 함께 쪼개 넘기는 경로로 바꾼 메커니즘입니다. 단일 문서 경로는 에이전트의 컨텍스트 한도를 구조적으로 넘어섰습니다 — 지시서와 그 지시서가 읽으라고 지시하는 명세서·DDL을 합치면 한 번의 기동이 소비해야 할 양이 한도를 초과했고, 지켜야 할 지침은 문서 뒤쪽에 있어 파일 읽기 절단선 너머로 밀려나 있었습니다.
+
+* **경계는 앵커로만, 본문은 최종 문서에서**: 계획서는 이미 골격 1회와 단계별 1회의 호출로 조각내어 생성됩니다(4.4.5절). 그 조각을 산출물에 그대로 싣지 않고 **헤딩 위치를 찾는 앵커로만** 쓰고, 본문은 언제나 정제·자가 교정·구제 채택이 모두 끝난 최종 계획서에서 잘라냅니다. 조각이 나온 뒤에도 문서는 계속 바뀌므로, 조각 본문을 실으면 계획서와 단계 문서가 조용히 달라집니다.
+* **부분 분할 금지**: 단계 하나라도 경계를 찾지 못하면 나머지만 쪼개지 않고 전체를 단일 파일 폴백으로 되돌립니다. 비어 있는 단계 문서가 조용히 생기는 것이 가장 나쁜 결과이기 때문입니다. 골격 분할과 단계 분할은 독립적으로 성패가 갈리며, **어느 쪽이 실패해도 지침을 문서 앞으로 옮기는 순서 교정은 항상 적용됩니다** — 분기와 무관하게 진입점 조립 순서가 고정되어 있어 구조적으로 보장됩니다.
+* **회차 단위 순차 실행**: 코드 생성은 0회차(골격·DI·설정) ➔ 단계 1..N ➔ 조립의 순차 회차로 돌며, 각 회차는 자기 `task-*.md` 하나만 받습니다. 회차 하나가 실패해도 사유를 기록하고 다음 회차로 넘어가, 한 단계의 실패가 전체 실행을 무효로 만들지 않습니다. 다만 쿼터 소진·미인증·툴 권한 거부처럼 회차와 무관한 실패는 남은 회차를 중단합니다 — 다음 회차도 같은 벽에 부딪힐 것이 확실하기 때문입니다.
+* **회차별 검증 범위**: 검증은 그 회차가 만든 산출물만 대상으로 삼습니다. 검증할 대상을 찾지 못한 회차는 통과가 아니라 실패로 기록됩니다 — "검증할 것이 없어서 통과"와 "실제로 통과"를 구별하지 못하면 코드가 생성되지 않은 회차가 게이트를 통과합니다. 0회차는 대조할 설계서가 없어 검증을 걸지 않고 산출물 생성 여부만 보며, 조립 회차는 모든 단계가 통과했을 때만 Job 전체 L2를 걸고 그렇지 않으면 사유를 남기고 건너뜁니다.
+* **명세서 접근 범위**: 원본 명세서는 `<출력루트>/Procedures/<스키마.이름>/docs/Spec.md`에, Job 루트는 `<출력루트>/Jobs/<Job이름>`에 있어 **서로 형제**입니다. 회차 지시서가 상대 경로로 명세서를 가리키므로 `{jobDir}` 하나로는 덮이지 않아, 무인 배치 인자에 `{specRoot}`(= `<출력루트>/Procedures`)를 따로 엽니다. 출력 루트 전체가 아니라 `Procedures/`만 여는 이유는, 통째로 열면 다른 Job의 번들과 진행 상태까지 쓰기 범위에 들어오기 때문입니다.
+* **AI가 만든 이름을 파일명으로 쓰지 않기**: 단계 코드는 AI가 생성한 목차에서 오므로 경로 구분자나 `..`가 들어올 수 있습니다. 파일명으로 쓰기 전에 영숫자·`_`·`-`만 남기도록 정화하며, 정화 결과가 충돌하면 부분 분할을 만들지 않고 분할 전체를 포기합니다.
+
 ---
 
 ## 5. TUI/CLI 부가 기능 및 복구 파이프라인 (Secondary Features)
@@ -618,8 +640,10 @@ graph TD
 * **순차 단일 선택 루프**: 다중 선택 UI 컴포넌트가 사용자의 선택 물리적 입력 순서를 리턴 목록에 보장하지 않는 한계를 극복하기 위해, 배치 전환 시나리오의 단계별 실행 흐름에 맞게 사용자가 목록에서 순서대로 하나씩 SP를 선택해 큐(Queue)에 적재하고 최종 `[-- 완료 --]` 메뉴 선택 시 루프를 종료해 물리적 배치 전환 순서 정합성을 완벽히 확보합니다.
 
 ### 5.3. 외부 코딩 에이전트 연동용 마이그레이션 지시서 번들링 및 자동 기동 브릿지
-* **마이그레이션 지시서 패키징**: 최종 승인된 통합 배치 계획과 개별 SP의 명세서, 참조하는 DDL 및 테이블 스키마 정보를 하나의 마크다운 파일(`agent/MigrationInstructions.md`)로 빌드하여 외부 에이전트 복사/붙여넣기용 컨텍스트 프롬프트를 명시해 추출합니다. 지시서 5장에는 [DataAccessPolicy.InstructionRules](../src/ReSet.Core/Services/DataAccessPolicy.cs)가 생성하는 SQL/ORM 경계 규칙이 삽입되고, 함께 생성되는 `AbstractSettleTasklet.cs` 스텁에는 `TaskletOrmComment`가 ORM 사용 시 지켜야 할 커넥션/트랜잭션 참여 방법을 실행 코드가 아닌 주석으로만 남깁니다.
-* **대화형/무인 배치 인자 분리**: 엔진 인자는 `Arguments`(대화형)와 `BatchArguments`(무인)로 나뉩니다. 대화형 TUI 형식은 무인 실행에서 TTY를 열지 못해 종료 코드 0인 채 조용히 실패하므로 폴백하지 않으며, `BatchArguments`가 비면 그 엔진은 무인 배치 미지원으로 간주해 기동 전에 거부합니다. 지시서가 작업 디렉터리 바깥에 있으므로 `{jobDir}` 자리표시자로 접근 범위를 열어 줍니다.
+* **마이그레이션 지시서 번들 구성**: 최종 승인된 통합 배치 계획을 하나의 거대한 마크다운으로 넘기지 않고, 진입점 지시서(`agent/MigrationInstructions.md`)와 공통 문서(`agent/common/`), 단계 본문(`agent/steps/<코드>.md`), 회차별 작업 지시서(`agent/task-NN-<코드>.md`)로 나눠 씁니다. 진입점에는 [DataAccessPolicy.InstructionRules](../src/ReSet.Core/Services/DataAccessPolicy.cs)가 생성하는 SQL/ORM 경계 규칙이 삽입되고, 함께 생성되는 `AbstractSettleTasklet` 스텁에는 `TaskletOrmComment`가 ORM 사용 시 지켜야 할 커넥션/트랜잭션 참여 방법을 실행 코드가 아닌 주석으로만 남깁니다. 나누는 이유와 회차 실행 방식은 4.11절에 있습니다.
+* **회차 진행 상태의 소유권**: `agent/progress.json`은 도구가 쓰고 `agent/todo.md`는 그 상태에서 렌더링되는 파생 산출물입니다. 에이전트에게 자기 체크리스트를 채점하게 하면 신뢰성이 의심되는 주체가 유일한 완료 기록을 쓰게 되므로, 진행 상태를 도구 쪽으로 옮겼습니다. 상태 파일은 임시 파일 교체로 원자적으로 쓰이고, 읽지 못한 파일은 덮어쓰지 않고 `.corrupt`로 보존됩니다.
+* **대화형/무인 배치 인자 분리**: 엔진 인자는 `Arguments`(대화형)와 `BatchArguments`(무인)로 나뉩니다. 대화형 TUI 형식은 무인 실행에서 TTY를 열지 못해 종료 코드 0인 채 조용히 실패하므로 폴백하지 않으며, `BatchArguments`가 비면 그 엔진은 무인 배치 미지원으로 간주해 기동 전에 거부합니다. 지시서가 작업 디렉터리 바깥에 있으므로 `{jobDir}` 자리표시자로 접근 범위를 열어 주고, 원본 명세서는 Job 루트의 하위가 아니라 형제이므로 `{specRoot}`로 따로 열어 줍니다(4.11절).
+* **기존 지시서로 재기동할 때의 분류**: 스탠드얼론 메뉴가 고른 지시서 파일은 실행 전에 레거시 단일 문서인지 회차 번들인지 판정됩니다. 번들이면 디스크의 `steps/`에서 회차 목록을 복원해 회차 경로로 보내고, 번들인데 복원이 성립하지 않으면 전체 Job 경로로 떨어뜨리지 않고 사유를 설명하며 거부합니다 — 회차용 문서를 전체 Job 경로에 먹이는 조합만은 만들지 않기 위해서입니다.
 * **모드별 콘솔 스트림 처리**: 대화형에서는 자식 프로세스의 입출력을 숨기지 않고 부모 콘솔 스트림을 상속 공유(`RedirectStandardInput/Output = false`)하여 자연어 상호작용과 수동 승인 프롬프트를 동일 콘솔에서 수행합니다. 무인 배치에서는 CLI가 대화형으로 오인하지 않도록 stdin을 닫고 stderr를 캡처해 실패 원인 분류에 사용하되, 진행 상황이 CI 로그에 남도록 stdout은 양쪽 모두 상속합니다.
 * **취소 및 프로세스 강제 정리**: 취소 토큰(`CancellationToken`) 수신 시 윈도우/리눅스 환경의 좀비 프로세스 방지를 위해 `process.Kill(true)`을 구동해 외부 에이전트 프로세스 트리 전체를 강제 정리합니다. 인자의 따옴표는 치환기가 아니라 템플릿이 소유하며, 자리표시자를 감싸는 형태(`--add-dir "{jobDir}"`)로 두어 공백이 든 경로도 인자 하나로 유지됩니다.
 * **자가 수정 피드백 루프(Self-Correction Loop) 및 TDD L0 검증**: 코딩 에이전트 기동 시 타겟 단위 테스트 및 아키텍처 제약 테스트를 미리 생성해 배포하고, 빌드/테스트(L0) 성공 통과 시 정적 린터(L1) 및 AI 의미론적 대조(L2)를 거치며 스스로 코드를 고치는 자가 수정 루프(Self-Correction Loop) 브릿지를 탑재하여 최종 코드 품질을 엄격히 관리합니다.
@@ -634,4 +658,4 @@ graph TD
 * **콘솔 UI 파괴 방지**: Spectre.Console 진행 바 및 TUI 화면이 로그 텍스트 출력으로 인해 지저분하게 깨지는 현상을 원천 방어하기 위해 Serilog의 콘솔 출력을 비활성화하고 **오직 파일 전용(File Sink)으로만 로그를 기록**하도록 제한합니다.
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
 
-<!-- synced-through: dbaf3b9 -->
+<!-- synced-through: b2fbb1e -->
