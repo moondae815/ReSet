@@ -11,6 +11,9 @@ using Xunit;
 
 namespace ReSet.Core.Tests
 {
+    // 전역 Serilog.Log.Logger를 교체하는 테스트가 있다. 클래스 간 병렬 실행에서
+    // 다른 클래스의 복원과 겹치면 임시 로거가 영구히 남으므로 한 묶음으로 직렬화한다.
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class FileMappingServiceScopeTests : IDisposable
     {
         private readonly string _root;

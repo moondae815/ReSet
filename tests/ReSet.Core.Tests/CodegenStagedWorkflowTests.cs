@@ -28,6 +28,9 @@ namespace ReSet.Core.Tests
     /// 파일을 실제로 만들어 놓고, IAiClient만 MATCH를 돌려주도록 세워 L1/L2를
     /// 진짜로 통과시킨다.
     /// </summary>
+    // 전역 Serilog.Log.Logger를 교체하는 테스트가 있다. 클래스 간 병렬 실행에서
+    // 다른 클래스의 복원과 겹치면 임시 로거가 영구히 남으므로 한 묶음으로 직렬화한다.
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class CodegenStagedWorkflowTests : IDisposable
     {
         /// <summary>조립 회차의 Job 전체 검증이 매핑할 대상. 계획서 폴더 이름이 곧 매핑 이름이다.</summary>

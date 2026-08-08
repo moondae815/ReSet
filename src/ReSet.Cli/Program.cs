@@ -2351,14 +2351,16 @@ namespace ReSet.Cli
 
         /// <summary>
         /// InstructionEntryPointComposer가 분할 여부와 무관하게 모든 진입점에 무조건 쓰는
-        /// 문구(InstructionEntryPointComposer.cs:42, AppendGuidelines 호출보다도 앞).
-        /// task-00-bootstrap.md의 유무만으로 Legacy를 판정하면, 번들 쓰기가 진입점(:165)과
-        /// 부트스트랩 작업(:201) 사이에서 끊기거나 사용자가 그 파일 하나만 지웠을 때도
+        /// 문구. task-00-bootstrap.md의 유무만으로 Legacy를 판정하면, 번들 쓰기가 진입점과
+        /// 부트스트랩 작업 사이에서 끊기거나 사용자가 그 파일 하나만 지웠을 때도
         /// Legacy로 떨어져 전체 Job 경로로 잘못 보내진다 - 이 문구가 있으면 그 반례를 잡아
         /// Broken으로 돌린다(Legacy로 잘못 판정하는 것보다 거부하는 쪽이 안전하다).
+        ///
+        /// 문구를 여기 다시 적지 않고 작성기의 상수를 그대로 읽는다. 손으로 복사해 두면
+        /// 작성기 쪽 문장을 다듬는 순간 판별이 조용히 멈추고 b336ee5가 막은 오라우팅이
+        /// 되살아나는데, ReSet.Cli에는 그것을 잡아 줄 테스트 프로젝트가 없다.
         /// </summary>
-        private const string StagedEntryPointMarker =
-            "배정된 작업 파일(`task-*.md`)이 지시하는 것만 읽고 구현하십시오";
+        private const string StagedEntryPointMarker = InstructionEntryPointComposer.StagedBundleMarker;
 
         /// <summary>
         /// 메뉴 3("기작성된 지시서 재구동")이 디스크에서 고른 MigrationInstructions.md를 분류하고,

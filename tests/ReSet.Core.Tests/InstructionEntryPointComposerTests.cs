@@ -163,5 +163,25 @@ namespace ReSet.Core.Tests
             Assert.Contains("이 계획서의 검증 상태", section);
             Assert.NotEmpty(section.Trim());
         }
+
+        /// <summary>
+        /// CLI의 재구동 경로(메뉴 3)는 이 표식으로 회차 번들과 옛 단일 문서를 가른다.
+        /// 표식이 어느 진입점에서든 빠지면 회차용 번들이 "다른 Step을 읽지 마십시오"를
+        /// 이해하지 못하는 전체 Job 경로로 흘러간다(b336ee5가 막은 오라우팅).
+        /// ReSet.Cli에는 테스트 프로젝트가 없으므로 그 계약을 여기서 고정한다.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void Compose_ShouldAlwaysEmitTheStagedBundleMarker(bool stepsSplit)
+        {
+            var inputs = stepsSplit
+                ? Split()
+                : Split() with { StepsSplit = false, SinglePlanRelativePath = "../docs/BatchMigrationPlan.md" };
+
+            var markdown = InstructionEntryPointComposer.Compose(inputs);
+
+            Assert.Contains(InstructionEntryPointComposer.StagedBundleMarker, markdown);
+        }
     }
 }

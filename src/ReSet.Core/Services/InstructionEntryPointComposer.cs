@@ -32,6 +32,19 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class InstructionEntryPointComposer
     {
+        /// <summary>
+        /// 분할 여부와 무관하게 모든 진입점에 무조건 실리는 문장. 디스크에서 주운
+        /// MigrationInstructions.md가 회차 번들인지 옛 단일 문서인지를 가르는 표식이며,
+        /// CLI의 재구동 경로(메뉴 3)가 이 상수를 그대로 읽는다.
+        ///
+        /// 예전에는 이 문장의 부분 문자열이 Program.cs에 손으로 복사돼 있었다. 여기 문구를
+        /// 다듬으면 판별이 조용히 멈추고, 회차용 번들이 "다른 Step을 읽지 마십시오"를
+        /// 이해하지 못하는 전체 Job 경로로 다시 흘러간다(b336ee5가 막은 바로 그 오라우팅).
+        /// ReSet.Cli에는 테스트 프로젝트가 없어 그 회귀를 잡아 줄 것도 없으므로,
+        /// 상수 하나로 묶어 컴파일러가 대신 잡게 한다.
+        /// </summary>
+        public const string StagedBundleMarker = "배정된 작업 파일(`task-*.md`)이 지시하는 것만 읽고 구현하십시오";
+
         public static string Compose(EntryPointInputs inputs)
         {
             var sb = new StringBuilder();
@@ -39,7 +52,7 @@ namespace ReSet.Core.Services
             sb.AppendLine($"# 🚀 Consolidated Migration Instructions for Coding Agent ({inputs.JobName})");
             sb.AppendLine();
             sb.AppendLine("본 문서는 복수의 SQL Server Stored Procedure를 하나의 통합 배치로 마이그레이션하기 위한 **진입점**입니다.");
-            sb.AppendLine("이 파일을 끝까지 읽은 뒤, 배정된 작업 파일(`task-*.md`)이 지시하는 것만 읽고 구현하십시오.");
+            sb.AppendLine($"이 파일을 끝까지 읽은 뒤, {StagedBundleMarker}.");
             sb.AppendLine();
             sb.AppendLine("---");
             sb.AppendLine();
