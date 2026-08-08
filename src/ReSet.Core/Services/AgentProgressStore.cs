@@ -232,7 +232,10 @@ namespace ReSet.Core.Services
 
                 sb.AppendLine($"- [{box}] {label}{note}");
 
-                if (stage.Status == StageStatus.Failed && !string.IsNullOrWhiteSpace(stage.LastGapSummary))
+                // 통과한 회차에도 남길 말이 있다 - 예를 들어 조립 회차가 미완성 단계 때문에
+                // Job 전체 검증을 건너뛴 경우, 그 사실이 여기 보이지 않으면 사람은 전체 검증이
+                // 돌았다고 오해한다. 그래서 상태와 무관하게 요약이 있으면 렌더링한다.
+                if (!string.IsNullOrWhiteSpace(stage.LastGapSummary))
                 {
                     sb.AppendLine($"  - {CollapseNewlines(stage.LastGapSummary)}");
                 }

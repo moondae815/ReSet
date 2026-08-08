@@ -10,6 +10,9 @@ using ReSet.Core.Services;
 using ReSet.Core.Services.Clients.Cli;
 using ReSet.Validator.Core.Models;
 using ReSet.Validator.Core.Services;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 
 namespace ReSet.Core.Tests
@@ -27,17 +30,29 @@ namespace ReSet.Core.Tests
     /// </summary>
     public class CodegenStagedWorkflowTests : IDisposable
     {
+        /// <summary>조립 회차의 Job 전체 검증이 매핑할 대상. 계획서 폴더 이름이 곧 매핑 이름이다.</summary>
+        private const string JobName = "JobX";
+
         private readonly string _root;
         private readonly string _agentDir;
         private readonly string _codeDir;
+        private readonly string _specDir;
 
         public CodegenStagedWorkflowTests()
         {
             _root = Path.Combine(Path.GetTempPath(), "reset-staged-" + Guid.NewGuid().ToString("N"));
             _agentDir = Path.Combine(_root, "agent");
             _codeDir = Path.Combine(_root, "src");
+
+            // 실제 배선과 같은 배치다 - FileMappingService의 자동 탐색은 계획서의
+            // <job>/docs/BatchMigrationPlan.md 구조에서 상위 폴더 이름을 매핑 이름으로 쓴다.
+            // 빈 폴더로 두면 자동 탐색이 0건을 돌려주어 "건너뛰었다"와 "찾은 게 없다"가
+            // 구별되지 않으므로, 계획서를 실제로 깔아 둔다.
+            _specDir = Path.Combine(_root, JobName, "docs");
             Directory.CreateDirectory(_agentDir);
             Directory.CreateDirectory(_codeDir);
+            Directory.CreateDirectory(_specDir);
+            File.WriteAllText(Path.Combine(_specDir, "BatchMigrationPlan.md"), "# JobX 통합 계획");
 
             foreach (var name in new[]
             {
@@ -60,12 +75,12 @@ namespace ReSet.Core.Tests
             if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
         }
 
-        private CodegenStagePlan Plan() => CodegenStagePlan.FromBundle(
+        private CodegenStagePlan Plan(bool stepsSplit = true) => CodegenStagePlan.FromBundle(
             new BundleResult(
                 Path.Combine(_agentDir, "MigrationInstructions.md"),
                 new[] { "S01", "S02" },
                 Array.Empty<string>(),
-                StepsSplit: true,
+                StepsSplit: stepsSplit,
                 new[]
                 {
                     Path.Combine(_agentDir, "task-00-bootstrap.md"),
@@ -80,11 +95,10 @@ namespace ReSet.Core.Tests
         {
             var config = new ValidatorConfig
             {
-                SpecDirectory = Path.Combine(_root, "empty-spec"),
+                SpecDirectory = _specDir,
                 SourceCodeDirectory = _codeDir,
                 OutputDirectory = Path.Combine(_root, "validation"),
             };
-            Directory.CreateDirectory(config.SpecDirectory);
 
             var verifier = new CodeVerificationOrchestrator(
                 config, aiClient ?? MatchingAiClient(), null, null);
@@ -93,8 +107,12 @@ namespace ReSet.Core.Tests
                 engine, verifier, new MetadataExporter(), maxAttempts);
         }
 
-        /// <summary>L2가 항상 MATCH를 내도록 세운 AI 클라이언트.</summary>
-        private static IAiClient MatchingAiClient()
+        /// <summary>
+        /// L2가 항상 MATCH를 내도록 세운 AI 클라이언트.
+        /// <paramref name="verifiedSpecs"/>를 주면 어떤 설계서가 L2에 실려 갔는지를 순서대로 기록한다 -
+        /// 어느 회차가 무엇을 검증했는지(그리고 무엇을 검증하지 않았는지)를 고정하기 위한 것이다.
+        /// </summary>
+        private static IAiClient MatchingAiClient(List<string>? verifiedSpecs = null)
         {
             var client = Substitute.For<IAiClient>();
             client.ProviderName.Returns("stub");
@@ -102,8 +120,21 @@ namespace ReSet.Core.Tests
             client.ChatAsync(
                     Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
                     Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult(new AiResult { Content = "{\"OverallStatus\": \"MATCH\"}" }));
+                .Returns(callInfo =>
+                {
+                    verifiedSpecs?.Add(SpecMarker(callInfo.ArgAt<string>(1)));
+                    return Task.FromResult(new AiResult { Content = "{\"OverallStatus\": \"MATCH\"}" });
+                });
             return client;
+        }
+
+        /// <summary>L2 프롬프트에 실린 설계서가 무엇인지 한 낱말로 되짚는다.</summary>
+        private static string SpecMarker(string userPrompt)
+        {
+            if (userPrompt.Contains("# JobX 통합 계획", StringComparison.Ordinal)) return "PLAN";
+            if (userPrompt.Contains("# S01 단계 설계서", StringComparison.Ordinal)) return "S01";
+            if (userPrompt.Contains("# S02 단계 설계서", StringComparison.Ordinal)) return "S02";
+            return "UNKNOWN";
         }
 
         /// <summary>지정한 단계의 설계서에 대해서만 MISMATCH를 내는 AI 클라이언트.</summary>
@@ -141,7 +172,9 @@ namespace ReSet.Core.Tests
             return tail switch
             {
                 "bootstrap" => "CommonInfra",
-                "assembly" => "PipelineHost",
+                // 조립 산출물은 Job 이름을 달아야 계획서(BatchMigrationPlan.md)의 자동 탐색이
+                // 짝지을 수 있다 - 실제 파이프라인에서 이 회차가 만드는 것이 Job 진입점이다.
+                "assembly" => JobName,
                 _ => tail + "Tasklet",
             };
         }
@@ -183,6 +216,28 @@ namespace ReSet.Core.Tests
                     if (Path.GetFileName(instructions) == taskFileName)
                     {
                         return Task.FromResult(new CodegenRunResult(false, 1, CliFailureKind.Unknown, "산출물 없음"));
+                    }
+
+                    WriteArtifactFor(instructions, callInfo.ArgAt<string>(2));
+                    return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
+                });
+            return engine;
+        }
+
+        /// <summary>특정 task 파일에서 회차와 무관한 환경 실패를 내는 엔진.</summary>
+        private ICodingEngine EngineFailingWith(string taskFileName, CliFailureKind kind)
+        {
+            var engine = Substitute.For<ICodingEngine>();
+            engine.Name.Returns("stub");
+            engine.Command.Returns("stub");
+            engine.GenerateCodeAsync(
+                    Arg.Any<SpDefinition?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    var instructions = callInfo.ArgAt<string>(1);
+                    if (Path.GetFileName(instructions) == taskFileName)
+                    {
+                        return Task.FromResult(new CodegenRunResult(false, 1, kind, "환경 실패"));
                     }
 
                     WriteArtifactFor(instructions, callInfo.ArgAt<string>(2));
@@ -395,6 +450,180 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("Critic Feedback - 01-S01", taskFile);
             Assert.Contains("루프 조건이 다릅니다", taskFile);
+
+            // 회차 경로와 전체 Job 경로가 같은 피드백 조립기를 쓴다. 두 벌로 갈라졌을 때
+            // 새 경로에서만 빠져 있던 문구다 - 다시 갈라지면 여기서 잡힌다.
+            Assert.Contains("지시서 5장의 SQL/ORM 경계 규칙 참조", taskFile);
+        }
+
+        /// <summary>
+        /// 회차별 L2의 합이 Job 전체 검증을 대신하지만, 단계들이 하나의 파이프라인으로
+        /// 엮였는지는 아무 회차도 보지 않는다. 그래서 조립 회차가 마지막에 한 번 전체를 본다.
+        /// Bootstrap은 대조할 설계서가 없으므로 L2를 아예 태우지 않는다 - 태우면 계획서 전문을
+        /// 상대로 공통 인프라만 있는 트리를 검증하게 되어 반드시 실패하고, 회차 1이 못 돈다.
+        /// </summary>
+        [Fact]
+        public async Task RunStagedWorkflowAsync_ShouldVerifyStepsInScopeAndTheJobOnlyAtAssembly()
+        {
+            var verifiedSpecs = new List<string>();
+
+            var result = await Build(ProductiveEngine(), aiClient: MatchingAiClient(verifiedSpecs))
+                .RunStagedWorkflowAsync(
+                    JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.True(result.AllPassed);
+
+            // Bootstrap은 없다. 단계는 각자 자기 설계서만. 조립에서만 계획서 전체.
+            Assert.Equal(new[] { "S01", "S02", "PLAN" }, verifiedSpecs);
+        }
+
+        /// <summary>
+        /// 미완성 단계가 있으면 Job 전체 대조는 성립하지 않는다(계획서는 전 단계를 요구하는데
+        /// 트리에는 일부가 없다). 건너뛰되 그 사실이 진행 기록과 todo.md에 남아야 한다 -
+        /// 로그만으로는 사람이 전체 검증이 돌았다고 오해한다.
+        /// </summary>
+        [Fact]
+        public async Task RunStagedWorkflowAsync_ShouldSkipJobWideVerification_WhenAStepIsUnfinished()
+        {
+            var verifiedSpecs = new List<string>();
+
+            await Build(EngineFailingOn("task-01-S01.md"), aiClient: MatchingAiClient(verifiedSpecs))
+                .RunStagedWorkflowAsync(
+                    JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            // S01은 산출물이 없어 검증에 닿지 못했고, 조립은 계획서를 태우지 않았다.
+            Assert.Equal(new[] { "S02" }, verifiedSpecs);
+
+            var assembly = AgentProgressStore.Load(_agentDir)!.Stages.Single(s => s.Id == "99-assembly");
+
+            // 조립 작업 자체는 했으므로 통과지만, 무엇을 건너뛰었는지가 남는다.
+            Assert.Equal(StageStatus.Passed, assembly.Status);
+            Assert.Contains("Job 전체 검증 건너뜀", assembly.LastGapSummary);
+            Assert.Contains("S01", assembly.LastGapSummary);
+
+            var todo = await File.ReadAllTextAsync(Path.Combine(_agentDir, "todo.md"));
+
+            Assert.Contains("Job 전체 검증 건너뜀", todo);
+        }
+
+        /// <summary>
+        /// 할당량 소진·인증 실패·도구 권한 거부는 다음 회차에서도 똑같이 실패한다. 남은 회차를
+        /// 각각 같은 벽에 부딪히게 두지 않고 끝낸다. 이때 남은 회차는 Failed가 아니라
+        /// Pending으로 남아야 재시도할 때 "실패한 것"과 "돌려보지도 않은 것"이 구별된다.
+        /// </summary>
+        [Theory]
+        [InlineData(CliFailureKind.QuotaExhausted)]
+        [InlineData(CliFailureKind.NotAuthenticated)]
+        [InlineData(CliFailureKind.ToolPermissionDenied)]
+        public async Task RunStagedWorkflowAsync_ShouldStopRemainingStages_OnEnvironmentFailure(
+            CliFailureKind kind)
+        {
+            var engine = EngineFailingWith("task-01-S01.md", kind);
+
+            var result = await Build(engine).RunStagedWorkflowAsync(
+                JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.AllPassed);
+            Assert.NotNull(result.AbortReason);
+            Assert.Contains(kind.ToString(), result.AbortReason);
+
+            var calls = InstructionCalls(engine);
+
+            Assert.DoesNotContain("task-02-S02.md", calls);
+            Assert.DoesNotContain("task-99-assembly.md", calls);
+
+            var stages = AgentProgressStore.Load(_agentDir)!.Stages;
+
+            Assert.Equal(StageStatus.Failed, stages.Single(s => s.Id == "01-S01").Status);
+            Assert.Equal(StageStatus.Pending, stages.Single(s => s.Id == "02-S02").Status);
+            Assert.Equal(StageStatus.Pending, stages.Single(s => s.Id == "99-assembly").Status);
+        }
+
+        /// <summary>
+        /// 단계 분할에 실패해 대조할 설계서가 없는 회차. 검증하지 못했으므로 통과가 아니다 -
+        /// 통과로 두면 이 태스크가 막으려던 구멍이 방향만 뒤집힌 채 되살아난다.
+        /// 재시도로 달라질 것이 없으므로 그 자리에서 접는다.
+        /// </summary>
+        [Fact]
+        public async Task RunStagedWorkflowAsync_ShouldFailStepThatHasNoSpecToCompareAgainst()
+        {
+            var engine = ProductiveEngine();
+
+            var result = await Build(engine).RunStagedWorkflowAsync(
+                JobName, Plan(stepsSplit: false), _agentDir, _codeDir,
+                isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.AllPassed);
+            Assert.Equal(new[] { "S01", "S02" }, result.FailedStepCodes);
+
+            var stage = AgentProgressStore.Load(_agentDir)!.Stages.Single(s => s.Id == "01-S01");
+
+            Assert.Equal(StageStatus.Failed, stage.Status);
+            Assert.Contains("대조할 설계서 경로가 없어", stage.LastGapSummary);
+
+            // 재시도해도 번들이 다시 만들어지지 않는 한 같은 결과다. 한 번만 기동한다.
+            Assert.Equal(1, InstructionCalls(engine).Count(c => c == "task-01-S01.md"));
+        }
+
+        /// <summary>
+        /// "이 회차의 코드를 못 찾음" 분기는 산출물이 나왔으므로 무산출물 캡에 걸리지 않는다.
+        /// 상한이 없으면 MaxL2Attempts가 "unlimited"일 때 유료 기동이 끝나지 않는다.
+        /// 진전을 낼 수 있도록 이름 규약을 피드백으로 주고, 그래도 안 되면 접는다.
+        /// </summary>
+        [Fact(Timeout = 60000)]
+        public async Task RunStagedWorkflowAsync_ShouldCapRetries_WhenTheStepSourceNeverAppears()
+        {
+            var engine = EngineProducingUnrelatedOutputFor("task-01-S01.md");
+
+            // -1 = unlimited. 상한이 없으면 이 호출은 끝나지 않는다.
+            var result = await Build(engine, maxAttempts: -1).RunStagedWorkflowAsync(
+                JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.AllPassed);
+            Assert.Equal(new[] { "S01" }, result.FailedStepCodes);
+            Assert.Equal(2, InstructionCalls(engine).Count(c => c == "task-01-S01.md"));
+
+            // 다음 시도가 진전을 낼 수 있도록 파일 이름 규약을 알려 준다.
+            var taskFile = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-01-S01.md"));
+
+            Assert.Contains("회차 산출물 확인 실패", taskFile);
+            Assert.Contains("`S01`로 시작해야 합니다", taskFile);
+        }
+
+        /// <summary>
+        /// 계획이 그대로인 재실행(크래시 후 재기동)이 통과 기록 N개를 지우고 전 회차를 다시
+        /// 돌린다. 가장 흔하고 가장 비싼 경우이므로 아무 흔적 없이 일어나서는 안 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunStagedWorkflowAsync_ShouldReportReplacingPreviousProgress_EvenWhenPlanIsUnchanged()
+        {
+            await Build(ProductiveEngine()).RunStagedWorkflowAsync(
+                JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Warning().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                await Build(ProductiveEngine()).RunStagedWorkflowAsync(
+                    JobName, Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+            }
+            finally
+            {
+                Log.Logger = previousLogger;
+            }
+
+            var replaced = sink.Messages.Single(m => m.Contains("이전 진행 기록을 대체"));
+
+            Assert.Contains("통과 4개", replaced);
+            Assert.Contains("회차 구성 변경: False", replaced);
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
 
         /// <summary>
