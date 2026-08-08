@@ -5007,7 +5007,7 @@ SELECT 1;
             string? previousSkeleton,
             AiResult? previousSkeletonResult,
             Dictionary<string, string>? previousSections,
-            Dictionary<string, string> previousViolations,
+            Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             CancellationToken cancellationToken)
         {
@@ -5028,8 +5028,8 @@ SELECT 1;
             return resultProperty!.GetValue(task);
         }
 
-        private static Dictionary<string, string> GetFloorViolations(object splitGeneration) =>
-            (Dictionary<string, string>)splitGeneration.GetType().GetProperty("FloorViolations")!.GetValue(splitGeneration)!;
+        private static Dictionary<string, StepDefect> GetFloorViolations(object splitGeneration) =>
+            (Dictionary<string, StepDefect>)splitGeneration.GetType().GetProperty("FloorViolations")!.GetValue(splitGeneration)!;
 
         private static Dictionary<string, string> GetSections(object splitGeneration) =>
             (Dictionary<string, string>)splitGeneration.GetType().GetProperty("Sections")!.GetValue(splitGeneration)!;
@@ -5070,7 +5070,7 @@ SELECT 1;
             // 1회차: 지목 없이 전부 생성한다. S01은 재시도해도 하한 미달로 남는다.
             var first = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
-                NullProgressScope.Instance, null, null, null, new Dictionary<string, string>(),
+                NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
                 Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(first);
 
@@ -5145,7 +5145,7 @@ SELECT 1;
             // 1회차: 골격을 실제로 만든다.
             var first = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
-                NullProgressScope.Instance, null, null, null, new Dictionary<string, string>(),
+                NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
                 Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(first);
 
@@ -5289,7 +5289,7 @@ SELECT 1;
                 {
                     new("S01", "첫 단계", Array.Empty<string>(), new[] { "dbo.T1" }, new[] { "-1" }, false),
                 },
-                new Dictionary<string, string> { ["S01"] = "S01 (하한 미달)" },   // stepFloorViolations (out)
+                new Dictionary<string, StepDefect> { ["S01"] = new StepDefect(StepDefectKind.QualityFloor, "S01 (하한 미달)") },   // stepFloorViolations (out)
                 pendingDefectiveSteps,
             };
 
@@ -5301,7 +5301,7 @@ SELECT 1;
             Assert.Null(args[3]);
             // 이전에 빠뜨렸던 바로 그 항목: 재수립 후 stepFloorViolations는 통째로
             // 새 빈 사전이어야 하고, 옛 코드("S01")를 담고 있으면 안 된다.
-            var clearedViolations = Assert.IsType<Dictionary<string, string>>(args[4]);
+            var clearedViolations = Assert.IsType<Dictionary<string, StepDefect>>(args[4]);
             Assert.Empty(clearedViolations);
             Assert.Empty(pendingDefectiveSteps);
         }

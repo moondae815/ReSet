@@ -293,8 +293,8 @@ namespace ReSet.Core.Services
         private static string BuildFloorBanner(PlanLayout? layout, string code)
         {
             if (layout?.FloorViolations == null ||
-                !layout.FloorViolations.TryGetValue(code, out var reason) ||
-                string.IsNullOrWhiteSpace(reason))
+                !layout.FloorViolations.TryGetValue(code, out var defect) ||
+                string.IsNullOrWhiteSpace(defect.Reason))
             {
                 return string.Empty;
             }
@@ -302,7 +302,7 @@ namespace ReSet.Core.Services
             var sb = new StringBuilder();
             sb.AppendLine("> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**");
             sb.AppendLine("> ");
-            sb.AppendLine($"> {reason.Trim()}");
+            sb.AppendLine($"> {defect.Reason.Trim()}");
             sb.AppendLine("> ");
             sb.AppendLine("> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오.");
             sb.AppendLine();

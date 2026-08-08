@@ -65,7 +65,7 @@ S02 본문
         private static BatchStepPlan Step(string code, string name) =>
             new(code, name, new[] { "UP_" + code }, new[] { "dbo.T" }, new[] { "-1" }, false);
 
-        private static PlanLayout Layout(IReadOnlyDictionary<string, string>? violations = null) => new(
+        private static PlanLayout Layout(IReadOnlyDictionary<string, StepDefect>? violations = null) => new(
             "골격",
             new Dictionary<string, string>
             {
@@ -195,7 +195,10 @@ S02 본문
         [Fact]
         public async Task WriteAsync_ShouldBannerOnlyTheViolatingStep()
         {
-            var violations = new Dictionary<string, string> { ["S02"] = "의사코드가 없습니다." };
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S02"] = new StepDefect(StepDefectKind.QualityFloor, "의사코드가 없습니다."),
+            };
 
             await new InstructionBundleWriter().WriteAsync(Inputs(Layout(violations)), CancellationToken.None);
 

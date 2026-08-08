@@ -20,7 +20,7 @@ public sealed record PlanLayout(
     string? Skeleton,
     IReadOnlyDictionary<string, string>? Sections,
     IReadOnlyList<BatchStepPlan>? Steps,
-    IReadOnlyDictionary<string, string>? FloorViolations)
+    IReadOnlyDictionary<string, StepDefect>? FloorViolations)
 {
     /// <summary>
     /// 단계 분할을 시도할 수 있는가. Sections가 비어 있으면 앵커가 없으므로 시도 자체가 성립하지 않는다.

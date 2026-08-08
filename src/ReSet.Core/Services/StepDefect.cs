@@ -1,0 +1,22 @@
+namespace ReSet.Core.Services
+{
+    /// <summary>
+    /// 단계 하나에 대해 하한 검사가 낸 판정의 종류.
+    ///
+    /// 둘을 가르는 이유: 실측에서 14개 단계 중 13개에 "품질 미달" 배너가 붙었는데,
+    /// 그 13개는 섹션이 부실한 것이 아니라 대조할 재료가 목차에 없어 검사가 돌지
+    /// 못한 것이었다. 두 사실을 같은 배너로 내면 읽는 사람이 어느 쪽인지 알 수
+    /// 없고, 배너가 대부분의 단계에 붙어 변별력도 사라진다.
+    /// </summary>
+    public enum StepDefectKind
+    {
+        /// <summary>본문이 최소 요건을 못 채웠다. 재생성으로 고칠 수 있다.</summary>
+        QualityFloor,
+
+        /// <summary>대조할 재료가 목차에 없어 검사를 실행하지 못했다. 재생성으로 고쳐지지 않는다.</summary>
+        Unverifiable,
+    }
+
+    /// <param name="Reason">"{Code} (사유)" 형식의 표시 문자열. 배너가 그대로 싣는다.</param>
+    public sealed record StepDefect(StepDefectKind Kind, string Reason);
+}

@@ -1699,7 +1699,7 @@ namespace ReSet.Core.Services
             // 어긋나면 L3 지목 재생성이 화면의 문서가 아닌 폐기된 회차 위에 얹힌다.
             // 셋 다 실제로 발생했던 결함이라 개별 변수로 두지 않는다.
             var adoptedState = new AdoptedGenerationState(
-                string.Empty, null, null, null, new Dictionary<string, string>());
+                string.Empty, null, null, null, new Dictionary<string, StepDefect>());
             // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
             var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
@@ -1722,7 +1722,7 @@ namespace ReSet.Core.Services
             // 지목 재생성이 건드리지 않은 단계의 항목을 그대로 보존해야 하기
             // 때문이다 — 목록을 통째로 교체하면 재생성되지 않은 단계의 하한 미달
             // 기록이 조용히 사라진다.
-            var stepFloorViolations = new Dictionary<string, string>();
+            var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
 
             // 조각을 호출부로 내보낸다. 산출물 분할이 이 값들을 경계 앵커로 쓴다.
@@ -1744,7 +1744,7 @@ namespace ReSet.Core.Services
                         lastSkeleton,
                         new Dictionary<string, string>(lastStepSections),
                         steps,
-                        new Dictionary<string, string>(stepFloorViolations));
+                        new Dictionary<string, StepDefect>(stepFloorViolations));
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
@@ -1951,7 +1951,7 @@ namespace ReSet.Core.Services
                             lastSkeleton,
                             lastSkeletonResult,
                             lastStepSections == null ? null : new Dictionary<string, string>(lastStepSections),
-                            new Dictionary<string, string>(stepFloorViolations));
+                            new Dictionary<string, StepDefect>(stepFloorViolations));
                     }
                 }
 
@@ -2167,7 +2167,7 @@ namespace ReSet.Core.Services
                     // 분할 상태가 있으면 분할로 재생성한다. 통짜 단일 호출은 단계마다
                     // 확보한 본문을 한 번에 무너뜨린다 — 이 경로가 존재하는 이유다.
                     string rePlan = string.Empty;
-                    Dictionary<string, string> reViolations = stepFloorViolations;
+                    Dictionary<string, StepDefect> reViolations = stepFloorViolations;
 
                     var stepsForRegeneration = BatchStepPlanParser.TryParse(structureForRegeneration);
                     if (stepsForRegeneration != null)
@@ -2201,7 +2201,7 @@ namespace ReSet.Core.Services
                         // 같은 부류의 결함을 이미 한 번 겪고 막아 둔 자리다.
                         var violationsForRegeneration = reuseSkeleton
                             ? stepFloorViolations
-                            : new Dictionary<string, string>();
+                            : new Dictionary<string, StepDefect>();
 
                         using var progressScopeForL3 = _userInteraction.CreateProgressScope("피드백 반영 재생성") ?? NullProgressScope.Instance;
                         // GenerateBySplitAsync는 "phase3" 키로 진행률을 기록한다(재사용이면
@@ -2242,7 +2242,7 @@ namespace ReSet.Core.Services
                             // 즉 옛 목차의 살아있는 기록이다. 그대로 두면 아래 배너 재부착이
                             // 새 목차에 없는 단계 코드를 지목한다 — 분할 분기(:2158-2160)가
                             // 이미 막아 둔 것과 같은 부류의 결함이다.
-                            reViolations = new Dictionary<string, string>();
+                            reViolations = new Dictionary<string, StepDefect>();
                         }
 
                         try
@@ -2365,7 +2365,7 @@ namespace ReSet.Core.Services
         /// </summary>
         private string AttachPipelineBanners(
             string consolidatedPlan,
-            IReadOnlyDictionary<string, string> stepFloorViolations,
+            IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string jobName)
@@ -2382,7 +2382,7 @@ namespace ReSet.Core.Services
             // 기준으로 정렬해 읽는 순서를 결정적으로 고정한다.
             var stepFloorViolationMessages = stepFloorViolations
                 .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
-                .Select(kvp => kvp.Value)
+                .Select(kvp => kvp.Value.Reason)
                 .ToList();
             if (stepFloorViolationMessages.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
             {
@@ -2504,7 +2504,7 @@ namespace ReSet.Core.Services
             AiResult Generation,
             string Skeleton,
             Dictionary<string, string> Sections,
-            Dictionary<string, string> FloorViolations);
+            Dictionary<string, StepDefect> FloorViolations);
 
         /// <summary>
         /// 채택 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
@@ -2530,7 +2530,7 @@ namespace ReSet.Core.Services
             string? Skeleton,
             AiResult? SkeletonResult,
             IReadOnlyDictionary<string, string>? StepSections,
-            IReadOnlyDictionary<string, string> FloorViolations);
+            IReadOnlyDictionary<string, StepDefect> FloorViolations);
 
         /// <summary>
         /// 채택 상태를 살아있는 지역 변수들로 되돌린다. 사전은 복사해서 넘긴다 —
@@ -2541,14 +2541,14 @@ namespace ReSet.Core.Services
             out string? skeleton,
             out AiResult? skeletonResult,
             out Dictionary<string, string>? stepSections,
-            out Dictionary<string, string> floorViolations)
+            out Dictionary<string, StepDefect> floorViolations)
         {
             skeleton = adopted.Skeleton;
             skeletonResult = adopted.SkeletonResult;
             stepSections = adopted.StepSections == null
                 ? null
                 : new Dictionary<string, string>(adopted.StepSections);
-            floorViolations = new Dictionary<string, string>(adopted.FloorViolations);
+            floorViolations = new Dictionary<string, StepDefect>(adopted.FloorViolations);
         }
 
         /// <summary>
@@ -2569,14 +2569,14 @@ namespace ReSet.Core.Services
             out AiResult? lastSkeletonResult,
             out Dictionary<string, string>? lastStepSections,
             out IReadOnlyList<BatchStepPlan>? currentSteps,
-            out Dictionary<string, string> stepFloorViolations,
+            out Dictionary<string, StepDefect> stepFloorViolations,
             List<string> pendingDefectiveSteps)
         {
             lastSkeleton = null;
             lastSkeletonResult = null;
             lastStepSections = null;
             currentSteps = null;
-            stepFloorViolations = new Dictionary<string, string>();
+            stepFloorViolations = new Dictionary<string, StepDefect>();
             pendingDefectiveSteps.Clear();
         }
 
@@ -2641,7 +2641,7 @@ namespace ReSet.Core.Services
         /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
         /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
         /// </summary>
-        private sealed record StepSectionResult(string Code, string Markdown, string? FloorViolation);
+        private sealed record StepSectionResult(string Code, string Markdown, StepDefect? FloorViolation);
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
@@ -2672,7 +2672,7 @@ namespace ReSet.Core.Services
             string? previousSkeleton,
             AiResult? previousSkeletonResult,
             Dictionary<string, string>? previousSections,
-            Dictionary<string, string> previousViolations,
+            Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             CancellationToken cancellationToken)
         {
@@ -2722,7 +2722,7 @@ namespace ReSet.Core.Services
             // 단계의 기록은 새로 만들기 직전에 지운다 — 통과하면 조용히 사라지고,
             // 다시 미달하면 아래에서 새로 채워진다. 손대지 않는 단계의 기록은
             // 절대 건드리지 않는다.
-            var floorViolations = new Dictionary<string, string>(previousViolations);
+            var floorViolations = new Dictionary<string, StepDefect>(previousViolations);
 
             // 지목 재생성이면 지목된 단계만, 아니면 전부 만든다.
             // 지목 코드가 목록에 없으면(모델이 지어낸 코드) 무시한다.
@@ -2829,7 +2829,7 @@ namespace ReSet.Core.Services
         /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
         /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<(string Markdown, string? FloorViolation)> GenerateStepSectionWithFloorRetryAsync(
+        private async Task<(string Markdown, StepDefect? Defect)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
@@ -2898,7 +2898,7 @@ namespace ReSet.Core.Services
                         $"  [yellow]* {step.Code} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {reason}[/]");
                     Log.Warning(
                         "단계 하한 검사를 실행하지 못했습니다 - Step: {StepCode}, 사유: {Reason}", step.Code, reason);
-                    return (content, $"{step.Code} ({reason})");
+                    return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"));
                 }
 
                 _userInteraction.NotifyStatus(
@@ -2909,10 +2909,10 @@ namespace ReSet.Core.Services
             if (adopted == null)
             {
                 return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
-                    $"{step.Code} (생성 실패)");
+                    new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} (생성 실패)"));
             }
 
-            return (adopted, $"{step.Code} (하한 미달)");
+            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} (하한 미달)"));
         }
 
         /// <summary>
