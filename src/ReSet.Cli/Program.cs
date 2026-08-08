@@ -1017,7 +1017,7 @@ namespace ReSet.Cli
                                 case ExistingInstructionsKind.Staged:
                                     await RunStagedCodegenAsync(
                                         selectedInstruction,
-                                        stagePlan!,
+                                        () => stagePlan!,
                                         isBatchMode: false,
                                         enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
                                         engineName: selectedEngine,
@@ -1029,8 +1029,9 @@ namespace ReSet.Cli
 
                                 case ExistingInstructionsKind.Broken:
                                     AnsiConsole.MarkupLine(
-                                        "[red]에러: 회차별 번들로 보이지만(task-00-bootstrap.md 존재) 회차 파일 집합이 " +
-                                        "불완전합니다(task-99-assembly.md 없음). 이 문서는 전체 Job 경로로 실행할 수 " +
+                                        "[red]에러: 회차별 번들로 보이지만 회차 파일 집합이 불완전하거나 일관되지 " +
+                                        "않습니다(조립 회차 파일 없음, steps/*.md와 짝이 되는 task-*.md 없음, 또는 " +
+                                        "부트스트랩 파일만 빠진 중단된 쓰기). 이 문서는 전체 Job 경로로 실행할 수 " +
                                         "없습니다 - 그 경로는 회차별 지시를 이해하지 못합니다. 통합 배치 마이그레이션 " +
                                         "설계를 다시 실행해 번들을 재생성하십시오.[/]");
                                     break;
@@ -2163,11 +2164,14 @@ namespace ReSet.Cli
             IAiClient aiClient,
             CancellationToken cancellationToken)
         {
-            var agentDir = Path.GetDirectoryName(bundle.EntryPointPath)!;
-            var stagePlan = CodegenStagePlan.FromBundle(bundle, agentDir);
-
+            // CodegenStagePlan.FromBundle 호출을 여기서 미리 해 버리면 공유 try(RunCodegenAsync)
+            // 밖에서 예외가 날 수 있다 - 배치 모드에서 ExitCode=1을 세우는 지점을 우회하게
+            // 되므로(리뷰에서 지적된 결함), 회차 계획 구성 자체를 지연 실행 델리게이트로
+            // 넘겨 RunCodegenAsync의 try 안에서 계산되게 한다.
             await RunStagedCodegenAsync(
-                bundle.EntryPointPath, stagePlan, isBatchMode, enableCodegen, engineName,
+                bundle.EntryPointPath,
+                () => CodegenStagePlan.FromBundle(bundle, Path.GetDirectoryName(bundle.EntryPointPath)!),
+                isBatchMode, enableCodegen, engineName,
                 targetProjectDir, configuration, aiClient, cancellationToken);
         }
 
@@ -2176,10 +2180,14 @@ namespace ReSet.Cli
         /// 기동하고 결과를 보고한다. <see cref="RunCodegenEngineAsync"/>와
         /// <see cref="TryClassifyExistingInstructionsFile"/> 양쪽이 이 메서드로 모인다 -
         /// 회차 계획을 어떻게 얻었는지와 무관하게 실행·보고 로직은 하나여야 한다.
+        ///
+        /// <paramref name="buildStagePlan"/>은 값이 아니라 지연 실행 델리게이트다 - 계획을
+        /// 만드는 과정에서 예외가 나도 RunCodegenAsync의 공유 try 안에서 잡혀 배치 모드
+        /// ExitCode=1이 정상적으로 세팅되게 하기 위해서다.
         /// </summary>
         private static async Task RunStagedCodegenAsync(
             string entryPointPath,
-            CodegenStagePlan stagePlan,
+            Func<CodegenStagePlan> buildStagePlan,
             bool isBatchMode,
             bool enableCodegen,
             string? engineName,
@@ -2193,6 +2201,8 @@ namespace ReSet.Cli
                 configuration, aiClient, cancellationToken,
                 async (orchestrator, jobName, agentDir, _, ct) =>
                 {
+                    var stagePlan = buildStagePlan();
+
                     AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (회차별 순차 실행)[/]\n");
 
                     var staged = await orchestrator.RunStagedWorkflowAsync(
@@ -2340,13 +2350,26 @@ namespace ReSet.Cli
         }
 
         /// <summary>
+        /// InstructionEntryPointComposer가 분할 여부와 무관하게 모든 진입점에 무조건 쓰는
+        /// 문구(InstructionEntryPointComposer.cs:42, AppendGuidelines 호출보다도 앞).
+        /// task-00-bootstrap.md의 유무만으로 Legacy를 판정하면, 번들 쓰기가 진입점(:165)과
+        /// 부트스트랩 작업(:201) 사이에서 끊기거나 사용자가 그 파일 하나만 지웠을 때도
+        /// Legacy로 떨어져 전체 Job 경로로 잘못 보내진다 - 이 문구가 있으면 그 반례를 잡아
+        /// Broken으로 돌린다(Legacy로 잘못 판정하는 것보다 거부하는 쪽이 안전하다).
+        /// </summary>
+        private const string StagedEntryPointMarker =
+            "배정된 작업 파일(`task-*.md`)이 지시하는 것만 읽고 구현하십시오";
+
+        /// <summary>
         /// 메뉴 3("기작성된 지시서 재구동")이 디스크에서 고른 MigrationInstructions.md를 분류하고,
         /// 새 번들이면 회차 계획을 함께 되짚는다.
         ///
         /// 새 번들과 옛 단일 문서는 파일명이 같아 내용을 보지 않고는 구분되지 않는다.
-        /// agent/ 직하에 task-00-bootstrap.md가 있는지로 판정한다 - InstructionBundleWriter가
-        /// 항상 함께 쓰는 파일이라 존재만으로 새 번들임을 확정할 수 있고, 옛 단일 문서는
-        /// 이 파일을 쓴 적이 없다.
+        /// agent/ 직하에 task-00-bootstrap.md가 있는지를 1차 판정으로 쓴다 -
+        /// InstructionBundleWriter가 항상 함께 쓰는 파일이라 존재만으로 새 번들임을 확정할
+        /// 수 있다. 없을 때는 곧바로 Legacy로 단정하지 않고 진입점 내용을 본다
+        /// (<see cref="StagedEntryPointMarker"/> 참고) - 새 번들 표식이 있는데 부트스트랩
+        /// 파일만 없으면 Legacy가 아니라 Broken이다.
         ///
         /// 새 번들로 판정됐는데 조립 회차 파일(task-99-assembly.md)이 없으면 Broken이다 -
         /// 이 경우 호출자는 예전 전체 Job 경로로 떨어지면 안 된다. 그 경로는 이미 회차별로
@@ -2354,51 +2377,115 @@ namespace ReSet.Cli
         /// 이해하지 못한 채 통째로 떠먹여지기 때문이다(리뷰에서 지적된 결함 - 회차용 문서를
         /// 전체 Job 경로에 먹이는 조합 자체를 만들지 않는다).
         ///
+        /// <b>회차 집합은 agent/ 직하의 task-*.md를 통째로 훑어 세지 않고, steps/*.md를
+        /// 기준으로 거슬러 올라간다.</b> InstructionBundleWriter는 번들을 다시 쓸 때
+        /// agent/ 직하의 task-*.md를 정리하지 않지만(progress.json·todo.md·에이전트
+        /// 산출물이 그 자리에 살아, Task 7에서 의도적으로 남겨 두기로 정했다 - 그 결정은
+        /// 여기서 건드리지 않는다), steps/ 아래는 매번 지금 목차에 없는 파일을 지운다
+        /// (CleanupStaleStepFiles, 폴백 전환 시 통째 삭제). 그래서 이전 실행보다 단계가
+        /// 줄었거나(예: 10단계 → 3단계) 이번이 폴백(0단계)이면, agent/ 직하에는 예전 회차의
+        /// task-*.md가 그대로 남아 있어도 steps/에는 그 흔적이 없다. task-*.md를 통째로
+        /// 훑어 회차를 세면 이 낡은 파일까지 진짜 회차로 세어, 유료 코딩 에이전트를 이미
+        /// 지워진 단계 지시서로 기동하고 조립 회차 지시서에 가짜 "제외 목록"까지 얹게
+        /// 된다(리뷰에서 지적된 결함). steps/를 기준으로 삼으면 이 문제가 구조적으로
+        /// 성립하지 않는다 - steps/에 없는 코드는 애초에 후보에 오르지 않는다.
+        ///
+        /// steps/{코드}.md와 짝이 되는 task-*.md를 찾지 못하면(쓰기 도중 중단 등으로 번들이
+        /// 일관되지 않은 상태) Broken이다 - 낡은 파일로 대충 짝짓지 않는다. 회차 순서는
+        /// task-*.md 파일명에 박힌 서수({ordinal:D2})를 숫자로 파싱해 정렬한다 - 문자열
+        /// 정렬(task-00- vs task-100-)은 두 자리를 벗어나는 순간 사전순과 회차순이
+        /// 어긋나므로 쓰지 않는다. 서수를 못 읽거나(task-<서수>-<코드> 형식을 벗어난 이름)
+        /// StepCode가 없는 파일은 TaskFileComposer.ParseStageIdentity가 이미 걸러
+        /// 색인에서 자동으로 빠진다 - 우연한 phantom 회차가 생기지 않는다.
+        ///
         /// 원본(비정화) 단계 코드는 파일명에서 완전히 되짚을 수 없을 수 있다(SanitizeStepCode가
-        /// 손실 변환이라서 - TaskFileComposer 주석 참고). 그래서 steps/{코드}.md가 실제로
-        /// 존재할 때만 StepSpecPath를 채운다 - 없으면 null로 두고, EvaluateStepAsync가 그
-        /// 회차를 "대조할 설계서가 없음"으로 명시적으로 실패 처리한다(조용한 통과가 아니다).
-        /// 잘못 추측해도 안전한 방향으로만 떨어진다.
+        /// 손실 변환이라서 - TaskFileComposer 주석 참고). steps/{코드}.md의 코드는 항상
+        /// 원본이므로(InstructionBundleWriter가 정화하지 않고 그대로 쓴다) 그 코드를 그대로
+        /// StepCode로 쓴다 - 정화된 파일명에서 역산하지 않는다.
         /// </summary>
         private static (ExistingInstructionsKind Kind, CodegenStagePlan? StagePlan) TryClassifyExistingInstructionsFile(
             string entryPointPath)
         {
             var agentDir = Path.GetDirectoryName(entryPointPath);
-            if (agentDir == null || !File.Exists(Path.Combine(agentDir, "task-00-bootstrap.md")))
+            if (agentDir == null)
             {
                 return (ExistingInstructionsKind.Legacy, null);
             }
 
-            var taskFiles = Directory.GetFiles(agentDir, "task-*.md")
-                .OrderBy(p => Path.GetFileName(p), StringComparer.Ordinal) // task-00-, task-01-... 자릿수가 고정이라 사전순=회차순
-                .ToList();
+            var bootstrapPath = Path.Combine(agentDir, "task-00-bootstrap.md");
+            if (!File.Exists(bootstrapPath))
+            {
+                if (File.Exists(entryPointPath) &&
+                    File.ReadAllText(entryPointPath).Contains(StagedEntryPointMarker, StringComparison.Ordinal))
+                {
+                    return (ExistingInstructionsKind.Broken, null);
+                }
 
-            if (!taskFiles.Any(p => Path.GetFileName(p) == "task-99-assembly.md"))
+                return (ExistingInstructionsKind.Legacy, null);
+            }
+
+            var assemblyPath = Path.Combine(agentDir, "task-99-assembly.md");
+            if (!File.Exists(assemblyPath))
             {
                 return (ExistingInstructionsKind.Broken, null);
             }
 
-            var stepsDir = Path.Combine(agentDir, "steps");
-            var stages = new List<CodegenStage>();
-
-            foreach (var taskPath in taskFiles)
+            // Step 회차 task-*.md만 정화 코드로 색인한다. 이름이 회차 규약을 벗어나거나
+            // (task-<서수>-<코드> 형태가 아니거나) 서수를 숫자로 못 읽는 파일은 후보에서
+            // 자동으로 빠진다.
+            var stepTaskFilesByCode = new List<(string SanitizedCode, int Ordinal, string TaskPath)>();
+            foreach (var taskPath in Directory.GetFiles(agentDir, "task-*.md"))
             {
-                var identity = TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(taskPath));
-
-                string? specPath = null;
-                if (identity.Kind == StageKind.Step && identity.StepCode != null)
+                var baseName = Path.GetFileNameWithoutExtension(taskPath);
+                var identity = TaskFileComposer.ParseStageIdentity(baseName);
+                if (identity.Kind != StageKind.Step || identity.StepCode == null)
                 {
-                    var candidate = Path.Combine(stepsDir, $"{identity.StepCode}.md");
-                    if (File.Exists(candidate))
-                    {
-                        specPath = candidate;
-                    }
-                    // 파일이 없으면(정화로 원본 코드가 달라졌거나, steps/가 애초에 없는 폴백
-                    // 번들이거나) null로 둔다 - 위 주석대로 EvaluateStepAsync가 명시 실패시킨다.
+                    continue;
                 }
 
-                stages.Add(new CodegenStage(identity.Id, identity.Kind, taskPath, identity.StepCode, specPath));
+                var parts = baseName.Split('-');
+                if (parts.Length < 2 || !int.TryParse(parts[1], out var ordinal))
+                {
+                    continue; // 서수를 못 읽는 이름 - 색인하지 않는다(=phantom 회차 방지).
+                }
+
+                stepTaskFilesByCode.Add((identity.StepCode, ordinal, taskPath));
             }
+
+            var stepsDir = Path.Combine(agentDir, "steps");
+            var stepSpecFiles = Directory.Exists(stepsDir) ? Directory.GetFiles(stepsDir, "*.md") : Array.Empty<string>();
+
+            var matchedSteps = new List<(int Ordinal, string Code, string TaskPath, string SpecPath)>();
+            foreach (var specPath in stepSpecFiles)
+            {
+                var code = Path.GetFileNameWithoutExtension(specPath);
+                var match = stepTaskFilesByCode.FirstOrDefault(e =>
+                    string.Equals(e.SanitizedCode, code, StringComparison.OrdinalIgnoreCase));
+
+                if (match.TaskPath == null)
+                {
+                    // steps/에는 있는데 짝이 되는 task-*.md가 없다 - 번들이 일관되지 않다.
+                    return (ExistingInstructionsKind.Broken, null);
+                }
+
+                matchedSteps.Add((match.Ordinal, code, match.TaskPath, specPath));
+            }
+
+            var bootstrapIdentity = TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(bootstrapPath));
+            var assemblyIdentity = TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(assemblyPath));
+
+            var stages = new List<CodegenStage>
+            {
+                new(bootstrapIdentity.Id, StageKind.Bootstrap, bootstrapPath, null, null),
+            };
+
+            foreach (var step in matchedSteps.OrderBy(s => s.Ordinal))
+            {
+                var identity = TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(step.TaskPath));
+                stages.Add(new CodegenStage(identity.Id, StageKind.Step, step.TaskPath, step.Code, step.SpecPath));
+            }
+
+            stages.Add(new CodegenStage(assemblyIdentity.Id, StageKind.Assembly, assemblyPath, null, null));
 
             return (ExistingInstructionsKind.Staged, new CodegenStagePlan(stages));
         }
