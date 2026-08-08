@@ -845,6 +845,123 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("NetArchTest", bootstrapTask);
         }
 
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_ForCSharp_WritesArchitectureAndContractStubsAtCorrectPaths()
+        {
+            // Task 14 리뷰가 지적한 결함: DataAccessPolicy 단위 테스트는 문자열 내용만
+            // 확인하고, MetadataExporter가 그 문자열을 실제로 어떤 파일 이름/경로에
+            // 배치하는지는 아무 테스트도 고정하지 않았다. Java 산출물이 컴파일되지
+            // 않는 결함이 바로 그 배선 지점에서 났다 - 여기서 언어별 배치를 고정한다.
+            var testOutputDir = Path.Combine(
+                Directory.GetCurrentDirectory(), "test_output_exporter_wiring_cs");
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+
+            try
+            {
+                var spDefs = new System.Collections.Generic.List<SpDefinition>
+                {
+                    new SpDefinition { Schema = "dbo", Name = "USP_Sp1", DdlText = "CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;" }
+                };
+
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    spDefs, "# Plan", VerificationOutcome.Passed, "WiringJobCs", testOutputDir, "C#",
+                    new OutputPathResolver("TestDB", testOutputDir));
+
+                var agentFolder = Path.Combine(testOutputDir, "agent");
+
+                Assert.True(File.Exists(Path.Combine(agentFolder, "src", "AbstractSettleTasklet.cs")));
+                Assert.True(File.Exists(Path.Combine(agentFolder, "src", "SettleContracts.cs")));
+                Assert.True(File.Exists(Path.Combine(agentFolder, "tests", "StepLogicTests.cs")));
+                Assert.True(File.Exists(Path.Combine(agentFolder, "tests", "ArchitectureTests.cs")));
+
+                // Java 전용 파일은 C# 타깃에서는 나오지 않아야 한다.
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ISettleStep.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "AbstractSettleTasklet.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ISettleStepDescriptor.java")));
+
+                var architectureTest = await File.ReadAllTextAsync(
+                    Path.Combine(agentFolder, "tests", "ArchitectureTests.cs"));
+                Assert.Contains("NetArchTest.Rules", architectureTest);
+            }
+            finally
+            {
+                if (Directory.Exists(testOutputDir))
+                {
+                    Directory.Delete(testOutputDir, true);
+                }
+            }
+        }
+
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_ForJava_WritesArchitectureAndContractStubsAtCorrectPaths()
+        {
+            // Critical: ArchitectureTests.java가 com.reset.batch.core.ISettleStep /
+            // AbstractSettleTasklet을 클래스 리터럴로 참조하므로, 이 두 파일이 실제로
+            // agent/src에 쓰이지 않으면 javac가 즉시 실패한다. 이 테스트가 없으면
+            // DataAccessPolicyTests(문자열만 확인)를 통과해도 산출물은 컴파일되지 않는다.
+            var testOutputDir = Path.Combine(
+                Directory.GetCurrentDirectory(), "test_output_exporter_wiring_java");
+            if (Directory.Exists(testOutputDir))
+            {
+                Directory.Delete(testOutputDir, true);
+            }
+
+            try
+            {
+                var spDefs = new System.Collections.Generic.List<SpDefinition>
+                {
+                    new SpDefinition { Schema = "dbo", Name = "USP_Sp1", DdlText = "CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;" }
+                };
+
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    spDefs, "# Plan", VerificationOutcome.Passed, "WiringJobJava", testOutputDir, "Java",
+                    new OutputPathResolver("TestDB", testOutputDir));
+
+                var agentFolder = Path.Combine(testOutputDir, "agent");
+
+                var settleStepPath = Path.Combine(agentFolder, "src", "ISettleStep.java");
+                var abstractTaskletPath = Path.Combine(agentFolder, "src", "AbstractSettleTasklet.java");
+                var contractPath = Path.Combine(agentFolder, "src", "ISettleStepDescriptor.java");
+                var architectureTestPath = Path.Combine(agentFolder, "tests", "ArchitectureTests.java");
+                var stepLogicTestPath = Path.Combine(agentFolder, "tests", "StepLogicTests.java");
+
+                Assert.True(File.Exists(settleStepPath), settleStepPath);
+                Assert.True(File.Exists(abstractTaskletPath), abstractTaskletPath);
+                Assert.True(File.Exists(contractPath), contractPath);
+                Assert.True(File.Exists(architectureTestPath), architectureTestPath);
+                Assert.True(File.Exists(stepLogicTestPath), stepLogicTestPath);
+
+                // C# 전용 파일은 Java 타깃에서는 나오지 않아야 한다.
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "AbstractSettleTasklet.cs")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "SettleContracts.cs")));
+
+                var settleStep = await File.ReadAllTextAsync(settleStepPath);
+                var abstractTasklet = await File.ReadAllTextAsync(abstractTaskletPath);
+                var contract = await File.ReadAllTextAsync(contractPath);
+                var architectureTest = await File.ReadAllTextAsync(architectureTestPath);
+
+                // 아키텍처 테스트가 참조하는 패키지·타입이 실제로 이 패키지에 존재해야 한다.
+                Assert.Contains("package com.reset.batch.core;", settleStep);
+                Assert.Contains("package com.reset.batch.core;", abstractTasklet);
+                Assert.Contains("package com.reset.batch.core;", contract);
+                Assert.Contains("public interface ISettleStep", settleStep);
+                Assert.Contains("public abstract class AbstractSettleTasklet implements ISettleStep", abstractTasklet);
+                Assert.Contains("com.reset.batch.core.ISettleStep.class", architectureTest);
+                Assert.Contains("com.reset.batch.core.AbstractSettleTasklet.class", architectureTest);
+                Assert.Contains("package com.reset.batch.tests.architecture;", architectureTest);
+            }
+            finally
+            {
+                if (Directory.Exists(testOutputDir))
+                {
+                    Directory.Delete(testOutputDir, true);
+                }
+            }
+        }
+
         private static async Task<string> ExportAndReadBootstrapTaskAsync(string targetLanguage, string dirSuffix)
         {
             var testOutputDir = Path.Combine(

@@ -102,6 +102,7 @@ ORM은 아래 4가지 용도에만 허용합니다. 목록에 없는 모든 데�
         // 정산 대상 대량 DML, 집계, 청킹 루프, Shadow 처리, 세션 제어는 파라미터 바인딩 SQL로 작성한다.";
 
         private const string CSharpArchitectureTests = @"using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using NetArchTest.Rules;
@@ -168,25 +169,37 @@ namespace ReSet.Batch.Tests.Architecture
         public void EveryTasklet_MustDeclare_StepNameAndSourceProcName()
         {
             // 검증기는 이 이름으로 설계서와 코드를 짝짓는다. 비어 있으면 매핑이 끊긴다.
-            var offenders = Target.GetTypes()
+            // 생성자 주입(예: ISettleRepository)을 쓰는 Tasklet은 매개변수 없는
+            // Activator.CreateInstance가 실패한다. 그 예외가 테스트 실행 자체를
+            // 무너뜨리면 원래 잡으려던 위반이 조용히 넘어가므로, 인스턴스화 실패도
+            // 위반 목록에 담아 보고한다.
+            var offenders = new List<string>();
+            foreach (var t in Target.GetTypes()
                 .Where(t => typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
-                .Where(t => t.IsClass && !t.IsAbstract)
-                .Where(t =>
+                .Where(t => t.IsClass && !t.IsAbstract))
+            {
+                try
                 {
                     var instance = (ReSet.Batch.Core.ISettleStep)Activator.CreateInstance(t)!;
-                    return string.IsNullOrWhiteSpace(instance.StepName);
-                })
-                .Select(t => t.FullName)
-                .ToList();
+                    if (string.IsNullOrWhiteSpace(instance.StepName))
+                    {
+                        offenders.Add(t.FullName + "" (StepName이 비어 있음)"");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    offenders.Add(t.FullName + $"" (매개변수 없는 생성자로 인스턴스화 실패: {ex.GetType().Name})"");
+                }
+            }
 
             Assert.True(offenders.Count == 0,
-                ""StepName이 비어 있는 Tasklet: "" + string.Join("", "", offenders));
+                ""StepName 검증에 실패한 Tasklet: "" + string.Join("", "", offenders));
         }
     }
 }
 ";
 
-        private const string JavaArchitectureTests = @"package reset.batch.tests.architecture;
+        private const string JavaArchitectureTests = @"package com.reset.batch.tests.architecture;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
@@ -203,21 +216,21 @@ import org.junit.jupiter.api.Test;
  */
 class ArchitectureTests {
 
-    private final JavaClasses classes = new ClassFileImporter().importPackages(""reset.batch"");
+    private final JavaClasses classes = new ClassFileImporter().importPackages(""com.reset.batch"");
 
     @Test
     void everySettleStepMustExtendAbstractSettleTasklet() {
         ArchRuleDefinition.classes()
-            .that().implement(reset.batch.core.ISettleStep.class)
+            .that().implement(com.reset.batch.core.ISettleStep.class)
             .and().areNotInterfaces().and().areNotAbstract()
-            .should().beAssignableTo(reset.batch.core.AbstractSettleTasklet.class)
+            .should().beAssignableTo(com.reset.batch.core.AbstractSettleTasklet.class)
             .check(classes);
     }
 
     @Test
     void taskletsMustNotCreateTheirOwnConnection() {
         ArchRuleDefinition.noClasses()
-            .that().areAssignableTo(reset.batch.core.AbstractSettleTasklet.class)
+            .that().areAssignableTo(com.reset.batch.core.AbstractSettleTasklet.class)
             .should().callMethod(javax.sql.DataSource.class, ""getConnection"")
             .check(classes);
     }
@@ -268,7 +281,7 @@ namespace ReSet.Batch.Core
 }
 ";
 
-        private const string JavaRepositoryContract = @"package reset.batch.core;
+        private const string JavaRepositoryContract = @"package com.reset.batch.core;
 
 import java.util.List;
 
