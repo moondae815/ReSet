@@ -54,6 +54,25 @@ class C
     }
 
     [Fact]
+    public void Scanner_FlagsANullConditionalMemberAccessTypeCheck()
+    {
+        // SqlObjectTypeClassifier.cs 자신이 ?.Contains(...)를 쓴다. 그 관용구를
+        // 호출부로 복사해 오면 (파일명 제외가 없는 곳에서는) 사각지대가 된다 -
+        // a?.b()는 MemberAccessExpressionSyntax가 아니라
+        // ConditionalAccessExpressionSyntax/MemberBindingExpressionSyntax로
+        // 파싱되기 때문이다.
+        var source = @"
+class C
+{
+    bool M(D dep) => dep.Type?.Contains(""TABLE"") == true;
+}
+class D { public string Type { get; set; } }";
+
+        var offender = Assert.Single(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+        Assert.Contains("dep.Type?.Contains", offender.Expression);
+    }
+
+    [Fact]
     public void Scanner_DoesNotFlagLogTextMatching()
     {
         // 실례: src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs.
@@ -63,6 +82,19 @@ class C
 class C
 {
     bool M(string logUpper) => logUpper.Contains(""TABLE"");
+}";
+
+        Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
+    }
+
+    [Fact]
+    public void Scanner_DoesNotFlagANullConditionalLogTextMatch()
+    {
+        // 조건 3(수신자)은 null 조건부 경로에서도 여전히 관문이어야 한다.
+        var source = @"
+class C
+{
+    bool M(string logUpper) => logUpper?.Contains(""TABLE"") == true;
 }";
 
         Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));

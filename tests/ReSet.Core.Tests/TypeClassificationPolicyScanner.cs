@@ -23,9 +23,18 @@ public sealed record TypeClassificationOffender(string RelativePath, int Line, s
 /// 필요)을 쓰지 않고 구문 트리만 본다. 빠르고 프로젝트 참조가 필요 없으며,
 /// 이 저장소의 명명 규약이 일관되어 실용적으로 충분하다.
 ///
+/// null 조건부 호출(`dep.Type?.Contains("TABLE")`)도 잡는다. `a?.b()`는
+/// `MemberAccessExpressionSyntax`가 아니라 `ConditionalAccessExpressionSyntax`/
+/// `MemberBindingExpressionSyntax`로 파싱되므로 별도 경로가 필요하다 -
+/// 정작 이 관용구를 쓰는 유일한 소스 파일이 `SqlObjectTypeClassifier.cs`
+/// 자신이라, 그 파일을 참고해 옮겨 적는 것이 사각지대에 이르는 가장
+/// 자연스러운 경로였다.
+///
 /// 알려진 한계: `var t = dep.Type; t.Contains("TABLE")`처럼 타입 문자열을 이름이
-/// 다른 지역 변수로 옮겨 담으면 놓친다. 이 형태는 자연스러운 리팩터링에서
-/// 나오지 않으므로 거짓 음성을 감수한다.
+/// 다른 지역 변수로 옮겨 담으면 놓친다. `a?.b?.Contains(...)`처럼 조건부 접근이
+/// 여러 번 이어지는 경우는 가장 가까운 감싸는 조건부 접근식만 수신자로 본다 -
+/// 이 저장소의 실제 호출부는 한 단계 이상 이어지지 않으므로 실용적으로 충분하다.
+/// 두 형태 모두 자연스러운 리팩터링에서 나오지 않으므로 거짓 음성을 감수한다.
 /// </summary>
 public static class TypeClassificationPolicyScanner
 {
@@ -74,16 +83,50 @@ public static class TypeClassificationPolicyScanner
 
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            if (invocation.Expression is not MemberAccessExpressionSyntax member) continue;
-            if (member.Name.Identifier.ValueText != "Contains") continue;
+            if (!TryGetContainsReceiver(invocation, out var receiver, out var reportNode)) continue;
             if (!HasSqlTypeLiteralArgument(invocation)) continue;
-            if (!IsSqlTypeExpression(member.Expression)) continue;
+            if (!IsSqlTypeExpression(receiver)) continue;
 
-            var line = tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1;
-            offenders.Add(new TypeClassificationOffender(relativePath, line, invocation.ToString()));
+            var line = tree.GetLineSpan(reportNode.Span).StartLinePosition.Line + 1;
+            offenders.Add(new TypeClassificationOffender(relativePath, line, reportNode.ToString()));
         }
 
         return offenders;
+    }
+
+    /// <summary>
+    /// `Contains` 호출의 수신자를 두 형태에서 뽑아낸다 - 일반 멤버 접근
+    /// (`dep.Type.Contains(...)`)과 null 조건부 접근(`dep.Type?.Contains(...)`).
+    /// 후자는 `invocation.Expression`이 `MemberBindingExpressionSyntax`이고,
+    /// 진짜 수신자는 감싸는 `ConditionalAccessExpressionSyntax.Expression`에 있다.
+    /// `reportNode`는 위반 메시지에 담을 전체 식이다 - 조건부 접근 경로에서는
+    /// `invocation` 자체가 `.Contains(...)` 부분만 가리키므로 감싸는
+    /// `ConditionalAccessExpressionSyntax` 전체(`dep.Type?.Contains(...)`)를 쓴다.
+    /// </summary>
+    private static bool TryGetContainsReceiver(
+        InvocationExpressionSyntax invocation,
+        out ExpressionSyntax receiver,
+        out SyntaxNode reportNode)
+    {
+        switch (invocation.Expression)
+        {
+            case MemberAccessExpressionSyntax member when member.Name.Identifier.ValueText == "Contains":
+                receiver = member.Expression;
+                reportNode = invocation;
+                return true;
+
+            case MemberBindingExpressionSyntax binding
+                when binding.Name.Identifier.ValueText == "Contains" &&
+                     invocation.Parent is ConditionalAccessExpressionSyntax conditional:
+                receiver = conditional.Expression;
+                reportNode = conditional;
+                return true;
+
+            default:
+                receiver = null!;
+                reportNode = null!;
+                return false;
+        }
     }
 
     private static bool HasSqlTypeLiteralArgument(InvocationExpressionSyntax invocation) =>
