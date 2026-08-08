@@ -223,15 +223,25 @@ class ArchitectureTests {
     void everySettleStepMustExtendAbstractSettleTasklet() {
         // ClassesThat 인터페이스에는 abstract 여부만 걸러내는 메서드가 없다 - ArchUnit이
         // 문서화한 방법은 haveModifier/doNotHaveModifier(JavaModifier.ABSTRACT)뿐이다.
+        //
+        // allowEmptyShould(true): 부트스트랩 회차에는 AbstractSettleTasklet(추상)만 있고
+        // 구현체 Tasklet이 아직 없다. 이 규칙의 ""should"" 대상 집합(ISettleStep을 구현하고
+        // 인터페이스도 추상도 아닌 클래스)은 그 시점에 비어 있는데, ArchUnit은 기본값으로
+        // 빈 집합을 실패로 본다(archRule.failOnEmptyShould). 대상이 아직 없다는 뜻이지
+        // 위반이라는 뜻이 아니므로, 없으면 통과로 취급한다.
         ArchRuleDefinition.classes()
             .that().implement(com.reset.batch.core.ISettleStep.class)
             .and().areNotInterfaces().and().doNotHaveModifier(JavaModifier.ABSTRACT)
             .should().beAssignableTo(com.reset.batch.core.AbstractSettleTasklet.class)
+            .allowEmptyShould(true)
             .check(classes);
     }
 
     @Test
     void taskletsMustNotCreateTheirOwnConnection() {
+        // allowEmptyShould가 필요 없다 - isAssignableTo는 자기 자신을 포함하므로
+        // AbstractSettleTasklet 자신이 항상 이 규칙의 대상 집합에 들어 있다(부트스트랩
+        // 회차에도 그 파일은 이미 배치되어 있다).
         ArchRuleDefinition.noClasses()
             .that().areAssignableTo(com.reset.batch.core.AbstractSettleTasklet.class)
             .should().callMethod(javax.sql.DataSource.class, ""getConnection"")
@@ -240,9 +250,12 @@ class ArchitectureTests {
 
     @Test
     void domainMustNotDependOnInfrastructure() {
+        // allowEmptyShould(true): 부트스트랩 회차의 스켈레톤에는 ..domain.. 패키지 자체가
+        // 아직 없다. 위와 같은 이유로 대상 없음을 위반으로 취급하지 않는다.
         ArchRuleDefinition.noClasses()
             .that().resideInAPackage(""..domain.."")
             .should().dependOnClassesThat().resideInAPackage(""..infrastructure.."")
+            .allowEmptyShould(true)
             .check(classes);
     }
 }

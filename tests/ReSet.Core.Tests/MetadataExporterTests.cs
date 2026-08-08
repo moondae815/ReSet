@@ -877,10 +877,18 @@ namespace ReSet.Core.Tests
                 Assert.True(File.Exists(Path.Combine(agentFolder, "tests", "StepLogicTests.cs")));
                 Assert.True(File.Exists(Path.Combine(agentFolder, "tests", "ArchitectureTests.cs")));
 
-                // Java 전용 파일은 C# 타깃에서는 나오지 않아야 한다.
+                // Java 전용 파일은 C# 타깃에서는 나오지 않아야 한다. Java 쪽 테스트가
+                // 고정하는 8개 파일 전부와 대칭이어야 한다 - 이 목록이 Java 쪽 파일
+                // 추가를 따라가지 못하면(재리뷰에서 지적된 결함) 새 파일이 C# 타깃에도
+                // 잘못 새어나가는 회귀를 이 테스트가 놓친다.
                 Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ISettleStep.java")));
                 Assert.False(File.Exists(Path.Combine(agentFolder, "src", "AbstractSettleTasklet.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "SettleContext.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "StepResult.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "IDbConnectionFactory.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ICheckpointRepository.java")));
                 Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ISettleStepDescriptor.java")));
+                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "ISettleRepository.java")));
 
                 var architectureTest = await File.ReadAllTextAsync(
                     Path.Combine(agentFolder, "tests", "ArchitectureTests.cs"));
@@ -993,6 +1001,36 @@ namespace ReSet.Core.Tests
                 // 다시 부르면 javac가 즉시 "cannot find symbol"로 죽는다.
                 Assert.DoesNotContain("areNotAbstract()", architectureTest);
                 Assert.Contains("doNotHaveModifier(JavaModifier.ABSTRACT)", architectureTest);
+
+                // 부트스트랩 회차에는 Tasklet 구현체도 domain 패키지도 아직 없다. ArchUnit은
+                // should절의 대상 집합이 비어 있으면 기본적으로 실패시키므로, 대상이 아직
+                // 없을 뿐인 두 규칙(EverySettleStep.../DomainMustNot...)에는
+                // allowEmptyShould(true)가 있어야 지시서가 "부트스트랩에서 통과시켜라"라고
+                // 말하는 것이 실제로 가능하다. taskletsMustNotCreateTheirOwnConnection은
+                // AbstractSettleTasklet 자신이 항상 대상 집합에 있어 필요 없다.
+                Assert.Contains("everySettleStepMustExtendAbstractSettleTasklet", architectureTest);
+                var everySettleStepRuleStart = architectureTest.IndexOf("everySettleStepMustExtendAbstractSettleTasklet", StringComparison.Ordinal);
+                var everySettleStepRuleEnd = architectureTest.IndexOf("taskletsMustNotCreateTheirOwnConnection", StringComparison.Ordinal);
+                Assert.Contains("allowEmptyShould(true)", architectureTest[everySettleStepRuleStart..everySettleStepRuleEnd]);
+
+                var domainRuleStart = architectureTest.IndexOf("domainMustNotDependOnInfrastructure", StringComparison.Ordinal);
+                Assert.Contains("allowEmptyShould(true)", architectureTest[domainRuleStart..]);
+
+                // BOM(EF BB BF): javac가 BOM으로 시작하는 소스를 거부한다는 보고가 있다
+                // (JDK-4508058). 컴파일러 없이도 바이트 자체는 고정할 수 있다.
+                var javaFilePaths = new[]
+                {
+                    settleStepPath, abstractTaskletPath, settleContextPath, stepResultPath,
+                    dbConnectionFactoryPath, checkpointRepositoryPath, stepDescriptorPath, repositoryPath,
+                    architectureTestPath, stepLogicTestPath,
+                };
+                foreach (var path in javaFilePaths)
+                {
+                    var firstBytes = await File.ReadAllBytesAsync(path);
+                    var startsWithBom = firstBytes.Length >= 3
+                        && firstBytes[0] == 0xEF && firstBytes[1] == 0xBB && firstBytes[2] == 0xBF;
+                    Assert.False(startsWithBom, $"{path}가 UTF-8 BOM으로 시작한다");
+                }
             }
             finally
             {

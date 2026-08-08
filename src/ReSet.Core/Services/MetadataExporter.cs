@@ -14,6 +14,14 @@ namespace ReSet.Core.Services
 {
     public class MetadataExporter : IMetadataExporter
     {
+        /// <summary>
+        /// Encoding.UTF8은 BOM(EF BB BF)을 파일 앞에 붙인다. javac가 BOM으로 시작하는 소스를
+        /// "illegal character" 오류로 거부한다는 보고가 있다(JDK-4508058). 이 환경에는 JDK가
+        /// 없어 직접 컴파일해 확인하지 못했지만, BOM을 빼서 손해 볼 것은 없고 있으면 깨질 수
+        /// 있으므로 Java 산출물에는 이 인코딩을 쓴다.
+        /// </summary>
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
         public Task ExportCodeObjectArtifactsAsync(
             SpDefinition definition,
             CodeObjectKey objectKey,
@@ -550,7 +558,7 @@ public interface ISettleStep {
     StepResult execute(SettleContext context);
 }
 ";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStep.java"), settleStepStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStep.java"), settleStepStub, Utf8NoBom);
 
                         var settleContextStub = @"package com.reset.batch.core;
 
@@ -584,7 +592,7 @@ public class SettleContext {
     public void setCheckpoint(ICheckpointRepository checkpoint) { this.checkpoint = checkpoint; }
 }
 ";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContext.java"), settleContextStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContext.java"), settleContextStub, Utf8NoBom);
 
                         var stepResultStub = @"package com.reset.batch.core;
 
@@ -612,7 +620,7 @@ public class StepResult {
     public boolean isSuccess() { return code == 0; }
 }
 ";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "StepResult.java"), stepResultStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "StepResult.java"), stepResultStub, Utf8NoBom);
 
                         var dbConnectionFactoryStub = @"package com.reset.batch.core;
 
@@ -624,7 +632,7 @@ public interface IDbConnectionFactory {
     Connection createConnection() throws SQLException;
 }
 ";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "IDbConnectionFactory.java"), dbConnectionFactoryStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "IDbConnectionFactory.java"), dbConnectionFactoryStub, Utf8NoBom);
 
                         var checkpointRepositoryStub = @"package com.reset.batch.core;
 
@@ -634,7 +642,7 @@ public interface ICheckpointRepository {
     void markStepCompleted(String stepName, String ymd);
 }
 ";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ICheckpointRepository.java"), checkpointRepositoryStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ICheckpointRepository.java"), checkpointRepositoryStub, Utf8NoBom);
 
                         var abstractTaskletStub = @"package com.reset.batch.core;
 
@@ -718,7 +726,7 @@ public abstract class AbstractSettleTasklet implements ISettleStep {
     // 이 conn 위에서 열려야 한다. 정산 대상 대량 DML, 집계, 청킹 루프, Shadow 처리,
     // 세션 제어는 파라미터 바인딩 SQL(MyBatis)로 작성한다.";
                         var abstractTaskletStubWithBoundary = abstractTaskletStub.Replace("[[ORM_BOUNDARY_JAVA]]", javaOrmBoundaryComment);
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.java"), abstractTaskletStubWithBoundary, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.java"), abstractTaskletStubWithBoundary, Utf8NoBom);
                     }
                 }
                 catch (Exception ex)
@@ -727,11 +735,11 @@ public abstract class AbstractSettleTasklet implements ISettleStep {
                 }
 
                 // 테스트 뼈대 및 NetArchTest 더미 생성
+                // agentTestsFolder 생성도 src/와 같은 결함 모양을 가진다 - 이전에는 outer try에
+                // 직접 놓여 있어 생성 실패가 곧장 outer catch로 튀어 완료 로그를 삼켰다. 생성과
+                // 그 직후의 쓰기를 언어별로 하나의 try에 묶어, 실패해도 다른 파일(반대쪽 언어
+                // 분기나 src/ 계약 스텁)에 영향이 없게 한다.
                 var agentTestsFolder = Path.Combine(agentFolder, "tests");
-                if (!Directory.Exists(agentTestsFolder))
-                {
-                    Directory.CreateDirectory(agentTestsFolder);
-                }
                 if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                 {
                     var xUnitStub = @"using Xunit;
@@ -746,16 +754,27 @@ namespace ReSet.Batch.Tests
         public async Task Step_ShouldExecuteDml_WhenPreCheckPasses()
         {
             // Arrange
-            
+
             // Act
-            
+
             // Assert
         }
     }
 }";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
-                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
-                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                    try
+                    {
+                        if (!Directory.Exists(agentTestsFolder))
+                        {
+                            Directory.CreateDirectory(agentTestsFolder);
+                        }
+                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "tests/*.cs 스텁 생성 중 오류가 발생했습니다. 진행은 계속합니다.");
+                    }
 
                     // agentSrcFolder 생성이 위 inner try에서 이미 실패해 경고로 삼켜졌을 수
                     // 있다. 그 경우 여기서 다시 시도하고, 그래도 실패하면 이 파일만 건너뛴다 -
@@ -786,15 +805,26 @@ public class StepLogicTests {
     @Test
     public void step_ShouldExecuteDml_WhenPreCheckPasses() {
         // Arrange
-        
+
         // Act
-        
+
         // Assert
     }
 }";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
-                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Encoding.UTF8);
-                    await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Encoding.UTF8);
+                    try
+                    {
+                        if (!Directory.Exists(agentTestsFolder))
+                        {
+                            Directory.CreateDirectory(agentTestsFolder);
+                        }
+                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Utf8NoBom);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "tests/*.java 스텁 생성 중 오류가 발생했습니다. 진행은 계속합니다.");
+                    }
 
                     // C# 쪽과 같은 이유로 격리한다 - src/ 생성 실패가 이미 쓰인 tests/*.java를
                     // 무의미하게 만들며 outer catch로 튀어 완료 로그를 삼키게 두지 않는다.
@@ -804,8 +834,8 @@ public class StepLogicTests {
                         {
                             Directory.CreateDirectory(agentSrcFolder);
                         }
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStepDescriptor.java"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleRepository.java"), DataAccessPolicy.JavaRepositoryInterfaceStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStepDescriptor.java"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Utf8NoBom);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleRepository.java"), DataAccessPolicy.JavaRepositoryInterfaceStub, Utf8NoBom);
                     }
                     catch (Exception ex)
                     {
