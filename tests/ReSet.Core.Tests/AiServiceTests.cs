@@ -1091,6 +1091,116 @@ namespace ReSet.Core.Tests
             Assert.False(review.HasDefects);
             Assert.Empty(review.DefectiveSteps);
         }
+
+        private static SpDefinition SchemaFilterSpDef(
+            System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>> referencedColumns,
+            string dependencyName)
+        {
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = dependencyName,
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" },
+                    new ColumnInfo { ColumnName = "NonSettleAmt", DataType = "money" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = referencedColumns
+            };
+
+            return spDef;
+        }
+
+        private static IAiService SpecService()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            return new AiService(client, 0.2f);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldKeepColumnsFromEveryCanonicalMatch()
+        {
+            // 정규화가 한정을 못 한 경우(ObjectKey 없음 등) 키가 갈라진 채 남을 수 있다.
+            // 첫 매치에서 멈추면 INSERT 전용 컬럼이 스키마 표에서 사라진다.
+            var spDef = SchemaFilterSpDef(
+                new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD", "NonSettleAmt" } }
+                },
+                "TSettleMst");
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+            Assert.Contains("| NonSettleAmt |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldNotMatchATableWhoseNameMerelyContainsTheDependency()
+        {
+            // dep.Name = "TSettleMst" 가 "TSettleMstBackup" 키에 부분 매칭되던 버그.
+            // 백업 테이블의 참조 컬럼이 본 테이블의 필터를 통과시켜선 안 된다.
+            var spDef = SchemaFilterSpDef(
+                new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMstBackup", new System.Collections.Generic.List<string> { "CYMD" } },
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } }
+                },
+                "TSettleMst");
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.DoesNotContain("| CYMD |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldQualifyDependencyListWithItsDatabase()
+        {
+            // 의존성 목록이 DB를 안 찍으면 PaymentDB.dbo.TTxMst 와 dbo.TTxMst 가
+            // 프롬프트에서 구별되지 않는다. 바로 아래 스키마 블록은 3파트로 찍는다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TTxMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("PaymentDB.dbo.TTxMst", result.UserPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler

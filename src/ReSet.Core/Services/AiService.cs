@@ -46,17 +46,38 @@ namespace ReSet.Core.Services
             
             // 엄격한 필터링 대상 컬럼 식별
             var keepCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            
+
             // 1) AST에서 감지한 실제 참조 컬럼 추가
+            //
+            // canonical 3-part로 정확 비교한다. 예전에는 dep.Name을 substring으로 찾고
+            // 첫 매치에서 멈췄다. 그러면 INSERT 대상 컬럼만 담긴 키를 놓쳐 CYMD·INSTATE·
+            // OUTSTATE·NonSettleAmt가 스키마 표에서 사라지고, AI가 "존재하지 않는 컬럼"
+            // 이라고 적었다. 또 "TSettleMst"가 "TSettleMstBackup"에도 매칭됐다.
+            //
+            // break를 두지 않는 것은 폴백 대비다. 정규화가 DB 컨텍스트를 못 얻으면
+            // 키가 갈라진 채 남는데, 그때도 컬럼이 유실되면 안 된다.
             if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.ReferencedColumnsPerTable != null)
             {
+                var depCanonicalName = StaticAnalysisNormalizer.CanonicalizeParts(
+                    dep.Database,
+                    dep.Schema,
+                    dep.Name,
+                    spDef.ObjectKey?.Database,
+                    spDef.Schema);
+
                 foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
                 {
-                    if (kvp.Key.Contains(dep.Name, StringComparison.OrdinalIgnoreCase))
+                    var keyCanonicalName = StaticAnalysisNormalizer.Canonicalize(
+                        kvp.Key,
+                        spDef.ObjectKey?.Database,
+                        spDef.Schema);
+
+                    if (!string.Equals(keyCanonicalName, depCanonicalName, StringComparison.OrdinalIgnoreCase))
                     {
-                        foreach (var c in kvp.Value) keepCols.Add(c);
-                        break;
+                        continue;
                     }
+
+                    foreach (var c in kvp.Value) keepCols.Add(c);
                 }
             }
             
@@ -125,8 +146,12 @@ namespace ReSet.Core.Services
 
             foreach (var dep in spDef.Dependencies)
             {
-                dependenciesText.AppendLine($"- Schema: {dep.Schema}, Name: {dep.Name}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
-                
+                // 바로 아래 <referenced-table-schemas>가 3파트로 찍으므로 여기서도 DB를
+                // 밝힌다. 안 그러면 PaymentDB.dbo.TTxMst와 dbo.TTxMst가 같은 줄로 보인다.
+                var depQualifiedName = StaticAnalysisNormalizer.CanonicalizeParts(
+                    dep.Database, dep.Schema, dep.Name, spDef.ObjectKey?.Database, spDef.Schema);
+                dependenciesText.AppendLine($"- Name: {depQualifiedName}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
+
                 if (dep.Columns.Count > 0)
                 {
                     tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep, spDef));
