@@ -1335,6 +1335,71 @@ namespace ReSet.Core.Tests
             Assert.Contains("| CLIENTID |", result.UserPrompt);
             Assert.Contains("| CYMD |", result.UserPrompt);
         }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldUseSameQualifiedNameInDependencyListAndSchemaHeaderWhenDependencyHasDatabase()
+        {
+            // 설계서 §5: 의존성 목록과 스키마 블록 헤더가 같은 물리 테이블을 다른
+            // 표기로 찍으면 모델이 그 둘을 서로 다른 테이블로 읽을 수 있다. dep.Database가
+            // 있어 [DB].[Schema].[Name] 대괄호 표기로 갈라지던 경우를 덮는다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Database = "PaymentDB",
+                Schema = "dbo",
+                Name = "TTxMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "TxId", DataType = "int" }
+                }
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("- Name: PaymentDB.dbo.TTxMst, Type:", result.UserPrompt);
+            Assert.Contains("### 테이블: PaymentDB.dbo.TTxMst (", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldUseSameQualifiedNameInDependencyListAndSchemaHeaderWhenDependencyHasNoDatabase()
+        {
+            // dep.Database가 없어 spDef.ObjectKey로 한정되는 경우도 두 블록의 표기가
+            // 같아야 한다. 이전에는 스키마 블록 헤더만 DB 없이 "dbo.TSettleMst"로
+            // 남아 의존성 목록의 "SETTLE_POQ_DB.dbo.TSettleMst"와 어긋났다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" }
+                }
+            });
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("- Name: SETTLE_POQ_DB.dbo.TSettleMst, Type:", result.UserPrompt);
+            Assert.Contains("### 테이블: SETTLE_POQ_DB.dbo.TSettleMst (", result.UserPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler

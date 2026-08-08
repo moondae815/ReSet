@@ -32,9 +32,12 @@ namespace ReSet.Core.Services
         private string FormatTableSchemaToMarkdown(DependencyInfo dep, SpDefinition spDef)
         {
             var sb = new System.Text.StringBuilder();
-            var depFullName = string.IsNullOrEmpty(dep.Database)
-                 ? $"{dep.Schema}.{dep.Name}"
-                 : $"[{dep.Database}].[{dep.Schema}].[{dep.Name}]";
+            // 바로 위 의존성 목록(dependenciesText)이 BuildDependencyQualifiedName으로
+            // canonical 3-part 표기를 쓰므로 여기서도 같은 표기를 써야 한다. 한쪽만
+            // 맞추면(예: 목록은 "SETTLE_POQ_DB.dbo.TCardAllotInterest", 이 헤더는
+            // "dbo.TCardAllotInterest" 또는 "[DB].[Schema].[Name]") 모델이 같은 물리
+            // 테이블을 서로 다른 두 테이블로 읽을 위험이 생긴다.
+            var depFullName = BuildDependencyQualifiedName(dep, spDef);
             sb.AppendLine($"### 테이블: {depFullName} ({dep.Type}) - 발견 깊이: {dep.DiscoveryDepth}단계");
             if (!string.IsNullOrEmpty(dep.Description))
             {
