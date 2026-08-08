@@ -1725,6 +1725,14 @@ namespace ReSet.Core.Services
             var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
 
+            // 목차가 낼 ErrorCodes는 하한 검사의 유일한 대조 기준인데, 실측 두 회차에서
+            // 26개 단계 중 25개가 빈 배열이었다. 명세서에서 뽑아 채운다. 명세서는 루프
+            // 안에서 바뀌지 않으므로 한 번만 뽑는다.
+            //
+            // specsCopy가 아니라 specs를 넘긴다 - specsCopy에는 Feedback_Log.txt가
+            // 붙는데 그것은 명세서가 아니다.
+            var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+
             // 조각을 호출부로 내보낸다. 산출물 분할이 이 값들을 경계 앵커로 쓴다.
             // splitMarkdown이 null이면 단일 호출 경로였다는 뜻이고, 그때는 조각이
             // 아예 없으므로 null을 그대로 내보내 호출부가 폴백을 취하게 한다.
@@ -1780,7 +1788,7 @@ namespace ReSet.Core.Services
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
                             var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
-                            currentPlanStructure = planResult.Content;
+                            currentPlanStructure = PlanStructureEnricher.Enrich(planResult.Content, specReturnCodes);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
@@ -1977,6 +1985,7 @@ namespace ReSet.Core.Services
                         {
                             var redrafted = await DraftReplacementPlanStructureAsync(
                                 "재시도가 점수를 개선하지 못해 목차를 다시 설계합니다",
+                                specReturnCodes,
                                 currentPlanStructure, currentBrainstorming, feedbackLog,
                                 targetLanguage, jobName, cancellationToken);
 
@@ -2153,6 +2162,7 @@ namespace ReSet.Core.Services
                     {
                         pendingPlanStructure = await DraftReplacementPlanStructureAsync(
                             "사용자가 문서 구조 변경을 요청하여 목차를 다시 설계합니다",
+                            specReturnCodes,
                             currentPlanStructure, currentBrainstorming, reviewResult.UserFeedback,
                             targetLanguage, jobName, cancellationToken);
                         if (pendingPlanStructure != null)
@@ -2449,6 +2459,7 @@ namespace ReSet.Core.Services
         /// </summary>
         private async Task<string?> DraftReplacementPlanStructureAsync(
             string reason,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> returnCodes,
             string currentStructure,
             string brainstorming,
             string? redraftFeedback,
@@ -2487,7 +2498,9 @@ namespace ReSet.Core.Services
                 return null;
             }
 
-            return redrafted;
+            // 재수립 경로와 L3 사용자 요청 경로가 이 헬퍼를 공유한다. 여기서 한 번
+            // 보강하면 두 경로가 함께 덮인다 - 호출부마다 따로 걸면 하나를 빠뜨린다.
+            return PlanStructureEnricher.Enrich(redrafted, returnCodes);
         }
 
         /// <summary>

@@ -6938,5 +6938,134 @@ SELECT 1;
             Assert.Equal(sectionKeys, stepCodes);
             Assert.Equal(new HashSet<string> { "S01", "S02" }, stepCodes);
         }
+
+        // Task 3: SpecReturnCodeExtractor + PlanStructureEnricher 배선. 목차가
+        // ErrorCodes를 비운 채 나와도, 명세서 본문의 @po_intRetVal 대입에서 뽑은
+        // 코드가 실제로 기록된 PlanStructure.md에 반영돼야 한다.
+        private const string StepsJsonNoErrorCodes = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""dbo.UP_X""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [] }
+  ]
+}
+```";
+
+        // 재수립 목차. 코드가 S01과 겹치지 않는 T01을 써서, 재수립 경로에서 보강이
+        // 걸리지 않으면 최종 문서에 -7이 없다는 사실이 바로 드러나게 한다.
+        private const string StepsJsonNoErrorCodesRedrafted = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""T01"", ""Name"": ""새 첫 단계"", ""LegacyProcedures"": [""dbo.UP_X""], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [] }
+  ]
+}
+```";
+
+        /// <summary>
+        /// 고정 본문 - step.ErrorCodes를 인덱싱하지 않는다. 보강 배선이 아직 없어
+        /// ErrorCodes가 빈 배열인 채로 파싱돼도 안전하게 하한을 통과해야 하기 때문이다.
+        /// </summary>
+        private static string FixedErrorCodeSection(string code) =>
+            $"### {code} 단계\n\n대상은 dbo.T1이고 오류코드는 -7이다.\n\n```sql\nSELECT 1;\n```";
+
+        [Fact]
+        public async Task Pipeline_ShouldWriteEnrichedErrorCodesToPlanStructureFile()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            // 목차는 ErrorCodes를 비운 채 낸다 - 실측 두 회차에서 26개 단계 중
+            // 25개가 이렇게 비어 있었다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJsonNoErrorCodes });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var steps = call.Arg<IReadOnlyList<BatchStepPlan>>();
+                    return new AiResult { Content = SkeletonMarkdownFor(steps.Select(s => s.Code).ToArray()) };
+                });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call => new AiResult { Content = FixedErrorCodeSection(call.Arg<BatchStepPlan>().Code) });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            // 명세서 본문에 반환코드 대입이 있다. LegacyProcedures("dbo.UP_X")와
+            // 파일명("dbo.UP_X")이 BareName 규칙으로 같은 키가 된다.
+            var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
+            var jobName = "ErrorCodeEnrichJob";
+            var outputRoot = _consolidatedOutputRoot;
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+            var written = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md"));
+
+            Assert.Contains("-7", written);
+            var parsed = BatchStepPlanParser.TryParse(written);
+            Assert.Equal(new[] { "-7" }, parsed!.Single(s => s.Code == "S01").ErrorCodes);
+        }
+
+        [Fact]
+        public async Task Pipeline_ShouldEnrichTheRedraftedStructureToo()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            // 최초 목차(S01), 재수립 목차(T01) 순서로 반환된다. 둘 다 ErrorCodes를
+            // 비운 채 낸다 - 최초 수립에만 보강을 걸면 이 재수립 회차가 다시
+            // 무실행이 된다는 회귀를 이 테스트가 잡아야 한다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJsonNoErrorCodes },
+                    new AiResult { Content = "## 재설계 목차\n" + StepsJsonNoErrorCodesRedrafted });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var steps = call.Arg<IReadOnlyList<BatchStepPlan>>();
+                    return new AiResult { Content = SkeletonMarkdownFor(steps.Select(s => s.Code).ToArray()) };
+                });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call => new AiResult { Content = FixedErrorCodeSection(call.Arg<BatchStepPlan>().Code) });
+
+            // 1·2회차는 60점으로 정체(최고점 갱신 없음) -> 2회차에서 목차 재수립이
+            // 발동한다(StructureRedraftPolicy: 미갱신 1회로 발동). 3회차는 재수립된
+            // 목차로 통과한다.
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call < 2
+                        ? new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
+                        : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
+            var jobName = "ErrorCodeRedraftEnrichJob";
+            var outputRoot = _consolidatedOutputRoot;
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+            // 재수립이 실제로 일어나 T01로 문서가 조립됐는지 먼저 확인한다 - 그렇지
+            // 않으면 이 테스트는 재수립 경로를 검증하는 게 아니다.
+            Assert.Contains("T01", result.Plan);
+
+            var finalPlanStructureOnDisk = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md"));
+            Assert.Contains("-7", finalPlanStructureOnDisk);
+        }
     }
 }
