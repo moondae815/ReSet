@@ -354,8 +354,21 @@ namespace ReSet.Core.Services
         {
             var step = layout?.Steps?.FirstOrDefault(s =>
                 string.Equals(s.Code, stepCode, StringComparison.OrdinalIgnoreCase));
-            if (step == null || step.TargetTables.Count == 0)
+            if (step == null)
             {
+                return dependencies;
+            }
+
+            // 목차가 대상 테이블을 안 냈으면 좁힐 근거가 없어 전체를 준다. 아래
+            // matched.Count == 0 폴백과 결과가 같으므로 관측성도 같아야 한다 -
+            // 여기만 조용하면 그 회차 하나가 Job 전체 스키마를 받은 사실이
+            // "경고 0건"에 묻힌다.
+            if (step.TargetTables.Count == 0)
+            {
+                Log.Warning(
+                    "단계의 목차 TargetTables가 비어 있어 의존성 스키마를 좁히지 못하고 전체 목록으로 대체합니다 - " +
+                    "Step: {StepCode}, 스키마 수: {Count}개",
+                    stepCode, dependencies.Count);
                 return dependencies;
             }
 

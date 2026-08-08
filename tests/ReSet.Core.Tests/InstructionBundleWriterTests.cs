@@ -6,10 +6,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 
 namespace ReSet.Core.Tests
 {
+    // 전역 Serilog.Log.Logger를 교체하는 테스트가 있어 병렬 실행에서 분리한다.
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class InstructionBundleWriterTests : IDisposable
     {
         private readonly string _outputRoot;
@@ -394,6 +399,59 @@ S02 본문
         }
 
         [Fact]
+        public async Task WriteAsync_ShouldWarnWhenStepDeclaresNoTargetTables()
+        {
+            // TargetTables가 비면 필터가 통째로 풀려 그 회차만 Job 전체 스키마를
+            // 받는다. 실측: POQSettleProcDaily5의 S12가 55개를 받는 동안 나머지는
+            // 1개였는데 로그에는 "경고: 0건"으로 끝났다. 바로 아래 matched.Count == 0
+            // 폴백에는 경고가 있으므로, 같은 결과를 내는 두 폴백의 관측성이
+            // 어긋나 있던 셈이다.
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string>
+                {
+                    ["S01"] = "### S01 스냅샷 생성\n조각 본문",
+                    ["S02"] = "### S02 원장 생성\n조각 본문",
+                },
+                new[]
+                {
+                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false),
+                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, Array.Empty<string>(), new[] { "-1" }, false),
+                },
+                null);
+
+            var inputs = Inputs(layout) with
+            {
+                SpDefs = new List<SpDefinition>
+                {
+                    SpDefWithDependency("UP_S01", "TClient"),
+                    SpDefWithDependency("UP_S02", "TLedger"),
+                },
+            };
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Warning().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m => m.Contains("S02") && m.Contains("TargetTables"));
+
+            // 폴백 자체는 유지한다 - 좁히지 못했다고 스키마를 통째로 빼앗으면
+            // 그 회차는 컬럼을 확인할 방법이 아예 없어진다.
+            var s02Task = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-02-S02.md"));
+            Assert.Contains("dbo.TClient", s02Task);
+            Assert.Contains("dbo.TLedger", s02Task);
+        }
+
+        [Fact]
         public async Task WriteAsync_ShouldNotIncludeDependenciesSection_InBootstrapTaskFile()
         {
             // 부트스트랩은 "단계 상세 문서를 읽지 마십시오"라고 지시하면서 작업
@@ -581,6 +639,12 @@ S02 본문
             Assert.Contains(
                 "BatchMigrationPlan.md",
                 await File.ReadAllTextAsync(result.EntryPointPath));
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
     }
 }
