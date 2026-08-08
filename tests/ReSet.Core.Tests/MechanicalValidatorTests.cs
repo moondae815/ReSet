@@ -550,5 +550,54 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Assert.False(result.IsValid);
             Assert.True(result.RegenerationCanFix);
         }
+
+        [Fact]
+        public void ValidateBatchStep_WithNoLegacyProcedure_TreatsEmptyErrorCodesAsNotApplicable()
+        {
+            // 레거시 출신이 없는 단계는 보존할 원본 코드가 애초에 없다. 실측
+            // POQSettleProcDaily6의 S00(실행 잠금 사전검증)과 S08(수수료 총액 확정)이
+            // 그런 경우로, 둘 다 계획이 새로 설계한 단계다.
+            var plan = S10Plan() with
+            {
+                LegacyProcedures = Array.Empty<string>(),
+                ErrorCodes = Array.Empty<string>(),
+            };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.True(result.IsValid);
+            Assert.Empty(result.PlanDefects);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithLegacyProcedureButNoErrorCodes_StillFails()
+        {
+            // 출신이 있는데 코드가 비었다면 보강이 실패한 것이다. 그 사실은 남아야 한다.
+            var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.PlanDefects, d => d.Contains("ErrorCodes"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithNoLegacyProcedure_StillChecksTargetTables()
+        {
+            // 두 축은 독립이다. 출신이 없다는 것과 쓰는 테이블이 없다는 것은 다른 사실이고,
+            // 아무것도 쓰지 않는다는 선언은 그 자체로 확인이 필요하다.
+            var plan = S10Plan() with
+            {
+                LegacyProcedures = Array.Empty<string>(),
+                ErrorCodes = Array.Empty<string>(),
+                TargetTables = Array.Empty<string>(),
+            };
+
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.PlanDefects, d => d.Contains("TargetTables"));
+            Assert.DoesNotContain(result.PlanDefects, d => d.Contains("ErrorCodes"));
+        }
     }
 }

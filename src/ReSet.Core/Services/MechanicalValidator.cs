@@ -202,7 +202,14 @@ namespace ReSet.Core.Services
                     $"{step.Code}의 목차 TargetTables가 비어 있어 대상 테이블 대조를 실행할 수 없습니다.");
             }
 
-            if (!step.ErrorCodes.Any(code => !string.IsNullOrWhiteSpace(code)))
+            // 레거시 출신이 없는 단계는 보존할 원본 코드가 애초에 없다 - 대조 항목 0개가
+            // 정상이다. 이것을 결함으로 들면 계획이 새로 설계한 정상 단계에 배너가 붙어
+            // 배너의 변별력이 사라진다.
+            //
+            // TargetTables 축은 여기에 딸리지 않는다. 출신이 없다는 것과 쓰는 테이블이
+            // 없다는 것은 다른 사실이고, 아무것도 쓰지 않는다는 선언은 그 자체로 확인이 필요하다.
+            if (step.LegacyProcedures.Count > 0 &&
+                !step.ErrorCodes.Any(code => !string.IsNullOrWhiteSpace(code)))
             {
                 result.PlanDefects.Add(
                     $"{step.Code}의 목차 ErrorCodes가 비어 있어 원본 오류코드 대조를 실행할 수 없습니다.");
