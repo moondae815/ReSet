@@ -55,11 +55,15 @@ public sealed record TypeClassificationOffender(string RelativePath, int Line, s
 /// `?.`가 두 번 이상 이어져도(`a?.Trim()?.Contains(...)`, `dep?.Type?.Trim()?.Contains(...)`)
 /// 소유 관계를 정확히 계산하면 안전하게 끝까지 풀린다 - 실험으로 세 겹·네 겹
 /// (`a?.Trim()?.ToUpper()?.ToLowerInvariant()?.Contains(...)`)까지 확인했고
-/// 매번 밀리초 단위로 끝났다. `IsSqlTypeExpression`의 while 루프에는 그와
-/// 별개로 방어적 루프 안전장치(직전과 같은 노드가 돌아오면 중단)가 있다 -
-/// 조상 탐색이 정확해도 남겨 둔 것이다. 구문 트리 형태는 앞으로도 예상 밖이
-/// 나올 수 있고, 게이트가 무응답이 되는 것은 판정을 놓치는 것보다 나쁘기
-/// 때문이다.
+/// 매번 밀리초 단위로 끝났다. 게이트가 멈추지 않는 근거는 이 소유 관계 계산
+/// 하나다. `IsSqlTypeExpression`의 while 루프에 있는 방어적 루프 안전장치는
+/// 그보다 좁은 범위의 값싼 보험일 뿐이다 - 언래핑이 *직전* 노드를 그대로
+/// 돌려주는 주기 1 순환만 끊고, 두 노드를 번갈아 오가는 주기 2 이상의 순환은
+/// 끊지 못한다(실측: 조상 탐색만 예전 구현으로 되돌리면
+/// `dependencyType?.Trim().ToUpper()?.Contains("TABLE")`가 같은 두 노드
+/// 참조를 번갈아 오가는 순환에 빠지고, 이 장치는 한 번도 발동하지 않는다).
+/// 그래도 남겨 둔다 - 비용이 없고, 주기 1 순환은 예전 구현에서 실제로
+/// 나온 형태이기 때문이다(`dependencyType?.Trim()?.Contains("TABLE")`).
 ///
 /// 알려진 한계(전부 실험으로 확인 - 임의로 적지 않았다):
 /// - `var t = dep.Type; t.Contains("TABLE")`처럼 타입 문자열을 이름이 다른
@@ -71,6 +75,14 @@ public sealed record TypeClassificationOffender(string RelativePath, int Line, s
 /// - `ToString`/`Substring`처럼 정규화 목록(Trim/ToUpper류) 밖의 메서드로 감싼
 ///   수신자는 풀지 않는다 - 목록을 무제한으로 넓히면 임의의 변환 뒤에서도
 ///   게이트가 뚫려 정밀도가 무너진다.
+/// - `(dependencyType?.Trim())?.Contains("TABLE")`처럼 수신자를 괄호로 감싸면
+///   놓친다 - 수신자가 `ParenthesizedExpressionSyntax`로 들어오는데 언래핑이
+///   괄호를 벗기지 않는다(실측: 위반 0건으로 통과).
+/// - `dep.Type?.Contains("TABLE").ToString()`처럼 매칭 호출 뒤에 후속 접근이
+///   붙으면 놓친다 - 이때 `.Contains("TABLE")` 호출의 부모가
+///   `ConditionalAccessExpressionSyntax`가 아니라 `MemberAccessExpressionSyntax`가
+///   되어 `TryGetMatchReceiver`의 조건부 접근 분기가 성립하지 않는다
+///   (실측: 위반 0건으로 통과).
 /// </summary>
 public static class TypeClassificationPolicyScanner
 {
@@ -201,13 +213,22 @@ public static class TypeClassificationPolicyScanner
     {
         while (TryUnwrapNormalizationCall(receiver, out var inner))
         {
-            // 방어적 루프 안전장치(재리뷰 Critical): 언래핑이 직전과 같은 노드를
-            // 돌려주면(조상 탐색이 잘못 계산되는 등 예상 밖 구문 트리 형태에서)
-            // 무한 루프 대신 여기서 멈춘다. Equals는 Roslyn SyntaxNode에서 같은
-            // 위치의 같은 그린 노드를 가리키면 true다(래퍼 객체 참조가 달라도) -
-            // ReferenceEquals보다 이 판정에 맞다. 아래 TryFindOwningConditionalAccess를
-            // 바로잡아도 이 장치는 유지한다 - 게이트가 무응답이 되는 것은 판정을
-            // 놓치는 것보다 나쁘고, 구문 트리 형태는 앞으로도 예상 밖이 나올 수 있다.
+            // 방어적 루프 안전장치: 언래핑이 *직전*과 같은 노드를 돌려주는
+            // 주기 1 순환에서 무한 반복 대신 여기서 멈춘다.
+            //
+            // 여기 쓰인 Equals는 System.Object.Equals, 즉 참조 동등이다 -
+            // SyntaxNode도 CSharpSyntaxNode도 ExpressionSyntax도 Equals를
+            // 재정의하지 않고 IEquatable<SyntaxNode>도 구현하지 않는다(리플렉션
+            // 확인). 구조 동등이 아니다: 모양이 똑같아도 다른 노드면 false이므로
+            // 다른 곳에서 이 .Equals로 구조 비교를 기대하면 안 된다(구조 비교는
+            // IsEquivalentTo다). 그런데도 이 비교가 통하는 이유는 Roslyn이 레드
+            // 노드를 캐시해서, 같은 자리를 다시 물으면 같은 참조를 돌려주기
+            // 때문이다.
+            //
+            // 이 장치가 막는 범위는 딱 주기 1 순환까지다. 두 노드를 번갈아 오가는
+            // 주기 2 이상은 직전 노드 비교로 끊을 수 없다 - 게이트가 멈추지 않는
+            // 근거는 아래 TryFindOwningConditionalAccess의 소유 관계 계산 쪽이고,
+            // 이 장치는 그보다 좁은 범위의 값싼 보험이다.
             if (receiver.Equals(inner))
             {
                 break;

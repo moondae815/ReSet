@@ -72,11 +72,23 @@
 
 **정정 3(재리뷰 Critical, 발견 1 - 완전히 닫힘):** 위 정정 2의 "조건부 접근이 두 번 이상 이어지는 형태는 놓친다"는 문장이 사실과 달랐다 - 실제로는 "놓치는" 것이 아니라 **무한 루프**였다. 2차 수정이 추가한 조상 탐색(`TryFindEnclosingConditionalAccess`)이 부모를 따라 올라가다 "처음 만나는" 조건부 접근식을 무조건 소유자로 봤는데, `a?.Trim()?.Contains(...)`처럼 `?.`가 두 번 이어지면 안쪽 조건부 접근식의 `Expression`이 바로 `?.Trim()` 호출 자신이라 "처음 만나는" 조건부 접근식이 오히려 자기 자신을 감싸는 것이었다 - `conditional.Expression`이 언래핑 대상 노드 자신을 돌려주고, `IsSqlTypeExpression`의 while 루프가 같은 노드를 영원히 반복했다. 재현·워치독 실측은 실행 보고에 남아 있다(4개 형태가 5초 타임아웃 안에 안 끝남, 수정 후 전부 25ms 이내로 종료).
 
-고친 내용은 두 가지다. (1) 조상 탐색을 "처음 만나는 CA"가 아니라 "실제로 `WhenNotNull`을 소유하는 CA"로 바로잡았다(`TryFindOwningConditionalAccess`) - 노드가 어떤 CA의 `Expression`(수신자) 쪽에 있으면 그 CA는 소유자가 아니므로, 그 CA 자체를 새 시작점 삼아 계속 올라간다. 이 수정만으로 `?.`가 몇 번 이어지든(세 번·네 번까지 실측) 안전하게 끝까지 풀리고, 밀리초 단위로 끝난다. (2) 그와 별개로 `IsSqlTypeExpression`의 while 루프에 방어적 루프 안전장치(직전과 같은 노드가 돌아오면 중단)를 추가했다 - 조상 탐색이 정확해도 남겨 뒀다. 게이트가 무응답이 되는 것은 판정을 놓치는 것보다 나쁘고, 구문 트리 형태는 앞으로도 예상 밖이 나올 수 있기 때문이다.
+고친 내용은 두 가지다. (1) 조상 탐색을 "처음 만나는 CA"가 아니라 "실제로 `WhenNotNull`을 소유하는 CA"로 바로잡았다(`TryFindOwningConditionalAccess`) - 노드가 어떤 CA의 `Expression`(수신자) 쪽에 있으면 그 CA는 소유자가 아니므로, 그 CA 자체를 새 시작점 삼아 계속 올라간다. 이 수정만으로 `?.`가 몇 번 이어지든(세 번·네 번까지 실측) 안전하게 끝까지 풀리고, 밀리초 단위로 끝난다. (2) 그와 별개로 `IsSqlTypeExpression`의 while 루프에 방어적 루프 안전장치(직전과 같은 노드가 돌아오면 중단)를 추가했다. **멈추지 않음을 보장하는 것은 (1)이고, (2)는 그보다 좁은 범위의 값싼 보험이다** - 아래 정정 4를 볼 것.
+
+**정정 4(최종 브랜치 리뷰):** 위 (2)의 안전장치를 설명한 문장이 두 가지 거짓을 담고 있었다(스캐너 클래스 XML 주석과 인라인 주석에도 같은 취지로 적혀 있었다). 둘 다 실측으로 바로잡았다.
+
+* **`Equals`의 의미.** "같은 위치의 같은 그린 노드를 가리키면 true(구조 동등)"라고 적었으나 사실이 아니다. `receiver.Equals(inner)`가 부르는 것은 `System.Object.Equals`, 즉 **참조 동등**이다 - `SyntaxNode`·`CSharpSyntaxNode`·`ExpressionSyntax` 어느 쪽도 `Equals`를 재정의하지 않고 `IEquatable<SyntaxNode>`도 구현하지 않는다(리플렉션 확인). 구조가 같고 텍스트가 같은 두 노드는 같은 트리 안에 있든 다른 트리에 있든 `Equals`가 `false`다(실측). 구조 비교를 원하면 `IsEquivalentTo`다. 그럼에도 이 비교가 제 일을 하는 진짜 이유는 **Roslyn이 레드 노드를 캐시하기 때문**이다 - 같은 자리를 다시 물으면 같은 래퍼 참조가 돌아온다(실측: `member.Expression`을 두 번 읽으면 `ReferenceEquals`가 `true`, GC 이후에도 같다).
+* **안전장치의 실제 능력.** "조상 탐색이 잘못 계산되어도 무한 루프를 막는다"고 적었으나 사실이 아니다. 이 장치는 **직전 노드로 곧장 되돌아오는 주기 1 순환만** 끊는다. 조상 탐색만 정정 3 이전 구현으로 되돌리고 이 장치를 남긴 변형에서, `dependencyType?.Trim().ToUpper()?.Contains("TABLE")`는 `.Trim().ToUpper()`와 `.Trim()` 두 노드를 무한히 번갈아 오갔고(레드 노드 캐시 덕에 매번 **같은 참조**가 돌아오는 것까지 확인) 안전장치는 한 번도 발동하지 않았다 - 재리뷰의 20초 초과 관측과 같은 형태다. 반면 `dependencyType?.Trim()?.Contains("TABLE")`(주기 1)에서는 즉시 발동했다.
+
+따라서 게이트가 멈추지 않는 정확성의 근거는 (1)의 소유 관계 계산이다. (2)는 없애지 않는다 - 비용이 없고, 주기 1 순환은 정정 3 이전 구현에서 실제로 나온 형태이므로 값싼 보험으로 남길 만하다. 다만 그 이상을 막는다고 적어서는 안 된다.
 
 같은 재리뷰에서 `dep?.Type.Contains("TABLE")`(첫 널 조건부 접근 자체가 수신자, 언래핑을 거치지 않는 경우)도 안 잡히는 것이 발견됐다. 조상 탐색 없이 `IsSqlTypeExpression`의 switch에 `MemberBindingExpressionSyntax` 분기 하나를 추가하는 것으로 안전하게 고쳐졌다(무한 루프를 일으킨 조상 탐색 로직과는 무관한 별개의 코드 경로다).
 
 이번 라운드의 방침은 지난 두 라운드와 달랐다 - 탐지 능력을 넓히지 않고 Critical과 위 두 가지만 고쳤다. 남는 한계는 위 정정 2의 목록에서 "이중 널 조건부 체인" 항목만 제외한 나머지 그대로다: 지역 변수 재대입, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드로 감싼 수신자.
+
+여기에 최종 브랜치 리뷰가 관측한 두 형태를 한계로 추가한다. 둘 다 이번에 생긴 것이 아니고, 게이트를 멈추지도 오탐하지도 않으며(실측: 밀리초 안에 위반 0건으로 통과), 이번 라운드에서 고치지 않는다 - 능력을 넓히는 것은 이 라운드의 방침이 아니다.
+
+* `(dependencyType?.Trim())?.Contains("TABLE")` - 수신자를 괄호로 감싼 형태. 수신자가 `ParenthesizedExpressionSyntax`로 들어오는데 언래핑이 괄호를 벗기지 않는다.
+* `dep.Type?.Contains("TABLE").ToString()` - 매칭 호출 뒤에 후속 접근이 붙는 형태. 이때 `.Contains("TABLE")` 호출의 부모가 `ConditionalAccessExpressionSyntax`가 아니라 `MemberAccessExpressionSyntax`가 되어 `TryGetMatchReceiver`의 조건부 접근 분기가 성립하지 않는다.
 
 `SqlObjectTypeClassifier.cs`는 스캐너가 건너뛴다. 그 파일이 정책의 구현체다.
 
