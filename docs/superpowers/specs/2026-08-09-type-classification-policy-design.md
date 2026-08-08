@@ -56,17 +56,37 @@
 
 구문 트리에서 다음을 모두 만족하는 `InvocationExpression`이 위반이다.
 
-1. 멤버 접근의 이름이 `Contains`
+1. 멤버 접근의 이름이 `Contains` · `IndexOf` · `StartsWith` · `EndsWith` 중 하나 — 넷 다 타입 문자열에 대한 부분 문자열/접두·접미 판정이고, 수신자 관문(조건 3)이 정밀도를 지켜 준다.
 2. 인자에 문자열 리터럴 `TABLE` · `VIEW` · `FUNCTION` · `PROCEDURE` 중 하나 (대소문자 무시)
-3. 수신자가 SQL 타입 표현식 — `.Type`으로 끝나는 멤버 접근(`dep.Type`, `d.Type`)이거나, 이름이 `type`이거나 `Type`으로 끝나는 식별자(`type`, `objectType`, `dependencyType`)
+3. 수신자가 SQL 타입 표현식 — `.Type`으로 끝나는 멤버 접근(`dep.Type`, `d.Type`)이거나, 이름이 `type`이거나 `Type`으로 끝나는 식별자(`type`, `objectType`, `dependencyType`). 판정에 앞서 아래 두 겹을 벗겨 안쪽의 진짜 수신자를 본다.
+   - **정규화 호출.** Trim/ToUpper/ToUpperInvariant/ToLower/ToLowerInvariant로 감싼 수신자는 풀어서 안쪽 수신자로 다시 판정한다(`dep.Type.ToUpper().Contains(...)`, `dep.Type.Trim().ToUpperInvariant().Contains(...)`처럼 여러 겹도 전부 푼다) — 이 저장소가 타입 문자열을 정규화한 뒤 매칭하는 관용구를 이미 세 곳에서 쓰기 때문이다(`DependencyAnalysisOrchestrator.cs:329`, `MetadataExporter.cs:160`, `DbMetadataService.cs:216`).
+   - **널 조건부 수신자.** null 조건부 호출(`dep.Type?.Contains("TABLE")`)도 잡는다. `a?.b()`는 `MemberAccessExpressionSyntax`가 아니라 `ConditionalAccessExpressionSyntax`/`MemberBindingExpressionSyntax`로 파싱되므로 별도 경로가 필요하다. 이 언래핑은 널 조건부 체인 안에서도 작동하고(`dependencyType?.Trim().ToUpperInvariant().Contains("TABLE")` — 위 세 근거 지점 중 두 곳이 실제로 이 모양이다), `dep?.Type.Contains(...)`처럼 언래핑을 거치지 않고 수신자 자체가 곧장 `MemberBindingExpressionSyntax`로 들어오는 경우도 별도로 잡는다. `?.`가 두 번 이상 이어져도 소유 관계를 정확히 계산하면 안전하게 끝까지 풀린다 — 실험으로 세 겹·네 겹까지 확인했고 매번 밀리초 단위로 끝났다.
 
 3번이 오탐을 막는다. 로그 매칭은 수신자가 `logUpper`라 걸리지 않는다.
 
 `CancellationPolicyScanner`와 같이 시맨틱 모델 없이 구문 트리만 본다. 그 스캐너가 근거를 이미 적어 두었다 — 빠르고, 프로젝트 참조가 필요 없고, 이 저장소의 명명 규약이 일관되어 실용적으로 충분하다.
 
-알려진 한계: `var t = dep.Type; t.Contains("TABLE")`은 놓친다. 가드는 휴리스틱이다.
+`SqlObjectTypeClassifier.cs`는 스캐너가 건너뛴다. 그 파일이 정책의 구현체다.
 
-**정정(최종 브랜치 리뷰, 발견 1):** 위 문단은 원래 "이 형태는 자연스러운 리팩터링에서 나오지 않는다"고 적었다. 이 코드베이스에 대해 사실이 아니다 — `dep.Type.ToUpper().Contains(...)`처럼 정규화 호출로 감싼 수신자는 실제로 나온다. 이 저장소가 타입 문자열을 정규화한 뒤 매칭하는 관용구를 이미 세 곳에서 쓰기 때문이다(`DependencyAnalysisOrchestrator.cs:329`, `MetadataExporter.cs:160`, `DbMetadataService.cs:216` — 전부 `Trim().ToUpperInvariant()` 뒤에 매칭한다). 이 형태 중 어느 곳에 `Contains` 기반 분기 하나만 덧붙이는 것이 다음 편집으로 자연스러웠을 것이고, 스캐너가 감싼 수신자를 못 보면 게이트가 침묵한 채 원래의 TVF 오분류 결함이 되살아났을 것이다. 스캐너는 이후 Trim/ToUpper/ToUpperInvariant/ToLower/ToLowerInvariant로 감싼 수신자를 풀어(중첩 포함) 안쪽 수신자로 재판정하도록 고쳐졌고, `Contains` 외에 `IndexOf`/`StartsWith`/`EndsWith`도 같은 판정으로 다루도록 넓어졌다.
+스캔 대상은 `src/` 아래 모든 프로젝트(`ReSet.Core` · `ReSet.Cli` · `ReSet.Validator.Core` · `ReSet.Validator.Cli`)의 `.cs` 파일이며, 빌드 산출물(`bin/` · `obj/`)은 제외한다. 산출물을 훑으면 생성 코드가 오탐을 만들고 스캔이 느려진다.
+
+#### 알려진 한계
+
+가드는 휴리스틱이다. 아래는 전부 실험으로 확인했다 — 임의로 적지 않았다.
+
+* `var t = dep.Type; t.Contains("TABLE")`처럼 타입 문자열을 이름이 다른 지역 변수로 옮겨 담으면 놓친다 — 수신자 이름만 보고 대입 체인을 추적하지 않기 때문이다.
+* `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드(`Equals`, 정규식 등)로 타입을 판정하는 형태는 놓친다 — 지금까지 이 저장소에서 관측된 결함은 전부 이 넷의 조합이었다.
+* `ToString`/`Substring`처럼 정규화 목록(Trim/ToUpper류) 밖의 메서드로 감싼 수신자는 풀지 않는다 — 목록을 무제한으로 넓히면 임의의 변환 뒤에서도 게이트가 뚫려 정밀도가 무너진다.
+* 수신자를 괄호로 감싼 형태 — 평문 `(dep.Type).Contains("TABLE")`도, 널 조건부 `(dependencyType?.Trim())?.Contains("TABLE")`도 놓친다(재리뷰 실측: 둘 다 0건). 수신자가 `ParenthesizedExpressionSyntax`로 들어오는데 언래핑이 괄호를 벗기지 않는다.
+* **널 조건부** 매칭 호출 뒤에 후속 접근이 붙는 형태 — `dep.Type?.Contains("TABLE").ToString()`은 놓친다. 이때 `.Contains("TABLE")` 호출의 부모가 `ConditionalAccessExpressionSyntax`가 아니라 `MemberAccessExpressionSyntax`가 되어 `TryGetMatchReceiver`의 조건부 접근 분기가 성립하지 않는다. 평문 `dep.Type.Contains("TABLE").ToString()`은 여전히 잡힌다(재리뷰 실측: 1건).
+
+뒤 두 형태는 최종 브랜치 리뷰가 관측했다. 둘 다 이 브랜치에서 생긴 것이 아니고, 게이트를 멈추지도 오탐하지도 않으며(실측: 밀리초 안에 위반 0건으로 통과), 이 브랜치에서 고치지 않았다 — 능력을 넓히는 것은 그 라운드의 방침이 아니었다.
+
+#### 수정 이력
+
+아래 정정 1~4는 구현이 이 문서의 주장을 반증한 기록이다. 현재 상태는 위의 「위반 서명」과 「알려진 한계」이고, 아래는 거기에 이른 경위다.
+
+**정정 1(최종 브랜치 리뷰, 발견 1):** 위 한계 목록의 첫 항목(`var t = dep.Type; t.Contains("TABLE")`)을 적은 문단은 원래 "이 형태는 자연스러운 리팩터링에서 나오지 않는다"고 적었다. 이 코드베이스에 대해 사실이 아니다 — `dep.Type.ToUpper().Contains(...)`처럼 정규화 호출로 감싼 수신자는 실제로 나온다. 이 저장소가 타입 문자열을 정규화한 뒤 매칭하는 관용구를 이미 세 곳에서 쓰기 때문이다(`DependencyAnalysisOrchestrator.cs:329`, `MetadataExporter.cs:160`, `DbMetadataService.cs:216` — 전부 `Trim().ToUpperInvariant()` 뒤에 매칭한다). 이 형태 중 어느 곳에 `Contains` 기반 분기 하나만 덧붙이는 것이 다음 편집으로 자연스러웠을 것이고, 스캐너가 감싼 수신자를 못 보면 게이트가 침묵한 채 원래의 TVF 오분류 결함이 되살아났을 것이다. 스캐너는 이후 Trim/ToUpper/ToUpperInvariant/ToLower/ToLowerInvariant로 감싼 수신자를 풀어(중첩 포함) 안쪽 수신자로 재판정하도록 고쳐졌고, `Contains` 외에 `IndexOf`/`StartsWith`/`EndsWith`도 같은 판정으로 다루도록 넓어졌다.
 
 **정정 2(재리뷰, 발견 1 - 부분적으로 닫힘):** 위 1차 수정은 불완전했다. `DependencyAnalysisOrchestrator.cs:329`와 `MetadataExporter.cs:160`이 실제로 쓰는 모양은 `dependencyType?.Trim().ToUpperInvariant()` — 즉 **널 조건부**(`?.`) 뒤에 정규화 호출이 이어지는 형태다. 1차 수정의 언래핑은 `invocation.Expression is MemberAccessExpressionSyntax`만 처리했는데, 널 조건부 체인의 *첫* 호출(`?.Trim`)은 `MemberBindingExpressionSyntax`로 파싱되고 더 안쪽 표현식이 없어 그 자리에서 멈췄다 - 근거로 인용한 두 지점의 실제 모양을 정작 못 잡는 상태로 "고쳐졌다"고 적은 것이었다. `TryUnwrapNormalizationCall`이 `MemberBindingExpressionSyntax`를 만나면 감싸는 `ConditionalAccessExpressionSyntax.Expression`을 진짜 수신자로 보도록 고쳐, 이제 두 지점의 실제 모양이 잡힌다(실측 확인). `var t = dep.Type; t.Contains(...)`처럼 이름이 다른 지역 변수로 옮겨 담는 형태, `dep?.Type?.Trim().Contains(...)`처럼 조건부 접근이 두 번 이상 이어지는 형태, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드(`ToString`, `Substring` 등)로 감싼 수신자는 여전히 놓친다 - 전부 실측으로 확인했다(이 코드베이스에 해당 형태가 없거나, 인위적으로 만든 소스에서 놓치는 것을 직접 관찰했다).
 
@@ -83,16 +103,9 @@
 
 같은 재리뷰에서 `dep?.Type.Contains("TABLE")`(첫 널 조건부 접근 자체가 수신자, 언래핑을 거치지 않는 경우)도 안 잡히는 것이 발견됐다. 조상 탐색 없이 `IsSqlTypeExpression`의 switch에 `MemberBindingExpressionSyntax` 분기 하나를 추가하는 것으로 안전하게 고쳐졌다(무한 루프를 일으킨 조상 탐색 로직과는 무관한 별개의 코드 경로다).
 
-이번 라운드의 방침은 지난 두 라운드와 달랐다 - 탐지 능력을 넓히지 않고 Critical과 위 두 가지만 고쳤다. 남는 한계는 위 정정 2의 목록에서 "이중 널 조건부 체인" 항목만 제외한 나머지 그대로다: 지역 변수 재대입, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드로 감싼 수신자.
+그 라운드의 방침은 지난 두 라운드와 달랐다 - 탐지 능력을 넓히지 않고 Critical과 위 두 가지만 고쳤다. 남는 한계는 위 정정 2의 목록에서 "이중 널 조건부 체인" 항목만 제외한 나머지 그대로다: 지역 변수 재대입, `Contains`/`IndexOf`/`StartsWith`/`EndsWith` 외의 문자열 메서드, `Trim`/`ToUpper`류 밖의 메서드로 감싼 수신자.
 
-여기에 최종 브랜치 리뷰가 관측한 두 형태를 한계로 추가한다. 둘 다 이번에 생긴 것이 아니고, 게이트를 멈추지도 오탐하지도 않으며(실측: 밀리초 안에 위반 0건으로 통과), 이번 라운드에서 고치지 않는다 - 능력을 넓히는 것은 이 라운드의 방침이 아니다.
-
-* `(dependencyType?.Trim())?.Contains("TABLE")` - 수신자를 괄호로 감싼 형태. 수신자가 `ParenthesizedExpressionSyntax`로 들어오는데 언래핑이 괄호를 벗기지 않는다.
-* `dep.Type?.Contains("TABLE").ToString()` - 매칭 호출 뒤에 후속 접근이 붙는 형태. 이때 `.Contains("TABLE")` 호출의 부모가 `ConditionalAccessExpressionSyntax`가 아니라 `MemberAccessExpressionSyntax`가 되어 `TryGetMatchReceiver`의 조건부 접근 분기가 성립하지 않는다.
-
-`SqlObjectTypeClassifier.cs`는 스캐너가 건너뛴다. 그 파일이 정책의 구현체다.
-
-스캔 대상은 `src/` 아래 모든 프로젝트(`ReSet.Core` · `ReSet.Cli` · `ReSet.Validator.Core` · `ReSet.Validator.Cli`)의 `.cs` 파일이며, 빌드 산출물(`bin/` · `obj/`)은 제외한다. 산출물을 훑으면 생성 코드가 오탐을 만들고 스캔이 느려진다.
+같은 리뷰가 관측한 두 형태 — 수신자를 괄호로 감싼 형태와 널 조건부 매칭 호출 뒤에 후속 접근이 붙는 형태 — 는 위 「알려진 한계」의 마지막 두 항목으로 올렸다.
 
 ### 2. baseline 파일을 만들지 않는 이유
 
