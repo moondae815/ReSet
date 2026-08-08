@@ -580,7 +580,10 @@ namespace ReSet.Core.Services
                 var tableColumnsMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (var dep in objectDefinition.Dependencies)
                 {
-                    if ((dep.Type.Contains("TABLE") || dep.Type.Contains("VIEW")) && dep.Columns != null && dep.Columns.Count > 0)
+                    // "SQL_TABLE_VALUED_FUNCTION"이 부분 문자열 "TABLE"을 포함하므로
+                    // 인라인 Contains 판정을 쓰면 TVF가 테이블로 오분류된다.
+                    // SqlObjectTypeClassifier.IsTableOrView로 위임한다.
+                    if (SqlObjectTypeClassifier.IsTableOrView(dep.Type) && dep.Columns != null && dep.Columns.Count > 0)
                     {
                         var depFullName = string.IsNullOrEmpty(dep.Database)
                             ? $"{dep.Schema}.{dep.Name}"
@@ -1234,7 +1237,12 @@ namespace ReSet.Core.Services
                     // 조회 에러 시 소프트 페일로 스킵
                 }
 
-                if (objectType != null && (objectType.Contains("TABLE") || objectType.Contains("VIEW")))
+                // objectType != null 검사는 IsTableOrView가 null에 false를 돌려주므로
+                // 기능적으로는 중복이지만, "조회 실패 시 스킵한다"는 의도를 코드에서
+                // 바로 드러내므로 남겨 둔다. 실제 판정은 SqlObjectTypeClassifier에
+                // 위임한다 - 여기 가드가 없으면 동적 SQL로 발견된 TVF가 그대로
+                // 테이블/뷰 의존성으로 등록되어 DDL이 수집되지 않는다.
+                if (objectType != null && SqlObjectTypeClassifier.IsTableOrView(objectType))
                 {
                     visited.Add(visitedName);
 

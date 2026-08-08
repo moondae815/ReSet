@@ -209,6 +209,21 @@ namespace ReSet.Core.Tests
             // 되살아나는 것.
             Assert.DoesNotContain("private static bool IsTableOrViewType", source);
             Assert.DoesNotContain("private static bool IsCodeObjectType", source);
+
+            // 계획 외 보완(Task 9): 원래 가드는 "rawDep.Type.Contains(...)" 라는 특정
+            // 변수명만 확인했다. 그런데 2차 정밀 정적 분석(tableColumnsMap 구성)과
+            // 동적 SQL 의존성 해석(ResolveDynamicSqlDependenciesAsync)에는 변수명이
+            // 각각 dep.Type / objectType인 인라인 "TABLE"/"VIEW" 부분 문자열 판정이
+            // 따로 남아 있었고, 그중 동적 SQL 경로는 dep.Columns 가드조차 없어
+            // TVF가 그대로 테이블 의존성으로 등록되는 더 심각한 결함이었다.
+            //
+            // 변수명(dep/objectType/rawDep)에 의존하는 가드는 새 변수명이 나타나는
+            // 세 번째 회귀를 못 잡는다. 그래서 이번에는 변수명과 무관하게
+            // ".Contains(\"TABLE\")" 리터럴 자체가 파일 전체에 단 한 번도 나타나지
+            // 않아야 한다고 단언한다. 정상 경로는 전부 SqlObjectTypeClassifier로
+            // 위임되어 있어야 하며, 그 분류기 자신의 부분 문자열 판정은
+            // SqlObjectTypeClassifier.cs 안에 있으므로 이 단언과 무관하다.
+            Assert.Equal(0, CountOccurrences(source, ".Contains(\"TABLE\")"));
         }
 
         private static int CountOccurrences(string source, string literal) =>
