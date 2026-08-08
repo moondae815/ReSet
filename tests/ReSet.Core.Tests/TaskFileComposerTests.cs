@@ -204,6 +204,48 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Compose_ShouldPlaceCSharpStubAtItsFlatPath_ForBootstrap()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null, TargetLanguage = "C#",
+            });
+
+            Assert.Contains("src/AbstractSettleTasklet.cs", markdown);
+            Assert.Contains("tests/ArchitectureTests.cs", markdown);
+            Assert.DoesNotContain(".java", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheJavaFilesAndPackagePath_ForBootstrap()
+        {
+            // Java 산출물은 여러 public 파일로 나뉘고(MetadataExporter), Maven/Gradle
+            // 기본 레이아웃은 소스 경로가 패키지와 일치해야 한다. 언어와 무관하게 ".cs"
+            // 하나만 적어 두면 Java 에이전트가 존재하지 않는 파일을 배치하라는 지시를
+            // 받고, 어디에 둘지도 듣지 못한다.
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null, TargetLanguage = "Java",
+            });
+
+            Assert.Contains("src/ISettleStep.java", markdown);
+            Assert.Contains("src/AbstractSettleTasklet.java", markdown);
+            Assert.Contains("src/SettleContext.java", markdown);
+            Assert.Contains("src/StepResult.java", markdown);
+            Assert.Contains("src/IDbConnectionFactory.java", markdown);
+            Assert.Contains("src/ICheckpointRepository.java", markdown);
+            Assert.Contains("src/ISettleStepDescriptor.java", markdown);
+            Assert.Contains("src/ISettleRepository.java", markdown);
+            Assert.Contains("tests/ArchitectureTests.java", markdown);
+            Assert.Contains("src/main/java/com/reset/batch/core/", markdown);
+            Assert.Contains("src/test/java/com/reset/batch/tests/architecture/", markdown);
+            Assert.DoesNotContain("AbstractSettleTasklet.cs", markdown);
+            Assert.DoesNotContain("ArchitectureTests.cs", markdown);
+        }
+
+        [Fact]
         public void Compose_ShouldPointAtSinglePlanFile_WhenNotSplit()
         {
             var markdown = TaskFileComposer.Compose(StepInputs() with

@@ -172,8 +172,8 @@ namespace ReSet.Core.Services
             // 같은 이유로 회차별 지시서는 그 회차가 읽어야 할 것만 가리켜야 한다.
             sb.AppendLine("- 커넥션 문자열 설정 파일과 `IDbConnectionFactory` 구현체: [common/03-hosting-and-config.md](common/03-hosting-and-config.md)의 호스팅/DI 및 멀티 DB 연결 문자열 안내를 따를 것");
             sb.AppendLine("- `ICheckpointRepository` 구현체");
-            sb.AppendLine("- `src/AbstractSettleTasklet.cs`를 프로젝트에 배치 (내용은 수정 금지)");
-            sb.AppendLine("- `tests/ArchitectureTests.cs`를 프로젝트에 배치하고 통과시킬 것");
+            sb.AppendLine(BaseStubPlacementLine(inputs.TargetLanguage));
+            sb.AppendLine(ArchitectureTestPlacementLine(inputs.TargetLanguage));
             sb.AppendLine();
             sb.AppendLine("## 하지 말 것");
             sb.AppendLine();
@@ -283,5 +283,21 @@ namespace ReSet.Core.Services
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? "MyBatis, Spring Data JPA, Mockito, ArchUnit"
                 : "Dapper, EF Core, Moq, NetArchTest";
+
+        /// <summary>
+        /// C#은 파일 하나(AbstractSettleTasklet.cs)만 배치하면 되지만, Java는 확장 표면의
+        /// 타입들을 public 파일 하나당 하나씩 낸다(MetadataExporter 참고). 언어와 무관하게
+        /// ".cs" 파일명 하나만 하드코딩해 두면 Java 에이전트가 존재하지 않는 지시를 받는다.
+        /// </summary>
+        private static string BaseStubPlacementLine(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "- `src/ISettleStep.java`, `src/AbstractSettleTasklet.java`, `src/SettleContext.java`, `src/StepResult.java`, `src/IDbConnectionFactory.java`, `src/ICheckpointRepository.java`, `src/ISettleStepDescriptor.java`, `src/ISettleRepository.java`를 프로젝트의 `src/main/java/com/reset/batch/core/` 아래로 배치 (패키지 경로와 반드시 일치시킬 것, 내용은 수정 금지)"
+                : "- `src/AbstractSettleTasklet.cs`를 프로젝트에 배치 (내용은 수정 금지)";
+
+        /// <summary>Java의 소스 루트는 패키지 경로와 일치해야 하므로 대상 경로까지 지시한다.</summary>
+        private static string ArchitectureTestPlacementLine(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "- `tests/ArchitectureTests.java`를 프로젝트의 `src/test/java/com/reset/batch/tests/architecture/` 아래로 배치하고 통과시킬 것"
+                : "- `tests/ArchitectureTests.cs`를 프로젝트에 배치하고 통과시킬 것";
     }
 }

@@ -56,7 +56,7 @@ namespace ReSet.Core.Services
             sb.AppendLine();
             sb.AppendLine("---");
             sb.AppendLine();
-            AppendGuidelines(sb);
+            AppendGuidelines(sb, inputs);
             sb.AppendLine("---");
             sb.AppendLine();
             AppendReadingContract(sb, inputs);
@@ -107,7 +107,7 @@ namespace ReSet.Core.Services
             return sb.ToString();
         }
 
-        private static void AppendGuidelines(StringBuilder sb)
+        private static void AppendGuidelines(StringBuilder sb, EntryPointInputs inputs)
         {
             sb.AppendLine("## 🔑 1. 에이전트 핵심 수행 지침 (Agent Execution Guidelines)");
             sb.AppendLine();
@@ -121,7 +121,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("6. 제공된 자가 검증용 단위 테스트 및 아키텍처 검증 코드를 통과(PASS)시키고 빌드가 성공함을 자체 점검할 일.");
             sb.AppendLine("7. **[중요]** 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 3장의 경계 규칙에 따라 SQL 경로로 분류된 DML은 명세서에 있는 원본 로직(조건절·집계식·에러 코드)을 축약 없이 파라미터 바인딩 SQL로 100% 완전하게 작성해야 하며, ORM은 3장의 허용 목록에 한해 사용해야 합니다.");
             sb.AppendLine("8. **[중요]** Worker 구성 시 반드시 명세된 모든 DB Factory 의존성을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
-            sb.AppendLine("9. **[중요]** 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.");
+            sb.AppendLine(TaskletInheritanceGuideline(inputs.TargetLanguage));
             sb.AppendLine();
             sb.AppendLine("**[경고] 원본 Stored Procedure(.sql) 파일은 레거시 코드이므로 절대 검색(find 명령어 등)하거나 직접 참조하지 마십시오. 모든 비즈니스 로직은 이미 분석 완료된 Spec.md 문서에 정의되어 있습니다.**");
             sb.AppendLine();
@@ -148,6 +148,17 @@ namespace ReSet.Core.Services
             sb.AppendLine("4. 진행 상태는 도구가 검증 결과를 근거로 기록합니다. `todo.md`를 직접 편집하지 마십시오.");
             sb.AppendLine();
         }
+
+        /// <summary>
+        /// C#은 파일 하나(AbstractSettleTasklet.cs)만 언급하면 되지만, Java는 확장 표면의
+        /// 타입들이 여러 public 파일로 나뉜다(MetadataExporter/TaskFileComposer 참고).
+        /// 언어와 무관하게 ".cs" 파일명을 하드코딩하면 Java 에이전트가 C# 파일을
+        /// 배치하라는, 존재하지도 않는 지시를 받는다.
+        /// </summary>
+        private static string TaskletInheritanceGuideline(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "9. **[중요]** 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.java`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 함께 제공되는 `src/ISettleStep.java`, `src/SettleContext.java`, `src/StepResult.java`, `src/IDbConnectionFactory.java`, `src/ICheckpointRepository.java`, `src/ISettleStepDescriptor.java`, `src/ISettleRepository.java`는 모두 `com.reset.batch.core` 패키지 소속이므로 `src/main/java/com/reset/batch/core/` 아래에 패키지 경로와 일치시켜 배치하십시오. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오."
+                : "9. **[중요]** 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.";
 
         private static void AppendTechStack(StringBuilder sb, EntryPointInputs inputs)
         {

@@ -132,6 +132,29 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Compose_ShouldNameTheJavaStubFilesAndPackagePath_InGuideline9()
+        {
+            // 지침 9번이 언어와 무관하게 "src/AbstractSettleTasklet.cs"만 가리키면 Java
+            // 에이전트가 존재하지 않는 C# 파일을 배치하라는 지시를 받는다.
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "Java" });
+
+            Assert.Contains("src/AbstractSettleTasklet.java", markdown);
+            Assert.Contains("src/ISettleStep.java", markdown);
+            Assert.Contains("src/ISettleRepository.java", markdown);
+            Assert.Contains("src/main/java/com/reset/batch/core/", markdown);
+            Assert.DoesNotContain("AbstractSettleTasklet.cs", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheCSharpStubFile_InGuideline9()
+        {
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "C#" });
+
+            Assert.Contains("src/AbstractSettleTasklet.cs", markdown);
+            Assert.DoesNotContain("AbstractSettleTasklet.java", markdown);
+        }
+
+        [Fact]
         public void PlanVerificationSection_ShouldSpeakEvenWhenPassed()
         {
             // 표기 부재를 "검증됨"으로 추론하는 것이 이 계열 결함의 뿌리다.
