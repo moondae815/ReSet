@@ -539,7 +539,7 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            Assert.Equal(1, (int)entry["FormatVersion"]!);
+            Assert.Equal(2, (int)entry["FormatVersion"]!);
         }
 
         [Fact]
@@ -570,6 +570,49 @@ namespace ReSet.Core.Tests
             File.WriteAllText(indexPath, root.ToJsonString());
 
             Assert.False(_cacheManager.IsCacheValid(key, hash, _paths));
+        }
+
+        [Fact]
+        public void IsCacheValid_ReturnsFalse_ForEntriesFromFormatVersionOne()
+        {
+            // 포맷 버전 1은 정적 분석 식별자 정규화 이전에 만들어졌다. 해시가 그대로
+            // 일치하더라도 스키마 표와 테이블 목록이 정규화되지 않은 채 만들어졌으므로
+            // 재사용하면 정정 대상이던 잘못된 Spec.md가 그대로 복원된다.
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "TestSp", CodeObjectType.Procedure);
+            var hash = "hash";
+            var specContent = "# Spec Report for TestSp";
+            var specFilePath = _paths.ResolveSpecPath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(specFilePath)!);
+            File.WriteAllText(specFilePath, specContent);
+
+            _cacheManager.UpdateCache(
+                key,
+                new SpDefinition { DdlText = "CREATE PROC dbo.TestSp AS SELECT 1;" },
+                hash,
+                _paths,
+                specContent);
+
+            var indexPath = Path.Combine(_tempOutputDir, ".sp_cache_index.json");
+            var root = JsonNode.Parse(File.ReadAllText(indexPath))!;
+            foreach (var pair in root["Entries"]!.AsObject())
+            {
+                pair.Value!["FormatVersion"] = 1;
+            }
+            File.WriteAllText(indexPath, root.ToJsonString());
+
+            Assert.False(_cacheManager.IsCacheValid(key, hash, _paths));
+        }
+
+        [Fact]
+        public void CacheFormatVersion_ShouldBeTwoSoPreNormalizationArtifactsAreRebuilt()
+        {
+            // 복합 해시는 DDL만 본다. 원본 SP가 안 바뀌었으므로 버전을 올리지 않으면
+            // 정규화 이전에 만들어진 잘못된 Spec.md가 그대로 복원된다.
+            var source = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(
+                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/CacheManager.cs"));
+
+            Assert.Contains("CurrentCacheFormatVersion = 2", source);
         }
     }
 }
