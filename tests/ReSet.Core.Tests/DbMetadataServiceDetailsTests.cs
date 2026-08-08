@@ -233,5 +233,58 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(160, await task);
         }
+
+        [Fact]
+        public void NormalizeStaticAnalysisForDefinition_ShouldCanonicaliseAgainstTheObjectKey()
+        {
+            // DB 연결 없이 정규화 배선만 확인한다. 실제 수집은 통합 검증 몫이다.
+            var definition = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ReferencedTables = new System.Collections.Generic.List<string>
+                    {
+                        "TSettleMst", "dbo.TSettleMst", "SETTLE_POQ_DB.dbo.TSettleMst"
+                    }
+                }
+            };
+
+            definition.StaticAnalysis = StaticAnalysisNormalizer.Normalize(
+                definition.StaticAnalysis,
+                definition.ObjectKey?.Database,
+                definition.Schema);
+
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                definition.StaticAnalysis.ReferencedTables);
+        }
+
+        [Fact]
+        public void DbMetadataService_ShouldNormaliseStaticAnalysisBeforeReturning()
+        {
+            // 배선이 빠지면 조용히 예전 표기가 저장된다. 호출이 존재하는지뿐 아니라
+            // 그 호출에 넘기는 인자까지 고정한다: DB 컨텍스트는 ObjectKey에서,
+            // 스키마는 정의 자체에서 와야 한다. 호출만 있고 엉뚱한 인자(예: null, null)를
+            // 넘기면 컴파일은 되지만 정규화가 무력화되는데, Assert.Contains 하나로는
+            // 그 실수를 잡지 못한다(Task 3 리뷰에서 지적된 것과 같은 종류의 약한 가드).
+            var source = System.IO.File.ReadAllText(
+                System.IO.Path.Combine(
+                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/DbMetadataService.cs"));
+
+            const string callPrefix = "StaticAnalysisNormalizer.Normalize(";
+            Assert.Contains(callPrefix, source);
+
+            var callStart = source.IndexOf(callPrefix, StringComparison.Ordinal);
+            var callEnd = source.IndexOf(");", callStart, StringComparison.Ordinal);
+            Assert.True(callEnd > callStart, "StaticAnalysisNormalizer.Normalize 호출의 닫는 괄호를 찾지 못했다.");
+            var callSite = source.Substring(callStart, callEnd - callStart);
+
+            Assert.Contains("objectDefinition.ObjectKey?.Database", callSite);
+            Assert.Contains("objectDefinition.Schema", callSite);
+        }
     }
 }

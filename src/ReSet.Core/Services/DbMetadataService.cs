@@ -614,6 +614,13 @@ namespace ReSet.Core.Services
                 Log.Warning(ex, "[DbMetadata] 2차 정밀 정적 분석 재구동 중 예외 발생 (기존 결과 유지)");
             }
 
+            // 정적 분석은 SQL에 적힌 표기를 그대로 남긴다. 여기서 canonical 3-part로
+            // 통일해 두면 metadata.json·스냅샷·프롬프트가 같은 이름을 쓰게 된다.
+            objectDefinition.StaticAnalysis = StaticAnalysisNormalizer.Normalize(
+                objectDefinition.StaticAnalysis,
+                objectDefinition.ObjectKey?.Database,
+                objectDefinition.Schema);
+
             Log.Information(
                 "[DbMetadata] 코드 객체 메타데이터 수집 완료 - 객체: {ObjectFullName}, 의존 객체: {DepCount}개, 경고: {WarnCount}개",
                 objectFullName,
