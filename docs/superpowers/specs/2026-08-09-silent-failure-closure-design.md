@@ -236,7 +236,7 @@ int consecutiveUnverified = 0;
 - `nothingVerified`면 증가시키고, 대조가 한 번이라도 성립하면(`validationResults.Count > 0`)
   0으로 리셋한다
 - 피드백을 붙인 뒤 `consecutiveUnverified >= MaxConsecutiveUnverifiedRetries`(=2)면
-  `BuildAbortResult`로 루프를 끝낸다
+  루프를 끝낸다
 
 순서가 중요하다. **피드백을 먼저 붙이고 캡을 판정한다.** 마지막 시도에서 접더라도 지시서에는
 이유가 남아 사람이 열어 볼 수 있다. 회차 경로가 같은 순서다(`:461` → `:469`).
@@ -244,12 +244,20 @@ int consecutiveUnverified = 0;
 상수는 새로 만들지 않고 기존 `MaxConsecutiveUnverifiedRetries`를 재사용한다. 두 경로가
 같은 상황을 다른 숫자로 접으면 운영자가 둘을 구별해 기억해야 한다.
 
-중단 사유는 무산출물 캡(`:105`)과 같은 어투로 쓴다.
+**`BuildAbortResult`를 쓰지 않는다.** 그 헬퍼는 `CliFailureClassifier.ToCodegenAbortException`
+으로 사유를 만든다(`:806`). 즉 "CLI 기동이 실패했다"는 전제의 안내문이라 설치 여부나
+`CodegenSettings:Engines:<name>:Command`를 확인하라고 말한다. `nothingVerified`는 **기동이
+성공하고 산출물까지 나온** 상황이므로 그 안내는 틀렸다. 사유를 직접 만들어
+`new CodegenWorkflowResult(false, reason)`으로 돌려주고, 로그에는 `Log.Error`로 남긴다.
 
 ```
 [SelfHealing] 검증 대조 쌍을 찾지 못한 시도가 2회 연속 발생했습니다.
+설계서 디렉터리와 소스 디렉터리에서 짝을 찾지 못했습니다 - 설계서: {specDir}, 소스: {codeDir}.
 피드백을 붙여도 대조가 성립하지 않으므로 루프를 중단합니다.
 ```
+
+이 사유는 실행 실패가 아니라 **배치 구성 문제**를 가리킨다. 두 디렉터리 경로를 담아야
+사람이 무엇을 볼지 알 수 있다.
 
 ### 3. 목차 블록을 한 곳에서 고른다
 
@@ -367,15 +375,23 @@ return planStructureMarkdown[..located.Value.BodyIndex]
 
 ### 결함 2
 
+카운터도 테스트한다. `CodegenWorkflowOrchestratorTests`가 이미 `ScriptedCodingEngine`으로
+실제 `RunSelfHealingWorkflowAsync` 루프를 돌리고 있고, `nothingVerified` 조건(계획서와
+소스를 심지 않아 매핑이 0건)을 그대로 재현하는 픽스처도 있다.
+
 | 대상 | 검증 |
 |---|---|
 | `BuildUnverifiedFeedback` | 시도 회차·두 디렉터리 경로·대조 규약 설명을 담는지 |
-| `BuildUnverifiedFeedback` | 같은 입력에 같은 출력인지(지시서에 여러 번 붙어도 어느 시도인지 구별되는지) |
+| 캡 | `maxL2Attempts`를 무제한(-1)으로 두고도 2회에서 끊기는지(`CallCount == 2`) |
+| 리셋 | 1회차 미대조 → 2회차 정상 매핑 통과 시 성공으로 끝나는지 |
+| 피드백 | `IMetadataExporter.AppendFeedbackToInstructionsAsync`가 미대조 시도마다 불렸는지 |
+| 중단 사유 | 두 디렉터리 경로를 담고, CLI 설정 키(`CodegenSettings:Engines`)를 **담지 않는지** |
 
-카운터 자체는 목 검증기와 목 코딩 엔진이 필요하다. `CodeVerificationOrchestrator`가
-인터페이스 없는 구상 클래스라 이번 범위에서는 감쌀 수 없다.
-**따라서 카운터에는 단위 테스트가 없다** — 회차 경로(`:457-477`)와 같은 모양으로 쓰는 것이
-근거이며, 구현 시 두 블록을 나란히 놓고 대조한다. 이 한계를 리뷰어에게 명시한다.
+**기존 테스트 하나가 깨진다.** `RunSelfHealingWorkflowAsync_NothingWasVerified_ShouldNotReportSuccess`는
+`Assert.Null(result.AbortReason)`으로 "산출물을 못 만든 경로가 아님"을 고정하고 있다. 캡이
+생기면 그 시점에 사유가 붙으므로 이 단언은 성립하지 않는다. **삭제하지 말고 의도를 유지한
+채 바꾼다** — 사유가 있되 그것이 산출물 부재가 아니라 대조 실패를 가리키는지 확인하는
+단언으로 교체한다.
 
 ### 결함 3
 
