@@ -66,8 +66,9 @@ namespace ReSet.Validator.Core.Services
             // Finding 3: 연속 무산출물 재시도 카운터. 산출물이 한 번이라도 나오면 리셋된다.
             int consecutiveNoArtifactRetries = 0;
 
-            // 검증 대조 쌍을 하나도 찾지 못한 시도의 연속 횟수. 회차 경로(:457)와 같은
-            // 성격이다. 산출물은 나왔으므로 위 무산출물 카운터로는 잡히지 않는다.
+            // 검증 대조 쌍을 하나도 찾지 못한 시도의 연속 횟수. 회차 경로의
+            // RunStageAsync가 쓰는 consecutiveUnverified/MaxConsecutiveUnverifiedRetries
+            // 캡과 같은 성격이다. 산출물은 나왔으므로 위 무산출물 카운터로는 잡히지 않는다.
             int consecutiveUnverified = 0;
 
             // Finding 4: 산출물을 한 번도 만들지 못한 채 maxAttempts를 소진했을 때 마지막
@@ -183,7 +184,9 @@ namespace ReSet.Validator.Core.Services
                 }
 
                 // 피드백을 먼저 붙이고 접는다. 마지막 시도에서 끊더라도 지시서에는 이유가
-                // 남아 사람이 열어 볼 수 있다. 회차 경로가 같은 순서다(:461 -> :469).
+                // 남아 사람이 열어 볼 수 있다. 회차 경로의 RunStageAsync가 같은 순서다 -
+                // AppendFeedbackToInstructionsAsync 호출 다음에 MaxConsecutiveUnverifiedRetries
+                // 캡을 검사한다.
                 if (consecutiveUnverified >= MaxConsecutiveUnverifiedRetries)
                 {
                     // BuildAbortResult를 쓰지 않는다. 그 헬퍼는 CliFailureClassifier로 사유를

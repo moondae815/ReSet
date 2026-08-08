@@ -391,19 +391,25 @@ namespace ReSet.Core.Tests
 
         /// <summary>
         /// 블록이 하나뿐인 정상 목차에서는 종전과 같은 결과여야 한다.
+        ///
+        /// "재포맷만으로도 통과한다"는 함정을 피하려면 seed한 코드가 실제로 산출물에
+        /// 도착했는지까지 확인해야 한다 - Structure의 S01은 LegacyProcedures로
+        /// "UP_Util_PG_Client_CMRate_Ins"를 선언하므로 그 bare name과 일치하는
+        /// 코드를 seed한다.
         /// </summary>
         [Fact]
         public void Enrich_SingleValidBlock_ShouldStillEnrichInPlace()
         {
             var codes = new Dictionary<string, IReadOnlyList<string>>
             {
-                ["up_settlecommupd"] = new[] { "-201" }
+                ["up_util_pg_client_cmrate_ins"] = new[] { "-201" }
             };
 
             var enriched = PlanStructureEnricher.Enrich(Structure, codes);
 
             Assert.Contains("산문은 그대로 보존되어야 한다.", enriched);
             Assert.NotEqual(Structure, enriched);
+            Assert.Contains("-201", Step(enriched, "S01").ErrorCodes);
         }
 
         /// <summary>

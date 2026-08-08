@@ -427,8 +427,9 @@ namespace ReSet.Core.Services
         /// 말하는데, 그 내용이 실제로 무엇인지는 아무도 확인하지 않았다. 게다가
         /// verification/은 조립 회차만 가리키므로 단계 회차가 그 구간을 영영 못 본다.
         /// 판별에 실패했을 때의 정답은 "통짜로 남긴다"이며, 이 분기의 통짜 바구니가 개요다.
-        /// (Task 4에서 고친 결함과 같은 부류다 - 그때도 어느 조각에도 속하지 못한 구간이
-        /// 사라졌고, 처방은 통짜 바구니에 흡수시키는 것이었다.)
+        /// (<see cref="FindUncoveredRanges"/>/<see cref="AbsorbUncoveredRegions"/>가 고친
+        /// 결함과 같은 부류다 - 그때도 어느 조각에도 속하지 못한 구간이 사라졌고, 처방은
+        /// 통짜 바구니에 흡수시키는 것이었다.)
         /// </summary>
         private static string BuildWholeSkeletonAroundSteps(
             IReadOnlyList<string> lines, StepBoundaryResult steps, int skeletonStart)

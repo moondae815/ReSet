@@ -827,9 +827,15 @@ SELECT 1;
         [Fact]
         public void FindUncoveredRanges_ShouldClampOutOfBoundsRanges()
         {
-            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (-5, 3), (8, 99) });
+            // (-5, 3)과 (8, 99)만으로는 클램핑을 증명하지 못한다 - 두 Math.Max/Math.Min
+            // 호출을 지워도 이 두 범위에서는 우연히 같은 (3, 8)이 나온다. 완전히
+            // 범위 밖에 있는 구간(12..20, lineCount=10)이라야 갈린다: 클램프하면
+            // End(10)가 Start(12)보다 작아져 그 범위 자체가 사라져 문서 전체가
+            // 빈틈([(0, 10)])이 되고, 클램프하지 않으면 [12, 20)이 덮은 것으로 잘못
+            // 인정되어 빈틈이 [(0, 12)]로 좁아진다.
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (12, 20) });
 
-            Assert.Equal(new[] { (3, 8) }, gaps);
+            Assert.Equal(new[] { (0, 10) }, gaps);
         }
 
         [Fact]
