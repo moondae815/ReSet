@@ -141,4 +141,27 @@ class D { public string Type { get; set; } }";
 
         Assert.Empty(TypeClassificationPolicyScanner.ScanSource(source, "Fake.cs"));
     }
+
+    [Fact]
+    public void NoRawSqlTypeClassificationRemainsInSource()
+    {
+        // baseline 파일을 두지 않는 이유: 다섯 곳을 전부 고칠 수 있으므로 목표가
+        // 0이다. 빈 baseline은 "0을 단언한다"를 돌려 말한 것에 불과하다. 정당한
+        // 예외가 실제로 생기면 그때 도입한다.
+        var repoRoot = RepoPaths.FindRepoRoot();
+        var offenders = TypeClassificationPolicyScanner
+            .ScanDirectory(System.IO.Path.Combine(repoRoot, "src"));
+
+        var report = string.Join(
+            "\n",
+            offenders.Select(offender =>
+                $"  {offender.RelativePath}:{offender.Line}  {offender.Expression}"));
+
+        Assert.True(
+            offenders.Count == 0,
+            "SQL 객체 타입을 직접 부분 문자열로 판정하는 곳이 남아 있습니다. " +
+            "SqlObjectTypeClassifier의 IsTableOrView / IsCodeObject / ResolveCodeObjectType로 " +
+            "위임하십시오. \"SQL_TABLE_VALUED_FUNCTION\"이 \"TABLE\"을 포함하므로 " +
+            $"직접 판정하면 TVF가 테이블로 오분류됩니다.\n\n{report}");
+    }
 }

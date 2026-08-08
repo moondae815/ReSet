@@ -74,8 +74,8 @@ namespace ReSet.Core.Services
 
                     foreach (var dependency in spDetails.Dependencies)
                     {
-                        var dependencyType = GetDependencyCodeObjectType(dependency.Type);
-                        if (dependencyType == null)
+                        var dependencyType = SqlObjectTypeClassifier.ResolveCodeObjectType(dependency.Type);
+                        if (dependencyType == CodeObjectType.Unresolved)
                         {
                             continue;
                         }
@@ -86,7 +86,7 @@ namespace ReSet.Core.Services
                                 snapshot.Database,
                             dependency.Schema,
                             dependency.Name,
-                            dependencyType.Value);
+                            dependencyType);
                         if (snapshot.CodeObjects.ContainsKey(dependencyKey.CanonicalName))
                         {
                             continue;
@@ -153,21 +153,6 @@ namespace ReSet.Core.Services
                 StringComparer.OrdinalIgnoreCase);
 
             return snapshot;
-        }
-
-        private static CodeObjectType? GetDependencyCodeObjectType(string type)
-        {
-            if (type.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase))
-            {
-                return CodeObjectType.Procedure;
-            }
-
-            if (type.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase))
-            {
-                return CodeObjectType.Function;
-            }
-
-            return null;
         }
     }
 }
