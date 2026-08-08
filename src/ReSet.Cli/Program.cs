@@ -892,22 +892,29 @@ namespace ReSet.Cli
 
                             // 통합 마이그레이션 지시서 생성
                             AnsiConsole.MarkupLine($"[yellow]{cliArgs.JobName}[/] - 통합 마이그레이션 지시서 생성 중...");
-                            await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
+                            var bundle = await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
                                 spDefs,
                                 consolidatedPlan,
                                 pipelineResult.Outcome,
                                 cliArgs.JobName,
                                 jobsOutputDir,
                                 targetLanguage,
-                                new OutputPathResolver(resolvedDatabase, outputDir));
+                                new OutputPathResolver(resolvedDatabase, outputDir),
+                                pipelineResult.Layout,
+                                activeCts.Token);
 
-                            var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
-                            AnsiConsole.MarkupLine($"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(instructionsPath)}");
+                            foreach (var warning in bundle.Warnings)
+                            {
+                                AnsiConsole.MarkupLine($"[yellow]경고: {Markup.Escape(warning)}[/]");
+                            }
+
+                            AnsiConsole.MarkupLine(
+                                $"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(bundle.EntryPointPath)}");
 
                             // 외부 코딩 에이전트(Codegen) 기동
                             var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
                             await RunCodegenEngineAsync(
-                                instructionsPath,
+                                bundle,
                                 isBatchMode: true,
                                 enableCodegen: isCodegenEnabled,
                                 engineName: selectedEngine,
@@ -998,7 +1005,7 @@ namespace ReSet.Cli
                             var jobSpecificOutputDir = Directory.GetParent(Directory.GetParent(selectedInstruction)!.FullName)!.FullName;
                             var jobSpecificSrcDir = Path.Combine(jobSpecificOutputDir, "src");
 
-                            await RunCodegenEngineAsync(
+                            await RunLegacyWholeJobCodegenAsync(
                                 selectedInstruction,
                                 isBatchMode: false,
                                 enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
@@ -1411,22 +1418,29 @@ namespace ReSet.Cli
                             try
                             {
                                 AnsiConsole.MarkupLine($"\n[yellow]{jobName}[/] - 통합 마이그레이션 지시서 생성 중...");
-                                await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
+                                var bundle = await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
                                     spDefs,
                                     consolidatedPlan,
                                     pipelineResult.Outcome,
                                     jobName,
                                     jobsOutputDir,
                                     targetLanguage,
-                                    new OutputPathResolver(resolvedDatabase, outputDir));
+                                    new OutputPathResolver(resolvedDatabase, outputDir),
+                                    pipelineResult.Layout,
+                                    activeCts.Token);
 
-                                var instructionsPath = Path.Combine(jobsOutputDir, "agent", "MigrationInstructions.md");
-                                AnsiConsole.MarkupLine($"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(instructionsPath)}");
+                                foreach (var warning in bundle.Warnings)
+                                {
+                                    AnsiConsole.MarkupLine($"[yellow]경고: {Markup.Escape(warning)}[/]");
+                                }
+
+                                AnsiConsole.MarkupLine(
+                                    $"[green]통합 마이그레이션 지시서 번들이 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(bundle.EntryPointPath)}");
 
                                 // 외부 코딩 에이전트(Codegen) 기동
                                 var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
                                 await RunCodegenEngineAsync(
-                                    instructionsPath,
+                                    bundle,
                                     isBatchMode: false,
                                     enableCodegen: isCodegenEnabled,
                                     engineName: selectedEngine,
@@ -1999,7 +2013,162 @@ namespace ReSet.Cli
             });
         }
 
+        /// <summary>
+        /// 방금 쓴 지시서 번들(895/1414 호출부)을 회차 순서대로 순차 기동한다.
+        ///
+        /// bundle.TaskFilePaths가 회차 목록의 유일한 근거다 - agentDir을 다시 뒤져
+        /// task-*.md를 찾거나 순서를 추측하지 않는다(CodegenStagePlan.FromBundle 참고).
+        /// </summary>
         private static async Task RunCodegenEngineAsync(
+            BundleResult bundle,
+            bool isBatchMode,
+            bool enableCodegen,
+            string? engineName,
+            string targetProjectDir,
+            IConfiguration configuration,
+            IAiClient aiClient,
+            CancellationToken cancellationToken)
+        {
+            // CLI 옵션이나 설정파일 중 하나라도 codegen이 활성화되어 있어야 함
+            if (!enableCodegen && isBatchMode)
+            {
+                return; // 배치 모드이고 비활성화 상태면 스킵
+            }
+
+            // 대화형 모드인 경우, codegen 옵션이 꺼져 있어도 사용자에게 기동 여부를 질문할 수 있음
+            if (!isBatchMode)
+            {
+                var runConfirm = AnsiConsole.Confirm($"[yellow]마이그레이션된 소스 코드를 자동 생성하기 위해 외부 코딩 에이전트({engineName})를 기동하시겠습니까?[/]");
+                if (!runConfirm)
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                AnsiConsole.MarkupLine($"\n[bold blue]=== 외부 코딩 에이전트 기동 ({engineName}) ===[/]");
+                var factory = new CodingEngineFactory(configuration);
+                var engine = factory.CreateEngine(engineName ?? "claude", isBatchMode);
+
+                if (!File.Exists(bundle.EntryPointPath))
+                {
+                    AnsiConsole.MarkupLine($"[red]에러: 마이그레이션 지시서 파일({Path.GetFileName(bundle.EntryPointPath)})을 찾을 수 없습니다.[/]");
+                    return;
+                }
+
+                var agentDir = Path.GetDirectoryName(bundle.EntryPointPath)!;
+                var jobOutputDirInfo = Directory.GetParent(agentDir);
+                var jobName = jobOutputDirInfo?.Name ?? "Unknown";
+                var baseDir = jobOutputDirInfo?.FullName ?? "";
+                var specDir = Path.Combine(baseDir, "docs");
+
+                // 최대 시도 횟수 설정 로드
+                var maxL2AttemptsRaw = configuration["AiSettings:MaxL2Attempts"] ?? "2";
+                int maxL2Attempts = 2;
+                if (string.Equals(maxL2AttemptsRaw, "unlimited", StringComparison.OrdinalIgnoreCase) || maxL2AttemptsRaw == "-1")
+                {
+                    maxL2Attempts = -1;
+                }
+                else if (int.TryParse(maxL2AttemptsRaw, out int parsed))
+                {
+                    maxL2Attempts = parsed;
+                }
+
+                // Validator 및 Codegen Workflow Orchestrator 설정
+                var validatorConfig = new ValidatorConfig
+                {
+                    MaxL2Attempts = maxL2Attempts, // 단방향 검증용 설정 (이제 내부적으로 반복하지 않음)
+                    SpecDirectory = specDir,
+                    SourceCodeDirectory = targetProjectDir,
+                    OutputDirectory = Path.Combine(baseDir, "validation")
+                };
+
+                var metadataExporter = new ReSet.Core.Services.MetadataExporter();
+                var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
+                var orchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts);
+
+                AnsiConsole.MarkupLine($"[grey]지시서 경로: {bundle.EntryPointPath}[/]");
+                AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
+                AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (회차별 순차 실행)[/]\n");
+
+                var stagePlan = CodegenStagePlan.FromBundle(bundle, agentDir);
+
+                var staged = await orchestrator.RunStagedWorkflowAsync(
+                    jobName, stagePlan, agentDir, targetProjectDir, isBatchMode, cancellationToken);
+
+                if (staged.AbortReason != null)
+                {
+                    AnsiConsole.MarkupLine($"[red]코드 생성 중단: {Markup.Escape(staged.AbortReason)}[/]");
+
+                    // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 중단을 초록으로 읽는다.
+                    // RunLegacyWholeJobCodegenAsync가 실패 시 이미 지키던 원칙과 같다.
+                    if (isBatchMode)
+                    {
+                        Environment.ExitCode = 1;
+                    }
+                }
+                // 브리프 원문은 여기서 staged.FailedStepCodes.Count > 0으로만 판정했지만,
+                // FailedStepCodes는 StepCode가 있는 회차(단계)만 담는다(AgentProgressStore).
+                // 조립 회차만 실패하면(StepCode 없음) 이 카운트가 0인 채로 AllPassed만
+                // false가 되어, 원문 그대로면 "모든 회차 통과"로 잘못 보고된다 - 그래서
+                // 판정 자체는 staged.AllPassed로 하고, 안내 문구만 실패 단계 유무로 나눈다.
+                else if (!staged.AllPassed)
+                {
+                    if (staged.FailedStepCodes.Count > 0)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]코드 생성 완료 — 검증을 통과하지 못한 단계 {staged.FailedStepCodes.Count}개: " +
+                            $"{Markup.Escape(string.Join(", ", staged.FailedStepCodes))}[/]");
+                        AnsiConsole.MarkupLine(
+                            "[yellow]이 단계들은 파이프라인에서 제외되었으므로 최종 빌드가 깨져 있을 수 있습니다.[/]");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine(
+                            "[yellow]코드 생성 완료 — 조립 회차가 검증을 통과하지 못했습니다. 최종 산출물을 확인하세요.[/]");
+                    }
+
+                    if (isBatchMode)
+                    {
+                        Environment.ExitCode = 1;
+                    }
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[green]코드 생성 완료 — 모든 회차가 검증을 통과했습니다.[/]");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // 상위에서 잡도록 던짐
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AnsiConsole.MarkupLine($"\n[red]외부 코딩 에이전트 실행 중 오류 발생:[/] {Markup.Escape(ex.Message)}");
+
+                // 팩토리의 배치 거부(예: agy의 빈 BatchArguments)도 이 catch로 떨어진다 -
+                // 화면에는 "보이지만" 종료 코드는 여전히 0이었다. 무인 배치에서는 그 코드가
+                // CI가 보는 유일한 신호다.
+                if (isBatchMode)
+                {
+                    Environment.ExitCode = 1;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 대화형 메뉴 3번("기작성된 지시서 재구동")이 쓰는 예전 전체 Job 단일 기동 경로다.
+        ///
+        /// 이 메뉴는 디스크에서 임의의 MigrationInstructions.md를 골라 재기동하므로
+        /// BundleResult(회차별 task-*.md 목록)가 없다 - 그 목록은 방금 번들을 쓴 호출자만
+        /// 갖고 있다. 골라낸 파일 하나에서 그 목록을 역산하는 것은 신뢰할 수 없다(파일명은
+        /// 회차 코드를 안전 문자로 정화한 값이라 원본 코드로 되짚을 수 없는 경우가 있다 -
+        /// CodegenStagePlan.FromBundle의 주석 참고). 그래서 이 메뉴는 회차 분할 없이 예전
+        /// RunSelfHealingWorkflowAsync로 통째로 돌린다. 이 함수의 동작은 이 작업(Task 15)에서
+        /// 바꾸지 않는다 - 기존 전체 Job 워크플로 경로는 그대로 둔다.
+        /// </summary>
+        private static async Task RunLegacyWholeJobCodegenAsync(
             string instructionsPath,
             bool isBatchMode,
             bool enableCodegen,
