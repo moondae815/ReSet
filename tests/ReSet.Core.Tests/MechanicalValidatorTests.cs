@@ -631,6 +631,30 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Assert.DoesNotContain(result.PlanDefects, d => d.Contains("ErrorCodes"));
         }
 
+        [Fact]
+        public void ValidateBatchStep_WithNoLegacyProcedureButDeclaredErrorCodes_DoesNotLogNotApplicable()
+        {
+            // 스펙 §4: "해당 없음"은 ErrorCodes가 비었고 LegacyProcedures도 빈 경우에만
+            // 해당한다. 레거시 출신이 없는 신설 단계라도 목차가 ErrorCodes를 선언했다면
+            // 바로 아래 foreach가 실제로 대조하므로, "대조 대상이 아닙니다" 로그는 거짓말이 된다.
+            var plan = S10Plan() with { LegacyProcedures = Array.Empty<string>() };
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                _validator.ValidateBatchStep(S10HealthySection, plan);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.DoesNotContain(sink.Messages, m => m.Contains("오류코드 대조 대상이 아닙니다"));
+        }
+
         private sealed class CapturingSink : ILogEventSink
         {
             public List<string> Messages { get; } = new();

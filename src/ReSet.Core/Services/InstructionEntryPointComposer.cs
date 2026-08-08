@@ -112,7 +112,7 @@ namespace ReSet.Core.Services
                 sb.AppendLine($"**{label}** — L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과한 계획입니다.");
                 if (hasUnverifiableSteps)
                 {
-                    sb.AppendLine("다만 일부 단계는 대조할 재료(대상 테이블·원본 오류코드)가 목차에 없어 검증되지 못한 단계가 있습니다. 아래 단계별 배너에서 어느 단계인지 확인하십시오.");
+                    sb.AppendLine("다만 대조할 재료(대상 테이블·원본 오류코드)가 목차에 없어 검증되지 못한 단계가 있습니다. 아래 단계별 배너에서 어느 단계인지 확인하십시오.");
                 }
                 return sb.ToString();
             }
