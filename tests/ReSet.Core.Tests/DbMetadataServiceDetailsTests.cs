@@ -167,17 +167,11 @@ namespace ReSet.Core.Tests
         public void DirectDependencyClassification_TreatsTableValuedFunctionsAsCodeObjects(
             string dependencyType)
         {
-            var tableMethod = typeof(DbMetadataService).GetMethod(
-                "IsTableOrViewType",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            var codeMethod = typeof(DbMetadataService).GetMethod(
-                "IsCodeObjectType",
-                BindingFlags.NonPublic | BindingFlags.Static);
-
-            Assert.NotNull(tableMethod);
-            Assert.NotNull(codeMethod);
-            Assert.False((bool)tableMethod.Invoke(null, new object?[] { dependencyType })!);
-            Assert.True((bool)codeMethod.Invoke(null, new object?[] { dependencyType })!);
+            // 분류 판정은 SqlObjectTypeClassifier로 이전되었다(두 private 메서드는
+            // 삭제됨). 여기서는 DbMetadataService가 그 분류기에 위임한다는 것을
+            // 공개 API로 확인한다.
+            Assert.False(SqlObjectTypeClassifier.IsTableOrView(dependencyType));
+            Assert.True(SqlObjectTypeClassifier.IsCodeObject(dependencyType));
         }
 
         [Theory]

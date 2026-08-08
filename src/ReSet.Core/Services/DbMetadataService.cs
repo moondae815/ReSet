@@ -700,7 +700,7 @@ namespace ReSet.Core.Services
                     try
                     {
                         if (!isExternalDependency &&
-                            IsTableOrViewType(directDependency.Type))
+                            SqlObjectTypeClassifier.IsTableOrView(directDependency.Type))
                         {
                             directDependency.Columns = await GetTableColumnsAsync(
                                 connectionString,
@@ -723,7 +723,7 @@ namespace ReSet.Core.Services
                         }
                         // 외부 DB 코드 객체의 DDL은 부모 프롬프트 컨텍스트에 필요하므로 함께 수집한다.
                         // (바로 위 테이블/뷰 분기는 외부 DB 스키마 수집이 범위 밖이라 기존 가드를 유지한다.)
-                        else if (IsCodeObjectType(directDependency.Type))
+                        else if (SqlObjectTypeClassifier.IsCodeObject(directDependency.Type))
                         {
                             directDependency.ReferencedDdlText = await GetObjectDdlAsync(
                                 connectionString,
@@ -752,15 +752,6 @@ namespace ReSet.Core.Services
                 warnings.Add($"[{sourceObjectKey.CanonicalName}] 직접 의존성 정보 수집 실패: {exception.Message}");
             }
         }
-
-        private static bool IsTableOrViewType(string? dependencyType) =>
-            !IsCodeObjectType(dependencyType) &&
-            (dependencyType?.Contains("TABLE", StringComparison.OrdinalIgnoreCase) == true ||
-             dependencyType?.Contains("VIEW", StringComparison.OrdinalIgnoreCase) == true);
-
-        private static bool IsCodeObjectType(string? dependencyType) =>
-            dependencyType?.Contains("FUNCTION", StringComparison.OrdinalIgnoreCase) == true ||
-            dependencyType?.Contains("PROCEDURE", StringComparison.OrdinalIgnoreCase) == true;
 
         // 재귀 호출 메서드 (DFS)
         private async Task GatherDependenciesRecursiveAsync(
@@ -825,7 +816,7 @@ namespace ReSet.Core.Services
                 }
 
                 // 스키마 조회 분기 (테이블, 뷰)
-                if (rawDep.Type.Contains("TABLE") || rawDep.Type.Contains("VIEW"))
+                if (SqlObjectTypeClassifier.IsTableOrView(rawDep.Type))
                 {
                     try
                     {
@@ -841,15 +832,13 @@ namespace ReSet.Core.Services
                     }
                 }
                 // 코드 수집 및 하위 재귀 분기 (UDF, SP)
-                else if (rawDep.Type.Contains("FUNCTION") || rawDep.Type.Contains("PROCEDURE"))
+                else if (SqlObjectTypeClassifier.IsCodeObject(rawDep.Type))
                 {
                     try
                     {
                         depInfo.ReferencedDdlText = await GetObjectDdlAsync(connectionString, dependencyDatabase, rawDep.Schema, rawDep.Name, cancellationToken);
 
-                        var childType = rawDep.Type.Contains("FUNCTION")
-                            ? CodeObjectType.Function
-                            : CodeObjectType.Procedure;
+                        var childType = SqlObjectTypeClassifier.ResolveCodeObjectType(rawDep.Type);
                         var childKey = CodeObjectKey.Create(
                             dependencyDatabase,
                             rawDep.Schema,
