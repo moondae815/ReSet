@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ReSet.Core.Models;
@@ -519,6 +520,77 @@ SELECT 1;
             Assert.False(slices.StepsSplit);
             Assert.Equal(garbled.Trim(), slices.Architecture);
             Assert.Empty(slices.Steps);
+        }
+
+        /// <summary>
+        /// 조각이 덮은 범위를 모으면 덮이지 않은 구간이 계산된다. Resolve는 이 결과를
+        /// 개요에 흡수해 "모든 줄이 어느 조각엔가 담긴다"는 불변식을 지킨다.
+        /// </summary>
+        [Fact]
+        public void FindUncoveredRanges_NothingCovered_ShouldReturnWholeDocument()
+        {
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, Array.Empty<(int, int)>());
+
+            Assert.Equal(new[] { (0, 10) }, gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_FullyCovered_ShouldReturnNothing()
+        {
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (0, 10) });
+
+            Assert.Empty(gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_ShouldFindLeadingMiddleAndTrailingGaps()
+        {
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(20, new[] { (3, 7), (12, 15) });
+
+            Assert.Equal(new[] { (0, 3), (7, 12), (15, 20) }, gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_UnorderedInput_ShouldGiveSameResult()
+        {
+            // Resolve는 조각을 만든 순서대로 범위를 넣는다. 그 순서가 문서 순서와
+            // 같으리라고 기대하지 않는다.
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (7, 10), (0, 3) });
+
+            Assert.Equal(new[] { (3, 7) }, gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_OverlappingRanges_ShouldNotInventGaps()
+        {
+            // 문서가 기형이라 단계 구간이 검증 SQL 구간과 겹칠 수 있다. 겹침을 빈틈으로
+            // 잘못 읽으면 이미 실린 내용이 개요에 한 번 더 실린다.
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (0, 6), (3, 10) });
+
+            Assert.Empty(gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_ShouldIgnoreEmptyRanges()
+        {
+            // End <= Start는 "그 조각은 만들어지지 않았다"는 뜻이다. 덮은 것으로 세지 않는다.
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (0, 4), (6, 6), (6, 10) });
+
+            Assert.Equal(new[] { (4, 6) }, gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_ShouldClampOutOfBoundsRanges()
+        {
+            var gaps = PlanBoundaryResolver.FindUncoveredRanges(10, new[] { (-5, 3), (8, 99) });
+
+            Assert.Equal(new[] { (3, 8) }, gaps);
+        }
+
+        [Fact]
+        public void FindUncoveredRanges_EmptyDocument_ShouldReturnNothing()
+        {
+            Assert.Empty(PlanBoundaryResolver.FindUncoveredRanges(0, new[] { (0, 5) }));
         }
     }
 }

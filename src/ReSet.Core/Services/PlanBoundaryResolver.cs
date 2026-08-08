@@ -421,6 +421,56 @@ namespace ReSet.Core.Services
             return head.Length == 0 ? tail : head + "\n\n" + tail;
         }
 
+        /// <summary>
+        /// [0, lineCount) 중 covered가 덮지 않은 구간을 오름차순으로 돌려준다.
+        ///
+        /// 조각을 새로 만들면 그 범위를 <see cref="Resolve"/>의 covered 목록에 반드시
+        /// 등록해야 한다. 등록을 잊으면 그 구간이 개요에 <b>중복</b>으로 실리고(회차마다
+        /// 읽는 파일이 부푼다), 범위만 등록하고 조각을 만들지 않으면 구간이 <b>사라진다</b>.
+        /// 둘 다 눈으로는 드러나지 않으므로 이 계산을 조각 나누는 코드 옆에 둔다.
+        ///
+        /// 겹치는 범위는 병합한다. 문서가 기형이라 단계 구간이 검증 SQL 구간과 겹치는
+        /// 경우가 있는데, 그것을 빈틈으로 읽으면 이미 실린 내용을 한 번 더 싣게 된다.
+        /// </summary>
+        public static IReadOnlyList<(int Start, int End)> FindUncoveredRanges(
+            int lineCount, IEnumerable<(int Start, int End)> covered)
+        {
+            if (covered == null) throw new ArgumentNullException(nameof(covered));
+
+            var gaps = new List<(int Start, int End)>();
+            if (lineCount <= 0)
+            {
+                return gaps;
+            }
+
+            var normalized = covered
+                .Select(range => (Start: Math.Max(0, range.Start), End: Math.Min(lineCount, range.End)))
+                .Where(range => range.End > range.Start)
+                .OrderBy(range => range.Start)
+                .ToList();
+
+            var cursor = 0;
+            foreach (var range in normalized)
+            {
+                if (range.Start > cursor)
+                {
+                    gaps.Add((cursor, range.Start));
+                }
+
+                if (range.End > cursor)
+                {
+                    cursor = range.End;
+                }
+            }
+
+            if (cursor < lineCount)
+            {
+                gaps.Add((cursor, lineCount));
+            }
+
+            return gaps;
+        }
+
         private static string Join(IReadOnlyList<string> lines, int start, int end)
         {
             if (start < 0 || end <= start)
