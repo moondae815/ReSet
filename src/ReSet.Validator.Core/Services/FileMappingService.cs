@@ -4,6 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using ReSet.Validator.Core.Models;
+// ReSet.Core.Services에도 ValidationResult가 있어 네임스페이스를 통째로 열면 모호해진다.
+// 필요한 것은 이름 규약 하나뿐이므로 그 형식만 별칭으로 들여온다.
+using CodegenArtifactNaming = ReSet.Core.Services.CodegenArtifactNaming;
 using Serilog;
 
 namespace ReSet.Validator.Core.Services
@@ -156,14 +159,13 @@ namespace ReSet.Validator.Core.Services
                 // 규칙 2: 다중 파일 프로젝트 (폴더 매치) - 배치 마이그레이션 대응
                 if (string.IsNullOrEmpty(mappedSourcePath))
                 {
-                    var noUnderscore = cleanName.Replace("_", "");
-                    var possibleDirs = new[]
-                    {
-                        Path.Combine(config.SourceCodeDirectory, $"{noUnderscore}.Batch"),
-                        Path.Combine(config.SourceCodeDirectory, $"{cleanName}.Batch"),
-                        Path.Combine(config.SourceCodeDirectory, noUnderscore),
-                        Path.Combine(config.SourceCodeDirectory, cleanName)
-                    };
+                    // 후보 이름은 CodegenArtifactNaming이 단독으로 소유한다. 조립 회차
+                    // 지시서(TaskFileComposer)가 에이전트에게 알려 주는 이름이 여기서
+                    // 판정되는 이름과 같아야 하기 때문이다 - 손으로 두 벌 적어 두면
+                    // 한쪽만 고쳐져 "구현은 완벽한데 조립 회차만 실패"가 되살아난다.
+                    var possibleDirs = CodegenArtifactNaming
+                        .JobProjectDirectoryNames(cleanName)
+                        .Select(name => Path.Combine(config.SourceCodeDirectory, name));
 
                     foreach (var dir in possibleDirs)
                     {

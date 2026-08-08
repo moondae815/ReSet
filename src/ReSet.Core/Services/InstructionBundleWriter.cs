@@ -20,7 +20,8 @@ namespace ReSet.Core.Services
         OutputPathResolver Paths,
         string JobOutputDir);
 
-    /// <param name="StepCodes">실제로 파일이 쓰인 단계 코드. 회차 정의의 근거가 된다.</param>
+    /// <param name="StepCodes">실제로 파일이 쓰인 단계 코드(파일명에 쓰인 <b>정화된</b> 값).
+    /// 회차 정의의 근거가 되며, steps/&lt;코드&gt;.md와 task-NN-&lt;코드&gt;.md가 같은 값을 쓴다.</param>
     /// <param name="TaskFilePaths">회차 순서대로의 작업 지시서 절대 경로. 회차 정의의 근거.</param>
     public sealed record BundleResult(
         string EntryPointPath,
@@ -105,28 +106,63 @@ namespace ReSet.Core.Services
                     "이전 실행의 검증 SQL 파일을 정리했습니다 - 대상: {Count}개", staleVerificationFiles);
             }
 
+            // 원본 코드(계획서 헤딩·본문에 그대로 나타나는 표시용)와 정화 코드(파일명·
+            // 검증 매핑용)를 짝으로 들고 다닌다. 두 값이 필요한 자리가 다르다 - 지시서
+            // 본문은 에이전트가 계획서에서 찾을 수 있어야 하므로 원본이어야 하고,
+            // 파일명과 소스 매칭 접두사는 파일 시스템이 받아 주는 값이어야 한다.
+            var stepPairs = new List<(string Raw, string Safe)>();
             var stepCodes = new List<string>();
             var stepIndex = new List<IndexEntry>();
             var stepsDir = Path.Combine(agentDir, "steps");
 
-            if (slices.StepsSplit)
+            // 정화가 서로 다른 두 코드를 같은 이름으로 뭉갤 수 있다(예: "S01 "과 "S01").
+            // 그러면 한 단계의 상세가 다른 단계의 파일을 소리 없이 덮어쓰고, 두 회차가
+            // 같은 소스 파일을 상대로 게이트를 통과한다. 부분 분할을 하지 않는다는 규칙과
+            // 같은 이유로 그때는 분할 자체를 포기하고 단일 파일 폴백으로 내려간다.
+            var stepsSplit = slices.StepsSplit;
+            if (stepsSplit)
+            {
+                foreach (var code in OrderedStepCodes(inputs.Layout, slices.Steps))
+                {
+                    stepPairs.Add((code, TaskFileComposer.SanitizeStepCode(code)));
+                }
+
+                var distinctSafe = new HashSet<string>(
+                    stepPairs.Select(pair => pair.Safe), StringComparer.OrdinalIgnoreCase);
+
+                if (distinctSafe.Count != stepPairs.Count)
+                {
+                    var warning =
+                        "단계 코드를 파일명으로 정화하면 서로 다른 단계가 같은 이름이 됩니다. " +
+                        "부분 분할 대신 계획서를 단일 파일로 유지합니다.";
+                    warnings.Add(warning);
+                    Log.Error(
+                        "{Warning} - 코드: {Codes}",
+                        warning, string.Join(", ", stepPairs.Select(pair => $"{pair.Raw}→{pair.Safe}")));
+
+                    stepPairs.Clear();
+                    stepsSplit = false;
+                }
+            }
+
+            if (stepsSplit)
             {
                 Directory.CreateDirectory(stepsDir);
 
                 // 단계 집합이 이전 실행보다 줄었을 수 있다(예: S01-S03 → S01-S02). 이번
                 // 목차에 없는 파일을 먼저 지워야, 사라진 단계의 낡은 지침이 --add-dir로
                 // 스코프된 에이전트에게 계속 보이는 일이 없다.
-                CleanupStaleStepFiles(stepsDir, slices.Steps.Keys);
+                CleanupStaleStepFiles(stepsDir, stepPairs.Select(pair => pair.Safe));
 
-                foreach (var code in OrderedStepCodes(inputs.Layout, slices.Steps))
+                foreach (var (raw, safe) in stepPairs)
                 {
-                    var body = slices.Steps[code];
-                    var banner = BuildFloorBanner(inputs.Layout, code);
+                    var body = slices.Steps[raw];
+                    var banner = BuildFloorBanner(inputs.Layout, raw);
                     await WriteAsync(
-                        Path.Combine(stepsDir, $"{code}.md"), banner + body, cancellationToken);
+                        Path.Combine(stepsDir, $"{safe}.md"), banner + body, cancellationToken);
 
-                    stepCodes.Add(code);
-                    stepIndex.Add(new IndexEntry(DescribeStep(inputs.Layout, code), $"steps/{code}.md"));
+                    stepCodes.Add(safe);
+                    stepIndex.Add(new IndexEntry(DescribeStep(inputs.Layout, raw), $"steps/{safe}.md"));
                 }
             }
             else if (Directory.Exists(stepsDir))
@@ -144,7 +180,7 @@ namespace ReSet.Core.Services
             var specs = BuildSpecIndex(inputs, agentDir);
 
             // 진입점과 task-*.md 양쪽이 같은 폴백 경로를 가리켜야 하므로 한 번만 계산한다.
-            var singlePlanRelative = slices.StepsSplit
+            var singlePlanRelative = stepsSplit
                 ? null
                 : RelativeToAgent(agentDir, Path.Combine(inputs.JobOutputDir, "docs", "BatchMigrationPlan.md"));
 
@@ -153,7 +189,7 @@ namespace ReSet.Core.Services
                 inputs.TargetLanguage,
                 inputs.PlanOutcome,
                 slices.Preamble,
-                slices.StepsSplit,
+                stepsSplit,
                 stepIndex,
                 dependencies,
                 specs,
@@ -168,7 +204,8 @@ namespace ReSet.Core.Services
             // 여기서 회차 0(부트스트랩)·단계별·회차 99(조립)까지 한 벌을 미리 써 둔다.
             var taskFiles = new List<string>();
 
-            async Task WriteTaskAsync(StageKind kind, int ordinal, string? code, string? name, string? specRelative)
+            async Task WriteTaskAsync(
+                StageKind kind, int ordinal, string? code, string? safeCode, string? name, string? specRelative)
             {
                 // 부트스트랩·조립 회차는 특정 단계에 매인 스키마가 없다 - 작업 전체
                 // 스키마를 붙이면 "단계 상세 문서를 읽지 마십시오"(부트스트랩)와
@@ -183,7 +220,7 @@ namespace ReSet.Core.Services
                     TargetLanguage: inputs.TargetLanguage,
                     StepCode: code,
                     StepName: name,
-                    StepRelativePath: code != null && slices.StepsSplit ? $"steps/{code}.md" : null,
+                    StepRelativePath: safeCode != null && stepsSplit ? $"steps/{safeCode}.md" : null,
                     SpecRelativePath: specRelative,
                     Dependencies: stepDependencies,
                     HasStepContract: slices.StepContract != null,
@@ -198,23 +235,24 @@ namespace ReSet.Core.Services
                 taskFiles.Add(path);
             }
 
-            await WriteTaskAsync(StageKind.Bootstrap, 0, null, null, null);
+            await WriteTaskAsync(StageKind.Bootstrap, 0, null, null, null, null);
 
             var ordinal = 1;
-            foreach (var code in stepCodes)
+            foreach (var (raw, safe) in stepPairs)
             {
                 await WriteTaskAsync(
-                    StageKind.Step, ordinal, code, DescribeStep(inputs.Layout, code), SpecPathForStep(inputs, agentDir, code));
+                    StageKind.Step, ordinal, raw, safe,
+                    DescribeStep(inputs.Layout, raw), SpecPathForStep(inputs, agentDir, raw));
                 ordinal++;
             }
 
-            await WriteTaskAsync(StageKind.Assembly, 99, null, null, null);
+            await WriteTaskAsync(StageKind.Assembly, 99, null, null, null, null);
 
             Log.Information(
                 "지시서 번들을 작성했습니다 - Job: {JobName}, 단계 분할: {StepsSplit}, 단계 수: {StepCount}개, 경고: {WarningCount}건",
-                inputs.JobName, slices.StepsSplit, stepCodes.Count, warnings.Count);
+                inputs.JobName, stepsSplit, stepCodes.Count, warnings.Count);
 
-            return new BundleResult(entryPointPath, stepCodes, warnings, slices.StepsSplit, taskFiles);
+            return new BundleResult(entryPointPath, stepCodes, warnings, stepsSplit, taskFiles);
         }
 
         /// <summary>

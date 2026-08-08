@@ -2398,10 +2398,11 @@ namespace ReSet.Cli
         /// StepCode가 없는 파일은 TaskFileComposer.ParseStageIdentity가 이미 걸러
         /// 색인에서 자동으로 빠진다 - 우연한 phantom 회차가 생기지 않는다.
         ///
-        /// 원본(비정화) 단계 코드는 파일명에서 완전히 되짚을 수 없을 수 있다(SanitizeStepCode가
-        /// 손실 변환이라서 - TaskFileComposer 주석 참고). steps/{코드}.md의 코드는 항상
-        /// 원본이므로(InstructionBundleWriter가 정화하지 않고 그대로 쓴다) 그 코드를 그대로
-        /// StepCode로 쓴다 - 정화된 파일명에서 역산하지 않는다.
+        /// steps/{코드}.md와 task-NN-{코드}.md는 같은 정화 결과를 파일명으로 쓴다
+        /// (InstructionBundleWriter가 TaskFileComposer.SanitizeStepCode를 함께 쓴다).
+        /// 그래서 두 이름을 그대로 대조하면 되고, 정화가 코드를 바꾸는 정상 번들이
+        /// 이 대조에서 Broken으로 거부되던 막다른 길도 함께 사라진다. steps/에서 읽은
+        /// 코드를 StepCode로 쓰는 것은 CodegenStagePlan.FromBundle과 같은 값이다.
         /// </summary>
         private static (ExistingInstructionsKind Kind, CodegenStagePlan? StagePlan) TryClassifyExistingInstructionsFile(
             string entryPointPath)

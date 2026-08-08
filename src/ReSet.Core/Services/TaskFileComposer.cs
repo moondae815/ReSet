@@ -91,10 +91,16 @@ namespace ReSet.Core.Services
         /// <summary>
         /// stepCode는 AI가 생성한 계획서 텍스트에서 뽑아낸 값이라 신뢰할 수 없다.
         /// 그대로 파일명에 꽂으면 "../"나 경로 구분자를 태운 코드가 agent/ 바깥에
-        /// 파일을 쓰게 만들 수 있다(Task 7 리뷰에서 steps/ 쓰기 경로에 있던 것과
-        /// 같은 결함). 파일명으로 안전한 문자만 남기고 나머지는 버린다.
+        /// 파일을 쓰게 만들 수 있다. 파일명으로 안전한 문자만 남기고 나머지는 버린다.
+        ///
+        /// task-*.md와 steps/*.md가 <b>같은</b> 정화 결과를 파일명으로 써야 한다.
+        /// 예전에는 steps/ 쪽만 원본 코드를 그대로 썼는데, 그 비대칭이 (1) agent/steps/
+        /// 바깥으로 쓰는 경로 탈출, (2) 정화가 코드를 바꾸는 정상 번들이 재구동에서
+        /// Broken으로 거부되는 막다른 길, (3) CodegenStagePlan.FromBundle과
+        /// TryClassifyExistingInstructionsFile이 서로 다른 StepCode를 내는 분기를
+        /// 한꺼번에 만들어 냈다. 그래서 이 메서드를 공개해 양쪽이 같이 쓴다.
         /// </summary>
-        private static string SanitizeStepCode(string? stepCode)
+        public static string SanitizeStepCode(string? stepCode)
         {
             if (string.IsNullOrEmpty(stepCode))
             {
@@ -210,6 +216,11 @@ namespace ReSet.Core.Services
                 sb.AppendLine($"- 원본 명세서: [Spec.md]({inputs.SpecRelativePath}) — UPDATE/INSERT 상세 매핑 수식이 필요할 때만 봅니다.");
             }
 
+            // 이름 규약을 실패한 뒤의 피드백으로만 알려 주면 유료 기동 한 번을 규약
+            // 하나 때문에 버린다. 규약은 처음부터 지시서에 실려 있어야 한다.
+            sb.AppendLine(CodegenArtifactNaming.DescribeStepArtifactNaming(
+                SanitizeStepCode(inputs.StepCode), inputs.TargetLanguage));
+
             sb.AppendLine();
             sb.AppendLine("`AbstractSettleTasklet`을 상속한 Tasklet 클래스 하나와, 그 단계가 필요로 하는 데이터 액세스 코드를 작성하십시오.");
             sb.AppendLine();
@@ -237,6 +248,10 @@ namespace ReSet.Core.Services
             sb.AppendLine("- 단계 실행 순서와 선행 조건 검증");
             sb.AppendLine("- 단계 간 예외 전파와 트랜잭션 롤백 처리");
             sb.AppendLine("- 전체 빌드와 아키텍처 테스트 통과");
+            // 이 회차의 게이트는 Job 전체 검증이고, 그 검증은 계획서와 소스 트리를
+            // Job 이름으로 짝짓는다. 이름 규약이 어디에도 적혀 있지 않던 동안에는
+            // 모든 회차가 통과한 실행조차 매핑 0건으로 실패 처리됐다.
+            sb.AppendLine(CodegenArtifactNaming.DescribeJobArtifactNaming(inputs.JobName, inputs.TargetLanguage));
             sb.AppendLine();
 
             if (inputs.FailedStepCodes.Count > 0)
@@ -279,20 +294,36 @@ namespace ReSet.Core.Services
             sb.AppendLine();
         }
 
+        /// <summary>
+        /// 최소 버전을 함께 적는다. 버전 없이 이름만 적으면 에이전트가 물어 오는 릴리스가
+        /// 무엇일지 정해지지 않는데, 부트스트랩이 통과시켜야 하는 아키텍처 테스트는 특정
+        /// 버전 이상에서만 컴파일된다 - 특히 Java 쪽 <c>ArchRule.allowEmptyShould(boolean)</c>는
+        /// ArchUnit 0.23.1에서 추가됐다(0.23.0이 빈 should를 실패로 바꾸고, 0.23.1이 규칙별
+        /// 예외 메서드를 넣었다). 그보다 낮은 릴리스를 물어 오면 부트스트랩이 통과시켜야 할
+        /// 바로 그 파일이 컴파일되지 않고, 부트스트랩 실패는 하드 중단이다.
+        /// 테스트 러너(xUnit/JUnit 5)도 함께 적는다 - 아키텍처 테스트 스텁이 그 어노테이션을
+        /// 쓰는데 목록에 없어 에이전트가 러너 없이 프로젝트를 세울 수 있었다.
+        /// </summary>
         private static string ToolingPackages(string targetLanguage) =>
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
-                ? "MyBatis, Spring Data JPA, Mockito, ArchUnit"
-                : "Dapper, EF Core, Moq, NetArchTest";
+                ? "MyBatis 3.5+, Spring Data JPA 3.2+, JUnit 5.10+, Mockito 5.0+, ArchUnit 0.23.1+ (`allowEmptyShould` 도입 버전 — 그 아래는 컴파일되지 않음)"
+                : "Dapper 2.1+, EF Core 10.0+, xUnit 2.9+, Moq 4.20+, NetArchTest.Rules 1.3.2+";
 
         /// <summary>
-        /// C#은 파일 하나(AbstractSettleTasklet.cs)만 배치하면 되지만, Java는 확장 표면의
+        /// C#은 두 파일(AbstractSettleTasklet.cs·SettleContracts.cs), Java는 확장 표면의
         /// 타입들을 public 파일 하나당 하나씩 낸다(MetadataExporter 참고). 언어와 무관하게
         /// ".cs" 파일명 하나만 하드코딩해 두면 Java 에이전트가 존재하지 않는 지시를 받는다.
+        ///
+        /// C# 쪽에서 SettleContracts.cs가 빠져 있었다. 그 파일이 담은 ISettleStepDescriptor·
+        /// ISettleRepository는 회차 간 단계 등록 순서를 결정론적으로 고정하는 계약인데,
+        /// 배치 지시가 없으니 C# 프로젝트에는 조용히 도달하지 않았다 - 컴파일을 깨지
+        /// 않는 종류의 누락이라 아무것도 잡지 못했다. 목록은 MetadataExporter가 실제로
+        /// agent/src/에 쓰는 파일 전부와 일치해야 한다.
         /// </summary>
         private static string BaseStubPlacementLine(string targetLanguage) =>
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? "- `src/ISettleStep.java`, `src/AbstractSettleTasklet.java`, `src/SettleContext.java`, `src/StepResult.java`, `src/IDbConnectionFactory.java`, `src/ICheckpointRepository.java`, `src/ISettleStepDescriptor.java`, `src/ISettleRepository.java`를 프로젝트의 `src/main/java/com/reset/batch/core/` 아래로 배치 (패키지 경로와 반드시 일치시킬 것, 내용은 수정 금지)"
-                : "- `src/AbstractSettleTasklet.cs`를 프로젝트에 배치 (내용은 수정 금지)";
+                : "- `src/AbstractSettleTasklet.cs`, `src/SettleContracts.cs`를 프로젝트에 배치 (내용은 수정 금지)";
 
         /// <summary>Java의 소스 루트는 패키지 경로와 일치해야 하므로 대상 경로까지 지시한다.</summary>
         private static string ArchitectureTestPlacementLine(string targetLanguage) =>

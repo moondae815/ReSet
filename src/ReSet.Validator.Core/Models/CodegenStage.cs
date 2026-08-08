@@ -6,7 +6,8 @@ using Serilog;
 namespace ReSet.Validator.Core.Models
 {
     /// <param name="Id">"01-S01" 형태. progress.json의 회차 식별자와 같다.</param>
-    /// <param name="StepCode">단계 회차면 파일명에서 되짚어낸 정화된 코드(progress.json의 StepCode와 같은 값), 아니면 null.</param>
+    /// <param name="StepCode">단계 회차면 파일명에서 되짚어낸 정화된 코드(progress.json의 StepCode와 같은 값), 아니면 null.
+    /// 이 값이 곧 검증기가 소스 파일 이름과 대조하는 접두사이며, 회차 지시서가 에이전트에게 알려 주는 접두사와 같다.</param>
     /// <param name="StepSpecPath">이 회차의 검증 대상 설계서. 단계 회차이고 분할에 성공했을 때만 값이 있다.</param>
     public sealed record CodegenStage(
         string Id,
@@ -27,11 +28,11 @@ namespace ReSet.Validator.Core.Models
         {
             var stages = new List<CodegenStage>();
 
-            // task-*.md 파일명에는 정화된 단계 코드가 들어가지만, steps/{코드}.md
-            // 자체는 InstructionBundleWriter가 원본(비정화) 코드로 쓴다(Task 8에서
-            // 알려진 대로 그 경로는 정화하지 않는다). StepSpecPath를 파일명에서
-            // 되짚어낸 정화된 코드로 조합하면 실제로는 없는 파일을 가리킨다 -
-            // 그래서 원본 코드가 필요한 곳(StepSpecPath)에는 bundle.StepCodes를 쓴다.
+            // steps/{코드}.md와 task-NN-{코드}.md는 이제 같은 정화 결과를 파일명으로
+            // 쓴다(TaskFileComposer.SanitizeStepCode를 양쪽이 함께 쓴다). 그래서
+            // bundle.StepCodes[i]와 파일명에서 되짚어낸 identity.StepCode는 같은 값이다.
+            // 위치 짝짓기는 그 등식이 깨졌을 때(회차 파일 수와 코드 수가 어긋났을 때)를
+            // 잡아내는 가드로 남긴다.
             //
             // bundle.TaskFilePaths와 bundle.StepCodes는 InstructionBundleWriter.WriteAsync가
             // 부트스트랩 → (같은 foreach로) 단계별 → 조립 순서로 함께 채워 넣으므로,
@@ -48,24 +49,24 @@ namespace ReSet.Validator.Core.Models
 
                 if (identity.Kind == StageKind.Step)
                 {
-                    string? rawStepCode;
+                    string? stepFileCode;
                     if (stepIndex < bundle.StepCodes.Count)
                     {
-                        rawStepCode = bundle.StepCodes[stepIndex];
+                        stepFileCode = bundle.StepCodes[stepIndex];
                     }
                     else
                     {
-                        // 계약 위반이다 - Step 회차 파일 수가 원본 코드 목록보다 많다.
+                        // 계약 위반이다 - Step 회차 파일 수가 단계 코드 목록보다 많다.
                         // 위치로 못 짝지으므로 파일명에서 되짚어낸 값으로 물러서되,
                         // 조용히 넘어가지 않고 남긴다.
                         Log.Warning(
-                            "회차 목록과 원본 단계 코드 개수가 어긋났습니다 - StepIndex: {StepIndex}, StepCodesCount: {StepCodesCount}, TaskFile: {TaskFile}",
+                            "회차 목록과 단계 코드 개수가 어긋났습니다 - StepIndex: {StepIndex}, StepCodesCount: {StepCodesCount}, TaskFile: {TaskFile}",
                             stepIndex, bundle.StepCodes.Count, taskPath);
-                        rawStepCode = identity.StepCode;
+                        stepFileCode = identity.StepCode;
                     }
 
-                    specPath = bundle.StepsSplit && rawStepCode != null
-                        ? Path.Combine(agentDir, "steps", $"{rawStepCode}.md")
+                    specPath = bundle.StepsSplit && stepFileCode != null
+                        ? Path.Combine(agentDir, "steps", $"{stepFileCode}.md")
                         : null;
 
                     stepIndex++;

@@ -416,5 +416,171 @@ S02 본문
 
             Assert.DoesNotContain("## 참조할 스키마", bootstrap);
         }
+
+        /// <summary>
+        /// 단계 코드는 AI가 만든 목차에서 온 자유 문자열이다. steps/{코드}.md 쓰기 경로만
+        /// 정화를 건너뛰고 있어 "../"나 경로 구분자가 든 코드로 agent/steps/ 바깥에 파일을
+        /// 쓸 수 있었다. task-*.md 쪽에는 이미 회귀 테스트가 있었고 steps/ 쪽만 없었다.
+        /// </summary>
+        [Theory]
+        [InlineData("../evil")]
+        [InlineData("a/b")]
+        [InlineData("S01:회원")]
+        public async Task WriteAsync_ShouldSanitizeStepFileNames(string unsafeCode)
+        {
+            var plan = $"""
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### {unsafeCode} 위험한 코드
+
+본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+""";
+
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { [unsafeCode] = $"### {unsafeCode} 위험한 코드\n조각" },
+                new[] { Step(unsafeCode, "위험한 코드") },
+                null);
+
+            var result = await new InstructionBundleWriter().WriteAsync(
+                Inputs(layout) with { FinalPlanMarkdown = plan }, CancellationToken.None);
+
+            Assert.True(result.StepsSplit);
+
+            var safeCode = TaskFileComposer.SanitizeStepCode(unsafeCode);
+            var stepsDir = Path.Combine(_agentDir, "steps");
+
+            Assert.Equal(new[] { safeCode }, result.StepCodes);
+            Assert.True(File.Exists(Path.Combine(stepsDir, safeCode + ".md")));
+
+            // 정화하지 않았다면 쓰였을 경로가 실제로 비어 있어야 한다.
+            Assert.False(File.Exists(Path.GetFullPath(Path.Combine(stepsDir, unsafeCode + ".md"))));
+            Assert.Single(Directory.GetFiles(stepsDir, "*.md"));
+
+            // 이 번들이 만든 모든 마크다운이 Job 디렉터리 안에 남아야 한다.
+            foreach (var written in Directory.GetFiles(_outputRoot, "*.md", SearchOption.AllDirectories))
+            {
+                Assert.StartsWith(_jobDir + Path.DirectorySeparatorChar, Path.GetFullPath(written));
+            }
+        }
+
+        /// <summary>
+        /// steps/{코드}.md와 task-NN-{코드}.md가 같은 이름을 써야 재구동 경로(메뉴 3)가
+        /// 둘을 짝지을 수 있다. 정화가 코드를 바꾸는 정상 번들이 Broken으로 거부되던
+        /// 막다른 길이 여기서 닫힌다.
+        /// </summary>
+        [Fact]
+        public async Task WriteAsync_ShouldNameStepFilesAndTaskFilesWithTheSameCode()
+        {
+            var plan = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01: 회원 이관
+
+본문
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+""";
+
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { ["S01: 회원"] = "### S01: 회원 이관\n조각" },
+                new[] { Step("S01: 회원", "회원 이관") },
+                null);
+
+            var result = await new InstructionBundleWriter().WriteAsync(
+                Inputs(layout) with { FinalPlanMarkdown = plan }, CancellationToken.None);
+
+            var safeCode = TaskFileComposer.SanitizeStepCode("S01: 회원");
+            var stepTaskFile = result.TaskFilePaths.Single(path =>
+                TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(path)).Kind == StageKind.Step);
+
+            Assert.Equal(
+                safeCode,
+                TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(stepTaskFile)).StepCode);
+            Assert.True(File.Exists(Path.Combine(_agentDir, "steps", safeCode + ".md")));
+
+            // 회차 지시서가 가리키는 단계 상세 링크도 같은 이름이어야 한다.
+            Assert.Contains($"steps/{safeCode}.md", await File.ReadAllTextAsync(stepTaskFile));
+        }
+
+        /// <summary>
+        /// 정화가 서로 다른 두 코드를 같은 이름으로 뭉개면 한 단계의 상세가 다른 단계의
+        /// 파일을 덮어쓰고, 두 회차가 같은 소스 파일로 게이트를 통과한다. 부분 분할을
+        /// 하지 않는다는 규칙과 같은 이유로 그때는 분할 자체를 포기한다.
+        /// </summary>
+        [Fact]
+        public async Task WriteAsync_ShouldFallBackToSinglePlan_WhenSanitizedStepCodesCollide()
+        {
+            var plan = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## Mermaid 기반 통합 흐름도
+
+흐름도 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01. 스냅샷
+
+본문 1
+
+### S01: 원장
+
+본문 2
+
+## 통합 데이터 정합성 검증 SQL 세트
+
+검증 SQL 본문
+""";
+
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string>
+                {
+                    ["S01."] = "### S01. 스냅샷\n조각",
+                    ["S01:"] = "### S01: 원장\n조각",
+                },
+                new[] { Step("S01.", "스냅샷"), Step("S01:", "원장") },
+                null);
+
+            var result = await new InstructionBundleWriter().WriteAsync(
+                Inputs(layout) with { FinalPlanMarkdown = plan }, CancellationToken.None);
+
+            Assert.False(result.StepsSplit);
+            Assert.Empty(result.StepCodes);
+            Assert.False(Directory.Exists(Path.Combine(_agentDir, "steps")));
+            Assert.Contains(result.Warnings, warning => warning.Contains("같은 이름"));
+
+            // 폴백이므로 회차는 부트스트랩과 조립뿐이고, 진입점은 계획서 전문을 가리킨다.
+            Assert.Equal(2, result.TaskFilePaths.Count);
+            Assert.Contains(
+                "BatchMigrationPlan.md",
+                await File.ReadAllTextAsync(result.EntryPointPath));
+        }
     }
 }

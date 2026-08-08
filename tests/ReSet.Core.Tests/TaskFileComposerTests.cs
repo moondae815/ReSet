@@ -213,8 +213,57 @@ namespace ReSet.Core.Tests
             });
 
             Assert.Contains("src/AbstractSettleTasklet.cs", markdown);
+            // SettleContracts.cs가 빠져 있으면 ISettleStepDescriptor·ISettleRepository가
+            // C# 프로젝트에 도달하지 않는다. 컴파일은 깨지지 않아 아무것도 잡지 못했다.
+            Assert.Contains("src/SettleContracts.cs", markdown);
             Assert.Contains("tests/ArchitectureTests.cs", markdown);
             Assert.DoesNotContain(".java", markdown);
+        }
+
+        /// <summary>
+        /// C# 배치 지시 목록은 MetadataExporter가 실제로 agent/src에 쓰는 파일 전부와
+        /// 일치해야 한다. Java 쪽은 79fca6d에서 8개 전부를 열거하도록 고쳐졌는데 C#만
+        /// 남아 있었다 - 같은 종류의 누락이 다시 생기지 않게 파일 목록으로 고정한다.
+        /// </summary>
+        [Fact]
+        public void Compose_ShouldNameEveryContractFileWrittenForCSharp_ForBootstrap()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null, TargetLanguage = "C#",
+            });
+
+            foreach (var written in new[] { "AbstractSettleTasklet.cs", "SettleContracts.cs" })
+            {
+                Assert.Contains($"src/{written}", markdown);
+            }
+        }
+
+        [Fact]
+        public void Compose_ShouldPinMinimumToolingVersions_ForBootstrap()
+        {
+            // 버전 없이 이름만 적으면 에이전트가 어떤 릴리스를 물어올지 정해지지 않는데,
+            // 부트스트랩이 통과시켜야 하는 아키텍처 테스트는 특정 버전 이상에서만
+            // 컴파일된다. 부트스트랩 실패는 하드 중단이므로 그 실패는 회복 불가다.
+            var csharp = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null, TargetLanguage = "C#",
+            });
+            var java = TaskFileComposer.Compose(StepInputs() with
+            {
+                Kind = StageKind.Bootstrap, StepCode = null, StepName = null, StepRelativePath = null,
+                SpecRelativePath = null, TargetLanguage = "Java",
+            });
+
+            // allowEmptyShould(boolean)는 ArchUnit 0.23.1에서 추가됐다. 그보다 낮은
+            // 릴리스를 물어오면 회차 0이 통과시켜야 하는 바로 그 파일이 컴파일되지 않는다.
+            Assert.Contains("ArchUnit 0.23.1+", java);
+            Assert.Contains("JUnit 5", java);
+            Assert.Contains("NetArchTest.Rules 1.3.2+", csharp);
+            Assert.Contains("xUnit", csharp);
+            Assert.DoesNotContain("Dapper, EF Core", csharp);
         }
 
         [Fact]
