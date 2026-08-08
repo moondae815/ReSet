@@ -408,14 +408,14 @@ namespace ReSet.Core.Services
             // (기존 AbstractSettleTasklet 스텁 배치 블록은 여기 이어서 그대로 둔다.)
             try
             {
+                var agentSrcFolder = Path.Combine(agentFolder, "src");
+                if (!Directory.Exists(agentSrcFolder))
+                {
+                    Directory.CreateDirectory(agentSrcFolder);
+                }
+
                 try
                 {
-                    var agentSrcFolder = Path.Combine(agentFolder, "src");
-                    if (!Directory.Exists(agentSrcFolder))
-                    {
-                        Directory.CreateDirectory(agentSrcFolder);
-                    }
-
                     if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                     {
                         var baseClassStub = @"using System;
@@ -547,29 +547,10 @@ namespace ReSet.Batch.Tests
         }
     }
 }";
-                    var archUnitStub = @"using NetArchTest.Rules;
-using Xunit;
-
-namespace ReSet.Batch.Tests.Architecture
-{
-    public class ArchitectureTests
-    {
-        [Fact]
-        public void DomainLayer_ShouldNotDependOn_InfrastructureLayer()
-        {
-            // Arrange
-            // var result = Types.InCurrentDomain()
-            //     .That().ResideInNamespace(""ReSet.Batch.Domain"")
-            //     .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
-            //     .GetResult();
-            
-            // Assert
-            // Assert.True(result.IsSuccessful);
-        }
-    }
-}";
+                    var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                    await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContracts.cs"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
                 }
                 else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                 {
@@ -589,23 +570,10 @@ public class StepLogicTests {
         // Assert
     }
 }";
-                    var archUnitStub = @"package com.reset.batch.tests.architecture;
-
-import com.tngtech.archunit.junit.AnalyzeClasses;
-import com.tngtech.archunit.junit.ArchTest;
-import com.tngtech.archunit.lang.ArchRule;
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
-
-@AnalyzeClasses(packages = ""com.reset.batch"")
-public class ArchitectureTests {
-    @ArchTest
-    public static final ArchRule domainLayer_ShouldNotDependOn_InfrastructureLayer = 
-        classes()
-            .that().resideInAPackage(""..domain.."")
-            .should().onlyDependOnClassesThat().resideInAnyPackage(""..domain.."", ""java.."");
-}";
+                    var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Encoding.UTF8);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Encoding.UTF8);
+                    await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStepDescriptor.java"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
                 }
 
                 Log.Information("통합 마이그레이션 지시서 번들 내보내기 완료 - JobName: {JobName}", jobName);
