@@ -527,14 +527,16 @@ namespace ReSet.Batch.Core
                         // javac가 ""cannot find symbol""로 즉시 죽는다 - 아키텍처 테스트가
                         // 아무것도 못 잡는 게 아니라 프로젝트 전체가 컴파일되지 않는다.
                         //
-                        // Java는 public 타입 하나당 파일 하나가 규칙이라 ISettleStep과
-                        // AbstractSettleTasklet은 서로 다른 패키지(테스트 쪽)에서 클래스
-                        // 리터럴로 참조되므로 둘 다 public이어야 하고, 그래서 파일도
-                        // 나뉜다. SettleContext/StepResult/IDbConnectionFactory/
-                        // ICheckpointRepository는 외부에서 이름으로 참조되지 않으므로
-                        // AbstractSettleTasklet.java에 package-private으로 묶었다 -
-                        // RepositoryContractStub의 Java 스텁(ISettleStepDescriptor.java가
-                        // ISettleRepository를 묶어 담는 것)과 같은 관례다.
+                        // SettleContext/StepResult/IDbConnectionFactory/ICheckpointRepository도
+                        // 전부 public 파일로 낸다. 이들은 확장 표면(ISettleStep.execute,
+                        // AbstractSettleTasklet의 preCheck/runBusinessSteps/
+                        // onFailureCompensation)의 매개변수·반환 타입인데, 에이전트가 만드는
+                        // Tasklet은 Hexagonal 레이아웃상 core가 아닌 다른 패키지(예:
+                        // com.reset.batch.steps)에 있다. 이 타입들을 package-private으로
+                        // 묶으면(C#의 internal 습관) 그 패키지에서는 오버라이드 시그니처
+                        // 자체를 적을 수 없어 javac가 ""is not public"" / ""does not override
+                        // abstract method""로 죽는다. Java는 파일당 public 최상위 타입
+                        // 하나만 허용하므로 6개 파일로 나눈다.
                         var settleStepStub = @"package com.reset.batch.core;
 
 /**
@@ -549,6 +551,90 @@ public interface ISettleStep {
 }
 ";
                         await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStep.java"), settleStepStub, Encoding.UTF8);
+
+                        var settleContextStub = @"package com.reset.batch.core;
+
+/**
+ * Step 실행 컨텍스트. Tasklet 서브클래스가 다른 패키지에 있으므로 public이어야 한다 -
+ * package-private이면 그 패키지에서 execute/preCheck/runBusinessSteps의 시그니처
+ * 자체를 적을 수 없다.
+ */
+public class SettleContext {
+    private String ymd;
+    private boolean bypassPreCheck;
+    private IDbConnectionFactory mainDb;
+    private IDbConnectionFactory paymentDb;
+    private IDbConnectionFactory settleCardDb;
+    private IDbConnectionFactory plCardDb;
+    private ICheckpointRepository checkpoint;
+
+    public String getYmd() { return ymd; }
+    public void setYmd(String ymd) { this.ymd = ymd; }
+    public boolean isBypassPreCheck() { return bypassPreCheck; }
+    public void setBypassPreCheck(boolean bypassPreCheck) { this.bypassPreCheck = bypassPreCheck; }
+    public IDbConnectionFactory getMainDb() { return mainDb; }
+    public void setMainDb(IDbConnectionFactory mainDb) { this.mainDb = mainDb; }
+    public IDbConnectionFactory getPaymentDb() { return paymentDb; }
+    public void setPaymentDb(IDbConnectionFactory paymentDb) { this.paymentDb = paymentDb; }
+    public IDbConnectionFactory getSettleCardDb() { return settleCardDb; }
+    public void setSettleCardDb(IDbConnectionFactory settleCardDb) { this.settleCardDb = settleCardDb; }
+    public IDbConnectionFactory getPlCardDb() { return plCardDb; }
+    public void setPlCardDb(IDbConnectionFactory plCardDb) { this.plCardDb = plCardDb; }
+    public ICheckpointRepository getCheckpoint() { return checkpoint; }
+    public void setCheckpoint(ICheckpointRepository checkpoint) { this.checkpoint = checkpoint; }
+}
+";
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContext.java"), settleContextStub, Encoding.UTF8);
+
+                        var stepResultStub = @"package com.reset.batch.core;
+
+/**
+ * preCheck/runBusinessSteps를 오버라이드하는 Tasklet 서브클래스(다른 패키지)가 이
+ * 타입을 직접 생성해 반환해야 하므로 클래스와 생성자 모두 public이다.
+ */
+public class StepResult {
+    private final int code;
+    private final String message;
+    private final String sourceProcName;
+    private String poStrErrMsg;
+
+    public StepResult(int code, String message, String sourceProcName) {
+        this.code = code;
+        this.message = message;
+        this.sourceProcName = sourceProcName;
+    }
+
+    public int getCode() { return code; }
+    public String getMessage() { return message; }
+    public String getSourceProcName() { return sourceProcName; }
+    public String getPoStrErrMsg() { return poStrErrMsg; }
+    public void setPoStrErrMsg(String poStrErrMsg) { this.poStrErrMsg = poStrErrMsg; }
+    public boolean isSuccess() { return code == 0; }
+}
+";
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "StepResult.java"), stepResultStub, Encoding.UTF8);
+
+                        var dbConnectionFactoryStub = @"package com.reset.batch.core;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+
+/** 회차 0의 부트스트랩이 DB별로 구현한다(멀티 DB 연결 문자열 설정에서 주입). */
+public interface IDbConnectionFactory {
+    Connection createConnection() throws SQLException;
+}
+";
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "IDbConnectionFactory.java"), dbConnectionFactoryStub, Encoding.UTF8);
+
+                        var checkpointRepositoryStub = @"package com.reset.batch.core;
+
+/** 회차 0의 부트스트랩이 구현한다. */
+public interface ICheckpointRepository {
+    boolean isStepCompleted(String stepName, String ymd);
+    void markStepCompleted(String stepName, String ymd);
+}
+";
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ICheckpointRepository.java"), checkpointRepositoryStub, Encoding.UTF8);
 
                         var abstractTaskletStub = @"package com.reset.batch.core;
 
@@ -619,60 +705,6 @@ public abstract class AbstractSettleTasklet implements ISettleStep {
     protected void onFailureCompensation(SettleContext context, int failedStateCode) {
     }
 }
-
-class SettleContext {
-    private String ymd;
-    private boolean bypassPreCheck;
-    private IDbConnectionFactory mainDb;
-    private IDbConnectionFactory paymentDb;
-    private IDbConnectionFactory settleCardDb;
-    private IDbConnectionFactory plCardDb;
-    private ICheckpointRepository checkpoint;
-
-    public String getYmd() { return ymd; }
-    public void setYmd(String ymd) { this.ymd = ymd; }
-    public boolean isBypassPreCheck() { return bypassPreCheck; }
-    public void setBypassPreCheck(boolean bypassPreCheck) { this.bypassPreCheck = bypassPreCheck; }
-    public IDbConnectionFactory getMainDb() { return mainDb; }
-    public void setMainDb(IDbConnectionFactory mainDb) { this.mainDb = mainDb; }
-    public IDbConnectionFactory getPaymentDb() { return paymentDb; }
-    public void setPaymentDb(IDbConnectionFactory paymentDb) { this.paymentDb = paymentDb; }
-    public IDbConnectionFactory getSettleCardDb() { return settleCardDb; }
-    public void setSettleCardDb(IDbConnectionFactory settleCardDb) { this.settleCardDb = settleCardDb; }
-    public IDbConnectionFactory getPlCardDb() { return plCardDb; }
-    public void setPlCardDb(IDbConnectionFactory plCardDb) { this.plCardDb = plCardDb; }
-    public ICheckpointRepository getCheckpoint() { return checkpoint; }
-    public void setCheckpoint(ICheckpointRepository checkpoint) { this.checkpoint = checkpoint; }
-}
-
-class StepResult {
-    private final int code;
-    private final String message;
-    private final String sourceProcName;
-    private String poStrErrMsg;
-
-    StepResult(int code, String message, String sourceProcName) {
-        this.code = code;
-        this.message = message;
-        this.sourceProcName = sourceProcName;
-    }
-
-    public int getCode() { return code; }
-    public String getMessage() { return message; }
-    public String getSourceProcName() { return sourceProcName; }
-    public String getPoStrErrMsg() { return poStrErrMsg; }
-    public void setPoStrErrMsg(String poStrErrMsg) { this.poStrErrMsg = poStrErrMsg; }
-    public boolean isSuccess() { return code == 0; }
-}
-
-interface IDbConnectionFactory {
-    Connection createConnection() throws SQLException;
-}
-
-interface ICheckpointRepository {
-    boolean isStepCompleted(String stepName, String ymd);
-    void markStepCompleted(String stepName, String ymd);
-}
 ";
                         // C# 쪽 TaskletOrmComment와 같은 위치(runBusinessSteps 바로 위)에
                         // JPA 버전 경계 주석을 심는다. DataAccessPolicy.TaskletOrmComment는
@@ -724,7 +756,23 @@ namespace ReSet.Batch.Tests
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
-                    await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContracts.cs"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
+
+                    // agentSrcFolder 생성이 위 inner try에서 이미 실패해 경고로 삼켜졌을 수
+                    // 있다. 그 경우 여기서 다시 시도하고, 그래도 실패하면 이 파일만 건너뛴다 -
+                    // 두 tests/*.cs 스텁은 이미 디스크에 쓰였으니 여기서 예외가 outer catch로
+                    // 튀어 완료 로그를 삼키게 두지 않는다.
+                    try
+                    {
+                        if (!Directory.Exists(agentSrcFolder))
+                        {
+                            Directory.CreateDirectory(agentSrcFolder);
+                        }
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContracts.cs"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "SettleContracts.cs 템플릿 생성 중 오류가 발생했습니다. 진행은 계속합니다.");
+                    }
                 }
                 else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                 {
@@ -747,7 +795,22 @@ public class StepLogicTests {
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Encoding.UTF8);
                     await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Encoding.UTF8);
-                    await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStepDescriptor.java"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
+
+                    // C# 쪽과 같은 이유로 격리한다 - src/ 생성 실패가 이미 쓰인 tests/*.java를
+                    // 무의미하게 만들며 outer catch로 튀어 완료 로그를 삼키게 두지 않는다.
+                    try
+                    {
+                        if (!Directory.Exists(agentSrcFolder))
+                        {
+                            Directory.CreateDirectory(agentSrcFolder);
+                        }
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStepDescriptor.java"), DataAccessPolicy.RepositoryContractStub(targetLanguage), Encoding.UTF8);
+                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleRepository.java"), DataAccessPolicy.JavaRepositoryInterfaceStub, Encoding.UTF8);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "계약 스텁(ISettleStepDescriptor.java/ISettleRepository.java) 생성 중 오류가 발생했습니다. 진행은 계속합니다.");
+                    }
                 }
 
                 Log.Information("통합 마이그레이션 지시서 번들 내보내기 완료 - JobName: {JobName}", jobName);

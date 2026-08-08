@@ -202,6 +202,7 @@ namespace ReSet.Batch.Tests.Architecture
         private const string JavaArchitectureTests = @"package com.reset.batch.tests.architecture;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaModifier;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition;
 import org.junit.jupiter.api.Test;
@@ -220,9 +221,11 @@ class ArchitectureTests {
 
     @Test
     void everySettleStepMustExtendAbstractSettleTasklet() {
+        // ClassesThat 인터페이스에는 abstract 여부만 걸러내는 메서드가 없다 - ArchUnit이
+        // 문서화한 방법은 haveModifier/doNotHaveModifier(JavaModifier.ABSTRACT)뿐이다.
         ArchRuleDefinition.classes()
             .that().implement(com.reset.batch.core.ISettleStep.class)
-            .and().areNotInterfaces().and().areNotAbstract()
+            .and().areNotInterfaces().and().doNotHaveModifier(JavaModifier.ABSTRACT)
             .should().beAssignableTo(com.reset.batch.core.AbstractSettleTasklet.class)
             .check(classes);
     }
@@ -281,9 +284,13 @@ namespace ReSet.Batch.Core
 }
 ";
 
+        // C#은 파일 하나에 public 타입을 여러 개 둘 수 있어 ISettleStepDescriptor와
+        // ISettleRepository를 CSharpRepositoryContract 한 곳에 묶어도 컴파일된다. Java는
+        // 파일당 public 최상위 타입 하나 규칙이 있고, 두 타입 모두 구현체가 core 패키지
+        // 밖(에이전트가 만드는 Step/Repository 구현 패키지)에 있어야 하므로 각각 public이어야
+        // 한다 - 그래서 JavaRepositoryContract는 ISettleStepDescriptor만 담고,
+        // ISettleRepository는 JavaRepositoryInterfaceStub이라는 별도 파일로 낸다.
         private const string JavaRepositoryContract = @"package com.reset.batch.core;
-
-import java.util.List;
 
 /**
  * 단계 실행 순서를 선언으로 고정한다. 회차마다 다른 프로세스가 Tasklet을 추가하므로,
@@ -292,15 +299,6 @@ import java.util.List;
 public interface ISettleStepDescriptor {
     int getOrder();
     ISettleStep getStep();
-}
-
-/**
- * 데이터 액세스 계층의 최소 계약. 구현체는 회차 0에서 만든다.
- * 대량 DML·집계·청킹은 이 인터페이스 뒤에서도 파라미터 바인딩 SQL로 작성한다.
- */
-interface ISettleRepository {
-    int executeNonQuery(String sql, Object parameters);
-    <T> List<T> query(String sql, Object parameters, Class<T> type);
 }
 ";
 
@@ -316,5 +314,30 @@ interface ISettleRepository {
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? JavaRepositoryContract
                 : CSharpRepositoryContract;
+
+        private const string JavaSettleRepositoryInterface = @"package com.reset.batch.core;
+
+import java.util.List;
+
+/**
+ * 데이터 액세스 계층의 최소 계약. 구현체는 회차 0에서 만든다.
+ * 대량 DML·집계·청킹은 이 인터페이스 뒤에서도 파라미터 바인딩 SQL로 작성한다.
+ *
+ * ISettleStepDescriptor와 한 파일에 묶지 않는다 - 이 인터페이스의 구현체는 인프라
+ * 패키지(core 밖)에 있어야 하는데, Java에서 다른 패키지가 구현할 수 있으려면
+ * 인터페이스 자체가 public이어야 하고, public 최상위 타입은 파일당 하나만 허용된다.
+ */
+public interface ISettleRepository {
+    int executeNonQuery(String sql, Object parameters);
+    <T> List<T> query(String sql, Object parameters, Class<T> type);
+}
+";
+
+        /// <summary>
+        /// Java 전용. ISettleRepository를 ISettleStepDescriptor.java와 분리된 public
+        /// 파일(ISettleRepository.java)로 낸다. C#은 ISettleRepository가 이미
+        /// RepositoryContractStub("C#") 안에 public으로 들어 있으므로 이 상수를 쓰지 않는다.
+        /// </summary>
+        public static string JavaRepositoryInterfaceStub => JavaSettleRepositoryInterface;
     }
 }

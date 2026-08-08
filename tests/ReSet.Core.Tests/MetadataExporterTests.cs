@@ -921,37 +921,78 @@ namespace ReSet.Core.Tests
                     new OutputPathResolver("TestDB", testOutputDir));
 
                 var agentFolder = Path.Combine(testOutputDir, "agent");
+                var src = (string name) => Path.Combine(agentFolder, "src", name);
 
-                var settleStepPath = Path.Combine(agentFolder, "src", "ISettleStep.java");
-                var abstractTaskletPath = Path.Combine(agentFolder, "src", "AbstractSettleTasklet.java");
-                var contractPath = Path.Combine(agentFolder, "src", "ISettleStepDescriptor.java");
+                var settleStepPath = src("ISettleStep.java");
+                var abstractTaskletPath = src("AbstractSettleTasklet.java");
+                var settleContextPath = src("SettleContext.java");
+                var stepResultPath = src("StepResult.java");
+                var dbConnectionFactoryPath = src("IDbConnectionFactory.java");
+                var checkpointRepositoryPath = src("ICheckpointRepository.java");
+                var stepDescriptorPath = src("ISettleStepDescriptor.java");
+                var repositoryPath = src("ISettleRepository.java");
                 var architectureTestPath = Path.Combine(agentFolder, "tests", "ArchitectureTests.java");
                 var stepLogicTestPath = Path.Combine(agentFolder, "tests", "StepLogicTests.java");
 
                 Assert.True(File.Exists(settleStepPath), settleStepPath);
                 Assert.True(File.Exists(abstractTaskletPath), abstractTaskletPath);
-                Assert.True(File.Exists(contractPath), contractPath);
+                Assert.True(File.Exists(settleContextPath), settleContextPath);
+                Assert.True(File.Exists(stepResultPath), stepResultPath);
+                Assert.True(File.Exists(dbConnectionFactoryPath), dbConnectionFactoryPath);
+                Assert.True(File.Exists(checkpointRepositoryPath), checkpointRepositoryPath);
+                Assert.True(File.Exists(stepDescriptorPath), stepDescriptorPath);
+                Assert.True(File.Exists(repositoryPath), repositoryPath);
                 Assert.True(File.Exists(architectureTestPath), architectureTestPath);
                 Assert.True(File.Exists(stepLogicTestPath), stepLogicTestPath);
 
                 // C# 전용 파일은 Java 타깃에서는 나오지 않아야 한다.
-                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "AbstractSettleTasklet.cs")));
-                Assert.False(File.Exists(Path.Combine(agentFolder, "src", "SettleContracts.cs")));
+                Assert.False(File.Exists(src("AbstractSettleTasklet.cs")));
+                Assert.False(File.Exists(src("SettleContracts.cs")));
 
                 var settleStep = await File.ReadAllTextAsync(settleStepPath);
                 var abstractTasklet = await File.ReadAllTextAsync(abstractTaskletPath);
-                var contract = await File.ReadAllTextAsync(contractPath);
+                var settleContext = await File.ReadAllTextAsync(settleContextPath);
+                var stepResult = await File.ReadAllTextAsync(stepResultPath);
+                var dbConnectionFactory = await File.ReadAllTextAsync(dbConnectionFactoryPath);
+                var checkpointRepository = await File.ReadAllTextAsync(checkpointRepositoryPath);
+                var stepDescriptor = await File.ReadAllTextAsync(stepDescriptorPath);
+                var repository = await File.ReadAllTextAsync(repositoryPath);
                 var architectureTest = await File.ReadAllTextAsync(architectureTestPath);
 
                 // 아키텍처 테스트가 참조하는 패키지·타입이 실제로 이 패키지에 존재해야 한다.
                 Assert.Contains("package com.reset.batch.core;", settleStep);
                 Assert.Contains("package com.reset.batch.core;", abstractTasklet);
-                Assert.Contains("package com.reset.batch.core;", contract);
+                Assert.Contains("package com.reset.batch.core;", settleContext);
+                Assert.Contains("package com.reset.batch.core;", stepResult);
+                Assert.Contains("package com.reset.batch.core;", dbConnectionFactory);
+                Assert.Contains("package com.reset.batch.core;", checkpointRepository);
+                Assert.Contains("package com.reset.batch.core;", stepDescriptor);
+                Assert.Contains("package com.reset.batch.core;", repository);
+
+                // Critical(2차): AbstractSettleTasklet/ISettleStep의 확장 표면(preCheck/
+                // runBusinessSteps/execute의 매개변수·반환 타입)에 나오는 모든 타입이 public
+                // 이어야, 다른 패키지의 Tasklet 서브클래스가 이 시그니처를 오버라이드할 수
+                // 있다. package-private으로 회귀하면 "is not public in ...; cannot be
+                // accessed from outside package"로 컴파일이 깨진다 - 파일이 존재하는 것만으로는
+                // 이 회귀를 못 잡으므로 가시성 리터럴을 직접 고정한다.
                 Assert.Contains("public interface ISettleStep", settleStep);
                 Assert.Contains("public abstract class AbstractSettleTasklet implements ISettleStep", abstractTasklet);
+                Assert.Contains("public class SettleContext", settleContext);
+                Assert.Contains("public class StepResult", stepResult);
+                Assert.Contains("public StepResult(", stepResult);
+                Assert.Contains("public interface IDbConnectionFactory", dbConnectionFactory);
+                Assert.Contains("public interface ICheckpointRepository", checkpointRepository);
+                Assert.Contains("public interface ISettleStepDescriptor", stepDescriptor);
+                Assert.Contains("public interface ISettleRepository", repository);
+
                 Assert.Contains("com.reset.batch.core.ISettleStep.class", architectureTest);
                 Assert.Contains("com.reset.batch.core.AbstractSettleTasklet.class", architectureTest);
                 Assert.Contains("package com.reset.batch.tests.architecture;", architectureTest);
+
+                // ArchUnit의 ClassesThat에는 areNotAbstract()가 없다 - 존재하지 않는 메서드를
+                // 다시 부르면 javac가 즉시 "cannot find symbol"로 죽는다.
+                Assert.DoesNotContain("areNotAbstract()", architectureTest);
+                Assert.Contains("doNotHaveModifier(JavaModifier.ABSTRACT)", architectureTest);
             }
             finally
             {
