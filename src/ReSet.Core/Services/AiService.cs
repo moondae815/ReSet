@@ -56,6 +56,16 @@ namespace ReSet.Core.Services
             //
             // break를 두지 않는 것은 폴백 대비다. 정규화가 DB 컨텍스트를 못 얻으면
             // 키가 갈라진 채 남는데, 그때도 컬럼이 유실되면 안 된다.
+            //
+            // DB 컨텍스트(dep.Database도 spDef.ObjectKey?.Database도 없음)가 아예 없으면
+            // canonical 한정 자체가 불가능해서 3-part 정확 비교가 항상 어긋난다. 이
+            // 필터는 토큰 절약용 최적화일 뿐 정확성 장치가 아니다 - 과다 포함(다른
+            // 테이블 컬럼이 섞임)은 표에 불필요한 행을 몇 개 더할 뿐이지만, 과소 포함은
+            // 모델이 그 컬럼을 "존재하지 않는다"고 잘못 기록한다(14개 명세서를 망가뜨린
+            // 바로 그 결함). 그래서 컨텍스트가 없을 때만 베이스 이름(마지막 세그먼트)
+            // 비교로 과다 포함 쪽으로 기운다. 컨텍스트가 있는 정상 경로는 3-part 정확
+            // 비교를 유지해야 한다 - dbo.TPGProperty와 PaymentDB.dbo.TPGProperty를
+            // 베이스 이름만으로 합치면 서로 다른 물리 테이블의 컬럼이 섞인다.
             if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.ReferencedColumnsPerTable != null)
             {
                 var depCanonicalName = StaticAnalysisNormalizer.CanonicalizeParts(
@@ -65,6 +75,10 @@ namespace ReSet.Core.Services
                     spDef.ObjectKey?.Database,
                     spDef.Schema);
 
+                bool hasDbContext = !string.IsNullOrWhiteSpace(dep.Database) ||
+                    !string.IsNullOrWhiteSpace(spDef.ObjectKey?.Database);
+                var depBaseName = hasDbContext ? null : ExtractBaseName(dep.Name);
+
                 foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
                 {
                     var keyCanonicalName = StaticAnalysisNormalizer.Canonicalize(
@@ -72,7 +86,11 @@ namespace ReSet.Core.Services
                         spDef.ObjectKey?.Database,
                         spDef.Schema);
 
-                    if (!string.Equals(keyCanonicalName, depCanonicalName, StringComparison.OrdinalIgnoreCase))
+                    var matches = hasDbContext
+                        ? string.Equals(keyCanonicalName, depCanonicalName, StringComparison.OrdinalIgnoreCase)
+                        : string.Equals(ExtractBaseName(keyCanonicalName), depBaseName, StringComparison.OrdinalIgnoreCase);
+
+                    if (!matches)
                     {
                         continue;
                     }
@@ -138,6 +156,23 @@ namespace ReSet.Core.Services
             return sb.ToString();
         }
 
+        /// <summary>
+        /// canonical 이름(또는 원시 이름)에서 마지막 세그먼트만 뽑는다.
+        /// DB 컨텍스트가 없어 3-part로 한정할 수 없을 때 폴백 비교 키로 쓴다.
+        /// </summary>
+        private static string ExtractBaseName(string? qualifiedOrRawName)
+        {
+            if (string.IsNullOrWhiteSpace(qualifiedOrRawName)) return string.Empty;
+
+            var trimmed = qualifiedOrRawName.Trim().Trim('[', ']');
+            var lastDot = trimmed.LastIndexOf('.');
+            return lastDot >= 0 ? trimmed[(lastDot + 1)..].Trim('[', ']') : trimmed;
+        }
+
+        private static string BuildDependencyQualifiedName(DependencyInfo dep, SpDefinition spDef) =>
+            StaticAnalysisNormalizer.CanonicalizeParts(
+                dep.Database, dep.Schema, dep.Name, spDef.ObjectKey?.Database, spDef.Schema);
+
         private (string dependenciesText, string tableSchemasText, string referenceDdlsText, string staticAnalysisText) BuildSpMetadataTexts(SpDefinition spDef)
         {
             var dependenciesText = new StringBuilder();
@@ -148,8 +183,7 @@ namespace ReSet.Core.Services
             {
                 // 바로 아래 <referenced-table-schemas>가 3파트로 찍으므로 여기서도 DB를
                 // 밝힌다. 안 그러면 PaymentDB.dbo.TTxMst와 dbo.TTxMst가 같은 줄로 보인다.
-                var depQualifiedName = StaticAnalysisNormalizer.CanonicalizeParts(
-                    dep.Database, dep.Schema, dep.Name, spDef.ObjectKey?.Database, spDef.Schema);
+                var depQualifiedName = BuildDependencyQualifiedName(dep, spDef);
                 dependenciesText.AppendLine($"- Name: {depQualifiedName}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
 
                 if (dep.Columns.Count > 0)
@@ -1856,8 +1890,11 @@ Analyze the target Stored Procedure source code and table/UDF schemas, and write
 
             foreach (var dep in spDef.Dependencies)
             {
-                dependenciesText.AppendLine($"- Schema: {dep.Schema}, Name: {dep.Name}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
-                
+                // BuildSpMetadataTexts와 같은 DB 한정 규칙을 쓴다. 안 그러면
+                // PaymentDB.dbo.TTxMst와 dbo.TTxMst가 이 목록에서 구별되지 않는다.
+                var depQualifiedName = BuildDependencyQualifiedName(dep, spDef);
+                dependenciesText.AppendLine($"- Name: {depQualifiedName}, Type: {dep.Type} (발견 깊이: {dep.DiscoveryDepth}단계)");
+
                 if (dep.Columns.Count > 0)
                 {
                     tableSchemasText.AppendLine(FormatTableSchemaToMarkdown(dep, spDef));

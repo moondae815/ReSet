@@ -1201,6 +1201,94 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("PaymentDB.dbo.TTxMst", result.UserPrompt);
         }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldFallBackToBaseNameMatchWhenNoDatabaseContext()
+        {
+            // ObjectKey가 없으면 CanonicalizeParts가 DB를 못 채워 키가 갈라진 채 남는다.
+            // 이 필터는 토큰 절약용 최적화일 뿐 정확성 장치가 아니다 - 과다 포함은
+            // 표에 불필요한 행을 몇 개 더할 뿐이지만, 과소 포함은 모델이 "존재하지
+            // 않는 컬럼"이라고 잘못 기록한다(14개 명세서를 망가뜨린 바로 그 결함).
+            // 그래서 DB 컨텍스트가 없을 때는 베이스 이름 비교로 과다 포함 쪽으로 기운다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "CLIENTID", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "CYMD", DataType = "char(8)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TSettleMst", new System.Collections.Generic.List<string> { "CLIENTID" } },
+                    { "TSettleMst", new System.Collections.Generic.List<string> { "CYMD" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| CLIENTID |", result.UserPrompt);
+            Assert.Contains("| CYMD |", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldNotLetBaseNameFallbackMergeDifferentDatabasesWhenContextExists()
+        {
+            // ObjectKey가 있어 DB 컨텍스트를 확보한 정상 경로에서는 폴백이 적용되면 안 된다.
+            // dbo.TPGProperty(현재 DB)와 PaymentDB.dbo.TPGProperty(다른 DB)를 베이스
+            // 이름만으로 합치면 서로 다른 물리 테이블의 컬럼이 섞인다.
+            var spDef = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create(
+                    "SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;"
+            };
+
+            spDef.Dependencies.Add(new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TPGProperty",
+                Type = "USER_TABLE",
+                DiscoveryDepth = 1,
+                Columns = new System.Collections.Generic.List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "OwnColumn", DataType = "varchar(20)" },
+                    new ColumnInfo { ColumnName = "OtherDbColumn", DataType = "varchar(20)" }
+                }
+            });
+
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>
+                {
+                    { "SETTLE_POQ_DB.dbo.TPGProperty", new System.Collections.Generic.List<string> { "OwnColumn" } },
+                    { "PaymentDB.dbo.TPGProperty", new System.Collections.Generic.List<string> { "OtherDbColumn" } }
+                }
+            };
+
+            var result = await SpecService().GenerateSpecificationAsync(spDef, "지침");
+
+            Assert.Contains("| OwnColumn |", result.UserPrompt);
+            Assert.DoesNotContain("| OtherDbColumn |", result.UserPrompt);
+        }
     }
 
     public class MockHttpMessageHandler : HttpMessageHandler
