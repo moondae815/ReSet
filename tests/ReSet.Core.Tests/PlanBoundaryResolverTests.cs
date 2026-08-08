@@ -363,6 +363,108 @@ SELECT 1;
         }
 
         /// <summary>
+        /// 마지막 단계 <b>뒤</b>에 오는 절이 어느 조각에도 담기지 않으면 문서에서 사라진다.
+        /// 이 분기는 StepContract·Verification이 모두 null이고 StepsSplit이 true라 진입점에
+        /// 계획서 전문 링크도 실리지 않으므로, 개요 조각이 유일한 통짜 바구니다.
+        ///
+        /// 골격 탐색이 실패하는 가장 흔한 원인은 헤딩 문구 변경이다 - 즉 그 절이 <b>다른
+        /// 이름으로 실재</b>하기 때문에 실패한다. 그래서 픽스처의 마지막 절 이름을 일부러
+        /// 필수 H2와 다르게 둔다. 앞선 테스트가 이 결함을 못 잡은 이유가 픽스처에 마지막
+        /// 단계 뒤 내용이 아예 없었기 때문이다(Task 4에서 고친 것과 같은 부류의 결함).
+        /// </summary>
+        [Fact]
+        public void Resolve_ShouldKeepContentAfterTheLastStep_WhenSkeletonSplitFails()
+        {
+            var renamedVerificationHeading = """
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## 단계별 이행 상세 및 의사코드
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 데이터 정합성 대조 쿼리 모음
+
+검증 SQL 본문은 여기 있다
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(renamedVerificationHeading, LayoutWithSections());
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.True(slices.StepsSplit);
+            Assert.Null(slices.Verification);
+            Assert.Null(slices.StepContract);
+
+            // 단계 본문은 steps/*.md가 덮으므로 개요에 중복되지 않는다.
+            Assert.DoesNotContain("정제된 S01 본문", slices.Architecture);
+            Assert.DoesNotContain("정제된 S02 본문", slices.Architecture);
+
+            // 마지막 단계 뒤의 절은 아무도 덮지 않는다 - 개요가 흡수해야 한다.
+            Assert.Contains("개요 본문", slices.Architecture);
+            Assert.Contains("데이터 정합성 대조 쿼리 모음", slices.Architecture);
+            Assert.Contains("검증 SQL 본문은 여기 있다", slices.Architecture);
+        }
+
+        /// <summary>
+        /// 위 테스트를 절 이름 하나가 아니라 <b>문서 전체</b>로 일반화한다. 골격 분할이 실패한
+        /// 분기에서는 조각이 개요와 단계뿐이므로, 원문의 모든 비어 있지 않은 줄이 그 둘(그리고
+        /// 서문) 어딘가에 남아 있어야 한다. 앞으로 이 분기에 새 경계를 넣을 때 어느 구간이
+        /// 조용히 빠지는 것을 이 단언이 막는다.
+        /// </summary>
+        [Fact]
+        public void Resolve_ShouldNotLoseAnyLine_WhenSkeletonSplitFails()
+        {
+            var document = """
+서문 한 줄
+
+## 통합 배치 아키텍처 개요
+
+개요 본문
+
+## 단계별 이행 상세 및 의사코드
+
+공통 규약 본문
+
+### S01 스냅샷 생성
+
+정제된 S01 본문
+
+### S02 원장 생성
+
+정제된 S02 본문
+
+## 데이터 정합성 대조 쿼리 모음
+
+검증 SQL 본문은 여기 있다
+
+## 부록 - 운영 메모
+
+운영 메모 본문
+""";
+
+            var slices = PlanBoundaryResolver.Resolve(document, LayoutWithSections());
+
+            Assert.False(slices.SkeletonSplit);
+            Assert.True(slices.StepsSplit);
+
+            var covered = string.Join(
+                "\n",
+                new[] { slices.Preamble, slices.Architecture }.Concat(slices.Steps.Values));
+
+            foreach (var line in document.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0))
+            {
+                Assert.Contains(line, covered);
+            }
+        }
+
+        /// <summary>
         /// 반대로 단계 분할까지 실패했다면 끊을 기준점이 없다. 그때는 문서 끝까지
         /// 남겨야 어느 조각에도 속하지 못한 구간이 사라지지 않는다.
         /// </summary>

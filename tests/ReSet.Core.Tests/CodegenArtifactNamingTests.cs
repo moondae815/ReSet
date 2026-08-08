@@ -85,6 +85,35 @@ namespace ReSet.Core.Tests
             Assert.Contains($"`{JobName}.java`", AssemblyTaskFile("Java"));
         }
 
+        /// <summary>
+        /// 디렉터리는 지시 형태, 파일명은 허용 형태여야 한다.
+        ///
+        /// 자동 탐색의 규칙 1(파일 정확 일치)이 규칙 2(디렉터리)보다 먼저 이기고 소스 루트를
+        /// 재귀로 훑는다. 두 형태를 나란히 권하면 에이전트가 파일 쪽을 고를 수 있고 - Java에서
+        /// main 클래스를 Job 이름으로 짓는 것이 관용이라 특히 그렇다 - 그러면 Job 전체 계획서가
+        /// 진입점 파일 하나와 대조된다. 매핑은 성사되지만 L2가 MISMATCH를 내어, 구현이
+        /// 완전해도 조립 회차가 실패한다. C1의 증상이 C1의 수정이 연 문으로 되돌아오는 것이다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void AssemblyTaskFile_ShouldInstructTheDirectoryFormAndOnlyTolerateTheFileForm(string targetLanguage)
+        {
+            var text = CodegenArtifactNaming.DescribeJobArtifactNaming(JobName, targetLanguage);
+
+            Assert.Contains("**디렉터리**를 만들고", text);
+            // 파일 형태는 "인정됩니다"(허용)일 뿐 지시가 아니며, 왜 피해야 하는지까지 적는다.
+            Assert.Contains("인정됩니다", text);
+            Assert.Contains("권장하지 않습니다", text);
+            Assert.Contains("그 파일 하나와만 대조", text);
+
+            // 디렉터리 안내가 파일 안내보다 앞에 와야 한다 - 뒤에 오면 마지막에 읽은 쪽을 따른다.
+            var extension = targetLanguage == "Java" ? ".java" : ".cs";
+            Assert.True(
+                text.IndexOf("**디렉터리**", StringComparison.Ordinal) <
+                text.IndexOf($"`{JobName}{extension}`", StringComparison.Ordinal));
+        }
+
         [Theory]
         [InlineData(0)]
         [InlineData(1)]

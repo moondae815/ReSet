@@ -593,8 +593,11 @@ namespace ReSet.Validator.Core.Services
             }
 
             // MappedName에는 정화된 코드(StepCode)를 쓴다 - 소스 파일 이름과 대조되는 값이라
-            // 파일명에 못 쓰는 문자가 섞이면 안 된다. SpecFilePath는 반대로 원본 코드로 조립된
-            // 실제 경로(StepSpecPath)를 그대로 쓴다. 이 분리는 CodegenStage.cs에 적힌 그대로다.
+            // 파일명에 못 쓰는 문자가 섞이면 안 된다. SpecFilePath도 같은 정화 코드로 조립된
+            // 실제 경로(StepSpecPath)를 그대로 쓴다 - steps/{코드}.md와 task-NN-{코드}.md가
+            // 이제 같은 정화 결과를 파일명으로 쓰기 때문이다(CodegenStage.cs 참고).
+            // 예전에는 steps/만 원본 코드를 써서 두 값이 갈라져 있었고, 그 비대칭이
+            // 회차 지시서가 알려 주는 접두사와 게이트가 대조하는 접두사를 어긋나게 했다.
             var pairs = new[] { new ExplicitPair(stage.StepSpecPath, stage.StepCode, null) };
 
             var results = await _verifier.RunVerificationAsync(isBatchMode, pairs, cancellationToken);

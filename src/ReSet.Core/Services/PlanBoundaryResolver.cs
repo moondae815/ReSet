@@ -14,11 +14,15 @@ namespace ReSet.Core.Services
     /// <param name="Warnings">사용자에게 보여줄 경고. 성공해도 2순위로 내려왔다면 비어 있지 않다.</param>
     /// <param name="FirstStepLineIndex">첫 단계 헤딩의 줄 인덱스. 공통 규약을 잘라내는
     /// 끝점이 된다. 분할에 실패하면 -1이다.</param>
+    /// <param name="LastStepEndLineIndex">마지막 단계 본문이 끝나는 줄 인덱스(그 줄은 포함되지
+    /// 않는다). 단계 구간 <b>뒤</b>에 남은 내용이 어디서 시작하는지를 알려 준다 - 그 구간이
+    /// 어느 조각에도 담기지 않으면 문서에서 조용히 사라진다. 분할에 실패하면 -1이다.</param>
     public sealed record StepBoundaryResult(
         IReadOnlyDictionary<string, string> Steps,
         bool Split,
         IReadOnlyList<string> Warnings,
-        int FirstStepLineIndex);
+        int FirstStepLineIndex,
+        int LastStepEndLineIndex);
 
     /// <summary>
     /// 최종 계획서를 산출물 파일 단위로 자른 결과.
@@ -72,7 +76,8 @@ namespace ReSet.Core.Services
                 if (anchored != null)
                 {
                     Log.Information("단계 경계를 조각 앵커로 결정했습니다 - 단계 수: {Count}개", anchored.Value.Steps.Count);
-                    return new StepBoundaryResult(anchored.Value.Steps, true, warnings, anchored.Value.FirstIndex);
+                    return new StepBoundaryResult(
+                        anchored.Value.Steps, true, warnings, anchored.Value.FirstIndex, anchored.Value.LastEnd);
                 }
             }
 
@@ -84,16 +89,17 @@ namespace ReSet.Core.Services
                 if (byCode != null)
                 {
                     Log.Information("단계 경계를 목차 단계 코드로 결정했습니다 - 단계 수: {Count}개", byCode.Value.Steps.Count);
-                    return new StepBoundaryResult(byCode.Value.Steps, true, warnings, byCode.Value.FirstIndex);
+                    return new StepBoundaryResult(
+                        byCode.Value.Steps, true, warnings, byCode.Value.FirstIndex, byCode.Value.LastEnd);
                 }
             }
 
             warnings.Add("단계 경계를 찾지 못했습니다. 계획서를 분할하지 않고 단일 파일로 유지합니다.");
             Log.Warning("단계 경계 결정 실패 - 단일 파일 폴백");
-            return new StepBoundaryResult(NoSteps, false, warnings, -1);
+            return new StepBoundaryResult(NoSteps, false, warnings, -1, -1);
         }
 
-        private static (Dictionary<string, string> Steps, int FirstIndex)? TryLocateByAnchor(
+        private static (Dictionary<string, string> Steps, int FirstIndex, int LastEnd)? TryLocateByAnchor(
             List<string> lines, IReadOnlyDictionary<string, string> sections, List<string> warnings)
         {
             var located = new List<(string Code, int Index)>();
@@ -121,7 +127,7 @@ namespace ReSet.Core.Services
             return Materialize(lines, located, warnings);
         }
 
-        private static (Dictionary<string, string> Steps, int FirstIndex)? TryLocateByCode(
+        private static (Dictionary<string, string> Steps, int FirstIndex, int LastEnd)? TryLocateByCode(
             List<string> lines, IReadOnlyList<BatchStepPlan> steps, List<string> warnings)
         {
             var located = new List<(string Code, int Index)>();
@@ -162,7 +168,7 @@ namespace ReSet.Core.Services
         /// 찾아낸 시작 인덱스들로 실제 본문을 잘라낸다. 각 단계는 다음 단계의 시작 직전까지이며,
         /// 마지막 단계는 다음 H2(= 검증 SQL 세트)에서 끝난다.
         /// </summary>
-        private static (Dictionary<string, string> Steps, int FirstIndex)? Materialize(
+        private static (Dictionary<string, string> Steps, int FirstIndex, int LastEnd)? Materialize(
             List<string> lines, List<(string Code, int Index)> located, List<string> warnings)
         {
             if (located.Count == 0)
@@ -185,6 +191,10 @@ namespace ReSet.Core.Services
 
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+            // 마지막 단계가 끝나는 자리. 호출부는 이 뒤에 남은 내용을 어느 조각엔가
+            // 반드시 실어야 한다 - 담지 않으면 문서에서 조용히 사라진다.
+            var lastEnd = lines.Count;
+
             for (var i = 0; i < ordered.Count; i++)
             {
                 var start = ordered[i].Index;
@@ -201,6 +211,7 @@ namespace ReSet.Core.Services
                         lines, start + 1,
                         line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
                     end = nextH2 < 0 ? lines.Count : nextH2;
+                    lastEnd = end;
                 }
 
                 var body = string.Join("\n", lines.Skip(start).Take(end - start)).Trim();
@@ -213,7 +224,7 @@ namespace ReSet.Core.Services
                 result[ordered[i].Code] = body;
             }
 
-            return (result, ordered[0].Index);
+            return (result, ordered[0].Index, lastEnd);
         }
 
         /// <summary>조각에서 첫 헤딩 줄을 뽑는다. 이 줄이 최종 문서를 찾을 앵커가 된다.</summary>
@@ -283,17 +294,15 @@ namespace ReSet.Core.Services
                 // 만들어지고 끝점이 이미 첫 단계 헤딩이며, 02-data-access-boundary.md는
                 // 계획서가 아니라 DataAccessPolicy에서 오므로 같은 문제가 없다.)
                 var skeletonStart = positions[0] > 0 ? positions[0] : 0;
-                var skeletonEnd = steps.Split && steps.FirstStepLineIndex > skeletonStart
-                    ? steps.FirstStepLineIndex
-                    : lines.Count;
+                var wholeSkeleton = BuildWholeSkeletonAroundSteps(lines, steps, skeletonStart);
 
                 Log.Warning(
-                    "골격 H2 탐색 실패 - 골격을 통짜로 유지합니다. 단계 분할 여부: {StepsSplit}, 개요 끝 줄: {ArchitectureEnd}",
-                    steps.Split, skeletonEnd);
+                    "골격 H2 탐색 실패 - 골격을 통짜로 유지합니다. 단계 분할 여부: {StepsSplit}, 단계 구간: [{FirstStep}, {LastStepEnd})",
+                    steps.Split, steps.FirstStepLineIndex, steps.LastStepEndLineIndex);
 
                 return new PlanSlices(
                     preamble,
-                    Join(lines, skeletonStart, skeletonEnd),
+                    wholeSkeleton,
                     null,
                     null,
                     steps.Steps,
@@ -360,6 +369,56 @@ namespace ReSet.Core.Services
                 return trimmed.StartsWith("## ", StringComparison.Ordinal)
                     && trimmed.Contains(headingName, StringComparison.Ordinal);
             });
+        }
+
+        /// <summary>
+        /// 골격 분할이 실패했을 때의 개요 조각을 만든다. 단계 구간 <b>양옆</b>을 모두 담는다.
+        ///
+        /// 이 분기의 조각은 개요 하나뿐이다(StepContract·Verification이 모두 null이고,
+        /// StepsSplit이 true라 진입점에 계획서 전문 링크도 실리지 않는다). 그래서 여기 담기지
+        /// 않은 구간은 에이전트가 읽을 방법이 아예 없다.
+        ///
+        /// 단계 구간만 빼는 이유는 <b>중복</b> 때문이다 - 그 구간은 steps/*.md가 이미 덮으므로,
+        /// 여기 다시 담으면 매 회차가 읽는 파일에 계획서 전문이 통째로 되살아난다(이 작업이
+        /// 없애려던 바로 그것). 반대로 <b>마지막 단계 뒤</b>는 아무도 덮지 않는다. 실제 문서에서는
+        /// 대개 "통합 데이터 정합성 검증 SQL 세트"가 거기 있고, 골격 탐색이 실패하는 가장 흔한
+        /// 원인이 헤딩 문구 변경이므로 - 즉 그 절이 <b>다른 이름으로 실재</b>하기 때문에 실패하므로 -
+        /// 이 분기야말로 그것을 잃기 가장 쉬운 자리다.
+        ///
+        /// 검증 SQL 조각(verification/)으로 내보내지 않는 이유: 이 분기는 어느 H2가 무엇인지
+        /// 판별하지 못한 상태다. 꼬리가 검증 SQL이라고 단정해 Verification에 실으면
+        /// HasVerification이 참이 되어 조립 회차 지시서가 "검증 SQL을 배치하십시오"라고
+        /// 말하는데, 그 내용이 실제로 무엇인지는 아무도 확인하지 않았다. 게다가
+        /// verification/은 조립 회차만 가리키므로 단계 회차가 그 구간을 영영 못 본다.
+        /// 판별에 실패했을 때의 정답은 "통짜로 남긴다"이며, 이 분기의 통짜 바구니가 개요다.
+        /// (Task 4에서 고친 결함과 같은 부류다 - 그때도 어느 조각에도 속하지 못한 구간이
+        /// 사라졌고, 처방은 통짜 바구니에 흡수시키는 것이었다.)
+        /// </summary>
+        private static string BuildWholeSkeletonAroundSteps(
+            IReadOnlyList<string> lines, StepBoundaryResult steps, int skeletonStart)
+        {
+            if (!steps.Split || steps.FirstStepLineIndex <= skeletonStart)
+            {
+                // 단계 구간을 특정할 수 없다. 끊을 기준점이 없으므로 문서 끝까지 남긴다.
+                return Join(lines, skeletonStart, lines.Count);
+            }
+
+            var head = Join(lines, skeletonStart, steps.FirstStepLineIndex);
+
+            var tailStart = steps.LastStepEndLineIndex;
+            var tail = tailStart >= 0 && tailStart < lines.Count
+                ? Join(lines, tailStart, lines.Count)
+                : string.Empty;
+
+            if (tail.Length == 0)
+            {
+                return head;
+            }
+
+            Log.Information(
+                "골격 통짜 유지 - 마지막 단계 뒤의 구간을 개요 조각에 흡수했습니다 - 시작 줄: {TailStart}", tailStart);
+
+            return head.Length == 0 ? tail : head + "\n\n" + tail;
         }
 
         private static string Join(IReadOnlyList<string> lines, int start, int end)

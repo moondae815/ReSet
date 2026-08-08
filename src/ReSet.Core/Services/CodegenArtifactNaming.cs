@@ -47,6 +47,14 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 조립 회차 지시서에 실을 이름 규약 문구. 판정부가 실제로 인정하는 이름을
         /// 그대로 나열한다 - 예시를 손으로 적으면 판정부와 조용히 갈라진다.
+        ///
+        /// <b>디렉터리가 지시 형태이고 파일명은 허용 형태다.</b> 둘을 나란히 권하면 안 된다:
+        /// 자동 탐색의 규칙 1(파일 정확 일치)이 규칙 2(디렉터리)보다 먼저 이기고 소스 루트를
+        /// 재귀로 훑으므로, 에이전트가 파일 쪽을 고르면 Job 전체 계획서가 <b>진입점 파일 하나</b>와
+        /// 대조된다. 매핑 게이트는 통과하지만 L2가 다단계 계획서를 파일 하나와 견주어 MISMATCH를
+        /// 내고, 구현이 완전해도 조립 회차가 VerificationFailed로 끝난다 - C1의 증상이 C1의
+        /// 수정이 연 문으로 되돌아오는 것이다. Java에서 main 클래스를 Job 이름으로 짓는 것이
+        /// 관용이라 특히 밟기 쉽다.
         /// </summary>
         public static string DescribeJobArtifactNaming(string jobName, string targetLanguage)
         {
@@ -55,8 +63,9 @@ namespace ReSet.Core.Services
 
             return
                 $"- **산출물 이름 규약(필수)**: Job 전체 검증은 계획서와 소스 트리를 `{jobName}`이라는 이름으로 짝짓습니다. " +
-                $"작업 디렉터리 바로 아래에 {directories} 중 하나의 디렉터리를 두거나, " +
-                $"진입점 파일을 `{JobEntryPointFileBaseName(jobName)}{extension}`(확장자 앞이 정확히 이 이름)로 두십시오. " +
+                $"작업 디렉터리 바로 아래에 {directories} 중 하나의 **디렉터리**를 만들고 그 안에 프로젝트를 두십시오. " +
+                $"(이미 `{JobEntryPointFileBaseName(jobName)}{extension}`처럼 Job 이름과 정확히 같은 진입점 파일이 있어도 인정됩니다. " +
+                "다만 그 경우 검증이 계획서 전체를 그 파일 하나와만 대조하므로 권장하지 않습니다 — 디렉터리 형태를 쓰십시오.) " +
                 "이 규약을 벗어나면 구현이 완전해도 조립 회차가 실패로 기록됩니다.";
         }
 
