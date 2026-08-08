@@ -1005,16 +1005,49 @@ namespace ReSet.Cli
                             var jobSpecificOutputDir = Directory.GetParent(Directory.GetParent(selectedInstruction)!.FullName)!.FullName;
                             var jobSpecificSrcDir = Path.Combine(jobSpecificOutputDir, "src");
 
-                            await RunLegacyWholeJobCodegenAsync(
-                                selectedInstruction,
-                                isBatchMode: false,
-                                enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
-                                engineName: selectedEngine,
-                                targetProjectDir: jobSpecificSrcDir,
-                                configuration: configuration,
-                                aiClient: aiClient,
-                                cancellationToken: activeCts.Token);
-                            
+                            // 고른 문서가 새 번들(회차별)인지 옛 단일 문서인지 먼저 판정한다.
+                            // 새 번들을 예전 전체 Job 경로로 돌리면, 그 경로는 "배정된
+                            // task-*.md만 읽고 다른 Step은 읽지 마십시오"라는 지시를 이해하지
+                            // 못한 채 회차 본문이 빠진 진입점만 떠먹게 된다 - 절대 만들면 안 되는
+                            // 조합이라 여기서 분기부터 한다.
+                            var (kind, stagePlan) = TryClassifyExistingInstructionsFile(selectedInstruction);
+
+                            switch (kind)
+                            {
+                                case ExistingInstructionsKind.Staged:
+                                    await RunStagedCodegenAsync(
+                                        selectedInstruction,
+                                        stagePlan!,
+                                        isBatchMode: false,
+                                        enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
+                                        engineName: selectedEngine,
+                                        targetProjectDir: jobSpecificSrcDir,
+                                        configuration: configuration,
+                                        aiClient: aiClient,
+                                        cancellationToken: activeCts.Token);
+                                    break;
+
+                                case ExistingInstructionsKind.Broken:
+                                    AnsiConsole.MarkupLine(
+                                        "[red]에러: 회차별 번들로 보이지만(task-00-bootstrap.md 존재) 회차 파일 집합이 " +
+                                        "불완전합니다(task-99-assembly.md 없음). 이 문서는 전체 Job 경로로 실행할 수 " +
+                                        "없습니다 - 그 경로는 회차별 지시를 이해하지 못합니다. 통합 배치 마이그레이션 " +
+                                        "설계를 다시 실행해 번들을 재생성하십시오.[/]");
+                                    break;
+
+                                default: // Legacy
+                                    await RunLegacyWholeJobCodegenAsync(
+                                        selectedInstruction,
+                                        isBatchMode: false,
+                                        enableCodegen: true, // 스탠드얼론 메뉴이므로 강제 활성화
+                                        engineName: selectedEngine,
+                                        targetProjectDir: jobSpecificSrcDir,
+                                        configuration: configuration,
+                                        aiClient: aiClient,
+                                        cancellationToken: activeCts.Token);
+                                    break;
+                            }
+
                             AnsiConsole.WriteLine();
                             AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 메인 메뉴로 돌아갑니다...[/]");
                             Console.ReadKey(true);
@@ -2014,20 +2047,22 @@ namespace ReSet.Cli
         }
 
         /// <summary>
-        /// 방금 쓴 지시서 번들(895/1414 호출부)을 회차 순서대로 순차 기동한다.
-        ///
-        /// bundle.TaskFilePaths가 회차 목록의 유일한 근거다 - agentDir을 다시 뒤져
-        /// task-*.md를 찾거나 순서를 추측하지 않는다(CodegenStagePlan.FromBundle 참고).
+        /// 회차별 경로(RunStagedWorkflowAsync)와 예전 전체 Job 경로(RunSelfHealingWorkflowAsync)가
+        /// 공유하는 준비 단계. 활성화 여부 확인 → 코딩 엔진 생성 → 지시서 파일 존재 확인 →
+        /// MaxL2Attempts 파싱 → Validator/Orchestrator 구성까지는 두 경로가 완전히 같고,
+        /// 실제로 갈라지는 지점은 "어느 Run*Async를 부르고 결과를 어떻게 보고하는가" 하나뿐이다.
+        /// 그 지점만 <paramref name="executeAsync"/>로 넘겨, 셋업을 두 번 유지보수하지 않는다.
         /// </summary>
-        private static async Task RunCodegenEngineAsync(
-            BundleResult bundle,
+        private static async Task RunCodegenAsync(
+            string entryPointPath,
             bool isBatchMode,
             bool enableCodegen,
             string? engineName,
             string targetProjectDir,
             IConfiguration configuration,
             IAiClient aiClient,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<CodegenWorkflowOrchestrator, string, string, string, CancellationToken, Task> executeAsync)
         {
             // CLI 옵션이나 설정파일 중 하나라도 codegen이 활성화되어 있어야 함
             if (!enableCodegen && isBatchMode)
@@ -2051,16 +2086,16 @@ namespace ReSet.Cli
                 var factory = new CodingEngineFactory(configuration);
                 var engine = factory.CreateEngine(engineName ?? "claude", isBatchMode);
 
-                if (!File.Exists(bundle.EntryPointPath))
+                if (!File.Exists(entryPointPath))
                 {
-                    AnsiConsole.MarkupLine($"[red]에러: 마이그레이션 지시서 파일({Path.GetFileName(bundle.EntryPointPath)})을 찾을 수 없습니다.[/]");
+                    AnsiConsole.MarkupLine($"[red]에러: 마이그레이션 지시서 파일({Path.GetFileName(entryPointPath)})을 찾을 수 없습니다.[/]");
                     return;
                 }
 
-                var agentDir = Path.GetDirectoryName(bundle.EntryPointPath)!;
-                var jobOutputDirInfo = Directory.GetParent(agentDir);
-                var jobName = jobOutputDirInfo?.Name ?? "Unknown";
-                var baseDir = jobOutputDirInfo?.FullName ?? "";
+                var agentDirInfo = Directory.GetParent(entryPointPath);
+                var agentDir = agentDirInfo?.FullName ?? "";
+                var jobName = agentDirInfo?.Parent?.Name ?? "Unknown";
+                var baseDir = agentDirInfo?.Parent?.FullName ?? "";
                 var specDir = Path.Combine(baseDir, "docs");
 
                 // 최대 시도 횟수 설정 로드
@@ -2088,56 +2123,10 @@ namespace ReSet.Cli
                 var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
                 var orchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts);
 
-                AnsiConsole.MarkupLine($"[grey]지시서 경로: {bundle.EntryPointPath}[/]");
+                AnsiConsole.MarkupLine($"[grey]지시서 경로: {entryPointPath}[/]");
                 AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
-                AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (회차별 순차 실행)[/]\n");
 
-                var stagePlan = CodegenStagePlan.FromBundle(bundle, agentDir);
-
-                var staged = await orchestrator.RunStagedWorkflowAsync(
-                    jobName, stagePlan, agentDir, targetProjectDir, isBatchMode, cancellationToken);
-
-                if (staged.AbortReason != null)
-                {
-                    AnsiConsole.MarkupLine($"[red]코드 생성 중단: {Markup.Escape(staged.AbortReason)}[/]");
-
-                    // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 중단을 초록으로 읽는다.
-                    // RunLegacyWholeJobCodegenAsync가 실패 시 이미 지키던 원칙과 같다.
-                    if (isBatchMode)
-                    {
-                        Environment.ExitCode = 1;
-                    }
-                }
-                // 브리프 원문은 여기서 staged.FailedStepCodes.Count > 0으로만 판정했지만,
-                // FailedStepCodes는 StepCode가 있는 회차(단계)만 담는다(AgentProgressStore).
-                // 조립 회차만 실패하면(StepCode 없음) 이 카운트가 0인 채로 AllPassed만
-                // false가 되어, 원문 그대로면 "모든 회차 통과"로 잘못 보고된다 - 그래서
-                // 판정 자체는 staged.AllPassed로 하고, 안내 문구만 실패 단계 유무로 나눈다.
-                else if (!staged.AllPassed)
-                {
-                    if (staged.FailedStepCodes.Count > 0)
-                    {
-                        AnsiConsole.MarkupLine(
-                            $"[yellow]코드 생성 완료 — 검증을 통과하지 못한 단계 {staged.FailedStepCodes.Count}개: " +
-                            $"{Markup.Escape(string.Join(", ", staged.FailedStepCodes))}[/]");
-                        AnsiConsole.MarkupLine(
-                            "[yellow]이 단계들은 파이프라인에서 제외되었으므로 최종 빌드가 깨져 있을 수 있습니다.[/]");
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine(
-                            "[yellow]코드 생성 완료 — 조립 회차가 검증을 통과하지 못했습니다. 최종 산출물을 확인하세요.[/]");
-                    }
-
-                    if (isBatchMode)
-                    {
-                        Environment.ExitCode = 1;
-                    }
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine("[green]코드 생성 완료 — 모든 회차가 검증을 통과했습니다.[/]");
-                }
+                await executeAsync(orchestrator, jobName, agentDir, specDir, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -2158,14 +2147,130 @@ namespace ReSet.Cli
         }
 
         /// <summary>
+        /// 지시서 번들을 방금 새로 쓴 두 호출부(배치/대화형 통합 지시서 생성 직후)가 부르는
+        /// 회차별 실행 경로다.
+        ///
+        /// bundle.TaskFilePaths가 회차 목록의 유일한 근거다 - agentDir을 다시 뒤져
+        /// task-*.md를 찾거나 순서를 추측하지 않는다(CodegenStagePlan.FromBundle 참고).
+        /// </summary>
+        private static async Task RunCodegenEngineAsync(
+            BundleResult bundle,
+            bool isBatchMode,
+            bool enableCodegen,
+            string? engineName,
+            string targetProjectDir,
+            IConfiguration configuration,
+            IAiClient aiClient,
+            CancellationToken cancellationToken)
+        {
+            var agentDir = Path.GetDirectoryName(bundle.EntryPointPath)!;
+            var stagePlan = CodegenStagePlan.FromBundle(bundle, agentDir);
+
+            await RunStagedCodegenAsync(
+                bundle.EntryPointPath, stagePlan, isBatchMode, enableCodegen, engineName,
+                targetProjectDir, configuration, aiClient, cancellationToken);
+        }
+
+        /// <summary>
+        /// 회차 계획(방금 쓴 번들에서 왔든, 메뉴 3이 디스크에서 되짚었든)을 순서대로 순차
+        /// 기동하고 결과를 보고한다. <see cref="RunCodegenEngineAsync"/>와
+        /// <see cref="TryClassifyExistingInstructionsFile"/> 양쪽이 이 메서드로 모인다 -
+        /// 회차 계획을 어떻게 얻었는지와 무관하게 실행·보고 로직은 하나여야 한다.
+        /// </summary>
+        private static async Task RunStagedCodegenAsync(
+            string entryPointPath,
+            CodegenStagePlan stagePlan,
+            bool isBatchMode,
+            bool enableCodegen,
+            string? engineName,
+            string targetProjectDir,
+            IConfiguration configuration,
+            IAiClient aiClient,
+            CancellationToken cancellationToken)
+        {
+            await RunCodegenAsync(
+                entryPointPath, isBatchMode, enableCodegen, engineName, targetProjectDir,
+                configuration, aiClient, cancellationToken,
+                async (orchestrator, jobName, agentDir, _, ct) =>
+                {
+                    AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (회차별 순차 실행)[/]\n");
+
+                    var staged = await orchestrator.RunStagedWorkflowAsync(
+                        jobName, stagePlan, agentDir, targetProjectDir, isBatchMode, ct);
+
+                    if (staged.AbortReason != null)
+                    {
+                        AnsiConsole.MarkupLine($"[red]코드 생성 중단: {Markup.Escape(staged.AbortReason)}[/]");
+
+                        // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 중단을 초록으로 읽는다.
+                        // RunLegacyWholeJobCodegenAsync가 실패 시 이미 지키던 원칙과 같다.
+                        if (isBatchMode)
+                        {
+                            Environment.ExitCode = 1;
+                        }
+                    }
+                    // AllPassed로 성패를 가른다(FailedStepCodes.Count만 보지 않는다). FailedStepCodes는
+                    // StepCode가 있는 회차(단계)만 담는다(AgentProgressStore) - 조립 회차만 실패하면
+                    // (StepCode 없음) 그 카운트가 0인 채로 AllPassed만 false가 되어, 개수만 보면
+                    // "모든 회차 통과"로 잘못 보고된다.
+                    else if (!staged.AllPassed)
+                    {
+                        if (staged.FailedStepCodes.Count > 0)
+                        {
+                            AnsiConsole.MarkupLine(
+                                $"[yellow]코드 생성 완료 — 검증을 통과하지 못한 단계 {staged.FailedStepCodes.Count}개: " +
+                                $"{Markup.Escape(string.Join(", ", staged.FailedStepCodes))}[/]");
+
+                            // 실패 사유는 둘로 갈린다: (a) 대조할 단계 설계서(steps/{code}.md)가
+                            // 있었는데 검증에서 걸러진 것 - 계획대로 "제외"된 게 맞다. (b) 애초에
+                            // StepSpecPath가 없어(계획이 단일 파일로 폴백했거나, 메뉴 3이 디스크에서
+                            // 회차를 되짚었는데 steps/*.md가 없어) 검증을 시도조차 못 한 것 - 이건
+                            // "제외"가 아니다. 하나로 뭉뚱그리면 (b)를 (a)로 오해하게 만든다.
+                            var noSpecCodes = stagePlan.Stages
+                                .Where(s => s.Kind == StageKind.Step && s.StepSpecPath == null
+                                    && s.StepCode != null && staged.FailedStepCodes.Contains(s.StepCode))
+                                .Select(s => s.StepCode!)
+                                .ToList();
+                            var excludedCodes = staged.FailedStepCodes.Except(noSpecCodes).ToList();
+
+                            if (excludedCodes.Count > 0)
+                            {
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]이 중 검증에서 걸러진 {excludedCodes.Count}개는 파이프라인에서 제외되었으므로 " +
+                                    $"최종 빌드가 깨져 있을 수 있습니다: {Markup.Escape(string.Join(", ", excludedCodes))}[/]");
+                            }
+
+                            if (noSpecCodes.Count > 0)
+                            {
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]이 중 {noSpecCodes.Count}개는 대조할 단계 설계서가 없어 애초에 검증을 시도하지 " +
+                                    $"못했습니다(계획 분할 실패 또는 회차 파일 누락) - 최종 산출물을 직접 확인하세요: " +
+                                    $"{Markup.Escape(string.Join(", ", noSpecCodes))}[/]");
+                            }
+                        }
+                        else
+                        {
+                            AnsiConsole.MarkupLine(
+                                "[yellow]코드 생성 완료 — 조립 회차가 검증을 통과하지 못했습니다. 최종 산출물을 확인하세요.[/]");
+                        }
+
+                        if (isBatchMode)
+                        {
+                            Environment.ExitCode = 1;
+                        }
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine("[green]코드 생성 완료 — 모든 회차가 검증을 통과했습니다.[/]");
+                    }
+                });
+        }
+
+        /// <summary>
         /// 대화형 메뉴 3번("기작성된 지시서 재구동")이 쓰는 예전 전체 Job 단일 기동 경로다.
         ///
-        /// 이 메뉴는 디스크에서 임의의 MigrationInstructions.md를 골라 재기동하므로
-        /// BundleResult(회차별 task-*.md 목록)가 없다 - 그 목록은 방금 번들을 쓴 호출자만
-        /// 갖고 있다. 골라낸 파일 하나에서 그 목록을 역산하는 것은 신뢰할 수 없다(파일명은
-        /// 회차 코드를 안전 문자로 정화한 값이라 원본 코드로 되짚을 수 없는 경우가 있다 -
-        /// CodegenStagePlan.FromBundle의 주석 참고). 그래서 이 메뉴는 회차 분할 없이 예전
-        /// RunSelfHealingWorkflowAsync로 통째로 돌린다. 이 함수의 동작은 이 작업(Task 15)에서
+        /// 골라낸 지시서가 새 번들 형식이 아닐 때만(<see cref="TryClassifyExistingInstructionsFile"/>가
+        /// Legacy로 판정했을 때만) 이 경로를 탄다. 이 함수의 동작은 이 작업(Task 15)에서
         /// 바꾸지 않는다 - 기존 전체 Job 워크플로 경로는 그대로 둔다.
         /// </summary>
         private static async Task RunLegacyWholeJobCodegenAsync(
@@ -2178,120 +2283,124 @@ namespace ReSet.Cli
             IAiClient aiClient,
             CancellationToken cancellationToken)
         {
-            // CLI 옵션이나 설정파일 중 하나라도 codegen이 활성화되어 있어야 함
-            if (!enableCodegen && isBatchMode)
-            {
-                return; // 배치 모드이고 비활성화 상태면 스킵
-            }
-
-            // 대화형 모드인 경우, codegen 옵션이 꺼져 있어도 사용자에게 기동 여부를 질문할 수 있음
-            if (!isBatchMode)
-            {
-                var runConfirm = AnsiConsole.Confirm($"[yellow]마이그레이션된 소스 코드를 자동 생성하기 위해 외부 코딩 에이전트({engineName})를 기동하시겠습니까?[/]");
-                if (!runConfirm)
+            await RunCodegenAsync(
+                instructionsPath, isBatchMode, enableCodegen, engineName, targetProjectDir,
+                configuration, aiClient, cancellationToken,
+                async (orchestrator, jobName, _, specDir, ct) =>
                 {
-                    return;
-                }
-            }
+                    AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 자가수정 루프)[/]\n");
 
-            try
-            {
-                AnsiConsole.MarkupLine($"\n[bold blue]=== 외부 코딩 에이전트 기동 ({engineName}) ===[/]");
-                var factory = new CodingEngineFactory(configuration);
-                var engine = factory.CreateEngine(engineName ?? "claude", isBatchMode);
+                    var workflowResult = await orchestrator.RunSelfHealingWorkflowAsync(
+                        jobOrSpName: jobName,
+                        instructionsFilePath: instructionsPath,
+                        specDir: specDir,
+                        codeDir: targetProjectDir,
+                        isBatchMode: isBatchMode,
+                        cancellationToken: ct);
 
-                if (!File.Exists(instructionsPath))
-                {
-                    AnsiConsole.MarkupLine($"[red]에러: 마이그레이션 지시서 파일({Path.GetFileName(instructionsPath)})을 찾을 수 없습니다.[/]");
-                    return;
-                }
-
-                var fileName = Path.GetFileName(instructionsPath);
-                var agentDirInfo = Directory.GetParent(instructionsPath);
-                var spName = agentDirInfo?.Parent?.Name ?? "Unknown";
-
-                var targetLanguage = configuration["MigrationSettings:TargetLanguage"] ?? "C#";
-
-                var baseDir = agentDirInfo?.Parent?.FullName ?? "";
-                var specDir = Path.Combine(baseDir, "docs");
-
-                // 최대 시도 횟수 설정 로드
-                var maxL2AttemptsRaw = configuration["AiSettings:MaxL2Attempts"] ?? "2";
-                int maxL2Attempts = 2;
-                if (string.Equals(maxL2AttemptsRaw, "unlimited", StringComparison.OrdinalIgnoreCase) || maxL2AttemptsRaw == "-1")
-                {
-                    maxL2Attempts = -1;
-                }
-                else if (int.TryParse(maxL2AttemptsRaw, out int parsed))
-                {
-                    maxL2Attempts = parsed;
-                }
-
-                // Validator 및 Codegen Workflow Orchestrator 설정
-                var validatorConfig = new ValidatorConfig
-                {
-                    MaxL2Attempts = maxL2Attempts, // 단방향 검증용 설정 (이제 내부적으로 반복하지 않음)
-                    SpecDirectory = specDir,
-                    SourceCodeDirectory = targetProjectDir,
-                    OutputDirectory = Path.Combine(baseDir, "validation")
-                };
-
-                var metadataExporter = new ReSet.Core.Services.MetadataExporter();
-                var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
-                var codegenWorkflowOrchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts);
-
-                AnsiConsole.MarkupLine($"[grey]지시서 경로: {instructionsPath}[/]");
-                AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");
-                AnsiConsole.MarkupLine("[yellow]외부 프로세스 기동 중... (TDD 로컬 빌드 및 자가수정 루프)[/]\n");
-
-                var workflowResult = await codegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync(
-                    jobOrSpName: spName,
-                    instructionsFilePath: instructionsPath,
-                    specDir: specDir,
-                    codeDir: targetProjectDir,
-                    isBatchMode: isBatchMode,
-                    cancellationToken: cancellationToken);
-
-                if (workflowResult.Succeeded)
-                {
-                    AnsiConsole.MarkupLine("\n[bold green]✔ 코딩 에이전트 자가 수정 루프 통과 (MATCH)[/]");
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine("\n[bold red]❌ 코딩 에이전트 검증 완전 통과 실패. (최종 결과 확인 요망)[/]");
-
-                    // 무인 배치에서는 화면이 유일한 창구다. 중단 사유를 로그에만 두지 않는다.
-                    if (!string.IsNullOrWhiteSpace(workflowResult.AbortReason))
+                    if (workflowResult.Succeeded)
                     {
-                        AnsiConsole.MarkupLine($"[red]중단 사유:[/] {Markup.Escape(workflowResult.AbortReason)}");
+                        AnsiConsole.MarkupLine("\n[bold green]✔ 코딩 에이전트 자가 수정 루프 통과 (MATCH)[/]");
                     }
-
-                    // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 실패를 초록으로 읽는다.
-                    // 이 함수는 원래 실패를 삼키고 화면에만 찍었다 - Program.cs:166-168의
-                    // 원칙(빈 산출물이 종료 코드 0으로 성공 취급되면 안 된다)이 여기도 적용된다.
-                    // 대화형 모드는 사용자가 화면을 직접 보므로 건드리지 않는다.
-                    if (isBatchMode)
+                    else
                     {
-                        Environment.ExitCode = 1;
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw; // 상위에서 잡도록 던짐
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                AnsiConsole.MarkupLine($"\n[red]외부 코딩 에이전트 실행 중 오류 발생:[/] {Markup.Escape(ex.Message)}");
+                        AnsiConsole.MarkupLine("\n[bold red]❌ 코딩 에이전트 검증 완전 통과 실패. (최종 결과 확인 요망)[/]");
 
-                // 팩토리의 배치 거부(예: agy의 빈 BatchArguments)도 이 catch로 떨어진다 -
-                // 화면에는 "보이지만" 종료 코드는 여전히 0이었다. 무인 배치에서는 그 코드가
-                // CI가 보는 유일한 신호다.
-                if (isBatchMode)
-                {
-                    Environment.ExitCode = 1;
-                }
+                        // 무인 배치에서는 화면이 유일한 창구다. 중단 사유를 로그에만 두지 않는다.
+                        if (!string.IsNullOrWhiteSpace(workflowResult.AbortReason))
+                        {
+                            AnsiConsole.MarkupLine($"[red]중단 사유:[/] {Markup.Escape(workflowResult.AbortReason)}");
+                        }
+
+                        // 무인 배치에서 종료 코드 0으로 끝나면 CI가 이 실패를 초록으로 읽는다.
+                        // 이 함수는 원래 실패를 삼키고 화면에만 찍었다 - Program.cs:166-168의
+                        // 원칙(빈 산출물이 종료 코드 0으로 성공 취급되면 안 된다)이 여기도 적용된다.
+                        // 대화형 모드는 사용자가 화면을 직접 보므로 건드리지 않는다.
+                        if (isBatchMode)
+                        {
+                            Environment.ExitCode = 1;
+                        }
+                    }
+                });
+        }
+
+        /// <summary>메뉴 3이 디스크에서 고른 지시서 파일이 새 번들 형식인지 판정한 결과.</summary>
+        private enum ExistingInstructionsKind
+        {
+            /// <summary>Task 8 이전 형식의 단일 문서. RunLegacyWholeJobCodegenAsync 대상.</summary>
+            Legacy,
+
+            /// <summary>새 번들이고 회차 계획을 디스크에서 온전히 되짚었다. RunStagedCodegenAsync 대상.</summary>
+            Staged,
+
+            /// <summary>새 번들로 보이는데(task-00-bootstrap.md 있음) 회차 파일 집합이 불완전하다.
+            /// 전체 Job 경로로 떨어뜨리면 안 된다 - 이 문서는 "다른 Step을 읽지 마십시오"라고
+            /// 지시하므로, 그 지시를 이해하지 못하는 전체 Job 경로에 먹이면 안 된다.</summary>
+            Broken,
+        }
+
+        /// <summary>
+        /// 메뉴 3("기작성된 지시서 재구동")이 디스크에서 고른 MigrationInstructions.md를 분류하고,
+        /// 새 번들이면 회차 계획을 함께 되짚는다.
+        ///
+        /// 새 번들과 옛 단일 문서는 파일명이 같아 내용을 보지 않고는 구분되지 않는다.
+        /// agent/ 직하에 task-00-bootstrap.md가 있는지로 판정한다 - InstructionBundleWriter가
+        /// 항상 함께 쓰는 파일이라 존재만으로 새 번들임을 확정할 수 있고, 옛 단일 문서는
+        /// 이 파일을 쓴 적이 없다.
+        ///
+        /// 새 번들로 판정됐는데 조립 회차 파일(task-99-assembly.md)이 없으면 Broken이다 -
+        /// 이 경우 호출자는 예전 전체 Job 경로로 떨어지면 안 된다. 그 경로는 이미 회차별로
+        /// 쪼개져 "배정된 task-*.md만 읽고 다른 Step은 읽지 마십시오"라고 지시하는 문서를
+        /// 이해하지 못한 채 통째로 떠먹여지기 때문이다(리뷰에서 지적된 결함 - 회차용 문서를
+        /// 전체 Job 경로에 먹이는 조합 자체를 만들지 않는다).
+        ///
+        /// 원본(비정화) 단계 코드는 파일명에서 완전히 되짚을 수 없을 수 있다(SanitizeStepCode가
+        /// 손실 변환이라서 - TaskFileComposer 주석 참고). 그래서 steps/{코드}.md가 실제로
+        /// 존재할 때만 StepSpecPath를 채운다 - 없으면 null로 두고, EvaluateStepAsync가 그
+        /// 회차를 "대조할 설계서가 없음"으로 명시적으로 실패 처리한다(조용한 통과가 아니다).
+        /// 잘못 추측해도 안전한 방향으로만 떨어진다.
+        /// </summary>
+        private static (ExistingInstructionsKind Kind, CodegenStagePlan? StagePlan) TryClassifyExistingInstructionsFile(
+            string entryPointPath)
+        {
+            var agentDir = Path.GetDirectoryName(entryPointPath);
+            if (agentDir == null || !File.Exists(Path.Combine(agentDir, "task-00-bootstrap.md")))
+            {
+                return (ExistingInstructionsKind.Legacy, null);
             }
+
+            var taskFiles = Directory.GetFiles(agentDir, "task-*.md")
+                .OrderBy(p => Path.GetFileName(p), StringComparer.Ordinal) // task-00-, task-01-... 자릿수가 고정이라 사전순=회차순
+                .ToList();
+
+            if (!taskFiles.Any(p => Path.GetFileName(p) == "task-99-assembly.md"))
+            {
+                return (ExistingInstructionsKind.Broken, null);
+            }
+
+            var stepsDir = Path.Combine(agentDir, "steps");
+            var stages = new List<CodegenStage>();
+
+            foreach (var taskPath in taskFiles)
+            {
+                var identity = TaskFileComposer.ParseStageIdentity(Path.GetFileNameWithoutExtension(taskPath));
+
+                string? specPath = null;
+                if (identity.Kind == StageKind.Step && identity.StepCode != null)
+                {
+                    var candidate = Path.Combine(stepsDir, $"{identity.StepCode}.md");
+                    if (File.Exists(candidate))
+                    {
+                        specPath = candidate;
+                    }
+                    // 파일이 없으면(정화로 원본 코드가 달라졌거나, steps/가 애초에 없는 폴백
+                    // 번들이거나) null로 둔다 - 위 주석대로 EvaluateStepAsync가 명시 실패시킨다.
+                }
+
+                stages.Add(new CodegenStage(identity.Id, identity.Kind, taskPath, identity.StepCode, specPath));
+            }
+
+            return (ExistingInstructionsKind.Staged, new CodegenStagePlan(stages));
         }
 
         private static void ConfigureLogging(IConfiguration configuration)
