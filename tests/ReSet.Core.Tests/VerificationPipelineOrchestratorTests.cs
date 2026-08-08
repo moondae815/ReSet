@@ -6632,6 +6632,71 @@ SELECT 1;
             Assert.DoesNotContain("S01", result.Plan);
         }
 
+        /// <summary>
+        /// L3 재생성이 통짜 단일 호출로 떨어졌는데 lastSkeleton/lastStepSections가 이전
+        /// 회차의 조각을 그대로 들고 있으면, PlanLayout.Sections가 <b>더 이상 존재하지
+        /// 않는 문서</b>를 서술한 채 밖으로 나간다. 그 상태에서 PlanBoundaryResolver는
+        /// IsSplitAvailable이 참이라 앵커 경로를 돌리고, 같은 목차에서 나온 헤딩이라
+        /// 대체로 새 문서에서도 발견돼 분할이 성사된다 — 재생성이 추가한 단계가 앞
+        /// 슬라이스에 조용히 흡수된 채로. 통짜 재생성 뒤에는 조각 캐시가 남으면 안 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3RedraftFallsBackToSingleCall_DropsStaleSplitSections()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 최초 목차는 분할 경로로 들어가고(S01/S02), 재수립 목차는 단계 목록을
+            // 내지 못해 통짜 단일 호출 폴백을 강제한다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차 산문만 있다" });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 재작성된 통짜 문서\n\n본문에는 옛 코드가 없다." });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "구조를 다시 짜줘",
+                        RedraftStructure = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RedraftFallbackDropsSectionsJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.NotNull(result.Plan);
+            // 조각이 남아 있으면 Layout이 null이 아니고, 그 Sections는 방금 버려진
+            // 문서의 헤딩을 가리킨다. 통짜 문서에는 분할 앵커가 없어야 한다.
+            Assert.Null(result.Layout);
+        }
+
         // 목차가 단계 목록 JSON을 내야 분할 경로로 들어간다. BatchStepPlanParser는
         // ```json 블록 안의 Steps 배열만 읽는다.
         private const string PlanStructureWithSteps = """

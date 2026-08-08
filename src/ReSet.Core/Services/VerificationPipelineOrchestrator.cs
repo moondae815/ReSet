@@ -2251,6 +2251,22 @@ namespace ReSet.Core.Services
                                 structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
                             rePlan = aiResult.Content;
                             finalAiResult = aiResult;
+
+                            // 이 경로는 문서를 통짜로 다시 만든다. 그런데 lastSkeleton/
+                            // lastStepSections는 아직 이전 회차의 조각을 들고 있어,
+                            // BuildLayout이 "이미 존재하지 않는 문서"를 서술하는 Sections와
+                            // null인 Steps를 함께 내보낸다. PlanBoundaryResolver는
+                            // IsSplitAvailable이 참이라 1순위(앵커)를 돌리고, 같은 목차에서
+                            // 나온 헤딩들이라 대체로 새 문서에서도 발견된다 - 그러면 재생성이
+                            // 추가한 단계가 앞 슬라이스에 조용히 흡수된 채 분할이 성사된다.
+                            // 재시도 루프의 ClearSplitGenerationCacheAfterRedraft가 같은
+                            // 부류의 결함을 이미 한 번 겪고 막아 둔 자리다.
+                            //
+                            // 재생성이 실패하면(rePlan이 비면) 아래에서 continue로 돌아가
+                            // 직전 문서가 그대로 남으므로, 성공한 뒤에만 비운다.
+                            ClearSplitGenerationCacheAfterRedraft(
+                                out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
+                                out stepFloorViolations, pendingDefectiveSteps);
                         }
                         // 취소는 전파한다. 삼키면 아래 continue가 돌아 취소한
                         // 사용자에게 같은 승인 화면을 한 번 더 내민다.
