@@ -962,5 +962,80 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.True(result.IsValid);
         }
+
+        [Fact]
+        public void Validate_WhenCrudHeadingHasNumericPrefix_ShouldStillDetectMissingColumn()
+        {
+            // Arrange - 실제 산출물은 "## CRUD 분석" 대신 "## 3. CRUD 분석"처럼 접두를
+            // 붙이기도 한다. MarkdownSectionLocator.LocateSection은 완전 일치만 보므로
+            // CheckUpdateMappings가 부분 일치 폴백 없이는 조용히 0회 돈다.
+            var markdown = @"## 개요
+본문
+## 파라미터 목록
+본문
+## 3. CRUD 분석
+### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+## 로직 흐름 요약
+본문
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+A[""시작""] --> B[""끝""]
+```
+";
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert - PGVT가 누락됐다는 것이 잡혀야 한다. 폴백이 없으면 섹션을 못 찾아
+            // 조용히 통과한다.
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.UpdateMappingMissing);
+            Assert.Contains(result.Errors, e => e.Contains("PGVT"));
+        }
+
+        [Fact]
+        public void Validate_WhenCrudHeadingCannotBeLocatedEvenByFallback_ShouldLogWarning()
+        {
+            // Arrange - "### CRUD 분석"(h3)은 필수 헤더 부분 일치 검사(레벨 무관, Contains)는
+            // 통과하지만, CheckUpdateMappings의 완전 일치("## CRUD 분석")도 부분 일치
+            // 폴백(레벨 2 "## " 접두 전제)도 못 찾는다. 이 경우 조용히 0회 도는 대신
+            // Log.Warning을 남겨야 한다 - 검사가 말없이 꺼지는 것이 이 저장소가 반복해서
+            // 겪은 실패 양식이다.
+            var markdown = @"## 개요
+본문
+## 파라미터 목록
+본문
+### CRUD 분석
+UPDATE 대상 테이블의 금액 컬럼을 -1배 처리합니다.
+## 로직 흐름 요약
+본문
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+A[""시작""] --> B[""끝""]
+```
+";
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+
+            try
+            {
+                _ = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            // Assert
+            Assert.Contains(sink.Messages, m => m.Contains("CRUD 분석"));
+        }
     }
 }

@@ -335,10 +335,24 @@ namespace ReSet.Core.Services
             string markdown, SpecExpectations expectations, ValidationResult result)
         {
             var lines = MarkdownSectionLocator.SplitLines(markdown);
-            var (crudStart, crudEnd) = MarkdownSectionLocator.LocateSection(lines, "## CRUD 분석", "## ");
+            var (crudStart, crudEnd) = LocateCrudSection(lines);
 
-            // 헤더 자체가 없으면 ValidateMarkdownStructure가 이미 보고했다. 중복하지 않는다.
-            if (crudStart < 0) return;
+            if (crudStart < 0)
+            {
+                // 완전 일치도, 부분 일치 폴백도 CRUD 분석 섹션을 찾지 못했다. 헤더 자체가
+                // 아예 없으면 ValidateMarkdownStructure가 이미 보고했으니 중복하지 않지만,
+                // 기대값(UpdateColumns)이 있는데 섹션을 못 찾았다는 사실 자체는 조용히
+                // 넘기지 않는다 - 검사가 말없이 0회 도는 것이 이 저장소가 반복해서 겪은
+                // 실패 양식이다.
+                if (expectations.UpdateColumns.Count > 0)
+                {
+                    Log.Warning(
+                        "CheckUpdateMappings가 `## CRUD 분석` 섹션을 완전/부분 일치 모두로 찾지 못해 " +
+                        "{Count}개의 UPDATE 매핑 기대값을 대조하지 못했습니다.",
+                        expectations.UpdateColumns.Count);
+                }
+                return;
+            }
 
             var sections = CollectUpdateSections(lines, crudStart + 1, crudEnd);
 
@@ -355,6 +369,39 @@ namespace ReSet.Core.Services
                         string.Join(", ", missing));
                 }
             }
+        }
+
+        /// <summary>
+        /// `## CRUD 분석` 섹션을 찾는다. 완전 일치를 먼저 시도하고, 실패하면 부분 일치로
+        /// 폴백한다.
+        ///
+        /// 필수 헤더 존재 검사(ValidateMarkdownStructure, :540-550 부근)는 `Contains`
+        /// 부분 일치를 쓰는데 여기(CheckUpdateMappings)는 `MarkdownSectionLocator.LocateSection`의
+        /// 완전 일치를 썼다. 그래서 `## 3. CRUD 분석`처럼 접두가 붙은 산출물은 헤더 검사는
+        /// 통과하면서 매핑 대조만 조용히 꺼졌다 - 16개 컬럼이 산문으로 뭉개져도 L1을
+        /// 통과하는 결함이 바로 이것이다. 두 검사가 같은 판정 기준을 쓰도록 여기서
+        /// 폴백을 추가한다.
+        ///
+        /// `MarkdownSectionLocator`는 다른 소비자(계획서 분할)가 있으므로 그 클래스의
+        /// 기존 동작은 바꾸지 않는다 - 폴백은 이 클래스 안에만 둔다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateCrudSection(IReadOnlyList<string> lines)
+        {
+            var exact = MarkdownSectionLocator.LocateSection(lines, "## CRUD 분석", "## ");
+            if (exact.HeaderIndex >= 0) return exact;
+
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0,
+                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal)
+                     && line.Contains("CRUD 분석", StringComparison.OrdinalIgnoreCase));
+
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
         }
 
         /// <summary>
