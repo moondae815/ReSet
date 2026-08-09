@@ -1,5 +1,7 @@
 using System;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -178,6 +180,166 @@ namespace ReSet.Core.Tests
             // Assert
             Assert.DoesNotContain("ORM pseudocode", result.SystemPrompt);
             Assert.Contains("OOP pseudocode", result.SystemPrompt);
+        }
+
+        private static (AiService Service, MockHttpMessageHandler Handler) CreateProbe()
+        {
+            var handler = new MockHttpMessageHandler(
+                "{\"choices\":[{\"message\":{\"content\":\"## 생성된 명세서\"}}]}");
+            var client = new OpenAiClient(new HttpClient(handler), "k", "https://api.openai.com/v1", "gpt-4o");
+            return (new AiService(client, 0.2f), handler);
+        }
+
+        private static SpDefinition ProbeSpDef(params AstUpdateMapping[] mappings)
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "COMM_UPD", DdlText = "SELECT 1;" };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                UpdateTables = new List<string> { "DB.dbo.TCommMst" },
+                AstUpdateMappings = new List<AstUpdateMapping>(mappings)
+            };
+            return spDef;
+        }
+
+        private static AstUpdateMapping Mapping(
+            string? fromClause = null, params string[] selfReferenced)
+        {
+            var mapping = new AstUpdateMapping
+            {
+                TargetTable = "DB.dbo.TCommMst",
+                StatementOrdinal = 2,
+                FromClauseText = fromClause
+            };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "CLVT", SourceExpression = "CLVT * -1" });
+            mapping.SelfReferencedColumns.AddRange(selfReferenced);
+            return mapping;
+        }
+
+        /// <summary>
+        /// System.Text.Json의 기본 인코더는 비ASCII 문자를 \uXXXX 형태로 이스케이프해서 직렬화하므로,
+        /// 원문 요청 본문 문자열에는 한글 리터럴이 그대로 나타나지 않는다.
+        /// 메시지 content 필드들을 실제로 역직렬화해서 이스케이프가 풀린 원문 텍스트로 대조한다.
+        /// </summary>
+        private static string DecodeMessageContents(string requestBody)
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            var sb = new StringBuilder();
+            foreach (var message in doc.RootElement.GetProperty("messages").EnumerateArray())
+            {
+                sb.AppendLine(message.GetProperty("content").GetString());
+            }
+            return sb.ToString();
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithUpdateMappings_ShouldPrefillTheTable()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(Mapping()), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("AST UPDATE 타겟-소스 1:1 매핑 추출 데이터", body);
+            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 2)", body);
+            Assert.Contains("CLVT * -1", body);
+            Assert.Contains("(FILL_DESCRIPTION_HERE)", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutUpdateMappings_ShouldOmitTheBlock()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("AST UPDATE 타겟-소스 1:1 매핑 추출 데이터", body);
+            Assert.DoesNotContain("### UPDATE 대상 테이블:", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithFromClause_ShouldAttachNondeterminismWarning()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(
+                ProbeSpDef(Mapping(fromClause: "FROM DB.dbo.TCommMst A")), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("비결정적", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutFromClause_ShouldNotAttachNondeterminismWarning()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(Mapping()), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("비결정적", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithSelfReference_ShouldAttachSimultaneousEvaluationRule()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(
+                ProbeSpDef(Mapping(fromClause: null, "CLVT")), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("갱신 전 값", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutSelfReference_ShouldNotAttachSimultaneousEvaluationRule()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(Mapping()), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("갱신 전 값", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithPipeInExpression_ShouldEscapeTheTableCell()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+            var mapping = new AstUpdateMapping { TargetTable = "DB.dbo.TCommMst", StatementOrdinal = 1 };
+            mapping.Assignments.Add(new AstUpdateAssignment
+            {
+                Column = "FLAGS",
+                SourceExpression = "FLAGS | 4"
+            });
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(mapping), "지침", null);
+
+            // Assert - 이스케이프하지 않으면 표의 셀 경계가 깨진다.
+            // JSON 직렬화가 백슬래시를 한 번 더 이스케이프하므로 본문에는 `\\|`로 나타난다.
+            Assert.Contains(@"FLAGS \\| 4", handler.LastRequestBody);
         }
     }
 }

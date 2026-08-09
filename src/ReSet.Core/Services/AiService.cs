@@ -270,6 +270,31 @@ namespace ReSet.Core.Services
                     }
                     
                     staticAnalysisText.AppendLine($"  * UPDATE 대상 테이블: {(spDef.StaticAnalysis.UpdateTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.UpdateTables) : "없음")}");
+                    if (spDef.StaticAnalysis.AstUpdateMappings != null && spDef.StaticAnalysis.AstUpdateMappings.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine();
+                        staticAnalysisText.AppendLine("  [AST UPDATE 타겟-소스 1:1 매핑 추출 데이터 (ABSOLUTE SOURCE OF TRUTH)]");
+                        staticAnalysisText.AppendLine("  * L1 정적 파서(SqlScriptDom)가 SET 절의 타겟 컬럼과 원천 표현식을 기계적으로 정확히 추출했습니다.");
+                        staticAnalysisText.AppendLine("  * 아래 정보를 매핑 원천으로 절대적으로 신뢰하고 반영하십시오. 원본 쿼리에 없는 변환이나 추가 논리를 임의로 지어내지(할루시네이션) 마십시오.");
+                        foreach (var mapping in spDef.StaticAnalysis.AstUpdateMappings)
+                        {
+                            staticAnalysisText.AppendLine($"    <update-target table=\"{mapping.TargetTable}\" statement=\"{mapping.StatementOrdinal}\">");
+                            foreach (var assignment in mapping.Assignments)
+                            {
+                                staticAnalysisText.AppendLine($"      <set column=\"{assignment.Column}\">{assignment.SourceExpression}</set>");
+                            }
+                            if (!string.IsNullOrEmpty(mapping.FromClauseText))
+                            {
+                                staticAnalysisText.AppendLine($"      <from-clause>{mapping.FromClauseText}</from-clause>");
+                            }
+                            if (mapping.SelfReferencedColumns.Count > 0)
+                            {
+                                staticAnalysisText.AppendLine($"      <self-referenced-columns>{string.Join(", ", mapping.SelfReferencedColumns)}</self-referenced-columns>");
+                            }
+                            staticAnalysisText.AppendLine("    </update-target>");
+                        }
+                        staticAnalysisText.AppendLine();
+                    }
                     staticAnalysisText.AppendLine($"  * DELETE 대상 테이블: {(spDef.StaticAnalysis.DeleteTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.DeleteTables) : "없음")}");
                     
                     if (spDef.StaticAnalysis.CreatedTempTables.Count > 0)
@@ -420,6 +445,33 @@ namespace ReSet.Core.Services
                     rules.Add("");
                 }
             }
+            var updateMappings = spDef.StaticAnalysis?.AstUpdateMappings;
+            if (updateMappings != null && updateMappings.Count > 0)
+            {
+                rules.Add($"{ruleIndex++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:");
+                foreach (var mapping in updateMappings)
+                {
+                    rules.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal})");
+                    rules.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
+                    rules.Add("   | :--- | :--- | :--- | :--- |");
+                    foreach (var assignment in mapping.Assignments)
+                    {
+                        rules.Add($"   | {mapping.TargetTable} | {assignment.Column} | {EscapeTableCell(assignment.SourceExpression)} | (FILL_DESCRIPTION_HERE) |");
+                    }
+
+                    if (!string.IsNullOrEmpty(mapping.FromClauseText))
+                    {
+                        rules.Add("   위 문장은 FROM 절을 동반합니다. 갱신 대상은 FROM 절에 등장하는 해당 별칭의 인스턴스입니다. 조인이 대상 행 하나에 여러 소스 행을 매칭시킬 경우 T-SQL은 어느 값이 반영될지 정의하지 않습니다(비결정적). 조인 키의 유일성이 보장되는지 판단할 수 없으면 \"보장되지 않으면 결과가 비결정적\"이라는 사실만 기술하고, 유일성 여부를 추측하지 마십시오.");
+                    }
+
+                    if (mapping.SelfReferencedColumns.Count > 0)
+                    {
+                        rules.Add($"   다음 컬럼은 SET 우변에서 자기 자신을 참조합니다: {string.Join(", ", mapping.SelfReferencedColumns)}. SQL의 SET 절은 우변을 모두 **갱신 전 값**으로 동시에 평가합니다. 절차형 언어로 이행할 때 순차 대입하면 계산 결과가 달라지므로, 이 사실을 `## CRUD 분석`에 명시적으로 기술하십시오.");
+                    }
+
+                    rules.Add("");
+                }
+            }
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
@@ -562,6 +614,21 @@ Based on the structured reference context above, reverse engineer the stored pro
             }
 
             return (systemPrompt, userPrompt);
+        }
+
+        /// <summary>
+        /// 마크다운 표 셀에 넣을 수 있게 다듬는다. SET 우변에 비트 연산자 `|`가 들어가면
+        /// (예: FLAGS | 4) 셀 경계로 읽혀 표가 통째로 어긋난다. 개행도 같은 이유로 접는다.
+        /// </summary>
+        private static string EscapeTableCell(string expression)
+        {
+            if (string.IsNullOrEmpty(expression)) return string.Empty;
+
+            return expression
+                .Replace("\r\n", " ")
+                .Replace("\n", " ")
+                .Replace("\r", " ")
+                .Replace("|", "\\|");
         }
 
         private (string SystemPrompt, string UserPrompt) BuildFunctionSpecificationPrompts(SpDefinition functionDef, string userInstructions, string? feedbackLog)
