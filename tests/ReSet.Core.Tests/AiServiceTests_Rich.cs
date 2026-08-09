@@ -397,5 +397,51 @@ namespace ReSet.Core.Tests
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.DoesNotContain("### UPDATE 대상 테이블:", body);
         }
+
+        private static SpDefinition ProbeSpDefWithSchema()
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "COMM_UPD", DdlText = "SELECT 1;" };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+
+            var dep = new DependencyInfo
+            {
+                Name = "TCommMst", Schema = "dbo", Database = "DB", Type = "USER_TABLE"
+            };
+            dep.Columns.Add(new ColumnInfo { ColumnName = "CLVT", DataType = "int" });
+            spDef.Dependencies.Add(dep);
+
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithSchemaTable_ShouldDeclareItComplete()
+        {
+            // Arrange - A 검사가 "참조 컬럼은 빠짐없이 실린다"를 보장하므로, 모델에게 줄
+            // 올바른 지시는 부재 주장을 적을 빈칸을 여는 것이 아니라 그 반대다.
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDefWithSchema(), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("이 표는 이 프로시저가 참조하는 컬럼에 대해 완전합니다", body);
+            Assert.Contains("스키마에 없다고 기술하지 마십시오", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutSchemaTable_ShouldOmitTheDeclaration()
+        {
+            // Arrange - 스키마 표가 없으면 "이 표는 완전합니다"는 가리킬 대상이 없는
+            // 거짓 문장이 된다. ProbeSpDef는 의존성이 없어 표가 렌더링되지 않는다.
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("이 표는 이 프로시저가 참조하는 컬럼에 대해 완전합니다", body);
+        }
     }
 }

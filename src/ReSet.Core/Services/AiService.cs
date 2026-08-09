@@ -129,6 +129,18 @@ namespace ReSet.Core.Services
                 }
             }
 
+            if (tableSchemasText.Length > 0)
+            {
+                // A 검사(SchemaPromptColumnSelector.DetectOrphanedColumnKeys)가 이 문장을
+                // 참으로 유지하고, L1의 CheckSchemaClaims가 위반을 잡는다. 부재 주장을
+                // 적을 자리를 규정하지 않는 이유는 설계 문서에 있다 - 빈칸을 규정하는
+                // 것 자체가 주장을 유도한다.
+                tableSchemasText.AppendLine(
+                    "> 이 표는 이 프로시저가 참조하는 컬럼에 대해 완전합니다. " +
+                    "참조 컬럼이 스키마에 없다고 기술하지 마십시오.");
+                tableSchemasText.AppendLine();
+            }
+
             var staticAnalysisText = new StringBuilder();
             if (spDef.StaticAnalysis != null)
             {
