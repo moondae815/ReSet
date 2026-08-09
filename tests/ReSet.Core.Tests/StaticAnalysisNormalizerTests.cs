@@ -234,7 +234,29 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void Normalize_ShouldNotShareUpdateMappingInstancesWithInput()
+        public void Normalize_ShouldNotShareUpdateMappingListInstancesWithInput()
+        {
+            // Arrange
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping { TargetTable = "dbo.T" };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "A", SourceExpression = "1" });
+            mapping.SelfReferencedColumns.Add("A");
+            analysis.AstUpdateMappings.Add(mapping);
+
+            // Act
+            var normalized = StaticAnalysisNormalizer.Normalize(analysis, "DB", "dbo");
+            normalized.AstUpdateMappings[0].Assignments.Clear();
+            normalized.AstUpdateMappings[0].SelfReferencedColumns.Clear();
+
+            // Assert - 입력을 변경하지 않는다는 Normalize의 계약: Assignments와
+            // SelfReferencedColumns 둘 다 새 리스트 인스턴스여야 한다. 리스트 자체를
+            // 그대로 대입(aliasing)하면 결과 쪽을 비웠을 때 입력도 같이 비게 된다.
+            Assert.Single(analysis.AstUpdateMappings[0].Assignments);
+            Assert.Single(analysis.AstUpdateMappings[0].SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Normalize_ShouldNotShareUpdateAssignmentElementInstancesWithInput()
         {
             // Arrange
             var analysis = new SpStaticAnalysisResult();
@@ -244,10 +266,12 @@ namespace ReSet.Core.Tests
 
             // Act
             var normalized = StaticAnalysisNormalizer.Normalize(analysis, "DB", "dbo");
-            normalized.AstUpdateMappings[0].Assignments.Clear();
+            normalized.AstUpdateMappings[0].Assignments[0].SourceExpression = "MUTATED";
 
-            // Assert - 입력을 변경하지 않는다는 Normalize의 계약
-            Assert.Single(analysis.AstUpdateMappings[0].Assignments);
+            // Assert - AstUpdateAssignment는 가변 참조 타입이다. 리스트 컨테이너만 새로
+            // 만들고 원소를 그대로 옮기면(Add(assignment)) 컨테이너는 독립적이어도 원소를
+            // 공유하게 되어, 결과 쪽 원소를 바꾸면 입력 쪽도 같이 바뀐다.
+            Assert.Equal("1", analysis.AstUpdateMappings[0].Assignments[0].SourceExpression);
         }
     }
 }
