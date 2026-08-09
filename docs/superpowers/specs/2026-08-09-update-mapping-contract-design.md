@@ -127,6 +127,8 @@ public class AstUpdateAssignment
 
 INSERT 템플릿과 달리 컬럼이 없는 폴백 행(`(COLUMN_NAME)`)을 두지 않는다. SET 절이 없는 UPDATE는 존재하지 않으므로, `Assignments`가 비면 그 매핑 자체를 만들지 않는다.
 
+**표 셀에 넣기 전에 원천 표현식의 파이프를 이스케이프한다.** SET 우변에 비트 OR가 오면(`SET FLAGS = FLAGS | 4`) 그 문자가 셀 구분자로 읽혀 표 전체가 어긋나고, 그 표를 그대로 베낀 명세서는 L1 대조에서 컬럼을 찾지 못한다. 개행도 같은 이유로 공백으로 접는다. 파서가 표현식 원문을 보존한다는 계약은 유지된다 — 이스케이프는 표에 쓸 때만 하고 `AstUpdateAssignment.SourceExpression` 자체는 손대지 않는다.
+
 **조건부 경고** — `hasUdf`·`hasLinkedServers`·`hasDynamicSql`가 이미 쓰는 동적 Pruning과 같은 자리, 같은 방식이다. 감지된 문장에만 붙는다.
 
 FROM 절이 있는 문장(결함 2):
@@ -173,6 +175,8 @@ public ValidationResult Validate(string markdown, SpecExpectations? expectations
 **테이블 이름은 마지막 파트로 비교한다.** 프롬프트는 canonical 3-part를 요구하지만 AI가 짧게 쓰는 것은 결함이 아니다. 컬럼은 단어 경계(`\b`)로 봐서 `CLVT`가 `CLVTOTAL`에 걸리지 않게 한다. 대괄호 한정(`[CLVT]`)은 단어 경계가 자연히 처리한다.
 
 `ErrorType`에 `UpdateMappingMissing`을 추가한다. `RegenerationScope.FromL1Errors`는 이 타입이 섞이면 `allMermaid`가 거짓이 되어 `Overview + Crud + Logic` 재생성으로 간다. 이미 옳은 동작이므로 그쪽은 수정하지 않는다.
+
+**`BuildSuggestedPromptFix`에는 이 타입의 블록을 반드시 추가한다.** 그 함수는 `HeaderMissing`·`MermaidQuoteMissing`·`MermaidCliError`·`General` 넷만 열거하므로, 새 타입을 추가하고 여기를 손대지 않으면 **L1이 실패해도 재생성 프롬프트에 사유가 실리지 않는다.** `CriticFeedbackLog.ComposeAfterL1Failure`가 받을 재료가 비고, 같은 명세서가 같은 결함으로 재생성을 반복한다. 새 블록은 기존 "기타 에러" 앞에 놓는다 — 기타는 마지막이어야 한다.
 
 ### 5. 캐시 무효화
 
