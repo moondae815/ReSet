@@ -43,7 +43,7 @@ namespace ReSet.Core.Services
 
                 foreach (var dep in spDef.Dependencies)
                 {
-                    if (dep.Type.Contains("TABLE") || dep.Type.Contains("VIEW"))
+                    if (SqlObjectTypeClassifier.IsTableOrView(dep.Type))
                     {
                         var key = string.IsNullOrEmpty(dep.Database) 
                             ? $"{dep.Schema}.{dep.Name}" 
@@ -154,7 +154,7 @@ namespace ReSet.Core.Services
                 var isReferencing = spDef.Dependencies.Exists(d => 
                     d.Schema.Equals(schema, StringComparison.OrdinalIgnoreCase) && 
                     d.Name.Equals(tableName, StringComparison.OrdinalIgnoreCase) &&
-                    (d.Type.Contains("TABLE") || d.Type.Contains("VIEW")));
+                    SqlObjectTypeClassifier.IsTableOrView(d.Type));
 
                 if (isReferencing)
                 {

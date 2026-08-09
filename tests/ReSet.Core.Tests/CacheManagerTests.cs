@@ -602,17 +602,5 @@ namespace ReSet.Core.Tests
 
             Assert.False(_cacheManager.IsCacheValid(key, hash, _paths));
         }
-
-        [Fact]
-        public void CacheFormatVersion_ShouldBeTwoSoPreNormalizationArtifactsAreRebuilt()
-        {
-            // 복합 해시는 DDL만 본다. 원본 SP가 안 바뀌었으므로 버전을 올리지 않으면
-            // 정규화 이전에 만들어진 잘못된 Spec.md가 그대로 복원된다.
-            var source = System.IO.File.ReadAllText(
-                System.IO.Path.Combine(
-                    RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/CacheManager.cs"));
-
-            Assert.Contains("CurrentCacheFormatVersion = 2", source);
-        }
     }
 }

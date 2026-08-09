@@ -337,7 +337,10 @@ namespace ReSet.Core.Services
                         // 코드형 객체 DDL 저장
                         if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
                         {
-                            var subFolderType = dep.Type.Contains("PROCEDURE") ? "procedures" : "functions";
+                            var subFolderType =
+                                SqlObjectTypeClassifier.ResolveCodeObjectType(dep.Type) == CodeObjectType.Procedure
+                                    ? "procedures"
+                                    : "functions";
                             var codeFolder = Path.Combine(ddlFolder, subFolderType);
                             if (!Directory.Exists(codeFolder))
                             {

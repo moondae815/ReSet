@@ -218,7 +218,7 @@ namespace ReSet.Core.Services
                     referenceDdlsText.AppendLine("```");
                     referenceDdlsText.AppendLine();
                 }
-                else if (dep.Type.Contains("FUNCTION") || dep.Type.Contains("PROCEDURE"))
+                else if (SqlObjectTypeClassifier.IsCodeObject(dep.Type))
                 {
                     referenceDdlsText.AppendLine($"### 객체: {dep.Schema}.{dep.Name} ({dep.Type}) [DDL 소스코드 수집 실패 / 미제공]");
                     referenceDdlsText.AppendLine("*이 객체의 정의 DDL이 시스템 상에서 수집되지 않았습니다. 내부 알고리즘 분석을 건너뛰고 호출 위치만 기록하십시오.*");
