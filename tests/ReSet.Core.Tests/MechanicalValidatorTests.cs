@@ -1567,5 +1567,48 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
+
+        // [Minor] 코드 펜스 안의 문장도 검사 대상이었다. LocateCrudSection은
+        // MarkdownSectionLocator.FindIndexOutsideFence로 펜스를 추적하는데, 이 두 검사의
+        // 줄 순회는 추적하지 않아 한 파일 안에서 판정 기준이 갈렸다.
+
+        [Fact]
+        public void Validate_WhenAbsenceClaimAppearsInsideCodeFence_ShouldBeIgnored()
+        {
+            // Arrange - 실측된 오탐: ```sql 블록 안 주석에 부재 주장 문구가 있어도
+            // 오류로 잡혔다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec(
+                "```sql\n" +
+                "-- `dbo.TSettleMst` 스키마에 `CLINTCOMM`이 존재하지 않는 환경 대비\n" +
+                "SELECT 1\n" +
+                "```");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenTableCellLookingTextAppearsInsideCodeFence_ShouldNotCountTowardIdentitySplit()
+        {
+            // Arrange - 코드 펜스 안에 표 셀처럼 보이는 텍스트(예시 SQL 주석)가 있어도
+            // 실제 CRUD 표 밖이므로 표기 분열 집계에 들어가면 안 된다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n|---|---|\n| `dbo.TSettleMst` | `PLTID` |\n\n" +
+                "```text\n" +
+                "| `TSettleMst` | `PLTID` |\n" +
+                "```");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
     }
 }

@@ -446,9 +446,17 @@ namespace ReSet.Core.Services
             if (expectations.PromptSchemaColumns.Count == 0) return;
 
             var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var fenceFlags = ComputeFenceLineFlags(lines);
 
-            foreach (var line in MarkdownSectionLocator.SplitLines(markdown))
+            for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
             {
+                // 코드 펜스 안의 문장은 검사 대상이 아니다 - LocateCrudSection이 헤딩
+                // 경계를 찾을 때 이미 펜스를 추적하는데, 이 루프만 추적하지 않으면
+                // 예시 SQL 주석 안의 부재 표현이 오류로 잡힌다(실측).
+                if (fenceFlags[lineIndex]) continue;
+
+                var line = lines[lineIndex];
                 var isSelfContainedClaim = Array.Exists(
                     SelfContainedAbsenceClaimTokens, t => line.Contains(t, StringComparison.Ordinal));
                 var isSchemaContextClaim = line.Contains(SchemaContextWord, StringComparison.Ordinal)
@@ -525,6 +533,7 @@ namespace ReSet.Core.Services
             var (crudStart, crudEnd) = LocateCrudSection(lines);
             if (crudStart < 0) return;
 
+            var fenceFlags = ComputeFenceLineFlags(lines);
             var spellingsByTable = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
             void Flush()
@@ -549,6 +558,10 @@ namespace ReSet.Core.Services
 
             for (var index = crudStart + 1; index < crudEnd; index++)
             {
+                // 코드 펜스 안의 줄은 검사하지 않는다 - 예시 SQL 주석 안에 표 셀처럼
+                // 보이는 텍스트가 있어도 표기 분열 집계에 들어가면 안 된다(실측).
+                if (fenceFlags[index]) continue;
+
                 var trimmed = lines[index].TrimStart();
 
                 // "### "(H3)뿐 아니라 "#### "(H4)도 하위 절 경계다. 프롬프트는 조회/갱신
@@ -655,6 +668,39 @@ namespace ReSet.Core.Services
                 line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 각 줄이 코드 펜스(```) 안에 있는지 표시하는 배열을 만든다. 판정 규칙(줄 시작을
+        /// 트림한 뒤 ```로 시작하면 토글)은 <see cref="MarkdownSectionLocator.FindIndexOutsideFence"/>가
+        /// 헤딩 탐색에 쓰는 것과 동일하다 - LocateCrudSection이 이미 그 메서드로 펜스를
+        /// 추적하는데, CheckSchemaClaims·CheckTableIdentitySplit의 줄 순회만 추적하지
+        /// 않으면 한 파일 안에서 펜스 판정 기준이 갈린다(실측 오탐).
+        ///
+        /// 펜스 구분자 줄 자체도 true로 표시한다 - 그 줄은 문법 기호일 뿐 검사 대상
+        /// 문장이 아니다.
+        ///
+        /// `MarkdownSectionLocator`에는 줄 단위 펜스 배열을 돌려주는 API가 없고, 다른
+        /// 소비자(계획서 분할)가 있어 그 클래스는 고치지 않기로 했으므로 여기 최소한으로
+        /// 다시 구현한다.
+        /// </summary>
+        private static bool[] ComputeFenceLineFlags(IReadOnlyList<string> lines)
+        {
+            var flags = new bool[lines.Count];
+            var inFence = false;
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("```", StringComparison.Ordinal))
+                {
+                    flags[i] = true;
+                    inFence = !inFence;
+                    continue;
+                }
+
+                flags[i] = inFence;
+            }
+
+            return flags;
         }
 
         /// <summary>
