@@ -140,5 +140,92 @@ namespace ReSet.Core.Tests
             Assert.Equal(2, shown.Count);
             Assert.Contains("ETC", shown);
         }
+
+        [Fact]
+        public void DetectOrphanedColumnKeys_WhenCanonicalMismatchDropsColumns_ShouldReport()
+        {
+            // Arrange - 14개 명세서를 망가뜨린 결함의 재현. 의존성은 DB 한정
+            // SETTLE_POQ_DB.dbo.TSettleMst인데 AST 키는 비한정 "TSettleMst"이고,
+            // 분석 대상 SP는 다른 DB에 있다. 정식 비교가 어긋나 CYMD/INSTATE가
+            // 프롬프트 어디에도 실리지 않는다.
+            var dep = Dep("TSettleMst", "SETTLE_POQ_DB", ("CYMD", false), ("INSTATE", false));
+            var sp = Sp("PaymentDB", new Dictionary<string, List<string>>
+            {
+                ["TSettleMst"] = new List<string> { "CYMD", "INSTATE" }
+            });
+            sp.Dependencies.Add(dep);
+
+            // Act
+            var defects = SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp);
+
+            // Assert
+            var defect = Assert.Single(defects);
+            Assert.Contains("TSettleMst", defect);
+            Assert.Contains("CYMD", defect);
+        }
+
+        [Fact]
+        public void DetectOrphanedColumnKeys_WhenMatchingSucceeds_ShouldReportNothing()
+        {
+            // Arrange - 정상 경로. 정식 비교가 성립한다.
+            var dep = Dep("TSettleMst", "SETTLE_POQ_DB", ("CYMD", false));
+            var sp = Sp("SETTLE_POQ_DB", new Dictionary<string, List<string>>
+            {
+                ["SETTLE_POQ_DB.dbo.TSettleMst"] = new List<string> { "CYMD" }
+            });
+            sp.Dependencies.Add(dep);
+
+            // Act & Assert
+            Assert.Empty(SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp));
+        }
+
+        [Fact]
+        public void DetectOrphanedColumnKeys_WithoutDbContext_ShouldReportNothing()
+        {
+            // Arrange - DB 컨텍스트가 없으면 실제 매칭이 이미 베이스 이름으로 내려가
+            // 병합에 성공한다. 조건을 "정식 비교 실패"로 못 박으면 이 정상 동작이
+            // 전부 위반으로 보고된다 - 그래서 조건은 "실제 매칭에서 병합되지 않음"이다.
+            var dep = Dep("TSettleMst", null, ("CYMD", false));
+            var sp = Sp(null, new Dictionary<string, List<string>>
+            {
+                ["SETTLE_POQ_DB.dbo.TSettleMst"] = new List<string> { "CYMD" }
+            });
+            sp.Dependencies.Add(dep);
+
+            // Act & Assert
+            Assert.Empty(SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp));
+        }
+
+        [Fact]
+        public void DetectOrphanedColumnKeys_ForTempTable_ShouldReportNothing()
+        {
+            // Arrange - 임시 테이블은 애초에 의존성이 아니다. 정당하게 매칭되지 않는다.
+            var dep = Dep("TSettleMst", "SETTLE_POQ_DB", ("CYMD", false));
+            var sp = Sp("PaymentDB", new Dictionary<string, List<string>>
+            {
+                ["#TMP"] = new List<string> { "SEQ" }
+            });
+            sp.Dependencies.Add(dep);
+
+            // Act & Assert
+            Assert.Empty(SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp));
+        }
+
+        [Fact]
+        public void DetectOrphanedColumnKeys_WhenDependencyHasNoColumns_ShouldReportNothing()
+        {
+            // Arrange - TPGProperty처럼 메타데이터 수집이 안 된 의존성은 스키마 표
+            // 자체가 없다. 명세서가 "스키마 정의는 제공되지 않았습니다"라고 쓰는 것은
+            // 참인 진술이고, 이것은 입력 결함이 아니다.
+            var dep = Dep("TPGProperty", "SETTLE_POQ_DB");
+            var sp = Sp("PaymentDB", new Dictionary<string, List<string>>
+            {
+                ["TPGProperty"] = new List<string> { "CommMethod" }
+            });
+            sp.Dependencies.Add(dep);
+
+            // Act & Assert
+            Assert.Empty(SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp));
+        }
     }
 }

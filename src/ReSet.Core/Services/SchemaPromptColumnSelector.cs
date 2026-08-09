@@ -67,6 +67,65 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 참조 컬럼 키가 통째로 유실됐는지 본다.
+        ///
+        /// 명제: 키 K가 임시 테이블이 아니고, <b>실제 매칭에서 어떤 의존성에도 병합되지
+        /// 않았는데</b>, 베이스 이름으로는 컬럼을 가진 의존성과 맞는다면 - K의 컬럼들은
+        /// 프롬프트 어디에도 실리지 않았다.
+        ///
+        /// 첫째 조건이 "정식 비교 실패"가 아니라 "실제 매칭 실패"인 것이 중요하다.
+        /// KeyMatchesDependency는 DB 컨텍스트가 없을 때 이미 베이스 이름 비교로
+        /// 내려간다. 조건을 정식 비교로 못 박으면 그 폴백 경로의 정상 동작이 전부
+        /// 위반으로 보고된다.
+        ///
+        /// 이 위반은 재생성으로 고칠 수 없다 - 프롬프트가 거짓말을 한 코드 버그이지
+        /// AI의 잘못이 아니다. 그래서 호출부는 이것을 L1 오류가 아니라 경고로 다룬다.
+        /// </summary>
+        public static IReadOnlyList<string> DetectOrphanedColumnKeys(SpDefinition spDef)
+        {
+            var defects = new List<string>();
+            var analysis = spDef.StaticAnalysis;
+            if (analysis?.ReferencedColumnsPerTable == null) return defects;
+
+            foreach (var kvp in analysis.ReferencedColumnsPerTable)
+            {
+                var key = kvp.Key;
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                if (kvp.Value == null || kvp.Value.Count == 0) continue;
+
+                var trimmed = key.TrimStart();
+                if (trimmed.StartsWith("#", StringComparison.Ordinal)
+                 || trimmed.StartsWith("@", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (spDef.Dependencies.Any(dep => KeyMatchesDependency(key, dep, spDef)))
+                {
+                    continue; // 어딘가에 병합됐다.
+                }
+
+                var baseName = ExtractBaseName(key);
+                var lookalikes = spDef.Dependencies
+                    .Where(dep => dep.Columns.Count > 0
+                               && string.Equals(ExtractBaseName(dep.Name), baseName, StringComparison.OrdinalIgnoreCase))
+                    .Select(dep => StaticAnalysisNormalizer.CanonicalizeParts(
+                        dep.Database, dep.Schema, dep.Name, spDef.ObjectKey?.Database, spDef.Schema))
+                    .ToList();
+
+                if (lookalikes.Count == 0) continue;
+
+                defects.Add(
+                    $"[스키마 프롬프트] 참조 컬럼 키 `{key}`가 어떤 의존성에도 병합되지 않아 " +
+                    $"컬럼 {kvp.Value.Count}개({string.Join(", ", kvp.Value)})가 프롬프트 스키마 표에서 누락되었습니다. " +
+                    $"이름이 같은 의존성: {string.Join(", ", lookalikes)}. " +
+                    "명세서가 해당 컬럼을 \"존재하지 않음\"으로 기술할 수 있습니다.");
+            }
+
+            return defects;
+        }
+
+        /// <summary>
         /// ReferencedColumnsPerTable의 키 하나가 이 의존성의 것인지 판정한다.
         ///
         /// 비교 양변의 한정 가능한 출처가 다르다. 의존성 쪽은 dep.Database가 있으면
