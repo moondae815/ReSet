@@ -341,5 +341,25 @@ namespace ReSet.Core.Tests
             // JSON 직렬화가 백슬래시를 한 번 더 이스케이프하므로 본문에는 `\\|`로 나타난다.
             Assert.Contains(@"FLAGS \\| 4", handler.LastRequestBody);
         }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithNewlineInExpression_ShouldEscapeTheTableCell()
+        {
+            // Arrange - 여러 줄에 걸친 CASE 식처럼 SET 우변에 개행이 들어간 경우를 재현한다.
+            var (service, handler) = CreateProbe();
+            var mapping = new AstUpdateMapping { TargetTable = "DB.dbo.TCommMst", StatementOrdinal = 1 };
+            mapping.Assignments.Add(new AstUpdateAssignment
+            {
+                Column = "NOTE",
+                SourceExpression = "CASE\nWHEN A THEN 1\nEND"
+            });
+
+            // Act
+            await service.GenerateSpecificationAsync(ProbeSpDef(mapping), "지침", null);
+
+            // Assert - 개행을 접지 않으면 표 행 하나가 여러 줄로 쪼개져 마크다운 표가 깨진다.
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("CASE WHEN A THEN 1 END", body);
+        }
     }
 }

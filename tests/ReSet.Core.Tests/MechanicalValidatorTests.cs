@@ -753,6 +753,33 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_WhenCrudHeaderIsAbsent_ShouldNotDuplicateTheMappingError()
+        {
+            // Arrange - `## CRUD 분석` 헤더 자체가 없으면 ValidateMarkdownStructure가 헤더
+            // 누락을 이미 보고한다. CheckUpdateMappings가 같은 결함을 매핑 누락으로 또
+            // 보고하면 중복이다.
+            var markdown = @"## 개요
+본문
+## 파라미터 목록
+본문
+## 로직 흐름 요약
+본문
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+A[""시작""] --> B[""끝""]
+```
+";
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderMissing);
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.UpdateMappingMissing);
+        }
+
+        [Fact]
         public void Validate_ShouldNotAcceptAPrefixMatchAsTheColumn()
         {
             // Arrange - CLVTOTAL은 CLVT가 아니다.
