@@ -258,3 +258,85 @@ public ValidationResult Validate(string markdown, SpecExpectations? expectations
 1. 실제 Job 1회 — `COMM_UPD`의 명세서에 16개 컬럼이 실제로 표로 나오는지, `* -1`이 글자 그대로 남는지
 2. 자기참조가 감지된 문장에서 동시평가 규약이 명세서 본문에 실리는지
 3. L1 대조가 걸렸을 때 재생성이 실제로 그 누락을 해소하는지 — 해소하지 못하고 같은 오류로 재시도만 반복하면 대조가 너무 엄격한 것이다
+
+## 구현 후 기록 (2026-08-09)
+
+Task 1~6을 9개 커밋으로 구현했다. 최종: 16파일, 테스트 1,211 → **1,251**, `dotnet build` 오류 0건·경고 8개
+기준선 유지.
+
+### 이 설계에서 틀렸거나 부족했던 것
+
+**§4의 테이블 비교 규칙이 충돌을 다루지 않았다.** 스펙은 "테이블 이름은 마지막 파트로 비교한다"고만
+적었는데, `DB1.dbo.TCommMst`와 `DB2.dbo.TCommMst`처럼 마지막 파트가 같은 두 테이블이 한 항목으로
+합쳐져 서로의 누락을 가렸다. 리뷰가 재현했다 — 각 섹션에 상대의 컬럼만 있을 때 `IsValid == True`에
+오류 0건이 나왔다. 하필 이 스펙 §3의 예시(`SETTLE_POQ_DB.dbo.TCommMst`)가 마지막 파트만으로는
+구분되지 않는 그 모양이다.
+
+실제 구현(`MechanicalValidator.CollectUpdateSections`/`ResolveSectionBody`)은 이렇게 바뀌었다.
+수집 단계에서는 완전 한정 이름으로만 섹션을 모으고(마지막 파트로 접지 않는다), 대조 단계에서
+완전 한정 이름 일치를 먼저 시도한다. 실패하면 마지막 파트로 후보를 찾되, **후보 섹션과 후보
+기대(같은 마지막 파트를 요구하는 다른 `UpdateColumnExpectation`)가 각각 정확히 하나일 때만**
+그 폴백을 인정한다. 후보가 0개면 "매핑 표가 없다"는 `UpdateMappingMissing` 오류를, 후보가
+여럿이거나 기대가 여럿이면 "마지막 파트만으로는 특정할 수 없다"는 별도의 `UpdateMappingMissing`
+오류를 보고한다. 평소엔 관대하게, 충돌할 때만 엄격하게 — 라는 원칙으로 정리됐다.
+
+**구현 계획의 테스트 코드가 작동하지 않는 것이었다.** 계획은 한글 리터럴을 `handler.LastRequestBody`
+(원시 JSON)에 대고 단언하게 적었는데, `System.Text.Json`의 기본 인코더가 비ASCII 문자를 `\uXXXX`로
+이스케이프하므로 그 리터럴은 원시 JSON 본문에 글자 그대로 나타나지 않는다. 한글 부분 문자열
+단언은 구현이 옳든 망가졌든 항상 실패(또는 항상 성립하지 않는 방식으로 무의미)했을 것이다.
+구현은 요청 JSON을 파싱해 메시지 본문 속성을 읽어 디코딩된 실제 텍스트를 검사하는
+`DecodeMessageContents` 테스트 헬퍼로 이 문제를 닫았다.
+
+**§4가 `BuildSuggestedPromptFix`를 언급하지 않았다가 나중에 보강됐다.** 이건 이미 스펙 본문에
+반영되어 있으므로(§4 마지막 문단) 다시 적지 않는다 — 확인만 했다.
+
+### 이 설계에서 옳았던 것 (검증으로 확인)
+
+- **`SpecExpectations`를 별도 파일로 분리한 것.** 리뷰가 소비자를 추적해 `MechanicalValidator`가
+  정적 분석 모델(`SpStaticAnalysisResult`)을 몰라도 됨을 확인했다 — 기대값 생성은 정적 분석을
+  읽는 일이고 소비는 검증기의 일이라는 분리가 실제로 유지된다.
+- **표 셀의 파이프 이스케이프(`EscapeTableCell`).** 뮤테이션으로 하중이 확인됐다 — SET 우변에
+  비트 OR(`FLAGS | 4`)가 오는 경우를 실제로 검증하는 테스트가 있고, 이스케이프를 지우면 그
+  테스트가 깨진다.
+- **문장 서수까지 대조하지 않기로 한 것.** 테이블 단위 합집합이라 AI가 여러 문장의 표를 합쳐
+  쓰더라도 재생성을 강요하지 않는다. `Validate_WhenTheTableIsSplitAcrossTwoSections_ShouldUnionThem`
+  테스트가 이 완화를 지킨다.
+
+### 뮤테이션 검증 결과
+
+구현 중 워커와 리뷰어가 총 **22건**의 뮤테이션을 실행했다. 그중 **3건이 아무 테스트도 깨뜨리지
+못했다.** 둘은 실제 결함이라 테스트가 추가됐다 — 여러 줄에 걸친 SET 표현식(예: 다중 라인
+`CASE` 식)이 개행을 접지 않으면 마크다운 표 행을 깨뜨리는 것, 그리고 `## CRUD 분석` 섹션 자체가
+없을 때 `ValidateMarkdownStructure`의 `HeaderMissing`과 별개로 `CheckUpdateMappings`가 같은
+결함을 `UpdateMappingMissing`으로 중복 보고하던 것. 나머지 하나(`SpecExpectations.FromStaticAnalysis`가
+매핑이 하나도 없을 때 `null` 대신 빈 레코드를 반환하는 변형)는 소비자 추적과 실측으로
+`MechanicalValidator.Validate`가 `null`과 "빈 `UpdateColumns`를 가진 인스턴스"를 똑같이
+처리함(어느 쪽이든 대조 루프가 0회 돈다)이 확인되어 **관측 가능한 차이가 없다** — 테스트를
+새로 만들지 않고 이 사실만 기록한다.
+
+### 남은 후속 작업
+
+리뷰가 유예한 것들이다.
+
+1. `SqlStaticParser.RecordUpdateMapping`의 내부 방어 가드(`targetTable`이 빈 경우의 조기 반환)는
+   현재 호출 그래프에서 도달 불가한 죽은 코드다. `ExplicitVisit(UpdateSpecification)`의 바깥
+   가드가 항상 먼저 걸러내므로, 안쪽 가드는 그 바깥 가드가 약화되거나 우회됐을 때만 뮤테이션을
+   관측 가능하게 만들려고 존재한다. `RecordDmlTarget`의 계약이 바뀌어 이 안쪽 가드가 실제로
+   도달 가능해지면, 그 경고 메시지("내부 방어 가드 작동")가 `ControlFlowSummary`를 거쳐
+   "식별된 제어 흐름 구조 요약 (IF/WHILE)"이라는 어긋난 머리말 아래 LLM 프롬프트로 새어 나간다.
+2. 프롬프트의 pseudo-XML 블록(`<update-target>`/`<from-clause>`/`<self-referenced-columns>`)이
+   `<`, `>`, `"`를 이스케이프하지 않아 `WHERE A > 0` 같은 술어가 태그를 시각적으로 깨뜨린다.
+   회귀는 아니다 — 이미 배포된 INSERT `<source-query-block>`이 같은 패턴이고, 이것을 진짜 XML로
+   파싱하는 곳은 어디에도 없다.
+3. `MechanicalValidator.NormalizeQualifiedName`이 백틱과 대괄호를 앞뒤에서만 걷어내는
+   `Trim` 호출 연쇄로 문자열 가장자리만 다듬어서 `[DB].[dbo].[T]`가 `DB].[dbo].[T`가
+   된다(안쪽 대괄호는 남는다).
+   오늘은 완전 한정 이름 대조의 양쪽(기대값과 헤딩)이 같은 필드에 같은 변환을 적용해 무해하지만,
+   진짜 per-segment 정규화기는 아니다.
+4. `SpecExpectationsWiringPolicyScanner`의 수신자 검사가 `IdentifierNameSyntax` 즉 맨 `_validator`
+   식별자만 잡아서 `this._validator.Validate(...)`는 스캔을 빠져나간다. 현재 그런 사용은 없다.
+5. 모호성 오류(`ResolveSectionBody`의 마지막 분기)가 기대 테이블은 이름을 대지만, 충돌하는
+   형제 후보(같은 마지막 파트를 요구하는 다른 `UpdateColumnExpectation`)로 인해 모호해진
+   경우에는 그 형제를 나열하지 않고 후보 섹션만 나열한다. 모호한 기대마다 오류가 하나씩
+   나므로 `SuggestedPromptFix` 전체에는 결국 다 실리지만, 오류 메시지 하나만 보면 무엇과
+   충돌했는지 알 수 없다.

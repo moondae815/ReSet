@@ -405,6 +405,7 @@ graph TD
 * **UDF 및 Linked Server 원격 참조 수집**: `FunctionCall`에서 호출 타겟이 존재하는 스키마 수반 함수 호출(예: `dbo.fn_GetBonus`)을 UDF로 수집하고, `NamedTableReference`에서 `ServerIdentifier`가 존재하는 4파트 식별자 참조를 Linked Server로 수집하여 제어 흐름 요약에 경고를 인클루딩합니다.
 * **호환성 레벨 파서 다변화**: 레거시 DB 연결 시 호환성 수준(`compatibility_level`)을 자동 조회해 `TSql100Parser` ~ `TSql160Parser`를 동적으로 매핑 생성하여, 구버전 T-SQL 구문 구동 시 발생하는 컴파일/파싱 차단 예외를 원천 차단합니다.
 * **DML 대상 해석 (Target Resolution)**: `UpdateSpecification`/`DeleteSpecification`의 `Target`을 `InsertSpecification`과 동일한 패턴으로 선취해, 갱신·삭제 대상 테이블 하나만 `UpdateTables`/`DeleteTables`에 기록하고 FROM 절 조인 원본은 `SelectTables`로 분류합니다. 대상이 별칭인 경우(`UPDATE A SET ... FROM T A`) 전역 별칭 사전이 아니라 **그 문장 자신의 FROM 절**에서 해석합니다. 전역 사전은 마지막 등록이 이기므로 같은 별칭을 다른 문장이 다른 테이블에 쓰면 오해석됩니다. 대상을 해석할 수 없으면(테이블 변수 등) 해당 문장에 한해 문맥 내 전체 수집으로 폴백합니다.
+* **UPDATE SET 절 추출 (`AstUpdateMappings`)**: INSERT의 타겟-소스 매핑과 대칭으로, `UpdateSpecification` 방문 시 대상 테이블 이름 하나만 기록하던 종전 동작에 더해 문장별 SET 절을 함께 수집합니다. 각 UPDATE 문장에서 타겟 컬럼과 원천 표현식을 1:1로 담되, `SET @v = ...` 같은 변수 대입은 컬럼이 아니므로 제외합니다. FROM 절이 있으면 원문 텍스트를 그대로 보존해 자기참조 갱신(`UPDATE A SET ... FROM T A`)의 문맥을 남기고, SET 우변이 같은 문장의 타겟 컬럼을 참조하면(`SET CLVT = CLVT * -1`) 그 컬럼 목록을 별도로 기록해 SQL의 동시평가 규약을 전달합니다. 이 판정은 문장 하나 안에서만 이루어져 다른 문장이 갱신하는 동명 컬럼과 섞이지 않습니다. 대상 테이블 해석에 실패한 문장은 매핑 자체를 만들지 않습니다 — 존재하지 않는 테이블에 컬럼을 붙이면 L1 검증이 있지도 않은 표를 요구해 무한 재시도로 이어지기 때문입니다. 이렇게 뽑힌 컬럼·원천 표현식은 명세서 프롬프트에서 이미 채워진 표가 되어 AI는 설명 칸만 채우고, `MechanicalValidator`의 L1 기계 검증이 명세서 본문과 대조합니다.
 * **테이블 식별자 정규화 (`StaticAnalysisNormalizer`)**: 파서는 SQL에 적힌 표기를 그대로 보고하므로 같은 물리 테이블이 `TSettleMst`/`dbo.TSettleMst`/`SETTLE_POQ_DB.dbo.TSettleMst` 세 갈래로 나뉩니다(§4.1.1의 `CodeObjectKey` 대소문자 표기 확정과는 별개로, 이쪽은 표기 형태 자체를 하나로 합치는 문제입니다). 정의 조립 직후 canonical 3-part(`{Database}.{Schema}.{Name}`)로 통일하고 중복을 제거하여 `metadata.json`·스냅샷·프롬프트가 같은 이름을 쓰게 합니다. 병합은 3-part 전체 일치일 때만 수행합니다(`dbo.TPGProperty`와 `PaymentDB.dbo.TPGProperty`는 컬럼 구성이 같아도 다른 테이블입니다). 임시 테이블, 테이블 변수, 4파트 링크드 서버 이름, DB 컨텍스트가 없는 경우는 한정하지 않고 통과시킵니다.
 
 ### 4.4. 3단계 신뢰성 검증 파이프라인 (Verification Pipeline)
@@ -610,7 +611,7 @@ graph TD
 * **복합 시그니처 해시 계산**: 대상 SP의 DDL 본문 텍스트와 재귀적으로 수집된 모든 참조 UDF/SP/테이블의 DDL 메타데이터를 개체명 순서로 정렬 및 결합하여 단일 SHA-256 해시값으로 산출합니다.
 * **글로벌 캐시 인덱스 및 재사용**: 기존 개별 루트 디렉토리 기반 캐싱에서 전역(Global) 기반 인덱스(`.sp_cache_index.json`)로 구조를 개선하여, 서로 다른 루트 SP 구동 시에도 공통으로 호출되는 참조 UDF/SP 객체의 분석 산출물(`Spec.md`)을 물리적으로 복사해 재사용(Cache Hit)합니다.
 * **레거시 캐시 자동 마이그레이션**: 시스템 기동 시 기존에 분산 생성되었던 하위 폴더들의 로컬 캐시를 스캔하고 글로벌 인덱스로 병합하는 백그라운드 자동 마이그레이션을 지원합니다.
-* **캐시 포맷 버전과 강제 재분석**: 복합 해시는 DDL만 보므로, 프롬프트에 주입되는 메타데이터의 형태가 바뀌면 DDL이 그대로여도 기존 산출물이 무효가 됩니다. 이 경우 `CurrentCacheFormatVersion`을 올려 전체 캐시를 미스 처리합니다(현재 값 2 — 정적 분석 식별자 정규화 도입).
+* **캐시 포맷 버전과 강제 재분석**: 복합 해시는 DDL만 보므로, 프롬프트에 주입되는 메타데이터의 형태가 바뀌면 DDL이 그대로여도 기존 산출물이 무효가 됩니다. 이 경우 `CurrentCacheFormatVersion`을 올려 전체 캐시를 미스 처리합니다(현재 값 3 — 정적 분석 식별자 정규화에 이어 `AstUpdateMappings` 필드 추가로 재상승).
 * **오프라인 스냅샷은 원본만 신뢰**: `OfflineDbMetadataService`는 스냅샷에 저장된 `StaticAnalysis`를 재생하지 않고, 저장된 `DdlText`로 파서를 다시 돌린 뒤 정규화합니다. 스냅샷은 *데이터베이스*의 스냅샷이지 *분석 결과*의 스냅샷이 아니므로, 파서를 고칠 때마다 스냅샷 재추출을 요구하지 않기 위함입니다. 코드 객체의 DDL도 `CodeObjects`에서 의존성 항목으로 재링크합니다. 재파싱이 실패하면 저장본을 유지합니다. (스냅샷에 호환성 수준이 없어 오프라인 재파싱은 파서 기본값 160을 사용합니다.)
 
 ### 4.9. 하이브리드 영문화 프롬프트 및 환각 차단 메커니즘 (Prompt Engineering & Negative Constraints)
