@@ -1543,5 +1543,29 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
+
+        // [Minor] H4(####) 하위 절 경계에서 flush하지 않아 조회/갱신 절이 한 버킷으로
+        // 합쳐진다. "### "만 경계로 취급하는 것이 원인이다. 프롬프트(AiService.cs)는
+        // 하위 절 분리를 요구하면서 헤딩 레벨은 고정하지 않는다.
+
+        [Fact]
+        public void Validate_WhenSpellingsAreInDifferentH4Subsections_ShouldPass()
+        {
+            // Arrange - 실측된 오탐: "#### 조회 대상 테이블"과 "#### 갱신 대상 테이블"로
+            // 쓰면(H4) 절 경계에서 flush되지 않아 같은 테이블의 두 표기가 한 절로
+            // 뭉쳐 TableIdentitySplit이 잘못 발생했다. "###"로 쓴 동일 문서는 통과한다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "#### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n|---|---|\n| `DB.dbo.TSettleMst` | `PLTID` |\n\n" +
+                "#### 갱신 대상 테이블\n\n" +
+                "| 테이블명 | 갱신 컬럼 |\n|---|---|\n| `dbo.TSettleMst` | `PLTID` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
     }
 }

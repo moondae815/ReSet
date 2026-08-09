@@ -551,7 +551,12 @@ namespace ReSet.Core.Services
             {
                 var trimmed = lines[index].TrimStart();
 
-                if (trimmed.StartsWith("### ", StringComparison.Ordinal))
+                // "### "(H3)뿐 아니라 "#### "(H4)도 하위 절 경계다. 프롬프트는 조회/갱신
+                // 대상 테이블을 하위 절로 나눠 쓰라고 요구하면서 헤딩 레벨은 고정하지
+                // 않는다 - H4로 쓴 문서에서 flush가 안 되면 서로 다른 절의 같은 테이블이
+                // 한 버킷으로 합쳐져 TableIdentitySplit이 오탐된다(실측).
+                if (trimmed.StartsWith("### ", StringComparison.Ordinal) ||
+                    trimmed.StartsWith("#### ", StringComparison.Ordinal))
                 {
                     Flush();
                     continue;
