@@ -449,28 +449,7 @@ namespace ReSet.Core.Services
             if (updateMappings != null && updateMappings.Count > 0)
             {
                 rules.Add($"{ruleIndex++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:");
-                foreach (var mapping in updateMappings)
-                {
-                    rules.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal})");
-                    rules.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
-                    rules.Add("   | :--- | :--- | :--- | :--- |");
-                    foreach (var assignment in mapping.Assignments)
-                    {
-                        rules.Add($"   | {mapping.TargetTable} | {assignment.Column} | {EscapeTableCell(assignment.SourceExpression)} | (FILL_DESCRIPTION_HERE) |");
-                    }
-
-                    if (!string.IsNullOrEmpty(mapping.FromClauseText))
-                    {
-                        rules.Add("   위 문장은 FROM 절을 동반합니다. 갱신 대상은 FROM 절에 등장하는 해당 별칭의 인스턴스입니다. 조인이 대상 행 하나에 여러 소스 행을 매칭시킬 경우 T-SQL은 어느 값이 반영될지 정의하지 않습니다(비결정적). 조인 키의 유일성이 보장되는지 판단할 수 없으면 \"보장되지 않으면 결과가 비결정적\"이라는 사실만 기술하고, 유일성 여부를 추측하지 마십시오.");
-                    }
-
-                    if (mapping.SelfReferencedColumns.Count > 0)
-                    {
-                        rules.Add($"   다음 컬럼은 SET 우변에서 자기 자신을 참조합니다: {string.Join(", ", mapping.SelfReferencedColumns)}. SQL의 SET 절은 우변을 모두 **갱신 전 값**으로 동시에 평가합니다. 절차형 언어로 이행할 때 순차 대입하면 계산 결과가 달라지므로, 이 사실을 `## CRUD 분석`에 명시적으로 기술하십시오.");
-                    }
-
-                    rules.Add("");
-                }
+                rules.AddRange(BuildUpdateMappingTemplateLines(updateMappings));
             }
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
@@ -629,6 +608,45 @@ Based on the structured reference context above, reverse engineer the stored pro
                 .Replace("\n", " ")
                 .Replace("\r", " ")
                 .Replace("|", "\\|");
+        }
+
+        /// <summary>
+        /// UPDATE 대상 테이블의 fill-in-the-blank 마크다운 템플릿 본문을 만든다.
+        ///
+        /// 헤딩 리터럴 `### UPDATE 대상 테이블:`은 MechanicalValidator.CheckUpdateMappings가
+        /// 명세서 본문을 대조할 때 찾는 접두이자 L1(VerificationPipelineOrchestrator)이
+        /// 지역 모델 경로에서도 강제하는 계약이다. BuildSpecificationPrompts(전체 명세서
+        /// 1회 생성)와 BuildSpecSectionPrompts의 "CrudAnalysis" 분기(지역 모델의 최초
+        /// 생성 경로)가 이 헬퍼를 공유해야 두 경로가 같은 헤딩을 내보낸다는 것이
+        /// 코드로 보장된다 - 리터럴이 두 곳에 복제되면 한쪽만 고쳐질 위험이 생긴다.
+        /// </summary>
+        private static List<string> BuildUpdateMappingTemplateLines(IReadOnlyList<AstUpdateMapping> updateMappings)
+        {
+            var lines = new List<string>();
+            foreach (var mapping in updateMappings)
+            {
+                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal})");
+                lines.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
+                lines.Add("   | :--- | :--- | :--- | :--- |");
+                foreach (var assignment in mapping.Assignments)
+                {
+                    lines.Add($"   | {mapping.TargetTable} | {assignment.Column} | {EscapeTableCell(assignment.SourceExpression)} | (FILL_DESCRIPTION_HERE) |");
+                }
+
+                if (!string.IsNullOrEmpty(mapping.FromClauseText))
+                {
+                    lines.Add("   위 문장은 FROM 절을 동반합니다. 갱신 대상은 FROM 절에 등장하는 해당 별칭의 인스턴스입니다. 조인이 대상 행 하나에 여러 소스 행을 매칭시킬 경우 T-SQL은 어느 값이 반영될지 정의하지 않습니다(비결정적). 조인 키의 유일성이 보장되는지 판단할 수 없으면 \"보장되지 않으면 결과가 비결정적\"이라는 사실만 기술하고, 유일성 여부를 추측하지 마십시오.");
+                }
+
+                if (mapping.SelfReferencedColumns.Count > 0)
+                {
+                    lines.Add($"   다음 컬럼은 SET 우변에서 자기 자신을 참조합니다: {string.Join(", ", mapping.SelfReferencedColumns)}. SQL의 SET 절은 우변을 모두 **갱신 전 값**으로 동시에 평가합니다. 절차형 언어로 이행할 때 순차 대입하면 계산 결과가 달라지므로, 이 사실을 `## CRUD 분석`에 명시적으로 기술하십시오.");
+                }
+
+                lines.Add("");
+            }
+
+            return lines;
         }
 
         private (string SystemPrompt, string UserPrompt) BuildFunctionSpecificationPrompts(SpDefinition functionDef, string userInstructions, string? feedbackLog)
@@ -1638,6 +1656,17 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 if (hasLinkedServers)
                 {
                     sbRules.Add($"{rIdx++}. If Linked Server references (4-part identifier) are found, analyze the external DB dependencies. If it is a cross-database reference on the same server (3-part identifier), distinguish it clearly from a Linked Server.");
+                }
+
+                // 지역 모델 경로(이 분기)도 BuildSpecificationPrompts와 같은 UPDATE fill-in
+                // 템플릿을 받아야 한다. L1(VerificationPipelineOrchestrator)이 `### UPDATE
+                // 대상 테이블:` 접두 H3 헤딩의 존재를 강제하는데, 이 분기가 그 헤딩을 자발적으로
+                // 쓰도록 요구하지 않으면 지역 모델의 1차 시도가 구조적으로 실패한다.
+                var updateMappingsForCrud = spDef.StaticAnalysis?.AstUpdateMappings;
+                if (updateMappingsForCrud != null && updateMappingsForCrud.Count > 0)
+                {
+                    sbRules.Add($"{rIdx++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:");
+                    sbRules.AddRange(BuildUpdateMappingTemplateLines(updateMappingsForCrud));
                 }
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");

@@ -361,5 +361,41 @@ namespace ReSet.Core.Tests
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.Contains("CASE WHEN A THEN 1 END", body);
         }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithUpdateMappings_ShouldPrefillTheTable()
+        {
+            // Arrange - 지역 모델 경로(GenerateSpecSectionAsync의 "CrudAnalysis" 분기)도
+            // BuildSpecificationPrompts(전체 명세서 1회 생성)와 같은 UPDATE fill-in 템플릿을
+            // 받아야 한다. L1(VerificationPipelineOrchestrator)이 요구하는 `### UPDATE 대상
+            // 테이블:` 접두 H3 헤딩을 지역 모델이 자발적으로 쓰지 않으면 1차 시도가
+            // 구조적으로 실패한다.
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDef(Mapping()), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 2)", body);
+            Assert.Contains("CLVT * -1", body);
+            Assert.Contains("(FILL_DESCRIPTION_HERE)", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithoutUpdateMappings_ShouldOmitTheBlock()
+        {
+            // Arrange
+            var (service, handler) = CreateProbe();
+
+            // Act
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            // Assert
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("### UPDATE 대상 테이블:", body);
+        }
     }
 }
