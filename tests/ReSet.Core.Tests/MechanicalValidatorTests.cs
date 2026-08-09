@@ -1474,5 +1474,74 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
+
+        // 아래는 최종 브랜치 리뷰가 지적한 결함에 대한 회귀 테스트다.
+        //
+        // [Important] 컬럼 미수집 의존성이 대조 집합에서 빠지면서 동일 말단 이름
+        // 모호성 가드가 무력화된다. DB1.dbo.TSettleMst(컬럼 있음)와
+        // DB2.dbo.TSettleMst(컬럼 0개, 메타데이터 미수집)가 같이 있을 때, 컬럼 0개
+        // 쪽에 대한 참인 문장이나 CRUD 표 행이 컬럼 있는 쪽으로 오귀속된다.
+
+        private static SpDefinition BuildSettleMstWithColumnlessSibling()
+        {
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey("DB1", "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+
+            var withColumns = new DependencyInfo { Name = "TSettleMst", Schema = "dbo", Database = "DB1", Type = "USER_TABLE" };
+            withColumns.Columns.Add(new ColumnInfo { ColumnName = "CLINTCOMM", DataType = "int" });
+            sp.Dependencies.Add(withColumns);
+
+            // 컬럼 0개 - 메타데이터가 수집되지 않은 동명(말단) 테이블.
+            var columnless = new DependencyInfo { Name = "TSettleMst", Schema = "dbo", Database = "DB2", Type = "USER_TABLE" };
+            sp.Dependencies.Add(columnless);
+
+            return sp;
+        }
+
+        [Fact]
+        public void Validate_WhenColumnlessSiblingSharesLastName_TrueAbsenceClaim_ShouldStaySilent()
+        {
+            // Arrange - 리뷰 실측 시나리오 ①. "DB2.dbo.TSettleMst의 스키마는 제공되지
+            // 않아 CLINTCOMM 컬럼이 존재하지 않습니다"는 참인 진술이다(DB2는 컬럼 0개
+            // 의존성이라 스키마 표 자체가 없다). 컬럼 0개 의존성이 말단 이름 모호성
+            // 판정에서 빠지면 DB1 하나만 후보로 남아 DB1에 대한 거짓 오류로 오귀속된다.
+            var sp = BuildSettleMstWithColumnlessSibling();
+            var expectations = SpecExpectations.From(sp)!;
+            var markdown = WrapSpec(
+                "`DB2.dbo.TSettleMst`의 스키마는 제공되지 않아 `CLINTCOMM` 컬럼이 존재하지 않습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenColumnlessSiblingSharesLastName_CrudRowPair_ShouldNotBeTreatedAsIdentitySplit()
+        {
+            // Arrange - 리뷰 실측 시나리오 ②. DB1.dbo.TSettleMst 행과
+            // DB2.dbo.TSettleMst(컬럼 0개) 행은 서로 다른 물리 테이블이지 표기 분열이
+            // 아니다. 컬럼 0개 의존성이 대조 집합에서 빠지면 DB2 행이 말단 이름만으로
+            // DB1 키에 오귀속되어 두 표기가 한 테이블 아래 뭉쳐 TableIdentitySplit이
+            // 잘못 발생한다.
+            var sp = BuildSettleMstWithColumnlessSibling();
+            var expectations = SpecExpectations.From(sp)!;
+            var markdown = WrapSpec(
+                "### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n|---|---|\n" +
+                "| `DB1.dbo.TSettleMst` | `CLINTCOMM` |\n" +
+                "| `DB2.dbo.TSettleMst` | `CLINTCOMM` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
     }
 }

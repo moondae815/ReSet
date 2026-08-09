@@ -19,6 +19,15 @@ namespace ReSet.Core.Services
     /// 이것이 거짓 부재 주장 대조의 기준이다 - DB 전체 컬럼이 아니다. 정당하게 필터에서
     /// 빠진 컬럼을 기준으로 삼으면 재생성으로 고칠 수 없는 오류가 생긴다.
     /// </param>
+    /// <param name="ColumnlessDependencyTables">
+    /// 컬럼이 0개라 PromptSchemaColumns에서 제외된 의존성들의 canonical 이름.
+    /// 대조 기준(PromptSchemaColumns)에는 넣지 않는다 - 스키마 표 자체가 렌더링되지
+    /// 않으므로 이 테이블에 대한 "제공되지 않았습니다" 진술은 참이다. 그러나
+    /// MechanicalValidator.ResolveSchemaTableKey의 말단 이름 모호성 판정에는 넣어야
+    /// 한다 - 그렇지 않으면 컬럼 0개 테이블을 가리킨 문장·표 행이, 같은 말단 이름을
+    /// 가진 컬럼 있는 동명 테이블로 조용히 오귀속된다(리뷰 실측: DB1.dbo.TSettleMst와
+    /// DB2.dbo.TSettleMst 중 DB2만 메타데이터가 수집되지 않은 경우).
+    /// </param>
     /// <param name="InputDefects">
     /// 프롬프트가 진실을 담지 못한 경우의 서술. <b>L1 오류가 아니다</b> - 재생성이
     /// 고칠 수 없는 코드 버그이므로 호출부가 경고로 표면화한다.
@@ -26,6 +35,7 @@ namespace ReSet.Core.Services
     public sealed record SpecExpectations(
         IReadOnlyList<UpdateColumnExpectation> UpdateColumns,
         IReadOnlyDictionary<string, IReadOnlySet<string>> PromptSchemaColumns,
+        IReadOnlySet<string> ColumnlessDependencyTables,
         IReadOnlyList<string> InputDefects)
     {
         /// <summary>
@@ -40,18 +50,24 @@ namespace ReSet.Core.Services
 
             var promptSchemaColumns = new Dictionary<string, IReadOnlySet<string>>(
                 StringComparer.OrdinalIgnoreCase);
+            var columnlessDependencyTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var dep in spDef.Dependencies)
             {
-                // 컬럼이 없는 의존성은 스키마 표 자체가 렌더링되지 않는다
-                // (BuildSpMetadataTexts의 dep.Columns.Count > 0 조건). 대조 기준으로
-                // 삼으면 "스키마 정의는 제공되지 않았습니다"라는 참인 진술이 대조
-                // 대상으로 잘못 올라간다.
-                if (dep.Columns.Count == 0) continue;
-
                 var canonical = StaticAnalysisNormalizer.CanonicalizeParts(
                     dep.Database, dep.Schema, dep.Name, spDef.ObjectKey?.Database, spDef.Schema);
                 if (string.IsNullOrWhiteSpace(canonical)) continue;
+
+                if (dep.Columns.Count == 0)
+                {
+                    // 컬럼이 없는 의존성은 스키마 표 자체가 렌더링되지 않는다
+                    // (BuildSpMetadataTexts의 dep.Columns.Count > 0 조건). 대조 기준으로
+                    // 삼으면 "스키마 정의는 제공되지 않았습니다"라는 참인 진술이 대조
+                    // 대상으로 잘못 올라간다. 그러나 canonical 이름 자체는 별도 집합에
+                    // 담아 둔다 - 위 ColumnlessDependencyTables 문서 참고.
+                    columnlessDependencyTables.Add(canonical);
+                    continue;
+                }
 
                 promptSchemaColumns[canonical] = SchemaPromptColumnSelector.Select(dep, spDef);
             }
@@ -63,7 +79,8 @@ namespace ReSet.Core.Services
                 return null;
             }
 
-            return new SpecExpectations(updateColumns, promptSchemaColumns, inputDefects);
+            return new SpecExpectations(
+                updateColumns, promptSchemaColumns, columnlessDependencyTables, inputDefects);
         }
 
         /// <summary>

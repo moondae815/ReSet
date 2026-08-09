@@ -581,6 +581,11 @@ namespace ReSet.Core.Services
         /// 평소엔 관대하게, 충돌할 때만 침묵: 완전 한정 이름이 맞으면 그것을 쓰고,
         /// 아니면 마지막 파트로 찾되 후보가 정확히 하나일 때만 인정한다. 둘 이상이면
         /// null을 돌려 검사를 건너뛴다 - 오류로 만들지 않는다.
+        ///
+        /// 후보를 셀 때 ColumnlessDependencyTables(컬럼 0개라 대조 기준에서 빠진
+        /// 의존성)도 말단 이름 충돌 판정에 포함시킨다. 그렇지 않으면 컬럼 0개
+        /// 테이블을 가리킨 이름이, 대조 기준에는 없다는 이유만으로 같은 말단 이름을
+        /// 가진 컬럼 있는 동명 테이블로 조용히 오귀속된다 - 리뷰가 실측한 결함이다.
         /// </summary>
         private static string? ResolveSchemaTableKey(string writtenName, SpecExpectations expectations)
         {
@@ -598,6 +603,17 @@ namespace ReSet.Core.Services
                 if (!string.Equals(LastNamePart(key), lastPart, StringComparison.OrdinalIgnoreCase)) continue;
                 if (single != null) return null; // 모호하다.
                 single = key;
+            }
+
+            if (single != null)
+            {
+                foreach (var columnless in expectations.ColumnlessDependencyTables)
+                {
+                    if (string.Equals(LastNamePart(columnless), lastPart, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return null; // 컬럼 0개 동명 테이블과 충돌한다 - 어느 쪽인지 특정 불가.
+                    }
+                }
             }
 
             return single;
