@@ -261,8 +261,91 @@ public ValidationResult Validate(string markdown, SpecExpectations? expectations
 
 ## 구현 후 기록 (2026-08-09)
 
-Task 1~6을 9개 커밋으로 구현했다. 최종: 16파일, 테스트 1,211 → **1,251**, `dotnet build` 오류 0건·경고 8개
+Task 1~6을 9개 커밋으로 구현했다. 최종: 16파일, 테스트 1,211 → 1,251, `dotnet build` 오류 0건·경고 8개
 기준선 유지.
+
+Task 7(문서 동기화)로 태스크 단위 구현을 마친 뒤 **최종 브랜치 리뷰**를 돌렸다. 태스크 리뷰
+10건이 전부 놓친 Critical 1건과 Important 3건을 새로 잡았다. 수정 라운드 1(3커밋)에서 넷을
+전부 닫았는데, 그 Critical 수정 자체가 방향만 뒤집힌 새 Critical 1건(과잉 수정)을 만들어
+수정 라운드 2(3커밋)에서 그것마저 닫았다. 최종: 테스트 **1,262**건, `dotnet build` 오류 0건·경고
+8개 기준선 유지.
+
+### 최종 브랜치 리뷰가 잡은 것 (태스크 리뷰 10건이 전부 놓쳤다)
+
+각 항목에 왜 태스크 단위 리뷰로는 보이지 않았는지를 함께 남긴다 — 그것이 다음 사람에게
+더 유용한 정보이기 때문이다.
+
+**1. Critical — 별칭 미해결이 "해석 성공"으로 통과했다.** `ResolveDmlTargetName`이 별칭 해석에
+실패했을 때 원문(별칭 글자)을 그대로 돌려주고, 호출부 `RecordDmlTarget`은 그 문장에 대해서도
+`true`를 반환했다. 그 결과 설계 §1이 약속한 "대상 해석에 실패한 문장은 매핑을 만들지 않는다"가
+지켜지지 않고, `UPDATE X ... FROM (SELECT ...) X`(인라인 파생 테이블), `FROM @Buf T`(테이블
+변수), `WITH C AS (...) UPDATE C`(FROM 절 없는 CTE UPDATE) 세 형태가 존재하지 않는 테이블을
+L1 필수 요건으로 만들어 무한 재시도를 유발했다. 태스크 리뷰가 못 본 이유: `RecordDmlTarget`이
+돌려주는 `false`가 "별칭 미해결"까지 포함하지 **않는다**는 사실은, 이 브랜치가 한 줄도 바꾸지
+않은 기존 함수 `ResolveDmlTargetName`까지 내려가야 보인다 — 각 태스크의 diff는 그 함수를
+건드리지 않았으므로 리뷰 범위에 들어오지 않았다.
+
+**2. Important — 지역 모델 경로에 UPDATE 템플릿이 없었다.** `AiService.BuildSpecSectionPrompts`의
+`"CrudAnalysis"` 분기는 재생성 전용이 아니라 지역 모델의 **최초 생성** 경로인데, `### UPDATE
+대상 테이블:` fill-in-the-blank 표도 헤딩 계약도 심어져 있지 않았다. L1은 그 헤딩을 무조건
+요구하므로, 지역 모델의 1차 시도는 구조적으로 실패하게 되어 있었다. 못 본 이유:
+`BuildSpecificationPrompts`(전체 명세서 1회 생성 경로)와 `BuildSpecSectionPrompts`(지역 모델
+분할 생성 경로)라는 두 프롬프트 빌더가 서로 다른 태스크(Task 3과 이번 라운드)에 속해 있어
+어떤 단일 diff에도 두 경로가 함께 등장하지 않았다.
+
+**3. Important — `## CRUD 분석` 헤딩 판정이 두 검사에서 달랐다.** `ValidateMarkdownStructure`의
+필수 헤더 검사는 `Contains` 부분 일치인데, `CheckUpdateMappings`의 섹션 탐색은
+`MarkdownSectionLocator.LocateSection`의 완전 일치를 썼다. 그래서 `## 3. CRUD 분석`처럼 접두가
+붙은 산출물은 헤더 검사는 통과하면서 매핑 대조는 조용히 0회 돌았다. 못 본 이유: 새로 짠
+`CheckUpdateMappings`와 이 브랜치가 **변경하지 않은** 기존 `ValidateMarkdownStructure`의 판정
+기준 차이라, 각 diff만 보면 양쪽 다 그 자체로는 이상해 보이지 않는다.
+
+**4. Important — 임시 테이블 UPDATE가 L1 필수 요건으로 승격됐다.** `UpdateTables`에는 `#TMP`가
+들어가지 않는데(정책상 물리 테이블이 아니므로), `AstUpdateMappings`에는 들어가는 비대칭이
+있었다. 매핑만 만들어지고 CRUD 표에는 물리 테이블로 기술되지 않으니, L1이 존재할 수 없는
+요건을 요구하게 됐다. 못 본 이유: 파서(Task 1)의 임시 테이블 처리와 기대값 생성(Task 4)의
+조합이며, 각 diff는 각자의 범위 안에서는 합리적이었다.
+
+### 수정이 만든 두 번째 Critical — 과잉 수정
+
+Critical #1(별칭 미해결)을 닫는 수정(라운드 1, `20a4506`)은 **"별칭 해석 실패"와 "애초에
+별칭이 아닌 한정 없는 테이블명"을 구분하지 못해 정상 경로를 끊었다.** `UPDATE TSettleMst SET
+... FROM TSettleMst A, TClientSettleRate B, TPGSettleRate C ...` — 이 저장소 테스트가
+`Analyze_UpdateWithFromSources_ShouldFileJoinSourcesAsReads`(`SqlStaticParserTests.cs:532`)에서
+"COMM_UPD의 지배적 형태"라고 이름 붙인 그 형태 — 는 대상 `TSettleMst`가 한정되지 않은 이름이고
+FROM 절의 별칭은 `A`/`B`/`C`뿐이라 `TSettleMst`라는 별칭 선언 자체가 없다. 라운드 1의 수정은
+이 경우도 "별칭을 못 풀었다"고 오판해 매핑을 만들지 못하게 했고, 그 결과 이 브랜치가 존재하는
+이유인 16개 컬럼 `* -1` 표가 프롬프트에도 L1 기대값에도 들어가지 않는 상태가 됐다.
+
+**전체 스위트 1,259건이 초록인 채로 이 결함을 통과시켰다.** 그 형태를 다루는 기존 테스트 둘
+(`Analyze_UpdateWithFromSources_ShouldFileJoinSourcesAsReads`,
+`Analyze_UpdateTargetAlsoInFromClause_ShouldAppearAsBothTargetAndRead`)은 `UpdateTables`만
+단언했고 — 라운드 1의 수정이 `UpdateTables`의 과다 보고 동작을 의도적으로 그대로 보존했으므로
+이 둘은 계속 통과했다 — 신규 매핑 테스트는 전부 한정된 이름이거나 FROM에서 정상적으로 풀리는
+별칭이었다. **한정 없는 물리 테이블 대상 UPDATE가 매핑을 만드는지 확인하는 테스트가 한 건도
+없었다.**
+
+라운드 2(`7c8b620`)가 실제 수정한 `ResolveDmlTargetName`(`SqlStaticParser.cs`)의 최종 판정은
+다음 4단이다 (판정은 이 순서로 하나씩 확인한다):
+
+1. 이름에 `.`이 있다(한정된 이름) — 별칭일 수 없다. **해결.**
+2. 이름이 이 문장이 속한 CTE 목록의 이름과 같다 — 별칭이 아니라 CTE 참조이고 물리 테이블이
+   존재하지 않는다. **미해결.**
+3. FROM 절 안에 이 이름과 같은 별칭 선언이 아예 없다 — 별칭이 아니라 평범한 물리 테이블명이다.
+   **해결(그 이름 자체로).**
+4. 별칭 선언은 있지만 그 대상이 `NamedTableReference`가 아니다(파생 테이블, 테이블 변수 등) —
+   실제 물리 테이블명을 알 수 없다. **미해결.**
+5. (그 외, 즉 별칭 선언이 있고 물리 테이블로 풀린다) — 그 별칭이 가리키는 테이블명으로
+   **해결.**
+
+별칭 선언 존재 여부(`AliasDeclared`)와 그 별칭이 물리 테이블로 풀리는지(`ResolvedTableName`)를
+`AliasTargetFinder`에서 분리해 갖고 있어야 3번과 4번이 구분된다 — 이 분리가 라운드 1에 없던
+것이 과잉 수정의 원인이었다.
+
+**교훈.** 결함을 고칠 때 고친 가드의 반대편(정상 입력)에도 테스트가 있어야, **방향만
+뒤집힌 같은 결함**으로 다시 떨어지지 않았는지 확인할 수 있다. "대상을 못 풀면 매핑을
+만들지 않는다"를 검증하는 테스트만으로는, "풀어야 할 정상 대상을 못 풀었다고 오판하지
+않는다"는 검증되지 않는다.
 
 ### 이 설계에서 틀렸거나 부족했던 것
 
@@ -314,6 +397,10 @@ Task 1~6을 9개 커밋으로 구현했다. 최종: 16파일, 테스트 1,211 �
 처리함(어느 쪽이든 대조 루프가 0회 돈다)이 확인되어 **관측 가능한 차이가 없다** — 테스트를
 새로 만들지 않고 이 사실만 기록한다.
 
+**최종 브랜치 리뷰의 수정 라운드에서 뮤테이션 8건이 추가로 실행됐다**(라운드 1에서 4건, 라운드
+2에서 4건). 기존 22건과 합쳐 총 **30건**이다. 각 뮤테이션이 정확히 어느 가드를 지웠는지는 이
+기록에 남아 있지 않다 — 확인되지 않았다.
+
 ### 남은 후속 작업
 
 리뷰가 유예한 것들이다.
@@ -340,3 +427,22 @@ Task 1~6을 9개 커밋으로 구현했다. 최종: 16파일, 테스트 1,211 �
    경우에는 그 형제를 나열하지 않고 후보 섹션만 나열한다. 모호한 기대마다 오류가 하나씩
    나므로 `SuggestedPromptFix` 전체에는 결국 다 실리지만, 오류 메시지 하나만 보면 무엇과
    충돌했는지 알 수 없다.
+6. `AliasTargetFinder`의 `Visit(TableReferenceWithAlias)` 폴백이 실제로 도는지 확인되지
+   않았다. ScriptDom의 기본 `Visit` 오버로드가 상위 타입으로 체이닝하는지에 따라 결론이
+   갈린다. 체이닝하지 않으면 `UPDATE O SET ... FROM OPENQUERY(SRV,'...') O`처럼
+   `NamedTableReference`·`QueryDerivedTable`·`VariableTableReference` 외의 다른 별칭 보유
+   참조를 쓴 UPDATE가 "평범한 테이블명 O"로 오분류되어 없는 표를 L1이 요구한다 — 원 Critical의
+   잔여 꼬리다. 테스트 한 줄(`Assert.Empty(result.AstUpdateMappings)`)이면 디스패치 방향과
+   무관하게 동작이 고정된다. 해당 클래스 주석(`SqlStaticParser.cs:606`)이 이 폴백의 근거로
+   드는 "인라인 파생 테이블"은 `InlineDerivedTable`이 ScriptDom에서 자기 `Visit` 오버로드를
+   가지므로, 체이닝 여부 어느 가설에서도 정확한 예시가 아니다.
+7. 별칭 탐색(`AliasTargetFinder`, `ResolveAliasWithinFromClause`)이 FROM 절 하위 트리 전체를
+   돈다(선재 결함). `ExplicitVisit`을 오버라이드하지 않고 `Visit`만 오버라이드했으므로 기본
+   순회가 자식 노드까지 계속 내려간다 — 중첩 서브쿼리가 바깥 대상과 같은 이름의 별칭을 쓰면
+   그것을 잡는다. 이번 수정으로 방향은 안전한 쪽(매핑 생략)으로 바뀌었다. 근본 수정은 최상위
+   `TableReference`만 훑는 것이다.
+8. `BuildSpecSectionPrompts`의 `"CrudAnalysis"` 분기에 INSERT fill-in 블록이 없다. UPDATE는
+   이번에 `BuildUpdateMappingTemplateLines` 공유 헬퍼로 정리됐으나(`AiService.cs:622`), INSERT는
+   `BuildSpecificationPrompts`에만 fill-in 표가 있고 `BuildSpecSectionPrompts`에는 없는 같은
+   비대칭이 남아 있다. INSERT에는 UPDATE의 `CheckUpdateMappings`에 대응하는 L1 기계 대조가
+   없어 오늘 실패를 만들지는 않는다.
