@@ -1034,8 +1034,10 @@ A[""시작""] --> B[""끝""]
                 Log.Logger = previousLogger;
             }
 
-            // Assert
-            Assert.Contains(sink.Messages, m => m.Contains("CRUD 분석"));
+            // Assert - 필수 헤더 누락 메시지("필수 섹션 헤더 ... 누락되었습니다")도 "CRUD 분석"을
+            // 포함할 수 있으므로, 새로 추가한 경고에만 있는 고유 문구("완전/부분 일치 모두로
+            // 찾지 못해")를 단언해야 헤더 메시지 형식이 바뀌어도 우연히 통과하지 않는다.
+            Assert.Contains(sink.Messages, m => m.Contains("완전/부분 일치 모두로 찾지 못해"));
         }
     }
 }
