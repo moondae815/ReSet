@@ -853,6 +853,64 @@ END");
         }
 
         [Fact]
+        public void Analyze_UpdateTargetIsQueryDerivedTableAlias_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - 대상 별칭 X가 파생 테이블(서브쿼리)을 가리켜서
+            // AliasTargetFinder가 방문하는 NamedTableReference로는 못 찾는다.
+            var result = AnalyzeUpdate(
+                "    UPDATE X SET RN = 1 " +
+                "FROM (SELECT ROW_NUMBER() OVER (ORDER BY SEQ) AS RN, SEQ FROM dbo.TSample) X;");
+
+            // Assert - 별칭을 풀지 못했으므로 매핑은 만들지 않되, UpdateTables 과다 보고는
+            // 이 브랜치 이전부터의 관용적 동작이므로 그대로 유지되어야 한다.
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Empty(result.AstUpdateMappings);
+            Assert.Contains("X", result.UpdateTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetIsTableVariableAlias_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - 대상 별칭 T가 테이블 변수를 가리켜서
+            // AliasTargetFinder가 방문하는 NamedTableReference로는 못 찾는다.
+            var result = AnalyzeUpdate("    UPDATE T SET AMT = 0 FROM @Buf T;");
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Empty(result.AstUpdateMappings);
+            Assert.Contains("T", result.UpdateTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetIsCteAliasWithoutFromClause_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - WITH C AS (...) UPDATE C SET ... 형태는 UPDATE 문 자체에
+            // FROM 절이 없어(node.FromClause가 null) 별칭 C를 풀 방법이 없다.
+            var result = AnalyzeUpdate(
+                "    WITH C AS (SELECT SEQ, AMT FROM dbo.TSample) " +
+                "UPDATE C SET AMT = 0;");
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Empty(result.AstUpdateMappings);
+            Assert.Contains("C", result.UpdateTables);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetIsTempTable_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - 임시 테이블은 UpdateTables에도 들어가지 않고 명세서 CRUD
+            // 분석 표에도 물리 테이블로 기술되지 않으므로 SET 매핑을 만들면 안 된다.
+            var result = AnalyzeUpdate("    UPDATE #TMP SET AMT = 0;");
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Empty(result.AstUpdateMappings);
+            Assert.Contains("#TMP", result.CreatedTempTables);
+            Assert.DoesNotContain("#TMP", result.UpdateTables);
+        }
+
+        [Fact]
         public void Analyze_WithWriteMutatorSetClause_ShouldExtractColumnFromCallTarget()
         {
             // Arrange & Act - .WRITE()는 AssignmentSetClause가 아니라 FunctionCallSetClause로

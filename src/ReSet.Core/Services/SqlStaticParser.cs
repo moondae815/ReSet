@@ -477,27 +477,50 @@ namespace ReSet.Core.Services
             var written = GetSchemaObjectString(named.SchemaObject);
             if (string.IsNullOrWhiteSpace(written)) return false;
 
-            var resolved = ResolveDmlTargetName(written, fromClause);
-            resolvedName = resolved;
+            var resolved = ResolveDmlTargetName(written, fromClause, out var aliasResolved);
 
+            // UpdateTables/DeleteTables 과다 보고는 이 문장 이전부터의 관용적이고 무해한
+            // 동작이므로 여기서는 건드리지 않는다 - targetList.Add와 반환값 true는 별칭
+            // 해석 성공 여부와 무관하게 종전대로 유지한다. 바뀌는 것은 resolvedName뿐이다.
             if (resolved.StartsWith("#", StringComparison.Ordinal))
             {
+                // 임시 테이블은 UpdateTables/DeleteTables에도 들어가지 않고 명세서 CRUD
+                // 분석 표에도 물리 테이블로 기술되지 않는다. resolvedName을 null로 두어
+                // SET 매핑을 만들지 않는다 - 매핑만 만들어 L1이 요구하게 하면 그 비대칭이
+                // 무한 재시도가 된다.
                 if (_foundTemps.Add(resolved)) CreatedTempTables.Add(resolved);
                 return true;
             }
 
             if (_foundTables.Add(resolved)) ReferencedTables.Add(resolved);
             if (seen.Add(resolved)) targetList.Add(resolved);
+
+            // 별칭을 실제로 풀지 못했으면(한정되지 않은 이름을 FROM 절에서 찾지 못해
+            // 원문 그대로 돌아온 경우) resolvedName을 null로 남긴다 - 호출부는 이것으로
+            // "매핑을 만들지 않는다"를 판단한다. 잘못 푼 테이블 이름에 컬럼을 붙이면 L1이
+            // 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
+            if (aliasResolved) resolvedName = resolved;
             return true;
         }
 
-        private static string ResolveDmlTargetName(string written, FromClause? fromClause)
+        private static string ResolveDmlTargetName(string written, FromClause? fromClause, out bool aliasResolved)
         {
-            // 한정된 이름은 별칭일 수 없다.
-            if (written.Contains('.')) return written;
+            // 한정된 이름은 별칭일 수 없다. 항상 해결된 것으로 본다.
+            if (written.Contains('.'))
+            {
+                aliasResolved = true;
+                return written;
+            }
 
             var fromAlias = ResolveAliasWithinFromClause(fromClause, written);
-            return string.IsNullOrWhiteSpace(fromAlias) ? written : fromAlias!;
+            if (string.IsNullOrWhiteSpace(fromAlias))
+            {
+                aliasResolved = false;
+                return written;
+            }
+
+            aliasResolved = true;
+            return fromAlias!;
         }
 
         private static string? ResolveAliasWithinFromClause(FromClause? fromClause, string alias)
