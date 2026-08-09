@@ -564,12 +564,13 @@ namespace ReSet.Core.Services
 
                 var trimmed = lines[index].TrimStart();
 
-                // "### "(H3)뿐 아니라 "#### "(H4)도 하위 절 경계다. 프롬프트는 조회/갱신
-                // 대상 테이블을 하위 절로 나눠 쓰라고 요구하면서 헤딩 레벨은 고정하지
-                // 않는다 - H4로 쓴 문서에서 flush가 안 되면 서로 다른 절의 같은 테이블이
-                // 한 버킷으로 합쳐져 TableIdentitySplit이 오탐된다(실측).
-                if (trimmed.StartsWith("### ", StringComparison.Ordinal) ||
-                    trimmed.StartsWith("#### ", StringComparison.Ordinal))
+                // "### "(H3) 이상 깊이는 전부 하위 절 경계다. 프롬프트는 조회/갱신
+                // 대상 테이블을 하위 절로 나눠 쓰라고 요구할 뿐 헤딩 레벨은 고정하지
+                // 않는다("### "/"#### "만 열거했을 때 H5에서 실측된 것처럼, 레벨을
+                // 하나씩 나열하는 방식은 항상 한 레벨 뒤처진다). "## "(H2)는 CRUD
+                // 절 자체의 경계이자 LocateCrudSection이 이미 구간을 잡는 기준이므로
+                // 여기서 삼키면 안 된다.
+                if (IsSubsectionHeading(trimmed))
                 {
                     Flush();
                     continue;
@@ -591,6 +592,18 @@ namespace ReSet.Core.Services
             }
 
             Flush();
+        }
+
+        /// <summary>
+        /// 한 줄이 "### " 이상 깊이의 마크다운 헤딩(하위 절 경계)인지 판정한다.
+        /// "## "(H2)는 CRUD 절 자체의 경계이므로 여기서 제외한다.
+        /// </summary>
+        private static bool IsSubsectionHeading(string trimmedLine)
+        {
+            var hashCount = 0;
+            while (hashCount < trimmedLine.Length && trimmedLine[hashCount] == '#') hashCount++;
+            if (hashCount < 3) return false;
+            return hashCount < trimmedLine.Length && trimmedLine[hashCount] == ' ';
         }
 
         /// <summary>

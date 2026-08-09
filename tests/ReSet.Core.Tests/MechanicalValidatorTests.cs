@@ -1568,6 +1568,30 @@ A[""시작""] --> B[""끝""]
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
 
+        // [Minor] H5(#####) 이상 하위 절 경계에서도 flush하지 않는다. "### "와 "#### "
+        // 두 레벨만 열거한 것이 원인이다. 프롬프트(AiService.cs)는 하위 절 분리를
+        // 요구하면서 헤딩 레벨은 고정하지 않으므로 H5도 산출될 수 있다.
+
+        [Fact]
+        public void Validate_WhenSpellingsAreInDifferentH5Subsections_ShouldPass()
+        {
+            // Arrange - 실측된 오탐: "##### 조회 대상 테이블"과 "##### 갱신 대상 테이블"로
+            // 쓰면(H5) 절 경계에서 flush되지 않아 같은 테이블의 두 표기가 한 절로
+            // 뭉쳐 TableIdentitySplit이 잘못 발생했다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "##### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n|---|---|\n| `DB.dbo.TSettleMst` | `PLTID` |\n\n" +
+                "##### 갱신 대상 테이블\n\n" +
+                "| 테이블명 | 갱신 컬럼 |\n|---|---|\n| `dbo.TSettleMst` | `PLTID` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
+
         // [Minor] 코드 펜스 안의 문장도 검사 대상이었다. LocateCrudSection은
         // MarkdownSectionLocator.FindIndexOutsideFence로 펜스를 추적하는데, 이 두 검사의
         // 줄 순회는 추적하지 않아 한 파일 안에서 판정 기준이 갈렸다.
