@@ -47,98 +47,14 @@ namespace ReSet.Core.Services
             sb.AppendLine("| 컬럼명 | 데이터 타입 | Null 허용 | Identity | 기본값 | 제약 조건 | 설명 |");
             sb.AppendLine("| :--- | :--- | :---: | :---: | :--- | :--- | :--- |");
             
-            // 엄격한 필터링 대상 컬럼 식별
-            var keepCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // 1) AST에서 감지한 실제 참조 컬럼 추가
-            //
-            // canonical 3-part로 정확 비교한다. 예전에는 dep.Name을 substring으로 찾고
-            // 첫 매치에서 멈췄다. 그러면 INSERT 대상 컬럼만 담긴 키를 놓쳐 CYMD·INSTATE·
-            // OUTSTATE·NonSettleAmt가 스키마 표에서 사라지고, AI가 "존재하지 않는 컬럼"
-            // 이라고 적었다. 또 "TSettleMst"가 "TSettleMstBackup"에도 매칭됐다.
-            //
-            // break를 두지 않는 것은 폴백 대비다. 정규화가 DB 컨텍스트를 못 얻으면
-            // 키가 갈라진 채 남는데, 그때도 컬럼이 유실되면 안 된다.
-            //
-            // 엄격 3-part 비교가 성립하려면 "키" 쪽이 한정 가능해야 한다. 비교 양변의
-            // 한정 가능한 출처가 다르다:
-            //  - 의존성 쪽: dep.Database가 있으면 그것으로, 없으면 spDef.ObjectKey로 한정된다.
-            //  - 키 쪽: ReferencedColumnsPerTable의 원시 키는 SP DDL에 적힌 그대로다.
-            //    비한정 키(예: "TSettleMst")의 암묵적 DB는 "분석 대상 객체 자신의 DB"
-            //    (spDef.ObjectKey.Database)이지, 하필 지금 비교 중인 의존성의 DB가
-            //    아니다. dep.Database로 키를 한정하면 존재하지 않는 테이블을 지어내는
-            //    것과 같다(이 브랜치가 막으려는 "이름 날조"). 그래서 키 쪽 한정 가능
-            //    여부는 오직 spDef.ObjectKey?.Database 하나로만 결정되고, dep.Database는
-            //    이 판단에 기여하지 않는다.
-            //
-            // spDef.ObjectKey?.Database가 없으면 canonical 한정 자체가 불가능해서 3-part
-            // 정확 비교가 항상 어긋난다. 이 필터는 토큰 절약용 최적화일 뿐 정확성
-            // 장치가 아니다 - 과다 포함(다른 테이블 컬럼이 섞임)은 표에 불필요한 행을
-            // 몇 개 더할 뿐이지만, 과소 포함은 모델이 그 컬럼을 "존재하지 않는다"고
-            // 잘못 기록한다(14개 명세서를 망가뜨린 바로 그 결함). 그래서 컨텍스트가
-            // 없을 때만 베이스 이름(마지막 세그먼트) 비교로 과다 포함 쪽으로 기운다.
-            // 단, 이 폴백은 완전히 무해하지 않다 - 베이스 이름만 보므로 스키마가 다른
-            // 진짜 다른 테이블의 컬럼이 섞여 들어올 수 있다(같은 객체의 여분 행이
-            // 아니라, 대상 테이블에 없는 컬럼이 있는 것처럼 보일 위험). 그래도 거짓
-            // "컬럼 없음"보다는 낫다고 판단해 이 방향을 택한다.
-            //
-            // 컨텍스트가 있는 정상 경로는 3-part 정확 비교를 유지해야 한다 -
-            // dbo.TPGProperty와 PaymentDB.dbo.TPGProperty를 베이스 이름만으로 합치면
-            // 서로 다른 물리 테이블의 컬럼이 섞인다.
-            if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.ReferencedColumnsPerTable != null)
-            {
-                var depCanonicalName = StaticAnalysisNormalizer.CanonicalizeParts(
-                    dep.Database,
-                    dep.Schema,
-                    dep.Name,
-                    spDef.ObjectKey?.Database,
-                    spDef.Schema);
-
-                bool hasDbContext = !string.IsNullOrWhiteSpace(spDef.ObjectKey?.Database);
-                var depBaseName = hasDbContext ? null : ExtractBaseName(dep.Name);
-
-                foreach (var kvp in spDef.StaticAnalysis.ReferencedColumnsPerTable)
-                {
-                    var keyCanonicalName = StaticAnalysisNormalizer.Canonicalize(
-                        kvp.Key,
-                        spDef.ObjectKey?.Database,
-                        spDef.Schema);
-
-                    var matches = hasDbContext
-                        ? string.Equals(keyCanonicalName, depCanonicalName, StringComparison.OrdinalIgnoreCase)
-                        : string.Equals(ExtractBaseName(keyCanonicalName), depBaseName, StringComparison.OrdinalIgnoreCase);
-
-                    if (!matches)
-                    {
-                        continue;
-                    }
-
-                    foreach (var c in kvp.Value) keepCols.Add(c);
-                }
-            }
-            
-            // 2) PK / FK 컬럼 추가
-            foreach (var col in dep.Columns)
-            {
-                if (col.IsPrimaryKey || col.IsForeignKey)
-                {
-                    keepCols.Add(col.ColumnName);
-                }
-            }
-
-            // 3) 인덱스 구성 컬럼 추가
-            if (dep.Indexes != null)
-            {
-                foreach (var idx in dep.Indexes)
-                {
-                    foreach (var c in idx.Columns) keepCols.Add(c);
-                }
-            }
+            // 프롬프트에 어떤 컬럼이 실리는지는 SchemaPromptColumnSelector가 단독으로
+            // 결정한다. L1(SpecExpectations)이 같은 함수를 불러 대조 기준을 만들므로,
+            // 여기서 판정을 복제하면 두 권위가 가장자리에서 어긋난다.
+            var shownColumns = SchemaPromptColumnSelector.Select(dep, spDef);
 
             foreach (var col in dep.Columns)
             {
-                // 필터링 적용 (keepCols가 비어있는 경우는 정적 분석 정보가 없는 것으로 보고 폴백으로 모든 컬럼 출력)
-                if (keepCols.Count > 0 && !keepCols.Contains(col.ColumnName))
+                if (!shownColumns.Contains(col.ColumnName))
                 {
                     continue;
                 }
@@ -172,19 +88,6 @@ namespace ReSet.Core.Services
             }
             
             return sb.ToString();
-        }
-
-        /// <summary>
-        /// canonical 이름(또는 원시 이름)에서 마지막 세그먼트만 뽑는다.
-        /// DB 컨텍스트가 없어 3-part로 한정할 수 없을 때 폴백 비교 키로 쓴다.
-        /// </summary>
-        private static string ExtractBaseName(string? qualifiedOrRawName)
-        {
-            if (string.IsNullOrWhiteSpace(qualifiedOrRawName)) return string.Empty;
-
-            var trimmed = qualifiedOrRawName.Trim().Trim('[', ']');
-            var lastDot = trimmed.LastIndexOf('.');
-            return lastDot >= 0 ? trimmed[(lastDot + 1)..].Trim('[', ']') : trimmed;
         }
 
         private static string BuildDependencyQualifiedName(DependencyInfo dep, SpDefinition spDef) =>
