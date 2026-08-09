@@ -228,6 +228,73 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunPipelineAsync_WithInputDefects_AddsThemToSpDefWarningsAndNotifies()
+        {
+            // Arrange - A 위반(프롬프트가 진실을 담지 못함)이 실제로 spDef.Warnings에
+            // 적재되고 NotifyWarnings까지 전달되는지 오케스트레이터 전체 경로로 증명한다.
+            // 기존 InputDefects_ShouldNotBecomeValidationErrors(SpecExpectationsTests.cs)는
+            // "오류가 되지 않음"만 증명했다 - VerificationPipelineOrchestrator.cs:229-238의
+            // 경고 적재 블록을 통째로 지워도 그 테스트는 계속 초록이다. 여기서는 적재
+            // 블록이 실제로 spDef.Warnings를 채우고 그것이 NotifyWarnings로 전달되는
+            // 하중을 진다는 것을 오케스트레이터를 직접 돌려 검증한다.
+            //
+            // InputDefects는 SpecExpectationsTests.From_ShouldCarryInputDefects와 같은
+            // 구성으로 만든다: StaticAnalysis.ReferencedColumnsPerTable의 키가 어떤
+            // 의존성과도 병합되지 않고(DB가 다름), 이름이 같은(베이스 네임) 다른
+            // 의존성이 있어야 SchemaPromptColumnSelector.DetectOrphanedColumnKeys가
+            // 결함을 만든다.
+            var dep = new DependencyInfo
+            {
+                Name = "TSettleMst", Schema = "dbo", Database = "SETTLE_POQ_DB", Type = "USER_TABLE"
+            };
+            dep.Columns.Add(new ColumnInfo { ColumnName = "CLINTCOMM", DataType = "int" });
+
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "USP_Test",
+                DdlText = "CREATE PROCEDURE USP_Test AS SELECT 1",
+                // ObjectKey.Database가 있어야 KeyMatchesDependency가 DB 컨텍스트로 정확히
+                // 대조한다(SchemaPromptColumnSelector.KeyMatchesDependency 문서 참고).
+                // 비어 있으면 베이스 이름만으로 비교해 "OtherDb...TSettleMst"가 dep의
+                // "TSettleMst"와 우연히 일치해 결함이 생기지 않는다.
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "USP_Test", CodeObjectType.Procedure),
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ReferencedColumnsPerTable = new Dictionary<string, List<string>>(
+                        StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["OtherDb.dbo.TSettleMst"] = new List<string> { "CLINTCOMM" }
+                    }
+                }
+            };
+            spDef.Dependencies.Add(dep);
+
+            _dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Test", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            var specMarkdown = "## 개요\n## 파라미터 목록\n## CRUD 분석\n## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            _aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            _aiService.ReviewSpecificationAsync(spDef, specMarkdown)
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var (resultSpec, resultDef, _, _, _) = await _orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_Test", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Contains(spDef.Warnings, w => w.Contains("[스키마 프롬프트]"));
+            _userInteraction.Received(1).NotifyWarnings(
+                "dbo.USP_Test",
+                Arg.Is<List<string>>(list => list.Any(w => w.Contains("[스키마 프롬프트]"))));
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_L1ValidationError_AttemptsSelfCorrection()
         {
             // Arrange
