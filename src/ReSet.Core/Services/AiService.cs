@@ -448,7 +448,7 @@ namespace ReSet.Core.Services
             var updateMappings = spDef.StaticAnalysis?.AstUpdateMappings;
             if (updateMappings != null && updateMappings.Count > 0)
             {
-                rules.Add($"{ruleIndex++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:");
+                rules.Add($"{ruleIndex++}. {UpdateMappingTemplateIntroText}");
                 rules.AddRange(BuildUpdateMappingTemplateLines(updateMappings));
             }
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
@@ -609,6 +609,14 @@ Based on the structured reference context above, reverse engineer the stored pro
                 .Replace("\r", " ")
                 .Replace("|", "\\|");
         }
+
+        /// <summary>
+        /// UPDATE fill-in-the-blank 템플릿을 도입하는 규칙 문장. 번호 접두(`{ruleIndex}. `)만
+        /// 호출부가 붙이고 문장 본문은 여기 한 곳에서만 관리한다 - 두 프롬프트 빌더에
+        /// 복제되면 문구를 강화할 때 한쪽만 고쳐질 위험이 생긴다.
+        /// </summary>
+        private const string UpdateMappingTemplateIntroText =
+            "[CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:";
 
         /// <summary>
         /// UPDATE 대상 테이블의 fill-in-the-blank 마크다운 템플릿 본문을 만든다.
@@ -1665,7 +1673,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 var updateMappingsForCrud = spDef.StaticAnalysis?.AstUpdateMappings;
                 if (updateMappingsForCrud != null && updateMappingsForCrud.Count > 0)
                 {
-                    sbRules.Add($"{rIdx++}. [CRITICAL CRUD TEMPLATE (Fill-in-the-blanks)] For the UPDATE tables in the `## CRUD 분석` section, you MUST use the following pre-filled markdown table template exactly as provided. The `컬럼명` and `원천 표현식 (SET)` cells are already filled from the AST: do NOT alter, reorder, merge, or skip any row, and do NOT use '...'. Your ONLY job is to fill in the `설명` column for each row:");
+                    sbRules.Add($"{rIdx++}. {UpdateMappingTemplateIntroText}");
                     sbRules.AddRange(BuildUpdateMappingTemplateLines(updateMappingsForCrud));
                 }
 
