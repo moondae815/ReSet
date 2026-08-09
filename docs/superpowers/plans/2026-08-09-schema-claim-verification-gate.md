@@ -14,6 +14,7 @@
 - L1 오류(`ValidationResult.Errors`)에 들어가는 것은 **전부 재생성으로 고칠 수 있어야 한다.** 재생성이 고칠 수 없는 것은 `Errors`가 아니라 `spDef.Warnings`로 간다. 이 불변식을 깨면 무한 재시도가 생긴다.
 - 새 검사는 `MechanicalValidator.Validate`의 기존 soft-fail `try` 블록 **안**에 둔다. 검증기 자체 오류가 툴을 중단시키면 안 된다.
 - 테스트는 `output/` 아래 경로를 읽지 않는다. `.gitignore` 대상이라 CI에 없다. 픽스처는 `tests/ReSet.Core.Tests/Fixtures/`에 커밋한다.
+- `CodeObjectKey`는 **위치 레코드**다: `CodeObjectKey(string Database, string Schema, string Name, CodeObjectType Type)`. 매개변수 없는 생성자가 없으므로 객체 초기자 구문(`new CodeObjectKey { ... }`)은 컴파일되지 않는다. 네 인자를 모두 넘겨라.
 - 각 태스크 끝에서 `dotnet build`와 `dotnet test`가 모두 초록이어야 커밋한다.
 - 모든 가드는 뮤테이션으로 하중을 확인한다. 가드를 지웠는데 아무 테스트도 깨지지 않으면 그 테스트를 고친다.
 
@@ -90,7 +91,7 @@ namespace ReSet.Core.Tests
             {
                 Schema = "dbo",
                 Name = "UP_PROBE",
-                ObjectKey = database == null ? null : new CodeObjectKey { Database = database, Schema = "dbo", Name = "UP_PROBE" },
+                ObjectKey = database == null ? null : new CodeObjectKey(database, "dbo", "UP_PROBE", CodeObjectType.Procedure),
                 StaticAnalysis = new SpStaticAnalysisResult
                 {
                     IsParsedSuccessfully = true,
@@ -606,7 +607,7 @@ namespace ReSet.Core.Tests
             {
                 Schema = "dbo",
                 Name = "UP_PROBE",
-                ObjectKey = new CodeObjectKey { Database = "SETTLE_POQ_DB", Schema = "dbo", Name = "UP_PROBE" },
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_PROBE", CodeObjectType.Procedure),
                 StaticAnalysis = new SpStaticAnalysisResult
                 {
                     IsParsedSuccessfully = true,
@@ -925,12 +926,9 @@ git commit -m "feat: carry prompt schema columns and input defects in SpecExpect
             {
                 Schema = "dbo",
                 Name = "UP_PROBE",
-                ObjectKey = new CodeObjectKey
-                {
-                    Database = canonicalTable.Split('.').Length >= 3 ? canonicalTable.Split('.')[0] : "DB",
-                    Schema = "dbo",
-                    Name = "UP_PROBE"
-                }
+                ObjectKey = new CodeObjectKey(
+                    canonicalTable.Split('.').Length >= 3 ? canonicalTable.Split('.')[0] : "DB",
+                    "dbo", "UP_PROBE", CodeObjectType.Procedure)
             };
             sp.Dependencies.Add(dep);
             return SpecExpectations.From(sp)!;
@@ -1035,7 +1033,7 @@ git commit -m "feat: carry prompt schema columns and input defects in SpecExpect
             {
                 Schema = "dbo",
                 Name = "UP_PROBE",
-                ObjectKey = new CodeObjectKey { Database = "DB1", Schema = "dbo", Name = "UP_PROBE" }
+                ObjectKey = new CodeObjectKey("DB1", "dbo", "UP_PROBE", CodeObjectType.Procedure)
             };
             foreach (var db in new[] { "DB1", "DB2" })
             {
@@ -1332,7 +1330,7 @@ git commit -m "feat: fail L1 when the spec denies a column the prompt provided"
             {
                 Schema = "dbo",
                 Name = "UP_PROBE",
-                ObjectKey = new CodeObjectKey { Database = "DB1", Schema = "dbo", Name = "UP_PROBE" }
+                ObjectKey = new CodeObjectKey("DB1", "dbo", "UP_PROBE", CodeObjectType.Procedure)
             };
             foreach (var db in new[] { "DB1", "DB2" })
             {
@@ -1631,10 +1629,8 @@ namespace ReSet.Core.Tests
             {
                 Schema = "dbo",
                 Name = "UP_UTIL_SETTLE_COMM_UPD",
-                ObjectKey = new CodeObjectKey
-                {
-                    Database = "SETTLE_POQ_DB", Schema = "dbo", Name = "UP_UTIL_SETTLE_COMM_UPD"
-                }
+                ObjectKey = new CodeObjectKey(
+                    "SETTLE_POQ_DB", "dbo", "UP_UTIL_SETTLE_COMM_UPD", CodeObjectType.Procedure)
             };
             sp.Dependencies.Add(dep);
             return SpecExpectations.From(sp)!;
