@@ -93,13 +93,6 @@ namespace ReSet.Core.Services
                 if (string.IsNullOrWhiteSpace(key)) continue;
                 if (kvp.Value == null || kvp.Value.Count == 0) continue;
 
-                var trimmed = key.TrimStart();
-                if (trimmed.StartsWith("#", StringComparison.Ordinal)
-                 || trimmed.StartsWith("@", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
                 if (spDef.Dependencies.Any(dep => KeyMatchesDependency(key, dep, spDef)))
                 {
                     continue; // 어딘가에 병합됐다.

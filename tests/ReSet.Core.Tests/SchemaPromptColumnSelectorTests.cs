@@ -199,7 +199,12 @@ namespace ReSet.Core.Tests
         [Fact]
         public void DetectOrphanedColumnKeys_ForTempTable_ShouldReportNothing()
         {
-            // Arrange - 임시 테이블은 애초에 의존성이 아니다. 정당하게 매칭되지 않는다.
+            // Arrange - 별도 가드 없이 자동으로 제외된다. "#TMP"의 baseName은 "#TMP" 그대로다
+            // (ExtractBaseName은 마지막 "." 뒤만 잘라내고 접두 기호는 보존하며,
+            // StaticAnalysisNormalizer.Canonicalize도 "#"/"@"로 시작하는 이름은 원문 그대로
+            // 돌려준다). 반면 실제 DependencyInfo.Name은 DB 메타데이터에서 온 것이라 결코
+            // "#"로 시작하지 않는다. 그래서 lookalikes 매칭에서 baseName이 같은 의존성이
+            // 하나도 없어 자연히 빈 목록이 되고, 보고 대상에서 빠진다.
             var dep = Dep("TSettleMst", "SETTLE_POQ_DB", ("CYMD", false));
             var sp = Sp("PaymentDB", new Dictionary<string, List<string>>
             {
