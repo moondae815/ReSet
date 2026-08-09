@@ -104,5 +104,41 @@ namespace ReSet.Core.Tests
             // Assert - 매칭이 없으므로 폴백이 걸려 전체가 나온다. 섞이지는 않는다.
             Assert.Equal(2, shown.Count);
         }
+
+        [Fact]
+        public void Select_WhenDepDatabaseIsNullButObjectKeyHasDatabase_ShouldUseObjectKeyDatabaseForContext()
+        {
+            // Arrange - hasDbContext의 계산 출처가 실제로 갈라지는 유일한 조합: dep.Database는
+            // null(같은 DB 소속이라 비어 있는 정상적인 경우)이고 spDef.ObjectKey.Database는
+            // 있다. 이 둘이 항상 동시에 null이거나 동시에 값이 있으면 어느 쪽을 기준으로
+            // 삼든 hasDbContext 값이 같아서 이 가드는 아무 하중도 지지 않는다.
+            //
+            // spDef.ObjectKey.Database("SETTLE_POQ_DB")를 기준으로 삼으면(올바른 구현)
+            // hasDbContext=true가 되어 정식 3-part 비교가 성립한다. 키 "OtherDB.dbo.TSettleMst"는
+            // 이미 3-part로 완전히 한정돼 있어 그대로 유지되고, dep의 canonical 이름은
+            // fallback DB인 SETTLE_POQ_DB로 한정되어 "SETTLE_POQ_DB.dbo.TSettleMst"가 된다.
+            // 두 이름이 다르므로(OtherDB != SETTLE_POQ_DB) 매칭 실패 -> 이 키의 컬럼은
+            // 병합되지 않는다.
+            //
+            // 만약 dep.Database(null)를 기준으로 삼으면(회귀) hasDbContext=false가 되어
+            // 베이스 이름("TSettleMst" vs "TSettleMst") 비교로 내려가 버젓이 매칭에
+            // 성공한다 - OtherDB에 있는 실제로 다른 물리 테이블의 컬럼을 SETTLE_POQ_DB의
+            // TSettleMst로 지어내는 것과 같다. 이 오매칭이 keepCols를 채워 필터를
+            // 발동시키므로, 정당하게 남아 있어야 할 ETC가 프롬프트에서 사라진다.
+            var dep = Dep("TSettleMst", null, ("AMT", false), ("ETC", false));
+            var sp = Sp("SETTLE_POQ_DB", new Dictionary<string, List<string>>
+            {
+                ["OtherDB.dbo.TSettleMst"] = new List<string> { "AMT" }
+            });
+
+            // Act
+            var shown = SchemaPromptColumnSelector.Select(dep, sp);
+
+            // Assert - 정식 비교가 어긋나 매칭이 실패해야 하므로 keepCols가 비고
+            // 폴백이 걸려 두 컬럼이 모두 나와야 한다. ETC가 사라지면 hasDbContext가
+            // dep.Database 기준으로 잘못 계산되고 있다는 뜻이다.
+            Assert.Equal(2, shown.Count);
+            Assert.Contains("ETC", shown);
+        }
     }
 }
