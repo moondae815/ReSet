@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Serilog;
 using Serilog.Core;
@@ -155,6 +157,24 @@ namespace ReSet.Core.Tests
             Assert.Equal(broken, PlanStructureEnricher.Enrich(broken, Codes()));
         }
 
+        /// <summary>
+        /// Steps 배열 원소가 객체가 아니면 선택기가 부르는 TryParseBlock 안에서
+        /// InvalidOperationException이 난다. 클래스 docstring의 계약("실패는 예외가
+        /// 아니라 원본 반환이다")대로 Enrich는 이 입력에서도 원본을 그대로 돌려줘야
+        /// 한다 - 예외가 호출부(재수립 헬퍼 포함)까지 뚫고 나가면 안 된다.
+        /// </summary>
+        [Theory]
+        [InlineData("\"S01\"")]
+        [InlineData("null")]
+        public void Enrich_ShouldReturnInputUnchangedWhenAStepElementIsNotAnObject(string element)
+        {
+            var markdown = "# 목차\n\n```json\n{ \"Steps\": [ " + element + " ] }\n```\n";
+
+            var enriched = PlanStructureEnricher.Enrich(markdown, Codes());
+
+            Assert.Equal(markdown, enriched);
+        }
+
         [Fact]
         public void Enrich_ShouldEnrichTheSameBlockTheParserReads()
         {
@@ -298,6 +318,124 @@ namespace ReSet.Core.Tests
         {
             public List<string> Messages { get; } = new();
             public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
+        }
+
+        /// <summary>
+        /// 파서가 버리는 블록이 앞에 있으면 보강도 그 블록을 건너뛰고 파서와 같은 블록을
+        /// 골라야 한다. 종전에는 보강기가 자기 기준으로 첫 블록을 받아들여, 파일에 기록된
+        /// 목차와 파이프라인이 쓰는 목차가 갈렸다.
+        /// </summary>
+        [Fact]
+        public void Enrich_FirstBlockRejectedByParser_ShouldEnrichTheBlockTheParserReads()
+        {
+            var markdown = """
+# 목차
+
+```json
+{ "Steps": [ { "Name": "Code가 없어 파서가 버리는 항목", "LegacyProcedures": ["UP_A"], "ErrorCodes": [] } ] }
+```
+
+```json
+{ "Steps": [ { "Code": "S01", "Name": "성한 항목", "LegacyProcedures": ["UP_A"], "ErrorCodes": [] } ] }
+```
+""";
+
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["up_a"] = new[] { "-101", "-102" }
+            };
+
+            var enriched = PlanStructureEnricher.Enrich(markdown, codes);
+
+            // 파서가 읽는 블록(둘째)에만 코드가 들어가야 한다.
+            var located = BatchStepPlanParser.TryLocateStepsBlock(enriched);
+            Assert.NotNull(located);
+            Assert.Equal(new[] { "-101", "-102" }, located!.Value.Steps[0].ErrorCodes);
+
+            // 첫 블록은 손대지 않는다.
+            Assert.Contains("Code가 없어 파서가 버리는 항목", enriched);
+            var firstBlockEnd = enriched.IndexOf("```", enriched.IndexOf("Code가 없어", StringComparison.Ordinal), StringComparison.Ordinal);
+            Assert.DoesNotContain("-101", enriched[..firstBlockEnd]);
+        }
+
+        /// <summary>
+        /// 중복 프로퍼티 이름이 있는 블록은 JsonNode가 던져 보강할 수 없다. 그때 뒤 블록으로
+        /// 넘어가면 파서가 읽는 블록(앞의 것)과 갈린다. 보강을 포기하는 편이 옳다 -
+        /// 보강되지 않은 단계는 하한 검사가 "검증 불가"로 보고한다.
+        /// </summary>
+        [Fact]
+        public void Enrich_DuplicateKeysInTheParsedBlock_ShouldNotFallThroughToAnotherBlock()
+        {
+            var markdown = """
+# 목차
+
+```json
+{ "Steps": [ { "Code": "S01", "Name": "중복 키", "LegacyProcedures": ["UP_A"], "LegacyProcedures": ["UP_A"], "ErrorCodes": [] } ] }
+```
+
+```json
+{ "Steps": [ { "Code": "S99", "Name": "뒤 블록", "LegacyProcedures": ["UP_A"], "ErrorCodes": [] } ] }
+```
+""";
+
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["up_a"] = new[] { "-101" }
+            };
+
+            var enriched = PlanStructureEnricher.Enrich(markdown, codes);
+
+            // 아무것도 보강되지 않는다. 특히 뒤 블록이 조용히 보강되면 안 된다.
+            Assert.Equal(markdown, enriched);
+        }
+
+        /// <summary>
+        /// 블록이 하나뿐인 정상 목차에서는 종전과 같은 결과여야 한다.
+        ///
+        /// "재포맷만으로도 통과한다"는 함정을 피하려면 seed한 코드가 실제로 산출물에
+        /// 도착했는지까지 확인해야 한다 - Structure의 S01은 LegacyProcedures로
+        /// "UP_Util_PG_Client_CMRate_Ins"를 선언하므로 그 bare name과 일치하는
+        /// 코드를 seed한다.
+        /// </summary>
+        [Fact]
+        public void Enrich_SingleValidBlock_ShouldStillEnrichInPlace()
+        {
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["up_util_pg_client_cmrate_ins"] = new[] { "-201" }
+            };
+
+            var enriched = PlanStructureEnricher.Enrich(Structure, codes);
+
+            Assert.Contains("산문은 그대로 보존되어야 한다.", enriched);
+            Assert.NotEqual(Structure, enriched);
+            Assert.Contains("-201", Step(enriched, "S01").ErrorCodes);
+        }
+
+        /// <summary>
+        /// 블록 추출 정규식은 소스 트리에 정확히 한 번만 존재해야 한다. 두 벌이 되는 순간
+        /// 한쪽만 고쳐지고, 그 갈림은 어디에도 드러나지 않는다.
+        ///
+        /// 찾는 것은 정규식 패턴 문자열이지 ```json 이라는 낱말이 아니다 - AiService는
+        /// 프롬프트 본문에서 그 낱말을 여러 번 쓰고 그것들은 이 검사의 대상이 아니다.
+        /// </summary>
+        [Fact]
+        public void JsonBlockRegexLiteral_ShouldExistExactlyOnceInSourceTree()
+        {
+            const string literal = @"```json\s*\r?\n(?<body>.*?)```";
+            var srcRoot = Path.Combine(RepoPaths.FindRepoRoot(), "src");
+
+            var separator = Path.DirectorySeparatorChar;
+            var hits = Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories)
+                .Where(path =>
+                    !path.Contains($"{separator}bin{separator}", StringComparison.Ordinal) &&
+                    !path.Contains($"{separator}obj{separator}", StringComparison.Ordinal))
+                .Where(path => File.ReadAllText(path).Contains(literal, StringComparison.Ordinal))
+                .Select(path => Path.GetRelativePath(srcRoot, path).Replace(separator, '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(new[] { "ReSet.Core/Services/BatchStepPlan.cs" }, hits);
         }
     }
 }

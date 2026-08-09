@@ -66,6 +66,11 @@ namespace ReSet.Validator.Core.Services
             // Finding 3: 연속 무산출물 재시도 카운터. 산출물이 한 번이라도 나오면 리셋된다.
             int consecutiveNoArtifactRetries = 0;
 
+            // 검증 대조 쌍을 하나도 찾지 못한 시도의 연속 횟수. 회차 경로의
+            // RunStageAsync가 쓰는 consecutiveUnverified/MaxConsecutiveUnverifiedRetries
+            // 캡과 같은 성격이다. 산출물은 나왔으므로 위 무산출물 카운터로는 잡히지 않는다.
+            int consecutiveUnverified = 0;
+
             // Finding 4: 산출물을 한 번도 만들지 못한 채 maxAttempts를 소진했을 때 마지막
             // 실행 결과로 이유를 설명하기 위해 보관한다. 지금까지 산출물이 한 번이라도
             // 있었다면(검증까지 갔다면) 이 경로를 타지 않는다.
@@ -136,30 +141,36 @@ namespace ReSet.Validator.Core.Services
                     break;
                 }
 
+                // 대조가 한 번이라도 성립하면 리셋한다. 캡은 "계속 못 찾는 상태"를 접기
+                // 위한 것이지 누적 횟수를 벌하기 위한 것이 아니다.
+                consecutiveUnverified = nothingVerified ? consecutiveUnverified + 1 : 0;
+
                 if (nothingVerified)
                 {
-                    // 에이전트에게 붙일 L1/L2 피드백이 없다(대조 자체를 못 했다).
-                    // 조용히 재시도하면 무엇이 잘못됐는지 어디에도 남지 않는다.
                     Log.Error(
-                        "[SelfHealing] 검증 대상을 하나도 찾지 못했습니다(통과 아님) - 설계서 디렉터리: {SpecDir}, 소스 디렉터리: {CodeDir}",
-                        specDir, codeDir);
+                        "[SelfHealing] 검증 대상을 하나도 찾지 못했습니다(통과 아님) - 설계서 디렉터리: {SpecDir}, 소스 디렉터리: {CodeDir}, 연속 미대조: {Consecutive}/{Cap}",
+                        specDir, codeDir, consecutiveUnverified, MaxConsecutiveUnverifiedRetries);
                 }
 
                 // 4. 실패 시 피드백을 지시서에 Append.
-                // 대조 자체를 못 한 경우(failedResults가 비어 있는데 통과도 아닌 경우)는
-                // 붙일 L1/L2 결과가 없다 - 머리글만 남는 빈 피드백을 쓰지 않는다.
+                // 대조 자체를 못 한 경우에는 붙일 L1/L2 결과가 없다. 그래도 빈손으로
+                // 재시도하지는 않는다 - 무엇을 못 찾았는지 알려 주는 별도 피드백이 있다.
                 if (attempt < maxAttempts)
                 {
-                    if (failedResults.Count > 0)
+                    var feedback = failedResults.Count > 0
+                        ? BuildCriticFeedback($"## 🚨 [AI L1/L2 Critic Feedback - Attempt {attempt}] 🚨", failedResults)
+                        : nothingVerified
+                            ? CodegenLoopPolicy.BuildUnverifiedFeedback(specDir, codeDir, attempt)
+                            : null;
+
+                    if (feedback != null)
                     {
                         Log.Information("[SelfHealing] 검증 실패. 피드백을 지시서에 추가하고 에이전트를 재기동합니다.");
 
                         if (File.Exists(instructionsFilePath))
                         {
                             await _metadataExporter.AppendFeedbackToInstructionsAsync(
-                                instructionsFilePath,
-                                BuildCriticFeedback($"## 🚨 [AI L1/L2 Critic Feedback - Attempt {attempt}] 🚨", failedResults),
-                                cancellationToken);
+                                instructionsFilePath, feedback, cancellationToken);
                         }
                         else
                         {
@@ -170,6 +181,25 @@ namespace ReSet.Validator.Core.Services
                 else
                 {
                     Log.Warning("[SelfHealing] 최대 재시도 횟수({MaxAttempts}) 도달. 자가 수정을 포기합니다.", maxAttempts);
+                }
+
+                // 피드백을 먼저 붙이고 접는다. 마지막 시도에서 끊더라도 지시서에는 이유가
+                // 남아 사람이 열어 볼 수 있다. 회차 경로의 RunStageAsync가 같은 순서다 -
+                // AppendFeedbackToInstructionsAsync 호출 다음에 MaxConsecutiveUnverifiedRetries
+                // 캡을 검사한다.
+                if (consecutiveUnverified >= MaxConsecutiveUnverifiedRetries)
+                {
+                    // BuildAbortResult를 쓰지 않는다. 그 헬퍼는 CliFailureClassifier로 사유를
+                    // 만들어(:806) 설치 여부와 CodegenSettings:Engines:<name>:Command를
+                    // 확인하라고 말한다. 여기서는 기동이 성공하고 산출물까지 나왔으므로
+                    // 그 안내는 사람을 엉뚱한 곳으로 보낸다.
+                    var reason =
+                        $"[SelfHealing] 검증 대조 쌍을 찾지 못한 시도가 {MaxConsecutiveUnverifiedRetries}회 연속 발생했습니다. " +
+                        $"설계서 디렉터리와 소스 디렉터리에서 짝을 찾지 못했습니다 - 설계서: {specDir}, 소스: {codeDir}. " +
+                        "피드백을 붙여도 대조가 성립하지 않으므로 루프를 중단합니다.";
+
+                    Log.Error("{Reason}", reason);
+                    return new CodegenWorkflowResult(false, reason);
                 }
 
                 attempt++;

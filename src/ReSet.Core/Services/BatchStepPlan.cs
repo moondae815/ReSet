@@ -47,7 +47,29 @@ namespace ReSet.Core.Services
             @"```json\s*\r?\n(?<body>.*?)```",
             RegexOptions.Singleline | RegexOptions.Compiled);
 
-        public static IReadOnlyList<BatchStepPlan>? TryParse(string? planStructureMarkdown)
+        /// <summary>
+        /// 목차에서 유효한 단계 목록 블록의 위치와 파싱 결과.
+        /// </summary>
+        /// <param name="BodyIndex">원본 마크다운에서 ```json 본문이 시작하는 문자 인덱스.</param>
+        /// <param name="BodyLength">본문의 길이. 이 구간만 갈아 끼우면 펜스는 보존된다.</param>
+        /// <param name="Body">본문 원문.</param>
+        /// <param name="Steps">그 본문을 파싱한 결과. 비어 있지 않다.</param>
+        public readonly record struct StepsBlockLocation(
+            int BodyIndex,
+            int BodyLength,
+            string Body,
+            IReadOnlyList<BatchStepPlan> Steps);
+
+        /// <summary>
+        /// 파서와 보강기가 <b>같은</b> 블록을 고르게 하는 단일 진입점.
+        ///
+        /// 두 곳이 각자 블록을 고르면 PlanStructure.md에 기록된 목차와 파이프라인이 실제로
+        /// 쓰는 목차가 갈라진다. 그 불일치는 어디에도 드러나지 않는다 - 파일을 여는 사람은
+        /// 자기가 보는 것이 쓰인 것이라고 믿는다.
+        ///
+        /// 유효성 판정은 TryParseBlock 하나다. 그것이 버리는 블록은 이 선택기도 버린다.
+        /// </summary>
+        public static StepsBlockLocation? TryLocateStepsBlock(string? planStructureMarkdown)
         {
             if (string.IsNullOrWhiteSpace(planStructureMarkdown))
             {
@@ -56,16 +78,34 @@ namespace ReSet.Core.Services
 
             foreach (Match match in JsonBlockRegex.Matches(planStructureMarkdown))
             {
-                var parsed = TryParseBlock(match.Groups["body"].Value);
+                var body = match.Groups["body"];
+                var parsed = TryParseBlock(body.Value);
                 if (parsed != null)
                 {
-                    Log.Information("목차에서 단계 목록을 읽었습니다 - 단계 수: {Count}개", parsed.Count);
-                    return parsed;
+                    return new StepsBlockLocation(body.Index, body.Length, body.Value, parsed);
                 }
             }
 
-            Log.Warning("목차에서 유효한 단계 목록 JSON을 찾지 못했습니다. 분할 생성을 건너뜁니다.");
             return null;
+        }
+
+        public static IReadOnlyList<BatchStepPlan>? TryParse(string? planStructureMarkdown)
+        {
+            // 빈 입력은 "목차가 아직 없다"는 뜻이라 경고할 일이 아니다. 종전 동작 그대로다.
+            if (string.IsNullOrWhiteSpace(planStructureMarkdown))
+            {
+                return null;
+            }
+
+            var located = TryLocateStepsBlock(planStructureMarkdown);
+            if (located == null)
+            {
+                Log.Warning("목차에서 유효한 단계 목록 JSON을 찾지 못했습니다. 분할 생성을 건너뜁니다.");
+                return null;
+            }
+
+            Log.Information("목차에서 단계 목록을 읽었습니다 - 단계 수: {Count}개", located.Value.Steps.Count);
+            return located.Value.Steps;
         }
 
         private static IReadOnlyList<BatchStepPlan>? TryParseBlock(string json)
@@ -112,8 +152,14 @@ namespace ReSet.Core.Services
 
                 return steps;
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // JsonException만 잡으면 부족하다. Steps 배열 원소가 객체가 아니면
+                // TryGetProperty가 InvalidOperationException을 던지는데, 이는
+                // JsonException이 아니다. 이 구멍을 열어두면 여기서는 null을 돌려주는
+                // 대신 예외가 TryLocateStepsBlock을 거쳐 TryParse와 Enrich 밖으로
+                // 그대로 새 나간다 - 둘 다 "실패는 예외가 아니다"라는 계약을 진다.
+                Log.Warning(ex, "단계 목록 JSON 블록 파싱 중 예상치 못한 오류가 발생했습니다. 이 블록은 버립니다.");
                 return null;
             }
         }

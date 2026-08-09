@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Serilog;
 
 namespace ReSet.Core.Services
@@ -21,12 +20,6 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class PlanStructureEnricher
     {
-        // BatchStepPlanParser와 같은 정규식이어야 한다. 두 곳이 다른 블록을
-        // 고르면 파일에 기록된 목차와 실제로 쓰이는 목차가 갈라진다.
-        private static readonly Regex JsonBlockRegex = new(
-            @"```json\s*\r?\n(?<body>.*?)```",
-            RegexOptions.Singleline | RegexOptions.Compiled);
-
         private static readonly JsonSerializerOptions WriteOptions = new()
         {
             WriteIndented = true,
@@ -53,24 +46,28 @@ namespace ReSet.Core.Services
                 return planStructureMarkdown;
             }
 
-            foreach (Match match in JsonBlockRegex.Matches(planStructureMarkdown))
+            // 블록 선택은 파서가 소유한다. 여기서 따로 고르면 파일에 기록된 목차와
+            // 파이프라인이 실제로 쓰는 목차가 갈라진다.
+            var located = BatchStepPlanParser.TryLocateStepsBlock(planStructureMarkdown);
+            if (located == null)
             {
-                var body = match.Groups["body"].Value;
-                var rewritten = TryRewriteBlock(body, codesByProcedure);
-                if (rewritten == null)
-                {
-                    // 파서와 같은 규칙: 유효하지 않은 블록은 건너뛰고 다음을 본다.
-                    continue;
-                }
-
-                var bodyGroup = match.Groups["body"];
-                return planStructureMarkdown[..bodyGroup.Index]
-                    + rewritten
-                    + planStructureMarkdown[(bodyGroup.Index + bodyGroup.Length)..];
+                Log.Warning("목차에서 보강할 단계 목록 JSON 블록을 찾지 못했습니다. 원본을 그대로 사용합니다.");
+                return planStructureMarkdown;
             }
 
-            Log.Warning("목차에서 보강할 단계 목록 JSON 블록을 찾지 못했습니다. 원본을 그대로 사용합니다.");
-            return planStructureMarkdown;
+            var rewritten = TryRewriteBlock(located.Value.Body, codesByProcedure);
+            if (rewritten == null)
+            {
+                // 뒤 블록으로 넘어가지 않는다. 파서가 읽는 블록을 보강하지 못했다면 보강을
+                // 포기하는 것이 맞다 - 다른 블록을 고치면 두 목차가 갈라지고, 그 불일치는
+                // 어디에도 드러나지 않는다. 보강되지 않은 단계는 하한 검사가 "검증 불가"로
+                // 보고하므로 침묵하지도 않는다.
+                return planStructureMarkdown;
+            }
+
+            return planStructureMarkdown[..located.Value.BodyIndex]
+                + rewritten
+                + planStructureMarkdown[(located.Value.BodyIndex + located.Value.BodyLength)..];
         }
 
         /// <summary>

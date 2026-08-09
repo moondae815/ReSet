@@ -31,7 +31,8 @@ namespace ReSet.Core.Services
     /// <param name="Architecture">개요 + Mermaid 흐름도. 골격 분할이 실패하면 계획서 전문.
     /// 골격 분할은 성공했는데 단계 분할이 실패한 경우("단계별 이행 상세" 섹션을 어디서
     /// 자를지 모르는 경우)에는 그 섹션 전체까지 흡수한다 - 잘라낼 기준점이 없는 내용을
-    /// 버리는 것보다는 여기 통짜로 남기는 편이 낫다.</param>
+    /// 버리는 것보다는 여기 통짜로 남기는 편이 낫다. 두 분할이 모두 성공한 경로에서도,
+    /// 다른 어느 조각도 덮지 않은 구간(예: 검증 SQL 뒤 부록)은 전부 여기로 흡수된다.</param>
     /// <param name="StepContract">모든 단계가 공유하는 실행 계약. 잘라내지 못했으면 null.</param>
     /// <param name="Verification">정합성 검증 SQL 세트. 잘라내지 못했으면 null.</param>
     /// <param name="Steps">단계 코드 → 본문. 분할에 실패하면 비어 있다.</param>
@@ -317,22 +318,57 @@ namespace ReSet.Core.Services
             var architectureEnd = steps.Split ? positions[2] : positions[3];
             var architecture = Join(lines, positions[0], architectureEnd);
 
-            // 공통 규약 = (H2③, 첫 단계 헤딩). 단계 경계를 모르면 끝점을 정할 수 없다.
+            // 공통 규약 = [H2③, 첫 단계 헤딩). 헤딩 줄까지 담아 이 조각이 자기 제목을 갖게
+            // 한다 - 종전에는 그 줄이 개요의 끝과 이 조각의 시작 사이에 끼어 사라졌다.
+            //
+            // 다만 "비었는가"는 산문만 보고 판정한다. 헤딩을 무조건 붙이면 산문이 없는
+            // 문서에서 헤딩 한 줄짜리 파일이 생기고 진입점이 그것을 링크한다
+            // (InstructionBundleWriter.cs:61). 산문이 없으면 조각을 만들지 않고,
+            // 남겨진 헤딩 줄은 아래 흡수가 개요로 가져간다.
             string? stepContract = null;
             if (steps.Split && steps.FirstStepLineIndex > positions[2])
             {
-                stepContract = Join(lines, positions[2] + 1, steps.FirstStepLineIndex);
-                if (stepContract.Length == 0)
+                var prose = Join(lines, positions[2] + 1, steps.FirstStepLineIndex);
+                if (prose.Length > 0)
                 {
-                    stepContract = null;
+                    stepContract = Join(lines, positions[2], steps.FirstStepLineIndex);
                 }
             }
 
             // 검증 SQL = [H2④, 다음 H2 또는 문서 끝)
-            var verificationEnd = MarkdownSectionLocator.FindIndexOutsideFence(
+            var nextH2AfterVerification = MarkdownSectionLocator.FindIndexOutsideFence(
                 lines, positions[3] + 1,
                 line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
-            var verification = Join(lines, positions[3], verificationEnd < 0 ? lines.Count : verificationEnd);
+            var verificationEnd = nextH2AfterVerification < 0 ? lines.Count : nextH2AfterVerification;
+            var verification = Join(lines, positions[3], verificationEnd);
+
+            // 어느 조각에도 담기지 않은 줄이 없어야 한다. 조각이 덮은 범위를 모아
+            // 빈틈을 계산하고, 남은 것은 전부 개요가 받는다.
+            //
+            // 조각을 새로 만들면 이 목록에 범위를 등록해야 한다. 등록을 잊으면 그 구간이
+            // 개요에 중복으로 실리고, 범위만 등록하고 조각을 만들지 않으면 사라진다.
+            var covered = new List<(int Start, int End)>
+            {
+                (0, positions[0]),                 // Preamble
+                (positions[0], architectureEnd),   // Architecture 본체
+            };
+
+            if (stepContract != null)
+            {
+                covered.Add((positions[2], steps.FirstStepLineIndex));
+            }
+
+            if (steps.Split)
+            {
+                covered.Add((steps.FirstStepLineIndex, steps.LastStepEndLineIndex));
+            }
+
+            if (verification.Length > 0)
+            {
+                covered.Add((positions[3], verificationEnd));
+            }
+
+            architecture = AbsorbUncoveredRegions(lines, architecture, covered);
 
             Log.Information(
                 "골격을 분할했습니다 - 공통 규약: {HasContract}, 검증 SQL: {HasVerification}",
@@ -391,8 +427,9 @@ namespace ReSet.Core.Services
         /// 말하는데, 그 내용이 실제로 무엇인지는 아무도 확인하지 않았다. 게다가
         /// verification/은 조립 회차만 가리키므로 단계 회차가 그 구간을 영영 못 본다.
         /// 판별에 실패했을 때의 정답은 "통짜로 남긴다"이며, 이 분기의 통짜 바구니가 개요다.
-        /// (Task 4에서 고친 결함과 같은 부류다 - 그때도 어느 조각에도 속하지 못한 구간이
-        /// 사라졌고, 처방은 통짜 바구니에 흡수시키는 것이었다.)
+        /// (<see cref="FindUncoveredRanges"/>/<see cref="AbsorbUncoveredRegions"/>가 고친
+        /// 결함과 같은 부류다 - 그때도 어느 조각에도 속하지 못한 구간이 사라졌고, 처방은
+        /// 통짜 바구니에 흡수시키는 것이었다.)
         /// </summary>
         private static string BuildWholeSkeletonAroundSteps(
             IReadOnlyList<string> lines, StepBoundaryResult steps, int skeletonStart)
@@ -419,6 +456,91 @@ namespace ReSet.Core.Services
                 "골격 통짜 유지 - 마지막 단계 뒤의 구간을 개요 조각에 흡수했습니다 - 시작 줄: {TailStart}", tailStart);
 
             return head.Length == 0 ? tail : head + "\n\n" + tail;
+        }
+
+        /// <summary>
+        /// [0, lineCount) 중 covered가 덮지 않은 구간을 오름차순으로 돌려준다.
+        ///
+        /// 조각을 새로 만들면 그 범위를 <see cref="Resolve"/>의 covered 목록에 반드시
+        /// 등록해야 한다. 등록을 잊으면 그 구간이 개요에 <b>중복</b>으로 실리고(회차마다
+        /// 읽는 파일이 부푼다), 범위만 등록하고 조각을 만들지 않으면 구간이 <b>사라진다</b>.
+        /// 둘 다 눈으로는 드러나지 않으므로 이 계산을 조각 나누는 코드 옆에 둔다.
+        ///
+        /// 겹치는 범위는 병합한다. 문서가 기형이라 단계 구간이 검증 SQL 구간과 겹치는
+        /// 경우가 있는데, 그것을 빈틈으로 읽으면 이미 실린 내용을 한 번 더 싣게 된다.
+        /// </summary>
+        public static IReadOnlyList<(int Start, int End)> FindUncoveredRanges(
+            int lineCount, IEnumerable<(int Start, int End)> covered)
+        {
+            if (covered == null) throw new ArgumentNullException(nameof(covered));
+
+            var gaps = new List<(int Start, int End)>();
+            if (lineCount <= 0)
+            {
+                return gaps;
+            }
+
+            var normalized = covered
+                .Select(range => (Start: Math.Max(0, range.Start), End: Math.Min(lineCount, range.End)))
+                .Where(range => range.End > range.Start)
+                .OrderBy(range => range.Start)
+                .ToList();
+
+            var cursor = 0;
+            foreach (var range in normalized)
+            {
+                if (range.Start > cursor)
+                {
+                    gaps.Add((cursor, range.Start));
+                }
+
+                if (range.End > cursor)
+                {
+                    cursor = range.End;
+                }
+            }
+
+            if (cursor < lineCount)
+            {
+                gaps.Add((cursor, lineCount));
+            }
+
+            return gaps;
+        }
+
+        /// <summary>
+        /// 어느 조각에도 담기지 않은 구간을 개요에 흡수한다.
+        ///
+        /// 개요(common/00-architecture.md)는 <b>모든</b> 회차가 무조건 읽는 유일한 파일이다
+        /// (TaskFileComposer.Compose의 "먼저 읽을 것" 2번). 어느 회차가 그 구간을 필요로
+        /// 하는지 판별하지 못한 상태이므로, 판별 없이도 반드시 읽히는 자리에 둔다.
+        /// 골격 탐색이 실패한 분기가 이미 같은 판단을 내렸다.
+        ///
+        /// 배너를 올리지 않는다 - 이것은 결함 보고가 아니라 복구다. 사용자에게 요구할
+        /// 조치가 없다. 대신 흡수한 줄 범위를 로그에 남겨 원인을 추적할 수 있게 한다.
+        /// </summary>
+        private static string AbsorbUncoveredRegions(
+            IReadOnlyList<string> lines,
+            string architecture,
+            IReadOnlyList<(int Start, int End)> covered)
+        {
+            foreach (var range in FindUncoveredRanges(lines.Count, covered))
+            {
+                var text = Join(lines, range.Start, range.End);
+                if (text.Length == 0)
+                {
+                    // 공백뿐인 구간은 담을 것이 없다. 개요에 빈 줄만 늘리지 않는다.
+                    continue;
+                }
+
+                Log.Information(
+                    "어느 조각에도 속하지 않은 구간을 개요에 흡수했습니다 - 줄 [{Start}, {End})",
+                    range.Start, range.End);
+
+                architecture = architecture.Length == 0 ? text : architecture + "\n\n" + text;
+            }
+
+            return architecture;
         }
 
         private static string Join(IReadOnlyList<string> lines, int start, int end)

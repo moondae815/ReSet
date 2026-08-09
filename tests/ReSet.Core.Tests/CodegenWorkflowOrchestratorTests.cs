@@ -33,6 +33,9 @@ namespace ReSet.Core.Tests
         private readonly string _codeDir;
         private readonly string _instructionsPath;
 
+        /// <summary>BuildOrchestrator가 마지막으로 만든 목. 피드백 호출을 검사하는 데 쓴다.</summary>
+        private IMetadataExporter _metadataExporter = null!;
+
         public CodegenWorkflowOrchestratorTests()
         {
             _tempRoot = Path.Combine(Path.GetTempPath(), "reset-codegen-workflow-" + Guid.NewGuid().ToString("N"));
@@ -64,6 +67,17 @@ namespace ReSet.Core.Tests
                 "public class JobEntryPoint { }");
         }
 
+        /// <summary>
+        /// 지시서 파일을 실제로 만든다. 루프는 파일이 있을 때만 피드백을 붙이므로
+        /// (RunSelfHealingWorkflowAsync의 File.Exists 분기), 이것 없이는 피드백이
+        /// 호출되지 않는다.
+        /// </summary>
+        private void SeedInstructionsFile()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_instructionsPath)!);
+            File.WriteAllText(_instructionsPath, "# 마이그레이션 지시서\n\n본문\n");
+        }
+
         private static IAiClient MatchingAiClient()
         {
             var client = Substitute.For<IAiClient>();
@@ -85,9 +99,9 @@ namespace ReSet.Core.Tests
                 OutputDirectory = Path.Combine(_tempRoot, "validation")
             };
             var verifier = new CodeVerificationOrchestrator(validatorConfig, MatchingAiClient(), null, null);
-            var metadataExporter = Substitute.For<IMetadataExporter>();
+            _metadataExporter = Substitute.For<IMetadataExporter>();
 
-            return new CodegenWorkflowOrchestrator(engine, verifier, metadataExporter, maxL2Attempts);
+            return new CodegenWorkflowOrchestrator(engine, verifier, _metadataExporter, maxL2Attempts);
         }
 
         /// <summary>테스트마다 미리 정해 둔 CodegenRunResult 순서를 그대로 돌려주는 가짜 엔진.</summary>
@@ -112,6 +126,36 @@ namespace ReSet.Core.Tests
                 // 루프를 끊는지(더 호출되지 않는지)를 CallCount로 별도 검증한다.
                 var result = _results.Count > 1 ? _results.Dequeue() : _results.Peek();
                 return Task.FromResult(result);
+            }
+        }
+
+        /// <summary>
+        /// 두 번째 호출에서 파일 시스템에 부수효과를 일으키는 엔진. 에이전트가 드디어
+        /// 규약에 맞는 이름으로 파일을 만든 상황을 재현한다.
+        /// </summary>
+        private sealed class SeedingCodingEngine : ICodingEngine
+        {
+            private readonly Action _seedOnSecondCall;
+
+            public SeedingCodingEngine(Action seedOnSecondCall)
+            {
+                _seedOnSecondCall = seedOnSecondCall;
+            }
+
+            public string Name => "seeding-engine";
+            public string Command => "seeding";
+            public int CallCount { get; private set; }
+
+            public Task<CodegenRunResult> GenerateCodeAsync(
+                SpDefinition? spDef, string instructionsFilePath, string targetProjectDir, CancellationToken cancellationToken)
+            {
+                CallCount++;
+                if (CallCount == 2)
+                {
+                    _seedOnSecondCall();
+                }
+
+                return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
             }
         }
 
@@ -217,8 +261,12 @@ namespace ReSet.Core.Tests
 
             Assert.False(result.Succeeded);
             // 산출물은 나왔으므로 "산출물을 못 만들었다"는 중단 사유 경로가 아니다.
-            Assert.Null(result.AbortReason);
-            // 통과로 읽었다면 1회에 끊겼을 것이다. 시도를 모두 소진했어야 한다.
+            // 미대조 연속 캡이 생긴 뒤로는 사유가 붙되, 그 사유가 가리키는 것은
+            // 기동 실패가 아니라 대조 실패여야 한다.
+            Assert.NotNull(result.AbortReason);
+            Assert.Contains(_specDir, result.AbortReason);
+            Assert.DoesNotContain("CodegenSettings:Engines", result.AbortReason);
+            // 통과로 읽었다면 1회에 끊겼을 것이다.
             Assert.Equal(2, engine.CallCount);
         }
 
@@ -240,6 +288,95 @@ namespace ReSet.Core.Tests
 
             Assert.True(result.Succeeded);
             Assert.Equal(1, engine.CallCount);
+        }
+
+        /// <summary>
+        /// MaxL2Attempts가 "unlimited"(-1)면 maxAttempts가 int.MaxValue가 된다. 대조가
+        /// 계속 실패하는 상태에서 상한이 없으면 무인 배치가 끝나지 않는 유료 기동이 된다.
+        /// 회차 경로는 같은 상황을 연속 캡으로 막는다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_UnlimitedAttempts_ShouldStopAfterTwoUnverifiedRuns()
+        {
+            // 계획서도 소스도 심지 않는다 - 매핑이 0건이 되는 실제 조건 그대로다.
+            var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
+            var engine = new ScriptedCodingEngine(withArtifact);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: -1);
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(2, engine.CallCount);
+        }
+
+        /// <summary>
+        /// 중단 사유는 배치 구성 문제를 가리켜야 한다. BuildAbortResult를 재사용하면
+        /// CliFailureClassifier가 만든 "CLI 기동 실패" 안내가 나가는데, 여기서는 기동이
+        /// 성공하고 산출물까지 나왔으므로 그 안내는 사람을 엉뚱한 곳으로 보낸다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_UnverifiedCapReached_AbortReasonNamesTheDirectories()
+        {
+            var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
+            var engine = new ScriptedCodingEngine(withArtifact);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: -1);
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.NotNull(result.AbortReason);
+            Assert.Contains(_specDir, result.AbortReason);
+            Assert.Contains(_codeDir, result.AbortReason);
+            Assert.DoesNotContain("CodegenSettings:Engines", result.AbortReason);
+        }
+
+        /// <summary>
+        /// 미대조 시도에도 피드백이 붙어야 한다. 붙이지 않으면 재시도는 같은 명령을
+        /// 신호 없이 다시 던지는 것이다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_NothingVerified_ShouldAppendFeedbackToInstructions()
+        {
+            SeedInstructionsFile();
+            var withArtifact = new CodegenRunResult(true, 0, CliFailureKind.Unknown, null);
+            var engine = new ScriptedCodingEngine(withArtifact);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: -1);
+
+            await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            await _metadataExporter.Received().AppendFeedbackToInstructionsAsync(
+                _instructionsPath,
+                Arg.Is<string>(feedback => feedback.Contains("검증 대조 실패")),
+                Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// 캡에 못 미친 미대조(1회, 캡은 2)는 루프를 끊지 않아야 한다 - 1회차에 대조가
+        /// 실패해도 2회차에 대조 쌍이 나타나면 그대로 성공해야 한다. 캡 미만에서
+        /// 무조건 중단하는 버그나 카운터를 리셋하지 않는 버그를 잡는다.
+        ///
+        /// 주의: 이 시나리오만으로는 캡 판정과 통과 판정의 순서 자체를 고정하지 못한다.
+        /// 카운터는 nothingVerified가 거짓인 바로 그 시도에서 0으로 리셋되므로, 캡에
+        /// 걸리는 시도와 통과하는 시도는 결코 같은 회차일 수 없다 - 두 판정을 서로
+        /// 바꿔도 이 테스트에서는 결과가 갈리지 않는다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_MappingAppearsOnSecondRun_ShouldSucceed()
+        {
+            var engine = new SeedingCodingEngine(SeedVerifiableJob);
+
+            var orchestrator = BuildOrchestrator(engine, maxL2Attempts: -1);
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(2, engine.CallCount);
         }
     }
 }
