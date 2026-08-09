@@ -836,8 +836,35 @@ END");
                 "    DECLARE @T TABLE (CLVT INT);\r\n" +
                 "    UPDATE @T SET CLVT = 0;");
 
-            // Assert
+            // Assert - 매핑이 비어 있는 것은 가드가 "건너뛰기"로 정상 처리했을 때와, 예외가
+            // Analyze의 soft-fail 봉투에 삼켜졌을 때 둘 다에서 관찰된다. IsParsedSuccessfully가
+            // true라는 것까지 같이 단언해야 후자(크래시)를 전자(정상 가드)로 오인하지 않는다.
+            //
+            // 여기에 더해, RecordUpdateMapping 내부의 방어 가드(빈 targetTable을 조용히
+            // 건너뛰는 두 번째 방어선)가 존재하는 한, ExplicitVisit(UpdateSpecification)의
+            // 호출부 가드만 제거해도 내부 방어 가드가 똑같이 "매핑 없음 + 파싱 성공"을
+            // 만들어 내므로 위 두 단언만으로는 호출부 가드가 살아 있는지 구분할 수 없다.
+            // 내부 방어 가드가 남기는 ControlFlowSummary 흔적이 없다는 것까지 확인해야
+            // "정상적으로 가드가 통과를 막았다"와 "호출부 가드는 뚫렸지만 내부 방어 가드가
+            // 대신 막았다"를 구분할 수 있다.
+            Assert.True(result.IsParsedSuccessfully);
             Assert.Empty(result.AstUpdateMappings);
+            Assert.DoesNotContain(result.ControlFlowSummary, s => s.Contains("내부 방어 가드 작동"));
+        }
+
+        [Fact]
+        public void Analyze_WithWriteMutatorSetClause_ShouldExtractColumnFromCallTarget()
+        {
+            // Arrange & Act - .WRITE()는 AssignmentSetClause가 아니라 FunctionCallSetClause로
+            // 파싱된다. 컬럼은 뮤테이터 호출 대상에서, 표현식은 절 원문에서 가져온다.
+            var result = AnalyzeUpdate(
+                "    UPDATE dbo.TDocument SET Content.WRITE(@chunk, 1, 4) WHERE ID = 1;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            var assignment = Assert.Single(mapping.Assignments);
+            Assert.Equal("Content", assignment.Column);
+            Assert.Contains(".WRITE(", assignment.SourceExpression);
         }
     }
 }

@@ -321,6 +321,22 @@ namespace ReSet.Core.Services
 
         private void RecordUpdateMapping(UpdateSpecification node, string targetTable)
         {
+            // targetTable이 비어 있으면 호출부 가드가 약해졌거나 우회된 상태다. 아래
+            // _updateOrdinals.TryGetValue(targetTable, ...)는 null 키에서 예외를 던지고,
+            // 그 예외는 Analyze의 catch-all에 잡혀 이 UPDATE 하나가 아니라 SP 전체의
+            // 정적 분석 결과(ReferencedTables, AstInsertMappings 등)를 통째로 잃는다.
+            // "이 UPDATE 하나를 건너뛴다"가 "SP 전체 분석을 잃는다"보다 훨씬 싸다.
+            // 다만 조용히 넘어가면 상위 가드가 깨졌다는 사실 자체가 안 보이므로 흔적을
+            // 남긴다 - 정상 경로에서는 이 지점에 도달하지 않으므로, 이 문구가 보인다는
+            // 것 자체가 호출부 가드의 결함 신호다.
+            if (string.IsNullOrWhiteSpace(targetTable))
+            {
+                var line = node.StartLine;
+                ControlFlowSummary.Add(
+                    $"Line {line}: [🚨 경고: UPDATE 대상 이름을 확인하지 못해 SET 매핑을 건너뜀 (내부 방어 가드 작동)]");
+                return;
+            }
+
             if (node.SetClauses == null) return;
 
             var assignments = new List<AstUpdateAssignment>();
