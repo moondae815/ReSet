@@ -214,6 +214,15 @@ namespace ReSet.Core.Services
                 return Result(null, null, null, null);
             }
 
+            // 정적 분석이 확정한 UPDATE 매핑을 L1 기계 검증의 기대값으로 접어 둔다.
+            // 이 SP/함수에 UPDATE 매핑이 없으면(비 Procedure거나 정적 분석 실패 등)
+            // null이 되고, Validate는 그 경우 종전과 동일하게 UPDATE 매핑 대조를
+            // 건너뛴다 - 아래 6개 호출부 전부에 넘겨도 회귀가 없는 이유다.
+            // spDef는 위 null 검사를 통과했으므로 null 조건부 없이 그대로 넘긴다 -
+            // `spDef?.`를 쓰면 컴파일러의 널 흐름 추적이 재설정되어 아래
+            // ResolveCacheObjectKey(spDef, key) 호출에 CS8604 경고가 새로 생긴다.
+            var specExpectations = SpecExpectations.FromStaticAnalysis(spDef.StaticAnalysis);
+
             var cacheObjectKey = ResolveCacheObjectKey(
                 spDef,
                 key);
@@ -480,7 +489,7 @@ namespace ReSet.Core.Services
 
                 for (int i = 0; i < candidates.Length; i++)
                 {
-                    var l1Check = _validator.Validate(candidates[i]);
+                    var l1Check = _validator.Validate(candidates[i], specExpectations);
                     if (l1Check.IsValid)
                     {
                         candidates[i] = l1Check.CleansedMarkdown ?? candidates[i];
@@ -605,7 +614,7 @@ namespace ReSet.Core.Services
                     }
 
                     // 합성본 기계적 검증 (L1) 1회 수행
-                    var finalL1 = _validator.Validate(specificationMarkdown);
+                    var finalL1 = _validator.Validate(specificationMarkdown, specExpectations);
                     specificationMarkdown = finalL1.CleansedMarkdown ?? specificationMarkdown;
                     var consolidatedL1Valid = finalL1.IsValid;
                     var consolidatedL1Errors = finalL1.Errors;
@@ -620,7 +629,7 @@ namespace ReSet.Core.Services
                                 progressScope.AddTask("selffix", $"{_consolidatorService.ModelName} 자가 수정 중...");
                                 consolidatorSelfFixResult = await WrapWithProgress(_consolidatorService.GenerateSpecificationAsync(spDef, sbConsolidation.ToString(), finalL1.SuggestedPromptFix, _consolidatorEffort ?? "medium", cancellationToken), progressScope, "selffix");
                             }
-                            var postFixL1 = _validator.Validate(consolidatorSelfFixResult.Content);
+                            var postFixL1 = _validator.Validate(consolidatorSelfFixResult.Content, specExpectations);
                             specificationMarkdown = postFixL1.CleansedMarkdown ?? consolidatorSelfFixResult.Content;
                             // 자가 수정 1회 후에도 여전히 L1을 통과하지 못하면 표준 재시도 루프와
                             // 동일하게 L1Exhausted로 확정한다. 이후의 L2 재검토 결과가 이를
@@ -702,7 +711,7 @@ namespace ReSet.Core.Services
                             }
                             
                             // 수정본 문법 L1 검증 진행
-                            var fixL1Result = _validator.Validate(finalConsolidatedFixResult.Content);
+                            var fixL1Result = _validator.Validate(finalConsolidatedFixResult.Content, specExpectations);
                             if (fixL1Result.IsValid)
                             {
                                 specificationMarkdown = fixL1Result.CleansedMarkdown ?? finalConsolidatedFixResult.Content;
@@ -979,7 +988,7 @@ namespace ReSet.Core.Services
                     }
 
                     // L1: 기계적 무결성 검사
-                    var l1Result = _validator.Validate(specificationMarkdown);
+                    var l1Result = _validator.Validate(specificationMarkdown, specExpectations);
                     specificationMarkdown = l1Result.CleansedMarkdown ?? specificationMarkdown;
                     if (!l1Result.IsValid)
                     {
@@ -1378,7 +1387,7 @@ namespace ReSet.Core.Services
                         }
 
                         // 피드백 반영본에 대한 L1 정적 검사 1회 수행
-                        var l1Re = _validator.Validate(reSpec);
+                        var l1Re = _validator.Validate(reSpec, specExpectations);
                         reSpec = l1Re.CleansedMarkdown ?? reSpec;
                         if (!l1Re.IsValid)
                         {

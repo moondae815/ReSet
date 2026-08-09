@@ -1231,6 +1231,85 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task RunPipelineAsync_SpecExpectationsWiring_UpdateColumnMissing_TriggersL1RetryAndSelfCorrects()
+        {
+            // 이 테스트는 RunCodeObjectPipelineCoreAsync가 만든 specExpectations
+            // 지역 변수가 실제로 _validator.Validate에 전달되는지를 정적 스캔이
+            // 아니라 행동으로 증명한다. specExpectations가 null로 바뀌는 뮤테이션은
+            // 콜사이트 자체는 그대로 두 인자를 넘기므로 정적 스캔(SpecExpectationsWiringPolicyScanner)으로
+            // 잡을 수 없다 - 이 테스트가 그 사각지대를 메운다.
+            //
+            // 배선이 살아 있으면: 정적 분석이 확정한 UPDATE 대상 컬럼(SettleAmt)이
+            // 빠진 1차 생성물은 L1에서 실패해 재시도가 걸리고, 컬럼을 채운 2차
+            // 생성물이 최종 채택된다. 배선이 끊기면(specExpectations가 늘 null이면)
+            // 1차 생성물도 헤더·머메이드 요건은 다 갖췄으므로 그대로 통과해 1회
+            // 호출로 끝난다.
+
+            // Arrange
+            var dbService = Substitute.For<IDbMetadataService>();
+            var aiService = Substitute.For<IAiService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "USP_UpdateMappingWiringTest",
+                DdlText = "CREATE PROCEDURE USP_UpdateMappingWiringTest AS UPDATE dbo.TSettleMst SET SettleAmt = 0",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    AstUpdateMappings = new List<AstUpdateMapping>
+                    {
+                        new AstUpdateMapping
+                        {
+                            TargetTable = "dbo.TSettleMst",
+                            Assignments = new List<AstUpdateAssignment>
+                            {
+                                new AstUpdateAssignment { Column = "SettleAmt" }
+                            }
+                        }
+                    }
+                }
+            };
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_UpdateMappingWiringTest", Arg.Any<int>())
+                .Returns(Task.FromResult(spDef));
+
+            // 형식(필수 헤더·머메이드)은 완전하지만 UPDATE 매핑 표에 정적 분석이
+            // 확정한 SettleAmt 컬럼이 빠져 있다 - specExpectations가 넘어갈 때만
+            // L1이 이를 잡는다. 넘어가지 않으면 이 문서도 그대로 유효하다.
+            var missingColumnMarkdown =
+                "## 개요\n## 파라미터 목록\n## CRUD 분석\n" +
+                "### UPDATE 대상 테이블: dbo.TSettleMst\n" +
+                "| 컬럼 | 설명 |\n|---|---|\n| OtherCol | 다른 컬럼 |\n" +
+                "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+            var completeMarkdown =
+                "## 개요\n## 파라미터 목록\n## CRUD 분석\n" +
+                "### UPDATE 대상 테이블: dbo.TSettleMst\n" +
+                "| 컬럼 | 설명 |\n|---|---|\n| SettleAmt | 정산 금액 |\n" +
+                "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
+
+            aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = missingColumnMarkdown }), Task.FromResult(new AiResult { Content = completeMarkdown }));
+
+            var reviewResult = new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+            aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(reviewResult));
+
+            // Act
+            var (resultSpec, _, _, _, _) = await orchestrator.RunPipelineAsync(
+                "connection_string", "dbo", "USP_UpdateMappingWiringTest", 3, "OpenAI", "instructions", isBatchMode: true);
+
+            // Assert
+            Assert.NotNull(resultSpec);
+            Assert.Contains("SettleAmt", resultSpec);
+            userInteraction.Received(1).NotifyValidationSuccess("dbo.USP_UpdateMappingWiringTest");
+            await aiService.Received(2).GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
+        }
+
+        [Fact]
         public async Task RunPipelineAsync_ExhaustsRetries_ReturnsFailedSpec()
         {
             // Arrange
