@@ -197,6 +197,7 @@ namespace ReSet.Core.Services
         private string? _currentInsertTarget = null;
         private TSqlFragment? _currentDmlTargetNode = null;
         private bool _dmlTargetResolved = false;
+        private HashSet<string>? _currentCteNames = null;
         private readonly Dictionary<string, List<string>>? _tableColumnsMap;
 
         public SpStructureVisitor(Dictionary<string, List<string>>? tableColumnsMap = null)
@@ -245,15 +246,45 @@ namespace ReSet.Core.Services
         public override void ExplicitVisit(UpdateStatement node)
         {
             _statementContext.Push("UPDATE");
+            var prevCteNames = _currentCteNames;
+            _currentCteNames = CollectCteNames(node.WithCtesAndXmlNamespaces);
             base.ExplicitVisit(node);
+            _currentCteNames = prevCteNames;
             _statementContext.Pop();
         }
 
         public override void ExplicitVisit(DeleteStatement node)
         {
             _statementContext.Push("DELETE");
+            var prevCteNames = _currentCteNames;
+            _currentCteNames = CollectCteNames(node.WithCtesAndXmlNamespaces);
             base.ExplicitVisit(node);
+            _currentCteNames = prevCteNames;
             _statementContext.Pop();
+        }
+
+        /// <summary>
+        /// WITH 절의 CTE 이름을 모은다. `WITH C AS (...) UPDATE C SET ...`처럼 대상이
+        /// CTE 이름과 같으면 그것은 별칭이 아니라 CTE 참조이고, FROM 절 별칭 탐색으로는
+        /// 절대 풀리지 않는 물리 테이블 부재 상태다 - 별도로 미해결로 표시해야 한다.
+        /// </summary>
+        private static HashSet<string>? CollectCteNames(WithCtesAndXmlNamespaces? withClause)
+        {
+            if (withClause?.CommonTableExpressions == null || withClause.CommonTableExpressions.Count == 0)
+            {
+                return null;
+            }
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var cte in withClause.CommonTableExpressions)
+            {
+                if (!string.IsNullOrWhiteSpace(cte.ExpressionName?.Value))
+                {
+                    names.Add(cte.ExpressionName!.Value);
+                }
+            }
+
+            return names;
         }
 
         // Specification 단위 상세 감지 (ExplicitVisit 적용)
@@ -303,7 +334,7 @@ namespace ReSet.Core.Services
 
             _currentDmlTargetNode = node.Target;
             _dmlTargetResolved = RecordDmlTarget(
-                node.Target, node.FromClause, UpdateTables, _foundUpdate, out var resolvedTarget);
+                node.Target, node.FromClause, UpdateTables, _foundUpdate, _currentCteNames, out var resolvedTarget);
 
             // 대상을 풀지 못한 문장은 매핑을 만들지 않는다. 잘못 푼 테이블 이름에 컬럼을
             // 붙이면 L1이 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
@@ -445,7 +476,7 @@ namespace ReSet.Core.Services
             var prevResolved = _dmlTargetResolved;
 
             _currentDmlTargetNode = node.Target;
-            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, DeleteTables, _foundDelete, out _);
+            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, DeleteTables, _foundDelete, _currentCteNames, out _);
 
             base.ExplicitVisit(node);
 
@@ -469,6 +500,7 @@ namespace ReSet.Core.Services
             FromClause? fromClause,
             List<string> targetList,
             HashSet<string> seen,
+            HashSet<string>? cteNames,
             out string? resolvedName)
         {
             resolvedName = null;
@@ -477,7 +509,7 @@ namespace ReSet.Core.Services
             var written = GetSchemaObjectString(named.SchemaObject);
             if (string.IsNullOrWhiteSpace(written)) return false;
 
-            var resolved = ResolveDmlTargetName(written, fromClause, out var aliasResolved);
+            var resolved = ResolveDmlTargetName(written, fromClause, cteNames, out var aliasResolved);
 
             // UpdateTables/DeleteTables 과다 보고는 이 문장 이전부터의 관용적이고 무해한
             // 동작이므로 여기서는 건드리지 않는다 - targetList.Add와 반환값 true는 별칭
@@ -495,50 +527,96 @@ namespace ReSet.Core.Services
             if (_foundTables.Add(resolved)) ReferencedTables.Add(resolved);
             if (seen.Add(resolved)) targetList.Add(resolved);
 
-            // 별칭을 실제로 풀지 못했으면(한정되지 않은 이름을 FROM 절에서 찾지 못해
-            // 원문 그대로 돌아온 경우) resolvedName을 null로 남긴다 - 호출부는 이것으로
-            // "매핑을 만들지 않는다"를 판단한다. 잘못 푼 테이블 이름에 컬럼을 붙이면 L1이
-            // 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
+            // 별칭을 실제로 풀지 못했으면(한정되지 않은 이름의 별칭 선언이 FROM 절에 있으나
+            // 물리 테이블이 아니거나, CTE 이름과 같은 경우) resolvedName을 null로 남긴다 -
+            // 호출부는 이것으로 "매핑을 만들지 않는다"를 판단한다. 잘못 푼 테이블 이름에
+            // 컬럼을 붙이면 L1이 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
             if (aliasResolved) resolvedName = resolved;
             return true;
         }
 
-        private static string ResolveDmlTargetName(string written, FromClause? fromClause, out bool aliasResolved)
+        /// <summary>
+        /// UPDATE·DELETE 대상 이름을 물리 테이블명으로 해석한다.
+        ///
+        /// "별칭 해석 실패"와 "애초에 별칭이 아님"을 구분해야 한다 - 후자를 전자로
+        /// 오분류하면(라운드 1의 결함) `UPDATE TSettleMst SET ... FROM TSettleMst A, ...`처럼
+        /// 대상이 한정되지 않은 평범한 물리 테이블명이고 FROM 절 별칭이 전부 다른 이름일 때도
+        /// "별칭을 못 풀었다"고 오판해 정상적으로 만들어져야 할 매핑을 없애 버린다.
+        ///
+        /// 판정 순서:
+        /// 1) 한정된 이름(점 포함)은 별칭일 수 없다 - 항상 해결.
+        /// 2) CTE 이름과 같으면 별칭이 아니라 CTE 참조이고 물리 테이블이 존재하지 않는다 -
+        ///    항상 미해결.
+        /// 3) FROM 절에 이 이름과 같은 별칭 선언이 아예 없으면 별칭이 아니라 평범한
+        ///    물리 테이블명이다 - 해결.
+        /// 4) 별칭 선언은 있지만 그 대상이 NamedTableReference가 아니면(파생 테이블,
+        ///    테이블 변수 등) 실제 테이블명을 알 수 없다 - 미해결.
+        /// </summary>
+        private static string ResolveDmlTargetName(
+            string written, FromClause? fromClause, HashSet<string>? cteNames, out bool aliasResolved)
         {
-            // 한정된 이름은 별칭일 수 없다. 항상 해결된 것으로 본다.
             if (written.Contains('.'))
             {
                 aliasResolved = true;
                 return written;
             }
 
-            var fromAlias = ResolveAliasWithinFromClause(fromClause, written);
-            if (string.IsNullOrWhiteSpace(fromAlias))
+            if (cteNames != null && cteNames.Contains(written))
+            {
+                aliasResolved = false;
+                return written;
+            }
+
+            var (aliasDeclared, resolvedTable) = ResolveAliasWithinFromClause(fromClause, written);
+            if (!aliasDeclared)
+            {
+                aliasResolved = true;
+                return written;
+            }
+
+            if (string.IsNullOrWhiteSpace(resolvedTable))
             {
                 aliasResolved = false;
                 return written;
             }
 
             aliasResolved = true;
-            return fromAlias!;
+            return resolvedTable!;
         }
 
-        private static string? ResolveAliasWithinFromClause(FromClause? fromClause, string alias)
+        private static (bool AliasDeclared, string? ResolvedTableName) ResolveAliasWithinFromClause(
+            FromClause? fromClause, string alias)
         {
-            if (fromClause == null) return null;
+            if (fromClause == null) return (false, null);
 
             var finder = new AliasTargetFinder(alias);
             fromClause.Accept(finder);
-            return finder.ResolvedTableName;
+            return (finder.AliasDeclared, finder.ResolvedTableName);
         }
 
         /// <summary>
-        /// FROM 절 하나 안에서 주어진 별칭이 가리키는 테이블을 찾는다.
+        /// FROM 절 하나 안에서 주어진 이름과 같은 별칭 선언이 있는지, 있다면 그것이
+        /// 물리 테이블(NamedTableReference)을 가리키는지 찾는다.
+        ///
+        /// `TSqlFragmentVisitor`는 `NamedTableReference`, `QueryDerivedTable`,
+        /// `VariableTableReference` 각각에 대해 별도의 `Visit` 오버로드를 갖고 있고,
+        /// ScriptDom이 생성한 각 노드의 `Accept`는 그 노드의 정확한 컴파일타임 타입에
+        /// 맞는 오버로드로 직접 디스패치한다 - 그래서 공통 부모 `TableReferenceWithAlias`의
+        /// `Visit`만 오버라이드하면 위 세 구체 타입에 대해서는 호출되지 않는다. 세 오버로드를
+        /// 각각 잡고, `TableReferenceWithAlias`는 그 외 별칭 보유 타입(예: 인라인 파생
+        /// 테이블)을 위한 폴백으로 둔다.
+        ///
+        /// `AliasDeclared`와 `ResolvedTableName`을 분리하는 이유: 별칭 선언 자체가
+        /// 없으면(= 대상이 애초에 별칭이 아니라 평범한 물리 테이블명) 호출부가 그 이름을
+        /// 그대로 신뢰해야 하고, 별칭 선언은 있지만 물리 테이블이 아니면(파생 테이블,
+        /// 테이블 변수 등) 미해결로 봐야 한다. 이 둘을 `ResolvedTableName != null` 하나로
+        /// 뭉치면 구분이 불가능하다.
         /// </summary>
         private sealed class AliasTargetFinder : TSqlFragmentVisitor
         {
             private readonly string _alias;
 
+            public bool AliasDeclared { get; private set; }
             public string? ResolvedTableName { get; private set; }
 
             public AliasTargetFinder(string alias)
@@ -546,14 +624,22 @@ namespace ReSet.Core.Services
                 _alias = alias;
             }
 
-            public override void Visit(NamedTableReference node)
+            public override void Visit(NamedTableReference node) => Consider(node);
+            public override void Visit(QueryDerivedTable node) => Consider(node);
+            public override void Visit(VariableTableReference node) => Consider(node);
+            public override void Visit(TableReferenceWithAlias node) => Consider(node);
+
+            private void Consider(TableReferenceWithAlias node)
             {
-                if (ResolvedTableName != null) return;
-                if (node.SchemaObject == null) return;
+                if (AliasDeclared) return; // 첫 번째로 찾은 선언을 신뢰한다.
                 if (node.Alias == null || string.IsNullOrWhiteSpace(node.Alias.Value)) return;
                 if (!string.Equals(node.Alias.Value, _alias, StringComparison.OrdinalIgnoreCase)) return;
 
-                ResolvedTableName = GetSchemaObjectString(node.SchemaObject);
+                AliasDeclared = true;
+                if (node is NamedTableReference named && named.SchemaObject != null)
+                {
+                    ResolvedTableName = GetSchemaObjectString(named.SchemaObject);
+                }
             }
         }
 

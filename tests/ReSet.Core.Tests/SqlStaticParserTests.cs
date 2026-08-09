@@ -582,6 +582,60 @@ END;
         }
 
         [Fact]
+        public void Analyze_UpdateWithFromSources_ShouldStillCreateMapping()
+        {
+            // 라운드 2 회귀 수정 - Analyze_UpdateWithFromSources_ShouldFileJoinSourcesAsReads(:532)와
+            // 같은 DDL(COMM_UPD의 지배적 형태). 대상 TSettleMst는 한정되지 않은 이름이지만
+            // FROM 절에 "TSettleMst"라는 별칭 선언 자체가 없다(별칭은 A/B/C뿐). 별칭 미해결과
+            // 혼동해 매핑을 안 만들면 이 SP의 16개 컬럼 * -1 표가 프롬프트에서 사라진다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateFromMapping
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    CLCOMM = B.CommissionAmt
+    FROM   TSettleMst        A
+          ,TClientSettleRate B
+          ,TPGSettleRate     C
+    WHERE  A.ClientID = B.ClientID
+    AND    A.PGName   = C.PGName;
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("TSettleMst", mapping.TargetTable);
+        }
+
+        [Fact]
+        public void Analyze_UpdateTargetAlsoInFromClause_ShouldStillCreateMapping()
+        {
+            // 라운드 2 회귀 수정 - Analyze_UpdateTargetAlsoInFromClause_ShouldAppearAsBothTargetAndRead(:561)와
+            // 같은 DDL. FROM 절의 별칭은 "A"이지 "TSettleMst"가 아니므로 대상은 별칭이 아니라
+            // 평범한 물리 테이블명이다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestUpdateSelfReadMapping
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    CLTotal = A.CLComm + A.CLVT
+    FROM   TSettleMst A
+    WHERE  A.YMD = '20260808';
+END;
+";
+            var parser = new SqlStaticParser();
+
+            var result = parser.Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("TSettleMst", mapping.TargetTable);
+        }
+
+        [Fact]
         public void Analyze_DeleteWithAliasTarget_ShouldRecordOnlyTheResolvedTarget()
         {
             // 4PLCARD의 형태. DeleteTables가 ['A','TSettleMst','TPGProperty']였다.
@@ -791,6 +845,17 @@ END");
 
             // Assert
             Assert.Null(Assert.Single(result.AstUpdateMappings).FromClauseText);
+        }
+
+        [Fact]
+        public void Analyze_UnqualifiedTargetWithoutFromClause_ShouldStillCreateMapping()
+        {
+            // 라운드 2 회귀 수정 - 대상이 한정되지 않았고(TCommMst) FROM 절 자체가 없으면
+            // 별칭일 여지가 없다. 별칭 미해결과 혼동해 매핑을 안 만들면 안 된다.
+            var result = AnalyzeUpdate("    UPDATE TCommMst SET CLVT = 0 WHERE SEQ = 1;");
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("TCommMst", mapping.TargetTable);
         }
 
         [Fact]
