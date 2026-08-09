@@ -127,9 +127,14 @@ namespace ReSet.Core.Tests
             // Act
             var result = new MechanicalValidator().Validate(markdown, BuildSettleMstTruth());
 
-            // Assert - 테이블 동일성 분열.
+            // Assert - 테이블 동일성 분열. 설계 수용 기준 2는 "세 표기를 오류 메시지가
+            // 모두 지목"이다. "TSettleMst"만 단언하면 세 표기 전부의 부분 문자열이라
+            // 메시지가 한 표기만 남겨도 통과해 버린다 - 백틱을 포함한 세 표기 각각을
+            // 따로 단언해야 실제로 셋 다 지목됐는지 증명한다.
             var split = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
-            Assert.Contains("TSettleMst", split.Message);
+            Assert.Contains("`SETTLE_POQ_DB.dbo.TSettleMst`", split.Message);
+            Assert.Contains("`dbo.TSettleMst`", split.Message);
+            Assert.Contains("`TSettleMst`", split.Message);
 
             // Assert - 거짓 부재 주장. 이 개수(23)는 프로덕션에서 관찰되는 수가 아니다.
             // 실제 운영에서는 이 테이블의 스키마 자체가 수집되지 않아(dep.Columns.Count == 0)
