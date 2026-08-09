@@ -640,6 +640,16 @@ namespace ReSet.Core.Services
             {
                 foreach (var columnless in expectations.ColumnlessDependencyTables)
                 {
+                    // single 자신과 같은 canonical이면 충돌이 아니다 - 자기 자신과는
+                    // 특정 불가능성이 없다. 이 분기는 지금은 도달 불가하다: 같은
+                    // canonical이 컬럼 보유 집합과 컬럼 0개 집합에 동시에 실리는
+                    // 경로를 SpecExpectations.From이 만들지 않고(한 canonical은
+                    // 둘 중 하나에만 들어간다), DbMetadataService의 visited 집합이
+                    // 같은 의존성의 중복 등록도 막는다. 그래도 방어로 남겨 둔다 -
+                    // 그 중복 방지 계약이 바뀌면 이 가드가 조용히 이 모호성 판정
+                    // 게이트 자체를 꺼 버리기 때문이다.
+                    if (string.Equals(columnless, single, StringComparison.OrdinalIgnoreCase)) continue;
+
                     if (string.Equals(LastNamePart(columnless), lastPart, StringComparison.OrdinalIgnoreCase))
                     {
                         return null; // 컬럼 0개 동명 테이블과 충돌한다 - 어느 쪽인지 특정 불가.

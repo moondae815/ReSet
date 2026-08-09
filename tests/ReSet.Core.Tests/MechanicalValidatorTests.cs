@@ -1544,6 +1544,43 @@ A[""시작""] --> B[""끝""]
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
 
+        // [Minor] 같은 canonical 이름이 PromptSchemaColumns와 ColumnlessDependencyTables에
+        // 동시에 들어가면 ResolveSchemaTableKey가 자기 자신과 충돌한다고 오판해 항상
+        // null을 돌려준다. SpecExpectations.From은 한 canonical을 두 집합 중 하나에만
+        // 넣으므로 이 상태를 만들 수 없다 - 레코드를 직접 구성해야 재현된다.
+
+        [Fact]
+        public void Validate_WhenSameCanonicalIsInBothColumnSetAndColumnlessSet_ShouldNotSelfConflict()
+        {
+            // Arrange - 같은 canonical(DB1.dbo.TSettleMst)이 컬럼 보유 집합과 컬럼 0개
+            // 집합에 동시에 실린 상태를 직접 구성한다. 자기 자신과의 충돌은 충돌이
+            // 아니어야 하므로, 비한정 이름 `TSettleMst`에 대한 거짓 부재 주장은
+            // 여전히 발화해야 한다(= 귀속이 null로 무력화되지 않았다).
+            const string canonical = "DB1.dbo.TSettleMst";
+            var promptSchemaColumns = new Dictionary<string, IReadOnlySet<string>>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                [canonical] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "CLINTCOMM" }
+            };
+            var columnlessDependencyTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                canonical
+            };
+            var expectations = new SpecExpectations(
+                new List<UpdateColumnExpectation>(),
+                promptSchemaColumns,
+                columnlessDependencyTables,
+                new List<string>());
+            var markdown = WrapSpec(
+                "`TSettleMst`의 스키마에 `CLINTCOMM`은 존재하지 않습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
         // [Minor] H4(####) 하위 절 경계에서 flush하지 않아 조회/갱신 절이 한 버킷으로
         // 합쳐진다. "### "만 경계로 취급하는 것이 원인이다. 프롬프트(AiService.cs)는
         // 하위 절 분리를 요구하면서 헤딩 레벨은 고정하지 않는다.
