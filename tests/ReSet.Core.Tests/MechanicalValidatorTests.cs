@@ -4,6 +4,7 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
+using ReSet.Core.Models;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
@@ -659,6 +660,167 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             public List<string> Messages { get; } = new();
             public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
+        }
+
+        private const string SpecSkeleton = @"## 개요
+본문
+## 파라미터 목록
+본문
+## CRUD 분석
+{0}
+## 로직 흐름 요약
+본문
+## 비즈니스 흐름 시각화
+```mermaid
+graph TD
+A[""시작""] --> B[""끝""]
+```
+";
+
+        private static string SpecWith(string crudBody) => SpecSkeleton.Replace("{0}", crudBody);
+
+        private static SpecExpectations ExpectClvtAndPgvt()
+        {
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping { TargetTable = "DB.dbo.TCommMst", StatementOrdinal = 1 };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "CLVT", SourceExpression = "CLVT * -1" });
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "PGVT", SourceExpression = "PGVT * -1" });
+            analysis.AstUpdateMappings.Add(mapping);
+            return SpecExpectations.FromStaticAnalysis(analysis)!;
+        }
+
+        [Fact]
+        public void Validate_WithoutExpectations_ShouldBehaveAsBefore()
+        {
+            // Arrange
+            var markdown = SpecWith("UPDATE 대상 테이블의 금액 컬럼을 -1배 처리합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown);
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
+
+        [Fact]
+        public void Validate_WhenAllExpectedUpdateColumnsPresent_ShouldPass()
+        {
+            // Arrange
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+| DB.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
+
+        [Fact]
+        public void Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt()
+        {
+            // Arrange
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.UpdateMappingMissing);
+            Assert.Contains(result.Errors, e => e.Contains("PGVT"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("CLVT") && !e.Contains("PGVT"));
+        }
+
+        [Fact]
+        public void Validate_WhenTheUpdateTableSectionIsAbsent_ShouldReportIt()
+        {
+            // Arrange
+            var markdown = SpecWith("UPDATE 대상 테이블의 금액 컬럼을 -1배 처리합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.UpdateMappingMissing);
+        }
+
+        [Fact]
+        public void Validate_ShouldNotAcceptAPrefixMatchAsTheColumn()
+        {
+            // Arrange - CLVTOTAL은 CLVT가 아니다.
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVTOTAL | 0 | 무관한 컬럼 |
+| DB.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("CLVT"));
+        }
+
+        [Fact]
+        public void Validate_WhenHeadingUsesTheShortTableName_ShouldStillMatch()
+        {
+            // Arrange
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: TCommMst
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+| TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
+
+        [Fact]
+        public void Validate_WhenTheTableIsSplitAcrossTwoSections_ShouldUnionThem()
+        {
+            // Arrange
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+
+### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 2)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
+
+        [Fact]
+        public void SuggestedPromptFix_ShouldCarryTheUpdateMappingFailure()
+        {
+            // Arrange
+            var markdown = SpecWith("UPDATE 대상 테이블의 금액 컬럼을 -1배 처리합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert - 재생성 프롬프트에 실리지 않으면 L1이 실패해도 고칠 재료가 없다.
+            Assert.NotNull(result.SuggestedPromptFix);
+            Assert.Contains("UPDATE", result.SuggestedPromptFix!);
+            Assert.Contains("CLVT", result.SuggestedPromptFix!);
         }
     }
 }

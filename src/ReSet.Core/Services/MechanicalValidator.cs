@@ -14,6 +14,7 @@ namespace ReSet.Core.Services
         HeaderMissing,
         MermaidQuoteMissing,
         MermaidCliError,
+        UpdateMappingMissing,
         General
     }
 
@@ -77,7 +78,7 @@ namespace ReSet.Core.Services
             _useMermaidCli = useMermaidCli;
         }
 
-        public ValidationResult Validate(string markdown)
+        public ValidationResult Validate(string markdown, SpecExpectations? expectations = null)
         {
             var result = new ValidationResult();
             Log.Information("개별 명세서 기계적 문법 및 린트 검증 시작");
@@ -97,6 +98,11 @@ namespace ReSet.Core.Services
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
+
+                if (expectations != null)
+                {
+                    CheckUpdateMappings(cleansed, expectations, result);
+                }
             }
             catch (Exception ex)
             {
@@ -314,6 +320,119 @@ namespace ReSet.Core.Services
                 haystack,
                 $@"(?<!\w){Regex.Escape(token)}(?!\w)",
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
+        }
+
+        private const string UpdateHeadingPrefix = "### UPDATE 대상 테이블:";
+
+        /// <summary>
+        /// 정적 파서가 확정한 UPDATE 대상 컬럼이 명세서 본문에 실제로 있는지 본다.
+        ///
+        /// 문장 서수까지 대조하지 않고 테이블 단위 합집합으로 완화한다. 프롬프트는 문장별
+        /// 표를 요구하지만, AI가 표를 합쳐 썼다는 이유로 재생성을 강요하면 내용이 옳은데도
+        /// 루프가 돈다. L1은 형식 검증이고, 잡아야 할 것은 누락이다.
+        /// </summary>
+        private static void CheckUpdateMappings(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (crudStart, crudEnd) = MarkdownSectionLocator.LocateSection(lines, "## CRUD 분석", "## ");
+
+            // 헤더 자체가 없으면 ValidateMarkdownStructure가 이미 보고했다. 중복하지 않는다.
+            if (crudStart < 0) return;
+
+            var sections = CollectUpdateSections(lines, crudStart + 1, crudEnd);
+
+            foreach (var expectation in expectations.UpdateColumns)
+            {
+                var key = LastNamePart(expectation.Table);
+
+                if (!sections.TryGetValue(key, out var body))
+                {
+                    AddUpdateMappingError(result,
+                        $"`## CRUD 분석`에 UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 없습니다. " +
+                        $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}");
+                    continue;
+                }
+
+                var missing = expectation.Columns.Where(column => !ContainsToken(body, column)).ToList();
+                if (missing.Count > 0)
+                {
+                    AddUpdateMappingError(result,
+                        $"UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표에 다음 컬럼이 누락되었습니다: " +
+                        string.Join(", ", missing));
+                }
+            }
+        }
+
+        private static void AddUpdateMappingError(ValidationResult result, string message)
+        {
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.UpdateMappingMissing,
+                Message = message
+            });
+        }
+
+        /// <summary>
+        /// UPDATE 표 구간을 테이블별로 모은다. 같은 테이블이 여러 번 나오면 이어 붙인다.
+        /// </summary>
+        private static Dictionary<string, string> CollectUpdateSections(
+            IReadOnlyList<string> lines, int start, int end)
+        {
+            var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var index = start;
+
+            while (index < end)
+            {
+                if (!lines[index].TrimStart().StartsWith(UpdateHeadingPrefix, StringComparison.Ordinal))
+                {
+                    index++;
+                    continue;
+                }
+
+                var table = LastNamePart(ReadHeadingTable(lines[index].TrimStart()));
+                var bodyStart = index + 1;
+
+                var bodyEnd = MarkdownSectionLocator.FindIndexOutsideFence(
+                    lines, bodyStart,
+                    line => line.TrimStart().StartsWith("### ", StringComparison.Ordinal)
+                         || line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+
+                if (bodyEnd < 0 || bodyEnd > end) bodyEnd = end;
+
+                var body = string.Join("\n", lines.Skip(bodyStart).Take(bodyEnd - bodyStart));
+                sections[table] = sections.TryGetValue(table, out var existing)
+                    ? existing + "\n" + body
+                    : body;
+
+                index = bodyEnd;
+            }
+
+            return sections;
+        }
+
+        /// <summary>
+        /// 헤딩에서 테이블명을 읽는다. 프롬프트가 요구하는 "(문장 N)" 꼬리와 AI가 덧붙일
+        /// 수 있는 부연을 첫 공백에서 떨어낸다.
+        /// </summary>
+        private static string ReadHeadingTable(string headingLine)
+        {
+            var rest = headingLine.Substring(UpdateHeadingPrefix.Length).Trim();
+            var space = rest.IndexOf(' ');
+            return space < 0 ? rest : rest.Substring(0, space);
+        }
+
+        /// <summary>
+        /// 한정된 이름에서 마지막 파트만 남긴다. 프롬프트는 canonical 3-part를 요구하지만
+        /// AI가 짧게 쓰는 것은 결함이 아니다.
+        /// </summary>
+        private static string LastNamePart(string name)
+        {
+            var trimmed = name.Trim().Trim('`');
+            var dot = trimmed.LastIndexOf('.');
+            var last = dot < 0 ? trimmed : trimmed.Substring(dot + 1);
+            return last.Trim('[', ']', '`');
         }
 
         private void ValidateMarkdownStructure(string markdown, IReadOnlyList<string> requiredHeaders, ValidationResult result)
@@ -771,11 +890,24 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
             }
 
-            // 4. 기타 에러
+            // 4. UPDATE 매핑 누락
+            var updateErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.UpdateMappingMissing);
+            if (updateErrors.Count > 0)
+            {
+                sb.AppendLine("### 🚨 4. UPDATE 컬럼 매핑 누락 오류");
+                sb.AppendLine("정적 파서(AST)가 확정한 UPDATE SET 대상 컬럼이 `## CRUD 분석`의 매핑 표에서 빠졌습니다. 프롬프트에 제공된 fill-in-the-blank 표를 그대로 사용하고, 행을 생략하거나 '...'로 축약하지 마십시오. 표의 헤딩은 반드시 `### UPDATE 대상 테이블: <테이블명>` 형식이어야 합니다.");
+                foreach (var err in updateErrors)
+                {
+                    sb.AppendLine($"  - {err.Message}");
+                }
+                sb.AppendLine();
+            }
+
+            // 5. 기타 에러
             var generalErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.General);
             if (generalErrors.Count > 0)
             {
-                sb.AppendLine("### 🚨 4. 기타 정적 규격 검사 에러");
+                sb.AppendLine("### 🚨 5. 기타 정적 규격 검사 에러");
                 foreach (var err in generalErrors)
                 {
                     sb.AppendLine($"  - {err.Message}");
