@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using ReSet.Core.Models;
@@ -58,6 +59,7 @@ namespace ReSet.Core.Services
                         result.SelectTables = visitor.SelectTables;
                         result.InsertTables = visitor.InsertTables;
                         result.AstInsertMappings = visitor.AstInsertMappings;
+                        result.AstUpdateMappings = visitor.AstUpdateMappings;
                         result.UpdateTables = visitor.UpdateTables;
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
@@ -166,6 +168,7 @@ namespace ReSet.Core.Services
         public List<string> InsertTables { get; } = new();
         public List<AstInsertMapping> AstInsertMappings { get; } = new();
         public List<string> UpdateTables { get; } = new();
+        public List<AstUpdateMapping> AstUpdateMappings { get; } = new();
         public List<string> DeleteTables { get; } = new();
 
         public List<string> LinkedServerReferences { get; } = new();
@@ -181,6 +184,7 @@ namespace ReSet.Core.Services
         private readonly HashSet<string> _foundInsert = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _foundUpdate = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _foundDelete = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _updateOrdinals = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<string> _foundLinked = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _foundFuncs = new(StringComparer.OrdinalIgnoreCase);
@@ -298,13 +302,124 @@ namespace ReSet.Core.Services
             var prevResolved = _dmlTargetResolved;
 
             _currentDmlTargetNode = node.Target;
-            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, UpdateTables, _foundUpdate);
+            _dmlTargetResolved = RecordDmlTarget(
+                node.Target, node.FromClause, UpdateTables, _foundUpdate, out var resolvedTarget);
+
+            // 대상을 풀지 못한 문장은 매핑을 만들지 않는다. 잘못 푼 테이블 이름에 컬럼을
+            // 붙이면 L1이 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
+            if (_dmlTargetResolved && !string.IsNullOrWhiteSpace(resolvedTarget))
+            {
+                RecordUpdateMapping(node, resolvedTarget!);
+            }
 
             base.ExplicitVisit(node);
 
             _currentDmlTargetNode = prevTargetNode;
             _dmlTargetResolved = prevResolved;
             _statementContext.Pop();
+        }
+
+        private void RecordUpdateMapping(UpdateSpecification node, string targetTable)
+        {
+            if (node.SetClauses == null) return;
+
+            var assignments = new List<AstUpdateAssignment>();
+            foreach (var clause in node.SetClauses)
+            {
+                var column = ExtractSetColumn(clause);
+                if (string.IsNullOrWhiteSpace(column)) continue;
+
+                assignments.Add(new AstUpdateAssignment
+                {
+                    Column = column!,
+                    SourceExpression = ExtractSetExpression(clause)
+                });
+            }
+
+            // SET 절이 컬럼을 하나도 대입하지 않으면(변수 대입뿐이면) 표로 만들 것이 없다.
+            if (assignments.Count == 0) return;
+
+            _updateOrdinals.TryGetValue(targetTable, out var previous);
+            _updateOrdinals[targetTable] = previous + 1;
+
+            var mapping = new AstUpdateMapping
+            {
+                TargetTable = targetTable,
+                StatementOrdinal = previous + 1,
+                FromClauseText = node.FromClause == null ? null : GetFragmentText(node.FromClause)
+            };
+            mapping.Assignments.AddRange(assignments);
+            mapping.SelfReferencedColumns.AddRange(FindSelfReferences(node, assignments));
+            AstUpdateMappings.Add(mapping);
+        }
+
+        private static string? ExtractSetColumn(SetClause clause)
+        {
+            switch (clause)
+            {
+                case AssignmentSetClause assignment:
+                    // Column이 null이면 SET @var = ... 변수 대입이다. 컬럼이 아니다.
+                    return LastIdentifier(assignment.Column?.MultiPartIdentifier);
+                case FunctionCallSetClause call
+                    when call.MutatorFunction?.CallTarget is MultiPartIdentifierCallTarget target:
+                    // .WRITE() 변형. 컬럼만 뽑고 표현식은 절 원문을 쓴다.
+                    return LastIdentifier(target.MultiPartIdentifier);
+                default:
+                    return null;
+            }
+        }
+
+        private string ExtractSetExpression(SetClause clause) =>
+            clause is AssignmentSetClause { NewValue: not null } assignment
+                ? GetFragmentText(assignment.NewValue)
+                : GetFragmentText(clause);
+
+        private static string? LastIdentifier(MultiPartIdentifier? identifier)
+        {
+            var last = identifier?.Identifiers?.LastOrDefault();
+            return string.IsNullOrWhiteSpace(last?.Value) ? null : last!.Value;
+        }
+
+        /// <summary>
+        /// SET 우변이 같은 문장의 타겟 컬럼을 참조하는지 본다.
+        ///
+        /// 판정을 한 문장 안으로 제한한다. 전역 컬럼 사전을 쓰면 다른 문장이 갱신하는
+        /// 동명 컬럼이 섞여 오탐이 난다 - RecordDmlTarget이 전역 별칭 사전을 쓰지 않는
+        /// 것과 같은 이유다.
+        /// </summary>
+        private static List<string> FindSelfReferences(
+            UpdateSpecification node, List<AstUpdateAssignment> assignments)
+        {
+            var targets = new HashSet<string>(
+                assignments.Select(a => a.Column), StringComparer.OrdinalIgnoreCase);
+            var found = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var clause in node.SetClauses.OfType<AssignmentSetClause>())
+            {
+                if (clause.NewValue == null) continue;
+
+                var collector = new ColumnReferenceCollector();
+                clause.NewValue.Accept(collector);
+
+                foreach (var column in collector.Columns)
+                {
+                    if (targets.Contains(column) && seen.Add(column)) found.Add(column);
+                }
+            }
+
+            return found;
+        }
+
+        private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
+        {
+            public List<string> Columns { get; } = new();
+
+            public override void Visit(ColumnReferenceExpression node)
+            {
+                var column = LastIdentifier(node.MultiPartIdentifier);
+                if (column != null) Columns.Add(column);
+            }
         }
 
         public override void ExplicitVisit(DeleteSpecification node)
@@ -314,7 +429,7 @@ namespace ReSet.Core.Services
             var prevResolved = _dmlTargetResolved;
 
             _currentDmlTargetNode = node.Target;
-            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, DeleteTables, _foundDelete);
+            _dmlTargetResolved = RecordDmlTarget(node.Target, node.FromClause, DeleteTables, _foundDelete, out _);
 
             base.ExplicitVisit(node);
 
@@ -337,14 +452,17 @@ namespace ReSet.Core.Services
             TableReference? target,
             FromClause? fromClause,
             List<string> targetList,
-            HashSet<string> seen)
+            HashSet<string> seen,
+            out string? resolvedName)
         {
+            resolvedName = null;
             if (target is not NamedTableReference named || named.SchemaObject == null) return false;
 
             var written = GetSchemaObjectString(named.SchemaObject);
             if (string.IsNullOrWhiteSpace(written)) return false;
 
             var resolved = ResolveDmlTargetName(written, fromClause);
+            resolvedName = resolved;
 
             if (resolved.StartsWith("#", StringComparison.Ordinal))
             {

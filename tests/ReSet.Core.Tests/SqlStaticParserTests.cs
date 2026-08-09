@@ -1,5 +1,7 @@
 using System;
+using System.Linq;
 using Xunit;
+using ReSet.Core.Models;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
@@ -714,6 +716,128 @@ END;
             Assert.Equal(new[] { "MyServer.RemoteDb.dbo.Orders" }, result.DeleteTables);
             Assert.Contains("MyServer.RemoteDb.dbo.Orders", result.LinkedServerReferences);
             Assert.Contains(result.ControlFlowSummary, s => s.Contains("Linked Server 원격 테이블 참조 감지됨") && s.Contains("MyServer.RemoteDb.dbo.Orders"));
+        }
+
+        private static SpStaticAnalysisResult AnalyzeUpdate(string body)
+        {
+            var parser = new SqlStaticParser();
+            return parser.Analyze($@"
+CREATE PROCEDURE dbo.UpdateProbe
+AS
+BEGIN
+{body}
+END");
+        }
+
+        [Fact]
+        public void Analyze_WithSimpleSetClause_ShouldExtractColumnsAndExpressions()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate("    UPDATE dbo.TCommMst SET CLVT = 100, PGVT = @amount;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("dbo.TCommMst", mapping.TargetTable);
+            Assert.Equal(1, mapping.StatementOrdinal);
+            Assert.Collection(mapping.Assignments,
+                a => { Assert.Equal("CLVT", a.Column); Assert.Equal("100", a.SourceExpression); },
+                a => { Assert.Equal("PGVT", a.Column); Assert.Equal("@amount", a.SourceExpression); });
+        }
+
+        [Fact]
+        public void Analyze_WithQualifiedSetTarget_ShouldStripTableQualifier()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate("    UPDATE T SET T.COMM = 0 FROM dbo.TCommMst T;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("COMM", Assert.Single(mapping.Assignments).Column);
+        }
+
+        [Fact]
+        public void Analyze_WithVariableAssignment_ShouldRecordOnlyColumnAssignments()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate(
+                "    DECLARE @total INT;\r\n" +
+                "    UPDATE dbo.TCommMst SET @total = CLVT, CLVT = 0;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("CLVT", Assert.Single(mapping.Assignments).Column);
+        }
+
+        [Fact]
+        public void Analyze_WithFromClause_ShouldCaptureFromTextAndResolveAlias()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate(
+                "    UPDATE A SET A.CLVT = B.CLVT FROM dbo.TCommMst A INNER JOIN dbo.TStage B ON A.SEQ = B.SEQ;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal("dbo.TCommMst", mapping.TargetTable);
+            Assert.NotNull(mapping.FromClauseText);
+            Assert.Contains("dbo.TCommMst", mapping.FromClauseText!);
+            Assert.Contains("dbo.TStage", mapping.FromClauseText!);
+        }
+
+        [Fact]
+        public void Analyze_WithoutFromClause_ShouldLeaveFromTextNull()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate("    UPDATE dbo.TCommMst SET CLVT = 0 WHERE SEQ = 1;");
+
+            // Assert
+            Assert.Null(Assert.Single(result.AstUpdateMappings).FromClauseText);
+        }
+
+        [Fact]
+        public void Analyze_WithSelfReferencingSet_ShouldReportSelfReferencedColumns()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate("    UPDATE dbo.TCommMst SET CLVT = CLVT * -1, PGVT = PGVT * -1;");
+
+            // Assert
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal(new[] { "CLVT", "PGVT" }, mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_WhenRightHandSideIsNotATarget_ShouldNotReportSelfReference()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate("    UPDATE dbo.TCommMst SET CLVT = PGVT * -1;");
+
+            // Assert
+            Assert.Empty(Assert.Single(result.AstUpdateMappings).SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_WithTwoUpdatesOnSameTable_ShouldNumberStatements()
+        {
+            // Arrange & Act
+            var result = AnalyzeUpdate(
+                "    UPDATE dbo.TCommMst SET CLVT = 0;\r\n" +
+                "    UPDATE dbo.TCommMst SET PGVT = 1;");
+
+            // Assert
+            Assert.Equal(2, result.AstUpdateMappings.Count);
+            Assert.Equal(1, result.AstUpdateMappings[0].StatementOrdinal);
+            Assert.Equal(2, result.AstUpdateMappings[1].StatementOrdinal);
+        }
+
+        [Fact]
+        public void Analyze_WhenTargetIsUnresolvable_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - 테이블 변수는 NamedTableReference가 아니므로 대상이 풀리지 않는다.
+            var result = AnalyzeUpdate(
+                "    DECLARE @T TABLE (CLVT INT);\r\n" +
+                "    UPDATE @T SET CLVT = 0;");
+
+            // Assert
+            Assert.Empty(result.AstUpdateMappings);
         }
     }
 }
