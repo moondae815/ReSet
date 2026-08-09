@@ -1117,9 +1117,12 @@ A[""시작""] --> B[""끝""]
         public void Validate_WhenNoTableCanBeAttributed_ShouldPass()
         {
             // Arrange - 테이블을 특정할 수 없으면 침묵한다. 잘못 지목한 오류는
-            // 재생성으로 고칠 수 없다.
+            // 재생성으로 고칠 수 없다. "스키마"를 문장에 넣어 부재 표현 게이트를 통과시킨
+            // 뒤에도 귀속 실패로 침묵하는지를 실제로 검증한다 - 게이트조차 안 열리면
+            // 이 가드는 시험되지 않는다.
             var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
-            var markdown = WrapSpec("프로시저에는 `INSERT` 문이 없습니다. `CLINTCOMM`은 존재하지 않습니다.");
+            var markdown = WrapSpec(
+                "프로시저에는 `INSERT` 문이 없습니다. 제공된 스키마 기준으로 `CLINTCOMM`은 존재하지 않습니다.");
 
             // Act
             var result = new MechanicalValidator().Validate(markdown, expectations);
@@ -1146,10 +1149,12 @@ A[""시작""] --> B[""끝""]
         public void Validate_WhenTheSameClaimRepeats_ShouldReportItOnce()
         {
             // Arrange - 같은 (테이블, 컬럼) 주장이 여러 줄에 나와도 재생성 지시는 하나면 된다.
+            // 두 줄 모두 "스키마"를 포함시켜 부류 B 게이트를 통과하게 한다 - 그래야
+            // reported.Add 중복 제거 가드가 실제로 시험된다.
             var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
             var markdown = WrapSpec(
-                "`dbo.TSettleMst`의 `CLINTCOMM`은 존재하지 않습니다.\n" +
-                "다시 말해 `dbo.TSettleMst`의 `CLINTCOMM`은 스키마 불일치입니다.");
+                "`dbo.TSettleMst`의 스키마에 `CLINTCOMM`은 존재하지 않습니다.\n" +
+                "다시 말해 `dbo.TSettleMst`의 스키마에 `CLINTCOMM`은 존재하지 않습니다.");
 
             // Act
             var result = new MechanicalValidator().Validate(markdown, expectations);
@@ -1175,7 +1180,10 @@ A[""시작""] --> B[""끝""]
                 sp.Dependencies.Add(dep);
             }
             var expectations = SpecExpectations.From(sp)!;
-            var markdown = WrapSpec("`dbo.TCommMst`의 `AMT`는 존재하지 않습니다.");
+            // "스키마"를 문장에 넣어 부류 B 게이트를 통과하게 한다 - 그래야 귀속 모호
+            // 시의 침묵이 게이트 자체가 안 열려서가 아니라 ResolveSchemaTableKey가
+            // null을 돌려줘서임을 실제로 검증한다.
+            var markdown = WrapSpec("`dbo.TCommMst`의 스키마에 `AMT`는 존재하지 않습니다.");
 
             // Act
             var result = new MechanicalValidator().Validate(markdown, expectations);
@@ -1184,15 +1192,21 @@ A[""시작""] --> B[""끝""]
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
         }
 
-        // 아래는 리뷰에서 지적된 두 결함에 대한 회귀 테스트다.
+        // 아래는 두 라운드의 리뷰에서 지적된 결함에 대한 회귀 테스트다.
         //
-        // 결함 1: AbsenceClaimTokens의 맨 "존재하지 않"이 스키마 부재 단정과 런타임
-        // NULL/기본값 조건 서술을 구별하지 못했다. 판별자는 단정형("존재하지 않음",
-        // "존재하지 않습니다")과 조건형("존재하지 않는 경우", "존재하지 않으면")의 차이다.
+        // 1라운드 결함: AbsenceClaimTokens의 맨 "존재하지 않"이 스키마 부재 단정과
+        // 런타임 NULL/기본값 서술을 구별하지 못했다.
         //
-        // 결함 2: ResolveSchemaTableKey(candidate, …) != null 가드가 하중을 지는데도
-        // 회귀 테스트가 없었다. 이 가드가 없으면 그 자체로 실재하는 테이블명이 우연히
-        // 다른 테이블의 컬럼명과 같을 때, 테이블 부재 진술이 컬럼 부재 주장으로
+        // 2라운드 결함: 1라운드가 내놓은 "단정형이냐 조건형이냐"라는 판별자가 틀렸다.
+        // 한국어 어미는 그렇게 이분법적이지 않다 - "존재하지 않아"(연결형)는 단정도
+        // 조건도 아닌데, 실측 코퍼스(PG_Client_CMRate_Ins:71)의 진짜 결함 문장이 바로
+        // 이 연결형을 쓴다. 진짜 판별자는 어미가 아니라 주장의 대상이다 - 스키마에
+        // 대한 주장인가, 값에 대한 주장인가. 아래 두 부류로 나눈 이유는
+        // MechanicalValidator.CheckSchemaClaims 바로 위 AbsenceClaimTokens 주석을 참고.
+        //
+        // 결함(가드 미검증): ResolveSchemaTableKey(candidate, …) != null 가드가 하중을
+        // 지는데도 회귀 테스트가 없었다. 이 가드가 없으면 그 자체로 실재하는 테이블명이
+        // 우연히 다른 테이블의 컬럼명과 같을 때, 테이블 부재 진술이 컬럼 부재 주장으로
         // 오귀속된다.
 
         [Fact]
@@ -1310,6 +1324,61 @@ A[""시작""] --> B[""끝""]
 
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        // 아래는 2라운드 리뷰가 실제 코퍼스에서 재현한 미탐(false negative)에 대한
+        // 회귀 테스트다. 1라운드의 "단정형/조건형" 판별자가 어휘를 좁히면서 연결형
+        // 어미("존재하지 않아")를 쓰는 진짜 결함 문장까지 함께 놓쳤다.
+
+        [Fact]
+        public void Validate_WhenSpecUsesConnectiveFormWithSchemaContextToDenyRealColumns_ShouldFail()
+        {
+            // Arrange - dbo.UP_Util_PG_Client_CMRate_Ins/docs/Spec.md:71의 실측 원문.
+            // 선행 설계 문서(2026-08-08-static-analysis-identity-design.md §확인된 결함 ①)가
+            // 지목한 원본 결함 3종 중 하나이며, CompanySalesType·ExtraSettleFlag는 실재하는
+            // 컬럼이다. "존재하지 않아"는 연결형 어미라 1라운드의 단정형 토큰 어느 것도
+            // 매치하지 못했다 - 이번 라운드의 회귀 방지선이다.
+            var expectations = SchemaExpectations("DB.dbo.TClient", "CompanySalesType", "ExtraSettleFlag");
+            var markdown = WrapSpec(
+                "다만 제공된 `dbo.TClient` 스키마에는 `CompanySalesType`, `ExtraSettleFlag` 컬럼이 " +
+                "존재하지 않아 소스 코드와 제공 스키마 간 불일치가 있습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+            Assert.Contains(result.Errors, e => e.Contains("CompanySalesType"));
+            Assert.Contains(result.Errors, e => e.Contains("ExtraSettleFlag"));
+        }
+
+        [Fact]
+        public void Validate_WhenLineMixesAnAssertionWithAConditionalHedge_ShouldStillFail()
+        {
+            // Arrange - dbo.UP_UTIL_SETTLE_CANCEL_INS/docs/Spec.md:110의 실측 원문 형태.
+            // 1라운드 리뷰는 이 줄을 오탐 후보로 의심했지만, 코디네이터가 재확인한 대로
+            // 이것은 오탐이 아니라 진짜 결함이다 - CYMD·INSTATE·OUTSTATE·NonSettleAmt는
+            // 필터 결함으로 프롬프트에서 누락됐던 실재 컬럼들이다(선행 설계 문서 §확인된
+            // 결함 ①). 한 물리 줄 안에 단정("컬럼 불일치가 존재합니다")과 조건형 헤징
+            // ("존재하지 않으면")이 섞여 있어도, 그 줄에 "스키마"와 "존재하지 않"이 함께
+            // 있으므로 부류 B로 걸려야 한다.
+            var expectations = SchemaExpectations(
+                "DB.dbo.TSettleMst", "CYMD", "INSTATE", "OUTSTATE", "NonSettleAmt");
+            var markdown = WrapSpec(
+                "`CYMD`, `INSTATE`, `OUTSTATE`, `NonSettleAmt`에 대해 컬럼 불일치가 존재합니다. " +
+                "해당 컬럼이 `dbo.TSettleMst` 스키마에 존재하지 않으면 기본값을 사용합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+            Assert.Contains(result.Errors, e => e.Contains("CYMD"));
+            Assert.Contains(result.Errors, e => e.Contains("INSTATE"));
+            Assert.Contains(result.Errors, e => e.Contains("OUTSTATE"));
+            Assert.Contains(result.Errors, e => e.Contains("NonSettleAmt"));
         }
     }
 }

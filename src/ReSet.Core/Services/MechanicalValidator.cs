@@ -376,35 +376,50 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 명세서가 프롬프트에 실린 컬럼을 "없다"고 단정하는 것을 잡는다.
         ///
-        /// 목록은 지어낸 것이 아니라 실제 14개 명세서에서 관찰된 형태다. 어미 변화를
-        /// 한 항목이 덮도록 어간에서 끊었다. 맨 "없습니다"는 넣지 않는다 - 명세서
-        /// 전체에 일상적으로 쓰이는 말이라 표면이 너무 넓다.
+        /// 판별자는 문장의 어미가 아니라 <b>주장의 대상</b>이다 - 스키마에 대한
+        /// 주장인가, 런타임 값에 대한 주장인가. 직전 라운드는 "단정형이냐 조건형이냐"로
+        /// 어미를 갈랐지만 틀렸다. 한국어 어미는 그렇게 이분법적이지 않다 - 연결형
+        /// ("존재하지 않아")은 단정도 조건도 아닌데, 실측 코퍼스(PG_Client_CMRate_Ins:71:
+        /// "…제공된 `dbo.TClient` 스키마에는 `CompanySalesType`, `ExtraSettleFlag` 컬럼이
+        /// 존재하지 않아 소스 코드와 제공 스키마 간 불일치가 있습니다.")의 진짜 결함
+        /// 문장이 바로 이 연결형을 쓴다. 어미로 목록을 세분할수록 이런 형태를 놓친다.
         ///
-        /// 맨 "존재하지 않"도 쓸 수 없다. 한국어에서 이 어간은 스키마 부재 단정
-        /// ("존재하지 않음", "존재하지 않습니다")과 런타임 NULL/기본값 처리를 설명하는
-        /// 조건형 서술("존재하지 않는 경우", "존재하지 않으면")을 똑같이 덮는다. 셋째
-        /// 조건(컬럼이 실재하는지)은 <b>어느 컬럼을 말하는지</b>만 가려낼 뿐 <b>무엇을
-        /// 주장하는지</b>는 가려내지 못하므로, 조건형 문장까지 걸리면 실제 실행 시
-        /// NULL을 어떻게 처리하는지 설명하는 정상적인 업무 로직 서술이 재생성 루프에
-        /// 걸린다. 그래서 판별자를 단정형/조건형의 차이로 좁힌다 - 단정형은 어미로
-        /// 끝나고("존재하지 않음", "존재하지 않습니다") 조건형은 어미 뒤에 조건절이
-        /// 이어진다.
+        /// 그래서 표현을 두 부류로 나눈다.
+        ///   부류 A(자기완결적 판정형, SelfContainedAbsenceClaimTokens) - 같은 줄에 다른
+        ///   문맥 없이도 그 자체로 스키마 판정을 뜻한다. 표 셀("| ... | 존재하지 않음 |
+        ///   ... |")이 대표적이다 - 표 셀에는 "스키마"라는 단어가 없다.
+        ///   부류 B(스키마 문맥 요구형, SchemaContextAbsenceClaimTokens) - "존재하지" 하나
+        ///   만으로는 스키마 부재인지 런타임 부재인지 알 수 없으므로, 같은 줄에 "스키마"
+        ///   라는 단어가 함께 있을 때만 발동한다.
         ///
-        /// 목록이 완전하지 않다는 것은 인정된 한계다. 새 표현이 나타나면 그 명세서가
-        /// 통과한다. 대신 목록에 없는 표현이 오탐을 만들지는 않는다 - 실패 방향이
-        /// 안전한 쪽이다. 잔여 한계도 남는다: "`CLVT` 값은 존재하지 않습니다"처럼
-        /// 단정형 어미로 런타임 값을 서술하는 문장은 여전히 걸린다. 드물지만 0은
-        /// 아니다.
+        /// 목록은 지어낸 것이 아니라 실제 명세서에서 관찰된 형태다. 맨 "없습니다"는
+        /// 부류 A에 넣지 않는다 - 명세서 전체에 일상적으로 쓰이는 말이라 표면이 너무
+        /// 넓다. 목록이 완전하지 않다는 것도 인정된 한계다 - 목록에 없는 표현이 나타나면
+        /// 그 명세서가 통과한다. 대신 목록에 없는 표현이 오탐을 만들지는 않는다 - 실패
+        /// 방향이 안전한 쪽이다.
+        ///
+        /// 잔여 한계: 같은 줄에 "스키마"를 언급하면서 별개로 실재 컬럼의 런타임 NULL
+        /// 처리를 서술하는 문장은 여전히 오탐이다. 예: "제공된 스키마 기준으로 `CLVT`
+        /// 값이 존재하지 않으면 0을 씁니다." - "스키마"와 "존재하지"가 한 줄에 있지만
+        /// 주장의 대상은 값이지 스키마가 아니다. 줄 단위 토큰 대조로는 문장 구조를 읽지
+        /// 못하므로 이 경우를 가르는 더 안전한 어휘적 판별자를 찾지 못했다.
         /// </summary>
-        private static readonly string[] AbsenceClaimTokens =
+        private static readonly string[] SelfContainedAbsenceClaimTokens =
         {
             "스키마 불일치",
             "존재하지 않음",
-            "존재하지 않습니다",
             "정의되어 있지 않",
             "스키마에 없",
             "스키마가 없"
         };
+
+        /// <summary>스키마 문맥("스키마"라는 단어)이 같은 줄에 있을 때만 부재 주장으로 친다.</summary>
+        private static readonly string[] SchemaContextAbsenceClaimTokens =
+        {
+            "존재하지 않"
+        };
+
+        private const string SchemaContextWord = "스키마";
 
         private static readonly Regex BacktickIdentifierRegex =
             new Regex(@"`([^`\r\n]+)`", RegexOptions.Compiled);
@@ -432,7 +447,12 @@ namespace ReSet.Core.Services
 
             foreach (var line in MarkdownSectionLocator.SplitLines(markdown))
             {
-                if (!Array.Exists(AbsenceClaimTokens, t => line.Contains(t, StringComparison.Ordinal)))
+                var isSelfContainedClaim = Array.Exists(
+                    SelfContainedAbsenceClaimTokens, t => line.Contains(t, StringComparison.Ordinal));
+                var isSchemaContextClaim = line.Contains(SchemaContextWord, StringComparison.Ordinal)
+                    && Array.Exists(SchemaContextAbsenceClaimTokens, t => line.Contains(t, StringComparison.Ordinal));
+
+                if (!isSelfContainedClaim && !isSchemaContextClaim)
                 {
                     continue;
                 }
