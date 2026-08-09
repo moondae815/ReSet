@@ -1039,5 +1039,149 @@ A[""시작""] --> B[""끝""]
             // 찾지 못해")를 단언해야 헤더 메시지 형식이 바뀌어도 우연히 통과하지 않는다.
             Assert.Contains(sink.Messages, m => m.Contains("완전/부분 일치 모두로 찾지 못해"));
         }
+
+        private static SpecExpectations SchemaExpectations(
+            string canonicalTable, params string[] columns)
+        {
+            var dep = new DependencyInfo
+            {
+                Name = canonicalTable.Split('.')[^1],
+                Schema = "dbo",
+                Database = canonicalTable.Split('.').Length >= 3 ? canonicalTable.Split('.')[0] : null,
+                Type = "USER_TABLE"
+            };
+            foreach (var column in columns)
+            {
+                dep.Columns.Add(new ColumnInfo { ColumnName = column, DataType = "int" });
+            }
+
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey(
+                    canonicalTable.Split('.').Length >= 3 ? canonicalTable.Split('.')[0] : "DB",
+                    "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+            sp.Dependencies.Add(dep);
+            return SpecExpectations.From(sp)!;
+        }
+
+        private static string WrapSpec(string crudBody)
+        {
+            return string.Join("\n", new[]
+            {
+                "## 개요", "내용", "## 파라미터 목록", "내용",
+                "## CRUD 분석", crudBody,
+                "## 로직 흐름 요약", "내용", "## 비즈니스 흐름 시각화",
+                "```mermaid", "flowchart TD", "A[\"시작\"] --> B[\"끝\"]", "```"
+            });
+        }
+
+        [Fact]
+        public void Validate_WhenSpecClaimsAnExistingColumnIsAbsent_ShouldFail()
+        {
+            // Arrange - 14개 명세서를 통과시킨 결함의 모양.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM", "CLETC");
+            var markdown = WrapSpec(
+                "### 스키마 불일치 컬럼\n\n" +
+                "| 테이블명 | 컬럼명 | 판정 | 용도 |\n" +
+                "|---|---|---|---|\n" +
+                "| `dbo.TSettleMst` | `CLINTCOMM` | 존재하지 않음 | 할부이자 고객사 수수료 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+            Assert.Contains(result.Errors, e => e.Contains("CLINTCOMM"));
+        }
+
+        [Fact]
+        public void Validate_WhenTheAbsenceClaimIsTrue_ShouldPass()
+        {
+            // Arrange - 그 테이블에 없는 컬럼을 없다고 하는 것은 참인 진술이다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec(
+                "`dbo.TSettleMst`의 `NotAColumn`은 제공된 스키마에 없는 열이므로 스키마 불일치입니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenNoTableCanBeAttributed_ShouldPass()
+        {
+            // Arrange - 테이블을 특정할 수 없으면 침묵한다. 잘못 지목한 오류는
+            // 재생성으로 고칠 수 없다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec("프로시저에는 `INSERT` 문이 없습니다. `CLINTCOMM`은 존재하지 않습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WithoutAnAbsenceExpression_ShouldPass()
+        {
+            // Arrange - 부재 표현이 없으면 컬럼과 테이블이 같이 나와도 오류가 아니다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec("| `dbo.TSettleMst` | `CLINTCOMM` | 할부이자 고객사 수수료를 갱신합니다. |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenTheSameClaimRepeats_ShouldReportItOnce()
+        {
+            // Arrange - 같은 (테이블, 컬럼) 주장이 여러 줄에 나와도 재생성 지시는 하나면 된다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec(
+                "`dbo.TSettleMst`의 `CLINTCOMM`은 존재하지 않습니다.\n" +
+                "다시 말해 `dbo.TSettleMst`의 `CLINTCOMM`은 스키마 불일치입니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenTheLastNamePartIsAmbiguous_ShouldStaySilent()
+        {
+            // Arrange - 마지막 파트가 같은 테이블이 둘이면 귀속이 불가능하다.
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey("DB1", "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+            foreach (var db in new[] { "DB1", "DB2" })
+            {
+                var dep = new DependencyInfo { Name = "TCommMst", Schema = "dbo", Database = db, Type = "USER_TABLE" };
+                dep.Columns.Add(new ColumnInfo { ColumnName = "AMT", DataType = "int" });
+                sp.Dependencies.Add(dep);
+            }
+            var expectations = SpecExpectations.From(sp)!;
+            var markdown = WrapSpec("`dbo.TCommMst`의 `AMT`는 존재하지 않습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
     }
 }

@@ -15,6 +15,7 @@ namespace ReSet.Core.Services
         MermaidQuoteMissing,
         MermaidCliError,
         UpdateMappingMissing,
+        SchemaClaimFalse,
         General
     }
 
@@ -102,6 +103,7 @@ namespace ReSet.Core.Services
                 if (expectations != null)
                 {
                     CheckUpdateMappings(cleansed, expectations, result);
+                    CheckSchemaClaims(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -369,6 +371,124 @@ namespace ReSet.Core.Services
                         string.Join(", ", missing));
                 }
             }
+        }
+
+        /// <summary>
+        /// 명세서가 프롬프트에 실린 컬럼을 "없다"고 단정하는 것을 잡는다.
+        ///
+        /// 목록은 지어낸 것이 아니라 실제 14개 명세서에서 관찰된 형태다. 어미 변화를
+        /// 한 항목이 덮도록 어간에서 끊었다. 맨 "없습니다"는 넣지 않는다 - 명세서
+        /// 전체에 일상적으로 쓰이는 말이라 표면이 너무 넓다.
+        ///
+        /// 목록이 완전하지 않다는 것은 인정된 한계다. 새 표현이 나타나면 그 명세서가
+        /// 통과한다. 대신 목록에 없는 표현이 오탐을 만들지는 않는다 - 실패 방향이
+        /// 안전한 쪽이다.
+        /// </summary>
+        private static readonly string[] AbsenceClaimTokens =
+        {
+            "스키마 불일치",
+            "존재하지 않",
+            "정의되어 있지 않",
+            "스키마에 없",
+            "스키마가 없"
+        };
+
+        private static readonly Regex BacktickIdentifierRegex =
+            new Regex(@"`([^`\r\n]+)`", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 한 줄이 오류가 되려면 셋이 동시에 성립해야 한다.
+        ///   1. 줄에 부재 표현이 있다
+        ///   2. 줄의 백틱 식별자 중 하나가 의존성 테이블로 해석된다
+        ///   3. 줄의 다른 백틱 식별자 중 하나가 그 테이블의 프롬프트 컬럼 집합에 있다
+        ///
+        /// 셋째 조건이 오탐을 막는 핵심이다. "`INSERT` 문이 없습니다"는 INSERT가 어느
+        /// 테이블의 컬럼도 아니라 통과하고, "`TExchangeRateMst`의 스키마 정의는
+        /// 제공되지 않았습니다"는 그 의존성에 컬럼이 0개라 애초에 대조 대상에 없다
+        /// (SpecExpectations.From이 제외한다) - 그리고 그것은 참인 주장이므로 통과가 옳다.
+        ///
+        /// 둘째 조건은 귀속이 불가능할 때 침묵하게 만든다. 잘못 지목한 오류는 재생성으로
+        /// 고칠 수 없고, 그것이 이 저장소가 직전 브랜치에서 무한 재시도로 겪은 실패다.
+        /// </summary>
+        private static void CheckSchemaClaims(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.PromptSchemaColumns.Count == 0) return;
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var line in MarkdownSectionLocator.SplitLines(markdown))
+            {
+                if (!Array.Exists(AbsenceClaimTokens, t => line.Contains(t, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var identifiers = new List<string>();
+                foreach (Match match in BacktickIdentifierRegex.Matches(line))
+                {
+                    var identifier = match.Groups[1].Value.Trim();
+                    if (identifier.Length > 0) identifiers.Add(identifier);
+                }
+
+                if (identifiers.Count < 2) continue;
+
+                foreach (var identifier in identifiers)
+                {
+                    var tableKey = ResolveSchemaTableKey(identifier, expectations);
+                    if (tableKey == null) continue;
+
+                    var columns = expectations.PromptSchemaColumns[tableKey];
+
+                    foreach (var candidate in identifiers)
+                    {
+                        if (ReferenceEquals(candidate, identifier)) continue;
+                        if (ResolveSchemaTableKey(candidate, expectations) != null) continue;
+                        if (!columns.Contains(candidate)) continue;
+
+                        if (!reported.Add($"{tableKey}|{candidate}")) continue;
+
+                        var message =
+                            $"명세서가 `{tableKey}`의 컬럼 `{candidate}`을(를) 존재하지 않는 것으로 기술했습니다. " +
+                            "이 컬럼은 프롬프트의 스키마 표에 실제로 제공되었습니다.";
+                        result.Errors.Add(message);
+                        result.DetailedErrors.Add(new DetailedError
+                        {
+                            Type = ErrorType.SchemaClaimFalse,
+                            Message = message,
+                            RawContext = line.Trim()
+                        });
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 문서에 적힌 이름 하나를 PromptSchemaColumns의 키로 해석한다.
+        ///
+        /// 평소엔 관대하게, 충돌할 때만 침묵: 완전 한정 이름이 맞으면 그것을 쓰고,
+        /// 아니면 마지막 파트로 찾되 후보가 정확히 하나일 때만 인정한다. 둘 이상이면
+        /// null을 돌려 검사를 건너뛴다 - 오류로 만들지 않는다.
+        /// </summary>
+        private static string? ResolveSchemaTableKey(string writtenName, SpecExpectations expectations)
+        {
+            var normalized = NormalizeQualifiedName(writtenName);
+            if (normalized.Length == 0) return null;
+
+            if (expectations.PromptSchemaColumns.ContainsKey(normalized)) return normalized;
+
+            var lastPart = LastNamePart(writtenName);
+            if (lastPart.Length == 0) return null;
+
+            string? single = null;
+            foreach (var key in expectations.PromptSchemaColumns.Keys)
+            {
+                if (!string.Equals(LastNamePart(key), lastPart, StringComparison.OrdinalIgnoreCase)) continue;
+                if (single != null) return null; // 모호하다.
+                single = key;
+            }
+
+            return single;
         }
 
         /// <summary>
@@ -1016,11 +1136,24 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
             }
 
-            // 5. 기타 에러
+            // 5. 거짓 스키마 부재 주장
+            var schemaClaimErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.SchemaClaimFalse);
+            if (schemaClaimErrors.Count > 0)
+            {
+                sb.AppendLine("### 🚨 5. 실존 컬럼을 존재하지 않는다고 기술한 오류");
+                sb.AppendLine("아래 컬럼은 프롬프트의 `[Referenced Table Schemas]` 표에 실제로 제공되었습니다. 존재하지 않는다거나 스키마 불일치라고 기술하지 마십시오. 해당 문장과 표 행을 삭제하고, 그 컬럼을 정상적인 참조/갱신 컬럼으로 기술하십시오.");
+                foreach (var err in schemaClaimErrors)
+                {
+                    sb.AppendLine($"  - {err.Message}");
+                }
+                sb.AppendLine();
+            }
+
+            // 6. 기타 에러
             var generalErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.General);
             if (generalErrors.Count > 0)
             {
-                sb.AppendLine("### 🚨 5. 기타 정적 규격 검사 에러");
+                sb.AppendLine("### 🚨 6. 기타 정적 규격 검사 에러");
                 foreach (var err in generalErrors)
                 {
                     sb.AppendLine($"  - {err.Message}");
