@@ -539,7 +539,7 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            Assert.Equal(2, (int)entry["FormatVersion"]!);
+            Assert.Equal(3, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

@@ -205,5 +205,49 @@ namespace ReSet.Core.Tests
         {
             Assert.Equal(expected, StaticAnalysisNormalizer.Canonicalize(writtenName, "SETTLE_POQ_DB", "dbo"));
         }
+
+        [Fact]
+        public void Normalize_ShouldCanonicalizeUpdateMappingTableOnly()
+        {
+            // Arrange
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping
+            {
+                TargetTable = "TCommMst",
+                StatementOrdinal = 2,
+                FromClauseText = "FROM TCommMst A"
+            };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "CLVT", SourceExpression = "CLVT * -1" });
+            mapping.SelfReferencedColumns.Add("CLVT");
+            analysis.AstUpdateMappings.Add(mapping);
+
+            // Act
+            var normalized = StaticAnalysisNormalizer.Normalize(analysis, "SETTLE_POQ_DB", "dbo");
+
+            // Assert
+            var result = Assert.Single(normalized.AstUpdateMappings);
+            Assert.Equal("SETTLE_POQ_DB.dbo.TCommMst", result.TargetTable);
+            Assert.Equal(2, result.StatementOrdinal);
+            Assert.Equal("FROM TCommMst A", result.FromClauseText);
+            Assert.Equal("CLVT * -1", Assert.Single(result.Assignments).SourceExpression);
+            Assert.Equal("CLVT", Assert.Single(result.SelfReferencedColumns));
+        }
+
+        [Fact]
+        public void Normalize_ShouldNotShareUpdateMappingInstancesWithInput()
+        {
+            // Arrange
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping { TargetTable = "dbo.T" };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "A", SourceExpression = "1" });
+            analysis.AstUpdateMappings.Add(mapping);
+
+            // Act
+            var normalized = StaticAnalysisNormalizer.Normalize(analysis, "DB", "dbo");
+            normalized.AstUpdateMappings[0].Assignments.Clear();
+
+            // Assert - 입력을 변경하지 않는다는 Normalize의 계약
+            Assert.Single(analysis.AstUpdateMappings[0].Assignments);
+        }
     }
 }

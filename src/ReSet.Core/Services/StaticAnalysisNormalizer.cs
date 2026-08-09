@@ -62,6 +62,30 @@ namespace ReSet.Core.Services
                 });
             }
 
+            // 테이블 이름만 다룬다. 컬럼과 표현식은 그대로 옮긴다 - 표현식을 정규화하면
+            // SQL 재작성이 되고, 그것은 이 클래스가 하지 않기로 한 일이다.
+            foreach (var mapping in analysis.AstUpdateMappings)
+            {
+                var copy = new AstUpdateMapping
+                {
+                    TargetTable = Canonicalize(mapping.TargetTable, database, defaultSchema),
+                    StatementOrdinal = mapping.StatementOrdinal,
+                    FromClauseText = mapping.FromClauseText
+                };
+
+                foreach (var assignment in mapping.Assignments)
+                {
+                    copy.Assignments.Add(new AstUpdateAssignment
+                    {
+                        Column = assignment.Column,
+                        SourceExpression = assignment.SourceExpression
+                    });
+                }
+
+                copy.SelfReferencedColumns.AddRange(mapping.SelfReferencedColumns);
+                normalized.AstUpdateMappings.Add(copy);
+            }
+
             return normalized;
         }
 
