@@ -221,7 +221,22 @@ namespace ReSet.Core.Services
             // spDef는 위 null 검사를 통과했으므로 null 조건부 없이 그대로 넘긴다 -
             // `spDef?.`를 쓰면 컴파일러의 널 흐름 추적이 재설정되어 아래
             // ResolveCacheObjectKey(spDef, key) 호출에 CS8604 경고가 새로 생긴다.
-            var specExpectations = SpecExpectations.FromStaticAnalysis(spDef.StaticAnalysis);
+            var specExpectations = SpecExpectations.From(spDef);
+
+            // A 위반(프롬프트가 진실을 담지 못함)은 재생성으로 고칠 수 없는 코드 버그다.
+            // L1 오류로 만들면 무한 재시도가 된다. 아래 NotifyWarnings가 이미 사용자에게
+            // 보여 주는 채널이므로 새 채널을 만들지 않는다.
+            if (specExpectations != null && specExpectations.InputDefects.Count > 0)
+            {
+                foreach (var defect in specExpectations.InputDefects)
+                {
+                    Log.Warning("[파이프라인] {Defect}", defect);
+                    if (!spDef.Warnings.Contains(defect))
+                    {
+                        spDef.Warnings.Add(defect);
+                    }
+                }
+            }
 
             var cacheObjectKey = ResolveCacheObjectKey(
                 spDef,

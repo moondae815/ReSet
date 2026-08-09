@@ -19,7 +19,7 @@ public sealed record ValidatorCallExpectationsOffender(int Line, string Expressi
 /// 이 검사가 필요한 이유: 배선(Task 5)에는 새 단위 테스트가 없다 - 계획서에
 /// 명시된 검증은 "6개 호출부가 두 번째 인자를 받는다"는 정적 사실뿐이다.
 /// 기존 오케스트레이터 테스트는 전부 UPDATE 매핑이 없는 SpDefinition을 쓰므로
-/// FromStaticAnalysis가 항상 null을 돌려주고, null을 넘기든 아예 안 넘기든
+/// From이 항상 null을 돌려주고, null을 넘기든 아예 안 넘기든
 /// MechanicalValidator.Validate의 동작이 똑같다 - 배선을 통째로 지워도 스위트가
 /// 초록으로 남는다. 이 스캐너는 그 사각지대를 인자 개수라는 구문적 사실로 메운다.
 ///

@@ -686,7 +686,7 @@ A[""시작""] --> B[""끝""]
             mapping.Assignments.Add(new AstUpdateAssignment { Column = "CLVT", SourceExpression = "CLVT * -1" });
             mapping.Assignments.Add(new AstUpdateAssignment { Column = "PGVT", SourceExpression = "PGVT * -1" });
             analysis.AstUpdateMappings.Add(mapping);
-            return SpecExpectations.FromStaticAnalysis(analysis)!;
+            return SpecExpectations.From(new SpDefinition { StaticAnalysis = analysis })!;
         }
 
         [Fact]
@@ -869,7 +869,7 @@ A[""시작""] --> B[""끝""]
 
             analysis.AstUpdateMappings.Add(mapping1);
             analysis.AstUpdateMappings.Add(mapping2);
-            return SpecExpectations.FromStaticAnalysis(analysis)!;
+            return SpecExpectations.From(new SpDefinition { StaticAnalysis = analysis })!;
         }
 
         [Fact]
