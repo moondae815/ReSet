@@ -427,15 +427,25 @@ FROM 절의 별칭은 `A`/`B`/`C`뿐이라 `TSettleMst`라는 별칭 선언 자�
    경우에는 그 형제를 나열하지 않고 후보 섹션만 나열한다. 모호한 기대마다 오류가 하나씩
    나므로 `SuggestedPromptFix` 전체에는 결국 다 실리지만, 오류 메시지 하나만 보면 무엇과
    충돌했는지 알 수 없다.
-6. `AliasTargetFinder`의 `Visit(TableReferenceWithAlias)` 폴백이 실제로 도는지 확인되지
-   않았다. ScriptDom의 기본 `Visit` 오버로드가 상위 타입으로 체이닝하는지에 따라 결론이
-   갈린다. 체이닝하지 않으면 `UPDATE O SET ... FROM OPENQUERY(SRV,'...') O`처럼
-   `NamedTableReference`·`QueryDerivedTable`·`VariableTableReference` 외의 다른 별칭 보유
-   참조를 쓴 UPDATE가 "평범한 테이블명 O"로 오분류되어 없는 표를 L1이 요구한다 — 원 Critical의
-   잔여 꼬리다. 테스트 한 줄(`Assert.Empty(result.AstUpdateMappings)`)이면 디스패치 방향과
-   무관하게 동작이 고정된다. 해당 클래스 주석(`SqlStaticParser.cs:606`)이 이 폴백의 근거로
-   드는 "인라인 파생 테이블"은 `InlineDerivedTable`이 ScriptDom에서 자기 `Visit` 오버로드를
-   가지므로, 체이닝 여부 어느 가설에서도 정확한 예시가 아니다.
+6. ~~`AliasTargetFinder`의 `Visit(TableReferenceWithAlias)` 폴백이 실제로 도는지 확인되지
+   않았다.~~ **해소됨(2026-08-09).** `Analyze_UpdateTargetIsOpenQueryAlias_ShouldNotCreateMapping`
+   추가로 닫혔다. 확인된 사실은 두 가지다.
+
+   첫째, **폴백은 실제로 돈다.** 폴백을 지우는 뮤테이션에서 이 테스트만 깨지며
+   `TargetTable = "O"`가 나온다 — 존재하지 않는 테이블이 L1 요구사항으로 승격되는,
+   원 Critical의 잔여 꼬리가 그대로 재현된다. 나머지 41개는 전부 초록이었다.
+
+   둘째, **디스패치 방향은 체이닝 쪽이었고 원래 주석은 틀렸다.** ScriptDom의
+   `ExplicitVisit`은 노드 하나에 대해 상속 사슬의 모든 타입의 `Visit`을 호출한다. 그래서
+   `NamedTableReference`·`QueryDerivedTable`·`VariableTableReference` 세 오버라이드는
+   증명 가능한 중복이었다 — 셋을 지우고 폴백만 남겨도 42개가 전부 통과한다. 셋을 제거하고
+   주석을 실측한 사실로 다시 썼다. `Consider`가 노드당 두 번 불리던 것(부모 오버로드와 구체
+   타입 오버로드)도 함께 사라져 "첫 번째로 찾은 선언을 신뢰한다" 가드가 실제로 중복 호출을
+   막던 역할에서 벗어났다.
+
+   원래 주석이 폴백의 근거로 들던 "인라인 파생 테이블"은 어느 쪽 가설에서도 정확한 예시가
+   아니었다. 지금 주석은 `OpenQueryTableReference`를 들고, 그것을 뒷받침하는 테스트 이름을
+   함께 적는다.
 7. 별칭 탐색(`AliasTargetFinder`, `ResolveAliasWithinFromClause`)이 FROM 절 하위 트리 전체를
    돈다(선재 결함). `ExplicitVisit`을 오버라이드하지 않고 `Visit`만 오버라이드했으므로 기본
    순회가 자식 노드까지 계속 내려간다 — 중첩 서브쿼리가 바깥 대상과 같은 이름의 별칭을 쓰면

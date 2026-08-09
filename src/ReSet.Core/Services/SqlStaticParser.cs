@@ -598,13 +598,17 @@ namespace ReSet.Core.Services
         /// FROM 절 하나 안에서 주어진 이름과 같은 별칭 선언이 있는지, 있다면 그것이
         /// 물리 테이블(NamedTableReference)을 가리키는지 찾는다.
         ///
-        /// `TSqlFragmentVisitor`는 `NamedTableReference`, `QueryDerivedTable`,
-        /// `VariableTableReference` 각각에 대해 별도의 `Visit` 오버로드를 갖고 있고,
-        /// ScriptDom이 생성한 각 노드의 `Accept`는 그 노드의 정확한 컴파일타임 타입에
-        /// 맞는 오버로드로 직접 디스패치한다 - 그래서 공통 부모 `TableReferenceWithAlias`의
-        /// `Visit`만 오버라이드하면 위 세 구체 타입에 대해서는 호출되지 않는다. 세 오버로드를
-        /// 각각 잡고, `TableReferenceWithAlias`는 그 외 별칭 보유 타입(예: 인라인 파생
-        /// 테이블)을 위한 폴백으로 둔다.
+        /// `TableReferenceWithAlias` 하나만 오버라이드하면 별칭을 가질 수 있는 모든 참조
+        /// 타입이 잡힌다. ScriptDom의 `ExplicitVisit`은 노드 하나에 대해 그 상속 사슬에
+        /// 있는 **모든** 타입의 `Visit` 오버로드를 호출하기 때문이다 - 구체 타입 오버로드가
+        /// 따로 있어도 공통 부모 오버로드가 함께 불린다. 그래서 `NamedTableReference`,
+        /// `QueryDerivedTable`, `VariableTableReference`를 따로 잡을 필요가 없고,
+        /// `OpenQueryTableReference`처럼 여기서 열거하지 않은 타입도 자동으로 덮인다.
+        ///
+        /// 이 디스패치 방향은 추론이 아니라 뮤테이션으로 확인됐다: 이 폴백을 지우면
+        /// `Analyze_UpdateTargetIsOpenQueryAlias_ShouldNotCreateMapping`이 깨지면서
+        /// 별칭 `O`가 존재하지 않는 물리 테이블로 승격된다. 구체 타입 오버로드를 다시
+        /// 넣고 싶어지면, 그것이 무엇을 더 잡는지 먼저 깨지는 테스트로 보여야 한다.
         ///
         /// `AliasDeclared`와 `ResolvedTableName`을 분리하는 이유: 별칭 선언 자체가
         /// 없으면(= 대상이 애초에 별칭이 아니라 평범한 물리 테이블명) 호출부가 그 이름을
@@ -624,9 +628,6 @@ namespace ReSet.Core.Services
                 _alias = alias;
             }
 
-            public override void Visit(NamedTableReference node) => Consider(node);
-            public override void Visit(QueryDerivedTable node) => Consider(node);
-            public override void Visit(VariableTableReference node) => Consider(node);
             public override void Visit(TableReferenceWithAlias node) => Consider(node);
 
             private void Consider(TableReferenceWithAlias node)

@@ -962,6 +962,23 @@ END");
         }
 
         [Fact]
+        public void Analyze_UpdateTargetIsOpenQueryAlias_ShouldNotCreateMapping()
+        {
+            // Arrange & Act - OPENQUERY는 TableReferenceWithAlias의 자식이지만
+            // NamedTableReference / QueryDerivedTable / VariableTableReference 어디에도
+            // 속하지 않는다. AliasTargetFinder가 "별칭 선언 자체가 없다"고 오판하면
+            // 별칭 O를 평범한 물리 테이블명으로 취급해 존재하지 않는 테이블 O를
+            // L1 요구사항으로 승격시킨다. 이 단언이 그 분기를 고정한다.
+            var result = AnalyzeUpdate(
+                "    UPDATE O SET AMT = 0 " +
+                "FROM OPENQUERY(LNK, 'SELECT SEQ, AMT FROM T') O;");
+
+            // Assert
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Empty(result.AstUpdateMappings);
+        }
+
+        [Fact]
         public void Analyze_UpdateTargetIsTempTable_ShouldNotCreateMapping()
         {
             // Arrange & Act - 임시 테이블은 UpdateTables에도 들어가지 않고 명세서 CRUD
