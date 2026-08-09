@@ -1183,5 +1183,133 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
         }
+
+        // 아래는 리뷰에서 지적된 두 결함에 대한 회귀 테스트다.
+        //
+        // 결함 1: AbsenceClaimTokens의 맨 "존재하지 않"이 스키마 부재 단정과 런타임
+        // NULL/기본값 조건 서술을 구별하지 못했다. 판별자는 단정형("존재하지 않음",
+        // "존재하지 않습니다")과 조건형("존재하지 않는 경우", "존재하지 않으면")의 차이다.
+        //
+        // 결함 2: ResolveSchemaTableKey(candidate, …) != null 가드가 하중을 지는데도
+        // 회귀 테스트가 없었다. 이 가드가 없으면 그 자체로 실재하는 테이블명이 우연히
+        // 다른 테이블의 컬럼명과 같을 때, 테이블 부재 진술이 컬럼 부재 주장으로
+        // 오귀속된다.
+
+        [Fact]
+        public void Validate_WhenSpecUsesSchemaMismatchPhraseForARealColumn_ShouldFail()
+        {
+            // Arrange - "스키마에 없는 열이므로 스키마 불일치입니다"로 실재하는 컬럼을
+            // 부재로 단정하는 실측 결함 형태(리뷰 검증 시나리오 2).
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLCOMM");
+            var markdown = WrapSpec(
+                "`CLCOMM`은 제공된 `dbo.TSettleMst` 스키마에 없는 열이므로 스키마 불일치입니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+            Assert.Contains(result.Errors, e => e.Contains("CLCOMM"));
+        }
+
+        [Fact]
+        public void Validate_WhenTableHasNoProvidedSchema_AbsenceClaimIsTrueAndShouldPass()
+        {
+            // Arrange - TPGProperty처럼 메타데이터 수집이 안 된(컬럼 0개) 의존성은
+            // SpecExpectations.From이 PromptSchemaColumns에서 제외한다 - 스키마 표
+            // 자체가 렌더링되지 않기 때문이다. 그 테이블에 대한 "스키마에 없는 열"
+            // 주장은 참인 진술이므로 오류가 아니다(리뷰 검증 시나리오 3). expectations를
+            // null로 만들지 않기 위해 컬럼을 가진 다른 테이블을 하나 더 둔다.
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey("DB", "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+
+            var noSchemaDep = new DependencyInfo { Name = "TPGProperty", Schema = "dbo", Database = "DB", Type = "USER_TABLE" };
+            sp.Dependencies.Add(noSchemaDep);
+
+            var otherDep = new DependencyInfo { Name = "TSettleMst", Schema = "dbo", Database = "DB", Type = "USER_TABLE" };
+            otherDep.Columns.Add(new ColumnInfo { ColumnName = "CLINTCOMM", DataType = "int" });
+            sp.Dependencies.Add(otherDep);
+
+            var expectations = SpecExpectations.From(sp)!;
+            Assert.DoesNotContain("DB.dbo.TPGProperty", (IEnumerable<string>)expectations.PromptSchemaColumns.Keys);
+
+            var markdown = WrapSpec("`PLTID`, `ID`는 제공된 `TPGProperty` 스키마에 없는 열입니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenSpecDescribesRuntimeNullHandling_UsingConditionalPhrase_ShouldPass()
+        {
+            // Arrange - "존재하지 않는 경우"는 런타임 NULL/기본값 처리를 설명하는 조건형
+            // 문장이지 스키마 부재를 단정하는 문장이 아니다. 좁힌 어휘 목록은 단정형만
+            // 잡으므로 이 문장은 걸리지 않아야 한다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLINTCOMM");
+            var markdown = WrapSpec(
+                "`CLINTCOMM` 값이 `dbo.TSettleMst`에 존재하지 않는 경우 기본값 0을 사용합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenSpecDescribesRuntimeNullHandling_UsingConditionalConnective_ShouldPass()
+        {
+            // Arrange - "존재하지 않으면"도 마찬가지로 조건형이라 걸리면 안 된다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "CLVT");
+            var markdown = WrapSpec(
+                "실제 실행 대상 테이블에 해당 `CLVT` 컬럼이 `dbo.TSettleMst`에 존재하지 않으면 갱신을 건너뜁니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
+
+        [Fact]
+        public void Validate_WhenAnotherTableNameCoincidesWithAColumnName_ShouldNotMisattribute()
+        {
+            // Arrange - 실측된 결함 시나리오(리뷰 발견 2). `TRate`는 그 자체로 실재하는
+            // 별개 테이블이면서 우연히 `TSettleMst`의 컬럼명이기도 하다.
+            // ResolveSchemaTableKey(candidate, …) != null 가드가 없으면 "TRate는 제공된
+            // 스키마에 존재하지 않습니다"라는 테이블 부재 진술이 TSettleMst에 대한 거짓
+            // 컬럼 주장으로 오귀속된다.
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey("DB", "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+
+            var settleMst = new DependencyInfo { Name = "TSettleMst", Schema = "dbo", Database = "DB", Type = "USER_TABLE" };
+            settleMst.Columns.Add(new ColumnInfo { ColumnName = "CLINTCOMM", DataType = "int" });
+            settleMst.Columns.Add(new ColumnInfo { ColumnName = "TRate", DataType = "int" });
+            sp.Dependencies.Add(settleMst);
+
+            var rateTable = new DependencyInfo { Name = "TRate", Schema = "dbo", Database = "DB", Type = "USER_TABLE" };
+            rateTable.Columns.Add(new ColumnInfo { ColumnName = "ID", DataType = "int" });
+            sp.Dependencies.Add(rateTable);
+
+            var expectations = SpecExpectations.From(sp)!;
+            var markdown = WrapSpec("`dbo.TSettleMst`, `TRate`는 제공된 스키마에 존재하지 않습니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SchemaClaimFalse);
+        }
     }
 }
