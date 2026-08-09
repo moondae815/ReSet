@@ -344,15 +344,8 @@ namespace ReSet.Core.Services
 
             foreach (var expectation in expectations.UpdateColumns)
             {
-                var key = LastNamePart(expectation.Table);
-
-                if (!sections.TryGetValue(key, out var body))
-                {
-                    AddUpdateMappingError(result,
-                        $"`## CRUD 분석`에 UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 없습니다. " +
-                        $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}");
-                    continue;
-                }
+                var body = ResolveSectionBody(expectation, expectations.UpdateColumns, sections, result);
+                if (body == null) continue; // 오류(누락 또는 모호)는 ResolveSectionBody가 이미 기록했다.
 
                 var missing = expectation.Columns.Where(column => !ContainsToken(body, column)).ToList();
                 if (missing.Count > 0)
@@ -362,6 +355,59 @@ namespace ReSet.Core.Services
                         string.Join(", ", missing));
                 }
             }
+        }
+
+        /// <summary>
+        /// 기대 하나에 대응하는 문서 섹션 본문을 찾는다.
+        ///
+        /// 평소엔 관대하게, 충돌할 때만 엄격하게: 먼저 완전 한정 이름이 일치하는 섹션을
+        /// 찾는다. 없으면 마지막 파트로 찾되, 후보 섹션과 후보 기대가 각각 정확히 하나일
+        /// 때만 인정한다. 마지막 파트로 접어 처음부터 합치면(구 버전의 방식) 서로 다른
+        /// 두 테이블이 한 섹션으로 뭉개져 한쪽의 컬럼이 다른 쪽의 누락을 가려버린다
+        /// - 리뷰에서 실측된 결함이다. 조건이 깨지면(모호하면) 병합하지 않고 오류로 본다.
+        /// </summary>
+        private static string? ResolveSectionBody(
+            UpdateColumnExpectation expectation,
+            IReadOnlyList<UpdateColumnExpectation> allExpectations,
+            IReadOnlyDictionary<string, string> sections,
+            ValidationResult result)
+        {
+            var normalizedTarget = NormalizeQualifiedName(expectation.Table);
+
+            if (sections.TryGetValue(normalizedTarget, out var exactBody))
+            {
+                return exactBody;
+            }
+
+            var lastPart = LastNamePart(expectation.Table);
+
+            var candidateSections = sections
+                .Where(kvp => string.Equals(LastNamePart(kvp.Key), lastPart, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var candidateExpectations = allExpectations
+                .Where(e => string.Equals(LastNamePart(e.Table), lastPart, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (candidateSections.Count == 1 && candidateExpectations.Count == 1)
+            {
+                return candidateSections[0].Value;
+            }
+
+            if (candidateSections.Count == 0)
+            {
+                AddUpdateMappingError(result,
+                    $"`## CRUD 분석`에 UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 없습니다. " +
+                    $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}");
+                return null;
+            }
+
+            // 모호함: 후보 섹션이 여럿이거나, 같은 마지막 파트를 요구하는 기대가 여럿이다.
+            var candidateNames = string.Join(", ", candidateSections.Select(kvp => $"`{kvp.Key}`"));
+            AddUpdateMappingError(result,
+                $"UPDATE 대상 테이블 `{expectation.Table}`을(를) 마지막 파트 `{lastPart}`만으로는 특정할 수 없습니다 " +
+                $"(후보 섹션: {candidateNames}). 명세서의 UPDATE 대상 테이블 헤딩을 완전 한정 이름으로 구분해 작성해 주십시오.");
+            return null;
         }
 
         private static void AddUpdateMappingError(ValidationResult result, string message)
@@ -375,7 +421,13 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// UPDATE 표 구간을 테이블별로 모은다. 같은 테이블이 여러 번 나오면 이어 붙인다.
+        /// UPDATE 표 구간을 완전 한정 이름별로 모은다. 같은 완전 한정 이름이 여러 번
+        /// 나오면(문장이 여럿이라 헤딩이 반복되면) 이어 붙인다.
+        ///
+        /// 여기서 마지막 파트로 접지 않는다. 수집 단계에서 접으면 서로 다른 두 테이블이
+        /// (예: DB1.dbo.TCommMst와 DB2.dbo.TCommMst) 키 하나로 뭉개져 한쪽 섹션의 컬럼이
+        /// 다른 쪽의 누락을 가려버린다. 마지막 파트 완화는 대조 단계(ResolveSectionBody)의
+        /// 일이지, 수집 단계의 일이 아니다.
         /// </summary>
         private static Dictionary<string, string> CollectUpdateSections(
             IReadOnlyList<string> lines, int start, int end)
@@ -391,7 +443,7 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var table = LastNamePart(ReadHeadingTable(lines[index].TrimStart()));
+                var table = NormalizeQualifiedName(ReadHeadingTable(lines[index].TrimStart()));
                 var bodyStart = index + 1;
 
                 var bodyEnd = MarkdownSectionLocator.FindIndexOutsideFence(
@@ -414,18 +466,32 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 헤딩에서 테이블명을 읽는다. 프롬프트가 요구하는 "(문장 N)" 꼬리와 AI가 덧붙일
-        /// 수 있는 부연을 첫 공백에서 떨어낸다.
+        /// 수 있는 부연을 떨어낸다. 공백뿐 아니라 여는 괄호에서도 끊는다 - AI가
+        /// "TCommMst(문장 1)"처럼 공백 없이 붙여 써도 괄호가 테이블명에 삼켜지면 안 된다.
         /// </summary>
         private static string ReadHeadingTable(string headingLine)
         {
             var rest = headingLine.Substring(UpdateHeadingPrefix.Length).Trim();
-            var space = rest.IndexOf(' ');
-            return space < 0 ? rest : rest.Substring(0, space);
+            var cut = 0;
+            while (cut < rest.Length && !char.IsWhiteSpace(rest[cut]) && rest[cut] != '(')
+            {
+                cut++;
+            }
+
+            return rest.Substring(0, cut);
         }
 
         /// <summary>
+        /// 한정된 이름의 앞뒤에 붙는 백틱·대괄호·공백만 걷어낸다. 완전 한정 이름을 그대로
+        /// 대조 키로 쓸 때 쓴다 - 마지막 파트로 접지 않는다.
+        /// </summary>
+        private static string NormalizeQualifiedName(string name) =>
+            name.Trim().Trim('`').Trim('[', ']', '`').Trim();
+
+        /// <summary>
         /// 한정된 이름에서 마지막 파트만 남긴다. 프롬프트는 canonical 3-part를 요구하지만
-        /// AI가 짧게 쓰는 것은 결함이 아니다.
+        /// AI가 짧게 쓰는 것은 결함이 아니다. 완전 한정 이름이 일치하지 않을 때의
+        /// 폴백으로만 쓴다 - ResolveSectionBody 참고.
         /// </summary>
         private static string LastNamePart(string name)
         {

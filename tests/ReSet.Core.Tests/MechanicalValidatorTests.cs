@@ -822,5 +822,118 @@ A[""시작""] --> B[""끝""]
             Assert.Contains("UPDATE", result.SuggestedPromptFix!);
             Assert.Contains("CLVT", result.SuggestedPromptFix!);
         }
+
+        private static SpecExpectations TwoDatabasesSharingLastNamePart(
+            IReadOnlyList<string> db1Columns, IReadOnlyList<string> db2Columns)
+        {
+            var analysis = new SpStaticAnalysisResult();
+
+            var mapping1 = new AstUpdateMapping { TargetTable = "DB1.dbo.TCommMst", StatementOrdinal = 1 };
+            foreach (var column in db1Columns)
+            {
+                mapping1.Assignments.Add(new AstUpdateAssignment { Column = column, SourceExpression = $"{column} * -1" });
+            }
+
+            var mapping2 = new AstUpdateMapping { TargetTable = "DB2.dbo.TCommMst", StatementOrdinal = 1 };
+            foreach (var column in db2Columns)
+            {
+                mapping2.Assignments.Add(new AstUpdateAssignment { Column = column, SourceExpression = $"{column} * -1" });
+            }
+
+            analysis.AstUpdateMappings.Add(mapping1);
+            analysis.AstUpdateMappings.Add(mapping2);
+            return SpecExpectations.FromStaticAnalysis(analysis)!;
+        }
+
+        [Fact]
+        public void Validate_WhenTwoTablesShareLastNamePart_AndEachSectionIsComplete_ShouldPass()
+        {
+            // Arrange - DB1과 DB2는 마지막 파트(TCommMst)가 같지만 완전 한정 이름은 다르다.
+            var expectations = TwoDatabasesSharingLastNamePart(
+                db1Columns: new[] { "CLVT" }, db2Columns: new[] { "PGVT" });
+
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB1.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB1.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+
+### UPDATE 대상 테이블: DB2.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB2.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
+
+        [Fact]
+        public void Validate_WhenTwoTablesShareLastNamePart_ShouldNotMaskMissingColumnsAcrossThem()
+        {
+            // Arrange - 리뷰에서 실측된 결함 재현: DB1 섹션엔 CLVT만, DB2 섹션엔 PGVT만
+            // 있는데 두 테이블 모두 CLVT와 PGVT를 요구한다. 마지막 파트로 접으면 두 섹션이
+            // 합쳐져 서로의 결여를 가려버린다.
+            var expectations = TwoDatabasesSharingLastNamePart(
+                db1Columns: new[] { "CLVT", "PGVT" }, db2Columns: new[] { "CLVT", "PGVT" });
+
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB1.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB1.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+
+### UPDATE 대상 테이블: DB2.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB2.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert - DB1엔 PGVT가, DB2엔 CLVT가 없으므로 둘 다 잡혀야 한다.
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("DB1.dbo.TCommMst") && e.Contains("PGVT"));
+            Assert.Contains(result.Errors, e => e.Contains("DB2.dbo.TCommMst") && e.Contains("CLVT"));
+        }
+
+        [Fact]
+        public void Validate_WhenLastNamePartIsAmbiguousAcrossExpectations_ShouldReportAmbiguity()
+        {
+            // Arrange - DB1과 DB2 모두 TCommMst를 기대하는데 문서엔 짧은 이름 섹션 하나뿐이다.
+            // 어느 쪽에 대응하는지 특정할 수 없으므로 합치지 말고 오류로 봐야 한다.
+            var expectations = TwoDatabasesSharingLastNamePart(
+                db1Columns: new[] { "CLVT" }, db2Columns: new[] { "PGVT" });
+
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: TCommMst
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+| TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert - 짧은 이름 섹션 하나로 어느 완전 한정 테이블인지 특정할 수 없다.
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.UpdateMappingMissing);
+        }
+
+        [Fact]
+        public void Validate_WhenHeadingSuffixHasNoLeadingSpace_ShouldStillParseTableName()
+        {
+            // Arrange - "(문장 N)" 앞에 공백이 없어도 테이블명이 괄호를 삼키면 안 된다.
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst(문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | CLVT | CLVT * -1 | 취소 시 음수 전환 |
+| DB.dbo.TCommMst | PGVT | PGVT * -1 | 취소 시 음수 전환 |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, ExpectClvtAndPgvt());
+
+            // Assert
+            Assert.True(result.IsValid);
+        }
     }
 }
