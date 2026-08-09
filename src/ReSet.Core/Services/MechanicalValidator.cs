@@ -16,6 +16,7 @@ namespace ReSet.Core.Services
         MermaidCliError,
         UpdateMappingMissing,
         SchemaClaimFalse,
+        TableIdentitySplit,
         General
     }
 
@@ -104,6 +105,7 @@ namespace ReSet.Core.Services
                 {
                     CheckUpdateMappings(cleansed, expectations, result);
                     CheckSchemaClaims(cleansed, expectations, result);
+                    CheckTableIdentitySplit(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -494,6 +496,83 @@ namespace ReSet.Core.Services
                     }
                 }
             }
+        }
+
+        private static readonly Regex TableCellRegex =
+            new Regex(@"^\s*\|\s*`([^`\r\n]+)`\s*\|", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 같은 물리 테이블이 CRUD 표 한 절 안에서 서로 다른 표기로 여러 행이 되는 것을
+        /// 잡는다. EXCEPTION_PROC에서 SETTLE_POQ_DB.dbo.TSettleMst / dbo.TSettleMst /
+        /// TSettleMst 세 표기가 한 표에 공존한 것이 실측된 결함이다.
+        ///
+        /// "서로 다른 표기"라는 단서가 중요하다. 같은 문자열이 두 번 나오는 것은 이 결함이
+        /// 아니다 - 문장별로 나눠 적었을 수 있고, UPDATE 매핑 헤딩이 정확히 그렇게 한다.
+        ///
+        /// 절 경계를 넘지 않는다. 같은 테이블이 조회 절과 갱신 절에 각각 나오는 것은
+        /// 정상이다.
+        ///
+        /// 귀속은 ResolveSchemaTableKey에 맡긴다. 마지막 파트가 같은 실제 테이블이
+        /// 둘이면 그 함수가 null을 돌려주므로, DB1.dbo.TCommMst와 DB2.dbo.TCommMst가
+        /// 합쳐지는 오탐이 생기지 않는다.
+        /// </summary>
+        private static void CheckTableIdentitySplit(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.PromptSchemaColumns.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (crudStart, crudEnd) = LocateCrudSection(lines);
+            if (crudStart < 0) return;
+
+            var spellingsByTable = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            void Flush()
+            {
+                foreach (var kvp in spellingsByTable)
+                {
+                    if (kvp.Value.Count < 2) continue;
+
+                    var message =
+                        $"같은 물리 테이블 `{kvp.Key}`이(가) `## CRUD 분석`의 한 절 안에서 " +
+                        $"서로 다른 표기 {kvp.Value.Count}개로 나뉘어 기술되었습니다: " +
+                        string.Join(", ", kvp.Value.Select(s => $"`{s}`")) + ".";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.TableIdentitySplit,
+                        Message = message
+                    });
+                }
+                spellingsByTable.Clear();
+            }
+
+            for (var index = crudStart + 1; index < crudEnd; index++)
+            {
+                var trimmed = lines[index].TrimStart();
+
+                if (trimmed.StartsWith("### ", StringComparison.Ordinal))
+                {
+                    Flush();
+                    continue;
+                }
+
+                var match = TableCellRegex.Match(lines[index]);
+                if (!match.Success) continue;
+
+                var written = match.Groups[1].Value.Trim();
+                var key = ResolveSchemaTableKey(written, expectations);
+                if (key == null) continue;
+
+                if (!spellingsByTable.TryGetValue(key, out var spellings))
+                {
+                    spellings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    spellingsByTable[key] = spellings;
+                }
+                spellings.Add(NormalizeQualifiedName(written));
+            }
+
+            Flush();
         }
 
         /// <summary>
@@ -1182,11 +1261,24 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
             }
 
-            // 6. 기타 에러
+            // 6. 테이블 동일성 분열
+            var splitErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.TableIdentitySplit);
+            if (splitErrors.Count > 0)
+            {
+                sb.AppendLine("### 🚨 6. 같은 테이블을 여러 표기로 나눠 기술한 오류");
+                sb.AppendLine("아래 표기들은 모두 같은 하나의 물리 테이블입니다. CRUD 분석의 각 절에서 이들을 한 행으로 합치고, 프롬프트가 제공한 완전 한정 이름(DB.스키마.테이블) 하나만 사용하십시오.");
+                foreach (var err in splitErrors)
+                {
+                    sb.AppendLine($"  - {err.Message}");
+                }
+                sb.AppendLine();
+            }
+
+            // 7. 기타 에러
             var generalErrors = DetailedErrors.FindAll(e => e.Type == ErrorType.General);
             if (generalErrors.Count > 0)
             {
-                sb.AppendLine("### 🚨 6. 기타 정적 규격 검사 에러");
+                sb.AppendLine("### 🚨 7. 기타 정적 규격 검사 에러");
                 foreach (var err in generalErrors)
                 {
                     sb.AppendLine($"  - {err.Message}");

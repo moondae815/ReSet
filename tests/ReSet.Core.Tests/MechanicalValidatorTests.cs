@@ -1380,5 +1380,99 @@ A[""시작""] --> B[""끝""]
             Assert.Contains(result.Errors, e => e.Contains("OUTSTATE"));
             Assert.Contains(result.Errors, e => e.Contains("NonSettleAmt"));
         }
+
+        [Fact]
+        public void Validate_WhenOneTableIsSplitAcrossSpellings_ShouldFail()
+        {
+            // Arrange - EXCEPTION_PROC에서 실측된 결함. 한 표 안에 세 표기가 공존한다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n" +
+                "|---|---|\n" +
+                "| `DB.dbo.TSettleMst` | `PLTID` |\n" +
+                "| `dbo.TSettleMst` | `PLTID` |\n" +
+                "| `TSettleMst` | `PLTID` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.False(result.IsValid);
+            var error = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+            Assert.Contains("dbo.TSettleMst", error.Message);
+            Assert.Contains("TSettleMst", error.Message);
+        }
+
+        [Fact]
+        public void Validate_WhenTheSameSpellingRepeats_ShouldPass()
+        {
+            // Arrange - 같은 문자열이 반복되는 것은 이 결함이 아니다. 문장별로 나눠
+            // 적었을 수 있고, UPDATE 매핑 헤딩이 정확히 그렇게 한다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "### 갱신 대상 테이블\n\n" +
+                "| 테이블명 | 갱신 컬럼 |\n" +
+                "|---|---|\n" +
+                "| `dbo.TSettleMst` | `PLTID` |\n" +
+                "| `dbo.TSettleMst` | `PLTID` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
+
+        [Fact]
+        public void Validate_WhenTwoRealTablesShareALastNamePart_ShouldPass()
+        {
+            // Arrange - DB1.dbo.TCommMst와 DB2.dbo.TCommMst는 서로 다른 물리 테이블이다.
+            // 마지막 파트가 같다는 이유로 합치면 정상 명세서를 떨어뜨린다.
+            var sp = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_PROBE",
+                ObjectKey = new CodeObjectKey("DB1", "dbo", "UP_PROBE", CodeObjectType.Procedure)
+            };
+            foreach (var db in new[] { "DB1", "DB2" })
+            {
+                var dep = new DependencyInfo { Name = "TCommMst", Schema = "dbo", Database = db, Type = "USER_TABLE" };
+                dep.Columns.Add(new ColumnInfo { ColumnName = "AMT", DataType = "int" });
+                sp.Dependencies.Add(dep);
+            }
+            var expectations = SpecExpectations.From(sp)!;
+            var markdown = WrapSpec(
+                "### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n" +
+                "|---|---|\n" +
+                "| `DB1.dbo.TCommMst` | `AMT` |\n" +
+                "| `DB2.dbo.TCommMst` | `AMT` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
+
+        [Fact]
+        public void Validate_WhenSpellingsAreInDifferentSubsections_ShouldPass()
+        {
+            // Arrange - 조회 절과 갱신 절에 각각 나오는 것은 정상이다.
+            // 같은 테이블이 읽히고 갱신되는 것은 흔하다.
+            var expectations = SchemaExpectations("DB.dbo.TSettleMst", "PLTID");
+            var markdown = WrapSpec(
+                "### 조회 대상 테이블\n\n" +
+                "| 테이블명 | 참조 컬럼 |\n|---|---|\n| `DB.dbo.TSettleMst` | `PLTID` |\n\n" +
+                "### 갱신 대상 테이블\n\n" +
+                "| 테이블명 | 갱신 컬럼 |\n|---|---|\n| `dbo.TSettleMst` | `PLTID` |");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // Assert
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
+        }
     }
 }
