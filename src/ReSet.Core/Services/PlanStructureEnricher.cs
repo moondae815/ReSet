@@ -213,6 +213,13 @@ namespace ReSet.Core.Services
         /// AST에서 확정하고 모델은 추측한다. 실측에서 한 단계가 선언한 네 테이블 중
         /// 셋이 원본 DDL에 0회 등장했다 - 합집합했다면 그 허위가 검증 요건이 되고,
         /// 재생성이 그것을 고착시켰을 것이다.
+        ///
+        /// SchemaTables는 이 메서드가 유일하게 채우는 곳이다(BatchStepPlan.cs의 불변식).
+        /// 도구가 채울 재료가 없는 두 경로 - LegacyProcedures가 비어 대조할 원본이
+        /// 없는 경우, 그리고 있어도 정적 분석 매칭이 하나도 안 남는 경우 - 에서는
+        /// 기존 SchemaTables를 지운다. 재수립 프롬프트가 이전 목차를 그대로 예시로
+        /// 붙여넣으므로, 지우지 않으면 모델이 흉내 낸 값이 살아남아 도구가 낸 것으로
+        /// 오인된다.
         /// </summary>
         private static bool RewriteTables(
             JsonObject step,
@@ -222,8 +229,9 @@ namespace ReSet.Core.Services
             var procedures = ReadStringArray(step, "LegacyProcedures");
             if (procedures.Count == 0)
             {
-                // 레거시 출신이 없는 단계는 계획이 새로 설계한 것이다. 대조할 원본이 없다.
-                return false;
+                // 레거시 출신이 없는 단계는 계획이 새로 설계한 것이다. 대조할 원본이
+                // 없으니 SchemaTables도 채울 수 없다 - 모델이 흉내 낸 값이 있다면 지운다.
+                return step.Remove("SchemaTables");
             }
 
             var write = new List<string>();
@@ -286,6 +294,12 @@ namespace ReSet.Core.Services
             {
                 step["SchemaTables"] = new JsonArray(
                     schema.ConvertAll(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+                changed = true;
+            }
+            else if (step.Remove("SchemaTables"))
+            {
+                // 정적 분석 매칭이 하나도 안 남아 이번 회차에 도구가 채울 값이 없다.
+                // 기존 값이 모델이 흉내 낸 것일 수 있으므로 지운다.
                 changed = true;
             }
 

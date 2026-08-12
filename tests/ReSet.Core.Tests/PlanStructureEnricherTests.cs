@@ -592,6 +592,31 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Enrich_ShouldStripModelAuthoredSchemaTablesWhenNoLegacyProceduresToVerifyAgainst()
+        {
+            // SchemaTables는 도구가 정적 분석에서 채우는 필드다(BatchStepPlan.cs).
+            // LegacyProcedures가 비어 대조할 원본이 없는 단계는 도구가 아무것도 채우지
+            // 않았으므로, 재수립 프롬프트에 이전 목차가 통째로 예시로 들어가며 모델이
+            // 흉내 낸 값이 있다면 지워야 한다 - 남겨두면 DependenciesForStep이 그
+            // 값을 진짜 정적 분석 결과로 믿고 그 단계의 DDL 범위를 잘못 좁힌다.
+            const string designedStepWithGuessedSchemaTables = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S00"", ""Name"": ""실행 잠금 사전검증"", ""LegacyProcedures"": [], ""TargetTables"": [], ""SchemaTables"": [""dbo.TGuessed""] }
+  ]
+}
+```";
+
+            var result = PlanStructureEnricher.Enrich(
+                designedStepWithGuessedSchemaTables,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_x", new[] { "DB.dbo.T" }, System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.SchemaTables);
+        }
+
+        [Fact]
         public void Enrich_ShouldIgnoreNonStringEntriesInLegacyProcedures()
         {
             // 가드가 없으면 숫자 123이 문자열로 읽혀 codesByProcedure의 "123" 키에
