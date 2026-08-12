@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
+using NSubstitute;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
 using ReSet.Core.Services.Clients;
@@ -1185,6 +1187,99 @@ namespace ReSet.Core.Tests
             // catch 폴백은 HasDefects를 무조건 true로 두므로, false 확인은 성공 경로에서만 통과한다.
             Assert.False(review.HasDefects);
             Assert.Empty(review.DefectiveSteps);
+        }
+
+        // 캐시는 접두사 일치다. 잡 이름이 명세서보다 앞에 있으면 잡이 바뀔 때마다
+        // 뒤따르는 명세서 전량(실측 481KB)이 무효가 된다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_PutsTheJobNameAfterTheSpecifications()
+        {
+            // 이 테스트는 실제 OpenAiClient를 거쳐 나가는 원문 wire JSON을 검사한다.
+            // System.Text.Json의 기본 인코더는 비 ASCII 문자를 \uXXXX로 이스케이프하므로,
+            // 원문 문자열 그대로 남는 ASCII 고유 마커를 쓴다 — 한글 마커는 이스케이프되어
+            // IndexOf가 항상 -1을 반환해 이 assert의 의도(순서 검증)를 검증할 수 없다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "SpecUniqueMarker")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\": false}\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "## Plan", "Job_UniqueMarker");
+
+            var body = mockHandler.LastRequestBody;
+            Assert.True(
+                body.IndexOf("SpecUniqueMarker") < body.IndexOf("Job_UniqueMarker"),
+                "명세서가 잡 이름보다 앞에 와야 캐시 접두사가 잡 간에 공유된다.");
+        }
+
+        // 계획서 본문은 회차마다 재생성되므로 가변 조각에 있어야 한다. 고정 조각에
+        // 들어가면 접두사가 매 회차 달라져 캐시가 살지 않는다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_SendsThePlanBodyAsTheVolatileSuffix()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "명세서 내용")
+            };
+            var client = Substitute.For<IAiClient>();
+            client.ProviderName.Returns("OpenAI");
+            client.ModelName.Returns("gpt-4o");
+            client.ChatAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "{\"HasDefects\": false}" });
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "계획서고유표시", "Test_Job");
+
+            await client.Received(1).ChatAsync(
+                Arg.Any<string>(),
+                Arg.Is<string>(stable => stable.Contains("명세서 내용")
+                                         && !stable.Contains("계획서고유표시")),
+                Arg.Any<float>(),
+                Arg.Any<string?>(),
+                Arg.Is<string?>(suffix => suffix != null && suffix.Contains("계획서고유표시")),
+                Arg.Any<CancellationToken>());
+        }
+
+        // 제공자 간 동일성: 메시지를 나눌 수 없는 경로는 PromptComposition이 이어 붙인
+        // 한 덩어리를 받고, Claude는 같은 두 조각을 블록으로 받는다. 두 조각을 합친
+        // 결과가 세 부분을 원래 순서대로 담고 있어야 내용이 같다고 말할 수 있다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_MergedPromptKeepsEveryPartInOrder()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "명세서고유표시")
+            };
+            string? stable = null;
+            string? suffix = null;
+            var client = Substitute.For<IAiClient>();
+            client.ProviderName.Returns("OpenAI");
+            client.ModelName.Returns("gpt-4o");
+            client.ChatAsync(
+                    Arg.Any<string>(),
+                    Arg.Do<string>(s => stable = s),
+                    Arg.Any<float>(),
+                    Arg.Any<string?>(),
+                    Arg.Do<string?>(v => suffix = v),
+                    Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "{\"HasDefects\": false}" });
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.ReviewConsolidatedPlanAsync(specs, "계획서고유표시", "Job_고유표시");
+
+            var merged = PromptComposition.MergeVolatileSuffix(stable!, suffix!);
+            Assert.True(
+                merged.IndexOf("명세서고유표시") < merged.IndexOf("Job_고유표시"),
+                "합친 결과에서도 명세서가 잡 이름보다 앞이어야 한다.");
+            Assert.True(
+                merged.IndexOf("Job_고유표시") < merged.IndexOf("계획서고유표시"),
+                "합친 결과에서도 잡 이름이 계획서 본문보다 앞이어야 한다.");
         }
 
         private static SpDefinition SchemaFilterSpDef(

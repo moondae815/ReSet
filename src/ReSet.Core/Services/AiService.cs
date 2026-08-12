@@ -2415,28 +2415,43 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
   ""ScoreReadability"": 10
 }";
 
-            var userPrompt = new StringBuilder();
-            userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
-            userPrompt.AppendLine();
-            userPrompt.AppendLine("[Provided Stored Procedure Specifications]");
+            // 프롬프트를 캐시 접두사(고정)와 회차별 가변부로 나눈다.
+            //
+            // 명세서는 회차 간 바이트가 같고 실측 481KB로 가변부보다 크다. 잡 이름은
+            // 잡마다 달라지므로 앞에 두면 그 한 줄이 뒤의 명세서 전량을 무효로 만든다 —
+            // 캐시는 접두사 일치이기 때문이다. 계획서 본문은 회차마다 재생성되므로
+            // 애초에 캐시 대상이 아니다.
+            var stablePrompt = new StringBuilder();
+            stablePrompt.AppendLine("[Provided Stored Procedure Specifications]");
 
             foreach (var spec in specs)
             {
-                userPrompt.AppendLine($"---");
-                userPrompt.AppendLine($"Filename: {spec.FileName}");
-                userPrompt.AppendLine(spec.Content);
-                userPrompt.AppendLine();
+                stablePrompt.AppendLine($"---");
+                stablePrompt.AppendLine($"Filename: {spec.FileName}");
+                stablePrompt.AppendLine(spec.Content);
+                stablePrompt.AppendLine();
             }
 
-            userPrompt.AppendLine("[Consolidated Batch Modernization Plan Markdown]");
-            userPrompt.AppendLine(planMarkdown);
-            userPrompt.AppendLine();
-            userPrompt.AppendLine("Please review the consolidated plan and output the JSON result.");
+            var volatileSuffix = new StringBuilder();
+            volatileSuffix.AppendLine($"Unified Batch Job Name: {jobName}");
+            volatileSuffix.AppendLine();
+            volatileSuffix.AppendLine("[Consolidated Batch Modernization Plan Markdown]");
+            volatileSuffix.AppendLine(planMarkdown);
+            volatileSuffix.AppendLine();
+            volatileSuffix.AppendLine("Please review the consolidated plan and output the JSON result.");
 
             Log.Information("AI 통합 배치 계획서 리뷰 요청 전송 - JobName: {JobName}, Effort: {Effort}", jobName, effort ?? "Default");
-            Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt.ToString());
+            var mergedPrompt = PromptComposition.MergeVolatileSuffix(
+                stablePrompt.ToString(), volatileSuffix.ToString());
+            Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, mergedPrompt);
 
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), 0.1f, effort, cancellationToken: cancellationToken);
+            var aiResult = await _aiClient.ChatAsync(
+                systemPrompt,
+                stablePrompt.ToString(),
+                0.1f,
+                effort,
+                volatileUserSuffix: volatileSuffix.ToString(),
+                cancellationToken: cancellationToken);
 
             Log.Information("AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: {JobName}, 응답 길이: {Length}", jobName, aiResult?.Content?.Length ?? 0);
             Log.Debug("[AI 응답 내용]:\n{Response}", aiResult?.Content);
