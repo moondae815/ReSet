@@ -195,13 +195,23 @@ enum StepDefectKind { QualityFloor, Unverifiable }
   중복 키 블록에서도 같은 갈림이 생긴다(보강기는 건너뛰고 파서는 읽는다).
   고치려면 `BatchStepPlan.cs`를 범위에 들여 블록 유효성 판정을 한 곳에서 공유해야 한다.
   이때 정규식 리터럴 중복도 함께 해소된다.
-- **`PlanStructureEnricher.ReadStringArray`의 비문자열 방어 테스트가 뮤테이션 저항이 없다.**
+- ~~**`PlanStructureEnricher.ReadStringArray`의 비문자열 방어 테스트가 뮤테이션 저항이 없다.**
   가드를 제거해도 두 테스트가 그대로 통과한다 — 숫자 항목이 걸러지지 않고 통과해도
   `BareName("123")`이 코드 사전의 키에 없어 결과가 같고, JSON `null`은 애초에 `null`이라
   `IsNullOrWhiteSpace`에 걸리기 때문이다. `codesByProcedure`에 `"123"` 키를 넣어 통과 시
-  결과가 달라지게 만들면 닫힌다.
-- `TargetTables`도 명세서의 「갱신 대상 테이블」 절에서 같은 방식으로 뽑을 수 있다. 회차별
-  스키마 스코프 주제라 이번에 섞지 않았다.
+  결과가 달라지게 만들면 닫힌다.~~ **해소됨(2026-08-12).**
+  [목차 대상 테이블 보강](2026-08-12-target-tables-enrichment-design.md) 브랜치가
+  `codesByProcedure`에 `"123"` 키를 채운 `Enrich_ShouldIgnoreNonStringEntriesInLegacyProcedures`로
+  닫았다 — 가드를 지우면 이제 실패한다.
+- ~~`TargetTables`도 명세서의 「갱신 대상 테이블」 절에서 같은 방식으로 뽑을 수 있다. 회차별
+  스키마 스코프 주제라 이번에 섞지 않았다.~~ **해소됨(2026-08-12), 다만 전제가 틀렸다.**
+  [목차 대상 테이블 보강](2026-08-12-target-tables-enrichment-design.md)이 `TargetTables`를
+  채웠지만 명세서 산문에서 뽑지 않는다 — 이 항목이 가리킨 「갱신 대상 테이블」이라는 절은
+  코드 어디에도 없다(`grep -rn "갱신 대상 테이블" src` 0건). 프롬프트가 실제로 강제하는
+  헤딩은 `### INSERT 대상 테이블:`·`### UPDATE 대상 테이블:`뿐이다. 더 근본적으로 전제 자체가
+  틀렸다 — 오류코드는 명세서 산문에만 존재해 뽑을 곳이 거기뿐이지만, 대상 테이블은 파서가
+  AST에서 이미 구조화해 확정한 데이터로 존재한다. 그래서 산문은 애초에 옳은 원천이었던 적이
+  없고, 실제 원천은 `SpecTargetTableExtractor`가 읽는 정적 분석이다.
 - Claude 클라이언트의 프롬프트 캐시 중단점이 시스템 프롬프트에만 걸려 있어, L2 리뷰가
   여러 번 도는 회차에서 계획서 본문을 매번 전액 지불한다.
 
