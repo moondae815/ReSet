@@ -215,6 +215,11 @@ namespace ReSet.Core.Services.Clients
                     throw new InvalidOperationException($"Claude API 에러 응답 수신: {errMsg}");
                 }
 
+                var usage = ReadUsage(root);
+                Log.Information(
+                    "Claude 토큰 사용량 - 입력: {Input}, 캐시 쓰기: {CacheWrite}, 캐시 읽기: {CacheRead}",
+                    usage.Input, usage.CacheWrite, usage.CacheRead);
+
                 if (!root.TryGetProperty("content", out var contentElement) || contentElement.GetArrayLength() == 0)
                 {
                     Log.Error("Claude API 응답 content 속성 누락 또는 빈 배열");
@@ -294,6 +299,29 @@ namespace ReSet.Core.Services.Clients
             };
 
             return new object[] { new { role = "user", content = (object)blocks } };
+        }
+
+        /// <summary>
+        /// 응답의 usage에서 입력/캐시 쓰기/캐시 읽기 토큰 수를 읽는다.
+        /// 캐시 미스는 오류를 내지 않으므로, 이 값이 중단점이 실제로 동작하는지
+        /// 확인할 수 있는 유일한 신호다. 필드가 없거나 형식이 다르면 0으로 둔다.
+        /// </summary>
+        public static (int Input, int CacheWrite, int CacheRead) ReadUsage(JsonElement root)
+        {
+            if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+            {
+                return (0, 0, 0);
+            }
+
+            return (
+                ReadCounter(usage, "input_tokens"),
+                ReadCounter(usage, "cache_creation_input_tokens"),
+                ReadCounter(usage, "cache_read_input_tokens"));
+
+            static int ReadCounter(JsonElement element, string name) =>
+                element.TryGetProperty(name, out var value) && value.TryGetInt32(out var count)
+                    ? count
+                    : 0;
         }
 
         private static double GetClaudeVersion(string modelName)

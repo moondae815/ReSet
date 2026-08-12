@@ -122,6 +122,47 @@ namespace ReSet.Core.Tests
             var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
             Assert.Contains("Bad request", ex.Message);
         }
+
+        // 캐시 미스는 오류를 내지 않고 조용히 지나간다. usage를 읽지 않으면 중단점이
+        // 실제로 동작하는지 확인할 방법이 없다.
+        [Fact]
+        public void ReadUsage_ExtractsInputAndCacheCounters()
+        {
+            var json = @"{""usage"":{""input_tokens"":357560,
+                                     ""cache_creation_input_tokens"":1818,
+                                     ""cache_read_input_tokens"":0}}";
+
+            using var doc = JsonDocument.Parse(json);
+            var usage = ClaudeClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(357560, usage.Input);
+            Assert.Equal(1818, usage.CacheWrite);
+            Assert.Equal(0, usage.CacheRead);
+        }
+
+        // usage 필드가 없어도 응답 처리는 계속되어야 한다.
+        [Fact]
+        public void ReadUsage_WithoutAUsageObject_ReturnsZeros()
+        {
+            using var doc = JsonDocument.Parse(@"{""content"":[]}");
+            var usage = ClaudeClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(0, usage.Input);
+            Assert.Equal(0, usage.CacheWrite);
+            Assert.Equal(0, usage.CacheRead);
+        }
+
+        // 필드 일부만 오는 경우에도 던지지 않는다.
+        [Fact]
+        public void ReadUsage_WithPartialFields_FillsTheRestWithZero()
+        {
+            using var doc = JsonDocument.Parse(@"{""usage"":{""cache_read_input_tokens"":1818}}");
+            var usage = ClaudeClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(0, usage.Input);
+            Assert.Equal(0, usage.CacheWrite);
+            Assert.Equal(1818, usage.CacheRead);
+        }
     }
 
     public class ClaudeRequestSpyHandler : HttpMessageHandler
