@@ -68,6 +68,8 @@ flowchart TD
 | | [CliEffort](../src/ReSet.Core/Services/Clients/Cli/CliEffort.cs), [CliPrompt](../src/ReSet.Core/Services/Clients/Cli/CliPrompt.cs), [CliFailureClassifier](../src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs) | CLI 클라이언트 공용 헬퍼. CliEffort는 ReSet의 effort 값을 각 CLI가 받는 단계로 매핑(codex/agy는 low/medium/high만 지원해 xhigh를 high로 낮추고 로그를 남김)하며, CliPrompt는 시스템/사용자 프롬프트를 결합하고, CliFailureClassifier는 CLI 실패를 미인증·쿼터 소진·타임아웃·알 수 없음으로 분류해 원본 CLI 출력과 함께 예외 메시지를 구성합니다. |
 | | [CliProviderBatchGuard](../src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs) | Actor/Critic/Consolidator 중 CLI 제공자가 지정된 상태로 ReSet.Cli 또는 ReSet.Validator.Cli의 배치 모드가 실행되는 것을 판정하는 가드. CLI 에이전트 자체는 헤드리스로 정상 동작하지만, 무인 실행 중 권한 프롬프트 정지나 쿼터 소진이 발생하면 장시간 작업이 통째로 소실되므로, DB 연결 전에 실행을 즉시 중단시킵니다. |
 | | [MechanicalValidator](../src/ReSet.Core/Services/MechanicalValidator.cs) | Markdig AST 기반 마크다운 필수 구조 분석, Anti-Shortcut(생략어) 기계 검증, mermaid-cli 연동을 통한 다이어그램 문법 실시간 컴파일 검증, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`) 탑재. Mermaid CLI 검증 실패 또는 시간 초과 발생 시 기존 정규식 기반 폴백 기계 린터로 자동 우회 전환. 통합 배치 단계 섹션 하나가 구현 지시서로서의 최소 요건(SQL/의사코드 블록, 대상 테이블, 원본 오류코드)을 갖췄는지 검사하는 `ValidateBatchStep`도 이 클래스가 제공하며, AI 호출이 없어 비용이 0입니다. |
+| | [SchemaPromptColumnSelector](../src/ReSet.Core/Services/SchemaPromptColumnSelector.cs) | 프롬프트에 실릴 스키마 컬럼을 결정하는 단일 권위.<br/>`AiService`의 렌더러와 L1의 대조 기준이 같은 함수를 부르게 해, 어느 한쪽에서 판정을 복제했을 때 두 권위가 가장자리에서 어긋나는 것을 막습니다. 프롬프트에서 누락된 참조 컬럼 키를 찾아내는 `DetectOrphanedColumnKeys`도 제공합니다. |
+| | [SpecExpectations](../src/ReSet.Core/Services/SpecExpectations.cs) | `SpDefinition`에서 L1 대조 기준(UPDATE 컬럼 매핑, 프롬프트 스키마 컬럼, 컬럼 없는 의존 테이블, 입력 결함)을 뽑아내는 레코드.<br/>입력 측 결함은 `Errors`가 아니라 경고로 분리합니다 — 재생성으로 고칠 수 없는 것을 오류로 만들면 무한 재시도가 됩니다. |
 | | [BatchStepPlan](../src/ReSet.Core/Services/BatchStepPlan.cs), [BatchStepPlanParser](../src/ReSet.Core/Services/BatchStepPlan.cs) | 목차(`raw/PlanStructure.md`)의 ` ```json ` 블록에서 통합 배치 단계 목록(`Steps[]`, 최대 40개)을 읽어 `BatchStepPlan` 레코드(Code, Name, LegacyProcedures, TargetTables, ErrorCodes, Chunkable)로 반환하는 파서. 목차 헤딩 레벨이 산출물마다 달라 헤딩 파싱으로는 단계 목록을 얻을 수 없어 만들어졌으며, 파싱 실패는 예외가 아니라 null이라 호출부가 단일 호출 경로로 조용히 폴백합니다. 어느 블록을 쓸지는 `TryLocateStepsBlock` 하나가 정해 보강기도 같은 블록을 보며, 블록 파싱 중 발생한 예외는 `JsonException`이 아니어도 모두 흡수해 null로 돌립니다. |
 | | [SpecReturnCodeExtractor](../src/ReSet.Core/Services/SpecReturnCodeExtractor.cs) | 명세서 본문의 `@po_intRetVal` 대입에서 원본 반환 오류코드를 뽑는다 |
 | | [PlanStructureEnricher](../src/ReSet.Core/Services/PlanStructureEnricher.cs) | 목차의 `ErrorCodes`를 추출된 코드로 채워 하한 검사에 대조 기준을 준다. 보강할 블록을 따로 고르지 않고 파서가 고른 그 블록만 갈아 끼운다 |
@@ -530,6 +532,13 @@ L1 기계 검증은 헤더·Mermaid 문법·UPDATE 컬럼 매핑에 더해 **스
 `AiService`의 렌더러와 `SpecExpectations`가 같은 함수를 부른다. 이 판정을 어느 쪽에서든
 복제하면 두 권위가 가장자리에서 어긋난다.
 
+같은 불변식이 Anti-Shortcut 린트에도 적용된다. 금지 토큰 `etc.`를 부분 문자열로 찾던
+검사는 컬럼명이 `Etc`로 끝나고 문장 끝에 올 때 생기는 `CLEtc.`를 축약어로 오인했다.
+프롬프트가 만들어 넣은 자기참조 문장을 AI가 그대로 옮겨 적은 것이라 재생성으로 고칠
+방법이 없었고, 실측에서 L1 재시도 3회를 모두 소진시켰다. 지금은 이 토큰만 앞 경계를
+따지며, 검증 배너가 잔존 오류 메시지를 인용해 스스로를 오류로 만들지 않도록 인용문
+줄은 검사 대상에서 제외한다.
+
 #### 4.4.2. Level 2: AI 교차 리뷰 (L2 Actor-Critic)
 * **동적 모드 분기**: `ActorEffort` 설정값에 따라 검증 및 생성 경로가 이원화됩니다.
   * **단일 모드**: 지정된 LLM 모델을 사용해 1차 명세서를 빌드한 후(Ollama 제공자일 경우 1회차 생성 및 자가 수정/피드백 루프에서 `GenerateSpecSectionAsync`를 통해 "OverviewAndParameters", "CrudAnalysis", "LogicAndVisualization" 3개 파트로 나누어 순차 분할 생성 및 피드백 키워드 기반 선택적 재생성 조립을 구동), 이종 Critic 에이전트에게 5대 평가 기준(비즈니스 로직 정합성, 데이터 모델 및 CRUD 완전성, 연동 인터페이스 구체성, 예외 및 트랜잭션/격리성 정책, 다이어그램 및 시각화 가독성)을 바탕으로 교차 리뷰를 수행하도록 요청합니다. 특히 통합 배치 전환 계획의 경우 비즈니스 필터 보존 여부, XACT_ABORT ON 기반 TRY...CATCH 예외 처리, 그리고 원본 에러 코드 맵핑 무결성에 대해 더욱 가혹하게 감점 처리합니다. 결함 발견 시 자가 수정 루프를 가동하며, 설정된 Critic 기준 점수(Threshold)를 감쇄 없이 일관되게 엄격히 적용합니다. 최대 시도 횟수를 모두 사용한 후에도 기준 점수 미달로 최종 실패하는 경우, 명세서 문서 최상단에 `[!CAUTION]` 경고 배너와 최종 Critic 점수/피드백 코멘트를 보관하여 후속 수동 수정을 유도하도록 처리합니다.
@@ -575,6 +584,8 @@ L1 기계 검증은 헤더·Mermaid 문법·UPDATE 컬럼 매핑에 더해 **스
 
 ### 4.6. 소스코드 정합성 검증 엔진 (Validator)
 마이그레이션된 소스코드가 원래의 비즈니스 기능 명세서(Spec) 및 기존 Legacy DB SP의 구동 결과 데이터와 일치하는지 판정하는 정합성 검증 시스템 흐름은 다음과 같습니다.
+
+검증기는 설정을 자기 `appsettings.json`과 `appsettings.local.json`에서만 읽습니다. 분석기(`ReSet.Cli`)의 로컬 설정 파일에서는 `ApiKey` 하나만 따로 가져옵니다 — 그 파일을 통째로 병합하면 나중에 추가된 소스가 이기는 구성 규칙 때문에 분석기 쪽 provider가 검증기까지 덮어써, 분석기에서 CLI provider를 쓰는 순간 검증기의 무인 배치가 `CliProviderBatchGuard`에 걸려 중단됩니다.
 
 ```mermaid
 graph TD
@@ -691,4 +702,4 @@ graph TD
 * **콘솔 UI 파괴 방지**: Spectre.Console 진행 바 및 TUI 화면이 로그 텍스트 출력으로 인해 지저분하게 깨지는 현상을 원천 방어하기 위해 Serilog의 콘솔 출력을 비활성화하고 **오직 파일 전용(File Sink)으로만 로그를 기록**하도록 제한합니다.
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
 
-<!-- synced-through: cc89388 -->
+<!-- synced-through: a1f5e85 -->

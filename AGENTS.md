@@ -44,6 +44,8 @@
     *   [StepDefect.cs](./src/ReSet.Core/Services/StepDefect.cs): 단계 하한 검사 판정을 `QualityFloor`(본문 미달, 재생성으로 고쳐짐)와 `Unverifiable`(대조 재료가 목차에 없어 검사가 못 돎, 재생성으로 고쳐지지 않음)로 가르는 열거형과 레코드.
     *   [BatchPlanAssembler.cs](./src/ReSet.Core/Services/BatchPlanAssembler.cs): 골격 문서와 단계별 섹션을 하나의 계획서로 합칩니다. 모델이 넣은 자리표시자의 위치를 신뢰하지 않고, 단계 목록 순서대로 결정적으로 이어붙입니다 — 자리표시자는 모델이 단계 본문까지 써 버리는 것을 막기 위한 프롬프트 장치일 뿐, 조립이 그 위치에 의존하지 않습니다.
     *   [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs): Markdig 파서 및 Mermaid 린터를 활용해 산출물 뼈대 및 다이어그램 문법을 정적 검증하고, Mermaid 다이어그램 코드 자동 교정 및 표준화 정화기(`CleanseMermaidCode`)를 기동하는 클래스. Mermaid 라벨에 `@`가 있으면 자동으로 큰따옴표를 씌웁니다 — Mermaid 11에서 따옴표 없는 `@`는 링크 ID 문법으로 해석돼 파스 에러가 나기 때문입니다(실측). 단계 섹션 하한은 `ValidateBatchStep`이 검사합니다. 테이블명은 스키마 접두사를 뗀 이름으로, 오류코드는 **단어 경계로** 대조하십시오 — 부분 문자열 대조로 바꾸면 `-1`이 `-10` 안에서 걸려 검사가 통째로 무력해집니다. 경계 판정에는 `RegexOptions.ECMAScript`를 씁니다 — .NET 기본 `\w`는 한글 음절도 단어 문자로 취급해, 테이블명이 조사에 구분자 없이 바로 붙는 실제 문서에서 경계 검사가 항상 실패합니다. 스키마·DB 접두사를 떼는 `BareObjectName`은 `internal`입니다 — `VerificationPipelineOrchestrator`의 목차 커버리지 검사가 같은 접두사 제거 규칙을 재사용합니다. 새로 접두사를 떼는 자리를 만들 때 이 규칙을 다시 구현하지 말고 그대로 재사용하십시오.
+    *   [SchemaPromptColumnSelector.cs](./src/ReSet.Core/Services/SchemaPromptColumnSelector.cs): 프롬프트에 실릴 스키마 컬럼을 정하는 단일 권위. `AiService`의 렌더러와 L1의 대조 기준이 **같은 함수**를 부릅니다. 어느 한쪽에 판정을 복제하면 두 권위가 가장자리에서 어긋나므로 이 클래스를 거치지 않는 컬럼 선별을 새로 만들지 마십시오.
+    *   [SpecExpectations.cs](./src/ReSet.Core/Services/SpecExpectations.cs): `SpDefinition`에서 L1 대조 기준(UPDATE 매핑, 프롬프트 스키마 컬럼, 컬럼 없는 의존 테이블, 입력 결함)을 뽑아내는 레코드. 입력 측 결함은 `ValidationResult.Errors`가 아니라 경고로 나갑니다 — **재생성으로 고칠 수 없는 것을 오류로 만들면 무한 재시도가 됩니다.**
     *   [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs): 3단계 검증 파이프라인의 오케스트레이션을 담당. Ollama 구역별 순차 생성 및 피드백 기반 선택적 재생성, L1 자동 정화 마크다운 반영 오케스트레이션을 담당하며, 통합 배치 전환 계획 수립 시 3단계(Brainstorm ➔ Structure ➔ Finalize) Multi-Step Agentic Workflow 흐름을 제어합니다. 재시도가 소진되면 마지막 시도가 아니라 [BestAttempt](./src/ReSet.Core/Services/BestAttempt.cs)가 보관한 최고 점수 시도를 채택합니다. 순차 SP 루프와 배치 계획 루프 **양쪽 모두**에 적용되어 있으니 한쪽만 고치지 마십시오. 정상 소진뿐 아니라 생성 실패·L1 소진·L2 리뷰 실패로 중단될 때도 채택은 [RetryRescue](./src/ReSet.Core/Services/RetryRescue.cs)가 결정합니다 — 여덟 자리 전부가 이 한 곳을 거칩니다. `MaxL2Attempts`는 이름과 달리 L1 실패와 공유하는 총 시도 예산입니다. 목차 재설계 결과는 만들어 낸 자리에서 곧바로 쓰지 말고, 그 목차로 본문이 실제로 나온 것이 확정된 뒤에 `TryCommitPlanStructureAsync`로만 기록하십시오 — `raw/PlanStructure.md`는 파이프라인이 끝나거나 문서를 사용자에게 건네는 **모든** 지점에서 그 문서를 실제로 만든 목차를 담고 있어야 합니다. 구제 채택이 재설계 이전 시도를 고르면 그 시도를 만든 목차를 현행으로 되돌리고 밀려나는 목차를 superseded로 남깁니다. 분할 경로의 골격 재시도가 실패해 단일 호출로 폴백할 때는 `ClearSplitGenerationCacheAfterRedraft`로 골격·섹션·지목 목록·하한 위반 기록을 통째로 지우십시오 — 위반 기록만 지우고 섹션 캐시를 남기면, 나중 회차의 지목 재생성이 그 캐시를 재사용해 위반 기록 없는 하한 미달 섹션을 조용히 되살립니다(실제로 있었던 사고). 루프 종료 후에는 목차의 `LegacyProcedures`가 원본 `specs` 전부를 커버하는지도 검사합니다 — 이 값은 최종 `currentPlanStructure`에서 매번 새로 파싱하십시오. 라이브 루프 변수(`currentSteps`)를 재사용하면 구제 채택이 목차를 되돌린 뒤에도 채택되지 않은 마지막 회차의 목차를 가리킬 수 있습니다. 명세서 목록과 대조할 때는 반드시 원본 `specs` 인자를 쓰고, 회차마다 `Feedback_Log.txt`가 추가되는 작업 사본(`specsCopy`)과 대조하지 마십시오 — 안 그러면 그 항목이 매 회차 "커버 안 됨"으로 잘못 보고됩니다. **이 검사는 `(FileName, Content)`의 `FileName`이 프로시저별로 실제로 다른 값이라는 전제에 전적으로 기댑니다** — Program.cs의 두 호출부(`--batch --job-name` 경로, TUI 경로)는 각각 `SpDefinition.Schema`/`Name`과 `BatchStepCatalog.ExtractProcedureIdentifier`로 그 값을 만듭니다. `FileName`을 모든 명세서에 같은 고정 문자열이나 항상 `Spec.md`로 끝나는 경로로 채우는 호출부를 새로 추가하면 이 검사는 조용히 무의미해집니다(N개 명세서가 한 항목으로 뭉개져, 실제 결함이 있어도 있는 그대로 보고하지 못합니다 — 2026-08-06 코드 리뷰에서 실측됨). `SpecReturnCodeExtractor.BareName(fileName)`도 같은 전제에 기대는 소비자입니다 — `FileName`이 프로시저별로 갈리지 않으면 오류코드 추출도 조용히 한 프로시저로 뭉개집니다. 채택 회차의 목차·골격·골격 AiResult·단계 섹션·하한 위반은 `AdoptedGenerationState` 하나로 묶여 있습니다 — 구제 채택 지점에서 **통째로만** 되돌리십시오. 개별 필드만 되돌리는 코드를 쓰면 화면의 문서와 재생성에 쓰이는 상태가 어긋나고, 그 증상은 "엉뚱한 회차 위에 피드백이 얹힘"이라 추적이 매우 어렵습니다. L3 피드백 재생성은 통짜 `GenerateConsolidatedBatchPlanAsync`가 아니라 `GenerateBySplitAsync`를 거칩니다.
     *   [DependencyAnalysisOrchestrator.cs](./src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs): 루트 SP에서 발견한 하위 SP/UDF 코드 객체 그래프를 중복 없이 순회하고, 객체별 검증 파이프라인 실행·실패 격리·아티팩트 저장을 조율합니다.
     *   [VerificationDocumentFormatter.cs](./src/ReSet.Core/Services/VerificationDocumentFormatter.cs): 산출물 상단의 YAML 헤더와 NOTE 메타데이터(작성일시·분석 AI 정보·검증 종료 상태)를 렌더링합니다. 진입점은 문서 종류가 아니라 보장 수준으로 나뉘며(파이프라인 통과 문서 / 파이프라인에 진입한 적 없는 문서), Critic 점수는 종료 상태가 통과 또는 품질 미달일 때만 실립니다. 상태의 한국어 표기(`StatusLabel`)는 이 클래스가 단일 소유합니다.
@@ -148,6 +150,8 @@
 ### 🛡️ 범주 1. 보안 및 크레덴셜 제약 (Security)
 1.  **절대 비공개 API Key를 소스 코드나 [appsettings.json](./src/ReSet.Cli/appsettings.json)에 포함하여 커밋하지 마십시오.**
     *   로컬 개발용 API Key는 Git 추적 제외 대상인 `src/ReSet.Cli/appsettings.local.json`을 새로 생성하여 관리해야 합니다.
+    *   이 파일은 API Key 전용이 아니라 `appsettings.json`의 **모든 키를 덮어쓸 수 있습니다**. 저장소 기본값은 보수적으로 두고(예: API provider, 재귀 분석 off) 개인 환경 설정은 이쪽에 두십시오.
+    *   검증기(`ReSet.Validator.Cli`)는 이 파일에서 **`ApiKey`만** 가져갑니다. 파일을 통째로 병합하는 코드를 되살리지 마십시오 — 나중에 추가된 구성 소스가 이기므로 분석기 쪽 provider가 검증기를 덮어써, CLI provider를 쓰는 순간 검증기의 무인 배치가 `CliProviderBatchGuard`에 걸려 종료 코드 1로 죽습니다.
 
 ### ⚡ 범주 2. 예외 처리 및 안정성 (Stability & Soft Fail)
 2.  **전방위적 소프트 페일(Soft Fail) 및 예외 격리 정책을 준수하십시오.**
@@ -297,7 +301,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] 컴파일 에러가 0개이고, 경고가 **정확히 8건**(모두 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 0건으로 보이므로 반드시 `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`로 세야 한다. 8건보다 많으면 이번 변경이 새 경고를 넣은 것이다.
-- [ ] `dotnet test` 명령어를 실행하여 1211개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 1318개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] SQL 객체 타입을 `Contains("TABLE"/"VIEW"/"FUNCTION"/"PROCEDURE")`로 직접 판정한 곳이 없는가? (`SqlObjectTypeClassifier`에 위임해야 하며 `TypeClassificationPolicyTests`가 자동 검사한다)
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
@@ -306,4 +310,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: cc89388 -->
+<!-- synced-through: a1f5e85 -->
