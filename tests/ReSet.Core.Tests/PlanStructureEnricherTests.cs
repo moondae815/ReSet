@@ -617,5 +617,31 @@ namespace ReSet.Core.Tests
             var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
             Assert.Empty(step.ErrorCodes);
         }
+
+        [Fact]
+        public void Enrich_ShouldDropTheThreeTablesTheSourceDdlNeverMentions()
+        {
+            // 실측 회귀. output/은 추적되지 않으므로 발췌를 픽스처로 체크인했다.
+            // 이 세 이름은 UP_UTIL_SETTLE_SUMMARY_ETC의 DDL 원문에 0회 등장한다
+            // (IsParsedSuccessfully = True, 동적 SQL 없음 - 파서가 놓친 것이 아니다).
+            var markdown = File.ReadAllText(Path.Combine(
+                RepoPaths.FindRepoRoot(), "tests", "ReSet.Core.Tests", "Fixtures",
+                "S11PlanStructureExcerpt.md"));
+
+            var result = PlanStructureEnricher.Enrich(
+                markdown,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleMst" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Equal(new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" }, step.TargetTables);
+
+            var reported = Assert.Single(result.DroppedTableDeclarations);
+            Assert.Contains("TSettleByTX", reported);
+            Assert.Contains("TPartialCancelByTX", reported);
+            Assert.Contains("TSettleByIN", reported);
+        }
     }
 }

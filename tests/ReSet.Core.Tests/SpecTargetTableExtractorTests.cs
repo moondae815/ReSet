@@ -102,17 +102,65 @@ namespace ReSet.Core.Tests
             var first = new SpDefinition
             {
                 Name = "dbo.UP_Dup",
-                StaticAnalysis = new SpStaticAnalysisResult { InsertTables = { "DB.dbo.TA" } },
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    InsertTables = { "DB.dbo.TA" },
+                    SelectTables = { "DB.dbo.TReadA" },
+                },
             };
             var second = new SpDefinition
             {
                 Name = "other.UP_Dup",
-                StaticAnalysis = new SpStaticAnalysisResult { InsertTables = { "DB.dbo.TB" } },
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    InsertTables = { "DB.dbo.TB" },
+                    SelectTables = { "DB.dbo.TReadB" },
+                },
             };
 
             var sets = SpecTargetTableExtractor.Extract(new[] { first, second })["up_dup"];
 
             Assert.Equal(new[] { "DB.dbo.TA", "DB.dbo.TB" }, sets.WriteTables);
+            Assert.Equal(new[] { "DB.dbo.TReadA", "DB.dbo.TReadB" }, sets.ReadTables);
+        }
+
+        [Fact]
+        public void Extract_ShouldSurviveNullEntriesAndNullLists()
+        {
+            // definitions 자체가 null 항목을 담거나, Name이 공백이거나, 정적 분석의
+            // 목록 프로퍼티가 null이어도 예외가 새 나가면 안 된다 - 호출부(파이프라인의
+            // specTargetTables 대입)에 봉투가 없으므로 추출기가 스스로 방어해야 한다.
+            var definitions = new SpDefinition?[]
+            {
+                null,
+                new SpDefinition { Name = "  ", StaticAnalysis = new SpStaticAnalysisResult() },
+                new SpDefinition { Name = "UP_OK", StaticAnalysis = new SpStaticAnalysisResult { InsertTables = null! } },
+            };
+
+            var result = SpecTargetTableExtractor.Extract(definitions!);
+
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void Extract_ShouldKeepTwoFullNamesThatShareABareNameSeparate()
+        {
+            // dbo.TPGProperty와 PaymentDB.dbo.TPGProperty는 맨 이름이 같아도 서로 다른
+            // 물리 테이블이다. 세트 내부 중복 제거는 전체 정식 표기를 비교해야 하고,
+            // 맨 이름으로 비교하면 둘 중 하나가 조용히 사라진다 - 컬럼 구조가 같아서
+            // 위험한 실수다.
+            var sp = new SpDefinition
+            {
+                Name = "UP_SharedBareName",
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    InsertTables = { "dbo.TPGProperty", "PaymentDB.dbo.TPGProperty" },
+                },
+            };
+
+            var sets = SpecTargetTableExtractor.Extract(new[] { sp })["up_sharedbarename"];
+
+            Assert.Equal(new[] { "dbo.TPGProperty", "PaymentDB.dbo.TPGProperty" }, sets.WriteTables);
         }
 
         [Fact]
