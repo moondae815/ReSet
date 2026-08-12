@@ -319,7 +319,9 @@ namespace ReSet.Core.Services.Clients
                 ReadCounter(usage, "cache_read_input_tokens"));
 
             static int ReadCounter(JsonElement element, string name) =>
-                element.TryGetProperty(name, out var value) && value.TryGetInt32(out var count)
+                element.TryGetProperty(name, out var value)
+                && value.ValueKind == JsonValueKind.Number
+                && value.TryGetInt32(out var count)
                     ? count
                     : 0;
         }

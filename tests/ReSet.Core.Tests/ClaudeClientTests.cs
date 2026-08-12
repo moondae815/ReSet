@@ -163,6 +163,36 @@ namespace ReSet.Core.Tests
             Assert.Equal(0, usage.CacheWrite);
             Assert.Equal(1818, usage.CacheRead);
         }
+
+        // Anthropic은 cache_read_input_tokens를 integer|null로 타입한다. JsonElement.TryGetInt32는
+        // 숫자가 아닌 값에 대해 false가 아니라 InvalidOperationException을 던지므로, ValueKind를
+        // 먼저 확인하지 않으면 JSON null 하나가 성공한 응답을 예외로 바꾼다.
+        [Fact]
+        public void ReadUsage_WithNullCacheReadCounter_ReturnsZero()
+        {
+            using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":100,
+                                                              ""cache_creation_input_tokens"":0,
+                                                              ""cache_read_input_tokens"":null}}");
+            var usage = ClaudeClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(100, usage.Input);
+            Assert.Equal(0, usage.CacheWrite);
+            Assert.Equal(0, usage.CacheRead);
+        }
+
+        // 카운터가 숫자가 아닌 문자열로 와도 던지지 않고 0으로 둔다.
+        [Fact]
+        public void ReadUsage_WithCounterAsString_ReturnsZero()
+        {
+            using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":100,
+                                                              ""cache_creation_input_tokens"":""10"",
+                                                              ""cache_read_input_tokens"":0}}");
+            var usage = ClaudeClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(100, usage.Input);
+            Assert.Equal(0, usage.CacheWrite);
+            Assert.Equal(0, usage.CacheRead);
+        }
     }
 
     public class ClaudeRequestSpyHandler : HttpMessageHandler
