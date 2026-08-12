@@ -434,31 +434,21 @@ namespace ReSet.Validator.Cli
 
         private static IConfiguration LoadConfiguration()
         {
-            var builder = new ConfigurationBuilder()
+            // ReSet.Cli의 appsettings.local.json을 여기서 병합하지 않는다.
+            // .NET 구성은 나중에 추가한 소스가 이기므로, 그 파일을 뒤에 얹으면
+            // 이 프로젝트의 appsettings.json과 appsettings.local.json을 모두
+            // 덮어쓴다. 거기에 CLI provider를 두면 Validator의 provider까지
+            // 바뀌어 배치 모드가 CliProviderBatchGuard에 걸려 죽었고, Validator
+            // 전용 local 파일로 되돌리려 해도 로드 순서상 이길 수 없었다.
+            //
+            // 공유가 필요한 것은 API Key뿐이다. 그 일은 LoadApiKeyWithFallback이
+            // 같은 경로들을 뒤져 ApiKey 하나만 꺼내오는 방식으로 전담한다.
+            return new ConfigurationBuilder()
                 .SetBasePath(AppContext.BaseDirectory)
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-                .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true);
-
-            var slnRoot = FindSolutionRoot();
-            if (slnRoot != null)
-            {
-                var candidates = new[]
-                {
-                    Path.Combine(slnRoot, "src", "ReSet.Cli", "appsettings.local.json"),
-                    Path.Combine(slnRoot, "src", "ReSet.Cli", "bin", "Debug", "net10.0", "appsettings.local.json"),
-                    Path.Combine(slnRoot, "appsettings.local.json")
-                };
-
-                foreach (var path in candidates)
-                {
-                    if (File.Exists(path))
-                    {
-                        builder.AddJsonFile(Path.GetFullPath(path), optional: true, reloadOnChange: true);
-                    }
-                }
-            }
-
-            return builder.AddEnvironmentVariables().Build();
+                .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
+                .AddEnvironmentVariables()
+                .Build();
         }
 
         private static ValidatorConfig GetValidatorConfig(IConfiguration configuration, ValidatorCliArgs cliArgs)
