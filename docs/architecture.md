@@ -61,7 +61,8 @@ flowchart TD
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 통합 배치 수립 시 Brainstorming 및 PlanStructure 설계 분할 요청 처리, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
 | | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](../src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. `volatileUserSuffix` 인자로 요청마다 달라지는 지시를 공통 컨텍스트와 분리해 받습니다. |
-| | [PromptComposition](../src/ReSet.Core/Services/PromptComposition.cs) | 가변 접미사를 사용자 프롬프트에 합치는 규칙을 단독 소유하는 정적 클래스.<br/>메시지 분리가 불가능한 경로(Chat Completions·Claude·Google·Ollama·CLI)가 공유해, 제공자마다 구분자가 갈라지는 것을 막습니다. |
+| | [PromptCacheBreakpointPolicy](../src/ReSet.Core/Services/PromptCacheBreakpointPolicy.cs) | 프롬프트 캐시 중단점을 찍을지 판정하는 클래스.<br/>안정 접두사의 해시를 기억해 두 번째 전송부터 `cache_control`을 찍습니다. 캐시 쓰기가 1.25배라 첫 전송에 찍으면 1회차로 끝나는 잡에서 손해가 확정됩니다. |
+| | [PromptComposition](../src/ReSet.Core/Services/PromptComposition.cs) | 가변 접미사를 사용자 프롬프트에 합치는 규칙을 단독 소유하는 정적 클래스.<br/>메시지 분리가 불가능한 경로(Chat Completions·Google·Ollama·CLI)가 공유해, 제공자마다 구분자가 갈라지는 것을 막습니다. |
 | | [Clients (OpenAi, Claude, Google, Ollama, Zai)](../src/ReSet.Core/Services/Clients/) | OpenAI, Anthropic, Google, Ollama, Z.ai 등 공급자별 네이티브 규격 채팅 HttpClient 통신 모듈. OpenAiClient는 gpt-5 Responses API의 복수 reasoning summary를 누적 보존하며, OllamaClient는 /api/chat 통신 및 모델별 다양한 추론 토큰(`<think>`, `<|end of thought|>` 등) 분리 파싱을 지원합니다. |
 | | [ClaudeCliClient](../src/ReSet.Core/Services/Clients/Cli/ClaudeCliClient.cs), [CodexCliClient](../src/ReSet.Core/Services/Clients/Cli/CodexCliClient.cs), [AntigravityCliClient](../src/ReSet.Core/Services/Clients/Cli/AntigravityCliClient.cs) | HTTP API 대신 로컬에 로그인된 코딩 에이전트 CLI(Claude Code, Codex, Antigravity)를 헤드리스로 기동해 `IAiClient` 계약을 구현하는 클라이언트. `ApiKey` 없이 CLI 로그인 계정을 사용하며, temperature는 지원하지 않아 생성 시 경고를 남기고 무시합니다. AntigravityCliClient는 프롬프트를 표준 입력이 아닌 명령행으로 전달해야 하므로 기동 전 플랫폼별 명령행 길이 한계를 검사해 초과 시 즉시 실패시킵니다. |
 | | [CliProcessRunner](../src/ReSet.Core/Services/Clients/Cli/CliProcessRunner.cs), [CliWorkspace](../src/ReSet.Core/Services/Clients/Cli/CliWorkspace.cs) | CLI 클라이언트 공용 인프라. CliProcessRunner는 CLI 프로세스를 헤드리스로 기동해 표준 입출력 전달, 타임아웃, 취소를 처리하고, CliWorkspace는 호출마다 빈 임시 디렉터리를 만들어 CLI가 리포지토리 자체의 CLAUDE.md/AGENTS.md를 컨텍스트로 흡수하지 않도록 격리합니다. |
@@ -575,7 +576,7 @@ L1 기계 검증은 헤더·Mermaid 문법·UPDATE 컬럼 매핑에 더해 **스
 * **Decoupling 계약**: LLM 통신과 페이로드 직렬화 사양을 `IAiClient` 계약 뒤로 격리하였습니다. 비즈니스 파이프라인인 `AiService`는 하위 전송 메커니즘을 인지하지 않습니다.
 * **공급자별 독립 클라이언트**:
   * **OpenAiClient**: OpenAI 공식 SDK 통신, gpt-5 Responses API 지원 및 gpt-4o 등 최신 모델에 대한 자동 프롬프트 캐싱, Responses API의 `prompt_cache_key` 명시적 라우팅 지원, 복수 `reasoning.summary`의 비어 있지 않은 요약 누적 보존, o1/o3 추론 모델 규격(`reasoning_effort` 등) 대응. Responses API 경로에서는 `volatileUserSuffix`를 세 번째 메시지로 떼어 보내고 공통 메시지 블록에 `prompt_cache_breakpoint: { "mode": "explicit" }`를 찍어 그 지점을 캐시 접두사의 끝으로 지정합니다. breakpoint가 content 블록에 붙는 규격이므로 이때는 세 메시지 모두 `input_text` 타입 블록 배열로 보냅니다. 접미사가 비면 메시지를 만들지도, 블록 배열로 바꾸지도 않습니다 — 빈 메시지가 하나 느는 것 자체가 접두사를 바꿔 접미사를 쓰지 않는 호출들끼리의 캐시를 깨고, 캐시 이득이 없는 호출에서 표현만 바꾸면 형식 오류 위험만 늘기 때문입니다.
-  * **ClaudeClient**: Anthropic Messages API 페이로드 규격 대응, System 영역 `cache_control` 적용 및 헤더 추가를 통한 프롬프트 캐싱 지원, Claude 4/5세대 추론 토큰 대응 및 temperature 생략 처리.
+  * **ClaudeClient**: Anthropic Messages API 페이로드 규격 대응, System 영역 `cache_control` 적용 및 헤더 추가를 통한 프롬프트 캐싱 지원. 재생성 회차(같은 접두사를 이미 보낸 뒤 `volatileUserSuffix`가 있는 경우)에는 `PromptCacheBreakpointPolicy` 판정에 따라 user 블록에도 `cache_control`을 찍어 명세서 블록을 캐시하는 두 번째 중단점을 추가합니다 — 이 두 번째 중단점은 첫 전송에는 찍히지 않습니다. Claude 4/5세대 추론 토큰 대응 및 temperature 생략 처리.
   * **GoogleClient**: Google AI Studio API Key 주입 및 SystemInstruction 구조 대응.
   * **OllamaClient**: 로컬 실행형 LLM 통신을 위한 Ollama 네이티브 REST API(`/api/chat`) 규격 대응. 모델명에 `gemma4` 또는 `qwen3.6`이 포함될 경우 최적 샘플링(`num_ctx`, `top_p`, `top_k` 등)을 `options` 파라미터로 자동 할당하는 하드코딩 우회 로직 및 생각 토큰(<|channel>thought, <think> 등)의 수동 파싱과 본문 분리 기능 지원. 또한 텍스트 무한 반복 루프 방지를 위해 `repeat_penalty`가 자동 매핑됩니다.
   * **ZaiClient**: Z.ai AI 플랫폼 연동 규격 및 추론 과정(Reasoning Process) 수집 대응.
@@ -671,6 +672,20 @@ graph TD
 * **명세서에서 추출**: `SpecReturnCodeExtractor`가 원본 프로시저 명세서 본문의 `@po_intRetVal = <숫자>` 대입만 골라 반환 코드를 뽑는다. 변수명을 이 하나로 고정하는 이유는 좁히기 위해서가 아니라 노이즈를 배제하기 위해서다 — 명세서 산문에는 "-1배 처리" 같은 서술과 날짜의 음수가 흔해, 일반 음수 패턴으로 훑으면 그 전부를 코드로 오인한다.
 * **목차에 되먹임**: `PlanStructureEnricher`가 추출된 코드를 각 단계의 `LegacyProcedures`와 대조해 `ErrorCodes`를 채운 목차 마크다운을 다시 만든다. 파싱된 객체가 아니라 마크다운 문자열을 받고 돌려주는 이유는, 파이프라인이 목차를 문자열 하나로 들고 다니며 그 문자열이 파일 기록·파싱·프롬프트의 단일 출처이기 때문이다. 레거시 출신이 없는 단계(`LegacyProcedures`가 빈 배열)는 보존할 원본 코드가 애초에 없으므로 그대로 비워 둔다. 어느 블록을 보강할지는 파서(`BatchStepPlanParser.TryLocateStepsBlock`)가 단독으로 정한다 — 두 곳이 각자 고르면 파일에 기록된 목차와 파이프라인이 실제로 쓰는 목차가 갈라지고, 그 불일치는 어디에도 드러나지 않는다.
 * **"품질 미달"과 "검증 불가"와 "해당 없음"은 다른 사실**: `StepDefectKind`는 본문이 최소 요건을 못 채운 경우(`QualityFloor`, 재생성으로 고쳐진다)와 대조할 재료가 목차에 없어 검사 자체가 돌지 못한 경우(`Unverifiable`, 재생성으로 고쳐지지 않는다)를 가른다. 여기에 더해 레거시 출신이 없어 대조 항목이 원래 0개인 단계는 결함이 아니다 — 세 사실을 하나의 배너로 뭉치면 읽는 사람이 재시도할 가치가 있는지 판단할 수 없다.
+
+### 4.13. Claude 프롬프트 캐시 중단점 (Claude Prompt Cache Breakpoint)
+
+Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 한다. L2 통합 배치 리뷰는
+명세서 전문(실측 481KB)을 회차마다 다시 보내는데, 이 블록은 회차 간 바이트가 같아 캐시
+대상이다. 반면 계획서 본문은 회차마다 재생성되므로 대상이 아니다.
+
+중단점을 무조건 찍지 않는 이유는 가격 구조다. 캐시 쓰기는 1.25배, 읽기는 0.1배이고,
+실측에서 L2는 5개 잡 중 4개가 1회차에 끝났다. 무조건 찍으면 그 4건에서 손해가 확정되어
+표본 전체로는 순손실이 난다. `PromptCacheBreakpointPolicy`는 접두사를 전에 보낸 적이
+있을 때만 중단점을 찍어, 1회차 잡의 비용을 그대로 두고 재생성 회차만 이득을 취한다.
+
+같은 이유로 잡 이름은 명세서 뒤에 놓는다. 캐시는 접두사 일치라, 잡마다 달라지는 한 줄이
+앞에 있으면 뒤따르는 명세서 전량이 무효가 된다.
 
 ---
 
