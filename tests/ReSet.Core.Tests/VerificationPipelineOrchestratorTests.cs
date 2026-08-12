@@ -7213,5 +7213,102 @@ SELECT 1;
                 Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md"));
             Assert.Contains("-7", finalPlanStructureOnDisk);
         }
+
+        // Task 5: SpecTargetTableExtractor + PlanStructureEnricher(3인자) 배선.
+        // 목차는 TargetTables를 비운 채 낸다 - 실측 CLI 회차에서 12단계 중 5개가
+        // 이렇게 비어 있었고, 그 5개가 DDL 55개를 통째로 받았다.
+        private const string StepsJsonNoTargetTables = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""dbo.UP_X""], ""TargetTables"": [], ""ErrorCodes"": [""-7""] }
+  ]
+}
+```";
+
+        private static SpDefinition DefinitionWithTables() => new()
+        {
+            Schema = "dbo",
+            Name = "UP_X",
+            StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                InsertTables = { "SETTLE_POQ_DB.dbo.T1" },
+                SelectTables = { "SETTLE_POQ_DB.dbo.TSource" },
+            },
+        };
+
+        /// <summary>
+        /// Pipeline_ShouldWriteEnrichedErrorCodesToPlanStructureFile의 fake 배선을
+        /// 옮긴 헬퍼. 그 테스트는 건드리지 않는다 - 두 테스트가 같은 배선을 쓰지만
+        /// 한쪽을 리팩터링하면 그 테스트가 지키는 것이 흐려진다.
+        /// </summary>
+        private (VerificationPipelineOrchestrator orchestrator, string jobName, string outputRoot) ConsolidatedPipelineFor(string catalogMarkdown)
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + catalogMarkdown });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var steps = call.Arg<IReadOnlyList<BatchStepPlan>>();
+                    return new AiResult { Content = SkeletonMarkdownFor(steps.Select(s => s.Code).ToArray()) };
+                });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call => new AiResult { Content = FixedErrorCodeSection(call.Arg<BatchStepPlan>().Code) });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            var jobName = $"TargetTableEnrichJob_{Guid.NewGuid():N}";
+            return (orchestrator, jobName, _consolidatedOutputRoot);
+        }
+
+        [Fact]
+        public async Task Pipeline_ShouldWriteEnrichedTargetTablesToPlanStructureFile()
+        {
+            var (orchestrator, jobName, outputRoot) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
+            var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", jobName, "OpenAI", outputRoot,
+                isBatchMode: true,
+                definitions: new[] { DefinitionWithTables() });
+
+            var written = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md"));
+            var step = BatchStepPlanParser.TryParse(written)!.Single(s => s.Code == "S01");
+
+            Assert.Equal(new[] { "SETTLE_POQ_DB.dbo.T1" }, step.TargetTables);
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.T1", "SETTLE_POQ_DB.dbo.TSource" },
+                step.SchemaTables);
+        }
+
+        [Fact]
+        public async Task Pipeline_ShouldNotEnrichTablesWhenDefinitionsAreOmitted()
+        {
+            // 기본값 null이 회귀 방어의 본체다. 넘기지 않으면 종전 동작 그대로이고,
+            // 이 파일에서 오케스트레이터를 만드는 94곳이 한 줄도 바뀌지 않는다.
+            var (orchestrator, jobName, outputRoot) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
+            var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", jobName, "OpenAI", outputRoot, isBatchMode: true);
+
+            var written = await File.ReadAllTextAsync(
+                Path.Combine(outputRoot, "Jobs", jobName, "raw", "PlanStructure.md"));
+            var step = BatchStepPlanParser.TryParse(written)!.Single(s => s.Code == "S01");
+
+            Assert.Empty(step.TargetTables);
+            Assert.Empty(step.SchemaTables);
+        }
     }
 }
