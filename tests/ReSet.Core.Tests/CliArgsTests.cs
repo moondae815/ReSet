@@ -160,6 +160,7 @@ namespace ReSet.Core.Tests
             public void NotifyStatus(string message) => LastStatus = message;
             public void NotifyError(string message) { }
             public void NotifyWarnings(string selectedOption, List<string> warnings) { }
+            public void NotifyCatalogMismatches(string jobName, List<string> mismatches) { }
             public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) { }
             public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) { }
             public void NotifyValidationSuccess(string selectedOption) { }

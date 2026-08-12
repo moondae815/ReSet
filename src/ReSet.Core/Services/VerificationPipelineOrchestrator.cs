@@ -2579,7 +2579,7 @@ namespace ReSet.Core.Services
                 Log.Warning("목차 선언과 정적 분석이 어긋납니다 - {Message}", message);
             }
 
-            _userInteraction.NotifyWarnings(jobName, new List<string>(enrichment.DroppedTableDeclarations));
+            _userInteraction.NotifyCatalogMismatches(jobName, new List<string>(enrichment.DroppedTableDeclarations));
         }
 
         /// <summary>

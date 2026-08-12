@@ -56,6 +56,37 @@ namespace ReSet.Cli
             }
         }
 
+        public void NotifyCatalogMismatches(string jobName, List<string> mismatches)
+        {
+            if (mismatches == null || mismatches.Count == 0) return;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[yellow]목차가 선언한 대상 테이블 중 일부가 정적 분석의 쓰기 대상 목록과 어긋납니다. " +
+                "수집 실패가 아니라 목차 선언과 실제 코드 사이의 불일치이며, 해당 테이블은 하한 검사와 " +
+                "이 단계의 스키마 범위에서 모두 제외되었습니다. 계획서 본문도 함께 확인하십시오:[/]");
+            sb.AppendLine();
+            foreach (var mismatch in mismatches)
+            {
+                sb.AppendLine($"[grey]- {Markup.Escape(mismatch)}[/]");
+            }
+
+            var panel = new Panel(new Markup(sb.ToString().TrimEnd()))
+            {
+                Border = BoxBorder.Rounded,
+                Header = new PanelHeader($"[yellow] 경고: {Markup.Escape(jobName)} 목차-정적분석 불일치 ([bold]{mismatches.Count}[/]) [/]"),
+                BorderStyle = new Style(Color.Yellow)
+            };
+
+            AnsiConsole.Write(panel);
+            AnsiConsole.WriteLine();
+
+            Serilog.Log.Warning($"[{jobName}] 목차-정적분석 불일치 ({mismatches.Count}건):");
+            foreach (var mismatch in mismatches)
+            {
+                Serilog.Log.Warning($"  - {mismatch}");
+            }
+        }
+
         public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors)
         {
             var maxStr = maxAttempts == -1 ? "검증 완료까지" : maxAttempts.ToString();

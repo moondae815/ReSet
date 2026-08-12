@@ -7242,7 +7242,7 @@ SELECT 1;
         /// 옮긴 헬퍼. 그 테스트는 건드리지 않는다 - 두 테스트가 같은 배선을 쓰지만
         /// 한쪽을 리팩터링하면 그 테스트가 지키는 것이 흐려진다.
         /// </summary>
-        private (VerificationPipelineOrchestrator orchestrator, string jobName, string outputRoot) ConsolidatedPipelineFor(string catalogMarkdown)
+        private (VerificationPipelineOrchestrator orchestrator, string jobName, string outputRoot, IVerificationUserInteraction userInteraction) ConsolidatedPipelineFor(string catalogMarkdown)
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -7268,13 +7268,13 @@ SELECT 1;
                 aiService, aiService, "high", "high", "default", 8);
 
             var jobName = $"TargetTableEnrichJob_{Guid.NewGuid():N}";
-            return (orchestrator, jobName, _consolidatedOutputRoot);
+            return (orchestrator, jobName, _consolidatedOutputRoot, userInteraction);
         }
 
         [Fact]
         public async Task Pipeline_ShouldWriteEnrichedTargetTablesToPlanStructureFile()
         {
-            var (orchestrator, jobName, outputRoot) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
+            var (orchestrator, jobName, outputRoot, _) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
             var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
 
             await orchestrator.RunConsolidatedPipelineAsync(
@@ -7297,7 +7297,7 @@ SELECT 1;
         {
             // 기본값 null이 회귀 방어의 본체다. 넘기지 않으면 종전 동작 그대로이고,
             // 이 파일에서 오케스트레이터를 만드는 94곳이 한 줄도 바뀌지 않는다.
-            var (orchestrator, jobName, outputRoot) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
+            var (orchestrator, jobName, outputRoot, _) = ConsolidatedPipelineFor(StepsJsonNoTargetTables);
             var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
 
             await orchestrator.RunConsolidatedPipelineAsync(
@@ -7309,6 +7309,39 @@ SELECT 1;
 
             Assert.Empty(step.TargetTables);
             Assert.Empty(step.SchemaTables);
+        }
+
+        // 목차가 dbo.T1 외에 정적 분석 쓰기 대상에 없는 dbo.TGhost도 선언한다 -
+        // RewriteTables가 그 이름을 버린 선언으로 보고해야 한다.
+        private const string StepsJsonWithExtraDeclaredTable = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [""dbo.UP_X""], ""TargetTables"": [""dbo.T1"", ""dbo.TGhost""], ""ErrorCodes"": [""-7""] }
+  ]
+}
+```";
+
+        [Fact]
+        public async Task Pipeline_ShouldNotifyCatalogMismatchNotCollectionWarning_ForDroppedTableDeclarations()
+        {
+            // 목차-정적분석 불일치는 수집 실패가 아니다. NotifyWarnings(고정 문구가
+            // "수집 정보 누락"·"AI 프롬프트에는 포함되나"라고 말한다)로 보내면 거짓을
+            // 전달한다 - 전용 채널 NotifyCatalogMismatches로만 나가야 한다.
+            var (orchestrator, jobName, outputRoot, userInteraction) =
+                ConsolidatedPipelineFor(StepsJsonWithExtraDeclaredTable);
+            var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", jobName, "OpenAI", outputRoot,
+                isBatchMode: true,
+                definitions: new[] { DefinitionWithTables() });
+
+            userInteraction.Received(1).NotifyCatalogMismatches(
+                jobName,
+                Arg.Is<List<string>>(list => list.Any(m => m.Contains("TGhost"))));
+            userInteraction.DidNotReceive().NotifyWarnings(
+                jobName,
+                Arg.Is<List<string>>(list => list.Any(m => m.Contains("TGhost"))));
         }
     }
 }

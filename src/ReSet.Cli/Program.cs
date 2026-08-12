@@ -2560,6 +2560,7 @@ namespace ReSet.Cli
         public void NotifyStatus(string message) => _interactiveUserInteraction.NotifyStatus(message);
         public void NotifyError(string message) => _interactiveUserInteraction.NotifyError(message);
         public void NotifyWarnings(string selectedOption, List<string> warnings) => _interactiveUserInteraction.NotifyWarnings(selectedOption, warnings);
+        public void NotifyCatalogMismatches(string jobName, List<string> mismatches) => _interactiveUserInteraction.NotifyCatalogMismatches(jobName, mismatches);
         public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors) => _interactiveUserInteraction.NotifyL1Errors(selectedOption, attempt, maxAttempts, errors);
         public void NotifyL2Defects(string selectedOption, int attempt, int maxAttempts, string feedbackComment) => _interactiveUserInteraction.NotifyL2Defects(selectedOption, attempt, maxAttempts, feedbackComment);
         public void NotifyValidationSuccess(string selectedOption) => _interactiveUserInteraction.NotifyValidationSuccess(selectedOption);

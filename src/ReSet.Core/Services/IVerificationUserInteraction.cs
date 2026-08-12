@@ -15,6 +15,13 @@ namespace ReSet.Core.Services
         // DB 메타데이터 수집 중 발생한 경고 목록 출력
         void NotifyWarnings(string selectedOption, List<string> warnings);
 
+        // 목차가 선언한 대상 테이블과 정적 분석 결과가 어긋난다는 사실을 출력.
+        // NotifyWarnings와 구분하는 이유: 이 사실은 수집 실패가 아니라 목차 선언과
+        // 정적 분석의 불일치이고, 대상 테이블은 AI 프롬프트에 포함되는 게 아니라
+        // 검사와 스키마 범위에서 제외된다 - NotifyWarnings의 고정 문구를 쓰면
+        // 둘 다 거짓이 된다.
+        void NotifyCatalogMismatches(string jobName, List<string> mismatches);
+
         // L1 기계 검증 단계의 오류 정보 출력
         void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors);
 
