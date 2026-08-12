@@ -224,6 +224,117 @@ graph TD
             Assert.Contains("허용되지 않는 축약어/생략 기호", string.Join(" ", result.Errors));
         }
 
+        /// <summary>
+        /// 컬럼명이 Etc로 끝나고 문장 끝에 오면 "CLEtc."가 되는데, 이것은 축약어가
+        /// 아니다. COMM_UPD 실측에서 AiService가 프롬프트에 만들어 넣은 문장이
+        /// 그대로 명세서에 실렸고, 부분 문자열 검사가 이를 'etc.'로 읽어 L1을
+        /// 3회 연속 실패시켰다. AI가 쓴 것이 사실이므로 재생성으로 고칠 수 없었다.
+        /// </summary>
+        [Fact]
+        public void Validate_WithColumnNameEndingInEtc_ShouldNotFlagShortcut()
+        {
+            var markdown = @"
+# SP 명세서
+## 개요
+이 프로시저는 정산 수수료를 갱신합니다.
+
+## 파라미터 목록
+| 이름 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| @pi_strYMD | CHAR(8) | 정산일 |
+
+## CRUD 분석
+| 테이블 | CRUD |
+| :--- | :---: |
+| dbo.TSettleMst | U |
+
+다음 컬럼은 SET 우변에서 자기 자신을 참조합니다: CLComm, CLEtc. SQL의 SET 절은 우변을 모두 갱신 전 값으로 동시에 평가합니다.
+
+## 로직 흐름 요약
+1. 수수료를 갱신합니다.
+
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A[""시작""] --> B[""갱신""]
+```
+";
+            var result = _validator.Validate(markdown);
+
+            Assert.True(result.IsValid, "Validation failed with errors: " + string.Join(", ", result.Errors));
+        }
+
+        /// <summary>
+        /// 위 완화가 진짜 축약어까지 통과시키면 안 된다. 앞에 영문자가 붙지 않은
+        /// 'etc.'는 여전히 걸려야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_WithStandaloneEtcAbbreviation_ShouldStillReturnFalse()
+        {
+            var markdown = @"
+# SP 명세서
+## 개요
+| 컬럼 | 설명 |
+| :--- | :--- |
+| CLComm, etc. | 나머지 컬럼은 생략했습니다 |
+
+## 파라미터 목록
+## CRUD 분석
+## 로직 흐름 요약
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A[""시작""] --> B[""끝""]
+```
+";
+            var result = _validator.Validate(markdown);
+
+            Assert.False(result.IsValid);
+            Assert.Contains("허용되지 않는 축약어/생략 기호", string.Join(" ", result.Errors));
+        }
+
+        /// <summary>
+        /// L1 실패 배너는 잔존 오류 메시지를 본문에 인용하는데, 그 메시지 자체가
+        /// 금지 토큰을 따옴표로 담고 있다. 배너가 붙은 문서를 다시 검증하면 배너가
+        /// 스스로를 오류로 만들어 영원히 통과할 수 없다(COMM_UPD 실측: 10:22:38).
+        /// </summary>
+        [Fact]
+        public void Validate_WithL1ExhaustedBannerPrepended_ShouldNotReFlagItsOwnMessage()
+        {
+            var banner = VerificationBanner.L1Exhausted(new[]
+            {
+                "표 내부에 허용되지 않는 축약어/생략 기호('etc.')가 감지되었습니다. 모든 컬럼과 매핑을 완벽히 기술해야 합니다."
+            });
+
+            var body = @"
+# SP 명세서
+## 개요
+이 프로시저는 사용자를 조회합니다.
+
+## 파라미터 목록
+| 이름 | 타입 | 설명 |
+| :--- | :--- | :--- |
+| @UserId | INT | 사용자 ID |
+
+## CRUD 분석
+| 테이블 | CRUD |
+| :--- | :---: |
+| dbo.Users | R |
+
+## 로직 흐름 요약
+1. 사용자를 조회합니다.
+
+## 비즈니스 흐름 시각화 (Mermaid Diagram)
+```mermaid
+graph TD
+    A[""시작""] --> B[""조회""]
+```
+";
+            var result = _validator.Validate(banner + body);
+
+            Assert.True(result.IsValid, "Validation failed with errors: " + string.Join(", ", result.Errors));
+        }
+
         [Fact]
         public void ValidationResult_SuggestedPromptFix_WithMermaidQuoteMissing_ShouldIncludeGuide()
         {

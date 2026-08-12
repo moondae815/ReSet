@@ -928,9 +928,10 @@ namespace ReSet.Core.Services
 
             // 1.5 Anti-Shortcut (축약/생략 방지) 기계적 검증
             string[] forbiddenShortcuts = new[] { "이하 생략", "(생략)", "위와 동일", "기타 등등", "etc.", "TS[]" };
+            var scannable = StripQuotedLines(markdown);
             foreach (var forbidden in forbiddenShortcuts)
             {
-                if (markdown.Contains(forbidden, StringComparison.OrdinalIgnoreCase))
+                if (ContainsForbiddenShortcut(scannable, forbidden))
                 {
                     var msg = $"표 내부에 허용되지 않는 축약어/생략 기호('{forbidden}')가 감지되었습니다. 모든 컬럼과 매핑을 완벽히 기술해야 합니다.";
                     Log.Warning("린트 에러 감지 (Anti-Shortcut 위반) - {Message}", msg);
@@ -945,6 +946,48 @@ namespace ReSet.Core.Services
                 ValidateMermaid(mContent, result);
             }
         }
+
+        /// <summary>
+        /// 인용문(&gt;) 줄을 검사 대상에서 뺀다.
+        ///
+        /// VerificationBanner가 잔존 오류를 본문 앞에 인용하는데, 그 메시지 자체가
+        /// 금지 토큰을 따옴표로 담는다("...기호('etc.')가 감지되었습니다"). 배너가
+        /// 붙은 문서를 다시 검증하면 배너가 스스로를 오류로 만들어 어떤 재생성으로도
+        /// 통과할 수 없다 - COMM_UPD 실측에서 관측된 자기 오염이다.
+        ///
+        /// 이 검사의 대상은 애초에 표와 본문이다(오류 메시지가 "표 내부에"라고
+        /// 말한다). 인용문은 파이프라인이 붙인 메타 정보이지 AI가 쓴 명세가 아니다.
+        /// </summary>
+        private static string StripQuotedLines(string markdown)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var kept = new List<string>(lines.Count);
+            foreach (var line in lines)
+            {
+                if (line.TrimStart().StartsWith(">", StringComparison.Ordinal)) continue;
+                kept.Add(line);
+            }
+            return string.Join("\n", kept);
+        }
+
+        /// <summary>
+        /// "etc."만 앞 경계를 따진다. 컬럼명이 Etc로 끝나고 문장 끝에 오면
+        /// "CLEtc."가 되는데 이것은 축약어가 아니라 사실이다.
+        ///
+        /// AiService가 자기참조 컬럼 목록 뒤에 마침표를 붙여 프롬프트에 넣고
+        /// (AiService.cs:566), AI가 지시대로 그 문장을 옮겨 적고, 부분 문자열
+        /// 검사가 그것을 'etc.'로 읽었다. 재생성으로 고칠 수 없는 오류였고 -
+        /// AI가 쓴 것이 정답이므로 - COMM_UPD의 L1 3회를 모두 소진시켰다.
+        ///
+        /// 나머지 토큰은 한국어이거나 기호라 이 문제가 없어 그대로 둔다.
+        /// </summary>
+        private static bool ContainsForbiddenShortcut(string text, string forbidden) =>
+            forbidden == "etc."
+                ? StandaloneEtcRegex.IsMatch(text)
+                : text.Contains(forbidden, StringComparison.OrdinalIgnoreCase);
+
+        private static readonly Regex StandaloneEtcRegex =
+            new Regex(@"(?<![A-Za-z])etc\.", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private void ValidateMermaid(string mermaidContent, ValidationResult result)
         {
