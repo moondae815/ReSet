@@ -842,7 +842,7 @@ namespace ReSet.Cli
 
                     try
                     {
-                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, activeCts.Token);
+                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: activeCts.Token);
                         var consolidatedPlan = pipelineResult.Plan;
                         var aiResult = pipelineResult.Result;
                         if (string.IsNullOrEmpty(consolidatedPlan))
@@ -1378,7 +1378,27 @@ namespace ReSet.Cli
 
                         try
                         {
-                            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, outputDir, cancellationToken: activeCts.Token);
+                            // 정의를 계획 수립 앞에서 읽는다. 목차 보강이 이 정적 분석을
+                            // 쓰기 때문이고, 부수 효과로 메타데이터 누락 경고가 수십 분짜리
+                            // 계획 수립 전에 뜬다 - 종전에는 계획이 다 끝난 뒤에야 그 SP가
+                            // 지시서에서 빠진다는 사실을 알렸다.
+                            var loadResult = await BatchStepCatalog.LoadDefinitionsAsync(
+                                outputDir, selectedFiles, activeCts.Token);
+                            var spDefs = loadResult.Definitions.ToList();
+
+                            foreach (var missing in loadResult.MissingMetadata)
+                            {
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]경고: {Markup.Escape(missing)} 의 메타데이터(raw/metadata.json)가 없어 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다). 해당 SP를 1번 메뉴로 다시 분석하면 채워집니다.[/]");
+                            }
+
+                            foreach (var failed in loadResult.FailedToParse)
+                            {
+                                AnsiConsole.MarkupLine(
+                                    $"[yellow]경고: {Markup.Escape(failed)} 의 메타데이터를 읽지 못해 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다).[/]");
+                            }
+
+                            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, outputDir, definitions: spDefs, cancellationToken: activeCts.Token);
                             consolidatedPlan = pipelineResult.Plan;
                             var aiResult = pipelineResult.Result;
                             if (string.IsNullOrEmpty(consolidatedPlan))
@@ -1430,25 +1450,8 @@ namespace ReSet.Cli
                             });
 
 
-                            // SpDefinition들 복원 및 통합 마이그레이션 지시서 생성
-                            var loadResult = await BatchStepCatalog.LoadDefinitionsAsync(
-                                outputDir,
-                                selectedFiles,
-                                activeCts.Token);
-                            var spDefs = loadResult.Definitions.ToList();
-
-                            foreach (var missing in loadResult.MissingMetadata)
-                            {
-                                AnsiConsole.MarkupLine(
-                                    $"[yellow]경고: {Markup.Escape(missing)} 의 메타데이터(raw/metadata.json)가 없어 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다). 해당 SP를 1번 메뉴로 다시 분석하면 채워집니다.[/]");
-                            }
-
-                            foreach (var failed in loadResult.FailedToParse)
-                            {
-                                AnsiConsole.MarkupLine(
-                                    $"[yellow]경고: {Markup.Escape(failed)} 의 메타데이터를 읽지 못해 지시서에서 제외됩니다(참조 테이블 스키마와 Spec.md 링크 모두 누락되며, 해당 배치 스텝은 구현 대상에서 빠집니다).[/]");
-                            }
-
+                            // SpDefinition들은 위에서 계획 수립 전에 이미 로드했다. 여기서
+                            // 재사용해 같은 파일을 두 번 읽지 않는다.
                             try
                             {
                                 AnsiConsole.MarkupLine($"\n[yellow]{jobName}[/] - 통합 마이그레이션 지시서 생성 중...");
