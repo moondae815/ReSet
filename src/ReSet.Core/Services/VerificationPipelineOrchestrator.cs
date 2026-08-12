@@ -1813,7 +1813,10 @@ namespace ReSet.Core.Services
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
                             var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
-                            currentPlanStructure = PlanStructureEnricher.Enrich(planResult.Content, specReturnCodes);
+                            currentPlanStructure = PlanStructureEnricher.Enrich(
+                                planResult.Content,
+                                specReturnCodes,
+                                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown;
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
@@ -2541,7 +2544,10 @@ namespace ReSet.Core.Services
 
             // 재수립 경로와 L3 사용자 요청 경로가 이 헬퍼를 공유한다. 여기서 한 번
             // 보강하면 두 경로가 함께 덮인다 - 호출부마다 따로 걸면 하나를 빠뜨린다.
-            return PlanStructureEnricher.Enrich(redrafted, returnCodes);
+            return PlanStructureEnricher.Enrich(
+                redrafted,
+                returnCodes,
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown;
         }
 
         /// <summary>

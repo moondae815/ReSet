@@ -28,22 +28,35 @@ namespace ReSet.Core.Services
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
 
-        public static string Enrich(
+        /// <summary>
+        /// 보강 결과. 마크다운과, 검사에서 제외된 목차 선언의 보고를 함께 낸다.
+        ///
+        /// 버린 선언을 반환값에 싣는 이유: 그것을 계산하는 곳은 여기 하나여야 한다.
+        /// 오케스트레이터가 따로 비교하면 두 권위가 생기고, 이 저장소는 그 어긋남을
+        /// 이미 여러 번 겪었다.
+        /// </summary>
+        public sealed record PlanStructureEnrichment(
+            string Markdown,
+            IReadOnlyList<string> DroppedTableDeclarations);
+
+        public static PlanStructureEnrichment Enrich(
             string? planStructureMarkdown,
-            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure)
         {
+            var empty = Array.Empty<string>();
+
             if (string.IsNullOrWhiteSpace(planStructureMarkdown))
             {
-                return planStructureMarkdown ?? string.Empty;
+                return new PlanStructureEnrichment(planStructureMarkdown ?? string.Empty, empty);
             }
 
-            if (codesByProcedure == null || codesByProcedure.Count == 0)
+            var hasCodes = codesByProcedure != null && codesByProcedure.Count > 0;
+            var hasTables = tablesByProcedure != null && tablesByProcedure.Count > 0;
+            if (!hasCodes && !hasTables)
             {
-                // 명세서 추출이 통째로 0건이면 원본을 그대로 돌려주되 흔적을 남긴다.
-                // 이게 없으면 "보강이 돌았는데 못 채운 것"과 "추출이 0건이라 시작조차
-                // 안 된 것"을 운영자가 로그만 보고 구별할 수 없다.
-                Log.Warning("명세서에서 추출한 오류코드가 없어 목차 보강을 건너뜁니다.");
-                return planStructureMarkdown;
+                Log.Warning("명세서와 정적 분석에서 추출한 보강 재료가 없어 목차 보강을 건너뜁니다.");
+                return new PlanStructureEnrichment(planStructureMarkdown, empty);
             }
 
             // 블록 선택은 파서가 소유한다. 여기서 따로 고르면 파일에 기록된 목차와
@@ -52,22 +65,30 @@ namespace ReSet.Core.Services
             if (located == null)
             {
                 Log.Warning("목차에서 보강할 단계 목록 JSON 블록을 찾지 못했습니다. 원본을 그대로 사용합니다.");
-                return planStructureMarkdown;
+                return new PlanStructureEnrichment(planStructureMarkdown, empty);
             }
 
-            var rewritten = TryRewriteBlock(located.Value.Body, codesByProcedure);
+            var dropped = new List<string>();
+            var rewritten = TryRewriteBlock(
+                located.Value.Body,
+                codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
+                tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
+                dropped);
+
             if (rewritten == null)
             {
                 // 뒤 블록으로 넘어가지 않는다. 파서가 읽는 블록을 보강하지 못했다면 보강을
                 // 포기하는 것이 맞다 - 다른 블록을 고치면 두 목차가 갈라지고, 그 불일치는
                 // 어디에도 드러나지 않는다. 보강되지 않은 단계는 하한 검사가 "검증 불가"로
                 // 보고하므로 침묵하지도 않는다.
-                return planStructureMarkdown;
+                return new PlanStructureEnrichment(planStructureMarkdown, empty);
             }
 
-            return planStructureMarkdown[..located.Value.BodyIndex]
+            var markdown = planStructureMarkdown[..located.Value.BodyIndex]
                 + rewritten
                 + planStructureMarkdown[(located.Value.BodyIndex + located.Value.BodyLength)..];
+
+            return new PlanStructureEnrichment(markdown, dropped);
         }
 
         /// <summary>
@@ -81,7 +102,10 @@ namespace ReSet.Core.Services
         /// 파이프라인(재수립 헬퍼 포함)이 통째로 죽는다.
         /// </summary>
         private static string? TryRewriteBlock(
-            string json, IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+            string json,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
+            List<string> dropped)
         {
             try
             {
@@ -94,7 +118,8 @@ namespace ReSet.Core.Services
                     return null;
                 }
 
-                var enrichedCount = 0;
+                var enrichedCodeCount = 0;
+                var enrichedTableCount = 0;
                 foreach (var stepNode in steps)
                 {
                     if (stepNode is not JsonObject step)
@@ -103,20 +128,27 @@ namespace ReSet.Core.Services
                     }
 
                     var merged = MergeCodes(step, codesByProcedure);
-                    if (merged == null)
+                    if (merged != null)
                     {
-                        continue;
+                        step["ErrorCodes"] = new JsonArray(
+                            Array.ConvertAll(merged, c => (JsonNode?)JsonValue.Create(c)));
+                        enrichedCodeCount++;
                     }
 
-                    // ErrorCodes만 교체한다. 객체를 새로 만들면 Chunkable처럼 이미
-                    // 있는 필드나 나중에 늘어날 필드가 조용히 사라진다.
-                    step["ErrorCodes"] = new JsonArray(Array.ConvertAll(merged, c => (JsonNode?)JsonValue.Create(c)));
-                    enrichedCount++;
+                    if (RewriteTables(step, tablesByProcedure, dropped))
+                    {
+                        enrichedTableCount++;
+                    }
                 }
 
-                if (enrichedCount > 0)
+                if (enrichedCodeCount > 0)
                 {
-                    Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedCount);
+                    Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedCodeCount);
+                }
+
+                if (enrichedTableCount > 0)
+                {
+                    Log.Information("목차의 대상 테이블을 정적 분석에서 보강했습니다 - 단계 수: {Count}개", enrichedTableCount);
                 }
 
                 // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
@@ -171,6 +203,95 @@ namespace ReSet.Core.Services
 
             return changed ? merged.ToArray() : null;
         }
+
+        /// <summary>
+        /// 이 단계의 TargetTables를 정적 분석의 쓰기 대상으로 교체하고 SchemaTables를 채운다.
+        /// 바뀐 것이 있으면 true.
+        ///
+        /// 오류코드와 달리 합집합하지 않는 이유: 두 재료의 신뢰도가 대칭이 아니다.
+        /// 오류코드는 명세서 산문에서 뽑고 모델도 같은 산문을 보지만, 테이블은 파서가
+        /// AST에서 확정하고 모델은 추측한다. 실측에서 한 단계가 선언한 네 테이블 중
+        /// 셋이 원본 DDL에 0회 등장했다 - 합집합했다면 그 허위가 검증 요건이 되고,
+        /// 재생성이 그것을 고착시켰을 것이다.
+        /// </summary>
+        private static bool RewriteTables(
+            JsonObject step,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
+            List<string> dropped)
+        {
+            var procedures = ReadStringArray(step, "LegacyProcedures");
+            if (procedures.Count == 0)
+            {
+                // 레거시 출신이 없는 단계는 계획이 새로 설계한 것이다. 대조할 원본이 없다.
+                return false;
+            }
+
+            var write = new List<string>();
+            var writeSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var schema = new List<string>();
+            var schemaSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var procedure in procedures)
+            {
+                if (!tablesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(procedure), out var sets))
+                {
+                    continue;
+                }
+
+                foreach (var table in sets.WriteTables)
+                {
+                    if (writeSeen.Add(table)) write.Add(table);
+                    if (schemaSeen.Add(table)) schema.Add(table);
+                }
+
+                foreach (var table in sets.ReadTables)
+                {
+                    if (schemaSeen.Add(table)) schema.Add(table);
+                }
+            }
+
+            var changed = false;
+
+            // 쓰기 대상을 하나도 못 뽑았으면 기존 선언을 유지한다. 지우면 멀쩡한
+            // 단계가 "검증 불가"로 떨어져 지금보다 나빠진다.
+            if (write.Count > 0)
+            {
+                var declared = ReadStringArray(step, "TargetTables");
+                var extractedBareNames = new HashSet<string>(
+                    write.ConvertAll(SpecTargetTableExtractor.BareTableName), StringComparer.Ordinal);
+
+                var lost = declared.FindAll(
+                    d => !extractedBareNames.Contains(SpecTargetTableExtractor.BareTableName(d)));
+
+                if (lost.Count > 0)
+                {
+                    var code = ReadScalarString(step, "Code");
+                    dropped.Add(
+                        $"{code}: 목차가 선언한 대상 테이블 {string.Join(", ", lost)}이(가) " +
+                        "정적 분석에 없어 검사에서 제외했습니다. 계획서 본문도 함께 확인하십시오.");
+                }
+
+                step["TargetTables"] = new JsonArray(
+                    write.ConvertAll(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+                changed = true;
+            }
+
+            if (schema.Count > 0)
+            {
+                step["SchemaTables"] = new JsonArray(
+                    schema.ConvertAll(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static string ReadScalarString(JsonObject step, string name) =>
+            step.TryGetPropertyValue(name, out var node) &&
+            node is JsonValue value &&
+            value.TryGetValue(out string? text)
+                ? text ?? string.Empty
+                : string.Empty;
 
         private static List<string> ReadStringArray(JsonObject step, string name)
         {

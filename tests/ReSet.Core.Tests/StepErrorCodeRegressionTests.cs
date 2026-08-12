@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ReSet.Core.Services;
@@ -30,7 +31,10 @@ namespace ReSet.Core.Tests
 
             var before = BatchStepPlanParser.TryParse(Fixture("PlanStructureWithEmptyErrorCodes.md"))!;
             var after = BatchStepPlanParser.TryParse(
-                PlanStructureEnricher.Enrich(Fixture("PlanStructureWithEmptyErrorCodes.md"), codes))!;
+                PlanStructureEnricher.Enrich(
+                    Fixture("PlanStructureWithEmptyErrorCodes.md"),
+                    codes,
+                    new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown)!;
 
             Assert.Empty(before.Single(s => s.Code == "S06").ErrorCodes);
             Assert.Equal(16, after.Single(s => s.Code == "S06").ErrorCodes.Count);
@@ -45,7 +49,10 @@ namespace ReSet.Core.Tests
             });
 
             var steps = BatchStepPlanParser.TryParse(
-                PlanStructureEnricher.Enrich(Fixture("PlanStructureWithEmptyErrorCodes.md"), codes))!;
+                PlanStructureEnricher.Enrich(
+                    Fixture("PlanStructureWithEmptyErrorCodes.md"),
+                    codes,
+                    new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown)!;
 
             var s00 = steps.Single(s => s.Code == "S00");
             Assert.Empty(s00.ErrorCodes);
@@ -67,7 +74,10 @@ namespace ReSet.Core.Tests
             });
 
             var s06 = BatchStepPlanParser.TryParse(
-                PlanStructureEnricher.Enrich(Fixture("PlanStructureWithEmptyErrorCodes.md"), codes))!
+                PlanStructureEnricher.Enrich(
+                    Fixture("PlanStructureWithEmptyErrorCodes.md"),
+                    codes,
+                    new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown)!
                 .Single(s => s.Code == "S06");
 
             var body = $"### {s06.Code} {s06.Name}\n\n```sql\nSELECT 1 FROM {s06.TargetTables[0]};\n```\n\n"
