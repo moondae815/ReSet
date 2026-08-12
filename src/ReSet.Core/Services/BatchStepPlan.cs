@@ -16,6 +16,12 @@ namespace ReSet.Core.Services
     ///
     /// 세 가지로 쓰인다: 분할 생성의 단위, 하한 검사의 기준(TargetTables/ErrorCodes),
     /// L2가 결함을 지목할 때의 좌표(Code).
+    ///
+    /// TargetTables와 SchemaTables를 나눠 두는 이유: 앞은 "본문이 이 테이블을
+    /// 기술했는가"를 묻는 검증 재료이고, 뒤는 "이 회차 에이전트가 어떤 스키마를
+    /// 봐야 하는가"를 정하는 스코프 재료다. 한 필드로 겸하면 읽기 원본을 넣을 때
+    /// 검증이 과해지고, 빼면 에이전트가 SELECT를 쓸 스키마를 못 받는다.
+    /// SchemaTables는 모델이 내지 않는다 - 도구가 정적 분석에서 채운다.
     /// </summary>
     public sealed record BatchStepPlan(
         string Code,
@@ -23,7 +29,8 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> LegacyProcedures,
         IReadOnlyList<string> TargetTables,
         IReadOnlyList<string> ErrorCodes,
-        bool Chunkable);
+        bool Chunkable,
+        IReadOnlyList<string> SchemaTables);
 
     /// <summary>
     /// `raw/PlanStructure.md` 안의 ```json 블록에서 단계 목록을 읽는다.
@@ -140,7 +147,8 @@ namespace ReSet.Core.Services
                         ReadStringArray(element, "TargetTables"),
                         ReadStringArray(element, "ErrorCodes"),
                         element.TryGetProperty("Chunkable", out var chunkable) &&
-                            chunkable.ValueKind == JsonValueKind.True));
+                            chunkable.ValueKind == JsonValueKind.True,
+                        ReadStringArray(element, "SchemaTables")));
                 }
 
                 if (steps.Count == 0 || steps.Count > MaxSteps)

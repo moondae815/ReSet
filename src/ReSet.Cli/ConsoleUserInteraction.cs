@@ -56,6 +56,42 @@ namespace ReSet.Cli
             }
         }
 
+        public void NotifyCatalogMismatches(string jobName, List<string> mismatches)
+        {
+            if (mismatches == null || mismatches.Count == 0) return;
+
+            // 항목별 영향(하한 검사 제외 여부·스키마 범위 잔류 여부)은 테이블마다 다르다
+            // - 정적 분석에 전혀 없는 테이블은 둘 다에서 빠지지만, 읽기 전용으로만
+            // 쓰인 테이블은 스키마 범위에는 남는다. 그 구분은 PlanStructureEnricher가
+            // 만드는 항목별 문구(아래 목록) 하나에만 싣는다 - 여기서 또 단정하면
+            // 두 곳의 문구가 어긋날 때 어느 쪽을 믿어야 할지 알 수 없다.
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[yellow]목차가 선언한 대상 테이블 중 일부가 정적 분석의 쓰기 대상 목록과 어긋납니다. " +
+                "수집 실패가 아니라 목차 선언과 실제 코드 사이의 불일치입니다. 항목별 영향은 아래 목록을 " +
+                "확인하십시오:[/]");
+            sb.AppendLine();
+            foreach (var mismatch in mismatches)
+            {
+                sb.AppendLine($"[grey]- {Markup.Escape(mismatch)}[/]");
+            }
+
+            var panel = new Panel(new Markup(sb.ToString().TrimEnd()))
+            {
+                Border = BoxBorder.Rounded,
+                Header = new PanelHeader($"[yellow] 경고: {Markup.Escape(jobName)} 목차-정적분석 불일치 ([bold]{mismatches.Count}[/]) [/]"),
+                BorderStyle = new Style(Color.Yellow)
+            };
+
+            AnsiConsole.Write(panel);
+            AnsiConsole.WriteLine();
+
+            Serilog.Log.Warning($"[{jobName}] 목차-정적분석 불일치 ({mismatches.Count}건):");
+            foreach (var mismatch in mismatches)
+            {
+                Serilog.Log.Warning($"  - {mismatch}");
+            }
+        }
+
         public void NotifyL1Errors(string selectedOption, int attempt, int maxAttempts, List<string> errors)
         {
             var maxStr = maxAttempts == -1 ? "검증 완료까지" : maxAttempts.ToString();

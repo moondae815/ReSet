@@ -9,9 +9,9 @@ namespace ReSet.Core.Tests
     {
         private static IReadOnlyList<BatchStepPlan> ThreeSteps() => new[]
         {
-            new BatchStepPlan("S01", "수수료율 스냅샷", new[] { "UP_A" }, new[] { "dbo.T1" }, new[] { "-1" }, false),
-            new BatchStepPlan("S02", "정산 원장 생성", new[] { "UP_B" }, new[] { "dbo.T2" }, new[] { "-2" }, false),
-            new BatchStepPlan("S03", "취소 원장 반영", new[] { "UP_C" }, new[] { "dbo.T3" }, new[] { "-3" }, false)
+            new BatchStepPlan("S01", "수수료율 스냅샷", new[] { "UP_A" }, new[] { "dbo.T1" }, new[] { "-1" }, false, Array.Empty<string>()),
+            new BatchStepPlan("S02", "정산 원장 생성", new[] { "UP_B" }, new[] { "dbo.T2" }, new[] { "-2" }, false, Array.Empty<string>()),
+            new BatchStepPlan("S03", "취소 원장 반영", new[] { "UP_C" }, new[] { "dbo.T3" }, new[] { "-3" }, false, Array.Empty<string>())
         };
 
         // 프로덕션 헬퍼를 그대로 부른다 — 여기서 직접 포맷을 복제하면, 프롬프트가
@@ -84,7 +84,7 @@ namespace ReSet.Core.Tests
         {
             var steps = new[]
             {
-                new BatchStepPlan("S01", "[긴급] 수수료율 스냅샷", new[] { "UP_A" }, new[] { "dbo.T1" }, new[] { "-1" }, false)
+                new BatchStepPlan("S01", "[긴급] 수수료율 스냅샷", new[] { "UP_A" }, new[] { "dbo.T1" }, new[] { "-1" }, false, Array.Empty<string>())
             };
 
             var label = ConsoleUserInteraction.StepSelectionLabel(steps[0]);

@@ -985,9 +985,11 @@ namespace ReSet.Core.Tests
         private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
         {
             new BatchStepPlan("S01", "수수료율 스냅샷",
-                new[] { "UP_Util_PG_Client_CMRate_Ins" }, new[] { "dbo.TPGSettleRate" }, new[] { "-1" }, false),
+                new[] { "UP_Util_PG_Client_CMRate_Ins" }, new[] { "dbo.TPGSettleRate" }, new[] { "-1" }, false,
+                Array.Empty<string>()),
             new BatchStepPlan("S02", "정산 원장 생성",
-                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-2" }, true)
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-2" }, true,
+                Array.Empty<string>())
         };
 
         private static IAiService StepService()

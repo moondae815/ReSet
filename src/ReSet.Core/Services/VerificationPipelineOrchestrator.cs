@@ -1680,6 +1680,7 @@ namespace ReSet.Core.Services
             string provider,
             string outputRoot,
             bool isBatchMode = false,
+            IReadOnlyList<SpDefinition>? definitions = null,
             CancellationToken cancellationToken = default)
         {
             // 호출부 결함이므로 CWD로 조용히 폴백하지 않고 즉시 드러낸다.
@@ -1758,6 +1759,12 @@ namespace ReSet.Core.Services
             // 붙는데 그것은 명세서가 아니다.
             var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
 
+            // 목차의 TargetTables도 같은 문제를 갖는다 - 같은 12개 SP를 두 제공자로
+            // 돌린 실측에서 7개와 17개가 나왔고, 두 회차 모두 같은 단계를 빈 배열로
+            // 냈다. 오류코드와 달리 명세서 산문이 아니라 정적 분석에서 뽑는다.
+            // definitions가 null이면 빈 사전이라 보강이 일어나지 않는다.
+            var specTargetTables = SpecTargetTableExtractor.Extract(definitions);
+
             // 조각을 호출부로 내보낸다. 산출물 분할이 이 값들을 경계 앵커로 쓴다.
             // splitMarkdown이 null이면 단일 호출 경로였다는 뜻이고, 그때는 조각이
             // 아예 없으므로 null을 그대로 내보내 호출부가 폴백을 취하게 한다.
@@ -1813,7 +1820,10 @@ namespace ReSet.Core.Services
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
                             var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
-                            currentPlanStructure = PlanStructureEnricher.Enrich(planResult.Content, specReturnCodes);
+                            var planEnrichment = PlanStructureEnricher.Enrich(
+                                planResult.Content, specReturnCodes, specTargetTables);
+                            currentPlanStructure = planEnrichment.Markdown;
+                            NotifyDroppedTableDeclarations(jobName, planEnrichment);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
@@ -2011,6 +2021,7 @@ namespace ReSet.Core.Services
                             var redrafted = await DraftReplacementPlanStructureAsync(
                                 "재시도가 점수를 개선하지 못해 목차를 다시 설계합니다",
                                 specReturnCodes,
+                                specTargetTables,
                                 currentPlanStructure, currentBrainstorming, feedbackLog,
                                 targetLanguage, jobName, cancellationToken);
 
@@ -2188,6 +2199,7 @@ namespace ReSet.Core.Services
                         pendingPlanStructure = await DraftReplacementPlanStructureAsync(
                             "사용자가 문서 구조 변경을 요청하여 목차를 다시 설계합니다",
                             specReturnCodes,
+                            specTargetTables,
                             currentPlanStructure, currentBrainstorming, reviewResult.UserFeedback,
                             targetLanguage, jobName, cancellationToken);
                         if (pendingPlanStructure != null)
@@ -2501,6 +2513,7 @@ namespace ReSet.Core.Services
         private async Task<string?> DraftReplacementPlanStructureAsync(
             string reason,
             IReadOnlyDictionary<string, IReadOnlyList<string>> returnCodes,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> targetTables,
             string currentStructure,
             string brainstorming,
             string? redraftFeedback,
@@ -2541,7 +2554,32 @@ namespace ReSet.Core.Services
 
             // 재수립 경로와 L3 사용자 요청 경로가 이 헬퍼를 공유한다. 여기서 한 번
             // 보강하면 두 경로가 함께 덮인다 - 호출부마다 따로 걸면 하나를 빠뜨린다.
-            return PlanStructureEnricher.Enrich(redrafted, returnCodes);
+            var enrichment = PlanStructureEnricher.Enrich(redrafted, returnCodes, targetTables);
+            NotifyDroppedTableDeclarations(jobName, enrichment);
+            return enrichment.Markdown;
+        }
+
+        /// <summary>
+        /// 목차가 선언했으나 정적 분석에 없는 대상 테이블을 사용자에게 알린다.
+        ///
+        /// 배너나 StepDefect로 올리지 않는 이유: 이 사실은 목차가 확정된 뒤에
+        /// 관측되므로 재생성으로 고칠 수 없다. 고칠 수 없는 것을 재시도 루프에
+        /// 넣는 것이 이 저장소가 이미 두 번 물린 실패 모드다. 그렇다고 침묵하지도
+        /// 않는다 - 그 이름들은 계획서 본문에도 들어가 있다.
+        /// </summary>
+        private void NotifyDroppedTableDeclarations(string jobName, PlanStructureEnricher.PlanStructureEnrichment enrichment)
+        {
+            if (enrichment.DroppedTableDeclarations.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var message in enrichment.DroppedTableDeclarations)
+            {
+                Log.Warning("목차 선언과 정적 분석이 어긋납니다 - {Message}", message);
+            }
+
+            _userInteraction.NotifyCatalogMismatches(jobName, new List<string>(enrichment.DroppedTableDeclarations));
         }
 
         /// <summary>

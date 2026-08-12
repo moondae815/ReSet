@@ -54,7 +54,7 @@ namespace ReSet.Core.Tests
             null);
 
         private static BatchStepPlan Step(string code) =>
-            new(code, $"{code} 단계", new[] { "UP_X" }, new[] { "dbo.T" }, new[] { "-1" }, false);
+            new(code, $"{code} 단계", new[] { "UP_X" }, new[] { "dbo.T" }, new[] { "-1" }, false, Array.Empty<string>());
 
         [Fact]
         public void ResolveSteps_ShouldTakeBodiesFromFinalDocument_NotFromSections()

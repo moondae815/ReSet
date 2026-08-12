@@ -60,13 +60,19 @@ namespace ReSet.Core.Tests
                 ["up_util_settle_ins"] = new[] { "-1", "-2" },
             };
 
+        // 오류코드만 검사하는 기존 테스트들은 대상 테이블 재료가 없다. 빈 사전을
+        // 넘기면 RewriteTables가 아무 것도 못 찾아 TargetTables를 그대로 둔다 -
+        // 종전 동작과 같다.
+        private static readonly IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> EmptyTables =
+            new Dictionary<string, SpecTargetTableExtractor.StepTableSets>();
+
         private static BatchStepPlan Step(string markdown, string code) =>
             BatchStepPlanParser.TryParse(markdown)!.Single(s => s.Code == code);
 
         [Fact]
         public void Enrich_ShouldFillAnEmptyErrorCodeArray()
         {
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(new[] { "-1", "-2" }, Step(enriched, "S02").ErrorCodes);
         }
@@ -75,7 +81,7 @@ namespace ReSet.Core.Tests
         public void Enrich_ShouldUnionWithWhatThePlanAlreadyDeclared()
         {
             // 목차 선언이 먼저, 그다음 명세서 등장 순서. 결정론을 위해 순서를 고정한다.
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(new[] { "-9", "-1", "-10" }, Step(enriched, "S01").ErrorCodes);
         }
@@ -84,7 +90,7 @@ namespace ReSet.Core.Tests
         public void Enrich_ShouldLeaveStepsWithNoLegacyProcedureEmpty()
         {
             // 레거시 출신이 없는 단계는 보존할 원본 코드가 애초에 없다.
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.Empty(Step(enriched, "S00").ErrorCodes);
         }
@@ -93,15 +99,15 @@ namespace ReSet.Core.Tests
         public void Enrich_ShouldMatchProcedureNamesIgnoringSchemaPrefixAndCase()
         {
             // 목차는 "dbo.UP_UTIL_SETTLE_INS", 명세서 키는 "up_util_settle_ins"다.
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.NotEmpty(Step(enriched, "S02").ErrorCodes);
         }
 
         [Fact]
-        public void Enrich_ShouldPreserveOtherFields()
+        public void Enrich_ShouldPreserveOtherFieldsWhenMergingErrorCodes()
         {
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
             var s01 = Step(enriched, "S01");
 
             Assert.True(s01.Chunkable);
@@ -115,7 +121,7 @@ namespace ReSet.Core.Tests
         {
             // JsonSerializer의 기본 인코더는 비ASCII를 \uXXXX로 이스케이프한다.
             // 그대로 두면 PlanStructure.md의 한글 단계명이 사람이 못 읽는 문자열이 된다.
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.Contains("수수료율 스냅샷", enriched);
             Assert.DoesNotContain("\\u", enriched);
@@ -124,7 +130,7 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Enrich_ShouldPreserveProseOutsideTheJsonBlock()
         {
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
             Assert.Contains("산문은 그대로 보존되어야 한다.", enriched);
             Assert.Contains("꼬리 산문도 보존되어야 한다.", enriched);
@@ -135,8 +141,8 @@ namespace ReSet.Core.Tests
         public void Enrich_ShouldBeIdempotent()
         {
             // 목차는 재수립·구제 채택 경로에서 여러 번 오간다. 두 번 태워도 같아야 한다.
-            var once = PlanStructureEnricher.Enrich(Structure, Codes());
-            var twice = PlanStructureEnricher.Enrich(once, Codes());
+            var once = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
+            var twice = PlanStructureEnricher.Enrich(once, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(once, twice);
         }
@@ -146,7 +152,7 @@ namespace ReSet.Core.Tests
         {
             const string noBlock = "# 목차\n\nJSON 블록이 없다.";
 
-            Assert.Equal(noBlock, PlanStructureEnricher.Enrich(noBlock, Codes()));
+            Assert.Equal(noBlock, PlanStructureEnricher.Enrich(noBlock, Codes(), EmptyTables).Markdown);
         }
 
         [Fact]
@@ -154,7 +160,7 @@ namespace ReSet.Core.Tests
         {
             var broken = "# 목차\n\n```json\n{ \"Steps\": [ {{{ ]\n```\n";
 
-            Assert.Equal(broken, PlanStructureEnricher.Enrich(broken, Codes()));
+            Assert.Equal(broken, PlanStructureEnricher.Enrich(broken, Codes(), EmptyTables).Markdown);
         }
 
         /// <summary>
@@ -170,7 +176,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = "# 목차\n\n```json\n{ \"Steps\": [ " + element + " ] }\n```\n";
 
-            var enriched = PlanStructureEnricher.Enrich(markdown, Codes());
+            var enriched = PlanStructureEnricher.Enrich(markdown, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(markdown, enriched);
         }
@@ -182,7 +188,7 @@ namespace ReSet.Core.Tests
             // 파일에 기록된 목차와 실제로 쓰이는 목차가 갈라진다.
             var withDecoy = "```json\n{ \"NotSteps\": 1 }\n```\n\n" + Structure;
 
-            var enriched = PlanStructureEnricher.Enrich(withDecoy, Codes());
+            var enriched = PlanStructureEnricher.Enrich(withDecoy, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(new[] { "-1", "-2" }, Step(enriched, "S02").ErrorCodes);
             Assert.Contains("NotSteps", enriched);
@@ -214,7 +220,7 @@ namespace ReSet.Core.Tests
 ```
 ";
 
-            var enriched = PlanStructureEnricher.Enrich(duplicateKey, Codes());
+            var enriched = PlanStructureEnricher.Enrich(duplicateKey, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(duplicateKey, enriched);
         }
@@ -243,7 +249,7 @@ namespace ReSet.Core.Tests
 ```
 ";
 
-            var enriched = PlanStructureEnricher.Enrich(mixed, Codes());
+            var enriched = PlanStructureEnricher.Enrich(mixed, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(new[] { "-1", "-9", "-10" }, Step(enriched, "S01").ErrorCodes);
         }
@@ -271,7 +277,7 @@ namespace ReSet.Core.Tests
 ```
 ";
 
-            var enriched = PlanStructureEnricher.Enrich(mixed, Codes());
+            var enriched = PlanStructureEnricher.Enrich(mixed, Codes(), EmptyTables).Markdown;
 
             Assert.Equal(new[] { "-9", "-1", "-10" }, Step(enriched, "S01").ErrorCodes);
         }
@@ -281,7 +287,7 @@ namespace ReSet.Core.Tests
         {
             // 이 계약이 깨지면 파일에 기록된 값과 검사에 쓰인 값이 갈라진다 -
             // 지금 고치려는 결함과 정확히 같은 종류다.
-            var enriched = PlanStructureEnricher.Enrich(Structure, Codes());
+            var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
             var parsed = BatchStepPlanParser.TryParse(enriched);
 
             Assert.NotNull(parsed);
@@ -292,9 +298,9 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Enrich_ShouldLogWhenExtractionYieldedNoCodesAtAll()
         {
-            // codesByProcedure가 통째로 비면 원본을 그대로 돌려주는데, 흔적이 없으면
-            // "보강이 돌았는데 못 채운 것"과 "추출이 0건이라 시작조차 안 된 것"을
-            // 운영자가 로그만 보고 구별할 수 없다.
+            // codesByProcedure와 tablesByProcedure가 통째로 비면 원본을 그대로
+            // 돌려주는데, 흔적이 없으면 "보강이 돌았는데 못 채운 것"과 "추출이 0건이라
+            // 시작조차 안 된 것"을 운영자가 로그만 보고 구별할 수 없다.
             var empty = new Dictionary<string, IReadOnlyList<string>>();
 
             var sink = new CapturingSink();
@@ -302,7 +308,7 @@ namespace ReSet.Core.Tests
             Log.Logger = new LoggerConfiguration().MinimumLevel.Warning().WriteTo.Sink(sink).CreateLogger();
             try
             {
-                var enriched = PlanStructureEnricher.Enrich(Structure, empty);
+                var enriched = PlanStructureEnricher.Enrich(Structure, empty, EmptyTables).Markdown;
                 Assert.Equal(Structure, enriched);
             }
             finally
@@ -311,7 +317,7 @@ namespace ReSet.Core.Tests
                 Log.Logger = previousLogger;
             }
 
-            Assert.Contains(sink.Messages, m => m.Contains("오류코드") && m.Contains("보강을 건너뜁니다"));
+            Assert.Contains(sink.Messages, m => m.Contains("보강 재료가 없어") && m.Contains("보강을 건너뜁니다"));
         }
 
         private sealed class CapturingSink : ILogEventSink
@@ -345,7 +351,7 @@ namespace ReSet.Core.Tests
                 ["up_a"] = new[] { "-101", "-102" }
             };
 
-            var enriched = PlanStructureEnricher.Enrich(markdown, codes);
+            var enriched = PlanStructureEnricher.Enrich(markdown, codes, EmptyTables).Markdown;
 
             // 파서가 읽는 블록(둘째)에만 코드가 들어가야 한다.
             var located = BatchStepPlanParser.TryLocateStepsBlock(enriched);
@@ -383,7 +389,7 @@ namespace ReSet.Core.Tests
                 ["up_a"] = new[] { "-101" }
             };
 
-            var enriched = PlanStructureEnricher.Enrich(markdown, codes);
+            var enriched = PlanStructureEnricher.Enrich(markdown, codes, EmptyTables).Markdown;
 
             // 아무것도 보강되지 않는다. 특히 뒤 블록이 조용히 보강되면 안 된다.
             Assert.Equal(markdown, enriched);
@@ -405,7 +411,7 @@ namespace ReSet.Core.Tests
                 ["up_util_pg_client_cmrate_ins"] = new[] { "-201" }
             };
 
-            var enriched = PlanStructureEnricher.Enrich(Structure, codes);
+            var enriched = PlanStructureEnricher.Enrich(Structure, codes, EmptyTables).Markdown;
 
             Assert.Contains("산문은 그대로 보존되어야 한다.", enriched);
             Assert.NotEqual(Structure, enriched);
@@ -436,6 +442,300 @@ namespace ReSet.Core.Tests
                 .ToList();
 
             Assert.Equal(new[] { "ReSet.Core/Services/BatchStepPlan.cs" }, hits);
+        }
+
+        private static IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> Tables(
+            params (string Procedure, string[] Write, string[] Read)[] items)
+        {
+            var map = new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(
+                System.StringComparer.OrdinalIgnoreCase);
+            foreach (var (procedure, write, read) in items)
+            {
+                map[procedure] = new SpecTargetTableExtractor.StepTableSets(write, read);
+            }
+
+            return map;
+        }
+
+        private const string OneStep = @"```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S11"",
+      ""Name"": ""취소영향 요약 보정"",
+      ""LegacyProcedures"": [""UP_UTIL_SETTLE_SUMMARY_ETC""],
+      ""TargetTables"": [""TSettleByTX"", ""TPartialCancelByTX"", ""TSettleByIN"", ""TSettleByOUT""],
+      ""ErrorCodes"": [""-1""],
+      ""Chunkable"": true
+    }
+  ]
+}
+```";
+
+        [Fact]
+        public void Enrich_ShouldReplaceTargetTablesWithTheExtractedWriteSet()
+        {
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleMst" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Equal(new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" }, step.TargetTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldReportDeclarationsTheStaticAnalysisDoesNotHave()
+        {
+            // 실측: API 회차의 S11이 네 개를 선언했고 셋은 원본 DDL에 0회 등장한다.
+            // 합집합했다면 그 허위가 검증 요건으로 승격돼 재생성이 고착시켰을 것이다.
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    System.Array.Empty<string>())));
+
+            var reported = Assert.Single(result.DroppedTableDeclarations);
+            Assert.Contains("S11", reported);
+            Assert.Contains("TSettleByTX", reported);
+            Assert.Contains("TPartialCancelByTX", reported);
+            Assert.Contains("TSettleByIN", reported);
+            Assert.DoesNotContain("TSettleByOUT", reported);
+        }
+
+        [Fact]
+        public void Enrich_ShouldNotClaimSchemaScopeLossForADeclarationThatIsMerelyReadOnly()
+        {
+            // 결함 3(S09) 재현: 선언된 대상 테이블 하나(TSettleByTX)가 정적 분석에서
+            // 읽기 전용으로만 쓰인다(ReadTables). 하한 검사 재료(write)에서는 빠지지만
+            // SchemaTables 재료(write+read)에는 남는다 - "스키마 범위에서도 제외했다"고
+            // 뭉뚱그리면 그 절반은 거짓이 된다. 나머지 둘(TPartialCancelByTX,
+            // TSettleByIN)은 정적 분석 어디에도 없어 그 주장이 참이다.
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+
+            // 읽기 전용으로 남은 테이블은 SchemaTables에 여전히 있어야 한다.
+            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleByTX", step.SchemaTables);
+
+            var reported = Assert.Single(result.DroppedTableDeclarations);
+
+            // "모두 제외했습니다" 문장(정적 분석에 전혀 없는 두 테이블 몫)에는
+            // 읽기 전용 테이블 이름이 섞여 들어가면 안 된다 - 그 테이블은 실제로는
+            // 스키마 범위에 남아 있다.
+            var absentSentenceEnd = reported.IndexOf("제외했습니다.", System.StringComparison.Ordinal)
+                + "제외했습니다.".Length;
+            var absentSentence = reported.Substring(0, absentSentenceEnd);
+            Assert.Contains("TPartialCancelByTX", absentSentence);
+            Assert.Contains("TSettleByIN", absentSentence);
+            Assert.DoesNotContain("TSettleByTX", absentSentence);
+
+            // 읽기 전용 테이블은 별도로, 스키마 범위에는 남는다고 정확히 보고한다.
+            Assert.Contains("TSettleByTX", reported);
+            Assert.Contains("읽기 전용", reported);
+            Assert.Contains("스키마 범위에는 남", reported);
+        }
+
+        private const string StepWithGuessedSchemaTablesAndUnmatchedProcedure = @"```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S20"",
+      ""Name"": ""알 수 없는 프로시저 단계"",
+      ""LegacyProcedures"": [""UP_UNKNOWN""],
+      ""TargetTables"": [],
+      ""SchemaTables"": [""dbo.TGuessed""]
+    }
+  ]
+}
+```";
+
+        [Fact]
+        public void Enrich_ShouldStripSchemaTablesWhenLegacyProcedureHasNoStaticAnalysisMatch()
+        {
+            // LegacyProcedures는 비어 있지 않지만(procedures.Count > 0), 그 이름이
+            // tablesByProcedure 어디에도 없어 schema가 끝까지 비어 있는 경로 -
+            // "SchemaTables는 도구가 채운다"는 불변식을 지키는 else if 분기가 실제로
+            // 걸리는 유일한 기존 재료였던 픽스처가 없었다. 그 분기를 지워도 이
+            // 테스트가 없으면 아무것도 깨지지 않는다.
+            var result = PlanStructureEnricher.Enrich(
+                StepWithGuessedSchemaTablesAndUnmatchedProcedure,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_other_procedure", new[] { "DB.dbo.T" }, System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.SchemaTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldKeepTheDeclaredTablesWhenNothingWasExtracted()
+        {
+            // 파싱 실패나 대상 0개인 프로시저에서 기존값을 지우면 멀쩡한 단계가
+            // "검증 불가"로 떨어진다. 재료를 0으로 만들지 않는다.
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    System.Array.Empty<string>(),
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleMst" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Equal(4, step.TargetTables.Count);
+            Assert.Empty(result.DroppedTableDeclarations);
+        }
+
+        [Fact]
+        public void Enrich_ShouldFillSchemaTablesWithWritesAndReads()
+        {
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleMst" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Equal(
+                new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT", "SETTLE_POQ_DB.dbo.TSettleMst" },
+                step.SchemaTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldPreserveOtherFields()
+        {
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.True(step.Chunkable);
+            Assert.Equal(new[] { "-1" }, step.ErrorCodes);
+            Assert.Equal("취소영향 요약 보정", step.Name);
+        }
+
+        [Fact]
+        public void Enrich_ShouldBeIdempotentForTables()
+        {
+            var tables = Tables(("up_util_settle_summary_etc",
+                new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                new[] { "SETTLE_POQ_DB.dbo.TSettleMst" }));
+            var codes = new Dictionary<string, IReadOnlyList<string>>();
+
+            var once = PlanStructureEnricher.Enrich(OneStep, codes, tables);
+            var twice = PlanStructureEnricher.Enrich(once.Markdown, codes, tables);
+
+            Assert.Equal(once.Markdown, twice.Markdown);
+            Assert.Empty(twice.DroppedTableDeclarations);
+        }
+
+        [Fact]
+        public void Enrich_ShouldLeaveStepsWithoutLegacyProceduresAlone()
+        {
+            const string designedStep = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S00"", ""Name"": ""실행 잠금 사전검증"", ""LegacyProcedures"": [], ""TargetTables"": [] }
+  ]
+}
+```";
+
+            var result = PlanStructureEnricher.Enrich(
+                designedStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_x", new[] { "DB.dbo.T" }, System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.TargetTables);
+            Assert.Empty(step.SchemaTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldStripModelAuthoredSchemaTablesWhenNoLegacyProceduresToVerifyAgainst()
+        {
+            // SchemaTables는 도구가 정적 분석에서 채우는 필드다(BatchStepPlan.cs).
+            // LegacyProcedures가 비어 대조할 원본이 없는 단계는 도구가 아무것도 채우지
+            // 않았으므로, 재수립 프롬프트에 이전 목차가 통째로 예시로 들어가며 모델이
+            // 흉내 낸 값이 있다면 지워야 한다 - 남겨두면 DependenciesForStep이 그
+            // 값을 진짜 정적 분석 결과로 믿고 그 단계의 DDL 범위를 잘못 좁힌다.
+            const string designedStepWithGuessedSchemaTables = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S00"", ""Name"": ""실행 잠금 사전검증"", ""LegacyProcedures"": [], ""TargetTables"": [], ""SchemaTables"": [""dbo.TGuessed""] }
+  ]
+}
+```";
+
+            var result = PlanStructureEnricher.Enrich(
+                designedStepWithGuessedSchemaTables,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_x", new[] { "DB.dbo.T" }, System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.SchemaTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldIgnoreNonStringEntriesInLegacyProcedures()
+        {
+            // 가드가 없으면 숫자 123이 문자열로 읽혀 codesByProcedure의 "123" 키에
+            // 매칭된다. 그 키를 실제로 채워 두어야 가드 제거가 테스트를 깬다.
+            const string numericProcedure = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""숫자 항목"", ""LegacyProcedures"": [123], ""ErrorCodes"": [] }
+  ]
+}
+```";
+
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["123"] = new[] { "-99" },
+            };
+
+            var result = PlanStructureEnricher.Enrich(
+                numericProcedure,
+                codes,
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.ErrorCodes);
+        }
+
+        [Fact]
+        public void Enrich_ShouldDropTheThreeTablesTheSourceDdlNeverMentions()
+        {
+            // 실측 회귀. output/은 추적되지 않으므로 발췌를 픽스처로 체크인했다.
+            // 이 세 이름은 UP_UTIL_SETTLE_SUMMARY_ETC의 DDL 원문에 0회 등장한다
+            // (IsParsedSuccessfully = True, 동적 SQL 없음 - 파서가 놓친 것이 아니다).
+            var markdown = File.ReadAllText(Path.Combine(
+                RepoPaths.FindRepoRoot(), "tests", "ReSet.Core.Tests", "Fixtures",
+                "S11PlanStructureExcerpt.md"));
+
+            var result = PlanStructureEnricher.Enrich(
+                markdown,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleMst" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Equal(new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" }, step.TargetTables);
+
+            var reported = Assert.Single(result.DroppedTableDeclarations);
+            Assert.Contains("TSettleByTX", reported);
+            Assert.Contains("TPartialCancelByTX", reported);
+            Assert.Contains("TSettleByIN", reported);
         }
     }
 }
