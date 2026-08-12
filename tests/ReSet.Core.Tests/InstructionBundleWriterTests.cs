@@ -379,7 +379,7 @@ S02 본문
         }
 
         [Fact]
-        public async Task WriteAsync_ShouldScopeStepDependenciesToItsOwnTargetTables()
+        public async Task WriteAsync_ShouldScopeStepDependenciesToItsOwnSchemaTables()
         {
             // 각 단계는 서로 다른 테이블을 건드린다 - S01 지시서에는 S01의 테이블만,
             // S02 지시서에는 S02의 테이블만 있어야 한다. Job 전체 의존성을 그대로

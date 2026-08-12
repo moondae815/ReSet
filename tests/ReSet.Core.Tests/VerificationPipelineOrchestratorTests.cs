@@ -7109,6 +7109,12 @@ SELECT 1;
         /// <summary>
         /// 고정 본문 - step.ErrorCodes를 인덱싱하지 않는다. 보강 배선이 아직 없어
         /// ErrorCodes가 빈 배열인 채로 파싱돼도 안전하게 하한을 통과해야 하기 때문이다.
+        ///
+        /// 하드코딩된 "dbo.T1"을 고치지 마라 - Pipeline_ShouldWriteEnrichedTargetTablesToPlanStructureFile이
+        /// 이 문장을 하한 검사의 대상 테이블 언급으로 쓴다. 그 테스트는 보강된
+        /// TargetTables("SETTLE_POQ_DB.dbo.T1")를 바닥이름(bare name) 토큰 일치로
+        /// 대조하므로, "T1"이라는 바닥이름이 이 문장 어딘가에 등장해야 통과한다.
+        /// 이 문장을 바꾸면 그 테스트가 이유를 알 수 없는 채로 깨진다.
         /// </summary>
         private static string FixedErrorCodeSection(string code) =>
             $"### {code} 단계\n\n대상은 dbo.T1이고 오류코드는 -7이다.\n\n```sql\nSELECT 1;\n```";
