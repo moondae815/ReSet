@@ -130,10 +130,22 @@ namespace ReSet.Core.Tests
             // definitions 자체가 null 항목을 담거나, Name이 공백이거나, 정적 분석의
             // 목록 프로퍼티가 null이어도 예외가 새 나가면 안 된다 - 호출부(파이프라인의
             // specTargetTables 대입)에 봉투가 없으므로 추출기가 스스로 방어해야 한다.
+            //
+            // 공백 Name 원소는 대상/원본 테이블을 채워 둔다 - 비워 두면 "두 집합 다
+            // 비었을 때 건너뛴다"는 별개의 가드가 먼저 걸려, Name 가드를 지워도 이
+            // 테스트가 그 사실을 못 잡는다. 채워 두어야 Name 가드가 실제로 결정한다.
             var definitions = new SpDefinition?[]
             {
                 null,
-                new SpDefinition { Name = "  ", StaticAnalysis = new SpStaticAnalysisResult() },
+                new SpDefinition
+                {
+                    Name = "  ",
+                    StaticAnalysis = new SpStaticAnalysisResult
+                    {
+                        InsertTables = { "DB.dbo.TBlankName" },
+                        SelectTables = { "DB.dbo.TBlankNameSource" },
+                    },
+                },
                 new SpDefinition { Name = "UP_OK", StaticAnalysis = new SpStaticAnalysisResult { InsertTables = null! } },
             };
 
