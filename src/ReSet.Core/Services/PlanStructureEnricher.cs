@@ -273,16 +273,33 @@ namespace ReSet.Core.Services
 
                 if (lost.Count > 0)
                 {
-                    // "정적 분석에 없어"라고만 쓰면 틀린다 - 결함 3(S09)처럼 이름 자체는
-                    // 정적 분석에 있고 읽기 전용으로만 쓰인 경우도 있다. "쓰기 대상이
-                    // 아니다"라고 해야 부재·읽기전용 둘 다 맞다. 하한 검사뿐 아니라
-                    // SchemaTables(스키마 범위)에서도 함께 빠진다는 점도 밝힌다 - 후자가
-                    // 더 큰 영향인데 언급하지 않으면 절반만 알리는 셈이다.
+                    // "정적 분석에 없어 하한 검사와 스키마 범위에서 모두 제외했다"는
+                    // 하나의 문장으로 뭉뚱그리면 결함 3(S09) 같은 읽기 전용 사례에서
+                    // 거짓이 된다. 그 이름은 write에는 없어도(하한 검사 탈락) read에는
+                    // 있어 schema(write+read)에는 남는다(스키마 범위 잔류). 두 집합을
+                    // 나눠 각자에게 맞는 결과만 보고한다.
+                    var schemaBareNames = new HashSet<string>(
+                        schema.ConvertAll(SpecTargetTableExtractor.BareTableName), StringComparer.Ordinal);
+
+                    var absent = lost.FindAll(
+                        d => !schemaBareNames.Contains(SpecTargetTableExtractor.BareTableName(d)));
+                    var readOnly = lost.FindAll(
+                        d => schemaBareNames.Contains(SpecTargetTableExtractor.BareTableName(d)));
+
                     var code = ReadScalarString(step, "Code");
-                    dropped.Add(
-                        $"{code}: 목차가 선언한 대상 테이블 {string.Join(", ", lost)}이(가) " +
-                        "정적 분석의 쓰기 대상이 아니어서(선언 자체가 없거나 읽기 전용으로만 쓰임) " +
-                        "하한 검사와 이 단계의 스키마 범위에서 모두 제외했습니다. 계획서 본문도 함께 확인하십시오.");
+                    var sentence = new System.Text.StringBuilder($"{code}: 목차가 선언한 대상 테이블 중 ");
+                    if (absent.Count > 0)
+                    {
+                        sentence.Append(string.Join(", ", absent));
+                        sentence.Append("은(는) 정적 분석에 전혀 없어 하한 검사와 이 단계의 스키마 범위에서 모두 제외했습니다. ");
+                    }
+                    if (readOnly.Count > 0)
+                    {
+                        sentence.Append(string.Join(", ", readOnly));
+                        sentence.Append("은(는) 정적 분석에서 읽기 전용으로만 쓰여 하한 검사에서는 제외했으나 이 단계의 스키마 범위에는 남아 있습니다. ");
+                    }
+                    sentence.Append("계획서 본문도 함께 확인하십시오.");
+                    dropped.Add(sentence.ToString());
                 }
 
                 step["TargetTables"] = new JsonArray(

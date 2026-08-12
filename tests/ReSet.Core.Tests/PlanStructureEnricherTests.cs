@@ -507,6 +507,75 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Enrich_ShouldNotClaimSchemaScopeLossForADeclarationThatIsMerelyReadOnly()
+        {
+            // 결함 3(S09) 재현: 선언된 대상 테이블 하나(TSettleByTX)가 정적 분석에서
+            // 읽기 전용으로만 쓰인다(ReadTables). 하한 검사 재료(write)에서는 빠지지만
+            // SchemaTables 재료(write+read)에는 남는다 - "스키마 범위에서도 제외했다"고
+            // 뭉뚱그리면 그 절반은 거짓이 된다. 나머지 둘(TPartialCancelByTX,
+            // TSettleByIN)은 정적 분석 어디에도 없어 그 주장이 참이다.
+            var result = PlanStructureEnricher.Enrich(
+                OneStep,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_util_settle_summary_etc",
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+                    new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" })));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+
+            // 읽기 전용으로 남은 테이블은 SchemaTables에 여전히 있어야 한다.
+            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleByTX", step.SchemaTables);
+
+            var reported = Assert.Single(result.DroppedTableDeclarations);
+
+            // "모두 제외했습니다" 문장(정적 분석에 전혀 없는 두 테이블 몫)에는
+            // 읽기 전용 테이블 이름이 섞여 들어가면 안 된다 - 그 테이블은 실제로는
+            // 스키마 범위에 남아 있다.
+            var absentSentenceEnd = reported.IndexOf("제외했습니다.", System.StringComparison.Ordinal)
+                + "제외했습니다.".Length;
+            var absentSentence = reported.Substring(0, absentSentenceEnd);
+            Assert.Contains("TPartialCancelByTX", absentSentence);
+            Assert.Contains("TSettleByIN", absentSentence);
+            Assert.DoesNotContain("TSettleByTX", absentSentence);
+
+            // 읽기 전용 테이블은 별도로, 스키마 범위에는 남는다고 정확히 보고한다.
+            Assert.Contains("TSettleByTX", reported);
+            Assert.Contains("읽기 전용", reported);
+            Assert.Contains("스키마 범위에는 남", reported);
+        }
+
+        private const string StepWithGuessedSchemaTablesAndUnmatchedProcedure = @"```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S20"",
+      ""Name"": ""알 수 없는 프로시저 단계"",
+      ""LegacyProcedures"": [""UP_UNKNOWN""],
+      ""TargetTables"": [],
+      ""SchemaTables"": [""dbo.TGuessed""]
+    }
+  ]
+}
+```";
+
+        [Fact]
+        public void Enrich_ShouldStripSchemaTablesWhenLegacyProcedureHasNoStaticAnalysisMatch()
+        {
+            // LegacyProcedures는 비어 있지 않지만(procedures.Count > 0), 그 이름이
+            // tablesByProcedure 어디에도 없어 schema가 끝까지 비어 있는 경로 -
+            // "SchemaTables는 도구가 채운다"는 불변식을 지키는 else if 분기가 실제로
+            // 걸리는 유일한 기존 재료였던 픽스처가 없었다. 그 분기를 지워도 이
+            // 테스트가 없으면 아무것도 깨지지 않는다.
+            var result = PlanStructureEnricher.Enrich(
+                StepWithGuessedSchemaTablesAndUnmatchedProcedure,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                Tables(("up_other_procedure", new[] { "DB.dbo.T" }, System.Array.Empty<string>())));
+
+            var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
+            Assert.Empty(step.SchemaTables);
+        }
+
+        [Fact]
         public void Enrich_ShouldKeepTheDeclaredTablesWhenNothingWasExtracted()
         {
             // 파싱 실패나 대상 0개인 프로시저에서 기존값을 지우면 멀쩡한 단계가
