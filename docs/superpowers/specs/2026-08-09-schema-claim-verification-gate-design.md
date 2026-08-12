@@ -428,9 +428,11 @@ A가 그 문장을 참으로 유지하고, B가 위반을 잡는다.
    **컬럼 단위로만** 성립한다. Stage 1 전용이고 실제 섹션 생성은 `BuildSpMetadataTexts`를 쓰므로
    현재는 무해하다.
 7. 부재 표현 목록이 완전하지 않다(의도된 안전한 실패 방향). 새 표현이 나타나면 통과한다.
-8. `.claude/worktrees/`가 `.gitignore`에 없어 `git status`를 오염시킨다. 이 브랜치는
-   `.git/info/exclude`(로컬)로 처리했다. 이 저장소에서 Claude Code를 쓰는 누구에게나 재발하므로
-   `.gitignore`에 정식으로 넣는 편이 낫다.
+8. ~~`.claude/worktrees/`가 `.gitignore`에 없어 `git status`를 오염시킨다. 이 브랜치는
+   `.git/info/exclude`(로컬)로 처리했다.~~ **해소됨(2026-08-12).** `.gitignore:44`에
+   `.claude/worktrees/`를 넣었다(`.worktrees/` 바로 아래, 같은 「Local Git worktrees」 절).
+   `git check-ignore -v`가 `.git/info/exclude`가 아니라 이 줄을 매칭 원천으로 보고하므로
+   로컬 exclude 없이도 성립한다 — 기존 `.git/info/exclude:7` 항목은 이제 중복이다.
 9. 기존 플래키: `ArtifactChangeDetector.Snapshot`의 `EnumerateFiles` → `FileInfo.Length` TOCTOU.
    전체 실행 중 두 번 관측됐고 단독 재실행에서는 통과한다(선행 두 브랜치가 이미 기록).
 
