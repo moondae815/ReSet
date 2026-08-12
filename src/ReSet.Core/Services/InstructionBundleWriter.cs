@@ -214,7 +214,7 @@ namespace ReSet.Core.Services
             {
                 // 부트스트랩·조립 회차는 특정 단계에 매인 스키마가 없다 - 작업 전체
                 // 스키마를 붙이면 "단계 상세 문서를 읽지 마십시오"(부트스트랩)와
-                // 모순된다. Step 회차만 그 단계의 TargetTables로 좁힌다.
+                // 모순된다. Step 회차만 그 단계의 SchemaTables로 좁힌다.
                 var stepDependencies = kind == StageKind.Step && code != null
                     ? DependenciesForStep(dependencies, inputs.Layout, code)
                     : Array.Empty<IndexEntry>();
@@ -415,7 +415,7 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 테이블 식별자 두 개(의존성 라벨 "dbo.TClient" 또는 "SettleDB.dbo.TClient",
-        /// 목차의 TargetTables 표기 "dbo.Ledger"·"[dbo].[Ledger]"·"Ledger")가 같은
+        /// 목차의 SchemaTables 표기 "dbo.Ledger"·"[dbo].[Ledger]"·"Ledger")가 같은
         /// 테이블을 가리키는지 비교한다.
         ///
         /// 대괄호를 벗기고 마지막 두 조각(스키마.테이블)만 본다 - 의존성 라벨은
