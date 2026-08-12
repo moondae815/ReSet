@@ -372,6 +372,10 @@ namespace ReSet.Core.Services
             // Critic이 ScoreInterface에서 이 항목을 채점한다(아래 채점 기준 3번).
             // 생성 규칙에 없으면 모델은 요구받지 않은 것을 쓰지 않고, 그대로 감점된다.
             rules.Add($"{ruleIndex++}. Explicitly state whether this procedure returns a result set (Rowset) to the caller. State it even when no result set is returned.");
+            // 실측(CANCEL_INS): 별칭 B의 참조 컬럼 목록에 삽입 대상 컬럼과 상수로
+            // 채워지는 컬럼, 그리고 다른 별칭에서 오는 값이 섞였다. 같은 문서의
+            // INSERT 매핑 표는 정확했으므로 문서가 스스로와 어긋났다.
+            rules.Add($"{ruleIndex++}. When you list the referenced columns of a table or alias, include only the columns that the query actually reads from that alias. Do not list insert-target columns, columns filled by constants, columns read through a different alias, or columns that merely exist in the schema.");
 
             rules.Add($"{ruleIndex++}. [CRITICAL ANTI-SHORTCUT RULE] NEVER use abbreviations, ellipses (...), or phrases like '이하 생략', '기타', 'etc'. You MUST map EVERY SINGLE COLUMN present in the DDL to the markdown table row by row, even if there are 100 columns. Failure to write every column will result in a fatal system crash and your output will be rejected. Do NOT use `dbo.TS[] (이하 생략 가능하나 매핑은 완벽히 수행됨)` or similar shortcut phrases.");
             rules.Add($"{ruleIndex++}. [CRITICAL: 비즈니스 로직 원형 보존 원칙 - 다중 소스 결합 금지 해제] 원본 SQL이 `UNION`, `UNION ALL`, `JOIN`을 통해 여러 테이블에서 데이터를 수집한다면, 의사코드 및 설명에서도 모든 소스 테이블과 분모/분자 집계 수식(SUM 등)을 절대 생략하지 마십시오. (단일 테이블로 단순화하는 것은 치명적 결함으로 간주됩니다.)");

@@ -948,6 +948,38 @@ namespace ReSet.Core.Tests
             Assert.True(found, "Actor 생성 규칙(rules.Add)에 결과셋(Rowset) 명시 요구가 없습니다.");
         }
 
+        /// <summary>
+        /// 「참조 컬럼」 칸은 그 별칭이 실제로 읽는 컬럼만 담아야 한다.
+        /// CANCEL_INS 실측에서 별칭 B의 참조 컬럼 목록에 삽입 대상 컬럼
+        /// (YMD·AYMD·CYMD)과 상수로 채워지는 컬럼(INSTATE·OUTSTATE), 그리고
+        /// 다른 별칭에서 오는 NonSettleAmt가 섞였다. 같은 문서의 INSERT 매핑
+        /// 표는 정확했으므로 문서 내부에서 서로 어긋난 상태였다.
+        ///
+        /// 기계 게이트를 만들지 않고 생성 규칙으로 막는다 - 별칭 스코프 판정은
+        /// 오탐 위험이 크고, 이 표를 만드는 문서가 26개 중 2개뿐이라 비용이
+        /// 맞지 않는다.
+        /// </summary>
+        [Fact]
+        public void ReferencedColumnRule_LimitsTheListToWhatTheAliasActuallyReads()
+        {
+            var fullPath = System.IO.Path.Combine(
+                RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/AiService.cs");
+            var lines = System.IO.File.ReadAllLines(fullPath);
+
+            var found = false;
+            foreach (var line in lines)
+            {
+                if (line.Contains("rules.Add(")
+                    && line.Contains("only the columns that the query actually reads"))
+                {
+                    found = true;
+                    break;
+                }
+            }
+
+            Assert.True(found, "Actor 생성 규칙에 참조 컬럼 목록의 범위 제한이 없습니다.");
+        }
+
         private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
         {
             new BatchStepPlan("S01", "수수료율 스냅샷",
