@@ -5433,7 +5433,7 @@ SELECT 1;
                 new Dictionary<string, string> { ["S01"] = "섹션" },              // lastStepSections (out)
                 new List<BatchStepPlan>                                            // currentSteps (out)
                 {
-                    new("S01", "첫 단계", Array.Empty<string>(), new[] { "dbo.T1" }, new[] { "-1" }, false),
+                    new("S01", "첫 단계", Array.Empty<string>(), new[] { "dbo.T1" }, new[] { "-1" }, false, Array.Empty<string>()),
                 },
                 new Dictionary<string, StepDefect> { ["S01"] = new StepDefect(StepDefectKind.QualityFloor, "S01 (하한 미달)") },   // stepFloorViolations (out)
                 pendingDefectiveSteps,

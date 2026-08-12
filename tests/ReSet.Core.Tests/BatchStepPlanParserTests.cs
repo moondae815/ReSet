@@ -227,5 +227,48 @@ namespace ReSet.Core.Tests
             Assert.NotNull(located);
             Assert.Equal(parsed!.Select(s => s.Code), located!.Value.Steps.Select(s => s.Code));
         }
+
+        [Fact]
+        public void TryParse_ShouldReadSchemaTables()
+        {
+            var markdown = @"```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""요율 스냅샷 생성"",
+      ""LegacyProcedures"": [""UP_X""],
+      ""TargetTables"": [""DB.dbo.TWrite""],
+      ""SchemaTables"": [""DB.dbo.TWrite"", ""DB.dbo.TRead""],
+      ""ErrorCodes"": [""-1""]
+    }
+  ]
+}
+```";
+
+            var steps = BatchStepPlanParser.TryParse(markdown);
+
+            Assert.NotNull(steps);
+            Assert.Equal(new[] { "DB.dbo.TWrite", "DB.dbo.TRead" }, steps![0].SchemaTables);
+        }
+
+        [Fact]
+        public void TryParse_ShouldTreatAMissingSchemaTablesAsEmpty()
+        {
+            // 이 브랜치 이전에 만들어진 목차에는 이 필드가 없다. 없으면 빈 목록이고,
+            // DependenciesForStep이 종전처럼 전체 목록으로 폴백한다.
+            var markdown = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""옛 목차"", ""TargetTables"": [""DB.dbo.TWrite""] }
+  ]
+}
+```";
+
+            var steps = BatchStepPlanParser.TryParse(markdown);
+
+            Assert.NotNull(steps);
+            Assert.Empty(steps![0].SchemaTables);
+        }
     }
 }

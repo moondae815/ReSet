@@ -63,7 +63,7 @@ S02 본문
 """;
 
         private static BatchStepPlan Step(string code, string name) =>
-            new(code, name, new[] { "UP_" + code }, new[] { "dbo.T" }, new[] { "-1" }, false);
+            new(code, name, new[] { "UP_" + code }, new[] { "dbo.T" }, new[] { "-1" }, false, new[] { "dbo.T" });
 
         private static PlanLayout Layout(IReadOnlyDictionary<string, StepDefect>? violations = null) => new(
             "골격",
@@ -394,8 +394,8 @@ S02 본문
                 },
                 new[]
                 {
-                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false),
-                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, new[] { "dbo.TLedger" }, new[] { "-1" }, false),
+                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false, new[] { "dbo.TClient" }),
+                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, new[] { "dbo.TLedger" }, new[] { "-1" }, false, new[] { "dbo.TLedger" }),
                 },
                 null);
 
@@ -437,8 +437,8 @@ S02 본문
                 },
                 new[]
                 {
-                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false),
-                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, Array.Empty<string>(), new[] { "-1" }, false),
+                    new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false, new[] { "dbo.TClient" }),
+                    new BatchStepPlan("S02", "원장 생성", new[] { "UP_S02" }, Array.Empty<string>(), new[] { "-1" }, false, Array.Empty<string>()),
                 },
                 null);
 
@@ -482,7 +482,7 @@ S02 본문
             var layout = new PlanLayout(
                 "골격",
                 new Dictionary<string, string> { ["S01"] = "### S01 스냅샷 생성\n조각 본문" },
-                new[] { new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false) },
+                new[] { new BatchStepPlan("S01", "스냅샷 생성", new[] { "UP_S01" }, new[] { "dbo.TClient" }, new[] { "-1" }, false, new[] { "dbo.TClient" }) },
                 null);
 
             var inputs = Inputs(layout) with

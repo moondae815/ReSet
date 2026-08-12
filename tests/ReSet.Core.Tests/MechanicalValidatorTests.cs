@@ -472,7 +472,8 @@ graph TD
             new[] { "UP_UTIL_STAT_PGCOLLECT_INS" },
             new[] { "dbo.TStatPGCollect", "dbo.TSettleMst" },
             new[] { "-1" },
-            Chunkable: false);
+            Chunkable: false,
+            SchemaTables: Array.Empty<string>());
 
         private const string S10CollapsedSection = @"### 14. S10 PG 회수 통계 생성
 
@@ -519,7 +520,8 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             // 접두사까지 포함해 대조하면 정상 문서가 실패한다.
             var section = "### S02 기본 정산 원장 생성\n\n본문은 TSettleMst만 적었다. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
             var plan = new BatchStepPlan("S02", "기본 정산 원장 생성",
-                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false);
+                new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false,
+                Array.Empty<string>());
 
             var result = _validator.ValidateBatchStep(section, plan);
 
@@ -533,7 +535,8 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             // 회귀하면 -1이 -10 안에서 걸려 이 검사가 통째로 무력해진다.
             var section = "### S08 회수일 산정\n\n대상은 TSettleMst이고 오류코드는 -10뿐이다.\n\n```sql\nSELECT 1;\n```";
             var plan = new BatchStepPlan("S08", "회수일 산정",
-                new[] { "UP_UTIL_SETTLE_EXPECT_PROC" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false);
+                new[] { "UP_UTIL_SETTLE_EXPECT_PROC" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false,
+                Array.Empty<string>());
 
             var result = _validator.ValidateBatchStep(section, plan);
 

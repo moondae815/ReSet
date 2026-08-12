@@ -8,7 +8,7 @@ namespace ReSet.Core.Tests
     public class PlanLayoutTests
     {
         private static BatchStepPlan Step(string code) =>
-            new(code, $"{code} 단계", new[] { "UP_X" }, new[] { "dbo.T" }, new[] { "-1" }, false);
+            new(code, $"{code} 단계", new[] { "UP_X" }, new[] { "dbo.T" }, new[] { "-1" }, false, Array.Empty<string>());
 
         [Fact]
         public void IsSplitAvailable_ShouldBeFalse_WhenSectionsMissing()
