@@ -272,5 +272,114 @@ namespace ReSet.Core.Tests
             Assert.Contains("Now write the section for step S01", result.UserPrompt);
             Assert.Contains("코드 블록이 없습니다", result.UserPrompt);
         }
+
+        private static (ClaudeClient Client, ClaudeRequestSpyHandler Spy) NewClaudeClient()
+        {
+            var spy = new ClaudeRequestSpyHandler(
+                @"{""content"":[{""type"":""text"",""text"":""ok""}]}");
+            var client = new ClaudeClient(
+                new HttpClient(spy), "test_api_key", "https://api.anthropic.com", "claude-sonnet-5");
+            return (client, spy);
+        }
+
+        private static JsonElement UserContentOf(ClaudeRequestSpyHandler spy) =>
+            JsonDocument.Parse(spy.LastRequestContent!).RootElement
+                .GetProperty("messages")[0].GetProperty("content");
+
+        // 접미사가 없으면 표현을 바꾸지 않는다. 평문 문자열을 블록 배열로 바꾸는 것
+        // 자체가 접두사를 바꿔, 접미사 없는 호출들끼리의 캐시를 깨기 때문이다.
+        [Fact]
+        public async Task Claude_WithoutAVolatileSuffix_KeepsThePlainStringContent()
+        {
+            var (client, spy) = NewClaudeClient();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f);
+
+            Assert.Equal(JsonValueKind.String, UserContentOf(spy).ValueKind);
+            Assert.Equal("SharedContext", UserContentOf(spy).GetString());
+        }
+
+        // 첫 전송에는 중단점을 찍지 않는다. 캐시 쓰기가 1.25배라, 1회차에 끝나는 잡
+        // (실측 5건 중 4건)에서 손해가 확정되기 때문이다.
+        [Fact]
+        public async Task Claude_OnTheFirstSend_SplitsIntoBlocksWithoutACacheBreakpoint()
+        {
+            var (client, spy) = NewClaudeClient();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+
+            var content = UserContentOf(spy);
+            Assert.Equal(2, content.GetArrayLength());
+            Assert.Equal("SharedContext", content[0].GetProperty("text").GetString());
+            Assert.Equal("text", content[0].GetProperty("type").GetString());
+            Assert.Equal("PlanBody v1", content[1].GetProperty("text").GetString());
+            Assert.False(content[0].TryGetProperty("cache_control", out _));
+        }
+
+        // 재생성 회차: 같은 접두사를 다시 보내면 공유 블록에 중단점을 찍는다.
+        [Fact]
+        public async Task Claude_OnTheSecondSend_MarksTheSharedBlockWithCacheControl()
+        {
+            var (client, spy) = NewClaudeClient();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v2");
+
+            var content = UserContentOf(spy);
+            Assert.Equal(
+                "ephemeral",
+                content[0].GetProperty("cache_control").GetProperty("type").GetString());
+        }
+
+        // 가변 블록에 찍으면 그 지점의 접두사가 매번 달라 캐시가 살지 않고
+        // 쓰기 비용만 늘어난다.
+        [Fact]
+        public async Task Claude_NeverMarksTheVolatileBlock()
+        {
+            var (client, spy) = NewClaudeClient();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v2");
+
+            Assert.False(UserContentOf(spy)[1].TryGetProperty("cache_control", out _));
+        }
+
+        // 시스템 블록의 중단점은 이미 동작 중이고(실측 1,818 히트), user 블록이 달라진
+        // 호출에서도 최소한의 폴백 접두사 역할을 한다. 어떤 경우에도 유지한다.
+        [Fact]
+        public async Task Claude_AlwaysKeepsTheSystemBlockBreakpoint()
+        {
+            var (client, spy) = NewClaudeClient();
+
+            await client.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+
+            var system = JsonDocument.Parse(spy.LastRequestContent!).RootElement
+                .GetProperty("system")[0];
+            Assert.Equal(
+                "ephemeral",
+                system.GetProperty("cache_control").GetProperty("type").GetString());
+        }
+
+        // 클라이언트마다 기억이 독립이어야 테스트가 서로를 오염시키지 않고,
+        // Actor/Critic처럼 서로 다른 클라이언트가 접두사를 공유하지도 않는다.
+        [Fact]
+        public async Task Claude_MemoryIsPerClientInstance()
+        {
+            var (client1, _) = NewClaudeClient();
+            var (client2, spy2) = NewClaudeClient();
+
+            await client1.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+            await client2.ChatAsync("SharedSystem", "SharedContext", 0.1f,
+                volatileUserSuffix: "PlanBody v1");
+
+            Assert.False(UserContentOf(spy2)[0].TryGetProperty("cache_control", out _));
+        }
     }
 }

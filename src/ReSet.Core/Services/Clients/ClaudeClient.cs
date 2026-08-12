@@ -15,15 +15,24 @@ namespace ReSet.Core.Services.Clients
         private readonly string _apiKey;
         private readonly string _endpoint;
         private readonly string _modelName;
+        private readonly PromptCacheBreakpointPolicy _cacheBreakpointPolicy;
 
         public string ProviderName => "Claude";
         public string ModelName => _modelName;
 
-        public ClaudeClient(HttpClient httpClient, string apiKey, string endpoint, string modelName)
+        public ClaudeClient(
+            HttpClient httpClient,
+            string apiKey,
+            string endpoint,
+            string modelName,
+            PromptCacheBreakpointPolicy? cacheBreakpointPolicy = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _apiKey = apiKey;
             _modelName = modelName;
+            // 기본값은 정적 공유가 아니라 인스턴스마다 새 정책이다. 공유하면 서로 다른
+            // 역할(Actor/Critic)이나 테스트끼리 접두사 기억이 섞인다.
+            _cacheBreakpointPolicy = cacheBreakpointPolicy ?? new PromptCacheBreakpointPolicy();
 
             var ep = string.IsNullOrWhiteSpace(endpoint) ? "https://api.anthropic.com" : endpoint.Trim();
             if (ep.EndsWith("/v1/messages", StringComparison.OrdinalIgnoreCase))
@@ -35,8 +44,6 @@ namespace ReSet.Core.Services.Clients
 
         public async Task<AiResult> ChatAsync(string systemPrompt, string userPrompt, float temperature, string? effort = null, string? volatileUserSuffix = null, CancellationToken cancellationToken = default)
         {
-            userPrompt = PromptComposition.MergeVolatileSuffix(userPrompt, volatileUserSuffix);
-
             if (string.IsNullOrWhiteSpace(_apiKey))
             {
                 throw new ArgumentException("Claude API 키가 설정되지 않았습니다.");
@@ -66,6 +73,8 @@ namespace ReSet.Core.Services.Clients
             }
 
             bool enableThinking = version >= 3.7 && (!string.IsNullOrWhiteSpace(effort) || lowerModel.Contains("opus-4-8") || lowerModel.Contains("sonnet-4-6") || version >= 5.0);
+
+            var userMessages = BuildUserMessages(systemPrompt, userPrompt, volatileUserSuffix);
 
             // 프롬프트 캐싱 적용 (System 영역 전체를 ephemeral 캐시로 지정)
             var systemBlocks = new[]
@@ -101,7 +110,7 @@ namespace ReSet.Core.Services.Clients
                     {
                         { "model", _modelName },
                         { "system", systemBlocks },
-                        { "messages", new[] { new { role = "user", content = userPrompt } } },
+                        { "messages", userMessages },
                         { "max_tokens", maxTokens },
                         { "thinking", new { type = "adaptive", display = "summarized" } },
                         { "output_config", new { effort = apiEffort } }
@@ -134,10 +143,7 @@ namespace ReSet.Core.Services.Clients
                     {
                         model = _modelName,
                         system = systemBlocks,
-                        messages = new[]
-                        {
-                            new { role = "user", content = userPrompt }
-                        },
+                        messages = userMessages,
                         max_tokens = maxTokens,
                         thinking = new
                         {
@@ -156,10 +162,7 @@ namespace ReSet.Core.Services.Clients
                     {
                         model = _modelName,
                         system = systemBlocks,
-                        messages = new[]
-                        {
-                            new { role = "user", content = userPrompt }
-                        },
+                        messages = userMessages,
                         max_tokens = maxTokens
                     };
                 }
@@ -169,10 +172,7 @@ namespace ReSet.Core.Services.Clients
                     {
                         model = _modelName,
                         system = systemBlocks,
-                        messages = new[]
-                        {
-                            new { role = "user", content = userPrompt }
-                        },
+                        messages = userMessages,
                         max_tokens = maxTokens,
                         temperature = temperature
                     };
@@ -266,6 +266,34 @@ namespace ReSet.Core.Services.Clients
                     ThinkingText = thinkingText
                 };
             }
+        }
+
+        /// <summary>
+        /// user 메시지를 만든다. 가변 접미사가 있을 때만 타입 블록 배열로 보내고, 그
+        /// 접두사를 전에 보낸 적이 있으면 공유 블록에 cache_control을 찍는다.
+        ///
+        /// 접미사가 없으면 평문 문자열을 그대로 유지한다 — 표현이 바뀌는 것 자체가
+        /// 접두사를 바꿔, 접미사 없는 호출들끼리의 캐시를 깨기 때문이다.
+        /// OpenAiClient가 같은 이유로 같은 판단을 한다.
+        /// </summary>
+        private object[] BuildUserMessages(string systemPrompt, string userPrompt, string? volatileUserSuffix)
+        {
+            if (string.IsNullOrWhiteSpace(volatileUserSuffix))
+            {
+                return new object[] { new { role = "user", content = (object)userPrompt } };
+            }
+
+            object sharedBlock = _cacheBreakpointPolicy.ShouldMarkBreakpoint(systemPrompt, userPrompt)
+                ? new { type = "text", text = userPrompt, cache_control = new { type = "ephemeral" } }
+                : new { type = "text", text = userPrompt };
+
+            var blocks = new object[]
+            {
+                sharedBlock,
+                new { type = "text", text = volatileUserSuffix }
+            };
+
+            return new object[] { new { role = "user", content = (object)blocks } };
         }
 
         private static double GetClaudeVersion(string modelName)
