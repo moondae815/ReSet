@@ -318,7 +318,7 @@ namespace ReSet.Core.Services
             }
 
             rules.Add($"{ruleIndex++}. Include a Mermaid Flowchart diagram visualizing the business logic flow: ");
-            rules.Add("   - Always wrap the entire text of node labels in double quotes to prevent syntax errors (e.g., id1[\"\"Text (Extra)\"\"] --> id2[\"\"Return Result\"\"]).");
+            rules.Add("   - Always wrap the entire text of node labels in double quotes to prevent syntax errors (e.g., id1[\"Text (Extra)\"] --> id2[\"Return Result\"]).");
             rules.Add("   - Node IDs must be unique alphanumeric characters (e.g., Node1, Node2). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
             rules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another. Keep node IDs simple, using only uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG, INSPG, FAIL9, COMMIT).");
             rules.Add("   - When writing labels on arrows (e.g., -->|Label|), NEVER use double quotes, parentheses, or special characters inside the label.");
@@ -369,6 +369,9 @@ namespace ReSet.Core.Services
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
+            // Critic이 ScoreInterface에서 이 항목을 채점한다(아래 채점 기준 3번).
+            // 생성 규칙에 없으면 모델은 요구받지 않은 것을 쓰지 않고, 그대로 감점된다.
+            rules.Add($"{ruleIndex++}. Explicitly state whether this procedure returns a result set (Rowset) to the caller. State it even when no result set is returned.");
 
             rules.Add($"{ruleIndex++}. [CRITICAL ANTI-SHORTCUT RULE] NEVER use abbreviations, ellipses (...), or phrases like '이하 생략', '기타', 'etc'. You MUST map EVERY SINGLE COLUMN present in the DDL to the markdown table row by row, even if there are 100 columns. Failure to write every column will result in a fatal system crash and your output will be rejected. Do NOT use `dbo.TS[] (이하 생략 가능하나 매핑은 완벽히 수행됨)` or similar shortcut phrases.");
             rules.Add($"{ruleIndex++}. [CRITICAL: 비즈니스 로직 원형 보존 원칙 - 다중 소스 결합 금지 해제] 원본 SQL이 `UNION`, `UNION ALL`, `JOIN`을 통해 여러 테이블에서 데이터를 수집한다면, 의사코드 및 설명에서도 모든 소스 테이블과 분모/분자 집계 수식(SUM 등)을 절대 생략하지 마십시오. (단일 테이블로 단순화하는 것은 치명적 결함으로 간주됩니다.)");
@@ -469,8 +472,9 @@ namespace ReSet.Core.Services
                 checklistSb.AppendLine($"- [ ] ## CRUD 분석 표에 INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보(상수값, 변수, ISNULL 변환 등)가 1:1 대조 표로 완전하게 기술되었습니까?");
             }
 
-            checklistSb.AppendLine("- [ ] Mermaid 흐름도 내부 노드의 한글 텍스트에 큰따옴표(\"\")를 사용하고 문법적 예약어 충돌이 없도록 작성하셨습니까?");
+            checklistSb.AppendLine("- [ ] Mermaid 흐름도 내부 노드의 한글 텍스트를 큰따옴표 한 쌍으로 감싸고 문법적 예약어 충돌이 없도록 작성하셨습니까?");
             checklistSb.AppendLine("- [ ] SP 내부의 에러 처리 분기(예: DELETE/INSERT 실패 시 각각 @@ERROR 조건 분기 및 음수 반환 코드)와 트랜잭션 롤백 동작이 Mermaid 다이어그램 및 본문 설명에 충실히 반영되었습니까?");
+            checklistSb.AppendLine("- [ ] 호출자에게 반환되는 결과셋(Rowset)의 유무를 명시하셨습니까? (반환하지 않는 경우에도 그 사실을 적어야 합니다.)");
 
             var userPrompt = $@"
 <stored-procedure-context>

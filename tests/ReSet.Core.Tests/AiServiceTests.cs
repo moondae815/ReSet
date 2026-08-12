@@ -885,6 +885,69 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("Avoid variable names with '@'", source);
         }
 
+        /// <summary>
+        /// 노드 라벨 예시가 이중 따옴표였다. verbatim이 아닌 일반 문자열의
+        /// \"\"는 따옴표 두 개로 렌더되므로 모델에게 id1[""Text""]가 모범
+        /// 예시로 전달됐고, 그대로 따라 쓴 결과를 L2가 "치명적 Mermaid 문법
+        /// 오류"로 반려했다 - 이 저장소의 배치 실행에서 반복 관측된 패턴이다.
+        /// Critic 기준은 따옴표 1쌍을 요구하므로 예시가 기준과 어긋나 있었다.
+        /// </summary>
+        [Fact]
+        public void MermaidNodeLabelExample_ShowsOneQuotePair_NotDoubled()
+        {
+            var fullPath = System.IO.Path.Combine(
+                RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/AiService.cs");
+            var source = System.IO.File.ReadAllText(fullPath);
+
+            Assert.DoesNotContain("id1[\\\"\\\"Text", source);
+            Assert.DoesNotContain("id2[\\\"\\\"Return Result\\\"\\\"]", source);
+            Assert.Contains("id1[\\\"Text (Extra)\\\"]", source);
+            Assert.Contains("id2[\\\"Return Result\\\"]", source);
+        }
+
+        /// <summary>
+        /// 체크리스트도 같은 결함을 갖고 있었다. 큰따옴표를 쓰라는 항목이
+        /// 정작 그 예시로 ("")를 보여 주면 이중 따옴표를 지시하는 것으로 읽힌다.
+        /// </summary>
+        [Fact]
+        public void MermaidChecklist_DoesNotDemonstrateDoubledQuotes()
+        {
+            var fullPath = System.IO.Path.Combine(
+                RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/AiService.cs");
+            var source = System.IO.File.ReadAllText(fullPath);
+
+            Assert.DoesNotContain("큰따옴표(\\\"\\\")", source);
+        }
+
+        /// <summary>
+        /// Critic은 ScoreInterface에서 결과셋(Rowset) 반환 여부 명시를 채점하는데,
+        /// 그 요구가 분할 경로(로컬 모델용) 규칙에만 있고 통짜 경로의 Actor
+        /// 규칙에는 없었다. 실측 배치에서 "결과셋 반환 여부가 명시되어 있지
+        /// 않습니다"라는 인터페이스 감점이 반복됐다.
+        ///
+        /// 소스 전체를 훑으면 Critic 기준 때문에 언제나 통과하므로,
+        /// Actor 규칙을 쌓는 rules.Add 줄만 골라서 확인한다.
+        /// </summary>
+        [Fact]
+        public void ResultSetRule_IsInGenerationRules_NotOnlyInCriticCriteria()
+        {
+            var fullPath = System.IO.Path.Combine(
+                RepoPaths.FindRepoRoot(), "src/ReSet.Core/Services/AiService.cs");
+            var lines = System.IO.File.ReadAllLines(fullPath);
+
+            var found = false;
+            foreach (var line in lines)
+            {
+                if (line.Contains("rules.Add(") && line.Contains("Rowset"))
+                {
+                    found = true;
+                    break;
+                }
+            }
+
+            Assert.True(found, "Actor 생성 규칙(rules.Add)에 결과셋(Rowset) 명시 요구가 없습니다.");
+        }
+
         private static IReadOnlyList<BatchStepPlan> TwoSteps() => new[]
         {
             new BatchStepPlan("S01", "수수료율 스냅샷",
