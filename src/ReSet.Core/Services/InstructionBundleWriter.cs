@@ -363,12 +363,16 @@ namespace ReSet.Core.Services
         /// 지시서는 그 회차가 읽어야 할 것만 가리켜야 한다"는 이 작업의 목적과
         /// 정면으로 어긋난다.
         ///
-        /// 목차가 없거나(레이아웃 폴백) 이 단계의 TargetTables를 특정할 수 없거나,
+        /// 목차가 없거나(레이아웃 폴백) 이 단계의 SchemaTables를 특정할 수 없거나,
         /// 특정했는데도 일치하는 의존성이 하나도 없으면 전체 목록으로 떨어뜨리고
         /// 경고를 남긴다. 빈 목록을 조용히 내보내면 "이 단계는 스키마를 안 쓴다"와
         /// "일치 규칙이 틀렸다"를 구분할 방법이 없어진다 - 데이터 액세스 코드를
         /// 쓰다가 필요한 테이블의 컬럼 정의를 찾지 못하는 쪽이, 몇 개 더 실리는
         /// 쪽보다 훨씬 나쁘다.
+        ///
+        /// 스코프의 원천이 TargetTables가 아니라 SchemaTables인 이유: 앞은 쓰기 대상만
+        /// 담는 검증 재료라, 그것으로 좁히면 에이전트가 SELECT를 쓸 원본 테이블의 컬럼
+        /// 정의를 받지 못한다.
         /// </summary>
         private static IReadOnlyList<IndexEntry> DependenciesForStep(
             IReadOnlyList<IndexEntry> dependencies, PlanLayout? layout, string stepCode)
@@ -380,29 +384,29 @@ namespace ReSet.Core.Services
                 return dependencies;
             }
 
-            // 목차가 대상 테이블을 안 냈으면 좁힐 근거가 없어 전체를 준다. 아래
+            // 목차가 스키마 테이블을 안 냈으면 좁힐 근거가 없어 전체를 준다. 아래
             // matched.Count == 0 폴백과 결과가 같으므로 관측성도 같아야 한다 -
             // 여기만 조용하면 그 회차 하나가 Job 전체 스키마를 받은 사실이
             // "경고 0건"에 묻힌다.
-            if (step.TargetTables.Count == 0)
+            if (step.SchemaTables.Count == 0)
             {
                 Log.Warning(
-                    "단계의 목차 TargetTables가 비어 있어 의존성 스키마를 좁히지 못하고 전체 목록으로 대체합니다 - " +
+                    "단계의 목차 SchemaTables가 비어 있어 의존성 스키마를 좁히지 못하고 전체 목록으로 대체합니다 - " +
                     "Step: {StepCode}, 스키마 수: {Count}개",
                     stepCode, dependencies.Count);
                 return dependencies;
             }
 
             var matched = dependencies
-                .Where(dep => step.TargetTables.Any(target => TableTokensMatch(dep.Label, target)))
+                .Where(dep => step.SchemaTables.Any(target => TableTokensMatch(dep.Label, target)))
                 .ToList();
 
             if (matched.Count == 0)
             {
                 Log.Warning(
-                    "단계의 TargetTables와 일치하는 의존성 스키마를 찾지 못해 전체 목록으로 대체합니다 - " +
-                    "Step: {StepCode}, TargetTables: {TargetTables}",
-                    stepCode, string.Join(", ", step.TargetTables));
+                    "단계의 SchemaTables와 일치하는 의존성 스키마를 찾지 못해 전체 목록으로 대체합니다 - " +
+                    "Step: {StepCode}, SchemaTables: {SchemaTables}",
+                    stepCode, string.Join(", ", step.SchemaTables));
                 return dependencies;
             }
 

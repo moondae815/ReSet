@@ -421,9 +421,86 @@ S02 본문
         }
 
         [Fact]
-        public async Task WriteAsync_ShouldWarnWhenStepDeclaresNoTargetTables()
+        public async Task WriteAsync_ShouldScopeStepSchemasBySchemaTablesNotTargetTables()
         {
-            // TargetTables가 비면 필터가 통째로 풀려 그 회차만 Job 전체 스키마를
+            // 쓰기 대상만으로 좁히면 에이전트가 SELECT를 쓸 원본 스키마를 못 받는다.
+            // 실측 S01은 쓰기 5개·읽기 7개였다 - 쓰기만 주면 그 회차는 조회 코드를
+            // 쓸 수 없다.
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { ["S01"] = "### S01 스냅샷 생성\n조각 본문" },
+                new[]
+                {
+                    new BatchStepPlan(
+                        "S01", "스냅샷 생성",
+                        new[] { "UP_S01" },
+                        new[] { "dbo.TWrite" },
+                        new[] { "-1" },
+                        false,
+                        new[] { "dbo.TWrite", "dbo.TRead" }),
+                },
+                null);
+
+            var inputs = Inputs(layout) with
+            {
+                SpDefs = new List<SpDefinition>
+                {
+                    SpDefWithDependency("UP_S01", "TWrite"),
+                    SpDefWithDependency("UP_S01_Read", "TRead"),
+                    SpDefWithDependency("UP_Other", "TOther"),
+                },
+            };
+
+            await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+
+            var s01Task = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-01-S01.md"));
+
+            Assert.Contains("dbo.TWrite", s01Task);
+            Assert.Contains("dbo.TRead", s01Task);
+            Assert.DoesNotContain("dbo.TOther", s01Task);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldFallBackToEveryDependency_WhenSchemaTablesAreEmpty()
+        {
+            // 이 브랜치 이전에 만들어진 목차에는 SchemaTables가 없다. 좁힐 근거가
+            // 없으면 전체를 준다 - 종전과 같은 동작이다.
+            var layout = new PlanLayout(
+                "골격",
+                new Dictionary<string, string> { ["S01"] = "### S01 스냅샷 생성\n조각 본문" },
+                new[]
+                {
+                    new BatchStepPlan(
+                        "S01", "스냅샷 생성",
+                        new[] { "UP_S01" },
+                        new[] { "dbo.TWrite" },
+                        new[] { "-1" },
+                        false,
+                        Array.Empty<string>()),
+                },
+                null);
+
+            var inputs = Inputs(layout) with
+            {
+                SpDefs = new List<SpDefinition>
+                {
+                    SpDefWithDependency("UP_S01", "TWrite"),
+                    SpDefWithDependency("UP_Other", "TOther"),
+                },
+            };
+
+            await new InstructionBundleWriter().WriteAsync(inputs, CancellationToken.None);
+
+            var s01Task = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-01-S01.md"));
+
+            Assert.Contains("dbo.TWrite", s01Task);
+            Assert.Contains("dbo.TOther", s01Task);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldWarnWhenStepDeclaresNoSchemaTables()
+        {
+            // SchemaTables가 비면 필터가 통째로 풀려 그 회차만 Job 전체 스키마를
             // 받는다. 실측: POQSettleProcDaily5의 S12가 55개를 받는 동안 나머지는
             // 1개였는데 로그에는 "경고: 0건"으로 끝났다. 바로 아래 matched.Count == 0
             // 폴백에는 경고가 있으므로, 같은 결과를 내는 두 폴백의 관측성이
@@ -464,7 +541,7 @@ S02 본문
                 Log.Logger = previousLogger;
             }
 
-            Assert.Contains(sink.Messages, m => m.Contains("S02") && m.Contains("TargetTables"));
+            Assert.Contains(sink.Messages, m => m.Contains("S02") && m.Contains("SchemaTables"));
 
             // 폴백 자체는 유지한다 - 좁히지 못했다고 스키마를 통째로 빼앗으면
             // 그 회차는 컬럼을 확인할 방법이 아예 없어진다.
