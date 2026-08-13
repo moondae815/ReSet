@@ -275,6 +275,32 @@ public sealed class VerificationDocumentFormatterTests
         Assert.Contains("단계 검증: 17/19", markdown);
     }
 
+    // 설계 §2.1 샘플은 단계 검증을 종합 신뢰도 바로 아래, 축별 점수보다 위에 둔다 -
+    // 커버리지는 독자가 종합 신뢰도를 저울질할 때 곁에 둘 수치이지, 축별 점수
+    // 뒤에 딸린 부록이 아니다.
+    [Fact]
+    public void FormatVerifiedDocument_WithCoverage_PlacesStepLineRightAfterOverallScore()
+    {
+        var review = new ReviewResult
+        {
+            HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9,
+            ScoreInterface = 8, ScoreReadability = 9, ScoreException = 9
+        };
+
+        var markdown = VerificationDocumentFormatter.FormatVerifiedDocument(
+            "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
+            new DateTime(2026, 8, 13),
+            scope: null,
+            coverage: new VerificationCoverage(19, 17, false));
+
+        var overallScoreIndex = markdown.IndexOf("종합 신뢰도", StringComparison.Ordinal);
+        var stepCoverageIndex = markdown.IndexOf("단계 검증", StringComparison.Ordinal);
+        var firstAxisScoreIndex = markdown.IndexOf("정합성 점수", StringComparison.Ordinal);
+
+        Assert.True(overallScoreIndex < stepCoverageIndex, "단계 검증은 종합 신뢰도 뒤에 와야 합니다.");
+        Assert.True(stepCoverageIndex < firstAxisScoreIndex, "단계 검증은 축별 점수보다 앞에 와야 합니다.");
+    }
+
     // 분모가 없는 상태를 "0/0"으로 적으면 비율처럼 보이는 거짓이 된다.
     [Fact]
     public void FormatVerifiedDocument_WhenSplitDidNotRun_SaysSoInsteadOfARatio()
