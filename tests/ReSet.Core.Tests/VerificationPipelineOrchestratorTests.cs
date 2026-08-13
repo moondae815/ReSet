@@ -6272,6 +6272,61 @@ SELECT 1;
             Assert.Contains("-7", result.Plan);
         }
 
+        // 품질 미달 배너는 Critic의 FeedbackComment를 그대로 인용한다. Critic 코멘트가
+        // "오류코드 -7 반환 경로가 누락되었습니다"처럼 그 코드를 언급하면, 오류코드
+        // 누락 검사가 배너까지 포함한 전체 문서를 훑을 경우 배너의 인용문을 "존재"로
+        // 오인해 진짜 누락을 놓친다. 검사는 배너가 아니라 본문만 봐야 한다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenQualityRejectedBannerQuotesACode_StillDetectsTheGenuineOmission()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            // Critic은 매번 결함으로 거부하고 그 이유에 "-7"을 인용한다. maxL2Attempts=1이므로
+            // 재시도 없이 곧바로 품질 불합격으로 확정된다.
+            var defectiveReview = new ReviewResult
+            {
+                HasDefects = true,
+                FeedbackComment = "오류코드 -7 반환 경로가 누락되었습니다",
+                ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4
+            };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(defectiveReview));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            // 명세서는 -1과 -7을 반환한다고 적혀 있는데, 단계 섹션은 -1만 싣는다.
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -1 이고 @po_intRetVal = -7 이다.")
+            };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            // 배너 자체가 "-7"을 인용하고 있어야 회귀를 재현한다.
+            Assert.Contains("오류코드 -7 반환 경로가 누락되었습니다", result.Plan);
+            // 본문에는 실제로 -7이 없다(HealthyStepSection은 ErrorCodes[0]만 싣는다) - 배너의
+            // 인용문에 속지 않고 진짜 누락을 잡아야 한다.
+            Assert.Contains("[오류코드 누락]", result.Plan);
+        }
+
         // POQSettleProc7 재현: 모델이 빈 Steps 목록을 내면 분할이 무산되는데,
         // 종전에는 문서에 그 사실이 전혀 남지 않았다.
         [Fact]

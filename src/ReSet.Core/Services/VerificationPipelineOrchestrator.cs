@@ -1711,6 +1711,14 @@ namespace ReSet.Core.Services
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
+            // consolidatedPlan과 별도로 배너 없는 원본 본문만 담는다. L1Exhausted/
+            // QualityRejected/ReviewNotRun 배너는 실패 사유(Critic 피드백 등)를 그대로
+            // 인용하므로, 그 문구에 우연히 오류코드 숫자가 섞이면 본문을 훑어야 할
+            // AttachPipelineBanners의 오류코드 누락 검사가 배너 텍스트에서 "존재"를
+            // 오판한다 - QualityRejected 배너가 Critic 코멘트를 그대로 옮기는 것이
+            // 실제로 이 사고를 낸 자리다. 루프의 각 종료 지점에서 배너를 붙이기
+            // 직전의 값을 여기에 담아 둔다.
+            string documentBodyForChecks = string.Empty;
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
             // 재수립 시점에 필요한데 기존에는 if 블록 안에서만 살아 있었다.
@@ -1916,6 +1924,10 @@ namespace ReSet.Core.Services
                     finalAiResult = rescued.Generation ?? finalAiResult;
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
+                    // rescued.Markdown에는 이미 QualityRejected 배너가 붙어 있다(RetryRescue
+                    // 참조). 코드 대조는 배너 없는 원본이 필요하므로 bestAttempt.Current가
+                    // 들고 있는 채점 시점의 원본을 쓴다.
+                    documentBodyForChecks = bestAttempt.Current!.Markdown;
                     consolidatedPlan = rescued.Markdown;
                     break;
                 }
@@ -1951,12 +1963,17 @@ namespace ReSet.Core.Services
                             finalAiResult = rescued.Generation ?? finalAiResult;
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
+                            // rescued.Markdown은 이미 배너가 붙은 문자열이다 - 원본은
+                            // bestAttempt.Current에서 가져온다.
+                            documentBodyForChecks = bestAttempt.Current!.Markdown;
                             consolidatedPlan = rescued.Markdown;
                             break;
                         }
 
                         _userInteraction.NotifyError($"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
                         planOutcome = VerificationOutcome.L1Exhausted;
+                        // 배너를 붙이기 직전의 값이 배너 없는 원본이다.
+                        documentBodyForChecks = consolidatedPlan;
                         consolidatedPlan = VerificationBanner.L1Exhausted(l1Result.Errors) + consolidatedPlan;
                         break;
                     }
@@ -2085,6 +2102,10 @@ namespace ReSet.Core.Services
                         finalAiResult = rescued?.Generation ?? finalAiResult;
                         planOutcome = VerificationOutcome.QualityRejected;
                         planReview = adoptedReview;
+                        // rescued가 있으면 배너 없는 원본은 bestAttempt.Current에 있다.
+                        // 없으면(구제할 후보가 없음) 지금 값이 곧 배너를 붙이기 직전의
+                        // 원본이다 - 아래에서 그 값을 읽은 뒤에 덮어쓴다.
+                        documentBodyForChecks = rescued != null ? bestAttempt.Current!.Markdown : consolidatedPlan;
                         consolidatedPlan = rescued?.Markdown
                             ?? VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + consolidatedPlan;
                         break;
@@ -2109,6 +2130,7 @@ namespace ReSet.Core.Services
                         finalAiResult = rescued.Generation ?? finalAiResult;
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
+                        documentBodyForChecks = bestAttempt.Current!.Markdown;
                         consolidatedPlan = rescued.Markdown;
                         break;
                     }
@@ -2116,6 +2138,7 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyError(
                         $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
                     planOutcome = VerificationOutcome.ReviewNotRun;
+                    documentBodyForChecks = consolidatedPlan;
                     consolidatedPlan =
                         VerificationBanner.ReviewNotRun(reviewFailureReason ?? "사유가 기록되지 않았습니다.") + consolidatedPlan;
                     break;
@@ -2134,6 +2157,8 @@ namespace ReSet.Core.Services
                     }
                     planReview = l2Result;
                     _userInteraction.NotifyValidationSuccess(jobName);
+                    // 통과 경로는 배너가 붙지 않으므로 지금 값이 곧 원본이다.
+                    documentBodyForChecks = consolidatedPlan;
                     break;
                 }
             }
@@ -2148,9 +2173,12 @@ namespace ReSet.Core.Services
             // 않는다. (2) 앞으로 채택 문서를 이전 회차로 되돌리는 새 종료 경로를
             // 추가한다면, 그 경로는 반드시 currentPlanStructure를 그 회차의 목차로
             // 되감아야 한다 — 안 그러면 이 재계산이 채택되지 않은 문서를 서술한다.
+            // (3) 루프에 새 종료 경로(break/return)를 추가한다면 documentBodyForChecks도
+            // 그 자리에서 함께 채워야 한다 - 빠뜨리면 오류코드 누락 검사가 직전 회차의
+            // 원본을 보게 된다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             consolidatedPlan = AttachPipelineBanners(
-                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
@@ -2391,8 +2419,10 @@ namespace ReSet.Core.Services
                     // 회차에서 사라졌거나 새로 생긴 단계 코드를 반영하지 못한 채 낡은
                     // 목록을 계속 보여준다.
                     adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                    // 이 경로의 consolidatedPlan은 방금 rePlan에서 받은 배너 없는 원본이다
+                    // (아래 L1Exhausted 배너는 이 호출 다음에 붙는다).
                     consolidatedPlan = AttachPipelineBanners(
-                        consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+                        consolidatedPlan, consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 
                     // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
                     // 일부러 건너뛴다 — 통짜 재작성이 단계별로 확보한 본문을 무너뜨리기
@@ -2414,9 +2444,20 @@ namespace ReSet.Core.Services
         ///
         /// 재시도 루프 종료 직후와 L3 피드백 재생성 직후, 두 자리에서 호출된다.
         /// 두 벌로 두면 한쪽만 고쳐지는 날이 온다.
+        ///
+        /// <paramref name="documentBody"/>는 <paramref name="consolidatedPlan"/>과 달리
+        /// 배너가 전혀 붙지 않은 원본이다. L1Exhausted·QualityRejected·ReviewNotRun
+        /// 배너는 실패 사유(L1 오류 목록, Critic 코멘트 등)를 그대로 인용하는데, 그
+        /// 문구에 우연히 숫자 오류코드가 섞이면 오류코드 누락 검사가 배너의 인용문을
+        /// "문서에 존재"로 오판한다 - Critic이 "오류코드 -7 반환 경로가 누락되었습니다"라고
+        /// 쓴 QualityRejected 배너가 실제로 이 사고를 냈다. 본문만 훑어야 하는 검사는
+        /// 반드시 이 매개변수를 쓴다. 이 메서드가 자체로 앞서 붙이는 배너들
+        /// (UnverifiableSteps·StepFloorViolations·SplitGenerationSkipped)도 같은 이유로
+        /// consolidatedPlan을 오염시키므로, documentBody는 그 배너들의 영향도 받지 않는다.
         /// </summary>
         private string AttachPipelineBanners(
             string consolidatedPlan,
+            string documentBody,
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
@@ -2503,7 +2544,8 @@ namespace ReSet.Core.Services
             // 먼저 일어났다. 목차를 전혀 쓰지 않는다는 것이 이 검사의 존재 이유다.
             if (!string.IsNullOrEmpty(consolidatedPlan))
             {
-                var missingCodes = MechanicalValidator.FindMissingErrorCodes(consolidatedPlan, specReturnCodes);
+                // consolidatedPlan이 아니라 documentBody를 스캔한다 - 위 요약 참조.
+                var missingCodes = MechanicalValidator.FindMissingErrorCodes(documentBody, specReturnCodes);
                 if (missingCodes.Count > 0)
                 {
                     Log.Warning(
