@@ -19,6 +19,9 @@ namespace ReSet.Core.Services.Clients.Cli
         public string? Status { get; init; }
         public string? Response { get; init; }
 
+        /// <summary>토큰 집계. 봉투에 usage 객체가 없으면 null이다.</summary>
+        public CliUsage? Usage { get; init; }
+
         public bool IsSuccess =>
             string.Equals(Status, "SUCCESS", StringComparison.OrdinalIgnoreCase);
     }
@@ -135,7 +138,8 @@ namespace ReSet.Core.Services.Clients.Cli
                 return new AntigravityCliResponse
                 {
                     Status = ReadString(root, "status"),
-                    Response = ReadString(root, "response")
+                    Response = ReadString(root, "response"),
+                    Usage = ReadUsage(root)
                 };
             }
             catch (JsonException ex)
@@ -150,6 +154,29 @@ namespace ReSet.Core.Services.Clients.Cli
         /// 그것은 위의 catch (JsonException)에 걸리지 않는다. 스키마가 바뀌면 출력 덤프 없이
         /// 프레임워크 기본 메시지만 튀어나온다. ClaudeCliClient.ReadString과 같은 방식으로 막는다.
         /// </summary>
+        /// <summary>
+        /// agy의 필드 이름은 세 CLI 중 가장 많이 다르다. 캐시 읽기는 cache_read_tokens이고,
+        /// 캐시 쓰기에 해당하는 항목은 봉투에 없다. 대신 thinking_tokens를 유일하게 내놓는다.
+        ///
+        /// 없는 항목을 0으로 채우지 않는다. 0을 넣으면 "캐시 쓰기가 0회였다"는 측정값이
+        /// 되어, 나중에 캐시가 도는지 판정할 때 근거로 쓰인다. 실제로는 알 수 없다.
+        /// </summary>
+        private static CliUsage? ReadUsage(JsonElement root)
+        {
+            if (!root.TryGetProperty("usage", out var usage)
+                || usage.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return new CliUsage(
+                Input: CliUsage.ReadCounter(usage, "input_tokens"),
+                Output: CliUsage.ReadCounter(usage, "output_tokens"),
+                CacheWrite: null,
+                CacheRead: CliUsage.ReadCounter(usage, "cache_read_tokens"),
+                Thinking: CliUsage.ReadCounter(usage, "thinking_tokens"));
+        }
+
         private static string? ReadString(JsonElement root, string propertyName) =>
             root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
@@ -192,6 +219,9 @@ namespace ReSet.Core.Services.Clients.Cli
             }
 
             var response = ParseResult(processResult.StandardOutput);
+
+            // 실패 판정보다 먼저 남긴다. 실패한 호출도 토큰을 태웠다.
+            response.Usage?.WriteToLog(ProviderName);
 
             // agy는 쿼터 소진 같은 실패도 종료 코드 0으로 끝내면서 stdout JSON에만 담는다.
             // 분류기는 stdout을 보지 않으므로(오진 방지) 원문 JSON을 extraDetail로 직접 넘긴다.
