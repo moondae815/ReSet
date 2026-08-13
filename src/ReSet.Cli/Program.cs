@@ -874,7 +874,9 @@ namespace ReSet.Cli
                                     provider,
                                     modelName,
                                     consolidatorEffort,
-                                    DateTime.Now));
+                                    DateTime.Now,
+                                    scope: null,
+                                    coverage: pipelineResult.Coverage));
 
                             if (aiResult != null)
                             {
@@ -1430,7 +1432,9 @@ namespace ReSet.Cli
                                     provider,
                                     modelName,
                                     consolidatorEffort,
-                                    DateTime.Now));
+                                    DateTime.Now,
+                                    scope: null,
+                                    coverage: pipelineResult.Coverage));
 
                             if (aiResult != null)
                             {

@@ -254,4 +254,62 @@ public sealed class VerificationDocumentFormatterTests
         Assert.Contains("분석 범위: 직접 의존성", yaml);
         Assert.Contains("종합 신뢰도: 80", yaml);
     }
+
+    // 사람이 점수를 믿을지 판단할 재료다. 실측에서 계약을 20군데 깬 문서가
+    // 92점, 100% 지킨 문서가 88점이었다 - 점수만으로는 구분되지 않는다.
+    [Fact]
+    public void FormatVerifiedDocument_WithCoverage_RendersTheStepRatio()
+    {
+        var review = new ReviewResult
+        {
+            HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9,
+            ScoreInterface = 8, ScoreReadability = 9, ScoreException = 9
+        };
+
+        var markdown = VerificationDocumentFormatter.FormatVerifiedDocument(
+            "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
+            new DateTime(2026, 8, 13),
+            scope: null,
+            coverage: new VerificationCoverage(19, 17, false));
+
+        Assert.Contains("단계 검증: 17/19", markdown);
+    }
+
+    // 분모가 없는 상태를 "0/0"으로 적으면 비율처럼 보이는 거짓이 된다.
+    [Fact]
+    public void FormatVerifiedDocument_WhenSplitDidNotRun_SaysSoInsteadOfARatio()
+    {
+        var review = new ReviewResult
+        {
+            HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9,
+            ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+        };
+
+        var markdown = VerificationDocumentFormatter.FormatVerifiedDocument(
+            "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
+            new DateTime(2026, 8, 13),
+            scope: null,
+            coverage: new VerificationCoverage(null, 0, false));
+
+        Assert.Contains("단계 검증: 미실행", markdown);
+        Assert.DoesNotContain("0/0", markdown);
+    }
+
+    // 이 포매터는 단일 SP 명세서도 쓴다. 단계 개념이 없는 문서에 이 줄이
+    // 붙으면 매 명세서마다 의미 없는 필드가 생긴다.
+    [Fact]
+    public void FormatVerifiedDocument_WithoutCoverage_OmitsTheLineEntirely()
+    {
+        var review = new ReviewResult
+        {
+            HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9,
+            ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+        };
+
+        var markdown = VerificationDocumentFormatter.FormatVerifiedDocument(
+            "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
+            new DateTime(2026, 8, 13));
+
+        Assert.DoesNotContain("단계 검증", markdown);
+    }
 }

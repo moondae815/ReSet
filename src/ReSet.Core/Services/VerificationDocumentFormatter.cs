@@ -24,7 +24,8 @@ public static class VerificationDocumentFormatter
         string modelName,
         string? effort,
         DateTime timestamp,
-        AnalysisScope? scope = null)
+        AnalysisScope? scope = null,
+        VerificationCoverage? coverage = null)
     {
         // 점수 노출 여부는 review의 null 여부가 아니라 종료 상태가 결정한다.
         // 1차 시도의 리뷰 결과가 남아 있어도 최종적으로 검증되지 않았다면 점수를 실으면 안 된다.
@@ -54,10 +55,20 @@ CRUD 점수: {review.ScoreCrud}/10
             _ => string.Empty
         };
 
+        // 점수 옆에 검증량을 놓는다. 점수는 읽어 본 품질이고 이것은 대조해 본
+        // 분량이라 서로를 대신하지 못한다. 단일 SP 명세서에는 단계 개념이 없으므로
+        // coverage가 null이면 줄 자체를 만들지 않는다 - scope와 같은 규칙이다.
+        var coverageLine = coverage switch
+        {
+            null => string.Empty,
+            { StepsTotal: null } => "\n단계 검증: 미실행 (목차가 단계 목록을 내지 못함)",
+            var c => $"\n단계 검증: {c.StepsVerified}/{c.StepsTotal}"
+        };
+
         // 아래 두 주석은 남는다. 필드 자체의 설명이라 프롬프트에서 복제한 것이 아니고
         // 드리프트할 대상이 없다.
         var yamlFrontMatter = $@"---
-검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scopeLine}{scoreLines}
+검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scopeLine}{scoreLines}{coverageLine}
 ---
 
 ";
