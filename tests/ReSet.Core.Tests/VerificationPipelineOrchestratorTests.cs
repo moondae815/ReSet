@@ -6355,6 +6355,46 @@ SELECT 1;
             Assert.Contains("[분할 미실행]", result.Plan);
         }
 
+        // POQSettleProc7의 실제 사고 조합: 목차가 빈 Steps를 내 분할이 무산되고,
+        // 그 폴백 단일 호출 문서가 원본 오류코드까지 놓친다. 두 검사는 서로 다른
+        // 코드 경로([분할 미실행]은 adoptedSteps == null 분기, [오류코드 누락]은
+        // 분할 여부와 무관하게 항상 도는 FindMissingErrorCodes)라 독립적으로는
+        // 각각 테스트돼 있었지만, 같은 문서에 함께 실리는 조합은 지금까지 아무
+        // 테스트도 확인하지 않았다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenOutlineYieldsNoStepsAndCodeIsDropped_PrependsBothBanners()
+        {
+            var emptyStepsJson = "```json\n{\n  \"Steps\": []\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + emptyStepsJson });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = SkeletonMarkdown }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            // 명세서는 -7을 반환한다고 적혀 있는데, 분할이 무산돼 폴백한 단일 호출
+            // 문서(SkeletonMarkdown)에는 어디에도 없다.
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -7 이다.")
+            };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Contains("[분할 미실행]", result.Plan);
+            Assert.Contains("[오류코드 누락]", result.Plan);
+            Assert.Contains("-7", result.Plan);
+        }
+
         // 부재를 확인하는 테스트가 존재를 확인하는 테스트만큼 중요하다 - 조건이
         // 뒤집혀 배너가 늘 붙으면 정상 산출물마다 거짓 경고가 실린다.
         [Fact]
