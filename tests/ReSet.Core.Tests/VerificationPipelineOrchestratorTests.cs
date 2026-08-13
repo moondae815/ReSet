@@ -6512,6 +6512,52 @@ SELECT 1;
             Assert.Contains("-7", result.Plan);
         }
 
+        /// <summary>
+        /// 단계 본문 생성이 끝내 빈 응답만 돌려주면 하한 검사는 돈 적이 없다 -
+        /// 검사할 본문이 없었기 때문이다. 종전에는 그 단계가 QualityFloor로 기록돼
+        /// 검증됨으로 집계됐고, `단계 검증: 1/1` 아래에 "이 단계는 생성에
+        /// 실패했습니다"라고 적힌 섹션이 남을 수 있었다.
+        ///
+        /// 배선을 끝까지 확인한다. 값 객체 단위 테스트는 "종류가 주어지면 뺀다"까지만
+        /// 증명하고, 오케스트레이터가 그 종류를 실제로 만드는지는 보지 못한다 -
+        /// 이번 브랜치에서 그 틈으로 두 번 결함이 새어 나갔다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAStepBodyNeverGenerates_ExcludesItFromCoverageAndSaysSo()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            // 모든 시도가 빈 응답. 재시도까지 소진되면 본문이 없는 채로 확정된다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = string.Empty });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 본문 없는 단계는 검증됐다고 셀 수 없다.
+            Assert.NotNull(result.Coverage);
+            Assert.Equal(1, result.Coverage!.StepsTotal);
+            Assert.Equal(0, result.Coverage.StepsVerified);
+            Assert.True(result.Coverage.HasUnverifiedSteps);
+
+            // 그리고 그 사실이 문서에 하한 미달이 아닌 자기 이름으로 실린다.
+            Assert.Contains("[생성 실패]", result.Plan);
+        }
+
         // 부재를 확인하는 테스트가 존재를 확인하는 테스트만큼 중요하다 - 조건이
         // 뒤집혀 배너가 늘 붙으면 정상 산출물마다 거짓 경고가 실린다.
         [Fact]
