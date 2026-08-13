@@ -2513,6 +2513,14 @@ namespace ReSet.Core.Services
                 consolidatedPlan = VerificationBanner.StepFloorViolations(stepFloorViolationMessages) + consolidatedPlan;
             }
 
+            // 하한 미달 다음에 붙여 그 위로 오게 한다. 본문이 없는 것이 부실한
+            // 것보다 심각하므로 먼저 읽혀야 한다.
+            var generationFailedSteps = byKind[StepDefectKind.GenerationFailed].ToList();
+            if (generationFailedSteps.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.GenerationFailedSteps(generationFailedSteps) + consolidatedPlan;
+            }
+
             // 목차 커버리지 검사: 스텝의 내용이 부실한 것과 별개로, 애초에 어느
             // 스텝도 그 프로시저를 다루겠다고 선언하지 않았을 수 있다. 3개
             // 스텝짜리 목차가 12개 프로시저를 받으면 분할은 3개의 통통하고
@@ -3126,7 +3134,7 @@ namespace ReSet.Core.Services
             if (adopted == null)
             {
                 return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
-                    new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} (생성 실패)"));
+                    new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"));
             }
 
             return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} (하한 미달)"));

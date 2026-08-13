@@ -117,6 +117,29 @@ public static class VerificationBanner
     }
 
     /// <summary>
+    /// 모든 시도가 빈 응답을 돌려줘 섹션 본문 자체가 없는 단계를 알린다.
+    ///
+    /// StepFloorViolations와 다른 사실을 나른다 - 저건 "섹션이 최소 요건을 못
+    /// 채웠다"이고 이건 "채울 섹션이 아예 없다"이다. 하한 미달 배너에 섞으면
+    /// "최소 요건을 충족하지 못했습니다"라는 문구가 거짓이 된다. 검증 불가를
+    /// 하한 미달에서 갈라낸 것과 같은 이유다.
+    ///
+    /// 읽는 순서에서는 하한 미달보다 위에 온다. 본문이 없는 것이 부실한 것보다
+    /// 심각하고, 읽는 사람이 먼저 손대야 할 곳이다.
+    /// </summary>
+    public static string GenerationFailedSteps(IReadOnlyList<string> steps)
+    {
+        var stepLines = RenderBulletList(steps, "(단계명이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[생성 실패] 아래 단계는 본문이 생성되지 않았습니다.**"
+            + " 재시도까지 모두 빈 응답이 돌아와 섹션에 담을 내용이 없으며,"
+            + " 따라서 단계 하한 검사도 실행되지 못했습니다."
+            + " 해당 단계는 원본 프로시저를 직접 확인해야 합니다.\n"
+            + stepLines
+            + "\n\n";
+    }
+
+    /// <summary>
     /// 하한 검사가 대조할 재료를 얻지 못한 단계를 알린다.
     ///
     /// StepFloorViolations와 다른 사실을 나른다 - 저건 "섹션이 부실하다"이고

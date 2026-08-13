@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ReSet.Core.Services;
@@ -17,7 +18,13 @@ namespace ReSet.Core.Models
     /// <c>0</c>과 다르다 - 분모가 없는 상태를 0으로 적으면 비율처럼 보이는 거짓이
     /// 된다.
     /// </param>
-    /// <param name="StepsVerified">하한 검사를 실제로 실행한 단계 수.</param>
+    /// <param name="StepsVerified">
+    /// 하한 검사를 실제로 실행한 단계 수. 대조할 재료가 없었거나
+    /// (<see cref="StepDefectKind.Unverifiable"/>) 본문이 생성되지 않은
+    /// (<see cref="StepDefectKind.GenerationFailed"/>) 단계는 빠진다.
+    /// <see cref="StepDefectKind.QualityFloor"/>는 빠지지 않는다 - 검사가 돌았고
+    /// 떨어진 것이라 실행된 쪽에 속한다.
+    /// </param>
     /// <param name="HasDocumentCodeGap">원본 오류코드 중 문서 어디에도 없는 것이 있는가.</param>
     /// <param name="HasUncoveredProcedures">
     /// 목차가 원본 프로시저 커버리지를 확인해 주지 못했는가. 오케스트레이터의
@@ -72,13 +79,24 @@ namespace ReSet.Core.Models
                 return new VerificationCoverage(null, 0, hasDocumentCodeGap, hasUncoveredProcedures);
             }
 
-            var unverifiable = stepFloorViolations?
-                .Values.Count(defect => defect.Kind == StepDefectKind.Unverifiable) ?? 0;
+            // 채택된 목차에 있는 단계의 위반만 센다. stepFloorViolations는 회차별
+            // 스냅샷이고 adoptedSteps는 채택 확정 후 다시 파싱한 값이라, 구제 채택이
+            // 이전 회차 문서를 되살리면 두 집합이 어긋날 수 있다. 그때 위반 수를
+            // 그대로 빼면 존재하지도 않는 단계를 미검증으로 세어 비율이 틀어진다.
+            //
+            // 교집합을 취하면 검증 수가 구조적으로 음수가 될 수 없다. 종전의 음수
+            // 클램프는 이 불일치를 "0 검증"이라는 그럴듯한 값으로 덮고 있었다.
+            var adoptedCodes = new HashSet<string>(
+                adoptedSteps.Select(step => step.Code), StringComparer.OrdinalIgnoreCase);
 
-            var verified = adoptedSteps.Count - unverifiable;
+            var notVerified = stepFloorViolations
+                .Count(entry =>
+                    adoptedCodes.Contains(entry.Key)
+                    && entry.Value.Kind is StepDefectKind.Unverifiable or StepDefectKind.GenerationFailed);
+
             return new VerificationCoverage(
                 adoptedSteps.Count,
-                verified < 0 ? 0 : verified,
+                adoptedSteps.Count - notVerified,
                 hasDocumentCodeGap,
                 hasUncoveredProcedures);
         }

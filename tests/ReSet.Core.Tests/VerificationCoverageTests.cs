@@ -144,5 +144,81 @@ namespace ReSet.Core.Tests
             Assert.False(coverage.HasDocumentCodeGap);
             Assert.True(coverage.NeedsHumanAttention);
         }
+
+        // stepFloorViolations는 회차별 스냅샷이고 adoptedSteps는 채택 확정 후 다시
+        // 파싱한 값이다. 구제 채택이 이전 회차 문서를 되살리면 두 집합이 어긋날 수
+        // 있는데, 그때 위반 수를 그대로 빼면 존재하지도 않는 단계를 미검증으로 세어
+        // 비율이 틀어진다. 채택된 목차에 있는 코드만 센다.
+        [Fact]
+        public void From_IgnoresViolationsForStepsTheAdoptedOutlineDoesNotContain()
+        {
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S01"] = new StepDefect(StepDefectKind.Unverifiable, "S01 (검증 불가)"),
+                // 채택된 목차에 없는 단계. 이전 회차의 잔재다.
+                ["S99"] = new StepDefect(StepDefectKind.Unverifiable, "S99 (검증 불가)")
+            };
+
+            var coverage = VerificationCoverage.From(
+                Steps(3), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
+
+            Assert.Equal(3, coverage.StepsTotal);
+            Assert.Equal(2, coverage.StepsVerified);
+        }
+
+        // 위 규칙이 서면 검증 수는 구조적으로 음수가 될 수 없다. 종전에는 클램프가
+        // 그 불일치를 "0 검증"이라는 그럴듯한 값으로 덮고 있었다.
+        [Fact]
+        public void From_WhenEveryViolationIsForeign_CountsEveryStepAsVerified()
+        {
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S97"] = new StepDefect(StepDefectKind.Unverifiable, "S97 (검증 불가)"),
+                ["S98"] = new StepDefect(StepDefectKind.Unverifiable, "S98 (검증 불가)"),
+                ["S99"] = new StepDefect(StepDefectKind.Unverifiable, "S99 (검증 불가)")
+            };
+
+            var coverage = VerificationCoverage.From(
+                Steps(2), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
+
+            Assert.Equal(2, coverage.StepsVerified);
+            Assert.False(coverage.HasUnverifiedSteps);
+        }
+
+        // 생성 실패는 하한 검사가 돈 적이 없다 - 검사할 본문이 애초에 없었다.
+        // QualityFloor와 같은 종류로 두면 "검사가 돌았고 떨어졌다"에 섞여
+        // 검증됨으로 집계되고, 19/19 아래에 "이 단계는 생성에 실패했습니다"라고
+        // 적힌 섹션이 남는다.
+        [Fact]
+        public void From_SubtractsGenerationFailuresFromTheVerifiedCount()
+        {
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S01"] = new StepDefect(StepDefectKind.GenerationFailed, "S01 (생성 실패)")
+            };
+
+            var coverage = VerificationCoverage.From(
+                Steps(5), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
+
+            Assert.Equal(4, coverage.StepsVerified);
+            Assert.True(coverage.HasUnverifiedSteps);
+        }
+
+        // 세 종류가 한꺼번에 있을 때 QualityFloor만 검증됨으로 남는다.
+        [Fact]
+        public void From_AllThreeKinds_OnlyQualityFloorCountsAsVerified()
+        {
+            var violations = new Dictionary<string, StepDefect>
+            {
+                ["S01"] = new StepDefect(StepDefectKind.Unverifiable, "S01 (검증 불가)"),
+                ["S02"] = new StepDefect(StepDefectKind.GenerationFailed, "S02 (생성 실패)"),
+                ["S03"] = new StepDefect(StepDefectKind.QualityFloor, "S03 (하한 미달)")
+            };
+
+            var coverage = VerificationCoverage.From(
+                Steps(10), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
+
+            Assert.Equal(8, coverage.StepsVerified);
+        }
     }
 }

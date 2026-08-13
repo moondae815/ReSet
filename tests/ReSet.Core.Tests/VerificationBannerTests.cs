@@ -387,4 +387,30 @@ public sealed class VerificationBannerTests
         Assert.Contains("UP_UTIL_SETTLE_EXCEPTION_PROC", banner);
         Assert.DoesNotContain("up_util_settle_exception_proc", banner);
     }
+
+    // 생성 실패는 하한 미달과 다른 사실이다. 저건 "섹션이 최소 요건을 못 채웠다"이고
+    // 이건 "섹션 본문이 아예 없다"이다. 하한 미달 배너에 섞으면 "최소 요건을 충족하지
+    // 못했습니다"가 거짓이 된다 - 채울 본문 자체가 없었기 때문이다. 이 저장소가
+    // 검증 불가를 하한 미달에서 갈라낸 것과 같은 논리다.
+    [Fact]
+    public void GenerationFailedSteps_SaysTheBodyIsAbsent_NotThatItFellShort()
+    {
+        var banner = VerificationBanner.GenerationFailedSteps(
+            new[] { "S07 (생성 실패)", "S12 (생성 실패)" });
+
+        Assert.StartsWith("\n> [!WARNING]", banner);
+        Assert.Contains("[생성 실패]", banner);
+        Assert.Contains(">   - S07 (생성 실패)", banner);
+        Assert.Contains(">   - S12 (생성 실패)", banner);
+        // 하한 미달의 문구를 빌려 쓰면 안 된다.
+        Assert.DoesNotContain("최소 요건", banner);
+    }
+
+    [Fact]
+    public void GenerationFailedSteps_WithEmptyList_StillRendersPlaceholder()
+    {
+        var banner = VerificationBanner.GenerationFailedSteps(Array.Empty<string>());
+
+        Assert.Contains(">   - (단계명이 기록되지 않았습니다.)", banner);
+    }
 }
