@@ -163,5 +163,80 @@ namespace ReSet.Core.Tests
             Assert.Contains("codex progress: thinking", exception.Message);
             Assert.Contains("결과 파일을 남기지 않았습니다", exception.Message);
         }
+
+        // ---- 토큰 집계 ----
+        // 세 CLI 중 codex만 인자를 하나 더 붙여야 집계를 볼 수 있다. --json 없이는
+        // stdout에 사람이 읽을 진행 로그만 흐르고("tokens used 16,665"), 본문은 -o
+        // 파일로 따로 나온다. 본문 경로는 그대로 두고 stdout만 파싱 가능해진다.
+
+        [Fact]
+        public void BuildArguments_RequestsJsonEventsSoUsageIsObservable()
+        {
+            var arguments = CodexCliClient.BuildArguments("gpt-5.6-terra", null, "/tmp/out.txt");
+
+            Assert.Contains("--json", arguments);
+            // 본문은 여전히 -o 파일에서 읽는다. --json은 stdout만 바꾼다.
+            Assert.Contains("-o", arguments);
+        }
+
+        // 2026-08-12에 `codex exec --json`으로 실제로 받은 이벤트다. 필드 이름이
+        // claude와 다르다: cached_input_tokens / cache_write_input_tokens.
+        [Fact]
+        public void ParseUsage_ReadsTurnCompletedEvent()
+        {
+            var stdout = string.Join("\n", new[]
+            {
+                "{\"type\":\"thread.started\",\"thread_id\":\"abc\"}",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":14165," +
+                "\"cached_input_tokens\":9984,\"cache_write_input_tokens\":0," +
+                "\"output_tokens\":5,\"reasoning_output_tokens\":0}}"
+            });
+
+            var usage = CodexCliClient.ParseUsage(stdout);
+
+            Assert.NotNull(usage);
+            Assert.Equal(14165, usage!.Input);
+            Assert.Equal(9984, usage.CacheRead);
+            Assert.Equal(0, usage.CacheWrite);
+            Assert.Equal(5, usage.Output);
+            Assert.Equal(0, usage.Thinking);
+        }
+
+        // stdout이 순수 JSONL이라는 보장은 없다. 한 줄이라도 깨지면 집계를 못 읽는 것이
+        // 아니라 분석 전체가 죽는 구조는 곤란하다 - 집계는 진단 정보일 뿐이다.
+        [Fact]
+        public void ParseUsage_IgnoresNonJsonLines()
+        {
+            var stdout = string.Join("\n", new[]
+            {
+                "codex progress: thinking",
+                string.Empty,
+                "{ 깨진 JSON",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":7}}"
+            });
+
+            var usage = CodexCliClient.ParseUsage(stdout);
+
+            Assert.Equal(7, usage!.Input);
+        }
+
+        [Fact]
+        public void ParseUsage_WithoutTurnCompletedEvent_ReturnsNull()
+        {
+            Assert.Null(CodexCliClient.ParseUsage("{\"type\":\"thread.started\"}"));
+        }
+
+        // 한 실행에 turn.completed가 여럿이면 마지막이 그 실행의 최종 상태다.
+        [Fact]
+        public void ParseUsage_WithSeveralTurnCompletedEvents_TakesTheLast()
+        {
+            var stdout = string.Join("\n", new[]
+            {
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1}}",
+                "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":99}}"
+            });
+
+            Assert.Equal(99, CodexCliClient.ParseUsage(stdout)!.Input);
+        }
     }
 }

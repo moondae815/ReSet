@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using ReSet.Core.Models;
@@ -47,6 +48,10 @@ namespace ReSet.Core.Services.Clients.Cli
                 "--sandbox", "read-only",
                 "--skip-git-repo-check",
                 "--ephemeral",
+                // 세 CLI 중 codex만 집계를 보려면 인자를 더 붙여야 한다. 이것이 없으면
+                // stdout에는 사람이 읽을 진행 로그("tokens used 16,665")만 흐른다.
+                // 본문은 계속 -o 파일에서 읽으므로 기존 경로는 그대로다.
+                "--json",
                 "-o", outputFilePath
             };
 
@@ -74,6 +79,68 @@ namespace ReSet.Core.Services.Clients.Cli
             return arguments;
         }
 
+        /// <summary>
+        /// --json으로 받은 stdout(JSONL)에서 토큰 집계를 뽑는다.
+        ///
+        /// 필드 이름이 claude와 다르다: 캐시 읽기가 cached_input_tokens,
+        /// 캐시 쓰기가 cache_write_input_tokens, 추론이 reasoning_output_tokens다.
+        ///
+        /// 깨진 줄은 건너뛴다. 집계는 진단 정보일 뿐이므로, 한 줄이 깨졌다고 분석
+        /// 전체를 실패시킬 이유가 없다. 못 읽으면 null을 돌려주고 호출자가 경고한다.
+        /// </summary>
+        public static CliUsage? ParseUsage(string standardOutput)
+        {
+            if (string.IsNullOrWhiteSpace(standardOutput))
+            {
+                return null;
+            }
+
+            CliUsage? latest = null;
+
+            foreach (var line in standardOutput.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed[0] != '{')
+                {
+                    continue;
+                }
+
+                JsonDocument document;
+                try
+                {
+                    document = JsonDocument.Parse(trimmed);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+
+                using (document)
+                {
+                    var root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object
+                        || !root.TryGetProperty("type", out var type)
+                        || type.ValueKind != JsonValueKind.String
+                        || type.GetString() != "turn.completed"
+                        || !root.TryGetProperty("usage", out var usage)
+                        || usage.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    // 한 실행에 여러 개가 오면 마지막이 최종 상태다.
+                    latest = new CliUsage(
+                        Input: CliUsage.ReadCounter(usage, "input_tokens"),
+                        Output: CliUsage.ReadCounter(usage, "output_tokens"),
+                        CacheWrite: CliUsage.ReadCounter(usage, "cache_write_input_tokens"),
+                        CacheRead: CliUsage.ReadCounter(usage, "cached_input_tokens"),
+                        Thinking: CliUsage.ReadCounter(usage, "reasoning_output_tokens"));
+                }
+            }
+
+            return latest;
+        }
+
         public async Task<AiResult> ChatAsync(
             string systemPrompt,
             string userPrompt,
@@ -99,6 +166,9 @@ namespace ReSet.Core.Services.Clients.Cli
             {
                 throw CliFailureClassifier.CommandNotFound(ProviderName, _command, ex);
             }
+
+            // 실패 판정보다 먼저 남긴다. 실패한 호출도 토큰을 태웠다.
+            ParseUsage(processResult.StandardOutput)?.WriteToLog(ProviderName);
 
             if (!processResult.Succeeded)
             {
