@@ -306,7 +306,7 @@ dotnet test
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
 - [ ] 컴파일 에러가 0개이고, 경고가 **정확히 8건**(모두 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 0건으로 보이므로 반드시 `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`로 세야 한다. 8건보다 많으면 이번 변경이 새 경고를 넣은 것이다.
-- [ ] `dotnet test` 명령어를 실행하여 1433개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
+- [ ] `dotnet test` 명령어를 실행하여 1438개의 단위 테스트가 모두 예외 없이 100% 통과(Passed)하였는가?
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] SQL 객체 타입을 `Contains("TABLE"/"VIEW"/"FUNCTION"/"PROCEDURE")`로 직접 판정한 곳이 없는가? (`SqlObjectTypeClassifier`에 위임해야 하며 `TypeClassificationPolicyTests`가 자동 검사한다)
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?

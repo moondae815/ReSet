@@ -106,7 +106,7 @@ namespace ReSet.Core.Tests
         }
 
         // 단계가 전부 검증됐어도 문서 전체 오류코드 대조에서 누락이 나오면
-        // 사람이 봐야 한다. 세 조건은 각자 독립적으로 발화한다.
+        // 사람이 봐야 한다. 네 조건은 각자 독립적으로 발화한다.
         [Fact]
         public void From_DocumentCodeGapAloneTriggersAttention()
         {

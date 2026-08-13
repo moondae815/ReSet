@@ -145,11 +145,17 @@ namespace ReSet.Core.Services
                     // 오케스트레이터의 CoverageUnverifiable(대조 자체를 못 돌림)과
                     // UncoveredProcedures(대조는 돌았지만 일부가 빠짐)가 이 플래그
                     // 하나로 합쳐져 들어온다 - 두 배너는 if/else if로 이미 상호
-                    // 배타적이라 §0이 사유를 갈라 말할 필요가 없다
-                    // (VerificationCoverage.HasUncoveredProcedures 참고).
+                    // 배타적이라 §0이 사유를 갈라 말할 필요는 없지만, 문구까지 아무렇게나
+                    // 골라도 되는 것은 아니다. "나타나지 않았다"처럼 부재를 단정하면
+                    // CoverageUnverifiable 쪽에서 거짓이 된다 - 그 배너 자체가 "문서가 그
+                    // 프로시저들을 다루지 않았다는 뜻은 아닙니다"라고 명시한다
+                    // (VerificationBanner.CoverageUnverifiable 참고). "확인되지 않았다"는
+                    // 대조가 아예 안 돈 경우(확인할 방법이 없었다)와 대조는 돌았지만 특정
+                    // 프로시저가 빠진 경우(확인해 봤지만 못 찾았다) 양쪽에서 그대로 참이므로
+                    // 이 문구를 쓴다.
                     if (coverage.HasUncoveredProcedures)
                     {
-                        reasons.Add("원본 프로시저 일부가 목차 어디에도 나타나지 않았고");
+                        reasons.Add("원본 프로시저 커버리지가 확인되지 않았고");
                     }
 
                     // 사유가 둘 이상이면 쉼표로 잇는다 - 공백만으로는 한 사유가

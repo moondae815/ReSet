@@ -276,6 +276,25 @@ namespace ReSet.Core.Tests
             Assert.Contains("원본 프로시저", section);
         }
 
+        // HasUncoveredProcedures는 서로 다른 두 배너 상태를 하나로 합친 것이다 -
+        // (1) 대조 자체가 안 돈 상태(CoverageUnverifiable, "확인 불가")와 (2) 대조는
+        // 돌았는데 일부가 빠진 상태(UncoveredProcedures, "확인해 보니 없음"). §0의
+        // 문구가 "나타나지 않았다"처럼 부재를 단정하면 (1)에서 거짓이 된다 -
+        // CoverageUnverifiable의 배너 자체가 "문서가 그 프로시저들을 다루지 않았다는
+        // 뜻은 아닙니다"라고 명시적으로 경고하는 바로 그 오류다
+        // (VerificationBanner.cs 참고). 두 상태 모두에서 참인 말은 "확인되지
+        // 않았다"뿐이다.
+        [Fact]
+        public void PlanVerificationSection_WhenProceduresAreUncovered_DoesNotAssertAbsence()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 19, false, true));
+
+            Assert.DoesNotContain("나타나지 않았", section);
+            Assert.Contains("확인되지 않았", section);
+        }
+
         // 참인 사유만 나열해야 한다. 해당 없는 사유를 적으면 읽는 사람이 실제
         // 결함을 흘려보낸다.
         [Fact]

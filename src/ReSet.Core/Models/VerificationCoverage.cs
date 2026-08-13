@@ -20,13 +20,21 @@ namespace ReSet.Core.Models
     /// <param name="StepsVerified">하한 검사를 실제로 실행한 단계 수.</param>
     /// <param name="HasDocumentCodeGap">원본 오류코드 중 문서 어디에도 없는 것이 있는가.</param>
     /// <param name="HasUncoveredProcedures">
-    /// 목차가 원본 프로시저 커버리지를 밝히지 못했는가. 오케스트레이터의
+    /// 목차가 원본 프로시저 커버리지를 확인해 주지 못했는가. 오케스트레이터의
     /// <c>CoverageUnverifiable</c>("모든 단계가 출신을 비워 대조 자체를 못
-    /// 돌렸다")과 <c>UncoveredProcedures</c>("일부 프로시저가 어느 단계에도
-    /// 없다") 두 배너가 이 플래그 하나로 합쳐진다. 두 조건은 오케스트레이터에서
-    /// if/else if로 이미 상호 배타적이므로 - "대조를 아예 못 돌렸다"와 "돌렸는데
-    /// 빠졌다"는 같은 순간에 참일 수 없다 - 배너별로 필드를 나눠도 의미가
-    /// 갈리지 않고, 소비자(§0)가 구분해서 다르게 말할 필요도 없다.
+    /// 돌렸다")과 <c>UncoveredProcedures</c>("대조는 돌았지만 일부 프로시저가
+    /// 어느 단계에도 없다") 두 배너가 이 플래그 하나로 합쳐진다. 필드를 하나로
+    /// 합쳐도 되는 것은 오케스트레이터에서 두 조건이 if/else if로 이미 상호
+    /// 배타적이기 때문이다 - "대조를 아예 못 돌렸다"와 "돌렸는데 빠졌다"는 같은
+    /// 순간에 참일 수 없다. 그러나 그 사실이 "한 문장으로 둘 다 정확히 말할 수
+    /// 있다"는 뜻은 아니다 - 상호 배타성은 어느 쪽이 발화했는지를 보장할 뿐, 그
+    /// 발화의 서술이 두 상태 모두에서 참인지는 별도로 확인해야 한다. 실제로 첫
+    /// 시도("프로시저가 나타나지 않았다")는 <c>CoverageUnverifiable</c> 쪽에서
+    /// 거짓이었다 - 그 배너 자체가 "문서가 그 프로시저들을 다루지 않았다는 뜻은
+    /// 아닙니다"라고 명시하는데, 부재를 단정하는 문장은 정확히 그 오해를
+    /// 재현한다. 이 필드를 소비하는 §0(<see
+    /// cref="InstructionEntryPointComposer.PlanVerificationSection"/>)은
+    /// "확인되지 않았다"처럼 두 상태 모두에서 참인 문구만 써야 한다.
     /// </param>
     public sealed record VerificationCoverage(
         int? StepsTotal,
