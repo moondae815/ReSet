@@ -247,5 +247,50 @@ namespace ReSet.Core.Tests
             Assert.Contains("로그인", exception.Message);
             Assert.Contains("Not logged in", exception.Message);
         }
+
+        // ---- 토큰 집계 ----
+        // 2026-08-12에 `agy -p --output-format json`을 실제로 호출해 받은 usage 객체다.
+        // 세 CLI 중 필드 이름이 가장 다르다: 캐시 읽기는 cache_read_tokens이고,
+        // 캐시 쓰기 항목은 아예 없으며, 대신 thinking_tokens를 유일하게 내놓는다.
+
+        [Fact]
+        public void ParseResult_ReadsUsageCountersFromEnvelope()
+        {
+            const string json =
+                "{\"status\":\"SUCCESS\",\"response\":\"2\",\"usage\":{\"input_tokens\":19406," +
+                "\"output_tokens\":299,\"thinking_tokens\":288,\"cache_read_tokens\":0," +
+                "\"total_tokens\":19705}}";
+
+            var response = AntigravityCliClient.ParseResult(json);
+
+            Assert.NotNull(response.Usage);
+            Assert.Equal(19406, response.Usage!.Input);
+            Assert.Equal(299, response.Usage.Output);
+            Assert.Equal(288, response.Usage.Thinking);
+            Assert.Equal(0, response.Usage.CacheRead);
+        }
+
+        // agy는 캐시 쓰기를 보고하지 않는다. 0으로 채우면 "쓰기가 0회였다"는 측정값이
+        // 되어, 캐시가 도는지 판정할 때 근거로 쓰이게 된다. 실제로는 알 수 없다.
+        [Fact]
+        public void ParseResult_LeavesCacheWriteUnreported()
+        {
+            const string json =
+                "{\"status\":\"SUCCESS\",\"response\":\"2\",\"usage\":{\"input_tokens\":19406," +
+                "\"output_tokens\":299,\"cache_read_tokens\":0}}";
+
+            var response = AntigravityCliClient.ParseResult(json);
+
+            Assert.Null(response.Usage!.CacheWrite);
+        }
+
+        [Fact]
+        public void ParseResult_WithoutUsageObject_LeavesUsageNull()
+        {
+            var response = AntigravityCliClient.ParseResult(
+                "{\"status\":\"SUCCESS\",\"response\":\"PONG\"}");
+
+            Assert.Null(response.Usage);
+        }
     }
 }
