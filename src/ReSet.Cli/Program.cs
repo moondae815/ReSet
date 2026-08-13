@@ -903,6 +903,7 @@ namespace ReSet.Cli
                                 targetLanguage,
                                 new OutputPathResolver(resolvedDatabase, outputDir),
                                 pipelineResult.Layout,
+                                pipelineResult.Coverage,
                                 activeCts.Token);
 
                             foreach (var warning in bundle.Warnings)
@@ -1468,6 +1469,7 @@ namespace ReSet.Cli
                                     targetLanguage,
                                     new OutputPathResolver(resolvedDatabase, outputDir),
                                     pipelineResult.Layout,
+                                    pipelineResult.Coverage,
                                     activeCts.Token);
 
                                 foreach (var warning in bundle.Warnings)

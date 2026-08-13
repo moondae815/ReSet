@@ -368,6 +368,7 @@ namespace ReSet.Core.Services
             string targetLanguage,
             OutputPathResolver paths,
             PlanLayout? layout = null,
+            VerificationCoverage? coverage = null,
             CancellationToken cancellationToken = default)
         {
             Log.Information("통합 마이그레이션 지시서 번들 내보내기 시작 - JobName: {JobName}, OutputDir: {OutputDir}",

@@ -61,6 +61,7 @@ namespace ReSet.Core.Services
             string targetLanguage,
             OutputPathResolver paths,
             PlanLayout? layout = null,
+            VerificationCoverage? coverage = null,
             CancellationToken cancellationToken = default);
 
         /// <summary>

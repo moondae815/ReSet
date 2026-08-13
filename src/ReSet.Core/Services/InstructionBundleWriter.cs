@@ -18,7 +18,8 @@ namespace ReSet.Core.Services
         PlanLayout? Layout,
         IReadOnlyList<SpDefinition> SpDefs,
         OutputPathResolver Paths,
-        string JobOutputDir);
+        string JobOutputDir,
+        VerificationCoverage? Coverage = null);
 
     /// <param name="StepCodes">실제로 파일이 쓰인 단계 코드(파일명에 쓰인 <b>정화된</b> 값).
     /// 회차 정의의 근거가 되며, steps/&lt;코드&gt;.md와 task-NN-&lt;코드&gt;.md가 같은 값을 쓴다.</param>
@@ -196,11 +197,9 @@ namespace ReSet.Core.Services
                 HasStepContract: slices.StepContract != null,
                 HasVerification: slices.Verification != null,
                 SinglePlanRelativePath: singlePlanRelative,
-                // 목차 보강 후에도 "검증 불가"로 남은 단계가 있으면 §0이 "모두
-                // 통과"만 말해서는 안 된다 - 바로 아래 실리는 미검증 단계 목록과
-                // 모순된다(스펙 §6).
-                HasUnverifiableSteps: inputs.Layout?.FloorViolations?.Values
-                    .Any(defect => defect.Kind == StepDefectKind.Unverifiable) ?? false));
+                // 커버리지는 파이프라인이 한 번 계산해 넘긴 값을 그대로 쓴다.
+                // 여기서 다시 세면 헤더와 §0이 서로 다른 수를 말하게 된다.
+                Coverage: inputs.Coverage));
 
             var entryPointPath = Path.Combine(agentDir, "MigrationInstructions.md");
             await WriteAsync(entryPointPath, entryPoint, cancellationToken);

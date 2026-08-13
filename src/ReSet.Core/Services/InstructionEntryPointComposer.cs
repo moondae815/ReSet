@@ -9,11 +9,12 @@ namespace ReSet.Core.Services
 
     /// <param name="Preamble">최종 계획서의 첫 H2 앞 내용. L1Exhausted 배너가 여기 실린다.</param>
     /// <param name="SinglePlanRelativePath">분할 실패 시 계획서 전문의 상대 경로. 분할했으면 null.</param>
-    /// <param name="HasUnverifiableSteps">
-    /// 목차 보강 후에도 "검증 불가"로 남은 단계가 하나라도 있는가
-    /// (<see cref="ReSet.Core.Models.StepDefectKind.Unverifiable"/>). PlanOutcome이
-    /// Passed라도 이 값이 true면 §0은 "모두 통과"만 말해서는 안 된다 - 그 아래
-    /// 실제로 실리는 미검증 단계 목록과 정면으로 모순되기 때문이다.
+    /// <param name="Coverage">
+    /// 이 산출물이 실제로 받은 기계 검증의 양(<see cref="VerificationCoverage"/>). PlanOutcome이
+    /// Passed라도 <see cref="VerificationCoverage.NeedsHumanAttention"/>이 true면 §0은
+    /// "모두 통과"만 말해서는 안 된다 - 분할 미실행·미검증 단계·문서 오류코드 누락 세
+    /// 사유 중 실제로 해당하는 것만 그 아래에 밝힌다. null은 이 산출물에 커버리지
+    /// 개념이 없다는 뜻(예: 단일 SP 명세서)이며 "검증됨"으로 해석하지 않는다.
     /// </param>
     public sealed record EntryPointInputs(
         string JobName,
@@ -27,7 +28,7 @@ namespace ReSet.Core.Services
         bool HasStepContract,
         bool HasVerification,
         string? SinglePlanRelativePath,
-        bool HasUnverifiableSteps);
+        VerificationCoverage? Coverage);
 
     /// <summary>
     /// 진입점 `MigrationInstructions.md`를 조립한다.
@@ -65,7 +66,7 @@ namespace ReSet.Core.Services
             sb.AppendLine();
 
             // 검증 상태가 맨 앞에 온다. 계획을 소비한 뒤에 경고를 만나면 이미 늦다.
-            sb.AppendLine(PlanVerificationSection(inputs.PlanOutcome, inputs.HasUnverifiableSteps));
+            sb.AppendLine(PlanVerificationSection(inputs.PlanOutcome, inputs.Coverage));
 
             if (!string.IsNullOrWhiteSpace(inputs.Preamble))
             {
@@ -95,25 +96,53 @@ namespace ReSet.Core.Services
         /// 옮겨 왔다. 통과일 때도 침묵하지 않는다 - "표기 부재 = 검증됨"이라는 추론이
         /// 이 계열 결함의 뿌리다.
         ///
-        /// <paramref name="hasUnverifiableSteps"/>가 true면 Passed여도 "모두 통과"만
-        /// 말하지 않는다. 목차 보강이 실패해 "검증 불가" 단계가 남는 회차에는 이
-        /// 섹션 바로 아래 미검증 단계 목록이 실리는데, "모두 통과" 한 줄만 찍히면
-        /// 그 목록과 정면으로 모순된다(스펙 §6, 완료 기준 3).
+        /// <paramref name="coverage"/>가 <see cref="VerificationCoverage.NeedsHumanAttention"/>이면
+        /// Passed여도 "모두 통과"만 말하지 않는다. 종전에는 FloorViolations에 Unverifiable이
+        /// 있는지만 봤는데, 단계가 아예 없으면 위반도 없어 플래그가 꺼지고 가장 적게
+        /// 검증된 문서가 가장 깨끗한 배지를 달았다(실측 POQSettleProc7). 이제는 분할
+        /// 미실행·미검증 단계·문서 오류코드 누락 세 사유를 모두 보고, 실제로 해당하는
+        /// 것만 나열한다 - 해당 없는 사유를 적으면 읽는 사람이 실제 결함을 흘려보낸다.
         /// </summary>
-        public static string PlanVerificationSection(VerificationOutcome planOutcome, bool hasUnverifiableSteps)
+        public static string PlanVerificationSection(VerificationOutcome planOutcome, VerificationCoverage? coverage)
         {
             var label = VerificationDocumentFormatter.StatusLabel(planOutcome);
             var sb = new StringBuilder();
 
             if (planOutcome == VerificationOutcome.Passed)
             {
-                sb.AppendLine(hasUnverifiableSteps ? "## ⚠️ 0. 이 계획서의 검증 상태" : "## ✅ 0. 이 계획서의 검증 상태");
+                var attention = coverage?.NeedsHumanAttention ?? false;
+                sb.AppendLine(attention ? "## ⚠️ 0. 이 계획서의 검증 상태" : "## ✅ 0. 이 계획서의 검증 상태");
                 sb.AppendLine();
                 sb.AppendLine($"**{label}** — L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과한 계획입니다.");
-                if (hasUnverifiableSteps)
+
+                if (attention)
                 {
-                    sb.AppendLine("다만 대조할 재료(대상 테이블·원본 오류코드)가 목차에 없어 검증되지 못한 단계가 있습니다. 아래 단계별 배너에서 어느 단계인지 확인하십시오.");
+                    // 참인 사유만 싣는다. 해당 없는 사유를 적으면 읽는 사람이 실제
+                    // 결함을 흘려보낸다.
+                    var reasons = new List<string>();
+                    if (!coverage!.SplitRan)
+                    {
+                        reasons.Add("목차가 단계 목록을 내지 못해 단계 단위 기계 검증이 실행되지 않았고");
+                    }
+                    else if (coverage.HasUnverifiedSteps)
+                    {
+                        reasons.Add("대조할 재료가 목차에 없어 검증되지 못한 단계가 있고");
+                    }
+
+                    if (coverage!.HasDocumentCodeGap)
+                    {
+                        reasons.Add("원본 오류코드 일부가 문서에서 확인되지 않았고");
+                    }
+
+                    var joined = string.Join(" ", reasons);
+                    if (joined.EndsWith("고"))
+                    {
+                        joined = joined[..^1] + "습니다.";
+                    }
+
+                    sb.AppendLine($"다만 {joined} 구현 전에 사람의 확인이 필요합니다.");
                 }
+
                 return sb.ToString();
             }
 

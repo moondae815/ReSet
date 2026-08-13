@@ -20,7 +20,7 @@ namespace ReSet.Core.Tests
             HasStepContract: true,
             HasVerification: true,
             SinglePlanRelativePath: null,
-            HasUnverifiableSteps: false);
+            Coverage: null);
 
         private static EntryPointInputs Fallback() => Split() with
         {
@@ -160,7 +160,7 @@ namespace ReSet.Core.Tests
         {
             // 표기 부재를 "검증됨"으로 추론하는 것이 이 계열 결함의 뿌리다.
             var section = InstructionEntryPointComposer.PlanVerificationSection(
-                VerificationOutcome.Passed, hasUnverifiableSteps: false);
+                VerificationOutcome.Passed, coverage: null);
 
             Assert.Contains("이 계획서의 검증 상태", section);
             Assert.NotEmpty(section.Trim());
@@ -173,7 +173,7 @@ namespace ReSet.Core.Tests
             // 결함이다. 보강이 실패해 "검증 불가" 단계가 남는 회차에는 "모두 통과"
             // 한 줄만 찍혀 그 아래 미검증 단계 목록과 정면으로 모순됐다.
             var section = InstructionEntryPointComposer.PlanVerificationSection(
-                VerificationOutcome.Passed, hasUnverifiableSteps: true);
+                VerificationOutcome.Passed, coverage: new VerificationCoverage(19, 17, false));
 
             Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", section);
             Assert.Contains("검증되지 못한 단계가 있습니다", section);
@@ -183,7 +183,7 @@ namespace ReSet.Core.Tests
         public void Compose_ShouldStateBothPassedAndUnverifiableSteps_InSection0()
         {
             var markdown = InstructionEntryPointComposer.Compose(
-                Split() with { HasUnverifiableSteps = true });
+                Split() with { Coverage = new VerificationCoverage(19, 17, false) });
 
             Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", markdown);
             Assert.Contains("검증되지 못한 단계가 있습니다", markdown);
@@ -207,6 +207,83 @@ namespace ReSet.Core.Tests
             var markdown = InstructionEntryPointComposer.Compose(inputs);
 
             Assert.Contains(InstructionEntryPointComposer.StagedBundleMarker, markdown);
+        }
+
+        // 종전에는 FloorViolations에 Unverifiable이 있는지만 봤다. 단계가 아예
+        // 없으면 위반도 없으므로 플래그가 꺼졌고, 가장 적게 검증된 문서가 가장
+        // 깨끗한 배지를 달았다 - 실측(POQSettleProc7)에서 단계별 섹션이 하나도
+        // 없고 원본 오류코드 20개가 빠진 문서가 ✅ "모두 통과"로 나갔다.
+        [Fact]
+        public void PlanVerificationSection_WhenSplitDidNotRun_WarnsInsteadOfClaimingCleanPass()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(null, 0, false));
+
+            Assert.Contains("⚠️", section);
+            Assert.DoesNotContain("✅", section);
+            Assert.Contains("단계 단위 기계 검증이 실행되지 않았", section);
+        }
+
+        [Fact]
+        public void PlanVerificationSection_WhenStepsAreUnverified_Warns()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 17, false));
+
+            Assert.Contains("⚠️", section);
+            Assert.Contains("검증되지 못한 단계", section);
+        }
+
+        [Fact]
+        public void PlanVerificationSection_WhenDocumentCodesAreMissing_Warns()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 19, true));
+
+            Assert.Contains("⚠️", section);
+            Assert.Contains("원본 오류코드", section);
+        }
+
+        // 참인 사유만 나열해야 한다. 해당 없는 사유를 적으면 읽는 사람이 실제
+        // 결함을 흘려보낸다.
+        [Fact]
+        public void PlanVerificationSection_ListsOnlyTheReasonsThatApply()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 17, false));
+
+            Assert.DoesNotContain("원본 오류코드", section);
+            Assert.DoesNotContain("실행되지 않았", section);
+        }
+
+        // 부재 확인. 조건이 뒤집히면 정상 산출물마다 거짓 경고가 붙는데, 그것을
+        // 잡는 테스트는 이것뿐이다.
+        [Fact]
+        public void PlanVerificationSection_WhenEverythingIsVerified_KeepsTheCleanPass()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 19, false));
+
+            Assert.Contains("✅", section);
+            Assert.DoesNotContain("⚠️", section);
+            Assert.DoesNotContain("다만", section);
+        }
+
+        // Passed가 아닌 경로는 이미 ⚠️와 "사람의 검토가 필요합니다"를 쓴다.
+        [Fact]
+        public void PlanVerificationSection_NonPassedOutcome_IsUnchanged()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.QualityRejected,
+                new VerificationCoverage(19, 19, false));
+
+            Assert.Contains("⚠️", section);
+            Assert.Contains("사람의 검토가 필요합니다", section);
         }
     }
 }
