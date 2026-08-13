@@ -6134,6 +6134,58 @@ SELECT 1;
         }
 
         /// <summary>
+        /// 목차의 모든 단계가 LegacyProcedures를 비운 경우. 커버리지 검사는 근거가 0인데
+        /// 종전에는 명세서 전부를 "누락"으로 단정해 배너에 실었다. 실측(POQSettleProc6)에서
+        /// 33단계가 전부 비어 12개 프로시저가 모두 누락으로 보고됐지만, 본문은 12개를
+        /// 전부 다루고 있었다 — 배너가 거짓을 말한 것이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenNoStepDeclaresItsOrigin_ReportsTheCheckCouldNotRun()
+        {
+            var stepsJsonNoOrigins = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""LegacyProcedures"": [], ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""LegacyProcedures"": [], ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJsonNoOrigins });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1"), ("dbo.USP_Spec2", "content2") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Contains("[커버리지 검증 불가]", result.Plan);
+            // 누락으로 단정하지 않아야 하고, 명세서 이름을 누락 목록처럼 나열해서도 안 된다.
+            Assert.DoesNotContain("[커버리지 누락]", result.Plan);
+            var banner = result.Plan!.Split("\n\n").First(b => b.Contains("[커버리지 검증 불가]"));
+            Assert.DoesNotContain("dbo.USP_Spec1", banner);
+            Assert.DoesNotContain("dbo.USP_Spec2", banner);
+        }
+
+        /// <summary>
         /// Feedback_Log.txt 제외 픽스: 오케스트레이터는 재시도 회차마다 원본
         /// specs의 작업 사본(specsCopy)에 "Feedback_Log.txt"를 덧붙여 AI 호출에
         /// 넘긴다. 커버리지 검사가 그 사본과 대조하면 이 항목이 목차의 어느

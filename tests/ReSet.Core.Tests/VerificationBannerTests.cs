@@ -278,4 +278,48 @@ public sealed class VerificationBannerTests
 
         Assert.Contains(">   - (프로시저명이 기록되지 않았습니다.)", banner);
     }
+
+    // 목차의 어느 단계도 출신을 밝히지 않으면 커버리지 검사는 근거가 0이다. 그 상태로
+    // "누락" 배너를 내면 거짓말이 된다 - POQSettleProc6에서 12개 프로시저가 전부
+    // 누락으로 보고됐지만 본문은 12개를 모두 다루고 있었다. UnverifiableSteps가 하한
+    // 검사를 두고 이미 하는 구분("부실하다"가 아니라 "못 돌렸다")을 여기에도 세운다.
+    [Fact]
+    public void CoverageUnverifiable_SaysTheCheckCouldNotRun_NotThatAnythingIsMissing()
+    {
+        var banner = VerificationBanner.CoverageUnverifiable(totalSteps: 33, procedureCount: 12);
+
+        Assert.StartsWith("\n> [!WARNING]", banner);
+        Assert.Contains("[커버리지 검증 불가]", banner);
+        Assert.Contains("33", banner);
+        Assert.Contains("12", banner);
+        Assert.Contains("LegacyProcedures", banner);
+        // 누락이라고 단정해서는 안 된다.
+        Assert.DoesNotContain("커버리지 누락", banner);
+        Assert.DoesNotContain("반영되지 않았", banner);
+    }
+
+    // 일부 단계만 출신을 비운 경우는 근거가 부분적으로 있다. 누락 배너를 유지하되,
+    // 그 목록에 실제로는 다뤄진 프로시저가 섞일 수 있다는 사실을 함께 실어야 한다.
+    [Fact]
+    public void UncoveredProcedures_WithUnlabelledSteps_AdmitsTheListMayOverreport()
+    {
+        var banner = VerificationBanner.UncoveredProcedures(
+            new[] { "dbo.UP_A" }, stepsWithoutLegacyProcedures: 4);
+
+        Assert.Contains("[커버리지 누락]", banner);
+        Assert.Contains("4", banner);
+        Assert.Contains(">   - dbo.UP_A", banner);
+    }
+
+    // 모든 단계가 출신을 밝혔다면 목록은 확정적이다. 불필요한 단서를 붙이면
+    // 읽는 사람이 진짜 누락을 흘려보낸다.
+    [Fact]
+    public void UncoveredProcedures_WithEveryStepLabelled_CarriesNoCaveat()
+    {
+        var banner = VerificationBanner.UncoveredProcedures(
+            new[] { "dbo.UP_A" }, stepsWithoutLegacyProcedures: 0);
+
+        Assert.Contains("[커버리지 누락]", banner);
+        Assert.DoesNotContain("섞여 있을 수 있습니다", banner);
+    }
 }
