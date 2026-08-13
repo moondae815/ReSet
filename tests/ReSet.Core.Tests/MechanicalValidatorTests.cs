@@ -1785,5 +1785,54 @@ A[""시작""] --> B[""끝""]
             // Assert
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.TableIdentitySplit);
         }
+
+        // 이 검사의 미덕은 목차가 필요 없다는 것이다. 명세서에서 직접 뽑으므로
+        // 목차가 어떻게 망가지든 살아남는 유일한 검사다. POQSettleProc7에서 원본
+        // 오류코드 76개 중 20개가 사라졌는데 아무도 알리지 않았다.
+        [Fact]
+        public void FindMissingErrorCodes_ReportsOnlyCodesAbsentFromTheWholeDocument()
+        {
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["UP_A"] = new[] { "-1", "-2", "-3" },
+                ["UP_B"] = new[] { "-9" }
+            };
+            var document = "S01은 `-1`을 반환하고 `-3`도 반환한다. `-9`는 UP_B의 코드다.";
+
+            var missing = MechanicalValidator.FindMissingErrorCodes(document, codes);
+
+            var only = Assert.Single(missing);
+            Assert.Equal("UP_A", only.Key);
+            Assert.Equal(new[] { "-2" }, only.Value);
+        }
+
+        [Fact]
+        public void FindMissingErrorCodes_WhenEveryCodeIsPresent_ReturnsEmpty()
+        {
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["UP_A"] = new[] { "-1", "-2" }
+            };
+
+            var missing = MechanicalValidator.FindMissingErrorCodes("`-1` `-2`", codes);
+
+            Assert.Empty(missing);
+        }
+
+        // -1이 -10 안에서 오탐되면 진짜 누락이 통과한다. 단계별 검사와 같은
+        // ContainsToken을 써야 두 경로의 판정이 갈리지 않는다.
+        [Fact]
+        public void FindMissingErrorCodes_DoesNotMatchACodeInsideALongerNumber()
+        {
+            var codes = new Dictionary<string, IReadOnlyList<string>>
+            {
+                ["UP_A"] = new[] { "-1" }
+            };
+
+            var missing = MechanicalValidator.FindMissingErrorCodes("반환값은 `-10`이다.", codes);
+
+            var only = Assert.Single(missing);
+            Assert.Equal(new[] { "-1" }, only.Value);
+        }
     }
 }

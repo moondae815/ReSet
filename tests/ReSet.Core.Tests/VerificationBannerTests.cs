@@ -338,4 +338,27 @@ public sealed class VerificationBannerTests
         // 내용이 부실하다고 단정해서는 안 된다 - 근거가 없다.
         Assert.Contains("부실하다는 뜻은 아니지만", banner);
     }
+
+    // 분자만 보이면 심각도를 가늠할 수 없다. "9개 누락"과 "16개 중 9개 누락"은
+    // 읽는 사람에게 전혀 다른 사실이다.
+    [Fact]
+    public void MissingErrorCodes_ShowsTheDenominatorPerProcedure()
+    {
+        var codes = new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new[] { "-1", "-2", "-3", "-101" }
+        };
+        var missing = new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new[] { "-101" }
+        };
+
+        var banner = VerificationBanner.MissingErrorCodes(missing, codes);
+
+        Assert.StartsWith("\n> [!WARNING]", banner);
+        Assert.Contains("[오류코드 누락]", banner);
+        Assert.Contains("UP_UTIL_SETTLE_EXCEPTION_PROC", banner);
+        Assert.Contains("4개 중 1개", banner);
+        Assert.Contains("-101", banner);
+    }
 }

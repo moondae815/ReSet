@@ -236,4 +236,38 @@ public static class VerificationBanner
             + nameLines
             + "\n\n";
     }
+
+    /// <summary>
+    /// 원본 명세서의 오류코드 중 최종 문서 어디에도 없는 것을 알린다.
+    ///
+    /// 레거시 반환 코드를 그대로 계승하는 것은 이 문서의 핵심 계약이다. 실측
+    /// (POQSettleProc7)에서 그 계약이 20군데 깨졌는데 아무 신호도 나가지 않았다 -
+    /// 오류코드 대조가 단계별 경로에만 붙어 있었고 그 경로가 통째로 건너뛰어졌기 때문이다.
+    ///
+    /// 분모를 함께 싣는다. "9개 누락"만으로는 읽는 사람이 심각도를 가늠할 수 없다.
+    /// </summary>
+    public static string MissingErrorCodes(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> missingByProcedure,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+    {
+        var lines = new List<string>();
+        foreach (var (procedure, missing) in missingByProcedure)
+        {
+            var total = codesByProcedure != null
+                        && codesByProcedure.TryGetValue(procedure, out var all)
+                ? all.Count
+                : missing.Count;
+
+            lines.Add($"{procedure}: {total}개 중 {missing.Count}개 누락 — {string.Join(", ", missing)}");
+        }
+
+        var body = RenderBulletList(lines, "(누락 내역이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[오류코드 누락] 원본 명세서의 반환 코드가 최종 문서에서"
+            + " 확인되지 않았습니다.**"
+            + " 레거시 반환 코드의 보존은 이 문서의 핵심 계약이므로, 아래 항목은 문서를"
+            + " 넘기기 전에 직접 확인하십시오.\n"
+            + body
+            + "\n\n";
+    }
 }

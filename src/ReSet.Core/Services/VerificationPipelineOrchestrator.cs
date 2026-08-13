@@ -2496,6 +2496,25 @@ namespace ReSet.Core.Services
                 consolidatedPlan = VerificationBanner.SplitGenerationSkipped() + consolidatedPlan;
             }
 
+            var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+
+            // 분할 여부와 무관하게 항상 돈다. 폴백 경로에만 걸면 "분할은 됐으나 목차
+            // 메타데이터가 비어 단계별 대조가 무실행"인 회차를 놓친다 - 실측에서 그쪽이
+            // 먼저 일어났다. 목차를 전혀 쓰지 않는다는 것이 이 검사의 존재 이유다.
+            if (!string.IsNullOrEmpty(consolidatedPlan))
+            {
+                var missingCodes = MechanicalValidator.FindMissingErrorCodes(consolidatedPlan, specReturnCodes);
+                if (missingCodes.Count > 0)
+                {
+                    Log.Warning(
+                        "[파이프라인] 원본 오류코드가 최종 문서에서 확인되지 않았습니다 - Job: {JobName}, 프로시저: {Count}개",
+                        jobName, missingCodes.Count);
+
+                    consolidatedPlan =
+                        VerificationBanner.MissingErrorCodes(missingCodes, specReturnCodes) + consolidatedPlan;
+                }
+            }
+
             var uncoveredProcedures = adoptedSteps != null
                 ? FindUncoveredProcedures(adoptedSteps, specs)
                 : Array.Empty<string>();

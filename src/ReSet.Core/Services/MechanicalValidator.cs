@@ -313,7 +313,7 @@ namespace ReSet.Core.Services
         /// 경계 검사가 항상 실패한다. ECMAScript 옵션은 `\w`를 [a-zA-Z0-9_]로
         /// 제한해 한글 조사를 경계로 인식하게 한다.
         /// </summary>
-        private static bool ContainsToken(string haystack, string token)
+        internal static bool ContainsToken(string haystack, string token)
         {
             if (token.Length == 0)
             {
@@ -324,6 +324,46 @@ namespace ReSet.Core.Services
                 haystack,
                 $@"(?<!\w){Regex.Escape(token)}(?!\w)",
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
+        }
+
+        /// <summary>
+        /// 명세서에서 뽑은 원본 오류코드 중 문서 어디에도 없는 것을 프로시저별로 돌려준다.
+        ///
+        /// 단계별 하한 검사와 묻는 것이 다르다 - 저건 "이 코드가 제 섹션에 있는가"이고
+        /// 이건 "이 코드가 문서 어디에도 없는가"다. 후자에 걸리면 조건 없이 진짜 누락이다.
+        ///
+        /// 목차를 전혀 쓰지 않는다는 것이 이 검사의 존재 이유다. 목차가 비거나 망가지면
+        /// 단계별 검사는 통째로 무실행이 되는데(실측: 33단계 중 32단계, 그리고 다른
+        /// 회차에서는 33단계 전부), 그때가 바로 누락이 가장 의심스러운 순간이다.
+        /// </summary>
+        public static IReadOnlyDictionary<string, IReadOnlyList<string>> FindMissingErrorCodes(
+            string documentMarkdown,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+        {
+            var missing = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(documentMarkdown) || codesByProcedure == null)
+            {
+                return missing;
+            }
+
+            foreach (var (procedure, codes) in codesByProcedure)
+            {
+                var absent = new List<string>();
+                foreach (var code in codes)
+                {
+                    if (!string.IsNullOrWhiteSpace(code) && !ContainsToken(documentMarkdown, code.Trim()))
+                    {
+                        absent.Add(code);
+                    }
+                }
+
+                if (absent.Count > 0)
+                {
+                    missing[procedure] = absent;
+                }
+            }
+
+            return missing;
         }
 
         private const string UpdateHeadingPrefix = "### UPDATE 대상 테이블:";
