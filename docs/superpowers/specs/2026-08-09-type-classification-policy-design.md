@@ -202,7 +202,7 @@ ScriptDom이 이미 `]]`를 해제하므로 입력에 `]]`는 오지 않는다. 
 ## 후속 (이번 범위 밖)
 
 1. **`DependencyInfo.Type`의 타입화** — 문자열 가드가 아니라 타입 시스템으로 원시 판정을 차단한다. 근본적이지만 직렬화·스냅샷 호환성까지 번진다.
-2. **프롬프트 계약 강화 3건** — UPDATE 컬럼 매핑표, `UPDATE ... FROM` 자기참조 의미, `SET` 절 동시평가.
-3. **명세서 재발 방지 검증 게이트** — 남은 항목 중 가장 시급하다는 것이 선행 브랜치 최종 리뷰어의 평가다. 14개 명세서가 88~94점으로 검증을 통과하는 동안 이번 결함들이 하나도 걸리지 않았고, 선행 브랜치의 어떤 변경도 같은 종류의 허위 "컬럼 없음" 주장이 다시 만점권으로 통과하는 것을 막지 못한다.
+2. ~~**프롬프트 계약 강화 3건** — UPDATE 컬럼 매핑표, `UPDATE ... FROM` 자기참조 의미, `SET` 절 동시평가.~~ **해소됨(2026-08-09).** [UPDATE 매핑 계약](2026-08-09-update-mapping-contract-design.md)이 세 건을 모두 닫았다. 상세는 [정적 분석 식별자 정합성 복구](2026-08-08-static-analysis-identity-design.md) §후속 1~3의 해소 기록 참조.
+3. ~~**명세서 재발 방지 검증 게이트** — 남은 항목 중 가장 시급하다는 것이 선행 브랜치 최종 리뷰어의 평가다. 14개 명세서가 88~94점으로 검증을 통과하는 동안 이번 결함들이 하나도 걸리지 않았고, 선행 브랜치의 어떤 변경도 같은 종류의 허위 "컬럼 없음" 주장이 다시 만점권으로 통과하는 것을 막지 못한다.~~ **해소됨(2026-08-10).** [스키마 주장 검증 게이트](2026-08-09-schema-claim-verification-gate-design.md)가 닫았다. 게이트는 L2 Critic이 아니라 **L1 기계 검증**에 놓였다 — 5대 기준으로 14개가 통과한 것이 Critic 방식의 실측 결과였기 때문이다.
 4. **정확 일치 테이블 두 곳을 분류기로 통합**(출처: 최종 브랜치 리뷰) — `DependencyAnalysisOrchestrator.TryParseCodeObjectType`과 `MetadataExporter.NormalizeCodeObjectDdlFolder`가 `SqlObjectTypeClassifier` 밖에서 각자 정확 일치 `switch` 테이블로 코드 객체 여부를 판정한다. 두 권위가 가장자리에서 어긋난다 — `"P"`/`"FN"`/`"TF"`는 두 테이블에서 Procedure/Function이지만 분류기에서는 `Unresolved`이고, 반대로 `AGGREGATE_FUNCTION`/`EXTENDED_STORED_PROCEDURE`는 분류기에서는 코드 객체이지만 두 테이블은 모른다. `MetadataExporter`는 같은 `procedures`/`functions` 판정에 두 메커니즘을 함께 돌리고 있다(159행의 `NormalizeCodeObjectDdlFolder`와 341행의 분류기 위임). 스캐너는 원시 부분 문자열 판정만 잡으므로 이 정확 일치 테이블은 못 본다 — 오늘 오작동하지 않는 것은 실제 `Type` 값이 전부 `type_desc`에서 오기 때문이지, 게이트가 막고 있어서가 아니다.
 5. **`DbMetadataService`의 재귀 의존성 경로에 대한 동작 테스트 부재**(출처: 최종 브랜치 리뷰) — §4는 "위임이 통째로 사라지는" 경우를 각 지점의 동작 테스트가 잡는다고 적었지만, `DbMetadataService`의 재귀 의존성 경로는 라이브 DB가 있어야 실행되어 커버되지 않는다. 그래서 이 경로에서 분류기 위임을 통째로 되돌리는 편집이 있어도 지금은 테스트로 잡히지 않는다.
