@@ -771,7 +771,7 @@ namespace ReSet.Core.Tests
                     "C#",
                     paths,
                     layout: null,
-                    coverage: new VerificationCoverage(19, 17, false));
+                    coverage: new VerificationCoverage(19, 17, false, false));
 
                 var instructions = await File.ReadAllTextAsync(
                     Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));

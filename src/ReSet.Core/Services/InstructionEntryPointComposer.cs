@@ -12,9 +12,10 @@ namespace ReSet.Core.Services
     /// <param name="Coverage">
     /// 이 산출물이 실제로 받은 기계 검증의 양(<see cref="VerificationCoverage"/>). PlanOutcome이
     /// Passed라도 <see cref="VerificationCoverage.NeedsHumanAttention"/>이 true면 §0은
-    /// "모두 통과"만 말해서는 안 된다 - 분할 미실행·미검증 단계·문서 오류코드 누락 세
-    /// 사유 중 실제로 해당하는 것만 그 아래에 밝힌다. null은 이 산출물에 커버리지
-    /// 개념이 없다는 뜻(예: 단일 SP 명세서)이며 "검증됨"으로 해석하지 않는다.
+    /// "모두 통과"만 말해서는 안 된다 - 분할 미실행·미검증 단계·문서 오류코드 누락·목차
+    /// 프로시저 커버리지 누락 네 사유 중 실제로 해당하는 것만 그 아래에 밝힌다. null은
+    /// 이 산출물에 커버리지 개념이 없다는 뜻(예: 단일 SP 명세서)이며 "검증됨"으로
+    /// 해석하지 않는다.
     /// </param>
     public sealed record EntryPointInputs(
         string JobName,
@@ -100,8 +101,15 @@ namespace ReSet.Core.Services
         /// Passed여도 "모두 통과"만 말하지 않는다. 종전에는 FloorViolations에 Unverifiable이
         /// 있는지만 봤는데, 단계가 아예 없으면 위반도 없어 플래그가 꺼지고 가장 적게
         /// 검증된 문서가 가장 깨끗한 배지를 달았다(실측 POQSettleProc7). 이제는 분할
-        /// 미실행·미검증 단계·문서 오류코드 누락 세 사유를 모두 보고, 실제로 해당하는
-        /// 것만 나열한다 - 해당 없는 사유를 적으면 읽는 사람이 실제 결함을 흘려보낸다.
+        /// 미실행·미검증 단계·문서 오류코드 누락·목차 프로시저 커버리지 누락 네 사유를
+        /// 모두 보고, 실제로 해당하는 것만 나열한다 - 해당 없는 사유를 적으면 읽는
+        /// 사람이 실제 결함을 흘려보낸다.
+        ///
+        /// 네 번째 사유는 전체 브랜치 리뷰에서 발견됐다: §0이 ✅로 "모두 통과"를
+        /// 말하는 바로 위에 [커버리지 누락]/[커버리지 검증 불가] 배너가 원본
+        /// 프로시저 몇 개가 문서 어디에도 없다고 경고하는 문서가 나올 수 있었다 -
+        /// 이 문서 내부의 두 표면이 서로 모순되는, 이 브랜치가 없애려던 것과
+        /// 정확히 같은 모양의 결함이다.
         /// </summary>
         public static string PlanVerificationSection(VerificationOutcome planOutcome, VerificationCoverage? coverage)
         {
@@ -132,6 +140,16 @@ namespace ReSet.Core.Services
                     if (coverage!.HasDocumentCodeGap)
                     {
                         reasons.Add("원본 오류코드 일부가 문서에서 확인되지 않았고");
+                    }
+
+                    // 오케스트레이터의 CoverageUnverifiable(대조 자체를 못 돌림)과
+                    // UncoveredProcedures(대조는 돌았지만 일부가 빠짐)가 이 플래그
+                    // 하나로 합쳐져 들어온다 - 두 배너는 if/else if로 이미 상호
+                    // 배타적이라 §0이 사유를 갈라 말할 필요가 없다
+                    // (VerificationCoverage.HasUncoveredProcedures 참고).
+                    if (coverage.HasUncoveredProcedures)
+                    {
+                        reasons.Add("원본 프로시저 일부가 목차 어디에도 나타나지 않았고");
                     }
 
                     // 사유가 둘 이상이면 쉼표로 잇는다 - 공백만으로는 한 사유가

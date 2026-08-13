@@ -2612,8 +2612,14 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // noOriginsAtAll(CoverageUnverifiable)과 uncoveredProcedures.Count > 0
+            // (UncoveredProcedures)은 바로 위 if/else if로 이미 상호 배타적이다 - 커버리지
+            // 대조를 아예 못 돌린 상태와 돌렸는데 일부가 빠진 상태는 같은 순간에 참일 수
+            // 없다. 그래서 배너 두 개를 필드 하나(HasUncoveredProcedures)로 합쳐 넘긴다.
             return (consolidatedPlan,
-                VerificationCoverage.From(adoptedSteps, stepFloorViolations, hasDocumentCodeGap));
+                VerificationCoverage.From(
+                    adoptedSteps, stepFloorViolations, hasDocumentCodeGap,
+                    hasUncoveredProcedures: noOriginsAtAll || uncoveredProcedures.Count > 0));
         }
 
         /// <summary>

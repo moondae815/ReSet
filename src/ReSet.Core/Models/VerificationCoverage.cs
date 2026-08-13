@@ -19,10 +19,20 @@ namespace ReSet.Core.Models
     /// </param>
     /// <param name="StepsVerified">하한 검사를 실제로 실행한 단계 수.</param>
     /// <param name="HasDocumentCodeGap">원본 오류코드 중 문서 어디에도 없는 것이 있는가.</param>
+    /// <param name="HasUncoveredProcedures">
+    /// 목차가 원본 프로시저 커버리지를 밝히지 못했는가. 오케스트레이터의
+    /// <c>CoverageUnverifiable</c>("모든 단계가 출신을 비워 대조 자체를 못
+    /// 돌렸다")과 <c>UncoveredProcedures</c>("일부 프로시저가 어느 단계에도
+    /// 없다") 두 배너가 이 플래그 하나로 합쳐진다. 두 조건은 오케스트레이터에서
+    /// if/else if로 이미 상호 배타적이므로 - "대조를 아예 못 돌렸다"와 "돌렸는데
+    /// 빠졌다"는 같은 순간에 참일 수 없다 - 배너별로 필드를 나눠도 의미가
+    /// 갈리지 않고, 소비자(§0)가 구분해서 다르게 말할 필요도 없다.
+    /// </param>
     public sealed record VerificationCoverage(
         int? StepsTotal,
         int StepsVerified,
-        bool HasDocumentCodeGap)
+        bool HasDocumentCodeGap,
+        bool HasUncoveredProcedures)
     {
         /// <summary>분할 생성이 실행되어 단계 단위 검증이 성립했는가.</summary>
         public bool SplitRan => StepsTotal.HasValue;
@@ -31,9 +41,10 @@ namespace ReSet.Core.Models
         public bool HasUnverifiedSteps => StepsTotal.HasValue && StepsVerified < StepsTotal.Value;
 
         /// <summary>
-        /// 종료 상태가 Passed라도 사람이 봐야 하는가. 세 사유가 각자 독립적으로 발화한다.
+        /// 종료 상태가 Passed라도 사람이 봐야 하는가. 네 사유가 각자 독립적으로 발화한다.
         /// </summary>
-        public bool NeedsHumanAttention => !SplitRan || HasUnverifiedSteps || HasDocumentCodeGap;
+        public bool NeedsHumanAttention =>
+            !SplitRan || HasUnverifiedSteps || HasDocumentCodeGap || HasUncoveredProcedures;
 
         /// <summary>
         /// 파이프라인이 들고 있는 재료에서 커버리지를 만든다.
@@ -45,11 +56,12 @@ namespace ReSet.Core.Models
         public static VerificationCoverage From(
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
-            bool hasDocumentCodeGap)
+            bool hasDocumentCodeGap,
+            bool hasUncoveredProcedures)
         {
             if (adoptedSteps == null)
             {
-                return new VerificationCoverage(null, 0, hasDocumentCodeGap);
+                return new VerificationCoverage(null, 0, hasDocumentCodeGap, hasUncoveredProcedures);
             }
 
             var unverifiable = stepFloorViolations?
@@ -59,7 +71,8 @@ namespace ReSet.Core.Models
             return new VerificationCoverage(
                 adoptedSteps.Count,
                 verified < 0 ? 0 : verified,
-                hasDocumentCodeGap);
+                hasDocumentCodeGap,
+                hasUncoveredProcedures);
         }
     }
 }

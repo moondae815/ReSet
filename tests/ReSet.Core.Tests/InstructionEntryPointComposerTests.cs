@@ -23,7 +23,7 @@ namespace ReSet.Core.Tests
             // StepsSplit: true에 단계 1개가 실제로 실려 있으므로, 이 픽스처가 이름대로
             // "완전히 검증된 분할"을 뜻하려면 null(커버리지 개념 없음)이 아니라 그 단계가
             // 모두 검증됐다는 값이어야 한다.
-            Coverage: new VerificationCoverage(1, 1, false));
+            Coverage: new VerificationCoverage(1, 1, false, false));
 
         private static EntryPointInputs Fallback() => Split() with
         {
@@ -36,7 +36,7 @@ namespace ReSet.Core.Tests
             // 경로다 - 빈 목록이 아니라 총량 자체가 없다. Split()의 Coverage(1, 1, false)를
             // 그대로 물려받으면 "분할이 실행돼 1단계를 모두 검증했다"는, 이 픽스처가
             // 나타내려는 것과 정반대의 값을 주장하게 된다.
-            Coverage = new VerificationCoverage(null, 0, false),
+            Coverage = new VerificationCoverage(null, 0, false, false),
         };
 
         [Fact]
@@ -181,7 +181,7 @@ namespace ReSet.Core.Tests
             // 결함이다. 보강이 실패해 "검증 불가" 단계가 남는 회차에는 "모두 통과"
             // 한 줄만 찍혀 그 아래 미검증 단계 목록과 정면으로 모순됐다.
             var section = InstructionEntryPointComposer.PlanVerificationSection(
-                VerificationOutcome.Passed, coverage: new VerificationCoverage(19, 17, false));
+                VerificationOutcome.Passed, coverage: new VerificationCoverage(19, 17, false, false));
 
             Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", section);
             Assert.Contains("검증되지 못한 단계가 있습니다", section);
@@ -194,7 +194,7 @@ namespace ReSet.Core.Tests
             // 목차와 커버리지가 서로 다른 회차를 묘사하게 된다 - 이 픽스처가 실제로
             // 색인하는 단계 수(1개)와 맞춰, 그중 1개는 미검증이라고만 말한다.
             var markdown = InstructionEntryPointComposer.Compose(
-                Split() with { Coverage = new VerificationCoverage(1, 0, false) });
+                Split() with { Coverage = new VerificationCoverage(1, 0, false, false) });
 
             Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", markdown);
             Assert.Contains("검증되지 못한 단계가 있습니다", markdown);
@@ -231,7 +231,7 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(null, 0, false));
+                new VerificationCoverage(null, 0, false, false));
 
             Assert.Contains("⚠️", section);
             Assert.DoesNotContain("✅", section);
@@ -243,7 +243,7 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(19, 17, false));
+                new VerificationCoverage(19, 17, false, false));
 
             Assert.Contains("⚠️", section);
             Assert.Contains("검증되지 못한 단계", section);
@@ -254,10 +254,26 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(19, 19, true));
+                new VerificationCoverage(19, 19, true, false));
 
             Assert.Contains("⚠️", section);
             Assert.Contains("원본 오류코드", section);
+        }
+
+        // §0의 배너 사각지대 중 마지막 하나. 이 전에는 단계별 하한 검사가 전부
+        // 통과해도(HasUnverifiedSteps == false) 목차가 원본 프로시저 몇 개를
+        // 어느 단계에도 담지 못하면(또는 커버리지 대조 자체를 못 돌리면) §0은
+        // 그 사실을 몰랐다 - 문서 위쪽의 [커버리지 누락]/[커버리지 검증 불가]
+        // 배너와 정면으로 모순되는 ✅가 나갔다.
+        [Fact]
+        public void PlanVerificationSection_WhenProceduresAreUncovered_Warns()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(19, 19, false, true));
+
+            Assert.Contains("⚠️", section);
+            Assert.Contains("원본 프로시저", section);
         }
 
         // 참인 사유만 나열해야 한다. 해당 없는 사유를 적으면 읽는 사람이 실제
@@ -267,10 +283,11 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(19, 17, false));
+                new VerificationCoverage(19, 17, false, false));
 
             Assert.DoesNotContain("원본 오류코드", section);
             Assert.DoesNotContain("실행되지 않았", section);
+            Assert.DoesNotContain("원본 프로시저", section);
         }
 
         // 설계 §2.2 샘플은 두 사유를 쉼표로 잇는다("…실행되지 않았고, 원본…"). 사유가
@@ -281,19 +298,19 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(null, 0, true));
+                new VerificationCoverage(null, 0, true, false));
 
             Assert.Contains("실행되지 않았고, 원본", section);
         }
 
         // 부재 확인. 조건이 뒤집히면 정상 산출물마다 거짓 경고가 붙는데, 그것을
-        // 잡는 테스트는 이것뿐이다.
+        // 잡는 테스트는 이것뿐이다. 네 사유 모두 깨끗해야 ✅가 유지된다.
         [Fact]
         public void PlanVerificationSection_WhenEverythingIsVerified_KeepsTheCleanPass()
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.Passed,
-                new VerificationCoverage(19, 19, false));
+                new VerificationCoverage(19, 19, false, false));
 
             Assert.Contains("✅", section);
             Assert.DoesNotContain("⚠️", section);
@@ -306,7 +323,7 @@ namespace ReSet.Core.Tests
         {
             var section = InstructionEntryPointComposer.PlanVerificationSection(
                 VerificationOutcome.QualityRejected,
-                new VerificationCoverage(19, 19, false));
+                new VerificationCoverage(19, 19, false, false));
 
             Assert.Contains("⚠️", section);
             Assert.Contains("사람의 검토가 필요합니다", section);

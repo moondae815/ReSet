@@ -270,7 +270,7 @@ public sealed class VerificationDocumentFormatterTests
             "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
             new DateTime(2026, 8, 13),
             scope: null,
-            coverage: new VerificationCoverage(19, 17, false));
+            coverage: new VerificationCoverage(19, 17, false, false));
 
         Assert.Contains("단계 검증: 17/19", markdown);
     }
@@ -291,7 +291,7 @@ public sealed class VerificationDocumentFormatterTests
             "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
             new DateTime(2026, 8, 13),
             scope: null,
-            coverage: new VerificationCoverage(19, 17, false));
+            coverage: new VerificationCoverage(19, 17, false, false));
 
         var overallScoreIndex = markdown.IndexOf("종합 신뢰도", StringComparison.Ordinal);
         var stepCoverageIndex = markdown.IndexOf("단계 검증", StringComparison.Ordinal);
@@ -315,7 +315,7 @@ public sealed class VerificationDocumentFormatterTests
             "본문", review, VerificationOutcome.Passed, "OpenAI", "gpt-4o", "high",
             new DateTime(2026, 8, 13),
             scope: null,
-            coverage: new VerificationCoverage(null, 0, false));
+            coverage: new VerificationCoverage(null, 0, false, false));
 
         Assert.Contains("단계 검증: 미실행", markdown);
         Assert.DoesNotContain("0/0", markdown);

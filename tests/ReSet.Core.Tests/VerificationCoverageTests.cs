@@ -37,7 +37,8 @@ namespace ReSet.Core.Tests
             var coverage = VerificationCoverage.From(
                 adoptedSteps: null,
                 stepFloorViolations: new Dictionary<string, StepDefect>(),
-                hasDocumentCodeGap: false);
+                hasDocumentCodeGap: false,
+                hasUncoveredProcedures: false);
 
             Assert.Null(coverage.StepsTotal);
             Assert.False(coverage.SplitRan);
@@ -54,7 +55,7 @@ namespace ReSet.Core.Tests
                 ["S03"] = new StepDefect(StepDefectKind.Unverifiable, "S03 (검증 불가)")
             };
 
-            var coverage = VerificationCoverage.From(Steps(19), violations, false);
+            var coverage = VerificationCoverage.From(Steps(19), violations, false, false);
 
             Assert.Equal(19, coverage.StepsTotal);
             Assert.Equal(17, coverage.StepsVerified);
@@ -74,7 +75,7 @@ namespace ReSet.Core.Tests
                 ["S02"] = new StepDefect(StepDefectKind.QualityFloor, "S02 (하한 미달)")
             };
 
-            var coverage = VerificationCoverage.From(Steps(19), violations, false);
+            var coverage = VerificationCoverage.From(Steps(19), violations, false, false);
 
             Assert.Equal(19, coverage.StepsVerified);
             Assert.False(coverage.HasUnverifiedSteps);
@@ -89,7 +90,7 @@ namespace ReSet.Core.Tests
                 ["S02"] = new StepDefect(StepDefectKind.QualityFloor, "S02 (하한 미달)")
             };
 
-            var coverage = VerificationCoverage.From(Steps(10), violations, false);
+            var coverage = VerificationCoverage.From(Steps(10), violations, false, false);
 
             Assert.Equal(9, coverage.StepsVerified);
         }
@@ -98,7 +99,7 @@ namespace ReSet.Core.Tests
         public void From_WhenEverythingIsClean_NeedsNoHumanAttention()
         {
             var coverage = VerificationCoverage.From(
-                Steps(19), new Dictionary<string, StepDefect>(), hasDocumentCodeGap: false);
+                Steps(19), new Dictionary<string, StepDefect>(), hasDocumentCodeGap: false, hasUncoveredProcedures: false);
 
             Assert.Equal(19, coverage.StepsVerified);
             Assert.False(coverage.NeedsHumanAttention);
@@ -110,9 +111,37 @@ namespace ReSet.Core.Tests
         public void From_DocumentCodeGapAloneTriggersAttention()
         {
             var coverage = VerificationCoverage.From(
-                Steps(19), new Dictionary<string, StepDefect>(), hasDocumentCodeGap: true);
+                Steps(19), new Dictionary<string, StepDefect>(), hasDocumentCodeGap: true, hasUncoveredProcedures: false);
 
             Assert.False(coverage.HasUnverifiedSteps);
+            Assert.True(coverage.NeedsHumanAttention);
+        }
+
+        // From은 재료를 그대로 옮겨 담을 뿐이다. 값이 뒤섞이지 않는지 확인한다.
+        [Fact]
+        public void From_MapsHasUncoveredProceduresThrough()
+        {
+            var coverage = VerificationCoverage.From(
+                Steps(19), new Dictionary<string, StepDefect>(),
+                hasDocumentCodeGap: false, hasUncoveredProcedures: true);
+
+            Assert.True(coverage.HasUncoveredProcedures);
+        }
+
+        // 목차가 원본 프로시저 일부를 어디에도 담지 못한 것은(또는 커버리지
+        // 대조 자체를 실행하지 못한 것은) 그 자체로 단계 검증률·오류코드
+        // 보존과 독립적인 결함이다. 다른 세 사유가 전부 깨끗해도 이것 하나만으로
+        // 사람이 봐야 한다.
+        [Fact]
+        public void From_HasUncoveredProceduresAlone_NeedsHumanAttention()
+        {
+            var coverage = VerificationCoverage.From(
+                Steps(19), new Dictionary<string, StepDefect>(),
+                hasDocumentCodeGap: false, hasUncoveredProcedures: true);
+
+            Assert.True(coverage.SplitRan);
+            Assert.False(coverage.HasUnverifiedSteps);
+            Assert.False(coverage.HasDocumentCodeGap);
             Assert.True(coverage.NeedsHumanAttention);
         }
     }
