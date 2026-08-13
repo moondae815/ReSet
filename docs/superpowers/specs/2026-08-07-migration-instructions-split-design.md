@@ -407,10 +407,20 @@ C#은 NetArchTest, Java는 ArchUnit으로 같은 규칙을 표현한다.
 
 ### 남은 후속 작업
 
-- `PlanBoundaryResolver`의 `allFound == true` 분기에도 같은 모양의 공백이 있다 — 마지막 단계가
-  필수 H2가 아닌 헤딩에서 끝나면 그 구간이 어느 조각에도 속하지 않는다. `!allFound` 쪽은 해결됨.
-- 레거시 전체 Job 경로는 `MaxL2Attempts: "unlimited"`에서 `nothingVerified`가 무한 재시도한다.
-  회차 경로에는 상한이 있으나 레거시에는 없다.
+- ~~`PlanBoundaryResolver`의 `allFound == true` 분기에도 같은 모양의 공백이 있다 — 마지막 단계가
+  필수 H2가 아닌 헤딩에서 끝나면 그 구간이 어느 조각에도 속하지 않는다. `!allFound` 쪽은 해결됨.~~
+  **해소됨(2026-08-09).** [침묵 실패 닫기](2026-08-09-silent-failure-closure-design.md)의
+  `acf5210`이 `AbsorbUncoveredRegions`를 넣어 닫았다. 조각이 덮은 범위를 `covered` 목록으로
+  모아 빈틈을 계산하고 남은 줄은 전부 개요가 받는다. 조각을 새로 만들 때 이 목록에 범위를
+  등록하는 것이 계약이 됐다 — 등록을 잊으면 개요에 중복으로 실리고, 범위만 등록하고 조각을
+  만들지 않으면 사라진다.
+- ~~레거시 전체 Job 경로는 `MaxL2Attempts: "unlimited"`에서 `nothingVerified`가 무한 재시도한다.
+  회차 경로에는 상한이 있으나 레거시에는 없다.~~ **해소됨(2026-08-09), 다만 부분적이다.**
+  [침묵 실패 닫기](2026-08-09-silent-failure-closure-design.md)의 `e1ccfbd`가
+  `RunSelfHealingWorkflowAsync`에도 `MaxConsecutiveUnverifiedRetries`(2회) 캡을 넣어
+  `nothingVerified` 변종을 닫았다. **그러나 같은 문서 §후속 작업 1이 기록하듯 다른 조합은
+  아직 열려 있다** — 산출물 있음 + 매핑 성립 + L1/L2 매번 실패면 두 연속 캡(무산출물·미대조)
+  어디에도 닿지 않아 `unlimited`에서 여전히 끝나지 않는다.
 - C# 아키텍처 규칙 5가 단일 어셈블리 스코프라, 계약과 구현을 다른 프로젝트에 두는
   Hexagonal 배치에서 오탐이 난다. Java 쪽은 클래스패스 전체를 본다.
 - `{specRoot}`가 `<outputRoot>/Procedures`만 덮는다. External DB(`External/<db>/Procedures/`)와
