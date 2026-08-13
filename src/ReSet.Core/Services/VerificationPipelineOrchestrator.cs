@@ -1711,6 +1711,14 @@ namespace ReSet.Core.Services
             string? feedbackLog = null;
             var feedbackHistory = new System.Collections.Generic.List<string>();
             string consolidatedPlan = string.Empty;
+            // consolidatedPlan과 별도로 배너 없는 원본 본문만 담는다. L1Exhausted/
+            // QualityRejected/ReviewNotRun 배너는 실패 사유(Critic 피드백 등)를 그대로
+            // 인용하므로, 그 문구에 우연히 오류코드 숫자가 섞이면 본문을 훑어야 할
+            // AttachPipelineBanners의 오류코드 누락 검사가 배너 텍스트에서 "존재"를
+            // 오판한다 - QualityRejected 배너가 Critic 코멘트를 그대로 옮기는 것이
+            // 실제로 이 사고를 낸 자리다. 루프의 각 종료 지점에서 배너를 붙이기
+            // 직전의 값을 여기에 담아 둔다.
+            string documentBodyForChecks = string.Empty;
             AiResult? finalAiResult = null;
             string currentPlanStructure = string.Empty;
             // 재수립 시점에 필요한데 기존에는 if 블록 안에서만 살아 있었다.
@@ -1758,6 +1766,11 @@ namespace ReSet.Core.Services
             // specsCopy가 아니라 specs를 넘긴다 - specsCopy에는 Feedback_Log.txt가
             // 붙는데 그것은 명세서가 아니다.
             var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+
+            // 목차 단계는 명세서를 받지 않으므로 이름을 알 방법이 이 명단뿐이다.
+            // 반드시 원본 specs를 쓴다 - specsCopy는 재시도 회차마다 Feedback_Log.txt가
+            // 덧붙어, 존재하지 않는 프로시저가 명단에 섞인다.
+            var sourceProcedureRoster = specs.Select(s => s.FileName).ToList();
 
             // 목차의 TargetTables도 같은 문제를 갖는다 - 같은 12개 SP를 두 제공자로
             // 돌린 실측에서 7개와 17개가 나왔고, 두 회차 모두 같은 단계를 빈 배열로
@@ -1819,7 +1832,7 @@ namespace ReSet.Core.Services
                             currentBrainstorming = brainstormResult.Content;
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
-                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
+                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, sourceProcedureRoster, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
                             var planEnrichment = PlanStructureEnricher.Enrich(
                                 planResult.Content, specReturnCodes, specTargetTables);
                             currentPlanStructure = planEnrichment.Markdown;
@@ -1911,6 +1924,10 @@ namespace ReSet.Core.Services
                     finalAiResult = rescued.Generation ?? finalAiResult;
                     planReview = rescued.Review;
                     planOutcome = VerificationOutcome.QualityRejected;
+                    // rescued.Markdown에는 이미 QualityRejected 배너가 붙어 있다(RetryRescue
+                    // 참조). 코드 대조는 배너 없는 원본이 필요하므로 bestAttempt.Current가
+                    // 들고 있는 채점 시점의 원본을 쓴다.
+                    documentBodyForChecks = bestAttempt.Current!.Markdown;
                     consolidatedPlan = rescued.Markdown;
                     break;
                 }
@@ -1946,12 +1963,17 @@ namespace ReSet.Core.Services
                             finalAiResult = rescued.Generation ?? finalAiResult;
                             planReview = rescued.Review;
                             planOutcome = VerificationOutcome.QualityRejected;
+                            // rescued.Markdown은 이미 배너가 붙은 문자열이다 - 원본은
+                            // bestAttempt.Current에서 가져온다.
+                            documentBodyForChecks = bestAttempt.Current!.Markdown;
                             consolidatedPlan = rescued.Markdown;
                             break;
                         }
 
                         _userInteraction.NotifyError($"{jobName} - [[L1 기계 검증]] 최종 보완 실패. 마지막 작성 버전을 사용합니다.");
                         planOutcome = VerificationOutcome.L1Exhausted;
+                        // 배너를 붙이기 직전의 값이 배너 없는 원본이다.
+                        documentBodyForChecks = consolidatedPlan;
                         consolidatedPlan = VerificationBanner.L1Exhausted(l1Result.Errors) + consolidatedPlan;
                         break;
                     }
@@ -2023,7 +2045,7 @@ namespace ReSet.Core.Services
                                 specReturnCodes,
                                 specTargetTables,
                                 currentPlanStructure, currentBrainstorming, feedbackLog,
-                                targetLanguage, jobName, cancellationToken);
+                                targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
 
                             // 이 경로는 새 목차를 바로 다음 회차가 소비하므로 여기서 확정
                             // 기록한다. 기록에 실패하면 재수립을 없었던 일로 되돌려
@@ -2080,6 +2102,10 @@ namespace ReSet.Core.Services
                         finalAiResult = rescued?.Generation ?? finalAiResult;
                         planOutcome = VerificationOutcome.QualityRejected;
                         planReview = adoptedReview;
+                        // rescued가 있으면 배너 없는 원본은 bestAttempt.Current에 있다.
+                        // 없으면(구제할 후보가 없음) 지금 값이 곧 배너를 붙이기 직전의
+                        // 원본이다 - 아래에서 그 값을 읽은 뒤에 덮어쓴다.
+                        documentBodyForChecks = rescued != null ? bestAttempt.Current!.Markdown : consolidatedPlan;
                         consolidatedPlan = rescued?.Markdown
                             ?? VerificationBanner.QualityRejected(adoptedReview, _criticScoreThreshold) + consolidatedPlan;
                         break;
@@ -2104,6 +2130,7 @@ namespace ReSet.Core.Services
                         finalAiResult = rescued.Generation ?? finalAiResult;
                         planReview = rescued.Review;
                         planOutcome = VerificationOutcome.QualityRejected;
+                        documentBodyForChecks = bestAttempt.Current!.Markdown;
                         consolidatedPlan = rescued.Markdown;
                         break;
                     }
@@ -2111,6 +2138,7 @@ namespace ReSet.Core.Services
                     _userInteraction.NotifyError(
                         $"{jobName} - [[L2 AI 리뷰]] 를 수행하지 못해 교차 검증 없이 계획서를 확정합니다.");
                     planOutcome = VerificationOutcome.ReviewNotRun;
+                    documentBodyForChecks = consolidatedPlan;
                     consolidatedPlan =
                         VerificationBanner.ReviewNotRun(reviewFailureReason ?? "사유가 기록되지 않았습니다.") + consolidatedPlan;
                     break;
@@ -2129,6 +2157,8 @@ namespace ReSet.Core.Services
                     }
                     planReview = l2Result;
                     _userInteraction.NotifyValidationSuccess(jobName);
+                    // 통과 경로는 배너가 붙지 않으므로 지금 값이 곧 원본이다.
+                    documentBodyForChecks = consolidatedPlan;
                     break;
                 }
             }
@@ -2143,9 +2173,12 @@ namespace ReSet.Core.Services
             // 않는다. (2) 앞으로 채택 문서를 이전 회차로 되돌리는 새 종료 경로를
             // 추가한다면, 그 경로는 반드시 currentPlanStructure를 그 회차의 목차로
             // 되감아야 한다 — 안 그러면 이 재계산이 채택되지 않은 문서를 서술한다.
+            // (3) 루프에 새 종료 경로(break/return)를 추가한다면 documentBodyForChecks도
+            // 그 자리에서 함께 채워야 한다 - 빠뜨리면 오류코드 누락 검사가 직전 회차의
+            // 원본을 보게 된다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             consolidatedPlan = AttachPipelineBanners(
-                consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
@@ -2201,7 +2234,7 @@ namespace ReSet.Core.Services
                             specReturnCodes,
                             specTargetTables,
                             currentPlanStructure, currentBrainstorming, reviewResult.UserFeedback,
-                            targetLanguage, jobName, cancellationToken);
+                            targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
                         if (pendingPlanStructure != null)
                         {
                             structureForRegeneration = pendingPlanStructure;
@@ -2386,8 +2419,10 @@ namespace ReSet.Core.Services
                     // 회차에서 사라졌거나 새로 생긴 단계 코드를 반영하지 못한 채 낡은
                     // 목록을 계속 보여준다.
                     adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                    // 이 경로의 consolidatedPlan은 방금 rePlan에서 받은 배너 없는 원본이다
+                    // (아래 L1Exhausted 배너는 이 호출 다음에 붙는다).
                     consolidatedPlan = AttachPipelineBanners(
-                        consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+                        consolidatedPlan, consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 
                     // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
                     // 일부러 건너뛴다 — 통짜 재작성이 단계별로 확보한 본문을 무너뜨리기
@@ -2409,9 +2444,20 @@ namespace ReSet.Core.Services
         ///
         /// 재시도 루프 종료 직후와 L3 피드백 재생성 직후, 두 자리에서 호출된다.
         /// 두 벌로 두면 한쪽만 고쳐지는 날이 온다.
+        ///
+        /// <paramref name="documentBody"/>는 <paramref name="consolidatedPlan"/>과 달리
+        /// 배너가 전혀 붙지 않은 원본이다. L1Exhausted·QualityRejected·ReviewNotRun
+        /// 배너는 실패 사유(L1 오류 목록, Critic 코멘트 등)를 그대로 인용하는데, 그
+        /// 문구에 우연히 숫자 오류코드가 섞이면 오류코드 누락 검사가 배너의 인용문을
+        /// "문서에 존재"로 오판한다 - Critic이 "오류코드 -7 반환 경로가 누락되었습니다"라고
+        /// 쓴 QualityRejected 배너가 실제로 이 사고를 냈다. 본문만 훑어야 하는 검사는
+        /// 반드시 이 매개변수를 쓴다. 이 메서드가 자체로 앞서 붙이는 배너들
+        /// (UnverifiableSteps·StepFloorViolations·SplitGenerationSkipped)도 같은 이유로
+        /// consolidatedPlan을 오염시키므로, documentBody는 그 배너들의 영향도 받지 않는다.
         /// </summary>
         private string AttachPipelineBanners(
             string consolidatedPlan,
+            string documentBody,
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
@@ -2437,9 +2483,14 @@ namespace ReSet.Core.Services
                 .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
                 .ToLookup(kvp => kvp.Value.Kind, kvp => kvp.Value.Reason);
 
-            // 붙이는 순서와 읽히는 순서는 반대다 - 앞에 붙일수록 문서 위로 간다.
-            // 검증 불가를 먼저 붙여 품질 미달이 맨 위에 오게 한다(더 심각한
-            // 쪽을 먼저 읽게 하려는 의도).
+            // 붙이는 순서와 읽히는 순서는 반대다 - 나중에 붙일수록 문서 위로 간다.
+            // 검증 불가를 먼저 붙이고 하한 미달을 그다음에 붙여, 하한 미달이 검증
+            // 불가보다 위에 오게 한다(더 심각한 쪽을 먼저 읽게 하려는 의도). 이
+            // 아래로 분할 미실행 → 오류코드 누락 → 커버리지(누락/검증 불가) 배너가
+            // 순서대로 더 붙는데, 나중에 붙는 배너일수록 앞서 붙은 배너 위로
+            // 다시 얹힌다. 그래서 최종 문서는 위에서부터 커버리지 → 오류코드 누락
+            // → 분할 미실행 → 하한 미달 → 검증 불가 순으로 읽힌다 - 목차·명세서
+            // 수준의 결함일수록 위로, 단계 하나의 결함일수록 아래로 간다.
             var unverifiableSteps = byKind[StepDefectKind.Unverifiable].ToList();
             if (unverifiableSteps.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
             {
@@ -2477,9 +2528,40 @@ namespace ReSet.Core.Services
             //
             // TryParse가 null이면(목차가 유효한 단계 목록을 못 냈으면) 검사를 그냥
             // 건너뛴다 — 의도적이다. 분할 경로 자체가 "개선이지 필수 단계가 아니다"
-            // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
-            // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
-            // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
+            // 라는 계약을 이 검사도 그대로 물려받는다. 목차가 망가진 바로 그 순간이
+            // 커버리지가 가장 의심스러운 순간이지만, 더는 사각지대가 아니다 - 바로
+            // 아래에서 SplitGenerationSkipped 배너가 "분할이 무산되어 커버리지 검사와
+            // 하한 검사가 둘 다 실행되지 않았다"는 사실 자체를 문서에 남긴다. 이
+            // 배너가 생기기 전에는 문서에 아무 흔적이 남지 않아 가장 적게 검증된
+            // 문서가 가장 깨끗해 보였다(POQSettleProc7, 92점).
+            if (adoptedSteps == null && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                Log.Warning(
+                    "[파이프라인] 목차가 유효한 단계 목록을 내지 못해 분할 생성이 실행되지 않았습니다 - Job: {JobName}",
+                    jobName);
+                consolidatedPlan = VerificationBanner.SplitGenerationSkipped() + consolidatedPlan;
+            }
+
+            var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+
+            // 분할 여부와 무관하게 항상 돈다. 폴백 경로에만 걸면 "분할은 됐으나 목차
+            // 메타데이터가 비어 단계별 대조가 무실행"인 회차를 놓친다 - 실측에서 그쪽이
+            // 먼저 일어났다. 목차를 전혀 쓰지 않는다는 것이 이 검사의 존재 이유다.
+            if (!string.IsNullOrEmpty(consolidatedPlan))
+            {
+                // consolidatedPlan이 아니라 documentBody를 스캔한다 - 위 요약 참조.
+                var missingCodes = MechanicalValidator.FindMissingErrorCodes(documentBody, specReturnCodes);
+                if (missingCodes.Count > 0)
+                {
+                    Log.Warning(
+                        "[파이프라인] 원본 오류코드가 최종 문서에서 확인되지 않았습니다 - Job: {JobName}, 프로시저: {Count}개",
+                        jobName, missingCodes.Count);
+
+                    consolidatedPlan =
+                        VerificationBanner.MissingErrorCodes(missingCodes, specReturnCodes) + consolidatedPlan;
+                }
+            }
+
             var uncoveredProcedures = adoptedSteps != null
                 ? FindUncoveredProcedures(adoptedSteps, specs)
                 : Array.Empty<string>();
@@ -2542,6 +2624,7 @@ namespace ReSet.Core.Services
             string? redraftFeedback,
             string targetLanguage,
             string jobName,
+            IReadOnlyList<string> sourceProcedures,
             CancellationToken cancellationToken)
         {
             _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - {reason}...");
@@ -2555,7 +2638,7 @@ namespace ReSet.Core.Services
                     progressScope.AddTask("redraft", "목차 재설계 중...");
                     var result = await WrapWithProgress(
                         _consolidatorService.DraftBatchPlanStructureAsync(
-                            brainstorming, targetLanguage, jobName, _consolidatorEffort,
+                            brainstorming, targetLanguage, jobName, sourceProcedures, _consolidatorEffort,
                             currentStructure, redraftFeedback, cancellationToken),
                         progressScope, "redraft");
                     redrafted = result.Content;

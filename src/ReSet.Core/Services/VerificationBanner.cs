@@ -203,6 +203,27 @@ public static class VerificationBanner
     }
 
     /// <summary>
+    /// 목차가 유효한 단계 목록을 내지 못해 분할 생성이 실행되지 않았음을 알린다.
+    ///
+    /// 다른 배너들과 달리 이것은 "무엇이 잘못됐다"가 아니라 "무엇을 검사하지
+    /// 않았다"를 나른다. 그래서 더 중요하다 - 실측(POQSettleProc7)에서 이 경로를
+    /// 탄 문서가 배너 하나 없이 92점으로 끝났고, 분할된 문서(88점)보다 높았다.
+    /// 짧고 깔끔한 문서가 읽기 좋았기 때문이다. 점수는 누락을 볼 수 없다.
+    ///
+    /// 사유(JSON 블록 없음, 0단계, 상한 초과, 파싱 실패)는 구분하지 않는다.
+    /// 운영상 결과가 같고, 사유는 이미 경고 로그에 남는다.
+    /// </summary>
+    public static string SplitGenerationSkipped()
+    {
+        return "\n> [!WARNING]\n> **[분할 미실행] 목차가 유효한 단계 목록을 내지 못해"
+            + " 문서가 단일 호출로 생성되었습니다.**"
+            + " 단계별 섹션 생성과 단계별 하한 검사(대상 테이블·오류코드 대조)가"
+            + " 실행되지 않았습니다. 내용이 부실하다는 뜻은 아니지만, 이 문서는"
+            + " 단계 단위 기계 검증을 받지 않았습니다."
+            + "\n\n";
+    }
+
+    /// <summary>
     /// 사용자 취소로 이 문서의 참조 객체 일부가 분석되지 않았음을 알린다.
     /// 개수 대신 이름을 싣는다 — 읽는 사람이 다음에 할 일이 그 객체를 다시
     /// 분석하는 것이기 때문이다.
@@ -213,6 +234,44 @@ public static class VerificationBanner
 
         return "\n> [!CAUTION]\n> **[참조 미완] 사용자 취소로 아래 참조 객체가 분석되지 않았습니다.**\n"
             + nameLines
+            + "\n\n";
+    }
+
+    /// <summary>
+    /// 원본 명세서의 오류코드 중 최종 문서 어디에도 없는 것을 알린다.
+    ///
+    /// 레거시 반환 코드를 그대로 계승하는 것은 이 문서의 핵심 계약이다. 실측
+    /// (POQSettleProc7)에서 그 계약이 20군데 깨졌는데 아무 신호도 나가지 않았다 -
+    /// 오류코드 대조가 단계별 경로에만 붙어 있었고 그 경로가 통째로 건너뛰어졌기 때문이다.
+    ///
+    /// 분모를 함께 싣는다. "9개 누락"만으로는 읽는 사람이 심각도를 가늠할 수 없다.
+    /// </summary>
+    public static string MissingErrorCodes(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> missingByProcedure,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+    {
+        var lines = new List<string>();
+        foreach (var (procedure, missing) in missingByProcedure)
+        {
+            var total = codesByProcedure != null
+                        && codesByProcedure.TryGetValue(procedure, out var all)
+                ? all.Count
+                : missing.Count;
+
+            // procedure는 SpecReturnCodeExtractor.BareName이 낮춘 소문자 키다. 그대로
+            // 찍으면 같은 문서의 UncoveredProcedures(예: "dbo.UP_UTIL_SETTLE_INS")와
+            // 표기가 어긋난다. 스키마 접두사까지는 복원할 수 없지만, 대문자로는
+            // 맞춰 원본 프로시저명 표기 관례를 따른다.
+            lines.Add($"{procedure.ToUpperInvariant()}: {total}개 중 {missing.Count}개 누락 — {string.Join(", ", missing)}");
+        }
+
+        var body = RenderBulletList(lines, "(누락 내역이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[오류코드 누락] 원본 명세서의 반환 코드가 최종 문서에서"
+            + " 확인되지 않았습니다.**"
+            + " 레거시 반환 코드의 보존은 이 문서의 핵심 계약이므로, 아래 항목은 문서를"
+            + " 넘기기 전에 직접 확인하십시오.\n"
+            + body
             + "\n\n";
     }
 }
