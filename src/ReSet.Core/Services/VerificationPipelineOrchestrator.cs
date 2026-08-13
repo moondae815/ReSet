@@ -2177,14 +2177,15 @@ namespace ReSet.Core.Services
             // 그 자리에서 함께 채워야 한다 - 빠뜨리면 오류코드 누락 검사가 직전 회차의
             // 원본을 보게 된다.
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
-            consolidatedPlan = AttachPipelineBanners(
+            VerificationCoverage? coverage;
+            (consolidatedPlan, coverage) = AttachPipelineBanners(
                 consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps));
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
             }
 
             while (true)
@@ -2198,7 +2199,7 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps));
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
@@ -2421,7 +2422,11 @@ namespace ReSet.Core.Services
                     adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
                     // 이 경로의 consolidatedPlan은 방금 rePlan에서 받은 배너 없는 원본이다
                     // (아래 L1Exhausted 배너는 이 호출 다음에 붙는다).
-                    consolidatedPlan = AttachPipelineBanners(
+                    //
+                    // coverage도 여기서 다시 대입한다: 재생성이 단계 구성을 바꿨다면
+                    // 재시도 루프 종료 직후 계산한 커버리지는 더 이상 이 문서를
+                    // 서술하지 않는다.
+                    (consolidatedPlan, coverage) = AttachPipelineBanners(
                         consolidatedPlan, consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
 
                     // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
@@ -2455,7 +2460,7 @@ namespace ReSet.Core.Services
         /// (UnverifiableSteps·StepFloorViolations·SplitGenerationSkipped)도 같은 이유로
         /// consolidatedPlan을 오염시키므로, documentBody는 그 배너들의 영향도 받지 않는다.
         /// </summary>
-        private string AttachPipelineBanners(
+        private (string Plan, VerificationCoverage Coverage) AttachPipelineBanners(
             string consolidatedPlan,
             string documentBody,
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
@@ -2463,6 +2468,11 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string jobName)
         {
+            // 문서 헤더와 지시서 §0 양쪽이 소비할 커버리지 사실. 이 메서드 안에서
+            // 만들어지는 세 재료(adoptedSteps, stepFloorViolations, missingCodes)를
+            // 그대로 이어받아 계산한다 - 메서드 밖에서 missingCodes를 다시 계산하면
+            // 같은 사실이 두 곳에 생겨 갈라진다.
+            var hasDocumentCodeGap = false;
             // 하한 미달·검증 불가는 파이프라인을 막지 않지만, 조용히 넘어가지도
             // 않는다. 12줄짜리 S10이 아무 신호 없이 나온 것이 이 배너가 필요한
             // 이유다.
@@ -2553,6 +2563,8 @@ namespace ReSet.Core.Services
                 var missingCodes = MechanicalValidator.FindMissingErrorCodes(documentBody, specReturnCodes);
                 if (missingCodes.Count > 0)
                 {
+                    hasDocumentCodeGap = true;
+
                     Log.Warning(
                         "[파이프라인] 원본 오류코드가 최종 문서에서 확인되지 않았습니다 - Job: {JobName}, 프로시저: {Count}개",
                         jobName, missingCodes.Count);
@@ -2600,7 +2612,14 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return consolidatedPlan;
+            // noOriginsAtAll(CoverageUnverifiable)과 uncoveredProcedures.Count > 0
+            // (UncoveredProcedures)은 바로 위 if/else if로 이미 상호 배타적이다 - 커버리지
+            // 대조를 아예 못 돌린 상태와 돌렸는데 일부가 빠진 상태는 같은 순간에 참일 수
+            // 없다. 그래서 배너 두 개를 필드 하나(HasUncoveredProcedures)로 합쳐 넘긴다.
+            return (consolidatedPlan,
+                VerificationCoverage.From(
+                    adoptedSteps, stepFloorViolations, hasDocumentCodeGap,
+                    hasUncoveredProcedures: noOriginsAtAll || uncoveredProcedures.Count > 0));
         }
 
         /// <summary>

@@ -874,7 +874,9 @@ namespace ReSet.Cli
                                     provider,
                                     modelName,
                                     consolidatorEffort,
-                                    DateTime.Now));
+                                    DateTime.Now,
+                                    scope: null,
+                                    coverage: pipelineResult.Coverage));
 
                             if (aiResult != null)
                             {
@@ -901,6 +903,7 @@ namespace ReSet.Cli
                                 targetLanguage,
                                 new OutputPathResolver(resolvedDatabase, outputDir),
                                 pipelineResult.Layout,
+                                pipelineResult.Coverage,
                                 activeCts.Token);
 
                             foreach (var warning in bundle.Warnings)
@@ -1430,7 +1433,9 @@ namespace ReSet.Cli
                                     provider,
                                     modelName,
                                     consolidatorEffort,
-                                    DateTime.Now));
+                                    DateTime.Now,
+                                    scope: null,
+                                    coverage: pipelineResult.Coverage));
 
                             if (aiResult != null)
                             {
@@ -1464,6 +1469,7 @@ namespace ReSet.Cli
                                     targetLanguage,
                                     new OutputPathResolver(resolvedDatabase, outputDir),
                                     pipelineResult.Layout,
+                                    pipelineResult.Coverage,
                                     activeCts.Token);
 
                                 foreach (var warning in bundle.Warnings)

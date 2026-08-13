@@ -24,7 +24,8 @@ public static class VerificationDocumentFormatter
         string modelName,
         string? effort,
         DateTime timestamp,
-        AnalysisScope? scope = null)
+        AnalysisScope? scope = null,
+        VerificationCoverage? coverage = null)
     {
         // 점수 노출 여부는 review의 null 여부가 아니라 종료 상태가 결정한다.
         // 1차 시도의 리뷰 결과가 남아 있어도 최종적으로 검증되지 않았다면 점수를 실으면 안 된다.
@@ -35,10 +36,17 @@ public static class VerificationDocumentFormatter
         // 사람이 옮겨 적었는데, 연결을 강제하는 장치가 없어 드리프트했고 실제로 거짓이
         // 되었다. Critic은 셋(프로시저 명세서/UDF 명세서/통합 계획서)인데 이 포매터는
         // 그 셋을 구분할 수단이 없으므로, 어떤 문구를 쓰더라도 어딘가에서는 틀린다.
-        var scoreLines = showScores
+        //
+        // 종합 신뢰도와 축별 점수를 나눠 둔 이유: 커버리지(단계 검증)는 종합 신뢰도
+        // 바로 아래에 와야 한다 - 독자가 종합 신뢰도를 저울질할 때 곁에 둘 수치이지,
+        // 축별 점수 뒤에 딸린 부록이 아니다.
+        var overallScoreLine = showScores
+            ? $"\n종합 신뢰도: {review!.NormalizedScore}"
+            : string.Empty;
+
+        var axisScoreLines = showScores
             ? $@"
-종합 신뢰도: {review!.NormalizedScore}
-정합성 점수: {review.ScoreAccuracy}/10
+정합성 점수: {review!.ScoreAccuracy}/10
 CRUD 점수: {review.ScoreCrud}/10
 인터페이스 점수: {review.ScoreInterface}/10
 가독성 점수: {review.ScoreReadability}/10
@@ -54,10 +62,20 @@ CRUD 점수: {review.ScoreCrud}/10
             _ => string.Empty
         };
 
+        // 점수 옆에 검증량을 놓는다. 점수는 읽어 본 품질이고 이것은 대조해 본
+        // 분량이라 서로를 대신하지 못한다. 단일 SP 명세서에는 단계 개념이 없으므로
+        // coverage가 null이면 줄 자체를 만들지 않는다 - scope와 같은 규칙이다.
+        var coverageLine = coverage switch
+        {
+            null => string.Empty,
+            { StepsTotal: null } => "\n단계 검증: 미실행 (목차가 단계 목록을 내지 못함)",
+            var c => $"\n단계 검증: {c.StepsVerified}/{c.StepsTotal}"
+        };
+
         // 아래 두 주석은 남는다. 필드 자체의 설명이라 프롬프트에서 복제한 것이 아니고
         // 드리프트할 대상이 없다.
         var yamlFrontMatter = $@"---
-검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scopeLine}{scoreLines}
+검증 상태: {StatusLabel(outcome)} # 검증 파이프라인 종료 상태{scopeLine}{overallScoreLine}{coverageLine}{axisScoreLines}
 ---
 
 ";
