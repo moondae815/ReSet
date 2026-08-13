@@ -1899,7 +1899,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            Assert.Equal(consolidatedPlan, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다 -
+            // 이 테스트가 검증하는 대상은 배너가 아니라 본문이 그대로 실렸는지다.
+            Assert.EndsWith(consolidatedPlan, result.Plan);
             _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
         }
 
@@ -1931,7 +1933,8 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            Assert.Equal(goodPlan, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(goodPlan, result.Plan);
             _userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
         }
 
@@ -2252,7 +2255,8 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            Assert.Equal(regeneratedMarkdown, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(regeneratedMarkdown, result.Plan);
             await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
@@ -2294,7 +2298,8 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            Assert.Equal(initialMarkdown, result.Plan); // It reverted to initial markdown because regeneration failed
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(initialMarkdown, result.Plan); // It reverted to initial markdown because regeneration failed
             userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("재생성 실패")));
         }
 
@@ -2340,7 +2345,8 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            Assert.Equal(fixedMarkdown, result.Plan); // Returns fixed markdown
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(fixedMarkdown, result.Plan); // Returns fixed markdown
             userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
         }
 
@@ -3119,13 +3125,14 @@ namespace ReSet.Core.Tests
                 specs, "C#", "TestJobFeedbackOutcome", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             Assert.NotNull(result.Plan);
-            Assert.Equal(regeneratedMarkdown, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(regeneratedMarkdown, result.Plan);
             // 1차 호출: 표준 루프에서 L1+L2 모두 통과한 초안 -> Passed.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", initialMarkdown, VerificationOutcome.Passed, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
+                "TestJobFeedbackOutcome", Arg.Is<string>(s => s.EndsWith(initialMarkdown)), VerificationOutcome.Passed, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
             // 2차 호출: 피드백으로 전면 재생성된, 한 번도 리뷰받지 않은 계획서 -> ReviewNotRun.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", regeneratedMarkdown, VerificationOutcome.ReviewNotRun, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
+                "TestJobFeedbackOutcome", Arg.Is<string>(s => s.EndsWith(regeneratedMarkdown)), VerificationOutcome.ReviewNotRun, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         [Fact]
@@ -4540,7 +4547,8 @@ namespace ReSet.Core.Tests
                 specs, "C#", "L3RegenFailJob", "OpenAI", _consolidatedOutputRoot);
 
             // 사용자가 승인한 문서는 여전히 "첫 목차"가 만든 최초 계획서다.
-            Assert.Equal(plan, result.Plan);
+            // 목차("첫 목차")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
+            Assert.EndsWith(plan, result.Plan);
 
             var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "L3RegenFailJob", "raw");
             Assert.Equal("첫 목차", await File.ReadAllTextAsync(Path.Combine(rawDir, "PlanStructure.md")));
@@ -6214,6 +6222,68 @@ SELECT 1;
             // 부재를 확인하는 테스트가 존재를 확인하는 테스트만큼 중요하다 —
             // 그래야 조건이 뒤집혀 배너가 늘 붙는 사고를 잡는다.
             Assert.DoesNotContain("[커버리지 누락]", result.Plan);
+        }
+
+        // POQSettleProc7 재현: 모델이 빈 Steps 목록을 내면 분할이 무산되는데,
+        // 종전에는 문서에 그 사실이 전혀 남지 않았다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenOutlineYieldsNoSteps_PrependsSplitSkippedBanner()
+        {
+            var emptyStepsJson = "```json\n{\n  \"Steps\": []\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + emptyStepsJson });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = SkeletonMarkdown }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Contains("[분할 미실행]", result.Plan);
+        }
+
+        // 부재를 확인하는 테스트가 존재를 확인하는 테스트만큼 중요하다 - 조건이
+        // 뒤집혀 배너가 늘 붙으면 정상 산출물마다 거짓 경고가 실린다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenSplitRuns_OmitsSplitSkippedBanner()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.DoesNotContain("[분할 미실행]", result.Plan);
         }
 
         /// <summary>

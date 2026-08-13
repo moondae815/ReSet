@@ -2485,6 +2485,17 @@ namespace ReSet.Core.Services
             // 라는 계약을 이 검사도 그대로 물려받는다. 다만 목차가 망가진 바로 그
             // 순간이 커버리지가 가장 의심스러운 순간이라는 점은 유의하십시오 —
             // 이 검사가 아무 신호도 못 내는 유일한 사각지대다.
+            // 분할이 무산됐다는 사실 자체가 검증 결과의 일부다. 이 경로에서는 커버리지
+            // 검사와 하한 검사가 둘 다 실행되지 않는데, 종전에는 문서에 아무 흔적이
+            // 남지 않아 가장 적게 검증된 문서가 가장 깨끗해 보였다.
+            if (adoptedSteps == null && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                Log.Warning(
+                    "[파이프라인] 목차가 유효한 단계 목록을 내지 못해 분할 생성이 실행되지 않았습니다 - Job: {JobName}",
+                    jobName);
+                consolidatedPlan = VerificationBanner.SplitGenerationSkipped() + consolidatedPlan;
+            }
+
             var uncoveredProcedures = adoptedSteps != null
                 ? FindUncoveredProcedures(adoptedSteps, specs)
                 : Array.Empty<string>();

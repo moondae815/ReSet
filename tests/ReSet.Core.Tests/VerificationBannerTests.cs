@@ -322,4 +322,20 @@ public sealed class VerificationBannerTests
         Assert.Contains("[커버리지 누락]", banner);
         Assert.DoesNotContain("섞여 있을 수 있습니다", banner);
     }
+
+    // 목차가 유효한 단계 목록을 못 내면 커버리지 검사와 하한 검사가 둘 다 건너뛰어지는데,
+    // 종전에는 경고 로그 두 줄만 남고 문서에는 아무 흔적이 없었다. POQSettleProc7이
+    // 배너 0개에 92점으로 나온 이유다 - 검증을 가장 적게 받은 문서가 가장 높은 점수를 받았다.
+    [Fact]
+    public void SplitGenerationSkipped_SaysWhichChecksDidNotRun()
+    {
+        var banner = VerificationBanner.SplitGenerationSkipped();
+
+        Assert.StartsWith("\n> [!WARNING]", banner);
+        Assert.Contains("[분할 미실행]", banner);
+        Assert.Contains("단일 호출", banner);
+        Assert.Contains("하한 검사", banner);
+        // 내용이 부실하다고 단정해서는 안 된다 - 근거가 없다.
+        Assert.Contains("부실하다는 뜻은 아니지만", banner);
+    }
 }
