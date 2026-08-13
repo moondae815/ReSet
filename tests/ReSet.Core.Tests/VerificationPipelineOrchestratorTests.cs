@@ -2114,6 +2114,75 @@ namespace ReSet.Core.Tests
                 Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
         }
 
+        // 커버리지는 헤더와 지시서 §0 양쪽이 소비한다. 파이프라인 결과에 실리지
+        // 않으면 두 소비자가 각자 계산하게 되고, 그러면 같은 사실이 두 곳에서
+        // 갈라진다 - 이 저장소가 반복해서 겪은 실패다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenSplitRuns_ReportsStepCoverage()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Coverage);
+            Assert.Equal(1, result.Coverage!.StepsTotal);
+            Assert.Equal(1, result.Coverage.StepsVerified);
+            Assert.False(result.Coverage.NeedsHumanAttention);
+        }
+
+        // 분할이 무산된 회차. StepsTotal이 0이 아니라 null이어야 한다 - 0으로
+        // 적으면 "0단계를 0개 검증했다"는 비율로 읽힌다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenSplitDidNotRun_LeavesStepTotalUnreported()
+        {
+            var emptyStepsJson = "```json\n{\n  \"Steps\": []\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + emptyStepsJson });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = SkeletonMarkdown }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Coverage);
+            Assert.Null(result.Coverage!.StepsTotal);
+            Assert.False(result.Coverage.SplitRan);
+            Assert.True(result.Coverage.NeedsHumanAttention);
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L1Fails_TriggersRetry()
         {
