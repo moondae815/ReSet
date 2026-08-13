@@ -17,6 +17,9 @@ namespace ReSet.Core.Services.Clients.Cli
 
         /// <summary>턴이 끝난 사유. "max_tokens"면 본문이 잘린 것이다.</summary>
         public string? StopReason { get; init; }
+
+        /// <summary>토큰 집계. 봉투에 usage 객체가 없으면 null이다.</summary>
+        public CliUsage? Usage { get; init; }
     }
 
     /// <summary>
@@ -101,7 +104,8 @@ namespace ReSet.Core.Services.Clients.Cli
                     Result = ReadString(root, "result"),
                     Subtype = ReadString(root, "subtype"),
                     ApiErrorStatus = ReadString(root, "api_error_status"),
-                    StopReason = ReadString(root, "stop_reason")
+                    StopReason = ReadString(root, "stop_reason"),
+                    Usage = ReadUsage(root)
                 };
             }
             catch (JsonException ex)
@@ -143,6 +147,10 @@ namespace ReSet.Core.Services.Clients.Cli
 
             var response = ParseResponse(processResult.StandardOutput);
 
+            // 실패 판정보다 먼저 남긴다. 실패한 호출도 토큰을 태웠고, 그 사실은
+            // 실패했다는 이유로 사라져서는 안 된다.
+            response.Usage?.WriteToLog(ProviderName);
+
             // 종료 코드가 0이어도 JSON 안에만 오류가 담기는 경우가 있다.
             if (response.IsError || response.Result == null)
             {
@@ -164,6 +172,30 @@ namespace ReSet.Core.Services.Clients.Cli
             }
 
             return new AiResult { Content = response.Result };
+        }
+
+        /// <summary>
+        /// claude-cli의 usage 필드 이름은 Anthropic API와 같다. 그래서 API 경로의
+        /// 로그와 같은 값을 같은 이름으로 비교할 수 있다.
+        ///
+        /// 추론 토큰만 예외로 비운다. claude는 그것을 output_tokens_details라는 중첩
+        /// 객체에 담아, 정수 한 칸에 옮길 수 없다. 0을 넣으면 "추론을 안 했다"는 거짓이
+        /// 로그에 남는다.
+        /// </summary>
+        private static CliUsage? ReadUsage(JsonElement root)
+        {
+            if (!root.TryGetProperty("usage", out var usage)
+                || usage.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return new CliUsage(
+                Input: CliUsage.ReadCounter(usage, "input_tokens"),
+                Output: CliUsage.ReadCounter(usage, "output_tokens"),
+                CacheWrite: CliUsage.ReadCounter(usage, "cache_creation_input_tokens"),
+                CacheRead: CliUsage.ReadCounter(usage, "cache_read_input_tokens"),
+                Thinking: null);
         }
 
         private static string? ReadString(JsonElement root, string propertyName) =>

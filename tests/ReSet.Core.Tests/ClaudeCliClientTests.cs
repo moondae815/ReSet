@@ -253,5 +253,50 @@ namespace ReSet.Core.Tests
 
             Assert.Equal("PONG", result.Content);
         }
+
+        // ---- 토큰 집계 ----
+        // claude-cli는 API와 같은 이름으로 캐시 수치를 봉투에 담아 준다. 2026-08-12에
+        // `claude -p --output-format json`으로 "1+1"만 물었을 때 캐시 읽기 15,971 토큰이
+        // 찍혔다. CLI가 캐싱을 한다는 사실 자체가 그렇게 확인됐다. 읽지 않으면 캐시
+        // 미스는 오류를 내지 않으므로 영원히 보이지 않는다.
+
+        [Fact]
+        public void ParseResponse_ReadsUsageCountersFromEnvelope()
+        {
+            const string json =
+                "{\"is_error\":false,\"result\":\"2\",\"usage\":{\"input_tokens\":2," +
+                "\"cache_creation_input_tokens\":9417,\"cache_read_input_tokens\":15971," +
+                "\"output_tokens\":3}}";
+
+            var response = ClaudeCliClient.ParseResponse(json);
+
+            Assert.NotNull(response.Usage);
+            Assert.Equal(2, response.Usage!.Input);
+            Assert.Equal(9417, response.Usage.CacheWrite);
+            Assert.Equal(15971, response.Usage.CacheRead);
+            Assert.Equal(3, response.Usage.Output);
+        }
+
+        // claude의 추론 토큰은 output_tokens_details라는 중첩 객체에 있어 정수 하나로
+        // 옮길 수 없다. 억지로 0을 넣으면 "추론을 안 했다"는 거짓이 되므로 비워 둔다.
+        [Fact]
+        public void ParseResponse_LeavesThinkingUnreportedForClaude()
+        {
+            const string json =
+                "{\"is_error\":false,\"result\":\"2\",\"usage\":{\"input_tokens\":2," +
+                "\"output_tokens\":3,\"output_tokens_details\":{\"reasoning_tokens\":11}}}";
+
+            var response = ClaudeCliClient.ParseResponse(json);
+
+            Assert.Null(response.Usage!.Thinking);
+        }
+
+        [Fact]
+        public void ParseResponse_WithoutUsageObject_LeavesUsageNull()
+        {
+            var response = ClaudeCliClient.ParseResponse("{\"is_error\":false,\"result\":\"PONG\"}");
+
+            Assert.Null(response.Usage);
+        }
     }
 }
