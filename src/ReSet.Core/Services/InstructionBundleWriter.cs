@@ -19,7 +19,12 @@ namespace ReSet.Core.Services
         IReadOnlyList<SpDefinition> SpDefs,
         OutputPathResolver Paths,
         string JobOutputDir,
-        VerificationCoverage? Coverage = null);
+        // 기본값을 두지 않는다 - MetadataExporter가 Coverage를 받아 놓고 여기로
+        // 넘기지 않는 실수가 실제로 있었다. 그때는 이 값이 조용히 null로 떨어져
+        // 빌드도 깨끗하고 테스트도 전부 통과했으며, §0은 매 실행마다 초록 ✅만
+        // 찍었다 - 리뷰에서만 발견됐다. 생성자를 이 자리 하나(MetadataExporter.cs)로
+        // 묶어 두는 대신, 기본값을 없애 컴파일러가 이 연결을 영구히 강제하게 한다.
+        VerificationCoverage? Coverage);
 
     /// <param name="StepCodes">실제로 파일이 쓰인 단계 코드(파일명에 쓰인 <b>정화된</b> 값).
     /// 회차 정의의 근거가 되며, steps/&lt;코드&gt;.md와 task-NN-&lt;코드&gt;.md가 같은 값을 쓴다.</param>
