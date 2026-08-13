@@ -2027,6 +2027,89 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyValidationSuccess("TestJob");
         }
 
+        // 목차 단계는 명세서를 받지 않으므로, 프로시저 이름을 알 수 있는 경로는
+        // 이 명단 하나뿐이다. 여기가 끊기면 모델은 다시 추정하거나 거부한다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_PassesTheSourceProcedureRosterToTheOutlineStage()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "1", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "content1"),
+                ("dbo.UP_Util_Settle_Summary", "content2")
+            };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "목차" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "RosterJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            await aiService.Received(1).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Is<IReadOnlyList<string>>(r =>
+                    r.Count == 2
+                    && r.Contains("dbo.UP_UTIL_SETTLE_INS")
+                    && r.Contains("dbo.UP_Util_Settle_Summary")),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// 오케스트레이터는 재시도 회차마다 작업 사본(specsCopy)에 "Feedback_Log.txt"를
+        /// 덧붙이고, 바로 옆의 BrainstormBatchPlanAsync가 그 사본을 받는다. 명단이 사본에서
+        /// 오면 존재하지 않는 프로시저가 섞여 들어가고, 모델은 그것을 LegacyProcedures에
+        /// 적으며, 커버리지 검사는 그 이름을 어느 명세서와도 대조하지 못한다. 같은 함정에
+        /// 커버리지 검사가 이미 한 번 물린 적이 있다.
+        ///
+        /// 이 테스트가 실패해도 문서는 그럴듯하게 나오므로 사람 눈으로는 잡히지 않는다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_RedraftRoster_ExcludesTheRetryFeedbackWorkingCopy()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)> { ("dbo.UP_UTIL_SETTLE_INS", "content1") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "첫 목차" }, new AiResult { Content = "재설계 목차" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 정체를 만들어 재설계를 유발한다.
+            var stalled = new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(stalled));
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "StallRosterJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 최초 수립과 재설계 두 번 모두, 명단은 원본 명세서 하나뿐이어야 한다.
+            await aiService.Received(2).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Is<IReadOnlyList<string>>(r =>
+                    r.Count == 1 && r[0] == "dbo.UP_UTIL_SETTLE_INS"),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L1Fails_TriggersRetry()
         {

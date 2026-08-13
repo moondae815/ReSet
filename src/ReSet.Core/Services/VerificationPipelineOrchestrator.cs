@@ -1759,6 +1759,11 @@ namespace ReSet.Core.Services
             // 붙는데 그것은 명세서가 아니다.
             var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
 
+            // 목차 단계는 명세서를 받지 않으므로 이름을 알 방법이 이 명단뿐이다.
+            // 반드시 원본 specs를 쓴다 - specsCopy는 재시도 회차마다 Feedback_Log.txt가
+            // 덧붙어, 존재하지 않는 프로시저가 명단에 섞인다.
+            var sourceProcedureRoster = specs.Select(s => s.FileName).ToList();
+
             // 목차의 TargetTables도 같은 문제를 갖는다 - 같은 12개 SP를 두 제공자로
             // 돌린 실측에서 7개와 17개가 나왔고, 두 회차 모두 같은 단계를 빈 배열로
             // 냈다. 오류코드와 달리 명세서 산문이 아니라 정적 분석에서 뽑는다.
@@ -1819,9 +1824,7 @@ namespace ReSet.Core.Services
                             currentBrainstorming = brainstormResult.Content;
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
-                            // TODO(Task 2): System.Array.Empty<string>()는 컴파일만 통과시키는 임시 배선이다.
-                            // 실제 원본 명세서 명단 전달은 Task 2에서 넣는다.
-                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, System.Array.Empty<string>(), _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
+                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, sourceProcedureRoster, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
                             var planEnrichment = PlanStructureEnricher.Enrich(
                                 planResult.Content, specReturnCodes, specTargetTables);
                             currentPlanStructure = planEnrichment.Markdown;
@@ -2025,7 +2028,7 @@ namespace ReSet.Core.Services
                                 specReturnCodes,
                                 specTargetTables,
                                 currentPlanStructure, currentBrainstorming, feedbackLog,
-                                targetLanguage, jobName, cancellationToken);
+                                targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
 
                             // 이 경로는 새 목차를 바로 다음 회차가 소비하므로 여기서 확정
                             // 기록한다. 기록에 실패하면 재수립을 없었던 일로 되돌려
@@ -2203,7 +2206,7 @@ namespace ReSet.Core.Services
                             specReturnCodes,
                             specTargetTables,
                             currentPlanStructure, currentBrainstorming, reviewResult.UserFeedback,
-                            targetLanguage, jobName, cancellationToken);
+                            targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
                         if (pendingPlanStructure != null)
                         {
                             structureForRegeneration = pendingPlanStructure;
@@ -2544,6 +2547,7 @@ namespace ReSet.Core.Services
             string? redraftFeedback,
             string targetLanguage,
             string jobName,
+            IReadOnlyList<string> sourceProcedures,
             CancellationToken cancellationToken)
         {
             _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - {reason}...");
@@ -2555,11 +2559,9 @@ namespace ReSet.Core.Services
                 {
                     // 3단계 중 하나가 아니므로 n/3. 순번을 붙이지 않는다.
                     progressScope.AddTask("redraft", "목차 재설계 중...");
-                    // TODO(Task 2): System.Array.Empty<string>()는 컴파일만 통과시키는 임시 배선이다.
-                    // 실제 원본 명세서 명단 전달은 Task 2에서 넣는다.
                     var result = await WrapWithProgress(
                         _consolidatorService.DraftBatchPlanStructureAsync(
-                            brainstorming, targetLanguage, jobName, System.Array.Empty<string>(), _consolidatorEffort,
+                            brainstorming, targetLanguage, jobName, sourceProcedures, _consolidatorEffort,
                             currentStructure, redraftFeedback, cancellationToken),
                         progressScope, "redraft");
                     redrafted = result.Content;
