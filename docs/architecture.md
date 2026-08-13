@@ -86,6 +86,7 @@ flowchart TD
 | | [PlanBoundaryResolver](../src/ReSet.Core/Services/PlanBoundaryResolver.cs) | 확정된 계획서를 골격·단계·검증 조각으로 자르는 경계 결정기. 생성 단계의 조각은 **경계 앵커로만** 쓰고 본문은 언제나 최종 정제 문서에서 잘라냅니다(조각이 나온 뒤에도 정제·자가 교정·구제 채택으로 문서가 계속 바뀌기 때문). 앵커 → 단계 코드 → 단일 파일의 3단 폴백을 거치며, 단계 하나라도 경계를 못 찾으면 부분 분할을 남기지 않고 전체를 단일 파일로 되돌립니다. 두 분할이 모두 성공한 경로에서도 어느 조각에도 담기지 않은 구간(예: 검증 SQL 뒤 부록)은 전부 개요로 흡수해, 조각 나누기가 계획서의 어느 줄도 잃지 않게 합니다. |
 | | [MarkdownSectionLocator](../src/ReSet.Core/Services/MarkdownSectionLocator.cs) | 코드 펜스 안의 헤딩을 오인하지 않는 마크다운 섹션 탐색기. 닫히지 않은 펜스에 대한 재스캔 폴백을 포함하며 `BatchPlanAssembler`와 경계 결정기가 공유합니다. |
 | | [PlanLayout](../src/ReSet.Core/Models/PlanLayout.cs) | 계획서를 만든 조각(골격·단계별 섹션·단계 목록·하한 미달 사유)을 산출물 작성부까지 나르는 계약. `ConsolidatedPipelineResult`에 기본값 `null`로 실려, 단일 호출로 생성된 계획서도 그대로 흐릅니다. |
+| | [VerificationCoverage](../src/ReSet.Core/Models/VerificationCoverage.cs) | 산출물이 실제로 받은 기계 검증의 양(단계 총수, 검증된 단계 수, 문서 전체 오류코드 누락, 목차 프로시저 커버리지 미확인). 점수와 나란히 놓이지만 다른 것을 잽니다 — 점수는 읽어 본 품질이고 이것은 대조해 본 분량이라, 실측 세 회차에서 둘이 정반대로 움직였습니다. `PlanLayout`의 형제로 `ConsolidatedPipelineResult`에 실려 문서 헤더와 지시서 §0 양쪽이 같은 값을 읽습니다. `StepsTotal`이 `null`이면 분할이 실행되지 않은 것이며 `0`과 다릅니다 — 분모가 없는 상태를 0으로 적으면 비율처럼 읽힙니다. |
 | | [InstructionEntryPointComposer](../src/ReSet.Core/Services/InstructionEntryPointComposer.cs) | 진입점 지시서를 조립하는 순수 함수. 검증 배너 → 지침 → 읽기 계약 → 기술 스택 → 목차 순서가 분할 성공 여부와 **무관하게** 고정이라, 분할이 실패해도 지켜야 할 규칙이 문서 앞에 남습니다. `PlanVerificationSection`(§0)은 통과 판정이어도 분할 미실행·미검증 단계·원본 오류코드 누락·목차 프로시저 커버리지 미확인 네 사유 중 실제로 해당하는 것만 나열해 "모두 통과"가 검증 완전성을 함구하지 않게 합니다. 마지막 사유는 `CoverageUnverifiable`(대조 자체가 안 돎)과 `UncoveredProcedures`(대조는 돌았지만 일부 누락)를 한 플래그로 묶으므로, 문구는 "확인되지 않았다"처럼 두 원인 모두에서 참인 표현을 씁니다 — "나타나지 않았다"처럼 부재를 단정하면 대조가 안 돈 쪽에서 거짓이 됩니다. |
 | | [TaskFileComposer](../src/ReSet.Core/Services/TaskFileComposer.cs) | 회차별 작업 지시서(`task-NN-<코드>.md`)를 조립하는 순수 함수. 한 회차가 읽어야 할 것만 가리키며, 스키마 의존성 목록은 `InstructionBundleWriter.DependenciesForStep`이 그 단계의 `SchemaTables`(쓰기 ∪ 읽기)로 미리 좁혀 넘긴 것을 그대로 받습니다. AI가 만든 단계 코드를 파일명에 그대로 쓰지 않도록 정화하는 책임도 함께 집니다. |
 | | [InstructionBundleWriter](../src/ReSet.Core/Services/InstructionBundleWriter.cs) | 번들을 디스크에 배치하는 I/O 경계. `common/`·`steps/`·`verification/`과 `agent/` 직하의 회차 지시서를 쓰고, 이전 실행이 남긴 조각 파일을 표적 정리합니다. `agent/` 직하 파일은 건드리지 않습니다 — 진행 상태와 에이전트 산출물이 그곳에 살기 때문입니다. |
@@ -740,4 +741,4 @@ Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 �
 * **콘솔 UI 파괴 방지**: Spectre.Console 진행 바 및 TUI 화면이 로그 텍스트 출력으로 인해 지저분하게 깨지는 현상을 원천 방어하기 위해 Serilog의 콘솔 출력을 비활성화하고 **오직 파일 전용(File Sink)으로만 로그를 기록**하도록 제한합니다.
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
 
-<!-- synced-through: 33f4672 -->
+<!-- synced-through: c8d6074 -->
