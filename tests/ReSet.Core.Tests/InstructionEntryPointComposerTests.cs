@@ -32,6 +32,11 @@ namespace ReSet.Core.Tests
             HasStepContract = false,
             HasVerification = false,
             SinglePlanRelativePath = "../docs/BatchMigrationPlan.md",
+            // 실제 폴백 회차는 BatchStepPlanParser.TryParse가 null을 돌려주는
+            // 경로다 - 빈 목록이 아니라 총량 자체가 없다. Split()의 Coverage(1, 1, false)를
+            // 그대로 물려받으면 "분할이 실행돼 1단계를 모두 검증했다"는, 이 픽스처가
+            // 나타내려는 것과 정반대의 값을 주장하게 된다.
+            Coverage = new VerificationCoverage(null, 0, false),
         };
 
         [Fact]
@@ -185,8 +190,11 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Compose_ShouldStateBothPassedAndUnverifiableSteps_InSection0()
         {
+            // Split()은 단계 1개(S01)만 색인한다. Coverage가 19개 중 17개를 말하면
+            // 목차와 커버리지가 서로 다른 회차를 묘사하게 된다 - 이 픽스처가 실제로
+            // 색인하는 단계 수(1개)와 맞춰, 그중 1개는 미검증이라고만 말한다.
             var markdown = InstructionEntryPointComposer.Compose(
-                Split() with { Coverage = new VerificationCoverage(19, 17, false) });
+                Split() with { Coverage = new VerificationCoverage(1, 0, false) });
 
             Assert.Contains("L1 기계 검증과 L2 AI 교차 리뷰를 모두 통과", markdown);
             Assert.Contains("검증되지 못한 단계가 있습니다", markdown);
@@ -203,9 +211,11 @@ namespace ReSet.Core.Tests
         [InlineData(false)]
         public void Compose_ShouldAlwaysEmitTheStagedBundleMarker(bool stepsSplit)
         {
-            var inputs = stepsSplit
-                ? Split()
-                : Split() with { StepsSplit = false, SinglePlanRelativePath = "../docs/BatchMigrationPlan.md" };
+            // false 분기는 Fallback()을 그대로 쓴다 - 임시 오버라이드로 StepsSplit만
+            // 끄고 Steps·Coverage는 Split()에서 그대로 물려받으면, 분할이 꺼졌는데도
+            // 단계 링크와 "1/1 검증됨" 커버리지가 남아 폴백을 표방하면서 실제로는
+            // 반대를 나타내는 픽스처가 된다.
+            var inputs = stepsSplit ? Split() : Fallback();
 
             var markdown = InstructionEntryPointComposer.Compose(inputs);
 
