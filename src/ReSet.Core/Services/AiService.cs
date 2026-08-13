@@ -2069,9 +2069,9 @@ Rules for the step list:
 - One entry per executable step. NEVER collapse several steps into one entry (no `S01~S04` style ranges).
 - `Code` must be unique and must also appear in the prose outline heading for that step.
 - `LegacyProcedures` must be copied verbatim from the supplied Source Procedures list. It is how the pipeline links a step to its origin: the coverage check compares these names against that same list, and the enrichment pass uses them to fill `ErrorCodes` and `TargetTables`. Leave it empty only for a step with no legacy origin (input validation, locking, final publish).
-- Never emit an empty `Steps` list and never omit the JSON block, however incomplete the supplied analysis feels. A step list with imperfect `LegacyProcedures` is recoverable; an absent one discards every per-step section and every per-step check.
-- `TargetTables` must list every table the step creates or modifies, as written in the source specifications.
-- `ErrorCodes` must reproduce the EXACT original return codes of the source procedure. Do not invent, remap, or compress them into ranges.
+- `TargetTables` should list, to the best of your judgment from the brainstorming analysis, every table the step creates or modifies. This stage receives no source specifications, only the brainstorming result above, so treat this as a working estimate, not a final answer: the pipeline replaces it afterward with the tables a static-analysis pass confirms against the actual source code.
+- `ErrorCodes` should reproduce, to the best of your judgment from the brainstorming analysis, the original return codes of the source procedure. This stage receives no source specifications either, so this is also a working estimate: the pipeline unions it afterward with the codes a dedicated extraction pass finds in the specifications.
+- Never emit an empty `Steps` list and never omit the JSON block, however incomplete the supplied analysis feels. A step list with imperfect `LegacyProcedures`, `TargetTables`, or `ErrorCodes` is recoverable — every one of those three is corrected downstream from the source specifications. An absent step list is not recoverable: it discards every per-step section and every per-step check before any correction can happen.
 - `Chunkable` is false when the step is an aggregation or cross-DB join that cannot be chunked by a single key.
 - Emit the block once. Do not wrap the whole answer in a code block.";
 

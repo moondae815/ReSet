@@ -372,7 +372,33 @@ namespace ReSet.Core.Tests
                 "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
 
             Assert.Contains("Never emit an empty `Steps` list", result.SystemPrompt);
-            Assert.Contains("an absent one discards every per-step section", result.SystemPrompt);
+            Assert.Contains("discards every per-step section", result.SystemPrompt);
+        }
+
+        // 2026-08-13 회귀는 이 관용이 `LegacyProcedures` 한 필드에만 적용되고
+        // `TargetTables`·`ErrorCodes`는 여전히 명세서 대조 수준의 정확성을
+        // 요구한다고 읽혀 만들어졌다 - 모델이 이 스테이지에서 명세서를 받지
+        // 못한다는 사실을 알리지 않은 채였다. 세 필드 모두 하류에서 교정된다는
+        // 사실과 함께 관용을 넓혀야 같은 회귀가 재발하지 않는다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_BroadensTheEscapeHatchToAllThreeRosterFields()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            // 관용이 세 필드 모두를 이름으로 명시해야 한다 - 하나만 남으면
+            // 모델은 나머지 둘에 대해 다시 거부를 택한다.
+            Assert.Contains("imperfect `LegacyProcedures`, `TargetTables`, or `ErrorCodes` is recoverable", result.SystemPrompt);
+
+            // TargetTables·ErrorCodes가 이 단계에서 받지 못하는 명세서를 근거로
+            // 하류에서 다시 계산된다는 사실이 규칙 본문에 적혀 있어야 한다.
+            Assert.Contains("This stage receives no source specifications", result.SystemPrompt);
         }
 
         // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
