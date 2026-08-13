@@ -20,7 +20,10 @@ namespace ReSet.Core.Tests
             HasStepContract: true,
             HasVerification: true,
             SinglePlanRelativePath: null,
-            Coverage: null);
+            // StepsSplit: true에 단계 1개가 실제로 실려 있으므로, 이 픽스처가 이름대로
+            // "완전히 검증된 분할"을 뜻하려면 null(커버리지 개념 없음)이 아니라 그 단계가
+            // 모두 검증됐다는 값이어야 한다.
+            Coverage: new VerificationCoverage(1, 1, false));
 
         private static EntryPointInputs Fallback() => Split() with
         {

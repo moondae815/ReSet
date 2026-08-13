@@ -386,7 +386,7 @@ namespace ReSet.Core.Services
             var bundle = await new InstructionBundleWriter().WriteAsync(
                 new BundleInputs(
                     jobName, targetLanguage, planOutcome, consolidatedPlan,
-                    layout, spDefs, paths, baseOutputDir),
+                    layout, spDefs, paths, baseOutputDir, coverage),
                 cancellationToken);
 
             var agentFolder = Path.Combine(baseOutputDir, "agent");

@@ -745,6 +745,46 @@ namespace ReSet.Core.Tests
             }
         }
 
+        // coverage 매개변수가 실제로 BundleInputs까지 전달되는지 확인한다. 이전에는
+        // 시그니처에만 받아 두고 BundleInputs 생성 호출에는 넘기지 않아, §0이 항상
+        // "커버리지 없음"으로 렌더링됐다 - PlanVerificationSection 단위 테스트만으로는
+        // 이 배선 누락을 잡을 수 없어 exporter를 관통하는 이 테스트가 필요하다.
+        [Fact]
+        public async Task ExportConsolidatedMigrationInstructionsAsync_ForwardsCoverageIntoSection0()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Instructions-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Partial", CodeObjectType.Procedure);
+            var paths = new OutputPathResolver("PaymentDB", outputRoot);
+            var spDef = new SpDefinition
+            {
+                ObjectKey = key, Schema = "dbo", Name = "USP_Partial", DdlText = "SELECT 1;"
+            };
+
+            try
+            {
+                await new MetadataExporter().ExportConsolidatedMigrationInstructionsAsync(
+                    new System.Collections.Generic.List<SpDefinition> { spDef },
+                    "## 통합 배치 아키텍처 개요",
+                    VerificationOutcome.Passed,
+                    "Job1",
+                    Path.Combine(outputRoot, "Jobs", "Job1"),
+                    "C#",
+                    paths,
+                    layout: null,
+                    coverage: new VerificationCoverage(19, 17, false));
+
+                var instructions = await File.ReadAllTextAsync(
+                    Path.Combine(outputRoot, "Jobs", "Job1", "agent", "MigrationInstructions.md"));
+
+                Assert.Contains("⚠️", instructions);
+                Assert.Contains("검증되지 못한 단계", instructions);
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
         [Fact]
         public async Task ExportConsolidatedMigrationInstructionsAsync_CarriesTheDataAccessBoundaryRules()
         {
