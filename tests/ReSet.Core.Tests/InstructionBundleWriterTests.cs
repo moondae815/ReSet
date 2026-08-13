@@ -103,7 +103,8 @@ S02 본문
             Layout: layout,
             SpDefs: new List<SpDefinition> { SpDef("UP_A") },
             Paths: new OutputPathResolver("SettleDB", _outputRoot),
-            JobOutputDir: _jobDir);
+            JobOutputDir: _jobDir,
+            Coverage: null);
 
         [Fact]
         public async Task WriteAsync_ShouldPlaceEntryPointAtAgentRoot()
