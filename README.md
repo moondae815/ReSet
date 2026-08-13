@@ -551,4 +551,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: d7ec7f8 -->
+<!-- synced-through: 33f4672 -->
