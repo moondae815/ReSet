@@ -301,6 +301,28 @@ namespace ReSet.Core.Tests
             Assert.Contains("one step per internal branch", result.SystemPrompt);
         }
 
+        // LegacyProcedures만 JSON 예시에 등장할 뿐 규칙이 없었다. 파이프라인의 두 검사
+        // (목차 커버리지, 단계 하한)가 전적으로 이 필드에 기대는데도 그랬다. 실측에서
+        // POQSettleProc6의 33단계가 전부 이 필드를 비운 채 나왔고, 보강기가 대조할 원본을
+        // 잃어 ErrorCodes·TargetTables·SchemaTables까지 연쇄로 비었으며, 32단계가 하한
+        // 검사를 건너뛴 채 문서가 88점 Passed로 끝났다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_TellsTheModelWhatLegacyProceduresIsFor()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            // 규칙 목록에 자리를 얻어야 한다. 예시에만 있으면 모델은 선택 항목으로 읽는다.
+            Assert.Contains("`LegacyProcedures` must name", result.SystemPrompt);
+            // 빈 배열의 대가를 알려야 채울 이유가 생긴다.
+            Assert.Contains("empty array silently disables", result.SystemPrompt);
+        }
+
         // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
         // 헤딩 파싱은 대안이 아니다 — 실측한 두 목차가 단계를 각각 H3/H4에 뒀고,
         // 한쪽은 `### P20~P23.`으로 4개 단계를 헤딩 하나에 묶었다.
