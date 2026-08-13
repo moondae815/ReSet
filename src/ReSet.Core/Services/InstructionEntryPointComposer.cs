@@ -134,7 +134,9 @@ namespace ReSet.Core.Services
                         reasons.Add("원본 오류코드 일부가 문서에서 확인되지 않았고");
                     }
 
-                    var joined = string.Join(" ", reasons);
+                    // 사유가 둘 이상이면 쉼표로 잇는다 - 공백만으로는 한 사유가
+                    // 어디서 끝나고 다음이 시작하는지 눈으로 가르기 어렵다.
+                    var joined = string.Join(", ", reasons);
                     if (joined.EndsWith("고"))
                     {
                         joined = joined[..^1] + "습니다.";

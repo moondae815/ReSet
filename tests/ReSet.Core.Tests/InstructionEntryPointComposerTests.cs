@@ -263,6 +263,19 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("실행되지 않았", section);
         }
 
+        // 설계 §2.2 샘플은 두 사유를 쉼표로 잇는다("…실행되지 않았고, 원본…"). 사유가
+        // 둘 이상이면 공백만으로는 문장이 죽죽 이어져 어디서 한 사유가 끝나고 다음이
+        // 시작하는지 눈으로 가르기 어렵다.
+        [Fact]
+        public void PlanVerificationSection_WithTwoReasons_JoinsThemWithAComma()
+        {
+            var section = InstructionEntryPointComposer.PlanVerificationSection(
+                VerificationOutcome.Passed,
+                new VerificationCoverage(null, 0, true));
+
+            Assert.Contains("실행되지 않았고, 원본", section);
+        }
+
         // 부재 확인. 조건이 뒤집히면 정상 산출물마다 거짓 경고가 붙는데, 그것을
         // 잡는 테스트는 이것뿐이다.
         [Fact]
