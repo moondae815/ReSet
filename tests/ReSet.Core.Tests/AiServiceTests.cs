@@ -262,6 +262,45 @@ namespace ReSet.Core.Tests
             Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
         }
 
+        // 상한은 코드에만 있고 프롬프트에는 없었다. 그 사이 프롬프트는 "NEVER collapse
+        // several steps"로 잘게 쪼개라고만 밀었고, 실측에서 claude-opus-5가 73단계를 냈다가
+        // BatchStepPlanParser가 목차 전체를 버렸다. 모델은 자기가 들어본 적 없는 규칙에
+        // 걸린 것이다 — 상수를 프롬프트에 실어야 지킬 기회가 생긴다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_TellsTheModelTheStepCountCap()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            // 숫자를 손으로 적으면 상수와 갈라진다. 보간을 강제해, 상한을 바꾼 사람이
+            // 프롬프트를 고치지 않으면 이 테스트가 실패하게 만든다.
+            Assert.Contains(
+                $"AT MOST {BatchStepPlanParser.MaxSteps} entries",
+                result.SystemPrompt);
+        }
+
+        // 숫자만 주면 모델이 권고로 읽는다. 넘겼을 때 목차가 통째로 버려지고 단일 호출로
+        // 폴백한다는 대가를 알려줘야 입도를 조절할 근거가 생긴다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_TellsTheModelWhatExceedingTheCapCosts()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+
+            Assert.Contains("discards a longer list", result.SystemPrompt);
+            Assert.Contains("one step per internal branch", result.SystemPrompt);
+        }
+
         // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
         // 헤딩 파싱은 대안이 아니다 — 실측한 두 목차가 단계를 각각 H3/H4에 뒀고,
         // 한쪽은 `### P20~P23.`으로 4개 단계를 헤딩 하나에 묶었다.

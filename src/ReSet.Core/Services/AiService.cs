@@ -2065,6 +2065,7 @@ In ADDITION to the prose outline, you MUST emit exactly one fenced ```json block
 ```
 
 Rules for the step list:
+- The list must contain AT MOST {BatchStepPlanParser.MaxSteps} entries. The pipeline discards a longer list whole and falls back to generating the document in a single call, losing every per-step section — so choose the step granularity to fit that budget. A cohesive phase of a source procedure is one step; do NOT emit one step per internal branch or per exception rule.
 - One entry per executable step. NEVER collapse several steps into one entry (no `S01~S04` style ranges).
 - `Code` must be unique and must also appear in the prose outline heading for that step.
 - `TargetTables` must list every table the step creates or modifies, as written in the source specifications.
