@@ -2483,7 +2483,28 @@ namespace ReSet.Core.Services
             var uncoveredProcedures = adoptedSteps != null
                 ? FindUncoveredProcedures(adoptedSteps, specs)
                 : Array.Empty<string>();
-            if (uncoveredProcedures.Count > 0)
+
+            // 어느 단계도 출신을 밝히지 않았다면 이 검사는 근거가 0이다. 그 상태에서
+            // 나오는 "전부 누락"은 계산 결과가 아니라 재료 없음의 부작용이므로,
+            // 누락으로 단정하지 않고 검사가 돌지 못했다고 보고한다.
+            var unlabelledSteps = adoptedSteps?.Count(step => step.LegacyProcedures.Count == 0) ?? 0;
+            var noOriginsAtAll = adoptedSteps is { Count: > 0 } && unlabelledSteps == adoptedSteps.Count;
+
+            if (noOriginsAtAll)
+            {
+                Log.Warning(
+                    "[파이프라인] 목차의 모든 단계가 LegacyProcedures를 비워 커버리지 대조를 실행하지 못했습니다 " +
+                    "- Job: {JobName}, 단계: {Steps}개, 명세서: {Specs}개",
+                    jobName, adoptedSteps!.Count, specs.Count);
+
+                if (!string.IsNullOrEmpty(consolidatedPlan))
+                {
+                    consolidatedPlan =
+                        VerificationBanner.CoverageUnverifiable(adoptedSteps.Count, specs.Count)
+                        + consolidatedPlan;
+                }
+            }
+            else if (uncoveredProcedures.Count > 0)
             {
                 Log.Warning(
                     "[파이프라인] 목차가 커버하지 못한 원본 프로시저가 있습니다 - Job: {JobName}, 개수: {Count}개, 목록: {Procedures}",
@@ -2491,7 +2512,9 @@ namespace ReSet.Core.Services
 
                 if (!string.IsNullOrEmpty(consolidatedPlan))
                 {
-                    consolidatedPlan = VerificationBanner.UncoveredProcedures(uncoveredProcedures) + consolidatedPlan;
+                    consolidatedPlan =
+                        VerificationBanner.UncoveredProcedures(uncoveredProcedures, unlabelledSteps)
+                        + consolidatedPlan;
                 }
             }
 

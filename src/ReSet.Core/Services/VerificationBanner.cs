@@ -153,14 +153,52 @@ public static class VerificationBanner
     /// 개수 대신 프로시저명을 싣는다. 읽는 사람이 다음에 할 일이 그 프로시저를
     /// 직접 확인하거나 목차를 손으로 보완하는 것이기 때문이다.
     /// </summary>
-    public static string UncoveredProcedures(IReadOnlyList<string> procedureNames)
+    public static string UncoveredProcedures(
+        IReadOnlyList<string> procedureNames,
+        int stepsWithoutLegacyProcedures = 0)
     {
         var nameLines = RenderBulletList(procedureNames, "(프로시저명이 기록되지 않았습니다.)");
 
+        // 출신을 밝히지 않은 단계가 있으면 이 목록은 과다 보고일 수 있다. 그 단계가
+        // 실제로는 그 프로시저를 다루고 있어도 검사는 알 방법이 없기 때문이다.
+        // 단서 없이 내보내면 읽는 사람이 멀쩡한 프로시저를 다시 뒤지게 된다.
+        var caveat = stepsWithoutLegacyProcedures > 0
+            ? $" 다만 목차의 {stepsWithoutLegacyProcedures}개 단계가 원본 프로시저 표기를 비워 두었으므로,"
+              + " 이 목록에는 실제로는 다뤄진 프로시저가 섞여 있을 수 있습니다."
+            : string.Empty;
+
         return "\n> [!WARNING]\n> **[커버리지 누락] 목차가 아래 프로시저를 어느 단계에도 포함하지 않았습니다.**"
             + " 해당 프로시저는 최종 문서 어디에도 반영되지 않았을 가능성이 높습니다."
-            + " 원본 프로시저를 직접 확인하거나 목차를 보완하십시오.\n"
+            + " 원본 프로시저를 직접 확인하거나 목차를 보완하십시오."
+            + caveat
+            + "\n"
             + nameLines
+            + "\n\n";
+    }
+
+    /// <summary>
+    /// 목차의 어느 단계도 원본 프로시저를 밝히지 않아 커버리지 대조 자체가
+    /// 불가능했음을 알린다.
+    ///
+    /// UncoveredProcedures와 다른 사실을 나른다 - 저건 "이 프로시저를 다룰 단계가
+    /// 없다"이고 이건 "무엇이 다뤄졌는지 판정할 재료가 없다"이다. 둘을 뭉개면
+    /// 근거 0인 상태가 확정된 누락으로 보고된다. 실측(POQSettleProc6)에서 33단계가
+    /// 전부 표기를 비운 채 나왔고, 본문은 12개 프로시저를 모두 다루고 있었는데도
+    /// 12개 전부가 누락으로 보고됐다.
+    ///
+    /// 프로시저명을 싣지 않는다. 이름을 나열하면 그 자체가 누락 목록으로 읽히는데,
+    /// 이 배너의 요지는 정확히 그 판정을 할 수 없었다는 것이다. 읽는 사람이 할 일은
+    /// 개별 프로시저 확인이 아니라 목차를 고쳐 다시 돌리는 것이다.
+    /// </summary>
+    public static string CoverageUnverifiable(int totalSteps, int procedureCount)
+    {
+        return "\n> [!WARNING]\n> **[커버리지 검증 불가] 목차의 모든 단계"
+            + $"({totalSteps}개)가 원본 프로시저 표기(`LegacyProcedures`)를 비워 두어"
+            + " 커버리지 대조를 실행할 수 없었습니다.**"
+            + $" 원본 명세서 {procedureCount}개가 어느 단계에 대응하는지 확인되지 않았다는 뜻이며,"
+            + " 문서가 그 프로시저들을 다루지 않았다는 뜻은 아닙니다."
+            + " 같은 이유로 단계별 하한 검사의 대상 테이블·오류코드 대조도 실행되지 못했습니다."
+            + " 목차를 보완해 다시 실행하면 두 검사 모두 복구됩니다."
             + "\n\n";
     }
 
