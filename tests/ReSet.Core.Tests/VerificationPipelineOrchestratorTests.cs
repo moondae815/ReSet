@@ -1899,9 +1899,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다 -
-            // 이 테스트가 검증하는 대상은 배너가 아니라 본문이 그대로 실렸는지다.
-            Assert.EndsWith(consolidatedPlan, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + consolidatedPlan, result.Plan);
             _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
         }
 
@@ -1933,8 +1933,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(goodPlan, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + goodPlan, result.Plan);
             _userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
         }
 
@@ -2255,8 +2256,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(regeneratedMarkdown, result.Plan);
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + regeneratedMarkdown, result.Plan);
             await userInteraction.Received(2).RequestHumanReviewAsync("TestJobFeedback", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
@@ -2298,8 +2300,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(initialMarkdown, result.Plan); // It reverted to initial markdown because regeneration failed
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + initialMarkdown, result.Plan); // It reverted to initial markdown because regeneration failed
             userInteraction.Received(1).NotifyError(Arg.Is<string>(s => s.Contains("재생성 실패")));
         }
 
@@ -2345,8 +2348,9 @@ namespace ReSet.Core.Tests
 
             // Assert
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(fixedMarkdown, result.Plan); // Returns fixed markdown
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + fixedMarkdown, result.Plan); // Returns fixed markdown
             userInteraction.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("정적 에러가 검출되어 AI 자가 수정 1회 더 진행합니다")));
         }
 
@@ -3125,14 +3129,17 @@ namespace ReSet.Core.Tests
                 specs, "C#", "TestJobFeedbackOutcome", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
 
             Assert.NotNull(result.Plan);
-            // 목차("Plan Structure")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(regeneratedMarkdown, result.Plan);
-            // 1차 호출: 표준 루프에서 L1+L2 모두 통과한 초안 -> Passed.
+            // 목차("Plan Structure")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게
+            // 앞에 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + regeneratedMarkdown, result.Plan);
+            // 1차 호출: 표준 루프에서 L1+L2 모두 통과한 초안 -> Passed. 이 회차도 분할이
+            // 무산된 채였으므로 배너 + 초안을 정확히 고정한다.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", Arg.Is<string>(s => s.EndsWith(initialMarkdown)), VerificationOutcome.Passed, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
+                "TestJobFeedbackOutcome", Arg.Is<string>(s => s == VerificationBanner.SplitGenerationSkipped() + initialMarkdown), VerificationOutcome.Passed, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
             // 2차 호출: 피드백으로 전면 재생성된, 한 번도 리뷰받지 않은 계획서 -> ReviewNotRun.
+            // 배너 + 재생성본을 정확히 고정한다.
             await userInteraction.Received(1).RequestHumanReviewAsync(
-                "TestJobFeedbackOutcome", Arg.Is<string>(s => s.EndsWith(regeneratedMarkdown)), VerificationOutcome.ReviewNotRun, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
+                "TestJobFeedbackOutcome", Arg.Is<string>(s => s == VerificationBanner.SplitGenerationSkipped() + regeneratedMarkdown), VerificationOutcome.ReviewNotRun, Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>());
         }
 
         [Fact]
@@ -4547,8 +4554,9 @@ namespace ReSet.Core.Tests
                 specs, "C#", "L3RegenFailJob", "OpenAI", _consolidatedOutputRoot);
 
             // 사용자가 승인한 문서는 여전히 "첫 목차"가 만든 최초 계획서다.
-            // 목차("첫 목차")가 단계 목록을 못 내 분할 미실행 배너가 앞에 붙는다.
-            Assert.EndsWith(plan, result.Plan);
+            // 목차("첫 목차")가 단계 목록을 못 내므로 분할 미실행 배너가 정당하게 앞에
+            // 붙는다. 배너 + 본문을 정확히 고정해 배너 중복·오염을 계속 잡아낸다.
+            Assert.Equal(VerificationBanner.SplitGenerationSkipped() + plan, result.Plan);
 
             var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "L3RegenFailJob", "raw");
             Assert.Equal("첫 목차", await File.ReadAllTextAsync(Path.Combine(rawDir, "PlanStructure.md")));
