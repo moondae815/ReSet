@@ -258,7 +258,11 @@ public static class VerificationBanner
                 ? all.Count
                 : missing.Count;
 
-            lines.Add($"{procedure}: {total}개 중 {missing.Count}개 누락 — {string.Join(", ", missing)}");
+            // procedure는 SpecReturnCodeExtractor.BareName이 낮춘 소문자 키다. 그대로
+            // 찍으면 같은 문서의 UncoveredProcedures(예: "dbo.UP_UTIL_SETTLE_INS")와
+            // 표기가 어긋난다. 스키마 접두사까지는 복원할 수 없지만, 대문자로는
+            // 맞춰 원본 프로시저명 표기 관례를 따른다.
+            lines.Add($"{procedure.ToUpperInvariant()}: {total}개 중 {missing.Count}개 누락 — {string.Join(", ", missing)}");
         }
 
         var body = RenderBulletList(lines, "(누락 내역이 기록되지 않았습니다.)");
