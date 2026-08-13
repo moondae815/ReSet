@@ -2037,7 +2037,7 @@ DO NOT write code or detailed markdown plans. ONLY output your analysis: identif
             return aiResult;
         }
 
-        public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, string? effort = null, string? previousStructure = null, string? redraftFeedback = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> DraftBatchPlanStructureAsync(string brainstormingResult, string targetLanguage, string jobName, IReadOnlyList<string> sourceProcedures, string? effort = null, string? previousStructure = null, string? redraftFeedback = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect. Based on the previous brainstorming, draft a detailed step-by-step structural plan (Table of Contents and execution flow) for the final '{jobName}' {targetLanguage} batch application document.
 You MUST use exactly the following 4 mandatory H2 headers in Korean, and design the detailed sub-headers (H3, H4) beneath them:
@@ -2068,7 +2068,8 @@ Rules for the step list:
 - The list must contain AT MOST {BatchStepPlanParser.MaxSteps} entries. The pipeline discards a longer list whole and falls back to generating the document in a single call, losing every per-step section — so choose the step granularity to fit that budget. A cohesive phase of a source procedure is one step; do NOT emit one step per internal branch or per exception rule.
 - One entry per executable step. NEVER collapse several steps into one entry (no `S01~S04` style ranges).
 - `Code` must be unique and must also appear in the prose outline heading for that step.
-- `LegacyProcedures` must name every source procedure the step derives from, exactly as the source specifications name it. This is the field the rest of the pipeline keys off: the coverage check compares it against the supplied specifications, and the enrichment pass uses it to fill `ErrorCodes`, `TargetTables` and the schema list. An empty array silently disables all of them — the step is then reported as covering nothing, and its section is never mechanically checked. A step that genuinely derives from no source procedure (pure orchestration, locking, final publish) is the only case where the array may be empty.
+- `LegacyProcedures` must be copied verbatim from the supplied Source Procedures list. It is how the pipeline links a step to its origin: the coverage check compares these names against that same list, and the enrichment pass uses them to fill `ErrorCodes` and `TargetTables`. Leave it empty only for a step with no legacy origin (input validation, locking, final publish).
+- Never emit an empty `Steps` list and never omit the JSON block, however incomplete the supplied analysis feels. A step list with imperfect `LegacyProcedures` is recoverable; an absent one discards every per-step section and every per-step check.
 - `TargetTables` must list every table the step creates or modifies, as written in the source specifications.
 - `ErrorCodes` must reproduce the EXACT original return codes of the source procedure. Do not invent, remap, or compress them into ranges.
 - `Chunkable` is false when the step is an aggregation or cross-DB join that cannot be chunked by a single key.
@@ -2096,6 +2097,18 @@ The previous structure below repeatedly failed cross-review. Do NOT reproduce it
             userPrompt.AppendLine("[Brainstorming Analysis Result]");
             userPrompt.AppendLine(brainstormingResult);
             userPrompt.AppendLine();
+
+            // 명단이 없으면 블록을 만들지 않는다. 빈 목록에 "아래 목록에서 고르라"고
+            // 하면 모델이 고를 것이 없어 다시 거부를 택한다 - 이번 회귀의 원인이었다.
+            if (sourceProcedures != null && sourceProcedures.Count > 0)
+            {
+                userPrompt.AppendLine("[Source Procedures — use these names verbatim in `LegacyProcedures`]");
+                foreach (var procedure in sourceProcedures)
+                {
+                    userPrompt.AppendLine($"- {procedure}");
+                }
+                userPrompt.AppendLine();
+            }
 
             if (isRedraft)
             {

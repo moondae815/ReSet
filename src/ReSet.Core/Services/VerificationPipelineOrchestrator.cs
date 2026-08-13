@@ -1819,7 +1819,9 @@ namespace ReSet.Core.Services
                             currentBrainstorming = brainstormResult.Content;
 
                             progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
-                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
+                            // TODO(Task 2): System.Array.Empty<string>()는 컴파일만 통과시키는 임시 배선이다.
+                            // 실제 원본 명세서 명단 전달은 Task 2에서 넣는다.
+                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, System.Array.Empty<string>(), _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
                             var planEnrichment = PlanStructureEnricher.Enrich(
                                 planResult.Content, specReturnCodes, specTargetTables);
                             currentPlanStructure = planEnrichment.Markdown;
@@ -2553,9 +2555,11 @@ namespace ReSet.Core.Services
                 {
                     // 3단계 중 하나가 아니므로 n/3. 순번을 붙이지 않는다.
                     progressScope.AddTask("redraft", "목차 재설계 중...");
+                    // TODO(Task 2): System.Array.Empty<string>()는 컴파일만 통과시키는 임시 배선이다.
+                    // 실제 원본 명세서 명단 전달은 Task 2에서 넣는다.
                     var result = await WrapWithProgress(
                         _consolidatorService.DraftBatchPlanStructureAsync(
-                            brainstorming, targetLanguage, jobName, _consolidatorEffort,
+                            brainstorming, targetLanguage, jobName, System.Array.Empty<string>(), _consolidatorEffort,
                             currentStructure, redraftFeedback, cancellationToken),
                         progressScope, "redraft");
                     redrafted = result.Content;

@@ -232,7 +232,7 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
 
             Assert.DoesNotContain("[Redraft]", result.SystemPrompt);
             // 4개 필수 H2 강제는 두 모드 모두에서 유지된다.
@@ -251,7 +251,7 @@ namespace ReSet.Core.Tests
             IAiService service = new AiService(client, 0.2f);
 
             var result = await service.DraftBatchPlanStructureAsync(
-                "brainstorming", "C#", "Test_Job",
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" },
                 effort: null,
                 previousStructure: "## 낡은 목차",
                 redraftFeedback: "청킹 불가 스텝이 청킹으로 배치됨");
@@ -275,7 +275,7 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
 
             // 숫자를 손으로 적으면 상수와 갈라진다. 보간을 강제해, 상한을 바꾼 사람이
             // 프롬프트를 고치지 않으면 이 테스트가 실패하게 만든다.
@@ -295,19 +295,19 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
 
             Assert.Contains("discards a longer list", result.SystemPrompt);
             Assert.Contains("one step per internal branch", result.SystemPrompt);
         }
 
-        // LegacyProcedures만 JSON 예시에 등장할 뿐 규칙이 없었다. 파이프라인의 두 검사
-        // (목차 커버리지, 단계 하한)가 전적으로 이 필드에 기대는데도 그랬다. 실측에서
-        // POQSettleProc6의 33단계가 전부 이 필드를 비운 채 나왔고, 보강기가 대조할 원본을
-        // 잃어 ErrorCodes·TargetTables·SchemaTables까지 연쇄로 비었으며, 32단계가 하한
-        // 검사를 건너뛴 채 문서가 88점 Passed로 끝났다.
+        // 2026-08-13에 넣은 규칙이 회귀를 만들었다. "명세서가 부르는 그대로 쓰라"고
+        // 요구했는데 목차 단계는 명세서를 받지 않는다. codex-cli는 추정이 규칙 위반이라
+        // 판단해 단계 목록을 통째로 비웠고(POQSettleProc7), 단계별 섹션 33개와 원본
+        // 오류코드 20개가 사라진 문서가 92점으로 통과했다. 명단을 주면 같은 요구가
+        // 암기가 아니라 선택이 되어 비로소 지킬 수 있는 규칙이 된다.
         [Fact]
-        public async Task DraftBatchPlanStructureAsync_TellsTheModelWhatLegacyProceduresIsFor()
+        public async Task DraftBatchPlanStructureAsync_PutsTheProcedureRosterInTheUserPrompt()
         {
             var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
             var mockHandler = new MockHttpMessageHandler(mockResponse);
@@ -315,12 +315,64 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job",
+                new[] { "dbo.UP_UTIL_SETTLE_INS", "dbo.UP_Util_Settle_Summary" });
 
-            // 규칙 목록에 자리를 얻어야 한다. 예시에만 있으면 모델은 선택 항목으로 읽는다.
-            Assert.Contains("`LegacyProcedures` must name", result.SystemPrompt);
-            // 빈 배열의 대가를 알려야 채울 이유가 생긴다.
-            Assert.Contains("empty array silently disables", result.SystemPrompt);
+            Assert.Contains("[Source Procedures", result.UserPrompt);
+            Assert.Contains("- dbo.UP_UTIL_SETTLE_INS", result.UserPrompt);
+            Assert.Contains("- dbo.UP_Util_Settle_Summary", result.UserPrompt);
+        }
+
+        // 명단은 잡마다 달라지므로 시스템 프롬프트에 실으면 캐시 접두사가 매번 깨진다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_KeepsTheRosterOutOfTheSystemPrompt()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.DoesNotContain("dbo.UP_UTIL_SETTLE_INS", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_TellsTheModelToSelectFromTheRoster()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.Contains("copied verbatim from the supplied Source", result.SystemPrompt);
+            // 회귀를 만든 옛 문구는 남아 있으면 안 된다.
+            Assert.DoesNotContain("exactly as the source specifications name it", result.SystemPrompt);
+        }
+
+        // 거부가 더 비싸다는 사실을 알려주지 않으면 모델은 거부를 택한다. 실측에서
+        // 빈 Steps 목록 하나가 단계별 섹션 전부와 단계별 검사 전부를 없앴다.
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_ForbidsAnEmptyStepList()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.Contains("Never emit an empty `Steps` list", result.SystemPrompt);
+            Assert.Contains("an absent one discards every per-step section", result.SystemPrompt);
         }
 
         // 목차가 단계 목록을 구조화해 내지 않으면 분할 생성이 시작조차 못 한다.
@@ -335,7 +387,7 @@ namespace ReSet.Core.Tests
             var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
 
-            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job");
+            var result = await service.DraftBatchPlanStructureAsync("brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
 
             Assert.Contains("```json", result.SystemPrompt);
             Assert.Contains("\"Steps\"", result.SystemPrompt);
@@ -361,7 +413,7 @@ namespace ReSet.Core.Tests
             IAiService service = new AiService(client, 0.2f);
 
             var result = await service.DraftBatchPlanStructureAsync(
-                "brainstorming", "C#", "Test_Job",
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" },
                 effort: null,
                 previousStructure: "## 낡은 목차",
                 redraftFeedback: "스텝 누락");
