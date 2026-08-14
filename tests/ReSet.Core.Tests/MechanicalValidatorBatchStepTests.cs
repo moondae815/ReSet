@@ -67,7 +67,11 @@ namespace ReSet.Core.Tests
 
             var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
 
-            Assert.DoesNotContain(result.Errors, e => e.Contains("존재하지", StringComparison.Ordinal));
+            // 이전 단언 `e.Contains("존재하지")`는 실제 오류 메시지("...없습니다.")에
+            // 그 부분 문자열이 아예 없어, 구현이 무엇을 하든 항상 통과했다 - 이름이
+            // 주장하는 "카탈로그에 있는 테이블은 받아들인다"를 이 테스트가 실제로는
+            // 전혀 검증하지 못하고 있었다. 오류가 하나도 없어야 한다는 실제 의도로 바꾼다.
+            Assert.Empty(result.Errors);
         }
 
         [Fact]
