@@ -330,6 +330,29 @@ Task 2 Step 1이 준 문구를 그대로 쓴 것(플랜의 8개 중 3개는 위 
 각 행을 architecture.md의 인용 위치에서 직접 읽고 실질적 서술임을 확인한 뒤 AGENTS.md
 줄을 삭제했다(위 재분류 3개 포함).
 
+**좌표 유효기간 안내.** 아래 표의 `architecture.md:<n>` 줄 번호는 적힐 당시(대부분
+Fix Round 1, 2026-08-14)는 정확했으나, 그 뒤 이 브랜치 자신의 여러 커밋(§2.2에
+행을 추가한 `5cdba1e`, 이번 라운드의 `SpDefinition` 삽입 `9b0be10` 등)을 거치며
+최대 13줄까지 누적으로 밀렸다 — 위 "이 표를 읽기 전에" 절과 달리 이 표는 커밋
+스탬프를 받은 적이 없어 그 밀림이 드러나지 않았다. 재검증 없이 새 줄 번호를 다시
+적는 것은 애초에 이 표를 낡게 만든 바로 그 실수를 반복하는 것이므로, 여기서는
+줄 번호를 고치지 않는다 — 대신 아래 표의 `architecture.md:<n>`을 **정확한 주소가
+아니라 대략의 위치 힌트**로 읽는다. 이 문서 전체에서 실제로 재검증되고 커밋
+스탬프(`9b0be10`)가 붙은 `architecture.md:<n>` 좌표는 위 "이 표를 읽기 전에" 절이
+인용하는 네 개뿐이다.
+
+찾는 방법 — 이 표는 형식적인 마크다운 헤딩(`###`/`##`)을 인용하지 않지만, 대신
+grep 가능한 앵커를 이미 담고 있다: 1열의 클래스 이름은 항상 있고, 다수 행(§2.2
+표 자체를 가리키는 행들)은 3열에 `§2.2 표 자체의 정식 행`이라고 명시해 §2.2
+카탈로그 표 안에서 그 클래스 이름으로 찾으면 된다는 것을 알려 준다. 묶음 레이블
+두 행(`ClaudeClientTests`·`ClaudeCliClientTests`)은 3열에 정확한 링크 레이블
+문자열(`[Clients (Claude, OpenAi, Ollama) Tests]` 등)을 그대로 인용해 그 문자열로
+grep하면 된다. 나머지(`SqlObjectTypeClassifier`·`TypeClassificationPolicyTests`·
+`CliWorkspace`·`CliEffort`·`MockDataDto`·`GapReport`·`ValidatorAiService`)는 3열에
+그 문단의 내용을 요약 인용했을 뿐 grep 가능한 정확한 문자열이나 절 제목은 주지
+않는다 — 이 일곱 행은 클래스 이름으로 `grep -n`해 찾고, 여러 곳에 걸리면 3열의
+요약과 대조해 맞는 문단을 고른다.
+
 | 클래스 (원 AGENTS.md 줄) | 유형 | 확인한 위치 | 판정 |
 |---|---|---|---|
 | `SqlObjectTypeClassifier` (L37) | 사각지대(링크 없는 서술) | `architecture.md:388` — `SqlObjectTypeClassifier`의 판정 통합 배경과 `TypeClassificationPolicyTests` 연계를 한 문단으로 서술 | 실질적, 삭제 |
