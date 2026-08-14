@@ -3,6 +3,12 @@
 각 줄의 삭제 근거. `중복`은 동등 이상의 서술이 이미 그곳에 있다는 뜻이다.
 `근거없음`은 삭제하지 않고 이동한다.
 
+**표기 규칙.** 이 문서에서 `L<n>`은 언제나 AGENTS.md의 줄 번호(아래 표의 `LINE`
+열)를 뜻한다. `docs/architecture.md` 안의 위치는 `architecture.md:<n>`처럼 파일
+이름을 붙여 적는다. 두 좌표계에 같은 접두사를 쓰지 않는다 — 인용을 직접 찾아
+확인할 수 있다는 것이 이 대장의 유일한 값어치이므로, 숫자가 어느 파일을 가리키는지
+모호하면 그 값어치가 사라진다.
+
 **이 표를 읽기 전에.** `scripts/doc-audit.sh`는 클래스 이름이 아니라 마크다운 링크의
 경로로 근거를 찾는다(2026-08-14 개정, 아래 "개정 이력" 참고). 그래도 이 도구가
 증명하지 못하는 것이 네 가지 있다.
@@ -78,9 +84,11 @@ architecture.md가 그 클래스를 백틱 이름으로 실질적으로 서술�
 보지 못한다")이 말하는 스크립트의 사각지대이지, 드러난 실제 공백이 아니다.
 셋 — `CliWorkspace`, `CliEffort`, `ValidatorAiService` — 은 그중에서도
 혼합형이다: architecture.md 카탈로그 표에 실제 링크가 있어 스크립트가 일부
-분량을 이미 인정했지만(CliWorkspace L68→ARCH_MD 504, CliEffort L69→893,
-ValidatorAiService L110→302), 그 인정된 분량이 AGENTS.md 줄의 바이트 수에
-못 미치고 카탈로그 항목과는 별도의 더 긴 서술 문단이 또 있다(CliWorkspace·
+분량을 이미 인정했다 — `CliWorkspace`는 표 L88이고 그 카탈로그 링크는
+`architecture.md:68`에 있어 ARCH_MD 504바이트, `CliEffort`는 표 L89이고 링크는
+`architecture.md:69`에 있어 893바이트, `ValidatorAiService`는 표 L121이고 링크는
+`architecture.md:110`에 있어 302바이트다. 그 인정된 분량이 AGENTS.md 줄의
+바이트 수에 못 미치고 카탈로그 항목과는 별도의 더 긴 서술 문단이 또 있다(CliWorkspace·
 CliEffort는 `architecture.md:589`, ValidatorAiService는 `architecture.md:633`).
 나머지 넷(`SqlObjectTypeClassifier`, `MockDataDto`, `GapReport`,
 `TypeClassificationPolicyTests`)은 링크가 아예 없다(해당 `.cs` 경로로
