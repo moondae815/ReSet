@@ -88,11 +88,12 @@
     *   **L1 (정적)**: [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs)에서 Markdig 파서 필수 섹션 검증, **Anti-Shortcut (생략어) 감지 및 즉시 반려(Fast-Fail)**, 그리고 Mermaid 다이어그램 린팅을 수행하십시오.
         - **Mermaid 다이어그램 자동 정화**: `CleanseMermaidCode`가 L1 린팅 전에 화살표·노드 ID·라벨 문법을 자동 교정합니다. 이 정화된 내용을 훼손하거나 무력화하지 마십시오. 교정 규칙 세부는 `architecture.md §4.4.1` 참고.
         - **정화 결과 영속 반영**: L1 검증 단계에서 획득한 정화된 마크다운(CleansedMarkdown)은 검증 성공 여부에 관계없이 파이프라인 오케스트레이터에서 메모리 상의 명세서 및 계획서 원본 텍스트에 다시 덮어써 최종 파일로 영속 보존되도록 구현을 유지하십시오.
-        - 하한 검사의 대조 기준(`ErrorCodes`)은 AI가 아니라 도구가 명세서에서 채웁니다. 빈 배열은 통과가 아니라 "검증 불가"입니다. 단, `LegacyProcedures`가 비어 있는 단계는 보존할 원본 코드가 없으므로 정상입니다.
-        - 목차의 대상 테이블(`TargetTables`)은 정적 분석이 진실의 원천입니다. 명세서 산문에서 다시 뽑지 마십시오 — 대상 테이블은 오류코드와 달리 파서가 AST에서 이미 확정한 구조화된 데이터이므로, 산문을 재해석하면 정확도가 오히려 떨어집니다. `SpecTargetTableExtractor`가 뽑은 쓰기 집합으로 목차의 선언을 교체하고, 버려진 선언은 배너가 아니라 경고로 남기십시오.
+        - 하한 검사의 대조 기준(`ErrorCodes`)은 AI가 아니라 도구가 명세서에서 채웁니다. 빈 배열은 통과가 아니라 "검증 불가"입니다. 단, `LegacyProcedures`가 비어 있는 단계는 보존할 원본 코드가 없으므로 정상입니다. (`MechanicalValidatorTests.ValidateBatchStep_WithEmptyErrorCodes_Fails`/`..._WithNoLegacyProcedure_TreatsEmptyErrorCodesAsNotApplicable`가 검사)
+        - 목차의 대상 테이블(`TargetTables`)은 정적 분석이 진실의 원천입니다. 명세서 산문에서 다시 뽑지 마십시오 — 대상 테이블은 오류코드와 달리 파서가 AST에서 이미 확정한 구조화된 데이터이므로, 산문을 재해석하면 정확도가 오히려 떨어집니다. `SpecTargetTableExtractor`가 뽑은 쓰기 집합으로 목차의 선언을 교체하고, 버려진 선언은 배너가 아니라 경고로 남기십시오. (`SpecTargetTableExtractorTests`가 검사)
         - `TargetTables`(검증 재료)와 `SchemaTables`(회차 지시서 DDL 스코프 재료)를 한 필드로 합치지 마십시오. 합치면 읽기 원본을 넣을 때 검증이 과해지고(존재하지 않는 요건이 생김), 빼면 에이전트가 SELECT를 쓸 스키마를 받지 못합니다.
         - 명세서의 스키마 주장은 L1이 기계적으로 대조한다. 대조 기준은 프롬프트에 실린 컬럼이며,
-          DB 전체 컬럼이 아니다(`SchemaPromptColumnSelector`, `MechanicalValidator.CheckSchemaClaims`).
+          DB 전체 컬럼이 아니다(`SchemaPromptColumnSelector`, `MechanicalValidator.CheckSchemaClaims`,
+          `SchemaPromptColumnSelectorTests`/`SchemaClaimGateRegressionTests`가 검사).
     *   **L2 (AI 교차 검토)**: [AiService.cs](./src/ReSet.Core/Services/AiService.cs)가 `MaxL2Attempts` 한도 안에서 자가 보완 루프를 돌립니다. Critic 피드백은 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드 누적 규칙을 그대로 쓰십시오 — 끊으면 매번 백지에서 다시 쓰는 Actor가 앞 라운드에 정리된 오류를 되살립니다. `ActorEffort: "dynamic"`의 차등 Effort 병렬 생성·Fast-Pass·Consolidator 합성 흐름과 로컬 모델 구역 분할 생성은 `architecture.md §4.4.2` 참고.
         - **로컬 프로바이더 분기는 헬퍼로만**: 로컬 전용 분할 생성 경로(Ollama, mlx, local-openai 등)를 판정할 때는 반드시 `AiClientFactory.IsLocalProvider()`를 쓰고 `"Ollama"` 문자열을 직접 비교하지 마십시오 — mlx-lm 등 로컬 호환 프레임워크가 파이프라인에서 빠집니다. TUI 진행도는 Stage 1(논리 구조 분석)과 Stage 2(3구역 분할 생성)를 합쳐 1/4~4/4로 통합 넘버링하고, Stage 1 추론 로그도 다른 회차와 동일하게 `Thinking.md`에 누적해야 합니다.
     *   **품질 기준 엄격 강제 및 경고 표기**: 품질 향상을 위해 단일 모델 자가 수정 루프에서도 감쇄 임계치(Decaying Threshold)를 배제하고 설정된 기준 점수(Threshold)를 일관되게 적용하십시오. 만약 최종 시도 횟수를 소모한 후에도 점수 미달로 검증을 통과하지 못한 경우, 문서를 버리지 않고 채택하여 저장하되 문서 최상단에 `[!CAUTION]` 경고 배너와 상세한 Critic 점수 및 피드백 코멘트를 보존하여 후속 수정을 유도하도록 구현하십시오.
@@ -104,10 +105,11 @@
     *   **CLI 기반 제공자(`claude-cli`/`codex-cli`/`agy-cli`)의 원칙**: 로컬에 로그인된 코딩 에이전트 CLI를 헤드리스로 기동해 구독 비용만으로 운용하는 별도 제공자군입니다. `ApiKey`를 두지 말고 `Command` 설정만 쓰십시오. 호출 실패 시 다른 제공자로 자동 대체하지 말고 [CliFailureClassifier.cs](./src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)로 원인을 분류해 예외로 보고해, 전환은 사람이 설정을 고쳐 판단하게 하십시오.
     *   **CLI 제공자의 토큰 집계 정직성**: 응답 봉투의 토큰 집계는 반드시 읽어 로그로 남기고, **봉투에 없는 항목을 0으로 채우지 마십시오** - 0은 측정값이라, 없는 필드를 0으로 적으면 나중에 캐시 판정의 근거로 쓰입니다([CliUsage.cs](./src/ReSet.Core/Services/Clients/Cli/CliUsage.cs)의 미보고 표기를 쓰십시오).
     *   **CLI 제공자의 무인 배치 가드**: Actor/Critic/Consolidator 어느 하나라도 CLI 제공자면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 실행을 즉시 중단시켜야 합니다. `ModelName` 전달·temperature 무시 등 나머지 배선은 `architecture.md §4.5` 참고.
-    *   **코드가 강제하는 제약은 프롬프트에도 실으십시오**: 파서나 검증기가 상한·형식을 강제하는데 프롬프트가 그 사실을 알리지 않으면, 모델은 자신이 무엇을 어겼는지 알 방법이 없고 파이프라인은 오류 없이 폴백합니다 — 아무도 눈치채지 못하는 종류의 실패입니다. 제약을 코드에 새로 넣을 때는 그것을 받는 프롬프트도 함께 고치고, **파이프라인이 의존하는 필드에는 예외 없이 규칙 문장을 주십시오** — 스키마 예시에 등장한다는 것은 모델에게 선택 항목이라는 뜻입니다. 같은 결함이 세 번 나왔습니다:
+    *   **코드가 강제하는 제약은 프롬프트에도 실으십시오**: 파서나 검증기가 상한·형식을 강제하는데 프롬프트가 그 사실을 알리지 않으면, 모델은 자신이 무엇을 어겼는지 알 방법이 없고 파이프라인은 오류 없이 폴백합니다 — 아무도 눈치채지 못하는 종류의 실패입니다.
+        - 제약을 코드에 새로 넣을 때는 그것을 받는 프롬프트도 함께 고치고, **파이프라인이 의존하는 필드에는 예외 없이 규칙 문장을 주십시오** — 스키마 예시에 등장한다는 것은 모델에게 선택 항목이라는 뜻입니다. 같은 결함이 세 번 나왔습니다:
         - `ErrorCodes` 빈 배열
-        - `MaxSteps`: 목차가 73단계를 내 상한 40(`BatchStepPlanParser.MaxSteps`)에 걸리자 단계 목록이 통째로 버려졌고, 단계별 섹션이 하나도 없는 문서가 `Passed`로 끝났습니다. 상한을 프롬프트에 실은 뒤 같은 잡이 32단계로 들어왔습니다.
-        - 규칙 없이 JSON 예시에만 등장하던 `LegacyProcedures`: 파이프라인의 커버리지 검사와 하한 검사가 전적으로 기대는 필드인데, 33단계가 전부 비운 채 나와 두 검사가 통째로 무력화됐습니다.
+        - `MaxSteps`: 실측 사례로 목차가 73단계를 내 상한 40(`BatchStepPlanParser.MaxSteps`)에 걸리자 단계 목록이 통째로 버려졌고, 단계별 섹션이 하나도 없는 문서가 `Passed`로 끝났습니다. 상한을 프롬프트에 실은 뒤 같은 잡이 32단계로 들어왔습니다.
+        - 그리고 규칙 없이 JSON 예시에만 등장하던 `LegacyProcedures`: 파이프라인의 커버리지 검사와 하한 검사가 전적으로 기대는 필드인데, 33단계가 전부 비운 채 나와 두 검사가 통째로 무력화됐습니다.
     *   **리뷰(검증) 시 풍부한 컨텍스트 유지**: AI 리뷰어(Critic)가 명세서 정확성과 CRUD/인터페이스 완전성을 검증할 수 있도록, 리뷰 요청([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs))에도 분석 요청과 동일하게 테이블 스키마·참조 UDF DDL·AST 정적 분석 등 원본 메타데이터(`BuildSpMetadataTexts`) 및 대상 SP의 DDL 소스(`spDef.DdlText`)를 누락 없이 빌드해 리뷰 프롬프트(`userPrompt`)에 포함하십시오.
     *   **재귀 객체별 검증과 산출물 모드**: `AnalysisSettings:AnalyzeReferencedCodeObjects`가 켜지면 SP/UDF마다 기존 L1/L2/L3 파이프라인과 캐시 경로를 그대로 적용하고, 외부 DB 테이블·뷰의 컬럼·인덱스 상세는 조회하지 마십시오. 링크드 서버(4부 식별자)는 지원 대상이 아닙니다. 경계·경로·DDL 정책 세부는 `architecture.md §4.1.1` 참고.
     *   **하이브리드 영문 프롬프트 구조 준수**: `AiService.cs` 내부의 시스템 프롬프트(`systemPrompt`)는 반드시 영문(English) 작성을 원칙으로 하고, 최종 출력 및 체크리스트 동작 지시만 한국어 출력 조건 및 영어 매칭 트리거를 사용해야 합니다. 이를 임의로 한국어 프롬프트로 전면 번역하거나 되돌려 규칙 준수 강도를 떨어뜨리지 마십시오.

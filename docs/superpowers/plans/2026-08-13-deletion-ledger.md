@@ -638,11 +638,15 @@ AGENTS.md L86–L115(`### ⚙️ 범주 4.`부터 `### 🔒 범주 5.` 직전까
 
 ### 원문 유지(사람의 판단만이 잡는 항목)
 
-- L107 "코드가 강제하는 제약은 프롬프트에도 실으십시오" — 원문 유지(3예시 줄바꿈만)
+- L107 "코드가 강제하는 제약은 프롬프트에도 실으십시오" — 원문 유지, 4개 불릿으로 줄바꿈
+  (내용 삭제 없음이라고 이 라운드에서 적었으나, 이 주장은 `grep -c`만으로 검증한 것이었고
+  실제로는 "실측 사례로" 두 글자가 빠져 있었다 — 정정 경위는 아래 "Fix Round 1" 참고)
 - L112 하이브리드 영문 프롬프트 구조 준수 — 원문 유지
 - L113 스키마 및 환각/숏컷(Anti-Shortcut) 차단 룰 유지 — 원문 유지
 
-원문 유지 확인(`grep -c`, AGENTS.md 전체):
+원문 유지 확인(`grep -c`, AGENTS.md 전체) — **주의: 이 표는 조각의 생존만 증명하고 전체
+텍스트의 완전성은 증명하지 않는다.** 완전성 검증 방법은 아래 "Fix Round 1"에서
+정정했다.
 
 ```
 코드가 강제하는 제약은 프롬프트에도    1
@@ -663,3 +667,87 @@ Anti-Shortcut                          2
 23개는 변경 없음(무출력). `<!-- synced-through: c8d6074 -->` 양쪽 파일 모두 변경 없음.
 `.cs` 파일은 변경하지 않았으므로 `dotnet build`/`dotnet test`는 돌리지 않았다(`git status
 --short`가 `AGENTS.md` 한 줄만 보고).
+
+## Fix Round 1 (Task 4, 2026-08-14) — 검증 방법 자체가 부실했던 문제
+
+독립 리뷰가 SPEC COMPLIANCE FAIL(Critical 2건 + Important 1건 + Minor 1건)을 냈다. 공통
+원인: 원안이 텍스트 완전성을 `grep -c`로 "조각이 살아 있는지"만 확인했고, 전체를 이어
+붙여 대조하지 않았다. 그 결과 원문 유지 대상에서 단어가 실제로 빠졌는데도 통과로
+보고했다.
+
+**Critical 1 — L107이 여전히 600바이트를 넘었다(689B).** Task 4 Step 4는 "넘는 줄이
+원문 유지 대상뿐인지 확인하고, 넘으면 더 쪼갠다"고 명시했는데, 원안은 4개 불릿으로
+나눈 뒤 첫 불릿(인트로+마감 규칙문 결합)이 689B로 여전히 예산을 넘는 것을 놓쳤다.
+리뷰가 지목한 분할점("…아무도 눈치채지 못하는 종류의 실패입니다." 뒤)을 확인한 뒤 그
+지점에서 실제로 나눴다. 처음엔 두 번째 줄에 굵은 제목을 반복("...실으십시오 (계속)**:")
+했는데, 이는 원문에 없던 새 글자를 보태는 것이라 즉시 되돌리고, 다른 하위 불릿들과
+같은 `        - ` 들여쓰기만 쓰는 순수 줄바꿈으로 바꿨다:
+
+```
+L107: *   **코드가 강제하는 제약은 프롬프트에도 실으십시오**: ...아무도 눈치채지 못하는 종류의 실패입니다.   (365B)
+L108:     - 제약을 코드에 새로 넣을 때는... 같은 결함이 세 번 나왔습니다:                                      (333B)
+L109:     - `ErrorCodes` 빈 배열                                                                                (33B)
+L110:     - `MaxSteps`: 실측 사례로 목차가...32단계로 들어왔습니다.                                             (319B)
+L111:     - 그리고 규칙 없이 JSON 예시에만 등장하던 `LegacyProcedures`: ...무력화됐습니다.                       (264B)
+```
+
+**Critical 2 — "실측 사례로"가 빠져 있었다.** 리뷰가 지목한 그대로였다 — `MaxSteps` 예시
+불릿을 쓸 때 "목차가 73단계를..."로 바로 시작해 두 단어를 흘렸다. 복원했다.
+
+**전체 완전성 재검증(이번 라운드에서 처음 도입).** `grep -c`는 조각의 생존만 증명하고
+완전성은 증명하지 않는다는 지적을 받아들여, 이번에는 base(`6e7bd37`)의 L107 한 줄과
+현재 5줄(L107–L111)을 각각 토큰화(불릿 기호·줄머리 공백 제거, 백틱 코드스팬은 통째로
+보존, 나머지는 공백 및 `.,:()—` 경계로 분리)한 뒤 **정렬된 토큰 다중집합**으로 비교했다.
+1차 실행에서 "그리고"가 새로 빠진 것을 발견했다(열거형 `MaxSteps, 그리고 LegacyProcedures`를
+불릿으로 쪼개며 접속사를 지운 것 — 문체상 자연스러워 보였지만 "한 글자도 줄이지 않는다"
+제약에는 어긋난다). 복원 후 재실행:
+
+```
+BASE token count: 117
+NEW  token count: 117
+IDENTICAL token multisets — no words added or removed.
+```
+
+토큰 다중집합이 완전히 같다는 것은 (a) 정렬 후 비교이므로 재배치는 허용하고 순서
+정보만 버리며, (b) 같은 문자열이 두 번 나오면 두 번 다 있어야 일치하므로 우발적 중복도
+잡는다는 뜻이다. 순서 자체(마감 규칙문을 예시 앞으로 옮긴 것)는 재구성이지 삭제가
+아니므로 이 검증 범위 밖이며, 아래 "미해결 검토 대상"에 그 사실을 남긴다.
+
+**미해결 검토 대상 — 순서 재구성.** 원문은 [인트로]→[MaxSteps 실측 서술]→[3항목 열거]→
+[마감 규칙문] 순이었다. 지금은 [인트로]→[마감 규칙문+열거 도입]→[ErrorCodes]→[MaxSteps]→
+[LegacyProcedures] 순이다 — 마감 규칙문("제약을 코드에 새로 넣을 때는...")을 열거 앞으로
+옮겼다. 단어는 전부 보존됐지만 읽는 순서는 바뀌었다. 계획서의 "줄바꿈이지 삭제가
+아니다"가 재배치까지 승인하는지는 이 대장이 판단할 권한 밖이므로, 조정자가 이 순서를
+받아들이지 않으면 마감 규칙문을 예시 뒤(LegacyProcedures 다음)로 되돌리는 재작업이
+필요하다는 것만 기록해 둔다.
+
+**Important — L91·L92·L94-95에 누락된 테스트 인용을 추가했다.** `doc-audit.sh`는
+`[Foo.cs]` 대괄호 링크에서만 심볼을 뽑으므로, 이 세 불릿처럼 클래스명을 백틱으로만
+쓴 산문은 전부 `산문(수동판정)`으로 나와 자동 신호가 없었다("산문"은 "찾을 게 없다"가
+아니라 "기계가 할 말이 없다"는 뜻임을 이번에 확인했다). 각 테스트를 열어 실제로
+무엇을 단언하는지 확인한 뒤 인용을 추가했다:
+
+| 불릿 | 테스트 | 실제 단언(직접 읽고 확인) |
+|---|---|---|
+| L91 `ErrorCodes` 빈 배열 → 검증 불가 | `MechanicalValidatorTests.ValidateBatchStep_WithEmptyErrorCodes_Fails` | 빈 `ErrorCodes`로 `ValidateBatchStep` 호출 시 `IsValid=false`, 오류 메시지에 `"ErrorCodes"` 포함 |
+| L91 `LegacyProcedures`가 비면 정상 | `MechanicalValidatorTests.ValidateBatchStep_WithNoLegacyProcedure_TreatsEmptyErrorCodesAsNotApplicable` | `LegacyProcedures`와 `ErrorCodes`가 둘 다 빈 배열이면 `IsValid=true`, `PlanDefects` 비어 있음 |
+| L92 `TargetTables`는 정적 분석이 진실의 원천 | `SpecTargetTableExtractorTests.Extract_ShouldSplitWriteTargetsFromReadSources` | `SpecTargetTableExtractor.Extract`가 정적 분석의 Insert/Delete를 쓰기 집합으로, Select를 읽기 집합으로 정확히 분리 |
+| L94–95 대조 기준은 프롬프트에 실린 컬럼, DB 전체가 아님 | `SchemaPromptColumnSelectorTests.Select_WithReferencedColumns_ShouldKeepOnlyThoseAndKeys`/`..._WhenNothingMatches_ShouldFallBackToAllColumns` | 참조된 컬럼만 남기고 나머지는 제외(전체 컬럼이 아님을 확인), 매칭이 없을 때만 전체로 폴백 |
+| L94–95 스키마 주장은 L1이 기계적으로 대조 | `SchemaClaimGateRegressionTests.TheSpecThatScoredNinetyOne_ShouldNowFailL1` 등 | 실제 존재하는 컬럼을 "존재하지 않음"으로 적은 명세서가 `SchemaClaimFalse`로 L1에서 거부됨(88~94점을 받았던 실물 픽스처로 재현) |
+
+기각한 매핑은 없다 — 리뷰가 지목한 4개 전부 실제로 그 불릿이 서술하는 동작을 검사했다.
+
+### 크기 (Fix Round 1 이후)
+
+`docs/architecture.md`는 이번 라운드에서 건드리지 않았다(141,877B, 변경 없음). `AGENTS.md`는
+48,011B → 48,328B로 317B 늘었다 — 복원한 두 단어("실측 사례로", "그리고")와 4개 불릿에
+추가한 4개 테스트 인용이 분할로 아낀 바이트보다 컸다. 목적은 순감축이 아니라 완전성과
+인용 커버리지였다.
+
+재확인: 범주 4(L86–L119) 안에 600바이트를 넘는 줄 없음(`L107`이 365B로 원문 유지 항목
+중 가장 김). 원문 유지 3항목 `grep -c` 재확인 — "코드가 강제하는 제약은 프롬프트에도" 1,
+"Anti-Shortcut" 2, "하이브리드 영문" 1, "실측 사례로" 1(신규 확인 항목). 링크 검사
+재확인(둘 다 무출력): `AGENTS.md`의 `./` 링크 31개, `docs/architecture.md`의 `../src/`
+링크 104개·`../tests/` 링크 23개. `<!-- synced-through: c8d6074 -->` 양쪽 파일 모두
+변경 없음. `git diff --stat`이 `AGENTS.md`만 보고하며, 변경된 줄은 전부 L88–L112(범주 4
+안) 안에 있다. `.cs` 파일 변경 없음 — `dotnet build`/`dotnet test` 미실행.
