@@ -596,3 +596,70 @@ Gemma4ChannelThought, StandardThinkTag, DiversifyTemperatureBasedOnEffort — �
 링크 검사(둘 다 무출력, 재확인): `AGENTS.md`의 `./` 링크 32개, `docs/architecture.md`의
 `../src/` 링크 104개·`../tests/` 링크 23개 — 전부 존재 확인. `<!-- synced-through: c8d6074 -->`
 변경 없음.
+
+## Phase 2b 결과 — 범주 4 (검증 오케스트레이션 및 파이프라인 흐름) (Task 4, 2026-08-14)
+
+**구간.** WAVE_BASE `6e7bd37`(Task 3 Fix Round 1 이후) 기준 헤딩에서 재계산: 범주 4는
+AGENTS.md L86–L115(`### ⚙️ 범주 4.`부터 `### 🔒 범주 5.` 직전까지, 편집 전 상태). 이
+구간에는 이번 작업이 가장 위험하다고 지목한 "기계가 잡을 수 없는 프롬프트 설계 제약"이
+섞여 있어, 계획서가 확정한 8개 판정을 먼저 그대로 적용한 뒤 그것으로 해소되지 않는
+600바이트 초과 줄(L89, L108, L109)에 한해서만 손댔다. 근거 없이 줄이거나 옮긴 곳은
+없다 — L89·L109는 architecture.md에서 실제 중복을 확인한 뒤에만 축약했고, L108은
+중복을 찾지 못했으므로 이동하지 않고 표현만 다듬었다(아래에서 각각 구분해서 적는다).
+
+**판정 요약(계획서 확정 8개).**
+
+| 대상(원 줄) | 판정 | 처리 |
+|---|---|---|
+| L107 "코드가 강제하는 제약은 프롬프트에도" | 기계가 잡을 수 없음 | 원문 유지, 계획서가 승인한 방식대로 3개 예시(`ErrorCodes`/`MaxSteps`/`LegacyProcedures`)를 불릿으로 줄바꿈만 함(내용 삭제 없음) |
+| L112 하이브리드 영문 프롬프트 구조 | 기계가 잡을 수 없음 | 원문 유지, 한 글자도 안 건드림 |
+| L113 Anti-Shortcut 프롬프트 제약 | 기계가 잡을 수 없음 | 원문 유지, 한 글자도 안 건드림 |
+| L114 캐시 워밍 순서 | `RunConsolidatedPipeline_WarmsCacheBeforeFanningOut`가 검사(테스트를 열어 S01이 다른 단계보다 먼저 끝남을 단언함을 확인) | 계획서가 준 문구 그대로 축소, 근거는 `architecture.md §4.13`(직접 열어 같은 캐시 워밍 서술과 Claude 경로 예외를 확인) |
+| L115 예외 재시도 지연 | `RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter`/`..._WhenStepMissesFloor_RetriesWithoutDelay`가 검사(두 테스트를 열어 각각 지터 지연 있음/없음을 단언함을 확인) | 계획서가 준 문구 그대로 축소 |
+| L101 검증 종료 상태 정직성 | 사람의 판단 + `VerificationOutcome.cs` 주석 | 규칙 문장(네 값으로만 표현, bool/null 대체 금지)만 남기고 표기·게이팅·캐시 경계 세부는 `architecture.md §4.4.4`로(직접 열어 표기 단일화·점수 게이팅·캐시 경계 세 절 모두 있음을 확인, AGENTS.md 원문보다 두꺼움) |
+| L106 CLI 제공자 원칙 | `architecture.md §4.5`가 더 두껍게 보유(직접 열어 ApiKey/Command·ModelName 전달·temperature 무시·CliFailureClassifier 분류·토큰 매핑까지 AGENTS.md 원문과 동일한 내용을 더 상세히 서술함을 확인) | 핵심 규칙(ApiKey 대신 Command만, 자동 폴백 금지 후 CliFailureClassifier로 분류)만 남기고 나머지는 §4.5로 |
+| L96–99(구) L2 Actor-Critic 흐름 | `architecture.md §4.4`가 보유(§4.4.2를 직접 열어 dynamic 모드 병렬 생성·Fast-Pass·Consolidator 합성, 로컬 모델 3구역 분할 생성 서술이 AGENTS.md 원문보다 상세함을 확인) | `MaxL2Attempts`·누적 피드백 규칙(사유는 [CriticFeedbackLog.cs](../../../src/ReSet.Core/Services/CriticFeedbackLog.cs) 자신의 `<summary>`가 이미 서술)과 `IsLocalProvider()` 사용 규칙만 남기고 흐름 상세는 §4.4.2로 |
+
+**표에 없었지만 600바이트 초과로 직접 판정한 3줄.** Step 4의 전체 라인 예산 검사가
+범주 4 안에서 표 밖의 줄도 초과함을 드러냈다. 각 줄을 architecture.md에서 직접
+대조해 중복 여부를 확인한 뒤에만 손댔다:
+
+| 원문 위치(구 줄) | 바이트(전/후) | 사유 | 근거 위치(직접 열어 확인) |
+|---|---|---|---|
+| L89 Mermaid 다이어그램 자동 정화 상세(화살표 라벨·노드 ID·래핑 규칙, subgraph/체이닝 화살표 예외) | 644 → 284 | architecture.md가 더 두껍게 보유 | `architecture.md:538`(§4.4.1) — 같은 정화 항목을 더 상세히 서술, `subgraph`/체이닝 화살표 예외까지 포함 |
+| L109 재귀 객체별 검증과 산출물 모드의 `AllowExternalDatabaseConnections`/`DependencyArtifactMode`/`PortableBundle` 세부 | 1023 → 427 | architecture.md가 더 두껍게 보유 | `architecture.md:411-412`(§4.1.1) — 크로스 DB 스위치, `Reference`/`PortableBundle` DDL 정책을 그대로 서술 |
+| L105(신설, 원래 CLI 원칙 문단의 일부) 토큰 집계 정직성 | 예산 초과분은 분리로 해소(내용 손실 없음) | 600바이트 초과 — 원문 유지 대상이 아니므로 두 불릿으로 나눔(토큰 정직성 / 무인 배치 가드) | 줄바꿈만, 삭제 없음 |
+
+**L108(원 문서 "리뷰 시 풍부한 컨텍스트 유지")은 근거를 찾지 못해 표현만 다듬었다.**
+`architecture.md`에 `ReviewSpecificationAsync`/`BuildSpMetadataTexts` 언급이 없어(직접
+`grep` 확인, 결과 없음) 이동하지 않았다. 사람 판단만 잡는 프롬프트 컨텍스트 규칙으로
+보고 의미를 그대로 둔 채 "정상"·"실제" 등 군더더기만 줄여 630B → 520B로 예산 안에
+넣었다 — 단어 하나도 규칙의 의미를 바꾸지 않았다.
+
+### 원문 유지(사람의 판단만이 잡는 항목)
+
+- L107 "코드가 강제하는 제약은 프롬프트에도 실으십시오" — 원문 유지(3예시 줄바꿈만)
+- L112 하이브리드 영문 프롬프트 구조 준수 — 원문 유지
+- L113 스키마 및 환각/숏컷(Anti-Shortcut) 차단 룰 유지 — 원문 유지
+
+원문 유지 확인(`grep -c`, AGENTS.md 전체):
+
+```
+코드가 강제하는 제약은 프롬프트에도    1
+Anti-Shortcut                          2
+하이브리드 영문                        1
+```
+
+### 크기
+
+| 파일 | Phase 2b 이전(Task 3 Fix Round 1 이후, WAVE_BASE `6e7bd37`) | Phase 2b 이후 |
+|---|---|---|
+| `AGENTS.md` | 52,730 B | 48,011 B (−4,719 B) |
+| `docs/architecture.md` | 141,877 B | 141,877 B (변경 없음 — 인용한 모든 근거가 이미 architecture.md에 있었으므로 새로 옮길 내용이 없었다) |
+
+링크 검사: `AGENTS.md`의 `./` 링크가 32개 → 31개로 줄었다(계획서가 승인한 캐시 워밍
+불릿 교체 문구에서 `PromptCacheBreakpointPolicy.cs` 링크 1개가 빠졌기 때문 — 남은 31개
+전부 존재 확인, 무출력). `docs/architecture.md`의 `../src/` 링크 104개·`../tests/` 링크
+23개는 변경 없음(무출력). `<!-- synced-through: c8d6074 -->` 양쪽 파일 모두 변경 없음.
+`.cs` 파일은 변경하지 않았으므로 `dotnet build`/`dotnet test`는 돌리지 않았다(`git status
+--short`가 `AGENTS.md` 한 줄만 보고).
