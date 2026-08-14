@@ -1689,6 +1689,23 @@ namespace ReSet.Core.Services
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
             }
 
+            // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
+            // 검증기는 그때 검사를 건너뛴다(소프트 스킵).
+            var knownTableNames = (definitions ?? Array.Empty<SpDefinition>())
+                .SelectMany(sp => sp.Dependencies)
+                .Select(dep => string.IsNullOrEmpty(dep.Database)
+                    ? $"{dep.Schema}.{dep.Name}"
+                    : $"{dep.Database}.{dep.Schema}.{dep.Name}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (knownTableNames.Count == 0)
+            {
+                Log.Information(
+                    "스키마 카탈로그가 비어 있어 단계별 미지 테이블 검사를 실행하지 않습니다 - JobName: {JobName}",
+                    jobName);
+            }
+
             // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
             // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
             // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
@@ -1854,7 +1871,7 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, cancellationToken);
+                                pendingDefectiveSteps, knownTableNames, cancellationToken);
 
                             if (split != null)
                             {
@@ -2298,6 +2315,7 @@ namespace ReSet.Core.Services
                             reuseSkeleton ? lastStepSections : null,
                             violationsForRegeneration,
                             reuseSkeleton ? stepsToRegenerate : new List<string>(),
+                            knownTableNames,
                             cancellationToken);
 
                         if (split != null)
@@ -2501,6 +2519,27 @@ namespace ReSet.Core.Services
             // 다시 얹힌다. 그래서 최종 문서는 위에서부터 커버리지 → 오류코드 누락
             // → 분할 미실행 → 하한 미달 → 검증 불가 순으로 읽힌다 - 목차·명세서
             // 수준의 결함일수록 위로, 단계 하나의 결함일수록 아래로 간다.
+            // 배너는 나중에 붙을수록 위로 얹힌다. 생략 주석은 이 자리의 결함 중
+            // 가장 가벼우므로 가장 먼저 붙여 맨 아래에서 읽히게 한다.
+            //
+            // 스캔 실패가 나머지 배너까지 막지 않도록 격리한다(AGENTS.md 범주 2).
+            // 취소 필터는 달지 않는다 - Scan은 문자열 위의 동기 정규식이라 취소
+            // 토큰을 넘기는 await를 감싸지 않는다.
+            IReadOnlyList<string> omissionComments = Array.Empty<string>();
+            try
+            {
+                omissionComments = OmissionCommentScanner.Scan(consolidatedPlan);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "생략 주석 스캔 중 오류가 발생했습니다. 배너 없이 진행합니다.");
+            }
+
+            if (omissionComments.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.OmissionComments(omissionComments) + consolidatedPlan;
+            }
+
             var unverifiableSteps = byKind[StepDefectKind.Unverifiable].ToList();
             if (unverifiableSteps.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
             {
@@ -2899,6 +2938,7 @@ namespace ReSet.Core.Services
             Dictionary<string, string>? previousSections,
             Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
+            IReadOnlyList<string> knownTableNames,
             CancellationToken cancellationToken)
         {
             var targeted = previousSkeleton != null && previousSkeletonResult != null &&
@@ -2982,7 +3022,8 @@ namespace ReSet.Core.Services
                     progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
-                        step, steps, conventions, specs, targetLanguage, jobName, cancellationToken);
+                        step, steps, conventions, specs, targetLanguage, jobName,
+                        knownTableNames, cancellationToken);
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -3061,6 +3102,7 @@ namespace ReSet.Core.Services
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             string targetLanguage,
             string jobName,
+            IReadOnlyList<string> knownTableNames,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
@@ -3106,7 +3148,7 @@ namespace ReSet.Core.Services
 
                 adopted = content;
 
-                var stepResult = _validator.ValidateBatchStep(content, step);
+                var stepResult = _validator.ValidateBatchStep(content, step, knownTableNames);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

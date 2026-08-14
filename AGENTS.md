@@ -116,6 +116,7 @@
     *   **스키마 및 환각/숏컷(Shortcut) 차단 룰 유지**: 프롬프트 규칙 내의 "의존 메타데이터 외 컬럼 창작 금지" 및 "DDL 미정의 임의 에러 반환 상숫값 가작 금지" 규정은 로컬 LLM의 안전장치입니다. 또한 통합 배치 전환 계획 수립 시, UNION/JOIN이나 에러 코드 분기 처리(Chunking Key) 로직을 모델이 자의적으로 축약(Shortcut)하지 못하도록 하는 "Anti-Shortcut" 프롬프트 제약 규칙을 절대 간소화하거나 누락하지 마십시오.
     *   **`GenerateBySplitAsync`의 첫 단계 단독 실행을 제거하지 마십시오**: 프롬프트 접두사 캐시를 채우는 워밍이며, 지웠을 때의 증상은 산출물은 그대로인데 입력 토큰 비용만 조용히 오르는 것이라 코드만 봐서는 알 수 없습니다. (`RunConsolidatedPipeline_WarmsCacheBeforeFanningOut`가 검사, 근거는 `architecture.md §4.13`)
     *   **단계 생성의 예외 재시도 지연을 보존하십시오**: 지연은 예외 실패에만 붙고 하한 미달 재시도에는 붙지 않습니다 — 429 하나가 여러 단계를 같은 창에서 때리는 것을 흩트리기 위함입니다. (`RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter`와 `..._WhenStepMissesFloor_RetriesWithoutDelay`가 검사)
+    *   **`ValidateBatchStep` 호출은 스키마 카탈로그를 3번째 인자로 넘길 것**: 빠뜨린 호출부에서만 미지 테이블 검사가 조용히 꺼집니다. 2인자 오버로드를 되살리지 마십시오. (`KnownTableWiringPolicyTests`가 Roslyn 구문 트리로 자동 검사)
 
 ### 🔒 범주 5. 타겟 런타임 격리 및 리소스 정리 (Lifecycle & Sandbox)
 7.  **타겟 러너 격리 및 모의 데이터(Mock Data) 적재 수명주기를 준수하십시오.**
@@ -138,6 +139,8 @@
     *   **회차 게이트는 fail-closed**: 검증 대상을 찾지 못한 회차를 통과로 기록하지 마십시오 — 0회차는 산출물만 보고, 조립 회차는 전 단계 통과 시에만 Job L2를 걸고 아니면 사유를 남기고 건너뜁니다(`architecture.md §4.11`). 진전 없는 재시도에는 반드시 상한을 두고, **상한에 걸려 접기 전에 사유를 지시서에 먼저 붙이십시오**(`CodegenStagedWorkflowTests.RunStagedWorkflowAsync_ShouldCapRetries_WhenTheStepSourceNeverAppears`, `..._ShouldFailStepThatHasNoSpecToCompareAgainst`).
     *   **자가 수정 및 TDD 테스트 피드백 루프**: 외부 에이전트 기동 시 테스트 뼈대 및 구조 구축을 에이전트에게 자율 위임하고, 회차 지시서에 명시된 자율 루프(코드 작성 ➔ 테스트 ➔ 자가 수정 ➔ 자율 리뷰 ➔ 점진적 커밋)를 통해 에이전트 스스로 L0(로컬 테스트)를 통과하도록 유도합니다. 이후 L1 정적 검사(컴파일 오류 시 숏컷) 및 L2 의미론적 대조를 순차 수행하며, 검증 불일치 시 **그 회차의 작업 지시서**에 피드백을 축적해
         재수정 기동시킵니다.
+    *   **생성 번들의 계약 자산은 [DataAccessPolicy](./src/ReSet.Core/Services/DataAccessPolicy.cs)가 단독 소유합니다**: 스텁 본문을 `MetadataExporter`의 인라인 문자열로 되살리지 마십시오 — 테스트가 닿지 않는 계약이 됩니다. (`AgentContractStubTests`가 검사)
+    *   **회차별 테스트 파일명은 단계 코드로 시작하면 안 됩니다** (`LogicTests_S08.cs`): 검증기가 파일명 접두사로 회차 산출물을 짝지어, 테스트 파일 하나가 Tasklet 없이 이름 게이트를 통과시킵니다. (`TaskFileComposerTests`가 검사)
 
 ### 🧹 범주 7. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 9.  **메타데이터 정화 및 정책 문서 수립 가이드를 준수하십시오.**
@@ -222,4 +225,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: 3d3568e -->
+<!-- synced-through: 37cd381 -->

@@ -413,4 +413,15 @@ public sealed class VerificationBannerTests
 
         Assert.Contains(">   - (단계명이 기록되지 않았습니다.)", banner);
     }
+
+    [Fact]
+    public void OmissionComments_ShouldNameTheOffendingLines()
+    {
+        var banner = VerificationBanner.OmissionComments(new[] { "-- 나머지 실제 컬럼도 모두 기술" });
+
+        Assert.Contains("[!WARNING]", banner);
+        Assert.Contains("나머지 실제 컬럼도 모두 기술", banner);
+        // 규칙 7이 에이전트에게 금지한 형태를 계획서가 시범 보이고 있다는 사실을 말해야 한다.
+        Assert.Contains("생략", banner);
+    }
 }

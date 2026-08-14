@@ -206,6 +206,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("7. **[중요]** 어떠한 경우에도 `// implementation omitted`, `// TODO`, `/* Build SQL */` 등의 주석으로 코드를 생략(Placeholder)하지 마십시오. 3장의 경계 규칙에 따라 SQL 경로로 분류된 DML은 명세서에 있는 원본 로직(조건절·집계식·에러 코드)을 축약 없이 파라미터 바인딩 SQL로 100% 완전하게 작성해야 하며, ORM은 3장의 허용 목록에 한해 사용해야 합니다.");
             sb.AppendLine("8. **[중요]** Worker 구성 시 반드시 명세된 모든 DB Factory 의존성을 `SettleContext`에 할당해야 합니다. 누락 시 런타임 예외가 발생하여 검증을 통과할 수 없습니다.");
             sb.AppendLine(TaskletInheritanceGuideline(inputs.TargetLanguage));
+            sb.AppendLine(ContractAuthorityGuideline(inputs.TargetLanguage));
             sb.AppendLine();
             sb.AppendLine("**[경고] 원본 Stored Procedure(.sql) 파일은 레거시 코드이므로 절대 검색(find 명령어 등)하거나 직접 참조하지 마십시오. 모든 비즈니스 로직은 이미 분석 완료된 Spec.md 문서에 정의되어 있습니다.**");
             sb.AppendLine();
@@ -243,6 +244,31 @@ namespace ReSet.Core.Services
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? "9. **[중요]** 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.java`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 함께 제공되는 `src/ISettleStep.java`, `src/SettleContext.java`, `src/StepResult.java`, `src/IDbConnectionFactory.java`, `src/ICheckpointRepository.java`, `src/ISettleStepDescriptor.java`, `src/ISettleRepository.java`는 모두 `com.reset.batch.core` 패키지 소속이므로 `src/main/java/com/reset/batch/core/` 아래에 패키지 경로와 일치시켜 배치하십시오. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오."
                 : "9. **[중요]** 모든 Tasklet 클래스는 사전에 제공된 `src/AbstractSettleTasklet.cs`의 `AbstractSettleTasklet`을 강제로 상속받아 구현해야 합니다. 임의의 구조를 만들거나 에러코드를 자의적으로 변경하지 마십시오.";
+
+        /// <summary>
+        /// 계획서와 스텁이 충돌할 때 어느 쪽이 이기는지 못 박는다.
+        ///
+        /// 실측: 한 Job의 단계 문서 18개가 전부 비동기 ExecuteAsync와 15필드짜리
+        /// SettlementStepResult를 전제로 쓰였는데, 같은 번들의 스텁은 동기 Execute와
+        /// 3필드 StepResult였다. 단계 문서 어느 것도 스텁을 언급하지 않았다 -
+        /// 에이전트는 두 계약 사이에서 회차마다 다르게 선택할 수밖에 없었다.
+        ///
+        /// 스텁을 계획서에 맞춰 키우지 않고 이 문장을 넣는 이유: 계획서의 타입은
+        /// Job마다 다르게 생성되므로 스텁이 따라갈 수 없다. 고정된 쪽이 권위여야 한다.
+        /// </summary>
+        private static string ContractAuthorityGuideline(string targetLanguage)
+        {
+            var stubPath = targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "src/AbstractSettleTasklet.java"
+                : "src/AbstractSettleTasklet.cs";
+
+            return "10. **[중요]** 계획서 본문에 등장하는 `ExecuteAsync`, `SettlementStepResult`, " +
+                "`StepExecutionStatus`, `SettlementExecutionContext` 등의 타입은 **설계 의도**를 설명하는 " +
+                $"서술입니다. 실제 구현 계약은 `{stubPath}`이며, 둘이 충돌하면 **스텁이 이깁니다.** " +
+                "스텁에 없는 타입이 필요하면 Tasklet 내부에 두고, `common/`이 정의한 공통 계약 파일은 " +
+                "수정하지 마십시오. 실행 식별자(`RunId`, `InputHash`, `SourceSnapshotId`)는 `SettleContext`가 " +
+                "제공하므로 Shadow 테이블 이름과 체크포인트 키는 그 값으로 지으십시오.";
+        }
 
         private static void AppendTechStack(StringBuilder sb, EntryPointInputs inputs)
         {

@@ -123,12 +123,48 @@ namespace ReSet.Batch.Tests.Architecture
     /// </summary>
     public class ArchitectureTests
     {
-        private static Assembly Target => typeof(ReSet.Batch.Core.ISettleStep).Assembly;
+        // 코어 한 어셈블리만 보면, 회차 0이 지시받은 헥사고날 구조를 다중 프로젝트로
+        // 만든 순간 Tasklet과 Domain 타입이 시야에서 사라져 규칙들이 대상 0건으로
+        // 조용히 통과한다. 테스트 어셈블리가 참조하는 ReSet.Batch.* 를 전부 훑는다.
+        private static IReadOnlyList<Assembly> Targets
+        {
+            get
+            {
+                foreach (var reference in Assembly.GetExecutingAssembly().GetReferencedAssemblies())
+                {
+                    if ((reference.Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                    {
+                        // 아직 로드되지 않은 참조는 AppDomain에 나타나지 않는다.
+                        try { Assembly.Load(reference); } catch { /* 로드 실패는 아래 필터가 흡수한다 */ }
+                    }
+                }
+
+                return AppDomain.CurrentDomain.GetAssemblies()
+                    .Where(a => !a.IsDynamic)
+                    .Where(a => (a.GetName().Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                    .Distinct()
+                    .ToList();
+            }
+        }
+
+        private static IEnumerable<Type> TargetTypes =>
+            Targets.SelectMany(assembly =>
+            {
+                try
+                {
+                    return assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    // 일부 타입이 로드되지 않아도 나머지는 검사한다.
+                    return ex.Types.Where(t => t != null)!;
+                }
+            });
 
         [Fact]
         public void EverySettleStep_MustInherit_AbstractSettleTasklet()
         {
-            var offenders = Target.GetTypes()
+            var offenders = TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.ISettleStep).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract)
                 .Where(t => !typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
@@ -143,27 +179,45 @@ namespace ReSet.Batch.Tests.Architecture
         public void Tasklets_MustNotCreate_TheirOwnConnection()
         {
             // 새 커넥션을 만들면 검증기의 Rollback 격리가 깨져 정합성 대조가 오염된다.
-            var result = Types.InAssembly(Target)
-                .That().Inherit(typeof(ReSet.Batch.Core.AbstractSettleTasklet))
-                .ShouldNot().HaveDependencyOn(""Microsoft.Data.SqlClient.SqlConnection"")
-                .GetResult();
+            var offenders = new List<string>();
 
-            Assert.True(result.IsSuccessful,
-                ""SqlConnection을 직접 생성한 Tasklet: "" +
-                string.Join("", "", result.FailingTypeNames ?? Array.Empty<string>()));
+            foreach (var assembly in Targets)
+            {
+                var result = Types.InAssembly(assembly)
+                    .That().Inherit(typeof(ReSet.Batch.Core.AbstractSettleTasklet))
+                    .ShouldNot().HaveDependencyOn(""Microsoft.Data.SqlClient.SqlConnection"")
+                    .GetResult();
+
+                if (!result.IsSuccessful)
+                {
+                    offenders.AddRange(result.FailingTypeNames ?? Array.Empty<string>());
+                }
+            }
+
+            Assert.True(offenders.Count == 0,
+                ""SqlConnection을 직접 생성한 Tasklet: "" + string.Join("", "", offenders));
         }
 
         [Fact]
         public void Domain_MustNotDependOn_Infrastructure()
         {
-            var result = Types.InAssembly(Target)
-                .That().ResideInNamespaceStartingWith(""ReSet.Batch.Domain"")
-                .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
-                .GetResult();
+            var offenders = new List<string>();
 
-            Assert.True(result.IsSuccessful,
-                ""Infrastructure에 의존한 Domain 타입: "" +
-                string.Join("", "", result.FailingTypeNames ?? Array.Empty<string>()));
+            foreach (var assembly in Targets)
+            {
+                var result = Types.InAssembly(assembly)
+                    .That().ResideInNamespaceStartingWith(""ReSet.Batch.Domain"")
+                    .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
+                    .GetResult();
+
+                if (!result.IsSuccessful)
+                {
+                    offenders.AddRange(result.FailingTypeNames ?? Array.Empty<string>());
+                }
+            }
+
+            Assert.True(offenders.Count == 0,
+                ""Infrastructure에 의존한 Domain 타입: "" + string.Join("", "", offenders));
         }
 
         [Fact]
@@ -188,7 +242,7 @@ namespace ReSet.Batch.Tests.Architecture
             // 그 값을 읽을 수 있다 - 이름만 약속하고 실제로는 검사하지 않는 규칙을
             // 남겨 두지 않는다.
             var offenders = new List<string>();
-            foreach (var t in Target.GetTypes()
+            foreach (var t in TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract))
             {
@@ -260,7 +314,7 @@ namespace ReSet.Batch.Tests.Architecture
             Assert.True(notInjectable.Count == 0,
                 ""DI가 채울 수 없는(공개 설정자가 없는) 커넥션 팩토리 속성: "" + string.Join("", "", notInjectable));
 
-            var implementations = Target.GetTypes()
+            var implementations = TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.IDbConnectionFactory).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract)
                 .ToList();
@@ -296,6 +350,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 경계 규칙 조항 1의 후반부 - ORM(JPA)을 전달받은 커넥션/트랜잭션에 참여시켜야 한다는
  * 요구 - 는 호출 그래프 분석이 필요해 여기서 검증할 수 없다. 그 항목은 도구의 L1
  * 정적 검증이 본다. 이 테스트 통과를 경계 규칙 전체 준수로 읽지 마십시오.
+ *
+ * (C#과 달리 여기는 어셈블리 경계 문제가 없다 - importPackages가 com.reset.batch 전체를
+ *  훑으므로 Tasklet이 어느 모듈에 있든 시야에 들어온다.)
  */
 class ArchitectureTests {
 
@@ -453,6 +510,135 @@ class ArchitectureTests {
                 ? JavaArchitectureTests
                 : CSharpArchitectureTests;
 
+        private const string CSharpAssemblyCompletenessTests = @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Xunit;
+
+namespace ReSet.Batch.Tests.Architecture
+{
+    /// <summary>
+    /// 조립 회차 전용. 이 파일은 조립 회차의 지시서만 배치를 요구한다.
+    ///
+    /// 아키텍처 규칙들은 대상이 0건이면 통과한다 - 회차 0에는 Tasklet이 없으므로
+    /// 그것이 정상이다. 그래서 ""하나도 없다""를 실패로 보는 판정은 모든 단계가
+    /// 구현된 뒤에만 켤 수 있고, 스텁은 자신이 몇 회차에 놓이는지 알 수 없다.
+    /// 파일을 나누고 배치 지시를 조립 회차에만 두어 그 스위치를 만든다.
+    ///
+    /// [이 검사가 잡지 못하는 것]
+    /// 이 검사는 Tasklet(AbstractSettleTasklet 구현체)의 존재만 본다. Domain 계층의
+    /// 존재는 강제하지 않는다 - ArchitectureTests.Domain_MustNotDependOn_Infrastructure는
+    /// Tasklet 어셈블리와 Domain 어셈블리가 분리된 헥사고날 구조에서, 어떤
+    /// ReSet.Batch.Domain.* 타입도 로드되지 않으면 대상 0건으로 여전히 조용히
+    /// 통과한다. 별도의 Domain 존재 게이트를 두지 않은 것은 의도적이다 - 정산
+    /// 로직을 전부 Tasklet 안에 두고 별도 Domain 네임스페이스를 두지 않는 것도
+    /// 정당한 설계이며, 이 검사가 그 설계를 강제로 실패시켜서는 안 된다. 이 규칙은
+    /// 의존 ""방향""만 제약할 뿐 계층의 ""존재""를 요구한 적이 없다.
+    /// </summary>
+    public class AssemblyCompletenessTests
+    {
+        [Fact]
+        public void Assembly_MustContainAtLeastOneTasklet()
+        {
+            // ArchitectureTests.Targets와 같은 이유로 같은 워밍업을 반복한다: xUnit은
+            // 기본적으로 서로 다른 테스트 클래스를 별도 컬렉션으로 병렬 실행하므로,
+            // 참조된 ReSet.Batch.* 어셈블리를 먼저 강제 로드하지 않으면 이 검사가
+            // ArchitectureTests보다 먼저 실행되어 아직 아무것도 로드되지 않은 AppDomain을
+            // 보고 ""Tasklet이 0개""라는 거짓 실패를 낼 수 있다. 이 파일은 조립 회차
+            // 산출물로 독립적으로 배치되므로 ArchitectureTests와 헬퍼를 공유하지 않고
+            // 이 파일 안에서 자체적으로 워밍업한다.
+            //
+            // [전제] 이 워밍업은 테스트 프로젝트 자체가 참조된 어셈블리 정보로
+            // ReSet.Batch.* 를 나열할 수 있을 때만 그 어셈블리를 찾아낸다 - Roslyn은
+            // 실제로 참조되지 않은 어셈블리를 AssemblyRef 테이블에서 생략하므로,
+            // 어떤 Tasklet 프로젝트의 타입도 테스트 프로젝트 컴파일 산출물 어디에서도
+            // 이름으로 참조되지 않으면 그 어셈블리는 여기서도 보이지 않는다. 실무에서는
+            // 각 회차가 그 회차의 Tasklet을 참조하는 LogicTests_<코드>.cs를 함께
+            // 배치하므로 이 전제가 성립한다.
+            foreach (var reference in Assembly.GetExecutingAssembly().GetReferencedAssemblies())
+            {
+                if ((reference.Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                {
+                    // 아직 로드되지 않은 참조는 AppDomain에 나타나지 않는다.
+                    try { Assembly.Load(reference); } catch { /* 로드 실패는 아래 필터가 흡수한다 */ }
+                }
+            }
+
+            var taskletCount = AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => !a.IsDynamic)
+                .Where(a => (a.GetName().Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                .SelectMany(a =>
+                {
+                    try { return a.GetTypes(); }
+                    catch (ReflectionTypeLoadException ex) { return ex.Types.Where(t => t != null)!; }
+                })
+                .Count(t => t != null
+                    && t.IsClass
+                    && !t.IsAbstract
+                    && typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t));
+
+            Assert.True(taskletCount > 0,
+                ""Tasklet이 0개입니다. 아키텍처 규칙들이 대상 0건으로 통과했을 뿐 아무것도 검사하지 않았습니다."");
+        }
+    }
+}
+";
+
+        private const string JavaAssemblyCompletenessTests = @"package com.reset.batch.tests.architecture;
+
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 조립 회차 전용. 이 파일은 조립 회차의 지시서만 배치를 요구한다.
+ *
+ * 아키텍처 규칙들은 대상이 0건이면 통과한다 - 부트스트랩 회차에는 Tasklet이 없으므로
+ * 그것이 정상이다. ""하나도 없다""를 실패로 보는 판정은 모든 단계가 구현된 뒤에만
+ * 켤 수 있다.
+ *
+ * (C# 쪽과 달리 여기는 로딩 순서 문제가 없다 - importPackages가 클래스패스 전체를
+ *  직접 훑으므로, 어떤 테스트가 먼저 실행되든 관계없이 항상 같은 결과를 본다.)
+ *
+ * [이 검사가 잡지 못하는 것]
+ * 이 검사는 Tasklet(AbstractSettleTasklet 구현체)의 존재만 본다. Domain 계층의
+ * 존재는 강제하지 않는다 - ArchitectureTests.domainMustNotDependOnInfrastructure는
+ * 어떤 com.reset.batch.domain.* 타입도 없으면 대상 0건으로 여전히 통과한다. 별도의
+ * Domain 존재 게이트를 두지 않은 것은 의도적이다 - 정산 로직을 전부 Tasklet 안에
+ * 두고 별도 Domain 패키지를 두지 않는 것도 정당한 설계이며, 이 검사가 그 설계를
+ * 강제로 실패시켜서는 안 된다. 이 규칙은 의존 ""방향""만 제약할 뿐 계층의 ""존재""를
+ * 요구한 적이 없다.
+ */
+class AssemblyCompletenessTests {
+
+    private final JavaClasses classes = new ClassFileImporter().importPackages(""com.reset.batch"");
+
+    @Test
+    void assemblyMustContainAtLeastOneTasklet() {
+        long taskletCount = classes.stream()
+            .filter(c -> !c.getModifiers().contains(JavaModifier.ABSTRACT))
+            .filter(c -> c.isAssignableTo(""com.reset.batch.core.AbstractSettleTasklet""))
+            .count();
+
+        assertTrue(taskletCount > 0,
+            ""Tasklet이 0개입니다. 아키텍처 규칙들이 대상 0건으로 통과했을 뿐 아무것도 검사하지 않았습니다."");
+    }
+}
+";
+
+        /// <summary>
+        /// 조립 회차에서만 켜지는 0건 판정. 배치 지시가 활성화 스위치다.
+        /// </summary>
+        public static string AssemblyCompletenessTestStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaAssemblyCompletenessTests
+                : CSharpAssemblyCompletenessTests;
+
         private const string CSharpRepositoryContract = @"using System.Collections.Generic;
 
 namespace ReSet.Batch.Core
@@ -534,5 +720,337 @@ public interface ISettleRepository {
         /// RepositoryContractStub("C#") 안에 public으로 들어 있으므로 이 상수를 쓰지 않는다.
         /// </summary>
         public static string JavaRepositoryInterfaceStub => JavaSettleRepositoryInterface;
+
+        private const string CSharpAbstractTasklet = @"using System;
+using System.Data;
+
+namespace ReSet.Batch.Core
+{
+    public interface ISettleStep
+    {
+        string StepName { get; }
+        StepResult Execute(SettleContext context);
+    }
+
+    public abstract class AbstractSettleTasklet : ISettleStep
+    {
+        public abstract string StepName { get; }
+        protected abstract string SourceProcName { get; }
+
+        public StepResult Execute(SettleContext context)
+        {
+            if (context.Checkpoint?.IsStepCompleted(StepName, context.Ymd) == true)
+            {
+                return new StepResult { Code = 0, Message = ""이미 완료된 Step 재시작 스킵"", SourceProcName = SourceProcName };
+            }
+
+            int stateCode = 0;
+            using var conn = context.MainDb.CreateConnection();
+            conn.Open();
+            using (var cmdIso = conn.CreateCommand())
+            {
+                cmdIso.CommandText = ""SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SNAPSHOT;"";
+                cmdIso.ExecuteNonQuery();
+            }
+
+            try
+            {
+                var preCheckFail = PreCheck(conn, context, ref stateCode);
+                if (preCheckFail != null) return preCheckFail;
+
+                using var tran = conn.BeginTransaction();
+                try
+                {
+                    RunBusinessSteps(conn, tran, context, ref stateCode);
+                    tran.Commit();
+                    context.Checkpoint.MarkStepCompleted(StepName, context.Ymd);
+                    return new StepResult { Code = 0, Message = ""정상 완료"", SourceProcName = SourceProcName };
+                }
+                catch
+                {
+                    if (tran.Connection != null) tran.Rollback();
+                    OnFailureCompensation(context, stateCode);
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                return new StepResult { Code = stateCode, Message = ex.Message, SourceProcName = SourceProcName };
+            }
+        }
+
+        protected abstract StepResult PreCheck(IDbConnection conn, SettleContext context, ref int stateCode);
+[[ORM_BOUNDARY]]
+        protected abstract void RunBusinessSteps(IDbConnection conn, IDbTransaction tran, SettleContext context, ref int stateCode);
+        protected virtual void OnFailureCompensation(SettleContext context, int failedStateCode) { }
+    }
+
+    public class SettleContext
+    {
+        public string Ymd { get; set; }
+        public bool BypassPreCheck { get; set; }
+        // 계획서는 Shadow 이름(batch_shadow.<Table>_<RunId>_<StepCode>), 체크포인트 키,
+        // 오류 로그, 게시 Manifest를 전부 아래 값으로 짓는다. 스텁이 주지 않으면
+        // 회차마다 다른 우회가 생겨 회차 간 코드가 어긋난다.
+        //
+        // 계획서 본문의 비동기 실행 계약·확장 결과 타입은 설계 의도 설명이다.
+        // 실행 계약은 여기 있는 동기 Execute 하나다.
+        public Guid RunId { get; set; }
+        public string InputHash { get; set; }
+        public string SourceSnapshotId { get; set; }
+        public IDbConnectionFactory MainDb { get; set; }
+        public IDbConnectionFactory PaymentDb { get; set; }
+        public IDbConnectionFactory SettleCardDb { get; set; }
+        public IDbConnectionFactory PlCardDb { get; set; }
+        public ICheckpointRepository Checkpoint { get; set; }
+    }
+
+    public class StepResult
+    {
+        public int Code { get; set; }
+        public string Message { get; set; }
+        public string SourceProcName { get; set; }
+        public string PoStrErrMsg { get; set; }
+        public bool IsSuccess => Code == 0;
+    }
+
+    public interface IDbConnectionFactory { IDbConnection CreateConnection(); }
+    public interface ICheckpointRepository
+    {
+        bool IsStepCompleted(string stepName, string ymd);
+        void MarkStepCompleted(string stepName, string ymd);
+    }
+}";
+
+        private const string JavaSettleContext = @"package com.reset.batch.core;
+
+/**
+ * Step 실행 컨텍스트. Tasklet 서브클래스가 다른 패키지에 있으므로 public이어야 한다 -
+ * package-private이면 그 패키지에서 execute/preCheck/runBusinessSteps의 시그니처
+ * 자체를 적을 수 없다.
+ */
+public class SettleContext {
+    private String ymd;
+    private boolean bypassPreCheck;
+    private java.util.UUID runId;
+    private String inputHash;
+    private String sourceSnapshotId;
+    private IDbConnectionFactory mainDb;
+    private IDbConnectionFactory paymentDb;
+    private IDbConnectionFactory settleCardDb;
+    private IDbConnectionFactory plCardDb;
+    private ICheckpointRepository checkpoint;
+
+    public String getYmd() { return ymd; }
+    public void setYmd(String ymd) { this.ymd = ymd; }
+    public boolean isBypassPreCheck() { return bypassPreCheck; }
+    public void setBypassPreCheck(boolean bypassPreCheck) { this.bypassPreCheck = bypassPreCheck; }
+    public java.util.UUID getRunId() { return runId; }
+    public void setRunId(java.util.UUID runId) { this.runId = runId; }
+    public String getInputHash() { return inputHash; }
+    public void setInputHash(String inputHash) { this.inputHash = inputHash; }
+    public String getSourceSnapshotId() { return sourceSnapshotId; }
+    public void setSourceSnapshotId(String sourceSnapshotId) { this.sourceSnapshotId = sourceSnapshotId; }
+    public IDbConnectionFactory getMainDb() { return mainDb; }
+    public void setMainDb(IDbConnectionFactory mainDb) { this.mainDb = mainDb; }
+    public IDbConnectionFactory getPaymentDb() { return paymentDb; }
+    public void setPaymentDb(IDbConnectionFactory paymentDb) { this.paymentDb = paymentDb; }
+    public IDbConnectionFactory getSettleCardDb() { return settleCardDb; }
+    public void setSettleCardDb(IDbConnectionFactory settleCardDb) { this.settleCardDb = settleCardDb; }
+    public IDbConnectionFactory getPlCardDb() { return plCardDb; }
+    public void setPlCardDb(IDbConnectionFactory plCardDb) { this.plCardDb = plCardDb; }
+    public ICheckpointRepository getCheckpoint() { return checkpoint; }
+    public void setCheckpoint(ICheckpointRepository checkpoint) { this.checkpoint = checkpoint; }
+}
+";
+
+        private const string JavaAbstractTasklet = @"package com.reset.batch.core;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+/**
+ * C# 쪽 AbstractSettleTasklet과 같은 책임을 진다: 재시작 스킵 확인, 격리 수준 설정,
+ * 트랜잭션 경계, 실패 시 보상 호출을 여기서 한 번만 구현하고 Step 저자는 preCheck·
+ * runBusinessSteps만 채운다.
+ *
+ * JDBC에는 IDbTransaction에 대응하는 별도 타입이 없다 - Connection의 autoCommit을
+ * 끄고 commit()/rollback()으로 경계를 표시하므로, C# 쪽 conn/tran 두 인자가 여기서는
+ * Connection 하나로 합쳐진다. ref int stateCode도 Java에는 대응이 없어 out 매개변수
+ * 대신 보호된 필드로 옮겼다 - preCheck/runBusinessSteps 구현체가 실패 분류 코드를
+ * 남기고 싶으면 setStateCode를 호출한다.
+ */
+public abstract class AbstractSettleTasklet implements ISettleStep {
+
+    private int stateCode = 0;
+
+    protected abstract String getSourceProcName();
+
+    @Override
+    public StepResult execute(SettleContext context) {
+        if (context.getCheckpoint() != null
+                && context.getCheckpoint().isStepCompleted(getStepName(), context.getYmd())) {
+            return new StepResult(0, ""이미 완료된 Step 재시작 스킵"", getSourceProcName());
+        }
+
+        try (Connection conn = context.getMainDb().createConnection()) {
+            try (Statement isolationStmt = conn.createStatement()) {
+                isolationStmt.execute(""SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SNAPSHOT;"");
+            }
+
+            StepResult preCheckFail = preCheck(conn, context);
+            if (preCheckFail != null) {
+                return preCheckFail;
+            }
+
+            conn.setAutoCommit(false);
+            try {
+                runBusinessSteps(conn, context);
+                conn.commit();
+                context.getCheckpoint().markStepCompleted(getStepName(), context.getYmd());
+                return new StepResult(0, ""정상 완료"", getSourceProcName());
+            } catch (Exception ex) {
+                conn.rollback();
+                onFailureCompensation(context, stateCode);
+                throw ex;
+            }
+        } catch (Exception ex) {
+            return new StepResult(stateCode, ex.getMessage(), getSourceProcName());
+        }
+    }
+
+    /** preCheck/runBusinessSteps 구현체가 실패 분류 코드를 남기고 싶으면 이 메서드로 갱신한다. */
+    protected void setStateCode(int stateCode) {
+        this.stateCode = stateCode;
+    }
+
+    protected abstract StepResult preCheck(Connection conn, SettleContext context) throws SQLException;
+
+[[ORM_BOUNDARY_JAVA]]
+    protected abstract void runBusinessSteps(Connection conn, SettleContext context) throws SQLException;
+
+    protected void onFailureCompensation(SettleContext context, int failedStateCode) {
+    }
+}
+";
+
+        /// <summary>
+        /// AbstractSettleTasklet(Java) 스텁에 삽입할 ORM 경계 주석. C# 쪽 TaskletOrmComment와
+        /// 같은 위치(runBusinessSteps 바로 위)에 심는다. TaskletOrmComment는 EF Core/
+        /// SqlConnection 전용 C# 구문이라 그대로 재사용할 수 없어 별도로 둔다.
+        /// </summary>
+        public static string JavaTaskletOrmComment => @"    // [데이터 액세스 경계] ORM(Spring Data JPA)은 MigrationInstructions.md 5장의 허용 목록에
+    // 한해 사용한다. 사용할 경우 반드시 이 메서드가 받은 conn에 참여시켜야 하며, 새
+    // 커넥션이나 새 트랜잭션을 만들면 검증기의 Rollback 격리가 깨져 정합성 대조 결과가
+    // 오염된다. Spring 관리 트랜잭션(JpaTransactionManager)을 쓰더라도 그 트랜잭션이
+    // 이 conn 위에서 열려야 한다. 정산 대상 대량 DML, 집계, 청킹 루프, Shadow 처리,
+    // 세션 제어는 파라미터 바인딩 SQL(MyBatis)로 작성한다.";
+
+        /// <summary>
+        /// 코딩 에이전트가 강제로 상속해야 하는 베이스 클래스 스텁.
+        ///
+        /// MetadataExporter의 인라인 문자열에서 여기로 옮겼다. 나머지 계약 자산
+        /// (ArchitectureTests·SettleContracts)은 이미 이 클래스에 있어 테스트가
+        /// 붙어 있었는데, 정작 "반드시 상속하라"고 지시받는 이 파일만 테스트가
+        /// 없었다 - 지시서가 가장 강하게 요구하는 것이 가장 검사되지 않았다.
+        ///
+        /// ORM 경계 주석 치환까지 마친 최종 문자열을 돌려준다. 두 언어가 서로 다른
+        /// 자리표시자를 쓰므로 치환도 언어별로 다르다 - 치환을 호출부에 남기면
+        /// 호출부가 하나 늘 때마다 자리표시자가 그대로 나갈 위험이 생긴다.
+        /// </summary>
+        public static string AbstractTaskletStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaAbstractTasklet.Replace("[[ORM_BOUNDARY_JAVA]]", JavaTaskletOrmComment)
+                : CSharpAbstractTasklet.Replace("[[ORM_BOUNDARY]]", TaskletOrmComment);
+
+        /// <summary>
+        /// Java 전용 SettleContext.java. C#의 SettleContext는
+        /// <see cref="AbstractTaskletStub"/> 문자열 안에 들어 있으므로 이 메서드로
+        /// 얻을 수 없다 - 언어를 착각한 호출은 중복 파일을 산출물로 내보내므로
+        /// 조용히 통과시키지 않고 던진다.
+        /// </summary>
+        public static string SettleContextStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaSettleContext
+                : throw new NotSupportedException(
+                    "C#의 SettleContext는 AbstractTaskletStub 안에 포함되어 있습니다.");
+
+        private const string CSharpStepLogicTests = @"using Xunit;
+using Moq;
+
+namespace ReSet.Batch.Tests
+{
+    /// <summary>
+    /// 이 회차가 구현한 단계의 동작을 검증하는 테스트를 여기에 쓰십시오.
+    ///
+    /// 파일명은 반드시 <c>LogicTests_&lt;단계코드&gt;.cs</c> 형태로 만드십시오
+    /// (예: LogicTests_S08.cs). 단계 코드로 <b>시작하는</b> 이름(S08LogicTests.cs)은
+    /// 쓰지 마십시오 - 검증기가 파일명 접두사로 그 회차의 산출물을 찾기 때문에,
+    /// 테스트 파일이 Tasklet 자리를 차지해 구현을 빼먹어도 통과한 것처럼 보입니다.
+    ///
+    /// 최소 한 개: PreCheck 차단 경로 또는 RunBusinessSteps의 대표 분기.
+    ///
+    /// 이 파일(StepLogicTests.cs)은 모든 회차가 공유하는 템플릿입니다 - Job당 한 번만
+    /// 만들어지고 회차마다 다시 만들어지지 않습니다.
+    ///
+    /// 이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.
+    ///
+    /// 위 이름(LogicTests_&lt;단계코드&gt;.cs)으로 내용을 복사한 새 파일을 만들어 그 새 파일을 채우십시오.
+    /// </summary>
+    public class StepLogicTests
+    {
+        [Fact]
+        public void Step_ShouldHaveAtLeastOneBehaviourTest()
+        {
+            Assert.Fail(
+                ""이 회차의 단계 동작 테스트가 아직 없습니다. 이 Fact를 실제 테스트로 교체하십시오."");
+        }
+    }
+}
+";
+
+        private const string JavaStepLogicTests = @"package com.reset.batch.tests;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.fail;
+
+/**
+ * 이 회차가 구현한 단계의 동작을 검증하는 테스트를 여기에 쓰십시오.
+ *
+ * 파일명은 반드시 LogicTests_<단계코드>.java 형태로 만드십시오(예: LogicTests_S08.java).
+ * 단계 코드로 시작하는 이름(S08LogicTests.java)은 쓰지 마십시오 - 검증기가 파일명
+ * 접두사로 그 회차의 산출물을 찾기 때문에, 테스트 파일이 Tasklet 자리를 차지해
+ * 구현을 빼먹어도 통과한 것처럼 보입니다.
+ *
+ * 최소 한 개: preCheck 차단 경로 또는 runBusinessSteps의 대표 분기.
+ *
+ * 이 파일(StepLogicTests.java)은 모든 회차가 공유하는 템플릿입니다 - Job당 한 번만
+ * 만들어지고 회차마다 다시 만들어지지 않습니다.
+ *
+ * 이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.
+ *
+ * 위 이름(LogicTests_<단계코드>.java)으로 내용을 복사한 새 파일을 만들어 그 새 파일을 채우십시오.
+ */
+public class StepLogicTests {
+    @Test
+    public void step_ShouldHaveAtLeastOneBehaviourTest() {
+        fail(""이 회차의 단계 동작 테스트가 아직 없습니다. 이 테스트를 실제 테스트로 교체하십시오."");
+    }
+}
+";
+
+        /// <summary>
+        /// 회차가 채워야 하는 단계 동작 테스트의 스캐폴드.
+        ///
+        /// 이전 스텁은 본문이 주석 세 줄이라 통과해도 아무것도 보장하지 않았는데,
+        /// 지시서 규칙 6은 "제공된 자가 검증용 단위 테스트를 통과시키라"고 말한다 -
+        /// 빈 테스트를 방어로 착각하는 구조였다. 미구현 상태가 실패로 드러나게 한다.
+        /// </summary>
+        public static string StepLogicTestStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaStepLogicTests
+                : CSharpStepLogicTests;
     }
 }

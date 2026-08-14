@@ -18,6 +18,9 @@ namespace ReSet.Core.Services
     /// <param name="StepCode">단계 회차면 그 코드(파일명에서 되짚어낸 정화된 값), Bootstrap/Assembly면 null.</param>
     public sealed record TaskStageIdentity(string Id, StageKind Kind, string? StepCode);
 
+    /// <param name="InfraObjects">계획서가 참조하는 batch·batch_shadow 스키마 객체.
+    /// 회차 0만 사용한다. 기본값을 두지 않는 이유는 BundleInputs.Coverage와 같다 -
+    /// 배선을 빠뜨리면 조용히 빈 목록이 되는 대신 컴파일이 깨져야 한다.</param>
     public sealed record TaskFileInputs(
         StageKind Kind,
         string JobName,
@@ -30,7 +33,8 @@ namespace ReSet.Core.Services
         bool HasStepContract,
         bool HasVerification,
         IReadOnlyList<string> FailedStepCodes,
-        string? SinglePlanRelativePath);
+        string? SinglePlanRelativePath,
+        IReadOnlyList<string> InfraObjects);
 
     /// <summary>
     /// 회차 하나의 작업 지시서를 조립한다.
@@ -190,6 +194,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("- **어떤 Tasklet을 구현하지 마십시오.** 단계 구현은 이후 회차의 일입니다.");
             sb.AppendLine("- 단계 상세 문서를 읽지 마십시오.");
             sb.AppendLine();
+            AppendInfraObjects(sb, inputs);
             AppendDependencies(sb, inputs);
             sb.AppendLine("## 완료 조건");
             sb.AppendLine();
@@ -240,6 +245,20 @@ namespace ReSet.Core.Services
             sb.AppendLine();
             sb.AppendLine("- 빌드가 성공한다.");
             sb.AppendLine("- 이 단계의 조건절·집계식·오류 코드가 명세서와 축약 없이 일치한다.");
+            // "원본 스캐폴드 파일을 삭제하십시오"(1라운드 문구)는 어느 원본인지 모호했다 -
+            // `tests/StepLogicTests` 자체(모든 회차가 공유하는 템플릿, Job당 한 번만
+            // 만들어지고 회차마다 다시 만들어지지 않는다)인지, 프로젝트에 놓인 사본인지
+            // 구별이 안 됐다. S01이 앞의 뜻으로 읽고 그 파일을 지우면 S02부터는 복사할
+            // 원본 자체가 사라진다. 그래서 두 사실을 한 문장에 다 넣는다: 이 파일 자체는
+            // 절대 지우지 말 것, 그리고 그 이유(다음 회차도 여기서 복사한다는 것).
+            sb.AppendLine(
+                $"- 이 단계의 **동작 테스트**가 최소 한 개 통과한다. `tests/StepLogicTests" +
+                $"{TestFileExtension(inputs.TargetLanguage)}`는 모든 회차가 공유하는 템플릿입니다. " +
+                "이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 " +
+                "복사합니다. 대신 내용을 " +
+                $"`LogicTests_{SanitizeStepCode(inputs.StepCode)}{TestFileExtension(inputs.TargetLanguage)}`라는 " +
+                "새 파일로 복사해 채우십시오. 파일명이 단계 코드로 **시작하면** 검증기가 그 파일을 이 회차의 " +
+                "구현 산출물로 오인하므로 반드시 접미사 형태를 쓰십시오.");
             sb.AppendLine();
         }
 
@@ -252,6 +271,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("- 단계 실행 순서와 선행 조건 검증");
             sb.AppendLine("- 단계 간 예외 전파와 트랜잭션 롤백 처리");
             sb.AppendLine("- 전체 빌드와 아키텍처 테스트 통과");
+            sb.AppendLine(AssemblyCompletenessPlacementLine(inputs.TargetLanguage));
             // 이 회차의 게이트는 Job 전체 검증이고, 그 검증은 계획서와 소스 트리를
             // Job 이름으로 짝짓는다. 이름 규약이 어디에도 적혀 있지 않던 동안에는
             // 모든 회차가 통과한 실행조차 매핑 0건으로 실패 처리됐다.
@@ -280,6 +300,48 @@ namespace ReSet.Core.Services
                 sb.AppendLine("- [verification/integrity-sql.md](verification/integrity-sql.md)의 검증 SQL을 실행 가능한 형태로 배치하십시오.");
                 sb.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// 0건 판정을 켜는 스위치. 회차 0에는 Tasklet이 없어 이 검사가 부당하게
+        /// 실패하므로, 배치 지시를 조립 회차에만 둔다.
+        /// </summary>
+        private static string AssemblyCompletenessPlacementLine(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "- `tests/AssemblyCompletenessTests.java`를 프로젝트의 `src/test/java/com/reset/batch/tests/architecture/` 아래로 배치하고 통과시킬 것 (Tasklet이 하나도 없으면 실패하는 검사입니다 — 이 회차에서만 켭니다)"
+                : "- `tests/AssemblyCompletenessTests.cs`를 프로젝트에 배치하고 통과시킬 것 (Tasklet이 하나도 없으면 실패하는 검사입니다 — 이 회차에서만 켭니다)";
+
+        /// <summary>
+        /// 계획서의 SQL이 EXEC하거나 참조하는 신규 스키마 객체를 회차 0에 실명으로 싣는다.
+        ///
+        /// 문장만 주고 목록을 주지 않으면 지킬 수 없는 지시가 된다 - 회차 0은
+        /// "단계 상세 문서를 읽지 마십시오"를 함께 받으므로 목록을 스스로 모을 방법이 없다.
+        ///
+        /// 목록이 비면 절 자체를 내지 않는다. 빈 제목은 "만들 것이 없다"와
+        /// "수집이 실패했다"를 구별해 주지 못한다.
+        /// </summary>
+        private static void AppendInfraObjects(StringBuilder sb, TaskFileInputs inputs)
+        {
+            if (inputs.InfraObjects.Count == 0)
+            {
+                return;
+            }
+
+            sb.AppendLine("## 이번 회차에서 만들 인프라 스키마 객체");
+            sb.AppendLine();
+            sb.AppendLine("계획서의 SQL이 아래 객체를 참조합니다. 이 회차에서 DDL과 모듈의 골격을 만드십시오.");
+            sb.AppendLine("단계별 모듈의 업무 로직 본문은 해당 단계 회차가 채웁니다.");
+            sb.AppendLine();
+            sb.AppendLine($"`{BatchInfraObjectCollector.RunIdPlaceholder}`는 실행 식별자 자리표시자입니다. " +
+                "`SettleContext.RunId` 값으로 치환해 이름을 지으십시오.");
+            sb.AppendLine();
+
+            foreach (var name in inputs.InfraObjects)
+            {
+                sb.AppendLine($"- `{name}`");
+            }
+
+            sb.AppendLine();
         }
 
         private static void AppendDependencies(StringBuilder sb, TaskFileInputs inputs)
@@ -334,5 +396,8 @@ namespace ReSet.Core.Services
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? "- `tests/ArchitectureTests.java`를 프로젝트의 `src/test/java/com/reset/batch/tests/architecture/` 아래로 배치하고 통과시킬 것"
                 : "- `tests/ArchitectureTests.cs`를 프로젝트에 배치하고 통과시킬 것";
+
+        private static string TestFileExtension(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase) ? ".java" : ".cs";
     }
 }

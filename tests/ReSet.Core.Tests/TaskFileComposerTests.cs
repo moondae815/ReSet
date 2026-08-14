@@ -20,7 +20,55 @@ namespace ReSet.Core.Tests
             HasStepContract: true,
             HasVerification: true,
             FailedStepCodes: Array.Empty<string>(),
-            SinglePlanRelativePath: null);
+            SinglePlanRelativePath: null,
+            InfraObjects: Array.Empty<string>());
+
+        private static TaskFileInputs BootstrapInputs(IReadOnlyList<string> infraObjects) => new(
+            Kind: StageKind.Bootstrap,
+            JobName: "TestJob",
+            TargetLanguage: "C#",
+            StepCode: null,
+            StepName: null,
+            StepRelativePath: null,
+            SpecRelativePath: null,
+            Dependencies: Array.Empty<IndexEntry>(),
+            HasStepContract: true,
+            HasVerification: true,
+            FailedStepCodes: Array.Empty<string>(),
+            SinglePlanRelativePath: null,
+            InfraObjects: infraObjects);
+
+        [Fact]
+        public void Compose_ShouldListInfraObjectsInTheBootstrapRound()
+        {
+            // 회차 0은 읽기 계약상 step 파일을 읽을 수 없다. 목록을 여기 박아 주지
+            // 않으면 "계획서가 참조하는 객체를 만들라"는 문장을 지킬 방법이 없다.
+            var markdown = TaskFileComposer.Compose(
+                BootstrapInputs(new[] { "batch.POQSettleRun", "batch_shadow.TSettleMst_<RunId>_S06" }));
+
+            Assert.Contains("인프라 스키마 객체", markdown);
+            Assert.Contains("`batch.POQSettleRun`", markdown);
+            Assert.Contains("`batch_shadow.TSettleMst_<RunId>_S06`", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldOmitTheInfraSectionEntirelyWhenThereIsNothingToBuild()
+        {
+            // 빈 제목만 남으면 "만들 것이 없다"가 아니라 "수집이 실패했다"로도 읽힌다.
+            var markdown = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+
+            Assert.DoesNotContain("인프라 스키마 객체", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNotListInfraObjectsInStepRounds()
+        {
+            // 인프라 DDL은 회차 0의 일이다. 단계 회차에 목록을 실으면 같은 객체를
+            // 여러 회차가 만든다.
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.DoesNotContain("인프라 스키마 객체", markdown);
+        }
 
         [Fact]
         public void FileName_ShouldPlaceTaskFilesFlatUnderAgent()
@@ -307,6 +355,65 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("BatchMigrationPlan.md", markdown);
             Assert.Contains("S01", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldRequireABehaviourTestInStepRounds()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains("동작 테스트", markdown);
+            Assert.Contains("LogicTests_S01", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldWarnAgainstDeletingTheSharedScaffoldTemplateInStepRounds()
+        {
+            // 라운드 2 재검토: "원본 스캐폴드 파일을 삭제하십시오"는 어느 원본인지
+            // 모호했다 - agent/tests/StepLogicTests.*(모든 단계 회차가 공유하는 템플릿,
+            // Job당 한 번만 만들어지고 회차마다 다시 만들어지지 않는다)인지, 프로젝트에
+            // 놓인 사본인지 구별이 안 됐다. S01이 앞의 뜻으로 읽고 그 파일을 지우면
+            // S02부터는 복사할 원본 자체가 사라진다. 그래서 "삭제하지 마십시오, 다음
+            // 회차도 이 파일에서 복사합니다"로 뜻을 하나로 고정한다.
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains(
+                "이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.",
+                markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNotRequireABehaviourTestInTheBootstrapRound()
+        {
+            // 회차 0에는 단계가 없다. 요구하면 부트스트랩이 부당하게 실패한다.
+            var markdown = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+
+            Assert.DoesNotContain("동작 테스트", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldPlaceTheCompletenessTestOnlyInTheAssemblyRound()
+        {
+            var assembly = TaskFileComposer.Compose(new TaskFileInputs(
+                Kind: StageKind.Assembly,
+                JobName: "TestJob",
+                TargetLanguage: "C#",
+                StepCode: null,
+                StepName: null,
+                StepRelativePath: null,
+                SpecRelativePath: null,
+                Dependencies: Array.Empty<IndexEntry>(),
+                HasStepContract: true,
+                HasVerification: true,
+                FailedStepCodes: Array.Empty<string>(),
+                SinglePlanRelativePath: null,
+                InfraObjects: Array.Empty<string>()));
+
+            Assert.Contains("AssemblyCompletenessTests", assembly);
+
+            // 회차 0에 새면 Tasklet이 0개인 부트스트랩이 부당하게 실패한다.
+            var bootstrap = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+            Assert.DoesNotContain("AssemblyCompletenessTests", bootstrap);
         }
     }
 }

@@ -53,6 +53,8 @@ namespace ReSet.Core.Tests
 
 S01 본문
 
+INSERT INTO batch.POQSettleCheckpoint SELECT 1;
+
 ### S02 원장 생성
 
 S02 본문
@@ -113,6 +115,26 @@ S02 본문
 
             Assert.Equal(Path.Combine(_agentDir, "MigrationInstructions.md"), result.EntryPointPath);
             Assert.True(File.Exists(result.EntryPointPath));
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldDeclareTheStubAsTheOnlyBindingContract()
+        {
+            // 계획서 본문 18개 단계가 ExecuteAsync·SettlementStepResult를 쓰는데
+            // 스텁은 동기 Execute다. 어느 쪽이 이기는지 지시서가 말하지 않으면
+            // 회차마다 다른 결론이 난다.
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var entryPoint = await File.ReadAllTextAsync(Path.Combine(_agentDir, "MigrationInstructions.md"));
+
+            Assert.Contains("설계 의도", entryPoint);
+            Assert.Contains("src/AbstractSettleTasklet.cs", entryPoint);
+            Assert.Contains("스텁이 이깁니다", entryPoint);
+            // 규칙 9 바로 뒤여야 한다 - 상속 강제와 권위 순서는 같이 읽혀야 한다.
+            Assert.True(
+                entryPoint.IndexOf("9. **[중요]**", StringComparison.Ordinal)
+                    < entryPoint.IndexOf("10. **[중요]**", StringComparison.Ordinal),
+                "규칙 10이 규칙 9보다 앞에 있습니다.");
         }
 
         [Fact]
@@ -573,6 +595,40 @@ S02 본문
             var bootstrap = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-00-bootstrap.md"));
 
             Assert.DoesNotContain("## 참조할 스키마", bootstrap);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldFeedCollectedInfraObjectsIntoTheBootstrapTask()
+        {
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var bootstrap = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-00-bootstrap.md"));
+
+            Assert.Contains("`batch.POQSettleCheckpoint`", bootstrap);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldWarnWhenShadowNameRunIdLiteralsCollapse()
+        {
+            // CollapsedRunIdVariants가 접혀 하나의 이름이 되고 나면, 그 사실이
+            // BundleResult.Warnings로 나오지 않는 이상 계획서가 Shadow 이름 규칙
+            // (batch_shadow.<Table>_<RunId>_<StepCode>)을 어겼다는 증거가 흔적도 없이
+            // 사라진다. 접기만 하고 알리지 않는 것은 접지 않는 것보다 나쁘다.
+            var plan = FinalPlan +
+                "\n\nbatch_shadow.TSettleMst_RunId_S06 와 batch_shadow.TSettleMst_Run_S06\n";
+
+            var result = await new InstructionBundleWriter().WriteAsync(
+                Inputs(Layout()) with { FinalPlanMarkdown = plan }, CancellationToken.None);
+
+            // "_RunId_"/"_Run_" 원문 리터럴은 접힌 뒤의 이름(batch_shadow.TSettleMst_<RunId>_S06)
+            // 에는 존재하지 않는다 - 그래서 이 문자열은 접히기 전 원문에만 있는 증거다.
+            // infra.Names(접힌 결과)를 잘못 순회해도 이 단언은 통과하지 못한다.
+            Assert.Contains(result.Warnings, w =>
+                w.Contains("batch_shadow.TSettleMst_RunId_S06", StringComparison.Ordinal) &&
+                w.Contains(BatchInfraObjectCollector.RunIdPlaceholder, StringComparison.Ordinal));
+            Assert.Contains(result.Warnings, w =>
+                w.Contains("batch_shadow.TSettleMst_Run_S06", StringComparison.Ordinal) &&
+                w.Contains(BatchInfraObjectCollector.RunIdPlaceholder, StringComparison.Ordinal));
         }
 
         /// <summary>

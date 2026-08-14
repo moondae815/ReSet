@@ -435,101 +435,13 @@ namespace ReSet.Core.Services
 
                     if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                     {
-                        var baseClassStub = @"using System;
-using System.Data;
-
-namespace ReSet.Batch.Core
-{
-    public interface ISettleStep
-    {
-        string StepName { get; }
-        StepResult Execute(SettleContext context);
-    }
-
-    public abstract class AbstractSettleTasklet : ISettleStep
-    {
-        public abstract string StepName { get; }
-        protected abstract string SourceProcName { get; }
-
-        public StepResult Execute(SettleContext context)
-        {
-            if (context.Checkpoint?.IsStepCompleted(StepName, context.Ymd) == true)
-            {
-                return new StepResult { Code = 0, Message = ""이미 완료된 Step 재시작 스킵"", SourceProcName = SourceProcName };
-            }
-
-            int stateCode = 0;
-            using var conn = context.MainDb.CreateConnection();
-            conn.Open();
-            using (var cmdIso = conn.CreateCommand())
-            {
-                cmdIso.CommandText = ""SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SNAPSHOT;"";
-                cmdIso.ExecuteNonQuery();
-            }
-
-            try
-            {
-                var preCheckFail = PreCheck(conn, context, ref stateCode);
-                if (preCheckFail != null) return preCheckFail;
-
-                using var tran = conn.BeginTransaction();
-                try
-                {
-                    RunBusinessSteps(conn, tran, context, ref stateCode);
-                    tran.Commit();
-                    context.Checkpoint.MarkStepCompleted(StepName, context.Ymd);
-                    return new StepResult { Code = 0, Message = ""정상 완료"", SourceProcName = SourceProcName };
-                }
-                catch
-                {
-                    if (tran.Connection != null) tran.Rollback();
-                    OnFailureCompensation(context, stateCode);
-                    throw;
-                }
-            }
-            catch (Exception ex)
-            {
-                return new StepResult { Code = stateCode, Message = ex.Message, SourceProcName = SourceProcName };
-            }
-        }
-
-        protected abstract StepResult PreCheck(IDbConnection conn, SettleContext context, ref int stateCode);
-[[ORM_BOUNDARY]]
-        protected abstract void RunBusinessSteps(IDbConnection conn, IDbTransaction tran, SettleContext context, ref int stateCode);
-        protected virtual void OnFailureCompensation(SettleContext context, int failedStateCode) { }
-    }
-
-    public class SettleContext
-    {
-        public string Ymd { get; set; }
-        public bool BypassPreCheck { get; set; }
-        public IDbConnectionFactory MainDb { get; set; }
-        public IDbConnectionFactory PaymentDb { get; set; }
-        public IDbConnectionFactory SettleCardDb { get; set; }
-        public IDbConnectionFactory PlCardDb { get; set; }
-        public ICheckpointRepository Checkpoint { get; set; }
-    }
-
-    public class StepResult
-    {
-        public int Code { get; set; }
-        public string Message { get; set; }
-        public string SourceProcName { get; set; }
-        public string PoStrErrMsg { get; set; }
-        public bool IsSuccess => Code == 0;
-    }
-
-    public interface IDbConnectionFactory { IDbConnection CreateConnection(); }
-    public interface ICheckpointRepository
-    {
-        bool IsStepCompleted(string stepName, string ymd);
-        void MarkStepCompleted(string stepName, string ymd);
-    }
-}";
                         // 스텁은 System.Data만 참조하는 상태를 유지한다. ORM 패턴은 실행 코드가
                         // 아니라 주석으로만 넣어야 스텁이 특정 ORM 구현에 결합되지 않는다.
-                        var stubWithBoundary = baseClassStub.Replace("[[ORM_BOUNDARY]]", DataAccessPolicy.TaskletOrmComment);
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"), stubWithBoundary, Encoding.UTF8);
+                        // 치환은 DataAccessPolicy가 마친 뒤 넘어온다.
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentSrcFolder, "AbstractSettleTasklet.cs"),
+                            DataAccessPolicy.AbstractTaskletStub(targetLanguage),
+                            Encoding.UTF8);
                     }
                     else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                     {
@@ -564,39 +476,10 @@ public interface ISettleStep {
 ";
                         await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ISettleStep.java"), settleStepStub, Utf8NoBom);
 
-                        var settleContextStub = @"package com.reset.batch.core;
-
-/**
- * Step 실행 컨텍스트. Tasklet 서브클래스가 다른 패키지에 있으므로 public이어야 한다 -
- * package-private이면 그 패키지에서 execute/preCheck/runBusinessSteps의 시그니처
- * 자체를 적을 수 없다.
- */
-public class SettleContext {
-    private String ymd;
-    private boolean bypassPreCheck;
-    private IDbConnectionFactory mainDb;
-    private IDbConnectionFactory paymentDb;
-    private IDbConnectionFactory settleCardDb;
-    private IDbConnectionFactory plCardDb;
-    private ICheckpointRepository checkpoint;
-
-    public String getYmd() { return ymd; }
-    public void setYmd(String ymd) { this.ymd = ymd; }
-    public boolean isBypassPreCheck() { return bypassPreCheck; }
-    public void setBypassPreCheck(boolean bypassPreCheck) { this.bypassPreCheck = bypassPreCheck; }
-    public IDbConnectionFactory getMainDb() { return mainDb; }
-    public void setMainDb(IDbConnectionFactory mainDb) { this.mainDb = mainDb; }
-    public IDbConnectionFactory getPaymentDb() { return paymentDb; }
-    public void setPaymentDb(IDbConnectionFactory paymentDb) { this.paymentDb = paymentDb; }
-    public IDbConnectionFactory getSettleCardDb() { return settleCardDb; }
-    public void setSettleCardDb(IDbConnectionFactory settleCardDb) { this.settleCardDb = settleCardDb; }
-    public IDbConnectionFactory getPlCardDb() { return plCardDb; }
-    public void setPlCardDb(IDbConnectionFactory plCardDb) { this.plCardDb = plCardDb; }
-    public ICheckpointRepository getCheckpoint() { return checkpoint; }
-    public void setCheckpoint(ICheckpointRepository checkpoint) { this.checkpoint = checkpoint; }
-}
-";
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "SettleContext.java"), settleContextStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentSrcFolder, "SettleContext.java"),
+                            DataAccessPolicy.SettleContextStub(targetLanguage),
+                            Utf8NoBom);
 
                         var stepResultStub = @"package com.reset.batch.core;
 
@@ -648,89 +531,10 @@ public interface ICheckpointRepository {
 ";
                         await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "ICheckpointRepository.java"), checkpointRepositoryStub, Utf8NoBom);
 
-                        var abstractTaskletStub = @"package com.reset.batch.core;
-
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Statement;
-
-/**
- * C# 쪽 AbstractSettleTasklet과 같은 책임을 진다: 재시작 스킵 확인, 격리 수준 설정,
- * 트랜잭션 경계, 실패 시 보상 호출을 여기서 한 번만 구현하고 Step 저자는 preCheck·
- * runBusinessSteps만 채운다.
- *
- * JDBC에는 IDbTransaction에 대응하는 별도 타입이 없다 - Connection의 autoCommit을
- * 끄고 commit()/rollback()으로 경계를 표시하므로, C# 쪽 conn/tran 두 인자가 여기서는
- * Connection 하나로 합쳐진다. ref int stateCode도 Java에는 대응이 없어 out 매개변수
- * 대신 보호된 필드로 옮겼다 - preCheck/runBusinessSteps 구현체가 실패 분류 코드를
- * 남기고 싶으면 setStateCode를 호출한다.
- */
-public abstract class AbstractSettleTasklet implements ISettleStep {
-
-    private int stateCode = 0;
-
-    protected abstract String getSourceProcName();
-
-    @Override
-    public StepResult execute(SettleContext context) {
-        if (context.getCheckpoint() != null
-                && context.getCheckpoint().isStepCompleted(getStepName(), context.getYmd())) {
-            return new StepResult(0, ""이미 완료된 Step 재시작 스킵"", getSourceProcName());
-        }
-
-        try (Connection conn = context.getMainDb().createConnection()) {
-            try (Statement isolationStmt = conn.createStatement()) {
-                isolationStmt.execute(""SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SNAPSHOT;"");
-            }
-
-            StepResult preCheckFail = preCheck(conn, context);
-            if (preCheckFail != null) {
-                return preCheckFail;
-            }
-
-            conn.setAutoCommit(false);
-            try {
-                runBusinessSteps(conn, context);
-                conn.commit();
-                context.getCheckpoint().markStepCompleted(getStepName(), context.getYmd());
-                return new StepResult(0, ""정상 완료"", getSourceProcName());
-            } catch (Exception ex) {
-                conn.rollback();
-                onFailureCompensation(context, stateCode);
-                throw ex;
-            }
-        } catch (Exception ex) {
-            return new StepResult(stateCode, ex.getMessage(), getSourceProcName());
-        }
-    }
-
-    /** preCheck/runBusinessSteps 구현체가 실패 분류 코드를 남기고 싶으면 이 메서드로 갱신한다. */
-    protected void setStateCode(int stateCode) {
-        this.stateCode = stateCode;
-    }
-
-    protected abstract StepResult preCheck(Connection conn, SettleContext context) throws SQLException;
-
-[[ORM_BOUNDARY_JAVA]]
-    protected abstract void runBusinessSteps(Connection conn, SettleContext context) throws SQLException;
-
-    protected void onFailureCompensation(SettleContext context, int failedStateCode) {
-    }
-}
-";
-                        // C# 쪽 TaskletOrmComment와 같은 위치(runBusinessSteps 바로 위)에
-                        // JPA 버전 경계 주석을 심는다. DataAccessPolicy.TaskletOrmComment는
-                        // EF Core/SqlConnection 전용 C# 구문이라 그대로 재사용할 수 없다 -
-                        // 별도의 공유 상수로 뽑을 만큼 이 태스크의 범위가 넓지 않아 여기
-                        // 인라인으로 둔다.
-                        const string javaOrmBoundaryComment = @"    // [데이터 액세스 경계] ORM(Spring Data JPA)은 MigrationInstructions.md 5장의 허용 목록에
-    // 한해 사용한다. 사용할 경우 반드시 이 메서드가 받은 conn에 참여시켜야 하며, 새
-    // 커넥션이나 새 트랜잭션을 만들면 검증기의 Rollback 격리가 깨져 정합성 대조 결과가
-    // 오염된다. Spring 관리 트랜잭션(JpaTransactionManager)을 쓰더라도 그 트랜잭션이
-    // 이 conn 위에서 열려야 한다. 정산 대상 대량 DML, 집계, 청킹 루프, Shadow 처리,
-    // 세션 제어는 파라미터 바인딩 SQL(MyBatis)로 작성한다.";
-                        var abstractTaskletStubWithBoundary = abstractTaskletStub.Replace("[[ORM_BOUNDARY_JAVA]]", javaOrmBoundaryComment);
-                        await File.WriteAllTextAsync(Path.Combine(agentSrcFolder, "AbstractSettleTasklet.java"), abstractTaskletStubWithBoundary, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentSrcFolder, "AbstractSettleTasklet.java"),
+                            DataAccessPolicy.AbstractTaskletStub(targetLanguage),
+                            Utf8NoBom);
                     }
                 }
                 catch (Exception ex)
@@ -746,25 +550,6 @@ public abstract class AbstractSettleTasklet implements ISettleStep {
                 var agentTestsFolder = Path.Combine(agentFolder, "tests");
                 if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                 {
-                    var xUnitStub = @"using Xunit;
-using Moq;
-using System.Threading.Tasks;
-
-namespace ReSet.Batch.Tests
-{
-    public class StepLogicTests
-    {
-        [Fact]
-        public async Task Step_ShouldExecuteDml_WhenPreCheckPasses()
-        {
-            // Arrange
-
-            // Act
-
-            // Assert
-        }
-    }
-}";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     try
                     {
@@ -772,8 +557,15 @@ namespace ReSet.Batch.Tests
                         {
                             Directory.CreateDirectory(agentTestsFolder);
                         }
-                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "StepLogicTests.cs"),
+                            DataAccessPolicy.StepLogicTestStub(targetLanguage),
+                            Encoding.UTF8);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "AssemblyCompletenessTests.cs"),
+                            DataAccessPolicy.AssemblyCompletenessTestStub(targetLanguage),
+                            Encoding.UTF8);
                     }
                     catch (Exception ex)
                     {
@@ -799,22 +591,6 @@ namespace ReSet.Batch.Tests
                 }
                 else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                 {
-                    var jUnitStub = @"package com.reset.batch.tests;
-
-import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import static org.mockito.Mockito.*;
-
-public class StepLogicTests {
-    @Test
-    public void step_ShouldExecuteDml_WhenPreCheckPasses() {
-        // Arrange
-
-        // Act
-
-        // Assert
-    }
-}";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     try
                     {
@@ -822,8 +598,15 @@ public class StepLogicTests {
                         {
                             Directory.CreateDirectory(agentTestsFolder);
                         }
-                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "StepLogicTests.java"),
+                            DataAccessPolicy.StepLogicTestStub(targetLanguage),
+                            Utf8NoBom);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "AssemblyCompletenessTests.java"),
+                            DataAccessPolicy.AssemblyCompletenessTestStub(targetLanguage),
+                            Utf8NoBom);
                     }
                     catch (Exception ex)
                     {

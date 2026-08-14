@@ -140,6 +140,23 @@ public static class VerificationBanner
     }
 
     /// <summary>
+    /// 계획서 자신이 코드 자리에 주석을 세워 둔 곳을 알린다.
+    ///
+    /// 재생성을 걸지 않는다 - 지시 주석과 생략 주석을 기계가 완벽히 가르지 못해
+    /// 모델이 표현만 바꿔 우회할 위험이 크다. 사람이 판단하도록 사실만 남긴다.
+    /// </summary>
+    public static string OmissionComments(IReadOnlyList<string> comments)
+    {
+        var lines = RenderBulletList(comments, "(주석이 기록되지 않았습니다.)");
+
+        return "\n> [!WARNING]\n> **[생략 주석] 계획서의 코드 블록에 구현 대신 주석이 서 있는 곳이 있습니다.**"
+            + " 지시서 규칙 7은 코딩 에이전트에게 이 형태를 금지하는데, 계획서가 그것을 본보기로 보이고"
+            + " 있습니다. 아래 자리는 에이전트가 그대로 복사할 수 있으니 구현 전에 사람이 확인하십시오.\n"
+            + lines
+            + "\n\n";
+    }
+
+    /// <summary>
     /// 하한 검사가 대조할 재료를 얻지 못한 단계를 알린다.
     ///
     /// StepFloorViolations와 다른 사실을 나른다 - 저건 "섹션이 부실하다"이고

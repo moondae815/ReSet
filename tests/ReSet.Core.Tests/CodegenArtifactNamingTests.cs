@@ -63,7 +63,8 @@ namespace ReSet.Core.Tests
             HasStepContract: true,
             HasVerification: false,
             FailedStepCodes: Array.Empty<string>(),
-            SinglePlanRelativePath: null));
+            SinglePlanRelativePath: null,
+            InfraObjects: Array.Empty<string>()));
 
         [Fact]
         public void AssemblyTaskFile_ShouldStateTheNamingConventionTheJobWideGateApplies()
@@ -192,7 +193,8 @@ namespace ReSet.Core.Tests
                 HasStepContract: true,
                 HasVerification: false,
                 FailedStepCodes: Array.Empty<string>(),
-                SinglePlanRelativePath: null));
+                SinglePlanRelativePath: null,
+                InfraObjects: Array.Empty<string>()));
 
             Assert.Contains($"`{safeCode}`로 시작", taskFile);
 

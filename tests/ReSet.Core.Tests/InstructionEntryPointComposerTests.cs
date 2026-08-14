@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
 using Xunit;
@@ -161,6 +162,76 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("src/AbstractSettleTasklet.cs", markdown);
             Assert.DoesNotContain("AbstractSettleTasklet.java", markdown);
+        }
+
+        /// <summary>
+        /// 규칙 10 문장만 잘라낸다. 전체 markdown에 대고 Contains를 하면 규칙 9가
+        /// 이미 같은 파일명을 언급하므로, 규칙 10이 하드코딩되어 항상 한쪽 언어만
+        /// 가리키게 망가져도 전체 문자열 검사로는 잡히지 않는다.
+        /// </summary>
+        private static string ExtractGuideline10(string markdown)
+        {
+            var start = markdown.IndexOf("10. **[중요]**", StringComparison.Ordinal);
+            Assert.True(start >= 0, "규칙 10을 찾을 수 없습니다.");
+
+            // markdown.IndexOf("\n\n", ...)는 Windows(\r\n)에서 문단 경계를 절대 못 찾는다 -
+            // 이 문서는 StringBuilder.AppendLine(Environment.NewLine)으로 만들어지는데,
+            // Windows의 Environment.NewLine은 \r\n이라 빈 줄이 "\r\n\r\n"이 되고 그 안에는
+            // "\n\n" 부분 문자열이 없기 때문이다. 하우스 스타일(specs/2026-06-02-
+            // cross-platform-compatibility-analysis.md:27)이 명시한 \r?\n 개행 무관 대조로
+            // 고정한다.
+            var boundary = Regex.Match(markdown[start..], @"\r?\n\r?\n");
+            Assert.True(boundary.Success, "규칙 10 이후 단락 경계를 찾을 수 없습니다.");
+            return markdown[start..(start + boundary.Index)];
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheJavaStubFile_InGuideline10()
+        {
+            // 규칙 10의 스텁 경로가 언어와 무관하게 ".cs"로 굳으면 Java 에이전트가
+            // 존재하지 않는 C# 파일을 권위 있는 계약이라고 지시받는다.
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "Java" });
+            var guideline10 = ExtractGuideline10(markdown);
+
+            Assert.Contains("src/AbstractSettleTasklet.java", guideline10);
+            Assert.DoesNotContain("AbstractSettleTasklet.cs", guideline10);
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheCSharpStubFile_InGuideline10()
+        {
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "C#" });
+            var guideline10 = ExtractGuideline10(markdown);
+
+            Assert.Contains("src/AbstractSettleTasklet.cs", guideline10);
+            Assert.DoesNotContain("AbstractSettleTasklet.java", guideline10);
+        }
+
+        [Fact]
+        public void ExtractGuideline10_ShouldFindTheParagraphBoundary_OnWindowsLineEndings()
+        {
+            // 하우스 스타일(docs/superpowers/specs/2026-06-02-cross-platform-compatibility-
+            // analysis.md:27)은 개행을 \r?\n으로 CRLF에 무관하게 파싱하라고 못박는다. 이
+            // 환경은 macOS라 Environment.NewLine이 \n이므로, 실제 Windows 산출물(\r\n)을
+            // 흉내 내려면 여기서 강제로 CRLF화해야 이 테스트가 그 결함을 재현한다.
+            var markdown = InstructionEntryPointComposer.Compose(Split()).Replace("\n", "\r\n");
+
+            var guideline10 = ExtractGuideline10(markdown);
+
+            Assert.Contains("src/AbstractSettleTasklet.cs", guideline10);
+        }
+
+        [Fact]
+        public void Compose_ShouldPlaceGuideline10ImmediatelyAfterGuideline9_ForJava()
+        {
+            // C# 경로의 순서는 InstructionBundleWriterTests에서 이미 고정한다. Java도
+            // 같은 순서를 지켜야 상속 강제(9)와 권위 순서(10)가 같이 읽힌다.
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "Java" });
+
+            Assert.True(
+                markdown.IndexOf("9. **[중요]**", StringComparison.Ordinal)
+                    < markdown.IndexOf("10. **[중요]**", StringComparison.Ordinal),
+                "규칙 10이 규칙 9보다 앞에 있습니다.");
         }
 
         [Fact]
