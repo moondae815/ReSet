@@ -29,12 +29,15 @@ public sealed class DocumentationBudgetTests
     [Fact]
     public void FindOversizedLines_HandlesCrLfWithoutCountingTheCarriageReturn()
     {
-        var text = "a\r\n" + new string('x', 601);
+        // \r은 CRLF에서 항상 \n 앞에 오므로, 긴 줄 자체가 \r\n으로 끝나야 \r 제거를
+        // 실제로 검증한다. 뒤따르는 줄이 아니라 이 줄 끝에 \r이 남는다 - 여기서
+        // 세지 않으면 601이 아니라 602가 된다.
+        var text = new string('x', 601) + "\r\na";
 
         var found = DocumentationBudget.FindOversizedLines(text, 600);
 
         var only = Assert.Single(found);
-        Assert.Equal(2, only.Line);
+        Assert.Equal(1, only.Line);
         Assert.Equal(601, only.Bytes);
     }
 
