@@ -3,68 +3,108 @@
 각 줄의 삭제 근거. `중복`은 동등 이상의 서술이 이미 그곳에 있다는 뜻이다.
 `근거없음`은 삭제하지 않고 이동한다.
 
+**이 표를 읽기 전에.** `scripts/doc-audit.sh`는 클래스 이름이 아니라 마크다운 링크의
+경로로 근거를 찾는다(2026-08-14 개정, 아래 "개정 이력" 참고). 그래도 이 도구가
+증명하지 못하는 것이 세 가지 있다.
+
+- **근소한 차이는 판정이 아니라 확인 요청이다.** ARCH_MD 또는 SUMMARY가 대상 줄의
+  바이트 수 대비 대략 10% 이내로 기준에 못 미쳐 `근거없음`이 나온 경우, 실제로는
+  거의 같은 서술이 이미 있을 수 있다. 예: `CancellationPolicyTests`(447 vs 448바이트,
+  1바이트 차이), `ValidatorAiServiceTests`(179 vs 181), `DataComparisonServiceTests`
+  (176 vs 183). 이런 항목은 대장 반영 전 사람이 직접 대조한다.
+- **묶음 레이블은 개별 파일 경로로 찾을 수 없다.** `docs/architecture.md`가 여러
+  클래스를 하나의 링크 레이블로 묶어 서술하면(예: `[Clients (Claude, OpenAi,
+  Ollama) Tests]`, `[CLI Clients (ClaudeCli, CodexCli, AntigravityCli) Tests]`)
+  개별 파일 경로 대조는 그 서술을 찾지 못해 `근거없음`을 낸다. `ClaudeClientTests`와
+  `ClaudeCliClientTests`가 그 경우다 — 근거가 없는 게 아니라 스크립트가 못 찾을
+  뿐이며, architecture.md를 열어 보면 그 내용이 실제로 있다.
+- **이 스크립트는 `중복`을 증명하지 `근거없음`을 증명하지 않는다.** `근거없음`이
+  뜻하는 것은 "이 스크립트가 경로/이름으로 찾지 못했다"이지 "근거가 세상 어디에도
+  없다"가 아니다. 최종 판단(이동 vs 그대로 둠)은 각 Task의 사람 판정이 한다.
+
+## 개정 이력
+
+**2026-08-14 (Fix Round 1):** 최초 스크립트는 링크 텍스트의 클래스 *이름*으로
+architecture.md와 `<summary>`를 찾았다. `src/` 안에는 같은 basename을 가진 파일이
+둘 있다(`Program.cs`, `ConsoleUserInteraction.cs`가 각각 `ReSet.Cli`와
+`ReSet.Validator.Cli`에 있다). 이름 기반 대조는 이 두 짝의 근거를 합산해, 서로 다른
+AGENTS.md 두 줄에 같은(부풀려진) 분량을 배정했다 — 위험한 방향의 오류였다. 실측에서
+합산치가 두 줄 각각의 기준을 넘어 우연히 오탐은 없었지만, 이름이 우연히 짧거나 흔한
+다른 클래스라면 엉뚱한 근거를 빌려 거짓 `중복` 판정(부당 삭제의 근거)을 낼 수 있었다.
+같은 이유로 `find src -name "$sym.cs"`는 `tests/`를 뒤지지 않아, `tests/` 아래 클래스의
+SUMMARY가 항상 0으로 나왔다(`StepErrorCodeRegressionTests`가 실제로는 302바이트의
+`///` 요약을 갖고 있었는데도).
+
+지금 스크립트는 링크 텍스트가 아니라 **링크의 경로**로 찾는다. 경로는 파일을
+유일하게 식별하므로 이름이 겹쳐도 섞이지 않는다. 이 개정으로 여러 항목의 판정이
+바뀌었다 — 그 중 다수는 이전에 부풀려진 이름 기반 합산 덕에 숨어 있던 실제
+`근거없음`이 드러난 것이다(`SqlObjectTypeClassifier`, `CliWorkspace`, `CliEffort`,
+`MockDataDto`, `GapReport`, `ValidatorAiService`, `JavaProcessRunner`,
+`DataComparisonService`, `TypeClassificationPolicyTests`). Task 2는 이 개정판
+목록을 근거로 쓴다.
+
 ## Phase 1 — §2 클래스 카탈로그 (AGENTS.md L16–L145)
 
 ```
 LINE   BYTES   SYMBOL                             ARCH_MD   SUMMARY   VERDICT
 20     59      -                                  -         -         산문(수동판정)
 21     60      -                                  -         -         산문(수동판정)
-22     181     SpDefinition                       2420      551       중복:architecture.md
+22     181     SpDefinition                       0         551       중복:SpDefinition.cs <summary>
 23     200     -                                  -         -         산문(수동판정)
-24     247     CodeObjectKey                      1606      0         중복:architecture.md
+24     247     CodeObjectKey                      303       0         중복:architecture.md
 25     199     CodeObjectAnalysisModels           303       1360      중복:architecture.md
-26     342     VerificationOutcome                3162      806       중복:architecture.md
+26     342     VerificationOutcome                346       806       중복:architecture.md
 27     404     SpAnalysisOutcome                  406       676       중복:architecture.md
 28     172     DependencyInfo                     0         0         근거없음(이동필요)
 29     220     ColumnInfo                         0         0         근거없음(이동필요)
 30     187     TableIndexInfo                     0         0         근거없음(이동필요)
 31     218     AiResult                           0         0         근거없음(이동필요)
-32     146     DbSnapshot                         955       0         중복:architecture.md
+32     146     DbSnapshot                         243       0         중복:architecture.md
 33     70      -                                  -         -         산문(수동판정)
-34     298     DbMetadataService                  1861      258       중복:architecture.md
-35     281     SqlStaticParser                    1557      4532      중복:architecture.md
-36     622     StaticAnalysisNormalizer           879       2038      중복:architecture.md
-37     531     SqlObjectTypeClassifier            1677      411       중복:architecture.md
-38     1802    AiService                          7178      3552      중복:architecture.md
-39     683     IAiClient                          5113      724       중복:architecture.md
-40     379     PromptCacheBreakpointPolicy        3313      1603      중복:architecture.md
+34     298     DbMetadataService                  392       258       중복:architecture.md
+35     281     SqlStaticParser                    536       4532      중복:architecture.md
+36     622     StaticAnalysisNormalizer           0         2038      중복:StaticAnalysisNormalizer.cs <summary>
+37     531     SqlObjectTypeClassifier            0         411       근거없음(이동필요)
+38     1802    AiService                          465       3552      중복:AiService.cs <summary>
+39     683     IAiClient                          298       724       중복:IAiClient.cs <summary>
+40     379     PromptCacheBreakpointPolicy        2633      1603      중복:architecture.md
 41     420     PromptComposition                  341       410       근거없음(이동필요)
-42     1548    BatchStepPlan                      4239      3169      중복:architecture.md
-43     480     SpecReturnCodeExtractor            1659      1654      중복:architecture.md
-44     579     SpecTargetTableExtractor           875       1920      중복:architecture.md
-45     1484    PlanStructureEnricher              2180      3564      중복:architecture.md
-46     709     StepDefect                         563       1549      중복:StepDefect.cs <summary>
-47     451     BatchPlanAssembler                 860       1159      중복:architecture.md
-48     1377    MechanicalValidator                6220      17117     중복:architecture.md
-49     422     SchemaPromptColumnSelector         585       3559      중복:architecture.md
-50     418     SpecExpectations                   521       2502      중복:architecture.md
-51     4162    VerificationPipelineOrchestrator   3805      12852     중복:VerificationPipelineOrchestrator.cs <summary>
-52     296     DependencyAnalysisOrchestrator     867       567       중복:architecture.md
-53     559     VerificationDocumentFormatter      1205      1707      중복:architecture.md
-54     1474    VerificationBanner                 6124      7217      중복:architecture.md
+42     1548    BatchStepPlan                      965       3169      중복:BatchStepPlan.cs <summary>
+43     480     SpecReturnCodeExtractor            178       1654      중복:SpecReturnCodeExtractor.cs <summary>
+44     579     SpecTargetTableExtractor           381       1920      중복:SpecTargetTableExtractor.cs <summary>
+45     1484    PlanStructureEnricher              382       3564      중복:PlanStructureEnricher.cs <summary>
+46     709     StepDefect                         0         1549      중복:StepDefect.cs <summary>
+47     451     BatchPlanAssembler                 480       1159      중복:architecture.md
+48     1377    MechanicalValidator                749       17117     중복:MechanicalValidator.cs <summary>
+49     422     SchemaPromptColumnSelector         477       3559      중복:architecture.md
+50     418     SpecExpectations                   409       2502      중복:SpecExpectations.cs <summary>
+51     4162    VerificationPipelineOrchestrator   445       12852     중복:VerificationPipelineOrchestrator.cs <summary>
+52     296     DependencyAnalysisOrchestrator     292       567       중복:DependencyAnalysisOrchestrator.cs <summary>
+53     559     VerificationDocumentFormatter      751       1707      중복:architecture.md
+54     1474    VerificationBanner                 1583      7217      중복:architecture.md
 55     422     ThinkingLogPlaceholder             0         883       중복:ThinkingLogPlaceholder.cs <summary>
-56     717     ThinkingLogDocument                632       854       중복:ThinkingLogDocument.cs <summary>
-57     1104    BestAttempt                        121       1949      중복:BestAttempt.cs <summary>
-58     1270    RetryRescue                        545       1434      중복:RetryRescue.cs <summary>
+56     717     ThinkingLogDocument                0         854       중복:ThinkingLogDocument.cs <summary>
+57     1104    BestAttempt                        0         1949      중복:BestAttempt.cs <summary>
+58     1270    RetryRescue                        0         1434      중복:RetryRescue.cs <summary>
 59     1330    StructureRedraftPolicy             0         1812      중복:StructureRedraftPolicy.cs <summary>
 60     493     CriticFeedbackLog                  0         1947      중복:CriticFeedbackLog.cs <summary>
 61     682     RegenerationScope                  0         1847      중복:RegenerationScope.cs <summary>
-62     223     OutputPathResolver                 1177      87        중복:architecture.md
-63     231     SpecificationLinker                1078      0         중복:architecture.md
-64     616     MetadataExporter                   2334      702       중복:architecture.md
+62     223     OutputPathResolver                 305       87        중복:architecture.md
+63     231     SpecificationLinker                305       0         중복:architecture.md
+64     616     MetadataExporter                   588       702       중복:MetadataExporter.cs <summary>
 65     803     DataAccessPolicy                   2473      3627      중복:architecture.md
 66     787     PlanBoundaryResolver               813       7885      중복:architecture.md
 67     256     MarkdownSectionLocator             297       1791      중복:architecture.md
 68     383     InstructionEntryPointComposer      1018      4356      중복:architecture.md
 69     340     TaskFileComposer                   498       4911      중복:architecture.md
-70     680     InstructionBundleWriter            2203      5270      중복:architecture.md
+70     680     InstructionBundleWriter            422       5270      중복:InstructionBundleWriter.cs <summary>
 71     283     AgentProgressStore                 430       2337      중복:architecture.md
 72     261     CodegenArtifactNaming              314       2954      중복:architecture.md
-73     203     PlanLayout                         1067      1340      중복:architecture.md
+73     203     PlanLayout                         322       1340      중복:architecture.md
 74     648     VerificationCoverage               745       3697      중복:architecture.md
-75     252     OfflineDbMetadataService           914       2403      중복:architecture.md
-76     286     SnapshotManager                    414       0         중복:architecture.md
-77     251     LocalAiConsolidator                404       0         중복:architecture.md
+75     252     OfflineDbMetadataService           261       2403      중복:architecture.md
+76     286     SnapshotManager                    304       0         중복:architecture.md
+77     251     LocalAiConsolidator                290       0         중복:architecture.md
 78     197     CacheManager                       235       0         중복:architecture.md
 79     362     -                                  -         -         산문(수동판정)
 80     254     ExternalCliCodingEngine            339       228       중복:architecture.md
@@ -74,18 +114,18 @@ LINE   BYTES   SYMBOL                             ARCH_MD   SUMMARY   VERDICT
 84     231     -                                  -         -         산문(수동판정)
 85     987     ClaudeCliClient                    765       988       중복:ClaudeCliClient.cs <summary>
 86     830     -                                  -         -         산문(수동판정)
-87     208     CliProcessRunner                   1566      908       중복:architecture.md
-88     647     CliWorkspace                       3864      413       중복:architecture.md
-89     936     CliEffort                          5315      751       중복:architecture.md
-90     268     CliProviderBatchGuard              5917      570       중복:architecture.md
+87     208     CliProcessRunner                   504       908       중복:architecture.md
+88     647     CliWorkspace                       504       413       근거없음(이동필요)
+89     936     CliEffort                          893       751       근거없음(이동필요)
+90     268     CliProviderBatchGuard              508       570       중복:architecture.md
 91     157     IMultiProgressScope                0         0         근거없음(이동필요)
 92     218     NullProgressScope                  0         0         근거없음(이동필요)
 93     316     SettlementPolicyService            202       0         근거없음(이동필요)
 95     57      -                                  -         -         산문(수동판정)
-96     136     Program                            1730      252       중복:architecture.md
-97     474     ConsoleUserInteraction             660       0         중복:architecture.md
+96     136     Program                            216       9797      중복:architecture.md
+97     474     ConsoleUserInteraction             354       1290      중복:ConsoleUserInteraction.cs <summary>
 98     214     ValidationUiProxy                  193       0         근거없음(이동필요)
-99     1056    BatchStepCatalog                   1822      1803      중복:architecture.md
+99     1056    BatchStepCatalog                   1677      1803      중복:architecture.md
 100    250     SpecHeaderReader                   255       99        중복:architecture.md
 102    93      -                                  -         -         산문(수동판정)
 103    141     -                                  -         -         산문(수동판정)
@@ -95,26 +135,26 @@ LINE   BYTES   SYMBOL                             ARCH_MD   SUMMARY   VERDICT
 107    177     IValidationUserInterface           0         0         근거없음(이동필요)
 108    144     L1ValidationResult                 0         0         근거없음(이동필요)
 109    159     ValidationResult                   0         0         근거없음(이동필요)
-110    178     MockDataDto                        329       0         중복:architecture.md
-111    317     GapReport                          1664      0         중복:architecture.md
+110    178     MockDataDto                        0         0         근거없음(이동필요)
+111    317     GapReport                          0         0         근거없음(이동필요)
 112    153     RunnerDtos                         0         0         근거없음(이동필요)
 113    141     ValidatorConfig                    0         0         근거없음(이동필요)
 114    87      -                                  -         -         산문(수동판정)
-115    261     CodegenWorkflowOrchestrator        384       10112     중복:architecture.md
+115    261     CodegenWorkflowOrchestrator        317       10112     중복:architecture.md
 116    413     CodegenLoopPolicy                  478       1275      중복:architecture.md
 117    222     CodegenWorkflowResult              233       516       중복:architecture.md
 118    323     CodegenStage                       348       880       중복:architecture.md
-119    258     CodeVerificationOrchestrator       1680      271       중복:architecture.md
+119    258     CodeVerificationOrchestrator       350       271       중복:architecture.md
 120    249     FileMappingService                 254       771       중복:architecture.md
-121    520     ValidatorAiService                 1749      0         중복:architecture.md
-122    202     SpExecutionService                 337       0         중복:architecture.md
-123    213     SandboxSeedingService              1057      0         중복:architecture.md
-124    231     CSharpReflectionRunner             904       0         중복:architecture.md
-125    206     JavaProcessRunner                  425       0         중복:architecture.md
-126    237     DataComparisonService              516       0         중복:architecture.md
+121    520     ValidatorAiService                 302       0         근거없음(이동필요)
+122    202     SpExecutionService                 237       0         중복:architecture.md
+123    213     SandboxSeedingService              234       0         중복:architecture.md
+124    231     CSharpReflectionRunner             251       0         중복:architecture.md
+125    206     JavaProcessRunner                  204       0         근거없음(이동필요)
+126    237     DataComparisonService              233       0         근거없음(이동필요)
 128    91      -                                  -         -         산문(수동판정)
-129    80      Program                            1730      252       중복:architecture.md
-130    142     ConsoleUserInteraction             660       0         중복:architecture.md
+129    80      Program                            297       252       중복:architecture.md
+130    142     ConsoleUserInteraction             306       0         중복:architecture.md
 132    82      -                                  -         -         산문(수동판정)
 133    85      -                                  -         -         산문(수동판정)
 134    201     SqlStaticParserTests               291       0         중복:architecture.md
@@ -127,6 +167,7 @@ LINE   BYTES   SYMBOL                             ARCH_MD   SUMMARY   VERDICT
 141    183     DataComparisonServiceTests         176       0         근거없음(이동필요)
 142    399     DependencyAnalysisOrchestratorTests 0         0         근거없음(이동필요)
 143    448     CancellationPolicyTests            447       0         근거없음(이동필요)
-144    976     TypeClassificationPolicyTests      1677      0         중복:architecture.md
-145    624     StepErrorCodeRegressionTests       0         0         근거없음(이동필요)
+144    976     TypeClassificationPolicyTests      0         611       근거없음(이동필요)
+145    624     StepErrorCodeRegressionTests       0         302       근거없음(이동필요)
+감사 완료: 122행 처리
 ```
