@@ -26,7 +26,9 @@ ReSet의 소스 코드 변화를 3개의 핵심 문서에 정확하게 반영하
 
 ### 1단계: 변경 범위 확정 및 표적 스캔
 
-세 문서는 합계 200KB가 넘는다(README 57KB, AGENTS 약 30KB, architecture 137KB).
+세 문서는 합계 250KB에 육박한다(README 약 60KB, AGENTS 약 45KB, architecture 약 140KB —
+실측은 뒤에서 계속 바뀐다는 사실 자체가 이 문단의 요점이므로, 정확한 값은 항상
+`LC_ALL=C wc -c README.md AGENTS.md docs/architecture.md`로 직접 재측정한다).
 **전문을 읽지 말고 목차부터 확보한 뒤 필요한 섹션만 부분 읽기**를 한다.
 전문 읽기는 "문서 전면 개편" 요청일 때만 허용한다.
 
