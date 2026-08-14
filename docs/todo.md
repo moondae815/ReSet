@@ -3,10 +3,16 @@
 `docs/superpowers/specs/` 하위 설계 문서(2026-07-26 ~ 2026-08-13, 37건)에 기록된 후속 항목을
 소스 코드와 대조해 **실제로 열려 있는 것만** 남긴 목록이다.
 
-- 작성일: 2026-08-13
-- 제외: [2026-08-13 AGENTS.md 재구조화](superpowers/specs/2026-08-13-agents-md-restructure-design.md)
-  관련 작업(별도 진행)
-- 줄 번호는 작성 시점의 것이다. 시간이 지나면 멤버 이름으로 찾는 편이 정확하다.
+- 작성일: 2026-08-13 / 재검증일: 2026-08-14
+- 재검증 결과: 목록 작성 이후 `src/`에 커밋이 **0건**이므로(`git log ccdace0..HEAD -- src/`)
+  열린 항목은 전부 그대로 열려 있다. 그 사이 커밋은 AGENTS.md 재구조화(문서·테스트)뿐이다.
+  아래 4건은 목록 자체가 코드와 어긋나 있어 이번에 고쳤다 — P2의 **필수 H2 하드코딩**(3곳→4곳,
+  단계 라벨 오기), P3의 **모호성 오류 메시지**(절반은 이미 해소), 그리고 줄 번호 2건
+  (`SpecExpectationsWiringPolicyScanner :48→:47`, `ReSet.Cli/Program.cs :2003→:2002`).
+- 제외였던 [2026-08-13 AGENTS.md 재구조화](superpowers/specs/2026-08-13-agents-md-restructure-design.md)는
+  `3d3568e`로 **완료**됐다. 그 설계서의 미해결 후속은 없고, 남은 것은 의도된 범위 밖 항목뿐이다.
+- 줄 번호는 재검증일(2026-08-14) 기준으로 전부 확인했다. 시간이 지나면 멤버 이름으로 찾는
+  편이 정확하다.
 
 ---
 
@@ -135,9 +141,12 @@
 
 ### 배치 계획·지시서
 
-- [ ] **4개 필수 H2가 3곳에 하드코딩** — `AiService.cs:2044`(3/3 프롬프트),
-      `:2413`(Critic 프롬프트), `MechanicalValidator.cs:70`(L1 검증기).
-      2/3 단계의 실질 기여가 H3/H4뿐인 원인. 목차 단계 존치 여부는 실측이 필요하다
+- [ ] **4개 필수 H2가 4곳에 하드코딩** — `AiService.cs:658`(`ConsolidatedPlanRules`,
+      3/3 생성 프롬프트), `:2044`(2/3 목차 프롬프트), `:2413`(Critic 프롬프트),
+      `MechanicalValidator.cs:68`(`RequiredConsolidatedHeaders`, L1 검증기).
+      L1 실패 시 내미는 수정 템플릿(`MechanicalValidator.cs:1358`)까지 세면 리터럴은 5곳이다.
+      **2/3 단계의 실질 기여가 H3/H4뿐인 이유가 여기 있다** — 3/3 프롬프트가 이미 네 H2를
+      직접 지시하므로 목차가 그것을 다시 정해줄 필요가 없다. 목차 단계 존치 여부는 실측이 필요하다
 - [ ] **`StepLogicTests` 배치 위치가 어떤 지시서에도 없다**(C#·Java 공통) —
       파일은 `MetadataExporter.cs:775/825`가 만들지만 `TaskFileComposer.cs:335-336`은
       `ArchitectureTests`만 안내한다
@@ -189,8 +198,8 @@
       `IOException`과 `OperationCanceledException`이 동시에 발생하면 필터가 통과해
       취소가 삼켜진다. 취소 정책 스캐너는 이를 잡지 못한다(필터가 있으므로)
 - [ ] **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** —
-      `Program.cs:2003`. 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회 경로와
-      저장 경로가 갈라진다
+      `ReSet.Cli/Program.cs:2002`. 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회
+      경로와 저장 경로가 갈라진다
 - [ ] **`ArtifactChangeDetector.Snapshot`의 TOCTOU 플래키** — `:33-42`의
       `EnumerateFiles` → `FileInfo.Length`. **3개 문서가 반복 기록한 유일한 실제 플래키**로,
       전체 실행 중 관측되고 단독 재실행에서는 통과한다
@@ -205,16 +214,22 @@
 - [ ] 2/3가 빈 응답을 내도 일반 방어가 없다 — `:1824-1841`. 재수립 경로만 방어한다
 - [ ] 프롬프트의 pseudo-XML 블록이 `<`, `>`, `"`를 이스케이프하지 않는다 —
       `AiService.cs:196-209`. 진짜 XML로 파싱하는 곳은 없다
-- [ ] 모호성 오류가 충돌하는 형제 후보를 나열하지 않는다 — `ResolveSectionBody` 마지막 분기
+- [ ] 모호성 오류가 충돌하는 **기대**를 나열하지 않는다 —
+      `MechanicalValidator.cs:814-818`(`ResolveSectionBody` 마지막 분기).
+      후보 **섹션**(`candidateSections`)은 이미 메시지에 찍는다. 빠진 쪽은
+      `candidateExpectations`라, 후보 섹션이 하나뿐인데 같은 마지막 파트를 요구하는 UPDATE
+      대상이 여럿이라 모호해진 경우에는 무엇과 충돌했는지 알 수 없다
 - [ ] `SpecExpectationsWiringPolicyScanner`가 `this._validator`를 못 잡는다 —
-      `:48`이 `IdentifierNameSyntax`만 본다. 현재 그런 사용은 없다
+      `:47`이 `IdentifierNameSyntax`만 본다. 현재 그런 사용은 없다
 - [ ] SP 목록이 시작 시 1회만 로드되어 세션 중 DB 변경이 반영되지 않는다
 - [ ] TUI 선택 목록이 객체 디렉터리 이름만 렌더링해 서로 다른 DB의 동명 프로시저가
       구분되지 않는다
 - [ ] 비재귀 경로가 `DependencyAnalysisOrchestrator`로 통일되지 않았다 — 요청 모델과
       파이프라인 호출, 배치 모드를 함께 재배선해야 한다
 - [ ] 낡은 줄번호 인용 1건 잔존 — `CodegenWorkflowOrchestrator.cs:193`의 `(:806)`.
-      나머지 5곳은 해소됐다. 줄 번호 대신 멤버 이름을 쓰는 편이 낫다
+      실제로 그 주석이 가리키려던 곳은 `:816`(`BuildAbortResult`)과
+      `:838`(`CliFailureClassifier` 호출)이다. 나머지 5곳은 해소됐다.
+      줄 번호 대신 멤버 이름을 쓰는 편이 낫다
 - [ ] 뮤테이션 저항 없는 테스트 2건 —
       `FindUncoveredRanges_EmptyDocument_ShouldReturnNothing`(조기 반환을 지워도 통과,
       값싼 경계 방어로 의도적 유지),
@@ -247,10 +262,10 @@
 
 ---
 
-## 문서 갱신이 필요한 것 (코드상 이미 해소, 문서에는 열린 채)
+## 완료 기록 — 코드상 해소된 뒤 문서까지 닫은 것
 
-**전부 반영 완료(2026-08-13).** 각 설계 문서의 해당 항목에 취소선과 해소 근거를 달았다.
-아래는 어디를 어떻게 고쳤는지의 기록이다.
+**전부 반영 완료(2026-08-13, 2026-08-14 재확인).** 각 설계 문서의 해당 항목에 취소선과
+해소 근거를 달았다. 아래는 어디를 어떻게 고쳤는지의 기록이며, 새로 할 일은 없다.
 
 - [x] `2026-08-08-step-error-code-verification-design.md` §후속 1 —
       **보강기와 파서의 "유효한 블록" 판정 불일치**는 `fix/silent-failure-closure`의
