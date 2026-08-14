@@ -441,3 +441,82 @@ L142가 유일한 사례였다. 이 대장은 그 결과를 그대로 받아들�
   문단(`architecture.md` §4.6의 Gap 판정 규칙 문단, §4.7의 관계지향 모의 데이터 생성
   문단)의 백틱 이름을 마크다운 링크로 바꿨다. 산문이 이미 더 나은 거처였고, 항해
   가능성만 없었다.
+
+## Phase 2a 결과 — 범주 2 (예외 처리 및 안정성) (Task 3, 2026-08-14)
+
+**구간.** Task 2가 130줄을 지워 행 번호가 이동했으므로 헤딩에서 재계산했다 —
+`./scripts/doc-audit.sh`를 돌린 시점 기준 범주 2는 AGENTS.md L49–L67(`### ⚡ 범주 2.`부터
+`### 🎨 범주 3.` 직전까지)였다.
+
+**판정 요약.** 계획서가 확정한 5개 판정(취소 규칙 → 테스트, SQL 타입 판정 → 테스트,
+모델별 전송 규격 → architecture.md, Soft Fail 정책(DB/Exporter/캐시/재귀) → 원문 유지,
+Ollama 온도·추론 제어 → 원문 유지)에 더해, 표에 없던 나머지 불릿(정합성 검증 DB 실행,
+AI 클라이언트 널 가드, OpenAI Responses 추론 보존, 오프라인 스냅샷 Fail-Fast, 프롬프트
+응답 정화)에도 같은 판정 질문을 직접 적용했다. 그 근거로 연 파일:
+`tests/ReSet.Core.Tests/ValidatorTests.cs`(`SpExecutionService_ShouldSoftFail_OnInvalidConnectionString`),
+`tests/ReSet.Core.Tests/CancellationPolicyTests.cs`, `tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs`
+(`AnalyzeAsync_CancelledMidGraph_PersistsCompletedObjectsAndReportsPartialCompletion`,
+`..._CyclicGraphCancelled_AddsTheUnresolvedReferenceBannerToTheSurvivingDocument`),
+`tests/ReSet.Core.Tests/{Claude,OpenAi,Google,Zai}ClientTests.cs`(각 `ChatAsync_With*ErrorResponse_ShouldThrow*`),
+`tests/ReSet.Core.Tests/OpenAiClientTests.cs`(`ChatAsync_WithGpt5MixedReasoningSummaries_ShouldPreserveNonEmptyReasoningText`),
+`src/ReSet.Cli/Program.cs`(오프라인 스냅샷 Fail-Fast 구현부, 취소 최상위 핸들러
+주석), `docs/architecture.md`(§4.1 L404, §4.3, §4.5 L599–600, §4.13).
+
+### 줄여 쓴 항목(삭제, 근거 위치 포함)
+
+| 원문 위치(구 줄) | 사유 | 근거 위치 |
+|---|---|---|
+| L57 "취소를 실제로 흡수하는 지점은 [Program.cs]의 최상위 핸들러 하나뿐이며, 거기서 사용자에게 취소 사실을 알리고 Serilog를 정리한 뒤 종료합니다." | "그 파일을 여는 사람만" 잡는다 — Program.cs 자신이 이미 이 사실을 인라인 주석으로 말한다 | `src/ReSet.Cli/Program.cs:1663-1665`("이 안쪽의 어떤 catch도 취소를 가로채지 못했을 때의 마지막 정류장이다...") |
+| L58 스캐너가 잡는/놓치는 구문 형태의 전량 열거(원시 부분 문자열 판정 종류, 언래핑 목록, 괄호로 감싼 수신자, 널 조건부 체인 등) | 테스트가 잡는다 — `TypeClassificationPolicyTests`가 검사 범위를, `TypeClassificationPolicyScanner.cs`가 알려진 한계를 이미 코드로 문서화한다 | `tests/ReSet.Core.Tests/TypeClassificationPolicyTests.cs`, `tests/ReSet.Core.Tests/TypeClassificationPolicyScanner.cs` 상단 주석, `docs/architecture.md:404`(더 두꺼운 배경 서술) |
+| L62 모델별 전송 규격의 기계 세부(캐시 breakpoint의 explicit 모드·content 블록 규격, 문자열/블록 배열 혼용 금지, 접미사 빈 호출 처리, Claude 4/5세대 옵션 조율·temperature 생략, 재생성 회차 user 블록 두 번째 중단점) | architecture.md가 보유 | `docs/architecture.md:599`(OpenAiClient 항목, breakpoint 모드·content 블록·접미사 처리를 그대로 서술), `docs/architecture.md:600`(ClaudeClient 항목, "Claude 4/5세대 추론 토큰 대응 및 temperature 생략 처리"와 재생성 회차 user 블록 두 번째 중단점을 그대로 서술), `docs/architecture.md §4.13`(캐시 중단점의 가격 근거) |
+
+### 이동한 항목(삭제하지 않고 옮김)
+
+| 원문 위치(구 줄) | 이동 사유 | 새 위치 |
+|---|---|---|
+| L58 `DependencyAnalysisOrchestrator.TryParseCodeObjectType`/`MetadataExporter.NormalizeCodeObjectDdlFolder`의 정확 일치 `switch` 테이블 서술(분류기와의 불일치, `"P"`/`"FN"`/`"TF"` 처리 차이, 오늘 오작동하지 않는 이유) | 근거를 architecture.md/코드 어디도 갖고 있지 않았다(감사 도구가 `근거없음`) — 삭제가 아니라 이동 대상 | `docs/architecture.md` §4.3 새 불릿("분류기 밖에 남은 정확 일치 `switch` 테이블") — `TryParseCodeObjectType`(`src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs:327`)과 `NormalizeCodeObjectDdlFolder`(`src/ReSet.Core/Services/MetadataExporter.cs:159`)를 직접 읽고 확인한 뒤 옮겼다 |
+
+### 원문 유지(사람의 판단만이 잡는 항목)
+
+계획서가 확정한 대로 다음은 한 글자도 줄이지 않았다(단, L55 재귀 분석과 L64 Ollama 온도
+매핑은 600바이트 줄 예산을 넘어 **내용 삭제 없이** 여러 불릿으로 줄바꿈만 했다):
+
+- DB 메타데이터 수집(`DbMetadataService.cs`) — 원문 유지
+- 원천 데이터 파일 덤프(`MetadataExporter.cs`) — 원문 유지
+- 캐싱 및 서브 시스템(`CacheManager.cs`) — 원문 유지
+- 재귀 코드 객체 분석(`DependencyAnalysisOrchestrator.cs`) — 원문 유지, 3개 불릿으로 줄바꿈(`재귀 코드 객체 분석`/`(계속)`×2)
+- 오프라인 스냅샷 파일 검증 Fail-Fast — 원문 유지(테스트 없음, Program.cs Main 진입점이라 단위 테스트 대상이 아니고 설계 의도가 코드에서 자명하지 않음)
+- 취소는 소프트 페일 대상이 아님(필터 요구, `when (ex is not OperationCanceledException)`) — 원문 유지, 테스트 인용만 추가
+- 취소 이후 부분 완료 보존(완료 산출물 보존, 미분석 참조 표기) — 원문 유지, 테스트 인용만 추가
+- Ollama 온도 매핑 및 반복 패널티 방어 — 원문 유지, 2개 불릿으로 줄바꿈(온도 매핑/반복 패널티)
+- Ollama 모델별 추론(Thinking) 제어 및 파싱 규칙 — 원문 유지
+- 프롬프트 응답 정화(Conversational filler, 마크다운 코드 블록 금지) — 원문 유지(런타임 LLM 출력을 검사하는 테스트가 없음)
+- AI 클라이언트 목록 및 `KeyNotFoundException` 차단 규칙 — 원문 유지(이미 규칙 한 줄이라 축약할 서술이 없었음)
+
+원문 유지 확인(`grep -c`, 전부 1 이상):
+
+```
+소프트 스킵 처리해야 합니다                              1
+디스크 쓰기 오류 등이 발생하더라도 핵심 산출물은         1
+글로벌 해시 캐시 조작 및 레거시 마이그레이션            1
+하위 SP/UDF의 메타데이터·분석                            1
+사용자 DB 연결 프롬프트로 우회(Fallback)하지 말고        1
+0.1/0.4/0.7/0.9로 차등 적용                              1
+시스템 프롬프트 선두에 주입                              1
+Conversational filler                                    1
+```
+
+### 크기
+
+| 파일 | Phase 2a 이전(Task 2 이후, WAVE_BASE `c28183e`) | Phase 2a 이후 |
+|---|---|---|
+| `AGENTS.md` | 55,096 B | 52,492 B (−2,604 B) |
+| `docs/architecture.md` | 140,798 B | 141,877 B (+1,079 B) |
+
+범주 2가 계획서 추정 10.8KB보다 순감축이 작은 이유(2.6KB)는, 이 라운드의 판정 대부분이
+"삭제"가 아니라 "이미 짧은 규칙에 테스트 인용을 붙이는" 방향이었고, `.cs`가 바뀌지 않아
+검증할 대상이 순수 문서 조회뿐이라 원문 유지 비율이 예상보다 높았기 때문이다(Soft Fail
+5개 항목 중 3개 원문 100% 유지, 취소·SQL 타입 판정만 실질 축소).
+
+링크 검사(둘 다 무출력): `AGENTS.md`의 `./` 링크 32개, `docs/architecture.md`의
+`../src/` 링크 104개·`../tests/` 링크 23개 — 전부 존재 확인.
