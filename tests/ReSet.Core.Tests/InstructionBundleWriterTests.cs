@@ -116,6 +116,26 @@ S02 본문
         }
 
         [Fact]
+        public async Task WriteAsync_ShouldDeclareTheStubAsTheOnlyBindingContract()
+        {
+            // 계획서 본문 18개 단계가 ExecuteAsync·SettlementStepResult를 쓰는데
+            // 스텁은 동기 Execute다. 어느 쪽이 이기는지 지시서가 말하지 않으면
+            // 회차마다 다른 결론이 난다.
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var entryPoint = await File.ReadAllTextAsync(Path.Combine(_agentDir, "MigrationInstructions.md"));
+
+            Assert.Contains("설계 의도", entryPoint);
+            Assert.Contains("src/AbstractSettleTasklet.cs", entryPoint);
+            Assert.Contains("스텁이 이깁니다", entryPoint);
+            // 규칙 9 바로 뒤여야 한다 - 상속 강제와 권위 순서는 같이 읽혀야 한다.
+            Assert.True(
+                entryPoint.IndexOf("9. **[중요]**", StringComparison.Ordinal)
+                    < entryPoint.IndexOf("10. **[중요]**", StringComparison.Ordinal),
+                "규칙 10이 규칙 9보다 앞에 있습니다.");
+        }
+
+        [Fact]
         public async Task WriteAsync_ShouldWriteOneFilePerStep()
         {
             var result = await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
