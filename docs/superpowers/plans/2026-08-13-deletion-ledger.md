@@ -5,13 +5,18 @@
 
 **이 표를 읽기 전에.** `scripts/doc-audit.sh`는 클래스 이름이 아니라 마크다운 링크의
 경로로 근거를 찾는다(2026-08-14 개정, 아래 "개정 이력" 참고). 그래도 이 도구가
-증명하지 못하는 것이 세 가지 있다.
+증명하지 못하는 것이 네 가지 있다.
 
 - **근소한 차이는 판정이 아니라 확인 요청이다.** ARCH_MD 또는 SUMMARY가 대상 줄의
   바이트 수 대비 대략 10% 이내로 기준에 못 미쳐 `근거없음`이 나온 경우, 실제로는
   거의 같은 서술이 이미 있을 수 있다. 예: `CancellationPolicyTests`(447 vs 448바이트,
   1바이트 차이), `ValidatorAiServiceTests`(179 vs 181), `DataComparisonServiceTests`
-  (176 vs 183). 이런 항목은 대장 반영 전 사람이 직접 대조한다.
+  (176 vs 183, L141의 클래스), `JavaProcessRunner`(L125, 204 vs 206),
+  `DataComparisonService`(L126, 233 vs 237). 마지막 둘은 형제 이름
+  (`JavaProcessRunnerTests`, `DataComparisonServiceTests`)과의 충돌로 예전 점수가
+  일부 부풀려져 있었던 것도 사실이라 이번 경로 기반 수정이 옳았지만, 수정된
+  점수도 이 근접 구간 안에 들어와 있다. 이런 항목은 대장 반영 전 사람이 직접
+  대조한다.
 - **묶음 레이블은 개별 파일 경로로 찾을 수 없다.** `docs/architecture.md`가 여러
   클래스를 하나의 링크 레이블로 묶어 서술하면(예: `[Clients (Claude, OpenAi,
   Ollama) Tests]`, `[CLI Clients (ClaudeCli, CodexCli, AntigravityCli) Tests]`)
@@ -21,6 +26,15 @@
 - **이 스크립트는 `중복`을 증명하지 `근거없음`을 증명하지 않는다.** `근거없음`이
   뜻하는 것은 "이 스크립트가 경로/이름으로 찾지 못했다"이지 "근거가 세상 어디에도
   없다"가 아니다. 최종 판단(이동 vs 그대로 둠)은 각 Task의 사람 판정이 한다.
+- **링크 없는 서술은 경로 매칭이 보지 못한다.** `docs/architecture.md`가 어떤
+  클래스를 백틱으로 이름만 언급하며 본문 문단에서 길게 설명하면서도, 그 문단이
+  파일 경로로 링크하지는 않는 경우가 있다. 경로 대조는 정확히 그 경로가 등장하는
+  줄만 세므로, 이런 문단은 존재해도 카운트에 들어오지 않는다. 이 실패 방향은
+  "묶음 레이블" 항목과 다르다 — 묶음 레이블은 하나의 링크가 여러 클래스를 덮는
+  경우고, 이것은 그 클래스를 가리키는 링크 자체가 (그 문단에는) 아예 없는
+  경우다. 아래 "개정 이력"의 일곱 줄이 이 경우다 — `근거없음`이 나왔지만
+  architecture.md에 실질적 서술이 있으므로, Task 2는 이동 전에 그 문단을 먼저
+  읽는다.
 
 ## 개정 이력
 
@@ -36,12 +50,36 @@ SUMMARY가 항상 0으로 나왔다(`StepErrorCodeRegressionTests`가 실제로�
 `///` 요약을 갖고 있었는데도).
 
 지금 스크립트는 링크 텍스트가 아니라 **링크의 경로**로 찾는다. 경로는 파일을
-유일하게 식별하므로 이름이 겹쳐도 섞이지 않는다. 이 개정으로 여러 항목의 판정이
-바뀌었다 — 그 중 다수는 이전에 부풀려진 이름 기반 합산 덕에 숨어 있던 실제
-`근거없음`이 드러난 것이다(`SqlObjectTypeClassifier`, `CliWorkspace`, `CliEffort`,
-`MockDataDto`, `GapReport`, `ValidatorAiService`, `JavaProcessRunner`,
-`DataComparisonService`, `TypeClassificationPolicyTests`). Task 2는 이 개정판
-목록을 근거로 쓴다.
+유일하게 식별하므로 이름이 겹쳐도 섞이지 않는다. 이 개정으로 9개 항목의 판정이
+`중복:architecture.md`에서 `근거없음`으로 바뀌었다. 그 원인은 하나가 아니다.
+
+일부는 이름 충돌이 진짜였다는 뜻에서 실제로 드러난 근거없음이다 —
+`Program`/`ConsoleUserInteraction`이 그 증거다(같은 basename이 `ReSet.Cli`와
+`ReSet.Validator.Cli`에 둘 있어, 이름 기반 대조가 서로 다른 두 줄에 같은 분량을
+합산해 부여했다).
+
+하지만 아래 일곱 개는 사정이 다르다 — `SqlObjectTypeClassifier`(L37),
+`CliWorkspace`(L88), `CliEffort`(L89), `MockDataDto`(L110), `GapReport`(L111),
+`ValidatorAiService`(L121), `TypeClassificationPolicyTests`(L144)는
+architecture.md가 그 클래스를 백틱 이름으로 실질적으로 서술하고 있다 —
+`SqlObjectTypeClassifier`와 `TypeClassificationPolicyTests`는
+`architecture.md:388`, `CliWorkspace`와 `CliEffort`는 `architecture.md:589`,
+`MockDataDto`는 `architecture.md:637`, `GapReport`와 `ValidatorAiService`는
+`architecture.md:633`에 있다. 다만 그 문단이 파일을 링크하지 않아(또는
+카탈로그 링크와 별도로 더 긴 서술이 붙어 있어) 경로 매칭이 그 서술을 보지
+못한다. 이 일곱 줄의 `근거없음`은 위 네 번째 항목("링크 없는 서술은 경로 매칭이
+보지 못한다")이 말하는 스크립트의 사각지대이지, 드러난 실제 공백이 아니다.
+
+나머지 둘 — `JavaProcessRunner`(L125, 204 vs 206바이트), `DataComparisonService`
+(L126, 233 vs 237바이트) — 는 형제 이름(`JavaProcessRunnerTests`,
+`DataComparisonServiceTests`)과의 충돌로 이전 점수가 일부 부풀려져 있었던 것은
+맞지만, 지금 점수도 첫 번째 항목("근소한 차이는 판정이 아니라 확인 요청이다")이
+말하는 ~10% 근접 구간 안에 있다. 판정
+자체는 옳되(경로 매칭이 형제 이름과의 혼선을 없앤 결과다), 근소한 차이이므로
+사람이 대조하고 넘어간다.
+
+Task 2는 이 목록을 근거로 쓰되, 위 일곱 줄과 두 근접 줄은 표 아래 "미해결
+검토 대상" 각주와 이 절을 함께 읽는다.
 
 ## Phase 1 — §2 클래스 카탈로그 (AGENTS.md L16–L145)
 
@@ -171,3 +209,12 @@ LINE   BYTES   SYMBOL                             ARCH_MD   SUMMARY   VERDICT
 145    624     StepErrorCodeRegressionTests       0         302       근거없음(이동필요)
 감사 완료: 122행 처리
 ```
+
+**미해결 검토 대상 — 표는 스크립트 출력 그대로이므로 여기 별도로 표시한다.**
+다음 일곱 줄의 `근거없음`은 architecture.md가 링크 없이(또는 카탈로그 링크와는
+별도로) 실질적으로 서술하고 있어, "이동 필요"가 아니라 "먼저 그 문단을 확인"으로
+읽어야 한다 — L37 `SqlObjectTypeClassifier`, L88 `CliWorkspace`, L89 `CliEffort`,
+L110 `MockDataDto`, L111 `GapReport`, L121 `ValidatorAiService`, L144
+`TypeClassificationPolicyTests`(근거는 위 "개정 이력" 참고). 나머지 `근거없음` 중
+L125 `JavaProcessRunner`와 L126 `DataComparisonService`는 판정 자체는 맞지만
+~10% 근접 구간이라 위 "이 표를 읽기 전에"의 첫 번째 항목이 적용된다.
