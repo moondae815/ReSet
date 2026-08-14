@@ -163,6 +163,55 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("AbstractSettleTasklet.java", markdown);
         }
 
+        /// <summary>
+        /// 규칙 10 문장만 잘라낸다. 전체 markdown에 대고 Contains를 하면 규칙 9가
+        /// 이미 같은 파일명을 언급하므로, 규칙 10이 하드코딩되어 항상 한쪽 언어만
+        /// 가리키게 망가져도 전체 문자열 검사로는 잡히지 않는다.
+        /// </summary>
+        private static string ExtractGuideline10(string markdown)
+        {
+            var start = markdown.IndexOf("10. **[중요]**", StringComparison.Ordinal);
+            Assert.True(start >= 0, "규칙 10을 찾을 수 없습니다.");
+            var end = markdown.IndexOf("\n\n", start, StringComparison.Ordinal);
+            Assert.True(end >= 0, "규칙 10 이후 단락 경계를 찾을 수 없습니다.");
+            return markdown[start..end];
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheJavaStubFile_InGuideline10()
+        {
+            // 규칙 10의 스텁 경로가 언어와 무관하게 ".cs"로 굳으면 Java 에이전트가
+            // 존재하지 않는 C# 파일을 권위 있는 계약이라고 지시받는다.
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "Java" });
+            var guideline10 = ExtractGuideline10(markdown);
+
+            Assert.Contains("src/AbstractSettleTasklet.java", guideline10);
+            Assert.DoesNotContain("AbstractSettleTasklet.cs", guideline10);
+        }
+
+        [Fact]
+        public void Compose_ShouldNameTheCSharpStubFile_InGuideline10()
+        {
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "C#" });
+            var guideline10 = ExtractGuideline10(markdown);
+
+            Assert.Contains("src/AbstractSettleTasklet.cs", guideline10);
+            Assert.DoesNotContain("AbstractSettleTasklet.java", guideline10);
+        }
+
+        [Fact]
+        public void Compose_ShouldPlaceGuideline10ImmediatelyAfterGuideline9_ForJava()
+        {
+            // C# 경로의 순서는 InstructionBundleWriterTests에서 이미 고정한다. Java도
+            // 같은 순서를 지켜야 상속 강제(9)와 권위 순서(10)가 같이 읽힌다.
+            var markdown = InstructionEntryPointComposer.Compose(Split() with { TargetLanguage = "Java" });
+
+            Assert.True(
+                markdown.IndexOf("9. **[중요]**", StringComparison.Ordinal)
+                    < markdown.IndexOf("10. **[중요]**", StringComparison.Ordinal),
+                "규칙 10이 규칙 9보다 앞에 있습니다.");
+        }
+
         [Fact]
         public void PlanVerificationSection_ShouldSpeakEvenWhenPassed()
         {
