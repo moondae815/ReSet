@@ -356,5 +356,23 @@ namespace ReSet.Core.Tests
             Assert.Contains("BatchMigrationPlan.md", markdown);
             Assert.Contains("S01", markdown);
         }
+
+        [Fact]
+        public void Compose_ShouldRequireABehaviourTestInStepRounds()
+        {
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains("동작 테스트", markdown);
+            Assert.Contains("LogicTests_S01", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNotRequireABehaviourTestInTheBootstrapRound()
+        {
+            // 회차 0에는 단계가 없다. 요구하면 부트스트랩이 부당하게 실패한다.
+            var markdown = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+
+            Assert.DoesNotContain("동작 테스트", markdown);
+        }
     }
 }

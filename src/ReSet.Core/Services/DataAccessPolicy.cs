@@ -789,5 +789,68 @@ public abstract class AbstractSettleTasklet implements ISettleStep {
                 ? JavaSettleContext
                 : throw new NotSupportedException(
                     "C#의 SettleContext는 AbstractTaskletStub 안에 포함되어 있습니다.");
+
+        private const string CSharpStepLogicTests = @"using Xunit;
+using Moq;
+
+namespace ReSet.Batch.Tests
+{
+    /// <summary>
+    /// 이 회차가 구현한 단계의 동작을 검증하는 테스트를 여기에 쓰십시오.
+    ///
+    /// 파일명은 반드시 <c>LogicTests_&lt;단계코드&gt;.cs</c> 형태로 만드십시오
+    /// (예: LogicTests_S08.cs). 단계 코드로 <b>시작하는</b> 이름(S08LogicTests.cs)은
+    /// 쓰지 마십시오 - 검증기가 파일명 접두사로 그 회차의 산출물을 찾기 때문에,
+    /// 테스트 파일이 Tasklet 자리를 차지해 구현을 빼먹어도 통과한 것처럼 보입니다.
+    ///
+    /// 최소 한 개: PreCheck 차단 경로 또는 RunBusinessSteps의 대표 분기.
+    /// </summary>
+    public class StepLogicTests
+    {
+        [Fact]
+        public void Step_ShouldHaveAtLeastOneBehaviourTest()
+        {
+            Assert.Fail(
+                ""이 회차의 단계 동작 테스트가 아직 없습니다. 이 Fact를 실제 테스트로 교체하십시오."");
+        }
+    }
+}
+";
+
+        private const string JavaStepLogicTests = @"package com.reset.batch.tests;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.fail;
+
+/**
+ * 이 회차가 구현한 단계의 동작을 검증하는 테스트를 여기에 쓰십시오.
+ *
+ * 파일명은 반드시 LogicTests_<단계코드>.java 형태로 만드십시오(예: LogicTests_S08.java).
+ * 단계 코드로 시작하는 이름(S08LogicTests.java)은 쓰지 마십시오 - 검증기가 파일명
+ * 접두사로 그 회차의 산출물을 찾기 때문에, 테스트 파일이 Tasklet 자리를 차지해
+ * 구현을 빼먹어도 통과한 것처럼 보입니다.
+ *
+ * 최소 한 개: preCheck 차단 경로 또는 runBusinessSteps의 대표 분기.
+ */
+public class StepLogicTests {
+    @Test
+    public void step_ShouldHaveAtLeastOneBehaviourTest() {
+        fail(""이 회차의 단계 동작 테스트가 아직 없습니다. 이 테스트를 실제 테스트로 교체하십시오."");
+    }
+}
+";
+
+        /// <summary>
+        /// 회차가 채워야 하는 단계 동작 테스트의 스캐폴드.
+        ///
+        /// 이전 스텁은 본문이 주석 세 줄이라 통과해도 아무것도 보장하지 않았는데,
+        /// 지시서 규칙 6은 "제공된 자가 검증용 단위 테스트를 통과시키라"고 말한다 -
+        /// 빈 테스트를 방어로 착각하는 구조였다. 미구현 상태가 실패로 드러나게 한다.
+        /// </summary>
+        public static string StepLogicTestStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaStepLogicTests
+                : CSharpStepLogicTests;
     }
 }

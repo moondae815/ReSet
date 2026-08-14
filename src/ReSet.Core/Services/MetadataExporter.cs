@@ -550,25 +550,6 @@ public interface ICheckpointRepository {
                 var agentTestsFolder = Path.Combine(agentFolder, "tests");
                 if (targetLanguage.Equals("C#", StringComparison.OrdinalIgnoreCase))
                 {
-                    var xUnitStub = @"using Xunit;
-using Moq;
-using System.Threading.Tasks;
-
-namespace ReSet.Batch.Tests
-{
-    public class StepLogicTests
-    {
-        [Fact]
-        public async Task Step_ShouldExecuteDml_WhenPreCheckPasses()
-        {
-            // Arrange
-
-            // Act
-
-            // Assert
-        }
-    }
-}";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     try
                     {
@@ -576,7 +557,10 @@ namespace ReSet.Batch.Tests
                         {
                             Directory.CreateDirectory(agentTestsFolder);
                         }
-                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.cs"), xUnitStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "StepLogicTests.cs"),
+                            DataAccessPolicy.StepLogicTestStub(targetLanguage),
+                            Encoding.UTF8);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
                     }
                     catch (Exception ex)
@@ -603,22 +587,6 @@ namespace ReSet.Batch.Tests
                 }
                 else if (targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase))
                 {
-                    var jUnitStub = @"package com.reset.batch.tests;
-
-import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
-import static org.mockito.Mockito.*;
-
-public class StepLogicTests {
-    @Test
-    public void step_ShouldExecuteDml_WhenPreCheckPasses() {
-        // Arrange
-
-        // Act
-
-        // Assert
-    }
-}";
                     var archUnitStub = DataAccessPolicy.ArchitectureTestStub(targetLanguage);
                     try
                     {
@@ -626,7 +594,10 @@ public class StepLogicTests {
                         {
                             Directory.CreateDirectory(agentTestsFolder);
                         }
-                        await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "StepLogicTests.java"), jUnitStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "StepLogicTests.java"),
+                            DataAccessPolicy.StepLogicTestStub(targetLanguage),
+                            Utf8NoBom);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Utf8NoBom);
                     }
                     catch (Exception ex)

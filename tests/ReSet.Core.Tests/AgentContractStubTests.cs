@@ -225,5 +225,38 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("[[ORM_BOUNDARY", stub);
             Assert.Contains("[데이터 액세스 경계]", stub);
         }
+
+        /// <summary>
+        /// ArchitectureTestStub_ShouldNotBeEntirelyCommentedOut의 짝이다.
+        /// 그 결함(빈 테스트를 방어로 착각)은 한 번 고쳐졌는데 StepLogicTests에만
+        /// 적용되지 않아 본문이 주석 세 줄인 채로 남아 있었다 - 그런데 지시서 규칙 6은
+        /// "제공된 자가 검증용 단위 테스트를 통과시키라"고 말한다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void StepLogicTestStub_ShouldFailUntilTheRoundWritesARealTest(string targetLanguage)
+        {
+            var stub = DataAccessPolicy.StepLogicTestStub(targetLanguage);
+
+            var failMarker = targetLanguage == "Java" ? "fail(" : "Assert.Fail(";
+            Assert.Contains(failMarker, stub);
+            Assert.DoesNotContain("// Arrange\n\n            // Act", stub);
+        }
+
+        /// <summary>
+        /// FileMappingService가 name.StartsWith(단계코드)로 회차 산출물을 찾는다.
+        /// 테스트 파일을 S08LogicTests.cs로 만들면 Tasklet 없이도 이름 게이트가
+        /// 통과해, 구현을 빼먹은 회차가 초록으로 보인다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void StepLogicTestStub_ShouldDemandASuffixedFileName(string targetLanguage)
+        {
+            var stub = DataAccessPolicy.StepLogicTestStub(targetLanguage);
+
+            Assert.Contains("LogicTests_", stub);
+        }
     }
 }
