@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Syntax;
@@ -332,8 +333,14 @@ namespace ReSet.Core.Services
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
         }
 
-        // 백틱 인용과 SQL 펜스 안의 2부·3부 식별자만 본다. 산문까지 훑으면 서술이
-        // 식별자로 오인되고, 그 오탐은 단계 재생성을 유발해 비용이 실재한다.
+        // 백틱 인용과 SQL·의사코드 펜스 안의 2부·3부 식별자만 본다. 산문까지 훑으면
+        // 서술이 식별자로 오인되고, 그 오탐은 단계 재생성을 유발해 비용이 실재한다.
+        //
+        // 이 정규식만으로는 모양(shape)만 걸러낼 뿐 진짜 2부·3부 식별자인지는 못
+        // 가른다 - `a.YMD`(별칭 컬럼), `context.RunId`(멤버 접근)도 문법적으로는
+        // 똑같이 X.Y다. 그래서 이 정규식의 매치는 후보일 뿐이고, 실제 채택 여부는
+        // ExtractQuotedIdentifiers가 HasKnownQualifier로 한 번 더 거른다 - 객체명
+        // 바로 앞 조각(스키마)이 카탈로그가 아는 한정자일 때만 후보로 인정한다.
         private static readonly Regex QualifiedTableRegex = new(
             @"\b([A-Za-z_][A-Za-z_0-9]*)\.([A-Za-z_][A-Za-z_0-9]*)(?:\.([A-Za-z_][A-Za-z_0-9]*))?\b",
             RegexOptions.Compiled);
@@ -383,8 +390,9 @@ namespace ReSet.Core.Services
             }
 
             var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var knownQualifiers = BuildKnownQualifiers(knownTableNames, step);
 
-            foreach (var candidate in ExtractQuotedIdentifiers(stepMarkdown))
+            foreach (var candidate in ExtractQuotedIdentifiers(stepMarkdown, knownQualifiers))
             {
                 if (BatchInfraObjectCollector.IsInfraObject(candidate))
                 {
@@ -405,9 +413,56 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 백틱 인용과 코드 펜스 안에서만 수식 식별자를 뽑는다.
+        /// 후보 식별자의 한정자(스키마·데이터베이스)로 인정할 토큰 집합을 만든다.
+        ///
+        /// 카탈로그 자체에서 뽑는다 - 객체명이 `T`로 시작한다는 명명 규칙에 기대면
+        /// 카탈로그가 보증하지 않는 규칙에 검사가 묶인다. `dbo.TClient`에서는 `dbo`가,
+        /// `PaymentDB.dbo.TTxMst`에서는 `PaymentDB`와 `dbo`가 한정자다. batch·batch_shadow는
+        /// BatchInfraObjectCollector에서 그대로 가져온다 - 여기서 다시 적으면 그 접두사
+        /// 정의를 두 곳이 각자 아는 상태로 되돌아간다.
         /// </summary>
-        private static IEnumerable<string> ExtractQuotedIdentifiers(string markdown)
+        private static HashSet<string> BuildKnownQualifiers(
+            IReadOnlyCollection<string> knownTableNames, BatchStepPlan step)
+        {
+            var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var name in knownTableNames.Concat(step.TargetTables).Concat(step.SchemaTables))
+            {
+                var parts = (name ?? string.Empty).Trim().Trim('[', ']').Split('.');
+                for (var i = 0; i < parts.Length - 1; i++)
+                {
+                    var part = parts[i].Trim('[', ']').Trim();
+                    if (part.Length > 0)
+                    {
+                        qualifiers.Add(part);
+                    }
+                }
+            }
+
+            foreach (var schema in BatchInfraObjectCollector.Schemas)
+            {
+                qualifiers.Add(schema);
+            }
+
+            return qualifiers;
+        }
+
+        /// <summary>
+        /// 후보 식별자가 진짜 2부·3부 식별자 모양인지를, 객체명 바로 앞 조각(스키마)이
+        /// 알려진 한정자인가로 가른다. 별칭 컬럼(`a.YMD`)이나 멤버 접근
+        /// (`context.RunId`, `conn.Execute`)은 그 조각이 카탈로그에 없어 여기서 걸러진다.
+        /// </summary>
+        private static bool HasKnownQualifier(Match match, IReadOnlyCollection<string> knownQualifiers)
+        {
+            var immediateQualifier = match.Groups[3].Success ? match.Groups[2].Value : match.Groups[1].Value;
+            return knownQualifiers.Contains(immediateQualifier);
+        }
+
+        /// <summary>
+        /// 백틱 인용과 코드 펜스 안에서, 알려진 한정자를 가진 수식 식별자만 뽑는다.
+        /// </summary>
+        private static IEnumerable<string> ExtractQuotedIdentifiers(
+            string markdown, IReadOnlyCollection<string> knownQualifiers)
         {
             var lines = MarkdownSectionLocator.SplitLines(markdown);
             var fenceFlags = ComputeFenceLineFlags(lines);
@@ -427,7 +482,10 @@ namespace ReSet.Core.Services
 
                     foreach (Match m in QualifiedTableRegex.Matches(line))
                     {
-                        found.Add(m.Value);
+                        if (HasKnownQualifier(m, knownQualifiers))
+                        {
+                            found.Add(m.Value);
+                        }
                     }
                     continue;
                 }
@@ -437,7 +495,10 @@ namespace ReSet.Core.Services
                     var inner = backtick.Groups[1].Value.Trim();
                     foreach (Match m in QualifiedTableRegex.Matches(inner))
                     {
-                        found.Add(m.Value);
+                        if (HasKnownQualifier(m, knownQualifiers))
+                        {
+                            found.Add(m.Value);
+                        }
                     }
                 }
             }

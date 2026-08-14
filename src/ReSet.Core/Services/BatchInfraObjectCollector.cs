@@ -33,17 +33,23 @@ namespace ReSet.Core.Services
         /// <summary>Shadow 이름 규칙의 실행 식별자 자리표시자.</summary>
         public const string RunIdPlaceholder = "_<RunId>_";
 
-        // batch_shadow를 먼저 시도한다. batch가 먼저면 "batch_shadow.X"에서 batch를
-        // 먹고 '.'을 못 찾아 백트래킹한다 - 동작은 같지만 의도가 드러나지 않는다.
+        /// <summary>
+        /// 접두사 정의의 단일 소스. ObjectRegex는 이 목록에서 패턴을 만들어 낸다 -
+        /// 정규식 리터럴에 접두사를 따로 적으면 여기 목록과 갈라질 수 있고, 그러면
+        /// 이 클래스가 주장하는 "단독 소유"가 이름만 남는다. 미지 테이블 검사
+        /// (MechanicalValidator)도 이 목록을 그대로 재사용해 같은 함정을 피한다.
+        /// </summary>
+        public static readonly IReadOnlyList<string> Schemas = new[] { "batch", "batch_shadow" };
+
+        // 패턴은 Schemas에서 파생한다. 길이 내림차순으로 정렬해 "batch_shadow.X"가
+        // "batch"에서 먼저 걸려 '.'을 못 찾고 백트래킹하는 일을 막는다.
         private static readonly Regex ObjectRegex = new(
-            @"\b(batch_shadow|batch)\.([A-Za-z_][A-Za-z_0-9]*)",
+            $@"\b({string.Join("|", Schemas.OrderByDescending(s => s.Length).Select(Regex.Escape))})\.([A-Za-z_][A-Za-z_0-9]*)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex RunIdLiteralRegex = new(
             @"_(?:RunId|Run)_",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-        private static readonly string[] Schemas = { "batch", "batch_shadow" };
 
         public static BatchInfraObjects Collect(string? planMarkdown)
         {
