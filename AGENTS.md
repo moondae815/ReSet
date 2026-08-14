@@ -44,7 +44,7 @@
 1.  **절대 비공개 API Key를 소스 코드나 [appsettings.json](./src/ReSet.Cli/appsettings.json)에 포함하여 커밋하지 마십시오.**
     *   로컬 개발용 API Key는 Git 추적 제외 대상인 `src/ReSet.Cli/appsettings.local.json`을 새로 생성하여 관리해야 합니다.
     *   이 파일은 API Key 전용이 아니라 `appsettings.json`의 **모든 키를 덮어쓸 수 있습니다**. 저장소 기본값은 보수적으로 두고(예: API provider, 재귀 분석 off) 개인 환경 설정은 이쪽에 두십시오.
-    *   검증기(`ReSet.Validator.Cli`)는 이 파일에서 **`ApiKey`만** 가져갑니다. 파일을 통째로 병합하는 코드를 되살리지 마십시오 — 나중에 추가된 구성 소스가 이기므로 분석기 쪽 provider가 검증기를 덮어써, CLI provider를 쓰는 순간 검증기의 무인 배치가 `CliProviderBatchGuard`에 걸려 종료 코드 1로 죽습니다.
+    *   검증기(`ReSet.Validator.Cli`)는 이 파일에서 **`ApiKey`만** 가져갑니다. 파일을 통째로 병합하는 코드를 되살리지 마십시오 — 나중에 추가된 구성 소스가 이기므로 분석기 쪽 provider가 검증기를 덮어써, CLI provider를 쓰는 순간 검증기의 무인 배치가 `CliProviderBatchGuard`에 걸려 종료 코드 1로 죽습니다. (`ValidatorConfigurationTests.LoadConfiguration_DoesNotMergeTheCliProjectsLocalSettings`/`ApiKeyFallback_StillReadsOnlyTheApiKeyFromTheCliProject`가 소스 검사)
 
 ### ⚡ 범주 2. 예외 처리 및 안정성 (Stability & Soft Fail)
 2.  **전방위적 소프트 페일(Soft Fail) 및 예외 격리 정책을 준수하십시오.**
@@ -75,7 +75,7 @@
     *   **유효 디렉토리 및 통합 Job 대화형 선택 유도**: 필수 폴더 경로가 없을 경우 종료하기보다 TUI 상에서 사용자 재입력을 유도하되, `TextPrompt.ShowChoices(false)`를 결합해 슬래시('/') 기호가 구분선으로 오작동하여 화면이 깨지는 현상을 차단하십시오. 또한 검증기(Validator) 가동 시에는 `output/Jobs/` 하위의 Job 목록을 스캔하여 사용자에게 대화형으로 선택(Prompt)할 수 있는 전용 메뉴를 제공함으로써 올바른 경로 진입을 보장하십시오.
     *   **연결 정보 즉석 수정**: 로그인 성공 후에도 [ConsoleUserInteraction.cs](./src/ReSet.Cli/ConsoleUserInteraction.cs) 상에서 appsettings.json을 수정하지 않고 즉석에서 서버 주소 및 DB명을 갱신하여 대상 DB에 교체 접속할 수 있도록 입력 기회를 제공하십시오.
     *   **배치 단계 순서 보장**: 다중 선택 UI의 순서 유실 문제를 차단하기 위해 순차 선택 루프 방식으로 배치 계획 스텝 순서를 확보하십시오.
-    *   **TUI 상태 정보 강화 및 간소화**: Actor를 단일 모드로 실행할 때, 메인 태스크 이름에는 모델명과 추론 강도(Effort)를 함께 노출하되, 하위 진행 단계 표시 시 화면 간소화를 위해 불필요한 모델명을 반복 노출하지 않고 괄호 없는 순번(`n/3.`) 형식으로 간결하게 출력하도록 규칙을 준수하십시오.
+    *   **TUI 상태 정보 강화 및 간소화**: Actor를 단일 모드로 실행할 때, 메인 태스크 이름에는 모델명과 추론 강도(Effort)를 함께 노출하고, 하위 진행 단계 표시에서는 화면 간소화를 위해 모델명을 반복 노출하지 마십시오. 정확한 넘버링 형식은 `architecture.md §5.6` 참고.
     *   **TUI 시각적 안정성 (여백 확보)**: L1 기계 검증 및 L2 AI 리뷰에서 결함이 발견되어 화면에 출력할 때, 메시지 끝에 빈 줄바꿈(`AnsiConsole.WriteLine()`)을 강제하여 이어지는 다음 재시도 상태 메시지와 시각적으로 깔끔하게 분리되도록 가독성을 유지하십시오.
     *   **진행 태스크 정보 보존**: TUI 진행도 표시기(Progress Scope) 완료/실패 업데이트 시 원래의 설명(Description) 필드가 누락 또는 다른 값으로 덮어쓰여 화면 렌더링 레이아웃이 깨지는 현상을 방지하십시오.
     *   **재귀 분석 진행 표시**: 참조 SP/UDF 분석도 일반 TUI 진행 스코프에 상태를 위임하여 생성·검증 단계를 스피너와 경과시간으로 표시하십시오. 별도의 일반 콘솔 상태 출력과 진행 UI를 혼용해 화면을 깨뜨리지 마십시오.

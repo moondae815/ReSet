@@ -836,9 +836,20 @@ architecture.md"로 분류했었다(331B, 예산 안이라 손대지 않음).
   자율 워크플로 지시라 우리 테스트 스위트가 검사할 수 있는 대상이 아니다.
 - L142(신 L144)의 "AI 분석 완료 시 보완 스크립트 생성 기능은 기본 제거되어 있다"는
   이유 서술과 크로스 DB 파일명 접두(`ResolveCleansingFileBaseName`) — 전담 테스트 없음.
-- L133(신 L134) "프로세스 양방향 제어"(`ExternalCliCodingEngine`의 콘솔 스트림 상속,
-  `process.Kill(true)`) — 이번 라운드에서 손대지 않았지만(600B 미만) `doc-audit.sh`가
-  "근거없음(이동필요)"로 표시했었다. 다음 라운드에서 참고할 수 있도록 이름을 남긴다.
+- ~~L133(신 L134) "프로세스 양방향 제어"(`ExternalCliCodingEngine`의 콘솔 스트림 상속,
+  `process.Kill(true)`) — `doc-audit.sh`가 "근거없음(이동필요)"로 표시했었다.~~ **정정
+  (Task 6, 2026-08-14): 이 판정은 `doc-audit.sh`의 알려진 사각지대다.** 스크립트는
+  대괄호 `[Foo.cs]` 링크에서만 대상 클래스를 추출하는데, 이 불릿은 클래스명을 백틱
+  (`` `ExternalCliCodingEngine.cs` ``)으로만 적어 스캐너가 대상을 못 찾고 근거 없음으로
+  잘못 표시했다. 실제로는 `docs/architecture.md §5.3`(746–747행, "모드별 콘솔 스트림
+  처리"와 "취소 및 프로세스 강제 정리")이 이 불릿과 거의 같은 문장으로 이미 다루고
+  있음을 직접 열어 확인했다: 대화형 모드의 부모 콘솔 스트림 상속
+  (`RedirectStandardInput/Output = false`), 무인 배치의 stdin 닫기, 그리고
+  `CancellationToken` 수신 시 `process.Kill(true)`로 프로세스 트리를 강제 정리하는
+  내용까지 일치한다. L133은 범주 6(외부 코딩 에이전트)에 속해 이번 Task 6(범주
+  1·3·5·8)의 쓰기 범위 밖이므로 AGENTS.md의 해당 불릿 자체는 고치지 않았고, 이 대장
+  항목만 정정한다. 다음 라운드가 이 줄을 다시 감사할 때는 "근거없음"이 아니라
+  "중복:architecture.md §5.3"으로 재분류해야 한다.
 
 ### 크기
 
@@ -857,3 +868,102 @@ architecture.md"로 분류했었다(331B, 예산 안이라 손대지 않음).
 확인했다(범주 1–5·8 무변경). `docs/architecture.md`는 `git diff` 무출력(완전 무변경).
 `.cs` 파일 변경 없음(`git status --short`가 `AGENTS.md` 한 줄만 보고) — `dotnet
 build`/`dotnet test` 미실행.
+
+## Phase 2d 결과 — 범주 1·3·5·8 (보안, UI/UX, 런타임 격리, 워크트리) (Task 6, 2026-08-14)
+
+**구간.** WAVE_BASE `aa84c44` 기준 AGENTS.md L43–47(범주 1), L72–84(범주 3), L120–123(범주
+5), L160–164(범주 8). 계획서 자신이 이 네 범주를 "이미 짧고 전부 판단 규칙이라 거의
+손대지 않는다"고 명시했고, 실측도 그것을 확인했다 — 12개 불릿 중 11개가 어떤 테스트도
+잡을 수 없는 "사람/에이전트의 판단만이 잡는" 항목이었다.
+
+**범주 1(보안, 3줄) — 전량 유지, 인용 1건 추가.** 첫 두 불릿(비공개 키 커밋 금지,
+`appsettings.local.json` 신설)은 Git 추적 정책이라 어떤 단위 테스트도 검사할 수 없다.
+세 번째 불릿("검증기는 ApiKey만 가져간다")은 실제로 소스 수준 테스트가 있음을 발견해
+인용을 추가했다(삭제가 아니라 인용 추가이므로 원문은 한 글자도 지우지 않았다):
+`ValidatorConfigurationTests.LoadConfiguration_DoesNotMergeTheCliProjectsLocalSettings`
+(`src/ReSet.Validator.Cli/Program.cs`에 `builder.AddJsonFile(Path.GetFullPath(path)`
+패턴이 없음을 단언 — 파일 전체 병합 금지)과
+`ApiKeyFallback_StillReadsOnlyTheApiKeyFromTheCliProject`(`LoadApiKeyWithFallback`이
+존재하고 `tempConfig[$"AiSettings:Providers:{provider}:ApiKey"]`로 ApiKey 필드 하나만
+읽음을 단언)를 열어 직접 확인했다. AGENTS.md 불릿이 말하는 "파일을 통째로 병합하는
+코드를 되살리지 마십시오"와 "ApiKey만 가져갑니다"를 정확히 한 쌍으로 검사하는 테스트라
+정확한 인용이다.
+
+**범주 5(런타임 격리, 2줄) — 전량 유지, 테스트 없음 확인.** "트랜잭션/타임아웃 격리"
+(Rollback·ValueTask 동적 대기·Java 30초 타임아웃)와 "모의 데이터 수명주기"(Seed/자동
+소거)를 실제로 검사하는 테스트가 있는지 열어서 확인했다. `RunnerTests.cs`에는
+`CSharpReflectionRunner_ExecuteAsync_HandleConnectionError_SoftFail` 등 소프트 페일
+테스트만 있고 `Rollback()` 호출이나 타임아웃 설정을 단언하는 테스트는 없다.
+`SandboxSeedingServiceTests.cs`에는 `SanitizeTableName_ShouldEscapeTableNamesCorrectly`와
+`ConvertJsonValue_ShouldParseJsonElementsCorrectly` 두 개뿐이며 둘 다 문자열/JSON 변환
+헬퍼 단위 테스트이고 Seed나 Truncate 생명주기를 검사하지 않는다. 계획서의 "체크리스트가
+묻는 항목" 판정이 맞다 — 테스트가 아니라 사람이 체크리스트로 확인해야 한다. 인용을
+붙이지 않고 원문 그대로 두었다.
+
+**범주 8(워크트리, 3줄) — 전량 유지.** git worktree 사용 절차는 프로세스 규칙이라
+정의상 코드 테스트의 대상이 아니다. 확인만 하고 손대지 않았다.
+
+**범주 3(UI/UX, 13줄) — 12줄 원문 유지, 1줄 축소(구현 세부만 이동).**
+`doc-audit.sh 72 85` 실행 결과 13줄 중 12줄이 `산문(수동판정)`(백틱 클래스명만 있어
+자동 신호 없음), 1줄(L76 "연결 정보 즉석 수정")이 `중복:architecture.md`로 나왔다.
+그 매치는 §2.2 클래스 카탈로그의 `ConsoleUserInteraction` 행 2개(L47, L109)를 센 것이라
+이 불릿이 말하는 "즉석 서버 주소/DB명 갱신" 기능과는 무관한 우연의 일치였다 — 직접 열어
+확인했다. 대신 `architecture.md §5.1`("TUI 로그인 세션 및 연결 정보 실시간 변경")이 같은
+기능을 더 상세히(`.session.json` 복구까지) 이미 서술하고 있어 진짜 중복 후보였지만,
+이번 태스크의 위임 지시서가 명시적으로 승인한 이동 대상은 "TUI 진행도 넘버링 형식" 한
+건뿐이었으므로 **이 발견은 적용하지 않고 보고만 남긴다**(다음 라운드 후보,
+"테스트 없는 규칙" 절 아래 별도 기록).
+
+이동한 1건 — **"TUI 상태 정보 강화 및 간소화"(L78)**: 규칙 문장(메인 태스크에 모델명+
+Effort 노출, 하위 진행 단계에서는 모델명 반복 금지)은 판단 규칙이라 남기고, 구체적
+서식 스펙(`괄호 없는 순번(n/3.) 형식`)만 `architecture.md §5.6`(신설)로 옮겼다. 코드로
+직접 확인: `VerificationPipelineOrchestrator.cs`가 `progressScope.AddTask("phase1",
+"1/3. 브레인스토밍 중...")`/`"phase2", "2/3. 목차 설계 중..."`/`"phase3", "3/3. 골격
+생성 중..."`/`"phase3single", "3/3. 최종 생성 중 (단일 호출)..."`로 정확히 이 서식을
+쓰고, `NotifyStatus`가 별도로 `"{jobName} - AI 통합 배치 전환 계획 수립 중
+({Provider} - {ModelName}{Effort}) [{attemptText}]..."` 형태로 모델명·Effort를
+메인 상태 줄에만 낸다. 3단계 흐름 밖의 단발 작업(목차 재설계, `redraft` 태스크)에는
+번호를 붙이지 않는다는 사실도 소스 주석("3단계 중 하나가 아니므로 n/3. 순번을 붙이지
+않는다", 2664행)에서 확인해 architecture.md 문장에 반영했다. `architecture.md`에
+`n/3`·`괄호 없는`·`순번` 문자열이 이 편집 전에는 전혀 없었음을 `grep`으로 확인했다 —
+새로 옮긴 내용이지 기존 서술의 재진술이 아니다.
+
+`Markup.Escape()` 관련 인용 후보도 검토했다: `ConsoleUserInteractionTests.
+MapStepSelection_WithBracketInStepName_StillMatchesTheEscapedLabel`이
+`StepSelectionLabel`이 대괄호를 Spectre 규약(`[[...]]`)대로 이스케이프함을 단언하지만,
+이는 단계 선택 라벨이라는 한 호출부만 검사한다. AGENTS.md 불릿은 "DB 메타데이터, AI
+원문, 파일 경로 등"에 대한 **전면** 규칙을 요구하므로 이 테스트를 인용하면 실제보다
+넓은 보장이 있는 것처럼 읽힌다 — Task 5의 선례(부분 일치 인용 거부)를 따라 **인용하지
+않고** 원문을 그대로 두었다.
+
+### 크기
+
+| 파일 | Phase 2d 이전(WAVE_BASE `aa84c44`) | Phase 2d 이후 |
+|---|---|---|
+| `AGENTS.md` | 46,052 B | 46,177 B (+125 B — 인용 1건 추가가 넘버링 규칙 축소보다 큼) |
+| `docs/architecture.md` | 141,877 B | 142,721 B (+844 B — §5.6 신설) |
+
+계획서 Step 3의 기대치(25~35KB)는 이 태스크로 달성되지 않는다 — 이 범주 넷은 계획서가
+스스로 "거의 손대지 않는다"고 선언한 구간이라 애초에 실질적 축소 여력이 없었다.
+46KB대는 Phase 1(카탈로그 삭제)과 Task 3~5가 이미 확정한 크기이고, Task 6은 그 크기를
+그대로 유지하는 것이 올바른 판정이다.
+
+**라인 예산.** `LC_ALL=C awk 'length($0)>600' AGENTS.md` 전체 파일 무출력(600바이트
+초과 줄 없음). **링크 검사(둘 다 무출력).** `<!-- synced-through: c8d6074 -->` 양쪽
+파일 모두 변경 없음(문자열 자체는 그대로, 주변에 텍스트만 추가). `git diff aa84c44 --
+AGENTS.md`의 hunk가 정확히 L44(범주 1)와 L75(범주 3) 2곳뿐임을 확인했다(범주 2·4·6·7과
+범주 5·8은 무변경). `docs/architecture.md`는 758행 뒤 §5.6 신설 1개 hunk뿐. `.cs` 파일
+변경 없음(`git status --short`가 `AGENTS.md`/`docs/architecture.md`/이 대장 파일만
+보고) — `dotnet build`/`dotnet test` 미실행.
+
+### 테스트 없는 규칙(이름을 남긴다, 계속)
+
+- 범주 5 "트랜잭션/타임아웃 격리"의 `Rollback()`/`ValueTask` 동적 대기/Java 30초
+  타임아웃 — `RunnerTests.cs`에 소프트 페일 테스트만 있고 이 셋을 검사하는 테스트 없음.
+- 범주 5 "모의 데이터 수명주기"의 Seed/자동 소거(Truncate) — `SandboxSeedingServiceTests.cs`
+  는 문자열/JSON 변환 헬퍼만 검사하고 생명주기를 검사하지 않음.
+- 범주 3 "유효 디렉토리 및 통합 Job 대화형 선택 유도"의 `ShowChoices(false)` — 전담
+  테스트 없음(UI 렌더링 자체를 검사하는 테스트 프로젝트가 없음).
+- 범주 3 "연결 정보 즉석 수정"(L76) — **다음 라운드 후보**: `architecture.md §5.1`이
+  이미 더 상세히 다루는 진짜 중복이지만, 이번 위임 범위가 명시적으로 승인한 이동
+  대상이 아니라 이번 라운드에서는 적용하지 않았다.

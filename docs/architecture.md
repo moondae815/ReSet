@@ -758,4 +758,7 @@ Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 �
 * **콘솔 UI 파괴 방지**: Spectre.Console 진행 바 및 TUI 화면이 로그 텍스트 출력으로 인해 지저분하게 깨지는 현상을 원천 방어하기 위해 Serilog의 콘솔 출력을 비활성화하고 **오직 파일 전용(File Sink)으로만 로그를 기록**하도록 제한합니다.
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
 
+### 5.6. 검증 파이프라인 진행 표시 규칙 (Progress Display Conventions)
+* **메인 상태와 하위 진행 행의 역할 분리**: `NotifyStatus`가 잡 이름·공급자·모델명·Effort·시도 회차를 담은 한 줄 상태 메시지를 콘솔에 남기고, `IMultiProgressScope.AddTask`가 관리하는 하위 진행 행은 그 정보를 반복하지 않습니다. 전체 3단계 흐름(브레인스토밍 → 목차 설계 → 골격/최종 생성)에 속한 행에만 괄호 없는 `n/3. <설명>` 형식으로 순번을 붙이고(예: `1/3. 브레인스토밍 중...`, `3/3. 최종 생성 중 (단일 호출)...`), 목차 재설계처럼 그 3단계 흐름 밖의 단발 작업에는 순번을 붙이지 않습니다([VerificationPipelineOrchestrator.cs](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)).
+
 <!-- synced-through: c8d6074 -->
