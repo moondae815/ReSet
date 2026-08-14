@@ -113,7 +113,7 @@ git diff "$BASE"..HEAD -- src/ | grep -E "^[+-]" | grep -v "^[+-][+-]" \
 - `src/`에 존재하는 새 클래스가 `architecture.md` 2.2 테이블에 없는가?
 - 변경된 데이터 흐름·로깅 규칙·아키텍처 제약이 `architecture.md` 또는 `AGENTS.md`에 반영되지 않았는가?
 - `AGENTS.md`의 참조 링크가 존재하지 않는 파일을 가리키는가? (4단계 검증 커맨드로 확인)
-- `AGENTS.md` 체크리스트의 단위 테스트 개수가 실제와 다른가? (4단계 검증 커맨드로 확인)
+- `dotnet test`가 **실패 0, 건너뜀 0**인가? (기대 개수를 적는 방식은 폐기됐다. 4단계 검증 커맨드로 확인)
 - Mermaid 다이어그램이 신규 모듈 연동이나 흐름 변경을 반영하지 못하고 과거 구조에 머물러 있는가?
 - **1-5 역검색에 걸린 줄을 전부 확인했는가?** 이 목록이 "기존 서술이 거짓이 된 곳"의 1차 후보다.
 
@@ -234,7 +234,8 @@ grep -ho '](\./[^)]*)' AGENTS.md README.md | sed 's/](\(.*\))/\1/' \
 # (기대 개수를 문서에 적는 방식은 하루 만에 네 번 낡아서 폐기됐다)
 dotnet test 2>&1 | tail -3
 
-# 문서 예산 — 자동 로드되는 문서의 총량과 라인 길이
+# 문서 예산 — 게이트 자체가 사라졌으면 필터는 조용히 통과하므로 먼저 존재를 확인한다
+[ -f tests/ReSet.Core.Tests/documentation-budget-baseline.txt ] || echo "BROKEN: baseline missing"
 dotnet test --filter DocumentationBudget 2>&1 | tail -3
 
 # 동기화 지점 갱신 확인 — 손댄 문서가 현재 HEAD를 가리켜야 함
