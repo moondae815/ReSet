@@ -19,6 +19,11 @@ namespace ReSet.Core.Tests
         [Theory]
         [InlineData("    -- 원본 필터 YMD = @pi_strYMD AND USESTATE = 2를 모두 유지한다.")]
         [InlineData("    -- 원본 선행 보호 조건을 그대로 보존한다.")]
+        // 위 두 사례는 애초에 OmissionPatterns 어느 것과도 일치하지 않아 PreservationMarkers
+        // 가드가 없어도 이 테스트는 통과한다(가드를 지워도 초록). 아래 사례는 "나머지...같은"
+        // 패턴과 "유지한다" 마커를 동시에 만족시켜, Empty()의 유일한 근거가 가드가 되게 한다 -
+        // 가드를 지우면 이 케이스만 실패해야 한다.
+        [InlineData("    -- 나머지 컬럼도 같은 방식으로 유지한다")]
         public void Scan_ShouldNotFlagInstructionCommentsThatDemandPreservation(string comment)
         {
             // 오탐 경계를 고정한다. 배너가 잦으면 사람이 읽지 않게 되므로,
