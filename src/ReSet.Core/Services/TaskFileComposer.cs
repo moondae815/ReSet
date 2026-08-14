@@ -249,7 +249,10 @@ namespace ReSet.Core.Services
                 $"- 이 단계의 **동작 테스트**가 최소 한 개 통과한다. `tests/`의 스캐폴드를 " +
                 $"`LogicTests_{SanitizeStepCode(inputs.StepCode)}{TestFileExtension(inputs.TargetLanguage)}`로 " +
                 "복사해 채우십시오. 파일명이 단계 코드로 **시작하면** 검증기가 그 파일을 이 회차의 " +
-                "구현 산출물로 오인하므로 반드시 접미사 형태를 쓰십시오.");
+                "구현 산출물로 오인하므로 반드시 접미사 형태를 쓰십시오. 복사한 뒤에는 " +
+                "**원본 스캐폴드 파일을 삭제**하십시오 - 원본은 배치용 템플릿일 뿐이라 그 안의 " +
+                "Fact/Test는 항상 실패합니다. 원본을 그대로 두면 복사본이 통과해도 빌드가 " +
+                "영구적으로 빨간불이 됩니다.");
             sb.AppendLine();
         }
 

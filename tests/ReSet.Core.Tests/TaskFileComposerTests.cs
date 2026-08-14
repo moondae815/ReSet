@@ -367,6 +367,19 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Compose_ShouldWarnAgainstLeavingTheScaffoldFileItselfInStepRounds()
+        {
+            // MetadataExporter가 agent/tests/에 놓는 StepLogicTests.*는 복사용 템플릿이고
+            // 본문이 항상 실패하는 Fact/Test 하나다. 이 회차 지시서가 "복사해 채우십시오"만
+            // 말하고 원본을 어떻게 하라는 말이 없으면, 에이전트는 원본을 그대로 둔 채
+            // 복사본만 추가해 빌드가 영구적으로 빨간불이 되거나, 반대로 실패 단언 자체를
+            // 지워 버리는 합리적이지만 잘못된 선택을 한다.
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.Contains("원본 스캐폴드 파일을 삭제", markdown);
+        }
+
+        [Fact]
         public void Compose_ShouldNotRequireABehaviourTestInTheBootstrapRound()
         {
             // 회차 0에는 단계가 없다. 요구하면 부트스트랩이 부당하게 실패한다.

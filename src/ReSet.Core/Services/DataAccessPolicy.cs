@@ -990,6 +990,10 @@ namespace ReSet.Batch.Tests
     /// 테스트 파일이 Tasklet 자리를 차지해 구현을 빼먹어도 통과한 것처럼 보입니다.
     ///
     /// 최소 한 개: PreCheck 차단 경로 또는 RunBusinessSteps의 대표 분기.
+    ///
+    /// 이 파일(StepLogicTests.cs) 자체는 복사용 템플릿입니다 - 위 이름으로 복사해
+    /// 채운 뒤에는 원본 스캐폴드 파일을 삭제하십시오. 원본을 그대로 두면 아래의
+    /// 항상 실패하는 Fact가 그대로 남아 빌드가 영구적으로 빨간불이 됩니다.
     /// </summary>
     public class StepLogicTests
     {
@@ -1018,6 +1022,10 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 구현을 빼먹어도 통과한 것처럼 보입니다.
  *
  * 최소 한 개: preCheck 차단 경로 또는 runBusinessSteps의 대표 분기.
+ *
+ * 이 파일(StepLogicTests.java) 자체는 복사용 템플릿입니다 - 위 이름으로 복사해
+ * 채운 뒤에는 원본 스캐폴드 파일을 삭제하십시오. 원본을 그대로 두면 아래의
+ * 항상 실패하는 테스트가 그대로 남아 빌드가 영구적으로 빨간불이 됩니다.
  */
 public class StepLogicTests {
     @Test

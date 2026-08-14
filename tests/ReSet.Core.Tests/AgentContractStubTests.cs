@@ -260,6 +260,22 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
+        /// TaskFileComposer의 회차 라운드 지시문과 같은 문구를 스텁 자신의 문서 주석에도
+        /// 남긴다. 지시서만 읽고 이 파일을 직접 열어 보지 않는 에이전트도, 파일을 복사해
+        /// 채우다 이 주석을 보면 원본을 지워야 한다는 것을 알 수 있어야 한다 - 두 곳이
+        /// 다른 문구를 쓰면 한쪽만 고쳐졌을 때 그 사실이 드러나지 않는다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void StepLogicTestStub_ShouldWarnAgainstLeavingTheOriginalScaffoldFile(string targetLanguage)
+        {
+            var stub = DataAccessPolicy.StepLogicTestStub(targetLanguage);
+
+            Assert.Contains("원본 스캐폴드 파일을 삭제", stub);
+        }
+
+        /// <summary>
         /// 회차 0이 지시받은 헥사고날 구조를 다중 프로젝트로 만들면 Tasklet과 Domain
         /// 타입이 코어와 다른 어셈블리에 놓인다. 단일 어셈블리만 스캔하면 규칙 1·2·3·4가
         /// 대상 0건으로 조용히 통과한다 - 아키텍처 지시와 검사 방식이 서로를 무력화한다.
