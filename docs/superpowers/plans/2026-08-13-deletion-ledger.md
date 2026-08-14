@@ -1009,3 +1009,43 @@ AGENTS.md는 BOM이 없어 오늘은 차이가 0이다. (2) `core.autocrlf=true`
 `DocumentationBudgetTests.cs`의 측정 지점(`File.ReadAllText` → `MeasureBytes`) 옆
 주석으로 남겼다 — 다음에 그 측정을 바꾸거나 상한을 다시 계산할 사람이 열어 볼 자리이기
 때문이다.
+
+## 브랜치 전체 리뷰 대응 (2026-08-14)
+
+머지 전 브랜치 전체를 대상으로 한 독립 리뷰가 Important 1건을 이 대장에 대해 냈다.
+아래는 그 지적과 실제로 무엇을 고쳤는지다.
+
+**Important — `SpDefinition`(L22)의 `중복:SpDefinition.cs <summary>` 판정이 거짓이었다.**
+위 Phase 1 스냅샷 표의 L22 행은 `scripts/doc-audit.sh`가 실제로 낸 출력 그대로이므로
+(재현성이 이미 검증된 기록이라) 표 자체는 고치지 않는다. 다만 그 판정은 틀렸다 — 여기
+정정한다.
+
+- **원인.** `scripts/doc-audit.sh:73`의 `doc=$(awk '/\/\/\//{c+=length($0)} END{print c+0}'
+  "$path")`는 링크가 가리키는 파일 **전체**의 `///` 바이트를 합산해, 그 파일 안 어느
+  클래스의 요약이든 링크에 이름이 걸린 클래스의 몫으로 credit한다. `ARCH_MD` 열은
+  이미 경로 기반으로 개정됐지만(커밋 `78c390b`) `SUMMARY` 열은 여전히 파일 단위다 —
+  같은 약점이 컬럼 하나에만 남아 있었다.
+- **실측.** [`src/ReSet.Core/Models/SpDefinition.cs`](../src/ReSet.Core/Models/SpDefinition.cs)의
+  551바이트짜리 `///` 요약은 전부 `SpDefinition` 클래스(5행)가 아니라 같은 파일 안에
+  중첩된 `AstUpdateMapping`(27행)·`AstUpdateAssignment`(43행) 멤버에 붙어 있다.
+  `SpDefinition` 클래스 자신은 클래스 레벨 `<summary>`가 **없다**. `docs/architecture.md`
+  §2.2에도 `SpDefinition` 전용 행이 없었다 — 다른 행의 산문 속에 이름만 스쳐 지나갔을
+  뿐이다(`SpecExpectations`·`SpecTargetTableExtractor` 행). 따라서 삭제된 AGENTS.md L22
+  ("분석된 SP 메타데이터... 를 관리하는 루트 데이터 클래스")는 실제로는 **근거없음(이동
+  필요)** 이었어야 하며, `중복`은 이 문서 안 어디에도 존재하지 않는 근거를 가리킨
+  거짓 판정이다.
+- **바로잡음.** 다른 16개 근거없음 클래스(위 "Group A" 표)와 같은 방식으로,
+  `docs/architecture.md` §2.2의 ReSet.Core 그룹에 `SpDefinition` 행을 신설해 거처를
+  마련했다(`CodeObjectKey`/`CodeObjectAnalysisModels` 행 바로 다음) — 원문의 의미(DDL·
+  의존성 등 분석된 SP 메타데이터를 담는 루트 데이터 클래스)를 보존하되, 중첩 AST 매핑
+  타입 두 개를 함께 언급해 그 두 타입이 왜 551바이트의 `///`를 갖고도 `SpDefinition`
+  자신의 요약이 아닌지가 이 행만 봐도 드러나게 했다.
+- **정정된 판정.** L22 SpDefinition: ~~`중복:SpDefinition.cs <summary>`~~ → **근거없음
+  (이동 필요), `docs/architecture.md` §2.2에 신규 행으로 편입**. `scripts/doc-audit.sh`는
+  고치지 않는다 — 나머지 `<summary>` 단독 근거 9건은 재검토 결과 전부 정상이었고(클래스
+  레벨 `<summary>`가 실제로 그 바이트 수만큼 있었다), 이 스크립트를 다시 고치는 것은
+  이미 마감된 재구조화 범위 밖이다.
+
+**참고 — architecture.md 좌표는 이 절 이후로 밀렸다.** `SpDefinition` 행 삽입으로 §2.2
+표 아래의 모든 줄 번호가 1씩 밀렸다. 이 대장이 그 이전에 인용해 둔 `architecture.md:<n>`
+좌표(위 "이 표를 읽기 전에" 절)는 다음 절에서 새 값으로 정정한다.
