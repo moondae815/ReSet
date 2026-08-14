@@ -1,17 +1,36 @@
 # output/ 산출물 명세
 
-`output/` 아래에 생기는 파일을 **누가·언제·어디에·무엇을·어떻게·왜** 만드는지 정리한 문서다.
-모든 항목은 소스 코드의 실제 쓰기 지점에서 추출했다.
+ReSet이 `output/` 아래에 남기는 파일을 **누가·언제·어디에·무엇을·어떻게·왜** 만드는지 정리한 문서다.
 
 - 작성일: 2026-08-14
-- 기준: `agents-md-restructure` 브랜치 `ba07b02`
-- 줄 번호는 작성 시점의 것이다. 시간이 지나면 클래스·멤버 이름으로 찾는 편이 정확하다.
-- `output/` 전체는 `.gitignore:8`(`[Oo]utput/`)로 추적 제외된다. 여기 있는 것은 전부 **재생성 가능한
-  파생물**이며, 사람이 직접 편집해 보존할 자리가 아니다.
+- `output/` 전체는 Git 추적에서 제외된다. 여기 있는 것은 전부 **재생성 가능한 파생물**이며,
+  사람이 직접 편집해 보존할 자리가 아니다.
+- 각 산출물을 만드는 모듈의 구조는 [아키텍처 문서](architecture.md)에 있다. 이 문서는
+  **무엇이 왜 남는가**만 다룬다.
 
 ---
 
-## 1. 큰 그림
+## 1. 산출물을 만드는 다섯 주체
+
+ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 만들었는지가 그 파일을 얼마나
+믿어도 되는지를 결정**하므로, 이 구분이 문서 전체의 기준이다.
+
+| 표기 | 주체 | 무엇으로 | 결과의 성격 |
+|---|---|---|---|
+| 🤖 **AI** | LLM 응답 | Claude / OpenAI / Gemini / Ollama 등 설정된 제공자 | 매번 달라질 수 있다. **검증을 통과해야 신뢰한다** |
+| 🔎 **정적 분석** | SQL 구문 트리 파싱 | `Microsoft.SqlServer.TransactSql.ScriptDom` (T-SQL 공식 파서) | 항상 같은 답. AI가 놓친 것을 잡는 근거 |
+| 🗄 **DB 조회** | SQL Server 메타데이터 조회 | `Microsoft.Data.SqlClient` | DB의 사실을 그대로 옮긴 것 |
+| ⚙️ **결정적 조립** | 프로그램이 계산·포매팅 | 내장 템플릿, `System.Text.Json` | 입력이 같으면 결과가 같다 |
+| 🧑‍💻 **외부 에이전트** | 코딩 CLI가 생성 | Claude Code / Codex CLI / Antigravity CLI | ReSet이 내용을 쓰지 않는다 |
+
+로그는 `Serilog`, 마크다운 구조 검증은 `Markdig`, 다이어그램 문법 검사는 외부 `mermaid-cli`를 쓴다.
+
+**검증 3단계(L1/L2/L3)** 도 같은 축 위에 있다 — **L1은 🔎정적 분석과 ⚙️기계 검사**,
+**L2는 🤖AI 교차 리뷰**, **L3는 사람의 승인**이다.
+
+---
+
+## 2. 큰 그림
 
 산출물은 생성 시점이 다른 네 계층으로 나뉜다. 뒤 계층은 앞 계층을 입력으로 받는다.
 
@@ -24,189 +43,187 @@
         ↓ 외부 코딩 에이전트가 소비
 ④ 코드 생성과 검증        Jobs/[Job]/src/  Jobs/[Job]/validation/
 
-그 외    logs/  cleansing/  .sp_cache_index.json  (임의 경로) offline_snapshot.json
+그 외    logs/  cleansing/  .sp_cache_index.json  offline_snapshot.json
 ```
 
-두 개의 CLI가 이 계층을 나눠 갖는다. **`ReSet.Cli`가 ①~③과 ④의 기동을 담당**하고,
-**`ReSet.Validator.Cli`가 ④의 데이터 정합성 대조**를 담당한다.
+두 개의 CLI가 이 계층을 나눠 갖는다. **분석기(`ReSet.Cli`)가 ①~③과 ④의 기동**을,
+**검증기(`ReSet.Validator.Cli`)가 ④의 데이터 정합성 대조**를 담당한다.
 
-경로 계산의 단일 창구는 `OutputPathResolver`다. 객체 종류(`Procedure`/`Function`/`Unresolved`)와
-DB 소속(분석 루트 DB인지 아닌지)만으로 디렉터리가 결정되며, 루트 DB가 아니면 모든 경로 앞에
-`External/[DB]/`가 붙는다. 경로에 쓸 수 없는 문자·`.`·`%`는 `%XX`로 인코딩된다
-(`OutputPathResolver.EncodePathSegment`).
+산출물이 놓이는 자리는 **객체 종류와 DB 소속** 두 가지만으로 결정된다.
+프로시저는 `Procedures/`, 함수는 `Functions/`, 끝내 종류를 판정하지 못하면 `Unresolved/`로 가고,
+분석 루트가 아닌 DB의 객체는 앞에 `External/[DB]/`가 붙어 격리된다.
+경로에 쓸 수 없는 문자는 `%XX`로 인코딩되므로 이름에 특수문자가 있어도 폴더가 깨지지 않는다.
 
 ---
 
-## 2. ① 객체 단위 역공학 산출물
+## 3. ① 객체 단위 역공학
 
-**언제** — 메인 메뉴에서 SP 하나를 골라 분석하거나, 그 SP가 참조하는 객체를 재귀 분석할 때.
-의존성 그래프의 노드 하나가 성공할 때마다 그 노드 몫이 기록된다.
+**언제** — SP 하나를 골라 분석할 때. 그 SP가 참조하는 객체는 재귀적으로 함께 분석되며,
+그래프의 노드 하나가 성공할 때마다 그 노드 몫이 기록된다.
 
-**어디에** — 루트 DB는 `output/Procedures/[Schema].[이름]/`, UDF는 `output/Functions/[Schema].[이름]/`.
-다른 DB의 객체는 `output/External/[DB]/` 아래 같은 모양으로 격리된다.
-객체 종류를 끝내 판정하지 못하면 `Unresolved/`로 떨어진다(`OutputPathResolver.ResolveObjectDirectory`).
+**어디에** — `output/Procedures/[스키마].[이름]/`, UDF는 `output/Functions/[스키마].[이름]/`
 
 ### docs/ — 사람이 읽는 결과물
 
-| 파일 | 누가 | 왜 |
+| 파일 | 생성 주체 | 무엇을 · 왜 |
 |---|---|---|
-| `Spec.md` | 재귀 분석은 `DependencyAnalysisOrchestrator`(`:446`), 단일 SP는 `Program.SaveSpecAsync`(`Program.cs:1955`) | 최종 비즈니스 명세서. 뒤따르는 모든 계층의 **입력 원본**이다 |
-| `BatchMigrationPlan.md` | `Program.cs:2008` | SP 하나짜리 배치 전환 계획서. **L1도 L2도 거치지 않으므로** `FormatUnverifiedDocument`로 감싸 "검증 없음"을 헤더에 명시한다 |
-| `Thinking.md` | 재귀는 `DependencyAnalysisOrchestrator`(`:568`), 단일 SP는 `Program.cs:1977` | 채택된 시도가 무엇을 사고했는지 되짚기 위한 추론 로그. **본문이 비어도 반드시 쓴다** — 파일이 없다는 것과 추론이 없었다는 것을 산출물만 보고 구분할 수 있어야 하기 때문 |
-
-`Spec.md`에는 `VerificationDocumentFormatter.FormatVerifiedDocument`가 검증 결과(종합 신뢰도, 축별
-점수, `VerificationOutcome`, 검증 커버리지)를 YAML 헤더로 얹는다. 이 헤더는 나중에
-`SpecHeaderReader`가 되읽는다.
+| `Spec.md` | 🤖 AI + ⚙️ 검증 헤더 | **최종 비즈니스 명세서.** 뒤따르는 모든 계층의 입력 원본이다. 문서 맨 앞에 종합 신뢰도·5개 축 점수·검증 결과·커버리지가 붙어, **읽기 전에 얼마나 믿어도 되는지부터 보인다** |
+| `BatchMigrationPlan.md` | 🤖 AI | SP 하나짜리 배치 전환 계획서. **L1도 L2도 거치지 않으므로** 헤더에 "검증 없음"을 명시한다 — 검증된 명세서와 나란히 놓였다고 같은 신뢰도로 읽히면 안 되기 때문 |
+| `Thinking.md` | 🤖 AI (추론 부분) | 모델이 그 결론에 이른 사고 과정. **본문이 비어도 반드시 쓴다** — 파일이 없다는 것과 추론이 없었다는 것을 산출물만 보고 구분할 수 있어야 하므로 |
 
 ### raw/ — 재현과 감사를 위한 원본
 
-| 파일 | 누가 | 왜 |
+| 파일 | 생성 주체 | 무엇을 · 왜 |
 |---|---|---|
-| `metadata.json` | `MetadataExporter.ExportCodeObjectArtifactsAsync`(`:94`), 레거시 경로는 `ExportRawMetadataAsync`(`:275`) | 의존성이 전부 덤프된 `SpDefinition` 직렬화본. **지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천**이라 매니페스트와 같은 디렉터리에 둔다 |
-| `dependency-manifest.json` | `MetadataExporter`(`:87`), 경로는 `OutputPathResolver.ResolveManifestPath` | 의존 객체 식별자와 각 객체의 산출물 경로를 잇는 매니페스트. 크로스 DB 분석에서 어느 산출물이 어디로 갔는지 되짚는 유일한 색인 |
-| `prompt-context.md` | `MetadataExporter`(`:72`, `:300`), 통합 계획은 `Program.cs:890` | AI에 **실제로 주입된 원문**(System/User 프롬프트). 결과가 이상할 때 모델을 탓하기 전에 입력부터 확인하라고 남긴다 |
-| `deconstructed_logic.json` | `VerificationPipelineOrchestrator`(`:888`) | **Ollama 전용**. 로컬 LLM은 1단계 구조화 추론을 따로 돌리므로 그 중간 산출을 백업해 둔다 |
-| `chunks/chunk_N.json` | `AiService`(`:1011`) | 로컬 LLM의 AST 기반 분할 생성(`EnableLocalChunking`) 시 조각별 응답 캐시. 중단·재시도에서 이미 끝난 조각을 다시 태우지 않기 위한 것 |
-| `ddl/sp_definition.sql` | `MetadataExporter.ExportRawMetadataAsync`(`:315`) | 분석 대상 본문의 DDL 백업 |
-| `ddl/tables/[DB.]스키마.이름.md` | `MetadataExporter`(`:334`) | 참조 테이블의 컬럼 스키마를 마크다운 표로. **SQL이 아니라 md인 이유**는 이 표가 그대로 프롬프트와 지시서에 실리기 때문 |
-| `ddl/procedures/*.sql`, `ddl/functions/*.sql` | `MetadataExporter`(`:350`), 이식용 번들은 `ExportReferencedCodeDdlsAsync`(`:151`) | 참조된 코드 객체의 DDL. 하위 폴더 이름은 `SqlObjectTypeClassifier`가 판정한 종류를 따른다 |
+| `metadata.json` | 🗄 DB 조회 + 🔎 정적 분석 | 대상 SP와 **의존성 전체를 덤프한 것**. 지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천이기도 하다 |
+| `dependency-manifest.json` | ⚙️ 결정적 조립 | 어느 의존 객체의 산출물이 어디로 갔는지 잇는 색인. **크로스 DB 분석에서 흩어진 산출물을 되짚는 유일한 지도** |
+| `prompt-context.md` | ⚙️ 조립 (🗄 DB 조회 + 🔎 정적 분석 결과 포함) | **AI에 실제로 주입된 원문.** 결과가 이상할 때 모델을 탓하기 전에 입력부터 확인하라고 남긴다. UPDATE 컬럼 매핑 같은 정적 분석 산출도 여기 함께 실린다 |
+| `deconstructed_logic.json` | 🤖 AI (로컬 LLM 전용) | 로컬 모델은 한 번에 명세서를 못 쓰므로 **구조화 추론을 1단계로 분리**한다. 그 중간 결과의 백업본 |
+| `chunks/chunk_N.json` | 🤖 AI (로컬 LLM 전용) | 긴 SP를 구문 단위로 쪼개 생성할 때의 **조각별 응답 캐시**. 중단·재시도에서 이미 끝난 조각을 다시 태우지 않기 위한 것 |
+| `ddl/sp_definition.sql` | 🗄 DB 조회 | 분석 대상 본문의 DDL 원문 백업 |
+| `ddl/tables/*.md` | 🗄 DB 조회 → ⚙️ 표 포매팅 | 참조 테이블의 컬럼 스키마. **SQL이 아니라 마크다운 표인 이유**는 이 표가 그대로 프롬프트와 지시서에 실리기 때문 |
+| `ddl/procedures/*.sql`, `ddl/functions/*.sql` | 🗄 DB 조회 | 참조된 코드 객체의 DDL. 하위 폴더는 정적 분류 결과를 따른다 |
 
-### Objects/ — 객체 종류와 무관한 표준 DDL 보관소
+### Objects/ — 표준 DDL 정본
 
-| 경로 | 누가 | 왜 |
+| 경로 | 생성 주체 | 무엇을 · 왜 |
 |---|---|---|
-| `Objects/[Schema].[이름].[Type]/raw/object_definition.sql` | `MetadataExporter`(`:63`), 경로는 `OutputPathResolver.ResolveCanonicalDdlPath` | 같은 객체를 여러 경로에서 만나도 DDL 원본은 **한 벌만** 두기 위한 정본. 디렉터리 이름에 `Type`이 붙는 것은 스키마·이름이 겹치는 서로 다른 종류의 객체를 구분하기 위한 것 |
-| `Objects/[...]/raw/prompt-context.md` | `MetadataExporter`(`:72`) | 위 DDL을 뽑을 때 쓴 프롬프트 원문 |
+| `Objects/[스키마].[이름].[종류]/raw/object_definition.sql` | 🗄 DB 조회 | 같은 객체를 여러 경로에서 만나도 **DDL 원본은 한 벌만** 두기 위한 정본. 폴더 이름에 종류까지 붙는 것은 이름이 겹치는 다른 종류의 객체를 구분하기 위한 것 |
+| `Objects/[...]/raw/prompt-context.md` | ⚙️ 조립 | 위 DDL을 뽑을 때 쓴 프롬프트 원문 |
 
 ---
 
-## 3. ② 통합 Job 계획 수립 산출물
+## 4. ② 통합 Job 계획 수립
 
 **언제** — 여러 SP를 하나의 배치 Job으로 묶어 통합 전환 계획서를 만들 때.
-3단계로 진행되며 각 단계가 자기 산출물을 남긴다: **1/3 Brainstorm → 2/3 Structure(목차) → 3/3 Finalize**.
+**3단계로 나눠 진행하며 각 단계가 자기 산출물을 남긴다.**
+
+> **1/3 Brainstorm**(발상) → **2/3 Structure**(목차 확정) → **3/3 Finalize**(본문 작성)
+
+한 번에 쓰게 하지 않고 쪼갠 이유는, 긴 계획서를 통째로 생성하면 뒤로 갈수록 앞의 결정을
+잊기 때문이다. 목차를 먼저 못 박아 두면 본문을 **동시에 여러 개 생성해도 순서와 경계가 흔들리지 않는다.**
 
 **어디에** — `output/Jobs/[Job이름]/`
 
-| 파일 | 누가 | 언제 | 왜 |
+| 파일 | 생성 주체 | 언제 | 무엇을 · 왜 |
 |---|---|---|---|
-| `raw/Brainstorming.md` | `VerificationPipelineOrchestrator`(`:1831`) | 1/3 직후 | 최종 계획서에 남지 않은 초기 발상. 계획이 왜 그 모양이 됐는지는 여기에만 있다 |
-| `raw/PlanStructure.md` | `VerificationPipelineOrchestrator`(`:1840`, `:3233`) | 2/3 직후, 목차 재작성 시 갱신 | 3/3이 채워 넣을 **목차 계약**. 단계 본문을 동시 생성해도 순서와 경계가 흔들리지 않게 하는 기준 |
-| `raw/PlanStructure.superseded-N.md` | `VerificationPipelineOrchestrator`(`:3231`) | 목차를 다시 짤 때마다 | 폐기된 이전 목차. 덮어쓰지 않고 번호를 늘려 보존한다 — 목차가 왜 바뀌었는지 추적하려면 이전 판이 남아 있어야 하므로 |
-| `raw/prompt-context.md` | `Program.cs:890` | 3/3 성공 시 | 계획서를 만든 System/User 프롬프트 원문 |
-| `raw/ddl/*.md` | `InstructionBundleWriter`(`:523`) | 번들 생성 시 | Job 전체가 건드리는 참조 테이블의 스키마 표 |
-| `docs/BatchMigrationPlan.md` | `Program.cs:868` | 3/3 성공 시 | **통합 전환 계획서**. `FormatVerifiedDocument`로 검증 결과와 커버리지를 헤더에 얹는다 |
-| `docs/Thinking.md` | `Program.cs:885` | 계획서와 한 쌍 | 채택된 시도의 추론 로그. 계획서와 짝이라 한쪽만 나가면 안 된다 |
+| `raw/Brainstorming.md` | 🤖 AI | 1/3 직후 | 최종 계획서에 남지 않은 초기 발상. **계획이 왜 그 모양이 됐는지는 여기에만 있다** |
+| `raw/PlanStructure.md` | 🤖 AI | 2/3 직후 | 3/3이 채워 넣을 **목차 계약** |
+| `raw/PlanStructure.superseded-N.md` | 🤖 AI | 목차를 다시 짤 때마다 | 폐기된 이전 목차. **덮어쓰지 않고 번호를 늘려 보존한다** — 목차가 왜 바뀌었는지는 이전 판이 있어야 알 수 있으므로 |
+| `raw/prompt-context.md` | ⚙️ 조립 | 3/3 성공 시 | 계획서를 만든 프롬프트 원문 |
+| `raw/ddl/*.md` | 🗄 DB 조회 → ⚙️ 표 포매팅 | 번들 생성 시 | Job 전체가 건드리는 참조 테이블의 스키마 표 |
+| `docs/BatchMigrationPlan.md` | 🤖 AI + ⚙️ 검증 헤더 | 3/3 성공 시 | **통합 전환 계획서.** 검증 결과와 커버리지를 헤더에 얹는다 |
+| `docs/Thinking.md` | 🤖 AI (추론 부분) | 계획서와 한 쌍 | 채택된 시도의 사고 과정. 계획서와 짝이라 한쪽만 나가면 안 된다 |
 
 ---
 
-## 4. ③ 지시서 번들 (`Jobs/[Job]/agent/`)
+## 5. ③ 지시서 번들 (`Jobs/[Job]/agent/`)
 
-**누가** — `InstructionBundleWriter`가 뼈대를, `MetadataExporter.ExportConsolidatedMigrationInstructionsAsync`가
-스텁을, `AgentProgressStore`가 진행 상태를 쓴다.
+**생성 주체는 대부분 ⚙️ 결정적 조립이다.** AI가 쓴 계획서를 **기계적으로 잘라 재배치**할 뿐,
+이 단계에서 새로 생성되는 문장은 없다.
 
 **왜 쪼개는가** — 계획서 한 덩어리를 통째로 주면 에이전트가 매 회차 전부를 읽는다.
-`PlanBoundaryResolver`가 계획서를 절 단위로 잘라 공통 문서와 단계 본문으로 나누고, 회차별 지시서는
-자기 몫만 링크한다. 조각 본문을 지시서에 **복사하지 않고 링크**하는 것은, 계획서가 교정·구제 채택으로
-계속 바뀌는 동안 두 벌이 조용히 어긋나는 것을 막기 위한 것이다(`PlanLayout` 주석).
+계획서를 절 단위로 잘라 공통 문서와 단계 본문으로 나누고, 회차별 지시서는 자기 몫만 링크한다.
+본문을 **복사하지 않고 링크만 하는 것**은, 계획서가 교정·재생성으로 계속 바뀌는 동안
+두 벌이 조용히 어긋나는 것을 막기 위한 것이다.
 
-| 경로 | 누가 | 왜 |
+| 경로 | 생성 주체 | 무엇을 · 왜 |
 |---|---|---|
-| `MigrationInstructions.md` | `InstructionBundleWriter`(`:209`) + `InstructionEntryPointComposer` | 진입점. **지켜야 할 지침이 앞, 나머지는 링크**로만 둔다 |
-| `task-00-bootstrap.md` | `TaskFileComposer.FileName` | 0회차 = 골격 |
-| `task-NN-[단계코드].md` | 〃 | 1..N회차 = 단계별 이행 |
-| `task-99-assembly.md` | 〃 | 99회차 = 조립 |
-| `common/00-architecture.md` | `InstructionBundleWriter`(`:64`) | 전 회차 공통 — 아키텍처 |
-| `common/01-step-contract.md` | 〃(`:66`) | 전 회차 공통 — 단계 계약. **슬라이스가 비면 파일을 지운다**(`:76`) |
-| `common/02-data-access-boundary.md` | 〃(`:83`) | 전 회차 공통 — 데이터 액세스 경계 규칙 |
-| `common/03-hosting-and-config.md` | 〃(`:93`) | 전 회차 공통 — 호스팅·설정 |
-| `steps/[단계코드].md` | 〃(`:168`) | 단계별 이행 상세 본문. 슬라이스가 없으면 디렉터리째 삭제된다(`:180`) |
-| `verification/integrity-sql.md` | 〃(`:102`) | 무결성 대조 SQL. 계획서에 검증 절이 없으면 디렉터리째 삭제된다(`:110`) |
-| `src/*.cs` \| `*.java` | `MetadataExporter`(`:532` 이하) | **에이전트에 미리 제공하는 뼈대 스텁**. `AbstractSettleTasklet` 상속을 강제해 임의 구조와 자의적 에러코드를 막는다. Java는 `com.reset.batch.core` 패키지 인터페이스 7종을 함께 낸다 |
-| `tests/ArchitectureTests.*`, `tests/StepLogicTests.*` | `MetadataExporter`(`:775`, `:825`) | 함께 제공하는 테스트 스텁. 뼈대를 우회한 구현을 아키텍처 테스트가 잡아내게 하기 위한 것 |
-| `progress.json` | `AgentProgressStore`(`:183`) | **회차 진행 상태의 진실의 원천**. 도구가 소유하며 에이전트는 쓰지 않는다 |
-| `todo.md` | `AgentProgressStore`(`:184`) | `progress.json`에서 렌더링되는 사람용 표시. 예전에는 에이전트에게 `[x]`를 직접 갱신하라고 요구했으나 아무 일도 일어나지 않았고, 이제 **검증 결과만이 상태를 바꾼다** |
+| `MigrationInstructions.md` | ⚙️ 조립 | 진입점. **지켜야 할 지침이 앞, 나머지는 링크**로만 둔다 |
+| `task-00-bootstrap.md` | ⚙️ 조립 | 0회차 — 골격 |
+| `task-NN-[단계코드].md` | ⚙️ 조립 | 1..N회차 — 단계별 이행 |
+| `task-99-assembly.md` | ⚙️ 조립 | 99회차 — 조립 |
+| `common/00-architecture.md` | ⚙️ 계획서 분할 | 전 회차 공통 — 아키텍처 |
+| `common/01-step-contract.md` | ⚙️ 계획서 분할 | 전 회차 공통 — 단계 계약 |
+| `common/02-data-access-boundary.md` | ⚙️ 계획서 분할 | 전 회차 공통 — 데이터 액세스 경계 규칙 |
+| `common/03-hosting-and-config.md` | ⚙️ 계획서 분할 | 전 회차 공통 — 호스팅·설정 |
+| `steps/[단계코드].md` | ⚙️ 계획서 분할 | 단계별 이행 상세 본문 |
+| `verification/integrity-sql.md` | ⚙️ 계획서 분할 | 이행 결과를 원본과 대조할 무결성 SQL |
+| `src/` 뼈대 코드 | ⚙️ 내장 템플릿 | **에이전트에 미리 제공하는 스텁.** 공통 부모 클래스 상속을 강제해 임의 구조와 자의적 에러코드를 막는다. Java는 패키지 인터페이스 7종을 함께 낸다 |
+| `tests/` 테스트 스텁 | ⚙️ 내장 템플릿 | 뼈대를 우회한 구현을 **아키텍처 테스트가 잡아내게** 하기 위한 것 |
+| `progress.json` | ⚙️ 도구 상태 | **회차 진행 상태의 진실의 원천.** 도구가 소유하며 에이전트는 쓰지 않는다 |
+| `todo.md` | ⚙️ 렌더링 | `progress.json`에서 파생된 사람용 표시 |
 
-두 상태 파일은 `WriteAtomicAsync`로 임시 파일에 쓴 뒤 옮긴다. 최종 경로에 바로 쓰면 중단 시 잘린
-파일이 남고, 그 시점에 진행 상태가 이미 망가지기 때문이다. 읽거나 파싱하지 못한 `progress.json`은
-지우지 않고 옆으로 옮겨 보존한다(`:121`).
+계획서에 해당 절이 없으면 그 자리의 파일이나 디렉터리는 **만들지 않고 지운다.**
+빈 파일이 남으면 "내용이 없는 것"과 "아직 안 만든 것"을 구분할 수 없기 때문이다.
 
-**인코딩 주의** — C# 산출물은 `Encoding.UTF8`(BOM 포함), Java 산출물은 BOM 없는 UTF-8을 쓴다.
-javac가 BOM으로 시작하는 소스를 거부한다는 보고(JDK-4508058) 때문이다.
+진행 상태 두 파일은 **임시 파일에 쓴 뒤 옮기는 방식**으로 저장한다. 최종 경로에 바로 쓰면
+중단됐을 때 잘린 파일이 남고, 그 시점에 진행 상태가 이미 망가진다. 읽지 못한 `progress.json`은
+지우지 않고 옆으로 옮겨 보존한다.
+
+> **참고** — C# 산출물은 BOM 있는 UTF-8, Java 산출물은 BOM 없는 UTF-8로 쓴다.
+> javac가 BOM으로 시작하는 소스를 거부한다는 보고(JDK-4508058) 때문이다.
 
 ---
 
-## 5. ④ 코드 생성과 검증
+## 6. ④ 코드 생성과 검증
 
 ### Jobs/[Job]/src/ — 에이전트의 작업 결과물
 
-**누가** — 외부 코딩 에이전트(claude / codex / agy CLI). ReSet은 이 디렉터리를 만들어
-작업 디렉터리로 넘길 뿐(`Program.cs:918`·`1484` → `ExternalCliCodingEngine:52`) 내용을 쓰지 않는다.
-
-**왜 격리하는가** — 생성된 코드가 ReSet 자신의 `src/`나 사용자 워킹 트리를 오염시키지 않게 하기 위한 것.
+**생성 주체는 🧑‍💻 외부 코딩 에이전트다.** ReSet은 이 디렉터리를 만들어 작업 공간으로 넘길 뿐
+내용을 쓰지 않는다. 별도 폴더로 격리하는 것은 **생성된 코드가 ReSet 자신의 소스나
+사용자의 작업 트리를 오염시키지 않게** 하기 위한 것이다.
 
 ### Jobs/[Job]/validation/ — 정합성 대조 리포트
 
-**누가·언제** — 두 주체가 같은 디렉터리를 나눠 쓴다.
+**소스코드 대조** (명세서와 생성 코드가 같은 이야기를 하는가):
 
-`CodeVerificationOrchestrator`(소스코드 대조, `ReSet.Cli`가 기동):
-
-| 경로 | 왜 |
-|---|---|
-| `docs/[SP]/ValidationReport.md` | 명세서와 생성 코드의 격차 리포트 |
-| `docs/[SP]/AI_Response.md` | 판정 근거가 된 AI 원문 |
-| `docs/validation_summary.md` | Job 전체 요약 |
-| `raw/[SP]/Spec.md` | 대조에 실제로 쓰인 명세서 사본 — 원본이 이후 바뀌어도 판정 근거가 남게 |
-| `raw/[SP]/Source.[확장자]` | 대조에 쓰인 소스 사본 |
-| `raw/[SP]/AI_Prompt.md` | 주입된 프롬프트 원문 |
-
-`ReSet.Validator.Cli`(데이터 정합성 대조):
-
-| 경로 | 언제 | 왜 |
+| 경로 | 생성 주체 | 무엇을 · 왜 |
 |---|---|---|
-| `[SP]_test_inputs.json` | 테스트 입력 생성 시 | 레거시와 신규에 **같은 입력**을 넣기 위한 고정본 |
-| `mock/[SP]_mock_data.json` | 샌드박스 시딩 시 | 시드 데이터 |
-| `[SP]_legacy_results.json` | 레거시 SP 실행 후 | 기준값 |
-| `[SP]_target_results.json` (또는 `_new_results.json`) | 신규 코드 실행 후 | 비교 대상 |
-| `[SP]_CompareReport.md` | 대조 후 | 최종 판정 |
+| `docs/[SP]/ValidationReport.md` | ⚙️ 조립 + 🔎 L1 + 🤖 L2 | 입력 파라미터·출력 DTO·비즈니스 로직·예외 처리·데이터 액세스 경계 **5개 항목의 격차 리포트.** L1/L2/L3 결과가 한 줄씩 나란히 찍힌다 |
+| `docs/[SP]/AI_Response.md` | 🤖 AI | 판정 근거가 된 AI 원문 |
+| `docs/validation_summary.md` | ⚙️ 조립 | Job 전체 요약 |
+| `raw/[SP]/Spec.md`, `Source.*` | ⚙️ 사본 | 대조에 **실제로 쓰인** 명세서·소스 사본. 원본이 이후 바뀌어도 판정 근거가 남게 |
+| `raw/[SP]/AI_Prompt.md` | ⚙️ 조립 | 주입된 프롬프트 원문 |
+
+**데이터 정합성 대조** (레거시 SP와 신규 코드가 같은 값을 내는가):
+
+| 경로 | 생성 주체 | 무엇을 · 왜 |
+|---|---|---|
+| `[SP]_test_inputs.json` | 🤖 AI | 테스트 입력. 레거시와 신규에 **같은 입력**을 넣기 위해 파일로 고정한다 |
+| `mock/[SP]_mock_data.json` | 🤖 AI | 샌드박스에 심을 시드 데이터 |
+| `[SP]_legacy_results.json` | ▶️ 레거시 SP 실행 결과 | 기준값 |
+| `[SP]_target_results.json` | ▶️ 신규 코드 실행 결과 | 비교 대상 |
+| `[SP]_CompareReport.md` | ⚙️ **결정적 비교** | 최종 판정. **여기에 AI는 관여하지 않는다** — 값이 같은지는 기계가 판단할 수 있고, 그래야 판정이 매번 같기 때문 |
 
 ---
 
-## 6. 그 외 산출물
+## 7. 그 외 산출물
 
-| 경로 | 누가 | 언제 | 왜 |
+| 경로 | 생성 주체 | 언제 | 무엇을 · 왜 |
 |---|---|---|---|
-| `logs/reset-YYYYMMDD.log` | `Program.ConfigureLogging`(`Program.cs:2538`, Serilog 일별 롤링) | 분석기 실행 내내 | 실행 로그. 경로·보관 개수는 `LoggingSettings:LogDirectory`·`RetainedFileCountLimit`(기본 31)로 조정 |
-| `logs/reset-validator-YYYYMMDD.log` | `ReSet.Validator.Cli/Program.cs:387` | 검증기 실행 내내 | 검증기 로그를 분석기와 섞지 않기 위해 파일명을 분리 |
-| `cleansing/[대상]_MetadataCleansing.sql` | `VerificationPipelineOrchestrator`(`:1255`, `:3317`) | 메타데이터 결손이 발견될 때 | AI가 제안한 **메타데이터 보정 SQL**. 자동 실행하지 않고 파일로만 남긴다 — DB를 바꾸는 일은 사람이 읽고 결정할 몫이므로 |
-| `.sp_cache_index.json` | `CacheManager.SaveCacheIndex`(`:381`), 위치는 `GetGlobalCacheDirectory` | 분석 성공 시 | SP 본문·의존성 해시로 재분석을 건너뛰기 위한 색인. 하위 디렉터리에 흩어져 있던 레거시 인덱스는 `MigrateLegacyCaches`가 이 한 벌로 합친다. **캐시를 통째로 버리려면 이 파일을 지우면 된다** |
-| `offline_snapshot.json` (경로는 사용자 지정) | `SnapshotManager.ExportSnapshotAsync`, `--extract-snapshot` 인자로 기동 | 명시적으로 요청할 때만 | DB 연결 없이 구동하기 위한 스냅샷. `DatabaseSettings:OfflineSnapshotPath`에 지정하면 DB 조회를 우회한다 |
+| `logs/reset-YYYYMMDD.log` | 📋 Serilog | 분석기 실행 내내 | 실행 로그. 일별로 갈리며 기본 31개까지 보관 |
+| `logs/reset-validator-YYYYMMDD.log` | 📋 Serilog | 검증기 실행 내내 | 검증기 로그. 분석기와 섞이지 않게 파일명을 분리 |
+| `cleansing/[대상]_MetadataCleansing.sql` | 🤖 AI | 메타데이터 결손 발견 시 | AI가 제안한 **DB 메타데이터 보정 SQL.** 자동 실행하지 않고 파일로만 남긴다 — DB를 바꾸는 일은 사람이 읽고 결정할 몫이므로 |
+| `.sp_cache_index.json` | ⚙️ 해시 계산 | 분석 성공 시 | SP 본문과 의존성의 해시로 **재분석을 건너뛰기 위한 색인.** 캐시를 통째로 버리려면 이 파일만 지우면 된다 |
+| `offline_snapshot.json` | 🗄 DB 조회 덤프 | 명시적으로 요청할 때만 | **DB 연결 없이 구동하기 위한 스냅샷.** 운영 DB에 접근할 수 없는 자리에서 시연·재현할 때 쓴다 |
 
 ---
 
-## 7. 산출물이 아닌 것
+## 8. 산출물이 아닌 것
 
-혼동하기 쉬운 두 가지는 `output/` 밖에 있고, 남기지 않는다.
+혼동하기 쉬운 두 가지는 `output/` 밖에 있고, 실행이 끝나면 남지 않는다.
 
-- **CLI 제공자 작업 공간** — `CliWorkspace`가 시스템 임시 디렉터리에 `reset-cli-[GUID]/`를 만들어
-  프롬프트 파일을 넘긴다. `IDisposable`로 정리된다. 시스템 프롬프트 파일에는 BOM을 붙이지 않는데,
-  파일 맨 앞의 보이지 않는 문자를 모델이 지시로 읽기 때문이다.
-- **Mermaid 렌더 검사** — `MechanicalValidator`(`:1039`)가 `%TEMP%/ReSet_Mermaid/`에서 다이어그램
-  문법을 검사한다. L1의 판정 근거일 뿐 산출물이 아니다.
+- **CLI 제공자 작업 공간** — 코딩 CLI에 프롬프트를 파일로 넘기기 위해 시스템 임시 폴더를 쓴다.
+  이 파일에는 BOM을 붙이지 않는데, 맨 앞의 보이지 않는 문자를 모델이 지시로 읽기 때문이다.
+- **다이어그램 문법 검사** — L1이 Mermaid 블록을 임시 폴더에서 실제로 렌더해 본다.
+  판정 근거일 뿐 산출물이 아니다.
 
 ---
 
-## 8. 읽는 순서 제안
+## 9. 문제를 되짚는 순서
 
-문제를 되짚을 때 열어야 할 순서는 대개 정해져 있다.
+산출물이 이렇게 잘게 나뉜 이유는, **어디서 어긋났는지 좁혀 들어갈 수 있게** 하기 위한 것이다.
 
-1. **결과가 틀렸다** → `docs/Spec.md`의 YAML 헤더에서 `VerificationOutcome`과 축별 점수 확인
+1. **결과가 틀렸다** → `docs/Spec.md` 맨 앞의 검증 결과와 축별 점수부터 본다
 2. **왜 그렇게 나왔나** → 같은 폴더의 `Thinking.md`
-3. **모델이 무엇을 봤나** → `raw/prompt-context.md`. 입력이 부실하면 그 위의 둘을 탓할 이유가 없다
+3. **모델이 무엇을 봤나** → `raw/prompt-context.md`.
+   **입력이 부실하면 그 위의 둘을 탓할 이유가 없다**
 4. **입력이 왜 부실한가** → `raw/metadata.json`과 `raw/ddl/` — 의존성 수집 단계의 문제다
-5. **계획서가 이상하다** → `Jobs/[Job]/raw/Brainstorming.md` → `PlanStructure.md`(+`superseded-N`) 순서로
+5. **계획서가 이상하다** → `Brainstorming.md` → `PlanStructure.md`(+ 폐기된 판) 순서로
    3단계 중 어디서 어긋났는지 좁힌다
-6. **에이전트가 엉뚱한 코드를 냈다** → `agent/progress.json`으로 어느 회차인지 특정하고,
-   그 회차의 `task-NN-*.md`와 그것이 링크하는 `steps/`·`common/`만 읽는다
+6. **에이전트가 엉뚱한 코드를 냈다** → `agent/progress.json`으로 회차를 특정하고,
+   그 회차의 지시서와 그것이 링크하는 문서만 읽는다
 
 ---
 
