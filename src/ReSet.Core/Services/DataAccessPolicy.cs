@@ -525,12 +525,46 @@ namespace ReSet.Batch.Tests.Architecture
     /// 그것이 정상이다. 그래서 ""하나도 없다""를 실패로 보는 판정은 모든 단계가
     /// 구현된 뒤에만 켤 수 있고, 스텁은 자신이 몇 회차에 놓이는지 알 수 없다.
     /// 파일을 나누고 배치 지시를 조립 회차에만 두어 그 스위치를 만든다.
+    ///
+    /// [이 검사가 잡지 못하는 것]
+    /// 이 검사는 Tasklet(AbstractSettleTasklet 구현체)의 존재만 본다. Domain 계층의
+    /// 존재는 강제하지 않는다 - ArchitectureTests.Domain_MustNotDependOn_Infrastructure는
+    /// Tasklet 어셈블리와 Domain 어셈블리가 분리된 헥사고날 구조에서, 어떤
+    /// ReSet.Batch.Domain.* 타입도 로드되지 않으면 대상 0건으로 여전히 조용히
+    /// 통과한다. 별도의 Domain 존재 게이트를 두지 않은 것은 의도적이다 - 정산
+    /// 로직을 전부 Tasklet 안에 두고 별도 Domain 네임스페이스를 두지 않는 것도
+    /// 정당한 설계이며, 이 검사가 그 설계를 강제로 실패시켜서는 안 된다. 이 규칙은
+    /// 의존 ""방향""만 제약할 뿐 계층의 ""존재""를 요구한 적이 없다.
     /// </summary>
     public class AssemblyCompletenessTests
     {
         [Fact]
         public void Assembly_MustContainAtLeastOneTasklet()
         {
+            // ArchitectureTests.Targets와 같은 이유로 같은 워밍업을 반복한다: xUnit은
+            // 기본적으로 서로 다른 테스트 클래스를 별도 컬렉션으로 병렬 실행하므로,
+            // 참조된 ReSet.Batch.* 어셈블리를 먼저 강제 로드하지 않으면 이 검사가
+            // ArchitectureTests보다 먼저 실행되어 아직 아무것도 로드되지 않은 AppDomain을
+            // 보고 ""Tasklet이 0개""라는 거짓 실패를 낼 수 있다. 이 파일은 조립 회차
+            // 산출물로 독립적으로 배치되므로 ArchitectureTests와 헬퍼를 공유하지 않고
+            // 이 파일 안에서 자체적으로 워밍업한다.
+            //
+            // [전제] 이 워밍업은 테스트 프로젝트 자체가 참조된 어셈블리 정보로
+            // ReSet.Batch.* 를 나열할 수 있을 때만 그 어셈블리를 찾아낸다 - Roslyn은
+            // 실제로 참조되지 않은 어셈블리를 AssemblyRef 테이블에서 생략하므로,
+            // 어떤 Tasklet 프로젝트의 타입도 테스트 프로젝트 컴파일 산출물 어디에서도
+            // 이름으로 참조되지 않으면 그 어셈블리는 여기서도 보이지 않는다. 실무에서는
+            // 각 회차가 그 회차의 Tasklet을 참조하는 LogicTests_<코드>.cs를 함께
+            // 배치하므로 이 전제가 성립한다.
+            foreach (var reference in Assembly.GetExecutingAssembly().GetReferencedAssemblies())
+            {
+                if ((reference.Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                {
+                    // 아직 로드되지 않은 참조는 AppDomain에 나타나지 않는다.
+                    try { Assembly.Load(reference); } catch { /* 로드 실패는 아래 필터가 흡수한다 */ }
+                }
+            }
+
             var taskletCount = AppDomain.CurrentDomain.GetAssemblies()
                 .Where(a => !a.IsDynamic)
                 .Where(a => (a.GetName().Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
@@ -567,6 +601,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 아키텍처 규칙들은 대상이 0건이면 통과한다 - 부트스트랩 회차에는 Tasklet이 없으므로
  * 그것이 정상이다. ""하나도 없다""를 실패로 보는 판정은 모든 단계가 구현된 뒤에만
  * 켤 수 있다.
+ *
+ * (C# 쪽과 달리 여기는 로딩 순서 문제가 없다 - importPackages가 클래스패스 전체를
+ *  직접 훑으므로, 어떤 테스트가 먼저 실행되든 관계없이 항상 같은 결과를 본다.)
+ *
+ * [이 검사가 잡지 못하는 것]
+ * 이 검사는 Tasklet(AbstractSettleTasklet 구현체)의 존재만 본다. Domain 계층의
+ * 존재는 강제하지 않는다 - ArchitectureTests.domainMustNotDependOnInfrastructure는
+ * 어떤 com.reset.batch.domain.* 타입도 없으면 대상 0건으로 여전히 통과한다. 별도의
+ * Domain 존재 게이트를 두지 않은 것은 의도적이다 - 정산 로직을 전부 Tasklet 안에
+ * 두고 별도 Domain 패키지를 두지 않는 것도 정당한 설계이며, 이 검사가 그 설계를
+ * 강제로 실패시켜서는 안 된다. 이 규칙은 의존 ""방향""만 제약할 뿐 계층의 ""존재""를
+ * 요구한 적이 없다.
  */
 class AssemblyCompletenessTests {
 

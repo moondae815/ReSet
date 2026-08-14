@@ -294,5 +294,21 @@ namespace ReSet.Core.Tests
             // 회차 0의 아키텍처 테스트와 다른 파일이어야 활성화 스위치가 성립한다.
             Assert.Contains("AssemblyCompletenessTests", stub);
         }
+
+        /// <summary>
+        /// xUnit은 기본적으로 서로 다른 테스트 클래스를 별도 컬렉션으로 병렬 실행한다.
+        /// ArchitectureTests.Targets처럼 참조된 ReSet.Batch.* 어셈블리를 먼저
+        /// 강제 로드하지 않으면, AppDomain에 아직 아무것도 로드되지 않은 채로
+        /// 이 검사가 먼저 실행되어 "Tasklet이 0개"라는 거짓 실패를 낼 수 있다 -
+        /// 이 검사를 신뢰 가능하게 만들려던 장치 자체가 스케줄링에 좌우되면 안 된다.
+        /// </summary>
+        [Fact]
+        public void AssemblyCompletenessTestStub_ShouldWarmUpReferencedAssemblies_ForCSharp()
+        {
+            var stub = DataAccessPolicy.AssemblyCompletenessTestStub("C#");
+
+            Assert.Contains("GetReferencedAssemblies", stub);
+            Assert.Contains("Assembly.Load", stub);
+        }
     }
 }
