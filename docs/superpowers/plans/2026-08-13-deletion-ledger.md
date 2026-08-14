@@ -294,13 +294,17 @@ Task 2 Step 1이 준 문구를 그대로 쓴 것(플랜의 8개 중 3개는 위 
 | `ValidationResult` (L109) | AGENTS.md 원문에서 직접 작성 | 〃 |
 | `RunnerDtos` (L112) | AGENTS.md 원문에서 직접 작성 | 〃 |
 | `ValidatorConfig` (L113) | AGENTS.md 원문에서 직접 작성 | 〃 |
-| `DependencyAnalysisOrchestratorTests` (L142) | AGENTS.md 원문에서 직접 작성(3개 묶음 서술 중 이 클래스 몫만 발췌) | ReSet.Core.Tests 그룹, `CancellationPolicyTests` 행 다음 |
+| `DependencyAnalysisOrchestratorTests` (L142) | AGENTS.md 원문에서 직접 작성(구 L142는 세 클래스를 한 문장에 묶었다 — 아래 "Fix Round 1" 참고) | ReSet.Core.Tests 그룹, `CancellationPolicyTests` 행 다음 |
+| `SpecificationLinkerTests` (L142, 같은 묶음 문장) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `OutputPathResolverTests` (L142, 같은 묶음 문장) | AGENTS.md 원문에서 직접 작성 | 〃 |
 | `StepErrorCodeRegressionTests` (L145) | AGENTS.md 원문에서 직접 작성 | 〃 |
 
 편입 확인(각 클래스명이 architecture.md에 1회 이상 등장):
 `grep -c "<클래스명>" docs/architecture.md` — 17개(재분류 3개 포함, 이미 있던 항목이라
 당연히 나옴) 전부 1 이상. `ValidationResult`만 `L1ValidationResult`와의 부분 문자열
 겹침으로 2가 나오는데, 두 클래스 모두 각자의 행을 갖고 있으므로 문제 없다.
+(`SpecificationLinkerTests`·`OutputPathResolverTests`는 원래 31행 감사 대상이 아니었으므로
+이 확인 루프의 대상도 아니었다 — Fix Round 1에서 별도로 추가·확인했다.)
 
 ### Group B — 코드 근거가 확인되어 삭제한 17개
 
@@ -311,8 +315,8 @@ Task 2 Step 1이 준 문구를 그대로 쓴 것(플랜의 8개 중 3개는 위 
 |---|---|---|---|
 | `SqlObjectTypeClassifier` (L37) | 사각지대(링크 없는 서술) | `architecture.md:388` — `SqlObjectTypeClassifier`의 판정 통합 배경과 `TypeClassificationPolicyTests` 연계를 한 문단으로 서술 | 실질적, 삭제 |
 | `TypeClassificationPolicyTests` (L144) | 사각지대 | `architecture.md:388` — 위와 같은 문단 | 실질적, 삭제 |
-| `CliWorkspace` (L88) | 혼합형(카탈로그 링크 + 사각지대) | `architecture.md:589` — CLI 제공자 절에서 `CliWorkspace`가 만드는 임시 디렉터리 격리를 명시 서술(카탈로그 링크는 `architecture.md:68`) | 실질적, 삭제 |
-| `CliEffort` (L89) | 혼합형 | `architecture.md:589` — 같은 절에서 `CliEffort`의 xhigh→high 클램프를 명시 서술(카탈로그 링크는 `architecture.md:69`) | 실질적, 삭제 |
+| `CliWorkspace` (L88) | 혼합형(카탈로그 링크 + 사각지대) | `architecture.md:589`(CLI 제공자 절, 카탈로그 링크는 `:68`)가 `CliWorkspace`의 임시 디렉터리 격리를 서술하지만, 삭제된 AGENTS.md 줄의 가장 실행 지침적인 경고 — `--strict-mcp-config`/`--setting-sources ""` 두 축을 **함께** 유지해야 하는 이유 — 는 그 문단에 없다. 실제로는 [ClaudeCliClient.cs:63-69](../src/ReSet.Core/Services/Clients/Cli/ClaudeCliClient.cs)의 코드 주석이 같은 내용을 (실측 토큰 수치까지 포함해) 담고 있다. "그 파일을 여는 사람만 잡는다" 범주이므로 이곳이 맞는 거처다 — Fix Round 1에서 정정 | 실질적, 삭제(단 인용 위치는 Fix Round 1에서 정정) |
+| `CliEffort` (L89) | 혼합형 | `architecture.md:589`(같은 절, 카탈로그 링크는 `:69`)가 `CliEffort`의 xhigh→high 클램프는 서술하지만, 삭제된 AGENTS.md 줄이 실제로 강조한 것은 `CliFailureClassifier`의 도메인 특화 오탐 방지 경고("권한"/"한도"/"사용량" 같은 일반 단어로 마커를 잡지 말 것)였다. 이 경고는 [CliFailureClassifier.cs:50-56](../src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)의 코드 주석에 그대로(오히려 더 상세히) 남아 있다 — Fix Round 1에서 정정 | 실질적, 삭제(단 인용 위치는 Fix Round 1에서 정정) |
 | `MockDataDto` (L110) | 사각지대 | `architecture.md:637` — 관계지향 모의 데이터가 `MockDataDto` 형태로 생성·캐싱된다고 명시 | 실질적, 삭제 |
 | `GapReport` (L111) | 사각지대 | `architecture.md:633` — L2 Gap 판정 5대 범주가 `GapReport`에 담긴다고 명시 | 실질적, 삭제 |
 | `ValidatorAiService` (L121) | 혼합형 | `architecture.md:633` — 같은 문단이 `ValidatorAiService`의 L2 대조 책임을 서술(카탈로그 링크는 `architecture.md:110`) | 실질적, 삭제 |
@@ -327,19 +331,101 @@ Task 2 Step 1이 준 문구를 그대로 쓴 것(플랜의 8개 중 3개는 위 
 | `SettlementPolicyService` (L93) | **재분류(A→B)** | `architecture.md:101` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
 | `ValidationUiProxy` (L98) | **재분류(A→B)** | `architecture.md:50` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
 
-17개 전부 "치우지 말아야 할 것을 지웠다"는 신호 없이 실질적 서술을 직접 읽고 확인했다.
-Group B로 분류하되 삭제하지 말아야 할 근거가 부족했던 행은 없었다.
+**정정(Fix Round 1).** 이 절은 원래 "17개 전부 실질적 서술을 직접 읽고 확인했다"고
+적었으나 그 주장은 틀렸다 — 실제로 직접 읽고 확인한 것은 17개 각 줄이 인용한
+"대표 근거 위치"뿐이었고, 원본 AGENTS.md 줄이 **여러 클래스를 한 문장에 묶은
+경우**(L142가 `DependencyAnalysisOrchestratorTests`·`SpecificationLinkerTests`·
+`OutputPathResolverTests` 셋을 묶었던 것처럼) 첫 번째 클래스만 처리하고 나머지는
+검토 없이 함께 삭제되는 구멍이 있었다. 독립 리뷰가 L142에서 이 구멍을 발견했다
+(뒤 "Fix Round 1" 절 참고). 리뷰는 나머지 묶음 줄(L85, L89, L104, L121, L135, L136)은
+모든 형제 클래스가 architecture.md에 이미 근거를 갖고 있음을 확인했고, 이 구멍이
+L142 하나뿐임을 검증했다 — 이 대장은 그 결과를 그대로 따른다.
 
 ### 크기
 
-| 파일 | Before | After |
+| 파일 | Phase 1 원안 이후 | Fix Round 1 이후 |
 |---|---|---|
-| `AGENTS.md` | 108,485 B | 55,096 B |
-| `docs/architecture.md` | 137,251 B | 139,963 B |
+| `AGENTS.md` | 108,485 B → 55,096 B | 55,096 B (변경 없음) |
+| `docs/architecture.md` | 137,251 B → 139,963 B | 139,963 B → 140,651 B |
 
 AGENTS.md는 108,485 → 55,096바이트로 약 53.4KB 줄었다(계획서 예상 50~57KB 범위 안).
 계획이 예상한 8개보다 Group A가 훨씬 컸음에도(14개, 최종 §2.2 표 신규 행) 범위
 안에 든 이유는 §2 카탈로그의 대다수(122행 중 91행)가 애초에 `중복:architecture.md`
 또는 `중복:<클래스>.cs <summary>`로 정직하게 판정됐고, 그 91행이 삭제분의 대부분을
-차지했기 때문이다. `docs/architecture.md`는 137,251 → 139,963바이트로 2,712바이트
-늘었다(§2.2 표에 14개 신규 행 추가분).
+차지했기 때문이다. Fix Round 1은 AGENTS.md를 전혀 건드리지 않았다 — 모든 보정이
+`docs/architecture.md`(137,251 → 139,963 → 140,651바이트, 이번 라운드에서 +688)와
+이 대장에만 실렸다.
+
+## Fix Round 1 (2026-08-14) — 독립 리뷰가 찾은 정보 손실 보정
+
+독립 리뷰가 Phase 1 결과에서 SPEC COMPLIANCE FAIL / TASK QUALITY FAIL을 냈다. 원인은
+전부 "정보 손실"이었고 라우팅 표·삭제 경계·링크 검사·크기는 통과했다. 아래는 그
+지적 각각과 실제로 무엇을 고쳤는지다.
+
+**Critical — L142의 묶음 삭제 구멍.** 구 AGENTS.md L142는
+`DependencyAnalysisOrchestratorTests.cs, SpecificationLinkerTests.cs,
+OutputPathResolverTests.cs: 재귀 SP/UDF 그래프의 중복 제거·실패 격리, 성공 대상 링크
+및 객체별 출력 경로를 검증.`이라는 한 문장으로 세 클래스를 묶었다. `scripts/doc-audit.sh`는
+줄 하나에서 첫 `[Xxx.cs]` 링크만 `sym`으로 뽑으므로 이 묶음에서는
+`DependencyAnalysisOrchestratorTests`만 31행 감사 대상에 잡혔고, 나머지 둘은 애초에
+평가조차 되지 않은 채(`중복`도 `근거없음`도 아닌 "감사되지 않음") 원안이 §2 전체를
+삭제할 때 함께 사라졌다. 두 파일을 열어 확인한 결과 각각 클래스 요약 XML 주석이
+없고, 이 삭제 전까지는 이 문장 하나가 유일한 문서화였다.
+
+원 문장의 세 절은 세 클래스에 1:1로 대응한다 — "중복 제거·실패 격리"는
+`DependencyAnalysisOrchestratorTests`(이미 §2.2에 있음), "성공 대상 링크"는
+`SpecificationLinkerTests`, "객체별 출력 경로"는 `OutputPathResolverTests`. 각 테스트
+파일을 열어 그 절이 실제로 그 클래스의 동작과 일치하는지 확인한 뒤(`SpecificationLinkerTests`는
+성공한 참조에 상대 링크를 쓰고 실패·외부 DB는 사유를 쓰는 것을 검증,
+`OutputPathResolverTests`는 `ResolveSpecPath`/`ResolveDocsDirectory`/
+`ResolveCanonicalDdlPath`/`ResolveManifestPath`로 현재/외부 DB의 출력 경로 계산을
+검증), `docs/architecture.md`의 `DependencyAnalysisOrchestratorTests` 행 바로 다음에
+두 행을 새로 추가했다(§2.2, ReSet.Core.Tests 그룹):
+
+```
+| | [SpecificationLinkerTests](../tests/ReSet.Core.Tests/SpecificationLinkerTests.cs) | 성공한 참조 대상에 상대 `Spec.md` 링크가 걸리고, 실패·외부 DB 등 링크할 수 없는 대상은 링크 대신 사유가 적히는지 검증. |
+| | [OutputPathResolverTests](../tests/ReSet.Core.Tests/OutputPathResolverTests.cs) | 현재 DB와 외부 DB를 구분한 객체별 출력 경로(명세서·DDL·의존성 매니페스트) 계산을 검증. |
+```
+
+리뷰가 다른 묶음 줄(L85 CLI 클라이언트군, L89 CLI 헬퍼군, L104 검증 추상화군, L121
+검증 서비스군, L135/L136 클라이언트 테스트군)도 같은 구멍이 있는지 확인했고, 그
+전부가 architecture.md에 형제 클래스마다 이미 근거가 있음을 확인했다고 보고했다 —
+L142가 유일한 사례였다. 이 대장은 그 결과를 그대로 받아들였고, 재감사는 하지 않았다.
+
+**Important 1 — `SettlementPolicyService`가 삭제한 링크의 손실.** 재분류 표(위)가
+`SettlementPolicyService`(L93)를 Group A에서 Group B로 옮기며 AGENTS.md 줄을
+지웠는데, 그 줄은 `ISettlementPolicyService.cs`도 함께 언급·링크하고 있었다.
+`architecture.md:101`의 살아남은 행은 구현체만 서술하고 그 인터페이스는 언급하지
+않아, 삭제 시점에 그 인터페이스 파일이 대장·AGENTS.md·architecture.md 어디에도
+남지 않게 됐다. 이번 라운드에서 그 행을 보강했다:
+
+- 이전: `| | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |`
+- 이후: `| | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. 계약은 [ISettlementPolicyService](../src/ReSet.Core/Services/ISettlementPolicyService.cs)로 분리되어 있다. |`
+
+이것이 재분류(A→B) 판단 자체를 무효로 하지는 않는다 — `PromptComposition`과
+`ValidationUiProxy`의 재분류는 리뷰가 검증한 대로 손실이 없었다. 다만 "행이 존재한다"와
+"그 행이 원문의 내용을 다 담고 있다"는 별개의 주장이며, 후자를 확인하지 않고
+삭제한 것이 이번 사례의 결함이다 — 짧은 행이 살아남을 때는 삭제 전에 보강해야 한다.
+
+**Important 2 — `CliWorkspace`/`CliEffort` 인용 위치 정정.** 조정자 판정: 내용
+자체는 옳은 자리에 있다(코드 주석), 대장의 **인용**이 틀렸다. `architecture.md:589`는
+`CliWorkspace`·`CliEffort`의 일반적 역할은 서술하지만, 삭제된 AGENTS.md 줄이 실제로
+가장 힘주어 말한 두 경고 — (a) `CliWorkspace`의 `--strict-mcp-config`/
+`--setting-sources ""` "두 축을 함께 유지하라"는 규칙, (b) `CliFailureClassifier`의
+도메인 특화 오탐 방지 마커 규칙 — 는 그 문단에 없다. 둘 다 [ClaudeCliClient.cs:63-69]
+(../src/ReSet.Core/Services/Clients/Cli/ClaudeCliClient.cs)와
+[CliFailureClassifier.cs:50-56](../src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)의
+코드 주석에 원문과 같거나 더 상세하게 살아 있다. 이 두 경고는 "그 파일을 여는
+사람만 잡는다" 범주이므로 코드 주석이 맞는 거처이며, 라우팅 표를 바꿀 필요는 없다
+— 위 Group B 표의 인용을 이 절의 설명으로 정정했다.
+
+**Minor — 두 곳 보강.**
+- `DataComparisonServiceTests`(`architecture.md:135` 부근)가 서술하던 "예외 핸들링"을
+  "`JsonException` 핸들링"으로 구체화했다. 삭제된 AGENTS.md 줄이 명시했던 예외
+  타입이며, 실제로 `DataComparisonServiceTests.CompareOutputs_WithNullJson_ShouldHandleGracefully`가
+  `DataComparisonService.cs:26`의 `catch (JsonException)` 경로를 예외 처리한다.
+- `GapReport.cs`와 `MockDataDto.cs`가 삭제 시점에 잃었던 유일한 클릭 가능 링크를
+  복원했다 — 새 §2.2 행을 만들지 않고, 각 클래스를 이미 실질적으로 서술하던 산문
+  문단(`architecture.md` §4.6의 Gap 판정 규칙 문단, §4.7의 관계지향 모의 데이터 생성
+  문단)의 백틱 이름을 마크다운 링크로 바꿨다. 산문이 이미 더 나은 거처였고, 항해
+  가능성만 없었다.
