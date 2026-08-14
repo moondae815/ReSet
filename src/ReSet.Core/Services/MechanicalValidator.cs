@@ -171,7 +171,11 @@ namespace ReSet.Core.Services
         ///
         /// AI 호출이 없으므로 비용이 0이다. 단계마다 돌려도 무료다.
         /// </summary>
-        public StepValidationResult ValidateBatchStep(string? stepMarkdown, BatchStepPlan step)
+        /// <param name="knownTableNames">이 작업의 스키마 카탈로그(SpDefinition.Dependencies).
+        /// 비어 있으면 미지 테이블 검사를 실행하지 않는다 - 카탈로그가 없다는 사실을
+        /// 모든 테이블이 유령이라는 판정으로 바꾸지 않기 위한 소프트 스킵이다.</param>
+        public StepValidationResult ValidateBatchStep(
+            string? stepMarkdown, BatchStepPlan step, IReadOnlyCollection<string> knownTableNames)
         {
             var result = new StepValidationResult();
 
@@ -261,6 +265,8 @@ namespace ReSet.Core.Services
                 }
             }
 
+            CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
+
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
             result.Errors.AddRange(result.PlanDefects);
@@ -324,6 +330,119 @@ namespace ReSet.Core.Services
                 haystack,
                 $@"(?<!\w){Regex.Escape(token)}(?!\w)",
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
+        }
+
+        // 백틱 인용과 SQL 펜스 안의 2부·3부 식별자만 본다. 산문까지 훑으면 서술이
+        // 식별자로 오인되고, 그 오탐은 단계 재생성을 유발해 비용이 실재한다.
+        private static readonly Regex QualifiedTableRegex = new(
+            @"\b([A-Za-z_][A-Za-z_0-9]*)\.([A-Za-z_][A-Za-z_0-9]*)(?:\.([A-Za-z_][A-Za-z_0-9]*))?\b",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// 계획서가 쓰겠다고 적은 테이블이 실재하는지 본다.
+        ///
+        /// 실측: S17이 dbo.TSettleSummary로 파티션을 교체하라고 지시했는데 그 테이블은
+        /// 카탈로그 55종에 없고, S13이 만드는 요약 테이블 4개와 이름도 다르다. 문서 레벨
+        /// L1은 헤더·축약어·Mermaid만 보므로 그것을 잡을 곳이 아무 데도 없었다.
+        ///
+        /// batch·batch_shadow는 제외한다. 계획서가 새로 만드는 객체라 카탈로그에 없는
+        /// 것이 정상이며, 그 판단은 BatchInfraObjectCollector가 단독 소유한다.
+        /// </summary>
+        private static void CheckUnknownTableReferences(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyCollection<string> knownTableNames,
+            StepValidationResult result)
+        {
+            if (knownTableNames.Count == 0)
+            {
+                Log.Information(
+                    "{Code}: 스키마 카탈로그가 비어 있어 미지 테이블 검사를 건너뜁니다.", step.Code);
+                return;
+            }
+
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in knownTableNames)
+            {
+                var bare = BareObjectName(name);
+                if (bare.Length > 0)
+                {
+                    known.Add(bare);
+                }
+            }
+
+            // 목차가 선언한 대상 테이블도 알려진 것으로 친다. 카탈로그 수집이
+            // 놓친 대상 테이블 때문에 정상 단계가 걸리는 일을 막는다.
+            foreach (var declared in step.TargetTables.Concat(step.SchemaTables))
+            {
+                var bare = BareObjectName(declared);
+                if (bare.Length > 0)
+                {
+                    known.Add(bare);
+                }
+            }
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var candidate in ExtractQuotedIdentifiers(stepMarkdown))
+            {
+                if (BatchInfraObjectCollector.IsInfraObject(candidate))
+                {
+                    continue;
+                }
+
+                var bare = BareObjectName(candidate);
+                if (bare.Length == 0 || known.Contains(bare) || !reported.Add(bare))
+                {
+                    continue;
+                }
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 `{candidate}`를 참조하지만 이 작업의 스키마 카탈로그에도, " +
+                    "이 계획서가 만드는 batch 스키마 객체에도 없습니다. 실재하는 대상으로 바꾸거나, " +
+                    "신규 객체라면 batch 스키마에 두십시오.");
+            }
+        }
+
+        /// <summary>
+        /// 백틱 인용과 코드 펜스 안에서만 수식 식별자를 뽑는다.
+        /// </summary>
+        private static IEnumerable<string> ExtractQuotedIdentifiers(string markdown)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var fenceFlags = ComputeFenceLineFlags(lines);
+            var found = new List<string>();
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var line = lines[i];
+
+                if (fenceFlags[i])
+                {
+                    // 펜스 줄 자체(```sql)는 식별자를 담지 않는다.
+                    if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    foreach (Match m in QualifiedTableRegex.Matches(line))
+                    {
+                        found.Add(m.Value);
+                    }
+                    continue;
+                }
+
+                foreach (Match backtick in BacktickIdentifierRegex.Matches(line))
+                {
+                    var inner = backtick.Groups[1].Value.Trim();
+                    foreach (Match m in QualifiedTableRegex.Matches(inner))
+                    {
+                        found.Add(m.Value);
+                    }
+                }
+            }
+
+            return found;
         }
 
         /// <summary>

@@ -5371,6 +5371,7 @@ SELECT 1;
             Dictionary<string, string>? previousSections,
             Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
+            IReadOnlyList<string> knownTableNames,
             CancellationToken cancellationToken)
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
@@ -5381,7 +5382,8 @@ SELECT 1;
             var task = (Task)method!.Invoke(orchestrator, new object?[]
             {
                 planStructure, steps, specs, targetLanguage, jobName, progressScope,
-                previousSkeleton, previousSkeletonResult, previousSections, previousViolations, defectiveSteps, cancellationToken
+                previousSkeleton, previousSkeletonResult, previousSections, previousViolations, defectiveSteps,
+                knownTableNames, cancellationToken
             })!;
 
             await task;
@@ -5433,7 +5435,7 @@ SELECT 1;
             var first = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
                 NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
-                Array.Empty<string>(), CancellationToken.None);
+                Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(first);
 
             var firstViolations = GetFloorViolations(first!);
@@ -5444,7 +5446,7 @@ SELECT 1;
             var second = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
                 NullProgressScope.Instance, GetSkeleton(first!), GetGeneration(first!), GetSections(first!), firstViolations,
-                new[] { "S02" }, CancellationToken.None);
+                new[] { "S02" }, Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(second);
 
             var secondViolations = GetFloorViolations(second!);
@@ -5508,7 +5510,7 @@ SELECT 1;
             var first = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
                 NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
-                Array.Empty<string>(), CancellationToken.None);
+                Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(first);
 
             var firstGeneration = GetGeneration(first!);
@@ -5518,7 +5520,7 @@ SELECT 1;
             var second = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps!, specs, "C#", "Job_Test",
                 NullProgressScope.Instance, GetSkeleton(first!), firstGeneration, GetSections(first!),
-                GetFloorViolations(first!), new[] { "S02" }, CancellationToken.None);
+                GetFloorViolations(first!), new[] { "S02" }, Array.Empty<string>(), CancellationToken.None);
             Assert.NotNull(second);
 
             var secondGeneration = GetGeneration(second!);

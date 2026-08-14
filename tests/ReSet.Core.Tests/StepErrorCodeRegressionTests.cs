@@ -58,7 +58,7 @@ namespace ReSet.Core.Tests
             Assert.Empty(s00.ErrorCodes);
 
             var body = $"### {s00.Code} {s00.Name}\n\n```sql\nSELECT 1 FROM {s00.TargetTables[0]};\n```";
-            var result = new MechanicalValidator().ValidateBatchStep(body, s00);
+            var result = new MechanicalValidator().ValidateBatchStep(body, s00, Array.Empty<string>());
 
             Assert.True(result.IsValid);
         }
@@ -83,7 +83,7 @@ namespace ReSet.Core.Tests
             var body = $"### {s06.Code} {s06.Name}\n\n```sql\nSELECT 1 FROM {s06.TargetTables[0]};\n```\n\n"
                 + string.Join(" ", s06.ErrorCodes.Select(c => $"`{c}`"));
 
-            var result = new MechanicalValidator().ValidateBatchStep(body, s06);
+            var result = new MechanicalValidator().ValidateBatchStep(body, s06, Array.Empty<string>());
 
             Assert.True(result.IsValid);
         }
