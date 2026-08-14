@@ -607,6 +607,30 @@ S02 본문
             Assert.Contains("`batch.POQSettleCheckpoint`", bootstrap);
         }
 
+        [Fact]
+        public async Task WriteAsync_ShouldWarnWhenShadowNameRunIdLiteralsCollapse()
+        {
+            // CollapsedRunIdVariants가 접혀 하나의 이름이 되고 나면, 그 사실이
+            // BundleResult.Warnings로 나오지 않는 이상 계획서가 Shadow 이름 규칙
+            // (batch_shadow.<Table>_<RunId>_<StepCode>)을 어겼다는 증거가 흔적도 없이
+            // 사라진다. 접기만 하고 알리지 않는 것은 접지 않는 것보다 나쁘다.
+            var plan = FinalPlan +
+                "\n\nbatch_shadow.TSettleMst_RunId_S06 와 batch_shadow.TSettleMst_Run_S06\n";
+
+            var result = await new InstructionBundleWriter().WriteAsync(
+                Inputs(Layout()) with { FinalPlanMarkdown = plan }, CancellationToken.None);
+
+            // "_RunId_"/"_Run_" 원문 리터럴은 접힌 뒤의 이름(batch_shadow.TSettleMst_<RunId>_S06)
+            // 에는 존재하지 않는다 - 그래서 이 문자열은 접히기 전 원문에만 있는 증거다.
+            // infra.Names(접힌 결과)를 잘못 순회해도 이 단언은 통과하지 못한다.
+            Assert.Contains(result.Warnings, w =>
+                w.Contains("batch_shadow.TSettleMst_RunId_S06", StringComparison.Ordinal) &&
+                w.Contains(BatchInfraObjectCollector.RunIdPlaceholder, StringComparison.Ordinal));
+            Assert.Contains(result.Warnings, w =>
+                w.Contains("batch_shadow.TSettleMst_Run_S06", StringComparison.Ordinal) &&
+                w.Contains(BatchInfraObjectCollector.RunIdPlaceholder, StringComparison.Ordinal));
+        }
+
         /// <summary>
         /// 단계 코드는 AI가 만든 목차에서 온 자유 문자열이다. steps/{코드}.md 쓰기 경로만
         /// 정화를 건너뛰고 있어 "../"나 경로 구분자가 든 코드로 agent/steps/ 바깥에 파일을
