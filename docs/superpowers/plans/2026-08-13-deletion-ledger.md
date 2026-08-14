@@ -9,6 +9,13 @@
 확인할 수 있다는 것이 이 대장의 유일한 값어치이므로, 숫자가 어느 파일을 가리키는지
 모호하면 그 값어치가 사라진다.
 
+`architecture.md:<n>` 좌표에는 AGENTS.md 좌표와 달리 커밋 스탬프가 없었다 — 그래서
+§2.2 표에 행이 추가될 때마다(가장 최근은 `9b0be10`의 `SpDefinition` 행) 아래쪽 모든
+줄 번호가 조용히 밀렸다. 아래 "이 표를 읽기 전에" 절이 인용하는 `architecture.md:<n>`
+값은 전부 커밋 `9b0be10`("give SpDefinition the §2.2 row...") 시점 기준이다. 이후
+§2.2가 다시 늘어나면 이 좌표들도 다시 밀리므로, 그대로 믿지 말고 `grep -n`으로
+재확인한다 — 이 문장 자체가 다음 밀림을 침묵시키지 않기 위한 장치다.
+
 **이 표를 읽기 전에.** `scripts/doc-audit.sh`는 클래스 이름이 아니라 마크다운 링크의
 경로로 근거를 찾는다(2026-08-14 개정, 아래 "개정 이력" 참고). 그래도 이 도구가
 증명하지 못하는 것이 네 가지 있다.
@@ -76,20 +83,20 @@ L144 — 정확히 9줄). 이 9줄이 전부이며, 아래 일곱 개(사각지�
 `ValidatorAiService`(L121), `TypeClassificationPolicyTests`(L144)는
 architecture.md가 그 클래스를 백틱 이름으로 실질적으로 서술하고 있다 —
 `SqlObjectTypeClassifier`와 `TypeClassificationPolicyTests`는
-`architecture.md:388`, `CliWorkspace`와 `CliEffort`는 `architecture.md:589`,
-`MockDataDto`는 `architecture.md:637`, `GapReport`와 `ValidatorAiService`는
-`architecture.md:633`에 있다. 다만 그 문단이 파일을 링크하지 않아(또는
+`architecture.md:405`, `CliWorkspace`와 `CliEffort`는 `architecture.md:607`,
+`MockDataDto`는 `architecture.md:655`, `GapReport`와 `ValidatorAiService`는
+`architecture.md:651`에 있다. 다만 그 문단이 파일을 링크하지 않아(또는
 카탈로그 링크와 별도로 더 긴 서술이 붙어 있어) 경로 매칭이 그 서술을 보지
 못한다. 이 일곱 줄의 `근거없음`은 위 네 번째 항목("링크 없는 서술은 경로 매칭이
 보지 못한다")이 말하는 스크립트의 사각지대이지, 드러난 실제 공백이 아니다.
 셋 — `CliWorkspace`, `CliEffort`, `ValidatorAiService` — 은 그중에서도
 혼합형이다: architecture.md 카탈로그 표에 실제 링크가 있어 스크립트가 일부
 분량을 이미 인정했다 — `CliWorkspace`는 표 L88이고 그 카탈로그 링크는
-`architecture.md:68`에 있어 ARCH_MD 504바이트, `CliEffort`는 표 L89이고 링크는
-`architecture.md:69`에 있어 893바이트, `ValidatorAiService`는 표 L121이고 링크는
-`architecture.md:110`에 있어 302바이트다. 그 인정된 분량이 AGENTS.md 줄의
+`architecture.md:69`에 있어 ARCH_MD 504바이트, `CliEffort`는 표 L89이고 링크는
+`architecture.md:70`에 있어 893바이트, `ValidatorAiService`는 표 L121이고 링크는
+`architecture.md:117`에 있어 302바이트다. 그 인정된 분량이 AGENTS.md 줄의
 바이트 수에 못 미치고 카탈로그 항목과는 별도의 더 긴 서술 문단이 또 있다(CliWorkspace·
-CliEffort는 `architecture.md:589`, ValidatorAiService는 `architecture.md:633`).
+CliEffort는 `architecture.md:607`, ValidatorAiService는 `architecture.md:651`).
 나머지 넷(`SqlObjectTypeClassifier`, `MockDataDto`, `GapReport`,
 `TypeClassificationPolicyTests`)은 링크가 아예 없다(해당 `.cs` 경로로
 `grep -c`하면 0이 나온다).
