@@ -562,6 +562,10 @@ public interface ICheckpointRepository {
                             DataAccessPolicy.StepLogicTestStub(targetLanguage),
                             Encoding.UTF8);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.cs"), archUnitStub, Encoding.UTF8);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "AssemblyCompletenessTests.cs"),
+                            DataAccessPolicy.AssemblyCompletenessTestStub(targetLanguage),
+                            Encoding.UTF8);
                     }
                     catch (Exception ex)
                     {
@@ -599,6 +603,10 @@ public interface ICheckpointRepository {
                             DataAccessPolicy.StepLogicTestStub(targetLanguage),
                             Utf8NoBom);
                         await File.WriteAllTextAsync(Path.Combine(agentTestsFolder, "ArchitectureTests.java"), archUnitStub, Utf8NoBom);
+                        await File.WriteAllTextAsync(
+                            Path.Combine(agentTestsFolder, "AssemblyCompletenessTests.java"),
+                            DataAccessPolicy.AssemblyCompletenessTestStub(targetLanguage),
+                            Utf8NoBom);
                     }
                     catch (Exception ex)
                     {

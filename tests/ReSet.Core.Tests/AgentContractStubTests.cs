@@ -258,5 +258,41 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("LogicTests_", stub);
         }
+
+        /// <summary>
+        /// 회차 0이 지시받은 헥사고날 구조를 다중 프로젝트로 만들면 Tasklet과 Domain
+        /// 타입이 코어와 다른 어셈블리에 놓인다. 단일 어셈블리만 스캔하면 규칙 1·2·3·4가
+        /// 대상 0건으로 조용히 통과한다 - 아키텍처 지시와 검사 방식이 서로를 무력화한다.
+        /// </summary>
+        [Fact]
+        public void ArchitectureTestStub_ShouldScanEveryBatchAssembly_ForCSharp()
+        {
+            var stub = DataAccessPolicy.ArchitectureTestStub("C#");
+
+            Assert.DoesNotContain("private static Assembly Target =>", stub);
+            Assert.Contains("GetReferencedAssemblies", stub);
+            Assert.Contains("ReSet.Batch", stub);
+        }
+
+        /// <summary>
+        /// 0건 판정은 조립 회차에서만 켠다. 회차 0에는 Tasklet이 0개인 것이 정상이다.
+        /// 스텁은 자신이 몇 회차에 놓이는지 알 수 없으므로 파일을 나누고, 배치 지시를
+        /// 조립 회차에만 둔다 - 배치 지시가 곧 활성화 스위치다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void AssemblyCompletenessTestStub_ShouldFailWhenNoTaskletExists(string targetLanguage)
+        {
+            var stub = DataAccessPolicy.AssemblyCompletenessTestStub(targetLanguage);
+
+            Assert.Contains("AbstractSettleTasklet", stub);
+            // 실패 메시지가 "왜 0건이 위험한가"를 말해야 한다 - 개수만 세고 끝나면
+            // 읽는 사람이 대상 0건 통과라는 함정을 모른 채 넘어간다.
+            Assert.Contains("Tasklet이 0개입니다", stub);
+            Assert.Contains("대상 0건으로 통과", stub);
+            // 회차 0의 아키텍처 테스트와 다른 파일이어야 활성화 스위치가 성립한다.
+            Assert.Contains("AssemblyCompletenessTests", stub);
+        }
     }
 }

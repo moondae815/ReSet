@@ -374,5 +374,30 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain("동작 테스트", markdown);
         }
+
+        [Fact]
+        public void Compose_ShouldPlaceTheCompletenessTestOnlyInTheAssemblyRound()
+        {
+            var assembly = TaskFileComposer.Compose(new TaskFileInputs(
+                Kind: StageKind.Assembly,
+                JobName: "TestJob",
+                TargetLanguage: "C#",
+                StepCode: null,
+                StepName: null,
+                StepRelativePath: null,
+                SpecRelativePath: null,
+                Dependencies: Array.Empty<IndexEntry>(),
+                HasStepContract: true,
+                HasVerification: true,
+                FailedStepCodes: Array.Empty<string>(),
+                SinglePlanRelativePath: null,
+                InfraObjects: Array.Empty<string>()));
+
+            Assert.Contains("AssemblyCompletenessTests", assembly);
+
+            // 회차 0에 새면 Tasklet이 0개인 부트스트랩이 부당하게 실패한다.
+            var bootstrap = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+            Assert.DoesNotContain("AssemblyCompletenessTests", bootstrap);
+        }
     }
 }

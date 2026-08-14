@@ -123,12 +123,48 @@ namespace ReSet.Batch.Tests.Architecture
     /// </summary>
     public class ArchitectureTests
     {
-        private static Assembly Target => typeof(ReSet.Batch.Core.ISettleStep).Assembly;
+        // 코어 한 어셈블리만 보면, 회차 0이 지시받은 헥사고날 구조를 다중 프로젝트로
+        // 만든 순간 Tasklet과 Domain 타입이 시야에서 사라져 규칙들이 대상 0건으로
+        // 조용히 통과한다. 테스트 어셈블리가 참조하는 ReSet.Batch.* 를 전부 훑는다.
+        private static IReadOnlyList<Assembly> Targets
+        {
+            get
+            {
+                foreach (var reference in Assembly.GetExecutingAssembly().GetReferencedAssemblies())
+                {
+                    if ((reference.Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                    {
+                        // 아직 로드되지 않은 참조는 AppDomain에 나타나지 않는다.
+                        try { Assembly.Load(reference); } catch { /* 로드 실패는 아래 필터가 흡수한다 */ }
+                    }
+                }
+
+                return AppDomain.CurrentDomain.GetAssemblies()
+                    .Where(a => !a.IsDynamic)
+                    .Where(a => (a.GetName().Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                    .Distinct()
+                    .ToList();
+            }
+        }
+
+        private static IEnumerable<Type> TargetTypes =>
+            Targets.SelectMany(assembly =>
+            {
+                try
+                {
+                    return assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    // 일부 타입이 로드되지 않아도 나머지는 검사한다.
+                    return ex.Types.Where(t => t != null)!;
+                }
+            });
 
         [Fact]
         public void EverySettleStep_MustInherit_AbstractSettleTasklet()
         {
-            var offenders = Target.GetTypes()
+            var offenders = TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.ISettleStep).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract)
                 .Where(t => !typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
@@ -143,27 +179,45 @@ namespace ReSet.Batch.Tests.Architecture
         public void Tasklets_MustNotCreate_TheirOwnConnection()
         {
             // 새 커넥션을 만들면 검증기의 Rollback 격리가 깨져 정합성 대조가 오염된다.
-            var result = Types.InAssembly(Target)
-                .That().Inherit(typeof(ReSet.Batch.Core.AbstractSettleTasklet))
-                .ShouldNot().HaveDependencyOn(""Microsoft.Data.SqlClient.SqlConnection"")
-                .GetResult();
+            var offenders = new List<string>();
 
-            Assert.True(result.IsSuccessful,
-                ""SqlConnection을 직접 생성한 Tasklet: "" +
-                string.Join("", "", result.FailingTypeNames ?? Array.Empty<string>()));
+            foreach (var assembly in Targets)
+            {
+                var result = Types.InAssembly(assembly)
+                    .That().Inherit(typeof(ReSet.Batch.Core.AbstractSettleTasklet))
+                    .ShouldNot().HaveDependencyOn(""Microsoft.Data.SqlClient.SqlConnection"")
+                    .GetResult();
+
+                if (!result.IsSuccessful)
+                {
+                    offenders.AddRange(result.FailingTypeNames ?? Array.Empty<string>());
+                }
+            }
+
+            Assert.True(offenders.Count == 0,
+                ""SqlConnection을 직접 생성한 Tasklet: "" + string.Join("", "", offenders));
         }
 
         [Fact]
         public void Domain_MustNotDependOn_Infrastructure()
         {
-            var result = Types.InAssembly(Target)
-                .That().ResideInNamespaceStartingWith(""ReSet.Batch.Domain"")
-                .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
-                .GetResult();
+            var offenders = new List<string>();
 
-            Assert.True(result.IsSuccessful,
-                ""Infrastructure에 의존한 Domain 타입: "" +
-                string.Join("", "", result.FailingTypeNames ?? Array.Empty<string>()));
+            foreach (var assembly in Targets)
+            {
+                var result = Types.InAssembly(assembly)
+                    .That().ResideInNamespaceStartingWith(""ReSet.Batch.Domain"")
+                    .ShouldNot().HaveDependencyOn(""ReSet.Batch.Infrastructure"")
+                    .GetResult();
+
+                if (!result.IsSuccessful)
+                {
+                    offenders.AddRange(result.FailingTypeNames ?? Array.Empty<string>());
+                }
+            }
+
+            Assert.True(offenders.Count == 0,
+                ""Infrastructure에 의존한 Domain 타입: "" + string.Join("", "", offenders));
         }
 
         [Fact]
@@ -188,7 +242,7 @@ namespace ReSet.Batch.Tests.Architecture
             // 그 값을 읽을 수 있다 - 이름만 약속하고 실제로는 검사하지 않는 규칙을
             // 남겨 두지 않는다.
             var offenders = new List<string>();
-            foreach (var t in Target.GetTypes()
+            foreach (var t in TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract))
             {
@@ -260,7 +314,7 @@ namespace ReSet.Batch.Tests.Architecture
             Assert.True(notInjectable.Count == 0,
                 ""DI가 채울 수 없는(공개 설정자가 없는) 커넥션 팩토리 속성: "" + string.Join("", "", notInjectable));
 
-            var implementations = Target.GetTypes()
+            var implementations = TargetTypes
                 .Where(t => typeof(ReSet.Batch.Core.IDbConnectionFactory).IsAssignableFrom(t))
                 .Where(t => t.IsClass && !t.IsAbstract)
                 .ToList();
@@ -296,6 +350,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 경계 규칙 조항 1의 후반부 - ORM(JPA)을 전달받은 커넥션/트랜잭션에 참여시켜야 한다는
  * 요구 - 는 호출 그래프 분석이 필요해 여기서 검증할 수 없다. 그 항목은 도구의 L1
  * 정적 검증이 본다. 이 테스트 통과를 경계 규칙 전체 준수로 읽지 마십시오.
+ *
+ * (C#과 달리 여기는 어셈블리 경계 문제가 없다 - importPackages가 com.reset.batch 전체를
+ *  훑으므로 Tasklet이 어느 모듈에 있든 시야에 들어온다.)
  */
 class ArchitectureTests {
 
@@ -452,6 +509,89 @@ class ArchitectureTests {
             targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
                 ? JavaArchitectureTests
                 : CSharpArchitectureTests;
+
+        private const string CSharpAssemblyCompletenessTests = @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using Xunit;
+
+namespace ReSet.Batch.Tests.Architecture
+{
+    /// <summary>
+    /// 조립 회차 전용. 이 파일은 조립 회차의 지시서만 배치를 요구한다.
+    ///
+    /// 아키텍처 규칙들은 대상이 0건이면 통과한다 - 회차 0에는 Tasklet이 없으므로
+    /// 그것이 정상이다. 그래서 ""하나도 없다""를 실패로 보는 판정은 모든 단계가
+    /// 구현된 뒤에만 켤 수 있고, 스텁은 자신이 몇 회차에 놓이는지 알 수 없다.
+    /// 파일을 나누고 배치 지시를 조립 회차에만 두어 그 스위치를 만든다.
+    /// </summary>
+    public class AssemblyCompletenessTests
+    {
+        [Fact]
+        public void Assembly_MustContainAtLeastOneTasklet()
+        {
+            var taskletCount = AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a => !a.IsDynamic)
+                .Where(a => (a.GetName().Name ?? string.Empty).StartsWith(""ReSet.Batch"", StringComparison.Ordinal))
+                .SelectMany(a =>
+                {
+                    try { return a.GetTypes(); }
+                    catch (ReflectionTypeLoadException ex) { return ex.Types.Where(t => t != null)!; }
+                })
+                .Count(t => t != null
+                    && t.IsClass
+                    && !t.IsAbstract
+                    && typeof(ReSet.Batch.Core.AbstractSettleTasklet).IsAssignableFrom(t));
+
+            Assert.True(taskletCount > 0,
+                ""Tasklet이 0개입니다. 아키텍처 규칙들이 대상 0건으로 통과했을 뿐 아무것도 검사하지 않았습니다."");
+        }
+    }
+}
+";
+
+        private const string JavaAssemblyCompletenessTests = @"package com.reset.batch.tests.architecture;
+
+import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.core.importer.ClassFileImporter;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 조립 회차 전용. 이 파일은 조립 회차의 지시서만 배치를 요구한다.
+ *
+ * 아키텍처 규칙들은 대상이 0건이면 통과한다 - 부트스트랩 회차에는 Tasklet이 없으므로
+ * 그것이 정상이다. ""하나도 없다""를 실패로 보는 판정은 모든 단계가 구현된 뒤에만
+ * 켤 수 있다.
+ */
+class AssemblyCompletenessTests {
+
+    private final JavaClasses classes = new ClassFileImporter().importPackages(""com.reset.batch"");
+
+    @Test
+    void assemblyMustContainAtLeastOneTasklet() {
+        long taskletCount = classes.stream()
+            .filter(c -> !c.getModifiers().contains(JavaModifier.ABSTRACT))
+            .filter(c -> c.isAssignableTo(""com.reset.batch.core.AbstractSettleTasklet""))
+            .count();
+
+        assertTrue(taskletCount > 0,
+            ""Tasklet이 0개입니다. 아키텍처 규칙들이 대상 0건으로 통과했을 뿐 아무것도 검사하지 않았습니다."");
+    }
+}
+";
+
+        /// <summary>
+        /// 조립 회차에서만 켜지는 0건 판정. 배치 지시가 활성화 스위치다.
+        /// </summary>
+        public static string AssemblyCompletenessTestStub(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? JavaAssemblyCompletenessTests
+                : CSharpAssemblyCompletenessTests;
 
         private const string CSharpRepositoryContract = @"using System.Collections.Generic;
 

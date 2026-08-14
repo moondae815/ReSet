@@ -262,6 +262,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("- 단계 실행 순서와 선행 조건 검증");
             sb.AppendLine("- 단계 간 예외 전파와 트랜잭션 롤백 처리");
             sb.AppendLine("- 전체 빌드와 아키텍처 테스트 통과");
+            sb.AppendLine(AssemblyCompletenessPlacementLine(inputs.TargetLanguage));
             // 이 회차의 게이트는 Job 전체 검증이고, 그 검증은 계획서와 소스 트리를
             // Job 이름으로 짝짓는다. 이름 규약이 어디에도 적혀 있지 않던 동안에는
             // 모든 회차가 통과한 실행조차 매핑 0건으로 실패 처리됐다.
@@ -291,6 +292,15 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
             }
         }
+
+        /// <summary>
+        /// 0건 판정을 켜는 스위치. 회차 0에는 Tasklet이 없어 이 검사가 부당하게
+        /// 실패하므로, 배치 지시를 조립 회차에만 둔다.
+        /// </summary>
+        private static string AssemblyCompletenessPlacementLine(string targetLanguage) =>
+            targetLanguage.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                ? "- `tests/AssemblyCompletenessTests.java`를 프로젝트의 `src/test/java/com/reset/batch/tests/architecture/` 아래로 배치하고 통과시킬 것 (Tasklet이 하나도 없으면 실패하는 검사입니다 — 이 회차에서만 켭니다)"
+                : "- `tests/AssemblyCompletenessTests.cs`를 프로젝트에 배치하고 통과시킬 것 (Tasklet이 하나도 없으면 실패하는 검사입니다 — 이 회차에서만 켭니다)";
 
         /// <summary>
         /// 계획서의 SQL이 EXEC하거나 참조하는 신규 스키마 객체를 회차 0에 실명으로 싣는다.
