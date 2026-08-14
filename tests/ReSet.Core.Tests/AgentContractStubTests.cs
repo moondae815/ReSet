@@ -1,3 +1,4 @@
+using System;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -155,6 +156,74 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("ISettleStep", stub);
             Assert.Contains("Order", stub);
+        }
+
+        /// <summary>
+        /// 계획서는 Shadow 이름(batch_shadow.&lt;Table&gt;_&lt;RunId&gt;_&lt;StepCode&gt;),
+        /// 체크포인트 키, 오류 로그, 게시 Manifest를 전부 RunId 기반으로 설계한다.
+        /// 스텁이 그 값을 주지 않으면 18개 회차가 각자 다르게 우회한다.
+        /// </summary>
+        [Fact]
+        public void AbstractTaskletStub_ShouldExposeExecutionIdentifiers_ForCSharp()
+        {
+            var stub = DataAccessPolicy.AbstractTaskletStub("C#");
+
+            Assert.Contains("public Guid RunId { get; set; }", stub);
+            Assert.Contains("public string InputHash { get; set; }", stub);
+            Assert.Contains("public string SourceSnapshotId { get; set; }", stub);
+        }
+
+        [Fact]
+        public void SettleContextStub_ShouldExposeExecutionIdentifiers_ForJava()
+        {
+            var stub = DataAccessPolicy.SettleContextStub("Java");
+
+            Assert.Contains("getRunId", stub);
+            Assert.Contains("setRunId", stub);
+            Assert.Contains("getInputHash", stub);
+            Assert.Contains("getSourceSnapshotId", stub);
+        }
+
+        /// <summary>
+        /// 설계 1.1의 "최소 확장" 결정을 고정한다. 계획서 본문에는 ExecuteAsync와
+        /// SettlementStepResult가 가득하지만, 실행 계약은 동기 Execute 하나다.
+        /// 나중에 계획서를 보고 비동기를 끼워 넣으려는 사람에게 이 테스트가
+        /// 결정을 상기시킨다.
+        /// </summary>
+        [Fact]
+        public void AbstractTaskletStub_ShouldNotDeclareAsyncExecution_ForCSharp()
+        {
+            var stub = DataAccessPolicy.AbstractTaskletStub("C#");
+
+            Assert.DoesNotContain("ExecuteAsync", stub);
+            Assert.DoesNotContain("SettlementStepResult", stub);
+            Assert.Contains("public StepResult Execute(SettleContext context)", stub);
+        }
+
+        /// <summary>
+        /// C#의 SettleContext는 AbstractTaskletStub 안에 들어 있다. 언어를 착각한
+        /// 호출을 조용히 통과시키면 SettleContext.cs라는 중복 파일이 나간다.
+        /// </summary>
+        [Fact]
+        public void SettleContextStub_ShouldRejectCSharp()
+        {
+            Assert.Throws<NotSupportedException>(() => DataAccessPolicy.SettleContextStub("C#"));
+        }
+
+        /// <summary>
+        /// 치환 책임을 DataAccessPolicy가 가진다. 두 언어 모두 자리표시자를 쓰고
+        /// (C#은 [[ORM_BOUNDARY]], Java는 [[ORM_BOUNDARY_JAVA]]), 그대로 나가면
+        /// 에이전트 프로젝트가 컴파일되지 않는다.
+        /// </summary>
+        [Theory]
+        [InlineData("C#")]
+        [InlineData("Java")]
+        public void AbstractTaskletStub_ShouldAlreadySubstituteTheOrmBoundaryComment(string targetLanguage)
+        {
+            var stub = DataAccessPolicy.AbstractTaskletStub(targetLanguage);
+
+            Assert.DoesNotContain("[[ORM_BOUNDARY", stub);
+            Assert.Contains("[데이터 액세스 경계]", stub);
         }
     }
 }
