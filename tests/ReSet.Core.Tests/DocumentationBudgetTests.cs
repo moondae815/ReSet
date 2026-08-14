@@ -111,9 +111,10 @@ public sealed class DocumentationBudgetTests
             + failures + "\n" + Routing);
     }
 
-    private static IEnumerable<(string RelativePath, int Budget)> ReadBaseline(string repoRoot)
+    private static List<(string RelativePath, int Budget)> ReadBaseline(string repoRoot)
     {
         var path = Path.Combine(repoRoot, "tests", "ReSet.Core.Tests", "documentation-budget-baseline.txt");
+        var entries = new List<(string RelativePath, int Budget)>();
 
         foreach (var raw in File.ReadAllLines(path))
         {
@@ -123,7 +124,19 @@ public sealed class DocumentationBudgetTests
             var separator = line.LastIndexOf('=');
             Assert.True(separator > 0, $"기준선 파일의 형식이 잘못되었습니다: {raw}");
 
-            yield return (line[..separator].Trim(), int.Parse(line[(separator + 1)..].Trim()));
+            entries.Add((line[..separator].Trim(), int.Parse(line[(separator + 1)..].Trim())));
         }
+
+        // 이 게이트는 무엇을 검사할지 스스로 찾아내지 못하고 기준선 파일을 전적으로
+        // 신뢰한다. AGENTS.md 항목 하나만 조용히 지워져도 검사 대상이 사라져 두
+        // 테스트 모두 초록으로 통과한다 — 검사를 통과한 게 아니라 검사가 꺼진 것이다.
+        Assert.True(
+            entries.Exists(entry => entry.RelativePath == "AGENTS.md"),
+            "기준선 파일에 AGENTS.md 항목이 없습니다. 이 파일이 비었거나 그 줄만 빠지면 "
+            + "크기 게이트 두 개가 아무것도 검사하지 않고 조용히 통과합니다. "
+            + "tests/ReSet.Core.Tests/documentation-budget-baseline.txt에 "
+            + "'AGENTS.md = <상한>' 줄을 복원하십시오.");
+
+        return entries;
     }
 }
