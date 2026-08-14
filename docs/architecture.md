@@ -52,6 +52,7 @@ flowchart TD
 | | [SpecHeaderReader](../src/ReSet.Cli/SpecHeaderReader.cs) | 저장된 `Spec.md` 상단의 YAML 헤더에서 검증 종료 상태와 Critic 점수를 되읽어, 캐시로 복원된 명세서도 신규 분석과 동일하게 보고되도록 합니다. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbSnapshot](../src/ReSet.Core/Models/DbSnapshot.cs) | 로컬 환경에서 DB 연결 없이 오프라인 메타데이터 캐싱을 지원하기 위한 직렬화 구조 스냅샷 모델. |
 | | [CodeObjectKey](../src/ReSet.Core/Models/CodeObjectKey.cs), [CodeObjectAnalysisModels](../src/ReSet.Core/Models/CodeObjectAnalysisModels.cs) | DB·스키마·이름·유형으로 SP/UDF를 식별하고, 재귀 분석 그래프의 노드 상태·간선·객체별 분석 결과를 보존합니다. |
+| | [SpDefinition](../src/ReSet.Core/Models/SpDefinition.cs) | 분석된 SP/UDF의 메타데이터(원본 DDL, 의존성, 경고, 정적 분석 결과, AST 기반 논리 분해 결과 등)를 한데 묶어 담는 루트 데이터 클래스. `StaticAnalysis`(`SpStaticAnalysisResult`)의 `AstInsertMappings`/`AstUpdateMappings`를 거쳐 INSERT/UPDATE 문의 AST 매핑에 닿습니다. |
 | | [VerificationOutcome](../src/ReSet.Core/Models/VerificationOutcome.cs) | 검증 파이프라인이 어디서 끝났는지를 네 가지 값(리뷰 미수행·L1 미통과·품질 미달·통과)으로 구분하는 열거형. 기본값이 `ReviewNotRun`이라 상태를 설정하지 않은 경로는 통과가 아닌 쪽으로 기웁니다. |
 | | [SpAnalysisOutcome](../src/ReSet.Core/Models/SpAnalysisOutcome.cs), [ConsolidatedPipelineResult](../src/ReSet.Core/Models/ConsolidatedPipelineResult.cs) | 1단계 개별 SP 분석과 통합 계획 수립의 결과 계약. 명세서·검증 종료 상태·분석 범위·캐시 출처·아티팩트 저장 결과를 한 레코드에 담아 호출부가 보고 내용을 추측하지 않게 합니다. |
 | | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
@@ -98,7 +99,13 @@ flowchart TD
 | | [ArgumentTemplateResolver](../src/ReSet.Core/Services/ArgumentTemplateResolver.cs) | 코딩 엔진 인자 템플릿의 `{instructions}`·`{jobDir}`·`{specRoot}` 자리표시자를 절대 경로로 단일 패스 치환. 따옴표는 템플릿이 소유하므로 공백이 든 경로도 인자 하나로 유지됩니다. `{specRoot}`가 따로 있는 이유는 원본 명세서가 Job 루트의 하위가 아니라 형제이기 때문입니다(4.11절). |
 | | [ArtifactChangeDetector](../src/ReSet.Core/Services/ArtifactChangeDetector.cs) | 기동 전후 작업 디렉터리를 재귀 스냅샷해 산출물 변화 여부를 판정. `bin`·`obj` 등 빌드 부산물은 제외해 빌드만 돌린 실행이 성공으로 잡히지 않게 합니다. |
 | | [CodegenRunResult](../src/ReSet.Core/Models/CodegenRunResult.cs) | 엔진 1회 기동의 결과(산출물 변화 여부, 종료 코드, 실패 분류, 진단 원문). 성공 여부를 단정하는 속성을 두지 않아 판단을 호출자에게 남깁니다. |
-| | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |
+| | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. 계약은 [ISettlementPolicyService](../src/ReSet.Core/Services/ISettlementPolicyService.cs)로 분리되어 있다. |
+| | [DependencyInfo](../src/ReSet.Core/Models/DependencyInfo.cs) | 재귀적으로 수집된 DB 개체(테이블, 뷰, 다른 SP 등) 의존성을 표현하는 모델. |
+| | [ColumnInfo](../src/ReSet.Core/Models/ColumnInfo.cs) | 컬럼명, 데이터타입, PK/FK 정보, 한글 설명, 설명 누락 유무(`IsDescriptionMissing`) 및 Identity/DefaultValue 정보를 수집하는 모델. |
+| | [TableIndexInfo](../src/ReSet.Core/Models/TableIndexInfo.cs) | 테이블 인덱스 메타데이터(인덱스명, 타입, Unique, PK 여부, 구성 컬럼)를 관리하는 모델. |
+| | [AiResult](../src/ReSet.Core/Models/AiResult.cs) | AI 응답 내용(Content) 및 추론 텍스트(ThinkingText), 요청된 시스템/사용자 프롬프트 콘텍스트를 모아 관리하는 데이터 모델. |
+| | [IMultiProgressScope](../src/ReSet.Core/Services/IMultiProgressScope.cs) | 멀티태스크 진행률 상황 보고를 위한 추상 인터페이스. |
+| | [NullProgressScope](../src/ReSet.Core/Services/NullProgressScope.cs) | 유닛 테스트 및 무인 모드 등에서 UI 미출력을 보장하고 NullReferenceException을 막는 방어적 널 객체 구현체. |
 | **ReSet.Validator.Cli**<br/>(TUI/CLI 레이어) | [Program](../src/ReSet.Validator.Cli/Program.cs) | 검증기 CLI 진입점. 디렉토리 사전 유효성 확인, 솔루션 루트 스캔, Ctrl+C 취소 연동 및 무인 배치 검증 흐름 제어, 통합 Job 대화형 선택 메뉴 제공. |
 | | [ConsoleUserInteraction](../src/ReSet.Validator.Cli/ConsoleUserInteraction.cs) | Spectre.Console 기반 TUI 렌더링. 탭(Tab) 자동완성 디렉토리 입력창(`ShowChoices(false)` 제어), Gap 분석 결과 패널 렌더링 및 분석기와 통일된 `ConsoleProgressScope` 스피너 UI 제공. |
 | **ReSet.Validator.Core**<br/>(정합성 검증 레이어) | [CodegenWorkflowOrchestrator](../src/ReSet.Validator.Core/Services/CodegenWorkflowOrchestrator.cs) | 외부 코딩 에이전트(Actor)와 코드 검증기(Critic) 간의 자가 수정 워크플로우 루프를 전담하는 독립 오케스트레이터. |
@@ -113,6 +120,12 @@ flowchart TD
 | | [SpExecutionService](../src/ReSet.Validator.Core/Services/SpExecutionService.cs) | 테스트 케이스 파라미터를 활용해 Legacy DB에서 Stored Procedure를 실행하고 결과를 다중 ResultSet 구조 JSON으로 수집. |
 | | [SandboxSeedingService](../src/ReSet.Validator.Core/Services/SandboxSeedingService.cs) | 모의 데이터를 샌드박스 DB에 자동 적재(Seed)하고 검증 완료 후 강제 제거(Cleanup)하는 라이프사이클 관리. |
 | | [DataComparisonService](../src/ReSet.Validator.Core/Services/DataComparisonService.cs) | 레거시 vs 타겟 결과 JSON 데이터를 행 수, 컬럼 타입, 값 단위로 1:1 대조하여 비교 보고서 마크다운 생성. |
+| | [IValidatorPlugin](../src/ReSet.Validator.Core/Abstractions/IValidatorPlugin.cs) | C#([CsValidatorPlugin](../src/ReSet.Validator.Core/Plugins/CsValidatorPlugin.cs)), Java([JavaValidatorPlugin](../src/ReSet.Validator.Core/Plugins/JavaValidatorPlugin.cs)) 등 언어별 L1 정적 구조 및 명칭 검증을 구현하는 플러그인 인터페이스. |
+| | [IValidationUserInterface](../src/ReSet.Validator.Core/Abstractions/IValidationUserInterface.cs) | 검증기 TUI 사용자 인터랙션을 추상화한 인터페이스. |
+| | [L1ValidationResult](../src/ReSet.Validator.Core/Abstractions/L1ValidationResult.cs) | L1 정적 구문 검증 결과를 담는 모델. |
+| | [ValidationResult](../src/ReSet.Validator.Core/Models/ValidationResult.cs) | 검증 대상의 L1/L2/L3 전체 상태를 관리하는 데이터 모델. |
+| | [RunnerDtos](../src/ReSet.Validator.Core/Models/RunnerDtos.cs) | 타겟 런타임 실행기의 입출력 및 실행 결과를 담는 DTO 모음. |
+| | [ValidatorConfig](../src/ReSet.Validator.Core/Models/ValidatorConfig.cs) | 검증기 실행 설정을 바인딩하는 구성 모델. |
 | **ReSet.Core.Tests**<br/>(테스트 레이어) | [SqlStaticParserTests](../tests/ReSet.Core.Tests/SqlStaticParserTests.cs) | T-SQL AST 정적 분석기의 테이블 CRUD 분류, 다단계 중첩 인덴트, sp_executesql/EXEC 동적 SQL, UDF/Linked Server 감지 기능을 종합 검증. |
 | | [Clients (Claude, OpenAi, Ollama) Tests](../tests/ReSet.Core.Tests/) | AI 클라이언트별 페이로드 직렬화, API 전송 스펙 및 응답 널 가드(TryGetProperty) 무결성 검증. |
 | | [CLI Clients (ClaudeCli, CodexCli, AntigravityCli) Tests](../tests/ReSet.Core.Tests/), [CliProcessRunnerTests](../tests/ReSet.Core.Tests/CliProcessRunnerTests.cs), [CliEffortTests](../tests/ReSet.Core.Tests/CliEffortTests.cs), [CliPromptTests](../tests/ReSet.Core.Tests/CliPromptTests.cs), [CliFailureClassifierTests](../tests/ReSet.Core.Tests/CliFailureClassifierTests.cs), [CliProviderBatchGuardTests](../tests/ReSet.Core.Tests/CliProviderBatchGuardTests.cs), [CliProviderSettingsTests](../tests/ReSet.Core.Tests/CliProviderSettingsTests.cs), [AiClientFactoryTests](../tests/ReSet.Core.Tests/AiClientFactoryTests.cs), [CliUsageTests](../tests/ReSet.Core.Tests/CliUsageTests.cs), [CliUsageLoggingTests](../tests/ReSet.Core.Tests/CliUsageLoggingTests.cs) | CLI 기반 AI 제공자의 인자 구성, 응답 파싱, 실패 분류, effort 클램프, 배치 모드 차단 판정, 설정 바인딩 및 팩토리 등록을 검증. CliUsage 계열은 집계 파싱과, 그 값이 실제로 로그까지 도달하는지를 스텁 CLI로 끝까지 확인합니다. |
@@ -120,8 +133,12 @@ flowchart TD
 | | [SandboxSeedingServiceTests](../tests/ReSet.Core.Tests/SandboxSeedingServiceTests.cs) | 샌드박스 DB에 모의 테이블 데이터(Mock Data)의 적재(Seed) 및 테스트 직후 자동 소거(Clean-up) 사이클 검증. |
 | | [CodeVerificationOrchestratorTests](../tests/ReSet.Core.Tests/CodeVerificationOrchestratorTests.cs) | L1(정적) -> L2(AI 논리 Gap검사) -> L3(사용자 승인) 흐름 제어 및 자가 수정 오케스트레이션 검증. |
 | | [ValidatorAiServiceTests](../tests/ReSet.Core.Tests/ValidatorAiServiceTests.cs) | 검증기 AI 응답 파싱 무결성(마크다운 블록 정제) 및 L2 Gap 분석 검증. |
-| | [DataComparisonServiceTests](../tests/ReSet.Core.Tests/DataComparisonServiceTests.cs) | 레거시/신규 JSON 결과값 1:1 대조 정합성 및 예외 핸들링 검증. |
+| | [DataComparisonServiceTests](../tests/ReSet.Core.Tests/DataComparisonServiceTests.cs) | 레거시/신규 JSON 결과값 1:1 대조 정합성 및 `JsonException` 핸들링 검증. |
 | | [CancellationPolicyTests](../tests/ReSet.Core.Tests/CancellationPolicyTests.cs) | Roslyn 구문 트리로 `src/` 전체를 훑어 취소 예외를 삼킬 수 있는 `catch`를 찾아내는 아키텍처 게이트. 파일별 허용 개수를 [기준선 파일](../tests/ReSet.Core.Tests/cancellation-policy-baseline.txt)에 고정해, 새 위반이 생겼을 때뿐 아니라 고치고도 숫자를 내리지 않았을 때도 실패합니다. |
+| | [DependencyAnalysisOrchestratorTests](../tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs) | 재귀 SP/UDF 그래프의 중복 제거와 실패 격리를 검증. |
+| | [SpecificationLinkerTests](../tests/ReSet.Core.Tests/SpecificationLinkerTests.cs) | 성공한 참조 대상에는 상대 `Spec.md` 링크를, 실패한 대상에는 링크 대신 사유를 쓰는지, 참조 섹션이 파일 끝에서 중복 없이 교체되고 마크다운 특수문자를 이스케이프하는지, 링크 URL의 위험한 경로 문자를 퍼센트 인코딩하는지 검증. |
+| | [OutputPathResolverTests](../tests/ReSet.Core.Tests/OutputPathResolverTests.cs) | 현재 DB와 외부 DB를 구분한 객체별 출력 경로(명세서·DDL·의존성 매니페스트) 계산을 검증. |
+| | [StepErrorCodeRegressionTests](../tests/ReSet.Core.Tests/StepErrorCodeRegressionTests.cs) | 목차의 빈 `ErrorCodes` 배열 때문에 단계 하한 검사가 무실행이던 결함을 실측 축약 픽스처로 고정하는 회귀 테스트. |
 
 ---
 
@@ -412,6 +429,7 @@ graph TD
 * **DML 대상 해석 (Target Resolution)**: `UpdateSpecification`/`DeleteSpecification`의 `Target`을 `InsertSpecification`과 동일한 패턴으로 선취해, 갱신·삭제 대상 테이블 하나만 `UpdateTables`/`DeleteTables`에 기록하고 FROM 절 조인 원본은 `SelectTables`로 분류합니다. 대상이 별칭인 경우(`UPDATE A SET ... FROM T A`) 전역 별칭 사전이 아니라 **그 문장 자신의 FROM 절**에서 해석합니다. 전역 사전은 마지막 등록이 이기므로 같은 별칭을 다른 문장이 다른 테이블에 쓰면 오해석됩니다. 대상을 해석할 수 없으면(테이블 변수 등) 해당 문장에 한해 문맥 내 전체 수집으로 폴백합니다.
 * **UPDATE SET 절 추출 (`AstUpdateMappings`)**: INSERT의 타겟-소스 매핑과 대칭으로, `UpdateSpecification` 방문 시 대상 테이블 이름 하나만 기록하던 종전 동작에 더해 문장별 SET 절을 함께 수집합니다. 각 UPDATE 문장에서 타겟 컬럼과 원천 표현식을 1:1로 담되, `SET @v = ...` 같은 변수 대입은 컬럼이 아니므로 제외합니다. FROM 절이 있으면 원문 텍스트를 그대로 보존해 자기참조 갱신(`UPDATE A SET ... FROM T A`)의 문맥을 남기고, SET 우변이 같은 문장의 타겟 컬럼을 참조하면(`SET CLVT = CLVT * -1`) 그 컬럼 목록을 별도로 기록해 SQL의 동시평가 규약을 전달합니다. 이 판정은 문장 하나 안에서만 이루어져 다른 문장이 갱신하는 동명 컬럼과 섞이지 않습니다. 대상 테이블 해석에 실패한 문장은 매핑 자체를 만들지 않습니다 — 존재하지 않는 테이블에 컬럼을 붙이면 L1 검증이 있지도 않은 표를 요구해 무한 재시도로 이어지기 때문입니다. 이렇게 뽑힌 컬럼·원천 표현식은 명세서 프롬프트에서 이미 채워진 표가 되어 AI는 설명 칸만 채우고, `MechanicalValidator`의 L1 기계 검증이 명세서 본문과 대조합니다.
 * **테이블 식별자 정규화 (`StaticAnalysisNormalizer`)**: 파서는 SQL에 적힌 표기를 그대로 보고하므로 같은 물리 테이블이 `TSettleMst`/`dbo.TSettleMst`/`SETTLE_POQ_DB.dbo.TSettleMst` 세 갈래로 나뉩니다(§4.1.1의 `CodeObjectKey` 대소문자 표기 확정과는 별개로, 이쪽은 표기 형태 자체를 하나로 합치는 문제입니다). 정의 조립 직후 canonical 3-part(`{Database}.{Schema}.{Name}`)로 통일하고 중복을 제거하여 `metadata.json`·스냅샷·프롬프트가 같은 이름을 쓰게 합니다. 병합은 3-part 전체 일치일 때만 수행합니다(`dbo.TPGProperty`와 `PaymentDB.dbo.TPGProperty`는 컬럼 구성이 같아도 다른 테이블입니다). 임시 테이블, 테이블 변수, 4파트 링크드 서버 이름, DB 컨텍스트가 없는 경우는 한정하지 않고 통과시킵니다.
+* **분류기 밖에 남은 정확 일치 `switch` 테이블**: [DependencyAnalysisOrchestrator.TryParseCodeObjectType](../src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs)과 [MetadataExporter.NormalizeCodeObjectDdlFolder](../src/ReSet.Core/Services/MetadataExporter.cs)는 `SqlObjectTypeClassifier`가 훑지 못하는 정확 일치 `switch`/`switch` 식으로 타입 문자열을 Procedure/Function으로 매핑하며, 분류기와 가장자리에서 어긋납니다 — `"P"`/`"FN"`/`"TF"`를 두 테이블은 각각 Procedure 또는 Function으로 보지만, `SqlObjectTypeClassifier.ResolveCodeObjectType`은 `"FUNCTION"`/`"PROCEDURE"` 부분 문자열이 없다는 이유로 `Unresolved`로 봅니다. 오늘은 오작동하지 않습니다 — 실제로 관찰되는 `Type` 값은 전부 `type_desc`(예: `SQL_STORED_PROCEDURE`)에서 오므로 축약형 코드가 들어오지 않기 때문입니다. 그러나 이 두 테이블을 새로 만들거나 베끼지 마십시오. 세 곳(분류기, 두 switch 테이블)의 통합은 별도 후속 과제입니다.
 
 ### 4.4. 3단계 신뢰성 검증 파이프라인 (Verification Pipeline)
 생성된 명세서의 무결성과 비즈니스 완성도를 보장하기 위해 L1, L2, L3 단계가 유기적으로 연결된 검증 아키텍처를 가동합니다.
@@ -630,11 +648,11 @@ graph TD
   * **C# Reflection Runner**: 빌드된 C# DLL을 리플렉션 로드하고 생성자에 `SqlConnection` 및 `SqlTransaction`을 동적 주입하여 비즈니스 메소드를 직접 실행합니다. 비동기 호출 시 `Task`뿐만 아니라 `ValueTask` 및 `ValueTask<T>` 반환형식도 리플렉션을 통해 동적으로 대기(await)하며, 로직 수행 후 DB 수정 내역을 Sandbox에 반영하지 않고 항상 `Rollback()`을 호출해 격리합니다.
   * **Java Process Runner**: 타겟 클래스나 JAR를 외부 Java 프로세스로 기동하고 입력 인자를 stdin JSON 스트림으로 전달하며 결과를 stdout으로 수집합니다. 30초 타임아웃을 연결해 CLI 무한 대기 교착을 차단합니다.
 * **유연한 1:1 데이터 동등성 비교**: 레거시 DB SP를 돌려 수집한 `_legacy_results.json`과 타겟 실행 결과를 덤프한 `_target_results.json`을 대조합니다. 단순 텍스트 비교 시 발생하는 실수 소수점 끝자리 차이 및 DateTime 날짜 포맷팅 문자 표현 차이는 타입 감지 후 `NormalizeValueString`을 통해 정형화한 후 동등성을 평가하여 False Positive(거짓 불일치) 경고를 방지합니다.
-* **A 트랙(구조/논리 일치성)의 Gap 판정 규칙**: `ValidatorAiService`가 수행하는 L2 AI 의미론적 대조는 입력 파라미터·출력 데이터셋·비즈니스 로직·예외/트랜잭션에 이어 데이터 액세스 경계([DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) 기반)까지 5대 범주로 Gap을 판정해 `GapReport`에 담습니다. 프롬프트는 경계 위반이 하나라도 있으면 `OverallStatus`를 최소 `PARTIAL`로 판정하도록 지시하며, `CodeVerificationOrchestrator`는 여기에 더해 `DataAccessBoundaryGap`이 비어 있을 것까지 요구해 `L2Passed`를 세웁니다. 두 조건을 함께 보는 이유는, 경계 위반이 흔히 기능적으로는 동등하기 때문에 AI가 위반을 기록하면서도 `MATCH`로 답할 수 있고 그 경우 위반이 아무 신호 없이 통과하기 때문입니다. `DataAccessBoundaryGap`의 기본값이 `string.Empty`이므로 나머지 4개 범주의 판정 방식은 달라지지 않습니다.
+* **A 트랙(구조/논리 일치성)의 Gap 판정 규칙**: `ValidatorAiService`가 수행하는 L2 AI 의미론적 대조는 입력 파라미터·출력 데이터셋·비즈니스 로직·예외/트랜잭션에 이어 데이터 액세스 경계([DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) 기반)까지 5대 범주로 Gap을 판정해 [GapReport](../src/ReSet.Validator.Core/Models/GapReport.cs)에 담습니다. 프롬프트는 경계 위반이 하나라도 있으면 `OverallStatus`를 최소 `PARTIAL`로 판정하도록 지시하며, `CodeVerificationOrchestrator`는 여기에 더해 `DataAccessBoundaryGap`이 비어 있을 것까지 요구해 `L2Passed`를 세웁니다. 두 조건을 함께 보는 이유는, 경계 위반이 흔히 기능적으로는 동등하기 때문에 AI가 위반을 기록하면서도 `MATCH`로 답할 수 있고 그 경우 위반이 아무 신호 없이 통과하기 때문입니다. `DataAccessBoundaryGap`의 기본값이 `string.Empty`이므로 나머지 4개 범주의 판정 방식은 달라지지 않습니다.
 * **항상 조항 1은 L2보다 앞선 L1에서 막습니다**: ORM을 전달받은 커넥션/트랜잭션에 참여시키는 조항만은 [TransactionEnlistmentCheck](../src/ReSet.Validator.Core/Plugins/TransactionEnlistmentCheck.cs)가 언어별 플러그인에서 기계적으로 판정합니다. 위반 시 `CSharpReflectionRunner`의 Rollback 격리가 깨져 아래 B 트랙의 1:1 대조 결과 자체가 오염되므로, AI 판단을 기다리지 않고 L1 숏컷으로 반려합니다. 명백한 위반만 잡으며, DI로 주입된 컨텍스트가 참여하지 않는 경우는 파일 단위 검사로 판정할 수 없어 L2에 남습니다.
 
 ### 4.7. 관계지향 모의 데이터 적재 및 수명주기 격리 (Sandbox Seeding)
-* **관계지향 모의 데이터 생성**: 개발/검증용 실제 운영 데이터 반출이 불가능한 환경을 타개하기 위해, AI가 참조 테이블 스키마 및 JOIN 조건 등을 파악하여 상호 참조 무결성을 충족하는 모의 데이터를 `MockDataDto` 형태로 생성하고 로컬 캐싱합니다.
+* **관계지향 모의 데이터 생성**: 개발/검증용 실제 운영 데이터 반출이 불가능한 환경을 타개하기 위해, AI가 참조 테이블 스키마 및 JOIN 조건 등을 파악하여 상호 참조 무결성을 충족하는 모의 데이터를 [MockDataDto](../src/ReSet.Validator.Core/Models/MockDataDto.cs) 형태로 생성하고 로컬 캐싱합니다.
 * **Seeding 수명주기**: 데이터 정합성 수집 실행 직전 `SandboxSeedingService`가 가동되어 캐싱된 관계형 모의 데이터를 대상 샌드박스 데이터베이스에 적재(Seed)하며, 수집 작업이 종료되는 즉시 데이터를 자동으로 소거(Truncate/Delete)함으로써 샌드박스 DB의 무결 상태를 완벽하게 복원합니다.
 
 ### 4.8. SHA-256 해시 기반 로컬 증분 캐싱
@@ -740,5 +758,8 @@ Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 �
 ### 5.5. TUI 비파괴식 Serilog 파일 로깅 시스템
 * **콘솔 UI 파괴 방지**: Spectre.Console 진행 바 및 TUI 화면이 로그 텍스트 출력으로 인해 지저분하게 깨지는 현상을 원천 방어하기 위해 Serilog의 콘솔 출력을 비활성화하고 **오직 파일 전용(File Sink)으로만 로그를 기록**하도록 제한합니다.
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
+
+### 5.6. 검증 파이프라인 진행 표시 규칙 (Progress Display Conventions)
+* **메인 상태와 하위 진행 행의 역할 분리**: `NotifyStatus`가 잡 이름·공급자·모델명·Effort·시도 회차를 담은 한 줄 상태 메시지를 콘솔에 남기고, `IMultiProgressScope.AddTask`가 관리하는 하위 진행 행은 그 정보를 반복하지 않습니다. 전체 3단계 흐름(브레인스토밍 → 목차 설계 → 골격/최종 생성)에 속한 행에만 괄호 없는 `n/3. <설명>` 형식으로 순번을 붙이고(예: `1/3. 브레인스토밍 중...`, `3/3. 최종 생성 중 (단일 호출)...`), 목차 재설계처럼 그 3단계 흐름 밖의 단발 작업에는 순번을 붙이지 않습니다([VerificationPipelineOrchestrator.cs](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)).
 
 <!-- synced-through: c8d6074 -->

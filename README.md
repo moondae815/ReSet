@@ -88,6 +88,10 @@
 ReSet/
 │
 ├── ReSet.slnx      # .NET 솔루션 파일
+├── AGENTS.md       # AI 에이전트 행동 규칙 및 작업 완료 체크리스트
+│
+├── docs/                      # 아키텍처 문서, 설계 명세(superpowers/specs), 남은 후속 작업 목록
+├── scripts/                   # 문서 감사·워크트리 준비 보조 스크립트
 │
 ├── src/
 │   ├── ReSet.Core/            # [클래스 라이브러리] 핵심 비즈니스 로직 및 AI 커뮤니케이션
@@ -98,29 +102,39 @@ ReSet/
 │   │   ├── Program.cs              # CLI 진입점 및 대화형 워크플로우 제어
 │   │   ├── CodingEngineFactory.cs  # 설정 기반 외부 코딩 에이전트 생성 팩토리
 │   │   ├── appsettings.json        # 기본 설정 파일
+│   │   ├── appsettings.local.json  # [설정] 로컬 보안 자격 증명 (API 키 등 보관, Git 무시)
 │   │   └── instructions.md         # AI 분석 세부 마크다운 지침 템플릿
 │   │
 │   ├── ReSet.Validator.Core/  # [클래스 라이브러리] 소스코드 및 데이터 정합성 검증 엔진
 │   │   ├── Abstractions/           # 언어별 검증 플러그인, 타겟 런타임 러너 인터페이스
 │   │   ├── Models/                 # GapReport, MockDataDto, ValidationResult 데이터 모델
+│   │   ├── Plugins/                # 언어별(C#/Java) 검증 플러그인 및 트랜잭션 참여 검사 구현
 │   │   └── Services/               # FileMapping, SandboxSeeding, DataComparison 서비스
 │   │
 │   └── ReSet.Validator.Cli/   # [콘솔 애플리케이션] TUI 및 배치 모드 (소스코드 및 데이터 정합성 대조 검증기)
 │       ├── Program.cs              # 검증기 CLI 진입점 및 흐름 제어
 │       └── appsettings.json        # [설정] DB/LLM 자격 증명 설정 (추적 관리됨)
-├── appsettings.local.json           # [설정] 로컬 보안 자격 증명 (API 키 등 보관, Git 무시)
+│
+├── tests/
+│   └── ReSet.Core.Tests/      # [테스트 프로젝트] 파이프라인·파서·문서 예산 회귀 테스트
+│
 └── output/                          # [산출물 폴더] 역공학 명세서 및 마이그레이션 생성물 보관
     ├── Jobs/                        # 생성된 통합 전환 계획서(BatchMigrationPlan.md) 및 마이그레이션 소스코드(src/) 격리 보관소
     │   └── [Job이름]/               # 각 통합 Job 식별자 하위 폴더
     │       ├── docs/                # BatchMigrationPlan.md 및 Job 설계 문서
+    │       ├── raw/                 # 계획 수립 원본 (Brainstorming.md, 목차 계약 PlanStructure.md,
+    │       │                        #  폐기된 목차 PlanStructure.superseded-N.md, prompt-context.md, ddl/)
     │       ├── agent/               # 외부 코딩 에이전트에 전달되는 지시서 번들
     │       │   ├── MigrationInstructions.md  # 진입점 (지켜야 할 지침이 앞, 나머지는 링크)
     │       │   ├── task-NN-[코드].md         # 회차별 작업 지시서 (0=골격, 1..N=단계, 99=조립)
     │       │   ├── common/                   # 전 회차 공통 문서 (아키텍처, 단계 계약, 경계 규칙, 호스팅)
     │       │   ├── steps/                    # 단계별 이행 상세 본문
+    │       │   ├── src/                      # 에이전트에 미리 제공되는 뼈대 코드 (상속을 강제하는 스텁)
+    │       │   ├── tests/                    # 함께 제공되는 아키텍처·단계 로직 테스트 스텁
+    │       │   ├── verification/             # 무결성 대조 SQL 등 검증 보조 문서
     │       │   ├── progress.json             # 회차 진행 상태 (도구가 소유)
     │       │   └── todo.md                   # progress.json에서 렌더링되는 진행 현황
-    │       ├── src/                 # 외부 코딩 에이전트가 자동 생성한 마이그레이션 소스코드
+    │       ├── src/                 # 에이전트의 작업 디렉터리이자 생성 결과물 (뼈대는 agent/src에 있다)
     │       └── validation/          # 검증 문서(docs) 및 원본(raw) 리포트 격리 저장소
     ├── logs/
     ├── cleansing/                   # AI가 생성한 메타데이터 보정(Cleansing) SQL 스크립트 모음
@@ -132,13 +146,22 @@ ReSet/
     │       │   └── Thinking.md             # AI 모델의 추론 과정 로그
     │       └── raw/
     │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
+    │           ├── dependency-manifest.json # 의존 객체 식별자와 수집 경로 매니페스트
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
+    │           ├── chunks/                 # [로컬 LLM 전용] AST 분할 생성 시 조각별 응답 캐시
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
-    ├── Objects/                     # 코드 객체별 표준 DDL(object_definition.sql) 보관소
+    ├── Unresolved/                  # 종류를 판정하지 못한 객체의 산출물 (Procedures/Functions와 같은 구조)
+    ├── Objects/                     # 코드 객체별 표준 DDL 보관소
+    │   └── [Schema].[이름].[Type]/  # 스키마·이름이 겹치는 다른 종류의 객체를 구분하려 Type까지 붙인다
+    │       └── raw/                 # object_definition.sql (표준 DDL 정본) 및 prompt-context.md
+    ├── [Job이름]_Settlement_Policy_Rulebook.md  # 정산 정책 문서 (L1/L2를 거치지 않는 미검증 산출물)
+    ├── .sp_cache_index.json         # 재분석을 건너뛰기 위한 해시 색인 (지우면 캐시 전체 무효화)
     └── External/[Database]/         # 같은 인스턴스 내 다른 DB 객체의 산출물 격리 경로 (크로스 DB 분석 활성 시)
 ```
+
+`output/` 아래 각 파일을 **누가·언제·왜** 만드는지는 [산출물 명세](./docs/output-artifacts.md)에 정리되어 있습니다.
 
 ---
 
