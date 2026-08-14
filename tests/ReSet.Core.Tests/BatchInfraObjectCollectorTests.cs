@@ -1,3 +1,4 @@
+using System.Linq;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -5,6 +6,27 @@ namespace ReSet.Core.Tests
 {
     public class BatchInfraObjectCollectorTests
     {
+        /// <summary>
+        /// 클래스 문서 주석이 "접두사 정의를 단독 소유"한다고 주장한다. 예전에는 그
+        /// 주장과 달리 ObjectRegex 리터럴과 Schemas 배열에 접두사가 따로 적혀 있어,
+        /// 한쪽에만 새 접두사를 추가해도 컴파일이 통과했다 - 이 테스트는 Collect가
+        /// Schemas에 있는 모든 스키마를 실제로 인식하는지 그 목록에서 직접 대조해
+        /// 정규식이 배열과 갈라지면 여기서 걸리게 한다.
+        /// </summary>
+        [Fact]
+        public void Collect_ShouldRecognizeEverySchemaListedInSchemas()
+        {
+            var plan = string.Join(
+                " ", BatchInfraObjectCollector.Schemas.Select(schema => $"{schema}.SomeObject"));
+
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            foreach (var schema in BatchInfraObjectCollector.Schemas)
+            {
+                Assert.Contains($"{schema}.SomeObject", result.Names);
+            }
+        }
+
         [Fact]
         public void Collect_ShouldFindObjectsInsideAndOutsideCodeFences()
         {
