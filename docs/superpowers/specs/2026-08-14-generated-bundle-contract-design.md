@@ -219,8 +219,16 @@ public static IReadOnlyList<string> Collect(string? planMarkdown)
   검사기가 같은 접두사 정의를 공유해야 한다 — 두 곳에서 따로 판단하면 한쪽이 신규 접두사를
   놓쳤을 때 전부 오탐이 된다.
 
-걸리면 `result.PlanDefects`에 넣는다(`:211`, `:224`가 이미 쓰는 채널). 이 채널은 문법 오류가
-아니라 "재생성으로 고쳐질 수 있는 결함"을 담도록 만들어져 있어 목적이 정확히 맞는다.
+걸리면 `result.Errors`에 넣는다. **`PlanDefects`가 아니다** — 그쪽은 정반대 뜻이다.
+
+`PlanDefects`는 "목차가 원인이라 단계 본문을 다시 생성해도 사라지지 않는 결함"을 담고,
+`RegenerationCanFix => Errors.Count > PlanDefects.Count`가 그것으로 재시도 여부를 가른다.
+유령 테이블을 거기 넣으면 그 단계는 재생성되지 않고 `Unverifiable`로 건너뛰어져, §3.1이
+말한 "걸린 섹션만 재생성한다"가 성립하지 않는다. 이 검사가 잡는 것은 본문이 잘못 쓴
+이름이고, 그것은 다시 쓰면 고쳐진다.
+
+(이 문단의 초판은 `PlanDefects`라고 적었다. 실행 중 T56 리뷰어가 잡았고 구현은 처음부터
+`Errors`로 되어 있었다 — 계획서의 Task 5 코드와 테스트가 옳았고 이 설계 산문만 틀렸다.)
 
 메시지는 재생성이 실제로 고칠 수 있도록 구체적으로 쓴다.
 
@@ -390,7 +398,7 @@ Roslyn 배선 스캐너(`SpecExpectationsWiringPolicyScanner`), 정책 테스트
 
 `MechanicalValidator` 테스트.
 
-- 카탈로그에 없는 `dbo.TSettleSummary` → `PlanDefects` 1건.
+- 카탈로그에 없는 `dbo.TSettleSummary` → `Errors` 1건이고 `RegenerationCanFix`가 참.
 - `batch.POQSettleRun` → 0건 (신규 인프라이므로).
 - 카탈로그에 있는 `dbo.TSettleMst` → 0건.
 - 맨 산문의 테이블명 → 0건 (추출 범위 제한 고정).
