@@ -751,3 +751,109 @@ IDENTICAL token multisets — no words added or removed.
 링크 104개·`../tests/` 링크 23개. `<!-- synced-through: c8d6074 -->` 양쪽 파일 모두
 변경 없음. `git diff --stat`이 `AGENTS.md`만 보고하며, 변경된 줄은 전부 L88–L112(범주 4
 안) 안에 있다. `.cs` 파일 변경 없음 — `dotnet build`/`dotnet test` 미실행.
+
+## Phase 2c 결과 — 범주 6·7 (외부 코딩 에이전트, 메타데이터 정화) (Task 5, 2026-08-14)
+
+**구간.** WAVE_BASE `7920c5e` 기준 AGENTS.md L125–L153(`### 🔌 범주 6.`부터
+`### 🌳 범주 8.` 직전까지, 편집 전 상태). 계획서 자신의 경고대로 범주 7은 원문 유지
+비율이 가장 높은 구간이었다 — 여기 있는 서술 대부분이 "AI에게 무엇을 시킬지"에 관한
+프롬프트 설계 규칙이라 어떤 테스트도 잡지 못한다. `doc-audit.sh`는 이 구간의 27줄 중
+25줄을 `산문(수동판정)`으로 표시했다(대괄호 `[Foo.cs]` 링크가 아니라 백틱 클래스명만
+쓴 서술이라 자동 신호가 없었다는 뜻 — "찾을 게 없다"가 아니라 "기계가 할 말이 없다"로
+읽고, 각 불릿이 언급한 클래스명을 테스트 프로젝트에서 직접 grep했다).
+
+**600바이트 초과 11줄(전부 이 구간).** L127(768) L128(657) L132(950) L134(865)
+L137(1286) L138(606) L142(627) L146(625) L148(1337) L149(1933) L151(661)(WAVE_BASE
+기준 원 줄번호). 계획서의 우선순위(1. 라우팅+축약 2. 무손실 분할 3. 못 하면 보고)를
+그대로 따랐다.
+
+**라우팅+축약(7줄) — 각 줄을 architecture.md 또는 테스트로 확인한 뒤에만 축약.**
+
+| 원문 위치(원 줄) | 바이트(전→후) | 사유 | 근거 위치(직접 열어/그레핑해서 확인) |
+|---|---|---|---|
+| L127 번들 분할 제공 | 768 → 529 | 구조 서술(진입점/공통/단계/회차 문서로 나눔)이 architecture.md에 더 상세히 있음, 구조 테스트도 있음 | `architecture.md §4.11`(직접 열어 동일 구조·이유 서술 확인), `InstructionBundleWriterTests.WriteAsync_ShouldPlaceEntryPointAtAgentRoot`/`..._ShouldWriteOneFilePerStep`/`..._ShouldWriteCommonAndVerificationFiles`(각각 열어 진입점 위치·단계별 파일 1개·공통 파일 존재를 단언함을 확인). 출력 폴더 자동 생성·개별 SP 비생성·`output/Jobs/{JobName}/` 격리 부분은 이 테스트들이 다루지 않는 CLI(Program.cs) 계층 판단이라 원문 그대로 남김(아래 "테스트 없는 규칙" 참고) |
+| L128 분할 실패 시에도 지침은 앞으로 | 657 → 511 | architecture.md §4.11의 "부분 분할 금지" 불릿과 거의 같은 문장, 두 테스트가 정확히 이 주장(폴백에서도 순서 고정, 한 단계라도 못 찾으면 전체 폴백)을 단언 | `architecture.md §4.11`, `InstructionEntryPointComposerTests.Compose_ShouldPlaceGuidelinesBeforePlanLink_EvenInFallback`(폴백 마크다운에서도 지침 인덱스가 계획 링크보다 앞임을 단언), `PlanBoundaryResolverTests.ResolveSteps_ShouldFailWholly_WhenOneStepCannotBeLocated`(한 단계를 못 찾으면 `Split=false`, `Steps` 빔, 경고 있음을 단언 — 테스트 주석이 "부분 분할은 하지 않는다"고 직접 씀) |
+| L134(신 L135) 대화형/배치 인자 분리 | 865 → 570 | `Arguments`/`BatchArguments` 분리와 `{jobDir}`/`{specRoot}` 스코프 분리 둘 다 전담 테스트가 있음 | `CodingEngineTests.CodingEngineFactory_ShouldUseInteractiveArguments_WhenNotBatchMode`/`..._ShouldUseBatchArguments_WhenBatchMode`/`..._ShouldThrow_WhenBatchModeAndBatchArgumentsMissing`(세 개 다 열어 대화형/무인 분기와 빈 `BatchArguments` 시 예외 메시지에 "BatchArguments" 포함을 단언함을 확인), `ArgumentTemplateResolverTests.Resolve_ShouldReplaceJobDir_WithRawGrandparentPath`/`ResolveSpecRoot_ShouldCoverTheSpecLinkTheStepTaskFileEmits`/`ResolveSpecRoot_ShouldNotGrantTheWholeOutputRoot`(형제 경로 계산과 출력 루트 전체를 열지 않음을 각각 단언) |
+| L137(신 L138) 회차 게이트는 fail-closed | 1286 → 583 | "검증 대상 없으면 통과 아님" 절반은 architecture.md §4.11의 "회차별 검증 범위" 불릿과 동일, 재시도 상한/사유 선기록 절반은 전담 테스트가 있음 | `architecture.md §4.11`, `CodegenStagedWorkflowTests.RunStagedWorkflowAsync_ShouldCapRetries_WhenTheStepSourceNeverAppears`(상한 -1=무제한을 줘도 2회에서 멈춤을 단언, taskFile에 실패 사유가 다음 시도 전에 기록됨을 단언), `..._ShouldFailStepThatHasNoSpecToCompareAgainst`(대조할 설계서가 없으면 통과가 아니라 실패로 기록되고 `LastGapSummary`에 사유가 남음을 단언) |
+| L146(신 L149) UPDATE 매핑표는 정적 파서가 확정 | 625 → 596 | `AstUpdateMappings` 추출 메커니즘이 architecture.md §4.3에 이미 서술, `MechanicalValidator`의 대조 동작은 전담 테스트가 있음 | `architecture.md §4.3`(L429, 동일한 "이미 채워진 표"/"MechanicalValidator가 대조" 서술 확인), `MechanicalValidatorTests.Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt`(누락된 UPDATE 컬럼을 실패로 보고함을 확인) |
+| L148(신 L151) 의존 스키마 덤프 필터링 | 1337 → 545 | 판정 로직(3-part 정확 일치/베이스 이름 폴백/14개 명세서 결함) 전체가 `SchemaPromptColumnSelector` 클래스와 `KeyMatchesDependency` 메서드의 `<summary>` 문서 주석에 이미 있고, 6개 테스트가 각 분기를 단언 | `SchemaPromptColumnSelector.cs`의 클래스/메서드 `<summary>`(직접 읽어 3-part 정확 일치, DB 컨텍스트 없을 때 베이스 이름 폴백, 과다 포함이 과소 포함보다 나은 이유, "14개 명세서를 망가뜨린 결함" 서술이 AGENTS.md 원문과 동일함을 확인), `SchemaPromptColumnSelectorTests.Select_WithDbContext_ShouldNotMergeDifferentDatabases`(3-part 일치 시 다른 DB를 병합하지 않음을 단언), `..._WhenCanonicalMismatchDropsColumns_ShouldReport`("14개 명세서를 망가뜨린 결함의 재현"이라는 주석과 함께 정확히 그 시나리오를 재현해 결함을 보고함을 단언) |
+| L151(신 L157) Mermaid flowchart 생성 규칙화 및 정화 | 661 → 원문 프롬프트 규칙 유지, "정화기 동작" 서술만 제거 | 계획서가 지정한 정확한 분리 지점 — 화살표 라벨/노드 `@` 기호 규칙은 AI에게 시키는 프롬프트 설계라 원문 그대로 두고, "노드 ID 공백·언더스코어 일괄 제거" 서술만 `MechanicalValidator.CleanseMermaidCode`가 담당하는 코드 동작이라 인용으로 교체 | `MechanicalValidator.cs:1180`(`CleanseMermaidCode`가 실제로 노드 ID 공백/언더스코어를 제거하는 코드임을 확인), `MechanicalValidatorTests.PostProcessMarkdown_ShouldCleanseMermaidCode`(`A_1`→`A1`, `B_2`→`B2`로 언더스코어가 제거됨을 단언) |
+
+**무손실 분할(4줄) — 근거를 찾지 못했거나 축약이 원문의 판단 근거를 왜곡할 위험이 있어
+한 글자도 지우지 않고 줄만 나눴다.**
+
+| 원문 위치(원 줄) | 바이트 | 분할 사유 |
+|---|---|---|
+| L132 동적 코드 생성 시점 제약 | 950 | 스탠드얼론 메뉴 재기동(Resume) 판정 로직에 대한 테스트를 찾지 못함(`grep -rn "스탠드얼론\|Resume"` tests/ 결과 없음). CLI 레벨(Program.cs) 워크플로 판단이라 사람의 판단만이 잡는 항목으로 보고 원문 유지 |
+| L138(신 L139) 자가 수정 및 TDD 테스트 피드백 루프 | 606 | 외부 에이전트에게 자율 TDD 루프를 시키는 프롬프트 설계 지시라 어떤 테스트도 잡을 수 없음(`CodeVerificationOrchestratorTests`에 자가 수정 관련 테스트가 있으나 이 불릿이 말하는 "외부 에이전트의 자율 루프"가 아니라 우리 L1/L2 파이프라인의 자가 보완을 검사하는 것이라 인용 시 오귀속 위험). 600바이트를 6바이트만 초과해 축약보다 분할이 안전하다고 판단 |
+| L142(신 L144) 클렌징 스크립트 및 동기화 | 627 | "기본 제거되어 있다"는 이유(로컬 LLM 환각 방지)와 "물리적 존재 시에만 승인" 동작은 부분적으로만 테스트가 있고(`VerificationPipelineOrchestratorTests.RunPipelineAsync_InteractiveMode_SyncsDb_CatchesSqlException`이 후자만 다룸), 크로스 DB 파일명 접두(`ResolveCleansingFileBaseName`)는 전담 테스트가 없음(`grep -rn "ResolveCleansingFileBaseName" tests/` 결과 없음). 부분 인용이 나머지 미검증 부분을 검증된 것처럼 보이게 할 위험이 있어 축약하지 않고 분할만 함 |
+| L149(신 L152) 통합 배치 도메인 5대 핵심 제약 | 1933 | 계획서가 원문 유지를 명시한 항목(기계가 잡을 수 없는 프롬프트 설계 제약) — 축약 대상이 아니라 4줄로 분할 |
+
+**무손실 분할의 검증 방법(모두 order-blind가 아닌 재구성 비교).** `grep -c`나 정렬된
+다중집합은 재배치·중복을 놓칠 수 있다는 Task 4의 교훈에 따라, 분할된 각 줄에서
+연속 공백 들여쓰기(신설한 줄의 앞 8칸)만 제거하고 단일 공백으로 다시 이어붙인 뒤
+WAVE_BASE(`7920c5e`)의 원문 한 줄과 **파이썬 문자열 완전 일치**로 비교했다(토큰화나
+정렬을 거치지 않아 순서·중복 오류를 모두 잡는다):
+
+```
+동적 코드 생성 시점 제약 (old L132) MATCH: True
+자가 수정 TDD (old L138) MATCH: True
+클렌징 스크립트 (old L142) MATCH: True
+통합 배치 5대 제약 (old L149, 4줄로 분할) MATCH: True
+```
+
+### 원문 유지(사람의 판단만이 잡는 항목) — 4개 확인
+
+계획서가 지정한 4개 항목 중 3개(컬럼 매핑 표 축약 금지 L145, DDL 기반 제약 조건 작성
+L147, 복합 필터의 정확한 해석 L150)는 한 글자도 건드리지 않았다 — `diff`로 원문과
+새 파일의 해당 줄을 직접 비교해 **바이트 단위로 동일함**을 확인했다(무출력 = 동일).
+4번째(통합 배치 5대 제약, L149)는 600바이트를 훨씬 넘어(1933B) 계획서 지시대로 4줄로
+무손실 분할했으며, 위 파이썬 완전 일치 비교로 재구성 결과가 원문과 정확히 같음을
+확인했다(`MATCH: True`, 부분 문자열이 아니라 전체 문자열 비교).
+
+### 산문(수동판정) 25줄을 직접 grep한 결과
+
+`doc-audit.sh`가 신호를 주지 못한 나머지 줄(오버사이즈 11개 중 라우팅+축약 대상이 아닌
+줄 포함, 그리고 예산 안에 들어 손대지 않은 줄들) 중 백틱 클래스명이 있는 것만 테스트
+프로젝트에서 직접 grep했다. 새로 발견해 인용을 추가한 것은 위 라우팅 표에 이미
+반영했다(`CodingEngineTests`, `ArgumentTemplateResolverTests`,
+`SchemaPromptColumnSelectorTests`, `MechanicalValidatorTests`,
+`InstructionBundleWriterTests`, `PlanBoundaryResolverTests`,
+`InstructionEntryPointComposerTests`, `CodegenStagedWorkflowTests`). 손대지 않은 줄
+중에는 L131 데이터 액세스 경계 규칙(`DataAccessPolicy`)이 있는데, 이미
+`[DataAccessPolicy.cs]` 대괄호 링크를 갖고 있어 `doc-audit.sh`가 자동으로 "중복:
+architecture.md"로 분류했었다(331B, 예산 안이라 손대지 않음).
+
+### 테스트 없는 규칙(이름을 남긴다)
+
+- L127의 "개별 SP 분석 시에는 번들을 만들지 않으며, 통합 배치 시에만
+  `output/Jobs/{JobName}/`에 격리" — `src/ReSet.Cli/Program.cs`(854, 970, 1413행)의
+  CLI 오케스트레이션 로직이며 `tests/ReSet.Core.Tests`에 이 트리거 조건을 검사하는
+  테스트가 없다.
+- L132 "동적 코드 생성 시점 제약"의 스탠드얼론 메뉴 재기동(Resume) 판정 — 위 무손실
+  분할 표에 적은 대로 테스트 없음.
+- L138(신 L139) "자가 수정 및 TDD 테스트 피드백 루프" — 외부 에이전트에게 시키는
+  자율 워크플로 지시라 우리 테스트 스위트가 검사할 수 있는 대상이 아니다.
+- L142(신 L144)의 "AI 분석 완료 시 보완 스크립트 생성 기능은 기본 제거되어 있다"는
+  이유 서술과 크로스 DB 파일명 접두(`ResolveCleansingFileBaseName`) — 전담 테스트 없음.
+- L133(신 L134) "프로세스 양방향 제어"(`ExternalCliCodingEngine`의 콘솔 스트림 상속,
+  `process.Kill(true)`) — 이번 라운드에서 손대지 않았지만(600B 미만) `doc-audit.sh`가
+  "근거없음(이동필요)"로 표시했었다. 다음 라운드에서 참고할 수 있도록 이름을 남긴다.
+
+### 크기
+
+| 파일 | Phase 2c 이전(WAVE_BASE `7920c5e`) | Phase 2c 이후 |
+|---|---|---|
+| `AGENTS.md` | 48,328 B | 46,052 B (−2,276 B) |
+| `docs/architecture.md` | 141,877 B | 141,877 B (변경 없음 — 인용한 모든 근거가 이미 architecture.md 또는 코드 `<summary>`/테스트에 있었으므로 새로 옮길 내용이 없었다) |
+
+**전체 줄 예산 재확인.** `LC_ALL=C awk 'length($0)>600'` 전체 파일에서 무출력(600바이트
+초과 줄 없음, 범주 6·7의 11개 전부 해소). **링크 검사(둘 다 무출력).** 범주 6·7
+구간(L125–158) 안의 대괄호 링크는 `[DataAccessPolicy.cs]`(L131, 안 건드림)와
+`[ExternalCliCodingEngine.cs]`(L134, 안 건드림) 2개뿐이며 둘 다 파일이 실제로 존재함을
+확인했다(`test -f` 무출력 아닌 "OK" 출력으로 확인). `<!-- synced-through: c8d6074 -->`
+양쪽 파일 모두 변경 없음. `git diff 7920c5e -- AGENTS.md`의 유일한 hunk가
+`@@ -124,31 +124,37 @@`로 범주 6(L125 시작)~범주 8 직전(L158) 구간 안에만 있음을
+확인했다(범주 1–5·8 무변경). `docs/architecture.md`는 `git diff` 무출력(완전 무변경).
+`.cs` 파일 변경 없음(`git status --short`가 `AGENTS.md` 한 줄만 보고) — `dotnet
+build`/`dotnet test` 미실행.
