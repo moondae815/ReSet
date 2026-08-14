@@ -52,7 +52,7 @@ flowchart TD
 | | [SpecHeaderReader](../src/ReSet.Cli/SpecHeaderReader.cs) | 저장된 `Spec.md` 상단의 YAML 헤더에서 검증 종료 상태와 Critic 점수를 되읽어, 캐시로 복원된 명세서도 신규 분석과 동일하게 보고되도록 합니다. |
 | **ReSet.Core**<br/>(핵심 비즈니스 레이어) | [DbSnapshot](../src/ReSet.Core/Models/DbSnapshot.cs) | 로컬 환경에서 DB 연결 없이 오프라인 메타데이터 캐싱을 지원하기 위한 직렬화 구조 스냅샷 모델. |
 | | [CodeObjectKey](../src/ReSet.Core/Models/CodeObjectKey.cs), [CodeObjectAnalysisModels](../src/ReSet.Core/Models/CodeObjectAnalysisModels.cs) | DB·스키마·이름·유형으로 SP/UDF를 식별하고, 재귀 분석 그래프의 노드 상태·간선·객체별 분석 결과를 보존합니다. |
-| | [SpDefinition](../src/ReSet.Core/Models/SpDefinition.cs) | 분석된 SP/UDF의 메타데이터(원본 DDL, 의존성, 경고, 정적 분석 결과, AST 기반 논리 분해 결과 등)를 한데 묶어 담는 루트 데이터 클래스. 중첩 타입 `AstInsertMapping`/`AstUpdateMapping`이 INSERT/UPDATE 문의 AST 매핑을 담습니다. |
+| | [SpDefinition](../src/ReSet.Core/Models/SpDefinition.cs) | 분석된 SP/UDF의 메타데이터(원본 DDL, 의존성, 경고, 정적 분석 결과, AST 기반 논리 분해 결과 등)를 한데 묶어 담는 루트 데이터 클래스. `StaticAnalysis`(`SpStaticAnalysisResult`)의 `AstInsertMappings`/`AstUpdateMappings`를 거쳐 INSERT/UPDATE 문의 AST 매핑에 닿습니다. |
 | | [VerificationOutcome](../src/ReSet.Core/Models/VerificationOutcome.cs) | 검증 파이프라인이 어디서 끝났는지를 네 가지 값(리뷰 미수행·L1 미통과·품질 미달·통과)으로 구분하는 열거형. 기본값이 `ReviewNotRun`이라 상태를 설정하지 않은 경로는 통과가 아닌 쪽으로 기웁니다. |
 | | [SpAnalysisOutcome](../src/ReSet.Core/Models/SpAnalysisOutcome.cs), [ConsolidatedPipelineResult](../src/ReSet.Core/Models/ConsolidatedPipelineResult.cs) | 1단계 개별 SP 분석과 통합 계획 수립의 결과 계약. 명세서·검증 종료 상태·분석 범위·캐시 출처·아티팩트 저장 결과를 한 레코드에 담아 호출부가 보고 내용을 추측하지 않게 합니다. |
 | | [DbMetadataService](../src/ReSet.Core/Services/DbMetadataService.cs) | SQL Server 메타데이터 수집, DFS 기반 재귀적 의존성 탐색, 확장 속성(`MS_Description`) 주석, Identity/DefaultValue 및 인덱스 정보 수집, DDL 추출. 추가로 수집 완료된 스키마 메타데이터를 바인딩하여 2차 정밀 정적 분석 재구동 오케스트레이션 수행. |
