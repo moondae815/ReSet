@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Xunit;
 
@@ -52,5 +54,76 @@ public sealed class DocumentationBudgetTests
 
         var excerpt = Assert.Single(found).Excerpt;
         Assert.Equal(excerpt, Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(excerpt)));
+    }
+
+    // 라인 예산. 실제 병리는 4,162바이트짜리 "목록 항목"이었다.
+    private const int MaxLineBytes = 600;
+
+    private const string Routing =
+        "이 문장을 어긴 코드가 나왔을 때 무엇이 그것을 잡습니까?\n" +
+        "  테스트가 잡는다        → 규칙 한 줄 + 테스트 이름만 남기십시오\n" +
+        "  그 파일 여는 사람만    → 해당 클래스의 <summary>로 옮기십시오\n" +
+        "  여러 파일을 함께 봐야  → docs/architecture.md §4.x로 옮기십시오\n" +
+        "  사람의 판단만이 잡는다 → AGENTS.md에 남을 자격이 있습니다\n";
+
+    [Fact]
+    public void NoAutoLoadedDocumentExceedsItsByteBudget()
+    {
+        var repoRoot = RepoPaths.FindRepoRoot();
+        var failures = new StringBuilder();
+
+        foreach (var (relativePath, budget) in ReadBaseline(repoRoot))
+        {
+            var actual = DocumentationBudget.MeasureBytes(
+                File.ReadAllText(Path.Combine(repoRoot, relativePath)));
+
+            if (actual <= budget) continue;
+
+            failures.AppendLine($"{relativePath}: 상한 {budget:N0} 바이트, 실제 {actual:N0} 바이트 ({actual - budget:N0} 초과)");
+        }
+
+        Assert.True(
+            failures.Length == 0,
+            "자동 로드되는 문서가 크기 예산을 넘었습니다.\n\n" + failures + "\n" + Routing);
+    }
+
+    [Fact]
+    public void NoAutoLoadedDocumentHasAnOversizedLine()
+    {
+        var repoRoot = RepoPaths.FindRepoRoot();
+        var failures = new StringBuilder();
+
+        foreach (var (relativePath, _) in ReadBaseline(repoRoot))
+        {
+            var oversized = DocumentationBudget.FindOversizedLines(
+                File.ReadAllText(Path.Combine(repoRoot, relativePath)), MaxLineBytes);
+
+            foreach (var line in oversized)
+            {
+                failures.AppendLine($"{relativePath}:{line.Line} — {line.Bytes:N0} 바이트 (상한 {MaxLineBytes})");
+                failures.AppendLine($"  {line.Excerpt}");
+            }
+        }
+
+        Assert.True(
+            failures.Length == 0,
+            $"목록 항목 하나가 {MaxLineBytes} 바이트를 넘었습니다. 항목이 아니라 문단입니다.\n\n"
+            + failures + "\n" + Routing);
+    }
+
+    private static IEnumerable<(string RelativePath, int Budget)> ReadBaseline(string repoRoot)
+    {
+        var path = Path.Combine(repoRoot, "tests", "ReSet.Core.Tests", "documentation-budget-baseline.txt");
+
+        foreach (var raw in File.ReadAllLines(path))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+
+            var separator = line.LastIndexOf('=');
+            Assert.True(separator > 0, $"기준선 파일의 형식이 잘못되었습니다: {raw}");
+
+            yield return (line[..separator].Trim(), int.Parse(line[(separator + 1)..].Trim()));
+        }
     }
 }
