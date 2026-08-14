@@ -451,7 +451,7 @@ Java 분기의 두 쓰기도 같은 형태로 바꾼다:
         // 오류 로그, 게시 Manifest를 전부 아래 값으로 짓는다. 스텁이 주지 않으면
         // 회차마다 다른 우회가 생겨 회차 간 코드가 어긋난다.
         //
-        // 계획서 본문의 ExecuteAsync·SettlementStepResult는 설계 의도 설명이다.
+        // 계획서 본문의 비동기 실행 계약·확장 결과 타입은 설계 의도 설명이다.
         // 실행 계약은 여기 있는 동기 Execute 하나다.
         public Guid RunId { get; set; }
         public string InputHash { get; set; }
@@ -465,6 +465,14 @@ Java 분기의 두 쓰기도 같은 형태로 바꾼다:
 ```
 
 `Guid`는 스텁 첫 줄의 `using System;`으로 이미 해결된다.
+
+> **이 주석에 `ExecuteAsync`·`SettlementStepResult`를 문자 그대로 쓰지 마십시오.** Step 1의
+> `AbstractTaskletStub_ShouldNotDeclareAsyncExecution_ForCSharp`가 스텁 문자열 전체에 대해
+> `Assert.DoesNotContain`으로 그 토큰을 금지합니다. 이 계획의 초판이 실제로 그렇게 적어
+> 자기 테스트를 깨뜨렸고, 실행 중에 발견돼 위 문구로 고쳤습니다. 단언을 "선언 여부만
+> 본다"로 좁히는 대신 문구를 바꾼 이유는, 그 넓은 금지가 바로 이 테스트의 목적이기
+> 때문입니다 — 나중에 누군가 비동기를 되살리려 할 때 어휘 자체가 스텁에 없어야 합니다.
+> 에이전트에게 그 타입 이름을 알려 주는 일은 Task 3의 규칙 10이 이미 합니다.
 
 `DataAccessPolicy.JavaSettleContext`의 필드와 접근자에 다음을 더한다:
 
