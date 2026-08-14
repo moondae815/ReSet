@@ -2519,6 +2519,27 @@ namespace ReSet.Core.Services
             // 다시 얹힌다. 그래서 최종 문서는 위에서부터 커버리지 → 오류코드 누락
             // → 분할 미실행 → 하한 미달 → 검증 불가 순으로 읽힌다 - 목차·명세서
             // 수준의 결함일수록 위로, 단계 하나의 결함일수록 아래로 간다.
+            // 배너는 나중에 붙을수록 위로 얹힌다. 생략 주석은 이 자리의 결함 중
+            // 가장 가벼우므로 가장 먼저 붙여 맨 아래에서 읽히게 한다.
+            //
+            // 스캔 실패가 나머지 배너까지 막지 않도록 격리한다(AGENTS.md 범주 2).
+            // 취소 필터는 달지 않는다 - Scan은 문자열 위의 동기 정규식이라 취소
+            // 토큰을 넘기는 await를 감싸지 않는다.
+            IReadOnlyList<string> omissionComments = Array.Empty<string>();
+            try
+            {
+                omissionComments = OmissionCommentScanner.Scan(consolidatedPlan);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "생략 주석 스캔 중 오류가 발생했습니다. 배너 없이 진행합니다.");
+            }
+
+            if (omissionComments.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
+            {
+                consolidatedPlan = VerificationBanner.OmissionComments(omissionComments) + consolidatedPlan;
+            }
+
             var unverifiableSteps = byKind[StepDefectKind.Unverifiable].ToList();
             if (unverifiableSteps.Count > 0 && !string.IsNullOrEmpty(consolidatedPlan))
             {
