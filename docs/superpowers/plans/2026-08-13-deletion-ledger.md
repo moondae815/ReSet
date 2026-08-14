@@ -478,17 +478,18 @@ AI 클라이언트 널 가드, OpenAI Responses 추론 보존, 오프라인 스�
 
 ### 원문 유지(사람의 판단만이 잡는 항목)
 
-계획서가 확정한 대로 다음은 한 글자도 줄이지 않았다(단, L55 재귀 분석과 L64 Ollama 온도
-매핑은 600바이트 줄 예산을 넘어 **내용 삭제 없이** 여러 불릿으로 줄바꿈만 했다):
+계획서가 확정한 대로 다음은 한 글자도 줄이지 않았다:
 
 - DB 메타데이터 수집(`DbMetadataService.cs`) — 원문 유지
 - 원천 데이터 파일 덤프(`MetadataExporter.cs`) — 원문 유지
 - 캐싱 및 서브 시스템(`CacheManager.cs`) — 원문 유지
-- 재귀 코드 객체 분석(`DependencyAnalysisOrchestrator.cs`) — 원문 유지, 3개 불릿으로 줄바꿈(`재귀 코드 객체 분석`/`(계속)`×2)
+- 재귀 코드 객체 분석의 경로 인코딩 절만 — 원문 유지(테스트 없음). 나머지 절은 Fix Round 1에서
+  테스트가 있음이 확인되어 축약됐다 — 아래 "Fix Round 1" 절 참고
 - 오프라인 스냅샷 파일 검증 Fail-Fast — 원문 유지(테스트 없음, Program.cs Main 진입점이라 단위 테스트 대상이 아니고 설계 의도가 코드에서 자명하지 않음)
 - 취소는 소프트 페일 대상이 아님(필터 요구, `when (ex is not OperationCanceledException)`) — 원문 유지, 테스트 인용만 추가
 - 취소 이후 부분 완료 보존(완료 산출물 보존, 미분석 참조 표기) — 원문 유지, 테스트 인용만 추가
-- Ollama 온도 매핑 및 반복 패널티 방어 — 원문 유지, 2개 불릿으로 줄바꿈(온도 매핑/반복 패널티)
+- Ollama 온도 매핑 중 gemma4/qwen3.6 하드코딩 분기, 반복 패널티 방어 — 원문 유지(테스트 없음).
+  effort→temperature 매핑 절은 Fix Round 1에서 테스트가 있음이 확인되어 축약됐다
 - Ollama 모델별 추론(Thinking) 제어 및 파싱 규칙 — 원문 유지
 - 프롬프트 응답 정화(Conversational filler, 마크다운 코드 블록 금지) — 원문 유지(런타임 LLM 출력을 검사하는 테스트가 없음)
 - AI 클라이언트 목록 및 `KeyNotFoundException` 차단 규칙 — 원문 유지(이미 규칙 한 줄이라 축약할 서술이 없었음)
@@ -508,15 +509,90 @@ Conversational filler                                    1
 
 ### 크기
 
-| 파일 | Phase 2a 이전(Task 2 이후, WAVE_BASE `c28183e`) | Phase 2a 이후 |
-|---|---|---|
-| `AGENTS.md` | 55,096 B | 52,492 B (−2,604 B) |
-| `docs/architecture.md` | 140,798 B | 141,877 B (+1,079 B) |
-
-범주 2가 계획서 추정 10.8KB보다 순감축이 작은 이유(2.6KB)는, 이 라운드의 판정 대부분이
-"삭제"가 아니라 "이미 짧은 규칙에 테스트 인용을 붙이는" 방향이었고, `.cs`가 바뀌지 않아
-검증할 대상이 순수 문서 조회뿐이라 원문 유지 비율이 예상보다 높았기 때문이다(Soft Fail
-5개 항목 중 3개 원문 100% 유지, 취소·SQL 타입 판정만 실질 축소).
+| 파일 | Phase 2a 이전(Task 2 이후, WAVE_BASE `c28183e`) | Phase 2a 원안 이후 | Fix Round 1 이후 |
+|---|---|---|---|
+| `AGENTS.md` | 55,096 B | 52,492 B (−2,604 B) | 52,730 B (+238 B) |
+| `docs/architecture.md` | 140,798 B | 141,877 B (+1,079 B) | 141,877 B (변경 없음) |
 
 링크 검사(둘 다 무출력): `AGENTS.md`의 `./` 링크 32개, `docs/architecture.md`의
 `../src/` 링크 104개·`../tests/` 링크 23개 — 전부 존재 확인.
+
+## Fix Round 1 (Task 3, 2026-08-14) — 이미 테스트가 있는 절에 규칙 축소를 덜 적용한 문제
+
+독립 리뷰가 SPEC COMPLIANCE PASS / TASK QUALITY CONCERNS(Important 3건 + Minor 1건)를 냈다.
+공통 원인: 판정 질문("무엇이 잡는가?")을 특정 절에 대해서는 적용하지 않고 원문을 그대로
+두거나 부정확한 테스트 인용을 달았다. 아래는 지적별로 실제로 무엇을 고쳤는지다.
+
+**Important 1 — 재귀 코드 객체 분석이 대부분 테스트가 있음에도 원문 유지됐다.** Phase 2a
+원안은 이 불릿(구 L55–57, 3개 절로 줄바꿈, 1,385B)을 전부 "재귀" Soft Fail 원문 유지
+대상으로 묶었다. 리뷰가 `DependencyAnalysisOrchestratorTests.cs`를 열어 절마다 대응 테스트를
+지목했고, 각 테스트를 직접 열어 실제로 그 절을 검사하는지 확인했다:
+
+| 절 | 확인한 테스트 | 실제 단언 |
+|---|---|---|
+| 노드별 `Failed` 격리, 다른 객체 계속 분석 | `AnalyzeAsync_ChildFailureDoesNotFailRoot` | 자식이 `Failed`+사유("AI request failed")를 갖는 동안 루트는 `Succeeded` |
+| `SkippedDepth` | `AnalyzeAsync_UsesTraversalDepthToSkipGrandchildBeyondMaximum` | `maxDepth` 초과 손자 노드가 `SkippedDepth`, 메타데이터/파이프라인 요청 모두 안 감 |
+| 크로스 DB 비활성 시 `SkippedExternal` | `AnalyzeAsync_UsesDirectMetadataAndSkipsExternalObjectBeforeAdditionalLookup` | 외부 DB 객체가 `SkippedExternal`, 직접 메타데이터만 조회하고 파이프라인 요청 없음 |
+| 크로스 DB 활성 중 접근 실패는 `Failed` | `AnalyzeAsync_ExternalMetadataFailureIsSurfacedAsFailedNode` | `allowExternalDatabaseConnections: true`에서 메타데이터 조회 실패 시 `SkippedExternal`이 아니라 `Failed`, 루트 Spec.md에 "분석 불가" |
+| 최소 깊이 우선 | `AnalyzeAsync_ShallowDiscoveryWinsOverLaterDepthExceededPath` | 공유 객체가 얕은 경로로 한 번만 분석되고, 양쪽 간선(root→shared, nested→shared) 모두 기록 |
+| 실패 객체 링크 금지 | `AnalyzeAsync_SpecWriteFailureMarksChildFailedAndParentDoesNotLinkIt` | 자식 Spec.md 쓰기 실패 시 루트 Spec.md에 자식으로의 마크다운 링크가 없음 |
+| Critic 점수·`Thinking.md` 보존 | `AnalyzeAsync_PersistsChildReviewScoreAndThinkingArtifacts` | 자식 Spec.md에 점수 문구, `Thinking.md`에 추론 텍스트 기록 |
+| 카탈로그 표기 우선 | `AnalyzeAsync_NormalizesGraphKeysToCatalogObjectNameCasing` | 호출부 표기(`UF_Get_WorkDay2`)가 아니라 카탈로그 표기(`UF_GET_WORKDAY2`)로 노드·간선 이름이 통일 |
+
+경로 인코딩 절만 이 파일과 `OutputPathResolverTests.cs`에 대응 테스트가 없어(`grep`로 직접
+확인) 원문 유지로 남겼다. 위 표의 판정을 그대로 받아들이지 않고 각 테스트를 열어 확인한
+뒤, 3개 절을 다음으로 재작성했다(`AGENTS.md` L55–57):
+
+```
+*   **재귀 코드 객체 분석 — 상태 표기**: ... (AnalyzeAsync_ChildFailureDoesNotFailRoot/
+    ..._ExternalMetadataFailureIsSurfacedAsFailedNode/..._ShallowDiscoveryWinsOverLaterDepthExceededPath가 검사)
+*   **재귀 코드 객체 분석 — 성공 산출물**: ... (AnalyzeAsync_SpecWriteFailureMarksChildFailedAndParentDoesNotLinkIt/
+    ..._PersistsChildReviewScoreAndThinkingArtifacts/..._NormalizesGraphKeysToCatalogObjectNameCasing이 검사)
+*   **재귀 코드 객체 분석 — 경로 인코딩**: 객체 키와 출력 경로는 구분자·파일명 문자를
+    충돌 없이 인코딩해야 합니다.
+```
+
+`SkippedDepth`와 `AnalyzeAsync_UsesDirectMetadataAndSkipsExternalObjectBeforeAdditionalLookup`은
+대표 인용에서 빠졌다(리뷰가 지목한 대응 테스트이므로 위 표에는 남긴다) — 규칙 문장 자체가
+`SkippedDepth`/`SkippedExternal` 두 상태를 모두 명시하고, 인용은 상태 분기의 대표 사례
+(정상 실패·외부 실패·최소 깊이 우선)로 좁혔다. 세 줄 합계가 1,385B → 1,228B로 줄었다(−157B).
+
+**Important 2 — Ollama 온도 매핑에 정확히 맞는 테스트가 있는데도 인용이 없었다.**
+`OllamaClientTests.cs`의 `ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`([Theory],
+low→0.1/medium→0.4/high→0.7/max→0.9)를 열어 확인했다 — 요청 JSON의 `options.temperature`가
+정확히 그 값들과 일치하는지 단언한다. 이 절에 그 인용을 추가했다. 같은 불릿의 나머지
+절(모델명에 `gemma4`/`qwen3.6`이 포함되면 매핑을 무시하고 하드코딩된 샘플링 설정을 쓰는
+분기)은 `OllamaClient.cs:51-96`에 구현이 있지만 대응 테스트가 없어(`grep`로 확인) 원문
+그대로 남겼고, 그 사실을 인용 옆에 명시했다.
+
+**Important 3 — TryGetProperty 인용이 존재하지 않는 테스트 패턴을 주장했다.** 원 인용
+"각 클라이언트 테스트의 `ChatAsync_With*ErrorResponse_ShouldThrow*` 계열"은 `Claude`/`OpenAI`/
+`Zai`ClientTests.cs에서는 정확히 `ChatAsync_WithErrorResponse_ShouldThrowInvalidOperationException`로
+존재하지만(`grep`로 세 파일 모두 확인), `GoogleClientTests.cs`는 이 이름 패턴을 쓰지 않고
+`ChatAsync_WithMissingCandidates_ShouldThrowInvalidOperationException`을 쓰며(내용은 열어서
+확인 — `candidates` 필드 누락 시 `InvalidOperationException`, 메시지에 "생성된 후보군"
+포함), `OllamaClientTests.cs`에는 이 계열의 테스트가 아예 없다(전체 테스트 3개 —
+Gemma4ChannelThought, StandardThinkTag, DiversifyTemperatureBasedOnEffort — 중 오류 응답 관련은
+없음) — `OllamaClient.cs:145-158`에 같은 가드 구현은 있으나 미검증이다. 인용을 클라이언트별
+정확한 이름으로 고치고, Ollama의 공백을 "테스트가 없다"고 명시했다(테스트를 새로 쓰지는
+않았다 — 이 작업 범위 밖).
+
+**Minor — `SpExecutionService` 인용이 검증 범위를 과장했다.** 원 인용은
+`ErrorCode` 필드가 검증된다고 암시했지만, `SpExecutionService_ShouldSoftFail_OnInvalidConnectionString`을
+다시 열어 확인한 결과 `Assert.Contains("FAIL", resultJson)`과
+`Assert.Contains("dbo.TestProc", resultJson)`만 단언한다 — 직렬화된 문자열에 `FAIL`과
+프로시저명이 있는지만 검사하고 `ErrorCode` 필드명이나 그 값은 직접 단언하지 않는다. 인용을
+"결과에 `FAIL`과 프로시저명이 포함되는지 검사 — `ErrorCode` 필드 자체는 직접 단언하지
+않음"으로 고쳤다.
+
+### 크기 (Fix Round 1 이후)
+
+`docs/architecture.md`는 이번 라운드에서 건드리지 않았다(141,877B, 변경 없음). `AGENTS.md`는
+52,492B → 52,730B로 238B **늘었다** — 재귀 불릿 축소(−157B)보다 세 곳의 정밀한 테스트 인용
+추가(SpExecutionService, TryGetProperty/Google/Ollama 공백 명시, Ollama 온도)가 더 컸기
+때문이다. 이 라운드의 목적은 순감축이 아니라 "테스트가 있다고 주장하는 곳은 실제로 있고,
+없다고 침묵하는 곳은 침묵하지 않는다"는 정확성이었다.
+
+링크 검사(둘 다 무출력, 재확인): `AGENTS.md`의 `./` 링크 32개, `docs/architecture.md`의
+`../src/` 링크 104개·`../tests/` 링크 23개 — 전부 존재 확인. `<!-- synced-through: c8d6074 -->`
+변경 없음.
