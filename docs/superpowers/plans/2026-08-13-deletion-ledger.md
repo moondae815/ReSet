@@ -51,15 +51,22 @@ SUMMARY가 항상 0으로 나왔다(`StepErrorCodeRegressionTests`가 실제로�
 
 지금 스크립트는 링크 텍스트가 아니라 **링크의 경로**로 찾는다. 경로는 파일을
 유일하게 식별하므로 이름이 겹쳐도 섞이지 않는다. 이 개정으로 9개 항목의 판정이
-`중복:architecture.md`에서 `근거없음`으로 바뀌었다. 그 원인은 하나가 아니다.
+`중복:architecture.md`에서 `근거없음`으로 바뀌었다(`git show
+4556437:docs/superpowers/plans/2026-08-13-deletion-ledger.md`의 표와 현재 표를
+줄 번호 기준으로 대조한 결과: L37, L88, L89, L110, L111, L121, L125, L126,
+L144 — 정확히 9줄). 이 9줄이 전부이며, 아래 일곱 개(사각지대)와 두 개(근접
+구간)로 완전히 나뉜다. **세 번째 범주는 없다.**
 
-일부는 이름 충돌이 진짜였다는 뜻에서 실제로 드러난 근거없음이다 —
-`Program`/`ConsoleUserInteraction`이 그 증거다(같은 basename이 `ReSet.Cli`와
-`ReSet.Validator.Cli`에 둘 있어, 이름 기반 대조가 서로 다른 두 줄에 같은 분량을
-합산해 부여했다).
+`Program`(L96, L129)과 `ConsoleUserInteraction`(L97, L130)은 이 9줄에
+들어가지 않는다 — 네 줄 모두 개정 전후로 판정이 `중복`에서 움직이지 않았다
+(L96 `Program`의 ARCH_MD는 1730 → 216, L129는 1730 → 297로 숫자만 바뀌었을 뿐
+`중복:architecture.md`인 채로 남았다). 이름 충돌이 이 두 클래스의 근거를
+합산해 부풀렸던 것은 사실이고 그것이 대조 방식을 이름에서 경로로 바꾼
+이유지만, 그 결과는 **배정을 바로잡았을 뿐 근거없음을 드러내지 않았다** — 이
+두 클래스를 근거없음 사례로 인용하지 않는다.
 
-하지만 아래 일곱 개는 사정이 다르다 — `SqlObjectTypeClassifier`(L37),
-`CliWorkspace`(L88), `CliEffort`(L89), `MockDataDto`(L110), `GapReport`(L111),
+아래 일곱 개는 사각지대다 — `SqlObjectTypeClassifier`(L37), `CliWorkspace`
+(L88), `CliEffort`(L89), `MockDataDto`(L110), `GapReport`(L111),
 `ValidatorAiService`(L121), `TypeClassificationPolicyTests`(L144)는
 architecture.md가 그 클래스를 백틱 이름으로 실질적으로 서술하고 있다 —
 `SqlObjectTypeClassifier`와 `TypeClassificationPolicyTests`는
@@ -69,6 +76,15 @@ architecture.md가 그 클래스를 백틱 이름으로 실질적으로 서술�
 카탈로그 링크와 별도로 더 긴 서술이 붙어 있어) 경로 매칭이 그 서술을 보지
 못한다. 이 일곱 줄의 `근거없음`은 위 네 번째 항목("링크 없는 서술은 경로 매칭이
 보지 못한다")이 말하는 스크립트의 사각지대이지, 드러난 실제 공백이 아니다.
+셋 — `CliWorkspace`, `CliEffort`, `ValidatorAiService` — 은 그중에서도
+혼합형이다: architecture.md 카탈로그 표에 실제 링크가 있어 스크립트가 일부
+분량을 이미 인정했지만(CliWorkspace L68→ARCH_MD 504, CliEffort L69→893,
+ValidatorAiService L110→302), 그 인정된 분량이 AGENTS.md 줄의 바이트 수에
+못 미치고 카탈로그 항목과는 별도의 더 긴 서술 문단이 또 있다(CliWorkspace·
+CliEffort는 `architecture.md:589`, ValidatorAiService는 `architecture.md:633`).
+나머지 넷(`SqlObjectTypeClassifier`, `MockDataDto`, `GapReport`,
+`TypeClassificationPolicyTests`)은 링크가 아예 없다(해당 `.cs` 경로로
+`grep -c`하면 0이 나온다).
 
 나머지 둘 — `JavaProcessRunner`(L125, 204 vs 206바이트), `DataComparisonService`
 (L126, 233 vs 237바이트) — 는 형제 이름(`JavaProcessRunnerTests`,
