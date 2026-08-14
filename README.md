@@ -122,7 +122,8 @@ ReSet/
     ├── Jobs/                        # 생성된 통합 전환 계획서(BatchMigrationPlan.md) 및 마이그레이션 소스코드(src/) 격리 보관소
     │   └── [Job이름]/               # 각 통합 Job 식별자 하위 폴더
     │       ├── docs/                # BatchMigrationPlan.md 및 Job 설계 문서
-    │       ├── raw/                 # Brainstorming.md 및 계획 수립에 쓰인 DDL 백업(ddl/)
+    │       ├── raw/                 # 계획 수립 원본 (Brainstorming.md, 목차 계약 PlanStructure.md,
+    │       │                        #  폐기된 목차 PlanStructure.superseded-N.md, prompt-context.md, ddl/)
     │       ├── agent/               # 외부 코딩 에이전트에 전달되는 지시서 번들
     │       │   ├── MigrationInstructions.md  # 진입점 (지켜야 할 지침이 앞, 나머지는 링크)
     │       │   ├── task-NN-[코드].md         # 회차별 작업 지시서 (0=골격, 1..N=단계, 99=조립)
@@ -148,11 +149,19 @@ ReSet/
     │           ├── dependency-manifest.json # 의존 객체 식별자와 수집 경로 매니페스트
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
+    │           ├── chunks/                 # [로컬 LLM 전용] AST 분할 생성 시 조각별 응답 캐시
     │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
     ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
-    ├── Objects/                     # 코드 객체별 표준 DDL(object_definition.sql) 보관소
+    ├── Unresolved/                  # 종류를 판정하지 못한 객체의 산출물 (Procedures/Functions와 같은 구조)
+    ├── Objects/                     # 코드 객체별 표준 DDL 보관소
+    │   └── [Schema].[이름].[Type]/  # 스키마·이름이 겹치는 다른 종류의 객체를 구분하려 Type까지 붙인다
+    │       └── raw/                 # object_definition.sql (표준 DDL 정본) 및 prompt-context.md
+    ├── [Job이름]_Settlement_Policy_Rulebook.md  # 정산 정책 문서 (L1/L2를 거치지 않는 미검증 산출물)
+    ├── .sp_cache_index.json         # 재분석을 건너뛰기 위한 해시 색인 (지우면 캐시 전체 무효화)
     └── External/[Database]/         # 같은 인스턴스 내 다른 DB 객체의 산출물 격리 경로 (크로스 DB 분석 활성 시)
 ```
+
+`output/` 아래 각 파일을 **누가·언제·왜** 만드는지는 [산출물 명세](./docs/output-artifacts.md)에 정리되어 있습니다.
 
 ---
 
