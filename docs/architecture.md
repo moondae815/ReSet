@@ -99,6 +99,12 @@ flowchart TD
 | | [ArtifactChangeDetector](../src/ReSet.Core/Services/ArtifactChangeDetector.cs) | 기동 전후 작업 디렉터리를 재귀 스냅샷해 산출물 변화 여부를 판정. `bin`·`obj` 등 빌드 부산물은 제외해 빌드만 돌린 실행이 성공으로 잡히지 않게 합니다. |
 | | [CodegenRunResult](../src/ReSet.Core/Models/CodegenRunResult.cs) | 엔진 1회 기동의 결과(산출물 변화 여부, 종료 코드, 실패 분류, 진단 원문). 성공 여부를 단정하는 속성을 두지 않아 판단을 호출자에게 남깁니다. |
 | | [SettlementPolicyService](../src/ReSet.Core/Services/SettlementPolicyService.cs) | DDL 상수 분석 및 DB 마스터 데이터 프로파일링을 결합한 통합 정산 정책 정의서 도출. |
+| | [DependencyInfo](../src/ReSet.Core/Models/DependencyInfo.cs) | 재귀적으로 수집된 DB 개체(테이블, 뷰, 다른 SP 등) 의존성을 표현하는 모델. |
+| | [ColumnInfo](../src/ReSet.Core/Models/ColumnInfo.cs) | 컬럼명, 데이터타입, PK/FK 정보, 한글 설명, 설명 누락 유무(`IsDescriptionMissing`) 및 Identity/DefaultValue 정보를 수집하는 모델. |
+| | [TableIndexInfo](../src/ReSet.Core/Models/TableIndexInfo.cs) | 테이블 인덱스 메타데이터(인덱스명, 타입, Unique, PK 여부, 구성 컬럼)를 관리하는 모델. |
+| | [AiResult](../src/ReSet.Core/Models/AiResult.cs) | AI 응답 내용(Content) 및 추론 텍스트(ThinkingText), 요청된 시스템/사용자 프롬프트 콘텍스트를 모아 관리하는 데이터 모델. |
+| | [IMultiProgressScope](../src/ReSet.Core/Services/IMultiProgressScope.cs) | 멀티태스크 진행률 상황 보고를 위한 추상 인터페이스. |
+| | [NullProgressScope](../src/ReSet.Core/Services/NullProgressScope.cs) | 유닛 테스트 및 무인 모드 등에서 UI 미출력을 보장하고 NullReferenceException을 막는 방어적 널 객체 구현체. |
 | **ReSet.Validator.Cli**<br/>(TUI/CLI 레이어) | [Program](../src/ReSet.Validator.Cli/Program.cs) | 검증기 CLI 진입점. 디렉토리 사전 유효성 확인, 솔루션 루트 스캔, Ctrl+C 취소 연동 및 무인 배치 검증 흐름 제어, 통합 Job 대화형 선택 메뉴 제공. |
 | | [ConsoleUserInteraction](../src/ReSet.Validator.Cli/ConsoleUserInteraction.cs) | Spectre.Console 기반 TUI 렌더링. 탭(Tab) 자동완성 디렉토리 입력창(`ShowChoices(false)` 제어), Gap 분석 결과 패널 렌더링 및 분석기와 통일된 `ConsoleProgressScope` 스피너 UI 제공. |
 | **ReSet.Validator.Core**<br/>(정합성 검증 레이어) | [CodegenWorkflowOrchestrator](../src/ReSet.Validator.Core/Services/CodegenWorkflowOrchestrator.cs) | 외부 코딩 에이전트(Actor)와 코드 검증기(Critic) 간의 자가 수정 워크플로우 루프를 전담하는 독립 오케스트레이터. |
@@ -113,6 +119,12 @@ flowchart TD
 | | [SpExecutionService](../src/ReSet.Validator.Core/Services/SpExecutionService.cs) | 테스트 케이스 파라미터를 활용해 Legacy DB에서 Stored Procedure를 실행하고 결과를 다중 ResultSet 구조 JSON으로 수집. |
 | | [SandboxSeedingService](../src/ReSet.Validator.Core/Services/SandboxSeedingService.cs) | 모의 데이터를 샌드박스 DB에 자동 적재(Seed)하고 검증 완료 후 강제 제거(Cleanup)하는 라이프사이클 관리. |
 | | [DataComparisonService](../src/ReSet.Validator.Core/Services/DataComparisonService.cs) | 레거시 vs 타겟 결과 JSON 데이터를 행 수, 컬럼 타입, 값 단위로 1:1 대조하여 비교 보고서 마크다운 생성. |
+| | [IValidatorPlugin](../src/ReSet.Validator.Core/Abstractions/IValidatorPlugin.cs) | C#([CsValidatorPlugin](../src/ReSet.Validator.Core/Plugins/CsValidatorPlugin.cs)), Java([JavaValidatorPlugin](../src/ReSet.Validator.Core/Plugins/JavaValidatorPlugin.cs)) 등 언어별 L1 정적 구조 및 명칭 검증을 구현하는 플러그인 인터페이스. |
+| | [IValidationUserInterface](../src/ReSet.Validator.Core/Abstractions/IValidationUserInterface.cs) | 검증기 TUI 사용자 인터랙션을 추상화한 인터페이스. |
+| | [L1ValidationResult](../src/ReSet.Validator.Core/Abstractions/L1ValidationResult.cs) | L1 정적 구문 검증 결과를 담는 모델. |
+| | [ValidationResult](../src/ReSet.Validator.Core/Models/ValidationResult.cs) | 검증 대상의 L1/L2/L3 전체 상태를 관리하는 데이터 모델. |
+| | [RunnerDtos](../src/ReSet.Validator.Core/Models/RunnerDtos.cs) | 타겟 런타임 실행기의 입출력 및 실행 결과를 담는 DTO 모음. |
+| | [ValidatorConfig](../src/ReSet.Validator.Core/Models/ValidatorConfig.cs) | 검증기 실행 설정을 바인딩하는 구성 모델. |
 | **ReSet.Core.Tests**<br/>(테스트 레이어) | [SqlStaticParserTests](../tests/ReSet.Core.Tests/SqlStaticParserTests.cs) | T-SQL AST 정적 분석기의 테이블 CRUD 분류, 다단계 중첩 인덴트, sp_executesql/EXEC 동적 SQL, UDF/Linked Server 감지 기능을 종합 검증. |
 | | [Clients (Claude, OpenAi, Ollama) Tests](../tests/ReSet.Core.Tests/) | AI 클라이언트별 페이로드 직렬화, API 전송 스펙 및 응답 널 가드(TryGetProperty) 무결성 검증. |
 | | [CLI Clients (ClaudeCli, CodexCli, AntigravityCli) Tests](../tests/ReSet.Core.Tests/), [CliProcessRunnerTests](../tests/ReSet.Core.Tests/CliProcessRunnerTests.cs), [CliEffortTests](../tests/ReSet.Core.Tests/CliEffortTests.cs), [CliPromptTests](../tests/ReSet.Core.Tests/CliPromptTests.cs), [CliFailureClassifierTests](../tests/ReSet.Core.Tests/CliFailureClassifierTests.cs), [CliProviderBatchGuardTests](../tests/ReSet.Core.Tests/CliProviderBatchGuardTests.cs), [CliProviderSettingsTests](../tests/ReSet.Core.Tests/CliProviderSettingsTests.cs), [AiClientFactoryTests](../tests/ReSet.Core.Tests/AiClientFactoryTests.cs), [CliUsageTests](../tests/ReSet.Core.Tests/CliUsageTests.cs), [CliUsageLoggingTests](../tests/ReSet.Core.Tests/CliUsageLoggingTests.cs) | CLI 기반 AI 제공자의 인자 구성, 응답 파싱, 실패 분류, effort 클램프, 배치 모드 차단 판정, 설정 바인딩 및 팩토리 등록을 검증. CliUsage 계열은 집계 파싱과, 그 값이 실제로 로그까지 도달하는지를 스텁 CLI로 끝까지 확인합니다. |
@@ -122,6 +134,8 @@ flowchart TD
 | | [ValidatorAiServiceTests](../tests/ReSet.Core.Tests/ValidatorAiServiceTests.cs) | 검증기 AI 응답 파싱 무결성(마크다운 블록 정제) 및 L2 Gap 분석 검증. |
 | | [DataComparisonServiceTests](../tests/ReSet.Core.Tests/DataComparisonServiceTests.cs) | 레거시/신규 JSON 결과값 1:1 대조 정합성 및 예외 핸들링 검증. |
 | | [CancellationPolicyTests](../tests/ReSet.Core.Tests/CancellationPolicyTests.cs) | Roslyn 구문 트리로 `src/` 전체를 훑어 취소 예외를 삼킬 수 있는 `catch`를 찾아내는 아키텍처 게이트. 파일별 허용 개수를 [기준선 파일](../tests/ReSet.Core.Tests/cancellation-policy-baseline.txt)에 고정해, 새 위반이 생겼을 때뿐 아니라 고치고도 숫자를 내리지 않았을 때도 실패합니다. |
+| | [DependencyAnalysisOrchestratorTests](../tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs) | 재귀 SP/UDF 그래프의 중복 제거와 실패 격리를 검증. |
+| | [StepErrorCodeRegressionTests](../tests/ReSet.Core.Tests/StepErrorCodeRegressionTests.cs) | 목차의 빈 `ErrorCodes` 배열 때문에 단계 하한 검사가 무실행이던 결함을 실측 축약 픽스처로 고정하는 회귀 테스트. |
 
 ---
 

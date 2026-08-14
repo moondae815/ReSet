@@ -242,3 +242,104 @@ L110 `MockDataDto`, L111 `GapReport`, L121 `ValidatorAiService`, L144
 `TypeClassificationPolicyTests`(근거는 위 "개정 이력" 참고). 나머지 `근거없음` 중
 L125 `JavaProcessRunner`와 L126 `DataComparisonService`는 판정 자체는 맞지만
 ~10% 근접 구간이라 위 "이 표를 읽기 전에"의 첫 번째 항목이 적용된다.
+
+## Phase 1 결과 — 카탈로그 삭제와 라우팅 표 신설 (Task 2, 2026-08-14)
+
+**삭제 범위.** `AGENTS.md`의 `## 📂 프로젝트 구조 및 주요 파일 바로가기 (Key Code
+References)` 헤딩(구 L16)부터 범주 5(단위 테스트 프로젝트)의 마지막 항목(구 L145)까지
+전체를 삭제하고, 아래 "🗺 어디를 만지면 무엇을 먼저 읽는가 (Routing)" 표로 교체했다.
+바로 뒤의 `---` 구분선(구 L147)은 그대로 남겼다. 표는 계획서 Task 2 Step 3이 준
+문구를 그대로 썼다.
+
+**Task 1 Step 3의 예고(8개)와 실제 결과(31개)의 차이.** 계획서는 `근거없음` 판정이
+소형 모델 클래스 8개 언저리일 것으로 예고했다. 실제로는 `scripts/doc-audit.sh`가
+122행 중 31행을 `근거없음`으로 냈다 — 스크립트가 링크 텍스트의 클래스 *이름*으로
+찾다가 경로 기반으로 개정되면서(위 "개정 이력" 참고) 이름이 겹치는 클래스들의 근거
+배정이 바로잡혔고, 그 결과 원래 예고에 없던 `tests/` 대상들과 `ReSet.Validator.Core`의
+인터페이스·DTO 뭉치가 새로 드러났기 때문이다. 계획서 Task 2 Step 1의 "실제 결과를
+따르고, 그 차이를 대장에 적는다"는 지침에 따라 31개 전부를 판정했다.
+
+**추가 재분류 — 작업 중 발견.** 계획서와 상위 지시가 Group A(근거 없음, 이동 필요)로
+분류한 17개 중 3개는 실제로 `docs/architecture.md` §2.2 표에 이미 실질적인 행을
+갖고 있었다(스크립트의 이름 기반 매칭 잔재로 오분류됐던 것으로 보인다). 표를 여는
+대신 각 파일 경로로 직접 `grep`해 확인했다:
+
+| 클래스 | 원 분류 | 확인 결과 | 재분류 |
+|---|---|---|---|
+| `PromptComposition` (L41) | Group A(근거없음) | `architecture.md:65`에 이미 실질 서술 존재 | Group B로 재분류, AGENTS.md 줄 삭제 |
+| `SettlementPolicyService` (L93) | Group A(근거없음) | `architecture.md:101`에 이미 실질 서술 존재 | Group B로 재분류, AGENTS.md 줄 삭제 |
+| `ValidationUiProxy` (L98) | Group A(근거없음) | `architecture.md:50`에 이미 실질 서술 존재 | Group B로 재분류, AGENTS.md 줄 삭제 |
+
+세 클래스 모두 §2.2 표에 새 행을 추가하지 않았다 — 이미 있는 행에 중복 행을 만드는
+것은 "삭제의 기본값은 이동이다" 원칙에 어긋난다. 이로써 최종 배분은 Group A 14개,
+Group B 17개(14 + 재분류 3)로, 31개 전부를 설명한다.
+
+### Group A — architecture.md §2.2로 이동한 14개
+
+근거가 어디에도 없어 `docs/architecture.md` §2.2 표에 새 행으로 편입했다. 계획서
+Task 2 Step 1이 준 문구를 그대로 쓴 것(플랜의 8개 중 3개는 위 재분류로 빠졌으므로
+실제로는 6개)과, AGENTS.md 원문을 그대로 옮겨 직접 쓴 것(8개)으로 나뉜다.
+
+| 클래스 (원 AGENTS.md 줄) | 원문 출처 | architecture.md 신규 위치 |
+|---|---|---|
+| `DependencyInfo` (L28) | 계획서 verbatim | ReSet.Core 그룹, `SettlementPolicyService` 행 다음 (§2.2) |
+| `ColumnInfo` (L29) | 계획서 verbatim | 〃 |
+| `TableIndexInfo` (L30) | 계획서 verbatim | 〃 |
+| `AiResult` (L31) | 계획서 verbatim | 〃 |
+| `IMultiProgressScope` (L91) | 계획서 verbatim | 〃 |
+| `NullProgressScope` (L92) | 계획서 verbatim | 〃 |
+| `IValidatorPlugin` (L104) | AGENTS.md 원문에서 직접 작성 | ReSet.Validator.Core 그룹, `DataComparisonService` 행 다음 |
+| `IValidationUserInterface` (L107) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `L1ValidationResult` (L108) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `ValidationResult` (L109) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `RunnerDtos` (L112) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `ValidatorConfig` (L113) | AGENTS.md 원문에서 직접 작성 | 〃 |
+| `DependencyAnalysisOrchestratorTests` (L142) | AGENTS.md 원문에서 직접 작성(3개 묶음 서술 중 이 클래스 몫만 발췌) | ReSet.Core.Tests 그룹, `CancellationPolicyTests` 행 다음 |
+| `StepErrorCodeRegressionTests` (L145) | AGENTS.md 원문에서 직접 작성 | 〃 |
+
+편입 확인(각 클래스명이 architecture.md에 1회 이상 등장):
+`grep -c "<클래스명>" docs/architecture.md` — 17개(재분류 3개 포함, 이미 있던 항목이라
+당연히 나옴) 전부 1 이상. `ValidationResult`만 `L1ValidationResult`와의 부분 문자열
+겹침으로 2가 나오는데, 두 클래스 모두 각자의 행을 갖고 있으므로 문제 없다.
+
+### Group B — 코드 근거가 확인되어 삭제한 17개
+
+각 행을 architecture.md의 인용 위치에서 직접 읽고 실질적 서술임을 확인한 뒤 AGENTS.md
+줄을 삭제했다(위 재분류 3개 포함).
+
+| 클래스 (원 AGENTS.md 줄) | 유형 | 확인한 위치 | 판정 |
+|---|---|---|---|
+| `SqlObjectTypeClassifier` (L37) | 사각지대(링크 없는 서술) | `architecture.md:388` — `SqlObjectTypeClassifier`의 판정 통합 배경과 `TypeClassificationPolicyTests` 연계를 한 문단으로 서술 | 실질적, 삭제 |
+| `TypeClassificationPolicyTests` (L144) | 사각지대 | `architecture.md:388` — 위와 같은 문단 | 실질적, 삭제 |
+| `CliWorkspace` (L88) | 혼합형(카탈로그 링크 + 사각지대) | `architecture.md:589` — CLI 제공자 절에서 `CliWorkspace`가 만드는 임시 디렉터리 격리를 명시 서술(카탈로그 링크는 `architecture.md:68`) | 실질적, 삭제 |
+| `CliEffort` (L89) | 혼합형 | `architecture.md:589` — 같은 절에서 `CliEffort`의 xhigh→high 클램프를 명시 서술(카탈로그 링크는 `architecture.md:69`) | 실질적, 삭제 |
+| `MockDataDto` (L110) | 사각지대 | `architecture.md:637` — 관계지향 모의 데이터가 `MockDataDto` 형태로 생성·캐싱된다고 명시 | 실질적, 삭제 |
+| `GapReport` (L111) | 사각지대 | `architecture.md:633` — L2 Gap 판정 5대 범주가 `GapReport`에 담긴다고 명시 | 실질적, 삭제 |
+| `ValidatorAiService` (L121) | 혼합형 | `architecture.md:633` — 같은 문단이 `ValidatorAiService`의 L2 대조 책임을 서술(카탈로그 링크는 `architecture.md:110`) | 실질적, 삭제 |
+| `ClaudeClientTests` (L135) | 묶음 레이블 | `architecture.md:117` — `[Clients (Claude, OpenAi, Ollama) Tests]` 행이 세 클라이언트 테스트를 함께 서술 | 실질적, 삭제 |
+| `ClaudeCliClientTests` (L136) | 묶음 레이블 | `architecture.md:118` — `[CLI Clients (ClaudeCli, CodexCli, AntigravityCli) Tests]` 행 | 실질적, 삭제 |
+| `JavaProcessRunner` (L125) | 근소한 차이(204 vs 206) | `architecture.md:112` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `DataComparisonService` (L126) | 근소한 차이(233 vs 237) | `architecture.md:115` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `ValidatorAiServiceTests` (L140) | 근소한 차이(179 vs 181) | `architecture.md:122` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `DataComparisonServiceTests` (L141) | 근소한 차이(176 vs 183) | `architecture.md:123` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `CancellationPolicyTests` (L143) | 근소한 차이(447 vs 448) | `architecture.md:124` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `PromptComposition` (L41) | **재분류(A→B)** | `architecture.md:65` — §2.2 표 자체의 정식 행 (이름 기반 매칭 잔재로 오분류됐던 것으로 보임) | 실질적, 삭제 |
+| `SettlementPolicyService` (L93) | **재분류(A→B)** | `architecture.md:101` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+| `ValidationUiProxy` (L98) | **재분류(A→B)** | `architecture.md:50` — §2.2 표 자체의 정식 행 | 실질적, 삭제 |
+
+17개 전부 "치우지 말아야 할 것을 지웠다"는 신호 없이 실질적 서술을 직접 읽고 확인했다.
+Group B로 분류하되 삭제하지 말아야 할 근거가 부족했던 행은 없었다.
+
+### 크기
+
+| 파일 | Before | After |
+|---|---|---|
+| `AGENTS.md` | 108,485 B | 55,096 B |
+| `docs/architecture.md` | 137,251 B | 139,963 B |
+
+AGENTS.md는 108,485 → 55,096바이트로 약 53.4KB 줄었다(계획서 예상 50~57KB 범위 안).
+계획이 예상한 8개보다 Group A가 훨씬 컸음에도(14개, 최종 §2.2 표 신규 행) 범위
+안에 든 이유는 §2 카탈로그의 대다수(122행 중 91행)가 애초에 `중복:architecture.md`
+또는 `중복:<클래스>.cs <summary>`로 정직하게 판정됐고, 그 91행이 삭제분의 대부분을
+차지했기 때문이다. `docs/architecture.md`는 137,251 → 139,963바이트로 2,712바이트
+늘었다(§2.2 표에 14개 신규 행 추가분).
