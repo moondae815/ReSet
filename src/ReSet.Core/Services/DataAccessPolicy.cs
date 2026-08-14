@@ -991,9 +991,12 @@ namespace ReSet.Batch.Tests
     ///
     /// 최소 한 개: PreCheck 차단 경로 또는 RunBusinessSteps의 대표 분기.
     ///
-    /// 이 파일(StepLogicTests.cs) 자체는 복사용 템플릿입니다 - 위 이름으로 복사해
-    /// 채운 뒤에는 원본 스캐폴드 파일을 삭제하십시오. 원본을 그대로 두면 아래의
-    /// 항상 실패하는 Fact가 그대로 남아 빌드가 영구적으로 빨간불이 됩니다.
+    /// 이 파일(StepLogicTests.cs)은 모든 회차가 공유하는 템플릿입니다 - Job당 한 번만
+    /// 만들어지고 회차마다 다시 만들어지지 않습니다.
+    ///
+    /// 이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.
+    ///
+    /// 위 이름(LogicTests_&lt;단계코드&gt;.cs)으로 내용을 복사한 새 파일을 만들어 그 새 파일을 채우십시오.
     /// </summary>
     public class StepLogicTests
     {
@@ -1023,9 +1026,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  *
  * 최소 한 개: preCheck 차단 경로 또는 runBusinessSteps의 대표 분기.
  *
- * 이 파일(StepLogicTests.java) 자체는 복사용 템플릿입니다 - 위 이름으로 복사해
- * 채운 뒤에는 원본 스캐폴드 파일을 삭제하십시오. 원본을 그대로 두면 아래의
- * 항상 실패하는 테스트가 그대로 남아 빌드가 영구적으로 빨간불이 됩니다.
+ * 이 파일(StepLogicTests.java)은 모든 회차가 공유하는 템플릿입니다 - Job당 한 번만
+ * 만들어지고 회차마다 다시 만들어지지 않습니다.
+ *
+ * 이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.
+ *
+ * 위 이름(LogicTests_<단계코드>.java)으로 내용을 복사한 새 파일을 만들어 그 새 파일을 채우십시오.
  */
 public class StepLogicTests {
     @Test

@@ -367,16 +367,19 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void Compose_ShouldWarnAgainstLeavingTheScaffoldFileItselfInStepRounds()
+        public void Compose_ShouldWarnAgainstDeletingTheSharedScaffoldTemplateInStepRounds()
         {
-            // MetadataExporter가 agent/tests/에 놓는 StepLogicTests.*는 복사용 템플릿이고
-            // 본문이 항상 실패하는 Fact/Test 하나다. 이 회차 지시서가 "복사해 채우십시오"만
-            // 말하고 원본을 어떻게 하라는 말이 없으면, 에이전트는 원본을 그대로 둔 채
-            // 복사본만 추가해 빌드가 영구적으로 빨간불이 되거나, 반대로 실패 단언 자체를
-            // 지워 버리는 합리적이지만 잘못된 선택을 한다.
+            // 라운드 2 재검토: "원본 스캐폴드 파일을 삭제하십시오"는 어느 원본인지
+            // 모호했다 - agent/tests/StepLogicTests.*(모든 단계 회차가 공유하는 템플릿,
+            // Job당 한 번만 만들어지고 회차마다 다시 만들어지지 않는다)인지, 프로젝트에
+            // 놓인 사본인지 구별이 안 됐다. S01이 앞의 뜻으로 읽고 그 파일을 지우면
+            // S02부터는 복사할 원본 자체가 사라진다. 그래서 "삭제하지 마십시오, 다음
+            // 회차도 이 파일에서 복사합니다"로 뜻을 하나로 고정한다.
             var markdown = TaskFileComposer.Compose(StepInputs());
 
-            Assert.Contains("원본 스캐폴드 파일을 삭제", markdown);
+            Assert.Contains(
+                "이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.",
+                markdown);
         }
 
         [Fact]

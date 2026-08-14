@@ -245,14 +245,20 @@ namespace ReSet.Core.Services
             sb.AppendLine();
             sb.AppendLine("- 빌드가 성공한다.");
             sb.AppendLine("- 이 단계의 조건절·집계식·오류 코드가 명세서와 축약 없이 일치한다.");
+            // "원본 스캐폴드 파일을 삭제하십시오"(1라운드 문구)는 어느 원본인지 모호했다 -
+            // `tests/StepLogicTests` 자체(모든 회차가 공유하는 템플릿, Job당 한 번만
+            // 만들어지고 회차마다 다시 만들어지지 않는다)인지, 프로젝트에 놓인 사본인지
+            // 구별이 안 됐다. S01이 앞의 뜻으로 읽고 그 파일을 지우면 S02부터는 복사할
+            // 원본 자체가 사라진다. 그래서 두 사실을 한 문장에 다 넣는다: 이 파일 자체는
+            // 절대 지우지 말 것, 그리고 그 이유(다음 회차도 여기서 복사한다는 것).
             sb.AppendLine(
-                $"- 이 단계의 **동작 테스트**가 최소 한 개 통과한다. `tests/`의 스캐폴드를 " +
-                $"`LogicTests_{SanitizeStepCode(inputs.StepCode)}{TestFileExtension(inputs.TargetLanguage)}`로 " +
-                "복사해 채우십시오. 파일명이 단계 코드로 **시작하면** 검증기가 그 파일을 이 회차의 " +
-                "구현 산출물로 오인하므로 반드시 접미사 형태를 쓰십시오. 복사한 뒤에는 " +
-                "**원본 스캐폴드 파일을 삭제**하십시오 - 원본은 배치용 템플릿일 뿐이라 그 안의 " +
-                "Fact/Test는 항상 실패합니다. 원본을 그대로 두면 복사본이 통과해도 빌드가 " +
-                "영구적으로 빨간불이 됩니다.");
+                $"- 이 단계의 **동작 테스트**가 최소 한 개 통과한다. `tests/StepLogicTests" +
+                $"{TestFileExtension(inputs.TargetLanguage)}`는 모든 회차가 공유하는 템플릿입니다. " +
+                "이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 " +
+                "복사합니다. 대신 내용을 " +
+                $"`LogicTests_{SanitizeStepCode(inputs.StepCode)}{TestFileExtension(inputs.TargetLanguage)}`라는 " +
+                "새 파일로 복사해 채우십시오. 파일명이 단계 코드로 **시작하면** 검증기가 그 파일을 이 회차의 " +
+                "구현 산출물로 오인하므로 반드시 접미사 형태를 쓰십시오.");
             sb.AppendLine();
         }
 

@@ -262,17 +262,25 @@ namespace ReSet.Core.Tests
         /// <summary>
         /// TaskFileComposer의 회차 라운드 지시문과 같은 문구를 스텁 자신의 문서 주석에도
         /// 남긴다. 지시서만 읽고 이 파일을 직접 열어 보지 않는 에이전트도, 파일을 복사해
-        /// 채우다 이 주석을 보면 원본을 지워야 한다는 것을 알 수 있어야 한다 - 두 곳이
-        /// 다른 문구를 쓰면 한쪽만 고쳐졌을 때 그 사실이 드러나지 않는다.
+        /// 채우다 이 주석을 보면 이 파일을 어떻게 다뤄야 하는지 알 수 있어야 한다 - 두
+        /// 곳이 다른 문구를 쓰면 한쪽만 고쳐졌을 때 그 사실이 드러나지 않는다.
+        ///
+        /// 라운드 2 재검토: "원본 스캐폴드 파일을 삭제하십시오"는 이 파일 자체(모든
+        /// 회차가 공유하는 템플릿)를 가리키는지, 프로젝트에 놓인 사본을 가리키는지
+        /// 모호했다. Job당 한 번만 만들어지고 회차마다 다시 만들어지지 않으므로, 어느
+        /// 회차든 이 파일 자체를 지우면 다음 회차부터는 복사할 원본이 없다 - 그래서
+        /// "삭제하지 마십시오"로 뜻을 하나로 고정한다.
         /// </summary>
         [Theory]
         [InlineData("C#")]
         [InlineData("Java")]
-        public void StepLogicTestStub_ShouldWarnAgainstLeavingTheOriginalScaffoldFile(string targetLanguage)
+        public void StepLogicTestStub_ShouldWarnAgainstDeletingItselfAsTheSharedTemplate(string targetLanguage)
         {
             var stub = DataAccessPolicy.StepLogicTestStub(targetLanguage);
 
-            Assert.Contains("원본 스캐폴드 파일을 삭제", stub);
+            Assert.Contains(
+                "이 파일 자체를 프로젝트 산출물로 남기거나 삭제하지 마십시오. 다음 회차도 이 파일에서 복사합니다.",
+                stub);
         }
 
         /// <summary>
