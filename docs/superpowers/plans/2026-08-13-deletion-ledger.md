@@ -967,3 +967,45 @@ AGENTS.md`의 hunk가 정확히 L44(범주 1)와 L75(범주 3) 2곳뿐임을 확
 - 범주 3 "연결 정보 즉석 수정"(L76) — **다음 라운드 후보**: `architecture.md §5.1`이
   이미 더 상세히 다루는 진짜 중복이지만, 이번 위임 범위가 명시적으로 승인한 이동
   대상이 아니라 이번 라운드에서는 적용하지 않았다.
+
+## Task 8 — 기준선 고정과 실제 트리 게이트 (2026-08-14)
+
+Task 1~7이 AGENTS.md를 줄이는 쪽이었다면, Task 8은 그것이 다시 자라지 않게 막는
+쪽이다. `tests/ReSet.Core.Tests/DocumentationBudgetTests.cs`에 두 게이트를 추가했다
+— `NoAutoLoadedDocumentExceedsItsByteBudget`(문서 전체 크기 상한)과
+`NoAutoLoadedDocumentHasAnOversizedLine`(줄 하나당 600바이트 상한, 실제 병리였던
+4,162바이트짜리 "목록 항목"을 직접 겨냥). 둘 다 `tests/ReSet.Core.Tests/
+documentation-budget-baseline.txt`를 읽어 검사 대상과 상한을 얻는다.
+
+**상한 계산.** 손으로 적지 않고 Task 6 종료 시점 실측에 15%를 더해 계산했다:
+`BUDGET=$(( $(LC_ALL=C wc -c < AGENTS.md) * 115 / 100 ))` → 실측 46,177바이트 ×
+1.15 = 53,103.55 → 정수 나눗셈으로 53,103. 기준선 파일에 `AGENTS.md = 53103` 한
+줄로 저장했다. 게이트는 단방향이다 — 상한 초과만 실패하고 밑으로는 자유다
+(`cancellation-policy-baseline.txt`의 양방향 잠금과 의도적으로 다르다).
+
+**실제로 무는지 확인.** AGENTS.md에 700바이트짜리 줄을 붙여 라인 게이트가 실패함을,
+53,103바이트를 넘도록 짧은 줄 120개를 붙여 크기 게이트가 실패함을 각각 확인한 뒤
+원복해 다시 통과함을 확인했다(둘 다 실제로 파일을 고쳐 관찰한 것이며, 통과만 보고
+끝내지 않았다).
+
+**Fix Round 1 — 빈 기준선 구멍.** 독립 리뷰가 찾음: 게이트가 무엇을 검사할지 스스로
+찾아내지 못하고 기준선 파일 내용을 전적으로 신뢰한다. `documentation-budget-
+baseline.txt`에서 `AGENTS.md = 53103` 한 줄만 조용히 지워도(주석은 그대로 두고)
+두 게이트 모두 검사 대상이 사라져 초록으로 통과했다(6/6, 신호 없음) —
+`cancellation-policy-baseline.txt`와 달리 이 파일은 대조할 독립적인 실측(예: `src/`
+스캔)이 없어서 생긴 구멍이다. `ReadBaseline`을 지연 이터레이터(`yield return`)에서
+즉시 실행 메서드로 바꾸고, 파싱한 항목에 `AGENTS.md`가 실제로 있는지 단언하는 코드를
+추가해 닫았다 — 항목이 없으면 두 게이트 모두 "검사가 꺼졌다"는 취지의 메시지와 함께
+실패한다. 파일을 통째로 지우는 경우는 이미 `FileNotFoundException`으로 시끄러웠으므로
+손대지 않았다.
+
+**Fix Round 2 — BOM/CRLF는 대장이 아니라 측정 지점 주석으로.** 두 가지를 기록만 하고
+고치지 않기로 조정자가 판정했다: (1) `File.ReadAllText`는 UTF-8 BOM을 벗기지만 셸의
+`wc -c`(상한을 다시 계산할 때 쓰는 명령)는 BOM까지 세어, 셸에서 계산한 상한이 이
+테스트가 재는 값보다 ~3바이트 높게 잡힌다 — 상한을 느슨하게 할 뿐 조이지 않는 방향이고
+AGENTS.md는 BOM이 없어 오늘은 차이가 0이다. (2) `core.autocrlf=true` 체크아웃은 줄마다
+`\r`이 붙어 이 테스트가 재는 실측값이 줄 수만큼 커진다 — 여유가 6천 바이트대라 오늘은
+통과를 뒤집을 수 없지만 잠재적이다. 둘 다 이 태스크 고유의 문제가 아니라 이 대장이 아닌
+`DocumentationBudgetTests.cs`의 측정 지점(`File.ReadAllText` → `MeasureBytes`) 옆
+주석으로 남겼다 — 다음에 그 측정을 바꾸거나 상한을 다시 계산할 사람이 열어 볼 자리이기
+때문이다.

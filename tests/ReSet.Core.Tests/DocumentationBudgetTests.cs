@@ -74,6 +74,14 @@ public sealed class DocumentationBudgetTests
 
         foreach (var (relativePath, budget) in ReadBaseline(repoRoot))
         {
+            // 상한(baseline)은 `wc -c`로 다시 계산해 손으로 적는다(documentation-
+            // budget-baseline.txt 헤더 참고). 그런데 File.ReadAllText는 UTF-8 BOM을
+            // 벗기고 wc -c는 BOM까지 세므로, 셸에서 다시 계산한 상한은 여기서 재는
+            // 값보다 ~3바이트 높게 잡힌다 — 상한을 느슨하게 할 뿐 조이지는 않는다
+            // (오늘 AGENTS.md는 BOM이 없어 차이가 0이다). core.autocrlf=true
+            // 체크아웃은 반대로 여기서 재는 실측값을 줄 수만큼 부풀린다(줄마다 \r
+            // 추가) — 상한이 아니라 실측이 커지는 쪽이라 지금은 여유(6천 바이트대)
+            // 안에서 안전하지만, 상한을 다시 좁힐 때는 감안해야 한다.
             var actual = DocumentationBudget.MeasureBytes(
                 File.ReadAllText(Path.Combine(repoRoot, relativePath)));
 
