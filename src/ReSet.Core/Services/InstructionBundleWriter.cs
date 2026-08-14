@@ -185,6 +185,29 @@ namespace ReSet.Core.Services
             var dependencies = await WriteDependencySchemasAsync(inputs, agentDir, cancellationToken);
             var specs = BuildSpecIndex(inputs, agentDir);
 
+            // 계획서와 카탈로그가 둘 다 손에 있는 유일한 지점이다.
+            //
+            // 수집 실패가 번들 작성을 죽이지 않게 격리한다(AGENTS.md 범주 2). 취소
+            // 필터를 달지 않는 이유: Collect는 문자열 위의 동기 정규식이라 취소 토큰을
+            // 넘기는 await를 감싸지 않는다 - CancellationPolicyTests가 보는 형태가 아니다.
+            var infra = BatchInfraObjects.Empty;
+            try
+            {
+                infra = BatchInfraObjectCollector.Collect(inputs.FinalPlanMarkdown);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "인프라 스키마 객체 수집 중 오류가 발생했습니다. 목록 없이 진행합니다.");
+                warnings.Add("인프라 스키마 객체 수집에 실패해 회차 0에 목록을 싣지 못했습니다.");
+            }
+
+            foreach (var variant in infra.CollapsedRunIdVariants)
+            {
+                warnings.Add(
+                    $"Shadow 이름 규칙의 자리표시자가 리터럴로 굳었습니다: {variant} " +
+                    $"(→ {BatchInfraObjectCollector.RunIdPlaceholder}로 접어 한 항목으로 처리했습니다)");
+            }
+
             // 진입점과 task-*.md 양쪽이 같은 폴백 경로를 가리켜야 하므로 한 번만 계산한다.
             var singlePlanRelative = stepsSplit
                 ? null
@@ -237,7 +260,10 @@ namespace ReSet.Core.Services
                     // 회차 실행 전이므로 실패 단계는 아직 없다. 오케스트레이터가
                     // 조립 회차 직전에 이 파일을 다시 쓴다(Task 13).
                     FailedStepCodes: Array.Empty<string>(),
-                    SinglePlanRelativePath: singlePlanRelative);
+                    SinglePlanRelativePath: singlePlanRelative,
+                    // 인프라 목록은 회차 0만 받는다. 단계 회차에 실으면 같은 객체를
+                    // 여러 회차가 만든다.
+                    InfraObjects: kind == StageKind.Bootstrap ? infra.Names : Array.Empty<string>());
 
                 var path = Path.Combine(agentDir, TaskFileComposer.FileName(kind, ordinal, code));
                 await WriteAsync(path, TaskFileComposer.Compose(taskInputs), cancellationToken);

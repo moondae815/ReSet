@@ -53,6 +53,8 @@ namespace ReSet.Core.Tests
 
 S01 본문
 
+INSERT INTO batch.POQSettleCheckpoint SELECT 1;
+
 ### S02 원장 생성
 
 S02 본문
@@ -593,6 +595,16 @@ S02 본문
             var bootstrap = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-00-bootstrap.md"));
 
             Assert.DoesNotContain("## 참조할 스키마", bootstrap);
+        }
+
+        [Fact]
+        public async Task WriteAsync_ShouldFeedCollectedInfraObjectsIntoTheBootstrapTask()
+        {
+            await new InstructionBundleWriter().WriteAsync(Inputs(Layout()), CancellationToken.None);
+
+            var bootstrap = await File.ReadAllTextAsync(Path.Combine(_agentDir, "task-00-bootstrap.md"));
+
+            Assert.Contains("`batch.POQSettleCheckpoint`", bootstrap);
         }
 
         /// <summary>

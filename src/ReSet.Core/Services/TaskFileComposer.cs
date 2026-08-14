@@ -18,6 +18,9 @@ namespace ReSet.Core.Services
     /// <param name="StepCode">단계 회차면 그 코드(파일명에서 되짚어낸 정화된 값), Bootstrap/Assembly면 null.</param>
     public sealed record TaskStageIdentity(string Id, StageKind Kind, string? StepCode);
 
+    /// <param name="InfraObjects">계획서가 참조하는 batch·batch_shadow 스키마 객체.
+    /// 회차 0만 사용한다. 기본값을 두지 않는 이유는 BundleInputs.Coverage와 같다 -
+    /// 배선을 빠뜨리면 조용히 빈 목록이 되는 대신 컴파일이 깨져야 한다.</param>
     public sealed record TaskFileInputs(
         StageKind Kind,
         string JobName,
@@ -30,7 +33,8 @@ namespace ReSet.Core.Services
         bool HasStepContract,
         bool HasVerification,
         IReadOnlyList<string> FailedStepCodes,
-        string? SinglePlanRelativePath);
+        string? SinglePlanRelativePath,
+        IReadOnlyList<string> InfraObjects);
 
     /// <summary>
     /// 회차 하나의 작업 지시서를 조립한다.
@@ -190,6 +194,7 @@ namespace ReSet.Core.Services
             sb.AppendLine("- **어떤 Tasklet을 구현하지 마십시오.** 단계 구현은 이후 회차의 일입니다.");
             sb.AppendLine("- 단계 상세 문서를 읽지 마십시오.");
             sb.AppendLine();
+            AppendInfraObjects(sb, inputs);
             AppendDependencies(sb, inputs);
             sb.AppendLine("## 완료 조건");
             sb.AppendLine();
@@ -280,6 +285,39 @@ namespace ReSet.Core.Services
                 sb.AppendLine("- [verification/integrity-sql.md](verification/integrity-sql.md)의 검증 SQL을 실행 가능한 형태로 배치하십시오.");
                 sb.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// 계획서의 SQL이 EXEC하거나 참조하는 신규 스키마 객체를 회차 0에 실명으로 싣는다.
+        ///
+        /// 문장만 주고 목록을 주지 않으면 지킬 수 없는 지시가 된다 - 회차 0은
+        /// "단계 상세 문서를 읽지 마십시오"를 함께 받으므로 목록을 스스로 모을 방법이 없다.
+        ///
+        /// 목록이 비면 절 자체를 내지 않는다. 빈 제목은 "만들 것이 없다"와
+        /// "수집이 실패했다"를 구별해 주지 못한다.
+        /// </summary>
+        private static void AppendInfraObjects(StringBuilder sb, TaskFileInputs inputs)
+        {
+            if (inputs.InfraObjects.Count == 0)
+            {
+                return;
+            }
+
+            sb.AppendLine("## 이번 회차에서 만들 인프라 스키마 객체");
+            sb.AppendLine();
+            sb.AppendLine("계획서의 SQL이 아래 객체를 참조합니다. 이 회차에서 DDL과 모듈의 골격을 만드십시오.");
+            sb.AppendLine("단계별 모듈의 업무 로직 본문은 해당 단계 회차가 채웁니다.");
+            sb.AppendLine();
+            sb.AppendLine($"`{BatchInfraObjectCollector.RunIdPlaceholder}`는 실행 식별자 자리표시자입니다. " +
+                "`SettleContext.RunId` 값으로 치환해 이름을 지으십시오.");
+            sb.AppendLine();
+
+            foreach (var name in inputs.InfraObjects)
+            {
+                sb.AppendLine($"- `{name}`");
+            }
+
+            sb.AppendLine();
         }
 
         private static void AppendDependencies(StringBuilder sb, TaskFileInputs inputs)

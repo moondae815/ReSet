@@ -20,7 +20,55 @@ namespace ReSet.Core.Tests
             HasStepContract: true,
             HasVerification: true,
             FailedStepCodes: Array.Empty<string>(),
-            SinglePlanRelativePath: null);
+            SinglePlanRelativePath: null,
+            InfraObjects: Array.Empty<string>());
+
+        private static TaskFileInputs BootstrapInputs(IReadOnlyList<string> infraObjects) => new(
+            Kind: StageKind.Bootstrap,
+            JobName: "TestJob",
+            TargetLanguage: "C#",
+            StepCode: null,
+            StepName: null,
+            StepRelativePath: null,
+            SpecRelativePath: null,
+            Dependencies: Array.Empty<IndexEntry>(),
+            HasStepContract: true,
+            HasVerification: true,
+            FailedStepCodes: Array.Empty<string>(),
+            SinglePlanRelativePath: null,
+            InfraObjects: infraObjects);
+
+        [Fact]
+        public void Compose_ShouldListInfraObjectsInTheBootstrapRound()
+        {
+            // 회차 0은 읽기 계약상 step 파일을 읽을 수 없다. 목록을 여기 박아 주지
+            // 않으면 "계획서가 참조하는 객체를 만들라"는 문장을 지킬 방법이 없다.
+            var markdown = TaskFileComposer.Compose(
+                BootstrapInputs(new[] { "batch.POQSettleRun", "batch_shadow.TSettleMst_<RunId>_S06" }));
+
+            Assert.Contains("인프라 스키마 객체", markdown);
+            Assert.Contains("`batch.POQSettleRun`", markdown);
+            Assert.Contains("`batch_shadow.TSettleMst_<RunId>_S06`", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldOmitTheInfraSectionEntirelyWhenThereIsNothingToBuild()
+        {
+            // 빈 제목만 남으면 "만들 것이 없다"가 아니라 "수집이 실패했다"로도 읽힌다.
+            var markdown = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+
+            Assert.DoesNotContain("인프라 스키마 객체", markdown);
+        }
+
+        [Fact]
+        public void Compose_ShouldNotListInfraObjectsInStepRounds()
+        {
+            // 인프라 DDL은 회차 0의 일이다. 단계 회차에 목록을 실으면 같은 객체를
+            // 여러 회차가 만든다.
+            var markdown = TaskFileComposer.Compose(StepInputs());
+
+            Assert.DoesNotContain("인프라 스키마 객체", markdown);
+        }
 
         [Fact]
         public void FileName_ShouldPlaceTaskFilesFlatUnderAgent()
