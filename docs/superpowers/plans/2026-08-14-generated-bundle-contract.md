@@ -1373,6 +1373,13 @@ namespace ReSet.Core.Tests
         }
 
         [Theory]
+        // 이 입력이 이 테스트를 유효하게 만든다: `같은`으로 나머지-패턴에 걸리면서
+        // 동시에 `유지한다`를 담고 있어, Scan이 비어 있는 이유가 오직
+        // PreservationMarkers 가드뿐이다. 가드를 지우면 이 케이스가 붉어진다.
+        [InlineData("    -- 나머지 컬럼도 같은 방식으로 유지한다")]
+        // 아래 둘은 어느 패턴에도 걸리지 않아 가드가 없어도 통과한다. 경계를
+        // 고정하지는 못하지만, 사람이 읽을 때 "이런 문장은 생략이 아니다"를
+        // 보여주는 예시로 남겨 둔다.
         [InlineData("    -- 원본 필터 YMD = @pi_strYMD AND USESTATE = 2를 모두 유지한다.")]
         [InlineData("    -- 원본 선행 보호 조건을 그대로 보존한다.")]
         public void Scan_ShouldNotFlagInstructionCommentsThatDemandPreservation(string comment)
