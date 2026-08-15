@@ -228,5 +228,52 @@ namespace ReSet.Core.Tests
 
             Assert.Contains(result.Errors, e => e.Contains("poqbatch", StringComparison.Ordinal));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectANewObjectTheTocDeclaresOutsideTheBatchSchema()
+        {
+            // 실측(POQSettleProc11): 계획서가 배치 제어 객체를 S02·S16·S17에서는
+            // `dbo.BatchExecution`으로, 나머지 단계에서는 `batch.BatchExecution`으로
+            // 썼다. 회차 0은 `batch.` 쪽만 만들므로 S02가 기록하는 체크포인트 테이블은
+            // 아무도 만들지 않는다 - 재시작이 깨진다.
+            //
+            // 검사가 이것을 통과시킨 이유는 목차가 그렇게 선언했기 때문이다. known
+            // 집합이 목차의 TargetTables를 무조건 받아들여, 규약을 어긴 선언이 오히려
+            // 면죄부가 됐다. 카탈로그에도 없고 batch 계열도 아닌 선언은 신뢰하지 않는다.
+            var step = new BatchStepPlan(
+                Code: "S02",
+                Name: "실행 잠금 및 저널 개시",
+                LegacyProcedures: Array.Empty<string>(),
+                TargetTables: new[] { "dbo.BatchExecution" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var markdown = $"""
+                ### S02 실행 잠금 및 저널 개시
+
+                ```sql
+                INSERT INTO dbo.BatchExecution (RunId, Ymd) VALUES (@RunId, @Ymd);
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog);
+
+            Assert.Contains(result.Errors, e => e.Contains("dbo.BatchExecution", StringComparison.Ordinal));
+            // 본문을 batch 스키마로 옮기면 해결되므로 재생성 피드백에 실려야 한다.
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillTrustATocDeclarationThatExistsInTheCatalog()
+        {
+            // 회귀 가드: 목차 신뢰를 좁히는 것은 "카탈로그에도 batch에도 없는" 선언에
+            // 한정한다. 카탈로그가 아는 테이블 선언까지 의심하면 정상 단계가 전부 걸린다.
+            var markdown = Section("INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);");
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+
+            Assert.Empty(result.Errors);
+        }
     }
 }

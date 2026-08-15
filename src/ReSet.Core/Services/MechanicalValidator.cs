@@ -415,17 +415,14 @@ namespace ReSet.Core.Services
                 }
             }
 
-            // 목차가 선언한 대상 테이블도 알려진 것으로 친다. 카탈로그 수집이
-            // 놓친 대상 테이블 때문에 정상 단계가 걸리는 일을 막는다.
-            //
-            // LegacyProcedures도 같이 넣는다. 목차가 이 단계의 출신이라고 선언한
-            // 프로시저를 본문이 "그 규칙을 이관한다"고 언급하는 것은 정상 서술인데,
-            // 카탈로그는 테이블만 담으므로 그 이름이 유령 테이블로 몰렸다. 실측
-            // (POQSettleProc10): 9개 단계가 이 오탐 하나로 하한 미달 배너를 받고
-            // 단계마다 재생성 1회씩을 태웠다. 한정자 화이트리스트(BuildKnownQualifiers)
-            // 에는 넣지 않는다 - `dbo.UP_...`의 `dbo`는 이미 카탈로그가 아는 한정자이고,
-            // 거기 넣으면 카탈로그가 보증하지 않는 새 한정자까지 인정하게 된다.
-            foreach (var declared in step.TargetTables.Concat(step.SchemaTables).Concat(step.LegacyProcedures))
+            // 목차가 이 단계의 출신이라고 선언한 프로시저는 알려진 것으로 친다. 본문이
+            // "그 규칙을 이관한다"고 언급하는 것은 정상 서술인데, 카탈로그는 테이블만
+            // 담으므로 그 이름이 유령 테이블로 몰렸다. 실측(POQSettleProc10): 9개 단계가
+            // 이 오탐 하나로 하한 미달 배너를 받고 단계마다 재생성 1회씩을 태웠다.
+            // 한정자 화이트리스트(BuildKnownQualifiers)에는 넣지 않는다 - `dbo.UP_...`의
+            // `dbo`는 이미 카탈로그가 아는 한정자이고, 거기 넣으면 카탈로그가 보증하지
+            // 않는 새 한정자까지 인정하게 된다.
+            foreach (var declared in step.LegacyProcedures)
             {
                 var bare = BareObjectName(declared);
                 if (bare.Length > 0)
@@ -433,6 +430,18 @@ namespace ReSet.Core.Services
                     known.Add(bare);
                 }
             }
+
+            // TargetTables·SchemaTables는 여기서 신뢰하지 않는다. 예전에는 카탈로그
+            // 수집이 놓친 대상 테이블을 구제하려고 무조건 받아들였는데, 그 관대함이
+            // 규약 위반의 면죄부가 됐다 - 실측(POQSettleProc11): 목차가 배치 제어 객체를
+            // `dbo.BatchExecution`으로 선언하자 본문의 같은 참조가 "목차가 그렇게 말했다"는
+            // 이유로 통과했다. 회차 0은 `batch.BatchExecution`만 만들므로 S02가 기록하는
+            // 체크포인트 테이블은 아무도 만들지 않은 채 지시서가 나갔다.
+            //
+            // 카탈로그가 아는 이름은 이미 위에서 들어갔고, batch 계열 신규 객체는 후보
+            // 단계에서 IsInfraObject가 걸러낸다. 그 둘 중 어느 쪽도 아닌 선언은 계획서가
+            // 규약 밖에 새 객체를 만들겠다는 뜻이므로, 목차가 적었다는 사실만으로
+            // 통과시키지 않는다.
 
             var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var knownQualifiers = BuildKnownQualifiers(knownTableNames, step);
