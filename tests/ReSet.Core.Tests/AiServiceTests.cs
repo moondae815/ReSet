@@ -542,6 +542,61 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsPuttingRunControlTablesUnderDbo()
+        {
+            // 실측(POQSettleProc11): 규칙에 journal·checkpoint가 이미 있었는데도 S02·S16·S17이
+            // 실행 저널·잠금·체크포인트를 `dbo.BatchExecution` 등으로 만들었다. S02가 쓰는
+            // 테이블과 S03~S15가 읽는 테이블이 물리적으로 갈라져 재시작이 깨진다. 이
+            // 세 종류를 이름으로 지목해 규칙을 좁힌다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.Contains("execution journal, run lock, and checkpoint", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ShadowExampleUsesAPlaceholderNotALiteralRunId()
+        {
+            // 실측(POQSettleProc11): Shadow 예시에 넣은 구체 리터럴 `A1B2C3`를 모델이
+            // 그대로 베껴 `batch_shadow.TPGSettleRate_A1B2C3_S03`을 SQL에 박았다. 같은
+            // 문서의 표는 `<RunId>`를 쓰고 있어, 한 테이블이 회차 0 목록에 두 이름으로
+            // 올랐다. 예시의 자리표시자는 자리표시자로 읽혀야 하고, 접기 로직
+            // (RunIdLiteralRegex)이 아는 표기여야 한 항목으로 수렴한다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.DoesNotContain("A1B2C3", result.SystemPrompt);
+            // 접기 로직이 인식하는 표기인지를 문자열이 아니라 그 로직으로 확인한다.
+            var shadowNames = System.Text.RegularExpressions.Regex
+                .Matches(result.SystemPrompt, @"batch_shadow\.[A-Za-z_][A-Za-z_0-9<>]*")
+                .Select(m => m.Value)
+                .ToList();
+            Assert.NotEmpty(shadowNames);
+            Assert.All(shadowNames, name =>
+                Assert.Contains(
+                    BatchInfraObjectCollector.RunIdPlaceholder,
+                    BatchInfraObjectCollector.Collect(name).Names.Single()));
+        }
+
+        [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ContainsChunkTransactionBoundaryRule()
         {
             var specs = new System.Collections.Generic.List<(string FileName, string Content)>

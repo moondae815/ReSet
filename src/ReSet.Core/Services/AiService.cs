@@ -663,7 +663,7 @@ Based on the reference context above, reverse engineer the user defined function
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
 3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
 4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback: (a) The Shadow strategy MUST cover ALL target tables modified by the step, (b) you MUST define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours), and (c) you MUST explicitly provide Rollback/Restore pseudo-code that DELETEs the affected range FIRST and only then re-inserts from the Shadow table (e.g., `DELETE FROM Target WHERE BatchDate = @BatchDate;` followed by `INSERT INTO Target SELECT * FROM Shadow WHERE BatchDate = @BatchDate;`). Restoring without the preceding DELETE duplicates rows.
-4-1. [Batch Object Schema] Every NEW batch-only object you introduce (staging table, journal, checkpoint, control-total table, helper procedure) MUST live in the `batch` schema, and every shadow table MUST live in the `batch_shadow` schema. NEVER invent a job-named schema such as `poqbatch`, `poqsettlebatch`, or `<JobName>Batch`. The bootstrap round builds its list of objects to create by scanning for exactly these two schema names, so an object placed under any other schema is never created and every step referencing it breaks at runtime. Existing business tables keep their real schema (`dbo`, `PaymentDB.dbo`, ...) - this rule governs new objects only.
+4-1. [Batch Object Schema] Every NEW batch-only object you introduce (staging table, journal, checkpoint, control-total table, helper procedure) MUST live in the `batch` schema, and every shadow table MUST live in the `batch_shadow` schema. NEVER invent a job-named schema such as `poqbatch`, `poqsettlebatch`, or `<JobName>Batch`. The bootstrap round builds its list of objects to create by scanning for exactly these two schema names, so an object placed under any other schema is never created and every step referencing it breaks at runtime. Existing business tables keep their real schema (`dbo`, `PaymentDB.dbo`, ...) - this rule governs new objects only. The execution journal, run lock, and checkpoint tables are covered by this rule and are the ones most often gotten wrong: if one step writes them under `dbo` while other steps read them under `batch`, one logical table becomes two physical ones and restart silently skips or repeats work. Every step MUST spell these objects with the same schema.
 5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
 6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
 6-1. [Precise Error Tracking] If the original SP lacked `@@ERROR` checking, you MUST resolve it using `TRY...CATCH` and `XACT_ABORT ON`. However, DO NOT just return a generic `-1` in the `CATCH` block. You MUST declare a state variable at the top (e.g., `DECLARE @v_currentStepId INT = 0;`), update it before each DML with the exact original error code (e.g., `SET @v_currentStepId = -101;`), and return that variable in the CATCH block to preserve the exact point of failure. Use structured `TRY...CATCH` exclusively for error handling; NEVER use legacy `GOTO`-based error branching.
@@ -681,15 +681,17 @@ Based on the reference context above, reverse engineer the user defined function
 [Few-Shot Examples for Modernization Patterns]
 * Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
 ```sql
--- Create Shadow Table (name pattern: batch_shadow.<Table>_<RunId>_<StepCode>)
-SELECT * INTO batch_shadow.TargetTable_A1B2C3_S13 FROM dbo.TargetTable WHERE 1=0;
+-- Create Shadow Table. Name pattern: batch_shadow.<Table>_RunId_<StepCode>, where the
+-- literal token _RunId_ is a placeholder substituted with the actual run identifier at
+-- execution time. Write that token verbatim - do NOT bake a sample identifier into the name.
+SELECT * INTO batch_shadow.TargetTable_RunId_S13 FROM dbo.TargetTable WHERE 1=0;
 -- Bulk Insert into Shadow
-INSERT INTO batch_shadow.TargetTable_A1B2C3_S13 (Col1, Col2)
+INSERT INTO batch_shadow.TargetTable_RunId_S13 (Col1, Col2)
 SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
 -- Single Transaction Swap
 BEGIN TRAN;
   DELETE FROM dbo.TargetTable; -- Original target data purge
-  INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_A1B2C3_S13;
+  INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13;
 COMMIT TRAN;
 ```
 
@@ -716,7 +718,7 @@ BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;
     -- MUST DELETE target data for the chunk range or specific YMD BEFORE inserting from shadow to avoid duplicates!
     DELETE FROM dbo.TargetTable WHERE BatchDate = @BatchDate;
-    INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_A1B2C3_S13 WHERE BatchDate = @BatchDate;
+    INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13 WHERE BatchDate = @BatchDate;
     THROW;
 END CATCH
 ```
