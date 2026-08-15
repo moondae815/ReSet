@@ -63,6 +63,48 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Collect_ShouldReadThePlaceholderSpellingItsOwnOutputUses()
+        {
+            // 실측(POQSettleProc11): 계획서가 표에는 `batch_shadow.TSettleByTX_<RunId>_S11`을,
+            // SQL에는 리터럴을 쓰자 목록에 `batch_shadow.TSettleByTX_`라는 잘린 이름이 올랐다.
+            // 객체명 정규식이 `<`에서 멈추기 때문이다 - 접기 결과로 우리가 내보내는 바로 그
+            // 표기(RunIdPlaceholder)를 정작 우리가 다시 읽지 못했다.
+            var plan = "batch_shadow.TSettleByTX_<RunId>_S11";
+
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            Assert.Equal(new[] { "batch_shadow.TSettleByTX_<RunId>_S11" }, result.Names);
+        }
+
+        [Fact]
+        public void Collect_ShouldFoldEveryPlaceholderSpellingIntoTheSameEntry()
+        {
+            // 세 표기가 같은 테이블을 가리키는데 목록에 세 항목으로 오르면, 회차 0은
+            // 존재하지 않는 테이블 두 개를 더 만든다.
+            var plan = """
+                batch_shadow.TSettleMst_<RunId>_S06,
+                batch_shadow.TSettleMst_RunId_S06,
+                batch_shadow.TSettleMst_Run_S06
+                """;
+
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            Assert.Equal(new[] { "batch_shadow.TSettleMst_<RunId>_S06" }, result.Names);
+        }
+
+        [Fact]
+        public void Collect_ShouldNotSwallowMarkdownTagsThatFollowAnObjectName()
+        {
+            // `<RunId>`를 이름의 일부로 받아들이되 그 문을 아무 태그에나 열어 주면,
+            // 테이블 셀의 `<br/>`가 객체명에 붙어 들어온다.
+            var plan = "| `batch.BatchExecution<br/>` | 실행 저널 |";
+
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            Assert.Equal(new[] { "batch.BatchExecution" }, result.Names);
+        }
+
+        [Fact]
         public void Collect_ShouldIgnoreTheEnglishWordBatch()
         {
             var result = BatchInfraObjectCollector.Collect("the batch job runs nightly. batch processing.");

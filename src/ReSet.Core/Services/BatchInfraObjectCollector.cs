@@ -43,8 +43,15 @@ namespace ReSet.Core.Services
 
         // 패턴은 Schemas에서 파생한다. 길이 내림차순으로 정렬해 "batch_shadow.X"가
         // "batch"에서 먼저 걸려 '.'을 못 찾고 백트래킹하는 일을 막는다.
+        //
+        // 객체명은 `<RunId>` 조각을 품을 수 있다. 이것을 못 읽으면 정규식이 '<'에서
+        // 멈춰 `batch_shadow.TSettleByTX_<RunId>_S11`이 `batch_shadow.TSettleByTX_`라는
+        // 잘린 이름으로 목록에 오른다 - 접기 결과로 우리가 내보내는 표기
+        // (RunIdPlaceholder)를 정작 우리가 다시 읽지 못하던 결함이다. 허용은 이 한
+        // 조각으로 좁힌다. '<'를 통째로 이름 문자에 넣으면 테이블 셀의 `<br/>`가
+        // 객체명에 붙어 들어온다.
         private static readonly Regex ObjectRegex = new(
-            $@"\b({string.Join("|", Schemas.OrderByDescending(s => s.Length).Select(Regex.Escape))})\.([A-Za-z_][A-Za-z_0-9]*)",
+            $@"\b({string.Join("|", Schemas.OrderByDescending(s => s.Length).Select(Regex.Escape))})\.([A-Za-z_][A-Za-z_0-9]*(?:<RunId>[A-Za-z_0-9]*)*)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex RunIdLiteralRegex = new(
