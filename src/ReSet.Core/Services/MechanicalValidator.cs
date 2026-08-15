@@ -266,6 +266,7 @@ namespace ReSet.Core.Services
                 }
             }
 
+            CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
@@ -355,6 +356,42 @@ namespace ReSet.Core.Services
         /// batch·batch_shadow는 제외한다. 계획서가 새로 만드는 객체라 카탈로그에 없는
         /// 것이 정상이며, 그 판단은 BatchInfraObjectCollector가 단독 소유한다.
         /// </summary>
+        /// <summary>
+        /// 배치 전용 객체가 <see cref="BatchInfraObjectCollector.Schemas"/> 바깥의
+        /// 스키마에 놓였는지 본다.
+        ///
+        /// 실측(POQSettleProc10): 계획서가 batch(214회)·poqbatch(144회)·poqsettlebatch(94회)
+        /// 세 이름을 섞어 썼다. 회차 0의 인프라 객체 수집은 Schemas만 보므로 지시서의
+        /// "만들 객체" 목록에는 batch.* 24개만 들어갔고, 나머지 238건이 참조하는 객체는
+        /// 아무도 만들지 않는 채 외부 코더에게 넘어갔다.
+        ///
+        /// 미지 테이블 검사와 분리한 이유는 카탈로그 의존성이다. 저 검사는 대조할
+        /// 목록이 없으면 소프트 스킵하는 것이 맞지만, "batch·batch_shadow만 쓴다"는
+        /// 이 도구의 규약이라 카탈로그가 비어도 유효하다.
+        /// </summary>
+        private static void CheckNonCanonicalBatchSchema(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            // 한정자 화이트리스트를 태우지 않는다 - poqbatch는 카탈로그가 아는 한정자가
+            // 아니어서, 그 필터를 거치면 잡으려는 대상이 후보 단계에서 사라진다.
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var candidate in ExtractQuotedIdentifiers(stepMarkdown, Array.Empty<string>()))
+            {
+                if (!BatchInfraObjectCollector.IsNonCanonicalBatchObject(candidate) ||
+                    !reported.Add(candidate))
+                {
+                    continue;
+                }
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 `{candidate}`를 참조합니다. 배치 전용 객체가 놓일 스키마는 " +
+                    "`batch`(작업 객체)와 `batch_shadow`(섀도 테이블)뿐입니다. Job 이름을 딴 스키마를 " +
+                    "새로 만들지 말고 그 두 스키마 중 하나로 옮기십시오 - 회차 0의 인프라 객체 수집이 " +
+                    "그 두 이름만 보므로, 다른 이름에 둔 객체는 아무도 만들지 않습니다.");
+            }
+        }
+
         private static void CheckUnknownTableReferences(
             string stepMarkdown,
             BatchStepPlan step,
@@ -380,7 +417,15 @@ namespace ReSet.Core.Services
 
             // 목차가 선언한 대상 테이블도 알려진 것으로 친다. 카탈로그 수집이
             // 놓친 대상 테이블 때문에 정상 단계가 걸리는 일을 막는다.
-            foreach (var declared in step.TargetTables.Concat(step.SchemaTables))
+            //
+            // LegacyProcedures도 같이 넣는다. 목차가 이 단계의 출신이라고 선언한
+            // 프로시저를 본문이 "그 규칙을 이관한다"고 언급하는 것은 정상 서술인데,
+            // 카탈로그는 테이블만 담으므로 그 이름이 유령 테이블로 몰렸다. 실측
+            // (POQSettleProc10): 9개 단계가 이 오탐 하나로 하한 미달 배너를 받고
+            // 단계마다 재생성 1회씩을 태웠다. 한정자 화이트리스트(BuildKnownQualifiers)
+            // 에는 넣지 않는다 - `dbo.UP_...`의 `dbo`는 이미 카탈로그가 아는 한정자이고,
+            // 거기 넣으면 카탈로그가 보증하지 않는 새 한정자까지 인정하게 된다.
+            foreach (var declared in step.TargetTables.Concat(step.SchemaTables).Concat(step.LegacyProcedures))
             {
                 var bare = BareObjectName(declared);
                 if (bare.Length > 0)
@@ -394,6 +439,13 @@ namespace ReSet.Core.Services
 
             foreach (var candidate in ExtractQuotedIdentifiers(stepMarkdown, knownQualifiers))
             {
+                // 비표준 배치 스키마는 CheckNonCanonicalBatchSchema가 이미 자기 진단으로
+                // 보고했다. 여기서 다시 들면 같은 참조가 두 개의 다른 이름으로 걸린다.
+                if (BatchInfraObjectCollector.IsNonCanonicalBatchObject(candidate))
+                {
+                    continue;
+                }
+
                 if (BatchInfraObjectCollector.IsInfraObject(candidate))
                 {
                     continue;
@@ -482,7 +534,8 @@ namespace ReSet.Core.Services
 
                     foreach (Match m in QualifiedTableRegex.Matches(line))
                     {
-                        if (HasKnownQualifier(m, knownQualifiers))
+                        if (HasKnownQualifier(m, knownQualifiers) ||
+                            BatchInfraObjectCollector.IsNonCanonicalBatchObject(m.Value))
                         {
                             found.Add(m.Value);
                         }
@@ -495,7 +548,8 @@ namespace ReSet.Core.Services
                     var inner = backtick.Groups[1].Value.Trim();
                     foreach (Match m in QualifiedTableRegex.Matches(inner))
                     {
-                        if (HasKnownQualifier(m, knownQualifiers))
+                        if (HasKnownQualifier(m, knownQualifiers) ||
+                            BatchInfraObjectCollector.IsNonCanonicalBatchObject(m.Value))
                         {
                             found.Add(m.Value);
                         }

@@ -492,6 +492,56 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_PinsTheBatchObjectSchemaNames()
+        {
+            // 실측(POQSettleProc10): 프롬프트가 배치 전용 객체를 어느 스키마에 두라고
+            // 말한 적이 없어, 계획서가 batch·poqbatch·poqsettlebatch 세 이름으로
+            // 갈라졌다. 회차 0의 수집기는 batch 계열만 보므로 나머지 238건이 참조하는
+            // 객체는 아무도 만들지 않았다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.Contains("[Batch Object Schema]", result.SystemPrompt);
+            // 스키마 이름의 소유자는 수집기다. 프롬프트가 자기 목록을 따로 들면
+            // 두 곳이 갈라지므로, 그 배열에서 온 이름이 실제로 실렸는지 본다.
+            foreach (var schema in BatchInfraObjectCollector.Schemas)
+            {
+                Assert.Contains($"`{schema}`", result.SystemPrompt);
+            }
+        }
+
+        [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ShadowExampleUsesTheBatchShadowSchema()
+        {
+            // 규칙만 넣고 예시를 두면 프롬프트가 스스로 모순된다 - 옛 예시
+            // TargetTable_Shadow_YYYYMMDD는 스키마가 없어 새 규칙과 어긋나고,
+            // 모델은 규칙보다 눈앞의 예시를 따라간다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.DoesNotContain("TargetTable_Shadow_YYYYMMDD", result.SystemPrompt);
+            Assert.Contains("batch_shadow.", result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ContainsChunkTransactionBoundaryRule()
         {
             var specs = new System.Collections.Generic.List<(string FileName, string Content)>
