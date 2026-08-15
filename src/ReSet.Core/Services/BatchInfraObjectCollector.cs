@@ -58,6 +58,21 @@ namespace ReSet.Core.Services
             @"_(?:RunId|Run)_",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // 런타임에 조립되는 이름: N'batch_shadow.<Prefix>_' + <표현식> + N'_<StepCode>'.
+        //
+        // 규약이 Shadow 이름에 RunId를 넣으라고 하므로 조립은 위반이 아니라 필연이다.
+        // 이 형태를 못 읽던 동안은 접두부만 뽑혀 `batch_shadow.TSettleMst_`가 유령
+        // 항목으로 목록에 올랐고(실측 POQSettleProc11: 4단계), 회차 0은 존재할 필요가
+        // 없는 테이블을 만들라는 지시를 받았다.
+        //
+        // 사이의 표현식은 무엇이든 허용한다 - 실측만 해도 @p_RunId 직접 연결부터
+        // REPLACE(CONVERT(...))로 하이픈을 걷어내는 형태, 줄바꿈을 낀 형태까지 나온다.
+        // 다만 세미콜론은 넘지 않는다. 문장 경계를 넘으면 앞 문장의 접두사와 뒤 문장의
+        // 무관한 리터럴이 짝지어져 없는 이름이 만들어진다.
+        private static readonly Regex AssembledObjectRegex = new(
+            $@"'({string.Join("|", Schemas.OrderByDescending(s => s.Length).Select(Regex.Escape))})\.([A-Za-z_][A-Za-z_0-9]*_)'\s*\+[^;]*?\+\s*N?'(_[A-Za-z_0-9]+)'",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static BatchInfraObjects Collect(string? planMarkdown)
         {
             if (string.IsNullOrWhiteSpace(planMarkdown))
@@ -68,8 +83,26 @@ namespace ReSet.Core.Services
             var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
             var collapsed = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            foreach (Match match in AssembledObjectRegex.Matches(planMarkdown))
+            {
+                var schema = match.Groups[1].Value.ToLowerInvariant();
+                // 접두사는 '_'로, 접미사는 '_'로 시작하므로 자리표시자의 양끝 밑줄을 뗀다.
+                var runId = RunIdPlaceholder.Trim('_');
+                names.Add($"{schema}.{match.Groups[2].Value}{runId}{match.Groups[3].Value}");
+            }
+
             foreach (Match match in ObjectRegex.Matches(planMarkdown))
             {
+                // 조립의 앞조각은 그 자체로 객체명이 아니다. 이름이 '_'로 끝나고 바로
+                // 뒤에 따옴표가 오면 위 루프가 이미 온전한 이름으로 담았다.
+                var end = match.Index + match.Length;
+                if (match.Groups[2].Value.EndsWith("_", StringComparison.Ordinal) &&
+                    end < planMarkdown.Length &&
+                    planMarkdown[end] == '\'')
+                {
+                    continue;
+                }
+
                 var schema = match.Groups[1].Value.ToLowerInvariant();
                 var rawName = match.Groups[2].Value;
                 var normalized = RunIdLiteralRegex.Replace(rawName, RunIdPlaceholder);

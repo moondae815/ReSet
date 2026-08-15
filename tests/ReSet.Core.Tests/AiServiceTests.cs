@@ -542,6 +542,28 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_SeparatesShadowNameAssemblyFromBusinessTables()
+        {
+            // 실측(POQSettleProc11): S12가 "동적 테이블명을 조립하지 않는다"고 선언하고
+            // 같은 파일에서 N'batch_shadow.TSettleByOUT_' + @p_RunIdText + N'_S12'를 쓴다.
+            // 규약이 이름에 RunId를 요구하는 이상 Shadow 이름의 조립은 필연인데, 그
+            // 구분이 프롬프트에 없어 계획서가 스스로 모순된 문장을 남겼다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.Contains("assembling the shadow table name at runtime is expected", result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsPuttingRunControlTablesUnderDbo()
         {
             // 실측(POQSettleProc11): 규칙에 journal·checkpoint가 이미 있었는데도 S02·S16·S17이
