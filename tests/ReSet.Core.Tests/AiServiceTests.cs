@@ -239,6 +239,53 @@ namespace ReSet.Core.Tests
             Assert.Contains("통합 배치 아키텍처 개요", result.SystemPrompt);
         }
 
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_CarriesTheBatchObjectSchemaRule()
+        {
+            // 실측(POQSettleProc12): 목차가 배치 제어 객체를 SETTLE_POQ_DB.dbo.TBatchRun으로
+            // 선언하고 본문은 batch.BatchRun을 썼다. [Batch Object Schema] 규칙이 본문 생성
+            // 세 경로에만 걸리고 목차 생성에는 걸리지 않았기 때문이다.
+            //
+            // 이 자리가 특히 중요한 이유는 보강기가 여기를 고쳐 주지 못한다는 데 있다.
+            // PlanStructureEnricher는 LegacyProcedures로 정적 분석 결과를 찾아 TargetTables를
+            // 교체하는데, 문제의 다섯 단계는 전부 레거시 출신이 없는 신규 단계였다. 대조할
+            // 원본이 없으니 모델이 적은 것이 그대로 최종본이 된다 - 프롬프트가 유일한 방어선이다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.Contains("[Batch Object Schema]", result.SystemPrompt);
+            // 스키마 이름의 소유자는 수집기다. 프롬프트가 자기 목록을 따로 들면 갈라진다.
+            foreach (var schema in BatchInfraObjectCollector.Schemas)
+            {
+                Assert.Contains($"`{schema}`", result.SystemPrompt);
+            }
+        }
+
+        [Fact]
+        public async Task DraftBatchPlanStructureAsync_TellsTheModelItsTargetTablesSurviveWhenAStepHasNoLegacyOrigin()
+        {
+            // 프롬프트는 TargetTables를 "나중에 교체되는 추정치"라고만 말해 왔다. 레거시
+            // 출신이 없는 단계에서는 교체가 일어나지 않으므로 그 말이 절반만 참이고,
+            // 모델은 가장 조심해야 할 자리에서 가장 느슨하게 적게 된다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.Contains("no legacy origin", result.SystemPrompt);
+            Assert.Contains("batch.", result.SystemPrompt);
+        }
+
         // 재수립 모드에서는 이전 구조를 반복하지 말라는 지시와,
         // 그 판단 근거인 누적 피드백이 프롬프트에 실려야 한다.
         [Fact]
@@ -1284,6 +1331,33 @@ namespace ReSet.Core.Tests
             Assert.Contains("ONE step section", result.SystemPrompt);
             // 문서 전체 규칙(오류코드 원본 재사용 등)도 함께 실려야 한다.
             Assert.Contains("[Required Content & Rules]", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task EveryPlanPrompt_CarriesTheBatchObjectSchemaRule()
+        {
+            // 규칙을 공유 상수로 떼어낸 뒤, 어느 한 경로에서 참조가 빠져도 컴파일은
+            // 통과한다. 목차·골격·단계·통합 네 경로가 같은 규약을 받는다는 사실을
+            // 여기서 한 번에 고정한다 - 실측(POQSettleProc12)에서 목차 하나가 빠져
+            // 있었고 그 결과가 목차와 본문의 스키마 불일치였다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+            var service = StepService();
+
+            var prompts = new[]
+            {
+                (await service.DraftBatchPlanStructureAsync(
+                    "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" })).SystemPrompt,
+                (await service.GenerateBatchPlanSkeletonAsync(steps, "목차", specs, "C#", "Test_Job")).SystemPrompt,
+                (await service.GenerateBatchStepSectionAsync(
+                    steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job")).SystemPrompt,
+                (await service.GenerateConsolidatedBatchPlanAsync("목차", specs, "C#", "Test_Job")).SystemPrompt,
+            };
+
+            Assert.All(prompts, p => Assert.Contains("[Batch Object Schema]", p));
         }
 
         // 접두사가 갈라지면 프롬프트 캐시가 매 단계 미스가 되어 분할 비용이 N배로 뛴다.
