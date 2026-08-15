@@ -104,6 +104,37 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "batch.BatchExecution" }, result.Names);
         }
 
+        [Theory]
+        // 실측(POQSettleProc11) 네 형태. 규약이 이름에 RunId를 요구하므로 런타임 조립은
+        // 위반이 아니라 필연인데, 수집기가 이 형태를 못 읽어 접두부만 `batch_shadow.TSettleMst_`
+        // 라는 유령 항목으로 목록에 올랐다 - 회차 0이 존재할 필요 없는 테이블을 만든다.
+        [InlineData("N'batch_shadow.TSettleMst_' + @p_RunId + N'_S08';", "batch_shadow.TSettleMst_<RunId>_S08")]
+        [InlineData(
+            "N'batch_shadow.TSettleMst_' + REPLACE(CONVERT(VARCHAR(36), @p_RunId), '-', '') + N'_S09';",
+            "batch_shadow.TSettleMst_<RunId>_S09")]
+        [InlineData("N'batch_shadow.TSettleByOUT_' + @p_RunIdText + N'_S12';", "batch_shadow.TSettleByOUT_<RunId>_S12")]
+        [InlineData(
+            "N'batch_shadow.TStatPGCollect_' +\n    REPLACE(CONVERT(VARCHAR(36), @p_RunId), '-', '') + N'_S13';",
+            "batch_shadow.TStatPGCollect_<RunId>_S13")]
+        public void Collect_ShouldReadANameAssembledAtRuntime(string plan, string expected)
+        {
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            Assert.Equal(new[] { expected }, result.Names);
+        }
+
+        [Fact]
+        public void Collect_ShouldNotPairLiteralsAcrossAStatementBoundary()
+        {
+            // 사이의 표현식을 무엇이든 허용하되 문장 경계는 넘지 않는다. 넘으면 앞 문장의
+            // 접두사와 뒤 문장의 무관한 리터럴이 짝지어져 없는 이름이 만들어진다.
+            var plan = "SET @a = N'batch_shadow.TSettleMst_';\nSET @b = N'_S08';";
+
+            var result = BatchInfraObjectCollector.Collect(plan);
+
+            Assert.DoesNotContain("batch_shadow.TSettleMst_<RunId>_S08", result.Names);
+        }
+
         [Fact]
         public void Collect_ShouldIgnoreTheEnglishWordBatch()
         {
