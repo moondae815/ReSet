@@ -157,5 +157,76 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("dbo.TSettleSummary", StringComparison.Ordinal));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptTheLegacyProcedureTheStepDeclaresAsItsOrigin()
+        {
+            // 실측(POQSettleProc10): S04 본문이 "dbo.UP_Util_PG_Client_CMRate_Ins의 업무
+            // 규칙을 이관한다"고 썼는데, 그 프로시저는 목차가 이 단계의 LegacyProcedures로
+            // 선언한 바로 그것이다. known 집합이 TargetTables·SchemaTables만 담아
+            // 출신 프로시저가 유령 테이블로 몰렸고, 9개 단계가 이 오탐 하나로
+            // 하한 미달 배너를 받았다 - 단계마다 재생성 1회씩을 함께 태웠다.
+            var step = new BatchStepPlan(
+                Code: "S04",
+                Name: "일별 요율 스냅샷 생성",
+                LegacyProcedures: new[] { "dbo.UP_Util_PG_Client_CMRate_Ins" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: new[] { "-1" },
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var markdown = $"""
+                ### S04 일별 요율 스냅샷 생성
+
+                `dbo.UP_Util_PG_Client_CMRate_Ins`의 업무 규칙을 이관한다. 실패 시 `-1`.
+
+                ```sql
+                INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog);
+
+            Assert.DoesNotContain(
+                result.Errors, e => e.Contains("UP_Util_PG_Client_CMRate_Ins", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectABatchSchemaThatIsNotTheCanonicalOne()
+        {
+            // 실측(POQSettleProc10): 배치 전용 스키마가 batch·poqbatch·poqsettlebatch로
+            // 갈라졌고, 수집기는 batch만 알아 bootstrap이 나머지 객체를 만들지 않았다.
+            // 미지 테이블 검사는 이것을 잡지 못한다 - poqbatch는 카탈로그가 아는
+            // 한정자가 아니라 HasKnownQualifier에서 후보 단계부터 걸러지기 때문이다.
+            var markdown = Section("""
+                INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);
+                EXEC poqbatch.usp_S04_DailyRateSnapshot @Ymd = @Ymd;
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+
+            Assert.Single(result.Errors);
+            Assert.Contains(result.Errors, e => e.Contains("poqbatch", StringComparison.Ordinal));
+            // 본문 결함이므로 재생성 피드백에 실려야 한다 - 목차를 고칠 일이 아니다.
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillRejectANonCanonicalBatchSchemaWhenTheCatalogIsEmpty()
+        {
+            // 미지 테이블 검사는 카탈로그가 없으면 소프트 스킵한다 - 대조할 목록이
+            // 없으니 당연하다. 스키마 이름 규칙은 다르다. batch·batch_shadow만 쓴다는
+            // 것은 카탈로그와 무관한 이 도구의 규약이므로, 오프라인 스냅숏 경로에서도
+            // 갈라진 스키마가 조용히 통과해서는 안 된다.
+            var markdown = Section("""
+                INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);
+                EXEC poqbatch.usp_S04_DailyRateSnapshot @Ymd = @Ymd;
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Array.Empty<string>());
+
+            Assert.Contains(result.Errors, e => e.Contains("poqbatch", StringComparison.Ordinal));
+        }
     }
 }

@@ -79,6 +79,44 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 이 이름이 배치 전용 스키마를 쓰되 그 이름이 <see cref="Schemas"/>가 아닌가.
+        ///
+        /// 판정을 여기 두는 이유는 IsInfraObject와 같다 - 배치 스키마 이름의 정의를
+        /// 이 클래스가 단독으로 소유한다. 검증기가 자기 목록을 따로 들면 두 곳이
+        /// 갈라진다.
+        /// </summary>
+        public static bool IsNonCanonicalBatchObject(string? qualifiedName)
+        {
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+            {
+                return false;
+            }
+
+            var parts = qualifiedName.Split('.');
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            // 마지막 조각은 객체명이므로 보지 않는다 - dbo.TBatchLog는 이름에 batch가
+            // 들어갈 뿐 업무 테이블이다. 한정자 조각만 본다.
+            for (var i = 0; i < parts.Length - 1; i++)
+            {
+                // 이름이 batch로 끝나는지를 본다. 포함으로 넓히면 C# 타입의 멤버 접근이
+                // 걸린다 - 실측: BatchStepResult.LegacyRetVal. 실제로 갈라진 이름들
+                // (poqbatch·poqsettlebatch·POQBatch)은 하나같이 batch로 끝난다.
+                var qualifier = parts[i].Trim('[', ']').Trim();
+                if (qualifier.EndsWith("batch", StringComparison.OrdinalIgnoreCase) &&
+                    !Schemas.Contains(qualifier, StringComparer.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 이 이름이 계획서가 새로 만드는 인프라 객체인가. 카탈로그에 없는 것이
         /// 정상이므로 미지 테이블 검사에서 제외해야 한다.
         /// </summary>

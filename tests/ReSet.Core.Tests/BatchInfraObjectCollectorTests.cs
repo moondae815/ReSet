@@ -94,5 +94,37 @@ namespace ReSet.Core.Tests
         {
             Assert.Equal(expected, BatchInfraObjectCollector.IsInfraObject(name));
         }
+
+        /// <summary>
+        /// 실측(POQSettleProc10): 계획서가 배치 전용 스키마를 batch(214회)·poqbatch(144회)
+        /// ·poqsettlebatch(94회) 세 이름으로 갈라 썼다. 수집기는 Schemas만 알므로
+        /// bootstrap 회차의 "만들 객체" 목록에는 batch.* 24개만 들어갔고, 나머지
+        /// 238건이 참조하는 객체는 아무도 만들지 않는 채 지시서가 나갔다.
+        ///
+        /// 객체명 조각은 보지 않는다 - dbo.TBatchLog는 batch 스키마와 무관한
+        /// 업무 테이블이고, 이름에 batch가 들어갔다는 이유로 걸리면 안 된다.
+        /// </summary>
+        [Theory]
+        [InlineData("poqbatch.usp_S04_DailyRateSnapshot", true)]
+        [InlineData("poqsettlebatch.POQSettleSummaryStage", true)]
+        [InlineData("SETTLE_POQ_DB.POQBatch.POQSettleStepRun", true)]
+        [InlineData("batch.POQSettleRun", false)]
+        [InlineData("batch_shadow.TSettleMst_Run_S03", false)]
+        [InlineData("SETTLE_POQ_DB.batch.POQSettleCheckpoint", false)]
+        [InlineData("dbo.TSettleMst", false)]
+        [InlineData("dbo.TBatchLog", false)]
+        [InlineData("TSettleMst", false)]
+        [InlineData(null, false)]
+        // 실측: 이 검사를 POQSettleProc10 S06에 처음 돌렸을 때 `BatchStepResult.LegacyRetVal`이
+        // 걸렸다. 스키마가 아니라 C# 타입의 멤버 접근인데, 이름에 batch가 들어갔다는
+        // 이유만으로 잡힌 것이다. 갈라진 스키마들(poqbatch·poqsettlebatch·POQBatch)은
+        // 하나같이 batch로 끝나므로, 포함이 아니라 끝나는지를 본다.
+        [InlineData("BatchStepResult.LegacyRetVal", false)]
+        [InlineData("batchResult.Code", false)]
+        public void IsNonCanonicalBatchObject_ShouldFlagBatchSchemasThatAreNotTheCanonicalOnes(
+            string? name, bool expected)
+        {
+            Assert.Equal(expected, BatchInfraObjectCollector.IsNonCanonicalBatchObject(name));
+        }
     }
 }
