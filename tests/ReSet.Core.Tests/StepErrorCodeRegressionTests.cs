@@ -14,6 +14,11 @@ namespace ReSet.Core.Tests
     /// </summary>
     public class StepErrorCodeRegressionTests
     {
+        // 조건 컬럼 대조를 쓰지 않는 테스트용 빈 재료. 비어 있으면 검사가
+        // 소프트 스킵하므로 이 테스트들이 보는 동작은 달라지지 않는다.
+        private static readonly System.Collections.Generic.IReadOnlyDictionary<string, SpecConditions> NoConditions =
+            new System.Collections.Generic.Dictionary<string, SpecConditions>();
+
         // CancellationPolicyTests가 baseline 파일을 읽는 방식과 같다 - 저장소
         // 루트에서 소스 트리를 직접 읽는다. 이 저장소에는 출력 디렉터리 복사
         // 설정이 없으므로 픽스처 하나 때문에 도입하지 않는다.
@@ -58,7 +63,7 @@ namespace ReSet.Core.Tests
             Assert.Empty(s00.ErrorCodes);
 
             var body = $"### {s00.Code} {s00.Name}\n\n```sql\nSELECT 1 FROM {s00.TargetTables[0]};\n```";
-            var result = new MechanicalValidator().ValidateBatchStep(body, s00, Array.Empty<string>());
+            var result = new MechanicalValidator().ValidateBatchStep(body, s00, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid);
         }
@@ -83,7 +88,7 @@ namespace ReSet.Core.Tests
             var body = $"### {s06.Code} {s06.Name}\n\n```sql\nSELECT 1 FROM {s06.TargetTables[0]};\n```\n\n"
                 + string.Join(" ", s06.ErrorCodes.Select(c => $"`{c}`"));
 
-            var result = new MechanicalValidator().ValidateBatchStep(body, s06, Array.Empty<string>());
+            var result = new MechanicalValidator().ValidateBatchStep(body, s06, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid);
         }

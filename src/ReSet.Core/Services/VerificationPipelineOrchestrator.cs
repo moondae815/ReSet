@@ -3106,6 +3106,11 @@ namespace ReSet.Core.Services
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
+
+            // 원본이 무엇으로 거르는지는 명세서에만 있다. 단계마다 뽑아도 결과가 같으므로
+            // 재시도 루프 밖에서 한 번만 만든다.
+            var conditionColumns = SpecConditionColumnExtractor.Extract(specs);
+
             string? adopted = null;
             string? floorFeedback = null;
             // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
@@ -3148,7 +3153,7 @@ namespace ReSet.Core.Services
 
                 adopted = content;
 
-                var stepResult = _validator.ValidateBatchStep(content, step, knownTableNames);
+                var stepResult = _validator.ValidateBatchStep(content, step, knownTableNames, conditionColumns);
                 if (stepResult.IsValid)
                 {
                     return (content, null);
