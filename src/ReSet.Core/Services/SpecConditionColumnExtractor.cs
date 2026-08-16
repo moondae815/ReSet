@@ -49,7 +49,7 @@ namespace ReSet.Core.Services
         /// 첫 구현을 실측 산출물에 돌렸을 때 검출 27건 중 15건이 이 한 가지 버그였다.
         /// </remarks>
         private static readonly Regex ConditionRegex = new(
-            @"`\s*(?<column>[A-Za-z_@][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*)\s*(?:=|<>|>=|<=|\bIN\b)",
+            @"`\s*(?<column>[A-Za-z_@][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*)\s*(?:=|<>|>=|<=|\b(?:NOT\s+)?IN\b)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex UdfNameRegex = new(
@@ -70,7 +70,7 @@ namespace ReSet.Core.Services
         /// 인덱스 힌트다. 목록으로 두는 이유는 새 사례가 나올 때 한 줄로 늘리기 위해서다.
         /// </summary>
         private static readonly HashSet<string> NotColumns =
-            new(StringComparer.OrdinalIgnoreCase) { "INDEX", "TOP", "MAXDOP", "VALUES" };
+            new(StringComparer.OrdinalIgnoreCase) { "INDEX", "TOP", "MAXDOP", "VALUES", "NOT" };
 
         public static IReadOnlyDictionary<string, SpecConditions> Extract(
             IEnumerable<(string FileName, string Content)> specs)

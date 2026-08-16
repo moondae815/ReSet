@@ -212,6 +212,27 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Extract_ShouldNotSplitNotInIntoAColumnAndAnOperator()
+        {
+            // 실측(POQSettleProc14): S07이 `NOT`(으)로 거르는 로직이 없다는 결함을 받아
+            // 재생성 1회를 태웠다. `NOT IN`의 NOT이 컬럼으로 잡힌 것이고, BEGIN이
+            // BEG+IN으로 쪼개지던 것과 같은 뿌리다.
+            var result = SpecConditionColumnExtractor.Extract(Spec("`NOT IN (0,1)` 인 행은 제외합니다."));
+
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void Extract_ShouldReadTheColumnOfANotInCondition()
+        {
+            // 같은 뿌리의 반대편 손실. NOT을 연산자의 일부로 읽지 못하면 이 형태가
+            // 통째로 추출되지 않아, 원본이 실제로 거르는 컬럼을 놓친다.
+            var result = SpecConditionColumnExtractor.Extract(Spec("`A.UseState NOT IN (0)` 조건을 적용합니다."));
+
+            Assert.Equal(new[] { "UseState" }, result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        [Fact]
         public void Extract_ShouldStillReadAGenuineInCondition()
         {
             // 위 가드가 IN 조건 자체를 죽이면 안 된다.
