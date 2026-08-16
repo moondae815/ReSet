@@ -21,16 +21,32 @@ namespace ReSet.Core.Services
 
         public static IReadOnlyDictionary<string, string> Snapshot(string directory)
         {
-            var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
-
             if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
             {
-                return snapshot;
+                return new Dictionary<string, string>(StringComparer.Ordinal);
             }
 
             var root = Path.GetFullPath(directory);
+            return SnapshotFiles(root, Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
+        }
 
-            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        /// <summary>
+        /// 파일 목록을 받아 스냅샷을 만든다. 목록을 밖에서 넣을 수 있게 갈라 둔 이유는
+        /// 사라진 경로를 만났을 때의 동작을 테스트가 고정할 수 있게 하기 위해서다 -
+        /// 열거와 삭제가 겹치는 타이밍은 밖에서 주입할 수 없다.
+        ///
+        /// 읽는 사이 사라진 파일은 건너뛴다. 스냅샷의 의미가 "그 순간 존재한 파일들"이므로
+        /// 손실이 아니고, 여기서 던지면 그 시점에 다른 무언가가 같은 트리를 건드렸다는
+        /// 이유만으로 코딩 에이전트 호출 전체가 실패한다 - 실측: 전체 테스트를 병렬로
+        /// 돌릴 때 실행 디렉터리를 스냅샷하던 호출이 같은 디렉터리의 output 트리를 지우는
+        /// 다른 테스트와 겹쳐 간헐적으로 터졌다.
+        /// </summary>
+        public static IReadOnlyDictionary<string, string> SnapshotFiles(
+            string root, IEnumerable<string> files)
+        {
+            var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (var file in files)
             {
                 var relative = Path.GetRelativePath(root, file);
                 if (IsExcluded(relative))
@@ -38,8 +54,21 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var info = new FileInfo(file);
-                snapshot[relative] = $"{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+                // 파일이 사라졌는지 미리 Exists로 묻지 않는다 - 물어본 다음과 읽는 사이에
+                // 또 사라질 수 있어 검사 자체가 같은 경합을 안는다. 읽어 보고 없으면 넘긴다.
+                try
+                {
+                    var info = new FileInfo(file);
+                    snapshot[relative] = $"{info.Length}:{info.LastWriteTimeUtc.Ticks}";
+                }
+                catch (Exception ex) when (
+                    ex is FileNotFoundException ||
+                    ex is DirectoryNotFoundException ||
+                    ex is UnauthorizedAccessException ||
+                    ex is IOException)
+                {
+                    continue;
+                }
             }
 
             return snapshot;
