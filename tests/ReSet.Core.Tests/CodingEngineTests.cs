@@ -106,11 +106,20 @@ namespace ReSet.Core.Tests
 
             var tempFile = Path.GetTempFileName();
 
+            // 워킹 디렉터리로 실행 디렉터리를 넘기지 않는다. 엔진은 프로세스를 띄우기
+            // 전에 그 디렉터리를 통째로 재귀 스냅샷하는데, 실행 디렉터리에는 파일이
+            // 266개 있고 그중 output 트리는 다른 테스트들이 동시에 만들고 지운다
+            // (MetadataExporterTests·VerificationPipelineOrchestratorTests 등). 열거가
+            // 그 파일에 닿는 순간과 삭제가 겹치면 이 테스트가 간헐적으로 터졌다.
+            // 이 테스트가 보는 것은 "없는 명령어면 예외"뿐이라 워킹 디렉터리는 비어 있어도 된다.
+            var workDir = Path.Combine(Path.GetTempPath(), "reset-coding-engine-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workDir);
+
             try
             {
                 await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 {
-                    await engine.GenerateCodeAsync(spDef, tempFile, Directory.GetCurrentDirectory(), CancellationToken.None);
+                    await engine.GenerateCodeAsync(spDef, tempFile, workDir, CancellationToken.None);
                 });
             }
             finally
@@ -118,6 +127,11 @@ namespace ReSet.Core.Tests
                 if (File.Exists(tempFile))
                 {
                     File.Delete(tempFile);
+                }
+
+                if (Directory.Exists(workDir))
+                {
+                    Directory.Delete(workDir, recursive: true);
                 }
             }
         }
