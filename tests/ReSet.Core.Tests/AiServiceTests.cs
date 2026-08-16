@@ -611,6 +611,29 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_RequiresUnionBranchesToAlignTheirColumns()
+        {
+            // 실측(POQSettleProc13): S05가 전체 거래·부분취소·환불 세 분기를 UNION ALL로
+            // 묶으면서 전체 거래 분기에만 `0 AS USESTATE`를 넣고 나머지 둘에는 그 컬럼을
+            // 빠뜨렸다. 컬럼 수가 어긋나 SQL이 실행조차 되지 않는데, 명세서는 부분취소를
+            // 2, 환불을 3으로 구분하라고 명시하고 있었다. 기계 검증으로 잡으려면 SQL
+            // 구조를 파싱해야 하므로, 생성 시점에 규칙으로 막는다.
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.USP_Test1", "## 개요\n내용1")
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 통합 배치 명세\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
+
+            Assert.Contains("every branch MUST project the same column list", result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsPuttingRunControlTablesUnderDbo()
         {
             // 실측(POQSettleProc11): 규칙에 journal·checkpoint가 이미 있었는데도 S02·S16·S17이
