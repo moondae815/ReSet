@@ -107,5 +107,41 @@ namespace ReSet.Core.Tests
 
             Assert.Single(snapshot);
         }
+
+        /// <summary>
+        /// 실측: 전체 테스트를 병렬로 돌리면 CodingEngineTests가 실행 디렉터리를
+        /// 워킹 디렉터리로 넘겨 그 아래 266개 파일을 재귀 열거하는데, 같은 디렉터리의
+        /// output/** 트리를 다른 테스트가 동시에 지운다. 열거가 어떤 파일에 닿는 순간
+        /// 그것이 사라져 있으면 FileInfo.Length가 던지고, 코딩 엔진 호출 전체가 실패한다.
+        ///
+        /// 이 테스트는 그 경합을 재현하지 않는다 - 열거와 삭제가 겹치는 타이밍을 외부에서
+        /// 주입할 방법이 없고, 억지로 만들면 이 테스트 자체가 플래키가 된다. 대신 그
+        /// 상황에서 요구되는 동작만 좁게 고정한다: 목록에 사라진 경로가 섞여 있어도
+        /// 나머지는 정상적으로 담긴다. 스냅샷의 의미가 "그 순간 존재한 파일들"이므로
+        /// 읽는 사이 사라진 파일을 빼는 것은 손실이 아니다.
+        /// </summary>
+        [Fact]
+        public void SnapshotFiles_ShouldSkipAPathThatVanishedAndKeepTheRest()
+        {
+            WriteFile("Kept.cs", "class Kept {}");
+            var kept = Path.Combine(_root, "Kept.cs");
+            var vanished = Path.Combine(_root, "Vanished.cs");
+
+            var snapshot = ArtifactChangeDetector.SnapshotFiles(_root, new[] { vanished, kept });
+
+            Assert.Equal(new[] { "Kept.cs" }, snapshot.Keys);
+        }
+
+        [Fact]
+        public void SnapshotFiles_ShouldSkipAPathWhoseDirectoryVanished()
+        {
+            // 파일 하나가 아니라 상위 디렉터리째 사라지는 경우다 - 실측에서 다른 테스트가
+            // Directory.Delete(recursive)로 output 트리를 통째로 지운다.
+            var gone = Path.Combine(_root, "GoneDir", "Step1.cs");
+
+            var snapshot = ArtifactChangeDetector.SnapshotFiles(_root, new[] { gone });
+
+            Assert.Empty(snapshot);
+        }
     }
 }
