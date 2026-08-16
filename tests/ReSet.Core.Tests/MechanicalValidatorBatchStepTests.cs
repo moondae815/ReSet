@@ -439,6 +439,66 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ValidateBatchStep_ShouldRejectAShortcutInsideTheStepBody()
+        {
+            // 실측(POQSettleProc14): 축약어 '위와 동일' 하나 때문에 L1이 두 번 연속
+            // 실패했고, 그때마다 골격과 17개 단계가 통째로 재생성됐다. 3회 재시도
+            // 예산 중 2회를 그 한 줄이 먹어 L2 채점은 한 번뿐이었고, 개선 기회 없이
+            // 84점 불합격이 채택됐다 - Critic이 지적한 결함들이 고쳐질 자리가 없었다.
+            //
+            // 단계 단위로 잡으면 그 단계만 다시 만들면 되고, 지적도 기존 재생성
+            // 피드백 경로를 그대로 탄다.
+            var markdown = Section("""
+                | 컬럼 | 매핑 |
+                | :--- | :--- |
+                | CLTOTAL | 위와 동일 |
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("위와 동일", StringComparison.Ordinal));
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldIgnoreAShortcutInsideAQuotedLine()
+        {
+            // 배너가 잔존 오류를 인용하면 그 메시지 자체가 금지 토큰을 담는다. 인용문을
+            // 검사하면 배너 붙은 문서가 스스로를 오류로 만들어 어떤 재생성으로도
+            // 통과할 수 없다 - 문서 레벨에서 겪은 자기 오염이 단계에서도 똑같이 난다.
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                > 이전 시도는 축약어('위와 동일')로 반려되었습니다.
+
+                ```sql
+                UPDATE dbo.TSettleMst SET OutState = 9;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Empty(result.Errors);
+        }
+
+        [Theory]
+        [InlineData("SELECT CLEtc. FROM dbo.TSettleMst;", false)]   // 낱말의 일부는 축약어가 아니다
+        [InlineData("나머지 컬럼은 etc. 로 줄인다", true)]
+        public void ValidateBatchStep_ShouldApplyTheSameEtcRuleAsTheDocumentCheck(string body, bool expectError)
+        {
+            // 축약어 정의를 두 검사가 나눠 가지면 목록이 갈라진다. 문서 검사가 이미
+            // 가진 예외(CLEtc.는 축약어가 아니라 사실이다)가 단계에서도 그대로여야 한다.
+            var markdown = Section(body);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Equal(expectError, result.Errors.Any(e => e.Contains("etc.", StringComparison.Ordinal)));
+        }
+
+        [Fact]
         public void ValidateBatchStep_ShouldStillTrustATocDeclarationThatExistsInTheCatalog()
         {
             // 회귀 가드: 목차 신뢰를 좁히는 것은 "카탈로그에도 batch에도 없는" 선언에
