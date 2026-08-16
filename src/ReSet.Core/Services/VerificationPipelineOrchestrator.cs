@@ -2868,6 +2868,30 @@ namespace ReSet.Core.Services
         /// 떼도록 설계됐으므로 "dbo.UP_X.sql"에 그대로 적용하면 "sql"을
         /// 프로시저명으로 착각한다.
         /// </summary>
+        /// <summary>
+        /// 명세서에서 뽑은 두 대조 재료를 프로시저별로 합친다. 조건 컬럼과 반올림 모양은
+        /// 추출기가 다르지만 같은 검사가 함께 받아야 하고, 한쪽에만 있는 프로시저도
+        /// 있으므로(조건은 있는데 반올림은 없는 경우) 양쪽 키를 모두 살린다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, SpecConditions> MergeSpecMaterials(
+            IReadOnlyDictionary<string, SpecConditions> conditions,
+            IReadOnlyDictionary<string, IReadOnlyCollection<string>> roundingShapes)
+        {
+            var merged = new Dictionary<string, SpecConditions>(conditions, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pair in roundingShapes)
+            {
+                merged[pair.Key] = merged.TryGetValue(pair.Key, out var existing)
+                    ? existing with { RoundingShapes = pair.Value }
+                    : new SpecConditions(
+                        Array.Empty<string>(),
+                        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                        pair.Value);
+            }
+
+            return merged;
+        }
+
         private static IReadOnlyList<string> FindUncoveredProcedures(
             IReadOnlyList<BatchStepPlan> steps,
             List<(string FileName, string Content)> specs)
@@ -3107,9 +3131,11 @@ namespace ReSet.Core.Services
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
 
-            // 원본이 무엇으로 거르는지는 명세서에만 있다. 단계마다 뽑아도 결과가 같으므로
-            // 재시도 루프 밖에서 한 번만 만든다.
-            var conditionColumns = SpecConditionColumnExtractor.Extract(specs);
+            // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
+            // 단계마다 뽑아도 결과가 같으므로 재시도 루프 밖에서 한 번만 만든다.
+            var conditionColumns = MergeSpecMaterials(
+                SpecConditionColumnExtractor.Extract(specs),
+                SpecRoundingShapeExtractor.Extract(specs));
 
             string? adopted = null;
             string? floorFeedback = null;

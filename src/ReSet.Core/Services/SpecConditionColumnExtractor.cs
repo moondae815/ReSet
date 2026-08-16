@@ -9,9 +9,14 @@ namespace ReSet.Core.Services
     /// </summary>
     /// <param name="BodyColumns">프로시저 본체가 직접 거르는 컬럼.</param>
     /// <param name="ByUdf">UDF 맨이름 → 그 UDF 내부가 거르는 컬럼.</param>
+    /// <param name="RoundingShapes">원본이 쓰는 중첩 ROUND 계산의 정규화 모양
+    /// (<see cref="SpecRoundingShapeExtractor"/>가 뽑는다). 조건과 함께 담는 이유는 둘 다
+    /// 같은 시점에 명세서에서 뽑아 같은 검사로 넘기는 대조 재료이기 때문이다 - 나누면
+    /// ValidateBatchStep의 인자만 하나 더 늘어난다.</param>
     public sealed record SpecConditions(
         IReadOnlyList<string> BodyColumns,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> ByUdf);
+        IReadOnlyDictionary<string, IReadOnlyList<string>> ByUdf,
+        IReadOnlyCollection<string>? RoundingShapes = null);
 
     /// <summary>
     /// 명세서 본문에서 원본 프로시저가 필터·분기에 쓰는 컬럼 이름을 뽑는다.

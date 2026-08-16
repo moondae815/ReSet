@@ -445,6 +445,8 @@ namespace ReSet.Core.Services
                     ReportIfAbsent(stepMarkdown, step, key, column, reported, result);
                 }
 
+                ReportMissingRoundingShapes(stepMarkdown, step, key, conditions, result);
+
                 foreach (var pair in conditions.ByUdf)
                 {
                     // 계획서가 UDF를 그대로 호출하면 그 안의 조건은 옮겨 적을 것이 아니다.
@@ -461,6 +463,44 @@ namespace ReSet.Core.Services
                         ReportIfAbsent(stepMarkdown, step, pair.Key, column, reported, result);
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 원본이 쓰는 중첩 ROUND 계산이 단계 본문에서 사라졌는지 본다.
+        ///
+        /// 정산 금액은 반올림 순서에 따라 달라진다 - 합계를 먼저 반올림하고 다시
+        /// 반올림하는 것과 한 번만 하는 것은 다른 값을 낸다. 대상 테이블·오류코드·조건
+        /// 컬럼이 모두 맞아도 이 축은 비어 있었다.
+        ///
+        /// 누락만 본다. 계획서가 원본에 없는 계산을 더하는 것은 중간 집계를 두는 등
+        /// 정당할 수 있고, 그 방향까지 결함으로 들면 오탐이 재생성을 태운다.
+        /// </summary>
+        private static void ReportMissingRoundingShapes(
+            string stepMarkdown,
+            BatchStepPlan step,
+            string origin,
+            SpecConditions conditions,
+            StepValidationResult result)
+        {
+            if (conditions.RoundingShapes == null || conditions.RoundingShapes.Count == 0)
+            {
+                return;
+            }
+
+            var inStep = SpecRoundingShapeExtractor.ReadShapes(stepMarkdown);
+
+            foreach (var shape in conditions.RoundingShapes)
+            {
+                if (inStep.Contains(shape))
+                {
+                    continue;
+                }
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션에 원본 `{origin}`의 반올림 계산 `{shape}`에 해당하는 식이 없습니다. " +
+                    "컬럼 이름은 달라도 되지만 반올림 방식 플래그와 중첩 순서는 원본대로 두십시오 - " +
+                    "반올림 순서가 바뀌면 정산 금액이 달라집니다.");
             }
         }
 
