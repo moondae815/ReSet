@@ -517,6 +517,108 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain(result.Errors, e => e.Contains("SETTLE_POQ_DB.dbo", StringComparison.Ordinal));
         }
 
+        /// <summary>반올림 모양만 담은 재료.</summary>
+        private static IReadOnlyDictionary<string, SpecConditions> Rounding(string procedure, params string[] shapes) =>
+            new Dictionary<string, SpecConditions>(StringComparer.OrdinalIgnoreCase)
+            {
+                [procedure] = new SpecConditions(
+                    Array.Empty<string>(),
+                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+                    shapes)
+            };
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAStepMissingTheOriginalRoundingShape()
+        {
+            // 정산 금액은 반올림 순서에 따라 달라진다. 원본이 합계를 먼저 반올림하고
+            // 다시 반올림하는데 계획서가 한 번만 하면 결과가 어긋나는데, 그것을 보는
+            // 검사가 어디에도 없었다 - 대상 테이블·오류코드·조건 컬럼이 다 맞아도
+            // 이 축은 비어 있었다.
+            var step = new BatchStepPlan(
+                Code: "S05",
+                Name: "기본 정산 원장 생성",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Rounding(
+                "UP_UTIL_SETTLE_INS", "round(round(?,0,commsumroundflag)/1.1,0,commroundflag)");
+
+            var markdown = """
+                ### S05 기본 정산 원장 생성
+
+                ```sql
+                INSERT INTO dbo.TSettleMst (Amt)
+                SELECT ROUND(X.RawPgComm4Sum, 0, P.CommRoundFlag) FROM X;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("commsumroundflag", StringComparison.Ordinal));
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptTheSameShapeWrittenWithDifferentColumnNames()
+        {
+            // 이 검사의 핵심. 계획서는 원본의 X.PGCOMM4SUM을 X.RawPgComm4Sum으로 바꿔
+            // 부르는데, 이름까지 대조하면 정상 이행이 전부 걸린다.
+            var step = new BatchStepPlan(
+                Code: "S05",
+                Name: "기본 정산 원장 생성",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Rounding(
+                "UP_UTIL_SETTLE_INS", "round(round(?,0,commsumroundflag)/1.1,0,commroundflag)");
+
+            var markdown = """
+                ### S05 기본 정산 원장 생성
+
+                ```sql
+                INSERT INTO dbo.TSettleMst (Amt)
+                SELECT ROUND(ROUND(S.RawPGComm4Sum, 0, P.CommSumRoundFlag) / 1.1, 0, P.CommRoundFlag) FROM S;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("반올림", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandRoundingFromAStepWithNoLegacyOrigin()
+        {
+            var step = new BatchStepPlan(
+                Code: "S02",
+                Name: "실행 잠금",
+                LegacyProcedures: Array.Empty<string>(),
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Rounding("UP_UTIL_SETTLE_INS", "round(round(?,0,commsumroundflag),0,commroundflag)");
+
+            var markdown = """
+                ### S02 실행 잠금
+
+                ```sql
+                INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.Empty(result.Errors);
+        }
+
         [Fact]
         public void ValidateBatchStep_ShouldStillTrustATocDeclarationThatExistsInTheCatalog()
         {
