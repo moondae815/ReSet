@@ -592,6 +592,16 @@ namespace ReSet.Core.Services
                 }
 
                 var bare = BareObjectName(candidate);
+
+                // 맨이름이 한정자면 객체 참조가 아니라 `SETTLE_POQ_DB.dbo`처럼 DB와
+                // 스키마만 적은 것이다. 2부로 매칭되면 맨이름이 `dbo`가 되는데, 그것은
+                // 테이블이 아니라 이 검사가 이미 한정자로 아는 이름이다 - 실측
+                // (POQSettleProc15): S11이 이 오탐으로 재생성을 두 번 태웠다.
+                if (knownQualifiers.Contains(bare))
+                {
+                    continue;
+                }
+
                 if (bare.Length == 0 || known.Contains(bare) || !reported.Add(bare))
                 {
                     continue;

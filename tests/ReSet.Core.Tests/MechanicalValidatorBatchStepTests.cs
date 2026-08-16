@@ -499,6 +499,25 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ValidateBatchStep_ShouldNotTakeADatabaseAndSchemaPrefixAsAnObject()
+        {
+            // 실측(POQSettleProc15): S11이 `SETTLE_POQ_DB.dbo`를 미지 객체로 두 번 잡혀
+            // 재생성을 두 번 태웠다. 2부로 매칭되면 맨이름이 `dbo`가 되는데, `dbo`는
+            // 테이블이 아니라 이 검사가 이미 한정자로 알고 있는 이름이다.
+            // 실제 카탈로그처럼 3부 이름을 담아야 SETTLE_POQ_DB가 한정자로 등록된다.
+            var catalog = new[] { "SETTLE_POQ_DB.dbo.TSettleMst", "dbo.TStatPGCollect" };
+            var markdown = Section("""
+                -- 대상은 SETTLE_POQ_DB.dbo 스키마에 있다.
+                UPDATE SETTLE_POQ_DB.dbo.TSettleMst SET OutState = 9;
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SETTLE_POQ_DB.dbo", StringComparison.Ordinal));
+        }
+
+        [Fact]
         public void ValidateBatchStep_ShouldStillTrustATocDeclarationThatExistsInTheCatalog()
         {
             // 회귀 가드: 목차 신뢰를 좁히는 것은 "카탈로그에도 batch에도 없는" 선언에
