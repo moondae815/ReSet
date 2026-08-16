@@ -273,6 +273,7 @@ namespace ReSet.Core.Services
                 }
             }
 
+            CheckForbiddenShortcuts(stepMarkdown, step, result);
             CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
             CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
@@ -364,6 +365,44 @@ namespace ReSet.Core.Services
         /// batch·batch_shadow는 제외한다. 계획서가 새로 만드는 객체라 카탈로그에 없는
         /// 것이 정상이며, 그 판단은 BatchInfraObjectCollector가 단독 소유한다.
         /// </summary>
+        /// <summary>
+        /// 단계 본문에 축약·생략 표기가 있는지 본다.
+        ///
+        /// 같은 검사가 문서 레벨에도 있는데 여기에 다시 두는 이유는 재생성 단위 때문이다.
+        /// 실측(POQSettleProc14): 축약어 '위와 동일' 한 줄 때문에 문서 L1이 두 번 연속
+        /// 실패했고, 그때마다 골격과 17개 단계가 통째로 재생성됐다. 3회 재시도 예산 중
+        /// 2회를 그 한 줄이 먹어 L2 채점은 한 번뿐이었고, 개선 기회 없이 84점 불합격이
+        /// 채택됐다 - Critic이 지적한 결함이 고쳐질 자리가 없었다.
+        ///
+        /// 단계에서 잡으면 그 단계만 다시 만들면 되고(예산 1/17), 지적은 기존 재생성
+        /// 피드백 경로를 그대로 탄다 - 문서 레벨 L1 피드백은 단계 프롬프트에 전달되지
+        /// 않으므로, 그 경로로는 17개 단계가 지적을 모른 채 다시 쓰인다.
+        ///
+        /// 문서 레벨 검사는 그대로 둔다. 골격의 공통 규약 절이나 정합성 검증 SQL처럼
+        /// 단계 밖에 있는 축약어는 여기서 볼 수 없고, 단계 재생성이 예산을 다 쓰고도
+        /// 남은 경우의 안전망이기도 하다.
+        /// </summary>
+        private static void CheckForbiddenShortcuts(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            // 인용문을 빼는 이유는 문서 레벨과 같다 - 배너가 잔존 오류를 인용하면 그
+            // 메시지가 금지 토큰을 담아, 배너 붙은 문서가 스스로를 오류로 만든다.
+            var scannable = StripQuotedLines(stepMarkdown);
+
+            foreach (var forbidden in ForbiddenShortcuts)
+            {
+                if (!ContainsForbiddenShortcut(scannable, forbidden))
+                {
+                    continue;
+                }
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션에 축약·생략 표기 `{forbidden}`가 있습니다. " +
+                    "표의 모든 행과 매핑을 원본대로 완전히 기술하십시오 - 생략된 자리는 " +
+                    "구현자가 채울 수 없습니다.");
+            }
+        }
+
         /// <summary>
         /// 원본이 필터·분기에 쓰는 컬럼이 단계 본문에서 사라졌는지 본다.
         ///
@@ -1302,9 +1341,8 @@ namespace ReSet.Core.Services
             }
 
             // 1.5 Anti-Shortcut (축약/생략 방지) 기계적 검증
-            string[] forbiddenShortcuts = new[] { "이하 생략", "(생략)", "위와 동일", "기타 등등", "etc.", "TS[]" };
             var scannable = StripQuotedLines(markdown);
-            foreach (var forbidden in forbiddenShortcuts)
+            foreach (var forbidden in ForbiddenShortcuts)
             {
                 if (ContainsForbiddenShortcut(scannable, forbidden))
                 {
@@ -1356,6 +1394,14 @@ namespace ReSet.Core.Services
         ///
         /// 나머지 토큰은 한국어이거나 기호라 이 문제가 없어 그대로 둔다.
         /// </summary>
+        /// <summary>
+        /// 표와 본문에서 금지하는 축약·생략 표기. 문서 레벨 검사와 단계 하한 검사가
+        /// 이 목록 하나를 공유한다 — 나눠 가지면 한쪽만 새 축약어를 알게 되고, 그
+        /// 순간 단계에서 거르지 못한 것이 문서 레벨로 올라가 전체 재생성을 부른다.
+        /// </summary>
+        internal static readonly string[] ForbiddenShortcuts =
+            { "이하 생략", "(생략)", "위와 동일", "기타 등등", "etc.", "TS[]" };
+
         private static bool ContainsForbiddenShortcut(string text, string forbidden) =>
             forbidden == "etc."
                 ? StandaloneEtcRegex.IsMatch(text)
