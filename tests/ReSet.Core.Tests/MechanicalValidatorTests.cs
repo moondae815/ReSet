@@ -12,6 +12,11 @@ namespace ReSet.Core.Tests
     [Collection(GlobalSerilogLoggerCollection.Name)]
     public class MechanicalValidatorTests
     {
+        // 조건 컬럼 대조를 쓰지 않는 테스트용 빈 재료. 비어 있으면 검사가
+        // 소프트 스킵하므로 이 테스트들이 보는 동작은 달라지지 않는다.
+        private static readonly System.Collections.Generic.IReadOnlyDictionary<string, SpecConditions> NoConditions =
+            new System.Collections.Generic.Dictionary<string, SpecConditions>();
+
         private readonly MechanicalValidator _validator = new();
 
         [Fact]
@@ -497,7 +502,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         [Fact]
         public void ValidateBatchStep_WithCodeBlockAndAllTokens_IsValid()
         {
-            var result = _validator.ValidateBatchStep(S10HealthySection, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid, string.Join(" / ", result.Errors));
             Assert.Null(result.SuggestedPromptFix);
@@ -506,7 +511,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         [Fact]
         public void ValidateBatchStep_WithoutCodeBlock_Fails()
         {
-            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("의사코드 블록이 없습니다"));
@@ -523,7 +528,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 new[] { "UP_UTIL_SETTLE_INS" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false,
                 Array.Empty<string>());
 
-            var result = _validator.ValidateBatchStep(section, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(section, plan, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid, string.Join(" / ", result.Errors));
         }
@@ -538,7 +543,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 new[] { "UP_UTIL_SETTLE_EXPECT_PROC" }, new[] { "dbo.TSettleMst" }, new[] { "-1" }, false,
                 Array.Empty<string>());
 
-            var result = _validator.ValidateBatchStep(section, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(section, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("-1"));
@@ -549,7 +554,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             var section = "### S10 PG 회수 통계 생성\n\nTStatPGCollect만 적었다. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
 
-            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("TSettleMst"));
@@ -560,7 +565,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             var section = "## S10 PG 회수 통계 생성\n\nTStatPGCollect와 TSettleMst. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
 
-            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("헤딩"));
@@ -571,7 +576,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             var section = "### PG 회수 통계 생성\n\nTStatPGCollect와 TSettleMst. 오류코드 -1.\n\n```sql\nSELECT 1;\n```";
 
-            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(section, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
         }
@@ -579,7 +584,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         [Fact]
         public void ValidateBatchStep_WithEmptyMarkdown_Fails()
         {
-            var result = _validator.ValidateBatchStep("", S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep("", S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("비어있습니다"));
@@ -598,7 +603,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("ErrorCodes"));
@@ -609,7 +614,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             var plan = S10Plan() with { TargetTables = Array.Empty<string>() };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("TargetTables"));
@@ -622,7 +627,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             // 건너뛰어 빈 배열과 똑같이 무실행이 된다.
             var plan = S10Plan() with { ErrorCodes = new[] { "", "  " } };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.Errors, e => e.Contains("ErrorCodes"));
@@ -640,7 +645,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 TargetTables = Array.Empty<string>(),
             };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.False(result.RegenerationCanFix);
@@ -651,7 +656,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
         {
             // 본문에 코드 블록이 없는 것은 재생성으로 고쳐진다 - 기존 재시도가
             // 존재하는 이유이고, 그 경로가 살아 있어야 한다.
-            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan(), Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, S10Plan(), Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.True(result.RegenerationCanFix);
@@ -664,7 +669,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             // 재생성으로 고칠 수 있으면 재시도할 값어치가 있다.
             var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
 
-            var result = _validator.ValidateBatchStep(S10CollapsedSection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10CollapsedSection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.True(result.RegenerationCanFix);
@@ -682,7 +687,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 ErrorCodes = Array.Empty<string>(),
             };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid);
             Assert.Empty(result.PlanDefects);
@@ -704,7 +709,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
             try
             {
-                _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+                _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
             }
             finally
             {
@@ -721,7 +726,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             // 출신이 있는데 코드가 비었다면 보강이 실패한 것이다. 그 사실은 남아야 한다.
             var plan = S10Plan() with { ErrorCodes = Array.Empty<string>() };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.PlanDefects, d => d.Contains("ErrorCodes"));
@@ -739,7 +744,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 TargetTables = Array.Empty<string>(),
             };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
 
             Assert.False(result.IsValid);
             Assert.Contains(result.PlanDefects, d => d.Contains("TargetTables"));
@@ -759,7 +764,7 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
             Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
             try
             {
-                _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>());
+                _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
             }
             finally
             {

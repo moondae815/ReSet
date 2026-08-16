@@ -175,8 +175,15 @@ namespace ReSet.Core.Services
         /// <param name="knownTableNames">이 작업의 스키마 카탈로그(SpDefinition.Dependencies).
         /// 비어 있으면 미지 테이블 검사를 실행하지 않는다 - 카탈로그가 없다는 사실을
         /// 모든 테이블이 유령이라는 판정으로 바꾸지 않기 위한 소프트 스킵이다.</param>
+        /// <param name="conditionColumnsByProcedure">원본 프로시저 맨이름별로, 그 프로시저가
+        /// 필터·분기에 쓰는 컬럼 이름(<see cref="SpecConditionColumnExtractor"/>가 뽑는다).
+        /// 비어 있으면 조건 대조를 실행하지 않는다 - 대조할 재료가 없다는 사실을 로직이
+        /// 빠졌다는 판정으로 바꾸지 않기 위한 소프트 스킵이다.</param>
         public StepValidationResult ValidateBatchStep(
-            string? stepMarkdown, BatchStepPlan step, IReadOnlyCollection<string> knownTableNames)
+            string? stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyCollection<string> knownTableNames,
+            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure)
         {
             var result = new StepValidationResult();
 
@@ -268,6 +275,7 @@ namespace ReSet.Core.Services
 
             CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
+            CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -356,6 +364,90 @@ namespace ReSet.Core.Services
         /// batch·batch_shadow는 제외한다. 계획서가 새로 만드는 객체라 카탈로그에 없는
         /// 것이 정상이며, 그 판단은 BatchInfraObjectCollector가 단독 소유한다.
         /// </summary>
+        /// <summary>
+        /// 원본이 필터·분기에 쓰는 컬럼이 단계 본문에서 사라졌는지 본다.
+        ///
+        /// 실측(POQSettleProc13): 대상 테이블 19종과 오류코드 83개가 전부 맞고 배너도
+        /// 무결점이었는데, 원본이 정산 대상을 고르는 조건 12개가 계획서 어디에도 없었다
+        /// (S09의 SettleTarget·SettleState·HolidayPayFlag 등). 대상 집합이 달라지면
+        /// 금액이 달라지는데 아무 신호가 없었다 - 기계 검증이 스키마·이름 층만 보고
+        /// 로직 층을 비워 둔 자리다.
+        ///
+        /// 값은 대조하지 않고 컬럼 이름만 본다. 같은 조건을 명세서는 `UseState IN (0)`,
+        /// 계획서는 `UseState = 0`으로 쓰는데, 값까지 보면 실측에서 미검출의 27%가 이런
+        /// 동등 표현이었고 그 전부가 오탐이었다.
+        ///
+        /// 레거시 출신이 없는 단계는 물려받을 조건이 없으므로 대조하지 않는다.
+        /// </summary>
+        private static void CheckMissingConditionColumns(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
+            StepValidationResult result)
+        {
+            if (conditionColumnsByProcedure == null || conditionColumnsByProcedure.Count == 0)
+            {
+                Log.Information(
+                    "{Code}: 조건 컬럼 재료가 없어 로직 대조를 건너뜁니다.", step.Code);
+                return;
+            }
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var legacyProcedure in step.LegacyProcedures)
+            {
+                var key = BareObjectName(legacyProcedure);
+                if (key.Length == 0 || !conditionColumnsByProcedure.TryGetValue(key, out var conditions))
+                {
+                    continue;
+                }
+
+                foreach (var column in conditions.BodyColumns)
+                {
+                    ReportIfAbsent(stepMarkdown, step, key, column, reported, result);
+                }
+
+                foreach (var pair in conditions.ByUdf)
+                {
+                    // 계획서가 UDF를 그대로 호출하면 그 안의 조건은 옮겨 적을 것이 아니다.
+                    // 이 면제가 없으면 실측에서 검출 15건 중 14건이 오탐이었다.
+                    if (ContainsToken(stepMarkdown, pair.Key))
+                    {
+                        continue;
+                    }
+
+                    // 호출도 하지 않고 조건도 없으면, UDF 로직을 옮기겠다고 해 놓고
+                    // 그 안의 판단 기준을 빠뜨린 것이다.
+                    foreach (var column in pair.Value)
+                    {
+                        ReportIfAbsent(stepMarkdown, step, pair.Key, column, reported, result);
+                    }
+                }
+            }
+        }
+
+        private static void ReportIfAbsent(
+            string stepMarkdown,
+            BatchStepPlan step,
+            string origin,
+            string column,
+            HashSet<string> reported,
+            StepValidationResult result)
+        {
+            if (string.IsNullOrWhiteSpace(column) ||
+                ContainsToken(stepMarkdown, column.Trim()) ||
+                !reported.Add(column.Trim()))
+            {
+                return;
+            }
+
+            // "컬럼명이 없다"로 적으면 모델이 이름만 끼워 넣는 쪽으로 유도된다.
+            // 무엇이 빠졌는지가 아니라 무엇을 해야 하는지를 말한다.
+            result.Errors.Add(
+                $"{step.Code} 섹션에 원본 `{origin}`이 `{column}`(으)로 거르는 로직이 없습니다. " +
+                "그 컬럼을 쓰는 조건절·분기를 원본대로 본문에 넣으십시오 - 이 조건이 빠지면 " +
+                "처리 대상 집합이 원본과 달라집니다.");
+        }
+
         /// <summary>
         /// 배치 전용 객체가 <see cref="BatchInfraObjectCollector.Schemas"/> 바깥의
         /// 스키마에 놓였는지 본다.

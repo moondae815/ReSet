@@ -7,6 +7,33 @@ namespace ReSet.Core.Tests
 {
     public class MechanicalValidatorBatchStepTests
     {
+        // 조건 컬럼 대조를 쓰지 않는 테스트용 빈 재료. 비어 있으면 검사가
+        // 소프트 스킵하므로 이 테스트들이 보는 동작은 달라지지 않는다.
+        private static readonly System.Collections.Generic.IReadOnlyDictionary<string, SpecConditions> NoConditions =
+            new System.Collections.Generic.Dictionary<string, SpecConditions>();
+
+        /// <summary>본체 조건만 가진 재료.</summary>
+        private static IReadOnlyDictionary<string, SpecConditions> Body(string procedure, params string[] columns) =>
+            new Dictionary<string, SpecConditions>(StringComparer.OrdinalIgnoreCase)
+            {
+                [procedure] = new SpecConditions(
+                    columns,
+                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase))
+            };
+
+        /// <summary>UDF 하나에 딸린 조건만 가진 재료.</summary>
+        private static IReadOnlyDictionary<string, SpecConditions> Udf(
+            string procedure, string udf, params string[] columns) =>
+            new Dictionary<string, SpecConditions>(StringComparer.OrdinalIgnoreCase)
+            {
+                [procedure] = new SpecConditions(
+                    Array.Empty<string>(),
+                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [udf] = columns
+                    })
+            };
+
         private static BatchStepPlan Step(params string[] targetTables) => new(
             Code: "S17",
             Name: "완료 파티션 원자적 게시",
@@ -41,7 +68,7 @@ namespace ReSet.Core.Tests
             // 이 작업의 DDL 55종 어디에도 없다. 구현 자체가 불가능한 지시다.
             var markdown = Section("EXEC batch.SwitchPublishedPartition @TargetTable = N'dbo.TSettleSummary';");
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Contains(result.Errors, e => e.Contains("dbo.TSettleSummary", StringComparison.Ordinal));
             // 본문 결함이므로 재생성으로 고칠 수 있어야 한다 - PlanDefects가 아니다.
@@ -55,7 +82,7 @@ namespace ReSet.Core.Tests
             // 모든 단계가 전부 오탐으로 걸린다.
             var markdown = Section("INSERT INTO batch.POQSettleCheckpoint SELECT * FROM dbo.TSettleMst;");
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("POQSettleCheckpoint", StringComparison.Ordinal));
         }
@@ -65,7 +92,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = Section("UPDATE dbo.TSettleMst SET OutState = 9;");
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             // 이전 단언 `e.Contains("존재하지")`는 실제 오류 메시지("...없습니다.")에
             // 그 부분 문자열이 아예 없어, 구현이 무엇을 하든 항상 통과했다 - 이름이
@@ -89,7 +116,7 @@ namespace ReSet.Core.Tests
                 ```
                 """;
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("dbo.TSettleSummary", StringComparison.Ordinal));
         }
@@ -106,7 +133,7 @@ namespace ReSet.Core.Tests
                 WHERE a.YMD = @Ymd;
                 """);
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Empty(result.Errors);
         }
@@ -123,7 +150,7 @@ namespace ReSet.Core.Tests
                 conn.Execute("UPDATE dbo.TSettleMst SET OutState = 9", new { runId });
                 """);
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Empty(result.Errors);
         }
@@ -139,7 +166,7 @@ namespace ReSet.Core.Tests
                 EXEC batch.SwitchPublishedPartition @TargetTable = N'dbo.TSettleSummary';
                 """);
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Single(result.Errors);
             Assert.Contains(result.Errors, e => e.Contains("dbo.TSettleSummary", StringComparison.Ordinal));
@@ -153,7 +180,7 @@ namespace ReSet.Core.Tests
             var markdown = Section("EXEC batch.SwitchPublishedPartition @TargetTable = N'dbo.TSettleSummary';");
 
             var result = new MechanicalValidator().ValidateBatchStep(
-                markdown, Step("dbo.TSettleMst"), Array.Empty<string>());
+                markdown, Step("dbo.TSettleMst"), Array.Empty<string>(), NoConditions);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("dbo.TSettleSummary", StringComparison.Ordinal));
         }
@@ -185,7 +212,7 @@ namespace ReSet.Core.Tests
                 ```
                 """;
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, NoConditions);
 
             Assert.DoesNotContain(
                 result.Errors, e => e.Contains("UP_Util_PG_Client_CMRate_Ins", StringComparison.Ordinal));
@@ -203,7 +230,7 @@ namespace ReSet.Core.Tests
                 EXEC poqbatch.usp_S04_DailyRateSnapshot @Ymd = @Ymd;
                 """);
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Single(result.Errors);
             Assert.Contains(result.Errors, e => e.Contains("poqbatch", StringComparison.Ordinal));
@@ -224,7 +251,7 @@ namespace ReSet.Core.Tests
                 """);
 
             var result = new MechanicalValidator().ValidateBatchStep(
-                markdown, Step("dbo.TSettleMst"), Array.Empty<string>());
+                markdown, Step("dbo.TSettleMst"), Array.Empty<string>(), NoConditions);
 
             Assert.Contains(result.Errors, e => e.Contains("poqbatch", StringComparison.Ordinal));
         }
@@ -257,10 +284,157 @@ namespace ReSet.Core.Tests
                 ```
                 """;
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, NoConditions);
 
             Assert.Contains(result.Errors, e => e.Contains("dbo.BatchExecution", StringComparison.Ordinal));
             // 본문을 batch 스키마로 옮기면 해결되므로 재생성 피드백에 실려야 한다.
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAStepThatDropsAConditionColumnItsOriginFiltersOn()
+        {
+            // 실측(POQSettleProc13): S09가 `SettleTarget = 1`, `SettleState = 1`,
+            // `HolidayPayFlag = 2` 등 다섯 컬럼으로 거르는 로직을 통째로 빠뜨렸는데
+            // 배너는 무결점이었다. 대상 테이블도 오류코드도 다 맞았고, 아무도 "그
+            // 컬럼으로 거르는가"를 묻지 않았기 때문이다. 대상 집합이 달라지면
+            // 금액이 달라진다.
+            var step = new BatchStepPlan(
+                Code: "S09",
+                Name: "수납 지급 예정일 산정",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXPECT_PROC" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: new[] { "-1" },
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Body("UP_UTIL_SETTLE_EXPECT_PROC", "SettleTarget");
+
+            var markdown = Section("UPDATE dbo.TSettleMst SET OutYMD = @Ymd; -- 실패 시 -1");
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("SettleTarget", StringComparison.Ordinal));
+            // 본문을 다시 쓰면 고칠 수 있으므로 재생성 피드백에 실려야 한다.
+            Assert.True(result.RegenerationCanFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptAConditionColumnWrittenWithADifferentOperator()
+        {
+            // 명세서는 `UseState IN (0)`, 계획서는 `UseState = 0`으로 쓴다. 값까지
+            // 대조하면 실측에서 미검출의 27%가 이런 동등 표현이었고 전부 오탐이었다.
+            var step = new BatchStepPlan(
+                Code: "S09",
+                Name: "수납 지급 예정일 산정",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXPECT_PROC" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Body("UP_UTIL_SETTLE_EXPECT_PROC", "UseState");
+
+            var markdown = Section("UPDATE dbo.TSettleMst SET OutYMD = @Ymd WHERE UseState = 0;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UseState", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandConditionColumnsFromAStepWithNoLegacyOrigin()
+        {
+            // 잠금·저널 같은 신규 단계에는 물려받을 원본 조건이 없다. 여기에 대조를
+            // 걸면 규칙이 없는 곳에서 결함이 생긴다.
+            var step = new BatchStepPlan(
+                Code: "S02",
+                Name: "실행 잠금",
+                LegacyProcedures: Array.Empty<string>(),
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Body("UP_UTIL_SETTLE_EXPECT_PROC", "SettleTarget");
+
+            var markdown = """
+                ### S02 실행 잠금
+
+                ```sql
+                INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.Empty(result.Errors);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldExcuseAUdfConditionWhenTheStepCallsThatUdf()
+        {
+            // 실측(POQSettleProc13): S09가 UIF_SettleYMD를 7회 호출하는데도 그 안의
+            // SettleTarget·SettleState를 누락으로 보고했다. 검출 15건 중 14건이 이
+            // 오인이었다 - 계획서가 UDF를 그대로 부르면 그 안의 조건을 옮겨 적을
+            // 이유가 없다.
+            var step = new BatchStepPlan(
+                Code: "S09",
+                Name: "수납 지급 예정일 산정",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXPECT_PROC" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Udf("UP_UTIL_SETTLE_EXPECT_PROC", "UIF_SettleYMD", "SettleTarget");
+
+            var markdown = """
+                ### S09 수납 지급 예정일 산정
+
+                ```sql
+                UPDATE dbo.TSettleMst
+                SET OutYMD = (SELECT OutYMD FROM dbo.UIF_SettleYMD(@Ymd, @PeriodId));
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            // 카탈로그에 UDF를 넣지 않아 미지 테이블 검사가 따로 울지만, 이 테스트가
+            // 보는 것은 조건 대조뿐이다. 실제 산출물에서는 UDF도 DDL 카탈로그에 있다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("거르는 로직이 없습니다", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldDemandAUdfConditionWhenTheStepNeitherCallsItNorInlinesIt()
+        {
+            // 면제의 반대편. UDF를 부르지도 않고 그 판단 기준도 본문에 없으면, 로직을
+            // 옮기겠다고 해 놓고 무엇으로 거르는지를 빠뜨린 것이다. 이 갈래가 없으면
+            // UDF 조건은 검사에서 통째로 사라져 검출력이 0이 된다.
+            var step = new BatchStepPlan(
+                Code: "S09",
+                Name: "수납 지급 예정일 산정",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXPECT_PROC" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(),
+                Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var conditions = Udf("UP_UTIL_SETTLE_EXPECT_PROC", "UIF_SettleYMD", "SettleTarget");
+
+            var markdown = """
+                ### S09 수납 지급 예정일 산정
+
+                지급 예정일 계산은 C#으로 이관한다.
+
+                ```sql
+                UPDATE dbo.TSettleMst SET OutYMD = @Calculated;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, step, Catalog, conditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("SettleTarget", StringComparison.Ordinal));
             Assert.True(result.RegenerationCanFix);
         }
 
@@ -271,7 +445,7 @@ namespace ReSet.Core.Tests
             // 한정한다. 카탈로그가 아는 테이블 선언까지 의심하면 정상 단계가 전부 걸린다.
             var markdown = Section("INSERT INTO dbo.TSettleMst (Ymd) VALUES (@Ymd);");
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog);
+            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Empty(result.Errors);
         }
