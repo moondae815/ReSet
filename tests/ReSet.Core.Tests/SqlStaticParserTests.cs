@@ -1099,5 +1099,71 @@ END";
 
             Assert.Contains("EDIReqYmd", attributed, StringComparer.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void Analyze_UpdateSetRhsColumnFromJoinedTable_ShouldNotBeAttributedToUpdateTarget()
+        {
+            // 리뷰어 회귀 재현 1: SET 우변의 한정자 없는 컬럼은 조인된 소스 테이블의
+            // 것일 수 있다. UPDATE 문맥이라는 이유만으로 갱신 대상에 붙이면, 갱신
+            // 대상 테이블에 존재하지 않는 컬럼을 스키마 표가 요구하게 되어 L1이
+            // 절대 만족될 수 없는 무한 재시도를 만든다. SET 대상 위치(EDIReqYmd)만
+            // 붙어야 하고, 우변의 비한정 컬럼(OnlyOnJoinedTable)은 붙으면 안 된다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.SetEdiDate
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    A.EDIReqYmd = OnlyOnJoinedTable
+    FROM   dbo.TSettleMst   A
+    JOIN   dbo.TPLCardEDIMst E ON A.PLTID = E.PLTID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var targetCols = result.ReferencedColumnsPerTable
+                .Where(kvp => kvp.Key.EndsWith("TSettleMst", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(kvp => kvp.Value)
+                .ToList();
+
+            Assert.Contains("EDIReqYmd", targetCols, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("OnlyOnJoinedTable", targetCols, StringComparer.OrdinalIgnoreCase);
+
+            var anyTableCols = result.ReferencedColumnsPerTable.Values.SelectMany(v => v);
+            Assert.DoesNotContain("OnlyOnJoinedTable", anyTableCols, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Analyze_UpdateWhereColumnFromJoinedTable_ShouldNotBeAttributedToUpdateTarget()
+        {
+            // 리뷰어 회귀 재현 2: WHERE 절의 한정자 없는 컬럼도 조인된 소스 테이블의
+            // 것일 수 있다. UPDATE 문맥 전체가 아니라 SET 대상 위치만 갱신 대상에
+            // 귀속되어야 한다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.SetEdiDate
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    A.EDIReqYmd = E.ReqYMD
+    FROM   dbo.TSettleMst   A
+    JOIN   dbo.TPLCardEDIMst E ON A.PLTID = E.PLTID
+    WHERE  OnlyOnEWhereCol = 'X'
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var targetCols = result.ReferencedColumnsPerTable
+                .Where(kvp => kvp.Key.EndsWith("TSettleMst", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(kvp => kvp.Value)
+                .ToList();
+
+            Assert.Contains("EDIReqYmd", targetCols, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("OnlyOnEWhereCol", targetCols, StringComparer.OrdinalIgnoreCase);
+
+            var anyTableCols = result.ReferencedColumnsPerTable.Values.SelectMany(v => v);
+            Assert.DoesNotContain("OnlyOnEWhereCol", anyTableCols, StringComparer.OrdinalIgnoreCase);
+        }
     }
 }

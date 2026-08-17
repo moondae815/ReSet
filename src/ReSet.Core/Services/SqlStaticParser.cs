@@ -195,7 +195,6 @@ namespace ReSet.Core.Services
         private readonly Stack<QuerySpecification> _querySpecs = new();
         private int _indentLevel = 0;
         private string? _currentInsertTarget = null;
-        private string? _currentUpdateTarget = null;
         private TSqlFragment? _currentDmlTargetNode = null;
         private bool _dmlTargetResolved = false;
         private HashSet<string>? _currentCteNames = null;
@@ -332,15 +331,10 @@ namespace ReSet.Core.Services
             _statementContext.Push("UPDATE");
             var prevTargetNode = _currentDmlTargetNode;
             var prevResolved = _dmlTargetResolved;
-            var prevUpdateTarget = _currentUpdateTarget;
 
             _currentDmlTargetNode = node.Target;
             _dmlTargetResolved = RecordDmlTarget(
                 node.Target, node.FromClause, UpdateTables, _foundUpdate, _currentCteNames, out var resolvedTarget);
-            // 한정자 없는 SET 대상 컬럼(예: SET EDIReqYmd = ...)은 갱신 대상 테이블의
-            // 것이다. 컬럼 리졸버 폴백이 이 값을 그대로 쓸 수 있도록 저장해 둔다 -
-            // 대상을 새로 추론하지 않고 RecordDmlTarget이 이미 푼 값만 재사용한다.
-            _currentUpdateTarget = _dmlTargetResolved ? resolvedTarget : null;
 
             // 대상을 풀지 못한 문장은 매핑을 만들지 않는다. 잘못 푼 테이블 이름에 컬럼을
             // 붙이면 L1이 존재하지 않는 표를 요구하게 되고, 그것은 무한 재시도가 된다.
@@ -353,7 +347,6 @@ namespace ReSet.Core.Services
 
             _currentDmlTargetNode = prevTargetNode;
             _dmlTargetResolved = prevResolved;
-            _currentUpdateTarget = prevUpdateTarget;
             _statementContext.Pop();
         }
 
@@ -392,6 +385,16 @@ namespace ReSet.Core.Services
 
             // SET 절이 컬럼을 하나도 대입하지 않으면(변수 대입뿐이면) 표로 만들 것이 없다.
             if (assignments.Count == 0) return;
+
+            // SET 대입 목록(assignments)은 AssignmentSetClause/FunctionCallSetClause의
+            // Column에서만 뽑는다 - WHERE·ON·SET 우변은 절대 여기 섞이지 않는다. 그래서
+            // 이 위치가 "한정자 없는 컬럼이 갱신 대상의 것"이라고 확신할 수 있는 유일한
+            // 지점이다. 컬럼 리졸버 폴백에서 UPDATE 문맥 전체를 갱신 대상으로 돌리면
+            // 조인된 다른 테이블의 컬럼까지 잘못 귀속되므로(리뷰 회귀 실측) 여기서만 붙인다.
+            foreach (var assignment in assignments)
+            {
+                RegisterReferencedColumn(targetTable, assignment.Column);
+            }
 
             _updateOrdinals.TryGetValue(targetTable, out var previous);
             _updateOrdinals[targetTable] = previous + 1;
@@ -957,15 +960,14 @@ namespace ReSet.Core.Services
                         {
                             targetTable = _currentInsertTarget;
                         }
-                        // 한정자 없는 SET 대상 컬럼은 갱신 대상 테이블의 것이다. 이 분기가
-                        // 없으면 "Unknown"으로 버려져 프롬프트 스키마 표에서 사라지고, 규칙
-                        // 389가 명세서에 거짓 "스키마 불일치"를 쓰게 한다(EXPECT_PROC 실측).
-                        // 대상을 새로 추론하지 않는다 - RecordUpdateMapping이 이미 푼 값만 쓴다.
-                        else if (_statementContext.Count > 0 && _statementContext.Peek() == "UPDATE"
-                                 && _dmlTargetResolved && !string.IsNullOrEmpty(_currentUpdateTarget))
-                        {
-                            targetTable = _currentUpdateTarget;
-                        }
+                        // UPDATE 문 안의 한정자 없는 컬럼은 여기서 갱신 대상에 귀속하지 않는다.
+                        // UPDATE...FROM은 QuerySpecification을 만들지 않으므로 이 위치에서는
+                        // SET 대상 컬럼과 WHERE/ON/SET 우변의 조인 소스 컬럼을 구분할 수 없다
+                        // (리뷰에서 실측: UPDATE 문맥이라는 이유만으로 붙이면 조인된 다른
+                        // 테이블의 컬럼까지 갱신 대상에 잘못 귀속된다). SET 대상 컬럼은
+                        // RecordUpdateMapping이 문법적으로 정확한 위치(AssignmentSetClause/
+                        // FunctionCallSetClause의 Column)에서 직접 등록한다 - 그쪽이 유일하게
+                        // 모호함 없는 지점이다.
                         else if (ReferencedTables.Count == 1)
                         {
                             targetTable = ReferencedTables[0];
@@ -979,16 +981,21 @@ namespace ReSet.Core.Services
 
                 if (targetTable != "Unknown")
                 {
-                    if (!ReferencedColumnsPerTable.TryGetValue(targetTable, out var columns))
-                    {
-                        columns = new List<string>();
-                        ReferencedColumnsPerTable[targetTable] = columns;
-                    }
-                    if (!columns.Contains(columnName, StringComparer.OrdinalIgnoreCase))
-                    {
-                        columns.Add(columnName);
-                    }
+                    RegisterReferencedColumn(targetTable, columnName);
                 }
+            }
+        }
+
+        private void RegisterReferencedColumn(string tableName, string columnName)
+        {
+            if (!ReferencedColumnsPerTable.TryGetValue(tableName, out var columns))
+            {
+                columns = new List<string>();
+                ReferencedColumnsPerTable[tableName] = columns;
+            }
+            if (!columns.Contains(columnName, StringComparer.OrdinalIgnoreCase))
+            {
+                columns.Add(columnName);
             }
         }
 
