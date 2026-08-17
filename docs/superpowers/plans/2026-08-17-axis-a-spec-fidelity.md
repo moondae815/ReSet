@@ -13,7 +13,16 @@
 ## Global Constraints
 
 - **테스트 명령**: `dotnet test`. 실패 0, 건너뜀 0이어야 한다.
-- **경고 상한**: `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`이 **정확히 8**이어야 한다. 증분 빌드는 경고를 다시 보고하지 않으므로 반드시 `clean` 후 센다.
+- **경고 상한**: `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`이 **9를 넘지 않아야** 한다. 증분 빌드는 경고를 다시 보고하지 않으므로 반드시 `clean` 후 센다.
+
+  이 숫자는 실측이다. `ORIGINAL_BASE`(`ea66b82`)에서 직접 세어 **9건**이었고, 내역은
+  `DbMetadataServiceTests.cs` 8건 + `AiServiceTests.cs` 1건이다. **`AGENTS.md:217`은
+  "정확히 8건(모두 `DbMetadataServiceTests.cs`)"이라 하는데 그것이 낡았다** — 그 뒤
+  `AiServiceTests.cs`에 하나가 늘었고 체크리스트가 따라가지 못했다. 이 계획의 초판도
+  그 숫자를 그대로 옮겨 적었다가 Task 1 워커가 잡아냈다.
+
+  `AGENTS.md`를 고치는 것은 이 계획의 범위가 아니다(이 계획이 만든 결함이 아니고,
+  건드리면 모든 태스크의 쓰기 집합에 문서 한 개가 더 붙는다). 별건으로 올린다.
 - **소프트 페일 (AGENTS.md 범주 2)**: 추출기·검사기 자체 예외는 try-catch로 격리하고 파이프라인을 죽이지 않는다. 재료를 빈 목록으로 두고 생성을 계속한다.
 - **취소 정책**: 취소 가능한 `await`를 감싸는 `catch`에는 `when (ex is not OperationCanceledException)` 필터가 필수다. `CancellationPolicyTests`가 Roslyn으로 자동 검사한다. **이 계획의 추출기는 전부 동기 순수 함수이므로 해당 없음** — `await`를 넣지 마라.
 - **L1 오류로 만들 수 있는 것**: 모델이 프롬프트에서 **실제로 받은** 재료만. 프롬프트에 없는 것을 L1이 요구하면 무한 재시도가 된다. 프롬프트·파서가 거짓을 말한 경우는 `SpecExpectations.InputDefects`(경고 채널)로 보낸다.
