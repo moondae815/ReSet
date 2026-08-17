@@ -534,6 +534,21 @@ namespace ReSet.Core.Services
                     + "그것이 호출 계층에 미치는 영향을 기술하셨습니까?");
             }
 
+            // Util_Settle_Summary 실측 - 헤더 주석이 내부 SP 호출을 NONE이라 선언하는데
+            // 실제로는 EXEC가 둘 있었다. 명세서는 두 EXEC를 정확히 적으면서도 헤더가
+            // 모순된다는 사실 자체는 빠뜨렸다. MechanicalValidator.CheckHeaderContractContradiction(L1)이
+            // 대조하는 것은 "NONE 선언 + 실제 EXEC" 한 패턴뿐이지만, 이 체크리스트는
+            // 헤더가 선언할 수 있는 다른 계약(반환값 규약 등)의 모순도 함께 상기시킨다 -
+            // 헤더 주석이 있을 때만 의미가 있으므로 Header 종류가 있을 때만 낸다.
+            if (sourceComments.Any(b => b.Kind == "Header"))
+            {
+                checklistSb.AppendLine(
+                    "- [ ] 헤더 주석이 선언한 계약(반환값 규약, 내부 SP 호출 유무 등)이 "
+                    + "실제 구현과 어긋나는 부분이 있다면, 그 모순 자체를 명세서에 "
+                    + "기록하셨습니까? 구현만 옳게 적고 주석이 낡았다는 사실을 빠뜨리면 "
+                    + "다음 사람이 같은 조사에 다시 들어갑니다.");
+            }
+
             var userPrompt = $@"
 <stored-procedure-context>
   <basic-info>
@@ -1756,6 +1771,20 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     checklistSb.AppendLine(
                         $"- [ ] 프로시저 본문이 설정하는 세션 옵션({string.Join(", ", sessionOptionsForCrud)})과 "
                         + "그것이 호출 계층에 미치는 영향을 기술하셨습니까?");
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 헤더/구현 모순 확인 요구를
+                // 받아야 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+                // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
+                // 모델 경로는 이 규칙을 한 번도 받지 못한다(SourceComment·Rounding·
+                // SessionOption 체크리스트와 같은 모양의 결함).
+                if (sourceCommentsForCrud.Any(b => b.Kind == "Header"))
+                {
+                    checklistSb.AppendLine(
+                        "- [ ] 헤더 주석이 선언한 계약(반환값 규약, 내부 SP 호출 유무 등)이 "
+                        + "실제 구현과 어긋나는 부분이 있다면, 그 모순 자체를 명세서에 "
+                        + "기록하셨습니까? 구현만 옳게 적고 주석이 낡았다는 사실을 빠뜨리면 "
+                        + "다음 사람이 같은 조사에 다시 들어갑니다.");
                 }
                 checklistText = checklistSb.ToString();
             }

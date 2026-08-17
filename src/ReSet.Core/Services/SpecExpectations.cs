@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 using ReSet.Core.Models;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -55,6 +58,13 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string> SessionOptions { get; init; } = Array.Empty<string>();
 
         /// <summary>
+        /// 원본 DDL에 동적 SQL이 아닌, 이름이 고정된 저장 프로시저 EXEC 호출이 있는가.
+        /// 헤더 주석이 "내부 SP 호출 없음"이라 선언했는데 실제로는 있는 모순을 잡는
+        /// 판정에만 쓴다.
+        /// </summary>
+        public bool HasInternalProcedureCall { get; init; }
+
+        /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
         /// </summary>
@@ -96,10 +106,22 @@ namespace ReSet.Core.Services
             var sourceComments = SourceCommentExtractor.Extract(spDef.DdlText);
             var roundingCalls = RoundingSemanticsExtractor.Extract(spDef.DdlText);
             var sessionOptions = SessionOptionsExtractor.Extract(spDef.DdlText);
+            var hasInternalProcedureCall = DetectInternalProcedureCall(spDef.DdlText);
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
             // 스위트는 초록으로 남는다.
+            //
+            // hasInternalProcedureCall은 예외다 - 일부러 여기 잇지 않는다. 이 신호는
+            // 헤더 주석이 "NONE"이라 선언했을 때만 의미가 있고, 헤더 주석이 있으면
+            // sourceComments가 이미 비어 있지 않으므로(SourceCommentExtractor는 CREATE
+            // 이전 모든 주석 줄을 Header로 담는다) 이 항이 없어도 null 판정은 이미
+            // sourceComments 항이 넓혀 준다. 반대로 헤더 주석이 아예 없는 SP는 이
+            // 신호가 true여도 대조할 헤더 계약이 없으므로 null로 남아도 정확하다 -
+            // 여기 이었다면 "EXEC만 있고 주석은 하나도 없는" SP까지 대조 대상으로
+            // 끌어들여, 대조할 게 없는데도 Validate가 CheckHeaderContractContradiction을
+            // 도는 낭비가 생긴다(결과는 같지만 조기 반환의 취지 - "정말 대조할 것이
+            // 있을 때만 확장한다" - 를 흐린다).
             if (updateColumns.Count == 0
                 && promptSchemaColumns.Count == 0
                 && inputDefects.Count == 0
@@ -119,8 +141,75 @@ namespace ReSet.Core.Services
                 HasLinkedServerReference = hasLinkedServerReference,
                 SourceComments = sourceComments,
                 RoundingCalls = roundingCalls,
-                SessionOptions = sessionOptions
+                SessionOptions = sessionOptions,
+                HasInternalProcedureCall = hasInternalProcedureCall
             };
+        }
+
+        /// <summary>
+        /// 원본 DDL에 동적 SQL이 아닌 이름 고정 EXEC 호출이 있는지 AST로 직접 훑는다.
+        ///
+        /// [ControlFlowSummary를 쓰지 않는 이유] SqlStaticParser.ExplicitVisit(ExecuteStatement)를
+        /// 실측하면, sp_executesql·EXEC(@SQL) 같은 <b>동적 SQL</b> 실행만 경고로
+        /// ControlFlowSummary에 남고 `EXEC dbo.OtherProc ...`처럼 이름이 고정된 정상
+        /// 내부 SP 호출은 아무 흔적도 남기지 않는다. 그래서
+        /// analysis.ControlFlowSummary.Any(s =&gt; s.Contains("EXEC"))로 이 신호를
+        /// 판정하면 UP_Util_Settle_Summary(EXEC dbo.UP_Util_Settle_Summary_AcqManual 등,
+        /// 둘 다 이름 고정 호출)에서도 항상 false가 되어 이 검사 전체가 죽은 채
+        /// 테스트만 초록으로 남는다. 게다가 그 문자열의 "EXEC (@SQL) 동적 SQL 문자열
+        /// 실행 감지됨" 메시지 자체가 우연히 "EXEC" 부분 문자열을 포함하므로, 같은
+        /// 판정식은 진짜 내부 SP 호출이 아닌 동적 SQL 문자열 실행에서 반대로 오탐할
+        /// 수도 있었다 - 두 방향 모두 잘못이다. 그래서 이 메서드가 AST를 직접 훑어
+        /// ExecutableProcedureReference 노드만(동적 SQL 노드 제외) 본다.
+        /// </summary>
+        private static bool DetectInternalProcedureCall(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return false;
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out _);
+                if (fragment == null) return false;
+
+                var visitor = new InternalProcedureCallVisitor();
+                fragment.Accept(visitor);
+                return visitor.Found;
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+                Log.Warning(ex, "[SpecExpectations] 내부 SP 호출 탐지 실패 - false로 진행합니다.");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// EXEC 대상이 이름 고정 프로시저 참조(ExecutableProcedureReference)이고 그
+        /// 이름이 sp_executesql이 아니면 내부 SP 호출로 본다. EXEC(@sql) 같은 문자열
+        /// 실행(ExecutableStringList)은 여기 매치되지 않는다 - 그건 동적 SQL이지
+        /// "내부 SP 호출"이 아니다.
+        /// </summary>
+        private sealed class InternalProcedureCallVisitor : TSqlFragmentVisitor
+        {
+            public bool Found { get; private set; }
+
+            public override void Visit(ExecuteStatement node)
+            {
+                if (Found) return;
+
+                if (node.ExecuteSpecification?.ExecutableEntity is not ExecutableProcedureReference procRef)
+                {
+                    return;
+                }
+
+                var name = procRef.ProcedureReference?.ProcedureReference?.Name?.BaseIdentifier?.Value;
+                if (string.IsNullOrEmpty(name)) return;
+                if (string.Equals(name, "sp_executesql", StringComparison.OrdinalIgnoreCase)) return;
+
+                Found = true;
+            }
         }
 
         /// <summary>

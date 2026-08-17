@@ -659,6 +659,64 @@ COMMIT TRAN"
             Assert.Contains("호출 계층에 미치는 영향", body);
         }
 
+        /// <summary>
+        /// Util_Settle_Summary 실측 형태 - CREATE 이전의 헤더 주석(Header 종류)이
+        /// "Inner SP : NONE"을 선언한다. 체크리스트 항목이 실제 프롬프트에 닿는지
+        /// 증명하기 위한 헬퍼다. 원본 DDL이 이미 &lt;sp-source-ddl&gt;로 프롬프트에
+        /// 통째로 들어가므로, 어서션은 그 DDL 원문에는 없는 체크리스트 고유 문구를
+        /// 써야 한다 - 그렇지 않으면 체크리스트 항목이 없어도 원문 병기만으로
+        /// 통과해 버려 아무것도 증명하지 못한다.
+        /// </summary>
+        private static SpDefinition ProbeSpDefWithHeaderComment()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_Util_Settle_Summary",
+                DdlText = @"
+-- Inner SP        : NONE
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary AS
+BEGIN
+    EXEC dbo.OtherProc
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldContainTheHeaderContractContradictionChecklistItem()
+        {
+            // 메인 생성 경로(BuildSpecificationPrompts). 항목이 빠지면 이 어서션이
+            // 실패해야 한다. "헤더 주석이 선언한 계약"은 체크리스트 문구에만 있고
+            // 원본 DDL(&lt;sp-source-ddl&gt;)에는 없다 - DDL 원문 병기만으로는
+            // 통과할 수 없다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDefWithHeaderComment(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("헤더 주석이 선언한 계약", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldContainTheHeaderContractContradictionChecklistItem()
+        {
+            // 위 테스트의 짝. 지역 모델 CrudAnalysis 경로(BuildSpecSectionPrompts의
+            // "CrudAnalysis" 분기)는 지역 모델의 최초 생성 경로이자 L3 재생성 경로다 -
+            // BuildSpecificationPrompts에만 항목을 두면 이 경로가 규칙을 받지 못한 채로
+            // 남는다(SourceComment·Rounding·SessionOption 체크리스트와 같은 모양의
+            // 결함이 재발할 수 있다). 이 테스트는 그 분기 자체를 대상으로 삼는다 -
+            // 항목이 이 분기에서만 삭제돼도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDefWithHeaderComment(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("헤더 주석이 선언한 계약", body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_InsertOnlyWithNoThreePartReferences_ShouldGroundTheEmptyCase()
         {

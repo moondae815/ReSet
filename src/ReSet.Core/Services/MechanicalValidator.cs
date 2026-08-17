@@ -22,6 +22,7 @@ namespace ReSet.Core.Services
         SourceCommentMissing,
         RoundingSemanticsMissing,
         SessionOptionMissing,
+        HeaderContractContradiction,
         General
     }
 
@@ -115,6 +116,7 @@ namespace ReSet.Core.Services
                     CheckSourceComments(cleansed, expectations, result);
                     CheckRoundingSemantics(cleansed, expectations, result);
                     CheckSessionOptions(cleansed, expectations, result);
+                    CheckHeaderContractContradiction(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1242,6 +1244,58 @@ namespace ReSet.Core.Services
                     RawContext = $"SET {option}"
                 });
             }
+        }
+
+        /// <summary>
+        /// 명세서가 헤더/구현 모순을 인정했다고 볼 수 있는 표현들.
+        ///
+        /// [Fix Round 1 - 리뷰 실측] Task 6의 "내림"/"내림차순" 충돌과 같은 모양의
+        /// 함정을 코퍼스 전수 스캔(output/**/docs/Spec.md, 26건)으로 미리 검사했다.
+        /// "일치하지 않"은 3건이 걸렸는데 전부 이 검사가 찾는 모순 인정과 무관한
+        /// 문장이었다 - 특히 동기 사례인 UP_Util_Settle_Summary/docs/Spec.md:278의
+        /// "원천과 일치하지 않는 값이 전달되면"은 입력 검증 이야기지 헤더 주석
+        /// 이야기가 아니다. 이 토큰을 그대로 뒀다면 정작 헤더 모순을 한 번도 적지
+        /// 않은 그 문서가 우연히 이 문장 하나로 통과했을 것이다 - 이 검사가 막으려는
+        /// 결함이 검사 자체의 허점으로 새어 나가는 셈이다. 그래서 "일치하지 않"은
+        /// 뺐다. 나머지 네 토큰(모순, 스테일, 다릅니다, 어긋)은 같은 전수 스캔에서
+        /// 0건이라 알려진 충돌이 없다 - 새 충돌이 실측되면 여기 추가한다.
+        /// </summary>
+        private static readonly string[] ContradictionAcknowledgementTokens =
+        {
+            "모순", "스테일", "다릅니다", "어긋"
+        };
+
+        /// <summary>
+        /// 헤더 주석이 내부 SP 호출을 NONE이라 선언했는데 실제로 EXEC가 있고,
+        /// 명세서가 그 모순 자체를 적지 않았는지 본다.
+        ///
+        /// 이 한 패턴만 본다. 헤더 주석이 선언할 수 있는 계약은 여러 가지이고
+        /// 대부분은 기계가 구현과 대조할 수 없다 - 넓히면 오탐이 된다.
+        /// </summary>
+        private static void CheckHeaderContractContradiction(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (!expectations.HasInternalProcedureCall) return;
+
+            var headerClaimsNone = expectations.SourceComments.Any(
+                b => b.Kind == "Header"
+                     && b.Text.Contains("NONE", StringComparison.OrdinalIgnoreCase));
+            if (!headerClaimsNone) return;
+
+            var acknowledged = Array.Exists(
+                ContradictionAcknowledgementTokens,
+                t => markdown.Contains(t, StringComparison.Ordinal));
+            if (acknowledged) return;
+
+            const string message =
+                "헤더 주석이 내부 SP 호출을 NONE으로 선언했으나 실제로는 EXEC 호출이 있습니다. "
+                + "명세서가 이 모순(스테일 주석) 자체를 기록하지 않았습니다.";
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.HeaderContractContradiction,
+                Message = message
+            });
         }
 
         private static readonly Regex TableCellRegex =

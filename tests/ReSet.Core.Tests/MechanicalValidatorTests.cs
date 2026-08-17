@@ -2097,6 +2097,115 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_HeaderClaimsNoInternalCallButExecExists_ShouldBeAnError()
+        {
+            // Util_Settle_Summary 실측 - 헤더 주석이 내부 SP 호출을 NONE이라 선언하는데
+            // 실제로는 EXEC가 둘 있다. 명세서는 두 EXEC를 정확히 적었지만 헤더가
+            // 모순된다는 사실 자체는 적지 않았다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 두 개의 하위 프로시저를 EXEC로 호출합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_HeaderContradictionAcknowledged_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n헤더 주석은 내부 SP 호출이 NONE이라 선언하나 실제로는 EXEC가 둘 있어 "
+                + "주석이 구현과 모순됩니다(스테일 주석).\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_UnrelatedMismatchPhraseDoesNotAcknowledgeTheHeaderContradiction_ShouldStillBeAnError()
+        {
+            // Fix Round 1 리뷰 실측(Task 6의 "내림"/"내림차순"과 같은 모양) - 후보 토큰
+            // "일치하지 않"은 UP_Util_Settle_Summary의 실제 명세서(output/Procedures/
+            // dbo.UP_Util_Settle_Summary/docs/Spec.md:278)에 "원천과 일치하지 않는
+            // 값이 전달되면"이라는, 입력 검증을 말하는 문장으로 이미 등장한다. 그
+            // 우연한 등장이 헤더 모순 인정으로 잘못 인정되면, 헤더가 모순된다는
+            // 사실을 한 번도 적지 않은 바로 그 동기 사례 문서가 통과해 버린다 - 이
+            // 검사가 막으려는 결함이 검사 자체의 허점으로 새어 나가는 것과 같다.
+            // 그래서 "일치하지 않"은 인정 토큰 목록에서 뺐고, 이 테스트가 그 결정이
+            // 되돌려지지 않았음을 증명한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 두 개의 하위 프로시저를 EXEC로 호출합니다. "
+                + "입력 날짜의 형식과 유효성을 검사하지 않습니다. NULL 또는 원천과 "
+                + "일치하지 않는 값이 전달되면 직접 삭제·삽입 대상이 없을 수 있습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_NoInternalProcedureCall_ShouldNotCheckHeaderContractContradiction()
+        {
+            // 재료가 비면 소프트 스킵이다 - 내부 SP 호출이 없는 대다수 SP에서 거짓
+            // 결함이 나면 안 된다.
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_HeaderDoesNotClaimNone_ShouldNotCheckHeaderContractContradiction()
+        {
+            // 헤더가 NONE을 선언하지 않으면 대조할 모순이 없다 - 내부 SP 호출이
+            // 있어도 이 패턴 밖이다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : dbo.UP_Other", 3, Array.Empty<string>())
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
         public void From_WhenTheOnlyMaterialIsARoundingCall_ShouldNotBeNullAndShouldCarryTheCalls()
         {
             // Task 4가 세운 조기 반환 함정의 재현이다. roundingCalls를 조기 반환
@@ -2206,6 +2315,79 @@ END"
 
             Assert.NotNull(expectations);
             Assert.Contains("NOCOUNT", expectations!.SessionOptions);
+        }
+
+        [Fact]
+        public void From_WhenDdlHasHeaderCommentAndNamedInternalExecCall_ShouldSetHasInternalProcedureCallTrue()
+        {
+            // Util_Settle_Summary 실측 형태 - 이름 고정 EXEC(EXEC dbo.OtherProc)는
+            // SqlStaticParser.ControlFlowSummary에 아무 흔적도 남기지 않는다(동적 SQL만
+            // 경고로 남는다). ControlFlowSummary.Any(s => s.Contains("EXEC"))로 이 신호를
+            // 판정했다면 이 테스트가 실패해야 한다 - 그 판정식은 이 DDL에서 항상 false다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+-- Inner SP        : NONE
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    EXEC dbo.OtherProc @Ymd
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.True(expectations!.HasInternalProcedureCall);
+        }
+
+        [Fact]
+        public void From_WhenDdlOnlyHasDynamicSqlExec_ShouldNotSetHasInternalProcedureCall()
+        {
+            // 동적 SQL 실행(EXEC(@sql) 또는 sp_executesql)은 "내부 SP 호출"이 아니다.
+            // SqlStaticParser가 남기는 경고 문구("EXEC (@SQL) 동적 SQL 문자열 실행
+            // 감지됨")는 우연히 "EXEC" 부분 문자열을 포함하므로, ControlFlowSummary
+            // 기반 판정식은 이 케이스에서 반대 방향으로(내부 SP 호출이 아닌데 있다고)
+            // 오탐할 수 있었다. AST를 직접 보는 이 구현은 ExecutableStringList를
+            // ExecutableProcedureReference와 구분하므로 여기서 false여야 한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+-- Inner SP        : NONE
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @sql NVARCHAR(100) = 'SELECT 1'
+    EXEC (@sql)
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.False(expectations!.HasInternalProcedureCall);
+        }
+
+        [Fact]
+        public void From_WhenOnlyMaterialIsInternalProcedureCallWithoutAnyComments_ShouldStayNull()
+        {
+            // 의도적 결정의 문서화다. HasInternalProcedureCall은 조기 반환 조건에
+            // 잇지 않는다 - 이 신호는 헤더 주석이 NONE이라 선언했을 때만 의미가 있고,
+            // 헤더 주석이 있는 SP는 sourceComments 항이 이미 null 판정을 넓혀 준다.
+            // 반대로 주석이 하나도 없는 이 DDL처럼, 대조할 헤더 계약 자체가 없으면
+            // HasInternalProcedureCall이 true여도 여전히 null이 맞다 - CheckHeaderContractContradiction이
+            // 어차피 headerClaimsNone에서 조용히 스킵할 대상을 대조 표면에 끌어올릴
+            // 이유가 없다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    EXEC dbo.OtherProc
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.Null(expectations);
         }
 
         private static SpecExpectations EmptyExpectations() =>
