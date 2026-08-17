@@ -63,7 +63,7 @@ namespace ReSet.Core.Services
                         result.UpdateTables = visitor.UpdateTables;
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
-                        result.ThreePartTableReferences = visitor.ThreePartTableReferences;
+                        result.ThreePartObjectReferences = visitor.ThreePartObjectReferences;
                         result.ReferencedFunctions = visitor.ReferencedFunctions;
                         result.ProcedureParameters = visitor.ProcedureParameters;
                         result.DeclaredVariables = visitor.DeclaredVariables;
@@ -173,7 +173,7 @@ namespace ReSet.Core.Services
         public List<string> DeleteTables { get; } = new();
 
         public List<string> LinkedServerReferences { get; } = new();
-        public List<string> ThreePartTableReferences { get; } = new();
+        public List<string> ThreePartObjectReferences { get; } = new();
         public List<string> ReferencedFunctions { get; } = new();
         public List<string> ProcedureParameters { get; } = new();
         public List<string> DeclaredVariables { get; } = new();
@@ -353,9 +353,15 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 3부 이상으로 표기된 테이블 참조의 원문을 그대로 모은다. RegisteredTables 등은
+        /// 3부 이상으로 표기된 오브젝트 참조의 원문을 그대로 모은다. RegisteredTables 등은
         /// 별칭 해석과 정규화를 거치지만, 여기서는 원문 부분 수만 세고 값을 손대지
         /// 않는다 - "원본이 실제로 몇 부로 썼는가"가 이 목록의 유일한 존재 이유다.
+        ///
+        /// SchemaObjectName은 테이블 참조에만 붙지 않는다 - 3부로 호출된 테이블 반환
+        /// 함수(TVF, 예: SETTLE_CARD_DB.dbo.UF_GET_COMM4PG(...))의 호출 대상도 이
+        /// 노드 타입으로 나타나므로 함께 잡힌다. 의도적으로 걸러내지 않는다: TVF 3부
+        /// 호출도 실재하는 크로스 DB 참조이고, 걸러내면 그 사실을 정직하게 서술하는
+        /// 명세서가 오히려 L1(CheckIdentifierNotationClaims)에서 거짓으로 오탐된다.
         /// </summary>
         public override void ExplicitVisit(SchemaObjectName node)
         {
@@ -363,9 +369,9 @@ namespace ReSet.Core.Services
             if (identifiers != null && identifiers.Count >= 3)
             {
                 var text = string.Join(".", identifiers.Select(i => i.Value));
-                if (!ThreePartTableReferences.Contains(text, StringComparer.OrdinalIgnoreCase))
+                if (!ThreePartObjectReferences.Contains(text, StringComparer.OrdinalIgnoreCase))
                 {
-                    ThreePartTableReferences.Add(text);
+                    ThreePartObjectReferences.Add(text);
                 }
             }
 

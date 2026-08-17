@@ -82,11 +82,14 @@ namespace ReSet.Core.Models
         public List<string> LinkedServerReferences { get; set; } = new();
 
         /// <summary>
-        /// 원본이 3부 이상으로 표기한 테이블 참조의 원문. 비어 있으면 이 SP에
-        /// 크로스 DB 참조가 없다는 뜻이며, L1이 명세서의 표기 주장을 이것으로
+        /// 원본이 3부 이상으로 표기한 오브젝트 참조의 원문. 테이블만이 아니다 - 3부로
+        /// 호출된 테이블 반환 함수(TVF)도 포함한다. 둘 다 엄연한 크로스 DB 참조이고,
+        /// 함수 호출을 빼면 그 사실을 정직하게 서술하는 명세서가 L1에서 오탐으로
+        /// 걸린다(이 목록이 비었다고 잘못 판정하므로). 비어 있으면 이 SP에 3부 이상
+        /// 오브젝트 참조가 전혀 없다는 뜻이며, L1이 명세서의 표기 주장을 이것으로
         /// 반증한다. 정규화 대상이 아니다 - 원문이어야 근거가 된다.
         /// </summary>
-        public List<string> ThreePartTableReferences { get; set; } = new();
+        public List<string> ThreePartObjectReferences { get; set; } = new();
         public List<string> ReferencedFunctions { get; set; } = new();
         public List<string> ProcedureParameters { get; set; } = new();
         public List<string> DeclaredVariables { get; set; } = new();

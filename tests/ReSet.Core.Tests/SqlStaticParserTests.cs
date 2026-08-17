@@ -1181,7 +1181,7 @@ END";
             var result = new SqlStaticParser().Analyze(ddlText);
 
             Assert.Equal("dbo.TSettleMst", Assert.Single(result.AstUpdateMappings).RawTargetText);
-            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", result.ThreePartTableReferences);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", result.ThreePartObjectReferences);
         }
 
         [Fact]
@@ -1198,7 +1198,27 @@ END";
 
             var result = new SqlStaticParser().Analyze(ddlText);
 
-            Assert.Empty(result.ThreePartTableReferences);
+            Assert.Empty(result.ThreePartObjectReferences);
+        }
+
+        [Fact]
+        public void Analyze_ShouldIncludeThreePartTableValuedFunctionCallsAsObjectReferences()
+        {
+            // 리뷰 실측: SETTLE_CARD_DB.dbo.UF_GET_COMM4PG(...) 같은 3부 TVF 호출도
+            // SchemaObjectName 방문자에 걸린다. 이것은 의도된 동작이다 - 3부 TVF 호출도
+            // 엄연한 크로스 DB 참조이고, 이를 제외하면 그 사실을 정직하게 서술하는
+            // 명세서가 오히려 L1에 오탐으로 걸린다. 그래서 목록 이름을
+            // ThreePartObjectReferences로 두어 테이블만이 아니라는 사실을 코드로 못박는다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT A.C FROM SETTLE_CARD_DB.dbo.UF_GET_COMM4PG(1, 2) A
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.Contains("SETTLE_CARD_DB.dbo.UF_GET_COMM4PG", result.ThreePartObjectReferences);
         }
     }
 }

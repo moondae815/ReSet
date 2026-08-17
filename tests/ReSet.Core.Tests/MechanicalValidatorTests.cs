@@ -1859,6 +1859,27 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_TruthfulDenialOfThreePartNotation_ShouldNotBeAnError()
+        {
+            // 리뷰 실측: 원본에 3부 참조가 없다는 것을 정직하게 부정하는 명세서가
+            // 오탐으로 걸리면, 재생성으로도 L1을 통과시킬 방법이 없다 - 모델이 참을
+            // 거짓으로 바꿔야만 통과하게 된다. AiService.cs의 Linked Server 안내문이
+            // 이런 "~이 아닙니다" 부정 어투를 이미 권장하고 있어 이 표현이 정상적으로
+            // 나올 수 있다.
+            var expectations = EmptyExpectations() with
+            {
+                HasThreePartReference = false,
+                HasLinkedServerReference = false
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 3부 식별자를 사용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
         public void Validate_ThreePartClaimWithAThreePartReference_ShouldPass()
         {
             var expectations = EmptyExpectations() with { HasThreePartReference = true };
@@ -1875,11 +1896,11 @@ A[""시작""] --> B[""끝""]
         {
             // SpecExpectations.From은 세 재료(UpdateColumns, PromptSchemaColumns,
             // InputDefects)가 전부 비면 null을 돌려주고 호출부는 null을 "대조 건너뜀"으로
-            // 받는다. ThreePartTableReferences를 조기 반환 조건에 잇지 않으면 이 새 재료가
+            // 받는다. ThreePartObjectReferences를 조기 반환 조건에 잇지 않으면 이 새 재료가
             // 유일하게 있는 SpDefinition도 null을 받아 L1이 한 번도 돌지 않는다 -
             // 이 테스트가 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
             var analysis = new SpStaticAnalysisResult();
-            analysis.ThreePartTableReferences.Add("SETTLE_POQ_DB.dbo.TSettleMst");
+            analysis.ThreePartObjectReferences.Add("SETTLE_POQ_DB.dbo.TSettleMst");
             var sp = new SpDefinition { StaticAnalysis = analysis };
 
             var expectations = SpecExpectations.From(sp);
@@ -1887,6 +1908,25 @@ A[""시작""] --> B[""끝""]
             Assert.NotNull(expectations);
             Assert.True(expectations!.HasThreePartReference);
             Assert.False(expectations.HasLinkedServerReference);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsALinkedServerReference_ShouldNotBeNullAndShouldCarryTheFlag()
+        {
+            // 위 ThreePartReference 테스트의 짝이다. From의 조기 반환 조건은 두 항
+            // (!hasThreePartReference && !hasLinkedServerReference)을 모두 걸어야 하는데,
+            // 한쪽만 테스트하면 다른 쪽 항이 조용히 빠져도 스위트가 초록으로 남는다.
+            // 이 태스크는 뒤따르는 태스크(5, 6, 7, 10, 11)가 조기 반환 조건에 항을
+            // 하나씩 잇는 템플릿이므로, 두 항을 각각 독립적으로 증명해 둔다.
+            var analysis = new SpStaticAnalysisResult();
+            analysis.LinkedServerReferences.Add("MyServer.RemoteDb.dbo.Orders");
+            var sp = new SpDefinition { StaticAnalysis = analysis };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.True(expectations!.HasLinkedServerReference);
+            Assert.False(expectations.HasThreePartReference);
         }
 
         private static SpecExpectations EmptyExpectations() =>

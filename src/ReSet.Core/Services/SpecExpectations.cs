@@ -81,7 +81,7 @@ namespace ReSet.Core.Services
             var inputDefects = SchemaPromptColumnSelector.DetectOrphanedColumnKeys(spDef);
 
             var analysis = spDef.StaticAnalysis;
-            var hasThreePartReference = analysis.ThreePartTableReferences.Count > 0;
+            var hasThreePartReference = analysis.ThreePartObjectReferences.Count > 0;
             var hasLinkedServerReference = analysis.LinkedServerReferences.Count > 0;
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에

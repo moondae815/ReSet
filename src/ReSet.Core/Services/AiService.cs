@@ -229,7 +229,20 @@ namespace ReSet.Core.Services
                     {
                         staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (프로시저 내부에서 Linked Server 원격 참조를 사용하지 않습니다. 만약 다른 데이터베이스의 테이블을 3부 식별자(Database.Schema.Table) 형식으로 참조한다면, 이는 Linked Server가 아닌 동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조이므로 CRUD 분석 표 및 개요에 Linked Server가 아님을 사실 기반으로 정확하게 구분하여 설명하십시오.)");
                     }
-                    
+
+                    // UPDATE 헤딩 원문 병기(위)만으로는 UPDATE 문이 없는 SP(예: INSERT 전용)에
+                    // 닿지 않는다. 이 목록은 정적 분석 섹션 전체에 실리므로 모든 SP에
+                    // 미치고, 비어 있을 때도 명시적으로 "없음"을 적어 규칙 6(원문 표기는
+                    // <sp-source-ddl>만 근거로 삼으라)이 실제로 기댈 근거를 만든다.
+                    if (spDef.StaticAnalysis.ThreePartObjectReferences.Count > 0)
+                    {
+                        staticAnalysisText.AppendLine($"- 원본이 3부 이상으로 표기한 오브젝트 참조(테이블/함수) 원문 목록: {string.Join(", ", spDef.StaticAnalysis.ThreePartObjectReferences)}");
+                    }
+                    else
+                    {
+                        staticAnalysisText.AppendLine("- 원본이 3부 이상으로 표기한 오브젝트 참조(테이블/함수) 원문 목록: 없음 (원본에 3부 식별자 또는 크로스 데이터베이스 참조가 존재하지 않습니다. 3부 식별자 기반 크로스 데이터베이스 참조라고 단언하지 마십시오.)");
+                    }
+
                     if (spDef.StaticAnalysis.ReferencedFunctions.Count > 0)
                     {
                         staticAnalysisText.AppendLine($"- 식별된 UDF 사용자 정의 함수 호출 목록: {string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)}");
@@ -1593,10 +1606,11 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     "   - The 'referenced-columns-per-table' in the static analysis metadata is the Source of Truth. Map these columns exactly without omitting any. Double-check all table and column names to ensure there are no spelling typos or hallucinations (e.g., use 'SeperateRate' and 'COMMISSIONCANCELAMT' exactly as defined in the source schema/DDL instead of hallucinated forms like 'SerateRate' or 'COMMATIONCANCELAMT').",
                     "3. For target tables of INSERT/UPDATE operations, map all target columns to their source values (variables, constants, function results, etc.) in a 1:1 mapping table. Do not abbreviate with 'etc.' or '...'.",
                     "4. Factually state the use case of temp tables (#TempTable), User Defined Functions (UDF), and Linked Servers. If not used, explicitly write that they are not used.",
-                    "5. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch."
+                    "5. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.",
+                    "6. Table names in the static analysis metadata are PARSER-NORMALIZED three-part names, not the source's own notation. When you describe how many parts the source identifier has (one-part, two-part, three-part, cross-database, Linked Server), base it ONLY on <sp-source-ddl>. Do not claim a cross-database or three-part reference that does not appear there."
                 };
 
-                int rIdx = 6;
+                int rIdx = 7;
                 if (hasUdf)
                 {
                     sbRules.Add($"{rIdx++}. If the DDL of the referenced UDF is provided, analyze its operation. If missing, output 'UDF definition not provided; detailed logic excluded from analysis' along with its calling location and purpose.");

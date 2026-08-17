@@ -978,6 +978,28 @@ namespace ReSet.Core.Services
         };
 
         /// <summary>
+        /// 부정 표현. 절 안에 이것이 있으면 그 절의 3부 주장은 "쓴다"가 아니라
+        /// "쓰지 않는다"는 뜻이다. AiService.cs:230의 Linked Server 안내문이 이미
+        /// "~이 아닙니다" 어투를 권장하므로, 정직한 부정을 거짓 단언으로 오판하면
+        /// 재생성으로 L1을 통과할 방법이 모델에게 없어진다.
+        /// </summary>
+        private static readonly string[] NegationTokens =
+        {
+            "아닙니다", "아니다", "아니며", "아니고",
+            "않습니다", "않는다", "않으며", "않고", "않은",
+            "없습니다", "없다", "없으며", "없고"
+        };
+
+        /// <summary>
+        /// 절 경계로 쓰는 접속 표현. 복문 한 줄이 "A이며 B가 아닙니다"처럼 서로 다른
+        /// 주장을 접속할 때, 뒤 절의 부정이 앞 절까지 번지면 안 된다 - 그러면
+        /// "3부 식별자... 참조이며 Linked Server... 아닙니다"(3부는 참, Linked Server만
+        /// 부정)가 부정문으로 잘못 읽혀 실제 거짓 단언을 놓친다. 절 단위로 쪼개
+        /// 주장 토큰과 부정 토큰이 "같은 절"에 있을 때만 부정으로 인정한다.
+        /// </summary>
+        private static readonly string[] ClauseBoundaryMarkers = { "이며", "이고", "지만", "그러나", ",", "." };
+
+        /// <summary>
         /// 원본에 3부 참조가 하나도 없는데 명세서가 3부·크로스 DB 참조를 단언하는지 본다.
         ///
         /// 파서가 정규화한 이름을 프롬프트가 원문처럼 보여 준 것이 원인이라 재생성으로
@@ -1005,6 +1027,8 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                if (!HasUnnegatedClaim(line)) continue;
+
                 var message =
                     "명세서가 3부 식별자 또는 크로스 데이터베이스 참조를 단언했으나, "
                     + "원본 DDL에는 3부 이상으로 표기된 테이블 참조가 없습니다. "
@@ -1018,6 +1042,58 @@ namespace ReSet.Core.Services
                 });
                 return; // 한 건만 보고한다 - 같은 원인의 문장이 여러 줄일 수 있다.
             }
+        }
+
+        /// <summary>
+        /// 줄을 절 단위로 쪼개, 3부 주장 토큰을 담은 절 중 부정 토큰이 없는 절이
+        /// 하나라도 있는지 본다. 있으면 그 절은 참인 단언이다(잡아야 한다). 주장을
+        /// 담은 모든 절이 부정 토큰도 함께 담고 있으면 정직한 부정문이므로 통과시킨다.
+        /// </summary>
+        private static bool HasUnnegatedClaim(string line)
+        {
+            foreach (var clause in SplitIntoClauses(line))
+            {
+                var hasClaim = Array.Exists(ThreePartClaimTokens, t => clause.Contains(t, StringComparison.Ordinal));
+                if (!hasClaim) continue;
+
+                var hasNegation = Array.Exists(NegationTokens, t => clause.Contains(t, StringComparison.Ordinal));
+                if (!hasNegation) return true;
+            }
+
+            return false;
+        }
+
+        private static List<string> SplitIntoClauses(string line)
+        {
+            var clauses = new List<string>();
+            var current = 0;
+
+            while (current < line.Length)
+            {
+                var nextBoundary = -1;
+                var markerLength = 0;
+
+                foreach (var marker in ClauseBoundaryMarkers)
+                {
+                    var idx = line.IndexOf(marker, current, StringComparison.Ordinal);
+                    if (idx >= 0 && (nextBoundary == -1 || idx < nextBoundary))
+                    {
+                        nextBoundary = idx;
+                        markerLength = marker.Length;
+                    }
+                }
+
+                if (nextBoundary == -1)
+                {
+                    clauses.Add(line.Substring(current));
+                    break;
+                }
+
+                clauses.Add(line.Substring(current, nextBoundary - current));
+                current = nextBoundary + markerLength;
+            }
+
+            return clauses;
         }
 
         private static readonly Regex TableCellRegex =

@@ -45,7 +45,7 @@ namespace ReSet.Core.Services
 
                 // 3부 이상 참조의 원문. 정규화하면 "원본이 몇 부로 썼는가"라는
                 // 유일한 존재 이유가 사라진다.
-                ThreePartTableReferences = new List<string>(analysis.ThreePartTableReferences),
+                ThreePartObjectReferences = new List<string>(analysis.ThreePartObjectReferences),
 
                 ReferencedTables = NormalizeList(analysis.ReferencedTables, database, defaultSchema),
                 SelectTables = NormalizeList(analysis.SelectTables, database, defaultSchema),
