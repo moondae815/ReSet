@@ -1071,5 +1071,33 @@ END";
             var mapping = Assert.Single(result.AstUpdateMappings);
             Assert.Equal(4, mapping.SourceLine);
         }
+
+        [Fact]
+        public void Analyze_UnqualifiedUpdateSetColumn_ShouldBeAttributedToTheUpdateTarget()
+        {
+            // EXPECT_PROC 실측: EDIReqYmd가 UPDATE 표에는 실리는데 스키마 표에서는
+            // 사라져, 규칙 389("스키마에 없으면 불일치로 표기")가 명세서에 거짓
+            // 스키마 불일치를 쓰게 했다. 리졸버 폴백에 UPDATE 분기가 없어서다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.SetEdiDate
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    EDIReqYmd = E.ReqYMD
+    FROM   dbo.TSettleMst   A
+    JOIN   dbo.TPLCardEDIMst E ON A.PLTID = E.PLTID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var attributed = result.ReferencedColumnsPerTable
+                .Where(kvp => kvp.Key.EndsWith("TSettleMst", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(kvp => kvp.Value)
+                .ToList();
+
+            Assert.Contains("EDIReqYmd", attributed, StringComparer.OrdinalIgnoreCase);
+        }
     }
 }
