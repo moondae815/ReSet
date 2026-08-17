@@ -66,6 +66,34 @@ description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는�
 
 원본 DDL 경로는 `output/Objects/[스키마].[이름].Procedure/raw/object_definition.sql`이다.
 
+### 2-1. 축 A 캐시는 Job이 바뀌어도 유효하다
+
+축 A 키의 세 경로는 모두 `output/Jobs/` **바깥**이므로 Job에 의존하지 않는다. 새 Job을
+감사할 때 이전 Job의 `axisA:` 항목만 옮겨 두면 그 SP들은 다시 검증하지 않는다. 실측에서
+`Spec.md` 14개는 Job 세 개가 새로 만들어지는 동안 한 번도 재생성되지 않았고, 축 A가
+서브에이전트 토큰의 약 45%였다.
+
+```bash
+python3 -c "
+import json
+src=json.load(open('output/Jobs/[이전job]/consistency/.cache.json',encoding='utf-8'))
+json.dump({k:v for k,v in src.items() if k.startswith('axisA:')},
+          open('output/Jobs/[새job]/consistency/.cache.json','w',encoding='utf-8'),
+          ensure_ascii=False,indent=1)"
+```
+
+**`axisA:`만 걸러서 옮긴다. 통째로 복사하지 마라.** 축 B 키는 `Jobs/[job]/agent/steps/`를
+포함해 새 Job에서 히트하지 않지만, 파일에 남아 있으면 보고서를 만들 때 이전 Job의 단계
+결과가 커버리지 표에 섞인다.
+
+옮긴 뒤 두 가지를 확인한다. **대상 SP 집합**이 다르면 새 Job이 쓰지 않는 SP의 항목은
+커버리지 표에서 뺀다 — 검증하지 않은 SP가 검증된 것으로 실린다. **보고서 4-1**의 서술 중
+이전 Job의 귀결을 인용한 문장("축 B의 S07에서 실제로 그 일이 일어났다")은 다시 쓴다.
+판정과 결함 목록 자체는 Job과 무관하므로 그대로 재사용한다.
+
+`Spec.md`가 안 바뀌었는지 미리 확인할 필요는 없다. 키가 파일 해시라 바뀌었으면 그 단위만
+미스가 나 재검증된다.
+
 ## 3. 축 A 대조 계약
 
 **파서가 수집한 항목에 한해 `StaticAnalysis`가 진실의 원천이다.** 이미 확정된 값이므로
@@ -195,4 +223,5 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 | 못 본 것을 적지 않는다 | 6절이 없으면 표본 검증이 전수 검증으로 읽힌다 |
 | 축 B 단위가 원본을 못 봤다고 한계로 적는다 | 그건 분업이다. 축 A가 덮는다 |
 | 단위 결과를 끝까지 모았다가 한 번에 저장한다 | 세션 한도로 중단되면 끝난 단위까지 전부 날아간다 |
+| 캐시를 통째로 다른 Job에 복사한다 | 축 B 키는 새 Job에서 히트하지 않지만 파일에는 남아, 이전 Job의 단계 결과가 새 보고서의 커버리지 표에 섞인다. `axisA:`만 옮긴다 |
 | 반복 결함을 단계마다 한 건씩 센다 | 배너 모순 하나가 14건이 되어 금액 결함을 가린다 |
