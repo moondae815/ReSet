@@ -1312,12 +1312,43 @@ namespace ReSet.Core.Services
         };
 
         /// <summary>
-        /// 마침표를 문장 경계로 쓴다. SplitIntoClauses보다 넓은 단위가 필요하다 -
-        /// 위 HeaderContractTerms 문서 참고.
+        /// 문장 경계 = 공백/줄바꿈/문서 끝이 뒤따르는 마침표, 또는 줄바꿈 그 자체.
+        /// SplitIntoClauses보다 넓은 단위가 필요하다 - 위 HeaderContractTerms 문서
+        /// 참고.
+        ///
+        /// [Fix Round 3 - 리뷰 실측] Round 2는 바로 "."을 경계로 썼다. 이 코퍼스는
+        /// 산문 안에 "dbo.UP_X" 같은 점(.) 포함 식별자가 흔하다(실측: 26개 실제
+        /// 명세서에서 문서당 45~65회, 코드 스팬 밖 표 셀 안에도 흔히 등장한다).
+        /// 그 점을 경계로 오인하면 "헤더 주석은 dbo.UP_X를 호출하지 않는다고 하나
+        /// 실제로는 호출합니다"처럼 정확히 인정한 한 문장이 "dbo"까지와 그 이후로
+        /// 쪼개져, 헤더 지시어와 인정 토큰이 서로 다른 조각으로 갈라진다 - 정확히
+        /// 인정한 문서를 틀렸다고 판정하는 거짓 양성이다. 날짜(2021.11.29)의 점도
+        /// 같은 함정이다. 그래서 마침표는 뒤에 공백·줄바꿈·문서 끝이 올 때만
+        /// 경계로 센다 - 식별자·날짜 안의 점(뒤에 글자·숫자가 옴)은 그대로 붙어
+        /// 있는다.
+        ///
+        /// 줄바꿈은 항상 경계로 센다. 표 형식 명세서는 논리적 진술마다 마침표
+        /// 없는 별도 행을 쓴다(실측: 코퍼스 대다수 표). 줄바꿈을 경계로 잡지
+        /// 않으면 그런 표 전체가 마침표 하나 없이 한 "문장"으로 뭉치고, 서로
+        /// 무관한 두 행이 각각 헤더 지시어와 인정 토큰을 하나씩 대면 거짓으로
+        /// 인정 처리된다 - Round 1이 닫은 문서-전체 매치 구멍이 표 안에서 다시
+        /// 열리는 것과 같은 모양이다.
+        ///
+        /// 반대로 줄바꿈을 경계로 잡으면, 한 문장이 줄 중간에서 개행되는(하드
+        /// 랩) 경우 헤더 지시어와 토큰이 서로 다른 줄로 갈릴 위험이 있다. 그런데
+        /// 이 생성기가 실제로 쓰는 산문은 하드 랩을 하지 않는다 - 코퍼스
+        /// 26건(output/**/docs/Spec.md)의 최장 줄이 400~800자를 넘는다(예:
+        /// UP_UTIL_SETTLE_COMM_UPD 827자, UP_UTIL_SETTLE_EXCEPTION_PROC 811자).
+        /// 한 문단·한 표 행이 통째로 한 줄이라는 뜻이므로, 줄바꿈을 경계로 잡아도
+        /// 실제 문장 안에서는 갈라지지 않는다. 그래서 이 방향의 위험은 이
+        /// 코퍼스에서는 실재하지 않고, 표 구멍을 막는 이득만 남는다.
         /// </summary>
+        private static readonly Regex SentenceBoundaryRegex =
+            new Regex(@"\.(?=\s|$)|\r\n|\r|\n", RegexOptions.Compiled);
+
         private static IEnumerable<string> SplitIntoSentences(string text)
         {
-            foreach (var sentence in text.Split('.'))
+            foreach (var sentence in SentenceBoundaryRegex.Split(text))
             {
                 if (!string.IsNullOrWhiteSpace(sentence)) yield return sentence;
             }

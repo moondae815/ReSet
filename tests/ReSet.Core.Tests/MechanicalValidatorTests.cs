@@ -2230,6 +2230,84 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_AcknowledgementSentenceWithDottedInternalCallIdentifier_ShouldPass()
+        {
+            // Fix Round 3 리뷰 실측. Round 2가 문장 경계로 바로 "."을 썼는데, 이
+            // 코퍼스는 "dbo.UP_X" 같은 점(.) 포함 식별자가 산문 안에 흔하다(실측:
+            // 26개 실제 명세서에서 문서당 45~65회). 그 점을 문장 경계로 오인하면
+            // 인정 문장 하나가 "dbo"까지와 "UP_..." 이후로 쪼개져, 헤더 지시어와
+            // 인정 토큰이 서로 다른 조각으로 갈라진다 - 정확히 인정한 문서를 틀렸다고
+            // 판정하는 거짓 양성이다. 이 문장은 cbd6a5d(Round 2 팁)에서 거짓으로
+            // 결함 처리됐다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n헤더 주석은 dbo.UP_Util_Settle_Summary_AcqManual을 호출하지 않는다고 "
+                + "하나 실제로는 호출합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_AcknowledgementSentenceWithDateInParentheses_ShouldPass()
+        {
+            // 위 테스트의 짝 - 점(.) 포함 날짜(2021.11.29)도 같은 함정이다. 숫자
+            // 사이의 점은 문장 경계가 아니다. 이 문장도 cbd6a5d에서 거짓으로 결함
+            // 처리됐다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n헤더 주석(2021.11.29 기준)은 내부 SP 호출이 없다고 하나 실제로는 "
+                + "두 개를 호출합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_TableRowsWithTokenAndHeaderTermInDifferentRows_ShouldStillBeAnError()
+        {
+            // Fix Round 3 - 줄바꿈을 경계로 잡지 않으면 재현되는 Round 1형 거짓
+            // 음성이다. 표 형식 명세서는 논리적 진술마다 마침표 없는 별도 행을 쓴다
+            // (실측: 코퍼스 대다수 표가 이 모양). 아래 표에서 "헤더" 언급은 3행에,
+            // "차이가 있" 토큰은 4행에 있고 서로 무관하다 - 줄바꿈을 경계로 잡지
+            // 않으면 두 행이 마침표 없이 한 "문장"으로 붙어 버려 거짓으로 인정
+            // 처리된다. 이 테스트는 줄바꿈 경계 채택이 그 구멍을 막는지 증명한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n| 항목 | 설명 |\n"
+                + "| --- | --- |\n"
+                + "| 헤더 주석 검토 | 별도 확인이 필요합니다 |\n"
+                + "| 정산 처리 | 두 번째 집계와 세 번째 집계 사이에 차이가 있습니다 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
         public void Validate_NoInternalProcedureCall_ShouldNotCheckHeaderContractContradiction()
         {
             // 재료가 비면 소프트 스킵이다 - 내부 SP 호출이 없는 대다수 SP에서 거짓
