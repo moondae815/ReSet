@@ -18,6 +18,7 @@ namespace ReSet.Core.Services
         UpdateMappingMissing,
         SchemaClaimFalse,
         TableIdentitySplit,
+        IdentifierNotationClaim,
         General
     }
 
@@ -107,6 +108,7 @@ namespace ReSet.Core.Services
                     CheckUpdateMappings(cleansed, expectations, result);
                     CheckSchemaClaims(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
+                    CheckIdentifierNotationClaims(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -967,6 +969,54 @@ namespace ReSet.Core.Services
                         });
                     }
                 }
+            }
+        }
+
+        private static readonly string[] ThreePartClaimTokens =
+        {
+            "3부 식별자", "세 부분 식별자", "크로스 데이터베이스 참조", "크로스 DB 참조"
+        };
+
+        /// <summary>
+        /// 원본에 3부 참조가 하나도 없는데 명세서가 3부·크로스 DB 참조를 단언하는지 본다.
+        ///
+        /// 파서가 정규화한 이름을 프롬프트가 원문처럼 보여 준 것이 원인이라 재생성으로
+        /// 고칠 수 있다 - 그래서 InputDefects가 아니라 L1 오류다. 다만 프롬프트가
+        /// 원문 표기를 함께 주기 시작한 뒤에만 성립한다(AiService의 원문 병기와 규칙).
+        ///
+        /// Linked Server 주장은 별도로 보지 않는다. LinkedServerReferences가 비었는데
+        /// 4부 참조를 단언하는 경우는 같은 조건에 걸린다.
+        /// </summary>
+        private static void CheckIdentifierNotationClaims(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.HasThreePartReference || expectations.HasLinkedServerReference) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var fenceFlags = ComputeFenceLineFlags(lines);
+
+            for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+            {
+                if (fenceFlags[lineIndex]) continue;
+
+                var line = lines[lineIndex];
+                if (!Array.Exists(ThreePartClaimTokens, t => line.Contains(t, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var message =
+                    "명세서가 3부 식별자 또는 크로스 데이터베이스 참조를 단언했으나, "
+                    + "원본 DDL에는 3부 이상으로 표기된 테이블 참조가 없습니다. "
+                    + "식별자 표기는 <sp-source-ddl>만 근거로 삼아야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.IdentifierNotationClaim,
+                    Message = message,
+                    RawContext = line.Trim()
+                });
+                return; // 한 건만 보고한다 - 같은 원인의 문장이 여러 줄일 수 있다.
             }
         }
 

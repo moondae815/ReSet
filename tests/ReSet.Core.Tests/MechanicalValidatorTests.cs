@@ -1839,5 +1839,68 @@ A[""시작""] --> B[""끝""]
             var only = Assert.Single(missing);
             Assert.Equal(new[] { "-1" }, only.Value);
         }
+
+        [Fact]
+        public void Validate_ThreePartClaimWithoutAnyThreePartReference_ShouldBeAnError()
+        {
+            // STAT_PGCOLLECT_INS 실측. 원본은 전부 1부 표기인데 Spec이 3부
+            // 크로스 데이터베이스 참조라고 단언했다.
+            var expectations = EmptyExpectations() with
+            {
+                HasThreePartReference = false,
+                HasLinkedServerReference = false
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 3부 식별자 기반 크로스 데이터베이스 참조이며 Linked Server 원격 참조가 아닙니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
+        public void Validate_ThreePartClaimWithAThreePartReference_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with { HasThreePartReference = true };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 3부 식별자로 다른 데이터베이스를 참조합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsAThreePartReference_ShouldNotBeNullAndShouldCarryTheFlag()
+        {
+            // SpecExpectations.From은 세 재료(UpdateColumns, PromptSchemaColumns,
+            // InputDefects)가 전부 비면 null을 돌려주고 호출부는 null을 "대조 건너뜀"으로
+            // 받는다. ThreePartTableReferences를 조기 반환 조건에 잇지 않으면 이 새 재료가
+            // 유일하게 있는 SpDefinition도 null을 받아 L1이 한 번도 돌지 않는다 -
+            // 이 테스트가 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            var analysis = new SpStaticAnalysisResult();
+            analysis.ThreePartTableReferences.Add("SETTLE_POQ_DB.dbo.TSettleMst");
+            var sp = new SpDefinition { StaticAnalysis = analysis };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.True(expectations!.HasThreePartReference);
+            Assert.False(expectations.HasLinkedServerReference);
+        }
+
+        private static SpecExpectations EmptyExpectations() =>
+            new(
+                Array.Empty<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                Array.Empty<string>());
+
+        /// <summary>
+        /// L1 구조 검사를 통과하는 최소 명세서. 아래 테스트들은 여기에 문장을 이어
+        /// 붙여 쓰는데, WrapSpec이 닫는 코드 펜스 뒤에 붙으므로 ComputeFenceLineFlags가
+        /// 펜스 밖으로 본다 - 검사 대상이 된다.
+        /// </summary>
+        private static string RequiredHeadersMarkdown() => WrapSpec("내용");
     }
 }

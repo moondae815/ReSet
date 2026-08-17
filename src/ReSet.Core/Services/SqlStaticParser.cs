@@ -63,6 +63,7 @@ namespace ReSet.Core.Services
                         result.UpdateTables = visitor.UpdateTables;
                         result.DeleteTables = visitor.DeleteTables;
                         result.LinkedServerReferences = visitor.LinkedServerReferences;
+                        result.ThreePartTableReferences = visitor.ThreePartTableReferences;
                         result.ReferencedFunctions = visitor.ReferencedFunctions;
                         result.ProcedureParameters = visitor.ProcedureParameters;
                         result.DeclaredVariables = visitor.DeclaredVariables;
@@ -172,6 +173,7 @@ namespace ReSet.Core.Services
         public List<string> DeleteTables { get; } = new();
 
         public List<string> LinkedServerReferences { get; } = new();
+        public List<string> ThreePartTableReferences { get; } = new();
         public List<string> ReferencedFunctions { get; } = new();
         public List<string> ProcedureParameters { get; } = new();
         public List<string> DeclaredVariables { get; } = new();
@@ -350,6 +352,26 @@ namespace ReSet.Core.Services
             _statementContext.Pop();
         }
 
+        /// <summary>
+        /// 3부 이상으로 표기된 테이블 참조의 원문을 그대로 모은다. RegisteredTables 등은
+        /// 별칭 해석과 정규화를 거치지만, 여기서는 원문 부분 수만 세고 값을 손대지
+        /// 않는다 - "원본이 실제로 몇 부로 썼는가"가 이 목록의 유일한 존재 이유다.
+        /// </summary>
+        public override void ExplicitVisit(SchemaObjectName node)
+        {
+            var identifiers = node.Identifiers;
+            if (identifiers != null && identifiers.Count >= 3)
+            {
+                var text = string.Join(".", identifiers.Select(i => i.Value));
+                if (!ThreePartTableReferences.Contains(text, StringComparer.OrdinalIgnoreCase))
+                {
+                    ThreePartTableReferences.Add(text);
+                }
+            }
+
+            base.ExplicitVisit(node);
+        }
+
         private void RecordUpdateMapping(UpdateSpecification node, string targetTable)
         {
             // targetTable이 비어 있으면 호출부 가드가 약해졌거나 우회된 상태다. 아래
@@ -404,7 +426,8 @@ namespace ReSet.Core.Services
                 TargetTable = targetTable,
                 StatementOrdinal = previous + 1,
                 SourceLine = node.StartLine,
-                FromClauseText = node.FromClause == null ? null : GetFragmentText(node.FromClause)
+                FromClauseText = node.FromClause == null ? null : GetFragmentText(node.FromClause),
+                RawTargetText = GetFragmentText(node.Target)
             };
             mapping.Assignments.AddRange(assignments);
             mapping.SelfReferencedColumns.AddRange(FindSelfReferences(node, assignments));

@@ -1165,5 +1165,40 @@ END";
             var anyTableCols = result.ReferencedColumnsPerTable.Values.SelectMany(v => v);
             Assert.DoesNotContain("OnlyOnEWhereCol", anyTableCols, StringComparer.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void Analyze_ShouldRecordTheRawTargetNotationAndThreePartReferences()
+        {
+            var ddlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    C = 1
+    FROM   SETTLE_POQ_DB.dbo.TSettleMst A
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.Equal("dbo.TSettleMst", Assert.Single(result.AstUpdateMappings).RawTargetText);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", result.ThreePartTableReferences);
+        }
+
+        [Fact]
+        public void Analyze_WithOnlyOnePartNames_ShouldReportNoThreePartReferences()
+        {
+            // STAT_PGCOLLECT_INS 실측: 모든 참조가 비수식인데 Spec이 3부 식별자
+            // 크로스 DB 참조라고 단언했다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO TStatPGCollect (C) SELECT C FROM TSettleMst
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.Empty(result.ThreePartTableReferences);
+        }
     }
 }

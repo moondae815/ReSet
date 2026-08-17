@@ -43,6 +43,10 @@ namespace ReSet.Core.Services
                 LinkedServerReferences = new List<string>(analysis.LinkedServerReferences),
                 ReferencedFunctions = new List<string>(analysis.ReferencedFunctions),
 
+                // 3부 이상 참조의 원문. 정규화하면 "원본이 몇 부로 썼는가"라는
+                // 유일한 존재 이유가 사라진다.
+                ThreePartTableReferences = new List<string>(analysis.ThreePartTableReferences),
+
                 ReferencedTables = NormalizeList(analysis.ReferencedTables, database, defaultSchema),
                 SelectTables = NormalizeList(analysis.SelectTables, database, defaultSchema),
                 InsertTables = NormalizeList(analysis.InsertTables, database, defaultSchema),
@@ -71,7 +75,9 @@ namespace ReSet.Core.Services
                     TargetTable = Canonicalize(mapping.TargetTable, database, defaultSchema),
                     StatementOrdinal = mapping.StatementOrdinal,
                     SourceLine = mapping.SourceLine,
-                    FromClauseText = mapping.FromClauseText
+                    FromClauseText = mapping.FromClauseText,
+                    // 원문 표기다 - canonicalize하면 "원본이 몇 부로 썼는가"를 잃는다.
+                    RawTargetText = mapping.RawTargetText
                 };
 
                 foreach (var assignment in mapping.Assignments)

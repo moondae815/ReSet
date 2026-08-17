@@ -47,6 +47,14 @@ namespace ReSet.Core.Models
 
         /// <summary>SET 우변이 같은 문장의 타겟 컬럼을 참조하는 컬럼들. 동시평가 경고의 근거다.</summary>
         public List<string> SelfReferencedColumns { get; set; } = new();
+
+        /// <summary>
+        /// UPDATE 대상의 원문 표기. TargetTable은 정규화된 3부 이름이라 원본이
+        /// 실제로 몇 부로 썼는지 잃는다. 명세서가 정규화 이름을 원문처럼 서술해
+        /// "3부 식별자 크로스 DB 참조" 같은 없는 사실을 단언한 실측이 있다.
+        /// 정규화기는 이 값을 canonicalize하지 않고 그대로 옮긴다.
+        /// </summary>
+        public string? RawTargetText { get; set; }
     }
 
     public class AstUpdateAssignment
@@ -72,6 +80,13 @@ namespace ReSet.Core.Models
         public List<AstUpdateMapping> AstUpdateMappings { get; set; } = new();
         public List<string> DeleteTables { get; set; } = new();
         public List<string> LinkedServerReferences { get; set; } = new();
+
+        /// <summary>
+        /// 원본이 3부 이상으로 표기한 테이블 참조의 원문. 비어 있으면 이 SP에
+        /// 크로스 DB 참조가 없다는 뜻이며, L1이 명세서의 표기 주장을 이것으로
+        /// 반증한다. 정규화 대상이 아니다 - 원문이어야 근거가 된다.
+        /// </summary>
+        public List<string> ThreePartTableReferences { get; set; } = new();
         public List<string> ReferencedFunctions { get; set; } = new();
         public List<string> ProcedureParameters { get; set; } = new();
         public List<string> DeclaredVariables { get; set; } = new();

@@ -38,6 +38,12 @@ namespace ReSet.Core.Services
         IReadOnlySet<string> ColumnlessDependencyTables,
         IReadOnlyList<string> InputDefects)
     {
+        /// <summary>원본이 3부 이상으로 표기한 테이블 참조가 하나라도 있는가.</summary>
+        public bool HasThreePartReference { get; init; }
+
+        /// <summary>원본에 Linked Server(4부) 참조가 있는가.</summary>
+        public bool HasLinkedServerReference { get; init; }
+
         /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
@@ -74,13 +80,28 @@ namespace ReSet.Core.Services
 
             var inputDefects = SchemaPromptColumnSelector.DetectOrphanedColumnKeys(spDef);
 
-            if (updateColumns.Count == 0 && promptSchemaColumns.Count == 0 && inputDefects.Count == 0)
+            var analysis = spDef.StaticAnalysis;
+            var hasThreePartReference = analysis.ThreePartTableReferences.Count > 0;
+            var hasLinkedServerReference = analysis.LinkedServerReferences.Count > 0;
+
+            // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
+            // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
+            // 스위트는 초록으로 남는다.
+            if (updateColumns.Count == 0
+                && promptSchemaColumns.Count == 0
+                && inputDefects.Count == 0
+                && !hasThreePartReference
+                && !hasLinkedServerReference)
             {
                 return null;
             }
 
             return new SpecExpectations(
-                updateColumns, promptSchemaColumns, columnlessDependencyTables, inputDefects);
+                updateColumns, promptSchemaColumns, columnlessDependencyTables, inputDefects)
+            {
+                HasThreePartReference = hasThreePartReference,
+                HasLinkedServerReference = hasLinkedServerReference
+            };
         }
 
         /// <summary>

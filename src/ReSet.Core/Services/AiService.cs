@@ -387,6 +387,7 @@ namespace ReSet.Core.Services
 
             // [Anti-Hallucination Constraints]
             rules.Add($"{ruleIndex++}. NEVER include columns in the CRUD table that do not exist in the provided schema metadata. If a column appears in the DDL but is missing from the schema, do not guess it as a normal column; mark it as a schema mismatch.");
+            rules.Add($"{ruleIndex++}. Table names in the static analysis metadata are PARSER-NORMALIZED three-part names, not the source's own notation. When you describe how many parts the source identifier has (one-part, two-part, three-part, cross-database, Linked Server), base it ONLY on <sp-source-ddl>. Do not claim a cross-database or three-part reference that does not appear there.");
             rules.Add($"{ruleIndex++}. DO NOT invent arbitrary return codes (e.g., assuming -1, -2, etc. sequentially) if the RETURN statement in the DDL does not specify literal values. Map them factually (e.g., 'Returns error code on failure (actual value not specified in code)').");
 
             // [Output Language Requirement]
@@ -556,7 +557,10 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>();
             foreach (var mapping in updateMappings)
             {
-                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal} · 원본 DDL 라인 {mapping.SourceLine})");
+                var rawNotation = string.IsNullOrWhiteSpace(mapping.RawTargetText)
+                    ? string.Empty
+                    : $" · 원문 표기: {mapping.RawTargetText}";
+                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal} · 원본 DDL 라인 {mapping.SourceLine}{rawNotation})");
                 lines.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
                 lines.Add("   | :--- | :--- | :--- | :--- |");
                 foreach (var assignment in mapping.Assignments)
