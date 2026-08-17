@@ -182,10 +182,34 @@ INSERT와 대칭인 UPDATE 분기를 넣는다. 문맥이 `UPDATE`이고 `_dmlTa
 그 컬럼을 '존재하지 않는다'고 잘못 기록한다 — 14개 명세서를 망가뜨린 바로 그 결함이다."*
 이번 감사가 그 예측이 실현된 사례다.
 
-**미확정 잔여.** 보고서가 함께 든 `CollectMonth2/3` · `CollectDay2/3` · `CollectTxSDay2/3` ·
-`CollectTxEDay2/3` 8컬럼은 **읽기 컬럼이라 경로가 다르다.** 이 수정으로 닫히는지 확정하지
-않았다. 해당 SP DDL로 개별 확인하고, 안 닫히면 `DetectOrphanedColumnKeys`의 탐지 범위를 넓혀
-`InputDefects` 경고로 표면화한다(L1 오류로 만들지 않는다 — 재생성이 못 고친다).
+**미확정 잔여 — 2026-08-17 실측으로 확정됐다. 아래 원래 추정은 틀렸다.**
+
+> ~~보고서가 함께 든 `CollectMonth2/3` 계열 8컬럼은 읽기 컬럼이라 경로가 다르다. 이 수정으로
+> 닫히는지 확정하지 않았다. 안 닫히면 `DetectOrphanedColumnKeys`의 탐지 범위를 넓힌다.~~
+
+측정 결과 **8컬럼은 이 수정으로 닫히지 않고, `DetectOrphanedColumnKeys`를 넓혀도 닫히지
+않는다.** 원인이 추정과 다르다.
+
+`CollectMonth2/3` · `CollectDay2/3` · `CollectTxSDay2/3` · `CollectTxEDay2/3`는
+**`EXPECT_PROC`의 SQL 본문에 한 번도 나오지 않는다**(`object_definition.sql` grep 0건).
+`EXPECT_PROC`가 호출하는 UDF `UF_GET_COLLECTYMD`의 본문에만 있고, 그 안에서는 단일 테이블
+`SELECT ... FROM TPGCollectPeriodMst`의 비한정 컬럼 목록이다. 그 UDF 자신의
+`prompt-context.md`에는 8컬럼이 스키마 표에 정상적으로 실려 있다 — **그 객체의 컬럼
+리졸버는 잘 동작한다.**
+
+따라서 이것은 리졸버 결함이 아니라 **객체 간 컬럼 의존성 병합의 공백**이다. SP가 DDL이
+제공된 UDF를 호출할 때, 그 UDF가 읽는 컬럼이 SP 자신의 `TPGCollectPeriodMst` 스키마 표에
+합쳐지지 않는다. `EXPECT_PROC`의 `Spec.md:341`이 그 상태를 정확히 서술한다 — 해당 컬럼이
+"함수 소스"에는 있으나 "제공된 스키마 표"에는 없다고.
+
+`DetectOrphanedColumnKeys`가 답이 될 수 없는 이유: 그 검출기는
+`ReferencedColumnsPerTable`의 **키**가 어느 의존성에도 병합되지 않은 경우를 찾는다.
+이 8컬럼은 `EXPECT_PROC`의 SQL에 없으므로 애초에 `ReferencedColumnsPerTable`에 들어가지
+않는다. 검출기가 볼 것이 없다.
+
+**이 계획의 범위 밖으로 남긴다.** 별개 기제이고, 고치려면 재귀 의존성 수집이 하위 객체의
+`ReferencedColumnsPerTable`을 상위로 접어 올리는 설계가 필요하다 — 축 A 충실도가 아니라
+프롬프트 입력 구성의 문제다.
 
 ### 1.4 표기 출처 병기
 
