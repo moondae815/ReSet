@@ -236,6 +236,22 @@
 
   출처: `2026-08-09-schema-claim-verification-gate-design.md` §남은 후속 1·2·4·6
 
+### 헤더 계약 모순 검사
+
+- [ ] **인정 문장이 어느 계약을 인정했는지 구분하지 못한다** —
+      `MechanicalValidator.CheckHeaderContractContradiction`. 헤더 주석 블록에는
+      Inner SP 말고 반환값 등 다른 계약도 있어서, 그 중 하나를 인정한 문장이
+      "주석"+"불일치"만으로 이 검사를 통과시킨다. 코퍼스에 그 형태가 실재한다 —
+      `UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:53`("반환값 헤더 주석의 계약은
+      실제 구현과 일부 불일치합니다"). 그 SP는 EXEC가 0건이라 검사가 발화하지
+      않아 현재는 무해하다. `HeaderContractTerms`를 내부 호출 지시어로 좁히는
+      안은 기각했다 — 호출 대상을 이름으로만 지목한 정당한 인정 문장이 함께
+      걸린다(테스트 `Validate_AcknowledgementSentenceWithDottedInternalCallIdentifier_ShouldPass`).
+      근본 해법은 `SpecExpectations.HasInternalProcedureCall`을 bool에서 **호출
+      대상 이름 목록**으로 바꾸고, 인정 문장이 그 이름 중 하나를 담았는지 보는 것
+
+  출처: 2026-08-17 14개 SP 전수 재생성 실측
+
 ### 정적 분석
 
 - [ ] **`DependencyInfo.Type` 타입화** — `DependencyInfo.cs:12`가 여전히 `string`.

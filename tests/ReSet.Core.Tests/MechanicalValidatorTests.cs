@@ -2362,6 +2362,32 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_AcknowledgementUsingBulilchi_ShouldPass()
+        {
+            // 2026-08-17 전수 재생성 실측. 14개 SP를 새 파이프라인으로 돌렸을 때 유일한
+            // L1 실패가 이 검사였고, 오탐이었다. 아래 문장은 그때 모델이 실제로 쓴 것을
+            // 그대로 옮긴 것이다(UP_Util_Settle_Summary.Spec.md:26). 모순을 정확히
+            // 적었는데도 인정 토큰 목록에 "불일치"가 없어 3회 재시도가 모두 거부됐고,
+            // 명세서는 L1미통과로 출고됐다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 5, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n- **내부 프로시저 주석 불일치:** 원본 헤더 주석에는 `Inner SP        : NONE`으로 "
+                + "선언되어 있으나 실제 구현은 `dbo.UP_Util_Settle_Summary_AcqManual` 및 "
+                + "`dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA`를 순차 호출합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
         public void Validate_AcknowledgementSentenceWithDateInParentheses_ShouldPass()
         {
             // 위 테스트의 짝 - 점(.) 포함 날짜(2021.11.29)도 같은 함정이다. 숫자

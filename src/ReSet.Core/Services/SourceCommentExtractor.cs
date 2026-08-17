@@ -131,8 +131,8 @@ namespace ReSet.Core.Services
                     // 이 앵커의 부재를 결함으로 들어, 저작권 고지 전사를 강제하는
                     // 오류 180건 중 다수를 차지했다. 헤더 재료의 존재 이유는 설계
                     // §2.4의 A5(헤더/구현 모순) 검사 하나뿐이고, 그 검사는
-                    // MechanicalValidator.HeaderContractTerms("헤더"·"주석"·
-                    // "Inner SP"·"NONE")로 이미 "선언 키워드"를 별도로 다룬다 -
+                    // MechanicalValidator.HeaderContractTerms("Inner SP"·"내부
+                    // 프로시저" 등 내부 호출 지시어)로 이미 "선언 키워드"를 별도로 다룬다 -
                     // 이 Anchors 필드가 아니라 블록의 Text 원문을 직접 본다. 그래서
                     // Header 블록은 Prose와 같이 앵커를 비워 CheckSourceComments의
                     // 개별 앵커 대조에서 조용히 빠지고, 헤더 모순 검사만 계속
