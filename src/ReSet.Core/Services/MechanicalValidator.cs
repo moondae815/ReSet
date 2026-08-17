@@ -999,7 +999,14 @@ namespace ReSet.Core.Services
         {
             "아닙니다", "아니다", "아니며", "아니고",
             "않습니다", "않는다", "않으며", "않고", "않은",
-            "없습니다", "없다", "없으며", "없고"
+            "없습니다", "없다", "없으며", "없고",
+            // [Fix Round 5 - 리뷰 실측] 종결형(-습니다/-다)만 담고 있었는데, 표 셀은
+            // 명사형 부정을 쓴다. UF_GET_ROUND4VAT/docs/Spec.md:107 "세 부분
+            // 식별자를 사용하는 동일 서버 내 다른 데이터베이스 참조가 없음"이 실측
+            // 오탐이다 - 그 함수는 3부 참조가 전혀 없어 정직하게 부정한 문장인데도
+            // "없음"이 목록에 없어 단언으로 오판됐다. "아님"·"않음"도 같은 이유로
+            // 더한다 - 이 셋은 "없다/아니다/않다"의 명사형 활용이지 새 어휘가 아니다.
+            "없음", "아님", "않음"
         };
 
         /// <summary>
@@ -1008,8 +1015,29 @@ namespace ReSet.Core.Services
         /// "3부 식별자... 참조이며 Linked Server... 아닙니다"(3부는 참, Linked Server만
         /// 부정)가 부정문으로 잘못 읽혀 실제 거짓 단언을 놓친다. 절 단위로 쪼개
         /// 주장 토큰과 부정 토큰이 "같은 절"에 있을 때만 부정으로 인정한다.
+        ///
+        /// [Fix Round 5 - 리뷰 실측, 종전엔 콤마·맨 마침표도 경계였다] 콤마와 맨
+        /// 마침표를 경계에서 뺐다. 종전 구현은 리터럴 ","와 "."을 그대로
+        /// IndexOf로 찾았는데, 이는 정확히 CheckHeaderContractContradiction의
+        /// SentenceBoundaryRegex(Fix Round 3)가 이미 걷어낸 함정을 이 검사에는
+        /// 그대로 남겨 둔 것이었다:
+        ///   - 맨 마침표: "dbo.UP_Legacy를 참조하지 않습니다"처럼 식별자 안의 "."이
+        ///     경계로 오인되면, "3부 식별자로 dbo"까지가 한 절이 되어 뒤에 오는
+        ///     진짜 부정("참조하지 않습니다")과 분리된다 - 정직한 부정문이 거짓
+        ///     단언으로 오판된다.
+        ///   - 콤마: "크로스 데이터베이스 참조, Linked Server 원격 참조 모두
+        ///     없습니다"처럼 콤마로 나열한 대상을 공유 서술어 하나로 부정하는
+        ///     문장을 콤마에서 쪼개면, 앞 절엔 주장만 남고 부정은 뒤 절에만 남아
+        ///     역시 거짓 단언으로 오판된다.
+        /// 마침표는 SentenceBoundaryRegex와 같은 규칙(뒤에 공백·줄바꿈·문서 끝이
+        /// 와야 경계)으로 대체했다 - 식별자·날짜 안의 점은 더 이상 절을 가르지
+        /// 않는다. "이며"·"지만" 같은 접속 표현은 그대로 둔다 - 대조 실험
+        /// (Validate_ThreePartClaimWithoutAnyThreePartReference_ShouldBeAnError)이
+        /// 이 표현으로 접속된 두 절이 실제로 다른 주장을 담는 실측(STAT_PGCOLLECT_INS)에
+        /// 근거해 여전히 갈라야 한다.
         /// </summary>
-        private static readonly string[] ClauseBoundaryMarkers = { "이며", "이고", "지만", "그러나", ",", "." };
+        private static readonly Regex ClauseBoundaryRegex =
+            new(@"이며|이고|지만|그러나|\.(?=\s|$)", RegexOptions.Compiled);
 
         /// <summary>
         /// 원본에 3부 참조가 하나도 없는데 명세서가 3부·크로스 DB 참조를 단언하는지 본다.
@@ -1080,32 +1108,46 @@ namespace ReSet.Core.Services
             var clauses = new List<string>();
             var current = 0;
 
-            while (current < line.Length)
+            foreach (Match marker in ClauseBoundaryRegex.Matches(line))
             {
-                var nextBoundary = -1;
-                var markerLength = 0;
-
-                foreach (var marker in ClauseBoundaryMarkers)
-                {
-                    var idx = line.IndexOf(marker, current, StringComparison.Ordinal);
-                    if (idx >= 0 && (nextBoundary == -1 || idx < nextBoundary))
-                    {
-                        nextBoundary = idx;
-                        markerLength = marker.Length;
-                    }
-                }
-
-                if (nextBoundary == -1)
-                {
-                    clauses.Add(line.Substring(current));
-                    break;
-                }
-
-                clauses.Add(line.Substring(current, nextBoundary - current));
-                current = nextBoundary + markerLength;
+                clauses.Add(line.Substring(current, marker.Index - current));
+                current = marker.Index + marker.Length;
             }
 
+            clauses.Add(line.Substring(current));
             return clauses;
+        }
+
+        /// <summary>
+        /// 코드 범례 앵커("N:라벨")의 숫자·라벨을 나눠 잡는다. CodeLegend가 아닌
+        /// 앵커(식별자·날짜)는 대상이 아니다.
+        /// </summary>
+        private static readonly Regex LegendAnchorPartsRegex =
+            new(@"^(\d+):(.+)$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 코드 범례 앵커 "N:라벨"이 명세서 본문에 있는지, 생성기가 실제로 쓰는
+        /// 서식까지 관용적으로 본다.
+        ///
+        /// [Fix Round 5 - 리뷰 실측] 종전 구현은 "N:라벨" 리터럴 부분 문자열만
+        /// 인정했다. 그런데 이 생성기가 실제로 쓰는 표 셀 서식은 백틱과 콜론 뒤
+        /// 공백이 들어간 `` `1`: `CommMethod` `` 형태다(실측:
+        /// UF_GET_PGCommOption/docs/Spec.md:43-44,74). 리터럴 앵커는 26건의 저장된
+        /// Spec.md 어디에도 그대로 나타나지 않아, 범례를 정확히 옮겨 적은 문서까지
+        /// 오탐으로 떨어뜨렸다. 숫자와 라벨 사이에 백틱·공백이 몇 개 끼어도
+        /// 인정하도록 정규식으로 관용성을 준다 - 값·순서까지는 흔들지 않는다
+        /// (숫자와 라벨은 여전히 앵커가 지정한 그대로여야 한다).
+        /// </summary>
+        private static bool ContainsAnchor(string markdown, string anchor)
+        {
+            var legendParts = LegendAnchorPartsRegex.Match(anchor);
+            if (!legendParts.Success)
+            {
+                return markdown.Contains(anchor, StringComparison.OrdinalIgnoreCase);
+            }
+
+            var pattern = $@"`?{Regex.Escape(legendParts.Groups[1].Value)}`?\s*:\s*`?{Regex.Escape(legendParts.Groups[2].Value)}`?";
+            return Regex.IsMatch(markdown, pattern, RegexOptions.IgnoreCase);
         }
 
         /// <summary>
@@ -1126,8 +1168,7 @@ namespace ReSet.Core.Services
             {
                 if (block.Anchors.Count == 0) continue;
 
-                var found = block.Anchors.Any(
-                    anchor => markdown.Contains(anchor, StringComparison.OrdinalIgnoreCase));
+                var found = block.Anchors.Any(anchor => ContainsAnchor(markdown, anchor));
                 if (found) continue;
 
                 var message =
@@ -1540,9 +1581,19 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 파생 테이블 컬럼의 정의 표현식이 명세서에 있는지 본다.
         ///
-        /// 헤딩 존재만으로는 부족하다. SET 우변이 X.PGCOMM에서 멈추면 명세서도 거기서
-        /// 멈추는데, 그 컬럼이 무엇으로 계산되는지가 금액을 결정한다. 그래서 표현식의
-        /// 앵커까지 본다.
+        /// [Fix Round 5 - 리뷰 실측, 이 브랜치의 유일한 축 A 🔴] 종전 구현은 헤딩
+        /// 존재를 전혀 확인하지 않고, 앵커가 "문서 전체 어딘가"에 있으면 통과시켰다.
+        /// 저장된 EXCEPTION_PROC/docs/Spec.md로 직접 돌려 보면 "### 파생 테이블 정의
+        /// (기계 확정 — 수정 금지)" 헤딩이 아예 없는데도 DiscountFlag(6회)·
+        /// DiscountAmt(7회)·TxAmt(11회 이상)가 문서 다른 곳에 흩어져 등장해 21개
+        /// 행 전부가 통과했다 - 실제 정의식 IIF(ISNULL(A.DiscountFlag,'N')='Y',
+        /// A.DiscountAmt, A.TxAmt)는 어디에도 없는데도. CheckDmlScopeTable
+        /// (기계 확정 표의 자매 검사)이 이미 옳게 하는 모양 - 헤딩을 먼저 요구하고,
+        /// 그다음 헤딩 구간 안에서만 대조 - 을 그대로 따른다.
+        ///
+        /// 헤딩이 없으면 그 자체로 오류다. 헤딩이 있으면, 앵커를 헤딩부터 다음
+        /// `## `/`### ` 헤딩 전까지의 구간으로 좁혀서 찾는다 - 문서 다른 곳(CRUD
+        /// 서술 등)의 우연한 등장이 이 표를 옮겼다는 증거가 되지 않는다.
         ///
         /// 앵커 하나만 있으면 통과다. 전부 요구하면 표현식을 풀어 설명한 정상 서술이
         /// 결함이 된다. 앵커가 하나도 없는 컬럼(상수·리터럴만으로 정의된 경우)은
@@ -1553,12 +1604,32 @@ namespace ReSet.Core.Services
         {
             if (expectations.DerivedColumns.Count == 0) return;
 
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (headingIndex, endIndex) = LocateDerivedTableSection(lines);
+
+            if (headingIndex < 0)
+            {
+                var headingMessage =
+                    $"파생 테이블 정의 표가 명세서에 없습니다. `{DerivedTableColumnExtractor.DerivedTableHeading}` "
+                    + $"헤딩과 {expectations.DerivedColumns.Count}개 컬럼 정의를 그대로 옮겨야 합니다.";
+                result.Errors.Add(headingMessage);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.DerivedTableDefinitionMissing,
+                    Message = headingMessage
+                });
+                return;
+            }
+
+            var sectionText = string.Join(
+                "\n", lines.Skip(headingIndex + 1).Take(endIndex - headingIndex - 1));
+
             foreach (var definition in expectations.DerivedColumns)
             {
                 if (definition.Anchors.Count == 0) continue;
 
                 var found = definition.Anchors.Any(
-                    anchor => markdown.Contains(anchor, StringComparison.OrdinalIgnoreCase));
+                    anchor => sectionText.Contains(anchor, StringComparison.OrdinalIgnoreCase));
                 if (found) continue;
 
                 var message =
@@ -1575,6 +1646,29 @@ namespace ReSet.Core.Services
                     RawContext = definition.Expression
                 });
             }
+        }
+
+        /// <summary>
+        /// 파생 테이블 정의 헤딩과, 그 표가 끝나는(다음 `## `/`### ` 헤딩이 시작하는)
+        /// 인덱스를 찾는다. 헤딩이 없으면 (-1, -1). LocateDmlScopeSection과 같은 이유로
+        /// 다음 H2뿐 아니라 다음 H3에도 막힌다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateDerivedTableSection(IReadOnlyList<string> lines)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == DerivedTableColumnExtractor.DerivedTableHeading);
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
         }
 
         private static readonly Regex TableCellRegex =

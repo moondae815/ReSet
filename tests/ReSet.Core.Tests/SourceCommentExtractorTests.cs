@@ -59,6 +59,29 @@ END";
         }
 
         [Fact]
+        public void Extract_HeaderComment_ShouldNotAnchorOnCopyrightOrDateTokens()
+        {
+            // 실측(output/**/docs/Spec.md 26건): "PayLetter"가 0건 등장하는데도, Header
+            // 블록이 NonExecutable과 같은 식별자·날짜 앵커 규칙을 쓰면 저작권 고지
+            // 자체가 대조 앵커가 되어 모든 문서가 이 보일러플레이트 전사를 강제로
+            // 요구받는다. 헤더 재료의 역할은 A5(헤더/구현 모순) 검사이지 저작권·
+            // 작성자 표기 전사가 아니다(설계 §2.1·§2.4 - "선언 키워드"는
+            // HeaderContractTerms가 이미 담당한다).
+            const string ddl = @"-- ProcedureName   : UP_Util_Settle_Ins
+-- Copyright ⓒ 2001 by PayLetter Inc. All rights reserved.
+-- Author          : kks, 2019-04-30
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    SELECT 1
+END";
+
+            var blocks = SourceCommentExtractor.Extract(ddl);
+
+            Assert.Contains(blocks, b => b.Kind == "Header");
+            Assert.All(blocks.Where(b => b.Kind == "Header"), b => Assert.Empty(b.Anchors));
+        }
+
+        [Fact]
         public void Extract_PlainProseComment_ShouldHaveNoAnchors()
         {
             // 앵커가 없으면 프롬프트에만 싣고 L1은 대조하지 않는다.

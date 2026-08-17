@@ -1892,6 +1892,69 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_ThreePartClaimNegatedWithNominalForm_ShouldNotBeAnError()
+        {
+            // UF_GET_ROUND4VAT/docs/Spec.md:107 실측: "세 부분 식별자를 사용하는 동일
+            // 서버 내 다른 데이터베이스 참조가 없음"처럼 표 셀은 종결형("없습니다")이
+            // 아니라 명사형 부정("없음")을 쓴다. NegationTokens가 종결형만 담으면 이
+            // 정직한 문장이 거짓 단언으로 오판된다.
+            var expectations = EmptyExpectations() with
+            {
+                HasThreePartReference = false,
+                HasLinkedServerReference = false
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n| 다른 데이터베이스 | 없음 | 세 부분 식별자를 사용하는 동일 서버 내 "
+                + "다른 데이터베이스 참조가 없음 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
+        public void Validate_ThreePartClaimAndNegationSeparatedByAComma_ShouldNotBeAnError()
+        {
+            // 리뷰 실측 예시 형태: "크로스 데이터베이스 참조, Linked Server 원격 참조
+            // 모두 없습니다"처럼 콤마로 나열한 대상을 공유 서술어 하나로 부정하는
+            // 문장을, 콤마를 절 경계로 쪼개면 앞 절엔 주장만 남고 부정은 뒤 절에만
+            // 남아 거짓 단언으로 오판된다.
+            var expectations = EmptyExpectations() with
+            {
+                HasThreePartReference = false,
+                HasLinkedServerReference = false
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n3부 식별자 기반 크로스 데이터베이스 참조, Linked Server 원격 참조 모두 "
+                + "없습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
+        public void Validate_ThreePartClaimNegatedAfterAPeriodInsideAnIdentifier_ShouldNotBeAnError()
+        {
+            // SplitIntoClauses가 "dbo.UP_Legacy"의 마침표를 절 경계로 오인하면, 부정
+            // "참조하지 않습니다"가 앞 절("3부 식별자")과 분리되어 정직한 부정문이
+            // 거짓 단언으로 오판된다. CheckHeaderContractContradiction의
+            // SentenceBoundaryRegex(Fix Round 3)가 이미 쓰는 "뒤에 공백/줄끝이 와야
+            // 마침표를 경계로 센다"는 규칙을 여기도 적용해야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasThreePartReference = false,
+                HasLinkedServerReference = false
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 3부 식별자로 dbo.UP_Legacy를 참조하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.IdentifierNotationClaim);
+        }
+
+        [Fact]
         public void Validate_MissingCommentAnchor_ShouldBeAnError()
         {
             var expectations = EmptyExpectations() with
@@ -1929,6 +1992,48 @@ A[""시작""] --> B[""끝""]
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
+        }
+
+        [Fact]
+        public void Validate_CodeLegendAnchorWrittenWithBackticksAndSpacing_ShouldPass()
+        {
+            // 실측: UF_GET_PGCommOption/docs/Spec.md:43-44,74. 생성기가 실제로 쓰는
+            // 서식은 `1`: `CommMethod`(백틱·콜론 뒤 공백 포함)인데, 앵커는 추출
+            // 시점의 원시 리터럴 "1:CommMethod"(백틱·공백 없음)다. 문자 그대로의
+            // 부분 문자열 대조만 쓰면 정확히 옮겨 적은 문서가 오탐으로 떨어진다.
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock(
+                        "CodeLegend", "1:CommMethod, 2:CommStandard", 74,
+                        new[] { "1:CommMethod", "2:CommStandard" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n| `@pi_intOptionFlag` | 옵션 | `1`: `CommMethod`, `2`: `CommStandard` |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
+        }
+
+        [Fact]
+        public void Validate_CodeLegendAnchorTrulyAbsent_ShouldStillBeAnError()
+        {
+            // 위 테스트의 짝 - 관용성을 너무 넓혀 진짜 누락까지 통과시키지 않았는지
+            // 증명한다.
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("CodeLegend", "1:CommMethod", 74, new[] { "1:CommMethod" })
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
         }
 
         [Fact]
@@ -2829,11 +2934,74 @@ END"
         }
 
         [Fact]
+        public void Validate_DerivedColumnAnchorsScatteredElsewhereInDocument_ShouldStillBeAnError()
+        {
+            // 실측: EXCEPTION_PROC의 저장된 Spec.md는 "### 파생 테이블 정의 (기계
+            // 확정 — 수정 금지)" 헤딩이 아예 없는데도 DiscountFlag(6회)·
+            // DiscountAmt(7회)·TxAmt(11회 이상)가 문서 다른 곳에 흩어져 등장해,
+            // "문서 전체에 앵커가 있는가"만 보는 종전 구현이 21개 행 전부를 통과
+            // 시켰다. 실제 정의식 IIF(ISNULL(A.DiscountFlag,'N')='Y',
+            // A.DiscountAmt, A.TxAmt)는 어디에도 없다 - 이 브랜치의 유일한 축 A
+            // 🔴가 프롬프트로만 닫혀 있었다는 뜻이다. CheckDmlScopeTable처럼
+            // 헤딩을 강제하고, 헤딩이 없으면 앵커가 문서 다른 곳에 있어도 통과시키지
+            // 않아야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition(
+                        "X", "PGCOMM",
+                        "IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt)",
+                        new[] { "DiscountFlag", "DiscountAmt", "TxAmt" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\nPG 수수료는 `ISNULL(X.PGCOMM, 0)`으로 계산합니다. "
+                + "DiscountFlag는 다른 조회 화면에서도 쓰인다. DiscountAmt와 TxAmt는 "
+                + "정산 요약 표에도 등장한다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
+        [Fact]
+        public void Validate_DerivedColumnAnchorOutsideTheDerivedTableSection_ShouldStillBeAnError()
+        {
+            // CheckDmlScopeTable과 같은 스코프 원칙 - 파생 테이블 헤딩 다음 구간
+            // 안에서만 앵커를 찾아야 한다. 헤딩 밖(예: 앞선 CRUD 서술)에 우연히
+            // 앵커가 나타나는 것을 통과로 치면, 헤딩 자체는 있어도 정의 표현식이
+            // 빠진 행을 놓친다.
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition(
+                        "X", "PGCOMM",
+                        "IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt)",
+                        new[] { "DiscountFlag", "DiscountAmt", "TxAmt" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\nDiscountFlag는 다른 조회 화면에서도 쓰인다.\n"
+                + "\n### 파생 테이블 정의 (기계 확정 — 수정 금지)\n"
+                + "| 별칭 | 컬럼 | 정의 표현식 |\n| :--- | :--- | :--- |\n"
+                + "| X | PGCOMM | (정의 누락) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
+        [Fact]
         public void Validate_DerivedColumnWithNoAnchors_ShouldBeSkipped()
         {
             // 앵커가 하나도 없는 파생 컬럼(예: 상수·리터럴만으로 정의된 컬럼)은
-            // 대조할 근거가 없다 - 대조 대상에서 조용히 빠져야지 항상 결함으로
-            // 잡히면 안 된다.
+            // 행 단위 대조 근거가 없다 - 조용히 빠져야지 항상 결함으로 잡히면 안
+            // 된다. 다만 헤딩 자체는 여전히 요구된다(Fix Round 5) - AiService는
+            // DerivedColumns가 하나라도 있으면 앵커 유무와 무관하게 항상 이 표
+            // 전체를 렌더링하므로, 앵커 없는 컬럼이 있다고 표를 통째로 생략해도
+            // 되는 것은 아니다.
             var expectations = EmptyExpectations() with
             {
                 DerivedColumns = new[]
@@ -2841,8 +3009,12 @@ END"
                     new DerivedColumnDefinition("X", "FLAG", "1", Array.Empty<string>())
                 }
             };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### 파생 테이블 정의 (기계 확정 — 수정 금지)\n"
+                + "| 별칭 | 컬럼 | 정의 표현식 |\n| :--- | :--- | :--- |\n"
+                + "| X | FLAG | 1 |\n";
 
-            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+            var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
         }
