@@ -1609,9 +1609,22 @@ namespace ReSet.Core.Services
 
             if (headingIndex < 0)
             {
+                // 이 검사는 헤딩을 line.Trim() 완전 일치로만 찾는다(LocateDerivedTableSection,
+                // CheckDmlScopeTable과 같은 규칙 - 위 클래스 요약 주석 참고). 완전
+                // 일치를 요구하는 것 자체는 의도적이라 느슨하게 풀지 않는다. 다만
+                // 예전 메시지 "파생 테이블 정의 표가 명세서에 없습니다"는 표가 정말
+                // 없는 경우와, 모델이 헤딩을 재서식(예: 볼드 처리, 앞뒤 공백,
+                // "수정 금지" 대신 "변경 금지" 등)해 문서에는 있지만 완전 일치에
+                // 실패한 경우를 구분하지 못했다 - 운영자나 재생성 모델이 이 메시지만
+                // 보고는 "표 자체를 새로 써야 하는지" "헤딩 문구만 원문 그대로
+                // 맞추면 되는지"를 알 수 없었다. 헤딩 정확 일치 요구를 메시지에
+                // 명시해 그 구분을 가능하게 한다.
                 var headingMessage =
-                    $"파생 테이블 정의 표가 명세서에 없습니다. `{DerivedTableColumnExtractor.DerivedTableHeading}` "
-                    + $"헤딩과 {expectations.DerivedColumns.Count}개 컬럼 정의를 그대로 옮겨야 합니다.";
+                    $"파생 테이블 정의 표를 찾지 못했습니다. `{DerivedTableColumnExtractor.DerivedTableHeading}` "
+                    + "헤딩이 명세서 어딘가에 이 문자열과 정확히 일치해야 인정됩니다(공백·기호·볼드 처리까지 "
+                    + "완전히 같아야 하며, 모델이 재서식한 헤딩은 일치로 보지 않습니다). 헤딩이 이미 있는데도 "
+                    + "이 오류가 났다면 표를 새로 쓰지 말고 헤딩 문구를 원문 그대로 맞추십시오. "
+                    + $"헤딩 아래에는 {expectations.DerivedColumns.Count}개 컬럼 정의를 그대로 옮겨야 합니다.";
                 result.Errors.Add(headingMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {

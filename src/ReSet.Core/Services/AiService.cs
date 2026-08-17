@@ -692,6 +692,32 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 모델의 최초 생성 경로)가 이 헬퍼를 공유해야 두 경로가 같은 표를 내보낸다는 것이
         /// 코드로 보장된다 - UPDATE fill-in 템플릿과 같은 이유다(BuildUpdateMappingTemplateLines
         /// 문서 참고).
+        ///
+        /// [헤더 문구 - "WHERE 술어 컬럼" 열] DmlScopeExtractor.TopLevelPredicateCollector는
+        /// 최상위 WHERE의 컬럼을 한정자와 무관하게 전부 모은다(대상 테이블 소속인지
+        /// 가리지 않는다) - 콤마로 나열한 옛 스타일 조인(FROM A, B WHERE A.X = B.Y)의
+        /// 결합 조건이 ON절 없이 WHERE에 그대로 놓이기 때문에, 그 조인 컬럼도 이
+        /// 칸에 함께 담겨야 하기 때문이다(DmlScopeExtractor 주석 참고). 그런데 예전
+        /// 헤더 문구 "대상에 적용된 WHERE 술어 컬럼"은 이 칸의 모든 컬럼이 대상
+        /// 범위를 좁힌다고 잘못 단언했다. 실측(COMM_UPD 223행 UPDATE): WHERE 전체가
+        /// 콤마 조인 결합 조건뿐인데도(A.PLTID = B.PLTID 형태) 옛 헤더 아래
+        /// "AYMD, YMD, CLIENTID, PGNAME, MALLID, PLTID, ID"가 그대로 찍혔다 - 이 표는
+        /// "기계 확정 — 수정 금지"라 명세서가 이 거짓 단언을 그대로 베끼고, 그 결과
+        /// 이 검사가 막으려는 바로 그 주장("정산 행은 YMD = @pi_strYMD로 좁혀진다")을
+        /// 오히려 뒷받침하는 근거로 오독될 수 있었다.
+        ///
+        /// [필터링 대신 문구만 고친 이유] 대상 한정자로 필터링하는 안도 검토했으나
+        /// 기각했다 - Task 9 리뷰가 이미 같은 모양의 트레이드오프를 실측으로
+        /// 확인했다(JoinKeys 필터링에서 한정자 없는 비교를 "놓치는 쪽"으로 두기로
+        /// 한 결정, DmlScopeExtractor의 HaveDifferentQualifiers 주석 참고): 여기서
+        /// 대상 한정자만 남기도록 필터링하면, 대상 스스로의 컬럼이 조인을 거쳐
+        /// 간접적으로(예: 서브쿼리 파생 값과의 비교) 범위를 좁히는 경우까지 함께
+        /// 잘려 나가 "거짓 단언"을 "거짓 부재"로 바꿀 뿐이다 - 한쪽 오류를 반대쪽
+        /// 오류로 맞바꾸는 셈이라 이득이 없다. 반면 헤더 문구를 "전체 컬럼, 대상
+        /// 한정 아님"으로 바로잡으면 데이터 자체(어느 컬럼이 실렸는지)는 하나도
+        /// 잃지 않으면서 거짓 단언만 없앤다 - `기준일 파라미터 적용` 칸이 이미
+        /// "대상이 실제로 좁혀지는가"라는, 이 칸이 잘못 떠맡았던 질문에 대한 정답을
+        /// 별도로 낸다.
         /// </summary>
         private static List<string> BuildDmlScopeTableLines(
             IReadOnlyList<DmlScopeFact> dmlScopeFacts, string dateParameter)
@@ -699,7 +725,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>
             {
                 $"   {DmlScopeExtractor.DmlScopeTableHeading}",
-                "   | 문장 | 라인 | 대상 | 대상에 적용된 WHERE 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 |",
+                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용 | 조인 키 |",
                 "   | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
@@ -777,6 +803,27 @@ Based on the structured reference context above, reverse engineer the stored pro
 
 [Output Language Requirement]
 - You MUST write the final markdown specification in Korean.";
+
+            // SpecExpectations.From()은 객체 타입을 가리지 않고 모든 SP/함수에 이
+            // 재료들을 무조건 만든다(L1의 CheckDerivedTableDefinitions 등도 무조건
+            // 돈다) - 그런데 이 프롬프트는 지금까지 파생 테이블 표를 한 번도 낸 적이
+            // 없었다. 실측(현재 코퍼스 26건 중 함수 12건을 이 harness로 직접 돌린 결과):
+            // UF_GET_COLLECTYMD·UIF_SettleYMD 둘 다 DerivedColumns=4로 실제 파생 컬럼이
+            // 있고 DerivedTableDefinitionMissing이 1건씩(헤딩 자체가 없음) 발생한다.
+            // T-SQL 함수는 UPDATE/DELETE를 담을 수 없어(DmlScopeExtractor가
+            // UpdateSpecification/DeleteSpecification만 본다) DmlScopeFacts는 코퍼스
+            // 12건 전부 0으로 구조적으로 비어 있다 - 그래서 DML 범위 표는 함수 프롬프트에
+            // 낼 필요가 없다(내도 Count==0이라 아무 일도 하지 않는다). 반면 SELECT/파생
+            // 테이블(FROM 절 서브쿼리)은 함수 본문에도 얼마든지 나타나므로 이 표는
+            // 프로시저와 똑같이 필요하다.
+            var derivedColumns = DerivedTableColumnExtractor.Extract(functionDef.DdlText);
+            if (derivedColumns.Count > 0)
+            {
+                var derivedTableLines = new List<string> { DerivedTableIntroText };
+                derivedTableLines.AddRange(BuildDerivedTableColumnLines(derivedColumns));
+                systemPrompt += "\n\n" + string.Join("\n", derivedTableLines);
+            }
+
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
 
             var (dependenciesText, tableSchemasText, referenceDdlsText, staticAnalysisText) = BuildSpMetadataTexts(functionDef);
@@ -786,6 +833,51 @@ Based on the structured reference context above, reverse engineer the stored pro
                 : returnInfo.IsTableValued
                     ? $"Table-valued function. Result columns:\n{string.Join("\n", returnInfo.Columns.Select(FormatFunctionReturnColumn))}"
                     : $"Scalar function return type: {returnInfo.DataType}";
+
+            // 같은 이유로 CheckSourceComments·CheckRoundingSemantics도 함수에 무조건
+            // 돈다. 실측: 코퍼스 함수 12건 중 6건이 이미 SourceCommentMissing으로
+            // 걸린다(주석 요구 문구가 프롬프트에 없었기 때문) - 요청받지 않은 것을
+            // 모델이 자발적으로 다 옮기길 기대할 수 없다. ROUND 3인자 호출은 현재
+            // 코퍼스 함수 12건 전부 0건이라 지금 당장 실패를 만들지는 않지만, 함수
+            // 본문에서도 ROUND(x, n, 1) 호출은 문법적으로 가능하므로(세션 옵션·
+            // 내부 SP 호출과 달리 T-SQL이 막지 않는다) 재료가 생기는 순간 같은
+            // 결함이 재현된다. 세션 옵션(SessionOptionsExtractor는 CreateProcedureStatement
+            // 본문만 훑는다)과 헤더/EXEC 모순(HasInternalProcedureCall은 이름 고정
+            // EXEC 호출을 요구하는데 함수는 부작용이 있는 EXEC를 낼 수 없다 - T-SQL이
+            // 이를 금지한다)은 반대로 함수에서 구조적으로 항상 비어 있다(실측:
+            // 코퍼스 12건 전부 SessionOptions=0, HasInternalProcCall=False) - 그래서
+            // 여기 체크리스트에 넣지 않는다. 넣어도 항상 빈 목록이라 아무 문장도
+            // 추가되지 않겠지만, 절대 채워지지 않는 항목을 프롬프트에 약속하는 것은
+            // 다음 사람이 "왜 이 항목은 절대 안 뜨지?"를 다시 조사하게 만든다.
+            var checklistSb = new StringBuilder();
+            var sourceComments = SourceCommentExtractor.Extract(functionDef.DdlText);
+            var roundingCalls = RoundingSemanticsExtractor.Extract(functionDef.DdlText);
+            if (sourceComments.Count > 0 || roundingCalls.Count > 0)
+            {
+                checklistSb.AppendLine();
+                checklistSb.AppendLine("🎯 [최종 작성 전 필수 검증 체크리스트]");
+
+                if (sourceComments.Count > 0)
+                {
+                    checklistSb.AppendLine(
+                        $"- [ ] 원본 DDL의 주석 {sourceComments.Count}건(비실행 조건·코드 범례·헤더 선언)을 "
+                        + "본문에 기록하셨습니까? 조건식 원문·도입 일자·사유를 그대로 옮기고, "
+                        + "\"실행되지 않습니다\" 한 문장으로 대신하지 마십시오. 대조 대상:");
+                    foreach (var block in sourceComments)
+                    {
+                        checklistSb.AppendLine($"      * (라인 {block.Line}) {block.Text}");
+                    }
+                }
+
+                if (roundingCalls.Count > 0)
+                {
+                    checklistSb.AppendLine(
+                        $"- [ ] 원본의 3인자 ROUND 호출 {roundingCalls.Count}건에 대해 "
+                        + $"{RoundingSemanticsExtractor.SemanticsSentence} "
+                        + "이 값 매핑을 명세서에 기술하셨습니까? \"반올림 또는 절사\"처럼 "
+                        + "어느 값이 어느 동작인지 흐리게 적지 마십시오.");
+                }
+            }
 
             var userPrompt = $@"
 <user-defined-function-context>
@@ -811,7 +903,8 @@ Based on the structured reference context above, reverse engineer the stored pro
   </function-source-ddl>
 </user-defined-function-context>
 
-Based on the reference context above, reverse engineer the user defined function and write the Korean markdown specification.";
+Based on the reference context above, reverse engineer the user defined function and write the Korean markdown specification.
+{checklistSb}";
 
             if (!string.IsNullOrWhiteSpace(feedbackLog))
             {
