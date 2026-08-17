@@ -24,6 +24,7 @@ namespace ReSet.Core.Services
         SessionOptionMissing,
         HeaderContractContradiction,
         DmlScopeTableMissing,
+        DerivedTableDefinitionMissing,
         General
     }
 
@@ -119,6 +120,7 @@ namespace ReSet.Core.Services
                     CheckSessionOptions(cleansed, expectations, result);
                     CheckHeaderContractContradiction(cleansed, expectations, result);
                     CheckDmlScopeTable(cleansed, expectations, result);
+                    CheckDerivedTableDefinitions(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1533,6 +1535,46 @@ namespace ReSet.Core.Services
                 });
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 파생 테이블 컬럼의 정의 표현식이 명세서에 있는지 본다.
+        ///
+        /// 헤딩 존재만으로는 부족하다. SET 우변이 X.PGCOMM에서 멈추면 명세서도 거기서
+        /// 멈추는데, 그 컬럼이 무엇으로 계산되는지가 금액을 결정한다. 그래서 표현식의
+        /// 앵커까지 본다.
+        ///
+        /// 앵커 하나만 있으면 통과다. 전부 요구하면 표현식을 풀어 설명한 정상 서술이
+        /// 결함이 된다. 앵커가 하나도 없는 컬럼(상수·리터럴만으로 정의된 경우)은
+        /// 대조할 근거가 없으므로 조용히 건너뛴다.
+        /// </summary>
+        private static void CheckDerivedTableDefinitions(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.DerivedColumns.Count == 0) return;
+
+            foreach (var definition in expectations.DerivedColumns)
+            {
+                if (definition.Anchors.Count == 0) continue;
+
+                var found = definition.Anchors.Any(
+                    anchor => markdown.Contains(anchor, StringComparison.OrdinalIgnoreCase));
+                if (found) continue;
+
+                var message =
+                    $"파생 테이블 `{definition.Alias}`의 컬럼 `{definition.Column}` 정의가 "
+                    + $"명세서에 없습니다: `{definition.Expression}`. "
+                    + $"SET 우변이 `{definition.Alias}.{definition.Column}`에서 멈추면 "
+                    + "그 값이 무엇으로 계산되는지가 소실됩니다. "
+                    + $"(대조 앵커: {string.Join(", ", definition.Anchors)})";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.DerivedTableDefinitionMissing,
+                    Message = message,
+                    RawContext = definition.Expression
+                });
+            }
         }
 
         private static readonly Regex TableCellRegex =

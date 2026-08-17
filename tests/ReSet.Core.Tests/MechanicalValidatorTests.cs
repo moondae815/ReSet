@@ -2761,6 +2761,109 @@ END"
             Assert.True(fact.DateParameterApplied);
         }
 
+        [Fact]
+        public void Validate_MissingDerivedTableDefinition_ShouldBeAnError()
+        {
+            // EXCEPTION_PROC 실행순서 13 실측. SET 우변이 ISNULL(X.PGCOMM,0)에서
+            // 멈추고 X의 정의(프로모션 원가 기준금액 분기)가 본문 어디에도
+            // 없으면, 이 검사가 없으면 재생성이 TxAmt 기준으로 계산해 금액이
+            // 달라진다 - 이번 감사의 유일한 축 A 🔴.
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition(
+                        "X", "PGCOMM",
+                        "IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt)",
+                        new[] { "DiscountFlag", "DiscountAmt", "TxAmt" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\nPG 수수료는 `ISNULL(X.PGCOMM, 0)`으로 계산합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
+        [Fact]
+        public void Validate_DerivedTableDefinitionPresent_ShouldPass()
+        {
+            // 위 테스트의 짝 - 앵커 하나(여기서는 DiscountFlag)만 본문에 있으면
+            // 통과다. 전부 요구하면 표현식을 풀어 설명한 정상 서술이 결함이
+            // 된다(설계 의도).
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition(
+                        "X", "PGCOMM",
+                        "IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt)",
+                        new[] { "DiscountFlag", "DiscountAmt", "TxAmt" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### 파생 테이블 정의 (기계 확정 — 수정 금지)\n"
+                + "| 별칭 | 컬럼 | 정의 표현식 |\n| :--- | :--- | :--- |\n"
+                + "| X | PGCOMM | IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
+        [Fact]
+        public void Validate_DerivedColumnWithNoAnchors_ShouldBeSkipped()
+        {
+            // 앵커가 하나도 없는 파생 컬럼(예: 상수·리터럴만으로 정의된 컬럼)은
+            // 대조할 근거가 없다 - 대조 대상에서 조용히 빠져야지 항상 결함으로
+            // 잡히면 안 된다.
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition("X", "FLAG", "1", Array.Empty<string>())
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsADerivedColumn_ShouldNotBeNullAndShouldCarryIt()
+        {
+            // Task 4/9가 세운 조기 반환 함정의 재현이다. DerivedColumns를 조기 반환
+            // 조건에 잇지 않으면, 이 새 재료가 유일하게 있는 SpDefinition도 null을
+            // 받아 CheckDerivedTableDefinitions이 한 번도 돌지 않는다 - 이 테스트가
+            // 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            //
+            // 파생 테이블을 UPDATE...FROM이 아니라 단순 SELECT...FROM에 둔다 -
+            // UPDATE/DELETE를 쓰면 DmlScopeExtractor도 동시에 사실을 만들어 내어
+            // (dmlScopeFacts.Count == 0) 조건이 이미 false가 되고, derivedColumns
+            // 항을 조기 반환식에서 지워도 이 테스트가 여전히 통과하는 거짓
+            // 안전망이 된다 - 신호를 하나만 남겨야 그 신호의 배선만 증명한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    SELECT X.PGCOMM
+    FROM   (SELECT PLTID,
+                   IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM
+            FROM   dbo.TSettleMst A) X
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.Empty(expectations!.DmlScopeFacts);
+            var def = Assert.Single(expectations.DerivedColumns, d => d.Column == "PGCOMM");
+            Assert.Contains("DiscountFlag", def.Anchors);
+        }
+
         private static SpecExpectations EmptyExpectations() =>
             new(
                 Array.Empty<UpdateColumnExpectation>(),

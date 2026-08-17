@@ -817,5 +817,67 @@ END"
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.DoesNotContain(DmlScopeExtractor.DmlScopeTableHeading, body);
         }
+
+        /// <summary>
+        /// EXCEPTION_PROC 실행순서 13 실측 형태 - 축 A 🔴. UPDATE의 SET 우변이
+        /// ISNULL(X.PGCOMM, 0)에서 멈추고, X 안의 IIF(ISNULL(A.DiscountFlag,'N')='Y', ...)가
+        /// 프로모션 건의 원가 기준금액이다. 아래 두 테스트는 DiscountFlag 등 표현식
+        /// 안의 식별자로 대조한다 - 원본 DDL에도 우연히 있는 단어가 아니라 파생
+        /// 테이블 정의 표에서만 나오는 값이어야 표가 없어도 통과하는 거짓양성을
+        /// 피한다.
+        /// </summary>
+        private static SpDefinition ProbeDerivedTableSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "EXCEPTION_PROC",
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    A.PGComm = ISNULL(X.PGCOMM, 0)
+    FROM   dbo.TSettleMst A
+    JOIN   (SELECT PLTID,
+                   IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM
+            FROM   dbo.TSettleMst A) X ON X.PLTID = A.PLTID
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithDerivedColumns_ShouldPrefillTheDerivedTableTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeDerivedTableSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DerivedTableColumnExtractor.DerivedTableHeading, body);
+            Assert.Contains("DiscountFlag", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithDerivedColumns_ShouldPrefillTheDerivedTableTable()
+        {
+            // 지역 모델 경로(GenerateSpecSectionAsync의 "CrudAnalysis" 분기)도 같은 표를
+            // 받아야 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+            // BuildSpecificationPrompts를 전혀 호출하지 않는다. 이 테스트는 그 분기
+            // 자체를 대상으로 삼는다 - 배선이 이 분기에서만 빠져도 실패해야 한다
+            // (비대칭 뮤테이션으로 실측: 이 분기만 끄면 이 테스트만 실패하고 위
+            // GenerateSpecificationAsync 테스트는 그대로 통과한다).
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeDerivedTableSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DerivedTableColumnExtractor.DerivedTableHeading, body);
+            Assert.Contains("DiscountFlag", body);
+        }
     }
 }

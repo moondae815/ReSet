@@ -392,6 +392,16 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildDmlScopeTableLines(dmlScopeFacts, dateParameter));
             }
 
+            // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
+            // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
+            // 강제한다 - 부재 서술은 자연어 판정이라 앵커가 없다.
+            var derivedColumns = DerivedTableColumnExtractor.Extract(spDef.DdlText);
+            if (derivedColumns.Count > 0)
+            {
+                rules.Add($"{ruleIndex++}. {DerivedTableIntroText}");
+                rules.AddRange(BuildDerivedTableColumnLines(derivedColumns));
+            }
+
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
@@ -710,6 +720,42 @@ Based on the structured reference context above, reverse engineer the stored pro
                 lines.Add(
                     $"   | {fact.Operation} {i + 1} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
                     + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
+        /// 파생 테이블 정의 표를 도입하는 규칙 문장. DmlScopeTableIntroText와 같은 이유로
+        /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
+        /// 위험을 없앤다.
+        /// </summary>
+        private const string DerivedTableIntroText =
+            "[CRITICAL DERIVED TABLE TABLE] The following derived-table column definitions are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. When a SET (or SELECT) expression references one of these aliases, you MUST NOT stop at the alias reference - the definition below is what determines the amount.";
+
+        /// <summary>
+        /// 파생 테이블 정의 표 본문을 만든다. 헤딩 리터럴
+        /// `DerivedTableColumnExtractor.DerivedTableHeading`은 Task 11의 L1(`MechanicalValidator`)이
+        /// 명세서 본문을 대조할 때 찾는 접두다. BuildSpecificationPrompts와
+        /// BuildSpecSectionPrompts의 "CrudAnalysis" 분기(지역 모델의 최초 생성 경로)가 이
+        /// 헬퍼를 공유해야 두 경로가 같은 표를 내보낸다는 것이 코드로 보장된다 -
+        /// BuildDmlScopeTableLines와 같은 이유다.
+        /// </summary>
+        private static List<string> BuildDerivedTableColumnLines(
+            IReadOnlyList<DerivedColumnDefinition> derivedColumns)
+        {
+            var lines = new List<string>
+            {
+                $"   {DerivedTableColumnExtractor.DerivedTableHeading}",
+                "   | 별칭 | 컬럼 | 정의 표현식 |",
+                "   | :--- | :--- | :--- |"
+            };
+
+            foreach (var definition in derivedColumns)
+            {
+                lines.Add(
+                    $"   | {definition.Alias} | {definition.Column} | {EscapeTableCell(definition.Expression)} |");
             }
 
             lines.Add("");
@@ -1763,6 +1809,18 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.Add($"{rIdx++}. {DmlScopeTableIntroText}");
                     sbRules.AddRange(BuildDmlScopeTableLines(dmlScopeFactsForCrud, dateParameterForCrud));
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
+                // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+                // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
+                // 모델 경로는 축 A 🔴를 드러내는 재료를 한 번도 받지 못한다(DmlScope 표와
+                // 같은 모양의 결함).
+                var derivedColumnsForCrud = DerivedTableColumnExtractor.Extract(spDef.DdlText);
+                if (derivedColumnsForCrud.Count > 0)
+                {
+                    sbRules.Add($"{rIdx++}. {DerivedTableIntroText}");
+                    sbRules.AddRange(BuildDerivedTableColumnLines(derivedColumnsForCrud));
                 }
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");

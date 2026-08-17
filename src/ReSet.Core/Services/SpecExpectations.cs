@@ -61,6 +61,14 @@ namespace ReSet.Core.Services
         public IReadOnlyList<DmlScopeFact> DmlScopeFacts { get; init; } = Array.Empty<DmlScopeFact>();
 
         /// <summary>
+        /// UPDATE/INSERT/DELETE FROM 절 파생 테이블의 컬럼 정의. SET(또는 SELECT)
+        /// 우변이 별칭.컬럼 참조에서 멈추고 그 정의를 어디에도 적지 않는 것을
+        /// 막는다 - 이번 감사의 유일한 축 A 🔴(EXCEPTION_PROC의 X.PGCOMM).
+        /// </summary>
+        public IReadOnlyList<DerivedColumnDefinition> DerivedColumns { get; init; }
+            = Array.Empty<DerivedColumnDefinition>();
+
+        /// <summary>
         /// 원본 DDL에 동적 SQL이 아닌, 이름이 고정된 저장 프로시저 EXEC 호출이 있는가.
         /// 헤더 주석이 "내부 SP 호출 없음"이라 선언했는데 실제로는 있는 모순을 잡는
         /// 판정에만 쓴다.
@@ -114,6 +122,7 @@ namespace ReSet.Core.Services
             // 다르게 고르면 프롬프트의 표와 여기 기대값이 갈라지고, 모델이 표를 그대로
             // 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 생긴다.
             var dmlScopeFacts = DmlScopeExtractor.Extract(spDef.DdlText, ResolveDateParameter(analysis));
+            var derivedColumns = DerivedTableColumnExtractor.Extract(spDef.DdlText);
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -137,7 +146,8 @@ namespace ReSet.Core.Services
                 && sourceComments.Count == 0
                 && roundingCalls.Count == 0
                 && sessionOptions.Count == 0
-                && dmlScopeFacts.Count == 0)
+                && dmlScopeFacts.Count == 0
+                && derivedColumns.Count == 0)
             {
                 return null;
             }
@@ -151,7 +161,8 @@ namespace ReSet.Core.Services
                 RoundingCalls = roundingCalls,
                 SessionOptions = sessionOptions,
                 HasInternalProcedureCall = hasInternalProcedureCall,
-                DmlScopeFacts = dmlScopeFacts
+                DmlScopeFacts = dmlScopeFacts,
+                DerivedColumns = derivedColumns
             };
         }
 
