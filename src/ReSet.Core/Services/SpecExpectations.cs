@@ -189,11 +189,29 @@ namespace ReSet.Core.Services
         /// 기준일 파라미터를 고르는 단일 규칙. AiService의 프롬프트 렌더(두 호출부)도 이
         /// 메서드를 부른다 - 두 곳이 다르게 고르면 프롬프트의 표와 L1의 기대가 갈라지고,
         /// 그러면 모델이 옳게 옮겨도 L1이 틀렸다고 한다.
+        ///
+        /// [반드시 이름만 돌려준다] ProcedureParameters의 원소는 SqlStaticParser가
+        /// $"{VariableName} {DataType}" 형태로 담은 <b>선언문</b>이다("@pi_strYMD varchar(8)").
+        /// 반면 이 값을 받는 DmlScopeExtractor는 VariableReference.Name에서 온 <b>맨 이름</b>
+        /// ("@pi_strYMD") 목록과 비교한다. 선언문을 그대로 넘기면 두 문자열은 어떤 SP에서도
+        /// 같아질 수 없어 DateParameterApplied가 구조적으로 항상 false가 되고, 프롬프트의
+        /// "DML 범위(기계 확정 - 수정 금지)" 표는 기준일 칸이 전 행 '아니오'인 채로 나간다.
+        /// EXCEPTION_PROC 재생성 실측에서 L2 비평가가 이 칸을 '치명적 사실 오류'로 잡아
+        /// 재시도 예산 3회를 모두 소진시켰다(최종 78/100 품질 미달 채택).
         /// </summary>
         public static string ResolveDateParameter(SpStaticAnalysisResult? analysis) =>
             analysis?.ProcedureParameters
-                .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase))
+                .Select(ParameterNameOf)
+                .FirstOrDefault(name => name.Contains("YMD", StringComparison.OrdinalIgnoreCase))
             ?? string.Empty;
+
+        /// <summary>"@pi_strYMD varchar(8)" 같은 선언문에서 변수명만 떼어낸다.</summary>
+        private static string ParameterNameOf(string declaration)
+        {
+            var trimmed = declaration.Trim();
+            var cut = trimmed.IndexOfAny(new[] { ' ', '\t', '\r', '\n' });
+            return cut < 0 ? trimmed : trimmed[..cut];
+        }
 
         /// <summary>
         /// 원본 DDL에 동적 SQL이 아닌 이름 고정 EXEC 호출이 있는지 AST로 직접 훑는다.

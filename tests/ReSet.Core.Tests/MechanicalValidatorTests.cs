@@ -2857,9 +2857,16 @@ END"
             // 방지책이다. 이 테스트는 From()이 실제로 그 헬퍼가 고르는 파라미터
             // (@pi_strYMD, 목록의 두 번째 것 - 첫 번째를 그냥 집는 실수를 잡는다)로
             // DateParameterApplied를 판정하는지 증명한다.
+            //
+            // [픽스처는 반드시 선언문 형태여야 한다] SqlStaticParser.ExplicitVisit(
+            // ProcedureParameter)는 $"{VariableName} {DataType}"으로 담으므로 운영에서
+            // 이 목록의 원소는 언제나 "@pi_strYMD varchar(8)"이지 "@pi_strYMD"가 아니다.
+            // 맨 이름을 넣은 픽스처는 파서가 만들 수 없는 값이라 ResolveDateParameter가
+            // 선언문을 그대로 흘려보내는 결함을 통째로 가렸고, 그 결함은 EXCEPTION_PROC
+            // 재생성에서 기준일 칸이 전 행 '아니오'로 나가서야 드러났다.
             var analysis = new SpStaticAnalysisResult();
-            analysis.ProcedureParameters.Add("@pi_intBatchNo");
-            analysis.ProcedureParameters.Add("@pi_strYMD");
+            analysis.ProcedureParameters.Add("@pi_intBatchNo int");
+            analysis.ProcedureParameters.Add("@pi_strYMD varchar(8)");
             var sp = new SpDefinition
             {
                 StaticAnalysis = analysis,
@@ -2880,6 +2887,32 @@ END"
             Assert.Equal("@pi_strYMD", resolvedByHelper);
             var fact = Assert.Single(expectations!.DmlScopeFacts);
             Assert.True(fact.DateParameterApplied);
+        }
+
+        [Fact]
+        public void ResolveDateParameter_OnRealParserOutput_ShouldYieldBareName()
+        {
+            // 위 테스트는 픽스처를 손으로 만든다 - 그 형식이 파서의 실제 산출과 어긋나면
+            // 통째로 헛돈다. 이 테스트만이 SqlStaticParser를 실제로 돌려서 이음매를
+            // 못 박는다: 파서가 담는 것은 선언문이고, ResolveDateParameter가 돌려줘야
+            // 하는 것은 DmlScopeExtractor의 VariableReference.Name과 맞물릴 맨 이름이다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_intBatchNo INT,
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE YMD = @pi_strYMD
+END";
+            var analysis = new SqlStaticParser().Analyze(ddl);
+
+            // 파서가 정말 "이름 타입" 형태로 담는다는 것을 먼저 확인한다.
+            Assert.Contains(analysis.ProcedureParameters, p => p.StartsWith("@pi_strYMD ", StringComparison.Ordinal));
+
+            Assert.Equal("@pi_strYMD", SpecExpectations.ResolveDateParameter(analysis));
+
+            var facts = DmlScopeExtractor.Extract(ddl, SpecExpectations.ResolveDateParameter(analysis));
+            Assert.True(Assert.Single(facts).DateParameterApplied);
         }
 
         [Fact]
