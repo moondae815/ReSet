@@ -500,6 +500,60 @@ namespace ReSet.Core.Tests
             Assert.Contains("PARSER-NORMALIZED", body);
         }
 
+        /// <summary>
+        /// COMM_UPD 실측 형태 - hasComments를 대체한 SourceCommentExtractor의 체크리스트
+        /// 항목이 실제 프롬프트에 닿는지를 증명하기 위한 것이라 이 헬퍼가 필요하다.
+        /// UPDATE 절 바로 아래 주석 처리된 조건(NonExecutable, 앵커 있음)을 둔다.
+        /// </summary>
+        private static SpDefinition ProbeSpDefWithSourceComment()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "COMM_UPD",
+                DdlText = @"
+CREATE PROCEDURE dbo.COMM_UPD AS
+BEGIN
+    UPDATE dbo.T SET C = 1
+    WHERE  ID > 0
+    --AND ClientID NOT IN (SELECT ClientID FROM dbo.UF_GET_CLIENTID4TMONET()) --예외처리 제거(2021.11.29)
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldContainTheSourceCommentChecklistItem()
+        {
+            // Task 5의 짝 - 메인 생성 경로(BuildSpecificationPrompts). hasComments는 계산만
+            // 되고 어디에서도 쓰이지 않는 죽은 변수였다 - 이 체크리스트 항목이 그 자리를
+            // 대신한다. 항목이 빠지면 이 어서션이 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDefWithSourceComment(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("원본 DDL의 주석", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldContainTheSourceCommentChecklistItem()
+        {
+            // 위 테스트의 짝. 지역 모델 CrudAnalysis 경로(BuildSpecSectionPrompts의
+            // "CrudAnalysis" 분기)는 지역 모델의 최초 생성 경로이자 L3 재생성 경로다 -
+            // BuildSpecificationPrompts에만 항목을 두면 이 경로가 규칙을 받지 못한 채로
+            // 남는다(Task 4의 Critical과 같은 모양의 결함). 이 테스트는 그 분기 자체를
+            // 대상으로 삼는다 - 항목이 이 분기에서만 삭제돼도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDefWithSourceComment(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("원본 DDL의 주석", body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_InsertOnlyWithNoThreePartReferences_ShouldGroundTheEmptyCase()
         {
