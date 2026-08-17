@@ -880,6 +880,54 @@ END");
         }
 
         [Fact]
+        public void Analyze_SetRightHandScalarSubquery_IsNotASelfReference()
+        {
+            // EXPECT_PROC:203-205 실측 형태. OutState는 참인 자기참조이고
+            // OutYMD는 TVF가 돌려주는 남의 컬럼이다. 둘이 한 SET 절에 있어서
+            // "판정을 통째로 끄는" 편법으로는 이 테스트를 통과할 수 없다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.UpdateSettleDates
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    OutState = IIF(OutState=0, 2, OutState)
+          ,OutYMD   = (SELECT OutYMD FROM dbo.UIF_SettleYMD(A.YMD, B.SettlePeriodID))
+    FROM   dbo.TSettleMst    A
+    JOIN   dbo.TClientCMRate B ON A.ClientID = B.ClientID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("OutState", mapping.SelfReferencedColumns);
+            Assert.DoesNotContain("OutYMD", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_SetRightHandOtherAliasColumn_IsNotASelfReference()
+        {
+            // 갱신 대상 별칭이 A일 때 B.OutYMD는 이름만 같은 남의 컬럼이다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.CopySettleDates
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutState = IIF(A.OutState=0, 2, A.OutState)
+          ,A.OutYMD   = B.OutYMD
+    FROM   dbo.TSettleMst  A
+    JOIN   dbo.TSettleHist B ON A.ID = B.ID
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("OutState", mapping.SelfReferencedColumns);
+            Assert.DoesNotContain("OutYMD", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
         public void Analyze_WithTwoUpdatesOnSameTable_ShouldNumberStatements()
         {
             // Arrange & Act

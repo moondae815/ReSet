@@ -439,6 +439,7 @@ namespace ReSet.Core.Services
         {
             var targets = new HashSet<string>(
                 assignments.Select(a => a.Column), StringComparer.OrdinalIgnoreCase);
+            var targetAlias = ExtractTargetAlias(node);
             var found = new List<string>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -449,24 +450,71 @@ namespace ReSet.Core.Services
                 var collector = new ColumnReferenceCollector();
                 clause.NewValue.Accept(collector);
 
-                foreach (var column in collector.Columns)
+                foreach (var reference in collector.Columns)
                 {
-                    if (targets.Contains(column) && seen.Add(column)) found.Add(column);
+                    var column = LastIdentifier(reference.MultiPartIdentifier);
+                    if (column == null || !targets.Contains(column)) continue;
+
+                    // 한정자가 붙었고 갱신 대상 별칭을 알 때만 한정자를 본다.
+                    // 대상이 별칭이 아니라 테이블 이름이면(UPDATE dbo.T SET ...)
+                    // ExtractTargetAlias가 null을 돌려주고 이 규칙은 적용되지 않는다.
+                    var qualifier = QualifierOf(reference.MultiPartIdentifier);
+                    if (targetAlias != null
+                        && qualifier != null
+                        && !string.Equals(qualifier, targetAlias, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (seen.Add(column)) found.Add(column);
                 }
             }
 
             return found;
         }
 
+        /// <summary>
+        /// UPDATE A SET ... FROM T A 형태의 갱신 대상 별칭. 대상이 한정된 테이블
+        /// 이름이면(부(部)가 둘 이상) 별칭이 아니므로 null이다 - 이 경우 한정자
+        /// 규칙을 적용하지 않는 쪽이 안전하다.
+        /// </summary>
+        private static string? ExtractTargetAlias(UpdateSpecification node)
+        {
+            if (node.Target is NamedTableReference named)
+            {
+                var identifiers = named.SchemaObject?.Identifiers;
+                if (identifiers != null && identifiers.Count == 1)
+                {
+                    return identifiers[0].Value;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? QualifierOf(MultiPartIdentifier? identifier)
+        {
+            var parts = identifier?.Identifiers;
+            if (parts == null || parts.Count < 2) return null;
+            return parts[parts.Count - 2].Value;
+        }
+
         private sealed class ColumnReferenceCollector : TSqlFragmentVisitor
         {
-            public List<string> Columns { get; } = new();
+            /// <summary>컬럼 이름이 아니라 참조 노드를 담는다 - 한정자 판정에 필요하다.</summary>
+            public List<ColumnReferenceExpression> Columns { get; } = new();
 
-            public override void Visit(ColumnReferenceExpression node)
-            {
-                var column = LastIdentifier(node.MultiPartIdentifier);
-                if (column != null) Columns.Add(column);
-            }
+            /// <summary>
+            /// 중첩 질의 안으로 내려가지 않는다. 그 스코프의 컬럼은 다른 테이블 소속이다.
+            /// (SELECT OutYMD FROM dbo.UIF_SettleYMD(...))의 OutYMD를 거둬 오면 갱신
+            /// 대상과 이름만 같은 남의 컬럼을 자기참조로 단정한다 - EXPECT_PROC:203-205
+            /// 에서 실측된 오탐이며, 그 거짓 문장이 그대로 프롬프트에 실렸다.
+            ///
+            /// base를 부르지 않는 것이 곧 하위 순회 중단이다.
+            /// </summary>
+            public override void ExplicitVisit(ScalarSubquery node) { }
+
+            public override void Visit(ColumnReferenceExpression node) => Columns.Add(node);
         }
 
         public override void ExplicitVisit(DeleteSpecification node)
