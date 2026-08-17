@@ -1144,16 +1144,65 @@ namespace ReSet.Core.Services
         ///
         /// 호출별로 보지 않고 문서 전체에 한 번만 요구한다. 같은 의미를 호출
         /// 개수만큼 반복하라는 요구가 되면 명세서가 장황해진다.
+        ///
+        /// [Fix Round 1 - 리뷰 실측] "내림"은 "내림차순"(ORDER BY 내림차순 정렬)의
+        /// 부분 문자열이다. 단순 substring 매칭이면 정렬 방향 서술이 절사 의미
+        /// 서술로 오인되어, 실제로는 값 매핑이 전혀 없는 문서가 통과한다 - 이 검사가
+        /// 막으려는 바로 그 결함이 조용히 새어 나간다. 실측 코퍼스에도
+        /// UF_GET_CLIENTSECTIONRATE.Spec.md의 "내림차순으로"가 실재한다.
+        ///
+        /// 대안(0·ROUND 근접 요구)은 기각했다: 실측 코퍼스(UP_UTIL_SETTLE_INS 등)의
+        /// 현재 통과하는 정상 명세서들이 "반올림 또는 절사 옵션을 적용합니다"처럼
+        /// "0"이나 "ROUND" 없이 동의어만으로 의미를 전달하고 있어, 근접 요구를 걸면
+        /// 그 정상 서술들이 새로 결함으로 잡힌다 - 없던 오탐을 만드는 대가가 이
+        /// 콜리전 하나를 막는 이득보다 크다. 대신 알려진 충돌 접미사만 배제한다 -
+        /// "내림합니다"·"내림 방식"처럼 "차순"으로 이어지지 않는 진짜 사용은 그대로
+        /// 인정된다. 절사·버림·truncate는 실측 코퍼스 전체(output/**/docs/Spec.md)를
+        /// 훑어도 같은 모양의 충돌이 없어 배제 목록이 비어 있다 - 발견되면 여기에
+        /// 한 항목을 추가하면 된다.
         /// </summary>
-        private static readonly string[] TruncationSynonyms = { "절사", "버림", "내림", "truncate", "TRUNCATE" };
+        private static readonly (string Synonym, string[] ExcludedFollowUps)[] TruncationSynonyms =
+        {
+            ("절사", Array.Empty<string>()),
+            ("버림", Array.Empty<string>()),
+            ("내림", new[] { "차순" }),
+            ("truncate", Array.Empty<string>())
+        };
+
+        /// <summary>
+        /// synonym이 markdown에 등장하되, 등장할 때마다 그 뒤가 excludedFollowUps 중
+        /// 하나로 이어지는 경우(다른 낱말의 일부)는 매치로 치지 않는다. 같은 synonym이
+        /// 문서에 여러 번 나오면 위치별로 독립 판정한다 - "내림차순"과 진짜 "내림"
+        /// 서술이 한 문서에 같이 있어도 후자는 여전히 인정되어야 한다.
+        /// </summary>
+        private static bool ContainsTruncationSynonym(string markdown, string synonym, string[] excludedFollowUps)
+        {
+            var searchFrom = 0;
+            while (true)
+            {
+                var idx = markdown.IndexOf(synonym, searchFrom, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) return false;
+
+                var after = idx + synonym.Length;
+                var isKnownCollision = excludedFollowUps.Any(followUp =>
+                    after + followUp.Length <= markdown.Length
+                    && string.Compare(
+                        markdown, after, followUp, 0, followUp.Length,
+                        StringComparison.OrdinalIgnoreCase) == 0);
+
+                if (!isKnownCollision) return true;
+
+                searchFrom = idx + 1;
+            }
+        }
 
         private static void CheckRoundingSemantics(
             string markdown, SpecExpectations expectations, ValidationResult result)
         {
             if (expectations.RoundingCalls.Count == 0) return;
 
-            var stated = Array.Exists(
-                TruncationSynonyms, s => markdown.Contains(s, StringComparison.OrdinalIgnoreCase));
+            var stated = TruncationSynonyms.Any(
+                t => ContainsTruncationSynonym(markdown, t.Synonym, t.ExcludedFollowUps));
             if (stated) return;
 
             var lines = string.Join(", ", expectations.RoundingCalls.Select(c => $"라인 {c.Line}"));

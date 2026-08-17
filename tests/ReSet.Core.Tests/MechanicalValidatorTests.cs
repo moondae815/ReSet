@@ -1984,6 +1984,46 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_RoundWithOnlyDescendingOrderMention_ShouldStillBeAnError()
+        {
+            // 리뷰 실측(Fix Round 1): "내림"은 "내림차순"의 부분 문자열이다. 단순
+            // substring 매칭이면 ORDER BY 방향 서술("생성일자 내림차순으로 정렬")이
+            // 절사 의미 서술로 오인되어 결함이 은폐된다. 실측 코퍼스에도
+            // UF_GET_CLIENTSECTIONRATE.Spec.md:157의 "내림차순으로"가 실재한다 -
+            // 이 문서 자체는 3인자 ROUND가 없어 오늘은 영향이 없지만, ROUND와 ORDER BY
+            // 서술이 함께 있는 미래의 SP는 이 결함에 노출된다.
+            var expectations = EmptyExpectations() with
+            {
+                RoundingCalls = new[] { new RoundingCall(63, "dbo.UF_GET_PGCommOption(A.PGName)") }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n결과는 생성일자 내림차순으로 정렬합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.RoundingSemanticsMissing);
+        }
+
+        [Fact]
+        public void Validate_RoundWithGenuineDescendingWordAdjacentToOrderMention_ShouldPass()
+        {
+            // 위 테스트의 짝 - 오탐(위양성)으로 되돌아가지 않았는지 증명한다. 같은
+            // 문서에 "내림차순" 언급이 있어도, 진짜 절사 의미 서술("0이 아니면
+            // 내림합니다")이 별도로 있으면 그 등장은 여전히 인정되어야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                RoundingCalls = new[] { new RoundingCall(63, "dbo.UF_GET_PGCommOption(A.PGName)") }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n결과는 생성일자 내림차순으로 정렬합니다. 세 번째 인자가 0이면 반올림, "
+                + "0이 아니면 내림합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.RoundingSemanticsMissing);
+        }
+
+        [Fact]
         public void Validate_NoRoundingCalls_ShouldNotCheckSemantics()
         {
             // 재료가 비면 소프트 스킵이다 - ROUND가 없는 대다수 SP에서 거짓 결함이
