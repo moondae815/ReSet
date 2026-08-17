@@ -2308,6 +2308,92 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_TwoBulletAcknowledgement_IsAKnownLimitation_AndStillReportsTheContradiction()
+        {
+            // Fix Round 4 - 알려진 한계, 고쳐지지 않았다(원하는 동작이 아니다).
+            // 자세한 이유는 CheckHeaderContractContradiction의 "[Fix Round 4 - 알려진
+            // 한계]" 주석 참고. 아래 명세서는 헤더/EXEC 모순을 실제로는 인정했다 -
+            // 첫 불릿이 헤더의 NONE 선언을, 둘째 불릿이 실제 EXEC 존재를 말한다.
+            // 그런데도 이 검사는 결함을 신고한다 - 두 불릿이 문장 경계(줄바꿈)로
+            // 갈라져 헤더 지시어와 인정 토큰이 같은 문장에 없기 때문이다. Round
+            // 3이 표 행 분리(위 테스트)를 막으려고 줄바꿈을 경계로 추가하면서
+            // 얻은 대가다 - 언젠가 고쳐지면 이 어서션(Assert.Contains)이
+            // 실패한다. 그 실패는 "좋은 소식이니 테스트를 갱신하라"로 읽어야
+            // 한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n- 헤더 주석은 내부 SP 호출이 없다고 선언한다\n"
+                + "- 그러나 실제로는 두 개를 호출한다\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_NumberedListAcknowledgement_IsAKnownLimitation_AndStillReportsTheContradiction()
+        {
+            // Fix Round 4 - 알려진 한계, 고쳐지지 않았다(원하는 동작이 아니다).
+            // 자세한 이유는 CheckHeaderContractContradiction의 "[Fix Round 4 - 알려진
+            // 한계]" 주석 참고. 위 두 불릿 케이스와 달리 이 한계는 Round 3(줄바꿈
+            // 경계 도입) 이전부터 있었다 - "1."·"2." 항목 표지 자체가 마침표+공백
+            // 이라 Round 2의 마침표-단독 경계 규칙에서도 이미 두 항목이 갈라졌다.
+            // 아래 명세서는 실제로는 모순을 인정했는데도 이 검사는 결함을
+            // 신고한다. 언젠가 고쳐지면 이 어서션이 실패한다 - "좋은 소식이니
+            // 테스트를 갱신하라"로 읽어야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n1. 헤더 주석은 내부 SP 호출이 없다고 선언한다\n"
+                + "2. 그러나 실제로는 두 개를 호출한다\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
+        public void Validate_TwoSentenceAcknowledgement_IsAKnownLimitation_AndStillReportsTheContradiction()
+        {
+            // Fix Round 4 - 알려진 한계, 고쳐지지 않았다(원하는 동작이 아니다).
+            // 자세한 이유는 CheckHeaderContractContradiction의 "[Fix Round 4 - 알려진
+            // 한계]" 주석 참고. 이 한계는 Round 2가 "같은 문장" 요구를 도입한
+            // 순간부터 있었다 - 아래는 마침표 하나로 정말 두 문장이 나뉘어 있고,
+            // 첫 문장이 헤더의 NONE 선언을, 둘째 문장이 실제 EXEC 존재를 말한다.
+            // 실제로는 모순을 인정했는데도 이 검사는 결함을 신고한다. 언젠가
+            // 고쳐지면 이 어서션이 실패한다 - "좋은 소식이니 테스트를
+            // 갱신하라"로 읽어야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n헤더 주석은 내부 SP 호출이 없다고 선언한다. 그러나 실제로는 "
+                + "두 개를 호출한다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
         public void Validate_NoInternalProcedureCall_ShouldNotCheckHeaderContractContradiction()
         {
             // 재료가 비면 소프트 스킵이다 - 내부 SP 호출이 없는 대다수 SP에서 거짓
