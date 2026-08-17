@@ -2437,20 +2437,27 @@ A[""시작""] --> B[""끝""]
             // 조건에 잇지 않으면 이 새 재료가 유일하게 있는 SpDefinition도 null을
             // 받아 CheckRoundingSemantics가 한 번도 돌지 않는다 - 이 테스트가 그
             // 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            //
+            // [Fix Round 1] UPDATE/DELETE 문장을 쓰지 않는다 - Task 9가 더한
+            // DmlScopeExtractor가 UPDATE/DELETE라면 무조건 사실을 하나 만들어 내어
+            // (dmlScopeFacts.Count == 0) 항이 이미 false가 되고, roundingCalls 항을
+            // 조기 반환식에서 지워도 이 테스트가 여전히 통과하는 거짓 안전망이
+            // 된다. ROUND는 SELECT 대입식 안에서도 그대로 잡힌다 - 3인자 ROUND
+            // 호출이라는 이 테스트의 본 주제는 그대로 살아 있다.
             var sp = new SpDefinition
             {
                 DdlText = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
-    UPDATE dbo.T
-    SET    PGComm = ROUND(A.TxAmt * B.Rate / 100, 0, dbo.UF_GET_PGCommOption(A.PGName))
+    SELECT @PGComm = ROUND(A.TxAmt * B.Rate / 100, 0, dbo.UF_GET_PGCommOption(A.PGName))
 END"
             };
 
             var expectations = SpecExpectations.From(sp);
 
             Assert.NotNull(expectations);
-            var call = Assert.Single(expectations!.RoundingCalls);
+            Assert.Empty(expectations!.DmlScopeFacts);
+            var call = Assert.Single(expectations.RoundingCalls);
             Assert.Contains("UF_GET_PGCommOption", call.ThirdArgument);
         }
 
@@ -2462,12 +2469,20 @@ END"
             // sourceComments를 조기 반환 조건에 잇지 않으면 이 새 재료가 유일하게
             // 있는 SpDefinition도 null을 받아 L1(CheckSourceComments)이 한 번도 돌지
             // 않는다 - 이 테스트가 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            //
+            // [Fix Round 1] UPDATE/DELETE 문장을 쓰지 않는다 - Task 9가 더한
+            // DmlScopeExtractor가 UPDATE/DELETE라면 무조건 사실을 하나 만들어 내어
+            // (dmlScopeFacts.Count == 0) 항이 이미 false가 되고, sourceComments 항을
+            // 조기 반환식에서 지워도 이 테스트가 여전히 통과하는 거짓 안전망이
+            // 된다. SourceCommentExtractor는 CREATE 이후의 주석 줄을 문장 종류와
+            // 무관하게 훑으므로, 앵커를 나르는 이 비실행 주석은 SELECT 아래에
+            // 두어도 그대로 잡힌다 - 이 테스트의 본 주제는 그대로 살아 있다.
             var sp = new SpDefinition
             {
                 DdlText = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
-    UPDATE dbo.T SET C = 1
+    SELECT ID FROM dbo.T
     WHERE  ID > 0
     --AND ClientID NOT IN (SELECT ClientID FROM dbo.UF_GET_CLIENTID4TMONET()) --예외처리 제거(2021.11.29)
 END"
@@ -2476,7 +2491,8 @@ END"
             var expectations = SpecExpectations.From(sp);
 
             Assert.NotNull(expectations);
-            var block = Assert.Single(expectations!.SourceComments);
+            Assert.Empty(expectations!.DmlScopeFacts);
+            var block = Assert.Single(expectations.SourceComments);
             Assert.Contains("UF_GET_CLIENTID4TMONET", block.Anchors);
         }
 

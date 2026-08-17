@@ -138,6 +138,25 @@ namespace ReSet.Core.Services
             // 끌어들여, 대조할 게 없는데도 Validate가 CheckHeaderContractContradiction을
             // 도는 낭비가 생긴다(결과는 같지만 조기 반환의 취지 - "정말 대조할 것이
             // 있을 때만 확장한다" - 를 흐린다).
+            //
+            // [Fix Round 1 - 이 AND-체인을 쓰는 "재료 하나만" 테스트를 쓸 때 반드시
+            // 지킬 것] 이 식은 순수 AND-체인이다. 항 하나가 실수로 빠져도 나머지
+            // 항 중 단 하나만 true(공백/미충족)가 아니면 전체 판정은 바뀌지 않는다
+            // - 즉 재료 하나만 있는 픽스처라도 다른 재료가 "우연히 같이" 잡히면
+            // 그 우연한 재료의 항이 지워진 항을 대신 가려 버려, 지워진 항을 지키는
+            // 테스트가 초록인 채로 아무것도 증명하지 못한다(Fix Round 1 실측:
+            // roundingCalls/sourceComments 전용 테스트가 UPDATE 문을 픽스처에
+            // 남겨 둔 탓에 DmlScopeExtractor(Task 9)가 무조건 사실을 하나 만들어
+            // dmlScopeFacts.Count == 0 항이 이미 false였다 - roundingCalls·
+            // sourceComments 항을 지워도 테스트가 계속 통과했다). DmlScopeExtractor는
+            // UPDATE/DELETE 문이 하나라도 있으면 그 문장의 대상·술어가 비어 있어도
+            // 무조건 사실을 만든다는 점이 특히 잘 숨는다 - "이 픽스처는 이 재료
+            // 말고는 아무것도 안 담았다"고 눈으로 봐도, UPDATE라는 문장 형태 자체가
+            // 이미 별도 재료다. "재료 하나만" 테스트를 새로 쓰거나 고칠 때는
+            // (1) 그 재료를 남기는 최소 DDL을 쓰고 (2) UPDATE/DELETE를 다른 문장
+            // (SELECT 등)으로 바꿀 수 있는지 먼저 확인하고 (3) 가능하면 결과의
+            // 다른 컬렉션(예: DmlScopeFacts)이 실제로 비어 있는지도 함께 단언해
+            // 격리를 코드로 못박는다.
             if (updateColumns.Count == 0
                 && promptSchemaColumns.Count == 0
                 && inputDefects.Count == 0
