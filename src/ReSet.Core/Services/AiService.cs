@@ -807,21 +807,64 @@ Based on the structured reference context above, reverse engineer the stored pro
             // SpecExpectations.From()은 객체 타입을 가리지 않고 모든 SP/함수에 이
             // 재료들을 무조건 만든다(L1의 CheckDerivedTableDefinitions 등도 무조건
             // 돈다) - 그런데 이 프롬프트는 지금까지 파생 테이블 표를 한 번도 낸 적이
-            // 없었다. 실측(현재 코퍼스 26건 중 함수 12건을 이 harness로 직접 돌린 결과):
+            // 없었다. 실측(현재 코퍼스 26건 중 함수 12건을 harness로 직접 돌린 결과):
             // UF_GET_COLLECTYMD·UIF_SettleYMD 둘 다 DerivedColumns=4로 실제 파생 컬럼이
             // 있고 DerivedTableDefinitionMissing이 1건씩(헤딩 자체가 없음) 발생한다.
-            // T-SQL 함수는 UPDATE/DELETE를 담을 수 없어(DmlScopeExtractor가
-            // UpdateSpecification/DeleteSpecification만 본다) DmlScopeFacts는 코퍼스
-            // 12건 전부 0으로 구조적으로 비어 있다 - 그래서 DML 범위 표는 함수 프롬프트에
-            // 낼 필요가 없다(내도 Count==0이라 아무 일도 하지 않는다). 반면 SELECT/파생
-            // 테이블(FROM 절 서브쿼리)은 함수 본문에도 얼마든지 나타나므로 이 표는
-            // 프로시저와 똑같이 필요하다.
+            // SELECT/파생 테이블(FROM 절 서브쿼리)은 함수 본문에도 얼마든지 나타나므로
+            // 이 표는 프로시저와 똑같이 필요하다.
             var derivedColumns = DerivedTableColumnExtractor.Extract(functionDef.DdlText);
             if (derivedColumns.Count > 0)
             {
                 var derivedTableLines = new List<string> { DerivedTableIntroText };
                 derivedTableLines.AddRange(BuildDerivedTableColumnLines(derivedColumns));
                 systemPrompt += "\n\n" + string.Join("\n", derivedTableLines);
+            }
+
+            // [Fix Round 2 - 리뷰 실측, 이전 주석의 오류를 바로잡음] DML 범위 표를
+            // "함수는 구조적으로 UPDATE/DELETE를 담을 수 없다"는 이유로 제외했었는데,
+            // 그 전제 자체가 틀렸다. 다중 문장 테이블 반환 함수(Multi-statement TVF)는
+            // 자신의 반환 테이블 변수(@Result 등)를 채운 뒤 그 변수에 UPDATE/DELETE를
+            // 거는 것이 합법적이고 문서화된 T-SQL이다 - 스칼라 함수·인라인 TVF만
+            // UPDATE/DELETE를 못 낼 뿐이다. DmlScopeExtractor.Visit(UpdateSpecification)/
+            // Visit(DeleteSpecification)은 SessionOptionsExtractor의 ProcedureBodyFinder와
+            // 달리 CreateProcedureStatement로 방문 범위를 좁히지 않는다 - fragment 전체를
+            // 훑으므로 CREATE FUNCTION 안의 UPDATE/DELETE도 그대로 잡힌다(리뷰가 이런
+            // TVF를 직접 만들어 확인: 사실 2건 반환). 그래서 이 표는 절차와 똑같이
+            // Count > 0으로 게이트만 걸고 무조건 렌더링한다 - "함수는 DML이 없다"는
+            // 잘못된 불변식을 코드에 다시 심지 않기 위해서다. DmlScopeExtractor 쪽을
+            // CreateProcedureStatement로 좁혀 이 문제를 "고치는" 것은 하지 않는다 -
+            // TVF가 자신의 반환 테이블에 거는 UPDATE/DELETE는 진짜 범위 정보이고
+            // 모델이 받아야 할 재료다; 추출기를 좁히면 계약 위반을 정보 손실로
+            // 맞바꿀 뿐이다. 현재 저장된 코퍼스 12건은 전부 단순 스칼라/인라인 함수라
+            // DmlScopeFacts=0으로 측정되므로(SessionOptions·HasInternalProcCall과
+            // 달리, "이 코퍼스에는 없다"일 뿐 "이 문법이 불가능하다"가 아니다) 이
+            // 가드는 지금 당장은 항상 거짓이지만, 다중 문장 TVF가 들어오는 순간
+            // 표가 렌더링된다.
+            //
+            // 나머지 둘은 여전히 뺀다 - 다만 이유가 서로 다르다는 것이 이 라운드의
+            // 요점이다. SessionOptionsExtractor는 방문자가 CreateProcedureStatement/
+            // CreateOrAlterProcedureStatement 본문만 훑도록 코드로 직접 좁혀져 있다
+            // (SessionOptionsExtractor.ProcedureBodyFinder) - CREATE FUNCTION 안의
+            // SET 문은 애초에 방문자 시야에 들어오지 않는다. 이것은 진짜 구문적
+            // 불가능성이다(SQL Server가 함수 본문의 SET 문 자체를 CREATE 시점에
+            // 거부한다). 반면 HasInternalProcedureCall(이름 고정 EXEC 호출)은
+            // ScriptDom 파서 자체는 함수 안의 EXEC도 문법적으로는 파싱한다 - 막는
+            // 것은 문법이 아니라 이 도구의 입력 경로다. DbMetadataService는
+            // DdlText를 항상 이미 배포된 객체의 sys.sql_modules에서만 읽는데, SQL
+            // Server는 부작용이 있는 EXEC를 함수 본문에 CREATE 시점에 거부하므로
+            // 그런 함수는 애초에 배포되어 있을 수 없다 - 그래서 이 도구가 실제로
+            // 마주치는 입력 도메인 안에서는 도달 불가능하다(구문이 막는 게 아니라
+            // 배포 가능한 객체의 집합이 막는다). 둘 다 실측(코퍼스 12건 전부
+            // SessionOptions=0, HasInternalProcCall=False)은 같지만, "왜 항상
+            // 비는가"의 근거는 서로 다르다 - 하나를 다른 하나의 이유로 뭉뚱그리면
+            // (이번에 DML 범위 표에서 실제로 벌어졌듯) 다음 리뷰가 또 찾아낸다.
+            var dateParameter = SpecExpectations.ResolveDateParameter(functionDef.StaticAnalysis);
+            var dmlScopeFacts = DmlScopeExtractor.Extract(functionDef.DdlText, dateParameter);
+            if (dmlScopeFacts.Count > 0)
+            {
+                var dmlScopeLines = new List<string> { DmlScopeTableIntroText };
+                dmlScopeLines.AddRange(BuildDmlScopeTableLines(dmlScopeFacts, dateParameter));
+                systemPrompt += "\n\n" + string.Join("\n", dmlScopeLines);
             }
 
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
@@ -839,16 +882,14 @@ Based on the structured reference context above, reverse engineer the stored pro
             // 걸린다(주석 요구 문구가 프롬프트에 없었기 때문) - 요청받지 않은 것을
             // 모델이 자발적으로 다 옮기길 기대할 수 없다. ROUND 3인자 호출은 현재
             // 코퍼스 함수 12건 전부 0건이라 지금 당장 실패를 만들지는 않지만, 함수
-            // 본문에서도 ROUND(x, n, 1) 호출은 문법적으로 가능하므로(세션 옵션·
-            // 내부 SP 호출과 달리 T-SQL이 막지 않는다) 재료가 생기는 순간 같은
-            // 결함이 재현된다. 세션 옵션(SessionOptionsExtractor는 CreateProcedureStatement
-            // 본문만 훑는다)과 헤더/EXEC 모순(HasInternalProcedureCall은 이름 고정
-            // EXEC 호출을 요구하는데 함수는 부작용이 있는 EXEC를 낼 수 없다 - T-SQL이
-            // 이를 금지한다)은 반대로 함수에서 구조적으로 항상 비어 있다(실측:
-            // 코퍼스 12건 전부 SessionOptions=0, HasInternalProcCall=False) - 그래서
-            // 여기 체크리스트에 넣지 않는다. 넣어도 항상 빈 목록이라 아무 문장도
-            // 추가되지 않겠지만, 절대 채워지지 않는 항목을 프롬프트에 약속하는 것은
-            // 다음 사람이 "왜 이 항목은 절대 안 뜨지?"를 다시 조사하게 만든다.
+            // 본문에서도 ROUND(x, n, 1) 호출은 문법적으로 가능하므로 재료가 생기는
+            // 순간 같은 결함이 재현된다.
+            //
+            // 세션 옵션·헤더/EXEC 모순 체크리스트는 여기 넣지 않는다 - 그 둘이 함수에서
+            // 왜 구조적으로/도메인상 항상 비는지는 위 DML 범위 표 블록의 주석에 근거와
+            // 함께 적어 뒀다(이번 라운드에서 DML 범위 표 쪽 "구조적으로 불가능하다"는
+            // 주장이 틀린 것으로 드러났으므로, 같은 판단을 두 곳에 따로 적어 두면 한쪽만
+            // 고쳐질 위험이 생긴다 - 근거는 한 곳에만 둔다).
             var checklistSb = new StringBuilder();
             var sourceComments = SourceCommentExtractor.Extract(functionDef.DdlText);
             var roundingCalls = RoundingSemanticsExtractor.Extract(functionDef.DdlText);

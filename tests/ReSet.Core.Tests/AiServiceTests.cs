@@ -142,6 +142,60 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task GenerateSpecificationAsync_MultiStatementTvfWithBodyLevelUpdateDelete_IncludesDmlScopeTable()
+        {
+            // 다중 문장 테이블 반환 함수(Multi-statement TVF)는 자신의 반환 테이블
+            // 변수(@Result)를 채운 뒤 그 변수에 UPDATE/DELETE를 거는 것이 합법적인
+            // T-SQL이다. SpecExpectations.From()은 객체 타입을 가리지 않고 이 DML을
+            // DmlScopeFacts로 만들고 L1(CheckDmlScopeTable)도 무조건 대조하므로,
+            // 프롬프트가 이 표를 내지 않으면 함수가 프롬프트에 없던 재료로 판정받는
+            // Finding 2와 같은 결함이 된다(Fix Round 2 리뷰 실측).
+            var functionDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "FN_MultiStatementResult",
+                ObjectType = CodeObjectType.Function,
+                DdlText = @"CREATE FUNCTION dbo.FN_MultiStatementResult()
+RETURNS @Result TABLE (Id INT, Amount DECIMAL(18,2), Flag INT)
+AS
+BEGIN
+    INSERT INTO @Result (Id, Amount, Flag) VALUES (1, 100, 0)
+    UPDATE @Result SET Flag = 1 WHERE Id = 1
+    DELETE FROM @Result WHERE Amount < 0
+    RETURN
+END",
+                FunctionReturn = new FunctionReturnInfo
+                {
+                    IsTableValued = true,
+                    Columns = new System.Collections.Generic.List<ColumnInfo>
+                    {
+                        new ColumnInfo { ColumnName = "Id", DataType = "INT", IsNullable = false },
+                        new ColumnInfo { ColumnName = "Amount", DataType = "decimal(18,2)", IsNullable = true },
+                        new ColumnInfo { ColumnName = "Flag", DataType = "INT", IsNullable = true }
+                    }
+                }
+            };
+
+            // 사전 조건: 이 DDL이 실제로 DmlScopeFacts를 만드는지 직접 확인한다 -
+            // 그렇지 않으면 아래 프롬프트 단언이 "재료가 애초에 없어서" 통과하는
+            // 거짓 양성이 될 수 있다.
+            var facts = DmlScopeExtractor.Extract(functionDef.DdlText, string.Empty);
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Operation == "UPDATE");
+            Assert.Contains(facts, f => f.Operation == "DELETE");
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 함수 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(functionDef, "rules");
+
+            Assert.Contains(DmlScopeExtractor.DmlScopeTableHeading, result.SystemPrompt);
+            Assert.Contains("UPDATE", result.SystemPrompt, StringComparison.Ordinal);
+            Assert.Contains("DELETE", result.SystemPrompt, StringComparison.Ordinal);
+        }
+
+        [Fact]
         public async Task ReviewSpecificationAsync_FunctionPrompt_UsesTvfNullabilityWithoutProcedureInstructions()
         {
             var functionDef = new SpDefinition
