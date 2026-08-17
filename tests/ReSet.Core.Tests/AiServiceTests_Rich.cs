@@ -444,5 +444,86 @@ namespace ReSet.Core.Tests
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.DoesNotContain("이 표는 이 프로시저가 참조하는 컬럼에 대해 완전합니다", body);
         }
+
+        /// <summary>
+        /// UP_UTIL_STAT_PGCOLLECT_INS 실측 형태 - INSERT 전용, UPDATE 매핑이 전혀 없다.
+        /// ThreePartObjectReferences 근거 문구는 UPDATE 헤딩 병기가 구조적으로 닿지
+        /// 못하는 이 형태에 실제로 미치는지를 증명하기 위한 것이라 이 헬퍼가 필요하다.
+        /// </summary>
+        private static SpDefinition ProbeInsertOnlySpDef(params string[] threePartObjectReferences)
+        {
+            var spDef = new SpDefinition { Schema = "dbo", Name = "UP_UTIL_STAT_PGCOLLECT_INS", DdlText = "SELECT 1;" };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                InsertTables = new List<string> { "dbo.TStatPGCollect" },
+                AstInsertMappings = new List<AstInsertMapping>
+                {
+                    new AstInsertMapping
+                    {
+                        TargetTable = "dbo.TStatPGCollect",
+                        TargetColumns = new List<string> { "C" },
+                        SourceQueryBlock = "SELECT C FROM TSettleMst"
+                    }
+                },
+                ThreePartObjectReferences = new List<string>(threePartObjectReferences)
+            };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_SystemPrompt_ShouldContainTheIdentifierNotationRule()
+        {
+            // 라운드 1 Critical의 짝 - 메인 생성 경로. 규칙이 빠지면 이 어서션이 실패해야
+            // 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("PARSER-NORMALIZED", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_SystemPrompt_ShouldContainTheIdentifierNotationRule()
+        {
+            // 라운드 1 Critical: 지역 모델 CrudAnalysis 경로가 원문 표기(a)는 병기하면서
+            // 규칙(b)은 빠뜨려, 동기 부여 사례가 재생성돼도 같은 결함을 반복할 수 있었다.
+            // 이 테스트가 그 분기 자체를 대상으로 삼는다 - 규칙이 이 분기에서만 삭제돼도
+            // 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("PARSER-NORMALIZED", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_InsertOnlyWithNoThreePartReferences_ShouldGroundTheEmptyCase()
+        {
+            // UPDATE 헤딩 원문 병기는 UPDATE 문이 없는 SP에 구조적으로 닿지 않는다.
+            // 정적 분석 섹션에 실리는 이 목록만이 UP_UTIL_STAT_PGCOLLECT_INS 같은
+            // INSERT 전용 SP에도 근거를 제공한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeInsertOnlySpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("3부 식별자 기반 크로스 데이터베이스 참조라고 단언하지 마십시오", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithThreePartObjectReferences_ShouldRenderTheActualList()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(
+                ProbeInsertOnlySpDef("SETTLE_POQ_DB.dbo.TSettleMst"), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", body);
+        }
     }
 }
