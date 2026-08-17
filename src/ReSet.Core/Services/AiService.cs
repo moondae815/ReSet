@@ -382,8 +382,9 @@ namespace ReSet.Core.Services
             // 구조는 "Spec이 범위를 단언하는데 원본에는 그 필터가 없다"이다. 부재를
             // 서술했는지는 자연어 판정이라 앵커가 없으므로, 서술을 요구하지 않고 이
             // 표를 강제한다(설계 3.1). BuildDmlScopeTableLines 문서 참고.
-            var dateParameter = spDef.StaticAnalysis?.ProcedureParameters
-                .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+            // SpecExpectations.From()의 DmlScopeFacts와 같은 규칙(SpecExpectations.ResolveDateParameter)
+            // 을 써야 한다 - 두 곳이 다르게 고르면 이 표와 L1의 기대가 갈라진다.
+            var dateParameter = SpecExpectations.ResolveDateParameter(spDef.StaticAnalysis);
             var dmlScopeFacts = DmlScopeExtractor.Extract(spDef.DdlText, dateParameter);
             if (dmlScopeFacts.Count > 0)
             {
@@ -1756,8 +1757,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // 전혀 호출하지 않으므로, 여기 빠뜨리면 지역 모델 경로는 A1 결함을 드러내는
                 // 재료를 한 번도 받지 못한다(SourceComment·Rounding·SessionOption 체크리스트와
                 // 같은 모양의 결함).
-                var dateParameterForCrud = spDef.StaticAnalysis?.ProcedureParameters
-                    .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+                var dateParameterForCrud = SpecExpectations.ResolveDateParameter(spDef.StaticAnalysis);
                 var dmlScopeFactsForCrud = DmlScopeExtractor.Extract(spDef.DdlText, dateParameterForCrud);
                 if (dmlScopeFactsForCrud.Count > 0)
                 {

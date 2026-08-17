@@ -57,6 +57,9 @@ namespace ReSet.Core.Services
         /// <summary>프로시저 본문의 세션 옵션 이름. 배치 앞머리의 것은 담지 않는다.</summary>
         public IReadOnlyList<string> SessionOptions { get; init; } = Array.Empty<string>();
 
+        /// <summary>DML 문장별 적용 범위. 명세서가 이 표를 그대로 옮겼는지 L1이 본다.</summary>
+        public IReadOnlyList<DmlScopeFact> DmlScopeFacts { get; init; } = Array.Empty<DmlScopeFact>();
+
         /// <summary>
         /// 원본 DDL에 동적 SQL이 아닌, 이름이 고정된 저장 프로시저 EXEC 호출이 있는가.
         /// 헤더 주석이 "내부 SP 호출 없음"이라 선언했는데 실제로는 있는 모순을 잡는
@@ -107,6 +110,10 @@ namespace ReSet.Core.Services
             var roundingCalls = RoundingSemanticsExtractor.Extract(spDef.DdlText);
             var sessionOptions = SessionOptionsExtractor.Extract(spDef.DdlText);
             var hasInternalProcedureCall = DetectInternalProcedureCall(spDef.DdlText);
+            // 프롬프트(AiService)와 같은 기준일 파라미터 선택 규칙을 써야 한다 - 두 곳이
+            // 다르게 고르면 프롬프트의 표와 여기 기대값이 갈라지고, 모델이 표를 그대로
+            // 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 생긴다.
+            var dmlScopeFacts = DmlScopeExtractor.Extract(spDef.DdlText, ResolveDateParameter(analysis));
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -129,7 +136,8 @@ namespace ReSet.Core.Services
                 && !hasLinkedServerReference
                 && sourceComments.Count == 0
                 && roundingCalls.Count == 0
-                && sessionOptions.Count == 0)
+                && sessionOptions.Count == 0
+                && dmlScopeFacts.Count == 0)
             {
                 return null;
             }
@@ -142,9 +150,20 @@ namespace ReSet.Core.Services
                 SourceComments = sourceComments,
                 RoundingCalls = roundingCalls,
                 SessionOptions = sessionOptions,
-                HasInternalProcedureCall = hasInternalProcedureCall
+                HasInternalProcedureCall = hasInternalProcedureCall,
+                DmlScopeFacts = dmlScopeFacts
             };
         }
+
+        /// <summary>
+        /// 기준일 파라미터를 고르는 단일 규칙. AiService의 프롬프트 렌더(두 호출부)도 이
+        /// 메서드를 부른다 - 두 곳이 다르게 고르면 프롬프트의 표와 L1의 기대가 갈라지고,
+        /// 그러면 모델이 옳게 옮겨도 L1이 틀렸다고 한다.
+        /// </summary>
+        public static string ResolveDateParameter(SpStaticAnalysisResult? analysis) =>
+            analysis?.ProcedureParameters
+                .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase))
+            ?? string.Empty;
 
         /// <summary>
         /// 원본 DDL에 동적 SQL이 아닌 이름 고정 EXEC 호출이 있는지 AST로 직접 훑는다.

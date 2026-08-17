@@ -23,6 +23,7 @@ namespace ReSet.Core.Services
         RoundingSemanticsMissing,
         SessionOptionMissing,
         HeaderContractContradiction,
+        DmlScopeTableMissing,
         General
     }
 
@@ -117,6 +118,7 @@ namespace ReSet.Core.Services
                     CheckRoundingSemantics(cleansed, expectations, result);
                     CheckSessionOptions(cleansed, expectations, result);
                     CheckHeaderContractContradiction(cleansed, expectations, result);
+                    CheckDmlScopeTable(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1438,6 +1440,99 @@ namespace ReSet.Core.Services
                 Type = ErrorType.HeaderContractContradiction,
                 Message = message
             });
+        }
+
+        /// <summary>
+        /// 기계 확정 DML 범위 표가 명세서에 옮겨졌는지 본다.
+        ///
+        /// 자연어를 읽지 않는다 - 헤딩의 존재와 각 문장의 라인 번호가 표 행으로
+        /// 나타나는지만 본다. 부재 서술을 판정하려 들면 축 B가 겪은 오탐(실측
+        /// 15건 중 14건)이 그대로 재현된다.
+        ///
+        /// 라인 번호를 대조 키로 쓰는 이유는 그것이 유일하고 청킹과 무관하기
+        /// 때문이다. 문장 순번은 채번이 리셋되므로 키가 될 수 없다(Task 2).
+        ///
+        /// [라인 번호 우연 충돌] 라인 셀 대조를 문서 전체가 아니라 DML 범위 헤딩
+        /// 바로 다음 구간(다음 `## `/`### ` 헤딩 전까지)으로 좁힌다. 스키마 대응
+        /// 표·UPDATE 매핑 표 같은 다른 표에도 숫자 셀(길이, 정밀도 등)이 있어, 문서
+        /// 전체를 훑으면 그 우연이 거짓 통과를 만들 수 있다 - 특히 라인 번호가
+        /// 작을 때 위험이 크다. 표 자체의 스키마(문장·라인·대상·술어·기준일·조인 키)
+        /// 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지 않으므로(문장 칸은
+        /// "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은 낮게 남는다.
+        /// </summary>
+        private static void CheckDmlScopeTable(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.DmlScopeFacts.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (headingIndex, endIndex) = LocateDmlScopeSection(lines);
+
+            if (headingIndex < 0)
+            {
+                var message =
+                    $"기계 확정 DML 범위 표가 명세서에 없습니다. `{DmlScopeExtractor.DmlScopeTableHeading}` "
+                    + $"헤딩과 {expectations.DmlScopeFacts.Count}개 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.DmlScopeTableMissing,
+                    Message = message
+                });
+                return;
+            }
+
+            var rowLines = new List<string>();
+            for (var i = headingIndex + 1; i < endIndex; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    rowLines.Add(lines[i]);
+                }
+            }
+
+            foreach (var fact in expectations.DmlScopeFacts)
+            {
+                var lineToken = fact.Line.ToString();
+                var present = rowLines.Any(
+                    row => row.Split('|').Any(cell => cell.Trim() == lineToken));
+                if (present) continue;
+
+                var message =
+                    $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
+                    + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.DmlScopeTableMissing,
+                    Message = message,
+                    RawContext = $"{fact.Operation} @ line {fact.Line}"
+                });
+            }
+        }
+
+        /// <summary>
+        /// DML 범위 헤딩과, 그 표가 끝나는(다음 `## `/`### ` 헤딩이 시작하는) 인덱스를
+        /// 찾는다. 헤딩이 없으면 (-1, -1). `MarkdownSectionLocator.LocateSection`을 쓰지
+        /// 않는 이유는 그 API가 경계 접두 하나만 받는데, 이 표는 H3라서 다음 H2뿐 아니라
+        /// 다음 H3(예: 뒤이은 `### UPDATE 대상 테이블: ...` 절)에도 막혀야 하기 때문이다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateDmlScopeSection(IReadOnlyList<string> lines)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == DmlScopeExtractor.DmlScopeTableHeading);
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
         }
 
         private static readonly Regex TableCellRegex =

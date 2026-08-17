@@ -2615,6 +2615,152 @@ END"
             Assert.Null(expectations);
         }
 
+        [Fact]
+        public void Validate_MissingDmlScopeTable_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
+        [Fact]
+        public void Validate_DmlScopeRowMissingTheLine_ShouldBeAnError()
+        {
+            // 헤딩만 옮기고 행을 빠뜨리는 것을 잡는다.
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }),
+                    new DmlScopeFact("UPDATE", 331, "A", new[] { "YMD" }, true, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 |\n| :--- | :--- | :--- |\n| UPDATE 1 | 227 | A |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("331"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeTableFullyCopied_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 227 | A | UseState | **아니오** | PLTID |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
+        [Fact]
+        public void Validate_DmlScopeRowLineCollidesOnlyWithAnUnrelatedTableElsewhere_ShouldStillBeAnError()
+        {
+            // 라인 번호가 다른 표(스키마 대응 표 등)의 무관한 숫자 셀과 우연히 같을 수
+            // 있다. 검사가 문서 전체를 훑으면 그 우연이 거짓 통과를 만든다 - 그래서
+            // DML 범위 헤딩 다음 구간으로만 대조 범위를 좁혔다. 이 테스트는 헤딩 밖에
+            // 있는 "227"이 통과를 만들지 않는다는 것을 증명한다.
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### 무관한 다른 표\n"
+                + "| 컬럼 | 길이 |\n| :--- | :--- |\n| Amount | 227 |\n"
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 |\n| :--- | :--- | :--- |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("227"));
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsADmlScopeFact_ShouldNotBeNullAndShouldCarryTheFact()
+        {
+            // Task 4가 세운 조기 반환 함정의 재현이다. dmlScopeFacts를 조기 반환
+            // 조건에 잇지 않으면 이 새 재료가 유일하게 있는 SpDefinition도 null을
+            // 받아 CheckDmlScopeTable이 한 번도 돌지 않는다 - 이 테스트가 그 배선이
+            // 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE ID > 0
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.Equal("UPDATE", fact.Operation);
+        }
+
+        [Fact]
+        public void From_DmlScopeFacts_ShouldApplyTheSameDateParameterAsResolveDateParameter()
+        {
+            // 프롬프트(AiService)와 L1(SpecExpectations.From)이 서로 다른 기준일 파라미터를
+            // 고르면, 모델이 표를 그대로 베껴도 L1은 틀렸다고 한다 - 재현 불가능한 실패다.
+            // 두 곳 모두 SpecExpectations.ResolveDateParameter 하나만 부르는 것이 유일한
+            // 방지책이다. 이 테스트는 From()이 실제로 그 헬퍼가 고르는 파라미터
+            // (@pi_strYMD, 목록의 두 번째 것 - 첫 번째를 그냥 집는 실수를 잡는다)로
+            // DateParameterApplied를 판정하는지 증명한다.
+            var analysis = new SpStaticAnalysisResult();
+            analysis.ProcedureParameters.Add("@pi_intBatchNo");
+            analysis.ProcedureParameters.Add("@pi_strYMD");
+            var sp = new SpDefinition
+            {
+                StaticAnalysis = analysis,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+    @pi_intBatchNo INT,
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE YMD = @pi_strYMD
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+            var resolvedByHelper = SpecExpectations.ResolveDateParameter(analysis);
+
+            Assert.NotNull(expectations);
+            Assert.Equal("@pi_strYMD", resolvedByHelper);
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.True(fact.DateParameterApplied);
+        }
+
         private static SpecExpectations EmptyExpectations() =>
             new(
                 Array.Empty<UpdateColumnExpectation>(),

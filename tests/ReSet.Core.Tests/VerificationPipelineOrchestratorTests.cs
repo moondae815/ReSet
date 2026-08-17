@@ -1347,15 +1347,27 @@ namespace ReSet.Core.Tests
             // 형식(필수 헤더·머메이드)은 완전하지만 UPDATE 매핑 표에 정적 분석이
             // 확정한 SettleAmt 컬럼이 빠져 있다 - specExpectations가 넘어갈 때만
             // L1이 이를 잡는다. 넘어가지 않으면 이 문서도 그대로 유효하다.
+            // 이 DDL(단일 문장 UPDATE)은 Task 10의 DmlScopeExtractor.Extract에도 걸려
+            // SpecExpectations.DmlScopeFacts를 1건(라인 1) 채운다. CheckDmlScopeTable이
+            // 그 표의 존재와 행을 요구하므로, 이 테스트가 검증하려는 UPDATE 매핑 배선과
+            // 무관한 이유로 두 시도 모두 실패하지 않도록 두 픽스처에 그 표를 미리 채워
+            // 둔다 - 그렇지 않으면 완성본(completeMarkdown)도 DML 범위 표 부재로 걸려
+            // NotifyValidationSuccess가 끝내 호출되지 않는다.
+            const string dmlScopeTable =
+                "### DML 범위 (기계 확정 — 수정 금지)\n" +
+                "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n|---|---|---|---|---|---|\n" +
+                "| UPDATE 1 | 1 | dbo.TSettleMst | (없음) | (기준일 파라미터 없음) | (없음) |\n";
             var missingColumnMarkdown =
                 "## 개요\n## 파라미터 목록\n## CRUD 분석\n" +
                 "### UPDATE 대상 테이블: dbo.TSettleMst\n" +
                 "| 컬럼 | 설명 |\n|---|---|\n| OtherCol | 다른 컬럼 |\n" +
+                dmlScopeTable +
                 "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
             var completeMarkdown =
                 "## 개요\n## 파라미터 목록\n## CRUD 분석\n" +
                 "### UPDATE 대상 테이블: dbo.TSettleMst\n" +
                 "| 컬럼 | 설명 |\n|---|---|\n| SettleAmt | 정산 금액 |\n" +
+                dmlScopeTable +
                 "## 로직 흐름 요약\n## 비즈니스 흐름 시각화\n```mermaid\ngraph TD\nA-->B\n```";
 
             aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
