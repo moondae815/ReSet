@@ -2036,6 +2036,67 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_MissingSessionOption_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with { SessionOptions = new[] { "NOCOUNT" } };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SessionOptionMissing);
+        }
+
+        [Fact]
+        public void Validate_StatedSessionOption_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with { SessionOptions = new[] { "NOCOUNT" } };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n`SET NOCOUNT ON`으로 행 수 메시지를 억제합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SessionOptionMissing);
+        }
+
+        [Fact]
+        public void Validate_NoSessionOptions_ShouldNotCheckSessionOptions()
+        {
+            // 재료가 비면 소프트 스킵이다 - 세션 옵션이 없는 대다수 SP에서 거짓 결함이
+            // 나면 안 된다.
+            var expectations = EmptyExpectations();
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SessionOptionMissing);
+        }
+
+        [Fact]
+        public void Validate_MissingNormalizedTransactionIsolationLevelOption_ShouldBeAnError()
+        {
+            // 위험 4: TRANSACTION ISOLATION LEVEL은 여러 단어이고 추출기가 내부 공백을
+            // 단일 공백으로 정규화한다. L1 대조 기준도 같은 정규화 문자열을 써야 한다 -
+            // 그렇지 않으면 이 검사가 영원히 통과하지 못하는 문자열을 요구하게 된다.
+            var expectations = EmptyExpectations()
+                with { SessionOptions = new[] { "TRANSACTION ISOLATION LEVEL" } };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SessionOptionMissing);
+        }
+
+        [Fact]
+        public void Validate_StatedNormalizedTransactionIsolationLevelOption_ShouldPass()
+        {
+            var expectations = EmptyExpectations()
+                with { SessionOptions = new[] { "TRANSACTION ISOLATION LEVEL" } };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n`SET TRANSACTION ISOLATION LEVEL READ COMMITTED`으로 격리 수준을 지정합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SessionOptionMissing);
+        }
+
+        [Fact]
         public void From_WhenTheOnlyMaterialIsARoundingCall_ShouldNotBeNullAndShouldCarryTheCalls()
         {
             // Task 4가 세운 조기 반환 함정의 재현이다. roundingCalls를 조기 반환
@@ -2121,6 +2182,30 @@ END"
             Assert.NotNull(expectations);
             Assert.True(expectations!.HasLinkedServerReference);
             Assert.False(expectations.HasThreePartReference);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsASessionOption_ShouldNotBeNullAndShouldCarryTheOption()
+        {
+            // Task 4가 세운 조기 반환 함정의 재현이다. sessionOptions를 조기 반환
+            // 조건에 잇지 않으면 이 새 재료가 유일하게 있는 SpDefinition도 null을
+            // 받아 CheckSessionOptions가 한 번도 돌지 않는다 - 이 테스트가 그 배선이
+            // 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    SET NOCOUNT ON
+    BEGIN TRAN
+    COMMIT TRAN
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            Assert.Contains("NOCOUNT", expectations!.SessionOptions);
         }
 
         private static SpecExpectations EmptyExpectations() =>

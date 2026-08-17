@@ -21,6 +21,7 @@ namespace ReSet.Core.Services
         IdentifierNotationClaim,
         SourceCommentMissing,
         RoundingSemanticsMissing,
+        SessionOptionMissing,
         General
     }
 
@@ -113,6 +114,7 @@ namespace ReSet.Core.Services
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
                     CheckSourceComments(cleansed, expectations, result);
                     CheckRoundingSemantics(cleansed, expectations, result);
+                    CheckSessionOptions(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1216,6 +1218,30 @@ namespace ReSet.Core.Services
                 Message = message,
                 RawContext = expectations.RoundingCalls[0].ThirdArgument
             });
+        }
+
+        /// <summary>
+        /// 본문 세션 옵션이 명세서에 언급되는지 본다. 옵션 이름 자체가 앵커라
+        /// 대조가 자명하다 - 이 재료에는 판정 불가 항목이 없다.
+        /// </summary>
+        private static void CheckSessionOptions(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            foreach (var option in expectations.SessionOptions)
+            {
+                if (markdown.Contains(option, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var message =
+                    $"프로시저 본문이 `SET {option}`을 설정하는데 명세서가 이를 기술하지 않았습니다. "
+                    + "세션 옵션은 호출 계층의 동작을 바꿀 수 있으므로 기록해야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SessionOptionMissing,
+                    Message = message,
+                    RawContext = $"SET {option}"
+                });
+            }
         }
 
         private static readonly Regex TableCellRegex =

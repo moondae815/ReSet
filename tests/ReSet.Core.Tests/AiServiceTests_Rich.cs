@@ -606,6 +606,59 @@ END"
             Assert.Contains(RoundingSemanticsExtractor.SemanticsSentence, body);
         }
 
+        /// <summary>
+        /// Util_Settle_Summary 실측 형태 - SET NOCOUNT ON이 AS 직후 BEGIN TRAN 앞에
+        /// 있는데 명세서 전체에 언급이 없었다. 체크리스트 항목이 실제 프롬프트에
+        /// 닿는지 증명하기 위한 헬퍼다.
+        /// </summary>
+        private static SpDefinition ProbeSpDefWithSessionOption()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_Util_Settle_Summary",
+                DdlText = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary AS
+SET NOCOUNT ON
+BEGIN TRAN
+    SELECT 1
+COMMIT TRAN"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldContainTheSessionOptionsChecklistItem()
+        {
+            // 메인 생성 경로(BuildSpecificationPrompts). 항목이 빠지면 이 어서션이
+            // 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDefWithSessionOption(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("호출 계층에 미치는 영향", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldContainTheSessionOptionsChecklistItem()
+        {
+            // 위 테스트의 짝. 지역 모델 CrudAnalysis 경로(BuildSpecSectionPrompts의
+            // "CrudAnalysis" 분기)는 지역 모델의 최초 생성 경로이자 L3 재생성 경로다 -
+            // BuildSpecificationPrompts에만 항목을 두면 이 경로가 규칙을 받지 못한 채로
+            // 남는다(SourceComment·Rounding 체크리스트와 같은 모양의 결함이 재발할 수
+            // 있다). 이 테스트는 그 분기 자체를 대상으로 삼는다 - 항목이 이 분기에서만
+            // 삭제돼도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDefWithSessionOption(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("호출 계층에 미치는 영향", body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_InsertOnlyWithNoThreePartReferences_ShouldGroundTheEmptyCase()
         {

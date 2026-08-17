@@ -522,6 +522,18 @@ namespace ReSet.Core.Services
                     + "어느 값이 어느 동작인지 흐리게 적지 마십시오.");
             }
 
+            // SET NOCOUNT ON이 AS 직후 BEGIN TRAN 앞에 있는데 Spec 전체에 언급이
+            // 없었던 것이 이 항목의 근거다(Util_Settle_Summary 실측). SessionOptionsExtractor
+            // 하나가 이 체크리스트와 MechanicalValidator.CheckSessionOptions(L1)의 대조
+            // 기준을 함께 낸다.
+            var sessionOptions = SessionOptionsExtractor.Extract(spDef.DdlText);
+            if (sessionOptions.Count > 0)
+            {
+                checklistSb.AppendLine(
+                    $"- [ ] 프로시저 본문이 설정하는 세션 옵션({string.Join(", ", sessionOptions)})과 "
+                    + "그것이 호출 계층에 미치는 영향을 기술하셨습니까?");
+            }
+
             var userPrompt = $@"
 <stored-procedure-context>
   <basic-info>
@@ -1731,6 +1743,19 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                         + $"{RoundingSemanticsExtractor.SemanticsSentence} "
                         + "이 값 매핑을 명세서에 기술하셨습니까? \"반올림 또는 절사\"처럼 "
                         + "어느 값이 어느 동작인지 흐리게 적지 마십시오.");
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 세션 옵션 요구를 받아야
+                // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+                // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
+                // 모델 경로는 이 규칙을 한 번도 받지 못한다(SourceComment·Rounding
+                // 체크리스트와 같은 모양의 결함).
+                var sessionOptionsForCrud = SessionOptionsExtractor.Extract(spDef.DdlText);
+                if (sessionOptionsForCrud.Count > 0)
+                {
+                    checklistSb.AppendLine(
+                        $"- [ ] 프로시저 본문이 설정하는 세션 옵션({string.Join(", ", sessionOptionsForCrud)})과 "
+                        + "그것이 호출 계층에 미치는 영향을 기술하셨습니까?");
                 }
                 checklistText = checklistSb.ToString();
             }
