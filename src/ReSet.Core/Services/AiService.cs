@@ -193,7 +193,7 @@ namespace ReSet.Core.Services
                         staticAnalysisText.AppendLine("  * 아래 정보를 매핑 원천으로 절대적으로 신뢰하고 반영하십시오. 원본 쿼리에 없는 변환이나 추가 논리를 임의로 지어내지(할루시네이션) 마십시오.");
                         foreach (var mapping in spDef.StaticAnalysis.AstUpdateMappings)
                         {
-                            staticAnalysisText.AppendLine($"    <update-target table=\"{mapping.TargetTable}\" statement=\"{mapping.StatementOrdinal}\">");
+                            staticAnalysisText.AppendLine($"    <update-target table=\"{mapping.TargetTable}\" statement=\"{mapping.StatementOrdinal}\" line=\"{mapping.SourceLine}\">");
                             foreach (var assignment in mapping.Assignments)
                             {
                                 staticAnalysisText.AppendLine($"      <set column=\"{assignment.Column}\">{assignment.SourceExpression}</set>");
@@ -556,7 +556,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>();
             foreach (var mapping in updateMappings)
             {
-                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal})");
+                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal} · 원본 DDL 라인 {mapping.SourceLine})");
                 lines.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
                 lines.Add("   | :--- | :--- | :--- | :--- |");
                 foreach (var assignment in mapping.Assignments)

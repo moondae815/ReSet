@@ -70,6 +70,7 @@ namespace ReSet.Core.Services
                 {
                     TargetTable = Canonicalize(mapping.TargetTable, database, defaultSchema),
                     StatementOrdinal = mapping.StatementOrdinal,
+                    SourceLine = mapping.SourceLine,
                     FromClauseText = mapping.FromClauseText
                 };
 

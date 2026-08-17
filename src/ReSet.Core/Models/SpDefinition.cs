@@ -31,6 +31,15 @@ namespace ReSet.Core.Models
         /// <summary>이 SP 안에서 같은 TargetTable에 대한 몇 번째 UPDATE 문장인가. 1부터 센다.</summary>
         public int StatementOrdinal { get; set; }
 
+        /// <summary>
+        /// 원본 DDL에서 이 UPDATE 문장이 시작하는 줄 번호(1부터). 파싱 실패 시 0.
+        ///
+        /// StatementOrdinal이 앵커로 못 쓰이기 때문에 있다 - 채번이 대상 테이블별이고
+        /// 청킹 경로가 파서를 여러 번 돌려 리셋되므로 "문장 1"이 여러 번 나온다.
+        /// 라인은 청킹과 무관하게 유일하고 object_definition.sql로 사람이 대조한다.
+        /// </summary>
+        public int SourceLine { get; set; }
+
         public List<AstUpdateAssignment> Assignments { get; set; } = new();
 
         /// <summary>FROM 절 원문. 없으면 null이며, 자기참조 의미 경고가 붙지 않는다.</summary>

@@ -273,5 +273,24 @@ namespace ReSet.Core.Tests
             // 공유하게 되어, 결과 쪽 원소를 바꾸면 입력 쪽도 같이 바뀐다.
             Assert.Equal("1", analysis.AstUpdateMappings[0].Assignments[0].SourceExpression);
         }
+
+        [Fact]
+        public void Normalize_ShouldPreserveTheUpdateMappingSourceLine()
+        {
+            // 정규화는 테이블 이름만 다룬다. 라인을 잃으면 앵커가 프롬프트에 닿지 않는다.
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping
+            {
+                TargetTable = "dbo.T",
+                StatementOrdinal = 1,
+                SourceLine = 42
+            };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "C", SourceExpression = "1" });
+            analysis.AstUpdateMappings.Add(mapping);
+
+            var normalized = StaticAnalysisNormalizer.Normalize(analysis, "DB", "dbo");
+
+            Assert.Equal(42, Assert.Single(normalized.AstUpdateMappings).SourceLine);
+        }
     }
 }

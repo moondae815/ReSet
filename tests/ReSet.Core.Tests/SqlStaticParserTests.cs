@@ -1054,5 +1054,22 @@ END";
             Assert.Equal("Content", assignment.Column);
             Assert.Contains(".WRITE(", assignment.SourceExpression);
         }
+
+        [Fact]
+        public void Analyze_UpdateMapping_ShouldCarryTheSourceLine()
+        {
+            // 청킹 경로가 카운터를 리셋해 StatementOrdinal이 앵커로 못 쓰인다.
+            // 라인은 청킹과 무관하게 유일하고 object_definition.sql로 대조된다.
+            var ddlText = @"CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Equal(4, mapping.SourceLine);
+        }
     }
 }
