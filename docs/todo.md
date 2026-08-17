@@ -15,6 +15,13 @@
   돌려 봐야 아는 3건은 새 섹션 `실측이 필요한 것`으로 갈랐다. 셋 다 프롬프트 사안이라
   한 뿌리에서 나온다 — 그 문서가 "프롬프트는 재생성 결과가 비결정적이라 별도 설계로
   다룬다"며 통째로 제외했기 때문이다.
+- **2026-08-17 — 프롬프트 유예를 부분적으로 깼다.** 위 "프롬프트는 재생성 결과가
+  비결정적이라 별도 설계로 다룬다"는 판단은
+  [축 A 명세서 충실도 설계](superpowers/specs/2026-08-17-axis-a-spec-fidelity-design.md)에서
+  조건부로 해제됐다. **비결정성을 없애는 것이 아니라, 비결정적 산출물을 결정적으로
+  검사한다** — 프롬프트 규칙을 혼자 추가하지 않고, 규칙과 L1 검사가 같은 추출기
+  결과에서 나오는 경우에만 추가한다. 그 계약을 지키지 않는 프롬프트 사안(P1의
+  `목차가 S01의 TargetTables를 채우지 못한다` 등)은 여전히 유예 상태다.
 - 2026-08-14 재검증 때의 기록: 목록 자체가 코드와 어긋난 4건을 그때 고쳤다 — P2의
   **필수 H2 하드코딩**(3곳→4곳, 단계 라벨 오기), P3의 **모호성 오류 메시지**(절반은 이미
   해소), 줄 번호 2건. 제외였던
@@ -101,6 +108,26 @@
   출처: `2026-08-14-generated-bundle-contract-design.md` §제외
 
 ### 정적 분석 / 프롬프트 계약
+
+- [ ] **호출된 객체가 참조하는 컬럼이 호출자의 스키마 표로 접혀 올라오지 않는다** —
+      `SqlStaticParser.cs:180`(`ReferencedColumnsPerTable`)
+
+  `UP_UTIL_SETTLE_EXPECT_PROC`가 부르는 UDF `UF_GET_COLLECTYMD`는
+  `TPGCollectPeriodMst`에서 `CollectMonth2/3`·`CollectDay2/3`·`CollectTxSDay2/3`·
+  `CollectTxEDay2/3` 8컬럼을 읽는다. 이 컬럼들은 `EXPECT_PROC` 자신의 SQL 본문에는 한
+  번도 나오지 않으므로 `EXPECT_PROC`의 `ReferencedColumnsPerTable`에 애초에 들어가지
+  않고, 그 결과 **`EXPECT_PROC`의 `Spec.md:341`이 실재하는 컬럼을 "제공된 스키마 표에
+  정의되지 않았다"고 잘못 기록한다.** `UF_GET_COLLECTYMD` 자신의 `prompt-context.md`에는
+  이 8컬럼이 정상적으로 실려 있어 — 컬럼 리졸버 자체는 옳고, 빠진 것은 **호출된 객체의
+  컬럼 의존성을 호출자에게 병합하는 단계**다. 실측 확정(2026-08-17, §설계 1.3의 원래
+  추정 "리졸버 결함"은 측정으로 반증됨) — `DetectOrphanedColumnKeys`를 넓혀도 닫히지
+  않는다. 그 검출기는 `ReferencedColumnsPerTable`의 **키**가 병합 안 된 경우만 보는데, 이
+  8컬럼은 SQL에 없어 애초에 키 자체가 생기지 않는다. 닫으려면 재귀 의존성 수집이 하위
+  객체(`UF_GET_COLLECTYMD`)의 `ReferencedColumnsPerTable`을 상위(`EXPECT_PROC`)로 접어
+  올리는 별도 설계가 필요하다 — 축 A 명세서 충실도가 아니라 프롬프트 입력 구성의 문제라
+  이 계획의 범위 밖에 남겼다.
+
+  출처: `2026-08-17-axis-a-spec-fidelity-design.md` §설계 1.3 (Task 3 실측)
 
 - [ ] **정확 일치 타입 테이블 2곳이 분류기 밖에 있다** —
       `DependencyAnalysisOrchestrator.cs:327`(`TryParseCodeObjectType`),
@@ -238,6 +265,21 @@
 ---
 
 ## P3 — 인지됨, 영향 미미
+
+- [ ] **`AGENTS.md`의 경고 개수가 낡았다** — `AGENTS.md:217`
+
+  "경고가 **정확히 8건**(모두 `DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)"이라
+  적혀 있으나, 이 브랜치의 기준 커밋에서 `dotnet clean && dotnet build`로 다시 세면
+  **9건**이다 — 기록된 8건에 `AiServiceTests.cs:681`의 `CS8604` 1건이 더 있다. 이 항목을
+  이 계획이 만들지 않았고 `AGENTS.md` 수정은 이 계획의 쓰기 범위 밖이라 고치지 않고
+  기록만 한다. 같은 체크리스트 바로 아랫줄(`:218`)이 스스로 경고하는 바로 그 위험이다
+  — 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 체크리스트를 무시하도록
+  길들인다. `:218`의 테스트 개수 항목은 이미 "하루 만에 네 번" 낡아 그 교훈으로 숫자
+  자체를 지우고 이유를 설명하는 문장으로 바꿨는데, `:217`의 경고 개수는 아직 그 처방을
+  받지 못했다 — 이번이 다섯 번째로 낡은 것이다.
+
+  출처: Task 12 실측(`2026-08-17-axis-a-spec-fidelity-design.md` 구현 중 `AGENTS.md:217`
+  대조, 2026-08-17)
 
 - [ ] `ScoreReadability` 라벨이 사실과 다르다 — 두 Critic 모두 코드 가독성이 아니라
       Mermaid 다이어그램 문법을 채점한다(`VerificationDocumentFormatter.cs:52`).
