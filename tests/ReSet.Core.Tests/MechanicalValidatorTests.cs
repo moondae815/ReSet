@@ -1892,6 +1892,89 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_MissingCommentAnchor_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock(
+                        "NonExecutable",
+                        "AND ClientID NOT IN (SELECT ClientID FROM dbo.UF_GET_CLIENTID4TMONET())",
+                        12,
+                        new[] { "UF_GET_CLIENTID4TMONET" })
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
+        }
+
+        [Fact]
+        public void Validate_CommentAnchorPresent_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock(
+                        "NonExecutable", "AND ClientID NOT IN (...)", 12,
+                        new[] { "UF_GET_CLIENTID4TMONET" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n주석 처리된 조건은 `dbo.UF_GET_CLIENTID4TMONET()`를 호출하며 실행되지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
+        }
+
+        [Fact]
+        public void Validate_AnchorlessProseComment_ShouldNotBeChecked()
+        {
+            // 앵커가 없는 항목은 L1이 손대지 않는다.
+            var expectations = EmptyExpectations() with
+            {
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Prose", "매입요청일(D)+1 : 집계 고려", 7, Array.Empty<string>())
+                }
+            };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SourceCommentMissing);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsASourceComment_ShouldNotBeNullAndShouldCarryTheComments()
+        {
+            // Task 4가 세운 조기 반환 함정의 재현이다. SpecExpectations.From은 재료가
+            // 전부 비면 null을 돌려주고 호출부는 null을 "대조 건너뜀"으로 받는다.
+            // sourceComments를 조기 반환 조건에 잇지 않으면 이 새 재료가 유일하게
+            // 있는 SpDefinition도 null을 받아 L1(CheckSourceComments)이 한 번도 돌지
+            // 않는다 - 이 테스트가 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.T SET C = 1
+    WHERE  ID > 0
+    --AND ClientID NOT IN (SELECT ClientID FROM dbo.UF_GET_CLIENTID4TMONET()) --예외처리 제거(2021.11.29)
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            var block = Assert.Single(expectations!.SourceComments);
+            Assert.Contains("UF_GET_CLIENTID4TMONET", block.Anchors);
+        }
+
+        [Fact]
         public void From_WhenTheOnlyMaterialIsAThreePartReference_ShouldNotBeNullAndShouldCarryTheFlag()
         {
             // SpecExpectations.From은 세 재료(UpdateColumns, PromptSchemaColumns,

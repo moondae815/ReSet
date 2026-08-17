@@ -313,8 +313,6 @@ namespace ReSet.Core.Services
                 }
             }
 
-            bool hasComments = spDef.DdlText.Contains("--") || spDef.DdlText.Contains("/*");
-
             var rules = new List<string>
             {
                 "You are an expert SQL Server Stored Procedure analyzer. Analyze the provided stored procedure metadata and write a comprehensive reverse-engineered specification in Markdown.",
@@ -493,6 +491,23 @@ namespace ReSet.Core.Services
             checklistSb.AppendLine("- [ ] Mermaid 흐름도 내부 노드의 한글 텍스트를 큰따옴표 한 쌍으로 감싸고 문법적 예약어 충돌이 없도록 작성하셨습니까?");
             checklistSb.AppendLine("- [ ] SP 내부의 에러 처리 분기(예: DELETE/INSERT 실패 시 각각 @@ERROR 조건 분기 및 음수 반환 코드)와 트랜잭션 롤백 동작이 Mermaid 다이어그램 및 본문 설명에 충실히 반영되었습니까?");
             checklistSb.AppendLine("- [ ] 호출자에게 반환되는 결과셋(Rowset)의 유무를 명시하셨습니까? (반환하지 않는 경우에도 그 사실을 적어야 합니다.)");
+
+            // 원본 DDL 전문은 이미 <sp-source-ddl>로 프롬프트에 들어가므로, 주석 결함은
+            // 정보 부족이 아니라 요구 부재였다. SourceCommentExtractor 하나가 이 체크리스트와
+            // MechanicalValidator.CheckSourceComments(L1)의 대조 기준을 함께 낸다 - 프롬프트
+            // 요구와 대조 기준이 서로 다른 판단을 하지 않도록 단일 권위로 둔다.
+            var sourceComments = SourceCommentExtractor.Extract(spDef.DdlText);
+            if (sourceComments.Count > 0)
+            {
+                checklistSb.AppendLine(
+                    $"- [ ] 원본 DDL의 주석 {sourceComments.Count}건(비실행 조건·코드 범례·헤더 선언)을 "
+                    + "본문에 기록하셨습니까? 조건식 원문·도입 일자·사유를 그대로 옮기고, "
+                    + "\"실행되지 않습니다\" 한 문장으로 대신하지 마십시오. 대조 대상:");
+                foreach (var block in sourceComments)
+                {
+                    checklistSb.AppendLine($"      * (라인 {block.Line}) {block.Text}");
+                }
+            }
 
             var userPrompt = $@"
 <stored-procedure-context>
@@ -1556,8 +1571,6 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
             }
 
-            bool hasComments = spDef.DdlText.Contains("--") || spDef.DdlText.Contains("/*");
-
             string systemPrompt = "";
             string checklistText = "";
 
@@ -1673,6 +1686,23 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 if (spDef.StaticAnalysis != null && spDef.StaticAnalysis.InsertTables.Count > 0)
                 {
                     checklistSb.AppendLine($"- [ ] INSERT 대상 테이블({string.Join(", ", spDef.StaticAnalysis.InsertTables)})의 각 컬럼별 원천 데이터 매핑 정보(상수값, 변수, ISNULL 변환 등)가 1:1 대조 표로 완전하게 기술되었습니까?");
+                }
+
+                // 이 분기는 지역 모델의 최초 생성 경로이자 L3 재생성 경로다
+                // (BuildUpdateMappingTemplateLines 문서 참고). BuildSpecificationPrompts에만
+                // 이 항목을 두면 두 경로가 여기서 갈라진다 - Task 4의 Critical 지적(3부
+                // 식별자 규칙이 이 분기에는 없었다)과 같은 모양의 결함이 재발한다.
+                var sourceCommentsForCrud = SourceCommentExtractor.Extract(spDef.DdlText);
+                if (sourceCommentsForCrud.Count > 0)
+                {
+                    checklistSb.AppendLine(
+                        $"- [ ] 원본 DDL의 주석 {sourceCommentsForCrud.Count}건(비실행 조건·코드 범례·헤더 선언)을 "
+                        + "본문에 기록하셨습니까? 조건식 원문·도입 일자·사유를 그대로 옮기고, "
+                        + "\"실행되지 않습니다\" 한 문장으로 대신하지 마십시오. 대조 대상:");
+                    foreach (var block in sourceCommentsForCrud)
+                    {
+                        checklistSb.AppendLine($"      * (라인 {block.Line}) {block.Text}");
+                    }
                 }
                 checklistText = checklistSb.ToString();
             }

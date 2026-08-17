@@ -44,6 +44,10 @@ namespace ReSet.Core.Services
         /// <summary>원본에 Linked Server(4부) 참조가 있는가.</summary>
         public bool HasLinkedServerReference { get; init; }
 
+        /// <summary>명세서가 옮겨야 할 원본 주석. 앵커가 있는 항목만 L1이 대조한다.</summary>
+        public IReadOnlyList<SourceCommentBlock> SourceComments { get; init; }
+            = Array.Empty<SourceCommentBlock>();
+
         /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
@@ -83,6 +87,7 @@ namespace ReSet.Core.Services
             var analysis = spDef.StaticAnalysis;
             var hasThreePartReference = analysis.ThreePartObjectReferences.Count > 0;
             var hasLinkedServerReference = analysis.LinkedServerReferences.Count > 0;
+            var sourceComments = SourceCommentExtractor.Extract(spDef.DdlText);
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -91,7 +96,8 @@ namespace ReSet.Core.Services
                 && promptSchemaColumns.Count == 0
                 && inputDefects.Count == 0
                 && !hasThreePartReference
-                && !hasLinkedServerReference)
+                && !hasLinkedServerReference
+                && sourceComments.Count == 0)
             {
                 return null;
             }
@@ -100,7 +106,8 @@ namespace ReSet.Core.Services
                 updateColumns, promptSchemaColumns, columnlessDependencyTables, inputDefects)
             {
                 HasThreePartReference = hasThreePartReference,
-                HasLinkedServerReference = hasLinkedServerReference
+                HasLinkedServerReference = hasLinkedServerReference,
+                SourceComments = sourceComments
             };
         }
 

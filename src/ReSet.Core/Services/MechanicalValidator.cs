@@ -19,6 +19,7 @@ namespace ReSet.Core.Services
         SchemaClaimFalse,
         TableIdentitySplit,
         IdentifierNotationClaim,
+        SourceCommentMissing,
         General
     }
 
@@ -109,6 +110,7 @@ namespace ReSet.Core.Services
                     CheckSchemaClaims(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
+                    CheckSourceComments(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1094,6 +1096,42 @@ namespace ReSet.Core.Services
             }
 
             return clauses;
+        }
+
+        /// <summary>
+        /// 원본 주석의 앵커 토큰이 명세서 본문에 있는지 본다.
+        ///
+        /// 앵커가 없는 항목은 건너뛴다 - 순수 산문 주석을 자연어로 대조하면 오탐만
+        /// 낳는다. 축 B의 조건 컬럼 검사가 실측 15건 중 14건 오탐이었던 전례가 있다.
+        ///
+        /// 앵커 하나만 있으면 통과로 본다. 한 주석의 모든 토큰을 요구하면 명세서가
+        /// 요약하는 정상 서술까지 결함이 된다.
+        /// </summary>
+        private static void CheckSourceComments(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.SourceComments.Count == 0) return;
+
+            foreach (var block in expectations.SourceComments)
+            {
+                if (block.Anchors.Count == 0) continue;
+
+                var found = block.Anchors.Any(
+                    anchor => markdown.Contains(anchor, StringComparison.OrdinalIgnoreCase));
+                if (found) continue;
+
+                var message =
+                    $"원본 DDL {block.Line}행의 주석이 명세서에 기록되지 않았습니다: "
+                    + $"`{block.Text}`. 조건식 원문·도입 일자·사유를 제약 절에 기술해야 합니다. "
+                    + $"(대조 앵커: {string.Join(", ", block.Anchors)})";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SourceCommentMissing,
+                    Message = message,
+                    RawContext = block.Text
+                });
+            }
         }
 
         private static readonly Regex TableCellRegex =
