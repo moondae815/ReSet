@@ -2138,6 +2138,35 @@ A[""시작""] --> B[""끝""]
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
         }
 
+        [Theory]
+        // Fix Round 1 - 독립 리뷰 실측. 아래 7개는 헤더/EXEC 모순을 인정하는 자연스러운
+        // 한국어 표현들이다. 원래 토큰 4개(모순, 스테일, 다릅니다, 어긋)만으로는 이 중
+        // 5개가 "인정하지 않음"으로 거짓 결함 처리됐다 - 모순을 정확히 기록한 문서를
+        // 틀렸다고 판정하는 오탐이다. 이 테스트가 7개 전부를 통과로 요구한다.
+        [InlineData("헤더 주석은 내부 SP 호출이 없다고 하나 실제로는 두 개를 호출한다.")]
+        [InlineData("헤더 주석은 Inner SP: NONE이라 되어 있지만 실제로는 두 개의 프로시저를 EXEC로 호출합니다.")]
+        [InlineData("주석과 실제 구현이 맞지 않습니다.")]
+        [InlineData("헤더 주석이 오래되어 실제 구현을 반영하지 못합니다.")]
+        [InlineData("헤더 주석의 선언과 실제 구현 사이에 차이가 있습니다.")]
+        [InlineData("이는 헤더 주석과 모순됩니다.")]
+        [InlineData("헤더 주석이 실제와 어긋납니다.")]
+        public void Validate_NaturalAcknowledgementPhrasings_ShouldPass(string acknowledgement)
+        {
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown() + "\n" + acknowledgement + "\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
         [Fact]
         public void Validate_UnrelatedMismatchPhraseDoesNotAcknowledgeTheHeaderContradiction_ShouldStillBeAnError()
         {
