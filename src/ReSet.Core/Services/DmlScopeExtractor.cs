@@ -15,7 +15,12 @@ namespace ReSet.Core.Services
     /// 기준일 파라미터가 <b>대상 범위에</b> 적용되는가. 서브쿼리 안에만 있으면 false다.
     /// 이 칸 하나가 A1 결함 넷 중 셋을 드러낸다.
     /// </param>
-    /// <param name="JoinKeys">FROM 절 조인의 ON 조건이 쓰는 컬럼 이름.</param>
+    /// <param name="JoinKeys">
+    /// 테이블을 잇는 컬럼 이름. ANSI JOIN의 ON 조건과, 콤마로 나열한 옛 스타일
+    /// 조인(FROM A, B WHERE A.X = B.Y)의 컬럼=컬럼 동등비교를 모두 담는다 -
+    /// 후자는 PredicateColumns와 겹칠 수 있다(같은 WHERE 텍스트가 필터와 조인
+    /// 역할을 동시에 하기 때문).
+    /// </param>
     public sealed record DmlScopeFact(
         string Operation,
         int Line,
@@ -94,6 +99,7 @@ namespace ReSet.Core.Services
             {
                 var predicateColumns = new List<string>();
                 var dateApplied = false;
+                var joinKeys = new List<string>();
 
                 if (where?.SearchCondition != null)
                 {
@@ -104,14 +110,35 @@ namespace ReSet.Core.Services
                     predicateColumns.AddRange(top.Columns);
                     dateApplied = _dateParameter.Length > 0
                         && top.Parameters.Contains(_dateParameter, StringComparer.OrdinalIgnoreCase);
+
+                    // 콤마로 나열한 옛 스타일 조인(FROM A, B WHERE A.X = B.Y)의 결합
+                    // 조건은 ON절이 없어 WHERE 최상위에 있다 - EXCEPTION_PROC 실행순서
+                    // 3(108행)/4(130행) 실측. 이 값은 의도적으로 predicateColumns와
+                    // 중복될 수 있다 - "WHERE에 나온 컬럼"과 "테이블을 잇는 컬럼"은
+                    // 다른 질문이고, 같은 텍스트(WHERE)가 두 역할을 동시에 하는 것이
+                    // 콤마 조인의 실제 구조이기 때문이다. ON절 조인은 애초에 WHERE가
+                    // 아니므로 predicateColumns에 실리지 않는다 - 편집으로 뺀 게 아니라
+                    // 소스 텍스트 구조가 다른 것이다.
+                    foreach (var key in top.JoinKeys)
+                    {
+                        if (!joinKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+                        {
+                            joinKeys.Add(key);
+                        }
+                    }
                 }
 
-                var joinKeys = new List<string>();
                 if (from != null)
                 {
                     var joins = new JoinConditionCollector();
                     from.Accept(joins);
-                    joinKeys.AddRange(joins.Columns);
+                    foreach (var key in joins.Columns)
+                    {
+                        if (!joinKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+                        {
+                            joinKeys.Add(key);
+                        }
+                    }
                 }
 
                 Facts.Add(new DmlScopeFact(
@@ -141,14 +168,54 @@ namespace ReSet.Core.Services
         /// <summary>
         /// WHERE 최상위 술어의 컬럼과 파라미터. 서브쿼리 안으로 내려가지 않는다 -
         /// EXISTS(... B.YMD = @pi_strYMD ...)는 대상 범위를 좁히지 않기 때문이다.
+        ///
+        /// 부수적으로 <see cref="JoinKeys"/>도 모은다 - 컬럼 = 컬럼 형태의 최상위
+        /// 동등비교는 콤마로 나열한 옛 스타일 조인(ON절이 없는 FROM A, B)의 결합
+        /// 조건이 WHERE에 그대로 놓인 것이다. 어느 쪽이 "진짜 대상"인지 고르지
+        /// 않는다 - ON절 수집(JoinConditionCollector)도 같은 원칙으로 양쪽 컬럼을
+        /// 그냥 다 담는다. 여기서도 똑같이 기계적으로 판단한다: 두 피연산자가 모두
+        /// 컬럼 참조면 조인 키 후보고, 비교 연산자가 등호가 아니거나 한쪽이 파라미터/
+        /// 리터럴/함수 결과면 조인 키가 아니다.
         /// </summary>
         private sealed class TopLevelPredicateCollector : TSqlFragmentVisitor
         {
             public List<string> Columns { get; } = new();
             public List<string> Parameters { get; } = new();
+            public List<string> JoinKeys { get; } = new();
 
             public override void ExplicitVisit(ScalarSubquery node) { }
-            public override void ExplicitVisit(ExistsPredicate node) { }
+
+            /// <summary>
+            /// EXISTS 서브쿼리 자체는 대상 범위를 좁히지 않지만, 그 안에서 바깥
+            /// 별칭을 참조하는 상관(correlated) 조건은 실제로 좁힌다 - 예:
+            /// EXISTS (SELECT 1 FROM B WHERE B.PLTID = A.PLTID)의 A.PLTID. 서브쿼리
+            /// 자신의 FROM이 선언한 별칭이 아닌 한정자를 쓰는 컬럼만 "바깥 참조"로
+            /// 본다 - 어느 쪽이 진짜 대상인지 추측하지 않고, 서브쿼리 스스로 선언하지
+            /// 않은 이름이라는 사실 하나로 판단한다. 파라미터는 이 서브쿼리 안에
+            /// 있으면 이유를 막론하고 대상에 적용된 것으로 세지 않는다 - 그 판정은
+            /// 여전히 바깥 최상위 WHERE에서만 이뤄진다(CorrelatedOuterColumnCollector가
+            /// VariableReference를 아예 수집하지 않는 이유).
+            /// </summary>
+            public override void ExplicitVisit(ExistsPredicate node)
+            {
+                if (node.Subquery?.QueryExpression is not QuerySpecification spec
+                    || spec.WhereClause?.SearchCondition == null)
+                {
+                    return;
+                }
+
+                var localAliases = CollectLocalAliases(spec.FromClause);
+                var correlated = new CorrelatedOuterColumnCollector(localAliases);
+                spec.WhereClause.SearchCondition.Accept(correlated);
+
+                foreach (var column in correlated.Columns)
+                {
+                    if (!Columns.Contains(column, StringComparer.OrdinalIgnoreCase))
+                    {
+                        Columns.Add(column);
+                    }
+                }
+            }
 
             /// <summary>
             /// PLTID IN (SELECT ...) 형태(EXCEPTION_PROC 실행순서 18 실측)에서 왼쪽
@@ -166,6 +233,34 @@ namespace ReSet.Core.Services
                     {
                         value.Accept(this);
                     }
+                }
+            }
+
+            /// <summary>
+            /// 컬럼 = 컬럼 형태의 최상위 동등비교를 조인 키 후보로 겸해 담는다.
+            /// base.ExplicitVisit을 그대로 호출해 기존 Columns 수집(양쪽 컬럼 모두)은
+            /// 손대지 않는다 - 이 오버라이드는 순수 추가다.
+            /// </summary>
+            public override void ExplicitVisit(BooleanComparisonExpression node)
+            {
+                if (node.ComparisonType == BooleanComparisonType.Equals
+                    && node.FirstExpression is ColumnReferenceExpression left
+                    && node.SecondExpression is ColumnReferenceExpression right)
+                {
+                    AddJoinKey(left);
+                    AddJoinKey(right);
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            private void AddJoinKey(ColumnReferenceExpression reference)
+            {
+                var name = reference.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                if (!string.IsNullOrWhiteSpace(name)
+                    && !JoinKeys.Contains(name!, StringComparer.OrdinalIgnoreCase))
+                {
+                    JoinKeys.Add(name!);
                 }
             }
 
@@ -188,10 +283,87 @@ namespace ReSet.Core.Services
             }
         }
 
-        /// <summary>조인 ON 조건이 쓰는 컬럼. ANSI JOIN(ON)만 본다 - 콤마로 나열한 옛
-        /// 스타일 조인(FROM A, B WHERE A.X = B.Y)의 결합 조건은 WHERE 최상위 술어로
-        /// 이미 PredicateColumns에 잡힌다(COMM_UPD 문장 7 실측). 여기서 또 잡으면
-        /// 중복 앵커일 뿐이라 그대로 둔다.</summary>
+        /// <summary>
+        /// EXISTS 서브쿼리 자신의 FROM이 선언한 별칭(과 한정자 없이도 쓸 수 있는
+        /// 테이블 이름)을 모은다 - 상관 컬럼 판정의 "로컬 이름" 기준이다.
+        /// </summary>
+        private static HashSet<string> CollectLocalAliases(FromClause? from)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (from?.TableReferences == null) return result;
+
+            foreach (var reference in from.TableReferences)
+            {
+                CollectLocalAliasesFrom(reference, result);
+            }
+
+            return result;
+        }
+
+        private static void CollectLocalAliasesFrom(TableReference? reference, HashSet<string> result)
+        {
+            switch (reference)
+            {
+                case NamedTableReference named:
+                    if (named.Alias != null) result.Add(named.Alias.Value);
+                    var baseName = named.SchemaObject?.BaseIdentifier?.Value;
+                    if (!string.IsNullOrEmpty(baseName)) result.Add(baseName);
+                    break;
+                case QualifiedJoin qualifiedJoin:
+                    CollectLocalAliasesFrom(qualifiedJoin.FirstTableReference, result);
+                    CollectLocalAliasesFrom(qualifiedJoin.SecondTableReference, result);
+                    break;
+                case UnqualifiedJoin unqualifiedJoin:
+                    CollectLocalAliasesFrom(unqualifiedJoin.FirstTableReference, result);
+                    CollectLocalAliasesFrom(unqualifiedJoin.SecondTableReference, result);
+                    break;
+                case QueryDerivedTable derived:
+                    if (derived.Alias != null) result.Add(derived.Alias.Value);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// EXISTS 서브쿼리 최상위 WHERE에서, 서브쿼리 자신의 로컬 별칭이 아닌
+        /// 한정자를 쓰는 컬럼만 담는다. 한정자가 없는 컬럼은 서브쿼리 자신의
+        /// 것으로 본다(안전한 기본값 - 놓치는 방향이지 잘못 담는 방향이 아니다).
+        /// 파라미터는 아예 수집하지 않는다 - 이 서브쿼리 안의 파라미터가 대상에
+        /// 적용된 것으로 잘못 세지는 것을 원천 차단한다.
+        /// </summary>
+        private sealed class CorrelatedOuterColumnCollector : TSqlFragmentVisitor
+        {
+            private readonly HashSet<string> _localAliases;
+
+            public CorrelatedOuterColumnCollector(HashSet<string> localAliases) => _localAliases = localAliases;
+
+            public List<string> Columns { get; } = new();
+
+            public override void ExplicitVisit(ScalarSubquery node) { }
+            public override void ExplicitVisit(ExistsPredicate node) { }
+
+            public override void ExplicitVisit(InPredicate node) => node.Expression?.Accept(this);
+
+            public override void Visit(ColumnReferenceExpression node)
+            {
+                var parts = node.MultiPartIdentifier?.Identifiers;
+                if (parts == null || parts.Count < 2) return;
+
+                var qualifier = parts[parts.Count - 2].Value;
+                if (_localAliases.Contains(qualifier)) return;
+
+                var name = parts[parts.Count - 1].Value;
+                if (!string.IsNullOrWhiteSpace(name)
+                    && !Columns.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    Columns.Add(name);
+                }
+            }
+        }
+
+        /// <summary>조인 ON 조건이 쓰는 컬럼(ANSI JOIN). 콤마로 나열한 옛 스타일
+        /// 조인(FROM A, B WHERE A.X = B.Y)의 결합 조건은 TopLevelPredicateCollector가
+        /// WHERE를 훑을 때 함께 담는다 - ON절이 없어 원본 텍스트 자체가 WHERE에만
+        /// 있기 때문이다.</summary>
         private sealed class JoinConditionCollector : TSqlFragmentVisitor
         {
             public List<string> Columns { get; } = new();
