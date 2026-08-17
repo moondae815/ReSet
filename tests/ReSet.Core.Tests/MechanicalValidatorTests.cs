@@ -2198,6 +2198,38 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_UnrelatedDifferenceSentenceElsewhereInDocument_ShouldStillBeAnError()
+        {
+            // Fix Round 2 리뷰 실측. Round 1에서 넓힌 "실제로는"·"차이가 있" 같은
+            // 토큰은 문서 전체(Contains)를 대상으로 하면 헤더와 무관한 문장에서도
+            // 매치된다 - 리뷰가 이 정확한 문장으로 증명했다: 아래 "정산 금액..."
+            // 문장은 원 단위 절사로 인한 두 집계값의 차이를 말할 뿐 헤더 주석과는
+            // 아무 관계가 없는데도, 문서 전체 Contains로는 "차이가 있"이 매치되어
+            // 진짜 헤더/EXEC 모순 신고를 조용히 삼켜 버렸다(DetailedErrors가
+            // 비어짐). CheckHeaderContractContradiction이 이제 문장 단위로 인정
+            // 토큰과 헤더 지시어(헤더·주석·Inner SP·NONE)의 공존을 요구하므로, 이
+            // 무관한 문장은 인정으로 세지 않는다 - 결함은 그대로 신고돼야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                HasInternalProcedureCall = true,
+                SourceComments = new[]
+                {
+                    new SourceCommentBlock("Header", "Inner SP        : NONE", 3, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n이 프로시저는 두 개의 하위 프로시저를 EXEC로 호출합니다. "
+                + "입력 날짜의 형식과 유효성을 검사하지 않습니다. NULL 또는 원천과 "
+                + "일치하지 않는 값이 전달되면 직접 삭제·삽입 대상이 없을 수 있습니다.\n"
+                + "정산 금액 계산 시 원 단위 절사로 인해 두 번째 집계와 세 번째 집계 "
+                + "사이에 차이가 있습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.HeaderContractContradiction);
+        }
+
+        [Fact]
         public void Validate_NoInternalProcedureCall_ShouldNotCheckHeaderContractContradiction()
         {
             // 재료가 비면 소프트 스킵이다 - 내부 SP 호출이 없는 대다수 SP에서 거짓

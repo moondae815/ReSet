@@ -1286,6 +1286,44 @@ namespace ReSet.Core.Services
         };
 
         /// <summary>
+        /// 인정 문장이 가리키는 대상이 "헤더 주석"이라는 것 자체를 확인하는 지시어.
+        /// 문서 전체가 아니라 <b>같은 문장</b> 안에 인정 토큰과 이 지시어가 함께
+        /// 있어야 인정으로 센다.
+        ///
+        /// [Fix Round 2 - 리뷰 실측] Round 1에서 넓힌 "실제로는"·"차이가 있" 같은
+        /// 토큰은 코퍼스 전수 스캔(문서 단위 유무)에서는 0건이었지만, 문서 전체
+        /// Contains로 판정하면 헤더와 전혀 무관한 문장에서도 매치될 수 있다는 것이
+        /// 리뷰의 지적이었다 - "정산 금액 계산 시 원 단위 절사로 인해 두 번째
+        /// 집계와 세 번째 집계 사이에 차이가 있습니다" 같은, 순전히 값 차이를
+        /// 말하는 문장이 실제 헤더/EXEC 모순 신고를 조용히 삼켰다. 토큰을 더
+        /// 좁히는 것으로는 근본 원인이 고쳐지지 않는다 - "이 단어가 문서 어딘가에
+        /// 있는가"라는 질문 자체가 잘못됐다("이 문서가 이 모순을 인정했는가"가
+        /// 맞는 질문이다). 그래서 판정 단위를 문서에서 문장으로 좁히고, 그 문장이
+        /// 헤더 주석을 가리킨다는 확인을 추가로 요구한다.
+        ///
+        /// 절(SplitIntoClauses) 단위가 아니라 문장 단위를 쓴다 - 절 경계 표지에는
+        /// "하나"·"지만" 같은 대조 접속사가 포함되는데, "헤더 주석은 ~없다고 하나
+        /// 실제로는 ~호출한다"처럼 그 접속사가 바로 인정 표현의 일부인 문장은 절로
+        /// 쪼개면 헤더 언급과 인정 토큰이 서로 다른 절로 갈라진다.
+        /// </summary>
+        private static readonly string[] HeaderContractTerms =
+        {
+            "헤더", "주석", "Inner SP", "NONE"
+        };
+
+        /// <summary>
+        /// 마침표를 문장 경계로 쓴다. SplitIntoClauses보다 넓은 단위가 필요하다 -
+        /// 위 HeaderContractTerms 문서 참고.
+        /// </summary>
+        private static IEnumerable<string> SplitIntoSentences(string text)
+        {
+            foreach (var sentence in text.Split('.'))
+            {
+                if (!string.IsNullOrWhiteSpace(sentence)) yield return sentence;
+            }
+        }
+
+        /// <summary>
         /// 헤더 주석이 내부 SP 호출을 NONE이라 선언했는데 실제로 EXEC가 있고,
         /// 명세서가 그 모순 자체를 적지 않았는지 본다.
         ///
@@ -1302,9 +1340,9 @@ namespace ReSet.Core.Services
                      && b.Text.Contains("NONE", StringComparison.OrdinalIgnoreCase));
             if (!headerClaimsNone) return;
 
-            var acknowledged = Array.Exists(
-                ContradictionAcknowledgementTokens,
-                t => markdown.Contains(t, StringComparison.Ordinal));
+            var acknowledged = SplitIntoSentences(markdown).Any(sentence =>
+                Array.Exists(ContradictionAcknowledgementTokens, t => sentence.Contains(t, StringComparison.Ordinal))
+                && Array.Exists(HeaderContractTerms, t => sentence.Contains(t, StringComparison.OrdinalIgnoreCase)));
             if (acknowledged) return;
 
             const string message =
