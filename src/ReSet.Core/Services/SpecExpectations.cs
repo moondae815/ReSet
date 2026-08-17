@@ -48,6 +48,9 @@ namespace ReSet.Core.Services
         public IReadOnlyList<SourceCommentBlock> SourceComments { get; init; }
             = Array.Empty<SourceCommentBlock>();
 
+        /// <summary>원본의 3인자 ROUND 호출. 값 매핑 기술 여부를 L1이 본다.</summary>
+        public IReadOnlyList<RoundingCall> RoundingCalls { get; init; } = Array.Empty<RoundingCall>();
+
         /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
@@ -88,6 +91,7 @@ namespace ReSet.Core.Services
             var hasThreePartReference = analysis.ThreePartObjectReferences.Count > 0;
             var hasLinkedServerReference = analysis.LinkedServerReferences.Count > 0;
             var sourceComments = SourceCommentExtractor.Extract(spDef.DdlText);
+            var roundingCalls = RoundingSemanticsExtractor.Extract(spDef.DdlText);
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -97,7 +101,8 @@ namespace ReSet.Core.Services
                 && inputDefects.Count == 0
                 && !hasThreePartReference
                 && !hasLinkedServerReference
-                && sourceComments.Count == 0)
+                && sourceComments.Count == 0
+                && roundingCalls.Count == 0)
             {
                 return null;
             }
@@ -107,7 +112,8 @@ namespace ReSet.Core.Services
             {
                 HasThreePartReference = hasThreePartReference,
                 HasLinkedServerReference = hasLinkedServerReference,
-                SourceComments = sourceComments
+                SourceComments = sourceComments,
+                RoundingCalls = roundingCalls
             };
         }
 

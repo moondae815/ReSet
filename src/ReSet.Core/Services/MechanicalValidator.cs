@@ -20,6 +20,7 @@ namespace ReSet.Core.Services
         TableIdentitySplit,
         IdentifierNotationClaim,
         SourceCommentMissing,
+        RoundingSemanticsMissing,
         General
     }
 
@@ -111,6 +112,7 @@ namespace ReSet.Core.Services
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
                     CheckSourceComments(cleansed, expectations, result);
+                    CheckRoundingSemantics(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1132,6 +1134,39 @@ namespace ReSet.Core.Services
                     RawContext = block.Text
                 });
             }
+        }
+
+        /// <summary>
+        /// 3인자 ROUND가 있는데 명세서가 절사 쪽 의미를 적지 않았는지 본다.
+        ///
+        /// 동의어 집합으로 판정한다. 명세서가 "내림"이라 써도 값 매핑은 전달된
+        /// 것이므로, 한 단어만 요구하면 정상 서술이 결함이 된다.
+        ///
+        /// 호출별로 보지 않고 문서 전체에 한 번만 요구한다. 같은 의미를 호출
+        /// 개수만큼 반복하라는 요구가 되면 명세서가 장황해진다.
+        /// </summary>
+        private static readonly string[] TruncationSynonyms = { "절사", "버림", "내림", "truncate", "TRUNCATE" };
+
+        private static void CheckRoundingSemantics(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.RoundingCalls.Count == 0) return;
+
+            var stated = Array.Exists(
+                TruncationSynonyms, s => markdown.Contains(s, StringComparison.OrdinalIgnoreCase));
+            if (stated) return;
+
+            var lines = string.Join(", ", expectations.RoundingCalls.Select(c => $"라인 {c.Line}"));
+            var message =
+                $"원본에 3인자 ROUND 호출이 {expectations.RoundingCalls.Count}건 있으나({lines}) "
+                + $"명세서가 절사 쪽 의미를 기술하지 않았습니다. {RoundingSemanticsExtractor.SemanticsSentence}";
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.RoundingSemanticsMissing,
+                Message = message,
+                RawContext = expectations.RoundingCalls[0].ThirdArgument
+            });
         }
 
         private static readonly Regex TableCellRegex =

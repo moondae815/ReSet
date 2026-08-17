@@ -554,6 +554,58 @@ END"
             Assert.Contains("원본 DDL의 주석", body);
         }
 
+        /// <summary>
+        /// COMM_UPD 실측 형태(3인자 ROUND, UDF가 세 번째 인자) - 체크리스트 항목이
+        /// 실제 프롬프트에 닿는지 증명하기 위한 헬퍼다.
+        /// </summary>
+        private static SpDefinition ProbeSpDefWithRoundingCall()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "COMM_UPD",
+                DdlText = @"
+CREATE PROCEDURE dbo.COMM_UPD AS
+BEGIN
+    UPDATE dbo.T
+    SET    PGComm = ROUND(A.TxAmt * B.Rate / 100, 0, dbo.UF_GET_PGCommOption(A.PGName))
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldContainTheRoundingSemanticsChecklistItem()
+        {
+            // 메인 생성 경로(BuildSpecificationPrompts). 항목이 빠지면 이 어서션이
+            // 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDefWithRoundingCall(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(RoundingSemanticsExtractor.SemanticsSentence, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldContainTheRoundingSemanticsChecklistItem()
+        {
+            // 위 테스트의 짝. 지역 모델 CrudAnalysis 경로(BuildSpecSectionPrompts의
+            // "CrudAnalysis" 분기)는 지역 모델의 최초 생성 경로이자 L3 재생성 경로다 -
+            // BuildSpecificationPrompts에만 항목을 두면 이 경로가 규칙을 받지 못한 채로
+            // 남는다(SourceComment 체크리스트와 같은 모양의 결함이 재발할 수 있다).
+            // 이 테스트는 그 분기 자체를 대상으로 삼는다 - 항목이 이 분기에서만
+            // 삭제돼도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeSpDefWithRoundingCall(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(RoundingSemanticsExtractor.SemanticsSentence, body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_InsertOnlyWithNoThreePartReferences_ShouldGroundTheEmptyCase()
         {

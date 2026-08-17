@@ -1949,6 +1949,77 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_RoundWithoutTruncationSemantics_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                RoundingCalls = new[] { new RoundingCall(63, "dbo.UF_GET_PGCommOption(A.PGName)") }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\nPG 수수료 반올림 옵션으로 정수화합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.RoundingSemanticsMissing);
+        }
+
+        [Theory]
+        [InlineData("절사")]
+        [InlineData("버림")]
+        [InlineData("내림")]
+        [InlineData("truncate")]
+        public void Validate_RoundWithTruncationSemantics_ShouldPass(string synonym)
+        {
+            // INS_EXTRA4PLCARD의 Spec이 이 매핑을 정확히 기록한 반례다(골든 케이스).
+            var expectations = EmptyExpectations() with
+            {
+                RoundingCalls = new[] { new RoundingCall(63, "dbo.UF_GET_PGCommOption(A.PGName)") }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + $"\n세 번째 인자가 0이면 반올림, 0이 아니면 {synonym}합니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.RoundingSemanticsMissing);
+        }
+
+        [Fact]
+        public void Validate_NoRoundingCalls_ShouldNotCheckSemantics()
+        {
+            // 재료가 비면 소프트 스킵이다 - ROUND가 없는 대다수 SP에서 거짓 결함이
+            // 나면 안 된다.
+            var expectations = EmptyExpectations();
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.RoundingSemanticsMissing);
+        }
+
+        [Fact]
+        public void From_WhenTheOnlyMaterialIsARoundingCall_ShouldNotBeNullAndShouldCarryTheCalls()
+        {
+            // Task 4가 세운 조기 반환 함정의 재현이다. roundingCalls를 조기 반환
+            // 조건에 잇지 않으면 이 새 재료가 유일하게 있는 SpDefinition도 null을
+            // 받아 CheckRoundingSemantics가 한 번도 돌지 않는다 - 이 테스트가 그
+            // 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.T
+    SET    PGComm = ROUND(A.TxAmt * B.Rate / 100, 0, dbo.UF_GET_PGCommOption(A.PGName))
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            var call = Assert.Single(expectations!.RoundingCalls);
+            Assert.Contains("UF_GET_PGCommOption", call.ThirdArgument);
+        }
+
+        [Fact]
         public void From_WhenTheOnlyMaterialIsASourceComment_ShouldNotBeNullAndShouldCarryTheComments()
         {
             // Task 4가 세운 조기 반환 함정의 재현이다. SpecExpectations.From은 재료가

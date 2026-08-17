@@ -509,6 +509,19 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // 세 번째 인자의 의미는 이 SP의 사정이 아니라 T-SQL 명세다 - 0이면 반올림,
+            // 0이 아니면 절사. RoundingSemanticsExtractor 하나가 이 체크리스트와
+            // MechanicalValidator.CheckRoundingSemantics(L1)의 대조 기준을 함께 낸다.
+            var roundingCalls = RoundingSemanticsExtractor.Extract(spDef.DdlText);
+            if (roundingCalls.Count > 0)
+            {
+                checklistSb.AppendLine(
+                    $"- [ ] 원본의 3인자 ROUND 호출 {roundingCalls.Count}건에 대해 "
+                    + $"{RoundingSemanticsExtractor.SemanticsSentence} "
+                    + "이 값 매핑을 명세서에 기술하셨습니까? \"반올림 또는 절사\"처럼 "
+                    + "어느 값이 어느 동작인지 흐리게 적지 마십시오.");
+            }
+
             var userPrompt = $@"
 <stored-procedure-context>
   <basic-info>
@@ -1703,6 +1716,21 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     {
                         checklistSb.AppendLine($"      * (라인 {block.Line}) {block.Text}");
                     }
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 ROUND 값 매핑 요구를 받아야
+                // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+                // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
+                // 모델 경로는 이 규칙을 한 번도 받지 못한다(SourceComment 체크리스트와
+                // 같은 모양의 결함).
+                var roundingCallsForCrud = RoundingSemanticsExtractor.Extract(spDef.DdlText);
+                if (roundingCallsForCrud.Count > 0)
+                {
+                    checklistSb.AppendLine(
+                        $"- [ ] 원본의 3인자 ROUND 호출 {roundingCallsForCrud.Count}건에 대해 "
+                        + $"{RoundingSemanticsExtractor.SemanticsSentence} "
+                        + "이 값 매핑을 명세서에 기술하셨습니까? \"반올림 또는 절사\"처럼 "
+                        + "어느 값이 어느 동작인지 흐리게 적지 마십시오.");
                 }
                 checklistText = checklistSb.ToString();
             }
