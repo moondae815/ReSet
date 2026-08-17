@@ -171,11 +171,11 @@ namespace ReSet.Core.Services
         ///
         /// 부수적으로 <see cref="JoinKeys"/>도 모은다 - 컬럼 = 컬럼 형태의 최상위
         /// 동등비교는 콤마로 나열한 옛 스타일 조인(ON절이 없는 FROM A, B)의 결합
-        /// 조건이 WHERE에 그대로 놓인 것이다. 어느 쪽이 "진짜 대상"인지 고르지
-        /// 않는다 - ON절 수집(JoinConditionCollector)도 같은 원칙으로 양쪽 컬럼을
-        /// 그냥 다 담는다. 여기서도 똑같이 기계적으로 판단한다: 두 피연산자가 모두
-        /// 컬럼 참조면 조인 키 후보고, 비교 연산자가 등호가 아니거나 한쪽이 파라미터/
-        /// 리터럴/함수 결과면 조인 키가 아니다.
+        /// 조건이 WHERE에 그대로 놓인 것일 수 있다. 다만 두 한정자가 서로 다를
+        /// 때만 조인 키로 본다(<see cref="HaveDifferentQualifiers"/>) - 같은 별칭
+        /// 안의 비교(A.YMD = A.AYMD)나 한정자를 알 수 없는 비교(TID = CID, A.TID =
+        /// CID)는 조인이라고 주장할 근거가 없다(리뷰 라운드 2 실측: EXCEPTION_PROC
+        /// 210/228/271/290행, COMM_UPD 58행, EXPECT_PROC 48행이 모두 이 오탐이었다).
         /// </summary>
         private sealed class TopLevelPredicateCollector : TSqlFragmentVisitor
         {
@@ -195,6 +195,14 @@ namespace ReSet.Core.Services
             /// 있으면 이유를 막론하고 대상에 적용된 것으로 세지 않는다 - 그 판정은
             /// 여전히 바깥 최상위 WHERE에서만 이뤄진다(CorrelatedOuterColumnCollector가
             /// VariableReference를 아예 수집하지 않는 이유).
+            ///
+            /// [알려진 한계 - 고치지 않기로 함, 리뷰 라운드 2] EXISTS 안에 또 다른
+            /// EXISTS가 중첩되면(2단 상관 서브쿼리) CorrelatedOuterColumnCollector가
+            /// ExistsPredicate를 스스로 억제하므로 안쪽 EXISTS의 상관 컬럼은 담기지
+            /// 않는다 - 진짜 바깥(최상위) 테이블을 참조하더라도 마찬가지다. 놓치는
+            /// 방향(과소 수집)이라 안전하지만 정보 손실은 있다. 실측 코퍼스에 이
+            /// 형태가 없어 픽스처도 만들지 않았다 - 나타나면 그때 3단 이상 재귀
+            /// 판정을 넣는다.
             /// </summary>
             public override void ExplicitVisit(ExistsPredicate node)
             {
@@ -237,21 +245,54 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// 컬럼 = 컬럼 형태의 최상위 동등비교를 조인 키 후보로 겸해 담는다.
-            /// base.ExplicitVisit을 그대로 호출해 기존 Columns 수집(양쪽 컬럼 모두)은
-            /// 손대지 않는다 - 이 오버라이드는 순수 추가다.
+            /// 컬럼 = 컬럼 형태의 최상위 동등비교를, 두 한정자가 서로 다를 때만 조인
+            /// 키 후보로 겸해 담는다. base.ExplicitVisit을 그대로 호출해 기존 Columns
+            /// 수집(양쪽 컬럼 모두, 한정자 무관)은 손대지 않는다 - 이 오버라이드는
+            /// 순수 추가다.
+            ///
+            /// [리뷰 라운드 2] 한정자를 보지 않고 양쪽 컬럼을 무조건 담았더니
+            /// 같은 별칭 안의 비교(A.YMD = A.AYMD - 날짜 제외 필터, EXCEPTION_PROC
+            /// 228행 등 실측)와 컬럼명이 우연히 다른 같은 테이블의 두 컬럼 비교
+            /// (A.TID = A.CID - "카카오머니만 강제회수" 규칙)까지 조인 키로
+            /// 잘못 단언했다. 표는 "기계 확정, 있는 그대로 베낄 것"이라 사람이
+            /// 다시 검증하지 않는다 - 빈 칸(놓침)보다 거짓 단언이 더 나쁘다.
             /// </summary>
             public override void ExplicitVisit(BooleanComparisonExpression node)
             {
                 if (node.ComparisonType == BooleanComparisonType.Equals
                     && node.FirstExpression is ColumnReferenceExpression left
-                    && node.SecondExpression is ColumnReferenceExpression right)
+                    && node.SecondExpression is ColumnReferenceExpression right
+                    && HaveDifferentQualifiers(left, right))
                 {
                     AddJoinKey(left);
                     AddJoinKey(right);
                 }
 
                 base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// 두 컬럼 참조의 한정자가 서로 다른지 본다. 한쪽이라도 한정자가 없으면
+            /// (한정자 없는 컬럼, 또는 부(部)가 하나뿐인 참조) 어느 테이블 소속인지
+            /// 알 근거가 없으므로 false를 돌려준다 - "놓치는 쪽"이 안전한 기본값이다.
+            /// 값·연산자를 보지 않는 것과 같은 원칙으로, 이름 그 자체 말고는
+            /// 아무것도 추측하지 않는다.
+            /// </summary>
+            private static bool HaveDifferentQualifiers(
+                ColumnReferenceExpression left, ColumnReferenceExpression right)
+            {
+                var leftQualifier = QualifierOf(left);
+                var rightQualifier = QualifierOf(right);
+                if (leftQualifier == null || rightQualifier == null) return false;
+
+                return !string.Equals(leftQualifier, rightQualifier, StringComparison.OrdinalIgnoreCase);
+            }
+
+            private static string? QualifierOf(ColumnReferenceExpression reference)
+            {
+                var parts = reference.MultiPartIdentifier?.Identifiers;
+                if (parts == null || parts.Count < 2) return null;
+                return parts[parts.Count - 2].Value;
             }
 
             private void AddJoinKey(ColumnReferenceExpression reference)

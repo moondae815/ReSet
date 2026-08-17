@@ -202,5 +202,82 @@ END";
             Assert.False(fact.DateParameterApplied);
             Assert.Contains("PLTID", fact.PredicateColumns);
         }
+
+        [Fact]
+        public void Extract_SameAliasEquality_ShouldNotBeAJoinKey()
+        {
+            // EXCEPTION_PROC 실행순서 4(228행) 실측 형태: A.YMD = A.AYMD는 같은 별칭
+            // 안의 날짜 제외 필터일 뿐, 두 테이블을 잇지 않는다. 값 자체는
+            // PredicateColumns에는 그대로 남아야 한다 - 정보가 빠지는 게 아니라
+            // "조인이다"라는 잘못된 주장만 빠져야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutState = 9
+    FROM   dbo.TSettleMst A
+    WHERE  A.YMD = @pi_strYMD
+    AND    A.YMD = A.AYMD
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var fact = Assert.Single(facts);
+            Assert.DoesNotContain("AYMD", fact.JoinKeys, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("AYMD", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Extract_BothUnqualifiedEquality_ShouldNotBeAJoinKey()
+        {
+            // 두 피연산자 모두 한정자가 없으면 어느 테이블 소속인지 알 수 없다 -
+            // 조인이라고 주장할 근거가 없으므로 놓치는 쪽(안전한 기본값)으로 기운다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    OutState = 9
+    WHERE  YMD = @pi_strYMD
+    AND    TID = CID
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var fact = Assert.Single(facts);
+            Assert.DoesNotContain("TID", fact.JoinKeys, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("CID", fact.JoinKeys, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("TID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("CID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Extract_OneSideQualifiedEquality_ShouldNotBeAJoinKey()
+        {
+            // 한쪽만 한정자가 있으면 반대쪽 소속을 알 수 없다 - 같은 이유로
+            // 조인 키로 세지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutState = 9
+    FROM   dbo.TSettleMst A
+    WHERE  A.YMD = @pi_strYMD
+    AND    A.TID = CID
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var fact = Assert.Single(facts);
+            Assert.DoesNotContain("TID", fact.JoinKeys, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("CID", fact.JoinKeys, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("TID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("CID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
+        }
     }
 }
