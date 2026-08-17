@@ -377,6 +377,20 @@ namespace ReSet.Core.Services
                 rules.Add($"{ruleIndex++}. {UpdateMappingTemplateIntroText}");
                 rules.AddRange(BuildUpdateMappingTemplateLines(updateMappings));
             }
+
+            // A1 결함 넷 중 셋(COMM_UPD 문장 7, EXCEPTION_PROC 실행순서 18·4)의 공통
+            // 구조는 "Spec이 범위를 단언하는데 원본에는 그 필터가 없다"이다. 부재를
+            // 서술했는지는 자연어 판정이라 앵커가 없으므로, 서술을 요구하지 않고 이
+            // 표를 강제한다(설계 3.1). BuildDmlScopeTableLines 문서 참고.
+            var dateParameter = spDef.StaticAnalysis?.ProcedureParameters
+                .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+            var dmlScopeFacts = DmlScopeExtractor.Extract(spDef.DdlText, dateParameter);
+            if (dmlScopeFacts.Count > 0)
+            {
+                rules.Add($"{ruleIndex++}. {DmlScopeTableIntroText}");
+                rules.AddRange(BuildDmlScopeTableLines(dmlScopeFacts, dateParameter));
+            }
+
             rules.Add($"{ruleIndex++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end of the document. Terminate the output immediately after the required sections.");
             rules.Add($"{ruleIndex++}. Do not guess the meaning of status values or business codes (e.g., OutState) unless explicitly defined in metadata. Describe them factually as defined in code (e.g., 'when OutState is 1 or 5').");
             rules.Add($"{ruleIndex++}. If the return value or output parameter is not explicitly assigned, describe the calling responsibility or prerequisites.");
@@ -649,6 +663,55 @@ Based on the structured reference context above, reverse engineer the stored pro
                 lines.Add("");
             }
 
+            return lines;
+        }
+
+        /// <summary>
+        /// DML 범위 표를 도입하는 규칙 문장. UpdateMappingTemplateIntroText와 같은 이유로
+        /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
+        /// 위험을 없앤다.
+        /// </summary>
+        private const string DmlScopeTableIntroText =
+            "[CRITICAL SCOPE TABLE] The following table is MACHINE-DERIVED from the source DDL. Copy it verbatim into `## CRUD 분석` under the exact heading shown, and make sure no sentence in your document contradicts it. Do NOT change any cell. In particular: when a row says the date parameter is NOT applied to the target, you must NOT write that the statement is limited to the settlement date.";
+
+        /// <summary>
+        /// DML 범위 표 본문을 만든다. 헤딩 리터럴 `DmlScopeExtractor.DmlScopeTableHeading`은
+        /// Task 10의 L1(`MechanicalValidator`)이 명세서 본문을 대조할 때 찾는 접두다.
+        /// BuildSpecificationPrompts와 BuildSpecSectionPrompts의 "CrudAnalysis" 분기(지역
+        /// 모델의 최초 생성 경로)가 이 헬퍼를 공유해야 두 경로가 같은 표를 내보낸다는 것이
+        /// 코드로 보장된다 - UPDATE fill-in 템플릿과 같은 이유다(BuildUpdateMappingTemplateLines
+        /// 문서 참고).
+        /// </summary>
+        private static List<string> BuildDmlScopeTableLines(
+            IReadOnlyList<DmlScopeFact> dmlScopeFacts, string dateParameter)
+        {
+            var lines = new List<string>
+            {
+                $"   {DmlScopeExtractor.DmlScopeTableHeading}",
+                "   | 문장 | 라인 | 대상 | 대상에 적용된 WHERE 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+            };
+
+            for (var i = 0; i < dmlScopeFacts.Count; i++)
+            {
+                var fact = dmlScopeFacts[i];
+                var predicates = fact.PredicateColumns.Count == 0
+                    ? "(없음)" : string.Join(", ", fact.PredicateColumns);
+                var joinKeys = fact.JoinKeys.Count == 0
+                    ? "(없음)" : string.Join(", ", fact.JoinKeys);
+                // 파라미터 자체가 없으면(dateParameter가 빈 문자열) 전부 false로만
+                // 나오는 칸이 "적용 안 됨"이라는 거짓 신호로 읽힐 수 있다. 그래서
+                // 이 경우엔 판정 자체가 없었다는 것을 명시한다.
+                var applied = dateParameter.Length == 0
+                    ? "(기준일 파라미터 없음)"
+                    : fact.DateParameterApplied ? "예" : "**아니오**";
+
+                lines.Add(
+                    $"   | {fact.Operation} {i + 1} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
+                    + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} |");
+            }
+
+            lines.Add("");
             return lines;
         }
 
@@ -1686,6 +1749,20 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.Add($"{rIdx++}. {UpdateMappingTemplateIntroText}");
                     sbRules.AddRange(BuildUpdateMappingTemplateLines(updateMappingsForCrud));
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 DML 범위 표를 받아야 한다 -
+                // VerificationPipelineOrchestrator의 지역 모델 흐름은 BuildSpecificationPrompts를
+                // 전혀 호출하지 않으므로, 여기 빠뜨리면 지역 모델 경로는 A1 결함을 드러내는
+                // 재료를 한 번도 받지 못한다(SourceComment·Rounding·SessionOption 체크리스트와
+                // 같은 모양의 결함).
+                var dateParameterForCrud = spDef.StaticAnalysis?.ProcedureParameters
+                    .FirstOrDefault(p => p.Contains("YMD", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+                var dmlScopeFactsForCrud = DmlScopeExtractor.Extract(spDef.DdlText, dateParameterForCrud);
+                if (dmlScopeFactsForCrud.Count > 0)
+                {
+                    sbRules.Add($"{rIdx++}. {DmlScopeTableIntroText}");
+                    sbRules.AddRange(BuildDmlScopeTableLines(dmlScopeFactsForCrud, dateParameterForCrud));
                 }
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");

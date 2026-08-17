@@ -742,5 +742,80 @@ END"
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", body);
         }
+
+        /// <summary>
+        /// EXCEPTION_PROC 실행순서 18의 실측 형태 - YMD 파라미터가 EXISTS 서브쿼리
+        /// 안에만 있고 바깥 UPDATE 대상에는 걸리지 않는다. 이 DDL 조각과 파라미터
+        /// 문자열 자체가 <sp-source-ddl>에도 그대로 실리므로, 표가 실제로 렌더됐는지는
+        /// 표에서만 나오는 마크업(헤딩·볼드 "아니오")으로 대조해야 한다 - 원본 DDL
+        /// 텍스트에 우연히 있는 단어를 짚으면 표가 없어도 통과하는 거짓양성 테스트가 된다.
+        /// </summary>
+        private static SpDefinition ProbeDmlScopeSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "EXCEPTION_PROC",
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutState = 9
+    FROM   dbo.TSettleMst A
+    WHERE  A.UseState = 0
+    AND    EXISTS (SELECT 1 FROM dbo.TSettleMst B WHERE B.YMD = @pi_strYMD)
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ProcedureParameters = new List<string> { "@pi_strYMD" }
+            };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithDmlScopeFacts_ShouldPrefillTheScopeTable()
+        {
+            // 부재를 서술했는지는 자연어 판정이라 앵커가 없다. 표를 미리 채워 주고
+            // L1이 행의 보존만 보는 것이 이 설계의 핵심이다(설계 3.1).
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeDmlScopeSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DmlScopeExtractor.DmlScopeTableHeading, body);
+            Assert.Contains("**아니오**", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithDmlScopeFacts_ShouldPrefillTheScopeTable()
+        {
+            // 지역 모델 경로(GenerateSpecSectionAsync의 "CrudAnalysis" 분기)도 같은 표를
+            // 받아야 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
+            // BuildSpecificationPrompts를 전혀 호출하지 않는다. 이 테스트는 그 분기
+            // 자체를 대상으로 삼는다 - 배선이 이 분기에서만 빠져도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeDmlScopeSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DmlScopeExtractor.DmlScopeTableHeading, body);
+            Assert.Contains("**아니오**", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutDmlStatements_ShouldOmitTheScopeTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(DmlScopeExtractor.DmlScopeTableHeading, body);
+        }
     }
 }
