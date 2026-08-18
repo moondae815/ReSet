@@ -3773,25 +3773,39 @@ namespace ReSet.Core.Services
             // 원천이 `batch_shadow.`가 아니면(그림자와 무관한 일반 ETL 전량 갱신 등)
             // 이 검사의 대상이 아니다(리뷰 재현, 오탐) - INSERT 문 전체(다음 `;`까지)를
             // 잡아 그 안에 `FROM batch_shadow.`가 있는지 따로 확인한다.
+            // 보상 복원은 CATCH 안에 있고 정방향 스왑은 밖에 있다. 이 구분이
+            // (b)의 실제 판별 기준이다 - 트랜잭션 깊이로만 제외하면 보상 복원을
+            // 자기 트랜잭션으로 감싼 형태가 통째로 빠져나간다(최종 리뷰 실측).
+            var catchSpans = CatchBlockPattern.Matches(cleaned)
+                .Select(m => (Start: m.Index, End: m.Index + m.Length))
+                .ToList();
+
             foreach (Match restore in RestoreWithoutRangePattern.Matches(cleaned))
             {
                 if (!ShadowSourcePattern.IsMatch(restore.Groups["insertBody"].Value)) continue;
 
-                // [최종 리뷰 B-1 수정] 이 매치가 열린 BEGIN TRAN 안(정방향 스왑)에
-                // 있으면 (b)의 대상이 아니다. (b)가 겨냥하는 것은 CATCH의 *복원*
-                // (ROLLBACK 뒤 자동 커밋 구간)이지, 트랜잭션 하나로 끝나는 정방향
-                // 교체가 아니다 - 스왑은 같은 DELETE-INSERT 모양이지만 실패하면
-                // 트랜잭션 전체가 롤백되어 DELETE 자체가 무효가 되므로 "다른
-                // 거래일 행이 되돌아가는" 위험이 없다. Few-Shot "Shadow Table Swap
-                // Pattern"의 `BEGIN TRAN; DELETE ...; INSERT ... FROM batch_shadow...;
-                // COMMIT TRAN;`이 정확히 이 모양이라 프롬프트의 모범 예시를 L1이
-                // 반려하는 오탐이 실행 재현됐다(리뷰 재현). (a)가 이미 계산해 둔
-                // openTransactionSpans로 판정한다 - 스왑은 그 안에, 복원은 그 밖에
-                // 있다.
-                if (openTransactionSpans.Any(span => restore.Index >= span.Start && restore.Index < span.End))
-                {
-                    continue;
-                }
+                // [최종 리뷰 B-1 수정, 이후 B-3 수정] 이 매치가 열린 BEGIN TRAN 안
+                // (정방향 스왑)에 있으면 (b)의 대상이 아니다. (b)가 겨냥하는 것은
+                // CATCH의 *복원*(ROLLBACK 뒤 자동 커밋 구간)이지, 트랜잭션 하나로
+                // 끝나는 정방향 교체가 아니다 - 스왑은 같은 DELETE-INSERT 모양이지만
+                // 실패하면 트랜잭션 전체가 롤백되어 DELETE 자체가 무효가 되므로
+                // "다른 거래일 행이 되돌아가는" 위험이 없다. Few-Shot "Shadow Table
+                // Swap Pattern"의 `BEGIN TRAN; DELETE ...; INSERT ... FROM
+                // batch_shadow...; COMMIT TRAN;`이 정확히 이 모양이라 프롬프트의
+                // 모범 예시를 L1이 반려하는 오탐이 실행 재현됐다(리뷰 재현).
+                //
+                // 다만 제외 조건을 트랜잭션 깊이만으로 두면, 보상 복원을 자기
+                // BEGIN TRAN으로 감싼 형태(CATCH 안에서 원자성 래퍼만 두른 것)가
+                // 통째로 빠져나간다(최종 리뷰 실측) - 그 래퍼는 다른 거래일의
+                // 행을 되돌려주지 않고 피해를 원자적으로 커밋할 뿐이다. 정방향
+                // 스왑은 CATCH 밖에 있고 보상 복원은 CATCH 안에 있다는 것이 실제
+                // 판별 기준이므로, 열린 트랜잭션 안이면서 CATCH 밖일 때만 제외한다.
+                var insideOpenTransaction =
+                    openTransactionSpans.Any(span => restore.Index >= span.Start && restore.Index < span.End);
+                var insideCatch =
+                    catchSpans.Any(span => restore.Index >= span.Start && restore.Index < span.End);
+
+                if (insideOpenTransaction && !insideCatch) continue;
 
                 result.Errors.Add(
                     $"{step.Code} 섹션의 복원이 `{restore.Groups["t"].Value}`를 WHERE 없이 " +

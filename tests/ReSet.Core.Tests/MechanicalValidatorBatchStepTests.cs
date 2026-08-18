@@ -1452,6 +1452,45 @@ END CATCH");
             Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
         }
 
+        // 최종 리뷰 실측: 보상 복원을 자기 트랜잭션으로 감싸면 (b)가 통째로 제외한다.
+        // 래퍼는 다른 거래일의 행을 되돌려주지 않고 피해를 원자적으로 커밋할 뿐이다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAWhereLessRestoreWrappedInItsOwnTransactionInsideCatch()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    BEGIN TRAN;
+        DELETE FROM dbo.TSettleByTX;
+        INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12;
+    COMMIT TRAN;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 정방향 스왑은 CATCH 밖이므로 계속 제외되어야 한다.
+        // 프롬프트의 Few-Shot이 가르치는 형태다 - 잡으면 지배 계약 위반이다.
+        [Fact]
+        public void ValidateBatchStep_StillAcceptsTheForwardSwapOutsideCatch()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+    DELETE FROM dbo.TargetTable;
+    INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
         // 감사 🟠(S11): EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다.
         [Fact]
         public void ValidateBatchStep_RejectsAnOuterVariableInsideExec()
