@@ -35,6 +35,10 @@ namespace ReSet.Core.Services
         // 직렬화가 없으므로(문자열 이름으로만 비교·표시한다), 서수 이동 자체의
         // 기능 영향은 없다.
         VerificationCartesianComparison,
+        // 이 값을 여기 넣으면 General의 서수가 뒤로 한 칸 더 밀린다. 이 코드베이스
+        // 어디에도 (int)ErrorType 캐스트나 숫자 직렬화가 없으므로(문자열 이름으로만
+        // 비교·표시한다) 기능 영향은 없다.
+        BatchRunRowNeverCreated,
         General
     }
 
@@ -173,6 +177,7 @@ namespace ReSet.Core.Services
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
                 CheckVerificationCartesianComparison(cleansed, result);
+                CheckBatchRunRowCreation(cleansed, result);
             }
             catch (Exception ex)
             {
@@ -3975,6 +3980,57 @@ namespace ReSet.Core.Services
                         RawContext = rawStatement.Trim()
                     });
                 }
+            }
+        }
+
+        /// <summary>
+        /// 실행 행을 만드는 지점이 계획서 전체에 하나도 없는지 본다.
+        ///
+        /// 감사 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다. 모든
+        /// 단계가 UPDATE만 해서 0행이 갱신되고, 실행 단위 자체가 존재하지 않았다.
+        ///
+        /// [왜 통합 문서에서 보는가]
+        /// 단계 검사로는 잡을 수 없다 - 어느 단계가 첫 단계인지 단계 문서 하나만
+        /// 봐서는 모르고, 설계 §3이 18개 문서를 한꺼번에 읽는 교차 검사를 배제했다.
+        /// 통합 문서는 계획서 전체를 보므로 "문서 어딘가에 최소 한 번"으로 닫힌다.
+        ///
+        /// [왜 소프트 스킵하는가]
+        /// 문서가 이 테이블을 언급조차 하지 않으면 이 계약이 적용되는 Job이
+        /// 아닐 수 있다. 없는 것을 결함으로 들지 않는다.
+        /// </summary>
+        private static void CheckBatchRunRowCreation(string markdown, ValidationResult result)
+        {
+            var cleaned = BlankCommentsAndStrings(markdown);
+
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (table.Origin != ControlRowOrigin.FirstStepInserts) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+
+                var mentioned = Regex.IsMatch(
+                    cleaned, $@"(?:\w+\.)?{Regex.Escape(bare)}\b", RegexOptions.IgnoreCase);
+                if (!mentioned) continue;
+
+                var inserted = Regex.IsMatch(
+                    cleaned,
+                    $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
+                    RegexOptions.IgnoreCase);
+                if (inserted) continue;
+
+                var message =
+                    $"계획서 전체에 `{table.Name}` 행을 만드는 지점이 없습니다. " +
+                    "이 테이블은 단계 목록의 첫 단계가 INSERT하며 RunId를 발급하는 계약인데, " +
+                    "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
+                    "첫 단계에 INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오.";
+
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.BatchRunRowNeverCreated,
+                    Message = message,
+                    RawContext = table.Name
+                });
             }
         }
 

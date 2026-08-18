@@ -3605,6 +3605,74 @@ SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(
                 e => e.Type == ErrorType.VerificationCartesianComparison);
         }
 
+        // 감사 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다. 단계 검사로는
+        // 잡을 수 없다 - 어느 단계가 첫 단계인지 단계 문서 하나만 봐서는 모른다.
+        // 통합 문서는 계획서 전체를 보므로 여기서 닫는다.
+        [Fact]
+        public void ValidateConsolidated_RejectsADocumentThatUpdatesBatchRunButNeverInsertsIt()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(@"
+UPDATE batch.BatchRun SET RunStatus = N'Succeeded', CompletedAtUtc = SYSUTCDATETIME()
+WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_AcceptsADocumentThatInsertsBatchRunSomewhere()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(@"
+INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus, StartedAtUtc)
+VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());
+SET @RunId = SCOPE_IDENTITY();
+UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 소프트 스킵: 문서가 이 테이블을 언급조차 하지 않으면 검사하지 않는다.
+        [Fact]
+        public void ValidateConsolidated_SkipsTheBatchRunCheckWhenTheDocumentNeverMentionsIt()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody("SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        /// <summary>
+        /// RequiredConsolidatedHeaders의 네 헤더를 갖춘 최소 통합 문서를 만들고,
+        /// 단계 상세 절에 주어진 SQL을 싣는다. 검증 SQL 절은 비워 둔다 -
+        /// 카티전 검사가 함께 발화하면 이 테스트가 무엇을 보는지 흐려진다.
+        /// </summary>
+        private static string ConsolidatedDocumentWithStepBody(string sql) => $$"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            ```sql
+            {{sql}}
+            ```
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            내용.
+            """;
+
         private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
             ## 통합 배치 아키텍처 개요
 
