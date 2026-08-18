@@ -1211,6 +1211,48 @@ END CATCH");
             Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
         }
 
+        // 재리뷰 재현(미탐): `ShadowSourcePattern`이 `batch_shadow` 바로 뒤에 리터럴
+        // `.`을 요구해, SQL Server에서 흔한 대괄호 인용 스키마(`[batch_shadow].[X]`)를
+        // 빗나갔다 - 대괄호 인용은 이 코드베이스가 이미 별도로 다뤄온 스타일이라 정상적인
+        // AI 생성 배치 SQL에서 충분히 나올 수 있다.
+        [Fact]
+        public void ValidateBatchStep_RejectsARestoreThatDeletesWithoutARangeUsingABracketQuotedShadowSource()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX;
+    INSERT INTO dbo.TSettleByTX SELECT * FROM [batch_shadow].[TSettleByTX_RunId_S12];
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 위험(오탐 방지): `batch_shadow`를 대괄호까지 허용하도록 완화하더라도, 업무
+        // 테이블 이름이 우연히 `batch_shadow`로 시작한다는 이유만으로(`batch_shadow_archive`
+        // 같은) 걸리면 안 된다 - 패턴은 `batch_shadow` 바로 뒤에 점을 요구하므로 이런
+        // 이름에는 애초에 걸리지 않아야 한다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsAWhereLessDeleteFollowedByAnInsertFromATableThatMerelyStartsWithBatchShadow()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX;
+    INSERT INTO dbo.TSettleByTX SELECT * FROM dbo.batch_shadow_archive;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
         // 감사 🟠(S11): EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다.
         [Fact]
         public void ValidateBatchStep_RejectsAnOuterVariableInsideExec()

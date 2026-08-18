@@ -3276,10 +3276,19 @@ namespace ReSet.Core.Services
             @"INSERT\s+INTO\s+\k<t>\b(?<insertBody>.*?);",
             RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
-        // (b)의 두 번째 관문: INSERT 문 안에 `FROM batch_shadow.`가 있어야 "그림자에서
-        // 복원"이다. 값 목록으로 채우는 일반 INSERT(`VALUES (...)`)는 그림자와 무관하다.
+        // (b)의 두 번째 관문: INSERT 문 안에 `FROM batch_shadow.`(또는 대괄호 인용
+        // `FROM [batch_shadow].`)가 있어야 "그림자에서 복원"이다. 값 목록으로 채우는
+        // 일반 INSERT(`VALUES (...)`)는 그림자와 무관하다.
+        //
+        // [재리뷰 수정] 스키마를 리터럴 `batch_shadow.`로만 찾으면 대괄호 인용
+        // `[batch_shadow].[X]`를 놓친다 - 실제 텍스트는 `batch_shadow].`이지 `batch_shadow.`가
+        // 아니기 때문이다(실행 재현, 미탐). 대괄호 인용은 이 코드베이스가 SET 절·컬럼
+        // 목록에서 이미 별도로 다뤄온 SQL Server의 흔한 표기라 정상적인 AI 생성 배치
+        // SQL에서 충분히 나올 수 있다. `batch_shadow` 바로 뒤에 여전히 점을 요구하므로,
+        // `batch_shadow_archive`처럼 우연히 그 문자열로 시작하는 업무 테이블 이름까지
+        // 걸리지는 않는다 - 대괄호를 닫아도(`]`) 그 다음 문자가 여전히 `.`이어야 한다.
         private static readonly Regex ShadowSourcePattern =
-            new(@"\bFROM\s+batch_shadow\.", RegexOptions.IgnoreCase);
+            new(@"\bFROM\s+\[?batch_shadow\]?\s*\.", RegexOptions.IgnoreCase);
 
         private static readonly Regex ExecDynamicBatchPattern =
             new(@"EXEC\s*\((?<body>.*?)\)\s*;", RegexOptions.IgnoreCase | RegexOptions.Singleline);
