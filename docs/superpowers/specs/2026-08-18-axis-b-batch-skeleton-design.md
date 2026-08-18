@@ -235,25 +235,30 @@ B4 11건 중 **카티전 곱 1건(🔴)만** 이번 설계에 넣는다. `TSettl
 
 ## §3 L1 검사 6종 — `MechanicalValidator`
 
-`ValidateBatchStep`(`MechanicalValidator.cs:198`)에 5종, 계획서 검증 슬라이스에 1종.
+`ValidateBatchStep`(`MechanicalValidator.cs:198`)에 5종, `ValidateConsolidated`(`:144`)에 1종.
 
-| 검사 | `ErrorType` | 잡는 것 |
+| 검사 | 결과가 실리는 곳 | 잡는 것 |
 |---|---|---|
-| 단계 인터페이스 | `StepInterfaceMismatch` | 본문이 M2에 없는 파라미터를 선언 (B1 · B8) |
-| 제어 어휘 | `BatchControlVocabularyMismatch` | 제어 테이블에 M1 밖의 컬럼명·상태값 (B2) |
-| 제어 행 출처 | `BatchControlRowOriginMissing` | 자기 소유 제어 행을 `UPDATE`만 하고 `INSERT`가 없음 (B3) |
-| 그림자 계약 | `ShadowBackupContractViolation` | TRAN 안 `SELECT INTO` · `WHERE` 없는 복원 삭제 · `EXEC()` 바깥 변수 (B6) |
-| 반환 경로 | `CatchDiscardsReturnCode` | `CATCH`가 출력 파라미터 설정 없이 `THROW`로 종료 (B7) |
-| 검증식 | `VerificationCartesianComparison` | 검증 SQL의 `CROSS JOIN` + 양측 `SUM` 비교 (B4 🔴) |
+| 단계 인터페이스 | `StepValidationResult.Errors` | 본문이 M2에 없는 파라미터를 선언 (B1 · B8) |
+| 제어 어휘 | `StepValidationResult.Errors` | 제어 테이블에 M1 밖의 컬럼명·상태값 (B2) |
+| 제어 행 출처 | `StepValidationResult.Errors` | 자기 소유 제어 행을 `UPDATE`만 하고 `INSERT`가 없음 (B3) |
+| 그림자 계약 | `StepValidationResult.Errors` | TRAN 안 `SELECT INTO` · `WHERE` 없는 복원 삭제 · `EXEC()` 바깥 변수 (B6) |
+| 반환 경로 | `StepValidationResult.Errors` | `CATCH`가 출력 파라미터 설정 없이 `THROW`로 종료 (B7) |
+| 검증식 | `ErrorType.VerificationCartesianComparison` | 검증 SQL의 `CROSS JOIN` + 양측 `SUM` 비교 (B4 🔴) |
+
+앞의 다섯은 단계 본문이 대상이라 `StepValidationResult.Errors`(문자열 목록)에 실린다 —
+`ErrorType`은 `ValidationResult.DetailedErrors` 쪽 어휘라 여기서는 쓰지 않는다. `Errors`에
+실으면 `SuggestedPromptFix`가 그대로 재생성 프롬프트의 `[Previous Attempt Rejected]`로
+넘겨 주므로, 검사가 곧 교정 지시가 된다.
+
+여섯 번째는 계획서 전체가 대상이다. 검증 SQL 슬라이스(`## 통합 데이터 정합성 검증 SQL 세트`,
+`InstructionBundleWriter.cs:102`가 `integrity-sql.md`로 내보내는 것)는 단계 본문이 아니라
+계획서 본문에 있으므로 `ValidateConsolidated`가 보고, 여기서는 `ErrorType`을 하나 늘린다.
 
 **교차 단계 검사를 만들지 않는다.** M1이 정본이므로 각 단계를 정본과 개별 대조하면 서로
 간의 일치는 따라온다. 18개 문서를 한꺼번에 읽는 기계는 필요 없고, 기존 per-step 재생성
 루프(`VerificationPipelineOrchestrator.cs:3182`)에 그대로 얹힌다. 재생성으로 고칠 수 있는
 결함이므로 `PlanDefects`가 아니라 `Errors`로 든다.
-
-앞의 다섯은 단계 본문이 대상이지만 `VerificationCartesianComparison`은 계획서의
-`## 통합 데이터 정합성 검증 SQL 세트` 슬라이스(`InstructionBundleWriter.cs:102`가
-`integrity-sql.md`로 내보내는 것)가 대상이다.
 
 ## §4 캐시 제약
 
