@@ -399,14 +399,13 @@ namespace ReSet.Core.Services
             // 독립된 try/catch로 파싱한다(DmlScopeExtractor 문서 참고 - AGENTS.md 범주 2
             // 소프트 페일). DmlScopeVisitor가 SetPredicateVisitor보다 더 많은 일을 하므로
             // (JoinConditionCollector, TextOf(target) 등) 이론상 Extract만 실패해
-            // dmlScopeFacts는 비고 setPredicates는 채워질 수 있다. 그 상태로
-            // BuildSetPredicateTableLines를 부르면 ordinals 조회가 실패해
-            // InvalidOperationException을 던져, 문서 생성 전체가 예외로 죽는다 - 이는
-            // Extract 쪽이 지키려던 소프트 페일 계약을 setPredicates 경로가 뒤집는
-            // 것이다. 두 재료는 같은 DDL에서 나오므로 한쪽이 실패하면 재료 전체를
-            // 미덥지 않다고 보고, dmlScopeFacts가 비어 있으면 집합 술어 표도 렌더하지
-            // 않는다. 반대로 dmlScopeFacts가 비어 있지 않은데 특정 키를 못 찾는 경우는
-            // 진짜 불변식 위반이므로 BuildSetPredicateTableLines 안의 예외를 그대로 둔다.
+            // dmlScopeFacts는 비고 setPredicates는 채워질 수 있다. 그 경우는 Extract만
+            // 소프트 페일했다는 뜻이고, 두 재료는 같은 DDL에서 나오므로 한쪽이 실패하면
+            // 재료 전체를 미덥지 않다고 봐야 한다 - 그래서 dmlScopeFacts가 비어 있으면
+            // setPredicates가 채워져 있어도 집합 술어 표를 렌더하지 않는다.
+            // DmlScopeExtractor.Extract가 그 소프트 페일을 로그로 남기므로 진단 흔적은
+            // 남는다(BuildSetPredicateTableLines는 더 이상 dmlScopeFacts를 조회하지
+            // 않는다 - FIX ROUND 3 이후 SetPredicateFact.StatementOrdinal을 직접 쓴다).
             if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 rules.AddRange(BuildSetPredicateTableLines(setPredicates));
@@ -1029,9 +1028,8 @@ Based on the structured reference context above, reverse engineer the stored pro
             // 비대칭이 재발한다.
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(functionDef.DdlText);
             // [소프트 페일 전파 방지] BuildSpecificationPrompts의 같은 이름 조건 참고 -
-            // dmlScopeFacts가 비었는데 setPredicates만 채워지면 Extract 쪽 소프트 페일이
-            // BuildSetPredicateTableLines의 예외로 뒤집힌다. 그래서 dmlScopeFacts도
-            // 비어 있지 않을 때만 렌더한다.
+            // dmlScopeFacts가 비었는데 setPredicates만 채워지면 Extract 쪽만 소프트
+            // 페일했다는 뜻이라, 재료 전체를 미덥지 않다고 보고 렌더하지 않는다.
             if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates));
@@ -2123,8 +2121,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 var setPredicatesForCrud = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
                 // [소프트 페일 전파 방지] BuildSpecificationPrompts의 같은 이름 조건 참고 -
                 // dmlScopeFactsForCrud가 비었는데 setPredicatesForCrud만 채워지면 Extract
-                // 쪽 소프트 페일이 BuildSetPredicateTableLines의 예외로 뒤집힌다. 그래서
-                // dmlScopeFactsForCrud도 비어 있지 않을 때만 렌더한다.
+                // 쪽만 소프트 페일했다는 뜻이라, 재료 전체를 미덥지 않다고 보고 렌더하지
+                // 않는다.
                 if (setPredicatesForCrud.Count > 0 && dmlScopeFactsForCrud.Count > 0)
                 {
                     sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud));
