@@ -397,7 +397,7 @@ namespace ReSet.Core.Services
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
             if (setPredicates.Count > 0)
             {
-                rules.AddRange(BuildSetPredicateTableLines(setPredicates));
+                rules.AddRange(BuildSetPredicateTableLines(setPredicates, dmlScopeFacts));
             }
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
@@ -763,7 +763,9 @@ Based on the structured reference context above, reverse engineer the stored pro
                 "   | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
-            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            // 채번은 BuildStatementOrdinals 하나가 유일한 출처다 - BuildSetPredicateTableLines와
+            // 같은 이유(문서 참고).
+            var ordinals = BuildStatementOrdinals(dmlScopeFacts);
 
             for (var i = 0; i < dmlScopeFacts.Count; i++)
             {
@@ -786,10 +788,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                     ? "(기준일 파라미터 없음)"
                     : fact.DateParameterApplied ? "예" : "**아니오**(최상위 기준 · 하위 질의는 별도 확인)";
 
-                // 연산 종류별로 번호를 매긴다. 전역 인덱스를 쓰면 INSERT가 섞이는
-                // 순간 "UPDATE 1"이 두 번째 UPDATE를 가리키게 된다.
-                ordinals.TryGetValue(fact.Operation, out var n);
-                ordinals[fact.Operation] = ++n;
+                var n = ordinals[(fact.Operation, fact.Line)];
 
                 lines.Add(
                     $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
@@ -800,6 +799,38 @@ Based on the structured reference context above, reverse engineer the stored pro
             lines.Add("   > `기준일 파라미터 적용` 칸의 `아니오`는 **최상위 WHERE에 없다**는 뜻일 뿐이다. 하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있으므로, 이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
             lines.Add("");
             return lines;
+        }
+
+        /// <summary>
+        /// DML 문장의 (연산, 라인) 쌍에 "연산 종류별 · 목록 순서대로 1부터"라는 하나의
+        /// 규칙으로 문장 번호를 매긴다.
+        ///
+        /// [왜 헬퍼 하나로 뽑았는가 - FIX ROUND 1] BuildDmlScopeTableLines와
+        /// BuildSetPredicateTableLines가 예전에는 채번을 각자 구현했다. 둘 다 "연산
+        /// 종류별로 1부터"라는 같은 규칙을 말로는 지켰지만, 집합 술어 표 쪽은
+        /// 자신이 실제로 받은 setPredicates 목록(집합 술어가 있는 문장만) 순서로
+        /// 세었다 - 그래서 최상위가 서브쿼리 IN뿐이라 집합 사실을 하나도 못 내는
+        /// 같은 연산의 문장이 두 문장 사이에 끼는 순간(실측:
+        /// output/Objects/dbo.UP_UTIL_SETTLE_COMM_UPD.Procedure/raw/object_definition.sql의
+        /// 3번째 UPDATE, 98행) 그 뒤 모든 집합 술어 행의 번호가 DML 범위 표보다 하나씩
+        /// 밀렸다. 채번의 주인을 이 헬퍼 하나로 못박아 두 표가 물리적으로 같은 숫자를
+        /// 내도록 한다 - "최상위"의 정의를 TopLevelPredicateCollector 한 곳에 두는
+        /// 것과 같은 이유다(DmlScopeExtractor 문서 참고).
+        /// </summary>
+        private static Dictionary<(string Operation, int Line), int> BuildStatementOrdinals(
+            IReadOnlyList<DmlScopeFact> dmlScopeFacts)
+        {
+            var ordinals = new Dictionary<(string, int), int>();
+            var perOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var fact in dmlScopeFacts)
+            {
+                perOperation.TryGetValue(fact.Operation, out var n);
+                perOperation[fact.Operation] = ++n;
+                ordinals[(fact.Operation, fact.Line)] = n;
+            }
+
+            return ordinals;
         }
 
         /// <summary>
@@ -814,7 +845,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 출처다 - 프롬프트와 L1(CheckSetPredicates)이 같은 상수를 쓴다.
         /// </summary>
         private static List<string> BuildSetPredicateTableLines(
-            IReadOnlyList<SetPredicateFact> setPredicates)
+            IReadOnlyList<SetPredicateFact> setPredicates, IReadOnlyList<DmlScopeFact> dmlScopeFacts)
         {
             var lines = new List<string>
             {
@@ -824,25 +855,35 @@ Based on the structured reference context above, reverse engineer the stored pro
                 "   | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
-            // 연산 종류별로 번호를 매긴다 - DML 범위 표와 같은 규칙이라 두 표의
-            // "UPDATE 3"이 같은 문장을 가리킨다.
-            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var lastLineByOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            // 채번은 DML 범위 표에서 가져온다(BuildStatementOrdinals) - 이 표가 독자적으로
+            // 세면, 집합 술어가 없는 같은 연산의 문장이 두 문장 사이에 낄 때 그 뒤 모든
+            // 행의 번호가 DML 범위 표보다 밀린다(BuildStatementOrdinals 문서의 실측 근거
+            // 참고 - FIX ROUND 1).
+            var ordinals = BuildStatementOrdinals(dmlScopeFacts);
 
             foreach (var fact in setPredicates)
             {
-                // 같은 문장에 IN이 여럿이면 문장 번호는 하나여야 한다.
-                if (!lastLineByOperation.TryGetValue(fact.Operation, out var lastLine)
-                    || lastLine != fact.Line)
+                if (!ordinals.TryGetValue((fact.Operation, fact.Line), out var n))
                 {
-                    ordinals.TryGetValue(fact.Operation, out var n);
-                    ordinals[fact.Operation] = n + 1;
-                    lastLineByOperation[fact.Operation] = fact.Line;
+                    // 이 조회는 오늘 실패할 수 없다 - DmlScopeExtractor.Extract와
+                    // ExtractSetPredicates는 UpdateSpecification·DeleteSpecification·
+                    // InsertSpecification이라는 같은 세 문장만 방문하므로(SetPredicateVisitor
+                    // 문서 참고), 집합 사실이 있는 문장은 반드시 DML 범위 사실도 갖는다.
+                    // Task 3의 From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이
+                    // 이 불변식을 테스트로 고정한다. 그런데도 호출부가 서로 다른
+                    // DdlText·dmlScopeFacts를 넘기는 실수를 하면 이 불변식이 깨질 수
+                    // 있다 - 그 경우 조용히 "1"이나 "0"을 채우면 두 표가 다른 문장을
+                    // 가리키는 거짓 채번이 그대로 명세서에 실린다(이번 라운드에서
+                    // 실제로 벌어진 것과 같은 모양의 결함). 그래서 추측하지 않고 예외로
+                    // 드러낸다.
+                    throw new InvalidOperationException(
+                        $"집합 술어 사실(연산={fact.Operation}, 라인={fact.Line})에 대응하는 DML 범위 사실을 찾지 못했습니다 - "
+                        + "ExtractSetPredicates와 Extract가 같은 DDL을 봤는지 호출부를 확인하십시오.");
                 }
 
                 var literals = string.Join(", ", fact.Literals);
                 lines.Add(
-                    $"   | {fact.Operation} {ordinals[fact.Operation]} | {fact.Line} | "
+                    $"   | {fact.Operation} {n} | {fact.Line} | "
                     + $"{EscapeTableCell(fact.Column)} | {(fact.IsNegated ? "NOT IN" : "IN")} | "
                     + $"{fact.Literals.Count} | {EscapeTableCell(literals)} |");
             }
@@ -972,7 +1013,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(functionDef.DdlText);
             if (setPredicates.Count > 0)
             {
-                systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates));
+                systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates, dmlScopeFacts));
             }
 
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
@@ -2061,7 +2102,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 var setPredicatesForCrud = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
                 if (setPredicatesForCrud.Count > 0)
                 {
-                    sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud));
+                    sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud, dmlScopeFactsForCrud));
                 }
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야

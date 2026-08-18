@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -987,6 +988,81 @@ END",
             var result = await service.GenerateSpecificationAsync(spDef, "rules");
 
             Assert.DoesNotContain(DmlScopeExtractor.SetPredicateTableHeading, result.SystemPrompt);
+        }
+
+        /// <summary>
+        /// 표 본문에서 헤딩 하나를 찾아 그 구간(다음 헤딩 줄 전까지) 안에서 "라인" 칸이
+        /// <paramref name="line"/>인 행의 "문장" 칸을 꺼낸다. MechanicalValidator의
+        /// CheckDmlScopeTable/CheckSetPredicates가 표를 대조하는 방식과 같은 모양이다 -
+        /// 행 전체가 아니라 칸 하나만 본다.
+        /// </summary>
+        private static string? FindStatementLabelForLine(string? body, string heading, int line)
+        {
+            if (body == null) return null;
+
+            var headingIndex = body.IndexOf(heading, StringComparison.Ordinal);
+            if (headingIndex < 0) return null;
+
+            var afterHeading = body.Substring(headingIndex + heading.Length);
+            foreach (var rawLine in afterHeading.Split('\n'))
+            {
+                var trimmed = rawLine.Trim();
+                if (trimmed.StartsWith("## ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("### ", StringComparison.Ordinal))
+                {
+                    break;   // 다음 표/섹션에 들어섰다.
+                }
+                if (!trimmed.StartsWith("|", StringComparison.Ordinal)) continue;
+
+                var cells = trimmed.Trim('|').Split('|').Select(c => c.Trim()).ToArray();
+                if (cells.Length < 2 || cells[1] != line.ToString()) continue;
+
+                return cells[0];
+            }
+
+            return null;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithSetPredicateGapInDmlOperations_ShouldKeepStatementOrdinalsAligned()
+        {
+            // 리뷰어 재현(FIX ROUND 1) - 같은 연산(UPDATE) 문장 셋 중 가운데 문장만
+            // 집합 술어가 없으면(여기서는 스칼라 비교 Id = 1), 집합 술어 표가 채번을
+            // 독자적으로 세는 순간 세 번째 문장부터 두 표의 "UPDATE N"이 서로 다른
+            // 문장을 가리킨다. 실제 UP_UTIL_SETTLE_COMM_UPD SP의 3번째 UPDATE(98행,
+            // 최상위가 서브쿼리 IN뿐이라 집합 사실을 하나도 못 낸다)부터 실제로
+            // 벌어진 결함이다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T1 SET C = 1 WHERE PGName IN ('A','B')
+    UPDATE dbo.T2 SET C = 1 WHERE Id = 1
+    UPDATE dbo.T3 SET C = 1 WHERE UseState IN (0,1)
+END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var body = result.SystemPrompt;
+
+            // 세 번째 UPDATE(dbo.T3, 7번 줄)는 DML 범위 표에서 "UPDATE 3"이어야 한다 -
+            // 중간에 집합 술어 없는 UPDATE(dbo.T2)가 끼어도 DML 범위 표의 채번은
+            // 모든 UPDATE를 센다.
+            var dmlScopeLabel = FindStatementLabelForLine(body, DmlScopeExtractor.DmlScopeTableHeading, 7);
+            Assert.Equal("UPDATE 3", dmlScopeLabel);
+
+            // 집합 술어 표의 같은 줄(7번) 행도 같은 "UPDATE 3"을 가리켜야 한다 - 두
+            // 표가 채번 규칙을 공유하지 않으면 여기서 "UPDATE 2"가 나온다.
+            var setPredicateLabel = FindStatementLabelForLine(body, DmlScopeExtractor.SetPredicateTableHeading, 7);
+            Assert.Equal(dmlScopeLabel, setPredicateLabel);
         }
     }
 }
