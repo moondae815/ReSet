@@ -3159,8 +3159,13 @@ namespace ReSet.Core.Services
                 string? content = null;
                 try
                 {
+                    // 자리표시자. Task 3이 시그니처에 stepInterfaces를 추가해 이 호출이
+                    // 깨졌는데, 실물 재료(StepInterfaceFacts.Build 결과)를 조달·전달하는
+                    // 배선은 Task 9의 몫이다 - 여기서 미리 조달하면 그 배선이 지나가는
+                    // 경로(:1694, :1874, :2318, GenerateBySplitAsync, 이 메서드의 시그니처)를
+                    // 지금 다 고쳐야 하고, Task 9가 같은 줄을 다시 고치며 통합이 충돌한다.
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
-                        step, steps, conventions, specs, targetLanguage, jobName,
+                        step, steps, conventions, specs, Array.Empty<StepInterface>(), targetLanguage, jobName,
                         _consolidatorEffort, floorFeedback, cancellationToken);
                     content = result?.Content;
                 }

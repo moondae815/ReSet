@@ -880,5 +880,92 @@ END"
             Assert.Contains(DerivedTableColumnExtractor.DerivedTableHeading, body);
             Assert.Contains("DiscountFlag", body);
         }
+
+        private static BatchStepPlan ProbeStep(string code) => new(
+            Code: code,
+            Name: $"{code} 단계",
+            LegacyProcedures: Array.Empty<string>(),
+            TargetTables: Array.Empty<string>(),
+            ErrorCodes: Array.Empty<string>(),
+            Chunkable: false,
+            SchemaTables: Array.Empty<string>());
+
+        private static readonly List<(string FileName, string Content)> ProbeSpecs =
+            new() { ("Spec.md", "# 명세서") };
+
+        // 설계 §4. 어느 단계를 만들든 공유 접두사는 바이트 동일해야 한다.
+        // 달라지면 프롬프트 캐시가 전부 미스가 되어 입력 토큰이 18배가 되는데
+        // 산출물은 그대로라 코드만 봐서는 알 수 없다.
+        [Fact]
+        public async Task GenerateBatchStepSection_SharedPrefixIsIdenticalAcrossSteps()
+        {
+            var steps = new[] { ProbeStep("S05"), ProbeStep("S08") };
+            var interfaces = new[]
+            {
+                new StepInterface("S05", new[] { "dbo.A" }, new[] { "@pi_strYMD varchar(8)" })
+            };
+
+            var first = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+            var second = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[1], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+
+            const string marker = "Now write the section";
+            // CS8602 경고 회피. UserPrompt는 널 가능 타입이지만 이 호출 경로는
+            // 항상 채운다 - 다른 테스트(AiServiceTests.cs)가 쓰는 것과 같은 관용이다.
+            Assert.NotNull(first.UserPrompt);
+            Assert.NotNull(second.UserPrompt);
+            var firstUserPrompt = first.UserPrompt!;
+            var secondUserPrompt = second.UserPrompt!;
+            Assert.Equal(
+                firstUserPrompt.Substring(0, firstUserPrompt.IndexOf(marker, StringComparison.Ordinal)),
+                secondUserPrompt.Substring(0, secondUserPrompt.IndexOf(marker, StringComparison.Ordinal)));
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSection_CarriesTheControlContractTable()
+        {
+            var steps = new[] { ProbeStep("S05") };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+
+            Assert.Contains("batch.BatchStepJournal", result.UserPrompt);
+            Assert.Contains("StepStatus", result.UserPrompt);
+            Assert.Contains("Succeeded", result.UserPrompt);
+            Assert.Contains("Do NOT invent alternatives", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSection_CarriesTheStepInterfaceTable()
+        {
+            var steps = new[] { ProbeStep("S05") };
+            var interfaces = new[]
+            {
+                new StepInterface("S05", new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                    new[] { "@pi_strYMD varchar(8)", "@po_intRetVal int OUTPUT" })
+            };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+
+            Assert.Contains("@po_intRetVal int OUTPUT", result.UserPrompt);
+            Assert.Contains("MUST NOT add", result.UserPrompt);
+        }
+
+        // 재료가 없으면 표 절 자체를 넣지 않는다. 빈 표를 넣으면 모델이
+        // "원본 파라미터가 없다"로 읽는다.
+        [Fact]
+        public async Task GenerateBatchStepSection_OmitsTheInterfaceSectionWhenThereIsNoMaterial()
+        {
+            var steps = new[] { ProbeStep("S05") };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+
+            Assert.DoesNotContain("[Original Procedure Interface]", result.UserPrompt);
+        }
     }
 }

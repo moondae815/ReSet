@@ -226,7 +226,7 @@ namespace ReSet.Core.Tests
             var steps = TwoSteps();
 
             await service.GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job");
+                steps[0], steps, "공통 규약 본문", Specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
 
             await client.Received(1).ChatAsync(
                 Arg.Any<string>(),
@@ -246,7 +246,7 @@ namespace ReSet.Core.Tests
             var steps = TwoSteps();
 
             await service.GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job",
+                steps[0], steps, "공통 규약 본문", Specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
                 effort: null, floorFeedback: "코드 블록이 없습니다");
 
             await client.Received(1).ChatAsync(
@@ -267,7 +267,7 @@ namespace ReSet.Core.Tests
             var steps = TwoSteps();
 
             var result = await service.GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", Specs, "C#", "Test_Job",
+                steps[0], steps, "공통 규약 본문", Specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
                 effort: null, floorFeedback: "코드 블록이 없습니다");
 
             Assert.Contains("공통 규약 본문", result.UserPrompt);

@@ -2690,7 +2690,10 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            AppendSharedStepContext(userPrompt, steps, string.Empty, specs, targetLanguage, jobName);
+            // 골격은 단계 본문을 쓰지 않으므로 원본 인터페이스 재료가 필요 없다. 넣으면
+            // 골격 프롬프트만 값이 바뀌어 단계 호출과의 공유 접두사가 어긋난다.
+            AppendSharedStepContext(
+                userPrompt, steps, string.Empty, specs, Array.Empty<StepInterface>(), targetLanguage, jobName);
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
@@ -2728,6 +2731,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             IReadOnlyList<BatchStepPlan> allSteps,
             string sharedConventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
+            IReadOnlyList<StepInterface> stepInterfaces,
             string targetLanguage,
             string jobName,
             string? effort = null,
@@ -2748,7 +2752,8 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            AppendSharedStepContext(userPrompt, allSteps, sharedConventions, specs, targetLanguage, jobName);
+            AppendSharedStepContext(
+                userPrompt, allSteps, sharedConventions, specs, stepInterfaces, targetLanguage, jobName);
 
             // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
             // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
@@ -2799,6 +2804,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             IReadOnlyList<BatchStepPlan> allSteps,
             string sharedConventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
+            IReadOnlyList<StepInterface> stepInterfaces,
             string targetLanguage,
             string jobName)
         {
@@ -2838,6 +2844,34 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine("[Shared Conventions Already Written In The Document]");
                 builder.AppendLine(sharedConventions);
                 builder.AppendLine();
+            }
+
+            // 제어 계약 표는 고정 자산이라 재료 유무와 무관하게 항상 싣는다. 단계별
+            // 어휘가 갈리면(StepStatus vs ExecutionStatus, Succeeded vs Completed) 하나의
+            // DDL이 모든 단계를 만족시키지 못해 재시작이 매 실행 막힌다.
+            builder.AppendLine();
+            builder.AppendLine("[Batch Control Table Contract]");
+            builder.AppendLine("These four tables are FIXED. Use exactly these column names and status values.");
+            builder.AppendLine("Do NOT invent alternatives such as ExecutionStatus, StepState, CompletionStatus,");
+            builder.AppendLine("BatchJobName, StartedAt, or DetailMessage. NEVER use the status value 'Completed' -");
+            builder.AppendLine("success is 'Succeeded' everywhere. If two steps spell one logical table differently,");
+            builder.AppendLine("no single DDL satisfies both and restart is blocked on every run.");
+            builder.AppendLine();
+            builder.Append(BatchControlContract.RenderPromptTable());
+
+            // 재료가 비면 절 자체를 넣지 않는다. 빈 표를 실으면 모델이 "원본 파라미터가
+            // 없다"로 읽어 있지도 않은 근거로 파라미터를 새로 지어낼 수 있다.
+            var interfaceTable = StepInterfaceFacts.RenderPromptTable(stepInterfaces);
+            if (interfaceTable.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("[Original Procedure Interface]");
+                builder.AppendLine("The parameter list below is EXHAUSTIVE for each step. You MUST NOT add an input");
+                builder.AppendLine("parameter that is not listed - not for restart, not for skipping, not for");
+                builder.AppendLine("bypassing a guard. Steps whose code is absent from this table have no legacy");
+                builder.AppendLine("origin, so design their interface from the plan structure instead.");
+                builder.AppendLine();
+                builder.Append(interfaceTable);
             }
         }
 

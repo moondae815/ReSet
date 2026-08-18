@@ -1402,7 +1402,7 @@ END",
             var steps = TwoSteps();
 
             var result = await StepService().GenerateBatchStepSectionAsync(
-                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+                steps[1], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
 
             Assert.Contains("S02", result.UserPrompt);
             Assert.Contains("공통 규약 본문", result.UserPrompt);
@@ -1433,7 +1433,7 @@ END",
                     "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" })).SystemPrompt,
                 (await service.GenerateBatchPlanSkeletonAsync(steps, "목차", specs, "C#", "Test_Job")).SystemPrompt,
                 (await service.GenerateBatchStepSectionAsync(
-                    steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job")).SystemPrompt,
+                    steps[1], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job")).SystemPrompt,
                 (await service.GenerateConsolidatedBatchPlanAsync("목차", specs, "C#", "Test_Job")).SystemPrompt,
             };
 
@@ -1453,9 +1453,9 @@ END",
             var service = StepService();
 
             var first = await service.GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
             var second = await service.GenerateBatchStepSectionAsync(
-                steps[1], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+                steps[1], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
 
             const string marker = "Now write the section for step";
             Assert.NotNull(first.UserPrompt);
@@ -1484,7 +1484,7 @@ END",
             var steps = TwoSteps();
 
             var result = await StepService().GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job",
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
                 effort: null, floorFeedback: "코드 블록이 없습니다");
 
             Assert.NotNull(result.UserPrompt);
@@ -1556,7 +1556,7 @@ END",
             var steps = TwoSteps();
 
             var result = await StepService().GenerateBatchStepSectionAsync(
-                steps[0], steps, "공통 규약 본문", specs, "C#", "Test_Job");
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
 
             Assert.NotNull(result.UserPrompt);
             Assert.Contains("[Shared Conventions Already Written In The Document]", result.UserPrompt!);
