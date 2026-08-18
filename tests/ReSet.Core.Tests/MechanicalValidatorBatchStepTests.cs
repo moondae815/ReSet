@@ -754,5 +754,61 @@ WHERE RunId = @RunId AND StepCode = N'S17';");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("INSERT"));
         }
+
+        // 리뷰 재현 1: 제어 테이블과 업무 테이블을 같은 UPDATE 문에서 FROM/JOIN으로
+        // 엮고, 업무 컬럼을 별칭 없이 WHERE에 쓰면 그 이름이 "쓰는 컬럼"으로 오인됐다.
+        // 계약 위반은 제어 테이블에 값을 쓸 때만 성립한다 - WHERE는 읽기다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotFlagAnUnaliasedBusinessColumnInAMixedUpdateWhereClause()
+        {
+            var markdown = Section("""
+                UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded'
+                FROM batch.BatchStepJournal bsj
+                JOIN dbo.TSettleMst ON dbo.TSettleMst.RunId = bsj.RunId
+                WHERE SourceRunId = @RunId AND bsj.StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SourceRunId"));
+        }
+
+        // 리뷰 재현 2: 세미콜론이 없는 제어 테이블 UPDATE 뒤에 무관한 업무 SQL이 오면
+        // `(?=;|$)` 경계가 문서 끝까지 흡수해 뒤쪽 업무 컬럼까지 후보로 섞였다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotAbsorbUnrelatedSqlAfterAMissingSemicolon()
+        {
+            var markdown = Section("""
+                UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' WHERE StepCode = N'S17'
+
+                SELECT SettleState, ExecutionStatus FROM dbo.TSettleMst WHERE RunId = @RunId;
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SettleState"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 리뷰 재현 3: 업무 테이블 자신의 상태 컬럼 필터(별칭 있음, 제어 테이블과 무관)가
+        // 같은 문 안에 있으면 그 리터럴이 "계약 밖 상태값"으로 오인됐다. 상태값 검사는
+        // 제어 테이블의 StatusColumn에 실제로 대입되는 값만 봐야 한다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotFlagABusinessStatusLiteralInTheSameStatement()
+        {
+            var markdown = Section("""
+                UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded'
+                FROM batch.BatchStepJournal bsj
+                JOIN dbo.TSettleMst t ON t.RunId = bsj.RunId
+                WHERE t.SettleStatus = N'Pending' AND bsj.StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("Pending"));
+        }
     }
 }

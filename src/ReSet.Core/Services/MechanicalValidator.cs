@@ -481,13 +481,31 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 제어 테이블에 계약 밖의 컬럼명·상태값을 쓰는지 본다.
+        /// 제어 테이블에 계약 밖의 컬럼명·상태값을 <b>쓰는지</b> 본다.
         ///
         /// 실측: 같은 batch.BatchStepJournal에 S01은 StepStatus='Succeeded',
         /// S02는 ExecutionStatus='Completed', S03은 StepStatus='Completed',
         /// S17은 StepState를 썼다. 어느 쪽으로 DDL을 만들어도 반대편 단계가
         /// 컴파일되지 않는다. 정본이 있으면 단계마다 정본과 대조하는 것으로
         /// 충분하다 - 18개 문서를 한꺼번에 읽는 교차 검사는 필요 없다.
+        ///
+        /// [수정 이력] 최초 구현은 UPDATE 문의 SET부터 세미콜론(또는 문서 끝)까지 tail
+        /// 전체에서 컬럼·리터럴 후보를 뽑았다. 제어 테이블과 업무 테이블을 같은 문에서
+        /// FROM/JOIN으로 엮고 WHERE에 별칭 없는 업무 컬럼(`SourceRunId`)을 쓰거나, 업무
+        /// 테이블 자신의 상태 필터(`t.SettleStatus = N'Pending'`)가 같은 문 안에 있으면
+        /// 그 이름·값이 "쓰는 것"으로 오인되어 결함 없는 단계가 상시 실패했다(리뷰
+        /// 재현: `UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' FROM ...
+        /// JOIN dbo.TSettleMst ... WHERE SourceRunId = @RunId`). 세미콜론이 없으면
+        /// `$`가 문서 끝까지 흡수해 뒤따르는 무관한 SQL의 컬럼까지 섞였다.
+        ///
+        /// 계약 위반은 제어 테이블에 값을 <b>쓸 때만</b> 성립한다 - WHERE·JOIN·ON·FROM은
+        /// 읽기이므로 대상이 아니다. 그래서 후보를 UPDATE의 SET 절 대입 대상과 INSERT의
+        /// 컬럼 목록, 이 두 쓰기 자리로 좁힌다. 상태값도 그 자리에서 실제로 대입되는
+        /// 값만 본다(SET의 StatusColumn 우변, INSERT 컬럼 목록에서 StatusColumn과 같은
+        /// 위치의 VALUES 항목). 이 좁힘 덕분에 "이름이 제어 컬럼처럼 보이는가"(stem
+        /// 휴리스틱), "값이 상태 어휘처럼 보이는가"(영단어 목록) 둘 다 필요 없어졌다 -
+        /// 쓰기 자리에 나온 이름·값은 정의상 그 테이블의 것이어야 하므로, known에
+        /// 없으면(컬럼) 또는 allowed에 없으면(상태값) 그 자체로 위반이다.
         /// </summary>
         private static void CheckBatchControlVocabulary(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
@@ -499,68 +517,196 @@ namespace ReSet.Core.Services
 
                 var known = new HashSet<string>(
                     table.Columns.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+                var allowed = table.StatusColumn != null
+                    ? table.Columns.First(c => c.Name == table.StatusColumn).AllowedValues
+                    : null;
 
-                // 이 테이블을 다루는 구문에서만 컬럼 후보를 본다. 문서 전체를
-                // 훑으면 업무 테이블의 컬럼이 후보로 섞인다.
-                foreach (Match statement in Regex.Matches(
-                    stepMarkdown,
-                    $@"(INSERT\s+INTO|UPDATE|FROM|JOIN)\s+(?:\w+\.)?{Regex.Escape(bare)}\b(?<tail>.*?)(?=;|$)",
-                    RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                CheckUpdateSetTargets(stepMarkdown, table, bare, known, allowed, step, result);
+                CheckInsertColumnTargets(stepMarkdown, table, bare, known, allowed, step, result);
+            }
+        }
+
+        /// <summary>
+        /// UPDATE 문의 SET 절에서 대입 대상 컬럼만 본다. 절의 끝 경계는 FROM/WHERE/;/
+        /// 문서 끝 중 먼저 오는 것으로 잡는다 - 세미콜론이 없어도 다음 문으로 새지
+        /// 않기 위해서다. 별칭이 붙은 대입 대상(`t.Col = ...`)은 대상에서 제외한다 -
+        /// 이 계약의 제어 테이블 UPDATE는 별칭을 쓰지 않으므로, 점이 섞인 이름은 이
+        /// 검사가 판단할 재료가 아니다(과탐보다 미탐이 안전하다).
+        /// </summary>
+        private static void CheckUpdateSetTargets(
+            string stepMarkdown,
+            ControlTable table,
+            string bare,
+            HashSet<string> known,
+            IReadOnlyList<string>? allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            foreach (Match statement in Regex.Matches(
+                stepMarkdown,
+                $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+SET\s+(?<set>.*?)(?=\bFROM\b|\bWHERE\b|;|$)",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                foreach (var assignment in SplitTopLevelSegments(statement.Groups["set"].Value))
                 {
-                    var tail = statement.Groups["tail"].Value;
+                    var eq = assignment.IndexOf('=');
+                    if (eq <= 0) continue;
 
-                    foreach (Match candidate in Regex.Matches(
-                        tail, @"(?<![@\w.])(?<col>[A-Za-z_]\w*)\s*(?==|,|\))"))
+                    var name = assignment[..eq].Trim();
+                    if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
+
+                    if (!known.Contains(name))
                     {
-                        var name = candidate.Groups["col"].Value;
-                        if (known.Contains(name)) continue;
-                        if (!LooksLikeControlColumn(name, known)) continue;
-
                         result.Errors.Add(
                             $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
                             $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
                             $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                        continue;
                     }
 
-                    if (table.StatusColumn == null) continue;
-                    var allowed = table.Columns
-                        .First(c => c.Name == table.StatusColumn).AllowedValues!;
-
-                    foreach (Match literal in Regex.Matches(tail, @"N?'(?<v>[A-Za-z]\w*)'"))
+                    if (allowed == null ||
+                        !string.Equals(name, table.StatusColumn, StringComparison.OrdinalIgnoreCase))
                     {
-                        var value = literal.Groups["v"].Value;
-                        if (!IsStatusLikeLiteral(value) || allowed.Contains(value, StringComparer.Ordinal))
-                        {
-                            continue;
-                        }
-
-                        result.Errors.Add(
-                            $"{step.Code} 섹션이 `{table.Name}`에 계약 밖의 상태값 '{value}'를 씁니다. " +
-                            $"허용 값은 {string.Join(", ", allowed)}입니다 - 성공 종료는 " +
-                            "'Succeeded' 하나이며 'Completed'는 쓰지 않습니다. 두 어휘가 섞이면 " +
-                            "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
+                        continue;
                     }
+
+                    ReportIfDisallowedStatusValue(assignment[(eq + 1)..], table, allowed, step, result);
                 }
             }
         }
 
-        /// <summary>계약 밖 이름 중 제어 컬럼으로 보이는 것만 든다 - 업무 컬럼 오탐을 막는다.</summary>
-        private static bool LooksLikeControlColumn(string name, HashSet<string> known)
+        /// <summary>
+        /// INSERT 문의 컬럼 목록만 본다. StatusColumn이 그 목록에 있으면 같은 위치의
+        /// VALUES 항목도 함께 본다 - INSERT...SELECT처럼 VALUES가 없으면 값 검사만
+        /// 조용히 건너뛴다(컬럼 이름 검사는 그대로 돈다).
+        /// </summary>
+        private static void CheckInsertColumnTargets(
+            string stepMarkdown,
+            ControlTable table,
+            string bare,
+            HashSet<string> known,
+            IReadOnlyList<string>? allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
         {
-            string[] stems = { "Status", "State", "JobName", "StartedAt", "CompletedAt", "Message", "RunId", "StepCode" };
-            return stems.Any(stem => name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
-                   && !known.Contains(name);
+            foreach (Match statement in Regex.Matches(
+                stepMarkdown,
+                $@"INSERT\s+INTO\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s*\((?<cols>[^)]*)\)",
+                RegexOptions.IgnoreCase))
+            {
+                var columns = SplitTopLevelSegments(statement.Groups["cols"].Value)
+                    .Select(c => c.Trim())
+                    .ToList();
+
+                foreach (var name in columns)
+                {
+                    if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
+                    if (known.Contains(name)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
+                        $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
+                        $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                }
+
+                if (allowed == null) continue;
+
+                var statusIndex = columns.FindIndex(
+                    c => string.Equals(c, table.StatusColumn, StringComparison.OrdinalIgnoreCase));
+                if (statusIndex < 0) continue;
+
+                // 컬럼 목록 바로 뒤에 VALUES(...)가 오는 모양만 본다. INSERT...SELECT는
+                // 이 모양이 아니므로 조용히 건너뛴다 - 컬럼 이름 검사는 이미 위에서 끝났다.
+                var afterColumns = stepMarkdown[(statement.Index + statement.Length)..];
+                var valuesHeader = Regex.Match(afterColumns, @"\A\s*VALUES\s*", RegexOptions.IgnoreCase);
+                if (!valuesHeader.Success) continue;
+
+                var openParenIndex = valuesHeader.Index + valuesHeader.Length;
+                if (openParenIndex >= afterColumns.Length || afterColumns[openParenIndex] != '(') continue;
+
+                var valuesBody = ExtractBalancedParenGroup(afterColumns, openParenIndex);
+                if (valuesBody == null) continue;
+
+                var values = SplitTopLevelSegments(valuesBody).Select(v => v.Trim()).ToList();
+                if (statusIndex >= values.Count) continue;
+
+                ReportIfDisallowedStatusValue(values[statusIndex], table, allowed, step, result);
+            }
         }
 
-        /// <summary>상태 어휘로 보이는 리터럴만 본다 - 오류 코드·테이블명 리터럴을 거른다.</summary>
-        private static bool IsStatusLikeLiteral(string value)
+        /// <summary>대입되는 값이 `N?'단어'` 모양의 리터럴일 때만 계약 어휘와 대조한다 -
+        /// 파라미터(`@Status`)·식(`CASE ...`)은 이 지점에서 실제 값을 알 수 없으므로
+        /// 조용히 건너뛴다. 위치로 이미 "그 테이블의 StatusColumn에 쓰는 값"임이 확정된
+        /// 뒤이므로, 영단어 상태 어휘 목록 같은 별도 필터는 필요 없다.</summary>
+        private static void ReportIfDisallowedStatusValue(
+            string valueExpression,
+            ControlTable table,
+            IReadOnlyList<string> allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
         {
-            string[] statusWords =
+            var literal = Regex.Match(valueExpression.Trim(), @"^N?'(?<v>[A-Za-z]\w*)'");
+            if (!literal.Success) return;
+
+            var value = literal.Groups["v"].Value;
+            if (allowed.Contains(value, StringComparer.Ordinal)) return;
+
+            result.Errors.Add(
+                $"{step.Code} 섹션이 `{table.Name}`에 계약 밖의 상태값 '{value}'를 씁니다. " +
+                $"허용 값은 {string.Join(", ", allowed)}입니다 - 성공 종료는 " +
+                "'Succeeded' 하나이며 'Completed'는 쓰지 않습니다. 두 어휘가 섞이면 " +
+                "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
+        }
+
+        /// <summary>쉼표로 항목을 나누되 괄호 안의 쉼표는 무시한다 - SET 절의 CASE 식이나
+        /// INSERT 값 목록의 함수 호출 인자에 있는 쉼표를 항목 경계로 오인하지 않기
+        /// 위해서다.</summary>
+        private static IEnumerable<string> SplitTopLevelSegments(string text)
+        {
+            var depth = 0;
+            var start = 0;
+            for (var i = 0; i < text.Length; i++)
             {
-                "Running", "Succeeded", "Failed", "Skipped", "Restarting", "Pending",
-                "Completed", "Validating", "Publishing", "Published", "Retrying", "Unpublished"
-            };
-            return statusWords.Contains(value, StringComparer.OrdinalIgnoreCase);
+                switch (text[i])
+                {
+                    case '(':
+                        depth++;
+                        break;
+                    case ')':
+                        depth--;
+                        break;
+                    case ',' when depth == 0:
+                        yield return text[start..i];
+                        start = i + 1;
+                        break;
+                }
+            }
+
+            yield return text[start..];
+        }
+
+        /// <summary>openParenIndex의 '('에 대응하는 ')'까지, 중첩 괄호 깊이를 세어 그
+        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다.</summary>
+        private static string? ExtractBalancedParenGroup(string text, int openParenIndex)
+        {
+            var depth = 0;
+            for (var i = openParenIndex; i < text.Length; i++)
+            {
+                if (text[i] == '(')
+                {
+                    depth++;
+                }
+                else if (text[i] == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return text[(openParenIndex + 1)..i];
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
