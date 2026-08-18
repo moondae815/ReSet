@@ -295,6 +295,8 @@ namespace ReSet.Core.Services
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
             CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
             CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
+            CheckBatchControlVocabulary(stepMarkdown, step, result);
+            CheckBatchControlRowOrigin(stepMarkdown, step, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -475,6 +477,124 @@ namespace ReSet.Core.Services
                         "체크포인트를 보고 호출하지 않으며, 업무 보호 검사는 호출될 때마다 " +
                         "무조건 수행되어야 합니다.");
                 }
+            }
+        }
+
+        /// <summary>
+        /// 제어 테이블에 계약 밖의 컬럼명·상태값을 쓰는지 본다.
+        ///
+        /// 실측: 같은 batch.BatchStepJournal에 S01은 StepStatus='Succeeded',
+        /// S02는 ExecutionStatus='Completed', S03은 StepStatus='Completed',
+        /// S17은 StepState를 썼다. 어느 쪽으로 DDL을 만들어도 반대편 단계가
+        /// 컴파일되지 않는다. 정본이 있으면 단계마다 정본과 대조하는 것으로
+        /// 충분하다 - 18개 문서를 한꺼번에 읽는 교차 검사는 필요 없다.
+        /// </summary>
+        private static void CheckBatchControlVocabulary(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            foreach (var table in BatchControlContract.Tables)
+            {
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                if (!ContainsToken(stepMarkdown, bare)) continue;
+
+                var known = new HashSet<string>(
+                    table.Columns.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+
+                // 이 테이블을 다루는 구문에서만 컬럼 후보를 본다. 문서 전체를
+                // 훑으면 업무 테이블의 컬럼이 후보로 섞인다.
+                foreach (Match statement in Regex.Matches(
+                    stepMarkdown,
+                    $@"(INSERT\s+INTO|UPDATE|FROM|JOIN)\s+(?:\w+\.)?{Regex.Escape(bare)}\b(?<tail>.*?)(?=;|$)",
+                    RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                {
+                    var tail = statement.Groups["tail"].Value;
+
+                    foreach (Match candidate in Regex.Matches(
+                        tail, @"(?<![@\w.])(?<col>[A-Za-z_]\w*)\s*(?==|,|\))"))
+                    {
+                        var name = candidate.Groups["col"].Value;
+                        if (known.Contains(name)) continue;
+                        if (!LooksLikeControlColumn(name, known)) continue;
+
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
+                            $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
+                            $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                    }
+
+                    if (table.StatusColumn == null) continue;
+                    var allowed = table.Columns
+                        .First(c => c.Name == table.StatusColumn).AllowedValues!;
+
+                    foreach (Match literal in Regex.Matches(tail, @"N?'(?<v>[A-Za-z]\w*)'"))
+                    {
+                        var value = literal.Groups["v"].Value;
+                        if (!IsStatusLikeLiteral(value) || allowed.Contains(value, StringComparer.Ordinal))
+                        {
+                            continue;
+                        }
+
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 `{table.Name}`에 계약 밖의 상태값 '{value}'를 씁니다. " +
+                            $"허용 값은 {string.Join(", ", allowed)}입니다 - 성공 종료는 " +
+                            "'Succeeded' 하나이며 'Completed'는 쓰지 않습니다. 두 어휘가 섞이면 " +
+                            "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
+                    }
+                }
+            }
+        }
+
+        /// <summary>계약 밖 이름 중 제어 컬럼으로 보이는 것만 든다 - 업무 컬럼 오탐을 막는다.</summary>
+        private static bool LooksLikeControlColumn(string name, HashSet<string> known)
+        {
+            string[] stems = { "Status", "State", "JobName", "StartedAt", "CompletedAt", "Message", "RunId", "StepCode" };
+            return stems.Any(stem => name.IndexOf(stem, StringComparison.OrdinalIgnoreCase) >= 0)
+                   && !known.Contains(name);
+        }
+
+        /// <summary>상태 어휘로 보이는 리터럴만 본다 - 오류 코드·테이블명 리터럴을 거른다.</summary>
+        private static bool IsStatusLikeLiteral(string value)
+        {
+            string[] statusWords =
+            {
+                "Running", "Succeeded", "Failed", "Skipped", "Restarting", "Pending",
+                "Completed", "Validating", "Publishing", "Published", "Retrying", "Unpublished"
+            };
+            return statusWords.Contains(value, StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 자기 소유 제어 행을 만들지 않고 UPDATE만 하는지 본다.
+        ///
+        /// 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었고 S03·S06·S17이
+        /// 자기 저널·체크포인트 행을 만드는 지점 없이 UPDATE만 했다. @@ROWCOUNT
+        /// 검사가 있는 S17은 정상 실행에서도 공개가 상시 실패했고, 없는 S06은
+        /// 0행 갱신을 오류 없이 지나가 재삽입 방지가 성립하지 않았다.
+        /// </summary>
+        private static void CheckBatchControlRowOrigin(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (table.Origin != ControlRowOrigin.EachStepInserts) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var updates = Regex.IsMatch(
+                    stepMarkdown, $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b", RegexOptions.IgnoreCase);
+                if (!updates) continue;
+
+                var inserts = Regex.IsMatch(
+                    stepMarkdown,
+                    $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
+                    RegexOptions.IgnoreCase);
+                if (inserts) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 `{table.Name}`을 UPDATE만 하고 자기 행을 만드는 지점이 " +
+                    "없습니다. 이 테이블은 각 단계가 시작할 때 자기 행을 INSERT한 뒤 종료할 때 " +
+                    "UPDATE하는 계약입니다. 생성 없이 UPDATE만 하면 0행이 갱신되어, @@ROWCOUNT를 " +
+                    "검사하는 경로는 정상 실행에서도 상시 실패하고 검사하지 않는 경로는 완료 표시 " +
+                    "없이 조용히 지나갑니다.");
             }
         }
 

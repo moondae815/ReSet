@@ -687,5 +687,72 @@ SET @v_currentStepId = -101;");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_anything"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_RejectsAColumnNameOutsideTheControlContract()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET ExecutionStatus = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_RejectsTheCompletedStatusValue()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET StepStatus = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsTheCanonicalVocabulary()
+        {
+            var markdown = Section(@"
+INSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus, StartedAtUtc)
+VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());
+UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded', CompletedAtUtc = SYSUTCDATETIME()
+WHERE RunId = @RunId AND StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+        }
+
+        // B3: UPDATE만 있고 INSERT가 없으면 0행 갱신이다. @@ROWCOUNT 검사가
+        // 있는 곳은 정상 실행에서도 상시 실패하고, 없는 곳은 조용히 지나간다.
+        [Fact]
+        public void ValidateBatchStep_RejectsUpdatingAJournalRowItNeverInserts()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // 읽기만 하는 단계는 대상이 아니다. 다른 단계의 저널을 조회하는 것은 정상이다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotRequireAnInsertWhenItOnlyReadsTheTable()
+        {
+            var markdown = Section(
+                "SELECT StepStatus FROM batch.BatchStepJournal WHERE RunId = @RunId AND StepCode = N'S16';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("INSERT"));
+        }
     }
 }
