@@ -33,7 +33,20 @@ namespace ReSet.Core.Services
 
     /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
     /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
-    /// <param name="Column">IN 좌변의 컬럼 이름.</param>
+    /// <param name="Column">
+    /// IN 좌변의 원문 표기 그대로 - 한정자가 있으면 한정자를 포함한다(`A.USESTATE`),
+    /// 없으면 컬럼 이름만이다(`UseState`). 마지막 식별자 조각만 담지 않는 이유는
+    /// 실측 코퍼스에서 키 충돌이 실제로 나기 때문이다:
+    /// `output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:97-98`가
+    /// 같은 INSERT 원천 SELECT의 같은 WHERE 최상위에서
+    /// `A.USESTATE IN (0,4,5,6)`과 `B.USESTATE IN (0,4)`를 나란히 쓴다 - 마지막
+    /// 조각만 담으면 둘 다 `USESTATE`가 되어 (Operation, Line, Column) 키가
+    /// 충돌하고, Task 3의 L1이 그 라인+컬럼으로 행을 찾을 때 하나가 엉뚱한 행에
+    /// 매칭된다. 한정자를 포함하면 코퍼스에서 키가 유일해질 뿐 아니라, "어느
+    /// 테이블의 USESTATE가 (0,4)로 제한되는가"라는 정보 자체가 이관 결과를
+    /// 바꾸므로 원문 그대로 담는 편이 옳다 - 이 재료가 이미 Literals에 적용한
+    /// "원문 그대로" 원칙을 좌변에도 일관되게 적용한 것이다.
+    /// </param>
     /// <param name="IsNegated">NOT IN이면 true.</param>
     /// <param name="Literals">
     /// 집합의 원소를 원문 그대로 담는다 - 문자열은 따옴표를 포함한다('PLCard').
@@ -103,6 +116,12 @@ namespace ReSet.Core.Services
         /// 다시 구현하면 두 정의가 갈라지고, 그 순간 이 재료는 프롬프트가 말하는
         /// "최상위"와 다른 것을 뜻하게 된다. 그래서 수집기를 넓히고 진입점만 나눈다 -
         /// 순회는 두 번 돌지만 비용은 무시할 수준이고 주인은 계속 한 곳이다.
+        ///
+        /// [주의 - (Operation, Line, Column) 키가 유일하다고 가정하지 마라] 같은
+        /// 한정 컬럼이 같은 문장에 두 번 IN으로 걸리면(예: `A.X IN (1) AND A.X IN
+        /// (2)`) 키가 여전히 충돌한다. 이 추출기는 그 경우를 합치거나 걸러내지
+        /// 않는다 - 합치면 AND/OR 의미를 날조하게 된다. 소비자(L1 검사 등)는 같은
+        /// 키의 사실이 둘 이상일 수 있다고 보고 다뤄야 한다.
         /// </summary>
         public static IReadOnlyList<SetPredicateFact> ExtractSetPredicates(string? ddlText)
         {
@@ -269,17 +288,24 @@ namespace ReSet.Core.Services
                     dateApplied,
                     joinKeys));
             }
+        }
 
-            private static string TextOf(TSqlFragment? fragment)
-            {
-                if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
+        /// <summary>
+        /// 토큰 원문을 그대로 잇는다 - 파서가 정규화하지 않은 소스 그대로다(문자열
+        /// 리터럴의 따옴표, 컬럼 참조의 한정자가 그대로 보존된다). DmlScopeVisitor의
+        /// Target 표기와 TopLevelPredicateCollector의 집합 술어 좌변·리터럴이 모두
+        /// 이 메서드 하나를 쓴다 - "원문 그대로 담는다"는 원칙이 재료마다 따로
+        /// 구현되며 갈라지지 않도록.
+        /// </summary>
+        private static string TextOf(TSqlFragment? fragment)
+        {
+            if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
 
-                return string.Concat(
-                    fragment.ScriptTokenStream
-                        .Skip(fragment.FirstTokenIndex)
-                        .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
-                        .Select(t => t.Text)).Trim();
-            }
+            return string.Concat(
+                fragment.ScriptTokenStream
+                    .Skip(fragment.FirstTokenIndex)
+                    .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
+                    .Select(t => t.Text)).Trim();
         }
 
         /// <summary>
@@ -440,35 +466,39 @@ namespace ReSet.Core.Services
             /// 리터럴 아닌 것이 섞이면 리터럴 집합으로 렌더할 때 명세서에 거짓
             /// 집합이 실린다. 좌변이 단순 컬럼 참조가 아니면(예: 식) 표의 "컬럼"
             /// 칸에 쓸 이름이 없다.
+            ///
+            /// [Subquery != null 검사가 남아 있는 이유] T-SQL 문법상 `IN (서브쿼리)`와
+            /// `IN (값 목록)`은 서로 다른 생산 규칙이라 Subquery와 Values가 동시에
+            /// 채워지는 파싱 결과는 나오지 않는다 - 그래서 `node.Values == null`
+            /// 검사 하나만으로도 서브쿼리 IN은 이미 걸러진다. 그런데도 이 검사를
+            /// 명시적으로 남기는 이유는, 그 사실이 ScriptDom의 내부 불변식이지 이
+            /// 메서드의 계약이 아니기 때문이다 - 파서 버전이 바뀌거나 이 메서드가
+            /// 텍스트 파싱이 아닌 경로(직접 조립한 AST 등)로 호출되는 날, "서브쿼리
+            /// IN은 담지 않는다"는 §3.2의 결정이 Values 상태에 우연히 얹혀 있지
+            /// 않고 코드에 그대로 선언돼 있어야 한다. 이 불변식이 SQL 텍스트로는
+            /// 깨지지 않으므로, DmlScopeExtractorTests의 SubqueryIn 테스트는 이
+            /// 한 줄만 떼어 실패시키지 못한다 - 그 테스트 옆 주석에 같은 설명을
+            /// 남겨 뒀다.
             /// </summary>
             private void RecordSetPredicate(InPredicate node)
             {
                 if (node.Subquery != null || node.Values == null || node.Values.Count == 0) return;
 
+                // Column은 마지막 식별자 조각이 아니라 원문 표기 그대로 담는다(레코드
+                // 문서의 실측 근거 참고) - 한정자가 있으면 A.USESTATE처럼 한정자까지
+                // 포함해야 같은 문장 안의 A.USESTATE와 B.USESTATE가 서로 다른 키가 된다.
                 if (node.Expression is not ColumnReferenceExpression columnRef) return;
-                var column = columnRef.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                var column = TextOf(columnRef);
                 if (string.IsNullOrWhiteSpace(column)) return;
 
                 var literals = new List<string>();
                 foreach (var value in node.Values)
                 {
                     if (value is not Literal literal) return;   // 하나라도 아니면 통째로 버린다
-                    literals.Add(TextOfFragment(literal));
+                    literals.Add(TextOf(literal));
                 }
 
-                SetPredicates.Add((column!, node.NotDefined, literals));
-            }
-
-            /// <summary>토큰 원문을 그대로 잇는다 - 문자열 리터럴의 따옴표를 보존한다.</summary>
-            private static string TextOfFragment(TSqlFragment fragment)
-            {
-                if (fragment.ScriptTokenStream == null) return string.Empty;
-
-                return string.Concat(
-                    fragment.ScriptTokenStream
-                        .Skip(fragment.FirstTokenIndex)
-                        .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
-                        .Select(t => t.Text)).Trim();
+                SetPredicates.Add((column, node.NotDefined, literals));
             }
 
             /// <summary>

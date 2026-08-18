@@ -370,7 +370,10 @@ END";
             var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
 
             Assert.Equal("UPDATE", fact.Operation);
-            Assert.Equal("PGName", fact.Column);
+            // Column은 원문 표기 그대로다(한정자 포함) - 아래
+            // SameLastSegmentDifferentQualifiers 테스트가 그 이유(키 충돌 방지)를
+            // 실측 코퍼스로 증명한다.
+            Assert.Equal("A.PGName", fact.Column);
             Assert.True(fact.IsNegated);
             Assert.Equal(9, fact.Literals.Count);
             Assert.Equal("'PLCard'", fact.Literals[0]);
@@ -402,6 +405,17 @@ END";
         public void ExtractSetPredicates_SubqueryIn_ShouldBeSkipped()
         {
             // 집합이 리터럴이 아니므로 옮겨 적을 목록 자체가 없다(설계 §3.2).
+            //
+            // [정직한 범위 고지 - 리뷰 라운드 1 Important 1] 이 테스트는 파이프라인
+            // 전체("서브쿼리 IN은 결과에 나타나지 않는다")를 증명하는 창발적
+            // 단언이지 RecordSetPredicate의 `node.Subquery != null` 가드 한 줄을
+            // 격리해서 증명하지 않는다 - T-SQL 문법상 `IN (서브쿼리)`와 `IN (값
+            // 목록)`은 서로 다른 생산 규칙이라 파싱 결과에서 Subquery와 Values가
+            // 동시에 채워지는 경우가 없고(ScriptDom이 이 불변식을 지킨다), 그래서
+            // 이 DDL로는 `node.Values == null` 검사 하나만으로도 이미 걸러진다.
+            // 그 가드가 왜 그래도 코드에 명시적으로 남아 있는지는
+            // RecordSetPredicate의 XML 주석에 적었다 - 요약하면 "ScriptDom의
+            // 내부 불변식에 이 메서드의 계약을 얹지 않기 위해서"다.
             var ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -464,6 +478,32 @@ END";
         }
 
         [Fact]
+        public void ExtractSetPredicates_SameLastSegmentDifferentQualifiers_ShouldKeepDistinctColumns()
+        {
+            // 리뷰 라운드 1 Important 3 - 코디네이터 결정. 실측 코퍼스
+            // (output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:97-98)
+            // 는 같은 INSERT 원천 SELECT의 같은 WHERE 최상위에서
+            // A.USESTATE IN (0,4,5,6)과 B.USESTATE IN (0,4)를 나란히 쓴다. Column이
+            // 마지막 식별자 조각만 담으면 둘 다 "UseState"가 되어 (Operation, Line,
+            // Column) 키가 충돌하고, Task 3의 L1이 라인+컬럼으로 행을 찾을 때 하나가
+            // 엉뚱한 행에 매칭된다. 한정자를 포함해야 키가 코퍼스에서 유일해진다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM   dbo.T A JOIN dbo.S B ON A.Id = B.Id
+    WHERE  A.UseState IN (0,4,5,6) AND B.UseState IN (0,4)
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Column == "A.UseState");
+            Assert.Contains(facts, f => f.Column == "B.UseState");
+        }
+
+        [Fact]
         public void ExtractSetPredicates_ScalarLiteralComparisons_ShouldBeSkipped()
         {
             // 설계 §2. 코퍼스 실측에서 스칼라 리터럴 비교는 474건(집합 리터럴은 약
@@ -471,6 +511,16 @@ END";
             // 기존 판단이 그대로 옳은 지점이 된다. 둘을 가르는 것은 구조다 -
             // INSTATE = 0은 컬럼 이름만 봐도 존재를 알지만, 집합의 크기와 원소는
             // 컬럼 이름으로 추측할 수 없다.
+            //
+            // [정직한 범위 고지 - 리뷰 라운드 1 Important 2] 이 DDL에는 InPredicate가
+            // 하나도 없다. RecordSetPredicate는 오직 ExplicitVisit(InPredicate)에서만
+            // 호출되므로, 이 픽스처는 RecordSetPredicate의 어떤 가드도 실행하지
+            // 않는다 - RecordSetPredicate 본문을 통째로 지워도 이 테스트는 똑같이
+            // 통과한다. 이 테스트가 실제로 증명하는 것은 "스칼라 비교는 IN 파이프라인
+            // 바깥이라 애초에 방문되지 않는다"는 구조적 사실이다(설계 §2 범위 결정의
+            // 회귀 가드) - 나중에 누군가 스칼라 비교까지 담는 코드를 별도로 추가하면
+            // (예: BooleanComparisonExpression을 집합 사실로 취급) 그때 이 테스트가
+            // 깨져서 §2의 범위 결정을 다시 정당화하도록 요구한다.
             var ddl = @"
 CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
 AS
