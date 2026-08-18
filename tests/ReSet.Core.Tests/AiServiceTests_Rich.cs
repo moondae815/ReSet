@@ -967,5 +967,69 @@ END"
 
             Assert.DoesNotContain("[Original Procedure Interface]", result.UserPrompt);
         }
+
+        private static async Task<string> StepSystemPromptAsync()
+        {
+            var steps = new[] { ProbeStep("S05") };
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+            // CS8603 경고 회피. SystemPrompt는 널 가능 타입이지만 이 호출 경로는
+            // 항상 채운다 - 위 GenerateBatchStepSection_* 테스트가 쓰는 것과 같은 관용이다.
+            Assert.NotNull(result.SystemPrompt);
+            return result.SystemPrompt!;
+        }
+
+        // 규칙 5가 @pi_bypassPreCheck를 발명해 명령했고, S02가 재시작 모드에서
+        // 실행 컨텍스트 전체에 그 값을 참으로 고정해 지급 확정 원장의 -9 하드
+        // 스톱이 통째로 사라졌다(감사 🔴).
+        [Fact]
+        public async Task ConsolidatedPlanRules_DoNotInventABypassParameter()
+        {
+            Assert.DoesNotContain("@pi_bypassPreCheck", await StepSystemPromptAsync());
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_MoveRestartSkipOutsideTheStep()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            Assert.Contains("orchestrator", rules, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("MUST NOT add an input parameter", rules);
+            Assert.Contains("unconditionally", rules);
+        }
+
+        // Few-Shot의 CATCH가 THROW로 끝나 규칙 6-1(상태 변수를 반환하라)과
+        // 규칙 13(출력 파라미터를 누락 없이 매핑하라)을 무력화했다. 모델은
+        // 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotCatchReturnsInsteadOfRethrowing()
+        {
+            var rules = await StepSystemPromptAsync();
+            var open = rules.IndexOf("BEGIN CATCH", StringComparison.Ordinal);
+            var close = rules.IndexOf("END CATCH", open, StringComparison.Ordinal);
+            var catchBlock = rules[open..close];
+
+            Assert.DoesNotContain("THROW;", catchBlock);
+            Assert.Contains("RETURN", catchBlock);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_MakeShadowALastResortWithThreeMechanics()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            Assert.Contains("LAST RESORT", rules);
+            Assert.Contains("BEFORE `BEGIN TRAN`", rules);
+            Assert.Contains("same range", rules);
+            Assert.Contains("sp_executesql", rules);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ForbidCrossJoinInReconciliationSql()
+        {
+            Assert.Contains(
+                "NEVER compare two aggregates with `CROSS JOIN`", await StepSystemPromptAsync());
+        }
     }
 }
