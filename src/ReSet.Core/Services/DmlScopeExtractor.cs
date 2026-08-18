@@ -53,12 +53,46 @@ namespace ReSet.Core.Services
     /// 파생 테이블 정의 표가 표현식 원문을 그대로 싣는 것과 같은 이유이고, 표에서
     /// 문자열과 숫자를 구분할 수 있게 한다.
     /// </param>
+    /// <param name="StatementOrdinal">
+    /// 이 사실을 낸 문장의 "연산 종류별 · 1부터" 번호(예: 세 번째 UPDATE면 3).
+    /// SetPredicateVisitor가 자신의 Visit(UpdateSpecification/DeleteSpecification/
+    /// InsertSpecification) 오버라이드 안에서(Collect 안이 아니라) 연산별 카운터를
+    /// 증가시켜 채운다.
+    ///
+    /// [왜 DML 범위 표의 채번을 조회하지 않고 여기 직접 담는가 - FIX ROUND 3]
+    /// 예전엔(FIX ROUND 2) AiService가 이 사실을 (Operation, Line) 키로 DML 범위
+    /// 사실 목록에서 찾아 그 문장 번호를 "빌려 썼다". 그런데 같은 물리 줄에 같은
+    /// 연산 문장이 둘이고 <b>둘 다</b> 집합 술어를 가지면, 그 키가 여전히 충돌해
+    /// 두 번째 문장의 집합 술어 행이 첫 문장의 번호를 빌려 쓰는 회귀가 났다
+    /// (2026-08-18 재리뷰 실측 - 표 하나가 "UPDATE 1 dbo.T1 / UPDATE 2 dbo.T2"인데
+    /// 옆 표의 dbo.T2 리터럴 행이 "UPDATE 2"가 아니라 "UPDATE 1"로 찍혔다).
+    ///
+    /// 리뷰가 반박한 예전 주석의 주장("(연산, 라인)만으로는 원천적으로 구분할 수
+    /// 없다")은 SetPredicateFact의 <b>모양</b>에 대한 이야기였을 뿐, 두 방문자가
+    /// 실제로 훑는 <b>원본 조각과 그 순서</b>는 애초에 그 정보에 기대지 않는다:
+    /// SetPredicateVisitor와 DmlScopeVisitor는 같은 파싱 트리를 같은 세 Visit
+    /// 오버라이드로, 같은 순서로 방문한다. 두 방문자가 각자 독립적으로(서로를
+    /// 참조하지 않고) 연산별 카운터를 문장당 정확히 한 번 증가시키면, 두 카운터는
+    /// 항상 같은 값을 낸다 - 사전 조회 없이도 "몇 번째 UPDATE인가"를 소스 구조
+    /// 자체가 답한다. 그래서 여기 문장 번호를 직접 담아 사전 조회 자체를 없앤다.
+    ///
+    /// [Collect가 아니라 Visit에서 세는 이유] INSERT의 Collect는 UNION 갈래마다
+    /// (QuerySpecification마다) 여러 번 불릴 수 있는데, DmlScopeVisitor의 INSERT는
+    /// 갈래를 합쳐 사실을 하나만 낸다(Visit(InsertSpecification) 안에서 Facts.Add를
+    /// 정확히 한 번 호출). Collect 안에서 세면 UNION 갈래 수만큼 카운터가 더 늘어
+    /// 이 문장 뒤의 모든 INSERT 번호가 DML 범위 표보다 밀린다 - FIX ROUND 1이
+    /// 집합 술어가 없는 문장을 건너뛰어 밀리던 것과 같은 모양의 결함이 INSERT
+    /// 카운터에도 생긴다. 그래서 카운터는 반드시 Visit(InsertSpecification) 진입
+    /// 시점에, InsertSource의 종류(VALUES/SELECT)와 무관하게 정확히 한 번만 늘린다 -
+    /// DmlScopeVisitor가 VALUES 원천의 INSERT에도 사실을 하나 내는 것과 대칭이다.
+    /// </param>
     public sealed record SetPredicateFact(
         string Operation,
         int Line,
         string Column,
         bool IsNegated,
-        IReadOnlyList<string> Literals);
+        IReadOnlyList<string> Literals,
+        int StatementOrdinal = 0);
 
     /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
@@ -331,32 +365,64 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// DML 문장을 찾아 그 최상위 WHERE에서 집합 술어를 모으고, 수집기가 모르는
-        /// 문장 문맥(연산 종류·시작 줄)을 붙인다.
+        /// 문장 문맥(연산 종류·시작 줄·문장 번호)을 붙인다.
+        ///
+        /// [문장 번호를 이 방문자가 직접 매기는 이유] SetPredicateFact.StatementOrdinal
+        /// 문서 참고 - DmlScopeVisitor와 같은 파싱 트리를 같은 세 Visit 오버라이드로
+        /// 같은 순서로 방문하므로, 이 방문자가 독자적으로 세어도 DML 범위 표의
+        /// 번호와 항상 일치한다. 카운터는 반드시 각 Visit 오버라이드 안에서(Collect
+        /// 안이 아니라) 문장당 정확히 한 번 늘려야 한다 - NextOrdinal 문서 참고.
         /// </summary>
         private sealed class SetPredicateVisitor : TSqlFragmentVisitor
         {
+            private readonly Dictionary<string, int> _perOperation =
+                new(StringComparer.OrdinalIgnoreCase);
+
             public List<SetPredicateFact> Facts { get; } = new();
 
             public override void Visit(UpdateSpecification node) =>
-                Collect("UPDATE", node, node.WhereClause);
+                Collect("UPDATE", node, node.WhereClause, NextOrdinal("UPDATE"));
 
             public override void Visit(DeleteSpecification node) =>
-                Collect("DELETE", node, node.WhereClause);
+                Collect("DELETE", node, node.WhereClause, NextOrdinal("DELETE"));
 
             public override void Visit(InsertSpecification node)
             {
+                // DmlScopeVisitor는 원천이 VALUES든 SELECT든 InsertSpecification마다
+                // 사실을 정확히 하나 낸다(Visit 안에서 Facts.Add를 한 번만 호출) -
+                // 그래서 이 카운터도 원천 종류와 무관하게 여기서 먼저, 한 번만
+                // 늘려야 두 방문자의 번호가 계속 맞는다. Collect(→UNION 갈래마다,
+                // 즉 QuerySpecification마다 호출됨) 안에서 늘리면 갈래 수만큼
+                // 카운터가 밀린다(SetPredicateFact.StatementOrdinal 문서 참고).
+                var ordinal = NextOrdinal("INSERT");
+
                 // INSERT ... SELECT의 대상 범위는 원천 SELECT의 최상위 WHERE가 정한다
                 // (DmlScopeExtractor.Visit(InsertSpecification)와 같은 판단). UNION으로
-                // 묶인 원천은 갈래마다 WHERE가 다르므로 전부 훑는다.
+                // 묶인 원천은 갈래마다 WHERE가 다르므로 전부 훑되, 문장 번호는 위에서
+                // 미리 정한 하나를 공유한다 - DmlScopeVisitor가 갈래를 합쳐 사실
+                // 하나만 내는 것과 대칭이다.
                 if (node.InsertSource is not SelectInsertSource select) return;
 
                 foreach (var spec in QuerySpecificationsOf(select.Select))
                 {
-                    Collect("INSERT", node, spec.WhereClause);
+                    Collect("INSERT", node, spec.WhereClause, ordinal);
                 }
             }
 
-            private void Collect(string operation, TSqlFragment statement, WhereClause? where)
+            /// <summary>
+            /// 연산 종류별 문장 번호를 1부터 매긴다. SetPredicateFact.StatementOrdinal
+            /// 문서의 실측 근거 참고 - DmlScopeVisitor가 문장 하나당 사실을 정확히
+            /// 하나만 내는 지점(각 Visit 오버라이드)과 카운터 증가 지점을 맞춰야,
+            /// 두 방문자가 독립적으로 세어도 항상 같은 번호가 나온다.
+            /// </summary>
+            private int NextOrdinal(string operation)
+            {
+                _perOperation.TryGetValue(operation, out var n);
+                _perOperation[operation] = ++n;
+                return n;
+            }
+
+            private void Collect(string operation, TSqlFragment statement, WhereClause? where, int ordinal)
             {
                 if (where?.SearchCondition == null) return;
 
@@ -366,7 +432,7 @@ namespace ReSet.Core.Services
                 foreach (var (column, isNegated, literals) in top.SetPredicates)
                 {
                     Facts.Add(new SetPredicateFact(
-                        operation, statement.StartLine, column, isNegated, literals));
+                        operation, statement.StartLine, column, isNegated, literals, ordinal));
                 }
             }
         }

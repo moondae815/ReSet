@@ -1204,5 +1204,52 @@ END"
             Assert.Contains("| UPDATE 1 | 5 | dbo.T1 |", body);
             Assert.Contains("| UPDATE 2 | 5 | dbo.T2 |", body);
         }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithTwoSetPredicatesOnSameLine_ShouldKeepBothTablesAligned()
+        {
+            // 재리뷰 재현(FIX ROUND 3) - 위 테스트(둘 다 집합 술어 없음)만으로는
+            // 잡히지 않는 결함이다. 같은 줄에 UPDATE 둘(T2·T3)이 있고 <b>둘 다</b>
+            // 집합 술어를 가지면, FIX ROUND 2의 `FirstByKey`((연산, 라인) 키의 첫
+            // 문장 번호를 집합 술어 표가 "빌려 쓰는" 방식)는 두 술어 행 모두에
+            // 같은 번호(그 줄의 첫 문장 번호, 여기서는 T2의 "UPDATE 2")를 붙였다 -
+            // T3의 집합 술어 행이 "UPDATE 3"이 아니라 "UPDATE 2"로 찍혀 DML 범위
+            // 표의 T2를 가리키는 거짓 귀속이 났다. 이 테스트는 DML 범위 표와 집합
+            // 술어 표를 모두 단언해, 같은 대상(T2/T3)의 문장 번호가 두 표에서
+            // 일치하는지를 직접 대조한다 - 앞 테스트가 DML 표만 봐서 놓친 지점이다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T1 SET C = 1 WHERE PGName IN ('a','b')
+    UPDATE dbo.T2 SET C = 1 WHERE Id IN (1,2); UPDATE dbo.T3 SET C = 1 WHERE Id IN (3,4,5)
+END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var body = result.SystemPrompt;
+
+            // DML 범위 표: 목록 안 자리로 센 번호 - T1=1(5번 줄), T2=2·T3=3(둘 다
+            // 6번 줄을 공유하지만 자리가 다르다).
+            Assert.Contains("| UPDATE 1 | 5 | dbo.T1 |", body);
+            Assert.Contains("| UPDATE 2 | 6 | dbo.T2 |", body);
+            Assert.Contains("| UPDATE 3 | 6 | dbo.T3 |", body);
+
+            // 집합 술어 표: 같은 대상의 리터럴 행이 DML 범위 표와 같은 문장 번호를
+            // 가리켜야 한다. T2의 리터럴(1, 2)이 "UPDATE 2"를, T3의 리터럴(3, 4, 5)이
+            // "UPDATE 3"을 가리키지 않으면(예: 둘 다 "UPDATE 2") 표 사이 귀속이
+            // 깨진 것이다.
+            Assert.Contains("| UPDATE 1 | 5 | PGName | IN | 2 | 'a', 'b' |", body);
+            Assert.Contains("| UPDATE 2 | 6 | Id | IN | 2 | 1, 2 |", body);
+            Assert.Contains("| UPDATE 3 | 6 | Id | IN | 3 | 3, 4, 5 |", body);
+        }
     }
 }
