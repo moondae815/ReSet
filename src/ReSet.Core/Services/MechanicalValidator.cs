@@ -28,6 +28,13 @@ namespace ReSet.Core.Services
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
         SetPredicateMismatch,
+        // VerificationCartesianComparison을 여기 넣으면 General의 서수가 뒤로
+        // 한 칸 밀린다 - "기존 값의 정수 표현이 안 바뀐다"는 서술은 부정확하다.
+        // (축 A의 SetPredicateMismatch와 병합된 지금은 15에서 16으로 밀렸다.)
+        // 다만 이 코드베이스 어디에도 (int)ErrorType 캐스트나 ErrorType의 숫자
+        // 직렬화가 없으므로(문자열 이름으로만 비교·표시한다), 서수 이동 자체의
+        // 기능 영향은 없다.
+        VerificationCartesianComparison,
         General
     }
 
@@ -165,6 +172,7 @@ namespace ReSet.Core.Services
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
+                CheckVerificationCartesianComparison(cleansed, result);
             }
             catch (Exception ex)
             {
@@ -202,7 +210,8 @@ namespace ReSet.Core.Services
             string? stepMarkdown,
             BatchStepPlan step,
             IReadOnlyCollection<string> knownTableNames,
-            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure)
+            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
+            IReadOnlyList<StepInterface>? stepInterfaces = null)
         {
             var result = new StepValidationResult();
 
@@ -296,6 +305,11 @@ namespace ReSet.Core.Services
             CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
             CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
+            CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
+            CheckBatchControlVocabulary(stepMarkdown, step, result);
+            CheckBatchControlRowOrigin(stepMarkdown, step, result);
+            CheckShadowBackupContract(stepMarkdown, step, result);
+            CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -419,6 +433,639 @@ namespace ReSet.Core.Services
                     $"{step.Code} 섹션에 축약·생략 표기 `{forbidden}`가 있습니다. " +
                     "표의 모든 행과 매핑을 원본대로 완전히 기술하십시오 - 생략된 자리는 " +
                     "구현자가 채울 수 없습니다.");
+            }
+        }
+
+        /// <summary>
+        /// 단계 본문이 선언한 프로시저 파라미터가 원본 인터페이스를 넘지 않는지 본다.
+        ///
+        /// 이 검사가 필요한 이유: 프롬프트 규칙 5가 @pi_bypassPreCheck를 발명해
+        /// 명령했고, S02가 재시작 모드에서 실행 컨텍스트 전체에 그 값을 참으로
+        /// 고정해 지급 확정 원장(OutState IN (1,5))의 -9 하드 스톱이 통째로
+        /// 사라졌다. 프롬프트를 고쳐도 강제가 없으면 되살아난다.
+        ///
+        /// DECLARE된 지역 변수는 대상이 아니다. 파라미터 선언 구간
+        /// (CREATE PROCEDURE ... AS 사이)에 등장하는 @이름만 본다.
+        /// </summary>
+        private static void CheckStepInterface(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyList<StepInterface>? stepInterfaces,
+            StepValidationResult result)
+        {
+            var iface = stepInterfaces?.FirstOrDefault(
+                i => string.Equals(i.StepCode, step.Code, StringComparison.OrdinalIgnoreCase));
+
+            if (iface == null)
+            {
+                // 재료가 없다는 사실과 대조해서 깨끗하다는 사실을 로그에서 구별한다.
+                Log.Information(
+                    "{Code}는 원본 인터페이스 재료가 없어 파라미터 대조 대상이 아닙니다.", step.Code);
+                return;
+            }
+
+            var allowed = new HashSet<string>(
+                StepInterfaceFacts.ParameterNames(iface), StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match declaration in Regex.Matches(
+                stepMarkdown,
+                // params는 [^)]*?가 아니라 .*?로 잡는다 - varchar(8)·decimal(18,2)처럼
+                // 타입 선언 안에 ')'가 섞이면 [^)]*?는 그 첫 ')'에서 막혀 AS까지
+                // 도달하지 못해 매치 자체가 실패한다(원본 계획서 정규식의 결함).
+                // .*?는 Singleline과 함께 개행까지 넘나들며 첫 단독 AS까지 게으르게
+                // 소비하므로 감싸는 괄호가 있든 없든, 타입 괄호가 있든 없든 안전하다.
+                //
+                // [최종 리뷰 B-2 수정] `(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)`로
+                // 시작 키워드를 넓혔다 - 옛 정규식은 `CREATE\s+PROC(?:EDURE)?`만
+                // 찾아 `CREATE OR ALTER PROCEDURE`(SQL Server 2016 SP1 이후 표준
+                // 관용)와 `ALTER PROCEDURE`를 아예 매치하지 못했고, 그 결과 인터페이스
+                // 검사 자체가 통째로 꺼져 발명 파라미터가 통과했다(실행 확인, 미탐).
+                @"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROC(?:EDURE)?\s+[^\s(]+\s*\(?(?<params>.*?)\bAS\b",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var paramsText = declaration.Groups["params"].Value;
+
+                // [최종 리뷰 B-2 수정] 산문이 원본 SP를 `CREATE PROCEDURE dbo.UP_X`로
+                // 언급하면(자기 AS가 없다) 이 정규식의 게으른 .*?가 그 뒤 실제 SQL의
+                // 테이블 별칭(`FROM dbo.T AS t`)까지 뻗어나가 그 사이의 DECLARE·SELECT
+                // 문 전체를 "파라미터 선언부"로 삼킨다 - 규칙 6-1이 필수로 요구하는
+                // `DECLARE @v_currentStepId INT = 0;`이 "원본에 없는 입력 파라미터"로
+                // 반려된 실행 재현이 이 모양이다(오탐). 진짜 파라미터 목록에는 SELECT·
+                // DECLARE·BEGIN·FROM 같은 완전한 문 키워드가 나올 수 없으므로, 그런
+                // 키워드가 하나라도 보이면 이 매치는 산문이 우연히 만든 가짜 선언부로
+                // 보고 통째로 버린다 - Few-Shot을 손대지 않고, 진짜 CREATE/ALTER
+                // PROCEDURE 선언은 그대로 검사한다.
+                if (Regex.IsMatch(paramsText, @"\b(?:SELECT|DECLARE|BEGIN|FROM)\b", RegexOptions.IgnoreCase))
+                {
+                    continue;
+                }
+
+                foreach (Match parameter in Regex.Matches(paramsText, @"@\w+"))
+                {
+                    if (allowed.Contains(parameter.Value)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 원본에 없는 입력 파라미터 '{parameter.Value}'를 선언합니다. " +
+                        $"이 단계의 인터페이스는 원본 프로시저의 파라미터가 전부입니다 " +
+                        $"({string.Join(", ", iface.Parameters)}). 재시작·스킵·검사 우회를 위해 " +
+                        "입력을 늘리지 마십시오 - 이미 완료된 단계는 오케스트레이터가 " +
+                        "체크포인트를 보고 호출하지 않으며, 업무 보호 검사는 호출될 때마다 " +
+                        "무조건 수행되어야 합니다.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 제어 테이블에 계약 밖의 컬럼명·상태값을 <b>쓰는지</b> 본다.
+        ///
+        /// 실측: 같은 batch.BatchStepJournal에 S01은 StepStatus='Succeeded',
+        /// S02는 ExecutionStatus='Completed', S03은 StepStatus='Completed',
+        /// S17은 StepState를 썼다. 어느 쪽으로 DDL을 만들어도 반대편 단계가
+        /// 컴파일되지 않는다. 정본이 있으면 단계마다 정본과 대조하는 것으로
+        /// 충분하다 - 18개 문서를 한꺼번에 읽는 교차 검사는 필요 없다.
+        ///
+        /// [수정 이력] 최초 구현은 UPDATE 문의 SET부터 세미콜론(또는 문서 끝)까지 tail
+        /// 전체에서 컬럼·리터럴 후보를 뽑았다. 제어 테이블과 업무 테이블을 같은 문에서
+        /// FROM/JOIN으로 엮고 WHERE에 별칭 없는 업무 컬럼(`SourceRunId`)을 쓰거나, 업무
+        /// 테이블 자신의 상태 필터(`t.SettleStatus = N'Pending'`)가 같은 문 안에 있으면
+        /// 그 이름·값이 "쓰는 것"으로 오인되어 결함 없는 단계가 상시 실패했다(리뷰
+        /// 재현: `UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' FROM ...
+        /// JOIN dbo.TSettleMst ... WHERE SourceRunId = @RunId`). 세미콜론이 없으면
+        /// `$`가 문서 끝까지 흡수해 뒤따르는 무관한 SQL의 컬럼까지 섞였다.
+        ///
+        /// 계약 위반은 제어 테이블에 값을 <b>쓸 때만</b> 성립한다 - WHERE·JOIN·ON·FROM은
+        /// 읽기이므로 대상이 아니다. 그래서 후보를 UPDATE의 SET 절 대입 대상과 INSERT의
+        /// 컬럼 목록, 이 두 쓰기 자리로 좁힌다. 상태값도 그 자리에서 실제로 대입되는
+        /// 값만 본다(SET의 StatusColumn 우변, INSERT 컬럼 목록에서 StatusColumn과 같은
+        /// 위치의 VALUES 항목). 이 좁힘 덕분에 "이름이 제어 컬럼처럼 보이는가"(stem
+        /// 휴리스틱), "값이 상태 어휘처럼 보이는가"(영단어 목록) 둘 다 필요 없어졌다 -
+        /// 쓰기 자리에 나온 이름·값은 정의상 그 테이블의 것이어야 하므로, known에
+        /// 없으면(컬럼) 또는 allowed에 없으면(상태값) 그 자체로 위반이다.
+        /// </summary>
+        private static void CheckBatchControlVocabulary(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            foreach (var table in BatchControlContract.Tables)
+            {
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                if (!ContainsToken(stepMarkdown, bare)) continue;
+
+                var known = new HashSet<string>(
+                    table.Columns.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+                var allowed = table.StatusColumn != null
+                    ? table.Columns.First(c => c.Name == table.StatusColumn).AllowedValues
+                    : null;
+
+                CheckUpdateSetTargets(stepMarkdown, table, bare, known, allowed, step, result);
+                CheckInsertColumnTargets(stepMarkdown, table, bare, known, allowed, step, result);
+            }
+        }
+
+        /// <summary>
+        /// UPDATE 문의 SET 절에서 대입 대상 컬럼만 본다. 절의 끝 경계는 괄호 깊이 0에서
+        /// 나타나는 FROM/WHERE/;/문서 끝 중 먼저 오는 것으로 잡는다 - 세미콜론이 없어도
+        /// 다음 문으로 새지 않기 위해서다.
+        ///
+        /// [2라운드 수정] 최초 버전은 정규식 `(?=\bFROM\b|\bWHERE\b|;|$)`로 경계를
+        /// 잡았는데, 이 lookahead는 괄호 깊이를 모른다. `SET StepStatus = (SELECT ...
+        /// FROM dbo.TSettleMst WHERE ...), ExecutionStatus = N'Completed'`처럼 대입식
+        /// 안의 서브쿼리가 FROM/WHERE를 담고 있으면 SET 절 전체가 그 지점에서 잘려,
+        /// 서브쿼리 뒤에 오는 대입은(계약 밖 컬럼이든 계약 밖 상태값이든) 통째로 검사
+        /// 대상에서 사라졌다(리뷰 재현, 미탐). `ExtractTopLevelClause`는 괄호 깊이와
+        /// 문자열 인용 상태를 추적하며 문자 단위로 훑어, 깊이 0·인용 밖에서 나타나는
+        /// FROM/WHERE/;만 경계로 인정한다.
+        ///
+        /// [알려진 미보완] 별칭이 붙은 대입 대상(`t.Col = ...`)은 대상에서 제외한다 -
+        /// `^[A-Za-z_]\w*$` 검사가 점이 섞인 이름을 걸러낸다. `UPDATE bsj SET
+        /// bsj.ExecutionStatus = N'Completed' FROM batch.BatchStepJournal bsj ...`처럼
+        /// UPDATE의 대상이 테이블명이 아니라 별칭이고 SET도 그 별칭으로 한정하는 형태는
+        /// 이 검사가 아예 보지 못한다(2라운드 리뷰가 지적한 기존 구멍, 이번 라운드가
+        /// 만든 결함이 아니다) - 별칭→테이블 바인딩을 FROM 절에서 별도로 추출해야 하는
+        /// 독립된 작업이라 이번 수정 범위에 넣지 않았다.
+        /// </summary>
+        private static void CheckUpdateSetTargets(
+            string stepMarkdown,
+            ControlTable table,
+            string bare,
+            HashSet<string> known,
+            IReadOnlyList<string>? allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            foreach (Match header in Regex.Matches(
+                stepMarkdown,
+                $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+SET\s+",
+                RegexOptions.IgnoreCase))
+            {
+                var setClause = ExtractTopLevelClause(stepMarkdown, header.Index + header.Length);
+
+                foreach (var assignment in SplitTopLevelSegments(setClause))
+                {
+                    var eq = assignment.IndexOf('=');
+                    if (eq <= 0) continue;
+
+                    var name = StripBracketQuoting(assignment[..eq].Trim());
+                    if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
+
+                    if (!known.Contains(name))
+                    {
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
+                            $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
+                            $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                        continue;
+                    }
+
+                    if (allowed == null ||
+                        !string.Equals(name, table.StatusColumn, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    ReportIfDisallowedStatusValue(assignment[(eq + 1)..], table, allowed, step, result);
+                }
+            }
+        }
+
+        /// <summary>
+        /// INSERT 문의 컬럼 목록만 본다. StatusColumn이 그 목록에 있으면 같은 위치의
+        /// VALUES 항목도 함께 본다 - INSERT...SELECT처럼 VALUES가 없으면 값 검사만
+        /// 조용히 건너뛴다(컬럼 이름 검사는 그대로 돈다).
+        /// </summary>
+        private static void CheckInsertColumnTargets(
+            string stepMarkdown,
+            ControlTable table,
+            string bare,
+            HashSet<string> known,
+            IReadOnlyList<string>? allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            foreach (Match statement in Regex.Matches(
+                stepMarkdown,
+                $@"INSERT\s+INTO\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s*\((?<cols>[^)]*)\)",
+                RegexOptions.IgnoreCase))
+            {
+                var columns = SplitTopLevelSegments(statement.Groups["cols"].Value)
+                    .Select(c => StripBracketQuoting(c.Trim()))
+                    .ToList();
+
+                foreach (var name in columns)
+                {
+                    if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
+                    if (known.Contains(name)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
+                        $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
+                        $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                }
+
+                if (allowed == null) continue;
+
+                var statusIndex = columns.FindIndex(
+                    c => string.Equals(c, table.StatusColumn, StringComparison.OrdinalIgnoreCase));
+                if (statusIndex < 0) continue;
+
+                // 컬럼 목록 바로 뒤에 VALUES(...)가 오는 모양만 본다. INSERT...SELECT는
+                // 이 모양이 아니므로 조용히 건너뛴다 - 컬럼 이름 검사는 이미 위에서 끝났다.
+                var afterColumns = stepMarkdown[(statement.Index + statement.Length)..];
+                var valuesHeader = Regex.Match(afterColumns, @"\A\s*VALUES\s*", RegexOptions.IgnoreCase);
+                if (!valuesHeader.Success) continue;
+
+                var openParenIndex = valuesHeader.Index + valuesHeader.Length;
+                if (openParenIndex >= afterColumns.Length || afterColumns[openParenIndex] != '(') continue;
+
+                var valuesBody = ExtractBalancedParenGroup(afterColumns, openParenIndex);
+                if (valuesBody == null) continue;
+
+                var values = SplitTopLevelSegments(valuesBody).Select(v => v.Trim()).ToList();
+                if (statusIndex >= values.Count) continue;
+
+                ReportIfDisallowedStatusValue(values[statusIndex], table, allowed, step, result);
+            }
+        }
+
+        /// <summary>대입되는 값이 `N?'단어'` 모양의 리터럴일 때만 계약 어휘와 대조한다 -
+        /// 파라미터(`@Status`)·식(`CASE ...`)은 이 지점에서 실제 값을 알 수 없으므로
+        /// 조용히 건너뛴다. 위치로 이미 "그 테이블의 StatusColumn에 쓰는 값"임이 확정된
+        /// 뒤이므로, 영단어 상태 어휘 목록 같은 별도 필터는 필요 없다.</summary>
+        private static void ReportIfDisallowedStatusValue(
+            string valueExpression,
+            ControlTable table,
+            IReadOnlyList<string> allowed,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var literal = Regex.Match(valueExpression.Trim(), @"^N?'(?<v>[A-Za-z]\w*)'");
+            if (!literal.Success) return;
+
+            var value = literal.Groups["v"].Value;
+            if (allowed.Contains(value, StringComparer.Ordinal)) return;
+
+            result.Errors.Add(
+                $"{step.Code} 섹션이 `{table.Name}`에 계약 밖의 상태값 '{value}'를 씁니다. " +
+                $"허용 값은 {string.Join(", ", allowed)}입니다 - 성공 종료는 " +
+                "'Succeeded' 하나이며 'Completed'는 쓰지 않습니다. 두 어휘가 섞이면 " +
+                "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
+        }
+
+        /// <summary>쉼표로 항목을 나누되 괄호·대괄호 인용·홑따옴표 문자열 리터럴·SQL
+        /// 주석 안의 쉼표는 무시한다 - SET 절의 CASE 식·INSERT 값 목록의 함수 호출
+        /// 인자에 있는 쉼표, `N'a,b error message'`처럼 문자열 값 자체에 든 쉼표,
+        /// `[Order,Column]`처럼 대괄호 인용 식별자 안에 든 쉼표를 항목 경계로 오인하지
+        /// 않기 위해서다.
+        ///
+        /// [2라운드 수정] 최초 버전은 인용 상태를 몰라 문자열 리터럴 안의 쉼표도 항목
+        /// 경계로 셌다. INSERT VALUES에서 그 쉼표 앞의 항목이 하나 더 늘어난 것처럼
+        /// 잘못 나뉘어, 뒤따르는 항목들의 위치가 하나씩 밀렸다 - StatusColumn 위치에
+        /// 엉뚱한 값이 걸려 계약 밖 상태값 검사가 조용히 빗나갔다(리뷰 재현, 미탐).
+        /// `''`(홑따옴표 두 개)는 문자열 안에서 홑따옴표 하나를 뜻하는 SQL 이스케이프이므로
+        /// 문자열을 닫지 않고 그대로 삼킨다.
+        ///
+        /// [3라운드 수정] 인용 상태 검사만으로는 부족했다 - 주석 `-- don't panic`의
+        /// 아포스트로피가 문자열 시작으로 오인되어 그 뒤의 진짜 대입까지 문자열 내용물로
+        /// 삼켜졌다(리뷰 재현, 미탐). 인용 검사보다 먼저(문자열 밖에서만) 주석을 건너뛰어
+        /// 그 안의 아포스트로피·쉼표·괄호가 전혀 구조로 해석되지 않게 한다 - 순서를
+        /// 바꾸면(문자열 안에서도 주석을 찾으면) `N'a--b'`의 `--`가 주석으로 오인되어
+        /// 값과 그 뒤 위반이 함께 사라진다. 대괄호 인용도 같은 이유로 더했다 -
+        /// `[ExecutionStatus]`를 대입 대상 검사가 벗겨서 대조하려면(3라운드 3순위)
+        /// 이 단계에서 먼저 `[Order,Column]` 같은 병적 이름의 내부 쉼표를 지켜야 한다.
+        /// </summary>
+        private static IEnumerable<string> SplitTopLevelSegments(string text)
+        {
+            var depth = 0;
+            var start = 0;
+            var inString = false;
+            var inBracket = false;
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = text[i];
+
+                if (inString)
+                {
+                    if (ch != '\'') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == '\'')
+                    {
+                        i++; // '' 이스케이프 - 문자열은 계속된다.
+                        continue;
+                    }
+
+                    inString = false;
+                    continue;
+                }
+
+                if (inBracket)
+                {
+                    if (ch != ']') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == ']')
+                    {
+                        i++; // ]] 이스케이프 - 대괄호 인용은 계속된다.
+                        continue;
+                    }
+
+                    inBracket = false;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value - 1; // for 루프의 i++와 합쳐 commentEnd로 재개한다.
+                    continue;
+                }
+
+                switch (ch)
+                {
+                    case '\'':
+                        inString = true;
+                        break;
+                    case '[':
+                        inBracket = true;
+                        break;
+                    case '(':
+                        depth++;
+                        break;
+                    case ')':
+                        depth--;
+                        break;
+                    case ',' when depth == 0:
+                        yield return text[start..i];
+                        start = i + 1;
+                        break;
+                }
+            }
+
+            yield return text[start..];
+        }
+
+        /// <summary>openParenIndex의 '('에 대응하는 ')'까지, 중첩 괄호 깊이를 세어 그
+        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다. 문자열 리터럴·SQL 주석 안의
+        /// 괄호는 깊이에서 제외한다.</summary>
+        private static string? ExtractBalancedParenGroup(string text, int openParenIndex)
+        {
+            var depth = 0;
+            var inString = false;
+
+            for (var i = openParenIndex; i < text.Length; i++)
+            {
+                var ch = text[i];
+
+                if (inString)
+                {
+                    if (ch != '\'') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == '\'')
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    inString = false;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value - 1;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                }
+                else if (ch == '(')
+                {
+                    depth++;
+                }
+                else if (ch == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return text[(openParenIndex + 1)..i];
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// startIndex부터, 괄호 깊이 0·문자열 인용/대괄호 인용/주석 밖에서 처음 나타나는
+        /// FROM/WHERE/;를 절의 끝으로 삼아 그 앞까지를 돌려준다. 그런 경계가 없으면
+        /// 문서 끝까지다.
+        ///
+        /// 괄호 깊이를 세는 이유: SET 대입식 안의 서브쿼리(`(SELECT ... FROM ... WHERE
+        /// ...)`)가 담은 FROM/WHERE는 그 서브쿼리에 속한 것이지 바깥 UPDATE 문의 절
+        /// 경계가 아니다. 문자열 인용을 추적하는 이유: 리터럴 값 안에 우연히 이 키워드와
+        /// 같은 글자가 오더라도(드물지만) 절을 잘라서는 안 된다.
+        ///
+        /// [3라운드 수정] 주석 `-- don't panic`의 아포스트로피가 문자열 시작으로
+        /// 오인되면 그 뒤의 진짜 WHERE/;까지 "문자열 안"으로 삼켜져 절 경계 자체가
+        /// 사라졌다(리뷰 재현, 미탐 - 1라운드는 컬럼·상태값을 3건 잡았는데 이 결함이
+        /// 있는 2라운드는 2건만 잡았다). 문자열 검사보다 먼저(문자열 밖에서만) 주석을
+        /// 건너뛴다 - 순서가 바뀌면 `N'a--b'`의 `--`가 주석으로 오인된다. 대괄호 인용도
+        /// 같은 이유로 추적한다 - `[FROM]`처럼 키워드와 우연히 같은 대괄호 인용
+        /// 식별자가 절 경계로 오인되지 않게 한다.
+        /// </summary>
+        private static string ExtractTopLevelClause(string text, int startIndex)
+        {
+            var depth = 0;
+            var inString = false;
+            var inBracket = false;
+            var i = startIndex;
+
+            while (i < text.Length)
+            {
+                var ch = text[i];
+
+                if (inString)
+                {
+                    if (ch == '\'')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == '\'')
+                        {
+                            i += 2;
+                            continue;
+                        }
+
+                        inString = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                if (inBracket)
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == ']')
+                        {
+                            i += 2;
+                            continue;
+                        }
+
+                        inBracket = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                    i++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    inBracket = true;
+                    i++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    depth++;
+                    i++;
+                    continue;
+                }
+
+                if (ch == ')')
+                {
+                    depth--;
+                    i++;
+                    continue;
+                }
+
+                if (depth == 0)
+                {
+                    if (ch == ';') break;
+                    if (MatchesKeywordAt(text, i, "FROM") || MatchesKeywordAt(text, i, "WHERE")) break;
+                }
+
+                i++;
+            }
+
+            return text[startIndex..i];
+        }
+
+        /// <summary>text의 index 위치에서 keyword가 대소문자 무관 단어 경계로 시작하는지
+        /// 본다 - "FROM" 검사가 "FROMSomething"이나 "AFROM"의 일부에 걸리지 않기
+        /// 위해서다.</summary>
+        private static bool MatchesKeywordAt(string text, int index, string keyword)
+        {
+            if (index + keyword.Length > text.Length) return false;
+            if (string.Compare(text, index, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            {
+                return false;
+            }
+
+            var precededByWordChar = index > 0 && IsWordChar(text[index - 1]);
+            var followedByWordChar =
+                index + keyword.Length < text.Length && IsWordChar(text[index + keyword.Length]);
+
+            return !precededByWordChar && !followedByWordChar;
+        }
+
+        private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+        /// <summary>
+        /// index 위치가 SQL 주석(`--`부터 줄 끝까지, 또는 `/*`부터 `*/`까지)의 시작이면
+        /// 그 주석이 끝나고 다음에 처리할 색인을 돌려준다. 주석이 아니면 null이다.
+        ///
+        /// 호출 규약: 이 함수는 반드시 "지금 문자열 인용 안이 아닐 때만" 불러야 한다.
+        /// 문자열 리터럴 안의 `--`·`/*`는 주석이 아니라 값의 일부이기 때문이다
+        /// (`N'a--b'`) - 그래서 세 스캐너 모두 인용 상태를 먼저 확인하고, 인용 밖일
+        /// 때만 이 함수를 부른다. 순서를 바꾸면(주석 검사를 인용 검사보다 먼저 하면)
+        /// 문자열 안의 `--`가 주석으로 오인되어 그 값과 뒤따르는 진짜 위반이 함께
+        /// 사라진다.
+        ///
+        /// 중첩 블록 주석(`/* /* ... */ */`)은 다루지 않는다. T-SQL은 중첩을 허용하지만,
+        /// 이 검사가 보는 입력은 마크다운 단계 본문의 SET 절·VALUES 절 한 조각이고,
+        /// 그 자리에 중첩 블록 주석을 쓸 동기가 없다 - 제어 테이블 대입 자리에 주석을
+        /// 중첩해 쓴 실제 사례가 리뷰·감사 어디에도 없다. 비중첩 스캔(`*/`를 만나면
+        /// 즉시 닫는다)으로 충분하고, 중첩 처리는 깊이 상태를 셋에 각각 더 심어야 해
+        /// 이번 라운드가 막 안정화한 로직을 다시 흔들 위험이 이득보다 크다.
+        /// </summary>
+        private static int? SkipCommentToken(string text, int index)
+        {
+            if (index + 1 < text.Length && text[index] == '-' && text[index + 1] == '-')
+            {
+                var lineEnd = text.IndexOf('\n', index + 2);
+                return lineEnd < 0 ? text.Length : lineEnd; // 개행 자체는 평범한 문자로 다음 루프가 처리한다.
+            }
+
+            if (index + 1 < text.Length && text[index] == '/' && text[index + 1] == '*')
+            {
+                var blockEnd = text.IndexOf("*/", index + 2, StringComparison.Ordinal);
+                return blockEnd < 0 ? text.Length : blockEnd + 2;
+            }
+
+            return null;
+        }
+
+        /// <summary>대괄호로 감싼 식별자(`[Name]`)의 대괄호를 벗긴다 - T-SQL에서 매우
+        /// 흔한 인용 형태인데 대입 대상·컬럼 목록 검사가 대괄호를 모르면
+        /// `SET [ExecutionStatus] = N'Completed'`나 `INSERT INTO ... ([StepStatus], ...)`
+        /// 같은 위반이 `^[A-Za-z_]\w*$` 정규식에 걸려 조용히 통과한다(3라운드 리뷰
+        /// pre-existing 지적). `]]`는 대괄호 인용 안에서 `]` 하나를 뜻하는 T-SQL
+        /// 이스케이프이므로 되돌린다. 대괄호로 감싸여 있지 않으면 원래 문자열을 그대로
+        /// 돌려준다.</summary>
+        private static string StripBracketQuoting(string name)
+        {
+            if (name.Length < 2 || name[0] != '[' || name[^1] != ']') return name;
+            return name[1..^1].Replace("]]", "]");
+        }
+
+        /// <summary>
+        /// 자기 소유 제어 행을 만들지 않고 UPDATE만 하는지 본다.
+        ///
+        /// 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었고 S03·S06·S17이
+        /// 자기 저널·체크포인트 행을 만드는 지점 없이 UPDATE만 했다. @@ROWCOUNT
+        /// 검사가 있는 S17은 정상 실행에서도 공개가 상시 실패했고, 없는 S06은
+        /// 0행 갱신을 오류 없이 지나가 재삽입 방지가 성립하지 않았다.
+        /// </summary>
+        private static void CheckBatchControlRowOrigin(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (table.Origin != ControlRowOrigin.EachStepInserts) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var updates = Regex.IsMatch(
+                    stepMarkdown, $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b", RegexOptions.IgnoreCase);
+                if (!updates) continue;
+
+                var inserts = Regex.IsMatch(
+                    stepMarkdown,
+                    $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
+                    RegexOptions.IgnoreCase);
+                if (inserts) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 `{table.Name}`을 UPDATE만 하고 자기 행을 만드는 지점이 " +
+                    "없습니다. 이 테이블은 각 단계가 시작할 때 자기 행을 INSERT한 뒤 종료할 때 " +
+                    "UPDATE하는 계약입니다. 생성 없이 UPDATE만 하면 0행이 갱신되어, @@ROWCOUNT를 " +
+                    "검사하는 경로는 정상 실행에서도 상시 실패하고 검사하지 않는 경로는 완료 표시 " +
+                    "없이 조용히 지나갑니다.");
             }
         }
 
@@ -2877,6 +3524,553 @@ namespace ReSet.Core.Services
             }
 
             return string.Join("\n", resultLines);
+        }
+
+        /// <summary>
+        /// 그림자 백업 장치의 세 역학을 본다.
+        ///
+        /// 감사 실측에서 다섯 단계가 각기 다른 이유로 복구 불능이었다. 규칙 4가
+        /// "선행 DELETE 후 복원"만 강제하고 생성 위치·복원 범위·동적 SQL 변수
+        /// 스코프는 한 마디도 하지 않았기 때문이다.
+        ///
+        /// 세 검사 모두 <see cref="BlankCommentsAndStrings"/>로 주석·문자열 내용을
+        /// 지운 사본을 대조 기준으로 삼는다(단, (c)는 EXEC() 몸체를 찾는 위치만
+        /// 사본에서 정하고, 그 안에 진짜 변수 참조가 있는지는 원문에서 본다 - 검사
+        /// 대상 자체가 문자열 리터럴의 내용물이기 때문이다). 6번 과제가 세 라운드에
+        /// 걸쳐 겪은 문제 두 가지를 피하기 위해서다: 원문을 그대로 훑으면 주석
+        /// `-- BEGIN TRAN은 안 쓴다`의 텍스트가 진짜 트랜잭션 시작으로 오인되고
+        /// (오탐), 첫 BEGIN TRAN/COMMIT TRAN 쌍만 보면 두 번째 이후 트랜잭션 블록
+        /// 안의 위반을 놓친다(미탐) - 그래서 (a)는 모든 BEGIN TRAN을 훑고, 그 트랜잭션을
+        /// 닫는 문으로 COMMIT TRAN과 ROLLBACK TRAN을 함께 찾는다.
+        /// </summary>
+        private static void CheckShadowBackupContract(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+
+            // (a) 트랜잭션 안에서 만든 그림자는 롤백과 함께 소멸한다. "첫 BEGIN TRAN부터
+            // 첫 종료문까지"만 보면 중첩 트랜잭션에서 안쪽 COMMIT TRAN을 바깥 트랜잭션의
+            // 종료로 오인해, 안쪽 COMMIT 뒤·바깥 COMMIT 앞에 있는 그림자를 "트랜잭션
+            // 밖"으로 잘못 분류한다(리뷰 재현, 미탐) - @@TRANCOUNT처럼 깊이를 세어, 그
+            // 깊이가 0보다 큰 구간 전체를 "안"으로 본다. 문서에 트랜잭션이 여럿이면
+            // 각각 독립된 구간이 된다. 닫는 문이 짝을 잃고 남으면(깊이가 0보다 큰 채로
+            // 문서가 끝나면) 문서 끝까지가 안이다. 깊이가 이미 0일 때 만난 종료문은
+            // 무시한다 - 대응하는 BEGIN이 없는 종료문 하나 때문에 깊이가 음수로 내려가
+            // 이후 스캔이 어긋나는 것을 막기 위해서다. `SAVE TRAN`(세이브포인트)은
+            // "BEGIN"으로 시작하지 않으므로 애초에 이 스캔에 잡히지 않는다 - 깊이를
+            // 올리지 않는다.
+            var depth = 0;
+            var openStart = -1;
+            var openTransactionSpans = new List<(int Start, int End)>();
+            var events = new List<(int Index, int Length, bool IsBegin)>();
+            foreach (Match m in BeginTranPattern.Matches(cleaned)) events.Add((m.Index, m.Length, true));
+            foreach (Match m in EndTranPattern.Matches(cleaned)) events.Add((m.Index, m.Length, false));
+            events.Sort((x, y) => x.Index.CompareTo(y.Index));
+
+            foreach (var ev in events)
+            {
+                if (ev.IsBegin)
+                {
+                    if (depth == 0) openStart = ev.Index + ev.Length;
+                    depth++;
+                    continue;
+                }
+
+                if (depth == 0) continue; // 짝 없는 종료문 - 무시하고 계속한다.
+
+                depth--;
+                if (depth == 0 && openStart >= 0)
+                {
+                    openTransactionSpans.Add((openStart, ev.Index));
+                    openStart = -1;
+                }
+            }
+
+            // 닫는 문이 짝을 잃고 남으면 문서 끝까지가 안이다.
+            if (depth > 0 && openStart >= 0) openTransactionSpans.Add((openStart, cleaned.Length));
+
+            foreach (var span in openTransactionSpans)
+            {
+                if (!ShadowIntoPattern.IsMatch(cleaned[span.Start..span.End])) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 BEGIN TRAN 안에서 그림자 테이블을 만듭니다. " +
+                    "SELECT INTO로 만든 테이블은 롤백과 함께 소멸하므로, 실패 시 복원할 " +
+                    "대상이 사라진 채 CATCH의 DELETE만 자동 커밋으로 실행되어 롤백이 이미 " +
+                    "복원한 행을 다시 지웁니다. 그림자는 BEGIN TRAN 앞에서 만드십시오. " +
+                    "단일 트랜잭션으로 끝나는 단계라면 그림자 없이 ROLLBACK TRAN만 쓰십시오.");
+            }
+
+            // (b) 복원은 원래 삭제한 범위와 같은 범위를 지워야 한다. WHERE로 범위를
+            // 좁힌 DELETE는 테이블명 바로 뒤에 세미콜론이 오지 않으므로 이 패턴에
+            // 걸리지 않는다 - `[\w.\[\]]+\s*;`가 테이블명 문자만 삼키고 WHERE 절의
+            // 공백·비교 연산자 앞에서 멈추기 때문이다.
+            //
+            // 이 규칙이 말하려는 것은 "그림자에서 복원할 때 원래 지운 범위와 같은
+            // 범위만 지워야 한다"이지, WHERE 없는 전량 삭제 자체가 아니다. INSERT의
+            // 원천이 `batch_shadow.`가 아니면(그림자와 무관한 일반 ETL 전량 갱신 등)
+            // 이 검사의 대상이 아니다(리뷰 재현, 오탐) - INSERT 문 전체(다음 `;`까지)를
+            // 잡아 그 안에 `FROM batch_shadow.`가 있는지 따로 확인한다.
+            foreach (Match restore in RestoreWithoutRangePattern.Matches(cleaned))
+            {
+                if (!ShadowSourcePattern.IsMatch(restore.Groups["insertBody"].Value)) continue;
+
+                // [최종 리뷰 B-1 수정] 이 매치가 열린 BEGIN TRAN 안(정방향 스왑)에
+                // 있으면 (b)의 대상이 아니다. (b)가 겨냥하는 것은 CATCH의 *복원*
+                // (ROLLBACK 뒤 자동 커밋 구간)이지, 트랜잭션 하나로 끝나는 정방향
+                // 교체가 아니다 - 스왑은 같은 DELETE-INSERT 모양이지만 실패하면
+                // 트랜잭션 전체가 롤백되어 DELETE 자체가 무효가 되므로 "다른
+                // 거래일 행이 되돌아가는" 위험이 없다. Few-Shot "Shadow Table Swap
+                // Pattern"의 `BEGIN TRAN; DELETE ...; INSERT ... FROM batch_shadow...;
+                // COMMIT TRAN;`이 정확히 이 모양이라 프롬프트의 모범 예시를 L1이
+                // 반려하는 오탐이 실행 재현됐다(리뷰 재현). (a)가 이미 계산해 둔
+                // openTransactionSpans로 판정한다 - 스왑은 그 안에, 복원은 그 밖에
+                // 있다.
+                if (openTransactionSpans.Any(span => restore.Index >= span.Start && restore.Index < span.End))
+                {
+                    continue;
+                }
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 복원이 `{restore.Groups["t"].Value}`를 WHERE 없이 " +
+                    "전량 삭제한 뒤 재삽입합니다. 복원은 이 단계가 실제로 지운 범위와 같은 " +
+                    "범위만 지워야 합니다 - 전량 삭제하면 다른 거래일의 행까지 실행 시작 " +
+                    "시점으로 되돌아가, 레거시에 없는 전역 행 집합 변경 경로가 생깁니다.");
+            }
+
+            // (c) EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다. EXEC() 문의 위치는
+            // 주석 안이 아닌지 cleaned에서 찾되, 그 몸체의 실제 문자열 리터럴 내용은
+            // 원문에서 읽는다 - 검사 대상 자체가 문자열 값이라 주석·문자열 지우기 사본에서는
+            // 이미 공백으로 지워져 있다. "EXEC(" 형태만 잡으므로 `EXEC sp_executesql ...`
+            // 직접 호출이나 `EXEC dbo.usp_Foo @a, @b` 같은 괄호 없는 프로시저 호출은
+            // "EXEC" 바로 뒤에 '('가 없어 애초에 매치되지 않는다.
+            foreach (Match exec in ExecDynamicBatchPattern.Matches(cleaned))
+            {
+                var bodyGroup = exec.Groups["body"];
+                var body = stepMarkdown.Substring(bodyGroup.Index, bodyGroup.Length);
+
+                // 문자열 리터럴 안의 @이름만 본다 - 연결에 쓰인 바깥 변수는 정상이다.
+                foreach (Match literal in StringLiteralPattern.Matches(body))
+                {
+                    if (!VariableTokenPattern.IsMatch(literal.Groups["s"].Value)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 EXEC()로 만든 동적 배치 안에서 바깥 배치의 변수를 " +
+                        "참조합니다. 동적 배치는 별도 스코프라 그 변수를 볼 수 없어 스칼라 변수 " +
+                        "미선언 오류로 실패합니다. sp_executesql의 매개변수로 값을 넘기십시오.");
+                    break;
+                }
+            }
+        }
+
+        private static readonly Regex BeginTranPattern =
+            new(@"\bBEGIN\s+TRAN(SACTION)?\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex EndTranPattern =
+            new(@"\b(?:COMMIT|ROLLBACK)\s+TRAN(SACTION)?\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex ShadowIntoPattern =
+            new(@"SELECT\s+.*?\bINTO\s+batch_shadow\.", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex RestoreWithoutRangePattern = new(
+            @"DELETE\s+FROM\s+(?<t>[\w.\[\]]+)\s*;(?<tail>.{0,400}?)" +
+            @"INSERT\s+INTO\s+\k<t>\b(?<insertBody>.*?);",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        // (b)의 두 번째 관문: INSERT 문 안에 `FROM batch_shadow.`(또는 대괄호 인용
+        // `FROM [batch_shadow].`)가 있어야 "그림자에서 복원"이다. 값 목록으로 채우는
+        // 일반 INSERT(`VALUES (...)`)는 그림자와 무관하다.
+        //
+        // [재리뷰 수정] 스키마를 리터럴 `batch_shadow.`로만 찾으면 대괄호 인용
+        // `[batch_shadow].[X]`를 놓친다 - 실제 텍스트는 `batch_shadow].`이지 `batch_shadow.`가
+        // 아니기 때문이다(실행 재현, 미탐). 대괄호 인용은 이 코드베이스가 SET 절·컬럼
+        // 목록에서 이미 별도로 다뤄온 SQL Server의 흔한 표기라 정상적인 AI 생성 배치
+        // SQL에서 충분히 나올 수 있다. `batch_shadow` 바로 뒤에 여전히 점을 요구하므로,
+        // `batch_shadow_archive`처럼 우연히 그 문자열로 시작하는 업무 테이블 이름까지
+        // 걸리지는 않는다 - 대괄호를 닫아도(`]`) 그 다음 문자가 여전히 `.`이어야 한다.
+        private static readonly Regex ShadowSourcePattern =
+            new(@"\bFROM\s+\[?batch_shadow\]?\s*\.", RegexOptions.IgnoreCase);
+
+        private static readonly Regex ExecDynamicBatchPattern =
+            new(@"EXEC\s*\((?<body>.*?)\)\s*;", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex StringLiteralPattern = new(@"N?'(?<s>[^']*)'");
+
+        private static readonly Regex VariableTokenPattern = new(@"@\w+");
+
+        /// <summary>
+        /// CATCH가 반환 경로 없이 THROW로 끝나는지 본다.
+        ///
+        /// 프롬프트 규칙 6-1은 상태 변수를 CATCH에서 반환하라 하고 규칙 13은 출력
+        /// 파라미터를 누락 없이 매핑하라 하는데, Few-Shot 예시의 CATCH가 THROW로
+        /// 끝났다. 모델은 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        ///
+        /// <see cref="BlankCommentsAndStrings"/>로 지운 사본에서 CATCH 블록을 찾고 그
+        /// 안의 THROW·RETURN도 같은 사본에서 찾는다 - 원문을 그대로 보면 주석
+        /// `-- RETURN @x;`의 텍스트가 진짜 반환 경로로 오인되어 THROW-only 위반을
+        /// 놓치고(미탐), 주석 `-- THROW를 쓰지 않는다`의 텍스트가 진짜 THROW로
+        /// 오인되어 정상 CATCH가 걸린다(오탐) - 6번 과제가 겪은 두 실패 유형과 같은
+        /// 모양이라 처음부터 사본을 쓴다.
+        /// </summary>
+        private static void CheckCatchDiscardsReturnCode(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+
+            foreach (Match block in CatchBlockPattern.Matches(cleaned))
+            {
+                var body = block.Groups["body"].Value;
+                if (!ThrowTokenPattern.IsMatch(body)) continue;
+                if (ReturnTokenPattern.IsMatch(body)) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 CATCH 블록이 반환 경로 없이 THROW로 끝납니다. " +
+                    "THROW는 호출부의 OUTPUT 파라미터 대입을 지나쳐 원본 반환 코드를 " +
+                    "잃어버립니다. 추적한 상태 변수를 출력 파라미터에 넣고 RETURN하십시오.");
+            }
+        }
+
+        private static readonly Regex CatchBlockPattern = new(
+            @"BEGIN\s+CATCH(?<body>.*?)END\s+CATCH", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex ThrowTokenPattern = new(@"\bTHROW\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex ReturnTokenPattern = new(@"\bRETURN\b", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// 정합성 검증 SQL이 카티전 곱으로 두 집계를 비교하는지 본다.
+        ///
+        /// 실측: FROM TSettleMst AS M CROSS JOIN TSettleByTX AS T 뒤
+        /// HAVING SUM(M.TXAMT) &lt;&gt; SUM(T.TXAMT)는 좌변이 |T|×SUM_M,
+        /// 우변이 |M|×SUM_T가 되어 |M|≠|T|인 정상 데이터에서 항상 불일치한다.
+        /// 정상 실행이 매번 데이터 품질 실패로 기록되어 공개가 상시 차단되고,
+        /// 증적에는 카티전 배수만큼 부풀려진 틀린 금액이 남는다.
+        ///
+        /// <see cref="BlankCommentsAndStrings"/>로 지운 사본에서 CROSS JOIN과 SUM을
+        /// 찾는다 - 원문을 그대로 보면 주석 `-- CROSS JOIN을 쓰지 않는다`나 동적 SQL을
+        /// 만드는 문자열 리터럴 안의 `CROSS JOIN` 텍스트가 진짜 카티전 조인으로
+        /// 오인되어 정상 검증식이 걸린다(오탐).
+        /// </summary>
+        private static void CheckVerificationCartesianComparison(string markdown, ValidationResult result)
+        {
+            foreach (Match block in Regex.Matches(
+                markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var rawSql = block.Groups["sql"].Value;
+                var cleanedSql = BlankCommentsAndStrings(rawSql);
+
+                // 결함은 "한 문 안에" CROSS JOIN과 두 별칭 SUM 비교가 함께 있을 때만
+                // 성립한다. 블록 전체를 한 덩어리로 보면, "SQL 세트" 관용대로 한
+                // 펜스에 무관한 질의 여럿을 묶었을 때 A 질의의 무해한 CROSS JOIN과
+                // B 질의의 정상적인 두 별칭 SUM 비교가 우연히 합쳐져 오탐이 난다 -
+                // 감사 수정 라운드 1이 이 오탐을 직접 재현했다. 문 경계(`;`)로 자른
+                // 사본에서 각 문을 따로 판정한다.
+                foreach (var (cleanedStatement, rawStatement) in SplitSqlStatements(rawSql, cleanedSql))
+                {
+                    if (!Regex.IsMatch(cleanedStatement, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase)) continue;
+
+                    // 이 문의 CROSS JOIN이 전부 "이미 각자 집계된 CTE 둘"을 잇는
+                    // 것이라면 카티전이 1×1이라 무해하다 - AiService.cs 규칙 2가
+                    // 권장하는 "양쪽을 각자의 CTE에서 집계한 뒤 비교"를 CROSS JOIN
+                    // 문법으로 쓴 정상 패턴이다. 감사 수정 라운드 1이 이 오탐도
+                    // 직접 재현했다.
+                    if (AllCrossJoinsJoinKnownCtes(cleanedStatement)) continue;
+
+                    // 서로 다른 별칭 둘에 각각 SUM이 걸린 비교만 든다.
+                    var aliases = Regex.Matches(cleanedStatement, @"\bSUM\s*\(\s*(?:ISNULL\s*\(\s*)?(?<a>\w+)\.",
+                            RegexOptions.IgnoreCase)
+                        .Select(m => m.Groups["a"].Value)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    if (aliases.Count < 2) continue;
+
+                    var message =
+                        "정합성 검증 SQL이 CROSS JOIN으로 두 집계를 비교합니다. 카티전 곱이라 " +
+                        "각 변이 상대 테이블의 건수배가 되어 정상 데이터에서 항상 불일치하고, " +
+                        "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
+                        "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
+
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.VerificationCartesianComparison,
+                        Message = message,
+                        RawContext = rawStatement.Trim()
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// 블랭크 처리된 사본을 `;` 경계로 잘라 (블랭크 사본, 원본) 문 쌍을 낸다.
+        /// 문자열·주석 안의 `;`는 <see cref="BlankCommentsAndStrings"/>가 공백으로
+        /// 바꿔 놓았으므로 경계가 되지 않는다. 자르기는 원본과 길이가 같은 사본의
+        /// 인덱스를 그대로 원본에 대는 방식이라 두 목록의 각 항목이 같은 구간을
+        /// 가리킨다 - <see cref="CheckShadowBackupContract"/>가 EXEC() 위치·내용을
+        /// 분리하는 것과 같은 관용이다. 마지막 문이 `;` 없이 끝나도 한 문으로
+        /// 다룬다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, string Raw)> SplitSqlStatements(string raw, string cleaned)
+        {
+            var start = 0;
+            for (var i = 0; i < cleaned.Length; i++)
+            {
+                if (cleaned[i] != ';') continue;
+                yield return (cleaned.Substring(start, i - start + 1), raw.Substring(start, i - start + 1));
+                start = i + 1;
+            }
+
+            if (start >= cleaned.Length) yield break;
+
+            var tail = cleaned.Substring(start);
+            if (string.IsNullOrWhiteSpace(tail)) yield break;
+
+            yield return (tail, raw.Substring(start));
+        }
+
+        /// <summary>
+        /// 이 문(statement) 안의 CROSS JOIN이 전부, 본문이 정확히 한 행으로
+        /// 집계되는 CTE 둘을 잇는지 본다(<see cref="CollectSingleRowAggregateCteNames"/>).
+        /// 하나라도 그렇지 않은 것(원시 테이블, 통과용 CTE, GROUP BY로 여러 행을
+        /// 내는 CTE 등)을 피연산자로 두면(한쪽만이어도) false를 낸다 - 그건 진짜
+        /// 카티전일 수 있다.
+        ///
+        /// 감사 수정 라운드 1은 "이름이 CTE면 안전"이라고 가정했는데, CTE 본문이
+        /// SELECT * 같은 통과용이면 여러 행을 내므로 그 가정이 틀렸다 - 재리뷰가
+        /// 정확히 이 모양(WITH L AS (SELECT * FROM ...), R AS (SELECT * FROM ...)
+        /// 뒤 CROSS JOIN, 바깥에서 별칭별 SUM)으로 재현했다. "한 행이 보장되는
+        /// CTE 둘"만 안전하다.
+        /// </summary>
+        private static bool AllCrossJoinsJoinKnownCtes(string cleanedStatement)
+        {
+            var singleRowAggregateCteNames = CollectSingleRowAggregateCteNames(cleanedStatement);
+            if (singleRowAggregateCteNames.Count == 0) return false;
+
+            var crossJoinCount = Regex.Matches(cleanedStatement, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase).Count;
+            var operandMatches = Regex.Matches(cleanedStatement,
+                @"\bFROM\s+(?<left>[\w\.\[\]]+)(?:\s+(?:AS\s+)?\w+)?\s+CROSS\s+JOIN\s+(?<right>[\w\.\[\]]+)",
+                RegexOptions.IgnoreCase);
+
+            // CROSS JOIN 발생 수만큼 피연산자 쌍을 못 찾으면(예: FROM 없이 걸린
+            // CROSS JOIN처럼 이 패턴이 다루지 않는 구문) 안전 쪽으로 판단하지
+            // 않는다 - 못 찾은 발생은 원시 테이블 취급과 같다.
+            if (operandMatches.Count < crossJoinCount) return false;
+
+            foreach (Match om in operandMatches)
+            {
+                var left = BareObjectName(om.Groups["left"].Value);
+                var right = BareObjectName(om.Groups["right"].Value);
+                if (!singleRowAggregateCteNames.Contains(left) || !singleRowAggregateCteNames.Contains(right)) return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// `WITH ... AS ( ... )` / `, ... AS ( ... )`로 선언된 CTE 중, 본문이
+        /// 집계 함수(SUM/COUNT/AVG/MIN/MAX)를 쓰고 "본문 자신의 SELECT"에
+        /// GROUP BY가 없어 정확히 한 행을 내는 것만 이름을 모은다. 그런 CTE
+        /// 끼리의 CROSS JOIN만 1×1이라 무해하다 - GROUP BY가 있으면 그룹
+        /// 수만큼, 통과용(SELECT * 등)이면 원본 행 수만큼 나오므로 한 행
+        /// 보장이 없다.
+        ///
+        /// [감사 수정 라운드 3] GROUP BY는 본문 전체가 아니라 본문 자신의
+        /// SELECT에서만 센다 - 서브쿼리(`FROM (SELECT ... GROUP BY ...) AS
+        /// sub`) 안의 GROUP BY는 그 서브쿼리의 행 수를 정할 뿐이고, 바깥이
+        /// 그 결과를 다시 SUM으로 합산하면 CTE 본문은 여전히 한 행이다.
+        ///
+        /// [감사 수정 라운드 4] 라운드 3은 GROUP BY만 서브쿼리에서 지우고
+        /// hasAggregate는 본문 전체 텍스트에서 그대로 찾았다 - 그 결과
+        /// `SELECT * FROM (그룹별 집계 서브쿼리) AS sub`처럼 본문 자신은
+        /// 통과용인데 안쪽 서브쿼리의 SUM(이 전체 스캔에 걸려 "집계 있음,
+        /// GROUP BY 없음"으로 오분류됐다 - 실제로는 서브쿼리가 여러 행을
+        /// 내고 본문이 그것을 그대로 통과시키므로 CTE 자체가 여러 행이다.
+        /// 이 CTE가 CROSS JOIN 뒤 바깥에서 재집계되면 S16 원 결함(그룹
+        /// 수만큼 부풀려진 합계)을 그대로 재현한다(재리뷰 재현).
+        ///
+        /// 이제 hasAggregate와 hasGroupBy를 같은 사본
+        /// (<see cref="BlankSubqueryParenGroups"/>)에서 함께 판정한다. 이
+        /// 사본은 "서브쿼리"(내용이 SELECT로 시작하는 괄호 그룹)만 지우고
+        /// `ISNULL(SUM(x),0)` 같은 함수 호출 괄호는 그대로 둔다 - 함수 호출
+        /// 인자로 집계가 중첩되는 것은 흔한 관용이라, 괄호 깊이만으로
+        /// 뭉뚱그려 지우면(라운드 3의 방식) 이런 정상 CTE의 hasAggregate까지
+        /// 지워져 오탐이 될 위험이 있다(라운드 3이 hasGroupBy에만 그 방식을
+        /// 썼던 이유이기도 하다). "서브쿼리인가 아닌가"로 좁히면 두 판정
+        /// 모두 안전하게 같은 사본을 쓸 수 있다.
+        ///
+        /// CTE 본문은 <see cref="ExtractBalancedParenGroup"/>(Task 6 자산, 중첩
+        /// 괄호를 다루고 문자열·주석 안 괄호를 깊이에서 제외한다)로 정확히
+        /// 잘라낸다 - 두 번째 괄호 짝 맞추기 구현을 만들지 않는다. 호출부에서
+        /// 이미 블랭크 처리된 사본을 넘기므로, 주석·문자열 속 SUM이나 GROUP BY
+        /// 텍스트에 속지 않는다.
+        /// </summary>
+        private static HashSet<string> CollectSingleRowAggregateCteNames(string cleanedStatement)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var declarationPattern in CteDeclarationPatterns)
+            {
+                foreach (Match m in Regex.Matches(cleanedStatement, declarationPattern, RegexOptions.IgnoreCase))
+                {
+                    var openParenIndex = m.Index + m.Length - 1; // 매치가 '(' 로 끝난다.
+                    var body = ExtractBalancedParenGroup(cleanedStatement, openParenIndex);
+                    if (body == null) continue;
+
+                    var withoutSubqueries = BlankSubqueryParenGroups(body);
+                    var hasAggregate = Regex.IsMatch(
+                        withoutSubqueries, @"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", RegexOptions.IgnoreCase);
+                    var hasTopLevelGroupBy = Regex.IsMatch(
+                        withoutSubqueries, @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
+                    if (hasAggregate && !hasTopLevelGroupBy)
+                    {
+                        result.Add(m.Groups["n"].Value);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// text 안에서 서브쿼리인 최상위 괄호 그룹(내용을 트림했을 때 SELECT로
+        /// 시작하는 것)만 그 안쪽을 공백으로 지운 사본을 낸다. 괄호 문자
+        /// `(`/`)` 자체는 지우지 않는다. 함수 호출 괄호(`ISNULL(SUM(x),0)`의
+        /// `(SUM(x),0)`처럼 내용이 SELECT로 시작하지 않는 것)는 건드리지
+        /// 않는다.
+        ///
+        /// [감사 수정 라운드 4] "괄호 깊이"만으로 지우면(라운드 3의
+        /// BlankNestedParenGroups) `ISNULL(SUM(x),0)`의 `SUM(`도 깊이 1이라
+        /// 지워질 위험이 있다 - 그래서 라운드 3은 이 방식을 GROUP BY 판정에만
+        /// 쓰고 hasAggregate는 본문 전체에서 찾았는데, 그 비대칭이 새 미탐을
+        /// 냈다(`SELECT * FROM (그룹별 집계 서브쿼리) AS sub` 형태에서 안쪽
+        /// SUM이 전체 스캔에 걸려 통과용 CTE가 집계 CTE로 오분류됨). "괄호
+        /// 그룹이 서브쿼리인가"로 좁히면 함수 호출 괄호는 절대 지우지
+        /// 않으므로 hasAggregate·hasGroupBy 양쪽에 같은 사본을 안전하게
+        /// 쓸 수 있다.
+        ///
+        /// 입력은 이미 <see cref="BlankCommentsAndStrings"/>로 블랭크 처리된
+        /// 사본에서 뽑혔으므로, 괄호 그룹 시작의 주석은 이미 공백이다 -
+        /// TrimStart가 그 공백까지 걷어내고 첫 토큰을 본다.
+        ///
+        /// <see cref="ExtractBalancedParenGroup"/>(Task 6 자산)로 각 최상위
+        /// '('의 짝 ')'를 찾는다 - 새 괄호 짝 맞추기 구현을 만들지 않는다.
+        /// 짝이 안 맞는 '('은 방어적으로 건너뛴다.
+        /// </summary>
+        private static string BlankSubqueryParenGroups(string text)
+        {
+            var chars = text.ToCharArray();
+            var i = 0;
+            while (i < chars.Length)
+            {
+                if (chars[i] != '(')
+                {
+                    i++;
+                    continue;
+                }
+
+                var inner = ExtractBalancedParenGroup(text, i);
+                if (inner == null)
+                {
+                    i++;
+                    continue;
+                }
+
+                var innerStart = i + 1;
+                var innerEnd = innerStart + inner.Length; // ')' 의 인덱스.
+
+                if (Regex.IsMatch(inner.TrimStart(), @"^SELECT\b", RegexOptions.IgnoreCase))
+                {
+                    for (var j = innerStart; j < innerEnd; j++)
+                    {
+                        if (chars[j] != '\n') chars[j] = ' ';
+                    }
+                }
+
+                i = innerEnd + 1; // ')' 다음으로 건너뛴다 - 중첩은 이미 다 처리됐다.
+            }
+
+            return new string(chars);
+        }
+
+        private static readonly string[] CteDeclarationPatterns =
+        {
+            @"\bWITH\s+(?<n>\w+)\s+AS\s*\(",
+            @",\s*(?<n>\w+)\s+AS\s*\("
+        };
+
+        /// <summary>
+        /// SQL 주석(`--`, `/* */`)과 문자열 리터럴(`'...'`) 안의 내용을 공백으로 지운
+        /// 사본을 돌려준다. 개행은 그대로 남긴다. 원본과 길이·줄 구조가 같으므로,
+        /// 사본에서 찾은 Match의 Index/Length를 원본 문자열에 그대로 적용해 잘라낼 수
+        /// 있다 - <see cref="CheckShadowBackupContract"/>의 (c)가 EXEC() 몸체의 위치는
+        /// 사본에서 찾고 그 문자열 리터럴 내용은 원본에서 읽는 데 이 성질을 쓴다.
+        ///
+        /// 그림자 계약·반환 경로 검사가 "-- BEGIN TRAN은 안 쓴다", "-- RETURN @x;"
+        /// 같은 주석 텍스트나 문자열 값 안의 키워드를 실제 문(statement)으로 오인하지
+        /// 않도록, 위치 기반 정규식을 걸기 전에 먼저 이 사본에 대해 매치한다. 대괄호
+        /// 인용 식별자는 다루지 않는다 - 이 검사들이 찾는 키워드(BEGIN/COMMIT/
+        /// ROLLBACK/TRAN/THROW/RETURN)가 대괄호 인용 식별자 안에 올 동기가 없기
+        /// 때문이다(기존 세 스캐너의 대괄호 처리와 달리, 이 사본은 컬럼·상태값
+        /// 대조가 아니라 제어 흐름 키워드 대조용이다).
+        /// </summary>
+        private static string BlankCommentsAndStrings(string text)
+        {
+            var chars = text.ToCharArray();
+            var inString = false;
+            var i = 0;
+
+            while (i < chars.Length)
+            {
+                var ch = chars[i];
+
+                if (inString)
+                {
+                    if (ch == '\'')
+                    {
+                        if (i + 1 < chars.Length && chars[i + 1] == '\'')
+                        {
+                            chars[i] = ' ';
+                            chars[i + 1] = ' ';
+                            i += 2;
+                            continue;
+                        }
+
+                        inString = false;
+                        chars[i] = ' ';
+                        i++;
+                        continue;
+                    }
+
+                    if (ch != '\n') chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    for (var j = i; j < commentEnd.Value; j++)
+                    {
+                        if (chars[j] != '\n') chars[j] = ' ';
+                    }
+
+                    i = commentEnd.Value;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                    chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                i++;
+            }
+
+            return new string(chars);
         }
     }
 

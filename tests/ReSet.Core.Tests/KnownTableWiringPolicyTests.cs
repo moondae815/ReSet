@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace ReSet.Core.Tests;
@@ -67,5 +68,26 @@ class C
             offenders.Count == 0,
             "카탈로그 인자 없이 ValidateBatchStep을 호출한 곳: " +
             string.Join(", ", offenders.Select(o => $"{o.Line}행 {o.Expression}")));
+    }
+
+    // 규칙: _validator.ValidateBatchStep(...) 호출은 5번째 인자(원본 인터페이스)를
+    // 받아야 한다. 선택 인자라 빼도 컴파일되므로, 빠뜨린 경로에서만 파라미터
+    // 검사가 조용히 꺼진다 - 이 저장소가 카탈로그 인자에서 이미 겪은 실패 모드다.
+    [Fact]
+    public void Orchestrator_PassesTheStepInterfacesToEveryValidateBatchStepCall()
+    {
+        // 경로 해석은 위 테스트와 같은 RepoPaths.FindRepoRoot()를 쓴다 -
+        // KnownTableWiringPolicyScanner에는 저장소 루트를 찾는 공개 헬퍼가 없다.
+        var source = File.ReadAllText(Path.Combine(
+            RepoPaths.FindRepoRoot(), "src", "ReSet.Core", "Services", "VerificationPipelineOrchestrator.cs"));
+
+        var calls = Regex.Matches(source, @"_validator\.ValidateBatchStep\((?<args>[^;]*?)\)");
+        Assert.NotEmpty(calls);
+
+        foreach (Match call in calls)
+        {
+            var commas = call.Groups["args"].Value.Count(c => c == ',');
+            Assert.True(commas >= 4, $"5번째 인자가 없는 호출: {call.Value}");
+        }
     }
 }

@@ -3344,5 +3344,288 @@ END"
         /// 펜스 밖으로 본다 - 검사 대상이 된다.
         /// </summary>
         private static string RequiredHeadersMarkdown() => WrapSpec("내용");
+
+        // 감사 🔴(S16): CROSS JOIN 뒤 양변 SUM 비교는 각 변이 상대 건수배가 되어
+        // 정상 데이터에서 항상 불일치한다. 그 결과가 S17 공개 상시 차단으로 이어졌다.
+        [Fact]
+        public void ValidateConsolidated_RejectsACartesianAggregateComparison()
+        {
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(T.TXAMT),0)
+FROM dbo.TSettleMst AS M
+CROSS JOIN dbo.TSettleByTX AS T
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_AcceptsIndependentAggregatesComparedAsScalars()
+        {
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleMst WHERE YMD = @BatchYmd),
+     R AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleByTX WHERE YMD = @BatchYmd)
+SELECT L.S, R.S FROM L, R WHERE L.S <> R.S;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinKeywordInsideAComment()
+        {
+            // CROSS JOIN이라는 낱말이 주석 안에만 있고, 실제 질의는 INNER JOIN으로
+            // 두 원천을 건별로 맞춘 뒤 한 번만 집계한다 - 별칭이 둘이라는 표면
+            // 패턴은 있지만 카티전이 아니므로 데이터 품질 실패로 잡히면 안 된다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+-- 과거에는 여기서 CROSS JOIN 방식을 썼으나 지금은 INNER JOIN 방식으로 건별 대사한다.
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(T.TXAMT),0)
+FROM dbo.TSettleMst AS M
+INNER JOIN dbo.TSettleByTX AS T ON T.PLTID = M.PLTID
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossApply()
+        {
+            // CROSS APPLY는 CROSS JOIN이 아니다 - \bCROSS\s+JOIN\b이 이를 잡으면
+            // 정상적인 상관 서브쿼리 패턴이 오탐으로 걸린다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(A.TXAMT),0), ISNULL(SUM(B.TXAMT),0)
+FROM dbo.TSettleMst AS A
+CROSS APPLY (SELECT TOP 1 TXAMT FROM dbo.TSettleByTX WHERE PLTID = A.PLTID) AS B
+HAVING ISNULL(SUM(A.TXAMT),0) <> ISNULL(SUM(B.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagTheSameAliasSummedTwice()
+        {
+            // 같은 별칭에 걸린 SUM이 둘이면 Distinct로 별칭이 1개가 되어, 서로
+            // 다른 두 집계를 비교하는 카티전 패턴이 아니다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(M.FEE),0)
+FROM dbo.TSettleMst AS M
+CROSS JOIN dbo.TSettleByTX AS T
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(M.FEE),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinOfTwoIndependentlyAggregatedCtes()
+        {
+            // 감사 수정 라운드 1: L, R이 각자 한 행으로 집계된 CTE라면 이들의
+            // CROSS JOIN은 1×1이라 수학적으로 무해하다 - AiService.cs 규칙 2가
+            // 권장하는 "각자 CTE에서 집계한 뒤 비교" 패턴을 CROSS JOIN 문법으로 쓴
+            // 것뿐이다. 이것을 잡으면 이 검사가 막으려는 바로 그 증상(정상 실행이
+            // 데이터 품질 실패로 기록되어 공개가 상시 차단됨)을 이 검사가 일으킨다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(M.TXAMT),0) AS S FROM dbo.TSettleMst AS M WHERE M.YMD=@BatchYmd),
+     R AS (SELECT ISNULL(SUM(T.TXAMT),0) AS S FROM dbo.TSettleByTX AS T WHERE T.YMD=@BatchYmd)
+SELECT L.S, R.S FROM L CROSS JOIN R WHERE L.S <> R.S;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagAnUnrelatedCrossJoinInASeparateStatementInTheSameFence()
+        {
+            // 감사 수정 라운드 1: 한 ```sql 펜스 안에 무관한 질의 둘이 있다.
+            // A는 무해한 CROSS JOIN(별칭 SUM 비교가 없다)이고, B는 INNER JOIN으로
+            // 건별 대사한 뒤 별칭 둘에 SUM을 건다 - 카티전이 아니다. 블록 전체를
+            // 한 덩어리로 보면 A의 CROSS JOIN과 B의 별칭 SUM 둘이 우연히 합쳐져
+            // 오탐이 난다 - 문 단위로 잘라야 이 우연한 결합을 막을 수 있다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT COUNT(*) FROM dbo.TCodeType AS X CROSS JOIN dbo.TCodeStatus AS Y;
+
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(T.TXAMT),0)
+FROM dbo.TSettleMst AS M
+INNER JOIN dbo.TSettleByTX AS T ON T.PLTID = M.PLTID
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinKeywordInsideAStringLiteral()
+        {
+            // 동적 SQL을 만드는 문자열 리터럴 안에 'CROSS JOIN'이라는 텍스트가
+            // 있을 뿐이고 실제 질의는 CROSS JOIN을 쓰지 않는다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+DECLARE @msg NVARCHAR(100) = 'do not use CROSS JOIN here';
+WITH L AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleMst WHERE YMD = @BatchYmd),
+     R AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleByTX WHERE YMD = @BatchYmd)
+SELECT L.S, R.S FROM L, R WHERE L.S <> R.S;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsACrossJoinBetweenOneCteAndOneRawTable()
+        {
+            // 좁히기가 지나치면 안 된다 - 한쪽만 CTE(L)이고 다른 쪽은 원시
+            // 테이블(dbo.TSettleByTX)이면 1×1 보장이 없으므로 진짜 카티전일 수
+            // 있다. 두 CTE가 다 아는 이름일 때만 건너뛰어야 한다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleMst WHERE YMD = @BatchYmd)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(T.TXAMT),0)
+FROM L
+CROSS JOIN dbo.TSettleByTX AS T
+HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsPassThroughCtesCrossJoinedThenAggregatedOutside()
+        {
+            // 감사 수정 라운드 2: 라운드 1의 좁히기는 "이름이 CTE면 안전"이라고
+            // 가정했는데 그 가정이 틀렸다. L, R이 통과용(SELECT *)일 뿐 한 행으로
+            // 집계되지 않으면 CROSS JOIN은 여전히 진짜 카티전이고, 바깥에서
+            // 별칭별로 SUM을 걸면 원래 결함(S16/S17)과 같은 모양이 된다. CTE
+            // 이름만 보고 넘기면 이 재현을 놓친다 - 재리뷰가 직접 재현했다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT * FROM dbo.TSettleMst), R AS (SELECT * FROM dbo.TSettleByTX)
+SELECT ISNULL(SUM(L.TXAMT),0), ISNULL(SUM(R.TXAMT),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.TXAMT),0) <> ISNULL(SUM(R.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfGroupedCtes()
+        {
+            // GROUP BY가 있는 CTE는 그룹 수만큼 행을 낸다 - 한 행이 보장되지
+            // 않으므로 CROSS JOIN이 1×1이라는 근거가 없다. 넘기면 안 된다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID),
+     R AS (SELECT T.PLTID, SUM(T.TXAMT) AS S FROM dbo.TSettleByTX AS T GROUP BY T.PLTID)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.S),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfOneAggregateCteAndOnePassThroughCte()
+        {
+            // 한쪽(L)만 집계 CTE고 다른 쪽(R)은 통과용이면 R이 여러 행을 낼 수
+            // 있어 1×1 보장이 없다 - 양쪽이 다 집계 CTE일 때만 넘겨야 한다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(M.TXAMT),0) AS S FROM dbo.TSettleMst AS M WHERE M.YMD=@BatchYmd),
+     R AS (SELECT * FROM dbo.TSettleByTX)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.TXAMT),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinOfCtesWhoseGroupByIsOnlyInsideANestedSubquery()
+        {
+            // 감사 수정 라운드 3: 라운드 2는 CTE 본문 전체에서 GROUP BY를 찾았다.
+            // L의 본문은 "SELECT SUM(sub.S) FROM (그룹별 집계 서브쿼리) AS sub"
+            // 처럼 서브쿼리 안에서만 GROUP BY를 쓰고, 바깥은 그 서브쿼리 결과를
+            // 다시 SUM으로 합산한다 - 서브쿼리 자체는 여러 행을 내지만, 바깥의
+            // SUM이 그것을 다시 한 행으로 만든다. L 본문 "자신의" SELECT에는
+            // GROUP BY가 없으므로 L은 여전히 한 행이다. 재리뷰가 이 모양을
+            // 재현했다 - 라운드 1 BASE에서는 안 잡혔는데(정탐) 라운드 2에서
+            // 새로 잡히기 시작했다(오탐, 이번 라운드가 고칠 회귀).
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (
+    SELECT SUM(sub.S) AS S FROM (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID) AS sub
+),
+     R AS (SELECT ISNULL(SUM(T.TXAMT),0) AS S FROM dbo.TSettleByTX AS T WHERE T.YMD=@BatchYmd)
+SELECT ISNULL(L.S,0), ISNULL(R.S,0) FROM L CROSS JOIN R HAVING ISNULL(L.S,0) <> ISNULL(R.S,0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfAPassThroughCteWrappingAGroupedSubquery()
+        {
+            // 감사 수정 라운드 4: 라운드 3은 hasGroupBy만 depth 0으로 좁히고
+            // hasAggregate는 본문 전체 텍스트를 그대로 스캔했다. L의 자기
+            // SELECT는 통과용(SELECT *)인데, 안쪽 서브쿼리의 SUM(이 전체
+            // 스캔에 걸려 L이 "집계 있음, GROUP BY 없음"으로 오분류됐다 -
+            // 실제로는 서브쿼리가 PLTID별로 여러 행을 내고 L은 그것을 그대로
+            // 통과시키므로 여러 행이다. CROSS JOIN 뒤 바깥에서 SUM(L.S)로
+            // 재집계하면 S16 원 결함(그룹 수만큼 부풀려진 합계)을 그대로
+            // 재현한다. 재리뷰가 라운드 2(fd5daaf)는 이걸 정탐으로 잡았는데
+            // 라운드 3(af05381)이 미탐으로 되돌렸다고 재현했다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (
+    SELECT * FROM (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID) AS sub
+),
+     R AS (SELECT ISNULL(SUM(T.TXAMT),0) AS S FROM dbo.TSettleByTX AS T WHERE T.YMD=@BatchYmd)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.S),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            내용.
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            ```sql
+            {sql}
+            ```
+            """;
     }
 }

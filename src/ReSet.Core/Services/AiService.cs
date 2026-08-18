@@ -1135,6 +1135,48 @@ Based on the reference context above, reverse engineer the user defined function
         ///
         /// 보간 문자열이 아니다. 이 블록에는 치환할 값이 없고, 상수로 두어야
         /// SQL 예시의 중괄호를 이스케이프할 필요가 없다.
+        ///
+        /// 2026-08-18 수술 근거(감사 실측):
+        /// - 규칙 5: 구 문구가 `@pi_bypassPreCheck`라는 우회 파라미터 발명을
+        ///   명령했고, S02가 재시작 모드에서 그 값을 실행 컨텍스트 전체에 참으로
+        ///   고정해 지급 확정 원장의 -9 하드 스톱이 통째로 사라졌다(🔴). 재시작
+        ///   스킵을 오케스트레이터(`batch.BatchCheckpoint`)로 옮기고, 단계 인터페이스
+        ///   확장과 사전 검증 가드의 조건부 비활성화를 둘 다 금지한다.
+        /// - 규칙 4/11: 그림자 테이블을 기본값처럼 넓게 권하면서 생성 시점·복원
+        ///   범위·EXEC() 스코프를 말하지 않아, 트랜잭션 하나로 끝나는 단계에서도
+        ///   불필요한 그림자와 중복 DELETE가 나왔다. 마지막 수단으로 좁히고, 쓸 때는
+        ///   (a) BEGIN TRAN 앞 생성 (b) 같은 범위만 복원 (c) EXEC() 안 외부 변수
+        ///   참조 금지·sp_executesql 매개변수화 세 역학을 필수로 못박는다. 규칙 11은
+        ///   규칙 4에 흡수했으므로 짧게 남긴다.
+        /// - Few-Shot CATCH: `THROW;`로 끝나 규칙 6-1(상태 변수 반환)과 규칙 13
+        ///   (출력 파라미터 매핑)을 무력화했다 - 모델은 산문 규칙보다 코드 예시를
+        ///   따른다는 것이 실측 5건에서 재현됐다. 반환 경로로 바꾸고, 그림자 복원도
+        ///   실제로 캡처됐을 때만 수행하도록 규칙 4와 맞췄다.
+        /// - 규칙 2: 검증 SQL이 두 집계를 `CROSS JOIN`으로 비교하면 카티션 곱이
+        ///   각 변을 상대 변의 행수만큼 부풀려 정상 데이터에서도 검증이 실패하고
+        ///   기대/실제 금액이 그 배수만큼 과대 계상된다. 각 변을 독립 서브쿼리/CTE로
+        ///   집계한 뒤 스칼라 두 개를 비교하도록 못박는다.
+        ///
+        /// 2026-08-18 수술 후속 보강(코드 리뷰 Important 2건 원상 복구):
+        /// - 규칙 4 (d) 다중 테이블 커버리지: 위 수술이 "그림자 전략은 단계가
+        ///   수정하는 모든 대상 테이블을 커버해야 한다"는 옛 (a) 지시를 대체 없이
+        ///   지웠다. 계획서가 규칙 4를 다시 쓴 의도는 그림자를 마지막 수단으로
+        ///   좁히는 것이었지 이 지시를 버리는 것이 아니었으므로, 그림자를 쓰기로
+        ///   한 가지 안에 되살린다. 일부 테이블만 덮으면 복원이 반쪽짜리가 되어
+        ///   롤백을 아예 안 한 것보다 더 나쁜 불일치 상태를 만든다.
+        /// - 규칙 4 (e) 퍼지 정책: 같은 수술이 "저장 용량 전략과 퍼지 정책(예:
+        ///   24시간 후 자동 삭제)을 정의해야 한다"는 옛 (b) 지시도 대체 없이
+        ///   지웠다. 그림자 테이블은 batch_shadow 스키마에 계속 쌓이는 물리
+        ///   객체이므로, 수명·정리 지시 없이 두면 저장 공간을 영구히 잠식한다.
+        ///   같은 가지에 되살린다.
+        /// - 둘 다 "그림자를 쓰기로 한 경우"에만 적용됨을 문장 끝에 명시해,
+        ///   규칙 4의 새 기조(그림자는 마지막 수단)와 모순되지 않게 했다.
+        /// - Few-Shot의 "Shadow Table Swap Pattern" 예시에 `DECLARE`와
+        ///   `SET @v_shadowCaptured = 1`을 추가했다(코드 리뷰 Minor 원상 복구).
+        ///   CATCH 블록 예시가 이 변수를 선언 없이 참조하고 있었는데, 이는 이
+        ///   축이 정확히 잡으려는 결함(미선언 변수 참조)을 프롬프트 스스로
+        ///   가르치는 꼴이었다. 그림자를 실제로 캡처한 직후(벌크 INSERT 다음)에
+        ///   1로 세워, 두 Few-Shot 예시가 같은 변수를 일관되게 쓰도록 맞췄다.
         /// </summary>
         /// <summary>
         /// 배치 전용 객체의 스키마 규약. 본문 생성 세 경로와 목차 생성이 같은 문장을
@@ -1158,10 +1200,11 @@ Based on the reference context above, reverse engineer the user defined function
      * ALWAYS add a space between the 'subgraph' keyword, its ID, and the bracket label (e.g., `subgraph SP1 [""Label""]`). Do not write `subgraph SP1[""Label""]`. Do not use parentheses '()' or brackets '[]' in arrow labels (e.g., use `|OutState IN 1, 5|` instead of `|OutState IN (1,5)|`).
    - ## 단계별 이행 상세 및 의사코드: Design the classes/components, chunk paging pseudocode, locks/transaction controls, and error restartability/recovery strategies.
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
+     * NEVER compare two aggregates with `CROSS JOIN`. A cartesian product multiplies each side by the other side's row count, so the comparison fails on correct data and the recorded expected/actual amounts are inflated by that factor. Aggregate each side independently in its own subquery or CTE, then compare the two scalars.
 3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
-4. [Transaction Isolation & Shadow Table] When converting single bulk transactions into chunked commits, you MUST define an isolation/visibility strategy. NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Instead, use Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. If you propose Shadow tables or Before-Image capturing for rollback: (a) The Shadow strategy MUST cover ALL target tables modified by the step, (b) you MUST define the storage capacity strategy and a purge policy (e.g., auto-drop after 24 hours), and (c) you MUST explicitly provide Rollback/Restore pseudo-code that DELETEs the affected range FIRST and only then re-inserts from the Shadow table (e.g., `DELETE FROM Target WHERE BatchDate = @BatchDate;` followed by `INSERT INTO Target SELECT * FROM Shadow WHERE BatchDate = @BatchDate;`). Restoring without the preceding DELETE duplicates rows.
+4. [Transaction Isolation & Shadow Table] NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Use session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. Shadow tables are a LAST RESORT, not a default: if the step's work fits in a single transaction, use `ROLLBACK TRAN` alone and write NO shadow table and NO compensating DELETE in the CATCH block - the rollback has already restored those rows, so deleting them again in an auto-committed CATCH destroys data that was never lost. Only when the step commits in chunks or rebuilds an aggregate (so a rollback cannot restore it) may you use a shadow, and then all of the following mechanics are mandatory: (a) create the shadow BEFORE `BEGIN TRAN` - a `SELECT INTO` issued inside the transaction disappears with the rollback and the restore then fails on a missing object; (b) the restore MUST delete exactly the same range the step deleted - NEVER `DELETE FROM Target` without a `WHERE`, which discards rows belonging to other business dates; (c) NEVER reference an outer batch variable inside `EXEC()` - a dynamic batch is a separate scope and fails with an undeclared-variable error; pass values as `sp_executesql` parameters instead; (d) if the step modifies MULTIPLE target tables, the shadow strategy MUST cover ALL of them - restoring only some of the tables leaves the step half-rolled-back, a worse inconsistency than no restore at all; (e) define the shadow table's storage lifetime and purge policy (for example, auto-drop it after 24 hours) so it does not permanently consume storage. Mechanics (d) and (e) apply only to steps that actually use a shadow - a step that stays on the single-transaction `ROLLBACK TRAN` default above needs neither.
 4-1. " + BatchObjectSchemaRule + @"
-5. [Idempotency & Restartability] You MUST design a Checkpoint-based Step Skip logic. If the batch fails at Step 06 and restarts, previous steps (like Step 01) that were already completed MUST NOT abort the entire batch with pre-validation errors (e.g., -9 error). Provide a `@pi_bypassPreCheck` parameter or explicit skip logic in your pseudocode so that completed steps are safely skipped upon restart.
+5. [Idempotency & Restartability] Restart skipping happens OUTSIDE the step. The orchestrator reads `batch.BatchCheckpoint` and simply does not call a step whose checkpoint is already `Succeeded`. Therefore a step MUST NOT add an input parameter for restart, skipping, or bypassing - its interface is exactly the parameter list given in the `[Original Procedure Interface]` table. The original pre-validation guards (for example a `-9` abort when a settled ledger row exists) MUST run unconditionally on every call; NEVER place them inside a conditional a caller can switch off. A step that is called is a step that does its full work, guards included.
 6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
 6-1. [Precise Error Tracking] If the original SP lacked `@@ERROR` checking, you MUST resolve it using `TRY...CATCH` and `XACT_ABORT ON`. However, DO NOT just return a generic `-1` in the `CATCH` block. You MUST declare a state variable at the top (e.g., `DECLARE @v_currentStepId INT = 0;`), update it before each DML with the exact original error code (e.g., `SET @v_currentStepId = -101;`), and return that variable in the CATCH block to preserve the exact point of failure. Use structured `TRY...CATCH` exclusively for error handling; NEVER use legacy `GOTO`-based error branching.
 7. [Anti-Shortcut for Business Logic] You MUST NOT simplify queries that use UNION, UNION ALL, or complex JOINs across multiple tables. Preserve all source tables and aggregation formulas in the pseudocode and descriptions.
@@ -1170,7 +1213,7 @@ Based on the reference context above, reverse engineer the user defined function
 8-1. [Chunk Transaction Boundary] Every iteration of a chunking `WHILE` loop MUST open and close its own explicit `BEGIN TRAN` / `COMMIT TRAN` boundary so that each chunk commits independently and a mid-run failure leaves earlier chunks durably committed. Do NOT wrap the entire loop in a single outer transaction.
 9. [Error Codes] You MUST strictly reuse the EXACT original error codes from the source SPs. DO NOT remap or invent new error codes (e.g., changing -1 to -11). DO NOT use continuous ranges (e.g., `-1~-23`).
 10. [NOLOCK Prohibition] Since SNAPSHOT isolation is used, you MUST explicitly remove all `WITH (NOLOCK)` or `NOLOCK` hints from the generated pseudocode. `NOLOCK` forces READ UNCOMMITTED and completely violates the SNAPSHOT isolation policy.
-11. [INSERT-only Rollback] For INSERT-only steps, do not use a Shadow table for rollback. Instead, rely solely on `ROLLBACK TRAN` for single transactions, or provide an explicit `DELETE WHERE [ChunkKey]` compensation logic. Do NOT perform `DELETE` immediately after `ROLLBACK TRAN` inside a CATCH block for a single transaction as it is redundant.
+11. [INSERT-only Rollback] For INSERT-only steps, rely on `ROLLBACK TRAN` for single transactions or an explicit `DELETE WHERE [ChunkKey]` compensation for chunked ones. See rule 4 - no shadow table.
 12. [Chunk Key Validation] You MUST CROSS-CHECK the provided DDL/Schema for the target table before writing the chunking key. Ensure the key column (e.g., `CLIENTID`) actually exists. If it doesn't exist, use an alternative primary key or composite hash (e.g., `PGNAME+MALLID`) that strictly exists in the target schema.
 13. [Output Parameters Interface] All output parameters (e.g., `@po_strErrMsg`, `@po_intRetVal`) from the original procedures MUST be accurately mapped in the unified batch context interface and error code tables. Do not omit them.
 14. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.
@@ -1179,6 +1222,9 @@ Based on the reference context above, reverse engineer the user defined function
 [Few-Shot Examples for Modernization Patterns]
 * Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
 ```sql
+-- DECLARE the capture flag the CATCH block below will check. Default to 0 (not captured)
+-- so an early failure - before the shadow actually exists - correctly skips the restore.
+DECLARE @v_shadowCaptured BIT = 0;
 -- Create Shadow Table. Name pattern: batch_shadow.<Table>_RunId_<StepCode>, where the
 -- literal token _RunId_ is a placeholder substituted with the actual run identifier at
 -- execution time. Write that token verbatim - do NOT bake a sample identifier into the name.
@@ -1186,6 +1232,9 @@ SELECT * INTO batch_shadow.TargetTable_RunId_S13 FROM dbo.TargetTable WHERE 1=0;
 -- Bulk Insert into Shadow
 INSERT INTO batch_shadow.TargetTable_RunId_S13 (Col1, Col2)
 SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+-- Only now has the shadow actually been captured - flip the flag so the CATCH block knows
+-- a restore is possible.
+SET @v_shadowCaptured = 1;
 -- Single Transaction Swap
 BEGIN TRAN;
   DELETE FROM dbo.TargetTable; -- Original target data purge
@@ -1214,10 +1263,16 @@ END
 ```sql
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;
-    -- MUST DELETE target data for the chunk range or specific YMD BEFORE inserting from shadow to avoid duplicates!
-    DELETE FROM dbo.TargetTable WHERE BatchDate = @BatchDate;
-    INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13 WHERE BatchDate = @BatchDate;
-    THROW;
+    -- Restore only when a shadow was actually captured (rule 4). Delete the SAME range first.
+    IF @v_shadowCaptured = 1
+    BEGIN
+        DELETE FROM dbo.TargetTable WHERE BatchDate = @BatchDate;
+        INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13 WHERE BatchDate = @BatchDate;
+    END
+    -- Return the tracked code. Do NOT `THROW` here: it unwinds past the caller's
+    -- OUTPUT parameter assignment and the original return code is lost (rules 6-1 and 13).
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
 END CATCH
 ```
 
@@ -2831,7 +2886,10 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            AppendSharedStepContext(userPrompt, steps, string.Empty, specs, targetLanguage, jobName);
+            // 골격은 단계 본문을 쓰지 않으므로 원본 인터페이스 재료가 필요 없다. 넣으면
+            // 골격 프롬프트만 값이 바뀌어 단계 호출과의 공유 접두사가 어긋난다.
+            AppendSharedStepContext(
+                userPrompt, steps, string.Empty, specs, Array.Empty<StepInterface>(), targetLanguage, jobName);
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
@@ -2869,6 +2927,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             IReadOnlyList<BatchStepPlan> allSteps,
             string sharedConventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
+            IReadOnlyList<StepInterface> stepInterfaces,
             string targetLanguage,
             string jobName,
             string? effort = null,
@@ -2889,7 +2948,8 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            AppendSharedStepContext(userPrompt, allSteps, sharedConventions, specs, targetLanguage, jobName);
+            AppendSharedStepContext(
+                userPrompt, allSteps, sharedConventions, specs, stepInterfaces, targetLanguage, jobName);
 
             // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
             // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
@@ -2940,6 +3000,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             IReadOnlyList<BatchStepPlan> allSteps,
             string sharedConventions,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
+            IReadOnlyList<StepInterface> stepInterfaces,
             string targetLanguage,
             string jobName)
         {
@@ -2979,6 +3040,34 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine("[Shared Conventions Already Written In The Document]");
                 builder.AppendLine(sharedConventions);
                 builder.AppendLine();
+            }
+
+            // 제어 계약 표는 고정 자산이라 재료 유무와 무관하게 항상 싣는다. 단계별
+            // 어휘가 갈리면(StepStatus vs ExecutionStatus, Succeeded vs Completed) 하나의
+            // DDL이 모든 단계를 만족시키지 못해 재시작이 매 실행 막힌다.
+            builder.AppendLine();
+            builder.AppendLine("[Batch Control Table Contract]");
+            builder.AppendLine("These four tables are FIXED. Use exactly these column names and status values.");
+            builder.AppendLine("Do NOT invent alternatives such as ExecutionStatus, StepState, CompletionStatus,");
+            builder.AppendLine("BatchJobName, StartedAt, or DetailMessage. NEVER use the status value 'Completed' -");
+            builder.AppendLine("success is 'Succeeded' everywhere. If two steps spell one logical table differently,");
+            builder.AppendLine("no single DDL satisfies both and restart is blocked on every run.");
+            builder.AppendLine();
+            builder.Append(BatchControlContract.RenderPromptTable());
+
+            // 재료가 비면 절 자체를 넣지 않는다. 빈 표를 실으면 모델이 "원본 파라미터가
+            // 없다"로 읽어 있지도 않은 근거로 파라미터를 새로 지어낼 수 있다.
+            var interfaceTable = StepInterfaceFacts.RenderPromptTable(stepInterfaces);
+            if (interfaceTable.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("[Original Procedure Interface]");
+                builder.AppendLine("The parameter list below is EXHAUSTIVE for each step. You MUST NOT add an input");
+                builder.AppendLine("parameter that is not listed - not for restart, not for skipping, not for");
+                builder.AppendLine("bypassing a guard. Steps whose code is absent from this table have no legacy");
+                builder.AppendLine("origin, so design their interface from the plan structure instead.");
+                builder.AppendLine();
+                builder.Append(interfaceTable);
             }
         }
 

@@ -1706,6 +1706,12 @@ namespace ReSet.Core.Services
                     jobName);
             }
 
+            // 원본 인터페이스 재료. knownTableNames와 같은 자리에서 만드는 이유는
+            // 둘 다 definitions에서 오고 같은 경로로 단계 검증까지 흘러가기 때문이다.
+            // 단계 목록은 여기서 아직 없으므로 프로시저별 사전까지만 만들고,
+            // 단계별 조립은 steps를 가진 GenerateBySplitAsync가 한다.
+            var parametersByProcedure = StepInterfaceFacts.CollectParameters(definitions);
+
             // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
             // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
             // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
@@ -1871,7 +1877,7 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, knownTableNames, cancellationToken);
+                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, cancellationToken);
 
                             if (split != null)
                             {
@@ -2316,6 +2322,7 @@ namespace ReSet.Core.Services
                             violationsForRegeneration,
                             reuseSkeleton ? stepsToRegenerate : new List<string>(),
                             knownTableNames,
+                            parametersByProcedure,
                             cancellationToken);
 
                         if (split != null)
@@ -2963,6 +2970,7 @@ namespace ReSet.Core.Services
             Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             IReadOnlyList<string> knownTableNames,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> parametersByProcedure,
             CancellationToken cancellationToken)
         {
             var targeted = previousSkeleton != null && previousSkeletonResult != null &&
@@ -3004,6 +3012,9 @@ namespace ReSet.Core.Services
             }
 
             var conventions = BatchPlanAssembler.ExtractSharedConventions(skeleton);
+            // steps가 여기서 처음 확정되므로 단계별 인터페이스도 여기서 만든다.
+            // 재시도 루프 밖이다 - 단계마다 뽑아도 결과가 같다.
+            var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure);
             var sections = previousSections != null
                 ? new Dictionary<string, string>(previousSections)
                 : new Dictionary<string, string>();
@@ -3047,7 +3058,7 @@ namespace ReSet.Core.Services
 
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
-                        knownTableNames, cancellationToken);
+                        knownTableNames, stepInterfaces, cancellationToken);
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -3127,6 +3138,7 @@ namespace ReSet.Core.Services
             string targetLanguage,
             string jobName,
             IReadOnlyList<string> knownTableNames,
+            IReadOnlyList<StepInterface> stepInterfaces,
             CancellationToken cancellationToken)
         {
             const int maxTries = 2;   // 최초 1회 + 재시도 1회
@@ -3159,8 +3171,10 @@ namespace ReSet.Core.Services
                 string? content = null;
                 try
                 {
+                    // 원본 인터페이스 표. GenerateBySplitAsync가 steps 확정 시점에
+                    // StepInterfaceFacts.Build로 한 번 만들어 여기까지 그대로 넘긴다.
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
-                        step, steps, conventions, specs, targetLanguage, jobName,
+                        step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
                         _consolidatorEffort, floorFeedback, cancellationToken);
                     content = result?.Content;
                 }
@@ -3179,7 +3193,8 @@ namespace ReSet.Core.Services
 
                 adopted = content;
 
-                var stepResult = _validator.ValidateBatchStep(content, step, knownTableNames, conditionColumns);
+                var stepResult = _validator.ValidateBatchStep(
+                    content, step, knownTableNames, conditionColumns, stepInterfaces);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

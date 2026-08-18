@@ -1251,5 +1251,178 @@ END"
             Assert.Contains("| UPDATE 2 | 6 | Id | IN | 2 | 1, 2 |", body);
             Assert.Contains("| UPDATE 3 | 6 | Id | IN | 3 | 3, 4, 5 |", body);
         }
+
+        private static BatchStepPlan ProbeStep(string code) => new(
+            Code: code,
+            Name: $"{code} 단계",
+            LegacyProcedures: Array.Empty<string>(),
+            TargetTables: Array.Empty<string>(),
+            ErrorCodes: Array.Empty<string>(),
+            Chunkable: false,
+            SchemaTables: Array.Empty<string>());
+
+        private static readonly List<(string FileName, string Content)> ProbeSpecs =
+            new() { ("Spec.md", "# 명세서") };
+
+        // 설계 §4. 어느 단계를 만들든 공유 접두사는 바이트 동일해야 한다.
+        // 달라지면 프롬프트 캐시가 전부 미스가 되어 입력 토큰이 18배가 되는데
+        // 산출물은 그대로라 코드만 봐서는 알 수 없다.
+        [Fact]
+        public async Task GenerateBatchStepSection_SharedPrefixIsIdenticalAcrossSteps()
+        {
+            var steps = new[] { ProbeStep("S05"), ProbeStep("S08") };
+            var interfaces = new[]
+            {
+                new StepInterface("S05", new[] { "dbo.A" }, new[] { "@pi_strYMD varchar(8)" })
+            };
+
+            var first = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+            var second = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[1], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+
+            const string marker = "Now write the section";
+            // CS8602 경고 회피. UserPrompt는 널 가능 타입이지만 이 호출 경로는
+            // 항상 채운다 - 다른 테스트(AiServiceTests.cs)가 쓰는 것과 같은 관용이다.
+            Assert.NotNull(first.UserPrompt);
+            Assert.NotNull(second.UserPrompt);
+            var firstUserPrompt = first.UserPrompt!;
+            var secondUserPrompt = second.UserPrompt!;
+            Assert.Equal(
+                firstUserPrompt.Substring(0, firstUserPrompt.IndexOf(marker, StringComparison.Ordinal)),
+                secondUserPrompt.Substring(0, secondUserPrompt.IndexOf(marker, StringComparison.Ordinal)));
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSection_CarriesTheControlContractTable()
+        {
+            var steps = new[] { ProbeStep("S05") };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+
+            Assert.Contains("batch.BatchStepJournal", result.UserPrompt);
+            Assert.Contains("StepStatus", result.UserPrompt);
+            Assert.Contains("Succeeded", result.UserPrompt);
+            Assert.Contains("Do NOT invent alternatives", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSection_CarriesTheStepInterfaceTable()
+        {
+            var steps = new[] { ProbeStep("S05") };
+            var interfaces = new[]
+            {
+                new StepInterface("S05", new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                    new[] { "@pi_strYMD varchar(8)", "@po_intRetVal int OUTPUT" })
+            };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs, interfaces, "C#", "Job");
+
+            Assert.Contains("@po_intRetVal int OUTPUT", result.UserPrompt);
+            Assert.Contains("MUST NOT add", result.UserPrompt);
+        }
+
+        // 재료가 없으면 표 절 자체를 넣지 않는다. 빈 표를 넣으면 모델이
+        // "원본 파라미터가 없다"로 읽는다.
+        [Fact]
+        public async Task GenerateBatchStepSection_OmitsTheInterfaceSectionWhenThereIsNoMaterial()
+        {
+            var steps = new[] { ProbeStep("S05") };
+
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+
+            Assert.DoesNotContain("[Original Procedure Interface]", result.UserPrompt);
+        }
+
+        private static async Task<string> StepSystemPromptAsync()
+        {
+            var steps = new[] { ProbeStep("S05") };
+            var result = await CreateProbe().Service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "conventions", ProbeSpecs,
+                Array.Empty<StepInterface>(), "C#", "Job");
+            // CS8603 경고 회피. SystemPrompt는 널 가능 타입이지만 이 호출 경로는
+            // 항상 채운다 - 위 GenerateBatchStepSection_* 테스트가 쓰는 것과 같은 관용이다.
+            Assert.NotNull(result.SystemPrompt);
+            return result.SystemPrompt!;
+        }
+
+        // 규칙 5가 @pi_bypassPreCheck를 발명해 명령했고, S02가 재시작 모드에서
+        // 실행 컨텍스트 전체에 그 값을 참으로 고정해 지급 확정 원장의 -9 하드
+        // 스톱이 통째로 사라졌다(감사 🔴).
+        [Fact]
+        public async Task ConsolidatedPlanRules_DoNotInventABypassParameter()
+        {
+            Assert.DoesNotContain("@pi_bypassPreCheck", await StepSystemPromptAsync());
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_MoveRestartSkipOutsideTheStep()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            Assert.Contains("orchestrator", rules, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("MUST NOT add an input parameter", rules);
+            Assert.Contains("unconditionally", rules);
+        }
+
+        // Few-Shot의 CATCH가 THROW로 끝나 규칙 6-1(상태 변수를 반환하라)과
+        // 규칙 13(출력 파라미터를 누락 없이 매핑하라)을 무력화했다. 모델은
+        // 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotCatchReturnsInsteadOfRethrowing()
+        {
+            var rules = await StepSystemPromptAsync();
+            var open = rules.IndexOf("BEGIN CATCH", StringComparison.Ordinal);
+            var close = rules.IndexOf("END CATCH", open, StringComparison.Ordinal);
+            var catchBlock = rules[open..close];
+
+            Assert.DoesNotContain("THROW;", catchBlock);
+            Assert.Contains("RETURN", catchBlock);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_MakeShadowALastResortWithThreeMechanics()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            Assert.Contains("LAST RESORT", rules);
+            Assert.Contains("BEFORE `BEGIN TRAN`", rules);
+            Assert.Contains("same range", rules);
+            Assert.Contains("sp_executesql", rules);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ForbidCrossJoinInReconciliationSql()
+        {
+            Assert.Contains(
+                "NEVER compare two aggregates with `CROSS JOIN`", await StepSystemPromptAsync());
+        }
+
+        // 규칙 4 수술(2026-08-18)이 옛 (a)(다중 테이블 커버리지)와 (b)(퍼지 정책)를
+        // 판정 트리로 바꾸며 대체 없이 지웠다(코드 리뷰 Important). 계획서가 규칙 4를
+        // 다시 쓴 의도는 그림자를 마지막 수단으로 좁히는 것이었지 이 둘을 버리는
+        // 것이 아니었으므로, 그림자를 쓰기로 한 가지 안에 되살린다. 일부 테이블만
+        // 덮으면 복원이 반쪽짜리가 되어 롤백 안 한 것보다 더 나쁜 불일치 상태를
+        // 만든다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ShadowMustCoverAllModifiedTargetTables()
+        {
+            Assert.Contains(
+                "the shadow strategy MUST cover ALL", await StepSystemPromptAsync());
+        }
+
+        // 그림자 테이블은 배치 전용 스키마에 계속 쌓이는 물리 객체다. 퍼지 정책
+        // 없이 두면 저장 공간을 영구히 잠식한다(코드 리뷰 Important). 그림자를
+        // 쓰기로 한 가지 안에 수명·정리 지시를 되살린다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ShadowMustDefineAPurgePolicy()
+        {
+            Assert.Contains("purge policy", await StepSystemPromptAsync());
+        }
     }
 }
