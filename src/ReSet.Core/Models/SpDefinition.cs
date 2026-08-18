@@ -32,6 +32,17 @@ namespace ReSet.Core.Models
         public int StatementOrdinal { get; set; }
 
         /// <summary>
+        /// 이 SP 안에서 대상 테이블과 무관하게 몇 번째 UPDATE 문장인가. 1부터 센다.
+        ///
+        /// StatementOrdinal은 <b>대상 테이블별</b> 채번이라 같은 SP 안에서 리셋된다 -
+        /// 대상 표기가 "TSettleMst"와 "dbo.TSettleMst"로 갈리면 카운터도 갈린다.
+        /// 2026-08-18 축 A 감사 실측(EXPECT_PROC): 라인 182와 245가 둘 다 "문장 1"이
+        /// 되는데 같은 문서의 본문은 그것들을 "갱신 8"·"갱신 11"로 세어, 절 제목으로
+        /// 문장을 지목하면 다른 UPDATE가 열렸다. 명세서 절 제목은 이 값을 쓴다.
+        /// </summary>
+        public int GlobalStatementOrdinal { get; set; }
+
+        /// <summary>
         /// 원본 DDL에서 이 UPDATE 문장이 시작하는 줄 번호(1부터). 파싱 실패 시 0.
         ///
         /// StatementOrdinal이 앵커로 못 쓰이기 때문에 있다 - 채번이 대상 테이블별이고

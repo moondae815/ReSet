@@ -180,7 +180,10 @@ END",
             // 그렇지 않으면 아래 프롬프트 단언이 "재료가 애초에 없어서" 통과하는
             // 거짓 양성이 될 수 있다.
             var facts = DmlScopeExtractor.Extract(functionDef.DdlText, string.Empty);
-            Assert.Equal(2, facts.Count);
+            // INSERT도 표에 실린다(2026-08-18 감사 대응). VALUES 원천이라 술어는 비지만
+            // 문장 자체는 라인 앵커를 남겨야 한다.
+            Assert.Equal(3, facts.Count);
+            Assert.Contains(facts, f => f.Operation == "INSERT");
             Assert.Contains(facts, f => f.Operation == "UPDATE");
             Assert.Contains(facts, f => f.Operation == "DELETE");
 

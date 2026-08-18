@@ -252,6 +252,23 @@
 
   출처: 2026-08-17 14개 SP 전수 재생성 실측
 
+### 축 A 재감사 잔여 (2026-08-18)
+
+- [ ] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** — 🟠, 직전
+      감사에서도 났고 이번에도 잔존. `object_definition.sql:39`의 인라인 리터럴 9개
+      (`PLCard`·`SamSungPay`·`SSGPayCard`·`KakaoPay`·`KakaoCard`·`impaymobile`·
+      `NaverCard`·`ApplePay`·`TossCardAuth`)를 한 번도 열거하지 않고 "원천 사용 PG
+      제외"로만 적는데, 같은 문서 `Spec.md:82`가 "원천 PG 목록"을 5개짜리 변수
+      `@v_PLCardSettlePeriodPG`로 정의해 두어 5개로 읽힌다. 갱신 1은 그 변수를 쓰지
+      않는다. 이행하면 4개 PG가 자동회수 대상에 잘못 편입된다
+- [ ] **UPDATE 매핑 표 밖의 대상 한정 리터럴이 재료로 실리지 않는다** — 위 항목의
+      일반형. `COMM_UPD` 문장 2의 `ABROADCHK = 1` 및 6개 PG 화이트리스트도 같은
+      이유로 명세서에서 사라졌다(🟠). WHERE 최상위의 **값**은 DML 범위 표가 담지
+      않는다(컬럼 이름만 담는다). 값까지 담으면 노이즈라는 판단이 있었으나, 대상
+      집합을 정하는 `IN` 리터럴 목록은 예외로 다룰 근거가 두 SP에서 나왔다
+
+  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
+
 ### 정적 분석
 
 - [ ] **`DependencyInfo.Type` 타입화** — `DependencyInfo.cs:12`가 여전히 `string`.

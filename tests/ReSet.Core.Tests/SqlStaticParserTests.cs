@@ -1220,5 +1220,30 @@ END";
 
             Assert.Contains("SETTLE_CARD_DB.dbo.UF_GET_COMM4PG", result.ThreePartObjectReferences);
         }
+
+        [Fact]
+        public void Analyze_UpdatesOnDifferentlyQualifiedTargets_ShouldStillNumberGlobally()
+        {
+            // 2026-08-18 축 A 감사 실측(EXPECT_PROC). StatementOrdinal은 대상 테이블별
+            // 채번이라 같은 테이블을 "T"와 "dbo.T"로 적으면 카운터가 갈려 "문장 1"이
+            // 두 번 나온다. 명세서 절 제목이 그 값을 쓰는 바람에 본문의 "갱신 8"을
+            // 찾아 절 제목 "문장 8"을 열면 다른 UPDATE가 나왔다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE T SET C = 1 WHERE Id = 1
+    UPDATE dbo.T SET C = 2 WHERE Id = 2
+    UPDATE T SET C = 3 WHERE Id = 3
+END";
+
+            var result = new SqlStaticParser().Analyze(ddl);
+
+            Assert.Equal(3, result.AstUpdateMappings.Count);
+            // 전역 서수는 소스 순서 그대로 1,2,3이어야 한다 - 리셋되지 않는다.
+            Assert.Equal(new[] { 1, 2, 3 }, result.AstUpdateMappings.Select(m => m.GlobalStatementOrdinal).ToArray());
+            // 대비: 테이블별 서수는 실제로 리셋된다(이 테스트가 막으려는 그 성질).
+            Assert.Contains(result.AstUpdateMappings, m => m.StatementOrdinal == 1 && m.SourceLine > 5);
+        }
     }
 }

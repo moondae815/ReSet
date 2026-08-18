@@ -279,5 +279,76 @@ END";
             Assert.Contains("TID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
             Assert.Contains("CID", fact.PredicateColumns, StringComparer.OrdinalIgnoreCase);
         }
+
+        [Fact]
+        public void Extract_InsertSelect_ShouldRecordSourceWherePredicates()
+        {
+            // 2026-08-18 축 A 감사 실측. 표 이름이 "DML 범위(기계 확정 — 수정 금지)"인데
+            // UPDATE/DELETE만 담던 동안 INSERT를 가진 SP 8개가 전부 걸렸다.
+            // UP_UTIL_STAT_PGCOLLECT_INS는 삭제 전용처럼 보였고,
+            // UP_Util_PG_Client_CMRate_Ins는 INSERT 5문이 라인 앵커가 붙은 유일한
+            // 표에서 통째로 빠져 추적 근거를 잃었다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    DELETE FROM dbo.T WHERE YMD = @pi_strYMD
+
+    INSERT INTO dbo.T (YMD, Amt)
+    SELECT A.YMD, A.Amt
+    FROM   dbo.S A JOIN dbo.U B ON A.PLTID = B.PLTID
+    WHERE  A.YMD = @pi_strYMD AND A.UseState = 1
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var insert = Assert.Single(facts, f => f.Operation == "INSERT");
+            Assert.Contains("YMD", insert.PredicateColumns);
+            Assert.Contains("UseState", insert.PredicateColumns);
+            Assert.True(insert.DateParameterApplied);
+            Assert.Contains("PLTID", insert.JoinKeys);
+            Assert.Contains(facts, f => f.Operation == "DELETE");
+        }
+
+        [Fact]
+        public void Extract_InsertValues_ShouldRecordStatementWithoutPredicates()
+        {
+            // VALUES 원천은 조건이 없다 - 술어가 비고 기준일이 false인 것이 사실이다.
+            // 그래도 문장 자체는 표에 실려야 라인 앵커가 남는다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.T (YMD, Amt) VALUES (@pi_strYMD, 0)
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal("INSERT", fact.Operation);
+            Assert.Empty(fact.PredicateColumns);
+            Assert.False(fact.DateParameterApplied);
+        }
+
+        [Fact]
+        public void Extract_InsertFromUnionAllSource_ShouldMergeBranchPredicates()
+        {
+            // UP_UTIL_SETTLE_SUMMARY_EXTRA 형태. 갈래마다 WHERE가 다르므로 전부 합친다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.T (YMD, Amt)
+    SELECT YMD, Amt FROM dbo.S WHERE YMD = @pi_strYMD
+    UNION ALL
+    SELECT YMD, Amt FROM dbo.U WHERE ReqYMD = '20260101' AND UseState = 0
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Contains("YMD", fact.PredicateColumns);
+            Assert.Contains("ReqYMD", fact.PredicateColumns);
+            Assert.Contains("UseState", fact.PredicateColumns);
+            Assert.True(fact.DateParameterApplied);
+        }
     }
 }

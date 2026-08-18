@@ -7,10 +7,12 @@ using Serilog;
 
 namespace ReSet.Core.Services
 {
-    /// <param name="Operation">"UPDATE" 또는 "DELETE".</param>
+    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
     /// <param name="Line">원본 DDL에서의 줄 번호(1부터) - 해당 문장 자체의 시작 줄이다.</param>
     /// <param name="Target">갱신·삭제 대상의 원문 표기 (파서가 정규화하지 않은 소스 그대로).</param>
-    /// <param name="PredicateColumns">WHERE 최상위가 거르는 컬럼 이름.</param>
+    /// <param name="PredicateColumns">
+    /// WHERE 최상위가 거르는 컬럼 이름. INSERT는 원천 SELECT의 최상위 WHERE를 본다.
+    /// </param>
     /// <param name="DateParameterApplied">
     /// 기준일 파라미터가 <b>대상 범위에</b> 적용되는가. 서브쿼리 안에만 있으면 false다.
     /// 이 칸 하나가 A1 결함 넷 중 셋을 드러낸다.
@@ -89,6 +91,89 @@ namespace ReSet.Core.Services
 
             public override void Visit(DeleteSpecification node) =>
                 Record("DELETE", node, node.Target, node.WhereClause, node.FromClause);
+
+            /// <summary>
+            /// INSERT도 담는다.
+            ///
+            /// [왜 담아야 하는가] 표의 이름은 "DML 범위"이고 "기계 확정 — 수정 금지"라
+            /// 못 박혀 있다. 그런데 UPDATE/DELETE만 담던 동안 INSERT를 가진 SP 8개가
+            /// 2026-08-18 축 A 감사에서 전부 걸렸다. UP_UTIL_STAT_PGCOLLECT_INS는
+            /// 삭제 전용 SP처럼 보였고, UP_Util_PG_Client_CMRate_Ins는 INSERT 5문이
+            /// <b>라인 앵커가 붙은 유일한 표</b>에서 통째로 빠져 추적 근거를 잃었으며,
+            /// UP_UTIL_SETTLE_SUMMARY_EXTRA는 같은 문서의 상태코드 표가 "8개 DML 단계"
+            /// 라고 적어 문서 내부 모순까지 났다.
+            ///
+            /// [열 의미는 그대로다] 이 표의 열은 "무엇이 대상 범위를 정하는가"를 묻는다.
+            /// INSERT ... SELECT에서 그 답은 원천 SELECT의 최상위 WHERE다 - 어느 행이
+            /// 실리는지를 그것이 정한다. INSERT ... VALUES는 조건이 없으므로 술어가
+            /// 비고 기준일도 false다(그것이 사실이다 - 무조건 한 행이 실린다).
+            /// UNION으로 묶인 원천은 갈래마다 WHERE가 다르므로 전부 합쳐 담는다.
+            /// </summary>
+            public override void Visit(InsertSpecification node)
+            {
+                var predicateColumns = new List<string>();
+                var joinKeys = new List<string>();
+                var dateApplied = false;
+
+                foreach (var spec in SourceQuerySpecifications(node.InsertSource))
+                {
+                    if (spec.WhereClause?.SearchCondition != null)
+                    {
+                        var top = new TopLevelPredicateCollector();
+                        spec.WhereClause.SearchCondition.Accept(top);
+                        foreach (var c in top.Columns)
+                        {
+                            if (!predicateColumns.Contains(c, StringComparer.OrdinalIgnoreCase)) predicateColumns.Add(c);
+                        }
+                        foreach (var k in top.JoinKeys)
+                        {
+                            if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
+                        }
+                        dateApplied |= _dateParameter.Length > 0
+                            && top.Parameters.Contains(_dateParameter, StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    if (spec.FromClause != null)
+                    {
+                        var joins = new JoinConditionCollector();
+                        spec.FromClause.Accept(joins);
+                        foreach (var k in joins.Columns)
+                        {
+                            if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
+                        }
+                    }
+                }
+
+                Facts.Add(new DmlScopeFact(
+                    "INSERT", node.StartLine, TextOf(node.Target),
+                    predicateColumns, dateApplied, joinKeys));
+            }
+
+            /// <summary>
+            /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
+            /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
+            /// </summary>
+            private static IEnumerable<QuerySpecification> SourceQuerySpecifications(InsertSource? source) =>
+                source is SelectInsertSource select
+                    ? QuerySpecificationsOf(select.Select)
+                    : Enumerable.Empty<QuerySpecification>();
+
+            private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
+            {
+                switch (query)
+                {
+                    case QuerySpecification spec:
+                        yield return spec;
+                        break;
+                    case BinaryQueryExpression binary:
+                        foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
+                        foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
+                        break;
+                    case QueryParenthesisExpression paren:
+                        foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
+                        break;
+                }
+            }
 
             private void Record(
                 string operation,

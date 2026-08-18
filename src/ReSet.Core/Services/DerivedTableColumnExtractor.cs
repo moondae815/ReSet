@@ -102,22 +102,61 @@ namespace ReSet.Core.Services
         {
             public List<DerivedColumnDefinition> Definitions { get; } = new();
 
+            private readonly HashSet<(string Alias, string Column, string Expression)> _seen = new();
+
             public override void Visit(QueryDerivedTable node)
             {
                 var alias = node.Alias?.Value;
                 if (string.IsNullOrWhiteSpace(alias)) return;
-                if (node.QueryExpression is not QuerySpecification spec) return;
 
-                foreach (var element in spec.SelectElements.OfType<SelectScalarExpression>())
+                foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
                 {
-                    var column = element.ColumnName?.Value
-                        ?? (element.Expression as ColumnReferenceExpression)
-                            ?.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
-                    if (string.IsNullOrWhiteSpace(column)) continue;
+                    foreach (var element in spec.SelectElements.OfType<SelectScalarExpression>())
+                    {
+                        var column = element.ColumnName?.Value
+                            ?? (element.Expression as ColumnReferenceExpression)
+                                ?.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                        if (string.IsNullOrWhiteSpace(column)) continue;
 
-                    var expression = TextOf(element.Expression);
-                    Definitions.Add(new DerivedColumnDefinition(
-                        alias!, column!, expression, BuildAnchors(expression)));
+                        var expression = TextOf(element.Expression);
+                        if (!_seen.Add((alias!, column!, expression))) continue;
+
+                        Definitions.Add(new DerivedColumnDefinition(
+                            alias!, column!, expression, BuildAnchors(expression)));
+                    }
+                }
+            }
+
+            /// <summary>
+            /// 파생 테이블의 본문에서 QuerySpecification을 전부 끌어낸다.
+            ///
+            /// [왜 캐스트 하나로는 안 되는가] UNION/UNION ALL/EXCEPT/INTERSECT로 묶인
+            /// 파생 테이블은 QueryExpression이 <b>BinaryQueryExpression</b>이라
+            /// QuerySpecification 캐스트가 실패한다. 예전 코드는 그 자리에서 그냥
+            /// 반환해 그런 파생 테이블을 통째로 놓쳤다 - EXCEPTION_PROC 문장 17
+            /// (PointPay/Payco, object_definition.sql:469-508)의 X가 실측 사례다.
+            /// BB.PGVT가 X.PGETC·X.PGIncVTax·X.PGETC4SUM을 참조하는데 그 정의가 표에서
+            /// 빠져, 2026-08-18 축 A 감사에서 🔴로 잡혔다. 이 추출기를 만들게 한
+            /// 결함(문장 13의 X 정의 누락)과 같은 종류인데 UNION 변형만 남아 있었다.
+            ///
+            /// [갈래를 합치지 않는 이유] 갈래마다 식이 다를 수 있다 - 위 X는 PointPay
+            /// 갈래와 Payco 갈래의 PGCOMM4SUM 산식이 서로 다르다. 하나로 접으면 그
+            /// 차이가 사라지므로 전부 수집하고, 완전히 같은 (별칭·컬럼·식)만 접는다.
+            /// </summary>
+            private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
+            {
+                switch (query)
+                {
+                    case QuerySpecification spec:
+                        yield return spec;
+                        break;
+                    case BinaryQueryExpression binary:
+                        foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
+                        foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
+                        break;
+                    case QueryParenthesisExpression paren:
+                        foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
+                        break;
                 }
             }
 

@@ -23,6 +23,7 @@ namespace ReSet.Core.Services
         RoundingSemanticsMissing,
         SessionOptionMissing,
         HeaderContractContradiction,
+        PromptInstructionLeak,
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
         General
@@ -108,6 +109,7 @@ namespace ReSet.Core.Services
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
+                CheckPromptInstructionLeak(cleansed, result);
 
                 if (expectations != null)
                 {
@@ -1485,6 +1487,41 @@ namespace ReSet.Core.Services
         /// (이 파일 하단)으로 고정해 둔다 - 언젠가 고쳐지면 그 테스트들이 실패할
         /// 것이고, 그 실패는 "좋은 소식이니 테스트를 갱신하라"로 읽어야 한다.
         /// </summary>
+        /// <summary>
+        /// 프롬프트가 작성자에게 준 지시문이 명세서 본문으로 새어 나왔는지 본다.
+        ///
+        /// [실측] 2026-08-18 축 A 감사. UPDATE 매핑 표 블록은 "그대로 베끼라"는
+        /// 지시를 받는데, 그 블록 안에 한국어 2인칭 명령문이 섞여 있어 모델이 표와
+        /// 함께 옮겨 적었다 - COMM_UPD 17곳, INS_EXTRA 5곳, INS_EXTRA4PLCARD 3곳.
+        /// 지시문을 영어로 되돌리고 표지를 붙이는 것만으로는 규칙일 뿐이라, 설계 §0의
+        /// 계약대로 기계 검사를 짝지운다.
+        ///
+        /// [앵커 규율에 어긋나지 않는다] 이 검사가 찾는 것은 한국어 명세서가 쓸 법한
+        /// 표현이 아니라 <b>프롬프트가 스스로 심은 표지 문자열</b>이다. 명세서에 이
+        /// 표지가 있다는 것은 곧 유출이 일어났다는 뜻이므로 오탐이 원리적으로 없다.
+        /// </summary>
+        /// <summary>
+        /// 프롬프트가 작성자(모델)에게 주는 지시문임을 못 박는 표지. AiService의
+        /// 프롬프트 빌더가 이 문자열을 심고 CheckPromptInstructionLeak이 같은
+        /// 문자열을 명세서에서 찾는다 - 하나의 사실을 프롬프트와 L1이 함께 쓴다.
+        /// </summary>
+        public const string PromptInstructionMarker = "[INSTRUCTION - DO NOT COPY THIS LINE INTO THE DOCUMENT]";
+
+        private static void CheckPromptInstructionLeak(string markdown, ValidationResult result)
+        {
+            if (!markdown.Contains(PromptInstructionMarker, StringComparison.OrdinalIgnoreCase)) return;
+
+            const string message =
+                "프롬프트가 작성자에게 준 지시문이 명세서 본문에 그대로 실렸습니다. "
+                + "해당 줄은 문서의 내용이 아니라 작성 지시이므로 삭제해야 합니다.";
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.PromptInstructionLeak,
+                Message = message
+            });
+        }
+
         private static void CheckHeaderContractContradiction(
             string markdown, SpecExpectations expectations, ValidationResult result)
         {

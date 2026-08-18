@@ -7,6 +7,50 @@ namespace ReSet.Core.Tests
     public class DerivedTableColumnExtractorTests
     {
         [Fact]
+        public void Extract_UnionAllDerivedTable_ShouldCaptureBothBranches()
+        {
+            // 2026-08-18 축 A 감사의 🔴 실측 형태. EXCEPTION_PROC 문장 17
+            // (PointPay/Payco, object_definition.sql:469-508)의 파생 X는 UNION ALL
+            // 두 갈래다. 예전 추출기는 QueryExpression을 QuerySpecification으로만
+            // 캐스트해 BinaryQueryExpression에서 그냥 반환했고, 그래서 이 X가 표에서
+            // 통째로 빠졌다 - BB.PGVT가 X.PGETC4SUM을 참조하는데 정의가 없어 이행 시
+            // PG 부가세 금액이 달라진다. 두 갈래의 PGCOMM4SUM 산식이 서로 다르므로
+            // 갈래를 접지 않고 둘 다 실려야 한다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE BB SET PGVT = X.PGETC4SUM
+    FROM TSettleMst BB
+    JOIN (
+        SELECT A.PLTID
+              ,PGETC4SUM = B.ETCAmt+(B.ETCAmt/10.0)
+              ,PGCOMM4SUM = B.CommissionAmt
+        FROM TSettleMst A JOIN TPGCMRate B ON A.PGName = B.PGName
+        WHERE A.PGName = 'pointpay'
+        UNION ALL
+        SELECT A.PLTID
+              ,PGETC4SUM = B.ETCAmt+(B.ETCAmt/10.0)
+              ,PGCOMM4SUM = B.CommissionAmt+(B.CommissionAmt/10.0)
+        FROM TSettleMst A JOIN TPGCMRate B ON A.PGName = B.PGName
+        WHERE A.PGName = 'payco'
+    ) X ON BB.PLTID = X.PLTID
+END";
+
+            var definitions = DerivedTableColumnExtractor.Extract(ddl);
+
+            // 두 갈래에서 식이 같은 PGETC4SUM은 한 행으로 접힌다.
+            var etc = Assert.Single(definitions, d => d.Alias == "X" && d.Column == "PGETC4SUM");
+            Assert.Contains("ETCAmt", etc.Expression);
+
+            // 식이 다른 PGCOMM4SUM은 갈래마다 남아야 한다 - 접으면 차이가 사라진다.
+            var comm = definitions.Where(d => d.Alias == "X" && d.Column == "PGCOMM4SUM").ToList();
+            Assert.Equal(2, comm.Count);
+            Assert.Contains(comm, d => !d.Expression.Contains("/ 10.0") && !d.Expression.Contains("/10.0"));
+            Assert.Contains(comm, d => d.Expression.Contains("10.0"));
+        }
+
+        [Fact]
         public void Extract_UpdateFromDerivedTable_ShouldCaptureColumnExpressions()
         {
             // EXCEPTION_PROC 실행순서 13 실측 형태. Spec은 SET 우변을

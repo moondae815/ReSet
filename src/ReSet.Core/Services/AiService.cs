@@ -645,6 +645,22 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 생성 경로)가 이 헬퍼를 공유해야 두 경로가 같은 헤딩을 내보낸다는 것이
         /// 코드로 보장된다 - 리터럴이 두 곳에 복제되면 한쪽만 고쳐질 위험이 생긴다.
         /// </summary>
+        /// <summary>
+        /// 프롬프트가 작성자(모델)에게 주는 지시문임을 못 박는 표지.
+        ///
+        /// [왜 필요한가] 아래 두 줄은 원래 한국어 2인칭 명령문("…추측하지 마십시오",
+        /// "…명시적으로 기술하십시오")이었고, 그대로 베끼라고 지시한 UPDATE 매핑 표
+        /// 블록 안에 섞여 있었다. 그래서 모델이 표와 함께 통째로 옮겨 적었다 -
+        /// 2026-08-18 축 A 감사 실측: COMM_UPD 17곳, INS_EXTRA 5곳,
+        /// INS_EXTRA4PLCARD 3곳. 특히 "`## CRUD 분석`에 기술하십시오"는 그 절 안에서
+        /// 자기 자신을 가리켜 납품 문서가 미완성 초안처럼 읽혔다.
+        ///
+        /// 한국어 명세서 본문과 섞이지 않도록 지시문을 영어로 되돌리고 이 표지를
+        /// 앞에 붙인다. MechanicalValidator.CheckPromptInstructionLeak이 이 표지를
+        /// 명세서에서 찾아 유출을 기계로 막는다 - 규칙 하나에 검사 하나(설계 §0).
+        /// </summary>
+        internal const string PromptInstructionMarker = MechanicalValidator.PromptInstructionMarker;
+
         private static List<string> BuildUpdateMappingTemplateLines(IReadOnlyList<AstUpdateMapping> updateMappings)
         {
             var lines = new List<string>();
@@ -653,7 +669,17 @@ Based on the structured reference context above, reverse engineer the stored pro
                 var rawNotation = string.IsNullOrWhiteSpace(mapping.RawTargetText)
                     ? string.Empty
                     : $" · 원문 표기: {mapping.RawTargetText}";
-                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (문장 {mapping.StatementOrdinal} · 원본 DDL 라인 {mapping.SourceLine}{rawNotation})");
+                // 절 제목에 StatementOrdinal을 쓰지 않는다. 그 값은 <b>대상 테이블별</b>
+                // 채번이라 같은 SP 안에서 리셋된다 - 대상 표기가 "TSettleMst"와
+                // "dbo.TSettleMst"로 갈리면 카운터도 갈린다. 2026-08-18 축 A 감사 실측
+                // (EXPECT_PROC): 라인 182와 245가 둘 다 "문장 1"이 되고, 같은 문서의
+                // 본문·오류코드 매핑·UDF 표는 그것들을 "갱신 8"·"갱신 11"로 센다.
+                // "갱신 8"을 찾아 절 제목 "문장 8"을 열면 라인 225(다른 UPDATE)가 나온다.
+                // 파서가 대상 테이블과 무관하게 매긴 GlobalStatementOrdinal을 쓰고,
+                // 본문이 쓰는 낱말과 같은 "갱신"으로 통일해 어휘 이원화까지 없앤다.
+                // 목록 위치(i+1) 대신 파서 값을 쓰는 이유는, 호출부가 부분집합을
+                // 넘기면 위치 기반 번호가 조용히 어긋나기 때문이다.
+                lines.Add($"   ### UPDATE 대상 테이블: {mapping.TargetTable} (갱신 {mapping.GlobalStatementOrdinal} · 원본 DDL 라인 {mapping.SourceLine}{rawNotation})");
                 lines.Add("   | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |");
                 lines.Add("   | :--- | :--- | :--- | :--- |");
                 foreach (var assignment in mapping.Assignments)
@@ -663,12 +689,12 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 if (!string.IsNullOrEmpty(mapping.FromClauseText))
                 {
-                    lines.Add("   위 문장은 FROM 절을 동반합니다. 갱신 대상은 FROM 절에 등장하는 해당 별칭의 인스턴스입니다. 조인이 대상 행 하나에 여러 소스 행을 매칭시킬 경우 T-SQL은 어느 값이 반영될지 정의하지 않습니다(비결정적). 조인 키의 유일성이 보장되는지 판단할 수 없으면 \"보장되지 않으면 결과가 비결정적\"이라는 사실만 기술하고, 유일성 여부를 추측하지 마십시오.");
+                    lines.Add($"   {PromptInstructionMarker} This statement has a FROM clause: the update target is the aliased instance that appears in FROM. If the join matches several source rows to one target row, T-SQL does not define which value wins (non-deterministic). State that fact in Korean in the document body, and do NOT guess whether the join keys are unique.");
                 }
 
                 if (mapping.SelfReferencedColumns.Count > 0)
                 {
-                    lines.Add($"   다음 컬럼은 SET 우변에서 자기 자신을 참조합니다: {string.Join(", ", mapping.SelfReferencedColumns)}. SQL의 SET 절은 우변을 모두 **갱신 전 값**으로 동시에 평가합니다. 절차형 언어로 이행할 때 순차 대입하면 계산 결과가 달라지므로, 이 사실을 `## CRUD 분석`에 명시적으로 기술하십시오.");
+                    lines.Add($"   {PromptInstructionMarker} These columns reference themselves on the SET right-hand side: {string.Join(", ", mapping.SelfReferencedColumns)}. SQL evaluates every right-hand side against the pre-update values simultaneously. State this fact in Korean under `## CRUD 분석`; sequential assignment during migration would change the result.");
                 }
 
                 lines.Add("");
@@ -725,9 +751,11 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>
             {
                 $"   {DmlScopeExtractor.DmlScopeTableHeading}",
-                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용 | 조인 키 |",
+                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 |",
                 "   | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
+
+            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < dmlScopeFacts.Count; i++)
             {
@@ -739,15 +767,29 @@ Based on the structured reference context above, reverse engineer the stored pro
                 // 파라미터 자체가 없으면(dateParameter가 빈 문자열) 전부 false로만
                 // 나오는 칸이 "적용 안 됨"이라는 거짓 신호로 읽힐 수 있다. 그래서
                 // 이 경우엔 판정 자체가 없었다는 것을 명시한다.
+                // "아니오"는 <b>최상위 WHERE에 없다</b>는 뜻이지 "이 문장이 기준일을
+                // 전혀 쓰지 않는다"는 뜻이 아니다. 그 구분을 칸 안에 적어 둔다 -
+                // 2026-08-18 축 A 감사 실측(COMM_UPD 문장 7, 223행): 파생 테이블 D의
+                // 내부 WHERE가 A.YMD = @pi_strYMD로 후보를 당일로 한정하는데, 명세서가
+                // 이 칸만 보고 "이 문장은 @pi_strYMD를 직접 조건으로 적용하지 않습니다"
+                // 라고 단언해 🟠이 됐다. 표가 "기계 확정 — 수정 금지"라 모델이 이
+                // 단언을 의심하지 않는다.
                 var applied = dateParameter.Length == 0
                     ? "(기준일 파라미터 없음)"
-                    : fact.DateParameterApplied ? "예" : "**아니오**";
+                    : fact.DateParameterApplied ? "예" : "**아니오**(최상위 기준 · 하위 질의는 별도 확인)";
+
+                // 연산 종류별로 번호를 매긴다. 전역 인덱스를 쓰면 INSERT가 섞이는
+                // 순간 "UPDATE 1"이 두 번째 UPDATE를 가리키게 된다.
+                ordinals.TryGetValue(fact.Operation, out var n);
+                ordinals[fact.Operation] = ++n;
 
                 lines.Add(
-                    $"   | {fact.Operation} {i + 1} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
+                    $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
                     + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} |");
             }
 
+            lines.Add("");
+            lines.Add("   > `기준일 파라미터 적용` 칸의 `아니오`는 **최상위 WHERE에 없다**는 뜻일 뿐이다. 하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있으므로, 이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
             lines.Add("");
             return lines;
         }

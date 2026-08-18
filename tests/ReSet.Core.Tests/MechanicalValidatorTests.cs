@@ -2362,6 +2362,30 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_LeakedPromptInstruction_ShouldBeAnError()
+        {
+            // 2026-08-18 축 A 감사 실측. UPDATE 매핑 표 블록은 "그대로 베끼라"는 지시를
+            // 받는데 그 안에 작성 지시문이 섞여 있어 모델이 함께 옮겨 적었다 -
+            // COMM_UPD 17곳, INS_EXTRA 5곳, INS_EXTRA4PLCARD 3곳. 지시문을 영어로
+            // 되돌리고 표지를 붙이는 것은 규칙일 뿐이라, 설계 §0대로 검사를 짝지운다.
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + MechanicalValidator.PromptInstructionMarker
+                + " This statement has a FROM clause: the update target is ...\n";
+
+            var result = new MechanicalValidator().Validate(markdown, null);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.PromptInstructionLeak);
+        }
+
+        [Fact]
+        public void Validate_WithoutLeakedInstruction_ShouldNotFlag()
+        {
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), null);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.PromptInstructionLeak);
+        }
+
+        [Fact]
         public void Validate_AcknowledgementUsingBulilchi_ShouldPass()
         {
             // 2026-08-17 전수 재생성 실측. 14개 SP를 새 파이프라인으로 돌렸을 때 유일한

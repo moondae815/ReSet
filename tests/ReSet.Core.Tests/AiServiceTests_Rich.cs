@@ -209,6 +209,7 @@ namespace ReSet.Core.Tests
             {
                 TargetTable = "DB.dbo.TCommMst",
                 StatementOrdinal = 2,
+                GlobalStatementOrdinal = 2,
                 SourceLine = 77,
                 FromClauseText = fromClause
             };
@@ -245,7 +246,7 @@ namespace ReSet.Core.Tests
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.Contains("AST UPDATE 타겟-소스 1:1 매핑 추출 데이터", body);
-            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 2 · 원본 DDL 라인 77)", body);
+            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (갱신 2 · 원본 DDL 라인 77)", body);
             Assert.Contains("CLVT * -1", body);
             Assert.Contains("(FILL_DESCRIPTION_HERE)", body);
         }
@@ -277,7 +278,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
-            Assert.Contains("비결정적", body);
+            Assert.Contains("non-deterministic", body);
         }
 
         [Fact]
@@ -291,7 +292,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
-            Assert.DoesNotContain("비결정적", body);
+            Assert.DoesNotContain("non-deterministic", body);
         }
 
         [Fact]
@@ -306,7 +307,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
-            Assert.Contains("갱신 전 값", body);
+            Assert.Contains("pre-update values", body);
         }
 
         [Fact]
@@ -320,7 +321,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
-            Assert.DoesNotContain("갱신 전 값", body);
+            Assert.DoesNotContain("pre-update values", body);
         }
 
         [Fact]
@@ -379,7 +380,7 @@ namespace ReSet.Core.Tests
 
             // Assert
             var body = DecodeMessageContents(handler.LastRequestBody);
-            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 2 · 원본 DDL 라인 77)", body);
+            Assert.Contains("### UPDATE 대상 테이블: DB.dbo.TCommMst (갱신 2 · 원본 DDL 라인 77)", body);
             Assert.Contains("CLVT * -1", body);
             Assert.Contains("(FILL_DESCRIPTION_HERE)", body);
         }

@@ -431,6 +431,7 @@ namespace ReSet.Core.Services
             {
                 TargetTable = targetTable,
                 StatementOrdinal = previous + 1,
+                GlobalStatementOrdinal = AstUpdateMappings.Count + 1,
                 SourceLine = node.StartLine,
                 FromClauseText = node.FromClause == null ? null : GetFragmentText(node.FromClause),
                 RawTargetText = GetFragmentText(node.Target)
