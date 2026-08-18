@@ -252,26 +252,6 @@
 
   출처: 2026-08-17 14개 SP 전수 재생성 실측
 
-### 축 A 재감사 잔여 (2026-08-18)
-
-- [ ] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** — 🟠, 직전
-      감사에서도 났고 이번에도 잔존. `object_definition.sql:39`의 인라인 리터럴 9개
-      (`PLCard`·`SamSungPay`·`SSGPayCard`·`KakaoPay`·`KakaoCard`·`impaymobile`·
-      `NaverCard`·`ApplePay`·`TossCardAuth`)를 한 번도 열거하지 않고 "원천 사용 PG
-      제외"로만 적는데, 같은 문서 `Spec.md:82`가 "원천 PG 목록"을 5개짜리 변수
-      `@v_PLCardSettlePeriodPG`로 정의해 두어 5개로 읽힌다. 갱신 1은 그 변수를 쓰지
-      않는다. 이행하면 4개 PG가 자동회수 대상에 잘못 편입된다
-- [ ] **UPDATE 매핑 표 밖의 대상 한정 리터럴이 재료로 실리지 않는다** — 위 항목의
-      일반형. `COMM_UPD` 문장 2의 `ABROADCHK = 1` 및 6개 PG 화이트리스트도 같은
-      이유로 명세서에서 사라졌다(🟠). WHERE 최상위의 **값**은 DML 범위 표가 담지
-      않는다(컬럼 이름만 담는다). 값까지 담으면 노이즈라는 판단이 있었으나, 대상
-      집합을 정하는 `IN` 리터럴 목록은 예외로 다룰 근거가 두 SP에서 나왔다
-
-  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
-  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
-  (2026-08-18 작성. 두 항목 모두 이 설계 하나가 닫는다 — `IN`/`NOT IN` 리터럴 목록만
-  재료로 삼고 스칼라 비교 474건은 노이즈로 제외한다)
-
 ### 정적 분석
 
 - [ ] **`DependencyInfo.Type` 타입화** — `DependencyInfo.cs:12`가 여전히 `string`.
@@ -393,6 +373,35 @@
 
 **전부 반영 완료(2026-08-13, 2026-08-14·2026-08-16 재확인).** 각 설계 문서의 해당 항목에
 취소선과 해소 근거를 달았다. 아래는 어디를 어떻게 고쳤는지의 기록이며, 새로 할 일은 없다.
+
+### 2026-08-18 집합 술어 재료로 닫은 축 A 재감사 2건 (둘 다 🟠)
+
+- **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** / **`COMM_UPD`
+  문장 2의 6개 PG 화이트리스트가 재료로 실리지 않는다** — DML 최상위 WHERE의
+  `IN`/`NOT IN` 리터럴 목록만 기계 확정 재료로 삼아 닫았다. 스칼라 리터럴 비교
+  474건(`COMM_UPD` 하나가 100건)은 노이즈로 제외했다 — 그 값들은 컬럼 이름만
+  봐도 존재를 추측할 수 있는 것들인 반면, **집합의 크기와 원소는 컬럼 이름으로
+  추측할 수 없다**는 것이 두 SP를 예외로 다룬 구조적 근거다.
+
+  - `DmlScopeExtractor.ExtractSetPredicates`가 문장·라인·컬럼(한정자 포함 원문
+    표기, 예: `A.PGName` — 같은 WHERE 최상위에 `A.USESTATE IN (...)`와
+    `B.USESTATE IN (...)`가 함께 나오면 마지막 조각만 담을 경우 두 사실의 키가
+    충돌하기 때문에 한정자를 그대로 남긴다)·연산·원소 수·리터럴 목록을 뽑는다.
+  - `AiService.BuildSetPredicateTableLines`가 그 재료를
+    `### 집합 술어 (기계 확정 — 수정 금지)` 표로 세 프롬프트 지점에 렌더한다.
+    이 표는 DML 범위 표와 같은 채번 헬퍼(`BuildStatementOrdinals`)를 써서
+    문장 번호를 맞춘다(집합 술어가 없는 문장을 건너뛰어 번호가 밀리던 결함을
+    공유 헬퍼로 없앴다).
+  - `MechanicalValidator.CheckSetPredicates`가 L1에서 대조한다. **`리터럴 목록`
+    칸 하나만** 문자열로 쪼개 대칭 비교한다 — 행 전체를 훑으면 라인 번호
+    `108`이 그 자체로 `0`·`1`을 담고 있어 숫자 리터럴 대조가 라인 번호와
+    구별되지 않고 퇴화하기 때문이다. 또한 같은 문장·컬럼 키에 사실이 둘 이상
+    있을 수 있어(위 한정자 예시) **키 그룹별 다중집합**으로 대조한다 —
+    `FirstOrDefault`로 첫 번째 사실 하나만 골라 매칭하면 같은 키의 다른 사실이
+    같은 행에 겹쳐 통과해 버려 한쪽의 리터럴 누락을 조용히 놓친다.
+
+  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
+  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
 
 ### 2026-08-16 재검증에서 닫은 3건 (전부 P2)
 
