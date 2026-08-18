@@ -918,6 +918,108 @@ END"
             Assert.Contains("'KakaoCard'", body);
         }
 
+        /// <summary>
+        /// 명세서 골격(RequiredHeadersMarkdown/WrapSpec와 같은 모양)을 만든다.
+        /// MechanicalValidatorTests의 동명 헬퍼와 같은 골격이지만 그쪽은 private이라
+        /// 여기서 재사용할 수 없다 - 이 클래스 안에서만 쓰는 최소 사본이다.
+        /// </summary>
+        private static string WrapAsSpecMarkdown(string crudBody) =>
+            string.Join("\n", new[]
+            {
+                "## 개요", "내용", "## 파라미터 목록", "내용",
+                "## CRUD 분석", crudBody,
+                "## 로직 흐름 요약", "내용", "## 비즈니스 흐름 시각화",
+                "```mermaid", "flowchart TD", "A[\"시작\"] --> B[\"끝\"]", "```"
+            });
+
+        /// <summary>
+        /// 프롬프트 본문에서 헤딩과 그 뒤 표 행들(`|`로 시작하는 줄)만 잘라낸다.
+        /// 왕복 테스트가 손으로 지어낸 표가 아니라 AiService가 실제로 낸 렌더를
+        /// 그대로 명세서에 붙여넣도록 하기 위함이다 - 그래야 렌더(EscapeTableCell)와
+        /// 파서(ExtractSetPredicateLiteralCell)가 실제로 서로 맞물리는지 검증한다.
+        /// </summary>
+        private static string ExtractTableSection(string? body, string heading)
+        {
+            Assert.NotNull(body);
+            var lines = body!.Split('\n');
+            var startIndex = Array.FindIndex(lines, l => l.Trim() == heading);
+            Assert.True(startIndex >= 0, $"heading not found in prompt: {heading}");
+
+            var sectionLines = new List<string> { lines[startIndex].TrimStart() };
+            for (var i = startIndex + 1; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+                if (!trimmed.StartsWith("|", StringComparison.Ordinal)) break;
+                sectionLines.Add(trimmed);
+            }
+
+            return string.Join("\n", sectionLines);
+        }
+
+        [Fact]
+        public async Task Validate_SetPredicateWithCommaInsideLiteral_ShouldRoundTripThroughTheRenderedTable()
+        {
+            // Important 1 재현 - Nm IN ('a,b','c')를 칸 안에서 쉼표로 단순 분할하면
+            // 렌더된 칸 "'a,b', 'c'"가 {"'a", "b'", "'c'"} 세 조각으로 쪼개져, 기대
+            // 리터럴 {"'a,b'", "'c'"}와 절대 맞지 않는다 - 모델이 표를 한 글자도
+            // 안 틀리고 그대로 옮겨도 L1이 "누락/추가"를 보고하는, §0이 막으려는
+            // 실패 모양이다. 손으로 지어낸 표가 아니라 AiService가 실제로 렌더한
+            // 표(ExtractTableSection)를 그대로 명세서에 붙여 왕복시킨다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE Nm IN ('a,b','c') END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var promptResult = await service.GenerateSpecificationAsync(spDef, "rules");
+            var tableSection = ExtractTableSection(promptResult.SystemPrompt, DmlScopeExtractor.SetPredicateTableHeading);
+            var markdown = WrapAsSpecMarkdown(tableSection);
+
+            var expectations = SpecExpectations.From(spDef);
+            Assert.NotNull(expectations);
+
+            var result = new MechanicalValidator().Validate(markdown, expectations!);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public async Task Validate_SetPredicateWithPipeInsideLiteral_ShouldRoundTripThroughTheRenderedTable()
+        {
+            // Important 1의 두 번째 사례 - Nm IN ('a|b','c')는 EscapeTableCell이
+            // `|`를 `\|`로 이스케이프해 렌더된 칸이 "'a\|b', 'c'"가 된다. 행을
+            // 그냥 `|`로 나누면(이스케이프를 모르는 분할) 이 이스케이프된 파이프
+            // 위치에서 행 자체가 잘못 쪼개져 리터럴 칸 마지막 조각이 "b'"만 남는다
+            // (리뷰 실측: "누락: 'a\|b' / 추가: b'"). 여기서도 손으로 지어낸 표가
+            // 아니라 실제 렌더 결과로 왕복시킨다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE Nm IN ('a|b','c') END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var promptResult = await service.GenerateSpecificationAsync(spDef, "rules");
+            var tableSection = ExtractTableSection(promptResult.SystemPrompt, DmlScopeExtractor.SetPredicateTableHeading);
+            var markdown = WrapAsSpecMarkdown(tableSection);
+
+            var expectations = SpecExpectations.From(spDef);
+            Assert.NotNull(expectations);
+
+            var result = new MechanicalValidator().Validate(markdown, expectations!);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
         [Fact]
         public async Task GenerateSpecSectionAsync_CrudAnalysis_WithSetPredicate_ShouldRenderTheTable()
         {
@@ -1063,6 +1165,44 @@ END"
             // 표가 채번 규칙을 공유하지 않으면 여기서 "UPDATE 2"가 나온다.
             var setPredicateLabel = FindStatementLabelForLine(body, DmlScopeExtractor.SetPredicateTableHeading, 7);
             Assert.Equal(dmlScopeLabel, setPredicateLabel);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithTwoUpdatesOnSameLine_ShouldAssignDistinctOrdinals()
+        {
+            // 리뷰어 재현(FIX ROUND 2) - `e14a7a4`가 DML 범위 표와 집합 술어 표의 채번을
+            // `Dictionary<(Operation, Line), int>` 하나로 통합했는데, 같은 물리 줄에
+            // 같은 연산(UPDATE) 문장이 둘이면 그 키가 충돌한다: 두 문장 모두
+            // (UPDATE, 같은 줄) 키를 쓰므로 나중 문장이 쓴 번호가 앞 문장의 번호를
+            // 덮어써서 "UPDATE 1"이 사라지고 서로 다른 대상 테이블 둘이 나란히
+            // "UPDATE 2"로 찍혔다 - 이미 배포된 기계 확정 표를 조용히 퇴행시키는
+            // 결함이다. 문장의 정체성(목록 안 자리)으로 세면 같은 줄이어도 서로
+            // 다른 번호를 받는다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T1 SET C = 1 WHERE Id = 1; UPDATE dbo.T2 SET C = 1 WHERE Id = 2
+END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var body = result.SystemPrompt;
+
+            // 두 UPDATE 모두 5번 줄(픽스처의 `@"` 다음 줄바꿈으로 1번 줄이 비므로
+            // CREATE PROCEDURE가 2번 줄부터 시작 - 위 테스트와 같은 계산)에서
+            // 시작하지만, 목록 안 자리는 다르므로 "UPDATE 1"과 "UPDATE 2"로 갈려야
+            // 한다.
+            Assert.Contains("| UPDATE 1 | 5 | dbo.T1 |", body);
+            Assert.Contains("| UPDATE 2 | 5 | dbo.T2 |", body);
         }
     }
 }

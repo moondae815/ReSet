@@ -395,7 +395,19 @@ namespace ReSet.Core.Services
             // 집합의 크기와 원소는 컬럼 이름으로 추측할 수 없다(설계 §2) - DmlScopeFacts와
             // 같은 이유로 표를 강제한다. BuildSetPredicateTableLines 문서 참고.
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
-            if (setPredicates.Count > 0)
+            // [소프트 페일 전파 방지] Extract와 ExtractSetPredicates는 같은 DDL을 각자
+            // 독립된 try/catch로 파싱한다(DmlScopeExtractor 문서 참고 - AGENTS.md 범주 2
+            // 소프트 페일). DmlScopeVisitor가 SetPredicateVisitor보다 더 많은 일을 하므로
+            // (JoinConditionCollector, TextOf(target) 등) 이론상 Extract만 실패해
+            // dmlScopeFacts는 비고 setPredicates는 채워질 수 있다. 그 상태로
+            // BuildSetPredicateTableLines를 부르면 ordinals 조회가 실패해
+            // InvalidOperationException을 던져, 문서 생성 전체가 예외로 죽는다 - 이는
+            // Extract 쪽이 지키려던 소프트 페일 계약을 setPredicates 경로가 뒤집는
+            // 것이다. 두 재료는 같은 DDL에서 나오므로 한쪽이 실패하면 재료 전체를
+            // 미덥지 않다고 보고, dmlScopeFacts가 비어 있으면 집합 술어 표도 렌더하지
+            // 않는다. 반대로 dmlScopeFacts가 비어 있지 않은데 특정 키를 못 찾는 경우는
+            // 진짜 불변식 위반이므로 BuildSetPredicateTableLines 안의 예외를 그대로 둔다.
+            if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 rules.AddRange(BuildSetPredicateTableLines(setPredicates, dmlScopeFacts));
             }
@@ -764,7 +776,9 @@ Based on the structured reference context above, reverse engineer the stored pro
             };
 
             // 채번은 BuildStatementOrdinals 하나가 유일한 출처다 - BuildSetPredicateTableLines와
-            // 같은 이유(문서 참고).
+            // 같은 이유(문서 참고). 이 표는 dmlScopeFacts를 자리 그대로 순회하므로
+            // ByIndex(문장의 정체성으로 매긴 번호)를 쓴다 - (연산, 라인) 키는 같은 줄에
+            // 같은 연산이 둘일 때 충돌한다(BuildStatementOrdinals 문서의 FIX ROUND 2 참고).
             var ordinals = BuildStatementOrdinals(dmlScopeFacts);
 
             for (var i = 0; i < dmlScopeFacts.Count; i++)
@@ -788,7 +802,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                     ? "(기준일 파라미터 없음)"
                     : fact.DateParameterApplied ? "예" : "**아니오**(최상위 기준 · 하위 질의는 별도 확인)";
 
-                var n = ordinals[(fact.Operation, fact.Line)];
+                var n = ordinals.ByIndex[i];
 
                 lines.Add(
                     $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
@@ -802,8 +816,8 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
-        /// DML 문장의 (연산, 라인) 쌍에 "연산 종류별 · 목록 순서대로 1부터"라는 하나의
-        /// 규칙으로 문장 번호를 매긴다.
+        /// DML 문장에 "연산 종류별 · 목록 순서대로 1부터"라는 하나의 규칙으로 문장
+        /// 번호를 매긴다.
         ///
         /// [왜 헬퍼 하나로 뽑았는가 - FIX ROUND 1] BuildDmlScopeTableLines와
         /// BuildSetPredicateTableLines가 예전에는 채번을 각자 구현했다. 둘 다 "연산
@@ -816,21 +830,45 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 밀렸다. 채번의 주인을 이 헬퍼 하나로 못박아 두 표가 물리적으로 같은 숫자를
         /// 내도록 한다 - "최상위"의 정의를 TopLevelPredicateCollector 한 곳에 두는
         /// 것과 같은 이유다(DmlScopeExtractor 문서 참고).
+        ///
+        /// [왜 (Operation, Line)을 유일 키로 쓰지 않는가 - FIX ROUND 2] `e14a7a4`는 이
+        /// 채번을 `Dictionary&lt;(Operation, Line), int&gt;` 하나로 통합했는데, 같은
+        /// 물리 줄에 같은 연산 문장이 둘이면(예: 세미콜론으로 이어 쓴
+        /// `UPDATE T1 ...; UPDATE T2 ...` 한 줄) 그 키가 충돌해 나중 문장이 앞 문장의
+        /// 번호를 덮어썼다 - 앞 문장의 "UPDATE 1"이 사라지고 두 문장이 서로 다른
+        /// 대상 테이블을 가리키면서 둘 다 "UPDATE 2"로 찍혔다. 이미 배포된 기계
+        /// 확정 표를 조용히 퇴행시키는 결함이라, 문장의 정체성(목록 안 자리)으로
+        /// 세는 `ByIndex`를 별도로 두고 DML 범위 표는 그것을 쓴다. 집합 술어 표는
+        /// dmlScopeFacts와 다른 목록(setPredicates)을 순회하므로 자리로 조인할 수
+        /// 없고 여전히 (연산, 라인) 키가 필요하다 - `FirstByKey`는 그 키의 <b>첫</b>
+        /// 문장 번호만 담는다. 같은 줄에 같은 연산이 둘이면 그 줄의 집합 술어가
+        /// 어느 문장 소속인지 (연산, 라인)만으로는 원천적으로 구분할 수 없으므로
+        /// (SetPredicateFact도 같은 키만 들고 있다), 첫 문장 번호로 수렴하는 것이
+        /// 현재 재료로 낼 수 있는 최선이다 - 다만 실측 코퍼스에는 같은 줄에 같은
+        /// 연산이 둘인 문장이 없다(세미콜론으로 이어 쓴 DML은 실물에 없음).
         /// </summary>
-        private static Dictionary<(string Operation, int Line), int> BuildStatementOrdinals(
-            IReadOnlyList<DmlScopeFact> dmlScopeFacts)
+        private static (IReadOnlyList<int> ByIndex, IReadOnlyDictionary<(string Operation, int Line), int> FirstByKey)
+            BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
         {
-            var ordinals = new Dictionary<(string, int), int>();
+            var byIndex = new int[dmlScopeFacts.Count];
+            var firstByKey = new Dictionary<(string, int), int>();
             var perOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var fact in dmlScopeFacts)
+            for (var i = 0; i < dmlScopeFacts.Count; i++)
             {
+                var fact = dmlScopeFacts[i];
                 perOperation.TryGetValue(fact.Operation, out var n);
                 perOperation[fact.Operation] = ++n;
-                ordinals[(fact.Operation, fact.Line)] = n;
+                byIndex[i] = n;
+
+                var key = (fact.Operation, fact.Line);
+                if (!firstByKey.ContainsKey(key))
+                {
+                    firstByKey[key] = n;
+                }
             }
 
-            return ordinals;
+            return (byIndex, firstByKey);
         }
 
         /// <summary>
@@ -858,19 +896,27 @@ Based on the structured reference context above, reverse engineer the stored pro
             // 채번은 DML 범위 표에서 가져온다(BuildStatementOrdinals) - 이 표가 독자적으로
             // 세면, 집합 술어가 없는 같은 연산의 문장이 두 문장 사이에 낄 때 그 뒤 모든
             // 행의 번호가 DML 범위 표보다 밀린다(BuildStatementOrdinals 문서의 실측 근거
-            // 참고 - FIX ROUND 1).
+            // 참고 - FIX ROUND 1). 이 표는 dmlScopeFacts가 아니라 setPredicates를
+            // 순회하므로 자리로 조인할 수 없어 FirstByKey((연산, 라인) 키의 첫 문장
+            // 번호)를 쓴다 - ByIndex를 쓰지 않는 이유는 BuildStatementOrdinals 문서의
+            // FIX ROUND 2 참고.
             var ordinals = BuildStatementOrdinals(dmlScopeFacts);
 
             foreach (var fact in setPredicates)
             {
-                if (!ordinals.TryGetValue((fact.Operation, fact.Line), out var n))
+                if (!ordinals.FirstByKey.TryGetValue((fact.Operation, fact.Line), out var n))
                 {
-                    // 이 조회는 오늘 실패할 수 없다 - DmlScopeExtractor.Extract와
-                    // ExtractSetPredicates는 UpdateSpecification·DeleteSpecification·
-                    // InsertSpecification이라는 같은 세 문장만 방문하므로(SetPredicateVisitor
-                    // 문서 참고), 집합 사실이 있는 문장은 반드시 DML 범위 사실도 갖는다.
-                    // Task 3의 From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이
-                    // 이 불변식을 테스트로 고정한다. 그런데도 호출부가 서로 다른
+                    // 호출부가 이미 dmlScopeFacts.Count > 0일 때만 이 메서드를 부른다
+                    // (소프트 페일 전파 방지 주석 참고 - dmlScopeFacts가 비면 Extract 쪽
+                    // 소프트 페일로 보고 이 메서드 자체를 호출하지 않는다). 그러므로
+                    // 여기 도달했다는 것은 dmlScopeFacts가 비어 있지 않다는 뜻이고, 이
+                    // 상태에서 특정 키만 못 찾는 것은 소프트 페일이 아니라 진짜 불변식
+                    // 위반이다 - DmlScopeExtractor.Extract와 ExtractSetPredicates는
+                    // UpdateSpecification·DeleteSpecification·InsertSpecification이라는
+                    // 같은 세 문장만 방문하므로(SetPredicateVisitor 문서 참고), 집합
+                    // 사실이 있는 문장은 반드시 DML 범위 사실도 갖는다. Task 3의
+                    // From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이 이
+                    // 불변식을 테스트로 고정한다. 그런데도 호출부가 서로 다른
                     // DdlText·dmlScopeFacts를 넘기는 실수를 하면 이 불변식이 깨질 수
                     // 있다 - 그 경우 조용히 "1"이나 "0"을 채우면 두 표가 다른 문장을
                     // 가리키는 거짓 채번이 그대로 명세서에 실린다(이번 라운드에서
@@ -1011,7 +1057,11 @@ Based on the structured reference context above, reverse engineer the stored pro
             // 술어 표를 받아야 한다 - 하나만 배선하면 Task 4의 Critical과 같은
             // 비대칭이 재발한다.
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(functionDef.DdlText);
-            if (setPredicates.Count > 0)
+            // [소프트 페일 전파 방지] BuildSpecificationPrompts의 같은 이름 조건 참고 -
+            // dmlScopeFacts가 비었는데 setPredicates만 채워지면 Extract 쪽 소프트 페일이
+            // BuildSetPredicateTableLines의 예외로 뒤집힌다. 그래서 dmlScopeFacts도
+            // 비어 있지 않을 때만 렌더한다.
+            if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates, dmlScopeFacts));
             }
@@ -2100,7 +2150,11 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // 대체 결함을 드러내는 재료를 한 번도 받지 못한다(DmlScope 표와 같은
                 // 모양의 결함 - Task 4의 Critical이 정확히 이 비대칭이었다).
                 var setPredicatesForCrud = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
-                if (setPredicatesForCrud.Count > 0)
+                // [소프트 페일 전파 방지] BuildSpecificationPrompts의 같은 이름 조건 참고 -
+                // dmlScopeFactsForCrud가 비었는데 setPredicatesForCrud만 채워지면 Extract
+                // 쪽 소프트 페일이 BuildSetPredicateTableLines의 예외로 뒤집힌다. 그래서
+                // dmlScopeFactsForCrud도 비어 있지 않을 때만 렌더한다.
+                if (setPredicatesForCrud.Count > 0 && dmlScopeFactsForCrud.Count > 0)
                 {
                     sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud, dmlScopeFactsForCrud));
                 }

@@ -277,6 +277,17 @@
 - [ ] **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** —
       `ReSet.Cli/Program.cs:2002`. 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회
       경로와 저장 경로가 갈라진다
+- [ ] **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
+      `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE
+      술어 컬럼·조인 키·리터럴 목록 등 값 칸은 대조하지만, `UPDATE N`/`DELETE N` 같은
+      "문장" 칸 자체는 어느 검사도 읽지 않는다(2026-08-18 최종 브랜치 리뷰가 지적,
+      "consider"로 남긴 새 검사라 이번 수정 범위 밖으로 미룸). 그 결과 채번
+      헬퍼(`AiService.BuildStatementOrdinals`)의 회귀 — 예: 이번에 고친 "같은 줄
+      두 문장이 번호를 덮어쓰는" 결함이나, DML 범위 표와 집합 술어 표가 서로 다른
+      번호를 내는 정렬 붕괴 — 가 L1을 그대로 통과한다. 지금은 `AiServiceTests_Rich`의
+      단위 테스트가 이 채번을 잡지만, 그 테스트를 지우거나 빠뜨려도 L1은 구조적으로
+      알아채지 못한다. 후속 작업: `CheckDmlScopeTable`/`CheckSetPredicates`가 "문장"
+      칸의 연산·번호가 실제 사실 순서와 일치하는지도 대조하도록 넓힌다.
 
 ---
 
@@ -376,7 +387,7 @@
 
 ### 2026-08-18 집합 술어 재료로 닫은 축 A 재감사 2건 (둘 다 🟠)
 
-- **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** / **`COMM_UPD`
+- [x] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** / **`COMM_UPD`
   문장 2의 6개 PG 화이트리스트가 재료로 실리지 않는다** — DML 최상위 WHERE의
   `IN`/`NOT IN` 리터럴 목록만 기계 확정 재료로 삼아 닫았다. 스칼라 리터럴 비교
   474건(`COMM_UPD` 하나가 100건)은 노이즈로 제외했다 — 그 값들은 컬럼 이름만

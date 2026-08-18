@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Syntax;
@@ -1846,7 +1847,12 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var expectedSets = facts.Select(f => f.Literals.ToHashSet(StringComparer.Ordinal)).ToList();
+                // 기대 쪽 리터럴에도 렌더가 적용한 개행 접기를 똑같이 적용한다 -
+                // FoldNewlinesLikeRenderedCell 문서 참고(리터럴 자체에 개행이 든
+                // 경우, 대조가 아예 성립 불가능해지는 것을 막기 위한 결정).
+                var expectedSets = facts
+                    .Select(f => f.Literals.Select(FoldNewlinesLikeRenderedCell).ToHashSet(StringComparer.Ordinal))
+                    .ToList();
                 var writtenSets = matchingRows.Select(ExtractSetPredicateLiteralCell).ToList();
 
                 // 다중집합 비교 - 순서가 아니라 원소 집합 자체로 짝을 찾는다. 짝을
@@ -1918,14 +1924,35 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 집합 술어 표 행에서 `리터럴 목록` 칸(마지막 칸) 하나만 꺼내 쉼표로 나눈
-        /// 원소 집합으로 만든다. 행 전체가 아니라 이 칸 하나만 보는 것이 §5.1의
-        /// 요구다 - 그래야 라인 번호 같은 숫자 셀이 리터럴과 섞여 대조가 퇴화하지
-        /// 않는다.
+        /// 집합 술어 표 행에서 `리터럴 목록` 칸(마지막 칸) 하나만 꺼내 SQL 리터럴
+        /// 문법을 존중하는 토큰화로 원소 집합을 만든다. 행 전체가 아니라 이 칸
+        /// 하나만 보는 것이 §5.1의 요구다 - 그래야 라인 번호 같은 숫자 셀이
+        /// 리터럴과 섞여 대조가 퇴화하지 않는다.
+        ///
+        /// [행을 SplitTableRowCells로 나누는 이유] `row.Split('|')`로 행 전체를
+        /// 단순 분할하면, AiService.EscapeTableCell이 렌더 시점에 리터럴 안의
+        /// `|`를 `\|`로 이스케이프한 자리에서도 갈라진다 - 이스케이프는 "셀
+        /// 경계가 아니다"라는 뜻인데 단순 분할은 그 뜻을 모른다. 실측(리뷰):
+        /// `Nm IN ('a|b','c')`가 렌더된 칸 `'a\|b', 'c'`를 단순 분할하면 행
+        /// 자체가 그 자리에서 잘못 쪼개져 리터럴 칸의 마지막 조각이 `b'`만
+        /// 남는다("누락: 'a\|b' / 추가: b'"). SplitTableRowCells는 `\|`를 셀
+        /// 경계가 아니라 칸 내용의 일부(복원된 `|`)로 다뤄 이 문제를 없앤다.
+        ///
+        /// [칸 안을 쉼표로 단순 분할하지 않는 이유] 렌더된 칸은 리터럴을 그대로
+        /// `, `로 이어 붙인 것이라(AiService.BuildSetPredicateTableLines의
+        /// `string.Join(", ", fact.Literals)`), 문자열 리터럴 자체에 쉼표가 있으면
+        /// (`Nm IN ('a,b','c')` → 칸 `'a,b', 'c'`) 쉼표 단순 분할이 `'a,b'`를
+        /// `'a`와 `b'` 두 조각으로 쪼갠다. 기대 쪽(`SetPredicateFact.Literals`)은
+        /// 원문 그대로 `{"'a,b'", "'c'"}`를 들고 있으므로, 표를 한 글자도 안 틀리고
+        /// 그대로 옮겨도 이 대조는 영원히 만족 불가능했다(실측: "누락: 'a,b' /
+        /// 추가: 'a, b'" - 공백 차이처럼 보이는 유령 원소를 보고해 모델이 옳은
+        /// 표를 "고치게" 만든다). §0이 막으려는 "모델이 옳게 옮겨도 L1이 틀렸다고
+        /// 하는" 실패 모양이라, TokenizeLiteralCell로 따옴표 안의 쉼표를 구분자로
+        /// 보지 않는다.
         /// </summary>
         private static HashSet<string> ExtractSetPredicateLiteralCell(string row)
         {
-            var cellsOfRow = row.Split('|').Select(c => c.Trim()).ToList();
+            var cellsOfRow = SplitTableRowCells(row);
             var literalCell = cellsOfRow.Count > 0 ? cellsOfRow[cellsOfRow.Count - 1] : string.Empty;
             if (literalCell.Length == 0 && cellsOfRow.Count >= 2)
             {
@@ -1933,12 +1960,125 @@ namespace ReSet.Core.Services
                 literalCell = cellsOfRow[cellsOfRow.Count - 2];
             }
 
-            return literalCell
-                .Split(',')
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .ToHashSet(StringComparer.Ordinal);
+            return TokenizeLiteralCell(literalCell).ToHashSet(StringComparer.Ordinal);
         }
+
+        /// <summary>
+        /// 마크다운 표 행을 `|`로 나누되, AiService.EscapeTableCell이 렌더 시점에
+        /// 남긴 `\|`(이스케이프된 파이프)는 셀 경계로 보지 않고 칸 내용의 일부로
+        /// 되돌린다(`|`로 복원). ExtractSetPredicateLiteralCell 문서의 실측 근거
+        /// 참고 - 이 복원이 없으면 리터럴 안의 `|`가 행 자체를 잘못 쪼갠다.
+        /// </summary>
+        private static List<string> SplitTableRowCells(string row)
+        {
+            var cells = new List<string>();
+            var current = new StringBuilder();
+
+            for (var i = 0; i < row.Length; i++)
+            {
+                var c = row[i];
+                if (c == '\\' && i + 1 < row.Length && row[i + 1] == '|')
+                {
+                    current.Append('|');
+                    i++;
+                    continue;
+                }
+
+                if (c == '|')
+                {
+                    cells.Add(current.ToString().Trim());
+                    current.Clear();
+                    continue;
+                }
+
+                current.Append(c);
+            }
+
+            cells.Add(current.ToString().Trim());
+            return cells;
+        }
+
+        /// <summary>
+        /// 집합 술어 표의 `리터럴 목록` 칸 하나를 SQL 리터럴 문법을 존중해
+        /// 토큰화한다 - 따옴표(`'...'`, 내부 `''` 이스케이프 포함) 밖의 쉼표만
+        /// 구분자로 삼는다. 왜 이래야 하는지는 ExtractSetPredicateLiteralCell
+        /// 문서의 실측 근거를 참고 - 쉼표 단순 분할은 `'a,b'`를 둘로 쪼개 L1을
+        /// 만족 불가능하게 만든다. 따옴표 밖의 토큰(숫자 리터럴 등)은 트림해서
+        /// 그대로 원소로 삼는다.
+        /// </summary>
+        private static List<string> TokenizeLiteralCell(string cell)
+        {
+            var tokens = new List<string>();
+            var current = new StringBuilder();
+            var inQuotes = false;
+
+            for (var i = 0; i < cell.Length; i++)
+            {
+                var c = cell[i];
+
+                if (inQuotes)
+                {
+                    current.Append(c);
+                    if (c == '\'')
+                    {
+                        // `''`는 리터럴 안에서 이스케이프된 작은따옴표다(T-SQL
+                        // 문법) - 닫는 따옴표로 보지 않고 다음 문자까지 함께
+                        // 삼킨다. 예: `'O''Brien'`.
+                        if (i + 1 < cell.Length && cell[i + 1] == '\'')
+                        {
+                            current.Append(cell[i + 1]);
+                            i++;
+                        }
+                        else
+                        {
+                            inQuotes = false;
+                        }
+                    }
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inQuotes = true;
+                    current.Append(c);
+                    continue;
+                }
+
+                if (c == ',')
+                {
+                    var token = current.ToString().Trim();
+                    if (token.Length > 0) tokens.Add(token);
+                    current.Clear();
+                    continue;
+                }
+
+                current.Append(c);
+            }
+
+            var last = current.ToString().Trim();
+            if (last.Length > 0) tokens.Add(last);
+
+            return tokens;
+        }
+
+        /// <summary>
+        /// AiService.EscapeTableCell은 표 셀을 렌더할 때 개행을 공백으로 접는다
+        /// (개행이 셀 경계를 깨뜨리지 않도록 - EscapeTableCell 문서 참고). 그런데
+        /// 이 접기는 역변환이 불가능하다 - 렌더된 표의 공백 하나만 보고는 그것이
+        /// 원래 `\r\n`이었는지 `\n`이었는지 `\r`이었는지, 혹은 원래도 공백이었는지
+        /// 구분할 수 없다.
+        ///
+        /// T-SQL 문자열 리터럴은 따옴표 안에 실제 개행 문자를 담을 수 있으므로
+        /// (실측 코퍼스에는 이 형태가 없었다), 리터럴 자체에 개행이 든 DDL이
+        /// 있다면 원문 그대로 대조하는 순간 표를 정확히 옮겨도 영원히 어긋난다 -
+        /// §0이 막으려는 "모델이 옳게 옮겨도 L1이 틀렸다고 하는" 실패 모양이다.
+        /// 그래서 조용히 실패하게 두지 않고, 기대 쪽 리터럴에도 렌더와 같은 접기를
+        /// 적용해 대조한다 - 개행의 정확한 종류를 구분하는 정밀도는 잃지만("접힌
+        /// 후 같은 문자열인가"만 확인), 대조 자체가 원리적으로 성립 불가능해지는
+        /// 것보다는 낫다.
+        /// </summary>
+        private static string FoldNewlinesLikeRenderedCell(string literal) =>
+            literal.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
 
         /// <summary>
         /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과

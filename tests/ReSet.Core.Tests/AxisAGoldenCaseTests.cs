@@ -192,28 +192,32 @@ namespace ReSet.Core.Tests
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
             var whitelist = Assert.Single(
-                facts, f => f.Line == 58 && f.Literals.Count == 6 && f.Literals.Contains("'DACOMCARD'"));
+                facts, f => f.Line == 58 && f.Column.Equals("A.PGNAME", StringComparison.OrdinalIgnoreCase)
+                    && f.Literals.Count == 6 && f.Literals.Contains("'DACOMCARD'"));
 
             Assert.False(whitelist.IsNegated);
             Assert.Contains("'INICARD'", whitelist.Literals);
             Assert.Contains("'TOSSCARD'", whitelist.Literals);
         }
 
+        // 2026-08-18 최종 브랜치 리뷰 실측(Minor 2) - 위 InRange(0, 40)와 두 All은
+        // 셋 중 둘(CANCEL_INS, AcqManual)에서 공허하게 통과했다: 그 둘의 실제 집합
+        // 술어 개수가 0이므로 Assert.All(빈 컬렉션)은 아무것도 검사하지 않고
+        // 무조건 통과한다. "폭발하지 않는다"는 의도는 유지하되, 각 프로시저의
+        // 정확한 기대 개수를 직접 실측해 단언한다 - 추정하지 않았다(임시 덤프
+        // 테스트로 확인 후 삭제: CANCEL_INS=0, INS_EXTRA4PLCARD=1, AcqManual=0).
         [Theory]
-        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS")]
-        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD")]
-        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual")]
-        public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(string procedureName)
+        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 0)]
+        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 1)]
+        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 0)]
+        public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(string procedureName, int expectedCount)
         {
-            // 배너가 잦으면 사람이 읽지 않는다 - 재료가 폭주하지 않는지 본다.
-            // 상한 40은 SourceCommentExtractor.MaxBlocks와 같은 값이고, 코퍼스 전체
-            // IN 리터럴 목록이 약 104건(SP당 평균 7)이라는 실측에 비추면 넉넉하다.
             var ddl = TryReadObjectDefinition(procedureName);
             if (ddl == null) return;
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
 
-            Assert.InRange(facts.Count, 0, 40);
+            Assert.Equal(expectedCount, facts.Count);
             // 빈 집합은 표에 쓸 것이 없다 - 추출기가 그런 사실을 내면 안 된다.
             Assert.All(facts, f => Assert.NotEmpty(f.Literals));
             Assert.All(facts, f => Assert.False(string.IsNullOrWhiteSpace(f.Column)));
