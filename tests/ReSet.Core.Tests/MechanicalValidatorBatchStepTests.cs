@@ -747,6 +747,96 @@ SET @v_currentStepId = -101;");
             Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_anything"));
         }
 
+        // 최종 리뷰 실측: 산문의 CREATE PROCEDURE 언급이 게으른 .*?의 출발점이 되어
+        // 진짜 선언의 AS를 지나 소비하고, 키워드 폐기 조건에 걸려 매치가 버려진다.
+        // Regex.Matches는 소비한 구간 뒤부터 재개하므로 진짜 선언이 영영 검사되지 않는다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksARealDeclarationAfterAProseMention()
+        {
+            var markdown = $$"""
+                ### S17 완료 파티션 원자적 게시
+
+                원본 `CREATE PROCEDURE dbo.UP_UTIL_SETTLE_INS`를 SELECT ... FROM 기준으로 옮긴다.
+
+                ```sql
+                CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @pi_bypassPreCheck bit AS
+                SELECT 1 FROM dbo.TSettleMst AS t;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 파라미터 목록 안 주석에 FROM이 있어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenTheParamListHasACommentContainingAKeyword()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17
+    @pi_strYMD varchar(8), -- 원본 SELECT ... FROM 기준일
+    @pi_bypassPreCheck bit
+AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 기본값 문자열 리터럴에 FROM이 있어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenADefaultLiteralContainsAKeyword()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @pi_mode nvarchar(10) = 'FROM', @pi_bypassPreCheck bit AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_mode nvarchar(10)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 파라미터 이름이 정확히 @From이어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenAParameterIsNamedExactlyFrom()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @From varchar(8), @pi_bypassPreCheck bit AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@From varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 본문의 테이블 별칭 AS가 파라미터 구간으로 새어 들어오면 안 된다.
+        // 선언의 AS는 언제나 본문의 별칭 AS보다 앞이다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotTreatABodyTableAliasAsThePartOfTheParamList()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8) AS
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst AS t WHERE t.YMD = @pi_strYMD;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_strYMD"));
+        }
+
         [Fact]
         public void ValidateBatchStep_RejectsAColumnNameOutsideTheControlContract()
         {

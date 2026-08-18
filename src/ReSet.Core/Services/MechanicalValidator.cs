@@ -467,52 +467,89 @@ namespace ReSet.Core.Services
             var allowed = new HashSet<string>(
                 StepInterfaceFacts.ParameterNames(iface), StringComparer.OrdinalIgnoreCase);
 
-            foreach (Match declaration in Regex.Matches(
-                stepMarkdown,
-                // params는 [^)]*?가 아니라 .*?로 잡는다 - varchar(8)·decimal(18,2)처럼
-                // 타입 선언 안에 ')'가 섞이면 [^)]*?는 그 첫 ')'에서 막혀 AS까지
-                // 도달하지 못해 매치 자체가 실패한다(원본 계획서 정규식의 결함).
-                // .*?는 Singleline과 함께 개행까지 넘나들며 첫 단독 AS까지 게으르게
-                // 소비하므로 감싸는 괄호가 있든 없든, 타입 괄호가 있든 없든 안전하다.
-                //
-                // [최종 리뷰 B-2 수정] `(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)`로
-                // 시작 키워드를 넓혔다 - 옛 정규식은 `CREATE\s+PROC(?:EDURE)?`만
-                // 찾아 `CREATE OR ALTER PROCEDURE`(SQL Server 2016 SP1 이후 표준
-                // 관용)와 `ALTER PROCEDURE`를 아예 매치하지 못했고, 그 결과 인터페이스
-                // 검사 자체가 통째로 꺼져 발명 파라미터가 통과했다(실행 확인, 미탐).
-                @"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROC(?:EDURE)?\s+[^\s(]+\s*\(?(?<params>.*?)\bAS\b",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            // 선언은 SQL 펜스 안에서만 찾는다.
+            //
+            // [왜 펜스로 제한하는가]
+            // 산문이 원본 SP를 `CREATE PROCEDURE dbo.UP_X`로 언급하면 게으른 .*?가
+            // 그 지점에서 출발해 진짜 선언의 AS를 지나 소비한다. Regex.Matches는
+            // 소비한 구간 뒤부터 재개하므로 진짜 선언이 영영 검사되지 않는다
+            // (최종 리뷰 실측). 선언은 펜스 안에 있고 산문 언급은 밖에 있다.
+            //
+            // [왜 괄호 깊이 0의 첫 AS인가]
+            // 선언의 AS는 언제나 본문의 테이블 별칭 AS(FROM t AS x)보다 앞이다.
+            // 깊이 0 조건은 varchar(8)·decimal(18,2) 같은 타입 괄호 안에서 끊기지
+            // 않게 한다. 주석과 문자열은 미리 공백으로 지우므로 `= 'FROM'`이나
+            // 목록 안 주석에 속지 않는다 - 그 둘 때문에 검사가 통째로 꺼지던
+            // 키워드 폐기 방식을 이 앵커가 대신한다.
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
             {
-                var paramsText = declaration.Groups["params"].Value;
+                var sql = fence.Groups["sql"].Value;
+                var cleaned = BlankCommentsAndStrings(sql);
 
-                // [최종 리뷰 B-2 수정] 산문이 원본 SP를 `CREATE PROCEDURE dbo.UP_X`로
-                // 언급하면(자기 AS가 없다) 이 정규식의 게으른 .*?가 그 뒤 실제 SQL의
-                // 테이블 별칭(`FROM dbo.T AS t`)까지 뻗어나가 그 사이의 DECLARE·SELECT
-                // 문 전체를 "파라미터 선언부"로 삼킨다 - 규칙 6-1이 필수로 요구하는
-                // `DECLARE @v_currentStepId INT = 0;`이 "원본에 없는 입력 파라미터"로
-                // 반려된 실행 재현이 이 모양이다(오탐). 진짜 파라미터 목록에는 SELECT·
-                // DECLARE·BEGIN·FROM 같은 완전한 문 키워드가 나올 수 없으므로, 그런
-                // 키워드가 하나라도 보이면 이 매치는 산문이 우연히 만든 가짜 선언부로
-                // 보고 통째로 버린다 - Few-Shot을 손대지 않고, 진짜 CREATE/ALTER
-                // PROCEDURE 선언은 그대로 검사한다.
-                if (Regex.IsMatch(paramsText, @"\b(?:SELECT|DECLARE|BEGIN|FROM)\b", RegexOptions.IgnoreCase))
+                foreach (Match header in Regex.Matches(
+                    cleaned,
+                    @"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROC(?:EDURE)?\s+[^\s(]+\s*\(?",
+                    RegexOptions.IgnoreCase))
+                {
+                    var paramsEnd = FindTopLevelAs(cleaned, header.Index + header.Length);
+                    if (paramsEnd < 0) continue;
+
+                    // 이름은 원본에서 뽑는다 - 지운 사본은 문자열 안이 공백이지만
+                    // 파라미터 이름은 리터럴 밖이라 어느 쪽에서 뽑아도 같다.
+                    // BlankCommentsAndStrings는 길이를 보존하므로(Task 1에서 확립된
+                    // 관용) cleaned에서 찾은 인덱스를 그대로 원문 sql을 자르는 데
+                    // 써도 어긋나지 않는다.
+                    var paramsText = sql[(header.Index + header.Length)..paramsEnd];
+
+                    foreach (Match parameter in Regex.Matches(paramsText, @"@\w+"))
+                    {
+                        if (allowed.Contains(parameter.Value)) continue;
+
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 원본에 없는 입력 파라미터 '{parameter.Value}'를 선언합니다. " +
+                            $"이 단계의 인터페이스는 원본 프로시저의 파라미터가 전부입니다 " +
+                            $"({string.Join(", ", iface.Parameters)}). 재시작·스킵·검사 우회를 위해 " +
+                            "입력을 늘리지 마십시오 - 이미 완료된 단계는 오케스트레이터가 " +
+                            "체크포인트를 보고 호출하지 않으며, 업무 보호 검사는 호출될 때마다 " +
+                            "무조건 수행되어야 합니다.");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// startIndex부터 괄호 깊이 0에 있는 첫 `AS` 토큰의 시작 인덱스를 낸다.
+        /// 없으면 -1. 입력은 이미 주석·문자열이 공백으로 지워진 사본이어야 한다.
+        /// </summary>
+        private static int FindTopLevelAs(string cleaned, int startIndex)
+        {
+            var depth = 0;
+
+            for (var i = startIndex; i < cleaned.Length; i++)
+            {
+                var ch = cleaned[i];
+
+                if (ch == '(') { depth++; continue; }
+                if (ch == ')') { if (depth > 0) depth--; continue; }
+                if (depth != 0) continue;
+
+                if ((ch != 'A' && ch != 'a') ||
+                    i + 1 >= cleaned.Length ||
+                    (cleaned[i + 1] != 'S' && cleaned[i + 1] != 's'))
                 {
                     continue;
                 }
 
-                foreach (Match parameter in Regex.Matches(paramsText, @"@\w+"))
-                {
-                    if (allowed.Contains(parameter.Value)) continue;
+                var beforeIsBoundary = i == 0 || !char.IsLetterOrDigit(cleaned[i - 1]) && cleaned[i - 1] != '_';
+                var afterIndex = i + 2;
+                var afterIsBoundary = afterIndex >= cleaned.Length ||
+                                      !char.IsLetterOrDigit(cleaned[afterIndex]) && cleaned[afterIndex] != '_';
 
-                    result.Errors.Add(
-                        $"{step.Code} 섹션이 원본에 없는 입력 파라미터 '{parameter.Value}'를 선언합니다. " +
-                        $"이 단계의 인터페이스는 원본 프로시저의 파라미터가 전부입니다 " +
-                        $"({string.Join(", ", iface.Parameters)}). 재시작·스킵·검사 우회를 위해 " +
-                        "입력을 늘리지 마십시오 - 이미 완료된 단계는 오케스트레이터가 " +
-                        "체크포인트를 보고 호출하지 않으며, 업무 보호 검사는 호출될 때마다 " +
-                        "무조건 수행되어야 합니다.");
-                }
+                if (beforeIsBoundary && afterIsBoundary) return i;
             }
+
+            return -1;
         }
 
         /// <summary>
