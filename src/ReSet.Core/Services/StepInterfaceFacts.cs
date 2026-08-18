@@ -34,12 +34,29 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class StepInterfaceFacts
     {
-        /// <summary>프로시저 맨이름과 한정명 양쪽으로 찾을 수 있게 담는다.</summary>
+        /// <summary>
+        /// 프로시저 맨이름과 한정명 양쪽으로 찾을 수 있게 담는다.
+        ///
+        /// [맨이름이 모호해지면 빼는 이유]
+        /// 스키마가 다른 동명 프로시저가 있으면(예: dbo.UP_FOO와 archive.UP_FOO) 맨이름
+        /// "UP_FOO"이 어느 쪽을 가리키는지 이 함수는 결정할 근거가 없다. 마지막으로 처리한
+        /// 정의로 조용히 덮어쓰면 Build가 엉뚱한 SP의 파라미터를 단계에 붙일 수 있다 -
+        /// 이 계획이 막으려는 "재료가 틀린 사실을 낸다"는 바로 그 실패다. 한정명 키는
+        /// 모호하지 않으므로 그대로 남기고, 맨이름 키만 빼서 그 경로로의 조회가
+        /// 실패하게 한다 - Build가 소프트 스킵한다(계획서 §Global Constraints와 같은 판단).
+        /// 같은 스키마·같은 이름이 두 번 들어오는 것은 같은 프로시저의 재확인일 뿐이라
+        /// 충돌로 치지 않는다.
+        /// </summary>
         public static IReadOnlyDictionary<string, IReadOnlyList<string>> CollectParameters(
             IReadOnlyList<SpDefinition>? definitions)
         {
             var map = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
             if (definitions == null) return map;
+
+            // 맨이름별로 지금까지 관측한 서로 다른 한정명 집합을 추적한다.
+            // 두 번째로 다른 한정명이 나타나는 순간 그 맨이름은 영구히 모호해진다.
+            var bareNameOwners = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var ambiguousBareNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var def in definitions)
             {
@@ -49,8 +66,26 @@ namespace ReSet.Core.Services
                 if (declared.Count == 0) continue;
 
                 var snapshot = declared.ToList();
+                var qualifiedName = $"{def.Schema}.{def.Name}";
+                map[qualifiedName] = snapshot;
+
+                if (ambiguousBareNames.Contains(def.Name)) continue;
+
+                if (!bareNameOwners.TryGetValue(def.Name, out var owners))
+                {
+                    owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    bareNameOwners[def.Name] = owners;
+                }
+                owners.Add(qualifiedName);
+
+                if (owners.Count > 1)
+                {
+                    ambiguousBareNames.Add(def.Name);
+                    map.Remove(def.Name);
+                    continue;
+                }
+
                 map[def.Name] = snapshot;
-                map[$"{def.Schema}.{def.Name}"] = snapshot;
             }
 
             return map;

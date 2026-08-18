@@ -137,4 +137,46 @@ public sealed class StepInterfaceFactsTests
             StepInterfaceFacts.RenderPromptTable(interfaces),
             StepInterfaceFacts.RenderPromptTable(interfaces));
     }
+
+    // 스키마가 다른 동명 프로시저가 있으면 맨이름이 어느 쪽을 가리키는지
+    // 더 이상 확정할 수 없다. 임의로 하나를 골라 덮어쓰면 틀린 사실을 낸다 -
+    // 한정명 키 둘은 남기고 맨이름 키는 뺀다.
+    [Fact]
+    public void CollectParameters_TreatsBareNameAsAmbiguousWhenTwoSchemasShareIt()
+    {
+        var map = StepInterfaceFacts.CollectParameters(new[]
+        {
+            Definition("dbo", "UP_FOO", "@pi_strYMD varchar(8)"),
+            Definition("archive", "UP_FOO", "@pi_strYMD varchar(8)")
+        });
+
+        Assert.True(map.ContainsKey("dbo.UP_FOO"));
+        Assert.True(map.ContainsKey("archive.UP_FOO"));
+        Assert.False(map.ContainsKey("UP_FOO"));
+    }
+
+    // 모호한 맨이름으로는 매칭이 안 된다. 틀린 파라미터를 붙이느니
+    // 그 단계를 소프트 스킵한다(계획서 §Global Constraints와 같은 판단).
+    [Fact]
+    public void Build_SkipsAStepWhoseBareLegacyProcedureNameIsAmbiguous()
+    {
+        var built = BuildFrom(
+            new[] { Step("S05", "UP_FOO") },
+            Definition("dbo", "UP_FOO", "@pi_strYMD varchar(8)"),
+            Definition("archive", "UP_FOO", "@pi_strYMD varchar(8)"));
+
+        Assert.Empty(built);
+    }
+
+    // 원본 프로시저가 파라미터를 하나도 선언하지 않으면 CollectParameters가
+    // 재료를 내지 않는다. Build는 그 단계에 대해서도 사실을 내면 안 된다.
+    [Fact]
+    public void Build_SkipsAStepWhoseOnlyLegacyProcedureDeclaredNoParameters()
+    {
+        var built = BuildFrom(
+            new[] { Step("S05", "dbo.UP_UTIL_SETTLE_INS") },
+            new SpDefinition { Schema = "dbo", Name = "UP_UTIL_SETTLE_INS" });
+
+        Assert.Empty(built);
+    }
 }
