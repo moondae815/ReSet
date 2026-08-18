@@ -3692,6 +3692,117 @@ UPDATE dbo.MyBatchRun SET Foo = 1 WHERE Id = @Id;");
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
         }
 
+        // [재리뷰 수정 - B-2와 같은 부류, 방향은 오탐] 문서 전체를 한 번에 BlankCommentsAndStrings로
+        // 지우면, 산문 속 영어 소유격 아포스트로피(the orchestrator's run row) 하나가 문자열
+        // 극성을 뒤집어 뒤따르는 정상 INSERT 펜스까지 공백으로 지운다 - batch.BatchRun을 올바르게
+        // INSERT하는 계획서인데도 "행을 만드는 지점이 없다"고 오탐한다(실행 재현). 펜스 단위로
+        // 지우면 산문의 아포스트로피는 펜스 밖이라 스캔에 들어오지 않는다.
+        [Fact]
+        public void ValidateConsolidated_AcceptsAnInsertWhenProseHasAnUnpairedApostropheBeforeTheFence()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(
+                "이 단계는 오케스트레이터가 batch.BatchRun 행을 만든다 - the orchestrator's run row를 시작하는 지점이다.",
+                @"
+INSERT INTO [batch].[BatchRun] (JobName, BatchYmd, RunStatus, StartedAtUtc)
+VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());
+SET @RunId = SCOPE_IDENTITY();
+UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 위와 같은 오탐 방어를 대괄호 없는 한정 표기(batch.BatchRun)로도 잠근다.
+        [Fact]
+        public void ValidateConsolidated_AcceptsAnUnbracketedInsertWhenProseHasAnUnpairedApostropheBeforeTheFence()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(
+                "이 단계는 오케스트레이터가 batch.BatchRun 행을 만든다 - the orchestrator's run row를 시작하는 지점이다.",
+                @"
+INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus, StartedAtUtc)
+VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());
+SET @RunId = SCOPE_IDENTITY();
+UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 미탐 방어: 같은 산문 아포스트로피가 있어도, 펜스 안이 실제로 UPDATE만 하고
+        // INSERT가 없으면 여전히 잡혀야 한다 - 펜스 단위 지우기가 오탐만 없애고
+        // 진짜 결함까지 덮어 버리면 안 된다.
+        [Fact]
+        public void ValidateConsolidated_StillRejectsAnUpdateOnlyFenceEvenWithAnUnpairedApostropheInProse()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(
+                "이 단계는 오케스트레이터가 the orchestrator's run row를 종료 처리하는 지점이다.",
+                @"
+UPDATE batch.BatchRun SET RunStatus = N'Succeeded', CompletedAtUtc = SYSUTCDATETIME()
+WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 소프트 스킵 보존: 산문에만 batch.BatchRun이 언급되고 SQL 펜스에는 전혀 나오지
+        // 않으면 여전히 소프트 스킵이어야 한다(산문은 실행 지시가 아니다). 이 수정 전에는
+        // mentioned 판정이 문서 전체(산문 포함)를 봤으므로 산문 언급만으로 "언급됨"이
+        // 성립해 이 케이스가 오히려 오류로 잡혔다 - 펜스 단위로 좁히면서 소프트 스킵이
+        // 바로잡힌다.
+        [Fact]
+        public void ValidateConsolidated_SkipsWhenBatchRunIsMentionedOnlyInProseNotInAnySqlFence()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(
+                "이 단계는 batch.BatchRun 행의 상태를 참고만 한다.",
+                "SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 여러 펜스: 첫 펜스는 UPDATE만 하고, 둘째 펜스가 INSERT한다 - 펜스별 판정을
+        // OR로 합치므로 문서 전체 판정과 같은 의미가 되어 오류가 없어야 한다.
+        [Fact]
+        public void ValidateConsolidated_AcceptsWhenOneFenceUpdatesAndAnotherFenceInsertsBatchRun()
+        {
+            var markdown = $$"""
+                ## 통합 배치 아키텍처 개요
+
+                내용.
+
+                ## Mermaid 기반 통합 흐름도
+
+                ```mermaid
+                flowchart TD
+                A["시작"] --> B["끝"]
+                ```
+
+                ## 단계별 이행 상세 및 의사코드
+
+                ```sql
+                UPDATE batch.BatchRun SET RunStatus = N'Running' WHERE RunId = @RunId;
+                ```
+
+                ```sql
+                INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus, StartedAtUtc)
+                VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());
+                SET @RunId = SCOPE_IDENTITY();
+                ```
+
+                ## 통합 데이터 정합성 검증 SQL 세트
+
+                내용.
+                """;
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
         /// <summary>
         /// RequiredConsolidatedHeaders의 네 헤더를 갖춘 최소 통합 문서를 만들고,
         /// 단계 상세 절에 주어진 SQL을 싣는다. 검증 SQL 절은 비워 둔다 -
@@ -3710,6 +3821,36 @@ UPDATE dbo.MyBatchRun SET Foo = 1 WHERE Id = @Id;");
             ```
 
             ## 단계별 이행 상세 및 의사코드
+
+            ```sql
+            {{sql}}
+            ```
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            내용.
+            """;
+
+        /// <summary>
+        /// <see cref="ConsolidatedDocumentWithStepBody(string)"/>와 같은 골격이되,
+        /// SQL 펜스 앞에 산문 한 줄을 끼워 넣는다 - 산문 속 짝 없는 아포스트로피가
+        /// 뒤따르는 펜스에 영향을 주는지(B-2와 같은 부류) 보는 회귀에 쓴다.
+        /// </summary>
+        private static string ConsolidatedDocumentWithStepBody(string prose, string sql) => $$"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            {{prose}}
 
             ```sql
             {{sql}}

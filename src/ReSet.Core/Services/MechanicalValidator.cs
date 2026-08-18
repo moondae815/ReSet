@@ -4107,11 +4107,19 @@ namespace ReSet.Core.Services
         /// `\b`를 붙이지 않는다(공백 바로 뒤에 대괄호가 오면 그 경계에서 `\b`가
         /// 성립하지 않아 대괄호 형태를 못 찾게 되기 때문이다 - `QualifiedTableNameFragment`
         /// 문서 참고).
+        ///
+        /// [재리뷰 수정 - B-2와 같은 부류, 방향은 오탐] 이 검사도 B-2가 고친 문제와
+        /// 정확히 같은 문서 전체 <see cref="BlankCommentsAndStrings"/>를 썼다. B-2는
+        /// 미탐(SQL 펜스가 통째로 지워져 검사 자체가 꺼짐) 방향이었지만, 여기서는
+        /// 산문 속 영어 소유격 아포스트로피(예: "the orchestrator's run row") 하나가
+        /// 문자열 극성을 뒤집어 뒤따르는 정상 INSERT 펜스까지 공백으로 지워버려
+        /// "행을 만드는 지점이 없다"는 오탐을 낸다(실행 재현). <see cref="CleanedSqlFences"/>가
+        /// 내는 펜스별 사본을 도는 것으로 바로잡는다 - `mentioned`/`inserted` 모두
+        /// 펜스별 판정을 OR로 합치므로 산문의 아포스트로피가 다른 펜스에 영향을
+        /// 주지 못한다. 이 검사는 인덱스를 쓰지 않으므로 `Offset`은 버린다.
         /// </summary>
         private static void CheckBatchRunRowCreation(string markdown, ValidationResult result)
         {
-            var cleaned = BlankCommentsAndStrings(markdown);
-
             foreach (var table in BatchControlContract.Tables)
             {
                 if (table.Origin != ControlRowOrigin.FirstStepInserts) continue;
@@ -4119,14 +4127,27 @@ namespace ReSet.Core.Services
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
                 var fragment = QualifiedTableNameFragment(bare);
 
-                var mentioned = Regex.IsMatch(
-                    cleaned, $@"\b{fragment}", RegexOptions.IgnoreCase);
-                if (!mentioned) continue;
+                var mentioned = false;
+                var inserted = false;
 
-                var inserted = Regex.IsMatch(
-                    cleaned,
-                    $@"(INSERT\s+INTO|MERGE)\s+{fragment}",
-                    RegexOptions.IgnoreCase);
+                foreach (var (cleaned, _) in CleanedSqlFences(markdown))
+                {
+                    if (!mentioned && Regex.IsMatch(
+                        cleaned, $@"\b{fragment}", RegexOptions.IgnoreCase))
+                    {
+                        mentioned = true;
+                    }
+
+                    if (!inserted && Regex.IsMatch(
+                        cleaned,
+                        $@"(INSERT\s+INTO|MERGE)\s+{fragment}",
+                        RegexOptions.IgnoreCase))
+                    {
+                        inserted = true;
+                    }
+                }
+
+                if (!mentioned) continue;
                 if (inserted) continue;
 
                 var message =
