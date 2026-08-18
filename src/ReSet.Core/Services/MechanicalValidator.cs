@@ -3436,22 +3436,22 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 이 문(statement) 안의 CROSS JOIN이 전부 이 문 안에서 `WITH ... AS (`
-        /// 또는 `, ... AS (`로 선언된 CTE 이름 둘을 잇는지 본다. 하나라도 원시
-        /// 테이블을 피연산자로 두면(한쪽만 CTE여도) false를 낸다 - 그건 진짜
-        /// 카티전일 수 있다. CTE가 하나도 선언되지 않은 문(진짜 위반 예시가 이
-        /// 모양이다)은 애초에 CTE로 좁힐 근거가 없으므로 false를 내 정탐을 그대로
-        /// 둔다.
+        /// 이 문(statement) 안의 CROSS JOIN이 전부, 본문이 정확히 한 행으로
+        /// 집계되는 CTE 둘을 잇는지 본다(<see cref="CollectSingleRowAggregateCteNames"/>).
+        /// 하나라도 그렇지 않은 것(원시 테이블, 통과용 CTE, GROUP BY로 여러 행을
+        /// 내는 CTE 등)을 피연산자로 두면(한쪽만이어도) false를 낸다 - 그건 진짜
+        /// 카티전일 수 있다.
+        ///
+        /// 감사 수정 라운드 1은 "이름이 CTE면 안전"이라고 가정했는데, CTE 본문이
+        /// SELECT * 같은 통과용이면 여러 행을 내므로 그 가정이 틀렸다 - 재리뷰가
+        /// 정확히 이 모양(WITH L AS (SELECT * FROM ...), R AS (SELECT * FROM ...)
+        /// 뒤 CROSS JOIN, 바깥에서 별칭별 SUM)으로 재현했다. "한 행이 보장되는
+        /// CTE 둘"만 안전하다.
         /// </summary>
         private static bool AllCrossJoinsJoinKnownCtes(string cleanedStatement)
         {
-            var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match m in Regex.Matches(cleanedStatement, @"\bWITH\s+(?<n>\w+)\s+AS\s*\(", RegexOptions.IgnoreCase))
-                cteNames.Add(m.Groups["n"].Value);
-            foreach (Match m in Regex.Matches(cleanedStatement, @",\s*(?<n>\w+)\s+AS\s*\(", RegexOptions.IgnoreCase))
-                cteNames.Add(m.Groups["n"].Value);
-
-            if (cteNames.Count == 0) return false;
+            var singleRowAggregateCteNames = CollectSingleRowAggregateCteNames(cleanedStatement);
+            if (singleRowAggregateCteNames.Count == 0) return false;
 
             var crossJoinCount = Regex.Matches(cleanedStatement, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase).Count;
             var operandMatches = Regex.Matches(cleanedStatement,
@@ -3467,11 +3467,54 @@ namespace ReSet.Core.Services
             {
                 var left = BareObjectName(om.Groups["left"].Value);
                 var right = BareObjectName(om.Groups["right"].Value);
-                if (!cteNames.Contains(left) || !cteNames.Contains(right)) return false;
+                if (!singleRowAggregateCteNames.Contains(left) || !singleRowAggregateCteNames.Contains(right)) return false;
             }
 
             return true;
         }
+
+        /// <summary>
+        /// `WITH ... AS ( ... )` / `, ... AS ( ... )`로 선언된 CTE 중, 본문이
+        /// 집계 함수(SUM/COUNT/AVG/MIN/MAX)를 쓰고 GROUP BY가 없어 정확히 한
+        /// 행을 내는 것만 이름을 모은다. 그런 CTE끼리의 CROSS JOIN만 1×1이라
+        /// 무해하다 - GROUP BY가 있으면 그룹 수만큼, 통과용(SELECT * 등)이면
+        /// 원본 행 수만큼 나오므로 한 행 보장이 없다.
+        ///
+        /// CTE 본문은 <see cref="ExtractBalancedParenGroup"/>(Task 6 자산, 중첩
+        /// 괄호를 다루고 문자열·주석 안 괄호를 깊이에서 제외한다)로 정확히
+        /// 잘라낸다 - 두 번째 괄호 매칭 구현을 새로 만들지 않는다. 호출부에서
+        /// 이미 블랭크 처리된 사본을 넘기므로, 주석·문자열 속 SUM이나 GROUP BY
+        /// 텍스트에 속지 않는다.
+        /// </summary>
+        private static HashSet<string> CollectSingleRowAggregateCteNames(string cleanedStatement)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var declarationPattern in CteDeclarationPatterns)
+            {
+                foreach (Match m in Regex.Matches(cleanedStatement, declarationPattern, RegexOptions.IgnoreCase))
+                {
+                    var openParenIndex = m.Index + m.Length - 1; // 매치가 '(' 로 끝난다.
+                    var body = ExtractBalancedParenGroup(cleanedStatement, openParenIndex);
+                    if (body == null) continue;
+
+                    var hasAggregate = Regex.IsMatch(body, @"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", RegexOptions.IgnoreCase);
+                    var hasGroupBy = Regex.IsMatch(body, @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
+                    if (hasAggregate && !hasGroupBy)
+                    {
+                        result.Add(m.Groups["n"].Value);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static readonly string[] CteDeclarationPatterns =
+        {
+            @"\bWITH\s+(?<n>\w+)\s+AS\s*\(",
+            @",\s*(?<n>\w+)\s+AS\s*\("
+        };
 
         /// <summary>
         /// SQL 주석(`--`, `/* */`)과 문자열 리터럴(`'...'`) 안의 내용을 공백으로 지운

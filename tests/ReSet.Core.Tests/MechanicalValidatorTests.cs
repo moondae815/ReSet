@@ -3310,6 +3310,56 @@ HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(T.TXAMT),0);");
                 e => e.Type == ErrorType.VerificationCartesianComparison);
         }
 
+        [Fact]
+        public void ValidateConsolidated_FlagsPassThroughCtesCrossJoinedThenAggregatedOutside()
+        {
+            // 감사 수정 라운드 2: 라운드 1의 좁히기는 "이름이 CTE면 안전"이라고
+            // 가정했는데 그 가정이 틀렸다. L, R이 통과용(SELECT *)일 뿐 한 행으로
+            // 집계되지 않으면 CROSS JOIN은 여전히 진짜 카티전이고, 바깥에서
+            // 별칭별로 SUM을 걸면 원래 결함(S16/S17)과 같은 모양이 된다. CTE
+            // 이름만 보고 넘기면 이 재현을 놓친다 - 재리뷰가 직접 재현했다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT * FROM dbo.TSettleMst), R AS (SELECT * FROM dbo.TSettleByTX)
+SELECT ISNULL(SUM(L.TXAMT),0), ISNULL(SUM(R.TXAMT),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.TXAMT),0) <> ISNULL(SUM(R.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfGroupedCtes()
+        {
+            // GROUP BY가 있는 CTE는 그룹 수만큼 행을 낸다 - 한 행이 보장되지
+            // 않으므로 CROSS JOIN이 1×1이라는 근거가 없다. 넘기면 안 된다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID),
+     R AS (SELECT T.PLTID, SUM(T.TXAMT) AS S FROM dbo.TSettleByTX AS T GROUP BY T.PLTID)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.S),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfOneAggregateCteAndOnePassThroughCte()
+        {
+            // 한쪽(L)만 집계 CTE고 다른 쪽(R)은 통과용이면 R이 여러 행을 낼 수
+            // 있어 1×1 보장이 없다 - 양쪽이 다 집계 CTE일 때만 넘겨야 한다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(M.TXAMT),0) AS S FROM dbo.TSettleMst AS M WHERE M.YMD=@BatchYmd),
+     R AS (SELECT * FROM dbo.TSettleByTX)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.TXAMT),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
         private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
             ## 통합 배치 아키텍처 개요
 
