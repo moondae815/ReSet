@@ -3163,39 +3163,73 @@ namespace ReSet.Core.Services
         {
             var cleaned = BlankCommentsAndStrings(stepMarkdown);
 
-            // (a) 트랜잭션 안에서 만든 그림자는 롤백과 함께 소멸한다. 문서에 트랜잭션이
-            // 여럿이면 각각을, COMMIT TRAN이든 ROLLBACK TRAN이든 그 트랜잭션을 닫는
-            // 첫 문까지를 "안"으로 본다 - 닫는 문이 아예 없으면 문서 끝까지가 안이다.
-            var searchFrom = 0;
-            while (searchFrom < cleaned.Length)
+            // (a) 트랜잭션 안에서 만든 그림자는 롤백과 함께 소멸한다. "첫 BEGIN TRAN부터
+            // 첫 종료문까지"만 보면 중첩 트랜잭션에서 안쪽 COMMIT TRAN을 바깥 트랜잭션의
+            // 종료로 오인해, 안쪽 COMMIT 뒤·바깥 COMMIT 앞에 있는 그림자를 "트랜잭션
+            // 밖"으로 잘못 분류한다(리뷰 재현, 미탐) - @@TRANCOUNT처럼 깊이를 세어, 그
+            // 깊이가 0보다 큰 구간 전체를 "안"으로 본다. 문서에 트랜잭션이 여럿이면
+            // 각각 독립된 구간이 된다. 닫는 문이 짝을 잃고 남으면(깊이가 0보다 큰 채로
+            // 문서가 끝나면) 문서 끝까지가 안이다. 깊이가 이미 0일 때 만난 종료문은
+            // 무시한다 - 대응하는 BEGIN이 없는 종료문 하나 때문에 깊이가 음수로 내려가
+            // 이후 스캔이 어긋나는 것을 막기 위해서다. `SAVE TRAN`(세이브포인트)은
+            // "BEGIN"으로 시작하지 않으므로 애초에 이 스캔에 잡히지 않는다 - 깊이를
+            // 올리지 않는다.
+            var depth = 0;
+            var openStart = -1;
+            var openTransactionSpans = new List<(int Start, int End)>();
+            var events = new List<(int Index, int Length, bool IsBegin)>();
+            foreach (Match m in BeginTranPattern.Matches(cleaned)) events.Add((m.Index, m.Length, true));
+            foreach (Match m in EndTranPattern.Matches(cleaned)) events.Add((m.Index, m.Length, false));
+            events.Sort((x, y) => x.Index.CompareTo(y.Index));
+
+            foreach (var ev in events)
             {
-                var beginMatch = BeginTranPattern.Match(cleaned, searchFrom);
-                if (!beginMatch.Success) break;
-
-                var afterBegin = beginMatch.Index + beginMatch.Length;
-                var endMatch = EndTranPattern.Match(cleaned, afterBegin);
-                var regionEnd = endMatch.Success ? endMatch.Index : cleaned.Length;
-                var inside = cleaned[afterBegin..regionEnd];
-
-                if (ShadowIntoPattern.IsMatch(inside))
+                if (ev.IsBegin)
                 {
-                    result.Errors.Add(
-                        $"{step.Code} 섹션이 BEGIN TRAN 안에서 그림자 테이블을 만듭니다. " +
-                        "SELECT INTO로 만든 테이블은 롤백과 함께 소멸하므로, 실패 시 복원할 " +
-                        "대상이 사라진 채 CATCH의 DELETE만 자동 커밋으로 실행되어 롤백이 이미 " +
-                        "복원한 행을 다시 지웁니다. 그림자는 BEGIN TRAN 앞에서 만드십시오. " +
-                        "단일 트랜잭션으로 끝나는 단계라면 그림자 없이 ROLLBACK TRAN만 쓰십시오.");
+                    if (depth == 0) openStart = ev.Index + ev.Length;
+                    depth++;
+                    continue;
                 }
 
-                searchFrom = endMatch.Success ? endMatch.Index + endMatch.Length : cleaned.Length;
+                if (depth == 0) continue; // 짝 없는 종료문 - 무시하고 계속한다.
+
+                depth--;
+                if (depth == 0 && openStart >= 0)
+                {
+                    openTransactionSpans.Add((openStart, ev.Index));
+                    openStart = -1;
+                }
+            }
+
+            // 닫는 문이 짝을 잃고 남으면 문서 끝까지가 안이다.
+            if (depth > 0 && openStart >= 0) openTransactionSpans.Add((openStart, cleaned.Length));
+
+            foreach (var span in openTransactionSpans)
+            {
+                if (!ShadowIntoPattern.IsMatch(cleaned[span.Start..span.End])) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 BEGIN TRAN 안에서 그림자 테이블을 만듭니다. " +
+                    "SELECT INTO로 만든 테이블은 롤백과 함께 소멸하므로, 실패 시 복원할 " +
+                    "대상이 사라진 채 CATCH의 DELETE만 자동 커밋으로 실행되어 롤백이 이미 " +
+                    "복원한 행을 다시 지웁니다. 그림자는 BEGIN TRAN 앞에서 만드십시오. " +
+                    "단일 트랜잭션으로 끝나는 단계라면 그림자 없이 ROLLBACK TRAN만 쓰십시오.");
             }
 
             // (b) 복원은 원래 삭제한 범위와 같은 범위를 지워야 한다. WHERE로 범위를
             // 좁힌 DELETE는 테이블명 바로 뒤에 세미콜론이 오지 않으므로 이 패턴에
             // 걸리지 않는다 - `[\w.\[\]]+\s*;`가 테이블명 문자만 삼키고 WHERE 절의
             // 공백·비교 연산자 앞에서 멈추기 때문이다.
+            //
+            // 이 규칙이 말하려는 것은 "그림자에서 복원할 때 원래 지운 범위와 같은
+            // 범위만 지워야 한다"이지, WHERE 없는 전량 삭제 자체가 아니다. INSERT의
+            // 원천이 `batch_shadow.`가 아니면(그림자와 무관한 일반 ETL 전량 갱신 등)
+            // 이 검사의 대상이 아니다(리뷰 재현, 오탐) - INSERT 문 전체(다음 `;`까지)를
+            // 잡아 그 안에 `FROM batch_shadow.`가 있는지 따로 확인한다.
             foreach (Match restore in RestoreWithoutRangePattern.Matches(cleaned))
             {
+                if (!ShadowSourcePattern.IsMatch(restore.Groups["insertBody"].Value)) continue;
+
                 result.Errors.Add(
                     $"{step.Code} 섹션의 복원이 `{restore.Groups["t"].Value}`를 WHERE 없이 " +
                     "전량 삭제한 뒤 재삽입합니다. 복원은 이 단계가 실제로 지운 범위와 같은 " +
@@ -3238,8 +3272,14 @@ namespace ReSet.Core.Services
             new(@"SELECT\s+.*?\bINTO\s+batch_shadow\.", RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
         private static readonly Regex RestoreWithoutRangePattern = new(
-            @"DELETE\s+FROM\s+(?<t>[\w.\[\]]+)\s*;(?<tail>.{0,400}?)INSERT\s+INTO\s+\k<t>",
+            @"DELETE\s+FROM\s+(?<t>[\w.\[\]]+)\s*;(?<tail>.{0,400}?)" +
+            @"INSERT\s+INTO\s+\k<t>\b(?<insertBody>.*?);",
             RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        // (b)의 두 번째 관문: INSERT 문 안에 `FROM batch_shadow.`가 있어야 "그림자에서
+        // 복원"이다. 값 목록으로 채우는 일반 INSERT(`VALUES (...)`)는 그림자와 무관하다.
+        private static readonly Regex ShadowSourcePattern =
+            new(@"\bFROM\s+batch_shadow\.", RegexOptions.IgnoreCase);
 
         private static readonly Regex ExecDynamicBatchPattern =
             new(@"EXEC\s*\((?<body>.*?)\)\s*;", RegexOptions.IgnoreCase | RegexOptions.Singleline);

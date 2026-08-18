@@ -1092,16 +1092,41 @@ ROLLBACK TRAN;");
             Assert.Contains(result.Errors, e => e.Contains("그림자"));
         }
 
-        // 위험: 중첩된 BEGIN TRAN. 안쪽 COMMIT TRAN만 보고 바깥 트랜잭션이 아직
-        // 열려 있다는 사실을 놓치면 안 된다 - 그림자는 여전히 바깥 트랜잭션 안이다.
+        // 위험: 중첩된 BEGIN TRAN. 그림자가 안쪽 트랜잭션이 열려 있는 동안 만들어져도
+        // 바깥 트랜잭션이 여전히 열려 있으므로 위반이다. 그림자 구문을 안쪽 COMMIT
+        // *뒤*·바깥 COMMIT *앞*에 둔다 - 첫 BEGIN/첫 COMMIT 쌍만 보는 얕은 구현도
+        // (그림자가 첫 COMMIT 앞에 있으면) 우연히 잡아내므로, 그 우연을 배제하려면
+        // 그림자가 첫(=안쪽) COMMIT을 지난 뒤에 나와야 한다 - 리뷰에서 실측된
+        // 미탐 재현과 같은 모양이다.
         [Fact]
         public void ValidateBatchStep_RejectsAShadowCreatedInsideANestedTransaction()
         {
             var markdown = Section(@"
 BEGIN TRAN;
 BEGIN TRAN;
-SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
 COMMIT TRAN;
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 리뷰 재현(미탐): 안쪽 트랜잭션이 COMMIT TRAN으로 닫혀도 바깥 트랜잭션은
+        // 아직 열려 있다. "첫 종료문을 그 트랜잭션의 종료로 소비"하는 얕은 구현은
+        // 안쪽 COMMIT을 바깥 트랜잭션의 종료로 오인해, 그 뒤의 그림자를 트랜잭션
+        // 밖으로 잘못 분류한다 - 트랜잭션 깊이를 세지 않으면 재현되는 미탐이다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAShadowCreatedBetweenAnInnerCommitAndTheStillOpenOuterCommit()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+BEGIN TRAN;
+COMMIT TRAN;
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
 COMMIT TRAN;");
 
             var result = new MechanicalValidator().ValidateBatchStep(
@@ -1155,6 +1180,27 @@ END CATCH");
 BEGIN CATCH
     DELETE FROM dbo.TSettleByTX WHERE YMD = @pi_strYMD;
     INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12 WHERE YMD = @pi_strYMD;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 리뷰 재현(오탐): 이 규칙이 말하려는 것은 "그림자에서 복원할 때 원래 지운
+        // 범위와 같은 범위만 지워야 한다"이지, WHERE 없는 전량 삭제 자체가 아니다.
+        // 그림자와 무관한 일반 ETL 전량 갱신(INSERT ... VALUES)까지 잡으면, 이
+        // 규칙과 아무 관계가 없는 정상 배치 SQL이 걸린다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsAWhereLessDeleteFollowedByANonShadowInsert()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX;
+    INSERT INTO dbo.TSettleByTX (Col1) VALUES (@v1);
     SET @po_intRetVal = @v_currentStepId;
     RETURN @v_currentStepId;
 END CATCH");
