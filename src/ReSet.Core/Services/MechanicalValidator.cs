@@ -26,6 +26,7 @@ namespace ReSet.Core.Services
         PromptInstructionLeak,
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
+        VerificationCartesianComparison,
         General
     }
 
@@ -162,6 +163,7 @@ namespace ReSet.Core.Services
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
+                CheckVerificationCartesianComparison(cleansed, result);
             }
             catch (Exception ex)
             {
@@ -3335,6 +3337,53 @@ namespace ReSet.Core.Services
         private static readonly Regex ThrowTokenPattern = new(@"\bTHROW\b", RegexOptions.IgnoreCase);
 
         private static readonly Regex ReturnTokenPattern = new(@"\bRETURN\b", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// 정합성 검증 SQL이 카티전 곱으로 두 집계를 비교하는지 본다.
+        ///
+        /// 실측: FROM TSettleMst AS M CROSS JOIN TSettleByTX AS T 뒤
+        /// HAVING SUM(M.TXAMT) &lt;&gt; SUM(T.TXAMT)는 좌변이 |T|×SUM_M,
+        /// 우변이 |M|×SUM_T가 되어 |M|≠|T|인 정상 데이터에서 항상 불일치한다.
+        /// 정상 실행이 매번 데이터 품질 실패로 기록되어 공개가 상시 차단되고,
+        /// 증적에는 카티전 배수만큼 부풀려진 틀린 금액이 남는다.
+        ///
+        /// <see cref="BlankCommentsAndStrings"/>로 지운 사본에서 CROSS JOIN과 SUM을
+        /// 찾는다 - 원문을 그대로 보면 주석 `-- CROSS JOIN을 쓰지 않는다`나 동적 SQL을
+        /// 만드는 문자열 리터럴 안의 `CROSS JOIN` 텍스트가 진짜 카티전 조인으로
+        /// 오인되어 정상 검증식이 걸린다(오탐).
+        /// </summary>
+        private static void CheckVerificationCartesianComparison(string markdown, ValidationResult result)
+        {
+            foreach (Match block in Regex.Matches(
+                markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var sql = BlankCommentsAndStrings(block.Groups["sql"].Value);
+                if (!Regex.IsMatch(sql, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase)) continue;
+
+                // 서로 다른 별칭 둘에 각각 SUM이 걸린 비교만 든다.
+                var aliases = Regex.Matches(sql, @"\bSUM\s*\(\s*(?:ISNULL\s*\(\s*)?(?<a>\w+)\.",
+                        RegexOptions.IgnoreCase)
+                    .Select(m => m.Groups["a"].Value)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (aliases.Count < 2) continue;
+
+                var message =
+                    "정합성 검증 SQL이 CROSS JOIN으로 두 집계를 비교합니다. 카티전 곱이라 " +
+                    "각 변이 상대 테이블의 건수배가 되어 정상 데이터에서 항상 불일치하고, " +
+                    "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
+                    "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
+
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.VerificationCartesianComparison,
+                    Message = message,
+                    RawContext = block.Groups["sql"].Value.Trim()
+                });
+            }
+        }
 
         /// <summary>
         /// SQL 주석(`--`, `/* */`)과 문자열 리터럴(`'...'`) 안의 내용을 공백으로 지운

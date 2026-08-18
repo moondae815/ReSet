@@ -3148,5 +3148,112 @@ END"
         /// 펜스 밖으로 본다 - 검사 대상이 된다.
         /// </summary>
         private static string RequiredHeadersMarkdown() => WrapSpec("내용");
+
+        // 감사 🔴(S16): CROSS JOIN 뒤 양변 SUM 비교는 각 변이 상대 건수배가 되어
+        // 정상 데이터에서 항상 불일치한다. 그 결과가 S17 공개 상시 차단으로 이어졌다.
+        [Fact]
+        public void ValidateConsolidated_RejectsACartesianAggregateComparison()
+        {
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(T.TXAMT),0)
+FROM dbo.TSettleMst AS M
+CROSS JOIN dbo.TSettleByTX AS T
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_AcceptsIndependentAggregatesComparedAsScalars()
+        {
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleMst WHERE YMD = @BatchYmd),
+     R AS (SELECT ISNULL(SUM(TXAMT),0) AS S FROM dbo.TSettleByTX WHERE YMD = @BatchYmd)
+SELECT L.S, R.S FROM L, R WHERE L.S <> R.S;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinKeywordInsideAComment()
+        {
+            // CROSS JOIN이라는 낱말이 주석 안에만 있고, 실제 질의는 INNER JOIN으로
+            // 두 원천을 건별로 맞춘 뒤 한 번만 집계한다 - 별칭이 둘이라는 표면
+            // 패턴은 있지만 카티전이 아니므로 데이터 품질 실패로 잡히면 안 된다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+-- 과거에는 여기서 CROSS JOIN 방식을 썼으나 지금은 INNER JOIN 방식으로 건별 대사한다.
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(T.TXAMT),0)
+FROM dbo.TSettleMst AS M
+INNER JOIN dbo.TSettleByTX AS T ON T.PLTID = M.PLTID
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(T.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossApply()
+        {
+            // CROSS APPLY는 CROSS JOIN이 아니다 - \bCROSS\s+JOIN\b이 이를 잡으면
+            // 정상적인 상관 서브쿼리 패턴이 오탐으로 걸린다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(A.TXAMT),0), ISNULL(SUM(B.TXAMT),0)
+FROM dbo.TSettleMst AS A
+CROSS APPLY (SELECT TOP 1 TXAMT FROM dbo.TSettleByTX WHERE PLTID = A.PLTID) AS B
+HAVING ISNULL(SUM(A.TXAMT),0) <> ISNULL(SUM(B.TXAMT),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagTheSameAliasSummedTwice()
+        {
+            // 같은 별칭에 걸린 SUM이 둘이면 Distinct로 별칭이 1개가 되어, 서로
+            // 다른 두 집계를 비교하는 카티전 패턴이 아니다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+SELECT ISNULL(SUM(M.TXAMT),0), ISNULL(SUM(M.FEE),0)
+FROM dbo.TSettleMst AS M
+CROSS JOIN dbo.TSettleByTX AS T
+HAVING ISNULL(SUM(M.TXAMT),0) <> ISNULL(SUM(M.FEE),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
+        private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            내용.
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            ```sql
+            {sql}
+            ```
+            """;
     }
 }
