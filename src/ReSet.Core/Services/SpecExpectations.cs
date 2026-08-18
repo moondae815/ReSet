@@ -61,6 +61,11 @@ namespace ReSet.Core.Services
         public IReadOnlyList<DmlScopeFact> DmlScopeFacts { get; init; } = Array.Empty<DmlScopeFact>();
 
         /// <summary>
+        /// DML 최상위 WHERE의 IN/NOT IN 리터럴 집합. CheckSetPredicates가 소비한다.
+        /// </summary>
+        public IReadOnlyList<SetPredicateFact> SetPredicates { get; init; } = Array.Empty<SetPredicateFact>();
+
+        /// <summary>
         /// UPDATE/INSERT/DELETE FROM 절 파생 테이블의 컬럼 정의. SET(또는 SELECT)
         /// 우변이 별칭.컬럼 참조에서 멈추고 그 정의를 어디에도 적지 않는 것을
         /// 막는다 - 이번 감사의 유일한 축 A 🔴(EXCEPTION_PROC의 X.PGCOMM).
@@ -123,6 +128,7 @@ namespace ReSet.Core.Services
             // 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 생긴다.
             var dmlScopeFacts = DmlScopeExtractor.Extract(spDef.DdlText, ResolveDateParameter(analysis));
             var derivedColumns = DerivedTableColumnExtractor.Extract(spDef.DdlText);
+            var setPredicates = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -166,7 +172,12 @@ namespace ReSet.Core.Services
                 && roundingCalls.Count == 0
                 && sessionOptions.Count == 0
                 && dmlScopeFacts.Count == 0
-                && derivedColumns.Count == 0)
+                && derivedColumns.Count == 0
+                // 오늘은 중복항이다 - ExtractSetPredicates와 Extract가 같은 세 문장만
+                // 방문하므로 setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다.
+                // From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이 그 불변식을
+                // 지키고, 깨지는 날 이 항이 실제로 필요해진다.
+                && setPredicates.Count == 0)
             {
                 return null;
             }
@@ -181,7 +192,8 @@ namespace ReSet.Core.Services
                 SessionOptions = sessionOptions,
                 HasInternalProcedureCall = hasInternalProcedureCall,
                 DmlScopeFacts = dmlScopeFacts,
-                DerivedColumns = derivedColumns
+                DerivedColumns = derivedColumns,
+                SetPredicates = setPredicates
             };
         }
 

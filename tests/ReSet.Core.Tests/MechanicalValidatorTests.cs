@@ -3135,6 +3135,202 @@ END"
             Assert.Contains("DiscountFlag", def.Anchors);
         }
 
+        // Column은 한정자를 포함한 원문 표기다(DmlScopeExtractor.SetPredicateFact
+        // 문서 참고) - 실측 DDL의 `A.PGName NOT IN (...)`을 그대로 반영해 "A.PGName"으로
+        // 둔다. 마지막 식별자 조각만 담으면 코퍼스에서 키 충돌이 실제로 난다.
+        private static SetPredicateFact NineePgFact() => new(
+            "UPDATE", 39, "A.PGName", true,
+            new[]
+            {
+                "'PLCard'", "'SamSungPay'", "'SSGPayCard'", "'KakaoPay'", "'KakaoCard'",
+                "'impaymobile'", "'NaverCard'", "'ApplePay'", "'TossCardAuth'"
+            });
+
+        private static string SetPredicateSection(string literalCell) =>
+            "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+            + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
+            + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+            + $"| UPDATE 1 | 39 | A.PGName | NOT IN | 9 | {literalCell} |\n";
+
+        [Fact]
+        public void Validate_SetPredicateTableMissing_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { NineePgFact() } };
+
+            var result = new MechanicalValidator().Validate(RequiredHeadersMarkdown(), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void Validate_SetPredicateWithAllLiterals_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { NineePgFact() } };
+            var markdown = RequiredHeadersMarkdown()
+                + SetPredicateSection(
+                    "'PLCard', 'SamSungPay', 'SSGPayCard', 'KakaoPay', 'KakaoCard', 'impaymobile', 'NaverCard', 'ApplePay', 'TossCardAuth'");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void Validate_SetPredicateDroppingTwoLiterals_ShouldBeAnError()
+        {
+            // 2026-08-18 축 A 감사의 실제 실패 방식. 명세서는 9개 중 7개를 문서
+            // 어딘가에 담고 있었고, 빠진 것은 SSGPayCard와 KakaoCard다. 행 골격만
+            // 요구하면 이 문서가 통과한다.
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { NineePgFact() } };
+            var markdown = RequiredHeadersMarkdown()
+                + SetPredicateSection(
+                    "'PLCard', 'SamSungPay', 'KakaoPay', 'impaymobile', 'NaverCard', 'ApplePay', 'TossCardAuth'");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(
+                result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+            Assert.Contains("SSGPayCard", error.Message);
+            Assert.Contains("KakaoCard", error.Message);
+        }
+
+        [Fact]
+        public void Validate_SetPredicateWithNumericLiterals_ShouldNotBeSatisfiedByLineNumber()
+        {
+            // 설계 §5.1. 행 전체를 부분 문자열로 훑으면 라인 번호 108이 이미 0과 1을
+            // 담아 UseState IN (0,1) 대조가 무조건 통과한다 - 검사가 아무것도 묻지
+            // 않게 된다. 대조 대상은 리터럴 목록 칸 하나여야 한다.
+            var fact = new SetPredicateFact("UPDATE", 108, "UseState", false, new[] { "0", "1" });
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 108 | UseState | IN | 2 | (생략) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void Validate_SetPredicateRowKeyedByLineAndColumn_ShouldDistinguishTwoInsOnOneStatement()
+        {
+            // 한 문장에 IN이 둘이면 라인만으로는 행을 특정할 수 없다.
+            var facts = new[]
+            {
+                new SetPredicateFact("UPDATE", 30, "PGName", false, new[] { "'A'", "'B'" }),
+                new SetPredicateFact("UPDATE", 30, "UseState", false, new[] { "0", "1" })
+            };
+            var expectations = EmptyExpectations() with { SetPredicates = facts };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 30 | PGName | IN | 2 | 'A', 'B' |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // UseState 행이 없으므로 하나만 걸려야 한다 - PGName 행이 라인 30을
+            // 담았다고 UseState까지 통과시키면 안 된다.
+            var error = Assert.Single(
+                result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+            Assert.Contains("UseState", error.Message);
+        }
+
+        [Fact]
+        public void Validate_SamePairKeyTwiceWithOnlyOneRow_ShouldBeAnError()
+        {
+            // (Operation, Line, Column) 키가 유일하다는 가정이 깨지는 경우 - 같은
+            // 한정 컬럼이 한 문장에서 IN으로 두 번 걸리면(`A.X IN (1) AND A.X IN (2)`)
+            // 추출기는 사실을 둘 내고 합치지 않는다(설계·ExtractSetPredicates 주석).
+            // 표에 행이 하나뿐이면 사실 하나가 통째로 증발한 것이므로 실패해야 한다 -
+            // `rowLines.FirstOrDefault`로 첫 행 하나에 둘 다 매칭시키면 이 누락을
+            // 조용히 통과시킨다.
+            var facts = new[]
+            {
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }),
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" })
+            };
+            var expectations = EmptyExpectations() with { SetPredicates = facts };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 1 | 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(
+                result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+            Assert.Contains("A.X", error.Message);
+        }
+
+        [Fact]
+        public void Validate_SameKeyTwiceWithTwoDistinctRows_ShouldPass()
+        {
+            // 위 실패 사례의 짝 - 행이 사실 수만큼 있고 각 행의 원소 집합이 기대
+            // 집합들의 다중집합과 일치하면 통과해야 한다. 두 행의 순서는 사실의
+            // 순서와 같을 필요가 없다 - 다중집합 비교이지 자리 대응이 아니다.
+            var facts = new[]
+            {
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }),
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" })
+            };
+            var expectations = EmptyExpectations() with { SetPredicates = facts };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 1 | 2 |\n"
+                + "| UPDATE 2 | 50 | A.X | IN | 1 | 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull()
+        {
+            // [조기 반환과 이 재료의 관계 - 설계 §6.3의 예외] SpecExpectations.From의
+            // 조기 반환은 순수 AND-체인이고, 보통은 "이 재료만 만드는 픽스처"로 자기
+            // 항을 지킨다. 그런데 이 재료는 그 격리가 <b>원리적으로 불가능하다</b> -
+            // ExtractSetPredicates와 Extract가 UpdateSpecification·DeleteSpecification·
+            // InsertSpecification이라는 같은 세 문장만 방문하므로, SetPredicates가
+            // 비지 않으면 DmlScopeFacts도 결코 비지 않는다. 즉 setPredicates 항은
+            // 단독 판별자가 될 수 없다.
+            //
+            // 그래서 이 테스트는 격리 대신 <b>그 불변식 자체</b>를 단언한다. 불변식이
+            // 깨지는 날(예: 추출기 하나가 다른 문장까지 훑게 되는 날) 이 테스트가
+            // 먼저 실패해, 조기 반환 항이 그때부터 실제로 필요해졌음을 알린다.
+            var sp = new SpDefinition
+            {
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DELETE FROM dbo.T WHERE UseState IN (0, 1)
+END"
+            };
+
+            var expectations = SpecExpectations.From(sp);
+
+            Assert.NotNull(expectations);
+            var fact = Assert.Single(expectations!.SetPredicates);
+            Assert.Equal("UseState", fact.Column);
+            Assert.Equal(new[] { "0", "1" }, fact.Literals);
+
+            // 불변식: 집합 술어가 있으면 DML 사실도 반드시 있다. 이것이 성립하는
+            // 동안 setPredicates 항은 조기 반환의 중복항이다.
+            Assert.NotEmpty(expectations.DmlScopeFacts);
+
+            // 나머지 재료는 이 픽스처가 만들지 않는다 - 이 테스트가 무엇을 증명하는지
+            // 좁혀 둔다.
+            Assert.Empty(expectations.DerivedColumns);
+            Assert.Empty(expectations.RoundingCalls);
+        }
+
         private static SpecExpectations EmptyExpectations() =>
             new(
                 Array.Empty<UpdateColumnExpectation>(),
