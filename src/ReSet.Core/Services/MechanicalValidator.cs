@@ -26,6 +26,11 @@ namespace ReSet.Core.Services
         PromptInstructionLeak,
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
+        // VerificationCartesianComparison을 여기 넣으면 General의 서수가 14에서
+        // 15로 바뀐다 - "기존 값의 정수 표현이 안 바뀐다"는 서술은 부정확하다.
+        // 다만 이 코드베이스 어디에도 (int)ErrorType 캐스트나 ErrorType의 숫자
+        // 직렬화가 없으므로(문자열 이름으로만 비교·표시한다), 서수 이동 자체의
+        // 기능 영향은 없다.
         VerificationCartesianComparison,
         General
     }
@@ -3357,32 +3362,115 @@ namespace ReSet.Core.Services
             foreach (Match block in Regex.Matches(
                 markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
             {
-                var sql = BlankCommentsAndStrings(block.Groups["sql"].Value);
-                if (!Regex.IsMatch(sql, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase)) continue;
+                var rawSql = block.Groups["sql"].Value;
+                var cleanedSql = BlankCommentsAndStrings(rawSql);
 
-                // 서로 다른 별칭 둘에 각각 SUM이 걸린 비교만 든다.
-                var aliases = Regex.Matches(sql, @"\bSUM\s*\(\s*(?:ISNULL\s*\(\s*)?(?<a>\w+)\.",
-                        RegexOptions.IgnoreCase)
-                    .Select(m => m.Groups["a"].Value)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                if (aliases.Count < 2) continue;
-
-                var message =
-                    "정합성 검증 SQL이 CROSS JOIN으로 두 집계를 비교합니다. 카티전 곱이라 " +
-                    "각 변이 상대 테이블의 건수배가 되어 정상 데이터에서 항상 불일치하고, " +
-                    "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
-                    "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
-
-                result.Errors.Add(message);
-                result.DetailedErrors.Add(new DetailedError
+                // 결함은 "한 문 안에" CROSS JOIN과 두 별칭 SUM 비교가 함께 있을 때만
+                // 성립한다. 블록 전체를 한 덩어리로 보면, "SQL 세트" 관용대로 한
+                // 펜스에 무관한 질의 여럿을 묶었을 때 A 질의의 무해한 CROSS JOIN과
+                // B 질의의 정상적인 두 별칭 SUM 비교가 우연히 합쳐져 오탐이 난다 -
+                // 감사 수정 라운드 1이 이 오탐을 직접 재현했다. 문 경계(`;`)로 자른
+                // 사본에서 각 문을 따로 판정한다.
+                foreach (var (cleanedStatement, rawStatement) in SplitSqlStatements(rawSql, cleanedSql))
                 {
-                    Type = ErrorType.VerificationCartesianComparison,
-                    Message = message,
-                    RawContext = block.Groups["sql"].Value.Trim()
-                });
+                    if (!Regex.IsMatch(cleanedStatement, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase)) continue;
+
+                    // 이 문의 CROSS JOIN이 전부 "이미 각자 집계된 CTE 둘"을 잇는
+                    // 것이라면 카티전이 1×1이라 무해하다 - AiService.cs 규칙 2가
+                    // 권장하는 "양쪽을 각자의 CTE에서 집계한 뒤 비교"를 CROSS JOIN
+                    // 문법으로 쓴 정상 패턴이다. 감사 수정 라운드 1이 이 오탐도
+                    // 직접 재현했다.
+                    if (AllCrossJoinsJoinKnownCtes(cleanedStatement)) continue;
+
+                    // 서로 다른 별칭 둘에 각각 SUM이 걸린 비교만 든다.
+                    var aliases = Regex.Matches(cleanedStatement, @"\bSUM\s*\(\s*(?:ISNULL\s*\(\s*)?(?<a>\w+)\.",
+                            RegexOptions.IgnoreCase)
+                        .Select(m => m.Groups["a"].Value)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    if (aliases.Count < 2) continue;
+
+                    var message =
+                        "정합성 검증 SQL이 CROSS JOIN으로 두 집계를 비교합니다. 카티전 곱이라 " +
+                        "각 변이 상대 테이블의 건수배가 되어 정상 데이터에서 항상 불일치하고, " +
+                        "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
+                        "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
+
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.VerificationCartesianComparison,
+                        Message = message,
+                        RawContext = rawStatement.Trim()
+                    });
+                }
             }
+        }
+
+        /// <summary>
+        /// 블랭크 처리된 사본을 `;` 경계로 잘라 (블랭크 사본, 원본) 문 쌍을 낸다.
+        /// 문자열·주석 안의 `;`는 <see cref="BlankCommentsAndStrings"/>가 공백으로
+        /// 바꿔 놓았으므로 경계가 되지 않는다. 자르기는 원본과 길이가 같은 사본의
+        /// 인덱스를 그대로 원본에 대는 방식이라 두 목록의 각 항목이 같은 구간을
+        /// 가리킨다 - <see cref="CheckShadowBackupContract"/>가 EXEC() 위치·내용을
+        /// 분리하는 것과 같은 관용이다. 마지막 문이 `;` 없이 끝나도 한 문으로
+        /// 다룬다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, string Raw)> SplitSqlStatements(string raw, string cleaned)
+        {
+            var start = 0;
+            for (var i = 0; i < cleaned.Length; i++)
+            {
+                if (cleaned[i] != ';') continue;
+                yield return (cleaned.Substring(start, i - start + 1), raw.Substring(start, i - start + 1));
+                start = i + 1;
+            }
+
+            if (start >= cleaned.Length) yield break;
+
+            var tail = cleaned.Substring(start);
+            if (string.IsNullOrWhiteSpace(tail)) yield break;
+
+            yield return (tail, raw.Substring(start));
+        }
+
+        /// <summary>
+        /// 이 문(statement) 안의 CROSS JOIN이 전부 이 문 안에서 `WITH ... AS (`
+        /// 또는 `, ... AS (`로 선언된 CTE 이름 둘을 잇는지 본다. 하나라도 원시
+        /// 테이블을 피연산자로 두면(한쪽만 CTE여도) false를 낸다 - 그건 진짜
+        /// 카티전일 수 있다. CTE가 하나도 선언되지 않은 문(진짜 위반 예시가 이
+        /// 모양이다)은 애초에 CTE로 좁힐 근거가 없으므로 false를 내 정탐을 그대로
+        /// 둔다.
+        /// </summary>
+        private static bool AllCrossJoinsJoinKnownCtes(string cleanedStatement)
+        {
+            var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in Regex.Matches(cleanedStatement, @"\bWITH\s+(?<n>\w+)\s+AS\s*\(", RegexOptions.IgnoreCase))
+                cteNames.Add(m.Groups["n"].Value);
+            foreach (Match m in Regex.Matches(cleanedStatement, @",\s*(?<n>\w+)\s+AS\s*\(", RegexOptions.IgnoreCase))
+                cteNames.Add(m.Groups["n"].Value);
+
+            if (cteNames.Count == 0) return false;
+
+            var crossJoinCount = Regex.Matches(cleanedStatement, @"\bCROSS\s+JOIN\b", RegexOptions.IgnoreCase).Count;
+            var operandMatches = Regex.Matches(cleanedStatement,
+                @"\bFROM\s+(?<left>[\w\.\[\]]+)(?:\s+(?:AS\s+)?\w+)?\s+CROSS\s+JOIN\s+(?<right>[\w\.\[\]]+)",
+                RegexOptions.IgnoreCase);
+
+            // CROSS JOIN 발생 수만큼 피연산자 쌍을 못 찾으면(예: FROM 없이 걸린
+            // CROSS JOIN처럼 이 패턴이 다루지 않는 구문) 안전 쪽으로 판단하지
+            // 않는다 - 못 찾은 발생은 원시 테이블 취급과 같다.
+            if (operandMatches.Count < crossJoinCount) return false;
+
+            foreach (Match om in operandMatches)
+            {
+                var left = BareObjectName(om.Groups["left"].Value);
+                var right = BareObjectName(om.Groups["right"].Value);
+                if (!cteNames.Contains(left) || !cteNames.Contains(right)) return false;
+            }
+
+            return true;
         }
 
         /// <summary>
