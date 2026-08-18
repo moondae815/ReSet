@@ -252,26 +252,6 @@
 
   출처: 2026-08-17 14개 SP 전수 재생성 실측
 
-### 축 A 재감사 잔여 (2026-08-18)
-
-- [ ] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** — 🟠, 직전
-      감사에서도 났고 이번에도 잔존. `object_definition.sql:39`의 인라인 리터럴 9개
-      (`PLCard`·`SamSungPay`·`SSGPayCard`·`KakaoPay`·`KakaoCard`·`impaymobile`·
-      `NaverCard`·`ApplePay`·`TossCardAuth`)를 한 번도 열거하지 않고 "원천 사용 PG
-      제외"로만 적는데, 같은 문서 `Spec.md:82`가 "원천 PG 목록"을 5개짜리 변수
-      `@v_PLCardSettlePeriodPG`로 정의해 두어 5개로 읽힌다. 갱신 1은 그 변수를 쓰지
-      않는다. 이행하면 4개 PG가 자동회수 대상에 잘못 편입된다
-- [ ] **UPDATE 매핑 표 밖의 대상 한정 리터럴이 재료로 실리지 않는다** — 위 항목의
-      일반형. `COMM_UPD` 문장 2의 `ABROADCHK = 1` 및 6개 PG 화이트리스트도 같은
-      이유로 명세서에서 사라졌다(🟠). WHERE 최상위의 **값**은 DML 범위 표가 담지
-      않는다(컬럼 이름만 담는다). 값까지 담으면 노이즈라는 판단이 있었으나, 대상
-      집합을 정하는 `IN` 리터럴 목록은 예외로 다룰 근거가 두 SP에서 나왔다
-
-  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
-  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
-  (2026-08-18 작성. 두 항목 모두 이 설계 하나가 닫는다 — `IN`/`NOT IN` 리터럴 목록만
-  재료로 삼고 스칼라 비교 474건은 노이즈로 제외한다)
-
 ### 정적 분석
 
 - [ ] **`DependencyInfo.Type` 타입화** — `DependencyInfo.cs:12`가 여전히 `string`.
@@ -297,6 +277,25 @@
 - [ ] **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** —
       `ReSet.Cli/Program.cs:2002`. 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회
       경로와 저장 경로가 갈라진다
+- [ ] **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
+      `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE
+      술어 컬럼·조인 키·리터럴 목록 등 값 칸은 대조하지만, `UPDATE N`/`DELETE N` 같은
+      "문장" 칸 자체는 어느 검사도 읽지 않는다(2026-08-18 최종 브랜치 리뷰가 지적,
+      "consider"로 남긴 새 검사라 이번 수정 범위 밖으로 미룸). 그 결과 채번
+      헬퍼(`AiService.BuildStatementOrdinals`)의 회귀 — 예: 이번에 고친 "같은 줄
+      두 문장이 번호를 덮어쓰는" 결함이나, DML 범위 표와 집합 술어 표가 서로 다른
+      번호를 내는 정렬 붕괴 — 가 L1을 그대로 통과한다. 지금은 `AiServiceTests_Rich`의
+      단위 테스트가 이 채번을 잡지만, 그 테스트를 지우거나 빠뜨려도 L1은 구조적으로
+      알아채지 못한다. 후속 작업: `CheckDmlScopeTable`/`CheckSetPredicates`가 "문장"
+      칸의 연산·번호가 실제 사실 순서와 일치하는지도 대조하도록 넓힌다. 이번
+      재리뷰(2026-08-18, FIX ROUND 3)가 덧붙인 관측 — `MechanicalValidator.cs:1828`
+      부근의 행 매칭(`matchingRows`를 고르는 `r.Split('|')`)은 여전히 순진한 분할을
+      쓰는데, `ExtractSetPredicateLiteralCell`은 이미 `SplitTableRowCells`(이스케이프된
+      `\|`를 존중하는 분할)로 바꿨다 — "칸이 무엇인가"에 행 매칭과 칸 추출이 서로
+      다른 규칙을 쓴다. `'x|10|y'` 같은 리터럴이 이스케이프되어 렌더되면
+      (`'x\|10\|y'`) 행 매칭 쪽의 순진한 분할이 그 자리에서 유령 칸(`10`)을 만들어
+      다른 사실의 라인 그룹과 거짓으로 매칭될 수 있다. 문장 칸 검사를 넣을 때
+      행 매칭도 `SplitTableRowCells`로 함께 통일해 닫는다.
 
 ---
 
@@ -393,6 +392,35 @@
 
 **전부 반영 완료(2026-08-13, 2026-08-14·2026-08-16 재확인).** 각 설계 문서의 해당 항목에
 취소선과 해소 근거를 달았다. 아래는 어디를 어떻게 고쳤는지의 기록이며, 새로 할 일은 없다.
+
+### 2026-08-18 집합 술어 재료로 닫은 축 A 재감사 2건 (둘 다 🟠)
+
+- [x] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** / **`COMM_UPD`
+  문장 2의 6개 PG 화이트리스트가 재료로 실리지 않는다** — DML 최상위 WHERE의
+  `IN`/`NOT IN` 리터럴 목록만 기계 확정 재료로 삼아 닫았다. 스칼라 리터럴 비교
+  474건(`COMM_UPD` 하나가 100건)은 노이즈로 제외했다 — 그 값들은 컬럼 이름만
+  봐도 존재를 추측할 수 있는 것들인 반면, **집합의 크기와 원소는 컬럼 이름으로
+  추측할 수 없다**는 것이 두 SP를 예외로 다룬 구조적 근거다.
+
+  - `DmlScopeExtractor.ExtractSetPredicates`가 문장·라인·컬럼(한정자 포함 원문
+    표기, 예: `A.PGName` — 같은 WHERE 최상위에 `A.USESTATE IN (...)`와
+    `B.USESTATE IN (...)`가 함께 나오면 마지막 조각만 담을 경우 두 사실의 키가
+    충돌하기 때문에 한정자를 그대로 남긴다)·연산·원소 수·리터럴 목록을 뽑는다.
+  - `AiService.BuildSetPredicateTableLines`가 그 재료를
+    `### 집합 술어 (기계 확정 — 수정 금지)` 표로 세 프롬프트 지점에 렌더한다.
+    이 표는 DML 범위 표와 같은 채번 헬퍼(`BuildStatementOrdinals`)를 써서
+    문장 번호를 맞춘다(집합 술어가 없는 문장을 건너뛰어 번호가 밀리던 결함을
+    공유 헬퍼로 없앴다).
+  - `MechanicalValidator.CheckSetPredicates`가 L1에서 대조한다. **`리터럴 목록`
+    칸 하나만** 문자열로 쪼개 대칭 비교한다 — 행 전체를 훑으면 라인 번호
+    `108`이 그 자체로 `0`·`1`을 담고 있어 숫자 리터럴 대조가 라인 번호와
+    구별되지 않고 퇴화하기 때문이다. 또한 같은 문장·컬럼 키에 사실이 둘 이상
+    있을 수 있어(위 한정자 예시) **키 그룹별 다중집합**으로 대조한다 —
+    `FirstOrDefault`로 첫 번째 사실 하나만 골라 매칭하면 같은 키의 다른 사실이
+    같은 행에 겹쳐 통과해 버려 한쪽의 리터럴 누락을 조용히 놓친다.
+
+  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
+  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
 
 ### 2026-08-16 재검증에서 닫은 3건 (전부 P2)
 

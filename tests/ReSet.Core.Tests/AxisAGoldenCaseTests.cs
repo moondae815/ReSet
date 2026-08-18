@@ -152,6 +152,77 @@ namespace ReSet.Core.Tests
                 + string.Join("\n", offenders));
         }
 
+        [Fact]
+        public void ExtractSetPredicates_OnExpectProc_ShouldCarryTheNinePgLiterals()
+        {
+            // 2026-08-18 축 A 감사의 🟠. object_definition.sql:39의 9개 리터럴이
+            // 명세서 어디에도 하나의 집합으로 제시되지 않아, 이관하면 4개 PG가
+            // 자동회수 대상에 잘못 편입된다. 픽스처가 아니라 실물 DDL로 잡는 이유는
+            // 최종 리뷰의 Critical이 "12개 태스크 리뷰가 전부 픽스처만 썼고 실물
+            // 코퍼스를 안 봐서 감사의 그 문서가 통과했다"였기 때문이다.
+            //
+            // Line=27, Column="A.PGName"은 실측값이다 - ExtractSetPredicates를 직접
+            // 돌려 확인했다(임시 덤프 테스트, 확인 후 삭제). Line은 IN이 있는 39행이
+            // 아니라 그 문장을 시작하는 UPDATE 키워드의 27행이고, Column은
+            // 좌변 원문 표기(한정자 포함) 계약이라 "PGName"이 아니라 "A.PGName"이다.
+            var ddl = TryReadObjectDefinition("dbo.UP_UTIL_SETTLE_EXPECT_PROC");
+            if (ddl == null) return;
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+            var pgName = Assert.Single(
+                facts, f => f.Line == 27 && f.Column.Equals("A.PGName", StringComparison.OrdinalIgnoreCase));
+
+            Assert.True(pgName.IsNegated);
+            Assert.Equal(9, pgName.Literals.Count);
+            Assert.Contains("'SSGPayCard'", pgName.Literals);
+            Assert.Contains("'KakaoCard'", pgName.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_OnCommUpd_ShouldCarryTheSixPgWhitelist()
+        {
+            // 같은 감사의 두 번째 🟠. object_definition.sql:77의 6개 화이트리스트가
+            // 명세서에 없어, 해외카드 수수료율이 국내건·타 PG건까지 적용될 수 있다.
+            //
+            // Line=58, Column="A.PGNAME"도 실측값이다(위와 같은 방식으로 확인) - 이
+            // 문장을 시작하는 UPDATE는 58행이고, 나머지 14개 집합 술어 중 원소 6개에
+            // 'DACOMCARD'를 담은 것은 이 행 하나뿐이라 Assert.Single이 안전하다.
+            var ddl = TryReadObjectDefinition("dbo.UP_UTIL_SETTLE_COMM_UPD");
+            if (ddl == null) return;
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+            var whitelist = Assert.Single(
+                facts, f => f.Line == 58 && f.Column.Equals("A.PGNAME", StringComparison.OrdinalIgnoreCase)
+                    && f.Literals.Count == 6 && f.Literals.Contains("'DACOMCARD'"));
+
+            Assert.False(whitelist.IsNegated);
+            Assert.Contains("'INICARD'", whitelist.Literals);
+            Assert.Contains("'TOSSCARD'", whitelist.Literals);
+        }
+
+        // 2026-08-18 최종 브랜치 리뷰 실측(Minor 2) - 위 InRange(0, 40)와 두 All은
+        // 셋 중 둘(CANCEL_INS, AcqManual)에서 공허하게 통과했다: 그 둘의 실제 집합
+        // 술어 개수가 0이므로 Assert.All(빈 컬렉션)은 아무것도 검사하지 않고
+        // 무조건 통과한다. "폭발하지 않는다"는 의도는 유지하되, 각 프로시저의
+        // 정확한 기대 개수를 직접 실측해 단언한다 - 추정하지 않았다(임시 덤프
+        // 테스트로 확인 후 삭제: CANCEL_INS=0, INS_EXTRA4PLCARD=1, AcqManual=0).
+        [Theory]
+        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 0)]
+        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 1)]
+        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 0)]
+        public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(string procedureName, int expectedCount)
+        {
+            var ddl = TryReadObjectDefinition(procedureName);
+            if (ddl == null) return;
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(expectedCount, facts.Count);
+            // 빈 집합은 표에 쓸 것이 없다 - 추출기가 그런 사실을 내면 안 된다.
+            Assert.All(facts, f => Assert.NotEmpty(f.Literals));
+            Assert.All(facts, f => Assert.False(string.IsNullOrWhiteSpace(f.Column)));
+        }
+
         private static string? TryReadObjectDefinition(string procedureName)
         {
             var root = TryFindRepoRoot();

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Syntax;
@@ -26,6 +27,7 @@ namespace ReSet.Core.Services
         PromptInstructionLeak,
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
+        SetPredicateMismatch,
         General
     }
 
@@ -123,6 +125,7 @@ namespace ReSet.Core.Services
                     CheckHeaderContractContradiction(cleansed, expectations, result);
                     CheckDmlScopeTable(cleansed, expectations, result);
                     CheckDerivedTableDefinitions(cleansed, expectations, result);
+                    CheckSetPredicates(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1733,6 +1736,358 @@ namespace ReSet.Core.Services
         {
             var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
                 lines, 0, line => line.Trim() == DerivedTableColumnExtractor.DerivedTableHeading);
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 기계 확정 집합 술어 표가 명세서에 옮겨졌고, 각 행의 원소 집합이 원본과
+        /// 같은지 본다.
+        ///
+        /// [행 키는 라인 + 컬럼, 그러나 유일하지 않다] 한 문장에 IN이 둘 이상일 수
+        /// 있어 라인만으로는 행을 특정할 수 없다. 게다가 같은 한정 컬럼이 같은
+        /// 문장에서 IN으로 두 번 걸리면(`A.X IN (1) AND A.X IN (2)`) (Operation,
+        /// Line, Column) 키조차 유일하지 않다 - ExtractSetPredicates는 그 경우를
+        /// 합치지 않고 사실을 둘 낸다(AND/OR 의미를 날조하지 않기 위해서). 그래서
+        /// 이 검사는 (Operation, Line, Column) 키로 사실을 <b>묶어</b>, 키마다
+        /// (1) 그 키를 가진 행을 전부 모으고 (2) 행 수가 사실 수와 같은지 보고
+        /// (3) 각 행의 리터럴 목록 칸을 파싱한 원소 집합들의 다중집합이 기대 집합들의
+        /// 다중집합과 같은지 대칭 비교한다. `rowLines.FirstOrDefault`로 첫 행 하나만
+        /// 찾으면 같은 키의 둘째 사실이 첫 행에 겹쳐 매칭되어 리터럴 누락이 조용히
+        /// 통과한다.
+        ///
+        /// [대조 대상은 행이 아니라 리터럴 목록 칸 하나다] 행 전체를 부분 문자열로
+        /// 훑으면 숫자 리터럴에서 퇴화한다 - `| UPDATE 3 | 108 | UseState | IN | 2 |
+        /// 0, 1 |`에서 "0"과 "1"을 찾으면 라인 번호 108이 이미 둘 다 담고 있어 무조건
+        /// 통과한다. 칸을 꺼내 원소 집합으로 대칭 비교하면 숫자든 문자열이든 같은
+        /// 규칙이 적용되고 오류 메시지가 구체화된다.
+        ///
+        /// [문서 전체를 훑지 않는 이유] 2026-08-18 축 A 감사 실측: EXPECT_PROC의
+        /// 9개 리터럴 중 7개가 <b>다른 문장</b>에 등장한다. "각 리터럴이 문서
+        /// 어딘가에 있는가"를 물으면 그 우연 덕분에 통과한다 - HeaderContractTerms의
+        /// Fix Round 2가 같은 이유로 판정 단위를 문서에서 문장으로 좁혔다.
+        /// </summary>
+        private static void CheckSetPredicates(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.SetPredicates.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (headingIndex, endIndex) = LocateSetPredicateSection(lines);
+
+            if (headingIndex < 0)
+            {
+                var message =
+                    $"기계 확정 집합 술어 표가 명세서에 없습니다. `{DmlScopeExtractor.SetPredicateTableHeading}` "
+                    + $"헤딩과 {expectations.SetPredicates.Count}개 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SetPredicateMismatch,
+                    Message = message
+                });
+                return;
+            }
+
+            var rowLines = new List<string>();
+            for (var i = headingIndex + 1; i < endIndex; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    rowLines.Add(lines[i]);
+                }
+            }
+
+            // (Operation, Line, Column) 키별로 사실을 묶는다 - 같은 키의 사실이
+            // 둘 이상이면 "행이 하나 있다"는 것만으로는 부족하고, 행도 그만큼
+            // 있어야 한다. Column은 대소문자를 가리지 않는다 - 아래 행 매칭이
+            // OrdinalIgnoreCase로 컬럼 칸을 비교하는 것과 같은 규칙이다.
+            var groups = expectations.SetPredicates
+                .GroupBy(f => (Operation: f.Operation.ToUpperInvariant(), f.Line, Column: f.Column.ToUpperInvariant()));
+
+            foreach (var group in groups)
+            {
+                var facts = group.ToList();
+                var line = group.Key.Line;
+                var displayColumn = facts[0].Column;
+                var displayOperation = facts[0].Operation;
+                var lineToken = line.ToString();
+
+                var matchingRows = rowLines.Where(r =>
+                {
+                    var cells = r.Split('|').Select(c => c.Trim()).ToList();
+                    return cells.Any(c => c == lineToken)
+                        && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase));
+                }).ToList();
+
+                if (matchingRows.Count != facts.Count)
+                {
+                    var countMessage =
+                        $"집합 술어 표에서 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 키를 가진 사실이 "
+                        + $"{facts.Count}개인데 행은 {matchingRows.Count}개 있습니다. 같은 컬럼에 IN이 "
+                        + "여러 번 걸리면 사실도 여럿이므로, 표는 각 사실을 별도 행으로 옮겨야 합니다 - "
+                        + "행을 합치거나 생략할 수 없습니다.";
+                    result.Errors.Add(countMessage);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.SetPredicateMismatch,
+                        Message = countMessage,
+                        RawContext = $"{displayOperation} @ line {line} · {displayColumn}"
+                    });
+                    continue;
+                }
+
+                // 기대 쪽 리터럴에도 렌더가 적용한 개행 접기를 똑같이 적용한다 -
+                // FoldNewlinesLikeRenderedCell 문서 참고(리터럴 자체에 개행이 든
+                // 경우, 대조가 아예 성립 불가능해지는 것을 막기 위한 결정).
+                var expectedSets = facts
+                    .Select(f => f.Literals.Select(FoldNewlinesLikeRenderedCell).ToHashSet(StringComparer.Ordinal))
+                    .ToList();
+                var writtenSets = matchingRows.Select(ExtractSetPredicateLiteralCell).ToList();
+
+                // 다중집합 비교 - 순서가 아니라 원소 집합 자체로 짝을 찾는다. 짝을
+                // 찾은 쌍은 서로 지우고, 남는 쪽이 곧 누락(기대에는 있는데 표에
+                // 대응 행이 없음)과 초과(표에는 있는데 대응하는 기대가 없음)다.
+                var remainingWritten = new List<HashSet<string>>(writtenSets);
+                var unmatchedExpected = new List<HashSet<string>>();
+
+                foreach (var expectedSet in expectedSets)
+                {
+                    var matchIndex = remainingWritten.FindIndex(w => w.SetEquals(expectedSet));
+                    if (matchIndex >= 0)
+                    {
+                        remainingWritten.RemoveAt(matchIndex);
+                    }
+                    else
+                    {
+                        unmatchedExpected.Add(expectedSet);
+                    }
+                }
+
+                if (unmatchedExpected.Count == 0) continue;
+
+                string mismatchMessage;
+                if (facts.Count == 1)
+                {
+                    // 키가 하나뿐이면 어긋난 짝이 명확하다 - 원소 단위로 누락/추가를
+                    // 짚어 준다("누락: SSGPayCard, KakaoCard").
+                    var expected = unmatchedExpected[0];
+                    var written = remainingWritten[0];
+                    var missing = expected.Except(written).ToList();
+                    var extra = written.Except(expected).ToList();
+
+                    var parts = new List<string>();
+                    if (missing.Count > 0) parts.Add($"누락: {string.Join(", ", missing)}");
+                    if (extra.Count > 0) parts.Add($"추가: {string.Join(", ", extra)}");
+
+                    mismatchMessage =
+                        $"집합 술어 표의 라인 {line} 컬럼 `{displayColumn}` 행에서 리터럴 목록이 "
+                        + $"원본과 다릅니다({string.Join(" / ", parts)}). 집합의 멤버십이 대상 행을 "
+                        + "정하므로 원소를 줄이거나 요약할 수 없습니다.";
+                }
+                else
+                {
+                    // 같은 키에 사실이 여럿이면 몇 번째 행이 몇 번째 사실과 짝인지
+                    // 자리로 단정할 수 없다 - 다중집합으로만 대조했으므로, 짝을 못
+                    // 찾은 집합 전체를 그대로 보여준다.
+                    var missingSets = unmatchedExpected.Select(s => "{" + string.Join(", ", s) + "}");
+                    var extraSets = remainingWritten.Select(s => "{" + string.Join(", ", s) + "}");
+
+                    mismatchMessage =
+                        $"집합 술어 표의 라인 {line} 컬럼 `{displayColumn}` 키에 사실이 {facts.Count}개인데, "
+                        + "행들의 원소 집합 다중집합이 원본과 다릅니다. "
+                        + $"표에서 대응하는 행을 찾지 못한 원본 집합: {string.Join(" | ", missingSets)}"
+                        + (remainingWritten.Count > 0
+                            ? $"; 원본 어느 집합과도 대응하지 않는 표의 집합: {string.Join(" | ", extraSets)}"
+                            : string.Empty)
+                        + " 같은 컬럼의 각 IN은 별도 행으로, 원소를 정확히 옮겨야 AND/OR 의미가 보존됩니다.";
+                }
+
+                result.Errors.Add(mismatchMessage);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SetPredicateMismatch,
+                    Message = mismatchMessage,
+                    RawContext = $"{displayOperation} @ line {line} · {displayColumn}"
+                });
+            }
+        }
+
+        /// <summary>
+        /// 집합 술어 표 행에서 `리터럴 목록` 칸(마지막 칸) 하나만 꺼내 SQL 리터럴
+        /// 문법을 존중하는 토큰화로 원소 집합을 만든다. 행 전체가 아니라 이 칸
+        /// 하나만 보는 것이 §5.1의 요구다 - 그래야 라인 번호 같은 숫자 셀이
+        /// 리터럴과 섞여 대조가 퇴화하지 않는다.
+        ///
+        /// [행을 SplitTableRowCells로 나누는 이유] `row.Split('|')`로 행 전체를
+        /// 단순 분할하면, AiService.EscapeTableCell이 렌더 시점에 리터럴 안의
+        /// `|`를 `\|`로 이스케이프한 자리에서도 갈라진다 - 이스케이프는 "셀
+        /// 경계가 아니다"라는 뜻인데 단순 분할은 그 뜻을 모른다. 실측(리뷰):
+        /// `Nm IN ('a|b','c')`가 렌더된 칸 `'a\|b', 'c'`를 단순 분할하면 행
+        /// 자체가 그 자리에서 잘못 쪼개져 리터럴 칸의 마지막 조각이 `b'`만
+        /// 남는다("누락: 'a\|b' / 추가: b'"). SplitTableRowCells는 `\|`를 셀
+        /// 경계가 아니라 칸 내용의 일부(복원된 `|`)로 다뤄 이 문제를 없앤다.
+        ///
+        /// [칸 안을 쉼표로 단순 분할하지 않는 이유] 렌더된 칸은 리터럴을 그대로
+        /// `, `로 이어 붙인 것이라(AiService.BuildSetPredicateTableLines의
+        /// `string.Join(", ", fact.Literals)`), 문자열 리터럴 자체에 쉼표가 있으면
+        /// (`Nm IN ('a,b','c')` → 칸 `'a,b', 'c'`) 쉼표 단순 분할이 `'a,b'`를
+        /// `'a`와 `b'` 두 조각으로 쪼갠다. 기대 쪽(`SetPredicateFact.Literals`)은
+        /// 원문 그대로 `{"'a,b'", "'c'"}`를 들고 있으므로, 표를 한 글자도 안 틀리고
+        /// 그대로 옮겨도 이 대조는 영원히 만족 불가능했다(실측: "누락: 'a,b' /
+        /// 추가: 'a, b'" - 공백 차이처럼 보이는 유령 원소를 보고해 모델이 옳은
+        /// 표를 "고치게" 만든다). §0이 막으려는 "모델이 옳게 옮겨도 L1이 틀렸다고
+        /// 하는" 실패 모양이라, TokenizeLiteralCell로 따옴표 안의 쉼표를 구분자로
+        /// 보지 않는다.
+        /// </summary>
+        private static HashSet<string> ExtractSetPredicateLiteralCell(string row)
+        {
+            var cellsOfRow = SplitTableRowCells(row);
+            var literalCell = cellsOfRow.Count > 0 ? cellsOfRow[cellsOfRow.Count - 1] : string.Empty;
+            if (literalCell.Length == 0 && cellsOfRow.Count >= 2)
+            {
+                // 행이 `|`로 끝나면 마지막 조각이 빈 문자열이다.
+                literalCell = cellsOfRow[cellsOfRow.Count - 2];
+            }
+
+            return TokenizeLiteralCell(literalCell).ToHashSet(StringComparer.Ordinal);
+        }
+
+        /// <summary>
+        /// 마크다운 표 행을 `|`로 나누되, AiService.EscapeTableCell이 렌더 시점에
+        /// 남긴 `\|`(이스케이프된 파이프)는 셀 경계로 보지 않고 칸 내용의 일부로
+        /// 되돌린다(`|`로 복원). ExtractSetPredicateLiteralCell 문서의 실측 근거
+        /// 참고 - 이 복원이 없으면 리터럴 안의 `|`가 행 자체를 잘못 쪼갠다.
+        /// </summary>
+        private static List<string> SplitTableRowCells(string row)
+        {
+            var cells = new List<string>();
+            var current = new StringBuilder();
+
+            for (var i = 0; i < row.Length; i++)
+            {
+                var c = row[i];
+                if (c == '\\' && i + 1 < row.Length && row[i + 1] == '|')
+                {
+                    current.Append('|');
+                    i++;
+                    continue;
+                }
+
+                if (c == '|')
+                {
+                    cells.Add(current.ToString().Trim());
+                    current.Clear();
+                    continue;
+                }
+
+                current.Append(c);
+            }
+
+            cells.Add(current.ToString().Trim());
+            return cells;
+        }
+
+        /// <summary>
+        /// 집합 술어 표의 `리터럴 목록` 칸 하나를 SQL 리터럴 문법을 존중해
+        /// 토큰화한다 - 따옴표(`'...'`, 내부 `''` 이스케이프 포함) 밖의 쉼표만
+        /// 구분자로 삼는다. 왜 이래야 하는지는 ExtractSetPredicateLiteralCell
+        /// 문서의 실측 근거를 참고 - 쉼표 단순 분할은 `'a,b'`를 둘로 쪼개 L1을
+        /// 만족 불가능하게 만든다. 따옴표 밖의 토큰(숫자 리터럴 등)은 트림해서
+        /// 그대로 원소로 삼는다.
+        /// </summary>
+        private static List<string> TokenizeLiteralCell(string cell)
+        {
+            var tokens = new List<string>();
+            var current = new StringBuilder();
+            var inQuotes = false;
+
+            for (var i = 0; i < cell.Length; i++)
+            {
+                var c = cell[i];
+
+                if (inQuotes)
+                {
+                    current.Append(c);
+                    if (c == '\'')
+                    {
+                        // `''`는 리터럴 안에서 이스케이프된 작은따옴표다(T-SQL
+                        // 문법) - 닫는 따옴표로 보지 않고 다음 문자까지 함께
+                        // 삼킨다. 예: `'O''Brien'`.
+                        if (i + 1 < cell.Length && cell[i + 1] == '\'')
+                        {
+                            current.Append(cell[i + 1]);
+                            i++;
+                        }
+                        else
+                        {
+                            inQuotes = false;
+                        }
+                    }
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inQuotes = true;
+                    current.Append(c);
+                    continue;
+                }
+
+                if (c == ',')
+                {
+                    var token = current.ToString().Trim();
+                    if (token.Length > 0) tokens.Add(token);
+                    current.Clear();
+                    continue;
+                }
+
+                current.Append(c);
+            }
+
+            var last = current.ToString().Trim();
+            if (last.Length > 0) tokens.Add(last);
+
+            return tokens;
+        }
+
+        /// <summary>
+        /// AiService.EscapeTableCell은 표 셀을 렌더할 때 개행을 공백으로 접는다
+        /// (개행이 셀 경계를 깨뜨리지 않도록 - EscapeTableCell 문서 참고). 그런데
+        /// 이 접기는 역변환이 불가능하다 - 렌더된 표의 공백 하나만 보고는 그것이
+        /// 원래 `\r\n`이었는지 `\n`이었는지 `\r`이었는지, 혹은 원래도 공백이었는지
+        /// 구분할 수 없다.
+        ///
+        /// T-SQL 문자열 리터럴은 따옴표 안에 실제 개행 문자를 담을 수 있으므로
+        /// (실측 코퍼스에는 이 형태가 없었다), 리터럴 자체에 개행이 든 DDL이
+        /// 있다면 원문 그대로 대조하는 순간 표를 정확히 옮겨도 영원히 어긋난다 -
+        /// §0이 막으려는 "모델이 옳게 옮겨도 L1이 틀렸다고 하는" 실패 모양이다.
+        /// 그래서 조용히 실패하게 두지 않고, 기대 쪽 리터럴에도 렌더와 같은 접기를
+        /// 적용해 대조한다 - 개행의 정확한 종류를 구분하는 정밀도는 잃지만("접힌
+        /// 후 같은 문자열인가"만 확인), 대조 자체가 원리적으로 성립 불가능해지는
+        /// 것보다는 낫다.
+        /// </summary>
+        private static string FoldNewlinesLikeRenderedCell(string literal) =>
+            literal.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
+
+        /// <summary>
+        /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과
+        /// 같은 이유로 다음 H2뿐 아니라 다음 H3에도 막힌다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateSetPredicateSection(IReadOnlyList<string> lines)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == DmlScopeExtractor.SetPredicateTableHeading);
             if (headerIndex < 0) return (-1, -1);
 
             var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(

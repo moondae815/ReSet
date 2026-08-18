@@ -31,6 +31,69 @@ namespace ReSet.Core.Services
         bool DateParameterApplied,
         IReadOnlyList<string> JoinKeys);
 
+    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
+    /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
+    /// <param name="Column">
+    /// IN 좌변의 원문 표기 그대로 - 한정자가 있으면 한정자를 포함한다(`A.USESTATE`),
+    /// 없으면 컬럼 이름만이다(`UseState`). 마지막 식별자 조각만 담지 않는 이유는
+    /// 실측 코퍼스에서 키 충돌이 실제로 나기 때문이다:
+    /// `output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:97-98`가
+    /// 같은 INSERT 원천 SELECT의 같은 WHERE 최상위에서
+    /// `A.USESTATE IN (0,4,5,6)`과 `B.USESTATE IN (0,4)`를 나란히 쓴다 - 마지막
+    /// 조각만 담으면 둘 다 `USESTATE`가 되어 (Operation, Line, Column) 키가
+    /// 충돌하고, Task 3의 L1이 그 라인+컬럼으로 행을 찾을 때 하나가 엉뚱한 행에
+    /// 매칭된다. 한정자를 포함하면 코퍼스에서 키가 유일해질 뿐 아니라, "어느
+    /// 테이블의 USESTATE가 (0,4)로 제한되는가"라는 정보 자체가 이관 결과를
+    /// 바꾸므로 원문 그대로 담는 편이 옳다 - 이 재료가 이미 Literals에 적용한
+    /// "원문 그대로" 원칙을 좌변에도 일관되게 적용한 것이다.
+    /// </param>
+    /// <param name="IsNegated">NOT IN이면 true.</param>
+    /// <param name="Literals">
+    /// 집합의 원소를 원문 그대로 담는다 - 문자열은 따옴표를 포함한다('PLCard').
+    /// 파생 테이블 정의 표가 표현식 원문을 그대로 싣는 것과 같은 이유이고, 표에서
+    /// 문자열과 숫자를 구분할 수 있게 한다.
+    /// </param>
+    /// <param name="StatementOrdinal">
+    /// 이 사실을 낸 문장의 "연산 종류별 · 1부터" 번호(예: 세 번째 UPDATE면 3).
+    /// SetPredicateVisitor가 자신의 Visit(UpdateSpecification/DeleteSpecification/
+    /// InsertSpecification) 오버라이드 안에서(Collect 안이 아니라) 연산별 카운터를
+    /// 증가시켜 채운다.
+    ///
+    /// [왜 DML 범위 표의 채번을 조회하지 않고 여기 직접 담는가 - FIX ROUND 3]
+    /// 예전엔(FIX ROUND 2) AiService가 이 사실을 (Operation, Line) 키로 DML 범위
+    /// 사실 목록에서 찾아 그 문장 번호를 "빌려 썼다". 그런데 같은 물리 줄에 같은
+    /// 연산 문장이 둘이고 <b>둘 다</b> 집합 술어를 가지면, 그 키가 여전히 충돌해
+    /// 두 번째 문장의 집합 술어 행이 첫 문장의 번호를 빌려 쓰는 회귀가 났다
+    /// (2026-08-18 재리뷰 실측 - 표 하나가 "UPDATE 1 dbo.T1 / UPDATE 2 dbo.T2"인데
+    /// 옆 표의 dbo.T2 리터럴 행이 "UPDATE 2"가 아니라 "UPDATE 1"로 찍혔다).
+    ///
+    /// 리뷰가 반박한 예전 주석의 주장("(연산, 라인)만으로는 원천적으로 구분할 수
+    /// 없다")은 SetPredicateFact의 <b>모양</b>에 대한 이야기였을 뿐, 두 방문자가
+    /// 실제로 훑는 <b>원본 조각과 그 순서</b>는 애초에 그 정보에 기대지 않는다:
+    /// SetPredicateVisitor와 DmlScopeVisitor는 같은 파싱 트리를 같은 세 Visit
+    /// 오버라이드로, 같은 순서로 방문한다. 두 방문자가 각자 독립적으로(서로를
+    /// 참조하지 않고) 연산별 카운터를 문장당 정확히 한 번 증가시키면, 두 카운터는
+    /// 항상 같은 값을 낸다 - 사전 조회 없이도 "몇 번째 UPDATE인가"를 소스 구조
+    /// 자체가 답한다. 그래서 여기 문장 번호를 직접 담아 사전 조회 자체를 없앤다.
+    ///
+    /// [Collect가 아니라 Visit에서 세는 이유] INSERT의 Collect는 UNION 갈래마다
+    /// (QuerySpecification마다) 여러 번 불릴 수 있는데, DmlScopeVisitor의 INSERT는
+    /// 갈래를 합쳐 사실을 하나만 낸다(Visit(InsertSpecification) 안에서 Facts.Add를
+    /// 정확히 한 번 호출). Collect 안에서 세면 UNION 갈래 수만큼 카운터가 더 늘어
+    /// 이 문장 뒤의 모든 INSERT 번호가 DML 범위 표보다 밀린다 - FIX ROUND 1이
+    /// 집합 술어가 없는 문장을 건너뛰어 밀리던 것과 같은 모양의 결함이 INSERT
+    /// 카운터에도 생긴다. 그래서 카운터는 반드시 Visit(InsertSpecification) 진입
+    /// 시점에, InsertSource의 종류(VALUES/SELECT)와 무관하게 정확히 한 번만 늘린다 -
+    /// DmlScopeVisitor가 VALUES 원천의 INSERT에도 사실을 하나 내는 것과 대칭이다.
+    /// </param>
+    public sealed record SetPredicateFact(
+        string Operation,
+        int Line,
+        string Column,
+        bool IsNegated,
+        IReadOnlyList<string> Literals,
+        int StatementOrdinal = 0);
+
     /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
     ///
@@ -54,6 +117,7 @@ namespace ReSet.Core.Services
     public static class DmlScopeExtractor
     {
         public const string DmlScopeTableHeading = "### DML 범위 (기계 확정 — 수정 금지)";
+        public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
 
         public static IReadOnlyList<DmlScopeFact> Extract(string? ddlText, string dateParameterName)
         {
@@ -75,6 +139,44 @@ namespace ReSet.Core.Services
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[DmlScopeExtractor] DML 범위 수집 실패 - 빈 목록으로 진행합니다.");
                 return Array.Empty<DmlScopeFact>();
+            }
+        }
+
+        /// <summary>
+        /// DML 최상위 WHERE의 IN/NOT IN 리터럴 목록을 뽑는다.
+        ///
+        /// [왜 별도 진입점인가] "어디까지가 대상 범위를 정하는 술어인가"라는 지식은
+        /// TopLevelPredicateCollector 한 곳에 인코딩돼 있다. 새 추출기가 그 순회를
+        /// 다시 구현하면 두 정의가 갈라지고, 그 순간 이 재료는 프롬프트가 말하는
+        /// "최상위"와 다른 것을 뜻하게 된다. 그래서 수집기를 넓히고 진입점만 나눈다 -
+        /// 순회는 두 번 돌지만 비용은 무시할 수준이고 주인은 계속 한 곳이다.
+        ///
+        /// [주의 - (Operation, Line, Column) 키가 유일하다고 가정하지 마라] 같은
+        /// 한정 컬럼이 같은 문장에 두 번 IN으로 걸리면(예: `A.X IN (1) AND A.X IN
+        /// (2)`) 키가 여전히 충돌한다. 이 추출기는 그 경우를 합치거나 걸러내지
+        /// 않는다 - 합치면 AND/OR 의미를 날조하게 된다. 소비자(L1 검사 등)는 같은
+        /// 키의 사실이 둘 이상일 수 있다고 보고 다뤄야 한다.
+        /// </summary>
+        public static IReadOnlyList<SetPredicateFact> ExtractSetPredicates(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<SetPredicateFact>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out _);
+                if (fragment == null) return Array.Empty<SetPredicateFact>();
+
+                var visitor = new SetPredicateVisitor();
+                fragment.Accept(visitor);
+                return visitor.Facts;
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+                Log.Warning(ex, "[DmlScopeExtractor] 집합 술어 수집 실패 - 빈 목록으로 진행합니다.");
+                return Array.Empty<SetPredicateFact>();
             }
         }
 
@@ -158,23 +260,6 @@ namespace ReSet.Core.Services
                     ? QuerySpecificationsOf(select.Select)
                     : Enumerable.Empty<QuerySpecification>();
 
-            private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
-            {
-                switch (query)
-                {
-                    case QuerySpecification spec:
-                        yield return spec;
-                        break;
-                    case BinaryQueryExpression binary:
-                        foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
-                        foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
-                        break;
-                    case QueryParenthesisExpression paren:
-                        foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
-                        break;
-                }
-            }
-
             private void Record(
                 string operation,
                 TSqlFragment statement,
@@ -237,16 +322,118 @@ namespace ReSet.Core.Services
                     dateApplied,
                     joinKeys));
             }
+        }
 
-            private static string TextOf(TSqlFragment? fragment)
+        /// <summary>
+        /// 토큰 원문을 그대로 잇는다 - 파서가 정규화하지 않은 소스 그대로다(문자열
+        /// 리터럴의 따옴표, 컬럼 참조의 한정자가 그대로 보존된다). DmlScopeVisitor의
+        /// Target 표기와 TopLevelPredicateCollector의 집합 술어 좌변·리터럴이 모두
+        /// 이 메서드 하나를 쓴다 - "원문 그대로 담는다"는 원칙이 재료마다 따로
+        /// 구현되며 갈라지지 않도록.
+        /// </summary>
+        private static string TextOf(TSqlFragment? fragment)
+        {
+            if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
+
+            return string.Concat(
+                fragment.ScriptTokenStream
+                    .Skip(fragment.FirstTokenIndex)
+                    .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
+                    .Select(t => t.Text)).Trim();
+        }
+
+        /// <summary>
+        /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
+        /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
+        /// </summary>
+        private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
+        {
+            switch (query)
             {
-                if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
+                case QuerySpecification spec:
+                    yield return spec;
+                    break;
+                case BinaryQueryExpression binary:
+                    foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
+                    foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
+                    break;
+                case QueryParenthesisExpression paren:
+                    foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
+                    break;
+            }
+        }
 
-                return string.Concat(
-                    fragment.ScriptTokenStream
-                        .Skip(fragment.FirstTokenIndex)
-                        .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
-                        .Select(t => t.Text)).Trim();
+        /// <summary>
+        /// DML 문장을 찾아 그 최상위 WHERE에서 집합 술어를 모으고, 수집기가 모르는
+        /// 문장 문맥(연산 종류·시작 줄·문장 번호)을 붙인다.
+        ///
+        /// [문장 번호를 이 방문자가 직접 매기는 이유] SetPredicateFact.StatementOrdinal
+        /// 문서 참고 - DmlScopeVisitor와 같은 파싱 트리를 같은 세 Visit 오버라이드로
+        /// 같은 순서로 방문하므로, 이 방문자가 독자적으로 세어도 DML 범위 표의
+        /// 번호와 항상 일치한다. 카운터는 반드시 각 Visit 오버라이드 안에서(Collect
+        /// 안이 아니라) 문장당 정확히 한 번 늘려야 한다 - NextOrdinal 문서 참고.
+        /// </summary>
+        private sealed class SetPredicateVisitor : TSqlFragmentVisitor
+        {
+            private readonly Dictionary<string, int> _perOperation =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            public List<SetPredicateFact> Facts { get; } = new();
+
+            public override void Visit(UpdateSpecification node) =>
+                Collect("UPDATE", node, node.WhereClause, NextOrdinal("UPDATE"));
+
+            public override void Visit(DeleteSpecification node) =>
+                Collect("DELETE", node, node.WhereClause, NextOrdinal("DELETE"));
+
+            public override void Visit(InsertSpecification node)
+            {
+                // DmlScopeVisitor는 원천이 VALUES든 SELECT든 InsertSpecification마다
+                // 사실을 정확히 하나 낸다(Visit 안에서 Facts.Add를 한 번만 호출) -
+                // 그래서 이 카운터도 원천 종류와 무관하게 여기서 먼저, 한 번만
+                // 늘려야 두 방문자의 번호가 계속 맞는다. Collect(→UNION 갈래마다,
+                // 즉 QuerySpecification마다 호출됨) 안에서 늘리면 갈래 수만큼
+                // 카운터가 밀린다(SetPredicateFact.StatementOrdinal 문서 참고).
+                var ordinal = NextOrdinal("INSERT");
+
+                // INSERT ... SELECT의 대상 범위는 원천 SELECT의 최상위 WHERE가 정한다
+                // (DmlScopeExtractor.Visit(InsertSpecification)와 같은 판단). UNION으로
+                // 묶인 원천은 갈래마다 WHERE가 다르므로 전부 훑되, 문장 번호는 위에서
+                // 미리 정한 하나를 공유한다 - DmlScopeVisitor가 갈래를 합쳐 사실
+                // 하나만 내는 것과 대칭이다.
+                if (node.InsertSource is not SelectInsertSource select) return;
+
+                foreach (var spec in QuerySpecificationsOf(select.Select))
+                {
+                    Collect("INSERT", node, spec.WhereClause, ordinal);
+                }
+            }
+
+            /// <summary>
+            /// 연산 종류별 문장 번호를 1부터 매긴다. SetPredicateFact.StatementOrdinal
+            /// 문서의 실측 근거 참고 - DmlScopeVisitor가 문장 하나당 사실을 정확히
+            /// 하나만 내는 지점(각 Visit 오버라이드)과 카운터 증가 지점을 맞춰야,
+            /// 두 방문자가 독립적으로 세어도 항상 같은 번호가 나온다.
+            /// </summary>
+            private int NextOrdinal(string operation)
+            {
+                _perOperation.TryGetValue(operation, out var n);
+                _perOperation[operation] = ++n;
+                return n;
+            }
+
+            private void Collect(string operation, TSqlFragment statement, WhereClause? where, int ordinal)
+            {
+                if (where?.SearchCondition == null) return;
+
+                var top = new TopLevelPredicateCollector();
+                where.SearchCondition.Accept(top);
+
+                foreach (var (column, isNegated, literals) in top.SetPredicates)
+                {
+                    Facts.Add(new SetPredicateFact(
+                        operation, statement.StartLine, column, isNegated, literals, ordinal));
+                }
             }
         }
 
@@ -267,6 +454,13 @@ namespace ReSet.Core.Services
             public List<string> Columns { get; } = new();
             public List<string> Parameters { get; } = new();
             public List<string> JoinKeys { get; } = new();
+
+            /// <summary>
+            /// 최상위 IN/NOT IN의 리터럴 집합. Column은 좌변 컬럼 이름, IsNegated는
+            /// NOT 여부, Literals는 원문 그대로다. Operation과 Line은 이 수집기가
+            /// 모르므로(문장 문맥은 호출부가 안다) 호출부가 채운다.
+            /// </summary>
+            public List<(string Column, bool IsNegated, List<string> Literals)> SetPredicates { get; } = new();
 
             public override void ExplicitVisit(ScalarSubquery node) { }
 
@@ -318,6 +512,8 @@ namespace ReSet.Core.Services
             /// </summary>
             public override void ExplicitVisit(InPredicate node)
             {
+                RecordSetPredicate(node);
+
                 node.Expression?.Accept(this);
 
                 if (node.Subquery == null && node.Values != null)
@@ -327,6 +523,48 @@ namespace ReSet.Core.Services
                         value.Accept(this);
                     }
                 }
+            }
+
+            /// <summary>
+            /// 리터럴만으로 이뤄진 최상위 IN을 집합 사실로 담는다.
+            ///
+            /// [담지 않는 셋] 서브쿼리 IN은 옮겨 적을 리터럴 목록이 없다. 원소에
+            /// 리터럴 아닌 것이 섞이면 리터럴 집합으로 렌더할 때 명세서에 거짓
+            /// 집합이 실린다. 좌변이 단순 컬럼 참조가 아니면(예: 식) 표의 "컬럼"
+            /// 칸에 쓸 이름이 없다.
+            ///
+            /// [Subquery != null 검사가 남아 있는 이유] T-SQL 문법상 `IN (서브쿼리)`와
+            /// `IN (값 목록)`은 서로 다른 생산 규칙이라 Subquery와 Values가 동시에
+            /// 채워지는 파싱 결과는 나오지 않는다 - 그래서 `node.Values == null`
+            /// 검사 하나만으로도 서브쿼리 IN은 이미 걸러진다. 그런데도 이 검사를
+            /// 명시적으로 남기는 이유는, 그 사실이 ScriptDom의 내부 불변식이지 이
+            /// 메서드의 계약이 아니기 때문이다 - 파서 버전이 바뀌거나 이 메서드가
+            /// 텍스트 파싱이 아닌 경로(직접 조립한 AST 등)로 호출되는 날, "서브쿼리
+            /// IN은 담지 않는다"는 §3.2의 결정이 Values 상태에 우연히 얹혀 있지
+            /// 않고 코드에 그대로 선언돼 있어야 한다. 이 불변식이 SQL 텍스트로는
+            /// 깨지지 않으므로, DmlScopeExtractorTests의 SubqueryIn 테스트는 이
+            /// 한 줄만 떼어 실패시키지 못한다 - 그 테스트 옆 주석에 같은 설명을
+            /// 남겨 뒀다.
+            /// </summary>
+            private void RecordSetPredicate(InPredicate node)
+            {
+                if (node.Subquery != null || node.Values == null || node.Values.Count == 0) return;
+
+                // Column은 마지막 식별자 조각이 아니라 원문 표기 그대로 담는다(레코드
+                // 문서의 실측 근거 참고) - 한정자가 있으면 A.USESTATE처럼 한정자까지
+                // 포함해야 같은 문장 안의 A.USESTATE와 B.USESTATE가 서로 다른 키가 된다.
+                if (node.Expression is not ColumnReferenceExpression columnRef) return;
+                var column = TextOf(columnRef);
+                if (string.IsNullOrWhiteSpace(column)) return;
+
+                var literals = new List<string>();
+                foreach (var value in node.Values)
+                {
+                    if (value is not Literal literal) return;   // 하나라도 아니면 통째로 버린다
+                    literals.Add(TextOf(literal));
+                }
+
+                SetPredicates.Add((column, node.NotDefined, literals));
             }
 
             /// <summary>
