@@ -810,5 +810,90 @@ WHERE RunId = @RunId AND StepCode = N'S17';");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("Pending"));
         }
+
+        // 미탐 회귀 1(2라운드 리뷰 재현): INSERT VALUES의 문자열 리터럴 안에 쉼표가
+        // 있으면(N'a,b error message') 위치 기반 분리가 그 쉼표를 항목 경계로
+        // 오인해 뒤따르는 항목들의 색인이 밀린다 - StepStatus 위치에 엉뚱한 값이
+        // 걸려 계약 밖 상태값 'Completed'를 놓쳤다. SplitTopLevelSegments가 인용
+        // 상태를 추적해야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueWhenAnEarlierInsertValueContainsAComma()
+        {
+            var markdown = Section(
+                "INSERT INTO batch.BatchStepJournal (RunId, StepCode, ErrorMessage, StepStatus, StartedAtUtc) " +
+                "VALUES (@RunId, N'S17', N'a,b error message', N'Completed', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 미탐 회귀 2a(2라운드 리뷰 재현): SET 대입식 안에 FROM을 가진 서브쿼리가 있으면
+        // 괄호를 무시하는 경계 탐색이 그 안의 FROM에서 SET 절 전체를 잘라, 서브쿼리
+        // 뒤에 오는 계약 밖 컬럼 대입이 통째로 검사에서 사라졌다. 경계는 괄호 깊이
+        // 0에서만 성립해야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnAfterAFromSubqueryInTheSetClause()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET StepStatus = " +
+                "(SELECT TOP 1 Status FROM dbo.TSettleMst WHERE RunId = @RunId), " +
+                "ExecutionStatus = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 미탐 회귀 2b: 서브쿼리 대입 뒤에 오는 것이 계약 밖 컬럼이 아니라 계약 밖
+        // 상태값일 때도 같은 절단 결함이 그 위반을 숨긴다.
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueAfterAFromSubqueryInTheSetClause()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET ErrorMessage = " +
+                "(SELECT TOP 1 Msg FROM dbo.TSettleMst WHERE RunId = @RunId), " +
+                "StepStatus = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 미탐 회귀 3: 다중 대입에서 첫 항목이 아니라 두 번째·세 번째 대입 대상이
+        // 계약 밖이어도 잡혀야 한다 - 위치가 아니라 이름으로 대조하므로 순서와
+        // 무관해야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsOutOfContractColumnsInTheSecondAndThirdAssignments()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded', FooBar = 1, BazQux = 2 " +
+                "WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("FooBar"));
+            Assert.Contains(result.Errors, e => e.Contains("BazQux"));
+        }
+
+        // 미탐 회귀 4: VALUES 목록에 괄호 중첩 함수(CONVERT(varchar(8), ..., 112))가
+        // 섞여도 위치 대응이 깨지지 않아야 한다 - 그 함수 인자의 내부 쉼표가 항목
+        // 경계로 오인되면 뒤 항목들의 색인이 밀린다.
+        [Fact]
+        public void ValidateBatchStep_KeepsPositionalAlignmentAcrossANestedParenFunctionInValues()
+        {
+            var markdown = Section(
+                "INSERT INTO batch.BatchStepJournal (RunId, StepCode, StartedAtUtc, StepStatus) " +
+                "VALUES (@RunId, N'S17', CONVERT(varchar(8), SYSUTCDATETIME(), 112), N'Completed');");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
     }
 }

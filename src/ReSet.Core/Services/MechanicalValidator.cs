@@ -527,11 +527,26 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// UPDATE 문의 SET 절에서 대입 대상 컬럼만 본다. 절의 끝 경계는 FROM/WHERE/;/
-        /// 문서 끝 중 먼저 오는 것으로 잡는다 - 세미콜론이 없어도 다음 문으로 새지
-        /// 않기 위해서다. 별칭이 붙은 대입 대상(`t.Col = ...`)은 대상에서 제외한다 -
-        /// 이 계약의 제어 테이블 UPDATE는 별칭을 쓰지 않으므로, 점이 섞인 이름은 이
-        /// 검사가 판단할 재료가 아니다(과탐보다 미탐이 안전하다).
+        /// UPDATE 문의 SET 절에서 대입 대상 컬럼만 본다. 절의 끝 경계는 괄호 깊이 0에서
+        /// 나타나는 FROM/WHERE/;/문서 끝 중 먼저 오는 것으로 잡는다 - 세미콜론이 없어도
+        /// 다음 문으로 새지 않기 위해서다.
+        ///
+        /// [2라운드 수정] 최초 버전은 정규식 `(?=\bFROM\b|\bWHERE\b|;|$)`로 경계를
+        /// 잡았는데, 이 lookahead는 괄호 깊이를 모른다. `SET StepStatus = (SELECT ...
+        /// FROM dbo.TSettleMst WHERE ...), ExecutionStatus = N'Completed'`처럼 대입식
+        /// 안의 서브쿼리가 FROM/WHERE를 담고 있으면 SET 절 전체가 그 지점에서 잘려,
+        /// 서브쿼리 뒤에 오는 대입은(계약 밖 컬럼이든 계약 밖 상태값이든) 통째로 검사
+        /// 대상에서 사라졌다(리뷰 재현, 미탐). `ExtractTopLevelClause`는 괄호 깊이와
+        /// 문자열 인용 상태를 추적하며 문자 단위로 훑어, 깊이 0·인용 밖에서 나타나는
+        /// FROM/WHERE/;만 경계로 인정한다.
+        ///
+        /// [알려진 미보완] 별칭이 붙은 대입 대상(`t.Col = ...`)은 대상에서 제외한다 -
+        /// `^[A-Za-z_]\w*$` 검사가 점이 섞인 이름을 걸러낸다. `UPDATE bsj SET
+        /// bsj.ExecutionStatus = N'Completed' FROM batch.BatchStepJournal bsj ...`처럼
+        /// UPDATE의 대상이 테이블명이 아니라 별칭이고 SET도 그 별칭으로 한정하는 형태는
+        /// 이 검사가 아예 보지 못한다(2라운드 리뷰가 지적한 기존 구멍, 이번 라운드가
+        /// 만든 결함이 아니다) - 별칭→테이블 바인딩을 FROM 절에서 별도로 추출해야 하는
+        /// 독립된 작업이라 이번 수정 범위에 넣지 않았다.
         /// </summary>
         private static void CheckUpdateSetTargets(
             string stepMarkdown,
@@ -542,12 +557,14 @@ namespace ReSet.Core.Services
             BatchStepPlan step,
             StepValidationResult result)
         {
-            foreach (Match statement in Regex.Matches(
+            foreach (Match header in Regex.Matches(
                 stepMarkdown,
-                $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+SET\s+(?<set>.*?)(?=\bFROM\b|\bWHERE\b|;|$)",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+SET\s+",
+                RegexOptions.IgnoreCase))
             {
-                foreach (var assignment in SplitTopLevelSegments(statement.Groups["set"].Value))
+                var setClause = ExtractTopLevelClause(stepMarkdown, header.Index + header.Length);
+
+                foreach (var assignment in SplitTopLevelSegments(setClause))
                 {
                     var eq = assignment.IndexOf('=');
                     if (eq <= 0) continue;
@@ -658,17 +675,47 @@ namespace ReSet.Core.Services
                 "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
         }
 
-        /// <summary>쉼표로 항목을 나누되 괄호 안의 쉼표는 무시한다 - SET 절의 CASE 식이나
-        /// INSERT 값 목록의 함수 호출 인자에 있는 쉼표를 항목 경계로 오인하지 않기
-        /// 위해서다.</summary>
+        /// <summary>쉼표로 항목을 나누되 괄호 안의 쉼표와 홑따옴표 문자열 리터럴 안의
+        /// 쉼표는 무시한다 - SET 절의 CASE 식·INSERT 값 목록의 함수 호출 인자에 있는
+        /// 쉼표, 그리고 `N'a,b error message'`처럼 문자열 값 자체에 든 쉼표를 항목
+        /// 경계로 오인하지 않기 위해서다.
+        ///
+        /// [2라운드 수정] 최초 버전은 인용 상태를 몰라 문자열 리터럴 안의 쉼표도 항목
+        /// 경계로 셌다. INSERT VALUES에서 그 쉼표 앞의 항목이 하나 더 늘어난 것처럼
+        /// 잘못 나뉘어, 뒤따르는 항목들의 위치가 하나씩 밀렸다 - StatusColumn 위치에
+        /// 엉뚱한 값이 걸려 계약 밖 상태값 검사가 조용히 빗나갔다(리뷰 재현, 미탐).
+        /// `''`(홑따옴표 두 개)는 문자열 안에서 홑따옴표 하나를 뜻하는 SQL 이스케이프이므로
+        /// 문자열을 닫지 않고 그대로 삼킨다.
+        /// </summary>
         private static IEnumerable<string> SplitTopLevelSegments(string text)
         {
             var depth = 0;
             var start = 0;
+            var inString = false;
+
             for (var i = 0; i < text.Length; i++)
             {
-                switch (text[i])
+                var ch = text[i];
+
+                if (inString)
                 {
+                    if (ch != '\'') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == '\'')
+                    {
+                        i++; // '' 이스케이프 - 문자열은 계속된다.
+                        continue;
+                    }
+
+                    inString = false;
+                    continue;
+                }
+
+                switch (ch)
+                {
+                    case '\'':
+                        inString = true;
+                        break;
                     case '(':
                         depth++;
                         break;
@@ -686,17 +733,40 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>openParenIndex의 '('에 대응하는 ')'까지, 중첩 괄호 깊이를 세어 그
-        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다.</summary>
+        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다. 문자열 리터럴 안의 괄호는
+        /// 깊이에서 제외한다.</summary>
         private static string? ExtractBalancedParenGroup(string text, int openParenIndex)
         {
             var depth = 0;
+            var inString = false;
+
             for (var i = openParenIndex; i < text.Length; i++)
             {
-                if (text[i] == '(')
+                var ch = text[i];
+
+                if (inString)
+                {
+                    if (ch != '\'') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == '\'')
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    inString = false;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                }
+                else if (ch == '(')
                 {
                     depth++;
                 }
-                else if (text[i] == ')')
+                else if (ch == ')')
                 {
                     depth--;
                     if (depth == 0)
@@ -708,6 +778,95 @@ namespace ReSet.Core.Services
 
             return null;
         }
+
+        /// <summary>
+        /// startIndex부터, 괄호 깊이 0·문자열 인용 밖에서 처음 나타나는 FROM/WHERE/;를
+        /// 절의 끝으로 삼아 그 앞까지를 돌려준다. 그런 경계가 없으면 문서 끝까지다.
+        ///
+        /// 괄호 깊이를 세는 이유: SET 대입식 안의 서브쿼리(`(SELECT ... FROM ... WHERE
+        /// ...)`)가 담은 FROM/WHERE는 그 서브쿼리에 속한 것이지 바깥 UPDATE 문의 절
+        /// 경계가 아니다. 문자열 인용을 추적하는 이유: 리터럴 값 안에 우연히 이 키워드와
+        /// 같은 글자가 오더라도(드물지만) 절을 잘라서는 안 된다.
+        /// </summary>
+        private static string ExtractTopLevelClause(string text, int startIndex)
+        {
+            var depth = 0;
+            var inString = false;
+            var i = startIndex;
+
+            while (i < text.Length)
+            {
+                var ch = text[i];
+
+                if (inString)
+                {
+                    if (ch == '\'')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == '\'')
+                        {
+                            i += 2;
+                            continue;
+                        }
+
+                        inString = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                    i++;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    depth++;
+                    i++;
+                    continue;
+                }
+
+                if (ch == ')')
+                {
+                    depth--;
+                    i++;
+                    continue;
+                }
+
+                if (depth == 0)
+                {
+                    if (ch == ';') break;
+                    if (MatchesKeywordAt(text, i, "FROM") || MatchesKeywordAt(text, i, "WHERE")) break;
+                }
+
+                i++;
+            }
+
+            return text[startIndex..i];
+        }
+
+        /// <summary>text의 index 위치에서 keyword가 대소문자 무관 단어 경계로 시작하는지
+        /// 본다 - "FROM" 검사가 "FROMSomething"이나 "AFROM"의 일부에 걸리지 않기
+        /// 위해서다.</summary>
+        private static bool MatchesKeywordAt(string text, int index, string keyword)
+        {
+            if (index + keyword.Length > text.Length) return false;
+            if (string.Compare(text, index, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            {
+                return false;
+            }
+
+            var precededByWordChar = index > 0 && IsWordChar(text[index - 1]);
+            var followedByWordChar =
+                index + keyword.Length < text.Length && IsWordChar(text[index + keyword.Length]);
+
+            return !precededByWordChar && !followedByWordChar;
+        }
+
+        private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
         /// <summary>
         /// 자기 소유 제어 행을 만들지 않고 UPDATE만 하는지 본다.
