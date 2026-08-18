@@ -574,7 +574,28 @@ END",
 
             // 선행 DELETE 없는 옛 복원 예시가 되살아나면 실패해야 한다.
             Assert.DoesNotContain("(e.g., `INSERT INTO Target SELECT * FROM Shadow`)", result.SystemPrompt);
-            Assert.Contains("DELETEs the affected range FIRST", result.SystemPrompt);
+
+            // 옛 단언은 "DELETEs the affected range FIRST"라는 산문 문구를 고정하고
+            // 있었다. 2026-08-18 규칙 4 수술(축 B 배치 골격 계획서 Task 4)이 그
+            // 문구를 지웠다 - 새 규칙 4 (b)는 "복원은 삭제한 것과 같은 범위만
+            // 지운다"는 범위 일치만 규정하고 순서는 말하지 않는다. 그러나 이
+            // 테스트의 이름이 지키려는 계약(복원은 삭제 후 삽입)은 여전히 Few-Shot
+            // CATCH 예시 코드에 살아 있다 - ConsolidatedPlanRules 자신이 "모델은
+            // 산문 규칙보다 코드 예시를 따른다"는 전제로 지어졌으므로, 죽은 산문
+            // 문자열 대신 그 코드 예시의 실제 순서를 검사한다.
+            Assert.NotNull(result.SystemPrompt);
+            var systemPrompt = result.SystemPrompt!;
+            var catchOpen = systemPrompt.IndexOf("BEGIN CATCH", StringComparison.Ordinal);
+            Assert.True(catchOpen >= 0, "Few-Shot의 CATCH 블록을 찾지 못했다.");
+            var catchClose = systemPrompt.IndexOf("END CATCH", catchOpen, StringComparison.Ordinal);
+            Assert.True(catchClose > catchOpen, "CATCH 블록의 끝을 찾지 못했다.");
+            var catchBlock = systemPrompt[catchOpen..catchClose];
+
+            var deleteIndex = catchBlock.IndexOf("DELETE FROM", StringComparison.Ordinal);
+            var insertIndex = catchBlock.IndexOf("INSERT INTO", StringComparison.Ordinal);
+            Assert.True(deleteIndex >= 0, "CATCH 블록에 DELETE 복원 문장이 없다.");
+            Assert.True(insertIndex >= 0, "CATCH 블록에 INSERT 복원 문장이 없다.");
+            Assert.True(deleteIndex < insertIndex, "복원은 DELETE가 INSERT보다 먼저 나와야 한다.");
         }
 
         [Fact]
