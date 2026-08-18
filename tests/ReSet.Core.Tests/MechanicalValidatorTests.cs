@@ -3360,6 +3360,30 @@ SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.TXAMT),0) FROM L CROSS JOIN R HAVING ISN
                 e => e.Type == ErrorType.VerificationCartesianComparison);
         }
 
+        [Fact]
+        public void ValidateConsolidated_DoesNotFlagCrossJoinOfCtesWhoseGroupByIsOnlyInsideANestedSubquery()
+        {
+            // 감사 수정 라운드 3: 라운드 2는 CTE 본문 전체에서 GROUP BY를 찾았다.
+            // L의 본문은 "SELECT SUM(sub.S) FROM (그룹별 집계 서브쿼리) AS sub"
+            // 처럼 서브쿼리 안에서만 GROUP BY를 쓰고, 바깥은 그 서브쿼리 결과를
+            // 다시 SUM으로 합산한다 - 서브쿼리 자체는 여러 행을 내지만, 바깥의
+            // SUM이 그것을 다시 한 행으로 만든다. L 본문 "자신의" SELECT에는
+            // GROUP BY가 없으므로 L은 여전히 한 행이다. 재리뷰가 이 모양을
+            // 재현했다 - 라운드 1 BASE에서는 안 잡혔는데(정탐) 라운드 2에서
+            // 새로 잡히기 시작했다(오탐, 이번 라운드가 고칠 회귀).
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (
+    SELECT SUM(sub.S) AS S FROM (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID) AS sub
+),
+     R AS (SELECT ISNULL(SUM(T.TXAMT),0) AS S FROM dbo.TSettleByTX AS T WHERE T.YMD=@BatchYmd)
+SELECT ISNULL(L.S,0), ISNULL(R.S,0) FROM L CROSS JOIN R HAVING ISNULL(L.S,0) <> ISNULL(R.S,0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
         private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
             ## 통합 배치 아키텍처 개요
 

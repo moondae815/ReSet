@@ -3475,16 +3475,29 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// `WITH ... AS ( ... )` / `, ... AS ( ... )`로 선언된 CTE 중, 본문이
-        /// 집계 함수(SUM/COUNT/AVG/MIN/MAX)를 쓰고 GROUP BY가 없어 정확히 한
-        /// 행을 내는 것만 이름을 모은다. 그런 CTE끼리의 CROSS JOIN만 1×1이라
-        /// 무해하다 - GROUP BY가 있으면 그룹 수만큼, 통과용(SELECT * 등)이면
-        /// 원본 행 수만큼 나오므로 한 행 보장이 없다.
+        /// 집계 함수(SUM/COUNT/AVG/MIN/MAX)를 쓰고 "본문 자신의 SELECT"에
+        /// GROUP BY가 없어 정확히 한 행을 내는 것만 이름을 모은다. 그런 CTE
+        /// 끼리의 CROSS JOIN만 1×1이라 무해하다 - GROUP BY가 있으면 그룹
+        /// 수만큼, 통과용(SELECT * 등)이면 원본 행 수만큼 나오므로 한 행
+        /// 보장이 없다.
+        ///
+        /// [감사 수정 라운드 3] GROUP BY는 본문 전체가 아니라 괄호 깊이 0(본문
+        /// 자신의 SELECT)에서만 센다. `SELECT SUM(sub.S) FROM (SELECT ...
+        /// GROUP BY ...) AS sub`처럼 서브쿼리 안에서만 GROUP BY를 쓰고 바깥이
+        /// 그 결과를 다시 SUM으로 합산하면, 서브쿼리 자체는 여러 행을 내도
+        /// CTE 본문은 여전히 한 행이다 - 라운드 2가 본문 전체에서 GROUP BY를
+        /// 찾아 이런 정상 2단계 집계를 오탐으로 잡았다(재리뷰 재현). 반대로
+        /// 집계 함수 판정은 본문 전체에서 그대로 찾는다 - `ISNULL(SUM(x),0)`
+        /// 처럼 집계가 다른 함수 호출 안에 중첩되는 것은 정상적이고 흔한
+        /// 관용이라, 이것까지 depth 0으로 좁히면 이 검사가 이미 통과시키는
+        /// 대다수 정상 CTE(예: 기존 정상 예시들)를 오탐으로 되돌린다.
         ///
         /// CTE 본문은 <see cref="ExtractBalancedParenGroup"/>(Task 6 자산, 중첩
         /// 괄호를 다루고 문자열·주석 안 괄호를 깊이에서 제외한다)로 정확히
-        /// 잘라낸다 - 두 번째 괄호 매칭 구현을 새로 만들지 않는다. 호출부에서
-        /// 이미 블랭크 처리된 사본을 넘기므로, 주석·문자열 속 SUM이나 GROUP BY
-        /// 텍스트에 속지 않는다.
+        /// 잘라낸다. GROUP BY의 depth 0 여부도 같은 함수로 가른다
+        /// (<see cref="BlankNestedParenGroups"/>) - 두 번째 괄호 짝 맞추기
+        /// 구현을 만들지 않는다. 호출부에서 이미 블랭크 처리된 사본을
+        /// 넘기므로, 주석·문자열 속 SUM이나 GROUP BY 텍스트에 속지 않는다.
         /// </summary>
         private static HashSet<string> CollectSingleRowAggregateCteNames(string cleanedStatement)
         {
@@ -3499,8 +3512,9 @@ namespace ReSet.Core.Services
                     if (body == null) continue;
 
                     var hasAggregate = Regex.IsMatch(body, @"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", RegexOptions.IgnoreCase);
-                    var hasGroupBy = Regex.IsMatch(body, @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
-                    if (hasAggregate && !hasGroupBy)
+                    var hasTopLevelGroupBy = Regex.IsMatch(
+                        BlankNestedParenGroups(body), @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
+                    if (hasAggregate && !hasTopLevelGroupBy)
                     {
                         result.Add(m.Groups["n"].Value);
                     }
@@ -3508,6 +3522,51 @@ namespace ReSet.Core.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// text 안에서 괄호 깊이 1 이상(중첩 괄호 안)인 구간만 공백으로 지운
+        /// 사본을 낸다. 괄호 문자 `(`/`)` 자체는 지우지 않고 그 사이 내용만
+        /// 지운다 - 예: `SUM(x)`의 안쪽만 지워 `SUM(   )`가 되므로, 이 사본을
+        /// 다른 목적(집계 함수 호출 판정 등)에 쓰면 함수 호출의 여는 괄호
+        /// 존재 자체는 왜곡되지 않는다. 이 검사는 그 목적으로 쓰지 않고
+        /// GROUP BY의 depth 0 여부만 가리는 데 쓴다 - GROUP BY는 스칼라 함수
+        /// 인자 안에 올 수 없으므로 이 구분이 문제되지 않는다.
+        ///
+        /// <see cref="ExtractBalancedParenGroup"/>(Task 6 자산)로 각 최상위
+        /// '('의 짝 ')'를 찾아 그 사이만 지운다 - 새 괄호 짝 맞추기 구현을
+        /// 만들지 않는다. 짝이 안 맞는 '('은 방어적으로 건너뛴다.
+        /// </summary>
+        private static string BlankNestedParenGroups(string text)
+        {
+            var chars = text.ToCharArray();
+            var i = 0;
+            while (i < chars.Length)
+            {
+                if (chars[i] != '(')
+                {
+                    i++;
+                    continue;
+                }
+
+                var inner = ExtractBalancedParenGroup(text, i);
+                if (inner == null)
+                {
+                    i++;
+                    continue;
+                }
+
+                var innerStart = i + 1;
+                var innerEnd = innerStart + inner.Length; // ')' 의 인덱스.
+                for (var j = innerStart; j < innerEnd; j++)
+                {
+                    if (chars[j] != '\n') chars[j] = ' ';
+                }
+
+                i = innerEnd + 1; // ')' 다음으로 건너뛴다 - 중첩은 이미 다 지워졌다.
+            }
+
+            return new string(chars);
         }
 
         private static readonly string[] CteDeclarationPatterns =
