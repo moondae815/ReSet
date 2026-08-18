@@ -3645,6 +3645,53 @@ UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
         }
 
+        // 수정 라운드 1 리뷰 Critical 실측: 대괄호 인용 스키마/테이블([batch].[BatchRun]
+        // 등)이 이 검사의 자체 정규식에 걸리지 않아 정상 INSERT를 반려했다(오탐).
+        // ResolveControlTableAliases가 별칭 바인딩에 이미 쓰는 대괄호 인식 패턴을
+        // 재사용해 네 혼합 형태(양쪽 대괄호/한쪽만 대괄호)를 전부 정상으로 받는지 잠근다.
+        [Theory]
+        [InlineData("[batch].[BatchRun]")]
+        [InlineData("[dbo].[BatchRun]")]
+        [InlineData("batch.[BatchRun]")]
+        [InlineData("[batch].BatchRun")]
+        public void ValidateConsolidated_AcceptsABracketQuotedInsertOfBatchRun(string qualifiedTable)
+        {
+            var markdown = ConsolidatedDocumentWithStepBody($@"
+INSERT INTO {qualifiedTable} (JobName, BatchYmd, RunStatus, StartedAtUtc)
+VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 대괄호 인식을 넓히면서 미탐을 만들지 않았는지 잠근다 - 같은 대괄호 형태로
+        // UPDATE만 하고 INSERT가 없으면 여전히 잡혀야 한다.
+        [Fact]
+        public void ValidateConsolidated_RejectsABracketQuotedUpdateOfBatchRunItNeverInserts()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(@"
+UPDATE [batch].[BatchRun] SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // 수정 라운드 1 리뷰 Minor 실측: 선행 경계 없이 접미사로 겹치는 식별자
+        // (MyBatchRun)가 "언급"으로 오인되면 안 된다. batch.BatchRun 자체는 문서에
+        // 없으므로 소프트 스킵이어야 한다.
+        [Fact]
+        public void ValidateConsolidated_SkipsWhenOnlyASuffixOverlappingIdentifierIsMentioned()
+        {
+            var markdown = ConsolidatedDocumentWithStepBody(@"
+UPDATE dbo.MyBatchRun SET Foo = 1 WHERE Id = @Id;");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
         /// <summary>
         /// RequiredConsolidatedHeaders의 네 헤더를 갖춘 최소 통합 문서를 만들고,
         /// 단계 상세 절에 주어진 SQL을 싣는다. 검증 SQL 절은 비워 둔다 -

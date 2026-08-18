@@ -604,6 +604,34 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 한정자·대괄호 인용 유무에 관계없이 이 테이블 맨이름을 찾는 정규식 조각.
+        ///
+        /// [수정 라운드 1 리뷰 Critical] 통합 문서 검사(<see cref="CheckBatchRunRowCreation"/>)가
+        /// 이 조각을 쓰지 않고 `(?:\w+\.)?{bare}\b` 형태의 자체 정규식을 새로 써서,
+        /// 대괄호 인용(`[batch].[BatchRun]` 등)으로 쓴 정상 INSERT를 인식하지 못해
+        /// 반려했다(리뷰 실행 재현). <see cref="ResolveControlTableAliases"/>가 별칭
+        /// 바인딩에 이미 쓰던 이 조각을 공용 헬퍼로 뽑아 두 곳이 같은 패턴 문자열을
+        /// 쓰게 한다 - 같은 문제를 두 정규식이 각자 다르게 풀면 한쪽만 고쳐질 때
+        /// 다른 쪽이 뒤에 남는다.
+        ///
+        /// 테이블 부분을 `\[bare\]|bare\b`로 나눈다 - 대괄호로 감싼 쪽은 `]`가 곧바로
+        /// 뒤따르는지로 경계를 삼고(대괄호 뒤에는 `\b`가 성립하지 않는다 - `]`도 공백도
+        /// 단어 문자가 아니라서 전이가 없다), 대괄호 없는 쪽은 `\b`로 접두사 겹침
+        /// (`BatchStepJournalArchive`)을 막는다. 이 조각 자체는 앞에 `\b`를 붙이지
+        /// 않는다 - `INSERT INTO [batch].[BatchRun]`처럼 공백 바로 뒤에 대괄호가 오면
+        /// 공백도 `[`도 단어 문자가 아니라서 그 경계에서 `\b`가 성립하지 않아, 앞에
+        /// `\b`를 강제하면 오히려 이 조각을 anchor(예: INSERT INTO 뒤)로 쓰는 호출부가
+        /// 대괄호 형태를 못 찾게 된다. 자유 부분 문자열 검색(예: "언급됨" 판정)에서
+        /// 접미사 겹침(`MyBatchRun`)을 막아야 하는 호출부는 호출부 쪽에서 `\b`를
+        /// 앞에 붙인다.
+        /// </summary>
+        private static string QualifiedTableNameFragment(string bare)
+        {
+            var escapedBare = Regex.Escape(bare);
+            return $@"(?:\[?\w+\]?\.)?(?:\[{escapedBare}\]|{escapedBare}\b)";
+        }
+
+        /// <summary>
         /// 이 구문에서 제어 테이블에 묶인 별칭을 모은다.
         ///
         /// [왜 필요한가]
@@ -632,11 +660,10 @@ namespace ReSet.Core.Services
         private static HashSet<string> ResolveControlTableAliases(string cleaned, string bare)
         {
             var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var escapedBare = Regex.Escape(bare);
 
             foreach (Match binding in Regex.Matches(
                 cleaned,
-                $@"\b(?:FROM|JOIN)\s+(?:\[?\w+\]?\.)?(?:\[{escapedBare}\]|{escapedBare}\b)\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*)",
+                $@"\b(?:FROM|JOIN)\s+{QualifiedTableNameFragment(bare)}\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*)",
                 RegexOptions.IgnoreCase))
             {
                 var alias = binding.Groups["alias"].Value;
@@ -3997,6 +4024,19 @@ namespace ReSet.Core.Services
         /// [왜 소프트 스킵하는가]
         /// 문서가 이 테이블을 언급조차 하지 않으면 이 계약이 적용되는 Job이
         /// 아닐 수 있다. 없는 것을 결함으로 들지 않는다.
+        ///
+        /// [수정 라운드 1 리뷰 Critical + Minor]
+        /// 애초 버전은 `(?:\w+\.)?{bare}\b`라는 자체 정규식을 새로 써서 대괄호 인용
+        /// (`[batch].[BatchRun]` 등)을 인식하지 못해 정상 INSERT를 반려했다(Critical,
+        /// 소프트 스킵 원칙과 정면 배치 - 있는 것을 없는 것으로 오판). 또한 `mentioned`
+        /// 판정에 선행 경계가 없어 `MyBatchRun`처럼 접미사로 겹치는 식별자도 "언급"으로
+        /// 오인할 수 있었다(Minor). <see cref="ResolveControlTableAliases"/>가 이미
+        /// 쓰는 대괄호 인식 조각(<see cref="QualifiedTableNameFragment"/>)을 재사용해
+        /// 둘 다 닫는다 - `mentioned`는 자유 부분 문자열 검색이므로 앞에 `\b`를 붙여
+        /// 접미사 겹침을 막고, `inserted`는 `INSERT INTO`/`MERGE` 뒤에 고정 결합되므로
+        /// `\b`를 붙이지 않는다(공백 바로 뒤에 대괄호가 오면 그 경계에서 `\b`가
+        /// 성립하지 않아 대괄호 형태를 못 찾게 되기 때문이다 - `QualifiedTableNameFragment`
+        /// 문서 참고).
         /// </summary>
         private static void CheckBatchRunRowCreation(string markdown, ValidationResult result)
         {
@@ -4007,14 +4047,15 @@ namespace ReSet.Core.Services
                 if (table.Origin != ControlRowOrigin.FirstStepInserts) continue;
 
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var fragment = QualifiedTableNameFragment(bare);
 
                 var mentioned = Regex.IsMatch(
-                    cleaned, $@"(?:\w+\.)?{Regex.Escape(bare)}\b", RegexOptions.IgnoreCase);
+                    cleaned, $@"\b{fragment}", RegexOptions.IgnoreCase);
                 if (!mentioned) continue;
 
                 var inserted = Regex.IsMatch(
                     cleaned,
-                    $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
+                    $@"(INSERT\s+INTO|MERGE)\s+{fragment}",
                     RegexOptions.IgnoreCase);
                 if (inserted) continue;
 
