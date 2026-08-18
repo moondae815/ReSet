@@ -576,14 +576,25 @@ namespace ReSet.Core.Services
         /// 별칭을 테이블에 묶는 자리는 FROM 절과 JOIN 절뿐이다. `AS`는 있어도 되고
         /// 없어도 된다. 다른 테이블에 묶인 별칭은 담지 않는다 - 담으면 업무 테이블을
         /// 별칭으로 갱신하는 정상 구문이 제어 테이블 검사에 걸린다.
+        ///
+        /// [1라운드 리뷰 수정] 대괄호로 인용한 제어 테이블명(`FROM [batch].[BatchStepJournal]
+        /// bsj`, `batch.[BatchStepJournal] bsj` 등)이 이 정규식에 전혀 잡히지 않아 이
+        /// 태스크가 닫으려던 구멍이 표기 형태 하나로 다시 열렸다(리뷰 실측). 테이블
+        /// 부분을 `\[bare\]|bare\b`로 나눴다 - 대괄호로 감싼 쪽은 `]`가 곧바로 뒤따르는지로
+        /// 경계를 삼고(대괄호 뒤에는 `\b`가 성립하지 않는다 - `]`도 공백도 단어 문자가
+        /// 아니라서 전이가 없다), 대괄호 없는 쪽은 원래대로 `\b`로 접두사 겹침
+        /// (`BatchStepJournalArchive`)을 막는다. 대괄호로 감싼 쪽도 닫는 `]`가 정확히
+        /// 그 자리에 와야 하므로 `[BatchStepJournalArchive]`가 `[BatchStepJournal]`로
+        /// 오매치되지 않는다 - 접두사 겹침 문제는 두 표기 형태 모두에서 막힌다.
         /// </summary>
         private static HashSet<string> ResolveControlTableAliases(string cleaned, string bare)
         {
             var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var escapedBare = Regex.Escape(bare);
 
             foreach (Match binding in Regex.Matches(
                 cleaned,
-                $@"\b(?:FROM|JOIN)\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*)",
+                $@"\b(?:FROM|JOIN)\s+(?:\[?\w+\]?\.)?(?:\[{escapedBare}\]|{escapedBare}\b)\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*)",
                 RegexOptions.IgnoreCase))
             {
                 var alias = binding.Groups["alias"].Value;

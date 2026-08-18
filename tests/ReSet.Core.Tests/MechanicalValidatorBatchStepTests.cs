@@ -1639,5 +1639,63 @@ WHERE StepCode = N'S17';");
 
             Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
         }
+
+        // 리뷰 1라운드 실측: 대괄호로 인용한 제어 테이블명(FROM [batch].[BatchStepJournal]
+        // bsj 등)이 별칭 정규식에 전혀 잡히지 않아 이 태스크가 닫으려던 구멍이
+        // 표기 형태 하나로 다시 열렸다. 네 혼합 형태(양쪽 대괄호/한쪽만 대괄호)를
+        // 전부 잠근다.
+        [Theory]
+        [InlineData("[batch].[BatchStepJournal]")]
+        [InlineData("[dbo].[BatchStepJournal]")]
+        [InlineData("batch.[BatchStepJournal]")]
+        [InlineData("[batch].BatchStepJournal")]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnInABracketQuotedAliasedUpdate(
+            string qualifiedTable)
+        {
+            var markdown = Section($@"
+UPDATE bsj SET bsj.ExecutionStatus = N'Succeeded'
+FROM {qualifiedTable} bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 같은 형태로 UPDATE만 하고 INSERT가 없으면 행 출처 검사도 잡아야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedAliasedUpdateOfAJournalRowItNeverInserts()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Succeeded'
+FROM [batch].[BatchStepJournal] bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // 이름이 접두사로만 겹치는 다른 테이블(BatchStepJournalArchive)의 대괄호 인용
+        // 별칭은 진짜 제어 테이블(BatchStepJournal)에 묶이면 안 된다 - 넓히면서
+        // 오탐을 들이지 않았는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_IgnoresAPrefixOverlappingBracketQuotedTable()
+        {
+            var markdown = Section(@"
+UPDATE arc SET arc.SomeArchiveColumn = 1
+FROM [batch].[BatchStepJournalArchive] arc
+WHERE arc.RunId = @RunId;
+
+INSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus, StartedAtUtc)
+VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SomeArchiveColumn"));
+        }
     }
 }
