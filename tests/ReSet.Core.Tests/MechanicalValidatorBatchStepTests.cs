@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -1016,6 +1017,282 @@ WHERE RunId = @RunId AND StepCode = N'S17';");
                 markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Contains(result.Errors, e => e.Contains("FooBarBaz"));
+        }
+
+        // === B6·B7: 그림자 계약·반환 경로 (Task 7) ===================================
+
+        // 감사 🔴(S04): BEGIN TRAN 안에서 만든 SELECT INTO 그림자는 롤백과 함께
+        // 사라진다. CATCH의 DELETE는 자동 커밋이라 이미 복원된 행을 다시 지우고
+        // 복원 INSERT는 객체 없음 오류로 실패한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAShadowCreatedInsideTheTransaction()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+SELECT * INTO batch_shadow.TClientSettleRate_RunId_S04 FROM dbo.TClientSettleRate WHERE YMD = @pi_strYMD;
+DELETE FROM dbo.TClientSettleRate WHERE YMD = @pi_strYMD;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("BEGIN TRAN") && e.Contains("그림자"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsAShadowCreatedBeforeTheTransaction()
+        {
+            var markdown = Section(@"
+SELECT * INTO batch_shadow.TClientSettleRate_RunId_S04 FROM dbo.TClientSettleRate WHERE YMD = @pi_strYMD;
+BEGIN TRAN;
+DELETE FROM dbo.TClientSettleRate WHERE YMD = @pi_strYMD;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 위험: 문서에 트랜잭션이 둘 이상이면 첫 BEGIN TRAN/COMMIT TRAN 쌍만 보는
+        // 순진한 구현은 두 번째 블록 안의 위반을 놓친다(미탐).
+        [Fact]
+        public void ValidateBatchStep_RejectsAShadowCreatedInsideASecondTransactionBlock()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+COMMIT TRAN;
+BEGIN TRAN;
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 위험: COMMIT TRAN이 아니라 ROLLBACK TRAN으로 끝나는 구간도 트랜잭션
+        // 안이다 - "첫 COMMIT TRAN까지만" 찾는 구현은 이 구간을 놓친다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAShadowCreatedInsideATransactionThatEndsWithRollback()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+ROLLBACK TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 위험: 중첩된 BEGIN TRAN. 안쪽 COMMIT TRAN만 보고 바깥 트랜잭션이 아직
+        // 열려 있다는 사실을 놓치면 안 된다 - 그림자는 여전히 바깥 트랜잭션 안이다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAShadowCreatedInsideANestedTransaction()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+BEGIN TRAN;
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+COMMIT TRAN;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 위험(오탐 방지): 주석 안의 "BEGIN TRAN" 문자열은 실제 트랜잭션을 열지
+        // 않는다 - 이 텍스트를 진짜 BEGIN TRAN으로 오인하면, 트랜잭션이 전혀 없는
+        // 단계에서 정상 SELECT INTO가 그림자 위반으로 오탐된다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotTreatACommentedBeginTranAsOpeningATransaction()
+        {
+            var markdown = Section(@"
+-- BEGIN TRAN은 이 단계에서 쓰지 않는다
+SELECT * INTO batch_shadow.TSettleMst_RunId_S17 FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("그림자"));
+        }
+
+        // 감사 🟠(S12): WHERE 없는 전량 삭제 후 전체 스냅샷 재삽입은 당일 외
+        // 거래일 행까지 실행 시작 시점으로 되돌린다.
+        [Fact]
+        public void ValidateBatchStep_RejectsARestoreThatDeletesWithoutARange()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX;
+    INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("WHERE"));
+        }
+
+        // 위험(오탐 방지): DELETE가 WHERE로 범위를 좁혔다면 정상 복원이다 - 이
+        // 규칙이 걸어서는 안 된다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsARestoreThatDeletesWithARange()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX WHERE YMD = @pi_strYMD;
+    INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12 WHERE YMD = @pi_strYMD;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 감사 🟠(S11): EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOuterVariableInsideExec()
+        {
+            var markdown = Section(
+                "EXEC(N'INSERT INTO ' + @v_shadowTableName + N' SELECT A.* FROM dbo.T A WHERE A.ProcYMD = @pi_strYMD');");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("sp_executesql"));
+        }
+
+        // 위험(오탐 방지): sp_executesql 자체를 직접 부르는 정상 호출은 EXEC() 동적
+        // 배치가 아니다 - "EXEC" 뒤에 괄호가 없으므로 걸리면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsADirectSpExecutesqlCall()
+        {
+            var markdown = Section(
+                "EXEC sp_executesql @sql, N'@p int', @p = @pi_intValue;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("동적 배치"));
+        }
+
+        // 위험(오탐 방지): 괄호 없는 프로시저 호출(`EXEC dbo.usp_Foo @a, @b`)도
+        // EXEC() 동적 배치가 아니다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsAProcedureCallWithoutParens()
+        {
+            var markdown = Section(
+                "EXEC dbo.usp_Foo @pi_strYMD, @pi_intValue;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("동적 배치"));
+        }
+
+        // B7: CATCH가 THROW로 끝나면 호출부의 OUTPUT 대입을 지나쳐 원본 반환 코드가 사라진다.
+        [Fact]
+        public void ValidateBatchStep_RejectsACatchThatOnlyRethrows()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("THROW"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsACatchThatSetsTheOutputAndReturns()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("THROW"));
+        }
+
+        // 위험(미탐 방지): RETURN이 주석 안에만 있으면 반환 경로가 없는 것과 같다 -
+        // 주석의 RETURN 문자열을 실제 코드로 오인하면 THROW-only 위반을 놓친다.
+        [Fact]
+        public void ValidateBatchStep_StillFlagsAThrowOnlyCatchWhenReturnAppearsOnlyInAComment()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    -- RETURN @v_currentStepId; (참고용 예시, 실제로 쓰지 않는다)
+    THROW;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("THROW"));
+        }
+
+        // 위험(오탐 방지): THROW가 주석 안에만 있으면 실제로 다시 던지지 않는다 -
+        // 주석의 THROW 문자열을 실제 코드로 오인하면 정상 CATCH가 오탐된다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotFlagACatchWhoseThrowMentionIsOnlyInAComment()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    -- THROW를 쓰면 반환 코드가 사라지므로 여기서는 쓰지 않는다
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("THROW"));
+        }
+
+        // 위험: 여러 CATCH 블록이 있으면 각각 독립적으로 판정되어야 한다 - 하나가
+        // 정상이라고 나머지 위반이 가려지거나, 하나가 위반이라고 정상까지 걸리면
+        // 안 된다.
+        [Fact]
+        public void ValidateBatchStep_EvaluatesEachCatchBlockIndependently()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    THROW;
+END CATCH
+
+BEGIN CATCH
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Equal(1, result.Errors.Count(e => e.Contains("THROW")));
         }
     }
 }

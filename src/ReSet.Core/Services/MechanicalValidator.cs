@@ -297,6 +297,8 @@ namespace ReSet.Core.Services
             CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
             CheckBatchControlVocabulary(stepMarkdown, step, result);
             CheckBatchControlRowOrigin(stepMarkdown, step, result);
+            CheckShadowBackupContract(stepMarkdown, step, result);
+            CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -3137,6 +3139,226 @@ namespace ReSet.Core.Services
             }
 
             return string.Join("\n", resultLines);
+        }
+
+        /// <summary>
+        /// 그림자 백업 장치의 세 역학을 본다.
+        ///
+        /// 감사 실측에서 다섯 단계가 각기 다른 이유로 복구 불능이었다. 규칙 4가
+        /// "선행 DELETE 후 복원"만 강제하고 생성 위치·복원 범위·동적 SQL 변수
+        /// 스코프는 한 마디도 하지 않았기 때문이다.
+        ///
+        /// 세 검사 모두 <see cref="BlankCommentsAndStrings"/>로 주석·문자열 내용을
+        /// 지운 사본을 대조 기준으로 삼는다(단, (c)는 EXEC() 몸체를 찾는 위치만
+        /// 사본에서 정하고, 그 안에 진짜 변수 참조가 있는지는 원문에서 본다 - 검사
+        /// 대상 자체가 문자열 리터럴의 내용물이기 때문이다). 6번 과제가 세 라운드에
+        /// 걸쳐 겪은 문제 두 가지를 피하기 위해서다: 원문을 그대로 훑으면 주석
+        /// `-- BEGIN TRAN은 안 쓴다`의 텍스트가 진짜 트랜잭션 시작으로 오인되고
+        /// (오탐), 첫 BEGIN TRAN/COMMIT TRAN 쌍만 보면 두 번째 이후 트랜잭션 블록
+        /// 안의 위반을 놓친다(미탐) - 그래서 (a)는 모든 BEGIN TRAN을 훑고, 그 트랜잭션을
+        /// 닫는 문으로 COMMIT TRAN과 ROLLBACK TRAN을 함께 찾는다.
+        /// </summary>
+        private static void CheckShadowBackupContract(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+
+            // (a) 트랜잭션 안에서 만든 그림자는 롤백과 함께 소멸한다. 문서에 트랜잭션이
+            // 여럿이면 각각을, COMMIT TRAN이든 ROLLBACK TRAN이든 그 트랜잭션을 닫는
+            // 첫 문까지를 "안"으로 본다 - 닫는 문이 아예 없으면 문서 끝까지가 안이다.
+            var searchFrom = 0;
+            while (searchFrom < cleaned.Length)
+            {
+                var beginMatch = BeginTranPattern.Match(cleaned, searchFrom);
+                if (!beginMatch.Success) break;
+
+                var afterBegin = beginMatch.Index + beginMatch.Length;
+                var endMatch = EndTranPattern.Match(cleaned, afterBegin);
+                var regionEnd = endMatch.Success ? endMatch.Index : cleaned.Length;
+                var inside = cleaned[afterBegin..regionEnd];
+
+                if (ShadowIntoPattern.IsMatch(inside))
+                {
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 BEGIN TRAN 안에서 그림자 테이블을 만듭니다. " +
+                        "SELECT INTO로 만든 테이블은 롤백과 함께 소멸하므로, 실패 시 복원할 " +
+                        "대상이 사라진 채 CATCH의 DELETE만 자동 커밋으로 실행되어 롤백이 이미 " +
+                        "복원한 행을 다시 지웁니다. 그림자는 BEGIN TRAN 앞에서 만드십시오. " +
+                        "단일 트랜잭션으로 끝나는 단계라면 그림자 없이 ROLLBACK TRAN만 쓰십시오.");
+                }
+
+                searchFrom = endMatch.Success ? endMatch.Index + endMatch.Length : cleaned.Length;
+            }
+
+            // (b) 복원은 원래 삭제한 범위와 같은 범위를 지워야 한다. WHERE로 범위를
+            // 좁힌 DELETE는 테이블명 바로 뒤에 세미콜론이 오지 않으므로 이 패턴에
+            // 걸리지 않는다 - `[\w.\[\]]+\s*;`가 테이블명 문자만 삼키고 WHERE 절의
+            // 공백·비교 연산자 앞에서 멈추기 때문이다.
+            foreach (Match restore in RestoreWithoutRangePattern.Matches(cleaned))
+            {
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 복원이 `{restore.Groups["t"].Value}`를 WHERE 없이 " +
+                    "전량 삭제한 뒤 재삽입합니다. 복원은 이 단계가 실제로 지운 범위와 같은 " +
+                    "범위만 지워야 합니다 - 전량 삭제하면 다른 거래일의 행까지 실행 시작 " +
+                    "시점으로 되돌아가, 레거시에 없는 전역 행 집합 변경 경로가 생깁니다.");
+            }
+
+            // (c) EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다. EXEC() 문의 위치는
+            // 주석 안이 아닌지 cleaned에서 찾되, 그 몸체의 실제 문자열 리터럴 내용은
+            // 원문에서 읽는다 - 검사 대상 자체가 문자열 값이라 주석·문자열 지우기 사본에서는
+            // 이미 공백으로 지워져 있다. "EXEC(" 형태만 잡으므로 `EXEC sp_executesql ...`
+            // 직접 호출이나 `EXEC dbo.usp_Foo @a, @b` 같은 괄호 없는 프로시저 호출은
+            // "EXEC" 바로 뒤에 '('가 없어 애초에 매치되지 않는다.
+            foreach (Match exec in ExecDynamicBatchPattern.Matches(cleaned))
+            {
+                var bodyGroup = exec.Groups["body"];
+                var body = stepMarkdown.Substring(bodyGroup.Index, bodyGroup.Length);
+
+                // 문자열 리터럴 안의 @이름만 본다 - 연결에 쓰인 바깥 변수는 정상이다.
+                foreach (Match literal in StringLiteralPattern.Matches(body))
+                {
+                    if (!VariableTokenPattern.IsMatch(literal.Groups["s"].Value)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 EXEC()로 만든 동적 배치 안에서 바깥 배치의 변수를 " +
+                        "참조합니다. 동적 배치는 별도 스코프라 그 변수를 볼 수 없어 스칼라 변수 " +
+                        "미선언 오류로 실패합니다. sp_executesql의 매개변수로 값을 넘기십시오.");
+                    break;
+                }
+            }
+        }
+
+        private static readonly Regex BeginTranPattern =
+            new(@"\bBEGIN\s+TRAN(SACTION)?\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex EndTranPattern =
+            new(@"\b(?:COMMIT|ROLLBACK)\s+TRAN(SACTION)?\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex ShadowIntoPattern =
+            new(@"SELECT\s+.*?\bINTO\s+batch_shadow\.", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex RestoreWithoutRangePattern = new(
+            @"DELETE\s+FROM\s+(?<t>[\w.\[\]]+)\s*;(?<tail>.{0,400}?)INSERT\s+INTO\s+\k<t>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex ExecDynamicBatchPattern =
+            new(@"EXEC\s*\((?<body>.*?)\)\s*;", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex StringLiteralPattern = new(@"N?'(?<s>[^']*)'");
+
+        private static readonly Regex VariableTokenPattern = new(@"@\w+");
+
+        /// <summary>
+        /// CATCH가 반환 경로 없이 THROW로 끝나는지 본다.
+        ///
+        /// 프롬프트 규칙 6-1은 상태 변수를 CATCH에서 반환하라 하고 규칙 13은 출력
+        /// 파라미터를 누락 없이 매핑하라 하는데, Few-Shot 예시의 CATCH가 THROW로
+        /// 끝났다. 모델은 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        ///
+        /// <see cref="BlankCommentsAndStrings"/>로 지운 사본에서 CATCH 블록을 찾고 그
+        /// 안의 THROW·RETURN도 같은 사본에서 찾는다 - 원문을 그대로 보면 주석
+        /// `-- RETURN @x;`의 텍스트가 진짜 반환 경로로 오인되어 THROW-only 위반을
+        /// 놓치고(미탐), 주석 `-- THROW를 쓰지 않는다`의 텍스트가 진짜 THROW로
+        /// 오인되어 정상 CATCH가 걸린다(오탐) - 6번 과제가 겪은 두 실패 유형과 같은
+        /// 모양이라 처음부터 사본을 쓴다.
+        /// </summary>
+        private static void CheckCatchDiscardsReturnCode(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+
+            foreach (Match block in CatchBlockPattern.Matches(cleaned))
+            {
+                var body = block.Groups["body"].Value;
+                if (!ThrowTokenPattern.IsMatch(body)) continue;
+                if (ReturnTokenPattern.IsMatch(body)) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 CATCH 블록이 반환 경로 없이 THROW로 끝납니다. " +
+                    "THROW는 호출부의 OUTPUT 파라미터 대입을 지나쳐 원본 반환 코드를 " +
+                    "잃어버립니다. 추적한 상태 변수를 출력 파라미터에 넣고 RETURN하십시오.");
+            }
+        }
+
+        private static readonly Regex CatchBlockPattern = new(
+            @"BEGIN\s+CATCH(?<body>.*?)END\s+CATCH", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        private static readonly Regex ThrowTokenPattern = new(@"\bTHROW\b", RegexOptions.IgnoreCase);
+
+        private static readonly Regex ReturnTokenPattern = new(@"\bRETURN\b", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// SQL 주석(`--`, `/* */`)과 문자열 리터럴(`'...'`) 안의 내용을 공백으로 지운
+        /// 사본을 돌려준다. 개행은 그대로 남긴다. 원본과 길이·줄 구조가 같으므로,
+        /// 사본에서 찾은 Match의 Index/Length를 원본 문자열에 그대로 적용해 잘라낼 수
+        /// 있다 - <see cref="CheckShadowBackupContract"/>의 (c)가 EXEC() 몸체의 위치는
+        /// 사본에서 찾고 그 문자열 리터럴 내용은 원본에서 읽는 데 이 성질을 쓴다.
+        ///
+        /// 그림자 계약·반환 경로 검사가 "-- BEGIN TRAN은 안 쓴다", "-- RETURN @x;"
+        /// 같은 주석 텍스트나 문자열 값 안의 키워드를 실제 문(statement)으로 오인하지
+        /// 않도록, 위치 기반 정규식을 걸기 전에 먼저 이 사본에 대해 매치한다. 대괄호
+        /// 인용 식별자는 다루지 않는다 - 이 검사들이 찾는 키워드(BEGIN/COMMIT/
+        /// ROLLBACK/TRAN/THROW/RETURN)가 대괄호 인용 식별자 안에 올 동기가 없기
+        /// 때문이다(기존 세 스캐너의 대괄호 처리와 달리, 이 사본은 컬럼·상태값
+        /// 대조가 아니라 제어 흐름 키워드 대조용이다).
+        /// </summary>
+        private static string BlankCommentsAndStrings(string text)
+        {
+            var chars = text.ToCharArray();
+            var inString = false;
+            var i = 0;
+
+            while (i < chars.Length)
+            {
+                var ch = chars[i];
+
+                if (inString)
+                {
+                    if (ch == '\'')
+                    {
+                        if (i + 1 < chars.Length && chars[i + 1] == '\'')
+                        {
+                            chars[i] = ' ';
+                            chars[i + 1] = ' ';
+                            i += 2;
+                            continue;
+                        }
+
+                        inString = false;
+                        chars[i] = ' ';
+                        i++;
+                        continue;
+                    }
+
+                    if (ch != '\n') chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    for (var j = i; j < commentEnd.Value; j++)
+                    {
+                        if (chars[j] != '\n') chars[j] = ' ';
+                    }
+
+                    i = commentEnd.Value;
+                    continue;
+                }
+
+                if (ch == '\'')
+                {
+                    inString = true;
+                    chars[i] = ' ';
+                    i++;
+                    continue;
+                }
+
+                i++;
+            }
+
+            return new string(chars);
         }
     }
 
