@@ -5395,7 +5395,11 @@ SELECT 1;
             {
                 planStructure, steps, specs, targetLanguage, jobName, progressScope,
                 previousSkeleton, previousSkeletonResult, previousSections, previousViolations, defectiveSteps,
-                knownTableNames, cancellationToken
+                // parametersByProcedure: 이 테스트들은 SpDefinition을 조달하지 않으므로
+                // (StepsJson만 파싱) 재료가 없다 - 빈 사전이 StepInterfaceFacts.Build를
+                // 소프트 스킵시켜 stepInterfaces가 빈 목록이 되고, 검증·프롬프트 양쪽
+                // 모두 카탈로그가 없던 이전 동작과 같아진다.
+                knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), cancellationToken
             })!;
 
             await task;
