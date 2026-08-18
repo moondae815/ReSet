@@ -569,7 +569,7 @@ namespace ReSet.Core.Services
                     var eq = assignment.IndexOf('=');
                     if (eq <= 0) continue;
 
-                    var name = assignment[..eq].Trim();
+                    var name = StripBracketQuoting(assignment[..eq].Trim());
                     if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
 
                     if (!known.Contains(name))
@@ -612,7 +612,7 @@ namespace ReSet.Core.Services
                 RegexOptions.IgnoreCase))
             {
                 var columns = SplitTopLevelSegments(statement.Groups["cols"].Value)
-                    .Select(c => c.Trim())
+                    .Select(c => StripBracketQuoting(c.Trim()))
                     .ToList();
 
                 foreach (var name in columns)
@@ -675,10 +675,11 @@ namespace ReSet.Core.Services
                 "정상 성공한 단계가 재시작 대조에서 미완료로 판정되어 실행이 상시 차단됩니다.");
         }
 
-        /// <summary>쉼표로 항목을 나누되 괄호 안의 쉼표와 홑따옴표 문자열 리터럴 안의
-        /// 쉼표는 무시한다 - SET 절의 CASE 식·INSERT 값 목록의 함수 호출 인자에 있는
-        /// 쉼표, 그리고 `N'a,b error message'`처럼 문자열 값 자체에 든 쉼표를 항목
-        /// 경계로 오인하지 않기 위해서다.
+        /// <summary>쉼표로 항목을 나누되 괄호·대괄호 인용·홑따옴표 문자열 리터럴·SQL
+        /// 주석 안의 쉼표는 무시한다 - SET 절의 CASE 식·INSERT 값 목록의 함수 호출
+        /// 인자에 있는 쉼표, `N'a,b error message'`처럼 문자열 값 자체에 든 쉼표,
+        /// `[Order,Column]`처럼 대괄호 인용 식별자 안에 든 쉼표를 항목 경계로 오인하지
+        /// 않기 위해서다.
         ///
         /// [2라운드 수정] 최초 버전은 인용 상태를 몰라 문자열 리터럴 안의 쉼표도 항목
         /// 경계로 셌다. INSERT VALUES에서 그 쉼표 앞의 항목이 하나 더 늘어난 것처럼
@@ -686,12 +687,22 @@ namespace ReSet.Core.Services
         /// 엉뚱한 값이 걸려 계약 밖 상태값 검사가 조용히 빗나갔다(리뷰 재현, 미탐).
         /// `''`(홑따옴표 두 개)는 문자열 안에서 홑따옴표 하나를 뜻하는 SQL 이스케이프이므로
         /// 문자열을 닫지 않고 그대로 삼킨다.
+        ///
+        /// [3라운드 수정] 인용 상태 검사만으로는 부족했다 - 주석 `-- don't panic`의
+        /// 아포스트로피가 문자열 시작으로 오인되어 그 뒤의 진짜 대입까지 문자열 내용물로
+        /// 삼켜졌다(리뷰 재현, 미탐). 인용 검사보다 먼저(문자열 밖에서만) 주석을 건너뛰어
+        /// 그 안의 아포스트로피·쉼표·괄호가 전혀 구조로 해석되지 않게 한다 - 순서를
+        /// 바꾸면(문자열 안에서도 주석을 찾으면) `N'a--b'`의 `--`가 주석으로 오인되어
+        /// 값과 그 뒤 위반이 함께 사라진다. 대괄호 인용도 같은 이유로 더했다 -
+        /// `[ExecutionStatus]`를 대입 대상 검사가 벗겨서 대조하려면(3라운드 3순위)
+        /// 이 단계에서 먼저 `[Order,Column]` 같은 병적 이름의 내부 쉼표를 지켜야 한다.
         /// </summary>
         private static IEnumerable<string> SplitTopLevelSegments(string text)
         {
             var depth = 0;
             var start = 0;
             var inString = false;
+            var inBracket = false;
 
             for (var i = 0; i < text.Length; i++)
             {
@@ -711,10 +722,34 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                if (inBracket)
+                {
+                    if (ch != ']') continue;
+
+                    if (i + 1 < text.Length && text[i + 1] == ']')
+                    {
+                        i++; // ]] 이스케이프 - 대괄호 인용은 계속된다.
+                        continue;
+                    }
+
+                    inBracket = false;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value - 1; // for 루프의 i++와 합쳐 commentEnd로 재개한다.
+                    continue;
+                }
+
                 switch (ch)
                 {
                     case '\'':
                         inString = true;
+                        break;
+                    case '[':
+                        inBracket = true;
                         break;
                     case '(':
                         depth++;
@@ -733,8 +768,8 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>openParenIndex의 '('에 대응하는 ')'까지, 중첩 괄호 깊이를 세어 그
-        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다. 문자열 리터럴 안의 괄호는
-        /// 깊이에서 제외한다.</summary>
+        /// 안쪽 내용만 돌려준다. 짝이 맞지 않으면 null이다. 문자열 리터럴·SQL 주석 안의
+        /// 괄호는 깊이에서 제외한다.</summary>
         private static string? ExtractBalancedParenGroup(string text, int openParenIndex)
         {
             var depth = 0;
@@ -755,6 +790,13 @@ namespace ReSet.Core.Services
                     }
 
                     inString = false;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value - 1;
                     continue;
                 }
 
@@ -780,18 +822,28 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// startIndex부터, 괄호 깊이 0·문자열 인용 밖에서 처음 나타나는 FROM/WHERE/;를
-        /// 절의 끝으로 삼아 그 앞까지를 돌려준다. 그런 경계가 없으면 문서 끝까지다.
+        /// startIndex부터, 괄호 깊이 0·문자열 인용/대괄호 인용/주석 밖에서 처음 나타나는
+        /// FROM/WHERE/;를 절의 끝으로 삼아 그 앞까지를 돌려준다. 그런 경계가 없으면
+        /// 문서 끝까지다.
         ///
         /// 괄호 깊이를 세는 이유: SET 대입식 안의 서브쿼리(`(SELECT ... FROM ... WHERE
         /// ...)`)가 담은 FROM/WHERE는 그 서브쿼리에 속한 것이지 바깥 UPDATE 문의 절
         /// 경계가 아니다. 문자열 인용을 추적하는 이유: 리터럴 값 안에 우연히 이 키워드와
         /// 같은 글자가 오더라도(드물지만) 절을 잘라서는 안 된다.
+        ///
+        /// [3라운드 수정] 주석 `-- don't panic`의 아포스트로피가 문자열 시작으로
+        /// 오인되면 그 뒤의 진짜 WHERE/;까지 "문자열 안"으로 삼켜져 절 경계 자체가
+        /// 사라졌다(리뷰 재현, 미탐 - 1라운드는 컬럼·상태값을 3건 잡았는데 이 결함이
+        /// 있는 2라운드는 2건만 잡았다). 문자열 검사보다 먼저(문자열 밖에서만) 주석을
+        /// 건너뛴다 - 순서가 바뀌면 `N'a--b'`의 `--`가 주석으로 오인된다. 대괄호 인용도
+        /// 같은 이유로 추적한다 - `[FROM]`처럼 키워드와 우연히 같은 대괄호 인용
+        /// 식별자가 절 경계로 오인되지 않게 한다.
         /// </summary>
         private static string ExtractTopLevelClause(string text, int startIndex)
         {
             var depth = 0;
             var inString = false;
+            var inBracket = false;
             var i = startIndex;
 
             while (i < text.Length)
@@ -815,9 +867,40 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                if (inBracket)
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == ']')
+                        {
+                            i += 2;
+                            continue;
+                        }
+
+                        inBracket = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                var commentEnd = SkipCommentToken(text, i);
+                if (commentEnd.HasValue)
+                {
+                    i = commentEnd.Value;
+                    continue;
+                }
+
                 if (ch == '\'')
                 {
                     inString = true;
+                    i++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    inBracket = true;
                     i++;
                     continue;
                 }
@@ -867,6 +950,54 @@ namespace ReSet.Core.Services
         }
 
         private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+        /// <summary>
+        /// index 위치가 SQL 주석(`--`부터 줄 끝까지, 또는 `/*`부터 `*/`까지)의 시작이면
+        /// 그 주석이 끝나고 다음에 처리할 색인을 돌려준다. 주석이 아니면 null이다.
+        ///
+        /// 호출 규약: 이 함수는 반드시 "지금 문자열 인용 안이 아닐 때만" 불러야 한다.
+        /// 문자열 리터럴 안의 `--`·`/*`는 주석이 아니라 값의 일부이기 때문이다
+        /// (`N'a--b'`) - 그래서 세 스캐너 모두 인용 상태를 먼저 확인하고, 인용 밖일
+        /// 때만 이 함수를 부른다. 순서를 바꾸면(주석 검사를 인용 검사보다 먼저 하면)
+        /// 문자열 안의 `--`가 주석으로 오인되어 그 값과 뒤따르는 진짜 위반이 함께
+        /// 사라진다.
+        ///
+        /// 중첩 블록 주석(`/* /* ... */ */`)은 다루지 않는다. T-SQL은 중첩을 허용하지만,
+        /// 이 검사가 보는 입력은 마크다운 단계 본문의 SET 절·VALUES 절 한 조각이고,
+        /// 그 자리에 중첩 블록 주석을 쓸 동기가 없다 - 제어 테이블 대입 자리에 주석을
+        /// 중첩해 쓴 실제 사례가 리뷰·감사 어디에도 없다. 비중첩 스캔(`*/`를 만나면
+        /// 즉시 닫는다)으로 충분하고, 중첩 처리는 깊이 상태를 셋에 각각 더 심어야 해
+        /// 이번 라운드가 막 안정화한 로직을 다시 흔들 위험이 이득보다 크다.
+        /// </summary>
+        private static int? SkipCommentToken(string text, int index)
+        {
+            if (index + 1 < text.Length && text[index] == '-' && text[index + 1] == '-')
+            {
+                var lineEnd = text.IndexOf('\n', index + 2);
+                return lineEnd < 0 ? text.Length : lineEnd; // 개행 자체는 평범한 문자로 다음 루프가 처리한다.
+            }
+
+            if (index + 1 < text.Length && text[index] == '/' && text[index + 1] == '*')
+            {
+                var blockEnd = text.IndexOf("*/", index + 2, StringComparison.Ordinal);
+                return blockEnd < 0 ? text.Length : blockEnd + 2;
+            }
+
+            return null;
+        }
+
+        /// <summary>대괄호로 감싼 식별자(`[Name]`)의 대괄호를 벗긴다 - T-SQL에서 매우
+        /// 흔한 인용 형태인데 대입 대상·컬럼 목록 검사가 대괄호를 모르면
+        /// `SET [ExecutionStatus] = N'Completed'`나 `INSERT INTO ... ([StepStatus], ...)`
+        /// 같은 위반이 `^[A-Za-z_]\w*$` 정규식에 걸려 조용히 통과한다(3라운드 리뷰
+        /// pre-existing 지적). `]]`는 대괄호 인용 안에서 `]` 하나를 뜻하는 T-SQL
+        /// 이스케이프이므로 되돌린다. 대괄호로 감싸여 있지 않으면 원래 문자열을 그대로
+        /// 돌려준다.</summary>
+        private static string StripBracketQuoting(string name)
+        {
+            if (name.Length < 2 || name[0] != '[' || name[^1] != ']') return name;
+            return name[1..^1].Replace("]]", "]");
+        }
 
         /// <summary>
         /// 자기 소유 제어 행을 만들지 않고 UPDATE만 하는지 본다.

@@ -895,5 +895,127 @@ WHERE RunId = @RunId AND StepCode = N'S17';");
 
             Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
         }
+
+        // 미탐 회귀 5(3라운드 리뷰 재현): 주석 안의 아포스트로피(don't)가 문자열
+        // 인용 시작으로 오인되면 그 뒤의 진짜 대입과 진짜 절 경계(WHERE/;)까지
+        // 문자열 내용물로 삼켜진다 - -- 줄 주석 형태.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnAfterALineCommentContainingAnApostrophe()
+        {
+            var markdown = Section("""
+                UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' -- don't panic
+                , FooBarBaz = 1
+                WHERE StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("FooBarBaz"));
+        }
+
+        // 미탐 회귀 5(3라운드 리뷰 재현): 같은 결함의 /* */ 블록 주석 형태.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnAfterABlockCommentContainingAnApostrophe()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' /* don't panic */" +
+                ", FooBarBaz = 1 WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("FooBarBaz"));
+        }
+
+        // 주석 뒤에 오는 것이 계약 밖 컬럼이 아니라 계약 밖 상태값이어도 같은 결함이
+        // 그 위반을 숨긴다 - -- 줄 주석 형태.
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueAfterALineCommentContainingAnApostrophe()
+        {
+            var markdown = Section("""
+                UPDATE batch.BatchStepJournal SET ErrorMessage = N'ok' -- don't panic
+                , StepStatus = N'Completed'
+                WHERE StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 상태값 버전의 /* */ 블록 주석 형태.
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueAfterABlockCommentContainingAnApostrophe()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET ErrorMessage = N'ok' /* don't panic */" +
+                ", StepStatus = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 문자열 리터럴 안의 --는 주석이 아니다 - 순서를 뒤집으면(주석 검사를 인용
+        // 상태보다 먼저 하면) 이 값 자체가 삼켜져 뒤따르는 진짜 위반을 놓친다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotTreatALineCommentMarkerInsideAStringLiteralAsAComment()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET ErrorMessage = N'a--b', FooBarBaz = 1 " +
+                "WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("FooBarBaz"));
+        }
+
+        // 3순위(대괄호 정규화): [ExecutionStatus] 같은 대괄호 인용 대입 대상은
+        // ^[A-Za-z_]\w*$가 걸러내 검사를 통째로 우회했다 - 대괄호를 벗기고 대조해야
+        // 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedOutOfContractColumnInAnUpdateSetClause()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET [ExecutionStatus] = N'Completed' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // INSERT 컬럼 목록에서도 대괄호를 벗겨야 계약 밖 상태값이 올바른 위치에서
+        // 대조된다.
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueWithBracketQuotedInsertColumns()
+        {
+            var markdown = Section(
+                "INSERT INTO batch.BatchStepJournal ([RunId], [StepCode], [StepStatus], [StartedAtUtc]) " +
+                "VALUES (@RunId, N'S17', N'Completed', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 병적인 대괄호 이름([Order,Column])의 내부 쉼표가 항목 경계로 오인되면
+        // 뒤따르는 진짜 위반의 위치가 밀린다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotSplitOnACommaInsideABracketQuotedName()
+        {
+            var markdown = Section(
+                "UPDATE batch.BatchStepJournal SET [Order,Column] = 1, FooBarBaz = 2 WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("FooBarBaz"));
+        }
     }
 }
