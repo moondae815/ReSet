@@ -1031,5 +1031,27 @@ END"
             Assert.Contains(
                 "NEVER compare two aggregates with `CROSS JOIN`", await StepSystemPromptAsync());
         }
+
+        // 규칙 4 수술(2026-08-18)이 옛 (a)(다중 테이블 커버리지)와 (b)(퍼지 정책)를
+        // 판정 트리로 바꾸며 대체 없이 지웠다(코드 리뷰 Important). 계획서가 규칙 4를
+        // 다시 쓴 의도는 그림자를 마지막 수단으로 좁히는 것이었지 이 둘을 버리는
+        // 것이 아니었으므로, 그림자를 쓰기로 한 가지 안에 되살린다. 일부 테이블만
+        // 덮으면 복원이 반쪽짜리가 되어 롤백 안 한 것보다 더 나쁜 불일치 상태를
+        // 만든다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ShadowMustCoverAllModifiedTargetTables()
+        {
+            Assert.Contains(
+                "the shadow strategy MUST cover ALL", await StepSystemPromptAsync());
+        }
+
+        // 그림자 테이블은 배치 전용 스키마에 계속 쌓이는 물리 객체다. 퍼지 정책
+        // 없이 두면 저장 공간을 영구히 잠식한다(코드 리뷰 Important). 그림자를
+        // 쓰기로 한 가지 안에 수명·정리 지시를 되살린다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ShadowMustDefineAPurgePolicy()
+        {
+            Assert.Contains("purge policy", await StepSystemPromptAsync());
+        }
     }
 }

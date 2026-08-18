@@ -1030,6 +1030,27 @@ Based on the reference context above, reverse engineer the user defined function
         ///   각 변을 상대 변의 행수만큼 부풀려 정상 데이터에서도 검증이 실패하고
         ///   기대/실제 금액이 그 배수만큼 과대 계상된다. 각 변을 독립 서브쿼리/CTE로
         ///   집계한 뒤 스칼라 두 개를 비교하도록 못박는다.
+        ///
+        /// 2026-08-18 수술 후속 보강(코드 리뷰 Important 2건 원상 복구):
+        /// - 규칙 4 (d) 다중 테이블 커버리지: 위 수술이 "그림자 전략은 단계가
+        ///   수정하는 모든 대상 테이블을 커버해야 한다"는 옛 (a) 지시를 대체 없이
+        ///   지웠다. 계획서가 규칙 4를 다시 쓴 의도는 그림자를 마지막 수단으로
+        ///   좁히는 것이었지 이 지시를 버리는 것이 아니었으므로, 그림자를 쓰기로
+        ///   한 가지 안에 되살린다. 일부 테이블만 덮으면 복원이 반쪽짜리가 되어
+        ///   롤백을 아예 안 한 것보다 더 나쁜 불일치 상태를 만든다.
+        /// - 규칙 4 (e) 퍼지 정책: 같은 수술이 "저장 용량 전략과 퍼지 정책(예:
+        ///   24시간 후 자동 삭제)을 정의해야 한다"는 옛 (b) 지시도 대체 없이
+        ///   지웠다. 그림자 테이블은 batch_shadow 스키마에 계속 쌓이는 물리
+        ///   객체이므로, 수명·정리 지시 없이 두면 저장 공간을 영구히 잠식한다.
+        ///   같은 가지에 되살린다.
+        /// - 둘 다 "그림자를 쓰기로 한 경우"에만 적용됨을 문장 끝에 명시해,
+        ///   규칙 4의 새 기조(그림자는 마지막 수단)와 모순되지 않게 했다.
+        /// - Few-Shot의 "Shadow Table Swap Pattern" 예시에 `DECLARE`와
+        ///   `SET @v_shadowCaptured = 1`을 추가했다(코드 리뷰 Minor 원상 복구).
+        ///   CATCH 블록 예시가 이 변수를 선언 없이 참조하고 있었는데, 이는 이
+        ///   축이 정확히 잡으려는 결함(미선언 변수 참조)을 프롬프트 스스로
+        ///   가르치는 꼴이었다. 그림자를 실제로 캡처한 직후(벌크 INSERT 다음)에
+        ///   1로 세워, 두 Few-Shot 예시가 같은 변수를 일관되게 쓰도록 맞췄다.
         /// </summary>
         /// <summary>
         /// 배치 전용 객체의 스키마 규약. 본문 생성 세 경로와 목차 생성이 같은 문장을
@@ -1055,7 +1076,7 @@ Based on the reference context above, reverse engineer the user defined function
    - ## 통합 데이터 정합성 검증 SQL 세트: Include validation SQL templates checking data integrity.
      * NEVER compare two aggregates with `CROSS JOIN`. A cartesian product multiplies each side by the other side's row count, so the comparison fails on correct data and the recorded expected/actual amounts are inflated by that factor. Aggregate each side independently in its own subquery or CTE, then compare the two scalars.
 3. [Concurrency & Execution Order] Strictly preserve the sequential execution order of the original stored procedures. Do NOT propose parallel execution for steps that perform DML on the same target table, as it causes data consistency conflicts.
-4. [Transaction Isolation & Shadow Table] NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Use session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. Shadow tables are a LAST RESORT, not a default: if the step's work fits in a single transaction, use `ROLLBACK TRAN` alone and write NO shadow table and NO compensating DELETE in the CATCH block - the rollback has already restored those rows, so deleting them again in an auto-committed CATCH destroys data that was never lost. Only when the step commits in chunks or rebuilds an aggregate (so a rollback cannot restore it) may you use a shadow, and then all three mechanics are mandatory: (a) create the shadow BEFORE `BEGIN TRAN` - a `SELECT INTO` issued inside the transaction disappears with the rollback and the restore then fails on a missing object; (b) the restore MUST delete exactly the same range the step deleted - NEVER `DELETE FROM Target` without a `WHERE`, which discards rows belonging to other business dates; (c) NEVER reference an outer batch variable inside `EXEC()` - a dynamic batch is a separate scope and fails with an undeclared-variable error; pass values as `sp_executesql` parameters instead.
+4. [Transaction Isolation & Shadow Table] NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Use session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`. Shadow tables are a LAST RESORT, not a default: if the step's work fits in a single transaction, use `ROLLBACK TRAN` alone and write NO shadow table and NO compensating DELETE in the CATCH block - the rollback has already restored those rows, so deleting them again in an auto-committed CATCH destroys data that was never lost. Only when the step commits in chunks or rebuilds an aggregate (so a rollback cannot restore it) may you use a shadow, and then all of the following mechanics are mandatory: (a) create the shadow BEFORE `BEGIN TRAN` - a `SELECT INTO` issued inside the transaction disappears with the rollback and the restore then fails on a missing object; (b) the restore MUST delete exactly the same range the step deleted - NEVER `DELETE FROM Target` without a `WHERE`, which discards rows belonging to other business dates; (c) NEVER reference an outer batch variable inside `EXEC()` - a dynamic batch is a separate scope and fails with an undeclared-variable error; pass values as `sp_executesql` parameters instead; (d) if the step modifies MULTIPLE target tables, the shadow strategy MUST cover ALL of them - restoring only some of the tables leaves the step half-rolled-back, a worse inconsistency than no restore at all; (e) define the shadow table's storage lifetime and purge policy (for example, auto-drop it after 24 hours) so it does not permanently consume storage. Mechanics (d) and (e) apply only to steps that actually use a shadow - a step that stays on the single-transaction `ROLLBACK TRAN` default above needs neither.
 4-1. " + BatchObjectSchemaRule + @"
 5. [Idempotency & Restartability] Restart skipping happens OUTSIDE the step. The orchestrator reads `batch.BatchCheckpoint` and simply does not call a step whose checkpoint is already `Succeeded`. Therefore a step MUST NOT add an input parameter for restart, skipping, or bypassing - its interface is exactly the parameter list given in the `[Original Procedure Interface]` table. The original pre-validation guards (for example a `-9` abort when a settled ledger row exists) MUST run unconditionally on every call; NEVER place them inside a conditional a caller can switch off. A step that is called is a step that does its full work, guards included.
 6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
@@ -1075,6 +1096,9 @@ Based on the reference context above, reverse engineer the user defined function
 [Few-Shot Examples for Modernization Patterns]
 * Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
 ```sql
+-- DECLARE the capture flag the CATCH block below will check. Default to 0 (not captured)
+-- so an early failure - before the shadow actually exists - correctly skips the restore.
+DECLARE @v_shadowCaptured BIT = 0;
 -- Create Shadow Table. Name pattern: batch_shadow.<Table>_RunId_<StepCode>, where the
 -- literal token _RunId_ is a placeholder substituted with the actual run identifier at
 -- execution time. Write that token verbatim - do NOT bake a sample identifier into the name.
@@ -1082,6 +1106,9 @@ SELECT * INTO batch_shadow.TargetTable_RunId_S13 FROM dbo.TargetTable WHERE 1=0;
 -- Bulk Insert into Shadow
 INSERT INTO batch_shadow.TargetTable_RunId_S13 (Col1, Col2)
 SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+-- Only now has the shadow actually been captured - flip the flag so the CATCH block knows
+-- a restore is possible.
+SET @v_shadowCaptured = 1;
 -- Single Transaction Swap
 BEGIN TRAN;
   DELETE FROM dbo.TargetTable; -- Original target data purge
