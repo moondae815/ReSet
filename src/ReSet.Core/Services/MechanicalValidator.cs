@@ -3481,23 +3481,35 @@ namespace ReSet.Core.Services
         /// 수만큼, 통과용(SELECT * 등)이면 원본 행 수만큼 나오므로 한 행
         /// 보장이 없다.
         ///
-        /// [감사 수정 라운드 3] GROUP BY는 본문 전체가 아니라 괄호 깊이 0(본문
-        /// 자신의 SELECT)에서만 센다. `SELECT SUM(sub.S) FROM (SELECT ...
-        /// GROUP BY ...) AS sub`처럼 서브쿼리 안에서만 GROUP BY를 쓰고 바깥이
-        /// 그 결과를 다시 SUM으로 합산하면, 서브쿼리 자체는 여러 행을 내도
-        /// CTE 본문은 여전히 한 행이다 - 라운드 2가 본문 전체에서 GROUP BY를
-        /// 찾아 이런 정상 2단계 집계를 오탐으로 잡았다(재리뷰 재현). 반대로
-        /// 집계 함수 판정은 본문 전체에서 그대로 찾는다 - `ISNULL(SUM(x),0)`
-        /// 처럼 집계가 다른 함수 호출 안에 중첩되는 것은 정상적이고 흔한
-        /// 관용이라, 이것까지 depth 0으로 좁히면 이 검사가 이미 통과시키는
-        /// 대다수 정상 CTE(예: 기존 정상 예시들)를 오탐으로 되돌린다.
+        /// [감사 수정 라운드 3] GROUP BY는 본문 전체가 아니라 본문 자신의
+        /// SELECT에서만 센다 - 서브쿼리(`FROM (SELECT ... GROUP BY ...) AS
+        /// sub`) 안의 GROUP BY는 그 서브쿼리의 행 수를 정할 뿐이고, 바깥이
+        /// 그 결과를 다시 SUM으로 합산하면 CTE 본문은 여전히 한 행이다.
+        ///
+        /// [감사 수정 라운드 4] 라운드 3은 GROUP BY만 서브쿼리에서 지우고
+        /// hasAggregate는 본문 전체 텍스트에서 그대로 찾았다 - 그 결과
+        /// `SELECT * FROM (그룹별 집계 서브쿼리) AS sub`처럼 본문 자신은
+        /// 통과용인데 안쪽 서브쿼리의 SUM(이 전체 스캔에 걸려 "집계 있음,
+        /// GROUP BY 없음"으로 오분류됐다 - 실제로는 서브쿼리가 여러 행을
+        /// 내고 본문이 그것을 그대로 통과시키므로 CTE 자체가 여러 행이다.
+        /// 이 CTE가 CROSS JOIN 뒤 바깥에서 재집계되면 S16 원 결함(그룹
+        /// 수만큼 부풀려진 합계)을 그대로 재현한다(재리뷰 재현).
+        ///
+        /// 이제 hasAggregate와 hasGroupBy를 같은 사본
+        /// (<see cref="BlankSubqueryParenGroups"/>)에서 함께 판정한다. 이
+        /// 사본은 "서브쿼리"(내용이 SELECT로 시작하는 괄호 그룹)만 지우고
+        /// `ISNULL(SUM(x),0)` 같은 함수 호출 괄호는 그대로 둔다 - 함수 호출
+        /// 인자로 집계가 중첩되는 것은 흔한 관용이라, 괄호 깊이만으로
+        /// 뭉뚱그려 지우면(라운드 3의 방식) 이런 정상 CTE의 hasAggregate까지
+        /// 지워져 오탐이 될 위험이 있다(라운드 3이 hasGroupBy에만 그 방식을
+        /// 썼던 이유이기도 하다). "서브쿼리인가 아닌가"로 좁히면 두 판정
+        /// 모두 안전하게 같은 사본을 쓸 수 있다.
         ///
         /// CTE 본문은 <see cref="ExtractBalancedParenGroup"/>(Task 6 자산, 중첩
         /// 괄호를 다루고 문자열·주석 안 괄호를 깊이에서 제외한다)로 정확히
-        /// 잘라낸다. GROUP BY의 depth 0 여부도 같은 함수로 가른다
-        /// (<see cref="BlankNestedParenGroups"/>) - 두 번째 괄호 짝 맞추기
-        /// 구현을 만들지 않는다. 호출부에서 이미 블랭크 처리된 사본을
-        /// 넘기므로, 주석·문자열 속 SUM이나 GROUP BY 텍스트에 속지 않는다.
+        /// 잘라낸다 - 두 번째 괄호 짝 맞추기 구현을 만들지 않는다. 호출부에서
+        /// 이미 블랭크 처리된 사본을 넘기므로, 주석·문자열 속 SUM이나 GROUP BY
+        /// 텍스트에 속지 않는다.
         /// </summary>
         private static HashSet<string> CollectSingleRowAggregateCteNames(string cleanedStatement)
         {
@@ -3511,9 +3523,11 @@ namespace ReSet.Core.Services
                     var body = ExtractBalancedParenGroup(cleanedStatement, openParenIndex);
                     if (body == null) continue;
 
-                    var hasAggregate = Regex.IsMatch(body, @"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", RegexOptions.IgnoreCase);
+                    var withoutSubqueries = BlankSubqueryParenGroups(body);
+                    var hasAggregate = Regex.IsMatch(
+                        withoutSubqueries, @"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", RegexOptions.IgnoreCase);
                     var hasTopLevelGroupBy = Regex.IsMatch(
-                        BlankNestedParenGroups(body), @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
+                        withoutSubqueries, @"\bGROUP\s+BY\b", RegexOptions.IgnoreCase);
                     if (hasAggregate && !hasTopLevelGroupBy)
                     {
                         result.Add(m.Groups["n"].Value);
@@ -3525,19 +3539,31 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// text 안에서 괄호 깊이 1 이상(중첩 괄호 안)인 구간만 공백으로 지운
-        /// 사본을 낸다. 괄호 문자 `(`/`)` 자체는 지우지 않고 그 사이 내용만
-        /// 지운다 - 예: `SUM(x)`의 안쪽만 지워 `SUM(   )`가 되므로, 이 사본을
-        /// 다른 목적(집계 함수 호출 판정 등)에 쓰면 함수 호출의 여는 괄호
-        /// 존재 자체는 왜곡되지 않는다. 이 검사는 그 목적으로 쓰지 않고
-        /// GROUP BY의 depth 0 여부만 가리는 데 쓴다 - GROUP BY는 스칼라 함수
-        /// 인자 안에 올 수 없으므로 이 구분이 문제되지 않는다.
+        /// text 안에서 서브쿼리인 최상위 괄호 그룹(내용을 트림했을 때 SELECT로
+        /// 시작하는 것)만 그 안쪽을 공백으로 지운 사본을 낸다. 괄호 문자
+        /// `(`/`)` 자체는 지우지 않는다. 함수 호출 괄호(`ISNULL(SUM(x),0)`의
+        /// `(SUM(x),0)`처럼 내용이 SELECT로 시작하지 않는 것)는 건드리지
+        /// 않는다.
+        ///
+        /// [감사 수정 라운드 4] "괄호 깊이"만으로 지우면(라운드 3의
+        /// BlankNestedParenGroups) `ISNULL(SUM(x),0)`의 `SUM(`도 깊이 1이라
+        /// 지워질 위험이 있다 - 그래서 라운드 3은 이 방식을 GROUP BY 판정에만
+        /// 쓰고 hasAggregate는 본문 전체에서 찾았는데, 그 비대칭이 새 미탐을
+        /// 냈다(`SELECT * FROM (그룹별 집계 서브쿼리) AS sub` 형태에서 안쪽
+        /// SUM이 전체 스캔에 걸려 통과용 CTE가 집계 CTE로 오분류됨). "괄호
+        /// 그룹이 서브쿼리인가"로 좁히면 함수 호출 괄호는 절대 지우지
+        /// 않으므로 hasAggregate·hasGroupBy 양쪽에 같은 사본을 안전하게
+        /// 쓸 수 있다.
+        ///
+        /// 입력은 이미 <see cref="BlankCommentsAndStrings"/>로 블랭크 처리된
+        /// 사본에서 뽑혔으므로, 괄호 그룹 시작의 주석은 이미 공백이다 -
+        /// TrimStart가 그 공백까지 걷어내고 첫 토큰을 본다.
         ///
         /// <see cref="ExtractBalancedParenGroup"/>(Task 6 자산)로 각 최상위
-        /// '('의 짝 ')'를 찾아 그 사이만 지운다 - 새 괄호 짝 맞추기 구현을
-        /// 만들지 않는다. 짝이 안 맞는 '('은 방어적으로 건너뛴다.
+        /// '('의 짝 ')'를 찾는다 - 새 괄호 짝 맞추기 구현을 만들지 않는다.
+        /// 짝이 안 맞는 '('은 방어적으로 건너뛴다.
         /// </summary>
-        private static string BlankNestedParenGroups(string text)
+        private static string BlankSubqueryParenGroups(string text)
         {
             var chars = text.ToCharArray();
             var i = 0;
@@ -3558,12 +3584,16 @@ namespace ReSet.Core.Services
 
                 var innerStart = i + 1;
                 var innerEnd = innerStart + inner.Length; // ')' 의 인덱스.
-                for (var j = innerStart; j < innerEnd; j++)
+
+                if (Regex.IsMatch(inner.TrimStart(), @"^SELECT\b", RegexOptions.IgnoreCase))
                 {
-                    if (chars[j] != '\n') chars[j] = ' ';
+                    for (var j = innerStart; j < innerEnd; j++)
+                    {
+                        if (chars[j] != '\n') chars[j] = ' ';
+                    }
                 }
 
-                i = innerEnd + 1; // ')' 다음으로 건너뛴다 - 중첩은 이미 다 지워졌다.
+                i = innerEnd + 1; // ')' 다음으로 건너뛴다 - 중첩은 이미 다 처리됐다.
             }
 
             return new string(chars);

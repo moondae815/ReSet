@@ -3384,6 +3384,31 @@ SELECT ISNULL(L.S,0), ISNULL(R.S,0) FROM L CROSS JOIN R HAVING ISNULL(L.S,0) <> 
                 e => e.Type == ErrorType.VerificationCartesianComparison);
         }
 
+        [Fact]
+        public void ValidateConsolidated_FlagsCrossJoinOfAPassThroughCteWrappingAGroupedSubquery()
+        {
+            // 감사 수정 라운드 4: 라운드 3은 hasGroupBy만 depth 0으로 좁히고
+            // hasAggregate는 본문 전체 텍스트를 그대로 스캔했다. L의 자기
+            // SELECT는 통과용(SELECT *)인데, 안쪽 서브쿼리의 SUM(이 전체
+            // 스캔에 걸려 L이 "집계 있음, GROUP BY 없음"으로 오분류됐다 -
+            // 실제로는 서브쿼리가 PLTID별로 여러 행을 내고 L은 그것을 그대로
+            // 통과시키므로 여러 행이다. CROSS JOIN 뒤 바깥에서 SUM(L.S)로
+            // 재집계하면 S16 원 결함(그룹 수만큼 부풀려진 합계)을 그대로
+            // 재현한다. 재리뷰가 라운드 2(fd5daaf)는 이걸 정탐으로 잡았는데
+            // 라운드 3(af05381)이 미탐으로 되돌렸다고 재현했다.
+            var markdown = ConsolidatedDocumentWithVerificationSql(@"
+WITH L AS (
+    SELECT * FROM (SELECT M.PLTID, SUM(M.TXAMT) AS S FROM dbo.TSettleMst AS M GROUP BY M.PLTID) AS sub
+),
+     R AS (SELECT ISNULL(SUM(T.TXAMT),0) AS S FROM dbo.TSettleByTX AS T WHERE T.YMD=@BatchYmd)
+SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(SUM(L.S),0) <> ISNULL(SUM(R.S),0);");
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.VerificationCartesianComparison);
+        }
+
         private static string ConsolidatedDocumentWithVerificationSql(string sql) => $"""
             ## 통합 배치 아키텍처 개요
 
