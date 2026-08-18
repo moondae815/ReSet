@@ -880,5 +880,113 @@ END"
             Assert.Contains(DerivedTableColumnExtractor.DerivedTableHeading, body);
             Assert.Contains("DiscountFlag", body);
         }
+
+        private static SpDefinition SetPredicateSpDefinition() => new()
+        {
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.InState = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.YMD = @pi_strYMD
+    AND    A.PGName NOT IN ('PLCard','SSGPayCard','KakaoCard')
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithSetPredicate_ShouldRenderTheTable()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(SetPredicateSpDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, body);
+            // Column 칸은 원문 표기(한정자 포함) 그대로다 - 픽스처가 A.PGName NOT IN
+            // 이므로 A.PGName이다. Line은 UPDATE 문장이 시작하는 실제 줄(5) -
+            // @" 다음 줄바꿈 때문에 픽스처의 1번 줄은 빈 줄이라 CREATE PROCEDURE가
+            // 2번 줄부터 시작한다.
+            Assert.Contains("| UPDATE 1 | 5 | A.PGName | NOT IN | 3 |", body);
+            Assert.Contains("'SSGPayCard'", body);
+            Assert.Contains("'KakaoCard'", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithSetPredicate_ShouldRenderTheTable()
+        {
+            // 지역 모델의 최초 생성 경로는 BuildSpecificationPrompts를 아예 호출하지
+            // 않는다 - Task 4의 Critical이 정확히 이 비대칭이었다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(
+                SetPredicateSpDefinition(), "CrudAnalysis", "rules", null);
+
+            Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, result.SystemPrompt);
+            Assert.Contains("'SSGPayCard'", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_FunctionWithSetPredicate_ShouldRenderTheTable()
+        {
+            var functionDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "FN_X",
+                ObjectType = CodeObjectType.Function,
+                DdlText = @"
+CREATE FUNCTION dbo.FN_X()
+RETURNS @R TABLE (Id INT)
+AS
+BEGIN
+    INSERT INTO @R (Id) VALUES (1)
+    DELETE FROM @R WHERE Id IN (7, 8)
+    RETURN
+END",
+                FunctionReturn = new FunctionReturnInfo
+                {
+                    IsTableValued = true,
+                    Columns = new System.Collections.Generic.List<ColumnInfo>
+                    {
+                        new ColumnInfo { ColumnName = "Id", DataType = "INT", IsNullable = false }
+                    }
+                }
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 함수 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(functionDef, "rules");
+
+            Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, result.SystemPrompt);
+            Assert.Contains("| DELETE 1 | 7 | Id | IN | 2 |", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutSetPredicate_ShouldNotRenderTheTable()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE Id = 1 END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+
+            Assert.DoesNotContain(DmlScopeExtractor.SetPredicateTableHeading, result.SystemPrompt);
+        }
     }
 }

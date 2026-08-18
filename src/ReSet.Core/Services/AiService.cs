@@ -392,6 +392,14 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildDmlScopeTableLines(dmlScopeFacts, dateParameter));
             }
 
+            // 집합의 크기와 원소는 컬럼 이름으로 추측할 수 없다(설계 §2) - DmlScopeFacts와
+            // 같은 이유로 표를 강제한다. BuildSetPredicateTableLines 문서 참고.
+            var setPredicates = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
+            if (setPredicates.Count > 0)
+            {
+                rules.AddRange(BuildSetPredicateTableLines(setPredicates));
+            }
+
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
             // 강제한다 - 부재 서술은 자연어 판정이라 앵커가 없다.
@@ -795,6 +803,55 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 기계 확정 집합 술어 표 본문을 만든다.
+        ///
+        /// [원소 수를 별도 칸으로 두는 이유] 2026-08-18 축 A 감사 실측: EXPECT_PROC의
+        /// 9개짜리 집합 자리에 명세서가 5개짜리 다른 목록을 그럴듯한 대체물로 채워
+        /// 넣었다. 목록만 있으면 눈으로 세어야 알지만, 수가 칸으로 있으면 어긋남이
+        /// 즉시 보인다.
+        ///
+        /// 헤딩 리터럴은 DmlScopeExtractor.SetPredicateTableHeading 하나가 유일한
+        /// 출처다 - 프롬프트와 L1(CheckSetPredicates)이 같은 상수를 쓴다.
+        /// </summary>
+        private static List<string> BuildSetPredicateTableLines(
+            IReadOnlyList<SetPredicateFact> setPredicates)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name.",
+                $"   {DmlScopeExtractor.SetPredicateTableHeading}",
+                "   | 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+            };
+
+            // 연산 종류별로 번호를 매긴다 - DML 범위 표와 같은 규칙이라 두 표의
+            // "UPDATE 3"이 같은 문장을 가리킨다.
+            var ordinals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var lastLineByOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var fact in setPredicates)
+            {
+                // 같은 문장에 IN이 여럿이면 문장 번호는 하나여야 한다.
+                if (!lastLineByOperation.TryGetValue(fact.Operation, out var lastLine)
+                    || lastLine != fact.Line)
+                {
+                    ordinals.TryGetValue(fact.Operation, out var n);
+                    ordinals[fact.Operation] = n + 1;
+                    lastLineByOperation[fact.Operation] = fact.Line;
+                }
+
+                var literals = string.Join(", ", fact.Literals);
+                lines.Add(
+                    $"   | {fact.Operation} {ordinals[fact.Operation]} | {fact.Line} | "
+                    + $"{EscapeTableCell(fact.Column)} | {(fact.IsNegated ? "NOT IN" : "IN")} | "
+                    + $"{fact.Literals.Count} | {EscapeTableCell(literals)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 파생 테이블 정의 표를 도입하는 규칙 문장. DmlScopeTableIntroText와 같은 이유로
         /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
         /// 위험을 없앤다.
@@ -907,6 +964,15 @@ Based on the structured reference context above, reverse engineer the stored pro
                 var dmlScopeLines = new List<string> { DmlScopeTableIntroText };
                 dmlScopeLines.AddRange(BuildDmlScopeTableLines(dmlScopeFacts, dateParameter));
                 systemPrompt += "\n\n" + string.Join("\n", dmlScopeLines);
+            }
+
+            // 이 경로(함수 명세서 프롬프트)도 BuildSpecificationPrompts와 같은 집합
+            // 술어 표를 받아야 한다 - 하나만 배선하면 Task 4의 Critical과 같은
+            // 비대칭이 재발한다.
+            var setPredicates = DmlScopeExtractor.ExtractSetPredicates(functionDef.DdlText);
+            if (setPredicates.Count > 0)
+            {
+                systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates));
             }
 
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
@@ -1985,6 +2051,17 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.Add($"{rIdx++}. {DmlScopeTableIntroText}");
                     sbRules.AddRange(BuildDmlScopeTableLines(dmlScopeFactsForCrud, dateParameterForCrud));
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 집합 술어 표를 받아야 한다 -
+                // VerificationPipelineOrchestrator의 지역 모델 흐름은 BuildSpecificationPrompts를
+                // 전혀 호출하지 않으므로, 여기 빠뜨리면 지역 모델 경로는 집합 리터럴
+                // 대체 결함을 드러내는 재료를 한 번도 받지 못한다(DmlScope 표와 같은
+                // 모양의 결함 - Task 4의 Critical이 정확히 이 비대칭이었다).
+                var setPredicatesForCrud = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
+                if (setPredicatesForCrud.Count > 0)
+                {
+                    sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud));
                 }
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
