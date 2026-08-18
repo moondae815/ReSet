@@ -632,6 +632,41 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// stepMarkdown 안의 ```sql 펜스들을 훑어, 각 펜스 내용을
+        /// <see cref="BlankCommentsAndStrings"/>로 지운 사본과 그 펜스 내용이
+        /// 원문에서 시작하는 인덱스를 함께 낸다.
+        ///
+        /// [왜 문서 전체가 아니라 펜스 단위인가 - 최종 리뷰 B-2]
+        /// <c>BlankCommentsAndStrings(stepMarkdown)</c>처럼 문서 전체를 한 번에 지우면,
+        /// 처음 만난 짝 없는 <c>'</c>부터 문서 끝까지가 통째로 "문자열 안"이 된다.
+        /// 한국어 산문 안의 소유격 아포스트로피(<c>the orchestrator's checkpoint</c>)나
+        /// 인라인 코드(<c>`don't`</c>) 하나가 그 뒤에 오는 모든 SQL 펜스를 공백으로
+        /// 지워버려, UPDATE 헤더도 SET 절도 통째로 사라진다 - 검사가 아무 신호 없이
+        /// 꺼진다(실행 재현: 잃어버린 오류 두 건이 정확히 이 축이 존재하는 이유인
+        /// 감사 실측 결함이었다). 펜스마다 따로 지우면 산문의 아포스트로피는 펜스
+        /// 밖이라 애초에 스캔에 들어오지 않고, 펜스 안의 주석·문자열은 여전히
+        /// 공백이 된다 - 사전 판정이 막으려던 "주석 안의 `UPDATE bsj SET`이 헤더로
+        /// 잡히는" 오탐은 그대로 막힌다. <see cref="CheckStepInterface"/>가 이미
+        /// 쓰는 관용이다(그 쪽은 자체 루프에서 직접 편다 - 두 자리가 인덱스
+        /// 환산까지 필요하지는 않아서다).
+        ///
+        /// 인덱스는 펜스 시작(```sql 접두 포함)이 아니라 펜스 <b>내용</b> 시작
+        /// (<c>fence.Groups["sql"].Index</c>)이다. BlankCommentsAndStrings는 길이를
+        /// 보존하므로, 호출부가 지운 사본에서 찾은 로컬 인덱스에 이 오프셋만
+        /// 더하면 원문(stepMarkdown) 기준 인덱스가 되어 <see cref="ExtractTopLevelClause"/>처럼
+        /// 원문에서 값을 읽어야 하는 헬퍼에 그대로 넘길 수 있다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, int Offset)> CleanedSqlFences(string stepMarkdown)
+        {
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var sqlGroup = fence.Groups["sql"];
+                yield return (BlankCommentsAndStrings(sqlGroup.Value), sqlGroup.Index);
+            }
+        }
+
+        /// <summary>
         /// 이 구문에서 제어 테이블에 묶인 별칭을 모은다.
         ///
         /// [왜 필요한가]
@@ -739,10 +774,15 @@ namespace ReSet.Core.Services
         /// 헤더를 원문에서 찾으면 주석 안의 `UPDATE bsj SET`이 헤더로 잡혀 같은 문제가
         /// 별칭 형태에도 생긴다. 다만 SET 절의 실제 값은 원문에서 읽어야 한다 - 상태값이
         /// 문자열 리터럴(`N'Completed'`)이라 사본에서는 이미 공백으로 지워져 있어
-        /// `ReportIfDisallowedStatusValue`가 아무것도 못 본다. `BlankCommentsAndStrings`는
-        /// 길이를 보존하므로 사본에서 찾은 인덱스로 원문(`stepMarkdown`)을 그대로 잘라도
-        /// 위치가 어긋나지 않는다 - `CheckShadowBackupContract`의 EXEC() 동적 배치 검사가
-        /// 쓰는 것과 같은 관용이다.
+        /// `ReportIfDisallowedStatusValue`가 아무것도 못 본다.
+        ///
+        /// [최종 리뷰 B-2 수정] 지우는 사본을 `stepMarkdown` 전체가 아니라
+        /// <see cref="CleanedSqlFences"/>가 내는 SQL 펜스 단위로 만든다 - 문서 전체를
+        /// 한 번에 지우면 산문의 짝 없는 아포스트로피 하나가 뒤따르는 모든 펜스를
+        /// 공백으로 지워 이 검사를 아무 신호 없이 꺼버린다(실행 재현). 펜스마다
+        /// 지운 사본에서 찾은 로컬 인덱스는 그 펜스의 문서 기준 오프셋을 더해야
+        /// `stepMarkdown`을 자르는 데 쓸 수 있다 - `CleanedSqlFences`가 그 오프셋을
+        /// 함께 낸다.
         /// </summary>
         private static void CheckUpdateSetTargets(
             string stepMarkdown,
@@ -753,54 +793,55 @@ namespace ReSet.Core.Services
             BatchStepPlan step,
             StepValidationResult result)
         {
-            // 별칭 묶임은 주석·문자열을 지운 사본에서 본다 - 주석 안의 FROM에
-            // 속으면 엉뚱한 별칭이 제어 테이블에 묶인다.
-            var cleaned = BlankCommentsAndStrings(stepMarkdown);
-            var aliases = ResolveControlTableAliases(cleaned, bare);
-
-            // 테이블 이름을 직접 쓴 헤더와, 이 테이블에 묶인 별칭을 쓴 헤더를 함께 본다.
-            var headerAlternatives = new List<string> { $@"(?:\w+\.)?{Regex.Escape(bare)}" };
-            headerAlternatives.AddRange(aliases.Select(Regex.Escape));
-
-            // 헤더도 사본에서 찾는다 - 원문에서 찾으면 주석 안의 `UPDATE bsj SET`이
-            // 헤더로 잡혀 별칭 형태에 새 오탐이 생긴다. 단, SET 절은 원문에서 잘라야
-            // 한다 - 상태값이 문자열 리터럴이라 사본에서는 공백으로 지워져 있다.
-            // BlankCommentsAndStrings는 길이를 보존하므로 사본의 인덱스를 원문에
-            // 그대로 써도 위치가 어긋나지 않는다.
-            foreach (Match header in Regex.Matches(
-                cleaned,
-                $@"UPDATE\s+(?:{string.Join("|", headerAlternatives)})\b\s+SET\s+",
-                RegexOptions.IgnoreCase))
+            foreach (var (cleaned, offset) in CleanedSqlFences(stepMarkdown))
             {
-                var setClause = ExtractTopLevelClause(stepMarkdown, header.Index + header.Length);
+                // 별칭 묶임은 이 펜스의 지운 사본에서 본다 - 주석 안의 FROM에
+                // 속으면 엉뚱한 별칭이 제어 테이블에 묶인다.
+                var aliases = ResolveControlTableAliases(cleaned, bare);
 
-                foreach (var assignment in SplitTopLevelSegments(setClause))
+                // 테이블 이름을 직접 쓴 헤더(대괄호 인용 포함, QualifiedTableNameFragment)와,
+                // 이 테이블에 묶인 별칭을 쓴 헤더를 함께 본다. 대괄호로 끝나는 대안은
+                // `]` 뒤에서 `\b`가 성립하지 않으므로(둘 다 비단어 문자라 전이가 없다)
+                // 공유 후행 `\b`를 두지 않는다 - QualifiedTableNameFragment는 자체
+                // 경계를 이미 담고 있고, 별칭 대안은 각자 `\b`를 붙인다.
+                var headerAlternatives = new List<string> { QualifiedTableNameFragment(bare) };
+                headerAlternatives.AddRange(aliases.Select(a => Regex.Escape(a) + @"\b"));
+
+                foreach (Match header in Regex.Matches(
+                    cleaned,
+                    $@"UPDATE\s+(?:{string.Join("|", headerAlternatives)})\s+SET\s+",
+                    RegexOptions.IgnoreCase))
                 {
-                    var eq = assignment.IndexOf('=');
-                    if (eq <= 0) continue;
+                    var setClause = ExtractTopLevelClause(stepMarkdown, offset + header.Index + header.Length);
 
-                    // 한정자가 이 제어 테이블을 가리킬 때만 벗긴다. 다른 것을
-                    // 가리키면 null이 와서 대조 대상이 아니다.
-                    var name = UnqualifyControlColumn(assignment[..eq], bare, aliases);
-                    if (name == null) continue;
-                    if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
-
-                    if (!known.Contains(name))
+                    foreach (var assignment in SplitTopLevelSegments(setClause))
                     {
-                        result.Errors.Add(
-                            $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
-                            $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
-                            $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
-                        continue;
-                    }
+                        var eq = assignment.IndexOf('=');
+                        if (eq <= 0) continue;
 
-                    if (allowed == null ||
-                        !string.Equals(name, table.StatusColumn, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
+                        // 한정자가 이 제어 테이블을 가리킬 때만 벗긴다. 다른 것을
+                        // 가리키면 null이 와서 대조 대상이 아니다.
+                        var name = UnqualifyControlColumn(assignment[..eq], bare, aliases);
+                        if (name == null) continue;
+                        if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
 
-                    ReportIfDisallowedStatusValue(assignment[(eq + 1)..], table, allowed, step, result);
+                        if (!known.Contains(name))
+                        {
+                            result.Errors.Add(
+                                $"{step.Code} 섹션이 제어 테이블 `{table.Name}`에 계약 밖의 컬럼 " +
+                                $"'{name}'을 씁니다. 이 테이블의 컬럼은 " +
+                                $"{string.Join(", ", table.Columns.Select(c => c.Name))}가 전부입니다.");
+                            continue;
+                        }
+
+                        if (allowed == null ||
+                            !string.Equals(name, table.StatusColumn, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        ReportIfDisallowedStatusValue(assignment[(eq + 1)..], table, allowed, step, result);
+                    }
                 }
             }
         }
@@ -809,6 +850,12 @@ namespace ReSet.Core.Services
         /// INSERT 문의 컬럼 목록만 본다. StatusColumn이 그 목록에 있으면 같은 위치의
         /// VALUES 항목도 함께 본다 - INSERT...SELECT처럼 VALUES가 없으면 값 검사만
         /// 조용히 건너뛴다(컬럼 이름 검사는 그대로 돈다).
+        ///
+        /// [Important 1 수정] 테이블명을 `(?:\w+\.)?{bare}\b`로만 찾으면 대괄호 인용
+        /// (`INSERT INTO [batch].[BatchStepJournal] (...)`)이 잡히지 않아 계약 밖
+        /// 컬럼·상태값이 그대로 새어나간다(base에서도 재현되는 pre-existing 결함).
+        /// `QualifiedTableNameFragment`로 바꿔 <see cref="ResolveControlTableAliases"/>·
+        /// <see cref="CheckUpdateSetTargets"/>와 같은 대괄호 인식을 쓴다.
         /// </summary>
         private static void CheckInsertColumnTargets(
             string stepMarkdown,
@@ -821,7 +868,7 @@ namespace ReSet.Core.Services
         {
             foreach (Match statement in Regex.Matches(
                 stepMarkdown,
-                $@"INSERT\s+INTO\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s*\((?<cols>[^)]*)\)",
+                $@"INSERT\s+INTO\s+{QualifiedTableNameFragment(bare)}\s*\((?<cols>[^)]*)\)",
                 RegexOptions.IgnoreCase))
             {
                 var columns = SplitTopLevelSegments(statement.Groups["cols"].Value)
@@ -1219,40 +1266,63 @@ namespace ReSet.Core.Services
         /// 자기 저널·체크포인트 행을 만드는 지점 없이 UPDATE만 했다. @@ROWCOUNT
         /// 검사가 있는 S17은 정상 실행에서도 공개가 상시 실패했고, 없는 S06은
         /// 0행 갱신을 오류 없이 지나가 재삽입 방지가 성립하지 않았다.
+        ///
+        /// [최종 리뷰 B-1 수정] INSERT 쪽 존재 판정이 `(?:\w+\.)?{bare}\b`로 대괄호를
+        /// 몰라 `INSERT INTO [batch].[BatchStepJournal] ...`처럼 정상적으로 자기 행을
+        /// 만드는 문서를 "UPDATE만 하고 INSERT가 없다"고 반려했다(신규 회귀, 실행
+        /// 재현) - UPDATE 쪽은 이미 <see cref="QualifiedTableNameFragment"/>로 대괄호를
+        /// 인식하는데 INSERT 쪽만 남아 한쪽만 보는 탐지가 됐다. 두 판정 모두
+        /// `QualifiedTableNameFragment`로 통일한다. UPDATE 쪽은 별칭 대안도 함께
+        /// 보므로, 대괄호로 끝나는 대안에 공유 후행 `\b`가 걸리지 않도록(`]` 뒤에서는
+        /// `\b`가 성립하지 않는다) `QualifiedTableNameFragment(bare)`와 별칭마다의
+        /// `Regex.Escape(alias) + \b`를 각각 대안으로 결합한다.
+        ///
+        /// [최종 리뷰 B-2 수정] 지우는 사본을 문서 전체가 아니라 <see cref="CleanedSqlFences"/>가
+        /// 내는 SQL 펜스 단위로 만든다 - 문서 전체를 한 번에 지우면 산문의 짝 없는
+        /// 아포스트로피 하나가 뒤따르는 모든 펜스를 공백으로 지워 이 검사를 아무
+        /// 신호 없이 꺼버린다(실행 재현). UPDATE·INSERT 존재 여부는 펜스별 판정을
+        /// OR로 합친다 - 문서 전체 판정과 같은 의미이지만(어느 펜스에서든 UPDATE가
+        /// 있으면 "UPDATE함", 어느 펜스에서든 INSERT가 있으면 "INSERT함") 산문의
+        /// 아포스트로피가 뒤 펜스를 지우지 못한다.
         /// </summary>
         private static void CheckBatchControlRowOrigin(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
         {
-            // 이 검사는 존재 여부만 보고 값은 읽지 않는다 - 주석·문자열을 지운 사본에서
-            // 판정해도 원문으로 되돌아갈 필요가 없다. 오히려 사본 쪽이 더 안전하다:
-            // 주석 안에 우연히 "UPDATE batch.BatchStepJournal" 같은 문구가 있으면
-            // 원문 판정은 그것도 UPDATE로 세어 오탐을 만들 수 있다.
-            var cleaned = BlankCommentsAndStrings(stepMarkdown);
-
             foreach (var table in BatchControlContract.Tables)
             {
                 if (table.Origin != ControlRowOrigin.EachStepInserts) continue;
 
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var updates = false;
+                var inserts = false;
 
-                // 별칭 형태(UPDATE bsj SET ... FROM batch.BatchStepJournal bsj)도
-                // 이 테이블의 UPDATE다. 이름 형태만 세면 별칭 형태가 행 출처 검사를
-                // 통째로 우회한다(최종 리뷰 실측).
-                var aliases = ResolveControlTableAliases(cleaned, bare);
-                var updateAlternatives = new List<string> { $@"(?:\w+\.)?{Regex.Escape(bare)}" };
-                updateAlternatives.AddRange(aliases.Select(Regex.Escape));
+                foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+                {
+                    // 별칭 형태(UPDATE bsj SET ... FROM batch.BatchStepJournal bsj)도
+                    // 이 테이블의 UPDATE다. 이름 형태만 세면 별칭 형태가 행 출처 검사를
+                    // 통째로 우회한다(최종 리뷰 실측).
+                    var aliases = ResolveControlTableAliases(cleaned, bare);
+                    var updateAlternatives = new List<string> { QualifiedTableNameFragment(bare) };
+                    updateAlternatives.AddRange(aliases.Select(a => Regex.Escape(a) + @"\b"));
 
-                var updates = Regex.IsMatch(
-                    cleaned,
-                    $@"UPDATE\s+(?:{string.Join("|", updateAlternatives)})\b",
-                    RegexOptions.IgnoreCase);
-                if (!updates) continue;
+                    if (!updates && Regex.IsMatch(
+                        cleaned,
+                        $@"UPDATE\s+(?:{string.Join("|", updateAlternatives)})",
+                        RegexOptions.IgnoreCase))
+                    {
+                        updates = true;
+                    }
 
-                var inserts = Regex.IsMatch(
-                    cleaned,
-                    $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
-                    RegexOptions.IgnoreCase);
-                if (inserts) continue;
+                    if (!inserts && Regex.IsMatch(
+                        cleaned,
+                        $@"(INSERT\s+INTO|MERGE)\s+{QualifiedTableNameFragment(bare)}",
+                        RegexOptions.IgnoreCase))
+                    {
+                        inserts = true;
+                    }
+                }
+
+                if (!updates || inserts) continue;
 
                 result.Errors.Add(
                     $"{step.Code} 섹션이 `{table.Name}`을 UPDATE만 하고 자기 행을 만드는 지점이 " +
