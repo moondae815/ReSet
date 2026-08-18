@@ -195,6 +195,21 @@ namespace ReSet.Core.Services
             sb.AppendLine("- 단계 상세 문서를 읽지 마십시오.");
             sb.AppendLine();
             AppendInfraObjects(sb, inputs);
+
+            // 제어 테이블 넷은 이 도구가 정본을 가지므로 이름만 넘기지 않고 DDL을
+            // 그대로 싣는다. 정의를 단계 문서에 위임했더니 단계마다 다른 컬럼명과
+            // 상태 어휘를 써서, 어느 쪽으로 만들어도 반대편 단계가 컴파일되지
+            // 않는 상태가 됐다(BatchControlContract의 <summary> 참고).
+            sb.AppendLine();
+            sb.AppendLine("## 실행 제어 테이블 DDL (정본)");
+            sb.AppendLine();
+            sb.AppendLine("아래 DDL을 그대로 만드십시오. 컬럼명과 상태값을 바꾸지 마십시오 -");
+            sb.AppendLine("단계 문서들이 이 이름과 값을 그대로 쓰도록 생성되었습니다.");
+            sb.AppendLine();
+            sb.AppendLine("```sql");
+            sb.Append(BatchControlContract.RenderDdl());
+            sb.AppendLine("```");
+
             AppendDependencies(sb, inputs);
             sb.AppendLine("## 완료 조건");
             sb.AppendLine();

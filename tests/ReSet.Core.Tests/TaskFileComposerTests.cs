@@ -415,5 +415,27 @@ namespace ReSet.Core.Tests
             var bootstrap = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
             Assert.DoesNotContain("AssemblyCompletenessTests", bootstrap);
         }
+
+        // 감사 §6-4: 제어 테이블의 컬럼 정의가 번들 어디에도 없었다. 회차 0 문서는
+        // 객체 이름만 나열하고 정의를 단계 문서에 위임했는데, 단계마다 다르게 썼다.
+        [Fact]
+        public void Bootstrap_CarriesTheControlTableDdl()
+        {
+            var composed = TaskFileComposer.Compose(BootstrapInputs(Array.Empty<string>()));
+
+            Assert.Contains("CREATE TABLE batch.BatchStepJournal", composed);
+            Assert.Contains("CHECK (StepStatus IN (N'Running', N'Succeeded', N'Failed', N'Skipped'))", composed);
+        }
+
+        // 이름 목록은 그대로 있어야 한다. DDL이 있는 것과 이 회차가 만들 객체
+        // 목록이 있는 것은 다른 사실이다 - Job이 만드는 그림자·헬퍼는 계약에 없다.
+        [Fact]
+        public void Bootstrap_StillListsTheCollectedObjectNames()
+        {
+            var composed = TaskFileComposer.Compose(
+                BootstrapInputs(new[] { "batch_shadow.TSettleMst_<RunId>_S06" }));
+
+            Assert.Contains("batch_shadow.", composed);
+        }
     }
 }
