@@ -268,6 +268,9 @@
       집합을 정하는 `IN` 리터럴 목록은 예외로 다룰 근거가 두 SP에서 나왔다
 
   출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
+  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
+  (2026-08-18 작성. 두 항목 모두 이 설계 하나가 닫는다 — `IN`/`NOT IN` 리터럴 목록만
+  재료로 삼고 스칼라 비교 474건은 노이즈로 제외한다)
 
 ### 정적 분석
 
