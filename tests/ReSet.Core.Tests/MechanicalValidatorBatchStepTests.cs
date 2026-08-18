@@ -1545,5 +1545,99 @@ END CATCH");
                     $"Few-Shot 블록 {i}이 L1을 통과하지 못했습니다: {string.Join(" | ", result.Errors)}\n---\n{blocks[i]}");
             }
         }
+
+        // 최종 리뷰 실측: UPDATE <별칭> SET ... FROM <제어테이블> <별칭> 형태를
+        // 어휘 검사가 아예 인식하지 못해 B2 9건이 초록 게이트 아래 남는다.
+        // docs/architecture.md:433-434가 이 형태를 표준 관용으로 명시한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.ExecutionStatus = N'Succeeded'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Completed'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 별칭 형태로 UPDATE만 하고 INSERT가 없으면 B3도 우회된다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnAliasedUpdateOfAJournalRowItNeverInserts()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Succeeded'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // 별칭 형태의 정상 어휘는 잡히면 안 된다. 넓히면서 오탐을 들이지 않았는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsTheCanonicalVocabularyInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+INSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus, StartedAtUtc)
+VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());
+UPDATE bsj SET bsj.StepStatus = N'Succeeded', bsj.CompletedAtUtc = SYSUTCDATETIME()
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
+        }
+
+        // 별칭이 제어 테이블에 묶이지 않았으면 그 UPDATE는 대상이 아니다.
+        // 업무 테이블을 별칭으로 갱신하는 것은 정상이다.
+        [Fact]
+        public void ValidateBatchStep_IgnoresAnAliasedUpdateBoundToABusinessTable()
+        {
+            var markdown = Section(@"
+UPDATE m SET m.SettleState = 9, m.ExecutionStatus = N'Completed'
+FROM dbo.TSettleMst m
+WHERE m.YMD = @pi_strYMD;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+        }
+
+        // 한정자가 제어 테이블 이름 자체인 형태도 벗겨야 한다.
+        [Fact]
+        public void ValidateBatchStep_StripsAQualifierThatIsTheControlTableNameItself()
+        {
+            var markdown = Section(@"
+UPDATE batch.BatchStepJournal SET batch.BatchStepJournal.ExecutionStatus = N'Succeeded'
+WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
     }
 }

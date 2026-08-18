@@ -562,6 +562,77 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 이 구문에서 제어 테이블에 묶인 별칭을 모은다.
+        ///
+        /// [왜 필요한가]
+        /// 최종 리뷰 실측: `UPDATE bsj SET bsj.ExecutionStatus = N'Completed'
+        /// FROM batch.BatchStepJournal bsj`가 어휘 검사와 행 출처 검사를 **둘 다**
+        /// 우회했다. 두 검사 모두 "UPDATE 바로 뒤가 테이블명"만 보기 때문이다.
+        /// docs/architecture.md:433-434가 이 형태를 이 저장소의 표준 T-SQL 관용으로
+        /// 명시하므로 가공의 위험이 아니다 - 재생성 산출물이 이 형태를 쓰면
+        /// B2·B3가 초록 게이트 아래 그대로 남는다.
+        ///
+        /// [왜 FROM/JOIN만 보는가]
+        /// 별칭을 테이블에 묶는 자리는 FROM 절과 JOIN 절뿐이다. `AS`는 있어도 되고
+        /// 없어도 된다. 다른 테이블에 묶인 별칭은 담지 않는다 - 담으면 업무 테이블을
+        /// 별칭으로 갱신하는 정상 구문이 제어 테이블 검사에 걸린다.
+        /// </summary>
+        private static HashSet<string> ResolveControlTableAliases(string cleaned, string bare)
+        {
+            var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match binding in Regex.Matches(
+                cleaned,
+                $@"\b(?:FROM|JOIN)\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*)",
+                RegexOptions.IgnoreCase))
+            {
+                var alias = binding.Groups["alias"].Value;
+
+                // FROM 뒤 첫 토큰이 별칭이 아니라 다음 절 키워드일 수 있다.
+                if (Regex.IsMatch(
+                        alias,
+                        @"^(?:WHERE|SET|INNER|LEFT|RIGHT|FULL|CROSS|OUTER|JOIN|ON|GROUP|ORDER|HAVING|UNION|OPTION|WITH)$",
+                        RegexOptions.IgnoreCase))
+                {
+                    continue;
+                }
+
+                aliases.Add(alias);
+            }
+
+            return aliases;
+        }
+
+        /// <summary>
+        /// 대입 대상에서 이 제어 테이블을 가리키는 한정자만 벗긴다.
+        ///
+        /// `bsj.ExecutionStatus`(bsj가 이 테이블의 별칭)나
+        /// `batch.BatchStepJournal.ExecutionStatus`(이름 자체)는 벗겨서 컬럼명을 낸다.
+        /// 다른 테이블을 가리키는 한정자는 벗기지 않고 null을 낸다 - 그것은 이
+        /// 테이블의 컬럼이 아니므로 대조 대상이 아니다.
+        /// </summary>
+        private static string? UnqualifyControlColumn(
+            string target, string bare, HashSet<string> aliases)
+        {
+            var name = StripBracketQuoting(target.Trim());
+
+            var lastDot = name.LastIndexOf('.');
+            if (lastDot < 0) return name;
+
+            var qualifier = StripBracketQuoting(name[..lastDot].Trim());
+            var column = StripBracketQuoting(name[(lastDot + 1)..].Trim());
+
+            var qualifierBare = qualifier[(qualifier.LastIndexOf('.') + 1)..];
+            if (aliases.Contains(qualifier) ||
+                string.Equals(qualifierBare, bare, StringComparison.OrdinalIgnoreCase))
+            {
+                return column;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// UPDATE 문의 SET 절에서 대입 대상 컬럼만 본다. 절의 끝 경계는 괄호 깊이 0에서
         /// 나타나는 FROM/WHERE/;/문서 끝 중 먼저 오는 것으로 잡는다 - 세미콜론이 없어도
         /// 다음 문으로 새지 않기 위해서다.
@@ -575,13 +646,23 @@ namespace ReSet.Core.Services
         /// 문자열 인용 상태를 추적하며 문자 단위로 훑어, 깊이 0·인용 밖에서 나타나는
         /// FROM/WHERE/;만 경계로 인정한다.
         ///
-        /// [알려진 미보완] 별칭이 붙은 대입 대상(`t.Col = ...`)은 대상에서 제외한다 -
-        /// `^[A-Za-z_]\w*$` 검사가 점이 섞인 이름을 걸러낸다. `UPDATE bsj SET
-        /// bsj.ExecutionStatus = N'Completed' FROM batch.BatchStepJournal bsj ...`처럼
-        /// UPDATE의 대상이 테이블명이 아니라 별칭이고 SET도 그 별칭으로 한정하는 형태는
-        /// 이 검사가 아예 보지 못한다(2라운드 리뷰가 지적한 기존 구멍, 이번 라운드가
-        /// 만든 결함이 아니다) - 별칭→테이블 바인딩을 FROM 절에서 별도로 추출해야 하는
-        /// 독립된 작업이라 이번 수정 범위에 넣지 않았다.
+        /// [별칭 대입 대상도 본다] `UPDATE bsj SET bsj.ExecutionStatus = N'Completed'
+        /// FROM batch.BatchStepJournal bsj ...`처럼 UPDATE의 대상이 테이블명이 아니라
+        /// 별칭이고 SET도 그 별칭으로 한정하는 형태는 한때 이 검사가 아예 보지 못했다
+        /// (2라운드 리뷰가 지적, 최종 리뷰가 실행 재현으로 확인). `ResolveControlTableAliases`가
+        /// FROM/JOIN에서 별칭→테이블 바인딩을 모으고, `UnqualifyControlColumn`이 그
+        /// 별칭(또는 테이블명 자체)으로 한정된 대입 대상만 벗겨 컬럼명을 낸다.
+        ///
+        /// 별칭 묶임은 <see cref="BlankCommentsAndStrings"/>로 주석·문자열을 지운 사본에서
+        /// 찾는다 - 주석 안에 우연히 `FROM batch.BatchStepJournal bsj` 같은 문구가 있으면
+        /// 엉뚱한 별칭이 제어 테이블에 묶인다. UPDATE 헤더도 같은 이유로 사본에서 찾는다 -
+        /// 헤더를 원문에서 찾으면 주석 안의 `UPDATE bsj SET`이 헤더로 잡혀 같은 문제가
+        /// 별칭 형태에도 생긴다. 다만 SET 절의 실제 값은 원문에서 읽어야 한다 - 상태값이
+        /// 문자열 리터럴(`N'Completed'`)이라 사본에서는 이미 공백으로 지워져 있어
+        /// `ReportIfDisallowedStatusValue`가 아무것도 못 본다. `BlankCommentsAndStrings`는
+        /// 길이를 보존하므로 사본에서 찾은 인덱스로 원문(`stepMarkdown`)을 그대로 잘라도
+        /// 위치가 어긋나지 않는다 - `CheckShadowBackupContract`의 EXEC() 동적 배치 검사가
+        /// 쓰는 것과 같은 관용이다.
         /// </summary>
         private static void CheckUpdateSetTargets(
             string stepMarkdown,
@@ -592,9 +673,23 @@ namespace ReSet.Core.Services
             BatchStepPlan step,
             StepValidationResult result)
         {
+            // 별칭 묶임은 주석·문자열을 지운 사본에서 본다 - 주석 안의 FROM에
+            // 속으면 엉뚱한 별칭이 제어 테이블에 묶인다.
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+            var aliases = ResolveControlTableAliases(cleaned, bare);
+
+            // 테이블 이름을 직접 쓴 헤더와, 이 테이블에 묶인 별칭을 쓴 헤더를 함께 본다.
+            var headerAlternatives = new List<string> { $@"(?:\w+\.)?{Regex.Escape(bare)}" };
+            headerAlternatives.AddRange(aliases.Select(Regex.Escape));
+
+            // 헤더도 사본에서 찾는다 - 원문에서 찾으면 주석 안의 `UPDATE bsj SET`이
+            // 헤더로 잡혀 별칭 형태에 새 오탐이 생긴다. 단, SET 절은 원문에서 잘라야
+            // 한다 - 상태값이 문자열 리터럴이라 사본에서는 공백으로 지워져 있다.
+            // BlankCommentsAndStrings는 길이를 보존하므로 사본의 인덱스를 원문에
+            // 그대로 써도 위치가 어긋나지 않는다.
             foreach (Match header in Regex.Matches(
-                stepMarkdown,
-                $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b\s+SET\s+",
+                cleaned,
+                $@"UPDATE\s+(?:{string.Join("|", headerAlternatives)})\b\s+SET\s+",
                 RegexOptions.IgnoreCase))
             {
                 var setClause = ExtractTopLevelClause(stepMarkdown, header.Index + header.Length);
@@ -604,7 +699,10 @@ namespace ReSet.Core.Services
                     var eq = assignment.IndexOf('=');
                     if (eq <= 0) continue;
 
-                    var name = StripBracketQuoting(assignment[..eq].Trim());
+                    // 한정자가 이 제어 테이블을 가리킬 때만 벗긴다. 다른 것을
+                    // 가리키면 null이 와서 대조 대상이 아니다.
+                    var name = UnqualifyControlColumn(assignment[..eq], bare, aliases);
+                    if (name == null) continue;
                     if (!Regex.IsMatch(name, @"^[A-Za-z_]\w*$")) continue;
 
                     if (!known.Contains(name))
@@ -1045,17 +1143,33 @@ namespace ReSet.Core.Services
         private static void CheckBatchControlRowOrigin(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
         {
+            // 이 검사는 존재 여부만 보고 값은 읽지 않는다 - 주석·문자열을 지운 사본에서
+            // 판정해도 원문으로 되돌아갈 필요가 없다. 오히려 사본 쪽이 더 안전하다:
+            // 주석 안에 우연히 "UPDATE batch.BatchStepJournal" 같은 문구가 있으면
+            // 원문 판정은 그것도 UPDATE로 세어 오탐을 만들 수 있다.
+            var cleaned = BlankCommentsAndStrings(stepMarkdown);
+
             foreach (var table in BatchControlContract.Tables)
             {
                 if (table.Origin != ControlRowOrigin.EachStepInserts) continue;
 
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+
+                // 별칭 형태(UPDATE bsj SET ... FROM batch.BatchStepJournal bsj)도
+                // 이 테이블의 UPDATE다. 이름 형태만 세면 별칭 형태가 행 출처 검사를
+                // 통째로 우회한다(최종 리뷰 실측).
+                var aliases = ResolveControlTableAliases(cleaned, bare);
+                var updateAlternatives = new List<string> { $@"(?:\w+\.)?{Regex.Escape(bare)}" };
+                updateAlternatives.AddRange(aliases.Select(Regex.Escape));
+
                 var updates = Regex.IsMatch(
-                    stepMarkdown, $@"UPDATE\s+(?:\w+\.)?{Regex.Escape(bare)}\b", RegexOptions.IgnoreCase);
+                    cleaned,
+                    $@"UPDATE\s+(?:{string.Join("|", updateAlternatives)})\b",
+                    RegexOptions.IgnoreCase);
                 if (!updates) continue;
 
                 var inserts = Regex.IsMatch(
-                    stepMarkdown,
+                    cleaned,
                     $@"(INSERT\s+INTO|MERGE)\s+(?:\w+\.)?{Regex.Escape(bare)}\b",
                     RegexOptions.IgnoreCase);
                 if (inserts) continue;
