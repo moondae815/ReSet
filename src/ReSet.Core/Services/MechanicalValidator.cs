@@ -470,11 +470,33 @@ namespace ReSet.Core.Services
                 // 도달하지 못해 매치 자체가 실패한다(원본 계획서 정규식의 결함).
                 // .*?는 Singleline과 함께 개행까지 넘나들며 첫 단독 AS까지 게으르게
                 // 소비하므로 감싸는 괄호가 있든 없든, 타입 괄호가 있든 없든 안전하다.
-                @"CREATE\s+PROC(?:EDURE)?\s+[^\s(]+\s*\(?(?<params>.*?)\bAS\b",
+                //
+                // [최종 리뷰 B-2 수정] `(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)`로
+                // 시작 키워드를 넓혔다 - 옛 정규식은 `CREATE\s+PROC(?:EDURE)?`만
+                // 찾아 `CREATE OR ALTER PROCEDURE`(SQL Server 2016 SP1 이후 표준
+                // 관용)와 `ALTER PROCEDURE`를 아예 매치하지 못했고, 그 결과 인터페이스
+                // 검사 자체가 통째로 꺼져 발명 파라미터가 통과했다(실행 확인, 미탐).
+                @"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROC(?:EDURE)?\s+[^\s(]+\s*\(?(?<params>.*?)\bAS\b",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline))
             {
-                foreach (Match parameter in Regex.Matches(
-                    declaration.Groups["params"].Value, @"@\w+"))
+                var paramsText = declaration.Groups["params"].Value;
+
+                // [최종 리뷰 B-2 수정] 산문이 원본 SP를 `CREATE PROCEDURE dbo.UP_X`로
+                // 언급하면(자기 AS가 없다) 이 정규식의 게으른 .*?가 그 뒤 실제 SQL의
+                // 테이블 별칭(`FROM dbo.T AS t`)까지 뻗어나가 그 사이의 DECLARE·SELECT
+                // 문 전체를 "파라미터 선언부"로 삼킨다 - 규칙 6-1이 필수로 요구하는
+                // `DECLARE @v_currentStepId INT = 0;`이 "원본에 없는 입력 파라미터"로
+                // 반려된 실행 재현이 이 모양이다(오탐). 진짜 파라미터 목록에는 SELECT·
+                // DECLARE·BEGIN·FROM 같은 완전한 문 키워드가 나올 수 없으므로, 그런
+                // 키워드가 하나라도 보이면 이 매치는 산문이 우연히 만든 가짜 선언부로
+                // 보고 통째로 버린다 - Few-Shot을 손대지 않고, 진짜 CREATE/ALTER
+                // PROCEDURE 선언은 그대로 검사한다.
+                if (Regex.IsMatch(paramsText, @"\b(?:SELECT|DECLARE|BEGIN|FROM)\b", RegexOptions.IgnoreCase))
+                {
+                    continue;
+                }
+
+                foreach (Match parameter in Regex.Matches(paramsText, @"@\w+"))
                 {
                     if (allowed.Contains(parameter.Value)) continue;
 
@@ -3236,6 +3258,22 @@ namespace ReSet.Core.Services
             foreach (Match restore in RestoreWithoutRangePattern.Matches(cleaned))
             {
                 if (!ShadowSourcePattern.IsMatch(restore.Groups["insertBody"].Value)) continue;
+
+                // [최종 리뷰 B-1 수정] 이 매치가 열린 BEGIN TRAN 안(정방향 스왑)에
+                // 있으면 (b)의 대상이 아니다. (b)가 겨냥하는 것은 CATCH의 *복원*
+                // (ROLLBACK 뒤 자동 커밋 구간)이지, 트랜잭션 하나로 끝나는 정방향
+                // 교체가 아니다 - 스왑은 같은 DELETE-INSERT 모양이지만 실패하면
+                // 트랜잭션 전체가 롤백되어 DELETE 자체가 무효가 되므로 "다른
+                // 거래일 행이 되돌아가는" 위험이 없다. Few-Shot "Shadow Table Swap
+                // Pattern"의 `BEGIN TRAN; DELETE ...; INSERT ... FROM batch_shadow...;
+                // COMMIT TRAN;`이 정확히 이 모양이라 프롬프트의 모범 예시를 L1이
+                // 반려하는 오탐이 실행 재현됐다(리뷰 재현). (a)가 이미 계산해 둔
+                // openTransactionSpans로 판정한다 - 스왑은 그 안에, 복원은 그 밖에
+                // 있다.
+                if (openTransactionSpans.Any(span => restore.Index >= span.Start && restore.Index < span.End))
+                {
+                    continue;
+                }
 
                 result.Errors.Add(
                     $"{step.Code} 섹션의 복원이 `{restore.Groups["t"].Value}`를 WHERE 없이 " +

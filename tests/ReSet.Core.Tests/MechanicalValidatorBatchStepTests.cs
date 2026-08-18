@@ -676,6 +676,64 @@ SET @v_currentStepId = -101;");
             Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
         }
 
+        // 최종 리뷰 B-2(오탐): 산문이 원본 SP를 `CREATE PROCEDURE dbo.UP_X`로 언급하면
+        // (자기 AS가 없다) 그 뒤 SQL의 테이블 별칭 `AS t`가 정규식의 게으른 매치를
+        // 끝맺는 첫 AS가 되어, 산문과 별칭 사이의 DECLARE된 지역 변수까지 "원본에
+        // 없는 입력 파라미터"로 잘못 보고됐다(실행 재현). 규칙 6-1이 필수로 요구하는
+        // 상태 변수가 이 함정에 걸리면 재생성 프롬프트가 모델에게 존재하지 않는
+        // 파라미터를 지우라고 지시하는 오탐이 된다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotTreatALocalVariableAsInventedWhenAProseMentionPrecedesATableAliasAs()
+        {
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                이 단계는 원본 `CREATE PROCEDURE dbo.UP_X`의 사전 검증 로직을 그대로 옮긴다.
+
+                ```sql
+                DECLARE @v_currentStepId INT = 0;
+                SELECT * FROM dbo.TSettleMst AS t WHERE t.Ymd = @pi_strYMD;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+        }
+
+        // 최종 리뷰 B-2(미탐, 함께 고칠 것): `CREATE OR ALTER PROCEDURE`는 SQL Server
+        // 2016 SP1 이후 표준 관용인데, 옛 정규식이 `CREATE\s+PROC(?:EDURE)?`만 찾아
+        // 이 형태를 아예 매치하지 못했다 - 인터페이스 검사가 통째로 꺼진 채 발명
+        // 파라미터가 통과했다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnInventedParameterInACreateOrAlterProcedure()
+        {
+            var markdown = Section(
+                "CREATE OR ALTER PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @pi_bypassPreCheck bit AS");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 위와 같은 이유로 `ALTER PROCEDURE`(CREATE 없이)도 매치되어야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnInventedParameterInAnAlterProcedure()
+        {
+            var markdown = Section(
+                "ALTER PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @pi_bypassPreCheck bit AS");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
         // 소프트 스킵: 재료가 없으면 검사하지 않는다. 신설 단계에는 원본이 없다.
         [Fact]
         public void ValidateBatchStep_SkipsTheInterfaceCheckWhenTheStepHasNoOrigin()
@@ -1253,6 +1311,57 @@ END CATCH");
             Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
         }
 
+        // 최종 리뷰 B-1(오탐, 실행 확인): 프롬프트 Few-Shot "Shadow Table Swap
+        // Pattern"의 정방향 스왑(`BEGIN TRAN; DELETE FROM T; INSERT INTO T SELECT *
+        // FROM batch_shadow...; COMMIT TRAN;`)이 (b)의 "WHERE 없는 전량 삭제 복원"
+        // 모양과 구조가 같아 걸렸다. (b)가 겨냥하는 것은 CATCH의 *복원*(롤백 뒤
+        // 자동 커밋 구간)이지, BEGIN TRAN 안에서 끝나는 정방향 교체가 아니다 - 이
+        // 스왑은 실패하면 트랜잭션 전체가 롤백되어 DELETE 자체가 무효가 되므로
+        // "다른 거래일 행이 실행 시작 시점으로 되돌아가는" (b)의 위험이 없다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsAShadowSwapDeleteAndInsertInsideAnOpenTransaction()
+        {
+            var markdown = Section(@"
+DECLARE @v_shadowCaptured BIT = 0;
+SELECT * INTO batch_shadow.TargetTable_RunId_S13 FROM dbo.TargetTable WHERE 1=0;
+INSERT INTO batch_shadow.TargetTable_RunId_S13 (Col1, Col2)
+SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+SET @v_shadowCaptured = 1;
+BEGIN TRAN;
+  DELETE FROM dbo.TargetTable;
+  INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TargetTable"), Array.Empty<string>(), NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 위험(미탐 방지): (b)를 "BEGIN TRAN 안이면 제외"로 좁히더라도, 트랜잭션 밖
+        // (CATCH에서 롤백 뒤 자동 커밋 구간)의 WHERE 없는 전량 삭제 복원은 여전히
+        // 잡혀야 한다 - 감사 S12 원본 위반과 같은 모양이다.
+        [Fact]
+        public void ValidateBatchStep_StillRejectsAWhereLessRestoreOutsideAnyTransaction()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+  DELETE FROM dbo.TSettleMst WHERE YMD = @pi_strYMD;
+  INSERT INTO dbo.TSettleMst SELECT * FROM batch_shadow.TSettleMst_RunId_S12 WHERE YMD = @pi_strYMD;
+COMMIT TRAN;
+BEGIN CATCH
+    DELETE FROM dbo.TSettleByTX;
+    INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
         // 감사 🟠(S11): EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다.
         [Fact]
         public void ValidateBatchStep_RejectsAnOuterVariableInsideExec()
@@ -1381,6 +1490,60 @@ END CATCH");
                 markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Equal(1, result.Errors.Count(e => e.Contains("THROW")));
+        }
+
+        // 최종 리뷰가 못박은 지배 계약: "재료 하나가 사실을 내고 프롬프트와 L1이
+        // 같은 사실을 소비한다." 프롬프트의 Few-Shot 모범 예시 네 개가 L1을 통과
+        // 못하면 정상 산출물이 재시도 예산을 태우고 QualityFloor 배너를 단다 -
+        // 재생성으로 고칠 수 없는 결함이다. `ConsolidatedPlanRules`에서 ```sql
+        // 블록을 직접 뽑아 각각 실제 ValidateBatchStep에 넣어 확인한다 - 지금까지
+        // 이 계약을 지키는 테스트가 없었다.
+        [Fact]
+        public void FewShotExamples_InConsolidatedPlanRules_AllValidateWithoutErrors()
+        {
+            var field = typeof(AiService).GetField(
+                "ConsolidatedPlanRules",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            Assert.NotNull(field);
+
+            var rules = (string)field!.GetValue(null)!;
+
+            var blocks = System.Text.RegularExpressions.Regex
+                .Matches(rules, @"```sql\r?\n(?<body>.*?)```", System.Text.RegularExpressions.RegexOptions.Singleline)
+                .Select(m => m.Groups["body"].Value)
+                .ToList();
+
+            // 블록 개수 자체를 못박는다 - Few-Shot이 늘거나 줄면 아래 인덱스별
+            // TargetTables 매핑도 같이 검토해야 한다는 신호다.
+            Assert.Equal(4, blocks.Count);
+
+            var targetTablesByBlock = new[]
+            {
+                new[] { "dbo.TargetTable" }, // 0: Shadow Table Swap Pattern
+                new[] { "TargetTable" },     // 1: Chunking Pattern
+                new[] { "dbo.TargetTable" }, // 2: Shadow Table Restore in CATCH block
+                new[] { "TargetTable" },     // 3: INSERT-only Compensation
+            };
+
+            for (var i = 0; i < blocks.Count; i++)
+            {
+                var markdown = Section(blocks[i]);
+                var step = new BatchStepPlan(
+                    Code: "S17",
+                    Name: "완료 파티션 원자적 게시",
+                    LegacyProcedures: Array.Empty<string>(),
+                    TargetTables: targetTablesByBlock[i],
+                    ErrorCodes: Array.Empty<string>(),
+                    Chunkable: false,
+                    SchemaTables: Array.Empty<string>());
+
+                var result = new MechanicalValidator().ValidateBatchStep(
+                    markdown, step, Array.Empty<string>(), NoConditions);
+
+                Assert.True(
+                    result.Errors.Count == 0,
+                    $"Few-Shot 블록 {i}이 L1을 통과하지 못했습니다: {string.Join(" | ", result.Errors)}\n---\n{blocks[i]}");
+            }
         }
     }
 }
