@@ -199,7 +199,8 @@ namespace ReSet.Core.Services
             string? stepMarkdown,
             BatchStepPlan step,
             IReadOnlyCollection<string> knownTableNames,
-            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure)
+            IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
+            IReadOnlyList<StepInterface>? stepInterfaces = null)
         {
             var result = new StepValidationResult();
 
@@ -293,6 +294,7 @@ namespace ReSet.Core.Services
             CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
             CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
             CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
+            CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -416,6 +418,63 @@ namespace ReSet.Core.Services
                     $"{step.Code} 섹션에 축약·생략 표기 `{forbidden}`가 있습니다. " +
                     "표의 모든 행과 매핑을 원본대로 완전히 기술하십시오 - 생략된 자리는 " +
                     "구현자가 채울 수 없습니다.");
+            }
+        }
+
+        /// <summary>
+        /// 단계 본문이 선언한 프로시저 파라미터가 원본 인터페이스를 넘지 않는지 본다.
+        ///
+        /// 이 검사가 필요한 이유: 프롬프트 규칙 5가 @pi_bypassPreCheck를 발명해
+        /// 명령했고, S02가 재시작 모드에서 실행 컨텍스트 전체에 그 값을 참으로
+        /// 고정해 지급 확정 원장(OutState IN (1,5))의 -9 하드 스톱이 통째로
+        /// 사라졌다. 프롬프트를 고쳐도 강제가 없으면 되살아난다.
+        ///
+        /// DECLARE된 지역 변수는 대상이 아니다. 파라미터 선언 구간
+        /// (CREATE PROCEDURE ... AS 사이)에 등장하는 @이름만 본다.
+        /// </summary>
+        private static void CheckStepInterface(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyList<StepInterface>? stepInterfaces,
+            StepValidationResult result)
+        {
+            var iface = stepInterfaces?.FirstOrDefault(
+                i => string.Equals(i.StepCode, step.Code, StringComparison.OrdinalIgnoreCase));
+
+            if (iface == null)
+            {
+                // 재료가 없다는 사실과 대조해서 깨끗하다는 사실을 로그에서 구별한다.
+                Log.Information(
+                    "{Code}는 원본 인터페이스 재료가 없어 파라미터 대조 대상이 아닙니다.", step.Code);
+                return;
+            }
+
+            var allowed = new HashSet<string>(
+                StepInterfaceFacts.ParameterNames(iface), StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match declaration in Regex.Matches(
+                stepMarkdown,
+                // params는 [^)]*?가 아니라 .*?로 잡는다 - varchar(8)·decimal(18,2)처럼
+                // 타입 선언 안에 ')'가 섞이면 [^)]*?는 그 첫 ')'에서 막혀 AS까지
+                // 도달하지 못해 매치 자체가 실패한다(원본 계획서 정규식의 결함).
+                // .*?는 Singleline과 함께 개행까지 넘나들며 첫 단독 AS까지 게으르게
+                // 소비하므로 감싸는 괄호가 있든 없든, 타입 괄호가 있든 없든 안전하다.
+                @"CREATE\s+PROC(?:EDURE)?\s+[^\s(]+\s*\(?(?<params>.*?)\bAS\b",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                foreach (Match parameter in Regex.Matches(
+                    declaration.Groups["params"].Value, @"@\w+"))
+                {
+                    if (allowed.Contains(parameter.Value)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 원본에 없는 입력 파라미터 '{parameter.Value}'를 선언합니다. " +
+                        $"이 단계의 인터페이스는 원본 프로시저의 파라미터가 전부입니다 " +
+                        $"({string.Join(", ", iface.Parameters)}). 재시작·스킵·검사 우회를 위해 " +
+                        "입력을 늘리지 마십시오 - 이미 완료된 단계는 오케스트레이터가 " +
+                        "체크포인트를 보고 호출하지 않으며, 업무 보호 검사는 호출될 때마다 " +
+                        "무조건 수행되어야 합니다.");
+                }
             }
         }
 

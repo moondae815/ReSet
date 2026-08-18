@@ -45,6 +45,9 @@ namespace ReSet.Core.Tests
 
         private static readonly string[] Catalog = { "dbo.TSettleMst", "dbo.TStatPGCollect", "dbo.TSettleMiss" };
 
+        private static IReadOnlyList<StepInterface> Interfaces(string code, params string[] parameters) =>
+            new[] { new StepInterface(code, new[] { "dbo.X" }, parameters) };
+
         private static string Section(string body) => $"""
             ### S17 완료 파티션 원자적 게시
 
@@ -629,6 +632,60 @@ namespace ReSet.Core.Tests
             var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
 
             Assert.Empty(result.Errors);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_RejectsAParameterThatTheOriginalDoesNotHave()
+        {
+            var markdown = Section("CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @pi_bypassPreCheck bit AS");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsExactlyTheOriginalParameters()
+        {
+            var markdown = Section("CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @po_intRetVal int OUTPUT AS");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)", "@po_intRetVal int OUTPUT"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("파라미터"));
+        }
+
+        // 지역 변수는 파라미터가 아니다. DECLARE된 이름을 결함으로 들면
+        // 모든 단계가 상시 실패한다.
+        [Fact]
+        public void ValidateBatchStep_IgnoresDeclaredLocalVariables()
+        {
+            var markdown = Section(@"CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8) AS
+DECLARE @v_currentStepId INT = 0;
+SET @v_currentStepId = -101;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+        }
+
+        // 소프트 스킵: 재료가 없으면 검사하지 않는다. 신설 단계에는 원본이 없다.
+        [Fact]
+        public void ValidateBatchStep_SkipsTheInterfaceCheckWhenTheStepHasNoOrigin()
+        {
+            var markdown = Section("CREATE PROCEDURE batch.usp_S17 @pi_anything bit AS");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S99", "@pi_strYMD varchar(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_anything"));
         }
     }
 }
