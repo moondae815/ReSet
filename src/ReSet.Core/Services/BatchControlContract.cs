@@ -6,11 +6,16 @@ using System.Text;
 namespace ReSet.Core.Services
 {
     /// <summary>제어 테이블 컬럼 하나. AllowedValues가 있으면 그것이 상태 어휘 전부다.</summary>
+    /// <param name="IsIdentity">
+    /// 이 컬럼이 값을 스스로 발급하는가. batch.BatchRun.RunId만 참이다 -
+    /// 발급 지점이 하나여야 실행 단위가 갈라지지 않는다.
+    /// </param>
     public sealed record ControlColumn(
         string Name,
         string SqlType,
         bool Nullable,
-        IReadOnlyList<string>? AllowedValues = null);
+        IReadOnlyList<string>? AllowedValues = null,
+        bool IsIdentity = false);
 
     /// <summary>
     /// 제어 행을 누가 만드는가.
@@ -33,11 +38,17 @@ namespace ReSet.Core.Services
     }
 
     /// <param name="StatusColumn">상태 어휘를 담은 컬럼. 없으면 null.</param>
+    /// <param name="PrimaryKey">
+    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 두지 않는다 -
+    /// 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
+    /// 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    /// </param>
     public sealed record ControlTable(
         string Name,
         IReadOnlyList<ControlColumn> Columns,
         ControlRowOrigin Origin,
-        string? StatusColumn);
+        string? StatusColumn,
+        IReadOnlyList<string>? PrimaryKey = null);
 
     /// <summary>
     /// 배치 실행 제어 테이블의 정본.
@@ -76,7 +87,7 @@ namespace ReSet.Core.Services
                 "batch.BatchRun",
                 new[]
                 {
-                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("RunId", "bigint", false, null, IsIdentity: true),
                     new ControlColumn("JobName", "nvarchar(128)", false),
                     new ControlColumn("BatchYmd", "varchar(8)", false),
                     new ControlColumn("RunStatus", "nvarchar(20)", false, RunStates),
@@ -86,7 +97,8 @@ namespace ReSet.Core.Services
                     new ControlColumn("ErrorMessage", "nvarchar(max)", true)
                 },
                 ControlRowOrigin.FirstStepInserts,
-                "RunStatus"),
+                "RunStatus",
+                new[] { "RunId" }),
 
             new ControlTable(
                 "batch.BatchStepJournal",
@@ -101,7 +113,8 @@ namespace ReSet.Core.Services
                     new ControlColumn("ErrorMessage", "nvarchar(max)", true)
                 },
                 ControlRowOrigin.EachStepInserts,
-                "StepStatus"),
+                "StepStatus",
+                new[] { "RunId", "StepCode" }),
 
             new ControlTable(
                 "batch.BatchCheckpoint",
@@ -113,7 +126,8 @@ namespace ReSet.Core.Services
                     new ControlColumn("CompletedAtUtc", "datetime2(3)", true)
                 },
                 ControlRowOrigin.EachStepInserts,
-                "CheckpointStatus"),
+                "CheckpointStatus",
+                new[] { "RunId", "StepCode" }),
 
             new ControlTable(
                 "batch.BatchValidationIssue",
@@ -165,8 +179,15 @@ namespace ReSet.Core.Services
                 var lines = new List<string>();
                 foreach (var col in table.Columns)
                 {
+                    var identity = col.IsIdentity ? " IDENTITY(1,1)" : "";
                     var nullability = col.Nullable ? "NULL" : "NOT NULL";
-                    lines.Add($"    {col.Name} {col.SqlType} {nullability}");
+                    lines.Add($"    {col.Name} {col.SqlType}{identity} {nullability}");
+                }
+
+                if (table.PrimaryKey is { Count: > 0 })
+                {
+                    lines.Add($"    CONSTRAINT PK_{BareName(table.Name)} " +
+                              $"PRIMARY KEY ({string.Join(", ", table.PrimaryKey)})");
                 }
 
                 foreach (var col in table.Columns.Where(c => c.AllowedValues is { Count: > 0 }))
@@ -196,7 +217,9 @@ namespace ReSet.Core.Services
                 var origin = table.Origin switch
                 {
                     ControlRowOrigin.FirstStepInserts =>
-                        "The FIRST step in the step list INSERTs this row and issues RunId. Later steps UPDATE it.",
+                        "The FIRST step in the step list INSERTs this row; RunId is issued by IDENTITY, " +
+                        "so read it back with SCOPE_IDENTITY() and pass it to every later step. " +
+                        "NEVER compute a RunId yourself. Later steps UPDATE this row.",
                     ControlRowOrigin.EachStepInserts =>
                         "EACH step INSERTs its own row when it starts, then UPDATEs it when it ends. Never UPDATE a row you did not insert.",
                     _ => "The producing step INSERTs only. There is no state transition."

@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.RegularExpressions;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -94,5 +95,47 @@ public sealed class BatchControlContractTests
         Assert.Contains("JobName", table);
         // 행 생성 소유권이 프롬프트에 실려야 B3가 닫힌다.
         Assert.Contains("INSERT", table);
+    }
+
+    // 최종 리뷰: 프롬프트 표는 "첫 단계가 INSERT하며 RunId를 발급한다"고 말하는데
+    // DDL에 발급 수단이 없었다. 18번의 독립 호출이 각자 방식을 지어내는 실패 모드가
+    // 이 축에서 재현될 수 있다.
+    [Fact]
+    public void RenderDdl_IssuesRunIdWithIdentityOnTheRunTableOnly()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+
+        Assert.Contains("RunId bigint IDENTITY(1,1) NOT NULL", ddl);
+        // 저널·체크포인트의 RunId는 발급받아 쓰는 자리다. 거기까지 IDENTITY면
+        // 각 테이블이 자기 번호를 새로 매겨 실행 단위가 갈라진다.
+        // (xUnit2013 회피: .Count를 Assert.Equal 인자에서 바로 쓰지 않는다 - 경고 기준선 9개를 넘긴다.)
+        var identityCount = Regex.Matches(ddl, @"IDENTITY\(1,1\)").Count;
+        Assert.Equal(1, identityCount);
+    }
+
+    [Fact]
+    public void RenderDdl_DeclaresAPrimaryKeyForEveryTableThatHasATransition()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+
+        Assert.Contains("CONSTRAINT PK_BatchRun PRIMARY KEY (RunId)", ddl);
+        Assert.Contains("CONSTRAINT PK_BatchStepJournal PRIMARY KEY (RunId, StepCode)", ddl);
+        Assert.Contains("CONSTRAINT PK_BatchCheckpoint PRIMARY KEY (RunId, StepCode)", ddl);
+    }
+
+    // 전이가 없는 테이블에는 키를 두지 않는다. 한 단계가 같은 IssueCode를 여러 번
+    // 낼 수 있어 자연 키가 없고, 대리 키를 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    [Fact]
+    public void RenderDdl_DoesNotDeclareAPrimaryKeyForTheInsertOnlyTable()
+    {
+        Assert.DoesNotContain("PK_BatchValidationIssue", BatchControlContract.RenderDdl());
+    }
+
+    // 프롬프트 표도 발급 수단을 말해야 한다 - DDL에만 있으면 단계 문서를 쓰는
+    // 모델이 그 사실을 못 본다.
+    [Fact]
+    public void RenderPromptTable_SaysHowRunIdIsIssued()
+    {
+        Assert.Contains("IDENTITY", BatchControlContract.RenderPromptTable());
     }
 }

@@ -747,6 +747,96 @@ SET @v_currentStepId = -101;");
             Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_anything"));
         }
 
+        // 최종 리뷰 실측: 산문의 CREATE PROCEDURE 언급이 게으른 .*?의 출발점이 되어
+        // 진짜 선언의 AS를 지나 소비하고, 키워드 폐기 조건에 걸려 매치가 버려진다.
+        // Regex.Matches는 소비한 구간 뒤부터 재개하므로 진짜 선언이 영영 검사되지 않는다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksARealDeclarationAfterAProseMention()
+        {
+            var markdown = $$"""
+                ### S17 완료 파티션 원자적 게시
+
+                원본 `CREATE PROCEDURE dbo.UP_UTIL_SETTLE_INS`를 SELECT ... FROM 기준으로 옮긴다.
+
+                ```sql
+                CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8), @pi_bypassPreCheck bit AS
+                SELECT 1 FROM dbo.TSettleMst AS t;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 파라미터 목록 안 주석에 FROM이 있어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenTheParamListHasACommentContainingAKeyword()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17
+    @pi_strYMD varchar(8), -- 원본 SELECT ... FROM 기준일
+    @pi_bypassPreCheck bit
+AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 기본값 문자열 리터럴에 FROM이 있어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenADefaultLiteralContainsAKeyword()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @pi_mode nvarchar(10) = 'FROM', @pi_bypassPreCheck bit AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_mode nvarchar(10)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 파라미터 이름이 정확히 @From이어도 검사가 꺼지면 안 된다.
+        [Fact]
+        public void ValidateBatchStep_StillChecksWhenAParameterIsNamedExactlyFrom()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @From varchar(8), @pi_bypassPreCheck bit AS
+SELECT 1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@From varchar(8)"));
+
+            Assert.Contains(result.Errors, e => e.Contains("@pi_bypassPreCheck"));
+        }
+
+        // 본문의 테이블 별칭 AS가 파라미터 구간으로 새어 들어오면 안 된다.
+        // 선언의 AS는 언제나 본문의 별칭 AS보다 앞이다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotTreatABodyTableAliasAsThePartOfTheParamList()
+        {
+            var markdown = Section(@"
+CREATE PROCEDURE batch.usp_S17 @pi_strYMD varchar(8) AS
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst AS t WHERE t.YMD = @pi_strYMD;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD varchar(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_strYMD"));
+        }
+
         [Fact]
         public void ValidateBatchStep_RejectsAColumnNameOutsideTheControlContract()
         {
@@ -1362,6 +1452,45 @@ END CATCH");
             Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
         }
 
+        // 최종 리뷰 실측: 보상 복원을 자기 트랜잭션으로 감싸면 (b)가 통째로 제외한다.
+        // 래퍼는 다른 거래일의 행을 되돌려주지 않고 피해를 원자적으로 커밋할 뿐이다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAWhereLessRestoreWrappedInItsOwnTransactionInsideCatch()
+        {
+            var markdown = Section(@"
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    BEGIN TRAN;
+        DELETE FROM dbo.TSettleByTX;
+        INSERT INTO dbo.TSettleByTX SELECT * FROM batch_shadow.TSettleByTX_RunId_S12;
+    COMMIT TRAN;
+    SET @po_intRetVal = @v_currentStepId;
+    RETURN @v_currentStepId;
+END CATCH");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
+        // 정방향 스왑은 CATCH 밖이므로 계속 제외되어야 한다.
+        // 프롬프트의 Few-Shot이 가르치는 형태다 - 잡으면 지배 계약 위반이다.
+        [Fact]
+        public void ValidateBatchStep_StillAcceptsTheForwardSwapOutsideCatch()
+        {
+            var markdown = Section(@"
+BEGIN TRAN;
+    DELETE FROM dbo.TargetTable;
+    INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13;
+COMMIT TRAN;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("전량 삭제"));
+        }
+
         // 감사 🟠(S11): EXEC() 동적 배치는 바깥 배치의 변수를 볼 수 없다.
         [Fact]
         public void ValidateBatchStep_RejectsAnOuterVariableInsideExec()
@@ -1544,6 +1673,361 @@ END CATCH");
                     result.Errors.Count == 0,
                     $"Few-Shot 블록 {i}이 L1을 통과하지 못했습니다: {string.Join(" | ", result.Errors)}\n---\n{blocks[i]}");
             }
+        }
+
+        // 최종 리뷰 실측: UPDATE <별칭> SET ... FROM <제어테이블> <별칭> 형태를
+        // 어휘 검사가 아예 인식하지 못해 B2 9건이 초록 게이트 아래 남는다.
+        // docs/architecture.md:433-434가 이 형태를 표준 관용으로 명시한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.ExecutionStatus = N'Succeeded'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_RejectsADisallowedStatusValueInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Completed'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // 별칭 형태로 UPDATE만 하고 INSERT가 없으면 B3도 우회된다.
+        [Fact]
+        public void ValidateBatchStep_RejectsAnAliasedUpdateOfAJournalRowItNeverInserts()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Succeeded'
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // 별칭 형태의 정상 어휘는 잡히면 안 된다. 넓히면서 오탐을 들이지 않았는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsTheCanonicalVocabularyInAnAliasedUpdate()
+        {
+            var markdown = Section(@"
+INSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus, StartedAtUtc)
+VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());
+UPDATE bsj SET bsj.StepStatus = N'Succeeded', bsj.CompletedAtUtc = SYSUTCDATETIME()
+FROM batch.BatchStepJournal bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
+        }
+
+        // 별칭이 제어 테이블에 묶이지 않았으면 그 UPDATE는 대상이 아니다.
+        // 업무 테이블을 별칭으로 갱신하는 것은 정상이다.
+        [Fact]
+        public void ValidateBatchStep_IgnoresAnAliasedUpdateBoundToABusinessTable()
+        {
+            var markdown = Section(@"
+UPDATE m SET m.SettleState = 9, m.ExecutionStatus = N'Completed'
+FROM dbo.TSettleMst m
+WHERE m.YMD = @pi_strYMD;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+        }
+
+        // 한정자가 제어 테이블 이름 자체인 형태도 벗겨야 한다.
+        [Fact]
+        public void ValidateBatchStep_StripsAQualifierThatIsTheControlTableNameItself()
+        {
+            var markdown = Section(@"
+UPDATE batch.BatchStepJournal SET batch.BatchStepJournal.ExecutionStatus = N'Succeeded'
+WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 리뷰 1라운드 실측: 대괄호로 인용한 제어 테이블명(FROM [batch].[BatchStepJournal]
+        // bsj 등)이 별칭 정규식에 전혀 잡히지 않아 이 태스크가 닫으려던 구멍이
+        // 표기 형태 하나로 다시 열렸다. 네 혼합 형태(양쪽 대괄호/한쪽만 대괄호)를
+        // 전부 잠근다.
+        [Theory]
+        [InlineData("[batch].[BatchStepJournal]")]
+        [InlineData("[dbo].[BatchStepJournal]")]
+        [InlineData("batch.[BatchStepJournal]")]
+        [InlineData("[batch].BatchStepJournal")]
+        public void ValidateBatchStep_RejectsAnOutOfContractColumnInABracketQuotedAliasedUpdate(
+            string qualifiedTable)
+        {
+            var markdown = Section($@"
+UPDATE bsj SET bsj.ExecutionStatus = N'Succeeded'
+FROM {qualifiedTable} bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 같은 형태로 UPDATE만 하고 INSERT가 없으면 행 출처 검사도 잡아야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedAliasedUpdateOfAJournalRowItNeverInserts()
+        {
+            var markdown = Section(@"
+UPDATE bsj SET bsj.StepStatus = N'Succeeded'
+FROM [batch].[BatchStepJournal] bsj
+WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // 이름이 접두사로만 겹치는 다른 테이블(BatchStepJournalArchive)의 대괄호 인용
+        // 별칭은 진짜 제어 테이블(BatchStepJournal)에 묶이면 안 된다 - 넓히면서
+        // 오탐을 들이지 않았는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_IgnoresAPrefixOverlappingBracketQuotedTable()
+        {
+            var markdown = Section(@"
+UPDATE arc SET arc.SomeArchiveColumn = 1
+FROM [batch].[BatchStepJournalArchive] arc
+WHERE arc.RunId = @RunId;
+
+INSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus, StartedAtUtc)
+VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SomeArchiveColumn"));
+        }
+
+        // === 최종 전체 브랜치 리뷰 후속: B-1·B-2·Important 1·Important 3 =============
+
+        // BLOCKING B-1 회귀 방어: 대괄호 인용 INSERT + 대괄호/맨이름 혼합 별칭 UPDATE
+        // 네 조합 모두 오류 없이 통과해야 한다(리뷰 실행 재현 재구성). 수정 전에는
+        // CheckBatchControlRowOrigin의 INSERT 쪽 판정이 대괄호를 몰라 이 정상
+        // 문서를 "UPDATE만 하고 자기 행을 만드는 지점이 없다"고 반려했다.
+        [Theory]
+        [InlineData(
+            "INSERT INTO [batch].[BatchStepJournal] (RunId, StepCode, StepStatus, StartedAtUtc) " +
+            "VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());",
+            "UPDATE bsj SET bsj.StepStatus = N'Succeeded' FROM [batch].[BatchStepJournal] bsj " +
+            "WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';")]
+        [InlineData(
+            "INSERT INTO [batch].[BatchStepJournal] (RunId, StepCode, StepStatus, StartedAtUtc) " +
+            "VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());",
+            "UPDATE bsj SET bsj.StepStatus = N'Succeeded' FROM batch.BatchStepJournal bsj " +
+            "WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';")]
+        [InlineData(
+            "INSERT INTO batch.[BatchStepJournal] (RunId, StepCode, StepStatus, StartedAtUtc) " +
+            "VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());",
+            "UPDATE bsj SET bsj.StepStatus = N'Succeeded' FROM batch.[BatchStepJournal] bsj " +
+            "WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';")]
+        public void ValidateBatchStep_AcceptsABracketQuotedInsertPairedWithAnAliasedUpdate(
+            string insertStatement, string updateStatement)
+        {
+            var markdown = Section(insertStatement + "\n" + updateStatement);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+        }
+
+        // 같은 회귀를 batch.BatchCheckpoint에서도 확인한다 - BatchStepJournal 하나만
+        // 고치고 다른 EachStepInserts 테이블을 놓치면 검사가 테이블마다 다르게 군다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsABracketQuotedInsertPairedWithAnAliasedUpdateOnBatchCheckpoint()
+        {
+            var markdown = Section("""
+                INSERT INTO [batch].[BatchCheckpoint] (RunId, StepCode, CheckpointStatus)
+                VALUES (@RunId, N'S17', N'Pending');
+                UPDATE bcp SET bcp.CheckpointStatus = N'Succeeded'
+                FROM [batch].[BatchCheckpoint] bcp
+                WHERE bcp.RunId = @RunId AND bcp.StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+        }
+
+        // B-1 미탐 방어: 대괄호 인용 직접 이름 형태로 UPDATE만 하고 INSERT가 전혀
+        // 없으면 여전히 잡혀야 한다 - 수정이 대괄호를 인식하게 하면서 반대로
+        // 있어야 할 위반까지 놓치지 않았는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedDirectNameUpdateOfAJournalRowItNeverInserts()
+        {
+            var markdown = Section(
+                "UPDATE [batch].[BatchStepJournal] SET StepStatus = N'Succeeded' WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // BLOCKING B-2 회귀 방어: 산문 속 짝 없는 아포스트로피(영어 소유격) 뒤에 오는
+        // SQL 펜스의 위반이 잡혀야 한다. 수정 전에는 BlankCommentsAndStrings가 문서
+        // 전체를 한 번에 지워, 이 아포스트로피부터 문서 끝까지가 "문자열 안"이 되어
+        // 펜스 전체가 공백으로 지워지고 검사가 아무 신호 없이 꺼졌다.
+        [Fact]
+        public void ValidateBatchStep_CatchesAControlColumnViolationAfterAProseApostrophe()
+        {
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                이 단계는 the orchestrator's checkpoint 값을 읽어 재시작 여부를 판단한다.
+
+                ```sql
+                UPDATE batch.BatchStepJournal SET ExecutionStatus = N'Completed' WHERE StepCode = N'S17';
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // 같은 회귀를 인라인 코드 안의 아포스트로피(`don't`)로도 확인한다.
+        [Fact]
+        public void ValidateBatchStep_CatchesAControlColumnViolationAfterInlineCodeWithAnApostrophe()
+        {
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                이 로직은 `don't`처럼 예외적인 경우를 별도로 다루지 않는다.
+
+                ```sql
+                UPDATE batch.BatchStepJournal SET ExecutionStatus = N'Completed' WHERE StepCode = N'S17';
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // B-2가 끈 두 검사 중 B3(행 출처)도 산문 아포스트로피 뒤에서 잡혀야 한다 -
+        // 감사 실측 결함(INSERT 없는 UPDATE)이 정확히 이 경로로 사라졌었다.
+        [Fact]
+        public void ValidateBatchStep_CatchesAMissingInsertAfterAProseApostrophe()
+        {
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                이 단계는 the orchestrator's checkpoint를 갱신한다.
+
+                ```sql
+                UPDATE batch.BatchStepJournal SET StepStatus = N'Succeeded' WHERE StepCode = N'S17';
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("BatchStepJournal"));
+        }
+
+        // B-2 오탐 방어(사전 판정이 막으려던 것): 펜스 안 주석에만 나오는
+        // `UPDATE bsj SET ...`는 헤더로 잡히면 안 된다 - 펜스 단위로 바꿔도
+        // 주석·문자열은 여전히 지워진 사본에서 판정해야 한다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotFlagAControlTableUpdateMentionedOnlyInAFenceComment()
+        {
+            var markdown = Section("""
+                -- UPDATE bsj SET bsj.ExecutionStatus = N'Completed' FROM batch.BatchStepJournal bsj;
+                SELECT 1;
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionStatus"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
+        }
+
+        // Important 1 회귀 방어: 직접 이름 대괄호 인용 UPDATE 헤더가 계약 밖 컬럼과
+        // 금지 상태값을 둘 다 잡아야 한다 - CheckUpdateSetTargets의 headerAlternatives가
+        // QualifiedTableNameFragment 이전에는 맨이름만 봐서 이 형태가 통째로 새어나갔다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedDirectNameUpdateHeaderViolation()
+        {
+            var markdown = Section(
+                "UPDATE [batch].[BatchStepJournal] SET [ExecutionStatus] = 1, [StepStatus] = N'Completed' " +
+                "WHERE StepCode = N'S17';");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+            Assert.Contains(result.Errors, e => e.Contains("Completed") && e.Contains("Succeeded"));
+        }
+
+        // Important 1 회귀 방어: 대괄호 인용 INSERT 테이블명도 컬럼 목록 검사를
+        // 우회하지 못해야 한다.
+        [Fact]
+        public void ValidateBatchStep_RejectsABracketQuotedTableNameInAnInsertColumnList()
+        {
+            var markdown = Section(
+                "INSERT INTO [batch].[BatchStepJournal] (RunId, StepCode, [ExecutionStatus], StartedAtUtc) " +
+                "VALUES (@RunId, N'S17', N'Completed', SYSUTCDATETIME());");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExecutionStatus"));
+        }
+
+        // Important 3: 대괄호 인용 별칭 형태의 정상 어휘(INSERT + UPDATE 짝)는 잡히면
+        // 안 된다 - 지금까지 이 긍정 테스트가 없어서 B-1이 초록으로 통과했다.
+        [Fact]
+        public void ValidateBatchStep_AcceptsTheCanonicalVocabularyInABracketQuotedAliasedUpdate()
+        {
+            var markdown = Section("""
+                INSERT INTO [batch].[BatchStepJournal] ([RunId], [StepCode], [StepStatus], [StartedAtUtc])
+                VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());
+                UPDATE bsj SET bsj.StepStatus = N'Succeeded', bsj.CompletedAtUtc = SYSUTCDATETIME()
+                FROM [batch].[BatchStepJournal] bsj
+                WHERE bsj.RunId = @RunId AND bsj.StepCode = N'S17';
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
         }
     }
 }
