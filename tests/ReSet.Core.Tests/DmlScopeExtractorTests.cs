@@ -350,5 +350,142 @@ END";
             Assert.Contains("UseState", fact.PredicateColumns);
             Assert.True(fact.DateParameterApplied);
         }
+
+        [Fact]
+        public void ExtractSetPredicates_TopLevelNotIn_ShouldCaptureEveryLiteral()
+        {
+            // EXPECT_PROC 갱신 1(object_definition.sql:39) 실측 형태. 명세서는 이 9개
+            // 자리에 5개짜리 다른 목록을 그럴듯한 대체물로 채워 넣었다 - 집합의 크기와
+            // 원소는 컬럼 이름으로 추측할 수 없다는 것이 이 재료의 존재 이유다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.InState = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.YMD = @pi_strYMD
+    AND    A.PGName NOT IN ('PLCard','SamSungPay','SSGPayCard','KakaoPay','KakaoCard','impaymobile','NaverCard','ApplePay','TossCardAuth')
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("UPDATE", fact.Operation);
+            Assert.Equal("PGName", fact.Column);
+            Assert.True(fact.IsNegated);
+            Assert.Equal(9, fact.Literals.Count);
+            Assert.Equal("'PLCard'", fact.Literals[0]);
+            Assert.Contains("'SSGPayCard'", fact.Literals);
+            Assert.Contains("'KakaoCard'", fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_PositiveInWithNumbers_ShouldKeepRawLiterals()
+        {
+            // 숫자 리터럴도 담는다. 표에서 대조하므로 앵커 문제가 생기지 않는다
+            // (설계 §5.1 - 산문에서 "0"을 찾는 것이 아니다).
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DELETE FROM dbo.T WHERE UseState IN (0, 1)
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("DELETE", fact.Operation);
+            Assert.Equal("UseState", fact.Column);
+            Assert.False(fact.IsNegated);
+            Assert.Equal(new[] { "0", "1" }, fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_SubqueryIn_ShouldBeSkipped()
+        {
+            // 집합이 리터럴이 아니므로 옮겨 적을 목록 자체가 없다(설계 §3.2).
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE PLTID IN (SELECT PLTID FROM dbo.S)
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_MixedValues_ShouldBeSkipped()
+        {
+            // 원소에 리터럴 아닌 것이 하나라도 섞이면 담지 않는다 - 리터럴 집합으로
+            // 렌더하면 명세서에 거짓 집합이 실린다(설계 §3.2).
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.T A JOIN dbo.S B ON A.Id = B.Id WHERE A.PGName IN ('PLCard', B.PGName)
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_InsideScalarSubquery_ShouldBeSkipped()
+        {
+            // "최상위"의 정의는 TopLevelPredicateCollector가 갖는다 - 스칼라 서브쿼리
+            // 안의 IN은 대상 범위를 정하지 않는다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1
+    WHERE  Amt = (SELECT MAX(Amt) FROM dbo.S WHERE PGName IN ('A','B'))
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_TwoInPredicatesInOneStatement_ShouldKeepBoth()
+        {
+            // 한 문장에 IN이 둘일 수 있다 - 그래서 L1의 행 키가 라인 하나로는
+            // 부족하고 라인+컬럼이어야 한다(설계 §5).
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE PGName IN ('A','B') AND UseState IN (0,1)
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Column == "PGName");
+            Assert.Contains(facts, f => f.Column == "UseState");
+            Assert.All(facts, f => Assert.Equal(5, f.Line));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_ScalarLiteralComparisons_ShouldBeSkipped()
+        {
+            // 설계 §2. 코퍼스 실측에서 스칼라 리터럴 비교는 474건(집합 리터럴은 약
+            // 104건)이라, 담으면 부피가 5배가 되고 "값까지 대조하면 노이즈"라는 축 B의
+            // 기존 판단이 그대로 옳은 지점이 된다. 둘을 가르는 것은 구조다 -
+            // INSTATE = 0은 컬럼 이름만 봐도 존재를 알지만, 집합의 크기와 원소는
+            // 컬럼 이름으로 추측할 수 없다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE dbo.T SET C = 1
+    WHERE  YMD = @pi_strYMD AND InState = 0 AND PGName = 'PLCard' AND UseState <> 1
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_NullDdl_ShouldReturnEmpty()
+        {
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(null));
+        }
     }
 }

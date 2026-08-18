@@ -31,6 +31,22 @@ namespace ReSet.Core.Services
         bool DateParameterApplied,
         IReadOnlyList<string> JoinKeys);
 
+    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
+    /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
+    /// <param name="Column">IN 좌변의 컬럼 이름.</param>
+    /// <param name="IsNegated">NOT IN이면 true.</param>
+    /// <param name="Literals">
+    /// 집합의 원소를 원문 그대로 담는다 - 문자열은 따옴표를 포함한다('PLCard').
+    /// 파생 테이블 정의 표가 표현식 원문을 그대로 싣는 것과 같은 이유이고, 표에서
+    /// 문자열과 숫자를 구분할 수 있게 한다.
+    /// </param>
+    public sealed record SetPredicateFact(
+        string Operation,
+        int Line,
+        string Column,
+        bool IsNegated,
+        IReadOnlyList<string> Literals);
+
     /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
     ///
@@ -54,6 +70,7 @@ namespace ReSet.Core.Services
     public static class DmlScopeExtractor
     {
         public const string DmlScopeTableHeading = "### DML 범위 (기계 확정 — 수정 금지)";
+        public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
 
         public static IReadOnlyList<DmlScopeFact> Extract(string? ddlText, string dateParameterName)
         {
@@ -75,6 +92,38 @@ namespace ReSet.Core.Services
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[DmlScopeExtractor] DML 범위 수집 실패 - 빈 목록으로 진행합니다.");
                 return Array.Empty<DmlScopeFact>();
+            }
+        }
+
+        /// <summary>
+        /// DML 최상위 WHERE의 IN/NOT IN 리터럴 목록을 뽑는다.
+        ///
+        /// [왜 별도 진입점인가] "어디까지가 대상 범위를 정하는 술어인가"라는 지식은
+        /// TopLevelPredicateCollector 한 곳에 인코딩돼 있다. 새 추출기가 그 순회를
+        /// 다시 구현하면 두 정의가 갈라지고, 그 순간 이 재료는 프롬프트가 말하는
+        /// "최상위"와 다른 것을 뜻하게 된다. 그래서 수집기를 넓히고 진입점만 나눈다 -
+        /// 순회는 두 번 돌지만 비용은 무시할 수준이고 주인은 계속 한 곳이다.
+        /// </summary>
+        public static IReadOnlyList<SetPredicateFact> ExtractSetPredicates(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<SetPredicateFact>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out _);
+                if (fragment == null) return Array.Empty<SetPredicateFact>();
+
+                var visitor = new SetPredicateVisitor();
+                fragment.Accept(visitor);
+                return visitor.Facts;
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+                Log.Warning(ex, "[DmlScopeExtractor] 집합 술어 수집 실패 - 빈 목록으로 진행합니다.");
+                return Array.Empty<SetPredicateFact>();
             }
         }
 
@@ -158,23 +207,6 @@ namespace ReSet.Core.Services
                     ? QuerySpecificationsOf(select.Select)
                     : Enumerable.Empty<QuerySpecification>();
 
-            private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
-            {
-                switch (query)
-                {
-                    case QuerySpecification spec:
-                        yield return spec;
-                        break;
-                    case BinaryQueryExpression binary:
-                        foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
-                        foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
-                        break;
-                    case QueryParenthesisExpression paren:
-                        foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
-                        break;
-                }
-            }
-
             private void Record(
                 string operation,
                 TSqlFragment statement,
@@ -251,6 +283,69 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
+        /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
+        /// </summary>
+        private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
+        {
+            switch (query)
+            {
+                case QuerySpecification spec:
+                    yield return spec;
+                    break;
+                case BinaryQueryExpression binary:
+                    foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
+                    foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
+                    break;
+                case QueryParenthesisExpression paren:
+                    foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// DML 문장을 찾아 그 최상위 WHERE에서 집합 술어를 모으고, 수집기가 모르는
+        /// 문장 문맥(연산 종류·시작 줄)을 붙인다.
+        /// </summary>
+        private sealed class SetPredicateVisitor : TSqlFragmentVisitor
+        {
+            public List<SetPredicateFact> Facts { get; } = new();
+
+            public override void Visit(UpdateSpecification node) =>
+                Collect("UPDATE", node, node.WhereClause);
+
+            public override void Visit(DeleteSpecification node) =>
+                Collect("DELETE", node, node.WhereClause);
+
+            public override void Visit(InsertSpecification node)
+            {
+                // INSERT ... SELECT의 대상 범위는 원천 SELECT의 최상위 WHERE가 정한다
+                // (DmlScopeExtractor.Visit(InsertSpecification)와 같은 판단). UNION으로
+                // 묶인 원천은 갈래마다 WHERE가 다르므로 전부 훑는다.
+                if (node.InsertSource is not SelectInsertSource select) return;
+
+                foreach (var spec in QuerySpecificationsOf(select.Select))
+                {
+                    Collect("INSERT", node, spec.WhereClause);
+                }
+            }
+
+            private void Collect(string operation, TSqlFragment statement, WhereClause? where)
+            {
+                if (where?.SearchCondition == null) return;
+
+                var top = new TopLevelPredicateCollector();
+                where.SearchCondition.Accept(top);
+
+                foreach (var (column, isNegated, literals) in top.SetPredicates)
+                {
+                    Facts.Add(new SetPredicateFact(
+                        operation, statement.StartLine, column, isNegated, literals));
+                }
+            }
+        }
+
+        /// <summary>
         /// WHERE 최상위 술어의 컬럼과 파라미터. 서브쿼리 안으로 내려가지 않는다 -
         /// EXISTS(... B.YMD = @pi_strYMD ...)는 대상 범위를 좁히지 않기 때문이다.
         ///
@@ -267,6 +362,13 @@ namespace ReSet.Core.Services
             public List<string> Columns { get; } = new();
             public List<string> Parameters { get; } = new();
             public List<string> JoinKeys { get; } = new();
+
+            /// <summary>
+            /// 최상위 IN/NOT IN의 리터럴 집합. Column은 좌변 컬럼 이름, IsNegated는
+            /// NOT 여부, Literals는 원문 그대로다. Operation과 Line은 이 수집기가
+            /// 모르므로(문장 문맥은 호출부가 안다) 호출부가 채운다.
+            /// </summary>
+            public List<(string Column, bool IsNegated, List<string> Literals)> SetPredicates { get; } = new();
 
             public override void ExplicitVisit(ScalarSubquery node) { }
 
@@ -318,6 +420,8 @@ namespace ReSet.Core.Services
             /// </summary>
             public override void ExplicitVisit(InPredicate node)
             {
+                RecordSetPredicate(node);
+
                 node.Expression?.Accept(this);
 
                 if (node.Subquery == null && node.Values != null)
@@ -327,6 +431,44 @@ namespace ReSet.Core.Services
                         value.Accept(this);
                     }
                 }
+            }
+
+            /// <summary>
+            /// 리터럴만으로 이뤄진 최상위 IN을 집합 사실로 담는다.
+            ///
+            /// [담지 않는 셋] 서브쿼리 IN은 옮겨 적을 리터럴 목록이 없다. 원소에
+            /// 리터럴 아닌 것이 섞이면 리터럴 집합으로 렌더할 때 명세서에 거짓
+            /// 집합이 실린다. 좌변이 단순 컬럼 참조가 아니면(예: 식) 표의 "컬럼"
+            /// 칸에 쓸 이름이 없다.
+            /// </summary>
+            private void RecordSetPredicate(InPredicate node)
+            {
+                if (node.Subquery != null || node.Values == null || node.Values.Count == 0) return;
+
+                if (node.Expression is not ColumnReferenceExpression columnRef) return;
+                var column = columnRef.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                if (string.IsNullOrWhiteSpace(column)) return;
+
+                var literals = new List<string>();
+                foreach (var value in node.Values)
+                {
+                    if (value is not Literal literal) return;   // 하나라도 아니면 통째로 버린다
+                    literals.Add(TextOfFragment(literal));
+                }
+
+                SetPredicates.Add((column!, node.NotDefined, literals));
+            }
+
+            /// <summary>토큰 원문을 그대로 잇는다 - 문자열 리터럴의 따옴표를 보존한다.</summary>
+            private static string TextOfFragment(TSqlFragment fragment)
+            {
+                if (fragment.ScriptTokenStream == null) return string.Empty;
+
+                return string.Concat(
+                    fragment.ScriptTokenStream
+                        .Skip(fragment.FirstTokenIndex)
+                        .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
+                        .Select(t => t.Text)).Trim();
             }
 
             /// <summary>
