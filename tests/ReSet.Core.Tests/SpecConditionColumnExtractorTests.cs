@@ -347,5 +347,75 @@ namespace ReSet.Core.Tests
 
             Assert.False(result.ContainsKey("UP_UTIL_SETTLE_EXPECT_PROC"));
         }
+
+        // === 화살표 오인 =====================================================
+        //
+        // 실측(POQSettleProc19): 원본 UP_UTIL_SETTLE_CANCEL_INS 22~23행은 코드값 범례를
+        // 주석으로 적는다 - `-- INCVTAX => 부가가치세(0:미포함, 1:포함)`. 명세서가 이를
+        // 그대로 인용했고, 조건 정규식의 `=` 대안이 `=>`의 `=`에 매치해 범례를 필터
+        // 조건으로 수집했다. 하한 검사가 "INCVTAX로 거르는 로직이 없다"고 요구해
+        // S07이 두 번 재생성됐다. 원본에는 그 조건이 없다.
+
+        [Fact]
+        public void Extract_ShouldNotReadALegendArrowAsAnEqualsCondition()
+        {
+            var content = """
+                - `INCVTAX => 부가가치세(0:미포함, 1:포함)`
+                - `COMMISSIONTYPE => 정산율(0:정율, 1:정액)`
+                """;
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.False(result.ContainsKey("UP_UTIL_SETTLE_EXPECT_PROC"));
+        }
+
+        // 넓히면서 진짜 비교 연산자를 잃으면 안 된다. `>=`는 `>` 다음에 `=`가 오므로
+        // 화살표와 문자 순서가 반대다.
+        [Theory]
+        [InlineData("`UseState = 0`", "UseState")]
+        [InlineData("`UseState >= 0`", "UseState")]
+        [InlineData("`UseState <= 0`", "UseState")]
+        [InlineData("`UseState <> 0`", "UseState")]
+        public void Extract_ShouldStillReadEveryRealComparisonOperator(string quoted, string expected)
+        {
+            var result = SpecConditionColumnExtractor.Extract(Spec($"| 조건 | {quoted} 인 행 |"));
+
+            Assert.Equal(new[] { expected }, result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // === 절 단위 배제 =====================================================
+        //
+        // 실측(POQSettleProc19): 부정 배제가 문장 단위였을 때 `YMD`가 69회 배제 기록에
+        // 올랐다. "커서 내부에서 `A.YMD = @pi_strYMD` 조건을 만족한 집계 결과로부터
+        // 수신되지만, UPDATE 문 최상위 WHERE 조건에는 입력 기준일이 직접 포함되지
+        // 않습니다" - 부정되는 것은 "입력 기준일이 최상위 WHERE에 있다"는 별개 사실이고
+        // 인용된 조건은 앞 절에서 긍정된다. YMD는 다른 문장에서 복구되어 실피해는
+        // 없었지만, 복구되지 않는 컬럼이라면 살아 있는 조건을 잃는다.
+
+        [Fact]
+        public void Extract_ShouldKeepAConditionAffirmedInTheClauseBeforeTheNegatedOne()
+        {
+            var content =
+                "| `@v_strYMD`는 커서 내부에서 `A.YMD = @pi_strYMD` 조건을 만족한 집계 결과로부터 " +
+                "수신되지만, UPDATE 문 최상위 WHERE 조건에는 입력 기준일이 직접 포함되지 않습니다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(new[] { "YMD" }, result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // 같은 절 안에서 부정된 조건은 여전히 배제된다. 절을 잘게 나누면서 잡아야 할
+        // 것까지 놓치면 이 검사가 유도한 유령 필터가 되돌아온다.
+        [Fact]
+        public void Extract_ShouldStillDropAConditionNegatedInsideItsOwnClause()
+        {
+            var content =
+                "| 현재 실행되는 산식은 `OUTSTATE = 1` 조건을 만족할 때만 합산하며, " +
+                "`CLIENTID IN ('PAYLETTER')` 조건은 현재 실행 산식에 포함되지 않습니다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(new[] { "OUTSTATE" }, result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
     }
 }

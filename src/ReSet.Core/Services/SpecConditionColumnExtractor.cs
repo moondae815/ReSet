@@ -54,9 +54,16 @@ namespace ReSet.Core.Services
         /// `IN` 앞뒤로 단어 경계를 요구한다. 이것이 없으면 `BEGIN`이 `BEG` + `IN`으로,
         /// `TSettleByIN`이 `TSettleBy` + `IN`으로 쪼개져 낱말 조각이 컬럼으로 둔갑한다 -
         /// 첫 구현을 실측 산출물에 돌렸을 때 검출 27건 중 15건이 이 한 가지 버그였다.
+        ///
+        /// `=`는 뒤에 `>`가 오지 않을 때만 등호다. 원본은 코드값 범례를 주석에 화살표로
+        /// 적고(`-- INCVTAX => 부가가치세(0:미포함, 1:포함)`) 명세서가 그것을 그대로
+        /// 인용하는데, 이 제약이 없으면 범례가 필터 조건으로 둔갑한다 - 실측에서
+        /// UP_UTIL_SETTLE_CANCEL_INS의 INCVTAX·COMMISSIONTYPE 두 범례가 "거르는 로직이
+        /// 없다"는 요구를 만들어 S07이 두 번 재생성됐다. 원본에는 그 조건이 없다.
+        /// 문자 순서가 반대인 `>=`는 이 제약에 걸리지 않는다.
         /// </remarks>
         private static readonly Regex ConditionRegex = new(
-            @"`\s*(?<column>[A-Za-z_@][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*)\s*(?:=|<>|>=|<=|\b(?:NOT\s+)?IN\b)",
+            @"`\s*(?<column>[A-Za-z_@][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*)\s*(?:=(?!>)|<>|>=|<=|\b(?:NOT\s+)?IN\b)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex UdfNameRegex = new(
@@ -193,7 +200,7 @@ namespace ReSet.Core.Services
             { "적용되지 않", "실행되지 않", "포함되지 않", "주석 처리" };
 
         /// <summary>
-        /// 한 줄을 문장으로 나눈다. 경계는 표 셀(`|`)과, 뒤에 공백이나 줄 끝이 오는 마침표다.
+        /// 한 줄을 절로 나눈다. 경계는 표 셀(`|`), 쉼표, 그리고 뒤에 공백이나 줄 끝이 오는 마침표다.
         ///
         /// [왜 줄이 아니라 문장인가]
         /// 한 줄 안에 죽은 조건과 살아 있는 조건이 함께 적힌다. `UP_UTIL_SETTLE_INS_EXTRA`
@@ -202,10 +209,21 @@ namespace ReSet.Core.Services
         /// 조건을 통째로 잃는다. 표 셀을 경계로 함께 두는 이유는 원본 코드 열과 해설 열이
         /// 갈려야 하기 때문이다(`| 58 | 코드 | 해설 |`).
         ///
+        /// [왜 쉼표까지 경계인가]
+        /// 한 문장 안에서 앞 절이 조건을 긍정하고 뒤 절이 다른 사실을 부정하는 형태가 흔하다.
+        /// "커서 내부에서 `A.YMD = @pi_strYMD` 조건을 만족한 집계 결과로부터 수신되지만,
+        /// UPDATE 문 최상위 WHERE 조건에는 입력 기준일이 직접 포함되지 않습니다" - 부정되는
+        /// 것은 "입력 기준일이 최상위 WHERE에 있다"는 별개 사실이고 인용된 조건은 살아 있다.
+        /// 문장 단위로 보면 실측에서 YMD가 69회 배제 기록에 올랐다(다른 문장에서 복구되어
+        /// 실피해는 없었지만, 복구되지 않는 컬럼이라면 살아 있는 조건을 잃는다).
+        /// 절로 나누면 그 형태가 갈리고, 인용과 부정이 같은 절에 있는 진짜 죽은 조건은
+        /// 그대로 걸린다.
+        ///
         /// 경계를 찾는 것은 백틱 구간을 지운 사본이다. 지우지 않으면 `dbo.TClient` 하나가
-        /// 문장을 둘로 쪼개, 뒤따르는 부정 서술이 앞의 조건에 닿지 못한다. 잘라 내는 것은
-        /// 원문이므로 조건 정규식은 인용을 그대로 본다 -
-        /// <see cref="MechanicalValidator"/>가 블랭크 사본의 인덱스를 원문에 대는 것과 같은 관용이다.
+        /// 절을 둘로 쪼개 뒤따르는 부정 서술이 앞의 조건에 닿지 못하고, `IN ('A','B')`의
+        /// 쉼표가 인용 한복판을 자른다. 잘라 내는 것은 원문이므로 조건 정규식은 인용을
+        /// 그대로 본다 - <see cref="MechanicalValidator"/>가 블랭크 사본의 인덱스를 원문에
+        /// 대는 것과 같은 관용이다.
         /// </summary>
         private static IEnumerable<string> SplitSentences(string line)
         {
@@ -216,6 +234,7 @@ namespace ReSet.Core.Services
             {
                 var isBoundary =
                     masked[i] == '|' ||
+                    masked[i] == ',' ||
                     (masked[i] == '.' &&
                      (i + 1 == masked.Length || char.IsWhiteSpace(masked[i + 1])));
 
