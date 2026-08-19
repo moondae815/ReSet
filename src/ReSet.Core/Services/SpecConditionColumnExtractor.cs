@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.RegularExpressions;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -170,10 +172,139 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// 인용된 조건이 죽어 있다고 말하는 서술. 이 표현이 든 문장의 조건은 수집하지 않는다.
+        ///
+        /// [왜 필요한가 - POQSettleProc18 실측]
+        /// 원본 `UP_UTIL_SETTLE_PROC_ETC` 58행의 `AND C.ClientIDType &lt;&gt; 1`은 주석 처리되어
+        /// 실행되지 않고, 명세서도 "따라서 `C.ClientIDType &lt;&gt; 1` 조건은 적용되지 않으며"라고
+        /// 정확히 적었다. 그런데 추출기가 그 부정 문장 안의 인용까지 조건으로 수집했고,
+        /// <see cref="MechanicalValidator"/>의 조건 대조가 "ClientIDType으로 거르는 로직이 없다"고
+        /// 요구했다. 재생성된 S16이 원본에 없는 필터를 활성 조건으로 넣어 내부테스트
+        /// 고객사(ClientIDType=1)가 후취정산 대상에서 빠졌다 - 검사가 결함을 잡은 것이
+        /// 아니라 만들어 낸 자리다.
+        ///
+        /// [왜 `사용되지 않`이 없는가]
+        /// `UP_UTIL_SETTLE_EXCEPTION_PROC` 87행은 "최상위 `WHERE`에 직접 사용되지 않으며
+        /// 하위 질의에서만 사용됩니다"라고 쓴다. 이건 조건이 죽었다는 말이 아니라 어디서
+        /// 쓰이는지를 밝히는 말이다. 목록에 넣으면 살아 있는 조건을 잃는다.
+        /// </summary>
+        private static readonly string[] DeadConditionMarkers =
+            { "적용되지 않", "실행되지 않", "포함되지 않", "주석 처리" };
+
+        /// <summary>
+        /// 한 줄을 문장으로 나눈다. 경계는 표 셀(`|`)과, 뒤에 공백이나 줄 끝이 오는 마침표다.
+        ///
+        /// [왜 줄이 아니라 문장인가]
+        /// 한 줄 안에 죽은 조건과 살아 있는 조건이 함께 적힌다. `UP_UTIL_SETTLE_INS_EXTRA`
+        /// 296행은 "이 조건식은 주석 처리되어 실행되지 않는다. 현재 실행되는 식은
+        /// `C.ExtraSettleFlag='Y'`만 확인하며"라고 쓴다 - 줄 단위로 버리면 실제로 실행되는
+        /// 조건을 통째로 잃는다. 표 셀을 경계로 함께 두는 이유는 원본 코드 열과 해설 열이
+        /// 갈려야 하기 때문이다(`| 58 | 코드 | 해설 |`).
+        ///
+        /// 경계를 찾는 것은 백틱 구간을 지운 사본이다. 지우지 않으면 `dbo.TClient` 하나가
+        /// 문장을 둘로 쪼개, 뒤따르는 부정 서술이 앞의 조건에 닿지 못한다. 잘라 내는 것은
+        /// 원문이므로 조건 정규식은 인용을 그대로 본다 -
+        /// <see cref="MechanicalValidator"/>가 블랭크 사본의 인덱스를 원문에 대는 것과 같은 관용이다.
+        /// </summary>
+        private static IEnumerable<string> SplitSentences(string line)
+        {
+            var masked = MaskQuotedSpans(line);
+            var start = 0;
+
+            for (var i = 0; i < masked.Length; i++)
+            {
+                var isBoundary =
+                    masked[i] == '|' ||
+                    (masked[i] == '.' &&
+                     (i + 1 == masked.Length || char.IsWhiteSpace(masked[i + 1])));
+
+                if (!isBoundary) continue;
+
+                yield return line.Substring(start, i - start + 1);
+                start = i + 1;
+            }
+
+            if (start < line.Length)
+            {
+                yield return line[start..];
+            }
+        }
+
+        /// <summary>백틱 쌍 사이를 같은 길이의 공백으로 바꾼 사본. 닫히지 않은 백틱은 건드리지 않는다.</summary>
+        private static string MaskQuotedSpans(string line)
+        {
+            var masked = new StringBuilder(line);
+            var open = -1;
+
+            for (var i = 0; i < line.Length; i++)
+            {
+                if (line[i] != '`') continue;
+
+                if (open < 0)
+                {
+                    open = i;
+                    continue;
+                }
+
+                for (var j = open + 1; j < i; j++)
+                {
+                    masked[j] = ' ';
+                }
+
+                open = -1;
+            }
+
+            return masked.ToString();
+        }
+
+        private static bool StatesTheConditionIsDead(string sentence)
+        {
+            foreach (var marker in DeadConditionMarkers)
+            {
+                if (sentence.Contains(marker, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
         private static List<string> ReadConditions(string line)
         {
             var columns = new List<string>();
-            foreach (Match match in ConditionRegex.Matches(line))
+
+            foreach (var sentence in SplitSentences(line))
+            {
+                if (StatesTheConditionIsDead(sentence))
+                {
+                    // 버렸다는 사실을 남긴다. 흔적이 없으면 "대조해서 깨끗함"과 "대조
+                    // 대상에서 뺐음"이 로그에서 구별되지 않는다.
+                    var dropped = MatchConditions(sentence);
+                    if (dropped.Count > 0)
+                    {
+                        Log.Information(
+                            "명세서가 죽었다고 서술한 조건을 대조 대상에서 뺍니다 - 컬럼: {Columns}, 문장: {Sentence}",
+                            string.Join(", ", dropped), sentence.Trim());
+                    }
+
+                    continue;
+                }
+
+                foreach (var column in MatchConditions(sentence))
+                {
+                    if (!columns.Contains(column, StringComparer.OrdinalIgnoreCase))
+                    {
+                        columns.Add(column);
+                    }
+                }
+            }
+
+            return columns;
+        }
+
+        private static List<string> MatchConditions(string text)
+        {
+            var columns = new List<string>();
+            foreach (Match match in ConditionRegex.Matches(text))
             {
                 var column = BareColumnName(match.Groups["column"].Value);
                 if (column.Length < MinimumColumnLength ||

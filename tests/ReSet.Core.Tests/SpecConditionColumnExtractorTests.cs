@@ -249,5 +249,103 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(new[] { "SettleState" }, result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
         }
+
+        // === 부정 문맥 배제 ==================================================
+        //
+        // 실측(POQSettleProc18): 원본 `UP_UTIL_SETTLE_PROC_ETC` 58행의
+        // `AND C.ClientIDType <> 1`은 주석 처리되어 실행되지 않는다. 명세서도 그렇게
+        // 적었는데, 추출기가 그 사실을 부정하는 문장 안의 인용까지 조건으로 수집했다.
+        // 하한 검사가 "ClientIDType으로 거르는 로직이 없다"고 요구했고, 재생성된 S16이
+        // 원본에 없는 필터를 활성 조건으로 넣어 내부테스트 고객사가 후취정산 대상에서
+        // 빠졌다. 검사가 결함을 잡은 것이 아니라 만들어 낸 자리다.
+
+        [Fact]
+        public void Extract_ShouldIgnoreAConditionTheSentenceSaysIsNotApplied()
+        {
+            var content =
+                "| 58 | `AND    C.ClientIDType       <> 1` | 원본에서는 줄 전체가 주석 처리되어 " +
+                "실제 실행되지 않습니다. 따라서 `C.ClientIDType <> 1` 조건은 적용되지 않으며, " +
+                "코드 범례는 `0:일반, 1:내부테스트용`으로 기록되어 있습니다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.False(result.ContainsKey("UP_UTIL_SETTLE_EXPECT_PROC"));
+        }
+
+        // 같은 셀 안에서 앞 문장이 "주석 처리되어 실행되지 않는다"고 말해도, 뒤 문장이
+        // 밝히는 "현재 실행되는" 조건은 살아 있어야 한다(UP_UTIL_SETTLE_INS_EXTRA 296행
+        // 실물). 줄 단위로 버리면 이 조건을 통째로 잃는다.
+        [Fact]
+        public void Extract_ShouldKeepTheLiveConditionStatedAfterADeadOne()
+        {
+            var content =
+                "| 168 | `END,0) * IIF(C.ExtraCommFlag='Y',1,0) AS CLComm` | 이 조건식은 주석 처리되어 " +
+                "실행되지 않는다. 현재 실행되는 식은 `C.ExtraSettleFlag='Y'`만 확인한다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(
+                new[] { "ExtraSettleFlag" },
+                result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // 부정은 그 문장에만 걸린다. 같은 셀의 다른 문장이 적은 유효 조건은 남는다
+        // (UP_UTIL_STAT_PGCOLLECT_INS 82행 실물).
+        [Fact]
+        public void Extract_ShouldKeepAConditionFromASiblingSentence()
+        {
+            var content =
+                "| TStatPGCollect | AHEADSETTLEAMT | 일반 정산 거래에서 `OUTSTATE = 1`일 때의 합계를 " +
+                "반영합니다. 주석 처리된 `CLIENTID IN ('PAYLETTER')` 조건은 실행 산식에 적용되지 않습니다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(
+                new[] { "OUTSTATE" },
+                result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // "직접 사용되지 않으며 하위 질의에서만 사용됩니다"는 조건이 죽었다는 말이
+        // 아니다(UP_UTIL_SETTLE_EXCEPTION_PROC 87행 실물). 부정 표현 목록을 넓히면
+        // 여기서 살아 있는 조건을 잃는다 - `사용되지 않`을 목록에 넣지 않는 이유다.
+        [Fact]
+        public void Extract_ShouldKeepAConditionUsedOnlyInASubquery()
+        {
+            var content =
+                "| `@pi_strYMD` | 처리 기준 정산일입니다. 마지막 `OutState = 9` 갱신은 최상위 " +
+                "`WHERE`에 직접 사용되지 않으며 하위 질의에서만 사용됩니다. |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(
+                new[] { "OutState" },
+                result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // 표의 코드 열과 해설 열은 서로 다른 문장이다. 셀 경계를 문장 경계로 보지
+        // 않으면, 해설이 부정하는 조건과 코드 열의 인용이 한 문장으로 붙는다.
+        [Fact]
+        public void Extract_ShouldTreatATableCellBoundaryAsASentenceBoundary()
+        {
+            var content = "| `UseState = 0` | 이 조건은 적용되지 않습니다 |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.Equal(
+                new[] { "UseState" },
+                result["UP_UTIL_SETTLE_EXPECT_PROC"].BodyColumns);
+        }
+
+        // 백틱 안의 한정자 점은 문장 경계가 아니다. 경계로 삼으면 `dbo.TClient` 하나가
+        // 문장을 둘로 쪼개, 뒤따르는 부정 서술이 앞 조건에 닿지 못한다.
+        [Fact]
+        public void Extract_ShouldNotSplitASentenceOnADottedIdentifier()
+        {
+            var content = "| `SETTLE_POQ_DB.dbo.TClient.UseState = 0` 조건은 적용되지 않습니다 |";
+
+            var result = SpecConditionColumnExtractor.Extract(Spec(content));
+
+            Assert.False(result.ContainsKey("UP_UTIL_SETTLE_EXPECT_PROC"));
+        }
     }
 }
