@@ -913,7 +913,7 @@ END"
             // 이므로 A.PGName이다. Line은 UPDATE 문장이 시작하는 실제 줄(5) -
             // @" 다음 줄바꿈 때문에 픽스처의 1번 줄은 빈 줄이라 CREATE PROCEDURE가
             // 2번 줄부터 시작한다.
-            Assert.Contains("| UPDATE 1 | 5 | A.PGName | NOT IN | 3 |", body);
+            Assert.Contains("| UPDATE 1 | 5 | A.PGName | NOT IN | 최상위 | 3 |", body);
             Assert.Contains("'SSGPayCard'", body);
             Assert.Contains("'KakaoCard'", body);
         }
@@ -1070,7 +1070,7 @@ END",
             var result = await service.GenerateSpecificationAsync(functionDef, "rules");
 
             Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, result.SystemPrompt);
-            Assert.Contains("| DELETE 1 | 7 | Id | IN | 2 |", result.SystemPrompt);
+            Assert.Contains("| DELETE 1 | 7 | Id | IN | 최상위 | 2 |", result.SystemPrompt);
         }
 
         [Fact]
@@ -1081,7 +1081,10 @@ END",
                 Schema = "dbo",
                 Name = "P",
                 ObjectType = CodeObjectType.Procedure,
-                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE Id = 1 END"
+                // 2026-08-19: 수집 범위가 리터럴 우변 등호까지 넓어져 `WHERE Id = 1`은
+                // 이제 사실을 낸다. 이 테스트의 의도는 "낼 사실이 없으면 표를 만들지
+                // 않는다"이므로 술어가 정말 없는 형태(파라미터 비교)로 바꾼다.
+                DdlText = "CREATE PROCEDURE dbo.P @p INT AS BEGIN UPDATE dbo.T SET C = 1 WHERE Id = @p END"
             };
             var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
             var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
@@ -1247,9 +1250,9 @@ END"
             // 가리켜야 한다. T2의 리터럴(1, 2)이 "UPDATE 2"를, T3의 리터럴(3, 4, 5)이
             // "UPDATE 3"을 가리키지 않으면(예: 둘 다 "UPDATE 2") 표 사이 귀속이
             // 깨진 것이다.
-            Assert.Contains("| UPDATE 1 | 5 | PGName | IN | 2 | 'a', 'b' |", body);
-            Assert.Contains("| UPDATE 2 | 6 | Id | IN | 2 | 1, 2 |", body);
-            Assert.Contains("| UPDATE 3 | 6 | Id | IN | 3 | 3, 4, 5 |", body);
+            Assert.Contains("| UPDATE 1 | 5 | PGName | IN | 최상위 | 2 | 'a', 'b' |", body);
+            Assert.Contains("| UPDATE 2 | 6 | Id | IN | 최상위 | 2 | 1, 2 |", body);
+            Assert.Contains("| UPDATE 3 | 6 | Id | IN | 최상위 | 3 | 3, 4, 5 |", body);
         }
 
         private static BatchStepPlan ProbeStep(string code) => new(

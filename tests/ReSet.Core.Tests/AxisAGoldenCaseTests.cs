@@ -204,11 +204,16 @@ namespace ReSet.Core.Tests
         // 셋 중 둘(CANCEL_INS, AcqManual)에서 공허하게 통과했다: 그 둘의 실제 집합
         // 술어 개수가 0이므로 Assert.All(빈 컬렉션)은 아무것도 검사하지 않고
         // 무조건 통과한다. "폭발하지 않는다"는 의도는 유지하되, 각 프로시저의
-        // 정확한 기대 개수를 직접 실측해 단언한다 - 추정하지 않았다(임시 덤프
-        // 테스트로 확인 후 삭제: CANCEL_INS=0, INS_EXTRA4PLCARD=1, AcqManual=0).
+        // 정확한 기대 개수를 직접 실측해 단언한다 - 추정하지 않았다.
+        //
+        // [2026-08-19 재실측] 축 A 감사 후 수집 범위를 넓혔다(리터럴 우변 등호·부등호,
+        // ISNULL 래핑 좌변, 파생 테이블 내부 술어). 기대 개수를 임시 프로브로 다시 재
+        // 갱신한다: CANCEL_INS 0→2, INS_EXTRA4PLCARD 1→13, AcqManual 0→0(그대로).
+        // 코퍼스 전체로는 79 → 198행이고, "폭발하지 않는다"는 이 테스트의 의도는
+        // 아래 InRange 상한(40)이 계속 지킨다 - 최대치인 EXCEPTION_PROC이 정확히 40이다.
         [Theory]
-        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 0)]
-        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 1)]
+        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 2)]
+        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 13)]
         [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 0)]
         public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(string procedureName, int expectedCount)
         {

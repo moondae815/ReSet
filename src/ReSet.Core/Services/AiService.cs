@@ -889,10 +889,10 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name.",
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`.",
                 $"   {DmlScopeExtractor.SetPredicateTableHeading}",
-                "   | 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |",
-                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             foreach (var fact in setPredicates)
@@ -900,7 +900,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 var literals = string.Join(", ", fact.Literals);
                 lines.Add(
                     $"   | {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | "
-                    + $"{EscapeTableCell(fact.Column)} | {(fact.IsNegated ? "NOT IN" : "IN")} | "
+                    + $"{EscapeTableCell(fact.Column)} | {fact.Operator} | {EscapeTableCell(fact.Scope)} | "
                     + $"{fact.Literals.Count} | {EscapeTableCell(literals)} |");
             }
 
@@ -2427,6 +2427,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Check if the operations and branches of the source code are documented accurately without hallucination, arbitrary assumptions, or guesses.
+   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER that narrows the target rows. A predicate that only appears as a column name in a table, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다`, is NOT described as a filter: report it. Conversely, report any filter the specification claims that the source does not actually have.
+   - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
    - Verify if temp tables, UDFs, and Linked Servers are factually detailed (or stated explicitly as not used).

@@ -503,8 +503,26 @@ END";
             Assert.Contains(facts, f => f.Column == "B.UseState");
         }
 
+        // [범위 결정 재정당화 - 2026-08-19 축 A 감사]
+        // 이 테스트는 원래 "스칼라 리터럴 비교는 담지 않는다"(설계 §2)를 잠갔고, 그 주석은
+        // 누군가 이 범위를 넓히면 테스트를 깨뜨려 결정을 다시 정당화하도록 요구했다.
+        // 축 A 감사가 그 요구를 충족하는 세 가지 사실을 냈다.
+        //
+        // (1) 실제 피해: 감사에서 나온 대상 행 집합 결함 4건 중 둘이 `CommissionCancelFlag = 1`
+        //     (COMM_UPD:169·243)이었다. 등호가 수집 대상 밖이라 L1이 대조할 재료조차 없었고,
+        //     취소수수료 미부과 계약을 걸러내는 필터가 명세서에서 통째로 사라졌는데 아무
+        //     검사도 울리지 않았다.
+        // (2) 옛 논거의 반증: "INSTATE = 0은 컬럼 이름만 봐도 존재를 안다"고 했으나, 명세서
+        //     DML 범위표에 컬럼명이 실려 있었는데도 `= 1`이라는 값이 문서 전체에 없었다.
+        //     이름만으로는 어느 값이 대상을 가르는지 알 수 없다.
+        // (3) 부피 재측정: 옛 주석의 474건은 파라미터·컬럼 비교까지 센 값이다. 우변이
+        //     리터럴인 것만 파서로 세면 119건이고, 표 전체는 79 → 198행으로 2.5배다
+        //     (SP당 평균 14행, 최대 40행). 5배가 아니다.
+        //
+        // 그래서 범위를 넓히되 경계는 유지한다 - 우변이 리터럴일 때만 담는다.
+        // 파라미터·컬럼 비교는 여전히 제외이며 그 회귀는 별도 Theory가 잠근다.
         [Fact]
-        public void ExtractSetPredicates_ScalarLiteralComparisons_ShouldBeSkipped()
+        public void ExtractSetPredicates_ComparisonsAgainstLiterals_ShouldNowBeCaptured()
         {
             // 설계 §2. 코퍼스 실측에서 스칼라 리터럴 비교는 474건(집합 리터럴은 약
             // 104건)이라, 담으면 부피가 5배가 되고 "값까지 대조하면 노이즈"라는 축 B의
@@ -529,13 +547,165 @@ BEGIN
     WHERE  YMD = @pi_strYMD AND InState = 0 AND PGName = 'PLCard' AND UseState <> 1
 END";
 
-            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            // 리터럴을 우변에 둔 셋만 담는다. `YMD = @pi_strYMD`는 옮겨 적을 리터럴이 없다.
+            Assert.Equal(3, facts.Count);
+            Assert.Contains(facts, f => f.Column == "InState" && f.Operator == "=" && f.Literals[0] == "0");
+            Assert.Contains(facts, f => f.Column == "PGName" && f.Operator == "=" && f.Literals[0] == "'PLCard'");
+            Assert.Contains(facts, f => f.Column == "UseState" && f.Operator == "<>" && f.Literals[0] == "1");
+            Assert.DoesNotContain(facts, f => f.Column == "YMD");
         }
 
         [Fact]
         public void ExtractSetPredicates_NullDdl_ShouldReturnEmpty()
         {
             Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(null));
+        }
+
+        // === 수집 범위 확장 (2026-08-19 축 A 감사 실측) =======================
+        //
+        // 감사에서 나온 🟠 4건이 전부 "원본 필터가 명세서 어디에도 없다"는 한 부류였고,
+        // 넷 다 이 추출기가 사실을 내지 않아 L1이 대조할 재료조차 갖지 못한 자리였다.
+        // 원본 코퍼스 기준으로 등호·부등호 리터럴 비교 129건, ISNULL 래핑 IN 13건이
+        // 수집 대상 밖이었고, 파생 테이블 내부 술어는 형태를 막론하고 빠졌다.
+
+        [Fact]
+        public void ExtractSetPredicates_InWithWrappedLeftSide_ShouldStillCapture()
+        {
+            // EXCEPTION_PROC:423 실측. 좌변이 ISNULL 호출이라 ColumnReference가
+            // 아니어서 통째로 버려졌다 - MobileCo가 NULL·기타값인 건까지 갱신 대상이
+            // 되는데 명세서에는 리터럴 집합이 실리지 않았다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.CLComm = 0
+    FROM dbo.TSettleMst A
+    WHERE ISNULL(A.MobileCo,'') IN ('1','2')
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("IN", fact.Operator);
+            Assert.Contains("MobileCo", fact.Column);
+            Assert.Equal(2, fact.Literals.Count);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_EqualityAgainstLiteral_ShouldBeCaptured()
+        {
+            // COMM_UPD:169 실측. 취소수수료 미부과 계약을 걸러내는 필터인데
+            // 등호는 수집 대상이 아니어서 `= 1`이라는 값이 명세서 전체에 없었다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = 0
+    FROM dbo.TSettleMst A
+    WHERE A.CommissionCancelFlag = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("=", fact.Operator);
+            Assert.Equal("A.CommissionCancelFlag", fact.Column);
+            Assert.Equal(new[] { "1" }, fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_InequalityAgainstLiteral_ShouldBeCaptured()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = 0
+    FROM dbo.TSettleMst A
+    WHERE A.UseState <> 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("<>", fact.Operator);
+            Assert.Equal(new[] { "1" }, fact.Literals);
+        }
+
+        // 파라미터·컬럼 비교는 옮겨 적을 리터럴이 없다. 담으면 표가 조인 키와
+        // 기준일 비교로 뒤덮여 진짜 리터럴 집합이 묻힌다.
+        [Theory]
+        [InlineData("A.YMD = @pi_strYMD")]
+        [InlineData("A.PLTID = B.PLTID")]
+        public void ExtractSetPredicates_ComparisonWithoutALiteral_ShouldBeIgnored(string predicate)
+        {
+            var ddl = $@"
+CREATE PROCEDURE dbo.P @pi_strYMD VARCHAR(8) AS
+BEGIN
+    UPDATE A SET A.PGCOMM = 0
+    FROM dbo.TSettleMst A, dbo.TSettleMst B
+    WHERE {predicate}
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_InsideADerivedTable_ShouldBeCapturedWithItsAlias()
+        {
+            // EXCEPTION_PROC:375 · COMM_UPD:243 실측. 파생 테이블 안의 필터도
+            // 대상 행 집합을 좁히는데 최상위 WHERE만 훑어 사실이 하나도 나오지 않았다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = X.Amt
+    FROM dbo.TSettleMst A
+    INNER JOIN (SELECT B.PLTID, SUM(B.Amt) AS Amt FROM dbo.TSettleMst B
+                WHERE B.CommissionCancelFlag = 1 GROUP BY B.PLTID) X
+        ON A.PLTID = X.PLTID
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("파생 테이블 X", fact.Scope);
+            Assert.Equal("B.CommissionCancelFlag", fact.Column);
+            Assert.Equal("=", fact.Operator);
+        }
+
+        // 같은 컬럼이 최상위와 파생 테이블에 각각 걸리면 사실이 둘이어야 한다.
+        // 하나로 합치면 L1이 한쪽만 대조하고 다른 쪽 누락을 통과시킨다.
+        [Fact]
+        public void ExtractSetPredicates_SameColumnInBothScopes_ShouldYieldTwoFacts()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = X.Amt
+    FROM dbo.TSettleMst A
+    INNER JOIN (SELECT B.PLTID, SUM(B.Amt) AS Amt FROM dbo.TSettleMst B
+                WHERE B.UseState = 1 GROUP BY B.PLTID) X
+        ON A.PLTID = X.PLTID
+    WHERE A.UseState = 0
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Scope == "최상위" && f.Literals[0] == "0");
+            Assert.Contains(facts, f => f.Scope == "파생 테이블 X" && f.Literals[0] == "1");
+        }
+
+        // 기존 IN 사실도 새 필드를 채워야 한다 - 표의 연산 칸과 범위 칸이 비면
+        // L1이 행을 찾지 못한다.
+        [Fact]
+        public void ExtractSetPredicates_PlainTopLevelIn_ShouldFillOperatorAndScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = 0 FROM dbo.TSettleMst A WHERE A.UseState NOT IN (0,4)
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("NOT IN", fact.Operator);
+            Assert.Equal("최상위", fact.Scope);
         }
     }
 }

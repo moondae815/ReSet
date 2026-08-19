@@ -2787,8 +2787,18 @@ namespace ReSet.Core.Services
             // 둘 이상이면 "행이 하나 있다"는 것만으로는 부족하고, 행도 그만큼
             // 있어야 한다. Column은 대소문자를 가리지 않는다 - 아래 행 매칭이
             // OrdinalIgnoreCase로 컬럼 칸을 비교하는 것과 같은 규칙이다.
+            // [범위를 키에 넣는 이유 - 2026-08-19 축 A 감사] 파생 테이블 내부 술어를
+            // 수집하면서 같은 표기의 컬럼이 최상위와 파생 양쪽에 걸릴 수 있게 됐다.
+            // 한정자 없는 컬럼이면 (연산, 라인, 컬럼) 키가 겹쳐, 명세서가 두 행을 모두
+            // "최상위"로 적어도 행 수가 맞아 통과한다 - 파생 테이블 필터가 문서에서
+            // 사라진 것을 못 잡는다는 뜻이고, COMM_UPD:243·EXCEPTION_PROC:375가 정확히
+            // 그 자리에서 새어 나갔다.
             var groups = expectations.SetPredicates
-                .GroupBy(f => (Operation: f.Operation.ToUpperInvariant(), f.Line, Column: f.Column.ToUpperInvariant()));
+                .GroupBy(f => (
+                    Operation: f.Operation.ToUpperInvariant(),
+                    f.Line,
+                    Column: f.Column.ToUpperInvariant(),
+                    Scope: f.Scope.ToUpperInvariant()));
 
             foreach (var group in groups)
             {
@@ -2796,22 +2806,24 @@ namespace ReSet.Core.Services
                 var line = group.Key.Line;
                 var displayColumn = facts[0].Column;
                 var displayOperation = facts[0].Operation;
+                var displayScope = facts[0].Scope;
                 var lineToken = line.ToString();
 
                 var matchingRows = rowLines.Where(r =>
                 {
                     var cells = r.Split('|').Select(c => c.Trim()).ToList();
                     return cells.Any(c => c == lineToken)
-                        && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase));
+                        && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase))
+                        && cells.Any(c => string.Equals(c, displayScope, StringComparison.OrdinalIgnoreCase));
                 }).ToList();
 
                 if (matchingRows.Count != facts.Count)
                 {
                     var countMessage =
-                        $"집합 술어 표에서 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 키를 가진 사실이 "
-                        + $"{facts.Count}개인데 행은 {matchingRows.Count}개 있습니다. 같은 컬럼에 IN이 "
-                        + "여러 번 걸리면 사실도 여럿이므로, 표는 각 사실을 별도 행으로 옮겨야 합니다 - "
-                        + "행을 합치거나 생략할 수 없습니다.";
+                        $"집합 술어 표에서 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 범위 `{displayScope}` "
+                        + $"키를 가진 사실이 {facts.Count}개인데 행은 {matchingRows.Count}개 있습니다. 같은 컬럼에 "
+                        + "술어가 여러 번 걸리면 사실도 여럿이므로, 표는 각 사실을 별도 행으로 옮겨야 합니다 - "
+                        + "행을 합치거나 생략할 수 없고, 범위(최상위 / 파생 테이블)도 사실대로 적어야 합니다.";
                     result.Errors.Add(countMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
