@@ -3242,26 +3242,20 @@ namespace ReSet.Core.Services
         /// 통과하는 결함이 바로 이것이다. 두 검사가 같은 판정 기준을 쓰도록 여기서
         /// 폴백을 추가한다.
         ///
-        /// `MarkdownSectionLocator`는 다른 소비자(계획서 분할)가 있으므로 그 클래스의
-        /// 기존 동작은 바꾸지 않는다 - 폴백은 이 클래스 안에만 둔다.
+        /// 폴백은 처음에 이 클래스 안에 손으로 썼다 - `MarkdownSectionLocator`에 다른
+        /// 소비자(계획서 분할)가 있어 그 클래스의 기존 동작을 건드리지 않으려는 것이었다.
+        /// 그런데 그 "다른 소비자"가 같은 이유로 깨졌다: 골격이
+        /// `## 단계별 이행 상세 및 의사코드:`처럼 꼬리표를 붙여 쓰자 조립기가 블록을 못 찾고
+        /// 문서 끝에 같은 H2를 새로 합성했다(POQSettleProc17·18 연속 재발). 같은 판정을
+        /// 두 곳이 각자 구현하면 한쪽만 고쳐진다 - 판정은 `MarkdownSectionLocator`의
+        /// `exact: false`로 옮기고, 기본값이 정확 일치라 다른 호출부는 그대로다.
         /// </summary>
         private static (int HeaderIndex, int EndIndex) LocateCrudSection(IReadOnlyList<string> lines)
         {
             var exact = MarkdownSectionLocator.LocateSection(lines, "## CRUD 분석", "## ");
-            if (exact.HeaderIndex >= 0) return exact;
-
-            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
-                lines, 0,
-                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal)
-                     && line.Contains("CRUD 분석", StringComparison.OrdinalIgnoreCase));
-
-            if (headerIndex < 0) return (-1, -1);
-
-            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
-                lines, headerIndex + 1,
-                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
-
-            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+            return exact.HeaderIndex >= 0
+                ? exact
+                : MarkdownSectionLocator.LocateSection(lines, "## CRUD 분석", "## ", exact: false);
         }
 
         /// <summary>

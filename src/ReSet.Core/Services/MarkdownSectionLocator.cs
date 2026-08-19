@@ -64,10 +64,31 @@ namespace ReSet.Core.Services
         /// </summary>
         /// <param name="headingLine">찾을 헤딩 줄 전체 (예: "## 단계별 이행 상세 및 의사코드").</param>
         /// <param name="boundaryPrefix">섹션의 끝을 정하는 헤딩 접두 (예: "## ").</param>
+        /// <param name="exact">
+        /// 참이면 헤딩 줄이 <paramref name="headingLine"/>과 완전히 같아야 한다(기본값, 종전 동작).
+        /// 거짓이면 <paramref name="boundaryPrefix"/>로 시작하면서 그 텍스트를 포함하는 헤딩도 받는다.
+        ///
+        /// [왜 이 옵션이 필요한가]
+        /// 모델이 쓰는 헤딩은 계약대로 나오지 않는다. 실측에서 두 가지 변형이 반복됐다 -
+        /// 접두가 붙는 형태(`## 3. CRUD 분석`)와 꼬리표가 붙는 형태
+        /// (`## 단계별 이행 상세 및 의사코드:`). 전자는 <see cref="MechanicalValidator"/>가
+        /// CRUD 절 대조를 조용히 끄는 사고를 냈고, 후자는 <see cref="BatchPlanAssembler"/>가
+        /// 단계 블록을 못 찾아 문서 끝에 같은 H2를 새로 합성하게 만들었다(POQSettleProc17·18
+        /// 연속 재발). 두 소비자가 각자 폴백을 손으로 쓰면 판정이 갈리므로 여기에 둔다.
+        ///
+        /// 기본값을 정확 일치로 두는 이유: 넓히는 판정을 기본으로 삼으면 이 변경이 닿을
+        /// 의도가 없던 호출부까지 함께 움직인다. 넓힐 자리는 호출부가 명시한다.
+        /// </param>
         public static (int HeaderIndex, int EndIndex) LocateSection(
-            IReadOnlyList<string> lines, string headingLine, string boundaryPrefix)
+            IReadOnlyList<string> lines, string headingLine, string boundaryPrefix, bool exact = true)
         {
-            var headerIndex = FindIndexOutsideFence(lines, 0, line => line.Trim() == headingLine);
+            var headerIndex = FindIndexOutsideFence(
+                lines,
+                0,
+                exact
+                    ? line => line.Trim() == headingLine
+                    : line => line.TrimStart().StartsWith(boundaryPrefix, StringComparison.Ordinal) &&
+                              line.Contains(HeadingText(headingLine), StringComparison.OrdinalIgnoreCase));
             if (headerIndex < 0)
             {
                 return (-1, -1);
@@ -80,5 +101,9 @@ namespace ReSet.Core.Services
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
         }
+
+        /// <summary>`## 제목`에서 `#`과 공백을 걷어낸 제목 부분. 느슨 매칭이 대조하는 것은 이 텍스트다.</summary>
+        private static string HeadingText(string headingLine) =>
+            headingLine.TrimStart().TrimStart('#').Trim();
     }
 }
