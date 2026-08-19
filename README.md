@@ -22,6 +22,7 @@
 * **AST 기반 CRUD 빈칸 채우기(Fill-in-the-blanks) 템플릿 자동 주입**: L1 파서가 추출한 INSERT 타겟 컬럼 목록을 마크다운 표 뼈대로 프롬프트에 선반영하여, AI의 환각(Hallucination) 및 컬럼 누락을 원천 차단합니다.
 
 ### 2. 3단계 신뢰성 검증 파이프라인 (Verification)
+* **원본 대조 재료의 기계 확정**: 원본 DDL에서 AST가 확정할 수 있는 사실 — DML 문장별 적용 범위, 대상 행을 가르는 리터럴 집합, 파생 테이블의 컬럼 산식, 원본 주석, 세션 옵션, 식별자 표기 — 을 프롬프트에 **표로** 실어 주고, 명세서가 그 표를 그대로 옮겼는지 기계가 대조합니다. 산문으로 요구하면 요약되거나 그럴듯한 대체물이 채워지므로, 옮겨 적어야 할 값 자체를 미리 확정해 넘기는 방식입니다.
 * **Level 1 (기계적 정적 검증 및 자동 정화)**: `Markdig` 파서로 구조적 필수 섹션을 검증하고, `mermaid-cli` 컴파일 테스트를 통해 Mermaid 다이어그램 오류를 검출하되 오류나 시간 초과 발생 시 정규식 기반 폴백(Fallback) 기계 린팅으로 자동 전환하여 파이프라인 중단을 예방합니다. 또한 마크다운 표 내부의 생략 기호(이하 생략, 등등)를 즉각 감지하여 기계적으로 반려하는 **Anti-Shortcut 검증**을 통해 LLM의 축약 환각을 조기에 차단합니다. 여기에 더해 **스키마 주장 사실검증**을 수행하여, 프롬프트에 실제로 제공된 컬럼을 명세서가 "존재하지 않음"으로 단정하거나 같은 물리 테이블을 서로 다른 표기로 나누어 기술한 경우를 잡아냅니다. 대조 기준은 DB 전체 컬럼이 아니라 프롬프트에 실린 컬럼이므로, 재생성으로 고칠 수 없는 오류를 만들지 않습니다. 자체 **Mermaid 다이어그램 자동 정화기(Cleanse)**를 탑재하여 비표준 화살표 조건절 및 누락된 화살표 보정, 라벨 따옴표 정형화, 다이어그램 전체에 걸친 노드 ID 공백/언더스코어 일괄 제거, 특수문자 포함 라벨 큰따옴표 자동 래핑 등 자동 보정을 수행합니다.
 * **Level 2 (Actor-Critic 및 자가 교정)**: `ActorEffort`가 `dynamic`으로 지정된 경우, Low/Medium/High Effort를 적용한 3종의 명세서 후보를 병렬 생성합니다. 이후, 설정에 따라 지정된 **Critic(리뷰어) 에이전트**가 각 후보에 대해 5대 기준(정합성, CRUD 완전성, 인터페이스 구체성, 예외/트랜잭션, 시각화 가독성 각 10점, 총 50점 만점)으로 정량 채점을 가동합니다. 특히 통합 배치 전환 계획의 경우 **원본 비즈니스 로직(필터 조건) 훼손 방지, XACT_ABORT ON 기반 예외 처리 강제 및 에러 코드 무결성**을 엄격히 감시합니다. 결함이 없고 100점 환산 기준 90점 이상인 우수 후보는 즉시 채택(**스마트 Fast-Pass**)하며, 그렇지 않은 경우 **Consolidator(합성기) 에이전트**가 각 항목별 고득점 후보의 파트를 Source of Truth 삼아 병합 조립하는 Actor-Critic 앙상블 모델을 가동합니다. 자가 수정 및 재생성 루프 진입 시 과거 실패 기록에 의한 컨텍스트 윈도우 오염을 방지하기 위해 최신 피드백만 압축 주입하는 **Stateful Checklist** 메커니즘을 지원합니다. 특히 로컬 Ollama 모델 실행의 경우, 1회차 생성 단계뿐만 아니라 피드백 보완 및 재생성 루프(L1/L2 자가 수정 및 L3 사용자 피드백)에서도 피드백 키워드를 분석하여 연관된 파트만 선택적으로 분할 순차 생성 및 조립하는 최적화 파이프라인을 지원합니다. (단일 모델 가동 시에는 설정 한도 내에서 자가 수정 루프를 수행하며, 최종 합성/보완본에 대한 Critic 점수를 최종 산출물 상단에 보존)
 * **Level 3 (인간 승인 피드백 루프)**: TUI 모드에서 실시간 문서 미리보기를 제공하며, 개발자의 자연어 보완 피드백을 수렴하여 완벽한 설계서가 나올 때까지 재생성 및 검증을 반복합니다. (무인 배치 모드에서는 생략)
@@ -180,7 +181,7 @@ ReSet/
     "Server": "localhost",          // SQL Server 주소
     "Database": "Northwind",        // 대상 데이터베이스 이름
     "MaxDependencyDepth": 3,        // 재귀적 의존성 탐색의 최대 깊이 (기본값: 3)
-    "AllowExternalDatabaseConnections": false, // 같은 인스턴스 내 다른 DB의 코드 객체까지 재귀 분석 (기본값: false). 활성 시 output/External/[DB]/에 생성. 링크드 서버 미지원
+    "AllowExternalDatabaseConnections": true, // 같은 인스턴스 내 다른 DB의 코드 객체까지 재귀 분석 (기본값: false). 활성 시 output/External/[DB]/에 생성. 링크드 서버 미지원
     "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
@@ -188,7 +189,7 @@ ReSet/
     "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달되며, 비워 두면 인자를 생략해 해당 CLI의 기본 모델이 쓰입니다
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
-    "MaxL2Attempts": 2,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
+    "MaxL2Attempts": 5,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
     // [통합 배치] 단계 본문 동시 생성 수 (기본값: 4, 1이면 순차인 종전 동작). 첫 단계는 설정값과
     // 무관하게 항상 단독 실행되어 프롬프트 접두사 캐시를 채운 뒤 나머지를 이 수만큼 동시 생성하며,
     // 값을 올려도 전체 벽시계는 골격 호출(약 2분) 아래로 내려가지 않습니다. Claude는 두 번째
@@ -271,7 +272,7 @@ ReSet/
     "SaveRawJson": true,           // [설정] SpDefinition JSON 파일 저장 여부
     "SaveRawContext": true,        // [설정] 조립된 프롬프트 마크다운 원문 저장 여부
     "SaveRawFiles": true,          // [설정] 의존성 개별 객체 파일/폴더 분산 덤프 여부
-    "EnableCache": false,          // [설정] DDL 해시 기반 로컬 증분 분석 캐싱 활성화 여부
+    "EnableCache": true,          // [설정] DDL 해시 기반 로컬 증분 분석 캐싱 활성화 여부
     "DependencyArtifactMode": "Reference" // [설정] 참조 객체 DDL 저장 방식 (Reference | PortableBundle)
   },
   "MigrationSettings": {
@@ -587,4 +588,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: 3d3568e -->
+<!-- synced-through: 0ccdf2c -->
