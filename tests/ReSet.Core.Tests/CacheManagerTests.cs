@@ -539,7 +539,9 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            Assert.Equal(3, (int)entry["FormatVersion"]!);
+            // 4: 집합 술어 표에 연산·범위 칸이 생겨 프롬프트 입력이 달라졌다(2026-08-19).
+            //    DDL이 같아도 옛 산출물은 그 칸이 없으므로 재분석해야 한다.
+            Assert.Equal(4, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

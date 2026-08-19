@@ -21,7 +21,11 @@ namespace ReSet.Core.Services
         //    테이블 목록이 달라지므로, 이전 버전으로 만든 산출물은 전부 다시 만들어야 한다.
         // 3: SpStaticAnalysisResult에 AstUpdateMappings가 추가되어 프롬프트 입력이 달라졌다.
         //    DDL이 같아도 기존 산출물은 UPDATE 매핑표가 없으므로 재분석해야 한다.
-        private const int CurrentCacheFormatVersion = 3;
+        // 4: 집합 술어 수집 범위가 넓어졌다(리터럴 우변 등호·부등호, ISNULL 래핑 좌변,
+        //    파생 테이블 내부 술어). 표에 연산·범위 칸이 생겨 프롬프트 입력이 달라졌고,
+        //    옛 산출물은 그 칸이 없어 L1을 통과할 수 없으므로 전부 재분석해야 한다.
+        //    2026-08-19 축 A 감사에서 이 재료가 없어 새어 나간 대상 행 집합 결함이 4건이었다.
+        private const int CurrentCacheFormatVersion = 4;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

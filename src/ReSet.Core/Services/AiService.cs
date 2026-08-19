@@ -2427,6 +2427,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Check if the operations and branches of the source code are documented accurately without hallucination, arbitrary assumptions, or guesses.
+   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER that narrows the target rows. A predicate that only appears as a column name in a table, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다`, is NOT described as a filter: report it. Conversely, report any filter the specification claims that the source does not actually have.
+   - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
    - Verify if temp tables, UDFs, and Linked Servers are factually detailed (or stated explicitly as not used).
