@@ -106,5 +106,79 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(3, end);
         }
+
+        // === 느슨 매칭 =======================================================
+        //
+        // 실측(POQSettleProc17·18 연속): 골격이 H2에 콜론을 붙여
+        // `## 단계별 이행 상세 및 의사코드:`로 썼는데, 정확 일치 탐색이 못 찾아
+        // BatchPlanAssembler가 문서 끝에 같은 H2를 새로 합성했다. 계획서에 같은 H2가
+        // 둘이 되고 공통 규약 절이 단계 본문과 갈라졌다. MechanicalValidator는
+        // Contains로 보므로 이 문서를 통과시켰다 - 두 판정 기준이 갈린 자리다.
+
+        [Fact]
+        public void LocateSection_WhenNotExact_ShouldFindAHeadingWithATrailingColon()
+        {
+            var lines = MarkdownSectionLocator.SplitLines(
+                "# 계획서\n## 단계별 이행 상세 및 의사코드:\n본문\n## 다음");
+
+            var (header, end) = MarkdownSectionLocator.LocateSection(
+                lines, "## 단계별 이행 상세 및 의사코드", "## ", exact: false);
+
+            Assert.Equal(1, header);
+            Assert.Equal(3, end);
+        }
+
+        // 접두가 붙은 형태도 같은 헤딩이다 - MechanicalValidator가 CRUD 절에서
+        // 손으로 쓰던 폴백이 보던 것과 같은 모양이다.
+        [Fact]
+        public void LocateSection_WhenNotExact_ShouldFindAHeadingWithANumberedPrefix()
+        {
+            var lines = MarkdownSectionLocator.SplitLines("## 3. CRUD 분석\n본문");
+
+            var (header, _) = MarkdownSectionLocator.LocateSection(
+                lines, "## CRUD 분석", "## ", exact: false);
+
+            Assert.Equal(0, header);
+        }
+
+        // 기본값은 종전 그대로여야 한다. 넓히면서 기존 소비자의 판정을 함께 바꾸면
+        // 이 변경이 닿을 의도가 없던 자리까지 움직인다.
+        [Fact]
+        public void LocateSection_ByDefault_ShouldStillRequireAnExactMatch()
+        {
+            var lines = MarkdownSectionLocator.SplitLines("## 단계별 이행 상세 및 의사코드:\n본문");
+
+            var (header, _) = MarkdownSectionLocator.LocateSection(
+                lines, "## 단계별 이행 상세 및 의사코드", "## ");
+
+            Assert.Equal(-1, header);
+        }
+
+        // 느슨해져도 헤딩이 아닌 줄을 잡으면 안 된다. 본문에 그 문구가 산문으로
+        // 등장하는 것은 흔하다.
+        [Fact]
+        public void LocateSection_WhenNotExact_ShouldIgnoreALineThatIsNotAHeading()
+        {
+            var lines = MarkdownSectionLocator.SplitLines(
+                "이 문서는 단계별 이행 상세 및 의사코드를 담는다\n## 단계별 이행 상세 및 의사코드:");
+
+            var (header, _) = MarkdownSectionLocator.LocateSection(
+                lines, "## 단계별 이행 상세 및 의사코드", "## ", exact: false);
+
+            Assert.Equal(1, header);
+        }
+
+        // 펜스 안의 헤딩은 느슨 매칭에서도 헤딩이 아니다.
+        [Fact]
+        public void LocateSection_WhenNotExact_ShouldStillIgnoreAHeadingInsideAFence()
+        {
+            var lines = MarkdownSectionLocator.SplitLines(
+                "```sql\n## 단계별 이행 상세 및 의사코드:\n```\n## 단계별 이행 상세 및 의사코드:");
+
+            var (header, _) = MarkdownSectionLocator.LocateSection(
+                lines, "## 단계별 이행 상세 및 의사코드", "## ", exact: false);
+
+            Assert.Equal(3, header);
+        }
     }
 }

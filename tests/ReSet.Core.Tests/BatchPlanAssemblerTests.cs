@@ -361,5 +361,62 @@ SELECT 1;
             Assert.DoesNotContain("<!-- STEP:", result);
             Assert.Contains("### 공통 SQL 오류 추적 패턴", result);
         }
+
+        // === 헤딩 변형 =======================================================
+        //
+        // 실측(POQSettleProc17·18 연속): 골격이 계약의 VERBATIM 헤더 대신
+        // `## 단계별 이행 상세 및 의사코드:`처럼 콜론을 붙여 썼다. 정확 일치 탐색이
+        // 못 찾아 단계 본문이 문서 끝에 새 H2와 함께 붙었고, 계획서에 같은 H2가 둘이
+        // 되어 공통 규약 절이 단계 본문과 갈라졌다. MechanicalValidator는 Contains로
+        // 보므로 이 문서를 통과시켰다.
+
+        private const string SkeletonWithColonHeading = @"# 계획서
+
+## 통합 배치 아키텍처 개요:
+
+개요 본문.
+
+## 단계별 이행 상세 및 의사코드:
+
+### 공통 SQL 오류 추적 패턴
+
+공통 규약 본문.
+
+<!-- STEP:S01 -->
+
+## 통합 데이터 정합성 검증 SQL 세트:
+
+검증 SQL 본문.";
+
+        [Fact]
+        public void Assemble_ShouldInsertStepsUnderAHeadingThatCarriesATrailingColon()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithColonHeading, new[] { "### S01 단계\n\n본문." });
+
+            var lines = MarkdownSectionLocator.SplitLines(result);
+            var stepDetailHeadings = lines.Count(
+                l => l.TrimStart().StartsWith("## ", System.StringComparison.Ordinal) &&
+                     l.Contains("단계별 이행 상세 및 의사코드"));
+
+            Assert.Equal(1, stepDetailHeadings);
+        }
+
+        // 단계 본문은 공통 규약 뒤, 다음 H2 앞에 들어가야 한다. 헤딩을 찾았다는 것만으로는
+        // 삽입 위치가 맞는지 알 수 없다.
+        [Fact]
+        public void Assemble_ShouldPlaceStepsBeforeTheNextHeadingWhenTheHeadingHasAColon()
+        {
+            var result = BatchPlanAssembler.Assemble(
+                SkeletonWithColonHeading, new[] { "### S01 단계\n\n본문." });
+
+            var stepIndex = result.IndexOf("### S01 단계", System.StringComparison.Ordinal);
+            var conventionsIndex = result.IndexOf("공통 규약 본문", System.StringComparison.Ordinal);
+            var nextHeadingIndex = result.IndexOf(
+                "## 통합 데이터 정합성 검증 SQL 세트", System.StringComparison.Ordinal);
+
+            Assert.True(conventionsIndex < stepIndex, "단계 본문이 공통 규약보다 앞에 놓였습니다.");
+            Assert.True(stepIndex < nextHeadingIndex, "단계 본문이 다음 H2를 넘어갔습니다.");
+        }
     }
 }

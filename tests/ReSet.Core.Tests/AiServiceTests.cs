@@ -228,6 +228,31 @@ END",
             Assert.DoesNotContain("return codes", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
         }
 
+        // [2026-08-19 축 A 감사] 기계 검증은 술어 표를 대조하지만 서술의 의미까지는
+        // 보지 못한다. 감사에서 나온 두 형태가 정확히 그 층이었다 - COMM_UPD 104행은
+        // 실제 필터를 "부과 여부와 취소수수료를 조회합니다"로 약화했고,
+        // EXCEPTION_PROC:313 서술은 원본에 없는 PGName 필터가 있는 것처럼 읽혔다.
+        // 원본 DDL을 이미 받는 Critic이 그 축을 보도록 명시한다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_ProcedurePrompt_AsksToVerifyPredicatesAreDescribedAsFilters()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE UseState = 0 END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\",\\\"ScoreAccuracy\\\":10,\\\"ScoreCrud\\\":10,\\\"ScoreInterface\\\":10,\\\"ScoreException\\\":10,\\\"ScoreReadability\\\":10}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            IAiService service = new AiService(new OpenAiClient(new HttpClient(handler), "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            await service.ReviewSpecificationAsync(spDef, "## 개요");
+
+            Assert.Contains("derived table", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("as a filter", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
+        }
+
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Success_ReturnsContent()
         {

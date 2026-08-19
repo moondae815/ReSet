@@ -4924,6 +4924,62 @@ SELECT 1;
             return aiService;
         }
 
+        // === 실행 행 생성 담당 단계 배선 =====================================
+        //
+        // 실측(POQSettleProc17): batch.BatchRun을 만드는 지점이 없는 계획서가 L1
+        // 자가 수정 3회 내내 같은 오류 1건으로 반려됐다. 통합 검사는 단계를 지목하지
+        // 못하고, 단계 검사에는 이 계약이 없어 어느 재생성 프롬프트에도 요구가
+        // 실리지 않았다. 담당 판정을 단계 검사로 넘기는 배선이 그 경로를 잇는다.
+        // 배선이 빠지면 검사 자체는 통과하므로, 요구가 프롬프트에 실렸는지로 잠근다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_TellsTheRunRowOwnerToInsertItOnRetry()
+        {
+            const string runRowStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""첫 단계"", ""TargetTables"": [""dbo.T1""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S02"", ""Name"": ""둘째 단계"", ""TargetTables"": [""batch.BatchRun""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + runRowStepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S02는 자기가 대상으로 선언한 실행 행을 UPDATE만 한다 - 만드는 지점이 없다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S02")
+                    {
+                        return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                    }
+
+                    return new AiResult
+                    {
+                        Content = "### S02 단계\n\n오류코드는 -2이다.\n\n```sql\n" +
+                                  "UPDATE batch.BatchRun SET RunStatus = N'Running' WHERE RunId = @RunId;\n```"
+                    };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            await aiService.Received().GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(p => p.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Is<string?>(feedback => feedback != null && feedback.Contains("batch.BatchRun") && feedback.Contains("INSERT")),
+                Arg.Any<CancellationToken>());
+        }
+
         [Fact]
         public async Task RunConsolidatedPipeline_WithStepList_GeneratesOneSectionPerStep()
         {

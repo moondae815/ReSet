@@ -67,6 +67,7 @@
     *   **Ollama 온도 매핑**: 로컬 Ollama 구동 시 effort(low/medium/high/max)에 따라 temperature를 0.1/0.4/0.7/0.9로 차등 적용하십시오. 단, 모델명에 `gemma4` 또는 `qwen3.6`이 포함된 경우 이 매핑을 무시하고 내부적으로 각각 최적 샘플링 설정으로 하드코딩되도록 강제해야 합니다. (`ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`가 표준 매핑을 검사; gemma4/qwen3.6 하드코딩 분기는 테스트 없음)
     *   **로컬 모델 반복 패널티(Degeneration) 방어**: 로컬 모델(Ollama, mlx, vllm) 특유의 텍스트 무한 반복 루프를 방지하기 위해 `repeat_penalty`, `repetition_penalty`, `frequency_penalty` 옵션을 반드시 주입하십시오.
     *   **Ollama 모델별 추론(Thinking) 제어 및 파싱 규칙**: Gemma 4에만 공식 추론 트리거인 `<|think|>`를 시스템 프롬프트 선두에 주입하고, 그 외의 모델(Qwen 등)은 프롬프트의 텍스트 지시(Instruction)로만 `<think>` 사용을 유도하여 텍스트 누수(Leakage)를 방지하십시오. 파싱 시 `</think>`뿐만 아니라 `<|end of thought|>` 토큰도 폴백(Fallback)으로 처리하여 추론 텍스트가 명세서에 노출되는 것을 원천 차단해야 합니다.
+    *   **Ollama Cloud는 로컬이 아니다**: `ollama-cloud`는 `OllamaClient`를 `isCloud: true`로 공유하되 `ProviderName`을 `"Ollama Cloud"`로 갈라 `IsLocalProvider`에서 빼십시오 — 로컬로 분류되면 AST 분할·온도 고정·`<think>` 유도가 원격 모델에 잘못 걸립니다. 키는 공유 `HttpClient`가 아니라 요청마다 붙입니다. (`OllamaCloudClientTests`가 검사)
     *   **프롬프트 응답 정화**: AI 응답 본문에 인사말, 요약 등 불필요한 대화형 문구(Conversational filler)가 포함되거나, 전체 응답을 마크다운 코드 블록(```)으로 감싸는 것을 금지하는 명시적 지시를 프롬프트에 유지하십시오. (단, Mermaid 다이어그램은 예외적으로 래핑 허용)
 
 ### 🎨 범주 3. 인터페이스 및 Spectre.Console 예외 회피 (UI/UX)

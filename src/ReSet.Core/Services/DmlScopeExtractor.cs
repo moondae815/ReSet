@@ -92,7 +92,9 @@ namespace ReSet.Core.Services
         string Column,
         bool IsNegated,
         IReadOnlyList<string> Literals,
-        int StatementOrdinal = 0);
+        int StatementOrdinal = 0,
+        string Operator = "IN",
+        string Scope = "최상위");
 
     /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
@@ -424,15 +426,65 @@ namespace ReSet.Core.Services
 
             private void Collect(string operation, TSqlFragment statement, WhereClause? where, int ordinal)
             {
-                if (where?.SearchCondition == null) return;
+                CollectFrom(operation, statement, where?.SearchCondition, ordinal, TopLevelScope);
+
+                // 파생 테이블 안의 필터도 대상 행 집합을 좁힌다 - 2026-08-19 축 A 감사의
+                // 🟠 4건 중 둘(COMM_UPD:243, EXCEPTION_PROC:375)이 이 자리였다. 최상위
+                // WHERE만 훑으면 그 술어는 사실이 하나도 나오지 않아 L1이 침묵한다.
+                var derived = new DerivedTableCollector();
+                statement.Accept(derived);
+
+                foreach (var (alias, searchCondition) in derived.Tables)
+                {
+                    CollectFrom(operation, statement, searchCondition, ordinal, $"파생 테이블 {alias}");
+                }
+            }
+
+            /// <summary>최상위 WHERE에서 나온 사실의 범위 표기.</summary>
+            private const string TopLevelScope = "최상위";
+
+            /// <summary>
+            /// 문장 안의 파생 테이블(`FROM (SELECT ...) X`)을 찾아 별칭과 그 WHERE를 낸다.
+            ///
+            /// 별칭이 없는 파생 테이블은 명세서 표에서 가리킬 이름이 없으므로 건너뛴다.
+            /// 스칼라 서브쿼리는 대상 범위를 정하지 않으므로 여기서도 다루지 않는다 -
+            /// <see cref="TopLevelPredicateCollector"/>가 세운 것과 같은 경계다.
+            /// </summary>
+            private sealed class DerivedTableCollector : TSqlFragmentVisitor
+            {
+                public List<(string Alias, BooleanExpression? Where)> Tables { get; } = new();
+
+                public override void ExplicitVisit(ScalarSubquery node) { }
+
+                public override void ExplicitVisit(QueryDerivedTable node)
+                {
+                    var alias = node.Alias?.Value;
+                    if (!string.IsNullOrWhiteSpace(alias))
+                    {
+                        foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
+                        {
+                            Tables.Add((alias!, spec.WhereClause?.SearchCondition));
+                        }
+                    }
+
+                    base.ExplicitVisit(node);
+                }
+            }
+
+            private void CollectFrom(
+                string operation, TSqlFragment statement, BooleanExpression? searchCondition,
+                int ordinal, string scope)
+            {
+                if (searchCondition == null) return;
 
                 var top = new TopLevelPredicateCollector();
-                where.SearchCondition.Accept(top);
+                searchCondition.Accept(top);
 
-                foreach (var (column, isNegated, literals) in top.SetPredicates)
+                foreach (var (column, op, literals) in top.SetPredicates)
                 {
                     Facts.Add(new SetPredicateFact(
-                        operation, statement.StartLine, column, isNegated, literals, ordinal));
+                        operation, statement.StartLine, column,
+                        op == "NOT IN", literals, ordinal, op, scope));
                 }
             }
         }
@@ -460,7 +512,7 @@ namespace ReSet.Core.Services
             /// NOT 여부, Literals는 원문 그대로다. Operation과 Line은 이 수집기가
             /// 모르므로(문장 문맥은 호출부가 안다) 호출부가 채운다.
             /// </summary>
-            public List<(string Column, bool IsNegated, List<string> Literals)> SetPredicates { get; } = new();
+            public List<(string Column, string Operator, List<string> Literals)> SetPredicates { get; } = new();
 
             public override void ExplicitVisit(ScalarSubquery node) { }
 
@@ -553,9 +605,8 @@ namespace ReSet.Core.Services
                 // Column은 마지막 식별자 조각이 아니라 원문 표기 그대로 담는다(레코드
                 // 문서의 실측 근거 참고) - 한정자가 있으면 A.USESTATE처럼 한정자까지
                 // 포함해야 같은 문장 안의 A.USESTATE와 B.USESTATE가 서로 다른 키가 된다.
-                if (node.Expression is not ColumnReferenceExpression columnRef) return;
-                var column = TextOf(columnRef);
-                if (string.IsNullOrWhiteSpace(column)) return;
+                var column = LeftSideText(node.Expression);
+                if (column == null) return;
 
                 var literals = new List<string>();
                 foreach (var value in node.Values)
@@ -564,7 +615,50 @@ namespace ReSet.Core.Services
                     literals.Add(TextOf(literal));
                 }
 
-                SetPredicates.Add((column, node.NotDefined, literals));
+                SetPredicates.Add((column, node.NotDefined ? "NOT IN" : "IN", literals));
+            }
+
+            /// <summary>
+            /// 술어 좌변의 표기를 낸다. 순수 컬럼 참조면 그 원문, `ISNULL(A.X,'')`처럼
+            /// 컬럼을 감싼 호출이면 그 호출 원문을 그대로 낸다. 어느 쪽도 아니면 null.
+            ///
+            /// [왜 래핑을 통째로 버리지 않는가 - 2026-08-19 축 A 감사]
+            /// 예전에는 좌변이 <c>ColumnReferenceExpression</c>이 아니면 사실을 버렸다.
+            /// 그래서 `ISNULL(A.MobileCo,'') IN ('1'..'6')`(EXCEPTION_PROC:423)이 수집되지
+            /// 않았고, MobileCo가 NULL·기타값인 건까지 갱신 대상이 되는데도 명세서에
+            /// 리터럴 집합이 실리지 않았다. 원본 코퍼스에 이 형태가 13건 있다.
+            ///
+            /// 표기를 컬럼 이름으로 축약하지 않고 호출 원문 그대로 담는 이유는
+            /// <see cref="SetPredicateFact.Column"/>이 이미 세운 "원문 그대로" 원칙과 같다 -
+            /// 명세서가 래핑까지 옮겨야 NULL 처리 의미가 보존된다.
+            /// </summary>
+            private static string? LeftSideText(ScalarExpression? expression)
+            {
+                switch (expression)
+                {
+                    case ColumnReferenceExpression columnRef:
+                        var column = TextOf(columnRef);
+                        return string.IsNullOrWhiteSpace(column) ? null : column;
+
+                    case FunctionCall call when ContainsColumn(call):
+                        var text = TextOf(call);
+                        return string.IsNullOrWhiteSpace(text) ? null : text;
+
+                    default:
+                        return null;
+                }
+            }
+
+            /// <summary>호출 인자 어딘가에 컬럼 참조가 있는가. 상수만으로 이뤄진 호출은 술어 좌변이 아니다.</summary>
+            private static bool ContainsColumn(FunctionCall call)
+            {
+                foreach (var parameter in call.Parameters)
+                {
+                    if (parameter is ColumnReferenceExpression) return true;
+                    if (parameter is FunctionCall nested && ContainsColumn(nested)) return true;
+                }
+
+                return false;
             }
 
             /// <summary>
@@ -591,7 +685,40 @@ namespace ReSet.Core.Services
                     AddJoinKey(right);
                 }
 
+                RecordComparisonPredicate(node);
                 base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// 리터럴을 우변에 둔 `=`·`&lt;&gt;` 비교를 원소 하나짜리 집합 사실로 담는다.
+            ///
+            /// [왜 등호까지 담는가 - 2026-08-19 축 A 감사]
+            /// 감사에서 나온 대상 행 집합 결함 4건이 전부 "원본 필터가 명세서 어디에도
+            /// 없다"는 한 부류였고, 그중 둘이 `CommissionCancelFlag = 1`이었다. 등호를
+            /// 담지 않으면 L1이 대조할 재료 자체가 없어, 취소수수료 미부과 계약을
+            /// 걸러내는 조건이 통째로 사라져도 아무 검사도 울리지 않는다. 원본 코퍼스
+            /// 기준 이 형태가 129건이다.
+            ///
+            /// 우변이 리터럴일 때만 담는다 - `A.YMD = @pi_strYMD`나 `A.PLTID = B.PLTID`는
+            /// 옮겨 적을 리터럴이 없고, 담으면 표가 기준일 비교와 조인 키로 뒤덮여 진짜
+            /// 리터럴 집합이 묻힌다. 조인 키는 바로 위에서 <see cref="JoinKeys"/>가 담는다.
+            /// </summary>
+            private void RecordComparisonPredicate(BooleanComparisonExpression node)
+            {
+                var op = node.ComparisonType switch
+                {
+                    BooleanComparisonType.Equals => "=",
+                    BooleanComparisonType.NotEqualToBrackets => "<>",
+                    BooleanComparisonType.NotEqualToExclamation => "<>",
+                    _ => null
+                };
+
+                if (op == null || node.SecondExpression is not Literal literal) return;
+
+                var column = LeftSideText(node.FirstExpression);
+                if (column == null) return;
+
+                SetPredicates.Add((column, op, new List<string> { TextOf(literal) }));
             }
 
             /// <summary>

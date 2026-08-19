@@ -2029,5 +2029,113 @@ VALUES (@RunId, N'S17', N'Running', SYSUTCDATETIME());");
             Assert.DoesNotContain(result.Errors, e => e.Contains("제어 테이블"));
             Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE만"));
         }
+
+        // === 실행 행 생성 담당 단계 검사 =====================================
+        //
+        // 실측(POQSettleProc17): 계획서 전체에 INSERT INTO batch.BatchRun이 0건인
+        // 채로 L1 통합 검사에 세 번 연속 반려됐다. 통합 검사는 문서 전체를 보므로
+        // "어느 단계가 고쳐야 하는가"를 말하지 못하고, 그 요구가 단계 재생성
+        // 프롬프트(floorFeedback)에 실릴 경로가 없어 재시도가 수렴하지 못했다.
+        // 담당 단계에 직접 요구를 걸어 그 경로를 잇는다.
+
+        private static readonly string[] OwnsBatchRun = { "batch.BatchRun" };
+
+        [Fact]
+        public void ValidateBatchStep_RejectsAnOwnerThatOnlyUpdatesTheRunRow()
+        {
+            var markdown = Section(@"
+UPDATE batch.BatchRun
+   SET RunStatus = N'Running'
+ WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                runRowOwnedTables: OwnsBatchRun);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("batch.BatchRun"));
+        }
+
+        // 이 결함은 본문을 다시 써서 고칠 수 있다. PlanDefects로 새면 재생성 없이
+        // 배너만 붙고 끝나 - 잇고자 한 피드백 경로가 그대로 끊긴다.
+        [Fact]
+        public void ValidateBatchStep_LetsRegenerationFixAMissingRunRowInsert()
+        {
+            var markdown = Section("UPDATE batch.BatchRun SET RunStatus = N'Running' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                runRowOwnedTables: OwnsBatchRun);
+
+            Assert.True(result.RegenerationCanFix);
+            Assert.Contains("INSERT", result.SuggestedPromptFix);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsAnOwnerThatInsertsTheRunRow()
+        {
+            var markdown = Section(@"
+INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus, StartedAtUtc)
+VALUES (@JobName, @BatchYmd, N'Running', SYSUTCDATETIME());
+SET @RunId = SCOPE_IDENTITY();");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                runRowOwnedTables: OwnsBatchRun);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("실행 단위"));
+        }
+
+        // 대괄호 인용은 T-SQL에서 매우 흔하다. 통합 검사가 같은 이유로 한 번
+        // 반려 사고를 냈으므로(QualifiedTableNameFragment 도입 경위) 단계 검사도
+        // 같은 조각을 쓰는지 잠근다.
+        [Theory]
+        [InlineData("INSERT INTO [batch].[BatchRun] (JobName) VALUES (@JobName);")]
+        [InlineData("INSERT INTO batch.[BatchRun] (JobName) VALUES (@JobName);")]
+        [InlineData("MERGE batch.BatchRun AS T USING (SELECT @JobName AS JobName) AS S ON 1 = 0 " +
+                    "WHEN NOT MATCHED THEN INSERT (JobName) VALUES (S.JobName);")]
+        public void ValidateBatchStep_AcceptsEveryQuotingAndMergeFormOfTheRunRowInsert(string statement)
+        {
+            var result = new MechanicalValidator().ValidateBatchStep(
+                Section(statement), Step("dbo.TSettleMst"), Catalog, NoConditions,
+                runRowOwnedTables: OwnsBatchRun);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("실행 단위"));
+        }
+
+        // 담당이 아닌 단계는 같은 행을 UPDATE만 해도 정상이다 - 뒤 단계가 상태를
+        // 갱신하는 것이 계약이다. 여기서 요구하면 실행 단위가 여러 번 생긴다.
+        [Fact]
+        public void ValidateBatchStep_DoesNotRequireTheRunRowInsertFromAStepThatDoesNotOwnIt()
+        {
+            var markdown = Section("UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("실행 단위"));
+        }
+
+        // 산문 속 영어 소유격 아포스트로피 하나가 뒤따르는 펜스를 통째로 지워
+        // 검사를 조용히 끄는 사고가 통합 검사에서 재현된 적이 있다(CleanedSqlFences
+        // 도입 경위). 단계 검사도 펜스 단위로 지우는지 잠근다.
+        [Fact]
+        public void ValidateBatchStep_StillSeesAViolationAfterAProseApostrophe()
+        {
+            var markdown = """
+                ### S17 완료 파티션 원자적 게시
+
+                This step reuses the orchestrator's run row instead of creating one.
+
+                ```sql
+                UPDATE batch.BatchRun SET RunStatus = N'Running' WHERE RunId = @RunId;
+                ```
+                """;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                runRowOwnedTables: OwnsBatchRun);
+
+            Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("batch.BatchRun"));
+        }
     }
 }

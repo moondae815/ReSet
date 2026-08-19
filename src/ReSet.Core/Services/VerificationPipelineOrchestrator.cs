@@ -3149,6 +3149,13 @@ namespace ReSet.Core.Services
                 SpecConditionColumnExtractor.Extract(specs),
                 SpecRoundingShapeExtractor.Extract(specs));
 
+            // 실행 행을 만들 책임이 이 단계에 있는가. 단계 검사는 단계 하나만 보므로
+            // 스스로 알 수 없고, 목록 전체를 가진 여기가 판정해 넘긴다. 이 배선이
+            // 없으면 그 계약은 문서 전체를 보는 통합 검사에만 남는데, 통합 검사는
+            // 어느 단계가 고쳐야 하는지 지목하지 못해 요구가 재생성 프롬프트에
+            // 실리지 않는다 - 실측에서 자가 수정 3회가 전부 같은 오류로 끝났다.
+            BatchControlContract.ResolveRowCreators(steps).TryGetValue(step.Code, out var runRowOwnedTables);
+
             string? adopted = null;
             string? floorFeedback = null;
             // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
@@ -3194,7 +3201,7 @@ namespace ReSet.Core.Services
                 adopted = content;
 
                 var stepResult = _validator.ValidateBatchStep(
-                    content, step, knownTableNames, conditionColumns, stepInterfaces);
+                    content, step, knownTableNames, conditionColumns, stepInterfaces, runRowOwnedTables);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

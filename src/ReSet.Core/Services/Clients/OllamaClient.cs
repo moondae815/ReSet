@@ -1,5 +1,6 @@
 using System;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -16,17 +17,48 @@ namespace ReSet.Core.Services.Clients
         private readonly string _endpoint;
         private readonly string _modelName;
         private readonly int? _numCtx;
+        private readonly string? _apiKey;
+        private readonly bool _isCloud;
 
-        public string ProviderName => "Ollama";
+        /// <summary>
+        /// 클라우드를 "Ollama"로 이름 붙이지 않는 이유: 이 문자열은 로그 표기일 뿐
+        /// 아니라 <see cref="AiClientFactory.IsLocalProvider"/>의 입력이기도 하다.
+        /// 클라우드가 로컬로 분류되면 AST 분할 파이프라인, 1단계 온도 0.05 고정,
+        /// &lt;think&gt; 유도 프롬프트, "동시성을 1로 낮추라"는 조언이 모두 원격
+        /// 모델에 잘못 걸린다.
+        /// </summary>
+        public string ProviderName => _isCloud ? "Ollama Cloud" : "Ollama";
         public string ModelName => _modelName;
 
-        public OllamaClient(HttpClient httpClient, string endpoint, string modelName, int? numCtx = null)
+        /// <param name="apiKey">
+        /// Ollama Cloud의 Bearer 토큰. 로컬 Ollama는 인증이 없으므로 비워 둔다.
+        /// 인증을 붙인 리버스 프록시 뒤의 로컬 Ollama라면 <paramref name="isCloud"/>
+        /// 없이 이 값만 줘도 헤더가 붙는다.
+        /// </param>
+        /// <param name="isCloud">
+        /// https://ollama.com 을 백엔드로 쓰는가. 기본 엔드포인트와 provider 이름만
+        /// 바꾼다 — 전송 프로토콜(/api/chat)은 로컬과 완전히 같다.
+        /// </param>
+        public OllamaClient(HttpClient httpClient, string endpoint, string modelName, int? numCtx = null, string? apiKey = null, bool isCloud = false)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _modelName = modelName;
             _numCtx = numCtx;
+            _apiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+            _isCloud = isCloud;
 
-            var ep = string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:11434" : endpoint.Trim();
+            // 클라우드는 키가 구조적으로 필수다. 없이 보내면 401만 돌아와 원인을
+            // 짚기 어려우므로, 발급 위치를 알려주며 생성 시점에 끊는다.
+            if (isCloud && _apiKey == null)
+            {
+                throw new ArgumentException(
+                    "Ollama Cloud는 API 키가 필요합니다. https://ollama.com/settings/keys 에서 발급한 키를 " +
+                    "appsettings.json의 AiSettings:Providers:ollama-cloud:ApiKey 에 지정하십시오.",
+                    nameof(apiKey));
+            }
+
+            var defaultEndpoint = isCloud ? "https://ollama.com" : "http://localhost:11434";
+            var ep = string.IsNullOrWhiteSpace(endpoint) ? defaultEndpoint : endpoint.Trim();
             
             // Ollama의 네이티브 엔드포인트 경로(/api/chat) 자동 보정
             if (ep.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
@@ -126,6 +158,13 @@ namespace ReSet.Core.Services.Clients
             {
                 Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json")
             };
+
+            // HttpClient는 provider들이 공유하므로 DefaultRequestHeaders가 아니라
+            // 요청마다 붙인다 - 공유 헤더에 심으면 Claude/OpenAI 요청에까지 이 키가 샌다.
+            if (_apiKey != null)
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            }
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
