@@ -889,10 +889,10 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name.",
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`.",
                 $"   {DmlScopeExtractor.SetPredicateTableHeading}",
-                "   | 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |",
-                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             foreach (var fact in setPredicates)
@@ -900,7 +900,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                 var literals = string.Join(", ", fact.Literals);
                 lines.Add(
                     $"   | {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | "
-                    + $"{EscapeTableCell(fact.Column)} | {(fact.IsNegated ? "NOT IN" : "IN")} | "
+                    + $"{EscapeTableCell(fact.Column)} | {fact.Operator} | {EscapeTableCell(fact.Scope)} | "
                     + $"{fact.Literals.Count} | {EscapeTableCell(literals)} |");
             }
 

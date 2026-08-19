@@ -3148,9 +3148,9 @@ END"
 
         private static string SetPredicateSection(string literalCell) =>
             "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-            + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
-            + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-            + $"| UPDATE 1 | 39 | A.PGName | NOT IN | 9 | {literalCell} |\n";
+            + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+            + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+            + $"| UPDATE 1 | 39 | A.PGName | NOT IN | 최상위 | 9 | {literalCell} |\n";
 
         [Fact]
         public void Validate_SetPredicateTableMissing_ShouldBeAnError()
@@ -3204,9 +3204,9 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 108 | UseState | IN | 2 | (생략) |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 108 | UseState | IN | 최상위 | 2 | (생략) |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3225,9 +3225,9 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 30 | PGName | IN | 2 | 'A', 'B' |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 30 | PGName | IN | 최상위 | 2 | 'A', 'B' |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3255,9 +3255,9 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 50 | A.X | IN | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 1 |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3280,10 +3280,10 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 50 | A.X | IN | 1 | 2 |\n"
-                + "| UPDATE 2 | 50 | A.X | IN | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 2 |\n"
+                + "| UPDATE 2 | 50 | A.X | IN | 최상위 | 1 | 1 |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3883,5 +3883,56 @@ WHERE RunId = @RunId;");
             {sql}
             ```
             """;
+    
+        // === 범위 구별 (2026-08-19 축 A 감사) ================================
+        //
+        // 파생 테이블 내부 술어를 수집하면서 같은 표기의 컬럼이 최상위와 파생 양쪽에
+        // 걸리는 형태가 생긴다. 별칭이 다르면 기존 (연산, 라인, 컬럼) 키로도 갈리지만,
+        // 한정자 없는 컬럼이면 키가 겹친다 - 그때 범위를 대조하지 않으면 명세서가 두 행을
+        // 모두 "최상위"로 적어도 통과한다. 파생 테이블 필터가 사라진 것을 못 잡는다는 뜻이고,
+        // COMM_UPD:243·EXCEPTION_PROC:375가 정확히 그 자리에서 새어 나갔다.
+        [Fact]
+        public void Validate_TwoScopesWrittenAsTheSameScope_ShouldBeAnError()
+        {
+            var top = new SetPredicateFact(
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위");
+            var derived = new SetPredicateFact(
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D");
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { top, derived } };
+
+            // 행 수는 맞지만 둘 다 최상위로 적었다 - 파생 테이블 필터가 문서에서 사라졌다.
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void Validate_BothScopesWrittenCorrectly_ShouldPass()
+        {
+            var top = new SetPredicateFact(
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위");
+            var derived = new SetPredicateFact(
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D");
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { top, derived } };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 파생 테이블 D | 1 | 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
     }
 }
