@@ -148,6 +148,51 @@ namespace ReSet.Core.Tests
             Assert.False(AiClientFactory.IsSingleGpuLocalProvider(provider!));
         }
 
+        // Ollama Cloud는 로컬 Ollama와 프로토콜이 같아 같은 클라이언트를 쓰지만,
+        // 설정 키는 따로 둔다 — 엔드포인트와 API 키가 로컬과 공존해야 하기 때문이다.
+        [Theory]
+        [InlineData("ollama-cloud")]
+        [InlineData("Ollama-Cloud")]
+        [InlineData("OLLAMA-CLOUD")]
+        public void CreateClient_WithOllamaCloudProvider_ShouldReturnOllamaClient(string provider)
+        {
+            var client = AiClientFactory.CreateClient(provider, "gpt-oss:120b", "sk-ollama-test", "https://ollama.com");
+
+            var ollama = Assert.IsType<OllamaClient>(client);
+            Assert.Equal("Ollama Cloud", ollama.ProviderName);
+        }
+
+        [Fact]
+        public void CreateClient_OllamaCloud_WithoutEndpoint_UsesOllamaComDefault()
+        {
+            var client = AiClientFactory.CreateClient("ollama-cloud", "gpt-oss:120b", "sk-ollama-test", "");
+
+            Assert.IsType<OllamaClient>(client);
+        }
+
+        // 클라우드는 원격 GPU를 쓰므로 로컬 분류에 걸리면 안 된다. 걸리면 AST 분할
+        // 파이프라인과 온도 0.05 고정이 원격 모델에 잘못 적용되고, StepConcurrency를
+        // 1로 낮추라는 반대 방향의 조언까지 뜬다.
+        [Theory]
+        [InlineData("ollama-cloud")]
+        [InlineData("Ollama-Cloud")]
+        [InlineData("Ollama Cloud")]
+        public void IsLocalProvider_WithOllamaCloud_ReturnsFalse(string provider)
+        {
+            Assert.False(AiClientFactory.IsLocalProvider(provider));
+            Assert.False(AiClientFactory.IsSingleGpuLocalProvider(provider));
+            Assert.False(AiClientFactory.IsCliProvider(provider));
+        }
+
+        // 로컬 Ollama는 그대로 로컬이어야 한다 — 클라우드 도입이 기존 분류를
+        // 건드리지 않았음을 고정한다.
+        [Fact]
+        public void IsLocalProvider_WithPlainOllama_StillReturnsTrue()
+        {
+            Assert.True(AiClientFactory.IsLocalProvider("ollama"));
+            Assert.True(AiClientFactory.IsSingleGpuLocalProvider("ollama"));
+        }
+
         [Fact]
         public void IsLocalProvider_WithVllm_StillReturnsTrue()
         {

@@ -2,7 +2,7 @@
 
 [![.NET 10.0](https://img.shields.io/badge/.NET-10.0-blueviolet.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![SQL Server](https://img.shields.io/badge/SQL%20Server-Database-red.svg)](https://www.microsoft.com/sql-server)
-[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20mlx%20%7C%20Z.ai%20%7C%20claude--cli%20%7C%20codex--cli%20%7C%20agy--cli-orange.svg)](#)
+[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20Ollama--Cloud%20%7C%20mlx%20%7C%20Z.ai%20%7C%20claude--cli%20%7C%20codex--cli%20%7C%20agy--cli-orange.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#)
 
 본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)와 사용자 정의 함수(UDF)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
@@ -42,7 +42,7 @@
 * **설계서 vs 구현 소스코드 일치성**: C#/Java 코드를 정적으로 분석하고 AI Gap 분석을 실행하여, 명세서 대비 입출력 파라미터, 연산 분기, 트랜잭션 구현 불일치점 및 데이터 액세스 경계(SQL/ORM) 위반 여부를 Gap Report로 도출합니다.
 * **관계지향 모의 데이터(Mock Data) 자동 생성 및 격리 적재**: 보안 규정으로 인해 운영 데이터를 활용할 수 없는 상황에 대처하여, AI가 테이블 DDL과 JOIN문을 파싱해 조인 컬럼 시드 값이 연결된 고품질 모의 데이터(`--gen-mock-data`)를 자동 생성하고, 테스트 실행 시 데이터베이스에 임시 Seeding 한 후 완료 시 자동 복구(Clean-up)합니다.
 * **하이브리드 런타임 수집 & 1:1 대조**: 테스트 케이스 입력을 자동 설계하여 Legacy DB의 SP를 호출하고, 마이그레이션된 소스코드(C# DLL 리플렉션 로드 및 ValueTask 비동기 대기 지원 / Java 외부 프로세스 실행)를 안전하게 트랜잭션 격리(Rollback) 및 타임아웃 하에 구동한 뒤 결과셋 데이터를 1:1로 정밀 비교 대조(`*_CompareReport.md`)합니다.
-* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Z.ai, `claude-cli`/`codex-cli`/`agy-cli` CLI 기반 제공자를 지원하며, 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)가 적용되어 있습니다.
+* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Ollama Cloud, Z.ai, `claude-cli`/`codex-cli`/`agy-cli` CLI 기반 제공자를 지원하며, 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)가 적용되어 있습니다.
 
 ### 5. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 * **테이블 스키마 설명 누락 역추론**: 테이블 및 컬럼 설명(`MS_Description`)이 누락된 항목을 `[설명 누락]`으로 식별한 뒤, 해당 컬럼이 활용되는 SP/UDF/뷰 쿼리의 연산 및 대입 문맥을 추론하여 AI가 `[AI 추론 보완: {Schema}.{Table}.{Column} - {설명}]` 형태로 의미를 자동 역추론합니다.
@@ -184,7 +184,7 @@ ReSet/
     "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
-    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
+    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
     "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달되며, 비워 두면 인자를 생략해 해당 CLI의 기본 모델이 쓰입니다
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
@@ -226,6 +226,14 @@ ReSet/
         "Endpoint": "http://localhost:11434", // 로컬 Ollama 엔드포인트
         "NumCtx": 32768,                     // 로컬 LLM의 최대 컨텍스트 윈도우 크기 지정
         "EnableThinking": true               // Gemma 4 등 추론(Thinking) 유도 프롬프트 활성화 여부
+      },
+      // Ollama Cloud. 로컬 Ollama와 같은 /api/chat 규격에 Bearer 인증만 더해지지만,
+      // 원격 GPU를 쓰므로 "로컬 provider"로 분류되지 않습니다 - AST 분할 파이프라인과
+      // <think> 유도 프롬프트가 적용되지 않고 StepConcurrency도 낮출 필요가 없습니다.
+      "ollama-cloud": {
+        "ApiKey": "",                        // https://ollama.com/settings/keys 에서 발급 (필수)
+        "Endpoint": "https://ollama.com",    // Ollama Cloud 엔드포인트 (/api/chat은 자동으로 붙습니다)
+        "NumCtx": 32768                      // 컨텍스트 윈도우 크기 지정
       },
       "mlx": {
         "ApiKey": "dummy",                   // mlx-lm, vLLM 등 로컬 OpenAI 호환 서버용 (키 검증 우회)
@@ -326,7 +334,7 @@ ReSet/
 ```json
 {
   "AiSettings": {
-    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
+    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
     "ModelName": "claude-sonnet-5",     // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달됨
     "ActorEffort": "high",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
     "Temperature": 0.1,
@@ -347,6 +355,10 @@ ReSet/
       },
       "Ollama": {
         "Endpoint": "http://localhost:11434"
+      },
+      "ollama-cloud": {
+        "ApiKey": "",                        // https://ollama.com/settings/keys 에서 발급 (필수)
+        "Endpoint": "https://ollama.com"
       },
       "Z.ai": {
         "ApiKey": "",

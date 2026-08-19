@@ -6,6 +6,12 @@ namespace ReSet.Core.Services.Clients
 {
     public static class AiClientFactory
     {
+        /// <summary>
+        /// 우리 기계의 자원으로 모델을 돌리는 provider인가. AST 분할 파이프라인 라우팅과
+        /// 1단계 온도 고정, &lt;think&gt; 유도 프롬프트의 대상을 가른다.
+        /// Ollama Cloud(<c>ollama-cloud</c>)는 프로토콜이 로컬 Ollama와 같아도 원격
+        /// GPU를 쓰므로 여기에 들지 않는다.
+        /// </summary>
         public static bool IsLocalProvider(string provider)
         {
             var p = provider?.ToLowerInvariant();
@@ -78,6 +84,10 @@ namespace ReSet.Core.Services.Clients
                 "mlx" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "mlx"),
                 "vllm" => new OpenAiClient(client, apiKey, endpoint, modelName, numCtx, "vllm"),
                 "ollama" => new OllamaClient(client, endpoint, modelName, numCtx),
+                // Ollama Cloud는 로컬과 같은 네이티브 /api/chat을 쓰므로 클라이언트를
+                // 공유한다. 다른 것은 Bearer 인증, 기본 엔드포인트, 그리고 로컬로
+                // 분류되지 않는다는 점뿐이다.
+                "ollama-cloud" => new OllamaClient(client, endpoint, modelName, numCtx, apiKey, isCloud: true),
                 "claude" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "anthropic" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "google" => new GoogleClient(client, apiKey, endpoint, modelName),

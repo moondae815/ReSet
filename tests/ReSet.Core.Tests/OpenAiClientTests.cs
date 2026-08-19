@@ -194,6 +194,7 @@ namespace ReSet.Core.Tests
         private readonly System.Net.HttpStatusCode _statusCode;
         public string? LastRequestContent { get; private set; }
         public string? LastRequestUri { get; private set; }
+        public System.Net.Http.Headers.HttpRequestHeaders? LastRequestHeaders { get; private set; }
 
         public OpenAiRequestSpyHandler(string responseContent, System.Net.HttpStatusCode statusCode = System.Net.HttpStatusCode.OK)
         {
@@ -204,6 +205,7 @@ namespace ReSet.Core.Tests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri?.ToString();
+            LastRequestHeaders = request.Headers;
             if (request.Content != null)
             {
                 LastRequestContent = await request.Content.ReadAsStringAsync(cancellationToken);
