@@ -216,7 +216,8 @@ namespace ReSet.Core.Services
             BatchStepPlan step,
             IReadOnlyCollection<string> knownTableNames,
             IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
-            IReadOnlyList<StepInterface>? stepInterfaces = null)
+            IReadOnlyList<StepInterface>? stepInterfaces = null,
+            IReadOnlyCollection<string>? runRowOwnedTables = null)
         {
             var result = new StepValidationResult();
 
@@ -313,6 +314,7 @@ namespace ReSet.Core.Services
             CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
             CheckBatchControlVocabulary(stepMarkdown, step, result);
             CheckBatchControlRowOrigin(stepMarkdown, step, result);
+            CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result);
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
 
@@ -629,6 +631,28 @@ namespace ReSet.Core.Services
         {
             var escapedBare = Regex.Escape(bare);
             return $@"(?:\[?\w+\]?\.)?(?:\[{escapedBare}\]|{escapedBare}\b)";
+        }
+
+        /// <summary>
+        /// 이 마크다운의 SQL 펜스 어딘가가 그 테이블의 행을 만드는가(`INSERT INTO` 또는 `MERGE`).
+        ///
+        /// 세 검사(<see cref="CheckBatchControlRowOrigin"/>, <see cref="CheckFirstStepRowCreation"/>,
+        /// <see cref="CheckBatchRunRowCreation"/>)가 같은 판정을 각자 쓰고 있었다. 같은 문제를
+        /// 여러 정규식이 각자 풀면 한쪽만 고쳐질 때 다른 쪽이 뒤에 남는다 -
+        /// <see cref="QualifiedTableNameFragment"/>를 공용으로 뽑은 것과 같은 이유다.
+        ///
+        /// 펜스 단위로 도는 이유는 <see cref="CleanedSqlFences"/>에 있다 - 문서 전체를 한 번에
+        /// 지우면 산문의 짝 없는 아포스트로피 하나가 뒤따르는 펜스를 통째로 비워 검사를 끈다.
+        /// </summary>
+        private static bool CreatesRowIn(string markdown, string bare)
+        {
+            var pattern = $@"(INSERT\s+INTO|MERGE)\s+{QualifiedTableNameFragment(bare)}";
+            foreach (var (cleaned, _) in CleanedSqlFences(markdown))
+            {
+                if (Regex.IsMatch(cleaned, pattern, RegexOptions.IgnoreCase)) return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1294,7 +1318,6 @@ namespace ReSet.Core.Services
 
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
                 var updates = false;
-                var inserts = false;
 
                 foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
                 {
@@ -1305,24 +1328,17 @@ namespace ReSet.Core.Services
                     var updateAlternatives = new List<string> { QualifiedTableNameFragment(bare) };
                     updateAlternatives.AddRange(aliases.Select(a => Regex.Escape(a) + @"\b"));
 
-                    if (!updates && Regex.IsMatch(
+                    if (Regex.IsMatch(
                         cleaned,
                         $@"UPDATE\s+(?:{string.Join("|", updateAlternatives)})",
                         RegexOptions.IgnoreCase))
                     {
                         updates = true;
-                    }
-
-                    if (!inserts && Regex.IsMatch(
-                        cleaned,
-                        $@"(INSERT\s+INTO|MERGE)\s+{QualifiedTableNameFragment(bare)}",
-                        RegexOptions.IgnoreCase))
-                    {
-                        inserts = true;
+                        break;
                     }
                 }
 
-                if (!updates || inserts) continue;
+                if (!updates || CreatesRowIn(stepMarkdown, bare)) continue;
 
                 result.Errors.Add(
                     $"{step.Code} 섹션이 `{table.Name}`을 UPDATE만 하고 자기 행을 만드는 지점이 " +
@@ -1330,6 +1346,54 @@ namespace ReSet.Core.Services
                     "UPDATE하는 계약입니다. 생성 없이 UPDATE만 하면 0행이 갱신되어, @@ROWCOUNT를 " +
                     "검사하는 경로는 정상 실행에서도 상시 실패하고 검사하지 않는 경로는 완료 표시 " +
                     "없이 조용히 지나갑니다.");
+            }
+        }
+
+        /// <summary>
+        /// 실행 행을 만들 책임이 있는 단계가 실제로 그 행을 만드는지 본다.
+        ///
+        /// [왜 단계 검사에도 있어야 하는가 - POQSettleProc17 실측]
+        /// 이 계약은 <see cref="CheckBatchRunRowCreation"/>이 문서 전체를 보고 이미
+        /// 검사한다. 그런데 통합 검사는 "계획서 전체에 만드는 지점이 없다"고만 말할 수
+        /// 있고 어느 단계가 고쳐야 하는지 지목하지 못한다. 단계 본문은 단계마다 독립
+        /// 호출로 생성되므로, 지목이 없으면 그 요구가 어느 재생성 프롬프트에도 실리지
+        /// 않는다 - 실제로 L1 자가 수정 3회가 전부 같은 오류 1건으로 끝났다.
+        /// 여기서 담당 단계의 <c>Errors</c>에 넣어야 <see cref="StepValidationResult.SuggestedPromptFix"/>
+        /// → floorFeedback 경로를 타고 그 단계의 다음 시도에 요구가 전달된다.
+        ///
+        /// 담당 판정은 <see cref="BatchControlContract.ResolveRowCreators"/>가 하고 호출부가
+        /// 결과를 넘긴다 - 이 검사는 단계 하나만 보므로 자기가 담당인지 스스로 알 수 없다.
+        /// 넘어온 것이 없으면 검사하지 않는다: 담당이 없는 목차는 계약을 쓰지 않는
+        /// Job일 수 있고, 그 자리는 통합 검사가 백스톱으로 덮는다.
+        ///
+        /// 판정 재료는 <see cref="CleanedSqlFences"/>가 내는 펜스별 사본이다. 문서 전체를
+        /// 한 번에 지우면 산문의 짝 없는 아포스트로피 하나가 뒤따르는 펜스를 통째로
+        /// 공백으로 만들어 이 검사를 아무 신호 없이 꺼버린다(통합 검사에서 실행 재현).
+        /// 이름 대조는 <see cref="QualifiedTableNameFragment"/>로 통일한다 - 같은 문제를
+        /// 두 정규식이 각자 풀면 한쪽만 고쳐질 때 다른 쪽이 뒤에 남는다.
+        /// </summary>
+        private static void CheckFirstStepRowCreation(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyCollection<string>? ownedTables,
+            StepValidationResult result)
+        {
+            if (ownedTables == null || ownedTables.Count == 0) return;
+
+            foreach (var tableName in ownedTables)
+            {
+                var table = BatchControlContract.Find(tableName);
+                if (table == null) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                if (CreatesRowIn(stepMarkdown, bare)) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션에 `{table.Name}` 행을 만드는 INSERT가 없습니다. " +
+                    $"이 테이블을 대상으로 선언한 첫 단계가 {step.Code}이므로 실행 행을 발급할 책임이 " +
+                    "이 단계에 있습니다. 생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 " +
+                    "존재하지 않습니다. INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 " +
+                    "넘기십시오.");
             }
         }
 
@@ -4128,27 +4192,18 @@ namespace ReSet.Core.Services
                 var fragment = QualifiedTableNameFragment(bare);
 
                 var mentioned = false;
-                var inserted = false;
 
                 foreach (var (cleaned, _) in CleanedSqlFences(markdown))
                 {
-                    if (!mentioned && Regex.IsMatch(
-                        cleaned, $@"\b{fragment}", RegexOptions.IgnoreCase))
+                    if (Regex.IsMatch(cleaned, $@"\b{fragment}", RegexOptions.IgnoreCase))
                     {
                         mentioned = true;
-                    }
-
-                    if (!inserted && Regex.IsMatch(
-                        cleaned,
-                        $@"(INSERT\s+INTO|MERGE)\s+{fragment}",
-                        RegexOptions.IgnoreCase))
-                    {
-                        inserted = true;
+                        break;
                     }
                 }
 
                 if (!mentioned) continue;
-                if (inserted) continue;
+                if (CreatesRowIn(markdown, bare)) continue;
 
                 var message =
                     $"계획서 전체에 `{table.Name}` 행을 만드는 지점이 없습니다. " +

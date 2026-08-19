@@ -27,7 +27,10 @@ namespace ReSet.Core.Services
     /// </summary>
     public enum ControlRowOrigin
     {
-        /// <summary>단계 목록의 첫 단계가 INSERT하며 RunId를 발급한다.</summary>
+        /// <summary>
+        /// 이 테이블을 대상으로 선언한 첫 단계가 INSERT하며 RunId를 발급한다.
+        /// 위치가 아니라 대상 보유로 정하는 이유는 <see cref="BatchControlContract.ResolveRowCreators"/>에 있다.
+        /// </summary>
         FirstStepInserts,
 
         /// <summary>각 단계가 시작 시 자기 행을 INSERT한 뒤 종료 시 UPDATE한다.</summary>
@@ -160,6 +163,67 @@ namespace ReSet.Core.Services
                 string.Equals(BareName(t.Name), bare, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// 단계 목록에서 <see cref="ControlRowOrigin.FirstStepInserts"/> 테이블의 행을
+        /// 만들 책임이 어느 단계에 있는지 정한다 - 그 테이블을 대상으로 선언한 첫 단계다.
+        /// 돌려주는 것은 단계 코드 → 그 단계가 만들어야 할 테이블 이름 목록이다.
+        ///
+        /// [왜 위치가 아니라 대상 보유인가]
+        /// 실측(POQSettleProc17): 계약이 "목록의 첫 단계"라고 위치로 지목했는데 승인된
+        /// 첫 단계 S01은 대상 테이블이 없는 비변경 사전검증이었다. S01은 자기 정의를
+        /// 따라 INSERT를 쓰지 않았고, batch.BatchRun을 실제로 가진 S02는 계약을 믿고
+        /// UPDATE만 했다. 아무도 행을 만들지 않은 계획서가 세 번 연속 같은 자리에서
+        /// 반려됐다. 첫 단계를 순수 검증 단계로 두는 것은 흔한 설계이므로(Proc12·14도
+        /// 그랬다) 계약이 위치를 강제하면 목차 설계와 계속 충돌한다.
+        ///
+        /// 아무 단계도 그 테이블을 대상으로 갖지 않으면 담당을 두지 않는다 - 계약을
+        /// 쓰지 않는 Job일 수 있고, 없는 것을 결함으로 들지 않는다는 소프트 스킵
+        /// 원칙이 여기에도 적용된다. 그 자리는 문서 전체를 보는 통합 검사가 덮는다.
+        ///
+        /// <see cref="ControlRowOrigin.EachStepInserts"/> 테이블은 단계 검사가 이미 모든
+        /// 단계에 자기 행 INSERT를 요구하므로 여기서 담당을 지목하지 않는다 - 지목하면
+        /// 같은 결함이 두 경로로 두 번 보고된다.
+        /// </summary>
+        public static IReadOnlyDictionary<string, IReadOnlyList<string>> ResolveRowCreators(
+            IReadOnlyList<BatchStepPlan>? steps)
+        {
+            var creators = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            if (steps == null) return ToReadOnly(creators);
+
+            foreach (var table in Tables)
+            {
+                if (table.Origin != ControlRowOrigin.FirstStepInserts) continue;
+
+                foreach (var step in steps)
+                {
+                    if (step?.TargetTables == null || string.IsNullOrWhiteSpace(step.Code)) continue;
+
+                    // Find는 맨이름으로도 맞춰 주므로 `[batch].[BatchRun]`이나 한정자
+                    // 표기 차이가 담당 판정을 비껴가지 않는다. 이름이 다른 테이블
+                    // (`dbo.TBatchRun`)은 맨이름이 달라 매치하지 않는다.
+                    if (!step.TargetTables.Any(t => ReferenceEquals(Find(t), table))) continue;
+
+                    if (!creators.TryGetValue(step.Code, out var owned))
+                    {
+                        owned = new List<string>();
+                        creators[step.Code] = owned;
+                    }
+
+                    owned.Add(table.Name);
+                    break;
+                }
+            }
+
+            return ToReadOnly(creators);
+        }
+
+        private static IReadOnlyDictionary<string, IReadOnlyList<string>> ToReadOnly(
+            Dictionary<string, List<string>> source) =>
+            source.ToDictionary(
+                pair => pair.Key,
+                pair => (IReadOnlyList<string>)pair.Value,
+                StringComparer.OrdinalIgnoreCase);
+
         private static string BareName(string name)
         {
             var idx = name.LastIndexOf('.');
@@ -217,7 +281,8 @@ namespace ReSet.Core.Services
                 var origin = table.Origin switch
                 {
                     ControlRowOrigin.FirstStepInserts =>
-                        "The FIRST step in the step list INSERTs this row; RunId is issued by IDENTITY, " +
+                        "The FIRST step that lists this table as a target INSERTs this row; " +
+                        "RunId is issued by IDENTITY, " +
                         "so read it back with SCOPE_IDENTITY() and pass it to every later step. " +
                         "NEVER compute a RunId yourself. Later steps UPDATE this row.",
                     ControlRowOrigin.EachStepInserts =>

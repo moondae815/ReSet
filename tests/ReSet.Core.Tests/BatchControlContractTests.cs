@@ -138,4 +138,88 @@ public sealed class BatchControlContractTests
     {
         Assert.Contains("IDENTITY", BatchControlContract.RenderPromptTable());
     }
+
+    // 계약이 담당을 위치("목록의 첫 단계")로 지목하면 첫 단계를 비변경 사전검증으로
+    // 두는 흔한 목차 설계와 충돌한다 - 실측에서 그 충돌로 세 회차가 반려됐다.
+    // 프롬프트 표의 문구와 ResolveRowCreators의 판정이 같은 규칙을 말해야 한다.
+    [Fact]
+    public void RenderPromptTable_AssignsTheRunRowToTheFirstStepThatTargetsIt()
+    {
+        var table = BatchControlContract.RenderPromptTable();
+
+        Assert.Contains("FIRST step that lists this table as a target", table);
+        Assert.DoesNotContain("FIRST step in the step list", table);
+    }
+
+    // === 실행 행 생성 담당 단계 판정 =========================================
+    //
+    // 실측(POQSettleProc17): 계약이 "목록의 첫 단계"라고 위치로 지목했는데 승인된
+    // 첫 단계 S01은 대상 테이블이 없는 비변경 사전검증이었다. S01은 자기 정의를
+    // 따라 INSERT를 쓰지 않았고, batch.BatchRun을 실제로 가진 S02는 계약을 믿고
+    // UPDATE만 했다. 아무도 행을 만들지 않은 계획서가 세 번 연속으로 같은 자리에서
+    // 반려됐다. 담당을 위치가 아니라 대상 보유로 정하면 두 지시가 어긋나지 않는다.
+
+    private static BatchStepPlan Plan(string code, params string[] targetTables) => new(
+        Code: code,
+        Name: code + " 단계",
+        LegacyProcedures: Array.Empty<string>(),
+        TargetTables: targetTables,
+        ErrorCodes: Array.Empty<string>(),
+        Chunkable: false,
+        SchemaTables: Array.Empty<string>());
+
+    [Fact]
+    public void ResolveRowCreators_NamesTheFirstStepThatTargetsTheTable()
+    {
+        var steps = new[]
+        {
+            Plan("S01"),
+            Plan("S02", "batch.BatchRun", "batch.BatchRunLock"),
+            Plan("S17", "batch.BatchRun")
+        };
+
+        var creators = BatchControlContract.ResolveRowCreators(steps);
+
+        Assert.Equal(new[] { "batch.BatchRun" }, creators["S02"]);
+    }
+
+    // 뒤 단계가 같은 테이블을 대상으로 가져도 그것은 UPDATE 지점이다. 담당이
+    // 둘이면 재생성 프롬프트가 두 자리에 INSERT를 요구해 실행 단위가 갈라진다.
+    [Fact]
+    public void ResolveRowCreators_DoesNotNameALaterStepThatAlsoTargetsTheTable()
+    {
+        var steps = new[]
+        {
+            Plan("S02", "batch.BatchRun"),
+            Plan("S17", "batch.BatchRun")
+        };
+
+        var creators = BatchControlContract.ResolveRowCreators(steps);
+
+        Assert.False(creators.ContainsKey("S17"));
+    }
+
+    // 아무 단계도 이 테이블을 대상으로 갖지 않으면 담당이 없다 - 계약을 쓰지 않는
+    // Job일 수 있으므로 아무 단계에도 의무를 지우지 않는다. 통합 검사가 백스톱이다.
+    [Fact]
+    public void ResolveRowCreators_NamesNoStepWhenNoneTargetsTheTable()
+    {
+        var steps = new[]
+        {
+            Plan("S01"),
+            Plan("S02", "SETTLE_POQ_DB.dbo.TBatchRun")
+        };
+
+        Assert.Empty(BatchControlContract.ResolveRowCreators(steps));
+    }
+
+    // 각 단계가 자기 행을 만드는 테이블은 단계 검사가 이미 전 단계에 요구한다.
+    // 여기서 또 담당을 지목하면 같은 결함이 두 경로로 두 번 보고된다.
+    [Fact]
+    public void ResolveRowCreators_IgnoresTablesEachStepInsertsForItself()
+    {
+        var steps = new[] { Plan("S02", "batch.BatchStepJournal", "batch.BatchCheckpoint") };
+
+        Assert.Empty(BatchControlContract.ResolveRowCreators(steps));
+    }
 }
