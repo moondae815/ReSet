@@ -74,6 +74,11 @@ namespace ReSet.Core.Services
                 {
                     TargetTable = Canonicalize(mapping.TargetTable, database, defaultSchema),
                     StatementOrdinal = mapping.StatementOrdinal,
+                    // 2026-08-20 실측: 이 한 줄이 없어 산출물의 UPDATE 절 제목이 전건
+                    // "갱신 0"이었다. 파서는 1부터 옳게 매기는데 여기서 잃었고, 파서
+                    // 단독 테스트는 정규화를 지나지 않아 통과해 8/18 수정 뒤에도
+                    // 프로덕션이 그대로였다.
+                    GlobalStatementOrdinal = mapping.GlobalStatementOrdinal,
                     SourceLine = mapping.SourceLine,
                     FromClauseText = mapping.FromClauseText,
                     // 원문 표기다 - canonicalize하면 "원본이 몇 부로 썼는가"를 잃는다.

@@ -481,7 +481,12 @@ namespace ReSet.Core.Services
             var errorAssignments = new List<string>();
             try
             {
-                var ddlLines = spDef.DdlText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                // [빈 줄을 버리지 않는 이유 - 2026-08-20 실측] 예전엔 RemoveEmptyEntries로
+                // 잘라 세어, 빈 줄 개수만큼 번호가 밀린 채 프롬프트에 나갔다
+                // (STAT_PGCOLLECT_INS: 실제 27·116 → 알린 값 20·104, 그 SP의 빈 줄이 14개).
+                // LLM은 받은 번호를 충실히 옮기므로 명세서 앵커가 원본과 어긋났다.
+                // 줄 번호를 매기는 스캔은 원본의 줄을 하나도 버리면 안 된다.
+                var ddlLines = spDef.DdlText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
                 int lineNum = 1;
                 foreach (var line in ddlLines)
                 {

@@ -292,5 +292,31 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(42, Assert.Single(normalized.AstUpdateMappings).SourceLine);
         }
+
+        [Fact]
+        public void Normalize_ShouldPreserveTheGlobalStatementOrdinal()
+        {
+            // 2026-08-20 실측: 파서는 GlobalStatementOrdinal을 1부터 옳게 매기는데
+            // (SqlStaticParserTests.Analyze_UpdatesOnDifferentlyQualifiedTargets_...가
+            // 그것을 증명한다) 산출물의 절 제목은 전건 "갱신 0"이었다. 원인이 이 복사다 -
+            // 다른 필드는 전부 옮기면서 이 필드만 빠뜨렸다.
+            //
+            // 파서 단독 테스트는 정규화를 지나지 않아 통과했다. 그래서 이 테스트는
+            // 반드시 Normalize를 통과하는 값으로 확인한다.
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping
+            {
+                TargetTable = "dbo.T",
+                StatementOrdinal = 1,
+                GlobalStatementOrdinal = 7,
+                SourceLine = 42
+            };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "C", SourceExpression = "1" });
+            analysis.AstUpdateMappings.Add(mapping);
+
+            var normalized = StaticAnalysisNormalizer.Normalize(analysis, "DB", "dbo");
+
+            Assert.Equal(7, Assert.Single(normalized.AstUpdateMappings).GlobalStatementOrdinal);
+        }
     }
 }
