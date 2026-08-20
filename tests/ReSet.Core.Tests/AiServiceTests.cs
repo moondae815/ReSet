@@ -253,6 +253,35 @@ END",
             Assert.Contains("as a filter", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
         }
 
+        // [Task 3 수정 라운드 1/5 - R3 재판정 자리 5] Critic이 "UDF가 상세히
+        // 기술됐는지 확인하라"고 채점하면, 새 계약(함수 동작 서술 금지)을 지킨
+        // 명세서가 오히려 감점되고 다음 라운드 피드백이 서술을 되돌린다 - 리뷰어도
+        // 못 보고 지나간 자리였다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_ProcedurePrompt_ShouldNotScoreUdfBehaviourDescription()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = dbo.UF_X(C) END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\",\\\"ScoreAccuracy\\\":10,\\\"ScoreCrud\\\":10,\\\"ScoreInterface\\\":10,\\\"ScoreException\\\":10,\\\"ScoreReadability\\\":10}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            IAiService service = new AiService(new OpenAiClient(new HttpClient(handler), "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            await service.ReviewSpecificationAsync(spDef, "## 개요");
+
+            // System.Text.Json 기본 인코더가 아포스트로피를 \\u0027로 이스케이프하므로
+            // 단언 문자열에는 아포스트로피를 넣지 않는다(예: "UDF's" 대신 "UDF"까지만).
+            Assert.DoesNotContain("Verify if temp tables, UDFs, and Linked Servers are factually detailed", handler.LastRequestBody);
+            Assert.Contains("verify only that its calling location and arguments are documented", handler.LastRequestBody);
+            Assert.Contains("do NOT require or reward a description of the UDF", handler.LastRequestBody);
+            // temp table·Linked Server 판정은 그대로 남아야 한다.
+            Assert.Contains("Verify if temp tables and Linked Servers are factually detailed", handler.LastRequestBody);
+        }
+
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Success_ReturnsContent()
         {

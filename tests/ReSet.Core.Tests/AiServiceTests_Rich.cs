@@ -1564,7 +1564,12 @@ END",
 
             Assert.DoesNotContain(DmlScopeExtractor.ReferencedFunctionTableHeading, body);
             Assert.DoesNotContain("analyze its logic", body);
-            Assert.Contains("Do NOT describe what any referenced User Defined Function (UDF) does.", body);
+            Assert.Contains("Do NOT describe what any referenced User Defined Function (UDF) does", body);
+            // 수정 라운드 1/5(R3 재판정) - A에도 D와 같은 핵심 리터럴 구절이 있어야 한다.
+            // hasUdf(StaticAnalysis)와 표(ExtractFunctionCalls)는 독립적으로 실패할 수
+            // 있으므로, 표가 없을 때도 이 리터럴이 남아 있어야 계약이 문서 전체에서
+            // 하나도 안 남는 사태를 막는다.
+            Assert.Contains("do NOT describe any function's behaviour", body);
             Assert.Contains("belongs only in that function's own Spec.md", body);
         }
 
@@ -1701,6 +1706,93 @@ END",
             Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, result.SystemPrompt);
             Assert.Contains("../../../Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md", result.SystemPrompt);
             Assert.Contains("../../../External/SETTLE_CARD_DB/Functions/dbo.UF_GET_COMM4PG/docs/Spec.md", result.SystemPrompt);
+        }
+
+        // ---------------------------------------------------------------
+        // 수정 라운드 1/5(R3 재판정) - 컨트롤러가 grep "UDF|User Defined Function"
+        // 전수 검색으로 확정한 완결 목록 중 나머지 세 자리(체크리스트 둘, CRUD
+        // 규칙 2). Critic 프롬프트(:2556)는 AiServiceTests.cs에서 덮는다.
+        // ---------------------------------------------------------------
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_Checklist_ShouldAskForCallingLocationNotBusinessRule()
+        {
+            // 자리 2(:538) - "활용 비즈니스 규칙을 명확히 기재하셨습니까?"는 서술을
+            // 요구하는 체크리스트였다. 새 계약은 호출 위치·인자만 묻는다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            spDef.StaticAnalysis.ReferencedFunctions.Add("UF_X");
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+
+            Assert.DoesNotContain("활용 비즈니스 규칙을 명확히 기재하셨습니까", result.UserPrompt);
+            Assert.Contains("호출 위치와 인자를 명확히 기재하셨습니까", result.UserPrompt);
+            Assert.Contains("동작·반환값 서술은 금지됩니다", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_Checklist_ShouldAskForCallingLocationNotBusinessRule()
+        {
+            // 자리 3(:2345) - 같은 체크리스트의 구역 분할 경로 사본.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            spDef.StaticAnalysis.ReferencedFunctions.Add("UF_X");
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(spDef, "CrudAnalysis", "rules", null);
+
+            Assert.DoesNotContain("활용 비즈니스 규칙을 명확히 기재하셨습니까", result.UserPrompt);
+            Assert.Contains("호출 위치와 인자를 명확히 기재하셨습니까", result.UserPrompt);
+            Assert.Contains("동작·반환값 서술은 금지됩니다", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_Rule2_ShouldNotDemandComputationDocumentation()
+        {
+            // 자리 4(:2223) - 내가 처음 범위 밖으로 보고했던 자리. 앞 문장(부재 오기
+            // 금지)은 그대로 두고 뒤 문장("Analyze the exact computation ... document
+            // it fully")만 계약에 맞게 바꿨는지 확인한다. hasUdf와 무관하게 항상 렌더되는
+            // 고정 규칙이므로 StaticAnalysis 없이도 검증할 수 있다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(spDef, "CrudAnalysis", "rules", null);
+            var body = result.SystemPrompt;
+
+            // 부재 오기 금지 문장은 살아 있어야 한다.
+            Assert.Contains("You must NEVER skip or declare a referenced UDF as 'not called'", body);
+            // 계산식 문서화 요구는 사라져야 한다.
+            Assert.DoesNotContain("Analyze the exact computation", body);
+            Assert.DoesNotContain("document it fully", body);
+            Assert.Contains("do NOT describe any function's behaviour or document its computation", body);
         }
     }
 }

@@ -332,7 +332,7 @@ namespace ReSet.Core.Services
                 // 썼다 - UF_GET_INCVTAXRATE를 다섯 SP가 "0이면 0.1…"부터 "계산에
                 // 사용합니다"까지 제각각으로 서술했다. 요약을 정확하게 만드는 대신
                 // 요약 자체를 없앤다.
-                rules.Add($"{ruleIndex++}. Do NOT describe what any referenced User Defined Function (UDF) does. Its behaviour - return value, branches, filters, defaults, rounding - belongs only in that function's own Spec.md, which the machine-derived 참조 함수 table links to. State where each function is called and with which arguments; say nothing about what it returns.");
+                rules.Add($"{ruleIndex++}. Do NOT describe what any referenced User Defined Function (UDF) does - do NOT describe any function's behaviour: return value, branches, filters, defaults, rounding. That belongs only in that function's own Spec.md, which the machine-derived 참조 함수 table links to. State where each function is called and with which arguments; say nothing about what it returns.");
             }
 
             rules.Add($"{ruleIndex++}. Include a Mermaid Flowchart diagram visualizing the business logic flow: ");
@@ -535,7 +535,7 @@ namespace ReSet.Core.Services
             }
             else
             {
-                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 호출 위치와 인자를 명확히 기재하셨습니까? (동작·반환값 서술은 금지됩니다 - 해당 함수의 Spec.md가 단일 진실의 원천입니다.)");
             }
 
             if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
@@ -2220,7 +2220,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     "[Rules]",
                     "1. The document must use only one H2 header: `## CRUD 분석`. Terminate immediately after writing this section. Do not include any other H2 headers.",
                     "2. State all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists.",
-                    "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. Analyze the exact computation (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) and document it fully.",
+                    "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. State its calling location and arguments (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) - do NOT describe any function's behaviour or document its computation; that belongs only in the function's own Spec.md.",
                     "   - For INSERT/UPDATE operations, you must list EVERY single column mapped in the INSERT/UPDATE statement (e.g. CLVT, PGVT, CLTOTAL, etc.). Omission of any target column is considered a critical failure.",
                     "   - You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.",
                     "   - You must separate SELECT tables into individual rows. If the source JSON groups multiple tables in one string, you MUST manually separate them into distinct rows in the Markdown table, mapping only the specific columns referenced for each respective table.",
@@ -2342,7 +2342,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
                 else
                 {
-                    checklistSb.AppendLine($"- [ ] 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+                    checklistSb.AppendLine($"- [ ] 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 호출 위치와 인자를 명확히 기재하셨습니까? (동작·반환값 서술은 금지됩니다 - 해당 함수의 Spec.md가 단일 진실의 원천입니다.)");
                 }
                 if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
                 {
@@ -2553,7 +2553,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
-   - Verify if temp tables, UDFs, and Linked Servers are factually detailed (or stated explicitly as not used).
+   - Verify if temp tables and Linked Servers are factually detailed (or stated explicitly as not used). For a referenced UDF, verify only that its calling location and arguments are documented - do NOT require or reward a description of the UDF's own behaviour, return value, or computation; that belongs only in the function's own Spec.md.
 3. Integration and Interface Definition (ScoreInterface):
    - Verify if parameter names, types, nullability (use '명시 없음' if undefined), and descriptions are fully detailed in a table.
    - Check if result set (Rowset) return behavior is explicitly stated.
