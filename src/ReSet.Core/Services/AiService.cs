@@ -325,7 +325,14 @@ namespace ReSet.Core.Services
             int ruleIndex = 3;
             if (hasUdf)
             {
-                rules.Add($"{ruleIndex++}. If the source code of a referenced User Defined Function (UDF) is provided, analyze its logic. If the UDF DDL is missing, output 'UDF definition not provided; detailed logic excluded from analysis' and state its calling location and purpose based on facts.");
+                // [왜 "분석하라"에서 "서술하지 마라"로 뒤집었는가 - 2026-08-20 축 A 교차 대조]
+                // 옛 지시는 "UDF 소스가 있으면 그 로직을 분석하라"였고, 함수 DDL 전문이
+                // 실제로 프롬프트에 들어갔다. 그런데도 EXCEPTION_PROC의 UDF 요약 표
+                // 10행 중 8행이 결함이었고 🔴이 5건이었다. 같은 함수를 SP마다 다르게
+                // 썼다 - UF_GET_INCVTAXRATE를 다섯 SP가 "0이면 0.1…"부터 "계산에
+                // 사용합니다"까지 제각각으로 서술했다. 요약을 정확하게 만드는 대신
+                // 요약 자체를 없앤다.
+                rules.Add($"{ruleIndex++}. Do NOT describe what any referenced User Defined Function (UDF) does - do NOT describe any function's behaviour: return value, branches, filters, defaults, rounding. That belongs only in that function's own Spec.md, which the machine-derived 참조 함수 table links to. State where each function is called and with which arguments; say nothing about what it returns.");
             }
 
             rules.Add($"{ruleIndex++}. Include a Mermaid Flowchart diagram visualizing the business logic flow: ");
@@ -409,6 +416,20 @@ namespace ReSet.Core.Services
             if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 rules.AddRange(BuildSetPredicateTableLines(setPredicates));
+            }
+
+            // 참조 함수 표도 같은 이유로 기계가 채운다 - 2026-08-20 축 A 교차 대조에서
+            // 이 자리를 LLM이 쓰던 시절 10행 중 8행이 결함이었다(🔴 5건).
+            var knownFunctionNames = (spDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .Select(d => d.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+
+            var functionCalls = DmlScopeExtractor.ExtractFunctionCalls(spDef.DdlText, knownFunctionNames);
+            if (functionCalls.Count > 0)
+            {
+                rules.AddRange(BuildReferencedFunctionTableLines(functionCalls, spDef));
             }
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
@@ -514,7 +535,7 @@ namespace ReSet.Core.Services
             }
             else
             {
-                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+                checklistSb.AppendLine($"- [ ] ## CRUD 분석 섹션에 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 호출 위치와 인자를 명확히 기재하셨습니까? (동작·반환값 서술은 금지됩니다 - 해당 함수의 Spec.md가 단일 진실의 원천입니다.)");
             }
 
             if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
@@ -909,6 +930,108 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 「참조 함수」 표를 렌더한다. 이 절은 조립기가 채우고 LLM은 손대지 않는다.
+        ///
+        /// [왜 동작 서술 칸이 없는가 - 2026-08-20 축 A 교차 대조]
+        /// 이 자리에 "실제 로직" 칸이 있던 시절 EXCEPTION_PROC의 10행 중 8행이
+        /// 결함이었고 🔴이 5건이었다(USESTATE=0 술어 누락, IIF 분기 누락, 기본값 0
+        /// 반환 누락). 함수 DDL 전문이 이미 프롬프트에 있었는데도 그랬다.
+        /// 그래서 서술 칸 자체를 없애고 함수 Spec.md로 링크만 건다.
+        /// </summary>
+        private static List<string> BuildReferencedFunctionTableLines(
+            IReadOnlyList<ReferencedFunctionCallFact> calls,
+            SpDefinition spDef)
+        {
+            var functionDeps = (spDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .ToList();
+
+            var lines = new List<string>
+            {
+                "   [CRITICAL REFERENCED FUNCTION TABLE] The following function calls are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT add a column describing what a function does, and do NOT describe the behaviour of any function listed in this table - its return value, branches, filters, or defaults - anywhere in the document: not in this section, not in CRUD 분석, not in 로직 흐름. When a SET expression calls a function, name the call and leave it at that. The single source of truth for a function's behaviour is that function's own Spec.md, which this table links to.",
+                $"   {DmlScopeExtractor.ReferencedFunctionTableHeading}",
+                "   | 함수 | 호출 위치 | 인자 | 명세서 |",
+                "   | :--- | :--- | :--- | :--- |"
+            };
+
+            foreach (var call in calls)
+            {
+                var dep = FindFunctionDependency(functionDeps, call.QualifiedName);
+
+                var display = dep == null
+                    ? call.QualifiedName
+                    : string.IsNullOrWhiteSpace(dep.Database)
+                        ? $"{dep.Schema}.{dep.Name}"
+                        : $"{dep.Database}.{dep.Schema}.{dep.Name}";
+                var link = dep != null ? BuildFunctionSpecRelativePath(dep, spDef) : "(명세서 없음)";
+
+                lines.Add(
+                    $"   | {EscapeTableCell(display)} | {call.Operation} {call.StatementOrdinal} (라인 {call.Line}) | "
+                    + $"{EscapeTableCell(call.CallExpression)} | {link} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
+        /// 「참조 함수」 표에서 호출문의 한정명(<paramref name="qualifiedName"/>)에 대응하는
+        /// 의존성 항목을 고른다.
+        ///
+        /// [I2 동행 수정 - R7, 2026-08-20] 예전엔 마지막 조각(함수 이름)만 대조했다 -
+        /// 크로스 DB 함수(예: `SETTLE_CARD_DB.dbo.UF_GET_COMM4PG`)와 로컬 동명 함수가
+        /// 있으면 잘못 짝지어질 여지가 있었고, I2가 `dep.Database`를 표시에 쓰기
+        /// 시작하면서 그 오짝이 표시 문구까지 잘못 낸다(로컬 함수를 크로스 DB로,
+        /// 혹은 그 반대로). 그래서 호출문에 한정자가 있으면(2부/3부) 그 한정명을
+        /// 의존성의 `Database.Schema.Name` 또는 `Schema.Name`과 먼저 정확히 대조하고,
+        /// 한정자가 없을 때만(또는 정확한 대조가 실패했을 때만) 마지막 조각으로
+        /// 대조한다.
+        /// </summary>
+        private static DependencyInfo? FindFunctionDependency(
+            IReadOnlyList<DependencyInfo> functionDeps, string qualifiedName)
+        {
+            if (qualifiedName.Contains('.', StringComparison.Ordinal))
+            {
+                var qualifiedMatch = functionDeps.FirstOrDefault(d =>
+                    (!string.IsNullOrWhiteSpace(d.Database)
+                        && string.Equals($"{d.Database}.{d.Schema}.{d.Name}", qualifiedName, StringComparison.OrdinalIgnoreCase))
+                    || string.Equals($"{d.Schema}.{d.Name}", qualifiedName, StringComparison.OrdinalIgnoreCase));
+                if (qualifiedMatch != null)
+                {
+                    return qualifiedMatch;
+                }
+            }
+
+            return functionDeps.FirstOrDefault(d =>
+                string.Equals(LastSegment(d.Name), LastSegment(qualifiedName), StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>한정명의 마지막 조각만 낸다(`SETTLE_CARD_DB.dbo.UF_X` → `UF_X`).</summary>
+        private static string LastSegment(string? qualified) =>
+            string.IsNullOrWhiteSpace(qualified)
+                ? string.Empty
+                : qualified.Split('.').Last();
+
+        /// <summary>
+        /// SP 명세서(`output/Procedures/[SP]/docs/Spec.md`)에서 함수 명세서로 가는
+        /// 상대 경로를 만든다. 「참조 코드 객체」 절이 이미 쓰는 것과 같은 형태다.
+        /// 로컬 함수는 `output/Functions/`, 다른 DB의 함수는
+        /// `output/External/[DB]/Functions/` 아래에 있다.
+        /// </summary>
+        private static string BuildFunctionSpecRelativePath(DependencyInfo dep, SpDefinition spDef)
+        {
+            var isExternal =
+                !string.IsNullOrWhiteSpace(dep.Database) &&
+                !string.Equals(dep.Database, spDef.ObjectKey?.Database, StringComparison.OrdinalIgnoreCase);
+
+            var folder = isExternal
+                ? $"../../../External/{dep.Database}/Functions"
+                : "../../../Functions";
+
+            return $"[Spec]({folder}/{dep.Schema}.{dep.Name}/docs/Spec.md)";
+        }
+
+        /// <summary>
         /// 파생 테이블 정의 표를 도입하는 규칙 문장. DmlScopeTableIntroText와 같은 이유로
         /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
         /// 위험을 없앤다.
@@ -1033,6 +1156,20 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (setPredicates.Count > 0 && dmlScopeFacts.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", BuildSetPredicateTableLines(setPredicates));
+            }
+
+            // 참조 함수 표도 같은 이유로 기계가 채운다 - 함수 명세서도 다른 함수를
+            // 호출할 수 있다(예: 스칼라 함수가 헬퍼 함수를 부른다). 이 경로를 빠뜨리면
+            // 함수 명세서에서만 함수 서술 금지 계약이 뚫린다.
+            var knownFunctionNamesForFunctionDef = (functionDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .Select(d => d.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+            var functionCallsForFunctionDef = DmlScopeExtractor.ExtractFunctionCalls(functionDef.DdlText, knownFunctionNamesForFunctionDef);
+            if (functionCallsForFunctionDef.Count > 0)
+            {
+                systemPrompt += "\n\n" + string.Join("\n", BuildReferencedFunctionTableLines(functionCallsForFunctionDef, functionDef));
             }
 
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
@@ -1671,7 +1808,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
 3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission. For 'SourceExpression', you MUST extract the EXACT string/formula from the SQL or use the exact expression from `<static-analysis-metadata>`. Do NOT hallucinate, summarize, or invent values (e.g., do not replace a variable with `CAST(0 AS INT)` unless it explicitly exists in the SQL branch).
 4. If there are UNION/UNION ALL blocks, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
-5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
+5. Identify all referenced User Defined Functions (UDFs) by name and calling location only. Do NOT detail their formulas, return values, or internal logic - that belongs in each function's own specification, not here.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
 7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
 8. If multiple tables are joined in a single SELECT query, you MUST create a separate JSON object in the `SelectTables` array for EACH individual physical table. Do NOT group them together like ""TableA, TableB"".
@@ -1847,7 +1984,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 2. Do NOT wrap the JSON output in markdown code blocks (e.g. do NOT use ```json ... ```). Output the raw JSON text directly.
 3. Every target column in INSERT/UPDATE statements MUST be listed in the mapping lists without omission. For 'SourceExpression', you MUST extract the EXACT string/formula from the SQL or use the exact expression from `<static-analysis-metadata>`. Do NOT hallucinate, summarize, or invent values.
 4. If there are UNION/UNION ALL blocks in the DML statements, or multiple IF branches updating/deleting the same table, separate them by setting a distinct 'BranchName' (e.g. '전체거래건', '부분취소건', '환불건') and detail their mappings separately.
-5. Identify all referenced User Defined Functions (UDFs) and detail their formulas, especially for calculations like CLVT and PGVT.
+5. Identify all referenced User Defined Functions (UDFs) by name and calling location only. Do NOT detail their formulas, return values, or internal logic - that belongs in each function's own specification, not here.
 6. The output must be written in Korean for descriptive string fields (like Purpose, BusinessRole, Description, StepDescription).
 7. Ensure all table names, column names, parameter names are spelled exactly as in the DDL. No abbreviations.
 8. If multiple tables are joined in a single SELECT query, you MUST create a separate JSON object in the `SelectTables` array for EACH individual physical table. Do NOT group them together like ""TableA, TableB"".
@@ -2118,7 +2255,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     "[Rules]",
                     "1. The document must use only one H2 header: `## CRUD 분석`. Terminate immediately after writing this section. Do not include any other H2 headers.",
                     "2. State all physical tables affected by SELECT, INSERT, UPDATE, DELETE in a clear Markdown Table format. Do NOT use bullet points or lists.",
-                    "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. Analyze the exact computation (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) and document it fully.",
+                    "   - You must NEVER skip or declare a referenced UDF as 'not called' or 'excluded from analysis' if it is present in the dependency list and used in the DDL. State its calling location and arguments (e.g., UF_GET_ROUND4VAT, UF_GET_INCVTAXRATE) - do NOT describe any function's behaviour or document its computation; that belongs only in the function's own Spec.md.",
                     "   - For INSERT/UPDATE operations, you must list EVERY single column mapped in the INSERT/UPDATE statement (e.g. CLVT, PGVT, CLTOTAL, etc.). Omission of any target column is considered a critical failure.",
                     "   - You must separate SELECT tables, INSERT tables, UPDATE tables, and DELETE tables into their own respective sub-sections with separate Markdown tables. Do not mix them in a single table.",
                     "   - You must separate SELECT tables into individual rows. If the source JSON groups multiple tables in one string, you MUST manually separate them into distinct rows in the Markdown table, mapping only the specific columns referenced for each respective table.",
@@ -2133,7 +2270,11 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 int rIdx = 7;
                 if (hasUdf)
                 {
-                    sbRules.Add($"{rIdx++}. If the DDL of the referenced UDF is provided, analyze its operation. If missing, output 'UDF definition not provided; detailed logic excluded from analysis' along with its calling location and purpose.");
+                    // A1의 「분석하라」를 여기서도 뒤집는다 - :328(BuildSpecificationPrompts)과
+                    // 같은 이유(2026-08-20 축 A 교차 대조, 위 주석 참고)다. 이 분기가 지역
+                    // 모델의 SP 명세서 최초 생성 경로라 여기를 놓치면 지역 모델은 함수
+                    // 서술 금지 계약을 한 번도 받지 못한다.
+                    sbRules.Add($"{rIdx++}. When a referenced User Defined Function (UDF) is called, state only its calling location and arguments, and do NOT describe any function's behaviour - return value, branches, filters, defaults, or rounding - anywhere in this document. That belongs only in the function's own Spec.md, which the machine-derived 참조 함수 table links to.");
                 }
                 if (hasDynamicSql)
                 {
@@ -2183,6 +2324,22 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildSetPredicateTableLines(setPredicatesForCrud));
                 }
 
+                // 이 분기도 BuildSpecificationPrompts와 같은 참조 함수 표를 받아야 한다 -
+                // VerificationPipelineOrchestrator의 지역 모델 흐름(IsLocalProvider &&
+                // ObjectType == Procedure)은 BuildSpecificationPrompts를 전혀 호출하지
+                // 않으므로, 여기 빠뜨리면 지역 모델로 만드는 SP 명세서는 함수 서술 금지
+                // 계약을 한 번도 받지 못한다 - DmlScope·집합 술어 표와 같은 모양의 결함.
+                var knownFunctionNamesForCrud = (spDef.Dependencies ?? new List<DependencyInfo>())
+                    .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                    .Select(d => d.Name)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .ToList();
+                var functionCallsForCrud = DmlScopeExtractor.ExtractFunctionCalls(spDef.DdlText, knownFunctionNamesForCrud);
+                if (functionCallsForCrud.Count > 0)
+                {
+                    sbRules.AddRange(BuildReferencedFunctionTableLines(functionCallsForCrud, spDef));
+                }
+
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
                 // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
@@ -2220,7 +2377,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
                 else
                 {
-                    checklistSb.AppendLine($"- [ ] 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 활용 비즈니스 규칙을 명확히 기재하셨습니까?");
+                    checklistSb.AppendLine($"- [ ] 호출되는 UDF({string.Join(", ", spDef.StaticAnalysis.ReferencedFunctions)})의 호출 위치와 인자를 명확히 기재하셨습니까? (동작·반환값 서술은 금지됩니다 - 해당 함수의 Spec.md가 단일 진실의 원천입니다.)");
                 }
                 if (spDef.StaticAnalysis == null || spDef.StaticAnalysis.LinkedServerReferences.Count == 0)
                 {
@@ -2308,6 +2465,18 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 };
 
                 int rIdx = 4;
+                if (hasUdf)
+                {
+                    // I1(2026-08-20 축 A 감사, 최종 전체 브랜치 리뷰) - 이 분기(지역
+                    // 모델 경로의 「로직 흐름 요약」 생성)는 hasUdf 분기가 아예 없었다.
+                    // 그런데도 :2485의 `sectionType == "CrudAnalysis" ||
+                    // sectionType == "LogicAndVisualization"` 조건 때문에
+                    // <referenced-ddl-source-code>(UDF DDL 전문)를 그대로 받는다 -
+                    // UDF 소스를 손에 쥔 채 아무 계약도 없이 「로직 흐름」 산문을 쓰는
+                    // 셈이었다. CrudAnalysis 분기의 규칙 D(:2242, 위)와 같은 취지의
+                    // 문장을 여기도 추가해 두 분기 모두 계약을 받도록 닫는다.
+                    sbRules.Add($"{rIdx++}. When a referenced User Defined Function (UDF) is called, do NOT describe any function's behaviour - return value, branches, filters, defaults, or rounding - anywhere in this document. That belongs only in the function's own Spec.md, which the machine-derived 참조 함수 table links to.");
+                }
                 if (hasDynamicSql)
                 {
                     sbRules.Add($"{rIdx++}. If dynamic SQL is present, explain the execution and business flow purpose in the logic summary.");
@@ -2431,7 +2600,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
-   - Verify if temp tables, UDFs, and Linked Servers are factually detailed (or stated explicitly as not used).
+   - Verify if temp tables and Linked Servers are factually detailed (or stated explicitly as not used). For a referenced UDF, verify only that its calling location and arguments are documented - do NOT require or reward a description of the UDF's own behaviour, return value, or computation; that belongs only in the function's own Spec.md. Conversely, if the specification describes a referenced UDF behaviour, return value, computation, or formula anywhere in the document, that is a contract violation - report it as a defect in FeedbackComment and lower ScoreCrud accordingly.
 3. Integration and Interface Definition (ScoreInterface):
    - Verify if parameter names, types, nullability (use '명시 없음' if undefined), and descriptions are fully detailed in a table.
    - Check if result set (Rowset) return behavior is explicitly stated.

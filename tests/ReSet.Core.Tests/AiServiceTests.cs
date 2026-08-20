@@ -253,6 +253,61 @@ END",
             Assert.Contains("as a filter", handler.LastRequestBody, StringComparison.OrdinalIgnoreCase);
         }
 
+        // [Task 3 수정 라운드 1/5 - R3 재판정 자리 5] Critic이 "UDF가 상세히
+        // 기술됐는지 확인하라"고 채점하면, 새 계약(함수 동작 서술 금지)을 지킨
+        // 명세서가 오히려 감점되고 다음 라운드 피드백이 서술을 되돌린다 - 리뷰어도
+        // 못 보고 지나간 자리였다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_ProcedurePrompt_ShouldNotScoreUdfBehaviourDescription()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = dbo.UF_X(C) END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\",\\\"ScoreAccuracy\\\":10,\\\"ScoreCrud\\\":10,\\\"ScoreInterface\\\":10,\\\"ScoreException\\\":10,\\\"ScoreReadability\\\":10}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            IAiService service = new AiService(new OpenAiClient(new HttpClient(handler), "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            await service.ReviewSpecificationAsync(spDef, "## 개요");
+
+            // System.Text.Json 기본 인코더가 아포스트로피를 \\u0027로 이스케이프하므로
+            // 단언 문자열에는 아포스트로피를 넣지 않는다(예: "UDF's" 대신 "UDF"까지만).
+            Assert.DoesNotContain("Verify if temp tables, UDFs, and Linked Servers are factually detailed", handler.LastRequestBody);
+            Assert.Contains("verify only that its calling location and arguments are documented", handler.LastRequestBody);
+            Assert.Contains("do NOT require or reward a description of the UDF", handler.LastRequestBody);
+            // temp table·Linked Server 판정은 그대로 남아야 한다.
+            Assert.Contains("Verify if temp tables and Linked Servers are factually detailed", handler.LastRequestBody);
+        }
+
+        // [M6 - 2026-08-20 최종 전체 브랜치 리뷰] 위 테스트가 확인하는 중립화
+        // 문장("do NOT require or reward")은 계약 위반을 "채점하지 않는다"는
+        // 뜻이지 "결함으로 보고한다"는 뜻은 아니었다. 설계 §7이 인정한 위험
+        // ("표를 뺏어도 다른 절에서 계속 서술할 수 있다")을 잡을 유일한 피드백
+        // 고리가 Critic인데 그 힘을 쓰지 않고 있었다. 명세서가 UDF 동작을
+        // 서술하면 결함으로 보고하라는 문구가 프롬프트에 있는지 확인한다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_ProcedurePrompt_ShouldReportUdfBehaviourDescriptionAsDefect()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = dbo.UF_X(C) END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\",\\\"ScoreAccuracy\\\":10,\\\"ScoreCrud\\\":10,\\\"ScoreInterface\\\":10,\\\"ScoreException\\\":10,\\\"ScoreReadability\\\":10}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            IAiService service = new AiService(new OpenAiClient(new HttpClient(handler), "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            await service.ReviewSpecificationAsync(spDef, "## 개요");
+
+            Assert.Contains("that is a contract violation", handler.LastRequestBody);
+            Assert.Contains("report it as a defect in FeedbackComment", handler.LastRequestBody);
+        }
+
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Success_ReturnsContent()
         {

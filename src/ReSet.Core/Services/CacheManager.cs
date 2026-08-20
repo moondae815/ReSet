@@ -25,7 +25,10 @@ namespace ReSet.Core.Services
         //    파생 테이블 내부 술어). 표에 연산·범위 칸이 생겨 프롬프트 입력이 달라졌고,
         //    옛 산출물은 그 칸이 없어 L1을 통과할 수 없으므로 전부 재분석해야 한다.
         //    2026-08-19 축 A 감사에서 이 재료가 없어 새어 나간 대상 행 집합 결함이 4건이었다.
-        private const int CurrentCacheFormatVersion = 4;
+        // 5: 참조 함수 표가 조립기 산출물로 바뀌었고 함수 동작 서술이 금지되었다.
+        //    프롬프트 입력과 출력 계약이 둘 다 달라졌으므로 옛 산출물은 재분석해야 한다.
+        //    2026-08-20 축 A 교차 대조에서 이 표의 10행 중 8행이 결함이었고 🔴이 5건이었다.
+        private const int CurrentCacheFormatVersion = 5;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
