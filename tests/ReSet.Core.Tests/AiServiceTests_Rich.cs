@@ -1941,5 +1941,37 @@ END",
 
             Assert.Contains("Copy this table verbatim into `## CRUD 분석`", result.SystemPrompt);
         }
+
+        [Fact]
+        public async Task GenerateSpecification_ErrorCodeChecklist_ShouldUseRealDdlLineNumbers()
+        {
+            // 2026-08-20 실측(STAT_PGCOLLECT_INS): 체크리스트가 오류값 설정 위치를
+            // "Line 20"·"Line 104"로 알렸는데 원본의 실제 줄은 27·116이었다. 그 SP의
+            // 빈 줄이 14개이고, 스캔이 빈 줄을 버리고 세면서 번호가 그만큼 밀렸다.
+            // LLM은 받은 번호를 충실히 옮겨 명세서 앵커가 원본과 어긋났다.
+            //
+            // 아래 DDL은 SET 앞에 빈 줄을 두어 그 오프셋을 재현한다. @po_intRetVal
+            // 대입은 8행에 있다(1행이 빈 줄).
+            var ddl = "\nCREATE PROCEDURE dbo.P\n    @po_intRetVal INT OUTPUT\nAS\nBEGIN\n\n    UPDATE dbo.T SET C = 1\n    SET @po_intRetVal = -1\nEND";
+
+            var spDef = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = ddl
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+
+            // 리터럴 8로 못 박는다. 픽스처에서 다시 계산해 그 값을 단언에 끼워 넣으면
+            // 두 번째 단언이 첫 번째가 방금 고정한 것을 되풀이할 뿐이다.
+            Assert.Contains("Line 8: SET @po_intRetVal = -1", result.UserPrompt);
+        }
     }
 }

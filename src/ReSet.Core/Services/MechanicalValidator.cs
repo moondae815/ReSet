@@ -137,6 +137,7 @@ namespace ReSet.Core.Services
                     CheckDmlScopeTable(cleansed, expectations, result);
                     CheckDerivedTableDefinitions(cleansed, expectations, result);
                     CheckSetPredicates(cleansed, expectations, result);
+                    CheckReferencedFunctions(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -3068,6 +3069,42 @@ namespace ReSet.Core.Services
             literal.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
 
         /// <summary>
+        /// 「참조 함수 (기계 확정 — 수정 금지)」 표가 명세서에 실렸는지 확인한다.
+        ///
+        /// [왜 이 검사가 있는가 - 2026-08-20 최종 전체 리뷰 M1] 조립기가 이 표를
+        /// 프롬프트에 넣지만, 모델이 그것을 옮겼는지는 아무도 확인하지 않았다.
+        /// 설계가 집합 술어 표의 성공 요인으로 꼽은 넷(구조화 · 위치 · 수정 금지 계약 ·
+        /// 검증) 중 마지막 하나만 이 표에 없었다. 그래서 "조립기가 쓴다"는 결정이
+        /// 실제로는 "조립기가 넣고 복사를 요청한다"에 그쳤다.
+        /// </summary>
+        private static void CheckReferencedFunctions(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            // 호출이 없으면 조립기도 표를 내지 않는다(AiService는 functionCalls.Count > 0
+            // 일 때만 렌더한다). 그런데도 표를 요구하면 함수를 부르지 않는 SP가 영영
+            // L1을 통과하지 못한다 - 이 가드 없이 검사를 먼저 넣어 실측으로 확인했다.
+            if (expectations.ReferencedFunctionCalls.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var headingIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0,
+                line => line.Trim() == DmlScopeExtractor.ReferencedFunctionTableHeading);
+
+            if (headingIndex < 0)
+            {
+                var message =
+                    $"기계 확정 참조 함수 표가 명세서에 없습니다. `{DmlScopeExtractor.ReferencedFunctionTableHeading}` "
+                    + $"헤딩과 {expectations.ReferencedFunctionCalls.Count}개 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SetPredicateMismatch,
+                    Message = message
+                });
+            }
+        }
+
+        /// <summary>
         /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과
         /// 같은 이유로 다음 H2뿐 아니라 다음 H3에도 막힌다.
         /// </summary>
@@ -4635,6 +4672,36 @@ namespace ReSet.Core.Services
             {
                 sb.AppendLine("### 🚨 7. 기타 정적 규격 검사 에러");
                 foreach (var err in generalErrors)
+                {
+                    sb.AppendLine($"  - {err.Message}");
+                }
+                sb.AppendLine();
+            }
+
+            // 8. 위 버킷 어디에도 담기지 않은 오류
+            //
+            // [버킷 하나를 더 만들지 않고 catch-all을 쓰는 이유 - 2026-08-20 리뷰 #1]
+            // SuggestedPromptFix는 모델에 닿는 유일한 통로다(result.Errors는 사람에게만
+            // 간다). 그런데 위 일곱 버킷이 타입을 열거하는 구조라, 새 ErrorType을 쓰는
+            // 검사를 추가하면서 버킷을 안 만들면 그 오류는 <b>내용이 통째로 빠진 채</b>
+            // 머리말과 맺음말만 모델에게 간다 - 검사는 재시도 예산을 쓰면서 "형식 오류가
+            // 있었다"만 알린다. 실측: 기계 확정 표 셋(DML 범위·파생 테이블·집합 술어)이
+            // 전부 이 상태였다.
+            //
+            // 타입별 버킷을 하나 더 만들면 오늘 그 셋은 닫히지만 다음 검사가 같은 구멍에
+            // 빠진다. 열거되지 않은 것을 모두 흘려보내면 부류 자체가 닫힌다.
+            var bucketed = new[]
+            {
+                ErrorType.HeaderMissing, ErrorType.MermaidQuoteMissing, ErrorType.MermaidCliError,
+                ErrorType.UpdateMappingMissing, ErrorType.SchemaClaimFalse,
+                ErrorType.TableIdentitySplit, ErrorType.General
+            };
+            var unbucketed = DetailedErrors.FindAll(e => Array.IndexOf(bucketed, e.Type) < 0);
+            if (unbucketed.Count > 0)
+            {
+                sb.AppendLine("### 🚨 8. 기계 확정 재료 대조 실패");
+                sb.AppendLine("프롬프트가 제공한 기계 확정 표를 문서가 그대로 담지 않았습니다. 아래 지적을 그대로 반영하되, 표의 헤딩과 행을 축자로 옮기십시오.");
+                foreach (var err in unbucketed)
                 {
                     sb.AppendLine($"  - {err.Message}");
                 }

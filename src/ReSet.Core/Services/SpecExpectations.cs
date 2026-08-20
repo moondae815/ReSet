@@ -66,6 +66,17 @@ namespace ReSet.Core.Services
         public IReadOnlyList<SetPredicateFact> SetPredicates { get; init; } = Array.Empty<SetPredicateFact>();
 
         /// <summary>
+        /// DML 문장이 부르는 사용자 함수 호출. CheckReferencedFunctions가 소비한다.
+        ///
+        /// 이름 집합을 Dependencies에서 뽑는 규칙은 AiService가 프롬프트 표를 만들 때
+        /// 쓰는 것과 <b>같아야 한다</b> - 두 곳이 갈리면 모델이 표를 그대로 베껴도
+        /// L1이 틀렸다고 하는 재현 불가능한 실패가 난다(기준일 파라미터가 같은 이유로
+        /// 한 규칙을 공유하는 것과 같다).
+        /// </summary>
+        public IReadOnlyList<ReferencedFunctionCallFact> ReferencedFunctionCalls { get; init; }
+            = Array.Empty<ReferencedFunctionCallFact>();
+
+        /// <summary>
         /// UPDATE/INSERT/DELETE FROM 절 파생 테이블의 컬럼 정의. SET(또는 SELECT)
         /// 우변이 별칭.컬럼 참조에서 멈추고 그 정의를 어디에도 적지 않는 것을
         /// 막는다 - 이번 감사의 유일한 축 A 🔴(EXCEPTION_PROC의 X.PGCOMM).
@@ -130,6 +141,17 @@ namespace ReSet.Core.Services
             var derivedColumns = DerivedTableColumnExtractor.Extract(spDef.DdlText);
             var setPredicates = DmlScopeExtractor.ExtractSetPredicates(spDef.DdlText);
 
+            // AiService가 프롬프트 표를 만들 때 쓰는 것과 같은 규칙이다. 원시 SQL 타입
+            // 문자열을 여기서 분류하지 않고 SqlObjectTypeClassifier에 위임하는 것까지
+            // 같아야 한다 - 두 곳이 갈리면 표와 기대값이 갈라진다.
+            var knownFunctionNames = (spDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .Select(d => d.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+            var referencedFunctionCalls =
+                DmlScopeExtractor.ExtractFunctionCalls(spDef.DdlText, knownFunctionNames);
+
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
             // 스위트는 초록으로 남는다.
@@ -177,7 +199,12 @@ namespace ReSet.Core.Services
                 // 방문하므로 setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다.
                 // From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이 그 불변식을
                 // 지키고, 깨지는 날 이 항이 실제로 필요해진다.
-                && setPredicates.Count == 0)
+                && setPredicates.Count == 0
+                // setPredicates와 같은 이유로 오늘은 중복항이다 - ExtractFunctionCalls도
+                // 같은 세 문장만 방문하므로 호출이 있으면 dmlScopeFacts도 비지 않는다.
+                // 그래도 잇는다: 위 주석이 경고하듯 항을 빠뜨리면 그 검사가 한 번도
+                // 돌지 않고 스위트는 초록으로 남는다.
+                && referencedFunctionCalls.Count == 0)
             {
                 return null;
             }
@@ -193,7 +220,8 @@ namespace ReSet.Core.Services
                 HasInternalProcedureCall = hasInternalProcedureCall,
                 DmlScopeFacts = dmlScopeFacts,
                 DerivedColumns = derivedColumns,
-                SetPredicates = setPredicates
+                SetPredicates = setPredicates,
+                ReferencedFunctionCalls = referencedFunctionCalls
             };
         }
 
