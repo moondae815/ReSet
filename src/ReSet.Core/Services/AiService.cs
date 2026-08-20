@@ -411,6 +411,20 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildSetPredicateTableLines(setPredicates));
             }
 
+            // 참조 함수 표도 같은 이유로 기계가 채운다 - 2026-08-20 축 A 교차 대조에서
+            // 이 자리를 LLM이 쓰던 시절 10행 중 8행이 결함이었다(🔴 5건).
+            var knownFunctionNames = (spDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .Select(d => d.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+
+            var functionCalls = DmlScopeExtractor.ExtractFunctionCalls(spDef.DdlText, knownFunctionNames);
+            if (functionCalls.Count > 0)
+            {
+                rules.AddRange(BuildReferencedFunctionTableLines(functionCalls, spDef));
+            }
+
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
             // 강제한다 - 부재 서술은 자연어 판정이라 앵커가 없다.
@@ -906,6 +920,73 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             lines.Add("");
             return lines;
+        }
+
+        /// <summary>
+        /// 「참조 함수」 표를 렌더한다. 이 절은 조립기가 채우고 LLM은 손대지 않는다.
+        ///
+        /// [왜 동작 서술 칸이 없는가 - 2026-08-20 축 A 교차 대조]
+        /// 이 자리에 "실제 로직" 칸이 있던 시절 EXCEPTION_PROC의 10행 중 8행이
+        /// 결함이었고 🔴이 5건이었다(USESTATE=0 술어 누락, IIF 분기 누락, 기본값 0
+        /// 반환 누락). 함수 DDL 전문이 이미 프롬프트에 있었는데도 그랬다.
+        /// 그래서 서술 칸 자체를 없애고 함수 Spec.md로 링크만 건다.
+        /// </summary>
+        private static List<string> BuildReferencedFunctionTableLines(
+            IReadOnlyList<ReferencedFunctionCallFact> calls,
+            SpDefinition spDef)
+        {
+            var functionDeps = (spDef.Dependencies ?? new List<DependencyInfo>())
+                .Where(d => SqlObjectTypeClassifier.ResolveCodeObjectType(d.Type) == CodeObjectType.Function)
+                .ToList();
+
+            var lines = new List<string>
+            {
+                "   [CRITICAL REFERENCED FUNCTION TABLE] The following function calls are MACHINE-DERIVED from the source DDL. Copy this table verbatim into the document under the exact heading shown. Do NOT add a column describing what a function does, and do NOT describe any function's behaviour, return value, branches, filters, or defaults ANYWHERE in the document - not in this section, not in CRUD 분석, not in 로직 흐름. When a SET expression calls a function, name the call and leave it at that. The single source of truth for a function's behaviour is that function's own Spec.md, which this table links to.",
+                $"   {DmlScopeExtractor.ReferencedFunctionTableHeading}",
+                "   | 함수 | 호출 위치 | 인자 | 명세서 |",
+                "   | :--- | :--- | :--- | :--- |"
+            };
+
+            foreach (var call in calls)
+            {
+                var dep = functionDeps.FirstOrDefault(d =>
+                    string.Equals(LastSegment(d.Name), LastSegment(call.QualifiedName), StringComparison.OrdinalIgnoreCase));
+
+                var display = dep != null ? $"{dep.Schema}.{dep.Name}" : call.QualifiedName;
+                var link = dep != null ? BuildFunctionSpecRelativePath(dep, spDef) : "(명세서 없음)";
+
+                lines.Add(
+                    $"   | {EscapeTableCell(display)} | {call.Operation} {call.StatementOrdinal} (라인 {call.Line}) | "
+                    + $"{EscapeTableCell(call.CallExpression)} | {link} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>한정명의 마지막 조각만 낸다(`SETTLE_CARD_DB.dbo.UF_X` → `UF_X`).</summary>
+        private static string LastSegment(string? qualified) =>
+            string.IsNullOrWhiteSpace(qualified)
+                ? string.Empty
+                : qualified.Split('.').Last();
+
+        /// <summary>
+        /// SP 명세서(`output/Procedures/[SP]/docs/Spec.md`)에서 함수 명세서로 가는
+        /// 상대 경로를 만든다. 「참조 코드 객체」 절이 이미 쓰는 것과 같은 형태다.
+        /// 로컬 함수는 `output/Functions/`, 다른 DB의 함수는
+        /// `output/External/[DB]/Functions/` 아래에 있다.
+        /// </summary>
+        private static string BuildFunctionSpecRelativePath(DependencyInfo dep, SpDefinition spDef)
+        {
+            var isExternal =
+                !string.IsNullOrWhiteSpace(dep.Database) &&
+                !string.Equals(dep.Database, spDef.ObjectKey?.Database, StringComparison.OrdinalIgnoreCase);
+
+            var folder = isExternal
+                ? $"../../../External/{dep.Database}/Functions"
+                : "../../../Functions";
+
+            return $"[Spec]({folder}/{dep.Schema}.{dep.Name}/docs/Spec.md)";
         }
 
         /// <summary>

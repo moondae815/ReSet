@@ -1427,5 +1427,89 @@ END"
         {
             Assert.Contains("purge policy", await StepSystemPromptAsync());
         }
+
+        private static SpDefinition ReferencedFunctionSpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM)
+                ,A.PGCOMM = SETTLE_CARD_DB.dbo.UF_GET_COMM4PG(A.CPID)
+    FROM   dbo.TSettleMst A
+END",
+            Dependencies = new List<DependencyInfo>
+            {
+                new() { Database = null, Schema = "dbo", Name = "UF_GET_ROUND4VAT", Type = "SQL_SCALAR_FUNCTION" },
+                new() { Database = "SETTLE_CARD_DB", Schema = "dbo", Name = "UF_GET_COMM4PG", Type = "SQL_SCALAR_FUNCTION" },
+                new() { Database = null, Schema = "dbo", Name = "TSettleMst", Type = "USER_TABLE" }
+            }
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_ShouldRenderReferencedFunctionTable()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(ReferencedFunctionSpDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, body);
+            // 로컬 함수와 외부 DB 함수의 링크 경로가 다르다.
+            Assert.Contains("../../../Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md", body);
+            Assert.Contains("../../../External/SETTLE_CARD_DB/Functions/dbo.UF_GET_COMM4PG/docs/Spec.md", body);
+            // 테이블은 이 표에 실리지 않는다.
+            var section = ExtractTableSection(body, DmlScopeExtractor.ReferencedFunctionTableHeading);
+            Assert.DoesNotContain("TSettleMst", section);
+        }
+
+        [Fact]
+        public async Task ReferencedFunctionTable_HeaderAndSeparator_ShouldHaveSameColumnCount()
+        {
+            // 2026-08-20 축 A 감사에서 헤더와 구분자 열 수가 어긋나 GFM이 표를
+            // 통째로 렌더하지 못한 결함이 두 번 나왔다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(ReferencedFunctionSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.ReferencedFunctionTableHeading);
+
+            var rows = section.Split('\n')
+                              .Select(l => l.Trim())
+                              .Where(l => l.StartsWith("|"))
+                              .ToList();
+
+            Assert.True(rows.Count >= 2, "표에 헤더와 구분자 행이 있어야 한다.");
+            Assert.Equal(rows[0].Count(c => c == '|'), rows[1].Count(c => c == '|'));
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_NoFunctionCalls_ShouldOmitTable()
+        {
+            var spDef = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END",
+                Dependencies = new List<DependencyInfo>()
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+
+            Assert.DoesNotContain(DmlScopeExtractor.ReferencedFunctionTableHeading, result.SystemPrompt);
+        }
     }
 }
