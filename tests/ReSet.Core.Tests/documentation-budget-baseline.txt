@@ -11,4 +11,4 @@
 #
 # architecture.md와 README.md는 자동 로드되지 않으므로 예산이 없다.
 
-AGENTS.md = 53103
+AGENTS.md = 35000
