@@ -1511,5 +1511,196 @@ END",
 
             Assert.DoesNotContain(DmlScopeExtractor.ReferencedFunctionTableHeading, result.SystemPrompt);
         }
+
+        // ---------------------------------------------------------------
+        // Task 3(범위 확장): 함수 서술 금지 계약 - 네 자리 모두.
+        // 컨트롤러 판정 R3: 배선 경로가 하나가 아니라 셋, 지시 자리가 셋이 아니라
+        // 넷이다. 아래 테스트들은 각 자리를 그 자리를 실제로 태우는 공개 API로
+        // 개별 검증한다 - 한 경로만 통과하고 나머지는 옛 문구가 남는 재발을 막는다.
+        // ---------------------------------------------------------------
+
+        [Fact]
+        public async Task GenerateSpecification_ShouldForbidDescribingFunctionBehaviour()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(ReferencedFunctionSpDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            // 옛 지시는 함수 로직을 분석하라고 시켰다.
+            Assert.DoesNotContain("analyze its logic", body);
+            // 새 계약은 문서 어디에서도 서술을 금지한다 - 이 픽스처는 실제로 함수를
+            // 호출하므로(ReferencedFunctionSpDefinition) 참조 함수 표가 렌더되고,
+            // 그 표 도입문이 이 핵심 문구를 담고 있다.
+            Assert.Contains("do NOT describe any function's behaviour", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_RuleA_ShouldForbidDescribingUdfBehaviour_EvenWithoutTheTable()
+        {
+            // 위 테스트는 참조 함수 표(Task 2가 배선)를 통해 핵심 문구를 확인한다 -
+            // 지시 A 문구 자체가 바뀌었는지는 별도로 확인해야 한다. hasUdf는 참이지만
+            // (StaticAnalysis.ReferencedFunctions) DDL에는 실제 함수 호출 구문이 없어
+            // ExtractFunctionCalls가 0건을 내고 표가 렌더되지 않는 픽스처를 쓴다 -
+            // 그러면 남는 것은 지시 A 문구뿐이다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            spDef.StaticAnalysis.ReferencedFunctions.Add("UF_UNUSED_IN_DDL");
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var body = result.SystemPrompt;
+
+            Assert.DoesNotContain(DmlScopeExtractor.ReferencedFunctionTableHeading, body);
+            Assert.DoesNotContain("analyze its logic", body);
+            Assert.Contains("Do NOT describe what any referenced User Defined Function (UDF) does.", body);
+            Assert.Contains("belongs only in that function's own Spec.md", body);
+        }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_Monolithic_ShouldForbidDetailingUdfFormulas()
+        {
+            // 지시 C(:1938, BuildDeconstructionPrompts) - 비-지역 provider는 청크 분할
+            // 없이 이 경로 하나로 DeconstructedLogic을 만든다. 그 결과가
+            // <deconstructed-logic-source-of-truth>로 명세서 생성 프롬프트에 되돌아오므로
+            // 이 자리를 놓치면 함수 공식이 다른 경로로 돌아온다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = dbo.UF_X(C) END"
+            };
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"{\\\"Logic\\\":{\\\"Steps\\\":[]}}\"}}]}";
+            var handler = new MockHttpMessageHandler(mockResponse);
+            var client = new OpenAiClient(new HttpClient(handler), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.DeconstructSpLogicAsync(spDef, "지침");
+
+            Assert.DoesNotContain("and detail their formulas, especially for calculations like CLVT and PGVT", handler.LastRequestBody);
+            Assert.Contains("Identify all referenced User Defined Functions (UDFs) by name and calling location only.", handler.LastRequestBody);
+        }
+
+        [Fact]
+        public async Task DeconstructSpLogicAsync_Chunked_ShouldForbidDetailingUdfFormulas()
+        {
+            // 지시 B(:1762, BuildChunkDeconstructionPrompts) - 지역 provider +
+            // AST 분할이 켜지면(기본값) 이 경로로 문장 단위 청크마다 DeconstructedLogic을
+            // 만든다. AiResult.SystemPrompt는 청크 파이프라인에서 고정 문자열로
+            // 대체되므로("AST Chunking Pipeline Used") 실제로 전송된 HTTP 요청 본문을
+            // 봐야 이 자리를 검증할 수 있다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                DdlText = "UPDATE dbo.TableA SET Col1 = dbo.UF_X(Col1);"
+            };
+            var mockResponseContent = "{\"Logic\":{\"Steps\":[]}}";
+            var ollamaJson = $"{{\"message\":{{\"role\":\"assistant\",\"content\":\"{mockResponseContent.Replace("\"", "\\\"")}\"}}}}";
+            var handler = new MockHttpMessageHandler(ollamaJson);
+            var client = new ReSet.Core.Services.Clients.OllamaClient(new HttpClient(handler), "http://localhost:11434", "llama3");
+            IAiService service = new AiService(client, 0.2f);
+
+            await service.DeconstructSpLogicAsync(spDef, "지침");
+
+            Assert.DoesNotContain("and detail their formulas, especially for calculations like CLVT and PGVT", handler.LastRequestBody);
+            Assert.Contains("Identify all referenced User Defined Functions (UDFs) by name and calling location only.", handler.LastRequestBody);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldForbidDescribingUdfBehaviour()
+        {
+            // 지시 D(:2224, BuildSpecSectionPrompts의 "CrudAnalysis" 분기) - 브리프가
+            // 몰랐던 자리. 지역 모델의 SP 명세서 최초 생성 경로다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END",
+                StaticAnalysis = new SpStaticAnalysisResult()
+            };
+            spDef.StaticAnalysis.ReferencedFunctions.Add("UF_UNUSED_IN_DDL");
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(spDef, "CrudAnalysis", "rules", null);
+            var body = result.SystemPrompt;
+
+            Assert.DoesNotContain("analyze its operation", body);
+            Assert.Contains("do NOT describe any function's behaviour", body);
+        }
+
+        [Fact]
+        public async Task GenerateFunctionSpecification_ShouldRenderReferencedFunctionTable()
+        {
+            // 배선 경로 1/2: 함수 명세서 경로(BuildFunctionSpecificationPrompts,
+            // functionDef 변수를 쓰는 systemPrompt += 관례). 함수가 다른 함수를 부를 때
+            // (예: 스칼라 함수가 헬퍼 함수를 호출) 참조 함수 표를 받아야 한다.
+            // ExtractFunctionCalls(Task 1의 ReferencedFunctionVisitor)는 UPDATE/
+            // DELETE/INSERT 문만 훑는다 - 스칼라 함수의 RETURN 식은 잡지 않는다. 그래서
+            // 다중 문장 TVF가 자신의 반환 테이블 변수에 거는 UPDATE로 함수를 호출하는
+            // 모양을 쓴다(BuildFunctionSpecificationPrompts 위 주석의 Fix Round 2가
+            // 실측한 바로 그 패턴).
+            var functionDef = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_OUTER", CodeObjectType.Function),
+                Schema = "dbo",
+                Name = "UF_OUTER",
+                ObjectType = CodeObjectType.Function,
+                DdlText = @"
+CREATE FUNCTION dbo.UF_OUTER()
+RETURNS @Result TABLE (Val INT)
+AS
+BEGIN
+    UPDATE @Result SET Val = dbo.UF_GET_ROUND4VAT(Val)
+    RETURN
+END",
+                Dependencies = new List<DependencyInfo>
+                {
+                    new() { Database = null, Schema = "dbo", Name = "UF_GET_ROUND4VAT", Type = "SQL_SCALAR_FUNCTION" }
+                }
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(functionDef, "rules");
+
+            Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, result.SystemPrompt);
+            Assert.Contains("../../../Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldRenderReferencedFunctionTable()
+        {
+            // 배선 경로 2/2: 구역 분할 경로(BuildSpecSectionPrompts의 "CrudAnalysis"
+            // 분기, sbRules.AddRange 관례). VerificationPipelineOrchestrator의 지역
+            // 모델 흐름(IsLocalProvider && ObjectType == Procedure)이 실제로 쓰는
+            // 경로라 여기를 놓치면 지역 모델로 만드는 SP 명세서는 보호가 전혀 없다.
+            var result = await new AiService(
+                new OpenAiClient(new HttpClient(new MockHttpMessageHandler(
+                    "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}")), "k", "https://api.openai.com/v1", "gpt-4o"),
+                0.2f)
+                .GenerateSpecSectionAsync(ReferencedFunctionSpDefinition(), "CrudAnalysis", "rules", null);
+
+            Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, result.SystemPrompt);
+            Assert.Contains("../../../Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md", result.SystemPrompt);
+            Assert.Contains("../../../External/SETTLE_CARD_DB/Functions/dbo.UF_GET_COMM4PG/docs/Spec.md", result.SystemPrompt);
+        }
     }
 }
