@@ -1,6 +1,6 @@
 ---
 name: reset-consistency-audit
-description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는지 대조할 때 사용한다. "정합성 검증", "산출물 대조", "Spec이 원본과 맞는지", "계획서가 레거시 로직을 보존했는지", "{job} 검증 보고서" 같은 요청이나, output/Procedures 또는 output/Jobs 산출물이 원본과 어긋났을 것 같다는 의심이 있을 때 적용 대상이다.
+description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는지 대조할 때 사용한다. "정합성 검증", "산출물 대조", "Spec이 원본과 맞는지", "계획서가 레거시 로직을 보존했는지", "{job} 검증 보고서", "UDF 명세서가 원본과 맞는지" 같은 요청이나, output/Procedures·output/Functions·output/External 또는 output/Jobs 산출물이 원본과 어긋났을 것 같다는 의심이 있을 때 적용 대상이다.
 ---
 
 # ReSet 산출물 정합성 감사
@@ -9,10 +9,14 @@ description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는�
 
 두 축을 대조한다.
 
-- **축 A** — SP 원본 DDL ↔ `output/Procedures/[SP]/docs/Spec.md`
+- **축 A** — **분석된 객체**(SP·스칼라 UDF·인라인 TVF, 외부 DB 것 포함)의 원본 DDL ↔ 그 객체의 `Spec.md`
 - **축 B** — `Spec.md` ↔ `output/Jobs/[job]/` 계획서·단계 지시서
 
-**핵심 원칙: 판정의 단위는 Job이 아니라 SP 하나 또는 단계 하나다.** 한 컨텍스트가
+축 A의 대상은 소비 명세서 집합이 아니라 **그 집합의 참조 폐포**다. SP가 호출하는 UDF의
+명세서도 산출물이고, 그 명세서가 원본과 어긋나면 그 함수를 부르는 모든 SP의 금액이
+함께 틀어진다. 실측: 부가세율·반올림·정산일 함수 3개를 14개 SP가 공유한다.
+
+**핵심 원칙: 판정의 단위는 Job이 아니라 객체 하나 또는 단계 하나다.** 한 컨텍스트가
 8,000줄 계획서와 14개 명세서를 동시에 들면 반드시 표본만 보게 되고, 표본이 달라지면
 같은 Job에서 다른 결함 목록이 나온다. 실측: 분할 없이 두 번 돌렸더니 결함 목록이
 합집합이 아니라 서로 어긋난 부분집합이었다(한쪽만 `INSERT` 컬럼 수 불일치를,
@@ -34,22 +38,62 @@ description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는�
 | 무엇을 | 어디서 (있는 것 중 첫 번째) |
 |---|---|
 | 소비 명세서 집합 | ① `agent/MigrationInstructions.md`의 `Spec.md` 링크 ② `raw/prompt-context.md`의 `^Filename:` 행(`Feedback_Log.txt` 제외) |
+| **축 A 대상 (참조 폐포)** | 소비 명세서 각각의 `output/Procedures/[SP]/raw/dependency-manifest.json` → `Nodes[]` **합집합** |
 | 단계 ↔ 레거시 SP 매핑 | ① `raw/prompt-context.md`의 `[Approved Step List]` 블록 `Legacy:` 필드 ② 계획서의 `승인된 단계 체인과 레거시 대응` 표 |
 | 단계 목록 | `agent/steps/*.md` 파일명 |
 
 `agent/`가 없으면(번들 미생성) **축 B는 검증 불가**다. 보고서에 그렇게 적고 끝낸다 —
 계획서만 놓고 추정하지 않는다.
 
-**중첩 SP 전개**: 확정된 각 SP의 DDL에서 `EXEC`로 호출되는 하위 SP를 한 단계 전개한다.
-전개 결과 중 소비 명세서 집합에 없는 것은 **그 자체가 축 B의 결함**이다(단계에 흡수됐지만
-명세서가 입력되지 않았다는 뜻). 결함으로 보고하고, 축 A 대상에는 포함한다.
+### 1-1. 참조 폐포 — 축 A 대상은 매니페스트가 확정한다
+
+`dependency-manifest.json`(BOM 있음, `utf-8-sig`)의 각 노드는 이렇게 생겼다.
+
+```json
+{ "Key": "SETTLE_CARD_DB.dbo.UF_GET_COMM4CLIENT.Function",
+  "Sha256": "a34f3a…", "Status": "Succeeded",
+  "SpecPath": "../../External/SETTLE_CARD_DB/Functions/dbo.UF_GET_COMM4CLIENT/docs/Spec.md",
+  "DdlPath":  "../../External/SETTLE_CARD_DB/Objects/dbo.UF_GET_COMM4CLIENT.Function/raw/object_definition.sql" }
+```
+
+- **경로를 조립하지 마라.** `SpecPath`·`DdlPath`를 그대로 쓴다. 로컬 함수든
+  `External/[DB]/` 아래 함수든 매니페스트가 이미 옳은 자리를 가리킨다.
+- **기준점은 매니페스트가 든 `raw/`가 아니라 그 부모인 객체 디렉터리**
+  `output/Procedures/[SP]/`다. `raw/`를 기준으로 풀면 `../../`가 한 칸 모자라
+  `output/Procedures/External/...` 같은 없는 경로가 나온다. 실측에서 이 한 칸 때문에
+  31개 중 17개가 통째로 어긋났다.
+- `metadata.json`은 `SpecPath`의 `docs/Spec.md`를 `raw/metadata.json`으로 바꿔 얻는다.
+
+```python
+base = f'output/Procedures/{sp}'                       # raw/ 가 아니다
+spec = os.path.normpath(os.path.join(base, nd['SpecPath']))
+ddl  = os.path.normpath(os.path.join(base, nd['DdlPath']))
+meta = spec.replace('docs/Spec.md', 'raw/metadata.json')
+```
+- **`Status`가 `Succeeded`가 아닌 노드는 `검증 불가`**로 판정하고 사유(`Error` 필드)를
+  보고서 3절에 적는다. 산출물이 없는 것을 정합으로 세지 마라.
+- 합집합의 키는 매니페스트 `Key`다. `DB.스키마.이름.종류` 4부라 외부 DB에 같은 이름이
+  있어도 충돌하지 않는다.
+
+**이 폐포가 중첩 SP 전개를 대신한다.** `EXEC`로 불리는 하위 SP는 매니페스트에 이미
+노드로 들어 있으므로 DDL을 손으로 훑지 않는다. 실측: 소비 12개 SP의 폐포가 31개
+객체(SP 14 = 소비 12 + 중첩 2, 로컬 UDF 10, 외부 UDF 7)였고 중첩 SP 2개가 그 안에 있었다.
+
+폐포에 있는 SP 중 **소비 명세서 집합에 없는 것**은 별도로 확인한다. 최상위 실행 순서에
+포함되지 않는 하위 호출이면 선택에서 빠진 것이 정상이지만, 단계에 흡수됐는데 명세서가
+입력되지 않았다면 **축 B의 결함**이다. 어느 쪽인지 축 B에서 판정하고, 축 A 대상에는
+어느 경우든 포함한다.
 
 ## 2. 검증 단위와 캐시
 
 | 축 | 단위 | 캐시 키의 최소 구성 |
 |---|---|---|
-| A | SP 1개 | `object_definition.sql` + `Spec.md` + `metadata.json` |
+| A | **객체 1개** (SP·함수 구분 없이) | `object_definition.sql` + `Spec.md` + `metadata.json` |
 | B | 단계 1개 | `steps/SNN.md` + 그 단계가 흡수한 **모든** SP의 `Spec.md` |
+
+캐시 항목 이름은 `axisA:[매니페스트 Key]`다(예: `axisA:SETTLE_POQ_DB.dbo.UF_GET_ROUND4VAT.Function`).
+이름만 4부 정규화하고 키(해시)는 그대로이므로, 이름이 짧던 옛 캐시는 **이름만 바꿔 옮기면
+적중이 유지된다** — 재검증할 필요가 없다.
 
 **키는 그 단위가 기준값으로 실제로 읽은 파일 전부의 `sha256`이다.** 위 표는 하한이지
 목록이 아니다 — 단위가 표에 없는 파일을 근거로 삼았으면(신설 단계에 들려 보낸 인접
@@ -64,7 +108,9 @@ description: ReSet 산출물이 원천과 여전히 같은 이야기를 하는�
 28개 단위를 한 번에 돌리다 세션 한도로 중단됐고, 끝난 단위의 결과가 통째로 날아갔다.
 중단된 실행은 캐시가 있는 단위를 건너뛰고 이어서 돌린다.
 
-원본 DDL 경로는 `output/Objects/[스키마].[이름].Procedure/raw/object_definition.sql`이다.
+**경로는 매니페스트에서 온다**(1-1절). 소비 명세서 집합에 속한 SP는 관례상
+`output/Objects/[스키마].[이름].Procedure/raw/object_definition.sql`에 있지만, 함수와
+외부 DB 객체는 자리가 다르므로 경로를 손으로 조립하면 반드시 어긋난다.
 
 ### 2-1. 축 A 캐시는 Job이 바뀌어도 유효하다
 
@@ -86,8 +132,8 @@ json.dump({k:v for k,v in src.items() if k.startswith('axisA:')},
 포함해 새 Job에서 히트하지 않지만, 파일에 남아 있으면 보고서를 만들 때 이전 Job의 단계
 결과가 커버리지 표에 섞인다.
 
-옮긴 뒤 두 가지를 확인한다. **대상 SP 집합**이 다르면 새 Job이 쓰지 않는 SP의 항목은
-커버리지 표에서 뺀다 — 검증하지 않은 SP가 검증된 것으로 실린다. **보고서 4-1**의 서술 중
+옮긴 뒤 두 가지를 확인한다. **대상 객체 집합**이 다르면 새 Job이 쓰지 않는 객체의 항목은
+커버리지 표에서 뺀다 — 검증하지 않은 객체가 검증된 것으로 실린다. **보고서 4-1**의 서술 중
 이전 Job의 귀결을 인용한 문장("축 B의 S07에서 실제로 그 일이 일어났다")은 다시 쓴다.
 판정과 결함 목록 자체는 Job과 무관하므로 그대로 재사용한다.
 
@@ -97,16 +143,16 @@ json.dump({k:v for k,v in src.items() if k.startswith('axisA:')},
 ## 3. 축 A 대조 계약
 
 **파서가 수집한 항목에 한해 `StaticAnalysis`가 진실의 원천이다.** 이미 확정된 값이므로
-DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙). 경로는
-`output/Procedures/[SP]/raw/metadata.json`이고 **BOM이 있으므로 `utf-8-sig`로 읽는다**
-(`Objects/` 아래에는 이 파일이 없다).
+DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙). 경로는 매니페스트
+`SpecPath`의 `docs/Spec.md`를 `raw/metadata.json`으로 바꾼 자리이고 **BOM이 있으므로
+`utf-8-sig`로 읽는다**(`Objects/` 아래에는 이 파일이 없다).
 
 파서가 **수집하지 않는** 것은 DDL 원문으로 채운다. 실측에서 확인된 것:
 인라인 TVF 호출(`UIF_SettleYMD` 등)이 `ReferencedFunctions`에 없고,
 `ProcedureParameters`는 `OUTPUT` 방향을 표기하지 않는다.
 파서에 없다는 것을 "원본에 없다"로 읽지 마라 — 정산일 계산 TVF 하나가 통째로 사라진다.
 
-각 SP마다 아래 표를 채운다. 빈 칸을 남기지 않는다.
+**SP 단위**는 아래 표를 채운다. 빈 칸을 남기지 않는다.
 
 | 대조 항목 | 기준값 출처 |
 |---|---|
@@ -121,6 +167,37 @@ DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙)
 
 Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 원문의 의미와
 어긋나면 DDL이 이긴다.
+
+### 3-1. 함수 단위는 표가 다르다
+
+**함수의 `StaticAnalysis`는 SP보다 훨씬 얇다.** 실측:
+
+```
+SP        IsParsedSuccessfully, ReferencedTables, ControlFlowSummary, SelectTables,
+          InsertTables, AstInsertMappings, UpdateTables, AstUpdateMappings,
+          ProcedureParameters, DeclaredVariables, ReferencedColumnsPerTable
+스칼라UDF IsParsedSuccessfully, ProcedureParameters                      ← 둘뿐
+```
+
+그리고 **함수의 핵심인 반환식을 파서가 담지 않는다.** SP 표를 그대로 들이대면 빈 칸이
+대부분이 되고, 정작 중요한 자리가 표에 없다. 함수 단위는 아래를 채운다.
+
+| 대조 항목 | 기준값 출처 |
+|---|---|
+| 파라미터 시그니처(순서·타입·기본값) | `StaticAnalysis.ProcedureParameters` |
+| 테이블 접근과 테이블별 참조 컬럼 | `SelectTables` / `ReferencedColumnsPerTable` (없으면 DDL 원문) |
+| **반환 타입과 반환식** | **DDL 원문** — 스칼라면 `RETURNS`와 `RETURN` 식, 인라인 TVF면 `RETURN (SELECT …)` 전문 |
+| **분기와 경계값** | **DDL 원문** — `CASE`/`IIF`의 각 분기 조건, `<=` 인지 `<` 인지, 임계값이 대입값인지 |
+| **상수·계수·반올림 자릿수·부호** | **DDL 원문** |
+| NULL 입력 처리와 `ISNULL`/`COALESCE` 기본값 | **DDL 원문** |
+| 결정성 관련 선언(`SCHEMABINDING`, `WITH` 옵션), `NOLOCK` | **DDL 원문** |
+
+**등급은 호출자 기준으로 읽는다.** 함수 자체에는 "대상 행 집합"이 없다.
+스칼라 UDF의 반환값이 달라지면 호출한 SP의 **금액이 틀리므로 🔴**이고,
+인라인 TVF가 돌려주는 행이 달라지면 **🟠**다. 표기·추적성은 SP와 같이 🟡·⚪다.
+
+**함수 하나의 결함은 그 함수를 부르는 모든 SP로 동시에 번진다.** 결함 행의 `영향` 칸에
+호출하는 SP 수를 적어라 — 폐포를 만들 때 쓴 매니페스트를 거꾸로 세면 나온다.
 
 ## 4. 축 B 대조 계약
 
@@ -146,13 +223,14 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 | 대상 테이블 | Spec의 쓰기 집합과 단계의 변경 대상이 같은가 |
 | 계산식 | 상수·계수·반올림 자릿수·부호가 그대로인가 |
 | 필터·조인 | 조인 종류(INNER/LEFT), 조건 컬럼, 비교 대상이 그대로인가 |
-| UDF 호출 | 함수명과 **인자 개수·순서**가 그대로인가 |
+| UDF 호출 | 함수명과 **인자 개수·순서**가 그대로인가 (본문은 축 A가 덮는다) |
 | 컬럼 집합 | `INSERT` 컬럼 수와 값 수, `UPDATE` SET 대상이 빠짐없는가 |
 | 후속 단계 간섭 | 뒤 단계가 앞 단계의 결과를 덮어쓰지 않는가 |
 
 ## 5. 병렬 분할
 
-축 A는 SP당, 축 B는 단계당 서브에이전트 하나에 맡긴다. 캐시가 유효한 단위는 띄우지 않는다.
+축 A는 **객체당**(SP든 함수든), 축 B는 단계당 서브에이전트 하나에 맡긴다.
+캐시가 유효한 단위는 띄우지 않는다.
 각 서브에이전트는 **자기 단위의 파일만** 읽고, 아래를 그대로 반환한다.
 
 - 판정: `정합` / `결함` / `검증 불가`
@@ -170,7 +248,9 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 🟠, 다른 실행에서는 ⚪로 갈렸다.
 
 단위 수가 20개를 넘으면 한 번에 다 띄우지 말고 나눠 돌린다. 각 단위는 끝나는 대로
-캐시에 기록되므로, 중단돼도 남은 단위만 이어서 돌리면 된다.
+캐시에 기록되므로, 중단돼도 남은 단위만 이어서 돌리면 된다. **참조 폐포를 대상으로
+삼으면 축 A만으로도 이 선을 넘는다** — 실측 31개. 함수는 SP보다 짧으니 함수 묶음을
+한 배치로, SP를 다른 배치로 나누면 배치 시간이 고르다.
 
 ## 6. 보고서
 
@@ -186,16 +266,19 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 | 축 | 판정 | 단위 수 | 신규 검증 | 캐시 재사용 | 검증 불가 |
 
 ## 2. 검증 대상 확정
-대상 목록과 **어느 파일에서 읽었는지**. 중첩 SP 전개 결과.
+소비 명세서 집합과 **어느 파일에서 읽었는지**. 참조 폐포의 구성
+(SP 몇 개 · 로컬 함수 몇 개 · 외부 DB 함수 몇 개)과 폐포에만 있는 SP의 처리.
 
 ## 3. 단위별 커버리지
-| 단위 | 판정 | 상태(신규/캐시/불가) | 근거 파일 |
-단위를 빠짐없이 한 행씩. 검증 불가는 사유를 적는다.
+| 단위 | 종류 | 판정 | 상태(신규/캐시/불가) | 근거 파일 |
+단위를 빠짐없이 한 행씩. `종류`는 SP / 함수 / 외부함수.
+검증 불가는 사유를 적는다(`Status`가 `Succeeded`가 아니면 그 `Error`도).
 
 ## 4. 축 A 결함
-| 등급 | SP | 원본 앵커 | 산출물 앵커 | 원본 | 산출물 | 영향 |
+| 등급 | 객체 | 원본 앵커 | 산출물 앵커 | 원본 | 산출물 | 영향 |
+함수 결함은 `영향` 칸에 **호출하는 SP 수**를 함께 적는다.
 
-### 4-1. 전 SP 공통 결함
+### 4-1. 전 객체 공통 결함
 
 ## 5. 축 B 결함
 | 등급 | 단계 | Spec 앵커 | 산출물 앵커 | Spec | 산출물 | 영향 |
@@ -225,3 +308,7 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 | 단위 결과를 끝까지 모았다가 한 번에 저장한다 | 세션 한도로 중단되면 끝난 단위까지 전부 날아간다 |
 | 캐시를 통째로 다른 Job에 복사한다 | 축 B 키는 새 Job에서 히트하지 않지만 파일에는 남아, 이전 Job의 단계 결과가 새 보고서의 커버리지 표에 섞인다. `axisA:`만 옮긴다 |
 | 반복 결함을 단계마다 한 건씩 센다 | 배너 모순 하나가 14건이 되어 금액 결함을 가린다 |
+| 함수는 호출 지점만 보고 본문을 안 본다 | 축 A가 SP만 보던 시절, 부가세율·반올림·정산일 함수의 명세서를 아무도 대조하지 않았다. 함수 하나의 결함은 그 함수를 부르는 SP 전부의 금액에 동시에 번진다 |
+| 함수 단위에 SP 대조 표를 들이댄다 | 스칼라 UDF의 `StaticAnalysis`에는 `ProcedureParameters`밖에 없다. 빈 칸만 늘고 정작 반환식은 표에 없다 — 3-1절 표를 쓴다 |
+| 함수 경로를 손으로 조립한다 | 로컬은 `output/Functions/`, 외부 DB는 `output/External/[DB]/Functions/`다. 매니페스트의 `SpecPath`·`DdlPath`를 그대로 쓴다 |
+| `Status`가 `Succeeded`가 아닌 노드를 건너뛴다 | 산출물이 없어 검증 못 한 것이 정합으로 세어진다. `검증 불가`로 판정하고 `Error`를 적는다 |
