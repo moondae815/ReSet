@@ -948,7 +948,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             var lines = new List<string>
             {
-                "   [CRITICAL REFERENCED FUNCTION TABLE] The following function calls are MACHINE-DERIVED from the source DDL. Copy this table verbatim into the document under the exact heading shown. Do NOT add a column describing what a function does, and do NOT describe any function's behaviour, return value, branches, filters, or defaults ANYWHERE in the document - not in this section, not in CRUD 분석, not in 로직 흐름. When a SET expression calls a function, name the call and leave it at that. The single source of truth for a function's behaviour is that function's own Spec.md, which this table links to.",
+                "   [CRITICAL REFERENCED FUNCTION TABLE] The following function calls are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT add a column describing what a function does, and do NOT describe the behaviour of any function listed in this table - its return value, branches, filters, or defaults - anywhere in the document: not in this section, not in CRUD 분석, not in 로직 흐름. When a SET expression calls a function, name the call and leave it at that. The single source of truth for a function's behaviour is that function's own Spec.md, which this table links to.",
                 $"   {DmlScopeExtractor.ReferencedFunctionTableHeading}",
                 "   | 함수 | 호출 위치 | 인자 | 명세서 |",
                 "   | :--- | :--- | :--- | :--- |"
@@ -956,10 +956,13 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             foreach (var call in calls)
             {
-                var dep = functionDeps.FirstOrDefault(d =>
-                    string.Equals(LastSegment(d.Name), LastSegment(call.QualifiedName), StringComparison.OrdinalIgnoreCase));
+                var dep = FindFunctionDependency(functionDeps, call.QualifiedName);
 
-                var display = dep != null ? $"{dep.Schema}.{dep.Name}" : call.QualifiedName;
+                var display = dep == null
+                    ? call.QualifiedName
+                    : string.IsNullOrWhiteSpace(dep.Database)
+                        ? $"{dep.Schema}.{dep.Name}"
+                        : $"{dep.Database}.{dep.Schema}.{dep.Name}";
                 var link = dep != null ? BuildFunctionSpecRelativePath(dep, spDef) : "(명세서 없음)";
 
                 lines.Add(
@@ -969,6 +972,38 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             lines.Add("");
             return lines;
+        }
+
+        /// <summary>
+        /// 「참조 함수」 표에서 호출문의 한정명(<paramref name="qualifiedName"/>)에 대응하는
+        /// 의존성 항목을 고른다.
+        ///
+        /// [I2 동행 수정 - R7, 2026-08-20] 예전엔 마지막 조각(함수 이름)만 대조했다 -
+        /// 크로스 DB 함수(예: `SETTLE_CARD_DB.dbo.UF_GET_COMM4PG`)와 로컬 동명 함수가
+        /// 있으면 잘못 짝지어질 여지가 있었고, I2가 `dep.Database`를 표시에 쓰기
+        /// 시작하면서 그 오짝이 표시 문구까지 잘못 낸다(로컬 함수를 크로스 DB로,
+        /// 혹은 그 반대로). 그래서 호출문에 한정자가 있으면(2부/3부) 그 한정명을
+        /// 의존성의 `Database.Schema.Name` 또는 `Schema.Name`과 먼저 정확히 대조하고,
+        /// 한정자가 없을 때만(또는 정확한 대조가 실패했을 때만) 마지막 조각으로
+        /// 대조한다.
+        /// </summary>
+        private static DependencyInfo? FindFunctionDependency(
+            IReadOnlyList<DependencyInfo> functionDeps, string qualifiedName)
+        {
+            if (qualifiedName.Contains('.', StringComparison.Ordinal))
+            {
+                var qualifiedMatch = functionDeps.FirstOrDefault(d =>
+                    (!string.IsNullOrWhiteSpace(d.Database)
+                        && string.Equals($"{d.Database}.{d.Schema}.{d.Name}", qualifiedName, StringComparison.OrdinalIgnoreCase))
+                    || string.Equals($"{d.Schema}.{d.Name}", qualifiedName, StringComparison.OrdinalIgnoreCase));
+                if (qualifiedMatch != null)
+                {
+                    return qualifiedMatch;
+                }
+            }
+
+            return functionDeps.FirstOrDefault(d =>
+                string.Equals(LastSegment(d.Name), LastSegment(qualifiedName), StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>한정명의 마지막 조각만 낸다(`SETTLE_CARD_DB.dbo.UF_X` → `UF_X`).</summary>
@@ -2430,6 +2465,18 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 };
 
                 int rIdx = 4;
+                if (hasUdf)
+                {
+                    // I1(2026-08-20 축 A 감사, 최종 전체 브랜치 리뷰) - 이 분기(지역
+                    // 모델 경로의 「로직 흐름 요약」 생성)는 hasUdf 분기가 아예 없었다.
+                    // 그런데도 :2485의 `sectionType == "CrudAnalysis" ||
+                    // sectionType == "LogicAndVisualization"` 조건 때문에
+                    // <referenced-ddl-source-code>(UDF DDL 전문)를 그대로 받는다 -
+                    // UDF 소스를 손에 쥔 채 아무 계약도 없이 「로직 흐름」 산문을 쓰는
+                    // 셈이었다. CrudAnalysis 분기의 규칙 D(:2242, 위)와 같은 취지의
+                    // 문장을 여기도 추가해 두 분기 모두 계약을 받도록 닫는다.
+                    sbRules.Add($"{rIdx++}. When a referenced User Defined Function (UDF) is called, do NOT describe any function's behaviour - return value, branches, filters, defaults, or rounding - anywhere in this document. That belongs only in the function's own Spec.md, which the machine-derived 참조 함수 table links to.");
+                }
                 if (hasDynamicSql)
                 {
                     sbRules.Add($"{rIdx++}. If dynamic SQL is present, explain the execution and business flow purpose in the logic summary.");
@@ -2553,7 +2600,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
-   - Verify if temp tables and Linked Servers are factually detailed (or stated explicitly as not used). For a referenced UDF, verify only that its calling location and arguments are documented - do NOT require or reward a description of the UDF's own behaviour, return value, or computation; that belongs only in the function's own Spec.md.
+   - Verify if temp tables and Linked Servers are factually detailed (or stated explicitly as not used). For a referenced UDF, verify only that its calling location and arguments are documented - do NOT require or reward a description of the UDF's own behaviour, return value, or computation; that belongs only in the function's own Spec.md. Conversely, if the specification describes a referenced UDF behaviour, return value, computation, or formula anywhere in the document, that is a contract violation - report it as a defect in FeedbackComment and lower ScoreCrud accordingly.
 3. Integration and Interface Definition (ScoreInterface):
    - Verify if parameter names, types, nullability (use '명시 없음' if undefined), and descriptions are fully detailed in a table.
    - Check if result set (Rowset) return behavior is explicitly stated.
