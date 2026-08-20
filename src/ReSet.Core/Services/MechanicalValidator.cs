@@ -137,6 +137,7 @@ namespace ReSet.Core.Services
                     CheckDmlScopeTable(cleansed, expectations, result);
                     CheckDerivedTableDefinitions(cleansed, expectations, result);
                     CheckSetPredicates(cleansed, expectations, result);
+                    CheckReferencedFunctions(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -3071,6 +3072,42 @@ namespace ReSet.Core.Services
         /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과
         /// 같은 이유로 다음 H2뿐 아니라 다음 H3에도 막힌다.
         /// </summary>
+        /// <summary>
+        /// 「참조 함수 (기계 확정 — 수정 금지)」 표가 명세서에 실렸는지 확인한다.
+        ///
+        /// [왜 이 검사가 있는가 - 2026-08-20 최종 전체 리뷰 M1] 조립기가 이 표를
+        /// 프롬프트에 넣지만, 모델이 그것을 옮겼는지는 아무도 확인하지 않았다.
+        /// 설계가 집합 술어 표의 성공 요인으로 꼽은 넷(구조화 · 위치 · 수정 금지 계약 ·
+        /// 검증) 중 마지막 하나만 이 표에 없었다. 그래서 "조립기가 쓴다"는 결정이
+        /// 실제로는 "조립기가 넣고 복사를 요청한다"에 그쳤다.
+        /// </summary>
+        private static void CheckReferencedFunctions(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            // 호출이 없으면 조립기도 표를 내지 않는다(AiService는 functionCalls.Count > 0
+            // 일 때만 렌더한다). 그런데도 표를 요구하면 함수를 부르지 않는 SP가 영영
+            // L1을 통과하지 못한다 - 이 가드 없이 검사를 먼저 넣어 실측으로 확인했다.
+            if (expectations.ReferencedFunctionCalls.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var headingIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0,
+                line => line.Trim() == DmlScopeExtractor.ReferencedFunctionTableHeading);
+
+            if (headingIndex < 0)
+            {
+                var message =
+                    $"기계 확정 참조 함수 표가 명세서에 없습니다. `{DmlScopeExtractor.ReferencedFunctionTableHeading}` "
+                    + $"헤딩과 {expectations.ReferencedFunctionCalls.Count}개 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.SetPredicateMismatch,
+                    Message = message
+                });
+            }
+        }
+
         private static (int HeaderIndex, int EndIndex) LocateSetPredicateSection(IReadOnlyList<string> lines)
         {
             var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(

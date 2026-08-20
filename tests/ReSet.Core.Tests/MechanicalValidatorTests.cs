@@ -3934,5 +3934,90 @@ WHERE RunId = @RunId;");
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
         }
 
+        /// <summary>참조 함수 호출이 하나 있는 최소 SP. 세 테스트가 공유한다.</summary>
+        private static SpDefinition ReferencedFunctionSp() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM)
+    FROM   dbo.TSettleMst A
+END",
+            Dependencies = new List<DependencyInfo>
+            {
+                new() { Database = null, Schema = "dbo", Name = "UF_GET_ROUND4VAT", Type = "SQL_SCALAR_FUNCTION" }
+            }
+        };
+
+        [Fact]
+        public void From_WithReferencedFunctionCalls_ShouldExposeThem()
+        {
+            // 재료를 SpecExpectations가 들지 못하면 CheckReferencedFunctions가 대조할
+            // 기준값이 없다. AiService가 프롬프트 표를 만들 때 쓰는 것과 같은 규칙으로
+            // 이름 집합을 뽑아야 한다 - 두 곳이 갈리면 모델이 표를 그대로 베껴도
+            // L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
+            var expectations = SpecExpectations.From(ReferencedFunctionSp());
+
+            Assert.NotNull(expectations);
+            var call = Assert.Single(expectations!.ReferencedFunctionCalls);
+            Assert.Equal("UF_GET_ROUND4VAT", call.QualifiedName);
+            Assert.Equal("UPDATE", call.Operation);
+            Assert.Equal(1, call.StatementOrdinal);
+        }
+
+        [Fact]
+        public void Validate_MissingReferencedFunctionTable_ShouldReportError()
+        {
+            // 2026-08-20 최종 리뷰 M1. 조립기가 표를 프롬프트에 넣지만 모델이 그것을
+            // 옮겼는지는 아무도 확인하지 않았다 - 설계가 집합 술어 표의 성공 요인으로
+            // 꼽은 넷 중 "검증기가 확인한다"만 이 표에 없었다.
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var result = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(ReferencedFunctionSp()));
+
+            Assert.Contains(
+                result.Errors,
+                e => e.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading));
+        }
+
+        [Fact]
+        public void Validate_NoFunctionCalls_ShouldNotDemandTheReferencedFunctionTable()
+        {
+            // 거짓 실패 방지. 함수를 부르지 않는 SP는 조립기도 표를 내지 않으므로
+            // (AiService는 functionCalls.Count > 0일 때만 렌더한다) 검사가 표를 요구하면
+            // 그 SP는 영영 L1을 통과하지 못한다. 기존 세 표 검사가 전부 사실 유무로
+            // 조기 반환하는 이유가 이것이다.
+            var sp = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM   dbo.TSettleMst A
+END",
+                Dependencies = new List<DependencyInfo>()
+            };
+
+            var expectations = SpecExpectations.From(sp);
+            Assert.Empty(expectations!.ReferencedFunctionCalls);
+
+            var result = new MechanicalValidator().Validate("## 개요\n내용\n", expectations);
+
+            Assert.DoesNotContain(
+                result.Errors,
+                e => e.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading));
+        }
+
     }
 }
