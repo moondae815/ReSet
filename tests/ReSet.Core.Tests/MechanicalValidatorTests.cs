@@ -4019,5 +4019,25 @@ END",
                 e => e.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading));
         }
 
+        [Fact]
+        public void SuggestedPromptFix_ShouldCarryMachineTableErrorsToTheModel()
+        {
+            // 2026-08-20 리뷰 #1. BuildSuggestedPromptFix가 DetailedErrors를 일곱 타입으로
+            // 버킷팅하는데 SetPredicateMismatch가 그중에 없어, 기계 확정 표 관련 오류는
+            // 일반 머리말과 맺음말만 남고 <b>내용이 통째로 빠진 채</b> 모델에게 간다.
+            // SuggestedPromptFix가 모델에 닿는 유일한 통로다(result.Errors는 사람에게만
+            // 간다). 그래서 이 검사는 재시도 예산만 쓰고 "형식 오류가 있었다"만 알린다.
+            //
+            // 세 표(DML 범위·파생 테이블·집합 술어)가 전부 같은 구멍을 갖고 있었다.
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var result = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(ReferencedFunctionSp()));
+
+            Assert.Contains(
+                DmlScopeExtractor.ReferencedFunctionTableHeading,
+                result.SuggestedPromptFix);
+        }
+
     }
 }

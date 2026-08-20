@@ -539,10 +539,13 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            // 5: 참조 함수 표가 조립기 산출물로 바뀌고 함수 동작 서술이 금지되었다
-            //    (2026-08-20). 프롬프트 입력과 출력 계약이 둘 다 달라졌으므로 옛
-            //    산출물은 재분석해야 한다.
-            Assert.Equal(5, (int)entry["FormatVersion"]!);
+            // 6: UPDATE 절 제목의 문장 번호 유실과 오류 코드 앵커의 줄 번호 밀림을
+            //    고쳤다(2026-08-20). 둘 다 프롬프트 입력이 달라진 것이므로 옛 엔트리를
+            //    재사용하면 산출물이 옛 재료 그대로 남는다.
+            //
+            // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
+            // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
+            Assert.Equal(6, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

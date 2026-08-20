@@ -28,7 +28,11 @@ namespace ReSet.Core.Services
         // 5: 참조 함수 표가 조립기 산출물로 바뀌었고 함수 동작 서술이 금지되었다.
         //    프롬프트 입력과 출력 계약이 둘 다 달라졌으므로 옛 산출물은 재분석해야 한다.
         //    2026-08-20 축 A 교차 대조에서 이 표의 10행 중 8행이 결함이었고 🔴이 5건이었다.
-        private const int CurrentCacheFormatVersion = 5;
+        // 6: UPDATE 절 제목의 문장 번호가 "갱신 0"에서 실제 번호로 고쳐졌고(정규화가
+        //    GlobalStatementOrdinal을 유실하고 있었다), 오류 반환 코드 앵커의 줄 번호가
+        //    빈 줄만큼 밀리던 것을 바로잡았다. 둘 다 프롬프트 입력이 달라진 것이므로
+        //    옛 엔트리를 재사용하면 산출물이 옛 재료 그대로 남는다.
+        private const int CurrentCacheFormatVersion = 6;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

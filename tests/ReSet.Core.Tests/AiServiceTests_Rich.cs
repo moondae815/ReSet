@@ -1969,9 +1969,9 @@ END",
 
             var result = await service.GenerateSpecificationAsync(spDef, "rules");
 
-            var realLine = ddl.Split('\n').ToList().FindIndex(l => l.Contains("SET @po_intRetVal")) + 1;
-            Assert.Equal(8, realLine);
-            Assert.Contains($"Line {realLine}: SET @po_intRetVal = -1", result.UserPrompt);
+            // 리터럴 8로 못 박는다. 픽스처에서 다시 계산해 그 값을 단언에 끼워 넣으면
+            // 두 번째 단언이 첫 번째가 방금 고정한 것을 되풀이할 뿐이다.
+            Assert.Contains("Line 8: SET @po_intRetVal = -1", result.UserPrompt);
         }
     }
 }
