@@ -105,7 +105,7 @@
     *   **신규 공급자 확장**: 새로운 LLM 공급자 연동 시, [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 상속받아 클라이언트를 구현하고 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
     *   **CLI 기반 제공자(`claude-cli`/`codex-cli`/`agy-cli`)의 원칙**: 로컬에 로그인된 코딩 에이전트 CLI를 헤드리스로 기동해 구독 비용만으로 운용하는 별도 제공자군입니다. `ApiKey`를 두지 말고 `Command` 설정만 쓰십시오. 호출 실패 시 다른 제공자로 자동 대체하지 말고 [CliFailureClassifier.cs](./src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)로 원인을 분류해 예외로 보고해, 전환은 사람이 설정을 고쳐 판단하게 하십시오.
     *   **CLI 제공자의 토큰 집계 정직성**: 응답 봉투의 토큰 집계는 반드시 읽어 로그로 남기고, **봉투에 없는 항목을 0으로 채우지 마십시오** - 0은 측정값이라, 없는 필드를 0으로 적으면 나중에 캐시 판정의 근거로 쓰입니다([CliUsage.cs](./src/ReSet.Core/Services/Clients/Cli/CliUsage.cs)의 미보고 표기를 쓰십시오).
-    *   **CLI 제공자의 무인 배치 가드**: Actor/Critic/Consolidator 어느 하나라도 CLI 제공자면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 실행을 즉시 중단시켜야 합니다. `ModelName` 전달·temperature 무시 등 나머지 배선은 `architecture.md §4.5` 참고.
+    *   **CLI 제공자의 무인 배치 가드**: Actor/Critic/Consolidator 어느 하나라도 CLI 제공자면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 실행을 중단시켜야 합니다. 기본값을 뒤집지 말고 `AiSettings:AllowCliProviderInBatch`를 켠 실행만 통과시키되, `agy-cli`는 옵트인으로도 열지 마십시오(`CliProviderBatchGuardTests`). 나머지 배선은 `architecture.md §4.5` 참고.
     *   **코드가 강제하는 제약은 프롬프트에도 실으십시오**: 파서나 검증기가 상한·형식을 강제하는데 프롬프트가 그 사실을 알리지 않으면, 모델은 자신이 무엇을 어겼는지 알 방법이 없고 파이프라인은 오류 없이 폴백합니다 — 아무도 눈치채지 못하는 종류의 실패입니다.
         - 제약을 코드에 새로 넣을 때는 그것을 받는 프롬프트도 함께 고치고, **파이프라인이 의존하는 필드에는 예외 없이 규칙 문장을 주십시오** — 스키마 예시에 등장한다는 것은 모델에게 선택 항목이라는 뜻입니다. 같은 결함이 세 번 나왔습니다:
         - `ErrorCodes` 빈 배열
