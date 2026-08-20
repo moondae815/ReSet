@@ -1,1 +1,0 @@
-../../../.claude/skills/reset-consistency-audit/SKILL.md
