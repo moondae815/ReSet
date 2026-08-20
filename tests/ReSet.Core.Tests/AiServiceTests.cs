@@ -778,10 +778,12 @@ END",
 
             var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
 
-            Assert.DoesNotContain("A1B2C3", result.SystemPrompt);
+            Assert.NotNull(result.SystemPrompt);
+            var systemPrompt = result.SystemPrompt!;
+            Assert.DoesNotContain("A1B2C3", systemPrompt);
             // 접기 로직이 인식하는 표기인지를 문자열이 아니라 그 로직으로 확인한다.
             var shadowNames = System.Text.RegularExpressions.Regex
-                .Matches(result.SystemPrompt, @"batch_shadow\.[A-Za-z_][A-Za-z_0-9<>]*")
+                .Matches(systemPrompt, @"batch_shadow\.[A-Za-z_][A-Za-z_0-9<>]*")
                 .Select(m => m.Value)
                 .ToList();
             Assert.NotEmpty(shadowNames);
