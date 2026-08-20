@@ -707,5 +707,147 @@ END";
             Assert.Equal("NOT IN", fact.Operator);
             Assert.Equal("최상위", fact.Scope);
         }
+
+        [Fact]
+        public void ExtractFunctionCalls_ShouldNumberStatementsLikeDmlScopeTable()
+        {
+            // EXCEPTION_PROC 실측 형태. DML 범위 표가 "UPDATE 1 / UPDATE 2"로 세는 것과
+            // 같은 번호가 나와야 두 표를 나란히 읽을 수 있다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM)
+    FROM   dbo.TSettleMst A
+    WHERE  A.YMD = @pi_strYMD
+
+    UPDATE B SET B.PGVT = dbo.UF_GET_ROUND4VAT(B.PGCOMM)
+    FROM   dbo.TSettleMst B
+    WHERE  B.YMD = @pi_strYMD
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UF_GET_ROUND4VAT" });
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal("UPDATE", facts[0].Operation);
+            Assert.Equal(1, facts[0].StatementOrdinal);
+            Assert.Equal(2, facts[1].StatementOrdinal);
+            // 라인도 DML 범위 표와 같은 기준(호출식이 있는 원본 줄)이어야 한다.
+            Assert.Equal(5, facts[0].Line);
+            Assert.Equal(9, facts[1].Line);
+            Assert.All(facts, f => Assert.Equal("UF_GET_ROUND4VAT", f.QualifiedName));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_BuiltInFunctions_ShouldBeSkipped()
+        {
+            // ISNULL/ROUND/CAST는 Dependencies에 없으므로 knownFunctionNames에도 없다.
+            // 이 표는 "어느 사용자 함수를 어디서 부르는가"만 답한다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = ROUND(ISNULL(A.X, 0), 0)
+    FROM   dbo.T A
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UF_GET_ROUND4VAT" }));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_InlineTvf_ShouldBeCaptured()
+        {
+            // 파서의 ReferencedFunctions는 인라인 TVF를 싣지 못한다(2026-08-20 실측:
+            // EXPECT_PROC·INS_EXTRA 모두 UIF_SettleYMD가 Dependencies에만 있었다).
+            // 이 추출기는 Dependencies에서 온 이름 집합을 쓰므로 그 구멍이 닫힌다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.OutYMD = (SELECT OutYMD FROM dbo.UIF_SettleYMD(@pi_strYMD, A.PeriodID))
+    FROM   dbo.TSettleMst A
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UIF_SettleYMD" }));
+
+            Assert.Equal("dbo.UIF_SettleYMD", fact.QualifiedName);
+            Assert.Equal("UPDATE", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_NestedCalls_ShouldCaptureBoth()
+        {
+            // EXCEPTION_PROC UPDATE 3 실측 형태 - 바깥 ROUND4VAT과 안쪽 두 함수가
+            // 모두 나와야 "이 문장이 무엇을 부르는가"가 빠짐없이 전달된다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(dbo.UF_GET_CLIENTSECTIONRATE(A.CLIENTID) * dbo.UF_GET_INCVTAXRATE(A.CLVTType))
+    FROM   dbo.TSettleMst A
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(
+                ddl,
+                new[] { "UF_GET_ROUND4VAT", "UF_GET_CLIENTSECTIONRATE", "UF_GET_INCVTAXRATE" });
+
+            var names = facts.Select(f => f.QualifiedName).ToList();
+            Assert.Equal(3, facts.Count);
+            Assert.Contains("UF_GET_ROUND4VAT", names);
+            Assert.Contains("UF_GET_CLIENTSECTIONRATE", names);
+            Assert.Contains("UF_GET_INCVTAXRATE", names);
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_StandaloneSelect_ShouldBeSkipped()
+        {
+            // DML 범위 표·집합 술어 표와 같은 경계다 - 세 표가 같은 문장 집합을
+            // 같은 번호로 가리켜야 나란히 읽을 수 있다. 이 경계를 넓히려면 세 표를
+            // 함께 넓혀야 하므로, 여기서 조용히 달라지지 않도록 못 박아 둔다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = dbo.UF_GET_ROUND4VAT(100)
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UF_GET_ROUND4VAT" }));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_UnparsableDdl_ShouldReturnEmpty()
+        {
+            // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(
+                "CREATE PROCEDURE ((( broken", new[] { "UF_X" }));
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(null, new[] { "UF_X" }));
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls("SELECT 1", Array.Empty<string>()));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_ScalarCall_ShouldReportBareName()
+        {
+            // ScriptDom의 FunctionCall.FunctionName은 한정자를 담지 않는다.
+            // 스키마·DB는 렌더러가 Dependencies에서 붙인다 - 여기서 추측하지 않는다.
+            var ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = SETTLE_CARD_DB.dbo.UF_GET_COMM4PG(A.CPID)
+    FROM   dbo.T A
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UF_GET_COMM4PG" }));
+
+            Assert.Equal("UF_GET_COMM4PG", fact.QualifiedName);
+        }
     }
 }

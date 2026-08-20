@@ -97,6 +97,38 @@ namespace ReSet.Core.Services
         string Scope = "최상위");
 
     /// <summary>
+    /// "이 문장이 어느 사용자 함수를 부르는가"를 담는다.
+    ///
+    /// [왜 동작이 아니라 호출 사실만 담는가 - 2026-08-20 축 A 교차 대조]
+    /// SP 명세서가 참조 함수의 동작을 산문으로 요약하던 자리에서 10행 중 8행이
+    /// 결함이었고 그중 🔴이 5건이었다(필수 술어 USESTATE=0 누락, IIF 분기 누락,
+    /// 기본값 0 반환 누락). 함수 DDL 전문은 이미 프롬프트에 들어가고 "분석하라"는
+    /// 지시까지 있었는데도 그랬다 - 같은 함수를 SP마다 다르게 썼다.
+    /// 그래서 요약을 정확하게 만드는 대신 요약 자체를 없앤다. 함수 동작의 단일
+    /// 진실의 원천은 그 함수의 Spec.md이고, SP 명세서는 거기로 링크만 건다.
+    /// </summary>
+    /// <param name="QualifiedName">호출문에 적힌 그대로의 한정명(예: `dbo.UF_GET_ROUND4VAT`).</param>
+    /// <param name="Operation">
+    /// 이 호출을 담은 문장의 연산(UPDATE/INSERT/DELETE).
+    ///
+    /// [독립 SELECT 문의 호출은 담지 않는다] DML 범위 표·집합 술어 표가 세우는 경계와
+    /// 같다 - 세 표가 같은 문장 집합을 같은 번호로 가리켜야 나란히 읽을 수 있다.
+    /// 변수 대입용 SELECT(`SELECT @v = dbo.UF_X(...)`)의 호출은 이 표에 나오지 않는다.
+    /// </param>
+    /// <param name="StatementOrdinal">
+    /// 연산 종류별 · 1부터인 문장 번호. DML 범위 표·집합 술어 표와 같은 채번이라
+    /// 세 표를 나란히 읽을 수 있다(SetPredicateFact.StatementOrdinal 문서 참고).
+    /// </param>
+    /// <param name="Line">호출식이 있는 원본 줄 번호.</param>
+    /// <param name="CallExpression">호출식 원문. 인자를 그대로 보여 준다.</param>
+    public sealed record ReferencedFunctionCallFact(
+        string QualifiedName,
+        string Operation,
+        int StatementOrdinal,
+        int Line,
+        string CallExpression);
+
+    /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
     ///
     /// 명세서가 부재를 서술했는지는 자연어 판정이라 앵커가 없다. 그래서 이 재료는
@@ -120,6 +152,7 @@ namespace ReSet.Core.Services
     {
         public const string DmlScopeTableHeading = "### DML 범위 (기계 확정 — 수정 금지)";
         public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
+        public const string ReferencedFunctionTableHeading = "### 참조 함수 (기계 확정 — 수정 금지)";
 
         public static IReadOnlyList<DmlScopeFact> Extract(string? ddlText, string dateParameterName)
         {
@@ -179,6 +212,43 @@ namespace ReSet.Core.Services
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[DmlScopeExtractor] 집합 술어 수집 실패 - 빈 목록으로 진행합니다.");
                 return Array.Empty<SetPredicateFact>();
+            }
+        }
+
+        /// <summary>
+        /// DDL에서 사용자 정의 함수 호출을 문장 번호와 함께 뽑는다.
+        /// </summary>
+        /// <param name="knownFunctionNames">
+        /// 한정자 없는 함수 이름 집합. SpDefinition.Dependencies의 FUNCTION 타입에서
+        /// 온다 - StaticAnalysis.ReferencedFunctions를 쓰지 않는 이유는 그쪽이 인라인
+        /// TVF를 싣지 못하기 때문이다(2026-08-20 실측: EXPECT_PROC·INS_EXTRA 모두
+        /// UIF_SettleYMD가 Dependencies에만 있었다). 이 집합에 없는 이름은 내장
+        /// 함수(ISNULL·ROUND·CAST)로 보고 건너뛴다.
+        /// </param>
+        public static IReadOnlyList<ReferencedFunctionCallFact> ExtractFunctionCalls(
+            string? ddlText,
+            IReadOnlyCollection<string> knownFunctionNames)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<ReferencedFunctionCallFact>();
+            if (knownFunctionNames == null || knownFunctionNames.Count == 0)
+                return Array.Empty<ReferencedFunctionCallFact>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out _);
+                if (fragment == null) return Array.Empty<ReferencedFunctionCallFact>();
+
+                var visitor = new ReferencedFunctionVisitor(knownFunctionNames);
+                fragment.Accept(visitor);
+                return visitor.Facts;
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+                Log.Warning(ex, "[DmlScopeExtractor] 참조 함수 호출 수집 실패 - 빈 목록으로 진행합니다.");
+                return Array.Empty<ReferencedFunctionCallFact>();
             }
         }
 
@@ -485,6 +555,98 @@ namespace ReSet.Core.Services
                     Facts.Add(new SetPredicateFact(
                         operation, statement.StartLine, column,
                         op == "NOT IN", literals, ordinal, op, scope));
+                }
+            }
+        }
+
+        /// <summary>
+        /// 문장마다 연산별 번호를 매기고 그 안의 사용자 함수 호출을 모은다.
+        /// 번호를 매기는 규칙은 SetPredicateVisitor와 같다 - 두 방문자가 같은 파싱
+        /// 트리를 같은 순서로 훑고 문장당 정확히 한 번 카운터를 늘리므로, 서로를
+        /// 참조하지 않고도 항상 같은 번호가 나온다.
+        /// </summary>
+        private sealed class ReferencedFunctionVisitor : TSqlFragmentVisitor
+        {
+            private readonly HashSet<string> _known;
+            private readonly Dictionary<string, int> _perOperation =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            public ReferencedFunctionVisitor(IReadOnlyCollection<string> knownFunctionNames) =>
+                _known = new HashSet<string>(knownFunctionNames, StringComparer.OrdinalIgnoreCase);
+
+            public List<ReferencedFunctionCallFact> Facts { get; } = new();
+
+            public override void Visit(UpdateSpecification node) =>
+                Collect("UPDATE", node, NextOrdinal("UPDATE"));
+
+            public override void Visit(DeleteSpecification node) =>
+                Collect("DELETE", node, NextOrdinal("DELETE"));
+
+            public override void Visit(InsertSpecification node) =>
+                Collect("INSERT", node, NextOrdinal("INSERT"));
+
+            private int NextOrdinal(string operation)
+            {
+                _perOperation.TryGetValue(operation, out var n);
+                _perOperation[operation] = ++n;
+                return n;
+            }
+
+            private void Collect(string operation, TSqlFragment statement, int ordinal)
+            {
+                var calls = new CallCollector(_known);
+                statement.Accept(calls);
+
+                foreach (var (qualified, line, text) in calls.Calls)
+                {
+                    Facts.Add(new ReferencedFunctionCallFact(qualified, operation, ordinal, line, text));
+                }
+            }
+
+            /// <summary>
+            /// 문장 안의 모든 함수 호출을 훑는다. 중첩 호출은 바깥과 안쪽이 모두
+            /// 나와야 "이 문장이 무엇을 부르는가"가 빠짐없이 전달되므로, 자식으로
+            /// 계속 내려간다(base.ExplicitVisit 호출).
+            /// </summary>
+            private sealed class CallCollector : TSqlFragmentVisitor
+            {
+                private readonly HashSet<string> _known;
+
+                public CallCollector(HashSet<string> known) => _known = known;
+
+                public List<(string Qualified, int Line, string Text)> Calls { get; } = new();
+
+                public override void ExplicitVisit(FunctionCall node)
+                {
+                    Record(node.FunctionName?.Value, node);
+                    base.ExplicitVisit(node);
+                }
+
+                // 인라인 TVF는 FROM 절의 SchemaObjectFunctionTableReference로 나온다.
+                public override void ExplicitVisit(SchemaObjectFunctionTableReference node)
+                {
+                    Record(node.SchemaObject?.BaseIdentifier?.Value, node, node.SchemaObject);
+                    base.ExplicitVisit(node);
+                }
+
+                private void Record(string? bareName, TSqlFragment node, SchemaObjectName? schemaObject = null)
+                {
+                    if (string.IsNullOrWhiteSpace(bareName) || !_known.Contains(bareName)) return;
+
+                    Calls.Add((Qualify(bareName, schemaObject), node.StartLine, TextOf(node)));
+                }
+
+                /// <summary>스칼라 함수는 호출식 원문에서, TVF는 SchemaObjectName에서 한정자를 얻는다.</summary>
+                private static string Qualify(string bareName, SchemaObjectName? schemaObject)
+                {
+                    var schema = schemaObject?.SchemaIdentifier?.Value;
+                    var database = schemaObject?.DatabaseIdentifier?.Value;
+
+                    if (!string.IsNullOrWhiteSpace(database) && !string.IsNullOrWhiteSpace(schema))
+                        return $"{database}.{schema}.{bareName}";
+                    if (!string.IsNullOrWhiteSpace(schema))
+                        return $"{schema}.{bareName}";
+                    return bareName;
                 }
             }
         }
