@@ -148,25 +148,60 @@ namespace ReSet.Cli
             var cliCommand = configuration[$"AiSettings:Providers:{provider}:Command"];
 
             // 무인 배치 도중 구독 쿼터가 소진되거나 권한 프롬프트에서 멈추면 장시간
-            // 실행이 통째로 날아간다. 시작 직후에 막는다.
+            // 실행이 통째로 날아간다. 시작 직후에 막는다. 그 손실을 감수하고 구독 계정으로
+            // 돌려야 하는 사정이 있으면 AllowCliProviderInBatch로 연다(기본 false).
+            bool.TryParse(
+                configuration["AiSettings:AllowCliProviderInBatch"] ?? "false",
+                out bool allowCliProviderInBatch);
+
             if (cliArgs.IsBatchMode)
             {
+                var guardCriticProvider = configuration["AiSettings:Critic:Provider"];
+                var guardConsolidatorProvider = configuration["AiSettings:Consolidator:Provider"];
+
                 var blockedRole = ReSet.Core.Services.Clients.Cli.CliProviderBatchGuard.FindBlockedRole(
                     provider,
-                    configuration["AiSettings:Critic:Provider"],
-                    configuration["AiSettings:Consolidator:Provider"]);
+                    guardCriticProvider,
+                    guardConsolidatorProvider,
+                    allowCliProviderInBatch);
 
                 if (blockedRole != null)
                 {
-                    AnsiConsole.MarkupLine(
-                        $"[red]에러: 배치 모드에서는 CLI provider를 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
-                    AnsiConsole.MarkupLine(
-                        "[yellow]CLI provider는 구독 쿼터 소진이나 권한 프롬프트로 무인 실행 도중 중단될 수 있습니다. appsettings.json에서 API provider로 변경해 주십시오.[/]");
+                    // 옵트인을 켰는데도 막혔다면 원인은 agy-cli 하나뿐이다(가드가 그것만 남긴다).
+                    // 사유를 갈라 놓지 않으면 "허용했는데 왜 막히나"에서 사용자가 멈춘다.
+                    if (allowCliProviderInBatch)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[red]에러: agy-cli는 배치 모드 허용 설정으로도 분석 역할에 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
+                        AnsiConsole.MarkupLine(
+                            "[yellow]agy-cli는 툴을 끌 수단이 없어 헤드리스에서 권한을 자동 거부하고 빈 응답만 남깁니다. claude-cli 또는 codex-cli를 사용해 주십시오.[/]");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[red]에러: 배치 모드에서는 CLI provider를 사용할 수 없습니다. ({Markup.Escape(blockedRole)} 역할)[/]");
+                        AnsiConsole.MarkupLine(
+                            "[yellow]CLI provider는 구독 쿼터 소진이나 권한 프롬프트로 무인 실행 도중 중단될 수 있습니다. appsettings.json에서 API provider로 변경하거나, 위험을 감수한다면 AiSettings:AllowCliProviderInBatch를 true로 설정해 주십시오.[/]");
+                    }
 
                     // 이 가드의 존재 이유는 무인 CI 실행을 세우는 것이다. 종료 코드 0으로
                     // 끝나면 아무것도 만들지 않았는데도 파이프라인이 초록으로 통과한다.
                     Environment.ExitCode = 1;
                     return;
+                }
+
+                // 통과시킨 것이지 안전해진 것이 아니다. 실제로 CLI provider를 쓰는 실행에만
+                // 경고를 남긴다 - 설정만 켜 두고 API provider로 도는 실행까지 시끄러우면
+                // 경고가 배경 소음이 되어 정작 위험한 실행에서 읽히지 않는다.
+                var cliRole = ReSet.Core.Services.Clients.Cli.CliProviderBatchGuard.FindCliRole(
+                    provider, guardCriticProvider, guardConsolidatorProvider);
+
+                if (cliRole != null)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]경고: 배치 모드에서 CLI provider를 사용합니다. ({Markup.Escape(cliRole)} 역할)[/]");
+                    AnsiConsole.MarkupLine(
+                        "[yellow]권한 프롬프트 정지나 구독 쿼터 소진이 발생하면 이번 실행 전체가 소실될 수 있습니다.[/]");
                 }
             }
 
