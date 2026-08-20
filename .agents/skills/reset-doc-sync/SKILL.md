@@ -1,1 +1,0 @@
-../../../.claude/skills/reset-doc-sync/SKILL.md
