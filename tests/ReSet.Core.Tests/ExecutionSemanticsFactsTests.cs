@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using Xunit;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
@@ -27,7 +26,7 @@ namespace ReSet.Core.Tests
                 CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
                 NoColumns);
 
-            var fact = Assert.Single(facts.Where(f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind));
+            var fact = Assert.Single(facts, f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind);
             Assert.Contains("SETTLE_POQ_DB", fact.Fact);
             Assert.Contains("3부 식별자 참조 0건", fact.Fact);
             Assert.Contains("연결 서버 참조 0건", fact.Fact);
@@ -48,7 +47,7 @@ namespace ReSet.Core.Tests
                 CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
                 NoColumns);
 
-            var fact = Assert.Single(facts.Where(f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind));
+            var fact = Assert.Single(facts, f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind);
             Assert.Contains("PaymentDB.dbo.TExtraSettleIn", fact.Fact);
         }
 
@@ -58,6 +57,23 @@ namespace ReSet.Core.Tests
             var facts = ExecutionSemanticsFacts.Collect("SELECT 1;", null, null, NoColumns);
 
             Assert.Empty(facts);
+        }
+
+        [Fact]
+        public void Collect_WithAggregateAssignment_ShouldEmitAnAggregateRow()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v VARCHAR(8) = ''
+    SELECT @v = MIN(ReqYMD) FROM dbo.T
+END";
+
+            var facts = ExecutionSemanticsFacts.Collect(
+                ddl, new SpStaticAnalysisResult { IsParsedSuccessfully = true }, null, NoColumns);
+
+            Assert.Contains(facts, f => f.Kind == ExecutionSemanticsFacts.AggregateAssignmentKind);
         }
     }
 }
