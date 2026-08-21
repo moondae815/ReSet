@@ -29,12 +29,24 @@ namespace ReSet.Core.Services
 
             var threePart = analysis.ThreePartObjectReferences ?? new List<string>();
             var linked = analysis.LinkedServerReferences ?? new List<string>();
-            var home = string.IsNullOrWhiteSpace(objectKey?.Database) ? "(미상)" : objectKey!.Database!;
+
+            // objectKey?.Database가 비어 있으면 이 SP가 속한 DB의 "이름"만 모를 뿐, 3부
+            // 식별자·연결 서버 참조 건수 자체는 파싱이 성공했으므로 여전히 확정값이다.
+            // "(미상)"을 문장 안에 박으면 "확정값입니다"로 끝나는 문장에 미상값이 섞여
+            // 표의 어조와 어긋난다(m2, 2026-08-22 최종 브랜치 리뷰) - 그래서 DB 이름을
+            // 아예 언급하지 않는 문구로 대체하고, 확정된 건수만 그대로 싣는다. 파싱
+            // 실패(:26-28)처럼 사실 자체를 못 내는 경우와 달리 여기서는 사실이 있으므로
+            // 침묵하지 않는다.
+            var home = objectKey?.Database;
+            var hasHome = !string.IsNullOrWhiteSpace(home);
 
             if (threePart.Count == 0 && linked.Count == 0)
             {
+                var subject = hasHome
+                    ? $"참조 객체는 전부 `{home}` 로컬입니다."
+                    : "참조 객체는 전부 이 프로시저와 같은 DB의 로컬 객체입니다.";
                 return new DatabasePlacementFact(
-                    $"참조 객체는 전부 `{home}` 로컬입니다. 3부 식별자 참조 0건, 연결 서버 참조 0건 — 확정값입니다.");
+                    $"{subject} 3부 식별자 참조 0건, 연결 서버 참조 0건 — 확정값입니다.");
             }
 
             var parts = new List<string>();
@@ -47,8 +59,10 @@ namespace ReSet.Core.Services
                 parts.Add($"연결 서버 참조 {linked.Count}건: {string.Join(", ", linked)}");
             }
 
-            return new DatabasePlacementFact(
-                $"소속 DB는 `{home}`이고 다음은 그 밖입니다 — {string.Join(" / ", parts)}.");
+            var prefix = hasHome
+                ? $"소속 DB는 `{home}`이고 다음은 그 밖입니다"
+                : "소속 DB 이름은 미상이나 다음은 그 밖입니다";
+            return new DatabasePlacementFact($"{prefix} — {string.Join(" / ", parts)}.");
         }
     }
 }
