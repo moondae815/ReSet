@@ -442,7 +442,10 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildLockHintTableLines(lockHints));
             }
 
-            rules.AddRange(BuildMachineFactBlockLines(spDef));
+            // 이 갈래(SP 전체 명세서)는 `## CRUD 분석`·`## 로직 흐름 요약` 둘 다
+            // 필수 H2로 쓴다(:355) - 두 표 모두 표 그대로 준다.
+            rules.AddRange(BuildMachineFactBlockLines(
+                spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true));
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
@@ -1113,8 +1116,24 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 기존 표 6종은 이 함수로 옮기지 않는다 - 갈래별 렌더 조건에 미묘한 비대칭이
         /// 있어(집합 술어는 dmlScopeFacts가 비면 렌더하지 않는다) 잘못 통일하면 기존
         /// 표가 조용히 사라지거나 더해진다.
+        ///
+        /// [목적지 절 두 플래그를 받는 이유 - Task 14 (Critical), 2026-08-22 최종 브랜치
+        /// 리뷰] 진입점을 하나로 둔 것 자체는 옳았지만, 표 두 종의 인트로가 서로 다른
+        /// 목적지 H2("실행 의미"는 `## CRUD 분석`, "CASE 분기"는 `## 로직 흐름 요약`)를
+        /// 못 박는데, 지역 모델의 두 절 분할 갈래(`CrudAnalysis`·`LogicAndVisualization`)는
+        /// 각각 그중 하나만 쓰고 다른 하나는 아예 쓰지 않는다(H2 제약이 "오직 하나만"이라고
+        /// 명시한다). 갈래 구분 없이 표 둘을 함께 냈더니 "자신이 쓸 수 없는 절에 표를
+        /// 넣으라"는 자기모순 지시가 됐다 - 모델이 그 H2 제약을 어기고 엉뚱한 헤딩까지
+        /// 합성하거나(귀결: 문서에 같은 `###` 헤딩이 두 번 생기고
+        /// `MechanicalValidator.LocateHeadingSection`은 `FindIndexOutsideFence`로 첫
+        /// 일치만 보므로 뒤 사본이 조용히 사라진다), 표 자체를 버려 그 갈래의 산출물에는
+        /// 그 표가 아예 없는 둘 중 하나가 난다. 그래서 갈래가 목적지 H2를 실제로 쓰는지를
+        /// 호출부가 알려주고, 쓰지 않으면 `BuildLockHintReferenceMaterialLines`가 세운
+        /// 선례(표가 아니라 참고 재료)를 그대로 따른다 - 진입점은 하나로 남고, 표를
+        /// 늘려도 네 갈래에 자동으로 실리는 이점은 그대로 유지된다.
         /// </summary>
-        private static List<string> BuildMachineFactBlockLines(SpDefinition spDef)
+        private static List<string> BuildMachineFactBlockLines(
+            SpDefinition spDef, bool crudAnalysisSectionPresent, bool logicFlowSectionPresent)
         {
             var lines = new List<string>();
 
@@ -1125,15 +1144,83 @@ Based on the structured reference context above, reverse engineer the stored pro
                 ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
             if (executionSemantics.Count > 0)
             {
-                lines.AddRange(BuildExecutionSemanticsTableLines(executionSemantics));
+                lines.AddRange(crudAnalysisSectionPresent
+                    ? BuildExecutionSemanticsTableLines(executionSemantics)
+                    : BuildExecutionSemanticsReferenceMaterialLines(executionSemantics));
             }
 
             var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
             if (caseBranches.Count > 0)
             {
-                lines.AddRange(BuildCaseBranchTableLines(caseBranches));
+                lines.AddRange(logicFlowSectionPresent
+                    ? BuildCaseBranchTableLines(caseBranches)
+                    : BuildCaseBranchReferenceMaterialLines(caseBranches));
             }
 
+            return lines;
+        }
+
+        /// <summary>
+        /// 실행 의미 사실을 <b>표 출력 지시가 아니라 근거 재료</b>로 싣는다 -
+        /// `BuildLockHintReferenceMaterialLines`와 같은 선례를 따른다. 이 분기는
+        /// `## CRUD 분석`을 쓰지 않으므로(예: 지역 모델의 `LogicAndVisualization`
+        /// 절 분할 갈래) `BuildExecutionSemanticsTableLines`의 "Copy this table
+        /// verbatim into `## CRUD 분석`" 지시를 그대로 주면 모델이 자신의 H2 제약을
+        /// 어기고 `## CRUD 분석` 헤딩까지 합성할 위험이 있다. 그래서 표 형식·헤딩
+        /// 리터럴을 피하고, 사실 자체를 참고 전용 글머리 목록으로 준다.
+        /// </summary>
+        private static List<string> BuildExecutionSemanticsReferenceMaterialLines(
+            IReadOnlyList<ExecutionSemanticFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [REFERENCE - execution semantics facts] MACHINE-DERIVED from the source DDL and " +
+                "static analysis. Do NOT output a table or heading for this list in this section - " +
+                "`## CRUD 분석` (a separate part of this same document) is responsible for rendering " +
+                "it as a table. These are settled values, not open questions - never restate any of " +
+                "them as unknown, unverifiable, or not provided. Use these facts only as ground truth:"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add(
+                    $"   - {fact.Kind} (라인 {fact.Line}, 대상 {fact.Target}): {fact.Fact}");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
+        /// CASE 분기 사실을 <b>표 출력 지시가 아니라 근거 재료</b>로 싣는다 -
+        /// `BuildLockHintReferenceMaterialLines`와 같은 선례를 따른다. 이 분기는
+        /// `## 로직 흐름 요약`을 쓰지 않으므로(예: 지역 모델의 `CrudAnalysis` 절
+        /// 분할 갈래) `BuildCaseBranchTableLines`의 "Copy this table verbatim into
+        /// `## 로직 흐름 요약`" 지시를 그대로 주면 모델이 자신의 H2 제약을 어기고
+        /// `## 로직 흐름 요약` 헤딩까지 합성할 위험이 있다. 그래서 표 형식·헤딩
+        /// 리터럴을 피하고, 조건·결과 원문 그대로를 참고 전용 글머리 목록으로 준다.
+        /// </summary>
+        private static List<string> BuildCaseBranchReferenceMaterialLines(
+            IReadOnlyList<CaseBranchFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [REFERENCE - CASE branch facts] MACHINE-DERIVED from the source DDL. Do NOT " +
+                "output a table or heading for this list in this section - `## 로직 흐름 요약` (a " +
+                "separate part of this same document) is responsible for rendering it as a table. " +
+                "Never merge branches, never paraphrase a comparison operator, and never summarise a " +
+                "result expression when you use these facts elsewhere in this document - the verbatim " +
+                "text below is the contract:"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add(
+                    $"   - 라인 {fact.Line}, 순서 {fact.Ordinal}: 조건 원문 `{fact.Condition}` -> " +
+                    $"결과 원문 `{fact.Result}`");
+            }
+
+            lines.Add("");
             return lines;
         }
 
@@ -1456,7 +1543,10 @@ Based on the structured reference context above, reverse engineer the stored pro
                 systemPrompt += "\n\n" + string.Join("\n", BuildReferencedFunctionTableLines(functionCallsForFunctionDef, functionDef));
             }
 
-            var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(functionDef);
+            // 이 갈래(함수 명세서)도 `## CRUD 분석`·`## 로직 흐름 요약` 둘 다 필수
+            // H2로 쓴다(:1354) - 두 표 모두 표 그대로 준다.
+            var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(
+                functionDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true);
             if (machineFactLinesForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
@@ -2678,7 +2768,11 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildLockHintTableLines(lockHintsForCrud));
                 }
 
-                sbRules.AddRange(BuildMachineFactBlockLines(spDef));
+                // 이 분기(CrudAnalysis)는 `## CRUD 분석` 하나만 쓴다(:2583 "only one
+                // H2 header"). CASE 분기 표는 `## 로직 흐름 요약`이 목적지라 이 분기가
+                // 쓰지 않으므로 - Task 14 (Critical) - 표가 아니라 참고 재료로만 준다.
+                sbRules.AddRange(BuildMachineFactBlockLines(
+                    spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: false));
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
@@ -2841,7 +2935,12 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForLogic));
                 }
-                sbRules.AddRange(BuildMachineFactBlockLines(spDef));
+                // 이 분기(LogicAndVisualization)는 `## 로직 흐름 요약`·`## 비즈니스
+                // 흐름 시각화`만 쓴다(:2802 "only H2 headers"). 실행 의미 표는
+                // `## CRUD 분석`이 목적지라 이 분기가 쓰지 않으므로 - Task 14
+                // (Critical) - 표가 아니라 참고 재료로만 준다.
+                sbRules.AddRange(BuildMachineFactBlockLines(
+                    spDef, crudAnalysisSectionPresent: false, logicFlowSectionPresent: true));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
