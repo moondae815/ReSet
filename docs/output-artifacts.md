@@ -284,6 +284,6 @@ Job 이름으로 짝지어 찾는다 — 이 디렉터리 바로 아래가 `[Job
 
 - [프로젝트 구조](../README.md#-프로젝트-구조-project-structure) — 디렉터리 트리 요약
 - [아키텍처](architecture.md) — 산출물을 만드는 모듈과 데이터 흐름
-- [남은 후속 작업](todo.md) — 산출물 생성 경로에 남아 있는 결함 목록
+- [알려진 결함](known-defects.md) — 설계 문서가 후속으로 미룬 것 중 심각도와 반복 횟수를 집계한 목록
 
 <!-- synced-through: 9ead7ac -->
