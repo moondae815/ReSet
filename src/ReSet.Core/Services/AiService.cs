@@ -2655,6 +2655,36 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForOverview));
                 }
 
+                // 배선 지점 4(실행 의미 참고 재료) - Task 17, 최종 브랜치 리뷰 2차.
+                // `BuildMachineFactBlockLines`의 호출부 네 곳(SP 전체·함수·CrudAnalysis·
+                // LogicAndVisualization) 중 이 갈래(`OverviewAndParameters`)만 빠져
+                // 있었다. 결함 E(F1 무리 - StaticAnalysis가 이미 확정한 "크로스 DB
+                // 참조 아님"을 명세서가 "단언할 수 없습니다"로 되짚은 사고)의 실제
+                // 앵커가 `## 개요` 절 안에서 확인됐다(UF_Get_CLComm4MobileCo의
+                // Spec.md, DatabasePlacementExtractor 문서 참고) - 이 갈래도 근거
+                // 재료를 받아야 한다. `BuildMachineFactBlockLines`를 그대로 부르지
+                // 않는 이유는 그 함수가 CASE 분기 사실도 함께 실어서다 - CASE 분기는
+                // `## 로직 흐름 요약` 소관이고 이 갈래(`## 개요`·`## 파라미터 목록`)의
+                // 서술 대상이 아니다. 감사 🟡이 난 자리는 DB 배치뿐이고, CASE 분기를
+                // 더하면 프롬프트만 길어지고 모델이 산만해질 뿐 대응하는 결함이 없다.
+                // `BuildExecutionSemanticsReferenceMaterialLines`(Task 14)를 직접
+                // 재사용해 다섯 종류(DB 배치·집계 대입·@@ROWCOUNT·커서 수명·식 타입
+                // 경로) 전부를 준다 - "이 사실들을 미확정으로 되짚지 말라"는 계약은
+                // 종류를 가리지 않고, CrudAnalysis·LogicAndVisualization 두 갈래도
+                // 다섯 종류 전부를 이미 받는다(BuildMachineFactBlockLines 문서 참고).
+                // 표가 아니라 참고 재료여야 한다는 이유는 위 잠금 힌트 배선과 같다 -
+                // `## CRUD 분석`용 "Copy this table verbatim" 지시를 그대로 주면
+                // 이 갈래가 자신의 H2 제약을 어기고 그 헤딩까지 합성할 위험이 있다.
+                var executionSemanticsForOverview = ExecutionSemanticsFacts.Collect(
+                    spDef.DdlText,
+                    spDef.StaticAnalysis,
+                    spDef.ObjectKey,
+                    ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
+                if (executionSemanticsForOverview.Count > 0)
+                {
+                    sbRules.AddRange(BuildExecutionSemanticsReferenceMaterialLines(executionSemanticsForOverview));
+                }
+
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");

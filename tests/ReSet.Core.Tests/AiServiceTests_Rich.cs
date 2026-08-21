@@ -2535,6 +2535,49 @@ END"
             Assert.Contains("3부 식별자 참조 0건", body);
         }
 
+        // Task 17 - 결함 E(F1 무리)의 실제 앵커는 `## 개요`다(UF_Get_CLComm4MobileCo의
+        // Spec.md, "원본 DDL에 3부 식별자가 없으므로 크로스 데이터베이스 참조 여부를
+        // 단언할 수 없습니다" - StaticAnalysis가 이미 확정한 값을 되짚었다). 그런데
+        // `BuildMachineFactBlockLines` 호출부 네 곳(SP 전체·함수·CrudAnalysis·
+        // LogicAndVisualization) 중 어디에도 `OverviewAndParameters`가 없다 - 이
+        // 갈래는 실행 의미 사실을 한 번도 받지 못한다. 표가 아니라 참고 재료로 줘야
+        // 한다(이 갈래는 `## 개요`·`## 파라미터 목록`만 쓰므로 `## CRUD 분석`용 표
+        // 지시를 주면 자기모순이 된다) - `BuildLockHintReferenceMaterialLines`가 이미
+        // 그 선례다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldReceiveExecutionSemanticsFactsInline()
+        {
+            var (service, _) = CreateProbe();
+
+            var result = await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
+
+            var body = result.SystemPrompt;
+            // 확정 사실 자체는 실려야 하지만, 이 갈래는 `## CRUD 분석`을 쓰지 않으므로
+            // 표·헤딩 형태로 실리면 안 된다 - LogicAndVisualization과 같은 계약이다.
+            Assert.Contains("3부 식별자 참조 0건", body);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("Do NOT output", body);
+        }
+
+        // CASE 분기는 `## 로직 흐름 요약` 소관이고 `## 개요`의 서술 대상이 아니다 -
+        // 감사 🟡이 난 자리는 DB 배치(크로스 DB 참조 단언)뿐, CASE 분기 서술이
+        // `## 개요`에서 문제 된 적은 없다. 재료를 늘리면 프롬프트가 길어지고 모델이
+        // 산만해지므로, 이 갈래에는 CASE 분기 재료를 주지 않는다 - 표로도, 참고
+        // 재료로도 싣지 않아야 한다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldNotReceiveCaseBranchFacts()
+        {
+            var (service, _) = CreateProbe();
+
+            var result = await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
+
+            var body = result.SystemPrompt;
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+            Assert.DoesNotContain("REFERENCE - CASE branch facts", body);
+        }
+
         private static SpDefinition ProbeCaseBranchSpDef()
         {
             var spDef = new SpDefinition
