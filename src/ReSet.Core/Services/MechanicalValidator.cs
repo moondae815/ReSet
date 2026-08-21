@@ -39,6 +39,12 @@ namespace ReSet.Core.Services
         // 어디에도 (int)ErrorType 캐스트나 숫자 직렬화가 없으므로(문자열 이름으로만
         // 비교·표시한다) 기능 영향은 없다.
         BatchRunRowNeverCreated,
+        // 작업 5 - 잠금 힌트·객체 선언 표의 L1 앵커. 위와 같은 이유로 서수 이동은
+        // 기능에 영향이 없다. BuildSuggestedPromptFix의 catch-all 버킷(8. 기계 확정
+        // 재료 대조 실패)이 열거되지 않은 타입을 모두 흘려보내므로 이 값도 별도
+        // 버킷 없이 모델에게 닿는다.
+        LockHintTableMissing,
+        ObjectDeclarationTableMissing,
         General
     }
 
@@ -138,6 +144,9 @@ namespace ReSet.Core.Services
                     CheckDerivedTableDefinitions(cleansed, expectations, result);
                     CheckSetPredicates(cleansed, expectations, result);
                     CheckReferencedFunctions(cleansed, expectations, result);
+                    CheckLockHints(cleansed, expectations, result);
+                    CheckObjectDeclaration(cleansed, expectations, result);
+                    CheckOrderByExpressions(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -3124,6 +3133,252 @@ namespace ReSet.Core.Services
                 });
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 기계 확정 잠금 힌트 표가 명세서에 옮겨졌는지 본다. 재료가 없으면(잠금 힌트를
+        /// 지는 스캔이 없으면) 조용히 건너뛴다 - AiService도 그때는 표를 내지 않는다
+        /// (CheckReferencedFunctions와 같은 가드).
+        ///
+        /// [행 식별 키가 (Operation, StatementOrdinal, Line, Table, Alias, Scope, Hints)
+        /// 여섯 값 전부인 이유 - 2026-08-21 조정자 판정, 브리프 지시 2]
+        /// 「DML 범위」·「집합 술어」 표는 문장당 행이 하나(또는 컬럼당 하나)라 Line
+        /// 토큰만으로 행을 특정해도 충돌이 없었다(CheckDmlScopeTable 참고). 잠금 힌트
+        /// 표는 다르다 - 행 하나가 (문장 × 스캔 자리)라서 한 문장에 여러 행이 난다.
+        /// `FROM A a JOIN B b`처럼 두 참조가 한 물리 줄에 있으면 두 LockHintFact의
+        /// Line이 정확히 같다(LockHintVisitor.Add의 중복 제거 키 문서가 이미 이 사실을
+        /// 실측해 남겼다 - Line만으로는 대상 노드와 FROM 참조조차 구분되지 않아 그
+        /// 키에 Line을 넣었다). Line 토큰만 보고 "어느 행에든 있다"로 판정하면, 문서가
+        /// 한 사실의 행만 옮기고 같은 줄의 다른 사실을 통째로 빠뜨려도 통과한다 -
+        /// INS_EXTRA4PLCARD에서 감사가 잡은 것과 같은 실패 모양(TPGProperty가 별칭
+        /// P·Y에는 힌트가 붙고 PG에는 안 붙는데 뭉뚱그려 서술됨)이다.
+        ///
+        /// 여섯 값을 모두 같은 행에서 요구하면 이 충돌이 사라진다 - 추출기 자신의
+        /// 중복 제거 키(Operation, StatementOrdinal, Table, Alias, Line)가 이미 그
+        /// 조합이 사실마다 유일함을 보장하므로(LockHintVisitor.Add), 그 키 전부가
+        /// 우연히 다른 사실의 셀들로 채워진 행에 동시에 나타날 가능성은 사실상 없다.
+        /// Scope·Hints까지 더하는 것은 "표는 채워졌지만 내용이 틀린" 부류(범위를
+        /// 최상위/파생 중 잘못 적거나, INDEX=CIDX_x를 INDEX로 뭉개는 것)까지 잡기
+        /// 위해서다 - 이 배치에서 세 번 반복된 "종류만 렌더하고 값을 버리는" 결함과
+        /// 같은 함정이 이 표에도 있다.
+        /// </summary>
+        private static void CheckLockHints(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.LockHints.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (headingIndex, endIndex) = LocateLockHintSection(lines);
+
+            if (headingIndex < 0)
+            {
+                var message =
+                    $"기계 확정 잠금 힌트 표가 명세서에 없습니다. `{DmlScopeExtractor.LockHintTableHeading}` "
+                    + $"헤딩과 {expectations.LockHints.Count}개 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.LockHintTableMissing,
+                    Message = message
+                });
+                return;
+            }
+
+            var rowLines = new List<string>();
+            for (var i = headingIndex + 1; i < endIndex; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    rowLines.Add(lines[i]);
+                }
+            }
+
+            foreach (var fact in expectations.LockHints)
+            {
+                var statementToken = $"{fact.Operation} {fact.StatementOrdinal}";
+                var lineToken = fact.Line.ToString();
+                var hintsToken = fact.Hints.Count == 0 ? "(없음)" : string.Join(", ", fact.Hints);
+
+                var present = rowLines.Any(row =>
+                {
+                    var cells = row.Split('|').Select(c => c.Trim()).ToArray();
+                    return cells.Any(c => c == statementToken)
+                        && cells.Any(c => c == lineToken)
+                        && cells.Any(c => c == fact.Table)
+                        && cells.Any(c => c == fact.Alias)
+                        && cells.Any(c => c == fact.Scope)
+                        && cells.Any(c => c == hintsToken);
+                });
+                if (present) continue;
+
+                var message =
+                    $"잠금 힌트 표에 {statementToken}(라인 {fact.Line})의 `{fact.Table}` "
+                    + $"(별칭 {fact.Alias}, 범위 {fact.Scope}) 행이 없거나 힌트 값이 다릅니다. "
+                    + $"힌트는 `{hintsToken}`을 그대로 옮겨야 합니다 - 종류만 적고 값을 생략하면 "
+                    + "원문에서 찾을 수 없습니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.LockHintTableMissing,
+                    Message = message,
+                    RawContext = $"{fact.Operation} {fact.StatementOrdinal} @ line {fact.Line} {fact.Table} {fact.Alias}"
+                });
+            }
+        }
+
+        /// <summary>
+        /// 잠금 힌트 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과
+        /// 같은 이유로 다음 H2뿐 아니라 다음 H3에도 막힌다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateLockHintSection(IReadOnlyList<string> lines)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == DmlScopeExtractor.LockHintTableHeading);
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 기계 확정 객체 선언 표(함수 WITH 옵션)가 명세서에 옮겨졌는지 본다. 재료가
+        /// 없으면(프로시저이거나 파싱 실패) 조용히 건너뛴다 - ObjectDeclarationExtractor.
+        /// Extract가 그때 항상 null을 낸다.
+        ///
+        /// 헤딩 존재만 보지 않고 WITH 옵션 값까지 대조한다 - "종류만 렌더하고 값을
+        /// 버리는" 결함이 이 배치에서 세 번 났고(INDEX=CIDX_x -> INDEX, EXECUTE AS
+        /// CALLER -> EXECUTEAS, A DESC -> A) 이 표가 정확히 그 두 번째 사례
+        /// (ObjectDeclarationExtractor.RenderExecuteAs 문서)의 원인이 된 자리다.
+        /// </summary>
+        private static void CheckObjectDeclaration(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ObjectDeclaration == null) return;
+
+            var fact = expectations.ObjectDeclaration;
+            var expectedOptionsText = fact.WithOptions.Count == 0
+                ? "(없음)"
+                : string.Join(", ", fact.WithOptions);
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var headingIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == ObjectDeclarationExtractor.ObjectDeclarationTableHeading);
+
+            if (headingIndex < 0)
+            {
+                var headingMessage =
+                    $"기계 확정 객체 선언 표가 명세서에 없습니다. `{ObjectDeclarationExtractor.ObjectDeclarationTableHeading}` "
+                    + $"헤딩과 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행을 그대로 옮겨야 합니다.";
+                result.Errors.Add(headingMessage);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.ObjectDeclarationTableMissing,
+                    Message = headingMessage
+                });
+                return;
+            }
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headingIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+            var sectionEnd = endIndex < 0 ? lines.Count : endIndex;
+            var sectionText = string.Join(
+                "\n", lines.Skip(headingIndex + 1).Take(sectionEnd - headingIndex - 1));
+
+            var found = sectionText.Contains(fact.QualifiedName, StringComparison.Ordinal)
+                && sectionText.Contains(expectedOptionsText, StringComparison.Ordinal);
+            if (found) return;
+
+            var message =
+                $"객체 선언 표에 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행이 없거나 "
+                + "값이 다릅니다. 표는 기계가 확정한 것이므로 옵션 종류만 적고 값(EXECUTE AS의 주체,"
+                + " INLINE의 ON/OFF 등)을 생략할 수 없습니다.";
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.ObjectDeclarationTableMissing,
+                Message = message,
+                RawContext = expectedOptionsText
+            });
+        }
+
+        /// <summary>
+        /// INSERT...SELECT의 최상위 ORDER BY가 「DML 범위」 표의 ORDER BY 칸에 실렸는지
+        /// 본다.
+        ///
+        /// [세 번째 검사가 필요한 이유 - 조정자 판정, 브리프 지시 1을 뒤집는다]
+        /// 계획서 초안은 "ORDER BY는 기존 「DML 범위」 표의 칸이므로 그 표의 기존 L1
+        /// 검사(CheckDmlScopeTable)가 이미 덮는다"고 적었지만 그 근거는 실측으로
+        /// 틀렸다. CheckDmlScopeTable은 각 사실의 <b>라인 토큰이 어느 행에든 있는지</b>만
+        /// 보고 칸 내용은 하나도 대조하지 않는다 - 그래서 모델이 ORDER BY 칸을 통째로
+        /// "(없음)"으로 적어도(원본에 ORDER BY가 있는데도) 그 행의 Line 토큰 자체는
+        /// 여전히 표에 있으므로 CheckDmlScopeTable은 통과시킨다. 2026-08-21 축 A
+        /// 감사가 잡은 결함(STAT_PGCOLLECT_INS:113의 `ORDER BY INYMD, CLIENTID,
+        /// PGNAME, MALLID`가 문서 어디에도 없었음)이 정확히 이 구멍이다.
+        ///
+        /// [CheckDerivedTableDefinitions와 같은 모양을 따르는 이유]
+        /// 그 검사도 처음엔 "앵커가 문서 전체 어딘가에 있으면 통과"였다가, 실물
+        /// 검증에서 헤딩 자체가 없는 문서인데도 21개 행이 전부 우연한 등장으로 헛통과한
+        /// 사건이 있었다(CheckDerivedTableDefinitions 문서 참고). 그래서 헤딩을 먼저
+        /// 요구하고, 표현식 텍스트도 「DML 범위」 표 구간(LocateDmlScopeSection) 안에서만
+        /// 찾는다 - 문서 다른 곳(CRUD 서술 등)의 우연한 등장은 증거가 아니다. 헤딩
+        /// 부재는 CheckDmlScopeTable이 이미 별도 오류로 잡으므로(DmlScopeFacts가
+        /// 비어 있지 않으면 그 검사가 반드시 돈다) 여기서는 중복 보고 없이 조용히
+        /// 건너뛴다.
+        ///
+        /// [대조 텍스트가 string.Join(", ", ...)인 이유] 렌더 계약은 AiService.
+        /// BuildDmlScopeTableLines다 - fact.OrderByExpressions를 그 결합 규칙으로 한
+        /// 칸에 싣는다(AiService.cs, EscapeTableCell(string.Join(", ", fact.
+        /// OrderByExpressions))). 대조도 같은 결합 텍스트로 해야 모델이 표를 그대로
+        /// 옮겼을 때 정확히 일치한다.
+        /// </summary>
+        private static void CheckOrderByExpressions(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            var factsWithOrderBy = expectations.DmlScopeFacts
+                .Where(f => f.OrderByExpressions.Count > 0)
+                .ToList();
+            if (factsWithOrderBy.Count == 0) return;
+
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            var (headingIndex, endIndex) = LocateDmlScopeSection(lines);
+
+            // 헤딩 부재는 CheckDmlScopeTable이 이미 별도 오류로 보고한다(위 문서 참고).
+            if (headingIndex < 0) return;
+
+            var sectionText = string.Join(
+                "\n", lines.Skip(headingIndex + 1).Take(endIndex - headingIndex - 1));
+
+            foreach (var fact in factsWithOrderBy)
+            {
+                var joined = string.Join(", ", fact.OrderByExpressions);
+                if (sectionText.Contains(joined, StringComparison.Ordinal)) continue;
+
+                var message =
+                    $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 ORDER BY 값(`{joined}`)이 "
+                    + "없습니다. ORDER BY 칸은 기계가 확정한 것이므로 정렬 대상과 방향(DESC/ASC)까지 "
+                    + "그대로 옮겨야 합니다 - \"(없음)\"으로 적거나 일부만 옮기면 원본에서 찾을 수 없습니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.DmlScopeTableMissing,
+                    Message = message,
+                    RawContext = $"{fact.Operation} @ line {fact.Line} ORDER BY {joined}"
+                });
+            }
         }
 
         private static readonly Regex TableCellRegex =

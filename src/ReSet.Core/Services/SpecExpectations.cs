@@ -77,6 +77,19 @@ namespace ReSet.Core.Services
             = Array.Empty<ReferencedFunctionCallFact>();
 
         /// <summary>
+        /// DML 문장이 읽는 자리와 그 잠금 힌트. CheckLockHints가 소비한다. 참조 단위
+        /// (문장 × 스캔 자리)라 DmlScopeFacts와 개수가 다를 수 있다 - LockHintFact 문서
+        /// 참고.
+        /// </summary>
+        public IReadOnlyList<LockHintFact> LockHints { get; init; } = Array.Empty<LockHintFact>();
+
+        /// <summary>
+        /// 함수 선언부의 WITH 옵션. 프로시저에는 이 옵션 자체가 없으므로 항상 null이다.
+        /// CheckObjectDeclaration이 소비한다.
+        /// </summary>
+        public ObjectDeclarationExtractor.ObjectDeclarationFact? ObjectDeclaration { get; init; }
+
+        /// <summary>
         /// UPDATE/INSERT/DELETE FROM 절 파생 테이블의 컬럼 정의. SET(또는 SELECT)
         /// 우변이 별칭.컬럼 참조에서 멈추고 그 정의를 어디에도 적지 않는 것을
         /// 막는다 - 이번 감사의 유일한 축 A 🔴(EXCEPTION_PROC의 X.PGCOMM).
@@ -152,6 +165,13 @@ namespace ReSet.Core.Services
             var referencedFunctionCalls =
                 DmlScopeExtractor.ExtractFunctionCalls(spDef.DdlText, knownFunctionNames);
 
+            // 잠금 힌트 표(CheckLockHints)와 객체 선언 표(CheckObjectDeclaration)의
+            // 기대값이다. AiService가 프롬프트 표를 만들 때 부르는 것과 같은 진입점을
+            // 쓴다 - 두 곳이 갈리면 모델이 표를 그대로 베껴도 L1이 틀렸다고 하는
+            // 재현 불가능한 실패가 난다(기준일 파라미터·참조 함수와 같은 이유).
+            var lockHints = DmlScopeExtractor.ExtractLockHints(spDef.DdlText);
+            var objectDeclaration = ObjectDeclarationExtractor.Extract(spDef.DdlText);
+
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
             // 스위트는 초록으로 남는다.
@@ -204,7 +224,20 @@ namespace ReSet.Core.Services
                 // 같은 세 문장만 방문하므로 호출이 있으면 dmlScopeFacts도 비지 않는다.
                 // 그래도 잇는다: 위 주석이 경고하듯 항을 빠뜨리면 그 검사가 한 번도
                 // 돌지 않고 스위트는 초록으로 남는다.
-                && referencedFunctionCalls.Count == 0)
+                && referencedFunctionCalls.Count == 0
+                // setPredicates·referencedFunctionCalls와 같은 이유로 오늘은 중복항이다 -
+                // ExtractLockHints도 INSERT/UPDATE/DELETE만 방문하므로 잠금 힌트가
+                // 있으면 dmlScopeFacts도 비지 않는다. 그래도 잇는다 - 위 경고와 같다.
+                && lockHints.Count == 0
+                // objectDeclaration은 중복항이 아니다 - WITH 옵션이 없는 함수(RETURN
+                // 하나뿐인 스칼라 함수 등)는 본문에 DML 문장이 전혀 없을 수 있어
+                // dmlScopeFacts·lockHints 등 다른 재료가 하나도 없다. 이 항을 빠뜨리면
+                // "WITH 절이 없다"는 사실 자체가 기대값에서 사라져, 그 사실을 대조할
+                // From_ShouldExposeLockHintsAndObjectDeclaration 같은 재료 하나짜리
+                // 픽스처에서 SpecExpectations.From이 null을 돌려주고 CheckObjectDeclaration이
+                // 한 번도 돌지 않는다 - 2026-08-20 리뷰가 dmlScopeFacts 항에서 실측한
+                // 것과 같은 실패 모양이다.
+                && objectDeclaration == null)
             {
                 return null;
             }
@@ -221,7 +254,9 @@ namespace ReSet.Core.Services
                 DmlScopeFacts = dmlScopeFacts,
                 DerivedColumns = derivedColumns,
                 SetPredicates = setPredicates,
-                ReferencedFunctionCalls = referencedFunctionCalls
+                ReferencedFunctionCalls = referencedFunctionCalls,
+                LockHints = lockHints,
+                ObjectDeclaration = objectDeclaration
             };
         }
 

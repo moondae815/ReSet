@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -4039,5 +4040,555 @@ END",
                 result.SuggestedPromptFix);
         }
 
+        // ==========================================================================
+        // 작업 5: L1 앵커 - 잠금 힌트 · 객체 선언 · ORDER BY
+        //
+        // 참조 함수 표가 검사 없이 한 판 나갔던 실수(위 SuggestedPromptFix_
+        // ShouldCarryMachineTableErrorsToTheModel 테스트 참고)를 반복하지 않는다.
+        // 표 셋 각각에 "재료가 있는데 표가 없으면 오류" 앵커를 건다.
+        // ==========================================================================
+
+        /// <summary>잠금 힌트가 하나(NOLOCK) 있는 최소 SP.</summary>
+        private static SpDefinition SpWithLockHints() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM dbo.TSettleMst A WITH (NOLOCK)
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        /// <summary>WITH 절이 없는 함수 - ObjectDeclarationFact.WithOptions가 빈 목록이다.</summary>
+        private static SpDefinition FunctionWithoutWithOptions() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_X", CodeObjectType.Function),
+            Schema = "dbo",
+            Name = "UF_GET_X",
+            ObjectType = CodeObjectType.Function,
+            DdlText = @"
+CREATE FUNCTION dbo.UF_GET_X(@p INT)
+RETURNS INT
+AS
+BEGIN
+    RETURN @p + 1
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        /// <summary>
+        /// 잠금 힌트가 없는 SP. 함수도 아니다 - 두 표 모두 재료가 없다.
+        ///
+        /// [FROM 절을 두지 않는 이유 - 실측] LockHintVisitor.CollectFrom은 FROM의
+        /// 테이블 참조를 힌트 유무와 무관하게 전부 사실로 낸다(Hints가 빈 목록이어도
+        /// 행이 생긴다) - 힌트가 조건인 것은 UPDATE/DELETE의 <b>대상 노드</b>뿐이다
+        /// (RecordTargetHint 문서 참고). `UPDATE A SET ... FROM dbo.T A`처럼 FROM이
+        /// 있는 픽스처를 썼더니 힌트가 하나도 없는데도 LockHints.Count가 1이 되어
+        /// 이 테스트가 실패했다 - "재료가 없다"를 보이려면 FROM 자체가 없어야 한다.
+        /// </summary>
+        private static SpDefinition SpWithoutAnyScan() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE dbo.TSettleMst SET C = 1 WHERE ID = 1
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_ShouldFlagMissingLockHintTable()
+        {
+            // 표만 넣고 검사를 안 세우면 모델이 옮겼는지 아무도 모른다. 참조 함수 표가
+            // 그 상태로 한 판 나갔고 L1 앵커를 나중에 따로 붙여야 했다.
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var result = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(SpWithLockHints()));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        [Fact]
+        public void Validate_ShouldFlagMissingObjectDeclarationTable()
+        {
+            var markdown = "## 개요\n내용\n";
+
+            var result = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(FunctionWithoutWithOptions()));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Message.Contains(
+                    ObjectDeclarationExtractor.ObjectDeclarationTableHeading));
+        }
+
+        [Fact]
+        public void Validate_ShouldNotFlagWhenThereIsNoMaterial()
+        {
+            // 재료가 없으면 검사하지 않는다. 잠금 힌트가 없는 객체, 함수가 아닌 객체.
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var result = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(SpWithoutAnyScan()));
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading));
+        }
+
+        [Fact]
+        public void From_ShouldExposeLockHintsAndObjectDeclaration()
+        {
+            // SpecExpectations.From의 조기 반환 AND 사슬에 두 재료를 잇지 않으면 재료가
+            // 있는데도 기대값 전체가 null이 되어 아래 두 검사가 한 번도 돌지 않는다.
+            var lockExpectations = SpecExpectations.From(SpWithLockHints());
+            Assert.NotNull(lockExpectations);
+            Assert.Single(lockExpectations!.LockHints);
+            Assert.Null(lockExpectations.ObjectDeclaration);
+
+            var functionExpectations = SpecExpectations.From(FunctionWithoutWithOptions());
+            Assert.NotNull(functionExpectations);
+            Assert.NotNull(functionExpectations!.ObjectDeclaration);
+            Assert.Empty(functionExpectations.ObjectDeclaration!.WithOptions);
+            Assert.Empty(functionExpectations.LockHints);
+        }
+
+        [Fact]
+        public void Validate_LockHintRowPresentWithCorrectValue_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithLockHints());
+            var fact = Assert.Single(expectations!.LockHints);
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table} | "
+                + $"{fact.Alias} | {fact.Scope} | {string.Join(", ", fact.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        /// <summary>
+        /// 한 문장에 스캔 자리가 둘인 SP. FROM 절의 JOIN 두 참조가 한 줄에 있어
+        /// 두 LockHintFact의 Line이 같다 - LockHintVisitor.Add의 중복 제거 키
+        /// (Operation, StatementOrdinal, Table, Alias, Line) 문서가 실측으로 남긴
+        /// 그 모양이다.
+        /// </summary>
+        private static SpDefinition SpWithTwoScansOnSameLine() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = B.D
+    FROM dbo.TA A WITH (NOLOCK) JOIN dbo.TB B WITH (NOLOCK) ON A.ID = B.ID
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_TwoLockHintFactsShareALine_BothMustBeIdentifiedIndependently()
+        {
+            // [실측 근거] 이 픽스처는 두 사실의 Line이 정확히 같다(둘 다 FROM 절의
+            // 같은 물리 줄에 있다). CheckDmlScopeTable처럼 Line 토큰만으로 행을
+            // 찾으면, 문서가 dbo.TA/A의 행만 옮기고 dbo.TB/B의 행을 통째로 빠뜨려도
+            // "그 Line 토큰이 문서 어딘가에 있다"는 사실만으로 통과해 버린다 - 정확히
+            // INS_EXTRA4PLCARD에서 감사가 잡은 결함(TPGProperty가 P·Y에는 붙고 PG에는
+            // 안 붙는데 뭉뚱그려 서술된 것)과 같은 실패 모양이다.
+            var expectations = SpecExpectations.From(SpWithTwoScansOnSameLine());
+            Assert.Equal(2, expectations!.LockHints.Count);
+            var first = expectations.LockHints[0];
+            var second = expectations.LockHints[1];
+            Assert.Equal(first.Line, second.Line);
+            Assert.NotEqual(first.Table, second.Table);
+
+            // 문서는 첫 번째 사실의 행만 옮기고 두 번째는 빠뜨린다.
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {first.Operation} {first.StatementOrdinal} | {first.Line} | {first.Table} | "
+                + $"{first.Alias} | {first.Scope} | {string.Join(", ", first.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            // 헤딩은 있고(첫 번째 사실의 행도 있다) 두 번째 사실의 행만 빠졌으므로
+            // 메시지는 "표가 없다"가 아니라 "행이 없다"이다 - Type과 누락된 테이블
+            // 이름(RawContext)으로 대조한다.
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.LockHintTableMissing
+                    && e.RawContext != null && e.RawContext.Contains(second.Table));
+        }
+
+        [Fact]
+        public void Validate_TwoLockHintFactsShareALine_BothRowsPresent_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithTwoScansOnSameLine());
+            var first = expectations!.LockHints[0];
+            var second = expectations.LockHints[1];
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {first.Operation} {first.StatementOrdinal} | {first.Line} | {first.Table} | "
+                + $"{first.Alias} | {first.Scope} | {string.Join(", ", first.Hints)} |\n"
+                + $"| {second.Operation} {second.StatementOrdinal} | {second.Line} | {second.Table} | "
+                + $"{second.Alias} | {second.Scope} | {string.Join(", ", second.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        /// <summary>파생 테이블 안에 스캔이 있는 SP. LockHintFact.Scope가 "파생"으로 찍힌다.</summary>
+        private static SpDefinition SpWithDerivedScopeLockHint() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM (SELECT X.C FROM dbo.TX X WITH (NOLOCK)) AS A
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_LockHintRowMissingEntirely_ForDerivedScopeFact_ShouldFlag()
+        {
+            // [실측 근거 - UP_UTIL_SETTLE_INS] 초안 규칙("파생 테이블 안으로 내려가지
+            // 않는다")은 파생 테이블 하나뿐인 최상위 FROM에서 스캔이 통째로 0행이
+            // 되어 PaymentDB.dbo.TTxMst WITH(NOLOCK, INDEX=...)를 포함한 네 테이블의
+            // 힌트가 사라졌다(DmlScopeExtractor.ExtractLockHints 문서 참고). 이 검사가
+            // 파생 스코프 행의 부재를 잡지 못하면 그 결함이 L1을 다시 통과한다.
+            var expectations = SpecExpectations.From(SpWithDerivedScopeLockHint());
+            var fact = Assert.Single(expectations!.LockHints);
+            Assert.Equal("파생", fact.Scope);
+
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        [Fact]
+        public void Validate_LockHintRowScopeMislabeled_ShouldFlag()
+        {
+            // 행 자체는 있지만 범위 칸이 "파생" 대신 "최상위"로 잘못 적혔다 - 표는
+            // 채워졌지만 내용이 틀린 경우다. 범위 칸도 대조 대상이어야 이 결함이 잡힌다.
+            var expectations = SpecExpectations.From(SpWithDerivedScopeLockHint());
+            var fact = Assert.Single(expectations!.LockHints);
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table} | "
+                + $"{fact.Alias} | 최상위 | {string.Join(", ", fact.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
+        [Fact]
+        public void Validate_LockHintRowScopeCorrect_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithDerivedScopeLockHint());
+            var fact = Assert.Single(expectations!.LockHints);
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table} | "
+                + $"{fact.Alias} | {fact.Scope} | {string.Join(", ", fact.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        /// <summary>값 있는 힌트(INDEX)를 지는 SP. RenderHint가 원문 토큰을 그대로 낸다.</summary>
+        private static SpDefinition SpWithValueBearingHint() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM dbo.TX A WITH (NOLOCK, INDEX(CIDX_TX_1))
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_LockHintValueCollapsedToKindOnly_ShouldFlag()
+        {
+            // [실측 근거] INDEX=CIDX_x -> INDEX처럼 "종류만 렌더하고 값을 버리는" 결함이
+            // 이 배치에서 세 번 났다(작업 3 ObjectDeclarationExtractor 문서 참고). 힌트
+            // 칸도 같은 함정이 있다 - 존재만 보고 값을 안 보면 "INDEX"만 적힌 표가
+            // "INDEX(CIDX_TX_1)"을 옮긴 것으로 오판정된다.
+            var expectations = SpecExpectations.From(SpWithValueBearingHint());
+            var fact = Assert.Single(expectations!.LockHints);
+            Assert.Contains(fact.Hints, h => h.StartsWith("INDEX", StringComparison.Ordinal) && h != "INDEX");
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table} | "
+                + $"{fact.Alias} | {fact.Scope} | NOLOCK, INDEX |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
+        [Fact]
+        public void Validate_LockHintValuePreserved_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithValueBearingHint());
+            var fact = Assert.Single(expectations!.LockHints);
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table} | "
+                + $"{fact.Alias} | {fact.Scope} | {string.Join(", ", fact.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        /// <summary>EXECUTE AS CALLER를 지는 함수. RenderExecuteAs가 값을 원문으로 낸다.</summary>
+        private static SpDefinition FunctionWithExecuteAsOption() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_X", CodeObjectType.Function),
+            Schema = "dbo",
+            Name = "UF_GET_X",
+            ObjectType = CodeObjectType.Function,
+            DdlText = @"
+CREATE FUNCTION dbo.UF_GET_X(@p INT)
+RETURNS INT
+WITH EXECUTE AS CALLER
+AS
+BEGIN
+    RETURN @p + 1
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_ObjectDeclarationValueCollapsedToKindOnly_ShouldFlag()
+        {
+            // [실측 근거] EXECUTE AS CALLER -> EXECUTEAS처럼 주체가 사라지는 결함이
+            // ObjectDeclarationExtractor.RenderExecuteAs 문서에 실측으로 남아 있다.
+            // 이 검사가 옵션 종류만 보고 값을 안 보면 그 결함이 L1을 다시 통과한다.
+            var expectations = SpecExpectations.From(FunctionWithExecuteAsOption());
+            var fact = expectations!.ObjectDeclaration!;
+            Assert.Equal(new[] { "EXECUTE AS CALLER" }, fact.WithOptions);
+
+            var markdown = WrapSpec("표 없음") + "\n"
+                + ObjectDeclarationExtractor.ObjectDeclarationTableHeading + "\n"
+                + "| 객체 | WITH 옵션 |\n"
+                + "| :--- | :--- |\n"
+                + $"| {fact.QualifiedName} | EXECUTEAS |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ObjectDeclarationTableMissing);
+        }
+
+        [Fact]
+        public void Validate_ObjectDeclarationValuePreserved_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(FunctionWithExecuteAsOption());
+            var fact = expectations!.ObjectDeclaration!;
+
+            var markdown = WrapSpec("표 없음") + "\n"
+                + ObjectDeclarationExtractor.ObjectDeclarationTableHeading + "\n"
+                + "| 객체 | WITH 옵션 |\n"
+                + "| :--- | :--- |\n"
+                + $"| {fact.QualifiedName} | {string.Join(", ", fact.WithOptions)} |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading));
+        }
+
+        [Fact]
+        public void Validate_ObjectDeclarationNoOptions_RendersAsNone_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(FunctionWithoutWithOptions());
+            var fact = expectations!.ObjectDeclaration!;
+            Assert.Empty(fact.WithOptions);
+
+            var markdown = WrapSpec("표 없음") + "\n"
+                + ObjectDeclarationExtractor.ObjectDeclarationTableHeading + "\n"
+                + "| 객체 | WITH 옵션 |\n"
+                + "| :--- | :--- |\n"
+                + $"| {fact.QualifiedName} | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Message.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading));
+        }
+
+        /// <summary>ORDER BY를 지는 INSERT...SELECT 하나짜리 SP. STAT_PGCOLLECT_INS:113 실측 모양.</summary>
+        private static SpDefinition SpWithOrderBy() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO dbo.TX (A, B)
+    SELECT A, B FROM dbo.TY
+    ORDER BY A, B DESC
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_OrderByMissingFromDmlScopeTable_ShouldFlag()
+        {
+            // 세 번째 앵커 - 축 A 감사 실측: STAT_PGCOLLECT_INS:113의
+            // `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서 어디에도 없었다.
+            // 브리프는 "ORDER BY는 기존 DML 범위 표의 칸이므로 그 표의 검사가 이미
+            // 덮는다"고 적었지만, CheckDmlScopeTable(위)은 라인 토큰이 어느 행에든
+            // 있는지만 보고 칸 내용은 대조하지 않으므로 ORDER BY 칸이 통째로
+            // "(없음)"이어도 통과한다 - 이 검사가 그 구멍을 닫는다.
+            var expectations = SpecExpectations.From(SpWithOrderBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.Equal(new[] { "A", "B DESC" }, fact.OrderByExpressions);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            // 행 자체는 있으므로(Line 토큰이 표에 있다) 메시지는 "표가 없다"가 아니라
+            // "ORDER BY 값이 없다"이다 - 헤딩 문자열을 요구하지 않고 ORDER BY 값과
+            // Type만 본다.
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("ORDER BY")
+                    && e.Message.Contains("A, B DESC"));
+        }
+
+        [Fact]
+        public void Validate_OrderByPresentElsewhereInDocumentButNotInDmlScopeTable_ShouldStillFlag()
+        {
+            // CheckDerivedTableDefinitions가 겪은 것과 같은 함정(주석 참고: 앵커가
+            // "문서 전체 어딘가"에 있으면 통과시켜 21개 행이 전부 헛통과한 사건) -
+            // ORDER BY 값도 표 구간 밖의 우연한 등장이 증거가 되어서는 안 된다.
+            var expectations = SpecExpectations.From(SpWithOrderBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+
+            var crud = "### 별도 서술\nORDER BY A, B DESC로 정렬해 삽입합니다.\n\n"
+                + DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("ORDER BY")
+                    && e.Message.Contains("A, B DESC"));
+        }
+
+        [Fact]
+        public void Validate_OrderByPresentInDmlScopeTable_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithOrderBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | "
+                + $"{string.Join(", ", fact.OrderByExpressions)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("ORDER BY"));
+        }
+
+        [Fact]
+        public void SuggestedPromptFix_ShouldCarryLockHintAndObjectDeclarationErrorsToTheModel()
+        {
+            // 위 SuggestedPromptFix_ShouldCarryMachineTableErrorsToTheModel과 같은 이유 -
+            // BuildSuggestedPromptFix의 catch-all 버킷(2026-08-20)이 새 ErrorType도
+            // 내용째로 실어야 검사를 세운 보람이 있다.
+            var markdown = "## 개요\n내용\n\n## CRUD 분석\n표 없음\n";
+
+            var lockResult = new MechanicalValidator().Validate(
+                markdown, SpecExpectations.From(SpWithLockHints()));
+            Assert.Contains(DmlScopeExtractor.LockHintTableHeading, lockResult.SuggestedPromptFix);
+
+            var declResult = new MechanicalValidator().Validate(
+                "## 개요\n내용\n", SpecExpectations.From(FunctionWithoutWithOptions()));
+            Assert.Contains(
+                ObjectDeclarationExtractor.ObjectDeclarationTableHeading, declResult.SuggestedPromptFix);
+        }
     }
 }
