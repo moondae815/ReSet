@@ -111,7 +111,22 @@ namespace ReSet.Core.Services
                     var isCount = upper == "COUNT" || upper == "COUNT_BIG";
                     if (!isCount && !NullOnEmptyAggregates.Contains(upper)) continue;
 
-                    var variable = setVariable.Variable?.Name ?? "(미상)";
+                    // m2(Task 17, 최종 브랜치 리뷰 2차) - Wave 10의 m2가
+                    // DatabasePlacementExtractor에서 정확히 이 모양을 걷어냈다: "확정값입니다"로
+                    // 끝나는 문장에 미상값이 섞이면 표의 어조와 어긋난다. 그런데 이 클래스의
+                    // 행은 DB 배치와 달리 대상 칸(Target) 자체가 변수명이라, 변수명을 모르면
+                    // "(미상)" 대신 다듬을 만한 문구가 없다 - 행 전체가 진술 불가능해진다.
+                    // 그래서 문구를 다듬는 대신 침묵한다(AGENTS.md 범주 2와 같은 원칙 -
+                    // 이 클래스의 파싱 실패 분기가 이미 그 선례다): 변수명이 없으면 이 행을
+                    // 아예 내지 않는다. `SelectSetVariable`은 `SELECT @v = expr` 문법으로만
+                    // 만들어지고 그 문법은 `@v` 없이 성립하지 않으므로, ScriptDom이 이
+                    // 파서를 통해 Variable을 null로 채우는 입력은 실측되지 않았다 -
+                    // 도달 불가에 가까운 방어 코드다.
+                    if (setVariable.Variable?.Name is not { } variable
+                        || string.IsNullOrWhiteSpace(variable))
+                    {
+                        continue;
+                    }
                     var hasInitializer = _initialized.Contains(variable);
 
                     string sentence;
