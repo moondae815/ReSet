@@ -78,7 +78,7 @@ namespace ReSet.Core.Services
                     }
                     if (!declaration.IsLocal)
                     {
-                        parts.Add("CURSOR 선언에 LOCAL이 지정되지 않아 커서 범위가 서버의 "
+                        parts.Add("CURSOR 선언에 LOCAL이 지정되지 않아 커서 범위가 데이터베이스의 "
                             + "default_to_local_cursor 설정에 달려 있습니다");
                     }
 
@@ -99,10 +99,14 @@ namespace ReSet.Core.Services
         private sealed record CursorDeclaration(int Line, string Name, bool IsLocal);
 
         // DeclareCursorStatement/OpenCursorStatement/CloseCursorStatement/ReturnStatement를
-        // 직접 방문한다. ScriptDom은 Visit(T)를 오버라이드해도 자식 순회를 계속하므로
-        // (AggregateAssignmentExtractor·RowCountBoundaryExtractor와 같은 근거), 최상위
+        // 직접 방문한다. 이 넷은 모두 리프 문장이지 StatementList 같은 컨테이너 노드가
+        // 아니므로, ScriptDom은 Visit(T)를 오버라이드해도 자식 순회를 계속한다
+        // (AggregateAssignmentExtractor·RowCountBoundaryExtractor와 같은 근거) - 최상위
         // StatementList뿐 아니라 BEGIN…END 안, IF/WHILE 블록 안에 있는 문장도 그대로
-        // 방문된다 - 별도의 StatementList 오버라이드가 필요 없다.
+        // 방문된다. 별도의 StatementList 오버라이드가 필요 없다. 주의: 이 결론은 리프
+        // 노드에만 성립한다. StatementList 같은 컨테이너 노드의 Visit(T)를
+        // ExplicitVisit/base 호출 없이 오버라이드하면 그 자식으로의 하강이 실제로
+        // 끊긴다 - 이 배치의 다른 추출기 리뷰가 확인한 결함 유형이다.
         private sealed class CursorVisitor : TSqlFragmentVisitor
         {
             private readonly Dictionary<string, int> _opens = new(StringComparer.OrdinalIgnoreCase);

@@ -172,5 +172,29 @@ END";
             Assert.Equal("c1", fact.CursorName);
             Assert.Contains("RETURN", fact.Sentence);
         }
+
+        [Fact]
+        public void Extract_LocalMissing_ShouldNameDatabaseNotServerAsTheScopeSetting()
+        {
+            // Fix Round 1 - default_to_local_cursor(CURSOR_DEFAULT)는 서버 전역이 아니라
+            // 데이터베이스 단위 옵션이다. 근거: docs/audit-reports/2026-08-20a-POQSettlePrco20-axisA.md:123
+            // ("스코프가 DB 옵션 의존")와 이 클래스의 XML 문서 자체("범위는 DB의
+            // default_to_local_cursor 설정에 달려 있다"). "서버의"라고 쓰면 이 문서와
+            // 저장소의 실측 근거 모두와 어긋나는 거짓 행이 기계 확정 표에 실린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE c1 CURSOR FOR SELECT c FROM dbo.T
+    OPEN c1
+    CLOSE c1
+    DEALLOCATE c1
+END";
+
+            var fact = Assert.Single(CursorLifecycleExtractor.Extract(ddl));
+
+            Assert.Contains("데이터베이스", fact.Sentence);
+            Assert.DoesNotContain("서버", fact.Sentence);
+        }
     }
 }
