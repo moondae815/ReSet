@@ -1973,5 +1973,292 @@ END",
             // 두 번째 단언이 첫 번째가 방금 고정한 것을 되풀이할 뿐이다.
             Assert.Contains("Line 8: SET @po_intRetVal = -1", result.UserPrompt);
         }
+
+        // ---------------------------------------------------------------
+        // Task 4(2026-08-21 machine-facts): 잠금 힌트·ORDER BY·객체 선언 표 배선.
+        // 배선 지점은 조정자가 grep으로 전수로 뽑아 셋(잠금 힌트) + 둘(객체 선언)로
+        // 확정했다 - 아래 테스트는 그 각 지점을 실제로 태우는 공개 API로 개별
+        // 검증한다. 한 경로만 배선하고 나머지를 빠뜨려도 해당 테스트만 실패해야
+        // 한다(비대칭 뮤테이션으로 실측할 수 있는 구조).
+        // ---------------------------------------------------------------
+
+        private static SpDefinition LockHintSpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DELETE T1
+    FROM   dbo.TSettleMst T1
+
+    UPDATE A
+    SET    A.OutState = 9
+    FROM   dbo.TSettleMst A WITH(NOLOCK)
+    WHERE  A.UseState = 0
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_ShouldRenderTheLockHintTable()
+        {
+            // 배선 지점 1/3: SP 최초 생성 경로(BuildSpecificationPrompts). 감사가
+            // 잡은 결함(INS_EXTRA4PLCARD: 같은 테이블이 별칭마다 NOLOCK 유무가
+            // 갈리는데 "5개 테이블의 조회 또는 조인에 사용됩니다"로 뭉갬)은 힌트
+            // 있는 행과 없는 행이 한 표에 나란히 서야 드러난다 - 그래서 DELETE의
+            // 힌트 없는 FROM 참조와 UPDATE의 NOLOCK 참조를 한 픽스처에 함께 둔다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(LockHintSpDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(DmlScopeExtractor.LockHintTableHeading, body);
+            Assert.Contains("| UPDATE 1 |", body);
+            Assert.Contains("NOLOCK", body);
+            Assert.Contains("최상위", body);
+            // DELETE의 FROM 참조(T1)는 힌트가 없다 - "(없음)"이 렌더되어야 그 자리가
+            // 표에서 조용히 빠지지 않고 "힌트 없음"이 확정 사실로 남는다.
+            Assert.Contains("| DELETE 1 |", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldRenderTheLockHintTable()
+        {
+            // 배선 지점 2/3: 지역 모델의 SP 명세서 최초 생성 경로
+            // (BuildSpecSectionPrompts의 "CrudAnalysis" 분기). 이 흐름은
+            // BuildSpecificationPrompts를 전혀 호출하지 않으므로 별도로 검증해야
+            // 한다 - 위 테스트만 통과하고 이 분기가 빠져도 잡아내야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## CRUD 분석\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(
+                LockHintSpDefinition(), "CrudAnalysis", "rules", null);
+            var body = result.SystemPrompt;
+
+            Assert.Contains(DmlScopeExtractor.LockHintTableHeading, body);
+            Assert.Contains("| UPDATE 1 |", body);
+            Assert.Contains("NOLOCK", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_NoLockHintScans_ShouldOmitTheTable()
+        {
+            // FROM도 없고 대상에 힌트도 없는 문장은 스캔할 자리가 없다는 뜻이라 이
+            // 표에 빈 행을 만들지 않는다 - DmlScopeExtractor의
+            // ExtractLockHints_StatementWithNoScan_ProducesNoRow와 짝이 되는
+            // 배선 테스트다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE X = 1 END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+
+            Assert.DoesNotContain(DmlScopeExtractor.LockHintTableHeading, result.SystemPrompt);
+        }
+
+        private static SpDefinition FunctionWithLockHintDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_MULTI", CodeObjectType.Function),
+            Schema = "dbo",
+            Name = "UF_MULTI",
+            ObjectType = CodeObjectType.Function,
+            DdlText = @"
+CREATE FUNCTION dbo.UF_MULTI()
+RETURNS @Result TABLE (Val INT)
+AS
+BEGIN
+    INSERT INTO @Result (Val)
+    SELECT Val FROM dbo.TSourceTable WITH(NOLOCK)
+    RETURN
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_FunctionPath_ShouldRenderTheLockHintTable()
+        {
+            // 배선 지점 3/3: 함수 명세서 경로(BuildFunctionSpecificationPrompts).
+            // 다중 문장 TVF는 자신의 반환 테이블 변수를 채우는 INSERT에서 잠금
+            // 힌트를 가질 수 있다(DmlScopeExtractor의 DML 범위 표 Fix Round 2와
+            // 같은 근거 - "함수는 DML이 없다"는 잘못된 불변식을 다시 심지 않는다).
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(FunctionWithLockHintDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(DmlScopeExtractor.LockHintTableHeading, body);
+            Assert.Contains("| INSERT 1 |", body);
+            Assert.Contains("NOLOCK", body);
+        }
+
+        private static SpDefinition OrderBySpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_UTIL_STAT_PGCOLLECT_INS", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "UP_UTIL_STAT_PGCOLLECT_INS",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.UP_UTIL_STAT_PGCOLLECT_INS
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TStatPGCollect (INYMD, CLIENTID, PGNAME, MALLID)
+    SELECT INYMD, CLIENTID, PGNAME, MALLID
+    FROM   dbo.TSettleMst
+    ORDER BY INYMD, CLIENTID, PGNAME, MALLID
+
+    UPDATE dbo.TSettleMst
+    SET    ProcYMD = @pi_strYMD
+    WHERE  YMD = @pi_strYMD
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_ShouldCarryOrderByColumn()
+        {
+            // STAT_PGCOLLECT_INS:113 실측 - ORDER BY INYMD, CLIENTID, PGNAME, MALLID가
+            // 문서 어디에도 없었다(2026-08-21 축 A 감사). INSERT 행은 목록을,
+            // UPDATE(최상위 ORDER BY가 문법상 불가) 행은 "—"를 실어야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(OrderBySpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+
+            Assert.Contains("ORDER BY", section);
+            Assert.Contains("INYMD, CLIENTID, PGNAME, MALLID", section);
+            var updateRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |"));
+            Assert.EndsWith("| — |", updateRow.TrimEnd());
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_InsertWithoutOrderBy_ShouldRenderNone()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN INSERT INTO dbo.T (A) SELECT A FROM dbo.S END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var insertRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| INSERT 1 |"));
+
+            Assert.EndsWith("| (없음) |", insertRow.TrimEnd());
+        }
+
+        private static SpDefinition FunctionWithSchemaBindingDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_OUTYMD4REFUND", CodeObjectType.Function),
+            Schema = "dbo",
+            Name = "UF_GET_OUTYMD4REFUND",
+            ObjectType = CodeObjectType.Function,
+            DdlText = "CREATE FUNCTION dbo.UF_GET_OUTYMD4REFUND(@a INT) RETURNS INT WITH SCHEMABINDING AS BEGIN RETURN @a END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_FunctionPath_ShouldRenderTheObjectDeclarationTable()
+        {
+            // 배선 지점 1/2: 함수 명세서 경로(BuildFunctionSpecificationPrompts).
+            // UF_GET_OUTYMD4REFUND 실측(2026-08-21 축 A 감사) - WITH 절이 없다는
+            // 것이 DDL에서 확정되는데 명세서가 "확인할 수 없음"으로 적었다. 여기
+            // 픽스처는 반대로 SCHEMABINDING이 있는 경우를 확정 재료로 싣는다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(FunctionWithSchemaBindingDefinition(), "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, body);
+            Assert.Contains("dbo.UF_GET_OUTYMD4REFUND", body);
+            Assert.Contains("SCHEMABINDING", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_FunctionPath_NoWithOptions_ShouldRenderNone()
+        {
+            // "(없음)"이 곧 "스키마 바인딩 아님"이다 - 명세서가 "확인할 수 없음"이라고
+            // 쓸 여지를 없애는 것이 이 표의 존재 이유다.
+            var functionDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UF_PLAIN",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.UF_PLAIN(@a INT) RETURNS INT AS BEGIN RETURN @a END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(functionDef, "rules");
+            var body = result.SystemPrompt;
+
+            Assert.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, body);
+            Assert.Contains("| dbo.UF_PLAIN | (없음) |", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldRenderTheObjectDeclarationTable()
+        {
+            // 배선 지점 2/2: OverviewAndParameters 분기(BuildSpecSectionPrompts).
+            // `## 개요` 소속이고 재료가 있을 때만(fact != null) 싣는다 - 프로시저
+            // DDL에서는 ObjectDeclarationExtractor.Extract가 항상 null이므로 이
+            // 표가 절대 나타나지 않는다(다음 테스트가 그 대칭을 확인한다).
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(
+                FunctionWithSchemaBindingDefinition(), "OverviewAndParameters", "rules", null);
+            var body = result.SystemPrompt;
+
+            Assert.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, body);
+            Assert.Contains("SCHEMABINDING", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ProcedureDdl_ShouldOmitTheObjectDeclarationTable()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(
+                spDef, "OverviewAndParameters", "rules", null);
+
+            Assert.DoesNotContain(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, result.SystemPrompt);
+        }
     }
 }

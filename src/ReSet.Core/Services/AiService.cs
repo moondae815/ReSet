@@ -432,6 +432,16 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildReferencedFunctionTableLines(functionCalls, spDef));
             }
 
+            // 잠금 힌트 표도 같은 이유로 기계가 채운다 - 2026-08-21 축 A 감사:
+            // INS_EXTRA4PLCARD는 같은 TPGProperty가 별칭 P·Y에는 NOLOCK이 붙고 PG에는
+            // 안 붙는데 명세서가 "5개 테이블의 조회 또는 조인에 사용됩니다"로 뭉갰다.
+            // 부재 서술은 자연어 판정이라 앵커가 없으므로 표를 강제한다.
+            var lockHints = DmlScopeExtractor.ExtractLockHints(spDef.DdlText);
+            if (lockHints.Count > 0)
+            {
+                rules.AddRange(BuildLockHintTableLines(lockHints));
+            }
+
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
             // 강제한다 - 부재 서술은 자연어 판정이라 앵커가 없다.
@@ -796,8 +806,8 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>
             {
                 $"   {DmlScopeExtractor.DmlScopeTableHeading}",
-                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 |",
-                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | ORDER BY |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             // 채번은 BuildStatementOrdinals 하나가 유일한 출처다(문서 참고) - 이 표는
@@ -828,9 +838,20 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 var n = ordinals[i];
 
+                // ORDER BY는 INSERT에만 문법상 가능하다(UPDATE·DELETE는 최상위 ORDER BY
+                // 자체가 불가) - STAT_PGCOLLECT_INS:113 실측(2026-08-21 축 A 감사): 원본의
+                // `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서 어디에도 없었다.
+                // 존재 여부가 아니라 목록을 싣는다 - 불리언이면 "있다"만 알고 무엇으로
+                // 정렬하는지는 여전히 모른다(DmlScopeFact.OrderByExpressions 문서 참고).
+                var orderBy = fact.Operation == "INSERT"
+                    ? (fact.OrderByExpressions.Count == 0
+                        ? "(없음)"
+                        : EscapeTableCell(string.Join(", ", fact.OrderByExpressions)))
+                    : "—";
+
                 lines.Add(
                     $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
-                    + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} |");
+                    + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} | {orderBy} |");
             }
 
             lines.Add("");
@@ -978,6 +999,86 @@ Based on the structured reference context above, reverse engineer the stored pro
             lines.Add("");
             return lines;
         }
+
+        /// <summary>
+        /// 잠금 힌트 표 본문을 만든다. 헤딩 리터럴은 추출기의 상수
+        /// (<see cref="DmlScopeExtractor.LockHintTableHeading"/>)를 쓴다 - L1이 산출물을
+        /// 대조할 때 찾는 접두와 같아야 하고, 문구를 고칠 때 한쪽만 바뀌는 일을 막는다.
+        /// 세 배선 경로(SP 최초 생성·함수 명세서·CrudAnalysis 분기)가 이 헬퍼를 공유해야
+        /// 같은 표가 나간다는 것이 코드로 보장된다 - BuildReferencedFunctionTableLines와
+        /// 같은 이유다.
+        ///
+        /// [행 하나가 (문장 × 스캔 자리) 하나인 이유 - 2026-08-21 축 A 감사]
+        /// INS_EXTRA4PLCARD 실측: 같은 TPGProperty가 별칭 P·Y에는 NOLOCK이 붙고 PG에는
+        /// 안 붙는데 명세서가 "5개 테이블의 조회 또는 조인에 사용됩니다"로 뭉갰다.
+        /// 문장당 한 칸으로는 이 결함을 담을 수 없어, LockHintFact를 참조 단위로 그대로
+        /// 행에 옮긴다 - 힌트가 없으면 "(없음)"을 명시적으로 적어 "표에 없는 참조"와
+        /// "표에는 있는데 힌트가 없는 참조"를 구분한다.
+        /// </summary>
+        private static List<string> BuildLockHintTableLines(IReadOnlyList<LockHintFact> facts)
+        {
+            var lines = new List<string>
+            {
+                $"   {LockHintIntroText}",
+                $"   {DmlScopeExtractor.LockHintTableHeading}",
+                "   | 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                var hints = fact.Hints.Count == 0 ? "(없음)" : string.Join(", ", fact.Hints);
+                lines.Add(
+                    $"   | {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | " +
+                    $"{EscapeTableCell(fact.Table)} | {EscapeTableCell(fact.Alias)} | " +
+                    $"{EscapeTableCell(fact.Scope)} | {EscapeTableCell(hints)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        private const string LockHintIntroText =
+            "[CRITICAL LOCK HINT TABLE] The following lock hints are MACHINE-DERIVED from the source DDL. " +
+            "Copy this table verbatim into `## CRUD 분석` under the exact heading shown. " +
+            "A row with `(없음)` means that scan carries NO hint - do not omit those rows and do not " +
+            "generalise across statements: the same table may carry a hint in one statement and not another, " +
+            "or in one alias and not another within the same statement. The 범위 column says where the scan " +
+            "sits - `최상위` is the statement's own FROM, `파생` is inside a derived table in that FROM.";
+
+        /// <summary>
+        /// 객체 선언 표. 함수에만 실린다 - 프로시저에는 WITH 옵션 자체가 없으므로
+        /// <see cref="ObjectDeclarationExtractor.Extract"/>가 항상 null을 내고, 호출부는
+        /// null일 때 이 헬퍼를 부르지 않는다.
+        ///
+        /// [왜 필요한가 - 2026-08-21 축 A 감사] UF_GET_OUTYMD4REFUND·
+        /// UF_GET_SETTLE_EXCHANGERATE 둘 다 WITH SCHEMABINDING이 없다는 것이 DDL에서
+        /// 확정되는데 명세서가 "제공되지 않아 확인할 수 없음"으로 적었다. "(없음)"이 곧
+        /// "스키마 바인딩 아님"이라 그 여지를 없앤다.
+        /// </summary>
+        private static List<string> BuildObjectDeclarationTableLines(
+            ObjectDeclarationExtractor.ObjectDeclarationFact fact)
+        {
+            var options = fact.WithOptions.Count == 0
+                ? "(없음)"
+                : string.Join(", ", fact.WithOptions);
+
+            return new List<string>
+            {
+                $"   {ObjectDeclarationIntroText}",
+                $"   {ObjectDeclarationExtractor.ObjectDeclarationTableHeading}",
+                "   | 객체 | WITH 옵션 |",
+                "   | :--- | :--- |",
+                $"   | {EscapeTableCell(fact.QualifiedName)} | {EscapeTableCell(options)} |",
+                ""
+            };
+        }
+
+        private const string ObjectDeclarationIntroText =
+            "[CRITICAL OBJECT DECLARATION TABLE] The WITH options below are MACHINE-DERIVED from the " +
+            "CREATE statement. Copy this table verbatim into `## 개요` under the exact heading shown. " +
+            "`(없음)` settles the question: the object is NOT schema-bound. Never write that schema " +
+            "binding could not be determined.";
 
         /// <summary>
         /// 「참조 함수」 표에서 호출문의 한정명(<paramref name="qualifiedName"/>)에 대응하는
@@ -1151,6 +1252,17 @@ Based on the structured reference context above, reverse engineer the stored pro
                 systemPrompt += "\n\n" + string.Join("\n", dmlScopeLines);
             }
 
+            // 배선 지점 3/3(잠금 힌트) - 다중 문장 TVF는 자신의 반환 테이블 변수를
+            // 채우는 DML 문에서 잠금 힌트를 가질 수 있다. 위 DML 범위 표 Fix Round 2가
+            // 실측한 것과 같은 이유로 "함수는 DML이 없다"는 잘못된 불변식을 다시 심지
+            // 않는다 - DmlScopeExtractor.ExtractLockHints는 fragment 전체를 훑으므로
+            // CREATE FUNCTION 안의 UPDATE/DELETE/INSERT도 그대로 잡힌다.
+            var lockHintsForFunctionDef = DmlScopeExtractor.ExtractLockHints(functionDef.DdlText);
+            if (lockHintsForFunctionDef.Count > 0)
+            {
+                systemPrompt += "\n\n" + string.Join("\n", BuildLockHintTableLines(lockHintsForFunctionDef));
+            }
+
             // 이 경로(함수 명세서 프롬프트)도 BuildSpecificationPrompts와 같은 집합
             // 술어 표를 받아야 한다 - 하나만 배선하면 Task 4의 Critical과 같은
             // 비대칭이 재발한다.
@@ -1175,6 +1287,17 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (functionCallsForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", BuildReferencedFunctionTableLines(functionCallsForFunctionDef, functionDef));
+            }
+
+            // 배선 지점 1/2(객체 선언) - 프로시저에는 이 옵션 자체가 없으므로 Extract는
+            // 함수가 아니면 항상 null을 낸다(ObjectDeclarationExtractor 문서 참고).
+            // UF_GET_OUTYMD4REFUND·UF_GET_SETTLE_EXCHANGERATE 실측(2026-08-21 축 A 감사) -
+            // WITH 절이 없다는 것이 DDL에서 확정되는데 명세서가 "확인할 수 없음"으로
+            // 적었다. "(없음)"이 곧 "스키마 바인딩 아님"이라 그 여지를 없앤다.
+            var objectDeclarationForFunctionDef = ObjectDeclarationExtractor.Extract(functionDef.DdlText);
+            if (objectDeclarationForFunctionDef != null)
+            {
+                systemPrompt += "\n\n" + string.Join("\n", BuildObjectDeclarationTableLines(objectDeclarationForFunctionDef));
             }
 
             systemPrompt += $"\n\n[USER INSTRUCTIONS]\n{userInstructions}";
@@ -2238,6 +2361,20 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
+                // 배선 지점 2/2(객체 선언) - `## 개요` 소속이고 재료가 있을 때만
+                // (fact != null) 싣는다. 프로시저에는 WITH 옵션 자체가 없으므로
+                // ObjectDeclarationExtractor.Extract가 항상 null을 내고, 이 가드가
+                // 자연히 표를 억제한다 - 이 분기의 실제 호출자
+                // (VerificationPipelineOrchestrator)는 ObjectType == Procedure일 때만
+                // 이 경로를 타지만(Extract가 null을 내는 이유와 별개로), 배선 자체는
+                // 재료 유무만으로 판단해야 다른 경로(함수)가 이 분기를 타게 되어도
+                // 조용히 깨지지 않는다.
+                var objectDeclarationForOverview = ObjectDeclarationExtractor.Extract(spDef.DdlText);
+                if (objectDeclarationForOverview != null)
+                {
+                    sbRules.AddRange(BuildObjectDeclarationTableLines(objectDeclarationForOverview));
+                }
+
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");
@@ -2343,6 +2480,17 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 if (functionCallsForCrud.Count > 0)
                 {
                     sbRules.AddRange(BuildReferencedFunctionTableLines(functionCallsForCrud, spDef));
+                }
+
+                // 이 분기도 BuildSpecificationPrompts와 같은 잠금 힌트 표를 받아야 한다 -
+                // VerificationPipelineOrchestrator의 지역 모델 흐름은
+                // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
+                // 모델 경로는 INS_EXTRA4PLCARD류 결함(같은 테이블이 별칭마다 힌트 유무가
+                // 갈리는데 뭉뚱그려 서술)을 드러내는 재료를 한 번도 받지 못한다.
+                var lockHintsForCrud = DmlScopeExtractor.ExtractLockHints(spDef.DdlText);
+                if (lockHintsForCrud.Count > 0)
+                {
+                    sbRules.AddRange(BuildLockHintTableLines(lockHintsForCrud));
                 }
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
