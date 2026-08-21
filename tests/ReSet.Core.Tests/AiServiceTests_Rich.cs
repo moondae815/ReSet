@@ -2537,13 +2537,14 @@ END"
 
         // Task 17 - 결함 E(F1 무리)의 실제 앵커는 `## 개요`다(UF_Get_CLComm4MobileCo의
         // Spec.md, "원본 DDL에 3부 식별자가 없으므로 크로스 데이터베이스 참조 여부를
-        // 단언할 수 없습니다" - StaticAnalysis가 이미 확정한 값을 되짚었다). 그런데
-        // `BuildMachineFactBlockLines` 호출부 네 곳(SP 전체·함수·CrudAnalysis·
-        // LogicAndVisualization) 중 어디에도 `OverviewAndParameters`가 없다 - 이
-        // 갈래는 실행 의미 사실을 한 번도 받지 못한다. 표가 아니라 참고 재료로 줘야
-        // 한다(이 갈래는 `## 개요`·`## 파라미터 목록`만 쓰므로 `## CRUD 분석`용 표
+        // 단언할 수 없습니다" - StaticAnalysis가 이미 확정한 값을 되짚었다). 이 결함이
+        // 났던 시점에는 `BuildMachineFactBlockLines` 호출부가 네 곳(SP 전체·함수·
+        // CrudAnalysis·LogicAndVisualization)뿐이었고 그중 어디에도
+        // `OverviewAndParameters`가 없었다 - 이 갈래는 실행 의미 사실을 한 번도 받지
+        // 못했다. 지금은 다섯 번째 호출부로 이 갈래도 받는다 - 표가 아니라 참고
+        // 재료로(이 갈래는 `## 개요`·`## 파라미터 목록`만 쓰므로 `## CRUD 분석`용 표
         // 지시를 주면 자기모순이 된다) - `BuildLockHintReferenceMaterialLines`가 이미
-        // 그 선례다.
+        // 그 선례다. 이 테스트는 그 배선이 유지되는지를 지킨다.
         [Fact]
         public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldReceiveExecutionSemanticsFactsInline()
         {

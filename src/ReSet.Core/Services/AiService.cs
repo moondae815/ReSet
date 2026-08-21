@@ -446,7 +446,9 @@ namespace ReSet.Core.Services
             // use these exact Korean titles" 규칙이 `## CRUD 분석`·`## 로직 흐름 요약`
             // 둘 다 필수 H2로 요구한다 - 두 표 모두 표 그대로 준다.
             rules.AddRange(BuildMachineFactBlockLines(
-                spDef, MachineFactPresentation.Table, MachineFactPresentation.Table));
+                spDef,
+                executionSemanticsPresentation: MachineFactPresentation.Table,
+                caseBranchPresentation: MachineFactPresentation.Table));
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
@@ -1591,7 +1593,9 @@ Based on the structured reference context above, reverse engineer the stored pro
             // `## CRUD 분석`·`## 로직 흐름 요약` 둘 다 필수 H2로 요구한다 - 두 표 모두
             // 표 그대로 준다.
             var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(
-                functionDef, MachineFactPresentation.Table, MachineFactPresentation.Table);
+                functionDef,
+                executionSemanticsPresentation: MachineFactPresentation.Table,
+                caseBranchPresentation: MachineFactPresentation.Table);
             if (machineFactLinesForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
@@ -2696,13 +2700,14 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
 
                 // 배선 지점 4(실행 의미 참고 재료) - Task 17, 최종 브랜치 리뷰 2차.
-                // `BuildMachineFactBlockLines`의 다섯 호출부(SP 전체·함수·CrudAnalysis·
-                // LogicAndVisualization·이 갈래) 중 이 갈래(`OverviewAndParameters`)만
-                // 빠져 있었다. 결함 E(F1 무리 - StaticAnalysis가 이미 확정한 "크로스 DB
-                // 참조 아님"을 명세서가 "단언할 수 없습니다"로 되짚은 사고)의 실제
-                // 앵커가 `## 개요` 절 안에서 확인됐다(UF_Get_CLComm4MobileCo의
-                // Spec.md, DatabasePlacementExtractor 문서 참고) - 이 갈래도 근거
-                // 재료를 받아야 한다.
+                // 이 갈래를 고치기 전에는 `BuildMachineFactBlockLines`의 호출부가
+                // 네 곳(SP 전체·함수·CrudAnalysis·LogicAndVisualization)뿐이었고
+                // 그중 이 갈래(`OverviewAndParameters`)는 없었다. 결함 E(F1 무리 -
+                // StaticAnalysis가 이미 확정한 "크로스 DB 참조 아님"을 명세서가
+                // "단언할 수 없습니다"로 되짚은 사고)의 실제 앵커가 `## 개요` 절
+                // 안에서 확인됐다(UF_Get_CLComm4MobileCo의 Spec.md,
+                // DatabasePlacementExtractor 문서 참고) - 이 갈래도 근거 재료를
+                // 받아야 한다. 지금은 이 갈래가 다섯 번째 호출부다.
                 //
                 // [단일 진입점을 통해서 준다 - Important, 최종 브랜치 리뷰 2차]
                 // 처음에는 `BuildExecutionSemanticsReferenceMaterialLines`를 직접
@@ -2718,7 +2723,9 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // 재료를 늘리면 프롬프트만 길어지고 모델이 산만해질 뿐 대응하는 결함이
                 // 없다).
                 sbRules.AddRange(BuildMachineFactBlockLines(
-                    spDef, MachineFactPresentation.Reference, MachineFactPresentation.Omit));
+                    spDef,
+                    executionSemanticsPresentation: MachineFactPresentation.Reference,
+                    caseBranchPresentation: MachineFactPresentation.Omit));
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
@@ -2842,8 +2849,22 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // H2 header: `## CRUD 분석`"이 `## CRUD 분석` 하나만 허용한다. CASE
                 // 분기 표는 `## 로직 흐름 요약`이 목적지라 이 분기가 쓰지 않으므로 -
                 // Task 14 (Critical) - 표가 아니라 참고 재료로만 준다.
+                //
+                // [`Omit`이 아니라 `Reference`인 이유 - Minor, 최종 브랜치 리뷰 2차]
+                // 위 규칙 3("map all target columns to their source values ... in
+                // a 1:1 mapping table")이 요구하는 소스값에는 CASE 식이 그대로 들어갈
+                // 수 있다(예: `SET Col = CASE WHEN ... END`) - 이 표는 `## CRUD 분석`
+                // 소관이지 `## 로직 흐름 요약` 소관이 아니다. `BuildCaseBranchReference
+                // MaterialLines`의 계약 문구("Never merge branches, never paraphrase
+                // a comparison operator, and never summarise a result expression
+                // when you use these facts elsewhere in this document")가 정확히
+                // 이 재사용을 겨냥한다 - CASE 식이 소스값 칸에 옮겨질 때도 조건·결과
+                // 원문이 뭉개지지 않게 한다. 그래서 `Omit`(개요처럼 CASE가 이 갈래의
+                // 서술 대상이 전혀 아닌 경우)이 아니라 `Reference`다.
                 sbRules.AddRange(BuildMachineFactBlockLines(
-                    spDef, MachineFactPresentation.Table, MachineFactPresentation.Reference));
+                    spDef,
+                    executionSemanticsPresentation: MachineFactPresentation.Table,
+                    caseBranchPresentation: MachineFactPresentation.Reference));
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
@@ -3014,7 +3035,9 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // `## CRUD 분석`이 목적지라 이 분기가 쓰지 않으므로 - Task 14
                 // (Critical) - 표가 아니라 참고 재료로만 준다.
                 sbRules.AddRange(BuildMachineFactBlockLines(
-                    spDef, MachineFactPresentation.Reference, MachineFactPresentation.Table));
+                    spDef,
+                    executionSemanticsPresentation: MachineFactPresentation.Reference,
+                    caseBranchPresentation: MachineFactPresentation.Table));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
