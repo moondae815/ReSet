@@ -57,6 +57,7 @@
     *   SQL 객체 타입은 [SqlObjectTypeClassifier](./src/ReSet.Core/Services/SqlObjectTypeClassifier.cs)만 사용하십시오. 부분 문자열 판정이나 분류기 사본은 금지합니다(`TypeClassificationPolicyTests`).
 3.  **AI API 응답 널 가드(TryGetProperty) 및 모델 파라미터 매핑을 준수하십시오.**
     *   AI 클라이언트의 JSON 응답은 `TryGetProperty`로 검사하고 필수 필드·오류 응답 누락 시 거절 사유를 담은 `InvalidOperationException`을 던지십시오(`ChatAsync_WithErrorResponse_ShouldThrowInvalidOperationException`, `ChatAsync_WithMissingCandidates_ShouldThrowInvalidOperationException`).
+    *   AI 리뷰 호출은 `AiCallRetry`로 감싸고, 클라이언트는 HTTP 상태 코드와 CLI 실패 유형을 예외에 보존하십시오(`AiRetryPolicyTests`). 재시도를 소진한 실패는 `OperationCanceledException`을 상속하지 않는 `AiCallFailedException`으로 올려야 타임아웃이 사용자 취소로 둔갑하지 않습니다.
     *   모델별 전송 규격과 캐시 중단점은 기존 배선을 유지하십시오. o1/o3은 `reasoning_effort`, gpt-5 Responses는 `prompt_cache_breakpoint`, Claude는 system `cache_control`과 재생성 user 중단점을 사용합니다(`architecture.md §4.5`, `§4.13`).
     *   gpt-5 Responses의 비어 있지 않은 모든 `summary_text`를 누적하고 뒤의 빈 summary가 앞선 추론을 지우지 않게 하십시오(`ChatAsync_WithGpt5MixedReasoningSummaries_ShouldPreserveNonEmptyReasoningText`).
     *   Ollama effort별 temperature는 low/medium/high/max = 0.1/0.4/0.7/0.9이며, `gemma4`·`qwen3.6`은 effort 매핑을 무시하고 하드코딩된 모델별 설정을 우선합니다. 로컬 모델에는 `repeat_penalty`·`repetition_penalty`·`frequency_penalty`를 주입하십시오(`ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`).
@@ -92,6 +93,7 @@
     *   시스템 프롬프트는 영어를 원칙으로 하고 최종 출력·체크리스트 동작 지시에만 한국어 출력 조건과 영어 매칭 트리거를 사용하십시오. 메타데이터 밖 컬럼, DDL 밖 오류 상수, UNION/JOIN·오류 분기 축약을 금지하는 Anti-Shortcut 규칙을 유지하십시오.
     *   `GenerateBySplitAsync`의 첫 단계 캐시 워밍을 유지하고, 예외 재시도에만 지연을 적용하십시오(`RunConsolidatedPipeline_WarmsCacheBeforeFanningOut`, `RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter`).
     *   `ValidateBatchStep`에는 스키마 카탈로그를 세 번째 인자로 넘기고 2인자 오버로드를 만들지 마십시오(`KnownTableWiringPolicyTests`).
+    *   Critic 점수와 기준 점수의 대조는 [CriticScoreGate](./src/ReSet.Core/Services/CriticScoreGate.cs)만 사용하고 사본을 만들지 마십시오. 사본을 두면 불합격 배너의 미달 항목과 재시도 판정이 갈립니다(`CriticScoreGateTests`).
 
 ### 🔒 범주 5. 타겟 런타임 격리 및 리소스 정리 (Lifecycle & Sandbox)
 7.  **타겟 러너 격리 및 모의 데이터(Mock Data) 적재 수명주기를 준수하십시오.**
@@ -193,4 +195,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: bcece4c -->
+<!-- synced-through: fec473d -->
