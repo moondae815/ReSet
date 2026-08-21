@@ -261,6 +261,13 @@ l2Result = await WrapWithProgress(
 
 - **생성 호출 27곳.** 인프라는 쓸 수 있게 두되 이번엔 감지 않는다.
   `known-defects.md`의 "생성 호출 실패 재시도 0회"는 열린 채로 둔다.
+- **콘텐츠 결함이 있는 응답.** `AiService.ParseReviewResult`는 리뷰 JSON 파싱이 깨지면
+  예외를 던지지 않고 `HasDefects=true`·전 항목 0점 `ReviewResult`를 반환한다 — 예외가
+  나지 않으므로 `AiCallRetry`는 이 실패를 볼 기회조차 없다. 빈/절단/차단된 완료
+  (`choices` 누락, 빈 content, Gemini `finishReason` RECITATION/OTHER)는 평범한
+  `InvalidOperationException`을 던지고 §4.1의 최종 분기가 `Fatal`로 분류한다 — 이건
+  **의도한 동작**이지 결함이 아니다. 전자는 재시도 인프라 밖에 있고, 후자는 인프라
+  안에서 의도적으로 재시도되지 않는다는 점이 다르다. 둘 다 `known-defects.md`에 있다.
 - **`Task.WhenAll`이 첫 예외만 표면화한다** (`RunCodeObjectPipelineCoreAsync`의 `Task.WhenAll(reviewTasks)`). `known-defects.md`에 별건으로 있다.
   재시도는 일시적 오류가 `WhenAll`까지 도달할 확률을 낮출 뿐 그 결함을 고치지 않는다.
 - **55곳의 `is not OperationCanceledException` 필터.** §4.3의 이음매가 리뷰 경로에서만
