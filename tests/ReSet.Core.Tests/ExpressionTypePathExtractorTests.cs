@@ -391,6 +391,38 @@ END";
         }
 
         [Fact]
+        public void Extract_CastInWhereClause_ShouldBeVisited()
+        {
+            // M-e: 방문 컨텍스트를 더 넓힌다 - WHERE 절도 흔한 자리다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @a MONEY = 10
+    DECLARE @b MONEY = 2
+    SELECT * FROM dbo.T WHERE CAST(@a * @b AS INT) = 1
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+            Assert.Contains("money", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_CastInUpdateSetClause_ShouldBeVisited()
+        {
+            // M-e: UPDATE ... SET도 흔한 자리다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @a MONEY = 10
+    DECLARE @b MONEY = 2
+    UPDATE dbo.T SET Col = CAST(@a * @b AS INT)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+            Assert.Contains("money", fact.Sentence);
+        }
+
+        [Fact]
         public void Extract_WithSyntaxErrors_ShouldReturnEmpty()
         {
             Assert.Empty(ExpressionTypePathExtractor.Extract("CREATE FUNCTION (((", NoColumns));
