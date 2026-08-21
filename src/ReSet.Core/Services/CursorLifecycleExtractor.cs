@@ -91,8 +91,13 @@ namespace ReSet.Core.Services
                     }
                     if (needsScopeSentence)
                     {
-                        parts.Add("CURSOR 선언에 LOCAL이 지정되지 않아 커서 범위가 데이터베이스의 "
-                            + "default_to_local_cursor 설정에 달려 있습니다");
+                        // Fix Round 2 - 게이트는 !IsLocal && !IsGlobal인데 문장 어휘가
+                        // "LOCAL이 지정되지 않아"로만 남아 있었다. GLOBAL이 명시된 경우엔
+                        // 이 문장이 아예 나지 않는다는 것을 문장 자신만 읽어서는 알 수
+                        // 없었다 - 게이트·클래스 요약·docs/architecture.md와 어휘를
+                        // 맞춘다.
+                        parts.Add("CURSOR 선언에 LOCAL도 GLOBAL도 지정되지 않아 커서 범위가 "
+                            + "데이터베이스의 default_to_local_cursor 설정에 달려 있습니다");
                     }
 
                     facts.Add(new CursorLifecycleFact(

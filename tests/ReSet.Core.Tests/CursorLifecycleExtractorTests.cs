@@ -238,5 +238,32 @@ END";
             Assert.Contains("CLOSE/DEALLOCATE에 도달하지 않습니다", fact.Sentence);
             Assert.DoesNotContain("default_to_local_cursor", fact.Sentence);
         }
+
+        [Fact]
+        public void Extract_LocalMissing_SentenceNamesBothLocalAndGlobalAsTheGateCondition()
+        {
+            // Fix Round 2 - 게이트는 !IsLocal && !IsGlobal인데(I1), 이 문장은 여전히
+            // "LOCAL이 지정되지 않아"로만 적혀 있었다. 실제로 나는 경우(LOCAL·GLOBAL
+            // 둘 다 미지정)에는 참이라 거짓 행은 아니지만, 이 문장은 "기계 확정 — 수정
+            // 금지" 표에 그대로 실린다 - 문장만 읽으면 "LOCAL만 안 쓰면 이 사실이
+            // 성립한다"고 오독하기 쉽고, GLOBAL이 명시된 경우 이 문장이 아예 나지
+            // 않는다는 것을 문장 자신에서는 알 수 없다. 게이트·클래스 요약·
+            // docs/architecture.md는 이미 "LOCAL도 GLOBAL도 없으면"으로 통일됐으므로
+            // 산출물에 실제로 박히는 이 문장도 같은 어휘를 쓰게 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE c1 CURSOR FOR SELECT c FROM dbo.T
+    OPEN c1
+    CLOSE c1
+    DEALLOCATE c1
+END";
+
+            var fact = Assert.Single(CursorLifecycleExtractor.Extract(ddl));
+
+            Assert.Contains("LOCAL", fact.Sentence);
+            Assert.Contains("GLOBAL", fact.Sentence);
+        }
     }
 }
