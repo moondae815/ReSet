@@ -60,6 +60,14 @@ namespace ReSet.Core.Services
                 };
             }
 
+            // CLI 프로바이더. 분류가 예외에 실려 있으므로 문구를 보지 않는다.
+            if (ex is Clients.Cli.CliInvocationException cliEx)
+            {
+                return cliEx.Kind == Clients.Cli.CliFailureKind.Timeout
+                    ? AiRetryVerdict.Transient
+                    : AiRetryVerdict.Fatal;
+            }
+
             // 파싱 실패·에러 응답 등. 같은 입력에 같은 응답이 올 이유가 크다.
             return AiRetryVerdict.Fatal;
         }

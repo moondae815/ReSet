@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using ReSet.Core.Services;
+using ReSet.Core.Services.Clients.Cli;
 using Xunit;
 
 namespace ReSet.Core.Tests
@@ -83,6 +84,35 @@ namespace ReSet.Core.Tests
         {
             // 응답 본문이 규약을 어긴 경우. 다시 불러도 같은 응답이 올 이유가 크다.
             var ex = new InvalidOperationException("응답 데이터 내에 choices 속성이 존재하지 않습니다.");
+
+            Assert.Equal(AiRetryVerdict.Fatal, AiRetryPolicy.Classify(ex, CancellationToken.None));
+        }
+
+        [Fact]
+        public void Classify_CliTimeout_IsTransient()
+        {
+            var ex = new CliInvocationException("타임아웃", CliFailureKind.Timeout);
+
+            Assert.Equal(AiRetryVerdict.Transient, AiRetryPolicy.Classify(ex, CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData(CliFailureKind.QuotaExhausted)]
+        [InlineData(CliFailureKind.NotAuthenticated)]
+        [InlineData(CliFailureKind.ToolPermissionDenied)]
+        public void Classify_CliFatalKinds_AreFatal(CliFailureKind kind)
+        {
+            // 쿼터 소진을 재시도하면 이미 빈 지갑을 계속 두드리게 된다.
+            var ex = new CliInvocationException("실패", kind);
+
+            Assert.Equal(AiRetryVerdict.Fatal, AiRetryPolicy.Classify(ex, CancellationToken.None));
+        }
+
+        [Fact]
+        public void Classify_CliUnknown_IsFatal()
+        {
+            // 무엇인지 모르는 것을 돈 내고 반복하지 않는다.
+            var ex = new CliInvocationException("알 수 없음", CliFailureKind.Unknown);
 
             Assert.Equal(AiRetryVerdict.Fatal, AiRetryPolicy.Classify(ex, CancellationToken.None));
         }
