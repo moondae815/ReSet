@@ -361,6 +361,36 @@ END";
         }
 
         [Fact]
+        public void Extract_UnknownColumnPairedWithKnownMoneyLeaf_ShouldOmitTheRow()
+        {
+            // M-d: 계획서 코드를 버린 이유(LeafCollector가 미상 잎을 놓쳐도, 다른 잎이
+            // money처럼 "익숙한" 타입이면 그 방향으로 새어 나갈 위험)를 직접 못박는다 -
+            // 기존 테스트는 전부 미상 컬럼을 정수 리터럴과만 짝지어(t.Amt * 2) 이
+            // 경로를 타지 않았다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_intTxAmt MONEY) RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(@pi_intTxAmt * t.Amt AS INT) FROM dbo.T t)
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+        }
+
+        [Fact]
+        public void Extract_AmbiguousColumnPairedWithKnownMoneyLeaf_ShouldOmitTheRow()
+        {
+            // M-d: "(모호)" 컬럼도 money와 짝지어졌을 때 새지 않는지 못박는다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "(모호)" };
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_intTxAmt MONEY) RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(@pi_intTxAmt * t.Amt AS INT) FROM dbo.T t)
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+        }
+
+        [Fact]
         public void Extract_WithSyntaxErrors_ShouldReturnEmpty()
         {
             Assert.Empty(ExpressionTypePathExtractor.Extract("CREATE FUNCTION (((", NoColumns));
