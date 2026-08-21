@@ -37,6 +37,12 @@ namespace ReSet.Core.Services
     /// (varchar/datetime/bit/uniqueidentifier 등, 그리고 <see cref="ExecutionSemanticsFacts.BuildColumnTypeMap"/>이
     /// 넣는 "(모호)" 표시)은 전부 "모르는 것"으로 처리한다.
     ///
+    /// [컬럼 타입 문자열의 괄호] `DbMetadataService`가 만드는 컬럼 타입은
+    /// decimal/numeric에 정밀도·자릿수를 괄호로 붙인다("decimal(18,2)") - money·
+    /// smallmoney·int 계열·float/real은 괄호 없이 맨 이름 그대로 온다. 화이트리스트와
+    /// 대조하기 전에 괄호 앞만 잘라 낸다(변수·파라미터 선언 타입은 애초에 괄호가
+    /// 없어 이 자르기가 영향을 주지 않는다).
+    ///
     /// float/real은 money·decimal/numeric보다 우선순위가 더 높지만, 그 조합이
     /// 최종적으로 어느 방향으로 반올림/절사되는지는 실행으로 확인한 적이 없다.
     /// 그래서 float/real은 "아는 타입"으로 인식은 하되(따라서 varchar 같은
@@ -250,10 +256,26 @@ namespace ReSet.Core.Services
                 if (string.IsNullOrWhiteSpace(name)) return null;
                 if (!dictionary.TryGetValue(name!, out var type)) return null;
 
-                var lowered = type.ToLowerInvariant();
-                // "(모호)"도 이 경로로 자연스럽게 걸러진다 - 다섯 계열 어디에도
-                // 속하지 않기 때문이다.
+                var lowered = StripSizeSuffix(type).ToLowerInvariant();
+                // "(모호)"도 이 경로로 자연스럽게 걸러진다 - 괄호를 잘라 내면 빈
+                // 문자열이 되고, 빈 문자열은 다섯 계열 어디에도 속하지 않기 때문이다.
                 return KnownTypeFamilies.Contains(lowered) ? lowered : null;
+            }
+
+            /// <summary>
+            /// I1 수정 라운드(리뷰): 변수·파라미터 선언 타입(DeclaredTypeVisitor)은
+            /// `SqlDataTypeOption.ToString()`이라 항상 맨 이름("decimal")이지만, 컬럼
+            /// 타입은 `DbMetadataService.GetTableColumnsAsync`(:898-907)와 스칼라
+            /// 반환값·테이블 파라미터 조회(:334, :365)가 만든다 - 이 셋 모두 decimal/
+            /// numeric에는 정밀도·자릿수를 괄호로 붙인다("decimal(18,2)"). 괄호 앞만
+            /// 잘라 화이트리스트와 대조해야 그 경로가 열린다. money/smallmoney/int
+            /// 계열/float/real은 이 조회가 `ELSE ''`라 원래도 맨 이름 그대로 온다 -
+            /// 그 타입들에는 이 자르기가 아무 효과가 없다(괄호가 없으니 자를 것도 없다).
+            /// </summary>
+            private static string StripSizeSuffix(string type)
+            {
+                var parenIndex = type.IndexOf('(');
+                return parenIndex < 0 ? type : type[..parenIndex];
             }
 
             private static string Combine(string a, string b)

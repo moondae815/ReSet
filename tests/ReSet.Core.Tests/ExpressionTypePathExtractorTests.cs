@@ -192,6 +192,61 @@ END";
         }
 
         [Fact]
+        public void Extract_ColumnTypeFromBuildColumnTypeMap_DecimalWithPrecisionScale_ShouldReportNumericTruncation()
+        {
+            // I1 수정 라운드: DbMetadataService(:898-907, :334, :365)가 실제로 만드는
+            // 컬럼 타입 문자열은 "decimal(18,2)"이지 "decimal"이 아니다 - 손으로 지은
+            // 맵이 아니라 BuildColumnTypeMap을 직접 태워야 이 결함이 다시 숨지 않는다.
+            var dependencies = new List<DependencyInfo>
+            {
+                new DependencyInfo
+                {
+                    Name = "T",
+                    Schema = "dbo",
+                    Columns = { new ColumnInfo { ColumnName = "Amt", DataType = "decimal(18,2)" } },
+                },
+            };
+            var columnTypes = ExecutionSemanticsFacts.BuildColumnTypeMap(dependencies);
+
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(t.Amt * 2 AS INT) FROM dbo.T t)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+            Assert.Contains("numeric", fact.Sentence);
+            Assert.Contains("절사", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_ColumnTypeFromBuildColumnTypeMap_MoneyPlainName_ShouldReportMoneyRounding()
+        {
+            // I1이 money/int/float처럼 괄호가 없는 타입 이름까지 깨뜨리지 않는지
+            // 못박는다 - DbMetadataService의 ELSE '' 분기가 이 형태를 만든다.
+            var dependencies = new List<DependencyInfo>
+            {
+                new DependencyInfo
+                {
+                    Name = "T",
+                    Schema = "dbo",
+                    Columns = { new ColumnInfo { ColumnName = "Amt", DataType = "money" } },
+                },
+            };
+            var columnTypes = ExecutionSemanticsFacts.BuildColumnTypeMap(dependencies);
+
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(t.Amt * 2 AS INT) FROM dbo.T t)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+            Assert.Contains("money", fact.Sentence);
+            Assert.Contains("반올림", fact.Sentence);
+        }
+
+        [Fact]
         public void Extract_WithSyntaxErrors_ShouldReturnEmpty()
         {
             Assert.Empty(ExpressionTypePathExtractor.Extract("CREATE FUNCTION (((", NoColumns));
