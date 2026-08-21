@@ -758,7 +758,7 @@ EOF
 - Test: `tests/ReSet.Core.Tests/AiServiceTests_Rich.cs`
 
 **Interfaces:**
-- Consumes: Task 1~3의 `LockHintFact`·`DmlScopeFact.OrderByColumns`·`ObjectDeclarationFact`와 헤딩 상수 셋
+- Consumes: Task 1~3의 `LockHintFact`·`DmlScopeFact.OrderByExpressions`·`ObjectDeclarationFact`와 헤딩 상수 셋
 - Produces:
   - `private static List<string> BuildLockHintTableLines(IReadOnlyList<LockHintFact> facts)`
   - `private static List<string> BuildObjectDeclarationTableLines(ObjectDeclarationFact fact)`
@@ -833,8 +833,8 @@ Expected: FAIL — 표가 프롬프트에 없다.
             {
                 $"   {LockHintIntroText}",
                 $"   {DmlScopeExtractor.LockHintTableHeading}",
-                "   | 문장 | 라인 | 테이블 | 별칭 | 힌트 |",
-                "   | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             foreach (var fact in facts)
@@ -842,7 +842,8 @@ Expected: FAIL — 표가 프롬프트에 없다.
                 var hints = fact.Hints.Count == 0 ? "(없음)" : string.Join(", ", fact.Hints);
                 lines.Add(
                     $"   | {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | " +
-                    $"{EscapeTableCell(fact.Table)} | {EscapeTableCell(fact.Alias)} | {hints} |");
+                    $"{EscapeTableCell(fact.Table)} | {EscapeTableCell(fact.Alias)} | " +
+                    $"{fact.Scope} | {hints} |");
             }
 
             return lines;
@@ -885,9 +886,9 @@ Expected: FAIL — 표가 프롬프트에 없다.
 
 ```csharp
                 var orderBy = fact.Operation == "INSERT"
-                    ? (fact.OrderByColumns.Count == 0
+                    ? (fact.OrderByExpressions.Count == 0
                         ? "(없음)"
-                        : EscapeTableCell(string.Join(", ", fact.OrderByColumns)))
+                        : EscapeTableCell(string.Join(", ", fact.OrderByExpressions)))
                     : "—";   // UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하다
 ```
 
@@ -1153,7 +1154,7 @@ EOF
 |---|---|
 | `UP_UTIL_SETTLE_INS_EXTRA4PLCARD` | `TSettleMst`가 사전확인·UPDATE1·UPDATE2에서 `NOLOCK`, `TPGProperty`의 `PG` 4곳은 `(없음)`, `P`·`Y`는 `NOLOCK` |
 | `UP_Util_Settle_Summary_AcqManual` | `NOLOCK`이 3곳(커서 조회 둘 + `DELETE` 대상 스캔) |
-| `UP_UTIL_STAT_PGCOLLECT_INS` | `INSERT 1`의 `OrderByColumns`가 `INYMD, CLIENTID, PGNAME, MALLID` |
+| `UP_UTIL_STAT_PGCOLLECT_INS` | `INSERT 1`의 `OrderByExpressions`가 `INYMD, CLIENTID, PGNAME, MALLID` |
 | `UF_GET_OUTYMD4REFUND` | `WithOptions`가 빈 목록 |
 | `UF_GET_SETTLE_EXCHANGERATE` | `WithOptions`가 빈 목록 |
 
