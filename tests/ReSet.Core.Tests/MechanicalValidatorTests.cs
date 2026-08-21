@@ -4403,6 +4403,50 @@ END",
                 e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
         }
 
+        /// <summary>
+        /// FROM 참조가 대괄호 식별자 안에 `|`를 지는 SP. 실물에서는 드물지만 T-SQL
+        /// 문법상 유효한 식별자다(`[T|X]` -> `SchemaObject.Identifiers[i].Value`가
+        /// 대괄호를 벗기고 "T|X"를 그대로 낸다).
+        /// </summary>
+        private static SpDefinition SpWithPipeInTableName() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM dbo.[T|X] A WITH (NOLOCK)
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_LockHintTableNameContainsPipe_RenderedEscaped_ShouldPass()
+        {
+            // [2026-08-21 최종 리뷰 Important 1] AiService.EscapeTableCell은 렌더 시점에
+            // 셀 안의 `|`를 `\|`로 바꾼다(셀 경계로 읽히지 않도록). 이 테스트는 렌더가
+            // 실제로 내놓는 것과 같은 표(테이블 칸이 이스케이프된)를 흉내 낸다 -
+            // CheckLockHints가 이 왕복을 되돌리지 못하면, 모델이 표를 원문 그대로
+            // 옮겨도 대조가 실패한다(row.Split('|')가 `\|` 자리에서도 셀을 쪼갠다).
+            var expectations = SpecExpectations.From(SpWithPipeInTableName());
+            var fact = Assert.Single(expectations!.LockHints);
+            Assert.Contains("|", fact.Table, StringComparison.Ordinal);
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | {fact.Table.Replace("|", "\\|")} | "
+                + $"{fact.Alias} | {fact.Scope} | {string.Join(", ", fact.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
         /// <summary>EXECUTE AS CALLER를 지는 함수. RenderExecuteAs가 값을 원문으로 낸다.</summary>
         private static SpDefinition FunctionWithExecuteAsOption() => new()
         {
@@ -4459,6 +4503,50 @@ END",
             Assert.DoesNotContain(
                 result.DetailedErrors,
                 e => e.Message.Contains(ObjectDeclarationExtractor.ObjectDeclarationTableHeading));
+        }
+
+        /// <summary>
+        /// EXECUTE AS '사용자'의 사용자명이 `|`를 지는 함수. RenderExecuteAs가 리터럴을
+        /// 원문 그대로 되돌리므로(EscapeQuote는 따옴표만 다룬다) WithOptions 값에
+        /// `|`가 그대로 남는다.
+        /// </summary>
+        private static SpDefinition FunctionWithPipeInExecuteAsLiteral() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_X", CodeObjectType.Function),
+            Schema = "dbo",
+            Name = "UF_GET_X",
+            ObjectType = CodeObjectType.Function,
+            DdlText = @"
+CREATE FUNCTION dbo.UF_GET_X(@p INT)
+RETURNS INT
+WITH EXECUTE AS 'my|user'
+AS
+BEGIN
+    RETURN @p + 1
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_ObjectDeclarationOptionContainsPipe_RenderedEscaped_ShouldPass()
+        {
+            // [2026-08-21 최종 리뷰 Important 1] 같은 왕복 문제가 객체 선언 표에도 있다 -
+            // CheckObjectDeclaration은 sectionText.Contains(expectedOptionsText)로
+            // 이스케이프되지 않은 원문을 렌더된(이스케이프된) 구간 텍스트에서 찾는다.
+            var expectations = SpecExpectations.From(FunctionWithPipeInExecuteAsLiteral());
+            var fact = expectations!.ObjectDeclaration!;
+            Assert.Contains("|", Assert.Single(fact.WithOptions), StringComparison.Ordinal);
+
+            var expectedOptionsText = string.Join(", ", fact.WithOptions);
+            var markdown = WrapSpec("표 없음") + "\n"
+                + ObjectDeclarationExtractor.ObjectDeclarationTableHeading + "\n"
+                + "| 객체 | WITH 옵션 |\n"
+                + "| :--- | :--- |\n"
+                + $"| {fact.QualifiedName} | {expectedOptionsText.Replace("|", "\\|")} |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ObjectDeclarationTableMissing);
         }
 
         [Fact]
@@ -4564,6 +4652,50 @@ END",
                 + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
                 + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | "
                 + $"{string.Join(", ", fact.OrderByExpressions)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("ORDER BY"));
+        }
+
+        /// <summary>ORDER BY 식이 비트 OR(`|`)를 지는 SP. 표에서 리터럴 그대로 보존된다.</summary>
+        private static SpDefinition SpWithPipeInOrderBy() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO dbo.TX (A, B)
+    SELECT A, B FROM dbo.TY
+    ORDER BY (A | B)
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_OrderByExpressionContainsPipe_RenderedEscaped_ShouldPass()
+        {
+            // [2026-08-21 최종 리뷰 Important 1] 같은 왕복 문제 - CheckOrderByExpressions는
+            // sectionText.Contains(joined)로 이스케이프되지 않은 joined를 렌더된(이스케이프된)
+            // 구간 텍스트에서 찾는다. ORDER BY 식은 임의 식이라(OrderByExpressionsOf 문서)
+            // 비트 OR처럼 `|`가 든 식이 문법상 유효하다.
+            var expectations = SpecExpectations.From(SpWithPipeInOrderBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.Contains("|", Assert.Single(fact.OrderByExpressions), StringComparison.Ordinal);
+
+            var escapedOrderBy = string.Join(", ", fact.OrderByExpressions).Replace("|", "\\|");
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | "
+                + $"{escapedOrderBy} |\n";
 
             var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
 

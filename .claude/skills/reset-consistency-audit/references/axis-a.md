@@ -36,7 +36,7 @@ DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙)
 | 오류·반환 코드 전체 집합과 발생 지점 | **DDL 원문** (`StaticAnalysis`에 없음) |
 | 분기 조건식·필터·조인 | **DDL 원문** |
 | 트랜잭션 경계, `NOCOUNT`, 주석 처리된 블록 | **DDL 원문** |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — DDL 원문으로 다시 뽑지 마라. `BuildLockHintTableLines`가 SP 프롬프트 경로에도 배선되므로(`AiService.cs:435-443`) SP의 DML 문장도 이 표가 기계 확정한다 |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `BuildLockHintTableLines`가 SP 프롬프트 경로에도 배선되므로(`AiService.cs:435-443`) SP의 DML 문장도 이 표가 기계 확정한다. **커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고) |
 
 Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 원문의 의미와
 어긋나면 DDL이 이긴다.
@@ -74,6 +74,12 @@ AST에서 확정해 프롬프트에 실어 준 값이라, 명세서가 옮겨 �
 문장당 한 칸으로 뭉갠 산문은 "5개 테이블의 조회 또는 조인에 사용됩니다"로 그 차이를
 지워 버렸다.
 
+**아래 ①·②는 `InsertSpecification`/`UpdateSpecification`/`DeleteSpecification` 노드에만
+적용된다** — `LockHintVisitor`가 방문을 오버라이드한 노드가 이 셋뿐이라서다
+(`DmlScopeExtractor.cs:394,413,420`). 커서 선언 안의 독립 `SELECT`처럼 이 세 노드 어디에도
+속하지 않는 스캔은 ①·②의 적용 대상 자체가 아니고, 표에 한 행도 남기지 않는다 — 아래
+"이 표가 담지 않는 것" 절을 먼저 읽어라.
+
 행이 되는 자리는 둘이다(`DmlScopeExtractor.LockHintVisitor`) — ①그 문장의 `FROM`에 걸린
 모든 테이블 참조는 **힌트 유무와 무관하게 전수** 실린다(힌트가 없으면 칸에 `(없음)`이
 명시된다). ②`INSERT`·`UPDATE`·`DELETE`의 **대상 노드**는 **자신이 힌트를 지고 있을 때** 행이
@@ -107,6 +113,26 @@ AST에서 확정해 프롬프트에 실어 준 값이라, 명세서가 옮겨 �
 가른다 — `잠금 힌트`에 행이 없다는 사실 자체로는 "이 문장이 그 테이블을 스캔하지 않았다"고
 결론 내릴 수 없다.
 
+**이 표가 담지 않는 것.** `LockHintVisitor`는 `InsertSpecification`/`UpdateSpecification`/
+`DeleteSpecification`만 방문한다(`DmlScopeExtractor.cs:394,413,420`). 이 셋에 속하지 않는
+스캔은 표에 한 행도 남기지 않는다 — "행이 0개 = 힌트가 없다"는 위 규칙이 적용되지 않는다.
+구체적으로:
+
+- **커서 선언·독립 `SELECT`.** `DECLARE cur CURSOR FOR SELECT …`의 `SELECT`는
+  `InsertSpecification` 등으로 감싸이지 않으므로 그 `FROM`의 힌트는 아예 방문되지 않는다.
+  실물 사례 — `output/Objects/dbo.UP_Util_Settle_Summary_AcqManual.Procedure/raw/object_definition.sql:28-31`의
+  커서 `SELECT`에 실린 `WITH(NOLOCK)` 두 개가 여기 해당한다. 이 자리는 DDL 원문이 기준값이다.
+- **문장 최상위 `WHERE`의 하위 질의**(`UPDATE T … WHERE X IN (SELECT … FROM S WITH(NOLOCK))`).
+  `CollectFrom`이 `node.FromClause`만 훑고 `node.WhereClause`는 건드리지 않는다
+  (`DmlScopeExtractor.cs:434-441`). 스펙 설계 문서의 「이 설계가 닫지 않는 것」에 실측이 있다.
+- **CTE 본문.** `WITH C AS (SELECT … FROM S WITH(NOLOCK)) INSERT … FROM C`는 `C`의 참조만
+  최상위로 실리고 `S`의 힌트는 CTE 정의 안이라 실리지 않는다. 오늘 코퍼스에는 사례가 없다.
+
+이 셋 다 "표에 행이 없다"가 "이 문장이 그 스캔에 힌트를 안 걸었다"는 뜻이 **아니다** —
+표의 적용 범위 밖이라 애초에 판정하지 않는다는 뜻이다. 명세서가 이 자리의 `NOLOCK`을
+옳게 서술했다면 그것을 "표에 없는 사실"이라며 결함으로 집지 마라 — DDL 원문과 대조해서
+판정한다.
+
 ### 3-1. 함수 단위는 표가 다르다
 
 **함수의 `StaticAnalysis`는 SP보다 얇고, 얼마나 얇은지가 함수마다 다르다.**
@@ -136,7 +162,7 @@ ControlFlowSummary   11/17   ThreePartObjectReferences 3/17   ReferencedFunction
 | **상수·계수·반올림 자릿수·부호** | **DDL 원문** |
 | NULL 입력 처리와 `ISNULL`/`COALESCE` 기본값 | **DDL 원문** |
 | 결정성 관련 선언(`SCHEMABINDING`, 기타 `WITH` 옵션) | `### 객체 선언 (기계 확정 — 수정 금지)` 표 (아래) — DDL 원문으로 다시 뽑지 마라 |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼가 함수 DML 문장에도 같은 표를 붙인다) |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼가 함수 DML 문장에도 같은 표를 붙인다) — 같은 범위 한정이 적용된다: `INSERT`/`UPDATE`/`DELETE`의 `FROM`과 대상 노드만 담고, 커서 선언·독립 `SELECT`·최상위 `WHERE` 하위 질의·CTE 본문은 DDL 원문이 기준값이다 |
 
 **`객체 선언` 표는 함수에만 실린다.** 프로시저에는 `WITH` 옵션 자체가 문법에 없으므로
 추출기가 항상 표를 내지 않는다 — **프로시저 명세서에 이 표가 없는 것은 결함이 아니다.**

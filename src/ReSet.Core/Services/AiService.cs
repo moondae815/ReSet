@@ -670,8 +670,15 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// <summary>
         /// 마크다운 표 셀에 넣을 수 있게 다듬는다. SET 우변에 비트 연산자 `|`가 들어가면
         /// (예: FLAGS | 4) 셀 경계로 읽혀 표가 통째로 어긋난다. 개행도 같은 이유로 접는다.
+        ///
+        /// [internal인 이유 - 2026-08-21 최종 리뷰 Important 1] MechanicalValidator가
+        /// 대조 시 같은 이스케이프를 거쳐야 한다. 대조 쪽이 이스케이프되지 않은 원문과
+        /// 렌더된(이스케이프된) 표를 그대로 비교하면, 값에 `|`가 든 표는(대괄호 식별자,
+        /// 비트 OR 식, EXECUTE AS 리터럴 등) 모델이 표를 원문 그대로 옮겨도 영원히
+        /// 대조를 통과할 수 없다 - 렌더와 대조가 이 함수 하나를 공유해야 그 왕복이
+        /// 성립한다. 두 곳이 각자 이스케이프 규칙을 베끼면 한쪽만 고쳤을 때 다시 갈린다.
         /// </summary>
-        private static string EscapeTableCell(string expression)
+        internal static string EscapeTableCell(string expression)
         {
             if (string.IsNullOrEmpty(expression)) return string.Empty;
 
@@ -2640,6 +2647,14 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
 
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
+                // I2(2026-08-21 최종 전체 브랜치 리뷰) - 위 규칙은 이 문서의 「CRUD 분석」
+                // 절에 실리는 「잠금 힌트 (기계 확정 — 수정 금지)」 표를 언급하지 않은 채
+                // 원본 DDL만 쥐고 격리 수준 산문을 쓰라고만 지시했다. AcqManual에서 감사가
+                // 잡은 🟡이 정확히 이 자리(격리수준 서술)였다 - hasUdf 규칙(위, I1)이 참조
+                // 함수 표를 근거로 세운 것과 같은 모양으로, 이 규칙도 그 표를 근거로 세우고
+                // 표를 넘는 단언(어느 테이블·별칭이 힌트를 지는지, 그 표에 없는 스캔 자리의
+                // 힌트 유무)을 하지 말라는 계약을 붙인다.
+                sbRules.Add($"{rIdx++}. Base the NOLOCK/isolation analysis above strictly on the 기계 확정 잠금 힌트 (기계 확정 — 수정 금지) table already rendered in this document's CRUD 분석 section (which statement/table/alias/scope carries which hint) - do not assert or contradict which table or scan carries a lock hint beyond what that table states, and do not infer hints for scans the table does not cover.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
                 sbRules.Add("   - You MUST add explicit condition labels on all branching arrows (e.g., `-->|Success|`, `-->|Failed: -1|`). Do not use double quotes, parentheses, or special characters on arrow condition text labels.");

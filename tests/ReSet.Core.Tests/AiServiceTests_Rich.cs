@@ -1855,6 +1855,37 @@ END",
             Assert.DoesNotContain("do NOT describe any function's behaviour", result.SystemPrompt);
         }
 
+        // ---------------------------------------------------------------
+        // 2026-08-21 최종 전체 브랜치 리뷰 - Important 2.
+        // ---------------------------------------------------------------
+
+        // Important 2 - LogicAndVisualization 분기의 NOLOCK 격리수준 규칙(위 hasUdf
+        // 규칙 바로 다음)은 이 문서의 CRUD 분석 절에 실리는 「잠금 힌트 (기계 확정 —
+        // 수정 금지)」 표를 전혀 언급하지 않은 채 원본 DDL만 쥐고 격리수준 산문을
+        // 쓰라고만 지시했다. AcqManual에서 감사가 잡은 🟡이 정확히 이 자리였다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_NolockRule_ShouldAnchorToMachineLockHintTable()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE A SET A.C = 1 FROM dbo.T A WITH (NOLOCK) END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 로직 흐름 요약\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", "rules", null);
+            var body = result.SystemPrompt;
+
+            Assert.Contains("transaction isolation implications", body);
+            Assert.Contains("기계 확정 잠금 힌트", body);
+            Assert.Contains("do not assert or contradict which table or scan carries a lock hint beyond what that table states", body);
+        }
+
         // I2 - 「참조 함수」 표는 dep.Database가 있어도 이제까지 버려 왔다. 크로스 DB
         // 함수(예: SETTLE_CARD_DB.dbo.UF_GET_COMM4PG)가 로컬 함수와 구분되지 않는
         // "dbo.UF_GET_COMM4PG"로 실려, 규칙 6(3부 식별자 판단은 <sp-source-ddl>만

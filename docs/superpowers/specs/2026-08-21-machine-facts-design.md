@@ -285,3 +285,12 @@ catch-all 버킷을 얻어, 열거되지 않은 `ErrorType`도 내용이 실려 
   분류했고, 방향이 "없는 것을 지어내는" 쪽이 아니라 "있는 것을 덜 담는" 쪽이며, 실물
   코퍼스에서 이 형태가 무는 것을 확인하지 못했다. **다만 닫힌 것이 아니다.** 다음 감사가
   `WHERE` 하위 질의의 힌트를 결함으로 집으면 그때 이 자리를 연다.
+- **잠금 힌트 표는 `INSERT`/`UPDATE`/`DELETE` 문장 밖의 스캔을 아예 담지 않는다.**
+  `LockHintVisitor`가 방문하는 노드가 `InsertSpecification`/`UpdateSpecification`/
+  `DeleteSpecification`뿐이라서다(`DmlScopeExtractor.cs:394,413,420`). 커서 선언 안의
+  독립 `SELECT`가 실물로 걸린다 —
+  `output/Objects/dbo.UP_Util_Settle_Summary_AcqManual.Procedure/raw/object_definition.sql:28-31`의
+  `DECLARE Cur_Summary_AcqManual CURSOR READ_ONLY FOR SELECT … FROM SETTLE_POQ_DB.dbo.TSettleMst A
+  WITH(NOLOCK) INNER JOIN SETTLE_CARD_DB.dbo.TClientCardContractMgmt B WITH(NOLOCK)`가 한 행도
+  내지 않는다. 위 `WHERE` 하위 질의 항목과 같은 이유(추출 가능 범위 밖)로 이번 범위에서는
+  닫지 않는다 — `axis-a.md`가 이 범위를 감사 계약에 명시했으므로 DDL 원문 대조로 흡수된다.

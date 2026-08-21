@@ -3168,6 +3168,15 @@ namespace ReSet.Core.Services
         /// 없지만, 소문자 표기가 섞인 산출물이 나오면 이 검사가 대소문자 차이만으로
         /// 거짓 결함을 낼 수 있다. 이번 라운드의 범위가 아니라 고치지 않고 다음
         /// 사람에게 이 문단으로 남긴다.
+        ///
+        /// [행을 SplitTableRowCells로 나누는 이유 - 2026-08-21 최종 리뷰 Important 1]
+        /// 이전 구현은 `row.Split('|')`로 단순 분할했다 - AiService.EscapeTableCell이
+        /// 렌더 시점에 테이블명·별칭·힌트 값 안의 `|`를 `\|`로 이스케이프한 자리에서도
+        /// 갈라져, 대괄호 식별자(`[T|X]`)나 값 있는 힌트에 `|`가 들어간 행은 모델이
+        /// 표를 원문 그대로 옮겨도 어떤 셀도 fact.Table 등과 정확히 같아질 수 없었다
+        /// (ExtractSetPredicateLiteralCell 문서의 같은 실패 모양). SplitTableRowCells는
+        /// `\|`를 셀 경계가 아니라 `|` 하나로 복원하므로, 이스케이프되지 않은 fact
+        /// 값과 직접 비교할 수 있다.
         /// </summary>
         private static void CheckLockHints(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -3208,7 +3217,7 @@ namespace ReSet.Core.Services
 
                 var present = rowLines.Any(row =>
                 {
-                    var cells = row.Split('|').Select(c => c.Trim()).ToArray();
+                    var cells = SplitTableRowCells(row);
                     return cells.Any(c => c == statementToken)
                         && cells.Any(c => c == lineToken)
                         && cells.Any(c => c == fact.Table)
@@ -3305,8 +3314,13 @@ namespace ReSet.Core.Services
             var sectionText = string.Join(
                 "\n", lines.Skip(headingIndex + 1).Take(sectionEnd - headingIndex - 1));
 
-            var found = sectionText.Contains(fact.QualifiedName, StringComparison.Ordinal)
-                && sectionText.Contains(expectedOptionsText, StringComparison.Ordinal);
+            // [렌더와 같은 이스케이프를 거치는 이유 - 2026-08-21 최종 리뷰 Important 1]
+            // 렌더(AiService.BuildObjectDeclarationTableLines)는 이 두 값을 EscapeTableCell로
+            // 감싸 싣는다 - EXECUTE AS '사용자' 리터럴처럼 `|`가 든 값은 `\|`로 이스케이프된
+            // 채로 표에 나온다. 이스케이프하지 않은 원문으로 Contains를 하면 모델이 표를
+            // 원문 그대로(이스케이프된 채로) 옮겨도 영원히 찾을 수 없다.
+            var found = sectionText.Contains(AiService.EscapeTableCell(fact.QualifiedName), StringComparison.Ordinal)
+                && sectionText.Contains(AiService.EscapeTableCell(expectedOptionsText), StringComparison.Ordinal);
             if (found) return;
 
             var message =
@@ -3372,7 +3386,12 @@ namespace ReSet.Core.Services
             foreach (var fact in factsWithOrderBy)
             {
                 var joined = string.Join(", ", fact.OrderByExpressions);
-                if (sectionText.Contains(joined, StringComparison.Ordinal)) continue;
+                // [이스케이프 왕복 - 2026-08-21 최종 리뷰 Important 1] 렌더는 이 칸도
+                // EscapeTableCell을 거친다(AiService.cs, EscapeTableCell(string.Join(", ",
+                // fact.OrderByExpressions))) - ORDER BY는 임의 식이라 비트 OR(`A | B`) 같은
+                // `|`가 든 식이 문법상 유효하다. 이스케이프하지 않은 joined로 Contains하면
+                // 그런 식은 모델이 표를 원문 그대로 옮겨도 찾을 수 없다.
+                if (sectionText.Contains(AiService.EscapeTableCell(joined), StringComparison.Ordinal)) continue;
 
                 var message =
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 ORDER BY 값(`{joined}`)이 "
