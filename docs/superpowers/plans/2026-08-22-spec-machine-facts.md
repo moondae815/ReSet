@@ -20,6 +20,9 @@
 - 새 추출기는 전부 `AGENTS.md` 범주 2 **소프트 페일**이다 — `try/catch`로 감싸고 실패 시 `Array.Empty<T>()`를 돌려주며 `Log.Warning`만 남긴다.
 - 새 추출기의 **파서 오류 정책은 "오류가 하나라도 있으면 빈 목록"** 으로 통일한다(`DmlScopeExtractor.ExtractLockHints`와 같은 쪽). 기계 확정 표에 부분 파스 결과가 섞이면 표 전체의 신뢰가 무너진다.
 - 기존 검사 15개를 감싼 `MechanicalValidator.Validate`의 catch-all은 **건드리지 않는다**. 대신 새 검사는 각각 자기 `try/catch`를 갖는다.
+- **`SpDefinition.StaticAnalysis`는 절대 `null`이 아니다** — `= new()`가 기본값이다. 그래서 `analysis == null` 검사만으로는 아무것도 걸러지지 않는다. "정적 분석이 없다"를 판정하려면 **`IsParsedSuccessfully`** 를 봐야 한다(`AiService.cs:147`의 기존 패턴). `SqlStaticParser.Analyze`는 이 플래그를 전부 아니면 전무로 설정하므로, 실패한 파스에서 나온 빈 목록은 "확인된 빈 값"이 아니라 **"보지 않았음"** 이다 — 그 상태에서 확정 사실을 만들면 안 된다. *(Wave 1 실측으로 확정)*
+- `SpDefinition.ObjectKey`의 타입은 **`CodeObjectKey`** 다 — 위치 파라미터 record `(string Database, string Schema, string Name, CodeObjectType Type)`이고 무인자 생성자가 없다. 생성은 `CodeObjectKey.Create(db, schema, name, CodeObjectType.Procedure)` 관례를 따른다. *(Wave 1 실측으로 확정)*
+- 테스트에서 `Assert.Single(collection.Where(pred))`를 쓰지 마라 — `xUnit2031` 분석기 경고가 난다. `Assert.Single(collection, pred)` 오버로드를 써라. 이 저장소는 비-CS 경고가 0인 상태를 유지해 왔다. *(Wave 1 실측)*
 
 ---
 
@@ -297,7 +300,7 @@ git commit -m "fix: 주석에만 등장하는 컬럼과 별칭 한정 참조가 
   - `record ExecutionSemanticFact(string Kind, string Line, string Target, string Fact)`
   - `ExecutionSemanticsFacts.TableHeading` (const string)
   - `ExecutionSemanticsFacts.BuildColumnTypeMap(IEnumerable<DependencyInfo>?) → IReadOnlyDictionary<string, string>`
-  - `ExecutionSemanticsFacts.Collect(string? ddlText, SpStaticAnalysisResult? analysis, ObjectKeyInfo? objectKey, IReadOnlyDictionary<string, string> columnTypes) → IReadOnlyList<ExecutionSemanticFact>`
+  - `ExecutionSemanticsFacts.Collect(string? ddlText, SpStaticAnalysisResult? analysis, CodeObjectKey? objectKey, IReadOnlyDictionary<string, string> columnTypes) → IReadOnlyList<ExecutionSemanticFact>`
   - `AiService.BuildMachineFactBlockLines(SpDefinition) → List<string>` (private static) — **4갈래가 부르는 단 하나의 진입점.** Task 7이 여기에 표를 하나 더 얹어도 갈래는 손대지 않는다.
 
 **`Collect`의 네 번째 인자를 지금 넣는 이유**: Task 9(A)가 컬럼 타입 사전을 요구한다. 시그니처를 나중에 바꾸면 Task 2~6이 쓴 호출부 코드가 전부 컴파일되지 않는다. 지금은 쓰지 않아도 자리를 만들어 둔다.
@@ -331,9 +334,9 @@ namespace ReSet.Core.Tests
             };
 
             var facts = ExecutionSemanticsFacts.Collect(
-                "SELECT 1;", analysis, new ObjectKeyInfo { Database = "SETTLE_POQ_DB" }, NoColumns);
+                "SELECT 1;", analysis, CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure), NoColumns);
 
-            var fact = Assert.Single(facts.Where(f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind));
+            var fact = Assert.Single(facts, f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind);
             Assert.Contains("SETTLE_POQ_DB", fact.Fact);
             Assert.Contains("3부 식별자 참조 0건", fact.Fact);
             Assert.Contains("연결 서버 참조 0건", fact.Fact);
@@ -349,9 +352,9 @@ namespace ReSet.Core.Tests
             };
 
             var facts = ExecutionSemanticsFacts.Collect(
-                "SELECT 1;", analysis, new ObjectKeyInfo { Database = "SETTLE_POQ_DB" }, NoColumns);
+                "SELECT 1;", analysis, CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure), NoColumns);
 
-            var fact = Assert.Single(facts.Where(f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind));
+            var fact = Assert.Single(facts, f => f.Kind == ExecutionSemanticsFacts.DatabasePlacementKind);
             Assert.Contains("PaymentDB.dbo.TExtraSettleIn", fact.Fact);
         }
 
@@ -398,7 +401,7 @@ namespace ReSet.Core.Services
     public static class DatabasePlacementExtractor
     {
         public static DatabasePlacementFact? Extract(
-            SpStaticAnalysisResult? analysis, ObjectKeyInfo? objectKey)
+            SpStaticAnalysisResult? analysis, CodeObjectKey? objectKey)
         {
             if (analysis == null) return null;
 
@@ -491,7 +494,7 @@ namespace ReSet.Core.Services
         public static IReadOnlyList<ExecutionSemanticFact> Collect(
             string? ddlText,
             SpStaticAnalysisResult? analysis,
-            ObjectKeyInfo? objectKey,
+            CodeObjectKey? objectKey,
             IReadOnlyDictionary<string, string> columnTypes)
         {
             var facts = new List<ExecutionSemanticFact>();
@@ -533,7 +536,7 @@ Expected: PASS
                 Schema = "dbo",
                 Name = "COMM_UPD",
                 DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
-                ObjectKey = new ObjectKeyInfo { Database = "SETTLE_POQ_DB" }
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure)
             };
             spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
             return spDef;
@@ -725,7 +728,7 @@ Expected: 실패 0 · 건너뜀 0 · 경고 8
                 Schema = "dbo",
                 Name = "P",
                 DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
-                ObjectKey = new ObjectKeyInfo { Database = "SETTLE_POQ_DB" }
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure)
             };
             spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
             return spDef;
