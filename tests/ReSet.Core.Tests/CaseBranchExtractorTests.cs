@@ -162,5 +162,36 @@ END";
             var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
             Assert.Equal(fact.Condition, renderedCell);
         }
+
+        [Fact]
+        public void Extract_MultilineWhenCondition_ConditionHasNoConsecutiveWhitespace()
+        {
+            // Fix Round 1 (Important, 조정자 브리프 오류 인정): 개행만 공백 하나로
+            // 접으면 원본의 들여쓰기가 그 자리에 남아 긴 연속 공백 런이 생긴다 - 이
+            // ddl은 접으면 "112)" 뒤에 약 21칸 공백이 남는다. MarkdownTableCellCodec.
+            // Escape는 그 런을 건드리지 않고 SplitRow는 셀 양끝만 Trim하므로
+            // (MarkdownTableCellCodec.cs:26-34,44-70), L1은 모델에게 그 공백 개수를
+            // 바이트 단위로 재현하라고 요구하는 셈이 된다 - 표는 코드 펜스 밖의
+            // 평문 마크다운으로 주어져 그 런이 렌더링에서 보이지 않는다
+            // (AiService.cs:1060-1063,1084-1087). DmlScopeExtractor.CollapseWhitespace
+            // (2026-08-20 리뷰 Important)와 DerivedTableColumnExtractor.TextOf가 이미
+            // 연속 공백류 전부를 하나로 접는 이유가 이것이다 - 같은 계약을 세 번째
+            // 추출기에도 물려준다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_strYMD CHAR(8)) RETURNS INT AS
+BEGIN
+    DECLARE @v INT
+    SET @v = CASE WHEN DATEPART(DW, CONVERT(VARCHAR(6), @pi_strYMD, 112)
+                        + RIGHT('0'+CONVERT(VARCHAR(2), @pi_strYMD),2) ) > 3
+                   THEN 7 ELSE 0 END
+    RETURN @v
+END";
+
+            var fact = CaseBranchExtractor.Extract(ddl).First(f => f.Ordinal == "WHEN 1");
+
+            Assert.False(
+                System.Text.RegularExpressions.Regex.IsMatch(fact.Condition, @"\s{2,}"),
+                $"연속 공백류가 남아 있습니다: [{fact.Condition}]");
+        }
     }
 }

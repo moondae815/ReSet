@@ -76,26 +76,31 @@ namespace ReSet.Core.Services
         /// `internal`인 이유는 이제 소비자가 셋이기 때문이다 - Task 9의
         /// ExpressionTypePathExtractor(CAST 식 원문), 그리고 Task 13의
         /// RowCountBoundaryExtractor(`@@ROWCOUNT` 술어 원문)가 CASE 분기와 같은 방식으로
-        /// 원문을 복원하고 같은 개행·탭 정규화가 필요하다(아래 참고). 원래 주석은
+        /// 원문을 복원하고 같은 공백 정규화가 필요하다(아래 참고). 원래 주석은
         /// "세 번째 소비자가 생기면 그때 중립 헬퍼 클래스로 옮긴다"고 적었었다 - 지금이
         /// 그 시점이지만, Task 13의 쓰기 집합이 새 파일을 허용하지 않아 이번에는 이
         /// 메서드를 그대로 두고 재사용하는 쪽을 택했다(같은 어셈블리 안에서 `internal`로
         /// 이미 접근 가능하다). 네 번째 소비자가 생기거나 쓰기 집합이 넓어지면 그때
         /// MarkdownTableCellCodec 같은 중립 클래스로 옮긴다.
         ///
-        /// [왜 여기서 개행·탭을 공백으로 접는가 - Task 13, 최종 브랜치 리뷰 Critical]
+        /// [왜 연속 공백류 전부를 공백 하나로 접는가 - Task 13 Fix Round 1]
         /// 이 값은 결국 세 기계 확정 표(CASE 분기 · 실행 의미의 @@ROWCOUNT/식 타입 경로)의
         /// 셀에 실리고, 렌더 시점에 `AiService.EscapeTableCell` → `MarkdownTableCellCodec.
-        /// Escape`를 거친다. `Escape`는 `\r\n`·`\n`·`\r`을 공백으로 접고 표 셀은 한 줄에서
-        /// 잘라낸 것이라 애초에 개행을 담을 수 없다 - 접지 않으면 원문을 한 글자도 안
-        /// 틀리고 옮겨도 L1(MechanicalValidator)의 `==` 대조가 영원히 실패한다. 탭도
-        /// 같은 자리에 접는다 - `Escape`는 탭을 건드리지 않아 기술적으로는 표 셀 안에
-        /// 리터럴 탭이 살아남을 수 있지만, 마크다운 표 셀 안의 리터럴 탭을 모델이 그대로
-        /// 재현하리라 기대하기 어렵다(실행 확인: `CAST(Amt\t* 100.0 AS INT)`류). 연속
-        /// 공백은 접지 않는다 - 이미 관측된 실패 두 유형(개행이 만드는 구조적 불일치,
-        /// 탭이 만드는 비가시 문자 재현 실패)에 대한 최소 대응이고, 공백 뭉치까지
-        /// 접으면 원문에서 한 걸음 더 멀어져 축A 감사가 원본 DDL과 글자 단위로 대조할
-        /// 때 표 값과 원문이 갈리는 폭이 커진다.
+        /// Escape`를 거친다. 최초 수정(Task 13 원 라운드)은 `\r\n`·`\n`·`\r`·`\t`만
+        /// 개별로 공백 하나씩으로 바꿨는데, 그러면 원본의 들여쓰기가 그 자리에 그대로
+        /// 남아 긴 연속 공백 런이 생긴다(실측: 개행 하나를 접은 자리에 다음 줄의 들여쓰기
+        /// 스무 칸 남짓이 붙어 남는다). `Escape`는 그 런을 건드리지 않고, `SplitRow`도
+        /// 셀 양끝만 `Trim`한다(MarkdownTableCellCodec.cs) - 그런데 표는 코드 펜스가
+        /// 아니라 들여쓰기된 평문 마크다운으로 프롬프트에 실려 "표를 그대로 옮겨라"라고만
+        /// 지시된다(AiService.cs) - 렌더링에서 그 공백 런은 눈에 보이지도 않으므로 모델이
+        /// 정규화하는 바로 그 종류의 공백이다. 그래서 개행·탭 각각을 따로 접는 대신
+        /// `\s+`(공백·탭·개행 등 모든 공백류의 연속)를 공백 하나로 접는다 - 이것은 이
+        /// 저장소의 새 규칙이 아니라 이미 있던 것을 뒤늦게 따르는 것이다:
+        /// `DmlScopeExtractor.CollapseWhitespace`(2026-08-20 리뷰 Important, 같은 이유로
+        /// 도입됨 - "개행이 있는 값은 어떤 산출물도 만족시킬 수 없는 요구")와
+        /// `DerivedTableColumnExtractor`의 private `TextOf`가 이미 같은 정규화를 한다.
+        /// 세 번째 추출기(CASE 분기 표)만 다르게 접을 근거가 없다. 의미는 그대로다 -
+        /// 접히는 것은 공백류뿐이고 토큰의 내용과 순서는 바뀌지 않는다.
         /// </summary>
         internal static string TextOf(TSqlFragment? fragment)
         {
@@ -105,12 +110,9 @@ namespace ReSet.Core.Services
                     .Skip(fragment.FirstTokenIndex)
                     .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
                     .Select(t => t.Text));
-            return raw
-                .Replace("\r\n", " ")
-                .Replace("\n", " ")
-                .Replace("\r", " ")
-                .Replace("\t", " ")
-                .Trim();
+            return string.IsNullOrWhiteSpace(raw)
+                ? string.Empty
+                : System.Text.RegularExpressions.Regex.Replace(raw, @"\s+", " ").Trim();
         }
 
         // SearchedCaseExpression/SimpleCaseExpression은 리프 문장이 아니라 스칼라 식이고,

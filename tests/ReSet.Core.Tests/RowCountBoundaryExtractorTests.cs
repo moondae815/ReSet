@@ -134,5 +134,31 @@ END";
             var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
             Assert.Equal(fact.Predicate, renderedCell);
         }
+
+        [Fact]
+        public void Extract_MultilinePredicate_PredicateHasNoConsecutiveWhitespace()
+        {
+            // Fix Round 1 (Important) - 개행을 공백 하나로만 접으면 원본 들여쓰기가
+            // 그 자리에 남아 긴 연속 공백 런이 생긴다("@@ROWCOUNT < 1" 뒤에 약 9칸
+            // 공백). Escape는 그 런을 건드리지 않으므로 L1이 모델에게 눈에 보이지도
+            // 않는 공백 개수를 바이트 단위로 재현하라고 요구하게 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @x INT
+    SELECT @x = c FROM dbo.T
+    IF @@ROWCOUNT < 1 BEGIN SET @x = 1 END
+    IF @@ROWCOUNT < 1
+        OR 1 = 2
+    BEGIN SELECT TOP 1 @x = c FROM dbo.T ORDER BY c DESC END
+END";
+
+            var fact = Assert.Single(RowCountBoundaryExtractor.Extract(ddl));
+
+            Assert.False(
+                System.Text.RegularExpressions.Regex.IsMatch(fact.Predicate, @"\s{2,}"),
+                $"연속 공백류가 남아 있습니다: [{fact.Predicate}]");
+        }
     }
 }

@@ -192,6 +192,33 @@ END";
         }
 
         [Fact]
+        public void Extract_CastSpanningMultipleLines_TargetHasNoConsecutiveWhitespace()
+        {
+            // Fix Round 1 (Important, 조정자 브리프 오류 인정): 개행만 공백 하나로
+            // 접으면 각 계속줄의 들여쓰기가 그 자리에 남아 연속 공백 런이 생긴다.
+            // Escape는 그 런을 건드리지 않고 SplitRow도 셀 양끝만 Trim하므로, 표는
+            // 코드 펜스 밖 평문 마크다운으로 주어져 그 런이 렌더링에서 보이지 않는데도
+            // L1은 모델에게 그 공백 개수를 바이트 단위로 재현하라고 요구하게 된다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_intTxAmt MONEY) RETURNS INT AS
+BEGIN
+    DECLARE @v_intRate MONEY
+    SET @v_intRate = 0.015
+    RETURN CAST(
+        @pi_intTxAmt
+        *
+        @v_intRate
+        AS INT)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+
+            Assert.False(
+                System.Text.RegularExpressions.Regex.IsMatch(fact.Expression, @"\s{2,}"),
+                $"연속 공백류가 남아 있습니다: [{fact.Expression}]");
+        }
+
+        [Fact]
         public void Extract_CastWithTabIndentation_TargetHasNoLiteralTab()
         {
             // Task 13 (최종 브랜치 리뷰 Critical): 리뷰어가 실행 확인한 프로브 -
