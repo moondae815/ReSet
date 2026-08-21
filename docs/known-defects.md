@@ -34,27 +34,6 @@
 
 ### P0 — 실사용 피해가 즉시 발생
 
-- [ ] **레거시 전체 Job 루프에 총 시도 상한이 없다** —
-      `CodegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync`의 `while (attempt <= maxAttempts)` 루프
-
-  산출물 있음 + 매핑 성립 + L1/L2 매번 실패 조합이면 같은 메서드의
-  `consecutiveNoArtifactRetries`와 `consecutiveUnverified` 두 연속 캡 어디에도 닿지 않는다.
-  `MaxL2Attempts: "unlimited"`(= `maxAttempts`에 들어가는 `int.MaxValue`)에서
-  **무인 배치가 끝나지 않는 유료 기동**이 된다.
-
-  출처: `2026-08-09-silent-failure-closure-design.md` §후속 작업 1
-
-- [ ] **통합 루프에 점수 임계값 강제가 없다** —
-      `VerificationPipelineOrchestrator.RunConsolidatedPipelineAsync`의 `bestAttempt.TryRecord` 직후
-
-  단일 객체 루프(`RunCodeObjectPipelineCoreAsync`)는 `overriddenHasDefects` 블록에서 5축을
-  직접 검사해 `HasDefects`를 덮어쓰지만, 통합 계획서 루프에는 그 블록 자체가 없다.
-  Critic이 낮은 점수와 함께 `HasDefects: false`를 내면 `검증 상태: 통과` 옆에 낮은 종합
-  신뢰도가 나란히 찍힌다.
-
-  출처: `2026-08-03-verification-annotation-cleanup-design.md`,
-  `2026-08-03-cancellation-policy-design.md`
-
 - [ ] **L2 리뷰 호출 재시도 인프라 부재** — 두 루프의 `if (!reviewSuccess)` 분기
       (`RunCodeObjectPipelineCoreAsync` 및 `RunConsolidatedPipelineAsync`)
 
@@ -321,7 +300,9 @@
 | 보강기·파서의 "유효한 블록" 판정 불일치 | `2ae7a2b`·`25319f6`·`933fb39`가 `BatchStepPlanParser.TryLocateStepsBlock` 공유로 닫음 |
 | Claude 프롬프트 캐시 중단점 | `PromptCacheBreakpointPolicy` (두 번째 전송부터 찍어 1회차 잡의 캐시 쓰기 손실 없음) |
 | `PlanBoundaryResolver`의 `allFound == true` 공백 | `acf5210`의 `AbsorbUncoveredRegions` |
-| 레거시 전체 Job의 `nothingVerified` 무한 재시도 | `e1ccfbd`의 `MaxConsecutiveUnverifiedRetries`. **부분 해소** — 위 P0 ①의 다른 조합은 열려 있다 |
+| 레거시 전체 Job의 `nothingVerified` 무한 재시도 | `e1ccfbd`의 `MaxConsecutiveUnverifiedRetries`. 남아 있던 다른 조합은 아래 총 시도 상한이 닫았다 |
+| 두 코드 생성 루프에 총 시도 상한이 없다 | `AiSettings:MaxTotalAttempts`(기본 20)를 `CodegenWorkflowOrchestrator`에 주입해 `RunSelfHealingWorkflowAsync`의 `while`과 `RunStageAsync`의 `for` 양쪽 머리에서 가드. **문서가 레거시 루프만 적었으나 회차 루프도 같은 구멍이었다** — `gate.Result == Failed`가 반복되면 `consecutiveUnverified`가 매 회차 0으로 리셋된다. 기존 두 연속 캡은 "같은 종류의 실패가 연속"을 세므로 산출물이 나오고 매핑도 성립하는 조합에서 둘 다 걸리지 않는다 |
+| 통합 루프에 점수 임계값 강제가 없다 | `CriticScoreGate`를 신설해 두 루프가 같은 5축 비교를 쓴다(통합 루프는 `bestAttempt.TryRecord` **직전**, 단일 루프와 같은 순서 — `TryRecord`는 `NormalizedScore`만 읽으므로 안전하다). 같은 비교의 세 번째 사본이던 `VerificationBanner.RejectionReason`도 함께 묶었다. 프롬프트의 리터럴 `8`은 그대로 둔다 — 모델에 주는 안내일 뿐이고 게이트는 코드가 잡는다 |
 | 신뢰도 점수와 검증 커버리지의 분리 표기 | `VerificationCoverage` 모델과 포매터의 `coverageLine` |
 | UPDATE 컬럼 매핑표 / `UPDATE … FROM` 자기참조 / `SET` 절 동시평가 | `2026-08-09-update-mapping-contract` |
 | 명세서 재발 방지 검증 게이트 | `63483f2`가 L2 Critic이 아니라 **L1**에 `MechanicalValidator.CheckSchemaClaims`를 넣고 `ab6dd5b`가 코드 펜스 오탐을 닫음 |

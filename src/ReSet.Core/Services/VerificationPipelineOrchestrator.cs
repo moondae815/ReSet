@@ -1091,22 +1091,9 @@ namespace ReSet.Core.Services
 
                     if (reviewSuccess && l2Result != null)
                     {
-                        // [수정] 감쇄 임계치(Decay)를 전면 비활성화하여 항상 설정된 기준 점수(_criticScoreThreshold)를 강제
-                        bool overriddenHasDefects = false;
-                        
-                        if (l2Result.ScoreAccuracy < _criticScoreThreshold ||
-                            l2Result.ScoreCrud < _criticScoreThreshold ||
-                            l2Result.ScoreInterface < _criticScoreThreshold ||
-                            l2Result.ScoreException < _criticScoreThreshold ||
-                            l2Result.ScoreReadability < _criticScoreThreshold)
-                        {
-                            overriddenHasDefects = true;
-                        }
-
-                        if (overriddenHasDefects)
-                        {
-                            l2Result.HasDefects = true;
-                        }
+                        // 감쇄 임계치(Decay)를 쓰지 않고 항상 설정된 기준 점수를 강제한다.
+                        // Critic의 HasDefects 자기 신고는 참고일 뿐이고 게이트는 코드가 잡는다.
+                        EnforceScoreThreshold(l2Result, selectedOption, attempt);
                     }
 
                     // 불합격 여부와 무관하게 후보로 등록한다. 재시도가 소진됐을 때
@@ -2022,6 +2009,14 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
                     reviewFailureReason = ex.Message;
+                }
+
+                if (reviewSuccess && l2Result != null)
+                {
+                    // 단일 객체 루프와 같은 순서 - 후보 등록 전에 게이트를 통과시킨다.
+                    // TryRecord는 NormalizedScore만 읽으므로 HasDefects를 덮어써도
+                    // 최고점 판정은 흔들리지 않는다.
+                    EnforceScoreThreshold(l2Result, jobName, attempt);
                 }
 
                 // 불합격 여부와 무관하게 후보로 등록한다.
@@ -3265,6 +3260,32 @@ namespace ReSet.Core.Services
                     $"{jobName} - {operationLabel} 기록 실패 (변경 폐기, 기존 목차 유지): {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Critic의 HasDefects 자기 신고를 5축 점수로 덮어쓴다. 두 루프가 같은 규칙을 쓰도록
+        /// 한 자리에 둔다 - 통합 계획서 루프에는 이 검사 자체가 없어서 낮은 점수와 함께
+        /// "통과"가 찍혔다.
+        /// </summary>
+        private void EnforceScoreThreshold(ReviewResult review, string target, int attempt)
+        {
+            var failedAxes = CriticScoreGate.FailedAxes(review, _criticScoreThreshold);
+            if (failedAxes.Count == 0)
+            {
+                return;
+            }
+
+            if (!review.HasDefects)
+            {
+                // 모델이 "결함 없음"이라고 했는데 점수가 기준에 못 미친 경우다.
+                // 조용히 덮어쓰면 나중에 왜 재시도가 돌았는지 알 수 없다.
+                Log.Warning(
+                    "[파이프라인] Critic이 결함 없음으로 신고했으나 기준({Threshold}) 미만 축이 있어 결함으로 덮어씁니다 - " +
+                    "대상: {Target}, 시도: {Attempt}, 미달 축: {FailedAxes}",
+                    _criticScoreThreshold, target, attempt, string.Join(", ", failedAxes));
+            }
+
+            review.HasDefects = true;
         }
 
         /// <summary>

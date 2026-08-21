@@ -2155,6 +2155,14 @@ namespace ReSet.Cli
                     maxL2Attempts = parsed;
                 }
 
+                // 총 시도 상한. MaxL2Attempts가 "unlimited"여도 넘지 못하는 바닥이므로
+                // "unlimited"를 받지 않는다 - 받으면 이 설정의 존재 이유가 사라진다.
+                var maxTotalAttempts = 20;
+                if (int.TryParse(configuration["AiSettings:MaxTotalAttempts"], out int parsedTotal) && parsedTotal >= 1)
+                {
+                    maxTotalAttempts = parsedTotal;
+                }
+
                 // Validator 및 Codegen Workflow Orchestrator 설정
                 var validatorConfig = new ValidatorConfig
                 {
@@ -2166,7 +2174,7 @@ namespace ReSet.Cli
 
                 var metadataExporter = new ReSet.Core.Services.MetadataExporter();
                 var codeVerificationOrchestrator = new CodeVerificationOrchestrator(validatorConfig, aiClient, null, new ValidationUiProxy());
-                var orchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts);
+                var orchestrator = new CodegenWorkflowOrchestrator(engine, codeVerificationOrchestrator, metadataExporter, maxL2Attempts, maxTotalAttempts);
 
                 AnsiConsole.MarkupLine($"[grey]지시서 경로: {entryPointPath}[/]");
                 AnsiConsole.MarkupLine($"[grey]타겟 프로젝트 디렉터리: {targetProjectDir}[/]");

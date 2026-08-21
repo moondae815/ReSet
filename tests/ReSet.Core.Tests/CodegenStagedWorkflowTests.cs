@@ -94,7 +94,7 @@ namespace ReSet.Core.Tests
             _agentDir);
 
         private CodegenWorkflowOrchestrator Build(
-            ICodingEngine engine, int maxAttempts = 2, IAiClient? aiClient = null)
+            ICodingEngine engine, int maxAttempts = 2, IAiClient? aiClient = null, int maxTotalAttempts = 20)
         {
             var config = new ValidatorConfig
             {
@@ -107,7 +107,7 @@ namespace ReSet.Core.Tests
                 config, aiClient ?? MatchingAiClient(), null, null);
 
             return new CodegenWorkflowOrchestrator(
-                engine, verifier, new MetadataExporter(), maxAttempts);
+                engine, verifier, new MetadataExporter(), maxAttempts, maxTotalAttempts);
         }
 
         /// <summary>
@@ -276,6 +276,32 @@ namespace ReSet.Core.Tests
                         WriteArtifactFor(instructions, dir);
                     }
 
+                    return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
+                });
+            return engine;
+        }
+
+        /// <summary>
+        /// 회차 산출물은 남기되, 총 시도 상한이 없으면 이 루프도 끝나지 않는다.
+        /// 테스트가 영원히 매달리는 대신 명확히 실패하도록 넉넉한 횟수를 넘기면 던진다.
+        /// </summary>
+        private ICodingEngine ProductiveEngineWithRunawayGuard(int throwAfter)
+        {
+            var engine = Substitute.For<ICodingEngine>();
+            engine.Name.Returns("stub");
+            engine.Command.Returns("stub");
+            var calls = 0;
+            engine.GenerateCodeAsync(
+                    Arg.Any<SpDefinition?>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(callInfo =>
+                {
+                    if (++calls > throwAfter)
+                    {
+                        throw new InvalidOperationException(
+                            $"회차 루프가 {throwAfter}회를 넘겨도 멈추지 않았습니다 - 총 시도 상한이 없습니다.");
+                    }
+
+                    WriteArtifactFor(callInfo.ArgAt<string>(1), callInfo.ArgAt<string>(2));
                     return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
                 });
             return engine;
@@ -665,5 +691,30 @@ namespace ReSet.Core.Tests
                 new[] { "00-bootstrap", "01-S01", "02-S02", "99-assembly" },
                 progress!.Stages.Select(s => s.Id).ToArray());
         }
+
+        /// <summary>
+        /// 전체 Job 루프와 같은 구멍이 회차 루프에도 있다. gate.Result가 Failed면
+        /// consecutiveUnverified가 매 회차 0으로 리셋되므로(NotVerifiable일 때만 증가),
+        /// MaxL2Attempts가 "unlimited"일 때 이 회차는 끝나지 않는다.
+        /// </summary>
+        [Fact]
+        public async Task RunStagedWorkflowAsync_UnlimitedAttemptsWithRejectedStage_StopsAtTotalCap()
+        {
+            var engine = ProductiveEngineWithRunawayGuard(throwAfter: 40);
+
+            var result = await Build(engine, maxAttempts: -1, aiClient: AiClientMismatchingOn("S01"), maxTotalAttempts: 4)
+                .RunStagedWorkflowAsync(
+                    "JobX", Plan(), _agentDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.AllPassed);
+            Assert.Equal(new[] { "S01" }, result.FailedStepCodes);
+
+            // 떨어지는 회차는 S01뿐이다. 그 회차만 총 상한만큼 돌고 멈춰야 한다.
+            Assert.Equal(4, InstructionCalls(engine).Count(f => f == "task-01-S01.md"));
+
+            var stage = AgentProgressStore.Load(_agentDir)!.Stages.Single(s => s.Id == "01-S01");
+            Assert.Contains("MaxTotalAttempts", stage.LastGapSummary);
+        }
+
     }
 }

@@ -1980,6 +1980,50 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), "L2 결함");
         }
 
+        /// <summary>
+        /// Critic이 낮은 점수와 함께 HasDefects: false를 내면, 단일 객체 루프는
+        /// 5축을 코드로 다시 검사해 HasDefects를 덮어쓰지만 통합 루프에는 그 블록이 없었다.
+        /// 그 결과 "검증 상태: 통과" 옆에 낮은 종합 신뢰도가 나란히 찍혔다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ReviewClaimsNoDefectsButAxisBelowThreshold_ShouldNotPass()
+        {
+            // Arrange
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 자기 신고는 "결함 없음"인데 CRUD 한 축만 기준(8) 미만이다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
+                .Returns(_ => Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10,
+                    ScoreCrud = 3,
+                    ScoreInterface = 10,
+                    ScoreException = 10,
+                    ScoreReadability = 10
+                }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            // Act
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            // Assert
+            Assert.NotNull(result.Plan);
+            // 통과로 접지 않고 재시도했어야 한다.
+            _userInteraction.Received().NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), Arg.Any<string>());
+            _userInteraction.DidNotReceive().NotifyValidationSuccess("Job_Test");
+            // 예산이 소진되면 구제 문서에 품질 불합격 배너가 붙는다.
+            Assert.Contains("품질 불합격", result.Plan);
+        }
+
         [Fact]
         public async Task RunPipelineAsync_ExportsMetadataCleansingSql_CreatesSqlFile()
         {
