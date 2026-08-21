@@ -592,6 +592,33 @@ END";
         }
 
         [Fact]
+        public void ExtractSetPredicates_InWithLeftFunctionCall_ShouldStillCapture()
+        {
+            // EXPECT_PROC:146·168 실측. 좌변이 LEFT(...) 호출인데 ScriptDom은 이것을
+            // FunctionCall이 아니라 전용 노드(LeftFunctionCall)로 판다. 그래서 위
+            // ISNULL 사례는 잡히는데 이 형태만 통째로 빠졌다 - 같은 SP에서 ISNULL
+            // 래핑은 정상 수집됐으므로 "래핑을 원천적으로 못 담는" 것이 아니라
+            // LEFT/RIGHT 한정 누락이다.
+            //
+            // 2026-08-20 축 A 감사의 🟡. 통신군(C)과 금융·상품권군(A,B)을 가르는
+            // 필터가 「집합 술어 (기계 확정 — 수정 금지)」 표에서 빠졌다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.CollectFlag = 1
+    FROM dbo.TSettleMst A
+    JOIN dbo.TPayTool D ON A.ToolID = D.ToolID
+    WHERE LEFT(D.PayToolType,1) IN ('A','B')
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("IN", fact.Operator);
+            Assert.Contains("PayToolType", fact.Column);
+            Assert.Equal(2, fact.Literals.Count);
+        }
+
+        [Fact]
         public void ExtractSetPredicates_EqualityAgainstLiteral_ShouldBeCaptured()
         {
             // COMM_UPD:169 실측. 취소수수료 미부과 계약을 걸러내는 필터인데
