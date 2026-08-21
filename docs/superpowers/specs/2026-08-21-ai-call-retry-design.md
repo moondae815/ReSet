@@ -276,3 +276,4 @@ l2Result = await WrapWithProgress(
 | `StatusCode == null`을 `Transient`로 두어 예상 밖 예외가 재시도된다 | `HttpRequestException`에 한정되고 `maxTries = 2`라 상한이 1회 추가다 |
 | 토큰 취소 판정이 경합한다 — 취소와 타임아웃이 거의 동시에 오면 | 취소로 판정된다(안전한 방향). 취소를 삼키지 않는 것이 이 코드베이스의 일관된 규약이다 |
 | `CliInvocationException` 도입이 기존 `catch (InvalidOperationException)`을 깬다 | 하위형이므로 기존 catch가 그대로 잡는다. 반환 형식만 좁아진다 |
+| **`Assert.Throws<InvalidOperationException>`을 쓰는 테스트가 깨진다** | **실측으로 드러났다(구현 중 Task 4가 보고).** xUnit의 `Assert.Throws<T>`는 `catch`와 달리 **정확 형식 일치**를 요구하므로 하위형이 오면 실패한다. `CodexCliClientTests`·`ClaudeCliClientTests`·`AntigravityCliClientTests`의 6개 테스트가 여기 걸린다. 위 행의 "하위형이라 안전하다"는 판단은 `catch`에만 맞았고 단언 API에는 틀렸다. 해당 단언을 `Assert.Throws<CliInvocationException>`으로 좁힌다 — 새 계약을 더 정확히 고정하므로 후퇴가 아니다 |

@@ -704,6 +704,9 @@ git commit -m "fix: API 클라이언트 6곳이 HTTP 상태 코드를 예외에 
 - Modify: `src/ReSet.Core/Services/AiRetryPolicy.cs`
 - Test: `tests/ReSet.Core.Tests/CliFailureClassifierTests.cs` (기존 파일에 추가)
 - Test: `tests/ReSet.Core.Tests/AiRetryPolicyTests.cs` (기존 파일에 추가)
+- Test: `tests/ReSet.Core.Tests/CodexCliClientTests.cs` (단언 형식 좁히기)
+- Test: `tests/ReSet.Core.Tests/ClaudeCliClientTests.cs` (단언 형식 좁히기)
+- Test: `tests/ReSet.Core.Tests/AntigravityCliClientTests.cs` (단언 형식 좁히기)
 
 **Interfaces:**
 - Consumes: `AiRetryPolicy.Classify` (Task 1), `CliFailureKind` (기존)
@@ -868,19 +871,50 @@ Run: `dotnet test tests/ReSet.Core.Tests --nologo -v q --filter "FullyQualifiedN
 Expected: 전부 통과. 기존 `CliFailureClassifierTests`의 다른 테스트들도 계속 통과해야 한다 —
 메시지 문구는 안 바뀌었다.
 
-- [ ] **Step 5: 전체 테스트로 회귀를 본다**
+- [ ] **Step 5: `Assert.Throws<InvalidOperationException>` 호출부를 좁힌다**
 
-`InvalidOperationException`을 잡던 자리가 있으므로 전체를 돌린다.
+`catch (InvalidOperationException)`은 하위형을 그대로 잡지만 **xUnit의
+`Assert.Throws<T>`는 정확 형식 일치를 요구한다.** `ToException`이 하위형을 돌려주는 순간
+그 단언들이 깨진다. 세 파일에서 `CliFailureClassifier` 경로를 단언하는 자리를 좁힌다:
+
+```csharp
+// 전
+Assert.Throws<InvalidOperationException>(() => ...);
+await Assert.ThrowsAsync<InvalidOperationException>(() => ...);
+
+// 후
+Assert.Throws<CliInvocationException>(() => ...);
+await Assert.ThrowsAsync<CliInvocationException>(() => ...);
+```
+
+대상: `CodexCliClientTests.cs` · `ClaudeCliClientTests.cs` · `AntigravityCliClientTests.cs`.
+**`CliFailureClassifier`를 거치지 않는 단언은 건드리지 않는다** — 전체 테스트를 돌려
+실제로 깨진 것만 고치고, 안 깨진 자리는 그대로 둔다.
+
+`using ReSet.Core.Services.Clients.Cli;`가 없으면 더한다.
+
+**함께 강화한다** — 이름이 분류를 표방하는 테스트(`..._ThrowsClassifiedException`,
+`..._IsClassifiedAsQuota`)는 지금까지 "예외가 났다"까지만 봤고 **무엇으로 분류됐는지는
+보지 못했다.** 이제 `Kind`가 예외에 실리므로 그 이름이 약속한 것을 실제로 검사한다:
+
+```csharp
+var ex = Assert.Throws<CliInvocationException>(() => ...);
+Assert.Equal(CliFailureKind.NotAuthenticated, ex.Kind);   // 테스트 이름이 말하는 그 종류
+```
+
+- [ ] **Step 6: 전체 테스트로 회귀를 본다**
 
 Run: `dotnet test --nologo -v q 2>&1 | grep -v "warning CS" | tail -5`
 
 Expected: `실패: 0`, 통과 수가 이전보다 늘어나 있다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add src/ReSet.Core/Services/Clients/Cli/ src/ReSet.Core/Services/AiRetryPolicy.cs \
-        tests/ReSet.Core.Tests/CliFailureClassifierTests.cs tests/ReSet.Core.Tests/AiRetryPolicyTests.cs
+        tests/ReSet.Core.Tests/CliFailureClassifierTests.cs tests/ReSet.Core.Tests/AiRetryPolicyTests.cs \
+        tests/ReSet.Core.Tests/CodexCliClientTests.cs tests/ReSet.Core.Tests/ClaudeCliClientTests.cs \
+        tests/ReSet.Core.Tests/AntigravityCliClientTests.cs
 git commit -m "fix: CLI 실패 유형을 예외에 보존하고 재시도 판정에 연결한다"
 ```
 
