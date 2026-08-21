@@ -1130,5 +1130,72 @@ END";
             Assert.Contains(facts, f => f.Hints.Contains("NOLOCK"));
             Assert.Contains(facts, f => f.Hints.Count == 0);
         }
+
+        [Fact]
+        public void ExtractLockHints_IndexHintWithEqualsForm_RendersOriginalIndexName()
+        {
+            // 수정 라운드 3 - 리뷰 실측: 값을 지는 힌트를 HintKind 이름만으로 뽑으면
+            // (예: "INDEX") 어느 인덱스를 강제하는지가 사라진다. 실물: UP_UTIL_SETTLE_INS
+            // 146행 PaymentDB.dbo.TTxMst A WITH(NOLOCK, INDEX=CIDX_TTxMst_YMD) - 이관 시
+            // 질의 계획이 달라지는 사실인데 표에 "INDEX"라고만 적으면 원본에서 찾을 수
+            // 없다. IndexTableHint 노드 자신의 원문 토큰을 그대로 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.T A WITH(INDEX=CIDX_x) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Contains("INDEX=CIDX_x", fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_IndexHintWithMultipleNames_RendersAllNames()
+        {
+            // INDEX(a, b) 형태 - 힌트 이름만으로는 두 인덱스 이름이 모두 사라진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.T A WITH(INDEX(IX_a, IX_b)) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Contains("INDEX(IX_a, IX_b)", fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_ForceSeekHintWithColumns_RendersOriginalText()
+        {
+            // FORCESEEK(IX_a(col)) - 값이 중첩된 형태(인덱스 이름 + 컬럼 목록). ScriptDom은
+            // 이를 ForceSeekTableHint로 판다(IndexValue·ColumnValues 별도 프로퍼티) -
+            // HintKind 이름만으로는 인덱스도 컬럼도 사라진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.T A WITH(FORCESEEK(IX_a(col))) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Contains("FORCESEEK(IX_a(col))", fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_ValuelessHint_StillRendersHintKindName()
+        {
+            // 값이 없는 힌트(NOLOCK 등)의 렌더는 이번 수정에서 손대지 않는다(조정자 판정 -
+            // 범위를 값 있는 힌트로 한정). 회귀 확인용 고정 테스트.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.T A WITH(NOLOCK) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
+        }
     }
 }

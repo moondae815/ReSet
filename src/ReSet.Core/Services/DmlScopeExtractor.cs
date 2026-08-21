@@ -455,9 +455,7 @@ namespace ReSet.Core.Services
                 var table = string.Join(
                     ".", node.SchemaObject.Identifiers.Select(i => i.Value));
                 var alias = string.IsNullOrEmpty(node.Alias?.Value) ? "-" : node.Alias!.Value;
-                var hints = node.TableHints
-                    .Select(h => h.HintKind.ToString().ToUpperInvariant())
-                    .ToList();
+                var hints = node.TableHints.Select(RenderHint).ToList();
                 var line = node.StartLine;
 
                 if (Facts.Any(f =>
@@ -469,6 +467,53 @@ namespace ReSet.Core.Services
 
                 Facts.Add(new LockHintFact(operation, ordinal, line, table, alias, scope, hints));
             }
+
+            /// <summary>
+            /// 힌트 하나를 표에 실을 문자열로 낸다.
+            ///
+            /// [값을 지는 힌트는 원문 토큰 그대로 낸다 - 수정 라운드 3, 조정자 판정]
+            /// HintKind 이름만 내면(예: "INDEX") 어느 인덱스인지가 사라진다. 실물:
+            /// UP_UTIL_SETTLE_INS 146행 `PaymentDB.dbo.TTxMst A WITH(NOLOCK,
+            /// INDEX=CIDX_TTxMst_YMD)` - 이관 시 질의 계획이 달라지는 사실인데 "INDEX"라고만
+            /// 적으면 원본에서 찾을 수 없다. 작업 3(객체 선언 추출기)이 EXECUTEAS·INLINE에서
+            /// 같은 부류의 결함을 겪었다 - "주체와 상태가 통째로 사라져 원문에서 찾을 수
+            /// 없는, 없는 것보다 나쁜 그럴듯한 오답"이 됐다.
+            ///
+            /// 값을 직접 IndexValues·ColumnValues 같은 프로퍼티에서 다시 조립하지 않고
+            /// 힌트 노드 자신의 원문 토큰(TextOf)을 쓰는 이유: `INDEX=CIDX_x`와
+            /// `INDEX(CIDX_x)`는 둘 다 유효 문법이고 ScriptDom은 어느 표기였는지를 별도
+            /// 타입으로 구분하지 않는다(둘 다 IndexTableHint, IndexValues만 다르다) - 프로브로
+            /// 확인했다(2026-08-21, 수정 라운드 3). 값에서 다시 조립하면 어느 표기를 쓸지
+            /// 우리가 지어내야 하고 원문과 다를 위험이 있다. 원문 토큰을 그대로 쓰면 원문의
+            /// 구두점(`=` vs `()`)까지 보존되어 항상 원본에서 축자로 찾을 수 있다 - 같은
+            /// 프로브로 실측: `WITH(FORCESEEK(IX_a(col)))`도 `FORCESEEK(IX_a(col))`로,
+            /// `WITH(SPATIAL_WINDOW_MAX_CELLS=8)`도 `SPATIAL_WINDOW_MAX_CELLS=8`로 그대로
+            /// 나온다.
+            ///
+            /// [값이 없는 힌트는 손대지 않는 이유] NOLOCK 등은 HintKind 이름 자체가 이미
+            /// 원문과 축자로 같다(대소문자만 다를 뿐 - 이 코퍼스는 전부 대문자로 쓴다).
+            /// 수정 라운드 3의 지시 범위가 값 있는 힌트로 한정돼 있고, 렌더를 통째로 원문
+            /// 토큰 기반으로 바꾸면 검증하지 않은 대소문자 차이가 새로 생길 위험이 있어
+            /// 건드리지 않는다.
+            ///
+            /// [알려진 값 있는 힌트 셋 - ScriptDom 180.37.3 전수 확인]
+            /// TableHint의 서브타입은 IndexTableHint·ForceSeekTableHint·LiteralTableHint
+            /// 셋뿐이다(리플렉션으로 어셈블리 전체를 훑어 확인, 2026-08-21 수정 라운드 3).
+            /// 값 없는 힌트는 서브타입이 없는 TableHint 그 자체다.
+            ///
+            /// [미래 서브타입에 대한 안전망] 이 분기(`GetType() != typeof(TableHint)`)는
+            /// 오늘 존재하는 셋을 원문 토큰으로 정확히 처리하지만, ScriptDom이 나중에
+            /// 새 값 있는 힌트 타입을 추가하면 자동으로 이 분기를 타 원문 토큰으로 렌더된다 -
+            /// TextOf가 노드 종류를 가리지 않고 원문을 그대로 잇기 때문에 대체로 안전하다.
+            /// 그래도 프로브 없이 넘겨짚지 말 것: 힌트를 새로 다루게 되면(테스트가 이
+            /// 분기에 처음 걸리면) 위 리플렉션 프로브를 다시 돌려 그 타입의 프로퍼티
+            /// 구조를 확인하고, 원문 토큰이 여전히 원하는 표기와 일치하는지 실물 DDL로
+            /// 검증한 뒤 이 문서에 사례를 추가하라.
+            /// </summary>
+            private static string RenderHint(TableHint hint) =>
+                hint.GetType() == typeof(TableHint)
+                    ? hint.HintKind.ToString().ToUpperInvariant()
+                    : CollapseWhitespace(TextOf(hint));
 
             /// <summary>
             /// FROM 절의 명명 테이블 참조를 모은다. 파생 테이블 안으로도 내려가되, 그
@@ -657,6 +702,19 @@ namespace ReSet.Core.Services
                     .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
                     .Select(t => t.Text)).Trim();
         }
+
+        /// <summary>
+        /// 여러 줄로 쓰인 원문 조각을 한 줄로 접는다. TopLevelPredicateCollector의 집합
+        /// 술어 좌변(2026-08-20 리뷰 Important)과 LockHintVisitor의 값 있는 힌트
+        /// 렌더(수정 라운드 3)가 함께 쓴다 - 프롬프트 쪽은 EscapeTableCell이 개행을
+        /// 공백으로 접어 싣는데 검증기는 접지 않은 원문과 대조하므로, 재료를 만들 때
+        /// 한 번 접어 두지 않으면 개행이 있는 값은 어떤 산출물도 만족시킬 수 없는
+        /// 요구가 된다. 접히는 것은 공백뿐이라 의미는 그대로다.
+        /// </summary>
+        private static string CollapseWhitespace(string? text) =>
+            string.IsNullOrWhiteSpace(text)
+                ? string.Empty
+                : System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
 
         /// <summary>
         /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
@@ -1065,27 +1123,6 @@ namespace ReSet.Core.Services
                         return null;
                 }
             }
-
-            /// <summary>
-            /// 여러 줄로 쓰인 좌변을 한 줄로 접는다.
-            ///
-            /// [왜 원문 그대로가 아닌가 - 2026-08-20 리뷰 Important]
-            /// 이 값은 프롬프트의 표 셀로 나가고 L1이 산출물의 같은 셀과 대조한다.
-            /// 그런데 프롬프트 쪽은 EscapeTableCell이 개행을 공백으로 접어 싣고
-            /// (AiService), 검증기는 접지 않은 이 원문과 대조한다
-            /// (MechanicalValidator.CheckSetPredicates). 좌변에 개행이 있으면 모델이
-            /// 지시대로 축자로 옮겨도 두 문자열이 영영 같아지지 않는다 - 어떤 산출물도
-            /// 만족시킬 수 없는 요구가 되고, 재시도 예산만 태운다.
-            ///
-            /// 좌변을 노드 타입이 아니라 컬럼 유무로 받게 넓힌 뒤로 CASE·산술식처럼
-            /// 여러 줄로 쓰이는 형태가 흔해져 이론상 위험이 실제 위험이 됐다. 재료를
-            /// 만들 때 한 번 접어 두면 프롬프트와 검증기가 같은 것을 본다. 접히는 것은
-            /// 공백뿐이라 의미는 그대로다.
-            /// </summary>
-            private static string CollapseWhitespace(string? text) =>
-                string.IsNullOrWhiteSpace(text)
-                    ? string.Empty
-                    : System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
 
             /// <summary>
             /// 식 어딘가에 컬럼 참조가 있는가. 하위 질의 안으로는 내려가지 않는다 -
