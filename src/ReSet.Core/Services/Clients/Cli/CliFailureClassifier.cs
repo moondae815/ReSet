@@ -137,7 +137,7 @@ namespace ReSet.Core.Services.Clients.Cli
             return BuildException(engineName, command, kind, result, extraDetail: null, CliFailureContext.Codegen);
         }
 
-        private static InvalidOperationException BuildException(
+        private static CliInvocationException BuildException(
             string providerName,
             string command,
             CliFailureKind kind,
@@ -196,7 +196,7 @@ namespace ReSet.Core.Services.Clients.Cli
                 builder.Append("\n[추가 진단]\n").Append(extraDetail);
             }
 
-            return new InvalidOperationException(builder.ToString());
+            return new CliInvocationException(builder.ToString(), kind);
         }
 
         public static InvalidOperationException CommandNotFound(

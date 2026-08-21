@@ -137,9 +137,10 @@ namespace ReSet.Core.Tests
 
             var client = new CodexCliClient(stub.Path, "gpt-5.6-terra", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
+            Assert.Equal(CliFailureKind.NotAuthenticated, exception.Kind);
             Assert.Contains("codex-cli", exception.Message);
             Assert.Contains("로그인", exception.Message);
             Assert.Contains("Not logged in", exception.Message);
@@ -157,7 +158,7 @@ namespace ReSet.Core.Tests
 
             var client = new CodexCliClient(stub.Path, "gpt-5.6-terra", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
             Assert.Contains("codex progress: thinking", exception.Message);

@@ -142,7 +142,10 @@ namespace ReSet.Core.Services.Clients
                 {
                     var errorContent = await response.Content.ReadAsStringAsync();
                     Log.Error("OpenAI Responses API HTTP 요청 실패 - StatusCode: {StatusCode} ({ReasonPhrase})\n[Error Response Content]:\n{ErrorContent}", (int)response.StatusCode, response.ReasonPhrase, errorContent);
-                    throw new HttpRequestException($"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).\n상세 에러 내용: {errorContent}");
+                    throw new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).\n상세 에러 내용: {errorContent}",
+                        null,
+                        response.StatusCode);
                 }
 
                 var responseContent = await response.Content.ReadAsStringAsync();
@@ -340,7 +343,10 @@ namespace ReSet.Core.Services.Clients
                 {
                     var errorContent = await response.Content.ReadAsStringAsync();
                     Log.Error("OpenAI API HTTP 요청 실패 - StatusCode: {StatusCode} ({ReasonPhrase})\n[Error Response Content]:\n{ErrorContent}", (int)response.StatusCode, response.ReasonPhrase, errorContent);
-                    throw new HttpRequestException($"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).\n상세 에러 내용: {errorContent}");
+                    throw new HttpRequestException(
+                        $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}).\n상세 에러 내용: {errorContent}",
+                        null,
+                        response.StatusCode);
                 }
 
                 var responseContent = await response.Content.ReadAsStringAsync();

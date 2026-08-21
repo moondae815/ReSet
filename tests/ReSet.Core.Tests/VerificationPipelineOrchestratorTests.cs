@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1980,6 +1981,153 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), "L2 결함");
         }
 
+        /// <summary>
+        /// 일시적 API 오류 한 번에 그 회차의 검증을 포기하던 자리다.
+        /// RetryRescue가 이전 회차 최고점을 구제해 완화할 뿐 검증 자체는 버려졌다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_TransientReviewFailure_RetriesAndSucceeds()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            var goodReview = new ReviewResult
+            {
+                HasDefects = false,
+                ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+            };
+
+            // 1회차는 503, 2회차는 성공. 재시도가 없으면 이 Job은 교차 검증 없이 끝난다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
+                .Returns(
+                    _ => throw new HttpRequestException("서비스 일시 오류", null, System.Net.HttpStatusCode.ServiceUnavailable),
+                    _ => Task.FromResult(goodReview));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            // 같은 회차 안에서 두 번 불렸어야 한다.
+            await _aiService.Received(2).ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test");
+            // 교차 검증을 건너뛴 배너가 없어야 한다. 문구는 VerificationBanner.ReviewNotRun의 것이다
+            // (콘솔 NotifyError 문구와 다르므로 그쪽을 쓰면 거짓 통과한다).
+            Assert.DoesNotContain("L2 AI 교차 리뷰가 수행되지 않았습니다", result.Plan);
+            _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
+        }
+
+        /// <summary>
+        /// HttpClient 타임아웃은 TaskCanceledException이고 이것은 OperationCanceledException이다.
+        /// 호출부 필터가 그것을 거르므로 예외가 파이프라인 밖으로 새어 나가
+        /// "사용자에 의해 중단되었습니다"로 보고됐다. TimeoutSeconds가 3600이므로
+        /// 한 시간을 태운 뒤에 사용자 탓이 되던 자리다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_HttpTimeout_DoesNotEscapeAsCancellation()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 토큰은 취소되지 않았다. 사용자가 멈춘 게 아니라 HttpClient가 시간을 다 쓴 것이다.
+            // 타입 인자를 명시한다: Task<T> 오버로드와 T 오버로드가 throw 람다 하나로는 구분되지 않아 모호해진다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
+                .Returns<ReviewResult>(_ => throw new TaskCanceledException("HttpClient.Timeout", new TimeoutException()));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            // 던지지 않고 끝나야 한다. 이 줄이 회귀 방지의 핵심이다.
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            // 소진될 때까지 재시도했고, 그 뒤 소프트 페일 경로로 내려왔다.
+            await _aiService.Received(2).ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test");
+            Assert.Contains("L2 AI 교차 리뷰가 수행되지 않았습니다", result.Plan);
+        }
+
+        /// <summary>
+        /// 인증 실패를 재시도하면 이미 빈 지갑을 계속 두드리게 된다.
+        /// 과잉 재시도 방지 가드 - 오늘도 통과하므로 뮤테이션으로 실효를 확인한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_FatalReviewFailure_DoesNotRetry()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 타입 인자를 명시한다: Task<T> 오버로드와 T 오버로드가 throw 람다 하나로는 구분되지 않아 모호해진다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
+                .Returns<ReviewResult>(_ => throw new HttpRequestException("인증 실패", null, System.Net.HttpStatusCode.Unauthorized));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.NotNull(result.Plan);
+            await _aiService.Received(1).ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test");
+        }
+
+        /// <summary>
+        /// Critic이 낮은 점수와 함께 HasDefects: false를 내면, 단일 객체 루프는
+        /// 5축을 코드로 다시 검사해 HasDefects를 덮어쓰지만 통합 루프에는 그 블록이 없었다.
+        /// 그 결과 "검증 상태: 통과" 옆에 낮은 종합 신뢰도가 나란히 찍혔다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ReviewClaimsNoDefectsButAxisBelowThreshold_ShouldNotPass()
+        {
+            // Arrange
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 자기 신고는 "결함 없음"인데 CRUD 한 축만 기준(8) 미만이다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
+                .Returns(_ => Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10,
+                    ScoreCrud = 3,
+                    ScoreInterface = 10,
+                    ScoreException = 10,
+                    ScoreReadability = 10
+                }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            // Act
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            // Assert
+            Assert.NotNull(result.Plan);
+            // 통과로 접지 않고 재시도했어야 한다.
+            _userInteraction.Received().NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), Arg.Any<string>());
+            _userInteraction.DidNotReceive().NotifyValidationSuccess("Job_Test");
+            // 예산이 소진되면 구제 문서에 품질 불합격 배너가 붙는다.
+            Assert.Contains("품질 불합격", result.Plan);
+        }
+
         [Fact]
         public async Task RunPipelineAsync_ExportsMetadataCleansingSql_CreatesSqlFile()
         {
@@ -3009,6 +3157,12 @@ namespace ReSet.Core.Tests
         {
             // I3: L2 리뷰 도중 취소되면 "리뷰 미수행" 문서를 완성해 정상 반환할 게 아니라
             // 취소를 그대로 전파해서 배치 루프의 OperationCanceledException 처리가 잡도록 해야 한다.
+            //
+            // AiRetryPolicy.Classify는 토큰이 취소되지 않은 OperationCanceledException을
+            // HttpClient 타임아웃으로 간주해 Transient로 재시도한다(재시도로 감싼 뒤의 새 규약,
+            // Task 5). 그래서 이 테스트가 지키려는 "진짜 취소는 새어 나간다"는 보장을 검증하려면
+            // 토큰을 실제로 취소한 뒤 그 토큰이 실린 예외를 던져야 한다 - 그래야 Classify가
+            // Cancelled로 판정해 재시도 없이 즉시 재던진다.
             var dbService = Substitute.For<IDbMetadataService>();
             var aiService = Substitute.For<IAiService>();
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
@@ -3017,18 +3171,28 @@ namespace ReSet.Core.Tests
                 "1", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
 
             var spDef = new SpDefinition { Schema = "dbo", Name = "USP_Cancelled", DdlText = "CREATE PROCEDURE USP_Cancelled AS SELECT 1" };
-            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Cancelled", Arg.Any<int>())
+            // 취소된 토큰을 파이프라인 전체에 흘려보내야 하므로, 여기도 특정 토큰 값
+            // (기본값)에만 매칭되지 않도록 Arg.Any<CancellationToken>()을 명시한다.
+            dbService.GetSpDetailsAsync(Arg.Any<string>(), "dbo", "USP_Cancelled", Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(spDef));
 
             var specMarkdown = ValidSpecificationMarkdown();
             aiService.GenerateSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = specMarkdown }));
 
+            using var cts = new CancellationTokenSource();
+            // 타입 인자를 명시한다: Task<T> 오버로드와 T 오버로드가 람다 본문만으로는
+            // 구분되지 않아 모호해진다.
             aiService.ReviewSpecificationAsync(spDef, Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromException<ReviewResult>(new OperationCanceledException()));
+                .Returns<ReviewResult>(_ =>
+                {
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                });
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => orchestrator.RunPipelineAsync(
-                "connection_string", "dbo", "USP_Cancelled", 3, "OpenAI", "instructions", isBatchMode: true));
+                "connection_string", "dbo", "USP_Cancelled", 3, "OpenAI", "instructions", isBatchMode: true,
+                cancellationToken: cts.Token));
 
             userInteraction.DidNotReceive().NotifyValidationSuccess(Arg.Any<string>());
         }

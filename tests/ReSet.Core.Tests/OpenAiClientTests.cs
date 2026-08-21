@@ -186,6 +186,32 @@ namespace ReSet.Core.Tests
             var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
             Assert.Contains("Bad request", ex.Message);
         }
+
+        /// <summary>
+        /// 상태 코드가 메시지 문자열 안에만 있으면 재시도 판정이 산문 매칭이 된다.
+        /// AiRetryPolicy가 429와 401을 가르는 근거가 이 속성이다. ChatAsync는 모델명에
+        /// "gpt-5"가 포함되면 Responses API 분기를, 아니면 Chat Completions 분기를 타는데
+        /// 두 분기 모두 별도의 throw 지점을 갖고 있다. 실서비스 설정("gpt-5.6-terra")은
+        /// Responses API 분기를 타므로 이 분기의 커버리지가 빠지면 안 된다.
+        /// </summary>
+        [Theory]
+        [InlineData(System.Net.HttpStatusCode.TooManyRequests, "gpt-4o")]
+        [InlineData(System.Net.HttpStatusCode.ServiceUnavailable, "gpt-4o")]
+        [InlineData(System.Net.HttpStatusCode.Unauthorized, "gpt-4o")]
+        [InlineData(System.Net.HttpStatusCode.TooManyRequests, "gpt-5-model")]
+        [InlineData(System.Net.HttpStatusCode.ServiceUnavailable, "gpt-5-model")]
+        [InlineData(System.Net.HttpStatusCode.Unauthorized, "gpt-5-model")]
+        public async Task ChatAsync_ErrorResponse_PreservesStatusCodeOnException(
+            System.Net.HttpStatusCode statusCode, string model)
+        {
+            var spyHandler = new OpenAiRequestSpyHandler("error body", statusCode);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", model);
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+
+            Assert.Equal(statusCode, ex.StatusCode);
+        }
     }
 
     public class OpenAiRequestSpyHandler : HttpMessageHandler

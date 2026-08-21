@@ -93,7 +93,7 @@ ReSet/
 ├── ReSet.slnx      # .NET 솔루션 파일
 ├── AGENTS.md       # AI 에이전트 행동 규칙 및 작업 완료 체크리스트
 │
-├── docs/                      # 아키텍처 문서, 설계 명세(superpowers/specs), 남은 후속 작업 목록
+├── docs/                      # 아키텍처 문서, 설계 명세(superpowers/specs), 알려진 결함 목록
 ├── scripts/                   # 문서 감사·워크트리 준비 보조 스크립트
 │
 ├── src/

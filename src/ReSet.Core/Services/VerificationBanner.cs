@@ -49,13 +49,9 @@ public static class VerificationBanner
     /// </summary>
     private static string RejectionReason(ReviewResult review, int scoreThreshold)
     {
-        // 순서는 아래 점수표와 같게 유지한다. 헤더와 표를 눈으로 대조하기 때문이다.
-        var failed = new List<string>();
-        if (review.ScoreAccuracy < scoreThreshold) failed.Add("정합성");
-        if (review.ScoreCrud < scoreThreshold) failed.Add("CRUD");
-        if (review.ScoreInterface < scoreThreshold) failed.Add("인터페이스");
-        if (review.ScoreReadability < scoreThreshold) failed.Add("가독성");
-        if (review.ScoreException < scoreThreshold) failed.Add("예외");
+        // 판정도 순서도 재시도를 결정하는 게이트와 같은 자리에서 온다. 사본을 두면
+        // "불합격인데 미달 항목 없음"이나 그 반대가 생긴다.
+        var failed = CriticScoreGate.FailedAxes(review, scoreThreshold);
 
         // 점수는 모두 기준을 넘겼는데 Critic이 결함을 지적한 경로가 있다.
         // 미달 항목이 없으므로 항목명을 지어내지 않는다.

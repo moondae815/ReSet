@@ -223,9 +223,10 @@ namespace ReSet.Core.Tests
 
             var client = new AntigravityCliClient(stub.Path, "gemini", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
+            Assert.Equal(CliFailureKind.QuotaExhausted, exception.Kind);
             Assert.Contains("agy-cli", exception.Message);
             Assert.Contains("구독", exception.Message);
             // 원문 JSON도 함께 실려야 진단이 된다.
@@ -241,9 +242,10 @@ namespace ReSet.Core.Tests
 
             var client = new AntigravityCliClient(stub.Path, "gemini", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
+            Assert.Equal(CliFailureKind.NotAuthenticated, exception.Kind);
             Assert.Contains("로그인", exception.Message);
             Assert.Contains("Not logged in", exception.Message);
         }

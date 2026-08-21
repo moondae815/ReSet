@@ -182,9 +182,10 @@ namespace ReSet.Core.Tests
 
             var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
+            Assert.Equal(CliFailureKind.QuotaExhausted, exception.Kind);
             // 분류된 안내(구독 한도 소진 → provider 교체)와 원문이 모두 있어야 한다.
             Assert.Contains("claude-cli", exception.Message);
             Assert.Contains("구독", exception.Message);
@@ -205,9 +206,10 @@ namespace ReSet.Core.Tests
 
             var client = new ClaudeCliClient(stub.Path, "sonnet", TimeSpan.FromSeconds(60));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<CliInvocationException>(() =>
                 client.ChatAsync("시스템 규칙", "사용자 프롬프트", 0.2f));
 
+            Assert.Equal(CliFailureKind.QuotaExhausted, exception.Kind);
             Assert.Contains("구독", exception.Message);
             Assert.Contains("rate_limit_error", exception.Message);
         }

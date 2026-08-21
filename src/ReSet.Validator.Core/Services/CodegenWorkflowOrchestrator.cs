@@ -39,16 +39,24 @@ namespace ReSet.Validator.Core.Services
         private readonly IMetadataExporter _metadataExporter;
         private readonly int _maxL2Attempts;
 
+        // MaxL2Attempts가 "unlimited"(= int.MaxValue)여도 넘지 못하는 바닥. 위의 두 캡은
+        // "같은 종류의 실패가 연속"을 세므로, 산출물이 매번 나오고 매핑도 성립하는데
+        // L1/L2만 계속 떨어지는 조합에서는 둘 다 매 회차 0으로 리셋되어 걸리지 않는다.
+        // 그 조합이 무인 배치에서 끝나지 않는 유료 기동이 된다.
+        private readonly int _maxTotalAttempts;
+
         public CodegenWorkflowOrchestrator(
             ICodingEngine codingEngine,
             CodeVerificationOrchestrator verifier,
             IMetadataExporter metadataExporter,
-            int maxL2Attempts)
+            int maxL2Attempts,
+            int maxTotalAttempts)
         {
             _codingEngine = codingEngine;
             _verifier = verifier;
             _metadataExporter = metadataExporter;
             _maxL2Attempts = maxL2Attempts;
+            _maxTotalAttempts = maxTotalAttempts;
         }
 
         public async Task<CodegenWorkflowResult> RunSelfHealingWorkflowAsync(
@@ -79,6 +87,17 @@ namespace ReSet.Validator.Core.Services
 
             while (attempt <= maxAttempts)
             {
+                if (attempt > _maxTotalAttempts)
+                {
+                    // BuildAbortResult를 쓰지 않는다. 그 헬퍼는 CliFailureClassifier로 사유를
+                    // 만들어 엔진 설치 여부와 CodegenSettings:Engines:<name>:Command를 확인하라고
+                    // 말하는데, 여기서는 기동도 산출물도 성공한 상태라 사람을 엉뚱한 곳으로
+                    // 보낸다. 아래 MaxConsecutiveUnverifiedRetries 캡이 같은 이유로 같은 처방을 쓴다.
+                    var capReason = BuildTotalCapReason(jobOrSpName);
+                    Log.Error("{Reason}", capReason);
+                    return new CodegenWorkflowResult(false, capReason);
+                }
+
                 Log.Information("[SelfHealing] 자가 수정 루프 시작 - 시도: {Attempt}/{MaxAttempts}, 대상: {Target}", attempt, _maxL2Attempts == -1 ? "무제한" : maxAttempts.ToString(), jobOrSpName);
 
                 // 1. External Coding Engine 기동 (Actor)
@@ -439,6 +458,17 @@ namespace ReSet.Validator.Core.Services
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                if (attempt > _maxTotalAttempts)
+                {
+                    // 전체 Job 루프와 같은 구멍이다. gate.Result가 Failed면 아래
+                    // consecutiveUnverified가 매 회차 0으로 리셋되므로(NotVerifiable일 때만
+                    // 증가) MaxL2Attempts가 "unlimited"이면 이 회차가 끝나지 않는다.
+                    var capReason = BuildTotalCapReason(stage.Id);
+                    Log.Error("{Reason}", capReason);
+                    return new StageOutcome(false, _maxTotalAttempts, capReason, null);
+                }
+
+
                 Log.Information(
                     "[Staged] 회차 기동 - Id: {StageId}, 종류: {Kind}, 시도: {Attempt}/{MaxAttempts}, 지시서: {TaskFile}",
                     stage.Id, stage.Kind, attempt, _maxL2Attempts == -1 ? "무제한" : maxAttempts.ToString(),
@@ -706,6 +736,15 @@ namespace ReSet.Validator.Core.Services
 
             return sb.ToString();
         }
+
+        /// <summary>
+        /// 총 상한 도달 사유. 예산 소진("최대 재시도 횟수 도달")과 다른 사건이므로 문구도
+        /// 다르다 - 사람이 어느 설정을 올려야 하는지 알 수 있어야 한다.
+        /// </summary>
+        private string BuildTotalCapReason(string target) =>
+            $"[SelfHealing] 총 시도 상한({_maxTotalAttempts}회)에 도달했습니다 - 대상: {target}. " +
+            "산출물은 나오고 대조도 성립하지만 검증이 계속 떨어지는 상태라 연속 캡에 걸리지 않습니다. " +
+            "재시도를 더 허용하려면 AiSettings:MaxTotalAttempts를 올리십시오.";
 
         private static string StageFeedbackHeader(CodegenStage stage, int attempt) =>
             $"## 🚨 [AI L1/L2 Critic Feedback - {stage.Id} 시도 {attempt}] 🚨";
