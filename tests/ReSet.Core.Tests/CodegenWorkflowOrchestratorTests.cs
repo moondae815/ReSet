@@ -90,7 +90,24 @@ namespace ReSet.Core.Tests
             return client;
         }
 
-        private CodegenWorkflowOrchestrator BuildOrchestrator(ICodingEngine engine, int maxL2Attempts)
+        /// <summary>L2가 항상 GAP를 내도록 세운 AI 클라이언트. 매핑은 성립하지만 검증이 매번 떨어진다.</summary>
+        private static IAiClient DefectiveAiClient()
+        {
+            var client = Substitute.For<IAiClient>();
+            client.ProviderName.Returns("stub");
+            client.ModelName.Returns("stub-model");
+            client.ChatAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                    Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ => Task.FromResult(new AiResult { Content = "{\"OverallStatus\": \"GAP\"}" }));
+            return client;
+        }
+
+        private CodegenWorkflowOrchestrator BuildOrchestrator(
+            ICodingEngine engine,
+            int maxL2Attempts,
+            int maxTotalAttempts = 20,
+            IAiClient? aiClient = null)
         {
             var validatorConfig = new ValidatorConfig
             {
@@ -98,10 +115,41 @@ namespace ReSet.Core.Tests
                 SourceCodeDirectory = _codeDir,
                 OutputDirectory = Path.Combine(_tempRoot, "validation")
             };
-            var verifier = new CodeVerificationOrchestrator(validatorConfig, MatchingAiClient(), null, null);
+            var verifier = new CodeVerificationOrchestrator(validatorConfig, aiClient ?? MatchingAiClient(), null, null);
             _metadataExporter = Substitute.For<IMetadataExporter>();
 
-            return new CodegenWorkflowOrchestrator(engine, verifier, _metadataExporter, maxL2Attempts);
+            return new CodegenWorkflowOrchestrator(engine, verifier, _metadataExporter, maxL2Attempts, maxTotalAttempts);
+        }
+
+        /// <summary>
+        /// 총 시도 상한이 없으면 이 루프는 끝나지 않는다. 테스트가 영원히 매달리는 대신
+        /// 명확히 실패하도록, 상한보다 넉넉한 횟수를 넘기면 던진다.
+        /// </summary>
+        private sealed class RunawayGuardEngine : ICodingEngine
+        {
+            private readonly int _throwAfter;
+
+            public RunawayGuardEngine(int throwAfter)
+            {
+                _throwAfter = throwAfter;
+            }
+
+            public string Name => "runaway-guard-engine";
+            public string Command => "runaway-guard";
+            public int CallCount { get; private set; }
+
+            public Task<CodegenRunResult> GenerateCodeAsync(
+                SpDefinition? spDef, string instructionsFilePath, string targetProjectDir, CancellationToken cancellationToken)
+            {
+                CallCount++;
+                if (CallCount > _throwAfter)
+                {
+                    throw new InvalidOperationException(
+                        $"루프가 {_throwAfter}회를 넘겨도 멈추지 않았습니다 - 총 시도 상한이 없습니다.");
+                }
+
+                return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
+            }
         }
 
         /// <summary>테스트마다 미리 정해 둔 CodegenRunResult 순서를 그대로 돌려주는 가짜 엔진.</summary>
@@ -157,6 +205,52 @@ namespace ReSet.Core.Tests
 
                 return Task.FromResult(new CodegenRunResult(true, 0, CliFailureKind.Unknown, null));
             }
+        }
+
+        /// <summary>
+        /// 산출물이 매번 나오고(무산출물 캡 리셋) 매핑도 성립하는데(미대조 캡 리셋)
+        /// L1/L2만 매번 떨어지는 조합. 기존 두 연속 캡 어디에도 닿지 않아
+        /// MaxL2Attempts가 "unlimited"이면 무인 배치가 끝나지 않는 유료 기동이 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_UnlimitedAttemptsWithFailingVerification_StopsAtTotalCap()
+        {
+            SeedVerifiableJob();
+            SeedInstructionsFile();
+            var engine = new RunawayGuardEngine(throwAfter: 40);
+
+            var orchestrator = BuildOrchestrator(
+                engine, maxL2Attempts: -1, maxTotalAttempts: 5, aiClient: DefectiveAiClient());
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(5, engine.CallCount);
+            // 사람이 무엇을 올려야 하는지 알 수 있어야 한다. 예산 소진과 총 상한 도달은
+            // 다른 사건이므로 사유도 달라야 한다.
+            Assert.NotNull(result.AbortReason);
+            Assert.Contains("MaxTotalAttempts", result.AbortReason);
+        }
+
+        /// <summary>
+        /// 총 상한은 바닥이지 예산이 아니다. MaxL2Attempts가 유한하면 그쪽이 먼저 끊어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunSelfHealingWorkflowAsync_FiniteBudget_TotalCapDoesNotExtendIt()
+        {
+            SeedVerifiableJob();
+            SeedInstructionsFile();
+            var engine = new RunawayGuardEngine(throwAfter: 40);
+
+            var orchestrator = BuildOrchestrator(
+                engine, maxL2Attempts: 2, maxTotalAttempts: 20, aiClient: DefectiveAiClient());
+
+            var result = await orchestrator.RunSelfHealingWorkflowAsync(
+                "TestJob", _instructionsPath, _specDir, _codeDir, isBatchMode: true, CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(2, engine.CallCount);
         }
 
         [Fact]

@@ -300,5 +300,43 @@ namespace ReSet.Core.Tests
             Assert.Contains("PATH", exception.Message);
             Assert.NotNull(exception.InnerException);
         }
+
+        /// <summary>
+        /// 분류를 문구로 녹인 뒤 버리면 재시도 판정이 그 문구를 다시 파싱해야 한다.
+        /// 쿼터 소진을 재시도하면 이미 빈 지갑을 계속 두드리게 된다.
+        /// </summary>
+        [Fact]
+        public void ToException_PreservesFailureKindOnTheException()
+        {
+            var result = new CliProcessResult { ExitCode = -1, TimedOut = true };
+
+            var exception = CliFailureClassifier.ToException("codex-cli", "codex", result, null);
+
+            var typed = Assert.IsType<CliInvocationException>(exception);
+            Assert.Equal(CliFailureKind.Timeout, typed.Kind);
+        }
+
+        [Fact]
+        public void ToException_QuotaExhausted_CarriesQuotaKind()
+        {
+            var exception = CliFailureClassifier.ToException(
+                "claude-cli", "claude", Failed("429 too many requests"), null);
+
+            var typed = Assert.IsType<CliInvocationException>(exception);
+            Assert.Equal(CliFailureKind.QuotaExhausted, typed.Kind);
+        }
+
+        /// <summary>
+        /// 하위형이므로 InvalidOperationException을 잡던 기존 호출부가 그대로 잡는다.
+        /// 이게 깨지면 도입 자체가 회귀다.
+        /// </summary>
+        [Fact]
+        public void ToException_IsStillAnInvalidOperationException()
+        {
+            var exception = CliFailureClassifier.ToException(
+                "codex-cli", "codex", Failed("something"), null);
+
+            Assert.IsAssignableFrom<InvalidOperationException>(exception);
+        }
     }
 }

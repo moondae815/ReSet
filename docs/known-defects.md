@@ -32,41 +32,6 @@
 
 ## 살아 있는 목록
 
-### P0 — 실사용 피해가 즉시 발생
-
-- [ ] **레거시 전체 Job 루프에 총 시도 상한이 없다** —
-      `CodegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync`의 `while (attempt <= maxAttempts)` 루프
-
-  산출물 있음 + 매핑 성립 + L1/L2 매번 실패 조합이면 같은 메서드의
-  `consecutiveNoArtifactRetries`와 `consecutiveUnverified` 두 연속 캡 어디에도 닿지 않는다.
-  `MaxL2Attempts: "unlimited"`(= `maxAttempts`에 들어가는 `int.MaxValue`)에서
-  **무인 배치가 끝나지 않는 유료 기동**이 된다.
-
-  출처: `2026-08-09-silent-failure-closure-design.md` §후속 작업 1
-
-- [ ] **통합 루프에 점수 임계값 강제가 없다** —
-      `VerificationPipelineOrchestrator.RunConsolidatedPipelineAsync`의 `bestAttempt.TryRecord` 직후
-
-  단일 객체 루프(`RunCodeObjectPipelineCoreAsync`)는 `overriddenHasDefects` 블록에서 5축을
-  직접 검사해 `HasDefects`를 덮어쓰지만, 통합 계획서 루프에는 그 블록 자체가 없다.
-  Critic이 낮은 점수와 함께 `HasDefects: false`를 내면 `검증 상태: 통과` 옆에 낮은 종합
-  신뢰도가 나란히 찍힌다.
-
-  출처: `2026-08-03-verification-annotation-cleanup-design.md`,
-  `2026-08-03-cancellation-policy-design.md`
-
-- [ ] **L2 리뷰 호출 재시도 인프라 부재** — 두 루프의 `if (!reviewSuccess)` 분기
-      (`RunCodeObjectPipelineCoreAsync` 및 `RunConsolidatedPipelineAsync`)
-
-  일시적 API 오류 한 번에 `break`하며 `_maxAttempts`가 남아 있어도 재시도하지 않는다.
-  `RetryRescue`가 이전 회차 최고점을 구제해 완화할 뿐, 그 회차의 검증 자체는 포기된다.
-  **5개 설계가 반복 기록한 최다 이월 항목**이며, 재시도 횟수·백오프·취소 전파·비용
-  정책 결정이 선행되어야 한다.
-
-  출처: `2026-08-01-verification-outcome-honesty`, `2026-08-03-cancellation-policy`,
-  `2026-08-03-stage1-analysis-flow-hardening`, `2026-08-03-verification-annotation-cleanup`,
-  `2026-08-03-verification-honesty-followups`
-
 ### 정책 결정이 선행되어야 하는 것
 
 코드 변경 전에 기준을 정해야 한다. **`반복` 칸이 이 표의 존재 이유다** — 여러 설계가 같은
@@ -138,6 +103,65 @@
 - **`ScoreReadability` 라벨이 사실과 다르다** — 두 Critic 모두 코드 가독성이 아니라
   Mermaid 문법을 채점하는데 `axisScoreLines`가 `가독성 점수`로 찍는다. 명세서에서도 틀렸고
   라벨 문자열이 테스트로 고정되어 있다.
+- **타임아웃 오보가 리뷰 경로 밖에는 그대로다** — `when (ex is not OperationCanceledException)`
+  필터 55곳. `AiCallRetry.ExecuteAsync`가 감싼 리뷰 5곳만 `AiCallFailedException`으로 바뀌어
+  정상 보고된다. 생성 호출 27곳(`AiService`의 `Generate*`·`Draft*`·`Brainstorm*`·`Deconstruct*`)을
+  포함한 나머지 경로의 HttpClient 타임아웃은 여전히 "사용자에 의해 중단되었습니다"로 찍힌다.
+  `AiSettings:TimeoutSeconds`가 3600이므로 한 시간을 태운 뒤 그렇게 된다.
+  출처: `2026-08-21-ai-call-retry-design.md` §7
+- **재시도가 벽시계 시간도 곱한다** — `AiClientFactory.CreateClient`가 CLI 클라이언트에도
+  API용 `HttpClient.Timeout`(`httpClient?.Timeout ?? TimeSpan.FromSeconds(300)`)을 그대로
+  넘긴다. `AiSettings:TimeoutSeconds`는 3600. 정체된 리뷰 호출 하나는 이제 타임아웃 한
+  시간을 태우고, 지터로 잠들었다가, 재시도에서 다시 한 시간을 태운 뒤에야 소프트 페일
+  배너에 이른다. `VerificationPipelineOrchestrator.RunCodeObjectPipelineCoreAsync`의
+  리뷰 좌석은 `_actorEffort == "dynamic"` 분기에 걸리느냐로 갈린다 — 비-dynamic(`else`)
+  경로는 `"review"` 한 자리, dynamic 경로는 `"final_review"`·`"refinal"`·병렬 후보 배치를
+  쥔다. 두 분기는 한 객체 실행에서 동시에 겹치지 않지만, 어느 쪽이 걸리든 그 좌석에서
+  재시도는 벽시계 시간을 그대로 곱한다. `Program.Main`의
+  `foreach (var selectedOption in targetSps)`가 대상 객체를 순차 처리하므로, 저하된
+  엔드포인트가 이제 예전 일정으로 배치를 끊지 않고 계속 갈아 넣는다. 설계 §5.1은 비용을
+  돈으로만 쟀다("리뷰 호출 비용이 2배") — 시간은
+  셈하지 않았다. 이 목록이 이미 미룬 "`AiSettings:TimeoutSeconds: 3600` 값 자체"의 유예가
+  이 사실 때문에 전보다 비싸졌다.
+  출처: `2026-08-21-ai-call-retry-design.md` §5.1
+- **L2 리뷰 재시도가 콘텐츠 결함에는 닿지 않는다** — `AiService.ParseReviewResult`는
+  리뷰 JSON 파싱이 깨지면 예외를 던지지 않고 `catch` 블록에서 `HasDefects = true`,
+  다섯 점수 전부 0인 `ReviewResult`를 반환한다. 예외가 전혀 나지 않으므로
+  `AiCallRetry.ExecuteAsync`는 이 실패를 볼 기회조차 없다. 파이프라인은 이걸 진짜
+  0/100 리뷰로 여기고 Actor 전체 재생성 회차를 돌리는데, 그 비용은 이 기능이 아끼려던
+  재시도 한 번보다 크다. 별도로, 비거나 절단되거나 차단된 완료(`choices` 누락, 빈
+  content, Gemini `finishReason` RECITATION/OTHER 등 API 클라이언트 6곳의
+  `InvalidOperationException` 계열)는 `AiRetryPolicy.Classify`의 최종 `return
+  AiRetryVerdict.Fatal` 분기로 떨어진다 — 이것은 설계 §4.1이 명시한 그대로이며
+  **범위 제한이지 구현 이탈이 아니다.** 분류기를 "고쳐서" 이 둘을 잡으려 들지 마라.
+  둘 다 길고 값비싼 L2 리뷰 호출에서 흔한 비결정성 실패 축이라 누락의 실효가 크다.
+  출처: `2026-08-21-ai-call-retry-design.md` §4.1·§7
+- **병렬 후보 검토의 클로저 고정이 재시도 경로에서만 하중을 진다** —
+  `VerificationPipelineOrchestrator.RunCodeObjectPipelineCoreAsync`의 병렬 후보 검토
+  조립부, `var candidate = candidates[i];`. `AiCallRetry.ExecuteAsync`는 첫 시도의
+  `factory()`를 동기적으로 호출하므로 그 자리를 `candidates[i]`로 인라인해도 **첫 시도**는
+  여전히 맞는 인덱스를 읽는다 — 회귀가 해피 패스에서는 보이지 않는다는 뜻이다. 문제는
+  **재시도**다. `for` 루프는 지연 없이 다음 반복으로 넘어가 `reviewTasks`에 태스크만
+  쌓고, 지터 지연은 그 뒤 `Task.WhenAll`로 기다리는 동안 일어난다 — 이 시점에는 이미
+  `i`가 `candidates.Length`까지 진행한 뒤다. 인라인된 `candidates[i]`가 재시도 시점에
+  평가되면 `IndexOutOfRangeException`을 던진다. 어느 테스트도 이 자리에서 재시도를
+  실제로 태우지 않는다 — `VerificationPipelineOrchestratorTests`의 구역별(하이브리드)
+  경로 테스트(`RunCodeObjectPipelineAsync_SectionalPath_*`)는 후보 채점 3회를 전부
+  첫 시도에 성공시키고, 실패·재시도는 그 뒤 `"final_review"` 자리에서만 일으킨다. 이는
+  **API 클라이언트 StatusCode 테스트 부재나 재시도 지연-취소 타이밍 의존성과는 다른
+  구멍이다** — 저 둘은 재시도 인프라 자체의 테스트 이야기고, 이것은 호출부 조립 코드의
+  지역 변수 스코프가 재시도 경로에서만 열리는 회귀다.
+  출처: `2026-08-21-ai-call-retry-design.md` §5
+- **API 클라이언트 5곳의 `StatusCode` 보존에 실행 가능한 테스트가 없다** —
+  `ClaudeClient`·`GoogleClient`·`OllamaClient`·`ZaiClient`(그리고 `OpenAiClient`의 두 번째
+  분기)가 `HttpRequestException`에 `response.StatusCode`를 싣도록 고쳐졌지만, 그것을
+  단언하는 테스트는 `OpenAiClientTests`의 `ChatAsync_ErrorResponse_PreservesStatusCodeOnException`
+  하나뿐이다. 여섯 자리 모두 같은 모양의 기계적 수정이고 파일별 개수 대조(`grep -c`)로는
+  맞았지만, 나머지 다섯 자리는 회귀해도 어느 테스트도 잡지 못한다.
+- **재시도 지연-취소 테스트가 타이밍에 의존한다** —
+  `AiCallRetryTests.ExecuteAsync_CancellationDuringDelay_EscapesWithoutRetryingAgain`이
+  60~90ms 지연 창의 약 15ms 지점에서 취소한다. 연속 10회 실행은 통과했고 여유는 약 4배지만,
+  느린 CI 환경에서는 플레이크가 될 수 있는 잔여 위험이다.
 
 ### 배치 계획 생성
 
@@ -321,10 +345,14 @@
 | 보강기·파서의 "유효한 블록" 판정 불일치 | `2ae7a2b`·`25319f6`·`933fb39`가 `BatchStepPlanParser.TryLocateStepsBlock` 공유로 닫음 |
 | Claude 프롬프트 캐시 중단점 | `PromptCacheBreakpointPolicy` (두 번째 전송부터 찍어 1회차 잡의 캐시 쓰기 손실 없음) |
 | `PlanBoundaryResolver`의 `allFound == true` 공백 | `acf5210`의 `AbsorbUncoveredRegions` |
-| 레거시 전체 Job의 `nothingVerified` 무한 재시도 | `e1ccfbd`의 `MaxConsecutiveUnverifiedRetries`. **부분 해소** — 위 P0 ①의 다른 조합은 열려 있다 |
+| 레거시 전체 Job의 `nothingVerified` 무한 재시도 | `e1ccfbd`의 `MaxConsecutiveUnverifiedRetries`. 남아 있던 다른 조합은 아래 총 시도 상한이 닫았다 |
+| 두 코드 생성 루프에 총 시도 상한이 없다 | `AiSettings:MaxTotalAttempts`(기본 20)를 `CodegenWorkflowOrchestrator`에 주입해 `RunSelfHealingWorkflowAsync`의 `while`과 `RunStageAsync`의 `for` 양쪽 머리에서 가드. **문서가 레거시 루프만 적었으나 회차 루프도 같은 구멍이었다** — `gate.Result == Failed`가 반복되면 `consecutiveUnverified`가 매 회차 0으로 리셋된다. 기존 두 연속 캡은 "같은 종류의 실패가 연속"을 세므로 산출물이 나오고 매핑도 성립하는 조합에서 둘 다 걸리지 않는다 |
+| 통합 루프에 점수 임계값 강제가 없다 | `CriticScoreGate`를 신설해 두 루프가 같은 5축 비교를 쓴다(통합 루프는 `bestAttempt.TryRecord` **직전**, 단일 루프와 같은 순서 — `TryRecord`는 `NormalizedScore`만 읽으므로 안전하다). 같은 비교의 세 번째 사본이던 `VerificationBanner.RejectionReason`도 함께 묶었다. 프롬프트의 리터럴 `8`은 그대로 둔다 — 모델에 주는 안내일 뿐이고 게이트는 코드가 잡는다 |
 | 신뢰도 점수와 검증 커버리지의 분리 표기 | `VerificationCoverage` 모델과 포매터의 `coverageLine` |
 | UPDATE 컬럼 매핑표 / `UPDATE … FROM` 자기참조 / `SET` 절 동시평가 | `2026-08-09-update-mapping-contract` |
 | 명세서 재발 방지 검증 게이트 | `63483f2`가 L2 Critic이 아니라 **L1**에 `MechanicalValidator.CheckSchemaClaims`를 넣고 `ab6dd5b`가 코드 펜스 오탐을 닫음 |
+| L2 리뷰 호출 재시도 인프라 부재 (5개 설계 이월) | `AiRetryPolicy`(순수 판정) + `AiCallRetry`(2회·지터 500~1500ms, `MaxL2Attempts` 미소모)를 신설하고 리뷰 5곳에 걸었다. 판정 재료를 위해 API 클라이언트 6곳이 `HttpRequestException.StatusCode`를, CLI가 `CliInvocationException.Kind`를 보존한다. **생성 호출 27곳은 열려 있다.** 닫힌 것은 **예외로 표면화되는 전송 실패**뿐이다 — `AiService.ParseReviewResult`가 예외 없이 삼키는 파싱 실패, `AiRetryPolicy.Classify`가 설계 §4.1대로 `Fatal` 처리하는 빈/차단된 완료, 그리고 병렬 후보 검토의 클로저 고정이 재시도 경로에서만 겪는 인덱스 회귀는 여전히 열려 있다(「알려진 한계 → 검증 파이프라인」 참고). 설계: `2026-08-21-ai-call-retry-design.md` |
+| HttpClient 타임아웃이 "사용자 취소"로 보고됐다 | 실측(.NET 10.0.10)으로 드러났다 — 타임아웃도 `TaskCanceledException`이라 `when (ex is not OperationCanceledException)` 필터 55곳이 전부 놓치고 최상위가 "사용자에 의해 중단되었습니다"를 찍었다. `AiCallRetry`가 소진 시 `AiCallFailedException`(취소 아님)으로 감싸 **리뷰 경로에서만** 닫혔다 |
 
 ### 이 목록 밖에서 닫힌 것
 
