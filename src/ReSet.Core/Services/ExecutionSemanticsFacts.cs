@@ -27,6 +27,8 @@ namespace ReSet.Core.Services
 
         public const string AggregateAssignmentKind = "집계 대입";
 
+        public const string RowCountKind = "@@ROWCOUNT";
+
         /// <summary>
         /// 컬럼명 → 데이터 타입 사전. ExpressionTypePathExtractor(Task 9)가 잎 타입을
         /// 판정할 때 쓴다. 같은 컬럼명이 테이블마다 타입이 다르면 판정할 수 없으므로
@@ -79,6 +81,12 @@ namespace ReSet.Core.Services
                     fact.Line.ToString(),
                     $"SELECT {fact.Variable} = {fact.Aggregate}(...)",
                     fact.Sentence));
+            }
+
+            foreach (var fact in RowCountBoundaryExtractor.Extract(ddlText))
+            {
+                facts.Add(new ExecutionSemanticFact(
+                    RowCountKind, fact.Line.ToString(), fact.Predicate, fact.Sentence));
             }
 
             return facts;
