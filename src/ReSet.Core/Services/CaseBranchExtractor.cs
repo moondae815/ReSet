@@ -118,10 +118,21 @@ namespace ReSet.Core.Services
         // ScriptDom은 자식으로의 하강을 계속한다(이 배치에서 실측 확인: SELECT 목록·SET·
         // WHERE(최상위·서브쿼리 안)·UPDATE SET 어디의 CASE도, 그리고 바깥 CASE의 THEN
         // 안에 중첩된 CASE도 모두 개별 Visit 호출로 도달한다). 그래서 별도의
-        // ExplicitVisit/base 호출이나 StatementList 오버라이드가 필요 없다. 주의: 이
-        // 결론은 이 두 식 노드에만 성립을 확인했다 - 컨테이너 노드의 Visit(T)를
-        // ExplicitVisit/base 호출 없이 오버라이드하면 그 자식으로의 하강이 실제로
-        // 끊긴다(이 배치의 다른 추출기 리뷰가 확인한 결함 유형).
+        // ExplicitVisit/base 호출이나 StatementList 오버라이드가 필요 없다.
+        //
+        // [Task 13 수정 - 아래 문장이 전에 거짓이었다] 이전 버전은 "이 결론은 이 두 식
+        // 노드에만 성립을 확인했다 - 컨테이너 노드의 Visit(T)를 ExplicitVisit/base 호출
+        // 없이 오버라이드하면 그 자식으로의 하강이 실제로 끊긴다"고 적었다. 이건 틀렸다.
+        // RowCountBoundaryExtractor.BlockVisitor가 정확히 그것을 한다 - 컨테이너 노드인
+        // Visit(StatementList)를 ExplicitVisit/base 호출 없이 오버라이드하는데, 중첩된
+        // BEGIN…END 안의 StatementList까지 정상 방문된다(RowCountBoundaryExtractorTests.
+        // Extract_NestedInsideIfBeginEndBlock_IsCovered가 통과하는 테스트로 못박는다).
+        // 즉 ScriptDom의 각 TSqlFragment 구현이 자신의 ExplicitVisit 안에서 방문자의
+        // Visit(T) 호출 여부와 무관하게 자식으로 하강하므로(다른 추출기 주석의 근거:
+        // "기본 ExplicitVisit이 AcceptChildren을 호출"), 리프 노드든 컨테이너 노드든
+        // Visit(T) 오버라이드만으로는 하강이 끊기지 않는다 - 적어도 이 저장소가 실측
+        // 확인한 모든 사례에서. 다음 사람이 이 자리를 근거로 불필요한 ExplicitVisit/base
+        // 호출이나 StatementList 오버라이드를 추가하지 마라 - 필요 없다.
         //
         // 방문 지점 커버리지는 CaseBranchExtractorTests의
         // Extract_NestedCase_ShouldAttributeEachBranchToItsOwnCaseOnly ·
