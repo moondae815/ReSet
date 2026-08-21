@@ -36,7 +36,7 @@ DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙)
 | 오류·반환 코드 전체 집합과 발생 지점 | **DDL 원문** (`StaticAnalysis`에 없음) |
 | 분기 조건식·필터·조인 | **DDL 원문** — 단, `CASE` 식(`SearchedCase`/`SimpleCase`)의 각 분기(조건·결과)는 `### CASE 분기 (기계 확정 — 수정 금지)` 표가 있으면 그 표가 기준값이다(아래). `IF`·`IIF`·`WHERE`·`JOIN` 조건은 여전히 DDL 원문이 기준값이다 — `CaseBranchExtractor`는 `CASE` 식만 방문한다 |
 | 트랜잭션 경계, `NOCOUNT`, 주석 처리된 블록 | **DDL 원문** |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `BuildLockHintTableLines`가 SP 프롬프트 경로에도 배선되므로(`AiService.cs:435-443`) SP의 DML 문장도 이 표가 기계 확정한다. **이 셋이 아닌 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문 등)의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고, 열거는 예시일 뿐 전수가 아니다) |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `AiService`의 `BuildLockHintTableLines` 호출부가 SP 프롬프트 경로에도 배선되므로(위치는 `AiService.cs`에서 `BuildLockHintTableLines`를 grep) SP의 DML 문장도 이 표가 기계 확정한다. **이 셋이 아닌 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문 등)의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고, 열거는 예시일 뿐 전수가 아니다) |
 
 Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 원문의 의미와
 어긋나면 DDL이 이긴다.
@@ -45,7 +45,8 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 표는 3-1절이(함수 전용이라 SP 명세서에는 안 실린다) 따로 맡는다. 나머지 여섯 — `DML 범위`·
 `집합 술어`·`파생 테이블 정의`·`잠금 힌트`·`실행 의미`·`CASE 분기` — 는 SP 단위가 함께
 대조한다. **뒤의 둘은 SP 전용이 아니다** — `AiService.BuildMachineFactBlockLines`가 SP·함수
-양쪽 프롬프트 경로에 배선돼(`AiService.cs:445,1459,2681,2844`) 함수 명세서에도 같은 표가
+양쪽 프롬프트 경로(SP 셋·함수 하나, 총 네 호출부 — 위치는 `AiService.cs`에서
+`BuildMachineFactBlockLines`를 grep)에 배선돼 함수 명세서에도 같은 표가
 실린다(`잠금 힌트`가 이미 그런 것과 같은 모양이다). 모두 조립기가 AST에서 확정해 프롬프트에
 실어 준 값이라, 명세서가 옮겨 적으면서 어긋났는지가 같은 방식으로 드러난다(2026-08-21 축
 A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `잠금 힌트`·`ORDER BY` 칸·
@@ -73,8 +74,10 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 자리에 `—`가 찍히는 등)을 놓친다.
 
 **`DML 범위` 표에 `GROUP BY` 열이 있다(Task 8, `DmlScopeFact.GroupByColumns`).** `ORDER BY`와
-같은 규약을 쓴다(`AiService.cs:805,842-846`) — `UPDATE`·`DELETE`는 최상위 `GROUP BY`가
-문법상 불가해 `—`이고, `INSERT`는 절이 없으면 `(없음)`, 있으면 그룹화 키 목록이다. 실측:
+같은 규약을 쓴다(`AiService`의 `BuildDmlScopeTableLines`가 `groupBy`를 계산하는 자리 —
+위치는 `AiService.cs`에서 `BuildDmlScopeTableLines`를 grep) — `UPDATE`·`DELETE`는 최상위
+`GROUP BY`가 문법상 불가해 `—`이고, `INSERT`는 절이 없으면 `(없음)`, 있으면 그룹화 키
+목록이다. 실측:
 `UP_Util_Settle_Summary`·`UP_Util_Settle_Summary_AcqManual`에서 `GROUP BY` 첫 키가 매핑 표의
 설명 칸에서만 언급되다 표에서 통째로 빠진 적이 있다 — 이 칸이 그 결함을 확정 표로 잡는다.
 
@@ -87,7 +90,9 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 `StaticAnalysis.IsParsedSuccessfully`가 있어야 하고, 나머지 셋은 `ddlText`의 파싱이
 각자 성공해야 한다 — 파싱 성공 여부가 종류마다 갈릴 수 있다). 볼 것은 둘이다.
 
-- **표가 있으면 행이 원문 그대로 실렸는가**(종류·라인·대상·확정 사실 네 칸).
+- **표가 있으면 행이 원문 그대로 실렸는가**(종류·라인·대상·확정 사실 네 칸). `@@ROWCOUNT`
+  종류의 대상 칸(술어 원문)은 아래 `CASE 분기` 절에 적은 것과 같은 공백류 접힘 예외가
+  적용된다.
 - **표의 사실을 산문이 뒤집지 않았는가.** `DB 배치` 행이 로컬 확정을 냈는데 산문이
   "크로스 DB 참조라고 단언할 수 없습니다"로 되짚으면 결함이다. `집계 대입`은
   `GROUP BY` 유무로 문장이 정반대다 — GROUP BY 없는 문장의 "무결과 시 NULL/0" 문구를
@@ -99,7 +104,13 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 `CASE @p WHEN '02' THEN ...`이면 표는 `@p = '02'`로 적는다 — WHEN 절 원문 자체에는 `=`
 토큰이 없다. 감사자가 이 칸을 원문과 글자 단위로 대조하다 "표가 원문에 없는 등호를
 지어냈다"고 오판하지 마라. `SearchedCase`의 조건과 모든 결과식(THEN/ELSE)은 원문 그대로다
-— 재구성은 `SimpleCase` 조건 칸에만 성립한다. 볼 것은 둘이다.
+— 재구성은 `SimpleCase` 조건 칸에만 성립한다. **"원문 그대로"는 토큰의 내용과 순서가
+바이트 단위로 같다는 뜻이지, 토큰 *사이* 공백까지 그렇다는 뜻은 아니다** — `CASE` 분기
+조건과 `@@ROWCOUNT` 술어(`실행 의미` 표의 대상 칸) 모두 `\s+`(공백·탭·개행 등 연속된
+공백류 전부)를 공백 하나로 접고 앞뒤를 다듬는다(`DmlScopeExtractor.CollapseWhitespace`·
+`DerivedTableColumnExtractor`의 같은 헬퍼와 동일한 방식). 원본이 여러 줄에 걸친 조건이면
+표는 한 줄로 접혀 실린다 — 이것도 SimpleCase의 `=` 재구성과 같은 종류의, 문서화된
+예외다. 볼 것은 둘이다.
 
 - **행 수가 원본 `CASE`의 `WHEN` + `ELSE` 전수와 맞는가**, 조건 원문의 **비교 연산자가
   말로 바뀌지 않았는가**(`>`를 "비교해"로).
@@ -119,18 +130,18 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 지워 버렸다.
 
 **아래 ①·②는 `InsertSpecification`/`UpdateSpecification`/`DeleteSpecification` 노드에만
-적용된다** — `LockHintVisitor`가 방문을 오버라이드한 노드가 이 셋뿐이라서다
-(`DmlScopeExtractor.cs:394,413,420`). 커서 선언 안의 독립 `SELECT`처럼 이 세 노드 어디에도
-속하지 않는 스캔은 ①·②의 적용 대상 자체가 아니고, 표에 한 행도 남기지 않는다 — 아래
-"이 표가 담지 않는 것" 절을 먼저 읽어라.
+적용된다** — `LockHintVisitor`가 방문을 오버라이드한 노드가 이 셋뿐이라서다(위치는
+`DmlScopeExtractor.cs`에서 `LockHintVisitor`의 세 `Visit` 오버로드를 grep). 커서 선언 안의
+독립 `SELECT`처럼 이 세 노드 어디에도 속하지 않는 스캔은 ①·②의 적용 대상 자체가 아니고,
+표에 한 행도 남기지 않는다 — 아래 "이 표가 담지 않는 것" 절을 먼저 읽어라.
 
 행이 되는 자리는 둘이다(`DmlScopeExtractor.LockHintVisitor`) — ①그 문장의 `FROM`에 걸린
 모든 테이블 참조는 **힌트 유무와 무관하게 전수** 실린다(힌트가 없으면 칸에 `(없음)`이
 명시된다). ②`INSERT`·`UPDATE`·`DELETE`의 **대상 노드**는 **자신이 힌트를 지고 있을 때** 행이
 생긴다 — **이 조건은 `FROM` 절 유무와 무관하다.** `RecordTargetHint`는 세 연산 모두에서
-`FROM` 절이 있든 없든 무조건 호출되고, 대상 노드 자신의 `TableHints`만 본다
-(`DmlScopeExtractor.cs:410,417,424`). `FROM`이 있을 때 대상 노드는 보통 갱신 대상
-지시자일 뿐이라 힌트를 지지 않아 규칙 ②에 자연히 안 걸리지만, **지면 실린다** — 자기참조
+`FROM` 절이 있든 없든 무조건 호출되고, 대상 노드 자신의 `TableHints`만 본다(위치는
+`DmlScopeExtractor.cs`에서 `RecordTargetHint`를 grep). `FROM`이 있을 때 대상 노드는 보통
+갱신 대상 지시자일 뿐이라 힌트를 지지 않아 규칙 ②에 자연히 안 걸리지만, **지면 실린다** — 자기참조
 문장(`UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T`)이 대상 힌트 행과 `FROM` 행을 각각 하나씩,
 총 2행을 낸다는 것을 `ExtractLockHints_TargetAndFromReferToSameTableAndAlias_BothAreKept`가
 실측으로 증명한다. `FROM`이 없어 대상 자체가 스캔인 경우(`DELETE FROM dbo.T WITH(NOLOCK)`)도
@@ -158,14 +169,15 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 결론 내릴 수 없다.
 
 **이 표가 담지 않는 것.** `LockHintVisitor`는 `InsertSpecification`/`UpdateSpecification`/
-`DeleteSpecification`만 방문한다(`DmlScopeExtractor.cs:394,413,420`). 이 셋에 속하지 않는
+`DeleteSpecification`만 방문한다(위치는 `DmlScopeExtractor.cs`에서 `LockHintVisitor`의 세
+`Visit` 오버로드를 grep). 이 셋에 속하지 않는
 스캔은 표에 한 행도 남기지 않는다 — "행이 0개 = 힌트가 없다"는 위 규칙이 적용되지 않는다.
 
 **판정 기준은 이 긍정형 한정 하나다 — 아래 목록은 그것을 실물로 보여주는 예시일 뿐
 전수가 아니다.** `InsertSpecification`/`UpdateSpecification`/`DeleteSpecification`이 아닌
 스캔이면 그 형태가 아래에 있든 없든 표 밖이고 DDL 원문이 기준값이다. 아래 목록에 없는
-새 형태를 만나면 "열거되지 않았으니 표가 관할한다"로 읽지 말고, 코드(`DmlScopeExtractor.cs:
-394,413,420`)를 기준으로 직접 판정하라 — 이 문서는 이미 세 라운드 연속 이 문단을
+새 형태를 만나면 "열거되지 않았으니 표가 관할한다"로 읽지 말고, 코드(`DmlScopeExtractor.
+LockHintVisitor`)를 기준으로 직접 판정하라 — 이 문서는 이미 세 라운드 연속 이 문단을
 고쳤다(사실과 반대 → 코드보다 좁게 → 최빈 형태 누락).
 
 - **제어 흐름 술어 안의 하위 질의** (`IF EXISTS(SELECT … FROM S WITH(NOLOCK) WHERE …)`).
@@ -182,8 +194,9 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
   실물 사례 — `output/Objects/dbo.UP_Util_Settle_Summary_AcqManual.Procedure/raw/object_definition.sql:28-31`의
   커서 `SELECT`에 실린 `WITH(NOLOCK)` 두 개가 여기 해당한다. 이 자리는 DDL 원문이 기준값이다.
 - **문장 최상위 `WHERE`의 하위 질의**(`UPDATE T … WHERE X IN (SELECT … FROM S WITH(NOLOCK))`).
-  `CollectFrom`이 `node.FromClause`만 훑고 `node.WhereClause`는 건드리지 않는다
-  (`DmlScopeExtractor.cs:434-441`). 스펙 설계 문서의 「이 설계가 닫지 않는 것」에 실측이 있다.
+  `CollectFrom`이 `node.FromClause`만 훑고 `node.WhereClause`는 건드리지 않는다(위치는
+  `DmlScopeExtractor.cs`에서 `CollectFrom`을 grep). 스펙 설계 문서의 「이 설계가 닫지 않는
+  것」에 실측이 있다.
 - **CTE 본문.** `WITH C AS (SELECT … FROM S WITH(NOLOCK)) INSERT … FROM C`는 `C`의 참조만
   최상위로 실리고 `S`의 힌트는 CTE 정의 안이라 실리지 않는다. **오늘 코퍼스에는 사례가
   0이다** — 반대로 위 제어 흐름 술어 형태가 실측 최빈값이니, 코퍼스 규모로 판단을
@@ -266,8 +279,10 @@ ControlFlowSummary   11/17   ThreePartObjectReferences 3/17   ReferencedFunction
 | 함수 | 호출 위치 | 인자 | 명세서 |
 ```
 
-**대상은 SP만이 아니다.** 조립기는 함수 명세서 생성 경로에도 같은 표를 붙인다
-(`AiService.cs:1456`) — 함수가 헬퍼 함수를 부르기 때문이고, 그 경로를 빠뜨리면 함수
+**대상은 SP만이 아니다.** 조립기는 함수 명세서 생성 경로에도 같은 표를 붙인다 —
+`AiService`의 `BuildReferencedFunctionTableLines`를 함수 명세서 생성 경로에서도 부른다
+(위치는 `AiService.cs`에서 `BuildReferencedFunctionTableLines`를 grep) — 함수가 헬퍼
+함수를 부르기 때문이고, 그 경로를 빠뜨리면 함수
 명세서에서만 서술 금지 계약이 뚫린다. 실측: 로컬·외부 함수 17개 중 2개
 (`UIF_SettleYMD`·`UF_GET_COLLECTYMD`)가 `UF_GET_WORKDAY2`를 부른다.
 
