@@ -247,6 +247,85 @@ END";
         }
 
         [Fact]
+        public void Extract_ColumnFromRealBaseTableAlias_ShouldStillReportKnownDirection()
+        {
+            // I2 수정의 회귀 방지: 진짜 영속 테이블 별칭을 통한 컬럼은 한정자 게이트가
+            // 생겨도 여전히 열려야 한다 - 과잉 침묵으로 이 과제를 무력화하면 안 된다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "money" };
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(t.Amt * 2 AS INT) FROM dbo.T t)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+            Assert.Contains("money", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_ColumnFromDerivedTableAlias_ShouldOmitTheRow()
+        {
+            // I2: 파생 테이블 별칭 x는 dbo.T의 의존성이 아니다. x.Amt가 우연히
+            // columnTypes의 "Amt"(실제로는 dbo.T 소속)와 이름이 같아도, x가 물리
+            // 테이블이 아니므로 그 컬럼에 대해 어떤 타입도 확정할 수 없다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "money" };
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    RETURN (SELECT CAST(x.Amt * 2 AS INT) FROM (SELECT Amt FROM dbo.T) x)
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+        }
+
+        [Fact]
+        public void Extract_ColumnFromCteAlias_ShouldOmitTheRow()
+        {
+            // I2: CTE 참조는 구문상 NamedTableReference와 구분되지 않지만 물리
+            // 테이블이 아니다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "money" };
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    ;WITH C AS (SELECT Amt FROM dbo.T)
+    SELECT CAST(C.Amt * 2 AS INT) FROM C
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+        }
+
+        [Fact]
+        public void Extract_ColumnFromTempTableAlias_ShouldOmitTheRow()
+        {
+            // I2: #Tmp는 dbo.T와 이름이 같은 컬럼이 있어도 별개의 임시 테이블이다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "money" };
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    SELECT Amt INTO #Tmp FROM dbo.T
+    SELECT CAST(t.Amt * 2 AS INT) FROM #Tmp t
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+        }
+
+        [Fact]
+        public void Extract_ColumnFromTableVariableAlias_ShouldOmitTheRow()
+        {
+            // I2: 테이블 변수도 임시 테이블과 같은 이유로 물리 테이블이 아니다.
+            var columnTypes = new Dictionary<string, string> { ["Amt"] = "money" };
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @Tmp TABLE (Amt MONEY)
+    INSERT INTO @Tmp (Amt) SELECT Amt FROM dbo.T
+    SELECT CAST(t.Amt * 2 AS INT) FROM @Tmp t
+END";
+
+            Assert.Empty(ExpressionTypePathExtractor.Extract(ddl, columnTypes));
+        }
+
+        [Fact]
         public void Extract_WithSyntaxErrors_ShouldReturnEmpty()
         {
             Assert.Empty(ExpressionTypePathExtractor.Extract("CREATE FUNCTION (((", NoColumns));

@@ -106,7 +106,14 @@ namespace ReSet.Core.Services
                 var declared = new DeclaredTypeVisitor();
                 fragment.Accept(declared);
 
-                var visitor = new CastVisitor(declared.Types, columnTypes);
+                var cteNames = new CteNameCollector();
+                fragment.Accept(cteNames);
+
+                var tableSafety = new TableSafetyVisitor(cteNames.Names);
+                fragment.Accept(tableSafety);
+
+                var visitor = new CastVisitor(
+                    declared.Types, columnTypes, tableSafety.SafeQualifiers, tableSafety.UnsafeQualifiers);
                 fragment.Accept(visitor);
                 return visitor.Facts;
             }
@@ -138,17 +145,98 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>CTE 이름을 프래그먼트 전체에서 모은다(수집 순서와 무관하게 만들려고 별도 패스로 둔다).</summary>
+        private sealed class CteNameCollector : TSqlFragmentVisitor
+        {
+            public HashSet<string> Names { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public override void Visit(CommonTableExpression node)
+            {
+                if (!string.IsNullOrWhiteSpace(node.ExpressionName?.Value))
+                {
+                    Names.Add(node.ExpressionName!.Value);
+                }
+            }
+        }
+
+        /// <summary>
+        /// I2 수정 라운드(리뷰): 컬럼 참조 `t.Amt`의 `t`가 진짜 영속 테이블을 가리키는지
+        /// 판정한다. `columnTypes`(=`BuildColumnTypeMap`의 평면화된 컬럼명→타입 사전)는
+        /// 어느 의존성 테이블 소속인지 정보를 잃는다 - 그래서 파생 테이블·CTE·임시
+        /// 테이블·테이블 변수의 별칭이 의존성 테이블의 컬럼명과 우연히 같으면, 존재하지도
+        /// 않는 컬럼에 대해 "기계 확정" 행이 날 수 있다(이 과제의 핵심 계약 위반).
+        ///
+        /// [왜 프래그먼트 전체를 스코프 구분 없이 훑는가] 별칭은 쿼리 스코프마다 다시
+        /// 선언될 수 있어 원칙적으로는 스코프별로 풀어야 정확하다. 이 수정 라운드의 쓰기
+        /// 집합 안에서 스코프 인식 별칭 해소를 새로 구현하는 대신, 프래그먼트 전체에서
+        /// 한 번이라도 그 이름이 파생 테이블·CTE·임시 테이블·테이블 변수의 별칭으로
+        /// 쓰였으면 그 이름 전체를 안전하지 않은 것으로 취급한다(<see cref="CastVisitor"/>가
+        /// 안전/불안전 판정 시 "불안전이 하나라도 있으면 진다"로 병합한다). 실수 방향은
+        /// 항상 "더 침묵한다"이지 "잘못 믿는다"가 아니다 - 코퍼스 실측(파생 테이블+CAST
+        /// 4개 객체, 임시 테이블·테이블 변수+CAST 0개)에서 이 과잉 침묵의 비용은 낮다.
+        ///
+        /// [TableReferenceWithAlias 하나만 오버라이드하는 이유] `SqlStaticParser.
+        /// AliasTargetFinder`와 같은 근거다 - ScriptDom의 `ExplicitVisit`은 노드 하나에
+        /// 대해 그 상속 사슬에 있는 모든 타입의 `Visit` 오버로드를 호출하므로, 별칭을
+        /// 가질 수 있는 모든 참조 타입(`NamedTableReference`·`QueryDerivedTable`·
+        /// `VariableTableReference` 등)이 이 오버로드 하나로 잡힌다.
+        /// </summary>
+        private sealed class TableSafetyVisitor : TSqlFragmentVisitor
+        {
+            private readonly HashSet<string> _cteNames;
+
+            public TableSafetyVisitor(HashSet<string> cteNames) => _cteNames = cteNames;
+
+            public HashSet<string> SafeQualifiers { get; } = new(StringComparer.OrdinalIgnoreCase);
+            public HashSet<string> UnsafeQualifiers { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public override void Visit(TableReferenceWithAlias node)
+            {
+                if (node is NamedTableReference named)
+                {
+                    var baseName = named.SchemaObject?.BaseIdentifier?.Value;
+                    var qualifier = named.Alias?.Value ?? baseName;
+                    if (string.IsNullOrWhiteSpace(qualifier)) return;
+
+                    var isTemp = !string.IsNullOrEmpty(baseName)
+                        && baseName!.StartsWith("#", StringComparison.Ordinal);
+                    var isCte = !string.IsNullOrEmpty(baseName) && _cteNames.Contains(baseName!);
+
+                    if (isTemp || isCte)
+                    {
+                        UnsafeQualifiers.Add(qualifier!);
+                    }
+                    else
+                    {
+                        SafeQualifiers.Add(qualifier!);
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(node.Alias?.Value))
+                {
+                    // QueryDerivedTable(파생 테이블) · VariableTableReference(테이블
+                    // 변수) · OpenQueryTableReference 등 - 전부 영속 테이블이 아니다.
+                    UnsafeQualifiers.Add(node.Alias!.Value);
+                }
+            }
+        }
+
         private sealed class CastVisitor : TSqlFragmentVisitor
         {
             private readonly IReadOnlyDictionary<string, string> _variables;
             private readonly IReadOnlyDictionary<string, string> _columns;
+            private readonly HashSet<string> _safeQualifiers;
+            private readonly HashSet<string> _unsafeQualifiers;
 
             public CastVisitor(
                 IReadOnlyDictionary<string, string> variables,
-                IReadOnlyDictionary<string, string> columns)
+                IReadOnlyDictionary<string, string> columns,
+                HashSet<string> safeQualifiers,
+                HashSet<string> unsafeQualifiers)
             {
                 _variables = variables;
                 _columns = columns;
+                _safeQualifiers = safeQualifiers;
+                _unsafeQualifiers = unsafeQualifiers;
             }
 
             public List<TypePathFact> Facts { get; } = new();
@@ -233,8 +321,7 @@ namespace ReSet.Core.Services
                         return KnownFamilyOrNull(variable.Name, _variables);
 
                     case ColumnReferenceExpression column:
-                        var name = column.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
-                        return KnownFamilyOrNull(name, _columns);
+                        return ResolveColumn(column);
 
                     case NumericLiteral:
                         // 소수점이 있는 리터럴(예: 100.0)은 numeric(p,s)이다.
@@ -249,6 +336,34 @@ namespace ReSet.Core.Services
                         // 근거가 없는 식 모양은 전부 모르는 것으로 취급한다.
                         return null;
                 }
+            }
+
+            /// <summary>
+            /// I2 수정 라운드(리뷰): 한정자(별칭 또는 테이블명)가 있는 컬럼 참조는
+            /// `TableSafetyVisitor`가 안전(진짜 영속 테이블)으로 확인한 경우에만
+            /// `columnTypes`의 평면화된 맵을 신뢰한다. 안전/불안전 어느 쪽에도 없거나
+            /// (스코프 무관 훑기가 그 이름을 전혀 못 봤다) 불안전으로 확인됐으면(파생
+            /// 테이블·CTE·임시 테이블·테이블 변수) - 판단 기준은 "이 컬럼 참조를
+            /// 의존성 테이블에 묶을 수 있는가" 하나다. 묶을 수 없으면 침묵한다.
+            /// 한정자가 없는 컬럼(예: 단일 FROM의 `Amt`)은 이 게이트를 타지 않는다 -
+            /// 그 경우의 모호성은 `BuildColumnTypeMap`의 "(모호)" 표시가 이미 감당한다.
+            /// </summary>
+            private string? ResolveColumn(ColumnReferenceExpression column)
+            {
+                var identifiers = column.MultiPartIdentifier?.Identifiers;
+                var name = identifiers?.LastOrDefault()?.Value;
+                if (string.IsNullOrWhiteSpace(name)) return null;
+
+                if (identifiers!.Count >= 2)
+                {
+                    var qualifier = identifiers[identifiers.Count - 2]?.Value;
+                    if (string.IsNullOrWhiteSpace(qualifier)) return null;
+
+                    var isSafe = _safeQualifiers.Contains(qualifier!) && !_unsafeQualifiers.Contains(qualifier!);
+                    if (!isSafe) return null;
+                }
+
+                return KnownFamilyOrNull(name, _columns);
             }
 
             private static string? KnownFamilyOrNull(string? name, IReadOnlyDictionary<string, string> dictionary)
