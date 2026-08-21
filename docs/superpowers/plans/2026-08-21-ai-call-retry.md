@@ -667,13 +667,15 @@ throw new HttpRequestException(
 | `OllamaClient.cs` | 유일한 `if (!response.IsSuccessStatusCode)` |
 | `ZaiClient.cs` | 유일한 `if (!response.IsSuccessStatusCode)` |
 
-전부 고쳤는지 확인:
+전부 고쳤는지 확인한다. 생성자 호출이 **여러 줄**이 되므로 한 줄 grep으로는 못 본다 —
+`new HttpRequestException(`이 있는 줄에는 `response.StatusCode`가 없다. 파일별로 개수를 맞춘다:
 
 ```bash
-grep -rn "new HttpRequestException" src/ReSet.Core/Services/Clients/ | grep -v "response.StatusCode)"
+grep -c "new HttpRequestException(" src/ReSet.Core/Services/Clients/*.cs
+grep -c "response.StatusCode);"     src/ReSet.Core/Services/Clients/*.cs
 ```
 
-Expected: 출력 없음.
+Expected: 두 출력이 파일별로 같은 수. `OpenAiClient.cs`가 2, 나머지 넷이 각 1 — 합계 6.
 
 - [ ] **Step 4: 통과를 확인한다**
 
@@ -1127,11 +1129,16 @@ Expected: **실패** — `Received(1)`인데 실제 2회.
 
 - [ ] **Step 7: 감싸지 않은 리뷰 호출이 남았는지 확인한다**
 
+감싼 뒤에는 `_criticService.Review`가 있는 줄에 `AiCallRetry`가 **없다**(여러 줄로 나뉜다).
+`grep -v "AiCallRetry"`로 거르면 다섯 줄이 전부 남아 거짓 실패가 된다. 인접 줄을 본다:
+
 ```bash
-grep -n "_criticService.Review" src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs | grep -v "AiCallRetry"
+grep -c "_criticService.Review"  src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs
+grep -B1 "_criticService.Review" src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs | grep -c "AiCallRetry.ExecuteAsync("
 ```
 
-Expected: 출력 없음. 다섯 자리 전부 감겼다.
+Expected: 둘 다 `5`. 첫 수는 리뷰 호출이 다섯 곳뿐임을, 둘째 수는 그 다섯이 모두 바로 윗줄의
+`AiCallRetry.ExecuteAsync(`에 감겼음을 뜻한다. 둘째가 5보다 작으면 감기지 않은 자리가 있다.
 
 - [ ] **Step 8: 전체 검증**
 
