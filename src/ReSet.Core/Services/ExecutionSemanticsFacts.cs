@@ -31,6 +31,8 @@ namespace ReSet.Core.Services
 
         public const string CursorKind = "커서 수명";
 
+        public const string TypePathKind = "식 타입 경로";
+
         /// <summary>
         /// 컬럼명 → 데이터 타입 사전. ExpressionTypePathExtractor(Task 9)가 잎 타입을
         /// 판정할 때 쓴다. 같은 컬럼명이 테이블마다 타입이 다르면 판정할 수 없으므로
@@ -95,6 +97,12 @@ namespace ReSet.Core.Services
             {
                 facts.Add(new ExecutionSemanticFact(
                     CursorKind, fact.Line.ToString(), fact.CursorName, fact.Sentence));
+            }
+
+            foreach (var fact in ExpressionTypePathExtractor.Extract(ddlText, columnTypes))
+            {
+                facts.Add(new ExecutionSemanticFact(
+                    TypePathKind, fact.Line.ToString(), fact.Expression, fact.Sentence));
             }
 
             return facts;
