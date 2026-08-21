@@ -326,6 +326,41 @@ END";
         }
 
         [Fact]
+        public void Extract_SmallMoneyOperands_SentenceNamesSmallMoneyNotMoney()
+        {
+            // M-a: "기계 확정" 행이 식에 없는 타입 이름을 대면 감사자나 모델이 그것을
+            // "고치려" 든다 - smallmoney 식인데 문장이 money라고 말하면 안 된다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_a SMALLMONEY, @pi_b SMALLMONEY) RETURNS INT AS
+BEGIN
+    RETURN CAST(@pi_a * @pi_b AS INT)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+
+            Assert.Contains("smallmoney", fact.Sentence);
+            Assert.NotEqual(ExpressionTypePathExtractor.MoneyRoundingSentence, fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_PureDecimalOperandWithNoMoney_SentenceDoesNotClaimPromotion()
+        {
+            // M-b: money가 애초에 전혀 없으면(피연산자가 처음부터 decimal/numeric)
+            // "승격되어"는 거짓 원인절이다 - 방향은 옳아도 근거가 틀렸다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_decimalRate DECIMAL) RETURNS INT AS
+BEGIN
+    RETURN CAST(@pi_decimalRate * 2 AS INT)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+
+            Assert.Contains("numeric", fact.Sentence);
+            Assert.Contains("절사", fact.Sentence);
+            Assert.DoesNotContain("승격", fact.Sentence);
+        }
+
+        [Fact]
         public void Extract_WithSyntaxErrors_ShouldReturnEmpty()
         {
             Assert.Empty(ExpressionTypePathExtractor.Extract("CREATE FUNCTION (((", NoColumns));

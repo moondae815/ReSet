@@ -60,8 +60,16 @@ namespace ReSet.Core.Services
         public const string MoneyRoundingSentence =
             "피연산자가 money로 유지되어 money → int 변환입니다. 0에서 먼 쪽으로 반올림합니다(12.5 → 13, -12.5 → -13).";
 
+        /// <summary>M-a 수정 라운드(리뷰): smallmoney 식에 money 이름을 대면 안 된다 - 실측으로 smallmoney도 반올림 방향은 같지만 이름은 실제 타입을 대야 한다.</summary>
+        public const string SmallMoneyRoundingSentence =
+            "피연산자가 smallmoney로 유지되어 smallmoney → int 변환입니다. 0에서 먼 쪽으로 반올림합니다(12.5 → 13, -12.5 → -13).";
+
         public const string NumericTruncationSentence =
             "피연산자에 numeric/decimal이 있어 승격되어 numeric → int 변환입니다. 0 방향으로 절사합니다(12.5 → 12, -12.5 → -12).";
+
+        /// <summary>M-b 수정 라운드(리뷰): money가 전혀 없이 애초에 numeric/decimal이면 "승격"이 일어난 적이 없다 - 방향은 같지만 원인절이 사실이어야 한다.</summary>
+        public const string NumericNoPromotionSentence =
+            "피연산자가 numeric/decimal입니다. numeric → int 변환입니다. 0 방향으로 절사합니다(12.5 → 12, -12.5 → -12).";
 
         /// <summary>
         /// 이 추출기가 "안다"고 취급하는 타입 이름 다섯 계열. 이 밖의 타입 이름은
@@ -250,17 +258,28 @@ namespace ReSet.Core.Services
                 var target = (node.DataType as SqlDataTypeReference)?.SqlDataTypeOption;
                 if (target != SqlDataTypeOption.Int) return;
 
-                var resolved = ResolveType(node.Parameter);
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var resolved = ResolveType(node.Parameter, seen);
                 if (resolved == null) return; // 잎 타입을 하나라도 모르면 침묵한다.
 
                 string sentence;
                 if (resolved == "decimal" || resolved == "numeric")
                 {
-                    sentence = NumericTruncationSentence;
+                    // M-b: money가 실제로 섞여 있을 때만 "승격되어"가 사실이다 - 애초에
+                    // numeric/decimal뿐이었으면(seen에 money/smallmoney가 없으면) 승격이
+                    // 일어난 적이 없다.
+                    var promotedFromMoney = seen.Contains("money") || seen.Contains("smallmoney");
+                    sentence = promotedFromMoney ? NumericTruncationSentence : NumericNoPromotionSentence;
                 }
-                else if (resolved == "money" || resolved == "smallmoney")
+                else if (resolved == "money")
                 {
                     sentence = MoneyRoundingSentence;
+                }
+                else if (resolved == "smallmoney")
+                {
+                    // M-a: 식에 없는 타입 이름("money")을 대면 "기계 확정" 행을
+                    // 감사자나 모델이 고치려 든다 - 실제 타입 이름을 대야 한다.
+                    sentence = SmallMoneyRoundingSentence;
                 }
                 else
                 {
@@ -300,7 +319,7 @@ namespace ReSet.Core.Services
             /// (함수 호출·서브쿼리·문자열 리터럴 등) 이 함수가 다루지 않는 식 모양이면
             /// null(모른다)을 돌려주고, null은 상위로 그대로 전파된다.
             /// </summary>
-            private string? ResolveType(ScalarExpression? expression)
+            private string? ResolveType(ScalarExpression? expression, HashSet<string> seen)
             {
                 switch (expression)
                 {
@@ -308,27 +327,27 @@ namespace ReSet.Core.Services
                         return null;
 
                     case ParenthesisExpression paren:
-                        return ResolveType(paren.Expression);
+                        return ResolveType(paren.Expression, seen);
 
                     case BinaryExpression binary:
-                        var left = ResolveType(binary.FirstExpression);
+                        var left = ResolveType(binary.FirstExpression, seen);
                         if (left == null) return null;
-                        var right = ResolveType(binary.SecondExpression);
+                        var right = ResolveType(binary.SecondExpression, seen);
                         if (right == null) return null;
                         return Combine(left, right);
 
                     case VariableReference variable:
-                        return KnownFamilyOrNull(variable.Name, _variables);
+                        return Record(KnownFamilyOrNull(variable.Name, _variables), seen);
 
                     case ColumnReferenceExpression column:
-                        return ResolveColumn(column);
+                        return Record(ResolveColumn(column), seen);
 
                     case NumericLiteral:
                         // 소수점이 있는 리터럴(예: 100.0)은 numeric(p,s)이다.
-                        return "numeric";
+                        return Record("numeric", seen);
 
                     case IntegerLiteral:
-                        return "int";
+                        return Record("int", seen);
 
                     default:
                         // FunctionCall·ScalarSubquery·StringLiteral·MoneyLiteral·
@@ -336,6 +355,19 @@ namespace ReSet.Core.Services
                         // 근거가 없는 식 모양은 전부 모르는 것으로 취급한다.
                         return null;
                 }
+            }
+
+            /// <summary>
+            /// M-b 수정 라운드(리뷰): `Combine`이 반환하는 최종 결과 하나만으로는
+            /// "money가 실제로 섞였는지"를 잃는다(예: money*numeric → numeric으로 이겨도
+            /// 결과 문자열만 보면 처음부터 numeric이었는지 구분이 안 된다). 잎마다
+            /// 실제로 관측한 계열을 `seen`에 그대로 남겨, 승격 여부를 사실대로 말할 수
+            /// 있게 한다.
+            /// </summary>
+            private static string? Record(string? family, HashSet<string> seen)
+            {
+                if (family != null) seen.Add(family);
+                return family;
             }
 
             /// <summary>
