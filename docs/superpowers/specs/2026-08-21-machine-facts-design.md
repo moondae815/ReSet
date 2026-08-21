@@ -62,8 +62,15 @@ UPDATE dbo.T WITH(NOLOCK) SET …      같음
 
 1. **`FROM` 절의 모든 테이블 참조** — 전수, 힌트 유무 무관.
    `INSERT`는 원천 `SELECT`의 `FROM`이 그 자리다.
-2. **`FROM` 절이 없는 `UPDATE`·`DELETE`의 대상 노드** — 그 자체가 스캔이므로 한 행.
-3. **힌트를 진 대상 노드** — `INSERT INTO T WITH(TABLOCK)` 같은 쓰기 대상의 힌트도 사실이다.
+2. **힌트를 진 대상 노드** — `DELETE FROM dbo.T WITH(NOLOCK)`처럼 `FROM`이 없어 대상이 곧
+   스캔인 경우와 `INSERT INTO T WITH(TABLOCK)` 같은 쓰기 대상의 힌트가 여기 걸린다.
+
+> **2026-08-21 구현 중 정정.** 초안은 2번을 "`FROM` 절이 없는 `UPDATE`·`DELETE`의 대상
+> 노드 — 그 자체가 스캔이므로 한 행"으로 적고 3번을 따로 두었다. 그러면 `UPDATE T SET C = 1
+> WHERE X = 1`처럼 `FROM`도 힌트도 없는 문장이 빈 힌트 행을 얻는데, 이 문서가 아래에서
+> "행이 하나도 없는 문장이 있다"고 적은 것과 정면으로 어긋난다. 구현자가 그 모순을 테스트로
+> 잡았다 — 초안 코드를 그대로 넣으면 `ExtractLockHints_StatementWithNoScan_ProducesNoRow`가
+> 실패한다. 조건을 "힌트가 있을 때만"으로 좁히면 둘이 함께 성립한다.
 
 `FROM`이 있을 때 대상 노드를 빼는 이유는 그것이 스캔이 아니라 갱신 대상 지시자이고 힌트를
 지지 않기 때문이다. 그대로 실으면 같은 테이블이 "힌트 있음 / 없음" 두 행으로 나와 독자를
@@ -73,9 +80,32 @@ UPDATE dbo.T WITH(NOLOCK) SET …      같음
 불리언이 아니라 힌트 목록이고, `READPAST`·`UPDLOCK` 같은 것도 그대로 실린다 —
 "`NOLOCK` 여부"가 아니라 "이 참조에 걸린 힌트"가 사실이다.
 
-**파생 테이블 안으로 내려가지 않는다.** 파생 테이블의 테이블 참조는 그 스코프의 것이고
-바깥 문장의 잠금 동작과 별개다. `ExplicitVisit(QueryDerivedTable)`을 비워 막는다 —
-`Visit`을 비우면 ScriptDom이 자식으로 계속 내려간다(2026-08-20 실측).
+**파생 테이블 안으로도 내려가고, `범위` 칸으로 구분한다.**
+
+> **2026-08-21 리뷰 중 정정 — 초안이 틀렸다.** 초안은 "파생 테이블 안으로 내려가지 않는다.
+> 그 스코프의 참조는 바깥 문장의 잠금 동작과 별개다"로 적었다. 그 규칙을
+> `SqlStaticParser.FindAliasForTarget`에서 베껴 온 것인데, 거기서는 옳았다 — 별칭 해석은
+> 이름의 스코프 문제라 안쪽 별칭이 바깥 대상과 무관하다.
+>
+> 잠금 힌트에는 그 논리가 서지 않는다. 파생 테이블의 `FROM`은 **같은 문장이 실제로 하는
+> 스캔**이고, 그 힌트가 곧 그 문장의 잠금 동작이다. 리뷰어가 실물로 보였다:
+> `UP_UTIL_SETTLE_INS`의 `INSERT`(55행)는 최상위 `FROM` 항목이 파생 테이블 하나뿐이라
+> 초안 규칙 아래에서 **행이 0개**가 되고, 그 안에 든
+> `PaymentDB.dbo.TTxMst A WITH(NOLOCK, INDEX=CIDX_TTxMst_YMD)`를 포함한 네 테이블의 힌트가
+> 통째로 사라진다. 스캔이 정말 없는 문장과 구별되지 않는다 — 이 표가 막으려는 바로 그
+> 실패 모양이다.
+>
+> 같은 파일의 「집합 술어」 표가 이미 옳은 답을 갖고 있었다. `SetPredicateFact.Scope`가
+> `"최상위"` / `"파생"`을 담고 표에 `범위` 칸으로 실린다. 파생을 빼는 게 아니라 표시해서
+> 싣는다. 잠금 힌트도 그 선례를 따른다.
+
+`LockHintFact`에 `Scope` 필드를 두고 표에 `범위` 칸을 낸다. 값은 `"최상위"` 또는 `"파생"`이다.
+
+**`INSERT` 원천이 `UNION`이면 분기마다 훑는다.** 원천이 `BinaryQueryExpression`일 수 있고
+그때 `QuerySpecification`으로 좁히면 통째로 빠진다. 같은 파일의 `QuerySpecificationsOf`
+헬퍼가 이 문제를 이미 풀어 두었으므로 재사용한다. 리뷰어가 실물로 확인했다 —
+`UP_Util_PG_Client_CMRate_Ins`의 `INSERT 2`(76행)와 `INSERT 4`(159행)가 모든 테이블에
+`NOLOCK`을 지고 있는데도 행이 0개였다.
 
 ### ② `ORDER BY`
 
@@ -116,13 +146,23 @@ CREATE FUNCTION dbo.F3(...) WITH SCHEMABINDING, RETURNS NULL ON NULL INPUT
 ```markdown
 ### 잠금 힌트 (기계 확정 — 수정 금지)
 
-| 문장 | 라인 | 테이블 | 별칭 | 힌트 |
-| :--- | :--- | :--- | :--- | :--- |
-| DELETE 1 | 36 | TSettleMst | A | (없음) |
-| INSERT 1 | 167 | TPGProperty | P | NOLOCK |
-| INSERT 1 | 173 | TPGProperty | Y | NOLOCK |
-| UPDATE 1 | 189 | TSettleMst | A | NOLOCK |
+| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| DELETE 1 | 36 | TSettleMst | A | 최상위 | (없음) |
+| DELETE 1 | 37 | TPGProperty | PG | 최상위 | (없음) |
+| INSERT 1 | 167 | TPGProperty | P | 파생 | NOLOCK |
+| INSERT 1 | 173 | SETTLE_POQ_DB.dbo.TPGProperty | Y | 최상위 | NOLOCK |
+| UPDATE 1 | 189 | TSettleMst | A | 최상위 | NOLOCK |
+| UPDATE 1 | 190 | TPGProperty | PG | 최상위 | (없음) |
 ```
+
+`범위` 칸은 「집합 술어」 표와 같은 뜻이다 — `최상위`는 문장의 `FROM`에 직접 실린 참조,
+`파생`은 파생 테이블 안의 참조다.
+
+> **2026-08-21 구현 중 정정.** 초안의 예시 표에는 `INSERT 1 | 167 | TPGProperty | P` 행이
+> 있었다. 그것은 실제 추출 결과가 아니라 감사 보고서의 산문에서 지어낸 것이고, `P` 별칭은
+> 파생 테이블 안에 있어 이 문서가 명시한 "파생 테이블 안으로 내려가지 않는다"는 규칙에
+> 정면으로 걸린다. 위 표는 구현자가 실물 DDL로 뽑은 결과다.
 
 행 단위는 (DML 문장 × 스캔 자리)다. 전수로 싣는다 — "수정 금지" 표에 빈 칸이 있으면 계약이
 서지 않고, 독자가 "여기 없는 문장은 어떻다는 뜻인가"를 추론해야 한다.
@@ -223,3 +263,13 @@ catch-all 버킷을 얻어, 열거되지 않은 `ErrorType`도 내용이 실려 
 - **`UIF_SettleYMD`의 🟡**(파서 확정값을 문서가 부정)은 재료가 이미 있는데 모델이 뒤집은
   것이라, 새 재료가 아니라 L1 검사가 필요한 자리다. 이번 셋과 성격이 달라 별도로 본다.
 - 이 설계는 **라이브 모드를 검증하지 않는다.** 오프라인 스냅샷 경로로만 실물 검증한다.
+- **잠금 힌트 표는 `WHERE` 절 하위 질의의 스캔을 비대칭으로 담는다.** 2026-08-21 재리뷰가
+  실측했다 — 파생 테이블 **안쪽**의 `WHERE` 하위 질의에 든 참조는 `파생`으로 수집되는데,
+  문장 **최상위** `WHERE`의 하위 질의에 든 참조는 아예 방문되지 않는다. 수집기가
+  `from.TableReferences`만 훑고 `node.WhereClause`는 건드리지 않기 때문이다.
+
+  즉 `UPDATE T SET C = 1 WHERE X IN (SELECT … FROM S WITH(NOLOCK))`의 `NOLOCK`은 표에
+  실리지 않는다. 조정자 판정으로 이번 범위에서는 그대로 둔다 — 재리뷰가 비차단으로
+  분류했고, 방향이 "없는 것을 지어내는" 쪽이 아니라 "있는 것을 덜 담는" 쪽이며, 실물
+  코퍼스에서 이 형태가 무는 것을 확인하지 못했다. **다만 닫힌 것이 아니다.** 다음 감사가
+  `WHERE` 하위 질의의 힌트를 결함으로 집으면 그때 이 자리를 연다.
