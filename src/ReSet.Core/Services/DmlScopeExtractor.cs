@@ -138,6 +138,11 @@ namespace ReSet.Core.Services
     /// 이 결함을 담을 수 없다.
     /// </summary>
     /// <param name="Alias">별칭이 없으면 "-".</param>
+    /// <param name="Scope">
+    /// "최상위" 또는 "파생". SetPredicateFact.Scope와 같은 선례다 - 파생 테이블 안의
+    /// 참조를 빼지 않고 표시해서 싣는다(수정 라운드 2, 아래 ExtractLockHints 문서의
+    /// 실측 근거 참고).
+    /// </param>
     /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
     public sealed record LockHintFact(
         string Operation,
@@ -145,6 +150,7 @@ namespace ReSet.Core.Services
         int Line,
         string Table,
         string Alias,
+        string Scope,
         IReadOnlyList<string> Hints);
 
     /// <summary>
@@ -288,6 +294,34 @@ namespace ReSet.Core.Services
         /// ExtractLockHints_StatementWithNoScan_ProducesNoRow가 이를 실측으로 잡았다 -
         /// "대상 자체가 스캔이다"와 "그 스캔에 보고할 힌트가 있다"는 다른 질문이고,
         /// 이 표는 후자만 싣는다. FROM 유무와 무관하게 대상이 힌트를 질 때만 싣는다.
+        ///
+        /// [파생 테이블 안으로도 내려가는 이유 - 수정 라운드 2, 조정자 판정]
+        /// 초안은 "파생 테이블 안으로 내려가지 않는다"였다. 그 규칙을
+        /// SqlStaticParser.FindAliasForTarget에서 베껴 왔는데, 거기서는 옳았다 - 별칭
+        /// 해석은 이름의 스코프 문제라 안쪽 별칭이 바깥 대상과 무관하다. 잠금 힌트에는
+        /// 그 논리가 서지 않는다 - 파생 테이블의 FROM은 같은 문장이 실제로 하는 스캔이고
+        /// 그 힌트가 곧 그 문장의 잠금 동작이다. 리뷰어가 실물로 보였다: UP_UTIL_SETTLE_INS의
+        /// INSERT(55행)는 최상위 FROM 항목이 파생 테이블 하나뿐이라 초안 규칙 아래에서
+        /// 행이 0개가 되고, PaymentDB.dbo.TTxMst WITH(NOLOCK, INDEX=CIDX_TTxMst_YMD)를
+        /// 포함한 네 테이블의 힌트가 통째로 사라졌다 - 스캔이 정말 없는 문장과 구별되지
+        /// 않는, 이 표가 막으려는 바로 그 실패 모양이다. 「집합 술어」 표의
+        /// SetPredicateFact.Scope 선례를 따라 빼지 않고 LockHintFact.Scope로 "최상위"/
+        /// "파생"을 표시해서 싣는다.
+        ///
+        /// [INSERT 원천이 UNION이면 갈래마다 훑는 이유 - 수정 라운드 2, 리뷰 실측]
+        /// 원천이 BinaryQueryExpression일 수 있는데 QuerySpecification으로 좁히면 통째로
+        /// 빠진다. UP_Util_PG_Client_CMRate_Ins의 INSERT 2(76행)·INSERT 4(159행)가 모든
+        /// 테이블에 NOLOCK을 지고 있는데도 행이 0개였다. QuerySpecificationsOf(이 파일의
+        /// DmlScopeVisitor·SetPredicateVisitor가 이미 쓰는 헬퍼)를 재사용한다 - 새로
+        /// 만들지 않는다.
+        ///
+        /// [중복 제거 키에 Line이 필요한 이유 - 수정 라운드 2, 리뷰 실측]
+        /// Line이 참조별로 갈리므로(수정 라운드 1) 대상 노드와 FROM 참조가 같은
+        /// (Operation, StatementOrdinal, Table, Alias)로 정규화되면(둘 다 별칭 없음
+        /// -> "-") Line을 빼고 판정하던 예전 키가 뒤에 추가되는 쪽을 같은 행으로 오인해
+        /// 조용히 버렸다 - `UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T`에서 대상의 NOLOCK이
+        /// 사라졌다. 두 참조는 원문에서 서로 다른 줄에 있는 별개의 스캔 자리이므로 Line을
+        /// 키에 포함해 둘 다 지킨다.
         /// </summary>
         public static IReadOnlyList<LockHintFact> ExtractLockHints(string? ddlText)
         {
@@ -317,47 +351,78 @@ namespace ReSet.Core.Services
 
         private sealed class LockHintVisitor : TSqlFragmentVisitor
         {
+            /// <summary>최상위 FROM에 직접 실린 참조. SetPredicateFact.Scope와 같은 문자열.</summary>
+            private const string TopLevelScope = "최상위";
+
+            /// <summary>파생 테이블 안의 참조.</summary>
+            private const string DerivedScope = "파생";
+
             public List<LockHintFact> Facts { get; } = new();
 
             private readonly Dictionary<string, int> _ordinals = new(StringComparer.Ordinal);
 
             public override void Visit(InsertSpecification node)
             {
-                var from = (node.InsertSource as SelectInsertSource)?.Select is QuerySpecification qs
-                    ? qs.FromClause
-                    : null;
-                Record("INSERT", node, node.Target, from);
+                var ordinal = NextOrdinal("INSERT");
+
+                // 원천이 UNION(BinaryQueryExpression)이면 갈래마다 FROM이 다르므로
+                // QuerySpecificationsOf(DmlScopeVisitor·SetPredicateVisitor가 이미 쓰는
+                // 헬퍼)로 전부 훑는다. VALUES 원천이면 QuerySpecificationsOf가 빈 시퀀스를
+                // 내므로 아무 것도 더해지지 않는다.
+                if (node.InsertSource is SelectInsertSource select)
+                {
+                    foreach (var spec in QuerySpecificationsOf(select.Select))
+                    {
+                        CollectFrom("INSERT", ordinal, spec.FromClause);
+                    }
+                }
+
+                RecordTargetHint("INSERT", ordinal, node.Target);
             }
 
-            public override void Visit(UpdateSpecification node) =>
-                Record("UPDATE", node, node.Target, node.FromClause);
+            public override void Visit(UpdateSpecification node)
+            {
+                var ordinal = NextOrdinal("UPDATE");
+                CollectFrom("UPDATE", ordinal, node.FromClause);
+                RecordTargetHint("UPDATE", ordinal, node.Target);
+            }
 
-            public override void Visit(DeleteSpecification node) =>
-                Record("DELETE", node, node.Target, node.FromClause);
+            public override void Visit(DeleteSpecification node)
+            {
+                var ordinal = NextOrdinal("DELETE");
+                CollectFrom("DELETE", ordinal, node.FromClause);
+                RecordTargetHint("DELETE", ordinal, node.Target);
+            }
 
-            private void Record(
-                string operation, TSqlFragment statement, TableReference target, FromClause? from)
+            private int NextOrdinal(string operation)
             {
                 _ordinals.TryGetValue(operation, out var n);
                 _ordinals[operation] = ++n;
+                return n;
+            }
 
-                if (from != null)
-                {
-                    var collector = new FromTableCollector();
-                    foreach (var reference in from.TableReferences) reference.Accept(collector);
-                    foreach (var table in collector.Tables) Add(operation, n, table);
-                }
+            private void CollectFrom(string operation, int ordinal, FromClause? from)
+            {
+                if (from == null) return;
 
-                // 대상 노드는 힌트를 질 때만 싣는다(INSERT INTO T WITH(TABLOCK),
-                // DELETE FROM dbo.T WITH(NOLOCK)). FROM이 없다고 무조건 실으면
-                // "FROM도 없고 힌트도 없는" 문장(UPDATE dbo.T SET C=1 WHERE X=1)까지
-                // 빈 힌트 행을 내 "스캔할 자리가 없다"는 사실을 잃는다 - 대상 자체가
-                // 곧 스캔이라는 것과, 그 스캔에 대해 보고할 힌트가 있다는 것은 다른
-                // 질문이다(2026-08-21 테스트 실측 - 브리프 초안의 from==null 단독
-                // 조건은 ExtractLockHints_StatementWithNoScan_ProducesNoRow에서 실패했다).
+                var collector = new FromTableCollector();
+                foreach (var reference in from.TableReferences) reference.Accept(collector);
+                foreach (var (table, scope) in collector.Tables) Add(operation, ordinal, table, scope);
+            }
+
+            // 대상 노드는 힌트를 질 때만 싣는다(INSERT INTO T WITH(TABLOCK),
+            // DELETE FROM dbo.T WITH(NOLOCK)). FROM이 없다고 무조건 실으면
+            // "FROM도 없고 힌트도 없는" 문장(UPDATE dbo.T SET C=1 WHERE X=1)까지
+            // 빈 힌트 행을 내 "스캔할 자리가 없다"는 사실을 잃는다 - 대상 자체가
+            // 곧 스캔이라는 것과, 그 스캔에 대해 보고할 힌트가 있다는 것은 다른
+            // 질문이다(2026-08-21 테스트 실측 - 브리프 초안의 from==null 단독
+            // 조건은 ExtractLockHints_StatementWithNoScan_ProducesNoRow에서 실패했다).
+            // 대상 노드는 파생 테이블 안에 있을 수 없으므로 항상 최상위다.
+            private void RecordTargetHint(string operation, int ordinal, TableReference target)
+            {
                 if (target is NamedTableReference named && named.TableHints.Count > 0)
                 {
-                    Add(operation, n, named);
+                    Add(operation, ordinal, named, TopLevelScope);
                 }
             }
 
@@ -376,8 +441,16 @@ namespace ReSet.Core.Services
             /// 구분해 감사에서 실적이 있다. DmlScopeFact·SetPredicateFact가 문장 줄을
             /// 쓰는 것은 문장당 행이 하나뿐이라 되풀이 문제가 없기 때문이고, 잠금 힌트는
             /// 그 전제가 깨지므로 같은 규칙을 따를 수 없다.
+            ///
+            /// [중복 제거 키에 Line이 필요한 이유 - 수정 라운드 2 리뷰 실측]
+            /// Line이 참조별로 갈리는데(위 문단) 대상 노드와 FROM 참조가 같은
+            /// (Operation, StatementOrdinal, Table, Alias)로 정규화되면 Line을 뺀 키가
+            /// 뒤에 추가되는 쪽을 같은 행으로 오인해 조용히 버렸다 -
+            /// `UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T`에서 대상의 NOLOCK이 사라졌다.
+            /// 두 참조는 원문에서 서로 다른 줄에 있는 별개의 스캔 자리이므로 Line을
+            /// 포함해야 판정이 옳다.
             /// </summary>
-            private void Add(string operation, int ordinal, NamedTableReference node)
+            private void Add(string operation, int ordinal, NamedTableReference node, string scope)
             {
                 var table = string.Join(
                     ".", node.SchemaObject.Identifiers.Select(i => i.Value));
@@ -389,26 +462,37 @@ namespace ReSet.Core.Services
 
                 if (Facts.Any(f =>
                         f.Operation == operation && f.StatementOrdinal == ordinal &&
-                        f.Table == table && f.Alias == alias))
+                        f.Table == table && f.Alias == alias && f.Line == line))
                 {
                     return;
                 }
 
-                Facts.Add(new LockHintFact(operation, ordinal, line, table, alias, hints));
+                Facts.Add(new LockHintFact(operation, ordinal, line, table, alias, scope, hints));
             }
 
             /// <summary>
-            /// FROM 절의 명명 테이블 참조를 모은다. 파생 테이블 안으로는 내려가지 않는다 -
-            /// 그 스코프의 참조는 바깥 문장의 잠금 동작과 별개다. ScriptDom은 Visit을
-            /// 비워도 자식으로 계속 내려가므로 ExplicitVisit을 비운다.
+            /// FROM 절의 명명 테이블 참조를 모은다. 파생 테이블 안으로도 내려가되, 그
+            /// 안에서 모은 참조는 Scope="파생"으로 구분한다(수정 라운드 2 - 조정자 판정,
+            /// ExtractLockHints 문서의 실측 근거 참고). ScriptDom은 Visit을 비워도 자식으로
+            /// 계속 내려가므로, 파생 테이블 진입/이탈을 표시하려면 ExplicitVisit을 오버라이드해
+            /// base.ExplicitVisit으로 자식 순회를 이어가야 한다.
             /// </summary>
             private sealed class FromTableCollector : TSqlFragmentVisitor
             {
-                public List<NamedTableReference> Tables { get; } = new();
+                public List<(NamedTableReference Node, string Scope)> Tables { get; } = new();
 
-                public override void Visit(NamedTableReference node) => Tables.Add(node);
+                private bool _inDerivedTable;
 
-                public override void ExplicitVisit(QueryDerivedTable node) { }
+                public override void Visit(NamedTableReference node) =>
+                    Tables.Add((node, _inDerivedTable ? DerivedScope : TopLevelScope));
+
+                public override void ExplicitVisit(QueryDerivedTable node)
+                {
+                    var wasInDerivedTable = _inDerivedTable;
+                    _inDerivedTable = true;
+                    base.ExplicitVisit(node);
+                    _inDerivedTable = wasInDerivedTable;
+                }
             }
         }
 

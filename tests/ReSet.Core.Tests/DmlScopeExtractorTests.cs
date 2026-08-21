@@ -973,10 +973,19 @@ END";
         }
 
         [Fact]
-        public void ExtractLockHints_DerivedTableInterior_IsNotCollected()
+        public void ExtractLockHints_DerivedTableInterior_IsCollectedWithDerivedScope()
         {
-            // 파생 테이블 안의 참조는 그 스코프의 것이고 바깥 문장의 잠금 동작과 별개다.
-            // ScriptDom은 Visit을 비워도 자식으로 내려가므로 ExplicitVisit을 비워야 한다.
+            // 수정 라운드 2 - 조정자 판정: 초안("파생 테이블 안으로 내려가지 않는다")은
+            // SqlStaticParser.FindAliasForTarget의 별칭-해석 규칙을 잘못 베낀 것이었다.
+            // 별칭 해석은 이름의 스코프 문제라 안쪽 별칭이 바깥 대상과 무관하지만, 잠금
+            // 힌트에는 그 논리가 서지 않는다 - 파생 테이블의 FROM은 같은 문장이 실제로
+            // 하는 스캔이고 그 힌트가 곧 그 문장의 잠금 동작이다. 리뷰어가 실물로 보였다:
+            // UP_UTIL_SETTLE_INS의 INSERT(55행)는 최상위 FROM 항목이 파생 테이블
+            // 하나뿐이라 초안 규칙 아래에서 행이 0개가 되고, PaymentDB.dbo.TTxMst의
+            // NOLOCK·INDEX를 포함한 네 테이블의 힌트가 통째로 사라졌다 - 스캔이 정말
+            // 없는 문장과 구별되지 않는, 이 표가 막으려는 바로 그 실패 모양이다.
+            // 「집합 술어」 표의 SetPredicateFact.Scope 선례를 따라 빼지 않고 "파생"으로
+            // 표시해서 싣는다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
@@ -988,9 +997,15 @@ END";
 
             var facts = DmlScopeExtractor.ExtractLockHints(ddl);
 
-            Assert.Single(facts);
-            Assert.Equal("A", facts[0].Alias);
-            Assert.DoesNotContain(facts, f => f.Table.Contains("THidden"));
+            Assert.Equal(2, facts.Count);
+
+            var b = Assert.Single(facts, f => f.Alias == "B");
+            Assert.Equal("dbo.THidden", b.Table);
+            Assert.Equal("파생", b.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, b.Hints);
+
+            var a = Assert.Single(facts, f => f.Alias == "A");
+            Assert.Equal("최상위", a.Scope);
         }
 
         [Fact]
@@ -1062,6 +1077,58 @@ END";
             Assert.NotEqual(a.Line, pg.Line);
             Assert.Equal(5, a.Line);
             Assert.Equal(6, pg.Line);
+        }
+
+        [Fact]
+        public void ExtractLockHints_InsertSourceIsUnion_EachBranchIsCollected()
+        {
+            // 수정 라운드 2 - 리뷰 실측: 원천이 BinaryQueryExpression(UNION ALL)이면
+            // QuerySpecification으로 좁히는 캐스트가 통째로 실패해 FROM 수집이 비었다.
+            // UP_Util_PG_Client_CMRate_Ins의 INSERT 2(76행)·INSERT 4(159행)가 전 테이블
+            // NOLOCK인데 행이 0개였다. 같은 파일의 QuerySpecificationsOf(DmlScopeVisitor·
+            // SetPredicateVisitor가 이미 쓰는 헬퍼)를 재사용해 갈래마다 훑는다 - 새로
+            // 만들지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A)
+    SELECT X FROM dbo.TSource1 S1 WITH(NOLOCK)
+    UNION ALL
+    SELECT X FROM dbo.TSource2 S2 WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal(new[] { "NOLOCK" }, Assert.Single(facts, f => f.Alias == "S1").Hints);
+            Assert.Equal(new[] { "NOLOCK" }, Assert.Single(facts, f => f.Alias == "S2").Hints);
+            Assert.All(facts, f => Assert.Equal("INSERT", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+        }
+
+        [Fact]
+        public void ExtractLockHints_TargetAndFromReferToSameTableAndAlias_BothAreKept()
+        {
+            // 수정 라운드 2 - 리뷰 실측(Important, 88b0aa2류): 대상 노드와 FROM 절 참조가
+            // 같은 (테이블, 별칭)으로 정규화되면(둘 다 별칭 없음 -> "-") Line을 뺀 중복
+            // 제거 키가 둘을 같은 행으로 오인해 뒤에 추가되는 쪽을 조용히 버렸다 -
+            // UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T에서 대상의 NOLOCK이 사라졌다.
+            // 두 참조는 원문에서 서로 다른 줄에 있는 별개의 스캔 자리이므로 Line을
+            // 키에 포함해 둘 다 지켜야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.T WITH(NOLOCK)
+    SET    C = 1
+    FROM   dbo.T
+    WHERE  X = 1
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Hints.Contains("NOLOCK"));
+            Assert.Contains(facts, f => f.Hints.Count == 0);
         }
     }
 }
