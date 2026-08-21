@@ -32,7 +32,11 @@ namespace ReSet.Core.Services
         //    GlobalStatementOrdinal을 유실하고 있었다), 오류 반환 코드 앵커의 줄 번호가
         //    빈 줄만큼 밀리던 것을 바로잡았다. 둘 다 프롬프트 입력이 달라진 것이므로
         //    옛 엔트리를 재사용하면 산출물이 옛 재료 그대로 남는다.
-        private const int CurrentCacheFormatVersion = 6;
+        // 7: 추출기 결함 셋을 닫았다(2026-08-20 축 A 감사). 자기참조 판정이 갱신 대상
+        //    별칭을 FROM 절에서 풀고, 집합 술어가 LEFT/RIGHT 같은 전용 노드로 감싼
+        //    좌변도 담고, 의존성 이름이 카탈로그 표기로 정규화된다. 셋 다 프롬프트에
+        //    실리는 기계 확정 재료라 옛 엔트리를 재사용하면 틀린 재료가 그대로 남는다.
+        private const int CurrentCacheFormatVersion = 7;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

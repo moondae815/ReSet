@@ -210,6 +210,25 @@ namespace ReSet.Core.Services
                     _snapshot.CodeObjects.TryGetValue(dependencyKey.LegacyCanonicalName, out stored))
                 {
                     dependency.ReferencedDdlText = stored.DdlText;
+
+                    // [이름을 저장된 객체에 맞추는 이유 - 2026-08-20 축 A 교차 감사]
+                    // sys.sql_expression_dependencies의 referenced_entity_name은 카탈로그
+                    // 표기가 아니라 호출식에 쓰인 표기를 돌려준다. T-SQL이 대소문자를 안
+                    // 가리므로 원본이 dbo.UF_Get_WorkDay2로 부르면 의존성 이름도 그렇게
+                    // 들어온다. 반면 산출물 디렉터리는 그 함수를 직접 분석할 때 쓴
+                    // 카탈로그 표기(dbo.UF_GET_WORKDAY2)로 만들어진다.
+                    //
+                    // 그 어긋남이 「참조 함수 (기계 확정 — 수정 금지)」 표의 명세서 링크에서
+                    // 드러났다 - 대소문자 구분 파일시스템에서 깨지는 경로가 나왔고, 같은
+                    // 문서의 「참조 코드 객체」 링크는 그래프 키를 써서 정본이라 문서 안에서
+                    // 서로 달랐다. 사전을 OrdinalIgnoreCase로 열어 둔 덕에 조회는 되지만,
+                    // 조회가 된다고 이름이 같은 것은 아니다.
+                    //
+                    // 여기서 한 번 맞춰 두면 아래로 흐르는 소비자(매니페스트·링커·프롬프트
+                    // 표)가 전부 한 표기로 모인다. 링크를 만드는 자리마다 고치면 다음
+                    // 소비자가 또 빠진다.
+                    if (!string.IsNullOrWhiteSpace(stored.Name)) dependency.Name = stored.Name;
+                    if (!string.IsNullOrWhiteSpace(stored.Schema)) dependency.Schema = stored.Schema;
                 }
             }
         }

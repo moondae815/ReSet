@@ -539,13 +539,13 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            // 6: UPDATE 절 제목의 문장 번호 유실과 오류 코드 앵커의 줄 번호 밀림을
-            //    고쳤다(2026-08-20). 둘 다 프롬프트 입력이 달라진 것이므로 옛 엔트리를
-            //    재사용하면 산출물이 옛 재료 그대로 남는다.
+            // 7: 추출기 결함 셋을 닫았다(2026-08-20 축 A 감사) — 자기참조 별칭 해석,
+            //    집합 술어의 전용 노드 좌변, 의존성 이름의 카탈로그 표기 정규화.
+            //    셋 다 프롬프트에 실리는 기계 확정 재료다.
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(6, (int)entry["FormatVersion"]!);
+            Assert.Equal(7, (int)entry["FormatVersion"]!);
         }
 
         [Fact]
