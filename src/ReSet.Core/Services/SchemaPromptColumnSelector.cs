@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
+using Serilog;
 using ReSet.Core.Models;
 
 namespace ReSet.Core.Services
@@ -36,7 +40,15 @@ namespace ReSet.Core.Services
                 foreach (var kvp in analysis.ReferencedColumnsPerTable)
                 {
                     if (!KeyMatchesDependency(kvp.Key, dep, spDef)) continue;
-                    foreach (var c in kvp.Value) keepCols.Add(c);
+                    foreach (var c in kvp.Value)
+                    {
+                        keepCols.Add(c);
+                        // 원본이 INSERT 대상 목록에 X.PRODUCTNAME처럼 별칭을 붙여
+                        // 적으면 파서가 그 문자열을 그대로 키에 담는다(실측:
+                        // UP_UTIL_SETTLE_INS_EXTRA). 베이스 이름도 함께 넣어야
+                        // 스키마의 ProductName과 맞는다.
+                        keepCols.Add(ExtractBaseName(c));
+                    }
                 }
             }
 
@@ -52,6 +64,25 @@ namespace ReSet.Core.Services
                 foreach (var idx in dep.Indexes)
                 {
                     foreach (var c in idx.Columns) keepCols.Add(c);
+                }
+            }
+
+            // 4) 주석에만 등장하는 컬럼
+            //
+            // 주석 처리된 조건이 참조하는 컬럼은 AST에 없고 PK/FK도 인덱스도 아니라
+            // 1~3에서 전부 빠진다. 그러면 모델이 그 컬럼을 "스키마에 없다"고 기록하고
+            // (실측: UP_UTIL_SETTLE_PROC_ETC의 TClient.ClientIDType), L1의 기준값도
+            // 같은 잘린 집합이라 그 거짓 주장을 잡지 못한다. 이 클래스 문서가 이미
+            // 경고한 과소 포함 결함이다.
+            if (keepCols.Count > 0)
+            {
+                var commentWords = CollectCommentWords(spDef.DdlText);
+                if (commentWords.Count > 0)
+                {
+                    foreach (var col in dep.Columns)
+                    {
+                        if (commentWords.Contains(col.ColumnName)) keepCols.Add(col.ColumnName);
+                    }
                 }
             }
 
@@ -159,6 +190,52 @@ namespace ReSet.Core.Services
             var trimmed = qualifiedOrRawName.Trim().Trim('[', ']');
             var lastDot = trimmed.LastIndexOf('.');
             return lastDot >= 0 ? trimmed[(lastDot + 1)..].Trim('[', ']') : trimmed;
+        }
+
+        /// <summary>
+        /// DDL 주석 안의 식별자 후보 단어를 모은다.
+        ///
+        /// 토큰 스트림을 쓰는 이유는 RoundingSemanticsExtractor가 AST를 쓰는 이유와
+        /// 같다 - 정규식으로 원문에서 "--"를 찾으면 문자열 리터럴 안의 텍스트까지
+        /// 주석으로 오인한다. GetTokenStream은 렉서가 실제로 주석으로 분류한 것만
+        /// 돌려준다.
+        ///
+        /// 단어를 통째로 담고 컬럼명과 대조하는 쪽을 택했다 - 주석 안의 SQL을 다시
+        /// 파싱하려 들면 조각난 구문에서 실패하고, 실패는 곧 과소 포함이다.
+        /// </summary>
+        private static HashSet<string> CollectCommentWords(string? ddlText)
+        {
+            var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(ddlText)) return words;
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var tokens = parser.GetTokenStream(reader, out _);
+                if (tokens == null) return words;
+
+                foreach (var token in tokens)
+                {
+                    if (token.TokenType != TSqlTokenType.SingleLineComment
+                        && token.TokenType != TSqlTokenType.MultilineComment)
+                    {
+                        continue;
+                    }
+
+                    foreach (var word in Regex.Split(token.Text ?? string.Empty, "[^A-Za-z0-9_]+"))
+                    {
+                        if (word.Length > 0) words.Add(word);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 실패하면 보강 없이 진행한다. 기존 동작으로 돌아갈 뿐이다.
+                Log.Warning(ex, "[SchemaPromptColumnSelector] 주석 토큰 수집 실패 - 주석 컬럼 보강 없이 진행합니다.");
+            }
+
+            return words;
         }
     }
 }
