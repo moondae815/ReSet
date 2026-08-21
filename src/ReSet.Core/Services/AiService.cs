@@ -2909,12 +2909,14 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     // I1(2026-08-20 축 A 감사, 최종 전체 브랜치 리뷰) - 이 분기(지역
                     // 모델 경로의 「로직 흐름 요약」 생성)는 hasUdf 분기가 아예 없었다.
-                    // 그런데도 :2485의 `sectionType == "CrudAnalysis" ||
+                    // 그런데도 promptSb 조립부(아래)의
+                    // `sectionType == "CrudAnalysis" ||
                     // sectionType == "LogicAndVisualization"` 조건 때문에
                     // <referenced-ddl-source-code>(UDF DDL 전문)를 그대로 받는다 -
                     // UDF 소스를 손에 쥔 채 아무 계약도 없이 「로직 흐름」 산문을 쓰는
-                    // 셈이었다. CrudAnalysis 분기의 규칙 D(:2242, 위)와 같은 취지의
-                    // 문장을 여기도 추가해 두 분기 모두 계약을 받도록 닫는다.
+                    // 셈이었다. CrudAnalysis 분기의 hasUdf 규칙(위, "state only its
+                    // calling location and arguments" 문장)과 같은 취지의 문장을
+                    // 여기도 추가해 두 분기 모두 계약을 받도록 닫는다.
                     sbRules.Add($"{rIdx++}. When a referenced User Defined Function (UDF) is called, do NOT describe any function's behaviour - return value, branches, filters, defaults, or rounding - anywhere in this document. That belongs only in the function's own Spec.md, which the machine-derived 참조 함수 table links to.");
                 }
                 if (hasDynamicSql)

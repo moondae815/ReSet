@@ -2503,7 +2503,8 @@ END"
             // [Fix Round 1 - 갈래 2 고유 앵커] "The required H2 headers are exactly"는
             // BuildFunctionSpecificationPrompts에만 있는 문구다(갈래 1은 "The
             // specification H2 headers must strictly use these exact Korean titles"를
-            // 쓴다) - 이 앵커가 없으면 :284의 타입 분기가 깨져 이 픽스처가 갈래 1로
+            // 쓴다) - 이 앵커가 없으면 BuildSpecificationPrompts의 ObjectType ==
+            // CodeObjectType.Function 라우팅 분기가 깨져 이 픽스처가 갈래 1로
             // 떨어져도 표 배선 자체는 그대로라 테스트가 통과해버린다.
             var (service, handler) = CreateProbe();
 
@@ -2610,8 +2611,9 @@ END"
             //
             // [Fix Round 1 - 갈래 2 고유 앵커] 위 테스트와 같은 이유로 "The required
             // H2 headers are exactly"(BuildFunctionSpecificationPrompts에만 있는
-            // 문구)를 함께 단언한다 - 이게 없으면 타입 분기가 깨져 갈래 1로 떨어져도
-            // 이 테스트는 그대로 통과한다.
+            // 문구)를 함께 단언한다 - 이게 없으면 BuildSpecificationPrompts의
+            // ObjectType == CodeObjectType.Function 라우팅 분기가 깨져 갈래 1로
+            // 떨어져도 이 테스트는 그대로 통과한다.
             var (service, handler) = CreateProbe();
 
             await service.GenerateSpecificationAsync(ProbeCaseBranchFunctionSpDef(), "지침", null);
