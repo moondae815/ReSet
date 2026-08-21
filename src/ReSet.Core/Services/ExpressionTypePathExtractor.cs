@@ -45,15 +45,20 @@ namespace ReSet.Core.Services
     ///
     /// float/real은 money·decimal/numeric보다 우선순위가 더 높지만, 그 조합이
     /// 최종적으로 어느 방향으로 반올림/절사되는지는 실행으로 확인한 적이 없다.
-    /// 그래서 float/real은 "아는 타입"으로 인식은 하되(따라서 varchar 같은
-    /// 완전히 모르는 타입과는 로그상 구분되지만), 식에 하나라도 섞이면 결과
-    /// 방향을 단정하지 않고 행을 생략한다.
+    /// 그래서 float/real은 "아는 타입"으로 인식은 하되, 식에 하나라도 섞이면 결과
+    /// 방향을 단정하지 않고 행을 생략한다. int 계열끼리만 있는 경우(방향 갈림과
+    /// 무관해 실을 사실이 없다)도 같은 자리에서 조용히 생략한다 - 이 둘은 잎 타입을
+    /// "몰라서" 생략하는 것이 아니라 방향을 확정할 근거가 없어서/실을 내용이 없어서
+    /// 생략하는 것이라 아래 로그(M-c)의 대상이 아니다.
     ///
     /// [왜 잎 타입을 하나라도 모르면 행을 내지 않는가] 기계 확정 표에 추측이
     /// 섞이면 표 전체의 신뢰가 무너진다. 컬럼·변수·파라미터·리터럴 중 하나라도
     /// 타입을 모르면(선언을 못 찾음, 함수 호출·서브쿼리 등 이 추출기가 다루지
-    /// 않는 식 모양, 위 다섯 계열 밖의 타입, "(모호)" 컬럼) 그 CAST는 침묵한다
-    /// - 실패 방향이 안전한 쪽이다.
+    /// 않는 식 모양, 위 다섯 계열 밖의 타입, "(모호)" 컬럼, 한정자를 의존성
+    /// 테이블에 묶을 수 없는 컬럼) 그 CAST는 침묵한다 - 실패 방향이 안전한
+    /// 쪽이다. 이 경우는 `Log.Debug`를 남긴다(M-c) - 설계 문서(2026-08-22-
+    /// spec-machine-facts-design.md:90-91)가 "하나라도 모르면 행을 생략하고
+    /// 로그만 남긴다"고 정했다.
     /// </summary>
     public static class ExpressionTypePathExtractor
     {
@@ -260,7 +265,19 @@ namespace ReSet.Core.Services
 
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var resolved = ResolveType(node.Parameter, seen);
-                if (resolved == null) return; // 잎 타입을 하나라도 모르면 침묵한다.
+                if (resolved == null)
+                {
+                    // M-c 수정 라운드(리뷰): 설계 문서(2026-08-22-spec-machine-facts-design.md:
+                    // 90-91)는 "하나라도 모르면 행을 생략하고 로그만 남긴다"고 정한다. 이
+                    // 로그가 없으면 침묵한 CAST와 애초에 없던 CAST가 구분되지 않는다. SP
+                    // 하나에 CAST가 27개인 곳도 있어 Debug로 둔다(운영 로그를 채우지 않되,
+                    // 필요할 때 켜서 확인할 수 있게).
+                    Log.Debug(
+                        "[ExpressionTypePathExtractor] {Line}행의 CAST(... AS INT) 식 {Expression} - "
+                        + "잎 타입 중 하나 이상을 알 수 없어 표에서 침묵합니다.",
+                        node.StartLine, TargetText(node));
+                    return;
+                }
 
                 string sentence;
                 if (resolved == "decimal" || resolved == "numeric")
