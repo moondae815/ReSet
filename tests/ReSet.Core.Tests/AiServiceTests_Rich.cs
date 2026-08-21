@@ -2479,6 +2479,54 @@ END"
             Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
         }
 
+        private static SpDefinition ProbeExecutionSemanticsFunctionSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UF_GET_SETTLE",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.F() RETURNS INT AS BEGIN RETURN 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UF_GET_SETTLE", CodeObjectType.Function)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_Function_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## CRUD 분석`
+            // 헤더를 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접 단언하는
+            // 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeExecutionSemanticsFunctionSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_ShouldNotEmitExecutionSemanticsTableHeading()
+        {
+            // Task 14 (Critical) - LogicAndVisualization 분기는 `## 로직 흐름 요약`과
+            // `## 비즈니스 흐름 시각화`만 쓴다(`## CRUD 분석`은 쓰지 않는다). 실행 의미
+            // 표의 인트로는 "Copy this table verbatim into `## CRUD 분석`"라고 지시하므로,
+            // 이 분기에 표 형태로 그대로 실리면 자기모순 지시가 된다 - 모델이 자신의
+            // H2 제약을 어기고 `## CRUD 분석` 헤딩을 합성하거나, 표를 통째로 버릴
+            // 위험이 있다. 헤딩·표는 없어야 하고, 사실 자체는 참고 재료로는 남아야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "LogicAndVisualization", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
         private static SpDefinition ProbeCaseBranchSpDef()
         {
             var spDef = new SpDefinition
@@ -2521,17 +2569,44 @@ END"
         }
 
         [Fact]
-        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldPrefillTheCaseBranchTable()
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldNotEmitCaseBranchTableHeading()
         {
-            // 지역 모델 경로는 BuildSpecificationPrompts를 전혀 호출하지 않는다.
-            // CRUD 분석 갈래에서만 배선이 빠져도 실패해야 한다.
+            // Task 14 (Critical) - CrudAnalysis 분기는 `## CRUD 분석` 하나만 쓴다
+            // ("only one H2 header"). CASE 분기 표의 인트로는 "Copy this table
+            // verbatim into `## 로직 흐름 요약`"라고 지시하므로, 이 분기에 표
+            // 형태로 그대로 실리면 자기모순 지시가 된다 - 이 테스트를 고치기 전에
+            // 돌리면 헤딩이 실제로 실려 RED가 난다. 헤딩·표는 없어야 하고, 조건/결과
+            // 원문 자체는 참고 재료로는 남아야 한다.
             var (service, handler) = CreateProbe();
 
             await service.GenerateSpecSectionAsync(
                 ProbeCaseBranchSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
 
             var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
+        }
+
+        private static SpDefinition ProbeCaseBranchFunctionSpDef()
+        {
+            var spDef = ProbeCaseBranchSpDef();
+            spDef.ObjectType = CodeObjectType.Function;
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_Function_ShouldPrefillTheCaseBranchTable()
+        {
+            // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## 로직 흐름
+            // 요약` 헤더도 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접
+            // 단언하는 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeCaseBranchFunctionSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.Contains(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
         }
 
         [Fact]
