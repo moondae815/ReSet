@@ -72,9 +72,21 @@ UPDATE dbo.T WITH(NOLOCK) SET …      같음
 > 잡았다 — 초안 코드를 그대로 넣으면 `ExtractLockHints_StatementWithNoScan_ProducesNoRow`가
 > 실패한다. 조건을 "힌트가 있을 때만"으로 좁히면 둘이 함께 성립한다.
 
-`FROM`이 있을 때 대상 노드를 빼는 이유는 그것이 스캔이 아니라 갱신 대상 지시자이고 힌트를
-지지 않기 때문이다. 그대로 실으면 같은 테이블이 "힌트 있음 / 없음" 두 행으로 나와 독자를
-오도한다. 감사가 지적한 자리(`DELETE TSettleByOUT FROM … WITH(NOLOCK)`)는 1번에 걸린다.
+`FROM`이 있을 때 대상 노드를 빼는 이유는 그것이 스캔이 아니라 갱신 대상 지시자이고
+**보통은** 힌트를 지지 않기 때문이다 — 그대로 실으면 같은 테이블이 "힌트 있음 / 없음" 두
+행으로 나와 독자를 오도한다. 감사가 지적한 자리(`DELETE TSettleByOUT FROM … WITH(NOLOCK)`)는
+1번에 걸린다.
+
+> **2026-08-21 재리뷰 중 정정 — "빼는 이유" 문단이 단정으로 읽혔다.** 위 문단은 전형적인
+> 경우를 설명하려던 것인데 "힌트를 지지 않기 때문이다"가 규칙처럼 읽혀, 2번(힌트를 진
+> 대상 노드)이 `FROM`이 없을 때만 적용된다고 오독될 여지가 있었다. **2번은 `FROM` 절
+> 유무와 무관하게 적용된다** — 구현(`RecordTargetHint`)은 `INSERT`·`UPDATE`·`DELETE` 세
+> 연산 모두에서 `FROM` 절이 있든 없든 무조건 호출되고, 대상 노드 자신이 힌트를 지는지만
+> 본다. `FROM`이 있을 때 대상이 힌트를 지는 경우도 실제로 생긴다 — 자기참조 문장
+> (`UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T`)이 대상 힌트 행과 `FROM` 행을 각각 하나씩
+> 낸다는 것을 `ExtractLockHints_TargetAndFromReferToSameTableAndAlias_BothAreKept`가
+> 실측으로 증명한다. "보통 힌트를 지지 않는다"는 전형적인 경우의 설명일 뿐, 대상 노드가
+> 힌트를 지면 `FROM` 유무와 무관하게 2번으로 실린다.
 
 **힌트는 목록이다.** 한 참조에 `NOLOCK, READUNCOMMITTED`처럼 여럿이 붙을 수 있다. 칸은
 불리언이 아니라 힌트 목록이고, `READPAST`·`UPDLOCK` 같은 것도 그대로 실린다 —

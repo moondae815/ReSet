@@ -76,8 +76,16 @@ AST에서 확정해 프롬프트에 실어 준 값이라, 명세서가 옮겨 �
 
 행이 되는 자리는 둘이다(`DmlScopeExtractor.LockHintVisitor`) — ①그 문장의 `FROM`에 걸린
 모든 테이블 참조는 **힌트 유무와 무관하게 전수** 실린다(힌트가 없으면 칸에 `(없음)`이
-명시된다). ②`FROM`이 없는 `UPDATE`·`DELETE`의 대상 노드(`DELETE FROM dbo.T WITH(NOLOCK)`
-처럼 대상 자체가 스캔인 경우)는 **힌트를 지고 있을 때만** 행이 생긴다.
+명시된다). ②`INSERT`·`UPDATE`·`DELETE`의 **대상 노드**는 **자신이 힌트를 지고 있을 때** 행이
+생긴다 — **이 조건은 `FROM` 절 유무와 무관하다.** `RecordTargetHint`는 세 연산 모두에서
+`FROM` 절이 있든 없든 무조건 호출되고, 대상 노드 자신의 `TableHints`만 본다
+(`DmlScopeExtractor.cs:410,417,424`). `FROM`이 있을 때 대상 노드는 보통 갱신 대상
+지시자일 뿐이라 힌트를 지지 않아 규칙 ②에 자연히 안 걸리지만, **지면 실린다** — 자기참조
+문장(`UPDATE dbo.T WITH(NOLOCK) ... FROM dbo.T`)이 대상 힌트 행과 `FROM` 행을 각각 하나씩,
+총 2행을 낸다는 것을 `ExtractLockHints_TargetAndFromReferToSameTableAndAlias_BothAreKept`가
+실측으로 증명한다. `FROM`이 없어 대상 자체가 스캔인 경우(`DELETE FROM dbo.T WITH(NOLOCK)`)도
+같은 조건(대상이 힌트를 짐)으로 행이 생긴다 — `FROM` 유무는 이 규칙의 조건이 아니라, 그
+문장에 대상 노드 말고 다른 스캔 자리가 더 있는지를 가를 뿐이다.
 
 **행이 아예 없는 것이 정상인 경우는, 그 문장에 `FROM` 참조가 하나도 없고 대상 노드에도
 힌트가 없을 때뿐이다** — 예: `UPDATE T SET C = 1 WHERE X = 1`, `DELETE FROM T`(힌트 없음),
