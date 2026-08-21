@@ -1037,5 +1037,31 @@ END";
             Assert.Equal("S", fact.Alias);
             Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
         }
+
+        [Fact]
+        public void ExtractLockHints_ReferencesOnDifferentLines_EachReportsItsOwnLine()
+        {
+            // 문장 줄을 쓰면 한 문장 안의 여러 참조가 전부 같은 줄로 찍혀 "문장" 칸이
+            // 이미 주는 정보를 되풀이할 뿐이고, 독자가 어느 스캔인지 원문에서 못 찾는다.
+            // INS_EXTRA4PLCARD의 INSERT 1은 52~174행에 걸쳐 있는데 그 안의 참조들이
+            // 전부 "52"로 찍혔다(수정 라운드 1 실물 검증 실측). Line은 참조 노드 자신의
+            // 줄이어야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM dbo.TSettleMst A WITH(NOLOCK)
+    JOIN dbo.TPGProperty PG
+        ON A.PGName = PG.PGName
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var a = Assert.Single(facts, f => f.Alias == "A");
+            var pg = Assert.Single(facts, f => f.Alias == "PG");
+            Assert.NotEqual(a.Line, pg.Line);
+            Assert.Equal(5, a.Line);
+            Assert.Equal(6, pg.Line);
+        }
     }
 }

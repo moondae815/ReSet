@@ -340,13 +340,12 @@ namespace ReSet.Core.Services
             {
                 _ordinals.TryGetValue(operation, out var n);
                 _ordinals[operation] = ++n;
-                var line = statement.StartLine;
 
                 if (from != null)
                 {
                     var collector = new FromTableCollector();
                     foreach (var reference in from.TableReferences) reference.Accept(collector);
-                    foreach (var table in collector.Tables) Add(operation, n, line, table);
+                    foreach (var table in collector.Tables) Add(operation, n, table);
                 }
 
                 // 대상 노드는 힌트를 질 때만 싣는다(INSERT INTO T WITH(TABLOCK),
@@ -358,11 +357,27 @@ namespace ReSet.Core.Services
                 // 조건은 ExtractLockHints_StatementWithNoScan_ProducesNoRow에서 실패했다).
                 if (target is NamedTableReference named && named.TableHints.Count > 0)
                 {
-                    Add(operation, n, line, named);
+                    Add(operation, n, named);
                 }
             }
 
-            private void Add(string operation, int ordinal, int line, NamedTableReference node)
+            /// <summary>
+            /// Line은 문장 시작 줄이 아니라 참조 노드 자신의 줄이다.
+            ///
+            /// [왜 참조별 줄인가 - 수정 라운드 1 실물 검증 실측]
+            /// 잠금 힌트는 문장 하나에서 행이 여럿 난다(FromTableCollector가 FROM의
+            /// 테이블마다 하나씩 낸다). 문장 줄을 쓰면 그 여럿이 전부 같은 줄로 찍혀
+            /// "문장" 칸이 이미 주는 정보를 되풀이할 뿐이고, 독자가 어느 스캔을 가리키는지
+            /// 원문에서 찾을 수 없다. INS_EXTRA4PLCARD의 INSERT 1은 52~174행에 걸쳐 있는데
+            /// 문장 줄을 쓰면 그 안의 참조가 전부 "52"로 찍혔다.
+            ///
+            /// ReferencedFunctionCallFact(CallCollector.Record, 이 파일 아래쪽)가 이미
+            /// 같은 이유로 호출 노드 자신의 줄을 쓴다 - 그 표는 인접 호출을 줄 번호로
+            /// 구분해 감사에서 실적이 있다. DmlScopeFact·SetPredicateFact가 문장 줄을
+            /// 쓰는 것은 문장당 행이 하나뿐이라 되풀이 문제가 없기 때문이고, 잠금 힌트는
+            /// 그 전제가 깨지므로 같은 규칙을 따를 수 없다.
+            /// </summary>
+            private void Add(string operation, int ordinal, NamedTableReference node)
             {
                 var table = string.Join(
                     ".", node.SchemaObject.Identifiers.Select(i => i.Value));
@@ -370,6 +385,7 @@ namespace ReSet.Core.Services
                 var hints = node.TableHints
                     .Select(h => h.HintKind.ToString().ToUpperInvariant())
                     .ToList();
+                var line = node.StartLine;
 
                 if (Facts.Any(f =>
                         f.Operation == operation && f.StatementOrdinal == ordinal &&
