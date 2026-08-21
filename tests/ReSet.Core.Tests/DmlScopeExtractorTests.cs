@@ -352,6 +352,77 @@ END";
         }
 
         [Fact]
+        public void Extract_InsertSelectWithOrderBy_CarriesTheColumns()
+        {
+            // STAT_PGCOLLECT_INS:113 실측. ORDER BY INYMD, CLIENTID, PGNAME, MALLID가
+            // 문서 어디에도 없어 🟡이었다(2026-08-21 축 A 감사). 존재 여부가 아니라
+            // 컬럼 목록을 싣는다 - 더 충실하고 비용이 같다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A, B)
+    SELECT INYMD, CLIENTID FROM dbo.TSource
+    GROUP BY INYMD, CLIENTID
+    ORDER BY INYMD, CLIENTID
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "INYMD", "CLIENTID" }, fact.OrderByColumns);
+        }
+
+        [Fact]
+        public void Extract_InsertWithoutOrderBy_HasEmptyOrderByList()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A) SELECT X FROM dbo.TSource
+END";
+
+            Assert.Empty(Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).OrderByColumns);
+        }
+
+        [Fact]
+        public void Extract_UpdateAndDelete_HaveEmptyOrderBy()
+        {
+            // UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하다. 표에서는 "—"로 렌더된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE X = 1
+    DELETE FROM dbo.T WHERE X = 2
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            Assert.All(facts, f => Assert.Empty(f.OrderByColumns));
+        }
+
+        [Fact]
+        public void Extract_InsertFromUnionAllWithTopLevelOrderBy_CarriesTheColumns()
+        {
+            // UP_Util_PG_Client_CMRate_Ins의 INSERT 2(76행)·INSERT 4(159행)가 UNION ALL
+            // 원천이다(웨이브 1 실측). 프로브(2026-08-21)로 확인: 최상위 ORDER BY는
+            // ScriptDom에서 BinaryQueryExpression 자신의 OrderByClause에 붙는다 -
+            // 어느 갈래(QuerySpecification)에도 붙지 않는다. Select as QuerySpecification
+            // 단일 캐스팅만 하면 이 ORDER BY를 통째로 놓친다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.T (A, B)
+    SELECT A, B FROM dbo.S1 WHERE X = 1
+    UNION ALL
+    SELECT A, B FROM dbo.S2 WHERE Y = 2
+    ORDER BY A, B
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "A", "B" }, fact.OrderByColumns);
+        }
+
+        [Fact]
         public void ExtractSetPredicates_TopLevelNotIn_ShouldCaptureEveryLiteral()
         {
             // EXPECT_PROC 갱신 1(object_definition.sql:39) 실측 형태. 명세서는 이 9개

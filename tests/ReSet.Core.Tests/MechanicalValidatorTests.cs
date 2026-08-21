@@ -2793,7 +2793,7 @@ END"
             {
                 DmlScopeFacts = new[]
                 {
-                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>())
                 }
             };
 
@@ -2810,8 +2810,8 @@ END"
             {
                 DmlScopeFacts = new[]
                 {
-                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }),
-                    new DmlScopeFact("UPDATE", 331, "A", new[] { "YMD" }, true, Array.Empty<string>())
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>()),
+                    new DmlScopeFact("UPDATE", 331, "A", new[] { "YMD" }, true, Array.Empty<string>(), Array.Empty<string>())
                 }
             };
             var markdown = RequiredHeadersMarkdown()
@@ -2832,7 +2832,7 @@ END"
             {
                 DmlScopeFacts = new[]
                 {
-                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>())
                 }
             };
             var markdown = RequiredHeadersMarkdown()
@@ -2857,7 +2857,7 @@ END"
             {
                 DmlScopeFacts = new[]
                 {
-                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" })
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>())
                 }
             };
             var markdown = RequiredHeadersMarkdown()

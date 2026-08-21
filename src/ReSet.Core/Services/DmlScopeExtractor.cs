@@ -23,13 +23,35 @@ namespace ReSet.Core.Services
     /// 후자는 PredicateColumns와 겹칠 수 있다(같은 WHERE 텍스트가 필터와 조인
     /// 역할을 동시에 하기 때문).
     /// </param>
+    /// <param name="OrderByColumns">
+    /// INSERT ... SELECT 의 최상위 ORDER BY 컬럼. UPDATE·DELETE는 최상위 ORDER BY가
+    /// 문법상 불가하므로 항상 빈 목록이고 표에서 "—"로 렌더된다.
+    ///
+    /// [존재 여부가 아니라 목록인 이유 - 2026-08-21 축 A 감사]
+    /// STAT_PGCOLLECT_INS:113의 `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서
+    /// 어디에도 없었다. 불리언으로 담으면 "있다"만 알고 무엇으로 정렬하는지는 여전히
+    /// 모른다. 컬럼 목록을 담는 비용이 같으므로 더 충실한 쪽을 택한다.
+    ///
+    /// [원천이 UNION일 때도 놓치지 않는 이유 - 2026-08-21 구현 중 프로브 실측]
+    /// ScriptDom에서 OrderByClause는 QuerySpecification이 아니라 그 공통 기반 클래스인
+    /// QueryExpression에 선언돼 있다(리플렉션으로 확인). 그래서 UNION으로 묶인 원천의
+    /// 최상위 ORDER BY는 어느 갈래(QuerySpecification)에도 붙지 않고 UNION 노드 자신인
+    /// BinaryQueryExpression.OrderByClause에 붙는다 - 갈래마다 OrderByClause는 항상
+    /// null이었다(직접 파싱해 확인). InsertSource.Select를 QuerySpecification으로
+    /// 좁혀 캐스팅하면 이 ORDER BY를 통째로 놓친다. Select를 QueryExpression 그대로
+    /// 두고 OrderByClause에 바로 접근하면 QuerySpecification·BinaryQueryExpression·
+    /// QueryParenthesisExpression 세 경우 모두 같은 코드로 잡힌다 - 실측: 실제 코퍼스의
+    /// UP_Util_PG_Client_CMRate_Ins INSERT 2(76행)·INSERT 4(159행)는 UNION ALL 원천이지만
+    /// 원문에 ORDER BY 자체가 없어(grep 확인) 이 필드는 빈 목록이 맞다.
+    /// </param>
     public sealed record DmlScopeFact(
         string Operation,
         int Line,
         string Target,
         IReadOnlyList<string> PredicateColumns,
         bool DateParameterApplied,
-        IReadOnlyList<string> JoinKeys);
+        IReadOnlyList<string> JoinKeys,
+        IReadOnlyList<string> OrderByColumns);
 
     /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
     /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
@@ -609,7 +631,29 @@ namespace ReSet.Core.Services
 
                 Facts.Add(new DmlScopeFact(
                     "INSERT", node.StartLine, TextOf(node.Target),
-                    predicateColumns, dateApplied, joinKeys));
+                    predicateColumns, dateApplied, joinKeys, OrderByColumnsOf(node.InsertSource)));
+            }
+
+            /// <summary>
+            /// INSERT 원천의 최상위 ORDER BY 컬럼을 뽑는다.
+            ///
+            /// [Select를 QuerySpecification으로 좁히지 않는 이유] OrderByClause는
+            /// QuerySpecification이 아니라 그 공통 기반 QueryExpression에 선언돼 있다
+            /// (2026-08-21 프로브 실측, 이 파일 DmlScopeFact.OrderByColumns 문서 참고).
+            /// UNION 원천의 최상위 ORDER BY는 BinaryQueryExpression 자신에 붙고 갈래
+            /// QuerySpecification에는 붙지 않으므로, Select를 QueryExpression 그대로 두고
+            /// OrderByClause에 바로 접근해야 QuerySpecification·BinaryQueryExpression·
+            /// QueryParenthesisExpression 세 경우가 한 코드로 잡힌다.
+            /// </summary>
+            private static IReadOnlyList<string> OrderByColumnsOf(InsertSource? source)
+            {
+                var orderBy = (source as SelectInsertSource)?.Select?.OrderByClause;
+                if (orderBy == null) return Array.Empty<string>();
+
+                return orderBy.OrderByElements
+                    .Select(e => TextOf(e.Expression))
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .ToList();
             }
 
             /// <summary>
@@ -681,7 +725,9 @@ namespace ReSet.Core.Services
                     TextOf(target),
                     predicateColumns,
                     dateApplied,
-                    joinKeys));
+                    joinKeys,
+                    // UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하다 - 항상 빈 목록.
+                    Array.Empty<string>()));
             }
         }
 
