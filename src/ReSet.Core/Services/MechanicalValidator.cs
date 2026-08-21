@@ -2819,9 +2819,16 @@ namespace ReSet.Core.Services
                 var displayScope = facts[0].Scope;
                 var lineToken = line.ToString();
 
+                // [MarkdownTableCellCodec.SplitRow로 나누는 이유 - 2026-08-21 최종 브랜치
+                // 리뷰 재라운드 ⑤] 컬럼·범위 칸도 렌더 시점에 EscapeTableCell을 거친다
+                // (AiService.cs:957-958) - 대괄호 식별자(`A.[C|D]`)처럼 `|`가 든 컬럼은
+                // `\|`로 이스케이프된 채 나온다. 단순 `r.Split('|')`는 그 자리에서도
+                // 갈라져 모델이 표를 원문 그대로 옮겨도 컬럼이 일치하지 않는다 -
+                // LockHints·ORDER BY·객체 선언과 같은 실패 모양(ExtractSetPredicateLiteralCell
+                // 문서의 실측 근거와 동일).
                 var matchingRows = rowLines.Where(r =>
                 {
-                    var cells = r.Split('|').Select(c => c.Trim()).ToList();
+                    var cells = MarkdownTableCellCodec.SplitRow(r);
                     return cells.Any(c => c == lineToken)
                         && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase))
                         && cells.Any(c => string.Equals(c, displayScope, StringComparison.OrdinalIgnoreCase));
@@ -2961,39 +2968,12 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 마크다운 표 행을 `|`로 나누되, AiService.EscapeTableCell이 렌더 시점에
-        /// 남긴 `\|`(이스케이프된 파이프)는 셀 경계로 보지 않고 칸 내용의 일부로
-        /// 되돌린다(`|`로 복원). ExtractSetPredicateLiteralCell 문서의 실측 근거
-        /// 참고 - 이 복원이 없으면 리터럴 안의 `|`가 행 자체를 잘못 쪼갠다.
+        /// 마크다운 표 행을 `|`로 나누는 별칭. 실제 구현은
+        /// <see cref="MarkdownTableCellCodec.SplitRow"/>다(2026-08-21 최종 브랜치 리뷰
+        /// 재라운드 Minor(설계) - 렌더 쪽 이스케이프와 짝을 맞추려고 중립 헬퍼로
+        /// 옮겼다. MarkdownTableCellCodec 문서 참고).
         /// </summary>
-        private static List<string> SplitTableRowCells(string row)
-        {
-            var cells = new List<string>();
-            var current = new StringBuilder();
-
-            for (var i = 0; i < row.Length; i++)
-            {
-                var c = row[i];
-                if (c == '\\' && i + 1 < row.Length && row[i + 1] == '|')
-                {
-                    current.Append('|');
-                    i++;
-                    continue;
-                }
-
-                if (c == '|')
-                {
-                    cells.Add(current.ToString().Trim());
-                    current.Clear();
-                    continue;
-                }
-
-                current.Append(c);
-            }
-
-            cells.Add(current.ToString().Trim());
-            return cells;
-        }
+        private static List<string> SplitTableRowCells(string row) => MarkdownTableCellCodec.SplitRow(row);
 
         /// <summary>
         /// 집합 술어 표의 `리터럴 목록` 칸 하나를 SQL 리터럴 문법을 존중해
@@ -3319,8 +3299,8 @@ namespace ReSet.Core.Services
             // 감싸 싣는다 - EXECUTE AS '사용자' 리터럴처럼 `|`가 든 값은 `\|`로 이스케이프된
             // 채로 표에 나온다. 이스케이프하지 않은 원문으로 Contains를 하면 모델이 표를
             // 원문 그대로(이스케이프된 채로) 옮겨도 영원히 찾을 수 없다.
-            var found = sectionText.Contains(AiService.EscapeTableCell(fact.QualifiedName), StringComparison.Ordinal)
-                && sectionText.Contains(AiService.EscapeTableCell(expectedOptionsText), StringComparison.Ordinal);
+            var found = sectionText.Contains(MarkdownTableCellCodec.Escape(fact.QualifiedName), StringComparison.Ordinal)
+                && sectionText.Contains(MarkdownTableCellCodec.Escape(expectedOptionsText), StringComparison.Ordinal);
             if (found) return;
 
             var message =
@@ -3391,7 +3371,7 @@ namespace ReSet.Core.Services
                 // fact.OrderByExpressions))) - ORDER BY는 임의 식이라 비트 OR(`A | B`) 같은
                 // `|`가 든 식이 문법상 유효하다. 이스케이프하지 않은 joined로 Contains하면
                 // 그런 식은 모델이 표를 원문 그대로 옮겨도 찾을 수 없다.
-                if (sectionText.Contains(AiService.EscapeTableCell(joined), StringComparison.Ordinal)) continue;
+                if (sectionText.Contains(MarkdownTableCellCodec.Escape(joined), StringComparison.Ordinal)) continue;
 
                 var message =
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 ORDER BY 값(`{joined}`)이 "

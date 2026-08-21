@@ -668,26 +668,13 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
-        /// 마크다운 표 셀에 넣을 수 있게 다듬는다. SET 우변에 비트 연산자 `|`가 들어가면
-        /// (예: FLAGS | 4) 셀 경계로 읽혀 표가 통째로 어긋난다. 개행도 같은 이유로 접는다.
-        ///
-        /// [internal인 이유 - 2026-08-21 최종 리뷰 Important 1] MechanicalValidator가
-        /// 대조 시 같은 이스케이프를 거쳐야 한다. 대조 쪽이 이스케이프되지 않은 원문과
-        /// 렌더된(이스케이프된) 표를 그대로 비교하면, 값에 `|`가 든 표는(대괄호 식별자,
-        /// 비트 OR 식, EXECUTE AS 리터럴 등) 모델이 표를 원문 그대로 옮겨도 영원히
-        /// 대조를 통과할 수 없다 - 렌더와 대조가 이 함수 하나를 공유해야 그 왕복이
-        /// 성립한다. 두 곳이 각자 이스케이프 규칙을 베끼면 한쪽만 고쳤을 때 다시 갈린다.
+        /// 마크다운 표 셀 이스케이프의 별칭. 실제 구현은
+        /// <see cref="MarkdownTableCellCodec.Escape"/>다 - 렌더(여기)와 대조
+        /// (MechanicalValidator)가 같은 함수를 공유해야 이스케이프 왕복이 성립하므로,
+        /// 어느 한쪽 클래스에 속한 메서드가 아니라 중립 헬퍼로 둔다(2026-08-21 최종
+        /// 브랜치 리뷰 재라운드 Minor(설계) - MarkdownTableCellCodec 문서 참고).
         /// </summary>
-        internal static string EscapeTableCell(string expression)
-        {
-            if (string.IsNullOrEmpty(expression)) return string.Empty;
-
-            return expression
-                .Replace("\r\n", " ")
-                .Replace("\n", " ")
-                .Replace("\r", " ")
-                .Replace("|", "\\|");
-        }
+        private static string EscapeTableCell(string expression) => MarkdownTableCellCodec.Escape(expression);
 
         /// <summary>
         /// UPDATE fill-in-the-blank 템플릿을 도입하는 규칙 문장. 번호 접두(`{ruleIndex}. `)만

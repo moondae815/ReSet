@@ -3292,6 +3292,29 @@ END"
         }
 
         [Fact]
+        public void Validate_SetPredicateColumnContainsPipe_RenderedEscaped_ShouldPass()
+        {
+            // [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤] AiService.BuildSetPredicateTableLines는
+            // 컬럼·범위 칸도 EscapeTableCell을 거친다(AiService.cs:957-958) - 대괄호
+            // 식별자(`A.[C|D]`)처럼 `|`가 든 컬럼은 `\|`로 이스케이프된 채 표에 나온다.
+            // 그런데 이 검사(위 매칭 Where절)는 그 행을 `r.Split('|')`로 단순 분할했다 -
+            // 이스케이프를 복원하지 않으면 셀이 잘못 쪼개져 모델이 표를 원문 그대로
+            // 옮겨도 컬럼이 일치하지 않는다(LockHints·ORDER BY·객체 선언과 같은 실패 모양).
+            var fact = new SetPredicateFact("UPDATE", 12, "A.[C|D]", false, new[] { "'X'" });
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
+            var escapedColumn = fact.Column.Replace("|", "\\|");
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| UPDATE 1 | 12 | {escapedColumn} | IN | 최상위 | 1 | 'X' |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
         public void From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull()
         {
             // [조기 반환과 이 재료의 관계 - 설계 §6.3의 예외] SpecExpectations.From의
