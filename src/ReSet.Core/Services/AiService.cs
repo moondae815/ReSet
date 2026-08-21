@@ -446,7 +446,7 @@ namespace ReSet.Core.Services
             // use these exact Korean titles" 규칙이 `## CRUD 분석`·`## 로직 흐름 요약`
             // 둘 다 필수 H2로 요구한다 - 두 표 모두 표 그대로 준다.
             rules.AddRange(BuildMachineFactBlockLines(
-                spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true));
+                spDef, MachineFactPresentation.Table, MachineFactPresentation.Table));
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
@@ -1105,60 +1105,100 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 한 사실 종류(실행 의미 · CASE 분기)를 한 갈래의 프롬프트에 어떻게 실을지 -
+        /// Task 17, 최종 브랜치 리뷰 2차(Important). 이전에는 bool 두 개
+        /// (crudAnalysisSectionPresent · logicFlowSectionPresent)로 "표냐 참고
+        /// 재료냐"만 표현했다. 그런데 `OverviewAndParameters` 갈래는 실행 의미는
+        /// 참고 재료로 받되 CASE 분기는 아예 받지 않아야 하는 세 번째 값이 필요했고,
+        /// bool로는 그 값을 표현할 수 없었다 - 그래서 이 갈래가 `BuildMachineFactBlockLines`를
+        /// 부르지 않고 `BuildExecutionSemanticsReferenceMaterialLines`를 직접 불러
+        /// 두 번째 진입점을 만들었다. 진입점이 둘이면 표 하나가 늘 때 이 갈래만
+        /// 조용히 못 받는 회귀를 문서만으로는 못 막는다(설계 D5가 걱정한 바로 그
+        /// 모양). 그래서 상태를 3상태로 넓혀 진입점을 다시 하나로 되돌린다.
+        /// </summary>
+        private enum MachineFactPresentation
+        {
+            /// <summary>이 갈래가 목적지 H2를 직접 쓴다 - 표 그대로 싣는다.</summary>
+            Table,
+
+            /// <summary>이 갈래는 목적지 H2를 쓰지 않지만 산문이 이 사실을 서술할 수
+            /// 있다 - 표가 아니라 참고 재료로 싣는다(`BuildLockHintReferenceMaterialLines`
+            /// 선례).</summary>
+            Reference,
+
+            /// <summary>이 갈래의 서술 대상이 아니다 - 아예 싣지 않는다. 예:
+            /// `OverviewAndParameters`에 CASE 분기(`## 로직 흐름 요약` 소관, 개요와
+            /// 무관).</summary>
+            Omit
+        }
+
+        /// <summary>
         /// 새로 추가되는 기계 확정 표를 전부 모아 프롬프트에 붙일 줄 목록으로 돌려준다.
         ///
         /// [왜 갈래마다 Collect를 부르지 않는가 - 설계 D5]
-        /// 프롬프트 빌더는 4갈래이고(SP 전체 · 함수 · 지역 모델 CRUD · 지역 모델 로직),
-        /// 지역 모델 경로는 BuildSpecificationPrompts를 아예 호출하지 않는다. 표 하나를
-        /// 늘릴 때마다 네 곳에 같은 조건문을 베끼면 "한 갈래만 고쳤다"는 이 코드베이스의
-        /// 반복 사고가 그대로 재생산된다. 진입점을 하나로 두면 표를 늘려도 갈래는
-        /// 바뀌지 않는다.
+        /// 프롬프트 빌더는 5갈래이고(SP 전체 · 함수 · 지역 모델 CRUD · 지역 모델 로직 ·
+        /// 지역 모델 개요), 지역 모델 경로는 BuildSpecificationPrompts를 아예 호출하지
+        /// 않는다. 표 하나를 늘릴 때마다 다섯 곳에 같은 조건문을 베끼면 "한 갈래만
+        /// 고쳤다"는 이 코드베이스의 반복 사고가 그대로 재생산된다. 진입점을 하나로
+        /// 두면 표를 늘려도 갈래는 바뀌지 않는다.
         ///
         /// 기존 표 6종은 이 함수로 옮기지 않는다 - 갈래별 렌더 조건에 미묘한 비대칭이
         /// 있어(집합 술어는 dmlScopeFacts가 비면 렌더하지 않는다) 잘못 통일하면 기존
         /// 표가 조용히 사라지거나 더해진다.
         ///
-        /// [목적지 절 두 플래그를 받는 이유 - Task 14 (Critical), 2026-08-22 최종 브랜치
-        /// 리뷰] 진입점을 하나로 둔 것 자체는 옳았지만, 표 두 종의 인트로가 서로 다른
-        /// 목적지 H2("실행 의미"는 `## CRUD 분석`, "CASE 분기"는 `## 로직 흐름 요약`)를
-        /// 못 박는데, 지역 모델의 두 절 분할 갈래(`CrudAnalysis`·`LogicAndVisualization`)는
-        /// 서로 다른 H2 부분집합만 쓴다 - `CrudAnalysis`는 `## CRUD 분석` 하나만 허용하고
-        /// (H2 제약이 "오직 하나만"이라고 명시한다), `LogicAndVisualization`은 `## 로직
-        /// 흐름 요약`과 `## 비즈니스 흐름 시각화` 둘을 허용하지만(H2 제약이 "오직 하나만"이
-        /// 아니다) 그 둘 중 어느 쪽에도 `## CRUD 분석`은 없다. 갈래 구분 없이 표 둘을
-        /// 함께 냈더니 "자신이 쓸 수 없는 절에 표를
-        /// 넣으라"는 자기모순 지시가 됐다 - 모델이 그 H2 제약을 어기고 엉뚱한 헤딩까지
-        /// 합성하거나(귀결: 문서에 같은 `###` 헤딩이 두 번 생기고
-        /// `MechanicalValidator.LocateHeadingSection`은 `FindIndexOutsideFence`로 첫
-        /// 일치만 보므로 뒤 사본이 조용히 사라진다), 표 자체를 버려 그 갈래의 산출물에는
-        /// 그 표가 아예 없는 둘 중 하나가 난다. 그래서 갈래가 목적지 H2를 실제로 쓰는지를
-        /// 호출부가 알려주고, 쓰지 않으면 `BuildLockHintReferenceMaterialLines`가 세운
-        /// 선례(표가 아니라 참고 재료)를 그대로 따른다 - 진입점은 하나로 남고, 표를
-        /// 늘려도 네 갈래에 자동으로 실리는 이점은 그대로 유지된다.
+        /// [목적지 절 상태를 사실 종류마다 받는 이유 - Task 14 (Critical), 2026-08-22
+        /// 최종 브랜치 리뷰 / Task 17, 최종 브랜치 리뷰 2차] 진입점을 하나로 둔 것
+        /// 자체는 옳았지만, 표 두 종의 인트로가 서로 다른 목적지 H2("실행 의미"는
+        /// `## CRUD 분석`, "CASE 분기"는 `## 로직 흐름 요약`)를 못 박는데, 다섯 갈래가
+        /// 서로 다른 H2 부분집합만 쓴다 - `CrudAnalysis`는 `## CRUD 분석` 하나만
+        /// 허용하고(H2 제약이 "오직 하나만"이라고 명시한다), `LogicAndVisualization`은
+        /// `## 로직 흐름 요약`과 `## 비즈니스 흐름 시각화` 둘을 허용하며(H2 제약이
+        /// "오직 하나만"이 아니다) 그 둘 중 어느 쪽에도 `## CRUD 분석`은 없고,
+        /// `OverviewAndParameters`는 `## 개요`와 `## 파라미터 목록`만 허용해 `## CRUD
+        /// 분석`도 `## 로직 흐름 요약`도 없다. 갈래 구분 없이 표를 함께 냈더니 "자신이
+        /// 쓸 수 없는 절에 표를 넣으라"는 자기모순 지시가 됐다 - 모델이 그 H2 제약을
+        /// 어기고 엉뚱한 헤딩까지 합성하거나(귀결: 문서에 같은 `###` 헤딩이 두 번
+        /// 생기고 `MechanicalValidator.LocateHeadingSection`은 `FindIndexOutsideFence`로
+        /// 첫 일치만 보므로 뒤 사본이 조용히 사라진다), 표 자체를 버려 그 갈래의
+        /// 산출물에는 그 표가 아예 없는 둘 중 하나가 난다. 그래서 각 사실 종류마다
+        /// 갈래가 <see cref="MachineFactPresentation"/> 중 무엇을 원하는지 호출부가
+        /// 명시적으로 알려준다 - `Table`(목적지 H2를 직접 쓴다) · `Reference`(목적지
+        /// H2는 안 쓰지만 산문이 서술할 수 있다 - `BuildLockHintReferenceMaterialLines`
+        /// 선례) · `Omit`(이 갈래의 서술 대상이 아니다). 진입점은 하나로 남고, 표를
+        /// 늘려도 다섯 갈래에 자동으로 실리는 이점은 그대로 유지되며, 각 갈래가 왜 그
+        /// 값을 받는지가 호출부 코드에 남는다(문서만 읽는다는 가정에 기대지 않는다).
         /// </summary>
         private static List<string> BuildMachineFactBlockLines(
-            SpDefinition spDef, bool crudAnalysisSectionPresent, bool logicFlowSectionPresent)
+            SpDefinition spDef,
+            MachineFactPresentation executionSemanticsPresentation,
+            MachineFactPresentation caseBranchPresentation)
         {
             var lines = new List<string>();
 
-            var executionSemantics = ExecutionSemanticsFacts.Collect(
-                spDef.DdlText,
-                spDef.StaticAnalysis,
-                spDef.ObjectKey,
-                ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
-            if (executionSemantics.Count > 0)
+            if (executionSemanticsPresentation != MachineFactPresentation.Omit)
             {
-                lines.AddRange(crudAnalysisSectionPresent
-                    ? BuildExecutionSemanticsTableLines(executionSemantics)
-                    : BuildExecutionSemanticsReferenceMaterialLines(executionSemantics));
+                var executionSemantics = ExecutionSemanticsFacts.Collect(
+                    spDef.DdlText,
+                    spDef.StaticAnalysis,
+                    spDef.ObjectKey,
+                    ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
+                if (executionSemantics.Count > 0)
+                {
+                    lines.AddRange(executionSemanticsPresentation == MachineFactPresentation.Table
+                        ? BuildExecutionSemanticsTableLines(executionSemantics)
+                        : BuildExecutionSemanticsReferenceMaterialLines(executionSemantics));
+                }
             }
 
-            var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
-            if (caseBranches.Count > 0)
+            if (caseBranchPresentation != MachineFactPresentation.Omit)
             {
-                lines.AddRange(logicFlowSectionPresent
-                    ? BuildCaseBranchTableLines(caseBranches)
-                    : BuildCaseBranchReferenceMaterialLines(caseBranches));
+                var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
+                if (caseBranches.Count > 0)
+                {
+                    lines.AddRange(caseBranchPresentation == MachineFactPresentation.Table
+                        ? BuildCaseBranchTableLines(caseBranches)
+                        : BuildCaseBranchReferenceMaterialLines(caseBranches));
+                }
             }
 
             return lines;
@@ -1551,7 +1591,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             // `## CRUD 분석`·`## 로직 흐름 요약` 둘 다 필수 H2로 요구한다 - 두 표 모두
             // 표 그대로 준다.
             var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(
-                functionDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true);
+                functionDef, MachineFactPresentation.Table, MachineFactPresentation.Table);
             if (machineFactLinesForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
@@ -2656,34 +2696,29 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 }
 
                 // 배선 지점 4(실행 의미 참고 재료) - Task 17, 최종 브랜치 리뷰 2차.
-                // `BuildMachineFactBlockLines`의 호출부 네 곳(SP 전체·함수·CrudAnalysis·
-                // LogicAndVisualization) 중 이 갈래(`OverviewAndParameters`)만 빠져
-                // 있었다. 결함 E(F1 무리 - StaticAnalysis가 이미 확정한 "크로스 DB
+                // `BuildMachineFactBlockLines`의 다섯 호출부(SP 전체·함수·CrudAnalysis·
+                // LogicAndVisualization·이 갈래) 중 이 갈래(`OverviewAndParameters`)만
+                // 빠져 있었다. 결함 E(F1 무리 - StaticAnalysis가 이미 확정한 "크로스 DB
                 // 참조 아님"을 명세서가 "단언할 수 없습니다"로 되짚은 사고)의 실제
                 // 앵커가 `## 개요` 절 안에서 확인됐다(UF_Get_CLComm4MobileCo의
                 // Spec.md, DatabasePlacementExtractor 문서 참고) - 이 갈래도 근거
-                // 재료를 받아야 한다. `BuildMachineFactBlockLines`를 그대로 부르지
-                // 않는 이유는 그 함수가 CASE 분기 사실도 함께 실어서다 - CASE 분기는
-                // `## 로직 흐름 요약` 소관이고 이 갈래(`## 개요`·`## 파라미터 목록`)의
-                // 서술 대상이 아니다. 감사 🟡이 난 자리는 DB 배치뿐이고, CASE 분기를
-                // 더하면 프롬프트만 길어지고 모델이 산만해질 뿐 대응하는 결함이 없다.
-                // `BuildExecutionSemanticsReferenceMaterialLines`(Task 14)를 직접
-                // 재사용해 다섯 종류(DB 배치·집계 대입·@@ROWCOUNT·커서 수명·식 타입
-                // 경로) 전부를 준다 - "이 사실들을 미확정으로 되짚지 말라"는 계약은
-                // 종류를 가리지 않고, CrudAnalysis·LogicAndVisualization 두 갈래도
-                // 다섯 종류 전부를 이미 받는다(BuildMachineFactBlockLines 문서 참고).
-                // 표가 아니라 참고 재료여야 한다는 이유는 위 잠금 힌트 배선과 같다 -
-                // `## CRUD 분석`용 "Copy this table verbatim" 지시를 그대로 주면
-                // 이 갈래가 자신의 H2 제약을 어기고 그 헤딩까지 합성할 위험이 있다.
-                var executionSemanticsForOverview = ExecutionSemanticsFacts.Collect(
-                    spDef.DdlText,
-                    spDef.StaticAnalysis,
-                    spDef.ObjectKey,
-                    ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
-                if (executionSemanticsForOverview.Count > 0)
-                {
-                    sbRules.AddRange(BuildExecutionSemanticsReferenceMaterialLines(executionSemanticsForOverview));
-                }
+                // 재료를 받아야 한다.
+                //
+                // [단일 진입점을 통해서 준다 - Important, 최종 브랜치 리뷰 2차]
+                // 처음에는 `BuildExecutionSemanticsReferenceMaterialLines`를 직접
+                // 불러 이 갈래를 `BuildMachineFactBlockLines` 밖에서 배선했다 -
+                // 그 함수가 CASE 분기 사실도 함께 실어서였다. 그런데 그러면 설계
+                // D5가 경고한 그 모양대로 진입점이 둘이 되고, `BuildMachineFactBlockLines`의
+                // 문서를 고치는 사람 눈에는 이 갈래가 안 보인다 - 다음에 여섯 번째
+                // 사실 종류가 그 함수에 추가되면 이 갈래만 조용히 못 받는다.
+                // `MachineFactPresentation`을 3상태(Table/Reference/Omit)로 넓혀
+                // 그 문제를 구조로 막는다 - 실행 의미는 `Reference`(개요 산문이
+                // 서술할 수 있으나 `## CRUD 분석`은 안 쓴다), CASE 분기는 `Omit`
+                // (CASE는 `## 로직 흐름 요약` 소관이고 감사 🟡이 난 자리도 DB 배치뿐,
+                // 재료를 늘리면 프롬프트만 길어지고 모델이 산만해질 뿐 대응하는 결함이
+                // 없다).
+                sbRules.AddRange(BuildMachineFactBlockLines(
+                    spDef, MachineFactPresentation.Reference, MachineFactPresentation.Omit));
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
@@ -2808,7 +2843,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // 분기 표는 `## 로직 흐름 요약`이 목적지라 이 분기가 쓰지 않으므로 -
                 // Task 14 (Critical) - 표가 아니라 참고 재료로만 준다.
                 sbRules.AddRange(BuildMachineFactBlockLines(
-                    spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: false));
+                    spDef, MachineFactPresentation.Table, MachineFactPresentation.Reference));
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
@@ -2979,7 +3014,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 // `## CRUD 분석`이 목적지라 이 분기가 쓰지 않으므로 - Task 14
                 // (Critical) - 표가 아니라 참고 재료로만 준다.
                 sbRules.AddRange(BuildMachineFactBlockLines(
-                    spDef, crudAnalysisSectionPresent: false, logicFlowSectionPresent: true));
+                    spDef, MachineFactPresentation.Reference, MachineFactPresentation.Table));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");

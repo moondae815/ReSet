@@ -2547,12 +2547,16 @@ END"
         [Fact]
         public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldReceiveExecutionSemanticsFactsInline()
         {
-            var (service, _) = CreateProbe();
+            // 형제 테스트(LogicAndVisualization_ShouldNotEmitExecutionSemanticsTableHeading
+            // 등)와 범위를 맞춘다 - result.SystemPrompt만 보면 사용자 프롬프트로 헤딩이
+            // 새는 회귀를 못 잡는다. CreateProbe + DecodeMessageContents(handler.
+            // LastRequestBody)로 시스템+사용자 프롬프트 둘 다 본다.
+            var (service, handler) = CreateProbe();
 
-            var result = await service.GenerateSpecSectionAsync(
+            await service.GenerateSpecSectionAsync(
                 ProbeExecutionSemanticsSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
 
-            var body = result.SystemPrompt;
+            var body = DecodeMessageContents(handler.LastRequestBody);
             // 확정 사실 자체는 실려야 하지만, 이 갈래는 `## CRUD 분석`을 쓰지 않으므로
             // 표·헤딩 형태로 실리면 안 된다 - LogicAndVisualization과 같은 계약이다.
             Assert.Contains("3부 식별자 참조 0건", body);
@@ -2568,12 +2572,14 @@ END"
         [Fact]
         public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldNotReceiveCaseBranchFacts()
         {
-            var (service, _) = CreateProbe();
+            // 형제 테스트와 범위를 맞춘다 - 시스템+사용자 프롬프트 둘 다 본다(위 테스트와
+            // 같은 이유).
+            var (service, handler) = CreateProbe();
 
-            var result = await service.GenerateSpecSectionAsync(
+            await service.GenerateSpecSectionAsync(
                 ProbeCaseBranchSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
 
-            var body = result.SystemPrompt;
+            var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
             Assert.DoesNotContain("REFERENCE - CASE branch facts", body);
         }
