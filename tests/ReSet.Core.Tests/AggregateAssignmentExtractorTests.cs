@@ -68,5 +68,49 @@ END";
         {
             Assert.Empty(AggregateAssignmentExtractor.Extract("CREATE PROCEDURE ((("));
         }
+
+        [Fact]
+        public void Extract_MinWithGroupBy_ShouldReportPreviousValueRetainedNotNull()
+        {
+            // 리뷰 발견(수정 라운드 1): GROUP BY가 있으면 무결과 시 그룹이 0개이므로
+            // 이 SELECT 자체가 0행을 돌려주고 대입이 일어나지 않는다 - NULL이 아니라
+            // 변수가 대입 전 값을 그대로 유지한다. GROUP BY 없는 경우와 정반대다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v VARCHAR(8) = ''
+    SELECT @v = MIN(ReqYMD) FROM dbo.T GROUP BY Grp
+END";
+
+            var facts = AggregateAssignmentExtractor.Extract(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("MIN", fact.Aggregate);
+            Assert.DoesNotContain("NULL", fact.Sentence);
+            Assert.Contains("이전 값", fact.Sentence);
+            Assert.Contains("일어나지 않습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_CountWithGroupBy_ShouldReportPreviousValueRetainedNotZero()
+        {
+            // COUNT도 GROUP BY 앞에서는 예외가 아니다 - 그룹이 0개면 이 SELECT가
+            // 0행이므로 대입 자체가 없다. 0이 들어간다는 주장은 거짓이 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @n INT
+    SELECT @n = COUNT(*) FROM dbo.T GROUP BY Grp
+END";
+
+            var facts = AggregateAssignmentExtractor.Extract(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("COUNT", fact.Aggregate);
+            Assert.Contains("이전 값", fact.Sentence);
+            Assert.Contains("일어나지 않습니다", fact.Sentence);
+        }
     }
 }

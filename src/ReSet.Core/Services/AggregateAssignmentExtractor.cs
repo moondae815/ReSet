@@ -22,6 +22,13 @@ namespace ReSet.Core.Services
     /// 0건이어도 한 행을 돌려준다. 그래서 대입은 항상 일어나고, MIN/MAX/SUM/AVG는
     /// NULL을, COUNT는 0을 넣는다. 이 사실은 이 SP의 사정이 아니라 T-SQL 명세다.
     ///
+    /// [GROUP BY가 있으면 정반대다] GROUP BY가 있으면 일치 행이 0건일 때 그룹 자체가
+    /// 0개이므로 이 SELECT는 0행을 돌려준다. 그러면 대입 자체가 일어나지 않아 변수는
+    /// 대입 전 값을 그대로 유지한다 - GROUP BY 없는 경우와 반대 방향이다. 이 사실도
+    /// 애매하지 않고 T-SQL 명세로 확정되므로, 행을 생략하지 않고 이 반대 사실을 담아
+    /// 낸다(수정 라운드 1 - 리뷰가 GROUP BY 없음을 전제한 문장을 GROUP BY 있는 절에도
+    /// 잘못 씌우던 결함을 잡았다).
+    ///
     /// [왜 비집계 대입은 담지 않는가] `SELECT @v = c FROM t`는 무결과면 대입 자체가
     /// 일어나지 않아 변수가 직전 값을 유지한다 - 정확히 반대 의미다. 담으면 거짓이 된다.
     ///
@@ -82,27 +89,53 @@ namespace ReSet.Core.Services
 
             public List<AggregateAssignmentFact> Facts { get; } = new();
 
-            public override void Visit(SelectSetVariable node)
+            // SelectSetVariable 단독으로는 자신을 감싼 QuerySpecification의
+            // GroupByClause를 알 수 없다(부모 포인터가 없다). GROUP BY 유무로 결론이
+            // 정반대이므로(수정 라운드 1) QuerySpecification 단위로 훑어 SelectElements
+            // 안의 SelectSetVariable을 직접 찾는다. ScriptDom은 Visit을 오버라이드해도
+            // 자식 순회를 계속하므로(DmlScopeExtractor.FromTableCollector와 같은 근거),
+            // 중첩된 파생 테이블/서브쿼리의 QuerySpecification도 그대로 방문된다.
+            public override void Visit(QuerySpecification node)
             {
-                if (node.Expression is not FunctionCall call) return;
+                var hasGroupBy = node.GroupByClause != null;
 
-                var name = call.FunctionName?.Value;
-                if (string.IsNullOrWhiteSpace(name)) return;
+                foreach (var element in node.SelectElements)
+                {
+                    if (element is not SelectSetVariable setVariable) continue;
+                    if (setVariable.Expression is not FunctionCall call) continue;
 
-                var upper = name!.ToUpperInvariant();
-                var isCount = upper == "COUNT" || upper == "COUNT_BIG";
-                if (!isCount && !NullOnEmptyAggregates.Contains(upper)) return;
+                    var name = call.FunctionName?.Value;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
 
-                var variable = node.Variable?.Name ?? "(미상)";
-                var hasInitializer = _initialized.Contains(variable);
+                    var upper = name!.ToUpperInvariant();
+                    var isCount = upper == "COUNT" || upper == "COUNT_BIG";
+                    if (!isCount && !NullOnEmptyAggregates.Contains(upper)) continue;
 
-                var sentence = isCount
-                    ? "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. COUNT는 0을 넣습니다."
-                    : "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. 무결과 시 NULL이 대입됩니다"
-                      + (hasInitializer ? " — DECLARE의 초기값은 유지되지 않습니다." : ".");
+                    var variable = setVariable.Variable?.Name ?? "(미상)";
+                    var hasInitializer = _initialized.Contains(variable);
 
-                Facts.Add(new AggregateAssignmentFact(
-                    node.StartLine, variable, upper, hasInitializer, sentence));
+                    string sentence;
+                    if (hasGroupBy)
+                    {
+                        // GROUP BY가 있으면 무결과 시 그룹이 0개이므로 이 SELECT 자체가
+                        // 0행을 돌려주고 대입이 일어나지 않는다 - NULL/0이 아니라 변수가
+                        // 대입 전 값을 그대로 유지한다.
+                        sentence = "GROUP BY가 있어 무결과 시 그룹이 0개이므로 이 SELECT는 0행을 돌려줍니다. "
+                                   + "대입이 일어나지 않습니다 — 변수는 이전 값을 그대로 유지합니다.";
+                    }
+                    else if (isCount)
+                    {
+                        sentence = "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. COUNT는 0을 넣습니다.";
+                    }
+                    else
+                    {
+                        sentence = "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. 무결과 시 NULL이 대입됩니다"
+                                   + (hasInitializer ? " — DECLARE의 초기값은 유지되지 않습니다." : ".");
+                    }
+
+                    Facts.Add(new AggregateAssignmentFact(
+                        setVariable.StartLine, variable, upper, hasInitializer, sentence));
+                }
             }
         }
     }
