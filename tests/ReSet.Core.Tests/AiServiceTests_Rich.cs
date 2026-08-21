@@ -2409,5 +2409,74 @@ END"
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
         }
+
+        private static SpDefinition ProbeCaseBranchSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "SETTLE_YMD",
+                DdlText = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    DECLARE @v INT
+    SET @v = CASE WHEN DATEPART(DW, GETDATE()) > 3 THEN 7 ELSE 0 END
+    RETURN @v
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheCaseBranchTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeCaseBranchSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutCase_ShouldOmitTheCaseBranchTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldPrefillTheCaseBranchTable()
+        {
+            // 지역 모델 경로는 BuildSpecificationPrompts를 전혀 호출하지 않는다.
+            // CRUD 분석 갈래에서만 배선이 빠져도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_ShouldPrefillTheCaseBranchTable()
+        {
+            // 로직 흐름 요약 갈래(갈래 3-3)가 이 표의 실제 소관 절이다 - 여기서
+            // 배선이 빠지면 CASE 분기 표가 실제로 실려야 할 절에 나가지 않는다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "LogicAndVisualization", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
+        }
     }
 }

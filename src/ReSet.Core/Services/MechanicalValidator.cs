@@ -48,6 +48,9 @@ namespace ReSet.Core.Services
         // 실행 의미 표(기계 확정 DB 배치 등)의 L1 앵커. 위와 같은 이유로 서수 이동은
         // 기능에 영향이 없다.
         ExecutionSemanticsTableMissing,
+        // CASE 분기 표(기계 확정 - 조건·결과 원문)의 L1 앵커. 위와 같은 이유로 서수
+        // 이동은 기능에 영향이 없다.
+        CaseBranchTableMissing,
         General
     }
 
@@ -151,6 +154,7 @@ namespace ReSet.Core.Services
                     CheckObjectDeclaration(cleansed, expectations, result);
                     CheckOrderByExpressions(cleansed, expectations, result);
                     CheckExecutionSemantics(cleansed, expectations, result);
+                    CheckCaseBranches(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -3474,6 +3478,83 @@ namespace ReSet.Core.Services
             catch (Exception ex)
             {
                 Log.Warning(ex, "[MechanicalValidator] 실행 의미 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 CASE 분기 표가 명세서에 옮겨졌는지 본다. 재료가 없으면 조용히
+        /// 건너뛴다(CheckExecutionSemantics와 같은 가드).
+        ///
+        /// 행 키는 (라인, 순서, 조건 원문) 셋이다. 결과 원문까지 넣지 않는 이유는
+        /// 결과식이 여러 줄에 걸치면 모델이 줄바꿈을 공백으로 정규화해 옮기는 것이
+        /// 정상이기 때문이다 - 조건까지 일치하면 행은 이미 특정된다.
+        ///
+        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
+        /// Errors를 통째로 지우고 IsValid = true로 통과시킨다. 새 검사의 실패가 기존
+        /// 검사들의 판정까지 삼키면 안 된다.
+        /// </summary>
+        private static void CheckCaseBranches(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.CaseBranches.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, CaseBranchExtractor.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 CASE 분기 표가 명세서에 없습니다. `{CaseBranchExtractor.TableHeading}` "
+                        + $"헤딩과 {expectations.CaseBranches.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.CaseBranchTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.CaseBranches)
+                {
+                    var lineToken = fact.Line.ToString();
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == lineToken)
+                            && cells.Any(c => c == fact.Ordinal)
+                            && cells.Any(c => c == fact.Condition);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"CASE 분기 표에 라인 {fact.Line}의 `{fact.Ordinal}` 행이 없거나 조건 원문이 "
+                        + $"다릅니다. `{fact.Condition}`을 그대로 옮겨야 합니다 - 분기를 합치거나 "
+                        + "비교 연산자를 말로 바꾸면 원문에서 찾을 수 없습니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.CaseBranchTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Ordinal} @ line {fact.Line}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] CASE 분기 표 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 

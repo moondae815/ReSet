@@ -1065,6 +1065,31 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 「CASE 분기」 표를 렌더한다. 조건·결과 모두 원문 그대로 실린다 -
+        /// 요약이 곧 결함이었다(UIF_SettleYMD 🟠 3건).
+        /// </summary>
+        private static List<string> BuildCaseBranchTableLines(IReadOnlyList<CaseBranchFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL CASE BRANCH TABLE] The following CASE branches are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 로직 흐름 요약` under the exact heading shown. Never merge branches, never paraphrase a comparison operator, and never summarise a result expression - the verbatim text is the contract.",
+                $"   {CaseBranchExtractor.TableHeading}",
+                "   | 라인 | 순서 | 조건 원문 | 결과 원문 |",
+                "   | :--- | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add(
+                    $"   | {fact.Line} | {EscapeTableCell(fact.Ordinal)} | "
+                    + $"{EscapeTableCell(fact.Condition)} | {EscapeTableCell(fact.Result)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 새로 추가되는 기계 확정 표를 전부 모아 프롬프트에 붙일 줄 목록으로 돌려준다.
         ///
         /// [왜 갈래마다 Collect를 부르지 않는가 - 설계 D5]
@@ -1090,6 +1115,12 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (executionSemantics.Count > 0)
             {
                 lines.AddRange(BuildExecutionSemanticsTableLines(executionSemantics));
+            }
+
+            var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
+            if (caseBranches.Count > 0)
+            {
+                lines.AddRange(BuildCaseBranchTableLines(caseBranches));
             }
 
             return lines;

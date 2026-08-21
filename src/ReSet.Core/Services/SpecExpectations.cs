@@ -113,6 +113,10 @@ namespace ReSet.Core.Services
         public IReadOnlyList<ExecutionSemanticFact> ExecutionSemantics { get; init; }
             = Array.Empty<ExecutionSemanticFact>();
 
+        /// <summary>CASE 분기 원문. CheckCaseBranches가 소비한다.</summary>
+        public IReadOnlyList<CaseBranchFact> CaseBranches { get; init; }
+            = Array.Empty<CaseBranchFact>();
+
         /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
@@ -191,6 +195,11 @@ namespace ReSet.Core.Services
                 spDef.ObjectKey,
                 ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
 
+            // CASE 분기 표(CheckCaseBranches)의 기대값이다. AiService가 프롬프트 표를
+            // 만들 때 부르는 것과 같은 Extract 진입점을 부른다 - 두 곳이 갈리면 모델이
+            // 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
+            var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
+
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
             // 스위트는 초록으로 남는다.
@@ -253,6 +262,11 @@ namespace ReSet.Core.Services
                 // 하나뿐인 객체에서 From이 null을 돌려주고 CheckExecutionSemantics가
                 // 한 번도 돌지 않는다.
                 && executionSemantics.Count == 0
+                // executionSemantics와 같은 이유로 중복항이 아니다 - DML이 하나도 없는
+                // 스칼라 함수도 CASE를 가질 수 있다. 이 항을 빠뜨리면 재료가 이것
+                // 하나뿐인 객체에서 From이 null을 돌려주고 CheckCaseBranches가 한 번도
+                // 돌지 않는다.
+                && caseBranches.Count == 0
                 // objectDeclaration은 중복항이 아니다 - WITH 옵션이 없는 함수(RETURN
                 // 하나뿐인 스칼라 함수 등)는 본문에 DML 문장이 전혀 없을 수 있어
                 // dmlScopeFacts·lockHints 등 다른 재료가 하나도 없다. 이 항을 빠뜨리면
@@ -281,7 +295,8 @@ namespace ReSet.Core.Services
                 ReferencedFunctionCalls = referencedFunctionCalls,
                 LockHints = lockHints,
                 ObjectDeclaration = objectDeclaration,
-                ExecutionSemantics = executionSemantics
+                ExecutionSemantics = executionSemantics,
+                CaseBranches = caseBranches
             };
         }
 
