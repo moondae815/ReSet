@@ -17,10 +17,32 @@ namespace ReSet.Core.Services
     ///
     /// [실행으로 확정한 사실 - 2026-08-22, SQL Server 2022 16.0.4255.1]
     /// 원본 구조(SELECT → IF @@ROWCOUNT&lt;1 BEGIN…END → IF @@ROWCOUNT&lt;1 BEGIN…END)를
-    /// 그대로 재현한 결과, 앞의 IF가 조건 거짓으로 블록을 건너뛰어도 그 IF 문 자체가
-    /// @@ROWCOUNT를 0으로 만든다. 따라서 두 번째 IF의 조건은 항상 참이다.
-    /// 실측 대상: UF_GET_COMM4CLIENT.Function:52,68 - 명세서 mermaid는 1차 성공 시
-    /// 3차를 건너뛰는 것으로 그려 금액 결정 규칙 자체가 달랐다(🔴).
+    /// 그대로 재현한 결과, 앞의 IF가 조건 거짓으로 블록을 건너뛰면 그 IF 문 자체가
+    /// @@ROWCOUNT를 0으로 만든다. 실측 대상: UF_GET_COMM4CLIENT.Function:52,68 - 명세서
+    /// mermaid는 1차 성공 시 3차를 건너뛰는 것으로 그려 금액 결정 규칙 자체가 달랐다(🔴).
+    ///
+    /// [Fix Round 1 - "항상 참"은 CASE Y에서 거짓이다] 리뷰의 Cannot-Verify를 조정자가
+    /// 로컬 Docker SQL Server 2022 16.0.4255.1에서 2026-08-22에 실행으로 확정했다.
+    /// <code>
+    /// DECLARE @t TABLE(c INT); INSERT INTO @t VALUES(1),(2);
+    /// DECLARE @e TABLE(c INT);
+    /// DECLARE @x INT;
+    ///
+    /// -- CASE X: 앞 IF의 분기가 건너뛰어짐
+    /// SELECT @x = c FROM @t;                                             -- 2행
+    /// IF @@ROWCOUNT &lt; 1 BEGIN SELECT TOP 1 @x = c FROM @e ORDER BY c END -- 건너뜀
+    /// IF @@ROWCOUNT &lt; 1 SELECT 'RESET_TO_0' ELSE SELECT 'NOT_RESET';     -- RESET_TO_0
+    ///
+    /// -- CASE Y: 앞 IF의 분기가 실행되고 행에 영향을 주는 문장으로 끝남
+    /// SELECT @x = c FROM @e;                                             -- 0행
+    /// IF @@ROWCOUNT &lt; 1 BEGIN SELECT TOP 1 @x = c FROM @t ORDER BY c END -- 실행됨, 1행
+    /// IF @@ROWCOUNT &lt; 1 SELECT 'RESET_TO_0' ELSE SELECT 'NOT_RESET';     -- NOT_RESET
+    /// </code>
+    /// CASE X는 RESET_TO_0, CASE Y는 NOT_RESET이다. 즉 직전 IF의 분기가 실행되고 그 안
+    /// 마지막 문장이 행에 영향을 주면 @@ROWCOUNT는 0으로 리셋되지 않고 그 문장의 행
+    /// 수가 남는다 - "이 조건은 항상 참이다"는 CASE Y에서 거짓이다. 분기가 실행됐는지는
+    /// 런타임 성질이라 이 정적 추출기는 알 수 없으므로, 어느 쪽으로도 단정하지 않고
+    /// 두 경우를 모두 참으로 서술한다(<see cref="SemanticsSentence"/>).
     ///
     /// [왜 이 모양에만 한정하는가] T-SQL에서 어떤 문장이 @@ROWCOUNT를 보존하고
     /// 어떤 문장이 0으로 만드는지의 일반 규칙을 전부 구현하려 들면 틀릴 여지가 크다.
@@ -29,8 +51,15 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class RowCountBoundaryExtractor
     {
+        /// <summary>
+        /// 직전 IF의 분기가 건너뛰어지는 경우(CASE X)와 실행되는 경우(CASE Y)를 모두
+        /// 참으로 담는다 - "이 조건은 항상 참이다"라고 단정하지 않는다. 분기가 실행됐는지는
+        /// 런타임 성질이라 정적 분석으로 알 수 없기 때문이다.
+        /// </summary>
         public const string SemanticsSentence =
-            "직전 IF 문이 @@ROWCOUNT를 0으로 리셋하므로 이 조건은 항상 참입니다.";
+            "직전 문장이 IF입니다. 그 IF의 분기가 건너뛰어지면 @@ROWCOUNT가 0으로 리셋되어 "
+            + "이 조건이 참이 됩니다. 분기가 실행되고 그 안 마지막 문장이 행에 영향을 주면 "
+            + "@@ROWCOUNT는 그 문장의 행 수로 남아, 이 조건의 참·거짓은 그 값에 달려 있습니다.";
 
         public static IReadOnlyList<RowCountBoundaryFact> Extract(string? ddlText)
         {
