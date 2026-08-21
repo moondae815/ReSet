@@ -2821,7 +2821,7 @@ namespace ReSet.Core.Services
 
                 // [MarkdownTableCellCodec.SplitRow로 나누는 이유 - 2026-08-21 최종 브랜치
                 // 리뷰 재라운드 ⑤] 컬럼·범위 칸도 렌더 시점에 EscapeTableCell을 거친다
-                // (AiService.cs:957-958) - 대괄호 식별자(`A.[C|D]`)처럼 `|`가 든 컬럼은
+                // (AiService.cs:944, BuildSetPredicateTableLines) - 대괄호 식별자(`A.[C|D]`)처럼 `|`가 든 컬럼은
                 // `\|`로 이스케이프된 채 나온다. 단순 `r.Split('|')`는 그 자리에서도
                 // 갈라져 모델이 표를 원문 그대로 옮겨도 컬럼이 일치하지 않는다 -
                 // LockHints·ORDER BY·객체 선언과 같은 실패 모양(ExtractSetPredicateLiteralCell

@@ -3357,7 +3357,7 @@ END"
         public void Validate_SetPredicateColumnContainsPipe_RenderedEscaped_ShouldPass()
         {
             // [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤] AiService.BuildSetPredicateTableLines는
-            // 컬럼·범위 칸도 EscapeTableCell을 거친다(AiService.cs:957-958) - 대괄호
+            // 컬럼·범위 칸도 EscapeTableCell을 거친다(AiService.cs:944, BuildSetPredicateTableLines) - 대괄호
             // 식별자(`A.[C|D]`)처럼 `|`가 든 컬럼은 `\|`로 이스케이프된 채 표에 나온다.
             // 그런데 이 검사(위 매칭 Where절)는 그 행을 `r.Split('|')`로 단순 분할했다 -
             // 이스케이프를 복원하지 않으면 셀이 잘못 쪼개져 모델이 표를 원문 그대로
@@ -4108,7 +4108,7 @@ END",
         /// <summary>
         /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤ - "호출식" 칸(AiService.cs:990)은 파이프
         /// 왕복이 필요 없다는 것을 실측으로 증명한다] `CheckReferencedFunctions`는 헤딩
-        /// 존재만 확인하고(:3069-3113) 행 내용은 전혀 대조하지 않는다 - 그래서 호출식이
+        /// 존재만 확인하고(:3069-3094) 행 내용은 전혀 대조하지 않는다 - 그래서 호출식이
         /// 렌더 때 이스케이프됐는지, 심지어 실제 호출식과 같은지조차 판정에 영향을 주지
         /// 않는다. 이 테스트는 호출식에 `|`를 넣고도(비트 OR가 든 인자) 헤딩만 있으면
         /// 통과한다는 것을 고정한다 - 다른 취급이 필요 없음을 실측으로 못 박는다.

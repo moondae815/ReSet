@@ -1082,7 +1082,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [REFERENCE - lock hint facts, MACHINE-DERIVED from the source DDL. Do NOT output " +
+                "   [REFERENCE - lock hint facts] MACHINE-DERIVED from the source DDL. Do NOT output " +
                 "a table or heading for this list in this section - `## CRUD 분석` (a separate part of " +
                 "this same document) is responsible for rendering it as a table. Use these facts only " +
                 "as ground truth for which statement/table/alias/scope carries which lock hint:"
