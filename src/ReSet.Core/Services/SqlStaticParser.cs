@@ -563,6 +563,21 @@ namespace ReSet.Core.Services
                 reference.Accept(collector);
             }
 
+            // [별칭을 먼저 보는 이유 - 2026-08-20 리뷰 Important]
+            // SQL Server는 UPDATE 대상 이름을 별칭에 먼저 바인딩한다. 테이블 이름부터
+            // 대조하면, 대상이 실은 별칭인데 마침 같은 이름의 테이블이 조인돼 있을 때
+            // 남의 별칭을 물어 온다(UPDATE X ... FROM dbo.TSettle X JOIN dbo.X Y -
+            // X는 TSettle의 별칭인데 dbo.X를 찾아 Y를 돌려준다). 바인딩 순서를 그대로
+            // 옮긴다.
+            foreach (var candidate in collector.Tables)
+            {
+                if (candidate.Alias?.Value is { Length: > 0 } alias &&
+                    string.Equals(alias, targetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return alias;
+                }
+            }
+
             foreach (var candidate in collector.Tables)
             {
                 var name = candidate.SchemaObject?.Identifiers?.LastOrDefault()?.Value;
@@ -571,9 +586,14 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                // 같은 테이블이 별칭 없이 실려 있으면 한정자 없는 참조가 곧 자기참조다.
-                // 그때는 별칭을 만들어 내지 말고 null을 돌려 규칙을 끈다.
-                if (candidate.Alias?.Value is { Length: > 0 } alias) return alias;
+                // 같은 테이블이 별칭 없이 실려 있으면 대상은 그 자리에 바인딩되고,
+                // 한정자 없는 참조가 곧 자기참조다. 별칭을 만들어 내지 말고 null을
+                // 돌려 한정자 규칙을 끈다.
+                //
+                // 여기서 계속 훑으면 안 된다 - 뒤에 같은 테이블이 별칭을 달고 또
+                // 실려 있으면(FROM dbo.T, dbo.T A) 그 별칭을 대상으로 잘못 잡아
+                // 판정이 통째로 뒤집힌다. 실측된 형태다.
+                return candidate.Alias?.Value is { Length: > 0 } tableAlias ? tableAlias : null;
             }
 
             return null;

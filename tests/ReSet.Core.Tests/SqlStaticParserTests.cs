@@ -1018,6 +1018,61 @@ END";
         }
 
         [Fact]
+        public void Analyze_TargetNameIsAnAlias_PrefersAliasOverSameNamedTable()
+        {
+            // 2026-08-20 리뷰 Important. 대상 이름을 FROM의 <테이블 이름>과만 대조하면,
+            // 그 이름이 실은 별칭인데 마침 같은 이름의 테이블이 조인되어 있을 때
+            // 남의 별칭을 물어 온다. SQL Server는 별칭을 먼저 바인딩하므로 순서를
+            // 맞춰야 한다.
+            //
+            // 여기서 X는 dbo.TSettle의 별칭이고, 조인된 dbo.X는 이름만 같은 남의
+            // 테이블이다. X.C가 자기참조이고 Y.D는 아니다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.AliasShadowsTableName
+AS
+BEGIN
+    UPDATE X
+    SET    C = X.C + 1
+          ,D = Y.D
+    FROM   dbo.TSettle X
+    JOIN   dbo.X Y ON X.I = Y.I
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("C", mapping.SelfReferencedColumns);
+            Assert.DoesNotContain("D", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_TargetAppearsUnaliasedInFrom_BindsToTheUnaliasedOccurrence()
+        {
+            // 2026-08-20 리뷰 Important. 같은 테이블이 별칭 없이도, 별칭을 달고도
+            // FROM에 실린 형태. UPDATE T는 별칭 없는 쪽에 바인딩되므로 한정자 없는
+            // T.C가 자기참조이고 A.D는 남의 것이다.
+            //
+            // 별칭 없는 자리를 건너뛰고 뒤의 별칭을 계속 찾으면 판정이 뒤집힌다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.UnaliasedTargetWins
+AS
+BEGIN
+    UPDATE T
+    SET    C = T.C + 1
+          ,D = A.D
+    FROM   dbo.T
+          ,dbo.T A
+    WHERE  T.I = A.I
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("C", mapping.SelfReferencedColumns);
+            Assert.DoesNotContain("D", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
         public void Analyze_WithTwoUpdatesOnSameTable_ShouldNumberStatements()
         {
             // Arrange & Act

@@ -242,7 +242,7 @@ namespace ReSet.Core.Tests
         public async Task GetCodeObjectDetailsDirectAsync_NormalizesDependencyNameToCatalogCasing()
         {
             // 2026-08-20 축 A 교차 감사 실측. sys.sql_expression_dependencies의
-            // referenced_entity_name은 카탈로그 표기가 아니라 <b>호출식에 쓰인 표기</b>를
+            // referenced_entity_name은 카탈로그 표기가 아니라 호출식에 쓰인 표기를
             // 돌려준다. T-SQL이 대소문자를 안 가리므로 원본이 dbo.UF_Get_WorkDay2로
             // 부르면 의존성 이름도 그 표기로 들어온다.
             //
@@ -290,6 +290,53 @@ namespace ReSet.Core.Tests
             var dependency = Assert.Single(result.Dependencies);
             Assert.Equal("UF_GET_WORKDAY2", dependency.Name);
             Assert.StartsWith("CREATE FUNCTION", dependency.ReferencedDdlText);
+        }
+
+        [Fact]
+        public async Task GetCodeObjectDetailsDirectAsync_NormalizesNameEvenWhenDdlAlreadyPresent()
+        {
+            // 2026-08-20 리뷰 Critical. 정규화를 DDL 재연결 루프 안에 두면
+            // `if (ReferencedDdlText가 이미 있으면) continue;` 가드 뒤에 놓여, DDL이
+            // 채워져 있는 <경우>에는 아예 실행되지 않는다. 그런데 온라인 추출기는
+            // 코드 객체 의존성의 DDL을 항상 채우고(DbMetadataService) 스냅샷은 그
+            // 객체를 그대로 저장하므로, 실제로 감사에서 어긋난 자리가 바로 그 경로다.
+            //
+            // 즉 이 테스트가 없으면 "고쳤다"는 수정이 정작 문제가 난 경로에서
+            // 한 번도 돌지 않는다.
+            var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "SP_Root", CodeObjectType.Procedure);
+            var functionKey = CodeObjectKey.Create("PaymentDB", "dbo", "UF_GET_WORKDAY2", CodeObjectType.Function);
+
+            var snapshot = new DbSnapshot { Database = "PaymentDB" };
+            snapshot.CodeObjects[rootKey.CanonicalName] = new SpDefinition
+            {
+                ObjectKey = rootKey,
+                Schema = rootKey.Schema,
+                Name = rootKey.Name,
+                Dependencies = new List<DependencyInfo>
+                {
+                    new()
+                    {
+                        SourceObjectKey = rootKey,
+                        Schema = "dbo",
+                        Name = "UF_Get_WorkDay2",   // 호출식 표기
+                        Type = "SQL_SCALAR_FUNCTION",
+                        // 온라인 추출기가 이미 채워 둔 상태 - 감사에서 어긋난 실제 경로다.
+                        ReferencedDdlText = "CREATE FUNCTION dbo.UF_GET_WORKDAY2() RETURNS char(8) AS BEGIN RETURN '' END"
+                    }
+                }
+            };
+            snapshot.CodeObjects[functionKey.CanonicalName] = new SpDefinition
+            {
+                ObjectKey = functionKey,
+                Schema = functionKey.Schema,
+                Name = functionKey.Name,            // 카탈로그 표기
+                DdlText = "CREATE FUNCTION dbo.UF_GET_WORKDAY2() RETURNS char(8) AS BEGIN RETURN '' END"
+            };
+
+            var result = await new OfflineDbMetadataService(snapshot)
+                .GetCodeObjectDetailsDirectAsync("ignored", rootKey);
+
+            Assert.Equal("UF_GET_WORKDAY2", Assert.Single(result.Dependencies).Name);
         }
 
         [Fact]

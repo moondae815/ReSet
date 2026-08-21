@@ -619,6 +619,42 @@ END";
         }
 
         [Fact]
+        public void ExtractSetPredicates_MultiLineLeftSide_ShouldBeCollapsedToOneLine()
+        {
+            // 2026-08-20 리뷰 Important. 좌변 원문에 개행이 있으면 통과 불가능한
+            // L1 실패가 난다. 프롬프트는 EscapeTableCell이 개행을 공백으로 접어
+            // 한 줄로 싣는데(AiService), 검증기는 접지 않은 원문과 셀을 대조한다
+            // (MechanicalValidator.CheckSetPredicates). 모델이 지시대로 표를 축자로
+            // 옮겨도 두 문자열이 영영 같아지지 않는다 - 어떤 산출물도 만족시킬 수 없는
+            // 요구가 된다.
+            //
+            // 좌변을 노드 타입이 아니라 컬럼 유무로 받게 넓힌 뒤로 CASE·산술식처럼
+            // 여러 줄로 쓰이는 형태가 흔해져, 이론상 위험이 실제 위험이 됐다.
+            // 재료를 만들 때 한 줄로 접어 두면 양쪽이 같은 것을 본다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Flag = 1
+    FROM dbo.TSettleMst A
+    WHERE CASE WHEN A.PayType = 1
+               THEN 'a'
+               ELSE 'b'
+          END IN ('a','b')
+END";
+
+            // CASE 좌변은 바깥 IN 팩트와 안쪽 분기 조건(A.PayType = 1) 팩트를 함께 낸다.
+            // 안쪽 수집은 이 브랜치 이전부터 있던 동작이라 여기서 손대지 않는다 -
+            // 이 테스트가 고정하는 것은 바깥 팩트의 좌변이 한 줄이라는 것뿐이다.
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+            var fact = Assert.Single(facts, f => f.Column.StartsWith("CASE", StringComparison.OrdinalIgnoreCase));
+
+            Assert.DoesNotContain("\n", fact.Column);
+            Assert.DoesNotContain("\r", fact.Column);
+            Assert.DoesNotContain("  ", fact.Column);
+            Assert.Contains("PayType", fact.Column);
+        }
+
+        [Fact]
         public void ExtractSetPredicates_EqualityAgainstLiteral_ShouldBeCaptured()
         {
             // COMM_UPD:169 실측. 취소수수료 미부과 계약을 걸러내는 필터인데
