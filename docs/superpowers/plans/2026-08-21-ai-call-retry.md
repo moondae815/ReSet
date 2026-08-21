@@ -334,8 +334,11 @@ namespace ReSet.Core.Tests
             // 이것이 이 설계의 핵심이다. OperationCanceledException으로 던지면 호출부의
             // when (ex is not OperationCanceledException) 필터가 또 놓쳐서 타임아웃이
             // "사용자 취소"로 둔갑한다.
-            // is 검사를 쓴다. IsNotType은 정확한 형식만 보므로 하위형 상속을 못 잡는다.
-            Assert.False(ex is OperationCanceledException);
+            // 형식 관계를 반사로 본다. `ex is OperationCanceledException`은 ex의 정적 형식이
+            // sealed AiCallFailedException이라 컴파일러가 "항상 거짓"으로 증명해 CS0184를 내고,
+            // 그 경고 자체가 "이 단언은 공허하다"는 뜻이다. IsNotType은 반대로 정확한 형식만
+            // 보므로 하위형 상속을 못 잡는다. 아래는 상속 관계가 생기면 실제로 실패한다.
+            Assert.False(typeof(OperationCanceledException).IsAssignableFrom(typeof(AiCallFailedException)));
 
             // 진단 정보를 잃지 않는다.
             Assert.IsType<HttpRequestException>(ex.InnerException);
@@ -359,7 +362,7 @@ namespace ReSet.Core.Tests
                     RetryPlan.NoDelay));
 
             Assert.Equal(2, calls);
-            Assert.False(ex is OperationCanceledException);
+            Assert.False(typeof(OperationCanceledException).IsAssignableFrom(ex.GetType()));
         }
 
         [Fact]
