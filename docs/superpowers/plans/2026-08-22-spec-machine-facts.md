@@ -1235,7 +1235,7 @@ git commit -m "feat: 집계 대입의 무결과 NULL 의미를 실행 의미 표
 
 ### Task 5: C — `@@ROWCOUNT` 재설정 경계
 
-`IF @@ROWCOUNT < 1` 앞의 `IF` 문이 `@@ROWCOUNT`를 0으로 리셋한다. 그래서 1차 조회가 행을 찾아도 3차 조회가 돈다 — 명세서의 mermaid는 건너뛰는 것으로 그려 금액 결정 규칙 자체가 달랐다(유일한 🔴 중 하나). 실측으로 확인한 모양(직전 형제가 `IF`)에만 한정한다.
+`IF @@ROWCOUNT < 1` 앞의 `IF` 문이 `@@ROWCOUNT`를 0으로 리셋한다. 그래서 1차 조회가 행을 찾아도 3차 조회가 돈다 — 명세서의 mermaid는 건너뛰는 것으로 그려 금액 결정 규칙 자체가 달랐다(감사가 찾은 🔴 2건 중 하나). 실측으로 확인한 모양(직전 형제가 `IF`)에만 한정한다.
 
 **Files:**
 - Create: `src/ReSet.Core/Services/RowCountBoundaryExtractor.cs`
@@ -1277,7 +1277,9 @@ END";
 
             var fact = Assert.Single(facts);
             Assert.Contains("직전 IF", fact.Sentence);
-            Assert.Contains("항상 참", fact.Sentence);
+            Assert.DoesNotContain("항상 참", fact.Sentence);
+            Assert.Contains("건너뛰", fact.Sentence);
+            Assert.Contains("실행", fact.Sentence);
         }
 
         [Fact]
@@ -1332,7 +1334,12 @@ namespace ReSet.Core.Services
     /// [실행으로 확정한 사실 - 2026-08-22, SQL Server 2022 16.0.4255.1]
     /// 원본 구조(SELECT → IF @@ROWCOUNT&lt;1 BEGIN…END → IF @@ROWCOUNT&lt;1 BEGIN…END)를
     /// 그대로 재현한 결과, 앞의 IF가 조건 거짓으로 블록을 건너뛰어도 그 IF 문 자체가
-    /// @@ROWCOUNT를 0으로 만든다. 따라서 두 번째 IF의 조건은 항상 참이다.
+    /// @@ROWCOUNT를 0으로 만든다. 따라서 두 번째 IF의 조건이 참이 된다.
+    ///
+    /// [주의 - Wave 4 실측] 그 반대 경우는 다르다. 앞 IF의 분기가 실제로 실행되고
+    /// 그 안 마지막 문장이 행에 영향을 주면 @@ROWCOUNT는 그 문장의 행 수로 남는다
+    /// (CASE Y = NOT_RESET). 분기 실행 여부는 런타임 성질이라 정적으로 알 수 없으므로
+    /// "항상 참"이라고 단정하면 안 된다 - 그 단정이 이 배치에서 실제로 Critical이 됐다.
     /// 실측 대상: UF_GET_COMM4CLIENT.Function:52,68 - 명세서 mermaid는 1차 성공 시
     /// 3차를 건너뛰는 것으로 그려 금액 결정 규칙 자체가 달랐다(🔴).
     ///
@@ -1344,7 +1351,9 @@ namespace ReSet.Core.Services
     public static class RowCountBoundaryExtractor
     {
         public const string SemanticsSentence =
-            "직전 IF 문이 @@ROWCOUNT를 0으로 리셋하므로 이 조건은 항상 참입니다.";
+            "직전 문장이 IF입니다. 그 IF의 분기가 건너뛰어지면 @@ROWCOUNT가 0으로 리셋되어 "
+            + "이 조건이 참이 됩니다. 분기가 실행되고 그 안 마지막 문장이 행에 영향을 주면 "
+            + "@@ROWCOUNT는 그 문장의 행 수로 남아, 이 조건의 참·거짓은 그 값에 달려 있습니다.";
 
         public static IReadOnlyList<RowCountBoundaryFact> Extract(string? ddlText)
         {

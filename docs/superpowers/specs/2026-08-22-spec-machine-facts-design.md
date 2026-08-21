@@ -47,7 +47,7 @@ L1 검사(`MechanicalValidator.CheckSchemaClaims`)까지 짝지어져 있다. �
 |---|---|---|
 | `식 타입 경로` | `CAST(<산술식> AS INT)`마다 피연산자 타입을 추론해 `money → int : 반올림` 또는 `numeric(p,s) → int : 절사` | 🔴 `UF_GET_COMM4CLIENT4INTEREST` · 🟡 `UF_GET_COMM4PG4INTEREST` |
 | `집계 대입` | `SELECT @v = MIN/MAX/SUM/AVG(...)`(GROUP BY 없음) → 무결과 시 NULL. `COUNT`만 0. `DECLARE` 초기값이 있으면 "초기값 미유지"까지 | 🟠 `UP_UTIL_SETTLE_INS_EXTRA` · 🟠 `UP_UTIL_SETTLE_SUMMARY_EXTRA` |
-| `@@ROWCOUNT` | `@@ROWCOUNT`를 읽는 자리의 직전 형제 문장이 `IF`면 "직전 IF가 0으로 리셋 — 조건이 항상 참" | 🔴 `UF_GET_COMM4CLIENT` |
+| `@@ROWCOUNT` | `@@ROWCOUNT`를 읽는 자리의 직전 형제 문장이 `IF`면, **분기가 건너뛰어지면** 0으로 리셋되어 조건이 참이 되고 **분기가 실행되면** 그 마지막 문장의 행 수가 남는다는 것을 둘 다 싣는다 | 🔴 `UF_GET_COMM4CLIENT` |
 | `커서 수명` | `DECLARE CURSOR`마다 ① `OPEN`~`CLOSE` 사이 `RETURN` 존재 → "오류 경로 미해제" ② `LOCAL` 미지정 → "범위가 서버 설정 의존" | 🟠 `UP_UTIL_SETTLE_SUMMARY_ETC` (+ `UP_UTIL_SETTLE_PROC_ETC` ⚪) |
 | `DB 배치` | `ObjectKey.Database` + `ThreePartObjectReferences` + `LinkedServerReferences`를 확정형 문장으로 번역 | F1 무리 🟡 7 · ⚪ 2 |
 
