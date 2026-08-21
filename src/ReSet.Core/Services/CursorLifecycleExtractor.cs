@@ -112,14 +112,24 @@ namespace ReSet.Core.Services
         private sealed record CursorDeclaration(int Line, string Name, bool IsLocal, bool IsGlobal);
 
         // DeclareCursorStatement/OpenCursorStatement/CloseCursorStatement/ReturnStatement를
-        // 직접 방문한다. 이 넷은 모두 리프 문장이지 StatementList 같은 컨테이너 노드가
-        // 아니므로, ScriptDom은 Visit(T)를 오버라이드해도 자식 순회를 계속한다
-        // (AggregateAssignmentExtractor·RowCountBoundaryExtractor와 같은 근거) - 최상위
-        // StatementList뿐 아니라 BEGIN…END 안, IF/WHILE 블록 안에 있는 문장도 그대로
-        // 방문된다. 별도의 StatementList 오버라이드가 필요 없다. 주의: 이 결론은 리프
-        // 노드에만 성립한다. StatementList 같은 컨테이너 노드의 Visit(T)를
-        // ExplicitVisit/base 호출 없이 오버라이드하면 그 자식으로의 하강이 실제로
-        // 끊긴다 - 이 배치의 다른 추출기 리뷰가 확인한 결함 유형이다.
+        // 직접 방문한다. 최상위 StatementList뿐 아니라 BEGIN…END 안, IF/WHILE 블록 안에
+        // 있는 문장도 그대로 방문된다. 별도의 StatementList 오버라이드가 필요 없다.
+        //
+        // [정정 - I2, 2026-08-22 최종 브랜치 리뷰] 예전 버전은 이 결론이 "리프 노드에만
+        // 성립하고, StatementList 같은 컨테이너 노드의 Visit(T)를 ExplicitVisit/base
+        // 호출 없이 오버라이드하면 그 자식으로의 하강이 실제로 끊긴다"고 적었는데, 이는
+        // 사실과 반대다. RowCountBoundaryExtractor가 정확히 그 모양(컨테이너 노드인
+        // Visit(StatementList)를 base 호출 없이 오버라이드)으로 구현돼 있고 정상 동작하며,
+        // RowCountBoundaryExtractorTests.Extract_NestedInsideIfBeginEndBlock_IsCovered가
+        // 중첩 StatementList까지 방문됨을 통과하는 테스트로 못박는다. 이 리포에서 직접
+        // 실험해도(Visit(StatementList)를 빈 본문으로 오버라이드하고 base/AcceptChildren을
+        // 전혀 호출하지 않아도 자식 OpenCursorStatement/CloseCursorStatement가 그대로
+        // 방문됨) 같은 결과가 나온다. 이 버전의 ScriptDom(180.37.3)에서 각 노드의
+        // Accept(visitor)는 visitor.Visit(this) 호출과 this.AcceptChildren(visitor) 호출을
+        // 둘 다 무조건 수행하도록 프레임워크 쪽에 미리 생성돼 있다 - 소비자가 Visit(T)를
+        // 어떻게 오버라이드하든(빈 본문이든, base를 부르든 안 부르든) 이 둘의 실행에는
+        // 영향이 없다. 즉 Visit(T) 오버라이드만으로 하강을 끊는 방법은 리프든 컨테이너든
+        // 이 API로는 존재하지 않는다.
         private sealed class CursorVisitor : TSqlFragmentVisitor
         {
             private readonly Dictionary<string, int> _opens = new(StringComparer.OrdinalIgnoreCase);
