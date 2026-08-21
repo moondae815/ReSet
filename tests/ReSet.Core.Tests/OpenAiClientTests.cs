@@ -186,6 +186,26 @@ namespace ReSet.Core.Tests
             var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
             Assert.Contains("Bad request", ex.Message);
         }
+
+        /// <summary>
+        /// 상태 코드가 메시지 문자열 안에만 있으면 재시도 판정이 산문 매칭이 된다.
+        /// AiRetryPolicy가 429와 401을 가르는 근거가 이 속성이다.
+        /// </summary>
+        [Theory]
+        [InlineData(System.Net.HttpStatusCode.TooManyRequests)]
+        [InlineData(System.Net.HttpStatusCode.ServiceUnavailable)]
+        [InlineData(System.Net.HttpStatusCode.Unauthorized)]
+        public async Task ChatAsync_ErrorResponse_PreservesStatusCodeOnException(
+            System.Net.HttpStatusCode statusCode)
+        {
+            var spyHandler = new OpenAiRequestSpyHandler("error body", statusCode);
+            var httpClient = new HttpClient(spyHandler);
+            var client = new OpenAiClient(httpClient, "test_api_key", "https://api.openai.com/v1", "gpt-4o");
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync("System", "User", 0.7f));
+
+            Assert.Equal(statusCode, ex.StatusCode);
+        }
     }
 
     public class OpenAiRequestSpyHandler : HttpMessageHandler
