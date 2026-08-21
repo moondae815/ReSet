@@ -1452,6 +1452,8 @@ git commit -m "feat: IF 뒤 @@ROWCOUNT 리셋을 실행 의미 표에 싣는다"
 
 **문장이 무엇을 단정하는지 조심해라**(Wave 5 실측). "오류 경로에서 커서가 닫히지 않는다"는 그 `RETURN`이 오류 경로인지, 그 경로가 도달 가능한지를 단정한다 — 정적으로 알 수 없다. 관측과 그 직접 귀결까지만 말해라. 그리고 `default_to_local_cursor`는 **서버가 아니라 데이터베이스** 옵션이다(`docs/audit-reports/2026-08-20a-POQSettlePrco20-axisA.md:123`).
 
+**이 원안 이후 바뀐 것 — I1 수정 라운드(2026-08-22 최종 브랜치 리뷰, Task 15).** 아래 Step 3 스케치의 게이트는 `LOCAL` 미지정만 봤다 — `GLOBAL`이 명시된 커서에도 "범위가 설정에 달려 있다"는 문장을 냈는데, `GLOBAL`이 명시되면 그 설정과 무관하게 범위가 전역으로 확정되므로 그 문장은 거짓이다. I1이 게이트를 `!declaration.IsLocal && !declaration.IsGlobal`로 고쳐 `GLOBAL` 명시 커서는 이 문장을 아예 내지 않는다(침묵). **아래 Step 3 코드는 그 수정 전의 원안이다 — 실제 게이트로 베끼지 마라.** 현재 게이트는 `src/ReSet.Core/Services/CursorLifecycleExtractor.cs`를 봐라(`needsScopeSentence`를 grep). 그리고 아래 docstring이 대는 "GLOBAL이면 같은 연결에서 재호출 시 DECLARE가 오류 16915로 실패해 처리 대상이 통째로 0이 된다"는 이 배치 어느 라운드에서도 실행으로 검증한 적이 없다 — **확인되지 않았다.** SUMMARY_ETC의 🟠 등급 근거는 커서 범위가 확정되지 않는다는 사실 자체이지, 오류 16915의 실측이 아니다.
+
 **Files:**
 - Create: `src/ReSet.Core/Services/CursorLifecycleExtractor.cs`
 - Modify: `src/ReSet.Core/Services/ExecutionSemanticsFacts.cs`
@@ -1558,8 +1560,17 @@ namespace ReSet.Core.Services
     ///
     /// [왜 LOCAL 미지정이 사실인가] DECLARE CURSOR에 LOCAL이 없으면 커서 범위가
     /// DB의 default_to_local_cursor 설정에 달린다(SQL Server 기본값 OFF = GLOBAL).
-    /// GLOBAL이면 같은 연결에서 재호출 시 DECLARE가 오류 16915로 실패해 처리 대상이
-    /// 통째로 0이 된다 - 이것이 SUMMARY_ETC의 등급을 🟠으로 올린 근거다.
+    /// [M-a 수정 - 2026-08-22, 이력 문서 낡음 정리] "GLOBAL이면 같은 연결에서 재호출
+    /// 시 DECLARE가 오류 16915로 실패해 처리 대상이 통째로 0이 된다"는 원안의 근거
+    /// 문장이 여기 있었으나, 이 배치 어느 라운드도 이를 실행으로 검증하지 않았다 -
+    /// 확인되지 않았다. SUMMARY_ETC 등급의 근거는 커서 범위 자체가 확정되지 않는다는
+    /// 사실이지 오류 16915의 실측이 아니다. 또한 이 원안은 LOCAL 미지정만 게이트로
+    /// 삼았는데, GLOBAL이 명시된 커서까지 이 문장을 내는 결함이 있었다(GLOBAL이면
+    /// default_to_local_cursor와 무관하게 범위가 전역으로 확정되므로 "설정에 달려
+    /// 있다"는 문장이 거짓이 된다) - I1(Task 15, 2026-08-22 최종 브랜치 리뷰)이
+    /// `!declaration.IsLocal && !declaration.IsGlobal`로 게이트를 고쳐 GLOBAL 명시
+    /// 커서는 침묵하게 했다. 실제 소스는 이 docstring이 아니라
+    /// `src/ReSet.Core/Services/CursorLifecycleExtractor.cs`를 봐라.
     /// </summary>
     public static class CursorLifecycleExtractor
     {
@@ -1589,16 +1600,23 @@ namespace ReSet.Core.Services
                         && closeLine > openLine
                         && visitor.ReturnLines.Any(l => l > openLine && l < closeLine);
 
-                    if (!unclosed && declaration.IsLocal) continue;
+                    // [M-a 수정 - 이 게이트는 원안이 `declaration.IsLocal`만 봤다. I1이
+                    // GLOBAL 명시 커서까지 아래 문장을 내던 결함을 고쳐 이렇게 바꿨다 -
+                    // GLOBAL이 명시되면 default_to_local_cursor와 무관하게 범위가
+                    // 전역으로 확정되므로 "설정에 달려 있다"는 문장이 거짓이 된다.
+                    var needsScopeSentence = !declaration.IsLocal && !declaration.IsGlobal;
+                    if (!unclosed && !needsScopeSentence) continue;
 
                     var parts = new List<string>();
                     if (unclosed)
                     {
                         parts.Add("OPEN과 CLOSE 사이에 RETURN이 있어 그 경로에서는 CLOSE/DEALLOCATE에 도달하지 않습니다");
                     }
-                    if (!declaration.IsLocal)
+                    if (needsScopeSentence)
                     {
-                        parts.Add("LOCAL이 지정되지 않아 커서 범위가 서버의 default_to_local_cursor 설정에 달려 있습니다");
+                        // [M-a 수정] 원안은 "서버의"였다 - default_to_local_cursor는
+                        // 서버가 아니라 데이터베이스 옵션이다(Wave 5 실측, 위 산문 참고).
+                        parts.Add("LOCAL도 GLOBAL도 지정되지 않아 커서 범위가 데이터베이스의 default_to_local_cursor 설정에 달려 있습니다");
                     }
 
                     facts.Add(new CursorLifecycleFact(
@@ -1615,7 +1633,7 @@ namespace ReSet.Core.Services
             }
         }
 
-        private sealed record CursorDeclaration(int Line, string Name, bool IsLocal);
+        private sealed record CursorDeclaration(int Line, string Name, bool IsLocal, bool IsGlobal);
 
         private sealed class CursorVisitor : TSqlFragmentVisitor
         {
@@ -1633,10 +1651,11 @@ namespace ReSet.Core.Services
                 var name = node.Name?.Value;
                 if (string.IsNullOrWhiteSpace(name)) return;
 
-                var isLocal = node.CursorDefinition?.Options?.Any(
-                    o => o.OptionKind == CursorOptionKind.Local) == true;
+                var options = node.CursorDefinition?.Options;
+                var isLocal = options?.Any(o => o.OptionKind == CursorOptionKind.Local) == true;
+                var isGlobal = options?.Any(o => o.OptionKind == CursorOptionKind.Global) == true;
 
-                Declarations.Add(new CursorDeclaration(node.StartLine, name!, isLocal));
+                Declarations.Add(new CursorDeclaration(node.StartLine, name!, isLocal, isGlobal));
             }
 
             public override void Visit(OpenCursorStatement node)
