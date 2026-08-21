@@ -29,6 +29,8 @@ namespace ReSet.Core.Services
 
         public const string RowCountKind = "@@ROWCOUNT";
 
+        public const string CursorKind = "커서 수명";
+
         /// <summary>
         /// 컬럼명 → 데이터 타입 사전. ExpressionTypePathExtractor(Task 9)가 잎 타입을
         /// 판정할 때 쓴다. 같은 컬럼명이 테이블마다 타입이 다르면 판정할 수 없으므로
@@ -87,6 +89,12 @@ namespace ReSet.Core.Services
             {
                 facts.Add(new ExecutionSemanticFact(
                     RowCountKind, fact.Line.ToString(), fact.Predicate, fact.Sentence));
+            }
+
+            foreach (var fact in CursorLifecycleExtractor.Extract(ddlText))
+            {
+                facts.Add(new ExecutionSemanticFact(
+                    CursorKind, fact.Line.ToString(), fact.CursorName, fact.Sentence));
             }
 
             return facts;
