@@ -442,8 +442,9 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildLockHintTableLines(lockHints));
             }
 
-            // 이 갈래(SP 전체 명세서)는 `## CRUD 분석`·`## 로직 흐름 요약` 둘 다
-            // 필수 H2로 쓴다(:355) - 두 표 모두 표 그대로 준다.
+            // 이 갈래(SP 전체 명세서)는 위 "The specification H2 headers must strictly
+            // use these exact Korean titles" 규칙이 `## CRUD 분석`·`## 로직 흐름 요약`
+            // 둘 다 필수 H2로 요구한다 - 두 표 모두 표 그대로 준다.
             rules.AddRange(BuildMachineFactBlockLines(
                 spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true));
 
@@ -1121,8 +1122,11 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 리뷰] 진입점을 하나로 둔 것 자체는 옳았지만, 표 두 종의 인트로가 서로 다른
         /// 목적지 H2("실행 의미"는 `## CRUD 분석`, "CASE 분기"는 `## 로직 흐름 요약`)를
         /// 못 박는데, 지역 모델의 두 절 분할 갈래(`CrudAnalysis`·`LogicAndVisualization`)는
-        /// 각각 그중 하나만 쓰고 다른 하나는 아예 쓰지 않는다(H2 제약이 "오직 하나만"이라고
-        /// 명시한다). 갈래 구분 없이 표 둘을 함께 냈더니 "자신이 쓸 수 없는 절에 표를
+        /// 서로 다른 H2 부분집합만 쓴다 - `CrudAnalysis`는 `## CRUD 분석` 하나만 허용하고
+        /// (H2 제약이 "오직 하나만"이라고 명시한다), `LogicAndVisualization`은 `## 로직
+        /// 흐름 요약`과 `## 비즈니스 흐름 시각화` 둘을 허용하지만(H2 제약이 "오직 하나만"이
+        /// 아니다) 그 둘 중 어느 쪽에도 `## CRUD 분석`은 없다. 갈래 구분 없이 표 둘을
+        /// 함께 냈더니 "자신이 쓸 수 없는 절에 표를
         /// 넣으라"는 자기모순 지시가 됐다 - 모델이 그 H2 제약을 어기고 엉뚱한 헤딩까지
         /// 합성하거나(귀결: 문서에 같은 `###` 헤딩이 두 번 생기고
         /// `MechanicalValidator.LocateHeadingSection`은 `FindIndexOutsideFence`로 첫
@@ -1543,8 +1547,9 @@ Based on the structured reference context above, reverse engineer the stored pro
                 systemPrompt += "\n\n" + string.Join("\n", BuildReferencedFunctionTableLines(functionCallsForFunctionDef, functionDef));
             }
 
-            // 이 갈래(함수 명세서)도 `## CRUD 분석`·`## 로직 흐름 요약` 둘 다 필수
-            // H2로 쓴다(:1354) - 두 표 모두 표 그대로 준다.
+            // 이 갈래(함수 명세서)도 위 "The required H2 headers are exactly" 규칙(7번)이
+            // `## CRUD 분석`·`## 로직 흐름 요약` 둘 다 필수 H2로 요구한다 - 두 표 모두
+            // 표 그대로 준다.
             var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(
                 functionDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: true);
             if (machineFactLinesForFunctionDef.Count > 0)
@@ -2768,9 +2773,10 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildLockHintTableLines(lockHintsForCrud));
                 }
 
-                // 이 분기(CrudAnalysis)는 `## CRUD 분석` 하나만 쓴다(:2583 "only one
-                // H2 header"). CASE 분기 표는 `## 로직 흐름 요약`이 목적지라 이 분기가
-                // 쓰지 않으므로 - Task 14 (Critical) - 표가 아니라 참고 재료로만 준다.
+                // 이 분기(CrudAnalysis)는 위 규칙 1 "The document must use only one
+                // H2 header: `## CRUD 분석`"이 `## CRUD 분석` 하나만 허용한다. CASE
+                // 분기 표는 `## 로직 흐름 요약`이 목적지라 이 분기가 쓰지 않으므로 -
+                // Task 14 (Critical) - 표가 아니라 참고 재료로만 준다.
                 sbRules.AddRange(BuildMachineFactBlockLines(
                     spDef, crudAnalysisSectionPresent: true, logicFlowSectionPresent: false));
 
@@ -2935,8 +2941,9 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForLogic));
                 }
-                // 이 분기(LogicAndVisualization)는 `## 로직 흐름 요약`·`## 비즈니스
-                // 흐름 시각화`만 쓴다(:2802 "only H2 headers"). 실행 의미 표는
+                // 이 분기(LogicAndVisualization)는 위 규칙 1 "The document must use
+                // only H2 headers: `## 로직 흐름 요약` and `## 비즈니스 흐름 시각화`"가
+                // 이 둘만 허용하고 `## CRUD 분석`은 그중에 없다. 실행 의미 표는
                 // `## CRUD 분석`이 목적지라 이 분기가 쓰지 않으므로 - Task 14
                 // (Critical) - 표가 아니라 참고 재료로만 준다.
                 sbRules.AddRange(BuildMachineFactBlockLines(

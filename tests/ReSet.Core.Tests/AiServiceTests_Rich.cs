@@ -2499,11 +2499,18 @@ END"
             // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## CRUD 분석`
             // 헤더를 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접 단언하는
             // 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            //
+            // [Fix Round 1 - 갈래 2 고유 앵커] "The required H2 headers are exactly"는
+            // BuildFunctionSpecificationPrompts에만 있는 문구다(갈래 1은 "The
+            // specification H2 headers must strictly use these exact Korean titles"를
+            // 쓴다) - 이 앵커가 없으면 :284의 타입 분기가 깨져 이 픽스처가 갈래 1로
+            // 떨어져도 표 배선 자체는 그대로라 테스트가 통과해버린다.
             var (service, handler) = CreateProbe();
 
             await service.GenerateSpecificationAsync(ProbeExecutionSemanticsFunctionSpDef(), "지침", null);
 
             var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("The required H2 headers are exactly", body);
             Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
             Assert.Contains("3부 식별자 참조 0건", body);
         }
@@ -2600,11 +2607,17 @@ END"
             // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## 로직 흐름
             // 요약` 헤더도 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접
             // 단언하는 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            //
+            // [Fix Round 1 - 갈래 2 고유 앵커] 위 테스트와 같은 이유로 "The required
+            // H2 headers are exactly"(BuildFunctionSpecificationPrompts에만 있는
+            // 문구)를 함께 단언한다 - 이게 없으면 타입 분기가 깨져 갈래 1로 떨어져도
+            // 이 테스트는 그대로 통과한다.
             var (service, handler) = CreateProbe();
 
             await service.GenerateSpecificationAsync(ProbeCaseBranchFunctionSpDef(), "지침", null);
 
             var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("The required H2 headers are exactly", body);
             Assert.Contains(CaseBranchExtractor.TableHeading, body);
             Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
         }
