@@ -136,6 +136,18 @@ namespace ReSet.Core.Services
         // 확인한 모든 사례에서. 다음 사람이 이 자리를 근거로 불필요한 ExplicitVisit/base
         // 호출이나 StatementList 오버라이드를 추가하지 마라 - 필요 없다.
         //
+        // [Fix Round 1 m-a - 참인 규칙도 적어 둔다] 위 문단은 무엇이 하강을 끊지
+        // "않는지"만 말한다. 실제로 하강을 끊는 것은 따로 있다 - ExplicitVisit(T)를
+        // 오버라이드하면서 base.ExplicitVisit(node)나 node.AcceptChildren(this)를
+        // 부르지 않는 경우다(별도 프로브로 확인: TSql160Parser로 IF 안에 중첩된
+        // BEGIN…END를 파싱한 뒤, ExplicitVisit(StatementList)를 base 호출 없이
+        // 오버라이드한 방문자는 최상위 StatementList 1개만 보고 IF 안의 것은 보지
+        // 못했다 - 같은 스크립트에서 Visit(StatementList)만 오버라이드한 방문자는
+        // 3개 모두 봤다). Visit(T)와 ExplicitVisit(T)는 이름이 비슷해도 계약이
+        // 다르다 - 전자는 방문 훅일 뿐이고 하강은 프레임워크가 각 TSqlFragment의
+        // ExplicitVisit 구현 안에서 하지만, 후자를 재정의하면 그 하강 책임까지
+        // 통째로 떠맡는다.
+        //
         // 방문 지점 커버리지는 CaseBranchExtractorTests의
         // Extract_NestedCase_ShouldAttributeEachBranchToItsOwnCaseOnly ·
         // Extract_CaseInsideWhereClause_ShouldStillBeVisited ·
