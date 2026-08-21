@@ -316,18 +316,24 @@ namespace ReSet.Core.Services
             /// CheckExecutionSemantics`는 렌더되지 않은 이 `Target`을, 렌더 파이프라인
             /// (`AiService.EscapeTableCell` → `MarkdownTableCellCodec.Escape`)을 거친 뒤
             /// 다시 셀로 쪼갠(`MarkdownTableCellCodec.SplitRow`) 문자열과 `==`로 원문 그대로
-            /// 비교한다(MechanicalValidator.cs:3494-3503). `Escape`가 접는 것은 `\r\n`·`\n`·
-            /// `\r` 세 가지뿐이고 연속 공백은 접지 않으며, `SplitRow`가 되돌리는 것은 `\|`
-            /// 뿐이다 - 그래서 여기서 접어야 할 것도 그 세 가지뿐이다(추측이 아니라
-            /// MarkdownTableCellCodec.cs 실측). 이걸 접지 않으면 원본 그대로 베껴 옮겨도
-            /// 영원히 일치하지 않는다.
+            /// 비교한다(MechanicalValidator.cs:3494-3503).
+            ///
+            /// [Task 13 수정 - 예전 버전이 놓친 것] 이 자리는 예전에 `\r\n`·`\n`·`\r`
+            /// 세 가지만 직접 접었다 - 그 시점 `MarkdownTableCellCodec.Escape`가 접는 것과
+            /// 정확히 같은 셋이라 그 자체로 틀린 문장은 아니었다. 그런데 그 셋과 같은
+            /// 위험(모델이 표 셀 안에서 그대로
+            /// 재현하리라 기대하기 어려운 문자)을 탭도 진다 - 실행 확인:
+            /// `CAST(Amt\t* 100.0 AS INT)`. `MarkdownTableCellCodec.Escape`는 탭을 건드리지
+            /// 않으므로, 접지 않으면 렌더된 프롬프트에도 리터럴 탭이 그대로 남는다. 이제
+            /// 개행·탭 정규화는 `CaseBranchExtractor.TextOf` 하나로 모았다(Task 13) - CASE
+            /// 분기 조건과 `@@ROWCOUNT` 술어가 같은 결함을 같은 이유로 겪기 때문이다. 그
+            /// 정규화는 이미 `TextOf`가 하므로 여기서 다시 하지 않는다 - 두 번 접어도
+            /// 멱등이라 틀리지는 않지만, 정규화 지점이 갈리면 다음 수정에서 한쪽만 고쳐질
+            /// 위험이 생긴다.
             /// </summary>
             private static string TargetText(TSqlFragment node)
             {
-                return CaseBranchExtractor.TextOf(node)
-                    .Replace("\r\n", " ")
-                    .Replace("\n", " ")
-                    .Replace("\r", " ");
+                return CaseBranchExtractor.TextOf(node);
             }
 
             /// <summary>

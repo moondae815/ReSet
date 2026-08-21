@@ -128,5 +128,39 @@ END";
 
             Assert.Equal(2, facts.Count);
         }
+
+        [Fact]
+        public void Extract_MultilineWhenCondition_ConditionMatchesRenderedTableCell()
+        {
+            // Task 13 (최종 브랜치 리뷰 Critical): UIF_SettleYMD:74-76 모양 - WHEN
+            // 조건이 여러 줄에 걸친다. MechanicalValidator.CheckCaseBranches는 렌더되지
+            // 않은 fact.Condition을, 렌더 파이프라인(AiService.EscapeTableCell →
+            // MarkdownTableCellCodec.Escape)을 거친 뒤 SplitRow로 되돌린 셀 문자열과
+            // ==로 원문 그대로 비교한다(MechanicalValidator.cs:3574-3580). Condition에
+            // 개행이 남아 있으면 표 셀(한 줄에서 잘라낸 것이라 개행을 담을 수 없다)과
+            // 영원히 일치하지 않는다 - 명세서를 한 글자도 안 틀리고 옮겨도 L1이 매 회차
+            // CaseBranchTableMissing을 낸다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_strYMD CHAR(8)) RETURNS INT AS
+BEGIN
+    DECLARE @v INT
+    SET @v = CASE WHEN DATEPART(DW, CONVERT(VARCHAR(6), @pi_strYMD, 112)
+                        + RIGHT('0'+CONVERT(VARCHAR(2), @pi_strYMD),2) ) > 3
+                   THEN 7 ELSE 0 END
+    RETURN @v
+END";
+
+            var fact = CaseBranchExtractor.Extract(ddl).First(f => f.Ordinal == "WHEN 1");
+
+            Assert.DoesNotContain("\n", fact.Condition);
+            Assert.DoesNotContain("\r", fact.Condition);
+
+            // 렌더러가 실제로 거치는 변환(개행 접기 + | 이스케이프)을 그대로 적용한 뒤,
+            // L1이 쓰는 셀 분리기로 되돌려 실제 렌더된 셀과 fact.Condition이 같은지
+            // 확인한다 - 둘 중 하나만 보면 이 결함이 또 숨는다.
+            var renderedRow = $"| {MarkdownTableCellCodec.Escape(fact.Condition)} |";
+            var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
+            Assert.Equal(fact.Condition, renderedCell);
+        }
     }
 }

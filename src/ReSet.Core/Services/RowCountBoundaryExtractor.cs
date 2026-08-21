@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Serilog;
 
@@ -106,21 +105,20 @@ namespace ReSet.Core.Services
                     if (statements[i] is not IfStatement current) continue;
                     if (current.Predicate == null) continue;
 
-                    var predicate = TextOf(current.Predicate);
+                    // Task 13 (최종 브랜치 리뷰 Critical): 이전에는 이 메서드 안에
+                    // CaseBranchExtractor.TextOf와 같은 모양의 복원 로직을 따로 두고,
+                    // 개행을 접지 않았다 - 여러 줄 IF 술어(드물지만 코드 모양상 가능)를
+                    // 원문 그대로 옮겨도 L1(MechanicalValidator.CheckExecutionSemantics)의
+                    // `==` 대조가 영원히 실패했다. `CaseBranchExtractor.TextOf`가 같은
+                    // 결함을 이미 고쳤으므로(개행·탭을 공백으로 접음) 별도 구현을 지우고
+                    // 그 메서드를 재사용한다 - 두 파일에서 같은 정규화를 유지·보수하면
+                    // 한쪽만 고쳐졌을 때 다시 갈라진다.
+                    var predicate = CaseBranchExtractor.TextOf(current.Predicate);
                     if (predicate.IndexOf("@@ROWCOUNT", StringComparison.OrdinalIgnoreCase) < 0) continue;
 
                     Facts.Add(new RowCountBoundaryFact(
                         current.StartLine, predicate, SemanticsSentence));
                 }
-            }
-
-            private static string TextOf(TSqlFragment fragment)
-            {
-                return string.Concat(
-                    fragment.ScriptTokenStream
-                        .Skip(fragment.FirstTokenIndex)
-                        .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
-                        .Select(t => t.Text)).Trim();
             }
         }
     }

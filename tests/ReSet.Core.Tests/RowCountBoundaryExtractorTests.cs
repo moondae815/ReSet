@@ -103,5 +103,36 @@ END";
 
             Assert.Single(RowCountBoundaryExtractor.Extract(ddl));
         }
+
+        [Fact]
+        public void Extract_MultilinePredicate_PredicateMatchesRenderedTableCell()
+        {
+            // Task 13 (최종 브랜치 리뷰 Critical): CaseBranchExtractor의 Condition과
+            // 같은 결함이 @@ROWCOUNT 표에도 있다. MechanicalValidator는 렌더되지 않은
+            // fact.Target(=Predicate)을, 렌더 파이프라인(AiService.EscapeTableCell →
+            // MarkdownTableCellCodec.Escape)을 거친 뒤 SplitRow로 되돌린 셀 문자열과
+            // ==로 원문 그대로 비교한다(MechanicalValidator.cs:3494-3503). Predicate에
+            // 개행이 남아 있으면 표 셀과 영원히 일치하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @x INT
+    SELECT @x = c FROM dbo.T
+    IF @@ROWCOUNT < 1 BEGIN SET @x = 1 END
+    IF @@ROWCOUNT < 1
+        OR 1 = 2
+    BEGIN SELECT TOP 1 @x = c FROM dbo.T ORDER BY c DESC END
+END";
+
+            var fact = Assert.Single(RowCountBoundaryExtractor.Extract(ddl));
+
+            Assert.DoesNotContain("\n", fact.Predicate);
+            Assert.DoesNotContain("\r", fact.Predicate);
+
+            var renderedRow = $"| {MarkdownTableCellCodec.Escape(fact.Predicate)} |";
+            var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
+            Assert.Equal(fact.Predicate, renderedCell);
+        }
     }
 }

@@ -73,19 +73,44 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 조각의 원문 텍스트를 토큰 스트림에서 복원한다.
         ///
-        /// `internal`인 이유는 Task 9의 ExpressionTypePathExtractor도 CAST 식 원문을
-        /// 같은 방식으로 복원하기 때문이다 - 같은 관용구를 두 번 쓰면 한쪽만 고쳐졌을 때
-        /// 표마다 원문 표기가 갈린다. 세 번째 소비자가 생기면 그때 중립 헬퍼 클래스로
-        /// 옮긴다(선례: SplitTableRowCells가 MarkdownTableCellCodec으로 옮겨 간 경위).
+        /// `internal`인 이유는 이제 소비자가 셋이기 때문이다 - Task 9의
+        /// ExpressionTypePathExtractor(CAST 식 원문), 그리고 Task 13의
+        /// RowCountBoundaryExtractor(`@@ROWCOUNT` 술어 원문)가 CASE 분기와 같은 방식으로
+        /// 원문을 복원하고 같은 개행·탭 정규화가 필요하다(아래 참고). 원래 주석은
+        /// "세 번째 소비자가 생기면 그때 중립 헬퍼 클래스로 옮긴다"고 적었었다 - 지금이
+        /// 그 시점이지만, Task 13의 쓰기 집합이 새 파일을 허용하지 않아 이번에는 이
+        /// 메서드를 그대로 두고 재사용하는 쪽을 택했다(같은 어셈블리 안에서 `internal`로
+        /// 이미 접근 가능하다). 네 번째 소비자가 생기거나 쓰기 집합이 넓어지면 그때
+        /// MarkdownTableCellCodec 같은 중립 클래스로 옮긴다.
+        ///
+        /// [왜 여기서 개행·탭을 공백으로 접는가 - Task 13, 최종 브랜치 리뷰 Critical]
+        /// 이 값은 결국 세 기계 확정 표(CASE 분기 · 실행 의미의 @@ROWCOUNT/식 타입 경로)의
+        /// 셀에 실리고, 렌더 시점에 `AiService.EscapeTableCell` → `MarkdownTableCellCodec.
+        /// Escape`를 거친다. `Escape`는 `\r\n`·`\n`·`\r`을 공백으로 접고 표 셀은 한 줄에서
+        /// 잘라낸 것이라 애초에 개행을 담을 수 없다 - 접지 않으면 원문을 한 글자도 안
+        /// 틀리고 옮겨도 L1(MechanicalValidator)의 `==` 대조가 영원히 실패한다. 탭도
+        /// 같은 자리에 접는다 - `Escape`는 탭을 건드리지 않아 기술적으로는 표 셀 안에
+        /// 리터럴 탭이 살아남을 수 있지만, 마크다운 표 셀 안의 리터럴 탭을 모델이 그대로
+        /// 재현하리라 기대하기 어렵다(실행 확인: `CAST(Amt\t* 100.0 AS INT)`류). 연속
+        /// 공백은 접지 않는다 - 이미 관측된 실패 두 유형(개행이 만드는 구조적 불일치,
+        /// 탭이 만드는 비가시 문자 재현 실패)에 대한 최소 대응이고, 공백 뭉치까지
+        /// 접으면 원문에서 한 걸음 더 멀어져 축A 감사가 원본 DDL과 글자 단위로 대조할
+        /// 때 표 값과 원문이 갈리는 폭이 커진다.
         /// </summary>
         internal static string TextOf(TSqlFragment? fragment)
         {
             if (fragment == null) return string.Empty;
-            return string.Concat(
+            var raw = string.Concat(
                 fragment.ScriptTokenStream
                     .Skip(fragment.FirstTokenIndex)
                     .Take(fragment.LastTokenIndex - fragment.FirstTokenIndex + 1)
-                    .Select(t => t.Text)).Trim();
+                    .Select(t => t.Text));
+            return raw
+                .Replace("\r\n", " ")
+                .Replace("\n", " ")
+                .Replace("\r", " ")
+                .Replace("\t", " ")
+                .Trim();
         }
 
         // SearchedCaseExpression/SimpleCaseExpression은 리프 문장이 아니라 스칼라 식이고,

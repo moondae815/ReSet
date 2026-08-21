@@ -192,6 +192,28 @@ END";
         }
 
         [Fact]
+        public void Extract_CastWithTabIndentation_TargetHasNoLiteralTab()
+        {
+            // Task 13 (최종 브랜치 리뷰 Critical): 리뷰어가 실행 확인한 프로브 -
+            // CAST expr=[[CAST(Amt[TAB]* 100.0 AS INT)]]. MarkdownTableCellCodec.Escape는
+            // \r\n·\n·\r만 접고 탭은 그대로 둔다(MarkdownTableCellCodec.cs) - SplitRow도
+            // 양끝만 Trim한다. 표 셀 안의 리터럴 탭을 모델이 그대로 재현하리라 기대하기
+            // 어렵다 - Target에 탭이 남으면 안 된다.
+            const string ddl = "CREATE FUNCTION dbo.F(@Amt MONEY) RETURNS INT AS\n"
+                + "BEGIN\n"
+                + "    RETURN CAST(@Amt\t* 100.0 AS INT)\n"
+                + "END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+
+            Assert.DoesNotContain("\t", fact.Expression);
+
+            var renderedRow = $"| {MarkdownTableCellCodec.Escape(fact.Expression)} |";
+            var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
+            Assert.Equal(fact.Expression, renderedCell);
+        }
+
+        [Fact]
         public void Extract_ColumnTypeFromBuildColumnTypeMap_DecimalWithPrecisionScale_ShouldReportNumericTruncation()
         {
             // I1 수정 라운드: DbMetadataService(:898-907, :334, :365)가 실제로 만드는
