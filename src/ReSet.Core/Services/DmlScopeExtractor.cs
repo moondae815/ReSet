@@ -23,14 +23,22 @@ namespace ReSet.Core.Services
     /// 후자는 PredicateColumns와 겹칠 수 있다(같은 WHERE 텍스트가 필터와 조인
     /// 역할을 동시에 하기 때문).
     /// </param>
-    /// <param name="OrderByColumns">
-    /// INSERT ... SELECT 의 최상위 ORDER BY 컬럼. UPDATE·DELETE는 최상위 ORDER BY가
-    /// 문법상 불가하므로 항상 빈 목록이고 표에서 "—"로 렌더된다.
+    /// <param name="OrderByExpressions">
+    /// INSERT ... SELECT 의 최상위 ORDER BY 요소 원문(정렬 방향 포함). UPDATE·DELETE는
+    /// 최상위 ORDER BY가 문법상 불가하므로 항상 빈 목록이고 표에서 "—"로 렌더된다.
+    ///
+    /// [이름이 Columns가 아니라 Expressions인 이유 - 수정 라운드 1, 조정자 판정]
+    /// ORDER BY는 컬럼 이름뿐 아니라 임의 식(`CASE WHEN ... END`, `LEN(A)`)과 정렬
+    /// 방향(`DESC`/`ASC`)을 받는다. Column이라는 이름은 "단순 식별자만 담는다"는
+    /// 기대를 주는데 그 기대가 실제로는 깨진다 - PredicateColumns·JoinKeys는 그
+    /// 기대가 성립하는 자리(항상 단순 식별자)라 이름이 정확하지만, 여기는 처음부터
+    /// 그렇지 않았다. 이 사실을 아직 아무도 소비하지 않는 지금(AiService·L1 배선은
+    /// 별도 과제) 이름을 고치는 비용이 가장 싸므로 지금 고친다.
     ///
     /// [존재 여부가 아니라 목록인 이유 - 2026-08-21 축 A 감사]
     /// STAT_PGCOLLECT_INS:113의 `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서
     /// 어디에도 없었다. 불리언으로 담으면 "있다"만 알고 무엇으로 정렬하는지는 여전히
-    /// 모른다. 컬럼 목록을 담는 비용이 같으므로 더 충실한 쪽을 택한다.
+    /// 모른다. 목록을 담는 비용이 같으므로 더 충실한 쪽을 택한다.
     ///
     /// [원천이 UNION일 때도 놓치지 않는 이유 - 2026-08-21 구현 중 프로브 실측]
     /// ScriptDom에서 OrderByClause는 QuerySpecification이 아니라 그 공통 기반 클래스인
@@ -51,7 +59,7 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> PredicateColumns,
         bool DateParameterApplied,
         IReadOnlyList<string> JoinKeys,
-        IReadOnlyList<string> OrderByColumns);
+        IReadOnlyList<string> OrderByExpressions);
 
     /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
     /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
@@ -631,7 +639,7 @@ namespace ReSet.Core.Services
 
                 Facts.Add(new DmlScopeFact(
                     "INSERT", node.StartLine, TextOf(node.Target),
-                    predicateColumns, dateApplied, joinKeys, OrderByColumnsOf(node.InsertSource)));
+                    predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource)));
             }
 
             /// <summary>
@@ -639,19 +647,39 @@ namespace ReSet.Core.Services
             ///
             /// [Select를 QuerySpecification으로 좁히지 않는 이유] OrderByClause는
             /// QuerySpecification이 아니라 그 공통 기반 QueryExpression에 선언돼 있다
-            /// (2026-08-21 프로브 실측, 이 파일 DmlScopeFact.OrderByColumns 문서 참고).
+            /// (2026-08-21 프로브 실측, 이 파일 DmlScopeFact.OrderByExpressions 문서 참고).
             /// UNION 원천의 최상위 ORDER BY는 BinaryQueryExpression 자신에 붙고 갈래
             /// QuerySpecification에는 붙지 않으므로, Select를 QueryExpression 그대로 두고
             /// OrderByClause에 바로 접근해야 QuerySpecification·BinaryQueryExpression·
             /// QueryParenthesisExpression 세 경우가 한 코드로 잡힌다.
+            ///
+            /// [e.Expression이 아니라 e(OrderByElement) 자신의 원문을 접어서 쓰는 이유 -
+            /// 수정 라운드 1 리뷰 실측]
+            /// 두 가지가 한 줄로 닫힌다.
+            ///
+            /// 1. TextOf(e.Expression)만 쓰면 여러 줄로 쓰인 식(`CASE WHEN ... END`처럼
+            ///    ORDER BY도 임의 식을 받는다)이 개행을 그대로 담는다. 이 재료의 값은
+            ///    "컬럼 이름"이 아니라 "임의 식의 원문"이라 PredicateColumns·JoinKeys(항상
+            ///    단순 식별자)와 달리 개행 위험이 실재한다. L1은 접지 않은 원문과 대조하므로
+            ///    (CollapseWhitespace 문서, 이 파일 아래쪽) 개행이 든 값은 어떤 산출물도
+            ///    만족시킬 수 없는 요구가 된다 - TopLevelPredicateCollector의 집합 술어
+            ///    좌변과 LockHintVisitor.RenderHint의 값 있는 힌트가 이미 같은 이유로
+            ///    CollapseWhitespace(TextOf(...))를 쓰고 있다. 세 번째 자리만 예외로 둘
+            ///    근거가 없다.
+            /// 2. DESC·ASC는 OrderByElement.SortOrder로 표현되고 그 키워드 토큰은
+            ///    e.Expression이 아니라 e(OrderByElement) 자신의 토큰 스트림에 있다
+            ///    (프로브 실측: `ORDER BY A DESC`에서 TextOf(e.Expression)은 "A"만, TextOf(e)는
+            ///    "A DESC"를 낸다). e.Expression만 보면 방향이 조용히 사라져, 원본이
+            ///    `ORDER BY A DESC`인데 표가 `A`라고 적어 grep으로 원본을 찾을 수 없게 된다 -
+            ///    이 표의 원칙("독자가 원본에서 찾을 수 있어야 한다")을 어긴다.
             /// </summary>
-            private static IReadOnlyList<string> OrderByColumnsOf(InsertSource? source)
+            private static IReadOnlyList<string> OrderByExpressionsOf(InsertSource? source)
             {
                 var orderBy = (source as SelectInsertSource)?.Select?.OrderByClause;
                 if (orderBy == null) return Array.Empty<string>();
 
                 return orderBy.OrderByElements
-                    .Select(e => TextOf(e.Expression))
+                    .Select(e => CollapseWhitespace(TextOf(e)))
                     .Where(t => !string.IsNullOrWhiteSpace(t))
                     .ToList();
             }

@@ -368,7 +368,7 @@ END";
 
             var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
 
-            Assert.Equal(new[] { "INYMD", "CLIENTID" }, fact.OrderByColumns);
+            Assert.Equal(new[] { "INYMD", "CLIENTID" }, fact.OrderByExpressions);
         }
 
         [Fact]
@@ -380,7 +380,7 @@ BEGIN
     INSERT INTO dbo.TStat (A) SELECT X FROM dbo.TSource
 END";
 
-            Assert.Empty(Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).OrderByColumns);
+            Assert.Empty(Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).OrderByExpressions);
         }
 
         [Fact]
@@ -396,7 +396,7 @@ END";
 
             var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
 
-            Assert.All(facts, f => Assert.Empty(f.OrderByColumns));
+            Assert.All(facts, f => Assert.Empty(f.OrderByExpressions));
         }
 
         [Fact]
@@ -419,7 +419,51 @@ END";
 
             var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
 
-            Assert.Equal(new[] { "A", "B" }, fact.OrderByColumns);
+            Assert.Equal(new[] { "A", "B" }, fact.OrderByExpressions);
+        }
+
+        [Fact]
+        public void Extract_InsertOrderByMultilineExpression_ShouldNotContainNewlines()
+        {
+            // 수정 라운드 1 리뷰 실측 - CASE WHEN을 여러 줄로 쓰면 TextOf(e.Expression)이
+            // 개행을 그대로 담는다. L1은 접지 않은 원문과 대조하므로(CollapseWhitespace
+            // 문서, :752-759) 개행이 든 값은 어떤 산출물도 만족시킬 수 없는 요구가 된다.
+            // TopLevelPredicateCollector(:1165)·LockHintVisitor.RenderHint(:538)가 이미
+            // 같은 이유로 접고 있다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A, B)
+    SELECT A, B FROM dbo.TSource
+    ORDER BY CASE WHEN A = 1
+                  THEN A
+                  ELSE B
+             END
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.DoesNotContain(fact.OrderByExpressions, c => c.Contains('\n') || c.Contains('\r'));
+        }
+
+        [Fact]
+        public void Extract_InsertOrderByWithDescDirection_ShouldKeepTheDirection()
+        {
+            // 수정 라운드 1 리뷰 Minor 실측 - DESC는 OrderByElement에 달려 있고
+            // e.Expression에는 없다. TextOf(e.Expression)만 보면 방향이 조용히 사라져
+            // 표가 원본 DDL과 grep으로 대조되지 않는다(원본이 `ORDER BY A DESC`인데
+            // 표가 `A`라고 적으면 못 찾는다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A, B)
+    SELECT A, B FROM dbo.TSource
+    ORDER BY A DESC, B
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "A DESC", "B" }, fact.OrderByExpressions);
         }
 
         [Fact]
