@@ -1856,15 +1856,17 @@ END",
         }
 
         // ---------------------------------------------------------------
-        // 2026-08-21 최종 전체 브랜치 리뷰 - Important 2.
+        // 2026-08-21 최종 전체 브랜치 리뷰 - Important 2 (재라운드 ①이 교체).
         // ---------------------------------------------------------------
 
-        // Important 2 - LogicAndVisualization 분기의 NOLOCK 격리수준 규칙(위 hasUdf
-        // 규칙 바로 다음)은 이 문서의 CRUD 분석 절에 실리는 「잠금 힌트 (기계 확정 —
-        // 수정 금지)」 표를 전혀 언급하지 않은 채 원본 DDL만 쥐고 격리수준 산문을
-        // 쓰라고만 지시했다. AcqManual에서 감사가 잡은 🟡이 정확히 이 자리였다.
+        // ①(재라운드) - 라운드 1의 "CRUD 분석 절에 이미 실린 표를 근거로 쓰라"는
+        // 포인터 지시는 이행 불가였다: 구역 분할 경로는 세 절을 병렬로 생성하므로
+        // (VerificationPipelineOrchestrator.cs:1328-1340, :1450-1462) LogicAndVisualization
+        // 분기 실행 시점에 CRUD 분석 절은 존재하지 않는다. 지금은 표를 가리키는 대신
+        // 잠금 힌트 사실 자체를 인라인 재료로 준다 - 그 재료가 이 분기의 프롬프트
+        // 안에 직접 있어야 한다.
         [Fact]
-        public async Task GenerateSpecSectionAsync_LogicAndVisualization_NolockRule_ShouldAnchorToMachineLockHintTable()
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_ShouldReceiveLockHintFactsInline()
         {
             var spDef = new SpDefinition
             {
@@ -1881,9 +1883,69 @@ END",
             var result = await service.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", "rules", null);
             var body = result.SystemPrompt;
 
+            // 사실 자체(테이블·힌트)가 프롬프트 문자열에 직접 있어야 한다 - "표를
+            // 참고하라"는 포인터만으로는 불충분하다(이행 불가였던 그 실패).
             Assert.Contains("transaction isolation implications", body);
-            Assert.Contains("기계 확정 잠금 힌트", body);
-            Assert.Contains("do not assert or contradict which table or scan carries a lock hint beyond what that table states", body);
+            Assert.Contains("dbo.T", body);
+            Assert.Contains("NOLOCK", body);
+            // 이 분기가 CRUD 분석 절의 표를 대신 출력하면 안 된다 - 재료임을 명시한다.
+            Assert.Contains("Do NOT output", body);
+            // 재료 밖(커서 등)의 힌트를 억제하지 말라는 범위 한정이 함께 실려야
+            // axis-a.md와 반대 방향을 지시하지 않는다.
+            Assert.Contains("do NOT suppress or omit lock-hint statements", body);
+            Assert.Contains("cursor declarations", body);
+        }
+
+        // ①(재라운드) - 감사 🟡이 실제로 난 절은 `## 개요`다(Spec.md:33,
+        // UP_Util_Settle_Summary_AcqManual의 커서 NOLOCK 누락). 그런데
+        // OverviewAndParameters 분기는 잠금 힌트를 서술하라는 명시적 규칙이 없어도
+        // 개요 산문이 스캔 방식을 요약하며 언급할 수 있다 - 이 분기도 근거 재료를
+        // 받아야 한다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldReceiveLockHintFactsInline()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE A SET A.C = 1 FROM dbo.T A WITH (NOLOCK) END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", "rules", null);
+            var body = result.SystemPrompt;
+
+            Assert.Contains("dbo.T", body);
+            Assert.Contains("NOLOCK", body);
+            Assert.Contains("Do NOT output", body);
+        }
+
+        // ①(재라운드) 대조군 - 잠금 힌트가 전혀 없으면 두 분기 모두 이 재료 자체를
+        // 렌더하지 않아야 한다(무조건 렌더라면 조건부가 아니라는 뜻).
+        [Fact]
+        public async Task GenerateSpecSectionAsync_WithoutLockHints_ShouldOmitReferenceMaterialInBothBranches()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 WHERE ID = 1 END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 개요\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var overview = await service.GenerateSpecSectionAsync(spDef, "OverviewAndParameters", "rules", null);
+            var logic = await service.GenerateSpecSectionAsync(spDef, "LogicAndVisualization", "rules", null);
+
+            Assert.DoesNotContain("REFERENCE - lock hint facts", overview.SystemPrompt);
+            Assert.DoesNotContain("REFERENCE - lock hint facts", logic.SystemPrompt);
         }
 
         // I2 - 「참조 함수」 표는 dep.Database가 있어도 이제까지 버려 왔다. 크로스 DB

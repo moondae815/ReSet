@@ -1041,6 +1041,74 @@ Based on the structured reference context above, reverse engineer the stored pro
             "sits - `최상위` is the statement's own FROM, `파생` is inside a derived table in that FROM.";
 
         /// <summary>
+        /// 잠금 힌트 사실을 <b>표 출력 지시가 아니라 근거 재료</b>로 싣는다.
+        ///
+        /// [왜 필요한가 - 2026-08-21 최종 브랜치 리뷰 재라운드 ①]
+        /// `LogicAndVisualization`(로직 흐름 요약)과 `OverviewAndParameters`(개요) 두 분기가
+        /// NOLOCK을 서술할 수 있는데(전자는 명시적 규칙이 있고, 후자는 감사 🟡이 실제로
+        /// 난 자리다 - `Spec.md:33`, `## 개요` 절, `UP_Util_Settle_Summary_AcqManual`의
+        /// `DELETE TSettleByOUT FROM … WITH(NOLOCK)` 누락), 둘 다 `BuildLockHintTableLines`를
+        /// 부르지 않는다 - 그 표는 `## CRUD 분석` 절 소관이다. 라운드 1은 "CRUD 분석 절에
+        /// 이미 실린 표를 근거로 쓰라"는 포인터 지시로 이 구멍을 메우려 했지만 틀렸다 -
+        /// 구역 분할 경로(`VerificationPipelineOrchestrator`)는 세 절을 병렬로 생성하므로
+        /// (`:1328-1340`, `:1450-1462`), 이 분기가 실행되는 시점에 CRUD 분석 절은 아직
+        /// 존재하지 않는다. 존재하지 않는 표를 "이미 실렸다"고 가리키는 지시는 이행할 수
+        /// 없고, 최악의 경우 모델이 "그 표가 담지 않는 자리(커서 등)의 힌트는 서술하면
+        /// 안 된다"로 과잉 해석해 DDL에 뻔히 보이는 힌트마저 억제한다 - 그 억제 대상이
+        /// 바로 이번에 `axis-a.md`가 "DDL 원문이 기준값이니 결함으로 집지 마라"고 못
+        /// 박은 커서 `SELECT`의 `NOLOCK` 둘이다. 그래서 포인터 대신 사실 자체를
+        /// 인라인으로 준다 - 이 분기가 다른 분기의 산출물을 볼 필요가 없어진다.
+        ///
+        /// [표가 아니라 글머리 목록인 이유] `BuildLockHintTableLines`(위)를 그대로
+        /// 재사용하면 그 도입문(`LockHintIntroText`)이 "Copy this table verbatim into
+        /// `## CRUD 분석`"이라고 지시한다 - 이 분기는 `## CRUD 분석`을 쓰지 않으므로
+        /// 그 지시를 그대로 주면 모델이 자신의 H2 제약(로직 흐름 요약/개요만 쓰라)을
+        /// 어기고 `## CRUD 분석` 헤딩까지 합성할 위험이 있다. 그리고 `### 잠금 힌트
+        /// (기계 확정 — 수정 금지)` 헤딩 리터럴을 이 재료에 그대로 넣으면, 최종 문서에
+        /// CRUD 분석 절이 <i>같은</i> 헤딩을 또 낼 때 `MechanicalValidator.CheckLockHints`가
+        /// (`FindIndexOutsideFence`로 첫 일치만 찾는다) 엉뚱한 절의 헤딩을 표로 오인할
+        /// 위험이 생긴다. 그래서 표 형식·헤딩 리터럴을 피하고, 이 재료가 <b>참고
+        /// 전용이며 이 절에는 표로 출력하지 않는다</b>는 문장을 앞에 명시한다.
+        ///
+        /// [범위 한정을 함께 싣는 이유] `axis-a.md`와 반대 방향을 지시하지 않기 위해서다.
+        /// 그 문서는 이 사실 목록(=잠금 힌트 표)이 INSERT/UPDATE/DELETE의 FROM·대상
+        /// 노드만 담는다고 못 박았고, 커서 선언·독립 SELECT·제어 흐름 술어(`IF
+        /// EXISTS(...)`) 안의 하위 질의·최상위 WHERE 하위 질의·CTE 본문은 표 밖이며
+        /// DDL 원문이 근거라고 적었다. 이 재료가 그 한정 없이 "이 목록이 잠금 힌트의
+        /// 전부"로 읽히면, 모델이 정확히 그 자리(커서 `NOLOCK`)의 서술을 억제한다 -
+        /// 라운드 1이 만든 문제와 같은 모양이라 같은 문장으로 닫는다.
+        /// </summary>
+        private static List<string> BuildLockHintReferenceMaterialLines(IReadOnlyList<LockHintFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [REFERENCE - lock hint facts, MACHINE-DERIVED from the source DDL. Do NOT output " +
+                "a table or heading for this list in this section - `## CRUD 분석` (a separate part of " +
+                "this same document) is responsible for rendering it as a table. Use these facts only " +
+                "as ground truth for which statement/table/alias/scope carries which lock hint:"
+            };
+
+            foreach (var fact in facts)
+            {
+                var hints = fact.Hints.Count == 0 ? "(없음)" : string.Join(", ", fact.Hints);
+                lines.Add(
+                    $"   - {fact.Operation} {fact.StatementOrdinal} (라인 {fact.Line}): " +
+                    $"{fact.Table} (별칭 {fact.Alias}, 범위 {fact.Scope}) -> {hints}");
+            }
+
+            lines.Add(
+                "   This list covers ONLY INSERT/UPDATE/DELETE statements' FROM references and target " +
+                "nodes - it does NOT cover cursor declarations, standalone SELECTs, subqueries inside " +
+                "control-flow predicates (e.g. `IF EXISTS(SELECT ... WITH(NOLOCK))`), a statement's own " +
+                "top-level WHERE subqueries, or CTE bodies. For those, the source DDL itself is the " +
+                "ground truth - do NOT suppress or omit lock-hint statements for those scans just " +
+                "because they are absent from this list, and do NOT assert or contradict which table " +
+                "or scan carries a hint beyond what is stated here or directly visible in the DDL.");
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 객체 선언 표. 함수에만 실린다 - 프로시저에는 WITH 옵션 자체가 없으므로
         /// <see cref="ObjectDeclarationExtractor.Extract"/>가 항상 null을 내고, 호출부는
         /// null일 때 이 헬퍼를 부르지 않는다.
@@ -2369,6 +2437,18 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildObjectDeclarationTableLines(objectDeclarationForOverview));
                 }
 
+                // 배선 지점 3(잠금 힌트 참고 재료) - 2026-08-21 최종 브랜치 리뷰
+                // 재라운드 ①. `## 개요`가 잠금 힌트를 서술할 의무를 지는 별도 규칙은
+                // 없지만, 실제로 감사 🟡이 난 자리가 여기다(Spec.md:33, "UP_Util_
+                // Settle_Summary_AcqManual"의 커서 `NOLOCK` 서술 - BuildLockHintReference
+                // MaterialLines 문서 참고). 개요 산문이 스캔 방식을 요약하며 언급할 수
+                // 있으므로, 이 절도 근거 재료를 받아야 한다.
+                var lockHintsForOverview = DmlScopeExtractor.ExtractLockHints(spDef.DdlText);
+                if (lockHintsForOverview.Count > 0)
+                {
+                    sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForOverview));
+                }
+
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
                 sbRules.Add("");
@@ -2633,15 +2713,22 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.Add($"{rIdx++}. If Linked Server references are used, describe the external DB transaction flow and distributed transaction characteristics if applicable.");
                 }
 
-                sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section.");
-                // I2(2026-08-21 최종 전체 브랜치 리뷰) - 위 규칙은 이 문서의 「CRUD 분석」
-                // 절에 실리는 「잠금 힌트 (기계 확정 — 수정 금지)」 표를 언급하지 않은 채
-                // 원본 DDL만 쥐고 격리 수준 산문을 쓰라고만 지시했다. AcqManual에서 감사가
-                // 잡은 🟡이 정확히 이 자리(격리수준 서술)였다 - hasUdf 규칙(위, I1)이 참조
-                // 함수 표를 근거로 세운 것과 같은 모양으로, 이 규칙도 그 표를 근거로 세우고
-                // 표를 넘는 단언(어느 테이블·별칭이 힌트를 지는지, 그 표에 없는 스캔 자리의
-                // 힌트 유무)을 하지 말라는 계약을 붙인다.
-                sbRules.Add($"{rIdx++}. Base the NOLOCK/isolation analysis above strictly on the 기계 확정 잠금 힌트 (기계 확정 — 수정 금지) table already rendered in this document's CRUD 분석 section (which statement/table/alias/scope carries which hint) - do not assert or contradict which table or scan carries a lock hint beyond what that table states, and do not infer hints for scans the table does not cover.");
+                // ①(2026-08-21 최종 브랜치 리뷰 재라운드) - 라운드 1은 "CRUD 분석 절에
+                // 이미 실린 표를 근거로 쓰라"는 포인터 지시를 여기 붙였는데, 조정자
+                // 재검토로 그 지시 자체가 틀렸다고 판정됐다: 이 분기의 프롬프트에는
+                // 그 표가 실리지 않고(BuildLockHintTableLines 호출부는 CrudAnalysis
+                // 분기·SP 최초 생성·함수 명세서 셋뿐), 구역 분할 경로는 세 절을 병렬로
+                // 생성해 이 분기 실행 시점에 CRUD 분석 절이 존재하지도 않는다
+                // (VerificationPipelineOrchestrator.cs:1328-1340, :1450-1462). 포인터
+                // 대신 사실 자체를 인라인 재료로 준다(BuildLockHintReferenceMaterialLines
+                // 문서 참고) - 그 재료가 이 절 출력물이 아니라 참고임을 스스로 명시하므로
+                // CrudAnalysis 분기와 표를 중복 출력할 위험이 없다.
+                var lockHintsForLogic = DmlScopeExtractor.ExtractLockHints(spDef.DdlText);
+                if (lockHintsForLogic.Count > 0)
+                {
+                    sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForLogic));
+                }
+                sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
                 sbRules.Add("   - You MUST add explicit condition labels on all branching arrows (e.g., `-->|Success|`, `-->|Failed: -1|`). Do not use double quotes, parentheses, or special characters on arrow condition text labels.");
