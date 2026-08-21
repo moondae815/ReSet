@@ -36,7 +36,10 @@ namespace ReSet.Core.Services
         //    별칭을 FROM 절에서 풀고, 집합 술어가 LEFT/RIGHT 같은 전용 노드로 감싼
         //    좌변도 담고, 의존성 이름이 카탈로그 표기로 정규화된다. 셋 다 프롬프트에
         //    실리는 기계 확정 재료라 옛 엔트리를 재사용하면 틀린 재료가 그대로 남는다.
-        private const int CurrentCacheFormatVersion = 7;
+        // 8: 잠금 힌트·객체 선언 표가 새로 실리고 DML 범위 표에 ORDER BY 칸이 붙었다
+        //    (2026-08-21 축 A 감사의 🟡 다섯). 프롬프트 입력이 달라졌으므로 옛 엔트리를
+        //    재사용하면 산출물이 옛 재료 그대로 남는다.
+        private const int CurrentCacheFormatVersion = 8;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

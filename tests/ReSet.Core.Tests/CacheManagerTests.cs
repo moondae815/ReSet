@@ -539,13 +539,13 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            // 7: 추출기 결함 셋을 닫았다(2026-08-20 축 A 감사) — 자기참조 별칭 해석,
-            //    집합 술어의 전용 노드 좌변, 의존성 이름의 카탈로그 표기 정규화.
-            //    셋 다 프롬프트에 실리는 기계 확정 재료다.
+            // 8: 잠금 힌트·객체 선언 표가 새로 실리고 DML 범위 표에 ORDER BY 칸이
+            //    붙었다(2026-08-21 축 A 감사의 🟡 다섯). 프롬프트 입력이 달라졌으므로
+            //    옛 엔트리를 재사용하면 산출물이 옛 재료 그대로 남는다.
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(7, (int)entry["FormatVersion"]!);
+            Assert.Equal(8, (int)entry["FormatVersion"]!);
         }
 
         [Fact]
