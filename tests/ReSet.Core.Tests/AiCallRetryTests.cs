@@ -143,5 +143,55 @@ namespace ReSet.Core.Tests
             Assert.Equal(TimeSpan.FromMilliseconds(500), RetryPlan.Default.MinDelay);
             Assert.Equal(TimeSpan.FromMilliseconds(1500), RetryPlan.Default.MaxDelay);
         }
+
+        /// <summary>
+        /// MaxTries가 0 이하이면 for 루프 본문이 한 번도 안 돌아 lastFailure가 null로
+        /// 남는다. 그 상태로 Log.Error(..., lastFailure!.Message)에 이르면 null 허용
+        /// 연산자가 진짜 NullReferenceException을 숨긴다. VerificationPipelineOrchestrator의
+        /// _stepConcurrency = Math.Max(1, stepConcurrency)와 같은 절상 - 0·음수는 1로
+        /// 올리고 상한은 두지 않는다.
+        /// </summary>
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        public async Task ExecuteAsync_MaxTriesZeroOrNegative_ClampsToOneAndCallsFactoryOnce(int maxTries)
+        {
+            var calls = 0;
+            var plan = new RetryPlan(maxTries, TimeSpan.Zero, TimeSpan.Zero);
+
+            var ex = await Assert.ThrowsAsync<AiCallFailedException>(() =>
+                AiCallRetry.ExecuteAsync<string>(
+                    () => { calls++; throw Transient(); },
+                    CancellationToken.None,
+                    plan));
+
+            Assert.Equal(1, calls);
+            Assert.Equal(1, ex.Attempts);
+        }
+
+        /// <summary>
+        /// 재시도 사이 대기 중에 취소되는 경로다 - 사용자가 대기 중에 Ctrl-C를 누르는
+        /// 실사용 시나리오다. DelayAsync가 던진 취소가 catch 블록 안에서 삼켜지면 그
+        /// 사이 두 번째 시도가 돈 것으로 착각하게 된다. 지연을 짧게 두되 취소는 그보다
+        /// 먼저 걸어 대기 도중임을 보장한다.
+        /// </summary>
+        [Fact]
+        public async Task ExecuteAsync_CancellationDuringDelay_EscapesWithoutRetryingAgain()
+        {
+            using var cts = new CancellationTokenSource();
+            var calls = 0;
+            var plan = new RetryPlan(2, TimeSpan.FromMilliseconds(60), TimeSpan.FromMilliseconds(90));
+
+            cts.CancelAfter(TimeSpan.FromMilliseconds(15));
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                AiCallRetry.ExecuteAsync<string>(
+                    () => { calls++; throw Transient(); },
+                    cts.Token,
+                    plan));
+
+            // 대기 중에 취소됐으므로 두 번째 시도(factory의 두 번째 호출)로 넘어가면 안 된다.
+            Assert.Equal(1, calls);
+        }
     }
 }

@@ -57,9 +57,16 @@ namespace ReSet.Core.Services
             RetryPlan? plan = null)
         {
             var effectivePlan = plan ?? RetryPlan.Default;
+
+            // 0·음수는 1로 절상한다. 상한은 두지 않는다 - VerificationPipelineOrchestrator의
+            // _stepConcurrency = Math.Max(1, stepConcurrency)와 같은 결정이다. "0회 시도"를
+            // 그대로 두면 루프가 한 번도 안 돌아 lastFailure가 null로 남고, 아래
+            // Log.Error(..., lastFailure!.Message)에서 진짜 NullReferenceException이 난다.
+            // 최소 1회는 실제로 불러본다.
+            var effectiveMaxTries = Math.Max(1, effectivePlan.MaxTries);
             Exception? lastFailure = null;
 
-            for (var attempt = 1; attempt <= effectivePlan.MaxTries; attempt++)
+            for (var attempt = 1; attempt <= effectiveMaxTries; attempt++)
             {
                 try
                 {
@@ -83,11 +90,11 @@ namespace ReSet.Core.Services
 
                     lastFailure = ex;
 
-                    if (attempt < effectivePlan.MaxTries)
+                    if (attempt < effectiveMaxTries)
                     {
                         Log.Warning(
                             "[재시도] AI 호출이 일시적으로 실패했습니다 - 시도 {Attempt}/{MaxTries}, 사유: {Reason}",
-                            attempt, effectivePlan.MaxTries, ex.Message);
+                            attempt, effectiveMaxTries, ex.Message);
 
                         await DelayAsync(effectivePlan, cancellationToken);
                     }
@@ -96,12 +103,12 @@ namespace ReSet.Core.Services
 
             Log.Error(
                 "[재시도] AI 호출이 {MaxTries}회 모두 실패했습니다 - 마지막 사유: {Reason}",
-                effectivePlan.MaxTries, lastFailure!.Message);
+                effectiveMaxTries, lastFailure!.Message);
 
             throw new AiCallFailedException(
-                $"AI 호출이 {effectivePlan.MaxTries}회 모두 실패했습니다: {lastFailure.Message}",
+                $"AI 호출이 {effectiveMaxTries}회 모두 실패했습니다: {lastFailure.Message}",
                 lastFailure,
-                effectivePlan.MaxTries);
+                effectiveMaxTries);
         }
 
         /// <summary>
