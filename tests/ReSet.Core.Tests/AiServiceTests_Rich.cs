@@ -2353,5 +2353,61 @@ END"
 
             Assert.DoesNotContain(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, result.SystemPrompt);
         }
+
+        /// <summary>
+        /// 실행 의미 표 픽스처. DDL 조각 자체가 &lt;sp-source-ddl&gt;로도 실리므로,
+        /// 표가 실제로 렌더됐는지는 표에서만 나오는 마크업(헤딩 상수)으로 대조해야
+        /// 한다 - 원본 DDL에 우연히 있는 단어를 짚으면 거짓양성이 된다.
+        /// </summary>
+        private static SpDefinition ProbeExecutionSemanticsSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "COMM_UPD",
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "COMM_UPD", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeExecutionSemanticsSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            // 지역 모델 경로는 BuildSpecificationPrompts를 전혀 호출하지 않는다.
+            // 이 분기에서만 배선이 빠져도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutStaticAnalysis_ShouldOmitTheExecutionSemanticsTable()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = new SpDefinition { Schema = "dbo", Name = "P", DdlText = "SELECT 1;" };
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+        }
     }
 }

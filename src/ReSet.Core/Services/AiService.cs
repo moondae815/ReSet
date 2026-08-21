@@ -442,6 +442,8 @@ namespace ReSet.Core.Services
                 rules.AddRange(BuildLockHintTableLines(lockHints));
             }
 
+            rules.AddRange(BuildMachineFactBlockLines(spDef));
+
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
             // 강제한다 - 부재 서술은 자연어 판정이라 앵커가 없다.
@@ -1032,6 +1034,67 @@ Based on the structured reference context above, reverse engineer the stored pro
             return lines;
         }
 
+        /// <summary>
+        /// 「실행 의미」 표를 렌더한다. 조립기가 채우고 LLM은 손대지 않는다.
+        ///
+        /// [왜 인트로가 렌더러 안에 있는가] 이 표는 갈래 2(함수 명세서 경로)에도
+        /// 실리는데 그 갈래에는 ruleIndex 채번이 없다(규칙 1~7이 verbatim 문자열로
+        /// 하드코딩돼 있다). 인트로를 번호 붙은 규칙으로 분리하면 갈래마다 모양이
+        /// 갈리므로, 참조 함수·잠금 힌트 표와 같이 렌더러가 인트로를 진다.
+        /// </summary>
+        private static List<string> BuildExecutionSemanticsTableLines(
+            IReadOnlyList<ExecutionSemanticFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL EXECUTION SEMANTICS TABLE] The following facts are MACHINE-DERIVED from the source DDL and static analysis. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. These are settled values, not open questions - never restate any of them as unknown, unverifiable, or not provided.",
+                $"   {ExecutionSemanticsFacts.TableHeading}",
+                "   | 종류 | 라인 | 대상 | 확정 사실 |",
+                "   | :--- | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add(
+                    $"   | {EscapeTableCell(fact.Kind)} | {EscapeTableCell(fact.Line)} | "
+                    + $"{EscapeTableCell(fact.Target)} | {EscapeTableCell(fact.Fact)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
+        /// 새로 추가되는 기계 확정 표를 전부 모아 프롬프트에 붙일 줄 목록으로 돌려준다.
+        ///
+        /// [왜 갈래마다 Collect를 부르지 않는가 - 설계 D5]
+        /// 프롬프트 빌더는 4갈래이고(SP 전체 · 함수 · 지역 모델 CRUD · 지역 모델 로직),
+        /// 지역 모델 경로는 BuildSpecificationPrompts를 아예 호출하지 않는다. 표 하나를
+        /// 늘릴 때마다 네 곳에 같은 조건문을 베끼면 "한 갈래만 고쳤다"는 이 코드베이스의
+        /// 반복 사고가 그대로 재생산된다. 진입점을 하나로 두면 표를 늘려도 갈래는
+        /// 바뀌지 않는다.
+        ///
+        /// 기존 표 6종은 이 함수로 옮기지 않는다 - 갈래별 렌더 조건에 미묘한 비대칭이
+        /// 있어(집합 술어는 dmlScopeFacts가 비면 렌더하지 않는다) 잘못 통일하면 기존
+        /// 표가 조용히 사라지거나 더해진다.
+        /// </summary>
+        private static List<string> BuildMachineFactBlockLines(SpDefinition spDef)
+        {
+            var lines = new List<string>();
+
+            var executionSemantics = ExecutionSemanticsFacts.Collect(
+                spDef.DdlText,
+                spDef.StaticAnalysis,
+                spDef.ObjectKey,
+                ExecutionSemanticsFacts.BuildColumnTypeMap(spDef.Dependencies));
+            if (executionSemantics.Count > 0)
+            {
+                lines.AddRange(BuildExecutionSemanticsTableLines(executionSemantics));
+            }
+
+            return lines;
+        }
+
         private const string LockHintIntroText =
             "[CRITICAL LOCK HINT TABLE] The following lock hints are MACHINE-DERIVED from the source DDL. " +
             "Copy this table verbatim into `## CRUD 분석` under the exact heading shown. " +
@@ -1349,6 +1412,12 @@ Based on the structured reference context above, reverse engineer the stored pro
             if (functionCallsForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", BuildReferencedFunctionTableLines(functionCallsForFunctionDef, functionDef));
+            }
+
+            var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(functionDef);
+            if (machineFactLinesForFunctionDef.Count > 0)
+            {
+                systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
             }
 
             // 배선 지점 1/2(객체 선언) - 프로시저에는 이 옵션 자체가 없으므로 Extract는
@@ -2567,6 +2636,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                     sbRules.AddRange(BuildLockHintTableLines(lockHintsForCrud));
                 }
 
+                sbRules.AddRange(BuildMachineFactBlockLines(spDef));
+
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
                 // BuildSpecificationPrompts를 전혀 호출하지 않으므로, 여기 빠뜨리면 지역
@@ -2728,6 +2799,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 {
                     sbRules.AddRange(BuildLockHintReferenceMaterialLines(lockHintsForLogic));
                 }
+                sbRules.AddRange(BuildMachineFactBlockLines(spDef));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
