@@ -2296,23 +2296,22 @@ Expected: 컴파일 실패 — `GroupByColumns`가 없다.
                     : string.Join(", ", fact.GroupByColumns);
 ```
 
-`CheckDmlScopeTable`의 행 대조에 `GROUP BY` 항을 잇는다. 기존 검사의 `present` 람다(`cells.Any(c => c == ...)` 연쇄)에 한 줄을 더하는 것이다.
+`CheckDmlScopeTable`에 `GROUP BY` 값 검사를 더한다.
+
+**실제 구현은 AND-체인이 아니다**(Wave 7 실측). 이 검사는 DDL 라인 번호가 DML 범위 절 안
+어느 행의 어느 칸에든 나타나는지만 본다 — 술어·조인 키·`ORDER BY`를 칸 단위로 검증하지
+않는다(`CheckOrderByExpressions`가 절 전체 `Contains`로 따로 덮는다). 그러니 검사를 통째로
+재설계하지 말고 기존 per-fact 루프를 확장해라.
 
 ```csharp
-                var groupByToken = fact.GroupByColumns.Count == 0
-                    ? "(없음)"
-                    : string.Join(", ", fact.GroupByColumns);
+                if (fact.GroupByColumns.Count == 0) continue;
+
+                var groupByToken = string.Join(", ", fact.GroupByColumns);
 ```
 
-```csharp
-                        && cells.Any(c => c == groupByToken)
-```
-
-**주의**: `(없음)` 토큰은 다른 칸(`조인 키`)에도 나온다. `cells.Any`는 어느 칸이든 하나만 맞으면 참이므로, `GROUP BY`가 비고 `조인 키`도 비면 이 항이 자동으로 참이 되어 검사가 무력해진다. 그래서 **`GroupByColumns`가 비어 있지 않을 때만** 이 항을 요구한다.
-
-```csharp
-                        && (fact.GroupByColumns.Count == 0 || cells.Any(c => c == groupByToken))
-```
+`GroupByColumns`가 비면 **비교 자체를 하지 않는다.** 이것이 `(없음)` 충돌을 피하는 방법이다 —
+그 토큰은 `조인 키` 칸에도 나오므로, 비교했다면 두 칸이 모두 `(없음)`일 때 검사가 자동으로
+통과해 무력해진다.
 
 - [ ] **Step 5: 기존 테스트를 고친다**
 
