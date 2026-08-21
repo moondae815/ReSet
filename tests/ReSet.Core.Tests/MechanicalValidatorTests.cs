@@ -839,6 +839,35 @@ A[""시작""] --> B[""끝""]
             Assert.True(result.IsValid);
         }
 
+        /// <summary>
+        /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤ - "원천 표현식(SET)" 칸(AiService.cs:736)은
+        /// 파이프 왕복이 필요 없다는 것을 실측으로 증명한다] `CheckUpdateMappings`는
+        /// `expectation.Columns`(컬럼명)만 `ContainsToken`으로 대조하고, `SourceExpression`
+        /// 자체는 어떤 검사도 다시 들여다보지 않는다 - 렌더가 그 칸을 EscapeTableCell로
+        /// 감싸도(비트 OR `A.Flags | 4`처럼 `|`가 든 식) 대조는 그 칸의 내용을 아예 보지
+        /// 않으므로 이스케이프 여부가 판정에 영향을 줄 수 없다. 컬럼명 대조만 통과하면
+        /// 되므로, 파이프가 든 표현식이어도 통과해야 한다 - 다른 취급이 필요 없다는
+        /// 것을 이 테스트가 고정한다(회귀 시 이 테스트가 잡는다).
+        /// </summary>
+        [Fact]
+        public void Validate_UpdateMappingSourceExpressionContainsPipe_RenderedEscaped_ShouldStillPass()
+        {
+            var analysis = new SpStaticAnalysisResult();
+            var mapping = new AstUpdateMapping { TargetTable = "DB.dbo.TCommMst", StatementOrdinal = 1 };
+            mapping.Assignments.Add(new AstUpdateAssignment { Column = "FLAGS", SourceExpression = "A.Flags | 4" });
+            analysis.AstUpdateMappings.Add(mapping);
+            var expectations = SpecExpectations.From(new SpDefinition { StaticAnalysis = analysis })!;
+
+            var markdown = SpecWith(@"### UPDATE 대상 테이블: DB.dbo.TCommMst (문장 1)
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| DB.dbo.TCommMst | FLAGS | A.Flags \| 4 | 플래그 비트 설정 |");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.True(result.IsValid);
+        }
+
         [Fact]
         public void Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt()
         {
@@ -3017,6 +3046,39 @@ END";
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
         }
 
+        /// <summary>
+        /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤ - "정의 표현식" 칸(AiService.cs:1231)은
+        /// 파이프 왕복이 필요 없다는 것을 실측으로 증명한다] `CheckDerivedTableDefinitions`는
+        /// `definition.Expression` 전체가 아니라 `definition.Anchors`(정규식
+        /// `\b[A-Za-z][A-Za-z0-9_]{2,}\b`로 뽑은 순수 식별자 토큰)만 `Contains`로 찾는다
+        /// (`DerivedTableColumnExtractor.BuildAnchors`). 그 정규식은 `|`를 포함하는 매치를
+        /// 만들 수 없으므로 앵커 자체에 `|`가 나타날 수 없다 - 렌더가 표현식 칸 전체를
+        /// 이스케이프해도(비트 OR가 든 식) 앵커 대조에는 영향이 없다. 이 테스트가 그
+        /// 사실을 고정한다.
+        /// </summary>
+        [Fact]
+        public void Validate_DerivedColumnExpressionContainsPipe_RenderedEscaped_ShouldStillPass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DerivedColumns = new[]
+                {
+                    new DerivedColumnDefinition(
+                        "X", "FLAGS",
+                        "A.Flags | 4",
+                        new[] { "Flags" })
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### 파생 테이블 정의 (기계 확정 — 수정 금지)\n"
+                + "| 별칭 | 컬럼 | 정의 표현식 |\n| :--- | :--- | :--- |\n"
+                + "| X | FLAGS | A.Flags \\| 4 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DerivedTableDefinitionMissing);
+        }
+
         [Fact]
         public void Validate_DerivedColumnAnchorsScatteredElsewhereInDocument_ShouldStillBeAnError()
         {
@@ -4037,6 +4099,51 @@ END",
             Assert.Empty(expectations!.ReferencedFunctionCalls);
 
             var result = new MechanicalValidator().Validate("## 개요\n내용\n", expectations);
+
+            Assert.DoesNotContain(
+                result.Errors,
+                e => e.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading));
+        }
+
+        /// <summary>
+        /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤ - "호출식" 칸(AiService.cs:990)은 파이프
+        /// 왕복이 필요 없다는 것을 실측으로 증명한다] `CheckReferencedFunctions`는 헤딩
+        /// 존재만 확인하고(:3069-3113) 행 내용은 전혀 대조하지 않는다 - 그래서 호출식이
+        /// 렌더 때 이스케이프됐는지, 심지어 실제 호출식과 같은지조차 판정에 영향을 주지
+        /// 않는다. 이 테스트는 호출식에 `|`를 넣고도(비트 OR가 든 인자) 헤딩만 있으면
+        /// 통과한다는 것을 고정한다 - 다른 취급이 필요 없음을 실측으로 못 박는다.
+        /// </summary>
+        [Fact]
+        public void Validate_ReferencedFunctionCallExpressionContainsPipe_HeadingPresent_ShouldStillPass()
+        {
+            var sp = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM | 1)
+    FROM   dbo.TSettleMst A
+END",
+                Dependencies = new List<DependencyInfo>
+                {
+                    new() { Database = null, Schema = "dbo", Name = "UF_GET_ROUND4VAT", Type = "SQL_SCALAR_FUNCTION" }
+                }
+            };
+
+            var expectations = SpecExpectations.From(sp);
+            var call = Assert.Single(expectations!.ReferencedFunctionCalls);
+            Assert.Contains("|", call.CallExpression, StringComparison.Ordinal);
+
+            var markdown = DmlScopeExtractor.ReferencedFunctionTableHeading
+                + "\n| 함수 | 호출 위치 | 호출식 | 링크 |\n| :--- | :--- | :--- | :--- |\n"
+                + "| UF_GET_ROUND4VAT | UPDATE 1 (라인 5) | dbo.UF_GET_ROUND4VAT(A.CLCOMM \\| 1) | - |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.DoesNotContain(
                 result.Errors,
