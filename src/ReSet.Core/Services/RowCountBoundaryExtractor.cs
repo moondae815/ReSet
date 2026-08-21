@@ -138,7 +138,7 @@ namespace ReSet.Core.Services
                     // 개행을 접지 않았다 - 여러 줄 IF 술어(드물지만 코드 모양상 가능)를
                     // 원문 그대로 옮겨도 L1(MechanicalValidator.CheckExecutionSemantics)의
                     // `==` 대조가 영원히 실패했다. `CaseBranchExtractor.TextOf`가 같은
-                    // 결함을 이미 고쳤으므로(개행·탭을 공백으로 접음) 별도 구현을 지우고
+                    // 결함을 이미 고쳤으므로(연속 공백류 전부를 공백 하나로 접음 - Fix Round 1) 별도 구현을 지우고
                     // 그 메서드를 재사용한다 - 두 파일에서 같은 정규화를 유지·보수하면
                     // 한쪽만 고쳐졌을 때 다시 갈라진다.
                     var predicate = CaseBranchExtractor.TextOf(current.Predicate);

@@ -325,7 +325,8 @@ namespace ReSet.Core.Services
             /// 재현하리라 기대하기 어려운 문자)을 탭도 진다 - 실행 확인:
             /// `CAST(Amt\t* 100.0 AS INT)`. `MarkdownTableCellCodec.Escape`는 탭을 건드리지
             /// 않으므로, 접지 않으면 렌더된 프롬프트에도 리터럴 탭이 그대로 남는다. 이제
-            /// 개행·탭 정규화는 `CaseBranchExtractor.TextOf` 하나로 모았다(Task 13) - CASE
+            /// 연속 공백류 정규화는 `CaseBranchExtractor.TextOf` 하나로 모았다(Task 13,
+            /// Fix Round 1에서 개행·탭 개별 접기 대신 `\s+` 하나로 넓어졌다) - CASE
             /// 분기 조건과 `@@ROWCOUNT` 술어가 같은 결함을 같은 이유로 겪기 때문이다. 그
             /// 정규화는 이미 `TextOf`가 하므로 여기서 다시 하지 않는다 - 두 번 접어도
             /// 멱등이라 틀리지는 않지만, 정규화 지점이 갈리면 다음 수정에서 한쪽만 고쳐질
