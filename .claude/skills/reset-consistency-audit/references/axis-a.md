@@ -36,7 +36,7 @@ DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙)
 | 오류·반환 코드 전체 집합과 발생 지점 | **DDL 원문** (`StaticAnalysis`에 없음) |
 | 분기 조건식·필터·조인 | **DDL 원문** |
 | 트랜잭션 경계, `NOCOUNT`, 주석 처리된 블록 | **DDL 원문** |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `BuildLockHintTableLines`가 SP 프롬프트 경로에도 배선되므로(`AiService.cs:435-443`) SP의 DML 문장도 이 표가 기계 확정한다. **커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고) |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `BuildLockHintTableLines`가 SP 프롬프트 경로에도 배선되므로(`AiService.cs:435-443`) SP의 DML 문장도 이 표가 기계 확정한다. **이 셋이 아닌 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문 등)의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고, 열거는 예시일 뿐 전수가 아니다) |
 
 Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 원문의 의미와
 어긋나면 DDL이 이긴다.
@@ -116,8 +116,23 @@ AST에서 확정해 프롬프트에 실어 준 값이라, 명세서가 옮겨 �
 **이 표가 담지 않는 것.** `LockHintVisitor`는 `InsertSpecification`/`UpdateSpecification`/
 `DeleteSpecification`만 방문한다(`DmlScopeExtractor.cs:394,413,420`). 이 셋에 속하지 않는
 스캔은 표에 한 행도 남기지 않는다 — "행이 0개 = 힌트가 없다"는 위 규칙이 적용되지 않는다.
-구체적으로:
 
+**판정 기준은 이 긍정형 한정 하나다 — 아래 목록은 그것을 실물로 보여주는 예시일 뿐
+전수가 아니다.** `InsertSpecification`/`UpdateSpecification`/`DeleteSpecification`이 아닌
+스캔이면 그 형태가 아래에 있든 없든 표 밖이고 DDL 원문이 기준값이다. 아래 목록에 없는
+새 형태를 만나면 "열거되지 않았으니 표가 관할한다"로 읽지 말고, 코드(`DmlScopeExtractor.cs:
+394,413,420`)를 기준으로 직접 판정하라 — 이 문서는 이미 세 라운드 연속 이 문단을
+고쳤다(사실과 반대 → 코드보다 좁게 → 최빈 형태 누락).
+
+- **제어 흐름 술어 안의 하위 질의** (`IF EXISTS(SELECT … FROM S WITH(NOLOCK) WHERE …)`).
+  **실측 코퍼스에서 가장 흔한 형태다** — `IF EXISTS`의 조건절은 `QuerySpecification`이지
+  세 노드 중 어디도 아니라 방문되지 않는다. 실물 사례 다섯:
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS.Procedure/raw/object_definition.sql:39`,
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS_EXTRA.Procedure/raw/object_definition.sql:31`,
+  `output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:21`,
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD.Procedure/raw/object_definition.sql:20`,
+  `output/Objects/dbo.UF_GET_WORKDAY2.Function/raw/object_definition.sql:34`(함수도 걸린다).
+  이 자리는 DDL 원문이 기준값이다.
 - **커서 선언·독립 `SELECT`.** `DECLARE cur CURSOR FOR SELECT …`의 `SELECT`는
   `InsertSpecification` 등으로 감싸이지 않으므로 그 `FROM`의 힌트는 아예 방문되지 않는다.
   실물 사례 — `output/Objects/dbo.UP_Util_Settle_Summary_AcqManual.Procedure/raw/object_definition.sql:28-31`의
@@ -126,11 +141,14 @@ AST에서 확정해 프롬프트에 실어 준 값이라, 명세서가 옮겨 �
   `CollectFrom`이 `node.FromClause`만 훑고 `node.WhereClause`는 건드리지 않는다
   (`DmlScopeExtractor.cs:434-441`). 스펙 설계 문서의 「이 설계가 닫지 않는 것」에 실측이 있다.
 - **CTE 본문.** `WITH C AS (SELECT … FROM S WITH(NOLOCK)) INSERT … FROM C`는 `C`의 참조만
-  최상위로 실리고 `S`의 힌트는 CTE 정의 안이라 실리지 않는다. 오늘 코퍼스에는 사례가 없다.
+  최상위로 실리고 `S`의 힌트는 CTE 정의 안이라 실리지 않는다. **오늘 코퍼스에는 사례가
+  0이다** — 반대로 위 제어 흐름 술어 형태가 실측 최빈값이니, 코퍼스 규모로 판단을
+  대체하지 마라.
 
-이 셋 다 "표에 행이 없다"가 "이 문장이 그 스캔에 힌트를 안 걸었다"는 뜻이 **아니다** —
-표의 적용 범위 밖이라 애초에 판정하지 않는다는 뜻이다. 명세서가 이 자리의 `NOLOCK`을
-옳게 서술했다면 그것을 "표에 없는 사실"이라며 결함으로 집지 마라 — DDL 원문과 대조해서
+위 예시 어디에 해당하든 "표에 행이 없다"가 "이 문장이 그 스캔에 힌트를 안 걸었다"는
+뜻이 **아니다** — 표의 적용 범위 밖이라 애초에 판정하지 않는다는 뜻이다. 명세서가 이
+자리의 `NOLOCK`을 옳게 서술했다면 그것을 "표에 없는 사실"이라며 결함으로 집지 마라 —
+DDL 원문과 대조해서
 판정한다.
 
 ### 3-1. 함수 단위는 표가 다르다
@@ -162,7 +180,7 @@ ControlFlowSummary   11/17   ThreePartObjectReferences 3/17   ReferencedFunction
 | **상수·계수·반올림 자릿수·부호** | **DDL 원문** |
 | NULL 입력 처리와 `ISNULL`/`COALESCE` 기본값 | **DDL 원문** |
 | 결정성 관련 선언(`SCHEMABINDING`, 기타 `WITH` 옵션) | `### 객체 선언 (기계 확정 — 수정 금지)` 표 (아래) — DDL 원문으로 다시 뽑지 마라 |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼가 함수 DML 문장에도 같은 표를 붙인다) — 같은 범위 한정이 적용된다: `INSERT`/`UPDATE`/`DELETE`의 `FROM`과 대상 노드만 담고, 커서 선언·독립 `SELECT`·최상위 `WHERE` 하위 질의·CTE 본문은 DDL 원문이 기준값이다 |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼가 함수 DML 문장에도 같은 표를 붙인다) — 같은 범위 한정이 적용된다: `INSERT`/`UPDATE`/`DELETE`의 `FROM`과 대상 노드만 담고, 그 밖의 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 최상위 `WHERE` 하위 질의, CTE 본문 등)은 DDL 원문이 기준값이다 |
 
 **`객체 선언` 표는 함수에만 실린다.** 프로시저에는 `WITH` 옵션 자체가 문법에 없으므로
 추출기가 항상 표를 내지 않는다 — **프로시저 명세서에 이 표가 없는 것은 결함이 아니다.**

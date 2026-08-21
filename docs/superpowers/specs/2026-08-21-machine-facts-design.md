@@ -294,3 +294,15 @@ catch-all 버킷을 얻어, 열거되지 않은 `ErrorType`도 내용이 실려 
   WITH(NOLOCK) INNER JOIN SETTLE_CARD_DB.dbo.TClientCardContractMgmt B WITH(NOLOCK)`가 한 행도
   내지 않는다. 위 `WHERE` 하위 질의 항목과 같은 이유(추출 가능 범위 밖)로 이번 범위에서는
   닫지 않는다 — `axis-a.md`가 이 범위를 감사 계약에 명시했으므로 DDL 원문 대조로 흡수된다.
+
+  **실측 코퍼스에서는 커서보다 제어 흐름 술어 안의 하위 질의(`IF EXISTS(SELECT … FROM S
+  WITH(NOLOCK) WHERE …)`)가 훨씬 흔하다** — 다섯 자리가 확인됐다:
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS.Procedure/raw/object_definition.sql:39`,
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS_EXTRA.Procedure/raw/object_definition.sql:31`,
+  `output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:21`,
+  `output/Objects/dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD.Procedure/raw/object_definition.sql:20`,
+  `output/Objects/dbo.UF_GET_WORKDAY2.Function/raw/object_definition.sql:34`. `IF EXISTS`의
+  조건절은 `QuerySpecification`이지 위 세 노드 어디도 아니라 같은 이유로 방문되지 않는다.
+  이 항목의 열거(커서·`WHERE` 하위 질의·CTE 본문·제어 흐름 술어)는 실물로 확인된 예시일
+  뿐 전수가 아니다 — 판정 기준은 항상 "노드가 `InsertSpecification`/`UpdateSpecification`/
+  `DeleteSpecification`인가" 하나다.
