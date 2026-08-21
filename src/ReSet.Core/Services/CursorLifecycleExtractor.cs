@@ -113,23 +113,31 @@ namespace ReSet.Core.Services
 
         // DeclareCursorStatement/OpenCursorStatement/CloseCursorStatement/ReturnStatement를
         // 직접 방문한다. 최상위 StatementList뿐 아니라 BEGIN…END 안, IF/WHILE 블록 안에
-        // 있는 문장도 그대로 방문된다. 별도의 StatementList 오버라이드가 필요 없다.
+        // 있는 문장도 그대로 방문된다. 별도의 StatementList 오버라이드가 필요 없다 -
+        // Visit(StatementList)를 오버라이드해도 기본 ExplicitVisit이 AcceptChildren을
+        // 호출하므로(RowCountBoundaryExtractor와 같은 근거) 자식 방문은 그대로 계속된다.
         //
-        // [정정 - I2, 2026-08-22 최종 브랜치 리뷰] 예전 버전은 이 결론이 "리프 노드에만
-        // 성립하고, StatementList 같은 컨테이너 노드의 Visit(T)를 ExplicitVisit/base
-        // 호출 없이 오버라이드하면 그 자식으로의 하강이 실제로 끊긴다"고 적었는데, 이는
-        // 사실과 반대다. RowCountBoundaryExtractor가 정확히 그 모양(컨테이너 노드인
-        // Visit(StatementList)를 base 호출 없이 오버라이드)으로 구현돼 있고 정상 동작하며,
-        // RowCountBoundaryExtractorTests.Extract_NestedInsideIfBeginEndBlock_IsCovered가
-        // 중첩 StatementList까지 방문됨을 통과하는 테스트로 못박는다. 이 리포에서 직접
-        // 실험해도(Visit(StatementList)를 빈 본문으로 오버라이드하고 base/AcceptChildren을
-        // 전혀 호출하지 않아도 자식 OpenCursorStatement/CloseCursorStatement가 그대로
-        // 방문됨) 같은 결과가 나온다. 이 버전의 ScriptDom(180.37.3)에서 각 노드의
-        // Accept(visitor)는 visitor.Visit(this) 호출과 this.AcceptChildren(visitor) 호출을
-        // 둘 다 무조건 수행하도록 프레임워크 쪽에 미리 생성돼 있다 - 소비자가 Visit(T)를
-        // 어떻게 오버라이드하든(빈 본문이든, base를 부르든 안 부르든) 이 둘의 실행에는
-        // 영향이 없다. 즉 Visit(T) 오버라이드만으로 하강을 끊는 방법은 리프든 컨테이너든
-        // 이 API로는 존재하지 않는다.
+        // [정정 - I2 Fix Round 1, 2026-08-22 최종 브랜치 리뷰] 이전 버전이 "Accept(visitor)는
+        // visitor.Visit(this)와 this.AcceptChildren(visitor)을 둘 다 무조건 수행한다 -
+        // 소비자가 Visit(T)를 어떻게 오버라이드하든 하강을 끊을 방법이 없다"고 적었는데,
+        // 이것도 틀렸다 - 방향만 반대로 틀렸다. 실제 관계는 Accept(visitor) →
+        // visitor.ExplicitVisit(node)(가상 메서드) → 오버라이드하지 않으면 프레임워크가
+        // 만들어 둔 기본 ExplicitVisit이 Visit(this)(순회 알림, 자식 방문에 관여하지
+        // 않음)와 AcceptChildren(visitor)(실제 하강)을 둘 다 부른다. 즉 하강을 실제로
+        // 제어하는 지점은 Visit(T)가 아니라 ExplicitVisit(T)다 - ExplicitVisit(T)를
+        // base(또는 AcceptChildren) 호출 없이 오버라이드하면 하강이 실제로 끊긴다. 이
+        // 저장소의 SqlStaticParser.NamedTableCollector.ExplicitVisit(QueryDerivedTable)와
+        // ColumnReferenceCollector.ExplicitVisit(ScalarSubquery)가 정확히 그 용도로 base
+        // 없이 오버라이드돼 있고("Visit이 아니라 ExplicitVisit을 비워야 한다 - Visit은
+        // 순회 중 호출되는 알림일 뿐이라 비워도 자식으로 계속 내려간다"), 그 차단에 의존하는
+        // SqlStaticParserTests.Analyze_SetRightHandScalarSubquery_IsNotASelfReference가
+        // 통과 중인 테스트로 못박는다. 이 리포에서 세 갈래로 직접 실험해도 같은 결과다 -
+        // Visit(StatementList)만 빈 본문으로 오버라이드하면(ExplicitVisit은 그대로 두면)
+        // 하강이 계속되고, ExplicitVisit(StatementList)를 base 호출 없이 오버라이드하면
+        // 하강이 끊기며, 그 안에서 base.ExplicitVisit(node)를 부르면 다시 하강한다. 이
+        // CursorVisitor는 ExplicitVisit을 어디도 오버라이드하지 않으므로(Visit(T)만
+        // 쓴다) 이 클래스의 원래 결론 - 별도 StatementList 처리가 필요 없다 - 은 여전히
+        // 유효하다.
         private sealed class CursorVisitor : TSqlFragmentVisitor
         {
             private readonly Dictionary<string, int> _opens = new(StringComparer.OrdinalIgnoreCase);
