@@ -14,7 +14,7 @@ namespace ReSet.Core.Services
 
     /// <summary>
     /// 커서의 수명 주기에서 렉시컬로 확정할 수 있는 두 가지를 뽑는다 - OPEN과 CLOSE
-    /// 사이의 RETURN, 그리고 LOCAL 미지정.
+    /// 사이의 RETURN, 그리고 LOCAL도 GLOBAL도 지정되지 않은 경우.
     ///
     /// [왜 렉시컬 관측에 그치는가] "OPEN과 CLOSE 사이에 RETURN이 있다"까지는 원문을
     /// 읽으면 확정되는 사실이다. 하지만 그 RETURN이 실제로 실행되는 경로인지(도달
