@@ -39,7 +39,16 @@ namespace ReSet.Core.Services
         // 8: 잠금 힌트·객체 선언 표가 새로 실리고 DML 범위 표에 ORDER BY 칸이 붙었다
         //    (2026-08-21 축 A 감사의 🟡 다섯). 프롬프트 입력이 달라졌으므로 옛 엔트리를
         //    재사용하면 산출물이 옛 재료 그대로 남는다.
-        private const int CurrentCacheFormatVersion = 8;
+        // 9: 실행 의미 표(DB 배치·집계 대입·@@ROWCOUNT·커서 수명·식 타입 경로 다섯 종류)와
+        //    CASE 분기 표가 프롬프트 네 갈래 전부에 새로 실렸다(2026-08-22 축 A 감사 -
+        //    UIF_SettleYMD의 🟠 3건이 CASE 분기 요약에서 났다). DML 범위 표에는 GROUP BY
+        //    칸이 붙었다. 스키마 표 과소 포함도 고쳐져 주석에만 등장하는 컬럼과 별칭
+        //    한정 표기(예: X.PRODUCTNAME)가 다시 실린다 - UP_UTIL_SETTLE_PROC_ETC 실측처럼
+        //    과소 포함이 "그 컬럼은 없다"는 잘못된 서술을 14개 명세서에 남긴 결함이었다.
+        //    전부 프롬프트 입력이 달라진 것이므로 옛 엔트리를 재사용하면 새 표가 없는
+        //    옛 산출물이 그대로 남고, 이 계획이 세운 L1 검사도 캐시 히트에서는 영영
+        //    발동하지 않는다.
+        private const int CurrentCacheFormatVersion = 9;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
