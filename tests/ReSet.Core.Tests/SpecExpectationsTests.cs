@@ -97,11 +97,23 @@ namespace ReSet.Core.Tests
             var expectations = SpecExpectations.From(sp);
             Assert.NotEmpty(expectations!.InputDefects);
 
+            // DatabasePlacementExtractor는 파싱에 성공한 SP마다 DB 배치 확정 문장을
+            // 낸다(Task 3의 실행 의미 표). 그 표를 markdown에도 그대로 실어야 이
+            // 테스트가 검증하려는 것(InputDefects는 오류가 되지 않는다)과 무관한
+            // ExecutionSemanticsTableMissing이 섞여 들지 않는다.
+            var executionSemanticsRow = Assert.Single(expectations.ExecutionSemantics);
             var markdown = string.Join("\n", new[]
             {
                 "## 개요", "내용", "## 파라미터 목록", "내용", "## CRUD 분석", "내용",
                 "## 로직 흐름 요약", "내용", "## 비즈니스 흐름 시각화",
-                "```mermaid", "flowchart TD", "A[\"시작\"] --> B[\"끝\"]", "```"
+                "```mermaid", "flowchart TD", "A[\"시작\"] --> B[\"끝\"]", "```",
+                "",
+                ExecutionSemanticsFacts.TableHeading,
+                "",
+                "| 종류 | 라인 | 대상 | 확정 사실 |",
+                "| :--- | :--- | :--- | :--- |",
+                $"| {executionSemanticsRow.Kind} | {executionSemanticsRow.Line} | "
+                    + $"{executionSemanticsRow.Target} | {executionSemanticsRow.Fact} |"
             });
 
             // Act

@@ -4956,5 +4956,62 @@ END",
 
             Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ObjectDeclarationTableMissing);
         }
+
+        private static SpDefinition ExecutionSemanticsSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public void From_WithOnlyExecutionSemantics_ShouldNotReturnNull()
+        {
+            // 이른 반환 AND-체인에 자기 항을 넣지 않으면 재료가 이것 하나뿐일 때
+            // From이 null을 돌려주고 CheckExecutionSemantics가 한 번도 돌지 않는다.
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+
+            Assert.NotNull(expectations);
+            Assert.NotEmpty(expectations!.ExecutionSemantics);
+            // 격리 확인 - 다른 재료가 이 픽스처를 살려 주고 있지 않은지 못박는다.
+            Assert.Empty(expectations.DmlScopeFacts);
+        }
+
+        [Fact]
+        public void Validate_MissingExecutionSemanticsTable_ShouldReportAnError()
+        {
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate("## 개요\n표가 없다.\n", expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
+
+        [Fact]
+        public void Validate_WithExecutionSemanticsTableCopied_ShouldNotReportThatError()
+        {
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+            var fact = Assert.Single(expectations!.ExecutionSemantics);
+            var markdown =
+                "## 개요\n\n"
+                + ExecutionSemanticsFacts.TableHeading + "\n\n"
+                + "| 종류 | 라인 | 대상 | 확정 사실 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Kind} | {fact.Line} | {fact.Target} | {fact.Fact} |\n";
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
     }
 }
