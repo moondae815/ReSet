@@ -153,6 +153,24 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Extract_ExecuteAsUserLiteralWithEmbeddedQuote_EscapesQuote()
+        {
+            // Fix Round 2 리뷰 실측(180.37.3 프로브): ScriptDom의 Literal.Value는 escape가
+            // 풀린 값을 준다 - 원문 'so''meuser'(작은따옴표 두 개로 이스케이프)를 파싱하면
+            // Literal.Value는 [so'meuser](이스케이프 풀림, 따옴표 하나)다. 이걸 그대로
+            // 따옴표로만 감싸면 EXECUTE AS 'so'meuser'가 되어 유효한 T-SQL도, 원문과 같은
+            // 텍스트도 아니게 된다 - 작은따옴표를 두 개로 되돌려 이스케이프해야 원문과
+            // 같아진다.
+            const string ddl =
+                "CREATE FUNCTION dbo.F(@a INT) RETURNS INT WITH EXECUTE AS 'so''meuser' " +
+                "AS BEGIN RETURN 1 END";
+
+            Assert.Equal(
+                new[] { "EXECUTE AS 'so''meuser'" },
+                ObjectDeclarationExtractor.Extract(ddl)!.WithOptions);
+        }
+
+        [Fact]
         public void Extract_NativeCompilation_RendersWithUnderscore()
         {
             // Fix Round 1 리뷰 실측: 실제 T-SQL 키워드는 NATIVE_COMPILATION(밑줄 포함)인데

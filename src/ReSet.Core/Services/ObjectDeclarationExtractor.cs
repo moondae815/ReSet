@@ -117,16 +117,30 @@ namespace ReSet.Core.Services
             /// CALLER/SELF/OWNER는 리터럴이 없다. 'user_name' 형(ExecuteAsOption.String)은
             /// 실제 이름이 Literal.Value에 따옴표 없이 담기므로 원문 표기(따옴표 포함)로
             /// 되돌려 싣는다. Login/User는 함수 WITH EXECUTE AS 절 문법상 도달하지
-            /// 않는다(그 형태는 별개인 EXECUTE AS 문에서만 쓰인다) - 방어적으로만 남긴다.
+            /// 않는다(180.37.3 프로브 실측 - EXECUTE AS LOGIN = '...'을 함수 옵션 자리에
+            /// 쓰면 파서가 "'LOGIN' 근처의 구문이 잘못되었습니다"로 거부한다. 그 형태는
+            /// 별개인 EXECUTE AS 문에서만 쓰인다) - 방어적으로만 남긴다.
             /// </summary>
             private static string RenderExecuteAs(ExecuteAsClause clause) => clause.ExecuteAsOption switch
             {
                 ExecuteAsOption.Caller => "EXECUTE AS CALLER",
                 ExecuteAsOption.Self => "EXECUTE AS SELF",
                 ExecuteAsOption.Owner => "EXECUTE AS OWNER",
-                ExecuteAsOption.String => $"EXECUTE AS '{clause.Literal?.Value}'",
+                ExecuteAsOption.String => $"EXECUTE AS '{EscapeQuote(clause.Literal?.Value)}'",
                 _ => "EXECUTE AS " + clause.ExecuteAsOption.ToString().ToUpperInvariant()
             };
+
+            /// <summary>
+            /// Fix Round 2 리뷰 실측(180.37.3 프로브): ScriptDom의 Literal.Value는
+            /// escape가 풀린 값을 준다 - 원문 EXECUTE AS 'so''meuser'(작은따옴표를
+            /// 두 개로 이스케이프한 T-SQL 표기)를 파싱하면 Literal.Value는 이스케이프가
+            /// 풀린 [so'meuser](따옴표 하나)로 나온다. 이걸 그대로 작은따옴표로만 감싸면
+            /// EXECUTE AS 'so'meuser'가 되어 유효한 T-SQL도 아니고 원문과 같은 텍스트도
+            /// 아니다 - 되돌려 감싸기 전에 작은따옴표를 두 개로 다시 이스케이프해야
+            /// 원문과 일치한다.
+            /// </summary>
+            private static string EscapeQuote(string? value) =>
+                value?.Replace("'", "''") ?? string.Empty;
 
             /// <summary>
             /// ScriptDom의 열거 이름(SchemaBinding)을 T-SQL 표기(SCHEMABINDING)로 옮긴다.
