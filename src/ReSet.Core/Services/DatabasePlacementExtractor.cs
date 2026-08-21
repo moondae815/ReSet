@@ -30,7 +30,8 @@ namespace ReSet.Core.Services
             var threePart = analysis.ThreePartObjectReferences ?? new List<string>();
             var linked = analysis.LinkedServerReferences ?? new List<string>();
 
-            // objectKey?.Database가 비어 있으면 이 SP가 속한 DB의 "이름"만 모를 뿐, 3부
+            // objectKey?.Database가 비어 있으면 이 객체(프로시저 또는 함수 - 이 사실은
+            // 함수 명세서 생성 경로에도 실린다)가 속한 DB의 "이름"만 모를 뿐, 3부
             // 식별자·연결 서버 참조 건수 자체는 파싱이 성공했으므로 여전히 확정값이다.
             // "(미상)"을 문장 안에 박으면 "확정값입니다"로 끝나는 문장에 미상값이 섞여
             // 표의 어조와 어긋난다(m2, 2026-08-22 최종 브랜치 리뷰) - 그래서 DB 이름을
@@ -42,9 +43,12 @@ namespace ReSet.Core.Services
 
             if (threePart.Count == 0 && linked.Count == 0)
             {
+                // m-b, Fix Round 1: "이 프로시저"라고 못박으면 함수 경로(AiService가
+                // BuildMachineFactBlockLines(functionDef)를 부르는 자리)에서 거짓이 된다 -
+                // 이 사실은 SP·함수 양쪽에 실린다. "이 객체"로 중립화한다.
                 var subject = hasHome
                     ? $"참조 객체는 전부 `{home}` 로컬입니다."
-                    : "참조 객체는 전부 이 프로시저와 같은 DB의 로컬 객체입니다.";
+                    : "참조 객체는 전부 이 객체와 같은 DB의 로컬 객체입니다.";
                 return new DatabasePlacementFact(
                     $"{subject} 3부 식별자 참조 0건, 연결 서버 참조 0건 — 확정값입니다.");
             }
@@ -59,10 +63,20 @@ namespace ReSet.Core.Services
                 parts.Add($"연결 서버 참조 {linked.Count}건: {string.Join(", ", linked)}");
             }
 
-            var prefix = hasHome
-                ? $"소속 DB는 `{home}`이고 다음은 그 밖입니다"
-                : "소속 DB 이름은 미상이나 다음은 그 밖입니다";
-            return new DatabasePlacementFact($"{prefix} — {string.Join(" / ", parts)}.");
+            if (!hasHome)
+            {
+                // m-c, Fix Round 1: SqlStaticParser.ExplicitVisit(SchemaObjectName)는 3부
+                // 식별자를 소속 DB 이름과 비교하지 않고 원문 부분 수만 보고 전부 담는다
+                // (자기 자신을 3부로 적은 참조도 걸린다). 소속 DB 이름을 모르면 이 참조가
+                // 실제로 "그 밖"인지 판정할 재료가 없다 - "다음은 그 밖입니다"라고 단정하면
+                // m2를 고치다 이 클래스의 침묵 원칙을 한 칸 어기게 된다. 분류어 없이
+                // 건수·목록만 싣는다.
+                return new DatabasePlacementFact(
+                    $"소속 DB 이름은 미상입니다. {string.Join(" / ", parts)}.");
+            }
+
+            return new DatabasePlacementFact(
+                $"소속 DB는 `{home}`이고 다음은 그 밖입니다 — {string.Join(" / ", parts)}.");
         }
     }
 }
