@@ -113,11 +113,14 @@
   API용 `HttpClient.Timeout`(`httpClient?.Timeout ?? TimeSpan.FromSeconds(300)`)을 그대로
   넘긴다. `AiSettings:TimeoutSeconds`는 3600. 정체된 리뷰 호출 하나는 이제 타임아웃 한
   시간을 태우고, 지터로 잠들었다가, 재시도에서 다시 한 시간을 태운 뒤에야 소프트 페일
-  배너에 이른다. `VerificationPipelineOrchestrator.RunCodeObjectPipelineCoreAsync`가
-  시도당 순차 리뷰 좌석 네 개를 쥐고 있다 — `"review"`·`"final_review"`·`"refinal"`,
-  그리고 병렬 후보 배치. `Program.Main`의 `foreach (var selectedOption in targetSps)`가
-  대상 객체를 순차 처리하므로, 저하된 엔드포인트가 이제 예전 일정으로 배치를 끊지 않고
-  계속 갈아 넣는다. 설계 §5.1은 비용을 돈으로만 쟀다("리뷰 호출 비용이 2배") — 시간은
+  배너에 이른다. `VerificationPipelineOrchestrator.RunCodeObjectPipelineCoreAsync`의
+  리뷰 좌석은 `_actorEffort == "dynamic"` 분기에 걸리느냐로 갈린다 — 비-dynamic(`else`)
+  경로는 `"review"` 한 자리, dynamic 경로는 `"final_review"`·`"refinal"`·병렬 후보 배치를
+  쥔다. 두 분기는 한 객체 실행에서 동시에 겹치지 않지만, 어느 쪽이 걸리든 그 좌석에서
+  재시도는 벽시계 시간을 그대로 곱한다. `Program.Main`의
+  `foreach (var selectedOption in targetSps)`가 대상 객체를 순차 처리하므로, 저하된
+  엔드포인트가 이제 예전 일정으로 배치를 끊지 않고 계속 갈아 넣는다. 설계 §5.1은 비용을
+  돈으로만 쟀다("리뷰 호출 비용이 2배") — 시간은
   셈하지 않았다. 이 목록이 이미 미룬 "`AiSettings:TimeoutSeconds: 3600` 값 자체"의 유예가
   이 사실 때문에 전보다 비싸졌다.
   출처: `2026-08-21-ai-call-retry-design.md` §5.1
