@@ -521,13 +521,79 @@ namespace ReSet.Core.Services
         /// </summary>
         private static string? ExtractTargetAlias(UpdateSpecification node)
         {
-            if (node.Target is NamedTableReference named)
+            if (node.Target is not NamedTableReference named) return null;
+
+            var identifiers = named.SchemaObject?.Identifiers;
+            if (identifiers == null || identifiers.Count == 0) return null;
+
+            // [FROM 절과 대조하는 이유 - 2026-08-20 축 A 감사 실측]
+            // UPDATE의 대상 이름은 별칭일 수도 있고(UPDATE A ... FROM T A)
+            // 테이블 이름일 수도 있다(UPDATE TSettleMst ... FROM TSettleMst A).
+            // 문법만으로는 둘을 못 가른다. 예전에는 "한 부(部)면 별칭"으로 어림했고,
+            // 그래서 두 방향으로 다 틀렸다.
+            //
+            //   갱신 6  : UPDATE TSettleMst ... FROM TSettleMst A → targetAlias가
+            //             "TSettleMst"가 되어 진짜 자기참조 A.PGCOMM이 남의 것으로
+            //             걸러졌다. 자기참조가 통째로 사라졌다(🔴).
+            //   갱신 17 : UPDATE SETTLE_POQ_DB.dbo.TSettleMst ... FROM ... AA →
+            //             부가 셋이라 null이 되고, 한정자 규칙이 아예 꺼져
+            //             파생 테이블 BB의 컬럼이 자기참조로 잡혔다(🟡).
+            //
+            // 대상 이름을 FROM 절에서 찾아 그 테이블에 붙은 별칭을 쓰면 둘 다 닫힌다.
+            // 찾지 못하면 이름 자신이 별칭이라는 뜻이므로(한 부일 때만) 그대로 쓴다.
+            var aliasFromSource = FindAliasForTarget(node.FromClause, named.SchemaObject);
+            if (aliasFromSource != null) return aliasFromSource;
+
+            return identifiers.Count == 1 ? identifiers[0].Value : null;
+        }
+
+        /// <summary>
+        /// FROM 절에서 갱신 대상과 같은 테이블을 찾아 그 별칭을 돌려준다.
+        /// 이름 비교는 마지막 부(테이블 이름)로만 한다 - 대상은 세 부로, FROM은
+        /// 두 부로 쓰는 표기 흔들림이 실물에 있다.
+        /// </summary>
+        private static string? FindAliasForTarget(FromClause? fromClause, SchemaObjectName? target)
+        {
+            var targetName = target?.Identifiers?.LastOrDefault()?.Value;
+            if (fromClause == null || targetName == null) return null;
+
+            var collector = new NamedTableCollector();
+            foreach (var reference in fromClause.TableReferences)
             {
-                var identifiers = named.SchemaObject?.Identifiers;
-                if (identifiers != null && identifiers.Count == 1)
+                reference.Accept(collector);
+            }
+
+            // [별칭을 먼저 보는 이유 - 2026-08-20 리뷰 Important]
+            // SQL Server는 UPDATE 대상 이름을 별칭에 먼저 바인딩한다. 테이블 이름부터
+            // 대조하면, 대상이 실은 별칭인데 마침 같은 이름의 테이블이 조인돼 있을 때
+            // 남의 별칭을 물어 온다(UPDATE X ... FROM dbo.TSettle X JOIN dbo.X Y -
+            // X는 TSettle의 별칭인데 dbo.X를 찾아 Y를 돌려준다). 바인딩 순서를 그대로
+            // 옮긴다.
+            foreach (var candidate in collector.Tables)
+            {
+                if (candidate.Alias?.Value is { Length: > 0 } alias &&
+                    string.Equals(alias, targetName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return identifiers[0].Value;
+                    return alias;
                 }
+            }
+
+            foreach (var candidate in collector.Tables)
+            {
+                var name = candidate.SchemaObject?.Identifiers?.LastOrDefault()?.Value;
+                if (name == null || !string.Equals(name, targetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // 같은 테이블이 별칭 없이 실려 있으면 대상은 그 자리에 바인딩되고,
+                // 한정자 없는 참조가 곧 자기참조다. 별칭을 만들어 내지 말고 null을
+                // 돌려 한정자 규칙을 끈다.
+                //
+                // 여기서 계속 훑으면 안 된다 - 뒤에 같은 테이블이 별칭을 달고 또
+                // 실려 있으면(FROM dbo.T, dbo.T A) 그 별칭을 대상으로 잘못 잡아
+                // 판정이 통째로 뒤집힌다. 실측된 형태다.
+                return candidate.Alias?.Value is { Length: > 0 } tableAlias ? tableAlias : null;
             }
 
             return null;
@@ -538,6 +604,29 @@ namespace ReSet.Core.Services
             var parts = identifier?.Identifiers;
             if (parts == null || parts.Count < 2) return null;
             return parts[parts.Count - 2].Value;
+        }
+
+        /// <summary>
+        /// FROM 절 안의 명명 테이블 참조를 모은다. JOIN으로 겹쳐 쌓인 것까지 훑어야
+        /// 하므로 방문자를 쓴다 - TableReferences를 직접 순회하면 조인 트리의
+        /// 왼쪽 가지만 보게 된다.
+        /// </summary>
+        private sealed class NamedTableCollector : TSqlFragmentVisitor
+        {
+            public List<NamedTableReference> Tables { get; } = new();
+
+            public override void Visit(NamedTableReference node) => Tables.Add(node);
+
+            /// <summary>
+            /// 파생 테이블 안으로 내려가지 않는다. 그 안의 테이블은 바깥 별칭과
+            /// 무관하고, 갱신 대상과 이름이 같으면 엉뚱한 별칭을 물어 온다 -
+            /// EXCEPTION_PROC 갱신 13이 그 형태다(파생 안 A, 바깥 Y, 둘 다 TSettleMst).
+            ///
+            /// Visit이 아니라 ExplicitVisit을 비워야 한다. ScriptDom에서 Visit은
+            /// 순회 중 호출되는 알림일 뿐이라 비워도 자식으로 계속 내려간다.
+            /// ColumnReferenceCollector가 ScalarSubquery를 막는 방식과 같다.
+            /// </summary>
+            public override void ExplicitVisit(QueryDerivedTable node) { }
         }
 
         private sealed class ColumnReferenceCollector : TSqlFragmentVisitor

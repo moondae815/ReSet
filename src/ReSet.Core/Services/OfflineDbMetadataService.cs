@@ -65,6 +65,7 @@ namespace ReSet.Core.Services
             var definition = CloneDefinition(stored, normalizedKey);
             definition.ObjectKey = normalizedKey;
             RelinkCodeObjectDdl(definition);
+            NormalizeCodeObjectDependencyNames(definition);
             RefreshStaticAnalysis(definition, normalizedKey);
             return Task.FromResult(definition);
         }
@@ -181,6 +182,7 @@ namespace ReSet.Core.Services
                 .ToList();
 
             RelinkCodeObjectDdl(directDefinition);
+            NormalizeCodeObjectDependencyNames(directDefinition);
             RefreshStaticAnalysis(directDefinition, normalizedKey);
 
             return Task.FromResult(directDefinition);
@@ -191,6 +193,58 @@ namespace ReSet.Core.Services
         /// CodeObjects에 들어 있으므로 여기서 이어 붙인다. 이렇게 하지 않으면 UIF_SettleYMD
         /// 같은 함수가 프롬프트에서 "DDL 수집 실패"로 남는다.
         /// </summary>
+        /// <summary>
+        /// 의존성 이름을 스냅샷에 저장된 객체의 표기에 맞춘다.
+        ///
+        /// [왜 별도 순회인가 - 2026-08-20 리뷰 Critical]
+        /// 처음에는 이것을 RelinkCodeObjectDdl 안에 넣었다. 그 메서드는
+        /// `ReferencedDdlText가 이미 있으면 continue`로 시작하는데, 온라인 추출기는
+        /// 코드 객체 의존성의 DDL을 항상 채우고 스냅샷은 그 객체를 그대로 저장한다.
+        /// 그래서 정규화가 <b>감사에서 실제로 어긋난 경로에서는 한 번도 돌지 않았다</b> —
+        /// 고쳤다고 적힌 수정이 문제가 난 자리를 비껴간 것이다.
+        ///
+        /// 두 일은 조건이 다르다. DDL 재연결은 "비어 있을 때만" 하는 보충이고,
+        /// 이름 정규화는 "저장된 객체를 찾을 수 있으면 언제나" 해야 하는 정정이다.
+        /// 한 루프에 묶으면 앞의 조건이 뒤의 것까지 가둔다.
+        ///
+        /// [왜 이름 쪽을 고치는가]
+        /// sys.sql_expression_dependencies의 referenced_entity_name은 카탈로그 표기가
+        /// 아니라 호출식에 쓰인 표기를 돌려준다. T-SQL이 대소문자를 안 가리므로 원본이
+        /// dbo.UF_Get_WorkDay2로 부르면 의존성 이름도 그 표기로 들어온다. 반면 산출물
+        /// 디렉터리는 그 함수를 직접 분석할 때 쓴 카탈로그 표기로 만들어진다. 그
+        /// 어긋남이 「참조 함수 (기계 확정 — 수정 금지)」 표의 명세서 링크에서 드러났고,
+        /// 같은 문서의 「참조 코드 객체」 링크는 그래프 키를 써서 정본이라 문서가 자기
+        /// 안에서 서로 달랐다. 사전을 OrdinalIgnoreCase로 열어 둔 덕에 조회는 되지만,
+        /// 조회가 된다고 이름이 같은 것은 아니다.
+        ///
+        /// 코드 객체만 다룬다. 테이블·뷰 이름은 이 정정을 받지 않으므로 그쪽 표기
+        /// 흔들림은 그대로 남는다 - 링크를 만드는 소비자가 코드 객체뿐이라 범위를
+        /// 좁혔다.
+        /// </summary>
+        private void NormalizeCodeObjectDependencyNames(SpDefinition definition)
+        {
+            foreach (var dependency in definition.Dependencies)
+            {
+                var codeObjectType = SqlObjectTypeClassifier.ResolveCodeObjectType(dependency.Type);
+                if (codeObjectType == CodeObjectType.Unresolved) continue;
+
+                var dependencyKey = CodeObjectKey.Create(
+                    string.IsNullOrWhiteSpace(dependency.Database) ? _snapshot.Database : dependency.Database!,
+                    dependency.Schema,
+                    dependency.Name,
+                    codeObjectType);
+
+                if (!_snapshot.CodeObjects.TryGetValue(dependencyKey.CanonicalName, out var stored) &&
+                    !_snapshot.CodeObjects.TryGetValue(dependencyKey.LegacyCanonicalName, out stored))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(stored.Name)) dependency.Name = stored.Name;
+                if (!string.IsNullOrWhiteSpace(stored.Schema)) dependency.Schema = stored.Schema;
+            }
+        }
+
         private void RelinkCodeObjectDdl(SpDefinition definition)
         {
             foreach (var dependency in definition.Dependencies)

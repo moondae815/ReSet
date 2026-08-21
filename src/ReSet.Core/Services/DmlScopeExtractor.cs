@@ -802,8 +802,19 @@ namespace ReSet.Core.Services
                         var column = TextOf(columnRef);
                         return string.IsNullOrWhiteSpace(column) ? null : column;
 
-                    case FunctionCall call when ContainsColumn(call):
-                        var text = TextOf(call);
+                    // [노드 타입을 열거하지 않는 이유 - 2026-08-20 축 A 감사]
+                    // 예전에는 FunctionCall만 받았다. 그런데 ScriptDom은 LEFT·RIGHT를
+                    // FunctionCall이 아니라 전용 노드(LeftFunctionCall·RightFunctionCall)로
+                    // 판다. 그래서 같은 SP에서 ISNULL 래핑은 잡히는데
+                    // `LEFT(D.PayToolType,1) IN ('C')`(EXPECT_PROC:146·168)만 통째로 빠졌고,
+                    // 통신군과 금융·상품권군을 가르는 필터가 "수정 금지" 표에서 사라졌다.
+                    //
+                    // 타입을 하나 더 열거하면 오늘 LEFT는 닫히지만 CAST·CONVERT·COALESCE·IIF
+                    // 처럼 전용 노드를 갖는 다음 것이 같은 구멍에 빠진다. 좌변이 무엇이든
+                    // "컬럼 참조를 품고 있는가"만 보면 부류가 닫힌다. 상수만으로 이뤄진
+                    // 식은 술어의 좌변이 아니므로 그대로 버린다.
+                    case ScalarExpression other when ContainsColumn(other):
+                        var text = CollapseWhitespace(TextOf(other));
                         return string.IsNullOrWhiteSpace(text) ? null : text;
 
                     default:
@@ -811,16 +822,46 @@ namespace ReSet.Core.Services
                 }
             }
 
-            /// <summary>호출 인자 어딘가에 컬럼 참조가 있는가. 상수만으로 이뤄진 호출은 술어 좌변이 아니다.</summary>
-            private static bool ContainsColumn(FunctionCall call)
-            {
-                foreach (var parameter in call.Parameters)
-                {
-                    if (parameter is ColumnReferenceExpression) return true;
-                    if (parameter is FunctionCall nested && ContainsColumn(nested)) return true;
-                }
+            /// <summary>
+            /// 여러 줄로 쓰인 좌변을 한 줄로 접는다.
+            ///
+            /// [왜 원문 그대로가 아닌가 - 2026-08-20 리뷰 Important]
+            /// 이 값은 프롬프트의 표 셀로 나가고 L1이 산출물의 같은 셀과 대조한다.
+            /// 그런데 프롬프트 쪽은 EscapeTableCell이 개행을 공백으로 접어 싣고
+            /// (AiService), 검증기는 접지 않은 이 원문과 대조한다
+            /// (MechanicalValidator.CheckSetPredicates). 좌변에 개행이 있으면 모델이
+            /// 지시대로 축자로 옮겨도 두 문자열이 영영 같아지지 않는다 - 어떤 산출물도
+            /// 만족시킬 수 없는 요구가 되고, 재시도 예산만 태운다.
+            ///
+            /// 좌변을 노드 타입이 아니라 컬럼 유무로 받게 넓힌 뒤로 CASE·산술식처럼
+            /// 여러 줄로 쓰이는 형태가 흔해져 이론상 위험이 실제 위험이 됐다. 재료를
+            /// 만들 때 한 번 접어 두면 프롬프트와 검증기가 같은 것을 본다. 접히는 것은
+            /// 공백뿐이라 의미는 그대로다.
+            /// </summary>
+            private static string CollapseWhitespace(string? text) =>
+                string.IsNullOrWhiteSpace(text)
+                    ? string.Empty
+                    : System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
 
-                return false;
+            /// <summary>
+            /// 식 어딘가에 컬럼 참조가 있는가. 하위 질의 안으로는 내려가지 않는다 -
+            /// 그 스코프의 컬럼은 이 술어의 좌변이 아니다.
+            /// </summary>
+            private static bool ContainsColumn(ScalarExpression expression)
+            {
+                var probe = new ColumnPresenceProbe();
+                expression.Accept(probe);
+                return probe.Found;
+            }
+
+            private sealed class ColumnPresenceProbe : TSqlFragmentVisitor
+            {
+                public bool Found { get; private set; }
+
+                public override void Visit(ColumnReferenceExpression node) => Found = true;
+
+                /// <summary>하위 질의는 남의 스코프다. ExplicitVisit이라야 자식으로 안 내려간다.</summary>
+                public override void ExplicitVisit(ScalarSubquery node) { }
             }
 
             /// <summary>
