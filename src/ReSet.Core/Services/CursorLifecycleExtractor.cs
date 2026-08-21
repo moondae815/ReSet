@@ -25,11 +25,17 @@ namespace ReSet.Core.Services
     /// UP_UTIL_SETTLE_PROC_ETC:137-141 - 두 경우 모두 OPEN 뒤 여러 RETURN이 CLOSE보다
     /// 앞선 모양이었다.
     ///
-    /// [왜 LOCAL 미지정이 사실인가] DECLARE CURSOR에 LOCAL이 없으면 이 구문 자체가
-    /// 커서 범위를 정하지 않은 것이다 - 범위는 DB의 default_to_local_cursor 설정에
-    /// 달려 있다. 이 설정값과 재호출 여부는 이 SP 밖의 사정이므로, 그 결과로 무슨
-    /// 일이 일어나는지(예: 재호출 시 오류)는 단정하지 않고 "범위가 설정에 달려 있다"는
-    /// 귀결까지만 싣는다.
+    /// [왜 LOCAL 미지정이 사실인가] DECLARE CURSOR에 LOCAL도 GLOBAL도 없으면 이 구문
+    /// 자체가 커서 범위를 정하지 않은 것이다 - 범위는 DB의 default_to_local_cursor
+    /// 설정에 달려 있다. 이 설정값과 재호출 여부는 이 SP 밖의 사정이므로, 그 결과로
+    /// 무슨 일이 일어나는지(예: 재호출 시 오류)는 단정하지 않고 "범위가 설정에 달려
+    /// 있다"는 귀결까지만 싣는다.
+    ///
+    /// [왜 GLOBAL 명시는 침묵하는가 - I1, 2026-08-22 최종 브랜치 리뷰] GLOBAL이 명시되면
+    /// 범위는 default_to_local_cursor 설정과 무관하게 전역으로 확정된다. 예전 코드는
+    /// LOCAL 유무만 보고 이 경우에도 "범위가 설정에 달려 있다"는 문장을 냈는데, 이는
+    /// 거짓이다. GLOBAL에 대해 참인 새 문장을 지어내는 대신 아예 내지 않는다 - 이
+    /// 클래스가 다른 모든 미확정 상황에서 쓰는 침묵 계약과 같다.
     ///
     /// [어긋난 순서에서 침묵하는 이유] 같은 커서 이름이 여러 번 OPEN/CLOSE되거나 CLOSE가
     /// OPEN보다 앞서거나 CLOSE 없이 DEALLOCATE만 있으면 "OPEN과 CLOSE 사이"라는 관측
@@ -68,7 +74,14 @@ namespace ReSet.Core.Services
                         && closeLine > openLine
                         && visitor.ReturnLines.Any(l => l > openLine && l < closeLine);
 
-                    if (!unclosed && declaration.IsLocal) continue;
+                    // 범위 문장은 LOCAL도 GLOBAL도 명시되지 않은 경우에만 낼 수 있다 - 그때만
+                    // 범위가 실제로 DB의 default_to_local_cursor 설정에 달려 있다. GLOBAL이
+                    // 명시되면 범위는 그 설정과 무관하게 전역으로 확정되므로, 이 문장은 거짓이
+                    // 된다. GLOBAL에 대해 새 문장을 지어내는 대신 침묵한다 - 이 추출기의
+                    // 다른 네 자리와 같은 침묵 계약(I1, 2026-08-22 최종 브랜치 리뷰).
+                    var needsScopeSentence = !declaration.IsLocal && !declaration.IsGlobal;
+
+                    if (!unclosed && !needsScopeSentence) continue;
 
                     var parts = new List<string>();
                     if (unclosed)
@@ -76,7 +89,7 @@ namespace ReSet.Core.Services
                         parts.Add("OPEN과 CLOSE 사이에 RETURN이 있어 이 경로로 실행이 종료되면 "
                             + "CLOSE/DEALLOCATE에 도달하지 않습니다");
                     }
-                    if (!declaration.IsLocal)
+                    if (needsScopeSentence)
                     {
                         parts.Add("CURSOR 선언에 LOCAL이 지정되지 않아 커서 범위가 데이터베이스의 "
                             + "default_to_local_cursor 설정에 달려 있습니다");
@@ -96,7 +109,7 @@ namespace ReSet.Core.Services
             }
         }
 
-        private sealed record CursorDeclaration(int Line, string Name, bool IsLocal);
+        private sealed record CursorDeclaration(int Line, string Name, bool IsLocal, bool IsGlobal);
 
         // DeclareCursorStatement/OpenCursorStatement/CloseCursorStatement/ReturnStatement를
         // 직접 방문한다. 이 넷은 모두 리프 문장이지 StatementList 같은 컨테이너 노드가
@@ -125,10 +138,11 @@ namespace ReSet.Core.Services
                 var name = node.Name?.Value;
                 if (string.IsNullOrWhiteSpace(name)) return;
 
-                var isLocal = node.CursorDefinition?.Options?.Any(
-                    o => o.OptionKind == CursorOptionKind.Local) == true;
+                var options = node.CursorDefinition?.Options;
+                var isLocal = options?.Any(o => o.OptionKind == CursorOptionKind.Local) == true;
+                var isGlobal = options?.Any(o => o.OptionKind == CursorOptionKind.Global) == true;
 
-                Declarations.Add(new CursorDeclaration(node.StartLine, name!, isLocal));
+                Declarations.Add(new CursorDeclaration(node.StartLine, name!, isLocal, isGlobal));
             }
 
             public override void Visit(OpenCursorStatement node)

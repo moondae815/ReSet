@@ -196,5 +196,47 @@ END";
             Assert.Contains("데이터베이스", fact.Sentence);
             Assert.DoesNotContain("서버", fact.Sentence);
         }
+
+        [Fact]
+        public void Extract_ExplicitGlobalCursor_ShouldNotReportFalseScopeSentence()
+        {
+            // I1 - GLOBAL이 명시되면 범위는 데이터베이스의 default_to_local_cursor 설정과
+            // 무관하게 전역으로 확정된다. IsLocal만 보고 판단하면 GLOBAL이 명시된 경우에도
+            // "범위가 설정에 달려 있다"는 거짓 문장이 나간다. 확정할 수 없는 새 문장을
+            // 지어내는 대신 침묵한다 - 이 클래스의 다른 네 곳과 같은 침묵 계약.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE c1 CURSOR GLOBAL FOR SELECT c FROM dbo.T
+    OPEN c1
+    CLOSE c1
+    DEALLOCATE c1
+END";
+
+            Assert.Empty(CursorLifecycleExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ExplicitGlobalCursorWithUnclosedReturn_StillReportsReturnFact()
+        {
+            // GLOBAL이 명시돼 범위 문장은 침묵하지만, OPEN과 CLOSE 사이 RETURN 관측은
+            // 독립적인 사실이므로 그 문장은 그대로 나가야 한다. 다만 LOCAL 관련 문구는
+            // 섞이면 안 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE c1 CURSOR GLOBAL FOR SELECT c FROM dbo.T
+    OPEN c1
+    IF @@ERROR <> 0 BEGIN RETURN END
+    CLOSE c1
+    DEALLOCATE c1
+END";
+
+            var fact = Assert.Single(CursorLifecycleExtractor.Extract(ddl));
+            Assert.Contains("CLOSE/DEALLOCATE에 도달하지 않습니다", fact.Sentence);
+            Assert.DoesNotContain("default_to_local_cursor", fact.Sentence);
+        }
     }
 }
