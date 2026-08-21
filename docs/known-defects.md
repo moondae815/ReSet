@@ -1,478 +1,339 @@
-# 남은 후속 작업
+# 알려진 결함
 
-`docs/superpowers/specs/` 하위 설계 문서(2026-07-26 ~ 2026-08-14, 38건)에 기록된 후속 항목을
-소스 코드와 대조해 **실제로 열려 있는 것만** 남긴 목록이다.
+`docs/superpowers/specs/`의 설계 문서가 후속으로 미룬 것 중, **한 문서만 읽어서는 알 수 없는
+것**을 모은다. 심각도 순위(어느 것이 P0인가)와 반복 횟수(같은 것을 몇 개의 설계가 별건으로
+미뤘는가)가 그것이다. 나머지는 각 설계 문서의 `§남은 후속`에 원본이 있다.
 
-- 작성일: 2026-08-13 / 재검증일: 2026-08-14, 2026-08-16
-- **2026-08-16 재검증 결과**: 그 사이 `src/`에 커밋이 24건 있었고 파일 14개가 바뀌었다.
-  그중 **3건이 해소**되어 P2에서 아래 완료 기록으로 옮겼다 — C# 아키텍처 규칙의 단일
-  어셈블리 스코프, `StepLogicTests` 배치 위치 안내 부재, `ArtifactChangeDetector` TOCTOU.
-  나머지 열린 항목은 전부 그대로이며, 바뀐 파일에 걸린 것들의 줄 번호를 이번에 갱신했다
-  (`MechanicalValidator`가 특히 크게 밀렸다 — 예: `:750→:1174`, `:897→:1321`).
-- **신규 발굴 3건 + 실측 3건**: 목록의 근거가 2026-08-13까지의 문서 37건이었는데, 그 뒤
-  [2026-08-14 생성 번들 계약](superpowers/specs/2026-08-14-generated-bundle-contract-design.md)이
-  추가됐다. 그 문서가 §제외·§남은 후속으로 미룬 것 중 **3건이 열려 있어 P1·P2에 넣었고**,
-  돌려 봐야 아는 3건은 새 섹션 `실측이 필요한 것`으로 갈랐다. 셋 다 프롬프트 사안이라
-  한 뿌리에서 나온다 — 그 문서가 "프롬프트는 재생성 결과가 비결정적이라 별도 설계로
-  다룬다"며 통째로 제외했기 때문이다.
-- **2026-08-17 — 프롬프트 유예를 부분적으로 깼다.** 위 "프롬프트는 재생성 결과가
-  비결정적이라 별도 설계로 다룬다"는 판단은
-  [축 A 명세서 충실도 설계](superpowers/specs/2026-08-17-axis-a-spec-fidelity-design.md)에서
-  조건부로 해제됐다. **비결정성을 없애는 것이 아니라, 비결정적 산출물을 결정적으로
-  검사한다** — 프롬프트 규칙을 혼자 추가하지 않고, 규칙과 L1 검사가 같은 추출기
-  결과에서 나오는 경우에만 추가한다. 그 계약을 지키지 않는 프롬프트 사안(P1의
-  `목차가 S01의 TargetTables를 채우지 못한다` 등)은 여전히 유예 상태다.
-- 2026-08-14 재검증 때의 기록: 목록 자체가 코드와 어긋난 4건을 그때 고쳤다 — P2의
-  **필수 H2 하드코딩**(3곳→4곳, 단계 라벨 오기), P3의 **모호성 오류 메시지**(절반은 이미
-  해소), 줄 번호 2건. 제외였던
-  [2026-08-13 AGENTS.md 재구조화](superpowers/specs/2026-08-13-agents-md-restructure-design.md)는
-  `3d3568e`로 **완료**됐다.
-- 줄 번호는 재검증일(2026-08-16) 기준으로 전부 확인했다. 시간이 지나면 멤버 이름으로 찾는
-  편이 정확하다.
+> **이 문서는 정기 재검증을 하지 않는다.**
+>
+> 2026-08-13 ~ 08-21에 전수 재검증을 세 번 돌린 결과가 근거다. 9일 · src 커밋 150건 동안
+> 최초 39건 중 **36건이 그대로**였고, 닫힌 4건은 전부 다른 일을 하다 우연히 닫힌 것이다
+> (닫은 커밋 6개 중 이 목록을 근거로 든 것이 하나도 없다). 그동안 목록은 39 → 47로 커졌고,
+> 재검증 한 회차가 앵커 70여 개 대조와 클린 빌드를 요구했다. **비용은 회차마다 들고 산출은
+> 0에 수렴한다.**
+>
+> 그래서 위쪽 「살아 있는 목록」만 유지하고, 아래 「알려진 한계」는 **시점 기록**으로 둔다.
+> 한계 쪽 항목은 **그 자리를 건드리는 사람이 그때 확인한다.** 적힌 앵커를 검증 없이 믿지 마라.
+
+**앵커 규약: `타입.멤버`를 쓰고 줄 번호를 쓰지 않는다.** 한 멤버 안에서 자리를 좁혀야 하면
+그 자리에 실제로 있는 식별자나 조건식을 함께 적는다. 이 목록은 줄 번호로 세 번 낡았다 —
+`MechanicalValidator`가 1,800줄대에서 4,700줄대로 커지는 동안 멤버 이름은 하나도 바뀌지 않았다.
+
+**여기에 없는 것**
+
+- **산출물 정합성 결함** — `docs/audit-defect-catalog.md`가 갱신 규약과 함께 소유한다.
+  아직 안 닫힌 부류(P14 원본 사실 미확정 · P6 주석 보존표 누락 · P11 표↔산문 불일치 ·
+  P12 재생성 진동 · P5 `CAST(money AS INT)` 절사 · 축 B B1–B8 재감사)는 그 문서 §5에 있다.
+  **여기에 옮겨 적지 마라** — 닫힘 판정 기준이 다르다(카탈로그는 재감사 회차를 요구하고
+  이 문서는 코드 앵커를 본다). 두 곳에 적으면 갈라진다.
+- **각 설계의 상세한 배경** — 아래 항목의 `출처`가 가리키는 문서에 있다.
 
 ---
 
-## P0 — 실사용 피해가 즉시 발생
+## 살아 있는 목록
 
-### 코드 생성 루프 (`ReSet.Validator.Core`)
+### P0 — 실사용 피해가 즉시 발생
 
-- [ ] **레거시 전체 Job 루프에 총 시도 상한이 없다** — `CodegenWorkflowOrchestrator.cs:123-205`
+- [ ] **레거시 전체 Job 루프에 총 시도 상한이 없다** —
+      `CodegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync`의 `while (attempt <= maxAttempts)` 루프
 
-  산출물 있음 + 매핑 성립 + L1/L2 매번 실패 조합이면 `consecutiveNoArtifactRetries`와
-  `consecutiveUnverified` 두 연속 캡 어디에도 닿지 않는다. `MaxL2Attempts: "unlimited"`
-  (= `int.MaxValue`)에서 무인 배치가 끝나지 않는 유료 기동이 된다.
+  산출물 있음 + 매핑 성립 + L1/L2 매번 실패 조합이면 같은 메서드의
+  `consecutiveNoArtifactRetries`와 `consecutiveUnverified` 두 연속 캡 어디에도 닿지 않는다.
+  `MaxL2Attempts: "unlimited"`(= `maxAttempts`에 들어가는 `int.MaxValue`)에서
+  **무인 배치가 끝나지 않는 유료 기동**이 된다.
 
   출처: `2026-08-09-silent-failure-closure-design.md` §후속 작업 1
 
-### 검증 파이프라인 (`ReSet.Core`)
+- [ ] **통합 루프에 점수 임계값 강제가 없다** —
+      `VerificationPipelineOrchestrator.RunConsolidatedPipelineAsync`의 `bestAttempt.TryRecord` 직후
 
-- [ ] **통합 루프에 점수 임계값 강제가 없다** — `VerificationPipelineOrchestrator.cs:2024-2039`
-
-  단일 객체 루프는 `:1092-1110`에서 5축을 직접 검사해 `HasDefects`를 덮어쓰지만, 통합
-  계획서 루프에는 그 블록 자체가 없다. Critic이 낮은 점수와 함께 `HasDefects: false`를
-  내면 `검증 상태: 통과` 옆에 낮은 종합 신뢰도가 나란히 찍힌다.
+  단일 객체 루프(`RunCodeObjectPipelineCoreAsync`)는 `overriddenHasDefects` 블록에서 5축을
+  직접 검사해 `HasDefects`를 덮어쓰지만, 통합 계획서 루프에는 그 블록 자체가 없다.
+  Critic이 낮은 점수와 함께 `HasDefects: false`를 내면 `검증 상태: 통과` 옆에 낮은 종합
+  신뢰도가 나란히 찍힌다.
 
   출처: `2026-08-03-verification-annotation-cleanup-design.md`,
   `2026-08-03-cancellation-policy-design.md`
 
-- [ ] **L2 리뷰 호출 재시도 인프라 부재** — `:1163-1186`(단일), `:2133-2162`(통합)
+- [ ] **L2 리뷰 호출 재시도 인프라 부재** — 두 루프의 `if (!reviewSuccess)` 분기
+      (`RunCodeObjectPipelineCoreAsync` 및 `RunConsolidatedPipelineAsync`)
 
   일시적 API 오류 한 번에 `break`하며 `_maxAttempts`가 남아 있어도 재시도하지 않는다.
   `RetryRescue`가 이전 회차 최고점을 구제해 완화할 뿐, 그 회차의 검증 자체는 포기된다.
-  **5개 문서가 반복 기록한 최다 이월 항목**이며, 재시도 횟수·백오프·취소 전파·비용
+  **5개 설계가 반복 기록한 최다 이월 항목**이며, 재시도 횟수·백오프·취소 전파·비용
   정책 결정이 선행되어야 한다.
 
   출처: `2026-08-01-verification-outcome-honesty`, `2026-08-03-cancellation-policy`,
   `2026-08-03-stage1-analysis-flow-hardening`, `2026-08-03-verification-annotation-cleanup`,
   `2026-08-03-verification-honesty-followups`
 
----
+### 정책 결정이 선행되어야 하는 것
 
-## P1 — 정확성·품질 손실
-
-### 검증 파이프라인
-
-- [ ] **`SpecHeader`에 인터페이스 점수 필드가 없다** —
-      `SpecHeaderReader.cs:6-12`, `VerificationDocumentFormatter.cs:50`
-
-  포매터는 `인터페이스 점수`를 YAML 헤더에 쓰지만 리더는 5개 키만 읽어 승인 화면이
-  무시한다(캐시 왕복에서는 살아남는다). **고칠 때 함정이 있다** — 필드를 추가하면
-  `ConsoleUserInteraction.cs:192-196`의 `?? 10` 폴백 뒤에 놓여 여섯 번째 조작 만점
-  위험이 생긴다.
-
-- [ ] **생성 호출 실패 재시도 0회** — `:984`(명세서), `:1923`(계획서)
-
-  명세서 경로와 계획서 경로의 공통 정책이라 한쪽만 고칠 수 없다.
-
-  출처: `2026-08-05-batch-structure-redraft-design.md` ⑤
-
-### 배치 계획 생성
-
-- [ ] **브레인스토밍 원문이 3/3에 전달되지 않는다** — `IAiService.cs:19`
-
-  `GenerateConsolidatedBatchPlanAsync(planStructure, specs, targetLanguage, jobName, …)`
-  시그니처에 자리가 없다. 아키텍처 판단(Tasklet/Chunk 선택 등)이 목차 제목에 살아남은
-  만큼만 본문에 도달한다.
-
-  출처: `2026-08-05-batch-structure-redraft-design.md` ①
-
-- [ ] **목차가 S01의 `TargetTables`를 채우지 못한다** —
-      `PlanStructureEnricher.cs:267/305`, `AiService.cs:2057`(`DraftBatchPlanStructureAsync`)
-
-  **신규 항목 중 실측에서 실제 비용을 낸 유일한 것이다.** Proc14 회차에서 결함 1건으로
-  잡혔고, 그 커밋(`87d6e30`, 2026-08-16)은 이를 자기 수정과 무관한 별개 사안으로 남겼다.
-  보강기가 정적 분석의 쓰기 대상으로 `TargetTables`를 통째로 교체하는데도 비는 단계가
-  생긴다. 왜 그 단계만 비는지부터 봐야 한다. 목차 생성 프롬프트 사안이라 재생성 결과가
-  비결정적이고, 그래서 원 설계가 범위 밖으로 뒀다.
-
-  출처: `2026-08-14-generated-bundle-contract-design.md` §제외
-
-### 정적 분석 / 프롬프트 계약
-
-- [ ] **호출된 객체가 참조하는 컬럼이 호출자의 스키마 표로 접혀 올라오지 않는다** —
-      `SqlStaticParser.cs:180`(`ReferencedColumnsPerTable`)
-
-  `UP_UTIL_SETTLE_EXPECT_PROC`가 부르는 UDF `UF_GET_COLLECTYMD`는
-  `TPGCollectPeriodMst`에서 `CollectMonth2/3`·`CollectDay2/3`·`CollectTxSDay2/3`·
-  `CollectTxEDay2/3` 8컬럼을 읽는다. 이 컬럼들은 `EXPECT_PROC` 자신의 SQL 본문에는 한
-  번도 나오지 않으므로 `EXPECT_PROC`의 `ReferencedColumnsPerTable`에 애초에 들어가지
-  않고, 그 결과 **`EXPECT_PROC`의 `Spec.md:341`이 실재하는 컬럼을 "제공된 스키마 표에
-  정의되지 않았다"고 잘못 기록한다.** `UF_GET_COLLECTYMD` 자신의 `prompt-context.md`에는
-  이 8컬럼이 정상적으로 실려 있어 — 컬럼 리졸버 자체는 옳고, 빠진 것은 **호출된 객체의
-  컬럼 의존성을 호출자에게 병합하는 단계**다. 실측 확정(2026-08-17, §설계 1.3의 원래
-  추정 "리졸버 결함"은 측정으로 반증됨) — `DetectOrphanedColumnKeys`를 넓혀도 닫히지
-  않는다. 그 검출기는 `ReferencedColumnsPerTable`의 **키**가 병합 안 된 경우만 보는데, 이
-  8컬럼은 SQL에 없어 애초에 키 자체가 생기지 않는다. 닫으려면 재귀 의존성 수집이 하위
-  객체(`UF_GET_COLLECTYMD`)의 `ReferencedColumnsPerTable`을 상위(`EXPECT_PROC`)로 접어
-  올리는 별도 설계가 필요하다 — 축 A 명세서 충실도가 아니라 프롬프트 입력 구성의 문제라
-  이 계획의 범위 밖에 남겼다.
-
-  출처: `2026-08-17-axis-a-spec-fidelity-design.md` §설계 1.3 (Task 3 실측)
-
-- [ ] **정확 일치 타입 테이블 2곳이 분류기 밖에 있다** —
-      `DependencyAnalysisOrchestrator.cs:327`(`TryParseCodeObjectType`),
-      `MetadataExporter.cs:159`(`NormalizeCodeObjectDdlFolder`)
-
-  `"P"`/`"FN"`/`"TF"`는 두 테이블에서 Procedure/Function이지만 `SqlObjectTypeClassifier`
-  에서는 `Unresolved`이고, `AGGREGATE_FUNCTION`/`EXTENDED_STORED_PROCEDURE`는 그 반대다.
-  오늘 오작동하지 않는 것은 실제 `Type` 값이 전부 `type_desc`에서 오기 때문이지 게이트가
-  막고 있어서가 아니다.
-
-  출처: `2026-08-09-type-classification-policy-design.md` §후속 4
-
-- [ ] **내부 방어 가드의 경고가 프롬프트로 샌다** —
-      `SqlStaticParser.cs:363-369` → `AiService.cs:244`
-
-  `RecordUpdateMapping`의 `"내부 방어 가드 작동"` 경고가 `ControlFlowSummary`를 거쳐
-  `"식별된 제어 흐름 구조 요약 (IF/WHILE)"`이라는 어긋난 머리말 아래 LLM 프롬프트에
-  실린다. 현재 호출 그래프에서는 도달 불가하지만 `RecordDmlTarget` 계약이 바뀌면 열린다.
-
-  출처: `2026-08-09-update-mapping-contract-design.md` §남은 후속 1
-
-- [ ] **`BuildSpecSectionPrompts`의 `CrudAnalysis` 분기에 INSERT fill-in 표가 없다** —
-      `AiService.cs:1609-1618`
-
-  UPDATE는 `BuildUpdateMappingTemplateLines` 공유 헬퍼로 정리됐으나 INSERT는
-  `BuildSpecificationPrompts`에만 fill-in 표가 있는 비대칭이 남아 있다. INSERT에는
-  `CheckUpdateMappings`에 대응하는 L1 기계 대조가 없어 오늘 실패를 만들지는 않는다.
-
-  출처: `2026-08-09-update-mapping-contract-design.md` §남은 후속 8
-
-### 메타데이터 / 지시서
-
-- [ ] **`AllowExternalDatabaseConnections`가 메타데이터 계층에 도달하지 않는다** —
-      `DependencyAnalysisOrchestrator.cs:29`, `DbMetadataService.cs:420`
-
-  `includeExternalCodeObjects: true`가 모든 호출부에 하드코딩되어 있어 설정이 무시된다.
-  비재귀 경로도 같다.
-
-  출처: `2026-08-03-stage1-analysis-flow-hardening-design.md` §범위 밖
-
-- [ ] **`{specRoot}`가 `<outputRoot>/Procedures`만 덮는다** —
-      `ArgumentTemplateResolver.cs:77-89`
-
-  `External/<db>/Procedures/`와 `Functions/`의 명세서는 코딩 에이전트가 볼 수 없다.
-
-  출처: `2026-08-07-migration-instructions-split-design.md` §남은 후속
-
-- [ ] **Job 이름에 `.`이 들어가면 지시서 안내와 게이트 탐색이 어긋난다** —
-      `FileMappingService.cs:141`
-
-  게이트가 마지막 점 앞을 버린다. 진입점 파일명 경로는 여전히 성립한다.
-
-  출처: `2026-08-07-migration-instructions-split-design.md` §남은 후속
-
----
-
-## P2 — 잠재 결함 / 커버리지 공백
-
-### 배치 계획·지시서
-
-- [ ] **4개 필수 H2가 4곳에 하드코딩** — `AiService.cs:668`(`ConsolidatedPlanRules`,
-      3/3 생성 프롬프트), `:2063`(2/3 목차 프롬프트), `:2432`(Critic 프롬프트),
-      `MechanicalValidator.cs:69`(`RequiredConsolidatedHeaders`, L1 검증기).
-      L1 실패 시 내미는 수정 템플릿(`MechanicalValidator.cs:1791`)까지 세면 리터럴은 5곳이다.
-      **2/3 단계의 실질 기여가 H3/H4뿐인 이유가 여기 있다** — 3/3 프롬프트가 이미 네 H2를
-      직접 지시하므로 목차가 그것을 다시 정해줄 필요가 없다. 목차 단계 존치 여부는 실측이 필요하다
-- [ ] **`agent/` 직하 중복 `task-*.md`에서 `FirstOrDefault`가 열거 순서에 의존** —
-      `InstructionBundleWriter.cs:318/410/498`. 진입점보다 나중에 쓰인 파일만 남기면 해결된다
-- [ ] **계획서가 SQL 배치 위치를 섞어 말한다** — `AiService.cs:668`(`ConsolidatedPlanRules`),
-      `:2275-2344`(단계 섹션 프롬프트)
-
-  한 계획서가 같은 로직을 두고 C# 인라인 SQL과 신규 저장 프로시저를 함께 지시한다.
-  어느 프롬프트도 어느 쪽이 기본인지 말하지 않기 때문이다. **고치기 전에 기준을 정하는
-  것이 선행되어야 한다** — 어느 쪽을 기본으로 삼을지, 예외를 허용한다면 무엇을 근거로
-  가를지. 그것 없이 프롬프트만 손대면 다음 회차에 반대 방향으로 쏠린다.
-
-  출처: `2026-08-14-generated-bundle-contract-design.md` §제외·§남은 후속
-
-- [ ] **계획서가 `batch.*` 모듈의 이름만 주고 본문을 주지 않는다** —
-      `TaskFileComposer.cs:332-333`
-
-  에이전트가 `Spec.md`에서 본문을 재구성해야 하는데, 이는 `MigrationInstructions.md`
-  규칙 7(자리표시자 금지)과 긴장 관계다. **부분 완화된 상태다** — 지시서가 "회차 0은
-  DDL과 골격까지, 업무 로직 본문은 해당 단계 회차가 채운다"고 공백의 주인을 정했다.
-  남은 것은 계획서가 본문을 직접 주게 하는 쪽이고, 그러려면 단계 섹션 프롬프트를 고쳐야 한다.
-
-  출처: `2026-08-14-generated-bundle-contract-design.md` §제외·§남은 후속
-
-- [ ] **`BuildUnverifiedFeedback`의 폴더 규약이 4개 중 2개만 말한다** —
-      `CodegenLoopPolicy.cs:73-77`. `JobProjectDirectoryNames`가 인정하는 밑줄 제거 변형
-      2개가 문구에서 빠졌다. 거짓은 아니고 누락이 실패를 만들지 않는다
-
-### 스키마 주장 검증 게이트 잔여
-
-- [ ] **`ComputeFenceLineFlags`에 미닫힘 펜스 폴백이 없다** —
-      `MechanicalValidator.cs:1174-1191`. `MarkdownSectionLocator.FindIndexOutsideFence`가
-      의도적으로 갖는 폴백("오탐보다 미탐이 훨씬 나쁘다")의 반쪽만 복제했다.
-      실무상 도달 불가에 가깝다 — 펜스가 홀수면 Markdig 헤더 검사가 먼저 떨군다
-- [ ] **`~~~` 펜스를 두 구현 다 인식하지 않는다** — 서로는 일치하나 Markdig와는 다르다
-- [ ] **`SuggestedPromptFix` 5번 블록이 검출 패턴과 일치한다** — Actor가 이 피드백을
-      문서의 "검증 이력" 류 섹션에 옮겨 적으면 게이트가 자기 지시문에 다시 걸린다.
-      확률은 낮고 회귀 테스트가 없다
-- [ ] **RAG/청크 경로가 테이블 단위 substring 필터를 쓴다** — `AiService.cs:1085-1105`.
-      완전성 문장도 붙지 않아 단일 권위가 컬럼 단위로만 성립한다. Stage 1 전용이고
-      실제 섹션 생성은 `BuildSpMetadataTexts`를 쓰므로 현재는 무해하다
-
-  출처: `2026-08-09-schema-claim-verification-gate-design.md` §남은 후속 1·2·4·6
-
-### 헤더 계약 모순 검사
-
-- [ ] **인정 문장이 어느 계약을 인정했는지 구분하지 못한다** —
-      `MechanicalValidator.CheckHeaderContractContradiction`. 헤더 주석 블록에는
-      Inner SP 말고 반환값 등 다른 계약도 있어서, 그 중 하나를 인정한 문장이
-      "주석"+"불일치"만으로 이 검사를 통과시킨다. 코퍼스에 그 형태가 실재한다 —
-      `UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:53`("반환값 헤더 주석의 계약은
-      실제 구현과 일부 불일치합니다"). 그 SP는 EXEC가 0건이라 검사가 발화하지
-      않아 현재는 무해하다. `HeaderContractTerms`를 내부 호출 지시어로 좁히는
-      안은 기각했다 — 호출 대상을 이름으로만 지목한 정당한 인정 문장이 함께
-      걸린다(테스트 `Validate_AcknowledgementSentenceWithDottedInternalCallIdentifier_ShouldPass`).
-      근본 해법은 `SpecExpectations.HasInternalProcedureCall`을 bool에서 **호출
-      대상 이름 목록**으로 바꾸고, 인정 문장이 그 이름 중 하나를 담았는지 보는 것
-
-  출처: 2026-08-17 14개 SP 전수 재생성 실측
-
-### 정적 분석
-
-- [ ] **`DependencyInfo.Type` 타입화** — `DependencyInfo.cs:12`가 여전히 `string`.
-      문자열 가드가 아니라 타입 시스템으로 원시 판정을 차단한다. 근본적이지만
-      직렬화·스냅샷 호환성까지 번진다
-- [ ] **`DbMetadataService` 재귀 의존성 경로에 동작 테스트가 없다** — 라이브 DB가
-      있어야 실행되어 커버되지 않는다. 이 경로에서 분류기 위임을 통째로 되돌리는
-      편집이 있어도 지금은 테스트로 잡히지 않는다
-- [ ] **`NormalizeQualifiedName`이 per-segment 정규화가 아니다** —
-      `MechanicalValidator.cs:1321-1322`. `[DB].[dbo].[T]`가 `DB].[dbo].[T`가 된다.
-      오늘은 대조 양쪽에 같은 변환을 적용해 무해하다
-- [ ] **`AliasTargetFinder`가 FROM 절 하위 트리 전체를 돈다** —
-      `SqlStaticParser.cs:619-645`. `ExplicitVisit`을 오버라이드하지 않아 기본 순회가
-      자식까지 내려간다. 중첩 서브쿼리가 바깥 대상과 같은 이름의 별칭을 쓰면 그것을
-      잡는다. 근본 수정은 최상위 `TableReference`만 훑는 것
-
-### 기타
-
-- [ ] **`Task.WhenAll`이 첫 예외만 표면화한다** —
-      `VerificationPipelineOrchestrator.cs:349`, `:431`. 로컬 프로바이더 병렬 분기에서
-      `IOException`과 `OperationCanceledException`이 동시에 발생하면 필터가 통과해
-      취소가 삼켜진다. 취소 정책 스캐너는 이를 잡지 못한다(필터가 있으므로)
-- [ ] **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** —
-      `ReSet.Cli/Program.cs:2002`. 식별자에 `.`이나 파일명 금지문자가 있으면 캐시 조회
-      경로와 저장 경로가 갈라진다
-- [ ] **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
-      `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE
-      술어 컬럼·조인 키·리터럴 목록 등 값 칸은 대조하지만, `UPDATE N`/`DELETE N` 같은
-      "문장" 칸 자체는 어느 검사도 읽지 않는다(2026-08-18 최종 브랜치 리뷰가 지적,
-      "consider"로 남긴 새 검사라 이번 수정 범위 밖으로 미룸). 그 결과 채번
-      헬퍼(`AiService.BuildStatementOrdinals`)의 회귀 — 예: 이번에 고친 "같은 줄
-      두 문장이 번호를 덮어쓰는" 결함이나, DML 범위 표와 집합 술어 표가 서로 다른
-      번호를 내는 정렬 붕괴 — 가 L1을 그대로 통과한다. 지금은 `AiServiceTests_Rich`의
-      단위 테스트가 이 채번을 잡지만, 그 테스트를 지우거나 빠뜨려도 L1은 구조적으로
-      알아채지 못한다. 후속 작업: `CheckDmlScopeTable`/`CheckSetPredicates`가 "문장"
-      칸의 연산·번호가 실제 사실 순서와 일치하는지도 대조하도록 넓힌다. 이번
-      재리뷰(2026-08-18, FIX ROUND 3)가 덧붙인 관측 — `MechanicalValidator.cs:1828`
-      부근의 행 매칭(`matchingRows`를 고르는 `r.Split('|')`)은 여전히 순진한 분할을
-      쓰는데, `ExtractSetPredicateLiteralCell`은 이미 `SplitTableRowCells`(이스케이프된
-      `\|`를 존중하는 분할)로 바꿨다 — "칸이 무엇인가"에 행 매칭과 칸 추출이 서로
-      다른 규칙을 쓴다. `'x|10|y'` 같은 리터럴이 이스케이프되어 렌더되면
-      (`'x\|10\|y'`) 행 매칭 쪽의 순진한 분할이 그 자리에서 유령 칸(`10`)을 만들어
-      다른 사실의 라인 그룹과 거짓으로 매칭될 수 있다. 문장 칸 검사를 넣을 때
-      행 매칭도 `SplitTableRowCells`로 함께 통일해 닫는다.
-
----
-
-## P3 — 인지됨, 영향 미미
-
-- [ ] **`AGENTS.md`의 경고 개수가 낡았다** — `AGENTS.md:217`
-
-  "경고가 **정확히 8건**(모두 `DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)"이라
-  적혀 있으나, 이 브랜치의 기준 커밋에서 `dotnet clean && dotnet build`로 다시 세면
-  **9건**이다 — 기록된 8건에 `AiServiceTests.cs:681`의 `CS8604` 1건이 더 있다. 이 항목을
-  이 계획이 만들지 않았고 `AGENTS.md` 수정은 이 계획의 쓰기 범위 밖이라 고치지 않고
-  기록만 한다. 같은 체크리스트 바로 아랫줄(`:218`)이 스스로 경고하는 바로 그 위험이다
-  — 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 체크리스트를 무시하도록
-  길들인다. `:218`의 테스트 개수 항목은 이미 "하루 만에 네 번" 낡아 그 교훈으로 숫자
-  자체를 지우고 이유를 설명하는 문장으로 바꿨는데, `:217`의 경고 개수는 아직 그 처방을
-  받지 못했다 — 이번이 다섯 번째로 낡은 것이다.
-
-  출처: Task 12 실측(`2026-08-17-axis-a-spec-fidelity-design.md` 구현 중 `AGENTS.md:217`
-  대조, 2026-08-17)
-
-- [ ] `ScoreReadability` 라벨이 사실과 다르다 — 두 Critic 모두 코드 가독성이 아니라
-      Mermaid 다이어그램 문법을 채점한다(`VerificationDocumentFormatter.cs:52`).
-      명세서에서도 틀렸다. 라벨 문자열이 테스트로 고정되어 있다
-- [ ] 2/3가 빈 응답을 내도 일반 방어가 없다 — `:1851-1857`. 재수립 경로만 방어한다
-- [ ] 프롬프트의 pseudo-XML 블록이 `<`, `>`, `"`를 이스케이프하지 않는다 —
-      `AiService.cs:196-209`. 진짜 XML로 파싱하는 곳은 없다
-- [ ] 모호성 오류가 충돌하는 **기대**를 나열하지 않는다 —
-      `MechanicalValidator.cs:1238-1243`(`ResolveSectionBody` 마지막 분기).
-      후보 **섹션**(`candidateSections`)은 이미 메시지에 찍는다. 빠진 쪽은
-      `candidateExpectations`라, 후보 섹션이 하나뿐인데 같은 마지막 파트를 요구하는 UPDATE
-      대상이 여럿이라 모호해진 경우에는 무엇과 충돌했는지 알 수 없다
-- [ ] `SpecExpectationsWiringPolicyScanner`가 `this._validator`를 못 잡는다 —
-      `:47`이 `IdentifierNameSyntax`만 본다. 현재 그런 사용은 없다
-- [ ] SP 목록이 시작 시 1회만 로드되어 세션 중 DB 변경이 반영되지 않는다
-- [ ] TUI 선택 목록이 객체 디렉터리 이름만 렌더링해 서로 다른 DB의 동명 프로시저가
-      구분되지 않는다
-- [ ] 비재귀 경로가 `DependencyAnalysisOrchestrator`로 통일되지 않았다 — 요청 모델과
-      파이프라인 호출, 배치 모드를 함께 재배선해야 한다
-- [ ] 낡은 줄번호 인용 1건 잔존 — `CodegenWorkflowOrchestrator.cs:193`의 `(:806)`.
-      실제로 그 주석이 가리키려던 곳은 `:816`(`BuildAbortResult`)과
-      `:838`(`CliFailureClassifier` 호출)이다. 나머지 5곳은 해소됐다.
-      줄 번호 대신 멤버 이름을 쓰는 편이 낫다
-- [ ] 뮤테이션 저항 없는 테스트 2건 —
-      `FindUncoveredRanges_EmptyDocument_ShouldReturnNothing`(조기 반환을 지워도 통과,
-      값싼 경계 방어로 의도적 유지),
-      `Pipeline_ShouldNotEnrichTablesWhenDefinitionsAreOmitted`("보강 스킵"과
-      "보강했으나 결과가 빔"을 구별 못 함)
-- [ ] `output/Jobs/POQSettleProc7/` 산출물 폐기 판단 (운영 결정)
-
----
-
-## 정책 결정이 선행되어야 하는 것
-
-코드 변경 전에 기준을 정해야 하는 항목이다. 반복 횟수는 여러 설계 문서가 같은 항목을
-"별건"으로 미룬 횟수다.
+코드 변경 전에 기준을 정해야 한다. **`반복` 칸이 이 표의 존재 이유다** — 여러 설계가 같은
+것을 각자 "별건"으로 미룬 횟수이고, 설계 문서 한 편만 읽어서는 이 숫자가 보이지 않는다.
 
 | 항목 | 반복 | 요지 |
 |---|---|---|
-| **시도 간 진동 억제** | 3 | Actor가 매번 백지에서 재작성해 점수가 20점 이상 출렁인다. `IAiService` 인터페이스와 프롬프트를 함께 바꿔야 한다(이전 명세서를 넘겨 수정하게 하는 방향) |
+| **시도 간 진동 억제** | 3 | Actor가 매번 백지에서 재작성해 점수가 20점 이상 출렁인다. `IAiService` 인터페이스와 프롬프트를 함께 바꿔야 한다(이전 명세서를 넘겨 수정하게 하는 방향). 실행과 실행 사이의 진동은 별개이며 카탈로그 P12가 그것이다 |
 | **합격 기준 정책** | 3 | 다섯 항목 전부가 기준을 넘어야 하는 현행 게이트 유지 vs 종합 점수 게이트 병행 |
 | **조기 종료** | 1 | 종합 점수가 충분히 높으면 재시도 중단. 합격 기준 변경을 수반한다 |
 | **구조화 출력(`--json-schema`)** | 1 | 세 CLI 모두 지원하며 Critic 채점 JSON 파싱을 견고하게 만든다. 다만 스키마 정의가 API 경로와 CLI 경로의 동작을 갈라놓는다 |
-| **`ActorEffort: dynamic`의 CLI 동시 실행 제어** | 1 | dynamic을 쓰면 프로세스 3개가 동시에 뜨고 쿼터 소진이 빨라진다 |
+| **`ActorEffort: dynamic`의 CLI 동시 실행 제어** | 1 | dynamic을 쓰면 프로세스 3개가 동시에 뜨고 쿼터 소진이 빨라진다. `74d53ec`(2026-08-20)가 무인 배치의 CLI provider 차단을 `AiSettings:AllowCliProviderInBatch` 옵트인으로 열면서 이 위험이 도달 가능해졌다 — `CliProviderBatchGuard`는 경고만 남기고 동시 실행 자체는 제어하지 않는다 |
+| **계획서의 SQL 배치 위치** | 1 | 한 계획서가 같은 로직을 C# 인라인 SQL과 신규 저장 프로시저로 함께 지시한다. 어느 프롬프트도 기본을 말하지 않기 때문이다. 기준 없이 프롬프트만 손대면 다음 회차에 반대로 쏠린다. 자리: `AiService`의 `ConsolidatedPlanRules` 상수와 `AiService.GenerateBatchStepSectionAsync`의 단계 섹션 프롬프트 |
+| **B4 — 축 B 나머지 10건** | 1 | 레거시 불변식인지 여부를 `Spec.md`로 판정해야 판단이 선다. 축 A 재생성으로 기준값이 바뀌었으므로 재감사가 선행된다 |
 
 ### 해결 불가로 기록된 것
-
-각 CLI가 제공하는 수단으로는 ReSet에서 해결할 수 없다고 판단된 항목이다.
 
 - codex-cli의 전역 `AGENTS.md` 주입
 - codex/agy의 출력 절단 감지
 - agy의 Windows 명령행 stdin 한계 — 명확한 예외로 알리는 데서 멈춘다
+- **`BatchSourceWatermark`·`BatchImmutableLedgerBaseline`의 컬럼 확정** — 어느 원천을
+  워터마킹하고 어느 원장을 기준선으로 잡는지에 따라 컬럼이 달라지는 **Job 형상** 객체다.
+  ReSet이 정할 수 있는 사실이 아니므로 스키마·명명 규칙만 적용하고 DDL은 계획서에 맡긴다
+  (`2026-08-18-axis-b-batch-skeleton-design.md` §7)
+- **B5 `NOLOCK` 전면 제거 7건** — 전부 ⚪이고 "배치가 단독 실행되고 원천에 동시 커밋이
+  없다"는 전제부 판단이다. 계약 결함이 아니다(같은 문서 §7)
 
----
+### 돌려 봐야 아는 것
 
-## 실측이 필요한 것
-
-기준을 정하는 문제가 아니라 **돌려 봐야 아는 것**이다. 위 정책 결정 표와 같은 이유로
-체크박스를 달지 않는다 — 지금 할 수 있는 일이 없고, 열린 항목 수를 오염시킨다.
-
-2026-08-14 생성 번들 계약 설계가 세 검사를 넣으면서 그 정확도를 자기 실측 하나
-(POQSettleProc9)로만 확인했다. 다른 Job에서 어떻게 나오는지가 남았다.
+기준을 정하는 문제가 아니라 실측이 필요한 것이다. 지금 할 수 있는 일이 없으므로
+체크박스를 달지 않는다. **감사 소관 실측(축 B 재감사·P5·`INS_EXTRA`)은 여기 없다** —
+`audit-defect-catalog.md` §5에 있다.
 
 | 항목 | 무엇을 봐야 하나 | 빗나갔을 때 |
 |---|---|---|
-| **② 인프라 객체 수집 목록의 과부족** | 67종은 POQSettleProc9 하나의 수치다. 다른 Job에서 `BatchInfraObjectCollector`가 무엇을 놓치고 무엇을 과하게 잡는지 | 과하면 회차 0이 필요 없는 객체를 만들고, 모자라면 SQL이 없는 테이블을 참조한다 |
-| **⑦ 생략 주석 배너의 빈도** | 배너가 한 Job에 몇 건이나 뜨는지 | 수십 건이면 사람이 읽지 않게 된다. 그때는 패턴을 좁힐지, 반대로 차단으로 승격할지 다시 판단해야 한다 |
-| **③ 유령 테이블 결함이 재생성으로 고쳐지는지** | 결함 메시지를 받은 모델이 실재하는 이름으로 바꾸는지, 이름만 바꿔 다른 유령을 만드는지 | 후자면 검사가 재생성만 태우고 아무것도 고치지 못한다 |
+| **인프라 객체 수집 목록의 과부족** | 67종은 POQSettleProc9 하나의 수치다. 두 번째 데이터 점이 있다 — POQSettlePrco20의 `task-00-bootstrap.md`가 19건을 싣는다. 그 19건이 계획서 SQL이 실제로 참조하는 것과 과부족 없이 맞는지는 아직 대조하지 않았다 | 과하면 회차 0이 필요 없는 객체를 만들고, 모자라면 SQL이 없는 테이블을 참조한다 |
+| **생략 주석 배너의 빈도** | 배너가 한 Job에 몇 건이나 뜨는지. POQSettlePrco20은 통합 계획서 산출물이 없어(`docs/`에 `BatchMigrationPlan.md`뿐) 이 회차로는 못 잰다 | 수십 건이면 사람이 읽지 않게 된다. 그때는 패턴을 좁힐지, 차단으로 승격할지 다시 판단해야 한다 |
+| **유령 테이블 결함이 재생성으로 고쳐지는지** | 결함 메시지를 받은 모델이 실재하는 이름으로 바꾸는지, 이름만 바꿔 다른 유령을 만드는지 | 후자면 검사가 재생성만 태우고 아무것도 고치지 못한다 |
+| **함수 DDL 본문을 프롬프트에서 뺄지** | 동작 서술을 금지한 뒤에도 *호출하는 문장*을 정확히 쓰려면 본문이 필요할 수 있다. 빼면 토큰이 크게 줄지만 측정 없이 지울 일이 아니다 | 지나치게 빼면 "함수가 0을 반환하는 행은 갱신 대상에서 빠진다" 같은 호출부 서술이 무너진다 |
 
-출처: `2026-08-14-generated-bundle-contract-design.md` §실측이 필요한 것
+출처: `2026-08-14-generated-bundle-contract-design.md` §실측이 필요한 것,
+`2026-08-20-udf-machine-contract-design.md` §5
 
 ---
 
-## 완료 기록 — 코드상 해소된 뒤 문서까지 닫은 것
+## 알려진 한계 — 재검증하지 않음
 
-**전부 반영 완료(2026-08-13, 2026-08-14·2026-08-16 재확인).** 각 설계 문서의 해당 항목에
-취소선과 해소 근거를 달았다. 아래는 어디를 어떻게 고쳤는지의 기록이며, 새로 할 일은 없다.
+**2026-08-21 시점의 기록이다.** 그 뒤로 확인하지 않았으므로 앵커도 판정도 낡을 수 있다.
+이 자리를 건드리게 되면 그때 확인하라. 대부분 각자의 설계 문서에 원본이 있고, `출처`가
+없는 항목은 **리뷰나 감사 실측에서 이 문서로 직접 들어온 것**이라 여기가 유일한 기록이다.
 
-### 2026-08-18 집합 술어 재료로 닫은 축 A 재감사 2건 (둘 다 🟠)
+### 검증 파이프라인
 
-- [x] **`EXPECT_PROC`의 `PGName NOT IN` 9개 리터럴이 명세서에 없다** / **`COMM_UPD`
-  문장 2의 6개 PG 화이트리스트가 재료로 실리지 않는다** — DML 최상위 WHERE의
-  `IN`/`NOT IN` 리터럴 목록만 기계 확정 재료로 삼아 닫았다. 스칼라 리터럴 비교
-  474건(`COMM_UPD` 하나가 100건)은 노이즈로 제외했다 — 그 값들은 컬럼 이름만
-  봐도 존재를 추측할 수 있는 것들인 반면, **집합의 크기와 원소는 컬럼 이름으로
-  추측할 수 없다**는 것이 두 SP를 예외로 다룬 구조적 근거다.
+- **`SpecHeader`에 인터페이스 점수 필드가 없다** — `ReSet.Cli/SpecHeaderReader.cs`의
+  `SpecHeader` 레코드가 5개 키만 읽어, `VerificationDocumentFormatter.FormatVerifiedDocument`가
+  YAML에 쓴 `인터페이스 점수`를 승인 화면이 무시한다(캐시 왕복에서는 살아남는다).
+  **고칠 때 함정** — 필드를 추가하면 `ConsoleUserInteraction.RequestHumanReviewAsync`의
+  `?? 10` 폴백 뒤에 놓여 여섯 번째 조작 만점 위험이 생긴다.
+- **생성 호출 실패 재시도 0회** — 두 루프의 `if (!genSuccess || …)` 분기. 명세서 경로와
+  계획서 경로의 공통 정책이라 한쪽만 고칠 수 없다.
+  출처: `2026-08-05-batch-structure-redraft-design.md` ⑤
+- **2/3가 빈 응답을 내도 일반 방어가 없다** — `RunConsolidatedPipelineAsync`가
+  `DraftBatchPlanStructureAsync`의 반환을 곧바로 `PlanStructureEnricher.Enrich`에 넘긴다.
+  재수립 경로만 방어한다.
+- **`Task.WhenAll`이 첫 예외만 표면화한다** — `RunCodeObjectPipelineCoreAsync`의
+  `Task.WhenAll(tasks)`와 `Task.WhenAll(reviewTasks)`. 로컬 프로바이더 병렬 분기에서
+  `IOException`과 `OperationCanceledException`이 동시에 발생하면 필터가 통과해 취소가
+  삼켜진다. 취소 정책 스캐너는 필터가 있으므로 잡지 못한다.
+- **`ScoreReadability` 라벨이 사실과 다르다** — 두 Critic 모두 코드 가독성이 아니라
+  Mermaid 문법을 채점하는데 `axisScoreLines`가 `가독성 점수`로 찍는다. 명세서에서도 틀렸고
+  라벨 문자열이 테스트로 고정되어 있다.
 
-  - `DmlScopeExtractor.ExtractSetPredicates`가 문장·라인·컬럼(한정자 포함 원문
-    표기, 예: `A.PGName` — 같은 WHERE 최상위에 `A.USESTATE IN (...)`와
-    `B.USESTATE IN (...)`가 함께 나오면 마지막 조각만 담을 경우 두 사실의 키가
-    충돌하기 때문에 한정자를 그대로 남긴다)·연산·원소 수·리터럴 목록을 뽑는다.
-  - `AiService.BuildSetPredicateTableLines`가 그 재료를
-    `### 집합 술어 (기계 확정 — 수정 금지)` 표로 세 프롬프트 지점에 렌더한다.
-    이 표는 DML 범위 표와 같은 채번 헬퍼(`BuildStatementOrdinals`)를 써서
-    문장 번호를 맞춘다(집합 술어가 없는 문장을 건너뛰어 번호가 밀리던 결함을
-    공유 헬퍼로 없앴다).
-  - `MechanicalValidator.CheckSetPredicates`가 L1에서 대조한다. **`리터럴 목록`
-    칸 하나만** 문자열로 쪼개 대칭 비교한다 — 행 전체를 훑으면 라인 번호
-    `108`이 그 자체로 `0`·`1`을 담고 있어 숫자 리터럴 대조가 라인 번호와
-    구별되지 않고 퇴화하기 때문이다. 또한 같은 문장·컬럼 키에 사실이 둘 이상
-    있을 수 있어(위 한정자 예시) **키 그룹별 다중집합**으로 대조한다 —
-    `FirstOrDefault`로 첫 번째 사실 하나만 골라 매칭하면 같은 키의 다른 사실이
-    같은 행에 겹쳐 통과해 버려 한쪽의 리터럴 누락을 조용히 놓친다.
+### 배치 계획 생성
 
-  출처: `output/Jobs/POQSettleProc16/consistency/ConsistencyReport-AxisA-2026-08-18.md` §4
-  설계: [집합 술어 재료](superpowers/specs/2026-08-18-set-predicate-material-design.md)
+- **브레인스토밍 원문이 3/3에 전달되지 않는다** — `IAiService.GenerateConsolidatedBatchPlanAsync`
+  시그니처에 자리가 없어, 아키텍처 판단(Tasklet/Chunk 선택 등)이 목차 제목에 살아남은
+  만큼만 본문에 도달한다.
+  출처: `2026-08-05-batch-structure-redraft-design.md` ①
+- **목차가 S01의 `TargetTables`를 채우지 못한다** — `PlanStructureEnricher.RewriteTables`,
+  `AiService.DraftBatchPlanStructureAsync`. Proc14 회차에서 결함 1건으로 실제 비용을 냈다
+  (`87d6e30`이 별개 사안으로 남김). 보강기가 정적 분석의 쓰기 대상으로 `TargetTables`를
+  통째로 교체하는데도 비는 단계가 생긴다 — **왜 그 단계만 비는지부터** 봐야 한다.
+  출처: `2026-08-14-generated-bundle-contract-design.md` §제외
+- **4개 필수 H2가 5곳에 하드코딩** — `AiService`의 `ConsolidatedPlanRules` 상수,
+  `AiService.DraftBatchPlanStructureAsync`, `AiService.ReviewConsolidatedPlanAsync`,
+  `MechanicalValidator`의 `RequiredConsolidatedHeaders`, `MechanicalValidator.BuildSuggestedPromptFix`의
+  `IsConsolidated` 분기. **2/3 단계의 실질 기여가 H3/H4뿐인 이유가 여기 있다** — 3/3
+  프롬프트가 이미 네 H2를 직접 지시하므로 목차가 다시 정해줄 필요가 없다.
+- **계획서가 `batch.*` 모듈의 이름만 주고 본문을 주지 않는다** — `TaskFileComposer.AppendInfraObjects`.
+  에이전트가 `Spec.md`에서 본문을 재구성해야 하는데 `MigrationInstructions.md` 규칙 7
+  (자리표시자 금지)과 긴장 관계다. 지시서가 "회차 0은 DDL과 골격까지"로 공백의 주인을
+  정해 부분 완화됐고, 남은 것은 단계 섹션 프롬프트를 고치는 쪽이다.
+  출처: `2026-08-14-generated-bundle-contract-design.md` §제외·§남은 후속
 
-### 2026-08-16 재검증에서 닫은 3건 (전부 P2)
+### 정적 분석 / 프롬프트 계약
 
-- [x] **C# 아키텍처 규칙이 단일 어셈블리 스코프** — `8e4af04`가 `DataAccessPolicy.cs`의
-      `ArchitectureTests` 스텁에 `Targets`(`:129-148`)를 넣어, 테스트 어셈블리가 참조하는
-      `ReSet.Batch.*` 를 전부 훑게 했다. 네 규칙이 대상 0건으로 조용히 통과하던 경로가
-      닫혔고, "하나도 없다"를 실패로 보는 판정은 조립 회차에만 켜진다.
-      `c86d7b7`이 `AssemblyCompletenessTests`에도 같은 워밍업을 넣어 xUnit의 클래스 병렬
-      실행 순서에 좌우되던 거짓 실패까지 함께 없앴다
-- [x] **`StepLogicTests` 배치 위치가 어떤 지시서에도 없다** — `TaskFileComposer.cs:254-261`이
-      이제 `tests/StepLogicTests{확장자}`를 경로째로 안내한다(C#·Java 공통, `TestFileExtension`).
-      `MetadataExporter.cs:561/602`가 만드는 위치와 일치한다. `8d9ba62`·`37cd381`이
-      "이 파일 자체는 지우지 말 것 / 내용을 `LogicTests_<단계코드>`로 복사할 것"까지 붙여,
-      원래 문제였던 "어디에 있는지 모른다"와 그 과정에서 드러난 "어느 원본을 지우라는 건지
-      모호하다"를 함께 닫았다
-- [x] **`ArtifactChangeDetector.Snapshot`의 TOCTOU 플래키** — `69a080c`가 열거와 읽기
-      사이에 사라진 파일을 건너뛰게 했다(`SnapshotFiles`로 목록 주입 지점을 갈라 테스트가
-      그 동작을 고정한다). `b577f65`는 원인 제공자였던 `CodingEngineTests`가 공유 실행
-      디렉터리를 스냅샷하지 않게 했다. **커밋 메시지가 밝힌 한계를 그대로 옮긴다** —
-      두 테스트가 경합 자체를 재현하지는 못하므로, 이 수정은 원인 경로가 더는 던지지
-      않는다는 것만 보이고 플래키가 사라졌음을 증명하지는 않는다
+- **호출된 객체가 참조하는 컬럼이 호출자의 스키마 표로 접혀 올라오지 않는다** —
+  `SqlStaticParser`의 `ReferencedColumnsPerTable`. `EXPECT_PROC`이 부르는 UDF
+  `UF_GET_COLLECTYMD`가 읽는 `TPGCollectPeriodMst`의 8컬럼이 `EXPECT_PROC` 자신의 SQL
+  본문에 없어 애초에 수집되지 않고, 그 결과 명세서가 실재하는 컬럼을 "스키마 표에 정의되지
+  않았다"고 잘못 기록한다. **실측으로 원인이 뒤집힌 항목이다** — 원 추정("리졸버 결함")은
+  반증됐고(UDF 자신의 `prompt-context.md`에는 8컬럼이 정상), `SchemaPromptColumnSelector.DetectOrphanedColumnKeys`를
+  넓혀도 닫히지 않는다(그 검출기는 **키**가 병합 안 된 경우만 보는데 이 컬럼들은 키 자체가
+  생기지 않는다). 닫으려면 하위 객체의 `ReferencedColumnsPerTable`을 상위로 접어 올리는
+  별도 설계가 필요하다. 2026-08-20 참조 함수 기계 계약은 이 자리를 닫지 않는다 — 그 표는
+  호출 사실과 링크만 싣는다.
+  출처: `2026-08-17-axis-a-spec-fidelity-design.md` §설계 1.3
+- **정확 일치 타입 테이블 2곳이 분류기 밖에 있다** — `DependencyAnalysisOrchestrator.TryParseCodeObjectType`,
+  `MetadataExporter.NormalizeCodeObjectDdlFolder`. `"P"`/`"FN"`/`"TF"`는 두 테이블에서
+  Procedure/Function이지만 `SqlObjectTypeClassifier`에서는 `Unresolved`이고,
+  `AGGREGATE_FUNCTION`/`EXTENDED_STORED_PROCEDURE`는 반대다. 오늘 오작동하지 않는 것은
+  실제 `Type` 값이 전부 `type_desc`에서 오기 때문이지 게이트가 막아서가 아니다.
+  출처: `2026-08-09-type-classification-policy-design.md` §후속 4
+- **내부 방어 가드의 경고가 프롬프트로 샌다** — `SqlStaticParser.RecordUpdateMapping`의
+  `"내부 방어 가드 작동"` 경고가 `ControlFlowSummary`를 거쳐 `AiService.BuildSpMetadataTexts`에서
+  `"식별된 제어 흐름 구조 요약 (IF/WHILE)"`이라는 어긋난 머리말 아래 실린다. 현재 호출
+  그래프에서는 도달 불가하지만 `RecordDmlTarget` 계약이 바뀌면 열린다.
+  출처: `2026-08-09-update-mapping-contract-design.md` §남은 후속 1
+- **`CrudAnalysis` 분기에 INSERT fill-in 표가 없다** — `AiService.BuildSpecSectionPrompts`의
+  `sectionType == "CrudAnalysis"` 분기. UPDATE는 `BuildUpdateMappingTemplateLines` 공유
+  헬퍼로 두 경로가 정리됐으나 INSERT는 `BuildSpecificationPrompts`에만 있다. INSERT에는
+  `CheckUpdateMappings`에 대응하는 L1 대조가 없어 오늘 실패를 만들지 않는다.
+  출처: `2026-08-09-update-mapping-contract-design.md` §남은 후속 8
+- **RAG/청크 경로가 테이블 단위 substring 필터를 쓴다** — `AiService.BuildChunkDeconstructionPrompts`의
+  `ragSchemas` 조립이 `depFullName.Contains(cleanRefTable)`와 `cleanRefTable.Contains(dep.Name)`
+  양방향 부분 문자열이라 이름이 겹치는 테이블을 함께 끌어온다. Stage 1 전용이고 실제 섹션
+  생성은 `BuildSpMetadataTexts`를 쓰므로 현재는 무해하다.
+- **`DependencyInfo.Type` 타입화** — 여전히 `string`. 문자열 가드가 아니라 타입 시스템으로
+  원시 판정을 차단하는 쪽이 근본적이지만 직렬화·스냅샷 호환성까지 번진다.
+- **`AliasTargetFinder`가 FROM 절 하위 트리 전체를 돈다** — `SqlStaticParser`의 중첩 클래스
+  (`ResolveAliasWithinFromClause`가 생성). `ExplicitVisit`을 오버라이드하지 않아 기본 순회가
+  자식까지 내려가, 중첩 서브쿼리가 바깥 대상과 같은 이름의 별칭을 쓰면 그것을 잡는다.
+  근본 수정은 최상위 `TableReference`만 훑는 것. `549541a`가 별칭 바인딩 순서와 별칭 없는
+  자리의 조기 결론은 고쳤으나 순회 범위는 그대로다.
 
-### 그 이전에 닫힌 것
+### L1 기계 검증기
 
-- [x] `2026-08-08-step-error-code-verification-design.md` §후속 1 —
-      **보강기와 파서의 "유효한 블록" 판정 불일치**는 `fix/silent-failure-closure`의
-      세 커밋(`2ae7a2b`·`25319f6`·`933fb39`, 2026-08-09)이
-      `BatchStepPlanParser.TryLocateStepsBlock` 공유로 닫았다. 보강기가 그 블록을 다시
-      쓰지 못하면 뒤 블록으로 넘어가지 않고 원본을 그대로 둔다. 정규식 리터럴 중복도
-      함께 사라졌다(`PlanStructureEnricher`에 `Regex` 0건)
-- [x] `2026-08-08-step-error-code-verification-design.md` §후속 4 —
-      **Claude 프롬프트 캐시 중단점**은 `PromptCacheBreakpointPolicy`로 해소(2026-08-12).
-      두 번째 전송부터 찍는 정책이라 1회차에 끝나는 잡에서 캐시 쓰기 손실이 없다
-- [x] `2026-08-07-migration-instructions-split-design.md` §남은 후속 —
-      **`PlanBoundaryResolver`의 `allFound == true` 공백**은 `acf5210`(2026-08-09)의
-      `AbsorbUncoveredRegions`(`:371`)로 해소
-- [x] `2026-08-07-migration-instructions-split-design.md` §남은 후속 —
-      **레거시 전체 Job 경로의 `nothingVerified` 무한 재시도**는 `e1ccfbd`(2026-08-09)의
-      `MaxConsecutiveUnverifiedRetries`로 닫혔다. **부분 해소로 기록했다** — 위 P0 ①의
-      다른 조합은 여전히 열려 있고, 문서에도 그 사실을 함께 적었다
-- [x] `2026-08-13-outline-roster-and-split-failure-visibility-design.md` §남은 후속 —
-      **신뢰도 점수와 검증 커버리지의 분리 표기**는 `VerificationCoverage` 모델과
-      포매터의 `coverageLine`으로 해소
-      (`2026-08-13-verification-coverage-design.md`가 닫음)
-- [x] `2026-08-08-static-analysis-identity-design.md` §후속 1·2·3 /
-      `2026-08-09-type-classification-policy-design.md` §후속 2 —
-      **UPDATE 컬럼 매핑표 / `UPDATE … FROM` 자기참조 / `SET` 절 동시평가** 3건은
-      `2026-08-09-update-mapping-contract`가 닫았다(`AiService.cs:554-577`)
-- [x] **(목록 밖에서 추가 확인)** `2026-08-08-static-analysis-identity-design.md` §후속 4 /
-      `2026-08-09-type-classification-policy-design.md` §후속 3 —
-      **명세서 재발 방지 검증 게이트**도 이미 닫혀 있었다. `63483f2`(2026-08-10)가
-      L2 Critic 기준이 아니라 **L1 기계 검증**에 `CheckSchemaClaims`
-      (`ErrorType.SchemaClaimFalse`)를 넣었고, `ab6dd5b`가 코드 펜스 오탐을 닫았다.
-      잔여 한계는 `2026-08-09-schema-claim-verification-gate` §남은 후속에 있으며
-      그중 4건은 위 P2에 반영되어 있다
+- **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
+  `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE 술어 컬럼·
+  조인 키·리터럴 목록 등 값 칸은 대조하지만 `UPDATE N`/`DELETE N` 같은 "문장" 칸 자체는
+  어느 검사도 읽지 않는다. 그 결과 채번 헬퍼(`AiService.BuildStatementOrdinals`)의 회귀 —
+  "같은 줄 두 문장이 번호를 덮어쓰는" 결함이나 두 표가 다른 번호를 내는 정렬 붕괴 — 가
+  L1을 그대로 통과한다. `AiServiceTests_Rich`의 단위 테스트가 지금은 잡지만, 그 테스트를
+  지우면 L1은 구조적으로 알아채지 못한다.
+  **함께 닫을 것** — `CheckSetPredicates`의 행 매칭(`matchingRows`를 고르는 `r.Split('|')`)은
+  순진한 분할인데 같은 파일의 `ExtractSetPredicateLiteralCell`은 이미 `SplitTableRowCells`
+  (이스케이프된 `\|`를 존중)로 바뀌어 있다. `'x|10|y'`가 `'x\|10\|y'`로 렌더되면 행 매칭
+  쪽이 유령 칸(`10`)을 만들어 다른 사실과 거짓 매칭될 수 있다.
+  근거: 2026-08-18 최종 브랜치 리뷰(FIX ROUND 3) — **이 문서가 유일한 기록**
+- **인정 문장이 어느 계약을 인정했는지 구분하지 못한다** —
+  `MechanicalValidator.CheckHeaderContractContradiction`과 `HeaderContractTerms`. 헤더 주석
+  블록에는 Inner SP 말고 반환값 등 다른 계약도 있어서, 그 중 하나를 인정한 문장이
+  "주석"+"불일치"만으로 검사를 통과시킨다. 코퍼스에 실재한다 — `UP_UTIL_STAT_PGCOLLECT_INS`의
+  `Spec.md`("반환값 헤더 주석의 계약은 실제 구현과 일부 불일치합니다"). 그 SP는 EXEC가
+  0건이라 오늘은 무해하다. **`HeaderContractTerms`를 내부 호출 지시어로 좁히는 안은
+  기각했다** — 호출 대상을 이름으로만 지목한 정당한 인정 문장이 함께 걸린다(테스트
+  `Validate_AcknowledgementSentenceWithDottedInternalCallIdentifier_ShouldPass`). 근본
+  해법은 `SpecExpectations.HasInternalProcedureCall`을 bool에서 **호출 대상 이름 목록**으로
+  바꾸고 인정 문장이 그 이름을 담았는지 보는 것.
+  근거: 2026-08-17 14개 SP 전수 재생성 실측 — **이 문서가 유일한 기록**
+- **`ComputeFenceLineFlags`에 미닫힘 펜스 폴백이 없다** —
+  `MarkdownSectionLocator.FindIndexOutsideFence`가 의도적으로 갖는 폴백("오탐보다 미탐이
+  훨씬 나쁘다")의 반쪽만 복제했다. 펜스가 홀수면 Markdig 헤더 검사가 먼저 떨궈 실무상
+  도달 불가에 가깝다.
+- **`~~~` 펜스를 두 구현 다 인식하지 않는다** — `ComputeFenceLineFlags`와
+  `MarkdownSectionLocator` 어디에도 `~~~` 리터럴이 없다. 서로는 일치하나 Markdig와 다르다.
+- **`SuggestedPromptFix` 5번 블록이 검출 패턴과 일치한다** — `BuildSuggestedPromptFix`.
+  Actor가 이 피드백을 문서의 "검증 이력" 류 섹션에 옮겨 적으면 게이트가 자기 지시문에
+  다시 걸린다. 확률은 낮고 회귀 테스트가 없다.
+- **`NormalizeQualifiedName`이 per-segment 정규화가 아니다** — `[DB].[dbo].[T]`가
+  `DB].[dbo].[T`가 된다. 대조 양쪽에 같은 변환을 적용해 오늘은 무해하다.
+- **모호성 오류가 충돌하는 기대를 나열하지 않는다** — `ResolveSectionBody`의 마지막 분기가
+  후보 섹션(`candidateSections`)은 찍지만 `candidateExpectations`는 빠뜨린다. 후보 섹션이
+  하나뿐인데 같은 마지막 파트를 요구하는 UPDATE 대상이 여럿이라 모호해진 경우 무엇과
+  충돌했는지 알 수 없다.
+
+  위 4건 출처: `2026-08-09-schema-claim-verification-gate-design.md` §남은 후속 1·2·4·6
+
+### 메타데이터 / 지시서
+
+- **`AllowExternalDatabaseConnections`가 메타데이터 계층에 도달하지 않는다** —
+  `DependencyAnalysisOrchestrator`의 편의 생성자와 `DbMetadataService.GetCodeObjectDetailsAsync`가
+  `includeExternalCodeObjects: true`를 하드코딩한다. **부분 완화** — 재귀 탐색 쪽에는
+  게이트가 있고(`DiscoverAsync`가 외부 DB 노드를 `SkippedExternal` 처리), `01a0d5b`가
+  `appsettings.json` 기본값을 `false`로 되돌렸다. 남은 것은 조회 호출 자체다.
+  출처: `2026-08-03-stage1-analysis-flow-hardening-design.md` §범위 밖
+- **`{specRoot}`가 `<outputRoot>/Procedures`만 덮는다** — `ArgumentTemplateResolver.ResolveSpecRootDirectory`.
+  `External/<db>/Procedures/`와 `Functions/`의 명세서는 코딩 에이전트가 볼 수 없다.
+- **Job 이름에 `.`이 들어가면 지시서 안내와 게이트 탐색이 어긋난다** —
+  `FileMappingService.ResolveMappings`의 `baseName.LastIndexOf('.')`가 마지막 점 앞을 버린다.
+  진입점 파일명 경로는 여전히 성립한다.
+
+  위 2건 출처: `2026-08-07-migration-instructions-split-design.md` §남은 후속
+
+- **`agent/` 직하 중복 `task-*.md`에서 `FirstOrDefault`가 열거 순서에 의존** —
+  `InstructionBundleWriter`의 `DescribeStep`·`DependenciesForStep`·`SpecPathForStep`.
+  진입점보다 나중에 쓰인 파일만 남기면 해결된다.
+- **`BuildUnverifiedFeedback`의 폴더 규약이 4개 중 2개만 말한다** —
+  `CodegenLoopPolicy.BuildUnverifiedFeedback`이 `CustOrderHist`와 `CustOrderHist.Batch`만
+  들어, `CodegenArtifactNaming.JobProjectDirectoryNames`가 인정하는 밑줄 제거 변형 2개가
+  빠졌다. 거짓은 아니고 누락이 실패를 만들지 않는다.
+- **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** — `ReSet.Cli/Program.cs`가
+  `Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs")`를 직접 조립해,
+  식별자에 `.`이나 파일명 금지문자가 있으면 `OutputPathResolver.EncodePathSegment`를 거치는
+  캐시 조회 경로와 갈라진다.
+
+### 테스트 커버리지
+
+- **`DbMetadataService` 재귀 의존성 경로에 동작 테스트가 없다** — 라이브 DB가 있어야 실행돼
+  커버되지 않는다(테스트의 `GetCodeObjectDetails*` 호출은 전부 NSubstitute 목). 이 경로에서
+  분류기 위임을 통째로 되돌려도 지금은 테스트로 잡히지 않는다.
+- **뮤테이션 저항 없는 테스트 2건** —
+  `PlanBoundaryResolverTests.FindUncoveredRanges_EmptyDocument_ShouldReturnNothing`(조기
+  반환을 지워도 통과, 값싼 경계 방어로 **의도적 유지**),
+  `VerificationPipelineOrchestratorTests.Pipeline_ShouldNotEnrichTablesWhenDefinitionsAreOmitted`
+  ("보강 스킵"과 "보강했으나 결과가 빔"을 구별 못 함).
+- **`SpecExpectationsWiringPolicyScanner`가 `this._validator`를 못 잡는다** —
+  `member.Expression is not IdentifierNameSyntax receiver` 판정이 `IdentifierNameSyntax`만
+  본다. 현재 그런 사용은 없다.
+
+### 그 밖
+
+- **프롬프트의 pseudo-XML 블록이 `<`, `>`, `"`를 이스케이프하지 않는다** —
+  `AiService.BuildDeconstructionPrompts`와 `BuildSpecSectionPrompts`의 `<sp-source-ddl>`
+  조립 지점. 진짜 XML로 파싱하는 곳은 없다.
+- **낡은 줄번호 인용 1건 잔존** — `CodegenWorkflowOrchestrator.RunSelfHealingWorkflowAsync`의
+  주석이 `(:806)`을 가리킨다. 가리키려던 곳은 같은 클래스의 `BuildAbortResult`와
+  `BuildAbortReason`(`CliFailureClassifier` 호출)이다. 이 문서의 앵커 규약과 같은 처방을 쓰면 된다.
+- **SP 목록이 시작 시 1회만 로드**되어 세션 중 DB 변경이 반영되지 않는다.
+- **TUI 선택 목록이 객체 디렉터리 이름만 렌더링**해 서로 다른 DB의 동명 프로시저가
+  구분되지 않는다.
+- **비재귀 경로가 `DependencyAnalysisOrchestrator`로 통일되지 않았다** — 요청 모델과
+  파이프라인 호출, 배치 모드를 함께 재배선해야 한다.
+- **더티 리드 노출을 명세서가 적지 않는다** — 6회차 감사가 배포 구성 확인으로 등급을 🟡까지
+  내렸으나 서술 부재는 그대로다. 이관 후 동시 실행 구성이 되면 위험이 따라간다.
+- **`output/Jobs/POQSettleProc7/` 산출물 폐기 판단** (운영 결정).
+
+---
+
+## 닫힌 것
+
+상세한 경위는 각 설계 문서의 해당 항목에 취소선과 함께 달려 있고, 커밋 메시지가 그 근거다.
+여기서는 **무엇이 왜 닫혔는지만** 남긴다.
+
+| 무엇 | 어떻게 |
+|---|---|
+| 축 A 재감사 🟠 2건 (`PGName NOT IN` 리터럴 · PG 화이트리스트) | 집합 술어를 기계 확정 재료로 승격. `DmlScopeExtractor.ExtractSetPredicates` → `AiService.BuildSetPredicateTableLines` → `MechanicalValidator.CheckSetPredicates`. 설계: `2026-08-18-set-predicate-material-design.md` |
+| C# 아키텍처 규칙이 단일 어셈블리 스코프 | `8e4af04`가 `ArchitectureTests` 스텁에 `Targets`를 넣어 대상 0건 통과를 막고, `c86d7b7`이 워밍업으로 xUnit 병렬 순서 의존 거짓 실패를 없앴다 |
+| `StepLogicTests` 배치 위치가 어느 지시서에도 없다 | `TaskFileComposer`가 `tests/StepLogicTests{확장자}`를 경로째 안내(`8d9ba62`·`37cd381`이 "원본을 지우지 말 것"까지 명시) |
+| `ArtifactChangeDetector.Snapshot` TOCTOU 플래키 | `69a080c`·`b577f65`. **한계 그대로 옮김** — 두 테스트가 경합 자체를 재현하지 못하므로 원인 경로가 더는 던지지 않는다는 것만 보인다 |
+| `AGENTS.md`의 경고 개수가 낡았다 | `d545f51`이 `AiServiceTests`의 `CS8604`를 없애 실제가 기록(8건)을 따라잡았다. 2026-08-21 클린 빌드로 확인 |
+| 보강기·파서의 "유효한 블록" 판정 불일치 | `2ae7a2b`·`25319f6`·`933fb39`가 `BatchStepPlanParser.TryLocateStepsBlock` 공유로 닫음 |
+| Claude 프롬프트 캐시 중단점 | `PromptCacheBreakpointPolicy` (두 번째 전송부터 찍어 1회차 잡의 캐시 쓰기 손실 없음) |
+| `PlanBoundaryResolver`의 `allFound == true` 공백 | `acf5210`의 `AbsorbUncoveredRegions` |
+| 레거시 전체 Job의 `nothingVerified` 무한 재시도 | `e1ccfbd`의 `MaxConsecutiveUnverifiedRetries`. **부분 해소** — 위 P0 ①의 다른 조합은 열려 있다 |
+| 신뢰도 점수와 검증 커버리지의 분리 표기 | `VerificationCoverage` 모델과 포매터의 `coverageLine` |
+| UPDATE 컬럼 매핑표 / `UPDATE … FROM` 자기참조 / `SET` 절 동시평가 | `2026-08-09-update-mapping-contract` |
+| 명세서 재발 방지 검증 게이트 | `63483f2`가 L2 Critic이 아니라 **L1**에 `MechanicalValidator.CheckSchemaClaims`를 넣고 `ab6dd5b`가 코드 펜스 오탐을 닫음 |
+
+### 이 목록 밖에서 닫힌 것
+
+2026-08-18 ~ 08-21의 큰 작업들은 여기 등재된 적이 없다. 감사가 새로 찾은 결함에 대응한
+것이고, 그 파이프라인은 `docs/audit-reports/` → `audit-defect-catalog.md` → 새 설계 문서다.
+이 문서가 아니라 그쪽이 지금 일을 움직인다.
+
+- **축 B 배치 골격 계약** — `BatchControlContract`·`StepInterfaceFacts` + L1 검사 6종
+- **참조 함수 기계 확정 표** — 함수 동작 서술 전면 금지, 5회차 7/8 → 6회차 8/8 정합
+- **추출기 결함 셋** — 자기참조 별칭(`88b0aa2`) · 집합 술어 `LEFT()` 좌변(`39050de`) ·
+  의존성 이름 표기(`a1bbcfe`). 6회차 재감사가 셋 다 산출물에서 확인, 축 A 🔴이 0이 됐다
+- **`GlobalStatementOrdinal`의 "갱신 0"** — 정규화의 값 유실을 캐시 형식 6에서 닫음
