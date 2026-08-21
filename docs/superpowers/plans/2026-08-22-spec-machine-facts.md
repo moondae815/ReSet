@@ -23,6 +23,7 @@
 - **`SpDefinition.StaticAnalysis`는 절대 `null`이 아니다** — `= new()`가 기본값이다. 그래서 `analysis == null` 검사만으로는 아무것도 걸러지지 않는다. "정적 분석이 없다"를 판정하려면 **`IsParsedSuccessfully`** 를 봐야 한다(`AiService.cs:147`의 기존 패턴). `SqlStaticParser.Analyze`는 이 플래그를 전부 아니면 전무로 설정하므로, 실패한 파스에서 나온 빈 목록은 "확인된 빈 값"이 아니라 **"보지 않았음"** 이다 — 그 상태에서 확정 사실을 만들면 안 된다. *(Wave 1 실측으로 확정)*
 - `SpDefinition.ObjectKey`의 타입은 **`CodeObjectKey`** 다 — 위치 파라미터 record `(string Database, string Schema, string Name, CodeObjectType Type)`이고 무인자 생성자가 없다. 생성은 `CodeObjectKey.Create(db, schema, name, CodeObjectType.Procedure)` 관례를 따른다. *(Wave 1 실측으로 확정)*
 - 테스트에서 `Assert.Single(collection.Where(pred))`를 쓰지 마라 — `xUnit2031` 분석기 경고가 난다. `Assert.Single(collection, pred)` 오버로드를 써라. 이 저장소는 비-CS 경고가 0인 상태를 유지해 왔다. *(Wave 1 실측)*
+- **확정 사실 문장에 `N건` 같은 수치 표현으로 부재를 말하지 마라.** 기존 L1 검사 `CheckIdentifierNotationClaims`의 `NegationTokens`는 `없습니다`·`않습니다`·`아닙니다`·`없음`·`아님` 계열만 부정으로 인식한다. `3부 식별자 참조 0건`처럼 쓰면 그 검사가 **부정 없는 주장**으로 오해해 3부 참조가 없는 거의 모든 SP에서 오탐을 낸다 — Wave 2가 실제로 이 벽에 부딪혀 `NegationTokens`에 `"0건"`을 더해야 했고, 그 widening은 자기모순 문장을 가릴 수 있는 잔여 위험을 남겼다. **새 사실 문장은 이미 인식되는 부정 어휘를 써라.** *(Wave 2 실측)*
 
 ---
 
