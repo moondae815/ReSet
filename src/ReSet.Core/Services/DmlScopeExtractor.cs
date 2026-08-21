@@ -129,6 +129,25 @@ namespace ReSet.Core.Services
         string CallExpression);
 
     /// <summary>
+    /// "이 문장이 어느 자리를 어떤 잠금 힌트로 읽는가"를 담는다.
+    ///
+    /// [행 단위가 (문장 × 스캔 자리)인 이유 - 2026-08-21 축 A 감사]
+    /// 감사가 지적한 것은 "문장별로 힌트가 붙은 곳과 안 붙은 곳이 갈린다"였다.
+    /// INS_EXTRA4PLCARD에서 TPGProperty가 P·Y 별칭에는 붙고 PG에는 안 붙는데,
+    /// 명세서는 "5개 테이블의 조회 또는 조인에 사용됩니다"로 뭉갰다. 문장당 한 칸으로는
+    /// 이 결함을 담을 수 없다.
+    /// </summary>
+    /// <param name="Alias">별칭이 없으면 "-".</param>
+    /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
+    public sealed record LockHintFact(
+        string Operation,
+        int StatementOrdinal,
+        int Line,
+        string Table,
+        string Alias,
+        IReadOnlyList<string> Hints);
+
+    /// <summary>
     /// DML 문장별로 "무엇이 대상 범위를 정하는가"를 뽑는다.
     ///
     /// 명세서가 부재를 서술했는지는 자연어 판정이라 앵커가 없다. 그래서 이 재료는
@@ -153,6 +172,7 @@ namespace ReSet.Core.Services
         public const string DmlScopeTableHeading = "### DML 범위 (기계 확정 — 수정 금지)";
         public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
         public const string ReferencedFunctionTableHeading = "### 참조 함수 (기계 확정 — 수정 금지)";
+        public const string LockHintTableHeading = "### 잠금 힌트 (기계 확정 — 수정 금지)";
 
         public static IReadOnlyList<DmlScopeFact> Extract(string? ddlText, string dateParameterName)
         {
@@ -249,6 +269,130 @@ namespace ReSet.Core.Services
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[DmlScopeExtractor] 참조 함수 호출 수집 실패 - 빈 목록으로 진행합니다.");
                 return Array.Empty<ReferencedFunctionCallFact>();
+            }
+        }
+
+        /// <summary>
+        /// DML 문장이 읽는 자리와 그 잠금 힌트를 뽑는다.
+        ///
+        /// [행이 되는 자리가 셋인 이유 - 2026-08-21 프로브 실측]
+        /// 처음에는 "대상 노드를 싣지 않는다"로 정했다가 규칙이 사실을 잃는 것을 봤다.
+        ///   DELETE T FROM dbo.T A WITH(NOLOCK)  대상 (없음) · FROM NoLock  ← 대상은 껍데기
+        ///   DELETE FROM dbo.T WITH(NOLOCK)      대상 NoLock · FROM 없음    ← 대상이 곧 스캔
+        /// FROM이 있으면 대상 노드는 갱신 대상 지시자일 뿐 스캔이 아니고 힌트를 지지 않는다.
+        /// 그대로 실으면 같은 테이블이 "힌트 있음/없음" 두 행으로 나와 독자를 오도한다.
+        ///
+        /// [대상 노드를 싣는 조건이 "힌트가 있을 때"인 이유 - 2026-08-21 테스트 실측]
+        /// "FROM이 없으면 무조건 대상이 스캔"으로 조건을 잡으면 FROM도 없고 힌트도
+        /// 없는 문장(UPDATE dbo.T SET C=1 WHERE X=1)까지 빈 힌트 행을 낸다.
+        /// ExtractLockHints_StatementWithNoScan_ProducesNoRow가 이를 실측으로 잡았다 -
+        /// "대상 자체가 스캔이다"와 "그 스캔에 보고할 힌트가 있다"는 다른 질문이고,
+        /// 이 표는 후자만 싣는다. FROM 유무와 무관하게 대상이 힌트를 질 때만 싣는다.
+        /// </summary>
+        public static IReadOnlyList<LockHintFact> ExtractLockHints(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LockHintFact>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0))
+                {
+                    return Array.Empty<LockHintFact>();
+                }
+
+                var visitor = new LockHintVisitor();
+                fragment.Accept(visitor);
+                return visitor.Facts;
+            }
+            catch (Exception ex)
+            {
+                // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
+                Log.Warning(ex, "[DmlScopeExtractor] 잠금 힌트 수집 실패 - 빈 목록으로 진행합니다.");
+                return Array.Empty<LockHintFact>();
+            }
+        }
+
+        private sealed class LockHintVisitor : TSqlFragmentVisitor
+        {
+            public List<LockHintFact> Facts { get; } = new();
+
+            private readonly Dictionary<string, int> _ordinals = new(StringComparer.Ordinal);
+
+            public override void Visit(InsertSpecification node)
+            {
+                var from = (node.InsertSource as SelectInsertSource)?.Select is QuerySpecification qs
+                    ? qs.FromClause
+                    : null;
+                Record("INSERT", node, node.Target, from);
+            }
+
+            public override void Visit(UpdateSpecification node) =>
+                Record("UPDATE", node, node.Target, node.FromClause);
+
+            public override void Visit(DeleteSpecification node) =>
+                Record("DELETE", node, node.Target, node.FromClause);
+
+            private void Record(
+                string operation, TSqlFragment statement, TableReference target, FromClause? from)
+            {
+                _ordinals.TryGetValue(operation, out var n);
+                _ordinals[operation] = ++n;
+                var line = statement.StartLine;
+
+                if (from != null)
+                {
+                    var collector = new FromTableCollector();
+                    foreach (var reference in from.TableReferences) reference.Accept(collector);
+                    foreach (var table in collector.Tables) Add(operation, n, line, table);
+                }
+
+                // 대상 노드는 힌트를 질 때만 싣는다(INSERT INTO T WITH(TABLOCK),
+                // DELETE FROM dbo.T WITH(NOLOCK)). FROM이 없다고 무조건 실으면
+                // "FROM도 없고 힌트도 없는" 문장(UPDATE dbo.T SET C=1 WHERE X=1)까지
+                // 빈 힌트 행을 내 "스캔할 자리가 없다"는 사실을 잃는다 - 대상 자체가
+                // 곧 스캔이라는 것과, 그 스캔에 대해 보고할 힌트가 있다는 것은 다른
+                // 질문이다(2026-08-21 테스트 실측 - 브리프 초안의 from==null 단독
+                // 조건은 ExtractLockHints_StatementWithNoScan_ProducesNoRow에서 실패했다).
+                if (target is NamedTableReference named && named.TableHints.Count > 0)
+                {
+                    Add(operation, n, line, named);
+                }
+            }
+
+            private void Add(string operation, int ordinal, int line, NamedTableReference node)
+            {
+                var table = string.Join(
+                    ".", node.SchemaObject.Identifiers.Select(i => i.Value));
+                var alias = string.IsNullOrEmpty(node.Alias?.Value) ? "-" : node.Alias!.Value;
+                var hints = node.TableHints
+                    .Select(h => h.HintKind.ToString().ToUpperInvariant())
+                    .ToList();
+
+                if (Facts.Any(f =>
+                        f.Operation == operation && f.StatementOrdinal == ordinal &&
+                        f.Table == table && f.Alias == alias))
+                {
+                    return;
+                }
+
+                Facts.Add(new LockHintFact(operation, ordinal, line, table, alias, hints));
+            }
+
+            /// <summary>
+            /// FROM 절의 명명 테이블 참조를 모은다. 파생 테이블 안으로는 내려가지 않는다 -
+            /// 그 스코프의 참조는 바깥 문장의 잠금 동작과 별개다. ScriptDom은 Visit을
+            /// 비워도 자식으로 계속 내려가므로 ExplicitVisit을 비운다.
+            /// </summary>
+            private sealed class FromTableCollector : TSqlFragmentVisitor
+            {
+                public List<NamedTableReference> Tables { get; } = new();
+
+                public override void Visit(NamedTableReference node) => Tables.Add(node);
+
+                public override void ExplicitVisit(QueryDerivedTable node) { }
             }
         }
 

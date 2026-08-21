@@ -912,5 +912,130 @@ END";
 
             Assert.Equal("UF_GET_COMM4PG", fact.QualifiedName);
         }
+
+        [Fact]
+        public void ExtractLockHints_FromClauseReferences_AreListedWithTheirHints()
+        {
+            // INS_EXTRA4PLCARD 실측 형태. 같은 TPGProperty가 별칭마다 힌트가 갈린다 -
+            // 산문은 "5개 테이블의 조회 또는 조인에 사용됩니다"로 뭉갰고 그것이 🟡이었다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM dbo.TSettleMst A WITH(NOLOCK)
+    JOIN dbo.TPGProperty PG ON A.PGName = PG.PGName
+    JOIN dbo.TPGProperty Y  WITH(NOLOCK) ON A.PGName = Y.PGName
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(3, facts.Count);
+            Assert.Equal(new[] { "NOLOCK" }, Assert.Single(facts, f => f.Alias == "A").Hints);
+            Assert.Empty(Assert.Single(facts, f => f.Alias == "PG").Hints);
+            Assert.Equal(new[] { "NOLOCK" }, Assert.Single(facts, f => f.Alias == "Y").Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_TargetNodeWithoutFromClause_IsTheScan()
+        {
+            // 설계 초안은 "대상 노드를 싣지 않는다"였는데 프로브가 그 규칙이 사실을
+            // 잃는 것을 보여 줬다. FROM 절이 없으면 대상 노드가 곧 스캔이고 힌트를 진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DELETE FROM dbo.TSettleByOUT WITH(NOLOCK) WHERE OutYMD = '20260101'
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Equal("DELETE", fact.Operation);
+            Assert.Equal("dbo.TSettleByOUT", fact.Table);
+            Assert.Equal("-", fact.Alias);
+            Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_TargetNodeWithFromClause_IsNotDoubleCounted()
+        {
+            // UPDATE T ... FROM T A 에서 대상 T와 FROM의 A는 다른 노드이고 대상 쪽엔
+            // 힌트가 없다. 둘 다 실으면 같은 테이블이 "힌트 있음/없음" 두 행으로 나와
+            // 독자를 오도한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE TSettleMst SET C = 1 FROM dbo.TSettleMst A WITH(NOLOCK) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Equal("A", fact.Alias);
+            Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_DerivedTableInterior_IsNotCollected()
+        {
+            // 파생 테이블 안의 참조는 그 스코프의 것이고 바깥 문장의 잠금 동작과 별개다.
+            // ScriptDom은 Visit을 비워도 자식으로 내려가므로 ExplicitVisit을 비워야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1
+    FROM (SELECT PLTID FROM dbo.THidden B WITH(NOLOCK)) X
+        ,dbo.TSettleMst A WITH(NOLOCK)
+    WHERE X.PLTID = A.PLTID
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Single(facts);
+            Assert.Equal("A", facts[0].Alias);
+            Assert.DoesNotContain(facts, f => f.Table.Contains("THidden"));
+        }
+
+        [Fact]
+        public void ExtractLockHints_StatementWithNoScan_ProducesNoRow()
+        {
+            // FROM도 없고 대상에 힌트도 없으면 스캔할 자리가 없다. 빈 행으로 채우지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.TSettleMst SET C = 1 WHERE X = 1
+END";
+
+            Assert.Empty(DmlScopeExtractor.ExtractLockHints(ddl));
+        }
+
+        [Fact]
+        public void ExtractLockHints_MultipleHints_AreAllListed()
+        {
+            // 한 참조에 힌트가 여럿 붙을 수 있다. 칸은 불리언이 아니라 목록이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.C = 1 FROM dbo.TSettleMst A WITH(NOLOCK, READUNCOMMITTED) WHERE A.X = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Equal(new[] { "NOLOCK", "READUNCOMMITTED" }, fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_InsertSourceFromClause_IsCollected()
+        {
+            // INSERT는 원천 SELECT의 FROM이 스캔 자리다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A) SELECT X FROM dbo.TSource S WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractLockHints(ddl));
+
+            Assert.Equal("INSERT", fact.Operation);
+            Assert.Equal("S", fact.Alias);
+            Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
+        }
     }
 }
