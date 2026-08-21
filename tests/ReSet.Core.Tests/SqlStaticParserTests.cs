@@ -928,6 +928,96 @@ END";
         }
 
         [Fact]
+        public void Analyze_TargetNamedNotAliased_ResolvesAliasFromFromClause()
+        {
+            // EXCEPTION_PROC 갱신 6(라인 187) 실측. UPDATE가 대상을 별칭이 아니라
+            // 테이블 이름으로 쓰고 FROM이 그 테이블에 별칭 A를 붙인 형태다.
+            // ExtractTargetAlias가 한 부(部)짜리 이름을 무조건 별칭으로 보면
+            // targetAlias="TSettleMst"가 되고, 진짜 자기참조인 A.PGCOMM이
+            // "남의 별칭"으로 걸러져 통째로 사라진다.
+            //
+            // 2026-08-20 축 A 감사에서 이 한 자리가 🔴이었다. 같은 SP의 갱신 7은
+            // 자기참조를 한정자 없이 써서(PGCOMM) 우연히 잡혔고, 그래서 명세서에는
+            // 갱신 7만 실리고 6은 빠진 채로 나갔다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.RaisePgCommToFloor
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    PGCOMMTYPE = 1
+          ,PGCOMM = CASE WHEN ABS(A.PGCOMM) < 180 THEN 180 ELSE ABS(A.PGCOMM) END
+          ,PGVT   = CASE WHEN ABS(A.PGCOMM) < 180 THEN  18 ELSE ABS(A.PGVT)   END
+    FROM   TSettleMst A WITH (NOLOCK)
+    WHERE  A.PGNAME = 'INIBANK'
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("PGCOMM", mapping.SelfReferencedColumns);
+            Assert.Contains("PGVT", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_QualifiedTargetWithDerivedTableSource_IsNotASelfReference()
+        {
+            // EXCEPTION_PROC 갱신 17(라인 452) 실측. 대상이 세 부(部) 이름이라
+            // ExtractTargetAlias가 null을 돌려주고, 그러면 한정자 규칙이 통째로
+            // 꺼져 파생 테이블 BB의 컬럼이 자기참조로 잘못 잡힌다.
+            //
+            // 위 갱신 6 사례와 같은 뿌리다 - 대상을 FROM 절과 대조해 풀지 않는 것.
+            // 한쪽은 놓치고 한쪽은 잘못 잡는 양면이라 함께 닫아야 한다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.CopyPgCommFromDerived
+AS
+BEGIN
+    UPDATE SETTLE_POQ_DB.dbo.TSettleMst
+    SET    PGComm = BB.PGCOMM
+          ,PGVT   = BB.PGVT
+    FROM   SETTLE_POQ_DB.dbo.TSettleMst AA WITH(NOLOCK)
+    JOIN  (SELECT PLTID, PGCOMM, PGVT FROM SETTLE_POQ_DB.dbo.TSettleHist) BB
+      ON   AA.PLTID = BB.PLTID
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Empty(mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
+        public void Analyze_DerivedTableRepeatsTargetTable_UsesOuterAlias()
+        {
+            // EXCEPTION_PROC 갱신 13(라인 336) 실측. 파생 테이블 X 안에서도 같은
+            // TSettleMst를 별칭 A로 읽고, 바깥에서는 별칭 Y로 읽는다. 갱신 대상은
+            // 바깥의 Y이므로 Y.CLCOMM이 자기참조이고 X.CLCOMM은 남의 컬럼이다.
+            //
+            // FROM 절에서 대상 별칭을 찾을 때 파생 테이블 안으로 내려가면 안쪽 A를
+            // 먼저 물어 와 targetAlias가 A가 되고, 그러면 진짜 자기참조 Y.CLCOMM이
+            // 통째로 걸러진다. ScriptDom은 Visit을 비워도 자식으로 계속 내려가므로
+            // ExplicitVisit으로 막아야 한다 - ColumnReferenceCollector가 ScalarSubquery를
+            // 막는 방식과 같다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.OverlaySettleFromCard
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    CLCOMM   = IIF(Y.PGName = 'PLCard', ISNULL(X.CLCOMM,0), Y.CLCOMM)
+          ,PGCOMM   = ISNULL(X.PGCOMM,0)
+    FROM  (SELECT A.PLTID, A.CLCOMM, A.PGCOMM
+           FROM   dbo.TSettleMst A WITH(NOLOCK)) X
+         ,dbo.TSettleMst Y WITH(NOLOCK)
+    WHERE  X.PLTID = Y.PLTID
+END";
+
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            var mapping = Assert.Single(result.AstUpdateMappings);
+            Assert.Contains("CLCOMM", mapping.SelfReferencedColumns);
+            Assert.DoesNotContain("PGCOMM", mapping.SelfReferencedColumns);
+        }
+
+        [Fact]
         public void Analyze_WithTwoUpdatesOnSameTable_ShouldNumberStatements()
         {
             // Arrange & Act
