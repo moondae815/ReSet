@@ -1448,7 +1448,9 @@ git commit -m "feat: IF 뒤 @@ROWCOUNT 리셋을 실행 의미 표에 싣는다"
 
 ### Task 6: F — 커서 수명 주기
 
-오류 경로에서 `CLOSE`/`DEALLOCATE`에 도달하지 않는 커서와, `LOCAL`을 지정하지 않아 범위가 서버 설정에 달린 커서를 싣는다.
+`OPEN`과 `CLOSE` 사이에 `RETURN`이 있는 커서와, `LOCAL`을 지정하지 않아 범위가 **데이터베이스** 옵션에 달린 커서를 싣는다.
+
+**문장이 무엇을 단정하는지 조심해라**(Wave 5 실측). "오류 경로에서 커서가 닫히지 않는다"는 그 `RETURN`이 오류 경로인지, 그 경로가 도달 가능한지를 단정한다 — 정적으로 알 수 없다. 관측과 그 직접 귀결까지만 말해라. 그리고 `default_to_local_cursor`는 **서버가 아니라 데이터베이스** 옵션이다(`docs/audit-reports/2026-08-20a-POQSettlePrco20-axisA.md:123`).
 
 **Files:**
 - Create: `src/ReSet.Core/Services/CursorLifecycleExtractor.cs`
@@ -1491,7 +1493,10 @@ END";
 
             var fact = Assert.Single(facts);
             Assert.Equal("GetDataCrsr", fact.CursorName);
-            Assert.Contains("오류 경로", fact.Sentence);
+            Assert.DoesNotContain("오류 경로", fact.Sentence);   // 도달 가능성을 단정하면 안 된다
+            Assert.Contains("RETURN", fact.Sentence);
+            Assert.Contains("데이터베이스", fact.Sentence);
+            Assert.DoesNotContain("서버", fact.Sentence);
             Assert.Contains("LOCAL", fact.Sentence);
         }
 
@@ -1543,7 +1548,7 @@ namespace ReSet.Core.Services
     public sealed record CursorLifecycleFact(int Line, string CursorName, string Sentence);
 
     /// <summary>
-    /// 커서의 수명 주기에서 확정할 수 있는 두 가지를 뽑는다 - 오류 경로 미해제와
+    /// 커서의 수명 주기에서 확정할 수 있는 두 가지를 뽑는다 - OPEN~CLOSE 사이 RETURN 관측과
     /// LOCAL 미지정.
     ///
     /// [왜 렉시컬 관측인가] 완전한 경로 분석 대신 "OPEN과 CLOSE 사이에 RETURN이
@@ -1682,7 +1687,7 @@ Expected: PASS
 ```bash
 dotnet test
 git add src/ReSet.Core/Services/CursorLifecycleExtractor.cs src/ReSet.Core/Services/ExecutionSemanticsFacts.cs tests/ReSet.Core.Tests/CursorLifecycleExtractorTests.cs
-git commit -m "feat: 커서 오류 경로 미해제와 LOCAL 미지정을 실행 의미 표에 싣는다"
+git commit -m "feat: 커서 OPEN-CLOSE 사이 RETURN 관측과 LOCAL 미지정을 실행 의미 표에 싣는다"
 ```
 
 ---
