@@ -4590,5 +4590,109 @@ END",
             Assert.Contains(
                 ObjectDeclarationExtractor.ObjectDeclarationTableHeading, declResult.SuggestedPromptFix);
         }
+
+        // ==========================================================================
+        // 작업 5 수정 라운드 1 - 리뷰 실측(Important)
+        //
+        // SpWithTwoScansOnSameLine은 두 사실의 테이블이 다르다(dbo.TA/dbo.TB) - Table
+        // 비교만으로 이미 두 행이 갈려 Alias 비교(MechanicalValidator.cs:3208)를
+        // 지워도 MechanicalValidatorTests 210건이 그대로 통과했다(리뷰어 실측). Table이
+        // 같고 Alias만 다른 가장 자연스러운 실제 패턴은 한 줄짜리 자기조인
+        // (`FROM dbo.T A WITH(NOLOCK) JOIN dbo.T B WITH(NOLOCK) ON A.ID=B.ID`)이고,
+        // 이 검사가 막으려는 부류가 정확히 그것이다 - Alias 비교가 없으면 A의 행이
+        // B의 행으로도 오판정된다.
+        // ==========================================================================
+
+        /// <summary>
+        /// 자기조인 - 같은 테이블, 두 별칭, 같은 물리 줄. Table·Line·Scope·Hints가
+        /// 두 사실 사이에서 전부 같고 Alias만 다르다 - Alias 비교가 정확히 이 모양의
+        /// 충돌을 막는다.
+        /// </summary>
+        private static SpDefinition SpWithSelfJoinOnSameLine() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.C = B.D
+    FROM dbo.T A WITH (NOLOCK) JOIN dbo.T B WITH (NOLOCK) ON A.ID = B.ID
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_SelfJoinSharesTableAndLine_MissingAliasRow_ShouldFlag()
+        {
+            var expectations = SpecExpectations.From(SpWithSelfJoinOnSameLine());
+            Assert.Equal(2, expectations!.LockHints.Count);
+            var first = expectations.LockHints[0];
+            var second = expectations.LockHints[1];
+            Assert.Equal(first.Table, second.Table);
+            Assert.Equal(first.Line, second.Line);
+            Assert.Equal(first.Scope, second.Scope);
+            Assert.Equal(first.Hints, second.Hints);
+            Assert.NotEqual(first.Alias, second.Alias);
+
+            // 문서는 첫 번째 별칭(A)의 행만 옮기고 두 번째 별칭(B)은 빠뜨린다. Table·
+            // Line·Scope·Hints가 전부 같으므로, Alias 비교가 없으면 A의 행이 B의 행도
+            // 만족시켜 버린다.
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {first.Operation} {first.StatementOrdinal} | {first.Line} | {first.Table} | "
+                + $"{first.Alias} | {first.Scope} | {string.Join(", ", first.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            var expectedRawContext =
+                $"{second.Operation} {second.StatementOrdinal} @ line {second.Line} {second.Table} {second.Alias}";
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.LockHintTableMissing && e.RawContext == expectedRawContext);
+        }
+
+        [Fact]
+        public void Validate_SelfJoinSharesTableAndLine_BothAliasRowsPresent_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithSelfJoinOnSameLine());
+            var first = expectations!.LockHints[0];
+            var second = expectations.LockHints[1];
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {first.Operation} {first.StatementOrdinal} | {first.Line} | {first.Table} | "
+                + $"{first.Alias} | {first.Scope} | {string.Join(", ", first.Hints)} |\n"
+                + $"| {second.Operation} {second.StatementOrdinal} | {second.Line} | {second.Table} | "
+                + $"{second.Alias} | {second.Scope} | {string.Join(", ", second.Hints)} |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
+        [Fact]
+        public void Validate_ObjectDeclarationRowNamesADifferentObject_ShouldFlag()
+        {
+            // Minor - 리뷰 실측: sectionText.Contains(fact.QualifiedName, ...) 절을
+            // 지워도 210건이 그대로 통과했다. WITH 옵션 값은 옳지만 객체 이름이 다른
+            // 행(오귀속)을 쓰면 이 절이 유일하게 잡는 결함이 재현된다.
+            var expectations = SpecExpectations.From(FunctionWithExecuteAsOption());
+            var fact = expectations!.ObjectDeclaration!;
+
+            var markdown = WrapSpec("표 없음") + "\n"
+                + ObjectDeclarationExtractor.ObjectDeclarationTableHeading + "\n"
+                + "| 객체 | WITH 옵션 |\n"
+                + "| :--- | :--- |\n"
+                + $"| dbo.UF_다른_함수 | {string.Join(", ", fact.WithOptions)} |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ObjectDeclarationTableMissing);
+        }
     }
 }

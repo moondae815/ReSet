@@ -3161,6 +3161,13 @@ namespace ReSet.Core.Services
         /// 최상위/파생 중 잘못 적거나, INDEX=CIDX_x를 INDEX로 뭉개는 것)까지 잡기
         /// 위해서다 - 이 배치에서 세 번 반복된 "종류만 렌더하고 값을 버리는" 결함과
         /// 같은 함정이 이 표에도 있다.
+        ///
+        /// [대소문자 비대칭 - 2026-08-21 리뷰 Minor, 의도적으로 고치지 않음] 이 비교는
+        /// `==`(대소문자 구분)이고 CheckSetPredicates는 OrdinalIgnoreCase다. 원본
+        /// DDL·프롬프트·모델 출력이 이 코퍼스에서 일관되게 대문자라 오늘은 영향이
+        /// 없지만, 소문자 표기가 섞인 산출물이 나오면 이 검사가 대소문자 차이만으로
+        /// 거짓 결함을 낼 수 있다. 이번 라운드의 범위가 아니라 고치지 않고 다음
+        /// 사람에게 이 문단으로 남긴다.
         /// </summary>
         private static void CheckLockHints(
             string markdown, SpecExpectations expectations, ValidationResult result)
