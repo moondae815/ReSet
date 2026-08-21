@@ -45,7 +45,7 @@ Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 
 표는 3-1절이(함수 전용이라 SP 명세서에는 안 실린다) 따로 맡는다. 나머지 여섯 — `DML 범위`·
 `집합 술어`·`파생 테이블 정의`·`잠금 힌트`·`실행 의미`·`CASE 분기` — 는 SP 단위가 함께
 대조한다. **뒤의 둘은 SP 전용이 아니다** — `AiService.BuildMachineFactBlockLines`가 SP·함수
-양쪽 프롬프트 경로(SP 셋·함수 하나, 총 네 호출부 — 위치는 `AiService.cs`에서
+양쪽 프롬프트 경로(SP 넷·함수 하나, 총 다섯 호출부 — 위치는 `AiService.cs`에서
 `BuildMachineFactBlockLines`를 grep)에 배선돼 함수 명세서에도 같은 표가
 실린다(`잠금 힌트`가 이미 그런 것과 같은 모양이다). 모두 조립기가 AST에서 확정해 프롬프트에
 실어 준 값이라, 명세서가 옮겨 적으면서 어긋났는지가 같은 방식으로 드러난다(2026-08-21 축
