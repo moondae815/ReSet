@@ -423,7 +423,12 @@ namespace ReSet.Core.Services
                         };
                         var taskKey = taskName;
                         progressScope.AddTask(taskKey, taskName);
-                        reviewTasks.Add(WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, candidates[i], _criticEffort, cancellationToken), progressScope, taskKey));
+                        var candidate = candidates[i];   // 클로저가 루프 변수를 붙잡지 않게 지역으로 고정한다
+                        reviewTasks.Add(WrapWithProgress(
+                            AiCallRetry.ExecuteAsync(
+                                () => _criticService.ReviewSpecificationAsync(spDef, candidate, _criticEffort, cancellationToken),
+                                cancellationToken),
+                            progressScope, taskKey));
                     }
 
                     try
@@ -682,7 +687,11 @@ namespace ReSet.Core.Services
                         using (var progressScope = _userInteraction.CreateProgressScope("최종 L2 검토") ?? NullProgressScope.Instance)
                         {
                             progressScope.AddTask("final_review", "합성본 최종 L2 검토 중...");
-                            finalL2Result = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "final_review");
+                            finalL2Result = await WrapWithProgress(
+                                AiCallRetry.ExecuteAsync(
+                                    () => _criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken),
+                                    cancellationToken),
+                                progressScope, "final_review");
                         }
                         
                         accumulatedThinking.AppendLine("### [Critic] Final Consolidated Spec Review Thinking");
@@ -743,14 +752,23 @@ namespace ReSet.Core.Services
                                     using (var progressScope = _userInteraction.CreateProgressScope("보완본 재검토") ?? NullProgressScope.Instance)
                                     {
                                         progressScope.AddTask("refinal", "보완본 L2 재검토 중...");
-                                        var reFinalReview = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "refinal");
+                                        var reFinalReview = await WrapWithProgress(
+                                            AiCallRetry.ExecuteAsync(
+                                                () => _criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken),
+                                                cancellationToken),
+                                            progressScope, "refinal");
                                         if (reFinalReview != null)
                                         {
                                             finalReview = reFinalReview;
                                         }
                                     }
                                 }
-                                catch (Exception ex) when (ex is not OperationCanceledException) { }
+                                catch (Exception ex) when (ex is not OperationCanceledException)
+                                {
+                                    // 재검토 실패는 이전 finalReview를 유지하므로 치명적이지 않다.
+                                    // 다만 조용히 삼키면 재시도까지 다 쓰고 실패한 사실이 어디에도 남지 않는다.
+                                    Log.Warning("[파이프라인] 보완본 L2 재검토 실패 - 이전 최종 리뷰를 유지합니다: {Reason}", ex.Message);
+                                }
                             }
                             else
                             {
@@ -1063,7 +1081,11 @@ namespace ReSet.Core.Services
                         using (var progressScope = _userInteraction.CreateProgressScope("L2 교차 리뷰") ?? NullProgressScope.Instance)
                         {
                             progressScope.AddTask("review", $"{_criticService.ModelName} 리뷰 중...");
-                            l2Result = await WrapWithProgress(_criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken), progressScope, "review");
+                            l2Result = await WrapWithProgress(
+                                AiCallRetry.ExecuteAsync(
+                                    () => _criticService.ReviewSpecificationAsync(spDef, specificationMarkdown, _criticEffort, cancellationToken),
+                                    cancellationToken),
+                                progressScope, "review");
                         }
                         reviewSuccess = true;
                         accumulatedThinking.AppendLine($"### [Critic] Attempt {attempt} Review Thinking");
@@ -2001,7 +2023,11 @@ namespace ReSet.Core.Services
                     using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 L2 리뷰") ?? NullProgressScope.Instance)
                     {
                         progressScope.AddTask("batchreview", $"{_criticService.ModelName} 통합 계획 리뷰 중...");
-                        l2Result = await WrapWithProgress(_criticService.ReviewConsolidatedPlanAsync(specs, consolidatedPlan, jobName, _criticEffort, cancellationToken), progressScope, "batchreview");
+                        l2Result = await WrapWithProgress(
+                            AiCallRetry.ExecuteAsync(
+                                () => _criticService.ReviewConsolidatedPlanAsync(specs, consolidatedPlan, jobName, _criticEffort, cancellationToken),
+                                cancellationToken),
+                            progressScope, "batchreview");
                     }
                     reviewSuccess = true;
                 }
