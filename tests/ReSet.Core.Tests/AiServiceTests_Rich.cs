@@ -2262,6 +2262,75 @@ END"
             Assert.EndsWith("| (없음) |", insertRow.TrimEnd());
         }
 
+        private static SpDefinition GroupBySpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_Util_Settle_Summary", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "UP_Util_Settle_Summary",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByTX (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*)
+    FROM   dbo.TSettleMst
+    WHERE  YMD = @pi_strYMD
+    GROUP BY YMD, CLIENTID
+
+    UPDATE dbo.TSettleMst
+    SET    ProcYMD = @pi_strYMD
+    WHERE  YMD = @pi_strYMD
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_ShouldCarryGroupByColumn()
+        {
+            // UP_Util_Settle_Summary 실측: GROUP BY 첫 키(YMD)가 매핑 표의 설명 칸에서만
+            // 언급되다 표에서 통째로 빠졌다(🟡). GROUP BY는 별도 칸으로 확정한다 -
+            // UPDATE(최상위 GROUP BY가 문법상 불가) 행은 "—"를 실어야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(GroupBySpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+
+            Assert.Contains("GROUP BY", section);
+            var insertRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| INSERT 1 |"));
+            Assert.Contains("YMD, CLIENTID", insertRow);
+            var updateRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |"));
+            // GROUP BY 칸은 ORDER BY 앞이라 마지막에서 두 번째 칸이다.
+            var updateCells = updateRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+            Assert.Equal("—", updateCells[updateCells.Count - 2]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_InsertWithoutGroupBy_ShouldRenderNone()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN INSERT INTO dbo.T (A) SELECT A FROM dbo.S END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var insertRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| INSERT 1 |"));
+
+            var cells = insertRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+            // GROUP BY 칸은 ORDER BY 앞이라 마지막에서 두 번째 칸이다.
+            Assert.Equal("(없음)", cells[cells.Count - 2]);
+        }
+
         private static SpDefinition FunctionWithSchemaBindingDefinition() => new()
         {
             ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_OUTYMD4REFUND", CodeObjectType.Function),

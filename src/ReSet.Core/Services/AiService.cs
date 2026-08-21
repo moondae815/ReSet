@@ -802,8 +802,8 @@ Based on the structured reference context above, reverse engineer the stored pro
             var lines = new List<string>
             {
                 $"   {DmlScopeExtractor.DmlScopeTableHeading}",
-                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | ORDER BY |",
-                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | GROUP BY | ORDER BY |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             // 채번은 BuildStatementOrdinals 하나가 유일한 출처다(문서 참고) - 이 표는
@@ -834,6 +834,17 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 var n = ordinals[i];
 
+                // GROUP BY도 ORDER BY와 같은 규약을 쓴다(DmlScopeFact.GroupByColumns 문서 -
+                // Task 8 제약 3): UPDATE·DELETE는 최상위 GROUP BY가 문법상 불가하므로 "—",
+                // INSERT는 절이 없으면 "(없음)", 있으면 그룹화 키 목록. UP_Util_Settle_Summary·
+                // UP_Util_Settle_Summary_AcqManual 실측 - GROUP BY 첫 키가 매핑 표의 설명
+                // 칸에서만 언급되다 표에서 통째로 빠졌다.
+                var groupBy = fact.Operation == "INSERT"
+                    ? (fact.GroupByColumns.Count == 0
+                        ? "(없음)"
+                        : EscapeTableCell(string.Join(", ", fact.GroupByColumns)))
+                    : "—";
+
                 // ORDER BY는 INSERT에만 문법상 가능하다(UPDATE·DELETE는 최상위 ORDER BY
                 // 자체가 불가) - STAT_PGCOLLECT_INS:113 실측(2026-08-21 축 A 감사): 원본의
                 // `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서 어디에도 없었다.
@@ -847,7 +858,7 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 lines.Add(
                     $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
-                    + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} | {orderBy} |");
+                    + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} | {groupBy} | {orderBy} |");
             }
 
             lines.Add("");

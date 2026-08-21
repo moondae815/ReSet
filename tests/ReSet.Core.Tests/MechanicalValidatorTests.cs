@@ -4835,6 +4835,99 @@ END",
                     && e.Message.Contains("ORDER BY"));
         }
 
+        /// <summary>GROUP BY를 지는 INSERT...SELECT 하나짜리 SP. UP_Util_Settle_Summary 실측 모양.</summary>
+        private static SpDefinition SpWithGroupBy() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_Util_Settle_Summary", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "UP_Util_Settle_Summary",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByTX (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*)
+    FROM   dbo.TSettleMst
+    WHERE  YMD = @pi_strYMD
+    GROUP BY YMD, CLIENTID
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_GroupByMissingFromDmlScopeTable_ShouldFlag()
+        {
+            // UP_Util_Settle_Summary 실측 - GROUP BY 첫 키(YMD)가 매핑 표의 설명 칸에서만
+            // 언급되다 표에서 통째로 빠졌다(🟡). CheckDmlScopeTable은 라인 토큰이 어느
+            // 행에든 있는지만 보고(위 문서), GROUP BY 칸 값이 실제로 그 행에 있는지는
+            // 대조하지 않으므로 GROUP BY 칸이 통째로 "(없음)"이어도 통과했다 - 이
+            // 확장이 그 구멍을 닫는다.
+            var expectations = SpecExpectations.From(SpWithGroupBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.Equal(new[] { "YMD", "CLIENTID" }, fact.GroupByColumns);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | (없음) | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("GROUP BY")
+                    && e.Message.Contains("YMD, CLIENTID"));
+        }
+
+        [Fact]
+        public void Validate_GroupByPresentInDmlScopeTable_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithGroupBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | "
+                + $"{string.Join(", ", fact.GroupByColumns)} | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("GROUP BY"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeFactWithoutGroupBy_ShouldNotRequireTheGroupByCell()
+        {
+            // 제약 2의 함정 재현 - GroupByColumns가 비어 있고(UPDATE는 항상 그렇다)
+            // 표의 GROUP BY 칸도 조인 키 칸도 "(없음)"이면 두 칸이 같은 토큰이다.
+            // 대조가 "값이 비어 있지 않을 때만 요구"를 지키지 않으면 이 우연한 일치가
+            // 검사를 무력화한다 - 이 테스트는 GroupByColumns가 빈 사실에는 아무 것도
+            // 요구하지 않는다는 것을 증명한다(라인 칸만 맞으면 통과).
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 227 | A | UseState | **아니오** | PLTID | (없음) | — |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
         [Fact]
         public void SuggestedPromptFix_ShouldCarryLockHintAndObjectDeclarationErrorsToTheModel()
         {

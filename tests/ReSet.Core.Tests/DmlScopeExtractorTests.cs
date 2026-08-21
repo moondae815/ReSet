@@ -467,6 +467,138 @@ END";
         }
 
         [Fact]
+        public void Extract_InsertWithGroupBy_ShouldRecordTheGroupingKeys()
+        {
+            // UP_Util_Settle_Summary 실측: GROUP BY 첫 키 YMD가 매핑 표의 설명 칸에서
+            // "그룹화 키"로 표기되지 않아, 표로 GROUP BY를 재구성하면 키가 빠졌다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByTX (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*)
+    FROM   dbo.TSettleMst
+    WHERE  YMD = @pi_strYMD
+    GROUP BY YMD, CLIENTID
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "YMD", "CLIENTID" }, fact.GroupByColumns);
+        }
+
+        [Fact]
+        public void Extract_InsertWithoutGroupBy_HasEmptyGroupByList()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (A) SELECT X FROM dbo.TSource
+END";
+
+            Assert.Empty(Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).GroupByColumns);
+        }
+
+        [Fact]
+        public void Extract_UpdateAndDelete_HaveEmptyGroupBy()
+        {
+            // UPDATE·DELETE는 최상위 GROUP BY가 문법상 불가하다 - ORDER BY와 같은
+            // 규약을 쓴다(표에서는 "—"로 렌더된다, AiService.BuildDmlScopeTableLines 참고).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.T SET C = 1 WHERE X = 1
+    DELETE FROM dbo.T WHERE X = 2
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            Assert.All(facts, f => Assert.Empty(f.GroupByColumns));
+        }
+
+        [Fact]
+        public void Extract_InsertSelectFromDerivedTableWithGroupBy_ShouldNotLeakTheInnerGroupByToTheOuterStatement()
+        {
+            // 제약 6 (Task 8) - INSERT ... SELECT ... FROM (SELECT ... GROUP BY ...) X는
+            // 파생 테이블 안에서 그룹화하지만, 바깥 INSERT 문장 자신은 GROUP BY 절이
+            // 없다. QuerySpecificationsOf는 UNION/괄호만 펼치고 FROM 안의 파생 테이블로는
+            // 내려가지 않으므로, 바깥 QuerySpecification의 GroupByClause만 봐야 이
+            // 구분이 지켜진다 - 이 배치의 Task 4가 정확히 이 부류(GROUP BY 귀속)에서
+            // 결함이 났다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TOut (YMD, CNT)
+    SELECT X.YMD, X.CNT
+    FROM (SELECT YMD, COUNT(*) AS CNT FROM dbo.TSource GROUP BY YMD) X
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Empty(fact.GroupByColumns);
+        }
+
+        [Fact]
+        public void Extract_InsertSelectDirectGroupBy_IsNotConfusedWithDerivedTableGroupBy()
+        {
+            // 위 테스트의 대조군 - INSERT ... SELECT ... GROUP BY(파생 테이블 없이
+            // 바깥 문장 자신의 GROUP BY)는 정상적으로 잡혀야 한다. 두 모양을 가르는
+            // 것이 이 추출기의 존재 이유다(제약 6).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TOut (YMD, CNT)
+    SELECT YMD, COUNT(*)
+    FROM   dbo.TSource
+    GROUP BY YMD
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "YMD" }, fact.GroupByColumns);
+        }
+
+        [Fact]
+        public void Extract_InsertFromUnionWithSameGroupByOnEveryBranch_CarriesTheSharedKeys()
+        {
+            // 제약 7 - UNION 갈래마다 같은 GROUP BY 키를 쓰면 하나의 사실로 실을 수
+            // 있다(애매하지 않다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TOut (YMD, CNT)
+    SELECT YMD, COUNT(*) FROM dbo.S1 GROUP BY YMD
+    UNION ALL
+    SELECT YMD, COUNT(*) FROM dbo.S2 GROUP BY YMD
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal(new[] { "YMD" }, fact.GroupByColumns);
+        }
+
+        [Fact]
+        public void Extract_InsertFromUnionWithDifferentGroupByPerBranch_ShouldLeaveGroupByEmpty()
+        {
+            // 제약 7 - 갈래마다 GROUP BY가 다르면(또는 한쪽만 있으면) 한 문장에 대해
+            // 무엇을 실어야 할지 애매하다. 애매하면 비운다 - 과소 포착은 Minor,
+            // 거짓 행은 Critical이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TOut (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*) FROM dbo.S1 GROUP BY YMD, CLIENTID
+    UNION ALL
+    SELECT YMD, NULL, COUNT(*) FROM dbo.S2 GROUP BY YMD
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Empty(fact.GroupByColumns);
+        }
+
+        [Fact]
         public void ExtractSetPredicates_TopLevelNotIn_ShouldCaptureEveryLiteral()
         {
             // EXPECT_PROC 갱신 1(object_definition.sql:39) 실측 형태. 명세서는 이 9개

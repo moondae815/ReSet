@@ -2566,9 +2566,19 @@ namespace ReSet.Core.Services
         /// 바로 다음 구간(다음 `## `/`### ` 헤딩 전까지)으로 좁힌다. 스키마 대응
         /// 표·UPDATE 매핑 표 같은 다른 표에도 숫자 셀(길이, 정밀도 등)이 있어, 문서
         /// 전체를 훑으면 그 우연이 거짓 통과를 만들 수 있다 - 특히 라인 번호가
-        /// 작을 때 위험이 크다. 표 자체의 스키마(문장·라인·대상·술어·기준일·조인 키)
-        /// 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지 않으므로(문장 칸은
-        /// "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은 낮게 남는다.
+        /// 작을 때 위험이 크다. 표 자체의 스키마(문장·라인·대상·술어·기준일·조인 키·
+        /// GROUP BY·ORDER BY) 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지
+        /// 않으므로(문장 칸은 "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은
+        /// 낮게 남는다.
+        ///
+        /// [GROUP BY 항 - Task 8] 값 대조는 GroupByColumns가 비어 있지 않을 때만
+        /// 요구한다. "(없음)"은 `조인 키` 칸에도 나오는 토큰이라, 값이 비었을 때도
+        /// 무조건 대조하면 GROUP BY 칸과 조인 키 칸이 둘 다 "(없음)"인 우연이 검사를
+        /// 자동으로 통과시킨다(제약 2). ORDER BY는 이 표 대조와 별도인
+        /// CheckOrderByExpressions가 맡지만, GROUP BY 값은 항상 단순 컬럼 식별자의
+        /// 나열이라(임의 식이 아니다 - DmlScopeFact.GroupByColumns 문서) ORDER BY처럼
+        /// 이스케이프 왕복을 거친 구간 텍스트 Contains가 아니라, 이 함수의 기존
+        /// 라인 대조와 같은 방식(같은 행의 셀 정확 일치)으로 충분하다.
         /// </summary>
         private static void CheckDmlScopeTable(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -2604,19 +2614,50 @@ namespace ReSet.Core.Services
             foreach (var fact in expectations.DmlScopeFacts)
             {
                 var lineToken = fact.Line.ToString();
-                var present = rowLines.Any(
-                    row => row.Split('|').Any(cell => cell.Trim() == lineToken));
-                if (present) continue;
+                var matchingRows = rowLines
+                    .Where(row => row.Split('|').Any(cell => cell.Trim() == lineToken))
+                    .ToList();
 
-                var message =
-                    $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
-                    + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
-                result.Errors.Add(message);
+                if (matchingRows.Count == 0)
+                {
+                    var message =
+                        $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
+                        + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.DmlScopeTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Operation} @ line {fact.Line}"
+                    });
+                    continue;
+                }
+
+                // GROUP BY 항 - Task 8 제약 2. "(없음)" 토큰은 `조인 키` 칸에도 나오는
+                // 값이라, GroupByColumns가 비고 조인 키도 비면(UPDATE·DELETE는 항상
+                // GroupByColumns가 비어 있다) 두 칸이 같은 "(없음)"이 된다. cells.Any(c =>
+                // c == token) 식의 대조를 무조건 요구로 걸면 그 우연한 일치가 검사를
+                // 무력화한다(CheckLockHints·CheckExecutionSemantics·CheckCaseBranches가
+                // 쓰는 다중 칸 AND 대조와 같은 함정). 그래서 GroupByColumns가 비어
+                // 있지 않을 때만, 그것도 line 토큰이 이미 맞은 같은 행 안에서 값을
+                // 요구한다 - 다른 행의 우연한 등장이 통과를 만들지 않는다.
+                if (fact.GroupByColumns.Count == 0) continue;
+
+                var groupByToken = string.Join(", ", fact.GroupByColumns);
+                var groupByPresent = matchingRows.Any(
+                    row => row.Split('|').Any(cell => cell.Trim() == groupByToken));
+                if (groupByPresent) continue;
+
+                var groupByMessage =
+                    $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 GROUP BY 값(`{groupByToken}`)이 "
+                    + "없습니다. GROUP BY 칸은 기계가 확정한 것이므로 그룹화 키를 그대로 옮겨야 합니다 - "
+                    + "\"(없음)\"으로 적거나 일부만 옮기면 원본 그룹화 의미가 소실됩니다.";
+                result.Errors.Add(groupByMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
-                    Message = message,
-                    RawContext = $"{fact.Operation} @ line {fact.Line}"
+                    Message = groupByMessage,
+                    RawContext = $"{fact.Operation} @ line {fact.Line} GROUP BY {groupByToken}"
                 });
             }
         }
