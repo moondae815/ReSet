@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using ReSet.Core.Models;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -153,6 +154,41 @@ END";
 
             var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
             Assert.Contains("money", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_CastSpanningMultipleLines_TargetMatchesRenderedTableCell()
+        {
+            // I3 수정 라운드: MechanicalValidator.CheckExecutionSemantics는 렌더되지 않은
+            // fact.Target(=SpecExpectations가 그대로 옮긴 ExecutionSemanticFact.Target)을
+            // 렌더된(개행이 공백으로 접힌) 표 셀 문자열과 원문 그대로(==) 비교한다
+            // (MechanicalValidator.cs:3494-3503). Target에 개행이 남아 있으면 렌더
+            // 파이프라인(MarkdownTableCellCodec.Escape)을 거친 셀과 영원히 일치하지
+            // 않는다 - 이 산술식은 다섯 종류 중 유일하게 통째로 Target에 실려 줄바꿈
+            // 확률이 가장 높다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_intTxAmt MONEY) RETURNS INT AS
+BEGIN
+    DECLARE @v_intRate MONEY
+    SET @v_intRate = 0.015
+    RETURN CAST(
+        @pi_intTxAmt
+        *
+        @v_intRate
+        AS INT)
+END";
+
+            var fact = Assert.Single(ExpressionTypePathExtractor.Extract(ddl, NoColumns));
+
+            Assert.DoesNotContain("\n", fact.Expression);
+            Assert.DoesNotContain("\r", fact.Expression);
+
+            // 렌더러가 실제로 거치는 변환(개행 접기 + | 이스케이프)을 그대로 적용한 뒤,
+            // L1이 쓰는 셀 분리기로 되돌려 실제 렌더된 셀과 fact.Target(=Expression)이
+            // 같은지 확인한다 - 둘 중 하나만 보면 이 결함이 또 숨는다.
+            var renderedRow = $"| {MarkdownTableCellCodec.Escape(fact.Expression)} |";
+            var renderedCell = MarkdownTableCellCodec.SplitRow(renderedRow)[1];
+            Assert.Equal(fact.Expression, renderedCell);
         }
 
         [Fact]

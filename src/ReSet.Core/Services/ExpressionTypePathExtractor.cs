@@ -177,7 +177,27 @@ namespace ReSet.Core.Services
                     return;
                 }
 
-                Facts.Add(new TypePathFact(node.StartLine, CaseBranchExtractor.TextOf(node), sentence));
+                Facts.Add(new TypePathFact(node.StartLine, TargetText(node), sentence));
+            }
+
+            /// <summary>
+            /// I3 수정 라운드(리뷰): CAST 식은 다섯 종류 중 유일하게 산술식 통째가
+            /// `Target`에 실려 여러 줄에 걸칠 확률이 가장 높다. `MechanicalValidator.
+            /// CheckExecutionSemantics`는 렌더되지 않은 이 `Target`을, 렌더 파이프라인
+            /// (`AiService.EscapeTableCell` → `MarkdownTableCellCodec.Escape`)을 거친 뒤
+            /// 다시 셀로 쪼갠(`MarkdownTableCellCodec.SplitRow`) 문자열과 `==`로 원문 그대로
+            /// 비교한다(MechanicalValidator.cs:3494-3503). `Escape`가 접는 것은 `\r\n`·`\n`·
+            /// `\r` 세 가지뿐이고 연속 공백은 접지 않으며, `SplitRow`가 되돌리는 것은 `\|`
+            /// 뿐이다 - 그래서 여기서 접어야 할 것도 그 세 가지뿐이다(추측이 아니라
+            /// MarkdownTableCellCodec.cs 실측). 이걸 접지 않으면 원본 그대로 베껴 옮겨도
+            /// 영원히 일치하지 않는다.
+            /// </summary>
+            private static string TargetText(TSqlFragment node)
+            {
+                return CaseBranchExtractor.TextOf(node)
+                    .Replace("\r\n", " ")
+                    .Replace("\n", " ")
+                    .Replace("\r", " ");
             }
 
             /// <summary>
