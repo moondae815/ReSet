@@ -3165,6 +3165,10 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
    - Node labels containing '@' must be wrapped in double quotes, with the identifier written exactly as in the source. Flag any paraphrased or spelled-out '@' (e.g. 'at ERROR' for '@@ERROR').
    - Do NOT penalize the presence of `[AI 추론 보완: ...]` tags in the descriptions. This is a REQUIRED system tag for metadata cleansing SQL generation and its presence is expected and correct.
 
+"
+                + MachineConfirmedTables.CriticExemptionBlock
+                + @"
+
 [Defect Judgment]
 - If any of the 5 criteria scores less than 8 points, or if any of the 5 mandatory H2 headers (## 개요, ## 파라미터 목록, ## CRUD 분석, ## 로직 흐름 요약, ## 비즈니스 흐름 시각화) is missing, mark HasDefects as true.
 
@@ -3236,6 +3240,10 @@ Review the generated specification markdown against the source metadata and sour
 3. Return Contract (ScoreInterface): Verify scalar return type or TVF result schema, parameters, nullability when known, and output derivations.
 4. Side Effects and Constraints (ScoreException): Verify observable side effects, data access constraints, and prerequisite assumptions are accurately described.
 5. Diagram Syntax and Readability (ScoreReadability): Verify Mermaid syntax and readability.
+
+"
+                + MachineConfirmedTables.CriticExemptionBlock
+                + @"
 
 [Defect Judgment]
 - Mark HasDefects true when any criterion is below 8 or a mandatory H2 header is missing.

@@ -34,6 +34,21 @@ namespace ReSet.Core.Services
         public const string TypePathKind = "식 타입 경로";
 
         /// <summary>
+        /// 종류 칸의 전체 목록. Critic 면제 블록이 이 순서 그대로 열거하므로
+        /// (MachineConfirmedTables.CriticExemptionBlock) 순서를 흔들면 프롬프트
+        /// 접두사 캐시가 깨진다. 새 종류를 더하면 여기에도 넣어야 한다
+        /// (`MachineConfirmedTablesTests.EveryExecutionSemanticKindConstant_IsListedInAllKinds`).
+        /// </summary>
+        public static readonly IReadOnlyList<string> AllKinds = new[]
+        {
+            DatabasePlacementKind,
+            AggregateAssignmentKind,
+            RowCountKind,
+            CursorKind,
+            TypePathKind
+        };
+
+        /// <summary>
         /// 컬럼명 → 데이터 타입 사전. ExpressionTypePathExtractor(Task 9)가 잎 타입을
         /// 판정할 때 쓴다. 같은 컬럼명이 테이블마다 타입이 다르면 판정할 수 없으므로
         /// "(모호)"로 표시해 그 CAST 행이 통째로 생략되게 한다.

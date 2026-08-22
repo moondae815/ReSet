@@ -235,6 +235,48 @@ namespace ReSet.Core.Tests
             return sb.ToString();
         }
 
+        // [2026-08-22 재생성 실측] Critic이 기계 확정 표를 세 번 공격했고 세 번 다
+        // 틀렸다 - DB 배치를 "지어낸 것", money -> int를 "절사", 건너뛴 IF가
+        // "@@ROWCOUNT를 리셋하지 않는다"고 단정했다. 뒤 둘은 로컬 SQL Server 2022로
+        // 실측해 표가 옳음을 확인했다(CAST(CAST(12.5 AS money) AS int) = 13, 앞 SELECT가
+        // 2행을 낸 뒤 건너뛴 IF 다음 @@ROWCOUNT = 0).
+        //
+        // Critic은 DDL 본문만 보므로 실행해야 아는 사실의 근거를 못 찾고 환각으로
+        // 판정한다. 그러면 L1(CheckExecutionSemantics)이 원문 복원을 요구해 교착이 되고
+        // 재시도가 6/6까지 소진된다. Actor 쪽에만 표 계약이 있고 Critic 쪽이 그것을
+        // 물려받지 못한 자리였다 - 정적 리뷰로는 안 보이고 재생성을 돌려야 드러난다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_ProcedurePrompt_ExemptsMachineConfirmedTablesFromHallucinationJudgment()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.ReviewSpecificationAsync(ProbeSpDef(Mapping()), "## 개요");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            // 블록의 내용 계약은 MachineConfirmedTablesTests가 본다. 여기서는 그 단일
+            // 출처가 이 갈래의 프롬프트에 실렸는지만 확인해, 문구가 두 벌로 갈라질
+            // 자리를 없앤다. 앞뒤 빈 줄까지 함께 고정하는 것은, 리터럴을 쪼개 이어
+            // 붙이는 조립이라 빈 줄이 조용히 사라져 블록 머리글이 앞 절에 붙어버릴 수
+            // 있기 때문이다(실제로 한 번 그렇게 됐다).
+            Assert.Contains("\n\n" + MachineConfirmedTables.CriticExemptionBlock + "\n\n", body);
+        }
+
+        // 함수 갈래는 별도 시스템 프롬프트를 쓴다. 관측된 Critic 공격 세 건이 전부
+        // 함수에서 났으므로(UF_GET_INCVTAXRATE, UF_Get_CLComm4MobileCo,
+        // UF_GET_COMM4CLIENT) 이 갈래가 빠지면 수정이 정작 필요한 자리에 닿지 않는다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_FunctionPrompt_ExemptsMachineConfirmedTablesFromHallucinationJudgment()
+        {
+            var (service, handler) = CreateProbe();
+            var functionDef = ProbeSpDef(Mapping());
+            functionDef.ObjectType = CodeObjectType.Function;
+
+            await service.ReviewSpecificationAsync(functionDef, "## 개요");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("\n\n" + MachineConfirmedTables.CriticExemptionBlock + "\n\n", body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_WithUpdateMappings_ShouldPrefillTheTable()
         {
