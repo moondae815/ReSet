@@ -49,8 +49,10 @@ namespace ReSet.Core.Services
     /// 기준일로 좁혀지는가"인데 독립 SELECT에는 갱신 대상이 없다. 그 문장의 WHERE가
     /// 기준일을 쓰더라도 false이므로, 이 칸을 독립 SELECT 행에서 "기준일을 쓰지
     /// 않는다"로 읽어서는 안 된다 - 판정 자체가 없었다는 뜻이다. 그 구분을 "—"로
-    /// 낼지는 렌더러가 정한다(Target과 같은 분업). 오늘 AiService는 아직 그 갈래가
-    /// 없어 SELECT 행에도 "아니오"를 낼 것이다 - Task 7이 고칠 자리다.
+    /// 낼지는 렌더러가 정한다(Target과 같은 분업). 그 갈래는 2026-08-22 축 A 재감사 ③
+    /// Task 7이 넣었다 - AiService는 독립 SELECT 행에 "—"를 낸다
+    /// (BuildDmlScopeTableLines의 <c>isStandaloneSelect ? "—"</c>). 이 문단은 그때까지
+    /// "아직 그 갈래가 없어 SELECT 행에도 '아니오'를 낼 것이다"라고 적혀 있었다.
     /// </param>
     /// <param name="JoinKeys">
     /// 테이블을 잇는 컬럼 이름. ANSI JOIN의 ON 조건과, 콤마로 나열한 옛 스타일
@@ -306,8 +308,9 @@ namespace ReSet.Core.Services
     /// 이 자리는 "세 표가 같은 문장 집합을 같은 번호로 가리켜야 나란히 읽을 수 있다"고
     /// 적혀 있었지만, 같은 재감사가 그 대칭을 의도적으로 깼다. 지금은 넷이 갈린다 -
     /// 이 표와 집합 술어 표는 세 DML 문장만, DML 범위 표는 거기에 독립 SELECT를 더해
-    /// 넷, 잠금 힌트 표는 `IF` 술어까지 더해 다섯이다. 그래서 뒤의 두 표에는
-    /// `SELECT n`·`IF n` 행이 있고 앞의 두 표에는 대응하는 행이 아예 없다. 이 비대칭은
+    /// 넷, 잠금 힌트 표는 `IF` 술어까지 더해 다섯이다. 그래서 DML 범위 표에는
+    /// `SELECT n` 행이, 잠금 힌트 표에는 `SELECT n`과 `IF n` 행이 있고, 앞의 두 표에는
+    /// 대응하는 행이 아예 없다(`IF n`은 잠금 힌트 표에만 있다). 이 비대칭은
     /// 계획서의 전역 제약이 못 박은 것이지 결함이 아니다 - 잠금과 스캔 범위는 DML 밖
     /// 문장에서도 대상 행을 가르지만, 집합 술어와 함수 호출을 그 문장까지 넓히는 것은
     /// 이 회차의 범위가 아니었다. 표를 나란히 읽을 때 `SELECT 1` 행이 한쪽에만 있다고
@@ -316,8 +319,9 @@ namespace ReSet.Core.Services
     /// <param name="StatementOrdinal">
     /// 연산 종류별 · 1부터인 문장 번호. 채번이 연산 이름별로 독립이라, UPDATE·DELETE·
     /// INSERT 번호는 네 표(이 표 · 집합 술어 · DML 범위 · 잠금 힌트)에서 여전히 같은
-    /// 문장을 가리킨다 - 뒤의 두 표에 `SELECT n`·`IF n` 행이 늘어도 DML 카운터는
-    /// 밀리지 않는다(SetPredicateFact.StatementOrdinal 문서 참고). 위 Operation 문서가
+    /// 문장을 가리킨다 - 뒤의 두 표에 `SELECT n`(잠금 힌트는 `IF n`도) 행이 늘어도
+    /// DML 카운터는 밀리지 않는다(SetPredicateFact.StatementOrdinal 문서 참고).
+    /// 위 Operation 문서가
     /// 적은 대로 문장 집합 자체는 표마다 다르다.
     /// </param>
     /// <param name="Line">호출식이 있는 원본 줄 번호.</param>

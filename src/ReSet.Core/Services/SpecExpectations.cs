@@ -286,13 +286,19 @@ namespace ReSet.Core.Services
                 && sessionOptions.Count == 0
                 && dmlScopeFacts.Count == 0
                 && derivedColumns.Count == 0
-                // 오늘은 중복항이다 - ExtractSetPredicates와 Extract가 같은 세 문장만
-                // 방문하므로 setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다.
+                // 오늘은 중복항이다 - ExtractSetPredicates가 방문하는 세 문장
+                // (UPDATE·DELETE·INSERT)이 Extract가 방문하는 네 문장의 부분집합이므로,
+                // setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다. Task 8 이전에는
+                // 이 자리가 "같은 세 문장만 방문하므로"라고 적혀 있었는데, 2026-08-22
+                // 축 A 재감사 ③의 Task 1이 Extract에 독립 SELECT를 더해 그 근거가
+                // 낡았다 - 결론은 그대로 서지만 이유가 부분집합 관계로 바뀌었다.
                 // From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이 그 불변식을
                 // 지키고, 깨지는 날 이 항이 실제로 필요해진다.
                 && setPredicates.Count == 0
                 // setPredicates와 같은 이유로 오늘은 중복항이다 - ExtractFunctionCalls도
-                // 같은 세 문장만 방문하므로 호출이 있으면 dmlScopeFacts도 비지 않는다.
+                // 같은 세 문장만 방문하고, 그 셋은 Extract가 보는 네 문장의 부분집합이라
+                // 호출이 있으면 dmlScopeFacts도 비지 않는다(부분집합으로 고쳐 적은 이유는
+                // 위 항의 주석 참고).
                 // 그래도 잇는다: 위 주석이 경고하듯 항을 빠뜨리면 그 검사가 한 번도
                 // 돌지 않고 스위트는 초록으로 남는다.
                 && referencedFunctionCalls.Count == 0
@@ -309,9 +315,13 @@ namespace ReSet.Core.Services
                 // 문장 노드가 아니라 QueryExpression이라 독립 SELECT로도 잡히지 않는다.
                 // ExtractLockHints_ControlFlowPredicate_ShouldBeNumberedAsIf의 DDL이 정확히
                 // 그 모양이고, 코퍼스 실물은 INS_EXTRA:31의 -9 차단 게이트 스캔이다.
-                // 즉 이 항은 이제 진짜로 일한다 - 지우면 그런 객체에서 From이 null을
-                // 돌려주고 CheckLockHints가 한 번도 돌지 않는다. "중복항이니 정리하자"는
-                // 리팩터가 이 항을 지우는 것이 이 파일에서 가장 비싼 실수다.
+                // 즉 이 항은 이제 진짜로 일한다 - 이웃 항들과 같은 단서가 붙는다:
+                // 재료가 이것 하나뿐인 객체에서 이 항을 지우면 From이 null을 돌려주고
+                // CheckLockHints가 한 번도 돌지 않는다(AND 사슬이므로 다른 재료가
+                // 함께 비어 있을 때의 이야기다 - 위 INS_EXTRA는 다른 재료도 지녀
+                // 그 자체로는 이 조건을 만족하지 않는다. 잠금 힌트만 남는 객체가
+                // 성립한다는 것이 요점이다). "중복항이니 정리하자"는 리팩터가 이 항을
+                // 지우는 것이 이 파일에서 가장 비싼 실수다.
                 && lockHints.Count == 0
                 // objectDeclaration과 같은 이유로 중복항이 아니다 - DB 배치 행은
                 // DML이 하나도 없는 객체에서도 난다. 이 항을 빠뜨리면 재료가 이것

@@ -123,7 +123,8 @@
     *   파라미터·컬럼 제약은 DDL의 타입·기본값만 근거로 쓰고 임의의 `NOT NULL`을 만들지 마십시오. 스키마 덤프는 `SchemaPromptColumnSelector`가 고른 참조·키·인덱스 컬럼으로 제한하십시오(`SchemaPromptColumnSelectorTests`).
     *   L1은 기계 확정 표의 셀 수, `### INSERT 대상 테이블:` 절 스코프 안 매핑 표 테이블명 표기(Ordinal), 같은 줄 앵커가 있는 널 허용 주장을 함께 봅니다. 프롬프트 스키마 표의 컬럼 필터는 INSERT·UPDATE 대상 컬럼도 입력원으로 삼고, `DB 배치` 문장은 소속 DB 안/밖을 가릅니다(`architecture.md §4.9`).
     *   「집합 술어」 표의 행 단위는 최상위 `AND` 항이고, 마지막 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 — 요약·번역·생략하지 마십시오(`architecture.md §4.9`).
-    *   「잠금 힌트」·「DML 범위」 표의 문장 칸은 `SELECT n`·`IF n`도 담습니다. 표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오(`architecture.md §4.9`).
+    *   「잠금 힌트」 표의 문장 칸은 `SELECT n`·`IF n`도 담고 범위 칸에 `하위 질의`가 있습니다. 「DML 범위」 표는 `SELECT n`까지만 담고 범위 칸이 없습니다(`architecture.md §4.9`).
+    *   표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오. 표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽으십시오(`architecture.md §4.9`).
     *   통합 배치 계획은 다음 5대 제약을 지킵니다.
         1. SNAPSHOT 격리에서 `WITH (NOLOCK)`을 사용하지 않습니다.
         2. INSERT-only 롤백은 Shadow 백업 대신 `ROLLBACK TRAN` 또는 `DELETE WHERE [ChunkKey]` 보상으로 설계합니다.
