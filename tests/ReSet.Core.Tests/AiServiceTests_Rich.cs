@@ -952,10 +952,15 @@ END"
 
             Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, body);
             // Column 칸은 원문 표기(한정자 포함) 그대로다 - 픽스처가 A.PGName NOT IN
-            // 이므로 A.PGName이다. Line은 UPDATE 문장이 시작하는 실제 줄(5) -
-            // @" 다음 줄바꿈 때문에 픽스처의 1번 줄은 빈 줄이라 CREATE PROCEDURE가
-            // 2번 줄부터 시작한다.
-            Assert.Contains("| UPDATE 1 | 5 | A.PGName | NOT IN | 최상위 | 3 |", body);
+            // 이므로 A.PGName이다.
+            //
+            // [Line이 5에서 8로 바뀐 이유 - 2026-08-22 축 A 재감사 ③ Task 5, 설계 §4 C]
+            // 라인 칸이 문장 시작줄이 아니라 그 술어 항 자신의 줄이 됐다
+            // (SetPredicateFact.Line 문서 참고). 이 픽스처를 세어 보면 @" 다음 줄바꿈
+            // 때문에 1번 줄이 빈 줄이고, 2 CREATE PROCEDURE · 3 AS · 4 BEGIN ·
+            // 5 UPDATE · 6 FROM · 7 WHERE · 8 AND A.PGName NOT IN (...) 이다.
+            // 그래서 UPDATE 문장의 시작줄은 여전히 5지만 이 항의 줄은 8이다.
+            Assert.Contains("| UPDATE 1 | 8 | A.PGName | NOT IN | 최상위 | 3 |", body);
             Assert.Contains("'SSGPayCard'", body);
             Assert.Contains("'KakaoCard'", body);
         }

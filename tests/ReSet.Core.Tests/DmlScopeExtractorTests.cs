@@ -1169,6 +1169,106 @@ END";
             Assert.Equal("최상위", fact.Scope);
         }
 
+        // 분해되는 항은 지금처럼 컬럼·연산·원소를 채우면서 원문 칸도 함께 진다
+        // (계획 Task 5 · 설계 §4 C). 분해가 원문을 대체하는 것이 아니라 둘이 나란히
+        // 실려야, 독자가 표의 분해를 원문과 대조할 수 있다.
+        [Fact]
+        public void ExtractSetPredicates_DecomposableTerm_ShouldCarryBothDecompositionAndText()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.PGNAME IN ('KFTC', 'YELOPAY')
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("A.PGNAME", fact.Column);
+            Assert.Equal("IN", fact.Operator);
+            Assert.Equal(new[] { "'KFTC'", "'YELOPAY'" }, fact.Literals);
+            Assert.Equal("A.PGNAME IN ('KFTC', 'YELOPAY')", fact.PredicateText);
+        }
+
+        // 리터럴 우변 비교(`=`·`<>`)도 같은 원문 칸을 진다 - 이 갈래는 InPredicate가
+        // 아니라 BooleanComparisonExpression에서 사실이 나므로, IN 테스트가 통과해도
+        // 이 자리는 따로 비어 있을 수 있다.
+        [Fact]
+        public void ExtractSetPredicates_ComparisonTerm_ShouldCarryItsText()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.CommissionCancelFlag = 1
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("=", fact.Operator);
+            Assert.Equal("A.CommissionCancelFlag = 1", fact.PredicateText);
+        }
+
+        // 원문 칸은 CollapseWhitespace를 거친다 - 개행이 든 값은 어떤 산출물도
+        // 만족시킬 수 없는 요구가 된다(CollapseWhitespace 문서, 좌변이 이미 같은 이유로
+        // 접힌다). 원본 코퍼스의 긴 IN 목록은 실제로 여러 줄에 걸쳐 쓰여 있다.
+        [Fact]
+        public void ExtractSetPredicates_MultiLineTerm_ShouldCollapseWhitespaceInText()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.PGNAME IN ('KFTC',
+                        'YELOPAY')
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.DoesNotContain("\n", fact.PredicateText);
+            Assert.Equal("A.PGNAME IN ('KFTC', 'YELOPAY')", fact.PredicateText);
+        }
+
+        // 라인은 문장 시작줄이 아니라 그 항 자신의 줄이다(계획 Task 5 · 설계 §4 C).
+        // 문장 줄을 쓰면 EXCEPTION_PROC의 UPDATE 7처럼 한 문장의 술어가 전부 210으로
+        // 찍혀 독자가 원문에서 어느 항인지 못 찾는다. 잠금 힌트 표가 같은 이유로 이미
+        // 참조 노드 자신의 줄을 쓴다
+        // (ExtractLockHints_ReferencesOnDifferentLines_EachReportsItsOwnLine).
+        [Fact]
+        public void ExtractSetPredicates_TermsOnDifferentLines_EachReportsItsOwnLine()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  A.PGNAME IN ('KFTC')
+    AND    A.UseState = 0
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var inFact = Assert.Single(facts, f => f.Operator == "IN");
+            var equalsFact = Assert.Single(facts, f => f.Operator == "=");
+
+            // UPDATE 키워드는 5행, IN 항은 8행, 등호 항은 9행이다.
+            Assert.Equal(8, inFact.Line);
+            Assert.Equal(9, equalsFact.Line);
+            // 문장 줄로 되돌아가면 두 행이 모두 5가 된다 - 그 회귀를 직접 막는다.
+            Assert.DoesNotContain(facts, f => f.Line == 5);
+        }
+
         [Fact]
         public void ExtractFunctionCalls_ShouldNumberStatementsLikeDmlScopeTable()
         {

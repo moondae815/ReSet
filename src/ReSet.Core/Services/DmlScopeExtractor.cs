@@ -155,7 +155,21 @@ namespace ReSet.Core.Services
     }
 
     /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
-    /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
+    /// <param name="Line">
+    /// 원본 DDL에서 <b>이 술어 항 자신</b>이 시작하는 줄 번호(1부터) - 문장의 시작줄이
+    /// 아니다.
+    ///
+    /// [문장 줄에서 항의 줄로 내린 이유 - 2026-08-22 축 A 재감사 ③ Task 5, 설계 §4 C]
+    /// 예전엔 문장 조각의 StartLine을 그대로 실었다. 그래서 한 문장의 술어가 전부 같은
+    /// 줄로 찍혔다 - UP_UTIL_SETTLE_EXCEPTION_PROC의 UPDATE 7은 WHERE가 여러 줄에 걸쳐
+    /// 있는데 그 술어 행이 모두 210이었고, "문장" 칸이 이미 주는 정보를 되풀이할 뿐
+    /// 독자가 어느 항인지 원문에서 찾을 수 없었다. LockHintFact.Line이 같은 이유로 이미
+    /// 참조 노드 자신의 줄을 쓴다(수정 라운드 1 실물 검증) - 그 선례를 따른다.
+    ///
+    /// [L1의 행 키에 미치는 영향] MechanicalValidator.CheckSetPredicates가
+    /// (Operation, Line, Column, Scope)로 행을 묶는다. 라인이 항마다 갈리므로 키는
+    /// 더 유일해진다 - 같은 문장의 서로 다른 컬럼이 이제 라인부터 다르다.
+    /// </param>
     /// <param name="Column">
     /// IN 좌변의 원문 표기 그대로 - 한정자가 있으면 한정자를 포함한다(`A.USESTATE`),
     /// 없으면 컬럼 이름만이다(`UseState`). 마지막 식별자 조각만 담지 않는 이유는
@@ -209,6 +223,27 @@ namespace ReSet.Core.Services
     /// 시점에, InsertSource의 종류(VALUES/SELECT)와 무관하게 정확히 한 번만 늘린다 -
     /// DmlScopeVisitor가 VALUES 원천의 INSERT에도 사실을 하나 내는 것과 대칭이다.
     /// </param>
+    /// <param name="PredicateText">
+    /// 이 사실을 낸 술어 항의 원문을 한 줄로 접어 담는다
+    /// (`A.PGNAME IN ('KFTC', 'YELOPAY')`).
+    ///
+    /// [왜 분해와 원문을 함께 싣는가 - 2026-08-22 축 A 재감사 ③ Task 5, 설계 §4 C]
+    /// 컬럼·연산·리터럴 칸은 분해된 결과라서, 분해가 담지 못한 것은 표에서 흔적도
+    /// 없이 사라진다. UP_UTIL_SETTLE_COMM_UPD:78의
+    /// `(A.UseState &lt;&gt; 1 OR (A.UseState = 1 AND A.YMD = A.AYMD))`이 실측 사례다 -
+    /// 분해된 두 행만 나란히 실려 AND로 읽히고, 그렇게 읽으면 모순(공집합)이다.
+    /// 원문 칸이 있으면 독자가 분해를 원문과 대조할 수 있고, 분해되지 않는 항도
+    /// 이 칸 하나로 표에 자리를 얻는다.
+    ///
+    /// 개행을 접는 이유는 좌변(Column)이 이미 접히는 이유와 같다 - 프롬프트 쪽은
+    /// EscapeTableCell이 개행을 공백으로 접어 싣는데 검증기가 접지 않은 원문과
+    /// 대조하면, 개행이 있는 값은 어떤 산출물도 만족시킬 수 없는 요구가 된다
+    /// (CollapseWhitespace 문서 참고). 원본 코퍼스의 긴 IN 목록은 실제로 여러 줄에
+    /// 걸쳐 쓰여 있다.
+    ///
+    /// [기본값이 빈 문자열인 이유] 이 재료를 손으로 조립하는 기존 테스트가 인자를
+    /// 생략해도 깨지지 않게 한다. 추출기 경로는 언제나 값을 채운다.
+    /// </param>
     public sealed record SetPredicateFact(
         string Operation,
         int Line,
@@ -217,7 +252,8 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> Literals,
         int StatementOrdinal = 0,
         string Operator = "IN",
-        string Scope = "최상위");
+        string Scope = "최상위",
+        string PredicateText = "");
 
     /// <summary>
     /// "이 문장이 어느 사용자 함수를 부르는가"를 담는다.
@@ -1456,7 +1492,7 @@ namespace ReSet.Core.Services
 
             private void Collect(string operation, TSqlFragment statement, WhereClause? where, int ordinal)
             {
-                CollectFrom(operation, statement, where?.SearchCondition, ordinal, TopLevelScope);
+                CollectFrom(operation, where?.SearchCondition, ordinal, TopLevelScope);
 
                 // 파생 테이블 안의 필터도 대상 행 집합을 좁힌다 - 2026-08-19 축 A 감사의
                 // 🟠 4건 중 둘(COMM_UPD:243, EXCEPTION_PROC:375)이 이 자리였다. 최상위
@@ -1466,7 +1502,7 @@ namespace ReSet.Core.Services
 
                 foreach (var (alias, searchCondition) in derived.Tables)
                 {
-                    CollectFrom(operation, statement, searchCondition, ordinal, $"파생 테이블 {alias}");
+                    CollectFrom(operation, searchCondition, ordinal, $"파생 테이블 {alias}");
                 }
             }
 
@@ -1501,20 +1537,25 @@ namespace ReSet.Core.Services
                 }
             }
 
+            /// <summary>
+            /// 한 검색 조건에서 모은 술어를 사실로 옮긴다. 문장 조각을 받지 않는 이유는
+            /// 라인이 더 이상 문장 시작줄이 아니기 때문이다 - 각 사실의 라인은 그 항
+            /// 자신의 줄이다(SetPredicateFact.Line 문서 참고).
+            /// </summary>
             private void CollectFrom(
-                string operation, TSqlFragment statement, BooleanExpression? searchCondition,
-                int ordinal, string scope)
+                string operation, BooleanExpression? searchCondition, int ordinal, string scope)
             {
                 if (searchCondition == null) return;
 
                 var top = new TopLevelPredicateCollector();
                 searchCondition.Accept(top);
 
-                foreach (var (column, op, literals) in top.SetPredicates)
+                foreach (var (column, op, literals, term) in top.SetPredicates)
                 {
                     Facts.Add(new SetPredicateFact(
-                        operation, statement.StartLine, column,
-                        op == "NOT IN", literals, ordinal, op, scope));
+                        operation, term.StartLine, column,
+                        op == "NOT IN", literals, ordinal, op, scope,
+                        CollapseWhitespace(TextOf(term))));
                 }
             }
         }
@@ -1630,11 +1671,15 @@ namespace ReSet.Core.Services
             public List<string> JoinKeys { get; } = new();
 
             /// <summary>
-            /// 최상위 IN/NOT IN의 리터럴 집합. Column은 좌변 컬럼 이름, IsNegated는
-            /// NOT 여부, Literals는 원문 그대로다. Operation과 Line은 이 수집기가
-            /// 모르므로(문장 문맥은 호출부가 안다) 호출부가 채운다.
+            /// 최상위 IN/NOT IN·리터럴 비교의 집합 사실. Column은 좌변 표기, Operator는
+            /// 연산, Literals는 원문 그대로다. Term은 그 사실을 낸 술어 노드 자신이다 -
+            /// 호출부가 여기서 라인(<see cref="SetPredicateFact.Line"/>)과 원문
+            /// (<see cref="SetPredicateFact.PredicateText"/>)을 얻는다. 노드를 그대로
+            /// 넘기고 호출부가 접는 이유는, 이 수집기가 라인·원문 표기 규칙(어느 줄을
+            /// 쓸지, 공백을 접을지)을 알 필요가 없기 때문이다 - 문장 문맥과 표기 규칙은
+            /// 둘 다 호출부의 몫이다.
             /// </summary>
-            public List<(string Column, string Operator, List<string> Literals)> SetPredicates { get; } = new();
+            public List<(string Column, string Operator, List<string> Literals, TSqlFragment Term)> SetPredicates { get; } = new();
 
             public override void ExplicitVisit(ScalarSubquery node) { }
 
@@ -1737,7 +1782,7 @@ namespace ReSet.Core.Services
                     literals.Add(TextOf(literal));
                 }
 
-                SetPredicates.Add((column, node.NotDefined ? "NOT IN" : "IN", literals));
+                SetPredicates.Add((column, node.NotDefined ? "NOT IN" : "IN", literals, node));
             }
 
             /// <summary>
@@ -1860,7 +1905,7 @@ namespace ReSet.Core.Services
                 var column = LeftSideText(node.FirstExpression);
                 if (column == null) return;
 
-                SetPredicates.Add((column, op, new List<string> { TextOf(literal) }));
+                SetPredicates.Add((column, op, new List<string> { TextOf(literal) }, node));
             }
 
             /// <summary>
