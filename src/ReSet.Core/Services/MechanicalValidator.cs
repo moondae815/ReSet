@@ -54,6 +54,8 @@ namespace ReSet.Core.Services
         // 기계 확정 표가 GFM 표로 렌더링되지 않는 형태로 옮겨졌을 때의 L1 앵커.
         // 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
         MachineTableShapeBroken,
+        // INSERT 매핑 표의 테이블명 표기 어긋남의 L1 앵커.
+        InsertMappingTableNameMismatch,
         General
     }
 
@@ -143,6 +145,7 @@ namespace ReSet.Core.Services
                 if (expectations != null)
                 {
                     CheckUpdateMappings(cleansed, expectations, result);
+                    CheckInsertMappingTableNames(cleansed, expectations, result);
                     CheckSchemaClaims(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
@@ -1852,6 +1855,75 @@ namespace ReSet.Core.Services
                         $"UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표에 다음 컬럼이 누락되었습니다: " +
                         string.Join(", ", missing));
                 }
+            }
+        }
+
+        /// <summary>
+        /// INSERT 매핑 표의 테이블명 칸이 파서가 확정한 대상 테이블과 표기까지 같은지 본다.
+        ///
+        /// [왜 Ordinal인가] 실측된 오타가 대소문자만 다른 경우다(TSetTleByOUT 대
+        /// TSettleByOUT, 2026-08-22 축 A 재감사). 대소문자를 무시하면 이 검사가
+        /// 잡아야 할 것을 정확히 못 잡는다. 실행은 무해해도 매핑 표를 식별자 원천으로
+        /// 삼는 이행·grep·자동 대조가 그 행에서 어긋난다.
+        ///
+        /// [왜 말단 이름으로 비교하는가] 명세서가 3부·2부·비한정 어느 표기를 쓸지는
+        /// 문서마다 다르다. 말단 이름이 같은데 표기 폭만 다른 것은 결함이 아니므로,
+        /// 말단 이름이 대소문자까지 같은지만 본다. 귀속이 불가능하면(말단 이름이
+        /// 어느 대상과도 안 맞으면) 침묵한다 - 잘못 지목한 오류는 재생성으로
+        /// 고칠 수 없다(CheckSchemaClaims의 정책).
+        /// </summary>
+        private static void CheckInsertMappingTableNames(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.InsertTargetTables.Count == 0) return;
+
+            try
+            {
+                var expectedLeaves = expectations.InsertTargetTables
+                    .Select(t => t.Split('.')[^1])
+                    .ToList();
+
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var reported = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var line in lines)
+                {
+                    if (!line.TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
+
+                    // SplitTableRowCells는 선행 "|" 앞의 빈 조각을 cells[0]에 그대로
+                    // 남긴다("| a | b |" → ["", "a", "b", ""]) - 표의 첫 데이터 칸(테이블명)은
+                    // 언제나 cells[1]이다. cells[0]을 쓰면 모든 정상 행에서 candidate가
+                    // 빈 문자열이 되어 이 검사가 한 번도 발동하지 않는다(TDD 1라운드 실측).
+                    var cells = SplitTableRowCells(line);
+                    if (cells.Count < 2) continue;
+
+                    var candidate = cells[1].Trim();
+                    if (candidate.Length == 0) continue;
+
+                    var leaf = candidate.Split('.')[^1];
+                    if (expectedLeaves.Any(e => string.Equals(e, leaf, StringComparison.Ordinal))) continue;
+
+                    var caseOnly = expectedLeaves.FirstOrDefault(
+                        e => string.Equals(e, leaf, StringComparison.OrdinalIgnoreCase));
+                    if (caseOnly == null) continue;
+                    if (!reported.Add(leaf)) continue;
+
+                    var message =
+                        $"INSERT 매핑 표의 테이블명 `{candidate}`이 파서가 확정한 표기 `{caseOnly}`와 " +
+                        "대소문자가 다릅니다. 실행은 무해하지만 이 표를 식별자 원천으로 삼는 " +
+                        "이행·대조가 어긋납니다. 원문 표기 그대로 옮기십시오.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.InsertMappingTableNameMismatch,
+                        Message = message,
+                        RawContext = candidate
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] INSERT 매핑 표 테이블명 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 

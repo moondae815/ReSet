@@ -118,6 +118,12 @@ namespace ReSet.Core.Services
             = Array.Empty<CaseBranchFact>();
 
         /// <summary>
+        /// 파서가 확정한 INSERT 대상 테이블(canonical 표기). 매핑 표의 테이블명 칸이
+        /// 이것과 표기까지 같은지 대조하는 기준이다.
+        /// </summary>
+        public IReadOnlyList<string> InsertTargetTables { get; init; } = Array.Empty<string>();
+
+        /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
         /// </summary>
@@ -200,6 +206,13 @@ namespace ReSet.Core.Services
             // 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
             var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
 
+            // INSERT 매핑 표의 테이블명 표기 대조(CheckInsertMappingTableNames)의 기대값이다.
+            // 파서(SqlStaticParser)가 이미 확정해 둔 InsertTables를 그대로 옮긴다 - 별도
+            // 재추출 경로를 두면 두 곳이 갈릴 수 있다.
+            var insertTargetTables = spDef.StaticAnalysis?.InsertTables is { Count: > 0 } insertTables
+                ? new List<string>(insertTables)
+                : new List<string>();
+
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
             // 스위트는 초록으로 남는다.
@@ -267,6 +280,13 @@ namespace ReSet.Core.Services
                 // 하나뿐인 객체에서 From이 null을 돌려주고 CheckCaseBranches가 한 번도
                 // 돌지 않는다.
                 && caseBranches.Count == 0
+                // insertTargetTables는 중복항이 아니다 - INSERT 매핑 표 대조(§4 D)는
+                // dmlScopeFacts 등 다른 재료가 하나도 없는 SP에서도 필요할 수 있다
+                // (예: 파서가 INSERT 대상만 잡고 다른 신호는 하나도 못 뽑은 경우).
+                // 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이 null을
+                // 돌려주고 CheckInsertMappingTableNames가 한 번도 돌지 않는다 - 위
+                // 주석들이 경고하는 것과 같은 실패 모양이다.
+                && insertTargetTables.Count == 0
                 // objectDeclaration은 중복항이 아니다 - WITH 옵션이 없는 함수(RETURN
                 // 하나뿐인 스칼라 함수 등)는 본문에 DML 문장이 전혀 없을 수 있어
                 // dmlScopeFacts·lockHints 등 다른 재료가 하나도 없다. 이 항을 빠뜨리면
@@ -296,7 +316,8 @@ namespace ReSet.Core.Services
                 LockHints = lockHints,
                 ObjectDeclaration = objectDeclaration,
                 ExecutionSemantics = executionSemantics,
-                CaseBranches = caseBranches
+                CaseBranches = caseBranches,
+                InsertTargetTables = insertTargetTables
             };
         }
 

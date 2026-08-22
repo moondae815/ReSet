@@ -5274,5 +5274,59 @@ END",
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
         }
+
+        /// <summary>
+        /// 2026-08-22 축 A 재감사 실측(UP_UTIL_SETTLE_SUMMARY_EXTRA). 매핑 표 한 행이
+        /// TSetTleByOUT으로 적혔다 - 대소문자만 다르다. 실행은 무해하지만 매핑 표를
+        /// 식별자 원천으로 삼는 이행·grep·자동 대조가 그 행에서 어긋난다.
+        /// 대소문자를 무시하면 이 검사가 잡아야 할 것을 못 잡으므로 Ordinal로 본다.
+        /// </summary>
+        [Fact]
+        public void Validate_InsertMappingTableNameDiffersOnlyByCase_IsReported()
+        {
+            var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
+            var markdown = WrapSpec(
+                "### INSERT 대상 테이블\n"
+                + "| 테이블명 | 컬럼명 | 원천 데이터 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TSetTleByOUT | OUTCNT | COUNT(*) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.InsertMappingTableNameMismatch);
+        }
+
+        /// <summary>표기가 정확히 같으면 통과한다 - 오탐 고정.</summary>
+        [Fact]
+        public void Validate_InsertMappingTableNameExact_IsNotReported()
+        {
+            var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
+            var markdown = WrapSpec(
+                "### INSERT 대상 테이블\n"
+                + "| 테이블명 | 컬럼명 | 원천 데이터 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TSettleByOUT | OUTCNT | COUNT(*) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.InsertMappingTableNameMismatch);
+        }
+
+        private static SpecExpectations BuildExpectationsWithInsertTargets(params string[] tables)
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    InsertTables = new List<string>(tables)
+                }
+            };
+            return SpecExpectations.From(spDef)!;
+        }
     }
 }
