@@ -1534,6 +1534,17 @@ END";
             var equalsFact = Assert.Single(facts, f => f.Operator == "=");
             Assert.Equal("A.UseState", equalsFact.Column);
             Assert.Equal(new[] { "0" }, equalsFact.Literals);
+
+            // 괄호를 벗기는 것은 **분해 판정뿐**이고 원문 칸은 괄호까지 원본 그대로
+            // 진다. 두 갈래가 한 메서드에 있지 않으므로(평탄화는 TopLevelAndTerms,
+            // 벗기기는 TryDecompose) 한쪽만 무너질 수 있고, 위 세 단언은 그 경우를
+            // 잡지 못한다 - 컬럼·연산·원소가 다 맞아도 원문에서 괄호만 사라진다.
+            //
+            // Task 7의 L1이 원문 칸을 행 키로 쓰므로(설계 §4 E) 그렇게 되면 모델이
+            // 표를 축자로 옳게 옮겨도 검증기가 틀렸다고 한다 - 어떤 산출물도 만족시킬
+            // 수 없는 요구가 되는, 이 파일의 주석들이 거듭 경고하는 그 실패 모양이다.
+            Assert.Equal("(A.PGNAME IN ('KFTC', 'YELOPAY'))", inFact.PredicateText);
+            Assert.Equal("(A.UseState = 0)", equalsFact.PredicateText);
         }
 
         // 파생 테이블 안의 항도 같은 규칙을 받는다 - 범위 칸이 최상위든 파생이든

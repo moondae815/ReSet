@@ -237,15 +237,42 @@ namespace ReSet.Core.Tests
         // [2026-08-19 재실측] 축 A 감사 후 수집 범위를 넓혔다(리터럴 우변 등호·부등호,
         // ISNULL 래핑 좌변, 파생 테이블 내부 술어). 기대 개수를 임시 프로브로 다시 재
         // 갱신한다: CANCEL_INS 0→2, INS_EXTRA4PLCARD 1→13, AcqManual 0→0(그대로).
-        // 코퍼스 전체로는 79 → 198행이고, "폭발하지 않는다"는 이 테스트의 의도는
-        // 아래 InRange 상한(40)이 계속 지킨다 - 최대치인 EXCEPTION_PROC이 정확히 40이다.
+        //
+        // [윗 문단의 수치는 2026-08-19 시점 실측이고 지금은 유효하지 않다 - Task 6에서
+        // 확인] 그때 이 자리에는 "코퍼스 전체로는 79 → 198행이고 … 최대치인
+        // EXCEPTION_PROC이 정확히 40이다"라고 적혀 있었다. 두 수치 모두 현재형으로
+        // 단언돼 있어 다음 사람이 실측치로 신뢰하기 쉬웠으므로 지운다. 아래 2026-08-22
+        // 문단이 같은 값을 다시 실측해 적는다.
+        //
+        // 같은 문단이 "'폭발하지 않는다'는 의도는 아래 InRange 상한(40)이 계속 지킨다"고
+        // 적었는데 그 단언은 이 Theory에 없다 - `InRange(0, 40)`은 같은 파일 :60의
+        // Extractors_ShouldNotThrowOnGoldenProcedures가 `comments.Count`에 건 것이라
+        // 집합 술어와 무관하다. 즉 집합 술어의 행 수 상한은 그동안 아무 단언도 지키지
+        // 않았다. 아래 InlineData에 EXCEPTION_PROC(코퍼스 최대치)을 더해 그 천장을
+        // 실제 단언으로 세운다.
         //
         // [2026-08-22 재실측 - 축 A 재감사 ③ Task 6] 행 단위가 "분해된 원소"에서
-        // "최상위 AND 항"으로 올라갔다(설계 §3 결정 3). 분해되지 않는 항이 원문 전용
-        // 행으로 자리를 얻으므로 개수는 늘기만 하고 줄지 않는다 - 세 자리 모두
-        // **행이 늘어난 것이지 분해되던 행이 사라진 것이 아니다.** 기대값은 추정이
-        // 아니라 실물 DDL(raw/object_definition.sql)의 최상위 AND 항을 직접 세어
-        // 확정했고, 추출기의 출력이 그 수와 일치했다.
+        // "최상위 AND 항"으로 올라갔다(설계 §3 결정 3). 기대값은 추정이 아니라 실물
+        // DDL(raw/object_definition.sql)의 최상위 AND 항을 직접 세어 확정했고, 추출기의
+        // 출력이 그 수와 일치했다.
+        //
+        // [총 행 수는 늘고, 분해 행 수는 줄 수 있다 - 일반 명제로 오해하지 말 것]
+        // 아래 네 자리 중 앞의 셋은 분해 행이 그대로이고 원문 전용 행만 늘었다. 그러나
+        // **분해 행이 줄어드는 것은 정상일 수 있다.** 실측: EXCEPTION_PROC은 총계가
+        // 40 → 102로 늘면서 분해 행은 40 → 30으로 열 줄었다. 원인은 회귀가 아니라 이
+        // 작업의 목적 그 자체다 - `(A.UseState <> 1 OR (A.UseState = 1 AND A.YMD =
+        // A.AYMD))`가 220·239·280·302·375행에 정확히 다섯 번 있고, 예전에는 각각
+        // 분해 행 둘(`<> 1`, `= 1`)을 냈다. 5 × 2 = 10이 한 항 한 행으로 합쳐진 것이라
+        // 차이가 정확히 상쇄된다. 그 두 행은 나란히 실려 AND로 읽혔고 그렇게 읽으면
+        // 공집합이었다(설계 §2.4) - 없애야 할 행이었다.
+        //
+        // 그러므로 "행이 줄었으니 회귀"라고 판단하면 오판이다. 가르는 기준은 개수의
+        // 방향이 아니라 **최상위 AND 항 하나가 행 하나를 얻었는가**이다. 항이 아닌
+        // 부분식(OR 갈래 안의 비교, 다른 항의 좌변을 이루는 CASE 안의 조건)이 독립
+        // 행을 잃는 것은 설계된 동작이다.
+        //
+        // 코퍼스 전체 실측(2026-08-22, output/ 아래 object_definition.sql 전부):
+        // 총계 200행 → 495행, 그중 분해 행 200행 → 181행(19행 감소, 위 기전).
         //
         // - CANCEL_INS 2 → 4: INSERT 원천 SELECT의 WHERE(49~52행) 항이 넷이다.
         //   분해되던 둘(`B.USESTATE = 0`, `ISNULL(B.CompanySalesType,4) NOT IN (0,1,2,3)`)은
@@ -261,10 +288,15 @@ namespace ReSet.Core.Tests
         //   0행이었고, 이제 원문 전용 6행이 된다. 커서 원천 SELECT(33~35)는
         //   SetPredicateVisitor의 방문 대상이 아니므로 여기 포함되지 않는다
         //   (계획 Global Constraints - 이 방문자는 넓히지 않는다).
+        // - EXCEPTION_PROC 40 → 102(분해 40 → 30): 코퍼스 최대치라 여기 더한다.
+        //   🟠 결함 넷이 이 SP에 있고(210·320·442행 등), 그동안 집합 술어 행 수의
+        //   천장을 지키는 단언이 하나도 없었다. 총계와 분해 행을 함께 못 박아, 행이
+        //   폭발하는 것과 분해가 소리 없이 무너지는 것을 양쪽에서 잡는다.
         [Theory]
         [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 4, 2)]
         [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 20, 13)]
         [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 6, 0)]
+        [InlineData("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", 102, 30)]
         public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(
             string procedureName, int expectedCount, int expectedDecomposedCount)
         {
@@ -275,8 +307,10 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(expectedCount, facts.Count);
 
-            // 분해되던 행이 원문 전용 행에 삼켜지지 않았는지를 개수와 별도로 잠근다.
-            // 개수만 보면 "분해 하나를 잃고 원문 둘을 얻은" 회귀가 통과한다.
+            // 분해되던 행이 원문 전용 행에 삼켜지지 않았는지를 총계와 별도로 잠근다.
+            // 총계만 보면 "분해 하나를 잃고 원문 하나를 얻은" 회귀가 그대로 통과한다 -
+            // 총계가 변하지 않기 때문이다(분해 둘을 잃고 원문 둘을 얻어도 마찬가지다).
+            // 그 회귀는 표에서 리터럴 집합만 조용히 사라지는 모양이라 가장 위험하다.
             var decomposed = facts.Where(f => f.Column != "—").ToList();
             Assert.Equal(expectedDecomposedCount, decomposed.Count);
 
