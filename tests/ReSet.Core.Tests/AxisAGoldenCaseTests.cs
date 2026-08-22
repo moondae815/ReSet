@@ -180,6 +180,16 @@ namespace ReSet.Core.Tests
             Assert.Equal(9, pgName.Literals.Count);
             Assert.Contains("'SSGPayCard'", pgName.Literals);
             Assert.Contains("'KakaoCard'", pgName.Literals);
+
+            // 원문 칸이 NOT을 지고 있는지 실물로 못 박는다. 표는 "기계 확정, 있는 그대로
+            // 베낄 것"이라 사람이 다시 검증하지 않는데, 원문에서 NOT이 빠지면 의미가
+            // 정반대인 술어가 실리고 IsNegated 칸과 원문 칸이 서로 모순된 표가 된다 -
+            // 제외 목록이 허용 목록으로 읽히면 9개 PG가 대상에서 빠지는 대신 그 9개만
+            // 대상이 된다. 다른 새 픽스처는 IN·등호만 덮으므로 이 갈래는 여기서만 걸린다.
+            Assert.Equal(
+                "A.PGName NOT IN ('PLCard','SamSungPay','SSGPayCard','KakaoPay','KakaoCard',"
+                    + "'impaymobile','NaverCard','ApplePay','TossCardAuth')",
+                pgName.PredicateText);
         }
 
         [Fact]
@@ -207,10 +217,12 @@ namespace ReSet.Core.Tests
             Assert.Contains("'INICARD'", whitelist.Literals);
             Assert.Contains("'TOSSCARD'", whitelist.Literals);
 
-            // 원문 칸도 실물로 못 박는다 - 77행 원문은 `A.PGNAME     IN (...)`처럼
-            // 한정자와 IN 사이에 공백이 다섯이라, CollapseWhitespace를 거치지 않으면
-            // 렌더와 검증기가 대조할 수 없는 값이 된다(SetPredicateFact.PredicateText
-            // 문서 참고). 픽스처가 아니라 코퍼스가 이 접기를 실제로 요구한다.
+            // 원문 칸도 실물로 못 박는다. 77행 원문은 `A.PGNAME     IN (...)`처럼
+            // 한정자와 IN 사이에 공백이 다섯 칸이라, 접지 않으면 원문 칸의 표기가
+            // 원본의 정렬 공백에 좌우된다 - 코퍼스 전수 프로브(2026-08-22) 기준
+            // 접기를 실제로 요구하는 것은 개행이 아니라 이 줄 안의 공백이다
+            // (SetPredicateFact.PredicateText 문서 참고). 픽스처가 아니라 코퍼스가
+            // 이 접기를 요구하는 자리다.
             Assert.Equal(
                 "A.PGNAME IN ('ALLTHEGATE','DACOMCARD','UNIONPAY','INICARD','TOSSCARD','NICECARD')",
                 whitelist.PredicateText);

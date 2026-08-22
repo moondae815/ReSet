@@ -1215,9 +1215,17 @@ END";
             Assert.Equal("A.CommissionCancelFlag = 1", fact.PredicateText);
         }
 
-        // 원문 칸은 CollapseWhitespace를 거친다 - 개행이 든 값은 어떤 산출물도
-        // 만족시킬 수 없는 요구가 된다(CollapseWhitespace 문서, 좌변이 이미 같은 이유로
-        // 접힌다). 원본 코퍼스의 긴 IN 목록은 실제로 여러 줄에 걸쳐 쓰여 있다.
+        // 원문 칸은 CollapseWhitespace를 거친다(좌변이 이미 같은 규칙으로 접힌다).
+        //
+        // [이 픽스처는 코퍼스에 없는 형태를 방어한다 - 2026-08-22 전수 프로브]
+        // 여러 줄에 걸친 항은 현재 코퍼스에 하나도 없다: 수집 판정을 통과하는 항
+        // 373건(실제 수집 범위보다 넓게 잡은 상위집합) 중 개행을 포함한 항이 0건이고,
+        // 여러 줄 IN 두 자리(COMM_UPD:141, EXCEPTION_PROC:527)는 둘 다 서브쿼리 IN이라
+        // 이 표가 담지 않는다. 그래도 픽스처를 남기는 이유는
+        // 개행이 든 값이 실리면 렌더된 칸과 접지 않은 원문이 어긋나기 때문이다
+        // (SetPredicateFact.PredicateText 문서 참고) - 실측으로 요구되는 접기는
+        // 줄 안의 공백 쪽이고, 그쪽은 AxisAGoldenCaseTests의 COMM_UPD:77 단언이
+        // 실물로 못 박는다.
         [Fact]
         public void ExtractSetPredicates_MultiLineTerm_ShouldCollapseWhitespaceInText()
         {
