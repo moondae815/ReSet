@@ -550,7 +550,7 @@ namespace ReSet.Core.Tests
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(11, (int)entry["FormatVersion"]!);
+            Assert.Equal(12, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

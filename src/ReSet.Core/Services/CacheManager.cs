@@ -86,7 +86,16 @@ namespace ReSet.Core.Services
         //     산출물이 그대로 남는다 - 원문 칸이 없어 분해되지 않는 술어가 통째로
         //     빠진 명세서, `IF` 술어의 잠금이 없는 명세서가 그대로 살아남고, 넓어진
         //     L1 셋도 캐시 히트에서는 영영 발동하지 않는다.
-        private const int CurrentCacheFormatVersion = 11;
+        // 12: CRUD 분석의 `SELECT 대상 테이블` 표 설명 칸이 조인 키·WHERE 술어를 담지
+        //     않게 됐다(2026-08-23 ④ 진단). 술어의 기준값은 DML 범위·집합 술어 표이고
+        //     둘 다 문장별로 행을 낸다. 버전 5가 "함수 동작 서술이 금지되었다 -
+        //     프롬프트 입력과 출력 계약이 둘 다 달라졌으므로 옛 산출물은 재분석해야
+        //     한다"로 올린 것과 같은 모양이다. 옛 엔트리를 재사용하면 금지된 서술을
+        //     담은 산출물이 그대로 남고, 그것이 다시 감사에서 결함으로 잡힌다.
+        //     실측 근거: UP_UTIL_SETTLE_EXCEPTION_PROC의 설명 칸이 UPDATE 3과 4의
+        //     조인 키를 묶어 적어 UPDATE 4에 없는 MALLID 조인을 주장했고, Critic이
+        //     UPDATE 3의 근거로 그것을 통과시켰다.
+        private const int CurrentCacheFormatVersion = 12;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
