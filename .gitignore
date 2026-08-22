@@ -45,3 +45,6 @@ scratch/
 
 # Subagent-driven development scratch
 .superpowers/
+
+# Output backups
+output.bak-*/
