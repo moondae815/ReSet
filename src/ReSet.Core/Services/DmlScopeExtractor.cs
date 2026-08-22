@@ -172,7 +172,21 @@ namespace ReSet.Core.Services
     /// </param>
     /// <param name="Column">
     /// IN 좌변의 원문 표기 그대로 - 한정자가 있으면 한정자를 포함한다(`A.USESTATE`),
-    /// 없으면 컬럼 이름만이다(`UseState`). 마지막 식별자 조각만 담지 않는 이유는
+    /// 없으면 컬럼 이름만이다(`UseState`).
+    ///
+    /// [분해되지 않는 항은 `—`다 - 2026-08-22 축 A 재감사 ③ Task 6, 설계 §3 결정 3]
+    /// 행 단위가 최상위 AND 항이고, 항이 분해되는 것은 우변이 전부 리터럴일 때뿐이다.
+    /// OR 결합 · 컬럼 대 컬럼(`A.YMD = A.AYMD`) · 산술식 우변 · 화이트리스트 밖
+    /// 연산자(`&gt;=`)는 분해되지 않으므로 이 칸과 <paramref name="Operator"/>가
+    /// 전각 대시 `—`이고 <paramref name="Literals"/>가 빈 목록이다. 그 항은
+    /// <paramref name="PredicateText"/> 하나로 표에 자리를 얻는다 - 예전에는 이런 항이
+    /// 사실 자체를 내지 않아 어떤 표에도 나타나지 않았다.
+    ///
+    /// 이 세 칸은 항상 함께 움직인다: 분해되면 셋 다 차고, 안 되면 셋 다 비운다.
+    /// 반쪽 분해(예: 컬럼만 채우고 리터럴은 빈 목록)는 표가 거짓 집합을 단언하게
+    /// 만들므로 내지 않는다.
+    ///
+    /// 마지막 식별자 조각만 담지 않는 이유는
     /// 실측 코퍼스에서 키 충돌이 실제로 나기 때문이다:
     /// `output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:97-98`가
     /// 같은 INSERT 원천 SELECT의 같은 WHERE 최상위에서
@@ -1552,9 +1566,16 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// 한 검색 조건에서 모은 술어를 사실로 옮긴다. 문장 조각을 받지 않는 이유는
+            /// 한 검색 조건의 최상위 AND 항을 사실로 옮긴다. 문장 조각을 받지 않는 이유는
             /// 라인이 더 이상 문장 시작줄이 아니기 때문이다 - 각 사실의 라인은 그 항
             /// 자신의 줄이다(SetPredicateFact.Line 문서 참고).
+            ///
+            /// 방문(Accept)이 아니라 <see cref="TopLevelPredicateCollector.CollectTerms"/>를
+            /// 부르는 이유: 이 표의 행 단위는 항이지 트리 어딘가의 술어 노드가 아니다.
+            /// 방문으로 모으면 OR 갈래 안의 비교까지 독립 행이 되어 AND로 읽히고,
+            /// 그렇게 읽으면 모순(공집합)이 된다(설계 §2.4). Columns·Parameters·JoinKeys를
+            /// 쓰는 DmlScopeVisitor 쪽 호출부는 지금처럼 Accept를 쓴다 - 그쪽은 식 전체를
+            /// 훑어야 하고, 이 작업으로 좁아져서는 안 된다.
             /// </summary>
             private void CollectFrom(
                 string operation, BooleanExpression? searchCondition, int ordinal, string scope)
@@ -1562,7 +1583,7 @@ namespace ReSet.Core.Services
                 if (searchCondition == null) return;
 
                 var top = new TopLevelPredicateCollector();
-                searchCondition.Accept(top);
+                top.CollectTerms(searchCondition);
 
                 foreach (var (column, op, literals, term) in top.SetPredicates)
                 {
@@ -1685,15 +1706,110 @@ namespace ReSet.Core.Services
             public List<string> JoinKeys { get; } = new();
 
             /// <summary>
-            /// 최상위 IN/NOT IN·리터럴 비교의 집합 사실. Column은 좌변 표기, Operator는
-            /// 연산, Literals는 원문 그대로다. Term은 그 사실을 낸 술어 노드 자신이다 -
-            /// 호출부가 여기서 라인(<see cref="SetPredicateFact.Line"/>)과 원문
+            /// 최상위 AND 항마다 사실 하나. Term은 그 항의 노드 자신이다 - 호출부가
+            /// 여기서 라인(<see cref="SetPredicateFact.Line"/>)과 원문
             /// (<see cref="SetPredicateFact.PredicateText"/>)을 얻는다. 노드를 그대로
             /// 넘기고 호출부가 접는 이유는, 이 수집기가 라인·원문 표기 규칙(어느 줄을
             /// 쓸지, 공백을 접을지)을 알 필요가 없기 때문이다 - 문장 문맥과 표기 규칙은
             /// 둘 다 호출부의 몫이다.
+            ///
+            /// 분해되는 항(IN/NOT IN·리터럴 우변 비교)은 Column에 좌변 표기, Operator에
+            /// 연산, Literals에 원문 그대로의 원소를 담는다. 분해되지 않는 항은 세 칸을
+            /// <see cref="NotDecomposed"/>·빈 목록으로 두고 Term만 진다
+            /// (2026-08-22 축 A 재감사 ③ Task 6 · 설계 §3 결정 3).
+            ///
+            /// <see cref="CollectTerms"/>만 이 목록을 채운다. 방문(Accept) 경로는
+            /// Columns·Parameters·JoinKeys만 모은다 - 방문으로 채우면 OR 갈래 안의
+            /// 비교까지 독립 행이 되어 AND로 읽히고, 그렇게 읽으면 모순이 된다(설계 §2.4).
             /// </summary>
             public List<(string Column, string Operator, List<string> Literals, TSqlFragment Term)> SetPredicates { get; } = new();
+
+            /// <summary>분해되지 않는 항의 컬럼·연산 칸에 쓰는 표기.</summary>
+            internal const string NotDecomposed = "—";
+
+            /// <summary>
+            /// 최상위 AND 항마다 집합 사실을 하나씩 낸다. 분해되면 분해해서도 싣고,
+            /// 못 하면 원문 전용으로 싣는다 - 어느 경우에도 항 자체는 빠지지 않는다
+            /// (설계 §3 결정 3). 이 메서드는 <see cref="SetPredicates"/>만 채운다.
+            /// Columns·Parameters·JoinKeys는 지금처럼 식 전체를 훑는 Accept 경로가
+            /// 계속 모은다 - DML 범위 표의 술어 컬럼 칸과 조인 키 칸이 이 작업으로
+            /// 좁아져서는 안 된다.
+            /// </summary>
+            public void CollectTerms(BooleanExpression? searchCondition)
+            {
+                foreach (var term in TopLevelAndTerms(searchCondition))
+                {
+                    var decomposed = TryDecompose(term);
+
+                    SetPredicates.Add(decomposed is { } d
+                        ? (d.Column, d.Operator, d.Literals, (TSqlFragment)term)
+                        : (NotDecomposed, NotDecomposed, new List<string>(), term));
+                }
+            }
+
+            /// <summary>
+            /// 최상위 AND 항을 평탄화한다. OR로 묶인 것은 통째로 한 항이다 - 안으로
+            /// 내려가면 갈래마다의 조건이 AND처럼 나란히 실려 모순으로 읽힌다
+            /// (2026-08-22 축 A 재감사 실측: EXCEPTION_PROC:210이 정확히 그 모양이었다.
+            /// `(A.UseState &lt;&gt; 1 OR (A.UseState = 1 AND A.YMD = A.AYMD))`이
+            /// UseState &lt;&gt; 1과 UseState = 1 두 행으로 실려 공집합을 뜻했다).
+            ///
+            /// 괄호는 안이 AND일 때만 벗긴다. `(A.X = 1)`처럼 항 하나를 감싼 괄호는
+            /// 여기서 벗기지 않고 <see cref="TryDecompose"/>가 분해할 때만 벗긴다 -
+            /// 그래야 원문 칸이 괄호까지 원본 그대로 진다.
+            /// </summary>
+            private static IEnumerable<BooleanExpression> TopLevelAndTerms(BooleanExpression? node)
+            {
+                if (node == null) yield break;
+
+                if (node is BooleanBinaryExpression binary
+                    && binary.BinaryExpressionType == BooleanBinaryExpressionType.And)
+                {
+                    foreach (var term in TopLevelAndTerms(binary.FirstExpression)) yield return term;
+                    foreach (var term in TopLevelAndTerms(binary.SecondExpression)) yield return term;
+                    yield break;
+                }
+
+                if (node is BooleanParenthesisExpression paren
+                    && paren.Expression is BooleanBinaryExpression inner
+                    && inner.BinaryExpressionType == BooleanBinaryExpressionType.And)
+                {
+                    foreach (var term in TopLevelAndTerms(paren.Expression)) yield return term;
+                    yield break;
+                }
+
+                yield return node;
+            }
+
+            /// <summary>
+            /// 항 하나를 컬럼·연산·리터럴로 분해한다. 분해되지 않으면 null.
+            ///
+            /// 분해가 성립하는 것은 <b>우변이 전부 리터럴일 때</b>뿐이다. `A.YMD = A.AYMD`
+            /// (설계 §2.2)나 `TxAmt != CardAmt+CouponAmt`(§2.3)는 옮겨 적을 리터럴이 없어
+            /// 여기서 실패하고, 호출부가 원문 전용 행으로 담는다. 예전에는 이 실패가
+            /// "사실 없음"이었고 그래서 그 항들이 어떤 표에도 나타나지 않았다.
+            ///
+            /// 괄호를 벗기고 판정하는 이유는 괄호가 의미가 아니라 표기이기 때문이다 -
+            /// 벗기지 않으면 `(A.PGNAME IN (...))`처럼 괄호 하나로 감싼 항이 원문
+            /// 전용으로 떨어져 리터럴 집합이 표에서 사라진다. 원문 전용 행이 분해되는
+            /// 행을 삼키는 것은 이 작업이 막아야 할 회귀다.
+            /// </summary>
+            private static (string Column, string Operator, List<string> Literals)? TryDecompose(
+                BooleanExpression term)
+            {
+                var node = term;
+                while (node is BooleanParenthesisExpression paren && paren.Expression != null)
+                {
+                    node = paren.Expression;
+                }
+
+                return node switch
+                {
+                    InPredicate inPredicate => DecomposeIn(inPredicate),
+                    BooleanComparisonExpression comparison => DecomposeComparison(comparison),
+                    _ => null
+                };
+            }
 
             public override void ExplicitVisit(ScalarSubquery node) { }
 
@@ -1745,8 +1861,6 @@ namespace ReSet.Core.Services
             /// </summary>
             public override void ExplicitVisit(InPredicate node)
             {
-                RecordSetPredicate(node);
-
                 node.Expression?.Accept(this);
 
                 if (node.Subquery == null && node.Values != null)
@@ -1759,12 +1873,13 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// 리터럴만으로 이뤄진 최상위 IN을 집합 사실로 담는다.
+            /// 리터럴만으로 이뤄진 IN 항을 컬럼·연산·원소로 분해한다. 분해되지 않으면 null.
             ///
-            /// [담지 않는 셋] 서브쿼리 IN은 옮겨 적을 리터럴 목록이 없다. 원소에
+            /// [분해하지 않는 셋] 서브쿼리 IN은 옮겨 적을 리터럴 목록이 없다. 원소에
             /// 리터럴 아닌 것이 섞이면 리터럴 집합으로 렌더할 때 명세서에 거짓
             /// 집합이 실린다. 좌변이 단순 컬럼 참조가 아니면(예: 식) 표의 "컬럼"
-            /// 칸에 쓸 이름이 없다.
+            /// 칸에 쓸 이름이 없다. 셋 다 <b>사실이 사라지는 것은 아니다</b> - 호출부가
+            /// 원문 전용 행으로 담는다(2026-08-22 축 A 재감사 ③ Task 6).
             ///
             /// [Subquery != null 검사가 남아 있는 이유] T-SQL 문법상 `IN (서브쿼리)`와
             /// `IN (값 목록)`은 서로 다른 생산 규칙이라 Subquery와 Values가 동시에
@@ -1779,24 +1894,24 @@ namespace ReSet.Core.Services
             /// 한 줄만 떼어 실패시키지 못한다 - 그 테스트 옆 주석에 같은 설명을
             /// 남겨 뒀다.
             /// </summary>
-            private void RecordSetPredicate(InPredicate node)
+            private static (string Column, string Operator, List<string> Literals)? DecomposeIn(InPredicate node)
             {
-                if (node.Subquery != null || node.Values == null || node.Values.Count == 0) return;
+                if (node.Subquery != null || node.Values == null || node.Values.Count == 0) return null;
 
                 // Column은 마지막 식별자 조각이 아니라 원문 표기 그대로 담는다(레코드
                 // 문서의 실측 근거 참고) - 한정자가 있으면 A.USESTATE처럼 한정자까지
                 // 포함해야 같은 문장 안의 A.USESTATE와 B.USESTATE가 서로 다른 키가 된다.
                 var column = LeftSideText(node.Expression);
-                if (column == null) return;
+                if (column == null) return null;
 
                 var literals = new List<string>();
                 foreach (var value in node.Values)
                 {
-                    if (value is not Literal literal) return;   // 하나라도 아니면 통째로 버린다
+                    if (value is not Literal literal) return null;   // 하나라도 아니면 통째로 버린다
                     literals.Add(TextOf(literal));
                 }
 
-                SetPredicates.Add((column, node.NotDefined ? "NOT IN" : "IN", literals, node));
+                return (column, node.NotDefined ? "NOT IN" : "IN", literals);
             }
 
             /// <summary>
@@ -1886,12 +2001,12 @@ namespace ReSet.Core.Services
                     AddJoinKey(right);
                 }
 
-                RecordComparisonPredicate(node);
                 base.ExplicitVisit(node);
             }
 
             /// <summary>
-            /// 리터럴을 우변에 둔 `=`·`&lt;&gt;` 비교를 원소 하나짜리 집합 사실로 담는다.
+            /// 리터럴을 우변에 둔 `=`·`&lt;&gt;` 비교를 원소 하나짜리 집합으로 분해한다.
+            /// 분해되지 않으면 null.
             ///
             /// [왜 등호까지 담는가 - 2026-08-19 축 A 감사]
             /// 감사에서 나온 대상 행 집합 결함 4건이 전부 "원본 필터가 명세서 어디에도
@@ -1900,11 +2015,19 @@ namespace ReSet.Core.Services
             /// 걸러내는 조건이 통째로 사라져도 아무 검사도 울리지 않는다. 원본 코퍼스
             /// 기준 이 형태가 129건이다.
             ///
-            /// 우변이 리터럴일 때만 담는다 - `A.YMD = @pi_strYMD`나 `A.PLTID = B.PLTID`는
-            /// 옮겨 적을 리터럴이 없고, 담으면 표가 기준일 비교와 조인 키로 뒤덮여 진짜
-            /// 리터럴 집합이 묻힌다. 조인 키는 바로 위에서 <see cref="JoinKeys"/>가 담는다.
+            /// 우변이 리터럴일 때만 분해한다 - `A.YMD = @pi_strYMD`나 `A.PLTID = B.PLTID`는
+            /// 옮겨 적을 리터럴이 없고, 리터럴 칸에 담으면 표가 기준일 비교와 조인 키로
+            /// 뒤덮여 진짜 리터럴 집합이 묻힌다. 조인 키는 바로 위에서
+            /// <see cref="JoinKeys"/>가 담는다. 그 항들은 이제 표에서 사라지지 않고
+            /// 원문 전용 행으로 실린다 - 분해 칸이 아니라 원문 칸을 쓰므로 리터럴
+            /// 집합은 여전히 묻히지 않는다(2026-08-22 축 A 재감사 ③ Task 6 · 설계 §2.2).
+            ///
+            /// `&gt;=`·`&gt;`·`&lt;=`·`&lt;` 등 화이트리스트 밖 연산자도 여기서 분해되지
+            /// 않고 원문 전용 행이 된다. 화이트리스트를 넓히는 대신 원문으로 담는 이유는
+            /// 설계 §3 결정 3 - 앞으로 나올 미지의 술어 형태에도 샘이 없다.
             /// </summary>
-            private void RecordComparisonPredicate(BooleanComparisonExpression node)
+            private static (string Column, string Operator, List<string> Literals)? DecomposeComparison(
+                BooleanComparisonExpression node)
             {
                 var op = node.ComparisonType switch
                 {
@@ -1914,12 +2037,12 @@ namespace ReSet.Core.Services
                     _ => null
                 };
 
-                if (op == null || node.SecondExpression is not Literal literal) return;
+                if (op == null || node.SecondExpression is not Literal literal) return null;
 
                 var column = LeftSideText(node.FirstExpression);
-                if (column == null) return;
+                if (column == null) return null;
 
-                SetPredicates.Add((column, op, new List<string> { TextOf(literal) }, node));
+                return (column, op, new List<string> { TextOf(literal) });
             }
 
             /// <summary>

@@ -239,11 +239,34 @@ namespace ReSet.Core.Tests
         // 갱신한다: CANCEL_INS 0→2, INS_EXTRA4PLCARD 1→13, AcqManual 0→0(그대로).
         // 코퍼스 전체로는 79 → 198행이고, "폭발하지 않는다"는 이 테스트의 의도는
         // 아래 InRange 상한(40)이 계속 지킨다 - 최대치인 EXCEPTION_PROC이 정확히 40이다.
+        //
+        // [2026-08-22 재실측 - 축 A 재감사 ③ Task 6] 행 단위가 "분해된 원소"에서
+        // "최상위 AND 항"으로 올라갔다(설계 §3 결정 3). 분해되지 않는 항이 원문 전용
+        // 행으로 자리를 얻으므로 개수는 늘기만 하고 줄지 않는다 - 세 자리 모두
+        // **행이 늘어난 것이지 분해되던 행이 사라진 것이 아니다.** 기대값은 추정이
+        // 아니라 실물 DDL(raw/object_definition.sql)의 최상위 AND 항을 직접 세어
+        // 확정했고, 추출기의 출력이 그 수와 일치했다.
+        //
+        // - CANCEL_INS 2 → 4: INSERT 원천 SELECT의 WHERE(49~52행) 항이 넷이다.
+        //   분해되던 둘(`B.USESTATE = 0`, `ISNULL(B.CompanySalesType,4) NOT IN (0,1,2,3)`)은
+        //   그대로고, `A.PLTID = B.PLTID`(컬럼 대 컬럼)와 `A.YMDCANCEL = @pi_strYMD`
+        //   (파라미터)가 원문 전용 행으로 더해졌다.
+        // - INS_EXTRA4PLCARD 13 → 20: 네 문장의 항이 5+4+6+5다.
+        //   DELETE(38~42) 5항 중 3항 분해 + 2항 신규, INSERT 원천의 파생 테이블
+        //   X(168~171) 4항 중 3항 분해 + 1항 신규, UPDATE(191~196) 6항 중 4항 분해
+        //   + 2항 신규, UPDATE(207~211) 5항 중 3항 분해 + 2항 신규. 분해분 합계는
+        //   3+3+4+3 = 13으로 옛 기대값 그대로다.
+        // - AcqManual 0 → 6: DELETE(48~50)와 INSERT 원천 SELECT(70~72)가 각각
+        //   `컬럼 = @지역변수` 3항씩이다. 전부 옮겨 적을 리터럴이 없어 예전에는
+        //   0행이었고, 이제 원문 전용 6행이 된다. 커서 원천 SELECT(33~35)는
+        //   SetPredicateVisitor의 방문 대상이 아니므로 여기 포함되지 않는다
+        //   (계획 Global Constraints - 이 방문자는 넓히지 않는다).
         [Theory]
-        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 2)]
-        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 13)]
-        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 0)]
-        public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(string procedureName, int expectedCount)
+        [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 4, 2)]
+        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 20, 13)]
+        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 6, 0)]
+        public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(
+            string procedureName, int expectedCount, int expectedDecomposedCount)
         {
             var ddl = TryReadObjectDefinition(procedureName);
             if (ddl == null) return;
@@ -251,9 +274,28 @@ namespace ReSet.Core.Tests
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
 
             Assert.Equal(expectedCount, facts.Count);
+
+            // 분해되던 행이 원문 전용 행에 삼켜지지 않았는지를 개수와 별도로 잠근다.
+            // 개수만 보면 "분해 하나를 잃고 원문 둘을 얻은" 회귀가 통과한다.
+            var decomposed = facts.Where(f => f.Column != "—").ToList();
+            Assert.Equal(expectedDecomposedCount, decomposed.Count);
+
             // 빈 집합은 표에 쓸 것이 없다 - 추출기가 그런 사실을 내면 안 된다.
-            Assert.All(facts, f => Assert.NotEmpty(f.Literals));
+            // 행이 표에서 자리를 얻는 근거는 둘 중 하나다: 분해된 리터럴 집합이거나
+            // 원문이거나. 어느 쪽도 없는 행은 독자에게 아무것도 말하지 않는다.
             Assert.All(facts, f => Assert.False(string.IsNullOrWhiteSpace(f.Column)));
+            Assert.All(facts, f => Assert.False(string.IsNullOrWhiteSpace(f.PredicateText)));
+            Assert.All(decomposed, f => Assert.NotEmpty(f.Literals));
+
+            // 원문 전용 행은 컬럼·연산·원소 셋 다 비어야 한다 - 반쪽 분해가 실리면
+            // 표가 거짓 집합을 단언한다(MixedValues 갈래).
+            Assert.All(
+                facts.Where(f => f.Column == "—"),
+                f =>
+                {
+                    Assert.Equal("—", f.Operator);
+                    Assert.Empty(f.Literals);
+                });
         }
 
         private static string? TryReadObjectDefinition(string procedureName)

@@ -765,7 +765,15 @@ BEGIN
     AND    A.PGName NOT IN ('PLCard','SamSungPay','SSGPayCard','KakaoPay','KakaoCard','impaymobile','NaverCard','ApplePay','TossCardAuth')
 END";
 
-            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            // [1행 → 2행 - 2026-08-22 축 A 재감사 ③ Task 6] 행이 하나 늘었지 분해가
+            // 사라진 것이 아니다. 행 단위가 최상위 AND 항이 되면서 `A.YMD = @pi_strYMD`
+            // 항이 원문 전용 행으로 자리를 얻었다(설계 §3 결정 3). NOT IN 항의 분해는
+            // 아래 단언이 그대로 못 박는다 - 원문 전용 행이 분해되는 행을 삼키면
+            // 여기서 잡힌다.
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+            Assert.Equal(2, facts.Count);
+
+            var fact = Assert.Single(facts, f => f.Operator == "NOT IN");
 
             Assert.Equal("UPDATE", fact.Operation);
             // Column은 원문 표기 그대로다(한정자 포함) - 아래
@@ -777,6 +785,10 @@ END";
             Assert.Equal("'PLCard'", fact.Literals[0]);
             Assert.Contains("'SSGPayCard'", fact.Literals);
             Assert.Contains("'KakaoCard'", fact.Literals);
+
+            var textOnly = Assert.Single(facts, f => f.Column == "—");
+            Assert.Equal("A.YMD = @pi_strYMD", textOnly.PredicateText);
+            Assert.Empty(textOnly.Literals);
         }
 
         [Fact]
@@ -800,9 +812,14 @@ END";
         }
 
         [Fact]
-        public void ExtractSetPredicates_SubqueryIn_ShouldBeSkipped()
+        public void ExtractSetPredicates_SubqueryIn_ShouldNotBeDecomposed()
         {
             // 집합이 리터럴이 아니므로 옮겨 적을 목록 자체가 없다(설계 §3.2).
+            //
+            // [0행 → 1행 - 2026-08-22 축 A 재감사 ③ Task 6] 행이 하나 늘었지 분해가
+            // 사라진 것이 아니다(애초에 분해되는 행이 없었다). 항은 이제 원문 전용
+            // 행으로 자리를 얻는다 - 리터럴 칸은 여전히 비어 있으므로 "거짓 집합을
+            // 싣지 않는다"는 §3.2의 결정은 그대로다.
             //
             // [정직한 범위 고지 - 리뷰 라운드 1 Important 1] 이 테스트는 파이프라인
             // 전체("서브쿼리 IN은 결과에 나타나지 않는다")를 증명하는 창발적
@@ -821,14 +838,22 @@ BEGIN
     UPDATE dbo.T SET C = 1 WHERE PLTID IN (SELECT PLTID FROM dbo.S)
 END";
 
-            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
         }
 
         [Fact]
-        public void ExtractSetPredicates_MixedValues_ShouldBeSkipped()
+        public void ExtractSetPredicates_MixedValues_ShouldNotBeDecomposed()
         {
-            // 원소에 리터럴 아닌 것이 하나라도 섞이면 담지 않는다 - 리터럴 집합으로
-            // 렌더하면 명세서에 거짓 집합이 실린다(설계 §3.2).
+            // 원소에 리터럴 아닌 것이 하나라도 섞이면 리터럴 칸에 담지 않는다 -
+            // 리터럴 집합으로 렌더하면 명세서에 거짓 집합이 실린다(설계 §3.2).
+            //
+            // [0행 → 1행 - Task 6] 행이 하나 늘었지 분해가 사라진 것이 아니다.
+            // 항은 원문 전용 행으로 실리고 리터럴 칸은 비어 있다 - 'PLCard' 하나만
+            // 담아 집합을 반쪽으로 만드는 일이 없다는 것을 아래에서 직접 못 박는다.
             var ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -836,14 +861,22 @@ BEGIN
     UPDATE A SET A.C = 1 FROM dbo.T A JOIN dbo.S B ON A.Id = B.Id WHERE A.PGName IN ('PLCard', B.PGName)
 END";
 
-            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("—", fact.Column);
+            Assert.Empty(fact.Literals);
+            Assert.Equal("A.PGName IN ('PLCard', B.PGName)", fact.PredicateText);
         }
 
         [Fact]
-        public void ExtractSetPredicates_InsideScalarSubquery_ShouldBeSkipped()
+        public void ExtractSetPredicates_InsideScalarSubquery_ShouldNotLeakTheInnerIn()
         {
             // "최상위"의 정의는 TopLevelPredicateCollector가 갖는다 - 스칼라 서브쿼리
             // 안의 IN은 대상 범위를 정하지 않는다.
+            //
+            // [0행 → 1행 - Task 6] 바깥 항(`Amt = (SELECT ...)`)이 원문 전용 행으로
+            // 자리를 얻는다. 그 안의 `PGName IN ('A','B')`는 여전히 자기 행을 갖지
+            // 않는다 - 이 테스트가 지키는 경계는 그쪽이므로 아래에서 직접 단언한다.
             var ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -852,7 +885,12 @@ BEGIN
     WHERE  Amt = (SELECT MAX(Amt) FROM dbo.S WHERE PGName IN ('A','B'))
 END";
 
-            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("—", fact.Column);
+            Assert.Empty(fact.Literals);
+            Assert.DoesNotContain(facts, f => f.Column.Equals("PGName", StringComparison.OrdinalIgnoreCase));
         }
 
         [Fact]
@@ -947,12 +985,21 @@ END";
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
 
-            // 리터럴을 우변에 둔 셋만 담는다. `YMD = @pi_strYMD`는 옮겨 적을 리터럴이 없다.
-            Assert.Equal(3, facts.Count);
+            // 리터럴을 우변에 둔 셋만 분해한다. `YMD = @pi_strYMD`는 옮겨 적을 리터럴이 없다.
+            //
+            // [3행 → 4행 - 2026-08-22 축 A 재감사 ③ Task 6] 행이 하나 늘었지 분해가
+            // 사라진 것이 아니다. 분해되던 셋은 아래에서 그대로 단언한다. 늘어난 하나는
+            // `YMD = @pi_strYMD` 항의 원문 전용 행이고, 그래도 컬럼 칸에 "YMD"가 실리지
+            // 않는다는 이 테스트의 원래 경계는 마지막 단언이 그대로 지킨다.
+            Assert.Equal(4, facts.Count);
             Assert.Contains(facts, f => f.Column == "InState" && f.Operator == "=" && f.Literals[0] == "0");
             Assert.Contains(facts, f => f.Column == "PGName" && f.Operator == "=" && f.Literals[0] == "'PLCard'");
             Assert.Contains(facts, f => f.Column == "UseState" && f.Operator == "<>" && f.Literals[0] == "1");
             Assert.DoesNotContain(facts, f => f.Column == "YMD");
+
+            var textOnly = Assert.Single(facts, f => f.Column == "—");
+            Assert.Equal("YMD = @pi_strYMD", textOnly.PredicateText);
+            Assert.Empty(textOnly.Literals);
         }
 
         [Fact]
@@ -1040,11 +1087,19 @@ BEGIN
           END IN ('a','b')
 END";
 
-            // CASE 좌변은 바깥 IN 팩트와 안쪽 분기 조건(A.PayType = 1) 팩트를 함께 낸다.
-            // 안쪽 수집은 이 브랜치 이전부터 있던 동작이라 여기서 손대지 않는다 -
-            // 이 테스트가 고정하는 것은 바깥 팩트의 좌변이 한 줄이라는 것뿐이다.
+            // [2행 → 1행 - 2026-08-22 축 A 재감사 ③ Task 6] 예전에는 바깥 IN 팩트와
+            // 안쪽 분기 조건(A.PayType = 1) 팩트를 함께 냈다. 행 단위가 최상위 AND
+            // 항으로 올라가면서 안쪽 분기 조건은 자기 행을 갖지 않는다 - 그것은 항이
+            // 아니라 이 항의 좌변을 이루는 조각이고, 그 원문은 이 행의 컬럼 칸과
+            // 원문 칸에 이미 통째로 실린다. 여기서 사라진 것은 **분해되던 최상위 항이
+            // 아니라 항의 부분식**이므로 "원문 전용 행이 분해되는 행을 삼킨다"는
+            // 회귀가 아니다. 바깥 항의 분해(컬럼·IN·원소 둘)는 아래에서 그대로 잠근다.
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
-            var fact = Assert.Single(facts, f => f.Column.StartsWith("CASE", StringComparison.OrdinalIgnoreCase));
+
+            var fact = Assert.Single(facts);
+            Assert.StartsWith("CASE", fact.Column, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("IN", fact.Operator);
+            Assert.Equal(new[] { "'a'", "'b'" }, fact.Literals);
 
             Assert.DoesNotContain("\n", fact.Column);
             Assert.DoesNotContain("\r", fact.Column);
@@ -1089,12 +1144,19 @@ END";
             Assert.Equal(new[] { "1" }, fact.Literals);
         }
 
-        // 파라미터·컬럼 비교는 옮겨 적을 리터럴이 없다. 담으면 표가 조인 키와
-        // 기준일 비교로 뒤덮여 진짜 리터럴 집합이 묻힌다.
+        // 파라미터·컬럼 비교는 옮겨 적을 리터럴이 없으므로 컬럼·연산·원소 칸에
+        // 담지 않는다. 담으면 표가 조인 키와 기준일 비교로 뒤덮여 진짜 리터럴 집합이
+        // 묻힌다.
+        //
+        // [0행 → 1행 - 2026-08-22 축 A 재감사 ③ Task 6] 행이 하나 늘었지 분해가
+        // 사라진 것이 아니다. 항은 원문 전용 행으로 자리를 얻고 리터럴 칸은 그대로
+        // 비어 있다 - 두 결정이 충돌하지 않는다(설계 §2.2 · §3 결정 3). 오히려
+        // `A.YMD = A.AYMD`류가 조인 키 그물과 집합 술어 그물 사이로 새던 🟠이
+        // 이 행으로 닫힌다.
         [Theory]
         [InlineData("A.YMD = @pi_strYMD")]
         [InlineData("A.PLTID = B.PLTID")]
-        public void ExtractSetPredicates_ComparisonWithoutALiteral_ShouldBeIgnored(string predicate)
+        public void ExtractSetPredicates_ComparisonWithoutALiteral_ShouldNotBeDecomposed(string predicate)
         {
             var ddl = $@"
 CREATE PROCEDURE dbo.P @pi_strYMD VARCHAR(8) AS
@@ -1104,7 +1166,12 @@ BEGIN
     WHERE {predicate}
 END";
 
-            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
+            Assert.Equal(predicate, fact.PredicateText);
         }
 
         [Fact]
@@ -1275,6 +1342,220 @@ END";
             Assert.Equal(9, equalsFact.Line);
             // 문장 줄로 되돌아가면 두 행이 모두 5가 된다 - 그 회귀를 직접 막는다.
             Assert.DoesNotContain(facts, f => f.Line == 5);
+        }
+
+        // === 분해되지 않는 항도 행을 낸다 (2026-08-22 축 A 재감사 ③ Task 6) ========
+        //
+        // 행 단위가 "분해된 원소"에서 "최상위 AND 항"으로 올라간다. 분해되는 항은
+        // 지금처럼 컬럼·연산·리터럴을 채우고, 분해되지 않는 항은 그 칸을 `—`로 두고
+        // 원문 칸만 채운다(설계 §3 결정 3 · §4 C). 어느 경우에도 항 자체는 빠지지 않는다.
+
+        [Fact]
+        public void ExtractSetPredicates_OrCombinedTerm_ShouldProduceOneRowWithTextOnly()
+        {
+            // EXCEPTION_PROC:210 실측 - 지금은 UseState <> 1과 UseState = 1 두 행이 나란히
+            // 실려 AND로 읽히고, 그렇게 읽으면 모순(공집합)이다. A.YMD = A.AYMD 항은
+            // 조인 키에서도 집합 술어에서도 빠져 두 그물 사이로 샜다(2026-08-22 축 A 재감사 🟠).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  (A.UseState <> 1 OR (A.UseState = 1 AND A.YMD = A.AYMD))
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
+            Assert.Equal("(A.UseState <> 1 OR (A.UseState = 1 AND A.YMD = A.AYMD))", fact.PredicateText);
+        }
+
+        // OR 갈래 안의 AND는 항이 아니다. 안으로 내려가 갈래별 조건을 따로 실으면
+        // 그것이 바로 위 테스트가 고치는 오독이므로, 갈래 안의 분해 가능한 비교
+        // (A.UseState = 1)가 독립 행으로 새어 나오지 않는 것까지 못 박는다.
+        [Fact]
+        public void ExtractSetPredicates_OrCombinedTerm_ShouldNotLeakItsBranchesAsRows()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A
+    WHERE  (A.UseState <> 1 OR (A.UseState = 1 AND A.YMD = A.AYMD))
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.DoesNotContain(facts, f => f.Column.Equals("A.UseState", StringComparison.OrdinalIgnoreCase));
+            Assert.All(facts, f => Assert.Empty(f.Literals));
+        }
+
+        // 괄호 없는 최상위 OR도 한 항이다.
+        //
+        // [이 픽스처가 따로 필요한 이유 - 변이 실측] 위 두 OrCombinedTerm 픽스처는
+        // 원문(EXCEPTION_PROC:210)을 따라 바깥 괄호가 있다. 그래서 평탄화가 OR로
+        // 내려가지 못하게 막는 것이 "괄호 안이 AND일 때만 벗긴다"는 괄호 갈래이지
+        // AND 갈래가 아니다. AND 평탄화를 OR까지 하도록 바꿔 놓아도 이 파일의 다른
+        // 테스트가 전부 통과하는 것을 확인했다 - 그 회귀를 잡는 것은 이 픽스처뿐이다.
+        [Fact]
+        public void ExtractSetPredicates_UnparenthesizedTopLevelOr_ShouldStayOneRow()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  A.UseState = 0 OR A.PGNAME IN ('KFTC')
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
+            Assert.Equal("A.UseState = 0 OR A.PGNAME IN ('KFTC')", fact.PredicateText);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_InequalityTerm_ShouldProduceRow()
+        {
+            // EXCEPTION_PROC:320 실측 - 수집 연산자가 =·<>·IN 셋뿐이라 >= 가 0행이었다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  A.AYMD >= '20230101'
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("A.AYMD >= '20230101'", fact.PredicateText);
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_ArithmeticRightHandSide_ShouldProduceRow()
+        {
+            // EXCEPTION_PROC:442 실측 - 우변이 리터럴이 아니라 어떤 표에도 없었다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  TxAmt != CardAmt+CouponAmt+MoneyAmt+PointAmt
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("TxAmt != CardAmt+CouponAmt+MoneyAmt+PointAmt", fact.PredicateText);
+            Assert.Equal("—", fact.Column);
+            Assert.Empty(fact.Literals);
+        }
+
+        // 설계 §2.2의 🟠 - 같은 별칭 안의 비교라 조인 키에서 의도적으로 빠지고,
+        // 우변이 리터럴이 아니라 집합 술어에서 구조적으로 빠져 두 그물 사이로 샜다.
+        // 원문 전용 행이 그 자리를 메운다.
+        [Fact]
+        public void ExtractSetPredicates_ColumnToColumnTerm_ShouldProduceTextOnlyRow()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  A.YMD = A.AYMD
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("—", fact.Operator);
+            Assert.Empty(fact.Literals);
+            Assert.Equal("A.YMD = A.AYMD", fact.PredicateText);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_MixedTerms_ShouldKeepDecomposableOnesDecomposed()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  A.PGNAME IN ('KFTC', 'YELOPAY')
+    AND    (A.UseState <> 1 OR A.YMD = A.AYMD)
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+
+            var decomposed = Assert.Single(facts, f => f.Column == "A.PGNAME");
+            Assert.Equal(new[] { "'KFTC'", "'YELOPAY'" }, decomposed.Literals);
+
+            var textOnly = Assert.Single(facts, f => f.Column == "—");
+            Assert.Equal("(A.UseState <> 1 OR A.YMD = A.AYMD)", textOnly.PredicateText);
+        }
+
+        // 원문 전용 행이 분해되는 행을 삼키면 안 된다(계획 Task 6의 제약). 괄호는
+        // 의미가 아니라 표기이므로, 괄호 하나로 감싼 항이 원문 전용으로 떨어지면
+        // 그 항의 리터럴 집합이 표에서 통째로 사라진다 - 이 표가 존재하는 이유가
+        // 바로 그 집합이다.
+        [Fact]
+        public void ExtractSetPredicates_ParenthesizedDecomposableTerm_ShouldStillDecompose()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A
+    WHERE  (A.PGNAME IN ('KFTC', 'YELOPAY'))
+    AND    (A.UseState = 0)
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+
+            var inFact = Assert.Single(facts, f => f.Operator == "IN");
+            Assert.Equal("A.PGNAME", inFact.Column);
+            Assert.Equal(new[] { "'KFTC'", "'YELOPAY'" }, inFact.Literals);
+
+            var equalsFact = Assert.Single(facts, f => f.Operator == "=");
+            Assert.Equal("A.UseState", equalsFact.Column);
+            Assert.Equal(new[] { "0" }, equalsFact.Literals);
+        }
+
+        // 파생 테이블 안의 항도 같은 규칙을 받는다 - 범위 칸이 최상위든 파생이든
+        // 행 단위는 그 스코프의 최상위 AND 항이다.
+        [Fact]
+        public void ExtractSetPredicates_UndecomposableTermInsideDerivedTable_ShouldCarryItsScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.PGCOMM = X.Amt
+    FROM dbo.TSettleMst A
+    INNER JOIN (SELECT B.PLTID, SUM(B.Amt) AS Amt FROM dbo.TSettleMst B
+                WHERE B.YMD = B.AYMD GROUP BY B.PLTID) X
+        ON A.PLTID = X.PLTID
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("파생 테이블 X", fact.Scope);
+            Assert.Equal("—", fact.Column);
+            Assert.Equal("B.YMD = B.AYMD", fact.PredicateText);
         }
 
         [Fact]

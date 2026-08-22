@@ -1131,7 +1131,13 @@ END",
                 // 2026-08-19: 수집 범위가 리터럴 우변 등호까지 넓어져 `WHERE Id = 1`은
                 // 이제 사실을 낸다. 이 테스트의 의도는 "낼 사실이 없으면 표를 만들지
                 // 않는다"이므로 술어가 정말 없는 형태(파라미터 비교)로 바꾼다.
-                DdlText = "CREATE PROCEDURE dbo.P @p INT AS BEGIN UPDATE dbo.T SET C = 1 WHERE Id = @p END"
+                //
+                // 2026-08-22(축 A 재감사 ③ Task 6): 행 단위가 최상위 AND 항으로 올라가
+                // `WHERE Id = @p`도 원문 전용 행을 낸다 - 분해되지 않는 항이 표에서
+                // 사라지지 않는 것이 그 작업의 목적이다(설계 §3 결정 3). 그래서 이제
+                // "사실이 정말 없는" 형태는 WHERE 자체가 없는 문장뿐이다. 이 테스트의
+                // 의도는 그대로이고, 그 의도를 지금도 만족하는 픽스처로 옮긴다.
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN UPDATE dbo.T SET C = 1 END"
             };
             var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
             var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
