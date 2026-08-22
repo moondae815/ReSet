@@ -5403,26 +5403,34 @@ END",
         /// IsNullable이 true인데 명세서가 "널을 허용하지 않습니다"로 단정했다. 이
         /// 단정을 근거로 이행 스키마에 NOT NULL을 세우면 원본이 3값 논리로 배제하던
         /// 행이 대상에 들어와 금액이 바뀐다.
+        ///
+        /// Fix Round 1 - 테이블 앵커가 필요해진 뒤로는 실측 문장 그대로
+        /// `TTest.UseState`처럼 테이블.컬럼을 한 식별자에 같이 쓴다 - 실제 결함
+        /// 문장(`TFreeInterestInstCommission.UseState`)과 같은 모양이다.
         /// </summary>
         [Fact]
         public void Validate_NotNullClaimOnNullableColumn_IsReported()
         {
             var expectations = BuildExpectationsWithNullableColumn("UseState", isNullable: true);
             var markdown = WrapSpec("표 없음")
-                + "\n`UseState`는 `tinyint`이며 널을 허용하지 않습니다.\n";
+                + "\n`TTest.UseState`는 `tinyint`이며 널을 허용하지 않습니다.\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
         }
 
-        /// <summary>실제로 NOT NULL인 컬럼에 대한 같은 문장은 통과한다 - 오탐 고정.</summary>
+        /// <summary>
+        /// 실제로 NOT NULL인 컬럼에 대한 같은 문장은 통과한다 - 오탐 고정. 테이블
+        /// 앵커를 붙여도(귀속이 성공해도) 참인 서술이므로 여전히 통과해야 한다는
+        /// 것까지 검증한다.
+        /// </summary>
         [Fact]
         public void Validate_NotNullClaimOnNotNullColumn_IsNotReported()
         {
             var expectations = BuildExpectationsWithNullableColumn("IsPGFlag", isNullable: false);
             var markdown = WrapSpec("표 없음")
-                + "\n`IsPGFlag`는 `tinyint`이며 널을 허용하지 않습니다.\n";
+                + "\n`TTest.IsPGFlag`는 `tinyint`이며 널을 허용하지 않습니다.\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -5430,15 +5438,32 @@ END",
         }
 
         /// <summary>
-        /// 어느 의존성 컬럼에도 귀속되지 않는 이름은 침묵한다. 잘못 지목한 오류는
-        /// 재생성으로 고칠 수 없다는 CheckSchemaClaims의 정책을 그대로 따른다.
+        /// 테이블은 귀속되지만 그 테이블의 어느 컬럼에도 귀속되지 않는 이름은
+        /// 침묵한다. 잘못 지목한 오류는 재생성으로 고칠 수 없다는 CheckSchemaClaims의
+        /// 정책을 그대로 따른다.
         /// </summary>
         [Fact]
         public void Validate_NotNullClaimOnUnknownIdentifier_IsSilent()
         {
             var expectations = BuildExpectationsWithNullableColumn("UseState", isNullable: true);
             var markdown = WrapSpec("표 없음")
-                + "\n`배치작업ID`는 널을 허용하지 않습니다.\n";
+                + "\n`TTest.배치작업ID`는 널을 허용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        /// <summary>
+        /// 테이블 앵커 자체가 없는(같은 줄에 어느 식별자도 테이블로 풀리지 않는)
+        /// 경우도 침묵한다 - Fix Round 1 이전 구현이 검증하지 못했던 경로다.
+        /// </summary>
+        [Fact]
+        public void Validate_NotNullClaimWithoutAnyTableAnchor_IsSilent()
+        {
+            var expectations = BuildExpectationsWithNullableColumn("UseState", isNullable: true);
+            var markdown = WrapSpec("표 없음")
+                + "\n`UseState`는 `tinyint`이며 널을 허용하지 않습니다.\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -5461,6 +5486,77 @@ END",
                 DdlText = "SELECT 1;",
                 ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
                 Dependencies = { dep },
+                StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true }
+            };
+            return SpecExpectations.From(spDef)!;
+        }
+
+        /// <summary>
+        /// Fix Round 1 - 리뷰 Critical 실측(UF_GET_COMM4PG4INTEREST). `UseState`는
+        /// `TCardContractMgmt`에서 NOT NULL, `TFreeInterestInstCommission`에서 널 허용으로
+        /// 갈린다. 이름만 보는 대조는 이 갈림을 만나면 이름 자체를 버려, 이 감사가
+        /// 잡아야 할 결함(후자를 NOT NULL로 단정한 문장)이 조용히 통과했다. 테이블별로
+        /// 나누면 두 UseState가 서로를 가리지 않고, 정답 테이블만 보고돼야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_NotNullClaimOnColumnAmbiguousAcrossTables_ReportsTheNullableTable()
+        {
+            var expectations = BuildExpectationsWithTwoDependencyTables(
+                ("TCardContractMgmt", "UseState", false),
+                ("TFreeInterestInstCommission", "UseState", true));
+            var markdown = WrapSpec("표 없음")
+                + "\n`TFreeInterestInstCommission.UseState`는 `tinyint`이며 널을 허용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        /// <summary>
+        /// Fix Round 1 - 리뷰 Critical 실측(UP_UTIL_SETTLE_SUMMARY_ETC:86 등 3곳). 표 행의
+        /// 마지막 셀이 SQL 술어 `A.OutYMD IS NOT NULL`을 서술할 뿐인데, 같은 행의
+        /// "참조 컬럼" 셀에 나열된 무관한 컬럼(`AYMD` 등)까지 널 불허 단정으로 잘못
+        /// 지목했다. `AYMD`는 이 표에서 실제로 널 허용이지만, 이 줄은 `AYMD`에 대해
+        /// 아무 단정도 하지 않았으므로 침묵해야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_SqlPredicateIsNotNull_DoesNotFlagUnrelatedColumnsInSameRow()
+        {
+            var expectations = BuildExpectationsWithNullableColumn("AYMD", isNullable: true);
+            var markdown = WrapSpec("표 없음")
+                + "\n| `SETTLE_POQ_DB.dbo.TTest` | 커서 조회 별칭 `A` | `AYMD`, `OutState` | "
+                + "`A.OutYMD IS NOT NULL` 조건을 적용합니다. |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        private static SpecExpectations BuildExpectationsWithTwoDependencyTables(
+            (string TableName, string ColumnName, bool IsNullable) tableA,
+            (string TableName, string ColumnName, bool IsNullable) tableB)
+        {
+            var depA = new DependencyInfo
+            {
+                Database = "SETTLE_CARD_DB",
+                Schema = "dbo",
+                Name = tableA.TableName,
+                Columns = { new ColumnInfo { ColumnName = tableA.ColumnName, IsNullable = tableA.IsNullable } }
+            };
+            var depB = new DependencyInfo
+            {
+                Database = "SETTLE_CARD_DB",
+                Schema = "dbo",
+                Name = tableB.TableName,
+                Columns = { new ColumnInfo { ColumnName = tableB.ColumnName, IsNullable = tableB.IsNullable } }
+            };
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = CodeObjectKey.Create("SETTLE_CARD_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Dependencies = { depA, depB },
                 StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true }
             };
             return SpecExpectations.From(spDef)!;

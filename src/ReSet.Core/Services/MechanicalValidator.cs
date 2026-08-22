@@ -2114,6 +2114,25 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 한 줄이 진짜 스키마 널 허용 단정인지 가르는 트리거. "NOT NULL"(영문, SQL
+        /// 술어)은 일부러 뺐다 - Fix Round 1 리뷰 Critical 실측: `IS NOT NULL`은 WHERE
+        /// 절 술어를 옮긴 산문일 뿐인데, 그 문장이 마크다운 표의 "참조 컬럼" 셀과 같은
+        /// 줄에 있으면 그 셀에 나열된 무관한 컬럼들(AYMD·OutState·ProductName 등)까지
+        /// "널 불허 단정"으로 잘못 지목했다(`output/Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_ETC/docs/Spec.md:86`,
+        /// `dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD/docs/Spec.md:79`,
+        /// `dbo.UP_Util_PG_Client_CMRate_Ins/docs/Spec.md:21,58`). `output/**/Spec.md`
+        /// 전수(감사 시점 "NOT NULL" 15건)를 확인하면 예외 없이 `IS NOT NULL` SQL 술어이거나
+        /// 무관한 문맥이고, 진짜 단정 문장은 항상 아래 두 한국어 어투 중 하나를 쓴다
+        /// (`UF_GET_COMM4PG4INTEREST`의 "널을 허용하지 않습니다",
+        /// `UF_Get_CLComm4MobileCo`의 "`NULL`을 허용하지 않습니다"). 판정 기준은 이
+        /// 코퍼스에서 거짓 양성 0이다.
+        /// </summary>
+        private static readonly string[] NotNullClaimTokens =
+        {
+            "널을 허용하지 않습니다", "NULL을 허용하지 않습니다"
+        };
+
+        /// <summary>
         /// 명세서가 "널을 허용하지 않습니다"로 단정한 컬럼이 실제로는 널 허용인지 본다.
         ///
         /// [왜 한 방향만 보는가] 널 허용인데 NOT NULL로 단정하는 쪽만 위험하다 -
@@ -2121,18 +2140,26 @@ namespace ReSet.Core.Services
         /// 3값 논리로 배제하던 행이 대상에 들어온다(2026-08-22 축 A 재감사,
         /// UF_GET_COMM4PG4INTEREST의 UseState). 반대 방향은 과한 방어라 무해하다.
         ///
-        /// [귀속 불가 시 침묵] 백틱 식별자의 말단 이름이 NullableColumnNames에 없으면
-        /// 넘어간다. 잘못 지목한 오류는 재생성으로 고칠 수 없고, 그것이 이 저장소가
-        /// 무한 재시도로 겪은 실패다(CheckSchemaClaims 주석). NullableColumnNames는
-        /// SpecExpectations.From이 이미 테이블 간 널 허용 여부가 갈리는 이름을 뺀
-        /// 집합이라, 여기서는 테이블 문맥 없이 말단 이름만 대조해도 참인 서술을
-        /// 오류로 지목하지 않는다. `@` 파라미터 참조는 leaf에 `@`가 그대로 남아
-        /// 컬럼 이름과 문자 그대로 다르므로 애초에 매치되지 않는다.
+        /// [Fix Round 1 - 왜 같은 줄 테이블 앵커가 필요한가] 1라운드는 컬럼 말단 이름만
+        /// 봐서, 명세서가 단정한 컬럼이 어느 테이블 얘기인지 전혀 확인하지 않았다.
+        /// 같은 이름의 컬럼이 테이블마다 널 허용 여부가 갈리는 실측(`UseState`:
+        /// `TCardContractMgmt`는 NOT NULL, `TFreeInterestInstCommission`은 널 허용)에서
+        /// 테이블 문맥 없이는 어느 판정이 맞는지 알 길이 없다. CheckSchemaClaims
+        /// (바로 위, 2085-2094행)가 이미 쓰는 관례를 그대로 따른다 - 같은 줄의 다른
+        /// 식별자가 테이블로 풀려야(앵커)만 그 테이블 기준으로 컬럼을 대조한다.
+        /// 실측 정답 문장은 `TFreeInterestInstCommission.UseState`처럼 테이블.컬럼이
+        /// 한 백틱 식별자 안에 같이 오기도 하므로, 식별자를 마지막 점에서 나눠
+        /// 앞부분이 테이블로 풀리는지도 본다 - 그러면 그 식별자 하나가 스스로 앵커와
+        /// 컬럼을 같이 들고 온다.
+        ///
+        /// [귀속 불가 시 침묵] 테이블로도 컬럼으로도 풀리지 않으면 넘어간다. 잘못
+        /// 지목한 오류는 재생성으로 고칠 수 없고, 그것이 이 저장소가 무한 재시도로
+        /// 겪은 실패다(CheckSchemaClaims 주석).
         /// </summary>
         private static void CheckNullabilityClaims(
             string markdown, SpecExpectations expectations, ValidationResult result)
         {
-            if (expectations.NullableColumnNames.Count == 0) return;
+            if (expectations.NullableColumnsByTable.Count == 0) return;
 
             try
             {
@@ -2140,35 +2167,86 @@ namespace ReSet.Core.Services
                 var fenceFlags = ComputeFenceLineFlags(lines);
                 var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+                void ReportIfNullable(string tableKey, string column, string rawLine)
+                {
+                    if (!expectations.NullableColumnsByTable.TryGetValue(tableKey, out var nullableCols)) return;
+                    if (!nullableCols.Contains(column)) return;
+                    if (!reported.Add($"{tableKey}|{column}")) return;
+
+                    var message =
+                        $"명세서가 `{tableKey}`의 컬럼 `{column}`을(를) 널 불허로 단정했으나 의존성 " +
+                        "스키마는 널 허용으로 확정했습니다. 이 단정을 근거로 제약을 세우거나 필터를 " +
+                        "바꾸면 원본이 배제하던 NULL 행이 대상에 들어옵니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.NullabilityClaimMismatch,
+                        Message = message,
+                        RawContext = rawLine.Trim()
+                    });
+                }
+
                 for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
                 {
                     if (fenceFlags[lineIndex]) continue;
 
                     var line = lines[lineIndex];
-                    if (!line.Contains("널을 허용하지 않습니다", StringComparison.Ordinal)
-                        && !line.Contains("NOT NULL", StringComparison.Ordinal))
+                    if (!Array.Exists(NotNullClaimTokens, t => line.Contains(t, StringComparison.Ordinal)))
                     {
                         continue;
                     }
 
+                    var identifiers = new List<string>();
                     foreach (Match match in BacktickIdentifierRegex.Matches(line))
                     {
                         var identifier = match.Groups[1].Value.Trim();
-                        var leaf = identifier.Split('.')[^1];
-                        if (!expectations.NullableColumnNames.Contains(leaf)) continue;
-                        if (!reported.Add(leaf)) continue;
+                        if (identifier.Length > 0) identifiers.Add(identifier);
+                    }
+                    if (identifiers.Count == 0) continue;
 
-                        var message =
-                            $"명세서가 `{leaf}` 컬럼을 널 불허로 단정했으나 의존성 스키마는 널 허용으로 "
-                            + "확정했습니다. 이 단정을 근거로 제약을 세우거나 필터를 바꾸면 원본이 "
-                            + "배제하던 NULL 행이 대상에 들어옵니다.";
-                        result.Errors.Add(message);
-                        result.DetailedErrors.Add(new DetailedError
+                    // 이 줄에서 풀린 테이블들(앵커) - 한정 없는 컬럼 후보를 대조할 기준.
+                    var anchoredTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    // 식별자 자신이 테이블.컬럼을 같이 들고 있는 후보.
+                    var qualifiedCandidates = new List<(string TableKey, string Column)>();
+                    var bareCandidates = new List<string>();
+
+                    foreach (var identifier in identifiers)
+                    {
+                        var directTableKey = ResolveSchemaTableKey(identifier, expectations);
+                        if (directTableKey != null)
                         {
-                            Type = ErrorType.NullabilityClaimMismatch,
-                            Message = message,
-                            RawContext = line.Trim()
-                        });
+                            anchoredTables.Add(directTableKey);
+                            continue; // 테이블만 가리키는 식별자는 컬럼 후보가 아니다.
+                        }
+
+                        var dotIndex = identifier.LastIndexOf('.');
+                        if (dotIndex > 0 && dotIndex < identifier.Length - 1)
+                        {
+                            var tablePart = identifier[..dotIndex];
+                            var columnPart = identifier[(dotIndex + 1)..];
+                            var tableKeyFromSplit = ResolveSchemaTableKey(tablePart, expectations);
+                            if (tableKeyFromSplit != null)
+                            {
+                                anchoredTables.Add(tableKeyFromSplit);
+                                qualifiedCandidates.Add((tableKeyFromSplit, columnPart));
+                                continue;
+                            }
+                        }
+
+                        bareCandidates.Add(identifier);
+                    }
+
+                    foreach (var (tableKey, column) in qualifiedCandidates)
+                    {
+                        ReportIfNullable(tableKey, column, line);
+                    }
+
+                    foreach (var bare in bareCandidates)
+                    {
+                        foreach (var tableKey in anchoredTables)
+                        {
+                            ReportIfNullable(tableKey, bare, line);
+                        }
                     }
                 }
             }

@@ -124,13 +124,20 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string> InsertTargetTables { get; init; } = Array.Empty<string>();
 
         /// <summary>
-        /// 의존성 스키마가 널 허용으로 확정한 컬럼의 말단 이름. 명세서가 "널을
-        /// 허용하지 않습니다"로 단정한 줄을 대조하는 기준이다. 컬럼 이름이 여러
-        /// 테이블에 걸쳐 같으면 널 허용 여부가 갈릴 수 있으므로, 갈리는 이름은
-        /// 담지 않는다 - 담으면 참인 서술이 오류로 지목된다.
+        /// 테이블별로 의존성 스키마가 널 허용으로 확정한 컬럼의 말단 이름. 키는
+        /// PromptSchemaColumns와 같은 canonical 3-part 이름이다. 명세서가 "널을
+        /// 허용하지 않습니다"로 단정한 줄을 대조하는 기준이다.
+        ///
+        /// [Fix Round 1 - 왜 테이블 단위인가] 1라운드 구현은 컬럼 이름을 테이블 구분
+        /// 없이 평평한 집합 하나로 모았고, 이름이 같은데 널 허용 여부가 테이블마다
+        /// 갈리면 그 이름을 통째로 버렸다. 실측(UF_GET_COMM4PG4INTEREST)에서
+        /// `TCardContractMgmt.UseState`는 NOT NULL, `TFreeInterestInstCommission.UseState`는
+        /// 널 허용이라 이 감사가 잡아야 할 바로 그 결함(후자를 NOT NULL로 단정한 명세서
+        /// 문장)이 조용히 버려졌다 - 리뷰 Critical로 실측. 테이블별로 나누면 두
+        /// UseState가 서로를 가리지 않는다.
         /// </summary>
-        public IReadOnlySet<string> NullableColumnNames { get; init; } =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyDictionary<string, IReadOnlySet<string>> NullableColumnsByTable { get; init; } =
+            new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
@@ -145,6 +152,13 @@ namespace ReSet.Core.Services
             var promptSchemaColumns = new Dictionary<string, IReadOnlySet<string>>(
                 StringComparer.OrdinalIgnoreCase);
             var columnlessDependencyTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // CheckNullabilityClaims의 기준이다. promptSchemaColumns와 정확히 같은 루프,
+            // 같은 canonical 계산, 같은 건너뛰기 조건으로 채운다 - 두 컬렉션의 키 집합이
+            // 갈리면(예: 이 컬렉션만 별도 루프로 canonical을 다시 계산하면) 한쪽에서만
+            // 해석되는 테이블이 생겨 CheckNullabilityClaims의 테이블 앵커 대조가
+            // 예측 불가능해진다.
+            var nullableColumnsByTable = new Dictionary<string, IReadOnlySet<string>>(
+                StringComparer.OrdinalIgnoreCase);
 
             foreach (var dep in spDef.Dependencies)
             {
@@ -164,30 +178,14 @@ namespace ReSet.Core.Services
                 }
 
                 promptSchemaColumns[canonical] = SchemaPromptColumnSelector.Select(dep, spDef);
-            }
 
-            // 같은 컬럼 이름이 테이블마다 널 허용 여부가 다르면 어느 쪽도 기준이 될 수
-            // 없다. 그런 이름은 빼서 침묵시킨다 - 참인 서술을 오류로 지목하면
-            // 재생성으로 고칠 수 없다.
-            var nullableByName = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-            var ambiguousNullability = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var dep in spDef.Dependencies)
-            {
-                foreach (var col in dep.Columns)
-                {
-                    if (string.IsNullOrWhiteSpace(col.ColumnName)) continue;
-                    if (nullableByName.TryGetValue(col.ColumnName, out var known))
-                    {
-                        if (known != col.IsNullable) ambiguousNullability.Add(col.ColumnName);
-                        continue;
-                    }
-                    nullableByName[col.ColumnName] = col.IsNullable;
-                }
+                var nullableInThisTable = new HashSet<string>(
+                    dep.Columns
+                        .Where(c => c.IsNullable && !string.IsNullOrWhiteSpace(c.ColumnName))
+                        .Select(c => c.ColumnName),
+                    StringComparer.OrdinalIgnoreCase);
+                nullableColumnsByTable[canonical] = nullableInThisTable;
             }
-            var nullableColumnNames = new HashSet<string>(
-                nullableByName.Where(kv => kv.Value && !ambiguousNullability.Contains(kv.Key))
-                    .Select(kv => kv.Key),
-                StringComparer.OrdinalIgnoreCase);
 
             var inputDefects = SchemaPromptColumnSelector.DetectOrphanedColumnKeys(spDef);
 
@@ -328,19 +326,13 @@ namespace ReSet.Core.Services
                 // 한 번도 돌지 않는다 - 2026-08-20 리뷰가 dmlScopeFacts 항에서 실측한
                 // 것과 같은 실패 모양이다.
                 && objectDeclaration == null
-                // nullableColumnNames는 promptSchemaColumns와 겉보기엔 같은 조건(dep.Columns.Count
-                // > 0)에서 채워지므로 오늘은 대체로 중복항처럼 보인다. 그러나
-                // setPredicates·referencedFunctionCalls·lockHints의 "중복항" 근거(같은
-                // Extract 함수가 같은 문장만 방문한다는 함수 공유)와 이 항은 다르다 -
-                // 두 값은 서로 다른 두 루프에서 독립적으로 계산되고, promptSchemaColumns
-                // 쪽 루프는 canonical 이름이 공백이면(dep.Name이 빈 의존성) 그 dep을
-                // 통째로 건너뛰어 promptSchemaColumns에 아무것도 안 남기는 반면
-                // nullableColumnNames 쪽 루프는 canonical 이름을 아예 계산하지 않아 그런
-                // dep의 컬럼도 그대로 담는다. 그런 dep이 실무에서 나타날 일은 거의
-                // 없지만, "거의 없다"는 근거로 항을 생략하면 그 희귀한 입력에서 이
-                // 검사가 한 번도 돌지 않고 스위트는 초록으로 남는다 - 위 여러 주석이
-                // 경고하는 것과 같은 실패 모양이라 자기 항을 그대로 잇는다.
-                && nullableColumnNames.Count == 0)
+                // Fix Round 1 - nullableColumnsByTable은 promptSchemaColumns와 정확히
+                // 같은 루프, 같은 canonical 계산, 같은 건너뛰기 조건에서 같은 키로
+                // 채워지므로(위 foreach 참고) 오늘은 진짜 중복항이다 - 두 컬렉션의 키
+                // 집합이 갈릴 길이 없다. setPredicates·referencedFunctionCalls·lockHints와
+                // 같은 이유로 그래도 잇는다: 언젠가 두 컬렉션이 별도 루프로 갈라지면
+                // 이 항이 없는 채 그 리팩터가 조용히 CheckNullabilityClaims를 죽인다.
+                && nullableColumnsByTable.Count == 0)
             {
                 return null;
             }
@@ -363,7 +355,7 @@ namespace ReSet.Core.Services
                 ExecutionSemantics = executionSemantics,
                 CaseBranches = caseBranches,
                 InsertTargetTables = insertTargetTables,
-                NullableColumnNames = nullableColumnNames
+                NullableColumnsByTable = nullableColumnsByTable
             };
         }
 
