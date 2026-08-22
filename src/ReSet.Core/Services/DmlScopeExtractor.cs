@@ -211,9 +211,13 @@ namespace ReSet.Core.Services
     /// </summary>
     /// <param name="Alias">별칭이 없으면 "-".</param>
     /// <param name="Scope">
-    /// "최상위" 또는 "파생". SetPredicateFact.Scope와 같은 선례다 - 파생 테이블 안의
-    /// 참조를 빼지 않고 표시해서 싣는다(수정 라운드 2, 아래 ExtractLockHints 문서의
-    /// 실측 근거 참고).
+    /// "최상위" · "파생" · "하위 질의". SetPredicateFact.Scope와 같은 선례다 - 최상위
+    /// FROM에 직접 실리지 않은 참조를 빼지 않고 표시해서 싣는다(수정 라운드 2, 아래
+    /// ExtractLockHints 문서의 실측 근거 참고).
+    ///
+    /// "최상위"는 그 문장(또는 그 IF 술어)이 직접 훑는 자리를 뜻한다. 술어 안에서
+    /// 다시 열린 질의가 훑는 자리는 문장 종류를 가리지 않고 "하위 질의"다
+    /// (2026-08-22 축 A 재감사 - LockHintVisitor.SubqueryScope 문서에 경계를 적었다).
     /// </param>
     /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
     public sealed record LockHintFact(
@@ -429,6 +433,23 @@ namespace ReSet.Core.Services
             /// <summary>파생 테이블 안의 참조.</summary>
             private const string DerivedScope = "파생";
 
+            /// <summary>
+            /// 최상위 FROM도 파생 테이블도 아닌, 술어 안 하위 질의의 참조.
+            ///
+            /// [무엇을 "최상위"라 부르는지의 경계 - 2026-08-22 축 A 재감사]
+            /// 한 스캔 자리가 `최상위`라는 말은 "그 문장(또는 그 IF 술어)이 직접 훑는
+            /// 자리"라는 뜻이다. 그 자리의 술어 안에서 다시 열리는 질의는 문장 종류와
+            /// 무관하게 전부 이 범위로 간다 - `UPDATE ... WHERE x IN (SELECT ...)`의
+            /// 하위 질의와 `IF EXISTS(SELECT ... WHERE x IN (SELECT ...))`의 안쪽
+            /// 하위 질의는 원문에서 같은 모양이므로 표에서도 같은 범위여야 한다.
+            /// 갈라 놓으면 독자가 `최상위`를 문장 종류마다 다르게 읽어야 한다.
+            ///
+            /// 하위 질의 안의 파생 테이블도 `파생`이 아니라 이 범위로 싣는다. 두 표시
+            /// 모두 "최상위가 아니다"를 말하는데, 겹칠 때 어느 쪽을 고를지는 자의적이고
+            /// 실측 코퍼스에 겹치는 사례가 없다. 바깥 겹을 먼저 말하는 쪽으로 고정한다.
+            /// </summary>
+            private const string SubqueryScope = "하위 질의";
+
             public List<LockHintFact> Facts { get; } = new();
 
             private readonly Dictionary<string, int> _ordinals = new(StringComparer.Ordinal);
@@ -456,6 +477,7 @@ namespace ReSet.Core.Services
                     foreach (var spec in QuerySpecificationsOf(select.Select))
                     {
                         CollectFrom("INSERT", ordinal, spec.FromClause);
+                        CollectWhereSubqueries("INSERT", ordinal, spec.WhereClause);
                     }
                 }
 
@@ -470,6 +492,7 @@ namespace ReSet.Core.Services
             {
                 var ordinal = NextOrdinal("UPDATE");
                 CollectFrom("UPDATE", ordinal, node.FromClause);
+                CollectWhereSubqueries("UPDATE", ordinal, node.WhereClause);
                 RecordTargetHint("UPDATE", ordinal, node.Target);
 
                 _dmlDepth++;
@@ -481,6 +504,7 @@ namespace ReSet.Core.Services
             {
                 var ordinal = NextOrdinal("DELETE");
                 CollectFrom("DELETE", ordinal, node.FromClause);
+                CollectWhereSubqueries("DELETE", ordinal, node.WhereClause);
                 RecordTargetHint("DELETE", ordinal, node.Target);
 
                 _dmlDepth++;
@@ -539,8 +563,26 @@ namespace ReSet.Core.Services
             /// 집으면 되감을 일 자체가 없다 - `ExplicitVisit(SelectStatement)`이
             /// `HasFromClause`로 미리 가르는 것과 같은 모양이다.
             ///
-            /// 술어 안 하위 질의는 `_dmlDepth`가 0인 자리이므로 DML 안 하위 질의 처리와
-            /// 겹치지 않는다.
+            /// DML 안 하위 질의(CollectWhereSubqueries)와 겹치지 않는다 - 그쪽은 세 DML
+            /// 오버라이드에서만 불리고, IF는 DML 문장 안에 나타날 수 없다.
+            ///
+            /// [첫 겹만 그 IF의 스캔인 이유] 술어의 첫 겹 하위 질의는 IF가 직접 훑는
+            /// 자리이므로 `최상위`/`파생`으로 싣지만, 그 안에서 다시 열리는 질의는
+            /// `하위 질의`다 - SubqueryScope 문서의 경계와 같다.
+            ///
+            /// [스캔이 없는 술어도 번호를 쓰는 자리 - 알고 남기는 비대칭]
+            /// 여기서 세는 것은 "스캔"이 아니라 "하위 질의"다. 그래서 `IF @x = (SELECT 1)`
+            /// 처럼 FROM 없는 하위 질의를 진 IF는 행을 하나도 내지 않으면서 IF 번호를
+            /// 소비한다. `ExplicitVisit(SelectStatement)`이 `HasFromClause`로 FROM 없는
+            /// SELECT를 아예 세지 않는 것과 어긋난다.
+            ///
+            /// 알고 남긴다. (1) IF 번호를 쓰는 표는 잠금 힌트 표 하나뿐이라 다른 표와
+            /// 어긋날 여지가 없다(SELECT 번호는 DML 범위 표와 나란히 읽혀야 하므로
+            /// 사정이 다르다). (2) 실측 코퍼스의 IF 술어 하위 질의 6건은 전부
+            /// `IF EXISTS(SELECT ... FROM ...)`이라 이 자리에 걸리는 원문이 없다.
+            /// **여기에 `HasFromClause` 같은 조건을 나중에 더하면 기존 IF 번호가 조용히
+            /// 밀린다** - 재생성된 명세서의 「IF n」이 전부 어긋나므로, 고치려거든
+            /// 산출물 재생성과 함께 해야 한다.
             /// </summary>
             public override void ExplicitVisit(IfStatement node)
             {
@@ -549,16 +591,63 @@ namespace ReSet.Core.Services
                 if (queries.Count > 0)
                 {
                     var ordinal = NextOrdinal("IF");
-                    foreach (var query in queries) CollectFromQuery("IF", ordinal, query);
+                    foreach (var (query, depth) in queries)
+                    {
+                        if (depth == 0) CollectFromQuery("IF", ordinal, query);
+                        else CollectSubqueryScans("IF", ordinal, query);
+                    }
                 }
 
                 base.ExplicitVisit(node);
             }
 
-            /// <summary>불리언 식 안의 하위 질의를 모은다.</summary>
-            private static List<QueryExpression> SubqueriesOf(BooleanExpression? predicate)
+            /// <summary>
+            /// DML 문장의 WHERE 안 하위 질의를 그 문장 번호로 훑는다.
+            ///
+            /// 범위를 `하위 질의`로 다는 이유는 `파생`과 같다 - 빼지 않고 표시해서 싣는다.
+            /// 별도 문장 번호를 주지 않는 이유는 이 스캔이 이미 그 DML 문장의 일부라서,
+            /// 새로 세면 같은 UPDATE가 두 번호로 나타나 다른 표와 대조할 수 없기 때문이다.
+            ///
+            /// 겹의 깊이를 가리지 않는다 - WHERE 하위 질의 안에서 또 열린 질의도 그
+            /// 문장이 직접 훑는 자리가 아니므로 같은 범위다.
+            /// </summary>
+            private void CollectWhereSubqueries(string operation, int ordinal, WhereClause? where)
             {
-                if (predicate == null) return new List<QueryExpression>();
+                if (where?.SearchCondition == null) return;
+
+                foreach (var (query, _) in SubqueriesOf(where.SearchCondition))
+                {
+                    CollectSubqueryScans(operation, ordinal, query);
+                }
+            }
+
+            /// <summary>
+            /// 하위 질의 하나가 훑는 자리를 전부 `하위 질의` 범위로 싣는다. 그 안에 또
+            /// 하위 질의가 있으면 SubqueriesOf가 이미 따로 모아 두었으므로 여기서는
+            /// 이 겹의 FROM만 본다(QuerySpecificationsOf는 UNION 갈래로만 내려가고
+            /// WHERE 안으로는 내려가지 않는다).
+            /// </summary>
+            private void CollectSubqueryScans(string operation, int ordinal, QueryExpression? query)
+            {
+                if (query == null) return;
+
+                foreach (var spec in QuerySpecificationsOf(query))
+                {
+                    if (spec.FromClause == null) continue;
+
+                    var tables = new FromTableCollector();
+                    foreach (var reference in spec.FromClause.TableReferences) reference.Accept(tables);
+                    foreach (var (table, _) in tables.Tables) Add(operation, ordinal, table, SubqueryScope);
+                }
+            }
+
+            /// <summary>
+            /// 불리언 식 안의 하위 질의를 겹 깊이와 함께 모은다. 깊이 0은 그 식이 직접
+            /// 여는 질의이고, 1 이상은 그 질의의 술어 안에서 다시 열린 질의다.
+            /// </summary>
+            private static List<(QueryExpression Query, int Depth)> SubqueriesOf(BooleanExpression? predicate)
+            {
+                if (predicate == null) return new List<(QueryExpression, int)>();
 
                 var collector = new SubqueryCollector();
                 predicate.Accept(collector);
@@ -569,12 +658,26 @@ namespace ReSet.Core.Services
             /// 술어 안의 `ScalarSubquery`를 모은다. EXISTS·IN·비교 어느 자리에 있든
             /// 하위 질의는 이 노드로 온다(프로브 실측). 술어 안에는 `SelectStatement`가
             /// 없으므로 바깥 방문자의 `SELECT n` 채번과 겹치지 않는다.
+            ///
+            /// 겹의 깊이를 함께 낸다. 호출부가 "이 식이 직접 여는 질의"와 "그 안에서 다시
+            /// 열린 질의"를 갈라야 하기 때문이다(SubqueryScope 문서 참고). Visit이 아니라
+            /// ExplicitVisit을 오버라이드해 base로 자식 순회를 이어가야 깊이를 표시할 수
+            /// 있다 - FromTableCollector가 파생 테이블 진입/이탈을 다루는 방식과 같다.
             /// </summary>
             private sealed class SubqueryCollector : TSqlFragmentVisitor
             {
-                public List<QueryExpression> Queries { get; } = new();
+                public List<(QueryExpression Query, int Depth)> Queries { get; } = new();
 
-                public override void Visit(ScalarSubquery node) => Queries.Add(node.QueryExpression);
+                private int _depth;
+
+                public override void ExplicitVisit(ScalarSubquery node)
+                {
+                    Queries.Add((node.QueryExpression, _depth));
+
+                    _depth++;
+                    base.ExplicitVisit(node);
+                    _depth--;
+                }
             }
 
             private int NextOrdinal(string operation)

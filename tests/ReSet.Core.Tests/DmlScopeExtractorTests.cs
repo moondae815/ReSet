@@ -1586,9 +1586,14 @@ END";
         [Fact]
         public void ExtractLockHints_IfWithoutScanNestingAnotherIf_ShouldNotShiftInnerOrdinal()
         {
-            // 술어에 스캔이 없는 IF는 번호를 쓰지 않는다. 그 IF가 다른 IF를 품고 있어도
-            // 안쪽이 1번부터 시작해야 한다 - 바깥이 번호를 먼저 집었다가 돌려주는 방식이면
-            // 집는 시점과 돌려주는 시점 사이에 안쪽이 끼어들 때 카운터가 어긋난다.
+            // 술어에 하위 질의가 없는 IF는 번호를 쓰지 않는다. 그 IF가 다른 IF를 품고
+            // 있어도 안쪽이 1번을, 뒤따르는 IF가 2번을 받아야 한다.
+            //
+            // 이 테스트가 고정하는 것은 그 결과뿐이고 구현 방식이 아니다. 계획서의
+            // "먼저 집었다가 스캔이 없으면 되돌린다" 방식으로도 이 테스트는 통과한다 -
+            // 되돌리기가 base.ExplicitVisit보다 앞서므로 집는 시점과 되돌리는 시점
+            // 사이에 안쪽 IF가 끼어들 자리가 없다. 지금 구현이 되감기를 아예 쓰지 않는
+            // 이유는 LockHintVisitor.ExplicitVisit(IfStatement) 문서에 있다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -1608,6 +1613,162 @@ END";
             Assert.Equal("dbo.TA", facts[0].Table);
             Assert.Equal(2, facts[1].StatementOrdinal);
             Assert.Equal("dbo.TB", facts[1].Table);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideDml_ShouldKeepStatementOrdinalAndMarkScope()
+        {
+            // COMM_UPD:145 · EXCEPTION_PROC:529 실측 - 최상위 WHERE 하위 질의의 NOLOCK이
+            // 표 밖이라 산문도 함께 침묵했다(2026-08-22 축 A 재감사 🟡).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TSettleMst A WITH(NOLOCK)
+    WHERE  A.PLTID IN (SELECT PLTID FROM PaymentDB.dbo.TCCanceledMst WITH(NOLOCK))
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("UPDATE", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            var sub = Assert.Single(facts, f => f.Table == "PaymentDB.dbo.TCCanceledMst");
+            Assert.Equal("하위 질의", sub.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, sub.Hints);
+
+            var top = Assert.Single(facts, f => f.Table == "dbo.TSettleMst");
+            Assert.Equal("최상위", top.Scope);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideDml_ShouldNotConsumeSelectOrdinal()
+        {
+            // DML 안 하위 질의는 그 DML 문장의 일부다. 독립 SELECT로 다시 채번하면
+            // 뒤 문장의 SELECT 번호가 밀려 다른 표와 나란히 읽을 수 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TA A WITH(NOLOCK)
+    WHERE  A.ID IN (SELECT ID FROM dbo.TB WITH(NOLOCK))
+
+    SELECT @v = MIN(ReqYMD) FROM dbo.TC WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var sub = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("UPDATE", sub.Operation);
+            Assert.Equal(1, sub.StatementOrdinal);
+            Assert.Equal("하위 질의", sub.Scope);
+
+            // 뒤 SELECT의 번호가 밀리지 않는다.
+            var select = Assert.Single(facts, f => f.Operation == "SELECT");
+            Assert.Equal(1, select.StatementOrdinal);
+            Assert.Equal("dbo.TC", select.Table);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideDelete_ShouldBeMarkedAsSubqueryScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DELETE FROM dbo.TA
+    WHERE  ID IN (SELECT ID FROM dbo.TB WITH(NOLOCK))
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var sub = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("DELETE", sub.Operation);
+            Assert.Equal(1, sub.StatementOrdinal);
+            Assert.Equal("하위 질의", sub.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, sub.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideInsertSource_ShouldBeMarkedAsSubqueryScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO dbo.TDst (ID)
+    SELECT A.ID
+    FROM   dbo.TA A WITH(NOLOCK)
+    WHERE  A.ID IN (SELECT ID FROM dbo.TB WITH(NOLOCK))
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("INSERT", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            var sub = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("하위 질의", sub.Scope);
+
+            var top = Assert.Single(facts, f => f.Table == "dbo.TA");
+            Assert.Equal("최상위", top.Scope);
+        }
+
+        [Fact]
+        public void ExtractLockHints_NestedSubqueryInIfPredicate_ShouldUseSubqueryScope()
+        {
+            // 같은 중첩 모양이 문장 종류에 따라 다른 범위로 찍히면 "최상위"를 믿을 수 없다.
+            // IF 술어의 첫 겹만 그 IF가 직접 훑는 자리이고, 그보다 깊은 겹은 DML의 WHERE
+            // 하위 질의와 같은 자리다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT 1
+              FROM   dbo.TA WITH(NOLOCK)
+              WHERE  ID IN (SELECT ID FROM dbo.TB WITH(NOLOCK)))
+        RETURN -1
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("IF", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            var top = Assert.Single(facts, f => f.Table == "dbo.TA");
+            Assert.Equal("최상위", top.Scope);
+
+            var sub = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("하위 질의", sub.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, sub.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_DmlInsideIfBody_ShouldGetItsOwnOrdinal()
+        {
+            // IF 본문 안의 DML은 술어가 아니라 자기 문장이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT 1 FROM dbo.TA WITH(NOLOCK))
+    BEGIN
+        UPDATE B SET B.X = 1 FROM dbo.TB B WITH(NOLOCK)
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var ifFact = Assert.Single(facts, f => f.Operation == "IF");
+            Assert.Equal(1, ifFact.StatementOrdinal);
+
+            var update = Assert.Single(facts, f => f.Operation == "UPDATE");
+            Assert.Equal(1, update.StatementOrdinal);
+            Assert.Equal("최상위", update.Scope);
         }
     }
 }
