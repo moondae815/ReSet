@@ -56,6 +56,8 @@ namespace ReSet.Core.Services
         MachineTableShapeBroken,
         // INSERT 매핑 표의 테이블명 표기 어긋남의 L1 앵커.
         InsertMappingTableNameMismatch,
+        // 컬럼 널 허용 주장 어긋남의 L1 앵커.
+        NullabilityClaimMismatch,
         General
     }
 
@@ -147,6 +149,7 @@ namespace ReSet.Core.Services
                     CheckUpdateMappings(cleansed, expectations, result);
                     CheckInsertMappingTableNames(cleansed, expectations, result);
                     CheckSchemaClaims(cleansed, expectations, result);
+                    CheckNullabilityClaims(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
                     CheckSourceComments(cleansed, expectations, result);
@@ -2107,6 +2110,71 @@ namespace ReSet.Core.Services
                         });
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 명세서가 "널을 허용하지 않습니다"로 단정한 컬럼이 실제로는 널 허용인지 본다.
+        ///
+        /// [왜 한 방향만 보는가] 널 허용인데 NOT NULL로 단정하는 쪽만 위험하다 -
+        /// 그 단정을 근거로 이행 스키마에 제약을 세우거나 필터를 바꾸면 원본이
+        /// 3값 논리로 배제하던 행이 대상에 들어온다(2026-08-22 축 A 재감사,
+        /// UF_GET_COMM4PG4INTEREST의 UseState). 반대 방향은 과한 방어라 무해하다.
+        ///
+        /// [귀속 불가 시 침묵] 백틱 식별자의 말단 이름이 NullableColumnNames에 없으면
+        /// 넘어간다. 잘못 지목한 오류는 재생성으로 고칠 수 없고, 그것이 이 저장소가
+        /// 무한 재시도로 겪은 실패다(CheckSchemaClaims 주석). NullableColumnNames는
+        /// SpecExpectations.From이 이미 테이블 간 널 허용 여부가 갈리는 이름을 뺀
+        /// 집합이라, 여기서는 테이블 문맥 없이 말단 이름만 대조해도 참인 서술을
+        /// 오류로 지목하지 않는다. `@` 파라미터 참조는 leaf에 `@`가 그대로 남아
+        /// 컬럼 이름과 문자 그대로 다르므로 애초에 매치되지 않는다.
+        /// </summary>
+        private static void CheckNullabilityClaims(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.NullableColumnNames.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var fenceFlags = ComputeFenceLineFlags(lines);
+                var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
+                {
+                    if (fenceFlags[lineIndex]) continue;
+
+                    var line = lines[lineIndex];
+                    if (!line.Contains("널을 허용하지 않습니다", StringComparison.Ordinal)
+                        && !line.Contains("NOT NULL", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    foreach (Match match in BacktickIdentifierRegex.Matches(line))
+                    {
+                        var identifier = match.Groups[1].Value.Trim();
+                        var leaf = identifier.Split('.')[^1];
+                        if (!expectations.NullableColumnNames.Contains(leaf)) continue;
+                        if (!reported.Add(leaf)) continue;
+
+                        var message =
+                            $"명세서가 `{leaf}` 컬럼을 널 불허로 단정했으나 의존성 스키마는 널 허용으로 "
+                            + "확정했습니다. 이 단정을 근거로 제약을 세우거나 필터를 바꾸면 원본이 "
+                            + "배제하던 NULL 행이 대상에 들어옵니다.";
+                        result.Errors.Add(message);
+                        result.DetailedErrors.Add(new DetailedError
+                        {
+                            Type = ErrorType.NullabilityClaimMismatch,
+                            Message = message,
+                            RawContext = line.Trim()
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] 널 허용 주장 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 

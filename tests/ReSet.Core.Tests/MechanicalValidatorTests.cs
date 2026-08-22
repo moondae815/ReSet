@@ -5397,5 +5397,73 @@ END",
             };
             return SpecExpectations.From(spDef)!;
         }
+
+        /// <summary>
+        /// 2026-08-22 축 A 재감사 실측(UF_GET_COMM4PG4INTEREST). 필터 컬럼 UseState는
+        /// IsNullable이 true인데 명세서가 "널을 허용하지 않습니다"로 단정했다. 이
+        /// 단정을 근거로 이행 스키마에 NOT NULL을 세우면 원본이 3값 논리로 배제하던
+        /// 행이 대상에 들어와 금액이 바뀐다.
+        /// </summary>
+        [Fact]
+        public void Validate_NotNullClaimOnNullableColumn_IsReported()
+        {
+            var expectations = BuildExpectationsWithNullableColumn("UseState", isNullable: true);
+            var markdown = WrapSpec("표 없음")
+                + "\n`UseState`는 `tinyint`이며 널을 허용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        /// <summary>실제로 NOT NULL인 컬럼에 대한 같은 문장은 통과한다 - 오탐 고정.</summary>
+        [Fact]
+        public void Validate_NotNullClaimOnNotNullColumn_IsNotReported()
+        {
+            var expectations = BuildExpectationsWithNullableColumn("IsPGFlag", isNullable: false);
+            var markdown = WrapSpec("표 없음")
+                + "\n`IsPGFlag`는 `tinyint`이며 널을 허용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        /// <summary>
+        /// 어느 의존성 컬럼에도 귀속되지 않는 이름은 침묵한다. 잘못 지목한 오류는
+        /// 재생성으로 고칠 수 없다는 CheckSchemaClaims의 정책을 그대로 따른다.
+        /// </summary>
+        [Fact]
+        public void Validate_NotNullClaimOnUnknownIdentifier_IsSilent()
+        {
+            var expectations = BuildExpectationsWithNullableColumn("UseState", isNullable: true);
+            var markdown = WrapSpec("표 없음")
+                + "\n`배치작업ID`는 널을 허용하지 않습니다.\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.NullabilityClaimMismatch);
+        }
+
+        private static SpecExpectations BuildExpectationsWithNullableColumn(string column, bool isNullable)
+        {
+            var dep = new DependencyInfo
+            {
+                Database = "SETTLE_POQ_DB",
+                Schema = "dbo",
+                Name = "TTest",
+                Columns = { new ColumnInfo { ColumnName = column, IsNullable = isNullable } }
+            };
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Dependencies = { dep },
+                StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true }
+            };
+            return SpecExpectations.From(spDef)!;
+        }
     }
 }
