@@ -382,7 +382,9 @@ namespace ReSet.Core.Services
         /// 포함한 네 테이블의 힌트가 통째로 사라졌다 - 스캔이 정말 없는 문장과 구별되지
         /// 않는, 이 표가 막으려는 바로 그 실패 모양이다. 「집합 술어」 표의
         /// SetPredicateFact.Scope 선례를 따라 빼지 않고 LockHintFact.Scope로 "최상위"/
-        /// "파생"을 표시해서 싣는다.
+        /// "파생"/"하위 질의"를 표시해서 싣는다 - 술어 안에서 다시 열린 질의가 훑는
+        /// 자리가 "하위 질의"다(2026-08-22 축 A 재감사. 경계는 LockHintVisitor의
+        /// SubqueryScope 문서에 적었다).
         ///
         /// [INSERT 원천이 UNION이면 갈래마다 훑는 이유 - 수정 라운드 2, 리뷰 실측]
         /// 원천이 BinaryQueryExpression일 수 있는데 QuerySpecification으로 좁히면 통째로
@@ -444,25 +446,30 @@ namespace ReSet.Core.Services
             /// 하위 질의는 원문에서 같은 모양이므로 표에서도 같은 범위여야 한다.
             /// 갈라 놓으면 독자가 `최상위`를 문장 종류마다 다르게 읽어야 한다.
             ///
-            /// 하위 질의 안의 파생 테이블도 `파생`이 아니라 이 범위로 싣는다. 두 표시
-            /// 모두 "최상위가 아니다"를 말하는데, 겹칠 때 어느 쪽을 고를지는 자의적이고
-            /// 실측 코퍼스에 겹치는 사례가 없다. 바깥 겹을 먼저 말하는 쪽으로 고정한다.
+            /// 술어는 WHERE만이 아니다. `JOIN ... ON` 안의 하위 질의도 그 문장이 직접
+            /// 훑는 자리가 아니므로 이 범위다(수정 라운드 1 리뷰 실측 - 그 자리가
+            /// `최상위`로 실리고 있었다).
+            ///
+            /// [아직 표에 오지 않는 자리 - 넘겨짚지 말 것] 이 라벨은 수집 경로가 지나간
+            /// 자리에만 붙는다. 오늘 지나가지 않는 자리가 남아 있다 - DML의 `SET` 절
+            /// 하위 질의(계획서가 이번 범위에서 뺐다)와 독립 `SELECT n`의 WHERE 하위
+            /// 질의(그 경로는 FROM만 훑는다. `IF n`은 술어 전체를 훑으므로 해당 없다).
+            /// 그 자리들은 "틀리게 실리는" 것이 아니라 "실리지 않는" 것이라 이 라벨의
+            /// 뜻은 그대로 참이지만, 표가 스캔을 전부 담는다고 읽으면 안 된다.
+            ///
+            /// [파생과 겹치면 이쪽이 이긴다] 두 표시 모두 "최상위가 아니다"를 말하는데,
+            /// 겹치는 자리가 양쪽 중첩 순서로 다 생긴다(파생 안의 하위 질의, 하위 질의
+            /// 안의 파생). 어느 쪽이 이길지를 `Add`의 등록 순서에 맡기면 그 중복 제거
+            /// 키에 Scope가 없어 먼저 등록된 라벨이 남고, 수집 순서를 한 줄 옮기는 것만
+            /// 으로 조용히 뒤집힌다. 그래서 `FromTableCollector.ScopeOf`에서 우선순위로
+            /// 고정하고 테스트로 못박았다
+            /// (ExtractLockHints_SubqueryInsideDerivedTable_ShouldWinOverDerivedScope).
             /// </summary>
             private const string SubqueryScope = "하위 질의";
 
             public List<LockHintFact> Facts { get; } = new();
 
             private readonly Dictionary<string, int> _ordinals = new(StringComparer.Ordinal);
-
-            /// <summary>
-            /// DML 문장 안인지 밖인지. `ExplicitVisit`로 진입/이탈을 감싸 추적한다.
-            ///
-            /// [왜 필요한가 - 2026-08-22 축 A 재감사] 같은 `ScalarSubquery`라도 DML 안에
-            /// 있으면 그 문장의 하위 질의이고(그 문장 번호를 그대로 써야 한다), DML 밖에
-            /// 있으면 제어 흐름 술어다(자기 번호를 받아야 한다). 노드 타입만으로는
-            /// 갈리지 않는다 - 프로브 실측으로 확인했다.
-            /// </summary>
-            private int _dmlDepth;
 
             public override void ExplicitVisit(InsertSpecification node)
             {
@@ -483,9 +490,7 @@ namespace ReSet.Core.Services
 
                 RecordTargetHint("INSERT", ordinal, node.Target);
 
-                _dmlDepth++;
                 base.ExplicitVisit(node);
-                _dmlDepth--;
             }
 
             public override void ExplicitVisit(UpdateSpecification node)
@@ -495,9 +500,7 @@ namespace ReSet.Core.Services
                 CollectWhereSubqueries("UPDATE", ordinal, node.WhereClause);
                 RecordTargetHint("UPDATE", ordinal, node.Target);
 
-                _dmlDepth++;
                 base.ExplicitVisit(node);
-                _dmlDepth--;
             }
 
             public override void ExplicitVisit(DeleteSpecification node)
@@ -507,16 +510,25 @@ namespace ReSet.Core.Services
                 CollectWhereSubqueries("DELETE", ordinal, node.WhereClause);
                 RecordTargetHint("DELETE", ordinal, node.Target);
 
-                _dmlDepth++;
                 base.ExplicitVisit(node);
-                _dmlDepth--;
             }
 
             /// <summary>
-            /// DML 밖의 독립 SELECT. 변수 대입 SELECT · 커서 원천 질의 · 함수 본문
-            /// SELECT가 전부 이 노드로 온다(프로브 실측 - `DECLARE CURSOR FOR SELECT`의
-            /// 원천도 `SelectStatement`다). `INSERT ... SELECT`의 원천은 이 노드로 오지
-            /// 않으므로 중복되지 않는다.
+            /// 독립 SELECT. 변수 대입 SELECT · 커서 원천 질의 · 함수 본문 SELECT가 전부
+            /// 이 노드로 온다(프로브 실측 - `DECLARE CURSOR FOR SELECT`의 원천도
+            /// `SelectStatement`다).
+            ///
+            /// [DML 안의 질의가 여기로 오지 않는다는 보장 - 수정 라운드 1 리뷰 판정]
+            /// 보장하는 것은 방문 상태가 아니라 **AST 모양**이다. `Insert`/`Update`/
+            /// `DeleteSpecification` 아래에 문장 노드인 `SelectStatement`가 놓이는 T-SQL
+            /// 형태가 없다 - INSERT 원천은 `QueryExpression`이고, `SET x = (SELECT ...)`·
+            /// 파생 테이블·`EXISTS(...)`는 전부 `ScalarSubquery`/`QueryDerivedTable` 아래의
+            /// `QueryExpression`이다. 그래서 `INSERT ... SELECT`의 원천이 여기서 다시
+            /// 잡혀 중복되는 일이 없다(ExtractLockHints_InsertSelectSource_ShouldNotProduceSelectRow).
+            ///
+            /// 예전에는 `_dmlDepth == 0` 가드가 이 자리를 지키는 것처럼 적혀 있었으나,
+            /// 그 필드는 읽히는 지점에서 0이 아닐 수 없어 실제로는 아무것도 가르지 않았다.
+            /// 근거와 역할이 어긋난 문서라 필드째 지웠다.
             ///
             /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 스캔할 자리가 없다.
             /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
@@ -525,7 +537,7 @@ namespace ReSet.Core.Services
             /// </summary>
             public override void ExplicitVisit(SelectStatement node)
             {
-                if (_dmlDepth == 0 && HasFromClause(node))
+                if (HasFromClause(node))
                 {
                     CollectFromQuery("SELECT", NextOrdinal("SELECT"), node.QueryExpression);
                 }
@@ -610,6 +622,10 @@ namespace ReSet.Core.Services
             ///
             /// 겹의 깊이를 가리지 않는다 - WHERE 하위 질의 안에서 또 열린 질의도 그
             /// 문장이 직접 훑는 자리가 아니므로 같은 범위다.
+            ///
+            /// WHERE만 훑는다고 해서 `JOIN ... ON` 안의 하위 질의가 빠지는 것은 아니다 -
+            /// 그쪽은 FROM 절 안이라 `CollectFrom`이 이미 지나가고, `FromTableCollector`가
+            /// ScalarSubquery 안을 같은 범위로 표시한다.
             /// </summary>
             private void CollectWhereSubqueries(string operation, int ordinal, WhereClause? where)
             {
@@ -622,10 +638,14 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// 하위 질의 하나가 훑는 자리를 전부 `하위 질의` 범위로 싣는다. 그 안에 또
-            /// 하위 질의가 있으면 SubqueriesOf가 이미 따로 모아 두었으므로 여기서는
-            /// 이 겹의 FROM만 본다(QuerySpecificationsOf는 UNION 갈래로만 내려가고
-            /// WHERE 안으로는 내려가지 않는다).
+            /// 하위 질의 하나가 훑는 자리를 전부 `하위 질의` 범위로 싣는다.
+            ///
+            /// "이 겹만 본다"고 읽지 말 것 - `QuerySpecificationsOf`는 UNION 갈래로만
+            /// 내려가지만, 그 뒤에 쓰는 `FromTableCollector`는 파생 테이블과 그 안의
+            /// 하위 질의까지 계속 내려간다. 더 깊은 겹은 `SubqueriesOf`를 통해서도
+            /// 한 번 더 들어오는데, 두 경로가 같은 라벨을 내므로(FromTableCollector가
+            /// ScalarSubquery 안을 `하위 질의`로 표시한다) 결과는 어느 쪽이 먼저 등록
+            /// 되든 같다.
             /// </summary>
             private void CollectSubqueryScans(string operation, int ordinal, QueryExpression? query)
             {
@@ -807,6 +827,21 @@ namespace ReSet.Core.Services
             /// ExtractLockHints 문서의 실측 근거 참고). ScriptDom은 Visit을 비워도 자식으로
             /// 계속 내려가므로, 파생 테이블 진입/이탈을 표시하려면 ExplicitVisit을 오버라이드해
             /// base.ExplicitVisit으로 자식 순회를 이어가야 한다.
+            ///
+            /// [ScalarSubquery도 표시해야 하는 이유 - 수정 라운드 1 리뷰 실측]
+            /// 기본 순회는 `QualifiedJoin.SearchCondition` 안으로도 내려간다. 그래서
+            /// `JOIN dbo.TB B ON B.ID IN (SELECT ID FROM dbo.TC WITH(NOLOCK))`의 TC가
+            /// 이 수집기에 걸리는데, 표시가 없으면 `최상위`(파생 안이면 `파생`)로 실렸다 -
+            /// 빠진 것이 아니라 틀리게 실린 것이라 더 나쁘다(스펙 §2.4). WHERE 안 하위
+            /// 질의와 원문에서 같은 모양이므로 같은 범위여야 한다.
+            ///
+            /// [파생과 겹칠 때 하위 질의가 이긴다 - 규칙으로 고정]
+            /// 두 표시가 동시에 켜지는 자리가 있다(파생 테이블 안의 WHERE 하위 질의,
+            /// 하위 질의 안의 파생 테이블). 어느 쪽이 이길지를 `Add`의 등록 순서에
+            /// 맡기면 - 그 중복 제거 키에는 Scope가 없어 먼저 등록된 라벨이 남는다 -
+            /// 수집 순서를 한 줄 옮기는 것만으로 라벨이 조용히 뒤집힌다. 여기서
+            /// 우선순위로 고정해 두 경로가 언제나 같은 답을 내게 한다
+            /// (ExtractLockHints_SubqueryInsideDerivedTable_ShouldWinOverDerivedScope).
             /// </summary>
             private sealed class FromTableCollector : TSqlFragmentVisitor
             {
@@ -814,8 +849,16 @@ namespace ReSet.Core.Services
 
                 private bool _inDerivedTable;
 
+                private bool _inSubquery;
+
                 public override void Visit(NamedTableReference node) =>
-                    Tables.Add((node, _inDerivedTable ? DerivedScope : TopLevelScope));
+                    Tables.Add((node, ScopeOf()));
+
+                private string ScopeOf()
+                {
+                    if (_inSubquery) return SubqueryScope;
+                    return _inDerivedTable ? DerivedScope : TopLevelScope;
+                }
 
                 public override void ExplicitVisit(QueryDerivedTable node)
                 {
@@ -823,6 +866,14 @@ namespace ReSet.Core.Services
                     _inDerivedTable = true;
                     base.ExplicitVisit(node);
                     _inDerivedTable = wasInDerivedTable;
+                }
+
+                public override void ExplicitVisit(ScalarSubquery node)
+                {
+                    var wasInSubquery = _inSubquery;
+                    _inSubquery = true;
+                    base.ExplicitVisit(node);
+                    _inSubquery = wasInSubquery;
                 }
             }
         }

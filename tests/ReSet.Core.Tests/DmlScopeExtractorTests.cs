@@ -1770,5 +1770,63 @@ END";
             Assert.Equal(1, update.StatementOrdinal);
             Assert.Equal("최상위", update.Scope);
         }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideJoinPredicate_ShouldUseSubqueryScope()
+        {
+            // 수정 라운드 1 리뷰 실측 - JOIN ... ON 안의 하위 질의는 WHERE 안의 것과
+            // 같은 자리인데 "최상위"로 실렸다. 빠진 것이 아니라 틀리게 실린 것이라
+            // 더 나쁘다(스펙 §2.4) - 프롬프트는 "최상위"를 "그 문장 자신의 FROM"으로
+            // 정의해 축자로 읽는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TA A
+    JOIN   dbo.TB B ON B.ID IN (SELECT ID FROM dbo.TC WITH(NOLOCK))
+    WHERE  A.ID = 1
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("UPDATE", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            var sub = Assert.Single(facts, f => f.Table == "dbo.TC");
+            Assert.Equal("하위 질의", sub.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, sub.Hints);
+
+            Assert.Equal("최상위", Assert.Single(facts, f => f.Table == "dbo.TA").Scope);
+            Assert.Equal("최상위", Assert.Single(facts, f => f.Table == "dbo.TB").Scope);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInsideDerivedTable_ShouldWinOverDerivedScope()
+        {
+            // 수정 라운드 1 리뷰 실측 - 파생과 하위 질의가 겹치는 자리. 규칙은
+            // "하위 질의가 파생을 이긴다"이며, 등록 순서가 아니라 FromTableCollector의
+            // 표시 우선순위가 그것을 정한다. 이 테스트가 없으면 수집 순서를 한 줄
+            // 옮기는 것만으로 라벨이 조용히 뒤집힌다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT 1
+              FROM (SELECT ID
+                    FROM   dbo.TD WITH(NOLOCK)
+                    WHERE  ID IN (SELECT ID FROM dbo.TE WITH(NOLOCK))) D)
+        RETURN -1
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("IF", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            Assert.Equal("파생", Assert.Single(facts, f => f.Table == "dbo.TD").Scope);
+            Assert.Equal("하위 질의", Assert.Single(facts, f => f.Table == "dbo.TE").Scope);
+        }
     }
 }
