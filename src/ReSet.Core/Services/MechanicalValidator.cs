@@ -3902,41 +3902,111 @@ namespace ReSet.Core.Services
                     var (headingIndex, endIndex) = LocateHeadingSection(lines, table.Heading);
                     if (headingIndex < 0) continue;
 
-                    var rows = new List<string>();
-                    for (var i = headingIndex + 1; i < endIndex; i++)
-                    {
-                        if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
-                        {
-                            rows.Add(lines[i]);
-                        }
-                    }
-
-                    if (rows.Count < 2) continue;
-
-                    var headerCells = SplitTableRowCells(rows[0]).Count;
-                    for (var i = 1; i < rows.Count; i++)
-                    {
-                        var cells = SplitTableRowCells(rows[i]).Count;
-                        if (cells == headerCells) continue;
-
-                        var message =
-                            $"`{table.Heading}` 표의 {i + 1}번째 행이 {cells}칸인데 헤더 행은 "
-                            + $"{headerCells}칸입니다. 셀 수가 다르면 표로 렌더링되지 않아 확정값이 "
-                            + "평문으로 무너집니다. 헤더와 같은 칸 수로 옮기십시오.";
-                        result.Errors.Add(message);
-                        result.DetailedErrors.Add(new DetailedError
-                        {
-                            Type = ErrorType.MachineTableShapeBroken,
-                            Message = message,
-                            RawContext = rows[i]
-                        });
-                        break;
-                    }
+                    ReportTableShapeBreaks(lines, headingIndex + 1, endIndex, table.Heading, result);
                 }
+
+                CheckInsertMappingTableShape(lines, result);
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "[MechanicalValidator] 기계 확정 표 형태 검사 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// INSERT 매핑 표(`### INSERT 대상 테이블: {테이블명}`)는 MachineConfirmedTables.All의
+        /// 여덟 헤딩에 없어 CheckMachineTableShape 본체가 못 본다. CheckInsertMappingTableNames는
+        /// 같은 절을 걷지만 테이블명 칸만 대조하므로 구분행 셀 수 결함은 어느 검사도 잡지
+        /// 못했다(2026-08-22 최종 리뷰 Important I2,
+        /// UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:71-72 실측). 절 경계 규칙은
+        /// CheckInsertMappingTableNames와 동일하다 - 헤딩 리터럴이 테이블명을 물고 있어
+        /// 카탈로그 상수 하나로 못 묶으므로 여기서 직접 절을 찾는다.
+        /// </summary>
+        private static void CheckInsertMappingTableShape(IReadOnlyList<string> lines, ValidationResult result)
+        {
+            var index = 0;
+            while (index < lines.Count)
+            {
+                if (!lines[index].TrimStart().StartsWith(InsertHeadingPrefix, StringComparison.Ordinal))
+                {
+                    index++;
+                    continue;
+                }
+
+                var sectionTable = lines[index].TrimStart().Substring(InsertHeadingPrefix.Length).Trim();
+                var bodyStart = index + 1;
+                var bodyEnd = MarkdownSectionLocator.FindIndexOutsideFence(
+                    lines, bodyStart,
+                    line => line.TrimStart().StartsWith("### ", StringComparison.Ordinal)
+                         || line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+                if (bodyEnd < 0 || bodyEnd > lines.Count) bodyEnd = lines.Count;
+
+                ReportTableShapeBreaks(
+                    lines, bodyStart, bodyEnd, $"{InsertHeadingPrefix} {sectionTable}", result);
+
+                index = bodyEnd;
+            }
+        }
+
+        /// <summary>
+        /// [start, end) 구간에서 "|"로 시작하는 줄을 모으되, 빈 줄을 블록 경계로
+        /// 삼아 쪼갠 뒤 블록마다 자기 첫 행(헤더)과 나머지 행의 셀 수를 비교한다.
+        ///
+        /// [왜 빈 줄이 경계인가] 빈 줄은 GFM의 표 종결자다. 옛 구현은 헤딩 절 전체에서
+        /// "|"로 시작하는 줄을 하나로 모아, 같은 절 안에 정당한 별개 표가 둘 이상 있으면
+        /// 합쳐버렸다. 그러면 뒤 표의 행이 앞 표 헤더의 셀 수와 비교되어 거짓 형태
+        /// 결함이 났다(2026-08-22 최종 리뷰 Critical,
+        /// output/Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md:55-70 실측 - 기계 확정
+        /// 4칸 표 뒤에 빈 줄로 구분된 정당한 3칸 표가 있었다). 코퍼스 31개 전수 재실행에서
+        /// 이 병합이 거짓 양성 10건(9개 객체)을 냈다.
+        ///
+        /// [왜 블록마다 break로 첫 오류만 보고하는가] break는 그 블록의 나머지 행
+        /// 검사만 멈춘다 - 바깥 foreach는 다음 블록으로 그대로 진행하므로, 옛 구현이
+        /// 표를 합쳐 뒤 블록 자체가 가려지던 결함(이월 Minor T3-m2)도 이 구조에서
+        /// 함께 해소된다.
+        /// </summary>
+        private static void ReportTableShapeBreaks(
+            IReadOnlyList<string> lines, int start, int end, string label, ValidationResult result)
+        {
+            var blocks = new List<List<string>>();
+            var current = new List<string>();
+            for (var i = start; i < end; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    current.Add(lines[i]);
+                }
+                else if (current.Count > 0)
+                {
+                    blocks.Add(current);
+                    current = new List<string>();
+                }
+            }
+            if (current.Count > 0) blocks.Add(current);
+
+            foreach (var rows in blocks)
+            {
+                if (rows.Count < 2) continue;
+
+                var headerCells = SplitTableRowCells(rows[0]).Count;
+                for (var i = 1; i < rows.Count; i++)
+                {
+                    var cells = SplitTableRowCells(rows[i]).Count;
+                    if (cells == headerCells) continue;
+
+                    var message =
+                        $"`{label}` 표의 {i + 1}번째 행이 {cells}칸인데 헤더 행은 "
+                        + $"{headerCells}칸입니다. 셀 수가 다르면 표로 렌더링되지 않아 확정값이 "
+                        + "평문으로 무너집니다. 헤더와 같은 칸 수로 옮기십시오.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.MachineTableShapeBroken,
+                        Message = message,
+                        RawContext = rows[i]
+                    });
+                    break;
+                }
             }
         }
 

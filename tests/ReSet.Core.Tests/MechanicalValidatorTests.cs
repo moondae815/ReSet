@@ -5276,6 +5276,67 @@ END",
         }
 
         /// <summary>
+        /// 2026-08-22 최종 리뷰 Critical 실측(output/Functions/dbo.UF_GET_ROUND4VAT/docs/Spec.md:55-70).
+        /// 기계 확정 표(4칸) 바로 뒤에 빈 줄로 구분된 정당한 별개 표(3칸)가 있다. 옛 구현은
+        /// 빈 줄을 무시하고 두 표를 하나로 합쳐, 뒤 표의 행을 앞 표 헤더(4칸)와 비교해
+        /// 거짓 형태 결함을 냈다. 빈 줄은 GFM의 표 종결자이므로 블록 경계로 삼아야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_AdjacentWellFormedTableWithDifferentColumnCount_IsNotReported()
+        {
+            var markdown = WrapSpec(
+                ExecutionSemanticsFacts.TableHeading + "\n\n"
+                + "| 종류 | 라인 | 대상 | 확정 사실 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + "| DB 배치 | - | (객체 전체) | 참조 객체는 전부 SETTLE_POQ_DB 로컬입니다. |\n"
+                + "\n"
+                + "| 작업 | 대상 | 분석 결과 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 조회 | 물리 테이블 | 없음 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
+        }
+
+        /// <summary>
+        /// 2026-08-22 최종 리뷰 Important I2 실측
+        /// (output/Procedures/dbo.UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:71-72). INSERT
+        /// 매핑 표는 MachineConfirmedTables.All의 여덟 헤딩에 없어 CheckMachineTableShape가
+        /// 못 보고, CheckInsertMappingTableNames는 테이블명 칸만 본다. 4칸 헤더 위에 3칸
+        /// 구분행이 그대로 있어도 아무 검사도 잡지 못했다 - 형태 검사를 INSERT 매핑
+        /// 절까지 넓혀야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_InsertMappingTableWithMismatchedSeparatorCells_IsReported()
+        {
+            var markdown = WrapSpec(
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TStatPGCollect\n"
+                + "| 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TStatPGCollect | INYMD | 외부 집계 INYMD | 세 UNION ALL 원천 집합의 회수일자입니다. |\n");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
+        }
+
+        /// <summary>셀 수가 맞는 INSERT 매핑 표는 통과한다 - 오탐 고정.</summary>
+        [Fact]
+        public void Validate_InsertMappingTableWithMatchingSeparatorCells_IsNotReported()
+        {
+            var markdown = WrapSpec(
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TStatPGCollect\n"
+                + "| 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TStatPGCollect | INYMD | 외부 집계 INYMD | 세 UNION ALL 원천 집합의 회수일자입니다. |\n");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
+        }
+
+        /// <summary>
         /// 2026-08-22 축 A 재감사 실측(UP_UTIL_SETTLE_SUMMARY_EXTRA). 매핑 표 한 행이
         /// TSetTleByOUT으로 적혔다 - 대소문자만 다르다. 실행은 무해하지만 매핑 표를
         /// 식별자 원천으로 삼는 이행·grep·자동 대조가 그 행에서 어긋난다.

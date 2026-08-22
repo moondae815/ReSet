@@ -1130,6 +1130,7 @@ Step 3의 세 확인과 Step 4의 증가폭을 그대로 적는다. 하나라도
 - Task 1~6의 커밋 여섯 개가 있고, 마지막 커밋 시점에 `dotnet test`가 실패 0 · 건너뜀 0이다.
 - Task 7의 세 확인이 전부 기대대로다.
 - 닫힌 결함: 🟠 1건(`UF_GET_COMM4PG4INTEREST`의 널 허용), 🟡 5건(`X.PRODUCTNAME` 2 · 표 셀 수 2 · 매핑 표 오타 1), ⚪ 4건(`DB 배치`).
+  - **표 셀 수 2건의 실제 닫힘 경로(2026-08-22 최종 리뷰 수정 반영)**: Task 3이 세운 `CheckMachineTableShape`는 `MachineConfirmedTables.All`의 여덟 헤딩만 돌아 `ConsistencyReport.md:116`(DML 범위 구분행, `UP_UTIL_STAT_PGCOLLECT_INS`)만 닫았다. `:117`(INSERT 매핑 표 구분행, 같은 객체)은 그 카탈로그에 없는 절이라 Task 3만으로는 닫히지 않았다 — 최종 리뷰 Important I2가 잡은 그대로다. 최종 리뷰 수정 라운드에서 `CheckMachineTableShape`의 공용 셀 수 비교 로직(`ReportTableShapeBreaks`)을 `### INSERT 대상 테이블: {테이블명}` 절까지 넓혀(`CheckInsertMappingTableShape`) 두 번째 결함도 닫았다. 같은 라운드에서 표 형태 검사 자체도 빈 줄(GFM의 표 종결자)을 블록 경계로 삼도록 고쳤다 — 옛 구현은 한 절 안의 인접한 별개 표를 하나로 합쳐 거짓 형태 결함을 냈다(최종 리뷰 Critical C1, 코퍼스 31개 재실행에서 거짓 양성 10건/9개 객체 확인).
 
 ## 이 계획이 닫지 않는 것
 
