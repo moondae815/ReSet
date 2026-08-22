@@ -561,10 +561,11 @@ namespace ReSet.Core.Services
             /// 그 필드는 읽히는 지점에서 0이 아닐 수 없어 실제로는 아무것도 가르지 않았다.
             /// 근거와 역할이 어긋난 문서라 필드째 지웠다.
             ///
-            /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 스캔할 자리가 없다.
-            /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
-            /// `RecordTargetHint`가 "FROM도 없고 힌트도 없는 문장"을 싣지 않는 것과 같은
-            /// 판단이다.
+            /// [무엇을 세는지는 이 방문자가 정하지 않는다] 판정은 파일 수준의
+            /// `DmlScopeExtractor.HasFromClause` 하나이고 `DmlScopeVisitor`도 같은
+            /// 메서드를 부른다 - 그 문서에 이유가 있다. FROM이 없는
+            /// `SELECT @a = 1`을 세지 않는 것은 `RecordTargetHint`가 "FROM도 없고
+            /// 힌트도 없는 문장"을 싣지 않는 것과 같은 판단이다.
             /// </summary>
             public override void ExplicitVisit(SelectStatement node)
             {
@@ -575,9 +576,6 @@ namespace ReSet.Core.Services
 
                 base.ExplicitVisit(node);
             }
-
-            private static bool HasFromClause(SelectStatement node) =>
-                QuerySpecificationsOf(node.QueryExpression).Any(q => q.FromClause != null);
 
             /// <summary>UNION 갈래를 포함해 질의식의 모든 FROM을 훑는다.</summary>
             private void CollectFromQuery(string operation, int ordinal, QueryExpression? query)
@@ -924,6 +922,102 @@ namespace ReSet.Core.Services
                 Record("DELETE", node, node.Target, node.WhereClause, node.FromClause);
 
             /// <summary>
+            /// DML 밖의 독립 SELECT. 변수 대입 SELECT · 커서 원천 질의 · 함수 본문
+            /// SELECT가 전부 이 노드로 온다(프로브 실측 - `DECLARE CURSOR FOR SELECT`의
+            /// 원천도 `SelectStatement`다). `INSERT ... SELECT`의 원천은 문장 노드가
+            /// 아니라 `QueryExpression`이라 여기로 오지 않는다 - 중복으로 실리지 않는다
+            /// (LockHintVisitor.ExplicitVisit(SelectStatement) 문서의 AST 모양 근거 참고).
+            ///
+            /// [왜 이 표에 싣는가 - 2026-08-22 축 A 재감사] 커서 원천 질의의 ORDER BY와
+            /// GROUP BY를 담을 자리가 이 표의 기존 칸이다(PROC_ETC:62 - 처리 순서가
+            /// MAX(ID)+1 채번 결과와 -3 중단 지점을 가르는데 문서 전체에 없었다).
+            /// 새 표를 만들지 않고 문장 집합만 넓히면 그 칸이 저절로 채워진다.
+            ///
+            /// [판정은 LockHintVisitor와 같은 메서드다] `HasFromClause`는 파일 수준
+            /// 헬퍼 하나다 - 두 표의 `SELECT n`이 같은 문장을 가리키는 근거가 그것이고,
+            /// 복제하면 갈라질 수 있다(그 메서드 문서 참고).
+            ///
+            /// [ExplicitVisit인 이유 - 이 방문자의 DML 오버라이드는 `Visit`인데도]
+            /// LockHintVisitor가 같은 노드를 `ExplicitVisit`으로 받아 자식 순회
+            /// (`base.ExplicitVisit`) 전에 번호를 매긴다. 여기도 같은 오버라이드에서
+            /// 같은 자리(자식 순회 전)에 사실을 더해야 두 표의 SELECT가 원문 순서라는
+            /// 같은 근거로 늘어선다 - 이 표의 문장 번호는 사실 목록 안의 자리로
+            /// 매겨지므로(AiService.BuildStatementOrdinals) 더하는 시점이 곧 번호다.
+            /// </summary>
+            public override void ExplicitVisit(SelectStatement node)
+            {
+                if (HasFromClause(node))
+                {
+                    RecordStandaloneSelect(node);
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// 독립 SELECT의 사실 하나를 만든다.
+            ///
+            /// [대상과 기준일이 비는 이유] 이 표의 열은 "무엇이 <b>갱신</b> 대상 범위를
+            /// 정하는가"를 묻는데 독립 SELECT에는 갱신 대상이 없다. 그래서 `Target`은
+            /// 빈 문자열, `DateParameterApplied`는 항상 false로 두고, 그 두 칸을 "—"로
+            /// 낼지 "(없음)"으로 낼지는 렌더러가 정한다 - `OrderByExpressions`가
+            /// UPDATE·DELETE에서 이미 쓰는 것과 같은 분업이다. 추출기에 표시 문자열을
+            /// 넣지 않는다.
+            /// </summary>
+            private void RecordStandaloneSelect(SelectStatement node)
+            {
+                var predicateColumns = new List<string>();
+                var joinKeys = new List<string>();
+                var groupByPerBranch = new List<IReadOnlyList<string>>();
+
+                foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
+                {
+                    if (spec.WhereClause?.SearchCondition != null)
+                    {
+                        // 최상위 술어만 본다 - Record·Visit(InsertSpecification)과 같은
+                        // 경계다(TopLevelPredicateCollector 문서 참고).
+                        var top = new TopLevelPredicateCollector();
+                        spec.WhereClause.SearchCondition.Accept(top);
+                        foreach (var c in top.Columns)
+                        {
+                            if (!predicateColumns.Contains(c, StringComparer.OrdinalIgnoreCase)) predicateColumns.Add(c);
+                        }
+                        foreach (var k in top.JoinKeys)
+                        {
+                            if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
+                        }
+                    }
+
+                    // ON 절의 결합 조건도 훑는다 - UPDATE·DELETE(Record)와
+                    // INSERT(Visit)가 이미 하는 일이다. 여기만 빼면 조인이 실재하는
+                    // 문장의 조인 키 칸이 "(없음)"으로 렌더돼 거짓 행이 된다.
+                    if (spec.FromClause != null)
+                    {
+                        var joins = new JoinConditionCollector();
+                        spec.FromClause.Accept(joins);
+                        foreach (var k in joins.Columns)
+                        {
+                            if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
+                        }
+                    }
+
+                    // UNION 갈래마다 모아 뒀다가 ResolveGroupByColumns로 합친다 -
+                    // 갈래마다 다르면 비운다(DmlScopeFact.GroupByColumns 제약 7).
+                    groupByPerBranch.Add(CollectGroupByColumns(spec));
+                }
+
+                Facts.Add(new DmlScopeFact(
+                    "SELECT",
+                    node.StartLine,
+                    string.Empty,
+                    predicateColumns,
+                    false,
+                    joinKeys,
+                    OrderByExpressionsOf(node.QueryExpression),
+                    ResolveGroupByColumns(groupByPerBranch)));
+            }
+
+            /// <summary>
             /// INSERT도 담는다.
             ///
             /// [왜 담아야 하는가] 표의 이름은 "DML 범위"이고 "기계 확정 — 수정 금지"라
@@ -1069,9 +1163,20 @@ namespace ReSet.Core.Services
             ///    `ORDER BY A DESC`인데 표가 `A`라고 적어 grep으로 원본을 찾을 수 없게 된다 -
             ///    이 표의 원칙("독자가 원본에서 찾을 수 있어야 한다")을 어긴다.
             /// </summary>
-            private static IReadOnlyList<string> OrderByExpressionsOf(InsertSource? source)
+            private static IReadOnlyList<string> OrderByExpressionsOf(InsertSource? source) =>
+                OrderByExpressionsOf((source as SelectInsertSource)?.Select);
+
+            /// <summary>
+            /// 질의식의 최상위 ORDER BY. 독립 SELECT는 `InsertSource`가 아니라
+            /// `QueryExpression`을 들고 있으므로 이 오버로드를 부르고, INSERT 쪽은
+            /// 원천을 벗겨 여기에 위임한다 - 본문이 둘로 갈리지 않는다. 왜 갈래
+            /// `QuerySpecification`이 아니라 `QueryExpression`에서 절을 읽는지, 왜
+            /// `e.Expression`이 아니라 `OrderByElement` 자신의 원문을 접어 쓰는지는
+            /// 위 오버로드의 문서에 있다.
+            /// </summary>
+            private static IReadOnlyList<string> OrderByExpressionsOf(QueryExpression? query)
             {
-                var orderBy = (source as SelectInsertSource)?.Select?.OrderByClause;
+                var orderBy = query?.OrderByClause;
                 if (orderBy == null) return Array.Empty<string>();
 
                 return orderBy.OrderByElements
@@ -1206,6 +1311,26 @@ namespace ReSet.Core.Services
                     break;
             }
         }
+
+        /// <summary>
+        /// 그 SELECT 문장이 훑는 자리가 있는가 - `SELECT n`으로 번호를 줄지 가르는
+        /// 판정이다. UNION이면 갈래 중 하나만 FROM을 가져도 참이다.
+        ///
+        /// [왜 방문자 안이 아니라 여기 있는가 - 설계 §4 A, Task 1 리뷰 C5]
+        /// 이 판정을 쓰는 방문자가 둘이다(LockHintVisitor는 잠금 힌트 표의 `SELECT n`,
+        /// DmlScopeVisitor는 DML 범위 표의 `SELECT n`). 두 방문자는 서로를 참조하지
+        /// 않고 각자 세는 것이 계약인데, 그 계약이 성립하려면 "무엇이 SELECT 문장
+        /// 하나인가"만은 반드시 같아야 한다. 판정을 각 방문자 안에 복제하면 한쪽만
+        /// 고쳐지는 날 두 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
+        /// 읽는 독자에게 그 어긋남은 조용하다 - 그래서 판정은 이 메서드 하나가
+        /// 유일한 출처다(ExtractAndExtractLockHints_ShouldAgreeOnWhichStatementsAreSelects가
+        /// 그 합의를 못박는다).
+        ///
+        /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 훑는 자리가 없다.
+        /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
+        /// </summary>
+        private static bool HasFromClause(SelectStatement node) =>
+            QuerySpecificationsOf(node.QueryExpression).Any(q => q.FromClause != null);
 
         /// <summary>
         /// DML 문장을 찾아 그 최상위 WHERE에서 집합 술어를 모으고, 수집기가 모르는

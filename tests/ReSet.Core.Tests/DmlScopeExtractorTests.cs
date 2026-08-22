@@ -599,6 +599,134 @@ END";
         }
 
         [Fact]
+        public void Extract_CursorSourceSelect_ShouldCarryOrderByAndGroupBy()
+        {
+            // PROC_ETC:62 실측 - 커서 원천의 ORDER BY가 문서 전체에 없었다.
+            // 처리 순서가 MAX(ID)+1 채번 결과와 -3 중단 지점을 가른다(2026-08-22 축 A 재감사 🟡).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    DECLARE Cur_SettlePost CURSOR FOR
+    SELECT A.ClientID, A.YMD, A.OutYMD
+    FROM   dbo.TSettleMst A WITH(NOLOCK)
+    WHERE  A.YMD = @pi_strYMD
+    GROUP BY A.ClientID, A.YMD, A.OutYMD
+    ORDER BY A.OutYMD, A.ClientID
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(new[] { "A.OutYMD", "A.ClientID" }, fact.OrderByExpressions);
+            // GroupByColumns는 마지막 식별자 조각만 담는다(CollectGroupByColumns) -
+            // INSERT 원천의 GROUP BY와 같은 표기여야 한 칸을 두 규칙으로 읽지 않는다.
+            Assert.Equal(new[] { "ClientID", "YMD", "OutYMD" }, fact.GroupByColumns);
+            Assert.Contains("YMD", fact.PredicateColumns);
+
+            // 갱신 대상이 없으므로 대상은 비우고 기준일 판정도 하지 않는다 -
+            // 표시(—)는 렌더러가 정한다(OrderByExpressions가 이미 쓰는 분업).
+            Assert.Equal(string.Empty, fact.Target);
+            Assert.False(fact.DateParameterApplied);
+        }
+
+        [Fact]
+        public void Extract_StandaloneSelect_ShouldNotDisturbDmlOrdinals()
+        {
+            // DML 범위 표의 문장 번호는 사실이 들고 있는 값이 아니라 목록 안 자리로
+            // 매겨진다(AiService.BuildStatementOrdinals). 그래서 "UPDATE 번호가 밀리지
+            // 않는다"는 "UPDATE 사실의 개수와 상대 순서가 그대로다"와 같은 말이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.T1 A WHERE A.YMD = @pi_strYMD
+
+    SELECT @v = MIN(ReqYMD) FROM dbo.TA WITH(NOLOCK)
+
+    UPDATE B SET B.X = 2 FROM dbo.T2 B WHERE B.YMD = @pi_strYMD
+END";
+
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            var updates = facts.Where(f => f.Operation == "UPDATE").ToList();
+            Assert.Equal(new[] { "A", "B" }, updates.Select(f => f.Target).ToArray());
+            Assert.All(updates, f => Assert.True(f.DateParameterApplied));
+
+            var select = Assert.Single(facts, f => f.Operation == "SELECT");
+            Assert.Equal(string.Empty, select.Target);
+        }
+
+        [Fact]
+        public void Extract_StandaloneSelectWithJoin_ShouldCarryJoinKeys()
+        {
+            // 조인 키 칸을 비우면 렌더러가 "(없음)"으로 낸다 - ON 절이 실재하는데
+            // 없다고 적는 것은 거짓 행이다. UPDATE·DELETE·INSERT 세 경로가 이미
+            // JoinConditionCollector로 ON 절을 훑으므로 독립 SELECT만 예외로 둘
+            // 근거가 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @v = MIN(A.ReqYMD)
+    FROM   dbo.TA A WITH(NOLOCK)
+    INNER JOIN dbo.TB B WITH(NOLOCK) ON A.ClientID = B.ClientID
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.Equal("SELECT", fact.Operation);
+            // JoinConditionCollector는 한정자를 뗀 이름을 담고 양쪽이 같은 이름이면
+            // 하나로 접는다 - UPDATE 경로(Extract_JoinKeys_ShouldBeCaptured)와 같은 표기다.
+            Assert.Equal(new[] { "ClientID" }, fact.JoinKeys);
+        }
+
+        [Fact]
+        public void ExtractAndExtractLockHints_ShouldAgreeOnWhichStatementsAreSelects()
+        {
+            // 두 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
+            // 두 표의 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는 독자에게
+            // 그 어긋남은 조용하다. 판정은 DmlScopeExtractor의 정적 헬퍼 하나
+            // (HasFromClause)이고 두 방문자가 그것을 부른다 - 이 테스트가 그 계약을
+            // 못박는다(2026-08-22 Task 1 리뷰 C5).
+            //
+            // 각 독립 SELECT의 FROM을 SELECT와 같은 줄에 두어, 잠금 힌트 사실의
+            // 라인(테이블 참조 위치)과 DML 범위 사실의 라인(문장 시작)이 같은 값이
+            // 되게 했다 - 두 표를 라인으로 맞대 볼 수 있다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @a = 1
+
+    SELECT @v = MIN(ReqYMD) FROM dbo.TA WITH(NOLOCK)
+
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A WITH(NOLOCK)
+
+    DECLARE Cur_SettlePost CURSOR FOR
+    SELECT B.ClientID FROM dbo.TB B WITH(NOLOCK) ORDER BY B.ClientID
+END";
+
+            var scopeSelectLines = DmlScopeExtractor.Extract(ddl, "@pi_strYMD")
+                .Where(f => f.Operation == "SELECT")
+                .Select(f => f.Line)
+                .ToArray();
+
+            var hintSelectLines = DmlScopeExtractor.ExtractLockHints(ddl)
+                .Where(f => f.Operation == "SELECT")
+                .OrderBy(f => f.StatementOrdinal)
+                .Select(f => f.Line)
+                .ToArray();
+
+            // FROM이 없는 `SELECT @a = 1`은 어느 쪽도 세지 않으므로 두 목록 모두 2개다.
+            Assert.Equal(2, scopeSelectLines.Length);
+            Assert.Equal(hintSelectLines, scopeSelectLines);
+        }
+
+        [Fact]
         public void ExtractSetPredicates_TopLevelNotIn_ShouldCaptureEveryLiteral()
         {
             // EXPECT_PROC 갱신 1(object_definition.sql:39) 실측 형태. 명세서는 이 9개

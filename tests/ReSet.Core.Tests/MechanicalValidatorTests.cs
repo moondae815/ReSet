@@ -2660,15 +2660,20 @@ END"
             // (dmlScopeFacts.Count == 0) 항이 이미 false가 되고, sourceComments 항을
             // 조기 반환식에서 지워도 이 테스트가 여전히 통과하는 거짓 안전망이
             // 된다. SourceCommentExtractor는 CREATE 이후의 주석 줄을 문장 종류와
-            // 무관하게 훑으므로, 앵커를 나르는 이 비실행 주석은 SELECT 아래에
+            // 무관하게 훑으므로, 앵커를 나르는 이 비실행 주석은 어떤 문장 아래에
             // 두어도 그대로 잡힌다 - 이 테스트의 본 주제는 그대로 살아 있다.
+            //
+            // [2026-08-22 축 A 재감사 ③ Task 4] FROM이 있는 독립 SELECT도 이제
+            // DML 범위 사실을 하나 만든다(커서 원천의 ORDER BY를 담기 위해서다).
+            // 그래서 신호를 하나만 남기려면 FROM이 없는 대입 SELECT여야 한다 -
+            // `DmlScopeExtractor.HasFromClause`가 그 문장을 세지 않으므로
+            // dmlScopeFacts가 비고, 이 테스트가 기대는 격리가 유지된다.
             var sp = new SpDefinition
             {
                 DdlText = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
-    SELECT ID FROM dbo.T
-    WHERE  ID > 0
+    SELECT @v_ID = 1
     --AND ClientID NOT IN (SELECT ClientID FROM dbo.UF_GET_CLIENTID4TMONET()) --예외처리 제거(2021.11.29)
 END"
             };
@@ -3173,20 +3178,28 @@ END";
             // 받아 CheckDerivedTableDefinitions이 한 번도 돌지 않는다 - 이 테스트가
             // 그 배선이 실제로 넓혀졌는지를 From()을 통해 증명한다.
             //
-            // 파생 테이블을 UPDATE...FROM이 아니라 단순 SELECT...FROM에 둔다 -
-            // UPDATE/DELETE를 쓰면 DmlScopeExtractor도 동시에 사실을 만들어 내어
-            // (dmlScopeFacts.Count == 0) 조건이 이미 false가 되고, derivedColumns
-            // 항을 조기 반환식에서 지워도 이 테스트가 여전히 통과하는 거짓
-            // 안전망이 된다 - 신호를 하나만 남겨야 그 신호의 배선만 증명한다.
+            // 파생 테이블을 DML이 아니라 IF 술어 안의 질의에 둔다 - DML을 쓰면
+            // DmlScopeExtractor도 동시에 사실을 만들어 내어 (dmlScopeFacts.Count == 0)
+            // 조건이 이미 false가 되고, derivedColumns 항을 조기 반환식에서 지워도
+            // 이 테스트가 여전히 통과하는 거짓 안전망이 된다 - 신호를 하나만 남겨야
+            // 그 신호의 배선만 증명한다.
+            //
+            // [2026-08-22 축 A 재감사 ③ Task 4] 예전에는 단순 `SELECT ... FROM`에
+            // 두었는데, 이제 FROM이 있는 독립 SELECT도 DML 범위 사실을 하나 만든다.
+            // IF 술어 안의 질의는 `SelectStatement`가 아니라 `ScalarSubquery`라
+            // DmlScopeVisitor가 방문하지 않는 반면(잠금 힌트 표만 `IF n`으로 담는다),
+            // DerivedTableVisitor는 `Visit(QueryDerivedTable)`이라 위치와 무관하게
+            // 잡는다 - 그래서 신호가 하나만 남는다.
             var sp = new SpDefinition
             {
                 DdlText = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
-    SELECT X.PGCOMM
-    FROM   (SELECT PLTID,
-                   IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM
-            FROM   dbo.TSettleMst A) X
+    IF EXISTS (SELECT 1
+               FROM   (SELECT PLTID,
+                              IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM
+                       FROM   dbo.TSettleMst A) X)
+        RETURN
 END"
             };
 
