@@ -296,9 +296,22 @@ namespace ReSet.Core.Services
                 // 그래도 잇는다: 위 주석이 경고하듯 항을 빠뜨리면 그 검사가 한 번도
                 // 돌지 않고 스위트는 초록으로 남는다.
                 && referencedFunctionCalls.Count == 0
-                // setPredicates·referencedFunctionCalls와 같은 이유로 오늘은 중복항이다 -
-                // ExtractLockHints도 INSERT/UPDATE/DELETE만 방문하므로 잠금 힌트가
-                // 있으면 dmlScopeFacts도 비지 않는다. 그래도 잇는다 - 위 경고와 같다.
+                // [중복항이 아니다 - 2026-08-22 축 A 재감사 ③ Task 8에서 고쳐 적는다]
+                // 이 자리는 오래도록 "setPredicates·referencedFunctionCalls와 같은 이유로
+                // 오늘은 중복항"이라고 적혀 있었다. 근거는 ExtractLockHints도
+                // INSERT/UPDATE/DELETE만 방문한다는 것이었는데, 같은 재감사의 Task 2가
+                // 그 전제를 깼다 - LockHintVisitor는 `IF` 술어 안의 스캔도 `IF n`으로
+                // 담지만 DmlScopeVisitor는 IfStatement를 방문하지 않는다(그 방문자의
+                // "SELECT만 더하고 IfStatement는 더하지 않는 이유" 문단 참고. 두 방문자의
+                // 문장 집합이 갈리는 지점이 정확히 여기다). 그래서 스캔을 지닌 문장이
+                // `IF EXISTS(SELECT ... FROM T)`뿐인 객체는 잠금 힌트가 나면서
+                // dmlScopeFacts는 빈 채로 남는다 - EXISTS 안의 질의는 SelectStatement
+                // 문장 노드가 아니라 QueryExpression이라 독립 SELECT로도 잡히지 않는다.
+                // ExtractLockHints_ControlFlowPredicate_ShouldBeNumberedAsIf의 DDL이 정확히
+                // 그 모양이고, 코퍼스 실물은 INS_EXTRA:31의 -9 차단 게이트 스캔이다.
+                // 즉 이 항은 이제 진짜로 일한다 - 지우면 그런 객체에서 From이 null을
+                // 돌려주고 CheckLockHints가 한 번도 돌지 않는다. "중복항이니 정리하자"는
+                // 리팩터가 이 항을 지우는 것이 이 파일에서 가장 비싼 실수다.
                 && lockHints.Count == 0
                 // objectDeclaration과 같은 이유로 중복항이 아니다 - DB 배치 행은
                 // DML이 하나도 없는 객체에서도 난다. 이 항을 빠뜨리면 재료가 이것
