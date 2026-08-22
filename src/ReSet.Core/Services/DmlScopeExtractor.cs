@@ -453,24 +453,36 @@ namespace ReSet.Core.Services
             /// `최상위`로 실리고 있었다).
             ///
             /// [아직 표에 오지 않는 자리 - 유예된 것이지 설계로 뺀 것이 아니다]
-            /// 경계는 "WHERE냐 SET이냐"가 아니라 **FROM 절 바깥에서 열리는 하위 질의**다.
-            /// 수집 경로가 훑는 것은 DML·IF의 술어와 FROM 절뿐이라, 그 바깥에서 열리는
-            /// 질의는 아래 세 모양 모두 표에 오지 않는다.
+            /// 수집 경로가 훑는 것은 DML·IF의 술어와 FROM 절뿐이다. 그 둘 어디에도
+            /// 걸리지 않는 자리에서 열리는 하위 질의는 아래 세 모양 모두 표에 오지
+            /// 않는다(코퍼스 24개 객체의 하위 질의 개시점 33곳을 전수 분류해 확인했다.
+            /// 2026-08-22 수정 라운드 3).
             ///
-            /// 1. 문장의 SELECT 목록 안 하위 질의. **코퍼스에 실물이 있는 유일한 모양**
-            ///    이다 - UF_Get_CLComm4MobileCo:31-32의
-            ///    `ELSE (SELECT CommissionRate FROM TClientCMRate WITH(NOLOCK) ...)`.
+            /// 1. 문장의 SELECT 목록 안 하위 질의. 실물 2건. 그중
+            ///    UF_Get_CLComm4MobileCo:31-32가 **표가 실제로 힌트를 잃는 유일한 자리**
+            ///    다 - `ELSE (SELECT CommissionRate FROM TClientCMRate WITH(NOLOCK) ...)`.
             ///    같은 문장의 37행 FROM(TClientSettleRate4MobileCo)은 `SELECT 1 · 최상위`
             ///    로 실리는데 32행의 NOLOCK은 표 어디에도 나타나지 않는다 - 이 축이
-            ///    없애려는 "보이지 않는 NOLOCK"의 실물이다.
-            /// 2. DML의 `SET` 절 하위 질의. 계획서가 이번 범위에서 뺐다. 코퍼스 실물 없음.
+            ///    없애려는 "보이지 않는 NOLOCK"의 실물이다. 나머지 1건
+            ///    (INS_EXTRA4PLCARD:162)은 TVF 호출이라 잃는 힌트가 없다(아래).
+            /// 2. DML의 `SET` 절 하위 질의. 계획서가 이번 범위에서 뺐다. **실물 6건이
+            ///    있다** - UP_UTIL_SETTLE_EXPECT_PROC:139·160·184·204·246과
+            ///    UP_UTIL_SETTLE_INS_EXTRA:213, 전부
+            ///    `OutYMD = (SELECT OutYMD FROM dbo.UIF_SettleYMD(A.YMD, C.SettlePeriodID))`
+            ///    모양이다. 그런데 원천이 전부 TVF 호출이라 `FromTableCollector`가 보는
+            ///    `NamedTableReference`가 아니고(`SchemaObjectFunctionTableReference`다)
+            ///    힌트도 지고 있지 않다 - 경로가 훑더라도 새로 실릴 행은 0건이다.
             /// 3. 독립 `SELECT n`의 WHERE 하위 질의. 그 경로는 FROM만 훑기 때문이다
-            ///    (`IF n`은 술어 전체를 훑으므로 해당 없다). 코퍼스 실물 없음 - 재감사가
-            ///    11개 앵커를 원문과 대조해 확인했다.
+            ///    (`IF n`은 술어 전체를 훑으므로 해당 없다). 실물 0건 - 위 33곳 중
+            ///    술어 안 하위 질의는 전부 DML의 WHERE이거나 IF 술어였다.
+            ///
+            /// 즉 이 세 모양이 "코퍼스에 없다"는 것은 거짓이고, 참인 것은 "이 세 모양
+            /// 때문에 표가 잃는 힌트는 UF_Get_CLComm4MobileCo:32 하나뿐"이다. 유예
+            /// 판단은 후자에 기대고 있다.
             ///
             /// 셋은 한 조각으로 닫아야 한다. 하나만 고치면 비대칭이 없어지는 게 아니라
             /// 자리만 옮긴다. CTE 본문(`WITH cte AS (SELECT ... WITH(NOLOCK))`)도 어느
-            /// 경로도 훑지 않으며 역시 코퍼스 실물이 없다.
+            /// 경로도 훑지 않는다 - 이쪽은 실물 0건이다(같은 라운드에 grep으로 확인).
             ///
             /// 이 자리들은 "틀리게 실리는" 것이 아니라 "실리지 않는" 것이라 이 라벨의
             /// 뜻은 그대로 참이다. 그래도 이 표를 "그 문장이 하는 모든 스캔"으로 읽으면
