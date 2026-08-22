@@ -960,9 +960,16 @@ END"
             // 때문에 1번 줄이 빈 줄이고, 2 CREATE PROCEDURE · 3 AS · 4 BEGIN ·
             // 5 UPDATE · 6 FROM · 7 WHERE · 8 AND A.PGName NOT IN (...) 이다.
             // 그래서 UPDATE 문장의 시작줄은 여전히 5지만 이 항의 줄은 8이다.
-            Assert.Contains("| UPDATE 1 | 8 | A.PGName | NOT IN | 최상위 | 3 |", body);
-            Assert.Contains("'SSGPayCard'", body);
-            Assert.Contains("'KakaoCard'", body);
+            //
+            // [열이 여덟이 된 이유 - 2026-08-22 축 A 재감사 ③ Task 7, 설계 §5]
+            // 「술어 원문」이 마지막 열로 붙었다. 분해된 항은 기존 여섯 칸을 그대로
+            // 채우고 원문 칸이 하나 더 붙는다.
+            Assert.Contains(
+                "| UPDATE 1 | 8 | A.PGName | NOT IN | 최상위 | 3 | "
+                + "'PLCard', 'SSGPayCard', 'KakaoCard' | "
+                + "A.PGName NOT IN ('PLCard','SSGPayCard','KakaoCard') |",
+                body);
+            Assert.Contains("| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |", body);
         }
 
         /// <summary>
@@ -2382,6 +2389,238 @@ END"
             var cells = insertRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
             // GROUP BY 칸은 ORDER BY 앞이라 마지막에서 두 번째 칸이다.
             Assert.Equal("(없음)", cells[cells.Count - 2]);
+        }
+
+        // === 독립 SELECT 행의 렌더 (2026-08-22 축 A 재감사 ③ Task 7) ===========
+        //
+        // Task 4가 커서 원천 질의를 `SELECT n` 행으로 담게 했는데, 렌더러의 GROUP BY·
+        // ORDER BY 칸은 `Operation == "INSERT"`만 보고 나머지를 전부 "—"로 냈다 -
+        // 그래서 PROC_ETC:62의 `ORDER BY A.OutYMD, A.ClientID`가 추출은 되는데 표에는
+        // 보이지 않았다(추출됐으나 보이지 않는 상태). 대상 칸과 기준일 칸도 같은
+        // 문장에서 각각 빈 칸과 "**아니오**"로 나왔는데, 후자는 아무것도 갱신하지 않는
+        // 문장에 대한 거짓 단언이다(DmlScopeFact.DateParameterApplied 문서).
+        private static SpDefinition CursorSourceSelectSpDefinition()
+        {
+            var spDef = new SpDefinition
+            {
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_UTIL_SETTLE_PROC_ETC", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "UP_UTIL_SETTLE_PROC_ETC",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = @"
+CREATE PROCEDURE dbo.UP_UTIL_SETTLE_PROC_ETC
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    DECLARE Cur_SettlePost CURSOR FOR
+    SELECT A.ClientID, A.YMD, A.OutYMD
+    FROM   dbo.TSettleMst A WITH(NOLOCK)
+    WHERE  A.YMD = @pi_strYMD
+    GROUP BY A.ClientID, A.YMD, A.OutYMD
+    ORDER BY A.OutYMD, A.ClientID
+
+    UPDATE dbo.TSettleMst
+    SET    ProcYMD = @pi_strYMD
+    WHERE  OutYMD = '20230101'
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ProcedureParameters = new List<string> { "@pi_strYMD" }
+            };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_StandaloneSelectRow_ShouldCarryOrderByAndGroupBy()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(CursorSourceSelectSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var selectRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| SELECT 1 |"));
+            var cells = selectRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+
+            // 칸 순서: 문장 · 라인 · 대상 · 술어 컬럼 · 기준일 · 조인 키 · GROUP BY · ORDER BY
+            Assert.Equal("A.OutYMD, A.ClientID", cells[cells.Count - 1]);
+            Assert.Equal("ClientID, YMD, OutYMD", cells[cells.Count - 2]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_StandaloneSelectRow_ShouldRenderTargetAndDateParameterAsDash()
+        {
+            // 갱신 대상이 없는 문장에 "**아니오**(최상위 기준 …)"를 적으면, 이 표가
+            // 답하는 질문("갱신 대상 범위가 기준일로 좁혀지는가")에 대한 판정이
+            // 있었던 것처럼 읽힌다 - 실제로는 판정 자체가 없었다. 대상 칸도 빈 칸이
+            // 아니라 "—"여야 "빠뜨렸다"와 "해당 없다"가 갈린다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(CursorSourceSelectSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var selectRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| SELECT 1 |"));
+            var cells = selectRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+
+            Assert.Equal("—", cells[2]);
+            Assert.Equal("—", cells[4]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_DmlRow_ShouldKeepTheDateParameterWordingUnchanged()
+        {
+            // 위 두 테스트의 짝 - SELECT 행을 가르는 갈래가 DML 행의 문구를 한 글자도
+            // 바꾸면 안 된다. 같은 픽스처의 UPDATE는 최상위 WHERE에 기준일이 없으므로
+            // 기존 문구가 그대로 나와야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(CursorSourceSelectSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var updateRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |"));
+            var cells = updateRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+
+            Assert.Equal("dbo.TSettleMst", cells[2]);
+            Assert.Equal("**아니오**(최상위 기준 · 하위 질의는 별도 확인)", cells[4]);
+        }
+
+        // === 잠금 힌트 도입문이 범위 칸의 값 셋을 다 설명한다 (Task 7) ===========
+        //
+        // Task 3 이후 범위 칸에 `하위 질의`가 실리고 문장 칸에 `SELECT n`·`IF n`이
+        // 실리는데, 도입문은 `최상위`와 `파생` 둘만 정의하고 있었다. 표를 "그대로
+        // 옮기라"고 하면서 산문이 표보다 적은 값을 정의하면 모델이 정의 밖의 행을
+        // 오해하거나 지어낸 라벨로 바꿔 적을 수 있다.
+        [Fact]
+        public async Task GenerateSpecification_LockHintIntro_ShouldDefineSubqueryScopeAndNewStatementKinds()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(CursorSourceSelectSpDefinition(), "rules");
+            var body = result.SystemPrompt!;
+            var intro = body.Split('\n').Single(l => l.Contains("[CRITICAL LOCK HINT TABLE]"));
+
+            Assert.Contains("`하위 질의`", intro);
+            Assert.Contains("`SELECT n`", intro);
+            Assert.Contains("`IF n`", intro);
+        }
+
+        // === 집합 술어 표의 「술어 원문」 열 (Task 7) ===========================
+        private static SpDefinition UndecomposedPredicateSpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.InState = 1
+    FROM   dbo.TSettleMst A
+    WHERE  (A.UseState <> 1 OR A.YMD = A.AYMD)
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_SetPredicateTable_UndecomposedTerm_ShouldRenderDashesAndPredicateText()
+        {
+            // 분해되지 않는 항(OR 결합)은 컬럼·연산·원소 수·리터럴이 전부 "—"이고
+            // 원문 칸만 찬다 - 그 칸이 이 필터의 유일한 기록처다(설계 §3 결정 3).
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(UndecomposedPredicateSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.SetPredicateTableHeading);
+            var row = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |"));
+            var cells = row.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+
+            // 칸 순서: 문장 · 라인 · 컬럼 · 연산 · 범위 · 원소 수 · 리터럴 목록 · 술어 원문
+            Assert.Equal(8, cells.Count);
+            Assert.Equal("—", cells[2]);
+            Assert.Equal("—", cells[3]);
+            Assert.Equal("최상위", cells[4]);
+            Assert.Equal("—", cells[5]);
+            Assert.Equal("—", cells[6]);
+            Assert.Equal("(A.UseState <> 1 OR A.YMD = A.AYMD)", cells[7]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_SetPredicateTable_DecomposedTerm_ShouldKeepAllColumnsAndAddPredicateText()
+        {
+            // 위 사례의 짝 - 분해되는 항은 기존 여섯 칸을 그대로 채우고 원문 칸이
+            // 하나 더 붙을 뿐이다. "—"가 분해되는 항까지 삼키면 안 된다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(SetPredicateSpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.SetPredicateTableHeading);
+            var row = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |") && l.Contains("A.PGName"));
+            var cells = row.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+
+            Assert.Equal(8, cells.Count);
+            Assert.Equal("A.PGName", cells[2]);
+            Assert.Equal("NOT IN", cells[3]);
+            Assert.Equal("3", cells[5]);
+            Assert.Equal("'PLCard', 'SSGPayCard', 'KakaoCard'", cells[6]);
+            Assert.Equal("A.PGName NOT IN ('PLCard','SSGPayCard','KakaoCard')", cells[7]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_SetPredicateIntro_ShouldExplainTheDashAndThePredicateTextColumn()
+        {
+            // 표를 "그대로 옮기라"고만 하면 모델은 "—"뿐인 행을 "다른 행과 달라 보이니
+            // 빠뜨려도 되는 행"으로 읽을 수 있다. 그 행에서는 원문 칸이 필터의 유일한
+            // 기록처라는 것을 도입문이 말해야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(UndecomposedPredicateSpDefinition(), "rules");
+            var intro = result.SystemPrompt!.Split('\n')
+                .Single(l => l.Contains("[CRITICAL SET PREDICATE TABLE]"));
+
+            Assert.Contains("술어 원문", intro);
+            Assert.Contains("`—`", intro);
+            Assert.Contains("ONLY record of that filter", intro);
+        }
+
+        [Fact]
+        public async Task Validate_UndecomposedPredicate_ShouldRoundTripThroughTheRenderedTable()
+        {
+            // 렌더러와 L1이 실제로 맞물리는지 왕복으로 확인한다 - 손으로 지어낸 표가
+            // 아니라 AiService가 낸 표를 그대로 명세서에 붙인다. 한쪽만 바꾸면
+            // "모델이 옳게 옮겨도 L1이 틀렸다고 하는" 실패 모양이 되는데, 그 실패는
+            // 이 왕복에서만 드러난다.
+            var spDef = UndecomposedPredicateSpDefinition();
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var promptResult = await service.GenerateSpecificationAsync(spDef, "rules");
+            var tableSection = ExtractTableSection(promptResult.SystemPrompt, DmlScopeExtractor.SetPredicateTableHeading);
+            var markdown = WrapAsSpecMarkdown(tableSection);
+
+            // [왜 이 단언이 먼저 필요한가 - 측정으로 확인함] 원문 열이 없던 시절에도
+            // 이 왕복은 통과했다. 분해되지 않은 사실은 리터럴이 비어 있고 렌더된 칸도
+            // 비어 있어 "빈 집합끼리" 맞아떨어졌기 때문이다 - 즉 아무것도 묻지 않는
+            // 통과였다. 왕복 대상 표가 실제로 원문을 담고 있는지부터 못박는다.
+            Assert.Contains("(A.UseState <> 1 OR A.YMD = A.AYMD)", tableSection);
+
+            var expectations = SpecExpectations.From(spDef);
+            Assert.NotNull(expectations);
+            Assert.NotEmpty(expectations!.SetPredicates);
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
         }
 
         private static SpDefinition FunctionWithSchemaBindingDefinition() => new()

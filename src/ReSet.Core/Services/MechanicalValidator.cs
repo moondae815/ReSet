@@ -3070,17 +3070,21 @@ namespace ReSet.Core.Services
         /// 기계 확정 집합 술어 표가 명세서에 옮겨졌고, 각 행의 원소 집합이 원본과
         /// 같은지 본다.
         ///
-        /// [행 키는 라인 + 컬럼, 그러나 유일하지 않다] 한 문장에 IN이 둘 이상일 수
-        /// 있어 라인만으로는 행을 특정할 수 없다. 게다가 같은 한정 컬럼이 같은
-        /// 문장에서 IN으로 두 번 걸리면(`A.X IN (1) AND A.X IN (2)`) (Operation,
-        /// Line, Column) 키조차 유일하지 않다 - ExtractSetPredicates는 그 경우를
-        /// 합치지 않고 사실을 둘 낸다(AND/OR 의미를 날조하지 않기 위해서). 그래서
-        /// 이 검사는 (Operation, Line, Column) 키로 사실을 <b>묶어</b>, 키마다
-        /// (1) 그 키를 가진 행을 전부 모으고 (2) 행 수가 사실 수와 같은지 보고
-        /// (3) 각 행의 리터럴 목록 칸을 파싱한 원소 집합들의 다중집합이 기대 집합들의
-        /// 다중집합과 같은지 대칭 비교한다. `rowLines.FirstOrDefault`로 첫 행 하나만
-        /// 찾으면 같은 키의 둘째 사실이 첫 행에 겹쳐 매칭되어 리터럴 누락이 조용히
-        /// 통과한다.
+        /// [행 키는 라인 + 컬럼 + 범위 + 술어 원문, 그래도 유일하지는 않다] 한 문장에
+        /// IN이 둘 이상일 수 있어 라인만으로는 행을 특정할 수 없다. 게다가 같은 한정
+        /// 컬럼이 같은 문장에서 IN으로 두 번 걸리면(`A.X IN (1) AND A.X IN (2)`)
+        /// (Operation, Line, Column) 키조차 유일하지 않다 - ExtractSetPredicates는 그
+        /// 경우를 합치지 않고 사실을 둘 낸다(AND/OR 의미를 날조하지 않기 위해서).
+        /// 그래서 이 검사는 키로 사실을 <b>묶어</b>, 키마다 (1) 그 키를 가진 행을 전부
+        /// 모으고 (2) 행 수가 사실 수와 같은지 보고 (3) 각 행의 리터럴 목록 칸을 파싱한
+        /// 원소 집합들의 다중집합이 기대 집합들의 다중집합과 같은지 대칭 비교한다.
+        /// `rowLines.FirstOrDefault`로 첫 행 하나만 찾으면 같은 키의 둘째 사실이 첫
+        /// 행에 겹쳐 매칭되어 리터럴 누락이 조용히 통과한다.
+        ///
+        /// 키에 범위가 든 이유는 2026-08-19 축 A 감사, 술어 원문이 든 이유는
+        /// 2026-08-22 축 A 재감사 ③ Task 7이다 - 각각 아래 본문 주석에 실측 근거를
+        /// 적어 두었다. 이 검사는 <b>AiService.BuildSetPredicateTableLines의 짝</b>이라,
+        /// 표의 열이 바뀌면 두 곳을 한 커밋에서 함께 고쳐야 한다.
         ///
         /// [대조 대상은 행이 아니라 리터럴 목록 칸 하나다] 행 전체를 부분 문자열로
         /// 훑으면 숫자 리터럴에서 퇴화한다 - `| UPDATE 3 | 108 | UseState | IN | 2 |
@@ -3124,22 +3128,39 @@ namespace ReSet.Core.Services
                 }
             }
 
-            // (Operation, Line, Column) 키별로 사실을 묶는다 - 같은 키의 사실이
-            // 둘 이상이면 "행이 하나 있다"는 것만으로는 부족하고, 행도 그만큼
-            // 있어야 한다. Column은 대소문자를 가리지 않는다 - 아래 행 매칭이
-            // OrdinalIgnoreCase로 컬럼 칸을 비교하는 것과 같은 규칙이다.
+            // (Operation, Line, Column, Scope, PredicateText) 키별로 사실을 묶는다 -
+            // 같은 키의 사실이 둘 이상이면 "행이 하나 있다"는 것만으로는 부족하고,
+            // 행도 그만큼 있어야 한다. Column은 대소문자를 가리지 않는다 - 아래 행
+            // 매칭이 OrdinalIgnoreCase로 컬럼 칸을 비교하는 것과 같은 규칙이다.
             // [범위를 키에 넣는 이유 - 2026-08-19 축 A 감사] 파생 테이블 내부 술어를
             // 수집하면서 같은 표기의 컬럼이 최상위와 파생 양쪽에 걸릴 수 있게 됐다.
             // 한정자 없는 컬럼이면 (연산, 라인, 컬럼) 키가 겹쳐, 명세서가 두 행을 모두
             // "최상위"로 적어도 행 수가 맞아 통과한다 - 파생 테이블 필터가 문서에서
             // 사라진 것을 못 잡는다는 뜻이고, COMM_UPD:243·EXCEPTION_PROC:375가 정확히
             // 그 자리에서 새어 나갔다.
+            // [술어 원문을 키에 넣는 이유 - 2026-08-22 축 A 재감사 ③ Task 7]
+            // 행 단위가 최상위 AND 항으로 올라가면서 분해되지 않는 항도 사실을 낸다.
+            // 그런 항은 컬럼·연산·원소 수·리터럴이 전부 "—"라서, 같은 줄의 서로 다른 두
+            // 항이 (연산, 라인, 컬럼, 범위) 키에서 완전히 겹친다 - 그러면 문서가 한
+            // 항의 원문을 두 번 적어도 "행이 사실 수만큼 있다"는 이유로 통과해, 나머지
+            // 한 항이 통째로 사라진 것을 못 잡는다. 원문을 키에 넣으면 그 겹침이
+            // 사라지고, 주석이 오래 적어 둔 키 비유일 문제(`A.X IN (1) AND A.X IN (2)`)도
+            // 함께 해소된다.
+            //
+            // [원문은 렌더된 그대로 비교한다 - 괄호 계약] Task 6은 바깥 괄호를 포함한
+            // 원문을 담는다(`(A.UseState <> 1 OR ...)`). 대조 전에 괄호를 벗기거나 공백을
+            // 정규화하면 옳게 옮긴 표가 거부되므로, 여기서는 <b>렌더가 실제로 하는 변형
+            // 하나</b>만 기대 쪽에 똑같이 적용한다 - 개행 접기다
+            // (FoldNewlinesLikeRenderedCell 문서. 추출기 경로의 PredicateText는 이미
+            // CollapseWhitespace를 거쳐 개행이 없으므로 이 접기는 손으로 조립한 사실에
+            // 대한 방어다). 이스케이프된 `|`는 SplitRow가 이미 복원한다.
             var groups = expectations.SetPredicates
                 .GroupBy(f => (
                     Operation: f.Operation.ToUpperInvariant(),
                     f.Line,
                     Column: f.Column.ToUpperInvariant(),
-                    Scope: f.Scope.ToUpperInvariant()));
+                    Scope: f.Scope.ToUpperInvariant(),
+                    PredicateText: FoldNewlinesLikeRenderedCell(f.PredicateText)));
 
             foreach (var group in groups)
             {
@@ -3148,6 +3169,7 @@ namespace ReSet.Core.Services
                 var displayColumn = facts[0].Column;
                 var displayOperation = facts[0].Operation;
                 var displayScope = facts[0].Scope;
+                var displayPredicateText = group.Key.PredicateText;
                 var lineToken = line.ToString();
 
                 // [MarkdownTableCellCodec.SplitRow로 나누는 이유 - 2026-08-21 최종 브랜치
@@ -3157,21 +3179,29 @@ namespace ReSet.Core.Services
                 // 갈라져 모델이 표를 원문 그대로 옮겨도 컬럼이 일치하지 않는다 -
                 // LockHints·ORDER BY·객체 선언과 같은 실패 모양(ExtractSetPredicateLiteralCell
                 // 문서의 실측 근거와 동일).
+                //
+                // 원문 칸 대조는 대소문자를 가린다(Ordinal) - 컬럼·범위와 달리 이 칸은
+                // DDL 원문 자체이고, 문자열 리터럴의 대소문자가 대상 행을 가른다.
+                // 원문이 빈 사실(손으로 조립한 기존 재료의 기본값)은 SplitRow가 늘 내는
+                // 앞뒤 빈 조각에 걸려 이 항이 참이 된다 - 원문을 채우지 않은 재료에는
+                // 이 대조가 추가 요구를 걸지 않는다는 뜻이다.
                 var matchingRows = rowLines.Where(r =>
                 {
                     var cells = MarkdownTableCellCodec.SplitRow(r);
                     return cells.Any(c => c == lineToken)
                         && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase))
-                        && cells.Any(c => string.Equals(c, displayScope, StringComparison.OrdinalIgnoreCase));
+                        && cells.Any(c => string.Equals(c, displayScope, StringComparison.OrdinalIgnoreCase))
+                        && cells.Any(c => string.Equals(c, displayPredicateText, StringComparison.Ordinal));
                 }).ToList();
 
                 if (matchingRows.Count != facts.Count)
                 {
                     var countMessage =
                         $"집합 술어 표에서 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 범위 `{displayScope}` "
-                        + $"키를 가진 사실이 {facts.Count}개인데 행은 {matchingRows.Count}개 있습니다. 같은 컬럼에 "
-                        + "술어가 여러 번 걸리면 사실도 여럿이므로, 표는 각 사실을 별도 행으로 옮겨야 합니다 - "
-                        + "행을 합치거나 생략할 수 없고, 범위(최상위 / 파생 테이블)도 사실대로 적어야 합니다.";
+                        + $"술어 원문 `{displayPredicateText}` 키를 가진 사실이 {facts.Count}개인데 행은 "
+                        + $"{matchingRows.Count}개 있습니다. 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
+                        + "요약하거나 바꿔 쓸 수 없고, 행을 합치거나 생략할 수 없으며, "
+                        + "범위(최상위 / 파생 테이블 / 하위 질의)도 사실대로 적어야 합니다.";
                     result.Errors.Add(countMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
@@ -3259,8 +3289,8 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 집합 술어 표 행에서 `리터럴 목록` 칸(마지막 칸) 하나만 꺼내 SQL 리터럴
-        /// 문법을 존중하는 토큰화로 원소 집합을 만든다. 행 전체가 아니라 이 칸
+        /// 집합 술어 표 행에서 `리터럴 목록` 칸(「술어 원문」 바로 앞 칸) 하나만 꺼내
+        /// SQL 리터럴 문법을 존중하는 토큰화로 원소 집합을 만든다. 행 전체가 아니라 이 칸
         /// 하나만 보는 것이 §5.1의 요구다 - 그래야 라인 번호 같은 숫자 셀이
         /// 리터럴과 섞여 대조가 퇴화하지 않는다.
         ///
@@ -3288,15 +3318,39 @@ namespace ReSet.Core.Services
         private static HashSet<string> ExtractSetPredicateLiteralCell(string row)
         {
             var cellsOfRow = SplitTableRowCells(row);
-            var literalCell = cellsOfRow.Count > 0 ? cellsOfRow[cellsOfRow.Count - 1] : string.Empty;
-            if (literalCell.Length == 0 && cellsOfRow.Count >= 2)
-            {
-                // 행이 `|`로 끝나면 마지막 조각이 빈 문자열이다.
-                literalCell = cellsOfRow[cellsOfRow.Count - 2];
-            }
+
+            // [칸 인덱스가 하나 밀린 이유 - 2026-08-22 축 A 재감사 ③ Task 7]
+            // 「술어 원문」이 마지막 열로 들어왔다. 행이 `|`로 끝나면 마지막 조각은
+            // 빈 문자열이고, 그 앞이 원문 칸이며, 리터럴 목록은 그 하나 앞이다.
+            // 인덱스를 안 고치면 원문 칸을 리터럴로 읽어 <b>옳게 옮긴 표</b>를 틀렸다고
+            // 한다 - 이 문서 위쪽이 적어 둔 실패 모양과 같은 부류다.
+            var trailingBlank = cellsOfRow.Count > 0 && cellsOfRow[^1].Length == 0 ? 1 : 0;
+            var literalIndex = cellsOfRow.Count - trailingBlank - 2;
+            var literalCell = literalIndex >= 0 ? cellsOfRow[literalIndex] : string.Empty;
+
+            // [`—` 한 글자는 빈 집합이다 - 측정으로 확인함] 계획서는 "분해되지 않은
+            // 사실은 Literals가 비어 있어 빈 집합끼리 맞춰지므로 이 갈래는 손대지
+            // 않아도 통과한다"고 적었는데, 틀렸다. 렌더러가 그 칸에 빈 문자열이 아니라
+            // UndecomposedCell("—")을 적기 때문이다(AiService.BuildSetPredicateTableLines).
+            // 그대로 두면 기대 {} 대 표 {"—"}가 되어, 원문 그대로 옮긴 표가 "추가: —"로
+            // 거부된다. 리터럴은 언제나 SQL 리터럴 표기('...' 또는 숫자)이므로 이
+            // 표기가 진짜 원소일 수는 없다.
+            if (literalCell == UndecomposedCell) return new HashSet<string>(StringComparer.Ordinal);
 
             return TokenizeLiteralCell(literalCell).ToHashSet(StringComparer.Ordinal);
         }
+
+        /// <summary>
+        /// 분해되지 않은 항의 원소 수·리터럴 목록 칸에 렌더러가 적는 표기.
+        ///
+        /// [왜 상수를 여기 또 두는가] 원본은
+        /// <c>DmlScopeExtractor.TopLevelPredicateCollector.NotDecomposed</c>인데 private
+        /// 중첩 클래스 안이라 참조할 수 없고, 렌더 쪽 짝은
+        /// <c>AiService.UndecomposedCell</c>이다. 이 검증기는 조립기(AiService)에
+        /// 컴파일 의존하지 않는 방향으로 다듬어 왔으므로(MarkdownTableCellCodec 문서)
+        /// 여기 자기 상수를 둔다 - 셋이 갈리면 옳게 옮긴 표가 거부되므로 함께 고친다.
+        /// </summary>
+        private const string UndecomposedCell = "—";
 
         /// <summary>
         /// 마크다운 표 행을 `|`로 나누는 별칭. 실제 구현은

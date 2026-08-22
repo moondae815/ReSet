@@ -3244,13 +3244,23 @@ END"
             {
                 "'PLCard'", "'SamSungPay'", "'SSGPayCard'", "'KakaoPay'", "'KakaoCard'",
                 "'impaymobile'", "'NaverCard'", "'ApplePay'", "'TossCardAuth'"
-            });
+            },
+            0, "NOT IN", "최상위", NineePgPredicateText);
+
+        /// <summary>
+        /// NineePgFact의 「술어 원문」 칸(2026-08-22 축 A 재감사 ③ Task 7). 기대와 표가
+        /// 같은 상수를 쓰므로, 리터럴을 빼먹는 시나리오에서도 원문 칸은 양쪽이 같다 -
+        /// 그 테스트가 겨냥한 단언(리터럴 목록 대조)만 홀로 실패한다.
+        /// </summary>
+        private const string NineePgPredicateText =
+            "A.PGName NOT IN ('PLCard', 'SamSungPay', 'SSGPayCard', 'KakaoPay', 'KakaoCard', "
+            + "'impaymobile', 'NaverCard', 'ApplePay', 'TossCardAuth')";
 
         private static string SetPredicateSection(string literalCell) =>
             "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-            + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-            + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-            + $"| UPDATE 1 | 39 | A.PGName | NOT IN | 최상위 | 9 | {literalCell} |\n";
+            + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+            + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+            + $"| UPDATE 1 | 39 | A.PGName | NOT IN | 최상위 | 9 | {literalCell} | {NineePgPredicateText} |\n";
 
         [Fact]
         public void Validate_SetPredicateTableMissing_ShouldBeAnError()
@@ -3300,13 +3310,15 @@ END"
             // 설계 §5.1. 행 전체를 부분 문자열로 훑으면 라인 번호 108이 이미 0과 1을
             // 담아 UseState IN (0,1) 대조가 무조건 통과한다 - 검사가 아무것도 묻지
             // 않게 된다. 대조 대상은 리터럴 목록 칸 하나여야 한다.
-            var fact = new SetPredicateFact("UPDATE", 108, "UseState", false, new[] { "0", "1" });
+            var fact = new SetPredicateFact(
+                "UPDATE", 108, "UseState", false, new[] { "0", "1" }, 0, "IN", "최상위",
+                "UseState IN (0, 1)");
             var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 108 | UseState | IN | 최상위 | 2 | (생략) |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 108 | UseState | IN | 최상위 | 2 | (생략) | UseState IN (0, 1) |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3319,15 +3331,19 @@ END"
             // 한 문장에 IN이 둘이면 라인만으로는 행을 특정할 수 없다.
             var facts = new[]
             {
-                new SetPredicateFact("UPDATE", 30, "PGName", false, new[] { "'A'", "'B'" }),
-                new SetPredicateFact("UPDATE", 30, "UseState", false, new[] { "0", "1" })
+                new SetPredicateFact(
+                    "UPDATE", 30, "PGName", false, new[] { "'A'", "'B'" }, 0, "IN", "최상위",
+                    "PGName IN ('A', 'B')"),
+                new SetPredicateFact(
+                    "UPDATE", 30, "UseState", false, new[] { "0", "1" }, 0, "IN", "최상위",
+                    "UseState IN (0, 1)")
             };
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 30 | PGName | IN | 최상위 | 2 | 'A', 'B' |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 30 | PGName | IN | 최상위 | 2 | 'A', 'B' | PGName IN ('A', 'B') |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3355,9 +3371,9 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 1 | A.X IN (1) |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3380,10 +3396,10 @@ END"
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 2 |\n"
-                + "| UPDATE 2 | 50 | A.X | IN | 최상위 | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 2 | A.X IN (2) |\n"
+                + "| UPDATE 2 | 50 | A.X | IN | 최상위 | 1 | 1 | A.X IN (1) |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3404,9 +3420,9 @@ END"
             var escapedColumn = fact.Column.Replace("|", "\\|");
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + $"| UPDATE 1 | 12 | {escapedColumn} | IN | 최상위 | 1 | 'X' |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| UPDATE 1 | 12 | {escapedColumn} | IN | 최상위 | 1 | 'X' | {escapedColumn} IN ('X') |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -4018,18 +4034,18 @@ WHERE RunId = @RunId;");
         public void Validate_TwoScopesWrittenAsTheSameScope_ShouldBeAnError()
         {
             var top = new SetPredicateFact(
-                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위");
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위", "UseState = 1");
             var derived = new SetPredicateFact(
-                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D");
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D", "UseState = 1");
             var expectations = EmptyExpectations() with { SetPredicates = new[] { top, derived } };
 
             // 행 수는 맞지만 둘 다 최상위로 적었다 - 파생 테이블 필터가 문서에서 사라졌다.
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n"
-                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 | UseState = 1 |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 | UseState = 1 |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -4040,17 +4056,228 @@ WHERE RunId = @RunId;");
         public void Validate_BothScopesWrittenCorrectly_ShouldPass()
         {
             var top = new SetPredicateFact(
-                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위");
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "최상위", "UseState = 1");
             var derived = new SetPredicateFact(
-                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D");
+                "UPDATE", 169, "UseState", false, new[] { "1" }, 4, "=", "파생 테이블 D", "UseState = 1");
             var expectations = EmptyExpectations() with { SetPredicates = new[] { top, derived } };
 
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
-                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |\n"
-                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
-                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 |\n"
-                + "| UPDATE 4 | 169 | UseState | = | 파생 테이블 D | 1 | 1 |\n";
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 최상위 | 1 | 1 | UseState = 1 |\n"
+                + "| UPDATE 4 | 169 | UseState | = | 파생 테이블 D | 1 | 1 | UseState = 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        // === 「술어 원문」 열 (2026-08-22 축 A 재감사 ③ Task 7) =================
+        //
+        // 표가 8열이 되면서 리터럴 목록 칸이 마지막이 아니라 뒤에서 세 번째가 됐다.
+        // 인덱스를 안 고치면 원문 칸을 리터럴로 읽어 <b>옳게 옮긴 표</b>를 틀렸다고
+        // 한다 - 이 저장소가 되풀이해 겪은 실패 모양이다
+        // (ExtractSetPredicateLiteralCell 문서의 실측 근거).
+        [Fact]
+        public void CheckSetPredicates_LiteralCellShiftedByNewColumn_ShouldStillCompare()
+        {
+            var fact = new SetPredicateFact(
+                "UPDATE", 130, "A.PGNAME", false, new[] { "'KFTC'", "'YELOPAY'" }, 4, "IN", "최상위",
+                "A.PGNAME IN ('KFTC', 'YELOPAY')");
+            var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 4 | 130 | A.PGNAME | IN | 최상위 | 2 | 'KFTC', 'YELOPAY' | "
+                + "A.PGNAME IN ('KFTC', 'YELOPAY') |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void CheckSetPredicates_PredicateTextSummarized_ShouldReport()
+        {
+            // 분해되지 않은 항은 원문 칸이 <b>유일한</b> 기록처다 - 컬럼·연산·원소 수·
+            // 리터럴이 전부 "—"이므로, 원문을 요약해 옮기면 그 필터가 문서에서 사라진다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "(A.UseState <> 1 OR A.YMD = A.AYMD)")
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | 당일 이전 취소건 제외 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // [왜 Type만으로는 부족한가 - 측정으로 확인함] 원문 칸을 대조하기 전에도
+            // 이 문서는 SetPredicateMismatch를 냈다. 다만 이유가 달랐다 - 칸 인덱스를
+            // 안 고친 파서가 마지막 칸(원문)을 리터럴 목록으로 읽어 "추가: 당일 이전
+            // 취소건 제외"라고 보고했을 뿐이다. 그 메시지에는 <b>원본 술어</b>가 없다.
+            // 그래서 "빠진 술어가 무엇인지 말하는가"로 단언한다 - 이것이 원문 대조가
+            // 실제로 작동할 때만 참이 되는 조건이다.
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetPredicateMismatch
+                    && e.Message.Contains("(A.UseState <> 1 OR A.YMD = A.AYMD)"));
+        }
+
+        [Fact]
+        public void CheckSetPredicates_UndecomposedRowCopiedVerbatim_ShouldPass()
+        {
+            // 위 실패 사례의 짝. 같은 재료를 원문 그대로 옮기면 통과해야 한다 -
+            // 이 짝이 없으면 위 테스트는 "분해되지 않은 행을 늘 틀렸다고 한다"로도
+            // 만족된다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "(A.UseState <> 1 OR A.YMD = A.AYMD)")
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | (A.UseState <> 1 OR A.YMD = A.AYMD) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void CheckSetPredicates_TwoUndecomposedTermsOnOneLine_OneTextWrittenTwice_ShouldReport()
+        {
+            // 분해되지 않은 행은 컬럼·연산·원소 수·리터럴이 전부 "—"라서, 원문을 키에서
+            // 빼면 같은 줄의 서로 다른 두 항이 완전히 같은 키가 된다. 그러면 문서가 한
+            // 항의 원문을 두 번 적어도 "행이 사실 수만큼 있다"는 이유로 통과한다 -
+            // 나머지 한 항이 문서에서 통째로 사라진 것을 못 잡는다는 뜻이다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "(A.UseState <> 1 OR A.YMD = A.AYMD)"),
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "A.AYMD >= '20230101'")
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | (A.UseState <> 1 OR A.YMD = A.AYMD) |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | (A.UseState <> 1 OR A.YMD = A.AYMD) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // 사라진 항의 원문이 메시지에 실려야 어느 술어가 빠졌는지 보인다.
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetPredicateMismatch
+                    && e.Message.Contains("A.AYMD >= '20230101'"));
+        }
+
+        [Fact]
+        public void CheckSetPredicates_TwoUndecomposedTermsOnOneLine_BothWrittenVerbatim_ShouldPass()
+        {
+            // 위 실패 사례의 짝 - 같은 입력에서 둘째 행의 원문만 사실대로 바꾸면
+            // 통과해야 한다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "(A.UseState <> 1 OR A.YMD = A.AYMD)"),
+                    new SetPredicateFact(
+                        "UPDATE", 220, "—", false, Array.Empty<string>(), 7, "—", "최상위",
+                        "A.AYMD >= '20230101'")
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | (A.UseState <> 1 OR A.YMD = A.AYMD) |\n"
+                + "| UPDATE 7 | 220 | — | — | 최상위 | — | — | A.AYMD >= '20230101' |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void CheckSetPredicates_PredicateTextKeepsOuterParentheses_ShouldPass()
+        {
+            // [괄호 계약] Task 6은 바깥 괄호를 포함한 원문을 그대로 담는다
+            // (ParenthesizedDecomposableTerm_ShouldStillDecompose가 못박은 계약).
+            // L1이 대조 전에 괄호를 벗기거나 공백을 정규화하면, 렌더된 그대로 옮긴
+            // 표가 거부된다 - §0이 막으려는 실패 모양이다. 바깥 괄호가 붙어도 분해는
+            // 되므로, 리터럴 칸이 찬 갈래에서 못박는다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 88, "A.PGName", false, new[] { "'PLCard'" }, 2, "=", "최상위",
+                        "(A.PGName = 'PLCard')")
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 2 | 88 | A.PGName | = | 최상위 | 1 | 'PLCard' | (A.PGName = 'PLCard') |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void CheckSetPredicates_PredicateTextContainsPipe_RenderedEscaped_ShouldPass()
+        {
+            // 원문 칸도 EscapeTableCell을 거친다 - 비트 연산자 `|`가 든 항은 `\|`로
+            // 이스케이프된 채 표에 나온다. 대조가 그 복원을 안 하면 옳게 옮긴 표가
+            // 거부된다(컬럼 칸이 이미 겪은 실패 모양 -
+            // Validate_SetPredicateColumnContainsPipe_RenderedEscaped_ShouldPass 참고).
+            const string predicateText = "A.Flags | 4 = 4";
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact(
+                        "UPDATE", 91, "—", false, Array.Empty<string>(), 3, "—", "최상위", predicateText)
+                }
+            };
+
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| UPDATE 3 | 91 | — | — | 최상위 | — | — | {predicateText.Replace("|", "\\|")} |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -4434,6 +4661,64 @@ END",
             Assert.DoesNotContain(
                 result.DetailedErrors,
                 e => e.Message.Contains(DmlScopeExtractor.LockHintTableHeading));
+        }
+
+        // === 새 문장 종류·새 범위 값 (2026-08-22 축 A 재감사 ③ Task 7) ==========
+        //
+        // 스펙 §4 E가 "변경이 없을 것으로 보이나 테스트로 확인한다"고 남긴 자리다.
+        // 확인 없이 넘기면 표만 넓어지고 검사는 침묵하는 상태가 된다.
+        [Fact]
+        public void CheckLockHints_SelectAndIfRows_ShouldCompareLikeDmlRows()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                LockHints = new[]
+                {
+                    new LockHintFact("SELECT", 1, 22, "PaymentDB.dbo.TExtraSettleIn", "-", "최상위", new[] { "NOLOCK" }),
+                    new LockHintFact("IF", 1, 31, "TSettleMst", "-", "최상위", new[] { "NOLOCK" }),
+                    new LockHintFact("UPDATE", 12, 529, "TSettleMst", "-", "하위 질의", new[] { "NOLOCK" })
+                }
+            };
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| SELECT 1 | 22 | PaymentDB.dbo.TExtraSettleIn | - | 최상위 | NOLOCK |\n"
+                + "| IF 1 | 31 | TSettleMst | - | 최상위 | NOLOCK |\n"
+                + "| UPDATE 12 | 529 | TSettleMst | - | 하위 질의 | NOLOCK |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
+        [Fact]
+        public void CheckLockHints_DroppedSelectRow_ShouldReport()
+        {
+            // 위 통과 사례의 짝 - 같은 입력에서 SELECT 행만 빼면 걸려야 한다.
+            // 짝이 없으면 위 테스트는 "이 검사가 아무것도 묻지 않는다"로도 만족된다.
+            var expectations = EmptyExpectations() with
+            {
+                LockHints = new[]
+                {
+                    new LockHintFact("SELECT", 1, 22, "PaymentDB.dbo.TExtraSettleIn", "-", "최상위", new[] { "NOLOCK" }),
+                    new LockHintFact("IF", 1, 31, "TSettleMst", "-", "최상위", new[] { "NOLOCK" })
+                }
+            };
+
+            var crud = DmlScopeExtractor.LockHintTableHeading + "\n"
+                + "| 문장 | 라인 | 테이블 | 별칭 | 범위 | 힌트 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| IF 1 | 31 | TSettleMst | - | 최상위 | NOLOCK |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.LockHintTableMissing
+                    && e.RawContext != null && e.RawContext.Contains("PaymentDB.dbo.TExtraSettleIn"));
         }
 
         /// <summary>파생 테이블 안에 스캔이 있는 SP. LockHintFact.Scope가 "파생"으로 찍힌다.</summary>

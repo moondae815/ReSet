@@ -820,6 +820,17 @@ Based on the structured reference context above, reverse engineer the stored pro
             for (var i = 0; i < dmlScopeFacts.Count; i++)
             {
                 var fact = dmlScopeFacts[i];
+
+                // [독립 SELECT 행을 가르는 이유 - 2026-08-22 축 A 재감사 ③ Task 7]
+                // 이 표의 대상 칸과 기준일 칸은 둘 다 "갱신 대상 범위"를 묻는데,
+                // 독립 SELECT에는 갱신 대상이 없다(DmlScopeFact.Target·
+                // DateParameterApplied 문서 - 그 재료는 표시 문자열을 담지 않고
+                // 렌더러에 맡긴다). 가르지 않으면 대상은 빈 칸으로, 기준일은
+                // "**아니오**(최상위 기준 · 하위 질의는 별도 확인)"로 나오는데
+                // 후자는 아무것도 갱신하지 않는 문장에 대한 거짓 단언이다 -
+                // 판정이 있었는데 부정으로 났다고 읽힌다.
+                var isStandaloneSelect = fact.Operation == "SELECT";
+
                 var predicates = fact.PredicateColumns.Count == 0
                     ? "(없음)" : string.Join(", ", fact.PredicateColumns);
                 var joinKeys = fact.JoinKeys.Count == 0
@@ -834,9 +845,15 @@ Based on the structured reference context above, reverse engineer the stored pro
                 // 이 칸만 보고 "이 문장은 @pi_strYMD를 직접 조건으로 적용하지 않습니다"
                 // 라고 단언해 🟠이 됐다. 표가 "기계 확정 — 수정 금지"라 모델이 이
                 // 단언을 의심하지 않는다.
-                var applied = dateParameter.Length == 0
-                    ? "(기준일 파라미터 없음)"
-                    : fact.DateParameterApplied ? "예" : "**아니오**(최상위 기준 · 하위 질의는 별도 확인)";
+                //
+                // 독립 SELECT 행은 이 세 갈래 어디에도 들지 않는다 - 판정 자체가
+                // 없었으므로 "—"다(위 isStandaloneSelect 주석). DML 행의 문구는
+                // 한 글자도 바뀌지 않는다.
+                var applied = isStandaloneSelect
+                    ? "—"
+                    : dateParameter.Length == 0
+                        ? "(기준일 파라미터 없음)"
+                        : fact.DateParameterApplied ? "예" : "**아니오**(최상위 기준 · 하위 질의는 별도 확인)";
 
                 var n = ordinals[i];
 
@@ -845,7 +862,17 @@ Based on the structured reference context above, reverse engineer the stored pro
                 // INSERT는 절이 없으면 "(없음)", 있으면 그룹화 키 목록. UP_Util_Settle_Summary·
                 // UP_Util_Settle_Summary_AcqManual 실측 - GROUP BY 첫 키가 매핑 표의 설명
                 // 칸에서만 언급되다 표에서 통째로 빠졌다.
-                var groupBy = fact.Operation == "INSERT"
+                //
+                // [SELECT 행도 같은 갈래에 넣는 이유 - Task 7] GROUP BY·ORDER BY는
+                // "질의를 여는 문장"에서만 가능하고, 독립 SELECT가 바로 그 부류다
+                // (DmlScopeFact.GroupByColumns 문서의 "—"/"(없음)" 규약 - INSERT·SELECT
+                // 행의 빈 목록은 "(없음)", UPDATE·DELETE 행은 문법상 불가라 "—").
+                // INSERT만 보던 동안 PROC_ETC:62 커서 원천의
+                // `ORDER BY A.OutYMD, A.ClientID`는 Task 4가 추출까지 해 놓고도
+                // 표에는 "—"로 찍혔다 - 추출됐으나 보이지 않는 상태였다.
+                var opensAQuery = fact.Operation == "INSERT" || isStandaloneSelect;
+
+                var groupBy = opensAQuery
                     ? (fact.GroupByColumns.Count == 0
                         ? "(없음)"
                         : EscapeTableCell(string.Join(", ", fact.GroupByColumns)))
@@ -856,14 +883,16 @@ Based on the structured reference context above, reverse engineer the stored pro
                 // `ORDER BY INYMD, CLIENTID, PGNAME, MALLID`가 문서 어디에도 없었다.
                 // 존재 여부가 아니라 목록을 싣는다 - 불리언이면 "있다"만 알고 무엇으로
                 // 정렬하는지는 여전히 모른다(DmlScopeFact.OrderByExpressions 문서 참고).
-                var orderBy = fact.Operation == "INSERT"
+                var orderBy = opensAQuery
                     ? (fact.OrderByExpressions.Count == 0
                         ? "(없음)"
                         : EscapeTableCell(string.Join(", ", fact.OrderByExpressions)))
                     : "—";
 
+                var target = isStandaloneSelect ? "—" : EscapeTableCell(fact.Target);
+
                 lines.Add(
-                    $"   | {fact.Operation} {n} | {fact.Line} | {EscapeTableCell(fact.Target)} | "
+                    $"   | {fact.Operation} {n} | {fact.Line} | {target} | "
                     + $"{EscapeTableCell(predicates)} | {applied} | {EscapeTableCell(joinKeys)} | {groupBy} | {orderBy} |");
             }
 
@@ -925,12 +954,40 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 분해되지 않은 항의 원소 수·리터럴 목록 칸에 쓰는 표기.
+        ///
+        /// [왜 상수를 여기 또 두는가] 추출기 쪽 원본은
+        /// <c>DmlScopeExtractor.TopLevelPredicateCollector.NotDecomposed</c>인데 그것이
+        /// <b>private 중첩 클래스</b> 안에 있어 이 어셈블리의 다른 타입이 참조할 수 없다.
+        /// 추출기 파일을 넓히지 않기로 한 이 작업의 범위 안에서는 같은 글자를 여기와
+        /// <c>MechanicalValidator</c>에 각각 두는 수밖에 없다 - 셋이 갈리면 렌더된 칸을
+        /// L1이 못 알아보므로, 고칠 때는 반드시 세 자리를 함께 고친다.
+        /// </summary>
+        private const string UndecomposedCell = "—";
+
+        /// <summary>
         /// 기계 확정 집합 술어 표 본문을 만든다.
         ///
         /// [원소 수를 별도 칸으로 두는 이유] 2026-08-18 축 A 감사 실측: EXPECT_PROC의
         /// 9개짜리 집합 자리에 명세서가 5개짜리 다른 목록을 그럴듯한 대체물로 채워
         /// 넣었다. 목록만 있으면 눈으로 세어야 알지만, 수가 칸으로 있으면 어긋남이
         /// 즉시 보인다.
+        ///
+        /// [「술어 원문」 열 - 2026-08-22 축 A 재감사 ③ Task 7, 설계 §5]
+        /// 행 단위가 원소에서 최상위 AND 항으로 올라가면서(Task 5·6) 열이 여덟이 됐다.
+        /// 컬럼·연산·리터럴 칸은 분해된 결과라 분해가 담지 못한 항은 흔적도 없이
+        /// 사라졌는데, 원문 칸이 그 항에 표의 자리를 준다. 분해되는 항도 원문을 함께
+        /// 실어 독자가 분해를 원문과 대조할 수 있게 한다
+        /// (SetPredicateFact.PredicateText 문서의 실측 근거).
+        ///
+        /// 이 렌더러와 MechanicalValidator.CheckSetPredicates는 <b>짝</b>이다. 한쪽만
+        /// 바꾸면 모델이 표를 원문 그대로 옮겨도 L1이 틀렸다고 하는 실패 모양이 된다
+        /// (ExtractSetPredicateLiteralCell 문서에 그 실물이 적혀 있다) - 열을 더하거나
+        /// 자리를 옮길 때는 반드시 두 곳을 한 커밋에서 함께 고친다.
+        ///
+        /// [원문 칸의 길이를 가정하지 않는다] 최상위 항이 `EXISTS(...)`이면 그 하위
+        /// 질의 전체가 한 줄로 접혀 이 칸에 들어간다. 어떤 항도 버리지 않는 것이
+        /// 설계의 결정이므로(설계 §3 결정 3) 자르지 않는다.
         ///
         /// 헤딩 리터럴은 DmlScopeExtractor.SetPredicateTableHeading 하나가 유일한
         /// 출처다 - 프롬프트와 L1(CheckSetPredicates)이 같은 상수를 쓴다.
@@ -949,19 +1006,29 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`.",
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`. One row is one top-level AND term of that WHERE. The last column, 술어 원문, carries that term exactly as written in the DDL. When 컬럼, 연산, 원소 수 and 리터럴 목록 all hold `—`, the term could not be decomposed into a column and a set of literals (an OR-combined condition, a column-to-column comparison, an arithmetic right-hand side, an operator this table does not decompose), and 술어 원문 is then the ONLY record of that filter - copy it verbatim, character for character, and describe the filter from it. Never omit such a row because it looks unlike the others, and never replace 술어 원문 with a paraphrase, a translation, or a summary.",
                 $"   {DmlScopeExtractor.SetPredicateTableHeading}",
-                "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 |",
-                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+                "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |",
+                "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
             };
 
             foreach (var fact in setPredicates)
             {
-                var literals = string.Join(", ", fact.Literals);
+                // 분해 여부는 세 칸이 함께 움직인다(SetPredicateFact.Column 문서 -
+                // "분해되면 셋 다 차고, 안 되면 셋 다 비운다"). 그래서 리터럴이
+                // 비었는지 하나만 보면 되고, 원소 수·리터럴 목록도 같은 갈래에서
+                // UndecomposedCell로 낸다 - 분해되지 않은 항의 "원소 0개"는 빈
+                // 집합이라는 사실이 아니라 판정 자체가 없었다는 뜻이라, 0이나
+                // 빈 칸으로 적으면 표가 거짓 집합을 단언한다.
+                var decomposed = fact.Literals.Count > 0;
+                var literals = decomposed ? string.Join(", ", fact.Literals) : UndecomposedCell;
+                var count = decomposed ? fact.Literals.Count.ToString() : UndecomposedCell;
+
                 lines.Add(
                     $"   | {fact.Operation} {fact.StatementOrdinal} | {fact.Line} | "
-                    + $"{EscapeTableCell(fact.Column)} | {fact.Operator} | {EscapeTableCell(fact.Scope)} | "
-                    + $"{fact.Literals.Count} | {EscapeTableCell(literals)} |");
+                    + $"{EscapeTableCell(fact.Column)} | {EscapeTableCell(fact.Operator)} | "
+                    + $"{EscapeTableCell(fact.Scope)} | {count} | {EscapeTableCell(literals)} | "
+                    + $"{EscapeTableCell(fact.PredicateText)} |");
             }
 
             lines.Add("");
@@ -1270,13 +1337,32 @@ Based on the structured reference context above, reverse engineer the stored pro
             return lines;
         }
 
+        /// <summary>
+        /// 잠금 힌트 표의 도입문.
+        ///
+        /// [범위 칸의 값이 셋이 된 뒤 - 2026-08-22 축 A 재감사 ③ Task 7]
+        /// Task 3이 `하위 질의`를 더하고 Task 1이 문장 칸에 `SELECT n`·`IF n`을 더했는데,
+        /// 이 문구는 `최상위`·`파생` 둘만 정의하고 있었다. 표를 "그대로 옮기라"고
+        /// 지시하면서 산문이 표보다 적은 값을 정의하면, 모델은 정의 밖의 행을 오해하거나
+        /// 아는 라벨로 바꿔 적는다. 경계의 권위 있는 서술은
+        /// <c>DmlScopeExtractor.LockHintVisitor.SubqueryScope</c>의 문서에 있다 -
+        /// 이 문구는 그것을 프롬프트 언어로 옮긴 것이므로, 그 문서가 바뀌면 여기도 바꾼다.
+        /// </summary>
         private const string LockHintIntroText =
             "[CRITICAL LOCK HINT TABLE] The following lock hints are MACHINE-DERIVED from the source DDL. " +
             "Copy this table verbatim into `## CRUD 분석` under the exact heading shown. " +
             "A row with `(없음)` means that scan carries NO hint - do not omit those rows and do not " +
             "generalise across statements: the same table may carry a hint in one statement and not another, " +
-            "or in one alias and not another within the same statement. The 범위 column says where the scan " +
-            "sits - `최상위` is the statement's own FROM, `파생` is inside a derived table in that FROM.";
+            "or in one alias and not another within the same statement. The 문장 column names the statement " +
+            "that owns the scan. Besides `INSERT n` / `UPDATE n` / `DELETE n` it can hold `SELECT n` - a " +
+            "standalone SELECT outside any DML (a variable assignment, a cursor source, a function body) - " +
+            "and `IF n` - a query inside an IF predicate. Those two update nothing, so describe them as reads; " +
+            "do not turn them into DML. Numbering runs from 1 per statement kind. The 범위 column says where " +
+            "the scan sits, and it has exactly three values: `최상위` is a position the statement (or that IF " +
+            "predicate) scans directly, `파생` is inside a derived table in that FROM, and `하위 질의` is inside " +
+            "a query opened again within one of those positions - a subquery in a WHERE or in a JOIN ... ON, " +
+            "or a scalar subquery. `하위 질의` wins when a position is both. A scan in any of the three narrows " +
+            "or reads real rows, so none of them may be omitted or softened.";
 
         /// <summary>
         /// 잠금 힌트 사실을 <b>표 출력 지시가 아니라 근거 재료</b>로 싣는다.
