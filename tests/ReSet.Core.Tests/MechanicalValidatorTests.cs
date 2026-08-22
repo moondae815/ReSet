@@ -5286,7 +5286,7 @@ END",
         {
             var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
             var markdown = WrapSpec(
-                "### INSERT 대상 테이블\n"
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT\n"
                 + "| 테이블명 | 컬럼명 | 원천 데이터 |\n"
                 + "| :--- | :--- | :--- |\n"
                 + "| SETTLE_POQ_DB.dbo.TSetTleByOUT | OUTCNT | COUNT(*) |\n");
@@ -5302,7 +5302,7 @@ END",
         {
             var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
             var markdown = WrapSpec(
-                "### INSERT 대상 테이블\n"
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT\n"
                 + "| 테이블명 | 컬럼명 | 원천 데이터 |\n"
                 + "| :--- | :--- | :--- |\n"
                 + "| SETTLE_POQ_DB.dbo.TSettleByOUT | OUTCNT | COUNT(*) |\n");
@@ -5310,6 +5310,75 @@ END",
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.InsertMappingTableNameMismatch);
+        }
+
+        /// <summary>
+        /// Fix Round 1 - 리뷰 Critical 실측. 옛 구현은 문서 전체의 `|`로 시작하는 모든 줄을
+        /// 훑었다. UPDATE 매핑 표(`### UPDATE 대상 테이블: ...`)도 같은
+        /// `| 테이블명 | 컬럼명 | ... |` 모양을 쓰므로(AiService.BuildUpdateMappingTemplateLines),
+        /// 그 표의 테이블명 칸이 InsertTargetTables와 대소문자만 다르면 이 검사가 UPDATE
+        /// 행을 INSERT 매핑 오류로 잘못 지목했다 - "원문 표기 그대로 옮기십시오"라는 안내가
+        /// UPDATE 문장에는 맞지 않을 수 있다. 이 문서에는 `### INSERT 대상 테이블:` 절이
+        /// 아예 없으므로, 검사가 제 절로 스코프를 좁혔다면 아무것도 보고하지 않아야 한다.
+        /// </summary>
+        [Fact]
+        public void Validate_UpdateMappingTableNameDiffersOnlyByCase_IsNotAttributedToInsertCheck()
+        {
+            var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
+            var markdown = WrapSpec(
+                "### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSetTleByOUT (갱신 1)\n"
+                + "| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TSetTleByOUT | OUTCNT | OUTCNT + 1 | 누적 갱신 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.InsertMappingTableNameMismatch);
+        }
+
+        /// <summary>
+        /// Fix Round 1 - 리뷰 Minor. InsertTargetTables 하나만 채운 픽스처는
+        /// SpecExpectations.From이 (이 항이 AND-체인에 이어져 있어서) null이 아닌 값을
+        /// 돌려주고, 그러면 Validate가 나머지 17개 CheckXxx를 전부 돈다. 이 파급이
+        /// 다른 재료(UpdateColumns·PromptSchemaColumns 등)를 전혀 채우지 않았는데도
+        /// 그 재료를 대조하는 검사들을 잘못 발동시키지 않는지를 잠근다 - 검사마다
+        /// "자기 재료가 비었으면 조기 반환한다"는 관례를 읽어 확인한 것을, 읽기가 아니라
+        /// 실행으로 못박는다.
+        /// </summary>
+        [Fact]
+        public void Validate_WithOnlyInsertTargetTablesPopulated_DoesNotRippleIntoUnrelatedChecks()
+        {
+            var expectations = BuildExpectationsWithInsertTargets("SETTLE_POQ_DB.dbo.TSettleByOUT");
+            var markdown = WrapSpec(
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT\n"
+                + "| 테이블명 | 컬럼명 | 원천 데이터 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| SETTLE_POQ_DB.dbo.TSettleByOUT | OUTCNT | COUNT(*) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var unrelatedTypesThatMustNotFire = new[]
+            {
+                ErrorType.UpdateMappingMissing,
+                ErrorType.SchemaClaimFalse,
+                ErrorType.TableIdentitySplit,
+                ErrorType.IdentifierNotationClaim,
+                ErrorType.SourceCommentMissing,
+                ErrorType.RoundingSemanticsMissing,
+                ErrorType.SessionOptionMissing,
+                ErrorType.HeaderContractContradiction,
+                ErrorType.DmlScopeTableMissing,
+                ErrorType.DerivedTableDefinitionMissing,
+                ErrorType.SetPredicateMismatch,
+                ErrorType.LockHintTableMissing,
+                ErrorType.ObjectDeclarationTableMissing,
+                ErrorType.CaseBranchTableMissing
+            };
+
+            foreach (var unrelatedType in unrelatedTypesThatMustNotFire)
+            {
+                Assert.DoesNotContain(result.DetailedErrors, e => e.Type == unrelatedType);
+            }
         }
 
         private static SpecExpectations BuildExpectationsWithInsertTargets(params string[] tables)

@@ -1858,6 +1858,8 @@ namespace ReSet.Core.Services
             }
         }
 
+        private const string InsertHeadingPrefix = "### INSERT 대상 테이블:";
+
         /// <summary>
         /// INSERT 매핑 표의 테이블명 칸이 파서가 확정한 대상 테이블과 표기까지 같은지 본다.
         ///
@@ -1871,6 +1873,23 @@ namespace ReSet.Core.Services
         /// 말단 이름이 대소문자까지 같은지만 본다. 귀속이 불가능하면(말단 이름이
         /// 어느 대상과도 안 맞으면) 침묵한다 - 잘못 지목한 오류는 재생성으로
         /// 고칠 수 없다(CheckSchemaClaims의 정책).
+        ///
+        /// [Fix Round 1 - 왜 `### INSERT 대상 테이블:` 절로 스코프를 좁히는가] 1라운드
+        /// 구현은 문서 전체에서 `|`로 시작하는 모든 줄을 훑었다. UPDATE 매핑 표
+        /// (`### UPDATE 대상 테이블: ...`, AiService.BuildUpdateMappingTemplateLines)도
+        /// 정확히 같은 `| 테이블명 | 컬럼명 | ... |` 모양을 쓰므로, 그 표의 테이블명 칸이
+        /// InsertTargetTables와 대소문자만 다르면 이 검사가 UPDATE 행을 INSERT 매핑
+        /// 오류로 잘못 지목했다(리뷰 Critical 실측 -
+        /// Validate_UpdateMappingTableNameDiffersOnlyByCase_IsNotAttributedToInsertCheck).
+        /// "원문 표기 그대로 옮기십시오"라는 안내는 INSERT 표 기준이라 UPDATE 문장에는
+        /// 안 맞을 수 있다 - 귀속 불가 시 침묵이라는 위 정책과 정면으로 어긋나는 잘못이다.
+        /// 그래서 AiService가 실제로 내는 헤딩 리터럴 `### INSERT 대상 테이블: {테이블명}`
+        /// (AiService.cs의 INSERT 매핑 표 렌더)만 절 경계로 삼고, 그 절의 본문(다음
+        /// `### ` 또는 `## ` 헤딩 전까지)에 있는 행만 본다 - CheckUpdateMappings의
+        /// UpdateHeadingPrefix·CollectUpdateSections와 같은 관례다. 한 SP가 INSERT 대상
+        /// 테이블을 여럿 가지면 절도 여럿이므로(AiService가 AstInsertMappings 각 원소마다
+        /// 절 하나씩 낸다), 문서 전체를 훑으며 해당 헤딩을 만날 때마다 절을 연다 - 첫
+        /// 절 하나만 보면 두 번째 이후 절의 오타를 놓친다.
         /// </summary>
         private static void CheckInsertMappingTableNames(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -1885,40 +1904,73 @@ namespace ReSet.Core.Services
 
                 var lines = MarkdownSectionLocator.SplitLines(markdown);
                 var reported = new HashSet<string>(StringComparer.Ordinal);
+                var index = 0;
 
-                foreach (var line in lines)
+                while (index < lines.Count)
                 {
-                    if (!line.TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
-
-                    // SplitTableRowCells는 선행 "|" 앞의 빈 조각을 cells[0]에 그대로
-                    // 남긴다("| a | b |" → ["", "a", "b", ""]) - 표의 첫 데이터 칸(테이블명)은
-                    // 언제나 cells[1]이다. cells[0]을 쓰면 모든 정상 행에서 candidate가
-                    // 빈 문자열이 되어 이 검사가 한 번도 발동하지 않는다(TDD 1라운드 실측).
-                    var cells = SplitTableRowCells(line);
-                    if (cells.Count < 2) continue;
-
-                    var candidate = cells[1].Trim();
-                    if (candidate.Length == 0) continue;
-
-                    var leaf = candidate.Split('.')[^1];
-                    if (expectedLeaves.Any(e => string.Equals(e, leaf, StringComparison.Ordinal))) continue;
-
-                    var caseOnly = expectedLeaves.FirstOrDefault(
-                        e => string.Equals(e, leaf, StringComparison.OrdinalIgnoreCase));
-                    if (caseOnly == null) continue;
-                    if (!reported.Add(leaf)) continue;
-
-                    var message =
-                        $"INSERT 매핑 표의 테이블명 `{candidate}`이 파서가 확정한 표기 `{caseOnly}`와 " +
-                        "대소문자가 다릅니다. 실행은 무해하지만 이 표를 식별자 원천으로 삼는 " +
-                        "이행·대조가 어긋납니다. 원문 표기 그대로 옮기십시오.";
-                    result.Errors.Add(message);
-                    result.DetailedErrors.Add(new DetailedError
+                    if (!lines[index].TrimStart().StartsWith(InsertHeadingPrefix, StringComparison.Ordinal))
                     {
-                        Type = ErrorType.InsertMappingTableNameMismatch,
-                        Message = message,
-                        RawContext = candidate
-                    });
+                        index++;
+                        continue;
+                    }
+
+                    var sectionTable = lines[index].TrimStart().Substring(InsertHeadingPrefix.Length).Trim();
+                    var bodyStart = index + 1;
+
+                    // 다음 헤딩(### 또는 ## 어느 쪽이든)이 이 INSERT 절의 끝이다 -
+                    // CollectUpdateSections와 같은 경계 규칙. 코드 펜스 안의 "### "처럼
+                    // 보이는 텍스트를 헤딩으로 오인하지 않도록 FindIndexOutsideFence를 쓴다.
+                    var bodyEnd = MarkdownSectionLocator.FindIndexOutsideFence(
+                        lines, bodyStart,
+                        line => line.TrimStart().StartsWith("### ", StringComparison.Ordinal)
+                             || line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+                    if (bodyEnd < 0 || bodyEnd > lines.Count) bodyEnd = lines.Count;
+
+                    for (var i = bodyStart; i < bodyEnd; i++)
+                    {
+                        var line = lines[i];
+                        if (!line.TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
+
+                        // SplitTableRowCells는 선행 "|" 앞의 빈 조각을 cells[0]에 그대로
+                        // 남긴다("| a | b |" → ["", "a", "b", ""]) - 표의 첫 데이터 칸(테이블명)은
+                        // 언제나 cells[1]이다. cells[0]을 쓰면 모든 정상 행에서 candidate가
+                        // 빈 문자열이 되어 이 검사가 한 번도 발동하지 않는다(TDD 1라운드 실측).
+                        var cells = SplitTableRowCells(line);
+                        if (cells.Count < 2) continue;
+
+                        var candidate = cells[1].Trim();
+                        if (candidate.Length == 0) continue;
+
+                        var leaf = candidate.Split('.')[^1];
+                        if (expectedLeaves.Any(e => string.Equals(e, leaf, StringComparison.Ordinal))) continue;
+
+                        var caseOnly = expectedLeaves.FirstOrDefault(
+                            e => string.Equals(e, leaf, StringComparison.OrdinalIgnoreCase));
+                        if (caseOnly == null) continue;
+                        // 같은 절 안에서 대상 테이블당 컬럼 수만큼 행이 반복되므로(AiService의
+                        // 템플릿이 컬럼마다 한 행을 낸다), leaf 단위로만 중복 제거한다 -
+                        // 그러지 않으면 표 하나의 오타 하나가 컬럼 수만큼 중복 보고된다.
+                        if (!reported.Add(leaf)) continue;
+
+                        // Fix Round 1 - 리뷰 Minor: RawContext에 절 식별자와 줄 번호를 넣어
+                        // 보고서 독자가 여러 INSERT 절 중 어느 것인지, 문서 몇 번째 줄인지
+                        // 바로 찾을 수 있게 한다(1라운드는 테이블명 문자열만 담아, 절이
+                        // 여럿이면 어느 절인지 구분할 길이 없었다).
+                        var message =
+                            $"`{InsertHeadingPrefix} {sectionTable}` 절({i + 1}번째 줄)의 INSERT 매핑 표 " +
+                            $"테이블명 `{candidate}`이 파서가 확정한 표기 `{caseOnly}`와 대소문자가 다릅니다. " +
+                            "실행은 무해하지만 이 표를 식별자 원천으로 삼는 이행·대조가 어긋납니다. " +
+                            "원문 표기 그대로 옮기십시오.";
+                        result.Errors.Add(message);
+                        result.DetailedErrors.Add(new DetailedError
+                        {
+                            Type = ErrorType.InsertMappingTableNameMismatch,
+                            Message = message,
+                            RawContext = $"{candidate} (절: {sectionTable}, {i + 1}번째 줄)"
+                        });
+                    }
+
+                    index = bodyEnd;
                 }
             }
             catch (Exception ex)
