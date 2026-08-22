@@ -523,6 +523,60 @@ namespace ReSet.Core.Services
                 }
             }
 
+            /// <summary>
+            /// 제어 흐름 술어 안의 스캔. `IF EXISTS(SELECT ... WITH(NOLOCK))`이 실물이다
+            /// (INS_EXTRA:31 - -9 차단 게이트의 판단 근거 스캔이 표 밖이었다).
+            ///
+            /// [본문이 아니라 술어만 감싸는 이유] `IF ... BEGIN UPDATE ... END`의 UPDATE는
+            /// 자기 문장이고 자기 번호를 받아야 한다. 술어만 훑고 본문은 평소대로
+            /// 자식 순회(base.ExplicitVisit)에 맡긴다.
+            ///
+            /// [번호를 미리 집지 않는 이유 - 계획서와 다른 자리]
+            /// 계획서는 먼저 NextOrdinal("IF")로 집고 스캔이 없으면 `_ordinals["IF"]`를
+            /// 되돌려 놓는 방식을 적었다. 결과는 같지만(집는 시점과 되돌리는 시점 사이에
+            /// 오늘은 아무도 끼어들지 않는다) 카운터를 되감는 코드는, 나중에 그 사이에
+            /// 채번이 한 줄이라도 들어오면 조용히 남의 번호를 지운다. 스캔이 있을 때만
+            /// 집으면 되감을 일 자체가 없다 - `ExplicitVisit(SelectStatement)`이
+            /// `HasFromClause`로 미리 가르는 것과 같은 모양이다.
+            ///
+            /// 술어 안 하위 질의는 `_dmlDepth`가 0인 자리이므로 DML 안 하위 질의 처리와
+            /// 겹치지 않는다.
+            /// </summary>
+            public override void ExplicitVisit(IfStatement node)
+            {
+                var queries = SubqueriesOf(node.Predicate);
+
+                if (queries.Count > 0)
+                {
+                    var ordinal = NextOrdinal("IF");
+                    foreach (var query in queries) CollectFromQuery("IF", ordinal, query);
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>불리언 식 안의 하위 질의를 모은다.</summary>
+            private static List<QueryExpression> SubqueriesOf(BooleanExpression? predicate)
+            {
+                if (predicate == null) return new List<QueryExpression>();
+
+                var collector = new SubqueryCollector();
+                predicate.Accept(collector);
+                return collector.Queries;
+            }
+
+            /// <summary>
+            /// 술어 안의 `ScalarSubquery`를 모은다. EXISTS·IN·비교 어느 자리에 있든
+            /// 하위 질의는 이 노드로 온다(프로브 실측). 술어 안에는 `SelectStatement`가
+            /// 없으므로 바깥 방문자의 `SELECT n` 채번과 겹치지 않는다.
+            /// </summary>
+            private sealed class SubqueryCollector : TSqlFragmentVisitor
+            {
+                public List<QueryExpression> Queries { get; } = new();
+
+                public override void Visit(ScalarSubquery node) => Queries.Add(node.QueryExpression);
+            }
+
             private int NextOrdinal(string operation)
             {
                 _ordinals.TryGetValue(operation, out var n);

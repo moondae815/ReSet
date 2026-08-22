@@ -1535,5 +1535,79 @@ END";
             Assert.DoesNotContain(facts, f => f.Operation == "SELECT");
             Assert.Single(facts, f => f.Operation == "INSERT");
         }
+
+        [Fact]
+        public void ExtractLockHints_ControlFlowPredicate_ShouldBeNumberedAsIf()
+        {
+            // INS_EXTRA:31 실측 - -9 차단 게이트의 판단 근거 스캔이다.
+            // 축 A 계약이 이 자리를 제어 흐름 술어 하위 질의의 실물 사례로 지목한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT PLTID
+              FROM   TSettleMst WITH(NOLOCK)
+              WHERE  ProcYMD = @pi_strYMD)
+    BEGIN
+        RETURN -9
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("IF", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            Assert.Equal("TSettleMst", fact.Table);
+            Assert.Equal("최상위", fact.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_TwoControlFlowPredicates_ShouldNumberIndependently()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT 1 FROM dbo.TA WITH(NOLOCK)) RETURN -1
+    IF EXISTS(SELECT 1 FROM dbo.TB WITH(NOLOCK)) RETURN -2
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal(1, facts[0].StatementOrdinal);
+            Assert.Equal("dbo.TA", facts[0].Table);
+            Assert.Equal(2, facts[1].StatementOrdinal);
+            Assert.Equal("dbo.TB", facts[1].Table);
+        }
+
+        [Fact]
+        public void ExtractLockHints_IfWithoutScanNestingAnotherIf_ShouldNotShiftInnerOrdinal()
+        {
+            // 술어에 스캔이 없는 IF는 번호를 쓰지 않는다. 그 IF가 다른 IF를 품고 있어도
+            // 안쪽이 1번부터 시작해야 한다 - 바깥이 번호를 먼저 집었다가 돌려주는 방식이면
+            // 집는 시점과 돌려주는 시점 사이에 안쪽이 끼어들 때 카운터가 어긋난다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF @p_intMode = 1
+    BEGIN
+        IF EXISTS(SELECT 1 FROM dbo.TA WITH(NOLOCK)) RETURN -1
+    END
+
+    IF EXISTS(SELECT 1 FROM dbo.TB WITH(NOLOCK)) RETURN -2
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal(1, facts[0].StatementOrdinal);
+            Assert.Equal("dbo.TA", facts[0].Table);
+            Assert.Equal(2, facts[1].StatementOrdinal);
+            Assert.Equal("dbo.TB", facts[1].Table);
+        }
     }
 }
