@@ -75,8 +75,48 @@ namespace ReSet.Core.Services
                     $"소속 DB 이름은 미상입니다. {string.Join(" / ", parts)}.");
             }
 
+            // 3부 식별자 참조에는 소속 DB를 3부로 적은 것도 섞인다(SqlStaticParser는
+            // 원문 부분 수만 보고 전부 담는다). 소속 DB를 아는 이 갈래에서는 가를 수
+            // 있으므로 가른다 - 전부 "그 밖"으로 적으면 홈 DB 참조가 크로스 DB로
+            // 읽히고, 이 표는 "수정 금지"라 산문이 바로잡을 수도 없다
+            // (2026-08-22 축 A 재감사, 네 객체 실측).
+            var homePrefix = home + ".";
+            var inside = threePart
+                .Where(r => r.StartsWith(homePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var outside = threePart
+                .Where(r => !r.StartsWith(homePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var segments = new List<string>();
+            if (outside.Count > 0)
+            {
+                segments.Add($"3부 식별자 참조 {outside.Count}건: {string.Join(", ", outside)}");
+            }
+            if (linked.Count > 0)
+            {
+                segments.Add($"연결 서버 참조 {linked.Count}건: {string.Join(", ", linked)}");
+            }
+
+            if (segments.Count == 0)
+            {
+                // 3부 표기가 있었지만 전부 소속 DB 안이고 연결 서버도 없다.
+                return new DatabasePlacementFact(
+                    $"소속 DB는 `{home}`이고 소속 DB 밖 참조는 없습니다 — "
+                    + $"소속 DB를 3부로 적은 참조 {inside.Count}건: {string.Join(", ", inside)}. "
+                    + "확정값입니다.");
+            }
+
+            // insideNote를 "다음은 그 밖입니다" 뒤에 붙이면 그 문구부터 문장 끝까지를
+            // "그 밖" 구간으로 읽는 소비자(예: 이 파일의 테스트, 명세서 산문)가 안쪽
+            // 참조 주소까지 그 구간 안에서 보게 된다 - 갈라놓은 두 목록이 문면에서
+            // 다시 섞인다. "다음은 그 밖입니다" 앞에 둬 그 구간이 밖 목록만 담게 한다.
+            var insideNote = inside.Count > 0
+                ? $" 소속 DB를 3부로 적은 참조 {inside.Count}건은 소속 DB 안입니다: {string.Join(", ", inside)}."
+                : string.Empty;
+
             return new DatabasePlacementFact(
-                $"소속 DB는 `{home}`이고 다음은 그 밖입니다 — {string.Join(" / ", parts)}.");
+                $"소속 DB는 `{home}`이고{insideNote} 다음은 그 밖입니다 — {string.Join(" / ", segments)}.");
         }
     }
 }
