@@ -51,6 +51,9 @@ namespace ReSet.Core.Services
         // CASE 분기 표(기계 확정 - 조건·결과 원문)의 L1 앵커. 위와 같은 이유로 서수
         // 이동은 기능에 영향이 없다.
         CaseBranchTableMissing,
+        // 기계 확정 표가 GFM 표로 렌더링되지 않는 형태로 옮겨졌을 때의 L1 앵커.
+        // 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
+        MachineTableShapeBroken,
         General
     }
 
@@ -135,6 +138,7 @@ namespace ReSet.Core.Services
                 result.CleansedMarkdown = cleansed;
                 ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
                 CheckPromptInstructionLeak(cleansed, result);
+                CheckMachineTableShape(cleansed, result);
 
                 if (expectations != null)
                 {
@@ -3596,6 +3600,73 @@ namespace ReSet.Core.Services
             catch (Exception ex)
             {
                 Log.Warning(ex, "[MechanicalValidator] CASE 분기 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 표가 GFM 표로 렌더링되는 형태인지 본다.
+        ///
+        /// [왜 행 내용 대조로는 부족한가] 값이 전부 맞아도 구분 행의 셀 수가 헤더와
+        /// 다르면 GFM이 표로 인식하지 않는다. 그러면 "수정 금지"로 못 박은 확정값이
+        /// 평문 한 덩어리가 되어 이행 담당자가 표로 읽지 못한다
+        /// (2026-08-22 축 A 재감사, UP_UTIL_STAT_PGCOLLECT_INS 실측).
+        ///
+        /// [왜 카탈로그를 도는가] MachineConfirmedTables.All이 표 목록의 단일 출처다.
+        /// 표가 늘면 이 검사가 따로 손대지 않아도 따라온다.
+        ///
+        /// [왜 expectations를 받지 않는가] 재료 없이 마크다운만으로 판정되므로
+        /// 재료가 없는 갈래에서도 돈다.
+        ///
+        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
+        /// Errors를 통째로 지우고 통과시킨다. 새 검사의 실패가 기존 검사의 판정까지
+        /// 삼키면 안 된다.
+        /// </summary>
+        private static void CheckMachineTableShape(string markdown, ValidationResult result)
+        {
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+
+                foreach (var table in MachineConfirmedTables.All)
+                {
+                    var (headingIndex, endIndex) = LocateHeadingSection(lines, table.Heading);
+                    if (headingIndex < 0) continue;
+
+                    var rows = new List<string>();
+                    for (var i = headingIndex + 1; i < endIndex; i++)
+                    {
+                        if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                        {
+                            rows.Add(lines[i]);
+                        }
+                    }
+
+                    if (rows.Count < 2) continue;
+
+                    var headerCells = SplitTableRowCells(rows[0]).Count;
+                    for (var i = 1; i < rows.Count; i++)
+                    {
+                        var cells = SplitTableRowCells(rows[i]).Count;
+                        if (cells == headerCells) continue;
+
+                        var message =
+                            $"`{table.Heading}` 표의 {i + 1}번째 행이 {cells}칸인데 헤더 행은 "
+                            + $"{headerCells}칸입니다. 셀 수가 다르면 표로 렌더링되지 않아 확정값이 "
+                            + "평문으로 무너집니다. 헤더와 같은 칸 수로 옮기십시오.";
+                        result.Errors.Add(message);
+                        result.DetailedErrors.Add(new DetailedError
+                        {
+                            Type = ErrorType.MachineTableShapeBroken,
+                            Message = message,
+                            RawContext = rows[i]
+                        });
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] 기계 확정 표 형태 검사 실패 - 이 검사만 건너뜁니다.");
             }
         }
 

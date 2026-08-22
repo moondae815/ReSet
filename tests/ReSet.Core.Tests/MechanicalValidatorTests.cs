@@ -5240,5 +5240,39 @@ END",
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.CaseBranchTableMissing);
         }
+
+        /// <summary>
+        /// 2026-08-22 축 A 재감사 실측(UP_UTIL_STAT_PGCOLLECT_INS). 구분 행의 셀 수가
+        /// 헤더와 다르면 GFM이 표로 인식하지 않아 "수정 금지" 표가 통째로 평문이 된다.
+        /// 행 내용 대조 검사들은 값만 보므로 이 부류를 잡지 못한다.
+        /// </summary>
+        [Fact]
+        public void Validate_MachineTableWithMismatchedSeparatorCells_IsReported()
+        {
+            var markdown = WrapSpec(
+                DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 |\n"
+                + "| :--- | :--- |\n"
+                + "| INSERT 1 | 55 | dbo.T |\n");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
+        }
+
+        /// <summary>셀 수가 맞는 표는 통과한다 - 오탐 고정.</summary>
+        [Fact]
+        public void Validate_MachineTableWithMatchingSeparatorCells_IsNotReported()
+        {
+            var markdown = WrapSpec(
+                DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| INSERT 1 | 55 | dbo.T |\n");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.MachineTableShapeBroken);
+        }
     }
 }
