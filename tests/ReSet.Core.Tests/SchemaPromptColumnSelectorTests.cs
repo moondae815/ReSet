@@ -310,5 +310,103 @@ END"
 
             Assert.Contains("ProductName", shown);
         }
+
+        /// <summary>
+        /// 2026-08-22 축 A 재감사 실측(UP_UTIL_SETTLE_INS_EXTRA·INS_EXTRA4PLCARD).
+        /// 원본이 INSERT 대상 목록에 X.PRODUCTNAME으로 적으면 파서는 그 문자열을
+        /// AstInsertMappings.TargetColumns에만 담고 ReferencedColumnsPerTable에는
+        /// 담지 않는다. 입력원이 참조 컬럼뿐이면 ProductName이 스키마 표에서 잘리고,
+        /// 모델이 "제공된 스키마에 없는 컬럼"이라 단정한다.
+        /// </summary>
+        [Fact]
+        public void Select_InsertTargetColumnWithAliasQualifier_KeepsBaseColumn()
+        {
+            var dep = new DependencyInfo
+            {
+                Database = "SETTLE_POQ_DB",
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Columns =
+                {
+                    new ColumnInfo { ColumnName = "PLTID" },
+                    new ColumnInfo { ColumnName = "ProductName" }
+                }
+            };
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Dependencies = { dep },
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ReferencedColumnsPerTable = new Dictionary<string, List<string>>
+                    {
+                        ["SETTLE_POQ_DB.dbo.TSettleMst"] = new() { "PLTID" }
+                    },
+                    AstInsertMappings =
+                    {
+                        new AstInsertMapping
+                        {
+                            TargetTable = "SETTLE_POQ_DB.dbo.TSettleMst",
+                            TargetColumns = { "PLTID", "X.PRODUCTNAME" }
+                        }
+                    }
+                }
+            };
+
+            var shown = SchemaPromptColumnSelector.Select(dep, spDef);
+
+            Assert.Contains("ProductName", shown);
+            Assert.Contains("PLTID", shown);
+        }
+
+        /// <summary>
+        /// 반대 방향도 고정한다. 파서가 파생 테이블의 계산 컬럼을 물리 테이블에
+        /// 귀속시키는 일이 있는데(실측: UF_GET_COLLECTYMD의 X.YMD), 베이스 이름을
+        /// keepCols에 넣어도 그것이 실제 컬럼이 아니면 실리지 않아야 한다.
+        /// Select의 반환값이 dep.Columns와의 교집합이라는 구조가 이 가드다.
+        /// </summary>
+        [Fact]
+        public void Select_InsertTargetColumnThatIsNotARealColumn_IsNotShown()
+        {
+            var dep = new DependencyInfo
+            {
+                Database = "SETTLE_POQ_DB",
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Columns = { new ColumnInfo { ColumnName = "PLTID" } }
+            };
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                Dependencies = { dep },
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ReferencedColumnsPerTable = new Dictionary<string, List<string>>
+                    {
+                        ["SETTLE_POQ_DB.dbo.TSettleMst"] = new() { "PLTID" }
+                    },
+                    AstInsertMappings =
+                    {
+                        new AstInsertMapping
+                        {
+                            TargetTable = "SETTLE_POQ_DB.dbo.TSettleMst",
+                            TargetColumns = { "PLTID", "X.YMD" }
+                        }
+                    }
+                }
+            };
+
+            var shown = SchemaPromptColumnSelector.Select(dep, spDef);
+
+            Assert.DoesNotContain("YMD", shown);
+        }
     }
 }

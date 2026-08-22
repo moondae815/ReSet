@@ -86,6 +86,38 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // 5) INSERT/UPDATE 대상 컬럼
+            //
+            // 파서는 INSERT 대상 목록을 AstInsertMappings.TargetColumns에만 담고
+            // ReferencedColumnsPerTable에는 담지 않는다. 그래서 오직 대상으로만
+            // 등장하는 컬럼이 1~4 어디에도 걸리지 않아 스키마 표에서 잘린다
+            // (실측: UP_UTIL_SETTLE_INS_EXTRA의 X.PRODUCTNAME → ProductName).
+            // 원문과 베이스 이름을 둘 다 넣는 것은 입력원 1과 같은 이유다.
+            // 실제 컬럼이 아닌 이름을 넣어도 아래 shown이 dep.Columns와의
+            // 교집합이라 실리지 않는다 - 가드를 따로 두지 않는 근거다.
+            if (analysis != null)
+            {
+                foreach (var mapping in analysis.AstInsertMappings)
+                {
+                    if (!KeyMatchesDependency(mapping.TargetTable, dep, spDef)) continue;
+                    foreach (var c in mapping.TargetColumns)
+                    {
+                        keepCols.Add(c);
+                        keepCols.Add(ExtractBaseName(c));
+                    }
+                }
+
+                foreach (var mapping in analysis.AstUpdateMappings)
+                {
+                    if (!KeyMatchesDependency(mapping.TargetTable, dep, spDef)) continue;
+                    foreach (var assignment in mapping.Assignments)
+                    {
+                        keepCols.Add(assignment.Column);
+                        keepCols.Add(ExtractBaseName(assignment.Column));
+                    }
+                }
+            }
+
             var shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var col in dep.Columns)
             {
