@@ -52,6 +52,42 @@ namespace ReSet.Core.Services
     /// UP_Util_PG_Client_CMRate_Ins INSERT 2(76행)·INSERT 4(159행)는 UNION ALL 원천이지만
     /// 원문에 ORDER BY 자체가 없어(grep 확인) 이 필드는 빈 목록이 맞다.
     /// </param>
+    /// <param name="GroupByColumns">
+    /// 문장의 GROUP BY 키. 없으면 빈 목록.
+    ///
+    /// 매핑 표의 설명 칸이 유일한 GROUP BY 기록처였고, 한 SP에서 세 문장의 첫 키가
+    /// 통째로 빠진 실측이 있다(UP_Util_Settle_Summary·UP_Util_Settle_Summary_AcqManual).
+    /// 기계 확정 열로 올려 그 자리를 산문에 맡기지 않는다.
+    ///
+    /// [ORDER BY와 같은 "—"/"(없음)" 규약을 쓰는 이유 - Task 8, 제약 3]
+    /// GROUP BY도 ORDER BY와 마찬가지로 UPDATE·DELETE의 최상위 절로는 문법상 불가능하고
+    /// (T-SQL은 UPDATE·DELETE에 GROUP BY를 허용하지 않는다), INSERT ... SELECT의 원천
+    /// SELECT에서만 나타날 수 있다. 그래서 렌더러(AiService.BuildDmlScopeTableLines)는
+    /// UPDATE·DELETE 행에 "—"(문법상 불가)를, INSERT 행의 빈 목록에는 "(없음)"(절 부재)을
+    /// 쓴다 - ORDER BY 칸이 이미 세운 구분을 그대로 재사용한다. 이 레코드 자신은 둘을
+    /// 구분하지 않는다(OrderByExpressions가 그렇듯 항상 빈 목록으로 담고, "—"인지
+    /// "(없음)"인지는 렌더 시점에 Operation으로 가른다).
+    ///
+    /// [파생 테이블 안의 GROUP BY가 새지 않는 이유 - Task 8, 제약 6]
+    /// INSERT ... SELECT ... FROM (SELECT ... GROUP BY ...) X처럼 GROUP BY가 파생
+    /// 테이블 안에 있으면 바깥 문장 자신의 GROUP BY가 아니다. DmlScopeVisitor는
+    /// QuerySpecificationsOf(select.Select)로 얻은 각 QuerySpecification의
+    /// GroupByClause만 직접 읽는다 - 이 헬퍼는 UNION·괄호만 펼치고 FROM 절 안의
+    /// 파생 테이블로는 내려가지 않으므로(SourceQuerySpecifications 문서 참고),
+    /// 파생 테이블의 GROUP BY는 애초에 이 순회에 잡히지 않는다. 이 배치의 Task 4가
+    /// 정확히 같은 부류(GROUP BY 귀속)에서 결함이 났었다.
+    ///
+    /// [UNION 갈래마다 GROUP BY가 다르면 비우는 이유 - Task 8, 제약 7]
+    /// INSERT 원천이 UNION일 때 갈래마다 WHERE·JOIN 키는 합쳐 담지만(교집합이 아니라
+    /// 합집합 - 각 갈래가 실제로 지는 조건이므로 합쳐도 거짓이 되지 않는다), GROUP BY는
+    /// 그렇게 할 수 없다. "이 INSERT 문의 GROUP BY"는 갈래마다 다른 값일 수 없는
+    /// 단일 사실이어야 하는데, 갈래마다 실제로 다르면 그 단일 답 자체가 없다 -
+    /// 억지로 합치면(합집합이든 첫 갈래든) 어느 갈래도 쓰지 않는 조합이나 다른
+    /// 갈래의 그룹화 의미를 사실인 것처럼 단언하게 된다. 그래서 모든 갈래가 완전히
+    /// 같은 GROUP BY 키 목록을 가질 때만 그 값을 싣고, 하나라도 다르면(갈래 중
+    /// 하나만 GROUP BY가 있는 경우 포함) 빈 목록으로 둔다 - 과소 포착(빈 칸)은
+    /// Minor, 거짓 행은 Critical이라는 판단 기준을 그대로 따른다.
+    /// </param>
     public sealed record DmlScopeFact(
         string Operation,
         int Line,
@@ -59,7 +95,13 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> PredicateColumns,
         bool DateParameterApplied,
         IReadOnlyList<string> JoinKeys,
-        IReadOnlyList<string> OrderByExpressions);
+        IReadOnlyList<string> OrderByExpressions,
+        IReadOnlyList<string>? GroupByColumns = null)
+    {
+        /// <summary>기본값을 null이 아니라 빈 목록으로 정규화한다 - 기존 생성 자리가
+        /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
+        public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
+    }
 
     /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
     /// <param name="Line">원본 DDL에서 그 문장이 시작하는 줄 번호(1부터).</param>
@@ -607,6 +649,7 @@ namespace ReSet.Core.Services
                 var predicateColumns = new List<string>();
                 var joinKeys = new List<string>();
                 var dateApplied = false;
+                var groupByPerBranch = new List<IReadOnlyList<string>>();
 
                 foreach (var spec in SourceQuerySpecifications(node.InsertSource))
                 {
@@ -635,11 +678,68 @@ namespace ReSet.Core.Services
                             if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
                         }
                     }
+
+                    // 이 QuerySpecification 자신의 GroupByClause만 본다 - 파생 테이블
+                    // 안의 GROUP BY는 애초에 이 순회에 잡히지 않는다(SourceQuerySpecifications가
+                    // UNION·괄호만 펼치고 FROM 안으로는 내려가지 않으므로). 갈래별로
+                    // 모아 뒀다가 마지막에 ResolveGroupByColumns로 합친다 - DmlScopeFact.
+                    // GroupByColumns 문서의 제약 7 실측 근거 참고.
+                    groupByPerBranch.Add(CollectGroupByColumns(spec));
                 }
 
                 Facts.Add(new DmlScopeFact(
                     "INSERT", node.StartLine, TextOf(node.Target),
-                    predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource)));
+                    predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource),
+                    ResolveGroupByColumns(groupByPerBranch)));
+            }
+
+            /// <summary>
+            /// QuerySpecification 하나의 GROUP BY 키 목록을 뽑는다. 단순 컬럼 참조가
+            /// 아닌 그루핑 식(ROLLUP·CUBE·식 그루핑 등)은 담지 않는다 - 표의 "컬럼"
+            /// 칸에 쓸 이름이 없는 것을 억지로 만들지 않는다(TopLevelPredicateCollector.
+            /// LeftSideText가 컬럼 아닌 좌변을 버리는 것과 같은 원칙).
+            /// </summary>
+            private static List<string> CollectGroupByColumns(QuerySpecification? query)
+            {
+                var columns = new List<string>();
+                var clause = query?.GroupByClause;
+                if (clause == null) return columns;
+
+                foreach (var spec in clause.GroupingSpecifications)
+                {
+                    if (spec is not ExpressionGroupingSpecification expr) continue;
+                    if (expr.Expression is not ColumnReferenceExpression column) continue;
+
+                    var name = column.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                    if (!string.IsNullOrWhiteSpace(name)) columns.Add(name!);
+                }
+
+                return columns;
+            }
+
+            /// <summary>
+            /// UNION 갈래별 GROUP BY 키를 문장 하나의 사실로 합친다.
+            ///
+            /// [갈래가 다르면 비우는 이유 - DmlScopeFact.GroupByColumns 문서의 제약 7
+            /// 실측 근거 참고] 모든 갈래가 완전히 같은 GROUP BY 키 목록(순서 포함)을
+            /// 가질 때만 그 값을 싣는다. 갈래가 하나뿐이면(UNION이 아니면) 그 갈래의
+            /// 값을 그대로 쓴다. 갈래가 없으면(VALUES 원천) 빈 목록이다.
+            /// </summary>
+            private static IReadOnlyList<string> ResolveGroupByColumns(
+                IReadOnlyList<IReadOnlyList<string>> perBranch)
+            {
+                if (perBranch.Count == 0) return Array.Empty<string>();
+
+                var first = perBranch[0];
+                for (var i = 1; i < perBranch.Count; i++)
+                {
+                    if (!perBranch[i].SequenceEqual(first, StringComparer.OrdinalIgnoreCase))
+                    {
+                        return Array.Empty<string>();
+                    }
+                }
+
+                return first;
             }
 
             /// <summary>

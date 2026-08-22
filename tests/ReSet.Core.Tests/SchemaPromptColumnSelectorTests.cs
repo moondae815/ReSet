@@ -232,5 +232,83 @@ namespace ReSet.Core.Tests
             // Act & Assert
             Assert.Empty(SchemaPromptColumnSelector.DetectOrphanedColumnKeys(sp));
         }
+
+        [Fact]
+        public void Select_ColumnMentionedOnlyInComment_ShouldStayInThePromptTable()
+        {
+            // UP_UTIL_SETTLE_PROC_ETC 실측: ClientIDType이 주석 처리된 조건에만 있어
+            // 표에서 잘려 나갔고, 명세서가 "제공 스키마의 TClient에도 ClientIDType은
+            // 없습니다"라고 썼다. AI의 환각이 아니라 재료가 잘린 결과다.
+            var dep = new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TClient",
+                Type = "USER_TABLE",
+                Columns = new List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "ClientID", IsPrimaryKey = true },
+                    new ColumnInfo { ColumnName = "ClientIDType" }
+                }
+            };
+
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "PROC_ETC",
+                DdlText = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT C.ClientID
+    FROM   dbo.TClient C
+    --AND    C.ClientIDType <> 1
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new Dictionary<string, List<string>>
+                {
+                    ["dbo.TClient"] = new List<string> { "ClientID" }
+                }
+            };
+
+            var shown = SchemaPromptColumnSelector.Select(dep, spDef);
+
+            Assert.Contains("ClientIDType", shown);
+        }
+
+        [Fact]
+        public void Select_AliasQualifiedReferenceKey_ShouldMatchThePlainColumn()
+        {
+            // UP_UTIL_SETTLE_INS_EXTRA 실측: 원본 INSERT 목록이 X.PRODUCTNAME이라
+            // 참조 키가 별칭 한정으로 기록됐고, 스키마의 ProductName과 맞지 않아
+            // 잘려 나갔다.
+            var dep = new DependencyInfo
+            {
+                Schema = "dbo",
+                Name = "TSettleMst",
+                Type = "USER_TABLE",
+                Columns = new List<ColumnInfo>
+                {
+                    new ColumnInfo { ColumnName = "PLTID", IsPrimaryKey = true },
+                    new ColumnInfo { ColumnName = "ProductName" }
+                }
+            };
+
+            var spDef = new SpDefinition { Schema = "dbo", Name = "INS_EXTRA", DdlText = "SELECT 1;" };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ReferencedColumnsPerTable = new Dictionary<string, List<string>>
+                {
+                    ["dbo.TSettleMst"] = new List<string> { "X.PRODUCTNAME" }
+                }
+            };
+
+            var shown = SchemaPromptColumnSelector.Select(dep, spDef);
+
+            Assert.Contains("ProductName", shown);
+        }
     }
 }

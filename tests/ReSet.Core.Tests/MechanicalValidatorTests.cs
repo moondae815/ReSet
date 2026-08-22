@@ -4835,6 +4835,99 @@ END",
                     && e.Message.Contains("ORDER BY"));
         }
 
+        /// <summary>GROUP BY를 지는 INSERT...SELECT 하나짜리 SP. UP_Util_Settle_Summary 실측 모양.</summary>
+        private static SpDefinition SpWithGroupBy() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_Util_Settle_Summary", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "UP_Util_Settle_Summary",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByTX (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*)
+    FROM   dbo.TSettleMst
+    WHERE  YMD = @pi_strYMD
+    GROUP BY YMD, CLIENTID
+END",
+            Dependencies = new List<DependencyInfo>()
+        };
+
+        [Fact]
+        public void Validate_GroupByMissingFromDmlScopeTable_ShouldFlag()
+        {
+            // UP_Util_Settle_Summary 실측 - GROUP BY 첫 키(YMD)가 매핑 표의 설명 칸에서만
+            // 언급되다 표에서 통째로 빠졌다(🟡). CheckDmlScopeTable은 라인 토큰이 어느
+            // 행에든 있는지만 보고(위 문서), GROUP BY 칸 값이 실제로 그 행에 있는지는
+            // 대조하지 않으므로 GROUP BY 칸이 통째로 "(없음)"이어도 통과했다 - 이
+            // 확장이 그 구멍을 닫는다.
+            var expectations = SpecExpectations.From(SpWithGroupBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+            Assert.Equal(new[] { "YMD", "CLIENTID" }, fact.GroupByColumns);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | (없음) | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("GROUP BY")
+                    && e.Message.Contains("YMD, CLIENTID"));
+        }
+
+        [Fact]
+        public void Validate_GroupByPresentInDmlScopeTable_ShouldPass()
+        {
+            var expectations = SpecExpectations.From(SpWithGroupBy());
+            var fact = Assert.Single(expectations!.DmlScopeFacts);
+
+            var crud = DmlScopeExtractor.DmlScopeTableHeading + "\n"
+                + "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼 | 기준일 파라미터 적용 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Operation} 1 | {fact.Line} | {fact.Target} | (없음) | (기준일 파라미터 없음) | (없음) | "
+                + $"{string.Join(", ", fact.GroupByColumns)} | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing
+                    && e.Message.Contains("GROUP BY"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeFactWithoutGroupBy_ShouldNotRequireTheGroupByCell()
+        {
+            // 제약 2의 함정 재현 - GroupByColumns가 비어 있고(UPDATE는 항상 그렇다)
+            // 표의 GROUP BY 칸도 조인 키 칸도 "(없음)"이면 두 칸이 같은 토큰이다.
+            // 대조가 "값이 비어 있지 않을 때만 요구"를 지키지 않으면 이 우연한 일치가
+            // 검사를 무력화한다 - 이 테스트는 GroupByColumns가 빈 사실에는 아무 것도
+            // 요구하지 않는다는 것을 증명한다(라인 칸만 맞으면 통과).
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false, new[] { "PLTID" }, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 | GROUP BY | ORDER BY |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 227 | A | UseState | **아니오** | PLTID | (없음) | — |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
         [Fact]
         public void SuggestedPromptFix_ShouldCarryLockHintAndObjectDeclarationErrorsToTheModel()
         {
@@ -4955,6 +5048,197 @@ END",
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ObjectDeclarationTableMissing);
+        }
+
+        private static SpDefinition ExecutionSemanticsSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public void From_WithOnlyExecutionSemantics_ShouldNotReturnNull()
+        {
+            // 이른 반환 AND-체인에 자기 항을 넣지 않으면 재료가 이것 하나뿐일 때
+            // From이 null을 돌려주고 CheckExecutionSemantics가 한 번도 돌지 않는다.
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+
+            Assert.NotNull(expectations);
+            Assert.NotEmpty(expectations!.ExecutionSemantics);
+            // 격리 확인 - 다른 재료가 이 픽스처를 살려 주고 있지 않은지 못박는다.
+            Assert.Empty(expectations.DmlScopeFacts);
+        }
+
+        [Fact]
+        public void Validate_MissingExecutionSemanticsTable_ShouldReportAnError()
+        {
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate("## 개요\n표가 없다.\n", expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
+
+        [Fact]
+        public void Validate_WithExecutionSemanticsTableCopied_ShouldNotReportThatError()
+        {
+            var expectations = SpecExpectations.From(ExecutionSemanticsSpDef());
+            var fact = Assert.Single(expectations!.ExecutionSemantics);
+            var markdown =
+                "## 개요\n\n"
+                + ExecutionSemanticsFacts.TableHeading + "\n\n"
+                + "| 종류 | 라인 | 대상 | 확정 사실 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Kind} | {fact.Line} | {fact.Target} | {fact.Fact} |\n";
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors,
+                e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
+
+        // [격리를 위해 CREATE PROCEDURE를 쓰고 StaticAnalysis를 세팅하지 않는다]
+        // CaseBranchExtractor는 spDef.DdlText만 보고 StaticAnalysis를 전혀 쓰지
+        // 않는다. 그런데 이 재료를 "하나만" 격리하려는 픽스처가 실측으로 두 함정에
+        // 걸렸다:
+        // (1) StaticAnalysis.IsParsedSuccessfully = true를 세팅하면
+        //     DatabasePlacementExtractor.Extract가 (ThreePartObjectReferences·
+        //     LinkedServerReferences가 비어도) "로컬입니다" 확정 문장을 하나 만들어
+        //     executionSemantics가 저절로 비지 않는다 - StaticAnalysis를 기본값
+        //     (new() - IsParsedSuccessfully = false)으로 남겨야 막힌다.
+        // (2) DDL을 CREATE FUNCTION으로 쓰면 ObjectDeclarationExtractor.Extract가
+        //     함수라는 사실만으로(WITH 옵션이 없어도) 항상 non-null 사실을 만들어
+        //     objectDeclaration == null 항이 저절로 거짓이 된다 - CREATE PROCEDURE로
+        //     바꿔야 이 추출기가 null을 돌려준다(프로시저에는 이 옵션 자체가 없다).
+        // 실측: SpecExpectations.From의 AND-체인에서 caseBranches.Count == 0 항을
+        // 통째로 지워도, 함정 (1)·(2) 각각이 별도로 AND-체인을 이미 거짓으로
+        // 만들고 있어 From_WithOnlyCaseBranches_ShouldNotReturnNull이 계속
+        // 통과했다 - roundingCalls/sourceComments 실측과 같은 모양이 두 번
+        // 겹친 경우다. 둘 다 막아야 이 테스트가 실제로 caseBranches 항을 지킨다.
+        private static SpDefinition CaseBranchSpDef()
+        {
+            return new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                DdlText = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v INT
+    SET @v = CASE WHEN DATEPART(DW, GETDATE()) > 3 THEN 7 ELSE 0 END
+    RETURN
+END"
+            };
+        }
+
+        [Fact]
+        public void From_WithOnlyCaseBranches_ShouldNotReturnNull()
+        {
+            // 이른 반환 AND-체인에 자기 항을 넣지 않으면 재료가 이것 하나뿐일 때
+            // From이 null을 돌려주고 CheckCaseBranches가 한 번도 돌지 않는다.
+            var expectations = SpecExpectations.From(CaseBranchSpDef());
+
+            Assert.NotNull(expectations);
+            Assert.NotEmpty(expectations!.CaseBranches);
+            // 격리 확인 - 다른 재료가 이 픽스처를 살려 주고 있지 않은지 못박는다.
+            // ExecutionSemantics·ObjectDeclaration까지 비어(null) 있음을 함께
+            // 단언해야 한다 - CaseBranchSpDef 위 주석의 두 함정(DB 배치 사실 ·
+            // 함수 선언 사실이 이 항을 대신 가려 버리는 것)이 되풀이되지 않게 한다.
+            Assert.Empty(expectations.DmlScopeFacts);
+            Assert.Empty(expectations.ExecutionSemantics);
+            Assert.Null(expectations.ObjectDeclaration);
+        }
+
+        [Fact]
+        public void Validate_MissingCaseBranchTable_ShouldReportAnError()
+        {
+            var expectations = SpecExpectations.From(CaseBranchSpDef());
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate("## 개요\n표가 없다.\n", expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.CaseBranchTableMissing);
+        }
+
+        [Fact]
+        public void Validate_MergedCaseBranches_ShouldStillReportTheMissingRow()
+        {
+            // UIF_SettleYMD 실측: 두 분기를 하나로 뭉갠 것이 🟠이었다. 헤딩만 있고
+            // 행이 빠지면 통과해서는 안 된다.
+            var expectations = SpecExpectations.From(CaseBranchSpDef());
+            var markdown =
+                "## 로직 흐름 요약\n\n"
+                + CaseBranchExtractor.TableHeading + "\n\n"
+                + "| 라인 | 순서 | 조건 원문 | 결과 원문 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + "| 5 | WHEN 1 | 요일을 비교해 | 7 |\n";
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.CaseBranchTableMissing);
+        }
+
+        [Fact]
+        public void Validate_WithCaseBranchTableCopied_ShouldNotReportThatError()
+        {
+            var expectations = SpecExpectations.From(CaseBranchSpDef());
+            var rows = string.Concat(expectations!.CaseBranches.Select(
+                f => $"| {f.Line} | {f.Ordinal} | {f.Condition} | {f.Result} |\n"));
+            var markdown =
+                "## 로직 흐름 요약\n\n"
+                + CaseBranchExtractor.TableHeading + "\n\n"
+                + "| 라인 | 순서 | 조건 원문 | 결과 원문 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + rows;
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.CaseBranchTableMissing);
+        }
+
+        [Fact]
+        public void Validate_CaseBranchTableWithoutElseRow_ShouldNotReportThatError()
+        {
+            // ELSE가 없는 CASE의 기대값에는 ELSE 행이 없다 - 명세서도 ELSE 행을
+            // 싣지 않아야 통과한다. 거짓 ELSE 행을 요구하면 안 된다.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "F",
+                DdlText = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    RETURN CASE WHEN 1 = 1 THEN 10 END
+END",
+                StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true }
+            };
+            var expectations = SpecExpectations.From(spDef);
+            var fact = Assert.Single(expectations!.CaseBranches);
+            Assert.Equal("WHEN 1", fact.Ordinal);
+
+            var markdown =
+                "## 로직 흐름 요약\n\n"
+                + CaseBranchExtractor.TableHeading + "\n\n"
+                + "| 라인 | 순서 | 조건 원문 | 결과 원문 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + $"| {fact.Line} | {fact.Ordinal} | {fact.Condition} | {fact.Result} |\n";
+            var validator = new MechanicalValidator();
+
+            var result = validator.Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.CaseBranchTableMissing);
         }
     }
 }

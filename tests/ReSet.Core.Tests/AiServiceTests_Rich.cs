@@ -2262,6 +2262,75 @@ END"
             Assert.EndsWith("| (없음) |", insertRow.TrimEnd());
         }
 
+        private static SpDefinition GroupBySpDefinition() => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UP_Util_Settle_Summary", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "UP_Util_Settle_Summary",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByTX (YMD, CLIENTID, CNT)
+    SELECT YMD, CLIENTID, COUNT(*)
+    FROM   dbo.TSettleMst
+    WHERE  YMD = @pi_strYMD
+    GROUP BY YMD, CLIENTID
+
+    UPDATE dbo.TSettleMst
+    SET    ProcYMD = @pi_strYMD
+    WHERE  YMD = @pi_strYMD
+END"
+        };
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_ShouldCarryGroupByColumn()
+        {
+            // UP_Util_Settle_Summary 실측: GROUP BY 첫 키(YMD)가 매핑 표의 설명 칸에서만
+            // 언급되다 표에서 통째로 빠졌다(🟡). GROUP BY는 별도 칸으로 확정한다 -
+            // UPDATE(최상위 GROUP BY가 문법상 불가) 행은 "—"를 실어야 한다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(GroupBySpDefinition(), "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+
+            Assert.Contains("GROUP BY", section);
+            var insertRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| INSERT 1 |"));
+            Assert.Contains("YMD, CLIENTID", insertRow);
+            var updateRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| UPDATE 1 |"));
+            // GROUP BY 칸은 ORDER BY 앞이라 마지막에서 두 번째 칸이다.
+            var updateCells = updateRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+            Assert.Equal("—", updateCells[updateCells.Count - 2]);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeTable_InsertWithoutGroupBy_ShouldRenderNone()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "P",
+                ObjectType = CodeObjectType.Procedure,
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN INSERT INTO dbo.T (A) SELECT A FROM dbo.S END"
+            };
+
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(spDef, "rules");
+            var section = ExtractTableSection(result.SystemPrompt, DmlScopeExtractor.DmlScopeTableHeading);
+            var insertRow = section.Split('\n').Single(l => l.TrimStart().StartsWith("| INSERT 1 |"));
+
+            var cells = insertRow.Trim().Trim('|').Split('|').Select(c => c.Trim()).ToList();
+            // GROUP BY 칸은 ORDER BY 앞이라 마지막에서 두 번째 칸이다.
+            Assert.Equal("(없음)", cells[cells.Count - 2]);
+        }
+
         private static SpDefinition FunctionWithSchemaBindingDefinition() => new()
         {
             ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "UF_GET_OUTYMD4REFUND", CodeObjectType.Function),
@@ -2352,6 +2421,271 @@ END"
                 spDef, "OverviewAndParameters", "rules", null);
 
             Assert.DoesNotContain(ObjectDeclarationExtractor.ObjectDeclarationTableHeading, result.SystemPrompt);
+        }
+
+        /// <summary>
+        /// 실행 의미 표 픽스처. DDL 조각 자체가 &lt;sp-source-ddl&gt;로도 실리므로,
+        /// 표가 실제로 렌더됐는지는 표에서만 나오는 마크업(헤딩 상수)으로 대조해야
+        /// 한다 - 원본 DDL에 우연히 있는 단어를 짚으면 거짓양성이 된다.
+        /// </summary>
+        private static SpDefinition ProbeExecutionSemanticsSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "COMM_UPD",
+                DdlText = "CREATE PROCEDURE dbo.P AS BEGIN SELECT 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "COMM_UPD", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeExecutionSemanticsSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            // 지역 모델 경로는 BuildSpecificationPrompts를 전혀 호출하지 않는다.
+            // 이 분기에서만 배선이 빠져도 실패해야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutStaticAnalysis_ShouldOmitTheExecutionSemanticsTable()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = new SpDefinition { Schema = "dbo", Name = "P", DdlText = "SELECT 1;" };
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+        }
+
+        private static SpDefinition ProbeExecutionSemanticsFunctionSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UF_GET_SETTLE",
+                ObjectType = CodeObjectType.Function,
+                DdlText = "CREATE FUNCTION dbo.F() RETURNS INT AS BEGIN RETURN 1 END",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UF_GET_SETTLE", CodeObjectType.Function)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_Function_ShouldPrefillTheExecutionSemanticsTable()
+        {
+            // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## CRUD 분석`
+            // 헤더를 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접 단언하는
+            // 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            //
+            // [Fix Round 1 - 갈래 2 고유 앵커] "The required H2 headers are exactly"는
+            // BuildFunctionSpecificationPrompts에만 있는 문구다(갈래 1은 "The
+            // specification H2 headers must strictly use these exact Korean titles"를
+            // 쓴다) - 이 앵커가 없으면 BuildSpecificationPrompts의 ObjectType ==
+            // CodeObjectType.Function 라우팅 분기가 깨져 이 픽스처가 갈래 1로
+            // 떨어져도 표 배선 자체는 그대로라 테스트가 통과해버린다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeExecutionSemanticsFunctionSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("The required H2 headers are exactly", body);
+            Assert.Contains(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_ShouldNotEmitExecutionSemanticsTableHeading()
+        {
+            // Task 14 (Critical) - LogicAndVisualization 분기는 `## 로직 흐름 요약`과
+            // `## 비즈니스 흐름 시각화`만 쓴다(`## CRUD 분석`은 쓰지 않는다). 실행 의미
+            // 표의 인트로는 "Copy this table verbatim into `## CRUD 분석`"라고 지시하므로,
+            // 이 분기에 표 형태로 그대로 실리면 자기모순 지시가 된다 - 모델이 자신의
+            // H2 제약을 어기고 `## CRUD 분석` 헤딩을 합성하거나, 표를 통째로 버릴
+            // 위험이 있다. 헤딩·표는 없어야 하고, 사실 자체는 참고 재료로는 남아야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "LogicAndVisualization", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("3부 식별자 참조 0건", body);
+        }
+
+        // Task 17 - 결함 E(F1 무리)의 실제 앵커는 `## 개요`다(UF_Get_CLComm4MobileCo의
+        // Spec.md, "원본 DDL에 3부 식별자가 없으므로 크로스 데이터베이스 참조 여부를
+        // 단언할 수 없습니다" - StaticAnalysis가 이미 확정한 값을 되짚었다). 이 결함이
+        // 났던 시점에는 `BuildMachineFactBlockLines` 호출부가 네 곳(SP 전체·함수·
+        // CrudAnalysis·LogicAndVisualization)뿐이었고 그중 어디에도
+        // `OverviewAndParameters`가 없었다 - 이 갈래는 실행 의미 사실을 한 번도 받지
+        // 못했다. 지금은 다섯 번째 호출부로 이 갈래도 받는다 - 표가 아니라 참고
+        // 재료로(이 갈래는 `## 개요`·`## 파라미터 목록`만 쓰므로 `## CRUD 분석`용 표
+        // 지시를 주면 자기모순이 된다) - `BuildLockHintReferenceMaterialLines`가 이미
+        // 그 선례다. 이 테스트는 그 배선이 유지되는지를 지킨다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldReceiveExecutionSemanticsFactsInline()
+        {
+            // 형제 테스트(LogicAndVisualization_ShouldNotEmitExecutionSemanticsTableHeading
+            // 등)와 범위를 맞춘다 - result.SystemPrompt만 보면 사용자 프롬프트로 헤딩이
+            // 새는 회귀를 못 잡는다. CreateProbe + DecodeMessageContents(handler.
+            // LastRequestBody)로 시스템+사용자 프롬프트 둘 다 본다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeExecutionSemanticsSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            // 확정 사실 자체는 실려야 하지만, 이 갈래는 `## CRUD 분석`을 쓰지 않으므로
+            // 표·헤딩 형태로 실리면 안 된다 - LogicAndVisualization과 같은 계약이다.
+            Assert.Contains("3부 식별자 참조 0건", body);
+            Assert.DoesNotContain(ExecutionSemanticsFacts.TableHeading, body);
+            Assert.Contains("Do NOT output", body);
+        }
+
+        // CASE 분기는 `## 로직 흐름 요약` 소관이고 `## 개요`의 서술 대상이 아니다 -
+        // 감사 🟡이 난 자리는 DB 배치(크로스 DB 참조 단언)뿐, CASE 분기 서술이
+        // `## 개요`에서 문제 된 적은 없다. 재료를 늘리면 프롬프트가 길어지고 모델이
+        // 산만해지므로, 이 갈래에는 CASE 분기 재료를 주지 않는다 - 표로도, 참고
+        // 재료로도 싣지 않아야 한다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldNotReceiveCaseBranchFacts()
+        {
+            // 형제 테스트와 범위를 맞춘다 - 시스템+사용자 프롬프트 둘 다 본다(위 테스트와
+            // 같은 이유).
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+            Assert.DoesNotContain("REFERENCE - CASE branch facts", body);
+        }
+
+        private static SpDefinition ProbeCaseBranchSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "SETTLE_YMD",
+                DdlText = @"
+CREATE FUNCTION dbo.F() RETURNS INT AS
+BEGIN
+    DECLARE @v INT
+    SET @v = CASE WHEN DATEPART(DW, GETDATE()) > 3 THEN 7 ELSE 0 END
+    RETURN @v
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheCaseBranchTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeCaseBranchSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithoutCase_ShouldOmitTheCaseBranchTable()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_ShouldNotEmitCaseBranchTableHeading()
+        {
+            // Task 14 (Critical) - CrudAnalysis 분기는 `## CRUD 분석` 하나만 쓴다
+            // ("only one H2 header"). CASE 분기 표의 인트로는 "Copy this table
+            // verbatim into `## 로직 흐름 요약`"라고 지시하므로, 이 분기에 표
+            // 형태로 그대로 실리면 자기모순 지시가 된다 - 이 테스트를 고치기 전에
+            // 돌리면 헤딩이 실제로 실려 RED가 난다. 헤딩·표는 없어야 하고, 조건/결과
+            // 원문 자체는 참고 재료로는 남아야 한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
+        }
+
+        private static SpDefinition ProbeCaseBranchFunctionSpDef()
+        {
+            var spDef = ProbeCaseBranchSpDef();
+            spDef.ObjectType = CodeObjectType.Function;
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_Function_ShouldPrefillTheCaseBranchTable()
+        {
+            // 갈래 2(함수 명세서, BuildFunctionSpecificationPrompts)는 `## 로직 흐름
+            // 요약` 헤더도 실제로 쓰는 갈래다(필수 H2 목록에 있다) - 이 배선을 직접
+            // 단언하는 테스트가 없었다(원장 M2). 이 갈래는 표를 그대로 받아야 한다.
+            //
+            // [Fix Round 1 - 갈래 2 고유 앵커] 위 테스트와 같은 이유로 "The required
+            // H2 headers are exactly"(BuildFunctionSpecificationPrompts에만 있는
+            // 문구)를 함께 단언한다 - 이게 없으면 BuildSpecificationPrompts의
+            // ObjectType == CodeObjectType.Function 라우팅 분기가 깨져 갈래 1로
+            // 떨어져도 이 테스트는 그대로 통과한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeCaseBranchFunctionSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("The required H2 headers are exactly", body);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
+            Assert.Contains(CaseBranchExtractor.ElseConditionText, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_LogicAndVisualization_ShouldPrefillTheCaseBranchTable()
+        {
+            // 로직 흐름 요약 갈래(갈래 3-3)가 이 표의 실제 소관 절이다 - 여기서
+            // 배선이 빠지면 CASE 분기 표가 실제로 실려야 할 절에 나가지 않는다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeCaseBranchSpDef(), "LogicAndVisualization", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(CaseBranchExtractor.TableHeading, body);
         }
     }
 }

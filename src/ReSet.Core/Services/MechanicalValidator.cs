@@ -45,6 +45,12 @@ namespace ReSet.Core.Services
         // 버킷 없이 모델에게 닿는다.
         LockHintTableMissing,
         ObjectDeclarationTableMissing,
+        // 실행 의미 표(기계 확정 DB 배치 등)의 L1 앵커. 위와 같은 이유로 서수 이동은
+        // 기능에 영향이 없다.
+        ExecutionSemanticsTableMissing,
+        // CASE 분기 표(기계 확정 - 조건·결과 원문)의 L1 앵커. 위와 같은 이유로 서수
+        // 이동은 기능에 영향이 없다.
+        CaseBranchTableMissing,
         General
     }
 
@@ -147,6 +153,8 @@ namespace ReSet.Core.Services
                     CheckLockHints(cleansed, expectations, result);
                     CheckObjectDeclaration(cleansed, expectations, result);
                     CheckOrderByExpressions(cleansed, expectations, result);
+                    CheckExecutionSemantics(cleansed, expectations, result);
+                    CheckCaseBranches(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -1996,7 +2004,15 @@ namespace ReSet.Core.Services
             // 오탐이다 - 그 함수는 3부 참조가 전혀 없어 정직하게 부정한 문장인데도
             // "없음"이 목록에 없어 단언으로 오판됐다. "아님"·"않음"도 같은 이유로
             // 더한다 - 이 셋은 "없다/아니다/않다"의 명사형 활용이지 새 어휘가 아니다.
-            "없음", "아님", "않음"
+            "없음", "아님", "않음",
+            // [Task 3 - 실행 의미 표 도입 실측] DatabasePlacementExtractor가 내는 확정
+            // 문장("3부 식별자 참조 0건, 연결 서버 참조 0건 - 확정값입니다")은 "없습니다"류
+            // 종결·명사형 부정 어휘를 전혀 쓰지 않고 건수를 0으로 못박는 방식으로
+            // 정직하게 부정한다. 이 표를 명세서가 그대로 옮기면(Task 3의 새 검사가
+            // 요구하는 바로 그 동작) "0건"을 부정으로 인정하지 않으면 3부 참조가 없는
+            // 절대다수 SP마다 이 절이 거짓 단언으로 오판된다 - 재생성으로 고칠 방법이
+            // 없는 재현 불가능한 실패다.
+            "0건"
         };
 
         /// <summary>
@@ -2550,9 +2566,19 @@ namespace ReSet.Core.Services
         /// 바로 다음 구간(다음 `## `/`### ` 헤딩 전까지)으로 좁힌다. 스키마 대응
         /// 표·UPDATE 매핑 표 같은 다른 표에도 숫자 셀(길이, 정밀도 등)이 있어, 문서
         /// 전체를 훑으면 그 우연이 거짓 통과를 만들 수 있다 - 특히 라인 번호가
-        /// 작을 때 위험이 크다. 표 자체의 스키마(문장·라인·대상·술어·기준일·조인 키)
-        /// 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지 않으므로(문장 칸은
-        /// "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은 낮게 남는다.
+        /// 작을 때 위험이 크다. 표 자체의 스키마(문장·라인·대상·술어·기준일·조인 키·
+        /// GROUP BY·ORDER BY) 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지
+        /// 않으므로(문장 칸은 "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은
+        /// 낮게 남는다.
+        ///
+        /// [GROUP BY 항 - Task 8] 값 대조는 GroupByColumns가 비어 있지 않을 때만
+        /// 요구한다. "(없음)"은 `조인 키` 칸에도 나오는 토큰이라, 값이 비었을 때도
+        /// 무조건 대조하면 GROUP BY 칸과 조인 키 칸이 둘 다 "(없음)"인 우연이 검사를
+        /// 자동으로 통과시킨다(제약 2). ORDER BY는 이 표 대조와 별도인
+        /// CheckOrderByExpressions가 맡지만, GROUP BY 값은 항상 단순 컬럼 식별자의
+        /// 나열이라(임의 식이 아니다 - DmlScopeFact.GroupByColumns 문서) ORDER BY처럼
+        /// 이스케이프 왕복을 거친 구간 텍스트 Contains가 아니라, 이 함수의 기존
+        /// 라인 대조와 같은 방식(같은 행의 셀 정확 일치)으로 충분하다.
         /// </summary>
         private static void CheckDmlScopeTable(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -2588,19 +2614,50 @@ namespace ReSet.Core.Services
             foreach (var fact in expectations.DmlScopeFacts)
             {
                 var lineToken = fact.Line.ToString();
-                var present = rowLines.Any(
-                    row => row.Split('|').Any(cell => cell.Trim() == lineToken));
-                if (present) continue;
+                var matchingRows = rowLines
+                    .Where(row => row.Split('|').Any(cell => cell.Trim() == lineToken))
+                    .ToList();
 
-                var message =
-                    $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
-                    + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
-                result.Errors.Add(message);
+                if (matchingRows.Count == 0)
+                {
+                    var message =
+                        $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
+                        + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.DmlScopeTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Operation} @ line {fact.Line}"
+                    });
+                    continue;
+                }
+
+                // GROUP BY 항 - Task 8 제약 2. "(없음)" 토큰은 `조인 키` 칸에도 나오는
+                // 값이라, GroupByColumns가 비고 조인 키도 비면(UPDATE·DELETE는 항상
+                // GroupByColumns가 비어 있다) 두 칸이 같은 "(없음)"이 된다. cells.Any(c =>
+                // c == token) 식의 대조를 무조건 요구로 걸면 그 우연한 일치가 검사를
+                // 무력화한다(CheckLockHints·CheckExecutionSemantics·CheckCaseBranches가
+                // 쓰는 다중 칸 AND 대조와 같은 함정). 그래서 GroupByColumns가 비어
+                // 있지 않을 때만, 그것도 line 토큰이 이미 맞은 같은 행 안에서 값을
+                // 요구한다 - 다른 행의 우연한 등장이 통과를 만들지 않는다.
+                if (fact.GroupByColumns.Count == 0) continue;
+
+                var groupByToken = string.Join(", ", fact.GroupByColumns);
+                var groupByPresent = matchingRows.Any(
+                    row => row.Split('|').Any(cell => cell.Trim() == groupByToken));
+                if (groupByPresent) continue;
+
+                var groupByMessage =
+                    $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 GROUP BY 값(`{groupByToken}`)이 "
+                    + "없습니다. GROUP BY 칸은 기계가 확정한 것이므로 그룹화 키를 그대로 옮겨야 합니다 - "
+                    + "\"(없음)\"으로 적거나 일부만 옮기면 원본 그룹화 의미가 소실됩니다.";
+                result.Errors.Add(groupByMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
-                    Message = message,
-                    RawContext = $"{fact.Operation} @ line {fact.Line}"
+                    Message = groupByMessage,
+                    RawContext = $"{fact.Operation} @ line {fact.Line} GROUP BY {groupByToken}"
                 });
             }
         }
@@ -3385,6 +3442,184 @@ namespace ReSet.Core.Services
                     RawContext = $"{fact.Operation} @ line {fact.Line} ORDER BY {joined}"
                 });
             }
+        }
+
+        /// <summary>
+        /// 기계 확정 실행 의미 표가 명세서에 옮겨졌는지 본다. 재료가 없으면 조용히
+        /// 건너뛴다 - AiService도 그때는 표를 내지 않는다(CheckLockHints와 같은 가드).
+        ///
+        /// [행 식별 키가 (종류, 라인, 대상, 확정 사실) 네 값 전부인 이유]
+        /// CheckLockHints와 같다 - 한 객체에 같은 종류의 행이 여럿 날 수 있어(식 타입
+        /// 경로는 CAST마다 한 행) 종류 토큰만으로는 행이 특정되지 않는다. 확정 사실
+        /// 칸까지 요구하는 것은 "표는 채웠는데 값이 틀린" 부류를 잡기 위해서다.
+        ///
+        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
+        /// Errors를 통째로 지우고 IsValid = true로 통과시킨다. 새 검사의 실패가 기존
+        /// 검사 15개의 판정까지 삼키면 안 된다.
+        /// </summary>
+        private static void CheckExecutionSemantics(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ExecutionSemantics.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, ExecutionSemanticsFacts.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 실행 의미 표가 명세서에 없습니다. `{ExecutionSemanticsFacts.TableHeading}` "
+                        + $"헤딩과 {expectations.ExecutionSemantics.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ExecutionSemanticsTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.ExecutionSemantics)
+                {
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == fact.Kind)
+                            && cells.Any(c => c == fact.Line)
+                            && cells.Any(c => c == fact.Target)
+                            && cells.Any(c => c == fact.Fact);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"실행 의미 표에 `{fact.Kind}`(라인 {fact.Line}, 대상 {fact.Target}) 행이 없거나 "
+                        + $"확정 사실이 다릅니다. `{fact.Fact}`를 그대로 옮겨야 합니다 - 이것은 미확정 "
+                        + "사항이 아니라 확정값입니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ExecutionSemanticsTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Kind} @ {fact.Line} {fact.Target}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] 실행 의미 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 CASE 분기 표가 명세서에 옮겨졌는지 본다. 재료가 없으면 조용히
+        /// 건너뛴다(CheckExecutionSemantics와 같은 가드).
+        ///
+        /// 행 키는 (라인, 순서, 조건 원문) 셋이다. 결과 원문까지 넣지 않는 이유는
+        /// 결과식이 여러 줄에 걸치면 모델이 줄바꿈을 공백으로 정규화해 옮기는 것이
+        /// 정상이기 때문이다 - 조건까지 일치하면 행은 이미 특정된다.
+        ///
+        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
+        /// Errors를 통째로 지우고 IsValid = true로 통과시킨다. 새 검사의 실패가 기존
+        /// 검사들의 판정까지 삼키면 안 된다.
+        /// </summary>
+        private static void CheckCaseBranches(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.CaseBranches.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, CaseBranchExtractor.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 CASE 분기 표가 명세서에 없습니다. `{CaseBranchExtractor.TableHeading}` "
+                        + $"헤딩과 {expectations.CaseBranches.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.CaseBranchTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.CaseBranches)
+                {
+                    var lineToken = fact.Line.ToString();
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == lineToken)
+                            && cells.Any(c => c == fact.Ordinal)
+                            && cells.Any(c => c == fact.Condition);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"CASE 분기 표에 라인 {fact.Line}의 `{fact.Ordinal}` 행이 없거나 조건 원문이 "
+                        + $"다릅니다. `{fact.Condition}`을 그대로 옮겨야 합니다 - 분기를 합치거나 "
+                        + "비교 연산자를 말로 바꾸면 원문에서 찾을 수 없습니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.CaseBranchTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Ordinal} @ line {fact.Line}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] CASE 분기 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 헤딩 하나와 그 표가 끝나는 인덱스를 찾는다. LocateLockHintSection의 일반형이다 -
+        /// 새 표가 둘 늘어 같은 코드를 세 번 쓰게 되므로 헤딩을 인자로 받는다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateHeadingSection(
+            IReadOnlyList<string> lines, string heading)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.Trim() == heading);
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
         }
 
         private static readonly Regex TableCellRegex =
