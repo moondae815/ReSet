@@ -2667,7 +2667,10 @@ END"
             // DML 범위 사실을 하나 만든다(커서 원천의 ORDER BY를 담기 위해서다).
             // 그래서 신호를 하나만 남기려면 FROM이 없는 대입 SELECT여야 한다 -
             // `DmlScopeExtractor.HasFromClause`가 그 문장을 세지 않으므로
-            // dmlScopeFacts가 비고, 이 테스트가 기대는 격리가 유지된다.
+            // dmlScopeFacts가 비고, 잠금 힌트도 훑을 FROM이 없어 비어 있다.
+            // 격리는 눈이 아니라 실측으로 확인했다(수정 라운드 1): SpecExpectations의
+            // `&& sourceComments.Count == 0` 항을 임시로 지우면 이 테스트가 빨개진다 -
+            // 즉 이 픽스처에서 From을 non-null로 만드는 재료는 주석 하나뿐이다.
             var sp = new SpDefinition
             {
                 DdlText = @"
@@ -2682,6 +2685,7 @@ END"
 
             Assert.NotNull(expectations);
             Assert.Empty(expectations!.DmlScopeFacts);
+            Assert.Empty(expectations.LockHints);
             var block = Assert.Single(expectations.SourceComments);
             Assert.Contains("UF_GET_CLIENTID4TMONET", block.Anchors);
         }
@@ -3184,21 +3188,28 @@ END";
             // 이 테스트가 여전히 통과하는 거짓 안전망이 된다 - 신호를 하나만 남겨야
             // 그 신호의 배선만 증명한다.
             //
-            // [2026-08-22 축 A 재감사 ③ Task 4] 예전에는 단순 `SELECT ... FROM`에
-            // 두었는데, 이제 FROM이 있는 독립 SELECT도 DML 범위 사실을 하나 만든다.
-            // IF 술어 안의 질의는 `SelectStatement`가 아니라 `ScalarSubquery`라
-            // DmlScopeVisitor가 방문하지 않는 반면(잠금 힌트 표만 `IF n`으로 담는다),
-            // DerivedTableVisitor는 `Visit(QueryDerivedTable)`이라 위치와 무관하게
-            // 잡는다 - 그래서 신호가 하나만 남는다.
+            // [2026-08-22 축 A 재감사 ③ Task 4 · 수정 라운드 1] 이 픽스처는 두 번
+            // 새 재료를 흘렸다. 예전의 단순 `SELECT ... FROM`은 이제 DML 범위 사실을
+            // 하나 만들고(Task 4), 그것을 피해 `IF EXISTS` 안으로 옮겼더니 이번엔
+            // 잠금 힌트가 샜다 - Task 2가 더한 `LockHintVisitor.ExplicitVisit(IfStatement)`
+            // 이 IF 술어의 FROM을 훑어 파생 테이블 안의 `dbo.TSettleMst`를 `IF 1 · 파생`
+            // 행으로 싣기 때문이다(힌트가 없어도 행은 난다). 실측으로 확인했다.
+            //
+            // 그래서 파생 테이블 본문에서 테이블 참조 자체를 없앴다. 잠금 힌트를
+            // 만드는 것은 `FromTableCollector.Visit(NamedTableReference)`뿐이므로,
+            // 테이블 참조가 없는 파생 테이블은 어느 방문자에게도 걸리지 않는다.
+            // `DerivedTableVisitor`는 `Visit(QueryDerivedTable)` 하나로 별칭과 명명된
+            // SELECT 항목만 보므로 이 모양에서도 정의를 그대로 뽑는다.
+            //
+            // 실행 가능한 SQL일 필요는 없다 - 이 테스트가 묻는 것은 파서가 이 DDL에서
+            // 어떤 재료를 뽑는가뿐이다(같은 이유로 아래 twin은 `AS PGCOMM`을 지운다).
             var sp = new SpDefinition
             {
                 DdlText = @"
 CREATE PROCEDURE dbo.P AS
 BEGIN
     IF EXISTS (SELECT 1
-               FROM   (SELECT PLTID,
-                              IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM
-                       FROM   dbo.TSettleMst A) X)
+               FROM   (SELECT IIF(ISNULL(A.DiscountFlag,'N')='Y', A.DiscountAmt, A.TxAmt) AS PGCOMM) X)
         RETURN
 END"
             };
@@ -3207,8 +3218,21 @@ END"
 
             Assert.NotNull(expectations);
             Assert.Empty(expectations!.DmlScopeFacts);
+            Assert.Empty(expectations.LockHints);
             var def = Assert.Single(expectations.DerivedColumns, d => d.Column == "PGCOMM");
             Assert.Contains("DiscountFlag", def.Anchors);
+
+            // 격리를 눈이 아니라 코드로 못박는다: 이 DDL에서 파생 컬럼 하나만 빼면
+            // (`AS PGCOMM`을 지워 이름 없는 SELECT 항목으로 만들면 DerivedTableVisitor가
+            // 건너뛴다) From은 null을 돌려줘야 한다. 그렇지 않다면 이 픽스처에 다른
+            // 재료가 섞여 있다는 뜻이고, derivedColumns 항을 조기 반환식에서 지워도
+            // 이 테스트가 초록으로 남는 거짓 안전망이 된다.
+            var withoutTheDerivedColumn = new SpDefinition
+            {
+                DdlText = sp.DdlText!.Replace(" AS PGCOMM", string.Empty)
+            };
+
+            Assert.Null(SpecExpectations.From(withoutTheDerivedColumn));
         }
 
         // Column은 한정자를 포함한 원문 표기다(DmlScopeExtractor.SetPredicateFact

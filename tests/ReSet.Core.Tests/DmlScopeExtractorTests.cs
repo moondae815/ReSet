@@ -685,17 +685,31 @@ END";
         }
 
         [Fact]
-        public void ExtractAndExtractLockHints_ShouldAgreeOnWhichStatementsAreSelects()
+        public void ExtractAndExtractLockHints_ShouldAgreeOnSelectStatementNumbers()
         {
             // 두 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
-            // 두 표의 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는 독자에게
-            // 그 어긋남은 조용하다. 판정은 DmlScopeExtractor의 정적 헬퍼 하나
-            // (HasFromClause)이고 두 방문자가 그것을 부른다 - 이 테스트가 그 계약을
-            // 못박는다(2026-08-22 Task 1 리뷰 C5).
+            // 두 표의 같은 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는
+            // 독자에게 그 어긋남은 조용하다. 판정은 DmlScopeExtractor의 정적 헬퍼
+            // 하나(HasFromClause)이고 두 방문자가 그것을 부른다(2026-08-22 Task 1
+            // 리뷰 C5).
             //
-            // 각 독립 SELECT의 FROM을 SELECT와 같은 줄에 두어, 잠금 힌트 사실의
-            // 라인(테이블 참조 위치)과 DML 범위 사실의 라인(문장 시작)이 같은 값이
-            // 되게 했다 - 두 표를 라인으로 맞대 볼 수 있다.
+            // [양쪽을 다 잡아야 하는 이유 - 수정 라운드 1] 두 표의 라인 목록만
+            // 맞대면 한 방향밖에 못 잡는다. 잠금 힌트 쪽 판정만 갈라져 FROM 없는
+            // `SELECT @a = 1`까지 세는 날에도, 그 문장은 훑을 자리가 없어 행을 하나도
+            // 내지 않으므로 라인 목록은 그대로다 - 그동안 번호만 조용히 밀려
+            // 잠금 힌트 표는 SELECT 2·3, DML 범위 표는 SELECT 1·2가 된다. 그래서
+            // 라인이 아니라 <b>번호와 라인의 짝</b>을 맞댄다.
+            //
+            // [픽스처가 TVF SELECT를 끼우는 이유] 정합을 실제로 지탱하는 불변식은
+            // "잠금 힌트 쪽은 행이 0개인 문장도 번호를 소비한다"이다. TVF만 훑는
+            // SELECT가 그 모양이다 - FROM은 있으므로(HasFromClause 참) 두 방문자
+            // 모두 번호를 주지만, 잠금 힌트를 만드는 FromTableCollector.Visit는
+            // NamedTableReference만 받으므로 행은 나지 않는다. 이 문장이 없으면
+            // 그 불변식이 픽스처에 아예 등장하지 않아 검증되지 않는다.
+            //
+            // 각 SELECT의 FROM을 SELECT와 같은 줄에 두어, 잠금 힌트 사실의 라인
+            // (테이블 참조 위치)과 DML 범위 사실의 라인(문장 시작)이 같은 값이 되게
+            // 했다 - 두 표를 라인으로 맞대 볼 수 있다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -706,24 +720,33 @@ BEGIN
 
     UPDATE A SET A.X = 1 FROM dbo.TSettleMst A WITH(NOLOCK)
 
+    SELECT @c = COUNT(*) FROM dbo.UIF_SettleYMD('20260101') F
+
     DECLARE Cur_SettlePost CURSOR FOR
     SELECT B.ClientID FROM dbo.TB B WITH(NOLOCK) ORDER BY B.ClientID
 END";
 
+            // DML 범위 표의 번호는 사실 목록 안의 자리다(AiService.BuildStatementOrdinals) -
+            // 연산별로 세므로 SELECT만 걸러낸 목록의 i번째가 곧 `SELECT i+1`이다.
             var scopeSelectLines = DmlScopeExtractor.Extract(ddl, "@pi_strYMD")
                 .Where(f => f.Operation == "SELECT")
                 .Select(f => f.Line)
                 .ToArray();
 
-            var hintSelectLines = DmlScopeExtractor.ExtractLockHints(ddl)
+            // FROM이 없는 `SELECT @a = 1`은 세지 않고, 나머지 셋은 센다.
+            Assert.Equal(3, scopeSelectLines.Length);
+
+            var hintSelects = DmlScopeExtractor.ExtractLockHints(ddl)
                 .Where(f => f.Operation == "SELECT")
-                .OrderBy(f => f.StatementOrdinal)
-                .Select(f => f.Line)
                 .ToArray();
 
-            // FROM이 없는 `SELECT @a = 1`은 어느 쪽도 세지 않으므로 두 목록 모두 2개다.
-            Assert.Equal(2, scopeSelectLines.Length);
-            Assert.Equal(hintSelectLines, scopeSelectLines);
+            // 잠금 힌트 표가 실제로 쓰는 번호는 1과 3이다 - 2번(TVF)은 행이 없어
+            // 비어 있지만 번호는 소비됐다. 한쪽 판정이 갈라지면 이 배열이 {2,4}나
+            // {1,2}로 바뀌므로, 라인이 그대로여도 여기서 잡힌다.
+            Assert.Equal(new[] { 1, 3 }, hintSelects.Select(f => f.StatementOrdinal).ToArray());
+
+            // 그리고 그 번호들은 DML 범위 표의 같은 번호와 같은 문장을 가리킨다.
+            Assert.All(hintSelects, f => Assert.Equal(scopeSelectLines[f.StatementOrdinal - 1], f.Line));
         }
 
         [Fact]

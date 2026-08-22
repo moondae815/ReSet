@@ -7,15 +7,50 @@ using Serilog;
 
 namespace ReSet.Core.Services
 {
-    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
+    /// <param name="Operation">
+    /// "INSERT", "UPDATE", "DELETE", "SELECT" 중 하나.
+    ///
+    /// ["SELECT"는 무엇인가 - 2026-08-22 축 A 재감사 ③ Task 4] DML 밖의 독립
+    /// SELECT 문장 중 <b>FROM이 있는 것</b>이다(판정은 DmlScopeExtractor.HasFromClause
+    /// 하나 - 그 문서 참고). 변수 대입 SELECT·커서 원천 질의·함수 본문 SELECT가
+    /// 여기 해당하고, `SELECT @a = 1`처럼 훑을 자리가 없는 문장은 번호조차 소비하지
+    /// 않는다. `INSERT ... SELECT`의 원천은 문장 노드가 아니라 QueryExpression이라
+    /// 이 종류로 다시 실리지 않는다(중복 없음).
+    ///
+    /// 이 종류를 담게 된 이유는 커서 원천 질의의 ORDER BY·GROUP BY다 - 처리 순서가
+    /// 결과를 가르는데(PROC_ETC:62) 그것을 담을 자리가 이 표의 기존 칸이었다.
+    ///
+    /// [이 표에 `IF`는 없다 - 잠금 힌트 표와 다른 점] 잠금 힌트 표는 `IF` 술어 안의
+    /// 스캔을 `IF n`으로 담지만(LockHintVisitor.ExplicitVisit(IfStatement)), 이 표는
+    /// 담지 않는다. 스펙 §4 D는 두 표를 함께 적었으나 계획서가 이 태스크를 SELECT로
+    /// 좁혔다 - 실측된 결함 11건 중 `IF` 술어 질의의 <b>대상 범위</b>(술어 컬럼·조인
+    /// 키·정렬)가 산문에만 있던 사례가 없었기 때문이다. 두 표의 문장 집합이 다른 것
+    /// 자체는 이 재료가 원래 허용하는 모양이고(WHERE 없는 UPDATE가 집합 술어 표에
+    /// 없는 것과 같다), 번호는 종류별로 세므로 한쪽에 `IF n`이 있어도 다른 종류의
+    /// 번호는 밀리지 않는다. 나중에 그 부류가 실측되면 DmlScopeVisitor에 IfStatement
+    /// 오버라이드를 더하되 판정은 LockHintVisitor와 같은 것을 쓰면 된다.
+    /// </param>
     /// <param name="Line">원본 DDL에서의 줄 번호(1부터) - 해당 문장 자체의 시작 줄이다.</param>
-    /// <param name="Target">갱신·삭제 대상의 원문 표기 (파서가 정규화하지 않은 소스 그대로).</param>
+    /// <param name="Target">
+    /// 갱신·삭제 대상의 원문 표기 (파서가 정규화하지 않은 소스 그대로).
+    ///
+    /// 독립 SELECT 행에서는 <b>빈 문자열</b>이다 - 갱신 대상이라는 것이 없기 때문이다.
+    /// 이 레코드는 표시 문자열을 담지 않으므로(OrderByExpressions가 "—"와 "(없음)"을
+    /// 가르지 않는 것과 같은 분업) 빈 칸을 "—"로 낼지는 렌더러가 정한다.
+    /// </param>
     /// <param name="PredicateColumns">
     /// WHERE 최상위가 거르는 컬럼 이름. INSERT는 원천 SELECT의 최상위 WHERE를 본다.
     /// </param>
     /// <param name="DateParameterApplied">
     /// 기준일 파라미터가 <b>대상 범위에</b> 적용되는가. 서브쿼리 안에만 있으면 false다.
     /// 이 칸 하나가 A1 결함 넷 중 셋을 드러낸다.
+    ///
+    /// 독립 SELECT 행에서는 <b>항상 false</b>다 - 이 칸이 묻는 것은 "갱신 대상 범위가
+    /// 기준일로 좁혀지는가"인데 독립 SELECT에는 갱신 대상이 없다. 그 문장의 WHERE가
+    /// 기준일을 쓰더라도 false이므로, 이 칸을 독립 SELECT 행에서 "기준일을 쓰지
+    /// 않는다"로 읽어서는 안 된다 - 판정 자체가 없었다는 뜻이다. 그 구분을 "—"로
+    /// 낼지는 렌더러가 정한다(Target과 같은 분업). 오늘 AiService는 아직 그 갈래가
+    /// 없어 SELECT 행에도 "아니오"를 낼 것이다 - Task 7이 고칠 자리다.
     /// </param>
     /// <param name="JoinKeys">
     /// 테이블을 잇는 컬럼 이름. ANSI JOIN의 ON 조건과, 콤마로 나열한 옛 스타일
@@ -24,8 +59,16 @@ namespace ReSet.Core.Services
     /// 역할을 동시에 하기 때문).
     /// </param>
     /// <param name="OrderByExpressions">
-    /// INSERT ... SELECT 의 최상위 ORDER BY 요소 원문(정렬 방향 포함). UPDATE·DELETE는
-    /// 최상위 ORDER BY가 문법상 불가하므로 항상 빈 목록이고 표에서 "—"로 렌더된다.
+    /// 문장의 최상위 ORDER BY 요소 원문(정렬 방향 포함). 두 종류에서 채워진다 -
+    /// INSERT ... SELECT 의 원천, 그리고 독립 SELECT(커서 원천 질의가 그 실물이다).
+    /// UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하므로 항상 빈 목록이고 표에서
+    /// "—"로 렌더된다.
+    ///
+    /// [독립 SELECT가 이 칸을 쓰는 이유 - 2026-08-22 축 A 재감사 ③ Task 4]
+    /// PROC_ETC:62의 `DECLARE Cur_SettlePost CURSOR FOR SELECT ... ORDER BY A.OutYMD,
+    /// A.ClientID`가 실물이다. 커서가 도는 순서가 MAX(ID)+1 채번 결과와 -3 중단
+    /// 지점을 가르는데 그 ORDER BY가 문서 전체에 없었다. 새 표를 만들지 않고 이 칸을
+    /// 그대로 쓴다 - 그래서 "이 필드는 INSERT 전용"이라고 읽으면 안 된다.
     ///
     /// [이름이 Columns가 아니라 Expressions인 이유 - 수정 라운드 1, 조정자 판정]
     /// ORDER BY는 컬럼 이름뿐 아니라 임의 식(`CASE WHEN ... END`, `LEN(A)`)과 정렬
@@ -61,12 +104,20 @@ namespace ReSet.Core.Services
     ///
     /// [ORDER BY와 같은 "—"/"(없음)" 규약을 쓰는 이유 - Task 8, 제약 3]
     /// GROUP BY도 ORDER BY와 마찬가지로 UPDATE·DELETE의 최상위 절로는 문법상 불가능하고
-    /// (T-SQL은 UPDATE·DELETE에 GROUP BY를 허용하지 않는다), INSERT ... SELECT의 원천
-    /// SELECT에서만 나타날 수 있다. 그래서 렌더러(AiService.BuildDmlScopeTableLines)는
-    /// UPDATE·DELETE 행에 "—"(문법상 불가)를, INSERT 행의 빈 목록에는 "(없음)"(절 부재)을
-    /// 쓴다 - ORDER BY 칸이 이미 세운 구분을 그대로 재사용한다. 이 레코드 자신은 둘을
-    /// 구분하지 않는다(OrderByExpressions가 그렇듯 항상 빈 목록으로 담고, "—"인지
-    /// "(없음)"인지는 렌더 시점에 Operation으로 가른다).
+    /// (T-SQL은 UPDATE·DELETE에 GROUP BY를 허용하지 않는다), 질의를 여는 문장 -
+    /// INSERT ... SELECT의 원천과 독립 SELECT - 에서만 나타날 수 있다. 그래서 렌더
+    /// 규약은 UPDATE·DELETE 행에 "—"(문법상 불가), INSERT·SELECT 행의 빈 목록에
+    /// "(없음)"(절 부재)이다 - ORDER BY 칸이 이미 세운 구분을 그대로 재사용한다.
+    /// 이 레코드 자신은 둘을 구분하지 않는다(OrderByExpressions가 그렇듯 항상 빈
+    /// 목록으로 담고, "—"인지 "(없음)"인지는 렌더 시점에 Operation으로 가른다).
+    ///
+    /// [렌더러는 아직 SELECT 행을 가르지 않는다 - Task 4 시점의 사실]
+    /// AiService.BuildDmlScopeTableLines의 GROUP BY·ORDER BY 칸은 오늘
+    /// `Operation == "INSERT"`만 보고 나머지를 전부 "—"로 낸다. 그래서 이 재료가
+    /// 담기 시작한 독립 SELECT의 ORDER BY·GROUP BY는 표에서 아직 보이지 않는다 -
+    /// 그 갈래를 넓히는 것은 이 배치의 Task 7(렌더러·L1)이다. 추출기와 렌더러를
+    /// 한 커밋에 묶지 않는 것이 계획서의 배분이고, 이 문단은 그 사이의 어긋남을
+    /// 다음 사람이 결함으로 오인하지 않게 적어 둔다.
     ///
     /// [파생 테이블 안의 GROUP BY가 새지 않는 이유 - Task 8, 제약 6]
     /// INSERT ... SELECT ... FROM (SELECT ... GROUP BY ...) X처럼 GROUP BY가 파생
@@ -240,10 +291,14 @@ namespace ReSet.Core.Services
     /// 노이즈다(SpecConditionColumnExtractor 주석). 조인 키의 유일성도 판정하지
     /// 않는다 - 프롬프트 규칙이 이미 "추측하지 마라"고 못박았다.
     ///
+    /// [어떤 문장을 방문하는가] Insert/Update/DeleteSpecification과, FROM이 있는
+    /// 독립 SelectStatement 넷이다(DmlScopeFact.Operation 문서 참고 - `IF`는 담지
+    /// 않는다).
+    ///
     /// [MERGE·CTE 기반 UPDATE] 실측 SP 24건 어디에도 MERGE와 CTE 기반 UPDATE가
-    /// 없었다(전수 grep 확인). 이 방문자는 UpdateSpecification/DeleteSpecification만
-    /// 방문하므로 MergeStatement는 애초에 매칭되지 않아 조용히 빠진다 - 예외를
-    /// 던지지 않고 그 문장 하나가 표에 실리지 않을 뿐이다. WITH 절이 있는 CTE는
+    /// 없었다(전수 grep 확인). 이 방문자는 위 네 종류만 방문하므로 MergeStatement는
+    /// 애초에 매칭되지 않아 조용히 빠진다 - 예외를 던지지 않고 그 문장 하나가 표에
+    /// 실리지 않을 뿐이다. WITH 절이 있는 CTE는
     /// ScriptDom에서 WithCtesAndXmlNamespaces로 감싸이지만 그 안의 UpdateSpecification/
     /// DeleteSpecification 자체는 그대로 방문되므로(방문자가 자식으로 계속 내려간다)
     /// CTE 기반 UPDATE가 나타나도 처리는 된다 - 다만 실측 코퍼스에는 이 형태가 없어
@@ -937,6 +992,11 @@ namespace ReSet.Core.Services
             /// 헬퍼 하나다 - 두 표의 `SELECT n`이 같은 문장을 가리키는 근거가 그것이고,
             /// 복제하면 갈라질 수 있다(그 메서드 문서 참고).
             ///
+            /// [SELECT만 더하고 IfStatement는 더하지 않는 이유] LockHintVisitor는
+            /// `IF` 술어 안의 스캔도 `IF n`으로 담지만 이 방문자는 담지 않는다 -
+            /// 근거는 DmlScopeFact.Operation 문서에 적어 두었다. 두 방문자의 문장
+            /// 집합이 이 지점에서 다르다는 것을 모르고 읽으면 결함처럼 보인다.
+            ///
             /// [ExplicitVisit인 이유 - 이 방문자의 DML 오버라이드는 `Visit`인데도]
             /// LockHintVisitor가 같은 노드를 `ExplicitVisit`으로 받아 자식 순회
             /// (`base.ExplicitVisit`) 전에 번호를 매긴다. 여기도 같은 오버라이드에서
@@ -1323,8 +1383,11 @@ namespace ReSet.Core.Services
         /// 하나인가"만은 반드시 같아야 한다. 판정을 각 방문자 안에 복제하면 한쪽만
         /// 고쳐지는 날 두 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
         /// 읽는 독자에게 그 어긋남은 조용하다 - 그래서 판정은 이 메서드 하나가
-        /// 유일한 출처다(ExtractAndExtractLockHints_ShouldAgreeOnWhichStatementsAreSelects가
-        /// 그 합의를 못박는다).
+        /// 유일한 출처다. ExtractAndExtractLockHints_ShouldAgreeOnSelectStatementNumbers가
+        /// 두 표의 <b>번호와 라인의 짝</b>을 맞대 그 합의를 못박는다 - 라인만 맞대면
+        /// 한쪽이 행 없는 문장까지 세기 시작해도 라인 목록은 그대로라 어긋남이 그냥
+        /// 통과한다(수정 라운드 1에 뮤테이션으로 실측했다: 잠금 힌트 쪽만 FROM 없는
+        /// SELECT를 세게 하면 번호가 {1,3}에서 {2,4}로 밀리는데 라인 목록은 불변이다).
         ///
         /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 훑는 자리가 없다.
         /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
