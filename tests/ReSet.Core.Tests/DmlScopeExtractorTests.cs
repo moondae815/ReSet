@@ -1444,5 +1444,96 @@ END";
 
             Assert.Equal(new[] { "NOLOCK" }, fact.Hints);
         }
+
+        [Fact]
+        public void ExtractLockHints_StandaloneSelectWithFrom_ShouldBeNumberedAsSelect()
+        {
+            // INS_EXTRA:22 실측 - 변수 대입 SELECT의 NOLOCK이 표 밖이라
+            // 문서 전체에서 한 번도 언급되지 않았다(2026-08-22 축 A 재감사 🟡).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @v_strReqYMD = MIN(ReqYMD)
+    FROM   PaymentDB.dbo.TExtraSettleIn WITH(NOLOCK)
+
+    UPDATE A SET A.X = 1 FROM dbo.TSettleMst A WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var select = Assert.Single(facts, f => f.Operation == "SELECT");
+            Assert.Equal(1, select.StatementOrdinal);
+            Assert.Equal("PaymentDB.dbo.TExtraSettleIn", select.Table);
+            Assert.Equal("최상위", select.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, select.Hints);
+
+            // 기존 DML 채번이 밀리지 않는다.
+            var update = Assert.Single(facts, f => f.Operation == "UPDATE");
+            Assert.Equal(1, update.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SelectWithoutFrom_ShouldNotBeNumbered()
+        {
+            // 스캔할 자리가 없는 대입은 문장 번호를 소비하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @a = 1
+
+    SELECT @v = MIN(ReqYMD) FROM dbo.TA WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var select = Assert.Single(facts, f => f.Operation == "SELECT");
+            Assert.Equal(1, select.StatementOrdinal);
+            Assert.Equal("dbo.TA", select.Table);
+        }
+
+        [Fact]
+        public void ExtractLockHints_CursorSourceSelect_ShouldBeNumberedAsSelect()
+        {
+            // PROC_ETC:62 실측 - 커서 원천 질의는 SelectStatement로 방문된다(프로브 확인).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE Cur_SettlePost CURSOR FOR
+    SELECT A.ClientID
+    FROM   dbo.TSettleMst A WITH(NOLOCK)
+    ORDER BY A.OutYMD, A.ClientID
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var select = Assert.Single(facts);
+            Assert.Equal("SELECT", select.Operation);
+            Assert.Equal("dbo.TSettleMst", select.Table);
+            Assert.Equal("A", select.Alias);
+        }
+
+        [Fact]
+        public void ExtractLockHints_InsertSelectSource_ShouldNotProduceSelectRow()
+        {
+            // INSERT ... SELECT의 원천은 SelectStatement로 방문되지 않는다(프로브 확인).
+            // 이 테스트는 그 사실이 깨지면 INSERT 원천이 두 번 실린다는 것을 잡는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO dbo.TF (C)
+    SELECT C FROM dbo.TG WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            // Assert.Empty(facts.Where(...)) 대신 DoesNotContain을 쓴다 - 같은 판정이지만
+            // 전자는 xUnit2029 경고를 낸다(빌드 실측).
+            Assert.DoesNotContain(facts, f => f.Operation == "SELECT");
+            Assert.Single(facts, f => f.Operation == "INSERT");
+        }
     }
 }

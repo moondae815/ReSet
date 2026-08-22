@@ -433,7 +433,17 @@ namespace ReSet.Core.Services
 
             private readonly Dictionary<string, int> _ordinals = new(StringComparer.Ordinal);
 
-            public override void Visit(InsertSpecification node)
+            /// <summary>
+            /// DML 문장 안인지 밖인지. `ExplicitVisit`로 진입/이탈을 감싸 추적한다.
+            ///
+            /// [왜 필요한가 - 2026-08-22 축 A 재감사] 같은 `ScalarSubquery`라도 DML 안에
+            /// 있으면 그 문장의 하위 질의이고(그 문장 번호를 그대로 써야 한다), DML 밖에
+            /// 있으면 제어 흐름 술어다(자기 번호를 받아야 한다). 노드 타입만으로는
+            /// 갈리지 않는다 - 프로브 실측으로 확인했다.
+            /// </summary>
+            private int _dmlDepth;
+
+            public override void ExplicitVisit(InsertSpecification node)
             {
                 var ordinal = NextOrdinal("INSERT");
 
@@ -450,20 +460,67 @@ namespace ReSet.Core.Services
                 }
 
                 RecordTargetHint("INSERT", ordinal, node.Target);
+
+                _dmlDepth++;
+                base.ExplicitVisit(node);
+                _dmlDepth--;
             }
 
-            public override void Visit(UpdateSpecification node)
+            public override void ExplicitVisit(UpdateSpecification node)
             {
                 var ordinal = NextOrdinal("UPDATE");
                 CollectFrom("UPDATE", ordinal, node.FromClause);
                 RecordTargetHint("UPDATE", ordinal, node.Target);
+
+                _dmlDepth++;
+                base.ExplicitVisit(node);
+                _dmlDepth--;
             }
 
-            public override void Visit(DeleteSpecification node)
+            public override void ExplicitVisit(DeleteSpecification node)
             {
                 var ordinal = NextOrdinal("DELETE");
                 CollectFrom("DELETE", ordinal, node.FromClause);
                 RecordTargetHint("DELETE", ordinal, node.Target);
+
+                _dmlDepth++;
+                base.ExplicitVisit(node);
+                _dmlDepth--;
+            }
+
+            /// <summary>
+            /// DML 밖의 독립 SELECT. 변수 대입 SELECT · 커서 원천 질의 · 함수 본문
+            /// SELECT가 전부 이 노드로 온다(프로브 실측 - `DECLARE CURSOR FOR SELECT`의
+            /// 원천도 `SelectStatement`다). `INSERT ... SELECT`의 원천은 이 노드로 오지
+            /// 않으므로 중복되지 않는다.
+            ///
+            /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 스캔할 자리가 없다.
+            /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
+            /// `RecordTargetHint`가 "FROM도 없고 힌트도 없는 문장"을 싣지 않는 것과 같은
+            /// 판단이다.
+            /// </summary>
+            public override void ExplicitVisit(SelectStatement node)
+            {
+                if (_dmlDepth == 0 && HasFromClause(node))
+                {
+                    CollectFromQuery("SELECT", NextOrdinal("SELECT"), node.QueryExpression);
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            private static bool HasFromClause(SelectStatement node) =>
+                QuerySpecificationsOf(node.QueryExpression).Any(q => q.FromClause != null);
+
+            /// <summary>UNION 갈래를 포함해 질의식의 모든 FROM을 훑는다.</summary>
+            private void CollectFromQuery(string operation, int ordinal, QueryExpression? query)
+            {
+                if (query == null) return;
+
+                foreach (var spec in QuerySpecificationsOf(query))
+                {
+                    CollectFrom(operation, ordinal, spec.FromClause);
+                }
             }
 
             private int NextOrdinal(string operation)
