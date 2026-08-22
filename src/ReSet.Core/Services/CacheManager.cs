@@ -75,8 +75,9 @@ namespace ReSet.Core.Services
         //     DML 범위 표는 독립 SELECT(커서 원천 질의 포함)까지만 담는다 - 문장
         //     칸에는 `SELECT n`만 실리고 `IF n`은 실리지 않으며(DmlScopeVisitor는
         //     IfStatement를 오버라이드하지 않는다), 이 표에는 범위 칸 자체가 없다
-        //     (렌더러 헤더는 문장·라인·대상·WHERE 최상위 술어 컬럼·기준일·조인 키·
-        //     GROUP BY·ORDER BY 여덟 칸이고, DmlScopeFact에도 Scope 필드가 없다).
+        //     (렌더러 헤더는 문장·라인·대상·WHERE 최상위 술어 컬럼·기준일 파라미터
+        //     적용·조인 키·GROUP BY·ORDER BY 여덟 칸이고, DmlScopeFact에도 Scope
+        //     필드가 없다).
         //     (3) 이 회차가 세운 L1도 함께 넓어졌다 - 집합 술어 행 대조 키에 범위와
         //     술어 원문이 들어갔고(같은 줄의 분해 불가 항 둘이 키에서 겹쳐 한 항이
         //     통째로 사라지는 것을 못 잡던 구멍이다), 리터럴 목록 칸 인덱스가 새 열만큼

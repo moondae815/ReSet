@@ -290,8 +290,11 @@ namespace ReSet.Core.Services
                 // (UPDATE·DELETE·INSERT)이 Extract가 방문하는 네 문장의 부분집합이므로,
                 // setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다. Task 8 이전에는
                 // 이 자리가 "같은 세 문장만 방문하므로"라고 적혀 있었는데, 2026-08-22
-                // 축 A 재감사 ③의 Task 1이 Extract에 독립 SELECT를 더해 그 근거가
+                // 축 A 재감사 ③의 Task 4가 Extract에 독립 SELECT를 더해 그 근거가
                 // 낡았다 - 결론은 그대로 서지만 이유가 부분집합 관계로 바뀌었다.
+                // (Task 1은 LockHintVisitor만 넓혔다. DmlScopeVisitor를 넓힌 것은
+                // Task 4다 - 아래 lockHints 항이 `IF`를 Task 2로 지목하는 것과 같은
+                // 번호 체계다.)
                 // From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull이 그 불변식을
                 // 지키고, 깨지는 날 이 항이 실제로 필요해진다.
                 && setPredicates.Count == 0
