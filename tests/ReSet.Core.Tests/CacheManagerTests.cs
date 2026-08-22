@@ -539,16 +539,15 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            // 9: 실행 의미 표·CASE 분기 표가, 이 버전을 올릴 당시 존재하던 프롬프트
-            //    호출부 네 갈래 전부에 새로 실렸고(이후 Task 17이 다섯 번째 호출부를
-            //    추가했다), DML 범위 표에 GROUP BY 칸이 붙었으며, 스키마 표 과소
-            //    포함도 고쳐졌다(CacheManager.cs의 버전 9 주석 참고). 프롬프트
-            //    입력이 달라졌으므로 옛 엔트리를 재사용하면 산출물이 옛 재료 그대로
-            //    남는다.
+            // 10: 스키마 표 컬럼 필터가 INSERT·UPDATE 대상 컬럼(입력원 ⑤)도 보게 됐고,
+            //     실행 의미 표의 `DB 배치` 문장이 3부 식별자를 소속 DB 접두사로 안과
+            //     밖으로 가른다(CacheManager.cs의 버전 10 주석 참고). 프롬프트
+            //     입력이 달라졌으므로 옛 엔트리를 재사용하면 산출물이 옛 재료 그대로
+            //     남는다.
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(9, (int)entry["FormatVersion"]!);
+            Assert.Equal(10, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

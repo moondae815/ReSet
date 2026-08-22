@@ -51,7 +51,17 @@ namespace ReSet.Core.Services
         //    전부 프롬프트 입력이 달라진 것이므로 옛 엔트리를 재사용하면 새 표가 없는
         //    옛 산출물이 그대로 남고, 이 계획이 세운 L1 검사도 캐시 히트에서는 영영
         //    발동하지 않는다.
-        private const int CurrentCacheFormatVersion = 9;
+        // 10: 프롬프트 입력이 둘 바뀌었다 - 스키마 표 컬럼 필터가 INSERT·UPDATE 대상
+        //     컬럼(입력원 ⑤)도 보게 됐고(오직 대상으로만 등장하는 컬럼이 잘려 모델이
+        //     "스키마에 없다"고 단정하던 결함), 실행 의미 표의 `DB 배치` 문장이 3부
+        //     식별자를 소속 DB 접두사로 안과 밖으로 가른다(홈 DB 참조가 크로스 DB로
+        //     읽히던 결함). 이 회차가 세운 L1 검사도 셋 늘었다 - 기계 확정 표의 헤더·
+        //     구분·데이터 행 셀 수, INSERT 매핑 표 테이블명의 파서 표기 대조(Ordinal),
+        //     널 허용 주장과 `Dependencies.IsNullable`의 테이블 앵커 대조. 프롬프트
+        //     입력이 달라진 것이므로 옛 엔트리를 재사용하면 틀린 재료로 만든 산출물이
+        //     그대로 남고, 새 L1 셋도 캐시 히트에서는 영영 발동하지 않는다.
+        //     2026-08-22 축 A 재감사 실측 6결함이 근거다.
+        private const int CurrentCacheFormatVersion = 10;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
