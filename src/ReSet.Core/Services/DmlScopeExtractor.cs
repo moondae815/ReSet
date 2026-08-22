@@ -417,7 +417,23 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// DML 최상위 WHERE의 IN/NOT IN 리터럴 목록을 뽑는다.
+        /// DML 문장에서 대상 행을 가르는 술어를 <b>항 단위로</b> 뽑는다.
+        ///
+        /// 사실 하나가 최상위 WHERE의 `AND` 항 하나이고, 파생 테이블 내부 WHERE의
+        /// 항도 함께 담아 <c>SetPredicateFact.Scope</c>로 가른다. 항 중에서 우변이
+        /// 전부 리터럴인 `IN`/`NOT IN`(DecomposeIn)과 `=`/`&lt;&gt;`(DecomposeComparison)만
+        /// 컬럼·연산자·리터럴 목록으로 분해되고, 나머지 항 - 우변이 파라미터인 비교,
+        /// 컬럼 대 컬럼, 서브쿼리 `IN`, `OR` 결합, 부등식 - 은 분해 없이
+        /// <c>SetPredicateFact.PredicateText</c> 하나로 자리를 얻는다(그 문서의
+        /// "분해되지 않는 항은 `—`다" 참고). 실측 코퍼스에서는 분해 불가 쪽이 다수다 -
+        /// 재생성된 EXCEPTION_PROC 표에서 102행 중 72행이고, 그중 34행이 컬럼 대 컬럼,
+        /// 21행이 `= @기준일 파라미터`, 6행이 서브쿼리 `IN`이다.
+        ///
+        /// [옛 요약이 왜 틀렸나 - 전체 브랜치 리뷰 M1] 이 자리는 "DML 최상위 WHERE의
+        /// IN/NOT IN 리터럴 목록을 뽑는다"였다. 감사가 수집 범위를 세 번 넓히는 동안
+        /// 고쳐지지 않아, 소비자가 가장 먼저 읽는 줄이 실제보다 훨씬 좁은 계약을
+        /// 약속하고 있었다(`docs/architecture.md`의 「명세서 충실도의 기계 확정 재료」
+        /// 항목이 세 회차를 모두 기록한다).
         ///
         /// [왜 별도 진입점인가] "어디까지가 대상 범위를 정하는 술어인가"라는 지식은
         /// TopLevelPredicateCollector 한 곳에 인코딩돼 있다. 새 추출기가 그 순회를
@@ -921,9 +937,16 @@ namespace ReSet.Core.Services
             ///
             /// ReferencedFunctionCallFact(CallCollector.Record, 이 파일 아래쪽)가 이미
             /// 같은 이유로 호출 노드 자신의 줄을 쓴다 - 그 표는 인접 호출을 줄 번호로
-            /// 구분해 감사에서 실적이 있다. DmlScopeFact·SetPredicateFact가 문장 줄을
-            /// 쓰는 것은 문장당 행이 하나뿐이라 되풀이 문제가 없기 때문이고, 잠금 힌트는
-            /// 그 전제가 깨지므로 같은 규칙을 따를 수 없다.
+            /// 구분해 감사에서 실적이 있다. 가르는 기준은 "문장당 행이 하나뿐인가"다:
+            /// DmlScopeFact는 문장당 행이 하나라 문장 줄을 그대로 쓰고, 잠금 힌트는 그
+            /// 전제가 깨지므로 참조별 줄을 쓴다.
+            ///
+            /// [SetPredicateFact는 이제 이쪽이다 - 전체 브랜치 리뷰 M1] 이 문단은
+            /// SetPredicateFact도 "문장당 행이 하나뿐이라" 문장 줄을 쓴다고 적고 있었다.
+            /// Task 5가 행 단위를 최상위 `AND` 항으로 올리면서 그 전제가 깨졌고, 그 줄은
+            /// 항 자신의 줄로 내려갔다(<c>SetPredicateFact.Line</c>) - 그리고 그 결정의
+            /// 선례로 인용된 것이 바로 이 문단이다. 두 문서가 서로를 근거로 대면서
+            /// 반대되는 사실을 적고 있었으므로 이쪽을 사실에 맞춘다.
             ///
             /// [중복 제거 키에 Line이 필요한 이유 - 수정 라운드 2 리뷰 실측]
             /// Line이 참조별로 갈리는데(위 문단) 대상 노드와 FROM 참조가 같은
@@ -1489,8 +1512,14 @@ namespace ReSet.Core.Services
             QuerySpecificationsOf(node.QueryExpression).Any(q => q.FromClause != null);
 
         /// <summary>
-        /// DML 문장을 찾아 그 최상위 WHERE에서 집합 술어를 모으고, 수집기가 모르는
-        /// 문장 문맥(연산 종류·시작 줄·문장 번호)을 붙인다.
+        /// DML 문장을 찾아 그 최상위 WHERE(와 파생 테이블 WHERE)에서 집합 술어를 모으고,
+        /// 수집기가 모르는 문장 문맥(연산 종류·문장 번호)을 붙인다.
+        ///
+        /// [줄 번호는 여기서 붙이지 않는다 - Task 5] 예전에는 문장의 시작 줄도 이
+        /// 방문자가 붙였다. 지금은 <c>SetPredicateFact.Line</c>이 <b>항 자신</b>의 줄이라
+        /// 술어를 만드는 자리에서 정해진다 - 문장당 술어가 여럿이므로 문장 줄을 쓰면
+        /// 그 여럿이 전부 같은 줄로 찍힌다(그 문서의 "문장 줄에서 항의 줄로 내린 이유"
+        /// 참고).
         ///
         /// [문장 번호를 이 방문자가 직접 매기는 이유] SetPredicateFact.StatementOrdinal
         /// 문서 참고 - DmlScopeVisitor와 같은 파싱 트리를 같은 세 Visit 오버라이드로

@@ -764,9 +764,36 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// DML 범위 표를 도입하는 규칙 문장. UpdateMappingTemplateIntroText와 같은 이유로
         /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
         /// 위험을 없앤다.
+        ///
+        /// [문장 칸에 `SELECT n`이, 대상·기준일 칸에 `—`가 실린 뒤 - 전체 브랜치 리뷰 I1]
+        /// Task 4가 이 표에 독립 SELECT 행을 더하고 Task 7이 그 행의 대상·기준일 칸을
+        /// `—`로 갈랐는데, 이 문구는 한 글자도 바뀌지 않아 그 두 값을 정의하지 않은 채
+        /// "그대로 옮기라"고만 지시하고 있었다. 잠금 힌트 표는 정확히 같은 결함을
+        /// <c>LockHintIntroText</c>에서 이미 고쳤고(범위 칸의 값 셋·`SELECT n`·`IF n`),
+        /// 집합 술어 도입문도 `—` 설명을 받았다 - 셋 중 이 하나만 남아 있었다.
+        /// 실측(PROC_ETC 재생성 표): 8행 중 6행이 `SELECT n`이고 그 6행의 대상·기준일
+        /// 칸은 전부 `—`다. 표 제목이 "DML 범위"라 행의 다수가 DML이 아니라는 사실이
+        /// 제목과 어긋나는데, 헤딩 리터럴은 L1이 대조하는 접두라 문구 쪽에서 가른다.
+        /// 권위 있는 서술은 <c>DmlScopeFact.Operation</c>·<c>DmlScopeFact.Target</c>
+        /// 문서에 있다 - 이 문구는 그것을 프롬프트 언어로 옮긴 것이므로, 그 문서가
+        /// 바뀌면 여기도 바꾼다. `IF n`은 이 표에 실리지 않으므로(잠금 힌트 표와 다른
+        /// 점 - Operation 문서 참고) 여기서 정의하지 않는다.
         /// </summary>
         private const string DmlScopeTableIntroText =
-            "[CRITICAL SCOPE TABLE] The following table is MACHINE-DERIVED from the source DDL. Copy it verbatim into `## CRUD 분석` under the exact heading shown, and make sure no sentence in your document contradicts it. Do NOT change any cell. In particular: when a row says the date parameter is NOT applied to the target, you must NOT write that the statement is limited to the settlement date.";
+            "[CRITICAL SCOPE TABLE] The following table is MACHINE-DERIVED from the source DDL. " +
+            "Copy it verbatim into `## CRUD 분석` under the exact heading shown, and make sure no " +
+            "sentence in your document contradicts it. Do NOT change any cell. In particular: when a " +
+            "row says the date parameter is NOT applied to the target, you must NOT write that the " +
+            "statement is limited to the settlement date. The 문장 column names the statement the row " +
+            "describes. Besides `INSERT n` / `UPDATE n` / `DELETE n` it can hold `SELECT n` - a " +
+            "standalone read outside any DML (a variable assignment, a cursor source query, a function " +
+            "body query). Such a row updates nothing, so describe it as a read; do not turn it into DML, " +
+            "and do not assume every row is a write just because the heading says DML. Numbering runs " +
+            "from 1 per statement kind. On those `SELECT n` rows the 대상 and 기준일 파라미터 적용 " +
+            "columns hold `—`, which means NO such judgment exists for that row - there is no update " +
+            "target to judge. `—` there is not `아니오`, not a negative finding, and not `unknown`: " +
+            "never write that such a statement leaves the date parameter unapplied, and never name a " +
+            "target for it.";
 
         /// <summary>
         /// DML 범위 표 본문을 만든다. 헤딩 리터럴 `DmlScopeExtractor.DmlScopeTableHeading`은
@@ -1006,7 +1033,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`. One row is one top-level AND term of that WHERE. The last column, 술어 원문, carries that term exactly as written in the DDL. When 컬럼, 연산, 원소 수 and 리터럴 목록 all hold `—`, the term could not be decomposed into a column and a set of literals (an OR-combined condition, a column-to-column comparison, an arithmetic right-hand side, an operator this table does not decompose), and 술어 원문 is then the ONLY record of that filter - copy it verbatim, character for character, and describe the filter from it. Never omit such a row because it looks unlike the others, and never replace 술어 원문 with a paraphrase, a translation, or a summary.",
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`. One row is one top-level AND term of that WHERE. The last column, 술어 원문, carries that term exactly as written in the DDL. When 컬럼, 연산, 원소 수 and 리터럴 목록 all hold `—`, the term could not be decomposed into a column and a set of literals (a comparison whose right-hand side is a parameter, a column-to-column comparison, an `IN` whose right-hand side is a subquery, an OR-combined condition, an arithmetic right-hand side, an operator this table does not decompose), and 술어 원문 is then the ONLY record of that filter - copy it verbatim, character for character, and describe the filter from it. Never omit such a row because it looks unlike the others, and never replace 술어 원문 with a paraphrase, a translation, or a summary.",
                 $"   {DmlScopeExtractor.SetPredicateTableHeading}",
                 "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |",
                 "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"

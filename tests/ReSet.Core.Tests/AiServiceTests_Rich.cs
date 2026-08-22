@@ -2510,6 +2510,35 @@ END"
             Assert.Contains("`IF n`", intro);
         }
 
+        // === DML 범위 도입문이 SELECT 행과 "—"를 정의한다 (전체 브랜치 리뷰 I1) ===
+        //
+        // 잠금 힌트 도입문과 같은 결함이 이 표에만 남아 있었다. Task 4가 문장 칸에
+        // `SELECT n`을, Task 7이 그 행의 대상·기준일 칸에 `—`를 실었는데 도입문은
+        // 한 글자도 바뀌지 않아, 표를 "그대로 옮기라"고 지시하면서 그 표가 쓰는
+        // 값 둘을 정의하지 않았다. 실측(PROC_ETC 재생성 표): 8행 중 6행이 `SELECT n`
+        // 이고 그 6행의 대상·기준일 칸이 전부 `—`다 - 표 제목은 "DML 범위"인데
+        // 행의 다수가 DML이 아니다. 정의되지 않은 값은 모델이 아는 라벨로 바뀐다.
+        [Fact]
+        public async Task GenerateSpecification_DmlScopeIntro_ShouldDefineStandaloneSelectRowsAndTheDash()
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(CursorSourceSelectSpDefinition(), "rules");
+            var body = result.SystemPrompt!;
+            var intro = body.Split('\n').Single(l => l.Contains("[CRITICAL SCOPE TABLE]"));
+
+            // 사실 1: 문장 칸이 `SELECT n`을 담을 수 있고, 그것은 아무것도 갱신하지
+            // 않는 독립 조회다 - DML로 바꿔 서술하면 안 된다.
+            Assert.Contains("`SELECT n`", intro);
+            // 사실 2: 그 행의 대상·기준일 칸에 실리는 `—`는 "아니오"도 "모름"도 아니라
+            // 판정 자체가 없다는 뜻이다.
+            Assert.Contains("`—`", intro);
+            // 칸 이름은 LockHintIntroText의 방식대로 백틱 없이 적는다("The 문장 column").
+            Assert.Contains("대상 and 기준일 파라미터 적용", intro);
+        }
+
         // === 집합 술어 표의 「술어 원문」 열 (Task 7) ===========================
         private static SpDefinition UndecomposedPredicateSpDefinition() => new()
         {
