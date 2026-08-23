@@ -126,6 +126,7 @@
     *   「잠금 힌트」 표의 문장 칸은 `SELECT n`·`IF n`도 담고 범위 칸에 `하위 질의`가 있습니다 — 그 값은 술어 안에 한정되지 않고, SELECT 목록·`SET` 절처럼 그 문장 안에서 다시 열린 질의가 훑는 자리를 모두 가리킵니다. 「DML 범위」·「집합 술어」 표는 `SELECT n`까지만 담고 `IF n` 행이 없으며, 「DML 범위」에는 범위 칸 자체가 없습니다(`architecture.md §4.12`).
     *   「참조 함수」 표에는 문장 칸이 없습니다 — 넓어진 문장 집합(DML 셋 + 독립 SELECT + `IF` 술어)은 「호출 위치」 칸의 `SELECT n (라인 L)`·`IF n (라인 L)`으로 나타납니다(`architecture.md §4.12`).
     *   「잠금 힌트」와 「참조 함수」의 `IF n`을 가로질러 대조하지 마십시오 — 채번 조건이 달라(앞은 술어에 하위 질의가 있을 때, 뒤는 술어에 알려진 함수 호출이 있을 때) 같은 `IF 1`이 다른 문장일 수 있습니다. `SELECT n`과 DML 번호만 네 표에서 맞물립니다(`DmlScopeExtractor.LockHintVisitor.ExplicitVisit(IfStatement)` 문서).
+    *   프롬프트에 `[MACHINE NOTICE]`(네 표가 담지 않는 문장 — 지금은 MERGE)가 실리면 그 문장은 산문으로 서술하되 기계 확정이 아님을 밝히고, 네 표에 행을 만들지 마십시오(`DmlScopeExtractor.ExtractUncoveredStatements`). 표에 그 문장이 없는 것은 누락이 아닙니다.
     *   「실행 의미」 표의 종류는 일곱입니다 — DB 배치·집계 대입·`@@ROWCOUNT`·커서 수명·식 타입 경로·비집계 대입·루프 내 재설정. 종류를 더할 때는 `ExecutionSemanticsFacts.AllKinds`에 함께 등재하십시오. L1은 종류를 목록과 대조하지 않으므로, 빠뜨리면 잃는 것은 행 대조가 아니라 Critic 면제입니다(`MachineConfirmedTablesTests`).
     *   표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오. 표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽으십시오(`architecture.md §4.12`).
     *   통합 배치 계획은 다음 5대 제약을 지킵니다.
