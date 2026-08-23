@@ -10,29 +10,170 @@ namespace ReSet.Core.Tests
         private static readonly Dictionary<string, string> NoColumns = new();
 
         [Fact]
-        public void Extract_NonAggregateAssignment_ShouldSayThePreviousValueSurvives()
+        public void Extract_NoInitializerAndNoEarlierUse_ShouldSayNullSurvives()
         {
-            // UP_UTIL_SETTLE_PROC_ETC:72 실측 - SELECT @v_intID = ID는 비집계 대입이라
-            // 무결과 시 직전 값이 남는다. 79행의 집계 대입(MAX)은 무결과 시 NULL이
-            // 대입되므로 정반대다. 둘이 표에 나란히 놓여야 대비가 보인다.
+            // UF_GET_CLIENTSECTIONRATE:14 실측 - DECLARE에 초기값이 없고(12행) 이 문장
+            // 앞에서 이 변수가 한 번도 쓰이지 않으며 객체에 되돌아가는 흐름이 없다.
+            // 그러면 무결과 시 남는 값은 정확히 NULL이다 - 23~25행의 IF @@ROWCOUNT <> 1이
+            // 그 NULL을 0으로 덮는 것이 이 함수의 요점이다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_strClientID VARCHAR(20)) RETURNS INT
+AS
+BEGIN
+    DECLARE @po_intAmt INT
+    SELECT TOP 1 @po_intAmt = SECTIONAMT
+    FROM   dbo.TClientSectionRate WITH(NOLOCK)
+    WHERE  CLIENTID = @pi_strClientID
+    RETURN @po_intAmt
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("@po_intAmt", fact.Variable);
+            Assert.Equal("SECTIONAMT", fact.Column);
+            Assert.Contains("대입 자체가 일어나지 않습니다", fact.Sentence);
+            Assert.Contains("NULL이 그대로 남습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_PrecedingSetOnSameVariable_ShouldNotClaimNull()
+        {
+            // UP_UTIL_SETTLE_PROC_ETC:69·72 실측 - 앞선 SET이 값을 남겼으므로 무결과 시
+            // 남는 값은 NULL이 아니다. 어떤 값인지는 기계가 판정할 수 없으므로
+            // "이 문장에 도달한 시점의 값"까지만 말한다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
 BEGIN
     DECLARE @v_intID INT
+    SET @v_intID = 0
     SELECT @v_intID = ID
     FROM   dbo.TSettleMiss WITH(NOLOCK)
     WHERE  ClientID = '1'
 END";
 
-            var facts = NonAggregateAssignmentExtractor.Extract(ddl);
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
 
-            var fact = Assert.Single(facts);
             Assert.Equal("@v_intID", fact.Variable);
-            Assert.Equal("ID", fact.Column);
-            Assert.Equal(6, fact.Line);
-            Assert.Contains("직전 값", fact.Sentence);
-            Assert.Contains("일어나지 않습니다", fact.Sentence);
+            Assert.Equal(7, fact.Line);
+            Assert.Contains("대입 자체가 일어나지 않습니다", fact.Sentence);
+            Assert.Contains("이 문장에 도달한 시점의 값", fact.Sentence);
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_DeclareWithInitializer_ShouldNotClaimNull()
+        {
+            // 초기값이 있으면 무결과 시 남는 값은 NULL이 아니라 그 초기값이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT = 0
+    SELECT @v = ID FROM dbo.TA WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_SameNameDeclaredWithInitializerInAnotherBatch_ShouldNotClaimNull()
+        {
+            // 이름은 배치마다 다시 선언된다. 판정 재료는 조각 전체에서 모으므로, 앞
+            // 배치의 초기값 없는 DECLARE를 보고 뒤 배치의 초기값 있는 변수에 NULL을
+            // 단정할 수 있다 - 같은 이름이 두 모양으로 선언돼 있으면 판정하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.A
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT 1
+END
+GO
+CREATE PROCEDURE dbo.B
+AS
+BEGIN
+    DECLARE @v INT = 0
+    SELECT @v = ID FROM dbo.TA WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_InsideWhileLoop_ShouldNotClaimNull()
+        {
+            // 루프는 원문 순서를 뒤집는다 - 두 번째 반복에서는 *뒤에 있는* SET이 이미
+            // 실행된 뒤 이 문장에 도달한다. 원문에서 앞선 대입이 없다는 것만으로
+            // NULL을 단정하면 거짓이 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    WHILE (@@FETCH_STATUS = 0) BEGIN
+        SELECT @v = ID FROM dbo.TA WITH(NOLOCK)
+        SET @v = 1
+    END
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_WithBackwardGoto_ShouldNotClaimNull()
+        {
+            // GOTO도 같은 이유로 원문 순서를 무너뜨린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    Again:
+    SELECT @v = ID FROM dbo.TA WITH(NOLOCK)
+    SET @v = 1
+    GOTO Again
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_OutputParameter_ShouldNotClaimNull()
+        {
+            // 매개변수는 호출자가 값을 준다 - DECLARE 변수와 달리 NULL로 시작한다는
+            // 보장이 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @po_intID INT OUTPUT
+AS
+BEGIN
+    SELECT @po_intID = ID FROM dbo.TA WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.DoesNotContain("NULL", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_AggregateInsideDerivedTable_ShouldNotBeCollected()
+        {
+            // 집계는 식이 아니라 FROM 절에도 산다. GROUP BY 없는 파생 테이블은 원본이
+            // 비어도 한 행을 돌려주므로 이 SELECT는 0행이 되지 않는다 - "무결과면
+            // 대입이 없다"를 읽는 사람은 정반대로 이해하게 된다. 담지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = X.MaxID FROM (SELECT MAX(ID) AS MaxID FROM dbo.TA) X
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
         }
 
         [Fact]
@@ -55,6 +196,7 @@ END";
         public void Extract_TwoAssignmentsInOneSelect_ShouldReportBoth()
         {
             // 한 SELECT가 변수 둘을 대입하면 둘 다 같은 무결과 동작을 겪는다.
+            // UF_GET_COLLECTYMD:29~30이 그 실물이다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -67,6 +209,8 @@ END";
 
             Assert.Equal(2, facts.Count);
             Assert.Equal(new[] { "@a", "@b" }, facts.Select(f => f.Variable).ToArray());
+            // 앞 변수의 참조가 뒤 변수의 판정을 오염시키면 안 된다 - 둘 다 NULL 갈래다.
+            Assert.All(facts, f => Assert.Contains("NULL이 그대로 남습니다", f.Sentence));
         }
 
         [Fact]
@@ -109,7 +253,7 @@ END";
         public void Extract_AggregateWrappedInIsNull_ShouldNotBeCollected()
         {
             // UP_UTIL_SETTLE_PROC_ETC:116 실측 - ISNULL(SUM(...),0)도 집계 질의다.
-            // 무결과 시 한 행이 돌아오고 0이 대입된다 - 직전 값이 남는다는 문장과 반대다.
+            // 무결과 시 한 행이 돌아오고 0이 대입된다 - 대입이 없다는 문장과 반대다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -141,7 +285,7 @@ END";
         {
             // FROM 절 판정만을 겨냥한다 - 대상은 리터럴이 아니라 컬럼 참조이므로
             // 식 모양 판정은 이 문장을 걸러내지 못한다. FROM이 없으면 한 행이 반드시
-            // 돌아와 대입이 일어나므로 "무결과 시 직전 값이 남는다"가 거짓이 된다.
+            // 돌아와 대입이 일어나므로 무결과를 전제한 문장이 거짓이 된다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -183,7 +327,7 @@ END";
             Assert.Equal("비집계 대입", fact.Kind);
             Assert.Equal("6", fact.Line);
             Assert.Equal("SELECT @v_intID = ID", fact.Target);
-            Assert.Contains("직전 값", fact.Fact);
+            Assert.Contains("NULL이 그대로 남습니다", fact.Fact);
         }
     }
 }
