@@ -33,6 +33,8 @@ namespace ReSet.Core.Services
 
         public const string TypePathKind = "식 타입 경로";
 
+        public const string NonAggregateAssignmentKind = "비집계 대입";
+
         /// <summary>
         /// 종류 칸의 전체 목록. Critic 면제 블록이 이 순서 그대로 열거하므로
         /// (MachineConfirmedTables.CriticExemptionBlock) 순서를 흔들면 프롬프트
@@ -45,7 +47,8 @@ namespace ReSet.Core.Services
             AggregateAssignmentKind,
             RowCountKind,
             CursorKind,
-            TypePathKind
+            TypePathKind,
+            NonAggregateAssignmentKind
         };
 
         /// <summary>
@@ -99,6 +102,17 @@ namespace ReSet.Core.Services
                     AggregateAssignmentKind,
                     fact.Line.ToString(),
                     $"SELECT {fact.Variable} = {fact.Aggregate}(...)",
+                    fact.Sentence));
+            }
+
+            // 집계 대입 바로 다음에 둔다 - 같은 대입문 부류이면서 무결과 동작이 정반대라
+            // 표에서 이웃해 있어야 대비가 보인다(PROC_ETC 72행 비집계 · 79행 집계).
+            foreach (var fact in NonAggregateAssignmentExtractor.Extract(ddlText))
+            {
+                facts.Add(new ExecutionSemanticFact(
+                    NonAggregateAssignmentKind,
+                    fact.Line.ToString(),
+                    $"SELECT {fact.Variable} = {fact.Column}",
                     fact.Sentence));
             }
 
