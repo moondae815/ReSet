@@ -2849,7 +2849,8 @@ namespace ReSet.Core.Services
         /// 낮게 남는다.
         /// 2026-08-23부터는 문장 칸(`UPDATE n`·`SELECT n`)도 같은 행에서 요구하므로
         /// 라인이 우연히 같은 다른 행에 걸릴 위험은 더 줄었다 - 번호는 렌더러와 같은
-        /// AiService.BuildStatementOrdinals로 매긴다.
+        /// DmlScopeExtractor.BuildStatementOrdinals로 매긴다(렌더러와 같은 함수 - 검증기는 조립기에
+        /// 컴파일 의존하지 않는다는 관례를 지키려고 중립 자리에 둔다).
         ///
         /// [GROUP BY 항 - Task 8] 값 대조는 GroupByColumns가 비어 있지 않을 때만
         /// 요구한다. "(없음)"은 `조인 키` 칸에도 나오는 토큰이라, 값이 비었을 때도
@@ -2895,9 +2896,9 @@ namespace ReSet.Core.Services
             // 이전에는 라인 토큰 하나로 행을 찾았다. 네 표가 같은 번호 체계를 공유한다는
             // 계약(architecture.md §4.12)을 L1이 지키지 않아, `UPDATE 2` 행을 `UPDATE 1`로
             // 적거나 `SELECT 1`을 `UPDATE 1`로 옮겨도 라인이 맞으면 통과했다. 번호는
-            // 렌더러와 같은 출처(AiService.BuildStatementOrdinals)로 다시 매긴다 -
+            // 렌더러와 같은 출처(DmlScopeExtractor.BuildStatementOrdinals)로 다시 매긴다 -
             // 채번을 여기서 복제하면 두 출처가 어긋나는 날 옳게 베낀 표가 거부된다.
-            var ordinals = AiService.BuildStatementOrdinals(expectations.DmlScopeFacts);
+            var ordinals = DmlScopeExtractor.BuildStatementOrdinals(expectations.DmlScopeFacts);
 
             for (var factIndex = 0; factIndex < expectations.DmlScopeFacts.Count; factIndex++)
             {
@@ -3492,6 +3493,22 @@ namespace ReSet.Core.Services
             // L1을 통과하지 못한다 - 이 가드 없이 검사를 먼저 넣어 실측으로 확인했다.
             if (expectations.ReferencedFunctionCalls.Count == 0) return;
 
+            // Validate의 catch-all은 검사 하나가 던지면 Errors를 통째로 지우고 소프트
+            // 패스시킨다 - 이 검사의 예외가 다른 표의 판정을 삼키지 않도록 자기 가드를 둔다
+            // (CheckExecutionSemantics·CheckCaseBranches와 같은 관례).
+            try
+            {
+                CheckReferencedFunctionsCore(markdown, expectations, result);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "참조 함수 표 대조 중 예외 - 이 표의 검사만 건너뜁니다.");
+            }
+        }
+
+        private static void CheckReferencedFunctionsCore(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
             var lines = MarkdownSectionLocator.SplitLines(markdown);
             var headingIndex = MarkdownSectionLocator.FindIndexOutsideFence(
                 lines, 0,
@@ -3515,24 +3532,20 @@ namespace ReSet.Core.Services
             // 봤다 - 행을 지우거나 호출 위치를 바꿔 적어도 침묵했다. 잠금 힌트와 같은
             // 방식으로 사실마다 자기 행을 요구한다. 대조 칸은 셋이다:
             //   · 호출 위치 - 렌더 그대로 `{Operation} {StatementOrdinal} (라인 {Line})`
-            //     (BuildReferencedFunctionTableLines). 네 표가 공유하는 문장 번호가 여기 실린다.
-            //   · 인자 - CallExpression 그대로(EscapeTableCell은 SplitRow가 복원한다).
+            //     (BuildReferencedFunctionTableLines). DML·`SELECT n` 번호는 네 표가 공유하지만
+            //     `IF n`은 표마다 채번 조건이 달라 잠금 힌트 표의 `IF n`과 같은 문장이 아닐 수
+            //     있다(architecture.md §4.12) - 이 검사는 표를 가로질러 대조하지 않는다.
+            //   · 인자 - CallExpression에 렌더와 같은 개행 접기를 적용한 값. `\|`는 SplitRow가
+            //     복원하지만 개행 접기는 되돌리지 않으므로 기대 쪽에서 접는다(아래 expectedCall).
             //   · 함수 - 렌더러는 의존성이 풀리면 `DB.스키마.이름`으로, 아니면 사실의
             //     QualifiedName(스키마 유무 불문)으로 적는다. 기대 쪽에는 그 판정 재료가
-            //     없으므로 정확 일치 대신 <b>이름 부분의 접미 일치</b>(대소문자 무시)만
-            //     요구한다 - `dbo.UF_X`·`SETTLE_POQ_DB.dbo.UF_X`·`UF_X`가 모두 같은 함수다.
+            //     없으므로 정확 일치 대신 <b>이름 부분의 점 경계 접미 일치</b>(대소문자
+            //     무시)를 요구한다 - `UF_X`·`dbo.UF_X`·`SETTLE_POQ_DB.dbo.UF_X`는 같은 함수이고
+            //     `X_UF_X`는 아니다(IsSameFunctionName).
             //   · 명세서 링크 칸은 상대 경로라 대조하지 않는다.
             // 같은 키의 사실이 여럿이면(한 문장이 같은 함수를 같은 인자로 두 번 부르면)
             // 행도 그 수만큼 있어야 한다 - CheckSetPredicates와 같은 묶음 규칙이다.
-            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
-                lines, headingIndex + 1,
-                line =>
-                {
-                    var trimmed = line.TrimStart();
-                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
-                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
-                });
-            if (endIndex < 0) endIndex = lines.Count;
+            var (_, endIndex) = LocateHeadingSection(lines, DmlScopeExtractor.ReferencedFunctionTableHeading);
 
             var rowLines = new List<string>();
             for (var i = headingIndex + 1; i < endIndex; i++)
@@ -3557,13 +3570,19 @@ namespace ReSet.Core.Services
                 var fact = facts[0];
                 var bareName = BareFunctionName(fact.QualifiedName);
                 var locationToken = $"{fact.Operation} {fact.StatementOrdinal} (라인 {fact.Line})";
+                // CallExpression은 TextOf(node) 그대로라 원문 개행이 남는다(SetPredicateFact.
+                // PredicateText와 달리 CollapseWhitespace를 거치지 않는다). 렌더러는
+                // MarkdownTableCellCodec.Escape가 개행을 공백으로 접어 한 줄 칸으로 싣고,
+                // 마크다운 표 행은 한 줄이므로 개행이 든 값을 그대로 요구하면 어떤 산출물도
+                // 만족시킬 수 없다 - CheckSetPredicates와 같은 접기를 기대 쪽에 적용한다.
+                var expectedCall = FoldNewlinesLikeRenderedCell(fact.CallExpression);
 
                 var matchingRows = rowLines.Count(row =>
                 {
                     var cells = MarkdownTableCellCodec.SplitRow(row);
                     return cells.Any(c => c == locationToken)
-                        && cells.Any(c => string.Equals(c, fact.CallExpression, StringComparison.Ordinal))
-                        && cells.Any(c => c.EndsWith(bareName, StringComparison.OrdinalIgnoreCase));
+                        && cells.Any(c => string.Equals(c, expectedCall, StringComparison.Ordinal))
+                        && cells.Any(c => IsSameFunctionName(c, bareName));
                 });
                 if (matchingRows == facts.Count) continue;
 
@@ -3591,6 +3610,14 @@ namespace ReSet.Core.Services
             var lastDot = qualifiedName.LastIndexOf('.');
             return lastDot < 0 ? qualifiedName : qualifiedName[(lastDot + 1)..];
         }
+
+        /// <summary>
+        /// 함수 칸 `cell`이 `bareName`과 같은 함수를 가리키는가 - 전체 일치이거나 점 경계
+        /// 뒤의 접미 일치(`dbo.UF_X`·`DB.dbo.UF_X`)만 참이다. `X_UF_X`는 거짓이다.
+        /// </summary>
+        private static bool IsSameFunctionName(string cell, string bareName) =>
+            string.Equals(cell, bareName, StringComparison.OrdinalIgnoreCase)
+            || cell.EndsWith("." + bareName, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과

@@ -990,24 +990,13 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 직접 담고(문서 참고), 이 헬퍼는 DML 범위 표만 쓴다 - 사전 조회 자체를
         /// 없애 이 계열의 결함을 구조적으로 막는다.
         /// </summary>
-        // [internal인 이유 - 2026-08-23 L1 문장 칸 대조] MechanicalValidator.CheckDmlScopeTable이
-        // 같은 함수로 번호를 다시 매겨 문장 칸을 대조한다. 채번 출처가 둘이 되면 렌더러와
-        // L1이 어긋나 옳게 베낀 표가 거부되므로, 복제하지 않고 이 하나를 공유한다.
-        internal static IReadOnlyList<int> BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
-        {
-            var byIndex = new int[dmlScopeFacts.Count];
-            var perOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-            for (var i = 0; i < dmlScopeFacts.Count; i++)
-            {
-                var fact = dmlScopeFacts[i];
-                perOperation.TryGetValue(fact.Operation, out var n);
-                perOperation[fact.Operation] = ++n;
-                byIndex[i] = n;
-            }
-
-            return byIndex;
-        }
+        // [본문이 DmlScopeExtractor로 옮겨간 이유 - 2026-08-23 L1 문장 칸 대조]
+        // MechanicalValidator.CheckDmlScopeTable이 같은 함수로 번호를 다시 매겨 문장 칸을
+        // 대조한다. 채번 출처가 둘이면 렌더러와 L1이 어긋나 옳게 베낀 표가 거부되고,
+        // 검증기는 조립기에 컴파일 의존하지 않는다는 관례(MarkdownTableCellCodec 문서)가
+        // 있으므로 중립 자리에 하나만 두고 여기서는 위임한다.
+        private static IReadOnlyList<int> BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
+            => DmlScopeExtractor.BuildStatementOrdinals(dmlScopeFacts);
 
         /// <summary>
         /// 분해되지 않은 항의 원소 수·리터럴 목록 칸에 쓰는 표기.
