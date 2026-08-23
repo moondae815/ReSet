@@ -235,7 +235,7 @@ git commit -m "feat: 참조 함수 표가 독립 SELECT와 IF 술어의 호출�
 
 ---
 
-### Task 2: `SetPredicateVisitor`가 같은 문장 집합을 방문한다
+### Task 2: `SetPredicateVisitor`가 독립 SELECT까지 방문한다 (`IF` 술어는 담지 않는다)
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/DmlScopeExtractor.cs` (`SetPredicateVisitor`, 1530행 근처)
