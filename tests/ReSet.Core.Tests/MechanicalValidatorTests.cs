@@ -6298,5 +6298,158 @@ END",
             Assert.Contains(result.DetailedErrors,
                 e => e.Type == ErrorType.ReferencedFunctionMismatch && e.Message.Contains("SELECT 1 (라인 53)"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 파라미터 목록 표의 행 ↔ StaticAnalysis.ProcedureParameters — 2026-08-23 9회차 ⚪ (D)
+        //
+        // 실측: COMM_UPD(`@v_valIncVat`)·INS_EXTRA(`@v_strReqYMD`·`@v_strCurrYMD`·`@v_valIncVat`)가
+        // 지역 변수를, AcqManual이 `구분` 칸으로 내부 변수·시스템 상태값(`@@ERROR`)·시스템
+        // 함수까지 파라미터 목록 표에 실었다. 시그니처는 파서가 확정한 사실이므로 표의
+        // `@이름` 행은 ProcedureParameters와 정확히 같아야 한다. 이름 열은 헤더로 찾고
+        // (`매개변수 명칭`·`매개변수`·`파라미터`·`이름`), 찾지 못하면 침묵한다(귀속 불가).
+        // 첫 표만 파라미터 표로 본다 - v14 EXPECT_PROC처럼 두 번째 표(내부 변수)는 대상이 아니다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static SpecExpectations BuildExpectationsWithParameters(params string[] declarations)
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = "SELECT 1;",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ProcedureParameters = new List<string>(declarations)
+                }
+            };
+            return SpecExpectations.From(spDef)!;
+        }
+
+        private static string SpecWithParameterSection(string parameterSectionBody)
+            => WrapSpec("표 없음").Replace("## 파라미터 목록\n내용", "## 파라미터 목록\n" + parameterSectionBody);
+
+        private const string CommUpdShapedParameterTable =
+            "| 매개변수 명칭 | 데이터 타입 | 입출력 구분 | Null 여부 | 연관 컬럼 및 사용 관계 |\n" +
+            "| :--- | :--- | :--- | :--- | :--- |\n" +
+            "| `@pi_strYMD` | `char(8)` | 입력 | 원본 DDL에 명시되지 않음 | 기준일 |\n" +
+            "| `@po_intRetVal` | `int` | 출력 | 원본 DDL에 명시되지 않음 | 반환 코드 |\n";
+
+        [Fact]
+        public void Validate_ParameterTableWithLocalVariableRow_IsReported()
+        {
+            // COMM_UPD Spec.md:83 실물 - 세 번째 행이 DECLARE된 지역 변수다.
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)", "@po_intRetVal int OUTPUT");
+            var markdown = SpecWithParameterSection(
+                CommUpdShapedParameterTable +
+                "| `@v_valIncVat` | `decimal(2,1)` | 지역 변수 | 해당 없음 | 부가세 배수 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+            Assert.Contains("@v_valIncVat", error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Validate_ParameterTableMatchingProcedureParameters_Passes()
+        {
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)", "@po_intRetVal int OUTPUT");
+            var markdown = SpecWithParameterSection(CommUpdShapedParameterTable);
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterTableWithNameInSecondColumn_IsStillChecked()
+        {
+            // AcqManual 실물 - 첫 열이 `구분`이고 이름 열은 둘째. 내부 변수·시스템 상태값 행이 섞여 있다.
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)", "@po_intRetVal int OUTPUT");
+            var markdown = SpecWithParameterSection(
+                "| 구분 | 매개변수 명칭 | 데이터 타입 | Null 여부 | 기본값 | 데이터베이스 컬럼과의 관계 |\n" +
+                "| :--- | :--- | :--- | :--- | :--- | :--- |\n" +
+                "| 입력 | `@pi_strYMD` | `char(8)` | 명시 없음 | 없음 | 기준일 |\n" +
+                "| 출력 | `@po_intRetVal` | `int` | 명시 없음 | 없음 | 반환 코드 |\n" +
+                "| 내부 변수 | `@v_strYMD` | `char(8)` | 해당 없음 | 없음 | 커서 변수 |\n" +
+                "| 시스템 상태값 | `@@ERROR` | `int` | 해당 없음 | 없음 | 오류 검사 |\n" +
+                "| 시스템 함수 | `GETDATE()` | `datetime` | 해당 없음 | 없음 | 등록일 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+            Assert.Contains("@v_strYMD", error.Message, StringComparison.Ordinal);
+            Assert.Contains("@@ERROR", error.Message, StringComparison.Ordinal);
+            // `GETDATE()`는 `@`로 시작하지 않아 이 검사의 대상이 아니다 - 지목하지 않는다.
+            Assert.DoesNotContain("GETDATE", error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Validate_ParameterTableMissingAParameter_IsReported()
+        {
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)", "@po_intRetVal int OUTPUT");
+            var markdown = SpecWithParameterSection(
+                "| 매개변수 명칭 | 데이터 타입 | 입출력 구분 |\n" +
+                "| :--- | :--- | :--- |\n" +
+                "| `@pi_strYMD` | `char(8)` | 입력 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+            Assert.Contains("@po_intRetVal", error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Validate_LocalVariablesInASecondTableUnderParameterSection_Pass()
+        {
+            // v14 EXPECT_PROC 실물 - 첫 표는 파라미터만, 둘째 표가 내부 변수.
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)", "@po_intRetVal int OUTPUT");
+            var markdown = SpecWithParameterSection(
+                CommUpdShapedParameterTable +
+                "\n| 내부 변수 명칭 | 데이터 타입 | 초기값 | 연결 컬럼 및 사용 관계 |\n" +
+                "| :--- | :--- | :--- | :--- |\n" +
+                "| `@v_PLCardSettlePeriodPG` | `varchar(200)` | `'PLCard'` | UPDATE 7의 NOT IN |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterTableWithoutRecognizableNameColumn_IsSilent()
+        {
+            // 이름 열을 헤더로 찾지 못하면 귀속할 수 없으므로 침묵한다.
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)");
+            var markdown = SpecWithParameterSection(
+                "| 번호 | 항목 | 설명 |\n" +
+                "| :--- | :--- | :--- |\n" +
+                "| 1 | `@v_x` | 임의 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterNameComparison_IgnoresCase()
+        {
+            var expectations = BuildExpectationsWithParameters("@pi_strYMD char(8)");
+            var markdown = SpecWithParameterSection(
+                "| 파라미터 | 데이터 타입 |\n" +
+                "| :--- | :--- |\n" +
+                "| `@PI_STRYMD` | `char(8)` |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterTableRowMismatch);
+        }
+
+        [Fact]
+        public void From_WithOnlyProcedureParameters_ShouldNotReturnNull()
+        {
+            // authoring-contract §1 - 재료가 이것 하나뿐이어도 검사가 돌아야 한다.
+            Assert.NotNull(BuildExpectationsWithParameters("@pi_strYMD char(8)"));
+        }
     }
 }

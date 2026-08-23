@@ -58,6 +58,9 @@ namespace ReSet.Core.Services
         InsertMappingTableNameMismatch,
         // 컬럼 널 허용 주장 어긋남의 L1 앵커.
         NullabilityClaimMismatch,
+        // 파라미터 목록 표의 `@이름` 행이 StaticAnalysis.ProcedureParameters와 다르다 -
+        // 지역 변수·시스템 상태값이 섞였거나 파라미터가 빠졌다(2026-08-23 9회차 (D)).
+        ParameterTableRowMismatch,
         // 참조 함수 표의 행 단위 대조 실패 앵커(2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1).
         // 이전에는 헤딩 부재를 SetPredicateMismatch로 빌려 보고했다.
         ReferencedFunctionMismatch,
@@ -153,6 +156,7 @@ namespace ReSet.Core.Services
                     CheckInsertMappingTableNames(cleansed, expectations, result);
                     CheckSchemaClaims(cleansed, expectations, result);
                     CheckNullabilityClaims(cleansed, expectations, result);
+                    CheckParameterTableRows(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
                     CheckSourceComments(cleansed, expectations, result);
@@ -2134,6 +2138,117 @@ namespace ReSet.Core.Services
         {
             "널을 허용하지 않습니다", "NULL을 허용하지 않습니다"
         };
+
+        /// <summary>
+        /// 「## 파라미터 목록」의 <b>첫 표</b>에 실린 `@이름` 행이 파서가 확정한 파라미터
+        /// (<see cref="SpecExpectations.ParameterNames"/>)와 정확히 같은지 대조한다.
+        ///
+        /// [왜 - 2026-08-23 9회차 축 A 재감사 (D)] COMM_UPD(`@v_valIncVat`)·INS_EXTRA(지역
+        /// 변수 셋)가 DECLARE된 변수를, AcqManual이 `구분` 칸으로 내부 변수·`@@ERROR`·시스템
+        /// 함수까지 파라미터 목록 표에 실었다. 시그니처는 파서 사실이라 이 표의 `@` 행은
+        /// ProcedureParameters와 1:1이어야 한다 - 넘치면 호출자가 없는 인자를 넘기려 들고,
+        /// 빠지면 시그니처가 잘린다.
+        ///
+        /// [귀속 규칙 - authoring-contract §7·§8] 코퍼스 31개의 이 표 헤더는 27가지라 열
+        /// 위치를 가정하지 않는다. 이름 열은 헤더 칸이 `매개변수 명칭`·`매개변수`·`파라미터`·
+        /// `이름`·`파라미터명`인 첫 열로 찾고, 못 찾으면 침묵한다. 대조 대상은 그 열의 값 중
+        /// `@`로 시작하는 것뿐이다(`GETDATE()` 같은 함수 이름은 건드리지 않는다).
+        /// 첫 표만 본다 - v14 EXPECT_PROC처럼 같은 H2 아래 두 번째 표(내부 변수)는 정상이다.
+        /// 표 경계는 빈 줄·`|`가 아닌 줄(§4). 비교는 대소문자 무시.
+        /// </summary>
+        /// <summary>마크다운 표의 정렬 행(`| :--- | --- |`)인가.</summary>
+        private static bool IsSeparatorRow(string row)
+        {
+            var cells = MarkdownTableCellCodec.SplitRow(row);
+            var inner = cells.Skip(1).Take(Math.Max(0, cells.Count - 2)).Select(c => c.Trim()).ToList();
+            return inner.Count > 0 && inner.All(c => c.Length > 0 && Regex.IsMatch(c, "^:?-+:?$"));
+        }
+
+        private static void CheckParameterTableRows(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ParameterNames.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headerIndex, endIndex) = MarkdownSectionLocator.LocateSection(
+                    lines, "## 파라미터 목록", "## ");
+                if (headerIndex < 0) return;
+
+                // 첫 표: 헤딩 뒤 첫 `|` 줄부터 빈 줄/비-`|` 줄 전까지.
+                var tableStart = -1;
+                for (var i = headerIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal)) { tableStart = i; break; }
+                }
+                if (tableStart < 0) return;
+
+                var rows = new List<string>();
+                for (var i = tableStart; i < endIndex; i++)
+                {
+                    var t = lines[i].TrimStart();
+                    if (!t.StartsWith("|", StringComparison.Ordinal)) break;
+                    rows.Add(lines[i]);
+                }
+                if (rows.Count < 2) return;
+
+                var headerCells = MarkdownTableCellCodec.SplitRow(rows[0]);
+                var nameColumn = -1;
+                for (var c = 1; c < headerCells.Count; c++)
+                {
+                    var h = headerCells[c].Trim();
+                    if (h is "매개변수 명칭" or "매개변수" or "파라미터" or "이름" or "파라미터명" or "매개변수명")
+                    {
+                        nameColumn = c;
+                        break;
+                    }
+                }
+                if (nameColumn < 0) return; // 귀속 불가 - 침묵
+
+                var written = new List<string>();
+                foreach (var row in rows.Skip(1))
+                {
+                    if (IsSeparatorRow(row)) continue;
+                    var cells = MarkdownTableCellCodec.SplitRow(row);
+                    if (cells.Count <= nameColumn) continue;
+                    var value = cells[nameColumn].Trim().Trim('`').Trim();
+                    if (value.StartsWith("@", StringComparison.Ordinal)) written.Add(value);
+                }
+                if (written.Count == 0) return; // `@` 행이 하나도 없으면 이 표가 파라미터 표인지 알 수 없다
+
+                var expected = new HashSet<string>(expectations.ParameterNames, StringComparer.OrdinalIgnoreCase);
+                var extra = written.Where(w => !expected.Contains(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                var missing = expectations.ParameterNames
+                    .Where(pn => !written.Contains(pn, StringComparer.OrdinalIgnoreCase))
+                    .ToList();
+                if (extra.Count == 0 && missing.Count == 0) return;
+
+                var parts = new List<string>();
+                if (extra.Count > 0)
+                    parts.Add($"파라미터가 아닌 행: {string.Join(", ", extra.Select(x => $"`{x}`"))}");
+                if (missing.Count > 0)
+                    parts.Add($"빠진 파라미터: {string.Join(", ", missing.Select(x => $"`{x}`"))}");
+                var message =
+                    $"「## 파라미터 목록」의 첫 표는 원본 시그니처의 파라미터 {expectations.ParameterNames.Count}개"
+                    + $"({string.Join(", ", expectations.ParameterNames.Select(x => $"`{x}`"))})만 행으로 가져야 합니다 - "
+                    + string.Join(" / ", parts)
+                    + ". DECLARE된 지역 변수·`@@ERROR` 같은 시스템 값은 이 표가 아니라 별도 표나 절에 적으십시오.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.ParameterTableRowMismatch,
+                    Message = message,
+                    RawContext = "## 파라미터 목록"
+                });
+            }
+            catch (Exception ex)
+            {
+                // 이 검사 하나의 예외가 Validate의 catch-all로 올라가면 모든 검사의 오류가
+                // 지워진다(authoring-contract §6). 메서드 전체를 건너뛴다.
+                Log.Warning(ex, "[MechanicalValidator] 파라미터 목록 표 대조 중 예외 - 이 검사를 건너뜁니다.");
+            }
+        }
 
         /// <summary>
         /// 명세서가 "널을 허용하지 않습니다"로 단정한 컬럼이 실제로는 널 허용인지 본다.

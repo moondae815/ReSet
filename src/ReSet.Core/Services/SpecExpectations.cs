@@ -142,6 +142,14 @@ namespace ReSet.Core.Services
             new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 파서가 확정한 파라미터 이름(`@pi_strYMD` 등, 선언문에서 이름만 뗀 것). 「파라미터
+        /// 목록」 표의 `@이름` 행이 이것과 정확히 같아야 한다는 대조(CheckParameterTableRows)의
+        /// 기준이다 - 2026-08-23 9회차 재감사 (D): COMM_UPD·INS_EXTRA가 지역 변수를,
+        /// AcqManual이 `@@ERROR`·내부 변수까지 그 표에 실었다.
+        /// </summary>
+        public IReadOnlyList<string> ParameterNames { get; init; } = Array.Empty<string>();
+
+        /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
         /// </summary>
@@ -244,6 +252,11 @@ namespace ReSet.Core.Services
             var insertTargetTables = spDef.StaticAnalysis?.InsertTables is { Count: > 0 } insertTables
                 ? new List<string>(insertTables)
                 : new List<string>();
+
+            var parameterNames = (spDef.StaticAnalysis?.ProcedureParameters ?? new List<string>())
+                .Select(ParameterNameOf)
+                .Where(n => n.StartsWith("@", StringComparison.Ordinal))
+                .ToList();
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -360,7 +373,12 @@ namespace ReSet.Core.Services
                 // 집합이 갈릴 길이 없다. setPredicates·referencedFunctionCalls·lockHints와
                 // 같은 이유로 그래도 잇는다: 언젠가 두 컬렉션이 별도 루프로 갈라지면
                 // 이 항이 없는 채 그 리팩터가 조용히 CheckNullabilityClaims를 죽인다.
-                && nullableColumnsByTable.Count == 0)
+                && nullableColumnsByTable.Count == 0
+                // parameterNames는 오늘 거의 항상 다른 재료(실행 의미의 DB 배치 등)와 함께
+                // 오지만, 파싱 실패로 StaticAnalysis가 파라미터만 남긴 객체에서도 파라미터
+                // 표 대조는 돌아야 한다 - 이 항을 빠뜨리면 그 경우 CheckParameterTableRows가
+                // 한 번도 돌지 않는다(authoring-contract §1).
+                && parameterNames.Count == 0)
             {
                 return null;
             }
@@ -383,7 +401,8 @@ namespace ReSet.Core.Services
                 ExecutionSemantics = executionSemantics,
                 CaseBranches = caseBranches,
                 InsertTargetTables = insertTargetTables,
-                NullableColumnsByTable = nullableColumnsByTable
+                NullableColumnsByTable = nullableColumnsByTable,
+                ParameterNames = parameterNames
             };
         }
 
