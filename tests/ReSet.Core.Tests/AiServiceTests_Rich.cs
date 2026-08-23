@@ -315,6 +315,29 @@ namespace ReSet.Core.Tests
             Assert.Contains("a machine-confirmed table carries the predicate verbatim", body);
         }
 
+        // [2026-08-23 ③(b) 최종 리뷰 에스컬레이션 2] 기준 1은 "`조회합니다`로 뭉개면 필터
+        // 서술이 아니다 - 보고하라"를 먼저 적고 표 면제를 뒤에 붙였다. ③(b)부터 집합 술어
+        // 표에 독립 SELECT(`SELECT n`) 행이 실리는데, 그 문장의 술어는 읽는 행을 가르므로
+        // "…인 행만 조회합니다"가 옳은 서술이다 - 순서와 주어 그대로면 리터럴한 Critic이
+        // 옳은 문장을 보고할 여지가 글자로 남는다(로그 17개에서 발현 0건, 이론적 경로).
+        // 이 테스트는 (a) 독립 SELECT 읽기 필터 면제 문장이 있고 (b) 표 면제가 금지
+        // 문장보다 앞에 온다는 두 가지를 프롬프트에서 고정한다.
+        [Fact]
+        public async Task ReviewSpecificationAsync_Criterion1_TreatsStandaloneSelectReadFilterAsFilterDescription()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.ReviewSpecificationAsync(SelectProbeSpDef(), "## 개요");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("For a standalone SELECT statement", body);
+            Assert.Contains("narrows the rows that statement reads", body);
+            var exemption = body.IndexOf("a machine-confirmed table carries the predicate verbatim", StringComparison.Ordinal);
+            var softening = body.IndexOf("is NOT described as a filter: report it", StringComparison.Ordinal);
+            Assert.True(exemption >= 0 && softening >= 0 && exemption < softening,
+                $"표 면제({exemption})가 금지 문장({softening})보다 앞에 와야 한다.");
+        }
+
         private static string DecodeMessageContents(string requestBody)
         {
             using var doc = JsonDocument.Parse(requestBody);

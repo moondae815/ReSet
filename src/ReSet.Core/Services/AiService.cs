@@ -3276,12 +3276,23 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 return await ReviewFunctionSpecificationAsync(spDef, specMarkdown, effort, cancellationToken);
             }
 
+            // [기준 1의 순서와 주어 - 2026-08-23 ③(b) 최종 리뷰 에스컬레이션 2] ③(b)부터 집합
+            // 술어 표에 독립 SELECT(`SELECT n`) 행이 실린다. 그 술어는 읽는 행을 가르므로
+            // "…인 행만 조회합니다"가 옳은 서술인데, 옛 문구는 `조회합니다` 금지를 먼저 적고
+            // 표 면제를 뒤에 붙여 리터럴한 Critic이 옳은 문장을 보고할 여지를 글자로 남겼다
+            // (로그 17개에서 발현 0건 - 이론적 경로). 지금은 표 면제를 앞으로, 금지는 쓰기
+            // 문장의 대상 행 술어로 한정하고, 독립 SELECT 읽기 필터를 명시한다.
+            //
+            // [캐시 버전을 올리지 않는 이유] 이 변경은 Critic을 느슨하게만 한다 - Actor 지시와
+            // 출력 계약은 그대로라 옛 산출물이 새 기준에서 결함이 되지 않는다. 인상 규정의
+            // 취지(옛 계약 산출물이 다음 감사에 결함으로 남는 것)에 해당하지 않는다. v12는
+            // Critic 완화가 Actor 지시(CRUD 설명 칸 금지)와 함께 바뀌어 올렸다.
             var systemPrompt = @"You are a principal database architect and critic agent reviewing a generated stored procedure specification in Markdown. Evaluate the accuracy, completeness, and formatting of the document against the original metadata.
 
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Check if the operations and branches of the source code are documented accurately without hallucination, arbitrary assumptions, or guesses.
-   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER that narrows the target rows. A predicate that only appears as a column name in a table, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다`, is NOT described as a filter: report it. However, when a machine-confirmed table carries the predicate verbatim for that specific statement (the `집합 술어` table's 술어 원문 column, or the `DML 범위` table's row for that statement), that IS the filter description - do NOT additionally demand it in prose, and do NOT lower any score because the CRUD description column omits join keys or predicates. That column is instructed not to carry them. Conversely, report any filter the specification claims that the source does not actually have.
+   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER. First, when a machine-confirmed table carries the predicate verbatim for that specific statement (the `집합 술어` table's 술어 원문 column, or the `DML 범위` table's row for that statement), that IS the filter description - do NOT additionally demand it in prose, do NOT report the prose for that predicate, and do NOT lower any score because the CRUD description column omits join keys or predicates (that column is instructed not to carry them). For a write statement (INSERT source, UPDATE, DELETE) whose predicate is NOT carried by such a table, a predicate that only appears as a column name, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다` without saying which rows it narrows, is NOT described as a filter: report it. For a standalone SELECT statement (a `SELECT n` row - cursor source, variable assignment, result set returned to the caller) the predicate narrows the rows that statement reads, so wording like `…인 행만 조회합니다`/`…인 행을 읽습니다` IS a filter description - do not report it; report only when the predicate is absent from both the tables and the prose, or when the prose contradicts the table. Conversely, report any filter the specification claims that the source does not actually have.
    - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').
