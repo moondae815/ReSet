@@ -603,32 +603,9 @@ namespace ReSet.Cli
                     var policyTargetSps = new List<string>();
                     if (cliArgs.PolicyProcedures.Count > 0)
                     {
-                        foreach (var target in cliArgs.PolicyProcedures)
-                        {
-                            string? matchedSp = null;
-                            if (target.Contains('.'))
-                            {
-                                matchedSp = spNames.Find(x => x.Equals(target, StringComparison.OrdinalIgnoreCase));
-                            }
-                            else
-                            {
-                                matchedSp = spNames.Find(x =>
-                                {
-                                    var parts = x.Split('.', 2);
-                                    var nameOnly = parts.Length > 1 ? parts[1] : parts[0];
-                                    return nameOnly.Equals(target, StringComparison.OrdinalIgnoreCase);
-                                });
-                            }
-
-                            if (matchedSp != null)
-                            {
-                                policyTargetSps.Add(matchedSp);
-                            }
-                            else
-                            {
-                                AnsiConsole.MarkupLine($"[yellow]경고: 입력된 SP '{target}'를 DB에서 찾을 수 없어 건너뜁니다.[/]");
-                            }
-                        }
+                        var resolution = TargetProcedureResolver.Resolve(cliArgs.PolicyProcedures, spNames);
+                        if (!ReportUnmatchedTargets(resolution.Unmatched)) return;
+                        policyTargetSps.AddRange(resolution.Matched);
                     }
                     else
                     {
@@ -689,32 +666,9 @@ namespace ReSet.Cli
                 }
                 else
                 {
-                    foreach (var target in cliArgs.TargetProcedures)
-                    {
-                        string? matchedSp = null;
-                        if (target.Contains('.'))
-                        {
-                            matchedSp = spNames.Find(x => x.Equals(target, StringComparison.OrdinalIgnoreCase));
-                        }
-                        else
-                        {
-                            matchedSp = spNames.Find(x =>
-                            {
-                                var parts = x.Split('.', 2);
-                                var nameOnly = parts.Length > 1 ? parts[1] : parts[0];
-                                return nameOnly.Equals(target, StringComparison.OrdinalIgnoreCase);
-                            });
-                        }
-
-                        if (matchedSp != null)
-                        {
-                            targetSps.Add(matchedSp);
-                        }
-                        else
-                        {
-                            AnsiConsole.MarkupLine($"[yellow]경고: 입력된 SP '{target}'를 DB에서 찾을 수 없어 건너뜁니다.[/]");
-                        }
-                    }
+                    var resolution = TargetProcedureResolver.Resolve(cliArgs.TargetProcedures, spNames);
+                    if (!ReportUnmatchedTargets(resolution.Unmatched)) return;
+                    targetSps.AddRange(resolution.Matched);
                 }
 
                 if (targetSps.Count == 0)
@@ -1819,6 +1773,24 @@ namespace ReSet.Cli
             }
 
             return configuredDatabase;
+        }
+
+        /// <summary>
+        /// `--sp`·`--policy`로 지목한 이름 중 DB에 없는 것이 하나라도 있으면 오류로 끝낸다.
+        /// 이름을 찍어 넘긴 것은 명백한 의도이므로 "경고 후 나머지만 진행"은 맞지 않다 -
+        /// 실측(2026-08-23)에서 약칭 하나가 노란 경고 한 줄과 종료 코드 0으로 건너뛰어져
+        /// 재생성이 조용히 빠졌다. 계속 진행해도 되면 true, 종료해야 하면 false.
+        /// </summary>
+        private static bool ReportUnmatchedTargets(IReadOnlyList<string> unmatched)
+        {
+            if (unmatched.Count == 0) return true;
+
+            AnsiConsole.MarkupLine(
+                $"[red]에러: 지목한 SP {unmatched.Count}개를 DB에서 찾을 수 없습니다: " +
+                $"{Markup.Escape(string.Join(", ", unmatched))}[/]");
+            AnsiConsole.MarkupLine("[red]약칭·부분 이름은 맞추지 않습니다. 스키마를 뺀 전체 이름(예: UP_UTIL_SETTLE_PROC_ETC) 또는 스키마.이름으로 다시 지정하십시오.[/]");
+            Environment.ExitCode = 1;
+            return false;
         }
 
         /// <summary>
