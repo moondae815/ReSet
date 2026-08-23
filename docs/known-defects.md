@@ -229,6 +229,19 @@
 
 ### L1 기계 검증기
 
+- **「파라미터와 변수의 컬럼 관계」 표의 연결 컬럼 주장을 어떤 검사도 대조하지 않는다** —
+  그 표는 모델이 쓰는 표라 기계 확정 표가 아니다. 2026-08-23 9회차 축 A 재감사 🟡
+  (`UP_UTIL_SETTLE_EXCEPTION_PROC` `Spec.md:34`): `@pi_strYMD`의 연결 컬럼으로 `TPLCardTxMst.YMD`·
+  `TClientSettleRate4MobileCo.YMD`를 적었는데 전자는 함수 인자로만 쓰이고(393-394행) 후자는
+  `A.AYMD = B.YMD`(416행, 승인일)로 결합된다. DML 범위 표(조인 키 `AYMD, YMD`)·집합 술어 표가
+  실제 술어를 보존하므로 추적성 🟡이지만, 이 표를 믿고 "정산일로 거른다"고 읽을 여지가 있다.
+  **후보 처방** — 파라미터가 비교되는 `테이블.컬럼` 쌍을 추출기(DmlScopeVisitor의 Parameters·
+  Columns 수집 경로)가 이미 알고 있으므로, 표의 각 행(파라미터, 연결 컬럼)을 그 쌍 집합과
+  대조하는 L1 검사 하나로 닫힌다(`/reset-l1-check` 한 회차). 같은 회차에 "표에 실린 함수의
+  동작을 산문이 서술"하는 🟡(`UF_GET_COLLECTYMD:93`)은 v14 재생성이 우연히 지웠다 — 도구
+  변경이 없어 재발 가능하며, 재발하면 참조 함수 표의 함수명 + 동작 술어를 잡는 검사가 후보다
+  (트리거 문구는 코퍼스로 정할 것).
+  근거: `docs/audit-reports/2026-08-23-POQSettlePrco20-axisA.md` 4절·4-3절
 - **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
   `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE 술어 컬럼·
   조인 키·리터럴 목록 등 값 칸은 대조하지만 `UPDATE N`/`DELETE N` 같은 "문장" 칸 자체는
