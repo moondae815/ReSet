@@ -219,6 +219,67 @@ END";
             Assert.False(Has(b, "@pi_strYMD", "TClientSettleRate", "ClientID"));
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 캐시 15 재생성 실측(PROC_ETC 재시도 6/6 소진)이 가르친 두 모양 - 둘 다 정당한 서술이었다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Extract_SelectAssignment_BindsTheWhereColumnsToTheAssignedVariable()
+        {
+            // PROC_ETC:130-135 - 변수 값을 만드는 SELECT의 WHERE 컬럼은 그 변수의 연결 컬럼이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v_intPostChkAmt2 MONEY = 0
+    SELECT @v_intPostChkAmt2 = ISNULL(SUM(CAST(CLSettleAmt AS MONEY)),0)
+    FROM   dbo.TSettleMiss WITH(NOLOCK)
+    WHERE  ClientID = 'X' AND ISNULL(IssueType,0) = 15
+END";
+            var b = ParameterColumnBindingExtractor.Extract(ddl);
+            Assert.True(Has(b, "@v_intPostChkAmt2", "TSettleMiss", "CLSettleAmt"));
+            Assert.True(Has(b, "@v_intPostChkAmt2", "TSettleMiss", "IssueType"));
+        }
+
+        [Fact]
+        public void Extract_VariableFedFromAColumn_PassesItsTargetsToVariablesBoundToThatColumn()
+        {
+            // PROC_ETC:59·66·90 - A.YMD = @pi_strYMD 로 고른 행을 FETCH INTO @v_strYMD 하고
+            // UPDATE TSettleMiss SET YMD = @v_strYMD. 기준일이 TSettleMiss.YMD에 적재된다는 서술은 옳다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8) AS
+BEGIN
+    DECLARE @v_strYMD VARCHAR(8), @v_strClientID VARCHAR(20)
+    DECLARE Cur CURSOR FOR SELECT A.ClientID, A.YMD FROM dbo.TSettleMst A WHERE A.YMD = @pi_strYMD
+    OPEN Cur
+    FETCH NEXT FROM Cur INTO @v_strClientID, @v_strYMD
+    UPDATE dbo.TSettleMiss SET YMD = @v_strYMD WHERE ClientID = @v_strClientID
+    CLOSE Cur
+END";
+            var b = ParameterColumnBindingExtractor.Extract(ddl);
+            Assert.True(Has(b, "@pi_strYMD", "TSettleMiss", "YMD"));
+            // 한 홉만이다 - @v_strClientID는 @pi_strYMD와 컬럼을 공유하지 않는다.
+            Assert.False(Has(b, "@pi_strYMD", "TSettleMiss", "ClientID"));
+        }
+
+        [Fact]
+        public void Extract_OneHopInheritance_DoesNotRescueTheExceptionProcClaim()
+        {
+            // 상속을 넓혀도 9회차 🟡의 두 주장은 여전히 결합이 아니어야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8) AS
+BEGIN
+    UPDATE A SET A.CLCOMM = dbo.UF_X(B.ClientID, B.YMD, @pi_strYMD)
+    FROM   dbo.TSettleMst A JOIN dbo.TPLCardTxMst B ON A.PLTID = B.PLTID
+    WHERE  A.YMD = @pi_strYMD
+    UPDATE A SET A.Flag = 1
+    FROM   dbo.TSettleMst A JOIN dbo.TClientSettleRate4MobileCo B ON A.ClientID = B.ClientID
+    WHERE  A.AYMD = B.YMD AND A.YMD = @pi_strYMD
+END";
+            var b = ParameterColumnBindingExtractor.Extract(ddl);
+            Assert.False(Has(b, "@pi_strYMD", "TPLCardTxMst", "YMD"));
+            Assert.False(Has(b, "@pi_strYMD", "TClientSettleRate4MobileCo", "YMD"));
+        }
+
         [Fact]
         public void Extract_NullOrUnparsable_ReturnsEmpty()
         {

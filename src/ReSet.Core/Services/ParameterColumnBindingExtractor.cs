@@ -35,6 +35,13 @@ namespace ReSet.Core.Services
     /// `FETCH … INTO @v_strYMD, …`는 자리로 대응한다(PROC_ETC:66). 조인 등식은 결합을 **전파**한다 -
     /// 한 문장 안에서 `A.YMD = B.YMD`이고 `A.YMD = @p`이면 `B.YMD`도 `@p`와 결합이다(COMM_UPD:68·76).
     /// 이 셋은 코퍼스 스윕의 거짓 양성 6건(PROC_ETC 4·COMM_UPD 2)이 가르쳐 준 모양이다.
+    /// 캐시 15 재생성 실측(PROC_ETC 재시도 6/6 소진)이 둘을 더 가르쳤다 - (1) 변수 값을 만드는 SELECT의
+    /// WHERE·ON 컬럼도 그 변수의 결합이다(`SELECT @v = SUM(x) FROM T WHERE IssueType = 15`의
+    /// IssueType), (2) <b>컬럼→변수 데이터 흐름 한 홉</b>: 변수 V가 컬럼 C에서 값을 받고(FETCH INTO·
+    /// `SELECT @v = C`) 다른 변수 P가 C와 결합돼 있으면 P는 V의 결합을 물려받는다
+    /// (`A.YMD = @pi_strYMD` → `FETCH INTO @v_strYMD` → `UPDATE TSettleMiss SET YMD = @v_strYMD`이면
+    /// @pi_strYMD ↔ TSettleMiss.YMD). 한 홉만이다 - 전체 닫힘을 취하면 한 객체의 변수 전부가 한 덩어리가
+    /// 되어 검사가 아무것도 기각하지 못한다. EXCEPTION_PROC의 두 주장은 상속 뒤에도 결합이 아니다.
     /// <b>결합으로 치지 않는 유일한 모양은 같은 함수 호출의 인자로만 함께 나오는 것</b>이다 -
     /// 그것이 바로 393행의 오독이고, 이것까지 결합으로 치면 이 재료는 그 결함을 영영 못 잡는다.
     ///
@@ -61,6 +68,7 @@ namespace ReSet.Core.Services
 
                 var visitor = new StatementVisitor();
                 fragment.Accept(visitor);
+                visitor.Finalize();
                 return visitor.Bindings;
             }
             catch (Exception ex)
@@ -75,6 +83,9 @@ namespace ReSet.Core.Services
         private sealed class StatementVisitor : TSqlFragmentVisitor
         {
             private readonly HashSet<(string, string, string)> _seen = new();
+            /// <summary>변수 → 그 변수가 값을 받는 컬럼(FETCH INTO·SELECT @v = 식·SET/DECLARE @v = 식). 한 홉 상속용.</summary>
+            private readonly Dictionary<string, HashSet<(string Table, string Column)>> _feeds =
+                new(StringComparer.OrdinalIgnoreCase);
             /// <summary>커서 이름 → (원천 SELECT의 열 식, 그 SELECT의 별칭 맵). FETCH INTO가 자리로 대응한다.</summary>
             private readonly Dictionary<string, (List<ScalarExpression> Columns, AliasCollector Aliases)> _cursors =
                 new(StringComparer.OrdinalIgnoreCase);
@@ -116,7 +127,10 @@ namespace ReSet.Core.Services
                         cur.Columns[i].Accept(finder);
                         foreach (var col in finder.Columns)
                             foreach (var t in cur.Aliases.Resolve(col))
+                            {
                                 AddBinding(node.IntoVariables[i].Name, t, BindingCollector.ColumnName(col));
+                                AddFeed(node.IntoVariables[i].Name, t, BindingCollector.ColumnName(col));
+                            }
                     }
                 }
                 base.ExplicitVisit(node);
@@ -126,6 +140,44 @@ namespace ReSet.Core.Services
             {
                 var key = (variable.ToUpperInvariant(), table.ToUpperInvariant(), column.ToUpperInvariant());
                 if (_seen.Add(key)) Bindings.Add(new ParameterColumnBinding(variable, table, column));
+            }
+
+            private void AddFeed(string variable, string table, string column)
+            {
+                if (!_feeds.TryGetValue(variable, out var set))
+                    _feeds[variable] = set = new HashSet<(string, string)>(new TableColumnComparer());
+                set.Add((table, column));
+            }
+
+            /// <summary>
+            /// 컬럼→변수 데이터 흐름 한 홉 상속. 변수 V가 컬럼 C에서 값을 받고(_feeds) 다른 변수 P가 C와
+            /// 결합돼 있으면 P는 V의 결합 전부를 물려받는다. 상속은 원래의 결합 목록을 기준으로 한 번만
+            /// 돈다(물려받은 결합으로 다시 물려받지 않는다).
+            /// </summary>
+            public void Finalize()
+            {
+                var original = Bindings.ToList();
+                var byVariable = original.GroupBy(b => b.Variable, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+                foreach (var (v, fed) in _feeds)
+                {
+                    if (!byVariable.TryGetValue(v, out var vBindings)) continue;
+                    foreach (var p in byVariable.Keys)
+                    {
+                        if (p.Equals(v, StringComparison.OrdinalIgnoreCase)) continue;
+                        var sharesFedColumn = byVariable[p].Any(b => fed.Contains((b.Table, b.Column)));
+                        if (!sharesFedColumn) continue;
+                        foreach (var b in vBindings) AddBinding(p, b.Table, b.Column);
+                    }
+                }
+            }
+
+            private sealed class TableColumnComparer : IEqualityComparer<(string Table, string Column)>
+            {
+                public bool Equals((string Table, string Column) x, (string Table, string Column) y) =>
+                    x.Table.Equals(y.Table, StringComparison.OrdinalIgnoreCase) && x.Column.Equals(y.Column, StringComparison.OrdinalIgnoreCase);
+                public int GetHashCode((string Table, string Column) o) =>
+                    HashCode.Combine(o.Table.ToUpperInvariant(), o.Column.ToUpperInvariant());
             }
 
             public override void ExplicitVisit(UpdateStatement node) => Handle(node);
@@ -171,6 +223,7 @@ namespace ReSet.Core.Services
                     foreach (var (t2, c2) in classes.MembersOf((table, column)))
                         AddBinding(variable, t2, c2);
                 }
+                foreach (var (variable, table, column) in bindings.Feeds) AddFeed(variable, table, column);
             }
 
             /// <summary>(테이블, 컬럼) 위의 합집합-찾기. 전파는 한 문장 안에서 닫힌다.</summary>
@@ -270,6 +323,8 @@ namespace ReSet.Core.Services
         {
             private readonly AliasCollector _aliases;
             public List<(string Variable, string Table, string Column)> Found { get; } = new();
+            /// <summary>변수가 값을 받는 컬럼(SELECT @v = 식·SET/DECLARE @v = 식). 한 홉 상속용.</summary>
+            public List<(string Variable, string Table, string Column)> Feeds { get; } = new();
             /// <summary>컬럼 = 컬럼 등식 쌍(테이블 해석 후). 조인 키 전파용.</summary>
             public List<((string, string) Left, (string, string) Right)> ColumnEqualities { get; } = new();
 
@@ -319,9 +374,49 @@ namespace ReSet.Core.Services
                 if (node.Variable != null && node.Expression != null)
                 {
                     foreach (var (t, c) in ColumnsIn(node.Expression))
+                    {
                         Found.Add((node.Variable.Name, t, c));
+                        Feeds.Add((node.Variable.Name, t, c));
+                    }
                 }
                 base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// 변수 대입 SELECT(`SELECT @v = … FROM … WHERE …`)의 WHERE·ON 컬럼은 그 변수의 값을 만드는
+            /// 행을 고르므로 그 변수와 결합이다(PROC_ETC:130-135의 `ISNULL(IssueType,0) = 15`).
+            /// </summary>
+            public override void ExplicitVisit(QuerySpecification node)
+            {
+                var assigned = node.SelectElements.OfType<SelectSetVariable>()
+                    .Select(x => x.Variable?.Name).Where(n => !string.IsNullOrEmpty(n)).ToList();
+                if (assigned.Count > 0)
+                {
+                    var filterColumns = new List<(string, string)>();
+                    if (node.WhereClause?.SearchCondition != null) filterColumns.AddRange(ColumnsIn(node.WhereClause.SearchCondition));
+                    if (node.FromClause != null)
+                    {
+                        var joins = new JoinConditionColumnFinder();
+                        node.FromClause.Accept(joins);
+                        foreach (var cond in joins.Conditions) filterColumns.AddRange(ColumnsIn(cond));
+                    }
+                    foreach (var v in assigned)
+                        foreach (var (t, c) in filterColumns)
+                            Found.Add((v!, t, c));
+                }
+                base.ExplicitVisit(node);
+            }
+
+            private sealed class JoinConditionColumnFinder : TSqlFragmentVisitor
+            {
+                public List<BooleanExpression> Conditions { get; } = new();
+                public override void ExplicitVisit(ScalarSubquery node) { }
+                public override void ExplicitVisit(QueryDerivedTable node) { }
+                public override void ExplicitVisit(QualifiedJoin node)
+                {
+                    if (node.SearchCondition != null) Conditions.Add(node.SearchCondition);
+                    base.ExplicitVisit(node);
+                }
             }
 
             public override void ExplicitVisit(SetVariableStatement node)
@@ -329,7 +424,10 @@ namespace ReSet.Core.Services
                 if (node.Variable != null && node.Expression != null)
                 {
                     foreach (var (t, c) in ColumnsIn(node.Expression))
+                    {
                         Found.Add((node.Variable.Name, t, c));
+                        Feeds.Add((node.Variable.Name, t, c));
+                    }
                 }
                 base.ExplicitVisit(node);
             }
@@ -339,7 +437,10 @@ namespace ReSet.Core.Services
                 if (node.VariableName != null && node.Value != null)
                 {
                     foreach (var (t, c) in ColumnsIn(node.Value))
+                    {
                         Found.Add((node.VariableName.Value, t, c));
+                        Feeds.Add((node.VariableName.Value, t, c));
+                    }
                 }
                 base.ExplicitVisit(node);
             }

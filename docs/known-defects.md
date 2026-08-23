@@ -236,7 +236,13 @@
   `테이블.컬럼` 주장 대조, 테이블이 `ReferencedTables`에 있는 것만). 코퍼스 31개 스윕에서 정확히
   `EXCEPTION_PROC:34`의 두 주장만 잡히고(`TPLCardTxMst.YMD`·`TClientSettleRate4MobileCo.YMD`) 거짓 양성 0 —
   첫 판의 거짓 양성 6건(PROC_ETC 커서 4·COMM_UPD 산술식 1·조인 전파 1)은 결합 정의를 넓혀 없앴다.
-  재생성 실측은 아직 안 했다(L1 오류가 재생성 프롬프트에 실려 모델이 고치는 경로). 같은 항목에
+  **캐시 15 전건 재생성 실측(08-23)** — 이 검사가 `PROC_ETC`의 재시도 6/6 소진에 가담했다. 거짓 양성 둘:
+  변수 값을 만드는 SELECT의 WHERE 컬럼(`@v_intPostChkAmt2` ↔ `TSettleMiss.IssueType`)과 변수를 거친
+  데이터 흐름(`A.YMD = @pi_strYMD` → `FETCH INTO @v_strYMD` → `SET YMD = @v_strYMD`, `@pi_strYMD` ↔
+  `TSettleMiss.YMD`). 둘 다 결합 정의에 넣었다(대입 SELECT의 WHERE·ON 컬럼, 컬럼→변수 한 홉 상속 —
+  전체 닫힘은 검사를 무력화하므로 한 홉). 채택된 명세서(2차 시도 86점)는 수정 전·후 L1을 통과한다.
+  거짓 양성이 재시도 소진으로 번진다는 `reset-l1-check` 경고의 실물이다 — 31개 스윕이 0이어도 모델이
+  새로 쓰는 산문은 스윕에 없던 모양을 낸다. 같은 항목에
   적었던 `UF_GET_COLLECTYMD:93`(표에 실린 함수의 동작 서술)은 v14 재생성이 우연히 지웠고 도구
   변경이 없어 재발 가능하다 — 재발하면 참조 함수 표의 함수명 + 동작 술어를 잡는 검사가 후보다(트리거
   문구는 코퍼스로 정할 것).
