@@ -36,7 +36,7 @@ DDL에서 손으로 다시 뽑지 않는다(AGENTS.md 범주 4의 같은 규칙)
 | 오류·반환 코드 전체 집합과 발생 지점 | **DDL 원문** (`StaticAnalysis`에 없음) |
 | 분기 조건식·필터·조인 | **DDL 원문** — 단, `CASE` 식(`SearchedCase`/`SimpleCase`)의 각 분기(조건·결과)는 `### CASE 분기 (기계 확정 — 수정 금지)` 표가 있으면 그 표가 기준값이다(아래). `IF`·`IIF`·`WHERE`·`JOIN` 조건은 여전히 DDL 원문이 기준값이다 — `CaseBranchExtractor`는 `CASE` 식만 방문한다 |
 | 트랜잭션 경계, `NOCOUNT`, 주석 처리된 블록 | **DDL 원문** — 단 주석은 전수가 아니다. 아래 「주석은 전수가 아니다」 참고 |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — **`INSERT`/`UPDATE`/`DELETE` 문장의 `FROM`과 대상 노드에 한해** DDL 원문으로 다시 뽑지 마라. `AiService`의 `BuildLockHintTableLines` 호출부가 SP 프롬프트 경로에도 배선되므로(위치는 `AiService.cs`에서 `BuildLockHintTableLines`를 grep) SP의 DML 문장도 이 표가 기계 확정한다. **이 셋이 아닌 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 문장 최상위 `WHERE` 하위 질의, CTE 본문 등)의 힌트는 이 표에 없다 — 그 자리는 여전히 DDL 원문이 기준값이다**(아래 산문 참고, 열거는 예시일 뿐 전수가 아니다) |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (아래) — DDL 원문으로 다시 뽑지 마라. **문장 집합은 다섯이다(캐시 11·13부터)**: `INSERT`/`UPDATE`/`DELETE` 문장, FROM이 있는 독립 `SELECT`(`SELECT n` — 커서 원천 질의·변수 대입 SELECT·함수 본문 SELECT), 술어에 하위 질의가 있는 `IF`(`IF n`). 범위 칸은 `최상위`·`파생`·`하위 질의`이고 `하위 질의`는 WHERE뿐 아니라 SELECT 목록·`SET` 절·`VALUES`·HAVING 등 그 문장 안에서 다시 열린 질의 전부다(`LockHintVisitor`의 다섯 `ExplicitVisit`). 2026-08-22까지 이 칸은 "DML 셋의 FROM과 대상 노드만"이라 적혀 있었고 `IF EXISTS` 안·커서 SELECT·최상위 WHERE 하위 질의를 표 밖이라 했다 — **낡은 서술이다.** 9회차(08-23) 단위 넷이 그 자리에 행이 실려 있는 것을 보고 보류했는데 전부 정상이다. 표에 없는 스캔을 보면(실측된 예는 아직 없다) DDL 원문이 기준값이다 |
 
 Spec.md가 `StaticAnalysis`와 어긋나면 파서가 이긴다. Spec.md가 DDL 원문의 의미와
 어긋나면 DDL이 이긴다.
@@ -109,7 +109,7 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 
 | 표 (`### … (기계 확정 — 수정 금지)`) | 보유 | 무엇을 대조하나 |
 |---|---|---|
-| `DML 범위` | 14/14 | 문장별 대상·최상위 술어 컬럼·기준일 파라미터 적용·**조인 키**·**`ORDER BY`**·**`GROUP BY`**(새 열 — 아래 참고) |
+| `DML 범위` | 14/14 | 문장별 대상·최상위 술어 컬럼·기준일 파라미터 적용·**조인 키**·**`ORDER BY`**·**`GROUP BY`**(새 열 — 아래 참고). **`기준일 파라미터 적용` 칸의 규약**(`SpecExpectations.ResolveDateParameter`·`DmlScopeVisitor`): 기준일 파라미터는 `ProcedureParameters` 중 이름에 `YMD`가 든 **첫 번째**이고, 판정은 `INSERT`/`UPDATE`/`DELETE`의 **최상위 WHERE**(식 안에 중첩돼도 셈, 스칼라 하위 질의·`EXISTS` 안은 안 셈)에서만 한다. **`SELECT n` 행은 판정 자체를 하지 않아 항상 `—`**다 — 함수 객체의 SELECT에 `YMD = @pi_strYMD`가 있어도 `—`가 정상이고, `—`를 "기준일을 쓰지 않는다"로 읽지 마라(9회차 보류 7건이 전부 이것이었다). `아니오`는 DML 문장의 최상위 WHERE에 없다는 뜻일 뿐이다 |
 | `집합 술어` | 12/14 | 대상 행을 가르는 리터럴 집합과 **원소 수**·범위(최상위/파생 테이블 X/**조인 ON T** — 2026-08-23 캐시 14부터 JOIN ON 절의 조인 키 등식이 아닌 항도 싣는다. 그 전 산출물에는 ON 절 리터럴이 어떤 표에도 없으므로, v13 이하 명세서에서 ON 절 리터럴 누락을 보면 명세서가 아니라 **도구 세대** 결함이다) |
 | `파생 테이블 정의` | 6/14 | 별칭 뒤에 숨은 컬럼 정의 표현식 |
 | `실행 의미` | (재생성 후 채운다) | 종류(`DB 배치`·`집계 대입`·`@@ROWCOUNT`·`커서 수명`·`식 타입 경로`)별 확정 문장 — 아래 별도 절 |
@@ -136,9 +136,20 @@ A 감사의 🟡 다섯이 재료 부재로 새어 나간 것을 닫은 셋이 `
 `UP_Util_Settle_Summary`·`UP_Util_Settle_Summary_AcqManual`에서 `GROUP BY` 첫 키가 매핑 표의
 설명 칸에서만 언급되다 표에서 통째로 빠진 적이 있다 — 이 칸이 그 결함을 확정 표로 잡는다.
 
-**`실행 의미` 표.** 종류 칸(`DB 배치`·`집계 대입`·`@@ROWCOUNT`·`커서 수명`·`식 타입 경로` —
-`ExecutionSemanticsFacts`의 `*Kind` 상수, **다섯 개다** — 열거가 넷으로 보이면 낡은 것이다)이
-첫 칸이자 행 식별 키의 일부다.
+**`실행 의미` 표.** 종류 칸(`DB 배치`·`집계 대입`·`@@ROWCOUNT`·`커서 수명`·`식 타입 경로`·
+`비집계 대입`·`루프 내 재설정` — `ExecutionSemanticsFacts.AllKinds`, **일곱 개다**(캐시 13부터; 뒤의
+둘은 2026-08-23 ③(b)가 더했다. 열거가 다섯으로 보이면 낡은 것이다)이 첫 칸이자 행 식별 키의 일부다.
+
+**종류마다 적용 범위가 좁다 — 행이 없는 자리를 보류하지 마라.** 추출기는 실측으로 닫은 모양만
+싣고 나머지는 침묵한다(거짓 행보다 없는 행이 낫다는 원칙). 9회차 보류 8건이 전부 이 범위 밖 자리였다.
+- `@@ROWCOUNT` — **직전 형제 문장이 `IF`인 자리**에서 `@@ROWCOUNT`를 읽는 문장만(`RowCountBoundaryExtractor`).
+  `SELECT @v = … ; IF @@ROWCOUNT < 1`처럼 SELECT 직후면 행이 **없는 것이 정상**이다.
+- `집계 대입` — `SELECT @v = AGG(...)`처럼 **최상위 식이 집계 함수 호출**일 때만. `MAX(ID)+1`·
+  `ISNULL(SUM(...),0)`처럼 이항식·스칼라 함수로 감싸이면 행이 없다(`AggregateAssignmentExtractor`).
+- `비집계 대입` — `SELECT @v = 컬럼 FROM …`처럼 **우변이 컬럼 참조 하나**이고 FROM이 있으며, FROM·CTE에
+  집계가 없고 복합 대입(`+=`)이 아닐 때만. `CASE`·`IIF`·산술식 우변은 행이 없다(`NonAggregateAssignmentExtractor`).
+- `루프 내 재설정` — `WHILE` 본문 안의 `SET @v = 상수` 중 실측으로 닫은 모양만(`LoopVariableResetExtractor`).
+이 범위 밖 자리의 사실은 산문이 기준값이고, 산문이 DDL과 맞으면 결함이 아니다.
 `MechanicalValidator.CheckExecutionSemantics`는 종류·라인·대상·확정 사실 **네 칸 모두**가
 표 어딘가의 셀과 일치해야 통과시킨다. `DB 배치`만 라인이 `-`, 대상이 `(객체 전체)`인
 고정값이다 — 줄에 매이지 않는 사실이라서다. **표가 있어도 다섯 종류 전부가 행을 낸 것은
@@ -240,10 +251,12 @@ DDL과 다르게 적었다면 그것은 이 표의 계약 위반이 아니라 �
 문장당 한 칸으로 뭉갠 산문은 "5개 테이블의 조회 또는 조인에 사용됩니다"로 그 차이를
 지워 버렸다.
 
-**아래 ①·②는 `InsertSpecification`/`UpdateSpecification`/`DeleteSpecification` 노드에만
-적용된다** — `LockHintVisitor`가 방문을 오버라이드한 노드가 이 셋뿐이라서다(위치는
-`DmlScopeExtractor.cs`에서 `LockHintVisitor`의 세 `Visit` 오버로드를 grep). 커서 선언 안의
-독립 `SELECT`처럼 이 세 노드 어디에도 속하지 않는 스캔은 ①·②의 적용 대상 자체가 아니고,
+**아래 ①·②는 `LockHintVisitor`가 방문하는 다섯 노드에 적용된다** — `InsertSpecification`/
+`UpdateSpecification`/`DeleteSpecification`, FROM이 있는 `SelectStatement`(`SELECT n` — 커서 원천
+질의 포함), 술어에 하위 질의가 있는 `IfStatement`(`IF n`)(위치는 `DmlScopeExtractor.cs`에서
+`LockHintVisitor`의 `ExplicitVisit` 오버로드 다섯을 grep). 이 문단은 2026-08-22까지 "세 노드뿐"이라
+적혀 있었고 커서 SELECT를 표 밖이라 했다 — 낡은 서술이었다. 이 다섯 어디에도 속하지 않는 스캔은
+①·②의 적용 대상 자체가 아니고,
 표에 한 행도 남기지 않는다 — 아래 "이 표가 담지 않는 것" 절을 먼저 읽어라.
 
 행이 되는 자리는 둘이다(`DmlScopeExtractor.LockHintVisitor`) — ①그 문장의 `FROM`에 걸린
@@ -348,7 +361,7 @@ ControlFlowSummary   11/17   ThreePartObjectReferences 3/17   ReferencedFunction
 | **상수·계수·반올림 자릿수·부호** | **DDL 원문** — 단, `CAST(... AS INT)`의 반올림/절사 방향이 `### 실행 의미 (기계 확정 — 수정 금지)` 표(`식 타입 경로` 종류)에 행으로 실렸으면 그 행이 기준값이다(위 SP 단위 절 참고) — SP·함수 양쪽에 같은 표가 실린다. **`CASE 분기`와 달리 표가 있어도 개별 `CAST`의 행이 없을 수 있다**(위 SP 단위 절의 「`식 타입 경로` 종류가 확정하는 것과 침묵하는 것」의 세 갈래 참고) — **갈래 1(잎 타입 미상)·2(float/real 혼입)**는 행이 없으면 DDL 원문으로도 방향을 확정할 수 없으니 DDL을 근거로 다시 판정하지 말고 산문이 방향을 단정했는지만 본다(단정했으면 결함). **갈래 3(잎이 int 계열끼리만)**은 정수 나눗셈 절사가 DDL 원문만으로 알 수 있는 일반 산술 규칙이라 이 예외에 해당하지 않는다 — 행이 없어도 DDL 원문이 여전히 기준값이다. 그 밖의 상수·계수·자릿수·부호는 여전히 DDL 원문이 기준값이다 |
 | NULL 입력 처리와 `ISNULL`/`COALESCE` 기본값 | **DDL 원문** |
 | 결정성 관련 선언(`SCHEMABINDING`, 기타 `WITH` 옵션) | `### 객체 선언 (기계 확정 — 수정 금지)` 표 (아래) — DDL 원문으로 다시 뽑지 마라 |
-| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼가 함수 DML 문장에도 같은 표를 붙인다) — 같은 범위 한정이 적용된다: `INSERT`/`UPDATE`/`DELETE`의 `FROM`과 대상 노드만 담고, 그 밖의 스캔(제어 흐름 술어 `IF EXISTS(...)` 안의 하위 질의 — 실측 최빈값, 커서 선언·독립 `SELECT`, 최상위 `WHERE` 하위 질의, CTE 본문 등)은 DDL 원문이 기준값이다 |
+| `NOLOCK` 등 잠금 힌트 | `### 잠금 힌트 (기계 확정 — 수정 금지)` 표 (위 SP 단위 표와 같은 헬퍼) — 문장 집합은 SP와 같은 다섯(DML 셋 · FROM 있는 독립 `SELECT n` · 하위 질의 있는 `IF n`)이다. 함수 본문 SELECT가 `SELECT n`으로 실리므로 함수에서 이 표는 이제 드물지 않다(`UF_GET_WORKDAY2`의 `IF 1` 행, `UIF_SettleYMD`의 `SELECT n` 행이 실물). 표에 없는 스캔(실측 예 없음)만 DDL 원문이 기준값이다 |
 
 **`객체 선언` 표는 함수에만 실린다.** 프로시저에는 `WITH` 옵션 자체가 문법에 없으므로
 추출기가 항상 표를 내지 않는다 — **프로시저 명세서에 이 표가 없는 것은 결함이 아니다.**
@@ -425,8 +438,12 @@ ControlFlowSummary   11/17   ThreePartObjectReferences 3/17   ReferencedFunction
 
 #### 3-2-1. 표의 사각지대 — 함수 객체 전용
 
-`ReferencedFunctionVisitor`의 순회 진입점은 `INSERT`·`UPDATE`·`DELETE` 문장뿐이라,
-순수 `SELECT`·`SET @x = dbo.F(…)`·`IF dbo.F(…) = 1` 안의 호출은 표에 실리지 않는다.
+`ReferencedFunctionVisitor`의 순회 진입점은 **다섯**이다(캐시 13부터) — `INSERT`·`UPDATE`·`DELETE`
+문장, FROM이 있는 독립 `SELECT`(`SELECT n (라인 L)`), `IF` 술어(`IF n (라인 L)`). 2026-08-22까지는
+DML 셋뿐이었고 그 경계가 🔴을 냈다(`UF_GET_COLLECTYMD`가 `UF_GET_WORKDAY2`를 부르는 두 자리가
+변수 대입 SELECT의 CASE 식 안이라 0건 → 표가 없어 링크도 없어 모델이 동작을 산문으로 요약 →
+간격 0 특례 누락). 지금 표 밖에 남는 자리는 `SET @x = dbo.F(…)`·`RETURN dbo.F(…)`·**FROM 없는**
+`SELECT @x = dbo.F(…)` 안의 호출뿐이다.
 
 **그런데 SP에서는 이 사각지대가 비어 있다.** 파서를 직접 돌려 확인했다 — 정산 SP 6개의
 함수 호출 **75건이 모두 표에 실린다**(EXCEPTION_PROC 29/29 · COMM_UPD 23/23 ·
@@ -434,10 +451,14 @@ EXPECT_PROC 9/9 · INS_EXTRA4PLCARD 6/6 · INS_EXTRA 5/5 · SETTLE_INS 3/3).
 `INSERT INTO … SELECT`가 AST에서는 **한 문장**이라 SELECT 절 안의 호출도 INSERT로 잡히고,
 정산 SP는 전부 그 모양이기 때문이다. **SP 단위에서 사각지대를 뒤지지 마라 — 없다.**
 
-**사각지대는 함수 객체에만 있다.** 함수 본문은 `RETURN`과 `SELECT`로 이뤄져 DML이 거의
-없다. 실측: 다른 함수를 부르는 함수 2개가 **0/2·0/2**로 한 건도 실리지 않는다
-(`UIF_SettleYMD`는 `UF_GET_WORKDAY2`를 라인 61·86의 `SELECT`에서 부르는데, 유일한 DML인
-라인 160 `INSERT INTO @tblOutYMD … VALUES(@po_strSettleYMD)`에는 함수 호출이 없다).
+**사각지대는 함수 객체에만 있고, 그마저 좁아졌다.** 함수 본문은 `RETURN`과 `SELECT`로 이뤄져
+DML이 거의 없다. 2026-08-22까지의 실측은 다른 함수를 부르는 함수 2개가 **0/2·0/2**였다
+(`UIF_SettleYMD`는 `UF_GET_WORKDAY2`를 라인 61·86의 `SELECT`에서 부르는데 유일한 DML인 라인 160
+`INSERT … VALUES`에는 호출이 없었다). **9회차(08-23, 캐시 13 재생성본)는 둘 다 2/2다** — 독립
+SELECT 안 호출이 표에 실리면서 `SELECT 1 (라인 61)`·`SELECT 1 (라인 86)`, `SELECT 1 (라인 53·78)`로
+나타났다. 따라서 "함수 객체는 표가 0/4"라는 실측은 더 이상 사실이 아니다 — `Dependencies`에
+함수가 있는데 표가 없으면 그 호출이 `SET`·`RETURN`·FROM 없는 `SELECT` 안에 있다는 뜻이고,
+그때만 이 절이 돈다.
 
 표가 없으면 **서술 금지도 걸리지 않는다.** 금지는 "이 표에 실린 함수"를 대상으로 하므로,
 그 함수는 명세서가 산문으로 무엇이든 적을 수 있고 받쳐 주는 기준값이 없다. 폐지된 산문
@@ -492,6 +513,8 @@ EXPECT_PROC 9/9 · INS_EXTRA4PLCARD 6/6 · INS_EXTRA 5/5 · SETTLE_INS 3/3).
 | 함수는 호출 지점만 보고 본문을 안 본다 | 축 A가 SP만 보던 시절, 부가세율·반올림·정산일 함수의 명세서를 아무도 대조하지 않았다. 함수 하나의 결함은 그 함수를 부르는 SP 전부의 금액에 동시에 번진다 |
 | 함수 단위에 SP 대조 표를 들이댄다 | 함수에는 쓰기 계열(`InsertTables`·`Ast*Mappings`)이 0/17이라 빈 칸만 늘고, 정작 반환식은 표에 없다 — 3-1절 표를 쓴다 |
 | **SP 명세서가 서술한 함수 동작을 아무도 대조하지 않는다** | 함수 단위는 호출부를, SP 단위는 함수 본문을 안 읽는다. 폐지된 「UDF 활용 규칙」 표에서 실측 10행 중 8행 결함·🔴 5건이 나왔고, 그 감사 🔴 7건 중 5건이 이 표 하나였다. `CASE` 분기·집계 대입 기본값은 함수 자신의 기계 확정 표(있으면)로 대조할 수 있게 됐지만(3-2-1 예외), **`IIF`·호출자 책임·도달 불가 분기·서술 불균형은 여전히 같은 조건**이다 |
-| 함수 명세서에 참조 함수 표가 없으니 함수를 안 부른다고 본다 | 순회 진입점이 `INSERT`·`UPDATE`·`DELETE`뿐이라 함수 본문의 호출은 실리지 않는다. 실측 0/4다 — `Dependencies`를 봐야 안다. 반대로 SP는 75/75가 실리므로 표가 없으면 정말 안 부르는 것이다 |
+| 함수 명세서에 참조 함수 표가 없으니 함수를 안 부른다고 본다 | 캐시 13부터 순회 진입점이 다섯(DML 셋 + FROM 있는 독립 SELECT + IF 술어)이라 함수 본문의 SELECT 안 호출도 실린다(9회차 실측 2/2·2/2). 그래도 `SET`·`RETURN`·FROM 없는 SELECT 안 호출은 표 밖이므로 **`Dependencies`를 봐야 안다.** SP는 75/75가 실리므로 표가 없으면 정말 안 부르는 것이다 |
+| 실행 의미 표에 `@@ROWCOUNT`·집계/비집계 대입 행이 없다고 보류한다 | 종류마다 적용 범위가 좁다(위 「실행 의미」 절 목록). SELECT 직후의 `IF @@ROWCOUNT`, `MAX(ID)+1`, `CASE` 우변 대입은 행이 없는 것이 정상이다 — 9회차 보류 8건이 전부 이것이었다 |
+| DML 범위 표의 `SELECT n` 행이 기준일 칸 `—`라고 보류한다 | `SELECT n` 행은 그 칸을 판정하지 않는다 — 9회차 보류 7건 |
 | 폐지된 산문 요약 표를 찾아 대조하려 든다 | 동작 서술은 이제 **금지**다. 서술의 정확성을 찾으면 전부 정합으로 나온다. 볼 것은 기계 확정 표의 충실성과 금지의 준수이고, 산문 절이 남아 있다면 그 자체가 결함이다 |
 | 단위가 "런타임 동작에 달렸다"고 보류한 것을 그대로 둔다 | 그 보류는 영원히 안 닫힌다. 자립 실행 쿼리와 결과별 등급을 함께 적게 하면 한 번 돌려 끝난다 — 실측에서 쿼리 하나가 🟡 두 건을 🔴로 확정했다 |
