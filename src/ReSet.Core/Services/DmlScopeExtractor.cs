@@ -253,6 +253,19 @@ namespace ReSet.Core.Services
     /// 시점에, InsertSource의 종류(VALUES/SELECT)와 무관하게 정확히 한 번만 늘린다 -
     /// DmlScopeVisitor가 VALUES 원천의 INSERT에도 사실을 하나 내는 것과 대칭이다.
     /// </param>
+    /// <param name="Scope">
+    /// 이 항이 놓인 자리. `최상위`(문장 자신의 WHERE) · `파생 테이블 X`(그 파생 테이블의
+    /// WHERE) · `조인 ON T`(테이블/별칭 T를 들여오는 JOIN의 ON 절) ·
+    /// `파생 테이블 X · 조인 ON T`(파생 테이블 X 안의 JOIN). 외부 조인이면 `LEFT OUTER 조인 ON T`
+    /// 처럼 종류를 앞에 둔다.
+    ///
+    /// [조인 ON - 2026-08-23 9회차 축 A 재감사 🟠, 회귀] ON 절의 조인 키 등식이 아닌 항은
+    /// 대상 행 집합을 좁히는데 어떤 기계 확정 표도 싣지 않았다 - 이 표는 WHERE만, DML 범위
+    /// 표의 조인 키 칸은 컬럼 이름만. 설명 칸 산문이 품고 있던 `PG.ExtraType IN (2,3)`이
+    /// 설명 칸 술어 금지(캐시 12)로 자리를 잃자 명세서에서 통째로 사라졌다. 조인 키 등식
+    /// (컬럼 대 컬럼 `=`)은 여기 싣지 않는다 - SetPredicateVisitor.CollectJoinOnTerms 문서.
+    /// L1(CheckSetPredicates)은 이 칸을 행 매칭 키에 넣으므로 모델은 값을 그대로 옮겨야 한다.
+    /// </param>
     /// <param name="PredicateText">
     /// 이 사실을 낸 술어 항의 원문을 한 줄로 접어 담는다
     /// (`A.PGNAME IN ('KFTC', 'YELOPAY')`).
@@ -1834,6 +1847,7 @@ namespace ReSet.Core.Services
                     CollectTopLevel("INSERT", spec.WhereClause, ordinal);
                 }
                 CollectDerivedTables("INSERT", node, ordinal);
+                CollectJoinOnTerms("INSERT", node, ordinal);
             }
 
             /// <summary>
@@ -1892,6 +1906,7 @@ namespace ReSet.Core.Services
                     }
                     // 파생 훑기는 문장당 한 번(Visit(InsertSpecification)의 같은 날짜 주석).
                     CollectDerivedTables("SELECT", node, ordinal);
+                    CollectJoinOnTerms("SELECT", node, ordinal);
                 }
 
                 base.ExplicitVisit(node);
@@ -1920,6 +1935,101 @@ namespace ReSet.Core.Services
             {
                 CollectTopLevel(operation, where, ordinal);
                 CollectDerivedTables(operation, statement, ordinal);
+                CollectJoinOnTerms(operation, statement, ordinal);
+            }
+
+            /// <summary>
+            /// 문장 안 JOIN의 ON 절에서 <b>조인 키 등식이 아닌</b> 항을 사실로 옮긴다.
+            ///
+            /// [왜 - 2026-08-23 9회차 축 A 재감사 🟠, 회귀] `INS_EXTRA4PLCARD`의 다섯 문장이
+            /// 전부 `INNER JOIN TPGProperty PG ON A.PGName = PG.PGName AND PG.ExtraType IN (2,3)`
+            /// 으로 ExtraType 2·3인 PG의 행만 대상으로 하는데, v13 명세서 어디에도 그
+            /// 리터럴이 없었다. 08-22까지는 CRUD 설명 칸 산문이 그 사실을 품고 있었고,
+            /// 설명 칸 술어 금지(캐시 12)가 그 자리를 없애자 받아 줄 표가 없었다 - 이
+            /// 표는 WHERE만 훑었고, DML 범위 표의 조인 키 칸은 컬럼 <b>이름</b>만 실었다.
+            /// "틀릴 자리를 없앤다"는 처방은 그 자리가 유일하게 품던 사실을 먼저 표로
+            /// 올려야 안전하다 - 그 반례가 이 자리다.
+            ///
+            /// [조인 키 등식은 싣지 않는다] 컬럼 대 컬럼 `=`는 DML 범위 표의 조인 키 칸이
+            /// 이미 소유한다(DmlScopeVisitor의 JoinKeys). 여기 또 실으면 같은 사실이 두
+            /// 표에 갈려 대조 부담만 는다. 등식이 아닌 컬럼 대 컬럼(`A.YMD >= B.FromYMD`)은
+            /// 조인 키가 아니므로 원문 행으로 남긴다 - WHERE의 분해 불가 항과 같은 취급이다.
+            ///
+            /// [범위 표기] 최상위 FROM의 조인은 `조인 ON {별칭}`, 파생 테이블 X 안의 조인은
+            /// `파생 테이블 X · 조인 ON {별칭}`. 외부 조인은 `LEFT OUTER 조인 ON {별칭}`처럼
+            /// 종류를 앞에 둔다 - 외부 조인의 ON 리터럴은 대상 행을 좁히지 않고 어느
+            /// 행이 짝이 되는지만 정하므로, 모델이 그것을 필터로 서술하면 틀린다.
+            ///
+            /// [경계] 스칼라 하위 질의(`EXISTS(...)`·`IN (SELECT ...)`) 안의 JOIN은 이 표의
+            /// 경계 밖이다 - TopLevelPredicateCollector·DerivedTableCollector와 같은 경계.
+            /// 별칭 없는 파생 테이블 안의 조인도 가리킬 이름이 없으므로 건너뛴다.
+            /// </summary>
+            private void CollectJoinOnTerms(string operation, TSqlFragment statement, int ordinal)
+            {
+                var joins = new JoinOnCollector();
+                statement.Accept(joins);
+
+                foreach (var (scope, searchCondition) in joins.Joins)
+                {
+                    CollectFrom(operation, searchCondition, ordinal, scope, skipJoinKeyEqualities: true);
+                }
+            }
+
+            /// <summary>
+            /// 문장 안의 QualifiedJoin을 찾아 범위 표기와 ON 검색 조건을 낸다. 파생 테이블
+            /// 안쪽이면 그 별칭을 범위에 앞세운다.
+            /// </summary>
+            private sealed class JoinOnCollector : TSqlFragmentVisitor
+            {
+                private readonly Stack<string> _derivedAliases = new();
+
+                public List<(string Scope, BooleanExpression? On)> Joins { get; } = new();
+
+                public override void ExplicitVisit(ScalarSubquery node) { }
+
+                public override void ExplicitVisit(QueryDerivedTable node)
+                {
+                    var alias = node.Alias?.Value;
+                    if (string.IsNullOrWhiteSpace(alias)) return; // 가리킬 이름이 없다.
+
+                    _derivedAliases.Push(alias!);
+                    base.ExplicitVisit(node);
+                    _derivedAliases.Pop();
+                }
+
+                public override void ExplicitVisit(QualifiedJoin node)
+                {
+                    var joinedName = NameOf(node.SecondTableReference);
+                    if (joinedName != null && node.SearchCondition != null)
+                    {
+                        var kind = node.QualifiedJoinType switch
+                        {
+                            QualifiedJoinType.LeftOuter => "LEFT OUTER ",
+                            QualifiedJoinType.RightOuter => "RIGHT OUTER ",
+                            QualifiedJoinType.FullOuter => "FULL OUTER ",
+                            _ => string.Empty
+                        };
+                        var scope = $"{kind}조인 ON {joinedName}";
+                        if (_derivedAliases.Count > 0)
+                        {
+                            scope = $"파생 테이블 {_derivedAliases.Peek()} · {scope}";
+                        }
+                        Joins.Add((scope, node.SearchCondition));
+                    }
+
+                    base.ExplicitVisit(node);
+                }
+
+                /// <summary>오른쪽 테이블 참조의 이름 - 별칭이 있으면 별칭, 없으면 기본 식별자.</summary>
+                private static string? NameOf(TableReference reference)
+                {
+                    return reference switch
+                    {
+                        TableReferenceWithAlias { Alias.Value: { Length: > 0 } alias } => alias,
+                        NamedTableReference named => named.SchemaObject?.BaseIdentifier?.Value,
+                        _ => null
+                    };
+                }
             }
 
             private void CollectTopLevel(string operation, WhereClause? where, int ordinal)
@@ -1983,7 +2093,8 @@ namespace ReSet.Core.Services
             /// 훑어야 하고, 이 작업으로 좁아져서는 안 된다.
             /// </summary>
             private void CollectFrom(
-                string operation, BooleanExpression? searchCondition, int ordinal, string scope)
+                string operation, BooleanExpression? searchCondition, int ordinal, string scope,
+                bool skipJoinKeyEqualities = false)
             {
                 if (searchCondition == null) return;
 
@@ -1992,11 +2103,35 @@ namespace ReSet.Core.Services
 
                 foreach (var (column, op, literals, term) in top.SetPredicates)
                 {
+                    // ON 절의 조인 키 등식은 DML 범위 표의 조인 키 칸이 소유한다
+                    // (CollectJoinOnTerms 문서). 등식이 아닌 컬럼 대 컬럼은 남긴다.
+                    if (skipJoinKeyEqualities && IsColumnEqualityJoinKey(term)) continue;
+
                     Facts.Add(new SetPredicateFact(
                         operation, term.StartLine, column,
                         op == "NOT IN", literals, ordinal, op, scope,
                         CollapseWhitespace(TextOf(term))));
                 }
+            }
+
+            /// <summary>
+            /// `A.K = B.K`처럼 양변이 모두 컬럼 참조인 등식인가. 괄호는 벗긴다.
+            /// 등식이 아닌 비교(`>=`)나 한쪽이 리터럴·변수·식이면 거짓이다.
+            /// </summary>
+            private static bool IsColumnEqualityJoinKey(TSqlFragment term)
+            {
+                var node = term;
+                while (node is BooleanParenthesisExpression paren && paren.Expression != null)
+                {
+                    node = paren.Expression;
+                }
+
+                return node is BooleanComparisonExpression
+                {
+                    ComparisonType: BooleanComparisonType.Equals,
+                    FirstExpression: ColumnReferenceExpression,
+                    SecondExpression: ColumnReferenceExpression
+                };
             }
         }
 

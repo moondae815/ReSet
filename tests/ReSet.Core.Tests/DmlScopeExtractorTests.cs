@@ -3060,8 +3060,213 @@ END";
             Assert.Equal("파생 테이블 X", facts[1].Scope);
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // JOIN ON 절의 리터럴 술어 - 2026-08-23 9회차 축 A 재감사 🟠(회귀)
+        //
+        // INS_EXTRA4PLCARD의 다섯 문장(21·37·167·190·206행)이 전부
+        // `INNER JOIN TPGProperty PG ON A.PGName = PG.PGName AND PG.ExtraType IN (2,3)`로
+        // ExtraType 2·3인 PG의 행만 대상으로 하는데, v13 명세서 어디에도 그 리터럴이
+        // 없었다. 08-22까지는 설명 칸 산문이 그 사실을 품고 있었고, 설명 칸 술어 금지
+        // (v12)가 그 자리를 없애자 받아 줄 표가 없었다 - 이 표는 WHERE만, DML 범위 표의
+        // 조인 키 칸은 컬럼 **이름**만 실었다. 그래서 ON 절의 항도 이 표가 싣는다.
+        //
+        // 조인 키 등식(컬럼 대 컬럼)은 싣지 않는다 - DML 범위 표의 조인 키 칸이 그
+        // 사실을 이미 소유하고, 여기 실으면 같은 사실이 두 표에 갈려 대조 부담만 는다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnLiteralTerm_ShouldBeCapturedWithJoinScope()
+        {
+            // INS_EXTRA4PLCARD:36-37 실물 모양.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DELETE A FROM TSettleMst A
+    INNER JOIN TPGProperty AS PG ON A.PGName = PG.PGName AND PG.ExtraType IN (2,3)
+    WHERE  A.ProcYMD = @pi_strYMD
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var joinFact = Assert.Single(facts, f => f.Scope.StartsWith("조인 ON", StringComparison.Ordinal));
+            Assert.Equal("조인 ON PG", joinFact.Scope);
+            Assert.Equal("DELETE", joinFact.Operation);
+            Assert.Equal(1, joinFact.StatementOrdinal);
+            Assert.Equal("PG.ExtraType", joinFact.Column);
+            Assert.Equal("IN", joinFact.Operator);
+            Assert.Equal(new[] { "2", "3" }, joinFact.Literals);
+            Assert.Equal("PG.ExtraType IN (2,3)", joinFact.PredicateText);
+            Assert.Equal(5, joinFact.Line);
+
+            // 조인 키 등식은 행이 되지 않는다.
+            Assert.DoesNotContain(facts, f => f.PredicateText.Contains("A.PGName = PG.PGName", StringComparison.Ordinal));
+            // 최상위 WHERE 항은 그대로 있다.
+            Assert.Contains(facts, f => f.Scope == "최상위" && f.PredicateText == "A.ProcYMD = @pi_strYMD");
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnInsideDerivedTable_ShouldCarryBothScopes()
+        {
+            // INS_EXTRA4PLCARD:167 실물 모양 - INSERT 원천의 파생 테이블 X 안의 JOIN.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TOut (PLTID)
+    SELECT X.PLTID
+    FROM (SELECT A.PLTID
+          FROM   TSettleMst A WITH(NOLOCK)
+          JOIN   TPGProperty P WITH(NOLOCK) ON A.PGName = P.PGName AND P.ExtraType IN (2,3)
+          WHERE  A.YMD = @pi_strYMD) X
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var joinFact = Assert.Single(facts, f => f.Scope.Contains("조인 ON", StringComparison.Ordinal));
+            Assert.Equal("파생 테이블 X · 조인 ON P", joinFact.Scope);
+            Assert.Equal("INSERT", joinFact.Operation);
+            Assert.Equal("P.ExtraType", joinFact.Column);
+            Assert.Equal(new[] { "2", "3" }, joinFact.Literals);
+            Assert.Contains(facts, f => f.Scope == "파생 테이블 X" && f.PredicateText == "A.YMD = @pi_strYMD");
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnWithOnlyColumnEqualities_ShouldProduceNoJoinRow()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Amt = B.Amt
+    FROM   dbo.TA A
+    INNER JOIN dbo.TB B ON A.K1 = B.K1 AND A.K2 = B.K2
+    WHERE  A.UseState = 1
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.DoesNotContain(facts, f => f.Scope.Contains("조인 ON", StringComparison.Ordinal));
+            var only = Assert.Single(facts);
+            Assert.Equal("최상위", only.Scope);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnNonEqualityAgainstColumn_ShouldStillBeRowBecauseItIsNotAJoinKey()
+        {
+            // 컬럼 대 컬럼이라도 등식이 아니면 조인 키가 아니다 - DML 범위 표의 조인 키 칸이
+            // 싣지 않으므로 이 표가 원문 행으로 보존한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Amt = B.Amt
+    FROM   dbo.TA A
+    INNER JOIN dbo.TB B ON A.K1 = B.K1 AND A.YMD >= B.FromYMD
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var joinFact = Assert.Single(facts);
+            Assert.Equal("조인 ON B", joinFact.Scope);
+            Assert.Equal("—", joinFact.Column);
+            Assert.Equal("A.YMD >= B.FromYMD", joinFact.PredicateText);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_OuterJoinOnLiteral_ShouldNameTheJoinKindInScope()
+        {
+            // 외부 조인의 ON 리터럴은 대상 행을 좁히지 않고 어느 행이 짝이 되는지만 정한다 -
+            // 범위 칸에 조인 종류를 남겨 모델이 필터로 잘못 서술하지 않게 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Amt = ISNULL(Y.Amt, 0)
+    FROM   dbo.TA A
+    LEFT OUTER JOIN dbo.TPGProperty Y ON A.PGName = Y.PGName AND Y.CommMethod = 0
+END";
+
+            var joinFact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            Assert.Equal("LEFT OUTER 조인 ON Y", joinFact.Scope);
+            Assert.Equal("Y.CommMethod", joinFact.Column);
+            Assert.Equal(new[] { "0" }, joinFact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinWithoutAlias_ShouldUseTheTableName()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DELETE A FROM TSettleMst A
+    INNER JOIN dbo.TPGProperty ON A.PGName = TPGProperty.PGName AND TPGProperty.ExtraType IN (2,3)
+END";
+
+            var joinFact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            Assert.Equal("조인 ON TPGProperty", joinFact.Scope);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnInsideScalarSubquery_ShouldNotLeak()
+        {
+            // 하위 질의 안의 JOIN은 이 표의 경계 밖이다(TopLevelPredicateCollector·
+            // DerivedTableCollector와 같은 경계). EXISTS 항 자체는 최상위 원문 행으로 남는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Flag = 1
+    FROM   dbo.TA A
+    WHERE  EXISTS (SELECT 1 FROM dbo.TB B INNER JOIN dbo.TC C ON B.K = C.K AND C.F IN (1,2) WHERE B.K = A.K)
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.DoesNotContain(facts, f => f.Scope.Contains("조인 ON", StringComparison.Ordinal));
+            var only = Assert.Single(facts);
+            Assert.Equal("최상위", only.Scope);
+            // EXISTS 항의 원문 표기(`(SELECT 1 …`로 시작)는 기존 TextOf의 동작이라 여기서
+            // 고정하지 않는다 - 하위 질의 안의 `C.F IN (1,2)`가 행으로 새지 않았다는 것만 본다.
+            Assert.Contains("SELECT 1 FROM dbo.TB B", only.PredicateText, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_StandaloneSelectJoinOnLiteral_ShouldBeCollectedUnderSelect()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = COUNT(*)
+    FROM   dbo.TA A
+    INNER JOIN dbo.TB B ON A.K = B.K AND B.State = 'Y'
+END";
+
+            var joinFact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+            Assert.Equal("SELECT", joinFact.Operation);
+            Assert.Equal(1, joinFact.StatementOrdinal);
+            Assert.Equal("조인 ON B", joinFact.Scope);
+            Assert.Equal(new[] { "'Y'" }, joinFact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_JoinOnRows_ShouldFollowTopLevelAndDerivedRows()
+        {
+            // 문장 안 순서: 최상위 → 파생 테이블 → 조인 ON. 앞의 둘은 기존 순서 그대로다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE A SET A.Amt = X.Amt
+    FROM   dbo.TA A
+    INNER JOIN (SELECT K, Amt FROM dbo.TB WHERE UseState = 1) X ON A.K = X.K AND X.Amt > 0
+    WHERE  A.YMD = '20250101'
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(3, facts.Count);
+            Assert.Equal("최상위", facts[0].Scope);
+            Assert.Equal("파생 테이블 X", facts[1].Scope);
+            Assert.Equal("조인 ON X", facts[2].Scope);
+        }
+
         [SkippableFact]
-        public void ExtractSetPredicates_OverTheCorpus_ShouldBe578FactsWithNoDuplicates()
+        public void ExtractSetPredicates_OverTheCorpus_ShouldBe583FactsWithNoDuplicates()
         {
             var root = UncoveredCorpusRoot();
             Skip.If(root == null, CorpusSkip.Reason);
@@ -3083,8 +3288,16 @@ END";
             // 2026-08-23 실측(파생 훑기를 문장당 한 번으로 올리기 전·후 동일): 사실 578 ·
             // 파생 86 · 중복 0. 수정이 코퍼스 출력을 바꾸지 않았다는 증거이자, 다음 변경이
             // 이 수치를 흔들면 여기서 드러나게 하는 앵커다.
-            Assert.Equal(578, total);
-            Assert.Equal(86, derived);
+            //
+            // [578 → 583 · 비최상위 86 → 91 - 2026-08-23 JOIN ON 절 수집] 9회차 축 A
+            // 재감사 🟠(회귀)로 ON 절의 조인 키 등식이 아닌 항을 싣게 됐다. 코퍼스 전수
+            // 열거 결과 더해진 행은 정확히 다섯이다 - INS_EXTRA4PLCARD의 `PG.ExtraType IN
+            // (2,3)` 넷(37·167·190·206행)과 EXPECT_PROC:210의 `ABS(IIF(...)) = ABS(E.Amt)`
+            // (등식이지만 양변이 컬럼 참조가 아니라 식이라 조인 키가 아니다 - 원문 행).
+            // 다른 객체의 ON 절은 전부 컬럼 등식이라 행이 늘지 않았다. `derived`는
+            // "최상위가 아닌 범위"를 세므로 조인 ON 행도 여기 든다.
+            Assert.Equal(583, total);
+            Assert.Equal(91, derived);
             Assert.Equal(0, duplicates);
         }
     }

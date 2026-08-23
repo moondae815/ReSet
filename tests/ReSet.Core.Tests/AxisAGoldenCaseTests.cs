@@ -312,9 +312,21 @@ namespace ReSet.Core.Tests
         //   (47·60·73·88·96·355·374·381·457·470·486·528행)도 전부 UPDATE 안의 파생
         //   테이블(485행 UNION ALL 갈래 포함)이거나 `IN (...)` 서브쿼리다. 셋 다
         //   독립 SELECT가 하나도 없으므로 이 작업으로 늘어날 행이 없다.
+        //
+        // [INS_EXTRA4PLCARD 20 → 24(분해 13 → 17) - 2026-08-23 JOIN ON 절 수집]
+        // 9회차 축 A 재감사의 🟠(회귀): 다섯 문장의 `INNER JOIN TPGProperty PG ON
+        // A.PGName = PG.PGName AND PG.ExtraType IN (2,3)`이 v13 명세서 어디에도 없었다.
+        // SetPredicateVisitor가 이제 JOIN ON 절의 조인 키 등식이 아닌 항을 `조인 ON PG`
+        // 범위로 싣는다 - 37행(DELETE 1)·167행(INSERT 1 파생 X 안, `파생 테이블 X ·
+        // 조인 ON P`)·190행(UPDATE 1)·206행(UPDATE 2)의 넷이 더해졌고 전부 분해된다.
+        // 21행의 `IF EXISTS` 안 조인은 이 표가 IF를 방문하지 않으므로 들지 않는다.
+        // 위 문단의 "32행 ON A.ClientID = B.ClientID는 이 표의 재료가 아니다"는 여전히
+        // 참이다 - 조인 키 등식은 DML 범위 표의 조인 키 칸이 소유하므로 싣지 않는다.
+        // 나머지 셋은 ON 절에 등식 아닌 항이 없어 그대로다(EXCEPTION_PROC의 ON은 전부
+        // 컬럼 등식, CANCEL_INS·AcqManual도 마찬가지 - 실물 DDL에서 확인).
         [SkippableTheory]
         [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 4, 2)]
-        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 20, 13)]
+        [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 24, 17)]
         [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 9, 2)]
         [InlineData("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", 102, 30)]
         public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(

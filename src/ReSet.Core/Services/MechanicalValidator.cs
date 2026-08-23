@@ -3233,7 +3233,7 @@ namespace ReSet.Core.Services
                         + $"{matchingRows.Count}개 있습니다. 문장 칸은 `{statementToken}` 그대로여야 하고 "
                         + "「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
                         + "요약하거나 바꿔 쓸 수 없고, 행을 합치거나 생략할 수 없으며, "
-                        + "범위(최상위 / 파생 테이블 / 하위 질의)도 사실대로 적어야 합니다.";
+                        + "범위(최상위 / 파생 테이블 X / 조인 ON T / 파생 테이블 X · 조인 ON T)도 사실대로 적어야 합니다.";
                     result.Errors.Add(countMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {

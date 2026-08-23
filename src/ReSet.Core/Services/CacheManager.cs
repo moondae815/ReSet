@@ -133,7 +133,20 @@ namespace ReSet.Core.Services
         //     산출물이 그대로 남는다 - 독립 SELECT의 집합 술어와 `IF` 술어의 함수 호출이
         //     빠진 명세서, 32행 NOLOCK이 표 어디에도 없는 명세서, 루프 내 재설정과
         //     비집계 대입이 산문에만 있는 명세서가 그대로 살아남는다.
-        private const int CurrentCacheFormatVersion = 13;
+        // 14: 2026-08-23 9회차 축 A 재감사 🟠(회귀) - 집합 술어 표가 JOIN ON 절의
+        //     조인 키 등식이 아닌 항을 `조인 ON T`(파생 안이면 `파생 테이블 X · 조인 ON T`,
+        //     외부 조인이면 `LEFT OUTER 조인 ON T`) 범위로 싣는다
+        //     (SetPredicateVisitor.CollectJoinOnTerms). INS_EXTRA4PLCARD 다섯 문장의
+        //     `PG.ExtraType IN (2,3)`이 설명 칸 술어 금지(12)로 자리를 잃고 어떤 표에도
+        //     없었다 - 13은 그 자리를 없앴지만 받아 줄 표를 먼저 올리지 않았다. 표의 열은
+        //     그대로 여덟이고 도입문(프롬프트 문자열)에 `조인 ON` 범위의 뜻과 외부 조인
+        //     서술 규칙이 더해졌다. 코퍼스 전수 열거에서 늘어난 행은 정확히 다섯
+        //     (INS_EXTRA4PLCARD 4 · EXPECT_PROC:210 1)이고 기존 578행은 불변이다 -
+        //     DmlScopeExtractorTests의 코퍼스 앵커 583·91·0. L1 CheckSetPredicates는
+        //     범위 칸을 행 매칭 키에 이미 넣고 있어 새 값이 그대로 흘러간다(검사 변경 없음).
+        //     옛 엔트리를 재사용하면 조인 ON 행이 없는 명세서가 그대로 남으므로 전건 무효.
+        //     (main 대조: 인상 직전 main 값 13 - reset-l1-check 스킬의 번호 충돌 규칙.)
+        private const int CurrentCacheFormatVersion = 14;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
