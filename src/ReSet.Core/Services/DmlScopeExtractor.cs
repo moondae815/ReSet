@@ -308,13 +308,17 @@ namespace ReSet.Core.Services
     /// 링크가 없으니 모델이 함수 동작을 산문으로 요약했고 그 요약에서 간격 0 특례가
     /// 빠졌다. 지금은 세 DML에 더해 FROM이 있는 독립 SELECT와 `IF` 술어를 방문한다.
     ///
-    /// [표들의 문장 집합은 서로 다르다 - 2026-08-22 축 A 재감사 ③ Task 8이 고쳐 적었다]
+    /// [표들의 문장 집합은 서로 다르다 - 2026-08-23 축 A ③(b) Task 1 기준]
     /// 이 자리는 한때 "세 표가 같은 문장 집합을 같은 번호로 가리켜야 나란히 읽을 수
-    /// 있다"고 적혀 있었지만, 그 재감사가 대칭을 의도적으로 깼다. 지금 갈리는 자리는
-    /// 집합 술어 표 하나다 - 그 표만 세 DML 문장을 방문하고, 이 표와 DML 범위 표와
-    /// 잠금 힌트 표는 독립 SELECT까지 방문한다(`IF n` 행은 이 표와 잠금 힌트 표에
-    /// 있다). 표를 나란히 읽을 때 `SELECT 1` 행이 한쪽에만 있다고 해서 다른 쪽이
-    /// 빠뜨린 것이 아니다.
+    /// 있다"고 적혀 있었다. 2026-08-22 축 A 재감사 ③ Task 8이 그 대칭을 의도적으로
+    /// 깼고, <b>이 표가 독립 SELECT와 `IF` 술어를 담게 된 것은 오늘(축 A ③(b) Task 1)
+    /// 이다.</b> 지금 갈리는 자리는 집합 술어 표 하나다 - 그 표만 세 DML 문장을
+    /// 방문하고, 이 표와 DML 범위 표와 잠금 힌트 표는 독립 SELECT까지 방문한다
+    /// (`IF n` 행은 이 표와 잠금 힌트 표에 있다). 표를 나란히 읽을 때 `SELECT 1` 행이
+    /// 한쪽에만 있다고 해서 다른 쪽이 빠뜨린 것이 아니다.
+    ///
+    /// 다만 `IF n`은 두 표를 가로질러 대조할 수 없다 - 채번 조건이 서로 다르다
+    /// (LockHintVisitor.ExplicitVisit(IfStatement) 문서의 마지막 문단).
     /// </param>
     /// <param name="StatementOrdinal">
     /// 연산 종류별 · 1부터인 문장 번호. 채번이 연산 이름별로 독립이라, UPDATE·DELETE·
@@ -781,13 +785,31 @@ namespace ReSet.Core.Services
             /// 소비한다. `ExplicitVisit(SelectStatement)`이 `HasFromClause`로 FROM 없는
             /// SELECT를 아예 세지 않는 것과 어긋난다.
             ///
-            /// 알고 남긴다. (1) IF 번호를 쓰는 표는 잠금 힌트 표 하나뿐이라 다른 표와
-            /// 어긋날 여지가 없다(SELECT 번호는 DML 범위 표와 나란히 읽혀야 하므로
-            /// 사정이 다르다). (2) 실측 코퍼스의 IF 술어 하위 질의 6건은 전부
+            /// 알고 남긴다. 실측 코퍼스의 IF 술어 하위 질의 6건은 전부
             /// `IF EXISTS(SELECT ... FROM ...)`이라 이 자리에 걸리는 원문이 없다.
             /// **여기에 `HasFromClause` 같은 조건을 나중에 더하면 기존 IF 번호가 조용히
             /// 밀린다** - 재생성된 명세서의 「IF n」이 전부 어긋나므로, 고치려거든
             /// 산출물 재생성과 함께 해야 한다.
+            ///
+            /// [`IF n`을 쓰는 표가 이제 둘이고, 두 표의 채번 조건이 다르다 -
+            /// 2026-08-23 축 A ③(b) Task 1 수정 라운드 1 F1]
+            /// 이 자리는 근거 (1)로 "IF 번호를 쓰는 표는 잠금 힌트 표 하나뿐이라 다른
+            /// 표와 어긋날 여지가 없다"고 적고 있었다. Task 1이 그 문장을 거짓으로
+            /// 만들었다 - `ReferencedFunctionVisitor`도 `IF n`을 매기기 시작했고, 두
+            /// 방문자가 번호를 소비하는 조건이 서로 다르다. 이쪽은 술어에 <b>하위 질의</b>가
+            /// 있을 때, 저쪽은 술어에 <b>알려진 함수 호출</b>이 있을 때다. 그래서
+            /// `IF EXISTS(SELECT ...)` 다음에 `IF dbo.UF_X(1) &gt; 0`이 오는 프로시저에서
+            /// 앞엣것은 잠금 힌트 표의 `IF 1`이 되고 뒤엣것은 참조 함수 표의 `IF 1`이
+            /// 된다 - 같은 이름표, 다른 문장이다.
+            ///
+            /// 이것도 알고 남긴다. 양쪽을 맞추려면 한쪽 채번 조건을 넓혀야 하는데,
+            /// 그 순간 이미 발행된 명세서의 「IF n」이 조용히 밀린다(바로 위 문단이
+            /// 경고하는 것과 같은 사고다). `SELECT n`은 사정이 다르다 - 세 표가
+            /// `HasFromClause` 하나를 공유하고
+            /// `ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers`가
+            /// 번호와 라인의 짝으로 그 합의를 못 박는다. `IF n`에는 그런 합의가 없다.
+            /// <b>두 표의 `IF n`을 가로질러 대조하지 마라.</b> 언젠가 통일한다면
+            /// 산출물 재생성과 함께여야 한다.
             /// </summary>
             public override void ExplicitVisit(IfStatement node)
             {
@@ -1493,17 +1515,24 @@ namespace ReSet.Core.Services
         /// 판정이다. UNION이면 갈래 중 하나만 FROM을 가져도 참이다.
         ///
         /// [왜 방문자 안이 아니라 여기 있는가 - 설계 §4 A, Task 1 리뷰 C5]
-        /// 이 판정을 쓰는 방문자가 둘이다(LockHintVisitor는 잠금 힌트 표의 `SELECT n`,
-        /// DmlScopeVisitor는 DML 범위 표의 `SELECT n`). 두 방문자는 서로를 참조하지
+        /// 이 판정을 쓰는 방문자가 셋이다(LockHintVisitor는 잠금 힌트 표의 `SELECT n`,
+        /// DmlScopeVisitor는 DML 범위 표의 `SELECT n`, ReferencedFunctionVisitor는
+        /// 참조 함수 표의 `SELECT n` - 셋째는 2026-08-23 축 A ③(b) Task 1이 더했다).
+        /// 세 방문자는 서로를 참조하지
         /// 않고 각자 세는 것이 계약인데, 그 계약이 성립하려면 "무엇이 SELECT 문장
         /// 하나인가"만은 반드시 같아야 한다. 판정을 각 방문자 안에 복제하면 한쪽만
-        /// 고쳐지는 날 두 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
+        /// 고쳐지는 날 세 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
         /// 읽는 독자에게 그 어긋남은 조용하다 - 그래서 판정은 이 메서드 하나가
-        /// 유일한 출처다. ExtractAndExtractLockHints_ShouldAgreeOnSelectStatementNumbers가
-        /// 두 표의 <b>번호와 라인의 짝</b>을 맞대 그 합의를 못박는다 - 라인만 맞대면
+        /// 유일한 출처다. ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers가
+        /// 세 표의 <b>번호와 라인의 짝</b>을 맞대 그 합의를 못박는다 - 라인만 맞대면
         /// 한쪽이 행 없는 문장까지 세기 시작해도 라인 목록은 그대로라 어긋남이 그냥
         /// 통과한다(수정 라운드 1에 뮤테이션으로 실측했다: 잠금 힌트 쪽만 FROM 없는
         /// SELECT를 세게 하면 번호가 {1,3}에서 {2,4}로 밀리는데 라인 목록은 불변이다).
+        ///
+        /// [판정을 공유해도 채번은 각자다] 이 메서드가 같아도 `NextOrdinal("SELECT")`
+        /// 호출부는 방문자마다 따로 있다. 그래서 채번 지점을 늘리는 사람은 위 테스트도
+        /// 함께 넓혀야 한다 - Task 1이 셋째 지점을 더하면서 그 확장을 빠뜨렸고,
+        /// 수정 라운드 1 F2가 잡았다.
         ///
         /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 훑는 자리가 없다.
         /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
@@ -1655,9 +1684,22 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 문장마다 연산별 번호를 매기고 그 안의 사용자 함수 호출을 모은다.
-        /// 번호를 매기는 규칙은 SetPredicateVisitor와 같다 - 두 방문자가 같은 파싱
-        /// 트리를 같은 순서로 훑고 문장당 정확히 한 번 카운터를 늘리므로, 서로를
-        /// 참조하지 않고도 항상 같은 번호가 나온다.
+        ///
+        /// [어느 표와 번호가 맞는가 - 2026-08-23 축 A ③(b) Task 1 수정 라운드 1]
+        /// 이 자리는 "번호를 매기는 규칙은 SetPredicateVisitor와 같다 … 항상 같은
+        /// 번호가 나온다"고 적고 있었다. Task 1이 방문 범위를 넓히면서 그 문장이
+        /// 거짓이 됐다. 지금 성립하는 것은 셋이다.
+        ///
+        /// (1) `UPDATE`·`DELETE`·`INSERT` 번호는 네 표 전부에서 같은 문장을 가리킨다 -
+        ///     채번이 연산 이름별로 독립이라 SELECT·IF 행이 늘어도 밀리지 않는다.
+        /// (2) `SELECT` 번호는 이 표 · DML 범위 표 · 잠금 힌트 표 셋이 합의한다 -
+        ///     판정을 <see cref="HasFromClause"/> 하나로 공유하고
+        ///     `ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers`가
+        ///     번호와 라인의 짝으로 못 박는다. 집합 술어 표에는 `SELECT n` 행이 없다.
+        /// (3) `IF` 번호는 <b>합의가 없다.</b> 이 표는 술어에 알려진 함수 호출이 있을 때,
+        ///     잠금 힌트 표는 술어에 하위 질의가 있을 때 번호를 소비한다 - 조건이 다르니
+        ///     같은 `IF 1`이 다른 문장일 수 있다. 근거는
+        ///     `LockHintVisitor.ExplicitVisit(IfStatement)` 문서에 있다.
         /// </summary>
         private sealed class ReferencedFunctionVisitor : TSqlFragmentVisitor
         {

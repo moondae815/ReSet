@@ -685,13 +685,17 @@ END";
         }
 
         [Fact]
-        public void ExtractAndExtractLockHints_ShouldAgreeOnSelectStatementNumbers()
+        public void ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers()
         {
-            // 두 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
-            // 두 표의 같은 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는
+            // 세 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
+            // 세 표의 같은 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는
             // 독자에게 그 어긋남은 조용하다. 판정은 DmlScopeExtractor의 정적 헬퍼
-            // 하나(HasFromClause)이고 두 방문자가 그것을 부른다(2026-08-22 Task 1
-            // 리뷰 C5).
+            // 하나(HasFromClause)이고 세 방문자가 그것을 부른다(2026-08-22 Task 1
+            // 리뷰 C5 · 2026-08-23 축 A ③(b) Task 1 수정 라운드 1 F2).
+            //
+            // [판정을 공유하는 것만으로는 부족하다] 채번 지점(NextOrdinal("SELECT"))은
+            // 방문자마다 따로 있다. 판정이 같아도 한쪽 채번만 갈라지면 표가 조용히
+            // 어긋나므로, 채번 지점이 늘 때마다 이 가드도 함께 넓혀야 한다.
             //
             // [양쪽을 다 잡아야 하는 이유 - 수정 라운드 1] 두 표의 라인 목록만
             // 맞대면 한 방향밖에 못 잡는다. 잠금 힌트 쪽 판정만 갈라져 FROM 없는
@@ -747,6 +751,24 @@ END";
 
             // 그리고 그 번호들은 DML 범위 표의 같은 번호와 같은 문장을 가리킨다.
             Assert.All(hintSelects, f => Assert.Equal(scopeSelectLines[f.StatementOrdinal - 1], f.Line));
+
+            // [세 번째 채번 지점 - 2026-08-23 축 A ③(b) Task 1] 참조 함수 표도 독립
+            // SELECT를 방문하면서 NextOrdinal("SELECT")를 따로 돌린다. 픽스처의 TVF
+            // SELECT가 마침 이 표에서만 행을 내므로(잠금 힌트 표는 NamedTableReference가
+            // 없어 비운다) 세 표가 SELECT 1·2·3을 나눠 덮는다 - 잠금 힌트가 1과 3,
+            // 참조 함수가 2다.
+            var functionSelects = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UIF_SettleYMD" })
+                .Where(f => f.Operation == "SELECT")
+                .ToArray();
+
+            var tvfCall = Assert.Single(functionSelects);
+
+            // 짝을 먼저 맞댄다 - 이 단언이 이 가드가 지키는 주장(참조 함수 표의
+            // SELECT n이 DML 범위 표의 SELECT n과 같은 문장이다) 그 자체다. 절대
+            // 번호를 먼저 단언하면 채번이 갈라진 날 그쪽이 먼저 터져, 정작 표 사이
+            // 어긋남을 보여 주는 라인 비교는 실행되지도 않는다.
+            Assert.Equal(scopeSelectLines[tvfCall.StatementOrdinal - 1], tvfCall.Line);
+            Assert.Equal(2, tvfCall.StatementOrdinal);
         }
 
         [Fact]

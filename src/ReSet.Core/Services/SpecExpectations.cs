@@ -66,7 +66,9 @@ namespace ReSet.Core.Services
         public IReadOnlyList<SetPredicateFact> SetPredicates { get; init; } = Array.Empty<SetPredicateFact>();
 
         /// <summary>
-        /// DML 문장이 부르는 사용자 함수 호출. CheckReferencedFunctions가 소비한다.
+        /// DML 문장 · FROM이 있는 독립 SELECT · `IF` 술어가 부르는 사용자 함수 호출.
+        /// CheckReferencedFunctions가 소비한다(문장 집합은 2026-08-23 축 A ③(b)
+        /// Task 1이 세 DML에서 넓혔다 - ReferencedFunctionCallFact.Operation 문서 참고).
         ///
         /// 이름 집합을 Dependencies에서 뽑는 규칙은 AiService가 프롬프트 표를 만들 때
         /// 쓰는 것과 <b>같아야 한다</b> - 두 곳이 갈리면 모델이 표를 그대로 베껴도
