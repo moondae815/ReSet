@@ -298,29 +298,29 @@ namespace ReSet.Core.Services
     /// </summary>
     /// <param name="QualifiedName">호출문에 적힌 그대로의 한정명(예: `dbo.UF_GET_ROUND4VAT`).</param>
     /// <param name="Operation">
-    /// 이 호출을 담은 문장의 연산(UPDATE/INSERT/DELETE).
+    /// 이 호출을 담은 문장의 연산(UPDATE/INSERT/DELETE/SELECT/IF).
     ///
-    /// [독립 SELECT 문의 호출은 담지 않는다] 집합 술어 표가 세우는 경계와 같다 - 두 표
-    /// 모두 UPDATE·DELETE·INSERT만 방문한다. 변수 대입용 SELECT(`SELECT @v =
-    /// dbo.UF_X(...)`)의 호출은 이 표에 나오지 않는다.
+    /// [독립 SELECT와 `IF` 술어도 담는다 - 2026-08-23 축 A ③(b) Task 1]
+    /// 이 자리는 "독립 SELECT 문의 호출은 담지 않는다"고 적혀 있었다. 그 경계가 🔴을
+    /// 냈다 - `UF_GET_COLLECTYMD`가 `UF_GET_WORKDAY2`를 부르는 두 자리(53·78행)가
+    /// 모두 변수 대입 SELECT의 SELECT 목록 안 `CASE` 식이라 수집이 0건이었고,
+    /// 수집이 0건이면 렌더러가 참조 함수 표를 통째로 빼므로 링크도 없어졌다.
+    /// 링크가 없으니 모델이 함수 동작을 산문으로 요약했고 그 요약에서 간격 0 특례가
+    /// 빠졌다. 지금은 세 DML에 더해 FROM이 있는 독립 SELECT와 `IF` 술어를 방문한다.
     ///
-    /// [표들의 문장 집합이 더는 같지 않다 - 2026-08-22 축 A 재감사 ③ Task 8에서 고쳐 적는다]
-    /// 이 자리는 "세 표가 같은 문장 집합을 같은 번호로 가리켜야 나란히 읽을 수 있다"고
-    /// 적혀 있었지만, 같은 재감사가 그 대칭을 의도적으로 깼다. 지금은 넷이 갈린다 -
-    /// 이 표와 집합 술어 표는 세 DML 문장만, DML 범위 표는 거기에 독립 SELECT를 더해
-    /// 넷, 잠금 힌트 표는 `IF` 술어까지 더해 다섯이다. 그래서 DML 범위 표에는
-    /// `SELECT n` 행이, 잠금 힌트 표에는 `SELECT n`과 `IF n` 행이 있고, 앞의 두 표에는
-    /// 대응하는 행이 아예 없다(`IF n`은 잠금 힌트 표에만 있다). 이 비대칭은
-    /// 계획서의 전역 제약이 못 박은 것이지 결함이 아니다 - 잠금과 스캔 범위는 DML 밖
-    /// 문장에서도 대상 행을 가르지만, 집합 술어와 함수 호출을 그 문장까지 넓히는 것은
-    /// 이 회차의 범위가 아니었다. 표를 나란히 읽을 때 `SELECT 1` 행이 한쪽에만 있다고
-    /// 해서 다른 쪽이 빠뜨린 것이 아니다.
+    /// [표들의 문장 집합은 서로 다르다 - 2026-08-22 축 A 재감사 ③ Task 8이 고쳐 적었다]
+    /// 이 자리는 한때 "세 표가 같은 문장 집합을 같은 번호로 가리켜야 나란히 읽을 수
+    /// 있다"고 적혀 있었지만, 그 재감사가 대칭을 의도적으로 깼다. 지금 갈리는 자리는
+    /// 집합 술어 표 하나다 - 그 표만 세 DML 문장을 방문하고, 이 표와 DML 범위 표와
+    /// 잠금 힌트 표는 독립 SELECT까지 방문한다(`IF n` 행은 이 표와 잠금 힌트 표에
+    /// 있다). 표를 나란히 읽을 때 `SELECT 1` 행이 한쪽에만 있다고 해서 다른 쪽이
+    /// 빠뜨린 것이 아니다.
     /// </param>
     /// <param name="StatementOrdinal">
     /// 연산 종류별 · 1부터인 문장 번호. 채번이 연산 이름별로 독립이라, UPDATE·DELETE·
     /// INSERT 번호는 네 표(이 표 · 집합 술어 · DML 범위 · 잠금 힌트)에서 여전히 같은
-    /// 문장을 가리킨다 - 뒤의 두 표에 `SELECT n`(잠금 힌트는 `IF n`도) 행이 늘어도
-    /// DML 카운터는 밀리지 않는다(SetPredicateFact.StatementOrdinal 문서 참고).
+    /// 문장을 가리킨다 - `SELECT n`·`IF n` 행이 늘어도 DML 카운터는 밀리지 않는다
+    /// (SetPredicateFact.StatementOrdinal 문서 참고).
     /// 위 Operation 문서가
     /// 적은 대로 문장 집합 자체는 표마다 다르다.
     /// </param>
@@ -1670,14 +1670,74 @@ namespace ReSet.Core.Services
 
             public List<ReferencedFunctionCallFact> Facts { get; } = new();
 
-            public override void Visit(UpdateSpecification node) =>
+            public override void ExplicitVisit(UpdateSpecification node)
+            {
                 Collect("UPDATE", node, NextOrdinal("UPDATE"));
+                base.ExplicitVisit(node);
+            }
 
-            public override void Visit(DeleteSpecification node) =>
+            public override void ExplicitVisit(DeleteSpecification node)
+            {
                 Collect("DELETE", node, NextOrdinal("DELETE"));
+                base.ExplicitVisit(node);
+            }
 
-            public override void Visit(InsertSpecification node) =>
+            public override void ExplicitVisit(InsertSpecification node)
+            {
                 Collect("INSERT", node, NextOrdinal("INSERT"));
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// DML 밖의 독립 SELECT. 변수 대입 SELECT · 커서 원천 · 함수 본문이 전부 이 노드로 온다.
+            ///
+            /// [왜 넓히는가 - 2026-08-23 축 A ③(b)] COLLECTYMD:53·78이 변수 대입 SELECT의
+            /// SELECT 목록 안 CASE 식에서 UF_GET_WORKDAY2를 부른다. 이 호출이 수집되지 않아
+            /// 참조 함수 표가 아예 생기지 않았고(AiService가 수집 0건이면 표를 통째로 뺀다),
+            /// 표가 없으니 링크도 없어 모델이 산문으로 요약했다 - 그 요약에서 간격 0 특례가
+            /// 빠진 것이 🔴이다. 링크만 걸렸으면 결함이 없었다(UF_GET_WORKDAY2 자신의
+            /// 명세서에는 그 사실이 정확히 있다).
+            ///
+            /// [FROM이 없으면 세지 않는 이유] 네 표가 같은 문장을 같은 번호로 가리켜야
+            /// 하므로 판정을 공유한다 - <see cref="HasFromClause"/>는 DmlScopeExtractor의
+            /// 파일 수준 헬퍼이고 LockHintVisitor·DmlScopeVisitor가 이미 그것을 부른다.
+            /// </summary>
+            public override void ExplicitVisit(SelectStatement node)
+            {
+                if (HasFromClause(node))
+                {
+                    Collect("SELECT", node, NextOrdinal("SELECT"));
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>
+            /// 제어 흐름 술어 안의 함수 호출. 술어만 훑고 본문은 자식 순회에 맡긴다 -
+            /// IF 본문의 DML은 자기 문장이고 자기 번호를 받아야 한다. 그래서 문장 전체를
+            /// 훑는 <see cref="Collect"/>를 쓰지 않고 술어만 CallCollector에 넘긴다.
+            /// 스캔이 아니라 호출을 세므로 FROM 유무를 묻지 않는다.
+            ///
+            /// [번호를 호출이 있을 때만 집는 이유] 빈손인 IF가 번호를 삼키면 뒤 IF의
+            /// 번호가 조용히 밀린다. LockHintVisitor.ExplicitVisit(IfStatement)이 같은
+            /// 판단을 했고 그 근거가 그 자리 주석에 있다.
+            /// </summary>
+            public override void ExplicitVisit(IfStatement node)
+            {
+                var calls = new CallCollector(_known);
+                node.Predicate?.Accept(calls);
+
+                if (calls.Calls.Count > 0)
+                {
+                    var ordinal = NextOrdinal("IF");
+                    foreach (var (qualified, line, text) in calls.Calls)
+                    {
+                        Facts.Add(new ReferencedFunctionCallFact(qualified, "IF", ordinal, line, text));
+                    }
+                }
+
+                base.ExplicitVisit(node);
+            }
 
             private int NextOrdinal(string operation)
             {

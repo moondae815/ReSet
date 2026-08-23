@@ -1665,11 +1665,14 @@ END";
         }
 
         [Fact]
-        public void ExtractFunctionCalls_StandaloneSelect_ShouldBeSkipped()
+        public void ExtractFunctionCalls_StandaloneSelectWithoutFrom_ShouldBeSkipped()
         {
-            // DML 범위 표·집합 술어 표와 같은 경계다 - 세 표가 같은 문장 집합을
-            // 같은 번호로 가리켜야 나란히 읽을 수 있다. 이 경계를 넓히려면 세 표를
-            // 함께 넓혀야 하므로, 여기서 조용히 달라지지 않도록 못 박아 둔다.
+            // [2026-08-23 축 A ③(b)] 예전에는 "독립 SELECT는 통째로 빠진다"가 경계였고
+            // 이 테스트가 그것을 못 박았다. 지금 경계는 FROM 유무다 - 독립 SELECT도
+            // 방문하되, 훑을 자리가 없는 FROM 없는 대입만 빠진다. 판정은 DML 범위·
+            // 잠금 힌트와 공유하는 HasFromClause 하나다.
+            //
+            // 남는 사실: FROM 없는 대입은 호출을 담고 있어도 행을 내지 않는다.
             var ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -1680,6 +1683,157 @@ END";
 
             Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(
                 ddl, new[] { "UF_GET_ROUND4VAT" }));
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_CallInsideStandaloneSelectList_ShouldBeCollected()
+        {
+            // COLLECTYMD:53 실측 - 변수 대입 SELECT의 SELECT 목록 안 CASE 식에서 함수를 부른다.
+            // 이 호출이 수집되지 않아 참조 함수 표가 아예 생기지 않았고, 표가 없으니 링크도
+            // 없어 모델이 산문으로 요약했다 - 그 요약에서 간격 0 특례가 빠진 것이 🔴이다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_strYMD VARCHAR(8)) RETURNS VARCHAR(8)
+AS
+BEGIN
+    DECLARE @v VARCHAR(8)
+    SELECT @v = CASE WHEN CollectType = 2
+                     THEN dbo.UF_GET_WORKDAY2(@pi_strYMD, CollectDay)
+                     ELSE CONVERT(VARCHAR(8), @pi_strYMD, 112)
+                END
+    FROM   dbo.TPGCollectPeriodMst WITH(NOLOCK)
+    WHERE  CollectFlag = 1
+    RETURN @v
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UF_GET_WORKDAY2" });
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            // 스칼라 호출은 맨이름으로 실린다 - ScriptDom의 FunctionCall.FunctionName이
+            // 한정자를 담지 않고, 스키마는 렌더러가 Dependencies에서 붙인다
+            // (ExtractFunctionCalls_ScalarCall_ShouldReportBareName이 같은 계약을 못 박는다).
+            Assert.Equal("UF_GET_WORKDAY2", fact.QualifiedName);
+            Assert.Contains("UF_GET_WORKDAY2", fact.CallExpression);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_CallInsideIfPredicate_ShouldBeNumberedAsIf()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF dbo.UF_GET_ROUND4VAT(100) > 0
+    BEGIN
+        RETURN
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UF_GET_ROUND4VAT" });
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("IF", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_CallInsideIfBody_ShouldBelongToItsOwnStatement()
+        {
+            // 술어만 IF로 귀속시킨다 - 본문의 DML은 자기 문장이고 자기 번호를 받아야
+            // 한다. 술어 갈래가 Collect(문장 전체 훑기)를 쓰면 이 단언이 무너진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF dbo.UF_GET_ROUND4VAT(100) > 0
+    BEGIN
+        UPDATE A SET A.C = dbo.UF_GET_INCVTAXRATE(A.T) FROM dbo.TA A
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(
+                ddl, new[] { "UF_GET_ROUND4VAT", "UF_GET_INCVTAXRATE" });
+
+            Assert.Equal(2, facts.Count);
+            var predicate = Assert.Single(facts, f => f.Operation == "IF");
+            Assert.Equal("UF_GET_ROUND4VAT", predicate.QualifiedName);
+            var body = Assert.Single(facts, f => f.Operation == "UPDATE");
+            Assert.Equal("UF_GET_INCVTAXRATE", body.QualifiedName);
+            Assert.Equal(1, body.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_IfPredicateWithoutCall_ShouldNotConsumeAnOrdinal()
+        {
+            // 호출이 있을 때만 번호를 집는다 - 앞 IF가 빈손으로 번호를 삼키면
+            // 뒤 IF의 번호가 조용히 밀린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF @x > 0
+    BEGIN
+        RETURN
+    END
+
+    IF dbo.UF_GET_ROUND4VAT(100) > 0
+    BEGIN
+        RETURN
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UF_GET_ROUND4VAT" });
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("IF", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_StandaloneSelectWithoutFrom_ShouldNotConsumeAnOrdinal()
+        {
+            // FROM이 없는 대입은 스캔할 자리가 없다 - 잠금 힌트·DML 범위와 같은 판정
+            // (HasFromClause)을 써야 네 표의 SELECT 번호가 같은 문장을 가리킨다.
+            //
+            // [앞 문장에 호출을 두지 않는 이유 - 변이 증명의 격리]
+            // 앞 SELECT에도 호출을 두면 HasFromClause 가드를 지웠을 때 Assert.Single이
+            // 먼저 터져(2건) 번호 단언은 실행되지도 않는다. 호출 없는 문장을 앞에 두면
+            // 가드가 사라질 때 남는 사실은 여전히 하나이고 번호만 1에서 2로 밀리므로,
+            // 이 테스트가 죽는 자리가 정확히 StatementOrdinal 단언이 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @a = 1
+
+    SELECT @b = dbo.UF_GET_ROUND4VAT(2) FROM dbo.TA WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UF_GET_ROUND4VAT" });
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            Assert.Contains("2", fact.CallExpression);
+        }
+
+        [Fact]
+        public void ExtractFunctionCalls_DmlOrdinals_ShouldNotShift()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @v = dbo.UF_GET_ROUND4VAT(1) FROM dbo.TA WITH(NOLOCK)
+
+    UPDATE A SET A.X = dbo.UF_GET_ROUND4VAT(2) FROM dbo.TB A
+END";
+
+            var facts = DmlScopeExtractor.ExtractFunctionCalls(ddl, new[] { "UF_GET_ROUND4VAT" });
+
+            var update = Assert.Single(facts, f => f.Operation == "UPDATE");
+            Assert.Equal(1, update.StatementOrdinal);
         }
 
         [Fact]
