@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Xunit;
 using ReSet.Core.Services;
@@ -2869,6 +2871,104 @@ END";
             Assert.Equal("UPDATE", setSubquery.Operation);
             Assert.Equal(1, setSubquery.StatementOrdinal);
             Assert.Equal("하위 질의", setSubquery.Scope);
+        }
+    
+        // ------------------------------------------------------------------
+        // [네 표가 출발점을 갖지 않는 문장 - 2026-08-23 ③(b) 최종 리뷰 유예 "MERGE 무출발점"]
+        // MergeStatement는 네 방문자(DML 범위·잠금 힌트·집합 술어·참조 함수) 어디에도
+        // 출발점이 없다. 그 객체의 표는 다른 문장 행으로 채워져 완전해 보이는데 MERGE만
+        // 통째로 없는 "없는 것보다 나쁜 모양"이 된다. 거짓 행 대신 탐지기가 그 사실을
+        // 말하고(프롬프트 공지), 코퍼스에 MERGE가 들어오는 날 아래 앵커가 깨져 지원
+        // 결정을 강제한다.
+        // ------------------------------------------------------------------
+
+        private const string MergeDdl = @"
+CREATE PROCEDURE dbo.P_MERGE
+AS
+BEGIN
+    MERGE dbo.TSettleMst AS T
+    USING (SELECT ClientID, YMD FROM dbo.TStage WITH(NOLOCK) WHERE UseState = 1) AS S
+        ON T.ClientID = S.ClientID AND T.YMD = S.YMD
+    WHEN MATCHED AND T.InState = 0 THEN UPDATE SET T.InState = 1, T.Comm = dbo.UF_GET_ROUND4VAT(T.Comm)
+    WHEN NOT MATCHED THEN INSERT (ClientID, YMD) VALUES (S.ClientID, S.YMD);
+END";
+
+        [Fact]
+        public void ExtractUncoveredStatements_MergeStatement_ShouldReportKindAndLine()
+        {
+            var uncovered = DmlScopeExtractor.ExtractUncoveredStatements(MergeDdl);
+
+            var one = Assert.Single(uncovered);
+            Assert.Equal("MERGE", one.Kind);
+            Assert.Equal(5, one.Line);
+        }
+
+        [Fact]
+        public void ExtractUncoveredStatements_NoMerge_ShouldBeEmpty()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.TA A WITH(NOLOCK) WHERE A.Y IN (1, 2)
+    SELECT @v = 1 FROM dbo.TB
+END";
+            Assert.Empty(DmlScopeExtractor.ExtractUncoveredStatements(ddl));
+        }
+
+        [Fact]
+        public void ExtractUncoveredStatements_ParseError_ShouldBeEmpty()
+        {
+            Assert.Empty(DmlScopeExtractor.ExtractUncoveredStatements("MERGE dbo.T USING ( ON"));
+            Assert.Empty(DmlScopeExtractor.ExtractUncoveredStatements(null));
+        }
+
+        [Fact]
+        public void FourTables_MergeStatement_ShouldProduceNoRows_WhichIsWhyTheNoticeExists()
+        {
+            // 공지 문구("네 표가 담지 않는다")가 참인 동안만 이 테스트가 초록이다. 누군가 한
+            // 표만 MERGE를 담기 시작하면 여기서 깨지고, 그때 공지 문구와 함께 결정해야 한다.
+            Assert.Empty(DmlScopeExtractor.Extract(MergeDdl, "@pi_strYMD"));
+            Assert.Empty(DmlScopeExtractor.ExtractLockHints(MergeDdl));
+            Assert.Empty(DmlScopeExtractor.ExtractSetPredicates(MergeDdl));
+            Assert.Empty(DmlScopeExtractor.ExtractFunctionCalls(MergeDdl, new[] { "UF_GET_ROUND4VAT" }));
+        }
+
+        [SkippableFact]
+        public void ExtractUncoveredStatements_OverTheCorpus_ShouldBeZero_Tripwire()
+        {
+            var root = UncoveredCorpusRoot();
+            Skip.If(root == null, CorpusSkip.Reason);
+
+            var hits = new List<string>();
+            foreach (var dir in Directory.EnumerateDirectories(root!))
+            {
+                var ddlPath = Path.Combine(dir, "raw", "object_definition.sql");
+                if (!File.Exists(ddlPath)) continue;
+                foreach (var u in DmlScopeExtractor.ExtractUncoveredStatements(File.ReadAllText(ddlPath)))
+                {
+                    hits.Add($"{Path.GetFileName(dir)}:{u.Line} {u.Kind}");
+                }
+            }
+
+            // 0이 아니게 되는 날: 네 표에 MERGE를 싣는 설계를 하든, 공지로 남길지를 결정하든
+            // 한쪽을 고르고 이 단언을 그 결정에 맞게 바꾼다. 조용히 넘어가지 않는다.
+            Assert.True(hits.Count == 0, "코퍼스에 네 표가 담지 않는 문장이 들어왔다: " + string.Join(", ", hits));
+        }
+
+        private static string? UncoveredCorpusRoot()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                if (Directory.Exists(Path.Combine(dir.FullName, "src", "ReSet.Core")))
+                {
+                    var candidate = Path.Combine(dir.FullName, "output", "Objects");
+                    return Directory.Exists(candidate) ? candidate : null;
+                }
+                dir = dir.Parent;
+            }
+            return null;
         }
     }
 }

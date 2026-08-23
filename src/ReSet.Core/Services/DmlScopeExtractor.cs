@@ -381,6 +381,12 @@ namespace ReSet.Core.Services
     /// 스캔인 이유]", 경계 전체는 LockHintVisitor.SubqueryScope 문서에 있다.
     /// </param>
     /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
+    /// <summary>
+    /// 네 기계 확정 표가 출발점을 갖지 않는 문장 하나 - 종류(지금은 "MERGE")와 원본 줄.
+    /// <see cref="DmlScopeExtractor.ExtractUncoveredStatements"/> 문서 참고.
+    /// </summary>
+    public sealed record UncoveredStatement(string Kind, int Line);
+
     public sealed record LockHintFact(
         string Operation,
         int StatementOrdinal,
@@ -617,6 +623,56 @@ namespace ReSet.Core.Services
         /// 사라졌다. 두 참조는 원문에서 서로 다른 줄에 있는 별개의 스캔 자리이므로 Line을
         /// 키에 포함해 둘 다 지킨다.
         /// </summary>
+        /// <summary>
+        /// 네 기계 확정 표(DML 범위·잠금 힌트·집합 술어·참조 함수)가 <b>출발점을 갖지 않는</b>
+        /// 문장을 센다 - 지금은 MERGE 하나다(<see cref="MergeStatement"/>). 네 방문자는
+        /// INSERT·UPDATE·DELETE 사양, FROM 있는 독립 SELECT, IF 술어에서만 출발하므로
+        /// MERGE의 대상·USING 원천·ON 술어·WHEN 절 술어·SET 식 함수 호출은 어느 표에도
+        /// 실리지 않는다. 그 객체의 표는 다른 문장 행으로 채워져 완전해 보이는데 한 문장만
+        /// 통째로 없는 모양이 된다 - ③(b)가 닫은 "없는 것보다 나쁜 모양" 그대로다.
+        ///
+        /// [거짓 행 대신 공지 - 2026-08-23 ③(b) 최종 리뷰 유예] 코퍼스 24객체에 MERGE는
+        /// 0건이다. 실물 없이 네 방문자에 MERGE 갈래를 더하면 합성 DDL로만 검증한 행이
+        /// 「수정 금지」 표에 실린다. 그래서 표에 싣지 않고, AiService가 이 목록으로 프롬프트에
+        /// "이 문장은 표가 담지 않는다 - 산문으로 적되 표에 넣지 마라" 공지를 낸다. 코퍼스에
+        /// MERGE가 들어오는 날은 DmlScopeExtractorTests의 트립와이어가 깨져 지원 여부를
+        /// 결정하게 한다. 파싱 실패·null은 빈 목록(형제 추출기와 같은 소프트 페일).
+        /// </summary>
+        public static IReadOnlyList<UncoveredStatement> ExtractUncoveredStatements(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<UncoveredStatement>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0))
+                {
+                    return Array.Empty<UncoveredStatement>();
+                }
+
+                var visitor = new UncoveredStatementVisitor();
+                fragment.Accept(visitor);
+                return visitor.Found;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[DmlScopeExtractor] 미담 문장 수집 실패 - 빈 목록으로 진행합니다.");
+                return Array.Empty<UncoveredStatement>();
+            }
+        }
+
+        private sealed class UncoveredStatementVisitor : TSqlFragmentVisitor
+        {
+            public List<UncoveredStatement> Found { get; } = new();
+
+            // MERGE 안의 USING 원천(SELECT)·WHEN 절 본문은 네 방문자가 어차피 안 가므로
+            // 여기서도 내려가지 않는다 - 문장 하나에 공지 하나다.
+            public override void ExplicitVisit(MergeStatement node)
+                => Found.Add(new UncoveredStatement("MERGE", node.StartLine));
+        }
+
         public static IReadOnlyList<LockHintFact> ExtractLockHints(string? ddlText)
         {
             if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LockHintFact>();
@@ -762,6 +818,11 @@ namespace ReSet.Core.Services
             ///      `EXEC dbo.P (SELECT ...)`는 인자가 아니라 <b>두 문장</b>
             ///      (`EXEC dbo.P` + 괄호 친 독립 SELECT)으로 파싱돼 그 SELECT가 평소대로
             ///      `SELECT n` 행을 낸다. 실측으로 확인하고 목록에서 뺐다.
+            /// (라) MERGE 문 전체. `MergeStatement`는 네 방문자 어디에도 출발점이 없어 대상·
+            ///      USING 원천·ON 술어·WHEN 절이 통째로 빠진다 - 이 표만이 아니라 네 표가
+            ///      같다. 거짓 행 대신 <see cref="ExtractUncoveredStatements"/>가 그 문장을
+            ///      세어 프롬프트에 "표가 담지 않는다" 공지를 내고, 코퍼스 트립와이어가
+            ///      MERGE 유입 시 깨진다(2026-08-23, 코퍼스 0건).
             ///
             /// 이 자리들은 "틀리게 실리는" 것이 아니라 "실리지 않는" 것이라 이 라벨의
             /// 뜻은 그대로 참이다. 그래도 이 표를 "그 문장이 하는 모든 스캔"으로 읽으면

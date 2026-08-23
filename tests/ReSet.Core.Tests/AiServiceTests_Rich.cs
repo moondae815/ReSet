@@ -338,6 +338,45 @@ namespace ReSet.Core.Tests
                 $"표 면제({exemption})가 금지 문장({softening})보다 앞에 와야 한다.");
         }
 
+        // [MERGE 무출발점 - 2026-08-23] 네 기계 확정 표는 MergeStatement에 출발점이 없다.
+        // MERGE가 있는 객체에서는 표가 다른 문장 행으로 채워져 완전해 보이는데 MERGE만
+        // 통째로 빠진다. 거짓 행 대신 프롬프트에 기계 공지 한 블록을 실어 산문으로 적되
+        // 표에 넣지 말라고 한다. 공지는 MERGE가 있을 때만 나온다(없는 객체의 프롬프트는
+        // 바이트 하나 안 바뀌어 캐시 인상이 필요 없다).
+        [Fact]
+        public async Task GenerateSpecification_WithMergeStatement_ShouldCarryUncoveredStatementNotice()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = SelectProbeSpDef();
+            spDef.DdlText = @"
+CREATE PROCEDURE dbo.UP_SELECT_PROBE
+AS
+BEGIN
+    MERGE dbo.TSettleMst AS T
+    USING (SELECT ClientID FROM dbo.TStage WITH(NOLOCK)) AS S ON T.ClientID = S.ClientID
+    WHEN MATCHED THEN UPDATE SET T.InState = 1;
+END";
+
+            await service.GenerateSpecificationAsync(spDef, "지시");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("[MACHINE NOTICE]", body);
+            Assert.Contains("MERGE statement", body);
+            Assert.Contains("line(s) 5", body);
+            Assert.Contains("Do NOT add rows for them to those tables", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecification_WithoutMergeStatement_ShouldNotCarryUncoveredStatementNotice()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(SelectProbeSpDef(), "지시");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("[MACHINE NOTICE]", body);
+        }
+
         private static string DecodeMessageContents(string requestBody)
         {
             using var doc = JsonDocument.Parse(requestBody);

@@ -1317,7 +1317,43 @@ Based on the structured reference context above, reverse engineer the stored pro
                 }
             }
 
+            // [네 표가 담지 않는 문장의 공지 - 2026-08-23 ③(b) 최종 리뷰 유예 "MERGE 무출발점"]
+            // 네 기계 확정 표는 MergeStatement에 출발점이 없다(DmlScopeExtractor.
+            // ExtractUncoveredStatements 문서). 그 객체의 표는 다른 문장 행으로 채워져
+            // 완전해 보이는데 MERGE만 통째로 빠지므로, 거짓 행 대신 "이 문장은 표가 담지
+            // 않는다"를 기계가 말한다. 다섯 갈래가 모두 이 함수를 부르므로 배선은 여기
+            // 한 곳이다 - 한쪽만 바뀌어 교착이 나는 구조를 피한다.
+            //
+            // [캐시 버전을 올리지 않는 이유] 이 블록은 MERGE가 있는 객체에서만 나오고
+            // 코퍼스에 그런 객체가 0이라 영향받는 기존 산출물이 없다(프롬프트 바이트 불변).
+            // MERGE 객체가 처음 들어오는 날은 그 객체가 처음 생성되는 날이라 캐시가 없다.
+            lines.AddRange(BuildUncoveredStatementNoticeLines(spDef));
+
             return lines;
+        }
+
+        /// <summary>
+        /// 네 표가 담지 않는 문장(지금은 MERGE)이 있을 때만 내는 기계 공지. 산문으로 적되
+        /// 표에 행을 만들지 말고, 그 서술이 기계 확정이 아님을 밝히라고 한다.
+        /// </summary>
+        private static List<string> BuildUncoveredStatementNoticeLines(SpDefinition spDef)
+        {
+            var uncovered = DmlScopeExtractor.ExtractUncoveredStatements(spDef.DdlText);
+            if (uncovered.Count == 0) return new List<string>();
+
+            var byKind = uncovered
+                .GroupBy(u => u.Kind)
+                .Select(g => $"{g.Key} statement(s) at line(s) {string.Join(", ", g.Select(u => u.Line))}");
+
+            return new List<string>
+            {
+                "   [MACHINE NOTICE] This object contains " + string.Join("; ", byKind)
+                + " that the four machine-confirmed tables (DML 범위 · 잠금 힌트 · 집합 술어 · 참조 함수) do NOT cover. "
+                + "Describe each such statement in prose - its target, its USING source, the ON predicate, each WHEN branch and its action - "
+                + "and state explicitly that this description is not machine-confirmed. "
+                + "Do NOT add rows for them to those tables, and do NOT treat their absence from the tables as an omission.",
+                ""
+            };
         }
 
         /// <summary>
