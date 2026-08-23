@@ -805,7 +805,7 @@ grep -n "CurrentCacheFormatVersion" src/ReSet.Core/Services/CacheManager.cs
 
 `13`이어야 한다 — 병합으로 밀렸다(계획 시점 기대값은 `11`이었고, 이 회차가 12로 올렸다가 `main`이 먼저 쓴 12와 부딪혀 13이 됐다). **`10` 이하면 멈추고 보고하라** — 앞 브랜치가 병합되지 않았다는 뜻이다.
 
-`13`으로 바꾸고 기존 양식대로 주석을 더한다: 참조 함수·집합 술어 표가 독립 SELECT와 `IF` 술어를 담게 됐고, 잠금 힌트가 SELECT 목록·`SET` 절 하위 질의를 담으며, 실행 의미 표에 종류 둘이 늘었다. 옛 엔트리를 재사용하면 새 행 없는 산출물이 남는다.
+`13`으로 바꾸고 기존 양식대로 주석을 더한다: 참조 함수 표가 독립 SELECT와 `IF` 술어를, 집합 술어 표가 독립 SELECT만을 담게 됐고, 잠금 힌트가 SELECT 목록·`SET` 절 하위 질의를 담으며, 실행 의미 표에 종류 둘이 늘었다. 옛 엔트리를 재사용하면 새 행 없는 산출물이 남는다.
 
 `CacheManagerTests`의 버전 리터럴도 함께 간다 — 그 테스트 주석이 스스로를 트립와이어로 선언한다("버전을 올리면 이 테스트가 깨지고, 깨진 자리에서 '정말 전건 재분석을 의도했는가'를 한 번 더 묻게 된다").
 
@@ -815,7 +815,7 @@ grep -n "CurrentCacheFormatVersion" src/ReSet.Core/Services/CacheManager.cs
 grep -n "집합 술어\|참조 함수\|잠금 힌트\|실행 의미" docs/architecture.md AGENTS.md
 ```
 
-**표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽어라** — `AGENTS.md`에 규칙으로 있고, 앞 브랜치에서 이 규칙을 어겨 여섯 자리에 거짓이 실렸다. 표마다 갈라 적어라: 네 표가 이제 같은 문장 집합을 보되 **DML 범위 표에는 범위 칸이 없고 `IF n` 행도 없다.**
+**표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽어라** — `AGENTS.md`에 규칙으로 있고, 앞 브랜치에서 이 규칙을 어겨 여섯 자리에 거짓이 실렸다. 표마다 갈라 적어라: **문장 집합의 폭이 표마다 다르다** — 잠금 힌트·참조 함수는 독립 SELECT와 `IF` 술어까지 다섯이고, DML 범위·집합 술어는 독립 SELECT까지 넷이라 `IF n` 행이 없다. **DML 범위 표에는 범위 칸 자체도 없다.**
 
 - [ ] **Step 5: 전체 테스트와 커밋**
 
@@ -824,7 +824,7 @@ Expected: 실패 0 · 건너뜀 0.
 
 ```bash
 git add src/ReSet.Core/Services/CacheManager.cs tests/ReSet.Core.Tests/CacheManagerTests.cs tests/ReSet.Core.Tests/MechanicalValidatorTests.cs docs/architecture.md AGENTS.md
-git commit -m "chore: 캐시 버전 13과 네 표의 문장 집합 통일을 문서에 반영한다"
+git commit -m "chore: 캐시 버전 13과 표마다 다른 문장 집합의 폭을 문서에 반영한다"
 ```
 
 ---
