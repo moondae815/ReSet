@@ -721,7 +721,7 @@ git commit -m "feat: 실행 의미 표가 루프 내 변수 재설정을 담는�
 
 ---
 
-### Task 6: L1 확인, 캐시 버전 12, 문서
+### Task 6: L1 확인, 캐시 버전 13, 문서
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/CacheManager.cs`
@@ -797,7 +797,7 @@ Run: `dotnet test --filter "FullyQualifiedName~MechanicalValidatorTests.CheckSet
 
 두 테스트가 **통과하면** L1은 손댈 것이 없다 — 그것이 "행 단위 대조라 그대로 흘러간다"는 주장의 확인이다. 실패하면 그때 `CheckSetPredicates`를 고친다. 어느 쪽이든 보고하라.
 
-- [ ] **Step 3: 캐시 버전을 12로 올린다**
+- [ ] **Step 3: 캐시 버전을 13으로 올린다**(계획 시점에는 12였다 — `main`이 2026-08-23 ④ 진단으로 12를 먼저 써서 병합 때 13으로 밀렸다)
 
 ```bash
 grep -n "CurrentCacheFormatVersion" src/ReSet.Core/Services/CacheManager.cs
@@ -824,7 +824,7 @@ Expected: 실패 0 · 건너뜀 0.
 
 ```bash
 git add src/ReSet.Core/Services/CacheManager.cs tests/ReSet.Core.Tests/CacheManagerTests.cs tests/ReSet.Core.Tests/MechanicalValidatorTests.cs docs/architecture.md AGENTS.md
-git commit -m "chore: 캐시 버전 12와 네 표의 문장 집합 통일을 문서에 반영한다"
+git commit -m "chore: 캐시 버전 13과 네 표의 문장 집합 통일을 문서에 반영한다"
 ```
 
 ---

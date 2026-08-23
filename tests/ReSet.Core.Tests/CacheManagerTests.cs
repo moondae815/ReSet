@@ -539,19 +539,19 @@ namespace ReSet.Core.Tests
                 File.ReadAllText(Path.Combine(_tempOutputDir, ".sp_cache_index.json")))!;
             var entry = root["Entries"]!.AsObject().Single().Value!;
 
-            // 12: 기계 확정 표 넷이 한꺼번에 넓어졌다. 표마다 폭이 다르므로 갈라 적는다 -
+            // 13: 기계 확정 표 넷이 한꺼번에 넓어졌다. 표마다 폭이 다르므로 갈라 적는다 -
             //     참조 함수 표는 DML 셋에 더해 독립 SELECT와 `IF` 술어의 호출을 담고(문장
             //     칸이 없는 표라 「호출 위치」 칸의 `SELECT n`·`IF n`으로 나타난다),
             //     집합 술어 표는 독립 SELECT까지만 담으며(`IF n` 행은 없다), 잠금 힌트
             //     표는 문장 집합은 그대로인 채 하위 질의 수집이 WHERE 절에서 문장 노드
             //     전체로 넓어졌고, 실행 의미 표에는 종류 둘(`비집계 대입`·`루프 내
-            //     재설정`)이 늘었다. CacheManager.cs의 버전 12 주석 참고.
+            //     재설정`)이 늘었다. CacheManager.cs의 버전 13 주석 참고.
             //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면 산출물이 옛
             //     재료 그대로 남는다. 전건 재분석을 의도한 것이 맞다.
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(12, (int)entry["FormatVersion"]!);
+            Assert.Equal(13, (int)entry["FormatVersion"]!);
         }
 
         [Fact]
