@@ -1814,9 +1814,9 @@ namespace ReSet.Core.Services
                 // DmlScopeVisitor는 원천이 VALUES든 SELECT든 InsertSpecification마다
                 // 사실을 정확히 하나 낸다(Visit 안에서 Facts.Add를 한 번만 호출) -
                 // 그래서 이 카운터도 원천 종류와 무관하게 여기서 먼저, 한 번만
-                // 늘려야 두 방문자의 번호가 계속 맞는다. Collect(→UNION 갈래마다,
-                // 즉 QuerySpecification마다 호출됨) 안에서 늘리면 갈래 수만큼
-                // 카운터가 밀린다(SetPredicateFact.StatementOrdinal 문서 참고).
+                // 늘려야 두 방문자의 번호가 계속 맞는다. CollectTopLevel(→UNION
+                // 갈래마다, 즉 QuerySpecification마다 호출됨) 안에서 늘리면 갈래
+                // 수만큼 카운터가 밀린다(SetPredicateFact.StatementOrdinal 문서 참고).
                 var ordinal = NextOrdinal("INSERT");
 
                 // INSERT ... SELECT의 대상 범위는 원천 SELECT의 최상위 WHERE가 정한다

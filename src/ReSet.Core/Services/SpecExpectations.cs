@@ -288,8 +288,8 @@ namespace ReSet.Core.Services
                 && sessionOptions.Count == 0
                 && dmlScopeFacts.Count == 0
                 && derivedColumns.Count == 0
-                // 오늘은 중복항이다 - ExtractSetPredicates가 방문하는 세 문장
-                // (UPDATE·DELETE·INSERT)이 Extract가 방문하는 네 문장의 부분집합이므로,
+                // 오늘은 중복항이다 - ExtractSetPredicates가 방문하는 네 문장
+                // (UPDATE·DELETE·INSERT·FROM 있는 독립 SELECT)이 Extract가 방문하는 네 문장과 같으므로,
                 // setPredicates가 비지 않으면 dmlScopeFacts도 비지 않는다. Task 8 이전에는
                 // 이 자리가 "같은 세 문장만 방문하므로"라고 적혀 있었는데, 2026-08-22
                 // 축 A 재감사 ③의 Task 4가 Extract에 독립 SELECT를 더해 그 근거가

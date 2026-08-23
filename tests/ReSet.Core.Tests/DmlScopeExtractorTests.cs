@@ -3011,18 +3011,23 @@ END";
         [Fact]
         public void ExtractSetPredicates_UnionStandaloneSelectWithDerivedTables_ShouldCollectEachDerivedPredicateOnce()
         {
+            // 커서 원천 질의 - 독립 SELECT에 UNION이 실물로 오는 자리다(대입 SELECT는
+            // SQL Server가 데이터 검색과 결합을 허용하지 않는다, Msg 141).
             const string ddl = @"
 CREATE PROCEDURE dbo.P_UNION_SEL
 AS
 BEGIN
-    DECLARE @c INT
-    SELECT @c = COUNT(*)
-    FROM   (SELECT ID FROM dbo.TA WHERE UseState = 1) X
-    WHERE  X.ID > 0
-    UNION ALL
-    SELECT COUNT(*)
-    FROM   (SELECT ID FROM dbo.TB WHERE UseState = 2) Y
-    WHERE  Y.ID > 0
+    DECLARE cur CURSOR FOR
+        SELECT X.ID
+        FROM   (SELECT ID FROM dbo.TA WHERE UseState = 1) X
+        WHERE  X.ID > 0
+        UNION ALL
+        SELECT Y.ID
+        FROM   (SELECT ID FROM dbo.TB WHERE UseState = 2) Y
+        WHERE  Y.ID > 0
+    OPEN cur
+    CLOSE cur
+    DEALLOCATE cur
 END";
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
 
@@ -3030,6 +3035,8 @@ END";
             Assert.Single(facts, f => f.Scope == "파생 테이블 X");
             Assert.Single(facts, f => f.Scope == "파생 테이블 Y");
             Assert.Equal(4, facts.Count);
+            Assert.All(facts, f => Assert.Equal("SELECT", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
         }
 
         [Fact]
