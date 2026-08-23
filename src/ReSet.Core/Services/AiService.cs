@@ -469,7 +469,8 @@ namespace ReSet.Core.Services
             rules.AddRange(BuildMachineFactBlockLines(
                 spDef,
                 executionSemanticsPresentation: MachineFactPresentation.Table,
-                caseBranchPresentation: MachineFactPresentation.Table));
+                caseBranchPresentation: MachineFactPresentation.Table,
+                uncoveredNoticePresentation: MachineFactPresentation.Table));
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
@@ -1287,7 +1288,8 @@ Based on the structured reference context above, reverse engineer the stored pro
         private static List<string> BuildMachineFactBlockLines(
             SpDefinition spDef,
             MachineFactPresentation executionSemanticsPresentation,
-            MachineFactPresentation caseBranchPresentation)
+            MachineFactPresentation caseBranchPresentation,
+            MachineFactPresentation uncoveredNoticePresentation)
         {
             var lines = new List<string>();
 
@@ -1327,7 +1329,11 @@ Based on the structured reference context above, reverse engineer the stored pro
             // [캐시 버전을 올리지 않는 이유] 이 블록은 MERGE가 있는 객체에서만 나오고
             // 코퍼스에 그런 객체가 0이라 영향받는 기존 산출물이 없다(프롬프트 바이트 불변).
             // MERGE 객체가 처음 들어오는 날은 그 객체가 처음 생성되는 날이라 캐시가 없다.
-            lines.AddRange(BuildUncoveredStatementNoticeLines(spDef));
+            // 공지도 갈래별 presentation을 따른다 - 네 표를 실제로 받는 갈래(SP 전체·함수·
+            // CrudAnalysis)에만 "표에 넣지 마라"를 주고, 표를 받지 않는 개요·로직 갈래에는
+            // 참고형 한 줄만 준다. 자기가 쓸 수 없는 목적지에 대한 지시를 받은 모델은 H2를
+            // 어기고 헤딩을 합성하거나 지시를 버린다(위 Task 14/17 실측과 같은 모양).
+            lines.AddRange(BuildUncoveredStatementNoticeLines(spDef, uncoveredNoticePresentation));
 
             return lines;
         }
@@ -1336,24 +1342,30 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 네 표가 담지 않는 문장(지금은 MERGE)이 있을 때만 내는 기계 공지. 산문으로 적되
         /// 표에 행을 만들지 말고, 그 서술이 기계 확정이 아님을 밝히라고 한다.
         /// </summary>
-        private static List<string> BuildUncoveredStatementNoticeLines(SpDefinition spDef)
+        private static List<string> BuildUncoveredStatementNoticeLines(
+            SpDefinition spDef, MachineFactPresentation presentation)
         {
+            if (presentation == MachineFactPresentation.Omit) return new List<string>();
+
             var uncovered = DmlScopeExtractor.ExtractUncoveredStatements(spDef.DdlText);
             if (uncovered.Count == 0) return new List<string>();
 
+            // 문구의 "USING source · ON predicate · WHEN branch"는 MERGE 전용이다. Kind가
+            // 둘째 종류(예: CTE 기반 UPDATE)를 얻는 날 이 문장을 종류별로 갈라야 한다 -
+            // 지금은 ExtractUncoveredStatements가 MERGE만 세므로 참이다.
             var byKind = uncovered
                 .GroupBy(u => u.Kind)
                 .Select(g => $"{g.Key} statement(s) at line(s) {string.Join(", ", g.Select(u => u.Line))}");
+            var what = "This object contains " + string.Join("; ", byKind)
+                + " that the four machine-confirmed tables (DML 범위 · 잠금 힌트 · 집합 술어 · 참조 함수) do NOT cover.";
 
-            return new List<string>
-            {
-                "   [MACHINE NOTICE] This object contains " + string.Join("; ", byKind)
-                + " that the four machine-confirmed tables (DML 범위 · 잠금 힌트 · 집합 술어 · 참조 함수) do NOT cover. "
-                + "Describe each such statement in prose - its target, its USING source, the ON predicate, each WHEN branch and its action - "
-                + "and state explicitly that this description is not machine-confirmed. "
-                + "Do NOT add rows for them to those tables, and do NOT treat their absence from the tables as an omission.",
-                ""
-            };
+            var instruction = presentation == MachineFactPresentation.Table
+                ? " Describe each such statement in prose - its target, its USING source, the ON predicate, each WHEN branch and its action - "
+                  + "and state explicitly that this description is not machine-confirmed. "
+                  + "Do NOT add rows for them to those tables, and do NOT treat their absence from the tables as an omission."
+                : " If this section mentions such a statement, describe it only in prose and do not present that description as machine-confirmed.";
+
+            return new List<string> { "   [MACHINE NOTICE] " + what + instruction, "" };
         }
 
         /// <summary>
@@ -1764,7 +1776,8 @@ Based on the structured reference context above, reverse engineer the stored pro
             var machineFactLinesForFunctionDef = BuildMachineFactBlockLines(
                 functionDef,
                 executionSemanticsPresentation: MachineFactPresentation.Table,
-                caseBranchPresentation: MachineFactPresentation.Table);
+                caseBranchPresentation: MachineFactPresentation.Table,
+                uncoveredNoticePresentation: MachineFactPresentation.Table);
             if (machineFactLinesForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
@@ -2894,7 +2907,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 sbRules.AddRange(BuildMachineFactBlockLines(
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Reference,
-                    caseBranchPresentation: MachineFactPresentation.Omit));
+                    caseBranchPresentation: MachineFactPresentation.Omit,
+                    uncoveredNoticePresentation: MachineFactPresentation.Reference));
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
@@ -3033,7 +3047,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 sbRules.AddRange(BuildMachineFactBlockLines(
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Table,
-                    caseBranchPresentation: MachineFactPresentation.Reference));
+                    caseBranchPresentation: MachineFactPresentation.Reference,
+                    uncoveredNoticePresentation: MachineFactPresentation.Table));
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
@@ -3206,7 +3221,8 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
                 sbRules.AddRange(BuildMachineFactBlockLines(
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Reference,
-                    caseBranchPresentation: MachineFactPresentation.Table));
+                    caseBranchPresentation: MachineFactPresentation.Table,
+                    uncoveredNoticePresentation: MachineFactPresentation.Reference));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");

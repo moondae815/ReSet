@@ -366,6 +366,56 @@ END";
             Assert.Contains("Do NOT add rows for them to those tables", body);
         }
 
+        private const string MergeProbeDdl = @"
+CREATE PROCEDURE dbo.UP_SELECT_PROBE
+AS
+BEGIN
+    MERGE dbo.TSettleMst AS T
+    USING (SELECT ClientID FROM dbo.TStage WITH(NOLOCK)) AS S ON T.ClientID = S.ClientID
+    WHEN MATCHED THEN UPDATE SET T.InState = 1;
+END";
+
+        private static SpDefinition MergeProbeSpDef()
+        {
+            var spDef = SelectProbeSpDef();
+            spDef.DdlText = MergeProbeDdl;
+            return spDef;
+        }
+
+        // 네 표를 실제로 받는 갈래(CrudAnalysis)는 표 금지 문장까지 받는다.
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_WithMerge_ShouldCarryTableFormNotice()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                MergeProbeSpDef(), "CrudAnalysis", "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("[MACHINE NOTICE]", body);
+            Assert.Contains("Do NOT add rows for them to those tables", body);
+        }
+
+        // 네 표를 받지 않는 갈래(개요·로직)는 참고형 공지만 받는다 - 존재하지 않는 표에
+        // 대한 금지 지시나 이 절이 쓸 수 없는 목적지에 대한 적극 지시를 주면, 모델이 H2
+        // 제약을 어기고 헤딩을 합성하거나 지시를 통째로 버린다(BuildMachineFactBlockLines
+        // 문서의 Task 14/17 실측).
+        [Theory]
+        [InlineData("OverviewAndParameters")]
+        [InlineData("LogicAndVisualization")]
+        public async Task GenerateSpecSectionAsync_NonTableBranches_WithMerge_ShouldCarryReferenceFormNoticeOnly(string section)
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                MergeProbeSpDef(), section, "지침", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("[MACHINE NOTICE]", body);
+            Assert.Contains("If this section mentions", body);
+            Assert.DoesNotContain("Do NOT add rows for them to those tables", body);
+        }
+
         [Fact]
         public async Task GenerateSpecification_WithoutMergeStatement_ShouldNotCarryUncoveredStatementNotice()
         {
