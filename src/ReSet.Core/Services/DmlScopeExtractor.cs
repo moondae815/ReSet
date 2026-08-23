@@ -368,10 +368,17 @@ namespace ReSet.Core.Services
     ///
     /// "최상위"는 그 문장(또는 그 IF 술어)이 직접 훑는 자리를 뜻한다. 그 안에서 다시
     /// 열린 질의가 훑는 자리는 문장 종류도 하위 질의가 놓인 자리도 가리지 않고
-    /// "하위 질의"다 - 술어(WHERE·JOIN ON·IF)뿐 아니라 SELECT 목록과 `UPDATE`의 `SET`
-    /// 절에 걸린 스칼라 하위 질의도 그렇다(2026-08-22 축 A 재감사가 경계를 적었고
-    /// 2026-08-23 축 A ③(b) Task 3이 술어 밖 자리를 담기 시작했다 -
-    /// LockHintVisitor.SubqueryScope 문서 참고).
+    /// "하위 질의"다 - DML·독립 SELECT에서는 WHERE·JOIN ON뿐 아니라 SELECT 목록과
+    /// `UPDATE`의 `SET` 절에 걸린 스칼라 하위 질의도 그렇다(2026-08-22 축 A 재감사가
+    /// 경계를 적었고 2026-08-23 축 A ③(b) Task 3이 술어 밖 자리를 담기 시작했다).
+    ///
+    /// <b>`IF`만 한 겹 다르다.</b> `IF` 술어의 <b>첫 겹</b> 하위 질의는 그 IF가 직접
+    /// 훑는 자리로 보아 "최상위"(파생 안이면 "파생")이고, 그 안에서 다시 열린 질의부터
+    /// "하위 질의"다. 그래서 원문 모양이 같아도 `UPDATE ... WHERE x IN (SELECT ...)`의
+    /// 하위 질의는 "하위 질의"인데 `IF EXISTS(SELECT ...)`의 그것은 "최상위"다 - 실측
+    /// 대조는 ExtractLockHints_IfPredicateAndDmlBody_ShouldNotOverlap의 `dbo.TG`
+    /// 단언이다. 근거는 LockHintVisitor.ExplicitVisit(IfStatement)의 "[첫 겹만 그 IF의
+    /// 스캔인 이유]", 경계 전체는 LockHintVisitor.SubqueryScope 문서에 있다.
     /// </param>
     /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
     public sealed record LockHintFact(
@@ -665,6 +672,17 @@ namespace ReSet.Core.Services
             ///    회귀 테스트로 못 박았다
             ///    (ExtractLockHints_SubqueryInStandaloneSelectWhere_ShouldUseSubqueryScope).
             ///
+            /// [세 모양은 계기였을 뿐 기준이 아니다 - 위 셋으로 좁혀 읽지 말 것]
+            /// 넓힌 것은 "이 세 자리"가 아니라 <b>문장 노드 전체</b>다. 그래서 세 모양
+            /// 밖의 자리도 함께 담기기 시작했다 - 실측으로 확인한 것만 적는다
+            /// (2026-08-23 수정 라운드 1): `INSERT ... VALUES ((SELECT ...))`의 원천,
+            /// `HAVING`의 하위 질의, `ORDER BY`의 하위 질의, DML `OUTPUT` 절의 하위
+            /// 질의가 전부 `하위 질의` 범위로 실린다. `INSERT`에서 이 훑기가 UNION 갈래
+            /// 루프 밖이자 `SelectInsertSource` 조건 밖으로 나온 것이 VALUES 원천까지
+            /// 담기게 된 직접 원인이다. 방향은 의도한 대로이고 코퍼스 실물 0건이라
+            /// 회귀는 없다. 커버 범위를 알고 싶으면 위 번호 목록이 아니라 아래
+            /// "그래도 표에 오지 않는 자리"의 규칙을 보라.
+            ///
             /// [넓힌 결과의 실측 - 코퍼스 24개 객체 전후 대조, 2026-08-23]
             /// 넓히기 전후로 코퍼스 전체의 잠금 힌트 사실을 전부 덤프해 비교했다.
             /// 차이는 정확히 한 행 늘어난 것뿐이다:
@@ -674,6 +692,12 @@ namespace ReSet.Core.Services
             /// 닿지 않는다(다른 세 표와 공유하는 `SELECT n`이 밀리면 안 된다).
             ///
             /// [그래도 표에 오지 않는 자리 - 알고 남긴다]
+            /// 가리는 규칙은 하나다: <b>이 방문자가 문장 번호를 집는 네 자리</b>
+            /// (DML 셋 · `HasFromClause`가 참인 독립 SELECT)와 `IF` 술어에서 출발하는
+            /// 훑기만 존재한다. 그 출발점의 자손이 아닌 하위 질의는 어디에 있든 표에
+            /// 오지 않는다. 아래 셋은 그 규칙의 따름 결과이고, 목록이 아니라 규칙이
+            /// 기준이다.
+            ///
             /// (가) FROM이 없는 독립 SELECT 안의 하위 질의. `SELECT @v = (SELECT MAX(x)
             ///      FROM T WITH(NOLOCK))`처럼 바깥에 FROM이 없으면
             ///      <see cref="HasFromClause"/>가 false라 문장 번호 자체를 집지 않고,
@@ -682,11 +706,36 @@ namespace ReSet.Core.Services
             ///      함께여야 한다. 코퍼스 실물 0건(AST 프로브 전수 확인, 2026-08-23).
             /// (나) CTE 본문의 FROM(`WITH cte AS (SELECT ... WITH(NOLOCK))`). CTE 본문은
             ///      `ScalarSubquery`가 아니라 `CommonTableExpression` 아래의
-            ///      `QueryExpression`이라 `SubqueryCollector`가 닿지 않는다. 코퍼스 실물
-            ///      0건 - 같은 프로브가 `CommonTableExpression`을 하나도 찾지 못했다
-            ///      (예전 문서는 grep으로 같은 결론을 냈고, AST로 다시 확인했다).
-            ///      다만 CTE 본문 <b>안의 스칼라 하위 질의</b>는 이제 걸린다 - 문장 노드
-            ///      전체를 훑기 때문이다.
+            ///      `QueryExpression`이라 `SubqueryCollector`가 <b>모으지 않는다</b>
+            ///      (순회는 그 아래로 내려간다 - 닿지 못하는 것이 아니라 그 노드에서만
+            ///      수집하기 때문이다). 코퍼스 실물 0건 - 같은 프로브가
+            ///      `CommonTableExpression`을 하나도 찾지 못했다(예전 문서는 grep으로
+            ///      같은 결론을 냈고, AST로 다시 확인했다).
+            ///
+            ///      CTE 본문 <b>안의 스칼라 하위 질의</b>는 <b>독립 SELECT 문장에
+            ///      한해</b> 걸린다. `WITH ... SELECT`의 CTE 절은 `SelectStatement`
+            ///      (`StatementWithCtesAndXmlNamespaces`)에 달리고 넓힌 경로가 넘기는
+            ///      것이 바로 그 `SelectStatement`이기 때문이다. **DML은 다르다** -
+            ///      `WITH ... INSERT/UPDATE/DELETE`의 CTE 절은 `InsertStatement`·
+            ///      `UpdateStatement`·`DeleteStatement`에 달리는데 넓힌 경로가 넘기는 것은
+            ///      `InsertSpecification`·`UpdateSpecification`·`DeleteSpecification`
+            ///      이라 CTE 절이 그 자손이 아니다. 실측(2026-08-23 수정 라운드 1):
+            ///      같은 CTE를 얹은 세 문장 중 독립 SELECT만 본문 안 하위 질의의
+            ///      NOLOCK 행을 냈고 INSERT·UPDATE는 내지 않았다.
+            /// (다) 문장 번호를 집지 않는 <b>다른 문장 종류</b> 안의 하위 질의. 실물
+            ///      문법으로 확인한 넷은 `SET @v = (SELECT ...)`
+            ///      (`SetVariableStatement`), `WHILE (SELECT ...) > 0`의 술어,
+            ///      `RETURN (SELECT ...)`, `DECLARE @v INT = (SELECT ...)`다 - 넷 다
+            ///      NOLOCK을 진 하위 질의를 넣어도 행이 0개였다. (가)의 예시
+            ///      `SELECT @v = (...)`와 (다)의 `SET @v = (...)`는 원문 한 끗 차이인데
+            ///      둘 다 표에 오지 않는다는 점을 특히 주의하라. 네 종류 모두 코퍼스
+            ///      실물 0건(AST 프로브 전수 확인, 2026-08-23).
+            ///
+            ///      `EXEC` 인자는 이 목록에 없다 - 넣을 수 없기 때문이다.
+            ///      `EXEC dbo.P @a = (SELECT ...)`는 파싱 자체가 실패하고(구문 오류),
+            ///      `EXEC dbo.P (SELECT ...)`는 인자가 아니라 <b>두 문장</b>
+            ///      (`EXEC dbo.P` + 괄호 친 독립 SELECT)으로 파싱돼 그 SELECT가 평소대로
+            ///      `SELECT n` 행을 낸다. 실측으로 확인하고 목록에서 뺐다.
             ///
             /// 이 자리들은 "틀리게 실리는" 것이 아니라 "실리지 않는" 것이라 이 라벨의
             /// 뜻은 그대로 참이다. 그래도 이 표를 "그 문장이 하는 모든 스캔"으로 읽으면
@@ -915,9 +964,10 @@ namespace ReSet.Core.Services
             /// 겹치는 자리를 못 박고, 두 호출의 순서를 서로 바꾸는 뮤테이션으로도
             /// 초록이 유지되는 것을 확인했다).
             ///
-            /// 최상위 FROM 참조 자체는 이 경로로 들어오지 않는다 - `SubqueriesOf`는
-            /// `ScalarSubquery`를 통해서만 내려가므로 어떤 하위 질의에도 속하지 않는
-            /// 참조에는 닿지 않는다.
+            /// 최상위 FROM 참조 자체는 이 경로로 들어오지 않는다 - `SubqueriesOf`의
+            /// 순회는 조각 전체로 내려가지만 <b>수집은 `ScalarSubquery`에서만</b> 하고,
+            /// 그 뒤 훑는 것도 모은 하위 질의의 FROM뿐이라 어떤 하위 질의에도 속하지
+            /// 않는 참조는 결과에 들어오지 않는다.
             ///
             /// [`IF` 술어와 겹치지 않는 이유 - 문법으로 확인, 2026-08-23]
             /// 문장 전체를 훑으니 "IF 술어 안 하위 질의가 DML 경로에서도 잡히지 않는가"를
