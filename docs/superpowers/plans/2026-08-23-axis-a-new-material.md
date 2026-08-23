@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 방문 범위가 좁아 표에 오지 못하던 사실 5건(🔴 1 · 🟡 4)을 기존 표 넷과 실행 의미 표의 종류 둘로 닫는다.
+**Goal:** 방문 범위가 좁아 표에 오지 못하던 사실 5건(③(b) 4건 🔴 2 · 🟡 2 + 계획 밖 1건 🟡 — 「완료 기준」 참고)을 기존 표 넷과 실행 의미 표의 종류 둘로 닫는다.
 
 **Architecture:** 네 방문자 중 둘(`SetPredicateVisitor`·`ReferencedFunctionVisitor`)이 아직 DML 셋만 방문한다. ③(a)가 나머지 둘에 한 것과 같은 규칙을 더해 네 표의 문장 집합을 통일한다. 잠금 힌트는 문장 집합이 이미 넓으므로 FROM 절 바깥 하위 질의 세 모양만 더 훑는다. 🔴은 실행 의미 표에 종류 둘(`루프 내 재설정`·`비집계 대입`)을 더해 닫는다. **새 표는 만들지 않는다.**
 
@@ -499,7 +499,7 @@ git commit -m "feat: 잠금 힌트 표가 SELECT 목록과 SET 절의 하위 질
 [Fact]
 public void Extract_NonAggregateAssignment_ShouldSayThePreviousValueSurvives()
 {
-    // PROC_ETC:71 실측 - SELECT @v_intID = ID는 비집계 대입이라 무결과 시
+    // PROC_ETC:72 실측 - SELECT @v_intID = ID는 비집계 대입이라 무결과 시
     // 직전 값이 남는다. 79행의 집계 대입(MAX)은 무결과 시 NULL이 대입되므로
     // 정반대다. 둘이 표에 나란히 놓여야 대비가 보인다.
     const string ddl = @"
@@ -880,9 +880,11 @@ git add docs/
 git commit -m "docs: 축 A ③(b) 재생성 확인 결과를 기록한다"
 ```
 
-**결과.** 확인 일곱 개가 전부 기대대로였고 채번도 세 SP 모두 회귀 없음. 닫힌 결함 다섯(🔴 1 ·
-🟡 4)을 반영해 8회차 집계가 24건 닫힘 → **29건 닫힘**이 됐다. 실측 요약·앵커·남은 단서(재시도
-셋, 캐시 버전 12/13 두 세대)는 `docs/audit-defect-catalog.md` 4-2절 끝 한 곳에 있다.
+**결과.** 확인 일곱 개가 전부 기대대로였고 채번도 세 SP 모두 회귀 없음. 34건 안의 4건(🔴 2 ·
+🟡 2)이 닫혀 8회차 집계가 25건 닫힘 → **29건 닫힘**이 됐고(①2+②4+④3+⑤5 = 14 · ③(a) 11 ·
+③(b) 4, 미귀속 5를 더해 34), 계획 밖 1건(`CLComm4MobileCo:32`)은 34건 밖으로 따로 센다.
+실측 요약·앵커·남은 단서(재시도 셋, 캐시 버전 12/13 두 세대, 「원본 주석 기록」 표제 진동)는
+`docs/audit-defect-catalog.md` 4-2절 끝 한 곳에 있다.
 
 ---
 
@@ -891,7 +893,12 @@ git commit -m "docs: 축 A ③(b) 재생성 확인 결과를 기록한다"
 - Task 1~6의 커밋 여섯 개가 있고, 마지막 커밋 시점에 `dotnet test`가 실패 0 · 건너뜀 0이다(코퍼스 있는 상태).
 - Task 7의 확인 일곱 개가 전부 기대대로다.
 - 기존 DML 문장 번호가 재생성 전후로 같다.
-- 닫힌 결함: 🔴 1건(루프 내 변수 재설정) · 🟡 4건(함수→함수 3 · SELECT 목록 하위 질의 1).
+- 닫힌 결함: **34건 안의 4건**(🔴 2 — `PROC_ETC:69` 루프 내 변수 재설정 · `COLLECTYMD` 간격 0 특례 /
+  🟡 2 — `COLLECTYMD` 음수 간격 · `UIF_SettleYMD` 휴일 검사 시작점) **+ 계획 밖 1건**
+  (`UF_Get_CLComm4MobileCo:32` SELECT 목록 하위 질의 — 34건 밖).
+  **계획 시점의 "🔴 1건 · 🟡 4건"은 틀렸다** — 다섯을 한 출처로 묶고 등급을 잘못 배분했다.
+  근거는 `2026-08-22-out-of-table-scope-design.md:251`(③(b) 4건, 🔴 둘)과 8회차 보고서
+  :82·:80·:96·:100, 그리고 설계 §2.3(계획 밖 1건)이다.
 
 ## 이 계획이 닫지 않는 것
 
