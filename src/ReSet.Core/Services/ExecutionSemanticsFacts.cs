@@ -35,6 +35,8 @@ namespace ReSet.Core.Services
 
         public const string NonAggregateAssignmentKind = "비집계 대입";
 
+        public const string LoopVariableResetKind = "루프 내 재설정";
+
         /// <summary>
         /// 종류 칸의 전체 목록. Critic 면제 블록이 이 순서 그대로 열거하므로
         /// (MachineConfirmedTables.CriticExemptionBlock) 순서를 흔들면 프롬프트
@@ -48,7 +50,8 @@ namespace ReSet.Core.Services
             RowCountKind,
             CursorKind,
             TypePathKind,
-            NonAggregateAssignmentKind
+            NonAggregateAssignmentKind,
+            LoopVariableResetKind
         };
 
         /// <summary>
@@ -132,6 +135,18 @@ namespace ReSet.Core.Services
             {
                 facts.Add(new ExecutionSemanticFact(
                     TypePathKind, fact.Line.ToString(), fact.Expression, fact.Sentence));
+            }
+
+            // 대입 두 갈래와 달리 이웃해 있어야 할 이유가 없어 끝에 붙인다. 이쪽은
+            // 무결과 동작이 아니라 "이 값이 어디서 왔는가"를 말하며, 짝이 되는 사실은
+            // 실행 의미 표가 아니라 지역 변수 표의 DECLARE 초기값이다.
+            foreach (var fact in LoopVariableResetExtractor.Extract(ddlText))
+            {
+                facts.Add(new ExecutionSemanticFact(
+                    LoopVariableResetKind,
+                    fact.Line.ToString(),
+                    $"SET {fact.Variable} = {fact.Value}",
+                    fact.Sentence));
             }
 
             return facts;
