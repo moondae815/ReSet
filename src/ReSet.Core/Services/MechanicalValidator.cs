@@ -3588,7 +3588,7 @@ namespace ReSet.Core.Services
 
                 var message =
                     $"참조 함수 표에 `{fact.QualifiedName}`의 호출 위치 `{locationToken}` "
-                    + $"인자 `{fact.CallExpression}` 행이 {facts.Count}개 있어야 하는데 {matchingRows}개 있습니다. "
+                    + $"인자 `{expectedCall}` 행이 {facts.Count}개 있어야 하는데 {matchingRows}개 있습니다. "
                     + "함수·호출 위치·인자 칸은 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, "
                     + "문장 번호·라인을 바꿔 적을 수 없으며, 인자 원문을 요약할 수 없습니다.";
                 result.Errors.Add(message);
