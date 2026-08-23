@@ -1122,7 +1122,7 @@ Based on the structured reference context above, reverse engineer the stored pro
                     "   The IF n in this table's 호출 위치 column numbers only IF statements whose predicate contains a known function call. "
                     + "It is NOT the same numbering as the IF n in the 잠금 힌트 table, which numbers IF statements whose predicate contains a subquery - "
                     + "the same label can point at different statements. Never equate or cross-reference IF n between the two tables; "
-                    + "DML numbers (UPDATE/INSERT/DELETE n) and SELECT n ARE shared across the four machine-confirmed tables.");
+                    + "DML numbers (UPDATE/INSERT/DELETE n) and SELECT n ARE shared across the four machine-confirmed tables (DML 범위 · 잠금 힌트 · 집합 술어 · 참조 함수).");
             }
 
             foreach (var call in calls)
