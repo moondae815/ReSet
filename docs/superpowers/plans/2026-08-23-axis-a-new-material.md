@@ -833,7 +833,7 @@ git commit -m "chore: 캐시 버전 13과 네 표의 문장 집합 통일을 문
 
 **Files:** 없음(확인만 한다). 결함이 남으면 그 자리를 고치는 별도 커밋을 낸다.
 
-- [ ] **Step 1: 백업하고 재생성한다**
+- [x] **Step 1: 백업하고 재생성한다**
 
 재생성은 외부 AI CLI(`codex-cli`·`Claude`)를 호출하고 `output/`을 덮어쓴다. **먼저 백업하라.**
 
@@ -844,7 +844,7 @@ dotnet run --project src/ReSet.Cli -- --sp UP_UTIL_SETTLE_PROC_ETC < /dev/null 2
 
 `COLLECTYMD`·`WORKDAY2`·`UF_Get_CLComm4MobileCo`·`UIF_SettleYMD`는 함수라 `--sp`로 직접 지정할 수 없다. 파이프라인이 SP의 의존성으로 함께 재생성하므로, 그 함수들을 참조하는 SP를 돌려라 — `UP_UTIL_SETTLE_EXPECT_PROC`이 `UF_GET_COLLECTYMD`를 부른다. 로그(`output/logs/reset-<날짜>.log`)에서 `분석 시작 - Type: UDF, Key: ...` 줄로 어느 함수가 돌았는지 확인하라.
 
-- [ ] **Step 2: 앵커를 대조한다**
+- [x] **Step 2: 앵커를 대조한다**
 
 | 확인 | 명령 | 기대 |
 |---|---|---|
@@ -854,11 +854,11 @@ dotnet run --project src/ReSet.Cli -- --sp UP_UTIL_SETTLE_PROC_ETC < /dev/null 2
 | 집합 술어 | `grep -n "CollectFlag" output/Functions/dbo.UF_GET_COLLECTYMD/docs/Spec.md` | 표에 `= 1` 행 |
 | SELECT 목록 하위 질의 | `grep -n "TClientCMRate" output/Functions/dbo.UF_Get_CLComm4MobileCo/docs/Spec.md` | 잠금 힌트 표에 `하위 질의` |
 | 루프 내 재설정 | `grep -n "루프 내 재설정" output/Procedures/dbo.UP_UTIL_SETTLE_PROC_ETC/docs/Spec.md` | 69행 행 |
-| 비집계 대입 | `grep -n "비집계 대입" output/Procedures/dbo.UP_UTIL_SETTLE_PROC_ETC/docs/Spec.md` | 71행 행, 79행 집계와 나란히 |
+| 비집계 대입 | `grep -n "비집계 대입" output/Procedures/dbo.UP_UTIL_SETTLE_PROC_ETC/docs/Spec.md` | **72행** 행, 79행 집계와 나란히 (계획 시점의 "71"은 오기 — 71은 주석이고 `SELECT @v_intID = ID`가 72행이다) |
 
 **표 행을 셀 때는 섹션으로 잘라라.** 앞 브랜치에서 `grep -c`가 센 문자열 출현 횟수를 표 행 수로 읽은 오류가 있었다.
 
-- [ ] **Step 3: 채번 회귀를 확인한다**
+- [x] **Step 3: 채번 회귀를 확인한다**
 
 ```bash
 diff <(grep -oE "^\| (UPDATE|INSERT|DELETE) [0-9]+" output.bak-<날짜>/Procedures/dbo.UP_UTIL_SETTLE_PROC_ETC/docs/Spec.md | sort -u) \
@@ -867,11 +867,11 @@ diff <(grep -oE "^\| (UPDATE|INSERT|DELETE) [0-9]+" output.bak-<날짜>/Procedur
 
 Expected: 차이 없음. 차이가 있으면 Global Constraints가 깨진 것이다.
 
-- [ ] **Step 4: L1이 조용한지 확인한다**
+- [x] **Step 4: L1이 조용한지 확인한다**
 
 재생성 로그에 `SetPredicateMismatch`나 실행 의미 관련 오류가 반복되면 표를 넓힌 쪽과 검사를 넓힌 쪽이 어긋난 것이다. 마지막 객체까지 `[L1/L2 자동 검증] 모두 통과!`가 나와야 한다.
 
-- [ ] **Step 5: 결과를 기록하고 커밋한다**
+- [x] **Step 5: 결과를 기록하고 커밋한다**
 
 닫힌 결함과 남은 결함을 감사 카탈로그에 반영한다.
 
@@ -879,6 +879,10 @@ Expected: 차이 없음. 차이가 있으면 Global Constraints가 깨진 것이
 git add docs/
 git commit -m "docs: 축 A ③(b) 재생성 확인 결과를 기록한다"
 ```
+
+**결과.** 확인 일곱 개가 전부 기대대로였고 채번도 세 SP 모두 회귀 없음. 닫힌 결함 다섯(🔴 1 ·
+🟡 4)을 반영해 8회차 집계가 24건 닫힘 → **29건 닫힘**이 됐다. 실측 요약·앵커·남은 단서(재시도
+셋, 캐시 버전 12/13 두 세대)는 `docs/audit-defect-catalog.md` 4-2절 끝 한 곳에 있다.
 
 ---
 
