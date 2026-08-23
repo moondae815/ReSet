@@ -990,7 +990,10 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 직접 담고(문서 참고), 이 헬퍼는 DML 범위 표만 쓴다 - 사전 조회 자체를
         /// 없애 이 계열의 결함을 구조적으로 막는다.
         /// </summary>
-        private static IReadOnlyList<int> BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
+        // [internal인 이유 - 2026-08-23 L1 문장 칸 대조] MechanicalValidator.CheckDmlScopeTable이
+        // 같은 함수로 번호를 다시 매겨 문장 칸을 대조한다. 채번 출처가 둘이 되면 렌더러와
+        // L1이 어긋나 옳게 베낀 표가 거부되므로, 복제하지 않고 이 하나를 공유한다.
+        internal static IReadOnlyList<int> BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
         {
             var byIndex = new int[dmlScopeFacts.Count];
             var perOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
