@@ -416,6 +416,29 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class DmlScopeExtractor
     {
+        /// <summary>
+        /// 「DML 범위」 표의 문장 번호를 매긴다 - 목록 순서대로 연산(UPDATE·INSERT·DELETE·
+        /// SELECT)별 1부터. 렌더러(AiService.BuildDmlScopeTableLines)와 L1
+        /// (MechanicalValidator.CheckDmlScopeTable)이 같은 이 함수를 써야 한다 - 채번 출처가
+        /// 둘이면 옳게 베낀 표가 거부된다. DmlScopeFact에 번호 필드가 없어(다른 세 사실과
+        /// 달리) 자리 순서로 매기므로, 두 호출자는 같은 Extract 결과를 그대로 넘겨야 한다.
+        /// </summary>
+        public static IReadOnlyList<int> BuildStatementOrdinals(IReadOnlyList<DmlScopeFact> dmlScopeFacts)
+        {
+            var byIndex = new int[dmlScopeFacts.Count];
+            var perOperation = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            for (var i = 0; i < dmlScopeFacts.Count; i++)
+            {
+                var fact = dmlScopeFacts[i];
+                perOperation.TryGetValue(fact.Operation, out var n);
+                perOperation[fact.Operation] = ++n;
+                byIndex[i] = n;
+            }
+
+            return byIndex;
+        }
+
         public const string DmlScopeTableHeading = "### DML 범위 (기계 확정 — 수정 금지)";
         public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
         public const string ReferencedFunctionTableHeading = "### 참조 함수 (기계 확정 — 수정 금지)";

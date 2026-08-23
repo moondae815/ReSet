@@ -3238,6 +3238,8 @@ END"
         // Column은 한정자를 포함한 원문 표기다(DmlScopeExtractor.SetPredicateFact
         // 문서 참고) - 실측 DDL의 `A.PGName NOT IN (...)`을 그대로 반영해 "A.PGName"으로
         // 둔다. 마지막 식별자 조각만 담으면 코퍼스에서 키 충돌이 실제로 난다.
+        // StatementOrdinal은 1이다 - 추출기는 연산별로 1부터 매기고(0은 실물에 없다), L1이
+        // 문장 칸을 행에서 요구하므로(2026-08-23) 손으로 만든 사실도 렌더 행의 `UPDATE 1`과 맞아야 한다.
         private static SetPredicateFact NineePgFact() => new(
             "UPDATE", 39, "A.PGName", true,
             new[]
@@ -3245,7 +3247,7 @@ END"
                 "'PLCard'", "'SamSungPay'", "'SSGPayCard'", "'KakaoPay'", "'KakaoCard'",
                 "'impaymobile'", "'NaverCard'", "'ApplePay'", "'TossCardAuth'"
             },
-            0, "NOT IN", "최상위", NineePgPredicateText);
+            1, "NOT IN", "최상위", NineePgPredicateText);
 
         /// <summary>
         /// NineePgFact의 「술어 원문」 칸(2026-08-22 축 A 재감사 ③ Task 7). 기대와 표가
@@ -3311,7 +3313,7 @@ END"
             // 담아 UseState IN (0,1) 대조가 무조건 통과한다 - 검사가 아무것도 묻지
             // 않게 된다. 대조 대상은 리터럴 목록 칸 하나여야 한다.
             var fact = new SetPredicateFact(
-                "UPDATE", 108, "UseState", false, new[] { "0", "1" }, 0, "IN", "최상위",
+                "UPDATE", 108, "UseState", false, new[] { "0", "1" }, 1, "IN", "최상위",
                 "UseState IN (0, 1)");
             var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
             var markdown = RequiredHeadersMarkdown()
@@ -3332,10 +3334,10 @@ END"
             var facts = new[]
             {
                 new SetPredicateFact(
-                    "UPDATE", 30, "PGName", false, new[] { "'A'", "'B'" }, 0, "IN", "최상위",
+                    "UPDATE", 30, "PGName", false, new[] { "'A'", "'B'" }, 1, "IN", "최상위",
                     "PGName IN ('A', 'B')"),
                 new SetPredicateFact(
-                    "UPDATE", 30, "UseState", false, new[] { "0", "1" }, 0, "IN", "최상위",
+                    "UPDATE", 30, "UseState", false, new[] { "0", "1" }, 1, "IN", "최상위",
                     "UseState IN (0, 1)")
             };
             var expectations = EmptyExpectations() with { SetPredicates = facts };
@@ -3365,8 +3367,8 @@ END"
             // 조용히 통과시킨다.
             var facts = new[]
             {
-                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }),
-                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" })
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }, 1),
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" }, 1)
             };
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
@@ -3390,16 +3392,18 @@ END"
             // 순서와 같을 필요가 없다 - 다중집합 비교이지 자리 대응이 아니다.
             var facts = new[]
             {
-                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }),
-                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" })
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "1" }, 1),
+                new SetPredicateFact("UPDATE", 50, "A.X", false, new[] { "2" }, 1)
             };
             var expectations = EmptyExpectations() with { SetPredicates = facts };
             var markdown = RequiredHeadersMarkdown()
                 + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
                 + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
                 + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                // 같은 문장(UPDATE 1)의 두 AND 항이므로 문장 칸은 둘 다 UPDATE 1이다 -
+                // 문장 칸을 안 보던 시절에는 둘째 행이 UPDATE 2로 적혀 있었다(2026-08-23 정정).
                 + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 2 | A.X IN (2) |\n"
-                + "| UPDATE 2 | 50 | A.X | IN | 최상위 | 1 | 1 | A.X IN (1) |\n";
+                + "| UPDATE 1 | 50 | A.X | IN | 최상위 | 1 | 1 | A.X IN (1) |\n";
 
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
@@ -3415,7 +3419,7 @@ END"
             // 그런데 이 검사(위 매칭 Where절)는 그 행을 `r.Split('|')`로 단순 분할했다 -
             // 이스케이프를 복원하지 않으면 셀이 잘못 쪼개져 모델이 표를 원문 그대로
             // 옮겨도 컬럼이 일치하지 않는다(LockHints·ORDER BY·객체 선언과 같은 실패 모양).
-            var fact = new SetPredicateFact("UPDATE", 12, "A.[C|D]", false, new[] { "'X'" });
+            var fact = new SetPredicateFact("UPDATE", 12, "A.[C|D]", false, new[] { "'X'" }, 1);
             var expectations = EmptyExpectations() with { SetPredicates = new[] { fact } };
             var escapedColumn = fact.Column.Replace("|", "\\|");
             var markdown = RequiredHeadersMarkdown()
@@ -3441,11 +3445,11 @@ END"
 
         /// <summary>
         /// 넓어진 문장 집합의 `SELECT n` 행을 L1이 DML 행과 똑같이 대조하는지 확인한다.
-        /// CheckSetPredicates가 사실을 묶는 키는 (연산 · 라인 · 컬럼 · 범위 · 술어 원문)
-        /// 다섯이지만, 그 묶음에 맞는 <b>행을 찾는 술어</b>는 라인 · 컬럼 · 범위 · 술어
-        /// 원문 네 칸만 보고 문장 칸을 보지 않는다(MechanicalValidator.cs의 `groups`와
-        /// `matchingRows`). 그래서 연산이 `SELECT`로 바뀌어도 검사가 달라질 자리가 없다는
-        /// 것이 Task 2의 주장인데, 확인 없이 넘기면 표만 넓어지고 검사는 침묵한다.
+        /// CheckSetPredicates가 사실을 묶는 키는 (연산 · 번호 · 라인 · 컬럼 · 범위 · 술어 원문)
+        /// 여섯이고, 행을 찾는 술어도 2026-08-23부터 문장 토큰(`SELECT 1`)을 함께 요구한다
+        /// (MechanicalValidator.cs의 `groups`와 `matchingRows` - 그 전에는 라인 · 컬럼 · 범위 ·
+        /// 술어 원문 네 칸만 봐서 연산이 `SELECT`로 바뀌어도 검사가 달라질 자리가 없다는 것이
+        /// Task 2의 주장이었다). 어느 쪽이든 확인 없이 넘기면 표만 넓어지고 검사는 침묵한다.
         ///
         /// 이 테스트 홀로는 "검사가 SELECT 행을 아예 건너뛴다"와 구분되지 않는다 -
         /// 바로 아래 Validate_SetPredicateSelectRowDropped_ShouldBeAnError가 그 갈래를
@@ -4430,12 +4434,13 @@ END",
         }
 
         /// <summary>
-        /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤ - "호출식" 칸(AiService.cs:990)은 파이프
-        /// 왕복이 필요 없다는 것을 실측으로 증명한다] `CheckReferencedFunctions`는 헤딩
-        /// 존재만 확인하고(:3069-3094) 행 내용은 전혀 대조하지 않는다 - 그래서 호출식이
-        /// 렌더 때 이스케이프됐는지, 심지어 실제 호출식과 같은지조차 판정에 영향을 주지
-        /// 않는다. 이 테스트는 호출식에 `|`를 넣고도(비트 OR가 든 인자) 헤딩만 있으면
-        /// 통과한다는 것을 고정한다 - 다른 취급이 필요 없음을 실측으로 못 박는다.
+        /// [2026-08-21 최종 브랜치 리뷰 재라운드 ⑤에서 시작, 2026-08-23 의미가 바뀜]
+        /// 처음 이 테스트는 `CheckReferencedFunctions`가 헤딩 존재만 보고 행 내용을 대조하지
+        /// 않는다는 것을 고정했다. 2026-08-23부터 그 검사는 행 단위(함수 · 호출 위치 · 인자)로
+        /// 대조하므로, 이제 이 테스트가 고정하는 것은 <b>파이프 왕복</b>이다 - 인자에 `|`가
+        /// 들면 렌더러가 `\|`로 이스케이프하고 SplitRow가 복원하므로, 실제 추출기가 낸
+        /// 사실과 이스케이프된 행이 그대로 맞아야 한다. 단언을 새 ErrorType 부재로 좁혀
+        /// 행 대조가 실제로 이 행을 받아들였음을 본다.
         /// </summary>
         [Fact]
         public void Validate_ReferencedFunctionCallExpressionContainsPipe_HeadingPresent_ShouldStillPass()
@@ -4470,8 +4475,7 @@ END",
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.DoesNotContain(
-                result.Errors,
-                e => e.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading));
+                result.DetailedErrors, e => e.Type == ErrorType.ReferencedFunctionMismatch);
         }
 
         [Fact]
@@ -6105,6 +6109,194 @@ END",
                 StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true }
             };
             return SpecExpectations.From(spDef)!;
+        }
+
+        // ------------------------------------------------------------------
+        // [문장 칸 대조 - 2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1]
+        // 네 표는 같은 문장 번호 체계를 공유한다고 문서가 약속하는데, L1은 잠금 힌트에서만
+        // 문장 칸을 행 매칭 키에 넣고 있었다. 집합 술어·DML 범위는 라인 등으로만 행을
+        // 찾아 `SELECT 1` 행을 `UPDATE 1`로 옮겨 적어도 침묵했고, 참조 함수는 헤딩
+        // 존재만 봤다. 아래 테스트들이 그 세 구멍을 각각 고정한다.
+        // ------------------------------------------------------------------
+
+        [Fact]
+        public void Validate_SetPredicateRowWithWrongStatementCell_ShouldReport()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[] { CollectFlagSelectFact() }
+            };
+            // 라인·컬럼·범위·원문은 전부 맞고 문장 칸만 UPDATE로 틀린 행.
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 100 | CollectFlag | = | 최상위 | 1 | 1 | CollectFlag = 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.SetPredicateMismatch && e.Message.Contains("SELECT 1"));
+        }
+
+        private static DmlScopeFact UpdateScopeFact(int line) => new(
+            "UPDATE", line, "dbo.TSettleMst", new[] { "YMD" }, true,
+            Array.Empty<string>(), Array.Empty<string>());
+
+        private const string DmlScopeHeaderRows =
+            "| 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | GROUP BY | ORDER BY |\n"
+            + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n";
+
+        [Fact]
+        public void Validate_DmlScopeRowVerbatim_ShouldPass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[] { UpdateScopeFact(50) }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.DmlScopeTableHeading + "\n" + DmlScopeHeaderRows
+                + "| UPDATE 1 | 50 | dbo.TSettleMst | YMD | 예 | (없음) | — | — |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
+        [Fact]
+        public void Validate_DmlScopeRowWithWrongStatementCell_ShouldReport()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[] { UpdateScopeFact(50) }
+            };
+            // 라인은 맞고 문장 칸만 SELECT로 틀린 행.
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.DmlScopeTableHeading + "\n" + DmlScopeHeaderRows
+                + "| SELECT 1 | 50 | dbo.TSettleMst | YMD | 예 | (없음) | — | — |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("UPDATE 1"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeSecondUpdateRow_ShouldRequireItsOwnOrdinal()
+        {
+            // UPDATE 둘 중 둘째 행의 문장 칸이 첫째와 같은 "UPDATE 1"로 적힌 표.
+            // 라인만 보면 두 행 다 있으므로 통과하던 모양이다.
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[] { UpdateScopeFact(50), UpdateScopeFact(80) }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.DmlScopeTableHeading + "\n" + DmlScopeHeaderRows
+                + "| UPDATE 1 | 50 | dbo.TSettleMst | YMD | 예 | (없음) | — | — |\n"
+                + "| UPDATE 1 | 80 | dbo.TSettleMst | YMD | 예 | (없음) | — | — |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("UPDATE 2"));
+        }
+
+        private static ReferencedFunctionCallFact Workday2CallFact() => new(
+            "dbo.UF_GET_WORKDAY2", "SELECT", 1, 53, "dbo.UF_GET_WORKDAY2(@pi_strYMD, CollectDay)");
+
+        private const string ReferencedFunctionHeaderRows =
+            "| 함수 | 호출 위치 | 인자 | 명세서 |\n"
+            + "| :--- | :--- | :--- | :--- |\n";
+
+        [Fact]
+        public void Validate_ReferencedFunctionRowVerbatim_ShouldPass()
+        {
+            // 렌더러는 의존성이 풀리면 함수 칸을 DB.스키마.이름으로 적는다
+            // (BuildReferencedFunctionTableLines) - 사실의 QualifiedName(dbo.UF_…)과 다르다.
+            // 링크 칸은 경로 의존이라 대조 대상이 아니다.
+            var expectations = EmptyExpectations() with
+            {
+                ReferencedFunctionCalls = new[] { Workday2CallFact() }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.ReferencedFunctionTableHeading + "\n" + ReferencedFunctionHeaderRows
+                + "| SETTLE_POQ_DB.dbo.UF_GET_WORKDAY2 | SELECT 1 (라인 53) | dbo.UF_GET_WORKDAY2(@pi_strYMD, CollectDay) | [Spec](../../../Functions/dbo.UF_GET_WORKDAY2/docs/Spec.md) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ReferencedFunctionMismatch);
+        }
+
+        [Fact]
+        public void Validate_ReferencedFunctionRowDropped_ShouldReport()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                ReferencedFunctionCalls = new[] { Workday2CallFact() }
+            };
+            // 헤딩도 헤더도 구분줄도 있는데 행만 없는 표 - 헤딩 존재만 보면 통과한다.
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.ReferencedFunctionTableHeading + "\n" + ReferencedFunctionHeaderRows;
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ReferencedFunctionMismatch);
+        }
+
+        [Fact]
+        public void Validate_ReferencedFunctionCallExpressionSpansLines_RenderedFolded_ShouldPass()
+        {
+            // CallExpression은 TextOf(node) 그대로라 원문의 개행이 남는다. 렌더러는
+            // MarkdownTableCellCodec.Escape가 개행을 공백으로 접어 한 줄 칸으로 싣는다 -
+            // 마크다운 표 행은 한 줄이므로 개행이 든 값을 그대로 요구하면 어떤 산출물도
+            // 만족시킬 수 없다(CollapseWhitespace 문서). 집합 술어의
+            // FoldNewlinesLikeRenderedCell과 같은 접기를 여기도 적용해야 한다.
+            var call = new ReferencedFunctionCallFact(
+                "dbo.UF_GET_WORKDAY2", "SELECT", 1, 78,
+                "dbo.UF_GET_WORKDAY2( CONVERT(VARCHAR(6), DATEADD(M, CollectMonth, @pi_strYMD), 112) + '01',\n                                     CollectDay-1)");
+            var expectations = EmptyExpectations() with { ReferencedFunctionCalls = new[] { call } };
+            var renderedCell = MarkdownTableCellCodec.Escape(call.CallExpression);
+            Assert.DoesNotContain("\n", renderedCell);
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.ReferencedFunctionTableHeading + "\n" + ReferencedFunctionHeaderRows
+                + $"| dbo.UF_GET_WORKDAY2 | SELECT 1 (라인 78) | {renderedCell} | (명세서 없음) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ReferencedFunctionMismatch);
+        }
+
+        [Fact]
+        public void Validate_ReferencedFunctionCellIsADifferentNameWithSameSuffix_ShouldReport()
+        {
+            // 함수 칸 대조는 `이름`·`스키마.이름`·`DB.스키마.이름` 세 표기를 받으려고 접미
+            // 일치를 쓴다. 경계 없는 EndsWith면 `X_UF_GET_WORKDAY2` 같은 다른 이름도
+            // 통과하므로, 점 경계 또는 전체 일치만 받아야 한다.
+            var expectations = EmptyExpectations() with { ReferencedFunctionCalls = new[] { Workday2CallFact() } };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.ReferencedFunctionTableHeading + "\n" + ReferencedFunctionHeaderRows
+                + "| X_UF_GET_WORKDAY2 | SELECT 1 (라인 53) | dbo.UF_GET_WORKDAY2(@pi_strYMD, CollectDay) | (명세서 없음) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ReferencedFunctionMismatch);
+        }
+
+        [Fact]
+        public void Validate_ReferencedFunctionRowWithWrongStatementCell_ShouldReport()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                ReferencedFunctionCalls = new[] { Workday2CallFact() }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.ReferencedFunctionTableHeading + "\n" + ReferencedFunctionHeaderRows
+                + "| dbo.UF_GET_WORKDAY2 | UPDATE 1 (라인 53) | dbo.UF_GET_WORKDAY2(@pi_strYMD, CollectDay) | (명세서 없음) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.ReferencedFunctionMismatch && e.Message.Contains("SELECT 1 (라인 53)"));
         }
     }
 }

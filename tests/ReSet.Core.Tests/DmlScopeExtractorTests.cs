@@ -636,7 +636,7 @@ END";
         public void Extract_StandaloneSelect_ShouldNotDisturbDmlOrdinals()
         {
             // DML 범위 표의 문장 번호는 사실이 들고 있는 값이 아니라 목록 안 자리로
-            // 매겨진다(AiService.BuildStatementOrdinals). 그래서 "UPDATE 번호가 밀리지
+            // 매겨진다(DmlScopeExtractor.BuildStatementOrdinals(렌더러 AiService는 이를 위임 호출)). 그래서 "UPDATE 번호가 밀리지
             // 않는다"는 "UPDATE 사실의 개수와 상대 순서가 그대로다"와 같은 말이다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
@@ -732,7 +732,7 @@ BEGIN
     SELECT B.ClientID FROM dbo.TB B WITH(NOLOCK) WHERE B.UseState = 0 ORDER BY B.ClientID
 END";
 
-            // DML 범위 표의 번호는 사실 목록 안의 자리다(AiService.BuildStatementOrdinals) -
+            // DML 범위 표의 번호는 사실 목록 안의 자리다(DmlScopeExtractor.BuildStatementOrdinals(렌더러 AiService는 이를 위임 호출)) -
             // 연산별로 세므로 SELECT만 걸러낸 목록의 i번째가 곧 `SELECT i+1`이다.
             var scopeSelectLines = DmlScopeExtractor.Extract(ddl, "@pi_strYMD")
                 .Where(f => f.Operation == "SELECT")

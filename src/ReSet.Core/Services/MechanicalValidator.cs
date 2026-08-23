@@ -58,6 +58,9 @@ namespace ReSet.Core.Services
         InsertMappingTableNameMismatch,
         // 컬럼 널 허용 주장 어긋남의 L1 앵커.
         NullabilityClaimMismatch,
+        // 참조 함수 표의 행 단위 대조 실패 앵커(2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1).
+        // 이전에는 헤딩 부재를 SetPredicateMismatch로 빌려 보고했다.
+        ReferencedFunctionMismatch,
         General
     }
 
@@ -2844,6 +2847,10 @@ namespace ReSet.Core.Services
         /// GROUP BY·ORDER BY) 안에서는 라인 칸 말고 다른 칸이 순수 숫자로만 채워지지
         /// 않으므로(문장 칸은 "UPDATE 1"처럼 접두어가 붙는다) 표 내부 충돌 위험은
         /// 낮게 남는다.
+        /// 2026-08-23부터는 문장 칸(`UPDATE n`·`SELECT n`)도 같은 행에서 요구하므로
+        /// 라인이 우연히 같은 다른 행에 걸릴 위험은 더 줄었다 - 번호는 렌더러와 같은
+        /// DmlScopeExtractor.BuildStatementOrdinals로 매긴다(렌더러와 같은 함수 - 검증기는 조립기에
+        /// 컴파일 의존하지 않는다는 관례를 지키려고 중립 자리에 둔다).
         ///
         /// [GROUP BY 항 - Task 8] 값 대조는 GroupByColumns가 비어 있지 않을 때만
         /// 요구한다. "(없음)"은 `조인 키` 칸에도 나오는 토큰이라, 값이 비었을 때도
@@ -2885,24 +2892,40 @@ namespace ReSet.Core.Services
                 }
             }
 
-            foreach (var fact in expectations.DmlScopeFacts)
+            // [문장 칸도 같은 행에서 요구한다 - 2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1]
+            // 이전에는 라인 토큰 하나로 행을 찾았다. 네 표가 같은 번호 체계를 공유한다는
+            // 계약(architecture.md §4.12)을 L1이 지키지 않아, `UPDATE 2` 행을 `UPDATE 1`로
+            // 적거나 `SELECT 1`을 `UPDATE 1`로 옮겨도 라인이 맞으면 통과했다. 번호는
+            // 렌더러와 같은 출처(DmlScopeExtractor.BuildStatementOrdinals)로 다시 매긴다 -
+            // 채번을 여기서 복제하면 두 출처가 어긋나는 날 옳게 베낀 표가 거부된다.
+            var ordinals = DmlScopeExtractor.BuildStatementOrdinals(expectations.DmlScopeFacts);
+
+            for (var factIndex = 0; factIndex < expectations.DmlScopeFacts.Count; factIndex++)
             {
+                var fact = expectations.DmlScopeFacts[factIndex];
+                var statementToken = $"{fact.Operation} {ordinals[factIndex]}";
                 var lineToken = fact.Line.ToString();
                 var matchingRows = rowLines
-                    .Where(row => row.Split('|').Any(cell => cell.Trim() == lineToken))
+                    .Where(row =>
+                    {
+                        var cells = MarkdownTableCellCodec.SplitRow(row);
+                        return cells.Any(cell => cell == statementToken)
+                            && cells.Any(cell => cell == lineToken);
+                    })
                     .ToList();
 
                 if (matchingRows.Count == 0)
                 {
                     var message =
-                        $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {fact.Operation} 행이 없습니다. "
-                        + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없습니다.";
+                        $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {statementToken} 행이 없습니다 - "
+                        + "문장 칸과 라인 칸이 둘 다 같은 행에 있어야 합니다. "
+                        + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, 문장 번호를 바꿔 적을 수 없습니다.";
                     result.Errors.Add(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.DmlScopeTableMissing,
                         Message = message,
-                        RawContext = $"{fact.Operation} @ line {fact.Line}"
+                        RawContext = $"{statementToken} @ line {fact.Line}"
                     });
                     continue;
                 }
@@ -2919,7 +2942,7 @@ namespace ReSet.Core.Services
 
                 var groupByToken = string.Join(", ", fact.GroupByColumns);
                 var groupByPresent = matchingRows.Any(
-                    row => row.Split('|').Any(cell => cell.Trim() == groupByToken));
+                    row => MarkdownTableCellCodec.SplitRow(row).Any(cell => cell == groupByToken));
                 if (groupByPresent) continue;
 
                 var groupByMessage =
@@ -3154,9 +3177,15 @@ namespace ReSet.Core.Services
             // (FoldNewlinesLikeRenderedCell 문서. 추출기 경로의 PredicateText는 이미
             // CollapseWhitespace를 거쳐 개행이 없으므로 이 접기는 손으로 조립한 사실에
             // 대한 방어다). 이스케이프된 `|`는 SplitRow가 이미 복원한다.
+            // [문장 번호도 키에 넣고 행에서 요구한다 - 2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1]
+            // 묶음 키에 연산은 있었으나 행 매칭 술어는 라인·컬럼·범위·원문 네 칸만 봤다 -
+            // `SELECT 1` 행을 `UPDATE 1`로 옮겨 적어도 통과했다. 문장 토큰(렌더 그대로
+            // `{Operation} {StatementOrdinal}`)을 행에서 요구하고, 한 DDL 줄에 문장이
+            // 둘일 때 합쳐지지 않도록 번호를 키에도 넣는다.
             var groups = expectations.SetPredicates
                 .GroupBy(f => (
                     Operation: f.Operation.ToUpperInvariant(),
+                    f.StatementOrdinal,
                     f.Line,
                     Column: f.Column.ToUpperInvariant(),
                     Scope: f.Scope.ToUpperInvariant(),
@@ -3168,6 +3197,7 @@ namespace ReSet.Core.Services
                 var line = group.Key.Line;
                 var displayColumn = facts[0].Column;
                 var displayOperation = facts[0].Operation;
+                var statementToken = $"{displayOperation} {facts[0].StatementOrdinal}";
                 var displayScope = facts[0].Scope;
                 var displayPredicateText = group.Key.PredicateText;
                 var lineToken = line.ToString();
@@ -3188,7 +3218,8 @@ namespace ReSet.Core.Services
                 var matchingRows = rowLines.Where(r =>
                 {
                     var cells = MarkdownTableCellCodec.SplitRow(r);
-                    return cells.Any(c => c == lineToken)
+                    return cells.Any(c => c == statementToken)
+                        && cells.Any(c => c == lineToken)
                         && cells.Any(c => string.Equals(c, displayColumn, StringComparison.OrdinalIgnoreCase))
                         && cells.Any(c => string.Equals(c, displayScope, StringComparison.OrdinalIgnoreCase))
                         && cells.Any(c => string.Equals(c, displayPredicateText, StringComparison.Ordinal));
@@ -3197,9 +3228,10 @@ namespace ReSet.Core.Services
                 if (matchingRows.Count != facts.Count)
                 {
                     var countMessage =
-                        $"집합 술어 표에서 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 범위 `{displayScope}` "
+                        $"집합 술어 표에서 문장 {statementToken} 원본 DDL 라인 {line} 컬럼 `{displayColumn}` 범위 `{displayScope}` "
                         + $"술어 원문 `{displayPredicateText}` 키를 가진 사실이 {facts.Count}개인데 행은 "
-                        + $"{matchingRows.Count}개 있습니다. 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
+                        + $"{matchingRows.Count}개 있습니다. 문장 칸은 `{statementToken}` 그대로여야 하고 "
+                        + "「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
                         + "요약하거나 바꿔 쓸 수 없고, 행을 합치거나 생략할 수 없으며, "
                         + "범위(최상위 / 파생 테이블 / 하위 질의)도 사실대로 적어야 합니다.";
                     result.Errors.Add(countMessage);
@@ -3207,7 +3239,7 @@ namespace ReSet.Core.Services
                     {
                         Type = ErrorType.SetPredicateMismatch,
                         Message = countMessage,
-                        RawContext = $"{displayOperation} @ line {line} · {displayColumn}"
+                        RawContext = $"{statementToken} @ line {line} · {displayColumn}"
                     });
                     continue;
                 }
@@ -3443,7 +3475,9 @@ namespace ReSet.Core.Services
             literal.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
 
         /// <summary>
-        /// 「참조 함수 (기계 확정 — 수정 금지)」 표가 명세서에 실렸는지 확인한다.
+        /// 「참조 함수 (기계 확정 — 수정 금지)」 표가 명세서에 실렸는지, 그리고 사실마다
+        /// 자기 행(함수·호출 위치·인자)이 있는지 확인한다(행 대조는 2026-08-23부터 -
+        /// 본문 주석 참고).
         ///
         /// [왜 이 검사가 있는가 - 2026-08-20 최종 전체 리뷰 M1] 조립기가 이 표를
         /// 프롬프트에 넣지만, 모델이 그것을 옮겼는지는 아무도 확인하지 않았다.
@@ -3459,6 +3493,22 @@ namespace ReSet.Core.Services
             // L1을 통과하지 못한다 - 이 가드 없이 검사를 먼저 넣어 실측으로 확인했다.
             if (expectations.ReferencedFunctionCalls.Count == 0) return;
 
+            // Validate의 catch-all은 검사 하나가 던지면 Errors를 통째로 지우고 소프트
+            // 패스시킨다 - 이 검사의 예외가 다른 표의 판정을 삼키지 않도록 자기 가드를 둔다
+            // (CheckExecutionSemantics·CheckCaseBranches와 같은 관례).
+            try
+            {
+                CheckReferencedFunctionsCore(markdown, expectations, result);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "참조 함수 표 대조 중 예외 - 이 표의 검사만 건너뜁니다.");
+            }
+        }
+
+        private static void CheckReferencedFunctionsCore(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
             var lines = MarkdownSectionLocator.SplitLines(markdown);
             var headingIndex = MarkdownSectionLocator.FindIndexOutsideFence(
                 lines, 0,
@@ -3472,11 +3522,102 @@ namespace ReSet.Core.Services
                 result.Errors.Add(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
-                    Type = ErrorType.SetPredicateMismatch,
+                    Type = ErrorType.ReferencedFunctionMismatch,
                     Message = message
+                });
+                return;
+            }
+
+            // [행 단위 대조 - 2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1] 이전에는 헤딩 존재만
+            // 봤다 - 행을 지우거나 호출 위치를 바꿔 적어도 침묵했다. 잠금 힌트와 같은
+            // 방식으로 사실마다 자기 행을 요구한다. 대조 칸은 셋이다:
+            //   · 호출 위치 - 렌더 그대로 `{Operation} {StatementOrdinal} (라인 {Line})`
+            //     (BuildReferencedFunctionTableLines). DML·`SELECT n` 번호는 네 표가 공유하지만
+            //     `IF n`은 표마다 채번 조건이 달라 잠금 힌트 표의 `IF n`과 같은 문장이 아닐 수
+            //     있다(architecture.md §4.12) - 이 검사는 표를 가로질러 대조하지 않는다.
+            //   · 인자 - CallExpression에 렌더와 같은 개행 접기를 적용한 값. `\|`는 SplitRow가
+            //     복원하지만 개행 접기는 되돌리지 않으므로 기대 쪽에서 접는다(아래 expectedCall).
+            //   · 함수 - 렌더러는 의존성이 풀리면 `DB.스키마.이름`으로, 아니면 사실의
+            //     QualifiedName(스키마 유무 불문)으로 적는다. 기대 쪽에는 그 판정 재료가
+            //     없으므로 정확 일치 대신 <b>이름 부분의 점 경계 접미 일치</b>(대소문자
+            //     무시)를 요구한다 - `UF_X`·`dbo.UF_X`·`SETTLE_POQ_DB.dbo.UF_X`는 같은 함수이고
+            //     `X_UF_X`는 아니다(IsSameFunctionName).
+            //   · 명세서 링크 칸은 상대 경로라 대조하지 않는다.
+            // 같은 키의 사실이 여럿이면(한 문장이 같은 함수를 같은 인자로 두 번 부르면)
+            // 행도 그 수만큼 있어야 한다 - CheckSetPredicates와 같은 묶음 규칙이다.
+            var (_, endIndex) = LocateHeadingSection(lines, DmlScopeExtractor.ReferencedFunctionTableHeading);
+
+            var rowLines = new List<string>();
+            for (var i = headingIndex + 1; i < endIndex; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    rowLines.Add(lines[i]);
+                }
+            }
+
+            var groups = expectations.ReferencedFunctionCalls
+                .GroupBy(f => (
+                    Name: BareFunctionName(f.QualifiedName).ToUpperInvariant(),
+                    Operation: f.Operation.ToUpperInvariant(),
+                    f.StatementOrdinal,
+                    f.Line,
+                    f.CallExpression));
+
+            foreach (var group in groups)
+            {
+                var facts = group.ToList();
+                var fact = facts[0];
+                var bareName = BareFunctionName(fact.QualifiedName);
+                var locationToken = $"{fact.Operation} {fact.StatementOrdinal} (라인 {fact.Line})";
+                // CallExpression은 TextOf(node) 그대로라 원문 개행이 남는다(SetPredicateFact.
+                // PredicateText와 달리 CollapseWhitespace를 거치지 않는다). 렌더러는
+                // MarkdownTableCellCodec.Escape가 개행을 공백으로 접어 한 줄 칸으로 싣고,
+                // 마크다운 표 행은 한 줄이므로 개행이 든 값을 그대로 요구하면 어떤 산출물도
+                // 만족시킬 수 없다 - CheckSetPredicates와 같은 접기를 기대 쪽에 적용한다.
+                var expectedCall = FoldNewlinesLikeRenderedCell(fact.CallExpression);
+
+                var matchingRows = rowLines.Count(row =>
+                {
+                    var cells = MarkdownTableCellCodec.SplitRow(row);
+                    return cells.Any(c => c == locationToken)
+                        && cells.Any(c => string.Equals(c, expectedCall, StringComparison.Ordinal))
+                        && cells.Any(c => IsSameFunctionName(c, bareName));
+                });
+                if (matchingRows == facts.Count) continue;
+
+                var message =
+                    $"참조 함수 표에 `{fact.QualifiedName}`의 호출 위치 `{locationToken}` "
+                    + $"인자 `{expectedCall}` 행이 {facts.Count}개 있어야 하는데 {matchingRows}개 있습니다. "
+                    + "함수·호출 위치·인자 칸은 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, "
+                    + "문장 번호·라인을 바꿔 적을 수 없으며, 인자 원문을 요약할 수 없습니다.";
+                result.Errors.Add(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.ReferencedFunctionMismatch,
+                    Message = message,
+                    RawContext = $"{locationToken} {fact.QualifiedName}"
                 });
             }
         }
+
+        /// <summary>
+        /// `DB.스키마.이름`·`스키마.이름`·`이름` 어느 표기든 마지막 부분(함수 이름)만 돌려준다.
+        /// CheckReferencedFunctions의 함수 칸 대조가 접미 일치로 쓰는 값이다.
+        /// </summary>
+        private static string BareFunctionName(string qualifiedName)
+        {
+            var lastDot = qualifiedName.LastIndexOf('.');
+            return lastDot < 0 ? qualifiedName : qualifiedName[(lastDot + 1)..];
+        }
+
+        /// <summary>
+        /// 함수 칸 `cell`이 `bareName`과 같은 함수를 가리키는가 - 전체 일치이거나 점 경계
+        /// 뒤의 접미 일치(`dbo.UF_X`·`DB.dbo.UF_X`)만 참이다. `X_UF_X`는 거짓이다.
+        /// </summary>
+        private static bool IsSameFunctionName(string cell, string bareName) =>
+            string.Equals(cell, bareName, StringComparison.OrdinalIgnoreCase)
+            || cell.EndsWith("." + bareName, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 집합 술어 헤딩과 그 표가 끝나는 인덱스를 찾는다. LocateDmlScopeSection과
@@ -3507,8 +3648,9 @@ namespace ReSet.Core.Services
         ///
         /// [행 식별 키가 (Operation, StatementOrdinal, Line, Table, Alias, Scope, Hints)
         /// 여섯 값 전부인 이유 - 2026-08-21 조정자 판정, 브리프 지시 2]
-        /// 「DML 범위」·「집합 술어」 표는 문장당 행이 하나(또는 컬럼당 하나)라 Line
-        /// 토큰만으로 행을 특정해도 충돌이 없었다(CheckDmlScopeTable 참고). 잠금 힌트
+        /// 「DML 범위」·「집합 술어」 표는 문장당 행이 하나(또는 컬럼당 하나)라 처음에는
+        /// Line 토큰만으로 행을 특정했다(2026-08-23부터는 두 표도 문장 토큰을 같은 행에서
+        /// 요구한다 - CheckDmlScopeTable·CheckSetPredicates의 같은 날짜 주석). 잠금 힌트
         /// 표는 다르다 - 행 하나가 (문장 × 스캔 자리)라서 한 문장에 여러 행이 난다.
         /// `FROM A a JOIN B b`처럼 두 참조가 한 물리 줄에 있으면 두 LockHintFact의
         /// Line이 정확히 같다(LockHintVisitor.Add의 중복 제거 키 문서가 이미 이 사실을
