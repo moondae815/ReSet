@@ -1641,6 +1641,18 @@ namespace ReSet.Core.Services
                 {
                     // 번호는 UNION 갈래 수와 무관하게 문장당 하나다 - INSERT가 갈래마다
                     // Collect를 부르면서 번호는 미리 집어 공유하는 것과 같은 구조다.
+                    //
+                    // [갈래마다 Collect를 부르는 대가 - 알고 남긴다] Collect 안의
+                    // DerivedTableCollector는 문장 **전체**를 훑는다. 그래서 독립 SELECT가
+                    // UNION과 별칭 있는 파생 테이블을 동시에 가지면 그 파생 테이블 술어가
+                    // 갈래 수만큼 중복 수집된다. 바로 위 Visit(InsertSpecification)이 이미
+                    // 같은 구조라 이 작업이 새로 만든 위험은 아니고, 코퍼스에 그 모양이
+                    // 없다 - 2026-08-23 실측: output/Objects 전체에서 UNION 연산자는 다섯
+                    // 객체 여덟 자리뿐이고(COMM_UPD:143, STAT_PGCOLLECT_INS:78·95,
+                    // EXCEPTION_PROC:485, SETTLE_INS:165·226, CMRate_Ins:100·179) 전부
+                    // INSERT 원천이거나 `IN (...)` 서브쿼리다. 독립 SELECT의 UNION은 0건.
+                    // 코퍼스에 그 모양이 들어오는 날 고칠 자리는 여기가 아니라 Collect다
+                    // (파생 테이블 훑기를 갈래 루프 밖으로 한 번만 빼면 INSERT도 같이 낫는다).
                     var ordinal = NextOrdinal("SELECT");
                     foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
                     {
