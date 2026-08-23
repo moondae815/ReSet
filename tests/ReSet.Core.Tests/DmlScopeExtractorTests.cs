@@ -685,13 +685,13 @@ END";
         }
 
         [Fact]
-        public void ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers()
+        public void ExtractAndLockHintsAndFunctionCallsAndSetPredicates_ShouldAgreeOnSelectStatementNumbers()
         {
-            // 세 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
-            // 세 표의 같은 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는
+            // 네 방문자가 "무엇이 SELECT n인가"를 각자 복제해 판정하면 같은 DDL에서
+            // 네 표의 같은 번호가 다른 문장을 가리킬 수 있고, 표를 가로질러 읽는
             // 독자에게 그 어긋남은 조용하다. 판정은 DmlScopeExtractor의 정적 헬퍼
-            // 하나(HasFromClause)이고 세 방문자가 그것을 부른다(2026-08-22 Task 1
-            // 리뷰 C5 · 2026-08-23 축 A ③(b) Task 1 수정 라운드 1 F2).
+            // 하나(HasFromClause)이고 네 방문자가 그것을 부른다(2026-08-22 Task 1
+            // 리뷰 C5 · 2026-08-23 축 A ③(b) Task 1 수정 라운드 1 F2 · 같은 배치 Task 2).
             //
             // [판정을 공유하는 것만으로는 부족하다] 채번 지점(NextOrdinal("SELECT"))은
             // 방문자마다 따로 있다. 판정이 같아도 한쪽 채번만 갈라지면 표가 조용히
@@ -713,7 +713,9 @@ END";
             //
             // 각 SELECT의 FROM을 SELECT와 같은 줄에 두어, 잠금 힌트 사실의 라인
             // (테이블 참조 위치)과 DML 범위 사실의 라인(문장 시작)이 같은 값이 되게
-            // 했다 - 두 표를 라인으로 맞대 볼 수 있다.
+            // 했다 - 두 표를 라인으로 맞대 볼 수 있다. 커서 원천의 WHERE도 같은 줄에
+            // 둔 이유가 같다: 집합 술어 사실의 라인은 그 **항 자신**의 줄이라
+            // (SetPredicateFact.Line) 항을 다음 줄에 두면 문장 시작줄과 맞댈 수 없다.
             const string ddl = @"
 CREATE PROCEDURE dbo.P
 AS
@@ -727,7 +729,7 @@ BEGIN
     SELECT @c = COUNT(*) FROM dbo.UIF_SettleYMD('20260101') F
 
     DECLARE Cur_SettlePost CURSOR FOR
-    SELECT B.ClientID FROM dbo.TB B WITH(NOLOCK) ORDER BY B.ClientID
+    SELECT B.ClientID FROM dbo.TB B WITH(NOLOCK) WHERE B.UseState = 0 ORDER BY B.ClientID
 END";
 
             // DML 범위 표의 번호는 사실 목록 안의 자리다(AiService.BuildStatementOrdinals) -
@@ -769,6 +771,27 @@ END";
             // 어긋남을 보여 주는 라인 비교는 실행되지도 않는다.
             Assert.Equal(scopeSelectLines[tvfCall.StatementOrdinal - 1], tvfCall.Line);
             Assert.Equal(2, tvfCall.StatementOrdinal);
+
+            // [네 번째 채번 지점 - 2026-08-23 축 A ③(b) Task 2] 집합 술어 표도 독립
+            // SELECT를 방문하면서 NextOrdinal("SELECT")를 따로 돌린다. 커서 원천의
+            // `B.UseState = 0`이 이 표에서만 행을 내므로(잠금 힌트·참조 함수는 그
+            // 문장에서 담을 것이 없다) 이 표가 SELECT 3을 덮는다 - 세 표가 각각
+            // 1·3, 2를 덮던 자리에 셋째 문장이 더해져 픽스처의 SELECT 셋이 전부
+            // 어느 한 표에는 나타난다.
+            //
+            // 이 표의 채번만 갈라져 FROM 없는 `SELECT @a = 1`까지 세는 날, 행 수는
+            // 그대로다(그 문장은 WHERE가 없어 낼 행이 없다) - 그래서 Assert.Single은
+            // 그 어긋남을 잡지 못하고, 아래 짝 단언만이 잡는다.
+            var predicateSelects = DmlScopeExtractor.ExtractSetPredicates(ddl)
+                .Where(f => f.Operation == "SELECT")
+                .ToArray();
+
+            var cursorPredicate = Assert.Single(predicateSelects);
+
+            // 짝을 먼저 맞댄다 - 위 참조 함수 블록과 같은 이유다(번호를 먼저 단언하면
+            // 채번이 갈라진 날 그쪽이 먼저 터져 라인 비교가 실행되지 않는다).
+            Assert.Equal(scopeSelectLines[cursorPredicate.StatementOrdinal - 1], cursorPredicate.Line);
+            Assert.Equal(3, cursorPredicate.StatementOrdinal);
         }
 
         [Fact]
@@ -1589,6 +1612,122 @@ END";
             Assert.Equal("파생 테이블 X", fact.Scope);
             Assert.Equal("—", fact.Column);
             Assert.Equal("B.YMD = B.AYMD", fact.PredicateText);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_StandaloneSelectWhere_ShouldBeCollected()
+        {
+            // UF_GET_COLLECTYMD:100 실측 - `CollectFlag = 1`은 리터럴 우변 등치라 이 표가
+            // 담을 수 있는 형태인데, 독립 SELECT라 방문조차 되지 않아 표에 오지 못했다.
+            // "회수구분이 1(자동회수)인 행만 조회한다"는 사실이 어떤 기계 확정 표에도
+            // 없고 산문에만 있었다(설계 §2.2).
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = CollectDay
+    FROM   dbo.TPGCollectPeriodMst WITH(NOLOCK)
+    WHERE  CollectFlag = 1
+    RETURN @v
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            Assert.Equal("CollectFlag", fact.Column);
+            Assert.Equal("=", fact.Operator);
+            Assert.Equal("최상위", fact.Scope);
+            Assert.Equal(new[] { "1" }, fact.Literals);
+            Assert.Equal("CollectFlag = 1", fact.PredicateText);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_StandaloneSelectWithoutFrom_ShouldNotConsumeAnOrdinal()
+        {
+            // 훑을 자리가 없는 `SELECT @a = 1`이 번호를 삼키면 뒤 문장의 `SELECT n`이
+            // 조용히 밀려, 같은 번호가 표마다 다른 문장을 가리킨다. 판정은 네 방문자가
+            // 공유하는 HasFromClause 하나다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @a = 1
+
+    SELECT @b = C FROM dbo.TA WITH(NOLOCK) WHERE X = 7
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            Assert.Equal(new[] { "7" }, fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_StandaloneSelectDerivedTable_ShouldCarryItsScope()
+        {
+            // 독립 SELECT 안의 파생 테이블 WHERE도 그 질의가 훑는 행을 좁힌다 -
+            // DML 문장에서 이미 담던 것과 같은 범위 표기를 쓴다(설계 §4 B).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT X.Amt
+    FROM   (SELECT B.PLTID, SUM(B.Amt) AS Amt FROM dbo.TSettleMst B
+            WHERE B.UseState = 0 GROUP BY B.PLTID) X
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("SELECT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
+            Assert.Equal("파생 테이블 X", fact.Scope);
+            Assert.Equal("B.UseState", fact.Column);
+            Assert.Equal(new[] { "0" }, fact.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_StandaloneSelect_ShouldNotShiftDmlOrdinals()
+        {
+            // 채번은 연산 이름별로 독립이다 - SELECT 행이 앞에 끼어도 UPDATE 1은
+            // 계속 첫 UPDATE다. 이것이 깨지면 집합 술어 표와 DML 범위 표의 같은
+            // `UPDATE n`이 다른 문장을 가리킨다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    SELECT @v = C FROM dbo.TA WITH(NOLOCK) WHERE X = 1
+
+    UPDATE A SET A.Y = 1 FROM dbo.TB A WHERE A.Z = 2
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var update = Assert.Single(facts, f => f.Operation == "UPDATE");
+            Assert.Equal(1, update.StatementOrdinal);
+            Assert.Equal(new[] { "2" }, update.Literals);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_InsertSourceSelect_ShouldStayInsertOnly()
+        {
+            // `INSERT ... SELECT`의 원천은 문장 노드(SelectStatement)가 아니라
+            // QueryExpression이라 독립 SELECT 방문에 다시 잡히지 않는다 - 잡히면
+            // 같은 술어가 `INSERT 1`과 `SELECT 1` 두 행으로 실려 표가 문장 수를
+            // 부풀린다. DmlScopeFact.Operation 문서가 적은 AST 모양이 그 근거다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    INSERT INTO dbo.TA (C) SELECT B.C FROM dbo.TB B WITH(NOLOCK) WHERE B.UseState = 0
+END";
+
+            var fact = Assert.Single(DmlScopeExtractor.ExtractSetPredicates(ddl));
+
+            Assert.Equal("INSERT", fact.Operation);
+            Assert.Equal(1, fact.StatementOrdinal);
         }
 
         [Fact]

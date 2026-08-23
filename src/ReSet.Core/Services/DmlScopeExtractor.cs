@@ -156,7 +156,19 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
     }
 
-    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나.</param>
+    /// <param name="Operation">
+    /// "INSERT", "UPDATE", "DELETE", "SELECT" 중 하나.
+    ///
+    /// ["SELECT"는 무엇인가 - 2026-08-23 축 A ③(b) Task 2] DML 밖의 독립 SELECT 문장 중
+    /// <b>FROM이 있는 것</b>이다 - 판정도 번호도 DmlScopeFact.Operation의 "SELECT"와 같다
+    /// (DmlScopeExtractor.HasFromClause 하나가 유일한 출처). 커서 원천 질의가 그 실물이고
+    /// (UP_Util_Settle_Summary_AcqManual:29-36의 `B.AcqType = 1`·`A.OutState IN (2,9)`),
+    /// `INSERT ... SELECT`의 원천은 문장 노드가 아니라 QueryExpression이라 `INSERT n`
+    /// 행과 겹쳐 실리지 않는다.
+    ///
+    /// [이 표에도 `IF`는 없다] DML 범위 표와 같다 - 잠금 힌트 표·참조 함수 표만 `IF n`을
+    /// 담는다(DmlScopeFact.Operation 문서의 같은 문단 참고).
+    /// </param>
     /// <param name="Line">
     /// 원본 DDL에서 <b>이 술어 항 자신</b>이 시작하는 줄 번호(1부터) - 문장의 시작줄이
     /// 아니다.
@@ -209,8 +221,8 @@ namespace ReSet.Core.Services
     /// <param name="StatementOrdinal">
     /// 이 사실을 낸 문장의 "연산 종류별 · 1부터" 번호(예: 세 번째 UPDATE면 3).
     /// SetPredicateVisitor가 자신의 Visit(UpdateSpecification/DeleteSpecification/
-    /// InsertSpecification) 오버라이드 안에서(Collect 안이 아니라) 연산별 카운터를
-    /// 증가시켜 채운다.
+    /// InsertSpecification)과 ExplicitVisit(SelectStatement) 오버라이드 안에서
+    /// (Collect 안이 아니라) 연산별 카운터를 증가시켜 채운다.
     ///
     /// [왜 DML 범위 표의 채번을 조회하지 않고 여기 직접 담는가 - FIX ROUND 3]
     /// 예전엔(FIX ROUND 2) AiService가 이 사실을 (Operation, Line) 키로 DML 범위
@@ -223,8 +235,10 @@ namespace ReSet.Core.Services
     /// 리뷰가 반박한 예전 주석의 주장("(연산, 라인)만으로는 원천적으로 구분할 수
     /// 없다")은 SetPredicateFact의 <b>모양</b>에 대한 이야기였을 뿐, 두 방문자가
     /// 실제로 훑는 <b>원본 조각과 그 순서</b>는 애초에 그 정보에 기대지 않는다:
-    /// SetPredicateVisitor와 DmlScopeVisitor는 같은 파싱 트리를 같은 세 Visit
-    /// 오버라이드로, 같은 순서로 방문한다. 두 방문자가 각자 독립적으로(서로를
+    /// SetPredicateVisitor와 DmlScopeVisitor는 같은 파싱 트리를 같은 네 오버라이드로,
+    /// 같은 순서로 방문한다(DML 셋은 `Visit`, 독립 SELECT는
+    /// `ExplicitVisit(SelectStatement)`이고 그 판정은 HasFromClause 하나를 공유한다 -
+    /// 넷째는 2026-08-23 축 A ③(b) Task 2가 더했다). 두 방문자가 각자 독립적으로(서로를
     /// 참조하지 않고) 연산별 카운터를 문장당 정확히 한 번 증가시키면, 두 카운터는
     /// 항상 같은 값을 낸다 - 사전 조회 없이도 "몇 번째 UPDATE인가"를 소스 구조
     /// 자체가 답한다. 그래서 여기 문장 번호를 직접 담아 사전 조회 자체를 없앤다.
@@ -804,9 +818,9 @@ namespace ReSet.Core.Services
             ///
             /// 이것도 알고 남긴다. 양쪽을 맞추려면 한쪽 채번 조건을 넓혀야 하는데,
             /// 그 순간 이미 발행된 명세서의 「IF n」이 조용히 밀린다(바로 위 문단이
-            /// 경고하는 것과 같은 사고다). `SELECT n`은 사정이 다르다 - 세 표가
+            /// 경고하는 것과 같은 사고다). `SELECT n`은 사정이 다르다 - 네 표가
             /// `HasFromClause` 하나를 공유하고
-            /// `ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers`가
+            /// `ExtractAndLockHintsAndFunctionCallsAndSetPredicates_ShouldAgreeOnSelectStatementNumbers`가
             /// 번호와 라인의 짝으로 그 합의를 못 박는다. `IF n`에는 그런 합의가 없다.
             /// <b>두 표의 `IF n`을 가로질러 대조하지 마라.</b> 언젠가 통일한다면
             /// 산출물 재생성과 함께여야 한다.
@@ -1515,16 +1529,17 @@ namespace ReSet.Core.Services
         /// 판정이다. UNION이면 갈래 중 하나만 FROM을 가져도 참이다.
         ///
         /// [왜 방문자 안이 아니라 여기 있는가 - 설계 §4 A, Task 1 리뷰 C5]
-        /// 이 판정을 쓰는 방문자가 셋이다(LockHintVisitor는 잠금 힌트 표의 `SELECT n`,
+        /// 이 판정을 쓰는 방문자가 넷이다(LockHintVisitor는 잠금 힌트 표의 `SELECT n`,
         /// DmlScopeVisitor는 DML 범위 표의 `SELECT n`, ReferencedFunctionVisitor는
-        /// 참조 함수 표의 `SELECT n` - 셋째는 2026-08-23 축 A ③(b) Task 1이 더했다).
-        /// 세 방문자는 서로를 참조하지
+        /// 참조 함수 표의 `SELECT n`, SetPredicateVisitor는 집합 술어 표의 `SELECT n` -
+        /// 셋째는 2026-08-23 축 A ③(b) Task 1이, 넷째는 같은 배치 Task 2가 더했다).
+        /// 네 방문자는 서로를 참조하지
         /// 않고 각자 세는 것이 계약인데, 그 계약이 성립하려면 "무엇이 SELECT 문장
         /// 하나인가"만은 반드시 같아야 한다. 판정을 각 방문자 안에 복제하면 한쪽만
-        /// 고쳐지는 날 세 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
+        /// 고쳐지는 날 네 표의 같은 번호가 다른 문장을 가리키게 되고, 표를 가로질러
         /// 읽는 독자에게 그 어긋남은 조용하다 - 그래서 판정은 이 메서드 하나가
-        /// 유일한 출처다. ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers가
-        /// 세 표의 <b>번호와 라인의 짝</b>을 맞대 그 합의를 못박는다 - 라인만 맞대면
+        /// 유일한 출처다. ExtractAndLockHintsAndFunctionCallsAndSetPredicates_ShouldAgreeOnSelectStatementNumbers가
+        /// 네 표의 <b>번호와 라인의 짝</b>을 맞대 그 합의를 못박는다 - 라인만 맞대면
         /// 한쪽이 행 없는 문장까지 세기 시작해도 라인 목록은 그대로라 어긋남이 그냥
         /// 통과한다(수정 라운드 1에 뮤테이션으로 실측했다: 잠금 힌트 쪽만 FROM 없는
         /// SELECT를 세게 하면 번호가 {1,3}에서 {2,4}로 밀리는데 라인 목록은 불변이다).
@@ -1532,7 +1547,9 @@ namespace ReSet.Core.Services
         /// [판정을 공유해도 채번은 각자다] 이 메서드가 같아도 `NextOrdinal("SELECT")`
         /// 호출부는 방문자마다 따로 있다. 그래서 채번 지점을 늘리는 사람은 위 테스트도
         /// 함께 넓혀야 한다 - Task 1이 셋째 지점을 더하면서 그 확장을 빠뜨렸고,
-        /// 수정 라운드 1 F2가 잡았다.
+        /// 수정 라운드 1 F2가 잡았다. Task 2가 넷째 지점(SetPredicateVisitor)을 더하면서
+        /// 그 지시대로 가드를 함께 넓혔다 - 픽스처의 커서 원천 SELECT에 WHERE를 두어
+        /// 그 표가 `SELECT 3`을 덮게 했다.
         ///
         /// [FROM이 없으면 세지 않는 이유] `SELECT @a = 1`에는 훑는 자리가 없다.
         /// 번호를 소비하면 표에 낼 행도 없이 뒤 문장의 번호만 민다.
@@ -1541,8 +1558,10 @@ namespace ReSet.Core.Services
             QuerySpecificationsOf(node.QueryExpression).Any(q => q.FromClause != null);
 
         /// <summary>
-        /// DML 문장을 찾아 그 최상위 WHERE(와 파생 테이블 WHERE)에서 집합 술어를 모으고,
-        /// 수집기가 모르는 문장 문맥(연산 종류·문장 번호)을 붙인다.
+        /// DML 문장과 <b>DML 밖의 독립 SELECT</b>를 찾아 그 최상위 WHERE(와 파생 테이블
+        /// WHERE)에서 집합 술어를 모으고, 수집기가 모르는 문장 문맥(연산 종류·문장 번호)을
+        /// 붙인다. 독립 SELECT는 2026-08-23 축 A ③(b) Task 2가 더했다 -
+        /// <see cref="ExplicitVisit(SelectStatement)"/>에 그 근거가 있다.
         ///
         /// [줄 번호는 여기서 붙이지 않는다 - Task 5] 예전에는 문장의 시작 줄도 이
         /// 방문자가 붙였다. 지금은 <c>SetPredicateFact.Line</c>이 <b>항 자신</b>의 줄이라
@@ -1551,10 +1570,12 @@ namespace ReSet.Core.Services
         /// 참고).
         ///
         /// [문장 번호를 이 방문자가 직접 매기는 이유] SetPredicateFact.StatementOrdinal
-        /// 문서 참고 - DmlScopeVisitor와 같은 파싱 트리를 같은 세 Visit 오버라이드로
-        /// 같은 순서로 방문하므로, 이 방문자가 독자적으로 세어도 DML 범위 표의
-        /// 번호와 항상 일치한다. 카운터는 반드시 각 Visit 오버라이드 안에서(Collect
-        /// 안이 아니라) 문장당 정확히 한 번 늘려야 한다 - NextOrdinal 문서 참고.
+        /// 문서 참고 - DmlScopeVisitor와 같은 파싱 트리를 같은 네 오버라이드
+        /// (DML 셋은 `Visit`, 독립 SELECT는 `ExplicitVisit`)로 같은 순서로 방문하고
+        /// SELECT의 판정은 <see cref="HasFromClause"/> 하나를 공유하므로, 이 방문자가
+        /// 독자적으로 세어도 DML 범위 표의 번호와 항상 일치한다. 카운터는 반드시 각
+        /// 오버라이드 안에서(Collect 안이 아니라) 문장당 정확히 한 번 늘려야 한다 -
+        /// NextOrdinal 문서 참고.
         /// </summary>
         private sealed class SetPredicateVisitor : TSqlFragmentVisitor
         {
@@ -1593,10 +1614,49 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
+            /// DML 밖의 독립 SELECT의 WHERE. 변수 대입 SELECT · 커서 원천 질의 · 함수 본문
+            /// SELECT가 전부 이 노드로 온다. `INSERT ... SELECT`의 원천은 문장 노드가 아니라
+            /// QueryExpression이라 여기로 오지 않는다 - 그래서 `INSERT n` 행과 겹쳐 실리지
+            /// 않는다(DmlScopeFact.Operation 문서의 AST 모양 근거,
+            /// `ExtractSetPredicates_InsertSourceSelect_ShouldStayInsertOnly`가 못 박는다).
+            ///
+            /// [왜 넓히는가 - 2026-08-23 축 A ③(b) Task 2, 설계 §2.2] UF_GET_COLLECTYMD:100의
+            /// `CollectFlag = 1`은 리터럴 우변 등치라 이 표가 <b>담을 수 있는</b> 형태인데
+            /// 독립 SELECT라는 이유만으로 담기지 않았다. "회수구분이 1(자동회수)인 행만
+            /// 조회한다"가 어떤 기계 확정 표에도 없고 산문에만 있었다.
+            ///
+            /// [판정은 네 표가 공유한다] FROM 유무 판정은 <see cref="HasFromClause"/> 하나다 -
+            /// DmlScopeVisitor·LockHintVisitor·ReferencedFunctionVisitor가 이미 그것을 부른다.
+            /// 이 오버라이드가 <b>넷째 채번 지점</b>이라
+            /// `ExtractAndLockHintsAndFunctionCallsAndSetPredicates_ShouldAgreeOnSelectStatementNumbers`도
+            /// 함께 넓혔다(그 메서드 문서의 상시 지시).
+            ///
+            /// [IfStatement는 더하지 않는다] 잠금 힌트 표·참조 함수 표는 `IF n`을 담지만 이
+            /// 표와 DML 범위 표는 담지 않는다 - `IF` 술어의 <b>집합 술어</b>가 산문에만 있던
+            /// 사례가 실측되지 않았다(DmlScopeFact.Operation 문서가 같은 판단을 적었다).
+            /// </summary>
+            public override void ExplicitVisit(SelectStatement node)
+            {
+                if (HasFromClause(node))
+                {
+                    // 번호는 UNION 갈래 수와 무관하게 문장당 하나다 - INSERT가 갈래마다
+                    // Collect를 부르면서 번호는 미리 집어 공유하는 것과 같은 구조다.
+                    var ordinal = NextOrdinal("SELECT");
+                    foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
+                    {
+                        Collect("SELECT", node, spec.WhereClause, ordinal);
+                    }
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>
             /// 연산 종류별 문장 번호를 1부터 매긴다. SetPredicateFact.StatementOrdinal
             /// 문서의 실측 근거 참고 - DmlScopeVisitor가 문장 하나당 사실을 정확히
-            /// 하나만 내는 지점(각 Visit 오버라이드)과 카운터 증가 지점을 맞춰야,
-            /// 두 방문자가 독립적으로 세어도 항상 같은 번호가 나온다.
+            /// 하나만 내는 지점(DML 셋은 각 `Visit` 오버라이드, 독립 SELECT는
+            /// `ExplicitVisit(SelectStatement)`의 자식 순회 <b>전</b>)과 카운터 증가
+            /// 지점을 맞춰야, 두 방문자가 독립적으로 세어도 항상 같은 번호가 나온다.
             /// </summary>
             private int NextOrdinal(string operation)
             {
@@ -1692,10 +1752,12 @@ namespace ReSet.Core.Services
         ///
         /// (1) `UPDATE`·`DELETE`·`INSERT` 번호는 네 표 전부에서 같은 문장을 가리킨다 -
         ///     채번이 연산 이름별로 독립이라 SELECT·IF 행이 늘어도 밀리지 않는다.
-        /// (2) `SELECT` 번호는 이 표 · DML 범위 표 · 잠금 힌트 표 셋이 합의한다 -
-        ///     판정을 <see cref="HasFromClause"/> 하나로 공유하고
-        ///     `ExtractAndLockHintsAndFunctionCalls_ShouldAgreeOnSelectStatementNumbers`가
-        ///     번호와 라인의 짝으로 못 박는다. 집합 술어 표에는 `SELECT n` 행이 없다.
+        /// (2) `SELECT` 번호는 이 표 · DML 범위 표 · 잠금 힌트 표 · 집합 술어 표
+        ///     넷이 합의한다 - 판정을 <see cref="HasFromClause"/> 하나로 공유하고
+        ///     `ExtractAndLockHintsAndFunctionCallsAndSetPredicates_ShouldAgreeOnSelectStatementNumbers`가
+        ///     번호와 라인의 짝으로 못 박는다. 이 자리는 "집합 술어 표에는 `SELECT n`
+        ///     행이 없다"고 적고 있었다 - 같은 배치 Task 2가 그 표도 독립 SELECT를
+        ///     방문하게 하면서 거짓이 됐다.
         /// (3) `IF` 번호는 <b>합의가 없다.</b> 이 표는 술어에 알려진 함수 호출이 있을 때,
         ///     잠금 힌트 표는 술어에 하위 질의가 있을 때 번호를 소비한다 - 조건이 다르니
         ///     같은 `IF 1`이 다른 문장일 수 있다. 근거는

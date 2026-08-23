@@ -285,17 +285,37 @@ namespace ReSet.Core.Tests
         //   3+3+4+3 = 13으로 옛 기대값 그대로다.
         // - AcqManual 0 → 6: DELETE(48~50)와 INSERT 원천 SELECT(70~72)가 각각
         //   `컬럼 = @지역변수` 3항씩이다. 전부 옮겨 적을 리터럴이 없어 예전에는
-        //   0행이었고, 이제 원문 전용 6행이 된다. 커서 원천 SELECT(33~35)는
-        //   SetPredicateVisitor의 방문 대상이 아니므로 여기 포함되지 않는다
-        //   (계획 Global Constraints - 이 방문자는 넓히지 않는다).
+        //   0행이었고, 이제 원문 전용 6행이 된다.
         // - EXCEPTION_PROC 40 → 102(분해 40 → 30): 코퍼스 최대치라 여기 더한다.
         //   🟠 결함 넷이 이 SP에 있고(210·320·442행 등), 그동안 집합 술어 행 수의
         //   천장을 지키는 단언이 하나도 없었다. 총계와 분해 행을 함께 못 박아, 행이
         //   폭발하는 것과 분해가 소리 없이 무너지는 것을 양쪽에서 잡는다.
+        //
+        // [2026-08-23 축 A ③(b) Task 2 - 독립 SELECT가 실리면서 넷 중 하나만 움직였다]
+        // SetPredicateVisitor가 DML 밖의 독립 SELECT도 방문한다. 새 기대값은 추출기
+        // 출력이 아니라 raw/object_definition.sql을 열어 독립 SELECT의 WHERE 항을
+        // 직접 세어 정했다.
+        //
+        // - AcqManual 6 → 9(분해 0 → 2): 이 SP의 유일한 독립 SELECT는 커서 원천
+        //   (29~36행)이고, 그 WHERE의 최상위 AND 항이 정확히 셋이다 -
+        //   `ISNULL(A.EDIReqYmd,'') = @pi_strYMD`(33행, 우변이 파라미터라 원문 전용),
+        //   `B.AcqType = 1`(34행, 분해), `A.OutState IN (2,9)`(35행, 분해).
+        //   앞 브랜치가 "이 방문자는 넓히지 않는다"는 이유로 0으로 두었던 자리다.
+        //   32행의 `ON A.ClientID = B.ClientID`는 WHERE가 아니라 결합 조건이라
+        //   이 표의 재료가 아니다(SetPredicateVisitor는 WhereClause만 읽는다).
+        //   **세 행 전부 새로 더해진 것이고 잃은 행은 없다** - 앞의 여섯 행
+        //   (DELETE 3 + INSERT 3)은 그대로다.
+        // - 나머지 셋은 그대로다. 실물을 열어 확인했다: CANCEL_INS는 INSERT ... SELECT
+        //   하나뿐이고, INS_EXTRA4PLCARD의 SELECT 넷(19·85·133·162행)은 각각
+        //   `IF EXISTS` 술어 · INSERT 원천 · 파생 테이블 X · 스칼라 서브쿼리라
+        //   문장 노드(SelectStatement)가 아니며, EXCEPTION_PROC의 SELECT 열둘
+        //   (47·60·73·88·96·355·374·381·457·470·486·528행)도 전부 UPDATE 안의 파생
+        //   테이블(485행 UNION ALL 갈래 포함)이거나 `IN (...)` 서브쿼리다. 셋 다
+        //   독립 SELECT가 하나도 없으므로 이 작업으로 늘어날 행이 없다.
         [Theory]
         [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 4, 2)]
         [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 20, 13)]
-        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 6, 0)]
+        [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 9, 2)]
         [InlineData("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", 102, 30)]
         public void ExtractSetPredicates_ShouldNotExplodeOnGoldenProcedures(
             string procedureName, int expectedCount, int expectedDecomposedCount)
