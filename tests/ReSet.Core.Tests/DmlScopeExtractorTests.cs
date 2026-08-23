@@ -2970,5 +2970,115 @@ END";
             }
             return null;
         }
+    
+        // ------------------------------------------------------------------
+        // [UNION 갈래 중복 - 2026-08-23 ③(b) Task 2가 발견, 최종 리뷰 유예]
+        // SetPredicateVisitor는 INSERT 원천·독립 SELECT의 UNION 갈래마다 Collect를 불렀고,
+        // Collect는 호출마다 문장 전체를 훑어 파생 테이블 술어를 모았다 - 별칭 있는 파생
+        // 테이블이 있으면 갈래 수만큼 같은 사실이 중복됐다. 코퍼스에는 "갈래 ≥2 + 파생
+        // 테이블"이 한 문장에 있는 자리가 0건이라 잠재 결함이었다(CMRate_Ins 표 중복 0).
+        // 파생 훑기를 문장당 한 번으로 올리고, 아래 넷이 그것을 고정한다.
+        // ------------------------------------------------------------------
+
+        private const string UnionInsertWithDerivedDdl = @"
+CREATE PROCEDURE dbo.P_UNION_INS
+AS
+BEGIN
+    INSERT INTO dbo.TOut (ClientID, Amt)
+    SELECT X.ClientID, X.Amt
+    FROM   (SELECT ClientID, Amt FROM dbo.TA WHERE UseState = 1) X
+    WHERE  X.Amt > 0
+    UNION ALL
+    SELECT Y.ClientID, Y.Amt
+    FROM   (SELECT ClientID, Amt FROM dbo.TB WHERE UseState = 2) Y
+    WHERE  Y.Amt > 0
+END";
+
+        [Fact]
+        public void ExtractSetPredicates_UnionInsertWithDerivedTables_ShouldCollectEachDerivedPredicateOnce()
+        {
+            var facts = DmlScopeExtractor.ExtractSetPredicates(UnionInsertWithDerivedDdl);
+
+            // 최상위 술어는 갈래마다 하나씩(둘), 파생 테이블 술어는 X·Y 각 한 번.
+            Assert.Equal(2, facts.Count(f => f.Scope == "최상위"));
+            Assert.Single(facts, f => f.Scope == "파생 테이블 X");
+            Assert.Single(facts, f => f.Scope == "파생 테이블 Y");
+            Assert.Equal(4, facts.Count);
+            Assert.All(facts, f => Assert.Equal("INSERT", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_UnionStandaloneSelectWithDerivedTables_ShouldCollectEachDerivedPredicateOnce()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P_UNION_SEL
+AS
+BEGIN
+    DECLARE @c INT
+    SELECT @c = COUNT(*)
+    FROM   (SELECT ID FROM dbo.TA WHERE UseState = 1) X
+    WHERE  X.ID > 0
+    UNION ALL
+    SELECT COUNT(*)
+    FROM   (SELECT ID FROM dbo.TB WHERE UseState = 2) Y
+    WHERE  Y.ID > 0
+END";
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count(f => f.Scope == "최상위"));
+            Assert.Single(facts, f => f.Scope == "파생 테이블 X");
+            Assert.Single(facts, f => f.Scope == "파생 테이블 Y");
+            Assert.Equal(4, facts.Count);
+        }
+
+        [Fact]
+        public void ExtractSetPredicates_SingleBranchInsertWithDerivedTable_ShouldKeepTopLevelThenDerivedOrder()
+        {
+            // 단일 갈래 문장은 "최상위 → 파생" 순서가 그대로여야 한다 - 코퍼스 24객체의 표
+            // 출력이 바이트 단위로 불변이라는 근거이고, 그래서 캐시 버전을 올리지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P_SINGLE
+AS
+BEGIN
+    INSERT INTO dbo.TOut (ClientID)
+    SELECT X.ClientID
+    FROM   (SELECT ClientID FROM dbo.TA WHERE UseState = 1) X
+    WHERE  X.ClientID <> ''
+END";
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal("최상위", facts[0].Scope);
+            Assert.Equal("파생 테이블 X", facts[1].Scope);
+        }
+
+        [SkippableFact]
+        public void ExtractSetPredicates_OverTheCorpus_ShouldBe578FactsWithNoDuplicates()
+        {
+            var root = UncoveredCorpusRoot();
+            Skip.If(root == null, CorpusSkip.Reason);
+
+            int total = 0, derived = 0, duplicates = 0;
+            foreach (var dir in Directory.EnumerateDirectories(root!))
+            {
+                var ddlPath = Path.Combine(dir, "raw", "object_definition.sql");
+                if (!File.Exists(ddlPath)) continue;
+                var facts = DmlScopeExtractor.ExtractSetPredicates(File.ReadAllText(ddlPath));
+                total += facts.Count;
+                derived += facts.Count(f => f.Scope != "최상위");
+                duplicates += facts
+                    .GroupBy(f => (f.Operation, f.StatementOrdinal, f.Line, f.Column, f.Scope, f.PredicateText))
+                    .Where(g => g.Count() > 1)
+                    .Sum(g => g.Count() - 1);
+            }
+
+            // 2026-08-23 실측(파생 훑기를 문장당 한 번으로 올리기 전·후 동일): 사실 578 ·
+            // 파생 86 · 중복 0. 수정이 코퍼스 출력을 바꾸지 않았다는 증거이자, 다음 변경이
+            // 이 수치를 흔들면 여기서 드러나게 하는 앵커다.
+            Assert.Equal(578, total);
+            Assert.Equal(86, derived);
+            Assert.Equal(0, duplicates);
+        }
     }
 }

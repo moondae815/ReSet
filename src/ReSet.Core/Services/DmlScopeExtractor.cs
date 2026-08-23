@@ -1826,10 +1826,14 @@ namespace ReSet.Core.Services
                 // 하나만 내는 것과 대칭이다.
                 if (node.InsertSource is not SelectInsertSource select) return;
 
+                // [파생 훑기는 문장당 한 번 - 2026-08-23] 갈래마다 CollectTopLevel, 파생 테이블은
+                // 갈래 루프 밖에서 한 번. 예전에는 갈래마다 Collect가 문장 전체를 훑어 별칭 있는
+                // 파생 테이블 술어가 갈래 수만큼 중복됐다(③(b) Task 2가 발견, 코퍼스 0건).
                 foreach (var spec in QuerySpecificationsOf(select.Select))
                 {
-                    Collect("INSERT", node, spec.WhereClause, ordinal);
+                    CollectTopLevel("INSERT", spec.WhereClause, ordinal);
                 }
+                CollectDerivedTables("INSERT", node, ordinal);
             }
 
             /// <summary>
@@ -1859,15 +1863,17 @@ namespace ReSet.Core.Services
                 if (HasFromClause(node))
                 {
                     // 번호는 UNION 갈래 수와 무관하게 문장당 하나다 - INSERT가 갈래마다
-                    // Collect를 부르면서 번호는 미리 집어 공유하는 것과 같은 구조다.
+                    // CollectTopLevel을 부르면서 번호는 미리 집어 공유하는 것과 같은 구조다.
                     //
-                    // [갈래마다 Collect를 부르는 대가 - 알고 남긴다] Collect 안의
-                    // DerivedTableCollector는 문장 **전체**를 훑는다. 그래서 독립 SELECT가
+                    // [갈래마다 Collect를 부르던 대가 - 2026-08-23 고쳤다] 예전 Collect 안의
+                    // DerivedTableCollector는 문장 **전체**를 훑었다. 그래서 독립 SELECT가
                     // UNION과 별칭 있는 파생 테이블을 동시에 가지면 그 파생 테이블 술어가
-                    // 갈래 수만큼 중복 수집된다. 바로 위 Visit(InsertSpecification)이 이미
-                    // 같은 구조라 이 작업이 새로 만든 위험은 아니고, 코퍼스에 그 모양이
-                    // 없다 - 2026-08-23 실측: output/Objects 전체에서 UNION 연산자는 다섯
-                    // 객체 여덟 자리뿐이고, 전부 **문장 노드가 아닌 자리**에 있다.
+                    // 갈래 수만큼 중복 수집됐다(Visit(InsertSpecification)도 같은 구조였다).
+                    // 지금은 갈래마다 CollectTopLevel, 파생 훑기는 CollectDerivedTables로
+                    // 문장당 한 번이다 - DmlScopeExtractorTests의
+                    // ExtractSetPredicates_Union*_ShouldCollectEachDerivedPredicateOnce가 고정한다.
+                    // 코퍼스에는 그 모양이 없었다 - 2026-08-23 실측: output/Objects 전체에서
+                    // UNION 연산자는 다섯 객체 여덟 자리뿐이고, 전부 **문장 노드가 아닌 자리**에 있다.
                     // 여덟 자리를 원문에서 하나씩 확인한 분류다:
                     //   CMRate_Ins:100·179   INSERT(76·159) 원천의 최상위 UNION
                     //   SETTLE_INS:165·226   INSERT(55) 원천 **안의 파생 테이블**(`) X`는 300행)
@@ -1877,13 +1883,15 @@ namespace ReSet.Core.Services
                     // 즉 독립 SELECT 문장의 UNION은 0건이라 아래 갈래 루프가 두 번 도는
                     // 경우가 없다(이 오버라이드 자체는 UNION 없는 독립 SELECT로 실제로
                     // 불린다 - 중복 수집이 없다는 말이지 경로가 죽어 있다는 말이 아니다).
-                    // 코퍼스에 그 모양이 들어오는 날 고칠 자리는 여기가 아니라 Collect다
-                    // (파생 테이블 훑기를 갈래 루프 밖으로 한 번만 빼면 INSERT도 같이 낫는다).
+                    // 그래서 이 수정은 코퍼스 출력을 바꾸지 않는다 - 코퍼스 앵커(사실 578 ·
+                    // 파생 86 · 중복 0)가 전후 동일하고, 캐시 버전도 올리지 않았다.
                     var ordinal = NextOrdinal("SELECT");
                     foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
                     {
-                        Collect("SELECT", node, spec.WhereClause, ordinal);
+                        CollectTopLevel("SELECT", spec.WhereClause, ordinal);
                     }
+                    // 파생 훑기는 문장당 한 번(Visit(InsertSpecification)의 같은 날짜 주석).
+                    CollectDerivedTables("SELECT", node, ordinal);
                 }
 
                 base.ExplicitVisit(node);
@@ -1903,10 +1911,22 @@ namespace ReSet.Core.Services
                 return n;
             }
 
+            // UPDATE·DELETE는 갈래가 하나라 예전 Collect와 같은 "최상위 → 파생" 순서를 그대로
+            // 얻는다. INSERT·독립 SELECT는 갈래마다 CollectTopLevel을 부른 뒤 CollectDerivedTables를
+            // 한 번 부른다 - 단일 갈래 문장의 사실 순서는 바뀌지 않으므로(최상위 → 파생) 코퍼스
+            // 24객체의 표 출력이 바이트 단위로 같고, 그래서 캐시 버전을 올리지 않았다
+            // (DmlScopeExtractorTests의 코퍼스 앵커 578·86·0이 전후 동일).
             private void Collect(string operation, TSqlFragment statement, WhereClause? where, int ordinal)
             {
-                CollectFrom(operation, where?.SearchCondition, ordinal, TopLevelScope);
+                CollectTopLevel(operation, where, ordinal);
+                CollectDerivedTables(operation, statement, ordinal);
+            }
 
+            private void CollectTopLevel(string operation, WhereClause? where, int ordinal)
+                => CollectFrom(operation, where?.SearchCondition, ordinal, TopLevelScope);
+
+            private void CollectDerivedTables(string operation, TSqlFragment statement, int ordinal)
+            {
                 // 파생 테이블 안의 필터도 대상 행 집합을 좁힌다 - 2026-08-19 축 A 감사의
                 // 🟠 4건 중 둘(COMM_UPD:243, EXCEPTION_PROC:375)이 이 자리였다. 최상위
                 // WHERE만 훑으면 그 술어는 사실이 하나도 나오지 않아 L1이 침묵한다.
