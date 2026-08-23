@@ -140,7 +140,14 @@ WHILE (@@FETCH_STATUS = 0) BEGIN
 4. **FROM 절 바깥 하위 질의 세 모양을 한꺼번에 닫는다.** 실물 손실은 SELECT 목록 1건뿐이지만
    하나만 고치면 비대칭이 이동할 뿐이다.
 5. **새 표를 만들지 않는다.** 실행 의미 표에 종류 둘을 더한다 —
-   `MachineConfirmedTables.All`도 Critic 면제 블록도 프롬프트 접두사 캐시 순서도 바뀌지 않는다.
+   `MachineConfirmedTables.All`(표 목록)은 바뀌지 않는다.
+   **다만 Critic 면제 블록은 바뀐다.** `ExecutionSemanticsFacts.AllKinds`의 주석이 못 박는다 —
+   "Critic 면제 블록이 이 순서 그대로 열거하므로 순서를 흔들면 프롬프트 접두사 캐시가 깨진다.
+   새 종류를 더하면 여기에도 넣어야 한다". 강제하는 테스트도 있다
+   (`MachineConfirmedTablesTests.EveryExecutionSemanticKindConstant_IsListedInAllKinds`).
+   **새 종류는 목록 끝에 붙인다** — 기존 다섯의 순서를 건드리지 않으면 접두사 캐시의
+   앞부분이 보존된다. 어차피 캐시 버전 12가 전건을 미스시키므로 실害는 없으나,
+   순서를 흔들 이유가 없다.
 6. **캐시 버전을 12로 올린다.** 프롬프트에 실리는 표가 바뀐다.
 
 ## 4. 작업 항목
