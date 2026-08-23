@@ -2706,5 +2706,169 @@ END";
             Assert.Equal("파생", Assert.Single(facts, f => f.Table == "dbo.TD").Scope);
             Assert.Equal("하위 질의", Assert.Single(facts, f => f.Table == "dbo.TE").Scope);
         }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInSelectList_ShouldUseSubqueryScope()
+        {
+            // UF_Get_CLComm4MobileCo:31-32 실측 - SELECT 목록 안 스칼라 하위 질의의 NOLOCK이
+            // 표에 오지 않았다. 같은 문장의 FROM은 최상위로 실리므로, 표가 그 문장에 대해
+            // 채워진 것처럼 보이는데 두 스캔 중 하나가 빠진다 - 없는 것보다 나쁜 모양이다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F() RETURNS INT
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = CASE WHEN MobileCo1 > 0 THEN MobileCo1
+                     ELSE (SELECT CommissionRate
+                           FROM   dbo.TClientCMRate WITH(NOLOCK)
+                           WHERE  ClientID = '1')
+                END
+    FROM   dbo.TClientSettleRate4MobileCo WITH(NOLOCK)
+    RETURN @v
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var outer = Assert.Single(facts, f => f.Table == "dbo.TClientSettleRate4MobileCo");
+            Assert.Equal("최상위", outer.Scope);
+
+            var inner = Assert.Single(facts, f => f.Table == "dbo.TClientCMRate");
+            Assert.Equal("하위 질의", inner.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, inner.Hints);
+            Assert.Equal(outer.StatementOrdinal, inner.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInSetClause_ShouldUseSubqueryScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.OutYMD = (SELECT MAX(YMD) FROM dbo.TB WITH(NOLOCK))
+    FROM   dbo.TA A WITH(NOLOCK)
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            var inner = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("하위 질의", inner.Scope);
+            Assert.Equal("UPDATE", inner.Operation);
+            Assert.Equal(1, inner.StatementOrdinal);
+        }
+
+        [Fact]
+        public void ExtractLockHints_SubqueryInStandaloneSelectWhere_ShouldUseSubqueryScope()
+        {
+            // 세 모양 중 셋째. `ExplicitVisit(SelectStatement)`이 원래부터 이 노드를
+            // 방문하지만 훑는 것은 CollectFromQuery, 즉 FROM 절뿐이라 독립 SELECT의
+            // WHERE 하위 질의는 담기지 않았다 - 하위 질의를 훑는 경로(당시 이름은
+            // CollectWhereSubqueries, 지금은 CollectStatementSubqueries)를 DML 셋만
+            // 불렀기 때문이다. "SelectStatement를 방문하니 이미 되고 있다"는 추정이
+            // 거짓임을 못 박는다 - 이 테스트는 넓히기 전에 실제로 빨갰다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ID
+    FROM   dbo.TA WITH(NOLOCK)
+    WHERE  ID IN (SELECT ID FROM dbo.TB WITH(NOLOCK))
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("SELECT", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            Assert.Equal("최상위", Assert.Single(facts, f => f.Table == "dbo.TA").Scope);
+
+            var inner = Assert.Single(facts, f => f.Table == "dbo.TB");
+            Assert.Equal("하위 질의", inner.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, inner.Hints);
+        }
+
+        [Fact]
+        public void ExtractLockHints_FromClauseSubquery_ShouldNotDependOnCollectionOrder()
+        {
+            // Task 3이 수집을 문장 노드 전체로 넓히면서 FROM 절 **안의** 하위 질의가
+            // CollectFrom과 CollectStatementSubqueries 양쪽으로 들어오게 됐다. Add의
+            // 중복 제거 키에 Scope가 없으므로 두 경로가 다른 라벨을 내면 먼저 등록된
+            // 쪽이 남아 수집 순서 한 줄이 답을 가른다.
+            //
+            // dbo.TC는 하위 질의 안의 파생 테이블이라 FromTableCollector에서 두 표시가
+            // 동시에 켜지는 자리다. CollectFrom이 먼저 도는데도 `하위 질의`가 나오는 것은
+            // ScopeOf의 우선순위(_inSubquery 먼저) 덕이다 - CollectSubqueryScans는 언제나
+            // SubqueryScope를 쓰므로 두 경로의 답이 여기서 일치한다.
+            //
+            // 이 테스트가 기제를 실제로 잡는지는 뮤테이션으로 확인했다: ScopeOf에서
+            // _inDerivedTable을 먼저 보게 뒤집으면 CollectFrom이 `파생`을 먼저 등록해
+            // 이 단언이 빨개진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A
+    SET    A.X = 1
+    FROM   dbo.TA A WITH(NOLOCK)
+    JOIN   dbo.TB B ON B.ID IN (SELECT ID
+                                FROM   (SELECT ID FROM dbo.TC WITH(NOLOCK)) D)
+    WHERE  A.ID = 1
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.All(facts, f => Assert.Equal("UPDATE", f.Operation));
+            Assert.All(facts, f => Assert.Equal(1, f.StatementOrdinal));
+
+            var inner = Assert.Single(facts, f => f.Table == "dbo.TC");
+            Assert.Equal("하위 질의", inner.Scope);
+            Assert.Equal(new[] { "NOLOCK" }, inner.Hints);
+
+            Assert.Equal("최상위", Assert.Single(facts, f => f.Table == "dbo.TA").Scope);
+        }
+
+        [Fact]
+        public void ExtractLockHints_IfPredicateAndDmlBody_ShouldNotOverlap()
+        {
+            // Task 3이 수집을 문장 노드 전체로 넓혔으므로 "IF 술어 안 하위 질의가 DML
+            // 경로에서도 잡히는가"를 물어야 한다. 잡히지 않는다 - 겹치려면 IF 술어가
+            // UPDATE 노드의 자손이어야 하는데 T-SQL에는 그 형태가 없고, 실제 중첩은
+            // 반대 방향(IF가 DML을 담는다)이라 UPDATE에서 시작하는 훑기가 술어에
+            // 닿지 못한다. 반대 방향도 안전하다 - IfStatement 오버라이드는 술어만 훑고
+            // 본문은 자식 순회에 맡긴다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS(SELECT 1 FROM dbo.TG WITH(NOLOCK))
+    BEGIN
+        UPDATE A
+        SET    A.X = (SELECT MAX(ID) FROM dbo.TH WITH(NOLOCK))
+        FROM   dbo.TA A WITH(NOLOCK)
+    END
+END";
+
+            var facts = DmlScopeExtractor.ExtractLockHints(ddl);
+
+            Assert.Equal(3, facts.Count);
+
+            // IF 술어의 스캔은 IF 번호로만 실린다 - UPDATE 경로가 이 자리를 다시 담지 않는다.
+            var gate = Assert.Single(facts, f => f.Table == "dbo.TG");
+            Assert.Equal("IF", gate.Operation);
+            Assert.Equal(1, gate.StatementOrdinal);
+            Assert.Equal("최상위", gate.Scope);
+
+            // 본문 UPDATE의 두 스캔은 UPDATE 번호로만 실린다 - IF 경로가 본문을 담지 않는다.
+            var target = Assert.Single(facts, f => f.Table == "dbo.TA");
+            Assert.Equal("UPDATE", target.Operation);
+            Assert.Equal("최상위", target.Scope);
+
+            var setSubquery = Assert.Single(facts, f => f.Table == "dbo.TH");
+            Assert.Equal("UPDATE", setSubquery.Operation);
+            Assert.Equal(1, setSubquery.StatementOrdinal);
+            Assert.Equal("하위 질의", setSubquery.Scope);
+        }
     }
 }

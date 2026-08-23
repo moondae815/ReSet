@@ -366,9 +366,12 @@ namespace ReSet.Core.Services
     /// FROM에 직접 실리지 않은 참조를 빼지 않고 표시해서 싣는다(수정 라운드 2, 아래
     /// ExtractLockHints 문서의 실측 근거 참고).
     ///
-    /// "최상위"는 그 문장(또는 그 IF 술어)이 직접 훑는 자리를 뜻한다. 술어 안에서
-    /// 다시 열린 질의가 훑는 자리는 문장 종류를 가리지 않고 "하위 질의"다
-    /// (2026-08-22 축 A 재감사 - LockHintVisitor.SubqueryScope 문서에 경계를 적었다).
+    /// "최상위"는 그 문장(또는 그 IF 술어)이 직접 훑는 자리를 뜻한다. 그 안에서 다시
+    /// 열린 질의가 훑는 자리는 문장 종류도 하위 질의가 놓인 자리도 가리지 않고
+    /// "하위 질의"다 - 술어(WHERE·JOIN ON·IF)뿐 아니라 SELECT 목록과 `UPDATE`의 `SET`
+    /// 절에 걸린 스칼라 하위 질의도 그렇다(2026-08-22 축 A 재감사가 경계를 적었고
+    /// 2026-08-23 축 A ③(b) Task 3이 술어 밖 자리를 담기 시작했다 -
+    /// LockHintVisitor.SubqueryScope 문서 참고).
     /// </param>
     /// <param name="Hints">힌트가 없으면 빈 목록. 한 참조에 여럿 붙을 수 있다.</param>
     public sealed record LockHintFact(
@@ -564,9 +567,10 @@ namespace ReSet.Core.Services
         /// 포함한 네 테이블의 힌트가 통째로 사라졌다 - 스캔이 정말 없는 문장과 구별되지
         /// 않는, 이 표가 막으려는 바로 그 실패 모양이다. 「집합 술어」 표의
         /// SetPredicateFact.Scope 선례를 따라 빼지 않고 LockHintFact.Scope로 "최상위"/
-        /// "파생"/"하위 질의"를 표시해서 싣는다 - 술어 안에서 다시 열린 질의가 훑는
-        /// 자리가 "하위 질의"다(2026-08-22 축 A 재감사. 경계는 LockHintVisitor의
-        /// SubqueryScope 문서에 적었다).
+        /// "파생"/"하위 질의"를 표시해서 싣는다 - 그 문장 안에서 다시 열린 질의가 훑는
+        /// 자리가 "하위 질의"다. 술어 안이 흔하지만 거기 한정되지 않는다(SELECT 목록·
+        /// `SET` 절도 그렇다 - 2026-08-23 축 A ③(b) Task 3). 2026-08-22 축 A 재감사가
+        /// 이 라벨을 넣었고, 경계는 LockHintVisitor의 SubqueryScope 문서에 적었다.
         ///
         /// [INSERT 원천이 UNION이면 갈래마다 훑는 이유 - 수정 라운드 2, 리뷰 실측]
         /// 원천이 BinaryQueryExpression일 수 있는데 QuerySpecification으로 좁히면 통째로
@@ -634,37 +638,55 @@ namespace ReSet.Core.Services
             /// 훑는 자리가 아니므로 이 범위다(수정 라운드 1 리뷰 실측 - 그 자리가
             /// `최상위`로 실리고 있었다).
             ///
-            /// [아직 표에 오지 않는 자리 - 유예된 것이지 설계로 뺀 것이 아니다]
-            /// 수집 경로가 훑는 것은 DML·IF의 술어와 FROM 절뿐이다. 그 둘 어디에도
-            /// 걸리지 않는 자리에서 열리는 하위 질의는 아래 세 모양 모두 표에 오지
-            /// 않는다(코퍼스 24개 객체의 하위 질의 개시점 33곳을 전수 분류해 확인했다.
-            /// 2026-08-22 수정 라운드 3).
+            /// [세 모양은 이제 표에 온다 - 2026-08-23 축 A ③(b) Task 3]
+            /// 예전에는 수집 경로가 DML·IF의 술어와 FROM 절만 훑어서, 그 둘 어디에도
+            /// 걸리지 않는 자리에서 열리는 하위 질의가 아래 세 모양 모두 표에 오지
+            /// 않았다. <see cref="CollectStatementSubqueries"/>가 훑는 범위를 문장 노드
+            /// 전체로 넓히면서 셋 다 닫혔다. 셋을 한 조각으로 닫은 이유는 하나만 고치면
+            /// 비대칭이 없어지는 게 아니라 자리만 옮기기 때문이다.
             ///
             /// 1. 문장의 SELECT 목록 안 하위 질의. 실물 2건. 그중
-            ///    UF_Get_CLComm4MobileCo:31-32가 **표가 실제로 힌트를 잃는 유일한 자리**
-            ///    다 - `ELSE (SELECT CommissionRate FROM TClientCMRate WITH(NOLOCK) ...)`.
+            ///    UF_Get_CLComm4MobileCo:31-32가 **표가 실제로 힌트를 잃던 유일한 자리**
+            ///    였다 - `ELSE (SELECT CommissionRate FROM TClientCMRate WITH(NOLOCK) ...)`.
             ///    같은 문장의 37행 FROM(TClientSettleRate4MobileCo)은 `SELECT 1 · 최상위`
-            ///    로 실리는데 32행의 NOLOCK은 표 어디에도 나타나지 않는다 - 이 축이
-            ///    없애려는 "보이지 않는 NOLOCK"의 실물이다. 나머지 1건
-            ///    (INS_EXTRA4PLCARD:162)은 TVF 호출이라 잃는 힌트가 없다(아래).
-            /// 2. DML의 `SET` 절 하위 질의. 계획서가 이번 범위에서 뺐다. **실물 6건이
-            ///    있다** - UP_UTIL_SETTLE_EXPECT_PROC:139·160·184·204·246과
+            ///    로 실리는데 32행의 NOLOCK은 표 어디에도 없었다 - 이 축이 없애려는
+            ///    "보이지 않는 NOLOCK"의 실물이다. 나머지 1건(INS_EXTRA4PLCARD:162)은
+            ///    TVF 호출이라 잃는 힌트가 없다(아래).
+            /// 2. DML의 `SET` 절 하위 질의. **실물 6건이 있다** -
+            ///    UP_UTIL_SETTLE_EXPECT_PROC:139·160·184·204·246과
             ///    UP_UTIL_SETTLE_INS_EXTRA:213, 전부
             ///    `OutYMD = (SELECT OutYMD FROM dbo.UIF_SettleYMD(A.YMD, C.SettlePeriodID))`
             ///    모양이다. 그런데 원천이 전부 TVF 호출이라 `FromTableCollector`가 보는
             ///    `NamedTableReference`가 아니고(`SchemaObjectFunctionTableReference`다)
-            ///    힌트도 지고 있지 않다 - 경로가 훑더라도 새로 실릴 행은 0건이다.
-            /// 3. 독립 `SELECT n`의 WHERE 하위 질의. 그 경로는 FROM만 훑기 때문이다
-            ///    (`IF n`은 술어 전체를 훑으므로 해당 없다). 실물 0건 - 위 33곳 중
-            ///    술어 안 하위 질의는 전부 DML의 WHERE이거나 IF 술어였다.
+            ///    힌트도 지고 있지 않다 - 넓힌 경로가 훑어도 새로 실리는 행은 0건이다.
+            ///    실측으로 확인했다(아래 전후 대조에서 이 여섯 자리는 아무 행도 내지 않았다).
+            /// 3. 독립 `SELECT n`의 WHERE 하위 질의. 예전엔 그 경로가 FROM만 훑어서
+            ///    빠졌다(`IF n`은 술어 전체를 훑으므로 해당 없었다). 실물 0건이지만
+            ///    회귀 테스트로 못 박았다
+            ///    (ExtractLockHints_SubqueryInStandaloneSelectWhere_ShouldUseSubqueryScope).
             ///
-            /// 즉 이 세 모양이 "코퍼스에 없다"는 것은 거짓이고, 참인 것은 "이 세 모양
-            /// 때문에 표가 잃는 힌트는 UF_Get_CLComm4MobileCo:32 하나뿐"이다. 유예
-            /// 판단은 후자에 기대고 있다.
+            /// [넓힌 결과의 실측 - 코퍼스 24개 객체 전후 대조, 2026-08-23]
+            /// 넓히기 전후로 코퍼스 전체의 잠금 힌트 사실을 전부 덤프해 비교했다.
+            /// 차이는 정확히 한 행 늘어난 것뿐이다:
+            /// <c>UF_Get_CLComm4MobileCo | SELECT 1 | L32 | TClientCMRate | - | 하위 질의 | NOLOCK</c>.
+            /// 기존 230행은 <b>하나도 바뀌지 않았다</b> - 문장 번호도, 범위 라벨도,
+            /// 사라진 행도 없다. 넓힌 경로는 `NextOrdinal`을 부르지 않으므로 채번에
+            /// 닿지 않는다(다른 세 표와 공유하는 `SELECT n`이 밀리면 안 된다).
             ///
-            /// 셋은 한 조각으로 닫아야 한다. 하나만 고치면 비대칭이 없어지는 게 아니라
-            /// 자리만 옮긴다. CTE 본문(`WITH cte AS (SELECT ... WITH(NOLOCK))`)도 어느
-            /// 경로도 훑지 않는다 - 이쪽은 실물 0건이다(같은 라운드에 grep으로 확인).
+            /// [그래도 표에 오지 않는 자리 - 알고 남긴다]
+            /// (가) FROM이 없는 독립 SELECT 안의 하위 질의. `SELECT @v = (SELECT MAX(x)
+            ///      FROM T WITH(NOLOCK))`처럼 바깥에 FROM이 없으면
+            ///      <see cref="HasFromClause"/>가 false라 문장 번호 자체를 집지 않고,
+            ///      따라서 넓힌 경로도 불리지 않는다. 여기에 조건을 더하면 네 표가
+            ///      공유하는 `SELECT n`이 통째로 밀리므로 고치려거든 산출물 재생성과
+            ///      함께여야 한다. 코퍼스 실물 0건(AST 프로브 전수 확인, 2026-08-23).
+            /// (나) CTE 본문의 FROM(`WITH cte AS (SELECT ... WITH(NOLOCK))`). CTE 본문은
+            ///      `ScalarSubquery`가 아니라 `CommonTableExpression` 아래의
+            ///      `QueryExpression`이라 `SubqueryCollector`가 닿지 않는다. 코퍼스 실물
+            ///      0건 - 같은 프로브가 `CommonTableExpression`을 하나도 찾지 못했다
+            ///      (예전 문서는 grep으로 같은 결론을 냈고, AST로 다시 확인했다).
+            ///      다만 CTE 본문 <b>안의 스칼라 하위 질의</b>는 이제 걸린다 - 문장 노드
+            ///      전체를 훑기 때문이다.
             ///
             /// 이 자리들은 "틀리게 실리는" 것이 아니라 "실리지 않는" 것이라 이 라벨의
             /// 뜻은 그대로 참이다. 그래도 이 표를 "그 문장이 하는 모든 스캔"으로 읽으면
@@ -697,9 +719,15 @@ namespace ReSet.Core.Services
                     foreach (var spec in QuerySpecificationsOf(select.Select))
                     {
                         CollectFrom("INSERT", ordinal, spec.FromClause);
-                        CollectWhereSubqueries("INSERT", ordinal, spec.WhereClause);
                     }
                 }
+
+                // 갈래 루프 **밖**이다. CollectStatementSubqueries는 문장 노드 전체를
+                // 훑으므로 갈래마다 부르면 UNION 갈래 수만큼 같은 일을 되풀이한다
+                // (SetPredicateVisitor.ExplicitVisit(SelectStatement)의 주석이 경고하는
+                // 것과 같은 구조다). 잠금 힌트 쪽은 Add가 중복을 흡수하므로 결과는
+                // 같았겠지만, 같은 참조를 갈래 수만큼 훑을 이유가 없다.
+                CollectStatementSubqueries("INSERT", ordinal, node);
 
                 RecordTargetHint("INSERT", ordinal, node.Target);
 
@@ -710,7 +738,7 @@ namespace ReSet.Core.Services
             {
                 var ordinal = NextOrdinal("UPDATE");
                 CollectFrom("UPDATE", ordinal, node.FromClause);
-                CollectWhereSubqueries("UPDATE", ordinal, node.WhereClause);
+                CollectStatementSubqueries("UPDATE", ordinal, node);
                 RecordTargetHint("UPDATE", ordinal, node.Target);
 
                 base.ExplicitVisit(node);
@@ -720,7 +748,7 @@ namespace ReSet.Core.Services
             {
                 var ordinal = NextOrdinal("DELETE");
                 CollectFrom("DELETE", ordinal, node.FromClause);
-                CollectWhereSubqueries("DELETE", ordinal, node.WhereClause);
+                CollectStatementSubqueries("DELETE", ordinal, node);
                 RecordTargetHint("DELETE", ordinal, node.Target);
 
                 base.ExplicitVisit(node);
@@ -753,7 +781,9 @@ namespace ReSet.Core.Services
             {
                 if (HasFromClause(node))
                 {
-                    CollectFromQuery("SELECT", NextOrdinal("SELECT"), node.QueryExpression);
+                    var ordinal = NextOrdinal("SELECT");
+                    CollectFromQuery("SELECT", ordinal, node.QueryExpression);
+                    CollectStatementSubqueries("SELECT", ordinal, node);
                 }
 
                 base.ExplicitVisit(node);
@@ -786,8 +816,15 @@ namespace ReSet.Core.Services
             /// 집으면 되감을 일 자체가 없다 - `ExplicitVisit(SelectStatement)`이
             /// `HasFromClause`로 미리 가르는 것과 같은 모양이다.
             ///
-            /// DML 안 하위 질의(CollectWhereSubqueries)와 겹치지 않는다 - 그쪽은 세 DML
-            /// 오버라이드에서만 불리고, IF는 DML 문장 안에 나타날 수 없다.
+            /// DML·독립 SELECT 안 하위 질의(<see cref="CollectStatementSubqueries"/>)와
+            /// 겹치지 않는다. 그쪽은 그 네 오버라이드에서만 불리고, 넘기는 것이 그 문장
+            /// 노드라 IF 술어에 닿을 수 없다 - 술어는 IF 본문의 <b>형제</b>이지 본문
+            /// DML의 자손이 아니기 때문이다. T-SQL에 문장을 `UpdateSpecification` 등
+            /// 아래에 놓는 형태가 없다는 것이 그 근거다(그 메서드 문서의 `IF` 문단과
+            /// ExtractLockHints_IfPredicateAndDmlBody_ShouldNotOverlap 참고).
+            /// 예전 문서는 이 자리를 "IF는 DML 문장 안에 나타날 수 없다"로 적었는데,
+            /// 2026-08-23에 수집 범위가 문장 노드 전체로 넓어지면서 물어야 할 것이
+            /// "그쪽 훑기가 IF 술어에 닿는가"로 바뀌었다 - 답은 여전히 아니오다.
             ///
             /// [첫 겹만 그 IF의 스캔인 이유] 술어의 첫 겹 하위 질의는 IF가 직접 훑는
             /// 자리이므로 `최상위`/`파생`으로 싣지만, 그 안에서 다시 열리는 질의는
@@ -843,24 +880,61 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// DML 문장의 WHERE 안 하위 질의를 그 문장 번호로 훑는다.
+            /// 문장 노드 <b>전체</b>의 스칼라 하위 질의를 그 문장 번호로 훑는다.
             ///
             /// 범위를 `하위 질의`로 다는 이유는 `파생`과 같다 - 빼지 않고 표시해서 싣는다.
-            /// 별도 문장 번호를 주지 않는 이유는 이 스캔이 이미 그 DML 문장의 일부라서,
-            /// 새로 세면 같은 UPDATE가 두 번호로 나타나 다른 표와 대조할 수 없기 때문이다.
+            /// 별도 문장 번호를 주지 않는 이유는 이 스캔이 이미 그 문장의 일부라서, 새로
+            /// 세면 같은 UPDATE가 두 번호로 나타나 다른 표와 대조할 수 없기 때문이다.
             ///
-            /// 겹의 깊이를 가리지 않는다 - WHERE 하위 질의 안에서 또 열린 질의도 그
-            /// 문장이 직접 훑는 자리가 아니므로 같은 범위다.
+            /// 겹의 깊이를 가리지 않는다 - 하위 질의 안에서 또 열린 질의도 그 문장이
+            /// 직접 훑는 자리가 아니므로 같은 범위다.
             ///
-            /// WHERE만 훑는다고 해서 `JOIN ... ON` 안의 하위 질의가 빠지는 것은 아니다 -
-            /// 그쪽은 FROM 절 안이라 `CollectFrom`이 이미 지나가고, `FromTableCollector`가
-            /// ScalarSubquery 안을 같은 범위로 표시한다.
+            /// [WHERE 절만 훑던 것을 문장 전체로 넓혔다 - 2026-08-23 축 A ③(b) Task 3]
+            /// 예전엔 <c>WhereClause.SearchCondition</c>만 받았다. 그래서 FROM 절 바깥의
+            /// 스칼라 하위 질의 - SELECT 목록, `UPDATE`의 `SET` 절 - 안에 있는 힌트가
+            /// 표에 오지 않았다. 실물은 UF_Get_CLComm4MobileCo:31-32의
+            /// `ELSE (SELECT CommissionRate FROM TClientCMRate WITH(NOLOCK) ...)`이다.
+            /// 같은 문장의 37행 FROM은 `SELECT 1 · 최상위`로 실리므로 표가 그 문장에
+            /// 대해 <b>채워진 것처럼 보이는데</b> 두 스캔 중 하나가 없었다 - 표를 다 읽고도
+            /// NOLOCK 하나를 잃는, 없는 것보다 나쁜 모양이다.
+            ///
+            /// 독립 `SELECT`의 WHERE 하위 질의(세 모양 중 셋째)도 같은 한 줄로 닫힌다 -
+            /// 그쪽은 `CollectFromQuery`가 FROM만 훑어 빠져 있었다
+            /// (ExtractLockHints_SubqueryInStandaloneSelectWhere_ShouldUseSubqueryScope가
+            /// 넓히기 전에 실패하는 것으로 실측했다).
+            ///
+            /// [FROM 절 참조와 겹쳐도 라벨이 뒤집히지 않는 이유]
+            /// 문장 전체를 훑으면 FROM 절 <b>안의</b> 하위 질의가 <see cref="CollectFrom"/>과
+            /// 이 경로 양쪽으로 들어온다(`JOIN ... ON x IN (SELECT ...)`). `Add`의 중복
+            /// 제거 키에 Scope가 없어 먼저 등록된 라벨이 남으므로 두 경로가 다른 라벨을
+            /// 내면 수집 순서가 답을 갈랐을 것이다. 갈리지 않는다: 이 경로가 닿는 자리는
+            /// 정의상 `ScalarSubquery` 안이고, 그때 `FromTableCollector.ScopeOf`는
+            /// `_inSubquery` 우선순위로 언제나 `하위 질의`를 낸다 - 파생 테이블 표시가
+            /// 함께 켜져 있어도 그렇다. 즉 두 경로의 답이 항상 같다
+            /// (ExtractLockHints_FromClauseSubquery_ShouldNotDependOnCollectionOrder가
+            /// 겹치는 자리를 못 박고, 두 호출의 순서를 서로 바꾸는 뮤테이션으로도
+            /// 초록이 유지되는 것을 확인했다).
+            ///
+            /// 최상위 FROM 참조 자체는 이 경로로 들어오지 않는다 - `SubqueriesOf`는
+            /// `ScalarSubquery`를 통해서만 내려가므로 어떤 하위 질의에도 속하지 않는
+            /// 참조에는 닿지 않는다.
+            ///
+            /// [`IF` 술어와 겹치지 않는 이유 - 문법으로 확인, 2026-08-23]
+            /// 문장 전체를 훑으니 "IF 술어 안 하위 질의가 DML 경로에서도 잡히지 않는가"를
+            /// 물어야 한다. 잡히지 않는다. 겹치려면 `IF`의 <b>술어</b>가 DML/SELECT 문장
+            /// 노드의 자손이어야 하는데, T-SQL에는 문장을 `InsertSpecification`·
+            /// `UpdateSpecification`·`DeleteSpecification`·`SelectStatement` 아래에 놓는
+            /// 형태가 없다(`SelectStatement` 문서의 AST 모양 근거와 같은 사실이다).
+            /// `IF ... BEGIN UPDATE ... END`는 그 반대 방향의 중첩이라 UPDATE 노드에서
+            /// 시작하는 이 훑기가 술어에 닿지 못한다 - 술어는 본문의 형제다.
+            /// 방향을 뒤집어도 안전하다: `ExplicitVisit(IfStatement)`은 `node.Predicate`만
+            /// 훑고 본문은 자식 순회에 맡기므로 본문의 DML을 `IF` 번호로 싣지 않는다.
+            /// 실물로도 못 박았다
+            /// (ExtractLockHints_IfPredicateAndDmlBody_ShouldNotOverlap).
             /// </summary>
-            private void CollectWhereSubqueries(string operation, int ordinal, WhereClause? where)
+            private void CollectStatementSubqueries(string operation, int ordinal, TSqlFragment statement)
             {
-                if (where?.SearchCondition == null) return;
-
-                foreach (var (query, _) in SubqueriesOf(where.SearchCondition))
+                foreach (var (query, _) in SubqueriesOf(statement))
                 {
                     CollectSubqueryScans(operation, ordinal, query);
                 }
@@ -891,22 +965,29 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// 불리언 식 안의 하위 질의를 겹 깊이와 함께 모은다. 깊이 0은 그 식이 직접
-            /// 여는 질의이고, 1 이상은 그 질의의 술어 안에서 다시 열린 질의다.
+            /// 조각 안의 하위 질의를 겹 깊이와 함께 모은다. 깊이 0은 그 조각이 직접
+            /// 여는 질의이고, 1 이상은 그 질의 안에서 다시 열린 질의다.
+            ///
+            /// 받는 것이 `BooleanExpression`이 아니라 `TSqlFragment`인 이유: 부르는 자리가
+            /// 둘이고 넘기는 것이 서로 다르다. `ExplicitVisit(IfStatement)`은 술어
+            /// (`BooleanExpression`)를 넘기고 <see cref="CollectStatementSubqueries"/>는
+            /// 문장 노드를 통째로 넘긴다 - 후자가 FROM 절 바깥 하위 질의를 담으려면
+            /// 술어 타입으로는 표현되지 않는 자리(SELECT 목록, `SET` 절)까지 닿아야 한다.
             /// </summary>
-            private static List<(QueryExpression Query, int Depth)> SubqueriesOf(BooleanExpression? predicate)
+            private static List<(QueryExpression Query, int Depth)> SubqueriesOf(TSqlFragment? fragment)
             {
-                if (predicate == null) return new List<(QueryExpression, int)>();
+                if (fragment == null) return new List<(QueryExpression, int)>();
 
                 var collector = new SubqueryCollector();
-                predicate.Accept(collector);
+                fragment.Accept(collector);
                 return collector.Queries;
             }
 
             /// <summary>
-            /// 술어 안의 `ScalarSubquery`를 모은다. EXISTS·IN·비교 어느 자리에 있든
-            /// 하위 질의는 이 노드로 온다(프로브 실측). 술어 안에는 `SelectStatement`가
-            /// 없으므로 바깥 방문자의 `SELECT n` 채번과 겹치지 않는다.
+            /// 조각 안의 `ScalarSubquery`를 모은다. EXISTS·IN·비교 어느 자리에 있든
+            /// 하위 질의는 이 노드로 온다(프로브 실측). SELECT 목록과 `SET` 절의 스칼라
+            /// 하위 질의도 같은 노드다. 이 노드 아래에 `SelectStatement`가 놓이는 T-SQL
+            /// 형태가 없으므로 바깥 방문자의 `SELECT n` 채번과 겹치지 않는다.
             ///
             /// 겹의 깊이를 함께 낸다. 호출부가 "이 식이 직접 여는 질의"와 "그 안에서 다시
             /// 열린 질의"를 갈라야 하기 때문이다(SubqueryScope 문서 참고). Visit이 아니라
