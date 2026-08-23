@@ -152,7 +152,28 @@ namespace ReSet.Core.Services
                     staticAnalysisText.AppendLine($"  * SELECT 대상 테이블: {(spDef.StaticAnalysis.SelectTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.SelectTables) : "없음")}");
                     if (spDef.StaticAnalysis.SelectTables.Count > 0)
                     {
-                        staticAnalysisText.AppendLine("    (SELECT 대상 테이블은 CRUD 분석 표에 각각 독립적인 조회(SELECT) 참조 행으로 조건/참조 컬럼과 함께 완전하게 기술되어야 합니다.)");
+                        // [설명 칸이 술어를 담지 않는 이유 - 2026-08-23 ④ 진단]
+                        // 옛 지시문은 "조건과 함께" 기술하라고 요구했고, 그러자 설명 칸이
+                        // 여러 문장을 한 주장으로 묶었다(실측: `UPDATE 3 및 UPDATE 4에서
+                        // YMD, CLIENTID, PGNAME, MALLID 조인` - UPDATE 4에는 MALLID 조인이
+                        // 없다). Critic은 그 줄을 검토하고도 통과시켰다 - UPDATE 3에 근거가
+                        // 있으니 "뒷받침된다"고 본 것이다(존재 검증과 전칭 검증의 바꿔치기).
+                        //
+                        // 술어와 조인 키는 DML 범위·집합 술어 표가 문장별로 확정하므로,
+                        // 설명 칸이 그것을 나열할 자리를 없앤다 - 참조 함수 동작 서술 금지와
+                        // 같은 계열이다. 틀릴 수 있는 주장의 부류 자체를 제거하는 편이
+                        // "묶지 마라"는 지시보다 강하다.
+                        //
+                        // 이 문구는 BuildSpMetadataTexts를 부르는 여덟 호출부가 공유한다 -
+                        // Actor·Critic·함수·분할 갈래가 같은 규칙을 보므로 한쪽만 바뀌어
+                        // 교착이 나는 일이 구조적으로 없다.
+                        staticAnalysisText.AppendLine(
+                            "    (SELECT 대상 테이블은 CRUD 분석 표에 각각 독립적인 조회(SELECT) 참조 행으로 "
+                            + "참조 컬럼과 함께 완전하게 기술되어야 합니다. 다만 설명 칸에 "
+                            + "조인 키와 WHERE 술어를 나열하지 마십시오 - 그 사실은 "
+                            + $"`{DmlScopeExtractor.DmlScopeTableHeading}`와 "
+                            + $"`{DmlScopeExtractor.SetPredicateTableHeading}` 표가 문장별로 확정합니다. "
+                            + "설명 칸에는 어느 문장에서 참조되는지와, 그 두 표가 담지 않는 사실만 적으십시오.)");
                     }
                     
                     staticAnalysisText.AppendLine($"  * INSERT 대상 테이블: {(spDef.StaticAnalysis.InsertTables.Count > 0 ? string.Join(", ", spDef.StaticAnalysis.InsertTables) : "없음")}");
@@ -3268,7 +3289,7 @@ DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
 [Evaluation Criteria (Score 0-10 for each item)]
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Check if the operations and branches of the source code are documented accurately without hallucination, arbitrary assumptions, or guesses.
-   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER that narrows the target rows. A predicate that only appears as a column name in a table, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다`, is NOT described as a filter: report it. Conversely, report any filter the specification claims that the source does not actually have.
+   - Walk EVERY WHERE predicate of the source DDL - including predicates inside a derived table (`FROM (SELECT ... WHERE ...) X`) - and verify each one is described in the specification AS A FILTER that narrows the target rows. A predicate that only appears as a column name in a table, or is softened into wording such as `조회합니다`/`참조합니다`/`사용됩니다`, is NOT described as a filter: report it. However, when a machine-confirmed table carries the predicate verbatim for that specific statement (the `집합 술어` table's 술어 원문 column, or the `DML 범위` table's row for that statement), that IS the filter description - do NOT additionally demand it in prose, and do NOT lower any score because the CRUD description column omits join keys or predicates. That column is instructed not to carry them. Conversely, report any filter the specification claims that the source does not actually have.
    - A predicate commented out with `--` does not run. If the specification describes it as active logic, report it; if the specification states it is commented out and not applied, that is correct and must NOT be penalized.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if all SELECT/INSERT/UPDATE/DELETE tables and columns are documented 1:1 in a table format without shortcuts (e.g., no 'etc.').

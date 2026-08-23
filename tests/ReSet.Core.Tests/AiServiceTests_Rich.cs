@@ -224,6 +224,97 @@ namespace ReSet.Core.Tests
         /// 원문 요청 본문 문자열에는 한글 리터럴이 그대로 나타나지 않는다.
         /// 메시지 content 필드들을 실제로 역직렬화해서 이스케이프가 풀린 원문 텍스트로 대조한다.
         /// </summary>
+        /// <summary>
+        /// SELECT 대상 테이블이 있어야 155행 지시문이 프롬프트에 실린다.
+        /// ProbeSpDef는 UPDATE 매핑만 채우므로 이 픽스처를 따로 둔다.
+        /// </summary>
+        private static SpDefinition SelectProbeSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_SELECT_PROBE",
+                DdlText = "SELECT 1;",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_SELECT_PROBE", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                SelectTables = new List<string> { "SETTLE_POQ_DB.dbo.TClientSettleRate" }
+            };
+            return spDef;
+        }
+
+        /// <summary>
+        /// 2026-08-23 ④ 진단. CRUD 표의 설명 칸이 조인 키를 나열하면서 여러 문장을
+        /// 한 주장으로 묶었다(실측: `UPDATE 3 및 UPDATE 4에서 YMD, CLIENTID, PGNAME,
+        /// MALLID 조인` - UPDATE 4에는 MALLID 조인이 없다). Critic은 그 줄을 검토하고
+        /// "accurately captures the join keys"로 통과시켰다 - 존재 검증과 전칭 검증을
+        /// 바꿔치기한 것이다.
+        ///
+        /// 술어와 조인 키는 `DML 범위`·`집합 술어` 표가 문장별로 확정하므로, 설명 칸이
+        /// 그것을 나열할 자리를 없애 틀릴 수 있는 주장의 부류 자체를 제거한다.
+        /// 참조 함수 동작 서술 금지와 같은 계열이다.
+        /// </summary>
+        private static void AssertPredicateProseIsDelegatedToTables(string body)
+        {
+            // 옛 지시문은 조건 서술을 요구했다 - 살아 있으면 새 규칙과 정면으로 어긋난다.
+            Assert.DoesNotContain("조건/참조 컬럼과 함께", body);
+            Assert.Contains("조인 키와 WHERE 술어를 나열하지 마십시오", body);
+            Assert.Contains(DmlScopeExtractor.DmlScopeTableHeading, body);
+            Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_CrudDescriptionRule_DelegatesPredicatesToTables()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(SelectProbeSpDef(), "지시");
+
+            AssertPredicateProseIsDelegatedToTables(DecodeMessageContents(handler.LastRequestBody));
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_CrudAnalysis_DelegatesPredicatesToTables()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(SelectProbeSpDef(), "CrudAnalysis", "지시");
+
+            AssertPredicateProseIsDelegatedToTables(DecodeMessageContents(handler.LastRequestBody));
+        }
+
+        /// <summary>
+        /// Actor와 Critic이 같은 `staticAnalysisText`를 받으므로 규칙이 갈라질 수 없다.
+        /// 이 테스트가 그 배선을 고정한다 - 한쪽만 바뀌면 이 세션 초반의 교착이 재현된다.
+        /// </summary>
+        [Fact]
+        public async Task ReviewSpecificationAsync_CrudDescriptionRule_ReachesCriticToo()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.ReviewSpecificationAsync(SelectProbeSpDef(), "## 개요");
+
+            AssertPredicateProseIsDelegatedToTables(DecodeMessageContents(handler.LastRequestBody));
+        }
+
+        /// <summary>
+        /// Critic 기준 1은 술어가 "필터로 서술"됐는지 본다. 산문에서 술어를 빼면 그
+        /// 요구가 충족되지 않는 것으로 읽혀 교착이 난다 - 기계 확정 표의 술어 원문이
+        /// 곧 필터 서술이라는 것을 기준 안에 못 박는다.
+        /// </summary>
+        [Fact]
+        public async Task ReviewSpecificationAsync_Criterion1_AcceptsTableVerbatimAsFilterDescription()
+        {
+            var (service, handler) = CreateProbe();
+
+            await service.ReviewSpecificationAsync(SelectProbeSpDef(), "## 개요");
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("a machine-confirmed table carries the predicate verbatim", body);
+        }
+
         private static string DecodeMessageContents(string requestBody)
         {
             using var doc = JsonDocument.Parse(requestBody);

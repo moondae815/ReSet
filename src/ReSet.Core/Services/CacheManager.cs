@@ -86,7 +86,16 @@ namespace ReSet.Core.Services
         //     산출물이 그대로 남는다 - 원문 칸이 없어 분해되지 않는 술어가 통째로
         //     빠진 명세서, `IF` 술어의 잠금이 없는 명세서가 그대로 살아남고, 넓어진
         //     L1 셋도 캐시 히트에서는 영영 발동하지 않는다.
-        // 12: 기계 확정 표 넷이 또 한꺼번에 넓어졌다(2026-08-23 축 A ③(b)). 11과 마찬가지로
+        // 12: CRUD 분석의 `SELECT 대상 테이블` 표 설명 칸이 조인 키·WHERE 술어를 담지
+        //     않게 됐다(2026-08-23 ④ 진단). 술어의 기준값은 DML 범위·집합 술어 표이고
+        //     둘 다 문장별로 행을 낸다. 버전 5가 "함수 동작 서술이 금지되었다 -
+        //     프롬프트 입력과 출력 계약이 둘 다 달라졌으므로 옛 산출물은 재분석해야
+        //     한다"로 올린 것과 같은 모양이다. 옛 엔트리를 재사용하면 금지된 서술을
+        //     담은 산출물이 그대로 남고, 그것이 다시 감사에서 결함으로 잡힌다.
+        //     실측 근거: UP_UTIL_SETTLE_EXCEPTION_PROC의 설명 칸이 UPDATE 3과 4의
+        //     조인 키를 묶어 적어 UPDATE 4에 없는 MALLID 조인을 주장했고, Critic이
+        //     UPDATE 3의 근거로 그것을 통과시켰다.
+        // 13: 기계 확정 표 넷이 또 한꺼번에 넓어졌다(2026-08-23 축 A ③(b)). 11과 마찬가지로
         //     표 종류는 늘지 않았다. 넓어진 폭이 표마다 다르므로 표별로 갈라 적는다 -
         //     11의 (2)를 "두 표"로 묶어 적었다가 문서 여섯 자리에 거짓이 실린 전례가 있다.
         //     (1) 참조 함수 표(ReferencedFunctionVisitor): DML 셋에 더해 FROM이 있는 독립
@@ -124,7 +133,7 @@ namespace ReSet.Core.Services
         //     산출물이 그대로 남는다 - 독립 SELECT의 집합 술어와 `IF` 술어의 함수 호출이
         //     빠진 명세서, 32행 NOLOCK이 표 어디에도 없는 명세서, 루프 내 재설정과
         //     비집계 대입이 산문에만 있는 명세서가 그대로 살아남는다.
-        private const int CurrentCacheFormatVersion = 12;
+        private const int CurrentCacheFormatVersion = 13;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
