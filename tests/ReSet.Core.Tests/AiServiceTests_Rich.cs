@@ -2641,8 +2641,14 @@ END"
                 .Single(l => l.Contains("[CRITICAL SET PREDICATE TABLE]"));
 
             Assert.Contains("`SELECT n`", intro);
-            Assert.Contains("reads", intro);
+            // "reads"만 찾으면 같은 줄의 "the 문장 cell reads `SELECT n`"에도 걸려
+            // 지시문이 통째로 사라져도 초록이다 - 지시의 본체를 그대로 요구한다.
+            Assert.Contains("narrows the rows that statement reads", intro);
             Assert.Contains("INSERT, UPDATE or DELETE writes", intro);
+            // 독립 SELECT의 예시는 닫힌 열거가 아니어야 한다. 프로시저가 결과 집합을
+            // 그대로 반환하는 `SELECT ... FROM ... WHERE`도 HasFromClause가 참이라
+            // `SELECT n` 행을 내는데, 셋으로 닫아 두면 그 문장의 행이 지시 밖으로 읽힌다.
+            Assert.Contains("such as", intro);
         }
 
         [Fact]

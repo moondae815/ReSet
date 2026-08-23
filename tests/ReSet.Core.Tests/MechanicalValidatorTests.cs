@@ -3441,9 +3441,11 @@ END"
 
         /// <summary>
         /// 넓어진 문장 집합의 `SELECT n` 행을 L1이 DML 행과 똑같이 대조하는지 확인한다.
-        /// CheckSetPredicates의 행 키는 (라인 · 컬럼 · 범위 · 술어 원문)이라 연산 종류를
-        /// 보지 않으므로 손댈 것이 없다는 것이 Task 2의 주장인데, 확인 없이 넘기면
-        /// 표만 넓어지고 검사는 침묵한다.
+        /// CheckSetPredicates가 사실을 묶는 키는 (연산 · 라인 · 컬럼 · 범위 · 술어 원문)
+        /// 다섯이지만, 그 묶음에 맞는 <b>행을 찾는 술어</b>는 라인 · 컬럼 · 범위 · 술어
+        /// 원문 네 칸만 보고 문장 칸을 보지 않는다(MechanicalValidator.cs의 `groups`와
+        /// `matchingRows`). 그래서 연산이 `SELECT`로 바뀌어도 검사가 달라질 자리가 없다는
+        /// 것이 Task 2의 주장인데, 확인 없이 넘기면 표만 넓어지고 검사는 침묵한다.
         ///
         /// 이 테스트 홀로는 "검사가 SELECT 행을 아예 건너뛴다"와 구분되지 않는다 -
         /// 바로 아래 Validate_SetPredicateSelectRowDropped_ShouldBeAnError가 그 갈래를

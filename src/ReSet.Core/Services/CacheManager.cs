@@ -110,10 +110,15 @@ namespace ReSet.Core.Services
         //     `비집계 대입`(NonAggregateAssignmentExtractor)과
         //     `루프 내 재설정`(LoopVariableResetExtractor)이 AllKinds 끝에 붙었다.
         //     표의 열은 그대로 넷(종류·라인·대상·확정 사실)이다.
-        //     (5) L1은 이 회차에 넓히지 않았다 - CheckSetPredicates의 행 키는
-        //     (라인·컬럼·범위·술어 원문), CheckExecutionSemantics는 네 칸의 문자열
-        //     일치라 둘 다 연산 종류·행 종류를 보지 않아 새 행이 그대로 흘러간다.
-        //     확인 테스트를 두어 못 박았다(MechanicalValidatorTests의
+        //     (5) 집합 술어 표의 도입문(프롬프트 문자열)도 바뀌었다 - `SELECT n` 행의
+        //     술어가 쓰는 대상 행이 아니라 읽는 행을 가른다는 구절을 더했다. 표의 모양이
+        //     아니라 지시문만 바뀐 것이지만 프롬프트 바이트가 달라지는 것은 같으므로
+        //     이 회차의 무효화 사유에 함께 적는다.
+        //     (6) L1은 이 회차에 넓히지 않았다 - CheckSetPredicates가 사실을 묶는 키는
+        //     (연산·라인·컬럼·범위·술어 원문) 다섯이지만 실제 행 매칭은 라인·컬럼·범위·
+        //     술어 원문 네 칸만 보고 연산 칸을 보지 않으며, CheckExecutionSemantics도
+        //     네 칸의 문자열 일치라 종류 목록을 보지 않는다. 그래서 새 행이 그대로
+        //     흘러간다. 확인 테스트를 두어 못 박았다(MechanicalValidatorTests의
         //     Validate_SetPredicateSelectRow*·Validate_ExecutionSemantics*).
         //     프롬프트 입력이 달라진 것이므로 옛 엔트리를 재사용하면 새 행이 없는 옛
         //     산출물이 그대로 남는다 - 독립 SELECT의 집합 술어와 `IF` 술어의 함수 호출이
