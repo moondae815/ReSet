@@ -6451,5 +6451,157 @@ END",
             // authoring-contract §1 - 재료가 이것 하나뿐이어도 검사가 돌아야 한다.
             Assert.NotNull(BuildExpectationsWithParameters("@pi_strYMD char(8)"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 「파라미터 목록」 표의 연결 컬럼 주장 ↔ 변수-컬럼 결합 — 2026-08-23 9회차 🟡
+        // (UP_UTIL_SETTLE_EXCEPTION_PROC Spec.md:34)
+        //
+        // 표가 `@pi_strYMD`의 연결 컬럼으로 `TPLCardTxMst.YMD`·`TClientSettleRate4MobileCo.YMD`를
+        // 적었는데 DDL에서 그 둘은 @pi_strYMD와 결합되지 않는다. 주장은 행의 어느 칸이든
+        // 백틱 `테이블.컬럼` 토큰이고, 테이블이 StaticAnalysis.ReferencedTables에 있는 것만
+        // 대조한다(함수 `dbo.UF_X(`·별칭 `A.YMD`는 귀속 불가 - 침묵). 같은 H2 아래 모든 표를 본다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static SpecExpectations BuildExpectationsWithDdl(string ddl, params string[] referencedTables)
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_TEST",
+                DdlText = ddl,
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ProcedureParameters = new List<string> { "@pi_strYMD char(8)", "@po_intRetVal int OUTPUT" },
+                    ReferencedTables = new List<string>(referencedTables)
+                }
+            };
+            return SpecExpectations.From(spDef)!;
+        }
+
+        private const string ExceptionProcShapedDdl = @"
+CREATE PROCEDURE dbo.UP_TEST @pi_strYMD CHAR(8), @po_intRetVal INT OUTPUT AS
+BEGIN
+    UPDATE A SET A.CLCOMM = dbo.UF_X(B.ClientID, B.YMD, @pi_strYMD)
+    FROM   dbo.TSettleMst A JOIN dbo.TPLCardTxMst B ON A.PLTID = B.PLTID
+    WHERE  A.YMD = @pi_strYMD
+    UPDATE A SET A.Flag = 1
+    FROM   dbo.TSettleMst A JOIN dbo.TClientSettleRate4MobileCo B ON A.ClientID = B.ClientID
+    WHERE  A.AYMD = B.YMD AND A.YMD = @pi_strYMD
+END";
+
+        [Fact]
+        public void Validate_ParameterColumnClaimWithoutBinding_IsReported()
+        {
+            // EXCEPTION_PROC:34 실물 모양(헤더 `구분 | 명칭 | …`, 주장 칸은 넷째).
+            var expectations = BuildExpectationsWithDdl(ExceptionProcShapedDdl,
+                "dbo.TSettleMst", "dbo.TPLCardTxMst", "dbo.TClientSettleRate4MobileCo");
+            var markdown = SpecWithParameterSection(
+                "### 파라미터와 변수의 컬럼 관계\n\n" +
+                "| 구분 | 명칭 | 데이터 타입 | 연결되는 컬럼 또는 표현식 | 설명 |\n" +
+                "| :--- | :--- | :--- | :--- | :--- |\n" +
+                "| 입력 매개변수 | `@pi_strYMD` | `char(8)` | `TSettleMst.YMD`, `TPLCardTxMst.YMD`, `TClientSettleRate4MobileCo.YMD` | 정산 기준일 필터 |\n" +
+                "| 출력 매개변수 | `@po_intRetVal` | `int` | 대상 컬럼 없음 | 오류 코드 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+            Assert.Contains("TPLCardTxMst.YMD", error.Message, StringComparison.Ordinal);
+            Assert.Contains("TClientSettleRate4MobileCo.YMD", error.Message, StringComparison.Ordinal);
+            // 지목 목록(안내문의 "DDL이 … 결합하는 컬럼" 앞부분)에는 결합된 `TSettleMst.YMD`가 없어야 한다.
+            var flagged = error.Message.Substring(0, error.Message.IndexOf("DDL이", StringComparison.Ordinal));
+            Assert.DoesNotContain("TSettleMst.YMD", flagged, StringComparison.Ordinal);
+            // 별칭으로 쓰인 대상 이름(`A`)이 테이블로 새지 않는다.
+            Assert.DoesNotContain("`A.", error.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Validate_ParameterColumnClaimsAllBound_Pass()
+        {
+            var expectations = BuildExpectationsWithDdl(ExceptionProcShapedDdl,
+                "dbo.TSettleMst", "dbo.TPLCardTxMst", "dbo.TClientSettleRate4MobileCo");
+            var markdown = SpecWithParameterSection(
+                "| 매개변수 명칭 | 데이터 타입 | 연결 컬럼 |\n" +
+                "| :--- | :--- | :--- |\n" +
+                "| `@pi_strYMD` | `char(8)` | `TSettleMst.YMD`와 비교, `TSettleMst.CLCOMM` 산출에 사용 |\n" +
+                "| `@po_intRetVal` | `int` | 대상 컬럼 없음 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterColumnClaim_IgnoresFunctionsAliasesAndUnknownTables()
+        {
+            // `dbo.UF_X(`는 함수, `A.YMD`는 별칭, `TUnknown.YMD`는 ReferencedTables 밖 - 전부 침묵.
+            var expectations = BuildExpectationsWithDdl(ExceptionProcShapedDdl, "dbo.TSettleMst");
+            var markdown = SpecWithParameterSection(
+                "| 파라미터 | 데이터 타입 | 사용처 |\n" +
+                "| :--- | :--- | :--- |\n" +
+                "| `@pi_strYMD` | `char(8)` | `dbo.UF_X(B.ClientID, B.YMD, @pi_strYMD)`의 인자, `A.YMD` 비교, `TUnknown.YMD` |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterColumnClaim_ChecksEveryTableUnderTheSection()
+        {
+            // 관계 표가 둘째 표여도 본다 - 주장은 어느 표에 있든 주장이다.
+            var expectations = BuildExpectationsWithDdl(ExceptionProcShapedDdl,
+                "dbo.TSettleMst", "dbo.TClientSettleRate4MobileCo");
+            var markdown = SpecWithParameterSection(
+                CommUpdShapedParameterTable +
+                "\n| 명칭 | 연결 컬럼 |\n" +
+                "| :--- | :--- |\n" +
+                "| `@pi_strYMD` | `TClientSettleRate4MobileCo.YMD` |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterColumnClaim_AlsoChecksTablesUnderOverview()
+        {
+            // EXCEPTION_PROC 실물 - 관계 표가 `## 개요` 아래 `### 파라미터와 변수의 컬럼 관계`에 있다.
+            var expectations = BuildExpectationsWithDdl(ExceptionProcShapedDdl,
+                "dbo.TSettleMst", "dbo.TClientSettleRate4MobileCo");
+            var markdown = WrapSpec("표 없음").Replace("## 개요\n내용",
+                "## 개요\n내용\n\n### 파라미터와 변수의 컬럼 관계\n\n" +
+                "| 구분 | 명칭 | 연결되는 컬럼 또는 표현식 |\n| :--- | :--- | :--- |\n" +
+                "| 입력 매개변수 | `@pi_strYMD` | `TClientSettleRate4MobileCo.YMD` |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+        }
+
+        [Fact]
+        public void Validate_ParameterColumnClaim_IsSilentWhenDdlHasNoBindingsAtAll()
+        {
+            // 재료가 비면(파싱 실패·동적 SQL) 기각할 근거가 없다 - 침묵.
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo", Name = "UP_TEST", DdlText = "EXEC (@sql)",
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_TEST", CodeObjectType.Procedure),
+                StaticAnalysis = new SpStaticAnalysisResult
+                {
+                    IsParsedSuccessfully = true,
+                    ProcedureParameters = new List<string> { "@pi_strYMD char(8)" },
+                    ReferencedTables = new List<string> { "dbo.TSettleMst" }
+                }
+            };
+            var expectations = SpecExpectations.From(spDef)!;
+            var markdown = SpecWithParameterSection(
+                "| 파라미터 | 연결 컬럼 |\n| :--- | :--- |\n| `@pi_strYMD` | `TSettleMst.YMD` |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
+        }
     }
 }

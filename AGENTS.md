@@ -121,7 +121,7 @@
     *   C# 보간 프롬프트의 `{}`는 `{{}}`로 이스케이프하십시오. 정산 정책서는 DDL 분기와 데이터 프로파일링을 결합해 지정된 5개 헤더를 따릅니다.
     *   CRUD·컬럼 매핑은 `외 다수`·`등`으로 줄이지 말고 물리 컬럼과 원천값을 1:1로 모두 적으십시오. UPDATE 매핑은 `SqlStaticParser.AstUpdateMappings`가 채우며 AI fill-in 방식으로 되돌리지 마십시오(`MechanicalValidatorTests.Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt`).
     *   파라미터·컬럼 제약은 DDL의 타입·기본값만 근거로 쓰고 임의의 `NOT NULL`을 만들지 마십시오. 스키마 덤프는 `SchemaPromptColumnSelector`가 고른 참조·키·인덱스 컬럼으로 제한하십시오(`SchemaPromptColumnSelectorTests`).
-    *   L1은 기계 확정 표의 셀 수, `### INSERT 대상 테이블:` 절 스코프 안 매핑 표 테이블명 표기(Ordinal), 같은 줄 앵커가 있는 널 허용 주장, 「## 파라미터 목록」 첫 표의 `@이름` 행과 `ProcedureParameters`의 1:1(지역 변수·`@@ERROR`는 별도 표로)을 함께 봅니다. 프롬프트 스키마 표의 컬럼 필터는 INSERT·UPDATE 대상 컬럼도 입력원으로 삼고, `DB 배치` 문장은 소속 DB 안/밖을 가릅니다(`architecture.md §4.9`).
+    *   L1은 기계 확정 표의 셀 수, `### INSERT 대상 테이블:` 절 스코프 안 매핑 표 테이블명 표기(Ordinal), 같은 줄 앵커가 있는 널 허용 주장, 파라미터 표의 `@이름` 행과 `ProcedureParameters`의 1:1, 파라미터 표의 연결 컬럼 `테이블.컬럼`이 DDL에서 그 변수와 결합되는지(함수 인자 동반은 연결 아님)를 함께 봅니다. 프롬프트 스키마 표의 컬럼 필터는 INSERT·UPDATE 대상 컬럼도 입력원으로 삼고, `DB 배치` 문장은 소속 DB 안/밖을 가릅니다(`architecture.md §4.9`).
     *   「집합 술어」 표의 행 단위는 최상위 `AND` 항이고, 마지막 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 — 요약·번역·생략하지 마십시오(`architecture.md §4.12`). 문장 칸이 `SELECT n`인 행의 술어는 쓰는 대상 행이 아니라 **읽는 행**을 가르니 그렇게 서술하십시오.
     *   「집합 술어」 표의 범위 칸에는 `최상위`·`파생 테이블 X` 외에 `조인 ON T`(그 테이블을 들여오는 JOIN의 ON 절 항, 조인 키 등식은 제외)가 있습니다 — WHERE 항과 같은 필터로 서술하되, `LEFT OUTER 조인 ON T`처럼 외부 조인이면 대상 행을 좁히는 필터가 아니라 **짝이 되는 조건**으로 서술하십시오(캐시 버전 14).
     *   「잠금 힌트」 표의 문장 칸은 `SELECT n`·`IF n`도 담고 범위 칸에 `하위 질의`가 있습니다 — 그 값은 술어 안에 한정되지 않고, SELECT 목록·`SET` 절처럼 그 문장 안에서 다시 열린 질의가 훑는 자리를 모두 가리킵니다. 「DML 범위」·「집합 술어」 표는 `SELECT n`까지만 담고 `IF n` 행이 없으며, 「DML 범위」에는 범위 칸 자체가 없습니다(`architecture.md §4.12`).

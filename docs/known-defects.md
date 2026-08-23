@@ -229,18 +229,17 @@
 
 ### L1 기계 검증기
 
-- **「파라미터와 변수의 컬럼 관계」 표의 연결 컬럼 주장을 어떤 검사도 대조하지 않는다** —
-  그 표는 모델이 쓰는 표라 기계 확정 표가 아니다. 2026-08-23 9회차 축 A 재감사 🟡
-  (`UP_UTIL_SETTLE_EXCEPTION_PROC` `Spec.md:34`): `@pi_strYMD`의 연결 컬럼으로 `TPLCardTxMst.YMD`·
-  `TClientSettleRate4MobileCo.YMD`를 적었는데 전자는 함수 인자로만 쓰이고(393-394행) 후자는
-  `A.AYMD = B.YMD`(416행, 승인일)로 결합된다. DML 범위 표(조인 키 `AYMD, YMD`)·집합 술어 표가
-  실제 술어를 보존하므로 추적성 🟡이지만, 이 표를 믿고 "정산일로 거른다"고 읽을 여지가 있다.
-  **후보 처방** — 파라미터가 비교되는 `테이블.컬럼` 쌍을 추출기(DmlScopeVisitor의 Parameters·
-  Columns 수집 경로)가 이미 알고 있으므로, 표의 각 행(파라미터, 연결 컬럼)을 그 쌍 집합과
-  대조하는 L1 검사 하나로 닫힌다(`/reset-l1-check` 한 회차). 같은 회차에 "표에 실린 함수의
-  동작을 산문이 서술"하는 🟡(`UF_GET_COLLECTYMD:93`)은 v14 재생성이 우연히 지웠다 — 도구
-  변경이 없어 재발 가능하며, 재발하면 참조 함수 표의 함수명 + 동작 술어를 잡는 검사가 후보다
-  (트리거 문구는 코퍼스로 정할 것).
+- ~~**「파라미터와 변수의 컬럼 관계」 표의 연결 컬럼 주장을 어떤 검사도 대조하지 않는다**~~ —
+  **2026-08-23 닫힘.** `ParameterColumnBindingExtractor`(DDL의 변수↔`테이블.컬럼` 결합 - 술어·산술식·
+  대입·INSERT 자리·커서 FETCH INTO, 조인 등식 전파; 함수 인자 동반은 결합 아님)와
+  `MechanicalValidator.CheckParameterColumnClaims`(「## 개요」·「## 파라미터 목록」 아래 표의 백틱
+  `테이블.컬럼` 주장 대조, 테이블이 `ReferencedTables`에 있는 것만). 코퍼스 31개 스윕에서 정확히
+  `EXCEPTION_PROC:34`의 두 주장만 잡히고(`TPLCardTxMst.YMD`·`TClientSettleRate4MobileCo.YMD`) 거짓 양성 0 —
+  첫 판의 거짓 양성 6건(PROC_ETC 커서 4·COMM_UPD 산술식 1·조인 전파 1)은 결합 정의를 넓혀 없앴다.
+  재생성 실측은 아직 안 했다(L1 오류가 재생성 프롬프트에 실려 모델이 고치는 경로). 같은 항목에
+  적었던 `UF_GET_COLLECTYMD:93`(표에 실린 함수의 동작 서술)은 v14 재생성이 우연히 지웠고 도구
+  변경이 없어 재발 가능하다 — 재발하면 참조 함수 표의 함수명 + 동작 술어를 잡는 검사가 후보다(트리거
+  문구는 코퍼스로 정할 것).
   근거: `docs/audit-reports/2026-08-23-POQSettlePrco20-axisA.md` 4절·4-3절
 - **DML 범위 표·집합 술어 표의 "문장" 칸을 L1이 한 번도 검증하지 않는다** —
   `MechanicalValidator.CheckDmlScopeTable`과 `CheckSetPredicates`는 대상·WHERE 술어 컬럼·

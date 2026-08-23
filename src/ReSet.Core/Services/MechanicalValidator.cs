@@ -61,6 +61,9 @@ namespace ReSet.Core.Services
         // 파라미터 목록 표의 `@이름` 행이 StaticAnalysis.ProcedureParameters와 다르다 -
         // 지역 변수·시스템 상태값이 섞였거나 파라미터가 빠졌다(2026-08-23 9회차 (D)).
         ParameterTableRowMismatch,
+        // 파라미터 목록 표가 어떤 변수의 연결 컬럼으로 적은 `테이블.컬럼`이 DDL에서 그 변수와
+        // 결합되지 않는다(2026-08-23 9회차 🟡 EXCEPTION_PROC:34).
+        ParameterColumnClaimMismatch,
         // 참조 함수 표의 행 단위 대조 실패 앵커(2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1).
         // 이전에는 헤딩 부재를 SetPredicateMismatch로 빌려 보고했다.
         ReferencedFunctionMismatch,
@@ -157,6 +160,7 @@ namespace ReSet.Core.Services
                     CheckSchemaClaims(cleansed, expectations, result);
                     CheckNullabilityClaims(cleansed, expectations, result);
                     CheckParameterTableRows(cleansed, expectations, result);
+                    CheckParameterColumnClaims(cleansed, expectations, result);
                     CheckTableIdentitySplit(cleansed, expectations, result);
                     CheckIdentifierNotationClaims(cleansed, expectations, result);
                     CheckSourceComments(cleansed, expectations, result);
@@ -2156,6 +2160,135 @@ namespace ReSet.Core.Services
         /// 첫 표만 본다 - v14 EXPECT_PROC처럼 같은 H2 아래 두 번째 표(내부 변수)는 정상이다.
         /// 표 경계는 빈 줄·`|`가 아닌 줄(§4). 비교는 대소문자 무시.
         /// </summary>
+        /// <summary>
+        /// 「## 파라미터 목록」 아래 모든 표에서 `@이름` 행이 연결 컬럼으로 적은 `테이블.컬럼`
+        /// 주장이 DDL의 변수-컬럼 결합(<see cref="SpecExpectations.ParameterColumnBindings"/>)에
+        /// 있는지 대조한다.
+        ///
+        /// [왜 - 2026-08-23 9회차 축 A 재감사 🟡 EXCEPTION_PROC Spec.md:34] 「파라미터와 변수의
+        /// 컬럼 관계」 표가 `@pi_strYMD`의 연결 컬럼으로 `TPLCardTxMst.YMD`(함수 인자로만 함께
+        /// 나옴)·`TClientSettleRate4MobileCo.YMD`(`A.AYMD = B.YMD` - 변수 없음)를 적었다. 이 표는
+        /// 기계 확정 표가 아니라 어떤 검사도 보지 않았다.
+        ///
+        /// [귀속 규칙 - authoring-contract §7·§8] 주장은 행의 어느 칸이든 **백틱으로 감싼**
+        /// `X.Y`·`dbo.X.Y`·`DB.dbo.X.Y` 토큰이고 바로 뒤에 `(`가 오지 않는 것이다. 테이블 X는
+        /// <see cref="SpecExpectations.KnownTableNames"/>(StaticAnalysis.ReferencedTables 등의 기본
+        /// 이름)에 있어야 한다 - 함수(`dbo.UF_X(`)·별칭(`A.YMD`)·모르는 이름은 침묵. 이름 열은
+        /// 헤더로 찾는다(CheckParameterTableRows와 같은 목록 + `명칭`·`내부 변수 명칭`). 결합 재료가
+        /// 통째로 비거나 그 변수의 결합이 하나도 없으면(파싱 실패·동적 SQL·함수 인자로만 쓰임)
+        /// 기각 근거가 없으므로 침묵한다. 결합은 넓게 잡혀 있으므로(ParameterColumnBindingExtractor
+        /// 문서) 남는 것은 DDL 어디에서도 그 변수와 그 컬럼이 술어나 대입으로 만나지 않는 주장뿐이다.
+        /// </summary>
+        private static void CheckParameterColumnClaims(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ParameterColumnBindings.Count == 0) return;
+            if (expectations.KnownTableNames.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                // 관계 표는 `## 파라미터 목록` 아래에도, `## 개요` 아래(`### 파라미터와 변수의 컬럼
+                // 관계` - EXCEPTION_PROC 실물)에도 온다. 두 절의 표를 모두 본다.
+                var ranges = new List<(int Start, int End, string Heading)>();
+                foreach (var heading in new[] { "## 개요", "## 파라미터 목록" })
+                {
+                    var (h, e) = MarkdownSectionLocator.LocateSection(lines, heading, "## ");
+                    if (h >= 0) ranges.Add((h + 1, e, heading));
+                }
+                if (ranges.Count == 0) return;
+
+                var bound = new HashSet<string>(
+                    expectations.ParameterColumnBindings.Select(b => $"{b.Variable}|{b.Table}|{b.Column}"),
+                    StringComparer.OrdinalIgnoreCase);
+                var boundVariables = new HashSet<string>(
+                    expectations.ParameterColumnBindings.Select(b => b.Variable), StringComparer.OrdinalIgnoreCase);
+
+                // 표 단위로 순회 - 표 경계는 빈 줄·`|`가 아닌 줄(authoring-contract §4).
+                foreach (var (start, end, heading) in ranges)
+                {
+                var i = start;
+                while (i < end)
+                {
+                    if (!lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal)) { i++; continue; }
+                    var rows = new List<string>();
+                    while (i < end && lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal)) { rows.Add(lines[i]); i++; }
+                    if (rows.Count < 2) continue;
+
+                    var headerCells = MarkdownTableCellCodec.SplitRow(rows[0]);
+                    var nameColumn = -1;
+                    for (var c = 1; c < headerCells.Count; c++)
+                    {
+                        var h = headerCells[c].Trim();
+                        if (h is "매개변수 명칭" or "매개변수" or "파라미터" or "이름" or "파라미터명" or "매개변수명"
+                            or "명칭" or "내부 변수 명칭" or "변수 명칭" or "변수")
+                        {
+                            nameColumn = c;
+                            break;
+                        }
+                    }
+                    if (nameColumn < 0) continue;
+
+                    foreach (var row in rows.Skip(1))
+                    {
+                        if (IsSeparatorRow(row)) continue;
+                        var cells = MarkdownTableCellCodec.SplitRow(row);
+                        if (cells.Count <= nameColumn) continue;
+                        var variable = cells[nameColumn].Trim().Trim('`').Trim();
+                        if (!variable.StartsWith("@", StringComparison.Ordinal)) continue;
+                        if (!boundVariables.Contains(variable)) continue; // 결합이 하나도 없는 변수는 기각 근거 부족 - 침묵
+
+                        var unbound = new List<string>();
+                        for (var c = 1; c < cells.Count; c++)
+                        {
+                            if (c == nameColumn) continue;
+                            foreach (Match m in ParameterColumnClaimToken.Matches(cells[c]))
+                            {
+                                var parts = m.Groups[1].Value.Split('.');
+                                if (parts.Length < 2) continue;
+                                var table = parts[^2];
+                                var column = parts[^1];
+                                if (!expectations.KnownTableNames.Contains(table)) continue;
+                                var claim = $"{table}.{column}";
+                                if (bound.Contains($"{variable}|{table}|{column}")) continue;
+                                if (!unbound.Contains(claim, StringComparer.OrdinalIgnoreCase)) unbound.Add(claim);
+                            }
+                        }
+                        if (unbound.Count == 0) continue;
+
+                        var actual = expectations.ParameterColumnBindings
+                            .Where(b => b.Variable.Equals(variable, StringComparison.OrdinalIgnoreCase))
+                            .Select(b => $"`{b.Table}.{b.Column}`").Distinct().ToList();
+                        var message =
+                            $"「{heading}」 아래 표의 `{variable}` 행이 연결 컬럼으로 적은 "
+                            + string.Join(", ", unbound.Select(u => $"`{u}`"))
+                            + "은(는) 원본 DDL에서 그 변수와 비교·대입으로 결합되지 않습니다"
+                            + "(함수 인자로 함께 쓰이거나 다른 컬럼끼리 비교되는 자리는 연결이 아닙니다). "
+                            + $"DDL이 `{variable}`와 결합하는 컬럼: {(actual.Count > 0 ? string.Join(", ", actual) : "(없음)")}. "
+                            + "그 컬럼만 적거나 해당 토큰을 지우십시오.";
+                        result.Errors.Add(message);
+                        result.DetailedErrors.Add(new DetailedError
+                        {
+                            Type = ErrorType.ParameterColumnClaimMismatch,
+                            Message = message,
+                            RawContext = row.Trim()
+                        });
+                    }
+                }
+                }
+            }
+            catch (Exception ex)
+            {
+                // 이 검사 하나의 예외가 Validate의 catch-all로 올라가면 모든 검사의 오류가
+                // 지워진다(authoring-contract §6). 메서드 전체를 건너뛴다.
+                Log.Warning(ex, "[MechanicalValidator] 파라미터 연결 컬럼 주장 대조 중 예외 - 이 검사를 건너뜁니다.");
+            }
+        }
+
+        /// <summary>백틱으로 감싼 `X.Y`(점 2개 이상 가능) 토큰. 바로 뒤가 `(`이면 함수 호출이라 제외.</summary>
+        private static readonly Regex ParameterColumnClaimToken =
+            new(@"`([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)`(?!\s*\()", RegexOptions.Compiled);
+
         /// <summary>마크다운 표의 정렬 행(`| :--- | --- |`)인가.</summary>
         private static bool IsSeparatorRow(string row)
         {

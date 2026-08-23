@@ -150,6 +150,22 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string> ParameterNames { get; init; } = Array.Empty<string>();
 
         /// <summary>
+        /// DDL에서 변수(파라미터·지역 변수)가 술어나 대입으로 만나는 `테이블.컬럼` 결합
+        /// (<see cref="ParameterColumnBindingExtractor"/>). 「파라미터 목록」 표의 연결 컬럼
+        /// 주장을 기각하는 근거다(CheckParameterColumnClaims) - 2026-08-23 9회차 🟡 EXCEPTION_PROC:34.
+        /// </summary>
+        public IReadOnlyList<ParameterColumnBinding> ParameterColumnBindings { get; init; } =
+            Array.Empty<ParameterColumnBinding>();
+
+        /// <summary>
+        /// 이 객체가 참조하는 테이블의 기본 이름(스키마·DB 접두사 제거, 대소문자 무시).
+        /// StaticAnalysis.ReferencedTables·Select/Insert/Update/DeleteTables에서 모은다. 연결 컬럼
+        /// 주장의 `X.Y`에서 X가 여기 없으면(함수·별칭·모르는 이름) 귀속 불가로 침묵하는 기준이다.
+        /// </summary>
+        public IReadOnlySet<string> KnownTableNames { get; init; } =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 대조할 것이 하나도 없으면 null을 돌려준다. 호출부가 null 검사를 하지 않고
         /// 그대로 넘길 수 있게 하기 위해서다 - Validate는 null을 "종전 동작"으로 받는다.
         /// </summary>
@@ -257,6 +273,22 @@ namespace ReSet.Core.Services
                 .Select(ParameterNameOf)
                 .Where(n => n.StartsWith("@", StringComparison.Ordinal))
                 .ToList();
+
+            var parameterColumnBindings = ParameterColumnBindingExtractor.Extract(spDef.DdlText);
+            var knownTableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (spDef.StaticAnalysis != null)
+            {
+                foreach (var list in new[] { spDef.StaticAnalysis.ReferencedTables, spDef.StaticAnalysis.SelectTables,
+                                             spDef.StaticAnalysis.InsertTables, spDef.StaticAnalysis.UpdateTables,
+                                             spDef.StaticAnalysis.DeleteTables })
+                {
+                    foreach (var t in list ?? new List<string>())
+                    {
+                        var baseName = t.Split('.')[^1].Trim().Trim('[', ']');
+                        if (baseName.Length > 0) knownTableNames.Add(baseName);
+                    }
+                }
+            }
 
             // 대조할 것이 하나도 없을 때만 null이다. 재료를 추가하는 태스크는 이 식에
             // 자기 항을 반드시 이어야 한다 - 빠뜨리면 그 검사가 한 번도 돌지 않고,
@@ -378,7 +410,12 @@ namespace ReSet.Core.Services
                 // 오지만, 파싱 실패로 StaticAnalysis가 파라미터만 남긴 객체에서도 파라미터
                 // 표 대조는 돌아야 한다 - 이 항을 빠뜨리면 그 경우 CheckParameterTableRows가
                 // 한 번도 돌지 않는다(authoring-contract §1).
-                && parameterNames.Count == 0)
+                && parameterNames.Count == 0
+                // parameterColumnBindings는 DDL만으로 채워지므로 StaticAnalysis가 없는 객체에서도
+                // 올 수 있다 - 항을 잇지 않으면 그 경우 CheckParameterColumnClaims가 한 번도 돌지
+                // 않는다(authoring-contract §1). knownTableNames는 StaticAnalysis에서만 오므로
+                // 따로 잇지 않아도 위 항들이 덮지만, 검사는 둘 다 비면 스스로 침묵한다.
+                && parameterColumnBindings.Count == 0)
             {
                 return null;
             }
@@ -402,7 +439,9 @@ namespace ReSet.Core.Services
                 CaseBranches = caseBranches,
                 InsertTargetTables = insertTargetTables,
                 NullableColumnsByTable = nullableColumnsByTable,
-                ParameterNames = parameterNames
+                ParameterNames = parameterNames,
+                ParameterColumnBindings = parameterColumnBindings,
+                KnownTableNames = knownTableNames
             };
         }
 
