@@ -51,6 +51,34 @@ namespace ReSet.Core.Services
     /// **코퍼스에 이 모양은 없다** - 24개 객체의 object_definition.sql을 이 추출기로 훑어
     /// 이 가드 도입 전후 행이 8행으로 같음을 확인했다.
     ///
+    /// [집계는 CTE에도 산다] 수정 라운드 2 - 같은 함정인데 붙는 자리가 다르다.
+    /// `WITH c AS (SELECT MAX(ID) AS m FROM t) SELECT @v = c.m FROM c`에서 WITH 절은
+    /// FromClause 아래가 아니라 문장(<c>StatementWithCtesAndXmlNamespaces</c>)에 달려 있어,
+    /// FROM만 훑는 위 가드가 이 집계를 보지 못한다. 그래서 **WITH를 단 문장에 속한
+    /// QuerySpecification은 통째로 침묵한다**(<see cref="CteStatementRangeCollector"/>).
+    ///
+    /// 대가를 적어 둔다: 이 가드는 비집계 CTE
+    /// (`WITH c AS (SELECT ID FROM t) SELECT @v = c.ID FROM c`)까지 함께 침묵시킨다. 그쪽은
+    /// 사실 문장이 참이므로 담을 수 있는 행을 버리는 셈이다. 그래도 이렇게 하는 이유는,
+    /// 가려내려면 CTE 본문마다 집계를 판정하고 어느 CTE가 이 FROM에 실제로 닿는지까지
+    /// 따라가야 하는데(재귀 CTE·중첩 CTE·참조되지 않는 CTE가 모두 갈래를 늘린다), 그 판정이
+    /// 한 군데라도 새면 표에는 정반대 문장이 실리기 때문이다. 이 표는 「수정 금지」이고 L1이
+    /// 축자 전사를 강제하므로 거짓 행을 뒤에서 거를 장치가 없다 - AGENTS.md 범주 2와 같은
+    /// 원칙으로 거짓 행보다 없는 행을 고른다.
+    ///
+    /// **코퍼스에 이 모양도 없다** - 24개 객체를 파싱해 <c>CommonTableExpression</c> 노드를
+    /// 센 결과가 0건이다. 문자열 검색(`WITH ... AS (`)이 아니라 AST 노드 수로 확인했다 -
+    /// 코퍼스는 `WITH(NOLOCK)` 힌트를 곳곳에 쓰고 있어 문자열로는 둘이 구분되지 않는다.
+    /// 그 0건과 아래 8행을 함께 못박은 것이
+    /// <c>NonAggregateAssignmentExtractorTests.Extract_OverTheCorpus_...</c>다.
+    ///
+    /// [복합 대입은 담지 않는다] 수정 라운드 2 - `SELECT @v += col`도 SelectSetVariable로
+    /// 담기지만 대상 칸은 `SELECT @v = col`로 렌더돼 원문에 없는 문장이 표에 실린다.
+    /// <see cref="LoopVariableResetExtractor"/>가 같은 자리에서 거르는 것과 같은 규칙으로
+    /// <c>AssignmentKind != Equals</c>면 침묵한다. 코퍼스의 복합 대입은 전부
+    /// `UPDATE ... SET` 컬럼 대입이라 SelectSetVariable로는 0건이다(위 코퍼스 테스트가
+    /// 26건 중 0건으로 못박는다).
+    ///
     /// [왜 FROM 절을 요구하는가] `SELECT @v = ID`처럼 FROM이 없으면 무결과라는 개념이
     /// 없다 - 한 행이 반드시 돌아와 대입이 일어난다. FROM이 없는 문장에 이 사실 문장을
     /// 붙이면 거짓이 된다.
@@ -106,7 +134,10 @@ namespace ReSet.Core.Services
                 var scope = new VariableScopeVisitor();
                 fragment.Accept(scope);
 
-                var visitor = new NonAggregateAssignmentVisitor(scope);
+                var cteStatements = new CteStatementRangeCollector();
+                fragment.Accept(cteStatements);
+
+                var visitor = new NonAggregateAssignmentVisitor(scope, cteStatements);
                 fragment.Accept(visitor);
                 return visitor.Facts;
             }
@@ -209,11 +240,43 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// WITH 절을 단 문장이 원문에서 차지하는 범위를 모은다(클래스 주석의 "집계는 CTE에도
+        /// 산다").
+        ///
+        /// 범위로 재는 이유: 방문자는 QuerySpecification 단위로 훑는데 ScriptDom 노드에는
+        /// 부모 포인터가 없어 "내가 속한 문장이 WITH를 달았는가"를 노드에서 되물을 수 없다.
+        /// 그래서 문장 범위를 미리 모아 두고 오프셋 포함 여부로 판정한다. 범위는 그 문장
+        /// 하나까지다 - 객체에 CTE가 하나 있다고 나머지 문장까지 침묵하면 안 된다.
+        /// </summary>
+        private sealed class CteStatementRangeCollector : TSqlFragmentVisitor
+        {
+            private readonly List<(int Start, int End)> _ranges = new();
+
+            public override void Visit(StatementWithCtesAndXmlNamespaces node)
+            {
+                var ctes = node.WithCtesAndXmlNamespaces?.CommonTableExpressions;
+                if (ctes == null || ctes.Count == 0) return;
+                if (node.StartOffset < 0 || node.FragmentLength <= 0) return;
+
+                _ranges.Add((node.StartOffset, node.StartOffset + node.FragmentLength));
+            }
+
+            public bool Contains(int offset)
+                => _ranges.Any(range => offset >= range.Start && offset < range.End);
+        }
+
         private sealed class NonAggregateAssignmentVisitor : TSqlFragmentVisitor
         {
             private readonly VariableScopeVisitor _scope;
+            private readonly CteStatementRangeCollector _cteStatements;
 
-            public NonAggregateAssignmentVisitor(VariableScopeVisitor scope) => _scope = scope;
+            public NonAggregateAssignmentVisitor(
+                VariableScopeVisitor scope, CteStatementRangeCollector cteStatements)
+            {
+                _scope = scope;
+                _cteStatements = cteStatements;
+            }
 
             public List<NonAggregateAssignmentFact> Facts { get; } = new();
 
@@ -226,6 +289,9 @@ namespace ReSet.Core.Services
                 // FROM이 없으면 무결과가 성립하지 않는다 - 확정 사실 문장이 거짓이 된다.
                 if (node.FromClause == null) return;
 
+                // WITH를 단 문장에 속하면 침묵한다(클래스 주석의 "집계는 CTE에도 산다").
+                if (_cteStatements.Contains(node.StartOffset)) return;
+
                 var aggregateInFrom = new AggregateInFromDetector();
                 node.FromClause.Accept(aggregateInFrom);
                 if (aggregateInFrom.Found) return;
@@ -233,6 +299,10 @@ namespace ReSet.Core.Services
                 foreach (var element in node.SelectElements)
                 {
                     if (element is not SelectSetVariable setVariable) continue;
+
+                    // `SELECT @v += col`은 대상 칸이 `SELECT @v = col`로 렌더돼 원문에 없는
+                    // 문장이 된다. 형제 LoopVariableResetExtractor와 같은 규칙으로 거른다.
+                    if (setVariable.AssignmentKind != AssignmentKind.Equals) continue;
 
                     // 컬럼 참조만 담는다(클래스 주석의 "왜 컬럼 참조만 담는가").
                     if (setVariable.Expression is not ColumnReferenceExpression column) continue;

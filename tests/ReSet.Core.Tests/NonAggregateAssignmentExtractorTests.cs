@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Xunit;
 using ReSet.Core.Services;
 
@@ -177,6 +180,83 @@ END";
         }
 
         [Fact]
+        public void Extract_AggregateInsideCommonTableExpression_ShouldNotBeCollected()
+        {
+            // 파생 테이블 가드와 같은 함정인데 붙는 자리가 다르다. WITH 절은 FromClause
+            // 아래가 아니라 문장(StatementWithCtesAndXmlNamespaces)에 달려 있어, FROM만
+            // 훑는 가드는 이 집계를 보지 못한다. GROUP BY 없는 집계 CTE는 원본이 비어도
+            // 한 행을 돌려주므로 이 SELECT는 0행이 되지 않는다 - 담으면 표의 문장이
+            // 정확히 반대를 말한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    ;WITH c AS (SELECT MAX(ID) AS m FROM dbo.TA)
+    SELECT @v = c.m FROM c
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_NonAggregateCommonTableExpression_ShouldAlsoBeSkipped()
+        {
+            // 감수한 대가다. CTE 본문이 비집계면 이 문장은 실제로 0행이 될 수 있어 사실
+            // 문장이 참이지만, 그걸 가려내려면 CTE 본문마다 집계를 판정하고 어느 CTE가
+            // 이 FROM에 실제로 닿는지까지 따라가야 한다. 이 추출기의 원칙은 "거짓 행보다
+            // 없는 행"이므로 WITH를 단 문장은 통째로 침묵한다. 이 단언이 없으면 가드의
+            // 폭이 문서에만 있고 코드에는 없게 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    ;WITH c AS (SELECT ID FROM dbo.TA)
+    SELECT @v = c.ID FROM c
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_SiblingStatementOfACteStatement_ShouldStillBeCollected()
+        {
+            // 가드는 WITH를 단 **그 문장**까지다. 같은 객체에 CTE가 하나 있다고 객체
+            // 전체가 침묵하면 코퍼스 행이 조용히 사라진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @a INT, @b INT
+    ;WITH c AS (SELECT MAX(ID) AS m FROM dbo.TA)
+    SELECT @a = c.m FROM c
+    SELECT @b = ID FROM dbo.TB WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("@b", fact.Variable);
+            Assert.Equal("ID", fact.Column);
+        }
+
+        [Fact]
+        public void Extract_CompoundAssignment_ShouldNotBeCollected()
+        {
+            // `SELECT @v += col`도 SelectSetVariable로 담기는데 대상 칸은 `SELECT @v = col`로
+            // 렌더된다 - 원문에 없는 문장이 표에 실린다. 형제 LoopVariableResetExtractor가
+            // 같은 자리에서 AssignmentKind != Equals를 거르는 것과 같은 규칙이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT = 0
+    SELECT @v += ID FROM dbo.TA WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
         public void Extract_QualifiedColumn_ShouldKeepTheMultiPartNameAsWritten()
         {
             // 표의 대상 칸은 원문 대조 대상이다. 별칭을 떼면 L1의 행 대조가 어긋난다.
@@ -328,6 +408,128 @@ END";
             Assert.Equal("6", fact.Line);
             Assert.Equal("SELECT @v_intID = ID", fact.Target);
             Assert.Contains("NULL이 그대로 남습니다", fact.Fact);
+        }
+
+        [Fact]
+        public void Extract_OverTheCorpus_ShouldCollectExactlyEightRowsSevenOfThemNullCertain()
+        {
+            // 클래스 주석이 코퍼스 수치 셋(8행 · 8행 중 7행 · 가드 도입 전후 8행 동일) 위에
+            // 서 있는데 단위 테스트는 규칙이 흘러도 그대로 통과한다. 형제
+            // LoopVariableResetExtractorTests가 3/11을 못박은 것과 같은 방식으로 그 셋을
+            // 코퍼스에 직접 못박는다. 코퍼스가 없으면 조용히 통과한다(계획서 STEP ZERO).
+            //
+            // 뒤의 두 단언은 가드의 **분모**다. CTE 문장이 0건이고 복합 대입 SelectSetVariable이
+            // 0건이라는 것이 곧 두 가드가 위 8행을 한 행도 줄이지 않았다는 증거다 - 이 분모가
+            // 0이 아닌 날이 오면 위 목록이 줄어드는지 함께 드러난다.
+            var root = CorpusRoot();
+            if (root == null) return;
+
+            var collected = new List<string>();
+            var cteNodes = 0;
+            var setVariables = 0;
+            var compoundSetVariables = 0;
+
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                var path = Path.Combine(dir, "raw", "object_definition.sql");
+                if (!File.Exists(path)) continue;
+
+                var ddl = File.ReadAllText(path);
+                var name = Path.GetFileName(dir);
+
+                foreach (var fact in NonAggregateAssignmentExtractor.Extract(ddl))
+                {
+                    var branch = fact.Sentence.Contains("NULL이 그대로 남습니다") ? "NULL확정" : "중립";
+                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Column} [{branch}]");
+                }
+
+                var (cte, setVariable, compound) = CountGuardInputs(ddl);
+                cteNodes += cte;
+                setVariables += setVariable;
+                compoundSetVariables += compound;
+            }
+
+            Assert.Equal(
+                new[]
+                {
+                    "dbo.UF_GET_CLIENTSECTIONRATE.Function:14 @po_intAmt = SECTIONAMT [NULL확정]",
+                    "dbo.UF_GET_COLLECTYMD.Function:29 @v_intCollectStandard = CollectStandard [NULL확정]",
+                    "dbo.UF_GET_COLLECTYMD.Function:30 @v_intCollectType = CollectType [NULL확정]",
+                    "dbo.UF_GET_COLLECTYMD.Function:47 @v_intHolidayPayFlag = HolidayPayFlag [NULL확정]",
+                    "dbo.UIF_SettleYMD.Function:37 @v_intSettleStandard = SettleStandard [NULL확정]",
+                    "dbo.UIF_SettleYMD.Function:38 @v_intSettleType = SettleType [NULL확정]",
+                    "dbo.UIF_SettleYMD.Function:55 @v_intSettleDayFlag = SettleDayFlag [NULL확정]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:72 @v_intID = ID [중립]"
+                },
+                collected.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+
+            Assert.Equal(7, collected.Count(x => x.EndsWith("[NULL확정]", StringComparison.Ordinal)));
+            Assert.Equal(1, collected.Count(x => x.EndsWith("[중립]", StringComparison.Ordinal)));
+
+            Assert.Equal(0, cteNodes);
+            Assert.Equal(26, setVariables);
+            Assert.Equal(0, compoundSetVariables);
+        }
+
+        /// <summary>
+        /// 코퍼스 뿌리. 없으면 null - 그때 코퍼스 테스트는 조용히 통과한다(계획서 STEP ZERO).
+        ///
+        /// "output/Objects를 가진 첫 조상"으로 찾으면 안 된다 - 다른 테스트가 실행 중에
+        /// bin/Debug/net10.0/output/Objects에 가짜 객체를 만들어 두어, 그쪽이 먼저 걸리면
+        /// 이 테스트가 남의 테스트 찌꺼기를 코퍼스로 착각한다. 그래서 src/ReSet.Core를 가진
+        /// 조상(저장소 뿌리)을 먼저 찾고 거기서만 본다(형제 LoopVariableResetExtractorTests와
+        /// 같은 앵커).
+        /// </summary>
+        private static string? CorpusRoot()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                if (Directory.Exists(Path.Combine(dir.FullName, "src", "ReSet.Core")))
+                {
+                    var candidate = Path.Combine(dir.FullName, "output", "Objects");
+                    return Directory.Exists(candidate) ? candidate : null;
+                }
+
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 두 가드의 분모를 세는 테스트 전용 계수기. 추출기의 거르기를 거치지 않은 날것이라야
+        /// "코퍼스에 이 모양이 0건"을 못박을 수 있다.
+        /// grep이 아니라 AST 노드를 센다 - 주석의 문자열 모양(`WITH ... AS (`)은 힌트
+        /// `WITH(NOLOCK)`과 구분되지 않는다.
+        /// </summary>
+        private static (int Cte, int SetVariable, int CompoundSetVariable) CountGuardInputs(string ddl)
+        {
+            var parser = new TSql160Parser(true);
+            using var reader = new StringReader(ddl);
+            var fragment = parser.Parse(reader, out var errors);
+            if (fragment == null || errors.Count > 0) return (0, 0, 0);
+
+            var counter = new GuardInputCounter();
+            fragment.Accept(counter);
+            return (counter.Cte, counter.SetVariable, counter.CompoundSetVariable);
+        }
+
+        private sealed class GuardInputCounter : TSqlFragmentVisitor
+        {
+            public int Cte { get; private set; }
+
+            public int SetVariable { get; private set; }
+
+            public int CompoundSetVariable { get; private set; }
+
+            public override void Visit(CommonTableExpression node) => Cte++;
+
+            public override void Visit(SelectSetVariable node)
+            {
+                SetVariable++;
+                if (node.AssignmentKind != AssignmentKind.Equals) CompoundSetVariable++;
+            }
         }
     }
 }
