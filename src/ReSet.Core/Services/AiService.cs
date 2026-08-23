@@ -1108,6 +1108,23 @@ Based on the structured reference context above, reverse engineer the stored pro
                 "   | :--- | :--- | :--- | :--- |"
             };
 
+            // [IF n 교차 대조 금지 - 2026-08-23 ③(b) 최종 리뷰 유예] 이 표의 IF n은 술어에
+            // 알려진 함수 호출이 있는 IF만, 잠금 힌트 표의 IF n은 술어에 하위 질의가 있는
+            // IF만 센다(ReferencedFunctionVisitor·LockHintVisitor의 ExplicitVisit(IfStatement)).
+            // 같은 IF 1이 다른 문장일 수 있다 - 그 경고가 코드 주석·architecture.md·AGENTS.md에는
+            // 있었지만 표를 읽는 모델의 프롬프트에는 없었다. 혼동은 두 표 모두에 IF n이 있을
+            // 때만 생기므로 이 표에 IF 행이 있을 때만 싣는다 - 코퍼스에 그런 객체가 0이라
+            // 기존 프롬프트 바이트는 불변이고(캐시 인상 없음), 조건이 DDL에서 나오므로 나중에
+            // 어떤 객체가 IF dbo.UF_X(...)를 얻으면 DDL 해시가 바뀌어 자동 재분석된다.
+            if (calls.Any(c => string.Equals(c.Operation, "IF", StringComparison.OrdinalIgnoreCase)))
+            {
+                lines.Insert(1,
+                    "   The IF n in this table's 호출 위치 column numbers only IF statements whose predicate contains a known function call. "
+                    + "It is NOT the same numbering as the IF n in the 잠금 힌트 table, which numbers IF statements whose predicate contains a subquery - "
+                    + "the same label can point at different statements. Never equate or cross-reference IF n between the two tables; "
+                    + "DML numbers (UPDATE/INSERT/DELETE n) and SELECT n ARE shared across the four machine-confirmed tables.");
+            }
+
             foreach (var call in calls)
             {
                 var dep = FindFunctionDependency(functionDeps, call.QualifiedName);

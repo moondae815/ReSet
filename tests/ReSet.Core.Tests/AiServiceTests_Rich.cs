@@ -1713,6 +1713,83 @@ END",
             }
         };
 
+        private static SpDefinition ReferencedFunctionSpDefinition(string ddl) => new()
+        {
+            ObjectKey = new CodeObjectKey("SETTLE_POQ_DB", "dbo", "P", CodeObjectType.Procedure),
+            Schema = "dbo",
+            Name = "P",
+            ObjectType = CodeObjectType.Procedure,
+            DdlText = ddl,
+            Dependencies = new List<DependencyInfo>
+            {
+                new() { Database = null, Schema = "dbo", Name = "UF_GET_ROUND4VAT", Type = "SQL_SCALAR_FUNCTION" },
+                new() { Database = null, Schema = "dbo", Name = "TSettleMst", Type = "USER_TABLE" }
+            }
+        };
+
+        private static async Task<string> ReferencedFunctionPromptAsync(string ddl)
+        {
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+            var result = await service.GenerateSpecificationAsync(ReferencedFunctionSpDefinition(ddl), "rules");
+            return result.SystemPrompt;
+        }
+
+        private const string IfOrdinalCaveatMarker = "NOT the same numbering as the IF n in the 잠금 힌트 table";
+
+        // [IF n 교차 대조 금지 - 2026-08-23 ③(b) 최종 리뷰 유예] 참조 함수 표의 IF n은 술어에
+        // 알려진 함수 호출이 있는 IF만, 잠금 힌트 표의 IF n은 술어에 하위 질의가 있는 IF만
+        // 센다 - 같은 IF 1이 다른 문장일 수 있다. 그 경고가 코드 주석·architecture·AGENTS에는
+        // 있었지만 표를 읽는 모델의 프롬프트에는 없었다. 참조 함수 표에 IF n 행이 있을 때만
+        // 도입문에 싣는다 - 코퍼스에 그런 객체가 0이라 기존 프롬프트 바이트는 불변이다.
+        [Fact]
+        public async Task ReferencedFunctionTable_WithIfRow_ShouldCarryIfOrdinalCaveat()
+        {
+            var body = await ReferencedFunctionPromptAsync(@"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF dbo.UF_GET_ROUND4VAT(1) > 0
+        UPDATE A SET A.CLVT = 1 FROM dbo.TSettleMst A
+END");
+
+            Assert.Contains("| IF 1 (라인 5) |", body);
+            Assert.Contains(IfOrdinalCaveatMarker, body);
+            Assert.Contains("Never equate or cross-reference IF n between the two tables", body);
+        }
+
+        [Fact]
+        public async Task ReferencedFunctionTable_IfWithSubqueryButNoFunctionCall_ShouldNotCarryIfOrdinalCaveat()
+        {
+            // 잠금 힌트 표에만 IF n이 생기는 모양(술어에 하위 질의, 함수 호출 없음). 참조 함수
+            // 표에는 IF 행이 없으므로 경고도 없어야 한다 - 혼동은 두 표 모두에 IF n이 있을 때만.
+            var body = await ReferencedFunctionPromptAsync(@"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    IF EXISTS (SELECT 1 FROM dbo.TSettleMst WITH(NOLOCK) WHERE YMD = '20260101')
+        UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM) FROM dbo.TSettleMst A
+END");
+
+            Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, body);
+            Assert.DoesNotContain(IfOrdinalCaveatMarker, body);
+        }
+
+        [Fact]
+        public async Task ReferencedFunctionTable_DmlCallsOnly_ShouldNotCarryIfOrdinalCaveat()
+        {
+            var body = await ReferencedFunctionPromptAsync(@"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    UPDATE A SET A.CLVT = dbo.UF_GET_ROUND4VAT(A.CLCOMM) FROM dbo.TSettleMst A
+END");
+
+            Assert.Contains(DmlScopeExtractor.ReferencedFunctionTableHeading, body);
+            Assert.DoesNotContain(IfOrdinalCaveatMarker, body);
+        }
+
         [Fact]
         public async Task GenerateSpecification_ShouldRenderReferencedFunctionTable()
         {
