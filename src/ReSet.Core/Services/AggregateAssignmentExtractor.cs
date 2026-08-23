@@ -102,6 +102,12 @@ namespace ReSet.Core.Services
                 foreach (var element in node.SelectElements)
                 {
                     if (element is not SelectSetVariable setVariable) continue;
+
+                    // `SELECT @v += MAX(x)`는 대상 칸이 `SELECT @v = MAX(x)`로 렌더돼
+                    // 원문에 없는 문장이 된다. 형제 둘(LoopVariableResetExtractor ·
+                    // NonAggregateAssignmentExtractor)과 같은 규칙으로 거른다.
+                    if (setVariable.AssignmentKind != AssignmentKind.Equals) continue;
+
                     if (setVariable.Expression is not FunctionCall call) continue;
 
                     var name = call.FunctionName?.Value;

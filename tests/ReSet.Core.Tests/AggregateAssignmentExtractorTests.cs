@@ -30,6 +30,27 @@ END";
         }
 
         [Fact]
+        public void Extract_CompoundAssignment_ShouldNotBeCollected()
+        {
+            // `SELECT @v += MAX(x)`도 SelectSetVariable로 담기지만 대상 칸은
+            // `SELECT @v = MAX(x)`로 렌더된다(ExecutionSemanticsFacts) - 원문에 없는 문장이
+            // 「수정 금지」 표에 실린다. 형제 둘(LoopVariableResetExtractor ·
+            // NonAggregateAssignmentExtractor)이 같은 자리에서 거르는 것과 같은 규칙이다.
+            // 코퍼스 영향은 0건이다 - 24개 객체의 SelectSetVariable 26건 중 복합 대입이
+            // 0건임을 NonAggregateAssignmentExtractorTests의 코퍼스 테스트가 못박고 있고,
+            // 그 분모는 이 추출기에도 그대로 적용된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT = 0
+    SELECT @v += MAX(ID) FROM dbo.TA
+END";
+
+            Assert.Empty(AggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
         public void Extract_CountAssignment_ShouldReportZeroNotNull()
         {
             const string ddl = @"
