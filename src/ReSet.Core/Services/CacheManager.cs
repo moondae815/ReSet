@@ -86,7 +86,40 @@ namespace ReSet.Core.Services
         //     산출물이 그대로 남는다 - 원문 칸이 없어 분해되지 않는 술어가 통째로
         //     빠진 명세서, `IF` 술어의 잠금이 없는 명세서가 그대로 살아남고, 넓어진
         //     L1 셋도 캐시 히트에서는 영영 발동하지 않는다.
-        private const int CurrentCacheFormatVersion = 11;
+        // 12: 기계 확정 표 넷이 또 한꺼번에 넓어졌다(2026-08-23 축 A ③(b)). 11과 마찬가지로
+        //     표 종류는 늘지 않았다. 넓어진 폭이 표마다 다르므로 표별로 갈라 적는다 -
+        //     11의 (2)를 "두 표"로 묶어 적었다가 문서 여섯 자리에 거짓이 실린 전례가 있다.
+        //     (1) 참조 함수 표(ReferencedFunctionVisitor): DML 셋에 더해 FROM이 있는 독립
+        //     SELECT와 `IF` 술어의 호출까지 담는다. 이 표에는 문장 칸이 없다 - 렌더러
+        //     헤더는 함수·호출 위치·인자·명세서 넷이고, 넓어진 문장 집합은
+        //     「호출 위치」 칸의 `SELECT n (라인 L)`·`IF n (라인 L)`으로 나타난다.
+        //     (2) 집합 술어 표(SetPredicateVisitor): DML 셋에 더해 FROM이 있는 독립
+        //     SELECT의 WHERE까지 담는다 - 문장 칸에 `SELECT n`이 실린다. `IF` 술어는
+        //     담지 않으므로 `IF n` 행은 이 표에 나오지 않는다(참조 함수 표와 폭이 다르다).
+        //     실물은 UF_GET_COLLECTYMD:100의 `CollectFlag = 1`로, 넓히기 전에는 어떤
+        //     기계 확정 표에도 없고 산문에만 있었다.
+        //     (3) 잠금 힌트 표(LockHintVisitor): 문장 집합은 11 그대로 다섯이다. 바뀐 것은
+        //     하위 질의 수집 범위로, WHERE 절 한정에서 문장 노드 전체로 넓어졌다 -
+        //     SELECT 목록·DML의 `SET` 절·독립 SELECT의 WHERE에 걸린 스칼라 하위 질의가
+        //     이제 `하위 질의` 범위로 실린다(곁가지로 `VALUES`·HAVING·ORDER BY·`OUTPUT`
+        //     절도 같은 경로로 들어온다). 코퍼스 전후 대조로 실제로 늘어난 행은
+        //     UF_Get_CLComm4MobileCo:32의 NOLOCK 한 행이고 기존 230행은 불변이다.
+        //     넓힌 경로는 NextOrdinal을 부르지 않으므로 네 표가 공유하는 `SELECT n`은
+        //     밀리지 않는다.
+        //     (4) 실행 의미 표(ExecutionSemanticsFacts): 종류가 다섯에서 일곱이 됐다 -
+        //     `비집계 대입`(NonAggregateAssignmentExtractor)과
+        //     `루프 내 재설정`(LoopVariableResetExtractor)이 AllKinds 끝에 붙었다.
+        //     표의 열은 그대로 넷(종류·라인·대상·확정 사실)이다.
+        //     (5) L1은 이 회차에 넓히지 않았다 - CheckSetPredicates의 행 키는
+        //     (라인·컬럼·범위·술어 원문), CheckExecutionSemantics는 네 칸의 문자열
+        //     일치라 둘 다 연산 종류·행 종류를 보지 않아 새 행이 그대로 흘러간다.
+        //     확인 테스트를 두어 못 박았다(MechanicalValidatorTests의
+        //     Validate_SetPredicateSelectRow*·Validate_ExecutionSemantics*).
+        //     프롬프트 입력이 달라진 것이므로 옛 엔트리를 재사용하면 새 행이 없는 옛
+        //     산출물이 그대로 남는다 - 독립 SELECT의 집합 술어와 `IF` 술어의 함수 호출이
+        //     빠진 명세서, 32행 NOLOCK이 표 어디에도 없는 명세서, 루프 내 재설정과
+        //     비집계 대입이 산문에만 있는 명세서가 그대로 살아남는다.
+        private const int CurrentCacheFormatVersion = 12;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

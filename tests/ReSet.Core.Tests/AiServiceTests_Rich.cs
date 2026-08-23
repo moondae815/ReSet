@@ -2622,6 +2622,30 @@ END"
         }
 
         [Fact]
+        public async Task GenerateSpecification_SetPredicateIntro_ShouldTellStandaloneSelectRowsApartFromDmlRows()
+        {
+            // [2026-08-23 축 A ③(b) Task 6] 이 도입문은 표에 DML 행만 있던 시절에
+            // 쓰였다 - "the membership of each set is what determines the target rows"도
+            // "narrows the target rows"도 대상 행(쓰는 행)을 말한다. Task 2가 독립
+            // SELECT(커서 원천 질의·변수 대입 SELECT·함수 본문 SELECT)의 WHERE를
+            // 담게 하면서 표에 `SELECT n` 행이 들어오는데, 그 행의 술어는 무엇을 쓸지가
+            // 아니라 무엇을 읽을지를 가른다. 갈라 적지 않으면 모델이 순수 조회 문장의
+            // 술어를 "갱신 대상을 좁힌다"로 옮길 길이 열린다 - 이 표는 "수정 금지"라
+            // 산문이 바로잡을 수도 없다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 명세서\"}}]}";
+            var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.GenerateSpecificationAsync(UndecomposedPredicateSpDefinition(), "rules");
+            var intro = result.SystemPrompt!.Split('\n')
+                .Single(l => l.Contains("[CRITICAL SET PREDICATE TABLE]"));
+
+            Assert.Contains("`SELECT n`", intro);
+            Assert.Contains("reads", intro);
+            Assert.Contains("INSERT, UPDATE or DELETE writes", intro);
+        }
+
+        [Fact]
         public async Task Validate_UndecomposedPredicate_ShouldRoundTripThroughTheRenderedTable()
         {
             // 렌더러와 L1이 실제로 맞물리는지 왕복으로 확인한다 - 손으로 지어낸 표가

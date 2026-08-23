@@ -958,9 +958,14 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// "UPDATE 2"가 아니라 "UPDATE 1"로 찍혔다). 그 라운드의 주석은 "(연산,
         /// 라인)만으로는 원천적으로 구분할 수 없다"고 적었는데, 이는 틀렸다 - 그
         /// 정보는 SetPredicateFact의 <b>모양</b>에 대한 이야기였을 뿐, 실제로는
-        /// SetPredicateVisitor가 DmlScopeVisitor와 같은 파싱 트리를 같은 세 Visit
-        /// 오버라이드로 같은 순서로 방문하므로 독자적으로 세어도 항상 같은 번호가
-        /// 나온다. 그래서 지금은 `SetPredicateFact.StatementOrdinal`이 그 번호를
+        /// SetPredicateVisitor가 DmlScopeVisitor와 같은 파싱 트리를 같은 네 오버라이드
+        /// (DML 셋은 `Visit`, FROM이 있는 독립 SELECT는 `ExplicitVisit(SelectStatement)`)로
+        /// 같은 순서로 방문하고 SELECT 판정도 `DmlScopeExtractor.HasFromClause` 하나를
+        /// 공유하므로, 독자적으로 세어도 항상 같은 번호가 나온다. 독립 SELECT는
+        /// 2026-08-23 축 A ③(b) Task 2가 셋에서 넷으로 넓힌 것이고, 그때도 두 방문자가
+        /// 함께 넓어져 이 주장은 그대로 참이다
+        /// (ExtractSetPredicates_StandaloneSelect_ShouldNotShiftDmlOrdinals가 못 박는다).
+        /// 그래서 지금은 `SetPredicateFact.StatementOrdinal`이 그 번호를
         /// 직접 담고(문서 참고), 이 헬퍼는 DML 범위 표만 쓴다 - 사전 조회 자체를
         /// 없애 이 계열의 결함을 구조적으로 막는다.
         /// </summary>
@@ -1023,7 +1028,9 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// DML 범위 표를 별도로 조회하지 않는다. SetPredicateVisitor가 그 값을
         /// DmlScopeVisitor와 <b>같은 규칙으로 독자적으로</b> 매긴다
         /// (SetPredicateFact.StatementOrdinal 문서 참고) - 두 방문자가 같은 파싱
-        /// 트리를 같은 세 Visit 오버라이드로 같은 순서로 방문하므로 항상 일치한다.
+        /// 트리를 같은 네 오버라이드(DML 셋은 `Visit`, FROM이 있는 독립 SELECT는
+        /// `ExplicitVisit(SelectStatement)`)로 같은 순서로 방문하고 SELECT 판정도
+        /// `DmlScopeExtractor.HasFromClause` 하나를 공유하므로 항상 일치한다.
         /// 예전엔(FIX ROUND 2) (연산, 라인) 키로 DML 범위 사실을 찾아 그 번호를
         /// "빌려 썼는데", 같은 줄에 같은 연산 문장이 둘이고 둘 다 집합 술어를 가지면
         /// 그 키가 여전히 충돌해 회귀가 났다(BuildStatementOrdinals 문서의 FIX
@@ -1033,7 +1040,7 @@ Based on the structured reference context above, reverse engineer the stored pro
         {
             var lines = new List<string>
             {
-                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`. One row is one top-level AND term of that WHERE. The last column, 술어 원문, carries that term exactly as written in the DDL. When 컬럼, 연산, 원소 수 and 리터럴 목록 all hold `—`, the term could not be decomposed into a column and a set of literals (a comparison whose right-hand side is a parameter, a column-to-column comparison, an `IN` whose right-hand side is a subquery, an OR-combined condition, an arithmetic right-hand side, an operator this table does not decompose), and 술어 원문 is then the ONLY record of that filter - copy it verbatim, character for character, and describe the filter from it. Never omit such a row because it looks unlike the others, and never replace 술어 원문 with a paraphrase, a translation, or a summary.",
+                "   [CRITICAL SET PREDICATE TABLE] The following set predicates are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. Do NOT drop, add, abbreviate, or summarize any literal - the membership of each set is what determines the target rows, and it cannot be inferred from the column name. The 범위 column says where the predicate sits - `최상위` is the statement's own WHERE, `파생 테이블 X` is the WHERE inside that derived table. A predicate inside a derived table narrows the target rows just as much as a top-level one, so it must be described as a filter, never softened into `조회합니다`. When the 문장 cell reads `SELECT n` the statement is a standalone SELECT - a cursor source query, a variable-assignment SELECT, or a function-body SELECT - and its predicate narrows the rows that statement reads, not rows that any INSERT, UPDATE or DELETE writes: state the narrowing explicitly as a filter on what is read (`... 인 행만`), and never present such a row as limiting the target rows of a write. One row is one top-level AND term of that WHERE. The last column, 술어 원문, carries that term exactly as written in the DDL. When 컬럼, 연산, 원소 수 and 리터럴 목록 all hold `—`, the term could not be decomposed into a column and a set of literals (a comparison whose right-hand side is a parameter, a column-to-column comparison, an `IN` whose right-hand side is a subquery, an OR-combined condition, an arithmetic right-hand side, an operator this table does not decompose), and 술어 원문 is then the ONLY record of that filter - copy it verbatim, character for character, and describe the filter from it. Never omit such a row because it looks unlike the others, and never replace 술어 원문 with a paraphrase, a translation, or a summary.",
                 $"   {DmlScopeExtractor.SetPredicateTableHeading}",
                 "   | 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |",
                 "   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"

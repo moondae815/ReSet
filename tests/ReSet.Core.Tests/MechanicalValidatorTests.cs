@@ -3429,6 +3429,64 @@ END"
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
         }
 
+        /// <summary>
+        /// UF_GET_COLLECTYMD:100의 실물. 독립 SELECT(여기서는 함수 본문 SELECT)의
+        /// 최상위 WHERE에 있는 리터럴 우변 등치라, 2026-08-23 축 A ③(b) Task 2가
+        /// 집합 술어 표의 문장 집합을 넓히기 전에는 어떤 기계 확정 표에도 없고
+        /// 산문에만 있었다.
+        /// </summary>
+        private static SetPredicateFact CollectFlagSelectFact() => new(
+            "SELECT", 100, "CollectFlag", false, new[] { "1" }, 1, "=", "최상위",
+            "CollectFlag = 1");
+
+        /// <summary>
+        /// 넓어진 문장 집합의 `SELECT n` 행을 L1이 DML 행과 똑같이 대조하는지 확인한다.
+        /// CheckSetPredicates의 행 키는 (라인 · 컬럼 · 범위 · 술어 원문)이라 연산 종류를
+        /// 보지 않으므로 손댈 것이 없다는 것이 Task 2의 주장인데, 확인 없이 넘기면
+        /// 표만 넓어지고 검사는 침묵한다.
+        ///
+        /// 이 테스트 홀로는 "검사가 SELECT 행을 아예 건너뛴다"와 구분되지 않는다 -
+        /// 바로 아래 Validate_SetPredicateSelectRowDropped_ShouldBeAnError가 그 갈래를
+        /// 막는다(행을 빼면 반드시 보고돼야 한다).
+        /// </summary>
+        [Fact]
+        public void Validate_SetPredicateSelectRow_ShouldCompareLikeDmlRows()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[] { CollectFlagSelectFact() }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| SELECT 1 | 100 | CollectFlag | = | 최상위 | 1 | 1 | CollectFlag = 1 |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
+        [Fact]
+        public void Validate_SetPredicateSelectRowDropped_ShouldBeAnError()
+        {
+            // 표도 헤더도 구분줄도 있는데 SELECT 행만 없는 명세서. 검사가 SELECT 행을
+            // 그냥 흘려보낸다면 여기서도 조용히 통과할 것이다.
+            var expectations = EmptyExpectations() with
+            {
+                SetPredicates = new[] { CollectFlagSelectFact() }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n" + DmlScopeExtractor.SetPredicateTableHeading + "\n"
+                + "| 문장 | 라인 | 컬럼 | 연산 | 범위 | 원소 수 | 리터럴 목록 | 술어 원문 |\n"
+                + "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.SetPredicateMismatch);
+        }
+
         [Fact]
         public void From_WithSetPredicates_ShouldExposeThemAndNeverReturnNull()
         {
@@ -5350,6 +5408,108 @@ END",
             var result = new MechanicalValidator().Validate(WrapSpec(crud), expectations);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.LockHintTableMissing);
+        }
+
+        /// <summary>
+        /// 실행 의미 표에 종류가 둘 늘었을 때(2026-08-23 축 A ③(b) Task 4·5의
+        /// `비집계 대입`·`루프 내 재설정`) L1이 그 행을 기존 종류와 똑같이 대조하는지
+        /// 확인한다. CheckExecutionSemantics는 종류 칸을 <b>목록과 대조하지 않고</b>
+        /// 네 칸(종류·라인·대상·확정 사실)의 문자열 일치만 보므로 손댈 것이 없다는 것이
+        /// 주장인데, 확인 없이 넘기면 표만 넓어지고 검사는 침묵한다.
+        /// </summary>
+        [Fact]
+        public void Validate_ExecutionSemanticsNewKinds_ShouldCompareLikeExistingKinds()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                ExecutionSemantics = NewKindFacts()
+            };
+
+            var result = new MechanicalValidator().Validate(
+                WrapSpec(ExecutionSemanticsSection(NewKindFacts())), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors, e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
+
+        [Fact]
+        public void Validate_ExecutionSemanticsNewKindRowDropped_ShouldBeAnError()
+        {
+            // 두 새 종류 중 `루프 내 재설정` 행만 뺀 명세서. 검사가 새 종류를 그냥
+            // 흘려보낸다면 여기서도 조용히 통과할 것이다.
+            var expectations = EmptyExpectations() with
+            {
+                ExecutionSemantics = NewKindFacts()
+            };
+            var kept = new[] { NewKindFacts()[0] };
+
+            var result = new MechanicalValidator().Validate(
+                WrapSpec(ExecutionSemanticsSection(kept)), expectations);
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.ExecutionSemanticsTableMissing
+                    && e.RawContext == $"{ExecutionSemanticsFacts.LoopVariableResetKind} @ 69 @v_intID");
+        }
+
+        /// <summary>
+        /// `AllKinds`에 없는 종류가 표에 와도 L1은 다르게 반응하지 않는다는 실측.
+        /// 종류 칸을 목록과 대조하는 검사가 L1에 없기 때문이다 - `AllKinds`를 읽는
+        /// 유일한 생산 코드는 `MachineConfirmedTables.CriticExemptionBlock`이고,
+        /// 등재 누락을 잡는 트립와이어도 L1이 아니라
+        /// `MachineConfirmedTablesTests.EveryExecutionSemanticKindConstant_IsListedInAllKinds`
+        /// (`*Kind` 상수를 리플렉션으로 훑는다)와
+        /// `CriticExemptionBlock_PutsExecutionSemanticsRowsOutOfReportingScope`다.
+        /// 즉 새 종류가 목록에서 빠지면 잃는 것은 L1 대조가 아니라 <b>Critic 면제</b>다.
+        /// </summary>
+        [Fact]
+        public void Validate_ExecutionSemanticsKindOutsideAllKinds_ShouldStillCompareRowWise()
+        {
+            const string unlistedKind = "이 목록에 없는 종류";
+            Assert.DoesNotContain(unlistedKind, ExecutionSemanticsFacts.AllKinds);
+
+            var facts = new[] { new ExecutionSemanticFact(unlistedKind, "7", "@v", "확정 사실.") };
+            var expectations = EmptyExpectations() with { ExecutionSemantics = facts };
+
+            var present = new MechanicalValidator().Validate(
+                WrapSpec(ExecutionSemanticsSection(facts)), expectations);
+            var dropped = new MechanicalValidator().Validate(
+                WrapSpec(ExecutionSemanticsSection(Array.Empty<ExecutionSemanticFact>())),
+                expectations);
+
+            Assert.DoesNotContain(
+                present.DetailedErrors, e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+            Assert.Contains(
+                dropped.DetailedErrors, e => e.Type == ErrorType.ExecutionSemanticsTableMissing);
+        }
+
+        /// <summary>
+        /// Task 4·5가 더한 두 종류의 행. 문장은 각 추출기의 상수를 그대로 옮긴 것이
+        /// 아니라 이 검사가 보는 것(네 칸의 문자열 일치)만 재현하는 표본이다.
+        /// </summary>
+        private static IReadOnlyList<ExecutionSemanticFact> NewKindFacts() => new[]
+        {
+            new ExecutionSemanticFact(
+                ExecutionSemanticsFacts.NonAggregateAssignmentKind, "71", "@v_strYMD ← A.YMD",
+                "비집계 SELECT는 결과가 없으면 대입 자체가 일어나지 않습니다. "
+                + "무결과 시 변수에는 이 문장에 도달한 시점의 값이 그대로 남습니다."),
+            new ExecutionSemanticFact(
+                ExecutionSemanticsFacts.LoopVariableResetKind, "69", "@v_intID",
+                "이 대입은 WHILE 본문의 최상위에 있고 앞에 루프를 벗어나는 문장이 없어, "
+                + "반복마다 다시 실행됩니다.")
+        };
+
+        private static string ExecutionSemanticsSection(IReadOnlyList<ExecutionSemanticFact> facts)
+        {
+            var section = ExecutionSemanticsFacts.TableHeading + "\n"
+                + "| 종류 | 라인 | 대상 | 확정 사실 |\n"
+                + "| :--- | :--- | :--- | :--- |\n";
+            foreach (var fact in facts)
+            {
+                section += $"| {fact.Kind} | {fact.Line} | {fact.Target} | {fact.Fact} |\n";
+            }
+
+            return section;
         }
 
         [Fact]
