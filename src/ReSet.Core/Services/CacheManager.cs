@@ -146,7 +146,18 @@ namespace ReSet.Core.Services
         //     범위 칸을 행 매칭 키에 이미 넣고 있어 새 값이 그대로 흘러간다(검사 변경 없음).
         //     옛 엔트리를 재사용하면 조인 ON 행이 없는 명세서가 그대로 남으므로 전건 무효.
         //     (main 대조: 인상 직전 main 값 13 - reset-l1-check 스킬의 번호 충돌 규칙.)
-        private const int CurrentCacheFormatVersion = 14;
+        // 15: 2026-08-23 9회차 축 A 재감사 ⚪ (A)·(G) - 프롬프트 재료 둘이 바뀌었다.
+        //     (A) DML 범위 표 아래 안내문("`아니오`는 최상위 WHERE에 없다는 뜻일 뿐이고
+        //     하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있다")이 모든 객체에 고정으로
+        //     붙어 하위 질의가 없는 4객체에서 거짓이었다. 이제 DmlScopeFact.DateParameterInNestedQuery가
+        //     참인 `아니오` 문장이 있을 때만, 그 문장 번호와 함께 싣는다(BuildDmlScopeTableLines).
+        //     (G) SqlStaticParser가 파생 테이블이 투영하는 이름의 한정자 없는 컬럼을 같은 FROM의
+        //     하나뿐인 물리 테이블에 붙이던 폴백을 막았다 - 코퍼스 31개에서 귀속 4건이 빠진다
+        //     (EXCEPTION_PROC TPGProperty.PLTID·ID, COLLECTYMD TPGCollectPeriodMst.YMD, UIF_SettleYMD
+        //     TSettlePeriodMst.YMD), 추가 0. 그 결과가 프롬프트의 스키마 표·SELECT 대상 표 재료다.
+        //     두 변경 모두 기존 객체의 프롬프트 바이트를 바꾸므로(문장이 빠지거나 컬럼이 빠짐)
+        //     "영향 객체 0" 예외가 성립하지 않아 올린다. (main 대조: 인상 직전 main 값 14.)
+        private const int CurrentCacheFormatVersion = 15;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

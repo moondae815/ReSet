@@ -3265,6 +3265,64 @@ END";
             Assert.Equal("조인 ON X", facts[2].Scope);
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // `기준일 파라미터 적용` 칸의 보조 사실 - 2026-08-23 9회차 ⚪ (A)
+        //
+        // DML 범위 표 아래 고정 문장("하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이
+        // 있으므로 …")이 모든 객체에 붙어, 하위 질의가 없거나 기준일 파라미터 자체가 없는
+        // 4객체에서 거짓이 됐다. 문장은 그런 문장이 실제로 있을 때만, 그 문장 번호와 함께 싣는다.
+        // 그 판정 재료가 DmlScopeFact.DateParameterInNestedQuery다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Extract_DateParameterOnlyInsideDerivedTable_ShouldFlagNestedUse()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8) AS
+BEGIN
+    UPDATE A SET A.Amt = X.Amt
+    FROM   dbo.TSettleMst A
+    JOIN   (SELECT PLTID, SUM(Amt) AS Amt FROM dbo.TTx WHERE YMD = @pi_strYMD GROUP BY PLTID) X ON A.PLTID = X.PLTID
+    WHERE  A.UseState = 1
+END";
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.False(fact.DateParameterApplied);
+            Assert.True(fact.DateParameterInNestedQuery);
+        }
+
+        [Fact]
+        public void Extract_DateParameterOnlyInScalarSubquery_ShouldFlagNestedUse()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8) AS
+BEGIN
+    DELETE A FROM dbo.TOut A
+    WHERE  A.PLTID IN (SELECT PLTID FROM dbo.TTx WHERE YMD = @pi_strYMD)
+END";
+            var fact = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD"));
+
+            Assert.False(fact.DateParameterApplied);
+            Assert.True(fact.DateParameterInNestedQuery);
+        }
+
+        [Fact]
+        public void Extract_NoNestedDateUse_ShouldNotFlag()
+        {
+            // AcqManual 실물 모양 - DELETE·INSERT 어디에도 하위 질의가 없고 기준일은 커서 SELECT에만 있다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8) AS
+BEGIN
+    DELETE FROM dbo.TOut WHERE Flag = 1
+    INSERT INTO dbo.TOut (YMD) VALUES (@pi_strYMD)
+    UPDATE dbo.TOut SET Flag = 2 WHERE YMD = @pi_strYMD
+END";
+            var facts = DmlScopeExtractor.Extract(ddl, "@pi_strYMD");
+
+            Assert.All(facts, f => Assert.False(f.DateParameterInNestedQuery));
+            Assert.Contains(facts, f => f.Operation == "UPDATE" && f.DateParameterApplied);
+        }
+
         [SkippableFact]
         public void ExtractSetPredicates_OverTheCorpus_ShouldBe583FactsWithNoDuplicates()
         {

@@ -549,12 +549,14 @@ namespace ReSet.Core.Tests
             // 14: 집합 술어 표가 JOIN ON 절의 조인 키 등식이 아닌 항을 `조인 ON T` 범위로 싣는다
             //     (9회차 축 A 재감사 🟠 회귀 - INS_EXTRA4PLCARD의 `PG.ExtraType IN (2,3)`).
             //     도입문도 바뀌었다. CacheManager.cs의 버전 14 주석 참고.
+            // 15: DML 범위 표 안내문이 조건부가 되고(A) 파서의 파생 테이블 컬럼 과잉 귀속이 빠져(G)
+            //     프롬프트 재료가 바뀌었다. CacheManager.cs의 버전 15 주석 참고.
             //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면 산출물이 옛
             //     재료 그대로 남는다. 전건 재분석을 의도한 것이 맞다.
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(14, (int)entry["FormatVersion"]!);
+            Assert.Equal(15, (int)entry["FormatVersion"]!);
         }
 
         [Fact]

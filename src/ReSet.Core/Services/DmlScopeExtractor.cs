@@ -54,6 +54,14 @@ namespace ReSet.Core.Services
     /// (BuildDmlScopeTableLines의 <c>isStandaloneSelect ? "—"</c>). 이 문단은 그때까지
     /// "아직 그 갈래가 없어 SELECT 행에도 '아니오'를 낼 것이다"라고 적혀 있었다.
     /// </param>
+    /// <param name="DateParameterInNestedQuery">
+    /// 기준일 파라미터가 이 문장의 <b>스칼라 하위 질의나 파생 테이블 안</b>에 나타나는가.
+    /// <see cref="DateParameterApplied"/>가 false인 행의 보조 사실이다 - 표 아래 안내문
+    /// ("`아니오`는 최상위 WHERE에 없다는 뜻일 뿐이고 하위 질의·파생 테이블 안에서 기준일을
+    /// 쓰는 문장이 있다")을 <b>그런 문장이 실제로 있을 때만, 그 문장 번호와 함께</b> 싣기 위한
+    /// 재료다(2026-08-23 9회차 ⚪ (A): 그 문장이 모든 객체에 고정으로 붙어 하위 질의가 없는
+    /// 4객체에서 거짓이었다). 독립 SELECT 행은 판정하지 않아 항상 false다.
+    /// </param>
     /// <param name="JoinKeys">
     /// 테이블을 잇는 컬럼 이름. ANSI JOIN의 ON 조건과, 콤마로 나열한 옛 스타일
     /// 조인(FROM A, B WHERE A.X = B.Y)의 컬럼=컬럼 동등비교를 모두 담는다 -
@@ -149,7 +157,8 @@ namespace ReSet.Core.Services
         bool DateParameterApplied,
         IReadOnlyList<string> JoinKeys,
         IReadOnlyList<string> OrderByExpressions,
-        IReadOnlyList<string>? GroupByColumns = null)
+        IReadOnlyList<string>? GroupByColumns = null,
+        bool DateParameterInNestedQuery = false)
     {
         /// <summary>기본값을 null이 아니라 빈 목록으로 정규화한다 - 기존 생성 자리가
         /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
@@ -1524,7 +1533,8 @@ namespace ReSet.Core.Services
                 Facts.Add(new DmlScopeFact(
                     "INSERT", node.StartLine, TextOf(node.Target),
                     predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource),
-                    ResolveGroupByColumns(groupByPerBranch)));
+                    ResolveGroupByColumns(groupByPerBranch),
+                    DateParameterAppearsInNestedQuery(node)));
             }
 
             /// <summary>
@@ -1638,6 +1648,43 @@ namespace ReSet.Core.Services
                     ? QuerySpecificationsOf(select.Select)
                     : Enumerable.Empty<QuerySpecification>();
 
+            /// <summary>
+            /// 문장 안의 스칼라 하위 질의·파생 테이블에 기준일 파라미터가 나타나는가
+            /// (DmlScopeFact.DateParameterInNestedQuery 문서).
+            /// </summary>
+            private bool DateParameterAppearsInNestedQuery(TSqlFragment statement)
+            {
+                if (_dateParameter.Length == 0) return false;
+                var finder = new NestedVariableFinder(_dateParameter);
+                statement.Accept(finder);
+                return finder.Found;
+            }
+
+            private sealed class NestedVariableFinder : TSqlFragmentVisitor
+            {
+                private readonly string _name;
+                public bool Found { get; private set; }
+                public NestedVariableFinder(string name) => _name = name;
+                public override void ExplicitVisit(ScalarSubquery node) { if (!Found) Found = Contains(node); }
+                public override void ExplicitVisit(QueryDerivedTable node) { if (!Found) Found = Contains(node); }
+                private bool Contains(TSqlFragment fragment)
+                {
+                    var v = new VariableNameFinder(_name);
+                    fragment.Accept(v);
+                    return v.Found;
+                }
+                private sealed class VariableNameFinder : TSqlFragmentVisitor
+                {
+                    private readonly string _name;
+                    public bool Found { get; private set; }
+                    public VariableNameFinder(string name) => _name = name;
+                    public override void Visit(VariableReference node)
+                    {
+                        if (node.Name.Equals(_name, StringComparison.OrdinalIgnoreCase)) Found = true;
+                    }
+                }
+            }
+
             private void Record(
                 string operation,
                 TSqlFragment statement,
@@ -1700,7 +1747,9 @@ namespace ReSet.Core.Services
                     dateApplied,
                     joinKeys,
                     // UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하다 - 항상 빈 목록.
-                    Array.Empty<string>()));
+                    Array.Empty<string>(),
+                    null,
+                    DateParameterAppearsInNestedQuery(statement)));
             }
         }
 

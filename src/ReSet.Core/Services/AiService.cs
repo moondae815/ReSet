@@ -946,8 +946,29 @@ Based on the structured reference context above, reverse engineer the stored pro
             }
 
             lines.Add("");
-            lines.Add("   > `기준일 파라미터 적용` 칸의 `아니오`는 **최상위 WHERE에 없다**는 뜻일 뿐이다. 하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있으므로, 이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
-            lines.Add("");
+
+            // [조건부 안내문 - 2026-08-23 9회차 ⚪ (A)] 이 문장은 모든 객체에 고정으로 붙어
+            // 하위 질의가 없거나 기준일 파라미터 자체가 없는 4객체(COMM4PG4INTEREST·
+            // PG_Client_CMRate_Ins·SUMMARY_ETC·AcqManual)에서 거짓이었다. `아니오` 행 중 실제로
+            // 하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있을 때만, 그 문장 번호와 함께 싣는다.
+            // 조건이 DDL에서 나오므로 DDL이 바뀌면 캐시가 자동 무효화된다(캐시 15가 이 변경을 실었다).
+            var hiddenDateStatements = new List<string>();
+            for (var i = 0; i < dmlScopeFacts.Count; i++)
+            {
+                var f = dmlScopeFacts[i];
+                if (!f.DateParameterApplied && f.DateParameterInNestedQuery
+                    && !string.Equals(f.Operation, "SELECT", StringComparison.OrdinalIgnoreCase))
+                {
+                    hiddenDateStatements.Add($"{f.Operation} {ordinals[i]}");
+                }
+            }
+            if (hiddenDateStatements.Count > 0)
+            {
+                lines.Add("   > `기준일 파라미터 적용` 칸의 `아니오`는 **최상위 WHERE에 없다**는 뜻일 뿐이다. "
+                    + $"하위 질의·파생 테이블 안에서 기준일을 쓰는 문장({string.Join(", ", hiddenDateStatements)})이 있으므로, "
+                    + "이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
+                lines.Add("");
+            }
             return lines;
         }
 

@@ -265,6 +265,61 @@ namespace ReSet.Core.Tests
             Assert.Contains(DmlScopeExtractor.SetPredicateTableHeading, body);
         }
 
+        private static SpDefinition DmlScopeProbe(string ddl)
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_DML_SCOPE_PROBE",
+                DdlText = ddl,
+                ObjectKey = CodeObjectKey.Create("SETTLE_POQ_DB", "dbo", "UP_DML_SCOPE_PROBE", CodeObjectType.Procedure)
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult
+            {
+                IsParsedSuccessfully = true,
+                ProcedureParameters = new List<string> { "@pi_strYMD CHAR(8)" },
+                UpdateTables = new List<string> { "dbo.TSettleMst" }
+            };
+            return spDef;
+        }
+
+        private const string DmlScopeNestedNoteMarker = "하위 질의·파생 테이블 안에서 기준일을 쓰는 문장";
+
+        /// <summary>
+        /// 2026-08-23 9회차 ⚪ (A). DML 범위 표 아래 고정 문장이 하위 질의 없는 객체에서 거짓이었다.
+        /// 이제 `아니오` 행 중 실제로 하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있을 때만,
+        /// 그 문장 번호와 함께 싣는다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateSpecificationAsync_DmlScopeNote_AppearsOnlyWhenANoRowHidesNestedDateUse()
+        {
+            var (service, handler) = CreateProbe();
+            const string nested = @"
+CREATE PROCEDURE dbo.UP_DML_SCOPE_PROBE @pi_strYMD CHAR(8) AS
+BEGIN
+    UPDATE A SET A.Amt = X.Amt
+    FROM   dbo.TSettleMst A
+    JOIN   (SELECT PLTID, SUM(Amt) AS Amt FROM dbo.TTx WHERE YMD = @pi_strYMD GROUP BY PLTID) X ON A.PLTID = X.PLTID
+    WHERE  A.UseState = 1
+END";
+            await service.GenerateSpecificationAsync(DmlScopeProbe(nested), "지시");
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DmlScopeNestedNoteMarker, body);
+            Assert.Contains("UPDATE 1", body);
+
+            (service, handler) = CreateProbe();
+            const string flat = @"
+CREATE PROCEDURE dbo.UP_DML_SCOPE_PROBE @pi_strYMD CHAR(8) AS
+BEGIN
+    UPDATE dbo.TSettleMst SET Flag = 2 WHERE UseState = 1
+    UPDATE dbo.TSettleMst SET Flag = 3 WHERE YMD = @pi_strYMD
+END";
+            await service.GenerateSpecificationAsync(DmlScopeProbe(flat), "지시");
+            body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(DmlScopeExtractor.DmlScopeTableHeading, body);
+            Assert.DoesNotContain(DmlScopeNestedNoteMarker, body);
+        }
+
         [Fact]
         public async Task GenerateSpecificationAsync_CrudDescriptionRule_DelegatesPredicatesToTables()
         {
