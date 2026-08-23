@@ -271,14 +271,14 @@ END";
             Assert.Empty(LoopVariableResetExtractor.Extract(ddl));
         }
 
-        [Fact]
+        [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheThreeKnownResets()
         {
             // 파일 주석이 "WHILE 본문 안 SET 11건 중 3건"이라는 실측 위에 서 있다.
             // 규칙이 흘러도 단위 테스트는 그대로 통과하므로 그 숫자를 코퍼스에 직접
-            // 못박는다. 코퍼스가 없으면 조용히 통과한다(계획서 STEP ZERO).
+            // 못박는다. 코퍼스가 없으면 건너뜀으로 표시된다(CorpusSkip.Reason).
             var root = CorpusRoot();
-            if (root == null) return;
+            Skip.If(root == null, CorpusSkip.Reason);
 
             var collected = new List<string>();
             var setsInsideLoops = 0;

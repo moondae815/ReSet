@@ -31,7 +31,9 @@ grep -n 'CurrentCacheFormatVersion = ' src/ReSet.Core/Services/CacheManager.cs
 
 ## 하네스
 
-`output/`은 gitignore라 워크트리에 없다. 메인 저장소 절대 경로를 쓴다.
+`output/`은 gitignore라 워크트리에 없다. 메인 저장소 절대 경로를 쓴다. 같은 이유로 코퍼스를
+읽는 단위 테스트(`AxisAGoldenCaseTests` 등)는 워크트리에서 **건너뜀**으로 표시된다 —
+`ln -s <main>/output output`을 걸어야 실제로 돈다(`.git/info/exclude`에 `output` 등록됨).
 스크래치 디렉터리에 만들고 검증이 끝나면 지운다.
 
 `sweep.csproj`:

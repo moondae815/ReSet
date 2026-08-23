@@ -144,6 +144,7 @@
     *   기능 추가, 버그 수정, 구조 변경 등 코드 베이스를 수정해야 할 경우, 가급적 독립적인 `git worktree`를 생성하여 별도의 작업 공간에서 코드를 작성하고 검증(빌드 및 테스트)을 수행하십시오.
     *   작업 및 테스트가 성공적으로 완료된 후 변경 사항을 병합(Merge)하고, 작업이 끝난 워크트리는 안전하게 정리(Remove)하는 사이클을 유지하십시오.
     *   `.claude/worktrees/` 격리 세션(`EnterWorktree`)에서는 `git -C <main>`도 사용자 `!` 입력도 가드가 main 병합을 막습니다. `ExitWorktree(keep)`로 main 루트에 돌아간 뒤 `git merge --ff-only <branch>` → 테스트 → `git worktree remove` → `git branch -d` 순으로 마무리하십시오.
+    *   워크트리에는 gitignore 대상인 `output/`이 없습니다. 코퍼스를 읽는 테스트는 그 환경에서 **건너뜀**으로 표시되므로(`건너뜀 0`이어야 실제로 돈 것), `ln -s <메인 저장소>/output output`을 건 뒤 테스트하십시오(`.git/info/exclude`에 `output`이 등록되어 있습니다).
 
 ---
 

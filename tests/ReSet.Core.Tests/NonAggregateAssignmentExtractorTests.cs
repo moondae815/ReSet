@@ -410,14 +410,14 @@ END";
             Assert.Contains("NULL이 그대로 남습니다", fact.Fact);
         }
 
-        [Fact]
+        [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyEightRowsSevenOfThemNullCertain()
         {
             // 클래스 주석이 코퍼스 수치 위에 서 있는데 단위 테스트는 규칙이 흘러도 그대로
             // 통과한다. 형제 LoopVariableResetExtractorTests가 3/11을 못박은 것과 같은
             // 방식으로 **넷**을 코퍼스에 직접 못박는다 - 비집계 대입 8행, 그중 NULL 확정
             // 7행, 그리고 이 회차가 더한 가드 둘의 분모(CTE 문장 0건 · 복합 대입 0건)다.
-            // 코퍼스가 없으면 조용히 통과한다(계획서 STEP ZERO).
+            // 코퍼스가 없으면 건너뜀으로 표시된다(CorpusSkip.Reason).
             //
             // 뒤의 두 단언이 그 분모다. CTE 문장이 0건이고 복합 대입 SelectSetVariable이
             // 0건이라는 것이 곧 **이 회차의** 두 가드가 위 8행을 한 행도 줄이지 않았다는
@@ -428,7 +428,7 @@ END";
             // 붙드는 것은 도입 **후**의 8행뿐이고, "전후 동일"은 단언 밖의 일회 실측으로
             // 남는다. 넓게 말하지 않으려고 적어 둔다.
             var root = CorpusRoot();
-            if (root == null) return;
+            Skip.If(root == null, CorpusSkip.Reason);
 
             var collected = new List<string>();
             var cteNodes = 0;

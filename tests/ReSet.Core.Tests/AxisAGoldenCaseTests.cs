@@ -38,14 +38,14 @@ namespace ReSet.Core.Tests
             "dbo.UP_Util_Settle_Summary_AcqManual"
         };
 
-        [Theory]
+        [SkippableTheory]
         [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS")]
         [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD")]
         [InlineData("dbo.UP_Util_Settle_Summary_AcqManual")]
         public void Extractors_ShouldNotThrowOnGoldenProcedures(string procedureName)
         {
             var ddl = TryReadObjectDefinition(procedureName);
-            if (ddl == null) return; // 산출물이 없는 환경(예: 갓 클론한 워크트리)에서는 건너뛴다.
+            Skip.If(ddl == null, CorpusSkip.Reason); // 산출물이 없는 환경(예: 갓 클론한 워크트리)에서는 건너뜀으로 표시한다.
 
             var comments = SourceCommentExtractor.Extract(ddl);
             var rounding = RoundingSemanticsExtractor.Extract(ddl);
@@ -89,11 +89,11 @@ namespace ReSet.Core.Tests
         /// </summary>
         private static readonly Regex StringLiteral = new(@"'(?:[^']|'')*'", RegexOptions.Compiled);
 
-        [Fact]
+        [SkippableFact]
         public void SourceCommentAnchors_ShouldNeverBeBareDigitColonDigit()
         {
             var files = FindAllObjectDefinitions();
-            if (files.Count == 0) return; // 산출물이 없는 환경에서는 건너뛴다.
+            Skip.If(files.Count == 0, CorpusSkip.Reason);
 
             var offenders = new List<string>();
             foreach (var file in files)
@@ -117,11 +117,11 @@ namespace ReSet.Core.Tests
                 + string.Join("\n", offenders));
         }
 
-        [Fact]
+        [SkippableFact]
         public void DerivedTableAnchors_ShouldNeverBeStringLiteralValues()
         {
             var files = FindAllObjectDefinitions();
-            if (files.Count == 0) return; // 산출물이 없는 환경에서는 건너뛴다.
+            Skip.If(files.Count == 0, CorpusSkip.Reason);
 
             var offenders = new List<string>();
             foreach (var file in files)
@@ -152,7 +152,7 @@ namespace ReSet.Core.Tests
                 + string.Join("\n", offenders));
         }
 
-        [Fact]
+        [SkippableFact]
         public void ExtractSetPredicates_OnExpectProc_ShouldCarryTheNinePgLiterals()
         {
             // 2026-08-18 축 A 감사의 🟠. object_definition.sql:39의 9개 리터럴이
@@ -170,7 +170,7 @@ namespace ReSet.Core.Tests
             // object_definition.sql의 27행이 이 UPDATE의 시작이고,
             // `AND    A.PGName NOT IN ('PLCard',...)`은 39행이다.
             var ddl = TryReadObjectDefinition("dbo.UP_UTIL_SETTLE_EXPECT_PROC");
-            if (ddl == null) return;
+            Skip.If(ddl == null, CorpusSkip.Reason);
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
             var pgName = Assert.Single(
@@ -192,7 +192,7 @@ namespace ReSet.Core.Tests
                 pgName.PredicateText);
         }
 
-        [Fact]
+        [SkippableFact]
         public void ExtractSetPredicates_OnCommUpd_ShouldCarryTheSixPgWhitelist()
         {
             // 같은 감사의 두 번째 🟠. object_definition.sql:77의 6개 화이트리스트가
@@ -206,7 +206,7 @@ namespace ReSet.Core.Tests
             // 58행이 이 UPDATE의 시작이고 화이트리스트 IN은 77행이다(위 주석이 이미
             // "object_definition.sql:77의 6개 화이트리스트"라고 적은 그 줄이다).
             var ddl = TryReadObjectDefinition("dbo.UP_UTIL_SETTLE_COMM_UPD");
-            if (ddl == null) return;
+            Skip.If(ddl == null, CorpusSkip.Reason);
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
             var whitelist = Assert.Single(
@@ -312,7 +312,7 @@ namespace ReSet.Core.Tests
         //   (47·60·73·88·96·355·374·381·457·470·486·528행)도 전부 UPDATE 안의 파생
         //   테이블(485행 UNION ALL 갈래 포함)이거나 `IN (...)` 서브쿼리다. 셋 다
         //   독립 SELECT가 하나도 없으므로 이 작업으로 늘어날 행이 없다.
-        [Theory]
+        [SkippableTheory]
         [InlineData("dbo.UP_UTIL_SETTLE_CANCEL_INS", 4, 2)]
         [InlineData("dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD", 20, 13)]
         [InlineData("dbo.UP_Util_Settle_Summary_AcqManual", 9, 2)]
@@ -321,7 +321,7 @@ namespace ReSet.Core.Tests
             string procedureName, int expectedCount, int expectedDecomposedCount)
         {
             var ddl = TryReadObjectDefinition(procedureName);
-            if (ddl == null) return;
+            Skip.If(ddl == null, CorpusSkip.Reason);
 
             var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
 
