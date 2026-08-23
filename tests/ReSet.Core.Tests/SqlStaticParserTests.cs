@@ -324,6 +324,96 @@ END;
             Assert.Contains("TxAmt", targetCols);
         }
 
+        /// <summary>
+        /// 2026-08-23 9회차 축 A 재감사 ⚪ (G) - `UP_UTIL_SETTLE_EXCEPTION_PROC:60-61,91`.
+        /// 파생 테이블 X(`TSettleMst A`의 투영)와 물리 테이블 `TPGProperty Y`를 조인한 질의에서
+        /// 한정자 없는 `PLTID`·`ID`는 X의 컬럼인데, 로컬 별칭 맵에 물리 테이블이 Y 하나뿐이라
+        /// "로컬 테이블이 하나면 그것" 폴백이 둘을 TPGProperty에 붙였다. 명세서는 계약대로
+        /// 파서를 옮겼고, 재생성(v14)으로도 같은 자리에 남아 파서 쪽으로 확정됐다(known-defects).
+        /// 파생 테이블이 투영하는 이름(별칭 또는 마지막 식별자)에 든 한정자 없는 컬럼은 물리
+        /// 테이블에 귀속하지 않는다 - SQL이 컴파일됐다면 그 이름은 X에서만 온 것이다.
+        /// </summary>
+        [Fact]
+        public void Analyze_UnqualifiedColumnProjectedByDerivedTable_ShouldNotBeAttributedToTheOnlyNamedTable()
+        {
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDerivedAttribution @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst
+    SET    PGComm = BB.PGCOMM
+    FROM   dbo.TSettleMst AA WITH(NOLOCK)
+    JOIN (
+        SELECT PLTID
+              ,ID
+              ,CASE WHEN Y.CommMethod = 0 THEN X.Amt ELSE 0 END AS PGCOMM
+        FROM (
+            SELECT A.PLTID, A.ID, A.PGName, A.Amt
+            FROM   dbo.TSettleMst A WITH(NOLOCK)
+            WHERE  A.YMD = @pi_strYMD
+        ) X
+        LEFT OUTER JOIN dbo.TPGProperty Y WITH(NOLOCK) ON X.PGName = Y.PGName
+    ) BB
+    ON     AA.PLTID = BB.PLTID
+    AND    AA.ID    = BB.ID
+    WHERE  AA.YMD   = @pi_strYMD
+END;
+";
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.True(result.ReferencedColumnsPerTable.ContainsKey("dbo.TPGProperty"));
+            var pgProperty = result.ReferencedColumnsPerTable["dbo.TPGProperty"];
+            Assert.Contains("CommMethod", pgProperty, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("PGName", pgProperty, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("PLTID", pgProperty, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ID", pgProperty, StringComparer.OrdinalIgnoreCase);
+            // 진짜 주인(TSettleMst)에는 한정 참조(A.PLTID·A.ID)로 이미 붙어 있다.
+            var settle = result.ReferencedColumnsPerTable["dbo.TSettleMst"];
+            Assert.Contains("PLTID", settle, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("ID", settle, StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Analyze_UnqualifiedColumnNotProjectedByDerivedTable_StillResolvesToTheOnlyNamedTable()
+        {
+            // 가드는 파생 테이블이 투영하는 이름에만 걸린다 - 투영에 없는 이름은 기존대로 하나뿐인 물리 테이블에 붙는다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDerivedAttribution2
+AS
+BEGIN
+    SELECT CommMethod, X.PLTID
+    FROM   (SELECT A.PLTID, A.PGName FROM dbo.TSettleMst A) X
+    JOIN   dbo.TPGProperty Y ON X.PGName = Y.PGName
+END;
+";
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            Assert.Contains("CommMethod", result.ReferencedColumnsPerTable["dbo.TPGProperty"], StringComparer.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Analyze_DerivedTableWithStar_DisablesTheSingleTableFallbackForUnqualifiedColumns()
+        {
+            // `SELECT *` 파생 테이블은 무엇을 투영하는지 모른다 - 한정자 없는 컬럼을 어느 쪽에도 붙이지 않는다.
+            var ddlText = @"
+CREATE PROCEDURE dbo.TestDerivedAttribution3
+AS
+BEGIN
+    SELECT PLTID
+    FROM   (SELECT * FROM dbo.TSettleMst A) X
+    JOIN   dbo.TPGProperty Y ON X.PGName = Y.PGName
+    WHERE  X.YMD = '20250101'
+END;
+";
+            var result = new SqlStaticParser().Analyze(ddlText);
+
+            Assert.True(result.IsParsedSuccessfully);
+            var has = result.ReferencedColumnsPerTable.TryGetValue("dbo.TPGProperty", out var cols);
+            Assert.False(has && cols.Contains("PLTID", StringComparer.OrdinalIgnoreCase));
+        }
+
         [Fact]
         public void Analyze_WithUnionAllAndDuplicateAliases_ShouldResolveColumnsIndependently()
         {

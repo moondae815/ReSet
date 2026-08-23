@@ -193,6 +193,19 @@ namespace ReSet.Core.Services
 
         private readonly Stack<string> _statementContext = new();
         private readonly Dictionary<QuerySpecification, Dictionary<string, string>> _queryLocalAliasMaps = new();
+
+        /// <summary>
+        /// QuerySpecification마다 그 FROM의 파생 테이블(`(SELECT …) X`)이 투영하는 컬럼 이름(별칭 또는
+        /// 마지막 식별자). 값에 `*`가 들어 있으면 `SELECT *` 파생 테이블이 있어 투영을 알 수 없다는 뜻이다.
+        ///
+        /// [왜 - 2026-08-23 9회차 축 A 재감사 ⚪ (G)] EXCEPTION_PROC:60-61의 한정자 없는 `PLTID`·`ID`는
+        /// 파생 테이블 X의 컬럼인데, 같은 FROM의 물리 테이블이 `TPGProperty Y` 하나뿐이라 아래의
+        /// "로컬 테이블이 하나면 그것" 폴백이 둘을 TPGProperty에 붙였다. 명세서의 SELECT 대상 표가
+        /// 그 오귀속을 그대로 옮겼고, v14 재생성 뒤에도 같은 자리에 남아 파서 쪽으로 확정됐다.
+        /// SQL이 컴파일됐다면 한정자 없는 이름은 정확히 한 원천에서 오므로, 파생 테이블이 그 이름을
+        /// 투영하면 물리 테이블 폴백을 걸지 않는다.
+        /// </summary>
+        private readonly Dictionary<QuerySpecification, HashSet<string>> _queryDerivedOutputs = new();
         private readonly Dictionary<string, string> _globalAliasToTableMap = new(StringComparer.OrdinalIgnoreCase);
         private readonly Stack<QuerySpecification> _querySpecs = new();
         private int _indentLevel = 0;
@@ -826,9 +839,73 @@ namespace ReSet.Core.Services
         {
             _querySpecs.Push(node);
             _statementContext.Push("SELECT");
+            // SELECT 목록이 FROM보다 먼저 방문되므로, 이 질의의 FROM에 직접 놓인 파생 테이블의 투영
+            // 이름을 **미리** 등록한다 - 안 그러면 `SELECT PLTID … FROM (…) X`의 PLTID를 풀 때 집합이 비어 있다.
+            var derivedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (node.FromClause?.TableReferences != null)
+            {
+                foreach (var tr in node.FromClause.TableReferences) CollectDerivedProjections(tr, derivedNames);
+            }
+            if (derivedNames.Count > 0) _queryDerivedOutputs[node] = derivedNames;
             base.ExplicitVisit(node);
             _statementContext.Pop();
             _querySpecs.Pop();
+        }
+
+        /// <summary>
+        /// FROM의 테이블 참조 트리를 내려가며 **이 질의 수준의** 파생 테이블만 찾는다 - 파생 테이블 안쪽은
+        /// 그 자신의 QuerySpecification이 다룬다.
+        /// </summary>
+        private static void CollectDerivedProjections(TableReference reference, HashSet<string> names)
+        {
+            switch (reference)
+            {
+                case QueryDerivedTable derived:
+                    CollectProjectedNames(derived.QueryExpression, names);
+                    break;
+                case QualifiedJoin join:
+                    CollectDerivedProjections(join.FirstTableReference, names);
+                    CollectDerivedProjections(join.SecondTableReference, names);
+                    break;
+                case UnqualifiedJoin ujoin:
+                    CollectDerivedProjections(ujoin.FirstTableReference, names);
+                    CollectDerivedProjections(ujoin.SecondTableReference, names);
+                    break;
+                case JoinParenthesisTableReference paren:
+                    CollectDerivedProjections(paren.Join, names);
+                    break;
+            }
+        }
+
+        private static void CollectProjectedNames(QueryExpression? query, HashSet<string> names)
+        {
+            switch (query)
+            {
+                case QuerySpecification spec:
+                    foreach (var el in spec.SelectElements)
+                    {
+                        switch (el)
+                        {
+                            case SelectStarExpression:
+                                names.Add("*");
+                                break;
+                            case SelectScalarExpression sse:
+                                var alias = sse.ColumnName?.Value;
+                                if (!string.IsNullOrWhiteSpace(alias)) names.Add(alias);
+                                else if (sse.Expression is ColumnReferenceExpression cre && cre.MultiPartIdentifier?.Identifiers.Count > 0)
+                                    names.Add(cre.MultiPartIdentifier.Identifiers[^1].Value);
+                                break;
+                        }
+                    }
+                    break;
+                case BinaryQueryExpression bin:
+                    CollectProjectedNames(bin.FirstQueryExpression, names);
+                    CollectProjectedNames(bin.SecondQueryExpression, names);
+                    break;
+                case QueryParenthesisExpression paren:
+                    CollectProjectedNames(paren.QueryExpression, names);
+                    break;
+            }
         }
 
         // 동적 SQL 실행 노드 감지 및 경고 추가 (ExecuteStatement)
@@ -1061,13 +1138,25 @@ namespace ReSet.Core.Services
                                 }
                             }
 
-                            if (!resolvedLocally && localTables.Count == 1)
+                            // 파생 테이블이 이 이름을 투영하면(또는 `SELECT *`라 알 수 없으면) 물리 테이블
+                            // 하나뿐이라는 이유로 붙이지 않는다 - _queryDerivedOutputs 문서의 실측.
+                            var projectedByDerived = _queryDerivedOutputs.TryGetValue(currentSpec, out var derivedNames)
+                                && (derivedNames.Contains("*") || derivedNames.Contains(columnName));
+
+                            if (!resolvedLocally && localTables.Count == 1 && !projectedByDerived)
                             {
                                 foreach (var t in localTables)
                                 {
                                     targetTable = t;
                                     break;
                                 }
+                                resolvedLocally = true;
+                            }
+                            else if (!resolvedLocally && projectedByDerived)
+                            {
+                                // 파생 테이블 안쪽 컬럼은 안쪽 QuerySpecification이 한정 참조로 이미 귀속했다.
+                                // 여기서 더 내려가지 않고 전역 폴백도 걸지 않는다.
+                                targetTable = "Unknown";
                                 resolvedLocally = true;
                             }
                         }
