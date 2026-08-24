@@ -77,6 +77,63 @@ public sealed class StepSqlStatementReaderTests
         Assert.Empty(statements);
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Task 16 - C2. 파싱 실패가 실재하는 문장을 "없다"로 만드는 것을 막으려면
+    // 호출부가 "펜스를 못 읽었다"는 사실 자체를 알아야 한다. 기존 단일 인자
+    // Read(markdown)은 이 신호를 전혀 내지 않는다 - 검사 A가 파싱 실패와
+    // "정말 문장이 없음"을 구별할 수 없다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void UnparsableFence_ReportsUnparsedFenceCount()
+    {
+        var statements = StepSqlStatementReader.Read(
+            Fence("이것은 SQL이 아니다 <<<>>>"), out var unparsedFenceCount);
+
+        Assert.Empty(statements);
+        Assert.Equal(1, unparsedFenceCount);
+    }
+
+    [Fact]
+    public void ParsableFenceWithNoStatements_DoesNotCountAsUnparsed()
+    {
+        // 파싱은 성공했지만 DML 문장이 없는 것(예: SET만 있는 펜스)은 "못
+        // 읽음"이 아니다 - 이 둘을 같은 신호로 합치면 정상 펜스도 검사 A를
+        // 접게 만든다.
+        var statements = StepSqlStatementReader.Read(
+            Fence("SET NOCOUNT ON;"), out var unparsedFenceCount);
+
+        Assert.Empty(statements);
+        Assert.Equal(0, unparsedFenceCount);
+    }
+
+    [Fact]
+    public void MixOfParsableAndUnparsableFences_KeepsRealStatementsAndCountsOnlyFailures()
+    {
+        // 실물 모양(S12.md:75-80): `INSERT ... SELECT /* 주석만 */ FROM ...`처럼
+        // SELECT 목록이 통째로 주석으로 비면 파싱이 실패한다 - 그 펜스만
+        // 버려지고 나머지 펜스의 실재하는 문장은 살아야 한다.
+        var markdown =
+            "### S12 단계\n\n" +
+            "```sql\n" +
+            "DELETE FROM dbo.TSettleByTX WHERE YMD = @pi_strYMD;\n" +
+            "```\n\n" +
+            "```sql\n" +
+            "INSERT INTO dbo.TPartialCancelByTX\n" +
+            "SELECT\n" +
+            "    /* 동일한 집계 열 */\n" +
+            "    /* PLTID를 포함 */\n" +
+            "FROM dbo.TSettleMst\n" +
+            "WHERE YMD = @pi_strYMD\n" +
+            "GROUP BY YMD;\n" +
+            "```\n";
+
+        var statements = StepSqlStatementReader.Read(markdown, out var unparsedFenceCount);
+
+        Assert.Single(statements, s => s.Kind == "DELETE" && s.TargetTable == "TSettleByTX");
+        Assert.Equal(1, unparsedFenceCount);
+    }
+
     [Fact]
     public void TrailingCommentOnPreviousStatement_IsNotMisattributedToNextStatement()
     {

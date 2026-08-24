@@ -42,43 +42,77 @@ namespace ReSet.Core.Services
             @"(?:\bU|\b갱신\s*|\bUPDATE\s+|\bINSERT\s+|\bDELETE\s+)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown)
+        public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>
+            Read(stepMarkdown, out _);
+
+        /// <param name="stepMarkdown">단계 지시서 전문.</param>
+        /// <param name="unparsedFenceCount">
+        /// 파싱에 실패해 통째로 버려진 ```sql 펜스 개수.
+        ///
+        /// [왜 필요한가 - Task 16 C2, 코퍼스 실측]
+        /// 예전에는 파싱 실패를 조용히 삼켜 실패한 펜스가 "문장이 0개"와
+        /// 구별되지 않았다. `output/Jobs/POQSettleBatch1/agent/steps/S12.md`는
+        /// DELETE 4개·INSERT 4개가 전문으로 있는데도, 같은 펜스 뒤쪽의
+        /// `INSERT … SELECT /* 주석만 */ FROM …`(SELECT 목록이 통째로 주석이라
+        /// 빈 것과 같다)이 파싱에 실패해 펜스 전체가 버려지고 검사 A가 "0개"로
+        /// 잘못 보고했다(코퍼스 스윕: 891개 펜스 중 191개(21%) 파싱 실패,
+        /// 326파일 중 119파일이 최소 1개). 호출부가 이 신호를 받아야 "재료가
+        /// 없다"를 "문장이 없다"로 착각하지 않는다.
+        /// </param>
+        public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown, out int unparsedFenceCount)
         {
             var statements = new List<StepSqlStatement>();
+            unparsedFenceCount = 0;
             if (string.IsNullOrWhiteSpace(stepMarkdown)) return statements;
 
             foreach (Match fence in FencePattern.Matches(stepMarkdown))
             {
-                // 펜스 하나가 T-SQL이 아니어도 나머지 펜스는 읽는다.
+                // 펜스 하나가 T-SQL이 아니어도 나머지 펜스는 읽는다 - 다만
+                // 못 읽은 사실 자체는 unparsedFenceCount로 남긴다.
                 try
                 {
-                    statements.AddRange(ReadFence(fence.Groups["sql"].Value));
+                    var (fenceStatements, parseFailed) = ReadFence(fence.Groups["sql"].Value);
+                    if (parseFailed)
+                    {
+                        unparsedFenceCount++;
+                        continue;
+                    }
+
+                    statements.AddRange(fenceStatements);
                 }
                 catch (Exception ex)
                 {
-                    Log.Debug(ex, "단계 SQL 펜스를 읽지 못했습니다 - 이 펜스는 건너뜁니다.");
+                    unparsedFenceCount++;
+                    // 기본 로그 수준(Information)에서 보이도록 Warning을 쓴다 - Debug는
+                    // 코퍼스 스윕에서 이 실패율(21%)을 아무도 못 보게 숨겼다.
+                    Log.Warning(ex, "단계 SQL 펜스를 읽지 못했습니다 - 이 펜스는 건너뜁니다.");
                 }
             }
 
             return statements;
         }
 
-        private static IEnumerable<StepSqlStatement> ReadFence(string sql)
+        private static (IReadOnlyList<StepSqlStatement> Statements, bool ParseFailed) ReadFence(string sql)
         {
             var parser = new TSql160Parser(initialQuotedIdentifiers: true);
             var fragment = parser.Parse(new StringReader(sql), out var errors);
 
-            // 파싱에 실패한 펜스는 침묵한다 - 의사코드·C# 조각이 온다.
-            if (fragment == null || errors is { Count: > 0 }) yield break;
+            // 파싱에 실패한 펜스는 통째로 버린다 - 의사코드·C# 조각이 온다. 다만
+            // 이제는 "버렸다"는 사실을 호출부가 알 수 있게 ParseFailed로 알린다.
+            if (fragment == null || errors is { Count: > 0 })
+            {
+                return (Array.Empty<StepSqlStatement>(), true);
+            }
 
             var tokens = fragment.ScriptTokenStream;
             var visitor = new DmlCollector();
             fragment.Accept(visitor);
 
-            foreach (var (statement, firstTokenIndex) in visitor.Found)
-            {
-                yield return statement with { Anchor = ReadAnchor(tokens, firstTokenIndex) };
-            }
+            var statements = visitor.Found
+                .Select(found => found.Statement with { Anchor = ReadAnchor(tokens, found.FirstTokenIndex) })
+                .ToList();
+
+            return (statements, false);
         }
 
         /// <summary>

@@ -371,10 +371,15 @@ namespace ReSet.Core.Services
 
                 if (facts.Count > 0)
                 {
-                    var statements = StepSqlStatementReader.Read(stepMarkdown);
+                    // unparsedFenceCount는 검사 A(개수 대조)에만 넘긴다 - 검사 B·C·D는
+                    // statements 목록 자체가 그대로이므로(파싱 실패 펜스는 예전에도
+                    // 지금도 빈 결과만 낸다) 이 신호로 동작을 바꾸지 않는다. Task 16
+                    // C2의 CheckStatementCountAgainstSpec 문서 참고.
+                    var statements = StepSqlStatementReader.Read(stepMarkdown, out var unparsedFenceCount);
 
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
-                    SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
+                    SafeCheck(() => CheckStatementCountAgainstSpec(
+                        facts, statements, unparsedFenceCount, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
@@ -5694,13 +5699,46 @@ namespace ReSet.Core.Services
         /// 떨어져 결함이 보이지 않는다). 이 검사가 SP 경계를 모르는 한 고칠 수
         /// 없다 - 단계 SQL 문장에 출처 SP를 표시하는 재료가 새로 생기기 전까지는
         /// 알려진 한계로 남긴다.
+        ///
+        /// [Task 16 C1 - 대조 불가능한 명세서 행을 요구로 들지 않는다 - 코퍼스 실측]
+        /// 명세서 DML 범위 표에는 이 검사가 절대 만족시킬 수 없는 행이 실재한다:
+        /// (1) Kind == "SELECT" 행 - <see cref="StepSqlStatementReader"/>의
+        /// DmlCollector는 UpdateStatement·DeleteStatement·InsertStatement만
+        /// 방문하고 SelectStatement는 방문하지 않으므로 이 종류의 StepSqlStatement는
+        /// 절대 만들어지지 않는다. (2) 대상 칸이 "—"이거나 한 글자 별칭(예: "A")인
+        /// 행 - 실물 테이블명이 아니다(실측: UP_UTIL_SETTLE_PROC_ETC의 SELECT
+        /// 1~6 대상 전부 "—", UP_UTIL_SETTLE_INS_EXTRA4PLCARD DELETE 1 대상
+        /// "A" - 물리 테이블은 FROM 절의 `dbo.TSettleMst AS A`이지 "A"라는
+        /// 이름의 테이블이 아니다). 두 경우 다 actual이 영구히 0이라, 모델이
+        /// 무엇을 쓰든 다음 회차에 같은 오류가 재발하고 재생성이 maxTries를
+        /// 소진한다(코퍼스 실측: 검사 A 오류 177건 중 70건(40%)이 이 부류).
+        /// <see cref="IsComparableDmlRow"/>로 대조 가능한 행만 남긴다 -
+        /// "귀속할 수 없으면 침묵한다"는 이 저장소의 규약을 여기 적용한다.
+        ///
+        /// [Task 16 C2 - 파싱 실패 펜스가 있으면 개수 대조를 통째로 접는다 -
+        /// 코퍼스 실측]
+        /// 펜스 하나라도 파싱에 실패하면 그 안의 실재하는 문장이 "없다"로
+        /// 잘못 집계된다 - 실측(`output/Jobs/POQSettleBatch1/agent/steps/
+        /// S12.md`): DELETE 4개·INSERT 4개가 전문으로 있는데, 같은 펜스
+        /// 뒤쪽의 `INSERT … SELECT /* 주석만 */ FROM …`이 파싱에 실패해 펜스
+        /// 전체가 버려지고 이 검사가 "0개"라고 보고했다(코퍼스 스윕: 891개
+        /// 펜스 중 191개(21%) 파싱 실패, 검사 A가 발화한 94단계 중 42단계가
+        /// 이 상태). 이 상태에서는 <see cref="DescribeMissingOrdinals"/>의
+        /// 불변식(missing.Count == expectedCount - actual)도 통과해(matched가
+        /// 비면 expectedCount - 0) 거짓 개수에 거짓 번호 목록이 붙는다. 개수
+        /// 대조는 "이 문서의 문장을 전부 읽었다"는 전제 위에 서 있으므로,
+        /// 하나라도 못 읽었으면 이 단계의 개수 대조 전체를 접는다 - "재료가
+        /// 없다"가 "문장이 없다"로 잘못 바뀌는 것을 막는다.
         /// </summary>
         private static void CheckStatementCountAgainstSpec(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
+            int unparsedFenceCount,
             BatchStepPlan step,
             StepValidationResult result)
         {
+            if (unparsedFenceCount > 0) return;
+
             // 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다(명세서
             // "갱신 1"은 그 SP 안에서만 유일하다). 번호 열거는 SP가 정확히 하나일
             // 때로 좁힌다.
@@ -5718,6 +5756,7 @@ namespace ReSet.Core.Services
 
             var expected = facts
                 .SelectMany(f => f.DmlRows)
+                .Where(IsComparableDmlRow)
                 .GroupBy(r => (r.Kind, r.TargetTable), StatementGroupComparer);
 
             foreach (var group in expected)
@@ -6162,6 +6201,29 @@ namespace ReSet.Core.Services
 
             return $"(빠진 것으로 보이는 번호: {string.Join(", ", missing)})";
         }
+
+        /// <summary>
+        /// 명세서 DML 범위 표 행이 <see cref="StepSqlStatementReader"/>가 실제로
+        /// 만들 수 있는 문장과 대조 가능한지 본다. <see cref="CheckStatementCountAgainstSpec"/>의
+        /// Task 16 C1 문서를 보라.
+        ///
+        /// [왜 길이 1인지로 가르는가 - 코퍼스 실측]
+        /// `output/Procedures`·`Functions`·`External` 전체의 DML 범위 표 "대상"
+        /// 칸을 훑으면(Task 16 실측) 값은 셋으로 갈린다: 실제 테이블명(예:
+        /// `TSettleMst`, `SETTLE_POQ_DB.dbo.TSettleMst` - 전부 2글자 이상),
+        /// "—"(SELECT 전용, 35건 - 한 글자 em dash), 한 글자 별칭 "A"(2건).
+        /// 실제 테이블명은 예외 없이 2글자 이상이라 길이 1 하나로 세 부류를
+        /// 정확히 가른다. `knownTableNames` 카탈로그 대조도 대안이지만 그
+        /// 카탈로그는 소프트 스킵 대상이다(비어 있을 수 있다 - ValidateBatchStep
+        /// 문서 참고) - 개수 대조 전체를 그 카탈로그에 묶으면 카탈로그가 빈
+        /// Job에서 진짜 결손(S07 8/18 등)까지 조용히 통과하게 된다. 길이
+        /// 판정은 그 위험이 없다.
+        /// </summary>
+        private static bool IsComparableDmlRow(SpecDmlRow row) =>
+            (row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase) ||
+             row.Kind.Equals("INSERT", StringComparison.OrdinalIgnoreCase) ||
+             row.Kind.Equals("DELETE", StringComparison.OrdinalIgnoreCase)) &&
+            row.TargetTable.Length > 1;
 
         /// <summary>
         /// `(문장 종류, 대상 테이블)`을 대소문자 무시로 묶는다. 명세서는
