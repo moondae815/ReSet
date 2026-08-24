@@ -39,6 +39,31 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ParseCommandLineArgs_CoverageMap_ShouldCaptureTarget()
+        {
+            CliArgs result = Program.ParseCommandLineArgs(new[] { "--coverage-map", "POQSettlePrco20" });
+
+            Assert.Equal("POQSettlePrco20", result.CoverageMapTarget);
+        }
+
+        [Fact]
+        public void ParseCommandLineArgs_CoverageMap_ShouldBeBatchMode()
+        {
+            // 커버리지 맵은 TUI 로그인 흐름을 타면 안 된다.
+            CliArgs result = Program.ParseCommandLineArgs(new[] { "--coverage-map", "dbo.UP_X" });
+
+            Assert.True(result.IsBatchMode);
+        }
+
+        [Fact]
+        public void ParseCommandLineArgs_CoverageMapWithoutValue_ShouldLeaveTargetNull()
+        {
+            CliArgs result = Program.ParseCommandLineArgs(new[] { "--coverage-map" });
+
+            Assert.Null(result.CoverageMapTarget);
+        }
+
+        [Fact]
         public async Task RunConfiguredAnalysisAsync_UsesOfflineSnapshotDatabaseForRecursiveRoot()
         {
             var snapshot = new DbSnapshot { Database = "SnapshotDB" };
