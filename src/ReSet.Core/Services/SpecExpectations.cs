@@ -119,6 +119,14 @@ namespace ReSet.Core.Services
         public IReadOnlyList<CaseBranchFact> CaseBranches { get; init; }
             = Array.Empty<CaseBranchFact>();
 
+        /// <summary>트랜잭션 경계 문장. 줄·종류·이름만 담는다.</summary>
+        public IReadOnlyList<TransactionBoundaryFact> TransactionBoundaries { get; init; }
+            = Array.Empty<TransactionBoundaryFact>();
+
+        /// <summary>`SET @v = &lt;식&gt;` 대입 전수. `SELECT @v = ...`는 여기 없다.</summary>
+        public IReadOnlyList<SetAssignmentFact> SetAssignments { get; init; }
+            = Array.Empty<SetAssignmentFact>();
+
         /// <summary>
         /// 파서가 확정한 INSERT 대상 테이블(canonical 표기). 매핑 표의 테이블명 칸이
         /// 이것과 표기까지 같은지 대조하는 기준이다.
@@ -262,6 +270,12 @@ namespace ReSet.Core.Services
             // 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
             var caseBranches = CaseBranchExtractor.Extract(spDef.DdlText);
 
+            // 트랜잭션 경계 표(Task 5의 새 검사)와 변수 대입 표의 기대값이다. AiService가
+            // 프롬프트 표를 만들 때 부르는 것과 같은 Extract 진입점을 부른다 - 두 곳이
+            // 갈리면 모델이 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
+            var transactionBoundaries = TransactionBoundaryExtractor.Extract(spDef.DdlText);
+            var setAssignments = SetAssignmentExtractor.Extract(spDef.DdlText);
+
             // INSERT 매핑 표의 테이블명 표기 대조(CheckInsertMappingTableNames)의 기대값이다.
             // 파서(SqlStaticParser)가 이미 확정해 둔 InsertTables를 그대로 옮긴다 - 별도
             // 재추출 경로를 두면 두 곳이 갈릴 수 있다.
@@ -383,6 +397,17 @@ namespace ReSet.Core.Services
                 // 하나뿐인 객체에서 From이 null을 돌려주고 CheckCaseBranches가 한 번도
                 // 돌지 않는다.
                 && caseBranches.Count == 0
+                // transactionBoundaries는 중복항이 아니다 - BEGIN/COMMIT/ROLLBACK/SAVE
+                // TRANSACTION만 있고 DML·CASE·파라미터 등 다른 재료가 하나도 없는 SP가
+                // 성립한다(authoring-contract §1이 이 파일 이름으로 실측을 남긴 자리다).
+                // 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이 null을 돌려주고
+                // 트랜잭션 경계 검사가 한 번도 돌지 않는다.
+                && transactionBoundaries.Count == 0
+                // setAssignments도 같은 이유로 중복항이 아니다 - `SET @v = <식>` 대입만
+                // 있고 다른 재료가 없는 SP(예: 상수 초기화만 하는 짧은 프로시저)가
+                // 성립한다. 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이
+                // null을 돌려주고 SET 대입 검사가 한 번도 돌지 않는다.
+                && setAssignments.Count == 0
                 // insertTargetTables는 중복항이 아니다 - INSERT 매핑 표 대조(§4 D)는
                 // dmlScopeFacts 등 다른 재료가 하나도 없는 SP에서도 필요할 수 있다
                 // (예: 파서가 INSERT 대상만 잡고 다른 신호는 하나도 못 뽑은 경우).
@@ -437,6 +462,8 @@ namespace ReSet.Core.Services
                 ObjectDeclaration = objectDeclaration,
                 ExecutionSemantics = executionSemantics,
                 CaseBranches = caseBranches,
+                TransactionBoundaries = transactionBoundaries,
+                SetAssignments = setAssignments,
                 InsertTargetTables = insertTargetTables,
                 NullableColumnsByTable = nullableColumnsByTable,
                 ParameterNames = parameterNames,
