@@ -81,6 +81,10 @@ namespace ReSet.Cli
                 {
                     cliArgs.ExtractSnapshotPath = args[++i];
                 }
+                else if (arg.Equals("--coverage-map", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    cliArgs.CoverageMapTarget = args[++i];
+                }
             }
 
             return cliArgs;
@@ -219,6 +223,22 @@ namespace ReSet.Cli
             if (!Path.IsPathRooted(outputDir))
             {
                 outputDir = Path.Combine(Directory.GetCurrentDirectory(), outputDir);
+            }
+
+            // 커버리지 맵 모드 - DB·AI 없이 output/ 산출물만 읽는다. 그래서 로그인
+            // 흐름보다 앞에 둔다(--extract-snapshot과 달리 연결이 필요 없다).
+            if (!string.IsNullOrEmpty(cliArgs.CoverageMapTarget))
+            {
+                var written = CoverageMapCommand.Run(outputDir, cliArgs.CoverageMapTarget);
+                if (written == null)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]커버리지 맵 대상을 찾지 못했습니다: {Markup.Escape(cliArgs.CoverageMapTarget)}[/]");
+                    return;
+                }
+
+                AnsiConsole.MarkupLine($"[green]커버리지 맵 생성 완료:[/] {Markup.Escape(written)}");
+                return;
             }
 
             var instructionsFile = configuration["OutputSettings:InstructionsFile"] ?? "instructions.md";
