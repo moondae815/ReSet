@@ -7651,5 +7651,60 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("@v_intCLComm") && e.Contains("MONEY"));
             Assert.Contains(result.Errors, e => e.Contains("@v_intCLVT") && e.Contains("MONEY"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 E - 상태 변수 초기값. S13 🟠: @v_currentStepId INT = 0으로 시작하고
+        // CATCH가 SET @po_intRetVal = @v_currentStepId를 무조건 수행해, DML 바깥에서
+        // 난 장애(커서 DECLARE/OPEN, 행 0건)가 성공 코드 0으로 보고된다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static BatchStepPlan StepWithCodes(string code, params string[] errorCodes) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_SUMMARY_ETC" },
+            TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+            ErrorCodes: errorCodes, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        [Fact]
+        public void ValidateBatchStep_StatusVariableInitializedToSuccessCode_ShouldBeAnError()
+        {
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 0;\n" +
+                "BEGIN TRY\n  SET @v_currentStepId = 1001;\nEND TRY\n" +
+                "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S13", "-9", "0", "1001", "1002"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("0"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_StatusVariableInitializedOutsideErrorCodeSet_IsSilent()
+        {
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = -999;\n" +
+                "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S13", "-9", "0", "1001", "1002"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_NoCatchReturnStructure_IsSilent()
+        {
+            var markdown = "### S13 단계\n\n```sql\nDECLARE @v_currentStepId INT = 0;\nSELECT 1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S13", "0", "1001"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+        }
     }
 }

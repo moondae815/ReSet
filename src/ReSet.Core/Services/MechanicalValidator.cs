@@ -357,6 +357,7 @@ namespace ReSet.Core.Services
             CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result);
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
+            SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -5517,6 +5518,80 @@ namespace ReSet.Core.Services
                     $"{step.Code} 섹션의 CATCH 블록이 반환 경로 없이 THROW로 끝납니다. " +
                     "THROW는 호출부의 OUTPUT 파라미터 대입을 지나쳐 원본 반환 코드를 " +
                     "잃어버립니다. 추적한 상태 변수를 출력 파라미터에 넣고 RETURN하십시오.");
+            }
+        }
+
+        /// <summary>
+        /// CATCH가 돌려주는 상태 변수의 초기값이 업무 오류 코드나 성공 코드와 겹치는지 본다.
+        ///
+        /// [POQSettleBatch1 축 B 감사 - 실물 코퍼스로 확인함]
+        /// S13 🟠(output/Jobs/POQSettleBatch1/agent/steps/S13.md:16, 134) -
+        /// `DECLARE @v_currentStepId INT = 0`으로 시작하고 CATCH가 그 값을 무조건
+        /// `@po_intRetVal`로 반환한다(목차 ErrorCodes = -9, 0, 1001, 1002 -
+        /// output/Jobs/POQSettleBatch1/raw/PlanStructure.md:453-458). 커서
+        /// DECLARE·OPEN·첫 FETCH에서 난 장애와 행 0건일 때의 COMMIT이 성공 코드
+        /// 0으로 보고된다. 실패가 성공으로 보고되면 오케스트레이터가 단계를
+        /// Succeeded로 기록해 재실행하지 않고, TSettleByOUT 보정이 누락된 채
+        /// 후속 정산이 진행된다.
+        /// S05 🟡(output/Jobs/POQSettleBatch1/agent/steps/S05.md:23, 218) - 같은
+        /// 모양의 `= -9`(목차 ErrorCodes에 -9 포함 - PlanStructure.md:205-209).
+        /// 기정산 조건과 사전 검증 질의의 SQL 장애가 같은 코드로 보고된다.
+        ///
+        /// 명세서 재료가 필요 없다 - 목차의 ErrorCodes와 단계 SQL만 본다. CATCH
+        /// 블록 안으로 범위를 좁히는 이유: TRY 안에서 같은 변수를 같은 값으로
+        /// 정상 대입해도(예: 성공 코드 0을 최종 대입) 그것은 이 결함이 아니다 -
+        /// 반환 지점이 CATCH일 때만 "장애가 다른 코드로 위장한다"는 결함이 성립한다.
+        ///
+        /// [이 검사가 잡지 못하는 것]
+        /// S13.md:16-17은 초기값 결함이 하나 더 있다 - `DECLARE @v_currentStepId
+        /// INT = 0;` 바로 다음 줄이 `SET @po_intRetVal = NULL;`이다. 이 두 번째
+        /// 줄은 변수가 아니라 리터럴 NULL을 대입하므로 아래 정규식의
+        /// `(?&lt;var&gt;@\w+)` 그룹에 매칭되지 않고, NULL은 애초에 ErrorCodes
+        /// 문자열 집합과 겹치지 않는다 - 이 검사는 이 건을 조용히 통과시킨다.
+        /// UP_UTIL_SETTLE_SUMMARY_ETC/docs/Spec.md:56은 `@po_intRetVal`의 선언
+        /// 기본값을 `1000`으로 확정하는데, 감사 보고서는 이 건(⚪)의 실제 영향이
+        /// 위 🟠(`@v_currentStepId = 0`)와 같은 뿌리라고 적었다. "선언 기본값과
+        /// 다른가"로 판정을 넓히려면 SpecExpectations에 파라미터 기본값 칸을
+        /// 더해야 하는데(현재 ParameterNames만 담는다) 이번 검사의 범위가 아니다.
+        /// </summary>
+        private static void CheckStepIdInitialValue(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            if (step.ErrorCodes.Count == 0) return;
+
+            var codes = new HashSet<string>(
+                step.ErrorCodes.Select(c => c.Trim()).Where(c => c.Length > 0), StringComparer.Ordinal);
+            codes.Add("0");   // 성공 코드는 목차에 없을 수도 있다
+
+            var reported = new HashSet<(string Name, string Value)>();
+
+            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            {
+                foreach (Match block in CatchBlockPattern.Matches(cleaned))
+                {
+                    var body = block.Groups["body"].Value;
+                    var returned = Regex.Match(
+                        body, @"SET\s+@po_intRetVal\s*=\s*(?<var>@\w+)", RegexOptions.IgnoreCase);
+                    if (!returned.Success) continue;
+
+                    var name = returned.Groups["var"].Value;
+                    var declared = Regex.Match(
+                        cleaned,
+                        $@"DECLARE\s+{Regex.Escape(name)}\s+\w+(\s*\(\s*\d+(\s*,\s*\d+)?\s*\))?\s*=\s*(?<value>-?\d+)",
+                        RegexOptions.IgnoreCase);
+                    if (!declared.Success) continue;
+
+                    var initial = declared.Groups["value"].Value;
+                    if (!codes.Contains(initial)) continue;
+                    if (!reported.Add((name, initial))) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 `{name}`을(를) `{initial}`로 초기화하고 CATCH에서 그 값을 " +
+                        $"`@po_intRetVal`로 돌려줍니다. `{initial}`은(는) 이 단계의 오류 코드 집합 " +
+                        $"({string.Join(", ", step.ErrorCodes)})에 이미 있는 값이라, DML 바깥에서 난 장애가 " +
+                        "업무 코드(성공 코드일 수도 있습니다)로 보고됩니다. 어느 코드와도 겹치지 않는 " +
+                        "값으로 초기화하십시오.");
+                }
             }
         }
 
