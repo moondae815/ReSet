@@ -170,7 +170,11 @@ public sealed record SpecLocalVariable(string Name, string TypeOrKind, bool IsSy
 
 ## 설계 §4 — 규약 2조항
 
-`common/01-step-contract.md`(단계 프롬프트에 실리는 공통 규약)에 넣는다.
+**`AiService.GenerateBatchStepSectionAsync`의 프롬프트에 도구가 직접 싣는다.**
+`common/01-step-contract.md`에 넣을 수 없다 — 그 파일은 도구가 쓰는 것이 아니라
+AI가 만든 계획서에서 `PlanBoundaryResolver`가 잘라낸 조각(`slices.StepContract`)이라,
+도구가 문장을 보장할 수 없다. 도구가 고정 문구로 강제하는 자리는 프롬프트뿐이다
+(`DataAccessPolicy.InstructionRules`가 `02-data-access-boundary.md`에 대해 하는 것과 같은 역할).
 
 - **① 스칼라 하위질의를 `CROSS APPLY`/`OUTER APPLY`로 바꾸지 않는다.** 명세서가 대입 우변을
   스칼라 하위질의로 적은 자리는 무결과일 때 `NULL`이 대입되는 자리다. `CROSS APPLY`는 그 행을
