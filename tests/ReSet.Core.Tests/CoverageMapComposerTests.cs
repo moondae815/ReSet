@@ -119,6 +119,38 @@ END";
         }
 
         [Fact]
+        public void Compose_SourceCommentOnlyStatement_ShouldNotBecomeSpecMissing()
+        {
+            // Fix Round 1 실측(EXPECT_PROC:16, PROC_ETC:23) 재현. 원본 주석 표에
+            // 이미 옮겨진 코드 범례 주석뿐 - 추출기 재료도, 주석이 아닌 앵커도 없다.
+            // SourceComments를 재료 쪽에 넣으면 이 문장이 SpecMissing(🟥)으로
+            // 뒤집힌다 - Spec.md가 성실히 옮겨 적었는데도 "명세서 결함"으로
+            // 오보하게 된다. 이 테스트를 되돌려(SourceComments를 넣어) 실행하면
+            // 깨져야 한다 - CoverageMapComposer.ExtractorFactLines의 배제 결정을
+            // 잠그는 회귀 가드다.
+            const string ddl = @"CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @x INT = 1  --0:반올림, 1:자동
+    PRINT 'done'
+END";
+            var def = new SpDefinition { Schema = "dbo", Name = "P", DdlText = ddl };
+            const string spec = @"### 원본 주석 기록
+
+| 라인 | 원본 주석 |
+| :--- | :--- |
+| 3 | 0:반올림, 1:자동 |
+";
+
+            var coverage = CoverageMapComposer.Compose("dbo.P", def, spec);
+            var declareLine = coverage.Statements.Single(s => s.Statement.StartLine == 3);
+
+            Assert.Equal(CoverageState.OutOfScope, declareLine.State);
+            Assert.Empty(declareLine.Anchors);
+            Assert.Empty(declareLine.ExtractorLines);
+            Assert.NotEmpty(declareLine.CommentAnchors);
+        }
+
+        [Fact]
         public void Compose_ShouldReportTableKindsRead()
         {
             const string spec = @"### 집합 술어 (기계 확정 — 수정 금지)
