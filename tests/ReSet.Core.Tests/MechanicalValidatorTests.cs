@@ -6771,5 +6771,163 @@ END";
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 픽스 라운드 1 - 검사 A 리뷰 Critical 2건.
+        //
+        // [Critical 1] "빠진 번호" 목록이 접두사 스킵(actual개를 앞에서부터 스킵)으로
+        // 계산돼, S07의 실제 모양(있음 1·2·3·12·13, 없음 4~11·14·15)에서 12·13을
+        // 빠졌다고 오보하고 4·5는 빠진 목록에서 빠뜨렸다. 이 문자열은
+        // SuggestedPromptFix를 거쳐 재생성 프롬프트의 floorFeedback으로 그대로
+        // 들어가므로, 틀린 번호는 모델에게 틀린 시정 지시가 된다.
+        //
+        // [Critical 2] 레거시 SP가 둘 이상 합쳐진 단계는 Ordinal이 SP마다 1부터
+        // 다시 시작해 번호를 합쳐 말할 수 없는데, 예전 코드는 DmlRows를 SP 경계
+        // 없이 SelectMany로 평탄화해 번호 열거를 그대로 냈다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_MissingOrdinals_OmitsPresentOrdinalsForNonPrefixShortfall()
+        {
+            // 있음: 1·2·3·12·13(전부 앵커로 확인). 없음: 4~11·14·15.
+            // 접두사 스킵이면 "6~15가 없다"고 잘못 말한다 - 12·13은 실제로 있다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U2\n" +
+                "UPDATE A SET A.CLCOMM = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U3\n" +
+                "UPDATE A SET A.CLCOMM = 3 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U12\n" +
+                "UPDATE A SET A.CLCOMM = 12 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U13\n" +
+                "UPDATE A SET A.CLCOMM = 13 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e =>
+                e.Contains("빠진 것으로 보이는 번호: 4, 5, 6, 7, 8, 9, 10, 11, 14, 15"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("번호: 6, 7, 8, 9, 10"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_MultipleLegacyProcedures_DoesNotEnumerateOrdinals()
+        {
+            // 두 레거시 SP 모두 TSettleMst에 UPDATE 2개씩(각자 Ordinal 1·2부터
+            // 다시 시작) 확정한다. 합계(4개) 대조는 옳아도, 번호를 합쳐 말하면
+            // 서로 다른 SP의 "갱신 1"이 같은 번호로 충돌해 뜻을 잃는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.SP_A"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 2, 20, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+                ["dbo.SP_B"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 2, 20, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "S07 단계",
+                LegacyProcedures: new[] { "dbo.SP_A", "dbo.SP_B" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("1개만") && e.Contains("4개를 확정"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_NoAnchoredStatements_OmitsOrdinalList()
+        {
+            // 단일 SP지만 앵커 주석이 하나도 없다 - 어느 갱신 번호가 실제로 있는지
+            // 알 길이 없으므로 개수만 말하고 번호는 열거하지 않는다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("1개만") && e.Contains("15개를 확정"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_PartiallyAnchoredStatements_OmitsOrdinalList()
+        {
+            // 두 문장 중 하나만 앵커가 있다. 앵커로 확인된 것만 "있음"으로 치면
+            // 실제로 있는데 앵커가 없는 두 번째 문장이 "빠짐"으로 잘못 보고된다 -
+            // 앵커 없는 문장이 하나라도 섞이면 번호 열거를 통째로 접는다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "UPDATE A SET A.CLCOMM = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("2개만") && e.Contains("15개를 확정"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 픽스 라운드 1 - Minor: off-by-one 경계. 기존 테스트는 1 대 15라
+        // 경계(정확히 같음·하나만 부족)를 시험하지 않았다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_ExactStatementCountMatchesSpec_IsSilent()
+        {
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(1));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_OneFewerThanSpec_IsAnError()
+        {
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(2));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("1개만") && e.Contains("2개를 확정"));
+        }
     }
 }

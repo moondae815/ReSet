@@ -5556,25 +5556,82 @@ namespace ReSet.Core.Services
             BatchStepPlan step,
             StepValidationResult result)
         {
+            // 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다(명세서
+            // "갱신 1"은 그 SP 안에서만 유일하다). facts를 SP 경계 없이 평탄화해
+            // 번호를 합쳐 말하면 서로 다른 SP의 같은 번호가 충돌해 뜻을 잃는다
+            // (픽스 라운드 1 Critical 2). 개수 비교는 SP 경계와 무관하게 옳으므로
+            // 그대로 두고, 번호 열거만 SP가 정확히 하나일 때로 좁힌다.
+            var singleSource = facts.Count == 1;
+
             var expected = facts
                 .SelectMany(f => f.DmlRows)
                 .GroupBy(r => (r.Kind, r.TargetTable), StatementGroupComparer);
 
             foreach (var group in expected)
             {
-                var actual = statements.Count(s =>
+                var matched = statements.Where(s =>
                     s.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
-                    s.TargetTable.Equals(group.Key.TargetTable, StringComparison.OrdinalIgnoreCase));
+                    s.TargetTable.Equals(group.Key.TargetTable, StringComparison.OrdinalIgnoreCase)).ToList();
 
-                if (actual >= group.Count()) continue;
+                var actual = matched.Count;
+                var expectedCount = group.Count();
+                if (actual >= expectedCount) continue;
 
-                var missing = group.Select(r => r.Ordinal).OrderBy(o => o).Skip(actual);
                 result.Errors.Add(
                     $"{step.Code} 섹션이 `{group.Key.TargetTable}`에 대한 {group.Key.Kind}를 {actual}개만 담고 " +
-                    $"있습니다. 명세서 DML 범위 표는 {group.Count()}개를 확정합니다(빠진 것으로 보이는 번호: " +
-                    $"{string.Join(", ", missing)}). 각 문장의 본문을 전문으로 실으십시오 — 주석이나 " +
+                    $"있습니다. 명세서 DML 범위 표는 {expectedCount}개를 확정합니다{DescribeMissingOrdinals(singleSource, group, matched)}. " +
+                    "각 문장의 본문을 전문으로 실으십시오 — 주석이나 " +
                     "\"원문 그대로 적용한다\"는 지시는 상수·계수·반올림 자릿수·UDF 인자를 복원하지 못합니다.");
             }
+        }
+
+        /// <summary>
+        /// 빠진 것으로 보이는 갱신 번호를 문장으로 만든다. 근거가 없으면 빈 문자열을
+        /// 낸다 - 귀속할 수 없으면 침묵한다는 이 저장소의 규약을 메시지 안의 번호에도
+        /// 적용한다.
+        ///
+        /// [픽스 라운드 1 Critical 1 - 왜 개수 기반 접두사 스킵을 버렸는가]
+        /// 예전 구현은 "명세서 Ordinal을 정렬해 앞에서 actual개를 스킵"했다. 이것은
+        /// 단계가 확정된 순서대로 앞부터 채운다는 가정인데, 근거가 없다. 실측
+        /// S07은 있음이 1·2·3·12·13, 없음이 4~11·14·15다(actual=5) - 접두사
+        /// 스킵은 "6~15가 없다"고 잘못 말해 실제로 있는 12·13을 빠졌다고
+        /// 지목하고 실제로 없는 4·5를 목록에서 빠뜨린다. 이 문자열은
+        /// SuggestedPromptFix → floorFeedback을 거쳐 재생성 프롬프트로 그대로
+        /// 들어가므로, 틀린 번호는 모델에게 틀린 시정 지시가 된다 - 번호를
+        /// 아예 안 주는 것보다 훨씬 나쁘다.
+        ///
+        /// 번호를 낼 수 있는 조건(전부 만족해야 한다):
+        /// 1. 레거시 SP가 정확히 하나다 - 둘 이상이면 Ordinal이 SP 경계마다 1부터
+        ///    다시 시작해 합친 번호가 뜻을 잃는다(Critical 2, CheckStatementCountAgainstSpec 참고).
+        /// 2. 이 (종류, 테이블) 그룹에 매치된 단계 문장이 하나 이상 있다 - 0개면
+        ///    "빠짐" 판정에 앵커가 필요 없다(전부가 확정적으로 빠졌다).
+        /// 3. 매치된 문장이 하나라도 있다면 그 전부가 앵커(`-- U4`·`/* 갱신 4 */`
+        ///    등)를 가져야 한다. 앵커 없는 문장이 하나라도 섞이면 "앵커로 확인된
+        ///    것만 있음"으로 칠 때 실제로는 있는데 앵커가 없는 문장이 "빠짐"으로
+        ///    잘못 보고된다 - 그래서 하나라도 앵커가 없으면 통째로 침묵한다.
+        /// </summary>
+        private static string DescribeMissingOrdinals(
+            bool singleSource,
+            IGrouping<(string Kind, string TargetTable), SpecDmlRow> group,
+            IReadOnlyList<StepSqlStatement> matched)
+        {
+            if (!singleSource) return string.Empty;
+            if (matched.Count > 0 && matched.Any(s => s.Anchor == null)) return string.Empty;
+
+            var present = matched
+                .Where(s => s.Anchor.HasValue)
+                .Select(s => s.Anchor!.Value)
+                .ToHashSet();
+
+            var missing = group
+                .Select(r => r.Ordinal)
+                .Where(o => !present.Contains(o))
+                .OrderBy(o => o)
+                .ToList();
+
+            return missing.Count == 0
+                ? string.Empty
+                : $"(빠진 것으로 보이는 번호: {string.Join(", ", missing)})";
         }
 
         /// <summary>
