@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 using ReSet.Core.Services;
 
@@ -179,15 +180,33 @@ namespace ReSet.Core.Tests
 
             var html = CoverageMapHtmlWriter.Render(new[] { coverage }, "T");
 
-            // 문장 수 기준: 정합 1/5=20.0%, 관할 밖 4/5=80.0%
-            Assert.Contains("20.0%", html);
-            Assert.Contains("80.0%", html);
-            // 라인 가중: 정합 10/14=71.4%, 관할 밖 4/14=28.6%
-            Assert.Contains("71.4%", html);
-            Assert.Contains("28.6%", html);
-            // 각 축의 용도를 밝히는 문구
-            Assert.Contains("외부 보고용", html);
-            Assert.Contains("내부 백로그용", html);
+            // Fix Round 1 리뷰 지적: html 전체에서 "20.0%"/"80.0%"를 찾으면
+            // AppendObjectList의 막대 세그먼트 폭(count * 100.0 / o.LeafCount, 이
+            // 픽스처에선 우연히 같은 값)이 새어 들어와도 통과한다 - 두 축을
+            // 합쳐도(AppendAxisLine 두 번째 호출이 LineWeight를 쓰도록 바꿔도)
+            // 이 테스트가 안 깨지는 원인이었다. class="axis-line" 문단만 오려내
+            // 그 안에서만 값을 확인한다.
+            var axisLines = Regex.Matches(html, "<p class=\"axis-line\">.*?</p>")
+                .Select(m => m.Value)
+                .ToList();
+            Assert.Equal(2, axisLines.Count);
+
+            var lineWeightedAxis = Assert.Single(axisLines, l => l.Contains("라인 가중"));
+            var statementCountAxis = Assert.Single(axisLines, l => l.Contains("문장 수"));
+
+            // 라인 가중 문단 안: 정합 10/14=71.4%, 관할 밖 4/14=28.6%
+            Assert.Contains("71.4%", lineWeightedAxis);
+            Assert.Contains("28.6%", lineWeightedAxis);
+            Assert.Contains("외부 보고용", lineWeightedAxis);
+
+            // 문장 수 문단 안: 정합 1/5=20.0%, 관할 밖 4/5=80.0%
+            Assert.Contains("20.0%", statementCountAxis);
+            Assert.Contains("80.0%", statementCountAxis);
+            Assert.Contains("내부 백로그용", statementCountAxis);
+
+            // 두 문단이 같은 계산을 공유하면(예: 둘 다 라인 가중으로 통일) 문단
+            // 텍스트 자체가 같아진다 - 서로 달라야 한다.
+            Assert.NotEqual(lineWeightedAxis, statementCountAxis);
         }
 
         [Fact]
