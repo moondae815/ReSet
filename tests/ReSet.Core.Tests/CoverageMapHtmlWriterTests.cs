@@ -275,11 +275,17 @@ namespace ReSet.Core.Tests
             // innerHTML로 다시 파싱하면 렌더 시점의 Encode가 무효화되고, 'A<B' 같은
             // 술어 원문이 태그로 먹혀 근거가 조용히 사라진다. textContent로 대입해야
             // 원문이 보존된다.
+            //
+            // [Fix Round 2 재리뷰 지적] 옛 단언(`.innerHTML = html`·`.innerHTML=html`
+            // 리터럴 검색)은 옛 한 줄짜리 구현("var html = ...; box.innerHTML = html;")
+            // 하나만 겨눈 죽은 가드였다 - 새 DOM API 구조에서 `evidenceBody.innerHTML =
+            // ...`처럼 특정 한 곳만 innerHTML로 되돌려도 문자열 "html"이라는 식별자가
+            // 아예 없어 안 걸렸다(재현: textContent 6개 호출 중 5개가 남아
+            // Contains("textContent")도 통과했다). `.innerHTML =` 대입 전부를
+            // 정규식으로 잡아야 부분 되돌림도 걸린다.
             var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
 
-            Assert.DoesNotContain(".innerHTML = html", html);
-            Assert.DoesNotContain(".innerHTML=html", html);
-            Assert.Contains("textContent", html);
+            Assert.DoesNotMatch(@"\.innerHTML\s*=", html);
         }
 
         [Fact]
