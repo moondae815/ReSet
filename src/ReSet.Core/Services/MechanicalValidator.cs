@@ -3178,6 +3178,37 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                // [술어 컬럼·조인 키 칸 - 2026-08-24 10회차 🟡] COMM_UPD UPDATE 10 행이 기계
+                // 원문 8개 토큰에 PGNAME을 하나 더해 9개로 전사했는데, 이 검사는 그 칸을
+                // 대조하지 않아 통과했다. GROUP BY 칸과 같은 관례로 요구한다 - 행 매칭이
+                // 이미 성립한 행 안에서, 목록이 비지 않을 때만, 렌더 문자열(", " 결합)과의
+                // 정확 일치. 비면 "(없음)"이 여러 칸에 나와 우연 일치가 검사를 무력화하므로
+                // 요구하지 않는다(아래 GROUP BY 주석의 같은 함정).
+                foreach (var (label, columns) in new[]
+                {
+                    ("술어 컬럼", fact.PredicateColumns),
+                    ("조인 키", fact.JoinKeys)
+                })
+                {
+                    if (columns.Count == 0) continue;
+                    var expectedCell = string.Join(", ", columns);
+                    var present = matchingRows.Any(
+                        row => MarkdownTableCellCodec.SplitRow(row).Any(cell => cell == expectedCell));
+                    if (present) continue;
+
+                    var cellMessage =
+                        $"DML 범위 표의 {statementToken} @ 라인 {fact.Line} 행에서 {label} 칸이 기계 확정값 "
+                        + $"`{expectedCell}`과 다릅니다. 이 칸은 축자 전사 대상입니다 - 토큰을 더하거나 빼거나 "
+                        + "순서를 바꿀 수 없습니다.";
+                    result.Errors.Add(cellMessage);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.DmlScopeTableMissing,
+                        Message = cellMessage,
+                        RawContext = $"{statementToken} @ line {fact.Line} {label}"
+                    });
+                }
+
                 // GROUP BY 항 - Task 8 제약 2. "(없음)" 토큰은 `조인 키` 칸에도 나오는
                 // 값이라, GroupByColumns가 비고 조인 키도 비면(UPDATE·DELETE는 항상
                 // GroupByColumns가 비어 있다) 두 칸이 같은 "(없음)"이 된다. cells.Any(c =>

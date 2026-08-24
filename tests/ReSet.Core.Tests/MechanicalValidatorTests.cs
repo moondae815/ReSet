@@ -2885,6 +2885,105 @@ END"
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 술어 컬럼·조인 키 칸의 정확 일치 - 2026-08-24 10회차 🟡 (COMM_UPD UPDATE 10)
+        //
+        // 기계 원문 8개 토큰(CLIENTID, PGNAME, MALLID, YMD, USESTATE, CYMD, AYMD, RefundFlag)에
+        // 모델이 PGNAME을 하나 더해 9개로 전사했는데 L1이 통과시켰다 - 이 검사는 그 칸을
+        // 아예 대조하지 않았다. GROUP BY 칸과 같은 관례(행 매칭 후, 목록이 비지 않을 때만,
+        // 렌더 문자열 정확 일치)로 두 칸을 요구한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Validate_DmlScopePredicateCellWithDuplicatedToken_ShouldBeAnError()
+        {
+            // COMM_UPD:340 실물 모양 - 토큰 하나가 중복으로 끼어듦.
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 340, "A",
+                        new[] { "CLIENTID", "PGNAME", "MALLID", "YMD", "USESTATE", "CYMD", "AYMD", "RefundFlag" },
+                        true, new[] { "CLIENTID" }, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 340 | A | CLIENTID, PGNAME, MALLID, YMD, PGNAME, USESTATE, CYMD, AYMD, RefundFlag | 예 | CLIENTID |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("술어 컬럼"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeJoinKeyCellRewritten_ShouldBeAnError()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 227, "A", new[] { "UseState" }, false,
+                        new[] { "PLTID", "YMD" }, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 227 | A | UseState | **아니오** | PLTID |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors,
+                e => e.Type == ErrorType.DmlScopeTableMissing && e.Message.Contains("조인 키"));
+        }
+
+        [Fact]
+        public void Validate_DmlScopeCellsCopiedVerbatim_Pass()
+        {
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("UPDATE", 340, "A",
+                        new[] { "CLIENTID", "PGNAME", "MALLID" }, true, new[] { "CLIENTID", "PGNAME" }, Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | 340 | A | CLIENTID, PGNAME, MALLID | 예 | CLIENTID, PGNAME |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
+        [Fact]
+        public void Validate_DmlScopeEmptyPredicateAndJoinLists_AreNotRequired()
+        {
+            // "(없음)" 토큰은 여러 칸에 나올 수 있어 요구하면 우연 일치가 검사를 무력화한다 -
+            // GROUP BY 칸과 같은 이유로 비어 있으면 요구하지 않는다.
+            var expectations = EmptyExpectations() with
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("INSERT", 52, "TSettleMst",
+                        System.Array.Empty<string>(), false, System.Array.Empty<string>(), Array.Empty<string>())
+                }
+            };
+            var markdown = RequiredHeadersMarkdown()
+                + "\n### DML 범위 (기계 확정 — 수정 금지)\n"
+                + "| 문장 | 라인 | 대상 | 술어 | 기준일 | 조인 키 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                + "| INSERT 1 | 52 | TSettleMst | (없음) | **아니오** | (없음) |\n";
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.DmlScopeTableMissing);
+        }
+
         [Fact]
         public void Validate_DmlScopeRowLineCollidesOnlyWithAnUnrelatedTableElsewhere_ShouldStillBeAnError()
         {
