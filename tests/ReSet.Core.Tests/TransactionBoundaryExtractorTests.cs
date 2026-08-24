@@ -119,6 +119,28 @@ END";
         }
 
         [Fact]
+        public void Extract_VariableFormTransactionName_ShouldKeepVerbatim()
+        {
+            // 설계서(2026-08-24-machine-table-expansion-design.md:68)가 이름으로 지목한
+            // 능력이다 - "변수 형태(BEGIN TRAN @name)도 원문 그대로 싣는다". BEGIN/COMMIT
+            // TRANSACTION의 이름 칸에 식별자가 아니라 변수가 온 경우, NameOf의
+            // VariableReference 분기가 없으면 이 자리는 조용히 "(없음)"으로 떨어진다.
+            const string ddl = @"CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @txnName VARCHAR(32)
+    SET @txnName = 'Txn1'
+    BEGIN TRANSACTION @txnName
+    COMMIT TRANSACTION @txnName
+END";
+
+            var facts = TransactionBoundaryExtractor.Extract(ddl);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Equal("@txnName", facts[0].Name);
+            Assert.Equal("@txnName", facts[1].Name);
+        }
+
+        [Fact]
         public void TableHeading_ShouldCarryTheMachineConfirmedSuffix()
         {
             Assert.EndsWith(
