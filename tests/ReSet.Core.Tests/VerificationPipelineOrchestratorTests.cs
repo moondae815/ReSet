@@ -5405,7 +5405,7 @@ SELECT 1;
         }
 
         [Fact]
-        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepExactlyOnce()
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepUpToMaxTries()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -5429,8 +5429,8 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            // S01은 2회(최초 + 재시도 1회), S02는 1회. 3회 이상이면 재시도 상한이 깨진 것이다.
-            await aiService.Received(2).GenerateBatchStepSectionAsync(
+            // S01은 5회(최초 1회 + 재시도 4회, maxTries=5), S02는 1회. 6회 이상이면 재시도 상한이 깨진 것이다.
+            await aiService.Received(5).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
@@ -5463,7 +5463,8 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            await aiService.Received(1).GenerateBatchStepSectionAsync(
+            // maxTries=5이므로 최초 1회를 뺀 재시도 4회(2~5번째 호출) 전부가 피드백을 싣는다.
+            await aiService.Received(4).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Is<string?>(f => f != null && f.Contains("의사코드 블록이 없습니다")),
@@ -6158,8 +6159,8 @@ SELECT 1;
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = SkeletonMarkdown });
 
-            // S01: 1회차(초기 + 재시도, 2회 호출)는 하한 미달. 3회 이후(2회차의
-            // 지목 재생성)는 정상.
+            // S01: 1회차(초기 1회 + 재시도 4회, maxTries=5 전량 소진, 5회 호출)는 하한
+            // 미달. 6회 이후(2회차의 지목 재생성)는 정상.
             var s01Call = 0;
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -6171,7 +6172,7 @@ SELECT 1;
                     }
 
                     s01Call++;
-                    return s01Call <= 2
+                    return s01Call <= 5
                         ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." }
                         : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });

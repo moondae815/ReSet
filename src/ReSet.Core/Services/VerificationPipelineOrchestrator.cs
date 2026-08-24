@@ -3162,7 +3162,9 @@ namespace ReSet.Core.Services
             IReadOnlyList<StepInterface> stepInterfaces,
             CancellationToken cancellationToken)
         {
-            const int maxTries = 2;   // 최초 1회 + 재시도 1회
+            // 검사가 5개 늘었다(문장 개수·조인 키·추가 술어·지역 변수·상태 변수 초기값).
+            // 2회로는 첫 시도에서 2건 이상 걸린 단계가 하한 미달로 확정된다 - 축 A는 6회다.
+            const int maxTries = 5;   // 최초 1회 + 재시도 4회
 
             // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
             // 단계마다 뽑아도 결과가 같으므로 재시도 루프 밖에서 한 번만 만든다.
