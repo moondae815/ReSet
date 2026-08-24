@@ -392,14 +392,9 @@ Expected: 컴파일 실패 — `FindAlias`가 없다.
 
 - [ ] **Step 3: `ControlTable`에 `Aliases`를 더한다**
 
+**`<param name="PrimaryKey">` 문서는 건드리지 않는다** — Task 1의 리뷰 소견으로 이미 그 자리에 `batch.BatchControlTotal` 예외 근거가 실렸다. 규칙을 깨는 커밋에 근거를 함께 두는 것이 맞아서 옮겼다. 여기서는 `Aliases` 항목만 더한다.
+
 ```csharp
-    /// <param name="StatusColumn">상태 어휘를 담은 컬럼. 없으면 null.</param>
-    /// <param name="PrimaryKey">
-    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 두지 않는다 -
-    /// 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
-    /// 넣으면 단계가 써야 할 컬럼이 늘어난다. 예외는 batch.BatchControlTotal이다 -
-    /// 그쪽에는 자연 키가 있고, 없으면 같은 지표가 두 번 들어와 대조가 갈린다.
-    /// </param>
     /// <param name="Aliases">
     /// 코퍼스에서 관측된 비정본 이름. 계약이 이것을 아는 이유는 정본을 정하는
     /// 것만으로는 이름이 수렴하지 않기 때문이다 - 동의어를 쓴 단계는 어느 검사에도
