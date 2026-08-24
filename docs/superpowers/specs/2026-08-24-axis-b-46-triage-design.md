@@ -1,0 +1,231 @@
+# POQSettleBatch1 축 B 결함 46건 — 닫는 수단별 층위 분류
+
+> 근거 보고서: [`docs/audit-reports/2026-08-24-POQSettleBatch1-축B.md`](../../audit-reports/2026-08-24-POQSettleBatch1-축B.md)
+> (`sha256 c609326d…`, `output/Jobs/POQSettleBatch1/consistency/ConsistencyReport.md`의 글자 그대로의 사본)
+> 진행 중인 설계: [`2026-08-24-axis-b-step-check-design.md`](./2026-08-24-axis-b-step-check-design.md) · 계획서 [`2026-08-24-axis-b-step-check.md`](../plans/2026-08-24-axis-b-step-check.md)
+
+## 0. 이 문서에 대하여
+
+축 B 감사가 낸 46건을 **무엇으로 닫는가**로 갈라 놓는다. 목적은 결함 기록이 아니라
+**다음 회차의 실행 단위를 세는 것**이다 — 46이라는 수는 작업량이 아니다. 한 검사가 여러 건을
+닫고, 어떤 건은 어떤 검사로도 닫히지 않는다. 이 문서의 답은 "46건"이 아니라 **"실행 단위 13개,
+그중 11건은 이미 착수됨"**이다.
+
+**소유권 경계.** `docs/audit-defect-catalog.md`가 산출물 정합성 결함을 소유한다(그 문서의
+`갱신 규약`, 그리고 `docs/known-defects.md`의 「여기에 없는 것」). 이 문서는 그 소유권을 침범하지
+않는다 — 카탈로그가 **무엇이 났고 무엇이 닫혔는가**를 적고, 이 문서는 **무엇으로 닫는가**를 적는다.
+회차 표 갱신·부류 번호 배정은 카탈로그의 일이며 이 문서에서 하지 않는다.
+
+**이 판이 담지 않는 것.** `실측` 칸은 비어 있다. 진행 중인 계획서의 Task 10(POQSettleBatch1
+재생성)이 돌아야 채워진다. 지금 적힌 것은 전부 **예측**이고, 예측과 실측이 갈리면 갈린 사실이
+다음 회차의 재료다. 축 A 결함 4건은 범위 밖이다 — 보고서 4-1절이 유일한 🟡(`COMM_UPD`의 DML
+범위 표 술어 컬럼 중복 전사)을 `CheckDmlScopeTable` 조임으로 다음 재생성에 닫힌다고 판정했고,
+나머지 3건은 정합 판정 안의 ⚪ 기록이다.
+
+## 1. 판정 규칙
+
+층을 배정하기 전에 **"기계가 이 결함을 잡으려면 무엇과 무엇을 비교해야 하는가"**를 먼저 적고,
+그 두 항이 실제 파일에 있는지 확인한다.
+
+**확인 없이 `L`로 보내지 않는다.** 이것이 이 문서의 유일한 강한 규칙이다. 기준값이 있다고
+가정하고 검사를 만들었다가 재료가 없더라는 것이 이 저장소에서 반복된 실패다(카탈로그 4-1절
+P2: *"재료를 도입해도 커버리지가 전건이 아니면 다시 난다"*). 재료가 확인되지 않은 자리는
+`L(재료 확장)`으로 적고 **그 확장 자체를 실행 단위로 센다**.
+
+| 층 | 뜻 | 닫는 수단 |
+| :--- | :--- | :--- |
+| **A** | 진행 중인 작업(검사 A~E · 프롬프트 2조항)이 겨냥하거나 부수로 닫을 자리 | Task 10 재생성 실측으로 판정 |
+| **L** | 기준값이 명세서 기계 확정 표나 계약에 있어 기계 대조가 성립 | `MechanicalValidator` 신설 검사 또는 기존 검사 배선 |
+| **C** | 기준값이 저장소 어디에도 없다 — 정본이 비어 있다 | 계약 코드(`BatchControlContract`) |
+| **P** | 기준값은 있으나 비교 대상이 산문이라 기계 대조가 오탐을 낳는다 | 단계 생성 프롬프트 조항(유도이므로 검사보다 약하다) |
+| **N** | 무대응 — 값·행 집합이 불변이고, 도구로 잡으면 오탐만 는다 | 없다. 기록만 남긴다 |
+
+**`공통 규약 문서` 층을 두지 않은 이유.** 처음 구상은 `L / 프롬프트 / 공통 규약 문서 / 판단 보류`
+넷이었다. `공통 규약 문서`는 실체가 없다 — `agent/common/01-step-contract.md`는 AI가 계획서에서
+잘라낸 조각이라 도구가 그 문장을 보장할 수 없고, 그래서 진행 중인 계획서가 규약을 단계 생성
+프롬프트에 싣는 쪽으로 이미 정정했다(계획서 커밋 `3647252`의 본문). 그 층은 `P`에 흡수했다.
+대신 `C`가 필요하다. `batch.ControlTotal`처럼 **정본이 비어 기준값 자체가 없는 자리**는 검사로도
+프롬프트로도 닫히지 않는다.
+
+## 2. 지금 있는 것 — 판정의 바탕
+
+층 배정은 아래 재고를 근거로 했다. 확인 시점은 2026-08-24, 커밋 `4b07453`이다.
+
+**`ValidateBatchStep`이 현재 도는 검사 12개** (`MechanicalValidator.cs:253` 이하)
+
+`CheckForbiddenShortcuts` · `CheckNonCanonicalBatchSchema` · `CheckUnknownTableReferences` ·
+`CheckMissingConditionColumns` · `CheckStepInterface` · `CheckBatchControlVocabulary` ·
+`CheckBatchControlRowOrigin` · `CheckFirstStepRowCreation` · `CheckShadowBackupContract` ·
+`CheckCatchDiscardsReturnCode` · `CheckStatementCountAgainstSpec`(검사 A) ·
+`CheckAnchoredStatementFacts`(검사 B)
+
+**단계 검사가 받는 재료** — `knownTableNames` · `conditionColumnsByProcedure` · `stepInterfaces` ·
+`runRowOwnedTables` · `statementFactsByProcedure`. **`SpecExpectations`는 전달되지 않는다**
+(`VerificationPipelineOrchestrator.cs:3238`의 호출 인자에 없다).
+
+**쓸 수 있는 기준값** — 확인한 것만 적는다.
+
+| 재료 | 어디에 | 실재 확인 |
+| :--- | :--- | :--- |
+| `SpecDmlRow.OrderBy` · `.GroupBy` · `.JoinKeys` · `.PredicateColumns` | `SpecStatementFactsExtractor.cs:9` | ✓ `UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:133`의 INSERT 1 행 ORDER BY 칸 = `INYMD, CLIENTID, PGNAME, MALLID` |
+| `SpecSetTarget.Columns` | 같은 파일 `:31` | ✓ `UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:240-246` 갱신 13 SET 대상 5개 |
+| 갱신 절 표의 `원천 표현식 (SET)` 열 | 같은 명세서 표의 3열 | ✓ 표에는 있으나 **`SpecSetTarget`이 담지 않는다** — 재료 확장 필요 |
+| `SpecLocalVariable` | 같은 파일 `:33` | ✓ (진행 중인 검사 D의 재료) |
+| `SpecExpectations.SessionOptions` · `.LockHints` | `SpecExpectations.cs:58,86` | ✓ 재료는 있고 `CheckSessionOptions`(`:168`)·`CheckLockHints`(`:174`)도 있으나 **둘 다 객체 경로에만 있고 단계 경로에 배선돼 있지 않다** |
+| `ControlColumn.SqlType` (`nvarchar(200)` 등) | `BatchControlContract.cs` | ✓ `BatchValidationIssue.ExpectedValue`·`ActualValue` |
+| `batch.ControlTotal` 컬럼 계약 | — | ✗ **저장소 전체 0건.** `SourceSnapshot`·`ValidationResult`·`BatchRunLock`도 같다 |
+| SELECT 대상 표의 참조 컬럼 | — | ✗ 추출기에 없다. `StaticAnalysis.SelectTables`는 **테이블 이름 목록**일 뿐 컬럼 단위가 아니다(`AiService.cs:152`) |
+
+## 3. 분류표 — 46건
+
+번호는 보고서 순서다(5절 표 37행 = #1–37, 5-1절 접힌 9건 = #38–46).
+
+### 3-1. A층 11건 — 진행 중인 작업이 겨냥한다
+
+`실측` 칸은 Task 10 재생성 후에 채운다.
+
+| # | 등급 | 단계 | 요지 | 겨냥한 수단 | 예측 |
+| :-- | :-- | :-- | :--- | :--- | :--- |
+| 1 | 🔴 | S07 | 18개 갱신 중 10개의 UPDATE 본문이 통째로 비었다 | 검사 A `CheckStatementCountAgainstSpec` + 프롬프트 앵커 요구 | 닫힘 유력 — 문장 수 대조가 정면으로 겨냥한다 |
+| 2 | 🔴 | S14 | 지역 변수 9개가 DECLARE 없이 쓰인다(금액 3종 MONEY 소실) | 검사 D (Task 6, 미착수) | 닫힘 유력 |
+| 3 | 🟠 | S07 | 명세서에 없는 `HAVING SUM(TxAmt)=0` 집계를 원본 로직으로 서술 | 검사 C (Task 5, 워크트리 `a30b2e7f`에서 진행 중) | 닫힘 유력 |
+| 4 | 🟠 | S07 | 갱신 13 최상위 UPDATE에 WHERE 절이 없다(YMD·PGNAME 소실) | 검사 B `CheckAnchoredStatementFacts` | 닫힘 유력 — 이미 병합됨 |
+| 5 | 🟠 | S09 | IF 1 가드에 명세서에 없는 `SM.TxAmt = 0`을 덧붙였다 | 검사 C | 닫힘 유력 |
+| 6 | 🟠 | S09 | 스칼라 하위 질의를 `CROSS APPLY`로 바꿔 무결과 행이 갱신에서 빠진다 | 프롬프트 규약 2조항(의미 바꾸는 치환 금지) | **불확실** — 계획서 Task 10 Step 2가 "규약은 프롬프트 유도라 검사보다 약하다, 남을 수 있다"고 이미 적었다 |
+| 7 | 🟠 | S11 | 갱신 9 조인에서 조인 키 YMD·UseState가 빠졌다 | 검사 B | 닫힘 유력 — 이미 병합됨 |
+| 8 | 🟠 | S13 | `@v_currentStepId INT = 0` 초기값이 성공 코드와 겹쳐 실패가 성공으로 보고된다 | 검사 E (Task 7, 미착수) | 닫힘 유력 |
+| 9 | 🟠 | S14 | 비집계 2단계 조회 + `@@ROWCOUNT > 1` 분기를 `MAX(ID)` 한 문장으로 합쳤다 | 프롬프트 규약 2조항 | **불확실** — #6과 같은 이유 |
+| 12 | 🟡 | S05 | `@v_currentStepId INT = -9` 초기값이 업무 조건 코드와 겹친다 | 검사 E | 닫힘 유력 — 검사 E가 `BatchStepPlan.ErrorCodes`와 겹침을 보므로 -9도 사정권이다 |
+| 31 | ⚪ | S13 | `@po_intRetVal`을 NULL로 초기화(선언 기본값 1000과 다름) | 검사 E | **불확실** — 검사 E는 *오류 코드와 겹치는가*를 보는데 NULL은 겹침이 아니다. 계획서 Task 7의 인터페이스(`BatchStepPlan.ErrorCodes` 소비)만으로는 NULL 초기화를 못 본다 |
+
+> **#31은 진행 중인 세션에 전할 값이 있다.** 검사 E의 판정식이 "초기값 ∈ ErrorCodes"이면
+> `NULL` 초기화는 통과한다. 보고서는 #31의 실제 영향이 #8과 같은 뿌리라고 적었으므로,
+> 검사 E에 "초기값이 선언 기본값과 다른가"를 한 줄 더할 수 있으면 두 건이 함께 닫힌다.
+
+### 3-2. L층 15건 — 기계 대조가 성립한다
+
+`재료` 칸의 ✓는 2절에서 실재를 확인한 것이다.
+
+| # | 등급 | 단계 | 요지 | 검사 | 재료 |
+| :-- | :-- | :-- | :--- | :--- | :--- |
+| 15 | 🟡 | S08 | 갱신 13의 SET 대상 `CLEtc = 0`이 단계 어디에도 없다 | **F** SET 대상 컬럼 누락 | ✓ `SpecSetTarget.Columns` |
+| 16 | 🟡 | S08 | 갱신 9(easybank)의 SET을 "UPDATE 8과 동일"로만 적었다(실제로는 다르다) | **F** | ✓ 같음 |
+| 17 | 🟡 | S08 | 갱신 1·2·4·7의 SET 산식을 "원문 그대로 적용한다"로 대체 — 계수 0.01·0.1, 3인자 ROUND 모드, UDF 인자가 없다 | **G** SET 원천 표현식의 리터럴·UDF 대조 | ⚠ 표에는 있으나 `SpecSetTarget`이 표현식 열을 안 담는다 — **재료 확장** |
+| 18 | 🟡 | S12 | INSERT 2·3·4가 대상 컬럼 목록 없이 `INSERT … SELECT`다(물리 컬럼 순서 의존) | **H** INSERT 컬럼 목록 존재·개수 대조 | ⚠ `SpecSetTarget`은 UPDATE 전용 — **INSERT 매핑 표 재료 신설** |
+| 13 | 🟡 | S07 | 완료 검증이 명세서 참조 컬럼 집합 밖의 `CLTOTAL`·`PGTOTAL`·`PGINTEXPCOMM`을 읽는다 | **N** 검증 블록이 기준값 범위 밖 컬럼을 읽는가 | ✗ SELECT 대상 표의 **컬럼 단위 재료가 없다** — 추출기 신설 |
+| 20 | 🟡 | S14 | 진입부의 `SET NOCOUNT ON`·`@@TRANCOUNT` 검사·사전 ROLLBACK이 사라졌다 | **M** 배선 | ✓ `SessionOptions` — 검사는 있고 단계 경로에 없다 |
+| 33 | ⚪ | S13 | `SET NOCOUNT ON`이 없다 | **M** 배선 | ✓ 같음 |
+| 38 | 🟡 | S04 | (가) 잠금 힌트 17곳 전멸 + **대체 격리 수준 선언도 없다** | **M** 배선 | ✓ `LockHints` — 전역 SNAPSHOT 정책의 예외를 이 검사가 가른다 |
+| 39 | ⚪ | S05 | (가) 잠금 힌트 + `INDEX=CIDX_TTxMst_YMD` **인덱스 힌트**까지 소실(전역 정책이 인덱스 힌트를 다루지 않는다) | **M** 배선 + 정책 문구 | ✓ `LockHints` |
+| 22 | 🟡 | S15 | DML 범위 표의 INSERT 1 ORDER BY 칸(`INYMD, CLIENTID, PGNAME, MALLID`)이 단계 SQL에 없다 | **I** ORDER BY·GROUP BY 칸 대조 | ✓ `SpecDmlRow.OrderBy` |
+| 23 | 🟡 | S16 | 길이 무제한 `ex.Message`를 `nvarchar(200)` 컬럼에 그대로 넣는다 | **J** 계약 길이 제한 컬럼 대입 | ✓ `ControlColumn.SqlType` |
+| 27 | ⚪ | S05 | 프로시저명이 `ExecuteS05_SetttleLedgerGeneration`(`t` 3개) 오타다 | **K** 프로시저명 ↔ 단계 클래스명 일치 | ✓ 단계 마크다운 자체(`S05.md:9` ↔ `:14`) |
+| 35 | ⚪ | S15 | 검증 SQL이 정의 없는 `SourceRows` CTE를 참조하고 `AS RowCount`를 쓴다 | **L** 검증 블록 실행 가능성 | ✓ 어휘 검사 — 기준값 불필요 |
+| 41 | ⚪ | S06 | (나) `AS RowCount` — T-SQL 예약어라 구문 오류, 행 수 검증 블록이 조용히 안 돈다 | **L** | ✓ 같음 |
+| 42 | 🟡 | S16 | (나) 같은 자리 | **L** | ✓ 같음 |
+
+> (나)는 세 단계에서 정확히 2건씩 나온다(`S06`·`S15`·`S16` 각 2회, 나머지 13단계 0건).
+> `AS [RowCount]`로 바꾸면 셋이 함께 닫힌다.
+
+### 3-3. C층 5건 — 정본이 비어 있다
+
+| # | 등급 | 단계 | 요지 |
+| :-- | :-- | :-- | :--- |
+| 10 | 🟡 | S03 | 선언된 쓰기 대상 넷 중 `SourceSnapshot`·`ControlTotal`에 DML이 한 줄도 없고, 그 자리가 **산출물 어디에도 정의가 없는** `batch.usp_CaptureSourceSnapshot`·`batch.usp_WriteS03ControlTotal` EXEC으로 대체됐다 |
+| 11 | 🟡 | S03 | "S04 이후가 스냅샷을 기준 입력으로 쓴다"고 단언하지만 `S04~S15`에서 `SourceSnapshot` 참조 0건 — 단계 간 계약이 한쪽에서만 선언됐다 |
+| 24 | ⚪ | S01 | `INSERT INTO batch.ControlTotal VALUES /* … */` 컬럼·값 목록이 주석 자리표시자다 |
+| 36 | ⚪ | S16 | 승인 표는 `ControlTotal`을 S16의 대상 테이블로 적었는데 S16은 읽기만 한다 |
+| 25 | ⚪ | S02 | 실패 전이에서 `CompletedAtUtc`를 기록하지 않는다(S01·S16은 기록한다) — 계약에 **종결 상태 전이 시 완료 시각 필수** 규칙이 없다 |
+
+**한 뿌리다.** `BatchControlContract.Tables`가 고정하는 것은 `BatchRun`·`BatchStepJournal`·
+`BatchCheckpoint`·`BatchValidationIssue` 넷뿐이고, 산출물이 실제로 쓰는 `ControlTotal`·
+`SourceSnapshot`·`ValidationResult`·`BatchRunLock`은 정본이 없다. 기준값이 없으니 컬럼 수·값 수
+대조가 성립하지 않고, 그래서 **신설 단계 4개(S01·S02·S03·S16)가 `검증 불가`로 남았다.**
+
+계약을 늘리기 전에 판단할 것이 하나 있다 — `BatchControlContract`의 「담지 않는 것」 주석이
+`BatchSourceWatermark`·`BatchImmutableLedgerBaseline`을 *"어느 원천을 워터마킹하는지에 따라 컬럼이
+달라지는 Job 형상 객체"*라며 제외했다. `SourceSnapshot`이 그 부류인지, `ControlTotal`처럼 Job과
+무관하게 (RunId, StepCode, 지표명, 기대값) 골격으로 고정 가능한지가 그 설계의 첫 질문이다.
+**이 문서는 그 답을 내지 않는다** — 별도 설계 대상이다.
+
+### 3-4. P층 3건 — 프롬프트로만 유도한다
+
+| # | 등급 | 단계 | 요지 | 왜 L이 아닌가 |
+| :-- | :-- | :-- | :--- | :--- |
+| 14 | 🟡 | S08 | "-9를 이 프로시저의 실행 DML에 임의 배정하지 않는다"고 서술하면서 자기 SQL은 `SET @v_currentStepId = -9` 직후 UPDATE 8을 한다 | 산문의 부정 진술과 SQL의 대입을 대조하려면 자연어 부정을 읽어야 한다. 오탐이 확실하다 |
+| 19 | 🟡 | S13 | 오류 메시지에서 고객사·결제수단·거래일 **차원 값 연결이 빠지고** 고정 문자열만 남았다 | 기준값(Spec의 문자열 조립식)은 있으나 문자열 일치 대조는 표현 차이에서 오탐이 난다 |
+| 30 | ⚪ | S12 | 하위 SP 예외가 INSERT 4의 `-8`로 가려진다 | 원본에 TRY/CATCH가 없어 **Spec에 기준값이 없다**. 비교 대상 자체가 없으므로 규약으로만 유도한다 |
+
+### 3-5. N층 12건 — 무대응
+
+값·행 집합이 불변이고, 검사로 만들면 오탐 비용이 이득을 넘는다. **기록만 남긴다.**
+
+| # | 등급 | 단계 | 요지 | 무대응 근거 |
+| :-- | :-- | :-- | :--- | :--- |
+| 21 | 🟡 | S15 | 외부 SELECT·GROUP BY의 `LOWER` 누락 | `LOWER`는 멱등이고 세 UNION 분기가 이미 소문자화한다 |
+| 26 | ⚪ | S04 | EXISTS가 `PLTID`를 언급하지 않는다 | 집합 술어 표가 IF 1 조건으로 세 컬럼만 확정 — PLTID는 내부 투영 |
+| 28 | ⚪ | S09 | `CAST` 결합 순서(나눗셈 우선 → 곱셈 우선) | 곱셈은 정확 연산이고 통상 수수료율 정밀도에서 값이 같다 |
+| 29 | ⚪ | S10 | INSERT 1 직전에도 `-2`를 대입 | 오류 코드 집합이 늘지 않고 롤백 방향이 더 안전하다 |
+| 32 | ⚪ | S13 | 커서에서 `OUTSTATE`가 빠졌다 | `OUTSTATE = 9` 필터로 상수 — DISTINCT 결과가 같고 쓰이지도 않는다 |
+| 34 | ⚪ | S14 | `-3` 경로에 CLOSE/DEALLOCATE 추가 + 리터럴 RETURN 신설 | 커서 누수 정리는 **원본 결함을 닫는 방향**이다 |
+| 37 | ⚪ | S16 | 주석은 "CROSS JOIN을 쓰지 않는다"인데 `ON 1 = 1`을 쓴다 | 양측이 각각 한 행이라 결과가 같다. 주석 모순 |
+| 40 | ⚪ | S07 | (가) 잠금 힌트 42곳 제거 | `SNAPSHOT` 치환을 선언했다 — 전역 정책대로다(#38이 🟡인 것은 S04만 그 선언이 없어서다) |
+| 43 | ⚪ | S05 | (다) 리터럴 `RETURN <정수>` 신설 | 공통 CATCH 패턴의 결과이고 OUTPUT 계약은 유지된다 |
+| 44 | ⚪ | S13 | (다) 같음 | 같음 |
+| 45 | ⚪ | S12 | (라) `COUNT(*)` → `ISNULL(COUNT(*),0)` | `GROUP BY` 하의 `COUNT(*)`는 NULL이 될 수 없다 |
+| 46 | ⚪ | S13 | (라) 반대 방향 | 같음 |
+
+## 4. 층별 집계와 다음 회차 실행 단위
+
+| 층 | 건수 | 🔴 | 🟠 | 🟡 | ⚪ |
+| :--- | --: | --: | --: | --: | --: |
+| A 진행 중 | 11 | 2 | 7 | 1 | 1 |
+| L 검사 | 15 | 0 | 0 | 10 | 5 |
+| C 계약 | 5 | 0 | 0 | 2 | 3 |
+| P 프롬프트 | 3 | 0 | 0 | 2 | 1 |
+| N 무대응 | 12 | 0 | 0 | 1 | 11 |
+| **계** | **46** | **2** | **7** | **16** | **21** |
+
+**46건은 실행 단위 13개다.** 그중 A층 11건은 이미 착수됐으므로 다음 회차가 새로 여는 것은 **9개**다.
+
+| 단위 | 닫는 건 | 재료 | 크기 |
+| :--- | :--- | :--- | :--- |
+| **M** 객체 경로 검사 2개를 단계 경로에 배선(`CheckSessionOptions`·`CheckLockHints`) | #20 #33 #38 #39 (4건) | 있음 | 작다 — `ValidateBatchStep`에 `SpecExpectations`를 넘기는 배선이 전부 |
+| **L** 검증 블록 실행 가능성(예약어 별칭 + 미정의 CTE) | #35 #41 #42 (3건) | 불필요 | 작다 — 어휘 검사 |
+| **F** SET 대상 컬럼 누락 | #15 #16 (2건) | 있음 | 작다 |
+| **I** DML 범위 표 ORDER BY·GROUP BY 칸 대조 | #22 (1건) | 있음 | 작다 — 검사 B와 같은 재료 |
+| **J** 계약 길이 제한 컬럼 대입 | #23 (1건) | 있음 | 작다 |
+| **K** 프로시저명 ↔ 단계 클래스명 일치 | #27 (1건) | 있음 | 작다 |
+| **G** SET 원천 표현식의 리터럴·UDF 대조 | #17 (1건) | **확장** | 중간 — `SpecSetTarget`에 표현식 열 추가 |
+| **H** INSERT 컬럼 목록 존재·개수 대조 | #18 (1건) | **신설** | 중간 — INSERT 매핑 표 추출기 |
+| **C** 제어 계약 확장(4표 + 종결 상태 규칙) | #10 #11 #24 #25 #36 (5건) · 신설 단계 4개 `검증 불가` | **없음** | 크다 — 설계 선행 |
+| **P** 프롬프트 조항 | #14 #19 #30 (3건) | — | 작다 — 조항 추가 |
+
+**권고 순서.** 작고 재료가 있는 것부터다 — **M → L → F → I → J → K**가 한 묶음이다. 여섯 단위로
+12건이 닫히고, 전부 기존 재료를 쓰거나 재료가 필요 없다. 그다음이 재료를 늘리는 **G → H**(2건)이고,
+**C**는 설계가 선행해야 하므로 별도 회차다. **P** 3건은 아무 때나 얹을 수 있다.
+
+**주의 하나.** 이 순서는 진행 중인 Task 10(재생성 실측)이 끝난 뒤에 착수해야 한다. 검사를 더하면
+단계 프롬프트와 하한이 바뀌어 16단계가 다르게 생성되고, Task 10이 재려는 "🔴🟠 9건 소멸"
+측정에 잡음이 섞인다. C층은 특히 그렇다 — 계약 표가 늘면 프롬프트 표가 통째로 바뀐다.
+
+## 5. 계수 검증
+
+보고서의 세 자리가 맞는지 확인했다(카탈로그 `갱신 규약` 8조가 요구하는 대조다).
+
+- **판정 표**(보고서 1절): 🔴 2 · 🟠 7 · 🟡 16 · ⚪ 21 = 46
+- **5절 표 37행**: 🔴 2 · 🟠 7 · 🟡 14 · ⚪ 14 = 37
+- **5-1절 접힌 9건**: (가) 3 · (나) 2 · (다) 2 · (라) 2 = 9 — 등급별로 🟡 2(#38 #42) · ⚪ 7
+- 37 + 9 = 46, 등급별로도 16 = 14 + 2, 21 = 14 + 7 ✓
+- **이 문서의 층별 집계** 11 + 15 + 5 + 3 + 12 = 46, 등급 소계도 위 표와 일치 ✓
+
+## 6. 이 분류가 보증하지 않는 것
+
+- **실측이 아니다.** A층 11건의 `예측`은 검사의 판정식을 읽고 낸 정적 판단이다. Task 10
+  재생성 결과가 예측과 갈리면 갈린 쪽이 사실이다.
+- **`L`이 곧 쉽다는 뜻이 아니다.** 재료가 있다는 것과 오탐 없이 잡는다는 것은 다르다. 각 검사는
+  코퍼스 326단계 스윕으로 거짓 양성 0을 확인해야 한다(계획서 Task 9와 같은 절차).
+- **`N` 12건은 "결함이 아니다"가 아니다.** 값·행 집합이 불변이라는 뜻이고, 그중 #27(오타)·
+  #37(주석 모순)은 그대로 배포되면 사람이 읽는 자리에 남는다. 다만 도구로 잡을 값이 없다고 봤다.
+- **`C`의 답을 내지 않았다.** 네 표를 계약에 넣을지, 넣는다면 어디까지가 ReSet이 정할 사실인지는
+  별도 설계 대상이다. 이 문서는 그 질문이 있다는 것까지만 적었다.
