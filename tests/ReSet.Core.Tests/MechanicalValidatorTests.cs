@@ -7706,5 +7706,47 @@ END";
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_SyntheticSuccessCodeAbsentFromPlan_MessageDoesNotClaimAlreadyListed()
+        {
+            // 실물 모양: POQSettleBatch1/S06 (ErrorCodes=["-9","-1"], DECLARE
+            // @v_currentStepId INT = 0). 판정은 codes(목차 + 합성 성공 코드 0)로
+            // 하지만, 목차 자체에는 "0"이 없다 - 메시지가 "0은(는) 이 단계의 오류
+            // 코드 집합 (-9, -1)에 이미 있는 값이라"고 적으면 방금 인쇄한 괄호 안에
+            // 0이 보이지 않는데 "있다"고 우기는 자기모순이 된다.
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 0;\n" +
+                "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S06", "-9", "-1"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("0"));
+            Assert.DoesNotContain(
+                result.Errors, e => e.Contains("오류 코드 집합 (-9, -1)에 이미 있는 값"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_NonZeroCatchAllInitialValue_MessageDoesNotClaimMaybeSuccessCode()
+        {
+            // 실물 모양: POQSettleProc10/S16 (ErrorCodes에 "4000" 포함, DECLARE
+            // @v_currentStepId INT = 4000 - "4000"은 이 단계가 스스로 문서화한
+            // 범용 catch-all 코드다). 이 값으로 보고되는 것 자체는 설계 의도와
+            // 같으므로 "성공 코드일 수도 있습니다"라는 문구는 부정확하다.
+            var markdown = "### S16 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 4000;\n" +
+                "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S16", "-1", "-3", "0", "4000"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("4000"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("성공 코드일 수도 있습니다"));
+        }
     }
 }

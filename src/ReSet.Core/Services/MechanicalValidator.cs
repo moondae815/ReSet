@@ -5559,9 +5559,13 @@ namespace ReSet.Core.Services
         {
             if (step.ErrorCodes.Count == 0) return;
 
-            var codes = new HashSet<string>(
-                step.ErrorCodes.Select(c => c.Trim()).Where(c => c.Length > 0), StringComparer.Ordinal);
-            codes.Add("0");   // 성공 코드는 목차에 없을 수도 있다
+            var declaredCodes = step.ErrorCodes
+                .Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
+            var declaredCodeSet = new HashSet<string>(declaredCodes, StringComparer.Ordinal);
+
+            var codes = new HashSet<string>(declaredCodeSet, StringComparer.Ordinal);
+            codes.Add("0");   // 성공 코드는 목차에 없을 수도 있다 - 판정에는 넣지만,
+                              // 메시지에서는 declaredCodeSet과 구분해 사실대로 밝힌다(아래).
 
             var reported = new HashSet<(string Name, string Value)>();
 
@@ -5585,12 +5589,50 @@ namespace ReSet.Core.Services
                     if (!codes.Contains(initial)) continue;
                     if (!reported.Add((name, initial))) continue;
 
-                    result.Errors.Add(
+                    // declaredInPlan이 false면 codes.Contains(initial)이 성립하는 유일한
+                    // 경로는 위에서 합성으로 더한 "0"뿐이다(declaredCodeSet에는 없고
+                    // codes에만 "0"이 있다) - 그래서 initial == "0"이 보장된다.
+                    var declaredInPlan = declaredCodeSet.Contains(initial);
+
+                    // [픽스 라운드 1 - Minor] "성공 코드일 수도 있습니다"는 초기값이
+                    // 실제로 `0`일 때만 사실이다. 실측(POQSettleProc10/S16 등 6건)은
+                    // 초기값이 그 단계가 스스로 문서화한 범용 catch-all 코드(예:
+                    // 4000, "원본 TRY...CATCH 실행 오류에 대응한다")인 경우로, 그
+                    // 코드로 보고되는 것 자체는 설계 의도와 같다 - 결함은 "성공으로
+                    // 위장"이 아니라 "서로 다른 장애 원인이 같은 코드 하나로
+                    // 뭉뚱그려진다"는 것이다. 초기값이 `0`인지로 표현을 가른다.
+                    var outcomeClause = initial == "0"
+                        ? "DML 바깥에서 난 장애가 성공으로 보고됩니다"
+                        : "DML 바깥에서 난 장애가 이 단계 안의 다른 원인과 같은 코드로 뭉뚱그려 보고됩니다";
+
+                    var prefix =
                         $"{step.Code} 섹션이 `{name}`을(를) `{initial}`로 초기화하고 CATCH에서 그 값을 " +
-                        $"`@po_intRetVal`로 돌려줍니다. `{initial}`은(는) 이 단계의 오류 코드 집합 " +
-                        $"({string.Join(", ", step.ErrorCodes)})에 이미 있는 값이라, DML 바깥에서 난 장애가 " +
-                        "업무 코드(성공 코드일 수도 있습니다)로 보고됩니다. 어느 코드와도 겹치지 않는 " +
-                        "값으로 초기화하십시오.");
+                        "`@po_intRetVal`로 돌려줍니다. ";
+                    var suffix = $" {outcomeClause}. 어느 코드와도 겹치지 않는 값으로 초기화하십시오.";
+
+                    // [픽스 라운드 1 - Critical] 판정은 codes(목차 ErrorCodes + 합성
+                    // 성공 코드 "0")로 하면서 메시지가 항상 step.ErrorCodes만 인쇄하면,
+                    // "0"이 목차에 없는 단계(실측 POQSettleBatch1/S06,
+                    // ErrorCodes=["-9","-1"])에서 "0은(는) 이 단계의 오류 코드 집합
+                    // (-9, -1)에 이미 있는 값이라"는 문장이 나간다 - 방금 인쇄한 괄호
+                    // 안에 0이 안 보이는데 "있다"고 우기는 자기모순이다. 코퍼스 스윕
+                    // (326개 단계 파일 · 21개 Job)에서 이 검사가 낸 129건 중 70건이
+                    // 이 모순을 그대로 실었다(실측). 인쇄하는 근거와 판정 근거를
+                    // 일치시킨다 - 목차에 실제로 있는 값이면 그대로 인쇄하고, 성공
+                    // 코드 0이 목차에 없어 합성으로 더해진 경우면 그 사실을 두 문장으로
+                    // 따로 밝힌다(한 문장에 욱여넣으면 "…읽습니다이라"처럼 어색해진다).
+                    var message = declaredInPlan
+                        ? prefix +
+                          $"`{initial}`은(는) 이 단계의 오류 코드 집합 " +
+                          $"({string.Join(", ", declaredCodes)})에 이미 있는 값입니다." +
+                          suffix
+                        : prefix +
+                          $"이 단계의 목차 오류 코드 집합은 ({string.Join(", ", declaredCodes)})뿐이라 " +
+                          $"`{initial}`은(는) 그 목록에 없습니다. 다만 이 저장소는 반환값이 `0`이면 " +
+                          "목차 기재 여부와 무관하게 무조건 성공으로 해석합니다." +
+                          suffix;
+
+                    result.Errors.Add(message);
                 }
             }
         }
