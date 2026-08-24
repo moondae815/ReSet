@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -15,10 +16,24 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> GroupBy,
         IReadOnlyList<string> OrderBy);
 
+    /// <summary>
+    /// UPDATE 갱신 절의 SET 대상만 담는다 - INSERT·DELETE 절은 담지 않는다.
+    ///
+    /// [왜 UPDATE 전용인가 - 리뷰 라운드 1 실측]
+    /// `output/Procedures/*/docs/Spec.md` 전체에서 `(삽입 N`·`(삭제 N`(서수 괄호)은
+    /// 0건이다. INSERT·DELETE의 "대상 테이블" 제목은 서수 없이 나온다
+    /// (`dbo.UP_Util_PG_Client_CMRate_Ins`·`dbo.UP_UTIL_SETTLE_CANCEL_INS`·
+    /// `dbo.UP_UTIL_STAT_PGCOLLECT_INS` 등 11개 이상 파일). 그 표는 UPDATE 갱신 절과
+    /// 모양도 다르다 - UPDATE는 "원천 표현식 (SET)" 열을 갖고 INSERT는 삽입 컬럼
+    /// 매핑이다. 서수 없는 제목에 <see cref="Ordinal"/>을 억지로 만들어 붙이면 그
+    /// 값이 무엇을 뜻하는지 아무도 모르게 되므로, 이 계약을 UPDATE 전용으로 좁힌다.
+    /// </summary>
     public sealed record SpecSetTarget(int Ordinal, string TargetTable, IReadOnlyList<string> Columns);
 
     public sealed record SpecLocalVariable(string Name, string TypeOrKind, bool IsSystemValue);
 
+    /// <param name="SetTargets">UPDATE 갱신 절의 SET 대상만 담는다. INSERT·DELETE
+    /// 절은 담지 않는다 - 이유는 <see cref="SpecSetTarget"/> 참고.</param>
     public sealed record SpecStatementFacts(
         IReadOnlyList<SpecDmlRow> DmlRows,
         IReadOnlyList<SpecSetTarget> SetTargets,
@@ -43,8 +58,15 @@ namespace ReSet.Core.Services
         private const string LocalVariableHeading = "### 지역 변수 및 시스템 값";
         private const string SystemValueMarker = "SQL Server 시스템 값";
 
+        // UPDATE만 잡는다 - INSERT|DELETE로 넓히면 안 된다. 실물 코퍼스 실측:
+        // `output/Procedures/*/docs/Spec.md` 전체에서 `(삽입 N`·`(삭제 N`(서수 괄호)은
+        // 0건이고, INSERT·DELETE의 "대상 테이블" 제목은 서수 없이 나온다(11개 이상
+        // 파일). 그리고 그 표는 UPDATE 갱신 절과 모양이 다르다 - UPDATE는
+        // "원천 표현식 (SET)" 열을 갖고 INSERT는 삽입 컬럼 매핑이다. 서수 없는
+        // 제목에 억지로 Ordinal을 만들어 붙이면 그 값이 무엇을 뜻하는지 아무도
+        // 모르게 되므로, SpecSetTarget은 UPDATE 갱신 절 전용 계약으로 좁힌다.
         private static readonly Regex UpdateSectionPattern = new(
-            @"^###\s+(?<kind>UPDATE|INSERT|DELETE)\s+대상 테이블:\s*(?<table>[^\(]+?)\s*\(\s*(?:갱신|삽입|삭제)\s*(?<ordinal>\d+)",
+            @"^###\s+UPDATE\s+대상 테이블:\s*(?<table>[^\(]+?)\s*\(\s*갱신\s*(?<ordinal>\d+)",
             RegexOptions.Compiled);
 
         private static readonly Regex StatementCellPattern = new(
@@ -77,7 +99,7 @@ namespace ReSet.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    Serilog.Log.Warning(ex, "명세서 기계 확정 표를 읽지 못했습니다 - Spec: {Spec}", fileName);
+                    Log.Warning(ex, "명세서 기계 확정 표를 읽지 못했습니다 - Spec: {Spec}", fileName);
                 }
             }
 
