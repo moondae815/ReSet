@@ -42,9 +42,14 @@ namespace ReSet.Core.Services
 
     /// <param name="StatusColumn">상태 어휘를 담은 컬럼. 없으면 null.</param>
     /// <param name="PrimaryKey">
-    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 두지 않는다 -
-    /// 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
+    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 원칙적으로 두지
+    /// 않는다 - 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
     /// 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    ///
+    /// 예외는 batch.BatchControlTotal이다. 그 표에는 자연 키가 있다 - 같은 실행의 같은
+    /// 단계가 같은 지표를 두 번 낼 이유가 없고, 두 번 들어오면 검증 단계가 어느 행을
+    /// 기준으로 삼을지 모른 채 대조가 갈린다. 위 규칙의 이유가 "자연 키가 없다"였으므로,
+    /// 자연 키가 있는 표에는 그 이유가 적용되지 않는다.
     /// </param>
     public sealed record ControlTable(
         string Name,

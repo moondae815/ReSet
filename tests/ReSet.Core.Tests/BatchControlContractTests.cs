@@ -124,8 +124,10 @@ public sealed class BatchControlContractTests
         Assert.Contains("CONSTRAINT PK_BatchCheckpoint PRIMARY KEY (RunId, StepCode)", ddl);
     }
 
-    // 전이가 없는 테이블에는 키를 두지 않는다. 한 단계가 같은 IssueCode를 여러 번
-    // 낼 수 있어 자연 키가 없고, 대리 키를 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    // BatchValidationIssue에 키를 두지 않는 이유는 자연 키가 없어서다 - 한 단계가 같은
+    // IssueCode를 여러 번 낼 수 있고, 대리 키를 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    // 계약 전체의 규칙이 아니다: 같은 ProducerInsertsOnly라도 BatchControlTotal에는
+    // 자연 키가 있어 PK를 둔다(ControlTotal_KeepsAPrimaryKeyEvenThoughItHasNoTransition).
     [Fact]
     public void RenderDdl_DoesNotDeclareAPrimaryKeyForTheInsertOnlyTable()
     {
