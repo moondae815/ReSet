@@ -585,10 +585,27 @@ git commit -m "fix: 프롬프트 표가 IDENTITY 없는 표에 발급 수단을 
 착수 가능 여부를 이렇게 확인한다.
 
 ```bash
-git log --oneline axis-b-step-check | grep -E "검사 (D|E)"
+grep -c -E 'CheckSpecLocalVariablesDeclared|CheckStepIdInitialValue' \
+  src/ReSet.Core/Services/MechanicalValidator.cs
 ```
 
-두 줄이 다 나오면 진행한다. 아니면 **Task 4까지로 이 계획서를 닫고** 그 회차가 끝난 뒤 다시 연다.
+**`4` 이상이면 게이트가 열린 것이다** — 두 검사의 정의 둘과 `ValidateBatchStep`의 호출 둘이
+모두 있다는 뜻이다. 정의만 있고 배선이 없으면 `2`가 나오는데, 그때는 아직 착수하지 않는다.
+
+그래도 그 파일에 **다른 세션의 작업이 진행 중일 수 있다.** 게이트가 열려도 착수 전에
+`git log --oneline -3 -- src/ReSet.Core/Services/MechanicalValidator.cs`로 최근 커밋 시각을 보고,
+그 회차가 끝났는지 확인한다. 게이트가 열리지 않았으면 **Task 4까지로 이 계획서를 닫고**
+그 회차가 끝난 뒤 다시 연다.
+
+> **왜 커밋 메시지로 판정하지 않는가 — 이 게이트가 한 번 틀렸다.**
+> 초판은 `git log --oneline axis-b-step-check | grep -E "검사 (D|E)"`였다. 검사 D의 커밋
+> 메시지가 `feat: 명세서 지역 변수 표의 변수가 선언 없이 쓰이는지 본다`라 그 문자열이 없어,
+> **게이트가 실제로 열린 뒤에도 "미개방"으로 읽혔다.** 판정 근거를 실체가 아니라 표기에
+> 걸어 둔 것이 원인이다.
+>
+> 같은 뿌리의 실패가 이 회차에 세 번 있었다 — 앵커 방식이 주석 위치에 기대다 무너진 것,
+> 분류표가 "검사가 병합됐으니 닫힘 유력"으로 예측했다가 그 검사가 재료에 닿지 못해 틀린 것,
+> 그리고 이 게이트다. **판정은 그 사실이 실제로 성립하는 자리를 봐야 한다.**
 
 ---
 
