@@ -83,8 +83,14 @@ END";
 
             var leaf = DdlStatementEnumerator.Leaves(DdlStatementEnumerator.Enumerate(ddl)).Single();
 
-            // CREATE PROC > BEGIN..END > IF > BEGIN..END > IF > BEGIN..END = 6겹
-            Assert.True(leaf.NestingDepth >= 4, $"깊이가 {leaf.NestingDepth}로 너무 얕다");
+            // 이 잎(UPDATE)을 품고 있는 문장은 정확히 6개다: CreateProcedureStatement,
+            // 바깥 BeginEndBlockStatement(SP 본문), 바깥 IfStatement(IF @x=1),
+            // 중간 BeginEndBlockStatement, 안쪽 IfStatement(IF @y=2), 안쪽
+            // BeginEndBlockStatement(UPDATE를 직접 담은 블록). TSql160Parser로 고정돼
+            // 있어 파서 버전 편차가 없으므로 느슨한 하한(>=4) 대신 정확한 값을 단언한다 -
+            // 조상 하나를 덜 세거나 겹을 잘못 붙이는 회귀가 나도 하한 검사는 통과해
+            // 놓친다.
+            Assert.Equal(6, leaf.NestingDepth);
         }
 
         [Fact]
