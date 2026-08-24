@@ -376,6 +376,7 @@ namespace ReSet.Core.Services
                     SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
+                    SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
                 }
             }
 
@@ -5846,6 +5847,76 @@ namespace ReSet.Core.Services
                     $"{row.Kind} {row.Ordinal} 행의 최상위 술어 컬럼은 " +
                     $"`{string.Join(", ", row.PredicateColumns)}`뿐입니다 — " +
                     "조건을 더하면 원본이 처리하던 행이 처리되지 않습니다.");
+            }
+        }
+
+        /// <summary>
+        /// 명세서 지역 변수 표의 변수가 단계에서 쓰이는데 DECLARE가 없는지 본다.
+        ///
+        /// [POQSettleBatch1 축 B 감사 S14 🔴]
+        /// 지역 변수 9개가 선언 없이 쓰였다. 그중 @v_intCLTotal·@v_intCLComm·@v_intCLVT는
+        /// 원본에서 MONEY인데 이름은 int를 시사한다 - 이행자가 명세서 표를 따로 보지 않으면
+        /// int로 선언해 금액이 절삭된다. 그래서 메시지에 타입을 함께 싣는다.
+        ///
+        /// [시스템 값을 빼는 이유 - 이중 방어]
+        /// 표는 @@ERROR·@@ROWCOUNT를 시스템 값 구분으로 함께 싣고, SpecLocalVariable은
+        /// 그 구분 칸을 읽어 IsSystemValue를 매긴다(SpecStatementFactsExtractor 참고).
+        /// 그런데 실측(output/Procedures/dbo.UP_UTIL_SETTLE_EXPECT_PROC/docs/Spec.md)에서
+        /// 이 표의 헤더가 "데이터 타입"뿐이라("또는 구분"이 없다) 타입 칸 자체를 못
+        /// 찾고, @@ERROR 행의 구분 칸 문구도 "시스템 정수 값"이라 추출기의 시스템 값
+        /// 마커("SQL Server 시스템 값")와 글자가 달라 IsSystemValue가 False로 나온다.
+        /// 이 상태를 그대로 믿으면 SQL Server 문법이 애초에 DECLARE를 허락하지 않는
+        /// @@ERROR에 "선언하라"는 거짓 오류가 나간다. `@@`(이중 골뱅이) 접두사는
+        /// T-SQL 문법상 사용자가 DECLARE할 수 없는 시스템 전역값의 표식이므로,
+        /// IsSystemValue 판정과 별개로 항상 안전하게 제외할 수 있다.
+        /// </summary>
+        private static void CheckSpecLocalVariablesDeclared(
+            IReadOnlyList<SpecStatementFacts> facts,
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var variables = facts.SelectMany(f => f.LocalVariables)
+                .Where(v => !v.IsSystemValue && !v.Name.StartsWith("@@", StringComparison.Ordinal))
+                .DistinctBy(v => v.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (variables.Count == 0) return;
+
+            // 같은 변수를 여러 펜스에서 똑같이 위반해도 오류는 한 번만 낸다 - 메시지가
+            // 글자 그대로 같아 중복이 재생성 프롬프트에 같은 지적을 반복해 싣는다
+            // (CheckAnchoredStatementExtras가 같은 (앵커, 종류)를 한 번만 대조하는 것과
+            // 같은 이유). 다만 "이미 만족됐다"는 판단은 여기서 기억하지 않는다 - 펜스1이
+            // 선언·사용을 모두 갖춰도 펜스2가 독립적으로 미선언 사용을 하면 그것은 여전히
+            // 결함이다(바로 위 주석 "선언이 있는지는 펜스별로 본다"가 막으려는 그 결함).
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            {
+                // 선언이 있는지는 펜스별로 본다 - 문서 전체를 한 덩어리로 보면
+                // 다른 펜스의 선언이 이 펜스의 사용을 덮는다.
+                foreach (var variable in variables)
+                {
+                    // 접두사 겹침(`@v_int`가 `@v_intCLTotal`에 매칭)을 막는다 -
+                    // 변수명 첫 글자 `@`는 단어 문자가 아니므로 시작 쪽은
+                    // 부정 후방탐색으로, 끝 쪽은 \b로 막는다.
+                    var used = Regex.IsMatch(cleaned, $@"(?<![\w@]){Regex.Escape(variable.Name)}\b",
+                        RegexOptions.IgnoreCase);
+                    if (!used) continue;
+
+                    var declared = Regex.IsMatch(
+                        cleaned, $@"\bDECLARE\b[^;]*?{Regex.Escape(variable.Name)}\b",
+                        RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                    if (declared) continue;
+
+                    if (!reported.Add(variable.Name)) continue;
+
+                    var type = string.IsNullOrWhiteSpace(variable.TypeOrKind)
+                        ? "명세서 지역 변수 표 참조" : variable.TypeOrKind;
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 `{variable.Name}`을(를) 선언 없이 씁니다. 명세서 지역 변수 표는 " +
+                        $"이 변수의 타입을 `{type}`으로 확정합니다 — DECLARE를 두고 그 타입을 그대로 쓰십시오. " +
+                        "타입을 이름으로 추측하면 금액 변수가 정수로 선언되어 절삭됩니다.");
+                }
             }
         }
 

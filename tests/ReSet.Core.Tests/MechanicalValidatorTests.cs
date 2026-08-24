@@ -7518,5 +7518,125 @@ END";
 
             Assert.Single(result.Errors, e => e.Contains("TxAmt") && e.Contains("명세서에 없는"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 D - 지역 변수 선언. S14 🔴: 지역 변수 9개가 DECLARE 없이 쓰였고
+        // 그중 금액 3종이 원본 MONEY인데 변수명은 int를 시사한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithVariables(
+            params SpecLocalVariable[] variables) =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(), Array.Empty<SpecSetTarget>(), variables)
+            };
+
+        [Fact]
+        public void ValidateBatchStep_SpecVariableUsedWithoutDeclare_ShouldBeAnErrorWithItsType()
+        {
+            var markdown = "### S14 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 0;\n" +
+                "SET @v_intCLTotal = 100;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(new SpecLocalVariable("@v_intCLTotal", "MONEY", false)));
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_intCLTotal") && e.Contains("MONEY"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_SystemValues_AreNotRequiredToBeDeclared()
+        {
+            var markdown = "### S14 단계\n\n```sql\nIF @@ERROR <> 0 RETURN -1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(new SpecLocalVariable("@@ERROR", "SQL Server 시스템 값", true)));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@@ERROR"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_VariableNotUsedByTheStep_IsSilent()
+        {
+            // 단계가 그 변수를 아예 쓰지 않으면 선언을 요구할 이유가 없다.
+            var markdown = "### S14 단계\n\n```sql\nSELECT 1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(new SpecLocalVariable("@v_intCLTotal", "MONEY", false)));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_intCLTotal"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_SystemValueNotFlaggedButDoubleAtPrefixed_IsSilent()
+        {
+            // 실측: output/Procedures/dbo.UP_UTIL_SETTLE_EXPECT_PROC/docs/Spec.md의
+            // 지역 변수 표는 헤더가 "데이터 타입"뿐이라("또는 구분"이 없다) 타입 칸을
+            // 못 찾고, @@ERROR 행의 구분 칸도 "시스템 정수 값"이라 추출기의
+            // SystemValueMarker("SQL Server 시스템 값")와 글자가 달라 IsSystemValue가
+            // False로 나온다(실행 재현). 이 상태를 그대로 신뢰하면 SQL Server가 DECLARE를
+            // 애초에 허락하지 않는 @@ERROR에 "선언하라"는 오류가 나 거짓 결함이 된다.
+            // `@@` 접두사는 T-SQL 문법상 사용자가 DECLARE할 수 없는 시스템 전역값의
+            // 표식이라 IsSystemValue 값과 무관하게 항상 안전하게 제외할 수 있다.
+            var markdown = "### S14 단계\n\n```sql\nIF @@ERROR <> 0 RETURN -1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(new SpecLocalVariable("@@ERROR", string.Empty, false)));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@@ERROR"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_PrefixOverlappingVariableName_DoesNotFalselyMatch()
+        {
+            // `@v_int`가 명세서 표에 있어도 단계 SQL에는 `@v_intCLTotal`만 있으면
+            // `@v_int`는 실제로 쓰이지 않은 것이다 - 접두사 겹침으로 오매치되면 안 된다.
+            var markdown = "### S14 단계\n\n```sql\n" +
+                "DECLARE @v_intCLTotal MONEY = 0;\n" +
+                "SET @v_intCLTotal = 100;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(new SpecLocalVariable("@v_int", "INT", false)));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("`@v_int`"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_MultipleUndeclaredVariables_EachReportedWithItsOwnType()
+        {
+            // S14 실물 모양: 여러 변수가 동시에 선언 없이 쓰인다. 금액 변수마다
+            // 자기 타입(MONEY)이 실려야 이행자가 int로 잘못 선언하지 않는다.
+            var markdown = "### S14 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 0;\n" +
+                "SET @v_intCLTotal = 100;\n" +
+                "SET @v_intCLComm = 10;\n" +
+                "SET @v_intCLVT = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithVariables(
+                    new SpecLocalVariable("@v_intCLTotal", "MONEY", false),
+                    new SpecLocalVariable("@v_intCLComm", "MONEY", false),
+                    new SpecLocalVariable("@v_intCLVT", "MONEY", false)));
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_intCLTotal") && e.Contains("MONEY"));
+            Assert.Contains(result.Errors, e => e.Contains("@v_intCLComm") && e.Contains("MONEY"));
+            Assert.Contains(result.Errors, e => e.Contains("@v_intCLVT") && e.Contains("MONEY"));
+        }
     }
 }
