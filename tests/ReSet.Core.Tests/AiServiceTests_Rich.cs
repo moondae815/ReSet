@@ -1788,6 +1788,7 @@ END",
             var client = new OpenAiClient(new HttpClient(new MockHttpMessageHandler(mockResponse)), "k", "https://api.openai.com/v1", "gpt-4o");
             IAiService service = new AiService(client, 0.2f);
             var result = await service.GenerateSpecificationAsync(ReferencedFunctionSpDefinition(ddl), "rules");
+            Assert.NotNull(result.SystemPrompt);
             return result.SystemPrompt;
         }
 

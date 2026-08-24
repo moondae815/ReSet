@@ -411,7 +411,7 @@ END;
 
             Assert.True(result.IsParsedSuccessfully);
             var has = result.ReferencedColumnsPerTable.TryGetValue("dbo.TPGProperty", out var cols);
-            Assert.False(has && cols.Contains("PLTID", StringComparer.OrdinalIgnoreCase));
+            Assert.False(has && cols!.Contains("PLTID", StringComparer.OrdinalIgnoreCase));
         }
 
         [Fact]

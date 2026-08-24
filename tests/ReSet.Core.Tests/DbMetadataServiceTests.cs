@@ -50,12 +50,10 @@ namespace ReSet.Core.Tests
             var service = new DbMetadataService();
             // Need to use reflection to call private method
             var method = typeof(DbMetadataService).GetMethod("GetDatabaseCompatibilityLevelAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (method != null)
-            {
-                var task = (Task<int>)method.Invoke(service, new object?[] { invalidConnString, null, CancellationToken.None });
-                var result = await task;
-                Assert.Equal(160, result);
-            }
+            Assert.NotNull(method);
+            var task = Assert.IsType<Task<int>>(method.Invoke(service, new object?[] { invalidConnString, null, CancellationToken.None }));
+            var result = await task;
+            Assert.Equal(160, result);
         }
 
         [Fact]
@@ -64,12 +62,10 @@ namespace ReSet.Core.Tests
             var invalidConnString = "Server=invalid_server;Database=invalid_db;Integrated Security=true;TrustServerCertificate=true;Connection Timeout=1;";
             var service = new DbMetadataService();
             var method = typeof(DbMetadataService).GetMethod("GetObjectTypeAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (method != null)
-            {
-                var task = (Task<string>)method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None });
-                var result = await task;
-                Assert.Equal("UNKNOWN", result);
-            }
+            Assert.NotNull(method);
+            var task = Assert.IsType<Task<string>>(method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None }));
+            var result = await task;
+            Assert.Equal("UNKNOWN", result);
         }
 
         [Fact]
@@ -78,12 +74,10 @@ namespace ReSet.Core.Tests
             var invalidConnString = "Server=invalid_server;Database=invalid_db;Integrated Security=true;TrustServerCertificate=true;Connection Timeout=1;";
             var service = new DbMetadataService();
             var method = typeof(DbMetadataService).GetMethod("GetTableDescriptionAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (method != null)
-            {
-                var task = (Task<string>)method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None });
-                var result = await task;
-                Assert.Equal("", result);
-            }
+            Assert.NotNull(method);
+            var task = Assert.IsType<Task<string>>(method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None }));
+            var result = await task;
+            Assert.Equal("", result);
         }
 
         [Fact]
@@ -92,14 +86,12 @@ namespace ReSet.Core.Tests
             var invalidConnString = "Server=invalid_server;Database=invalid_db;Integrated Security=true;TrustServerCertificate=true;Connection Timeout=1;";
             var service = new DbMetadataService();
             var method = typeof(DbMetadataService).GetMethod("GetRawDependenciesAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (method != null)
+            Assert.NotNull(method);
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
             {
-                await Assert.ThrowsAnyAsync<Exception>(async () => 
-                {
-                    var task = (Task<List<DependencyInfo>>)method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None });
-                    await task;
-                });
-            }
+                var task = Assert.IsType<Task<List<DependencyInfo>>>(method.Invoke(service, new object[] { invalidConnString, "db", "dbo", "test", CancellationToken.None }));
+                await task;
+            });
         }
     }
 }
