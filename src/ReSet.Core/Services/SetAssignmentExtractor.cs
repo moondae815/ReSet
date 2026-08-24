@@ -77,22 +77,26 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 원문 토큰을 그대로 이어 붙인다.
+        /// 원문 토큰을 그대로 이어 붙인 뒤 개행만 접는다.
         ///
         /// [자기 사본을 쓰는 이유] `DmlScopeExtractor.TextOf`는 그 클래스 내부 private이라
         /// 부를 수 없다. `DerivedTableColumnExtractor.cs:165`가 이미 같은 로직의 자기
         /// 사본을 갖고 있는 것이 이 코드베이스의 관례다.
         ///
-        /// [Fix Round 1 - Important 1: 토큰 단위로 공백을 접는 이유] 이전 구현은 모든
-        /// 토큰의 Text를 먼저 통째로 이어 붙인 뒤 결과 문자열에서 공백을 접었다. 그러면
-        /// 문자열 리터럴 토큰의 Text 안에 든 공백(리터럴 값의 일부)까지 정렬 공백과
-        /// 구분 없이 뭉개진다 - `'a  b'`가 `'a b'`가 되어 "요약·정규화 금지" 계약을
-        /// 어긴다. ScriptDom 토큰 스트림에서 공백/개행은 그 자체로 별도 토큰
-        /// (`TSqlTokenType.WhiteSpace`)이므로, 그 토큰만 공백 하나로 치환하고 그 외
-        /// 토큰의 Text는 손대지 않고 그대로 이으면 정렬 공백(원래 목적)만 접히고
-        /// 리터럴 내부 공백은 보존된다. `DerivedTableColumnExtractor.TextOf`도 같은
-        /// 결함을 갖고 있지만 그쪽은 서술 텍스트용이라 "요약 금지" 계약이 없다 -
-        /// 이 표는 계약이 더 엄해 선례보다 엄격하게 처리한다.
+        /// [Fix Round 2 - 왜 개행만 접고 스페이스·탭은 그대로 두는가] 라운드 1은 "이 표는
+        /// '요약 금지' 계약이 더 엄해서 형제 추출기(`DerivedTableColumnExtractor` 등)보다
+        /// 엄격하게 리터럴 내부까지 보존한다"고 적었다 - 그 축이 틀렸다. 진짜 근거는
+        /// 렌더/검증 왕복이다: `AiService`가 표를 렌더할 때 이 값은
+        /// `MarkdownTableCellCodec.Escape`를 거치고, `Escape`는 개행만 공백으로 바꾼다
+        /// (스페이스·탭은 손대지 않는다). `MechanicalValidator`는 모델이 그 렌더된
+        /// 값을 베껴 온 텍스트를 **접히지 않은 원본 fact**와 대조하므로, fact에 개행이
+        /// 남아 있으면 모델이 볼 수 있는 값(렌더된 값)으로는 그 대조를 절대 통과할 수
+        /// 없다 - 개행이 있는 값은 어떤 산출물도 만족시킬 수 없는 요구가 된다. 그래서
+        /// 추출기는 `Escape`가 접는 만큼만, 정확히 그만큼만 접어야 한다: 더 접으면(예:
+        /// 스페이스·탭까지 하나로 뭉개면) 형제 추출기들처럼 값 충실도를 공짜로 버리고,
+        /// 덜 접으면(개행을 보존하면) 왕복이 성립하지 않는다. `MarkdownTableCellCodec
+        /// .CollapseNewlines`를 `Escape`와 공유해서 이 규칙이 두 곳에서 따로 어긋나는
+        /// (드리프트) 것을 구조적으로 막는다.
         /// </summary>
         private static string TextOf(TSqlFragment? fragment)
         {
@@ -106,20 +110,10 @@ namespace ReSet.Core.Services
             var sb = new StringBuilder();
             for (var i = first; i <= last; i++)
             {
-                var token = stream[i];
-                if (token.TokenType == TSqlTokenType.WhiteSpace)
-                {
-                    // 정렬 공백·개행은 표 셀 붕괴를 막기 위해 공백 하나로 접는다.
-                    // 리터럴 내부 공백은 이 분기를 타지 않고(별도 토큰이 아니라
-                    // 리터럴 토큰 자신의 Text 안에 있으므로) 아래 else 경로로
-                    // 그대로 보존된다.
-                    if (sb.Length > 0 && sb[sb.Length - 1] != ' ') sb.Append(' ');
-                    continue;
-                }
-                sb.Append(token.Text);
+                sb.Append(stream[i].Text);
             }
 
-            return sb.ToString().TrimEnd(' ');
+            return MarkdownTableCellCodec.CollapseNewlines(sb.ToString());
         }
     }
 }

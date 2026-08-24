@@ -115,10 +115,14 @@ END";
         }
 
         [Fact]
-        public void Extract_AlignmentWhitespaceBetweenTokens_ShouldStillCollapseToSingleSpace()
+        public void Extract_AlignmentWhitespaceBetweenTokens_ShouldBePreservedVerbatim()
         {
-            // 리터럴 보존을 고치더라도 토큰 사이 정렬 공백은 여전히 한 칸으로 접혀야
-            // 한다 - 이 접기가 원래 CollapseWhitespace를 둔 이유(표 셀 붕괴 방지)다.
+            // Fix Round 2 정정. 라운드 1은 "정렬 공백도 한 칸으로 접는다"고 주장했지만
+            // 그 근거(CollapseWhitespace가 표 셀 붕괴를 막는다)가 틀렸다 -
+            // MarkdownTableCellCodec.Escape를 직접 읽어보면 렌더는 개행만 공백으로
+            // 바꾸고 스페이스·탭은 손대지 않는다. 추출기가 렌더보다 더 접으면 그만큼
+            // 값 충실도를 공짜로 버리는 것이다. 그래서 개행이 없는 정렬 공백은 이제
+            // 그대로 보존한다 - "추출기의 정규화는 렌더의 정규화와 정확히 같아야 한다."
             const string ddl = @"CREATE PROCEDURE dbo.P AS
 BEGIN
     DECLARE @a INT
@@ -127,24 +131,81 @@ END";
 
             var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
 
-            Assert.Equal("@a + 1", fact.Expression);
+            Assert.Equal("@a     +     1", fact.Expression);
         }
 
         [Fact]
         public void Extract_MultilineExpression_ShouldCollapseNewlineToSingleSpace()
         {
-            // 개행이 든 식이 표 셀을 깨뜨리지 않아야 한다 - 토큰 단위 처리로 바꿔도
-            // 유지되어야 하는 원래 계약.
-            const string ddl = @"CREATE PROCEDURE dbo.P AS
-BEGIN
-    DECLARE @a INT
-    SET @a = @a +
-        1
-END";
+            // 개행이 든 식이 표 셀을 깨뜨리지 않아야 한다 - MarkdownTableCellCodec.Escape가
+            // 개행을 공백 하나로 바꾸는 것과 문자 단위로 같은 치환이어야 모델이 베낀
+            // 값(렌더 결과)과 검증기가 대조하는 원본 fact가 어긋나지 않는다. 계속
+            // 줄이어지지 않도록 연속 라인 첫 칸부터 시작해 정렬 공백이 섞이지 않게 한다.
+            const string ddl = "CREATE PROCEDURE dbo.P AS\nBEGIN\n    DECLARE @a INT\n    SET @a = @a +\n1\nEND";
 
             var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
 
             Assert.Equal("@a + 1", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_LiteralWithEmbeddedNewline_ShouldCollapseToSingleSpace_LikeEscapeDoes()
+        {
+            // Fix Round 2 - 새 Important. 재리뷰어가 실물 프로브로 확인한 결함: 리터럴
+            // 안의 진짜 개행이 그대로 보존되고 있었다. MarkdownTableCellCodec.Escape는
+            // 개행을 공백 하나로 바꾸므로(왕복 가능), 추출기도 같은 치환을 해야
+            // "모델이 볼 수 있는 값(렌더된 값)"과 fact가 일치한다. 리터럴 안이라고
+            // 예외를 두지 않는다 - Escape는 셀 전체 문자열에 적용되고 리터럴 여부를
+            // 구분하지 않는다.
+            const string ddl = "CREATE PROCEDURE dbo.P AS\nBEGIN\n    DECLARE @v VARCHAR(10)\n    SET @v = 'a\nb'\nEND";
+
+            var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("'a b'", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_LiteralWithConsecutiveNewlines_ShouldMatchEscapeBehaviorExactly()
+        {
+            // Escape는 "\n"을 하나씩 개별 치환하므로 연속 개행 둘은 공백 둘이 된다
+            // (하나로 더 접지 않는다). 추출기가 \s+ 정규식으로 접으면 공백 하나로
+            // 뭉개져 Escape의 실제 산출과 어긋난다 - 그래서 정규식이 아니라 Escape와
+            // 문자 단위로 동일한 치환(MarkdownTableCellCodec.CollapseNewlines)을 쓴다.
+            const string ddl = "CREATE PROCEDURE dbo.P AS\nBEGIN\n    DECLARE @v VARCHAR(10)\n    SET @v = 'a\n\nb'\nEND";
+
+            var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("'a  b'", fact.Expression);
+            Assert.Equal(MarkdownTableCellCodec.Escape("'a\n\nb'"), fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_LiteralWithInternalTab_ShouldPreserveTabVerbatim()
+        {
+            // Escape는 탭을 손대지 않는다. 그러니 추출기도 접지 않는다 - 두 칸 공백
+            // 보존(라운드 1)과 같은 원칙을 탭에도 적용한다.
+            const string ddl = "CREATE PROCEDURE dbo.P AS\nBEGIN\n    DECLARE @v VARCHAR(10)\n    SET @v = 'a\tb'\nEND";
+
+            var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("'a\tb'", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_ExpressionWithEmbeddedNewline_ShouldContainNoRawNewlineAfterExtraction()
+        {
+            // "모델이 베낄 수 있는 값만 요구한다"의 기계적 증거. 개행이 fact에 그대로
+            // 남으면 렌더된 셀(개행이 공백으로 바뀐 모습)과 fact가 영원히 어긋나
+            // MechanicalValidator 대조를 만족할 수 없는 요구가 된다. 접은 값에
+            // 개행이 없으면 Escape를 다시 먹여도 자기 자신과 같다(멱등) - 즉 렌더된
+            // 값 그대로가 fact와 일치할 수 있다는 뜻이다.
+            const string ddl = "CREATE PROCEDURE dbo.P AS\nBEGIN\n    DECLARE @v VARCHAR(10)\n    SET @v = 'a\nb'\nEND";
+
+            var fact = Assert.Single(SetAssignmentExtractor.Extract(ddl));
+
+            Assert.DoesNotContain('\n', fact.Expression);
+            Assert.DoesNotContain('\r', fact.Expression);
+            Assert.Equal(MarkdownTableCellCodec.Escape(fact.Expression), fact.Expression);
         }
 
         [Fact]
