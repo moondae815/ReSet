@@ -82,37 +82,44 @@ namespace ReSet.Core.Services
         /// [자기 사본을 쓰는 이유] `DmlScopeExtractor.TextOf`는 그 클래스 내부 private이라
         /// 부를 수 없다. `DerivedTableColumnExtractor.cs:165`가 이미 같은 로직의 자기
         /// 사본을 갖고 있는 것이 이 코드베이스의 관례다.
+        ///
+        /// [Fix Round 1 - Important 1: 토큰 단위로 공백을 접는 이유] 이전 구현은 모든
+        /// 토큰의 Text를 먼저 통째로 이어 붙인 뒤 결과 문자열에서 공백을 접었다. 그러면
+        /// 문자열 리터럴 토큰의 Text 안에 든 공백(리터럴 값의 일부)까지 정렬 공백과
+        /// 구분 없이 뭉개진다 - `'a  b'`가 `'a b'`가 되어 "요약·정규화 금지" 계약을
+        /// 어긴다. ScriptDom 토큰 스트림에서 공백/개행은 그 자체로 별도 토큰
+        /// (`TSqlTokenType.WhiteSpace`)이므로, 그 토큰만 공백 하나로 치환하고 그 외
+        /// 토큰의 Text는 손대지 않고 그대로 이으면 정렬 공백(원래 목적)만 접히고
+        /// 리터럴 내부 공백은 보존된다. `DerivedTableColumnExtractor.TextOf`도 같은
+        /// 결함을 갖고 있지만 그쪽은 서술 텍스트용이라 "요약 금지" 계약이 없다 -
+        /// 이 표는 계약이 더 엄해 선례보다 엄격하게 처리한다.
         /// </summary>
         private static string TextOf(TSqlFragment? fragment)
         {
             if (fragment == null || fragment.ScriptTokenStream == null) return string.Empty;
 
-            var sb = new StringBuilder();
             var stream = fragment.ScriptTokenStream;
             var first = fragment.FirstTokenIndex;
             var last = fragment.LastTokenIndex;
             if (first < 0 || last < first || last >= stream.Count) return string.Empty;
 
+            var sb = new StringBuilder();
             for (var i = first; i <= last; i++)
             {
-                sb.Append(stream[i].Text);
+                var token = stream[i];
+                if (token.TokenType == TSqlTokenType.WhiteSpace)
+                {
+                    // 정렬 공백·개행은 표 셀 붕괴를 막기 위해 공백 하나로 접는다.
+                    // 리터럴 내부 공백은 이 분기를 타지 않고(별도 토큰이 아니라
+                    // 리터럴 토큰 자신의 Text 안에 있으므로) 아래 else 경로로
+                    // 그대로 보존된다.
+                    if (sb.Length > 0 && sb[sb.Length - 1] != ' ') sb.Append(' ');
+                    continue;
+                }
+                sb.Append(token.Text);
             }
 
-            return CollapseWhitespace(sb.ToString());
-        }
-
-        /// <summary>표 셀에 개행이 들어가면 마크다운 표가 깨진다. 공백 하나로 접는다.</summary>
-        private static string CollapseWhitespace(string text)
-        {
-            var sb = new StringBuilder(text.Length);
-            var pendingSpace = false;
-            foreach (var ch in text)
-            {
-                if (char.IsWhiteSpace(ch)) { pendingSpace = sb.Length > 0; continue; }
-                if (pendingSpace) { sb.Append(' '); pendingSpace = false; }
-                sb.Append(ch);
-            }
-            return sb.ToString();
+            return sb.ToString().TrimEnd(' ');
         }
     }
 }
