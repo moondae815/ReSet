@@ -28,8 +28,13 @@ namespace ReSet.Core.Services
     public enum ControlRowOrigin
     {
         /// <summary>
-        /// 이 테이블을 대상으로 선언한 첫 단계가 INSERT하며 RunId를 발급한다.
+        /// 이 테이블을 대상으로 선언한 첫 단계가 행을 INSERT한다.
         /// 위치가 아니라 대상 보유로 정하는 이유는 <see cref="BatchControlContract.ResolveRowCreators"/>에 있다.
+        ///
+        /// 키 값을 스스로 발급하는지는 이 축이 정하지 않는다 - 그것은
+        /// <see cref="ControlColumn.IsIdentity"/>가 정한다. batch.BatchRun은 RunId를
+        /// IDENTITY로 발급하지만, batch.BatchRunLock은 IDENTITY 컬럼이 없어 INSERT하는
+        /// 단계가 (JobName, BatchYmd) 키 값을 직접 채운다.
         /// </summary>
         FirstStepInserts,
 
