@@ -600,6 +600,17 @@ Spec-실림 쪽으로 잡고 있어 충돌 1건이 표면에 드러나지 않았
       없다"는 더 강한 주장이고, 🟥=0만으로는 성립하지 않는다 — §6(3)에서 실물로 확인했다(과거
       판에서 「집합 술어」 표가 비어 있었는데도 「잠금 힌트」 표의 우연한 동일 줄 인용 때문에 그
       잎은 이미 🟥가 아니었다).
+      **[2026-08-24 Task 7b — 위 테스트는 개명됐다]** ※ `grep`으로 위 이름을 찾은 사람을 위해 적는다 —
+      그 메서드는 지금
+      `CoverageMapGoldenTests.Requirement1_CurrentEdition_SpecMissingShouldMatchTransitionWindowCount`다.
+      **위 기록은 고치지 않는다 — 2026-08-24 그 시점의 🟥 = 0은 여전히 참이다.** 바뀐 것은
+      코퍼스가 아니라 도구다: 기계 확정 표 확장 브랜치가 「트랜잭션 경계」·「변수 대입」 표를
+      더하면서 `CoverageMapComposer.ExtractorFactLines`가 새 재료를 세기 시작했고,
+      `output/**/Spec.md`는 아직 옛 프롬프트 산출물이라 앵커가 없어 **같은 코퍼스에서 🟥이 205로
+      열렸다**(예정된 전이 창 — `2026-08-24-machine-table-expansion-design.md` §3의 실측 정정
+      블록에 105 + 100 분해와 함께 있다). 0을 안 거는데 이름이 `ShouldBeZero`로 남으면 이름이
+      거짓말이 되므로 함께 고쳤다. **재생성이 끝나 🟥이 0으로 돌아가면 원래 이름·원래 계약으로
+      되돌린다** — 그 지시는 단언 실패 메시지 안에 실려 있다.
 - [x] §6(2) `output.bak-2026-08-22` 대비 🟥·🟧 감소가 카탈로그 9회차 기록과 같은 방향이다
       **(Task 7 실측)** `CoverageMapGoldenTests.Requirement2_AgainstPriorEdition_DefectsShouldNotHaveGrown`이
       과거 판(14 SP 짝) 🟥+🟧 합계 395 → 현재 판 382로 감소를 확인했다(감소 13건). 14 SP 중
