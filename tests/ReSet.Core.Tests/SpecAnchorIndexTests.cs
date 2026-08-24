@@ -1,0 +1,156 @@
+using System.Linq;
+using Xunit;
+using ReSet.Core.Services;
+
+namespace ReSet.Core.Tests
+{
+    public class SpecAnchorIndexTests
+    {
+        [Fact]
+        public void Build_ShouldFindLineColumnByHeaderName_NotByPosition()
+        {
+            // CASE 분기 표는 '라인'이 1번째 칸이다. 위치를 상수로 박으면 '순서' 값
+            // (1, 2, 3...)을 라인 번호로 줍는다 - 설계서 첫 판이 실제로 낸 오류다.
+            const string md = @"### CASE 분기 (기계 확정 — 수정 금지)
+
+| 라인 | 순서 | 조건 원문 | 결과 원문 |
+| :--- | :--- | :--- | :--- |
+| 412 | WHEN 1 | @x > 3 | 7 |
+| 415 | ELSE | (그 외 전부) | 0 |
+";
+
+            var lines = SpecAnchorIndex.Build(md).Select(a => a.Line).ToList();
+
+            Assert.Equal(new[] { 412, 415 }, lines);
+            Assert.DoesNotContain(1, lines);
+            Assert.DoesNotContain(2, lines);
+        }
+
+        [Fact]
+        public void Build_SetPredicateTable_ShouldReadSecondColumn()
+        {
+            const string md = @"### 집합 술어 (기계 확정 — 수정 금지)
+
+| 문장 | 라인 | 컬럼 | 연산 |
+| :--- | :--- | :--- | :--- |
+| DELETE 1 | 38 | PGNAME | IN |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(38, anchor.Line);
+            Assert.False(anchor.IsCommentAnchor);
+            Assert.Contains("집합 술어", anchor.Source);
+            Assert.Contains("PGNAME", anchor.RowText);
+        }
+
+        [Theory]
+        [InlineData("### 원본 주석 기록", "라인", "원본 주석")]
+        [InlineData("### 원본 주석 보존", "라인", "원본 주석")]
+        [InlineData("### 원본 주석 보존 내역", "라인", "원본 주석")]
+        [InlineData("### 원본 주석 및 이력", "라인", "원문 주석 또는 선언")]
+        [InlineData("### 원본 주석 및 구현 대조", "라인", "원문 주석")]
+        [InlineData("### 원본 주석 및 실제 구현 대조", "라인", "원문 주석")]
+        public void Build_CommentTableVariants_ShouldAllBeMarkedAsCommentAnchors(
+            string heading, string firstColumn, string secondColumn)
+        {
+            // 실측: 주석 표 제목이 여섯으로 갈리고 컬럼명도 셋으로 갈린다.
+            // 제목이나 컬럼명 하나로 식별하면 반드시 샌다.
+            var md = $@"{heading}
+
+| {firstColumn} | {secondColumn} |
+| :--- | :--- |
+| 77 | -- 정산 보류 처리 |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(77, anchor.Line);
+            Assert.True(anchor.IsCommentAnchor, $"'{heading}'가 주석 앵커로 표시되지 않았다");
+        }
+
+        [Fact]
+        public void Build_CommentTableWithoutItsOwnHeading_ShouldStillBeMarked()
+        {
+            // EXCEPTION_PROC 실측: '## 로직 흐름 요약' 아래 산문 뒤에 제목 없이 붙는다.
+            const string md = @"## 로직 흐름 요약
+
+원본 주석 및 이력은 다음과 같습니다.
+
+| 라인 | 원본 주석 |
+| :--- | :--- |
+| 91 | -- 부가세 계산 |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(91, anchor.Line);
+            Assert.True(anchor.IsCommentAnchor);
+        }
+
+        [Fact]
+        public void Build_SectionHeading_ShouldPickOriginalDdlLine()
+        {
+            const string md =
+                "### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 1 · 원본 DDL 라인 38 · 원문 표기: TSettleMst)\n";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(38, anchor.Line);
+            Assert.Equal("절 제목", anchor.Source);
+            Assert.False(anchor.IsCommentAnchor);
+        }
+
+        [Fact]
+        public void Build_ReferencedFunctionCell_ShouldPickParenthesizedLine()
+        {
+            const string md = @"### 참조 함수 (기계 확정 — 수정 금지)
+
+| 함수 | 호출 문장 | 호출식 | 명세서 |
+| :--- | :--- | :--- | :--- |
+| dbo.UF_GET_ROUND4VAT | UPDATE 3 (라인 110) | dbo.UF_GET_ROUND4VAT(X) | [Spec](../a.md) |
+";
+
+            var anchors = SpecAnchorIndex.Build(md);
+            Assert.Contains(anchors, a => a.Line == 110);
+        }
+
+        [Fact]
+        public void Build_TableInsideCodeFence_ShouldBeIgnored()
+        {
+            const string md = @"### 예시
+
+```
+| 문장 | 라인 |
+| :--- | :--- |
+| DELETE 1 | 999 |
+```
+";
+
+            Assert.Empty(SpecAnchorIndex.Build(md));
+        }
+
+        [Fact]
+        public void CountLineBearingTables_ShouldCountDistinctTablesWithLineColumn()
+        {
+            const string md = @"### DML 범위 (기계 확정 — 수정 금지)
+
+| 문장 | 라인 | 대상 |
+| :--- | :--- | :--- |
+| DELETE 1 | 35 | T |
+
+### 파생 테이블 정의 (기계 확정 — 수정 금지)
+
+| 별칭 | 컬럼 | 정의 표현식 |
+| :--- | :--- | :--- |
+| X | A | SUM(B) |
+";
+
+            // 파생 테이블 정의 표에는 '라인' 칸이 없다(실측). 1종만 세어야 한다.
+            Assert.Equal(1, SpecAnchorIndex.CountLineBearingTables(md));
+        }
+
+        [Fact]
+        public void Build_NullOrBlank_ShouldReturnEmpty()
+        {
+            Assert.Empty(SpecAnchorIndex.Build(null));
+            Assert.Empty(SpecAnchorIndex.Build("   "));
+        }
+    }
+}
