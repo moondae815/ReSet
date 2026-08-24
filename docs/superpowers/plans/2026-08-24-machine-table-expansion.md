@@ -56,6 +56,21 @@ main의 CurrentCacheFormatVersion        → 15
 
 **태스크 순서의 근거:** Task 1·2는 서로 독립이다. Task 6(코퍼스 스윕)은 **Task 8(캐시 인상)보다 반드시 앞**이다 — 거짓 양성을 안은 채 전건 재생성을 걸면 재시도가 소진된다.
 
+> ### [2026-08-24 계획 정정] Task 4를 4a·4b로 가른다
+>
+> **계획의 첫 판이 기존 불변식을 어겼다.** `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog`가 **리플렉션으로 어셈블리의 모든 `TableHeading` 상수를 찾아** `MachineConfirmedTables.All`에 등록됐는지 단언한다(`tests/ReSet.Core.Tests/MachineConfirmedTablesTests.cs:51-67`). 반대 방향 짝(`CatalogHasNoEntryWithoutAHeadingConstant`)도 있다.
+>
+> 즉 **`TableHeading` 선언과 `All` 등록은 같은 커밋에 있어야 한다.** 첫 판은 선언을 Task 1·2에, 등록을 Task 4에 갈라 놓아 그 사이 내내 스위트가 빨갛다. Task 1·2 워커가 **각자 독립적으로** 이것을 발견하고 범위 밖이라 고치지 않은 채 보고했다 — 옳은 판단이다.
+>
+> **정정:** Task 4를 둘로 가른다.
+>
+> - **Task 4a — `MachineConfirmedTables.All` 등록.** Task 1·2만 소비한다(두 `TableHeading` 상수). **웨이브 1 직후 단독으로 돌려 불변식을 복구한다.**
+> - **Task 4b — `AiService` 표 렌더.** Task 3(`SpecExpectations` 속성)을 소비하므로 웨이브 3에 남는다.
+>
+> 두 등록을 한 태스크에 묶는 이유는 **둘 다 `MachineConfirmedTables.cs`의 같은 자리를 고치기 때문**이다 — 갈라서 병렬로 돌리면 체리픽이 충돌한다.
+>
+> 아래 「Task 4」 절은 **Task 4b**로 읽는다. Task 4a는 그 절의 Step 1~3(테스트·`All` 등록)만 떼어 수행하고, Step 4(`AiService` 렌더)는 Task 4b가 한다.
+
 ---
 
 ### Task 1: `TransactionBoundaryExtractor`
