@@ -55,8 +55,35 @@ namespace ReSet.Core.Services
     public static class SpecStatementFactsExtractor
     {
         private const string DmlScopeHeading = "### DML 범위 (기계 확정 — 수정 금지)";
-        private const string LocalVariableHeading = "### 지역 변수 및 시스템 값";
-        private const string SystemValueMarker = "SQL Server 시스템 값";
+
+        // 지역 변수 표 헤딩은 코퍼스에서 세 가지로 갈린다(축 B 검사 D 픽스 라운드 1
+        // 실측, output/Procedures/*/docs/Spec.md 전수 조사 - Functions·External은
+        // 이 표 자체가 없다):
+        //   "### 지역 변수 및 시스템 값"(COMM_UPD·EXPECT_PROC)
+        //   "### 지역 변수 및 시스템 상태값"(AcqManual)
+        //   "### 지역 변수와 컬럼 매핑"(PROC_ETC - S14의 원천)
+        // 고정 문자열 대조로는 세 번째를 못 읽어 S14의 지역 변수 9개가 재료 없이
+        // 통째로 침묵했다. "### 지역 변수"로 시작하는 절로 넓힌다 - 코퍼스 전체에서
+        // "### 지역"으로 시작하는 다른 절(예: 가상의 "### 지역별 매출 요약")과
+        // 겹치지 않으려면 "변수"까지 접두사에 포함해야 한다.
+        private const string LocalVariableHeadingPrefix = "### 지역 변수";
+
+        // 지역/시스템 값 구분 문구도 코퍼스에서 갈린다(같은 실측):
+        //   "SQL Server 시스템 값"(COMM_UPD), "시스템 정수 값"(EXPECT_PROC),
+        //   "시스템 상태값"(AcqManual, @@FETCH_STATUS)
+        // 셋 다 "시스템"과 "값"을 함께 담는다 - 일반 SQL 타입 이름(INT·MONEY·
+        // VARCHAR 등)은 한글을 담지 않으므로 이 두 조각을 함께 요구해도 정상
+        // 변수를 시스템 값으로 오분류할 위험이 없다.
+        //
+        // [MechanicalValidator의 `@@` 접두사 이중 방어와의 관계]
+        // 이 마커 일반화로도 코퍼스에 없는 네 번째 변형을 놓칠 수 있다. 그래서
+        // MechanicalValidator.CheckSpecLocalVariablesDeclared는 이 IsSystemValue
+        // 판정과 별개로 `@@` 접두사 이름을 항상 제외한다 - T-SQL 문법상 사용자가
+        // DECLARE할 수 없는 시스템 전역값의 표식이라 여기 마커 목록이 어떤 변형을
+        // 놓쳐도 거짓 오류로 이어지지 않는다. 두 방어는 서로의 대체가 아니라
+        // 겹으로 쌓은 방어다 - 이 목록은 되도록 정확한 IsSystemValue를 내려 하고,
+        // `@@` 방어는 그 판정이 틀려도 안전하도록 지킨다.
+        private static readonly string[] SystemValueMarkerFragments = { "시스템", "값" };
 
         // UPDATE만 잡는다 - INSERT|DELETE로 넓히면 안 된다. 실물 코퍼스 실측:
         // `output/Procedures/*/docs/Spec.md` 전체에서 `(삽입 N`·`(삭제 N`(서수 괄호)은
@@ -185,11 +212,20 @@ namespace ReSet.Core.Services
         private static IReadOnlyList<SpecLocalVariable> ReadLocalVariables(IReadOnlyList<string> lines)
         {
             var variables = new List<SpecLocalVariable>();
-            var table = ReadTable(lines, LocalVariableHeading);
+            var table = ReadTable(lines,
+                line => line.TrimEnd().StartsWith(LocalVariableHeadingPrefix, StringComparison.Ordinal));
             if (table == null) return variables;
 
             var iName = FindColumn(table.Value.Header, "명칭");
-            var iType = FindColumn(table.Value.Header, "데이터 타입", "구분");
+
+            // 타입 헤더도 코퍼스에서 갈린다: "데이터 타입 또는 구분"(COMM_UPD)은
+            // 두 조각을 모두 요구해도 되지만, "데이터 타입"(EXPECT_PROC·PROC_ETC)·
+            // "데이터 타입 또는 종류"(AcqManual)는 "구분"이 없어 AND 조건에 걸린다.
+            // 더 구체적인 후보를 먼저 시도하고, 실패하면 "데이터 타입" 단독으로
+            // 넓힌다 - 다른 호출부(FindColumn(header, params string[]))의 AND
+            // 의미는 그대로 둔 채 이 자리에서만 후보 목록을 순서대로 시도한다.
+            var iType = FindColumn(
+                new[] { new[] { "데이터 타입", "구분" }, new[] { "데이터 타입" } }, table.Value.Header);
             if (iName < 0) return variables;
 
             foreach (var cells in table.Value.Rows)
@@ -198,20 +234,25 @@ namespace ReSet.Core.Services
                 if (!name.StartsWith("@", StringComparison.Ordinal)) continue;
 
                 var type = Clean(Cell(cells, iType));
-                variables.Add(new SpecLocalVariable(
-                    name, type, type.Contains(SystemValueMarker, StringComparison.Ordinal)));
+                var isSystemValue = SystemValueMarkerFragments.All(
+                    f => type.Contains(f, StringComparison.Ordinal));
+                variables.Add(new SpecLocalVariable(name, type, isSystemValue));
             }
 
             return variables;
         }
 
         private static (List<string> Header, List<List<string>> Rows)? ReadTable(
-            IReadOnlyList<string> lines, string heading)
+            IReadOnlyList<string> lines, string heading) =>
+            ReadTable(lines, line => line.TrimEnd().Equals(heading, StringComparison.Ordinal));
+
+        private static (List<string> Header, List<List<string>> Rows)? ReadTable(
+            IReadOnlyList<string> lines, Func<string, bool> headingMatch)
         {
             var start = -1;
             for (var i = 0; i < lines.Count; i++)
             {
-                if (lines[i].TrimEnd().Equals(heading, StringComparison.Ordinal)) { start = i; break; }
+                if (headingMatch(lines[i])) { start = i; break; }
             }
             if (start < 0) return null;
 
@@ -256,6 +297,23 @@ namespace ReSet.Core.Services
             {
                 if (fragments.All(f => header[i].Contains(f, StringComparison.OrdinalIgnoreCase))) return i;
             }
+            return -1;
+        }
+
+        // 후보 조각 묶음을 순서대로 시도한다 - 첫 묶음이 안 맞으면 다음 묶음으로
+        // 넓힌다. 기존 FindColumn(header, params string[])의 AND 의미(모든 조각이
+        // 같은 칸에 있어야 함)는 그대로 두고, 이 자리에서만 "더 구체적인 후보가
+        // 없으면 더 느슨한 후보로 물러난다"는 순서를 더한다. 다른 호출부
+        // (iStatement·iLine·iTarget 등)는 이 오버로드를 쓰지 않으므로 그 칸
+        // 탐색은 전혀 달라지지 않는다.
+        private static int FindColumn(IReadOnlyList<string[]> candidateFragmentSets, IReadOnlyList<string> header)
+        {
+            foreach (var candidate in candidateFragmentSets)
+            {
+                var index = FindColumn(header, candidate);
+                if (index >= 0) return index;
+            }
+
             return -1;
         }
 

@@ -143,4 +143,130 @@ public sealed class SpecStatementFactsExtractorTests
 
         Assert.Empty(facts.SetTargets);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 축 B 검사 D 픽스 라운드 1 - 지역 변수 표 헤딩·타입 칸·시스템 값 마커가
+    // 코퍼스에서 갈린다(실측, output/Procedures/*/docs/Spec.md 전수 조사):
+    //   1. `### 지역 변수 및 시스템 값`(COMM_UPD·EXPECT_PROC) - 헤더 "데이터 타입
+    //      또는 구분"(COMM_UPD) / "데이터 타입"(EXPECT_PROC), 시스템 값 마커
+    //      "SQL Server 시스템 값"(COMM_UPD) / "시스템 정수 값"(EXPECT_PROC)
+    //   2. `### 지역 변수 및 시스템 상태값`(AcqManual) - 헤더 "데이터 타입 또는
+    //      종류", 시스템 값 마커 "시스템 상태값"
+    //   3. `### 지역 변수와 컬럼 매핑`(PROC_ETC, S14의 원천) - 헤더 "데이터 타입"
+    //      (구분 칸 없음), 시스템 값 행 자체가 없다
+    // Procedures 전체 + Functions·External의 Spec.md까지 훑어 이 네 가지가
+    // 전부다(Functions·External은 "지역 변수" 표 자체가 없고 산문으로만 언급한다).
+    // ─────────────────────────────────────────────────────────────────────
+
+    // PROC_ETC(S14 원천)의 실물 헤딩·표 모양을 그대로 오려 왔다. 헤딩 문자열이
+    // 다르고("지역 변수와 컬럼 매핑"), 타입 헤더가 "데이터 타입"뿐이다(구분 칸 없음).
+    [Fact]
+    public void LocalVariables_RecognizeProcEtcHeadingAndTypeOnlyHeader()
+    {
+        const string spec = """
+            ### 지역 변수와 컬럼 매핑
+
+            | 변수 명칭 | 데이터 타입 | 초기값 또는 원천 | 연계 컬럼 및 사용 관계 |
+            | :--- | :--- | :--- | :--- |
+            | `@v_intCLTotal` | `MONEY` | `SUM(TSettleMst.CLTotal)` | 기존 행의 `TSettleMiss.CLSettleAmt`에 누적합니다. |
+            | `@v_intIssueType` | `TINYINT` | 상수 `15` | 기존 행 조회 조건에 사용합니다. |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_PROC_ETC", spec) })["dbo.UP_UTIL_SETTLE_PROC_ETC"];
+
+        var money = Assert.Single(facts.LocalVariables, v => v.Name == "@v_intCLTotal");
+        Assert.Equal("MONEY", money.TypeOrKind);
+        Assert.False(money.IsSystemValue);
+    }
+
+    // AcqManual의 실물 헤딩·표 모양. 헤딩이 "시스템 상태값"으로 끝나고, 타입
+    // 헤더는 "데이터 타입 또는 종류"(원래 매칭 대상 "구분"이 아니라 "종류")이며,
+    // 시스템 값 행의 구분 문구는 "시스템 상태값"이다("SQL Server 시스템 값"과 다르다).
+    [Fact]
+    public void LocalVariables_RecognizeAcqManualHeadingAndSystemStateMarker()
+    {
+        const string spec = """
+            ### 지역 변수 및 시스템 상태값
+
+            | 명칭 | 데이터 타입 또는 종류 | 원천 | 사용 관계 |
+            | :--- | :--- | :--- | :--- |
+            | @v_strOutYMD | varchar(8) | 커서의 `TSettleMst.OutYMD` | 삭제 및 삽입의 `OutYMD` 조건값입니다. |
+            | @@FETCH_STATUS | 시스템 상태값 | `FETCH NEXT` 수행 결과 | 커서 반복 종료 판정에 사용합니다. |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_Util_Settle_Summary_AcqManual", spec) })["dbo.UP_Util_Settle_Summary_AcqManual"];
+
+        var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strOutYMD");
+        Assert.Equal("varchar(8)", local.TypeOrKind);
+        Assert.False(local.IsSystemValue);
+
+        var system = Assert.Single(facts.LocalVariables, v => v.Name == "@@FETCH_STATUS");
+        Assert.True(system.IsSystemValue);
+    }
+
+    // EXPECT_PROC의 실물 헤딩·표 모양. 헤딩은 COMM_UPD와 같지만("지역 변수 및
+    // 시스템 값") 타입 헤더가 "데이터 타입"뿐이고(구분 칸 없음), 시스템 값
+    // 구분 문구도 "시스템 정수 값"이라 COMM_UPD의 "SQL Server 시스템 값"과 다르다.
+    [Fact]
+    public void LocalVariables_RecognizeExpectProcTypeOnlyHeaderAndSystemIntegerMarker()
+    {
+        const string spec = """
+            ### 지역 변수 및 시스템 값
+
+            | 명칭 | 데이터 타입 | 원천 값 | 사용 관계 |
+            | :--- | :--- | :--- | :--- |
+            | @v_PLCardSettlePeriodPG | varchar(200) | `'PLCard,SamSungPay'` | 제외 조건에 사용됩니다. |
+            | @@ERROR | 시스템 정수 값 | 직전 문장 실행 결과 | 오류 여부를 판정합니다. |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_EXPECT_PROC", spec) })["dbo.UP_UTIL_SETTLE_EXPECT_PROC"];
+
+        var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_PLCardSettlePeriodPG");
+        Assert.Equal("varchar(200)", local.TypeOrKind);
+
+        var system = Assert.Single(facts.LocalVariables, v => v.Name == "@@ERROR");
+        Assert.True(system.IsSystemValue);
+    }
+
+    // 헤딩을 접두사로 넓혀 잡을 때 "지역"만 공유할 뿐 지역 변수 표가 아닌 다른
+    // 절("지역별 매출 요약" 같은)을 삼키면 안 된다 - 접두사가 반드시 "지역 변수"
+    // 까지 포함해야 한다는 것을 지킨다.
+    [Fact]
+    public void LocalVariables_DoesNotSwallowUnrelatedHeadingThatOnlySharesTheWord지역()
+    {
+        const string spec = """
+            ### 지역별 매출 요약
+
+            | 지역 | 매출 | 비고 |
+            | :--- | :--- | :--- |
+            | 서울 | 100 | - |
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_UNRELATED", spec) })["dbo.UP_UTIL_UNRELATED"];
+
+        Assert.Empty(facts.LocalVariables);
+    }
+
+    // 기존 COMM_UPD 모양(AND 조건 "데이터 타입 또는 구분" 헤더, "SQL Server
+    // 시스템 값" 마커)이 새 매칭 방식에서도 그대로 유지되는지 - 이미
+    // SystemValues_AreMarkedAndNotTreatedAsLocalVariables가 지키지만, 타입 칸
+    // 탐색 방식이 바뀌므로 그 값 자체를 다시 못박는다.
+    [Fact]
+    public void LocalVariables_CommUpdShape_StillReadsAndConditionHeaderCorrectly()
+    {
+        var variables = Extract().LocalVariables;
+
+        var local = Assert.Single(variables, v => v.Name == "@v_valIncVat");
+        Assert.Equal("DECIMAL(2,1)", local.TypeOrKind);
+    }
 }
