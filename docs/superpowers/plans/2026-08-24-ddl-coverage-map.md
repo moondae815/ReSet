@@ -17,7 +17,14 @@
 - **DB·AI 호출 금지.** `IDbMetadataService`·`IAiService`를 참조하지 않는다.
 - **파서 오류 정책:** `TSql160Parser(true)`로 파싱하고 오류가 하나라도 있으면 빈 결과를 낸다. `CaseBranchExtractor.Extract`(`CaseBranchExtractor.cs:50-60`)와 같은 정책이다.
 - **`output/`은 `.gitignore` 대상이다.** 실물 산출물에 의존하는 테스트는 전부 `[SkippableFact]`/`[SkippableTheory]` + `Skip.IfNot(...)`이고, 건너뛴 사유가 출력에 남아야 한다.
-- **빌드 경고 상한:** `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`이 **8**을 넘지 않는다(기존 `DbMetadataServiceTests.cs`의 CS8600/CS8602). `dotnet test` 실패 0.
+- **빌드 경고 상한: 0.** `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`이 **0**이어야 한다. `dotnet test` 실패 0.
+
+  > **[2026-08-24 실측 정정]** 이 줄의 첫 판은 `AGENTS.md:199`를 그대로 베껴 "정확히 8건
+  > (`DbMetadataServiceTests.cs`의 CS8600/CS8602)"을 상한으로 적었다. **그 기준선은 낡았다** —
+  > `ORIGINAL_BASE`(`e8a6949`)에서 clean 빌드를 돌리면 실제로 **0건**이다. Task 1·Task 2 워커가
+  > 각자 독립적으로 같은 관측을 보고했고 코디네이터가 재확인했다. 상한을 8로 두면 이번 작업이
+  > 경고를 8개까지 새로 넣고도 통과하므로 정정한다. `AGENTS.md` 쪽 갱신은 이 계획의 범위 밖이라
+  > 사용자에게 별도로 보고한다.
 - **네임스페이스:** 새 Core 파일은 `namespace ReSet.Core.Services`, 새 테스트는 `namespace ReSet.Core.Tests`.
 
 ---
@@ -2024,7 +2031,7 @@ git commit -m "test: 맵이 사람 감사와 같은 결론을 내는지 세 요�
 ## 완료 기준 (계획 전체)
 
 - [ ] Task 1~7의 모든 단계가 체크됐다
-- [ ] `dotnet clean && dotnet build`의 `warning CS` 유일 건수가 8 이하
+- [ ] `dotnet clean && dotnet build`의 `warning CS` 유일 건수가 **0**(기준선 실측값 — Global Constraints 참고)
 - [ ] `dotnet test` 실패 0
 - [ ] `--coverage-map POQSettlePrco20`이 DB·AI 없이 폐포 31개에 대해 HTML 한 장을 낸다
 - [ ] Task 4의 실측 수치와 🟧 백로그가 설계서에 적혔다
