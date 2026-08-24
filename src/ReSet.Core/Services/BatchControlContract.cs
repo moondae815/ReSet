@@ -146,7 +146,30 @@ namespace ReSet.Core.Services
                     new ControlColumn("DetectedAtUtc", "datetime2(3)", false)
                 },
                 ControlRowOrigin.ProducerInsertsOnly,
-                "Severity")
+                "Severity"),
+
+            // [왜 기준값 저장소로 좁히는가]
+            // 코퍼스 관측에서 이 표의 컬럼 집합이 넷으로 갈렸고, 그중 하나는
+            // ExpectedValue·ActualValue·IsMatched로 대조 결과까지 담았다. 그것은
+            // batch.BatchValidationIssue와 역할이 겹친다. 산출물도 이미 나뉘어
+            // 있다 - S16은 이 표를 "단계별 기준값"으로 읽고 대조 결과는 따로 쓴다.
+            // 넷 중 하나를 고를 근거가 이것뿐이었다. 나머지 셋은 빈도뿐이다.
+            //
+            // 관측된 변이 하나는 RowCount를 컬럼명으로 썼다. T-SQL 예약어라
+            // 대괄호 없이는 구문 오류다 - 계약이 그 이름을 배제하는 것 자체가 값이다.
+            new ControlTable(
+                "batch.BatchControlTotal",
+                new[]
+                {
+                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("StepCode", "nvarchar(10)", false),
+                    new ControlColumn("ControlName", "nvarchar(64)", false),
+                    new ControlColumn("ControlValue", "decimal(38,4)", false),
+                    new ControlColumn("CapturedAtUtc", "datetime2(3)", false)
+                },
+                ControlRowOrigin.ProducerInsertsOnly,
+                null,
+                new[] { "RunId", "StepCode", "ControlName" })
         };
 
         /// <summary>

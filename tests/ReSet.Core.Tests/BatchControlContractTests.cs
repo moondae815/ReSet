@@ -9,7 +9,7 @@ namespace ReSet.Core.Tests;
 public sealed class BatchControlContractTests
 {
     [Fact]
-    public void Tables_CoverTheFourControlTables()
+    public void Tables_CoverTheFiveControlTables()
     {
         var names = BatchControlContract.Tables.Select(t => t.Name).ToArray();
 
@@ -19,7 +19,8 @@ public sealed class BatchControlContractTests
                 "batch.BatchRun",
                 "batch.BatchStepJournal",
                 "batch.BatchCheckpoint",
-                "batch.BatchValidationIssue"
+                "batch.BatchValidationIssue",
+                "batch.BatchControlTotal"
             },
             names);
     }
@@ -221,5 +222,49 @@ public sealed class BatchControlContractTests
         var steps = new[] { Plan("S02", "batch.BatchStepJournal", "batch.BatchCheckpoint") };
 
         Assert.Empty(BatchControlContract.ResolveRowCreators(steps));
+    }
+
+    // 감사 실측(POQSettleBatch1 축 B #10·#24·#36): S01·S03·S16이 batch.ControlTotal에
+    // INSERT/SELECT를 걸었는데 컬럼 계약이 어디에도 없어 컬럼 수·값 수 대조가
+    // 성립하지 않았다. 신설 단계 4개가 `검증 불가`로 남은 뿌리다.
+    [Fact]
+    public void ControlTotal_IsAKeyedBaselineStore()
+    {
+        var table = BatchControlContract.Find("batch.BatchControlTotal");
+
+        Assert.NotNull(table);
+        Assert.Equal(
+            new[] { "RunId", "StepCode", "ControlName", "ControlValue", "CapturedAtUtc" },
+            table!.Columns.Select(c => c.Name).ToArray());
+        Assert.Equal(ControlRowOrigin.ProducerInsertsOnly, table.Origin);
+        Assert.Null(table.StatusColumn);
+        Assert.Equal(new[] { "RunId", "StepCode", "ControlName" }, table.PrimaryKey);
+    }
+
+    // 통제합계는 숫자 비교가 본질이다. 문자열로 두면 S16의 합계 대조가 문자열
+    // 비교가 되어 조용히 틀린다. BatchValidationIssue.ExpectedValue가 nvarchar인
+    // 것과 갈리지만, 그쪽은 사람이 읽는 오류 기록이고 이쪽은 기계가 비교하는
+    // 기준값이라 역할이 다르다.
+    [Fact]
+    public void ControlValue_IsNumericSoTheComparisonIsNumeric()
+    {
+        var value = BatchControlContract.Find("batch.BatchControlTotal")!
+            .Columns.Single(c => c.Name == "ControlValue");
+
+        Assert.Equal("decimal(38,4)", value.SqlType);
+        Assert.False(value.Nullable);
+    }
+
+    // 계약 주석의 "전이 없는 표에는 PK를 두지 않는다"에 대한 의도된 예외다.
+    // 그 규칙의 이유는 "한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가
+    // 없다"였는데, 통제합계에는 자연 키가 있다 - 같은 실행의 같은 단계가 같은
+    // 지표를 두 번 낼 이유가 없고, 두 번 나면 S16이 어느 행을 기준으로 삼을지
+    // 모른다.
+    [Fact]
+    public void ControlTotal_KeepsAPrimaryKeyEvenThoughItHasNoTransition()
+    {
+        Assert.Contains(
+            "CONSTRAINT PK_BatchControlTotal PRIMARY KEY (RunId, StepCode, ControlName)",
+            BatchControlContract.RenderDdl());
     }
 }
