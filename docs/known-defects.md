@@ -308,6 +308,18 @@
   Job에 골고루 퍼져 있고(POQSettleProc2·POQSettleProc3만 D·E가 0인데, 이 둘은 아래
   ScriptDom 파싱 실패의 밀도가 특히 높은 Job이다), **C는 326개 전부에서 0건**이다.
 
+  **이 수치 전부의 공통 한계 — 표본이 0문장 파일 65개를 포함한다.** 아래 (5)(「거짓
+  양성 판정」 안의 「ScriptDom 전체 펜스 파싱 실패」 문단)가 확인하듯 코퍼스 326개 중
+  65개 단계 파일이 `StepSqlStatementReader.Read`에서 문장 0개로 읽힌다. 그 부작용은
+  검사 A만의 것이 아니다 — 문장을 못 읽으면 그 문장을 보는 검사 B·D·E도 같은
+  (Job, 단계) 좌표에서 함께 돌지 않으므로, 위 A·B·D·E 네 검사(C는 애초에 앵커 부재로
+  0건)의 검출량은 전부 **65/326 파일이 0문장으로 읽히는 이 표본 위에서 잰 하한**이다
+  (B의 195건은 이후 태스크 12가 앵커 폴백을 침묵시켜 0으로 재측정됐다 — 아래
+  「검사 B·C의 앵커 방식」 항목). 다음 회차는 이 파서 결함(ScriptDom 펜스 전체 파싱을
+  포기하고 문장 단위로 분리해 개별 파싱하는 것 — 아래 (5)와 「검사 B·C의 앵커 방식」
+  항목의 (5)가 이미 남긴 선택지)을 먼저 닫는 것이 권고된다. 닫지 않은 채 검사를
+  늘리면, 늘어난 검사도 같은 65개 표본 위에서 하한만 잰다.
+
   **(2) 이번 회차가 닫으려던 9건 중 5건** — 5건 모두 그 (Job, 단계, 검사) 좌표에서 오류가
   난다. 다만 두 건은 검사가 실제로 낸 메시지가 감사가 지목한 문구와 다르다:
   - S07/검사 A — **그대로 재현.** "`TSettleMst`에 대한 UPDATE를 8개만 담고 있습니다.
@@ -499,6 +511,31 @@
 
   근거: 태스크 11 조사 기록(리뷰어 실물 재현, 이 문서가 유일한 기록) + 태스크 12
   코퍼스 재측정(검사 B: 326개 전수 0건).
+
+### 반복되는 함정 — 접두사 겹침
+
+이 저장소는 짧은 이름이 긴 이름의 접두사인 자리가 구조적으로 많다(`batch.*` 제어 표,
+`@v_*` 관용 변수, `T*` 테이블). 경계 없이 문자열을 매칭하면 검사가 조용히 무력화되거나
+(짧은 이름이 긴 이름 안에서 걸려 항상 "발견"되는 바람에 실제로는 아무것도 가려내지
+못함) 항상 실패한다(긴 이름이 짧은 이름을 부분 문자열로 포함해 `DoesNotContain`류가
+절대 통과하지 못함). 이번 회차에 같은 모양이 세 번 관측됐다 — **새 문자열 매칭을
+추가할 때마다 아래 셋을 참고해 경계를 확인할 것.**
+
+1. **`@v_int` vs `@v_intCLTotal`** — 검사 D의 변수 이름 매칭.
+   `MechanicalValidator.CheckSpecLocalVariablesDeclared`가 `(?<![\w@])…\b`(시작은 부정
+   후방탐색, 끝은 `\b`)로 막았다 — 그 자리에 이미 "접두사 겹침을 막는다"는 주석이 있다.
+2. **`` batch.BatchRun `` vs `` batch.BatchRunLock ``** — 계약 표 테스트가 행을 고를 때
+   백틱 없이 `Contains("BatchRun")`으로 고르면 두 표의 행이 섞여 테스트가 통과해도
+   아무것도 검사하지 않는다.
+   `BatchControlContractTests.RenderPromptTable_DoesNotClaimIdentityForATableThatHasNone`·
+   `RenderPromptTable_StillSaysHowRunIdIsIssuedForTheRunTable`이
+   `` `batch.BatchRunLock` ``·`` `batch.BatchRun` `` 처럼 백틱을 포함해 매칭해 피했다.
+3. **`ControlTotal` vs `BatchControlTotal`** — `BatchControlContract`의 별칭 누출 가드.
+   정본 이름 `batch.BatchControlTotal`이 별칭 `ControlTotal`을 문자 그대로 포함해 단순
+   `DoesNotContain(alias, output)`이 정본 이름이 정상적으로 실리기만 해도 항상 실패한다.
+   `BatchControlContractTests.RenderedOutput_DoesNotLeakAliasesAsIfTheyWereCanonical`이
+   정본 전체 이름과 맨이름(스키마 접두사를 뗀 이름)을 먼저 걷어낸 나머지에서 별칭을
+   찾는 방식으로 피했다.
 
 ### 메타데이터 / 지시서
 
