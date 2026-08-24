@@ -104,9 +104,17 @@ namespace ReSet.Core.Tests
             _output.WriteLine("");
 
             int totalLeaf = 0, totalC = 0, totalMissing = 0, totalProse = 0, totalOos = 0;
+            long totalLinesAll = 0, totalLinesC = 0, totalLinesMissing = 0, totalLinesProse = 0, totalLinesOos = 0;
             var oosBreakdownAll = new Dictionary<string, int>(StringComparer.Ordinal);
             var missingPositions = new List<(string Sp, int Start, int End, string Type)>();
             int mergeKnownUncoveredTotal = 0;
+
+            // 라인 가중치 - 잎 하나가 [StartLine, EndLine]을 차지하는 실제 줄 수.
+            // 리뷰어 지시(Fix Round 1, Important 1): 문장 수 기준(78.4% 🟧)과 라인 가중
+            // 기준(코드 부피 기준)은 서로 다른 질문에 답한다 - 🟧 상위 4종이 대부분
+            // 한 줄짜리 제어문(RETURN·SET·트랜잭션 경계·DECLARE)인 반면 🟩은 여러 줄짜리
+            // DML 블록이라, 둘이 정반대 인상을 줄 수 있다. 그래서 나란히 낸다.
+            static int LineWeight(DdlStatement s) => s.EndLine - s.StartLine + 1;
 
             foreach (var (name, coverage) in coverages)
             {
@@ -116,20 +124,35 @@ namespace ReSet.Core.Tests
                 var cProse = coverage.Count(CoverageState.ProseOnly);
                 var cOos = coverage.Count(CoverageState.OutOfScope);
 
+                var linesConsistent = coverage.Statements.Where(s => s.State == CoverageState.Consistent).Sum(s => LineWeight(s.Statement));
+                var linesMissing = coverage.Statements.Where(s => s.State == CoverageState.SpecMissing).Sum(s => LineWeight(s.Statement));
+                var linesProse = coverage.Statements.Where(s => s.State == CoverageState.ProseOnly).Sum(s => LineWeight(s.Statement));
+                var linesOos = coverage.Statements.Where(s => s.State == CoverageState.OutOfScope).Sum(s => LineWeight(s.Statement));
+                var linesLeafTotal = coverage.Statements.Sum(s => LineWeight(s.Statement));
+
                 totalLeaf += coverage.LeafCount;
                 totalC += cConsistent;
                 totalMissing += cMissing;
                 totalProse += cProse;
                 totalOos += cOos;
 
+                totalLinesAll += linesLeafTotal;
+                totalLinesC += linesConsistent;
+                totalLinesMissing += linesMissing;
+                totalLinesProse += linesProse;
+                totalLinesOos += linesOos;
+
+                double SpPct(long n) => linesLeafTotal == 0 ? 0 : 100.0 * n / linesLeafTotal;
+
                 _output.WriteLine($"=== {name} ===");
                 _output.WriteLine($"DDL 줄수      : {ddlLines}");
                 _output.WriteLine($"읽은 표 종수  : {coverage.TableKindsRead}");
-                _output.WriteLine($"잎 문장       : {coverage.LeafCount}");
-                _output.WriteLine($"🟩 Consistent : {cConsistent}");
-                _output.WriteLine($"🟥 SpecMissing: {cMissing}");
-                _output.WriteLine($"🟦 ProseOnly  : {cProse}");
-                _output.WriteLine($"🟧 OutOfScope : {cOos}");
+                _output.WriteLine($"잎 문장       : {coverage.LeafCount}  (잎이 차지하는 줄 수 합계: {linesLeafTotal})");
+                _output.WriteLine($"              문장 수           라인 가중");
+                _output.WriteLine($"🟩 Consistent : {cConsistent,4}건              {linesConsistent,5}줄 ({SpPct(linesConsistent):F1}%)");
+                _output.WriteLine($"🟥 SpecMissing: {cMissing,4}건              {linesMissing,5}줄 ({SpPct(linesMissing):F1}%)");
+                _output.WriteLine($"🟦 ProseOnly  : {cProse,4}건              {linesProse,5}줄 ({SpPct(linesProse):F1}%)");
+                _output.WriteLine($"🟧 OutOfScope : {cOos,4}건              {linesOos,5}줄 ({SpPct(linesOos):F1}%)");
 
                 var oosBySp = coverage.Statements
                     .Where(s => s.State == CoverageState.OutOfScope)
@@ -166,14 +189,20 @@ namespace ReSet.Core.Tests
             }
 
             _output.WriteLine("======================================================");
-            _output.WriteLine("전체 합계 (14 SP 전수, 잎 문장 단위)");
+            _output.WriteLine("전체 합계 (14 SP 전수) - 문장 수 기준 vs 라인 가중 기준 병기");
             _output.WriteLine("======================================================");
-            _output.WriteLine($"잎 문장 총계  : {totalLeaf}");
+            _output.WriteLine($"잎 문장 총계  : {totalLeaf}건 / 라인 가중 총계: {totalLinesAll}줄");
             double Pct(int n) => totalLeaf == 0 ? 0 : 100.0 * n / totalLeaf;
-            _output.WriteLine($"🟩 Consistent : {totalC,4}  ({Pct(totalC):F1}%)");
-            _output.WriteLine($"🟥 SpecMissing: {totalMissing,4}  ({Pct(totalMissing):F1}%)");
-            _output.WriteLine($"🟦 ProseOnly  : {totalProse,4}  ({Pct(totalProse):F1}%)");
-            _output.WriteLine($"🟧 OutOfScope : {totalOos,4}  ({Pct(totalOos):F1}%)");
+            double LinePct(long n) => totalLinesAll == 0 ? 0 : 100.0 * n / totalLinesAll;
+            _output.WriteLine("               문장 수 기준          라인 가중 기준");
+            _output.WriteLine($"🟩 Consistent : {totalC,4}건 ({Pct(totalC),5:F1}%)   {totalLinesC,5}줄 ({LinePct(totalLinesC),5:F1}%)");
+            _output.WriteLine($"🟥 SpecMissing: {totalMissing,4}건 ({Pct(totalMissing),5:F1}%)   {totalLinesMissing,5}줄 ({LinePct(totalLinesMissing),5:F1}%)");
+            _output.WriteLine($"🟦 ProseOnly  : {totalProse,4}건 ({Pct(totalProse),5:F1}%)   {totalLinesProse,5}줄 ({LinePct(totalLinesProse),5:F1}%)");
+            _output.WriteLine($"🟧 OutOfScope : {totalOos,4}건 ({Pct(totalOos),5:F1}%)   {totalLinesOos,5}줄 ({LinePct(totalLinesOos),5:F1}%)");
+            _output.WriteLine("");
+            _output.WriteLine("두 숫자는 다른 질문에 답한다 - 문장 수는 '다음에 무엇을 기계 확정 표로");
+            _output.WriteLine("넓혀야 하는가'(내부 백로그 우선순위), 라인 가중은 'SP의 실제 코드 부피 중");
+            _output.WriteLine("검증 안 된 부분이 얼마인가'(외부 보고용 첫 숫자)다.");
             _output.WriteLine("");
 
             _output.WriteLine("🟧 유형별 전체 합산 (내림차순):");
@@ -515,9 +544,23 @@ namespace ReSet.Core.Tests
                     scalarCount++;
                 }
 
+                var cProse = coverage.Count(CoverageState.ProseOnly);
                 _output.WriteLine($"{bucket}/{name}: TVF={isTableValued} 잎={coverage.LeafCount} "
                     + $"🟩{coverage.Count(CoverageState.Consistent)} 🟥{coverage.Count(CoverageState.SpecMissing)} "
-                    + $"🟦{coverage.Count(CoverageState.ProseOnly)} 🟧{coverage.Count(CoverageState.OutOfScope)}");
+                    + $"🟦{cProse} 🟧{coverage.Count(CoverageState.OutOfScope)}");
+
+                // Fix Round 1 - Important 2: 🟦가 이 코퍼스에서 죽은 축이 아니라는 것을
+                // 자리까지 열어 확인한다(14 SP에서는 0이었지만 함수 버킷에서는 살아 있다).
+                if (cProse > 0)
+                {
+                    foreach (var s in coverage.Statements.Where(s => s.State == CoverageState.ProseOnly))
+                    {
+                        var anchor = s.Anchors.FirstOrDefault();
+                        _output.WriteLine($"    🟦 줄 {s.Statement.StartLine}-{s.Statement.EndLine}  "
+                            + $"{s.Statement.StatementType}  앵커={anchor?.Source ?? "(없음)"}  "
+                            + $"행원문=\"{anchor?.RowText ?? "-"}\"");
+                    }
+                }
             }
 
             _output.WriteLine("");
