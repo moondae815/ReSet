@@ -6929,5 +6929,84 @@ END";
 
             Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("1개만") && e.Contains("2개를 확정"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 픽스 라운드 2 - 재리뷰 [2] PARTIALLY CLOSED + 새 Important.
+        //
+        // [2] facts는 statementFactsByProcedure에서 실제로 찾은 것만 남긴
+        // 부분집합이라(365-369행), 재료를 못 찾은 SP가 있어도 facts.Count == 1일
+        // 수 있다 - 그 상태에서도 단계 SQL에는 못 찾은 SP 출신 문장이 섞여 있고
+        // 그 SP의 앵커 번호도 1부터 다시 시작한다. 게이트는 재료를 찾았는지가
+        // 아니라 원본 SP가 정말 하나인지(step.LegacyProcedures.Count == 1)를
+        // 물어야 한다.
+        //
+        // [새 Important] 청크 분할 시 물리 조각마다 같은 앵커 주석을 반복하는
+        // 것은 자연스러운 작성 패턴이다. 앵커를 HashSet으로 모으면 중복이
+        // 합쳐져 missing 개수가 실제 부족분(expectedCount - actual)과 어긋난다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_FactsCoverOnlyOneOfMultipleLegacyProcedures_DoesNotEnumerateOrdinals()
+        {
+            // step.LegacyProcedures는 둘(SP_A, SP_B)인데 명세서 재료는 SP_A만
+            // 찾았다(SP_B의 Spec.md 파싱 실패·specs 배치 누락 등). facts.Count == 1을
+            // 게이트로 쓰면 이 상태를 "레거시 SP가 하나"로 오인해 번호를 열거한다 -
+            // 그러나 SP_B도 단계 SQL에 문장을 남길 수 있고 자기 번호로 1부터
+            // 다시 앵커한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.SP_A"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 2, 20, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 3, 30, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "S07 단계",
+                LegacyProcedures: new[] { "dbo.SP_A", "dbo.SP_B" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("1개만") && e.Contains("3개를 확정"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_DuplicateAnchorsInSameGroup_DoesNotEnumerateOrdinals()
+        {
+            // 두 문장이 모두 `-- U4`로 앵커됐다(청크 분할 시 물리 조각마다 같은
+            // 앵커를 반복하는 자연스러운 작성 패턴). 앵커를 집합으로 모으면 4가
+            // 하나로 합쳐져 missing 개수(14)가 실제 부족분(expectedCount 15 -
+            // actual 2 = 13)과 어긋난다 - 그 상태의 번호는 믿을 수 없다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U4\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U4\n" +
+                "UPDATE A SET A.CLCOMM = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("2개만") && e.Contains("15개를 확정"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
+        }
     }
 }

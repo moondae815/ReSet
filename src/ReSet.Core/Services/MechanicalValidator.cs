@@ -5549,6 +5549,16 @@ namespace ReSet.Core.Services
         /// 단계는 배치 제어 테이블(BatchStepJournal·BatchCheckpoint)에 자기 행을 쓰고,
         /// 청크 처리를 위해 문장을 나누기도 한다. 초과를 오류로 들면 그 정상 구조가 전부
         /// 걸린다.
+        ///
+        /// [알려진 한계 - 픽스 라운드 2 재리뷰 - 여러 레거시 SP를 흡수한 단계]
+        /// 여러 SP의 DmlRows를 SelectMany로 합쳐 (종류, 테이블) 단위로 개수만
+        /// 비교한다. 단계 SQL 문장에는 어느 SP 출신인지 표시가 없어, 한 SP의
+        /// 부족분이 같은 테이블에 쓴 다른 SP의 여분 문장으로 채워져 개수 비교
+        /// 자체가 통째로 침묵할 수 있다(재리뷰 재현: SP_A가 3개를 확정하고 2개만
+        /// 쓴 채 SP_B의 문장 1개가 같은 테이블에 더 있으면 합계가 우연히 맞아
+        /// 떨어져 결함이 보이지 않는다). 이 검사가 SP 경계를 모르는 한 고칠 수
+        /// 없다 - 단계 SQL 문장에 출처 SP를 표시하는 재료가 새로 생기기 전까지는
+        /// 알려진 한계로 남긴다.
         /// </summary>
         private static void CheckStatementCountAgainstSpec(
             IReadOnlyList<SpecStatementFacts> facts,
@@ -5557,11 +5567,19 @@ namespace ReSet.Core.Services
             StepValidationResult result)
         {
             // 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다(명세서
-            // "갱신 1"은 그 SP 안에서만 유일하다). facts를 SP 경계 없이 평탄화해
-            // 번호를 합쳐 말하면 서로 다른 SP의 같은 번호가 충돌해 뜻을 잃는다
-            // (픽스 라운드 1 Critical 2). 개수 비교는 SP 경계와 무관하게 옳으므로
-            // 그대로 두고, 번호 열거만 SP가 정확히 하나일 때로 좁힌다.
-            var singleSource = facts.Count == 1;
+            // "갱신 1"은 그 SP 안에서만 유일하다). 번호 열거는 SP가 정확히 하나일
+            // 때로 좁힌다.
+            //
+            // [픽스 라운드 2 - 왜 facts.Count가 아니라 step.LegacyProcedures.Count인가]
+            // facts는 statementFactsByProcedure에서 실제로 찾은 것만 남긴 부분집합이다
+            // (ValidateBatchStep의 필터링 참고). 명세서 파싱 실패·specs 배치 누락으로
+            // 한 SP의 재료만 못 찾으면 facts.Count == 1이면서도 LegacyProcedures.Count
+            // > 1일 수 있다 - 그 상태에서도 단계 SQL에는 여전히 못 찾은 SP 출신
+            // 문장이 섞여 있고, 그 SP의 앵커 번호도 1부터 다시 시작한다. 재리뷰
+            // 재현: LegacyProcedures=[SP_A,SP_B], facts에는 SP_A만 있는 상태에서
+            // SP_B가 자기 번호로 U1을 달면 SP_A의 U1과 충돌한다. 그래서 게이트는
+            // 재료를 찾았는지가 아니라 원본 SP가 정말 하나인지를 물어야 한다.
+            var singleSource = step.LegacyProcedures.Count == 1;
 
             var expected = facts
                 .SelectMany(f => f.DmlRows)
@@ -5579,7 +5597,8 @@ namespace ReSet.Core.Services
 
                 result.Errors.Add(
                     $"{step.Code} 섹션이 `{group.Key.TargetTable}`에 대한 {group.Key.Kind}를 {actual}개만 담고 " +
-                    $"있습니다. 명세서 DML 범위 표는 {expectedCount}개를 확정합니다{DescribeMissingOrdinals(singleSource, group, matched)}. " +
+                    $"있습니다. 명세서 DML 범위 표는 {expectedCount}개를 확정합니다" +
+                    $"{DescribeMissingOrdinals(singleSource, group, matched, actual, expectedCount)}. " +
                     "각 문장의 본문을 전문으로 실으십시오 — 주석이나 " +
                     "\"원문 그대로 적용한다\"는 지시는 상수·계수·반올림 자릿수·UDF 인자를 복원하지 못합니다.");
             }
@@ -5589,6 +5608,20 @@ namespace ReSet.Core.Services
         /// 빠진 것으로 보이는 갱신 번호를 문장으로 만든다. 근거가 없으면 빈 문자열을
         /// 낸다 - 귀속할 수 없으면 침묵한다는 이 저장소의 규약을 메시지 안의 번호에도
         /// 적용한다.
+        ///
+        /// [핵심 불변식 - 픽스 라운드 2]
+        /// 열거하는 번호의 개수는 반드시 `expectedCount - actual`과 같아야 한다.
+        /// 개별 사례를 하나씩 막지 않고 이 불변식 하나로 전부 자동으로 막는다:
+        /// - 중복 앵커: 같은 그룹의 두 문장이 같은 번호로 앵커되면(청크 분할 시
+        ///   물리 조각마다 `-- U4`를 반복하는 자연스러운 작성 패턴 - 이 함수의
+        ///   호출부 CheckStatementCountAgainstSpec의 doc 참고) present 집합에서
+        ///   중복이 합쳐져 missing이 실제보다 적게 나온다. actual(문장 개수)은
+        ///   합쳐지지 않으므로 missing.Count가 (expectedCount - actual)보다
+        ///   커진다 - 불변식이 깨져 침묵한다(재리뷰 재현: 두 문장이 모두 `-- U4`,
+        ///   expected=15, actual=2 → present={4} 하나로 합쳐져 missing=14인데
+        ///   실제 부족분은 13이다).
+        /// - 범위 밖 앵커(예: `U99`): expected 집합에 없는 번호라 missing 계산에서
+        ///   빠지지 않으므로 missing.Count가 예상보다 커져 같은 이유로 침묵한다.
         ///
         /// [픽스 라운드 1 Critical 1 - 왜 개수 기반 접두사 스킵을 버렸는가]
         /// 예전 구현은 "명세서 Ordinal을 정렬해 앞에서 actual개를 스킵"했다. 이것은
@@ -5600,20 +5633,23 @@ namespace ReSet.Core.Services
         /// 들어가므로, 틀린 번호는 모델에게 틀린 시정 지시가 된다 - 번호를
         /// 아예 안 주는 것보다 훨씬 나쁘다.
         ///
-        /// 번호를 낼 수 있는 조건(전부 만족해야 한다):
-        /// 1. 레거시 SP가 정확히 하나다 - 둘 이상이면 Ordinal이 SP 경계마다 1부터
-        ///    다시 시작해 합친 번호가 뜻을 잃는다(Critical 2, CheckStatementCountAgainstSpec 참고).
-        /// 2. 이 (종류, 테이블) 그룹에 매치된 단계 문장이 하나 이상 있다 - 0개면
-        ///    "빠짐" 판정에 앵커가 필요 없다(전부가 확정적으로 빠졌다).
-        /// 3. 매치된 문장이 하나라도 있다면 그 전부가 앵커(`-- U4`·`/* 갱신 4 */`
+        /// 번호를 낼 수 있는 전제(전부 만족해야 한다):
+        /// 1. 레거시 SP가 정확히 하나다(step.LegacyProcedures.Count == 1 - facts.Count가
+        ///    아니다. 재료를 못 찾은 SP도 단계 SQL에는 문장을 남길 수 있다 - 픽스
+        ///    라운드 2 [2] 참고).
+        /// 2. 매치된 문장이 하나라도 있다면 그 전부가 앵커(`-- U4`·`/* 갱신 4 */`
         ///    등)를 가져야 한다. 앵커 없는 문장이 하나라도 섞이면 "앵커로 확인된
         ///    것만 있음"으로 칠 때 실제로는 있는데 앵커가 없는 문장이 "빠짐"으로
         ///    잘못 보고된다 - 그래서 하나라도 앵커가 없으면 통째로 침묵한다.
+        /// 3. 계산한 missing 목록의 개수가 `expectedCount - actual`과 같다 - 다르면
+        ///    앵커가 중복되었거나 범위 밖이라는 뜻이고, 그 상태의 번호는 믿을 수 없다.
         /// </summary>
         private static string DescribeMissingOrdinals(
             bool singleSource,
             IGrouping<(string Kind, string TargetTable), SpecDmlRow> group,
-            IReadOnlyList<StepSqlStatement> matched)
+            IReadOnlyList<StepSqlStatement> matched,
+            int actual,
+            int expectedCount)
         {
             if (!singleSource) return string.Empty;
             if (matched.Count > 0 && matched.Any(s => s.Anchor == null)) return string.Empty;
@@ -5629,9 +5665,11 @@ namespace ReSet.Core.Services
                 .OrderBy(o => o)
                 .ToList();
 
-            return missing.Count == 0
-                ? string.Empty
-                : $"(빠진 것으로 보이는 번호: {string.Join(", ", missing)})";
+            // 핵심 불변식: 열거하는 개수는 반드시 (expectedCount - actual)과 같아야
+            // 한다. 다르면(중복 앵커·범위 밖 앵커 등) 번호 자체를 믿을 수 없다.
+            if (missing.Count != expectedCount - actual) return string.Empty;
+
+            return $"(빠진 것으로 보이는 번호: {string.Join(", ", missing)})";
         }
 
         /// <summary>
