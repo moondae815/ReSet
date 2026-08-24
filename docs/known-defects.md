@@ -512,6 +512,175 @@
   근거: 태스크 11 조사 기록(리뷰어 실물 재현, 이 문서가 유일한 기록) + 태스크 12
   코퍼스 재측정(검사 B: 326개 전수 0건).
 
+- **병합 전 코퍼스 스윕 게이트 실측(2026-08-24, Task 19) — Task 16 C1·C2·Task 17 C3·I1·Task 18 I2를 모두 적용한 뒤 재측정** —
+  `output/Jobs/*/agent/steps/*.md`를 스크래치 하네스로 스윕했다. 하네스는
+  `VerificationPipelineOrchestrator.GenerateStepSectionWithFloorRetryAsync`의
+  `_validator.ValidateBatchStep(...)` 호출을 그대로 본떠 `stepInterfaces`·
+  `runRowOwnedTables`·`statementFactsByProcedure`·`allSteps`를 전부 넘겼다(단,
+  `stepInterfaces`·`runRowOwnedTables`는 DB 메타데이터가 필요해 로컬에서 못
+  만들므로 `null` — 이 두 값이 관여하는 검사(`CheckStepInterface` 등)는 이번
+  스윕의 측정 대상 5개(A~E)에 들지 않는다). 저장소에는 커밋하지 않았다
+  (`/private/tmp/.../scratchpad/sweep-task19/`).
+
+  **하네스 집계**: Job 22개 · `PlanStructure.md` 파싱 실패 2개
+  (`POQSettleProc4` — 73단계를 선언하는데 `BatchStepPlanParser.MaxSteps`(40)를
+  넘어 `TryParse`가 `null`을 반환. `POQSettleProc7` — `"Steps": []`로 애초에
+  빈 배열) · 단계 파일 누락 51개(파싱된 20개 Job이 선언한 단계 중 `agent/steps/`에
+  실물이 없는 것) · 실측 쌍 326개(18개 Job).
+
+  **(1) 검사별 발화량(전체 · Job별)**. 수정 전 최종 리뷰 측정(A=94단계/177오류,
+  B=0, C=0, D=11, E=127)과 견주면:
+  - **A: 177오류 → 10오류(9개 (Job,Step) 좌표)** — `POQSettleBatch1(2) ·
+    POQSettleProc10(4, 2좌표) · POQSettleProc15(1) · POQSettleProc3(1) ·
+    POQSettleProc8(2)`.
+  - **B: 0 → 0**(그대로 — Task 12가 이미 폴백을 침묵시켜 이 코퍼스에서 앵커
+    기반 검사가 사실상 비활성이라는 사실은 여전하다).
+  - **C: 0 → 0**(그대로 — B가 비활성인 한 C도 `anchored.Count == 0` 조기
+    반환에 걸려 발동하지 않는다. 아래 (2)·(3)이 이번 라운드가 닫은 것은
+    C가 아니라 검사 A의 하위 결함 셋임을 다시 확인한다).
+  - **D: 11 → 52**(변화 없음 — 이번 라운드는 D를 건드리지 않았다. Task 9
+    코퍼스 재측정값 52와 정확히 일치해 D 로직이 이번 라운드 내내 그대로임을
+    재확인했다). Job별: `Batch1=9, Proc1=1, Proc11=1, Proc12=1, Proc13=14,
+    Proc14=10, Proc16=14, Proc8=1, Proc9=1`.
+  - **E: 127 → 59**(약 54% 감소 — Task 17 I1이 합성 `"0"` 성공 코드를 뺀
+    효과). Job별: `Batch1=3, Prco20=6, Proc1=4, Proc10=1, Proc11=2, Proc12=1,
+    Proc13=1, Proc14=6, Proc15=3, Proc16=3, Proc17=8, Proc18=9, Proc19=6,
+    Proc8=1, Proc9=5`.
+
+  **(2) 고친 세 건이 실제로 닫혔는지**:
+  - **C1(대조 불가능한 행을 요구로 들지 않는다)** — 위 A의 10건 전부를 직접
+    읽어 확인했다. `TargetTable` 길이 1(`"—"`·별칭 `"A"`)이거나 `Kind ==
+    SELECT`인 행에 대한 요구는 **0건**이다. 10건 전부 `UPDATE`·`INSERT`이고
+    대상은 `TSettleMst`·`TSettleMiss` 실물 테이블명이다.
+  - **C2(파싱 실패 펜스가 있으면 개수 대조를 통째로 접는다)** —
+    `output/Jobs/POQSettleBatch1/agent/steps/S12.md`를
+    `StepSqlStatementReader.Read(out unparsedFenceCount)`로 직접 돌려
+    `unparsedFenceCount=1`(파싱 실패 펜스 실재)·`문장 0개`를 확인했다. 그럼에도
+    위 A의 10건 목록에 `POQSettleBatch1/S12`는 **없다** — 거짓 "0개" 보고가
+    이 좌표에서 **0건**이다. 코퍼스 전체로도 여전히 326개 중 65개 단계
+    파일이 전체 펜스 파싱 실패로 문장 0개를 내지만(파서 결함 자체는
+    미해결 — 범위 밖), 그중 어느 것도 검사 A의 거짓 "0개" 보고로 이어지지
+    않았다(A의 10건 중 파싱 실패 펜스 좌표 0건).
+  - **C3(`BareObjectName` 키로 스키마 접두사 없는 `LegacyProcedures`를 찾는다)** —
+    `POQSettleProc1`(D=1·E=4)과 `POQSettleProc3`(A=1) 둘 다 이번 스윕에서
+    검사가 **발동했다**(수정 전에는 이 두 Job이 통째로 0건이었다는 것이 C3의
+    동기였다). `POQSettleProc2`는 이번 스윕에서 0건인데, 그 Job의 `LegacyProcedures`
+    중 값이 있는 3개 항목(`UP_Util_Settle_Summary` 등)도 접두사 없는 이름이라
+    같은 함정에 해당할 수 있다 — 다만 `FindSpecPath`의 `bareNameIndex` 폴백으로
+    `output/Procedures/dbo.UP_Util_Settle_Summary/docs/Spec.md`가 정상적으로
+    찾아지는 것은 직접 확인했으므로, 이 0건이 조회 실패가 아니라 실제로
+    깨끗한 것인지는 **미확인**(S13~S15 본문을 명세서와 문장 단위로 대조하지
+    않았다). `POQSettleProc4`·`POQSettleProc5`는 `agent/steps` 자체가 없어
+    (전자는 위 파싱 실패, 후자는 `raw/`만 있고 `agent/`가 아예 없음) C3와
+    무관하게 측정 불가 — **미확인**.
+
+  **(3) I2 가드(`allSteps` 배선)가 실제로 작동하는지**:
+  - **`POQSettleProc4` 자체는 실측 불가(미확인)** — 위 (1)이 밝힌 대로 이
+    Job은 `BatchStepPlanParser.MaxSteps`(40) 상한에 걸려 73단계 선언이
+    `TryParse`에서 `null`이 되고, 그 결과 분할 생성 경로 자체에 진입하지
+    못한다(주석: "파싱하지 못하면 호출부가 현행 단일 호출 경로로 폴백한다").
+    실측대로 `output/Jobs/POQSettleProc4/agent/`에는 `steps/` 디렉터리가
+    없다 — `ValidateBatchStep`이 이 Job의 어떤 단계에도 호출되지 않으므로
+    "개수 대조에서 침묵하는지"를 코퍼스로 잴 좌표가 없다.
+  - **코퍼스 전체(agent/steps가 있는 18개 Job, 326개 단계) 안에서 같은
+    레거시 SP가 2개 이상의 서로 다른 단계의 `LegacyProcedures`에 걸쳐
+    나타나는 사례가 0건**이다(하네스로 전수 대조 — `POQSettleProc4`·`7`을
+    빼면 이 코퍼스에는 애초에 "분할된 레거시 SP"가 없다). **I2 가드가 실제로
+    발동할 좌표가 이 코퍼스에는 존재하지 않는다.**
+  - **합성 검증(코퍼스 실측이 아님, 별도 표시)** — `POQSettleProc4`의
+    `raw/PlanStructure.md` 원문 JSON을 `MaxSteps` 상한과 무관하게 직접
+    파싱해 73단계를 복원하고, `S10`·`S27`(`EXCEPTION_PROC`, 확정 18행)·
+    `S28`·`S42`(`COMM_UPD`, 확정 15행) 4개 단계에 대해 더미 `UPDATE` 1개짜리
+    합성 본문으로 `ValidateBatchStep`을 `allSteps` 있음/없음 두 조건에서
+    돌렸다. 결과: **4개 단계 전부 `allSteps` 없음 → A 1건(불가능한 개수
+    요구) / `allSteps` 있음 → A 0건(침묵)**. I2 가드의 코드 메커니즘 자체는
+    설계대로 동작하나, 이 검증은 실물 생성 산출물이 아니라 합성 본문 위에서
+    한 것임을 분명히 한다.
+
+  **(4) 진짜 결손이 여전히 잡히는지** — 위 A 10건에 그대로 있다.
+  `POQSettleBatch1/S07`: "UPDATE를 8개만 담고 있습니다. 명세서 DML 범위
+  표는 18개를 확정합니다"(8/18, 정확히 재현). `POQSettleBatch1/S08`:
+  "UPDATE를 4개만... 15개를 확정"(4/15, 정확히 재현).
+
+  **(5) 거짓 양성 판정** — B·C는 발화 0건이라 표본 없음. A(10건, ≤30)는
+  전건, D(52건)·E(59건, 둘 다 >30)는 각 10건 표본(D는 매 5번째 행, E는
+  15건을 직접 열람).
+  - **검사 A — 10건 전건 확인, (Job,Step) 좌표 기준 4/9 진짜 결손·5/9
+    거짓 양성(6건)**. 진짜 결손 4곳(`Batch1/S07` 8/18, `Batch1/S08` 4/15,
+    `POQSettleProc15/S07` 4/18, `POQSettleProc3/S04` 17/18)은 전부 `dbo.TSettleMst
+    AS <별칭>` 직접 테이블 `UPDATE`로 확인했다(Shadow/Stage 스왑이 아님).
+    거짓 양성 5곳:
+    1. `POQSettleProc10/S07`(0/18) — `anchor-debug`로 직접 확인: 18개
+       `UPDATE` 전부가 `POQSettleS07Build`라는 Shadow build 테이블을
+       대상으로 한다. `BareObjectName`이 스펙의 `TSettleMst`와 다르다.
+    2. `POQSettleProc10/S11`(INSERT 0/1·UPDATE 0/2, 2건) — `batch.
+       POQSettleS11LedgerStage`/`SourceSnapshot` Stage 테이블 갱신(직접
+       확인, S11.md:451·481).
+    3. `POQSettleProc10/S16`(0/1) — `DELETE FROM dbo.TSettleMiss`(295행)
+       뒤 `INSERT INTO dbo.TSettleMiss`(305행) 재구축. **이전 회차 리뷰가
+       이미 문서화한 좌표·원인과 동일**(위 "축 B 단계 검사 코퍼스 스윕
+       실측" 항목의 (5)-2).
+    4. `POQSettleProc8/S08`(0/15) — `UPDATE SETTLE_POQ_DB.stage.
+       TSettleMst_S08`(S08.md:196·278). **이전 회차 리뷰가 이미 문서화한
+       좌표·원인과 동일**(같은 항목의 (5)-3).
+    5. `POQSettleProc8/S07`(1/18) — **이전 회차에 없던 새 하위유형.**
+       18개 예외 규칙을 `@RuleNo` 루프(`CASE 1..18`)로 한 `UPDATE T ...
+       FROM dbo.TSettleMst AS T` 문 하나에 통합 실행한다(S07.md:132-158).
+       Shadow/Stage 스왑이 아니라 "규칙별 앵커 문장 18개" 대신 "런타임
+       루프로 도는 문장 1개"로 설계한 것이라, 파서는 물리적으로 1개
+       `UPDATE`만 본다.
+
+    **판정 — 오탐 원인과 되돌릴 지점**: A의 오탐은 전부 "명세서 DML
+    범위 표가 (Kind, TargetTable) 단위로 `n`개 문장을 확정하는데, 실제
+    구현이 그 문장들을 물리적으로 다른 이름의 중간 테이블에 쓰거나
+    (Shadow/Stage 스왑, DELETE+INSERT 재구축) 하나의 파라미터 루프 문으로
+    합친다(규칙 루프 통합)"는 한 갈래에서 나온다. `CheckStatementCountAgainstSpec`이
+    `BareObjectName` 정확 일치로만 `(Kind, TargetTable)`을 대조하는 것이
+    되돌릴 지점이다 — 이번 라운드(C1·C2·I2)는 이 갈래를 건드리지 않았고
+    (쓰기 범위 밖), 다른 오탐 갈래(대조 불가 행·파싱 실패 펜스·분할 SP)를
+    닫으면서 모수가 234 → 10으로 줄어드는 사이 이 갈래의 절대 건수(5~6건)는
+    거의 그대로 남아 **비중만 30%(이전 표본) → 60%(이번 표본)로 커졌다**.
+    새 결함이 아니라 기존 한계의 비중 변화다 — 다만 `POQSettleProc8/S07`의
+    "규칙 루프 통합" 하위유형은 이전 문서에 없었으므로 다음 라운드를 위해
+    새로 기록한다.
+  - **검사 D — 10건 표본(52건 중 매 5번째 행) 전부 진짜**(선언 없이 쓰인
+    변수·명세서 타입 서술 일치). `D 검출 중 펜스 유래 1건`(POQSettleProc11/S08
+    `@v_strReqYMD`)도 그대로 재현됐다 — 이전 회차가 이미 "빈도 1.9%, 경계
+    사례"로 판정한 것과 동일 좌표·동일 개수, 이번 라운드가 손대지 않아
+    변화 없음.
+  - **검사 E — 15건 표본 직접 열람 + 코드 불변식으로 오탐이 구조적으로
+    불가능함을 확인**. `CheckStepIdInitialValue`는 `declaredCodeSet.
+    Contains(initial)`를 통과해야만 메시지를 내고, 그 메시지가 인쇄하는
+    "이미 있는 값" 집합이 바로 그 `declaredCodeSet`(=`step.ErrorCodes`)이므로
+    판정 근거와 인쇄 근거가 항상 같다. `POQSettleBatch1/S12`를 직접 열어
+    `DECLARE @v_currentStepId INT = 0;`·CATCH의 `SET @po_intRetVal =
+    @v_currentStepId;`가 메시지와 일치함을 확인했다.
+
+  **(6) 검사 E의 변화** — Task 9 코퍼스 재측정 기준값 129건(원 리뷰 127건과
+  근접)에서 **59건으로 약 54% 감소**했다(I1이 합성 `"0"` 성공 코드를 뺀
+  효과). 위 코드 불변식(판정 근거 = 인쇄 근거)에 따라 **남은 59건 전부가
+  그 단계의 목차 `ErrorCodes`에 실제로 있는 값**이다 — 15건 표본이 이를
+  재확인했다.
+
+  **병합 판단**: 이번 스윕 결과로 **병합해도 좋다고 본다.** C1·C2·C3·I1은
+  실측으로 닫혔음이 확인됐고(위 (2)·(6)), D·B·C는 이번 라운드가 손대지
+  않았으며 실측값이 이전 회차와 정확히 일치해 회귀가 없다. A의 남은
+  거짓 양성(5/9 좌표)은 이번 라운드가 만든 새 결함이 아니라 이미
+  문서화된 한계(Shadow/Stage 스왑·DELETE+INSERT 재구축)의 재현이고 비중만
+  커진 것이며, 새 하위유형(규칙 루프 통합) 하나를 이번에 추가로 기록했다.
+  다만 **I2가 실제로 해소하려던 동기 사례(`POQSettleProc4`)는 이 코퍼스로
+  실측할 수 없다** — `BatchStepPlanParser.MaxSteps`(40)라는 별개의 상한에
+  막혀 분할 생성 경로 자체에 도달하지 못하기 때문이다(이번 태스크가 만든
+  결함이 아니라 기존에 있던 별도 제약이 드러난 것). 이 사실은 은폐하지
+  않고 다음 라운드로 넘긴다 — `MaxSteps` 상한을 올리거나 73단계를 더
+  작은 단위로 재설계해야 `POQSettleProc4`가 분할 생성 경로에 들어가고,
+  그래야 I2 가드가 실물 산출물 위에서 검증될 수 있다.
+
+  하네스: `/private/tmp/claude-501/-Users-payletter-git-root-ReSet/
+  c5a30bfa-e9ae-4359-af7c-b2e0b422cf4b/scratchpad/sweep-task19/Program.cs`
+  (스크래치, 저장소 미커밋 — 워크트리 밖에 둬 `git status`에 전혀 잡히지
+  않는다). 근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 19.
+
 ### 반복되는 함정 — 접두사 겹침
 
 이 저장소는 짧은 이름이 긴 이름의 접두사인 자리가 구조적으로 많다(`batch.*` 제어 표,
