@@ -332,22 +332,104 @@ docs/Spec.md ──────────────────────�
 
 숫자를 감추자는 것이 아니라, 모르는 채로 회의실에 들고 가지 말자는 것이다.
 
-## 미확정 사항 — 구현 첫 단계에서 확인한다
+### 🟧 백로그 — 2026-08-24 Task 4 실측
 
-1. **잎 문장의 실제 개수와 4상태 분포.** 지금은 아무도 모른다. `EXCEPTION_PROC`(543줄) 하나만
-   먼저 돌려 보고 나머지 설계를 조정한다. 특히 🟧 비율이 §「위험」의 판단을 좌우한다.
-2. **`SET` 대입이 정말 관할 밖인가.** `AggregateAssignmentExtractor`·
-   `NonAggregateAssignmentExtractor`·`LoopVariableResetExtractor`가 이미 `SET`의 일부를 다룬다.
-   실린 것과 안 실린 것의 경계를 실측으로 확인해야 🟧 집계가 정직해진다.
-3. **컨테이너 유형 목록이 충분한가.** `IfStatement`·`WhileStatement`·`BeginEndBlockStatement`·
-   `TryCatchStatement` 넷으로 시작하되, 실측에서 한 문장이 비정상적으로 넓은 범위를 먹으면
-   목록을 늘린다.
-4. **함수(UDF)에도 같은 좌표계가 서는가.** 폐포 31개 중 17개가 함수다. 인라인 TVF는 문장이
-   사실상 하나라 맵이 무의미할 수 있다 — 그러면 함수는 별도 표시로 접는다.
-5. **`파생 테이블 정의` 표에 `라인` 칸이 없는 것이 실제로 손해인가.** 파생 테이블이 걸린 문장은
-   대개 그 문장의 `집합 술어`·`DML 범위` 행이 함께 있어 이미 🟩일 가능성이 높다. 실측에서
-   "파생 테이블만 있고 다른 사실 표가 안 받쳐 준 문장"이 나오면, 그때 그 표에 `라인` 칸을
-   더하는 것이 기계 확정 표 확장 백로그의 첫 항목이 된다.
+14개 SP 전수(잎 487개)를 돌린 결과, 🟧 382건(78.4%)의 **85%가 문장 유형 넷에 몰려 있다**
+(`ReturnStatement` 105 · `SetVariableStatement` 100 · `RollbackTransactionStatement` 81 ·
+`DeclareVariableStatement` 40 = 326/382). 유형별 전체 집계(내림차순)와 표로 담을 수 있는지
+여부는 다음과 같다.
+
+| 유형 | 건수 | 표로 담을 수 있는가 |
+|---|---:|---|
+| `ReturnStatement` | 105 | **가능** — 조기 반환 지점 표(줄·반환값·직전 조건)를 새로 만들면 닫힌다. 지금은 어떤 기계 확정 표도 관할하지 않는다. |
+| `SetVariableStatement` | 100 | **부분 가능** — `LoopVariableResetExtractor`가 `WHILE` 최상위 상수 재설정 3건만 담는다(전체의 2.9%). `AggregateAssignmentExtractor`·`NonAggregateAssignmentExtractor`는 `SELECT @v = ...` 형태만 다뤄 `SetVariableStatement`에는 원리적으로 닿지 않는다(실측: 두 추출기 재료 4건 전부 `SelectStatement` 잎에 떨어졌다, 예외 0건). 일반 `SET @v = <식>` 대입 표를 새로 만들면 나머지 97건 대부분을 닫을 수 있다. |
+| `RollbackTransactionStatement` | 81 | **가능** — `BeginTransactionStatement`(12)·`CommitTransactionStatement`(12)와 묶어 "트랜잭션 경계" 표(줄·종류)를 만들면 105건(81+12+12)이 한 번에 닫힌다. |
+| `DeclareVariableStatement` | 40 | **가능, 단 낮은 우선순위** — Spec.md의 "지역 변수 및 시스템 값" 류 표는 이미 있지만 **`라인` 칸이 없다**(헤더: `변수 명칭 \| 데이터 타입 \| 초기값 또는 원천 \| 연계 컬럼 및 사용 관계`) — 게다가 `(기계 확정 — 수정 금지)` 절도 아니다. `라인` 칸을 더하고 기계 확정으로 승격하면 닫힌다. |
+| `PredicateSetStatement` | 13 | **가능, 단 낮은 우선순위** — 대부분 `SET NOCOUNT ON` 류 세션 옵션이다. `SpecExpectations.SessionOptions`가 이미 이름을 모으지만 **줄 번호가 없다**(`IReadOnlyList<string>`). 줄 번호를 추가하면 닫힌다. |
+| `FetchCursorStatement`·`OpenCursorStatement`·`CloseCursorStatement`·`DeallocateCursorStatement` | 6·3·4·4 = 17 | **가능, 최저 우선순위** — `CursorLifecycleExtractor`가 커서 하나당 한 행(수명 요약)만 낸다. `OPEN`/`FETCH`/`CLOSE`/`DEALLOCATE` 개별 문장까지 표에 넣으면 닫히지만, 각 행이 말해 줄 새 사실이 적어(보일러플레이트) 값 대비 비용이 가장 낮다. |
+| `ExecuteStatement` | 2 | 코퍼스에 2건뿐이라 우선순위 낮음. 내부 SP 호출 표를 만들면 닫힌다. |
+
+**다음 회차 재료 확장 순서 제안**(닫히는 건수 기준): ① 트랜잭션 경계(105) → ② `SET` 일반 대입(최대
+97) → ③ 조기 반환(105, 단 "무엇을 반환했나"가 항상 확정 사실은 아니라 ①·②보다 설계가 더 필요하다)
+→ ④ 지역 변수 선언에 `라인` 칸 추가(40) → ⑤ 세션 옵션에 줄 번호 추가(13) → ⑥ 커서 개별 문장(17).
+①+②만 닫아도 202/382(53%)가 사라져 🟧 비율이 78.4%→약 37%로 떨어진다.
+
+## 미확정 사항 — 2026-08-24 Task 4 실측으로 닫는다
+
+1. **잎 문장의 실제 개수와 4상태 분포.** `output/Procedures/` 14개 SP 전수(`CoverageMapProbeTests.
+   Probe_AllProcedures_ShouldReportFullStateDistribution`)를 돌렸다.
+
+   | 상태 | 건수 | 비율 |
+   |---|---:|---:|
+   | 잎 문장 총계 | 487 | 100% |
+   | 🟩 Consistent | 105 | 21.6% |
+   | 🟥 SpecMissing | 0 | 0.0% |
+   | 🟦 ProseOnly | 0 | 0.0% |
+   | 🟧 OutOfScope | 382 | 78.4% |
+
+   **🟧이 §「위험」의 예상("절반")보다 크다 — 78.4%다.** 위 🟧 백로그가 그 내역이다. **🟥·🟦이
+   둘 다 정확히 0이라는 것도 실측이다** — 이 코퍼스의 14 SP에서 "재료는 있는데 명세서가 안
+   실었다"거나 "명세서는 있는데 재료가 없다"는 자리가 하나도 없었다(뒤섞이지 않고 갈렸다는
+   뜻이지, 판정 자체가 맞다는 증명은 아니다 — 그건 Task 7 골든 대조의 몫이다). 다만 감사
+   10회차의 🔴 0 · 🟠 0과 **방향이 같다**는 점은 그 자체로 눈에 띄는 정합 신호다.
+2. **`SET` 대입이 정말 관할 밖인가.** `Probe_SetVariableStatement_ShouldReportExtractorBoundary`로
+   경계를 실측했다. 잎 `SetVariableStatement` 103건(14 SP 합) 중 **재료가 붙는 것은 3건(2.9%)뿐**
+   — 전부 `LoopVariableResetExtractor`가 담는 `UP_UTIL_SETTLE_PROC_ETC`의 `WHILE` 최상위 상수
+   재설정(69·113·114행)이다. `AggregateAssignmentExtractor`·`NonAggregateAssignmentExtractor`의
+   재료 4건은 실측으로도 **전부 `SelectStatement` 잎**에 떨어졌다(`SetVariableStatement`에 떨어진
+   예외 0건) — 두 추출기는 `SELECT @v = ...` 형태만 다루므로 원리적으로 `SET @v = ...`에는 닿지
+   않는다는 docstring의 주장이 그대로 확인됐다. **결론: `SET` 대입은 실제로 거의 전부(97.1%)
+   관할 밖이 맞다.** 위 백로그 표의 근거다.
+3. **컨테이너 유형 목록이 충분한가.** 계획(`docs/superpowers/plans/2026-08-24-ddl-coverage-map.md`)의
+   §「설계서에서 확정한 것을 계획이 바꾼 두 자리」(가)가 이미 닫았다 — 목록을 열거하지 않고
+   토큰 범위 포함관계(진부분)로 컨테이너를 판정한다. 구현(`DdlStatementEnumerator.Contains`)이
+   그대로이므로 이 항목은 **더 늘릴 목록이 없다.**
+4. **함수(UDF)에도 같은 좌표계가 서는가.** `output/Functions/`(10개) + `output/External/*/Functions/`
+   (7개) = 17개 전수(`Probe_FunctionsAndExternal_ShouldReportLeafCounts`)를 돌렸다. **스칼라
+   함수 16개, 테이블 값 함수(TVF) 1개(`UIF_SettleYMD`).** 그 TVF는 잎이 **15개**로 다중 문장
+   TVF였다(4상태: 🟩4·🟥0·🟦0·🟧11) — **이 코퍼스에는 인라인 TVF가 0건이라 "잎이 사실상
+   하나라 맵이 무의미하다"는 우려가 적용될 사례가 없었다.** 스칼라 함수도 잎이 1~14개로
+   다양해(`UF_GET_ROUND4VAT`만 잎 1개) 대부분 맵이 유의미하다. 결론: 함수도 SP와 같은
+   좌표계·판정을 그대로 쓴다 — 별도 표시로 접을 필요가 실측되지 않았다. (인라인 TVF가
+   실제로 나타나면 잎 1개짜리 맵은 그 자체로 "이 함수는 표 하나로 충분하다"는 신호이지,
+   무의미하다는 신호가 아니다 — 재평가는 그때 한다.)
+5. **`파생 테이블 정의` 표에 `라인` 칸이 없는 것이 실제로 손해인가.**
+   `Probe_DerivedTableOnlySupport_ShouldCountUnsupportedStatements`로 "Spec.md에 파생 테이블
+   정의 표가 있는 SP"(6개: `COMM_UPD`·`EXCEPTION_PROC`·`INS`·`INS_EXTRA`·`INS_EXTRA4PLCARD`·
+   `STAT_PGCOLLECT_INS`)의 🟧·🟦 문장 중 DML 계열이면서 파생 테이블 자리(괄호 닫힘+별칭) 패턴이
+   원본에 걸리는 것을 정규식 근사로 후보를 셌다. **후보 0건.** 설계서의 가설대로 파생 테이블이
+   걸린 문장은 그 문장 자체의 `DML 범위`·`집합 술어` 재료가 이미 있어 🟩이거나, 애초에 그
+   문장이 `SetVariableStatement`/`ReturnStatement` 등 무관한 유형이었다. **결론: 손해 없음이
+   실측으로 확인됐다.** `라인` 칸을 추가하는 것은 이 코퍼스 기준으로는 백로그 우선순위가 아니다.
+
+### 부록 — `TableKindsRead` 실측 교차확인 (코디네이터 추가 지시)
+
+`Probe_TableKindsRead_ShouldReportGapAgainstActualMachineConfirmedTables`로 각 SP의 Spec.md에서
+`(기계 확정 — 수정 금지)` 절 제목을 전수 세고(75종), `SpecAnchorIndex.CountLineBearingTables`가
+보고한 값(70종, 14 SP 합)과 대조했다. **차이 5.**
+
+- **참조 함수 표(6개 SP 전부)** — 헤더가 `함수 \| 호출 위치 \| 인자 \| 명세서`다. `라인`이라는
+  정확한 칸 이름이 없어 `CountLineBearingTables`가 이 표를 **표 종수에서 놓친다.** 다만 **판정
+  자체는 새지 않는다** — 셀 값이 `UPDATE 2 (라인 68)` 형태로 줄 번호를 담고 있어
+  `SpecAnchorIndex`의 자유 텍스트 스캔(`(라인 N)` 정규식)이 앵커를 별도로 잡아낸다. 즉 이 6종은
+  "종수 표시"만 놓치고 "커버리지 판정"은 놓치지 않는다 — 설계서 §1이 말한 "파싱이 표를 놓치면
+  눈에 보이게 하는 장치"가 이 경우엔 **거짓 경보(실제로는 안 놓쳤는데 종수만 하나 적게 보임)**를
+  낸다는 뜻이다.
+- **파생 테이블 정의 표(6개 SP)** — 미확정 5번에서 이미 다룬 설계상 결정이다. `라인` 칸이 아예
+  없고 앵커를 주지 않는다(위 실측대로 손해는 없었다).
+- **역방향 사례 하나(`UP_Util_PG_Client_CMRate_Ins`)** — 기계확정 절 4종인데 `TableKindsRead`는
+  5종으로 **더 많이** 나왔다. 원인: `CountLineBearingTables`는 `(기계 확정 — 수정 금지)` 절에
+  국한되지 않고 **`라인` 칸을 가진 표 전부**(원본 주석 표 포함, 이 SP는 "원본 주석 보존 내역"
+  절에 `기계 확정` 표시가 없다)를 센다. 즉 두 수치는 애초에 같은 모집단을 재는 것이 아니다 —
+  `TableKindsRead`는 "앵커를 낼 수 있는 표 종수"이고, 위 75종은 "기계 확정 절 종수"다. 이 SP의
+  +1은 버그가 아니라 **정의가 다른 두 숫자를 나란히 놓아서 생긴 차이**다.
+
+**정리:** 실제 판정 손실은 없다(참조 함수는 앵커를 다른 경로로 확보하고, 파생 테이블은 손해가
+실측되지 않았다). 그러나 **상단에 찍는 "읽은 표 종수" 숫자 자체는 설계서 §1의 의도("파싱이
+표를 놓치면 눈에 보이게 하는 장치")를 온전히 만족하지 못한다** — 참조 함수 표처럼 판정에는
+안전한데 종수만 축소 표시되는 경우가 실측으로 확인됐기 때문이다. HTML(Task 5)에서 이 숫자를
+찍을 때는 "라인 칸을 가진 표 종수"라는 정의를 그대로 노출하고, "기계 확정 표 전체 종수"와
+동의어가 아니라는 점을 각주로 남기는 것을 권한다.
 
 ## 완료 기준
 
