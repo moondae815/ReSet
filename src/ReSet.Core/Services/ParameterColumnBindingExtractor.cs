@@ -68,7 +68,7 @@ namespace ReSet.Core.Services
 
                 var visitor = new StatementVisitor();
                 fragment.Accept(visitor);
-                visitor.Finalize();
+                visitor.PropagateFeeds();
                 return visitor.Bindings;
             }
             catch (Exception ex)
@@ -154,7 +154,7 @@ namespace ReSet.Core.Services
             /// 결합돼 있으면 P는 V의 결합 전부를 물려받는다. 상속은 원래의 결합 목록을 기준으로 한 번만
             /// 돈다(물려받은 결합으로 다시 물려받지 않는다).
             /// </summary>
-            public void Finalize()
+            public void PropagateFeeds()
             {
                 var original = Bindings.ToList();
                 var byVariable = original.GroupBy(b => b.Variable, StringComparer.OrdinalIgnoreCase)
