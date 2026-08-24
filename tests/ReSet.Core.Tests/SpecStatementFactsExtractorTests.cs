@@ -145,8 +145,15 @@ public sealed class SpecStatementFactsExtractorTests
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 축 B 검사 D 픽스 라운드 1 - 지역 변수 표 헤딩·타입 칸·시스템 값 마커가
-    // 코퍼스에서 갈린다(실측, output/Procedures/*/docs/Spec.md 전수 조사):
+    // 축 B 검사 D 픽스 라운드 1+2 - 지역/내부 변수 표 헤딩·타입 칸·시스템 값
+    // 마커가 코퍼스에서 갈린다.
+    //
+    // [조사 범위 - 라운드 2, `grep -rn "^###.*변수" output/Procedures/*/docs/Spec.md
+    // output/Functions/*/docs/Spec.md output/External/*/*/*/docs/Spec.md`]
+    // 라운드 1은 `^#.*지역\s*변수` 패턴만 훑어 "지역 변수" 계열만 찾았고 "이 네
+    // 가지가 전부다"라고 잘못 적었다(리뷰 Important로 지적됨) - "내부 변수" 계열은
+    // 그 패턴에 아예 걸리지 않아 놓쳤다. 라운드 2는 "변수"가 들어간 `###` 헤딩
+    // 전체를 훑었고, 그 결과 이 여섯 가지가 전부다:
     //   1. `### 지역 변수 및 시스템 값`(COMM_UPD·EXPECT_PROC) - 헤더 "데이터 타입
     //      또는 구분"(COMM_UPD) / "데이터 타입"(EXPECT_PROC), 시스템 값 마커
     //      "SQL Server 시스템 값"(COMM_UPD) / "시스템 정수 값"(EXPECT_PROC)
@@ -154,8 +161,27 @@ public sealed class SpecStatementFactsExtractorTests
     //      종류", 시스템 값 마커 "시스템 상태값"
     //   3. `### 지역 변수와 컬럼 매핑`(PROC_ETC, S14의 원천) - 헤더 "데이터 타입"
     //      (구분 칸 없음), 시스템 값 행 자체가 없다
-    // Procedures 전체 + Functions·External의 Spec.md까지 훑어 이 네 가지가
-    // 전부다(Functions·External은 "지역 변수" 표 자체가 없고 산문으로만 언급한다).
+    //   4. `### 내부 변수`(INS_EXTRA, output/Procedures/dbo.UP_UTIL_SETTLE_INS_EXTRA
+    //      /docs/Spec.md:93) - 헤더 "데이터 타입"(구분 칸 없음), 시스템 값 행 없음
+    //   5. `### 내부 변수와 컬럼 관계`(SUMMARY_ETC,
+    //      output/Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_ETC/docs/Spec.md:58) -
+    //      헤더 "데이터 타입", 시스템 값 행 없음
+    // Functions·External의 Spec.md는 "지역 변수"·"내부 변수"를 산문으로만
+    // 언급할 뿐 `###` 표 절 자체가 없다(같은 grep으로 확인, 0건).
+    //
+    // [알려진 한계 - 이번 라운드에서 손대지 않음]
+    //   6. `output/Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA/docs/Spec.md:75`도
+    //      같은 "내부 변수 명칭" 표 모양을 담지만, 그 표 앞에 `###`(또는 `##`)
+    //      전용 헤딩이 아예 없다 - `## 파라미터 목록`의 매개변수 표 바로 다음 줄에
+    //      빈 줄 하나만 두고 곧장 이어진다. 헤딩 문자열이 없으니 이 절의 시작을
+    //      앵커할 수 없고, 절 경계 없이 표를 찾으면 `## 파라미터 목록` 표까지
+    //      "지역/내부 변수 표"로 잘못 삼킬 위험이 있다(그 표의 첫 칸은 "매개변수
+    //      명칭"이라 우연히 "명칭"을 포함해 iName 탐색에도 걸린다). 그래서 이
+    //      파일은 SpecStatementFactsExtractor가 LocalVariables를 못 읽는 상태로
+    //      남는다 - MechanicalValidator.CheckSpecLocalVariablesDeclared는 재료가
+    //      없으면 침묵하므로 거짓 오류는 나지 않지만, 검사 D가 이 SP에는 여전히
+    //      비활성이다. 헤딩 없는 절의 경계를 표 모양(헤더 칸 이름)만으로 판별하는
+    //      별도 설계가 있어야 다음 라운드에서 닫을 수 있다.
     // ─────────────────────────────────────────────────────────────────────
 
     // PROC_ETC(S14 원천)의 실물 헤딩·표 모양을 그대로 오려 왔다. 헤딩 문자열이
@@ -268,5 +294,99 @@ public sealed class SpecStatementFactsExtractorTests
 
         var local = Assert.Single(variables, v => v.Name == "@v_valIncVat");
         Assert.Equal("DECIMAL(2,1)", local.TypeOrKind);
+    }
+
+    // INS_EXTRA의 실물 헤딩·표 모양. 헤딩이 "지역"이 아니라 "내부"로 시작한다
+    // ("### 내부 변수") - "### 지역 변수" 접두사만으로는 이 헤딩을 못 찾는다.
+    [Fact]
+    public void LocalVariables_RecognizeInsExtraInnerVariableHeading()
+    {
+        const string spec = """
+            ### 내부 변수
+
+            | 변수 명칭 | 데이터 타입 | 초기값 또는 대입식 | 관련 컬럼 및 사용 관계 |
+            | :--- | :--- | :--- | :--- |
+            | `@v_strReqYMD` | `VARCHAR(8)` | `''`, 이후 `MIN(ReqYMD)` | 집계 결과를 대입받습니다. |
+            | `@v_valIncVat` | `DECIMAL(2,1)` | `1.1` | UPDATE 5에서 사용됩니다. |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_INS_EXTRA", spec) })["dbo.UP_UTIL_SETTLE_INS_EXTRA"];
+
+        var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strReqYMD");
+        Assert.Equal("VARCHAR(8)", local.TypeOrKind);
+        Assert.False(local.IsSystemValue);
+    }
+
+    // SUMMARY_ETC의 실물 헤딩·표 모양. 헤딩이 "### 내부 변수와 컬럼 관계"로,
+    // INS_EXTRA와도 글자가 다르다 - 접두사가 "### 내부 변수"까지만이어야
+    // 두 파일을 모두 잡으면서 뒤에 오는 꼬리말은 자유로워야 한다.
+    [Fact]
+    public void LocalVariables_RecognizeSummaryEtcInnerVariableAndColumnHeading()
+    {
+        const string spec = """
+            ### 내부 변수와 컬럼 관계
+
+            | 내부 변수 명칭 | 데이터 타입 | 값의 원천 | 삭제 조건에서 대응하는 컬럼 | 삽입 원천 조건 |
+            | :--- | :--- | :--- | :--- | :--- |
+            | `@v_strYMD` | `CHAR(8)` | 커서 `A.YMD` | `YMD` | `YMD` 조건 |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_ETC", spec) })["dbo.UP_UTIL_SETTLE_SUMMARY_ETC"];
+
+        var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strYMD");
+        Assert.Equal("CHAR(8)", local.TypeOrKind);
+    }
+
+    // "내부"로 넓혀도 지역/내부 변수 표가 아닌 절(가상의 "### 내부 통제 절차")을
+    // 삼키면 안 된다 - 접두사가 반드시 "내부 변수"까지 포함해야 한다.
+    [Fact]
+    public void LocalVariables_DoesNotSwallowUnrelatedHeadingThatOnlySharesTheWord내부()
+    {
+        const string spec = """
+            ### 내부 통제 절차
+
+            | 절차 | 설명 |
+            | :--- | :--- |
+            | 1단계 | 검토 |
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_UNRELATED2", spec) })["dbo.UP_UTIL_UNRELATED2"];
+
+        Assert.Empty(facts.LocalVariables);
+    }
+
+    // 알려진 한계(라운드 2에서 손대지 않음) - SUMMARY_EXTRA의 "내부 변수 명칭"
+    // 표는 전용 `###`/`##` 헤딩이 없어 헤딩 앵커 자체가 없다. 절 경계를 표
+    // 모양만으로 판별하지 않는 한, 이 표는 LocalVariables에 들어오지 않는다 -
+    // 이 테스트는 그 부재를 못박아 다음 라운드가 "이미 닫혔다"고 착각하지
+    // 않게 한다.
+    [Fact]
+    public void LocalVariables_KnownLimitation_HeadinglessInnerVariableTableIsNotRead()
+    {
+        const string spec = """
+            ## 파라미터 목록
+
+            | 매개변수 명칭 | 데이터 타입 | 방향 | Null 여부 | 기본값 | 사용처 및 영향 컬럼 |
+            | :--- | :--- | :--- | :--- | :--- | :--- |
+            | `@pi_strYMD` | `CHAR(8)` | 입력 | 없음 | 없음 | 조회 조건 |
+
+            | 내부 변수 명칭 | 데이터 타입 | 초기값 | 산출 방식 | 영향 |
+            | :--- | :--- | :--- | :--- | :--- |
+            | `@v_strReqYMD` | `VARCHAR(8)` | `''` | `MIN(ReqYMD)` | DELETE·INSERT 조건에 사용됩니다. |
+
+            ## CRUD 분석
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA", spec) })["dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA"];
+
+        Assert.Empty(facts.LocalVariables);
     }
 }

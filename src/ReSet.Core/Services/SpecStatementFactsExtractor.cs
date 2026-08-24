@@ -56,17 +56,41 @@ namespace ReSet.Core.Services
     {
         private const string DmlScopeHeading = "### DML 범위 (기계 확정 — 수정 금지)";
 
-        // 지역 변수 표 헤딩은 코퍼스에서 세 가지로 갈린다(축 B 검사 D 픽스 라운드 1
-        // 실측, output/Procedures/*/docs/Spec.md 전수 조사 - Functions·External은
-        // 이 표 자체가 없다):
-        //   "### 지역 변수 및 시스템 값"(COMM_UPD·EXPECT_PROC)
-        //   "### 지역 변수 및 시스템 상태값"(AcqManual)
-        //   "### 지역 변수와 컬럼 매핑"(PROC_ETC - S14의 원천)
-        // 고정 문자열 대조로는 세 번째를 못 읽어 S14의 지역 변수 9개가 재료 없이
-        // 통째로 침묵했다. "### 지역 변수"로 시작하는 절로 넓힌다 - 코퍼스 전체에서
-        // "### 지역"으로 시작하는 다른 절(예: 가상의 "### 지역별 매출 요약")과
-        // 겹치지 않으려면 "변수"까지 접두사에 포함해야 한다.
-        private const string LocalVariableHeadingPrefix = "### 지역 변수";
+        // 지역/내부 변수 표 헤딩은 코퍼스에서 갈린다.
+        //
+        // [조사 범위 - 라운드 2, `grep -rn "^###.*변수" output/Procedures/*/docs/Spec.md
+        // output/Functions/*/docs/Spec.md output/External/*/*/*/docs/Spec.md`]
+        // 라운드 1은 `^#.*지역\s*변수` 패턴만 훑어 "지역 변수" 계열만 찾았고 주석에
+        // "이 네 가지가 전부다"라고 적었다 - 틀린 진술이었다(리뷰 Important로 지적됨).
+        // "내부 변수" 계열은 그 패턴에 걸리지 않아 통째로 놓쳤고, 그 SP들(아래 4·5)은
+        // 10~15개 이상의 Job 단계에서 참조되는데도 검사 D가 조용히 비활성이었다.
+        // 라운드 2는 "변수"가 들어간 `###` 헤딩 전체를 훑었고, 그 결과 이 여섯
+        // 가지가 전부다(Functions·External은 "지역 변수"·"내부 변수"를 산문으로만
+        // 언급할 뿐 `###` 표 절 자체가 없다 - 같은 grep으로 확인, 0건):
+        //   1. "### 지역 변수 및 시스템 값"(COMM_UPD·EXPECT_PROC)
+        //   2. "### 지역 변수 및 시스템 상태값"(AcqManual)
+        //   3. "### 지역 변수와 컬럼 매핑"(PROC_ETC - S14의 원천)
+        //   4. "### 내부 변수"(INS_EXTRA,
+        //      output/Procedures/dbo.UP_UTIL_SETTLE_INS_EXTRA/docs/Spec.md:93)
+        //   5. "### 내부 변수와 컬럼 관계"(SUMMARY_ETC,
+        //      output/Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_ETC/docs/Spec.md:58)
+        // 접두사를 "### 지역 변수"·"### 내부 변수" 둘로 넓힌다 - "### 지역"·
+        // "### 내부"만으로 넓히면 무관한 절(가상의 "### 지역별 매출 요약",
+        // "### 내부 통제 절차")까지 삼킬 수 있어 "변수"까지 반드시 포함한다.
+        //
+        // [알려진 한계 - 이번 라운드에서 손대지 않음]
+        //   6. output/Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA/docs/Spec.md:75도
+        //      같은 "내부 변수 명칭" 표 모양을 담지만, 그 표 앞에 전용 `###`(또는
+        //      `##`) 헤딩이 아예 없다 - `## 파라미터 목록`의 매개변수 표 바로 다음
+        //      줄에 빈 줄 하나만 두고 곧장 이어진다. 헤딩 문자열이 없으니 이 절의
+        //      시작을 앵커할 수 없다 - 절 경계 없이 표만으로 찾으면 "매개변수 명칭"
+        //      표까지 "지역/내부 변수 표"로 잘못 삼킬 위험이 크다(그 표의 첫 칸도
+        //      "명칭"을 포함해 iName 탐색에 우연히 걸린다). 그래서 이 SP는 여전히
+        //      LocalVariables를 못 읽는다 - CheckSpecLocalVariablesDeclared는
+        //      재료가 없으면 침묵하므로 거짓 오류는 안 나지만 검사 D가 비활성인
+        //      채로 남는다. 헤딩 없는 절의 경계를 표 모양(헤더 칸 이름)만으로
+        //      판별하는 별도 설계가 있어야 다음 라운드에서 닫을 수 있다.
+        private static readonly string[] LocalVariableHeadingPrefixes = { "### 지역 변수", "### 내부 변수" };
 
         // 지역/시스템 값 구분 문구도 코퍼스에서 갈린다(같은 실측):
         //   "SQL Server 시스템 값"(COMM_UPD), "시스템 정수 값"(EXPECT_PROC),
@@ -213,7 +237,8 @@ namespace ReSet.Core.Services
         {
             var variables = new List<SpecLocalVariable>();
             var table = ReadTable(lines,
-                line => line.TrimEnd().StartsWith(LocalVariableHeadingPrefix, StringComparison.Ordinal));
+                line => LocalVariableHeadingPrefixes.Any(prefix =>
+                    line.TrimEnd().StartsWith(prefix, StringComparison.Ordinal)));
             if (table == null) return variables;
 
             var iName = FindColumn(table.Value.Header, "명칭");

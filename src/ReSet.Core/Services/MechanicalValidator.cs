@@ -5750,8 +5750,13 @@ namespace ReSet.Core.Services
         ///   DELETE 1·UPDATE 1~5 행에서는 정당한 최상위 술어다(같은 Spec.md:223-229) -
         ///   즉 "TxAmt가 명세서에 없다"가 아니라 "가드 자체가 재료에 없다"가 원인이다.
         /// - S07 🟠(명세서에 없는 `HAVING SUM(TxAmt) = 0` 신설)는 아래 [집계 검사를
-        ///   넣지 않은 이유]가 설명하는 대로, GroupingProbe가 하위질의·파생 테이블
-        ///   구분 없이 True를 내는데 원본에 이미 있던 집계와 구별할 재료가 없다.
+        ///   넣지 않은 이유]가 설명하는 대로 닫지 못한다 - 다만 그 이유는 "S07
+        ///   원본에 이미 있던 집계와 구별할 재료가 없어서"가 아니다. S07의 레거시
+        ///   `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC` 자체의 명세서에는 HAVING·GROUP BY
+        ///   사용이 원본부터 0건이다(아래 [정정] 참고) - 집계 검사를 넣으면 이
+        ///   SP에서는 오히려 정확히 걸린다. 넣지 않는 진짜 이유는, 같은 신호
+        ///   (HasGrouping=True)가 원본부터 안쪽에서 집계하는 다른 SP(COMM_UPD 등)의
+        ///   정상 문장에도 걸려 그 문장들에 거짓 오류를 낸다는 것이다.
         ///
         /// [왜 집계(GROUP BY·HAVING) 검사를 넣지 않았는가 - 실측]
         /// 계획 초안은 `statement.HasGrouping &amp;&amp; row.GroupBy.Count == 0 → 오류`를
@@ -5760,27 +5765,42 @@ namespace ReSet.Core.Services
         /// SUM(TxAmt) = 0)`(WHERE의 IN 하위질의) - HasGrouping=True.
         /// (2) `... FROM dbo.TSettleMst A INNER JOIN (SELECT ... GROUP BY C.PLTID
         /// HAVING SUM(TxAmt) = 0) AS K ON ...`(FROM절 파생 테이블) - 역시
-        /// HasGrouping=True. 실제 S07의 결함(`output/Procedures/
-        /// dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`)은 두 번째 모양이다 -
-        /// UPDATE 7이 파생 테이블 `K`를 FROM절에서 조인하고 그 정의 안에
-        /// `HAVING SUM(TxAmt) = 0`이 있다. 즉 이 신호는 "WHERE의 IN/EXISTS
-        /// 하위질의"로 좁혀 말할 수 없다 - <see cref="StepSqlStatementReader"/>의
-        /// GroupingProbe는 문장 전체를 훑어 하위질의든 파생 테이블이든 구분 없이
-        /// True를 낸다(ScalarSubquery·QueryDerivedTable에서 순회를 끊는
-        /// ColumnCollector와 달리 GroupingProbe에는 그런 경계가 없다). 그런데
-        /// T-SQL 문법상 UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수 없다 -
-        /// 그 절은 반드시 WHERE 하위질의나 FROM절 파생 테이블 등 더 안쪽 SELECT
-        /// 안에서만 등장한다. 즉 UPDATE·DELETE에서 HasGrouping=True인 경우는
-        /// 전부 더 안쪽 SELECT발이고, "원본에 원래 있던 집계"와 "이번에 새로 붙은
-        /// 집계"를 이름만으로는 구별할 수 없다(실측: output/Procedures/
-        /// dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md의 UPDATE 1~18 전부
-        /// GROUP BY 칸이 `—`이고, 그중 다수가 원본부터 하위질의를 쓴다).
-        /// StepSqlStatement 레코드는 Kind·TargetTable·Anchor·PredicateColumns·
-        /// JoinColumns·HasGrouping만 노출하고 원본 파싱 트리를 주지 않으므로, 이
-        /// 파일만 고치는 범위에서는 최상위 여부를 가려낼 재료가 없다
-        /// (StepSqlStatementReader.cs를 고쳐 최상위 전용 신호를 추가하는 것은 이
-        /// 태스크의 쓰기 허용 범위 밖이다). 오탐을 내느니(정상 문장을 결함으로
-        /// 몰아 단계 재생성 예산을 낭비하느니) 이 검사는 넣지 않는다.
+        /// HasGrouping=True.
+        ///
+        /// [정정 - 픽스 라운드 2] 이전 버전은 여기서 "실제 S07의 결함이 이 두
+        /// 번째 모양"이라며 `dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`을
+        /// 근거로 들었다 - 틀렸다. S07의 레거시는
+        /// `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC`이고(`[Approved Step List]`: S07 |
+        /// 예외 정책 적용 | Legacy: dbo.UP_UTIL_SETTLE_EXCEPTION_PROC), 그 SP의
+        /// 명세서에는 HAVING·GROUP BY 사용이 원본부터 0건이다(실측: `grep -c
+        /// HAVING`·`grep -c "GROUP BY"` 모두
+        /// output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md에서 0 -
+        /// 유일한 "GROUP BY" 등장은 DML 범위 표의 열 헤더 문구다. 다만 이 SP도
+        /// UPDATE 1·2·13·18 등에서 `IN (SELECT ...)` 형태의 하위질의는 원본부터
+        /// 쓴다 - 집합 판정용이지 집계는 아니다). 인용했던 두 번째 모양(파생
+        /// 테이블 `K`의 `HAVING SUM(TxAmt) = 0`)은 실제로는 **COMM_UPD**(별도
+        /// SP, S08의 레거시)의 UPDATE 7 원본에 있는 정상 집계다(같은 Spec.md:480·
+        /// 492) - 두 SP가 우연히 같은 서수("UPDATE 7")를 써서 혼동이 생겼다.
+        ///
+        /// 그래서 이 검사를 넣지 않는 진짜 이유는 "명세서가 S07의 원본 집계를
+        /// 기록하지 않아 구별할 수 없다"가 아니라, **이 대조가 원본부터 안쪽에서
+        /// 집계하는 다른 SP(COMM_UPD 등)의 정상 문장에 거짓 오류를 낸다**는
+        /// 것이다. 이 신호는 "WHERE의 IN/EXISTS 하위질의"로 좁혀 말할 수도 없다 -
+        /// <see cref="StepSqlStatementReader"/>의 GroupingProbe는 문장 전체를
+        /// 훑어 하위질의든 파생 테이블이든 구분 없이 True를 낸다
+        /// (ScalarSubquery·QueryDerivedTable에서 순회를 끊는 ColumnCollector와
+        /// 달리 GroupingProbe에는 그런 경계가 없다). T-SQL 문법상 UPDATE·DELETE
+        /// 문 자체는 GROUP BY·HAVING을 가질 수 없다 - 그 절은 반드시 WHERE
+        /// 하위질의나 FROM절 파생 테이블 등 더 안쪽 SELECT 안에서만 등장하므로,
+        /// UPDATE·DELETE에서 HasGrouping=True인 경우는 전부 더 안쪽 SELECT발이고
+        /// "원본에 원래 있던 집계"(COMM_UPD UPDATE 7 같은)와 "이번에 새로 붙은
+        /// 집계"를 이름만으로는 구별할 수 없다. StepSqlStatement 레코드는
+        /// Kind·TargetTable·Anchor·PredicateColumns·JoinColumns·HasGrouping만
+        /// 노출하고 원본 파싱 트리를 주지 않으므로, 이 파일만 고치는 범위에서는
+        /// 최상위 여부를 가려낼 재료가 없다(StepSqlStatementReader.cs를 고쳐
+        /// 최상위 전용 신호를 추가하는 것은 이 태스크의 쓰기 허용 범위 밖이다).
+        /// 오탐을 내느니(정상 문장을 결함으로 몰아 단계 재생성 예산을
+        /// 낭비하느니) 이 검사는 넣지 않는다.
         ///
         /// [검사 B의 함정을 그대로 물려받아 같은 방식으로 막는다]
         /// 1. (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다 -

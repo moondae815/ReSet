@@ -7275,18 +7275,31 @@ END";
         // GROUP BY PLTID HAVING SUM(TxAmt) = 0)`(WHERE의 IN 하위질의) -
         // HasGrouping=True. (2) `FROM T INNER JOIN (SELECT ... GROUP BY ...
         // HAVING SUM(TxAmt)=0) AS K ON ...`(FROM절 파생 테이블) - 역시
-        // HasGrouping=True. 실제 S07 결함(`output/Procedures/
-        // dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`)은 두 번째 모양이다 -
-        // UPDATE 7이 파생 테이블 `K`를 FROM절에서 조인하고 그 정의 안에
-        // `HAVING SUM(TxAmt) = 0`이 있다. 즉 "WHERE의 IN/EXISTS 하위질의"로
-        // 좁혀 말할 수 없다 - StepSqlStatementReader.GroupingProbe는 하위질의든
-        // 파생 테이블이든 구분 없이 문장 전체를 훑는다. 그런데 T-SQL 문법상
-        // UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수 없다 - 그 절은
-        // 반드시 더 안쪽 SELECT(하위질의·파생 테이블) 안에서만 등장하므로,
-        // "원본에 원래 있던 집계"와 "이번에 새로 붙은 집계"를 이름만으로는
-        // 구별할 수 없다(실측: output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/
-        // docs/Spec.md의 UPDATE 1~18 전부 GROUP BY 칸이 `—`인데, 그중 상당수가
-        // 원본부터 하위질의를 쓴다). StepSqlStatement는 Kind·TargetTable·Anchor·
+        // HasGrouping=True.
+        //
+        // [정정 - 픽스 라운드 2] 이전 버전은 여기서 "실제 S07 결함이 이 두 번째
+        // 모양"이라며 `dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`을 근거로
+        // 들었다 - 틀렸다. S07의 레거시는 `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC`이고
+        // (`[Approved Step List]`: S07 | 예외 정책 적용 | Legacy:
+        // dbo.UP_UTIL_SETTLE_EXCEPTION_PROC), 그 SP의 명세서에는 HAVING·GROUP BY
+        // 사용이 원본부터 0건이다(실측: `grep -c HAVING`·`grep -c "GROUP BY"` 모두
+        // output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md에서 0 -
+        // 유일한 "GROUP BY" 등장은 DML 범위 표의 열 헤더 문구다). 인용했던 두
+        // 번째 모양(파생 테이블 `K`의 `HAVING SUM(TxAmt) = 0`)은 실제로는
+        // COMM_UPD(별도 SP, S08의 레거시)의 UPDATE 7 원본에 있는 정상 집계다
+        // (같은 Spec.md:480·492) - 두 SP가 우연히 같은 서수("UPDATE 7")를 써서
+        // 혼동이 생겼다.
+        //
+        // 그래서 이 검사를 넣지 않는 진짜 이유는 "명세서가 S07의 원본 집계를
+        // 기록하지 않아 구별할 수 없다"가 아니라, 이 대조가 원본부터 안쪽에서
+        // 집계하는 다른 SP(COMM_UPD 등)의 정상 문장에 거짓 오류를 낸다는
+        // 것이다. 이 신호는 "WHERE의 IN/EXISTS 하위질의"로 좁혀 말할 수도 없다 -
+        // StepSqlStatementReader.GroupingProbe는 하위질의든 파생 테이블이든
+        // 구분 없이 문장 전체를 훑는다. T-SQL 문법상 UPDATE·DELETE 문 자체는
+        // GROUP BY·HAVING을 가질 수 없다 - 그 절은 반드시 더 안쪽 SELECT
+        // (하위질의·파생 테이블) 안에서만 등장하므로, "원본에 원래 있던 집계"
+        // (COMM_UPD UPDATE 7 같은)와 "이번에 새로 붙은 집계"를 이름만으로는
+        // 구별할 수 없다. StepSqlStatement는 Kind·TargetTable·Anchor·
         // PredicateColumns·JoinColumns·HasGrouping만 노출하고 원본 파싱 트리를
         // 주지 않으므로, 이 파일만 고치는 범위(StepSqlStatementReader.cs는 이
         // 태스크의 쓰기 허용 범위 밖)에서는 최상위 여부를 가려낼 수 없다. 오탐을
