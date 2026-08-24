@@ -374,6 +374,7 @@ namespace ReSet.Core.Services
 
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
                     SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
+                    SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                 }
             }
 
@@ -5601,6 +5602,78 @@ namespace ReSet.Core.Services
                     $"{DescribeMissingOrdinals(singleSource, group, matched, actual, expectedCount)}. " +
                     "각 문장의 본문을 전문으로 실으십시오 — 주석이나 " +
                     "\"원문 그대로 적용한다\"는 지시는 상수·계수·반올림 자릿수·UDF 인자를 복원하지 못합니다.");
+            }
+        }
+
+        /// <summary>
+        /// 앵커가 달린 문장이 명세서 그 행의 조인 키와 최상위 WHERE 술어 컬럼을
+        /// 전부 담았는지 본다.
+        ///
+        /// [POQSettleBatch1 축 B 감사]
+        /// S07 🟠 - 갱신 13의 최상위 WHERE(Y.YMD = @pi_strYMD, Y.PGNAME IN …)가 통째로
+        /// 빠졌다. (PLTID, ID)가 유일하지 않은 배포에서는 기준일 밖의 행까지 갱신된다.
+        /// S11 🟠 - 갱신 9의 TPLCardEDIMst 결합에서 YMD·UseState가 빠져 같은 금액의
+        /// 다른 일자 행까지 매칭된다.
+        ///
+        /// [왜 앵커가 달린 문장만 보는가]
+        /// 순서로 대응시키면(k번째 UPDATE ↔ 갱신 k) 단계가 문장 하나를 빼먹는 순간
+        /// 이후가 전부 어긋나 오탐이 쏟아진다. S07이 정확히 10개를 빼먹은 문서다.
+        /// 앵커가 하나도 없으면 요구를 1건만 내고(아래) 문장별 오류는 내지 않는다.
+        ///
+        /// [왜 이름만 보고 값은 보지 않는가]
+        /// 같은 조건을 명세서는 `UseState IN (0)`, 단계는 `UseState = 0`으로 쓴다.
+        /// 값까지 보면 실측 미검출의 27%가 이런 동등 표현이었고 그 전부가 오탐이었다.
+        ///
+        /// [왜 앵커 번호로 행을 찾을 때 Kind도 맞추는가]
+        /// 같은 번호의 UPDATE와 INSERT는 명세서에서 서로 다른 행이다 - Ordinal은
+        /// (문장 종류) 안에서만 유일하다(<see cref="CheckStatementCountAgainstSpec"/>
+        /// 참고). Kind 없이 번호만 맞추면 엉뚱한 행의 조인 키·술어 컬럼을 요구로
+        /// 낼 수 있다.
+        /// </summary>
+        private static void CheckAnchoredStatementFacts(
+            IReadOnlyList<SpecStatementFacts> facts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var rows = facts.SelectMany(f => f.DmlRows).ToList();
+            if (rows.Count == 0) return;
+
+            var anchored = statements.Where(s => s.Anchor.HasValue).ToList();
+            if (anchored.Count == 0)
+            {
+                // 앵커가 하나도 없다. 문장별 오류를 쏟지 않고 요구를 1건만 낸다.
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 SQL이 명세서 갱신 번호를 주석으로 달지 않았습니다. " +
+                    "각 DML 문장 바로 앞에 `/* U13: … */`처럼 번호를 다십시오 — 번호가 있어야 " +
+                    "명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조됩니다.");
+                return;
+            }
+
+            foreach (var statement in anchored)
+            {
+                var row = rows.FirstOrDefault(r =>
+                    r.Ordinal == statement.Anchor!.Value &&
+                    r.Kind.Equals(statement.Kind, StringComparison.OrdinalIgnoreCase));
+                if (row == null) continue;
+
+                var present = new HashSet<string>(
+                    statement.PredicateColumns.Concat(statement.JoinColumns), StringComparer.OrdinalIgnoreCase);
+
+                ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns);
+                ReportMissing("조인 키", row.JoinKeys);
+
+                void ReportMissing(string label, IReadOnlyList<string> expected)
+                {
+                    var missing = expected.Where(c => !present.Contains(c)).ToList();
+                    if (missing.Count == 0) return;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장에 명세서가 확정한 " +
+                        $"{label} {string.Join(", ", missing)}이(가) 없습니다. 명세서 DML 범위 표 " +
+                        $"{row.Kind} {row.Ordinal} 행의 값은 `{string.Join(", ", expected)}`입니다 — " +
+                        "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.");
+                }
             }
         }
 

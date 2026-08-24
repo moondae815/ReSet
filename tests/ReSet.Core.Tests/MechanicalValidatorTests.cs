@@ -7008,5 +7008,91 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("2개만") && e.Contains("15개를 확정"));
             Assert.DoesNotContain(result.Errors, e => e.Contains("빠진 것으로 보이는 번호"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 B - 앵커 문장의 조인 키·최상위 WHERE 술어 컬럼 누락.
+        // S07 🟠: 갱신 13의 최상위 WHERE(Y.YMD, Y.PGNAME)가 통째로 빠졌다.
+        // S11 🟠: 갱신 9의 TPLCardEDIMst 조인에서 YMD·UseState 결합이 빠졌다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredStatementMissingPredicateColumn_ShouldBeAnError()
+        {
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 13, 410, "TSettleMst",
+                        new[] { "PLTID", "ID", "YMD", "PGNAME" }, new[] { "PLTID", "ID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U13: 카드사 원가 반영 */\n" +
+                "UPDATE Y SET Y.CLCOMM = X.Amt FROM dbo.TSettleMst AS Y\n" +
+                "INNER JOIN CardCost AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
+            Assert.Contains(result.Errors, e => e.Contains("PGNAME"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredStatementMissingJoinKey_ShouldBeAnError()
+        {
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 9, 300, "TSettleMst",
+                        new[] { "PLTID" }, new[] { "PLTID", "YMD", "UseState" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 갱신 9\n" +
+                "UPDATE A SET A.EDIReqYMD = E.ReqYMD FROM dbo.TSettleMst AS A\n" +
+                "INNER JOIN dbo.TPLCardEDIMst AS E ON A.PLTID = E.PLTID\n" +
+                "WHERE A.PLTID > 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("조인 키") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutAnchors_AsksForAnchorsOnce()
+        {
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 1, 30, "TSettleMst", new[] { "YMD" },
+                            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 2, 58, "TSettleMst", new[] { "YMD" },
+                            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "UPDATE A SET A.CLVT = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Single(result.Errors, e => e.Contains("갱신 번호를 주석"));
+        }
     }
 }
