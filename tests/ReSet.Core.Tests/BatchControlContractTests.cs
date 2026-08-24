@@ -178,8 +178,10 @@ public sealed class BatchControlContractTests
         var steps = new[]
         {
             Plan("S01"),
-            // batch.BatchRunLock은 이 축의 전용 표(RunLock_* 테스트들)이므로 여기서는
-            // 정본에 없는 이름을 써서 "대상 보유"만으로 담당이 갈리는 것을 본다.
+            // 계약 밖 이름을 쓴다. 여기에 batch.BatchRunLock을 쓰면 그것도 정본
+            // FirstStepInserts 표라 S02가 둘 다 담당하게 되어, 이 테스트의 좁은 의도
+            // (계약 밖 대상은 담당을 얻지 않는다)가 흐려진다. 다중 담당은
+            // ResolveRowCreators_NamesOneStepForEveryFirstStepInsertsTableItTargets가 본다.
             Plan("S02", "batch.BatchRun", "batch.SomeUnrelatedTable"),
             Plan("S17", "batch.BatchRun")
         };
@@ -187,6 +189,27 @@ public sealed class BatchControlContractTests
         var creators = BatchControlContract.ResolveRowCreators(steps);
 
         Assert.Equal(new[] { "batch.BatchRun" }, creators["S02"]);
+    }
+
+    // Task 2가 batch.BatchRunLock을 FirstStepInserts로 들이면서 이 종류의 표가 둘이 됐다.
+    // ResolveRowCreators는 표마다 독립으로 담당을 정하므로, 한 단계가 둘 다 대상으로
+    // 가지면 둘 다 담당해야 한다. 코퍼스에서 BatchRunLock(125회)은 BatchRun과 함께
+    // 쓰이므로 가상의 조합이 아니다 - 표가 하나뿐이던 시절에는 존재하지 않던 경로다.
+    [Fact]
+    public void ResolveRowCreators_NamesOneStepForEveryFirstStepInsertsTableItTargets()
+    {
+        var steps = new[]
+        {
+            Plan("S01"),
+            Plan("S02", "batch.BatchRun", "batch.BatchRunLock"),
+            Plan("S17", "batch.BatchRun", "batch.BatchRunLock")
+        };
+
+        var creators = BatchControlContract.ResolveRowCreators(steps);
+
+        Assert.Equal(new[] { "batch.BatchRun", "batch.BatchRunLock" }, creators["S02"]);
+        // 뒤 단계는 같은 두 표를 대상으로 가져도 담당을 얻지 않는다.
+        Assert.DoesNotContain("S17", creators.Keys);
     }
 
     // 뒤 단계가 같은 테이블을 대상으로 가져도 그것은 UPDATE 지점이다. 담당이
