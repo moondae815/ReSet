@@ -6832,7 +6832,7 @@ END";
 
             return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     rows, Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
             };
         }
@@ -6853,6 +6853,54 @@ END";
             var result = new MechanicalValidator().ValidateBatchStep(
                 markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("15"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Task 17 I2 - C3를 고치면 드러나는 결함. 같은 레거시 SP가 이 Job의 여러
+        // 단계에 나뉘어 있으면 개수 대조를 하지 않는다 - 한 단계가 그 SP의 문장
+        // 몇 개를 맡는지 알 방법이 없다("귀속할 수 없으면 침묵한다").
+        //
+        // 실측(POQSettleProc4): UP_UTIL_SETTLE_EXCEPTION_PROC이 S10~S27 18개
+        // 단계에 나뉘어 있다. C3 수정 전에는 이 SP의 재료를 아예 못 찾아 검사 A가
+        // 무실행이었으므로 이 결함이 드러나지 않았다 - C3를 고치는 순간 33개
+        // 단계가 만족 불가능한 개수 요구를 받는다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_LegacyProcedureSplitAcrossSteps_CountCheckIsSilent()
+        {
+            var allSteps = new[] { LegacyStep("S10"), LegacyStep("S11") }; // 같은 SP를 나눠 담당
+
+            // 명세서는 UPDATE 15개를 확정하지만 이 단계는 1개만 담는다 - 분할되지
+            // 않았다면 이것은 오류다(위 ShouldBeAnError 테스트가 그것을 지킨다).
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15), allSteps);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_LegacyProcedureNotSplit_CountCheckStillFires_EvenWithAllStepsProvided()
+        {
+            // allSteps를 받아도, 이 SP를 담당하는 단계가 자기 자신뿐이면(분할 아님)
+            // 개수 대조는 그대로 살아 있어야 한다 - I2 수정이 검사 A를 통째로
+            // 죽이는 방향으로 과잉 적용되지 않았는지 본다.
+            var allSteps = new[] { LegacyStep("S07") };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15), allSteps);
 
             Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("15"));
         }
@@ -6884,6 +6932,48 @@ END";
                 new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Task 17 C3 - 조회 키가 이 파일 자신의 규약과 어긋난다.
+        //
+        // 실측: `LegacyProcedures` 항목 314개 중 134개(43%)가 스키마 접두사 없는
+        // 이름이고(`UP_UTIL_SETTLE_EXCEPTION_PROC`), 명세서의 FileName은 언제나
+        // `"{Schema}.{Name}"`이다(`ReSet.Cli/Program.cs:772-774`). 원문 그대로
+        // 대조하면 이 조합은 영원히 못 찾아 POQSettleProc1~5의 검사 A·B·C·D가 조용히
+        // 무실행이었다. `SpecStatementFactsExtractor.Extract`(실물)와
+        // `ValidateBatchStep`을 함께 써서 두 파일의 수정이 실제로 맞물리는지 본다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_SchemaLessLegacyProcedureName_MatchesExtractedSpecFacts()
+        {
+            const string spec = """
+                ### DML 범위 (기계 확정 — 수정 금지)
+
+                | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | GROUP BY | ORDER BY |
+                | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+                | UPDATE 1 | 30 | TSettleMst | YMD | 예 | (없음) | — | — |
+                """;
+
+            var statementFacts = SpecStatementFactsExtractor.Extract(
+                new[] { ("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", spec) });
+
+            // 스키마 접두사 없음 - 실물 43%의 모양.
+            var step = new BatchStepPlan(
+                Code: "S10", Name: "S10 단계",
+                LegacyProcedures: new[] { "UP_UTIL_SETTLE_EXCEPTION_PROC" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            // 명세서는 UPDATE 1개를 확정하는데 단계 본문에는 하나도 없다.
+            var markdown = "### S10 단계\n\n```sql\nSELECT 1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, statementFacts);
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("TSettleMst"));
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -6935,7 +7025,7 @@ END";
             // 서로 다른 SP의 "갱신 1"이 같은 번호로 충돌해 뜻을 잃는다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.SP_A"] = new SpecStatementFacts(
+                ["SP_A"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
@@ -6944,7 +7034,7 @@ END";
                             new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
                     },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
-                ["dbo.SP_B"] = new SpecStatementFacts(
+                ["SP_B"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
@@ -7069,7 +7159,7 @@ END";
             // 다시 앵커한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.SP_A"] = new SpecStatementFacts(
+                ["SP_A"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
@@ -7138,7 +7228,7 @@ END";
         {
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("SELECT", 1, 43, "—",
@@ -7164,7 +7254,7 @@ END";
         {
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("DELETE", 1, 36, "A",
@@ -7192,7 +7282,7 @@ END";
             // 진짜 결손은 여전히 잡혀야 한다 - 좁히다가 검사를 죽이면 안 된다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("SELECT", 1, 10, "—",
@@ -7234,7 +7324,7 @@ END";
         {
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_Util_Settle_Summary"] = new SpecStatementFacts(
+                ["UP_Util_Settle_Summary"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("DELETE", 1, 31, "TSettleByTX",
@@ -7311,7 +7401,7 @@ END";
         {
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 13, 410, "TSettleMst",
                         new[] { "PLTID", "ID", "YMD", "PGNAME" }, new[] { "PLTID", "ID" },
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7337,7 +7427,7 @@ END";
         {
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 9, 300, "TSettleMst",
                         new[] { "PLTID" }, new[] { "PLTID", "YMD", "UseState" },
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7371,7 +7461,7 @@ END";
             // 조용히 지나가야 한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[]
                     {
                         new SpecDmlRow("UPDATE", 1, 30, "TSettleMst", new[] { "YMD" },
@@ -7424,11 +7514,11 @@ END";
             // 수 없다 - 귀속할 수 없으면 침묵해야 한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.SP_A"] = new SpecStatementFacts(
+                ["SP_A"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
-                ["dbo.SP_B"] = new SpecStatementFacts(
+                ["SP_B"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
                         new[] { "PLTID", "PGNAME" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
@@ -7460,11 +7550,11 @@ END";
             // (Ordinal, Kind)로 유일하게 식별되므로 대조 능력이 그대로 유지되어야 한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.SP_A"] = new SpecStatementFacts(
+                ["SP_A"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
-                ["dbo.SP_B"] = new SpecStatementFacts(
+                ["SP_B"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 2, 20, "TSettleMst",
                         new[] { "PLTID" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
@@ -7497,7 +7587,7 @@ END";
             // JoinColumns(ON절)에만 대조해야 한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 9, 300, "TSettleMst",
                         Array.Empty<string>(), new[] { "PLTID", "YMD" },
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7526,7 +7616,7 @@ END";
             // 논리적으로 한 문장이라 합치면 요구(YMD, PGNAME)를 전부 충족한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 4, 100, "TSettleMst",
                         new[] { "YMD", "PGNAME" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7621,7 +7711,7 @@ END";
             // 동작만 확인한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 30, "TSettleMst",
                         new[] { "YMD", "OutState" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7648,7 +7738,7 @@ END";
             // 모든 단계가 걸린다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 30, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7680,7 +7770,7 @@ END";
             // 재현하는 FROM절 파생 테이블 쪽이다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 7, 223, "TSettleMst",
                         new[] { "PLTID" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7711,7 +7801,7 @@ END";
             // IN/EXISTS 하위질의"로 위험을 좁혀 말하면 이 실제 모양을 놓친다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 7, 223, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7741,12 +7831,12 @@ END";
             // 조합만으로는 어느 SP의 행인지 알 수 없으므로 침묵한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.SP_A"] = new SpecStatementFacts(
+                ["SP_A"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
                     Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
-                ["dbo.SP_B"] = new SpecStatementFacts(
+                ["SP_B"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
                         new[] { "PLTID", "TxAmt" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7780,7 +7870,7 @@ END";
             // 문장이라는 원칙을 검사 B와 동일하게 지키는지 함께 본다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 4, 100, "TSettleMst",
                         new[] { "YMD", "PGNAME" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7810,7 +7900,7 @@ END";
             // 번만 대조해 오류도 한 번만 낸다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     new[] { new SpecDmlRow("UPDATE", 9, 300, "TSettleMst",
                         new[] { "YMD" }, Array.Empty<string>(),
                         Array.Empty<string>(), Array.Empty<string>()) },
@@ -7840,7 +7930,7 @@ END";
             params SpecLocalVariable[] variables) =>
             new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
-                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
                     Array.Empty<SpecDmlRow>(), Array.Empty<SpecSetTarget>(), variables)
             };
 
@@ -8006,14 +8096,23 @@ END";
             Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Task 17 I1 - 출처 없는 단언을 프롬프트에 싣는다.
+        //
+        // 예전 메시지("다만 이 저장소는 반환값이 0이면 목차 기재 여부와 무관하게
+        // 무조건 성공으로 해석합니다")의 근거를 `src/`·`docs/`·`AGENTS.md`에서
+        // 찾지 못했다 - 오히려 `AiService.cs:3212`가 정반대를 지시한다("명시적
+        // SET 없이 헤더 주석만으로 0을 성공으로 가정하지 말라"). 판정에서 합성
+        // "0"을 없애고, 목차 `ErrorCodes`에 실제로 있는 값과만 대조한다.
+        // ─────────────────────────────────────────────────────────────────────
+
         [Fact]
-        public void ValidateBatchStep_SyntheticSuccessCodeAbsentFromPlan_MessageDoesNotClaimAlreadyListed()
+        public void ValidateBatchStep_SuccessCodeZeroNotDeclaredInPlan_IsSilent_NoSyntheticZeroAssumption()
         {
             // 실물 모양: POQSettleBatch1/S06 (ErrorCodes=["-9","-1"], DECLARE
-            // @v_currentStepId INT = 0). 판정은 codes(목차 + 합성 성공 코드 0)로
-            // 하지만, 목차 자체에는 "0"이 없다 - 메시지가 "0은(는) 이 단계의 오류
-            // 코드 집합 (-9, -1)에 이미 있는 값이라"고 적으면 방금 인쇄한 괄호 안에
-            // 0이 보이지 않는데 "있다"고 우기는 자기모순이 된다.
+            // @v_currentStepId INT = 0). "0"이 목차 오류 코드 집합에 없으므로,
+            // 근거 없는 "0=성공" 가정을 걷어낸 뒤에는 이 초기값을 문제 삼을 근거가
+            // 없다 - 침묵해야 한다.
             var markdown = "### S06 단계\n\n```sql\n" +
                 "DECLARE @v_currentStepId INT = 0;\n" +
                 "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
@@ -8023,9 +8122,24 @@ END";
                 markdown, StepWithCodes("S06", "-9", "-1"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>());
 
-            Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("0"));
-            Assert.DoesNotContain(
-                result.Errors, e => e.Contains("오류 코드 집합 (-9, -1)에 이미 있는 값"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_currentStepId"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_StatusVariableMessage_NeverClaimsUnconditionalZeroSuccessInterpretation()
+        {
+            // S13처럼 "0"이 목차 ErrorCodes에 실제로 있는 경우조차, 근거 없는
+            // 저장소 차원의 단언 문구는 다시는 나오면 안 된다.
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "DECLARE @v_currentStepId INT = 0;\n" +
+                "BEGIN CATCH\n  SET @po_intRetVal = @v_currentStepId;\nEND CATCH\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, StepWithCodes("S13", "-9", "0", "1001", "1002"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("무조건 성공으로 해석"));
         }
 
         [Fact]

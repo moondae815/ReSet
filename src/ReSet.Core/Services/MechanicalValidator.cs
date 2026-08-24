@@ -250,6 +250,12 @@ namespace ReSet.Core.Services
         /// 필터·분기에 쓰는 컬럼 이름(<see cref="SpecConditionColumnExtractor"/>가 뽑는다).
         /// 비어 있으면 조건 대조를 실행하지 않는다 - 대조할 재료가 없다는 사실을 로직이
         /// 빠졌다는 판정으로 바꾸지 않기 위한 소프트 스킵이다.</param>
+        /// <param name="allSteps">이 Job의 단계 목록 전체(이 단계 자신도 포함). 검사 A(개수
+        /// 대조)가 "같은 레거시 SP가 여러 단계에 나뉘어 있는가"를 판정하는 데만 쓴다
+        /// (Task 17 I2). 생략하거나 null이면 그 판정을 하지 않고 예전처럼 이 단계
+        /// 하나가 그 SP의 문장 전부를 담당한다고 본다 - 호출부
+        /// (<see cref="VerificationPipelineOrchestrator"/>)가 아직 이 인자를 넘기지
+        /// 않는 상태에서는 이 매개변수가 있어도 실행 중 동작은 바뀌지 않는다.</param>
         public StepValidationResult ValidateBatchStep(
             string? stepMarkdown,
             BatchStepPlan step,
@@ -257,7 +263,8 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
             IReadOnlyList<StepInterface>? stepInterfaces = null,
             IReadOnlyCollection<string>? runRowOwnedTables = null,
-            IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null)
+            IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null,
+            IReadOnlyList<BatchStepPlan>? allSteps = null)
         {
             var result = new StepValidationResult();
 
@@ -361,13 +368,23 @@ namespace ReSet.Core.Services
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
+            //
+            // [Task 17 C3] 조회는 원문 `name`이 아니라 `BareObjectName(name)`으로 한다 -
+            // `statementFactsByProcedure`는 이제 `BareObjectName(FileName)`으로 키를
+            // 만든다(SpecStatementFactsExtractor 참고). `CheckMissingConditionColumns`
+            // (:1514의 `BareObjectName(legacyProcedure)`)와 같은 규약이다. 실측:
+            // `LegacyProcedures` 항목 314개 중 134개(43%)가 스키마 접두사 없는
+            // 이름이라, 원문 그대로 조회하면 그 항목은 영원히 못 찾는다.
             if (statementFactsByProcedure != null && step.LegacyProcedures.Count > 0)
             {
-                var facts = step.LegacyProcedures
-                    .Select(name => statementFactsByProcedure.TryGetValue(name, out var f) ? f : null)
-                    .Where(f => f != null)
-                    .Select(f => f!)
+                var namedFacts = step.LegacyProcedures
+                    .Select(name => (Name: name,
+                        Facts: statementFactsByProcedure.TryGetValue(BareObjectName(name), out var f) ? f : null))
+                    .Where(nf => nf.Facts != null)
+                    .Select(nf => (nf.Name, Facts: nf.Facts!))
                     .ToList();
+
+                var facts = namedFacts.Select(nf => nf.Facts).ToList();
 
                 if (facts.Count > 0)
                 {
@@ -377,9 +394,26 @@ namespace ReSet.Core.Services
                     // C2의 CheckStatementCountAgainstSpec 문서 참고.
                     var statements = StepSqlStatementReader.Read(stepMarkdown, out var unparsedFenceCount);
 
+                    // [Task 17 I2] 같은 레거시 SP가 이 Job의 다른 단계에도 나뉘어 있으면
+                    // 그 SP의 DmlRows는 개수 대조에서 뺀다 - 한 단계가 그 SP의 문장 몇
+                    // 개를 맡는지 알 방법이 없다("귀속할 수 없으면 침묵한다"). 앵커
+                    // 기반 검사(B·C·D)는 이 필터를 받지 않는다 - 그 검사들은 "전부
+                    // 있어야 한다"가 아니라 "앵커가 달린 문장은 정확해야 한다"만
+                    // 요구하므로 분할과 무관하게 여전히 유효하다.
+                    //
+                    // `allSteps`가 없으면(호출부가 아직 넘기지 않으면) 예전 그대로
+                    // 전체 facts로 대조한다 - 재료가 없다는 사실을 결함 없음으로
+                    // 바꾸지 않기 위한 하위 호환이다.
+                    var countCheckFacts = allSteps == null
+                        ? facts
+                        : namedFacts
+                            .Where(nf => !IsLegacyProcedureSplitAcrossSteps(nf.Name, step.Code, allSteps))
+                            .Select(nf => nf.Facts)
+                            .ToList();
+
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
                     SafeCheck(() => CheckStatementCountAgainstSpec(
-                        facts, statements, unparsedFenceCount, step, result));
+                        countCheckFacts, statements, unparsedFenceCount, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
@@ -392,6 +426,27 @@ namespace ReSet.Core.Services
 
             result.IsValid = result.Errors.Count == 0;
             return result;
+        }
+
+        /// <summary>
+        /// 이 Job 안에서 같은 레거시 SP를 다른 단계도 담당하는지 본다 (Task 17 I2).
+        ///
+        /// 실측(POQSettleProc4): `UP_UTIL_SETTLE_EXCEPTION_PROC`이 S10~S27 18개
+        /// 단계에, `UP_UTIL_SETTLE_COMM_UPD`가 S28~S42 15개 단계에 나뉘어 있다.
+        /// 이 상태에서 한 단계에 그 SP의 DmlRows 전체를 요구하면 33개 단계가
+        /// 만족 불가능한 개수 요구를 받는다 - 한 단계가 그 SP의 문장 몇 개를
+        /// 맡는지 알 방법이 없다.
+        /// </summary>
+        private static bool IsLegacyProcedureSplitAcrossSteps(
+            string legacyProcedureName, string ownStepCode, IReadOnlyList<BatchStepPlan> allSteps)
+        {
+            var bare = BareObjectName(legacyProcedureName);
+            if (bare.Length == 0) return false;
+
+            return allSteps.Any(other =>
+                !string.Equals(other.Code, ownStepCode, StringComparison.OrdinalIgnoreCase) &&
+                other.LegacyProcedures.Any(p =>
+                    BareObjectName(p).Equals(bare, StringComparison.OrdinalIgnoreCase)));
         }
 
         private static string FirstNonEmptyLine(string markdown)
@@ -5573,6 +5628,19 @@ namespace ReSet.Core.Services
         /// 위 🟠(`@v_currentStepId = 0`)와 같은 뿌리라고 적었다. "선언 기본값과
         /// 다른가"로 판정을 넓히려면 SpecExpectations에 파라미터 기본값 칸을
         /// 더해야 하는데(현재 ParameterNames만 담는다) 이번 검사의 범위가 아니다.
+        ///
+        /// [Task 17 I1 - 합성 성공 코드 "0"을 뺀 이유]
+        /// 예전에는 "0"이 목차 `ErrorCodes`에 없어도 판정에 합성으로 더하고,
+        /// 메시지에 "다만 이 저장소는 반환값이 `0`이면 목차 기재 여부와 무관하게
+        /// 무조건 성공으로 해석합니다"라고 적었다. 이 문장의 근거를 `src/`·
+        /// `docs/`·`AGENTS.md` 전체에서 찾지 못했다 - 오히려
+        /// `AiService.cs:3212`가 정반대를 지시한다("Do not assume it returns 0 on
+        /// success based solely on header comments if there is no explicit `SET`
+        /// statement"). 코퍼스 스윕(326개 단계 파일)에서 이 검사 발화 127건 중
+        /// 70건(55%)이 이 문장을 담은 가지를 탔다 - 근거 없는 단언이 결함 판정의
+        /// 유일한 정당화였다. 이제는 목차 `ErrorCodes`에 실제로 있는 값과만
+        /// 대조한다 - `0`이 목차에 있으면(예: S13, `["-9","0","1001","1002"]`)
+        /// 여전히 잡히고, 없으면 침묵한다.
         /// </summary>
         private static void CheckStepIdInitialValue(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
@@ -5582,10 +5650,6 @@ namespace ReSet.Core.Services
             var declaredCodes = step.ErrorCodes
                 .Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
             var declaredCodeSet = new HashSet<string>(declaredCodes, StringComparer.Ordinal);
-
-            var codes = new HashSet<string>(declaredCodeSet, StringComparer.Ordinal);
-            codes.Add("0");   // 성공 코드는 목차에 없을 수도 있다 - 판정에는 넣지만,
-                              // 메시지에서는 declaredCodeSet과 구분해 사실대로 밝힌다(아래).
 
             var reported = new HashSet<(string Name, string Value)>();
 
@@ -5606,13 +5670,8 @@ namespace ReSet.Core.Services
                     if (!declared.Success) continue;
 
                     var initial = declared.Groups["value"].Value;
-                    if (!codes.Contains(initial)) continue;
+                    if (!declaredCodeSet.Contains(initial)) continue;
                     if (!reported.Add((name, initial))) continue;
-
-                    // declaredInPlan이 false면 codes.Contains(initial)이 성립하는 유일한
-                    // 경로는 위에서 합성으로 더한 "0"뿐이다(declaredCodeSet에는 없고
-                    // codes에만 "0"이 있다) - 그래서 initial == "0"이 보장된다.
-                    var declaredInPlan = declaredCodeSet.Contains(initial);
 
                     // [픽스 라운드 1 - Minor] "성공 코드일 수도 있습니다"는 초기값이
                     // 실제로 `0`일 때만 사실이다. 실측(POQSettleProc10/S16 등 6건)은
@@ -5630,27 +5689,14 @@ namespace ReSet.Core.Services
                         "`@po_intRetVal`로 돌려줍니다. ";
                     var suffix = $" {outcomeClause}. 어느 코드와도 겹치지 않는 값으로 초기화하십시오.";
 
-                    // [픽스 라운드 1 - Critical] 판정은 codes(목차 ErrorCodes + 합성
-                    // 성공 코드 "0")로 하면서 메시지가 항상 step.ErrorCodes만 인쇄하면,
-                    // "0"이 목차에 없는 단계(실측 POQSettleBatch1/S06,
-                    // ErrorCodes=["-9","-1"])에서 "0은(는) 이 단계의 오류 코드 집합
-                    // (-9, -1)에 이미 있는 값이라"는 문장이 나간다 - 방금 인쇄한 괄호
-                    // 안에 0이 안 보이는데 "있다"고 우기는 자기모순이다. 코퍼스 스윕
-                    // (326개 단계 파일 · 21개 Job)에서 이 검사가 낸 129건 중 70건이
-                    // 이 모순을 그대로 실었다(실측). 인쇄하는 근거와 판정 근거를
-                    // 일치시킨다 - 목차에 실제로 있는 값이면 그대로 인쇄하고, 성공
-                    // 코드 0이 목차에 없어 합성으로 더해진 경우면 그 사실을 두 문장으로
-                    // 따로 밝힌다(한 문장에 욱여넣으면 "…읽습니다이라"처럼 어색해진다).
-                    var message = declaredInPlan
-                        ? prefix +
-                          $"`{initial}`은(는) 이 단계의 오류 코드 집합 " +
-                          $"({string.Join(", ", declaredCodes)})에 이미 있는 값입니다." +
-                          suffix
-                        : prefix +
-                          $"이 단계의 목차 오류 코드 집합은 ({string.Join(", ", declaredCodes)})뿐이라 " +
-                          $"`{initial}`은(는) 그 목록에 없습니다. 다만 이 저장소는 반환값이 `0`이면 " +
-                          "목차 기재 여부와 무관하게 무조건 성공으로 해석합니다." +
-                          suffix;
+                    // [Task 17 I1] 합성 성공 코드를 없애 판정을 declaredCodeSet 하나로
+                    // 좁혔으므로(위 `if (!declaredCodeSet.Contains(initial)) continue;`),
+                    // 이 지점에 도달했다는 것은 `initial`이 이 단계의 오류 코드 집합에
+                    // 실제로 있다는 뜻이다 - 인쇄하는 근거와 판정 근거가 항상 일치한다.
+                    var message = prefix +
+                        $"`{initial}`은(는) 이 단계의 오류 코드 집합 " +
+                        $"({string.Join(", ", declaredCodes)})에 이미 있는 값입니다." +
+                        suffix;
 
                     result.Errors.Add(message);
                 }

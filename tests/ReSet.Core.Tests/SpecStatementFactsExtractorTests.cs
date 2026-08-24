@@ -36,7 +36,24 @@ public sealed class SpecStatementFactsExtractorTests
 
     private static SpecStatementFacts Extract() =>
         SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_COMM_UPD", Spec) })["dbo.UP_UTIL_SETTLE_COMM_UPD"];
+            new[] { ("dbo.UP_UTIL_SETTLE_COMM_UPD", Spec) })["UP_UTIL_SETTLE_COMM_UPD"];
+
+    // Task 17 C3 - 실측: `step.LegacyProcedures` 314개 중 134개(43%)가 스키마
+    // 접두사 없는 이름이다(예: `UP_UTIL_SETTLE_EXCEPTION_PROC`). 그런데 명세서의
+    // FileName은 언제나 `"{Schema}.{Name}"`이다(`ReSet.Cli/Program.cs:772-774`).
+    // 추출기가 FileName 원문을 그대로 키로 쓰면 접두사 없는 이름은 영원히 못
+    // 찾는다 - `CheckMissingConditionColumns`(`MechanicalValidator.cs:1514`)가
+    // 이미 `BareObjectName(legacyProcedure)`로 조회하는 것과 같은 규약을
+    // 이 추출기도 따라야 한다.
+    [Fact]
+    public void Extract_KeysByBareObjectName_SoSchemaLessLegacyProcedureNamesCanLookItUp()
+    {
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_UTIL_SETTLE_COMM_UPD", Spec) });
+
+        Assert.True(facts.ContainsKey("UP_UTIL_SETTLE_COMM_UPD"));
+        Assert.False(facts.ContainsKey("dbo.UP_UTIL_SETTLE_COMM_UPD"));
+    }
 
     // 헤딩과 표 사이의 빈 줄이 `|`로 시작하지 않는 줄만 표 행으로 보는 필터
     // (ReadTableInRange) 없이는 그 빈 줄이 1칸짜리 "헤더"가 되어 진짜 헤더 행이
@@ -115,7 +132,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_INSERT_ONLY", spec) })["dbo.UP_UTIL_INSERT_ONLY"];
+            new[] { ("dbo.UP_UTIL_INSERT_ONLY", spec) })["UP_UTIL_INSERT_ONLY"];
 
         Assert.Empty(facts.SetTargets);
     }
@@ -139,7 +156,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_INSERT_ONLY", spec) })["dbo.UP_UTIL_INSERT_ONLY"];
+            new[] { ("dbo.UP_UTIL_INSERT_ONLY", spec) })["UP_UTIL_INSERT_ONLY"];
 
         Assert.Empty(facts.SetTargets);
     }
@@ -201,7 +218,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_PROC_ETC", spec) })["dbo.UP_UTIL_SETTLE_PROC_ETC"];
+            new[] { ("dbo.UP_UTIL_SETTLE_PROC_ETC", spec) })["UP_UTIL_SETTLE_PROC_ETC"];
 
         var money = Assert.Single(facts.LocalVariables, v => v.Name == "@v_intCLTotal");
         Assert.Equal("MONEY", money.TypeOrKind);
@@ -226,7 +243,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_Util_Settle_Summary_AcqManual", spec) })["dbo.UP_Util_Settle_Summary_AcqManual"];
+            new[] { ("dbo.UP_Util_Settle_Summary_AcqManual", spec) })["UP_Util_Settle_Summary_AcqManual"];
 
         var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strOutYMD");
         Assert.Equal("varchar(8)", local.TypeOrKind);
@@ -254,7 +271,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_EXPECT_PROC", spec) })["dbo.UP_UTIL_SETTLE_EXPECT_PROC"];
+            new[] { ("dbo.UP_UTIL_SETTLE_EXPECT_PROC", spec) })["UP_UTIL_SETTLE_EXPECT_PROC"];
 
         var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_PLCardSettlePeriodPG");
         Assert.Equal("varchar(200)", local.TypeOrKind);
@@ -278,7 +295,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_UNRELATED", spec) })["dbo.UP_UTIL_UNRELATED"];
+            new[] { ("dbo.UP_UTIL_UNRELATED", spec) })["UP_UTIL_UNRELATED"];
 
         Assert.Empty(facts.LocalVariables);
     }
@@ -313,7 +330,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_INS_EXTRA", spec) })["dbo.UP_UTIL_SETTLE_INS_EXTRA"];
+            new[] { ("dbo.UP_UTIL_SETTLE_INS_EXTRA", spec) })["UP_UTIL_SETTLE_INS_EXTRA"];
 
         var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strReqYMD");
         Assert.Equal("VARCHAR(8)", local.TypeOrKind);
@@ -337,7 +354,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_ETC", spec) })["dbo.UP_UTIL_SETTLE_SUMMARY_ETC"];
+            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_ETC", spec) })["UP_UTIL_SETTLE_SUMMARY_ETC"];
 
         var local = Assert.Single(facts.LocalVariables, v => v.Name == "@v_strYMD");
         Assert.Equal("CHAR(8)", local.TypeOrKind);
@@ -357,7 +374,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_UNRELATED2", spec) })["dbo.UP_UTIL_UNRELATED2"];
+            new[] { ("dbo.UP_UTIL_UNRELATED2", spec) })["UP_UTIL_UNRELATED2"];
 
         Assert.Empty(facts.LocalVariables);
     }
@@ -385,7 +402,7 @@ public sealed class SpecStatementFactsExtractorTests
             """;
 
         var facts = SpecStatementFactsExtractor.Extract(
-            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA", spec) })["dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA"];
+            new[] { ("dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA", spec) })["UP_UTIL_SETTLE_SUMMARY_EXTRA"];
 
         Assert.Empty(facts.LocalVariables);
     }
