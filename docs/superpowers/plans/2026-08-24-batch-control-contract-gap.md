@@ -746,6 +746,31 @@ Expected: FAIL — 첫 테스트가 오류를 찾지 못한다.
         }
 ```
 
+- [ ] **Step 3-B: 같은 파일의 거짓 IDENTITY 지시 두 자리를 함께 닫는다**
+
+**이것은 이 회차가 새로 만든 결함이다.** Task 2가 `batch.BatchRunLock`을 `FirstStepInserts`로
+들이기 전에는 그 축의 멤버가 `batch.BatchRun` 하나뿐이라 아래 두 문장이 항상 참이었다.
+이제는 IDENTITY 컬럼이 없는 두 번째 멤버가 있어 거짓이 된다. Task 4가 `RenderPromptTable`에서
+같은 결함을 닫았는데, 세 자리 중 하나만 닫은 셈이다.
+
+- `MechanicalValidator.cs`의 `CheckBatchRunRowCreation` — *"이 테이블은 단계 목록의 첫 단계가
+  INSERT하며 RunId를 발급하는 계약인데 … SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에
+  넘기십시오."*
+- 같은 파일의 `CheckFirstStepRowCreation` — *"… INSERT를 두고 SCOPE_IDENTITY()로 발급된
+  RunId를 이후 단계에 넘기십시오."*
+
+두 번째가 특히 급하다. 그 문자열이 `StepValidationResult` → `SuggestedPromptFix` →
+`floorFeedback`을 타고 **재생성 프롬프트에 시정 지시로 실린다** — 설계서 4절이 막으려던
+"프롬프트에 거짓 지시가 실린다"와 같은 경로다.
+
+`DetailedError.Type = ErrorType.BatchRunRowNeverCreated`도 잠금 행이 빠진 경우에는
+이름이 맞지 않는다. 함께 볼 것.
+
+**고치는 방법**: `RenderPromptTable`이 이미 하는 대로 `table.Columns.Any(c => c.IsIdentity)`로
+문장을 가른다. 세 자리가 같은 규칙을 쓰게 하는 것이 목적이다 —
+`BatchControlContract` 클래스 주석이 *"계약 문구를 조립 코드에서 다시 쓰지 마십시오 -
+테스트가 닿지 않는 계약이 된다"* 고 적은 자리다.
+
 - [ ] **Step 4: 배선한다**
 
 `ValidateBatchStep` 안, `CheckBatchControlVocabulary(stepMarkdown, step, result);` **바로 위**에 한 줄을 더한다.

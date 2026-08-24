@@ -176,16 +176,29 @@ PK를 두지 않는다고 적고 이유를 *"한 단계가 같은 `IssueCode`를
 | `AiService.cs:4045` 프롬프트 표 | 12행 추가 |
 | `TaskFileComposer.cs:210` 부트스트랩 DDL | `CREATE TABLE` 둘 추가(PK·CHECK 포함) |
 | `CheckBatchControlVocabulary`(`MechanicalValidator.cs:653`) | 19 + 19단계에서 새로 켜진다(전체 326 중) |
-| `CheckAnchoredStatementExtras`(`:5813`, 검사 C) | 예외 목록에 컬럼 이름 8개 추가 |
-| `CheckBatchRunRowCreation`(`:6051`) | `BatchRunLock`을 언급하면서 만드는 지점이 없는 계획서를 잡는다 |
-| `CheckBatchControlRowOrigin`(`:1376`) | 영향 없음 — `EachStepInserts` 표만 보는데 둘 다 아니다 |
+| `CheckBatchRunRowCreation`(`:5920`) | `BatchRunLock`을 언급하면서 만드는 지점이 없는 계획서를 잡는다 |
+| `CheckBatchControlRowOrigin`(`:1375`) | 영향 없음 — `EachStepInserts` 표만 보는데 둘 다 아니다 |
+| `CheckFirstStepRowCreation`(`:1445`) | `Find`를 거쳐 담당 표를 해석한다 |
 
-**검사 C의 예외 목록 확대는 무해하다.** 검사 C가 계약의 모든 컬럼 이름을 "명세서가 인정한
-이름"으로 취급하므로 새 이름이 레거시 업무 컬럼과 겹치면 검출력이 조용히 떨어진다. 실측하니
-`ControlName`·`ControlValue`·`CapturedAtUtc`·`OwnerRunId`·`LockStatus`·`AcquiredAtUtc`·
-`HeartbeatAtUtc`·`ReleasedAtUtc` 여덟 개가 `output/Procedures/*/docs/Spec.md` 전체에 **0건**이다.
-기존 계약 이름 넷(`RunId`·`StepCode`·`JobName`·`BatchYmd`)도 0건으로 같은 패턴이다.
-잃는 검출이 없다.
+> **정정(최종 리뷰).** 이 표의 초판은 검사 C(`CheckAnchoredStatementExtras`)가 계약 컬럼
+> 이름을 예외 목록으로 쓴다고 적고 줄 번호까지 달았다. **이 브랜치에는 그런 코드가 없다** —
+> 그 검사는 병렬 회차(`axis-b-step-check`)가 만드는 중이고, 설계를 쓸 때 그쪽 체크아웃의
+> 소스를 읽고 이 브랜치의 현재 상태인 것처럼 적은 것이 원인이다. 이 브랜치의
+> `BatchControlContract.Tables` 소비처는 `MechanicalValidator.cs`의 셋(`652`·`1375`·`5920`)과
+> `AiService.cs:4045`·`TaskFileComposer.cs:210`·`VerificationPipelineOrchestrator.cs:3192`다.
+>
+> 그때 잰 사실 자체는 유효하다 — 새 컬럼 이름 여덟 개
+> (`ControlName`·`ControlValue`·`CapturedAtUtc`·`OwnerRunId`·`LockStatus`·`AcquiredAtUtc`·
+> `HeartbeatAtUtc`·`ReleasedAtUtc`)가 `output/Procedures/*/docs/Spec.md` 전체에 **0건**이고
+> 기존 계약 이름 넷도 0건이다. 그러므로 병렬 회차의 검사 C가 병합된 뒤에도 그 예외 목록
+> 확대는 검출력을 떨어뜨리지 않는다. **다만 그것은 이 브랜치가 아니라 병합 후에 성립하는
+> 사실이다.**
+
+**이 회차가 새로 만든 결함 하나가 남았다.** `BatchRunLock`이 `FirstStepInserts`의 두 번째
+멤버가 되면서, `CheckBatchRunRowCreation`과 `CheckFirstStepRowCreation`이 그 축의 모든 표에
+내던 *"SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오"* 가 거짓이 됐다. 뒤 문장은
+`SuggestedPromptFix`를 타고 재생성 프롬프트에 실린다. `MechanicalValidator.cs`가 이 계획의
+범위 밖이라 여기서 닫지 못하고, **계획서의 게이트된 Task 5 Step 3-B에 기록했다.**
 
 **`CheckBatchRunRowCreation`의 부수 효과는 의도한 것이다.** 잠금을 해제(UPDATE)만 하고 아무도
 획득(INSERT)하지 않는 계획서가 걸린다. 누군가는 잠금을 잡아야 한다.
