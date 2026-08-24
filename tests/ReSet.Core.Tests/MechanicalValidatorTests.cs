@@ -7094,5 +7094,158 @@ END";
 
             Assert.Single(result.Errors, e => e.Contains("갱신 번호를 주석"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 B 픽스 라운드 1.
+        //
+        // [1] Critical - 앵커 행 조회가 SP 경계를 무시했다. `rows.FirstOrDefault(Ordinal,
+        // Kind)`만 쓰면 레거시 SP가 둘 이상이고 두 SP 모두 같은 (Ordinal, Kind)(예:
+        // 둘 다 "UPDATE 1")를 가질 때 먼저 열거된 SP의 행과 대조되어 실제로는 다른 SP의
+        // 요구를 충족한 문장에 거짓 오류가 난다. `CheckStatementCountAgainstSpec`이
+        // `singleSource` 가드로 막아 놓은 것과 같은 문제라, (Ordinal, Kind)로 매칭되는
+        // 명세서 행이 정확히 하나일 때만 대조하고 둘 이상이면(어느 SP 것인지 알 수 없음)
+        // 그 문장만 침묵한다 - 번호가 겹치지 않는 다중 SP 단계에서는 검출력이 유지된다.
+        //
+        // [2] Important - `JoinKeys` 칸을 WHERE·JOIN 합집합에 대조하면 조인 키가
+        // ON절에서 빠지고 WHERE에만 남은 것(S11 🟠의 실제 모양)을 놓친다. 명세서 DML
+        // 범위 표 헤더상 "조인 결합 포함"은 술어 칸(PredicateColumns)에만 해당하므로,
+        // 술어 칸은 합집합, 조인 키 칸은 JoinColumns(ON절)에만 대조한다.
+        //
+        // [3] Important - 같은 앵커가 청크로 반복된 문장들을 독립적으로 대조하면
+        // 합치면 충족되는 요구를 조각 단위로만 봐서 오검출한다. 같은 (앵커, 종류)의
+        // 조각을 합쳐 한 번만 대조한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_AmbiguousAnchorAcrossMultipleLegacyProcedures_IsSilent()
+        {
+            // SP_A의 UPDATE 1은 YMD만 요구하고 SP_B의 UPDATE 1은 PLTID·PGNAME을
+            // 요구한다. 문장은 실제로 SP_B의 요구(PLTID, PGNAME)를 충족하지만, 어느
+            // SP 출신인지 표시가 없어 (Ordinal, Kind)만으로는 두 행 중 하나를 고를
+            // 수 없다 - 귀속할 수 없으면 침묵해야 한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                        new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+                ["dbo.SP_B"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                        new[] { "PLTID", "PGNAME" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "S07 단계",
+                LegacyProcedures: new[] { "dbo.SP_A", "dbo.SP_B" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A " +
+                "WHERE A.PLTID = @p AND A.PGNAME = @p2;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_NonOverlappingAnchorsAcrossMultipleLegacyProcedures_IsStillChecked()
+        {
+            // SP_A는 UPDATE 1, SP_B는 UPDATE 2를 확정해 번호가 겹치지 않는다 - 이때는
+            // (Ordinal, Kind)로 유일하게 식별되므로 대조 능력이 그대로 유지되어야 한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                        new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+                ["dbo.SP_B"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 2, 20, "TSettleMst",
+                        new[] { "PLTID" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "S07 단계",
+                LegacyProcedures: new[] { "dbo.SP_A", "dbo.SP_B" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            // U1(SP_A)은 YMD가 빠져 있어 오류가 나야 한다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U1\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.PLTID = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_JoinKeyPresentOnlyInWhereNotOn_ShouldBeAnError()
+        {
+            // S11 🟠의 실제 모양: 조인 키(PLTID, YMD)가 ON절이 아니라 WHERE 필터로만
+            // 등장한다. WHERE·JOIN 합집합으로 대조하면 이 결함을 놓친다 - 조인 키 칸은
+            // JoinColumns(ON절)에만 대조해야 한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 9, 300, "TSettleMst",
+                        Array.Empty<string>(), new[] { "PLTID", "YMD" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 갱신 9\n" +
+                "UPDATE A SET A.EDIReqYMD = E.ReqYMD FROM dbo.TSettleMst AS A\n" +
+                "INNER JOIN dbo.TPLCardEDIMst AS E ON A.RowGuid = E.RowGuid\n" +
+                "WHERE A.PLTID = @p AND A.YMD = @p2;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("조인 키") && e.Contains("PLTID") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ChunkedAnchoredStatementsMergeColumns_IsSilentWhenUnionSatisfies()
+        {
+            // 같은 앵커(U4)가 물리 조각 둘에 반복된다. 조각1엔 YMD만, 조각2엔
+            // PGNAME만 있어 개별 조각 기준으로는 둘 다 부족해 보이지만, 청크 분할은
+            // 논리적으로 한 문장이라 합치면 요구(YMD, PGNAME)를 전부 충족한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 4, 100, "TSettleMst",
+                        new[] { "YMD", "PGNAME" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U4\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "-- U4\n" +
+                "UPDATE A SET A.CLVT = 2 FROM dbo.TSettleMst AS A WHERE A.PGNAME = @p2;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
     }
 }

@@ -5629,6 +5629,32 @@ namespace ReSet.Core.Services
         /// (문장 종류) 안에서만 유일하다(<see cref="CheckStatementCountAgainstSpec"/>
         /// 참고). Kind 없이 번호만 맞추면 엉뚱한 행의 조인 키·술어 컬럼을 요구로
         /// 낼 수 있다.
+        ///
+        /// [픽스 라운드 1 Critical - 왜 (Ordinal, Kind)가 유일할 때만 대조하는가]
+        /// 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다
+        /// (<see cref="CheckStatementCountAgainstSpec"/>의 singleSource 가드와 같은
+        /// 사실). 두 SP가 모두 같은 (Ordinal, Kind)(예: 둘 다 "UPDATE 1")를 가지면
+        /// `rows`에 그 조합이 두 번 나타나고, 첫 번째만 골라 대조하면 실제로는
+        /// 다른 SP의 요구를 충족한 문장에 거짓 오류가 난다(실측: SP_A의 UPDATE 1은
+        /// YMD만 요구, SP_B의 UPDATE 1은 PLTID·PGNAME을 요구하는데 PLTID·PGNAME을
+        /// 담은 SP_B 문장에 "YMD가 없다"는 틀린 오류가 났다). 그래서 singleSource
+        /// 가드처럼 SP 개수를 미리 재는 대신, (Ordinal, Kind)로 매칭되는 행 자체가
+        /// 정확히 하나일 때만 대조한다 - 둘 이상이면 어느 SP 것인지 알 수 없으므로
+        /// 그 문장만 침묵한다. 번호가 겹치지 않는 다중 SP 단계에서는 매칭이
+        /// 여전히 유일해 검출력이 유지된다.
+        ///
+        /// [픽스 라운드 1 Important - 왜 조인 키 칸은 JoinColumns에만 대조하는가]
+        /// 명세서 DML 범위 표 헤더의 "조인 결합 포함"은 술어 칸(PredicateColumns)에만
+        /// 해당한다 - 술어가 조인된 테이블의 컬럼을 참조할 수 있다는 뜻이다. 조인 키
+        /// 칸까지 WHERE·JOIN 합집합으로 대조하면, 조인 키가 ON절에서는 빠지고
+        /// WHERE 필터로만 남아도 통과한다 - 그것이 바로 S11 🟠이 닫으려는 결함
+        /// (조인 ON에서 조인 키 누락)의 변형이라 놓치면 안 된다.
+        ///
+        /// [픽스 라운드 1 Important - 왜 같은 앵커의 조각을 합쳐 한 번만 대조하는가]
+        /// 청크 분할은 논리적으로 한 문장이다(<see cref="DescribeMissingOrdinals"/>의
+        /// 중복 앵커 주석이 인정하는 같은 패턴). 조각마다 독립적으로 대조하면, 조각1엔
+        /// YMD만·조각2엔 PGNAME만 있어 합치면 요구를 전부 충족하는데도 조각 단위로는
+        /// 둘 다 부족해 보여 이중으로 오검출한다.
         /// </summary>
         private static void CheckAnchoredStatementFacts(
             IReadOnlyList<SpecStatementFacts> facts,
@@ -5650,20 +5676,35 @@ namespace ReSet.Core.Services
                 return;
             }
 
-            foreach (var statement in anchored)
+            // 같은 (앵커, 종류)로 묶는다 - 청크 분할된 조각들을 논리적으로 한 문장으로
+            // 합쳐서 본다.
+            var groups = anchored.GroupBy(s => (Ordinal: s.Anchor!.Value, Kind: s.Kind.ToUpperInvariant()));
+
+            foreach (var group in groups)
             {
-                var row = rows.FirstOrDefault(r =>
-                    r.Ordinal == statement.Anchor!.Value &&
-                    r.Kind.Equals(statement.Kind, StringComparison.OrdinalIgnoreCase));
-                if (row == null) continue;
+                // (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다.
+                // 레거시 SP가 둘 이상이면 이 조합이 서로 다른 SP의 서로 다른 행을
+                // 가리키도록 겹칠 수 있다 - 그 상태에서는 귀속할 수 없으므로 침묵한다.
+                var candidates = rows.Where(r =>
+                    r.Ordinal == group.Key.Ordinal &&
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (candidates.Count != 1) continue;
 
-                var present = new HashSet<string>(
-                    statement.PredicateColumns.Concat(statement.JoinColumns), StringComparer.OrdinalIgnoreCase);
+                var row = candidates[0];
 
-                ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns);
-                ReportMissing("조인 키", row.JoinKeys);
+                var predicateColumns = group.SelectMany(s => s.PredicateColumns).ToList();
+                var joinColumns = group.SelectMany(s => s.JoinColumns).ToList();
 
-                void ReportMissing(string label, IReadOnlyList<string> expected)
+                // 술어 칸은 "조인 결합 포함"이므로 WHERE·ON 합집합과 대조하지만,
+                // 조인 키 칸은 ON절(JoinColumns)에만 대조한다 - 위 문서 참고.
+                var predicatePresent = new HashSet<string>(
+                    predicateColumns.Concat(joinColumns), StringComparer.OrdinalIgnoreCase);
+                var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
+
+                ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
+                ReportMissing("조인 키", row.JoinKeys, joinPresent);
+
+                void ReportMissing(string label, IReadOnlyList<string> expected, HashSet<string> present)
                 {
                     var missing = expected.Where(c => !present.Contains(c)).ToList();
                     if (missing.Count == 0) return;
