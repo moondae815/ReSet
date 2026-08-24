@@ -375,6 +375,7 @@ namespace ReSet.Core.Services
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
                     SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
+                    SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                 }
             }
 
@@ -5715,6 +5716,105 @@ namespace ReSet.Core.Services
                         $"{row.Kind} {row.Ordinal} 행의 값은 `{string.Join(", ", expected)}`입니다 — " +
                         "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.");
                 }
+            }
+        }
+
+        /// <summary>
+        /// 앵커가 달린 문장의 최상위 WHERE 술어 컬럼에 명세서 그 행이 확정하지 않은
+        /// 이름이 붙었는지 본다.
+        ///
+        /// [POQSettleBatch1 축 B 감사]
+        /// S09 🟠 - `-9` 사전 검증 EXISTS에 `SM.TxAmt = 0`을 하나 더 붙였다. 이미
+        /// 지급 처리된 행이 TxAmt &lt;&gt; 0이면 원본은 -9로 즉시 반환하는데 단계는
+        /// 통과시켜 DELETE → INSERT로 지급 확정 원장을 다시 만든다.
+        ///
+        /// [왜 집계(GROUP BY·HAVING) 검사를 넣지 않았는가 - 실측]
+        /// 계획 초안은 `statement.HasGrouping &amp;&amp; row.GroupBy.Count == 0 → 오류`를
+        /// 제안했다. 프로브 실측(`WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx
+        /// GROUP BY PLTID HAVING SUM(TxAmt) = 0)`)으로 확인한 사실:
+        /// <see cref="StepSqlStatementReader"/>의 GroupingProbe는 문장 전체(하위질의
+        /// 포함)를 훑어 이 문장에서도 HasGrouping=True를 낸다 - ScalarSubquery에서
+        /// 순회를 끊는 ColumnCollector와 달리 GroupingProbe에는 그런 경계가 없다.
+        /// 그런데 T-SQL 문법상 UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수
+        /// 없다 - 그 절은 반드시 WHERE의 IN/EXISTS 하위질의 안에서만 등장한다.
+        /// 즉 UPDATE·DELETE에서 HasGrouping=True는 전부 하위질의발이고, "원본에
+        /// 원래 있던 하위질의 집계"와 "이번에 새로 붙은 하위질의 집계"를 이름만
+        /// 으로는 구별할 수 없다(실측: output/Procedures/dbo.UP_UTIL_SETTLE_
+        /// EXCEPTION_PROC/docs/Spec.md의 UPDATE 1~18 전부 GROUP BY 칸이 `—`이고,
+        /// 그중 다수가 원본부터 하위질의를 쓴다). StepSqlStatement 레코드는
+        /// Kind·TargetTable·Anchor·PredicateColumns·JoinColumns·HasGrouping만
+        /// 노출하고 원본 파싱 트리를 주지 않으므로, 이 파일만 고치는 범위에서는
+        /// 최상위 여부를 가려낼 재료가 없다(StepSqlStatementReader.cs를 고쳐 최상위
+        /// 전용 신호를 추가하는 것은 이 태스크의 쓰기 허용 범위 밖이다). 오탐을
+        /// 내느니(정상 문장을 결함으로 몰아 단계 재생성 예산을 낭비하느니) 이 검사는
+        /// 넣지 않는다 - S07의 `HAVING SUM(TxAmt)=0` 신설은 이 검사로 닫지 못하지만,
+        /// S09처럼 최상위 WHERE에 술어 컬럼이 추가되는 결함은 아래에서 여전히 잡는다.
+        ///
+        /// [검사 B의 함정을 그대로 물려받아 같은 방식으로 막는다]
+        /// 1. (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다 -
+        ///    레거시 SP가 둘 이상이면 번호가 SP마다 다시 시작해 같은 조합이 서로
+        ///    다른 행을 가리킬 수 있다(<see cref="CheckAnchoredStatementFacts"/> 참고).
+        /// 2. 같은 (앵커, 종류)의 청크 조각은 합쳐서 한 번만 대조한다 - 합치지
+        ///    않으면 같은 오류가 조각 수만큼 중복 보고된다.
+        /// 3. 이 오류 메시지는 SuggestedPromptFix → floorFeedback을 타고 재생성
+        ///    프롬프트에 그대로 실린다 - 매칭 행이 여럿이면(귀속 불가) 침묵한다.
+        ///
+        /// [예외 목록이 필요한 이유]
+        /// 단계는 배치 제어 컬럼(RunId·StepCode·BatchYmd 등)으로 자기 실행을
+        /// 한정한다. 그것까지 "명세서에 없는 술어"로 들면 모든 단계가 걸려 검사의
+        /// 변별력이 사라진다.
+        /// </summary>
+        private static void CheckAnchoredStatementExtras(
+            IReadOnlyList<SpecStatementFacts> facts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var rows = facts.SelectMany(f => f.DmlRows).ToList();
+            if (rows.Count == 0) return;
+
+            var anchored = statements.Where(s => s.Anchor.HasValue).ToList();
+            // 앵커 부재는 CheckAnchoredStatementFacts가 이미 1건으로 보고한다 -
+            // 여기서 중복 보고하지 않는다.
+            if (anchored.Count == 0) return;
+
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var table in BatchControlContract.Tables)
+            {
+                foreach (var column in table.Columns) allowed.Add(column.Name);
+            }
+
+            var groups = anchored.GroupBy(s => (Ordinal: s.Anchor!.Value, Kind: s.Kind.ToUpperInvariant()));
+
+            foreach (var group in groups)
+            {
+                var candidates = rows.Where(r =>
+                    r.Ordinal == group.Key.Ordinal &&
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (candidates.Count != 1) continue;
+
+                var row = candidates[0];
+
+                // 술어·조인 키·GROUP BY·ORDER BY 어느 칸에든 등장하면 명세서가 그
+                // 이름을 이 문장에 인정한 것으로 본다 - 더 관대할수록 오탐이 준다.
+                var known = new HashSet<string>(
+                    row.PredicateColumns.Concat(row.JoinKeys).Concat(row.GroupBy).Concat(row.OrderBy),
+                    StringComparer.OrdinalIgnoreCase);
+
+                var extras = group
+                    .SelectMany(s => s.PredicateColumns)
+                    .Where(c => !known.Contains(c) && !allowed.Contains(c))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (extras.Count == 0) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장이 명세서에 없는 " +
+                    $"술어 컬럼 {string.Join(", ", extras)}을(를) 씁니다. 명세서 DML 범위 표 " +
+                    $"{row.Kind} {row.Ordinal} 행의 최상위 술어 컬럼은 " +
+                    $"`{string.Join(", ", row.PredicateColumns)}`뿐입니다 — " +
+                    "조건을 더하면 원본이 처리하던 행이 처리되지 않습니다.");
             }
         }
 
