@@ -9,13 +9,24 @@ using Serilog;
 namespace ReSet.Core.Services
 {
     /// <param name="Anchor">주석에서 읽은 갱신 번호. 없으면 null.</param>
+    /// <param name="HasOpaqueJoinSource">
+    /// FROM 절의 조인 파트너 중 물리 테이블이 아닌 것(CTE·파생 테이블)이 있으면
+    /// true. 마이그레이션이 원본 단일 UPDATE를 `UPDATE 대상 ... FROM 대상 AS Y
+    /// INNER JOIN &lt;계산용 CTE·파생 테이블&gt; ON &lt;좁은 키&gt;`로 재구성하는
+    /// 관용구가 실물(S07 U2·U13·U17)에 있다 - 실제 필터(예: PGName·ClientID)는
+    /// 최상위 ON절이 아니라 그 서브쿼리 자신의 WHERE 안에 있는데, JoinColumns는
+    /// 최상위만 보므로 이 값들을 볼 수 없다. 조인 키 대조(MechanicalValidator의
+    /// CheckAnchoredStatementFacts)가 이 신호가 서면 "조인 키 없음"을 보고하지
+    /// 않도록 스스로를 가린다 - 값을 보정하지 않고 신뢰할 수 없다는 사실만 남긴다.
+    /// </param>
     public sealed record StepSqlStatement(
         string Kind,
         string TargetTable,
         int? Anchor,
         IReadOnlyList<string> PredicateColumns,
         IReadOnlyList<string> JoinColumns,
-        bool HasGrouping);
+        bool HasGrouping,
+        bool HasOpaqueJoinSource = false);
 
     /// <summary>
     /// 단계 지시서의 ```sql 펜스에서 DML 문장을 읽는다.
@@ -121,8 +132,13 @@ namespace ReSet.Core.Services
                 return (Array.Empty<StepSqlStatement>(), 1);
             }
 
-            var statements = new List<StepSqlStatement>();
             var lostStatementCount = 0;
+
+            // 조각마다 독립적으로 파싱하므로 먼저 (문장, 원본 좌표 시작·끝)을 전부
+            // 모은 뒤에 앵커를 매긴다 - 앵커 판정(아래 ReadAnchor)이 "직전 문장의
+            // 끝"을 알아야 하는데, 그 직전 문장이 다른 조각(다른 세미콜론 구간)에
+            // 있을 수 있어 조각 단위 반복 안에서는 알 수 없다.
+            var found = new List<(StepSqlStatement Statement, int GlobalStart, int GlobalEnd)>();
 
             foreach (var (start, endExclusive, containsDmlKeyword) in
                      SplitAtTopLevelSemicolons(sql, originalTokens))
@@ -144,21 +160,27 @@ namespace ReSet.Core.Services
                 var visitor = new DmlCollector();
                 fragment.Accept(visitor);
 
-                foreach (var found in visitor.Found)
+                foreach (var item in visitor.Found)
                 {
-                    // 앵커 탐지는 원본 펜스 전체의 토큰 스트림을 봐야 한다 - 조각
-                    // 자신의 토큰 스트림만 보면 "이전 조각 끝에 붙은 꼬리 주석"과
-                    // "이 조각 맨 앞의 선행 주석"을 가를 단서(이전 실토큰과 같은
-                    // 줄인지)가 조각 경계에서 사라진다. 그래서 조각 안에서 찾은
-                    // 문장의 시작 오프셋을 원본 좌표로 변환해 원본 토큰 스트림에서
-                    // 다시 찾는다.
-                    var globalOffset = start + found.StartOffset;
-                    var globalTokenIndex = FindTokenIndexAtOffset(originalTokens, globalOffset);
-                    statements.Add(found.Statement with
-                    {
-                        Anchor = ReadAnchor(originalTokens, globalTokenIndex)
-                    });
+                    // 원본 펜스 좌표로 변환한다 - 조각 자신의 좁은 좌표로는 조각
+                    // 경계 너머의 문맥(꼬리 주석인지 선행 주석인지, 직전 문장이
+                    // 어디서 끝나는지)을 알 수 없다.
+                    found.Add((item.Statement, start + item.StartOffset, start + item.EndOffset));
                 }
+            }
+
+            found.Sort((a, b) => a.GlobalStart.CompareTo(b.GlobalStart));
+
+            var statements = new List<StepSqlStatement>(found.Count);
+            var previousEnd = 0;
+            foreach (var (statement, globalStart, globalEnd) in found)
+            {
+                var globalTokenIndex = FindTokenIndexAtOffset(originalTokens, globalStart);
+                statements.Add(statement with
+                {
+                    Anchor = ReadAnchor(originalTokens, previousEnd, globalTokenIndex)
+                });
+                previousEnd = globalEnd;
             }
 
             return (statements, lostStatementCount);
@@ -272,34 +294,54 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 문장 바로 앞의 주석 토큰에서 갱신 번호를 읽는다.
+        /// 직전 문장(또는 펜스 시작)과 이 문장 사이 구간에서 앵커 번호를 읽는다.
         ///
-        /// [1라운드 리뷰 실측 - 왜 가장 가까운 주석 하나만 보는가]
-        /// 예전 구현은 일치하지 않는 주석을 계속 지나쳐 더 앞의 주석까지 훑었다.
-        /// 그러면 `A문장; -- U4 참고\nB문장`처럼 A의 꼬리 주석이 B의 앵커로
-        /// 잘못 붙는다 - 토큰 스트림만 보면 "A 뒤에 붙은 꼬리 주석"과 "B 앞에 놓인
-        /// 선행 주석"이 똑같이 "공백 다음 주석"으로 보이기 때문이다. 이 둘을 가르는
-        /// 유일한 단서는 개행이다: 주석이 이전 실토큰과 같은 줄에 있으면(개행으로
-        /// 갈라지지 않으면) 그건 그 이전 문장의 꼬리 주석이지 이 문장의 것이 아니다.
-        /// 그래서 가장 가까운 주석 하나만 보고, 그 주석이 자기 줄에 있을 때만
-        /// 앵커 후보로 인정한다 - 맞지 않으면 그 자리에서 멈추고 더 앞으로 가지 않는다.
+        /// [1라운드 리뷰 실측 - 왜 "구간에 정확히 1개"인가]
+        /// 예전 구현은 "바로 앞 토큰이 주석이면 그것" 하나만 봤다. 그러면 두 가지가
+        /// 깨진다: (1) `A문장; -- U4 참고\nB문장`처럼 A의 꼬리 주석이 B의 앵커로
+        /// 잘못 붙는다(개행으로 가른다 - 아래 PrecededByNewline). (2) 실물 관용구
+        /// `/* U13: … */ → SET @v_currentStepId = -20; → UPDATE …`처럼 주석과 DML
+        /// 사이에 `SET` 한 줄이 끼면(AiService의 [Precise Error Tracking] 규칙이
+        /// 모든 DML 직전에 요구하는 필수 패턴) "바로 앞 토큰"이 주석이 아니라 SET이
+        /// 되어 앵커를 통째로 놓친다(코퍼스 326개 전수 0개, docs/known-defects.md).
+        ///
+        /// [태스크 22 - 왜 SET을 그냥 건너뛰는 것만으로는 안 되는가]
+        /// 단순히 SET을 건너뛰면 더 나빠진다는 것이 태스크 11의 실측이다 - 미구현
+        /// 갱신의 서술 주석(DML 없음)이 SET과 함께 남아 있으면, 뒤에 오는 무관한
+        /// 실제 DML이 그 주석을 훔친다(실물 3건: S07:244가 U15를 훔쳐 실제로는
+        /// spec UPDATE 16인데 15로 오귀속). 그래서 "가장 가까운 것" 대신 "직전
+        /// 문장의 끝부터 이 문장의 시작까지 구간에 앵커 모양 주석이 몇 개인가"를
+        /// 센다 - 정확히 1개일 때만 신뢰한다. 훔친 사례는 이 구간에 주석이 2개
+        /// (U14 자리 + U15 자리) 걸리므로 유일하지 않아 자동으로 침묵한다 - 문장의
+        /// 내용(컬럼)을 전혀 보지 않고 순수하게 기계적으로 판별된다.
         /// </summary>
-        private static int? ReadAnchor(IList<TSqlParserToken> tokens, int firstTokenIndex)
+        private static int? ReadAnchor(IList<TSqlParserToken> tokens, int windowStartOffset, int firstTokenIndex)
         {
-            int i = firstTokenIndex - 1;
-            while (i >= 0 && tokens[i].TokenType is TSqlTokenType.WhiteSpace) i--;
-            if (i < 0) return null;
+            var windowStartTokenIndex = FindTokenIndexAtOffset(tokens, windowStartOffset);
 
-            var token = tokens[i];
-            if (token.TokenType is not (TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment))
+            int? ordinal = null;
+            var matchCount = 0;
+
+            for (int i = firstTokenIndex - 1; i >= windowStartTokenIndex; i--)
             {
-                return null;
+                var token = tokens[i];
+                if (token.TokenType is not (TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment))
+                {
+                    // SET 문·세미콜론 등 주석이 아닌 토큰은 건너뛰고 계속 거슬러
+                    // 올라간다 - 이게 "SET이 끼어도 앵커를 놓치지 않는다"의 핵심이다.
+                    continue;
+                }
+
+                if (!PrecededByNewline(tokens, i)) continue; // 꼬리 주석은 후보가 아니다.
+
+                var match = AnchorPattern.Match(token.Text);
+                if (!match.Success) continue;
+
+                matchCount++;
+                ordinal = int.Parse(match.Groups["ordinal"].Value);
             }
 
-            if (!PrecededByNewline(tokens, i)) return null;
-
-            var match = AnchorPattern.Match(token.Text);
-            return match.Success ? int.Parse(match.Groups["ordinal"].Value) : null;
+            return matchCount == 1 ? ordinal : null;
         }
 
         /// <summary>
@@ -327,12 +369,15 @@ namespace ReSet.Core.Services
         private sealed class DmlCollector : TSqlFragmentVisitor
         {
             /// <summary>
-            /// 문장과 그 시작 문자 오프셋(조각 텍스트 안의 상대 좌표). 앵커는
+            /// 문장과 그 시작·끝 문자 오프셋(조각 텍스트 안의 상대 좌표). 앵커는
             /// ReadFence가 이 오프셋을 원본 펜스 좌표로 변환해 원본 토큰
             /// 스트림에서 채운다 - 조각 자신의 좁은 토큰 스트림만으로는 조각
-            /// 경계 너머의 문맥(예: 꼬리 주석인지 선행 주석인지)을 알 수 없다.
+            /// 경계 너머의 문맥(예: 꼬리 주석인지 선행 주석인지, 직전 문장이
+            /// 어디서 끝나는지)을 알 수 없다. 끝 오프셋(<see cref="TSqlFragment.FragmentLength"/>
+            /// 기반)은 "직전 문장 이후 ~ 이 문장 이전" 구간에서 앵커 후보 주석을
+            /// 세는 데 쓴다(ReadAnchor 참고).
             /// </summary>
-            public List<(StepSqlStatement Statement, int StartOffset)> Found { get; } = new();
+            public List<(StepSqlStatement Statement, int StartOffset, int EndOffset)> Found { get; } = new();
 
             public override void Visit(UpdateStatement node) =>
                 Add("UPDATE", node, node.UpdateSpecification?.Target,
@@ -367,8 +412,36 @@ namespace ReSet.Core.Services
                         Anchor: null,
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
-                        grouping.Found),
-                    statement.StartOffset));
+                        grouping.Found,
+                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, from)),
+                    statement.StartOffset,
+                    statement.StartOffset + statement.FragmentLength));
+            }
+
+            /// <summary>
+            /// FROM 절의 조인 파트너 중 CTE·파생 테이블이 있는지 본다 - 위
+            /// <see cref="StepSqlStatement.HasOpaqueJoinSource"/> 문서 참고.
+            /// </summary>
+            private static bool DetectOpaqueJoinSource(TSqlStatement statement, FromClause? from)
+            {
+                if (from == null) return false;
+
+                var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (statement is StatementWithCtesAndXmlNamespaces withCtes &&
+                    withCtes.WithCtesAndXmlNamespaces != null)
+                {
+                    foreach (var cte in withCtes.WithCtesAndXmlNamespaces.CommonTableExpressions)
+                    {
+                        if (!string.IsNullOrWhiteSpace(cte.ExpressionName?.Value))
+                        {
+                            cteNames.Add(cte.ExpressionName!.Value);
+                        }
+                    }
+                }
+
+                var probe = new OpaqueJoinSourceProbe(cteNames);
+                from.Accept(probe);
+                return probe.Found;
             }
 
             /// <summary>
@@ -426,6 +499,36 @@ namespace ReSet.Core.Services
             }
 
             public override void ExplicitVisit(QueryDerivedTable node) { }
+        }
+
+        /// <summary>
+        /// FROM 절에 물리 테이블이 아닌 조인 파트너(파생 테이블 또는 CTE 이름
+        /// 참조)가 있는지만 본다 - 그 안쪽 내용은 보지 않는다(<see
+        /// cref="StepSqlStatement.HasOpaqueJoinSource"/> 참고).
+        /// </summary>
+        private sealed class OpaqueJoinSourceProbe : TSqlFragmentVisitor
+        {
+            private readonly HashSet<string> _cteNames;
+            public bool Found { get; private set; }
+
+            public OpaqueJoinSourceProbe(HashSet<string> cteNames) => _cteNames = cteNames;
+
+            /// <summary>파생 테이블을 만나는 순간으로 충분하다 - 안쪽으로 내려가지 않는다.</summary>
+            public override void ExplicitVisit(QueryDerivedTable node) => Found = true;
+
+            public override void Visit(NamedTableReference node)
+            {
+                // 한정자 없는 이름만 CTE일 수 있다 - `dbo.T`처럼 점으로 한정되면
+                // 물리 테이블이 확실하다(FromClauseAliasFinder와 같은 판정).
+                var identifiers = node.SchemaObject?.Identifiers;
+                if (identifiers == null || identifiers.Count != 1) return;
+
+                var name = identifiers[0].Value;
+                if (!string.IsNullOrWhiteSpace(name) && _cteNames.Contains(name))
+                {
+                    Found = true;
+                }
+            }
         }
 
         /// <summary>

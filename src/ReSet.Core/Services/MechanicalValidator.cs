@@ -5938,9 +5938,19 @@ namespace ReSet.Core.Services
                 // (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다.
                 // 레거시 SP가 둘 이상이면 이 조합이 서로 다른 SP의 서로 다른 행을
                 // 가리키도록 겹칠 수 있다 - 그 상태에서는 귀속할 수 없으므로 침묵한다.
+                //
+                // [태스크 22] TargetTable도 함께 대조한다 - 예전에는 (Ordinal, Kind)만
+                // 봐서, 단계가 완전히 다른 물리 테이블(섀도·스테이징 테이블)을 갱신하는
+                // 문장도 원본 대상 테이블의 행과 매칭됐다. 실물(POQSettleProc10/S08)은
+                // `batch.POQSettleLedgerStageImage`를 갱신하는데 원본은 `TSettleMst`고,
+                // 그 스테이징 전용 제어 컬럼(ImageRunId·ImageType)이 원본 predicate와
+                // 안 맞아 거짓 발화했다. `CheckStatementCountAgainstSpec`(검사 A)이
+                // 이미 (Kind, TargetTable)로 대조하는 것과 같은 규약이다.
+                var groupTargetTable = group.First().TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
-                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    r.TargetTable.Equals(groupTargetTable, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (candidates.Count != 1) continue;
 
                 var row = candidates[0];
@@ -5955,7 +5965,18 @@ namespace ReSet.Core.Services
                 var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
 
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
-                ReportMissing("조인 키", row.JoinKeys, joinPresent);
+
+                // [태스크 22] 조인 파트너가 CTE·파생 테이블이면(HasOpaqueJoinSource)
+                // 조인 키 칸 대조는 접는다 - 실물(S07 U2·U13·U17)은 원본 단일 UPDATE를
+                // `UPDATE 대상 ... FROM 대상 AS Y INNER JOIN <계산용 CTE> ON <좁은 키>`로
+                // 재구성하는데, 진짜 필터(PGName·ClientID 등)는 그 CTE 안의 WHERE에
+                // 있어 최상위만 보는 JoinColumns로는 볼 수 없다. 최상위 WHERE 술어
+                // 컬럼 대조는 이 사각지대와 무관하므로(S07 U13의 실제 결함 YMD·PGNAME
+                // 누락은 이쪽에서 여전히 잡힌다) 그대로 둔다.
+                if (!group.Any(s => s.HasOpaqueJoinSource))
+                {
+                    ReportMissing("조인 키", row.JoinKeys, joinPresent);
+                }
 
                 void ReportMissing(string label, IReadOnlyList<string> expected, HashSet<string> present)
                 {
@@ -6091,9 +6112,14 @@ namespace ReSet.Core.Services
 
             foreach (var group in groups)
             {
+                // [태스크 22] TargetTable도 함께 대조한다 - CheckAnchoredStatementFacts와
+                // 같은 이유(위 문서 참고). 대상 테이블이 다르면 스테이징 전용 제어
+                // 컬럼(ImageRunId·ImageType 등)을 "명세서에 없는 술어"로 오인한다.
+                var groupTargetTable = group.First().TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
-                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    r.TargetTable.Equals(groupTargetTable, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (candidates.Count != 1) continue;
 
                 var row = candidates[0];

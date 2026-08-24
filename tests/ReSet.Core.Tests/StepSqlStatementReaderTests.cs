@@ -316,4 +316,121 @@ public sealed class StepSqlStatementReaderTests
 
         Assert.Null(Assert.Single(statements).Anchor);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Task 22 - 문장↔spec 행 대응. 실물(S07·S11) 관용구는 앵커 주석과 DML
+    // 사이에 `SET @v_currentStepId = <오류코드>;` 한 줄이 끼어 있다(AiService의
+    // [Precise Error Tracking] 규칙이 요구하는 필수 패턴) - 예전 ReadAnchor는
+    // "바로 앞 토큰"만 봐서 이 SET에 막혀 앵커를 전부 놓쳤다(코퍼스 326개 전수
+    // 0개, docs/known-defects.md 참고).
+    //
+    // 다만 SET을 무조건 건너뛰는 것만으로는 부족하다 - 태스크 11이 실측으로
+    // 반증했다: 미구현 갱신의 서술 주석(DML 없음)이 SET과 함께 남아 있으면,
+    // 그 뒤에 오는 무관한 실제 DML이 그 주석을 "훔친다"(S07:244가 U15를
+    // 훔쳐 실제로는 UPDATE 16인데 15로 오귀속된 실물 3건).
+    //
+    // 그래서 여기서는 "가장 가까운 주석 하나"가 아니라 "직전 문장(또는 펜스
+    // 시작)과 이 문장 사이 구간에 앵커 모양 주석이 정확히 1개일 때만" 신뢰한다.
+    // 훔친 사례는 이 구간에 주석이 2개 이상(U14 자리 + U15 자리) 걸리므로
+    // 자동으로 침묵한다 - 내용 매칭 없이 순수하게 기계적으로 판별된다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void AnchorSurvivesInterveningSetStatement()
+    {
+        // 실물 관용구 그대로: 주석 → SET @v_currentStepId = <코드> → DML.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "/* U13: 원천카드 수수료 */\n" +
+            "SET @v_currentStepId = -20;\n" +
+            "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y WHERE Y.YMD = @p;"));
+
+        Assert.Equal(13, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void OrphanedPlaceholderAnchors_AreNotStolenByALaterUnrelatedStatement()
+    {
+        // 실물 모양(S07:238-244): U14·U15는 서술 주석만 있고 DML이 없다(미구현).
+        // 그 뒤에 오는 실제 DML(진짜로는 spec UPDATE 16)이 가장 가까운 주석
+        // "U15"를 훔치면 안 된다 - 이 구간에 주석이 2개(U14, U15) 있으므로
+        // 유일하지 않아 침묵해야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "/* U13: 원천카드 수수료 */\n" +
+            "SET @v_currentStepId = -20;\n" +
+            "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y WHERE Y.YMD = @p;\n" +
+            "SET @v_currentStepId = -201;\n" +
+            "/* U14: 미구현 자리 */\n" +
+            "SET @v_currentStepId = -21;\n" +
+            "/* U15: 미구현 자리 */\n" +
+            "SET @v_currentStepId = -27;\n" +
+            "UPDATE Z SET Z.CLCOMM = 1 FROM dbo.TSettleMst AS Z WHERE Z.YMD = @p;"));
+
+        Assert.Equal(2, statements.Count);
+        Assert.Equal(13, statements[0].Anchor);
+        Assert.Null(statements[1].Anchor); // U14·U15 둘 다 걸려 유일하지 않다 - 훔치지 않는다.
+    }
+
+    [Fact]
+    public void SecondStatementsCleanAnchor_IsNotConfusedByFirstStatementsAnchor()
+    {
+        // 앞 문장의 앵커가 뒤 문장의 구간으로 새지 않아야 한다 - 창은 직전
+        // 문장의 끝부터 시작한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "/* U1: 첫 번째 */\n" +
+            "SET @v_currentStepId = -101;\n" +
+            "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+            "/* U2: 두 번째 */\n" +
+            "SET @v_currentStepId = -102;\n" +
+            "UPDATE B SET B.CLVT = 2 FROM dbo.TSettleMst AS B WHERE B.YMD = @p;"));
+
+        Assert.Equal(2, statements.Count);
+        Assert.Equal(1, statements[0].Anchor);
+        Assert.Equal(2, statements[1].Anchor);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Task 22 - HasOpaqueJoinSource. 실물(S07 U2·U13·U17)은 원본의 단일
+    // UPDATE를 `UPDATE Y ... FROM 대상 AS Y INNER JOIN <CTE 또는 파생 테이블>
+    // AS X ON <좁은 키>`로 재구성한다 - 조인 키 칸의 실제 필터(예: PGName·
+    // ClientID)는 최상위 ON절이 아니라 그 CTE·파생 테이블 자신의 WHERE/ON
+    // 안에 있다. 최상위만 보는 JoinColumns 수집은 이걸 볼 수 없어 "조인 키가
+    // 없다"는 거짓 결과를 낸다 - 문장 내용은 멀쩡한데 조인 파트너가 물리
+    // 테이블이 아니라 계산용 서브쿼리라서 생기는 구조적 사각지대다. 이
+    // 신호는 그 사각지대가 있었는지만 표시한다 - 값을 보정하지 않는다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void FlagsOpaqueJoinSource_WhenJoinPartnerIsACte()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH X AS (SELECT A.PLTID, A.ID, A.PGName FROM dbo.TSettleMst AS A WHERE A.PGName = 'PLCard')\n" +
+            "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y\n" +
+            "INNER JOIN X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;"));
+
+        Assert.True(Assert.Single(statements).HasOpaqueJoinSource);
+    }
+
+    [Fact]
+    public void FlagsOpaqueJoinSource_WhenJoinPartnerIsADerivedTable()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE Y SET Y.CLCOMM = R.PGCOMM FROM dbo.TSettleMst AS Y\n" +
+            "INNER JOIN (SELECT S.PLTID, S.ID, S.PGCOMM FROM dbo.TStage AS S WHERE S.PGName = 'PLCard') AS R\n" +
+            "  ON R.PLTID = Y.PLTID AND R.ID = Y.ID;"));
+
+        Assert.True(Assert.Single(statements).HasOpaqueJoinSource);
+    }
+
+    [Fact]
+    public void DoesNotFlagOpaqueJoinSource_WhenAllJoinPartnersArePhysicalTables()
+    {
+        // 회귀 방지: S11 갱신 9처럼 조인 파트너가 전부 실물 테이블이면(CTE·파생
+        // 테이블 없음) 이 신호가 서지 않아야 한다 - 정상적인 조인 키 검사를
+        // 계속 신뢰할 수 있어야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.EDIReqYMD = E.ReqYMD FROM dbo.TSettleMst AS A\n" +
+            "INNER JOIN dbo.TPLCardEDIMst AS E ON A.PLTID = E.PLTID;"));
+
+        Assert.False(Assert.Single(statements).HasOpaqueJoinSource);
+    }
 }

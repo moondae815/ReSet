@@ -561,6 +561,178 @@
   위 (1)-(4)의 근거: 태스크 11 조사 기록(리뷰어 실물 재현, 이 문서가 유일한
   기록) + 태스크 12 코퍼스 재측정(검사 B: 326개 전수 0건).
 
+- **문장↔spec 행 대응 재설계(2026-08-24, Task 22) — 위 (4)의 단서를 실측하고
+  일부 닫음. S07 갱신 13 닫힘, S11 갱신 9는 못 닫음(정직한 미해결).**
+  하네스: 이 워크트리 안 스크래치 프로젝트(`StepSqlStatementReader.Read`·
+  `SpecStatementFactsExtractor.Extract`·`BatchStepPlanParser.TryParse`·
+  `MechanicalValidator.ValidateBatchStep`을 그대로 호출), 종료 후 삭제.
+
+  **1단계 실측**
+
+  **(1) 순서 정보가 얼마나 보존되는가.** `nonContiguousOrdinalGroups=0` —
+  코퍼스 31개 SP 전체에서 (SP, Kind)별 Ordinal이 항상 1..N 연속이다(빠진
+  번호 없음). 단조성은 지켜지지만 **미구현으로 빠진 갱신이 있으면 위치
+  하나만으로는 어느 번호가 빠졌는지 알 수 없다** — 실물(`POQSettleBatch1/S07`)
+  이 정확히 이 모양이다: spec은 UPDATE 18개를 확정하는데 단계는 8개
+  문장뿐이고(U4~U11·U14~U15가 서술 주석만 있고 DML 없음), 앵커를 살리면
+  1,2,3,13,17,18 순서로 단조 증가한다(건너뛴 자리는 앵커가 모호해 null,
+  아래 (3) 참고) — **부분 순서 보존**이 정확한 표현이다.
+
+  **(2) 내용만으로 얼마나 유일하게 결정되는가.** 단일 SP 단계(`step.
+  LegacyProcedures.Count==1`, 코퍼스 195단계·다중 SP 단계는 이 코퍼스에
+  **0건**) 안에서 (Kind, TargetTable) 필터만으로 후보를 좁히면 문장
+  1,808개 중 **unique 678(37%) · ambiguous 623(34%) · none 507(28%)**다
+  (같은 SP의 UPDATE가 거의 전부 같은 대상 테이블 하나를 쓰므로 TargetTable
+  자체가 변별력이 거의 없다 — S07은 18개 UPDATE 전부가 `TSettleMst`).
+  **내용만으로는 유일하게 결정되는 경우가 소수다.**
+
+  **(3) S07 갱신 13·S11 갱신 9가 옳은 행에 매칭되는가 — 이것이 순환의
+  핵심.** 둘 다 **직접 소스를 읽어 확인**했다(둘 다 실물 파일 실측, 추정
+  아님):
+  - **S07 갱신 13** — 단계 SQL은 `;WITH CardCost AS (...) UPDATE Y ... FROM
+    TSettleMst AS Y INNER JOIN CardCost AS X ON X.PLTID=Y.PLTID AND
+    X.ID=Y.ID`(CTE, 최상위 WHERE 없음). 앵커 주석 `/* U13: ... */`이 SET
+    문 바로 앞에 있고 그 사이에 다른 앵커가 끼지 않아(오귀속 위험 없음)
+    유일하게 매칭된다 — **내용(컬럼)으로는 모호했겠지만(같은 TargetTable을
+    쓰는 다른 17개 UPDATE 후보) 앵커만으로 충분했다.**
+  - **S11 갱신 9** — 단계(`POQSettleBatch1/S11`)는 **U-표기 앵커를 아예
+    안 쓴다** — 원본 오류코드를 그대로 라벨로 쓴다(`-- -13: 원천카드
+    수동매입...`, `SET @v_currentStepId = -13;`). `AnchorPattern`(`\bU`·
+    `\b갱신`·`\bUPDATE `·`\bINSERT `·`\bDELETE `+숫자)은 이 표기를 전혀
+    인식하지 못해 앵커가 **11개 문장 전부 null**이다. 대신 **개수 일치가
+    완벽하다** — spec UPDATE 11개, 단계 문장 11개, 위치 i(0-based) ↔
+    Ordinal i+1로 그대로 맞춰보면 index8(=UPDATE9)의 JoinColumns가
+    `{CLIENTID,PGNAME,MALLID,PLTID,DiscountFlag,DiscountAmt,TxAmt,Amt}`뿐이고
+    spec의 JoinKeys `{PLTID,YMD,UseState,DiscountFlag,DiscountAmt,TxAmt,
+    Amt,ClientID,PGName,MallID}`에서 **YMD·UseState가 정확히 빠진다** —
+    과제가 지목한 결함과 정확히 일치. **다만 이 위치 기반(개수 일치)
+    매칭은 이번 태스크의 쓰기 허용 범위 안(`MechanicalValidator.cs`)에
+    구현하지 않았다** — 아래 2단계·미해결 사유 참고.
+
+  **(4) 다른 축이 쓸 만한가 — 라인·오류코드.** `라인`(원본 DDL 라인) 칸은
+  단계 SQL에 대응 정보가 전혀 없다(마이그레이션 산출물은 원본 줄번호를
+  보존하지 않는다) — **못 쓴다.** `SET @v_currentStepId = <오류코드>`의
+  오류코드는 **SP마다 정의된 매핑이 있지만 형식이 코퍼스 전역에서
+  하나가 아니다**: `UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md:46-67`은
+  전용 표(`발생 UPDATE | @po_intRetVal | 처리`, `UPDATE 13 | -20`처럼
+  1:1)를 갖지만 이 표 제목·모양은 **코퍼스 31개 SP 중 이 파일 1개뿐**이고
+  (`grep -rl "발생 UPDATE" output/Procedures`), `UP_UTIL_SETTLE_EXPECT_PROC`
+  (S11의 원본)는 같은 정보를 `## 파라미터 목록`의 `@po_intRetVal` 설명
+  칸에 **산문으로**("UPDATE 1~5·6~11 실패 시 각각 -1, -2, ... -13, ...을
+  설정한다") 적어 실제로 S11의 `-13` 라벨과 맞아떨어짐을 직접 대조해
+  확인했다. **이 축은 실재하고 정확하지만(S07·S11 둘 다 실측으로 확인),
+  구조화된 "기계 확정" 표가 아니라 SP마다 다른 자유 산문·별도 표라서
+  안정적으로 파싱하려면 `SpecStatementFactsExtractor.cs` 변경이
+  필요하다 — 이 파일은 이번 태스크의 쓰기 허용 범위 밖이다.**
+
+  **2단계 결정 — 부분 채택.** "신뢰할 만한 대응이 불가능하다"는 아니다 -
+  **앵커 방식은 "정확히 하나의 앵커 후보만 있는 구간"으로 좁히면 안전하게
+  작동한다(내용 매칭 불필요)**. `StepSqlStatementReader.ReadAnchor`를
+  "문장 바로 앞 토큰"에서 "직전 문장의 끝 ~ 이 문장의 시작 구간에 앵커
+  모양 주석이 정확히 1개"로 다시 설계했다 — SET이 사이에 껴도(코퍼스
+  전역 관용구) 그 SET을 자연히 건너뛰고, 미구현 자리의 서술 주석이
+  둘 이상 쌓이면(오귀속 위험 신호, 실물 S07:244 등) 개수가 2개 이상이
+  되어 **자동으로 침묵**한다 — 태스크 11이 실측으로 폐기한 "SET만
+  건너뛰기"와 달리 거짓 귀속을 만들지 않는다(내용 매칭에 기대지 않고
+  순수하게 기계적으로 판별).
+
+  **왜 위치 기반(개수 일치, S11의 유일한 활로)은 구현하지 않았는가.**
+  구현하려면 `MechanicalValidator.CheckAnchoredStatementFacts`에
+  "단일 SP + 문장수==spec 행수(같은 Kind)면 위치로 매칭"을 추가해야
+  하는데, **코퍼스 전수 스윕으로 이 경로의 부작용을 먼저 쟀다** — UPDATE만
+  놓고 위치 매칭을 시험 적용하면 703개 위치 중 predicate 132건·join
+  101건이 "결측"으로 뜬다. 표본을 열어 확인한 결과 **다수가 거짓 양성**이다
+  — 원본 단일 UPDATE를 `UPDATE 대상 ... FROM 대상 JOIN <CTE·파생 테이블>
+  ON <좁은 키>`로 재구성하는 관용구(계산용 서브쿼리, S07 U2·U13·U17이
+  실물)가 흔해서, 진짜 필터가 최상위가 아니라 그 서브쿼리 WHERE 안에
+  있는데 최상위만 보는 JoinColumns가 이를 "없다"고 오판한다. 위치 기반은
+  **이 오탐 갈래를 (Ordinal, Kind)만 보던 예전 매칭보다 훨씬 넓은 코퍼스에
+  노출시켜** 위험이 더 크다. 이 회차는 그 오탐 갈래 중 확인 가능한 만큼
+  (`HasOpaqueJoinSource`, 아래)을 닫았지만, S11처럼 **앵커가 아예 없어
+  위치 기반이 유일한 활로인 자리**까지 안전하게 여는 것은 이 스윕이
+  보여준 잔여 위험(CTE 사각지대) 때문에 이번 라운드에서는 보류했다 —
+  "귀속할 수 없으면 침묵"을 지키려면 위치 기반의 오탐 갈래를 더 좁히는
+  후속 설계가 먼저 필요하다.
+
+  **3단계 구현 — S07은 실물로 닫혔다, S11은 못 닫았다.**
+  - `StepSqlStatementReader.ReadAnchor` 재설계(위 2단계) — 코퍼스 재스윕
+    (`ValidateBatchStep` 실전 호출, 326개 전수)으로 검사 B가 **1건**
+    발화했고 그 1건이 정확히 `POQSettleBatch1/S07`의 "UPDATE 13(갱신 13)
+    문장에 명세서가 확정한 최상위 WHERE 술어 컬럼 YMD, PGNAME이(가)
+    없습니다"다 — **과제가 닫으려던 S07 🟠 그대로.**
+  - 그런데 앵커를 살리자마자 **두 갈래 거짓 양성이 새로 드러났다**(둘 다
+    검사 B·C가 예전엔 항상 침묵이라 한 번도 발화한 적 없던 자리):
+    1. **대상 테이블 미대조** — `CheckAnchoredStatementFacts`·
+       `CheckAnchoredStatementExtras` 둘 다 (Ordinal, Kind)만 보고
+       TargetTable을 안 봤다. 실물(`POQSettleProc10/S08`)은 원본
+       `TSettleMst` 대신 섀도·스테이징 테이블(`batch.
+       POQSettleLedgerStageImage`)을 갱신하는데, 그 스테이징 전용 제어
+       컬럼(`ImageRunId`·`ImageType`)이 원본 predicate와 안 맞아
+       "명세서에 없는 술어"를 **12건**, "확정한 컬럼이 없다"를 **2건**
+       거짓으로 냈다. **고침** — 후보 필터에 TargetTable 일치를 추가했다
+       (검사 A가 이미 (Kind, TargetTable)로 대조하는 것과 같은 규약).
+    2. **CTE·파생 테이블 조인 파트너의 조인 키 사각지대** — 위 2단계가
+       설명한 계산용 서브쿼리 관용구. `S07`의 U2("PGName" 조인 키
+       거짓 결측)·U13(predicate는 진짜 결측이지만 join 쪽 "ClientID,
+       CardCPID"는 거짓)·U17("PGName, MallID" 거짓 결측) 3곳에서
+       재현됐다. **고침** — `StepSqlStatementReader`에
+       `HasOpaqueJoinSource`(FROM절 조인 파트너에 CTE·파생 테이블이
+       있으면 true, TDD 3건으로 확인) 신호를 추가하고,
+       `CheckAnchoredStatementFacts`가 이 신호가 서면 "조인 키" 서브
+       체크만 접는다(최상위 WHERE 술어 컬럼 체크는 이 사각지대와
+       무관해 그대로 둔다 — S07 U13의 진짜 결함은 이쪽에서 계속 잡힌다).
+  - **재스윕 결과(326개 전수, `ValidateBatchStep` 실전 호출)**: 검사
+    B **1건**(S07 갱신 13, 진짜) · 검사 C **0건**. 위 두 거짓 양성
+    갈래(대상 테이블 불일치·CTE 조인 사각지대)가 낸 항목 전부(검사 B
+    7건·검사 C 12건, 고치기 전 스윕에서 관측) **소멸했고, 새 거짓
+    양성은 관측되지 않았다.**
+  - **S11 갱신 9는 못 닫았다** — S11은 앵커가 0개(위 (3))라 검사 B가
+    이 단계 전체에서 조기 반환한다(Task 12가 이미 확립한 정책, 이번에도
+    유지). 위치 기반 매칭을 구현하지 않기로 한 결정(위 2단계) 때문에
+    이 회차는 이 좌표를 닫지 못했다 — **정직한 미해결**이다.
+  - **검사 A·D·E 회귀 확인** — `dotnet test`(코어 프로젝트) 366개 중
+    `StepSqlStatementReaderTests`·`MechanicalValidatorTests` 전수
+    통과(회귀 0). 검사 A·D·E는 이번 라운드가 건드리지 않은 로직이라
+    이 스윕 대상에 넣지 않았다(전체 `dotnet test` 2686 통과·2건 건너뜀
+    — 건너뜀 2건은 `output.bak-2026-08-22` 스냅샷 부재로 인한 사전
+    존재 스킵, 이번 변경과 무관 — **확인**).
+
+  **확인한 것과 확인하지 못한 것**
+  - **확인**: S07 갱신 13이 실물 코퍼스에서 정확히 잡힘(`ValidateBatchStep`
+    실전 호출, 메시지 문구까지 대조). CTE 사각지대·대상 테이블 불일치
+    거짓 양성이 고치기 전 스윕에서 실재했고 고친 뒤 사라짐(전·후 스윕
+    직접 비교). 326개 전수에서 검사 B·C 거짓 양성 0건(스윕 전체 출력을
+    수작업으로 다 읽었다 — 발화 자체가 1건뿐이라 표본이 아니라 전수).
+    S11의 오류코드-라벨 관용구가 `EXPECT_PROC/docs/Spec.md:80`의 산문과
+    정확히 일치함(직접 대조).
+  - **확인하지 못한 것**: S11 갱신 9는 닫지 못했다(정직하게 미해결로
+    남긴다). 위치 기반(개수 일치) 매칭을 실제로 구현했을 때 코퍼스
+    전체에서 몇 건이 새로 발화하고 그중 거짓 양성 비율이 얼마인지는
+    측정만 했고(위 2단계, UPDATE 703위치 중 predicate 132·join 101건
+    "결측" 후보) 실제 구현·전수 표본 확인까지는 안 갔다 — 다음 회차가
+    이 수치를 출발점으로 쓸 수 있다. 검사 C가 코퍼스에서 발화할 조건
+    (S11처럼 앵커가 없는 단계에서는 검사 B와 함께 조기 반환)은 이번
+    실측 범위 밖이다.
+
+  **다음 회차 제안** — S11류(오류코드 라벨, 앵커 0개)를 닫으려면 둘 중
+  하나가 필요하다: (a) `SpecStatementFactsExtractor.cs`(이번 태스크
+  쓰기 범위 밖)를 넓혀 `발생 UPDATE`류 표·`@po_intRetVal` 산문에서
+  오류코드→Ordinal 매핑을 기계 확정 재료로 뽑는 것, 또는 (b)
+  `MechanicalValidator.cs`에 "단일 SP + 문장수==spec 행수" 위치 기반
+  매칭을 추가하되 이번 스윕이 드러낸 CTE·파생 테이블 조인 사각지대를
+  predicate 체크에도 넓혀 막을 방법을 먼저 설계하는 것(현재는 join
+  체크만 `HasOpaqueJoinSource`로 막았다 — predicate 체크가 CTE 사각지대의
+  영향을 받는지는 표본에서 못 봤지만 위치 기반을 켜면 더 넓은 코퍼스에서
+  드러날 수 있다).
+
+  하네스: 스크래치 콘솔 프로젝트(`ReSet.Core.csproj` 참조, 워크트리
+  안, 저장소 미커밋, 종료 후 삭제) — `StepSqlStatementReader.Read`·
+  `SpecStatementFactsExtractor.Extract`·`BatchStepPlanParser.TryParse`로
+  코퍼스 326개 단계를 읽고, `MechanicalValidator.ValidateBatchStep`을
+  실전 그대로 호출해 검사 B·C 메시지만 문구로 걸렀다(다른 검사와 같은
+  구분 방법 — `StepValidationResult.Errors`가 `List<string>`).
+  근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 22.
+
 - **병합 전 코퍼스 스윕 게이트 실측(2026-08-24, Task 19) — Task 16 C1·C2·Task 17 C3·I1·Task 18 I2를 모두 적용한 뒤 재측정** —
   `output/Jobs/*/agent/steps/*.md`를 스크래치 하네스로 스윕했다. 하네스는
   `VerificationPipelineOrchestrator.GenerateStepSectionWithFloorRetryAsync`의

@@ -7608,6 +7608,92 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("조인 키") && e.Contains("PLTID") && e.Contains("YMD"));
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 B 태스크 22 - 문장↔spec 행 대응 재설계 뒤 드러난 두 새 함정.
+        //
+        // [1] 대상 테이블을 대조하지 않았다. (Ordinal, Kind)만 보면 단계가 완전히
+        // 다른 물리 테이블(섀도·스테이징 테이블)을 갱신하는 문장도 원본 대상
+        // 테이블의 행과 매칭된다 - 실물(POQSettleProc10/S08)은 `batch.
+        // POQSettleLedgerStageImage`를 갱신하는데 원본은 `TSettleMst`이고,
+        // 스테이징 전용 제어 컬럼(ImageRunId·ImageType)이 "명세서에 없는 술어"로
+        // 거짓 발화했다.
+        //
+        // [2] 조인 파트너가 CTE·파생 테이블이면 조인 키 대조가 못 미덥다. 실물
+        // (POQSettleBatch1/S07 U2·U13·U17)은 원본 단일 UPDATE를 `UPDATE 대상 ...
+        // FROM 대상 AS Y INNER JOIN <계산용 CTE> ON <좁은 키>`로 재구성한다 -
+        // 진짜 필터(PGName·ClientID 등)는 그 CTE 안의 WHERE에 있는데 최상위만
+        // 보는 조인 키 대조는 이를 "없다"고 거짓 보고한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredStatementTargetsADifferentPhysicalTable_StaysSilent()
+        {
+            // 실물 모양(POQSettleProc10/S08): 같은 (Ordinal, Kind)라도 문장의
+            // 실제 대상이 원본 spec 행의 대상 테이블과 다르면(섀도·스테이징
+            // 테이블) 그 행과 대조해서는 안 된다 - 스테이징 전용 제어 컬럼을
+            // "명세서가 확정한 컬럼이 없다"로 오인한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 7, 200, "TSettleMst",
+                        new[] { "PLTID", "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 7\n" +
+                "UPDATE B SET B.CLCOMM = 1 FROM [batch].[POQSettleLedgerStageImage] AS B\n" +
+                "WHERE B.ImageRunId = @pi_runId AND B.ImageType = 'Build';\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "batch.POQSettleLedgerStageImage" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredStatementWithOpaqueJoinSource_SuppressesJoinKeyReportOnly()
+        {
+            // 실물 모양(S07 U13): 조인 파트너가 CTE라 조인 키 칸(ClientID,
+            // CardCPID - 실제로는 CTE 안에 있다)은 못 미더워 침묵해야 하지만,
+            // 최상위 WHERE 술어 컬럼 누락(YMD, PGNAME)은 CTE와 무관하게 여전히
+            // 잡아야 한다 - S07 갱신 13의 실제 결함이 이 모양이다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 13, 336, "TSettleMst",
+                        new[] { "PLTID", "ID", "YMD", "PGNAME" }, new[] { "PLTID", "ID", "ClientID", "CardCPID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U13: 원천카드 수수료 */\n" +
+                "SET @v_currentStepId = -20;\n" +
+                ";WITH CardCost AS\n" +
+                "(\n" +
+                "    SELECT A.PLTID, A.ID, A.PGName\n" +
+                "    FROM dbo.TSettleMst AS A\n" +
+                "    INNER JOIN dbo.TPLCardTxMst AS B ON A.PLTID = B.PLTID\n" +
+                "    INNER JOIN dbo.TCardContractMgmt AS C ON B.CardCPID = C.CardCPID\n" +
+                "    WHERE A.PGNAME IN (SELECT value FROM STRING_SPLIT(@v_strCardPGNames, '+'))\n" +
+                ")\n" +
+                "UPDATE Y SET Y.CLCOMM = X.PLTID\n" +
+                "FROM dbo.TSettleMst AS Y\n" +
+                "INNER JOIN CardCost AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼") && e.Contains("YMD") && e.Contains("PGNAME"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 키"));
+        }
+
         [Fact]
         public void ValidateBatchStep_ChunkedAnchoredStatementsMergeColumns_IsSilentWhenUnionSatisfies()
         {
@@ -7821,6 +7907,34 @@ END";
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("GROUP BY") || e.Contains("집계"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ExtraPredicate_TargetsADifferentPhysicalTable_StaysSilent()
+        {
+            // 검사 B의 대상 테이블 미대조와 같은 함정(위 태스크 22 주석 참고) -
+            // 검사 C도 (Ordinal, Kind)만 보면 섀도·스테이징 테이블의 제어 컬럼을
+            // "명세서에 없는 술어"로 오인한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 7, 200, "TSettleMst",
+                        new[] { "PLTID", "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 7\n" +
+                "UPDATE B SET B.CLCOMM = 1 FROM [batch].[POQSettleLedgerStageImage] AS B\n" +
+                "WHERE B.ImageRunId = @pi_runId AND B.ImageType = 'Build';\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "batch.POQSettleLedgerStageImage" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는 술어 컬럼"));
         }
 
         [Fact]
