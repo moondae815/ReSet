@@ -155,6 +155,36 @@ public sealed class BatchControlContractTests
         Assert.DoesNotContain("FIRST step in the step list", table);
     }
 
+    // FirstStepInserts 문구가 "RunId is issued by IDENTITY, so read it back with
+    // SCOPE_IDENTITY()"를 무조건 실었다. batch.BatchRunLock은 같은 행 출처 모양이지만
+    // IDENTITY 컬럼이 없어, 그대로 두면 프롬프트에 거짓 지시가 실린다.
+    [Fact]
+    public void RenderPromptTable_DoesNotClaimIdentityForATableThatHasNone()
+    {
+        var rows = BatchControlContract.RenderPromptTable()
+            .Split('\n')
+            .Where(line => line.Contains("`batch.BatchRunLock`", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, row => Assert.DoesNotContain("SCOPE_IDENTITY", row));
+        Assert.All(rows, row => Assert.DoesNotContain("IDENTITY", row));
+    }
+
+    // 반대쪽도 지킨다 - BatchRun에서 그 문장이 사라지면 18번의 독립 호출이
+    // 각자 RunId 발급 방식을 지어낸다.
+    [Fact]
+    public void RenderPromptTable_StillSaysHowRunIdIsIssuedForTheRunTable()
+    {
+        var rows = BatchControlContract.RenderPromptTable()
+            .Split('\n')
+            .Where(line => line.Contains("`batch.BatchRun`", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, row => Assert.Contains("SCOPE_IDENTITY", row));
+    }
+
     // === 실행 행 생성 담당 단계 판정 =========================================
     //
     // 실측(POQSettleProc17): 계약이 "목록의 첫 단계"라고 위치로 지목했는데 승인된

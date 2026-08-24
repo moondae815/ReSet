@@ -358,13 +358,21 @@ namespace ReSet.Core.Services
 
             foreach (var table in Tables)
             {
+                // IDENTITY 문장은 그 표에 실제로 IDENTITY 컬럼이 있을 때만 싣는다.
+                // 없는 표에 실으면 프롬프트가 존재하지 않는 발급 수단을 지시한다.
+                var identity = table.Columns.FirstOrDefault(c => c.IsIdentity);
+
                 var origin = table.Origin switch
                 {
-                    ControlRowOrigin.FirstStepInserts =>
+                    ControlRowOrigin.FirstStepInserts when identity != null =>
                         "The FIRST step that lists this table as a target INSERTs this row; " +
-                        "RunId is issued by IDENTITY, " +
+                        $"{identity.Name} is issued by IDENTITY, " +
                         "so read it back with SCOPE_IDENTITY() and pass it to every later step. " +
-                        "NEVER compute a RunId yourself. Later steps UPDATE this row.",
+                        $"NEVER compute a {identity.Name} yourself. Later steps UPDATE this row.",
+                    ControlRowOrigin.FirstStepInserts =>
+                        "The FIRST step that lists this table as a target INSERTs this row. " +
+                        "Later steps UPDATE this row. No column self-issues a value here - " +
+                        "every key value is supplied by the step.",
                     ControlRowOrigin.EachStepInserts =>
                         "EACH step INSERTs its own row when it starts, then UPDATEs it when it ends. Never UPDATE a row you did not insert.",
                     _ => "The producing step INSERTs only. There is no state transition."
