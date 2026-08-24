@@ -7249,19 +7249,41 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // 검사 C - 명세서에 없는 술어 컬럼이 문장에 붙었는가.
-        // S09 🟠: -9 사전 검증 EXISTS에 SM.TxAmt = 0을 하나 더 붙여 가드가 좁아졌다.
+        // 검사 C - 명세서에 없는 최상위 술어 컬럼이 문장에 붙었는가.
         //
-        // [집계(GROUP BY·HAVING) 검사를 넣지 않은 이유 - 실측]
-        // 프로브: `WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx GROUP BY PLTID
-        // HAVING SUM(TxAmt) = 0)`에서 StepSqlStatement.HasGrouping은 True를
-        // 낸다(StepSqlStatementReader.GroupingProbe가 하위질의를 포함해 문장
-        // 전체를 훑는다 - ScalarSubquery에서 순회를 끊는 ColumnCollector와 달리
-        // GroupingProbe에는 그런 경계가 없다). 그런데 T-SQL 문법상 UPDATE·DELETE
-        // 문 자체는 GROUP BY·HAVING을 가질 수 없다 - 그 절은 반드시 WHERE의
-        // IN/EXISTS 하위질의 안에서만 등장한다. 즉 UPDATE·DELETE에서
-        // HasGrouping이 True인 경우는 전부 하위질의발이고, "원본에 원래 있던
-        // 하위질의 집계"와 "이번에 새로 붙은 하위질의 집계"를 이름만으로는
+        // [이 검사가 POQSettleBatch1 축 B 감사의 S07 🟠·S09 🟠 어느 쪽도 닫지
+        // 못한다 - 픽스 라운드 1 리뷰 실측]
+        // 아래 첫 [Fact]는 합성(synthetic) 시나리오다 - "최상위 WHERE에 명세서
+        // 밖 컬럼이 붙으면 잡는다"는 검사의 일반 동작만 보여줄 뿐, 실제 S09
+        // 결함을 재현하지 않는다. 실제 S09 결함(`-9` 사전 검증 EXISTS에
+        // `SM.TxAmt = 0` 추가)은 `output/Jobs/POQSettleBatch1/agent/steps/S09.md`의
+        // `IF EXISTS (...) BEGIN ... END` 가드 안에 있다. 리뷰가 그 파일 전체를
+        // StepSqlStatementReader.Read()로 파싱해 실측한 결과: DELETE 1·INSERT 1·
+        // UPDATE 5개, 총 7개 문장만 나오고 가드는 전혀 보이지 않는다 -
+        // DmlCollector(StepSqlStatementReader.cs)가 UpdateStatement·
+        // DeleteStatement·InsertStatement만 방문하고 IfStatement를 방문하지
+        // 않기 때문이다. 설사 방문하더라도 명세서 DML 범위 표
+        // (`output/Procedures/dbo.UP_UTIL_SETTLE_INS_EXTRA/docs/Spec.md:218-229`)에는
+        // "IF" 종류 행이 아예 없다 - SpecStatementFactsExtractor가 UPDATE·INSERT·
+        // DELETE·SELECT만 갱신 표로 인정한다. 그 가드의 `TxAmt = 0`은 같은
+        // Spec.md의 DELETE 1·UPDATE 1~5 행에서는 정당한 최상위 술어다(223~229행) -
+        // "TxAmt가 명세서에 없다"가 아니라 "가드 자체가 재료에 없다"가 원인이라,
+        // 이 검사로도 CheckAnchoredStatementFacts로도 닿지 않는다.
+        //
+        // [집계(GROUP BY·HAVING) 검사를 넣지 않은 이유 - 실측, S07도 닫지 못함]
+        // 프로브 두 가지로 확인: (1) `WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx
+        // GROUP BY PLTID HAVING SUM(TxAmt) = 0)`(WHERE의 IN 하위질의) -
+        // HasGrouping=True. (2) `FROM T INNER JOIN (SELECT ... GROUP BY ...
+        // HAVING SUM(TxAmt)=0) AS K ON ...`(FROM절 파생 테이블) - 역시
+        // HasGrouping=True. 실제 S07 결함(`output/Procedures/
+        // dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`)은 두 번째 모양이다 -
+        // UPDATE 7이 파생 테이블 `K`를 FROM절에서 조인하고 그 정의 안에
+        // `HAVING SUM(TxAmt) = 0`이 있다. 즉 "WHERE의 IN/EXISTS 하위질의"로
+        // 좁혀 말할 수 없다 - StepSqlStatementReader.GroupingProbe는 하위질의든
+        // 파생 테이블이든 구분 없이 문장 전체를 훑는다. 그런데 T-SQL 문법상
+        // UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수 없다 - 그 절은
+        // 반드시 더 안쪽 SELECT(하위질의·파생 테이블) 안에서만 등장하므로,
+        // "원본에 원래 있던 집계"와 "이번에 새로 붙은 집계"를 이름만으로는
         // 구별할 수 없다(실측: output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/
         // docs/Spec.md의 UPDATE 1~18 전부 GROUP BY 칸이 `—`인데, 그중 상당수가
         // 원본부터 하위질의를 쓴다). StepSqlStatement는 Kind·TargetTable·Anchor·
@@ -7269,14 +7291,22 @@ END";
         // 주지 않으므로, 이 파일만 고치는 범위(StepSqlStatementReader.cs는 이
         // 태스크의 쓰기 허용 범위 밖)에서는 최상위 여부를 가려낼 수 없다. 오탐을
         // 내느니(정상 문장을 결함으로 몰아 단계 재생성 예산을 낭비하느니) 이
-        // 검사는 넣지 않는다 - S07의 `HAVING SUM(TxAmt)=0` 신설은 이 검사로
-        // 닫지 못하지만, S09처럼 최상위 WHERE에 술어 컬럼이 추가되는 결함은
-        // 아래 검사로 여전히 잡는다.
+        // 검사는 넣지 않는다.
+        //
+        // [검사 C가 실제로 잡는 것]
+        // "명세서 DML 범위 표가 확정한 그 행의 최상위 WHERE 술어 컬럼 밖의 이름이
+        // 앵커로 매칭된 문장에 붙었다"는 일반 사실만 잡는다. POQSettleBatch1의
+        // 9건 중 어느 것도 이 모양이 아니라서 닫지 못하지만, 이 모양의 결함이
+        // 나타나는 다른 산출물에서는 여전히 동작한다.
         // ─────────────────────────────────────────────────────────────────────
 
         [Fact]
-        public void ValidateBatchStep_AnchoredStatementWithExtraPredicateColumn_ShouldBeAnError()
+        public void ValidateBatchStep_SyntheticTopLevelPredicateColumnNotInSpecRow_ShouldBeAnError()
         {
+            // 이 시나리오는 합성이다 - 실제 S09 결함(IF EXISTS 가드 안의
+            // SM.TxAmt = 0)을 재현하지 않는다(위 섹션 주석 참고). 여기서는
+            // "최상위 WHERE에 명세서 밖 컬럼이 있으면 잡는다"는 검사의 일반
+            // 동작만 확인한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
                 ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
@@ -7327,12 +7357,15 @@ END";
         }
 
         [Fact]
-        public void ValidateBatchStep_SubqueryGroupingIsNotFlagged_BecauseTopLevelCannotBeDistinguished()
+        public void ValidateBatchStep_WhereSubqueryGroupingIsNotFlagged_BecauseTopLevelCannotBeDistinguished()
         {
-            // S07의 실제 모양(HAVING SUM(TxAmt)=0이 IN 하위질의 안에 있다)과 같은
-            // 구조라도, UPDATE 문 자체는 GROUP BY·HAVING을 가질 수 없어 이 신호는
-            // 항상 하위질의발이다 - 원본에 이미 있던 하위질의 집계와 구별할 수
-            // 없으므로 이 검사는 집계를 결함으로 들지 않는다(위 섹션 주석 참고).
+            // WHERE의 IN 하위질의 안에 HAVING SUM(TxAmt)=0이 있는 모양. UPDATE 문
+            // 자체는 GROUP BY·HAVING을 가질 수 없어 이 신호는 항상 하위질의발이다 -
+            // 원본에 이미 있던 하위질의 집계와 구별할 수 없으므로 이 검사는 집계를
+            // 결함으로 들지 않는다(위 섹션 주석 참고). 이 모양은 실제 S07 결함의
+            // 모양은 아니다 - 실제 결함은 아래
+            // ValidateBatchStep_DerivedTableGroupingIsNotFlagged_MatchingRealS07Shape가
+            // 재현하는 FROM절 파생 테이블 쪽이다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
                 ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
@@ -7346,6 +7379,39 @@ END";
                 "/* U7 */\n" +
                 "UPDATE Y SET Y.CLCOMM = 0 FROM dbo.TSettleMst AS Y\n" +
                 "WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx GROUP BY PLTID HAVING SUM(TxAmt) = 0);\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("GROUP BY") || e.Contains("집계"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_DerivedTableGroupingIsNotFlagged_MatchingRealS07Shape()
+        {
+            // 실제 S07 결함(output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/docs/
+            // Spec.md:480)의 모양 - HAVING SUM(TxAmt)=0이 WHERE 하위질의가 아니라
+            // FROM절 파생 테이블 K의 정의 안에 있다. 프로브 실측: 이 모양도
+            // HasGrouping=True를 낸다(GroupingProbe가 ScalarSubquery·
+            // QueryDerivedTable을 가리지 않고 문장 전체를 훑는다) - "WHERE의
+            // IN/EXISTS 하위질의"로 위험을 좁혀 말하면 이 실제 모양을 놓친다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 7, 223, "TSettleMst",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U7 */\n" +
+                "UPDATE A SET A.CLCOMM = K.CLComm FROM dbo.TSettleMst AS A\n" +
+                "INNER JOIN (SELECT C.PLTID, MAX(ID) AS ID FROM dbo.TX C GROUP BY C.PLTID HAVING SUM(TxAmt) = 0) AS K\n" +
+                "ON A.PLTID = K.PLTID\n" +
+                "WHERE A.YMD = @p;\n" +
                 "```\n";
 
             var result = new MechanicalValidator().ValidateBatchStep(

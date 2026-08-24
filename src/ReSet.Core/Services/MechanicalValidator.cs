@@ -5721,34 +5721,65 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 앵커가 달린 문장의 최상위 WHERE 술어 컬럼에 명세서 그 행이 확정하지 않은
-        /// 이름이 붙었는지 본다.
+        /// 이름이 붙었는지 본다. 일반 검사로서 "명세서에 없는 최상위 술어 추가"를
+        /// 잡는다 - 아래 [이 검사가 닫지 못하는 것]은 POQSettleBatch1 축 B 감사의
+        /// 특정 두 항목(S07 🟠·S09 🟠)에 한정된 한계이지, 검사 자체의 무효를
+        /// 뜻하지 않는다.
         ///
-        /// [POQSettleBatch1 축 B 감사]
-        /// S09 🟠 - `-9` 사전 검증 EXISTS에 `SM.TxAmt = 0`을 하나 더 붙였다. 이미
-        /// 지급 처리된 행이 TxAmt &lt;&gt; 0이면 원본은 -9로 즉시 반환하는데 단계는
-        /// 통과시켜 DELETE → INSERT로 지급 확정 원장을 다시 만든다.
+        /// [이 검사가 닫지 못하는 것 - 픽스 라운드 1 리뷰 실측]
+        /// 이 검사는 POQSettleBatch1의 S07 🟠·S09 🟠 어느 쪽도 닫지 못한다. 둘 다
+        /// 재료·기제의 구조적 한계이지 이 파일의 로직을 고쳐서 닫을 수 있는 문제가
+        /// 아니다 - 재료(StepSqlStatementReader·SpecStatementFactsExtractor)를
+        /// 바꿔야 하고, 그 변경은 이 태스크의 쓰기 허용 범위 밖이다.
+        ///
+        /// - S09 🟠(`-9` 사전 검증 EXISTS에 `SM.TxAmt = 0` 추가)는 `IF EXISTS (...)
+        ///   BEGIN ... END` 가드 안에 있다(`output/Jobs/POQSettleBatch1/agent/steps/
+        ///   S09.md`의 IF EXISTS 블록, `output/Procedures/dbo.UP_UTIL_SETTLE_INS_EXTRA/
+        ///   docs/Spec.md:108`이 그 존재를 "IF 1"로 언급). 이 검사는 두 겹으로
+        ///   눈이 멀어 있다: (1) <see cref="StepSqlStatementReader"/>의
+        ///   DmlCollector는 UpdateStatement·DeleteStatement·InsertStatement만
+        ///   방문하고 IfStatement를 방문하지 않아 가드 자체가 StepSqlStatement로
+        ///   추출되지 않는다(리뷰 실측: S09.md 전체를 Read()하면 DELETE 1·INSERT 1·
+        ///   UPDATE 5개, 총 7개 문장만 나오고 가드는 전혀 보이지 않는다).
+        ///   (2) 설사 IF를 방문하더라도 명세서 DML 범위 표(같은 Spec.md:218-229)에는
+        ///   "IF" 종류 행이 아예 없다 - SpecStatementFactsExtractor의
+        ///   StatementCellPattern이 UPDATE·INSERT·DELETE·SELECT만 인정하고 IF는
+        ///   대응하는 갱신 표를 만들지 않는다. 대조할 명세서 행 자체가 없으므로
+        ///   귀속할 수 없어 침묵한다. 참고로 이 가드가 검사하는 `TxAmt = 0`은
+        ///   DELETE 1·UPDATE 1~5 행에서는 정당한 최상위 술어다(같은 Spec.md:223-229) -
+        ///   즉 "TxAmt가 명세서에 없다"가 아니라 "가드 자체가 재료에 없다"가 원인이다.
+        /// - S07 🟠(명세서에 없는 `HAVING SUM(TxAmt) = 0` 신설)는 아래 [집계 검사를
+        ///   넣지 않은 이유]가 설명하는 대로, GroupingProbe가 하위질의·파생 테이블
+        ///   구분 없이 True를 내는데 원본에 이미 있던 집계와 구별할 재료가 없다.
         ///
         /// [왜 집계(GROUP BY·HAVING) 검사를 넣지 않았는가 - 실측]
         /// 계획 초안은 `statement.HasGrouping &amp;&amp; row.GroupBy.Count == 0 → 오류`를
-        /// 제안했다. 프로브 실측(`WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx
-        /// GROUP BY PLTID HAVING SUM(TxAmt) = 0)`)으로 확인한 사실:
-        /// <see cref="StepSqlStatementReader"/>의 GroupingProbe는 문장 전체(하위질의
-        /// 포함)를 훑어 이 문장에서도 HasGrouping=True를 낸다 - ScalarSubquery에서
-        /// 순회를 끊는 ColumnCollector와 달리 GroupingProbe에는 그런 경계가 없다.
-        /// 그런데 T-SQL 문법상 UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수
-        /// 없다 - 그 절은 반드시 WHERE의 IN/EXISTS 하위질의 안에서만 등장한다.
-        /// 즉 UPDATE·DELETE에서 HasGrouping=True는 전부 하위질의발이고, "원본에
-        /// 원래 있던 하위질의 집계"와 "이번에 새로 붙은 하위질의 집계"를 이름만
-        /// 으로는 구별할 수 없다(실측: output/Procedures/dbo.UP_UTIL_SETTLE_
-        /// EXCEPTION_PROC/docs/Spec.md의 UPDATE 1~18 전부 GROUP BY 칸이 `—`이고,
-        /// 그중 다수가 원본부터 하위질의를 쓴다). StepSqlStatement 레코드는
-        /// Kind·TargetTable·Anchor·PredicateColumns·JoinColumns·HasGrouping만
-        /// 노출하고 원본 파싱 트리를 주지 않으므로, 이 파일만 고치는 범위에서는
-        /// 최상위 여부를 가려낼 재료가 없다(StepSqlStatementReader.cs를 고쳐 최상위
-        /// 전용 신호를 추가하는 것은 이 태스크의 쓰기 허용 범위 밖이다). 오탐을
-        /// 내느니(정상 문장을 결함으로 몰아 단계 재생성 예산을 낭비하느니) 이 검사는
-        /// 넣지 않는다 - S07의 `HAVING SUM(TxAmt)=0` 신설은 이 검사로 닫지 못하지만,
-        /// S09처럼 최상위 WHERE에 술어 컬럼이 추가되는 결함은 아래에서 여전히 잡는다.
+        /// 제안했다. 프로브 실측 두 가지로 확인한 사실:
+        /// (1) `WHERE Y.PLTID IN (SELECT PLTID FROM dbo.TTx GROUP BY PLTID HAVING
+        /// SUM(TxAmt) = 0)`(WHERE의 IN 하위질의) - HasGrouping=True.
+        /// (2) `... FROM dbo.TSettleMst A INNER JOIN (SELECT ... GROUP BY C.PLTID
+        /// HAVING SUM(TxAmt) = 0) AS K ON ...`(FROM절 파생 테이블) - 역시
+        /// HasGrouping=True. 실제 S07의 결함(`output/Procedures/
+        /// dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:480`)은 두 번째 모양이다 -
+        /// UPDATE 7이 파생 테이블 `K`를 FROM절에서 조인하고 그 정의 안에
+        /// `HAVING SUM(TxAmt) = 0`이 있다. 즉 이 신호는 "WHERE의 IN/EXISTS
+        /// 하위질의"로 좁혀 말할 수 없다 - <see cref="StepSqlStatementReader"/>의
+        /// GroupingProbe는 문장 전체를 훑어 하위질의든 파생 테이블이든 구분 없이
+        /// True를 낸다(ScalarSubquery·QueryDerivedTable에서 순회를 끊는
+        /// ColumnCollector와 달리 GroupingProbe에는 그런 경계가 없다). 그런데
+        /// T-SQL 문법상 UPDATE·DELETE 문 자체는 GROUP BY·HAVING을 가질 수 없다 -
+        /// 그 절은 반드시 WHERE 하위질의나 FROM절 파생 테이블 등 더 안쪽 SELECT
+        /// 안에서만 등장한다. 즉 UPDATE·DELETE에서 HasGrouping=True인 경우는
+        /// 전부 더 안쪽 SELECT발이고, "원본에 원래 있던 집계"와 "이번에 새로 붙은
+        /// 집계"를 이름만으로는 구별할 수 없다(실측: output/Procedures/
+        /// dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md의 UPDATE 1~18 전부
+        /// GROUP BY 칸이 `—`이고, 그중 다수가 원본부터 하위질의를 쓴다).
+        /// StepSqlStatement 레코드는 Kind·TargetTable·Anchor·PredicateColumns·
+        /// JoinColumns·HasGrouping만 노출하고 원본 파싱 트리를 주지 않으므로, 이
+        /// 파일만 고치는 범위에서는 최상위 여부를 가려낼 재료가 없다
+        /// (StepSqlStatementReader.cs를 고쳐 최상위 전용 신호를 추가하는 것은 이
+        /// 태스크의 쓰기 허용 범위 밖이다). 오탐을 내느니(정상 문장을 결함으로
+        /// 몰아 단계 재생성 예산을 낭비하느니) 이 검사는 넣지 않는다.
         ///
         /// [검사 B의 함정을 그대로 물려받아 같은 방식으로 막는다]
         /// 1. (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다 -
