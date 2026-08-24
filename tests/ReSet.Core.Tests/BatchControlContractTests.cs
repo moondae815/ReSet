@@ -56,9 +56,21 @@ public sealed class BatchControlContractTests
 
     // 감사 실측 B3: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다.
     // 행 소유권이 계약에 없으면 모든 단계가 UPDATE만 쓴다.
+    //
+    // Tables를 순회하는 이유: 이름으로만 네 표를 단정하면 일곱 번째 표를 추가하는
+    // 사람을 이 테스트가 붙잡지 못한다 - 새 표는 이름 목록에 없어 조용히 통과한다.
+    // 순회는 모든 표가 유효한 Origin을 갖는다는 것을 강제하고, 기존 네 표의 구체
+    // 값 단정은 회귀 검출력을 잃지 않도록 그대로 유지한다.
     [Fact]
     public void RowOrigin_IsDeclaredForEveryTable()
     {
+        foreach (var table in BatchControlContract.Tables)
+        {
+            Assert.True(
+                Enum.IsDefined(typeof(ControlRowOrigin), table.Origin),
+                $"{table.Name} declares an undefined Origin.");
+        }
+
         Assert.Equal(ControlRowOrigin.FirstStepInserts, BatchControlContract.Find("batch.BatchRun")!.Origin);
         Assert.Equal(ControlRowOrigin.EachStepInserts, BatchControlContract.Find("batch.BatchStepJournal")!.Origin);
         Assert.Equal(ControlRowOrigin.EachStepInserts, BatchControlContract.Find("batch.BatchCheckpoint")!.Origin);
@@ -75,15 +87,21 @@ public sealed class BatchControlContractTests
 
     // 부트스트랩 회차 문서가 실을 DDL. 감사 §6-4: 다섯 테이블의 컬럼
     // 정의가 번들 어디에도 없었다.
+    //
+    // Tables를 순회하는 이유: 이름 넷만 단정하면 일곱 번째 표를 추가한 사람이
+    // CREATE TABLE을 빼먹어도 이 테스트가 통과한다 - "EveryTable"이라는 이름이
+    // 거짓이 된다. 순회는 모든 표에 대해 CREATE TABLE이 실제로 나오는지 강제하고,
+    // StepStatus CHECK 제약의 구체 값 단정은 회귀 검출력을 잃지 않도록 그대로 둔다.
     [Fact]
     public void RenderDdl_EmitsCreateTableForEveryTable_WithAConstraintOnTheStatusVocabulary()
     {
         var ddl = BatchControlContract.RenderDdl();
 
-        Assert.Contains("CREATE TABLE batch.BatchRun", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchStepJournal", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchCheckpoint", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchValidationIssue", ddl);
+        foreach (var table in BatchControlContract.Tables)
+        {
+            Assert.Contains($"CREATE TABLE {table.Name}", ddl);
+        }
+
         Assert.Contains("CHECK (StepStatus IN (N'Running', N'Succeeded', N'Failed', N'Skipped'))", ddl);
     }
 
