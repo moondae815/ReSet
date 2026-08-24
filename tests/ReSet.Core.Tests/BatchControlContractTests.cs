@@ -450,4 +450,61 @@ public sealed class BatchControlContractTests
         Assert.Null(BatchControlContract.FindAlias(null));
         Assert.Null(BatchControlContract.FindAlias("   "));
     }
+
+    // 최종 리뷰: PrimaryKey·StatusColumn 항목이 그 표의 Columns에 실재하는 이름을
+    // 가리킨다는 불변식이 아무 데도 없었다. new[] { "RunID2" } 같은 오타는 구문상
+    // 유효한 DDL을 만들어 모든 기존 테스트가 초록인 채로 의미가 깨진다.
+    [Fact]
+    public void PrimaryKeyAndStatusColumn_NameColumnsThatActuallyExistOnTheTable()
+    {
+        foreach (var table in BatchControlContract.Tables)
+        {
+            var columnNames = table.Columns.Select(c => c.Name).ToArray();
+
+            if (table.PrimaryKey != null)
+            {
+                foreach (var pkColumn in table.PrimaryKey)
+                {
+                    Assert.Contains(pkColumn, columnNames);
+                }
+            }
+
+            if (table.StatusColumn != null)
+            {
+                Assert.Contains(table.StatusColumn, columnNames);
+            }
+        }
+    }
+
+    // 최종 리뷰: Aliases가 렌더 출력에 새지 않는다는 회귀 가드가 없었다 - 설계가
+    // 두려워한 것(모델이 별칭을 정본으로 읽는 것)을 아무 테스트도 잡지 않았다.
+    //
+    // 부분 문자열 함정: "batch.BatchControlTotal"이 별칭 "ControlTotal"을
+    // 문자 그대로 포함하므로, 단순 DoesNotContain(alias, output)은 정본 이름이
+    // 정상적으로 실리기만 해도 항상 실패한다. 그래서 정본 전체 이름과 그
+    // 맨이름(스키마 접두사를 뺀 이름, 예: PK_BatchControlTotal 같은 제약 이름에도
+    // 쓰인다)을 먼저 걷어낸 나머지에서 별칭을 찾는다 - 이러면 정본 이름 자체에
+    // 내포된 별칭 부분 문자열이 오탐을 만들지 않는다.
+    [Fact]
+    public void RenderedOutput_DoesNotLeakAliasesAsIfTheyWereCanonical()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+        var promptTable = BatchControlContract.RenderPromptTable();
+
+        foreach (var table in BatchControlContract.Tables)
+        {
+            if (table.Aliases == null) continue;
+
+            var bareName = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+
+            var ddlWithoutCanonical = ddl.Replace(table.Name, string.Empty).Replace(bareName, string.Empty);
+            var promptWithoutCanonical = promptTable.Replace(table.Name, string.Empty).Replace(bareName, string.Empty);
+
+            foreach (var alias in table.Aliases)
+            {
+                Assert.DoesNotContain(alias, ddlWithoutCanonical);
+                Assert.DoesNotContain(alias, promptWithoutCanonical);
+            }
+        }
+    }
 }
