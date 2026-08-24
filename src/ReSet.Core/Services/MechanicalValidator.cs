@@ -388,11 +388,19 @@ namespace ReSet.Core.Services
 
                 if (facts.Count > 0)
                 {
-                    // unparsedFenceCount는 검사 A(개수 대조)에만 넘긴다 - 검사 B·C·D는
-                    // statements 목록 자체가 그대로이므로(파싱 실패 펜스는 예전에도
-                    // 지금도 빈 결과만 낸다) 이 신호로 동작을 바꾸지 않는다. Task 16
-                    // C2의 CheckStatementCountAgainstSpec 문서 참고.
-                    var statements = StepSqlStatementReader.Read(stepMarkdown, out var unparsedFenceCount);
+                    // lostStatementCount는 검사 A(개수 대조)에만 넘긴다 - 검사 B·C·D는
+                    // statements 목록을 그대로 받아 스스로 앵커 유무로 판단하므로 이
+                    // 신호로 동작을 바꾸지 않는다. Task 16 C2의
+                    // CheckStatementCountAgainstSpec 문서 참고.
+                    //
+                    // [Task 20] `StepSqlStatementReader.Read`가 이제 펜스를 통째로
+                    // 버리지 않고 최상위 세미콜론 조각 단위로 복구하므로, statements
+                    // 목록은 예전보다 문장을 더 많이 담을 수 있다(잃는 것은 개별
+                    // 조각 - 예: `EXEC … sp_getapplock` 관용구나 SELECT 목록이 통째로
+                    // 주석인 INSERT뿐). 검사 B·C·D는 이 신호를 받지 않지만, 입력
+                    // 문장이 늘어나는 것 자체는 이 회차가 의도한 개선이다 - 코퍼스
+                    // 재측정으로 새 발화가 거짓이 아닌지 확인했다(docs/known-defects.md).
+                    var statements = StepSqlStatementReader.Read(stepMarkdown, out var lostStatementCount);
 
                     // [Task 17 I2] 같은 레거시 SP가 이 Job의 다른 단계에도 나뉘어 있으면
                     // 그 SP의 DmlRows는 개수 대조에서 뺀다 - 한 단계가 그 SP의 문장 몇
@@ -413,7 +421,7 @@ namespace ReSet.Core.Services
 
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
                     SafeCheck(() => CheckStatementCountAgainstSpec(
-                        countCheckFacts, statements, unparsedFenceCount, step, result));
+                        countCheckFacts, statements, lostStatementCount, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
@@ -5761,29 +5769,32 @@ namespace ReSet.Core.Services
         /// <see cref="IsComparableDmlRow"/>로 대조 가능한 행만 남긴다 -
         /// "귀속할 수 없으면 침묵한다"는 이 저장소의 규약을 여기 적용한다.
         ///
-        /// [Task 16 C2 - 파싱 실패 펜스가 있으면 개수 대조를 통째로 접는다 -
-        /// 코퍼스 실측]
-        /// 펜스 하나라도 파싱에 실패하면 그 안의 실재하는 문장이 "없다"로
-        /// 잘못 집계된다 - 실측(`output/Jobs/POQSettleBatch1/agent/steps/
-        /// S12.md`): DELETE 4개·INSERT 4개가 전문으로 있는데, 같은 펜스
-        /// 뒤쪽의 `INSERT … SELECT /* 주석만 */ FROM …`이 파싱에 실패해 펜스
-        /// 전체가 버려지고 이 검사가 "0개"라고 보고했다(코퍼스 스윕: 891개
-        /// 펜스 중 191개(21%) 파싱 실패, 검사 A가 발화한 94단계 중 42단계가
-        /// 이 상태). 이 상태에서는 <see cref="DescribeMissingOrdinals"/>의
-        /// 불변식(missing.Count == expectedCount - actual)도 통과해(matched가
-        /// 비면 expectedCount - 0) 거짓 개수에 거짓 번호 목록이 붙는다. 개수
-        /// 대조는 "이 문서의 문장을 전부 읽었다"는 전제 위에 서 있으므로,
-        /// 하나라도 못 읽었으면 이 단계의 개수 대조 전체를 접는다 - "재료가
-        /// 없다"가 "문장이 없다"로 잘못 바뀌는 것을 막는다.
+        /// [Task 16 C2 - 파싱에 실패해 잃어버린 DML 문장이 있으면 개수 대조를
+        /// 통째로 접는다 - 코퍼스 실측, Task 20이 손실 단위를 펜스에서 문장으로
+        /// 좁힘]
+        /// `StepSqlStatementReader.Read`는 펜스를 최상위 세미콜론 조각으로 잘라
+        /// 조각마다 독립적으로 파싱하므로(Task 20), 조각 하나의 오류가 더는
+        /// 같은 펜스의 다른 문장을 통째로 삼키지 않는다(예: `output/Jobs/
+        /// POQSettleBatch1/agent/steps/S12.md`의 DELETE 4개는 이제 정상
+        /// 집계된다). 다만 어떤 조각은 여전히 못 읽는다 - `INSERT … SELECT
+        /// /* 주석만 */ FROM …`처럼 SELECT 목록이 통째로 주석인 것은 산출물
+        /// 결함 자체라 파싱이 불가능하다. `lostStatementCount`는 이렇게 잃어버린
+        /// INSERT·UPDATE·DELETE 조각 개수를 센다(제어문 조각의 실패는 DML이
+        /// 아니므로 세지 않는다). 이 값이 0보다 크면 어느 (Kind,TargetTable)
+        /// 조합이 그 손실의 영향을 받았는지 알 수 없으므로, <see
+        /// cref="DescribeMissingOrdinals"/>의 불변식(missing.Count ==
+        /// expectedCount - actual)이 거짓 개수에 거짓 번호 목록을 붙이는 것을
+        /// 막기 위해 이 단계의 개수 대조 전체를 여전히 접는다 - "재료가 없다"가
+        /// "문장이 없다"로 잘못 바뀌는 것을 막는다.
         /// </summary>
         private static void CheckStatementCountAgainstSpec(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
-            int unparsedFenceCount,
+            int lostStatementCount,
             BatchStepPlan step,
             StepValidationResult result)
         {
-            if (unparsedFenceCount > 0) return;
+            if (lostStatementCount > 0) return;
 
             // 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다(명세서
             // "갱신 1"은 그 SP 안에서만 유일하다). 번호 열거는 SP가 정확히 하나일
