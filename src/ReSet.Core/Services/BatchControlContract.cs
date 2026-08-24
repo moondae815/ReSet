@@ -51,12 +51,18 @@ namespace ReSet.Core.Services
     /// 기준으로 삼을지 모른 채 대조가 갈린다. 위 규칙의 이유가 "자연 키가 없다"였으므로,
     /// 자연 키가 있는 표에는 그 이유가 적용되지 않는다.
     /// </param>
+    /// <param name="Aliases">
+    /// 코퍼스에서 관측된 비정본 이름. 계약이 이것을 아는 이유는 정본을 정하는
+    /// 것만으로는 이름이 수렴하지 않기 때문이다 - 동의어를 쓴 단계는 어느 검사에도
+    /// 걸리지 않고 조용히 통과한다.
+    /// </param>
     public sealed record ControlTable(
         string Name,
         IReadOnlyList<ControlColumn> Columns,
         ControlRowOrigin Origin,
         string? StatusColumn,
-        IReadOnlyList<string>? PrimaryKey = null);
+        IReadOnlyList<string>? PrimaryKey = null,
+        IReadOnlyList<string>? Aliases = null);
 
     /// <summary>
     /// 배치 실행 제어 테이블의 정본.
@@ -175,7 +181,8 @@ namespace ReSet.Core.Services
                 },
                 ControlRowOrigin.ProducerInsertsOnly,
                 null,
-                new[] { "RunId", "StepCode", "ControlName" }),
+                new[] { "RunId", "StepCode", "ControlName" },
+                new[] { "ControlTotal" }),
 
             // [왜 소유자 컬럼 이름을 RunId와 가르는가]
             // 이 표의 키는 (JobName, BatchYmd)다. 소유자 컬럼을 RunId라고 부르면
@@ -211,6 +218,27 @@ namespace ReSet.Core.Services
             return Tables.FirstOrDefault(t =>
                 string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(BareName(t.Name), bare, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// 관측된 비정본 이름을 정본 표로 되짚는다. 정본 이름이면 null이다.
+        ///
+        /// [왜 Find가 이것을 겸하지 않는가]
+        /// 겸하면 CheckBatchControlVocabulary가 batch.ControlTotal을 정본으로 착각해
+        /// 컬럼만 검사하고 틀린 이름을 조용히 승인한다. 별칭은 받아들일 것이 아니라
+        /// 보고할 것이다. 순서도 그것이 맞다 - 이름을 먼저 정본으로 바꾸게 하고,
+        /// 그다음 회차에 컬럼 검사가 걸린다.
+        /// </summary>
+        public static ControlTable? FindAlias(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            if (Find(name) != null) return null;
+
+            var bare = BareName(name);
+            return Tables.FirstOrDefault(t =>
+                t.Aliases != null &&
+                t.Aliases.Any(alias =>
+                    string.Equals(BareName(alias), bare, StringComparison.OrdinalIgnoreCase)));
         }
 
         /// <summary>
@@ -276,8 +304,10 @@ namespace ReSet.Core.Services
 
         private static string BareName(string name)
         {
-            var idx = name.LastIndexOf('.');
-            return idx >= 0 ? name[(idx + 1)..] : name;
+            var trimmed = name.Trim();
+            var idx = trimmed.LastIndexOf('.');
+            var bare = idx >= 0 ? trimmed[(idx + 1)..] : trimmed;
+            return bare.Trim('[', ']', ' ');
         }
 
         /// <summary>회차 0 부트스트랩 문서가 실을 실제 DDL.</summary>

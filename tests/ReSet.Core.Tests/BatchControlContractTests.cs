@@ -353,4 +353,53 @@ public sealed class BatchControlContractTests
         Assert.True(table.Columns.Single(c => c.Name == "ReleasedAtUtc").Nullable);
         Assert.False(table.Columns.Single(c => c.Name == "AcquiredAtUtc").Nullable);
     }
+
+    // 설계 5절: 정본을 정해도 남은 batch.ControlTotal 16회가 아무 검사에도
+    // 걸리지 않는다. 스키마 검사는 스키마 이름만 보고, 미지 테이블 검사는
+    // IsInfraObject가 batch.*를 통째로 걸러내며, 어휘 검사는 Find()가 맨이름을
+    // 맞추지 못해 그 표를 건너뛴다. 계약 위반이 아니라 침묵이라 다음 감사가
+    // 같은 자리를 또 든다.
+    [Fact]
+    public void FindAlias_MapsTheObservedSynonymToTheCanonicalTable()
+    {
+        var table = BatchControlContract.FindAlias("batch.ControlTotal");
+
+        Assert.NotNull(table);
+        Assert.Equal("batch.BatchControlTotal", table!.Name);
+    }
+
+    // Find가 동의어를 겸해 받으면 CheckBatchControlVocabulary가 batch.ControlTotal을
+    // 정본으로 착각해 컬럼만 검사하고 틀린 이름을 조용히 승인한다. 별칭은
+    // 받아들일 것이 아니라 보고할 것이다.
+    [Fact]
+    public void Find_DoesNotAcceptTheSynonym()
+    {
+        Assert.Null(BatchControlContract.Find("batch.ControlTotal"));
+    }
+
+    // 정본 이름으로 물으면 "이것은 별칭이다"가 아니어야 한다 - 그러지 않으면
+    // 호출부가 정상 이름을 오류로 보고한다.
+    [Fact]
+    public void FindAlias_ReturnsNullForACanonicalName()
+    {
+        Assert.Null(BatchControlContract.FindAlias("batch.BatchControlTotal"));
+        Assert.Null(BatchControlContract.FindAlias("BatchControlTotal"));
+    }
+
+    // 단계 문서는 같은 표를 batch.ControlTotal로도 ControlTotal로도 쓴다.
+    // 한쪽만 인식하면 검사가 절반만 돈다 - 기존 Find의 계약과 같다.
+    [Fact]
+    public void FindAlias_IsCaseInsensitiveAndAcceptsTheBareName()
+    {
+        Assert.Equal("batch.BatchControlTotal", BatchControlContract.FindAlias("CONTROLTOTAL")!.Name);
+        Assert.Equal("batch.BatchControlTotal", BatchControlContract.FindAlias("[batch].[ControlTotal]")!.Name);
+    }
+
+    [Fact]
+    public void FindAlias_ReturnsNullForAnUnknownName()
+    {
+        Assert.Null(BatchControlContract.FindAlias("batch.POQSettleS07Build"));
+        Assert.Null(BatchControlContract.FindAlias(null));
+        Assert.Null(BatchControlContract.FindAlias("   "));
+    }
 }
