@@ -3170,6 +3170,10 @@ namespace ReSet.Core.Services
                 SpecConditionColumnExtractor.Extract(specs),
                 SpecRoundingShapeExtractor.Extract(specs));
 
+            // 명세서가 문장 단위로 확정한 사실(DML 범위 표·갱신 절·지역 변수 표). 조건 컬럼과
+            // 같은 이유로 재시도 루프 밖에서 한 번만 만든다 - 단계마다 뽑아도 결과가 같다.
+            var statementFacts = SpecStatementFactsExtractor.Extract(specs);
+
             // 실행 행을 만들 책임이 이 단계에 있는가. 단계 검사는 단계 하나만 보므로
             // 스스로 알 수 없고, 목록 전체를 가진 여기가 판정해 넘긴다. 이 배선이
             // 없으면 그 계약은 문서 전체를 보는 통합 검사에만 남는데, 통합 검사는
@@ -3222,7 +3226,8 @@ namespace ReSet.Core.Services
                 adopted = content;
 
                 var stepResult = _validator.ValidateBatchStep(
-                    content, step, knownTableNames, conditionColumns, stepInterfaces, runRowOwnedTables);
+                    content, step, knownTableNames, conditionColumns, stepInterfaces, runRowOwnedTables,
+                    statementFacts);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

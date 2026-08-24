@@ -6702,5 +6702,74 @@ END";
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ParameterColumnClaimMismatch);
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 A - 문장 개수 대조. POQSettleBatch1 축 B 감사 S07 🔴:
+        // 명세서가 TSettleMst에 UPDATE 15개를 확정했는데 단계는 5개만 담고
+        // 나머지 10개를 `/* U4: … */` 주석 한 줄로 대체했다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithUpdates(int count)
+        {
+            var rows = Enumerable.Range(1, count)
+                .Select(i => new SpecDmlRow("UPDATE", i, i * 10, "TSettleMst",
+                    new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()))
+                .ToList();
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    rows, Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+        }
+
+        private static BatchStepPlan LegacyStep(string code) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC" },
+            TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+            ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        [Fact]
+        public void ValidateBatchStep_FewerStatementsThanSpecConfirms_ShouldBeAnError()
+        {
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE") && e.Contains("15"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_MoreStatementsThanSpec_IsSilent()
+        {
+            // 단계는 배치 제어 테이블에 정당하게 더 쓴다. 초과는 결함이 아니다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "UPDATE A SET A.CLVT = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(1));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_NewStepWithoutLegacy_IsSilent()
+        {
+            var step = new BatchStepPlan("S01", "S01 단계", Array.Empty<string>(),
+                new[] { "batch.BatchRun" }, Array.Empty<string>(), false, Array.Empty<string>());
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                "### S01 단계\n\n```sql\nSELECT 1;\n```\n", step, new[] { "batch.BatchRun" },
+                new Dictionary<string, SpecConditions>(), null, null, FactsWithUpdates(15));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("DML 범위 표는"));
+        }
     }
 }

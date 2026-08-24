@@ -256,7 +256,8 @@ namespace ReSet.Core.Services
             IReadOnlyCollection<string> knownTableNames,
             IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
             IReadOnlyList<StepInterface>? stepInterfaces = null,
-            IReadOnlyCollection<string>? runRowOwnedTables = null)
+            IReadOnlyCollection<string>? runRowOwnedTables = null,
+            IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null)
         {
             var result = new StepValidationResult();
 
@@ -356,6 +357,25 @@ namespace ReSet.Core.Services
             CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result);
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
+
+            // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
+            // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
+            if (statementFactsByProcedure != null && step.LegacyProcedures.Count > 0)
+            {
+                var facts = step.LegacyProcedures
+                    .Select(name => statementFactsByProcedure.TryGetValue(name, out var f) ? f : null)
+                    .Where(f => f != null)
+                    .Select(f => f!)
+                    .ToList();
+
+                if (facts.Count > 0)
+                {
+                    var statements = StepSqlStatementReader.Read(stepMarkdown);
+
+                    // 검사 하나가 던져도 나머지가 죽지 않는다.
+                    SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
+                }
+            }
 
             // 목차 결함도 Errors에 합류시킨다 - 배너·로그·사용자 통보가 전부
             // Errors를 읽으므로, 여기서 빠지면 기록 경로 전체에서 사라진다.
@@ -5495,6 +5515,85 @@ namespace ReSet.Core.Services
                     "THROW는 호출부의 OUTPUT 파라미터 대입을 지나쳐 원본 반환 코드를 " +
                     "잃어버립니다. 추적한 상태 변수를 출력 파라미터에 넣고 RETURN하십시오.");
             }
+        }
+
+        /// <summary>
+        /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
+        ///
+        /// 이 저장소의 L1 규약 - 개별 검사의 실패가 검사 전체를 무력화하면 결함이
+        /// 조용히 통과한다. 뒤이어 붙는 검사들(축 B 감사 S07의 앵커·컬럼 대조 등)도
+        /// 이 헬퍼를 한 줄씩 더 쓴다.
+        /// </summary>
+        private static void SafeCheck(Action check)
+        {
+            try
+            {
+                check();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "단계 검사 하나가 실패해 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 명세서가 확정한 DML 문장 수를 단계가 실제로 담았는지 본다.
+        ///
+        /// [POQSettleBatch1 축 B 감사 S07 🔴]
+        /// 명세서가 TSettleMst에 UPDATE 15개를 확정했는데 단계는 5개만 담고 나머지 10개를
+        /// `/* U4: 고객사 최저수수료 */` 같은 주석 한 줄로 대체했다. 상수·계수·부호·반올림
+        /// 자릿수·UDF 인자가 지시서 어디에도 없어, 이 절만으로 구현하면 CLCOMM·CLVT·PGCOMM·
+        /// PGVT가 원본과 달라진다.
+        ///
+        /// [부족만 오류로 드는 이유]
+        /// 단계는 배치 제어 테이블(BatchStepJournal·BatchCheckpoint)에 자기 행을 쓰고,
+        /// 청크 처리를 위해 문장을 나누기도 한다. 초과를 오류로 들면 그 정상 구조가 전부
+        /// 걸린다.
+        /// </summary>
+        private static void CheckStatementCountAgainstSpec(
+            IReadOnlyList<SpecStatementFacts> facts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var expected = facts
+                .SelectMany(f => f.DmlRows)
+                .GroupBy(r => (r.Kind, r.TargetTable), StatementGroupComparer);
+
+            foreach (var group in expected)
+            {
+                var actual = statements.Count(s =>
+                    s.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    s.TargetTable.Equals(group.Key.TargetTable, StringComparison.OrdinalIgnoreCase));
+
+                if (actual >= group.Count()) continue;
+
+                var missing = group.Select(r => r.Ordinal).OrderBy(o => o).Skip(actual);
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 `{group.Key.TargetTable}`에 대한 {group.Key.Kind}를 {actual}개만 담고 " +
+                    $"있습니다. 명세서 DML 범위 표는 {group.Count()}개를 확정합니다(빠진 것으로 보이는 번호: " +
+                    $"{string.Join(", ", missing)}). 각 문장의 본문을 전문으로 실으십시오 — 주석이나 " +
+                    "\"원문 그대로 적용한다\"는 지시는 상수·계수·반올림 자릿수·UDF 인자를 복원하지 못합니다.");
+            }
+        }
+
+        /// <summary>
+        /// `(문장 종류, 대상 테이블)`을 대소문자 무시로 묶는다. 명세서는
+        /// `USESTATE`·`TSettleMst`, 단계는 `UseState`·`TSETTLEMST`로 쓴다.
+        /// </summary>
+        private static readonly IEqualityComparer<(string Kind, string TargetTable)> StatementGroupComparer =
+            new StatementKindTableComparer();
+
+        private sealed class StatementKindTableComparer : IEqualityComparer<(string Kind, string TargetTable)>
+        {
+            public bool Equals((string Kind, string TargetTable) x, (string Kind, string TargetTable) y) =>
+                string.Equals(x.Kind, y.Kind, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.TargetTable, y.TargetTable, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Kind, string TargetTable) obj) =>
+                HashCode.Combine(
+                    obj.Kind?.ToUpperInvariant()?.GetHashCode() ?? 0,
+                    obj.TargetTable?.ToUpperInvariant()?.GetHashCode() ?? 0);
         }
 
         private static readonly Regex CatchBlockPattern = new(
