@@ -295,6 +295,149 @@
 
   위 4건 출처: `2026-08-09-schema-claim-verification-gate-design.md` §남은 후속 1·2·4·6
 
+- **축 B 단계 검사(검사 A~E) 코퍼스 스윕 실측(2026-08-24)** — `output/Jobs/*/agent/steps/*.md`
+  326개 전수(21개 Job + 이름이 겹치는 POQSettlePrco20 별도 1개 = 디렉터리 22개, 그중
+  POQSettleProc4·7은 `PlanStructure.md`의 단계 목록 JSON을 파싱하지 못해 `agent/steps`
+  자체가 없다 — 326쌍에는 영향 없음)를 스크래치 하네스로 돌려 `ValidateBatchStep`이
+  새로 얹은 검사 5개(`MechanicalValidator.CheckStatementCountAgainstSpec`=A,
+  `CheckAnchoredStatementFacts`=B, `CheckAnchoredStatementExtras`=C,
+  `CheckSpecLocalVariablesDeclared`=D, `CheckStepIdInitialValue`=E)의 오류만 골라 세었다.
+
+  **(1) 검사별 검출 건수(전체)** — A 234 · B 195 · C **0** · D 52 · E 129(코퍼스 재측정
+  기준값 129와 정확히 일치, 8회차 실측이 재현됨). Job별 분포는 A·B·D·E가 거의 모든
+  Job에 골고루 퍼져 있고(POQSettleProc2·POQSettleProc3만 D·E가 0인데, 이 둘은 아래
+  ScriptDom 파싱 실패의 밀도가 특히 높은 Job이다), **C는 326개 전부에서 0건**이다.
+
+  **(2) 이번 회차가 닫으려던 9건 중 5건** — 5건 모두 그 (Job, 단계, 검사) 좌표에서 오류가
+  난다. 다만 두 건은 검사가 실제로 낸 메시지가 감사가 지목한 문구와 다르다:
+  - S07/검사 A — **그대로 재현.** "`TSettleMst`에 대한 UPDATE를 8개만 담고 있습니다.
+    명세서 DML 범위 표는 18개를 확정합니다."
+  - S07/검사 B, S11/검사 B — **좌표는 잡히지만 메시지는 감사가 지목한 것과 다르다.**
+    `CheckAnchoredStatementFacts`가 "갱신 13의 YMD·PGNAME 누락"·"갱신 9의 조인 키
+    YMD·UseState 누락" 같은 문장 단위 메시지를 낸 게 아니라, **"SQL이 명세서 갱신
+    번호를 주석으로 달지 않았습니다"라는 포괄 메시지 1건**을 냈다. 원인을
+    `StepSqlStatementReader.Read(anchor-debug 모드로 직접 확인)`으로 재현: S07·S11
+    둘 다 `/* U13: … */` 같은 앵커 주석 바로 다음 줄에 `SET @v_currentStepId = -20;`이
+    끼어 있고, 그 다음에야 실제 UPDATE 문이 온다. `ReadAnchor`는 문장 바로 앞 토큰만
+    보므로 이 SET 문이 앵커를 가로막아 `Anchor`가 전부 `null`이 된다(S07: 문장 8개 ·
+    앵커 있음 0개). 이 SET-사이-끼임 관용구는 `AiService`의 [Precise Error Tracking]
+    규칙(각 DML 직전에 `@v_currentStepId`를 갱신하라)이 명시적으로 요구하는 패턴이라
+    **코퍼스 전역에서 재현된다** — B의 검출 195건 전부가 이 포괄 메시지이고(문장
+    단위 메시지 "명세서가 확정한 … 이(가) 없습니다"는 0건), **C(검사 C)가 326개
+    전부에서 0건인 이유도 같다** — `CheckAnchoredStatementExtras`는 `anchored.Count
+    == 0`이면 즉시 반환하므로, 앵커가 전혀 안 잡히는 한 검사 C는 절대 발동하지
+    않는다. 기존 주석(`CheckAnchoredStatementExtras` 문서화 주석)은 "S07·S09 두 건을
+    닫지 못한다"로 좁혀 적었지만, 실측은 **코퍼스 전체에서 한 번도 발동하지 않는다**는
+    훨씬 넓은 사실이다.
+  - S14/검사 D — **그대로 재현.** 지역 변수 9개(`@v_intID`·`@v_strClientID`·
+    `@v_strYMD`·`@v_strOutYMD`·`@v_intCLTotal`·`@v_intCLComm`·`@v_intCLVT`·
+    `@v_intPostChkAmt1`·`@v_intPostChkAmt2`) 전부가 선언 없이 쓰였다는 오류가 났고,
+    그중 3종(`intCLTotal`·`intCLComm`·`intCLVT`)의 명세서 타입이 정확히 `MONEY`다.
+  - S13/검사 E — **그대로 재현.** "`@v_currentStepId`을(를) `0`로 초기화… `0`은(는)
+    이 단계의 오류 코드 집합 (-9, 0, 1001, 1002)에 이미 있는 값입니다."
+
+  **(3) 검사 D의 "정합성 검증 SQL" 펜스 건 — 판정: 드물게 진짜, 대세는 아니다.**
+  D 검출 52건 중 정확히 **1건**(`POQSettleProc11/S08`의 `@v_strReqYMD`)만 `####
+  정합성 검증 SQL` 펜스가 트리거였다 — `CheckSpecLocalVariablesDeclared`와 같은 순서
+  (문서 순서 ```sql 펜스, "쓰였는데 그 펜스 안에 DECLARE가 없는" 첫 펜스가 보고를 낸다)로
+  재현해 확인했다. 그 파일은 메인 SQL 펜스(54행)에서 `DECLARE @v_strReqYMD
+  VARCHAR(8);`로 정확히 선언·사용하지만, 485행의 "#### 정합성 검증 SQL" 아래 첫
+  ```sql 펜스(487행)가 그 변수를 재선언 없이 참조해 여기서 위반이 잡힌다. 이 펜스
+  패턴(`#### 정합성 검증 SQL` 헤딩 + 뒤따르는 ```sql)은 코퍼스 326개 중 **71개**
+  단계 파일에 있고, 그중 **25개(35%)는 자체 `DECLARE`를 두지만 46개(65%)는 두지
+  않는다** — 즉 이 관용구 자체는 흔하지만, 그것이 D의 오탐으로 이어지는 경우(spec
+  지역 변수 표에 실제로 있는 이름이 그 펜스에서 처음 걸리는 경우)는 71개 중 1개뿐이다.
+  `agent/common/00-architecture.md`(POQSettleProc11 표본)를 열어 확인한 결과 이
+  펜스는 어디에도 자동 실행 경로로 배선돼 있지 않다 — 골격 프롬프트의 "##
+  통합 데이터 정합성 검증 SQL 세트"("validation SQL templates")를 단계 단위로
+  본뜬 참고용 템플릿이고, 실행은 별도의 `ISettlementValidationService`(S15 통합
+  정합성 검증 전용)와 `verification/integrity-sql.md`가 맡는다. **판정**: 이 1건은
+  `CheckSpecLocalVariablesDeclared`가 "배포되는 프로시저 본문이 컴파일 안 된다"를
+  막으려는 목적과, 실행되지 않는 참고용 SQL 템플릿이 변수 선언 없이 인쇄된
+  것이라는 사실 사이의 개념적 불일치다 — 좁게 보면 오탐(실제 배포되는 절차는
+  멀쩡히 컴파일된다), 넓게 보면 "인쇄된 대로 복붙하면 실패하는 문서"라는 진짜
+  결함이다. 어느 쪽으로 보든 **빈도가 1/52(1.9%)**라 검사 D의 전반적 가치를
+  훼손하지 않는다 — 다음 라운드에서 `#### 정합성 검증 SQL` 절 아래 펜스를
+  `CheckSpecLocalVariablesDeclared`의 스캔 대상에서 빼는 것으로 간단히 닫을 수
+  있다.
+
+  **(4) ORDER BY 축 — 전수 측정(범위를 줄이지 않음).** 명세서 DML 범위 표의
+  ORDER BY 칸에 값이 있는 행 36개를 코퍼스 전체에서 찾아, 그 SP를 흡수한 단계
+  파일(들)의 원문 전체에 `ORDER BY` 토큰이 한 번이라도 있는지로 대조했다(문장
+  단위 정밀 대응은 (2)에서 확인한 대로 앵커가 코퍼스 전역에서 깨져 있어 불가능
+  하다 — 이 숫자는 "흡수 단계 파일 전체에 ORDER BY가 0회"라는 보수적 하한이다).
+  귀속 불가(흡수 단계를 못 찾음) 4건, **미스매치(ORDER BY 요구가 있는데 흡수
+  단계 파일 전체에 ORDER BY가 0회) 22건.** 과제가 지목한 실례
+  `UP_UTIL_STAT_PGCOLLECT_INS/docs/Spec.md:133`(INSERT 1, ORDER BY = `INYMD,
+  CLIENTID, PGNAME, MALLID`) ↔ `POQSettleBatch1/S15`가 정확히 이 22건 목록에
+  있다(다른 20개 Job의 같은 SP도 전부 같은 패턴). 두 번째로 흔한 미스매치는
+  `UP_UTIL_SETTLE_PROC_ETC`의 SELECT 1(ORDER BY = `OutYMD, ClientID`)로 7개
+  Job에 반복된다. 표본 확인: `POQSettleBatch1/S15.md`를 직접 열어 대상 SQL이
+  `GROUP BY`만 쓰고 `ORDER BY`가 전혀 없음을 확인했다(과제가 인용한 감사
+  🟡 그대로). 이 숫자는 다음 라운드의 검사 채택 판단 재료로만 쓰고, 이번
+  라운드에서 새 검사를 만들지 않았다.
+
+  **(5) 거짓 양성 판정 — 표본과 방법.** C는 0건이라 표본이 없다. A·B·D는
+  검출이 30건을 넘어 검사별 10건씩(체계적 표본 — 결과 CSV를 검사별로 추출한
+  뒤 매 N번째 행을 취함, N은 검사별 건수/10) 표본을 뽑아 해당 `Spec.md`와
+  단계 파일을 직접 열었다. E는 10건을 표본 확인했다(모두 `@v_currentStepId`를
+  `0`으로 초기화하는 동일 패턴 — 이 값이 문자 그대로 0이라는 사실 자체가
+  판정 근거라 오탐 여지가 구조적으로 없다).
+  - **검사 D**: 10건 중 9건이 진짜(변수가 실제 실행 경로에서 미선언), 1건은
+    위 (3)의 정합성 검증 SQL 펜스 건(경계 사례로 이미 반영).
+  - **검사 B**: 10건 모두 위 (2)에서 설명한 포괄 메시지("주석으로 달지
+    않았습니다")이고, 앵커가 실제로 없는 것은 사실이므로 메시지 자체는
+    정확하다 — 다만 정밀도가 낮다(문장 단위 원인을 짚지 못한다).
+  - **검사 A**: 10건 중 **3건이 오탐으로 확인됐다.**
+    1. `POQSettleProc18/S12`(target=`A`, UPDATE 1개 확정·0개 검출) —
+       `dbo.UP_UTIL_SETTLE_EXPECT_PROC/docs/Spec.md:209`의 DML 범위 표 "대상"
+       칸이 테이블명이 아니라 SQL 별칭 리터럴 `A`를 담고 있다(스펙 저작
+       결함). 단계 SQL(`S12.md:252-254`)은 실제로 `A.PGName = 'pointpay'
+       … A.OutState = 2`를 그대로 담고 있어 원본 UPDATE 11은 존재한다 —
+       검사가 스펙의 "대상" 칸 오탈자를 그대로 물려받아 오탐을 냈다.
+    2. `POQSettleProc10/S16`(TSettleMiss, UPDATE 1개 확정·0개 검출) — 이
+       단계는 "Single-Transaction Shadow Swap" 아키텍처로 `DELETE FROM
+       dbo.TSettleMiss` 다음 `INSERT INTO dbo.TSettleMiss`로 재구축한다
+       (`S16.md:292-305`). 원본 스펙의 "UPDATE 1개"는 이 DELETE+INSERT
+       재구축으로 대체됐고, `CheckStatementCountAgainstSpec`은 종류(Kind)를
+       "UPDATE"로 고정 대조하므로 이 아키텍처 전환을 인식하지 못한다.
+    3. `POQSettleProc8/S08`(TSettleMst, UPDATE 15개 확정·0개 검출) — 이
+       단계는 Stage 테이블 스왑(`SETTLE_POQ_DB.stage.TSettleMst_S08`)
+       아키텍처를 쓴다: 15개 UPDATE 전부가 **실재하지만** `stage.TSettleMst_S08`을
+       대상으로 하고(`S08.md:122-399`), 최종에 `INSERT INTO
+       SETTLE_POQ_DB.dbo.TSettleMst`로 스왑한다. `BareObjectName`이
+       `stage.TSettleMst_S08`의 마지막 세그먼트만 남겨(`TSettleMst_S08`)
+       스펙의 `TSettleMst`와 글자가 달라 매칭이 실패한다.
+
+    **위보다 크고 별도인 구조적 결함 — ScriptDom 전체 펜스 파싱 실패.**
+    표본 확인 중 `POQSettleProc3/S08`(TSettleMst UPDATE 2개 확정·0개
+    검출)을 열어 보니 해당 UPDATE 문 2개가 실제로 존재했다(`S08.md:389,413`).
+    원인을 추적하면 `StepSqlStatementReader.Read`가 그 단계의 메인 ```sql
+    펜스(53~478행, 424줄) 전체를 통째로 못 읽는다 — `TSql160Parser`에
+    `parse-errors` 모드로 직접 돌려 확인: `EXEC @v_lockResult =
+    sys.sp_getapplock @Resource = CONCAT('POQSettleProc3:S08:',
+    @pi_strYMD), …`(단계 시작부 애플리케이션 락 획득 관용구, `AiService`가
+    표준 패턴으로 요구하는 것과 같다) 근처에서 구문 오류를 내고, 그 순간
+    펜스 전체가 "파싱 실패는 침묵한다"는 계약에 따라 통째로 버려진다 —
+    같은 펜스 안의 진짜 UPDATE 문 2개까지 함께 사라진다. 코퍼스 전수를
+    `StepSqlStatementReader.Read`로 다시 돌려 **326개 중 65개** 단계 파일이
+    문장 0개를 낸다(그중 다수는 DML이 원래 없는 통제 전용 단계라 정상이지만),
+    검사 A가 오류를 낸 116개 (Job, 단계) 좌표 중 **26개가 이 "전체 0문장"
+    파일과 겹치고, 그 26개 좌표가 낸 A 메시지가 234건 중 92건(39%)** 이다 —
+    이 92건은 진짜 누락인지 파서 실패로 가려진 것인지 이 스윕만으로는
+    구별할 수 없다(위 POQSettleProc3/S08 표본은 후자로 확인됨). **결론**:
+    검사 A는 스펙 저작 품질(별칭 오기재)·아키텍처 전환(Shadow/Stage
+    swap)·SQL 파서 취약성(`EXEC @var = schema.sp @param = 식(...)`) 세
+    갈래로 오탐을 내고, 그중 파서 취약성 갈래가 234건 중 최소 92건(39%)에
+    영향을 준다 — 검사 A의 234건을 "실제 누락 234건"으로 읽으면 안 된다.
+
+  하네스: `Program.cs`(스크래치, 저장소 미커밋) — `BatchStepPlanParser.TryParse`로
+  각 Job의 단계 목록을 얻고, 그 단계가 흡수한 SP들의 `Spec.md`를 모아
+  `SpecStatementFactsExtractor.Extract`로 사실을 뽑은 뒤 `ValidateBatchStep`을
+  호출해 위 5개 검사의 오류만 메시지 문구로 골랐다(`ErrorType`이 아니라
+  `StepValidationResult.Errors`가 `List<string>`이라 문구 대조가 유일한 구분 수단).
+  근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 9
+
 ### 메타데이터 / 지시서
 
 - **`AllowExternalDatabaseConnections`가 메타데이터 계층에 도달하지 않는다** —
