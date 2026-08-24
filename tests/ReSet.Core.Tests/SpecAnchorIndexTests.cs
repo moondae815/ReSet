@@ -127,6 +127,59 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Build_EscapedPipeInPrecedingColumn_ShouldNotShiftLineColumnIndex()
+        {
+            // '문장' 칸에 이스케이프된 파이프(\|)가 들어 있으면, 이를 셀 경계로 오인해
+            // 단순 Split('|')하는 구현은 그 뒤 칸들이 통째로 밀린다 - '라인' 칸에서
+            // 38 대신 그 앞뒤 조각("4" 등)을 줍게 된다. MarkdownTableCellCodec.SplitRow가
+            // \|를 복원해 셀 경계로 보지 않아야 헤더·데이터 행의 칸 인덱스가 어긋나지 않는다.
+            const string md = @"### 집합 술어 (기계 확정 — 수정 금지)
+
+| 문장 | 라인 | 컬럼 | 연산 |
+| :--- | :--- | :--- | :--- |
+| DELETE FLAGS \| 4 | 38 | PGNAME | IN |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(38, anchor.Line);
+        }
+
+        [Fact]
+        public void Build_RowWithEscapedPipe_ShouldKeepRowTextVerbatim()
+        {
+            // 근거 패널은 표 원문 그대로를 요구한다(설계서 §3). 셀 단위 언이스케이프
+            // 결과가 RowText로 새면 안 되고, 소스 마크다운 그대로(백슬래시-파이프 포함)
+            // 남아야 한다.
+            const string md = @"### 원본 주석 기록
+
+| 라인 | 원본 주석 |
+| :--- | :--- |
+| 77 | -- SET FLAGS \| 4 |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(77, anchor.Line);
+            Assert.True(anchor.IsCommentAnchor);
+            Assert.Contains(@"FLAGS \| 4", anchor.RowText);
+        }
+
+        [Fact]
+        public void Build_FreeTextAnchorPatternsInsideCodeFence_ShouldBeIgnored()
+        {
+            // 표 스캔은 이미 펜스를 건너뛴다(Build_TableInsideCodeFence_ShouldBeIgnored).
+            // 자유 텍스트 스캔('(라인 N)'·'원본 DDL 라인 N')이 펜스를 안 걸러내면 실제
+            // Spec.md에 흔한 mermaid 다이어그램 안의 우연한 문자열도 앵커로 잡힌다.
+            const string md = @"### 예시
+
+```
+그림 설명 (라인 999) 원본 DDL 라인 123
+```
+";
+
+            Assert.Empty(SpecAnchorIndex.Build(md));
+        }
+
+        [Fact]
         public void CountLineBearingTables_ShouldCountDistinctTablesWithLineColumn()
         {
             const string md = @"### DML 범위 (기계 확정 — 수정 금지)

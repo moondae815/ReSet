@@ -66,8 +66,20 @@ namespace ReSet.Core.Services
                     isComment));
             }
 
+            // 표 스캔(EnumerateLineBearingRows)은 펜스를 건너뛰는데 이 자유 텍스트 스캔만
+            // 안 건너뛰면 일관성이 깨진다 - 실제 Spec.md에는 mermaid 다이어그램 펜스가
+            // 흔히 들어 있어서, 그 안에 우연히 "(라인 999)"나 "원본 DDL 라인 123" 같은
+            // 문자열이 있으면 가짜 앵커가 잡힌다(2026-08-24 리뷰 지적).
+            var inFreeTextFence = false;
             foreach (var raw in MarkdownSectionLocator.SplitLines(specMarkdown))
             {
+                if (IsFenceDelimiter(raw))
+                {
+                    inFreeTextFence = !inFreeTextFence;
+                    continue;
+                }
+                if (inFreeTextFence) continue;
+
                 foreach (Match m in SectionHeadingLine.Matches(raw))
                 {
                     anchors.Add(new SpecAnchor(int.Parse(m.Groups[1].Value), "절 제목", raw.Trim(), false));
@@ -107,7 +119,7 @@ namespace ReSet.Core.Services
             {
                 var line = lines[i];
 
-                if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+                if (IsFenceDelimiter(line))
                 {
                     inFence = !inFence;
                     continue;
@@ -133,6 +145,14 @@ namespace ReSet.Core.Services
 
                 var isComment = header.Any(c => c.Contains("주석", StringComparison.Ordinal));
 
+                // [알려진 제약 - 2026-08-24 리뷰에서 지적, 이번 라운드에서는 고치지 않는다]
+                // 이 안쪽 루프는 '|'로 시작하는 줄이 이어지는 한 전부 지금 표의 데이터
+                // 행으로 삼킨다. '라인' 보유 표 두 개가 빈 줄 없이 맞붙으면(뒤 표가 자기
+                // 헤더·구분선 없이 곧장 이어지는 형태) 앞 표가 뒤 표까지 삼켜 heading이
+                // 잘못 붙는다. 전제는 "모든 '라인' 보유 표는 자기 '###' 제목을 갖고, 표
+                // 사이에는 최소 한 줄의 비-표 텍스트(제목 줄)가 낀다"이다 - 실제 14개 SP
+                // 코퍼스는 이 전제를 어기지 않아 당장 터지지 않는다. 제목 없이 맞붙는
+                // 인접 표가 생기면 이 가정이 깨진다는 것을 다음 사람이 알아야 한다.
                 for (var j = i + 2; j < lines.Count && lines[j].StartsWith("|", StringComparison.Ordinal); j++)
                 {
                     yield return (heading, header, lines[j], isComment);
@@ -143,5 +163,9 @@ namespace ReSet.Core.Services
 
         private static int IndexOfLineColumn(List<string> header) =>
             header.FindIndex(c => string.Equals(c.Trim(), LineColumnName, StringComparison.Ordinal));
+
+        /// <summary>코드 펜스 경계(```) 여부. 표 스캔과 자유 텍스트 스캔이 같은 판정을 쓴다.</summary>
+        private static bool IsFenceDelimiter(string line) =>
+            line.TrimStart().StartsWith("```", StringComparison.Ordinal);
     }
 }
