@@ -76,4 +76,53 @@ public sealed class StepSqlStatementReaderTests
 
         Assert.Empty(statements);
     }
+
+    [Fact]
+    public void TrailingCommentOnPreviousStatement_IsNotMisattributedToNextStatement()
+    {
+        // "-- U4 ..."는 A 문장 끝에 붙은 꼬리 주석이지 B 문장의 선행 주석이 아니다.
+        // 리뷰 1라운드 실측: 고치기 전에는 이 주석이 B의 앵커로 잘못 붙었다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p; -- U4 참고: A에 대한 설명\n" +
+            "UPDATE B SET B.CLVT = 2 FROM dbo.TSettleMst AS B WHERE B.YMD = @p;"));
+
+        Assert.Equal(2, statements.Count);
+        Assert.Null(statements[0].Anchor);
+        Assert.Null(statements[1].Anchor);
+    }
+
+    [Fact]
+    public void ResolvesTargetAlias_WhenFromClauseHasMultipleAliasedTables()
+    {
+        // FROM 절에 별칭이 둘 있을 때 갱신 대상 별칭(A)과 같은 것만 골라야 한다 -
+        // "먼저 찾은 별칭"으로 어림하면 B(TCost)를 잘못 돌려준다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.CLCOMM = 1 FROM dbo.TCost AS B INNER JOIN dbo.TSettleMst AS A " +
+            "ON A.PLTID = B.PLTID WHERE A.YMD = @p;"));
+
+        Assert.Equal("TSettleMst", Assert.Single(statements).TargetTable);
+    }
+
+    [Fact]
+    public void ResolvesTargetTable_WhenUpdateHasNoFromClauseOrAlias()
+    {
+        // FROM 절 자체가 없으면 별칭 사전이 비어 있고, 대상 이름은 그 자체가
+        // 물리 테이블명이다 - 한 부(部) 이름을 별칭으로 오인해 빈 문자열로
+        // 떨어뜨리면 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE TSettleMst SET CLCOMM = 1 WHERE YMD = @p;"));
+
+        Assert.Equal("TSettleMst", Assert.Single(statements).TargetTable);
+    }
+
+    [Fact]
+    public void DoesNotMisreadAnchorFromCompoundKoreanWord()
+    {
+        // "재갱신4"는 "갱신 4"의 오검출 대상이다 - "갱신" 앞에 다른 단어 성분이
+        // 붙어 있으면 그 자체로 앵커 표기가 아니다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- 재갱신4\nUPDATE A SET A.CLVT = 1 FROM dbo.TSettleMst AS A WHERE A.YMD = @p;"));
+
+        Assert.Null(Assert.Single(statements).Anchor);
+    }
 }

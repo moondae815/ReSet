@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -35,8 +36,10 @@ namespace ReSet.Core.Services
             @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
         // `U4` · `갱신 4` · `UPDATE 4` 세 표기를 인정한다. S07이 이미 `/* U4: … */`를 쓴다.
+        // 1라운드 리뷰 실측: `갱신` 앞에도 형제 대안들과 같은 `\b`가 있어야 한다 -
+        // 없으면 "재갱신4" 같은 합성어의 "갱신4"가 앵커 4로 오검출된다.
         private static readonly Regex AnchorPattern = new(
-            @"(?:\bU|갱신\s*|\bUPDATE\s+|\bINSERT\s+|\bDELETE\s+)(?<ordinal>\d{1,2})\b",
+            @"(?:\bU|\b갱신\s*|\bUPDATE\s+|\bINSERT\s+|\bDELETE\s+)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown)
@@ -53,7 +56,7 @@ namespace ReSet.Core.Services
                 }
                 catch (Exception ex)
                 {
-                    Serilog.Log.Debug(ex, "단계 SQL 펜스를 읽지 못했습니다 - 이 펜스는 건너뜁니다.");
+                    Log.Debug(ex, "단계 SQL 펜스를 읽지 못했습니다 - 이 펜스는 건너뜁니다.");
                 }
             }
 
@@ -79,26 +82,56 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 문장 바로 앞의 주석 토큰에서 갱신 번호를 읽는다. 공백과 주석만 거슬러
-        /// 올라가고, 다른 토큰을 만나면 멈춘다 - 앞 문장의 꼬리 주석을 자기 앵커로
-        /// 삼으면 대응이 한 칸씩 밀린다.
+        /// 문장 바로 앞의 주석 토큰에서 갱신 번호를 읽는다.
+        ///
+        /// [1라운드 리뷰 실측 - 왜 가장 가까운 주석 하나만 보는가]
+        /// 예전 구현은 일치하지 않는 주석을 계속 지나쳐 더 앞의 주석까지 훑었다.
+        /// 그러면 `A문장; -- U4 참고\nB문장`처럼 A의 꼬리 주석이 B의 앵커로
+        /// 잘못 붙는다 - 토큰 스트림만 보면 "A 뒤에 붙은 꼬리 주석"과 "B 앞에 놓인
+        /// 선행 주석"이 똑같이 "공백 다음 주석"으로 보이기 때문이다. 이 둘을 가르는
+        /// 유일한 단서는 개행이다: 주석이 이전 실토큰과 같은 줄에 있으면(개행으로
+        /// 갈라지지 않으면) 그건 그 이전 문장의 꼬리 주석이지 이 문장의 것이 아니다.
+        /// 그래서 가장 가까운 주석 하나만 보고, 그 주석이 자기 줄에 있을 때만
+        /// 앵커 후보로 인정한다 - 맞지 않으면 그 자리에서 멈추고 더 앞으로 가지 않는다.
         /// </summary>
         private static int? ReadAnchor(IList<TSqlParserToken> tokens, int firstTokenIndex)
         {
-            for (int i = firstTokenIndex - 1; i >= 0; i--)
-            {
-                var token = tokens[i];
-                if (token.TokenType is TSqlTokenType.WhiteSpace) continue;
-                if (token.TokenType is not (TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment))
-                {
-                    return null;
-                }
+            int i = firstTokenIndex - 1;
+            while (i >= 0 && tokens[i].TokenType is TSqlTokenType.WhiteSpace) i--;
+            if (i < 0) return null;
 
-                var match = AnchorPattern.Match(token.Text);
-                if (match.Success) return int.Parse(match.Groups["ordinal"].Value);
+            var token = tokens[i];
+            if (token.TokenType is not (TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment))
+            {
+                return null;
             }
 
-            return null;
+            if (!PrecededByNewline(tokens, i)) return null;
+
+            var match = AnchorPattern.Match(token.Text);
+            return match.Success ? int.Parse(match.Groups["ordinal"].Value) : null;
+        }
+
+        /// <summary>
+        /// 주어진 위치의 토큰이 그 앞의 실토큰과 다른 줄에 있는지 본다. 개행이 든
+        /// 공백 토큰을 만나면 다른 줄이고(자기 줄의 주석), 개행 없이 실토큰에
+        /// 닿으면 같은 줄이다(그 실토큰의 꼬리 주석).
+        /// </summary>
+        private static bool PrecededByNewline(IList<TSqlParserToken> tokens, int index)
+        {
+            for (int i = index - 1; i >= 0; i--)
+            {
+                var token = tokens[i];
+                if (token.TokenType is TSqlTokenType.WhiteSpace)
+                {
+                    if (token.Text.Contains('\n')) return true;
+                    continue; // 같은 줄의 탭·스페이스 - 계속 거슬러 올라간다.
+                }
+
+                return false; // 개행 전에 실토큰을 만났다 - 같은 줄이다.
+            }
+
+            return true; // 펜스 맨 앞 - 앞에 아무 토큰도 없으므로 자기 줄로 본다.
         }
 
         private sealed class DmlCollector : TSqlFragmentVisitor
