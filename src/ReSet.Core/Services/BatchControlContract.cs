@@ -88,6 +88,7 @@ namespace ReSet.Core.Services
         private static readonly string[] RunStates = { "Running", "Succeeded", "Failed", "Restarting" };
         private static readonly string[] StepStates = { "Running", "Succeeded", "Failed", "Skipped" };
         private static readonly string[] CheckpointStates = { "Pending", "Succeeded" };
+        private static readonly string[] LockStates = { "Held", "Released" };
 
         public static IReadOnlyList<ControlTable> Tables { get; } = new[]
         {
@@ -174,7 +175,28 @@ namespace ReSet.Core.Services
                 },
                 ControlRowOrigin.ProducerInsertsOnly,
                 null,
-                new[] { "RunId", "StepCode", "ControlName" })
+                new[] { "RunId", "StepCode", "ControlName" }),
+
+            // [왜 소유자 컬럼 이름을 RunId와 가르는가]
+            // 이 표의 키는 (JobName, BatchYmd)다. 소유자 컬럼을 RunId라고 부르면
+            // 키가 RunId라고 읽혀 실행마다 잠금 행이 새로 생기고, 그러면 잠금이
+            // 잠그지 않는다. 관측된 변이 셋(RunId·OwnerRunId·LockOwnerRunId) 중
+            // 역할이 이름에 드러나는 것을 고른다.
+            new ControlTable(
+                "batch.BatchRunLock",
+                new[]
+                {
+                    new ControlColumn("JobName", "nvarchar(128)", false),
+                    new ControlColumn("BatchYmd", "varchar(8)", false),
+                    new ControlColumn("OwnerRunId", "bigint", false),
+                    new ControlColumn("LockStatus", "nvarchar(20)", false, LockStates),
+                    new ControlColumn("AcquiredAtUtc", "datetime2(3)", false),
+                    new ControlColumn("HeartbeatAtUtc", "datetime2(3)", true),
+                    new ControlColumn("ReleasedAtUtc", "datetime2(3)", true)
+                },
+                ControlRowOrigin.FirstStepInserts,
+                "LockStatus",
+                new[] { "JobName", "BatchYmd" })
         };
 
         /// <summary>

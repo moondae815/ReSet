@@ -9,7 +9,7 @@ namespace ReSet.Core.Tests;
 public sealed class BatchControlContractTests
 {
     [Fact]
-    public void Tables_CoverTheFiveControlTables()
+    public void Tables_CoverTheSixControlTables()
     {
         var names = BatchControlContract.Tables.Select(t => t.Name).ToArray();
 
@@ -20,7 +20,8 @@ public sealed class BatchControlContractTests
                 "batch.BatchStepJournal",
                 "batch.BatchCheckpoint",
                 "batch.BatchValidationIssue",
-                "batch.BatchControlTotal"
+                "batch.BatchControlTotal",
+                "batch.BatchRunLock"
             },
             names);
     }
@@ -177,7 +178,9 @@ public sealed class BatchControlContractTests
         var steps = new[]
         {
             Plan("S01"),
-            Plan("S02", "batch.BatchRun", "batch.BatchRunLock"),
+            // batch.BatchRunLock은 이 축의 전용 표(RunLock_* 테스트들)이므로 여기서는
+            // 정본에 없는 이름을 써서 "대상 보유"만으로 담당이 갈리는 것을 본다.
+            Plan("S02", "batch.BatchRun", "batch.SomeUnrelatedTable"),
             Plan("S17", "batch.BatchRun")
         };
 
@@ -268,5 +271,63 @@ public sealed class BatchControlContractTests
         Assert.Contains(
             "CONSTRAINT PK_BatchControlTotal PRIMARY KEY (RunId, StepCode, ControlName)",
             BatchControlContract.RenderDdl());
+    }
+
+    // 코퍼스 관측: 이름은 다섯 코호트 전부에서 batch.BatchRunLock 하나로 수렴했는데
+    // 컬럼이 갈렸다 - 날짜 4종(BatchYmd·ProcessingYmd·BusinessDate·BatchDate),
+    // 소유자 3종, 상태 2종, 획득 시각 3종, 하트비트 3종. 이름이 이미 모였으므로
+    // 고를 것은 컬럼뿐이다.
+    [Fact]
+    public void RunLock_IsKeyedByJobAndBusinessDay()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock");
+
+        Assert.NotNull(table);
+        Assert.Equal(
+            new[]
+            {
+                "JobName", "BatchYmd", "OwnerRunId", "LockStatus",
+                "AcquiredAtUtc", "HeartbeatAtUtc", "ReleasedAtUtc"
+            },
+            table!.Columns.Select(c => c.Name).ToArray());
+        Assert.Equal(ControlRowOrigin.FirstStepInserts, table.Origin);
+        Assert.Equal("LockStatus", table.StatusColumn);
+        Assert.Equal(new[] { "JobName", "BatchYmd" }, table.PrimaryKey);
+    }
+
+    // 같은 Job·같은 영업일에 잠금이 둘일 수 없다는 것이 이 표의 존재 이유다.
+    // 키가 없으면 두 실행이 각자 자기 행을 넣고 둘 다 "잠갔다"고 믿는다.
+    [Fact]
+    public void RunLock_DeclaresItsPrimaryKeyAndStatusVocabularyInDdl()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+
+        Assert.Contains("CONSTRAINT PK_BatchRunLock PRIMARY KEY (JobName, BatchYmd)", ddl);
+        Assert.Contains("CHECK (LockStatus IN (N'Held', N'Released'))", ddl);
+    }
+
+    // 소유자는 PK가 아니라 참조다. RunId라는 같은 이름을 쓰면 이 표의 키가
+    // RunId라고 읽히고, 그러면 실행마다 잠금 행이 새로 생겨 잠금이 잠그지 않는다.
+    [Fact]
+    public void RunLock_NamesTheOwnerColumnApartFromRunId()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock")!;
+
+        Assert.Contains(table.Columns, c => c.Name == "OwnerRunId");
+        Assert.DoesNotContain(table.Columns, c => c.Name == "RunId");
+    }
+
+    // 하트비트는 실물이다 - 번들 7개가 UPDATE ... HeartbeatUtc = SYSUTCDATETIME()
+    // 형태로 실제로 갱신한다. 다만 최근 코호트 5개 중에서는 하나뿐이라 NULL을
+    // 허용해 쓰지 않는 Job이 비워 둘 수 있게 한다. 빼면 하트비트 기반 잠금 회수를
+    // 쓰는 Job이 어휘 검사에 걸려 그 설계 자체가 막힌다.
+    [Fact]
+    public void RunLock_LeavesTheOptionalTimestampsNullable()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock")!;
+
+        Assert.True(table.Columns.Single(c => c.Name == "HeartbeatAtUtc").Nullable);
+        Assert.True(table.Columns.Single(c => c.Name == "ReleasedAtUtc").Nullable);
+        Assert.False(table.Columns.Single(c => c.Name == "AcquiredAtUtc").Nullable);
     }
 }
