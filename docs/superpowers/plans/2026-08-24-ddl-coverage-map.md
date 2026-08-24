@@ -1520,7 +1520,12 @@ namespace ReSet.Core.Services
 - [ ] **Step 4: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~CoverageMapHtmlWriterTests"`
-Expected: PASS (7 tests)
+Expected: PASS (9 tests)
+
+> **[2026-08-24 정정]** 이 줄은 `7`이라고 적혀 있었다. Step 1에 테스트 둘
+> (`Render_ShouldFoldOutOfScopeByStatementType`·`Render_KnownUncoveredMerge_ShouldBeLabelledSeparately`)을
+> 나중에 더하면서 개수를 안 고친 것이다. Task 5 워커가 실행 중에 잡았다.
+> 낡은 기대 개수는 워커가 테스트를 덜 썼는지 더 썼는지 판단할 근거를 망가뜨린다.
 
 - [ ] **Step 5: 커밋한다**
 
