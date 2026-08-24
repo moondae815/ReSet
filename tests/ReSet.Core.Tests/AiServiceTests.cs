@@ -1633,6 +1633,45 @@ END",
             Assert.Contains("@@ROWCOUNT", userPrompt);
         }
 
+        /// <summary>
+        /// spec 설계 4의 escape clause: 규약 두 조항은 "명세서가 X로 적은 자리를
+        /// Y로 바꾸는 것"을 막는 조건부다. 원본(명세서)이 이미 그 형태로 되어 있는
+        /// 정당한 사례까지 무조건 금지로 읽히면, 규약 본문에 없는 이유로 AI가
+        /// 원본 형태를 스스로 되돌려 새 결함을 만들 위험이 있다. 두 조항 각각에
+        /// "명세서가 이미 그 형태면 해당 없음, 바꿔야 하면 이유를 단계 본문에
+        /// 적으라"는 예외 문구가 있어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_ConventionRulesCarryAnEscapeClauseForLegitimateDeviation()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            var userPrompt = result.UserPrompt!;
+
+            var applyBulletStart = userPrompt.IndexOf("CROSS APPLY", StringComparison.Ordinal);
+            var aggregateBulletStart = userPrompt.IndexOf("비집계 조회 여러 문장", StringComparison.Ordinal);
+            Assert.True(applyBulletStart >= 0);
+            Assert.True(aggregateBulletStart >= 0);
+
+            var applyBullet = userPrompt.Substring(applyBulletStart, aggregateBulletStart - applyBulletStart);
+            var aggregateBulletEnd = userPrompt.IndexOf("Now write the section for step", StringComparison.Ordinal);
+            var aggregateBullet = userPrompt.Substring(aggregateBulletStart, aggregateBulletEnd - aggregateBulletStart);
+
+            const string escapeMarker = "단계 본문에 적으";
+            Assert.Contains(escapeMarker, applyBullet);
+            Assert.Contains(escapeMarker, aggregateBullet);
+            Assert.Contains("해당하지 않습니다", applyBullet);
+            Assert.Contains("해당하지 않습니다", aggregateBullet);
+        }
+
         [Fact]
         public async Task GenerateBatchPlanSkeletonAsync_RequestsPlaceholdersInsteadOfStepBodies()
         {
