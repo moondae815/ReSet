@@ -7068,8 +7068,16 @@ END";
         }
 
         [Fact]
-        public void ValidateBatchStep_WithoutAnchors_AsksForAnchorsOnce()
+        public void ValidateBatchStep_WithoutAnchors_StaysSilent()
         {
+            // 코퍼스 실측(2026-08-24): 326개 단계 파일 전체에서 앵커가 0개 잡힌다 -
+            // 실물이 `/* U1: … */` → `SET @v_currentStepId = -101;` → `UPDATE …`
+            // 순서인데 ReadAnchor가 문장 직전의 공백·주석만 보기 때문이다. 이 상태에서
+            // "번호를 다십시오" 요구를 내면 실물과 맞지 않는 거짓 지시가 되고,
+            // SuggestedPromptFix → floorFeedback으로 재생성 프롬프트에 실려도 모델이
+            // 앵커를 달아도 여전히 못 읽히므로 maxTries를 소진할 수 있다
+            // (docs/known-defects.md 참고). 그래서 앵커가 하나도 없으면 검사 B는
+            // 조용히 지나가야 한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
                 ["dbo.UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
@@ -7092,7 +7100,7 @@ END";
                 markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
-            Assert.Single(result.Errors, e => e.Contains("갱신 번호를 주석"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("갱신 번호를 주석"));
         }
 
         // ─────────────────────────────────────────────────────────────────────
