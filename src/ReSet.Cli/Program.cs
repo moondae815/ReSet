@@ -137,6 +137,38 @@ namespace ReSet.Cli
             // 2.5 로깅 초기화
             ConfigureLogging(configuration);
 
+            // 커버리지 맵 모드 - DB·AI 없이 output/ 산출물만 읽는다. 그래서 로그인
+            // 흐름보다도, 배치 모드 AI provider 가드(IsBatchMode 분기)보다도 앞에
+            // 둔다. [I2 - 2026-08-24 리뷰] 이 분기가 가드보다 뒤에 있으면, CLI
+            // provider + AllowCliProviderInBatch=false(배포 기본값) 조합에서 AI를
+            // 한 번도 안 부르는 이 실행이 그 가드에 걸려 ExitCode=1로 막힌다 - 가드
+            // 자체는 무인 배치 안전 장치이므로 건드리지 않고, 이 분기를 그 앞으로
+            // 옮겨 애초에 가드에 안 걸리게 한다. outputDir 계산도 이 분기가
+            // 필요로 하는 것뿐이라 함께 끌어올린다.
+            var outputDir = configuration["OutputSettings:Directory"] ?? "./output";
+            if (!Path.IsPathRooted(outputDir))
+            {
+                outputDir = Path.Combine(Directory.GetCurrentDirectory(), outputDir);
+            }
+
+            if (!string.IsNullOrEmpty(cliArgs.CoverageMapTarget))
+            {
+                var written = CoverageMapCommand.Run(outputDir, cliArgs.CoverageMapTarget);
+                if (written == null)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]커버리지 맵 대상을 찾지 못했습니다: {Markup.Escape(cliArgs.CoverageMapTarget)}[/]");
+                    // [I3 - 2026-08-24 리뷰] 같은 메서드 아래쪽(배치 가드)의 규약과
+                    // 같다 - 종료 코드 0으로 끝나면 아무것도 만들지 않았는데도
+                    // 파이프라인이 초록으로 통과한다.
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                AnsiConsole.MarkupLine($"[green]커버리지 맵 생성 완료:[/] {Markup.Escape(written)}");
+                return;
+            }
+
             // 세션에서 이전 연결 정보 복원
             var session = SessionManager.LoadSession();
             var server = !string.IsNullOrEmpty(session.LastUsedServer) ? session.LastUsedServer : (configuration["DatabaseSettings:Server"] ?? "localhost");
@@ -218,28 +250,6 @@ namespace ReSet.Cli
             var allowExternalDbStr =
                 configuration["DatabaseSettings:AllowExternalDatabaseConnections"] ?? "false";
             bool.TryParse(allowExternalDbStr, out bool allowExternalDatabaseConnections);
-
-            var outputDir = configuration["OutputSettings:Directory"] ?? "./output";
-            if (!Path.IsPathRooted(outputDir))
-            {
-                outputDir = Path.Combine(Directory.GetCurrentDirectory(), outputDir);
-            }
-
-            // 커버리지 맵 모드 - DB·AI 없이 output/ 산출물만 읽는다. 그래서 로그인
-            // 흐름보다 앞에 둔다(--extract-snapshot과 달리 연결이 필요 없다).
-            if (!string.IsNullOrEmpty(cliArgs.CoverageMapTarget))
-            {
-                var written = CoverageMapCommand.Run(outputDir, cliArgs.CoverageMapTarget);
-                if (written == null)
-                {
-                    AnsiConsole.MarkupLine(
-                        $"[red]커버리지 맵 대상을 찾지 못했습니다: {Markup.Escape(cliArgs.CoverageMapTarget)}[/]");
-                    return;
-                }
-
-                AnsiConsole.MarkupLine($"[green]커버리지 맵 생성 완료:[/] {Markup.Escape(written)}");
-                return;
-            }
 
             var instructionsFile = configuration["OutputSettings:InstructionsFile"] ?? "instructions.md";
             if (!Path.IsPathRooted(instructionsFile))

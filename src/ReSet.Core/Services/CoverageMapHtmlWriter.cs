@@ -106,7 +106,7 @@ namespace ReSet.Core.Services
     --ok: #58c76a; --missing: #ff7b7b; --prose: #6fb2ff; --out: #a6a6a6;
   }
 }
-body { background: var(--bg); color: var(--fg); font-family: Consolas, 'Malgun Gothic', monospace; margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: Consolas, 'Malgun Gothic', monospace; margin: 0; padding-bottom: 220px; }
 h2, h3 { color: var(--fg); }
 #summary, #list, .pane { padding: 12px; border-bottom: 1px solid var(--border); }
 #list { display: flex; flex-direction: column; gap: 6px; }
@@ -126,8 +126,23 @@ h2, h3 { color: var(--fg); }
 .fold { margin: 8px 0; }
 .dual-axis { margin: 8px 0; }
 .axis-line { margin: 4px 0; }
-#evidence { padding: 12px; border-top: 2px solid var(--border); white-space: pre-wrap; }
+/* C1: 10만 줄짜리 문서에서도 클릭 즉시 결과가 보여야 한다 - 뷰포트 바닥에
+   고정한다(`sticky`가 아니라 `fixed`인 이유: sticky는 조상 컨테이너가
+   스크롤 영역을 만들면 조상 밖으로 못 나가는데, 이 문서는 body 자체가
+   유일한 스크롤 컨테이너라 fixed와 결과가 같으면서 더 명확하다). 비어
+   있을 때는 화면을 가리지 않도록 접는다. */
+#evidence {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  max-height: 40vh; overflow-y: auto;
+  padding: 12px; border-top: 2px solid var(--border); background: var(--bg);
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.2);
+  white-space: pre-wrap;
+}
+#evidence:empty { display: none; }
 button.filter { margin-right: 6px; }
+.footnote { color: var(--muted); font-size: 0.85em; margin: 2px 0 8px; }
+.axis-note { color: var(--muted); font-size: 0.85em; margin: 0 0 8px; }
+.parse-failed { color: var(--missing); font-weight: bold; }
 ");
         }
 
@@ -147,6 +162,13 @@ button.filter { margin-right: 6px; }
                 sb.Append($"{symbol} {Encode(label)} {count} &middot; ");
             }
             sb.AppendLine("</p>");
+            // I6: 「명세서 결함」 수(특히 0)에 단서 없이 찍으면 "모든 사실이 올바른
+            // 표에 실렸다"로 오독된다 - 설계서 §2 「귀속」 참고. 판정은 앵커가 하나라도
+            // 있으면 실림으로 잡고 출처 표를 구분하지 않는다.
+            sb.AppendLine(
+                $"<p class=\"footnote\">{Encode("※ 위 「명세서 결함」 수치는 \"잎 문장이 앵커 없이 완전히 비지 않았는가\"만 확인합니다. " +
+                "판정은 앵커가 어느 출처 표에서 왔는지 구분하지 않으므로, 이 값이 0이어도 " +
+                "\"모든 사실이 올바른 표에 실렸다\"는 보증하지 않습니다.")}</p>");
 
             sb.AppendLine("<p>");
             foreach (var state in AllStates)
@@ -156,7 +178,7 @@ button.filter { margin-right: 6px; }
             sb.AppendLine("<button class=\"filter\" data-filter=\"all\">전체</button>");
             sb.AppendLine("</p>");
 
-            AppendDualAxis(sb, all);
+            AppendDualAxis(sb, all, ordered);
             sb.AppendLine("</section>");
         }
 
@@ -165,19 +187,30 @@ button.filter { margin-right: 6px; }
         /// 문장 수로는 🟧가 커 보이고 라인 가중으로는 🟩가 커 보이는 코퍼스가
         /// 실측으로 확인됐다(2026-08-24 Task 4).
         /// </summary>
-        private static void AppendDualAxis(StringBuilder sb, IReadOnlyList<StatementCoverage> all)
+        private static void AppendDualAxis(
+            StringBuilder sb, IReadOnlyList<StatementCoverage> all, IReadOnlyList<ObjectCoverage> ordered)
         {
             var totalLeaf = all.Count;
             var totalLineWeight = all.Sum(LineWeight);
+            var totalOriginalLines = ordered.Sum(o => CountDdlLines(o.DdlText));
 
             sb.AppendLine("<div class=\"dual-axis\">");
             sb.AppendLine("<h3>커버리지 두 축</h3>");
             AppendAxisLine(sb, all, "라인 가중", "외부 보고용 — 내 SP 본문을 얼마나 봐줬나",
                 totalLineWeight, LineWeight);
+            // I5: 분모(잎 문장이 차지하는 줄)가 원본 전체 줄과 같지 않다는 것을 숫자로
+            // 보여야 한다 - 예: EXCEPTION_PROC은 543줄 중 150줄(27.6%)이 애초에
+            // 어느 잎에도 안 잡혀 이 분모 밖이다.
+            sb.AppendLine(
+                $"<p class=\"axis-note\">{Encode($"분모: 잎 문장 줄 {totalLineWeight} / 원본 {totalOriginalLines}줄")}</p>");
             AppendAxisLine(sb, all, "문장 수", "내부 백로그용 — 다음에 무엇을 기계 확정 표로 넓힐까",
                 totalLeaf, _ => 1);
             sb.AppendLine("</div>");
         }
+
+        /// <summary>AppendObjectPane과 같은 분할 규칙(원본 줄 번호 매김과 일치시킨다).</summary>
+        private static int CountDdlLines(string ddlText) =>
+            string.IsNullOrEmpty(ddlText) ? 0 : ddlText.Replace("\r\n", "\n").Split('\n').Length;
 
         private static void AppendAxisLine(
             StringBuilder sb, IReadOnlyList<StatementCoverage> all,
@@ -204,6 +237,14 @@ button.filter { margin-right: 6px; }
                 var total = o.LeafCount;
                 sb.Append($"<a class=\"obj-link\" href=\"#pane-{Encode(o.ObjectName)}\">");
                 sb.Append($"<span class=\"obj-name\">{Encode(o.ObjectName)}</span> ");
+                if (o.ParseFailed)
+                {
+                    // I4: 잎이 0인 채 막대 없이 "정상" 항목처럼 섞이면 안 된다 -
+                    // 목록 단계에서부터 눈에 띄게 갈라 보인다.
+                    sb.Append($"<span class=\"parse-failed\">{Encode("⚠ 파스 실패")}</span>");
+                    sb.AppendLine("</a>");
+                    continue;
+                }
                 sb.Append($"<span class=\"obj-missing\">▲{o.Count(CoverageState.SpecMissing)}</span>");
                 sb.Append("<span class=\"obj-bar\">");
                 foreach (var state in AllStates)
@@ -229,6 +270,21 @@ button.filter { margin-right: 6px; }
             sb.AppendLine($"<section class=\"pane\" id=\"pane-{Encode(o.ObjectName)}\">");
             sb.AppendLine($"<h2>{Encode(o.ObjectName)}</h2>");
             sb.AppendLine($"<p class=\"kinds\">읽은 표 종수: {o.TableKindsRead}</p>");
+            // M4: 이 수치는 "라인 칸을 가진 표 종수"이지 "기계 확정 표 전체 종수"가
+            // 아니다 - 정의 없이는 설계서 §1이 부여한 역할("파싱이 표를 놓치면 눈에
+            // 보이게 하는 장치")을 못 한다. 실측: 참조 함수 표는 헤더가 "호출 위치"라
+            // 라인 칸이 없어 이 수치에서 빠진다(판정 자체는 새지 않는다 - 셀 안의
+            // "(라인 N)"을 자유 텍스트 스캔이 별도로 잡는다).
+            sb.AppendLine(
+                $"<p class=\"footnote\">{Encode("※ \"라인\" 칸을 가진 표 종수입니다. 기계 확정 표 전체 종수와 " +
+                "동의어가 아닙니다 - 예: 참조 함수 표는 헤더가 \"호출 위치\"라 여기서 빠집니다(판정 자체는 " +
+                "새지 않습니다 - 셀 안의 \"(라인 N)\"을 별도로 잡습니다).")}</p>");
+            if (o.ParseFailed)
+            {
+                sb.AppendLine(
+                    $"<p class=\"parse-failed\">{Encode("⚠ 파스 실패 — DDL이 있는데 좌표계(잎 문장)가 비었습니다. " +
+                    "이 객체의 커버리지는 판정되지 않았습니다.")}</p>");
+            }
             AppendOutOfScopeFold(sb, o);
             sb.AppendLine("<pre class=\"ddl\">");
 
@@ -286,17 +342,39 @@ button.filter { margin-right: 6px; }
 document.addEventListener('click', function (e) {
   var row = e.target.closest('.row[data-state]');
   if (row) {
+    // I1: getAttribute()가 돌려주는 값은 이미 디코드된 원문이다. innerHTML로 다시
+    // 파싱하면 렌더 시점의 Encode가 무효화돼 'A<B' 같은 술어 원문이 태그로 먹혀
+    // 근거가 조용히 사라진다. DOM API + textContent로만 채워 재파싱을 없앤다.
     var box = document.getElementById('evidence');
-    var html = '<h3>근거</h3><div>' + (row.getAttribute('data-evidence') || '(근거 없음)') + '</div>';
+    box.textContent = '';
+
+    var evidenceHeading = document.createElement('h3');
+    evidenceHeading.textContent = '근거';
+    box.appendChild(evidenceHeading);
+
+    var evidenceBody = document.createElement('div');
+    evidenceBody.textContent = row.getAttribute('data-evidence') || '(근거 없음)';
+    box.appendChild(evidenceBody);
+
     var comment = row.getAttribute('data-comment');
     if (comment) {
-      html += '<h4>원본 주석(참고)</h4><div>' + comment + '</div>';
+      var commentHeading = document.createElement('h4');
+      commentHeading.textContent = '원본 주석(참고)';
+      box.appendChild(commentHeading);
+
+      var commentBody = document.createElement('div');
+      commentBody.textContent = comment;
+      box.appendChild(commentBody);
     }
+
     var known = row.getAttribute('data-known');
     if (known) {
-      html += '<p><strong>' + known + '</strong></p>';
+      var knownP = document.createElement('p');
+      var knownStrong = document.createElement('strong');
+      knownStrong.textContent = known;
+      knownP.appendChild(knownStrong);
+      box.appendChild(knownP);
     }
-    box.innerHTML = html;
     return;
   }
 

@@ -205,5 +205,38 @@ namespace ReSet.Core.Tests
             Assert.Empty(SpecAnchorIndex.Build(null));
             Assert.Empty(SpecAnchorIndex.Build("   "));
         }
+
+        [Fact]
+        public void Build_CommentTableWithNonCommentColumnNames_ShouldBeMarkedByHeading()
+        {
+            // 실측(UF_GET_COMM4PG4INTEREST): 제목엔 '주석'이 있는데 칸 이름은
+            // '라인'|'원문'뿐이라 컬럼명 판정("주석"이 든 칸)만으로는 안 걸린다.
+            // 이 표의 행이 일반 사실 앵커로 새면 허위 🟩(진짜 결함을 가림)이 된다.
+            const string md = @"### 원본 주석 기록
+
+| 라인 | 원문 |
+| :--- | :--- |
+| 27 | -- 이자 계산 보정 |
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(27, anchor.Line);
+            Assert.True(anchor.IsCommentAnchor, "제목에 '주석'이 있으면 칸 이름과 무관하게 주석 앵커여야 한다");
+        }
+
+        [Fact]
+        public void Build_FreeTextSectionHeadingUnderCommentHeading_ShouldBeMarkedAsCommentAnchor()
+        {
+            // 자유 텍스트 스캔('원본 DDL 라인 N'· '(라인 N)')이 주석 절 아래인지
+            // 안 가리면, 그 절의 사실이 일반 앵커로 새 판정에 영향을 준다.
+            const string md = @"### 원본 주석 기록
+
+원본 DDL 라인 47 관련 처리 내용을 기록한다.
+";
+
+            var anchor = Assert.Single(SpecAnchorIndex.Build(md));
+            Assert.Equal(47, anchor.Line);
+            Assert.True(anchor.IsCommentAnchor, "주석 절 아래의 자유 텍스트 앵커는 주석 앵커로 표시돼야 한다");
+        }
     }
 }

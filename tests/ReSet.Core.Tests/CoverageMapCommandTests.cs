@@ -78,5 +78,28 @@ namespace ReSet.Core.Tests
             var xDir = Path.GetFullPath(Path.Combine(_tempOutputDir, "Procedures", "dbo.X"));
             Assert.Single(closure, entry => Path.GetFullPath(entry.Dir) == xDir);
         }
+
+        [Fact]
+        public void Run_ObjectWithUnparsableDdl_ShouldStillWriteHtmlWithVisibleParseFailedFlag()
+        {
+            // I4: DdlText가 있는데 잎이 0개면 파스 실패의 확정 신호다 - 종료가
+            // 초록이어도 산출물에 그 사실이 남아야 한다. (콘솔 경고 자체는
+            // AnsiConsole이 출력 대상을 첫 사용 시점에 캐시해 Console.SetOut을
+            // 나중에 바꿔도 못 잡는 실측을 확인했다 - 그래서 여기서는 결정적으로
+            // 검증 가능한 HTML 산출물 쪽만 단정한다.)
+            var objectDir = Path.Combine(_tempOutputDir, "Procedures", "dbo.Broken");
+            Directory.CreateDirectory(Path.Combine(objectDir, "raw"));
+            Directory.CreateDirectory(Path.Combine(objectDir, "docs"));
+            File.WriteAllText(
+                Path.Combine(objectDir, "raw", "metadata.json"),
+                """{"Schema":"dbo","Name":"Broken","DdlText":"CREATE PROC (((( 이건 SQL이 아니다"}""");
+            File.WriteAllText(Path.Combine(objectDir, "docs", "Spec.md"), "## 개요\n");
+
+            var path = CoverageMapCommand.Run(_tempOutputDir, "dbo.Broken");
+
+            Assert.NotNull(path);
+            var html = File.ReadAllText(path!);
+            Assert.Contains("파스 실패", html);
+        }
     }
 }

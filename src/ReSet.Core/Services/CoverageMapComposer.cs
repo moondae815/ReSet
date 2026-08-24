@@ -38,6 +38,14 @@ namespace ReSet.Core.Services
         public int LeafCount => Statements.Count;
 
         public int Count(CoverageState state) => Statements.Count(s => s.State == state);
+
+        /// <summary>
+        /// I4: DdlStatementEnumerator는 파스 오류에 빈 목록을 낸다(옳은 정책) - 그런데
+        /// 그 결과를 그대로 두면 Compose가 잎 0개 ObjectCoverage를 만들고, HTML은 이걸
+        /// "막대 없는 정상 항목"으로 그린다. DdlText가 비어 있지 않은데 잎이 0이면
+        /// 파스 실패의 확정 신호다 - 빈 DdlText(파스 시도조차 없었음)와는 다른 사실이다.
+        /// </summary>
+        public bool ParseFailed => Statements.Count == 0 && !string.IsNullOrWhiteSpace(DdlText);
     }
 
     /// <summary>

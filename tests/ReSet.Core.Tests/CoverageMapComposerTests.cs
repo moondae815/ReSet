@@ -151,6 +151,40 @@ END";
         }
 
         [Fact]
+        public void Compose_DdlTextPresentButUnparsable_ShouldMarkParseFailed()
+        {
+            // I4: DdlStatementEnumerator는 파스 오류에 빈 목록을 낸다(옳은 정책)이지만
+            // 그 결과가 "정상 - 그냥 잎이 없는 객체"로 보이면 안 된다. DdlText가 비지
+            // 않았는데 잎이 0개면 파스 실패의 확정 신호다.
+            var def = new SpDefinition { Schema = "dbo", Name = "P", DdlText = "CREATE PROC (((( 이건 SQL이 아니다" };
+
+            var coverage = CoverageMapComposer.Compose("dbo.P", def, "## 개요\n");
+
+            Assert.True(coverage.ParseFailed);
+            Assert.Empty(coverage.Statements);
+        }
+
+        [Fact]
+        public void Compose_EmptyDdlText_ShouldNotBeParseFailed()
+        {
+            // 빈 DdlText는 파스 시도조차 없었던 것이다 - 파스 실패와 다른 사실이다.
+            var def = new SpDefinition { Schema = "dbo", Name = "P", DdlText = "" };
+
+            var coverage = CoverageMapComposer.Compose("dbo.P", def, "## 개요\n");
+
+            Assert.False(coverage.ParseFailed);
+        }
+
+        [Fact]
+        public void Compose_ValidDdlWithLeaves_ShouldNotBeParseFailed()
+        {
+            var coverage = CoverageMapComposer.Compose("dbo.P", Def(), "## 개요\n");
+
+            Assert.False(coverage.ParseFailed);
+            Assert.NotEmpty(coverage.Statements);
+        }
+
+        [Fact]
         public void Compose_ShouldReportTableKindsRead()
         {
             const string spec = @"### 집합 술어 (기계 확정 — 수정 금지)

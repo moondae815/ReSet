@@ -35,6 +35,8 @@ namespace ReSet.Cli
                 var coverage = LoadObject(objectDir, target);
                 if (coverage == null) return null;
 
+                WarnParseFailed(new[] { coverage });
+
                 var path = Path.Combine(objectDir, "docs", "CoverageMap.html");
                 Write(path, new[] { coverage }, target);
                 return path;
@@ -72,6 +74,8 @@ namespace ReSet.Cli
 
             AnsiConsole.MarkupLine(
                 $"[grey]소비 명세서 {consumed.Count}개 → 폐포 {objectDirs.Count}개 → 대조 {covered.Count}개[/]");
+
+            WarnParseFailed(covered);
 
             var path = Path.Combine(jobDir, "coverage", "CoverageMap.html");
             Write(path, covered, job);
@@ -165,6 +169,22 @@ namespace ReSet.Cli
                 var specFull = Path.GetFullPath(Path.Combine(objectDir, specPath));
                 var nodeDir = Path.GetDirectoryName(Path.GetDirectoryName(specFull));
                 if (nodeDir != null && Directory.Exists(nodeDir)) yield return (key, nodeDir);
+            }
+        }
+
+        /// <summary>
+        /// I4: DdlText가 있는데 잎이 0개면 파스 실패의 확정 신호다(옳은 정책으로 빈
+        /// 목록을 내는 DdlStatementEnumerator의 결과가, 손대지 않으면 아무 경고 없이
+        /// "막대 없는 정상 항목"으로 그려진다). HTML의 시각 표시와 별개로, 종료 코드가
+        /// 초록으로 찍히기 전에 콘솔에서도 한 번 더 눈에 띄게 한다.
+        /// </summary>
+        private static void WarnParseFailed(IEnumerable<ObjectCoverage> objects)
+        {
+            foreach (var o in objects.Where(o => o.ParseFailed))
+            {
+                AnsiConsole.MarkupLine(
+                    $"[red]경고: {Markup.Escape(o.ObjectName)} - DDL 파싱에 실패해 좌표계(잎 문장)가 " +
+                    "비었습니다. 이 객체의 커버리지는 판정되지 않았습니다.[/]");
             }
         }
 

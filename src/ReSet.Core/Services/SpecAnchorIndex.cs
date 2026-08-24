@@ -71,6 +71,11 @@ namespace ReSet.Core.Services
             // 흔히 들어 있어서, 그 안에 우연히 "(라인 999)"나 "원본 DDL 라인 123" 같은
             // 문자열이 있으면 가짜 앵커가 잡힌다(2026-08-24 리뷰 지적).
             var inFreeTextFence = false;
+            // [Fix Round 2 - 2026-08-24 리뷰 I7] 표 스캔은 절 제목을 보는데 이 자유
+            // 텍스트 스캔은 안 봐서, 주석 절 아래의 '원본 DDL 라인 N'·'(라인 N)'이
+            // 일반 사실 앵커로 샜다. 표 스캔과 같은 규칙(절 제목에 '주석'이 들면
+            // 그 아래는 주석 구간)을 적용한다.
+            var freeTextHeading = "(제목 없음)";
             foreach (var raw in MarkdownSectionLocator.SplitLines(specMarkdown))
             {
                 if (IsFenceDelimiter(raw))
@@ -80,15 +85,24 @@ namespace ReSet.Core.Services
                 }
                 if (inFreeTextFence) continue;
 
+                var freeTextHeadingMatch = HeadingLine.Match(raw);
+                if (freeTextHeadingMatch.Success)
+                {
+                    freeTextHeading = freeTextHeadingMatch.Groups[1].Value.Trim();
+                }
+
+                var isFreeTextComment = freeTextHeading.Contains("주석", StringComparison.Ordinal);
+
                 foreach (Match m in SectionHeadingLine.Matches(raw))
                 {
-                    anchors.Add(new SpecAnchor(int.Parse(m.Groups[1].Value), "절 제목", raw.Trim(), false));
+                    anchors.Add(new SpecAnchor(
+                        int.Parse(m.Groups[1].Value), "절 제목", raw.Trim(), isFreeTextComment));
                 }
 
                 foreach (Match m in ParenthesizedLine.Matches(raw))
                 {
                     anchors.Add(new SpecAnchor(
-                        int.Parse(m.Groups[1].Value), "셀 내 (라인 N)", raw.Trim(), false));
+                        int.Parse(m.Groups[1].Value), "셀 내 (라인 N)", raw.Trim(), isFreeTextComment));
                 }
             }
 
@@ -143,7 +157,13 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var isComment = header.Any(c => c.Contains("주석", StringComparison.Ordinal));
+                // [Fix Round 2 - 2026-08-24 리뷰 I7] 컬럼명만 보면 새는 자리가 있다
+                // (실측: UF_GET_COMM4PG4INTEREST — 제목은 '원본 주석 기록'인데 칸은
+                // '라인'|'원문'뿐이라 '주석' 글자가 컬럼명에 아예 없다). 절 제목에
+                // '주석'이 들어 있으면 컬럼명과 무관하게 주석 표로 본다. 위험 방향이
+                // 허위 🟩(진짜 결함을 가림)이라 컬럼명 판정 하나만으로는 부족하다.
+                var isComment = header.Any(c => c.Contains("주석", StringComparison.Ordinal))
+                    || heading.Contains("주석", StringComparison.Ordinal);
 
                 // [알려진 제약 - 2026-08-24 리뷰에서 지적, 이번 라운드에서는 고치지 않는다]
                 // 이 안쪽 루프는 '|'로 시작하는 줄이 이어지는 한 전부 지금 표의 데이터

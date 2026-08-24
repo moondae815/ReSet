@@ -57,11 +57,47 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Render_ShouldCarrySymbolsNotOnlyColors()
         {
-            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
+            // I9 (여섯 번째 무의미 테스트였다): 범례(#summary legend)와 필터 버튼은
+            // 상태와 무관하게 기호를 항상 찍으므로, data-state 행 밖에서 기호를
+            // 찾으면 <i class="sym">{symbol}</i>를 통째로 지워도 이 검사가 통과한다.
+            // data-state="..." 행 안에서 상태별 기호를 찾도록 좁힌다(축 테스트가 이미
+            // 쓰는 기법과 같다) - 그래야 실제 렌더된 줄이 기호를 잃으면 깨진다.
+            // Sample()의 SpecMissing 라인(10+)은 DDL 3줄짜리 픽스처 범위 밖이라
+            // <pre>에 아예 렌더되지 않으므로, 두 상태 모두 실제로 찍히는 전용
+            // 픽스처를 쓴다.
+            var consistent = new StatementCoverage(
+                new DdlStatement(1, 1, "DeleteStatement", 1, false),
+                CoverageState.Consistent,
+                new[] { 1 },
+                new List<SpecAnchor> { new(1, "표: 집합 술어", "| DELETE 1 | 1 | PGNAME |", false) },
+                new List<SpecAnchor>(),
+                false);
+            var specMissing = new StatementCoverage(
+                new DdlStatement(2, 2, "UpdateStatement", 1, false),
+                CoverageState.SpecMissing,
+                new[] { 2 },
+                new List<SpecAnchor>(),
+                new List<SpecAnchor>(),
+                false);
+            var coverage = new ObjectCoverage(
+                "dbo.A", "line1\nline2\n", new List<StatementCoverage> { consistent, specMissing }, 1);
 
-            Assert.Contains("■", html);
-            Assert.Contains("▲", html);
-            Assert.Contains("◆", html);
+            var html = CoverageMapHtmlWriter.Render(new[] { coverage }, "T");
+
+            var rows = Regex.Matches(html, "<span class=\"row[^\"]*\" data-state=\"([^\"]+)\"[^>]*>(.*?)</span>")
+                .Select(m => (State: m.Groups[1].Value, Row: m.Groups[2].Value))
+                .ToList();
+
+            Assert.NotEmpty(rows);
+            AssertRowCarriesSymbol(rows, nameof(CoverageState.Consistent), "■");
+            AssertRowCarriesSymbol(rows, nameof(CoverageState.SpecMissing), "▲");
+        }
+
+        private static void AssertRowCarriesSymbol(
+            List<(string State, string Row)> rows, string state, string symbol)
+        {
+            var row = Assert.Single(rows, r => r.State == state);
+            Assert.Contains(symbol, row.Row);
         }
 
         [Fact]
@@ -207,6 +243,93 @@ namespace ReSet.Core.Tests
             // 두 문단이 같은 계산을 공유하면(예: 둘 다 라인 가중으로 통일) 문단
             // 텍스트 자체가 같아진다 - 서로 달라야 한다.
             Assert.NotEqual(lineWeightedAxis, statementCountAxis);
+        }
+
+        [Fact]
+        public void Render_EvidencePanel_ShouldBePinnedToViewportNotDocumentBottom()
+        {
+            // C1: #evidence가 모든 pane 뒤 마지막 요소로만 있으면, 10MB짜리 문서에서
+            // 줄을 클릭해도 뷰포트에는 아무 변화가 없다(문서 맨 밑바닥이 갱신될 뿐).
+            // 스크롤 위치와 무관하게 보이려면 CSS가 뷰포트에 고정해야 한다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
+
+            var styleMatch = Regex.Match(html, "#evidence\\s*\\{[^}]*\\}");
+            Assert.True(styleMatch.Success, "#evidence 스타일 블록을 찾지 못했다");
+            Assert.Matches("position:\\s*(sticky|fixed)", styleMatch.Value);
+            Assert.Contains("bottom:", styleMatch.Value);
+        }
+
+        [Fact]
+        public void Render_EvidencePanel_ShouldHideWhenEmpty()
+        {
+            // 뷰포트에 고정된 패널이 비어 있을 때도 자리를 차지하면 화면을 가린다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
+
+            Assert.Contains("#evidence:empty", html);
+        }
+
+        [Fact]
+        public void Render_EvidenceScript_ShouldNotReparseDecodedRowTextAsHtml()
+        {
+            // I1: getAttribute('data-evidence')는 디코드된 원문을 준다. 그것을
+            // innerHTML로 다시 파싱하면 렌더 시점의 Encode가 무효화되고, 'A<B' 같은
+            // 술어 원문이 태그로 먹혀 근거가 조용히 사라진다. textContent로 대입해야
+            // 원문이 보존된다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
+
+            Assert.DoesNotContain(".innerHTML = html", html);
+            Assert.DoesNotContain(".innerHTML=html", html);
+            Assert.Contains("textContent", html);
+        }
+
+        [Fact]
+        public void Render_SpecMissingCount_ShouldCarryScopeFootnote()
+        {
+            // I6: 「명세서 결함 0」에 단서가 없으면 - 판정이 앵커의 출처 표를
+            // 구분하지 않는다는 사실이 화면에서 사라진다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 0) }, "T");
+
+            Assert.Contains("출처 표", html);
+        }
+
+        [Fact]
+        public void Render_LineWeightedAxis_ShouldShowDenominatorFootnote()
+        {
+            // I5: 라인 가중의 분모(잎 문장 줄 수 / 원본 전체 줄 수)가 안 보이면
+            // "67.5%가 분모다" 같은 실측이 화면에서 사라진다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 1) }, "T");
+
+            Assert.Contains("분모:", html);
+            Assert.Contains("원본", html);
+        }
+
+        [Fact]
+        public void Render_TableKindsRead_ShouldCarryDefinitionFootnote()
+        {
+            // M4: 「읽은 표 종수」가 "라인 칸을 가진 표 종수"라는 정의 없이 나오면
+            // "기계 확정 표 전체 종수"로 오독된다(참조 함수 표는 헤더가 '호출 위치'라
+            // 여기서 안 세어진다).
+            var coverage = new ObjectCoverage("dbo.K", "x\ny\n", new List<StatementCoverage>(), 7);
+
+            var html = CoverageMapHtmlWriter.Render(new[] { coverage }, "T");
+
+            Assert.Contains("라인", html);
+            Assert.Contains("호출 위치", html);
+        }
+
+        [Fact]
+        public void Render_ParseFailedObject_ShouldBeVisiblyFlaggedNotBlendedWithNormalObjects()
+        {
+            // I4: DdlText가 있는데 잎이 0이면 파스 실패의 확정 신호다. 막대 없는
+            // "정상" 항목으로 섞이면 안 되고, 눈에 띄게 표시돼야 한다.
+            var parseFailed = new ObjectCoverage(
+                "dbo.Broken", "CREATE PROC ((( 이건 SQL이 아니다",
+                new List<StatementCoverage>(), 0);
+
+            var html = CoverageMapHtmlWriter.Render(new[] { parseFailed }, "T");
+
+            Assert.True(parseFailed.ParseFailed);
+            Assert.Contains("파스 실패", html);
         }
 
         [Fact]
