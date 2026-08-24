@@ -1451,13 +1451,28 @@ namespace ReSet.Core.Services
                 var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
                 if (CreatesRowIn(stepMarkdown, bare)) continue;
 
-                result.Errors.Add(
-                    $"{step.Code} 섹션에 `{table.Name}` 행을 만드는 INSERT가 없습니다. " +
-                    $"이 테이블을 대상으로 선언한 첫 단계가 {step.Code}이므로 실행 행을 발급할 책임이 " +
-                    "이 단계에 있습니다. 생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 " +
-                    "존재하지 않습니다. INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 " +
-                    "넘기십시오.");
+                result.Errors.Add(FirstStepRowCreationMessage(step, table));
             }
+        }
+
+        /// <summary>
+        /// <see cref="CheckFirstStepRowCreation"/>이 낼 오류 문구를 만든다. IDENTITY
+        /// 컬럼이 있는 테이블만 "SCOPE_IDENTITY()로 발급된 값을 넘기라"고 말한다 -
+        /// 그 값은 IDENTITY가 있을 때만 존재한다. 없는 테이블(예: 복합키만 있는
+        /// 잠금 테이블)에 같은 절을 붙이면 존재하지 않는 발급 지점을 지어내라고
+        /// 지시하는 거짓 지시가 되고, 그 문구는 <see cref="StepValidationResult.SuggestedPromptFix"/>
+        /// → floorFeedback을 타고 재생성 프롬프트에 그대로 실린다.
+        /// </summary>
+        private static string FirstStepRowCreationMessage(BatchStepPlan step, ControlTable table)
+        {
+            var identityClause = table.Columns.Any(c => c.IsIdentity)
+                ? " INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오."
+                : "";
+
+            return $"{step.Code} 섹션에 `{table.Name}` 행을 만드는 INSERT가 없습니다. " +
+                $"이 테이블을 대상으로 선언한 첫 단계가 {step.Code}이므로 실행 행을 발급할 책임이 " +
+                "이 단계에 있습니다. 생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 " +
+                $"존재하지 않습니다.{identityClause}";
         }
 
         /// <summary>
@@ -6300,11 +6315,7 @@ namespace ReSet.Core.Services
                 if (!mentioned) continue;
                 if (CreatesRowIn(markdown, bare)) continue;
 
-                var message =
-                    $"계획서 전체에 `{table.Name}` 행을 만드는 지점이 없습니다. " +
-                    "이 테이블은 단계 목록의 첫 단계가 INSERT하며 RunId를 발급하는 계약인데, " +
-                    "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
-                    "첫 단계에 INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오.";
+                var message = BatchRunRowCreationMessage(table);
 
                 result.Errors.Add(message);
                 result.DetailedErrors.Add(new DetailedError
@@ -6314,6 +6325,26 @@ namespace ReSet.Core.Services
                     RawContext = table.Name
                 });
             }
+        }
+
+        /// <summary>
+        /// <see cref="CheckBatchRunRowCreation"/>이 낼 오류 문구를 만든다. IDENTITY
+        /// 컬럼이 있는 테이블만 "SCOPE_IDENTITY()로 발급된 값을 넘기라"고 말한다 -
+        /// 그 값은 IDENTITY가 있을 때만 존재한다. 없는 테이블에 같은 절을 붙이면
+        /// 존재하지 않는 발급 지점을 지어내라고 지시하는 거짓 지시가 된다. IDENTITY가
+        /// 없을 때 대안 키를 어떻게 만들지는 이 검사가 알 수 없으므로 말하지 않는다.
+        /// </summary>
+        private static string BatchRunRowCreationMessage(ControlTable table)
+        {
+            var body = table.Columns.Any(c => c.IsIdentity)
+                ? "이 테이블은 단계 목록의 첫 단계가 INSERT하며 RunId를 발급하는 계약인데, " +
+                  "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
+                  "첫 단계에 INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오."
+                : "이 테이블은 단계 목록의 첫 단계가 INSERT하는 계약인데, " +
+                  "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
+                  "첫 단계에 INSERT를 두십시오.";
+
+            return $"계획서 전체에 `{table.Name}` 행을 만드는 지점이 없습니다. " + body;
         }
 
         /// <summary>

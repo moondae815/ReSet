@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -3992,6 +3993,119 @@ UPDATE dbo.MyBatchRun SET Foo = 1 WHERE Id = @Id;");
             var result = new MechanicalValidator().ValidateConsolidated(markdown);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // TASK 14 - CheckFirstStepRowCreation/CheckBatchRunRowCreation이
+        // IDENTITY 없는 FirstStepInserts 테이블에도 "SCOPE_IDENTITY()로 발급된
+        // 값을 넘기라"고 지시했다. 그 값은 IDENTITY가 있을 때만 존재한다 -
+        // 지금 이 축에는 batch.BatchRun(IsIdentity: true) 하나뿐이라 우연히
+        // 참이었지만, IDENTITY 없는 테이블이 같은 축에 들어오는 순간 거짓
+        // 지시가 된다. BatchControlContract.Tables는 지금 이 하나뿐이라 공개
+        // 경로(ValidateBatchStep/ValidateConsolidated)로는 IDENTITY 없는
+        // 테이블을 시험할 수 없으므로, 문구를 만드는 private 헬퍼를 리플렉션으로
+        // 직접 불러 손으로 만든 ControlTable(IsIdentity 없음)을 넘긴다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static string InvokeFirstStepRowCreationMessage(BatchStepPlan step, ControlTable table)
+        {
+            var method = typeof(MechanicalValidator).GetMethod(
+                "FirstStepRowCreationMessage", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            return (string)method!.Invoke(null, new object[] { step, table })!;
+        }
+
+        private static string InvokeBatchRunRowCreationMessage(ControlTable table)
+        {
+            var method = typeof(MechanicalValidator).GetMethod(
+                "BatchRunRowCreationMessage", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            return (string)method!.Invoke(null, new object[] { table })!;
+        }
+
+        // batch.BatchRunLock처럼 IDENTITY 없이 복합키로만 여는 제어 테이블을
+        // 흉내낸다. BatchControlContract.cs는 이 태스크의 쓰기 범위 밖이라
+        // 실제 정본에 추가하지 못하므로, 검사 함수가 받는 ControlTable을
+        // 직접 만든다.
+        private static ControlTable NoIdentityFirstStepTable() => new(
+            "batch.BatchRunLock",
+            new[]
+            {
+                new ControlColumn("RunId", "bigint", false),
+                new ControlColumn("LockKey", "nvarchar(64)", false)
+            },
+            ControlRowOrigin.FirstStepInserts,
+            null,
+            new[] { "RunId", "LockKey" });
+
+        [Fact]
+        public void FirstStepRowCreationMessage_TableWithoutIdentity_OmitsScopeIdentityClause()
+        {
+            var step = LegacyStep("S02");
+            var table = NoIdentityFirstStepTable();
+
+            var message = InvokeFirstStepRowCreationMessage(step, table);
+
+            Assert.DoesNotContain("SCOPE_IDENTITY", message);
+            Assert.DoesNotContain("RunId를 이후 단계에", message);
+            Assert.Equal(
+                "S02 섹션에 `batch.BatchRunLock` 행을 만드는 INSERT가 없습니다. " +
+                "이 테이블을 대상으로 선언한 첫 단계가 S02이므로 실행 행을 발급할 책임이 " +
+                "이 단계에 있습니다. 생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 " +
+                "존재하지 않습니다.",
+                message);
+        }
+
+        [Fact]
+        public void FirstStepRowCreationMessage_TableWithIdentity_KeepsScopeIdentityClauseUnchanged()
+        {
+            var step = LegacyStep("S02");
+            var table = BatchControlContract.Find("batch.BatchRun");
+            Assert.NotNull(table);
+
+            var message = InvokeFirstStepRowCreationMessage(step, table!);
+
+            Assert.Equal(
+                "S02 섹션에 `batch.BatchRun` 행을 만드는 INSERT가 없습니다. " +
+                "이 테이블을 대상으로 선언한 첫 단계가 S02이므로 실행 행을 발급할 책임이 " +
+                "이 단계에 있습니다. 생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 " +
+                "존재하지 않습니다. INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 " +
+                "넘기십시오.",
+                message);
+        }
+
+        [Fact]
+        public void BatchRunRowCreationMessage_TableWithoutIdentity_OmitsScopeIdentityClause()
+        {
+            var table = NoIdentityFirstStepTable();
+
+            var message = InvokeBatchRunRowCreationMessage(table);
+
+            Assert.DoesNotContain("SCOPE_IDENTITY", message);
+            Assert.DoesNotContain("RunId를 발급하는", message);
+            Assert.DoesNotContain("RunId를 이후 단계에", message);
+            Assert.Equal(
+                "계획서 전체에 `batch.BatchRunLock` 행을 만드는 지점이 없습니다. " +
+                "이 테이블은 단계 목록의 첫 단계가 INSERT하는 계약인데, " +
+                "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
+                "첫 단계에 INSERT를 두십시오.",
+                message);
+        }
+
+        [Fact]
+        public void BatchRunRowCreationMessage_TableWithIdentity_KeepsScopeIdentityClauseUnchanged()
+        {
+            var table = BatchControlContract.Find("batch.BatchRun");
+            Assert.NotNull(table);
+
+            var message = InvokeBatchRunRowCreationMessage(table!);
+
+            Assert.Equal(
+                "계획서 전체에 `batch.BatchRun` 행을 만드는 지점이 없습니다. " +
+                "이 테이블은 단계 목록의 첫 단계가 INSERT하며 RunId를 발급하는 계약인데, " +
+                "생성 없이 UPDATE만 하면 0행이 갱신되어 실행 단위 자체가 존재하지 않습니다. " +
+                "첫 단계에 INSERT를 두고 SCOPE_IDENTITY()로 발급된 RunId를 이후 단계에 넘기십시오.",
+                message);
         }
 
         // [재리뷰 수정 - B-2와 같은 부류, 방향은 오탐] 문서 전체를 한 번에 BlankCommentsAndStrings로
