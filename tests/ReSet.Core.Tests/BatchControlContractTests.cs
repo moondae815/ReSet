@@ -46,12 +46,34 @@ public sealed class BatchControlContractTests
         Assert.Contains("Succeeded", journalStatus.AllowedValues!);
     }
 
+    // 규칙은 맨이름 전체가 아니라 "핵심 명사 + Status"다 - BatchStepJournal이
+    // StepJournalStatus가 아니라 StepStatus인 것이 그 증거다. BatchRunLock의
+    // 핵심 명사는 Lock이므로 LockStatus가 이 규칙의 예외가 아니라 적용 사례다.
     [Fact]
     public void StatusColumnName_FollowsTheTargetStatusRule()
     {
         Assert.Equal("RunStatus", BatchControlContract.Find("batch.BatchRun")!.StatusColumn);
         Assert.Equal("StepStatus", BatchControlContract.Find("batch.BatchStepJournal")!.StatusColumn);
         Assert.Equal("CheckpointStatus", BatchControlContract.Find("batch.BatchCheckpoint")!.StatusColumn);
+        Assert.Equal("LockStatus", BatchControlContract.Find("batch.BatchRunLock")!.StatusColumn);
+
+        // 일곱 번째 표가 코퍼스에서 실제로 관측된 변이인 LockState 같은 이름을
+        // 들고 와도 걸리도록, "Status" 접미사 규칙이 적용되는 표(행이 상태를
+        // 전이하는 FirstStepInserts·EachStepInserts) 전부를 순회로 본다.
+        //
+        // ProducerInsertsOnly는 제외한다 - batch.BatchValidationIssue의
+        // StatusColumn은 "Severity"인데, 이것은 프로세스 상태 전이가 아니라
+        // Info/Warning/Error/Critical이라는 별개의 어휘(심각도)를 담는 컬럼이라
+        // "Status" 접미사 규칙의 적용 대상이 아니다. 이 루프를 모든 표로
+        // 넓히면 사실이 아닌 기대를 강제하게 된다(직접 실행해 확인함 - 아래
+        // 리포트의 최초 실행 결과 참고).
+        foreach (var table in BatchControlContract.Tables)
+        {
+            if (table.StatusColumn == null) continue;
+            if (table.Origin == ControlRowOrigin.ProducerInsertsOnly) continue;
+
+            Assert.EndsWith("Status", table.StatusColumn, StringComparison.Ordinal);
+        }
     }
 
     // 감사 실측 B3: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다.

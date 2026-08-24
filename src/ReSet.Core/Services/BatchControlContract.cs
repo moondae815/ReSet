@@ -45,7 +45,23 @@ namespace ReSet.Core.Services
         ProducerInsertsOnly
     }
 
-    /// <param name="StatusColumn">상태 어휘를 담은 컬럼. 없으면 null.</param>
+    /// <param name="StatusColumn">
+    /// 상태 어휘를 담은 컬럼. 없으면 null.
+    ///
+    /// [행이 상태를 전이하는 표(FirstStepInserts·EachStepInserts)의 명명 규칙]
+    /// 이름은 표 맨이름 전체가 아니라 "그 표의 핵심 명사 + Status"다. 실례 넷:
+    /// batch.BatchRun → RunStatus, batch.BatchStepJournal → StepStatus(Journal까지
+    /// 떨어낸다), batch.BatchCheckpoint → CheckpointStatus, batch.BatchRunLock →
+    /// LockStatus. {맨이름}Status를 강제하면 BatchStepJournalStatus 같은 이름이
+    /// 나오는데 실제 산출물은 그렇게 쓰지 않는다. 핵심 명사만 남기는 것이 표 맥락
+    /// 안에서 모호하지 않은 최소 이름이라 단계 SQL이 길어지지 않고, 같은 개념을
+    /// 두 이름으로 부르는 일이 줄어든다.
+    ///
+    /// 이 규칙은 ProducerInsertsOnly 표에는 적용되지 않는다. batch.BatchValidationIssue의
+    /// StatusColumn은 "Severity"인데, 그것은 프로세스 상태 전이가 아니라
+    /// Info/Warning/Error/Critical이라는 별개의 어휘(심각도)를 담는 컬럼이다 - 행이
+    /// 상태를 바꾸지 않는 표이므로 "Status" 접미사가 말이 되지 않는다.
+    /// </param>
     /// <param name="PrimaryKey">
     /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 원칙적으로 두지
     /// 않는다 - 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
