@@ -3374,5 +3374,85 @@ END"
             var body = DecodeMessageContents(handler.LastRequestBody);
             Assert.Contains(CaseBranchExtractor.TableHeading, body);
         }
+
+        // Task 4b - 트랜잭션 경계 · 변수 대입 표. 둘 다 `## 로직 흐름 요약` 소관이라
+        // CASE 분기와 같은 caseBranchPresentation 값을 그대로 탄다(`BuildMachineFactBlockLines`
+        // 안에서만 배선한다).
+
+        private static SpDefinition ProbeTransactionBoundarySpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "TXN_PROBE",
+                DdlText = @"CREATE PROCEDURE dbo.TXN_PROBE AS
+BEGIN
+    BEGIN TRANSACTION
+    UPDATE dbo.T SET A = 1
+    COMMIT TRANSACTION
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        private static SpDefinition ProbeSetAssignmentSpDef()
+        {
+            var spDef = new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "SET_PROBE",
+                DdlText = @"CREATE PROCEDURE dbo.SET_PROBE AS
+BEGIN
+    DECLARE @flags INT
+    SET @flags = @flags | 1
+END"
+            };
+            spDef.StaticAnalysis = new SpStaticAnalysisResult { IsParsedSuccessfully = true };
+            return spDef;
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheTransactionBoundaryTable()
+        {
+            // 갈래 1(SP 전체 명세서, :469)은 caseBranchPresentation을 Table로 준다 -
+            // BuildMachineFactBlockLines를 통해 실제로 배선됐는지를 이 호출부 하나로 확인한다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeTransactionBoundarySpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(TransactionBoundaryExtractor.TableHeading, body);
+            Assert.Contains("BEGIN TRANSACTION", body);
+            Assert.Contains("COMMIT TRANSACTION", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecificationAsync_ShouldPrefillTheSetAssignmentTableAndEscapePipe()
+        {
+            // SET 대입식의 비트 연산자 `|`는 표 셀 경계로 읽히므로 EscapeTableCell
+            // (→ MarkdownTableCellCodec.Escape)이 `\|`로 이스케이프해야 표가 안 어긋난다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecificationAsync(ProbeSetAssignmentSpDef(), "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains(SetAssignmentExtractor.TableHeading, body);
+            Assert.Contains("@flags \\| 1", body);
+        }
+
+        [Fact]
+        public async Task GenerateSpecSectionAsync_OverviewAndParameters_ShouldNotReceiveTransactionBoundaryFacts()
+        {
+            // 이 갈래(:2945)는 caseBranchPresentation을 Omit으로 받는다. 두 신규 표도
+            // 같은 분기를 타므로 표로도 참고 재료로도 실리면 안 된다.
+            var (service, handler) = CreateProbe();
+
+            await service.GenerateSpecSectionAsync(
+                ProbeTransactionBoundarySpDef(), "OverviewAndParameters", "rules", null, null, CancellationToken.None);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain(TransactionBoundaryExtractor.TableHeading, body);
+        }
     }
 }
