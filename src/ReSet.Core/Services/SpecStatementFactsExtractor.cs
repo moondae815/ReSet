@@ -37,7 +37,18 @@ namespace ReSet.Core.Services
     public sealed record SpecStatementFacts(
         IReadOnlyList<SpecDmlRow> DmlRows,
         IReadOnlyList<SpecSetTarget> SetTargets,
-        IReadOnlyList<SpecLocalVariable> LocalVariables);
+        IReadOnlyList<SpecLocalVariable> LocalVariables)
+    {
+        /// <summary>
+        /// 오류 코드 원문("-13") → 그 코드를 설정하는 문장의 (종류, 번호).
+        ///
+        /// [왜 이 방향인가] 단계 지시서는 코드를 갖고 번호를 찾는다.
+        /// [중복 코드가 없는 이유] 같은 코드가 두 문장에 붙으면 귀속할 수 없으므로
+        /// 아예 담지 않는다 - 덮어쓰면 둘 중 하나가 조용히 틀린 행과 대조된다.
+        /// </summary>
+        public IReadOnlyDictionary<string, (string Kind, int Ordinal)> ErrorCodeToOrdinal { get; init; }
+            = new Dictionary<string, (string, int)>();
+    }
 
     /// <summary>
     /// 명세서의 기계 확정 표를 읽어 단계 검사가 쓸 사실로 만든다.
@@ -156,7 +167,10 @@ namespace ReSet.Core.Services
                     result[key] = new SpecStatementFacts(
                         ReadDmlRows(lines),
                         ReadSetTargets(lines),
-                        ReadLocalVariables(lines));
+                        ReadLocalVariables(lines))
+                    {
+                        ErrorCodeToOrdinal = ReadErrorCodeToOrdinal(lines),
+                    };
                 }
                 catch (Exception ex)
                 {
@@ -275,6 +289,51 @@ namespace ReSet.Core.Services
             }
 
             return variables;
+        }
+
+        // Task 4 - 오류 코드 (기계 확정 — 수정 금지) 표를 코드 → (종류, 번호)
+        // 사전으로 읽는다. 표 찾기는 `ReadTable`의 제목 경계 판정에 그대로 기댄다
+        // (다음 `### `를 만나면 절이 끝난다) - 다른 기계 확정 표에도
+        // `| UPDATE N |` 모양 행이 섞이므로, 제목으로 구간을 먼저 자르지 않고
+        // 문서 전체에서 직접 줄을 세면 엉뚱한 표의 행까지 담는다.
+        private static IReadOnlyDictionary<string, (string Kind, int Ordinal)> ReadErrorCodeToOrdinal(
+            IReadOnlyList<string> lines)
+        {
+            var map = new Dictionary<string, (string Kind, int Ordinal)>(StringComparer.Ordinal);
+
+            var table = ReadTable(lines, DmlScopeExtractor.ErrorCodeTableHeading);
+            if (table == null) return map;
+
+            var iStatement = FindColumn(table.Value.Header, "문장");
+            var iCode = FindColumn(table.Value.Header, "오류 코드");
+            if (iStatement < 0 || iCode < 0) return map;
+
+            // 같은 코드가 두 문장에 붙으면 귀속할 수 없다 - 넣고 덮어쓰지 않고
+            // 아예 뺀다. dropped는 "이미 중복이라 뺀 코드"를 기억해, 세 번째 이상
+            // 등장이 다시 map에 들어가는 것도 막는다.
+            var dropped = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var cells in table.Value.Rows)
+            {
+                var match = StatementCellPattern.Match(Cell(cells, iStatement));
+                if (!match.Success) continue;
+
+                var code = Clean(Cell(cells, iCode));
+                if (code.Length == 0 || dropped.Contains(code)) continue;
+
+                if (map.ContainsKey(code))
+                {
+                    map.Remove(code);
+                    dropped.Add(code);
+                    continue;
+                }
+
+                map[code] = (
+                    match.Groups["kind"].Value.ToUpperInvariant(),
+                    int.Parse(match.Groups["ordinal"].Value));
+            }
+
+            return map;
         }
 
         private static (List<string> Header, List<List<string>> Rows)? ReadTable(

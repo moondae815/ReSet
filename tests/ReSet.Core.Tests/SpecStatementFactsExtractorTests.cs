@@ -406,4 +406,88 @@ public sealed class SpecStatementFactsExtractorTests
 
         Assert.Empty(facts.LocalVariables);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Task 4 - 오류 코드 (기계 확정 — 수정 금지) 표를 코드→갱신 번호 사전으로 읽는다.
+    //
+    // [키 규약 주의] 계획서 초안은 파일명을 `"dbo.UP_X.md"`로 적고 키를 `"UP_X"`로
+    // 기대했지만, 실제 `BareObjectName`은 마지막 `.` 뒤만 남긴다 - 그 규약대로면
+    // `"dbo.UP_X.md"`의 키는 `"md"`가 된다. 이 파일의 다른 모든 테스트가 이미
+    // 쓰는 실제 규약(파일명에 확장자를 붙이지 않는다, 예: `"dbo.UP_UTIL_SETTLE_COMM_UPD"`)
+    // 을 그대로 따른다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Extract_ErrorCodeTable_ShouldMapCodeToOrdinal()
+    {
+        const string spec = """
+            ### 오류 코드 (기계 확정 — 수정 금지)
+
+            | 문장 | 오류 코드 | 설정 대상 |
+            | :--- | :--- | :--- |
+            | UPDATE 9 | -13 | @po_intRetVal |
+            | UPDATE 10 | -15 | @po_intRetVal |
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_X", spec) })["UP_X"];
+
+        Assert.Equal(("UPDATE", 9), facts.ErrorCodeToOrdinal["-13"]);
+        Assert.Equal(("UPDATE", 10), facts.ErrorCodeToOrdinal["-15"]);
+    }
+
+    [Fact]
+    public void Extract_DuplicateErrorCode_ShouldDropItEntirely()
+    {
+        const string spec = """
+            ### 오류 코드 (기계 확정 — 수정 금지)
+
+            | 문장 | 오류 코드 | 설정 대상 |
+            | :--- | :--- | :--- |
+            | UPDATE 3 | -9 | @po_intRetVal |
+            | UPDATE 7 | -9 | @po_intRetVal |
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_X", spec) })["UP_X"];
+
+        Assert.DoesNotContain("-9", facts.ErrorCodeToOrdinal.Keys);
+    }
+
+    [Fact]
+    public void Extract_NoErrorCodeTable_ShouldGiveEmptyMap()
+    {
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_X", "## 로직 흐름 요약\n") })["UP_X"];
+
+        Assert.Empty(facts.ErrorCodeToOrdinal);
+    }
+
+    // 다른 기계 확정 표(DML 범위 표 등)에도 `| UPDATE N |` 모양 행이 섞인다 -
+    // 표 찾기가 제목 경계로 한정되지 않으면 그 표의 행까지 오류 코드 표로
+    // 오독할 수 있다. 두 표가 한 문서에 함께 있어도 각자 자기 표만 읽는지 못박는다.
+    [Fact]
+    public void Extract_ErrorCodeTable_DoesNotReadRowsFromOtherTablesWithSimilarShape()
+    {
+        const string spec = """
+            ### DML 범위 (기계 확정 — 수정 금지)
+
+            | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | GROUP BY | ORDER BY |
+            | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+            | UPDATE 1 | 30 | TSettleMst | PLTID | 예 | PLTID | — | — |
+
+            ### 오류 코드 (기계 확정 — 수정 금지)
+
+            | 문장 | 오류 코드 | 설정 대상 |
+            | :--- | :--- | :--- |
+            | UPDATE 9 | -13 | @po_intRetVal |
+            """;
+
+        var facts = SpecStatementFactsExtractor.Extract(
+            new[] { ("dbo.UP_X", spec) })["UP_X"];
+
+        var single = Assert.Single(facts.ErrorCodeToOrdinal);
+        Assert.Equal("-13", single.Key);
+        Assert.Equal(("UPDATE", 9), single.Value);
+    }
 }
