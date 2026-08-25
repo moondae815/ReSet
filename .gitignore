@@ -48,3 +48,6 @@ scratch/
 
 # Output backups
 output.bak-*/
+
+# Playwright MCP 확인 산출물 (스냅샷·콘솔 로그·스크린샷)
+.playwright-mcp/
