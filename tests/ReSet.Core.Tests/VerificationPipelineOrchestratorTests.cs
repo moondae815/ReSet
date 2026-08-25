@@ -2312,6 +2312,73 @@ namespace ReSet.Core.Tests
             Assert.False(result.Coverage.NeedsHumanAttention);
         }
 
+        // Task 18 - I2 배선. GenerateStepSectionWithFloorRetryAsync가
+        // ValidateBatchStep에 allSteps(=steps)를 넘기지 않으면, 같은 레거시 SP를
+        // 나눠 담당하는 두 단계 모두가 그 SP의 DML 범위 표 전체를 요구받아
+        // 영구히 만족 불가능해진다(개요의 POQSettleProc4 실측과 같은 모양을
+        // 최소 재현한 것). USP_Spec1은 UPDATE 1개를 확정하지만, S01·S02가 함께
+        // 그 SP를 담당하고 실제 생성된 본문(HealthyStepSection)에는 UPDATE가
+        // 전혀 없다 - 분할되지 않았다면 이것은 하한 미달이어야 한다. allSteps가
+        // 배선되면 "같은 SP를 다른 단계도 담당한다"는 사실이 개수 대조를 침묵시켜
+        // 두 단계 모두 한 번의 생성 시도만으로 통과해야 한다.
+        //
+        // RED 확인: `_validator.ValidateBatchStep(...)` 호출에서 `allSteps: steps`를
+        // 빼면 이 테스트는 실패한다 - Coverage.StepsVerified가 2 미만으로 떨어지고
+        // GenerateBatchStepSectionAsync 호출 수가 2를 넘는다(각 단계가 maxTries=5까지
+        // 재시도하다 하한 미달로 확정된다).
+        [Fact]
+        public async Task RunConsolidatedPipeline_LegacyProcedureSplitAcrossSteps_PassesWithoutRetry()
+        {
+            const string specWithUpdateFact = """
+                ### DML 범위 (기계 확정 — 수정 금지)
+
+                | 문장 | 라인 | 대상 | WHERE 최상위 술어 컬럼(조인 결합 포함 · 대상 한정 아님) | 기준일 파라미터 적용(최상위 WHERE 기준) | 조인 키 | GROUP BY | ORDER BY |
+                | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+                | UPDATE 1 | 10 | TSettleMst | YMD | 예 | (없음) | — | — |
+                """;
+
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘째 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] }\n" +
+                "  ]\n}\n```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", specWithUpdateFact) };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.NotNull(result.Coverage);
+            Assert.Equal(2, result.Coverage!.StepsTotal);
+            Assert.Equal(2, result.Coverage.StepsVerified);
+            Assert.False(result.Coverage.NeedsHumanAttention);
+
+            // 재시도가 전혀 없었다는 뜻 - 단계마다 정확히 1회씩만 생성을 시도했다.
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
         // 분할이 무산된 회차. StepsTotal이 0이 아니라 null이어야 한다 - 0으로
         // 적으면 "0단계를 0개 검증했다"는 비율로 읽힌다.
         [Fact]
@@ -5405,7 +5472,7 @@ SELECT 1;
         }
 
         [Fact]
-        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepExactlyOnce()
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_RetriesThatStepUpToMaxTries()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -5429,8 +5496,8 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            // S01은 2회(최초 + 재시도 1회), S02는 1회. 3회 이상이면 재시도 상한이 깨진 것이다.
-            await aiService.Received(2).GenerateBatchStepSectionAsync(
+            // S01은 5회(최초 1회 + 재시도 4회, maxTries=5), S02는 1회. 6회 이상이면 재시도 상한이 깨진 것이다.
+            await aiService.Received(5).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
@@ -5463,7 +5530,8 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            await aiService.Received(1).GenerateBatchStepSectionAsync(
+            // maxTries=5이므로 최초 1회를 뺀 재시도 4회(2~5번째 호출) 전부가 피드백을 싣는다.
+            await aiService.Received(4).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Is<string?>(f => f != null && f.Contains("의사코드 블록이 없습니다")),
@@ -6158,8 +6226,8 @@ SELECT 1;
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = SkeletonMarkdown });
 
-            // S01: 1회차(초기 + 재시도, 2회 호출)는 하한 미달. 3회 이후(2회차의
-            // 지목 재생성)는 정상.
+            // S01: 1회차(초기 1회 + 재시도 4회, maxTries=5 전량 소진, 5회 호출)는 하한
+            // 미달. 6회 이후(2회차의 지목 재생성)는 정상.
             var s01Call = 0;
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -6171,7 +6239,7 @@ SELECT 1;
                     }
 
                     s01Call++;
-                    return s01Call <= 2
+                    return s01Call <= 5
                         ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." }
                         : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });

@@ -9,7 +9,7 @@ namespace ReSet.Core.Tests;
 public sealed class BatchControlContractTests
 {
     [Fact]
-    public void Tables_CoverTheFourControlTables()
+    public void Tables_CoverTheSixControlTables()
     {
         var names = BatchControlContract.Tables.Select(t => t.Name).ToArray();
 
@@ -19,7 +19,9 @@ public sealed class BatchControlContractTests
                 "batch.BatchRun",
                 "batch.BatchStepJournal",
                 "batch.BatchCheckpoint",
-                "batch.BatchValidationIssue"
+                "batch.BatchValidationIssue",
+                "batch.BatchControlTotal",
+                "batch.BatchRunLock"
             },
             names);
     }
@@ -44,19 +46,53 @@ public sealed class BatchControlContractTests
         Assert.Contains("Succeeded", journalStatus.AllowedValues!);
     }
 
+    // 규칙은 맨이름 전체가 아니라 "핵심 명사 + Status"다 - BatchStepJournal이
+    // StepJournalStatus가 아니라 StepStatus인 것이 그 증거다. BatchRunLock의
+    // 핵심 명사는 Lock이므로 LockStatus가 이 규칙의 예외가 아니라 적용 사례다.
     [Fact]
     public void StatusColumnName_FollowsTheTargetStatusRule()
     {
         Assert.Equal("RunStatus", BatchControlContract.Find("batch.BatchRun")!.StatusColumn);
         Assert.Equal("StepStatus", BatchControlContract.Find("batch.BatchStepJournal")!.StatusColumn);
         Assert.Equal("CheckpointStatus", BatchControlContract.Find("batch.BatchCheckpoint")!.StatusColumn);
+        Assert.Equal("LockStatus", BatchControlContract.Find("batch.BatchRunLock")!.StatusColumn);
+
+        // 일곱 번째 표가 코퍼스에서 실제로 관측된 변이인 LockState 같은 이름을
+        // 들고 와도 걸리도록, "Status" 접미사 규칙이 적용되는 표(행이 상태를
+        // 전이하는 FirstStepInserts·EachStepInserts) 전부를 순회로 본다.
+        //
+        // ProducerInsertsOnly는 제외한다 - batch.BatchValidationIssue의
+        // StatusColumn은 "Severity"인데, 이것은 프로세스 상태 전이가 아니라
+        // Info/Warning/Error/Critical이라는 별개의 어휘(심각도)를 담는 컬럼이라
+        // "Status" 접미사 규칙의 적용 대상이 아니다. 이 루프를 모든 표로
+        // 넓히면 사실이 아닌 기대를 강제하게 된다(직접 실행해 확인함 - 아래
+        // 리포트의 최초 실행 결과 참고).
+        foreach (var table in BatchControlContract.Tables)
+        {
+            if (table.StatusColumn == null) continue;
+            if (table.Origin == ControlRowOrigin.ProducerInsertsOnly) continue;
+
+            Assert.EndsWith("Status", table.StatusColumn, StringComparison.Ordinal);
+        }
     }
 
     // 감사 실측 B3: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다.
     // 행 소유권이 계약에 없으면 모든 단계가 UPDATE만 쓴다.
+    //
+    // Tables를 순회하는 이유: 이름으로만 네 표를 단정하면 일곱 번째 표를 추가하는
+    // 사람을 이 테스트가 붙잡지 못한다 - 새 표는 이름 목록에 없어 조용히 통과한다.
+    // 순회는 모든 표가 유효한 Origin을 갖는다는 것을 강제하고, 기존 네 표의 구체
+    // 값 단정은 회귀 검출력을 잃지 않도록 그대로 유지한다.
     [Fact]
     public void RowOrigin_IsDeclaredForEveryTable()
     {
+        foreach (var table in BatchControlContract.Tables)
+        {
+            Assert.True(
+                Enum.IsDefined(typeof(ControlRowOrigin), table.Origin),
+                $"{table.Name} declares an undefined Origin.");
+        }
+
         Assert.Equal(ControlRowOrigin.FirstStepInserts, BatchControlContract.Find("batch.BatchRun")!.Origin);
         Assert.Equal(ControlRowOrigin.EachStepInserts, BatchControlContract.Find("batch.BatchStepJournal")!.Origin);
         Assert.Equal(ControlRowOrigin.EachStepInserts, BatchControlContract.Find("batch.BatchCheckpoint")!.Origin);
@@ -73,15 +109,21 @@ public sealed class BatchControlContractTests
 
     // 부트스트랩 회차 문서가 실을 DDL. 감사 §6-4: 다섯 테이블의 컬럼
     // 정의가 번들 어디에도 없었다.
+    //
+    // Tables를 순회하는 이유: 이름 넷만 단정하면 일곱 번째 표를 추가한 사람이
+    // CREATE TABLE을 빼먹어도 이 테스트가 통과한다 - "EveryTable"이라는 이름이
+    // 거짓이 된다. 순회는 모든 표에 대해 CREATE TABLE이 실제로 나오는지 강제하고,
+    // StepStatus CHECK 제약의 구체 값 단정은 회귀 검출력을 잃지 않도록 그대로 둔다.
     [Fact]
     public void RenderDdl_EmitsCreateTableForEveryTable_WithAConstraintOnTheStatusVocabulary()
     {
         var ddl = BatchControlContract.RenderDdl();
 
-        Assert.Contains("CREATE TABLE batch.BatchRun", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchStepJournal", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchCheckpoint", ddl);
-        Assert.Contains("CREATE TABLE batch.BatchValidationIssue", ddl);
+        foreach (var table in BatchControlContract.Tables)
+        {
+            Assert.Contains($"CREATE TABLE {table.Name}", ddl);
+        }
+
         Assert.Contains("CHECK (StepStatus IN (N'Running', N'Succeeded', N'Failed', N'Skipped'))", ddl);
     }
 
@@ -123,8 +165,10 @@ public sealed class BatchControlContractTests
         Assert.Contains("CONSTRAINT PK_BatchCheckpoint PRIMARY KEY (RunId, StepCode)", ddl);
     }
 
-    // 전이가 없는 테이블에는 키를 두지 않는다. 한 단계가 같은 IssueCode를 여러 번
-    // 낼 수 있어 자연 키가 없고, 대리 키를 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    // BatchValidationIssue에 키를 두지 않는 이유는 자연 키가 없어서다 - 한 단계가 같은
+    // IssueCode를 여러 번 낼 수 있고, 대리 키를 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    // 계약 전체의 규칙이 아니다: 같은 ProducerInsertsOnly라도 BatchControlTotal에는
+    // 자연 키가 있어 PK를 둔다(ControlTotal_KeepsAPrimaryKeyEvenThoughItHasNoTransition).
     [Fact]
     public void RenderDdl_DoesNotDeclareAPrimaryKeyForTheInsertOnlyTable()
     {
@@ -151,6 +195,36 @@ public sealed class BatchControlContractTests
         Assert.DoesNotContain("FIRST step in the step list", table);
     }
 
+    // FirstStepInserts 문구가 "RunId is issued by IDENTITY, so read it back with
+    // SCOPE_IDENTITY()"를 무조건 실었다. batch.BatchRunLock은 같은 행 출처 모양이지만
+    // IDENTITY 컬럼이 없어, 그대로 두면 프롬프트에 거짓 지시가 실린다.
+    [Fact]
+    public void RenderPromptTable_DoesNotClaimIdentityForATableThatHasNone()
+    {
+        var rows = BatchControlContract.RenderPromptTable()
+            .Split('\n')
+            .Where(line => line.Contains("`batch.BatchRunLock`", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, row => Assert.DoesNotContain("SCOPE_IDENTITY", row));
+        Assert.All(rows, row => Assert.DoesNotContain("IDENTITY", row));
+    }
+
+    // 반대쪽도 지킨다 - BatchRun에서 그 문장이 사라지면 18번의 독립 호출이
+    // 각자 RunId 발급 방식을 지어낸다.
+    [Fact]
+    public void RenderPromptTable_StillSaysHowRunIdIsIssuedForTheRunTable()
+    {
+        var rows = BatchControlContract.RenderPromptTable()
+            .Split('\n')
+            .Where(line => line.Contains("`batch.BatchRun`", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.NotEmpty(rows);
+        Assert.All(rows, row => Assert.Contains("SCOPE_IDENTITY", row));
+    }
+
     // === 실행 행 생성 담당 단계 판정 =========================================
     //
     // 실측(POQSettleProc17): 계약이 "목록의 첫 단계"라고 위치로 지목했는데 승인된
@@ -174,13 +248,38 @@ public sealed class BatchControlContractTests
         var steps = new[]
         {
             Plan("S01"),
-            Plan("S02", "batch.BatchRun", "batch.BatchRunLock"),
+            // 계약 밖 이름을 쓴다. 여기에 batch.BatchRunLock을 쓰면 그것도 정본
+            // FirstStepInserts 표라 S02가 둘 다 담당하게 되어, 이 테스트의 좁은 의도
+            // (계약 밖 대상은 담당을 얻지 않는다)가 흐려진다. 다중 담당은
+            // ResolveRowCreators_NamesOneStepForEveryFirstStepInsertsTableItTargets가 본다.
+            Plan("S02", "batch.BatchRun", "batch.SomeUnrelatedTable"),
             Plan("S17", "batch.BatchRun")
         };
 
         var creators = BatchControlContract.ResolveRowCreators(steps);
 
         Assert.Equal(new[] { "batch.BatchRun" }, creators["S02"]);
+    }
+
+    // Task 2가 batch.BatchRunLock을 FirstStepInserts로 들이면서 이 종류의 표가 둘이 됐다.
+    // ResolveRowCreators는 표마다 독립으로 담당을 정하므로, 한 단계가 둘 다 대상으로
+    // 가지면 둘 다 담당해야 한다. 코퍼스에서 BatchRunLock(125회)은 BatchRun과 함께
+    // 쓰이므로 가상의 조합이 아니다 - 표가 하나뿐이던 시절에는 존재하지 않던 경로다.
+    [Fact]
+    public void ResolveRowCreators_NamesOneStepForEveryFirstStepInsertsTableItTargets()
+    {
+        var steps = new[]
+        {
+            Plan("S01"),
+            Plan("S02", "batch.BatchRun", "batch.BatchRunLock"),
+            Plan("S17", "batch.BatchRun", "batch.BatchRunLock")
+        };
+
+        var creators = BatchControlContract.ResolveRowCreators(steps);
+
+        Assert.Equal(new[] { "batch.BatchRun", "batch.BatchRunLock" }, creators["S02"]);
+        // 뒤 단계는 같은 두 표를 대상으로 가져도 담당을 얻지 않는다.
+        Assert.DoesNotContain("S17", creators.Keys);
     }
 
     // 뒤 단계가 같은 테이블을 대상으로 가져도 그것은 UPDATE 지점이다. 담당이
@@ -221,5 +320,213 @@ public sealed class BatchControlContractTests
         var steps = new[] { Plan("S02", "batch.BatchStepJournal", "batch.BatchCheckpoint") };
 
         Assert.Empty(BatchControlContract.ResolveRowCreators(steps));
+    }
+
+    // 감사 실측(POQSettleBatch1 축 B #10·#24·#36): S01·S03·S16이 batch.ControlTotal에
+    // INSERT/SELECT를 걸었는데 컬럼 계약이 어디에도 없어 컬럼 수·값 수 대조가
+    // 성립하지 않았다. 신설 단계 4개가 `검증 불가`로 남은 뿌리다.
+    [Fact]
+    public void ControlTotal_IsAKeyedBaselineStore()
+    {
+        var table = BatchControlContract.Find("batch.BatchControlTotal");
+
+        Assert.NotNull(table);
+        Assert.Equal(
+            new[] { "RunId", "StepCode", "ControlName", "ControlValue", "CapturedAtUtc" },
+            table!.Columns.Select(c => c.Name).ToArray());
+        Assert.Equal(ControlRowOrigin.ProducerInsertsOnly, table.Origin);
+        Assert.Null(table.StatusColumn);
+        Assert.Equal(new[] { "RunId", "StepCode", "ControlName" }, table.PrimaryKey);
+    }
+
+    // 통제합계는 숫자 비교가 본질이다. 문자열로 두면 S16의 합계 대조가 문자열
+    // 비교가 되어 조용히 틀린다. BatchValidationIssue.ExpectedValue가 nvarchar인
+    // 것과 갈리지만, 그쪽은 사람이 읽는 오류 기록이고 이쪽은 기계가 비교하는
+    // 기준값이라 역할이 다르다.
+    [Fact]
+    public void ControlValue_IsNumericSoTheComparisonIsNumeric()
+    {
+        var value = BatchControlContract.Find("batch.BatchControlTotal")!
+            .Columns.Single(c => c.Name == "ControlValue");
+
+        Assert.Equal("decimal(38,4)", value.SqlType);
+        Assert.False(value.Nullable);
+    }
+
+    // 계약 주석의 "전이 없는 표에는 PK를 두지 않는다"에 대한 의도된 예외다.
+    // 그 규칙의 이유는 "한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가
+    // 없다"였는데, 통제합계에는 자연 키가 있다 - 같은 실행의 같은 단계가 같은
+    // 지표를 두 번 낼 이유가 없고, 두 번 나면 S16이 어느 행을 기준으로 삼을지
+    // 모른다.
+    [Fact]
+    public void ControlTotal_KeepsAPrimaryKeyEvenThoughItHasNoTransition()
+    {
+        Assert.Contains(
+            "CONSTRAINT PK_BatchControlTotal PRIMARY KEY (RunId, StepCode, ControlName)",
+            BatchControlContract.RenderDdl());
+    }
+
+    // 코퍼스 관측: 이름은 다섯 코호트 전부에서 batch.BatchRunLock 하나로 수렴했는데
+    // 컬럼이 갈렸다 - 날짜 4종(BatchYmd·ProcessingYmd·BusinessDate·BatchDate),
+    // 소유자 3종, 상태 2종, 획득 시각 3종, 하트비트 3종. 이름이 이미 모였으므로
+    // 고를 것은 컬럼뿐이다.
+    [Fact]
+    public void RunLock_IsKeyedByJobAndBusinessDay()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock");
+
+        Assert.NotNull(table);
+        Assert.Equal(
+            new[]
+            {
+                "JobName", "BatchYmd", "OwnerRunId", "LockStatus",
+                "AcquiredAtUtc", "HeartbeatAtUtc", "ReleasedAtUtc"
+            },
+            table!.Columns.Select(c => c.Name).ToArray());
+        Assert.Equal(ControlRowOrigin.FirstStepInserts, table.Origin);
+        Assert.Equal("LockStatus", table.StatusColumn);
+        Assert.Equal(new[] { "JobName", "BatchYmd" }, table.PrimaryKey);
+    }
+
+    // 같은 Job·같은 영업일에 잠금이 둘일 수 없다는 것이 이 표의 존재 이유다.
+    // 키가 없으면 두 실행이 각자 자기 행을 넣고 둘 다 "잠갔다"고 믿는다.
+    [Fact]
+    public void RunLock_DeclaresItsPrimaryKeyAndStatusVocabularyInDdl()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+
+        Assert.Contains("CONSTRAINT PK_BatchRunLock PRIMARY KEY (JobName, BatchYmd)", ddl);
+        Assert.Contains("CHECK (LockStatus IN (N'Held', N'Released'))", ddl);
+    }
+
+    // 소유자는 PK가 아니라 참조다. RunId라는 같은 이름을 쓰면 이 표의 키가
+    // RunId라고 읽히고, 그러면 실행마다 잠금 행이 새로 생겨 잠금이 잠그지 않는다.
+    [Fact]
+    public void RunLock_NamesTheOwnerColumnApartFromRunId()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock")!;
+
+        Assert.Contains(table.Columns, c => c.Name == "OwnerRunId");
+        Assert.DoesNotContain(table.Columns, c => c.Name == "RunId");
+    }
+
+    // 하트비트는 실물이다 - 번들 7개가 UPDATE ... HeartbeatUtc = SYSUTCDATETIME()
+    // 형태로 실제로 갱신한다. 다만 최근 코호트 5개 중에서는 하나뿐이라 NULL을
+    // 허용해 쓰지 않는 Job이 비워 둘 수 있게 한다. 빼면 하트비트 기반 잠금 회수를
+    // 쓰는 Job이 어휘 검사에 걸려 그 설계 자체가 막힌다.
+    [Fact]
+    public void RunLock_LeavesTheOptionalTimestampsNullable()
+    {
+        var table = BatchControlContract.Find("batch.BatchRunLock")!;
+
+        Assert.True(table.Columns.Single(c => c.Name == "HeartbeatAtUtc").Nullable);
+        Assert.True(table.Columns.Single(c => c.Name == "ReleasedAtUtc").Nullable);
+        Assert.False(table.Columns.Single(c => c.Name == "AcquiredAtUtc").Nullable);
+    }
+
+    // 설계 5절: 정본을 정해도 남은 batch.ControlTotal 16회가 아무 검사에도
+    // 걸리지 않는다. 스키마 검사는 스키마 이름만 보고, 미지 테이블 검사는
+    // IsInfraObject가 batch.*를 통째로 걸러내며, 어휘 검사는 Find()가 맨이름을
+    // 맞추지 못해 그 표를 건너뛴다. 계약 위반이 아니라 침묵이라 다음 감사가
+    // 같은 자리를 또 든다.
+    [Fact]
+    public void FindAlias_MapsTheObservedSynonymToTheCanonicalTable()
+    {
+        var table = BatchControlContract.FindAlias("batch.ControlTotal");
+
+        Assert.NotNull(table);
+        Assert.Equal("batch.BatchControlTotal", table!.Name);
+    }
+
+    // Find가 동의어를 겸해 받으면 CheckBatchControlVocabulary가 batch.ControlTotal을
+    // 정본으로 착각해 컬럼만 검사하고 틀린 이름을 조용히 승인한다. 별칭은
+    // 받아들일 것이 아니라 보고할 것이다.
+    [Fact]
+    public void Find_DoesNotAcceptTheSynonym()
+    {
+        Assert.Null(BatchControlContract.Find("batch.ControlTotal"));
+    }
+
+    // 정본 이름으로 물으면 "이것은 별칭이다"가 아니어야 한다 - 그러지 않으면
+    // 호출부가 정상 이름을 오류로 보고한다.
+    [Fact]
+    public void FindAlias_ReturnsNullForACanonicalName()
+    {
+        Assert.Null(BatchControlContract.FindAlias("batch.BatchControlTotal"));
+        Assert.Null(BatchControlContract.FindAlias("BatchControlTotal"));
+    }
+
+    // 단계 문서는 같은 표를 batch.ControlTotal로도 ControlTotal로도 쓴다.
+    // 한쪽만 인식하면 검사가 절반만 돈다 - 기존 Find의 계약과 같다.
+    [Fact]
+    public void FindAlias_IsCaseInsensitiveAndAcceptsTheBareName()
+    {
+        Assert.Equal("batch.BatchControlTotal", BatchControlContract.FindAlias("CONTROLTOTAL")!.Name);
+        Assert.Equal("batch.BatchControlTotal", BatchControlContract.FindAlias("[batch].[ControlTotal]")!.Name);
+    }
+
+    [Fact]
+    public void FindAlias_ReturnsNullForAnUnknownName()
+    {
+        Assert.Null(BatchControlContract.FindAlias("batch.POQSettleS07Build"));
+        Assert.Null(BatchControlContract.FindAlias(null));
+        Assert.Null(BatchControlContract.FindAlias("   "));
+    }
+
+    // 최종 리뷰: PrimaryKey·StatusColumn 항목이 그 표의 Columns에 실재하는 이름을
+    // 가리킨다는 불변식이 아무 데도 없었다. new[] { "RunID2" } 같은 오타는 구문상
+    // 유효한 DDL을 만들어 모든 기존 테스트가 초록인 채로 의미가 깨진다.
+    [Fact]
+    public void PrimaryKeyAndStatusColumn_NameColumnsThatActuallyExistOnTheTable()
+    {
+        foreach (var table in BatchControlContract.Tables)
+        {
+            var columnNames = table.Columns.Select(c => c.Name).ToArray();
+
+            if (table.PrimaryKey != null)
+            {
+                foreach (var pkColumn in table.PrimaryKey)
+                {
+                    Assert.Contains(pkColumn, columnNames);
+                }
+            }
+
+            if (table.StatusColumn != null)
+            {
+                Assert.Contains(table.StatusColumn, columnNames);
+            }
+        }
+    }
+
+    // 최종 리뷰: Aliases가 렌더 출력에 새지 않는다는 회귀 가드가 없었다 - 설계가
+    // 두려워한 것(모델이 별칭을 정본으로 읽는 것)을 아무 테스트도 잡지 않았다.
+    //
+    // 부분 문자열 함정: "batch.BatchControlTotal"이 별칭 "ControlTotal"을
+    // 문자 그대로 포함하므로, 단순 DoesNotContain(alias, output)은 정본 이름이
+    // 정상적으로 실리기만 해도 항상 실패한다. 그래서 정본 전체 이름과 그
+    // 맨이름(스키마 접두사를 뺀 이름, 예: PK_BatchControlTotal 같은 제약 이름에도
+    // 쓰인다)을 먼저 걷어낸 나머지에서 별칭을 찾는다 - 이러면 정본 이름 자체에
+    // 내포된 별칭 부분 문자열이 오탐을 만들지 않는다.
+    [Fact]
+    public void RenderedOutput_DoesNotLeakAliasesAsIfTheyWereCanonical()
+    {
+        var ddl = BatchControlContract.RenderDdl();
+        var promptTable = BatchControlContract.RenderPromptTable();
+
+        foreach (var table in BatchControlContract.Tables)
+        {
+            if (table.Aliases == null) continue;
+
+            var bareName = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+
+            var ddlWithoutCanonical = ddl.Replace(table.Name, string.Empty).Replace(bareName, string.Empty);
+            var promptWithoutCanonical = promptTable.Replace(table.Name, string.Empty).Replace(bareName, string.Empty);
+
+            foreach (var alias in table.Aliases)
+            {
+                Assert.DoesNotContain(alias, ddlWithoutCanonical);
+                Assert.DoesNotContain(alias, promptWithoutCanonical);
+            }
+        }
     }
 }

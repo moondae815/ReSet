@@ -1597,6 +1597,81 @@ END",
             Assert.True(feedback > marker, "피드백은 지시문 뒤에 붙어야 한다");
         }
 
+        /// <summary>
+        /// 축 B 단계 검사는 DML 문장을 명세서의 "갱신 N"에 앵커 주석으로 대응시킨다.
+        /// 앵커가 없으면 조인 키·술어 컬럼 대조가 통째로 꺼지므로 프롬프트가 앵커
+        /// 작성을 요구해야 한다. 앵커와 설명이 주석 둘로 나뉘면 판독기가 문장
+        /// 바로 앞의 가장 가까운 주석 하나만 보므로 앵커를 놓친다 - 하나의 주석에
+        /// 담으라는 예시(`/* U13: 카드사 원가 반영 */`)도 함께 요구해야 한다.
+        /// 규약 두 조항(CROSS/OUTER APPLY 치환 금지, 비집계 여러 문장의 집계 병합
+        /// 금지)은 실측에서 금액·행 집합을 바꾼 치환이다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_DemandsAnchorCommentsAndForbidsSemanticSubstitutions()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            var userPrompt = result.UserPrompt!;
+
+            // 앵커 요구.
+            Assert.Contains("갱신 번호", userPrompt);
+            // 앵커와 설명을 하나의 주석에 담으라는 지시와 그 예시.
+            Assert.Contains("하나의 주석", userPrompt);
+            Assert.Contains("/* U13: 카드사 원가 반영 */", userPrompt);
+            // 규약 1: CROSS/OUTER APPLY 치환 금지.
+            Assert.Contains("CROSS APPLY", userPrompt);
+            Assert.Contains("OUTER APPLY", userPrompt);
+            // 규약 2: 비집계 여러 문장의 집계 병합 금지.
+            Assert.Contains("@@ROWCOUNT", userPrompt);
+        }
+
+        /// <summary>
+        /// spec 설계 4의 escape clause: 규약 두 조항은 "명세서가 X로 적은 자리를
+        /// Y로 바꾸는 것"을 막는 조건부다. 원본(명세서)이 이미 그 형태로 되어 있는
+        /// 정당한 사례까지 무조건 금지로 읽히면, 규약 본문에 없는 이유로 AI가
+        /// 원본 형태를 스스로 되돌려 새 결함을 만들 위험이 있다. 두 조항 각각에
+        /// "명세서가 이미 그 형태면 해당 없음, 바꿔야 하면 이유를 단계 본문에
+        /// 적으라"는 예외 문구가 있어야 한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_ConventionRulesCarryAnEscapeClauseForLegitimateDeviation()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            var userPrompt = result.UserPrompt!;
+
+            var applyBulletStart = userPrompt.IndexOf("CROSS APPLY", StringComparison.Ordinal);
+            var aggregateBulletStart = userPrompt.IndexOf("비집계 조회 여러 문장", StringComparison.Ordinal);
+            Assert.True(applyBulletStart >= 0);
+            Assert.True(aggregateBulletStart >= 0);
+
+            var applyBullet = userPrompt.Substring(applyBulletStart, aggregateBulletStart - applyBulletStart);
+            var aggregateBulletEnd = userPrompt.IndexOf("Now write the section for step", StringComparison.Ordinal);
+            var aggregateBullet = userPrompt.Substring(aggregateBulletStart, aggregateBulletEnd - aggregateBulletStart);
+
+            const string escapeMarker = "단계 본문에 적으";
+            Assert.Contains(escapeMarker, applyBullet);
+            Assert.Contains(escapeMarker, aggregateBullet);
+            Assert.Contains("해당하지 않습니다", applyBullet);
+            Assert.Contains("해당하지 않습니다", aggregateBullet);
+        }
+
         [Fact]
         public async Task GenerateBatchPlanSkeletonAsync_RequestsPlaceholdersInsteadOfStepBodies()
         {

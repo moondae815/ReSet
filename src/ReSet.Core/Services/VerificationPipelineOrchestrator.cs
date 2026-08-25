@@ -3137,11 +3137,21 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 단계 섹션 하나를 만들고 하한을 검사한다. 미달이면 그 단계만 1회 재시도한다.
+        /// 단계 섹션 하나를 만들고 하한을 검사한다. 미달이면 그 단계만 재시도한다 —
+        /// 단계당 최대 5회(최초 1회 + 재시도 4회). 2에서 5로 올린 이유: 축 B 감사로
+        /// 검사가 5개 늘어(문장 개수·조인 키·추가 술어·지역 변수·상태 변수 초기값),
+        /// 2회로는 첫 시도에서 2건 이상 걸린 단계가 재시도 1회 안에 다 못 고쳐 하한
+        /// 미달로 확정된다. 축 A(통합 문서 하한 검사)는 6회다.
         ///
         /// 이 재시도는 MaxL2Attempts를 소모하지 않는다. 그 예산은 Actor-Critic 문서
         /// 레벨의 것이고, 이 보수는 리뷰 호출이 0인 국소 작업이라 성격이 다르다.
-        /// 대신 단계당 1회로 하드 캡해 폭주를 막는다.
+        /// 대신 이 예산은 MaxL2Attempts와 완전히 독립이고, 이 메서드 자체가 문서
+        /// 레벨 시도마다(즉 MaxL2Attempts번) 처음부터 다시 돈다 — 그래서 최악 비용은
+        /// 단일 5회가 아니라 "단계 수 × 5 × 문서 레벨 시도 수"다. 그럼에도 별도의
+        /// 총량 상한(예: 잡 전체 호출 수 캡)은 두지 않기로 했다 — 실측상 대부분의
+        /// 단계가 1~2회 안에 통과하고, 6회를 다 채운 사례는 지금까지 PROC_ETC
+        /// 하나뿐이었다. 다음에 이 자리를 읽을 때 "상한이 빠졌다"가 아니라
+        /// "상한을 두지 않기로 결정했다"로 읽어야 한다.
         ///
         /// 재시도 후에도 미달이면 채택하고 기록만 한다. 여기서 문서 L1을 실패시키면
         /// 같은 결함으로 골격+단계 전체 재생성을 유발해 비용만 태운다.
@@ -3162,13 +3172,17 @@ namespace ReSet.Core.Services
             IReadOnlyList<StepInterface> stepInterfaces,
             CancellationToken cancellationToken)
         {
-            const int maxTries = 2;   // 최초 1회 + 재시도 1회
+            const int maxTries = 5;   // 최초 1회 + 재시도 4회 - 근거는 위 docstring 참고
 
             // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
             // 단계마다 뽑아도 결과가 같으므로 재시도 루프 밖에서 한 번만 만든다.
             var conditionColumns = MergeSpecMaterials(
                 SpecConditionColumnExtractor.Extract(specs),
                 SpecRoundingShapeExtractor.Extract(specs));
+
+            // 명세서가 문장 단위로 확정한 사실(DML 범위 표·갱신 절·지역 변수 표). 조건 컬럼과
+            // 같은 이유로 재시도 루프 밖에서 한 번만 만든다 - 단계마다 뽑아도 결과가 같다.
+            var statementFacts = SpecStatementFactsExtractor.Extract(specs);
 
             // 실행 행을 만들 책임이 이 단계에 있는가. 단계 검사는 단계 하나만 보므로
             // 스스로 알 수 없고, 목록 전체를 가진 여기가 판정해 넘긴다. 이 배선이
@@ -3222,7 +3236,17 @@ namespace ReSet.Core.Services
                 adopted = content;
 
                 var stepResult = _validator.ValidateBatchStep(
-                    content, step, knownTableNames, conditionColumns, stepInterfaces, runRowOwnedTables);
+                    content, step, knownTableNames, conditionColumns,
+                    stepInterfaces: stepInterfaces,
+                    runRowOwnedTables: runRowOwnedTables,
+                    statementFactsByProcedure: statementFacts,
+                    // [Task 18 I2 배선] steps는 이 메서드의 매개변수로, 이 Job의 단계
+                    // 목록 전체다(이 단계 자신 포함) - ValidateBatchStep이 "같은 레거시
+                    // SP가 다른 단계에도 나뉘어 있는가"를 판정하는 데 그대로 쓴다. 이
+                    // 인자가 빠지면 그 판정을 못 해 분할된 SP를 담당하는 모든 단계가
+                    // 영구히 만족 불가능한 개수 요구를 받는다(위 클래스 docstring 및
+                    // MechanicalValidator.IsLegacyProcedureSplitAcrossSteps 참고).
+                    allSteps: steps);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

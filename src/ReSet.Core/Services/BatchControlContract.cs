@@ -28,8 +28,13 @@ namespace ReSet.Core.Services
     public enum ControlRowOrigin
     {
         /// <summary>
-        /// 이 테이블을 대상으로 선언한 첫 단계가 INSERT하며 RunId를 발급한다.
+        /// 이 테이블을 대상으로 선언한 첫 단계가 행을 INSERT한다.
         /// 위치가 아니라 대상 보유로 정하는 이유는 <see cref="BatchControlContract.ResolveRowCreators"/>에 있다.
+        ///
+        /// 키 값을 스스로 발급하는지는 이 축이 정하지 않는다 - 그것은
+        /// <see cref="ControlColumn.IsIdentity"/>가 정한다. batch.BatchRun은 RunId를
+        /// IDENTITY로 발급하지만, batch.BatchRunLock은 IDENTITY 컬럼이 없어 INSERT하는
+        /// 단계가 (JobName, BatchYmd) 키 값을 직접 채운다.
         /// </summary>
         FirstStepInserts,
 
@@ -40,18 +45,45 @@ namespace ReSet.Core.Services
         ProducerInsertsOnly
     }
 
-    /// <param name="StatusColumn">상태 어휘를 담은 컬럼. 없으면 null.</param>
+    /// <param name="StatusColumn">
+    /// 상태 어휘를 담은 컬럼. 없으면 null.
+    ///
+    /// [행이 상태를 전이하는 표(FirstStepInserts·EachStepInserts)의 명명 규칙]
+    /// 이름은 표 맨이름 전체가 아니라 "그 표의 핵심 명사 + Status"다. 실례 넷:
+    /// batch.BatchRun → RunStatus, batch.BatchStepJournal → StepStatus(Journal까지
+    /// 떨어낸다), batch.BatchCheckpoint → CheckpointStatus, batch.BatchRunLock →
+    /// LockStatus. {맨이름}Status를 강제하면 BatchStepJournalStatus 같은 이름이
+    /// 나오는데 실제 산출물은 그렇게 쓰지 않는다. 핵심 명사만 남기는 것이 표 맥락
+    /// 안에서 모호하지 않은 최소 이름이라 단계 SQL이 길어지지 않고, 같은 개념을
+    /// 두 이름으로 부르는 일이 줄어든다.
+    ///
+    /// 이 규칙은 ProducerInsertsOnly 표에는 적용되지 않는다. batch.BatchValidationIssue의
+    /// StatusColumn은 "Severity"인데, 그것은 프로세스 상태 전이가 아니라
+    /// Info/Warning/Error/Critical이라는 별개의 어휘(심각도)를 담는 컬럼이다 - 행이
+    /// 상태를 바꾸지 않는 표이므로 "Status" 접미사가 말이 되지 않는다.
+    /// </param>
     /// <param name="PrimaryKey">
-    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 두지 않는다 -
-    /// 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
+    /// 기본 키 컬럼 목록. 전이가 없는 테이블(ProducerInsertsOnly)에는 원칙적으로 두지
+    /// 않는다 - 한 단계가 같은 IssueCode를 여러 번 낼 수 있어 자연 키가 없고, 대리 키를
     /// 넣으면 단계가 써야 할 컬럼이 늘어난다.
+    ///
+    /// 예외는 batch.BatchControlTotal이다. 그 표에는 자연 키가 있다 - 같은 실행의 같은
+    /// 단계가 같은 지표를 두 번 낼 이유가 없고, 두 번 들어오면 검증 단계가 어느 행을
+    /// 기준으로 삼을지 모른 채 대조가 갈린다. 위 규칙의 이유가 "자연 키가 없다"였으므로,
+    /// 자연 키가 있는 표에는 그 이유가 적용되지 않는다.
+    /// </param>
+    /// <param name="Aliases">
+    /// 코퍼스에서 관측된 비정본 이름. 계약이 이것을 아는 이유는 정본을 정하는
+    /// 것만으로는 이름이 수렴하지 않기 때문이다 - 동의어를 쓴 단계는 어느 검사에도
+    /// 걸리지 않고 조용히 통과한다.
     /// </param>
     public sealed record ControlTable(
         string Name,
         IReadOnlyList<ControlColumn> Columns,
         ControlRowOrigin Origin,
         string? StatusColumn,
-        IReadOnlyList<string>? PrimaryKey = null);
+        IReadOnlyList<string>? PrimaryKey = null,
+        IReadOnlyList<string>? Aliases = null);
 
     /// <summary>
     /// 배치 실행 제어 테이블의 정본.
@@ -83,6 +115,7 @@ namespace ReSet.Core.Services
         private static readonly string[] RunStates = { "Running", "Succeeded", "Failed", "Restarting" };
         private static readonly string[] StepStates = { "Running", "Succeeded", "Failed", "Skipped" };
         private static readonly string[] CheckpointStates = { "Pending", "Succeeded" };
+        private static readonly string[] LockStates = { "Held", "Released" };
 
         public static IReadOnlyList<ControlTable> Tables { get; } = new[]
         {
@@ -146,7 +179,52 @@ namespace ReSet.Core.Services
                     new ControlColumn("DetectedAtUtc", "datetime2(3)", false)
                 },
                 ControlRowOrigin.ProducerInsertsOnly,
-                "Severity")
+                "Severity"),
+
+            // [왜 기준값 저장소로 좁히는가]
+            // 코퍼스 관측에서 이 표의 컬럼 집합이 넷으로 갈렸고, 그중 하나는
+            // ExpectedValue·ActualValue·IsMatched로 대조 결과까지 담았다. 그것은
+            // batch.BatchValidationIssue와 역할이 겹친다. 산출물도 이미 나뉘어
+            // 있다 - S16은 이 표를 "단계별 기준값"으로 읽고 대조 결과는 따로 쓴다.
+            // 넷 중 하나를 고를 근거가 이것뿐이었다. 나머지 셋은 빈도뿐이다.
+            //
+            // 관측된 변이 하나는 RowCount를 컬럼명으로 썼다. T-SQL 예약어라
+            // 대괄호 없이는 구문 오류다 - 계약이 그 이름을 배제하는 것 자체가 값이다.
+            new ControlTable(
+                "batch.BatchControlTotal",
+                new[]
+                {
+                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("StepCode", "nvarchar(10)", false),
+                    new ControlColumn("ControlName", "nvarchar(64)", false),
+                    new ControlColumn("ControlValue", "decimal(38,4)", false),
+                    new ControlColumn("CapturedAtUtc", "datetime2(3)", false)
+                },
+                ControlRowOrigin.ProducerInsertsOnly,
+                null,
+                new[] { "RunId", "StepCode", "ControlName" },
+                new[] { "ControlTotal" }),
+
+            // [왜 소유자 컬럼 이름을 RunId와 가르는가]
+            // 이 표의 키는 (JobName, BatchYmd)다. 소유자 컬럼을 RunId라고 부르면
+            // 키가 RunId라고 읽혀 실행마다 잠금 행이 새로 생기고, 그러면 잠금이
+            // 잠그지 않는다. 관측된 변이 셋(RunId·OwnerRunId·LockOwnerRunId) 중
+            // 역할이 이름에 드러나는 것을 고른다.
+            new ControlTable(
+                "batch.BatchRunLock",
+                new[]
+                {
+                    new ControlColumn("JobName", "nvarchar(128)", false),
+                    new ControlColumn("BatchYmd", "varchar(8)", false),
+                    new ControlColumn("OwnerRunId", "bigint", false),
+                    new ControlColumn("LockStatus", "nvarchar(20)", false, LockStates),
+                    new ControlColumn("AcquiredAtUtc", "datetime2(3)", false),
+                    new ControlColumn("HeartbeatAtUtc", "datetime2(3)", true),
+                    new ControlColumn("ReleasedAtUtc", "datetime2(3)", true)
+                },
+                ControlRowOrigin.FirstStepInserts,
+                "LockStatus",
+                new[] { "JobName", "BatchYmd" })
         };
 
         /// <summary>
@@ -161,6 +239,27 @@ namespace ReSet.Core.Services
             return Tables.FirstOrDefault(t =>
                 string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(BareName(t.Name), bare, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// 관측된 비정본 이름을 정본 표로 되짚는다. 정본 이름이면 null이다.
+        ///
+        /// [왜 Find가 이것을 겸하지 않는가]
+        /// 겸하면 CheckBatchControlVocabulary가 batch.ControlTotal을 정본으로 착각해
+        /// 컬럼만 검사하고 틀린 이름을 조용히 승인한다. 별칭은 받아들일 것이 아니라
+        /// 보고할 것이다. 순서도 그것이 맞다 - 이름을 먼저 정본으로 바꾸게 하고,
+        /// 그다음 회차에 컬럼 검사가 걸린다.
+        /// </summary>
+        public static ControlTable? FindAlias(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            if (Find(name) != null) return null;
+
+            var bare = BareName(name);
+            return Tables.FirstOrDefault(t =>
+                t.Aliases != null &&
+                t.Aliases.Any(alias =>
+                    string.Equals(BareName(alias), bare, StringComparison.OrdinalIgnoreCase)));
         }
 
         /// <summary>
@@ -226,8 +325,10 @@ namespace ReSet.Core.Services
 
         private static string BareName(string name)
         {
-            var idx = name.LastIndexOf('.');
-            return idx >= 0 ? name[(idx + 1)..] : name;
+            var trimmed = name.Trim();
+            var idx = trimmed.LastIndexOf('.');
+            var bare = idx >= 0 ? trimmed[(idx + 1)..] : trimmed;
+            return bare.Trim('[', ']', ' ');
         }
 
         /// <summary>회차 0 부트스트랩 문서가 실을 실제 DDL.</summary>
@@ -278,13 +379,21 @@ namespace ReSet.Core.Services
 
             foreach (var table in Tables)
             {
+                // IDENTITY 문장은 그 표에 실제로 IDENTITY 컬럼이 있을 때만 싣는다.
+                // 없는 표에 실으면 프롬프트가 존재하지 않는 발급 수단을 지시한다.
+                var identity = table.Columns.FirstOrDefault(c => c.IsIdentity);
+
                 var origin = table.Origin switch
                 {
-                    ControlRowOrigin.FirstStepInserts =>
+                    ControlRowOrigin.FirstStepInserts when identity != null =>
                         "The FIRST step that lists this table as a target INSERTs this row; " +
-                        "RunId is issued by IDENTITY, " +
+                        $"{identity.Name} is issued by IDENTITY, " +
                         "so read it back with SCOPE_IDENTITY() and pass it to every later step. " +
-                        "NEVER compute a RunId yourself. Later steps UPDATE this row.",
+                        $"NEVER compute a {identity.Name} yourself. Later steps UPDATE this row.",
+                    ControlRowOrigin.FirstStepInserts =>
+                        "The FIRST step that lists this table as a target INSERTs this row. " +
+                        "Later steps UPDATE this row. No column self-issues a value here - " +
+                        "every key value is supplied by the step.",
                     ControlRowOrigin.EachStepInserts =>
                         "EACH step INSERTs its own row when it starts, then UPDATEs it when it ends. Never UPDATE a row you did not insert.",
                     _ => "The producing step INSERTs only. There is no state transition."

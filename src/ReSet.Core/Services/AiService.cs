@@ -3916,6 +3916,30 @@ Consolidate the provided specifications into a single unified batch job named '{
             AppendSharedStepContext(
                 userPrompt, allSteps, sharedConventions, specs, stepInterfaces, targetLanguage, jobName);
 
+            // [축 B 감사가 요구하는 세 가지 - POQSettleBatch1 2026-08-24]
+            // 앵커가 없으면 단계 검사가 문장을 명세서의 갱신 N에 붙일 수 없어 조인 키·술어
+            // 컬럼 대조가 통째로 꺼진다. 규약 두 조항은 실측에서 금액·행 집합을 바꾼 치환이다.
+            // 이 블록은 floorFeedback보다 앞, 캐시 접두사(userPrompt) 안쪽에 둔다 - floorFeedback은
+            // volatileSuffix에 실려 반드시 프롬프트 말미에 붙어야 한다(아래 참고).
+            userPrompt.AppendLine("### 문장 앵커와 의미 보존 (필수)");
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("- **각 DML 문장 바로 앞에 명세서의 갱신 번호를 주석으로 답니다.** " +
+                "`/* U13: 카드사 원가 반영 */` 형식입니다(`갱신 13`·`UPDATE 13`도 인정됩니다). " +
+                "번호가 있어야 검증이 명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조합니다. " +
+                "앵커와 설명은 **하나의 주석에** 담으십시오. 주석을 둘로 나누면(`/* U13 */`와 " +
+                "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다.");
+            userPrompt.AppendLine("- **스칼라 하위질의를 `CROSS APPLY`/`OUTER APPLY`로 바꾸지 마십시오.** " +
+                "명세서가 대입 우변을 스칼라 하위질의로 적은 자리는 무결과일 때 `NULL`이 대입되는 자리입니다. " +
+                "`CROSS APPLY`는 그 행을 갱신 대상에서 통째로 제외해, 같은 문장의 다른 컬럼 대입까지 사라집니다. " +
+                "원본(명세서)이 이미 `CROSS APPLY`/`OUTER APPLY` 형태라면 이 조항은 해당하지 않습니다. " +
+                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
+            userPrompt.AppendLine("- **비집계 조회 여러 문장을 집계 한 문장으로 합치지 마십시오.** " +
+                "명세서가 `SELECT @v = col` 뒤에 `@@ROWCOUNT > 1` 분기를 둔 자리는 \"없음\"과 \"여럿\"을 " +
+                "가르는 자리입니다. `MAX(col)` 한 문장으로 합치면 \"없음\"의 표현이 `0`에서 `NULL`로 바뀌어 " +
+                "분기가 역전됩니다. 원본(명세서)이 이미 집계 한 문장 형태라면 이 조항은 해당하지 않습니다. " +
+                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
+            userPrompt.AppendLine();
+
             // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
             // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
             // 그 지점의 접두사 전체를 비교하므로, 243KB 컨텍스트 뒤에 이 몇 줄이 붙으면
