@@ -387,6 +387,56 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// 캐시 히트는 SpDefinition.RawPromptContext를 채우지 않는다(파이프라인이 AI를
+        /// 호출한 회차에만 채운다). 그 빈 값으로 기존 파일을 덮으면, 앞선 회차가 실제로
+        /// 모델에 보낸 프롬프트 원문이 사라진다 - 산출물이 이상할 때 입력부터 확인하라는
+        /// 이 파일의 존재 이유가 캐시 히트 한 번에 파괴된다.
+        /// 파일이 아예 없을 때 빈 파일을 남기는 계약(위 테스트)은 그대로 지킨다.
+        /// </summary>
+        [Fact]
+        public async Task ExportCodeObjectArtifactsAsync_PreservesExistingPromptContextWhenPromptIsEmpty()
+        {
+            var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
+            var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CacheHit", CodeObjectType.Procedure);
+            var promptPath = Path.Combine(
+                outputRoot, "Objects", "dbo.USP_CacheHit.Procedure", "raw", "prompt-context.md");
+
+            try
+            {
+                // 1회차: 실제로 AI를 호출해 프롬프트 원문을 남겼다.
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    new SpDefinition
+                    {
+                        Schema = key.Schema,
+                        Name = key.Name,
+                        DdlText = "SELECT 1;",
+                        RawPromptContext = "=== [System Prompt] ===\nreal prompt from attempt 1"
+                    },
+                    key,
+                    new CodeObjectPipelineResult { Nodes = new System.Collections.Generic.List<AnalysisNode> { new(key) { Status = AnalysisNodeStatus.Succeeded } } },
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                Assert.Contains("real prompt from attempt 1", await File.ReadAllTextAsync(promptPath));
+
+                // 2회차: 같은 객체가 다른 SP의 의존성으로 걸려 캐시 히트했다.
+                // RawPromptContext는 null이다.
+                await new MetadataExporter().ExportCodeObjectArtifactsAsync(
+                    new SpDefinition { Schema = key.Schema, Name = key.Name, DdlText = "SELECT 1;" },
+                    key,
+                    new CodeObjectPipelineResult { Nodes = new System.Collections.Generic.List<AnalysisNode> { new(key) { Status = AnalysisNodeStatus.Succeeded } } },
+                    DependencyArtifactMode.Reference,
+                    outputRoot);
+
+                Assert.Contains("real prompt from attempt 1", await File.ReadAllTextAsync(promptPath));
+            }
+            finally
+            {
+                if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+            }
+        }
+
         [Fact]
         public async Task ExportCodeObjectArtifactsAsync_PortableBundleWritesOnlyReferencedDdlAlongsideCanonicalDdl()
         {
