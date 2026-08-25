@@ -470,11 +470,15 @@ UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
     [Fact]
     public void Read_NonNegativeAssignmentsInInterval_ShouldNotBeCandidates()
     {
-        // 초기화 0과 @@ROWCOUNT 대입이 후보가 되면 「구간에 하나」가 절대
-        // 성립하지 않는다.
+        // 초기화 0과 @@ROWCOUNT 대입, 그리고 `SET @v = 5;`처럼 부호만 다른 진짜
+        // 후보 모양(양수 정수 리터럴 SET 대입)이 후보가 되면 「구간에 하나」가
+        // 절대 성립하지 않는다. `SET @v_rowCount = 5;`가 이 셋 중 실제로 부호
+        // 필터(음수만 후보)가 없으면 후보가 될 모양이다 - 나머지 둘(DECLARE·
+        // @@ROWCOUNT)은 부호와 무관한 이유로 이미 제외된다.
         const string step = @"```sql
 DECLARE @v_currentStepId INT = 0;
 SET @v_cnt = @@ROWCOUNT;
+SET @v_rowCount = 5;
 SET @v_currentStepId = -13;
 UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
 ```";
@@ -482,6 +486,22 @@ UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
         var statement = Assert.Single(StepSqlStatementReader.Read(step));
 
         Assert.Equal("-13", statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_OnlyNonNegativeSetAssignmentInInterval_ShouldNotYieldCodeAnchor()
+    {
+        // 구간에 음수 후보가 전혀 없고 양수 정수 리터럴 SET 대입만 있으면
+        // CodeAnchor는 null이어야 한다 - 부호 필터가 없으면 이 양수 대입이
+        // 유일한 후보로 잡혀 "-13" 같은 값 대신 "5"가 나온다.
+        const string step = @"```sql
+SET @v_rowCount = 5;
+UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Null(statement.CodeAnchor);
     }
 
     [Fact]
@@ -511,5 +531,23 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
 
         Assert.Equal(13, statement.Anchor);
         Assert.Equal("-13", statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_SetPatternInsideCommentOnly_ShouldNotBeReadAsCodeAnchor()
+    {
+        // 실물 관용구(output/Jobs/POQSettleProc12/agent/common/01-step-contract.md의
+        // "-- 예시: SET @v_currentStepId = -101;" 같은 예시 문구)가 주석 안에만
+        // 있을 뿐 실제 SET 문이 아니면 CodeAnchor는 잡히면 안 된다. ReadAnchor가
+        // 주석 토큰만 후보로 보는 것과 반대로, ReadCodeAnchor는 주석이 아닌
+        // 실코드 토큰만 후보로 봐야 한다.
+        const string step = @"```sql
+-- 예시: SET @v_currentStepId = -101;
+UPDATE A SET A.X = 1 FROM dbo.T AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Null(statement.CodeAnchor);
     }
 }

@@ -385,6 +385,15 @@ namespace ReSet.Core.Services
         /// 잡을 수 없다 - 구간 안 토큰의 원문 Text를 이어붙여 그 문자열에
         /// 정규식을 돌린다. 토큰은 Offset 기준으로 빈틈없이 이어지므로 이어붙인
         /// 문자열은 원본 펜스의 해당 구간과 문자 단위로 같다.
+        ///
+        /// [왜 주석 토큰은 빼는가 - 리뷰 라운드 1 발견 2]
+        /// `ReadAnchor`는 주석 토큰만 후보로 본다. 이 메서드는 반대로 실코드만
+        /// 봐야 한다 - 주석 안에 `-- 예시: SET @v_currentStepId = -101;`처럼
+        /// 예시 문구가 있으면(실물: output/Jobs/POQSettleProc12/agent/common/
+        /// 01-step-contract.md) 그 문구가 실제 SET 문이 아닌데도 잡힌다. 주석
+        /// 토큰의 Text를 통째로 빼되 공백 하나로 치환한다 - 그냥 빼면 주석
+        /// 앞뒤 실토큰이 공백 없이 이어붙어(`SET-- 주석 --@v`처럼) 엉뚱하게
+        /// 합쳐질 위험이 있다.
         /// </summary>
         private static string? ReadCodeAnchor(IList<TSqlParserToken> tokens, int windowStartOffset, int firstTokenIndex)
         {
@@ -393,7 +402,14 @@ namespace ReSet.Core.Services
             var window = new StringBuilder();
             for (int i = windowStartTokenIndex; i < firstTokenIndex; i++)
             {
-                window.Append(tokens[i].Text);
+                var token = tokens[i];
+                if (token.TokenType is TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment)
+                {
+                    window.Append(' ');
+                    continue;
+                }
+
+                window.Append(token.Text);
             }
 
             var matches = CodeAnchorPattern.Matches(window.ToString());
