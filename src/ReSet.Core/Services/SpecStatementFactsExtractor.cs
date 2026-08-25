@@ -143,7 +143,17 @@ namespace ReSet.Core.Services
                 try
                 {
                     var lines = MarkdownSectionLocator.SplitLines(content);
-                    result[fileName] = new SpecStatementFacts(
+
+                    // Task 17 C3 - 원문 FileName을 키로 쓰면 스키마 접두사 없는
+                    // `step.LegacyProcedures` 항목(실측 314개 중 134개, 43%)이 영원히
+                    // 못 찾는다. `CheckMissingConditionColumns`
+                    // (MechanicalValidator.cs:1514)가 이미 `BareObjectName`으로 조회하는
+                    // 것과 같은 규약을 여기서도 따른다 - 두 재료가 다른 키 규약을 쓰면
+                    // 한쪽만 고쳐서는 조회가 여전히 어긋난다.
+                    var key = MechanicalValidator.BareObjectName(fileName);
+                    if (key.Length == 0) continue;
+
+                    result[key] = new SpecStatementFacts(
                         ReadDmlRows(lines),
                         ReadSetTargets(lines),
                         ReadLocalVariables(lines));

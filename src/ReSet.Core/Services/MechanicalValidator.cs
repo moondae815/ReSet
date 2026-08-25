@@ -250,6 +250,12 @@ namespace ReSet.Core.Services
         /// 필터·분기에 쓰는 컬럼 이름(<see cref="SpecConditionColumnExtractor"/>가 뽑는다).
         /// 비어 있으면 조건 대조를 실행하지 않는다 - 대조할 재료가 없다는 사실을 로직이
         /// 빠졌다는 판정으로 바꾸지 않기 위한 소프트 스킵이다.</param>
+        /// <param name="allSteps">이 Job의 단계 목록 전체(이 단계 자신도 포함). 검사 A(개수
+        /// 대조)가 "같은 레거시 SP가 여러 단계에 나뉘어 있는가"를 판정하는 데만 쓴다
+        /// (Task 17 I2). 생략하거나 null이면 그 판정을 하지 않고 예전처럼 이 단계
+        /// 하나가 그 SP의 문장 전부를 담당한다고 본다 - 호출부
+        /// (<see cref="VerificationPipelineOrchestrator"/>)가 아직 이 인자를 넘기지
+        /// 않는 상태에서는 이 매개변수가 있어도 실행 중 동작은 바뀌지 않는다.</param>
         public StepValidationResult ValidateBatchStep(
             string? stepMarkdown,
             BatchStepPlan step,
@@ -257,7 +263,8 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, SpecConditions> conditionColumnsByProcedure,
             IReadOnlyList<StepInterface>? stepInterfaces = null,
             IReadOnlyCollection<string>? runRowOwnedTables = null,
-            IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null)
+            IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null,
+            IReadOnlyList<BatchStepPlan>? allSteps = null)
         {
             var result = new StepValidationResult();
 
@@ -361,20 +368,60 @@ namespace ReSet.Core.Services
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
+            //
+            // [Task 17 C3] 조회는 원문 `name`이 아니라 `BareObjectName(name)`으로 한다 -
+            // `statementFactsByProcedure`는 이제 `BareObjectName(FileName)`으로 키를
+            // 만든다(SpecStatementFactsExtractor 참고). `CheckMissingConditionColumns`
+            // (:1514의 `BareObjectName(legacyProcedure)`)와 같은 규약이다. 실측:
+            // `LegacyProcedures` 항목 314개 중 134개(43%)가 스키마 접두사 없는
+            // 이름이라, 원문 그대로 조회하면 그 항목은 영원히 못 찾는다.
             if (statementFactsByProcedure != null && step.LegacyProcedures.Count > 0)
             {
-                var facts = step.LegacyProcedures
-                    .Select(name => statementFactsByProcedure.TryGetValue(name, out var f) ? f : null)
-                    .Where(f => f != null)
-                    .Select(f => f!)
+                var namedFacts = step.LegacyProcedures
+                    .Select(name => (Name: name,
+                        Facts: statementFactsByProcedure.TryGetValue(BareObjectName(name), out var f) ? f : null))
+                    .Where(nf => nf.Facts != null)
+                    .Select(nf => (nf.Name, Facts: nf.Facts!))
                     .ToList();
+
+                var facts = namedFacts.Select(nf => nf.Facts).ToList();
 
                 if (facts.Count > 0)
                 {
-                    var statements = StepSqlStatementReader.Read(stepMarkdown);
+                    // lostStatementCount는 검사 A(개수 대조)에만 넘긴다 - 검사 B·C·D는
+                    // statements 목록을 그대로 받아 스스로 앵커 유무로 판단하므로 이
+                    // 신호로 동작을 바꾸지 않는다. Task 16 C2의
+                    // CheckStatementCountAgainstSpec 문서 참고.
+                    //
+                    // [Task 20] `StepSqlStatementReader.Read`가 이제 펜스를 통째로
+                    // 버리지 않고 최상위 세미콜론 조각 단위로 복구하므로, statements
+                    // 목록은 예전보다 문장을 더 많이 담을 수 있다(잃는 것은 개별
+                    // 조각 - 예: `EXEC … sp_getapplock` 관용구나 SELECT 목록이 통째로
+                    // 주석인 INSERT뿐). 검사 B·C·D는 이 신호를 받지 않지만, 입력
+                    // 문장이 늘어나는 것 자체는 이 회차가 의도한 개선이다 - 코퍼스
+                    // 재측정으로 새 발화가 거짓이 아닌지 확인했다(docs/known-defects.md).
+                    var statements = StepSqlStatementReader.Read(stepMarkdown, out var lostStatementCount);
+
+                    // [Task 17 I2] 같은 레거시 SP가 이 Job의 다른 단계에도 나뉘어 있으면
+                    // 그 SP의 DmlRows는 개수 대조에서 뺀다 - 한 단계가 그 SP의 문장 몇
+                    // 개를 맡는지 알 방법이 없다("귀속할 수 없으면 침묵한다"). 앵커
+                    // 기반 검사(B·C·D)는 이 필터를 받지 않는다 - 그 검사들은 "전부
+                    // 있어야 한다"가 아니라 "앵커가 달린 문장은 정확해야 한다"만
+                    // 요구하므로 분할과 무관하게 여전히 유효하다.
+                    //
+                    // `allSteps`가 없으면(호출부가 아직 넘기지 않으면) 예전 그대로
+                    // 전체 facts로 대조한다 - 재료가 없다는 사실을 결함 없음으로
+                    // 바꾸지 않기 위한 하위 호환이다.
+                    var countCheckFacts = allSteps == null
+                        ? facts
+                        : namedFacts
+                            .Where(nf => !IsLegacyProcedureSplitAcrossSteps(nf.Name, step.Code, allSteps))
+                            .Select(nf => nf.Facts)
+                            .ToList();
 
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
-                    SafeCheck(() => CheckStatementCountAgainstSpec(facts, statements, step, result));
+                    SafeCheck(() => CheckStatementCountAgainstSpec(
+                        countCheckFacts, statements, lostStatementCount, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
@@ -387,6 +434,27 @@ namespace ReSet.Core.Services
 
             result.IsValid = result.Errors.Count == 0;
             return result;
+        }
+
+        /// <summary>
+        /// 이 Job 안에서 같은 레거시 SP를 다른 단계도 담당하는지 본다 (Task 17 I2).
+        ///
+        /// 실측(POQSettleProc4): `UP_UTIL_SETTLE_EXCEPTION_PROC`이 S10~S27 18개
+        /// 단계에, `UP_UTIL_SETTLE_COMM_UPD`가 S28~S42 15개 단계에 나뉘어 있다.
+        /// 이 상태에서 한 단계에 그 SP의 DmlRows 전체를 요구하면 33개 단계가
+        /// 만족 불가능한 개수 요구를 받는다 - 한 단계가 그 SP의 문장 몇 개를
+        /// 맡는지 알 방법이 없다.
+        /// </summary>
+        private static bool IsLegacyProcedureSplitAcrossSteps(
+            string legacyProcedureName, string ownStepCode, IReadOnlyList<BatchStepPlan> allSteps)
+        {
+            var bare = BareObjectName(legacyProcedureName);
+            if (bare.Length == 0) return false;
+
+            return allSteps.Any(other =>
+                !string.Equals(other.Code, ownStepCode, StringComparison.OrdinalIgnoreCase) &&
+                other.LegacyProcedures.Any(p =>
+                    BareObjectName(p).Equals(bare, StringComparison.OrdinalIgnoreCase)));
         }
 
         private static string FirstNonEmptyLine(string markdown)
@@ -5568,6 +5636,19 @@ namespace ReSet.Core.Services
         /// 위 🟠(`@v_currentStepId = 0`)와 같은 뿌리라고 적었다. "선언 기본값과
         /// 다른가"로 판정을 넓히려면 SpecExpectations에 파라미터 기본값 칸을
         /// 더해야 하는데(현재 ParameterNames만 담는다) 이번 검사의 범위가 아니다.
+        ///
+        /// [Task 17 I1 - 합성 성공 코드 "0"을 뺀 이유]
+        /// 예전에는 "0"이 목차 `ErrorCodes`에 없어도 판정에 합성으로 더하고,
+        /// 메시지에 "다만 이 저장소는 반환값이 `0`이면 목차 기재 여부와 무관하게
+        /// 무조건 성공으로 해석합니다"라고 적었다. 이 문장의 근거를 `src/`·
+        /// `docs/`·`AGENTS.md` 전체에서 찾지 못했다 - 오히려
+        /// `AiService.cs:3212`가 정반대를 지시한다("Do not assume it returns 0 on
+        /// success based solely on header comments if there is no explicit `SET`
+        /// statement"). 코퍼스 스윕(326개 단계 파일)에서 이 검사 발화 127건 중
+        /// 70건(55%)이 이 문장을 담은 가지를 탔다 - 근거 없는 단언이 결함 판정의
+        /// 유일한 정당화였다. 이제는 목차 `ErrorCodes`에 실제로 있는 값과만
+        /// 대조한다 - `0`이 목차에 있으면(예: S13, `["-9","0","1001","1002"]`)
+        /// 여전히 잡히고, 없으면 침묵한다.
         /// </summary>
         private static void CheckStepIdInitialValue(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
@@ -5577,10 +5658,6 @@ namespace ReSet.Core.Services
             var declaredCodes = step.ErrorCodes
                 .Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
             var declaredCodeSet = new HashSet<string>(declaredCodes, StringComparer.Ordinal);
-
-            var codes = new HashSet<string>(declaredCodeSet, StringComparer.Ordinal);
-            codes.Add("0");   // 성공 코드는 목차에 없을 수도 있다 - 판정에는 넣지만,
-                              // 메시지에서는 declaredCodeSet과 구분해 사실대로 밝힌다(아래).
 
             var reported = new HashSet<(string Name, string Value)>();
 
@@ -5601,13 +5678,8 @@ namespace ReSet.Core.Services
                     if (!declared.Success) continue;
 
                     var initial = declared.Groups["value"].Value;
-                    if (!codes.Contains(initial)) continue;
+                    if (!declaredCodeSet.Contains(initial)) continue;
                     if (!reported.Add((name, initial))) continue;
-
-                    // declaredInPlan이 false면 codes.Contains(initial)이 성립하는 유일한
-                    // 경로는 위에서 합성으로 더한 "0"뿐이다(declaredCodeSet에는 없고
-                    // codes에만 "0"이 있다) - 그래서 initial == "0"이 보장된다.
-                    var declaredInPlan = declaredCodeSet.Contains(initial);
 
                     // [픽스 라운드 1 - Minor] "성공 코드일 수도 있습니다"는 초기값이
                     // 실제로 `0`일 때만 사실이다. 실측(POQSettleProc10/S16 등 6건)은
@@ -5625,27 +5697,14 @@ namespace ReSet.Core.Services
                         "`@po_intRetVal`로 돌려줍니다. ";
                     var suffix = $" {outcomeClause}. 어느 코드와도 겹치지 않는 값으로 초기화하십시오.";
 
-                    // [픽스 라운드 1 - Critical] 판정은 codes(목차 ErrorCodes + 합성
-                    // 성공 코드 "0")로 하면서 메시지가 항상 step.ErrorCodes만 인쇄하면,
-                    // "0"이 목차에 없는 단계(실측 POQSettleBatch1/S06,
-                    // ErrorCodes=["-9","-1"])에서 "0은(는) 이 단계의 오류 코드 집합
-                    // (-9, -1)에 이미 있는 값이라"는 문장이 나간다 - 방금 인쇄한 괄호
-                    // 안에 0이 안 보이는데 "있다"고 우기는 자기모순이다. 코퍼스 스윕
-                    // (326개 단계 파일 · 21개 Job)에서 이 검사가 낸 129건 중 70건이
-                    // 이 모순을 그대로 실었다(실측). 인쇄하는 근거와 판정 근거를
-                    // 일치시킨다 - 목차에 실제로 있는 값이면 그대로 인쇄하고, 성공
-                    // 코드 0이 목차에 없어 합성으로 더해진 경우면 그 사실을 두 문장으로
-                    // 따로 밝힌다(한 문장에 욱여넣으면 "…읽습니다이라"처럼 어색해진다).
-                    var message = declaredInPlan
-                        ? prefix +
-                          $"`{initial}`은(는) 이 단계의 오류 코드 집합 " +
-                          $"({string.Join(", ", declaredCodes)})에 이미 있는 값입니다." +
-                          suffix
-                        : prefix +
-                          $"이 단계의 목차 오류 코드 집합은 ({string.Join(", ", declaredCodes)})뿐이라 " +
-                          $"`{initial}`은(는) 그 목록에 없습니다. 다만 이 저장소는 반환값이 `0`이면 " +
-                          "목차 기재 여부와 무관하게 무조건 성공으로 해석합니다." +
-                          suffix;
+                    // [Task 17 I1] 합성 성공 코드를 없애 판정을 declaredCodeSet 하나로
+                    // 좁혔으므로(위 `if (!declaredCodeSet.Contains(initial)) continue;`),
+                    // 이 지점에 도달했다는 것은 `initial`이 이 단계의 오류 코드 집합에
+                    // 실제로 있다는 뜻이다 - 인쇄하는 근거와 판정 근거가 항상 일치한다.
+                    var message = prefix +
+                        $"`{initial}`은(는) 이 단계의 오류 코드 집합 " +
+                        $"({string.Join(", ", declaredCodes)})에 이미 있는 값입니다." +
+                        suffix;
 
                     result.Errors.Add(message);
                 }
@@ -5694,13 +5753,49 @@ namespace ReSet.Core.Services
         /// 떨어져 결함이 보이지 않는다). 이 검사가 SP 경계를 모르는 한 고칠 수
         /// 없다 - 단계 SQL 문장에 출처 SP를 표시하는 재료가 새로 생기기 전까지는
         /// 알려진 한계로 남긴다.
+        ///
+        /// [Task 16 C1 - 대조 불가능한 명세서 행을 요구로 들지 않는다 - 코퍼스 실측]
+        /// 명세서 DML 범위 표에는 이 검사가 절대 만족시킬 수 없는 행이 실재한다:
+        /// (1) Kind == "SELECT" 행 - <see cref="StepSqlStatementReader"/>의
+        /// DmlCollector는 UpdateStatement·DeleteStatement·InsertStatement만
+        /// 방문하고 SelectStatement는 방문하지 않으므로 이 종류의 StepSqlStatement는
+        /// 절대 만들어지지 않는다. (2) 대상 칸이 "—"이거나 한 글자 별칭(예: "A")인
+        /// 행 - 실물 테이블명이 아니다(실측: UP_UTIL_SETTLE_PROC_ETC의 SELECT
+        /// 1~6 대상 전부 "—", UP_UTIL_SETTLE_INS_EXTRA4PLCARD DELETE 1 대상
+        /// "A" - 물리 테이블은 FROM 절의 `dbo.TSettleMst AS A`이지 "A"라는
+        /// 이름의 테이블이 아니다). 두 경우 다 actual이 영구히 0이라, 모델이
+        /// 무엇을 쓰든 다음 회차에 같은 오류가 재발하고 재생성이 maxTries를
+        /// 소진한다(코퍼스 실측: 검사 A 오류 177건 중 70건(40%)이 이 부류).
+        /// <see cref="IsComparableDmlRow"/>로 대조 가능한 행만 남긴다 -
+        /// "귀속할 수 없으면 침묵한다"는 이 저장소의 규약을 여기 적용한다.
+        ///
+        /// [Task 16 C2 - 파싱에 실패해 잃어버린 DML 문장이 있으면 개수 대조를
+        /// 통째로 접는다 - 코퍼스 실측, Task 20이 손실 단위를 펜스에서 문장으로
+        /// 좁힘]
+        /// `StepSqlStatementReader.Read`는 펜스를 최상위 세미콜론 조각으로 잘라
+        /// 조각마다 독립적으로 파싱하므로(Task 20), 조각 하나의 오류가 더는
+        /// 같은 펜스의 다른 문장을 통째로 삼키지 않는다(예: `output/Jobs/
+        /// POQSettleBatch1/agent/steps/S12.md`의 DELETE 4개는 이제 정상
+        /// 집계된다). 다만 어떤 조각은 여전히 못 읽는다 - `INSERT … SELECT
+        /// /* 주석만 */ FROM …`처럼 SELECT 목록이 통째로 주석인 것은 산출물
+        /// 결함 자체라 파싱이 불가능하다. `lostStatementCount`는 이렇게 잃어버린
+        /// INSERT·UPDATE·DELETE 조각 개수를 센다(제어문 조각의 실패는 DML이
+        /// 아니므로 세지 않는다). 이 값이 0보다 크면 어느 (Kind,TargetTable)
+        /// 조합이 그 손실의 영향을 받았는지 알 수 없으므로, <see
+        /// cref="DescribeMissingOrdinals"/>의 불변식(missing.Count ==
+        /// expectedCount - actual)이 거짓 개수에 거짓 번호 목록을 붙이는 것을
+        /// 막기 위해 이 단계의 개수 대조 전체를 여전히 접는다 - "재료가 없다"가
+        /// "문장이 없다"로 잘못 바뀌는 것을 막는다.
         /// </summary>
         private static void CheckStatementCountAgainstSpec(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
+            int lostStatementCount,
             BatchStepPlan step,
             StepValidationResult result)
         {
+            if (lostStatementCount > 0) return;
+
             // 레거시 SP가 둘 이상이면 Ordinal은 SP마다 1부터 다시 시작한다(명세서
             // "갱신 1"은 그 SP 안에서만 유일하다). 번호 열거는 SP가 정확히 하나일
             // 때로 좁힌다.
@@ -5718,6 +5813,7 @@ namespace ReSet.Core.Services
 
             var expected = facts
                 .SelectMany(f => f.DmlRows)
+                .Where(IsComparableDmlRow)
                 .GroupBy(r => (r.Kind, r.TargetTable), StatementGroupComparer);
 
             foreach (var group in expected)
@@ -5842,9 +5938,19 @@ namespace ReSet.Core.Services
                 // (Ordinal, Kind)로 매칭되는 명세서 행이 정확히 하나일 때만 대조한다.
                 // 레거시 SP가 둘 이상이면 이 조합이 서로 다른 SP의 서로 다른 행을
                 // 가리키도록 겹칠 수 있다 - 그 상태에서는 귀속할 수 없으므로 침묵한다.
+                //
+                // [태스크 22] TargetTable도 함께 대조한다 - 예전에는 (Ordinal, Kind)만
+                // 봐서, 단계가 완전히 다른 물리 테이블(섀도·스테이징 테이블)을 갱신하는
+                // 문장도 원본 대상 테이블의 행과 매칭됐다. 실물(POQSettleProc10/S08)은
+                // `batch.POQSettleLedgerStageImage`를 갱신하는데 원본은 `TSettleMst`고,
+                // 그 스테이징 전용 제어 컬럼(ImageRunId·ImageType)이 원본 predicate와
+                // 안 맞아 거짓 발화했다. `CheckStatementCountAgainstSpec`(검사 A)이
+                // 이미 (Kind, TargetTable)로 대조하는 것과 같은 규약이다.
+                var groupTargetTable = group.First().TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
-                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    r.TargetTable.Equals(groupTargetTable, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (candidates.Count != 1) continue;
 
                 var row = candidates[0];
@@ -5859,7 +5965,18 @@ namespace ReSet.Core.Services
                 var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
 
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
-                ReportMissing("조인 키", row.JoinKeys, joinPresent);
+
+                // [태스크 22] 조인 파트너가 CTE·파생 테이블이면(HasOpaqueJoinSource)
+                // 조인 키 칸 대조는 접는다 - 실물(S07 U2·U13·U17)은 원본 단일 UPDATE를
+                // `UPDATE 대상 ... FROM 대상 AS Y INNER JOIN <계산용 CTE> ON <좁은 키>`로
+                // 재구성하는데, 진짜 필터(PGName·ClientID 등)는 그 CTE 안의 WHERE에
+                // 있어 최상위만 보는 JoinColumns로는 볼 수 없다. 최상위 WHERE 술어
+                // 컬럼 대조는 이 사각지대와 무관하므로(S07 U13의 실제 결함 YMD·PGNAME
+                // 누락은 이쪽에서 여전히 잡힌다) 그대로 둔다.
+                if (!group.Any(s => s.HasOpaqueJoinSource))
+                {
+                    ReportMissing("조인 키", row.JoinKeys, joinPresent);
+                }
 
                 void ReportMissing(string label, IReadOnlyList<string> expected, HashSet<string> present)
                 {
@@ -5995,9 +6112,14 @@ namespace ReSet.Core.Services
 
             foreach (var group in groups)
             {
+                // [태스크 22] TargetTable도 함께 대조한다 - CheckAnchoredStatementFacts와
+                // 같은 이유(위 문서 참고). 대상 테이블이 다르면 스테이징 전용 제어
+                // 컬럼(ImageRunId·ImageType 등)을 "명세서에 없는 술어"로 오인한다.
+                var groupTargetTable = group.First().TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
-                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase)).ToList();
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    r.TargetTable.Equals(groupTargetTable, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (candidates.Count != 1) continue;
 
                 var row = candidates[0];
@@ -6162,6 +6284,29 @@ namespace ReSet.Core.Services
 
             return $"(빠진 것으로 보이는 번호: {string.Join(", ", missing)})";
         }
+
+        /// <summary>
+        /// 명세서 DML 범위 표 행이 <see cref="StepSqlStatementReader"/>가 실제로
+        /// 만들 수 있는 문장과 대조 가능한지 본다. <see cref="CheckStatementCountAgainstSpec"/>의
+        /// Task 16 C1 문서를 보라.
+        ///
+        /// [왜 길이 1인지로 가르는가 - 코퍼스 실측]
+        /// `output/Procedures`·`Functions`·`External` 전체의 DML 범위 표 "대상"
+        /// 칸을 훑으면(Task 16 실측) 값은 셋으로 갈린다: 실제 테이블명(예:
+        /// `TSettleMst`, `SETTLE_POQ_DB.dbo.TSettleMst` - 전부 2글자 이상),
+        /// "—"(SELECT 전용, 35건 - 한 글자 em dash), 한 글자 별칭 "A"(2건).
+        /// 실제 테이블명은 예외 없이 2글자 이상이라 길이 1 하나로 세 부류를
+        /// 정확히 가른다. `knownTableNames` 카탈로그 대조도 대안이지만 그
+        /// 카탈로그는 소프트 스킵 대상이다(비어 있을 수 있다 - ValidateBatchStep
+        /// 문서 참고) - 개수 대조 전체를 그 카탈로그에 묶으면 카탈로그가 빈
+        /// Job에서 진짜 결손(S07 8/18 등)까지 조용히 통과하게 된다. 길이
+        /// 판정은 그 위험이 없다.
+        /// </summary>
+        private static bool IsComparableDmlRow(SpecDmlRow row) =>
+            (row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase) ||
+             row.Kind.Equals("INSERT", StringComparison.OrdinalIgnoreCase) ||
+             row.Kind.Equals("DELETE", StringComparison.OrdinalIgnoreCase)) &&
+            row.TargetTable.Length > 1;
 
         /// <summary>
         /// `(문장 종류, 대상 테이블)`을 대소문자 무시로 묶는다. 명세서는

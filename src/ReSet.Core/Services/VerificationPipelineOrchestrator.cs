@@ -3236,8 +3236,17 @@ namespace ReSet.Core.Services
                 adopted = content;
 
                 var stepResult = _validator.ValidateBatchStep(
-                    content, step, knownTableNames, conditionColumns, stepInterfaces, runRowOwnedTables,
-                    statementFacts);
+                    content, step, knownTableNames, conditionColumns,
+                    stepInterfaces: stepInterfaces,
+                    runRowOwnedTables: runRowOwnedTables,
+                    statementFactsByProcedure: statementFacts,
+                    // [Task 18 I2 배선] steps는 이 메서드의 매개변수로, 이 Job의 단계
+                    // 목록 전체다(이 단계 자신 포함) - ValidateBatchStep이 "같은 레거시
+                    // SP가 다른 단계에도 나뉘어 있는가"를 판정하는 데 그대로 쓴다. 이
+                    // 인자가 빠지면 그 판정을 못 해 분할된 SP를 담당하는 모든 단계가
+                    // 영구히 만족 불가능한 개수 요구를 받는다(위 클래스 docstring 및
+                    // MechanicalValidator.IsLegacyProcedureSplitAcrossSteps 참고).
+                    allSteps: steps);
                 if (stepResult.IsValid)
                 {
                     return (content, null);
