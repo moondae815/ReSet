@@ -986,6 +986,90 @@
   없고, 가드의 `SET @po_intRetVal = -N` 라인은 `SetAssignmentExtractor`가 이미 담아
   `CoverageMapComposer.cs:154`가 커버리지에 싣고 있다. 이 표를 `ExtractorFactLines`에
   더하는 배선은 어떤 상태도 바꾸지 못한다(2026-08-25 리플렉션 프로브 실측).」
+  **골든 테스트 관점 보강** — 최종 리뷰어 확인: 설계서 배선표는 이 배선을 하라고
+  적었지만 실제로는 하지 않은 것이 옳았다. `ExtractorFactLines`(위 141행)는
+  `IReadOnlyList<int>` 하나로 접혀 `CoverageMapComposer.Compose`가 잎 문장의
+  State를 가르는 유일한 입력이고, `ErrorCodeFact`엔 애초에 `Line`이 없다 —
+  그대로 `.Select(f => f.Line)`을 써 넣으면 컴파일이 안 되고, StatementOrdinal을
+  Line으로 잘못 재해석해 억지로 끼워 넣으면 엉뚱한 잎에 사실이 붙어
+  `CoverageMapGoldenTests`의 요구 1(🟥 총계 0)·요구 3(줄 37·167·190·206의
+  앵커 개수 정확히 일치)을 깨뜨렸을 것이다. 배선표의 오류가 코드로 옮겨지기
+  전에 골든 테스트가 걸러 낼 자리였다는 뜻이지, 실제로 짜서 돌려 본 결과는
+  아니다.
+
+- **캐시 17 인상 전 선결 조건 — I2·I3·재매핑 위험을 한 자리에 모은다(2026-08-25,
+  최종 whole-branch 리뷰).** 셋 다 "병합 후, 캐시 17 재생성 전"이라는 같은
+  창을 가리킨다 — 흩어져 있으면 인상하는 사람이 셋 중 하나만 보고 진행할
+  위험이 있어 여기 한 절로 묶는다.
+
+  **(1) 지금 이 축은 무동작이다 — 병합해도 S11 갱신 9류는 아직 안 닫힌다 (I2).**
+  `CacheManager.cs:174`의 `CurrentCacheFormatVersion`은 **16**이고,
+  `output/.sp_cache_index.json`의 31개 항목은 **전부 `FormatVersion: 16`**이다
+  (직접 확인: `entries` 31개, `FormatVersion` 집합이 `{16}` 하나뿐). 그래서
+  「오류 코드」 표가 아직 어느 `Spec.md`에도 없고 → `ReadErrorCodeToOrdinal`이
+  항상 빈 사전을 돌려주고 → `ResolveOrdinal`의 코드 앵커 경로는 **도달
+  불가**다. Task 8이 잰 코퍼스 2건(0.6%, (A)조건) → 199건(60%, (B)조건 —
+  코드 앵커가 실제로 켜졌을 때 잡히는 단계 파일 수) 확대는 **캐시 17 +
+  전건 재생성 뒤에야** 일어난다. 그동안 실제로 켜지는 유일한 변화는
+  `IsCandidateForAnchoredStatementCheck`(`MechanicalValidator.cs:6162-6163`)가
+  INSERT 문장을 후보에서 빼는 것뿐이다 — 즉 **검사 B·C의 관할이 순수하게
+  줄어든다**(영향은 사실상 0이지만 부호는 음수다). **다음 사람이 코드만
+  보고 "이 축은 이미 작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+
+  **(2) 코드 사전이 SP로 스코프되지 않는다 (I3).** `MergeErrorCodeMaps`
+  (`MechanicalValidator.cs:6172` 부근)는 같은 코드 문자열이 서로 다른 SP에서
+  **서로 다른 값**으로 충돌할 때만 그 코드를 빼고, 한 SP에만 있는 코드는
+  그대로 병합 사전에 남는다. 레거시 SP가 둘 이상인 단계에서 SP A에만 있는
+  코드(예: `-13`)는 남고, 그 코드를 단 문장이 실제로는 SP B에서 왔어도
+  SP A의 (Kind, Ordinal)로 환산될 수 있다. 하위 가드(`candidates.Count != 1`
+  판정 + TargetTable 대조, `CheckAnchoredStatementFacts`·
+  `CheckAnchoredStatementExtras` 공통)가 일부만 막는다 — 두 SP가 같은 물리
+  테이블을 갱신하면 TargetTable 대조를 그대로 통과한다. **재매핑 위험과
+  뿌리가 같다: 사전의 키가 코드 하나뿐이고 SP로 한정되지 않는다.**
+  **미측정** — 코퍼스에 다중 레거시 SP 단계가 몇 건인지는 이번 라운드
+  범위 밖이다. 인상 전에 세야 할 수치다.
+
+  **(3) 오류 코드 재매핑 — AiService 규약 9의 전제가 실제로 깨진다.** 실측
+  (`output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/raw/metadata.json`
+  `DdlText` 290·319·344행): 원본 `UP_UTIL_SETTLE_COMM_UPD`는 inivacct
+  블록(`PGNAME IN ('inivacct')`)에 **`-9`**, easybank 블록(`PGNAME IN
+  ('easybank')`)에 `-10`, KFTC/INIBANK 블록(`PGNAME IN ('KFTC','INIBANK')`)에
+  `-11`을 쓰는데, 이행 코드(`output/Jobs/POQSettleProc19/agent/steps/
+  S11.md:319,362,395` 부근 — 주석 "8. inivacct 취소수수료"·"9. easybank
+  취소 및 부분취소 수수료"·"10. KFTC, INIBANK 환불서비스 수수료")는 같은
+  세 블록에 각각 `-10`·`-11`·`-12`를 단다. **`-9`가 소실되고 이후 전체가
+  1씩 밀렸다** — 한 문장의 오기재가 아니라 SP 꼬리 전체의 체계적 이동이다.
+  `AiService.cs:2117`(`[Error Codes]` 항목, "You MUST strictly reuse the
+  EXACT original error codes... DO NOT remap or invent new error codes")가
+  재매핑을 금지하지만 **프롬프트 수준 강제**라 지켜지지 않았다. **§3
+  불일치 침묵이 이를 못 막는다** — 그 문장 주변에 U-앵커가 없어서다(코퍼스
+  326개 단계 파일 중 U-앵커를 실제로 쓰는 파일은 직접 세어 **2개뿐**,
+  `POQSettleBatch1/S07.md`·`POQSettleProc10/S08.md`). 나머지 324개는 코드
+  앵커가 **유일한 신원 축**이라 대조할 상대가 없다. 결과는 거짓양성이
+  아니라 **거짓 귀속**: 문장 X를 행 Y와 대조해 엉뚱한 행의 술어 결측을
+  요구하고, 그 요구가 `SuggestedPromptFix → floorFeedback`을 타고 재생성
+  프롬프트에 실려 재시도를 소진한다.
+
+  **(4) 방어 후보 — 코드 집합 대조.** 단계의 코드 라벨 **집합**이 그 SP
+  표의 코드 **집합**과 어긋나면 그 단계에서 코드 축을 **통째로 끈다.**
+  관측된 사례가 `-9` 소실("표에는 있는데 단계에는 없다")이라 이 검사에
+  걸린다 — 밀림을 직접 보는 대신 **밀림의 원인(라벨 소실)**을 본다.
+  문장 단위가 아니라 집합 단위라 값싸다. 기존 「귀속할 수 없으면
+  침묵한다」 규약과 같은 결이다. **(2)의 SP 미스코프도 상당 부분 함께
+  좁아진다** — 집합이 어긋나는 SP는 애초에 코드 축이 꺼지므로
+  `MergeErrorCodeMaps`의 병합 결과가 잘못 쓰일 기회 자체가 준다.
+  *(코디네이터와 최종 리뷰어가 이 방어를 독립적으로 같은 결론으로
+  제안했다 — 다음 사람에게 신뢰도 신호가 된다.)*
+
+  **(5) 인상 전 재측정 항목.** 한 번에 닫으려면 함께 재라: 다중 레거시
+  SP 단계 수((2)의 노출량) · 남은 발화 103건(위 Task 11 표본 오탐률 85%
+  참고)의 오탐률 · 코드 집합이 어긋나는 SP 수.
+
+  근거: 위 Task 8·11 실측 + 이번 라운드 재확인(`CacheManager.cs`,
+  `output/.sp_cache_index.json`, `MechanicalValidator.cs`, `AiService.cs`,
+  `output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/raw/metadata.json`,
+  `output/Jobs/POQSettleProc19/agent/steps/S11.md` 직접 대조) — 최종
+  whole-branch 리뷰 I2·I3·재매핑 위험 통합.
 
 - **병합 전 코퍼스 스윕 게이트 실측(2026-08-24, Task 19) — Task 16 C1·C2·Task 17 C3·I1·Task 18 I2를 모두 적용한 뒤 재측정** —
   `output/Jobs/*/agent/steps/*.md`를 스크래치 하네스로 스윕했다. 하네스는

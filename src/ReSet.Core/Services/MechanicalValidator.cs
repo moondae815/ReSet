@@ -6471,8 +6471,11 @@ namespace ReSet.Core.Services
                 .Where(a => a.Ordinal.HasValue)
                 .ToList();
             // 앵커 부재(U-앵커·코드 앵커 둘 다 없음, 또는 둘이 불일치해 귀속할 수
-            // 없음)는 CheckAnchoredStatementFacts가 이미 1건으로 보고한다 - 여기서
-            // 중복 보고하지 않는다.
+            // 없음)는 CheckAnchoredStatementFacts도 같은 조건에서 아무것도
+            // 보고하지 않고 조용히 return한다(위 [현재 사실] 문단 참고) - "이미
+            // 1건으로 보고한다"가 아니라 "귀속할 수 없으면 침묵한다"는 이 저장소의
+            // 규약을 두 함수가 함께 따르는 것이다. 여기서 새로 보고를 시작할
+            // 이유가 없다.
             if (anchored.Count == 0) return;
 
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
