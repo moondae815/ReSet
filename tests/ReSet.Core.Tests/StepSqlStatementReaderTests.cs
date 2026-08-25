@@ -433,4 +433,83 @@ public sealed class StepSqlStatementReaderTests
 
         Assert.False(Assert.Single(statements).HasOpaqueJoinSource);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Task 5: 코드 앵커(음수 오류 코드 라벨) — ReadAnchor와 같은 구간에서
+    // 「구간에 정확히 하나」일 때만 읽는다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Read_CodeLabelBeforeUpdate_ShouldBeReadAsCodeAnchor()
+    {
+        const string step = @"```sql
+-- -13: 원천카드 수동매입 지급일 및 매입요청일
+SET @v_currentStepId = -13;
+UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Equal("-13", statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_TwoNegativeAssignmentsInInterval_ShouldStaySilent()
+    {
+        const string step = @"```sql
+SET @v_currentStepId = -12;
+SET @v_currentStepId = -13;
+UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Null(statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_NonNegativeAssignmentsInInterval_ShouldNotBeCandidates()
+    {
+        // 초기화 0과 @@ROWCOUNT 대입이 후보가 되면 「구간에 하나」가 절대
+        // 성립하지 않는다.
+        const string step = @"```sql
+DECLARE @v_currentStepId INT = 0;
+SET @v_cnt = @@ROWCOUNT;
+SET @v_currentStepId = -13;
+UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Equal("-13", statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_VariableNameIsNotFixed()
+    {
+        // 규약 6-1은 @v_currentStepId를 예시로 들 뿐 이름을 못 박지 않는다.
+        const string step = @"```sql
+SET @v_step = -7;
+UPDATE A SET A.X = 1 FROM dbo.T AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Equal("-7", statement.CodeAnchor);
+    }
+
+    [Fact]
+    public void Read_UAnchorAndCodeAnchorCanCoexist()
+    {
+        const string step = @"```sql
+/* U13: 카드사 원가 반영 */
+SET @v_currentStepId = -13;
+UPDATE A SET A.X = 1 FROM dbo.T AS A;
+```";
+
+        var statement = Assert.Single(StepSqlStatementReader.Read(step));
+
+        Assert.Equal(13, statement.Anchor);
+        Assert.Equal("-13", statement.CodeAnchor);
+    }
 }
