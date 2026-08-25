@@ -8275,5 +8275,267 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("4000"));
             Assert.DoesNotContain(result.Errors, e => e.Contains("성공 코드일 수도 있습니다"));
         }
+
+        // ── Task 5: 트랜잭션 경계 · 변수 대입 표의 전사 대조 ──────────────────
+
+        private static SpecExpectations TransactionExpectations() =>
+            SpecExpectations.From(new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                DdlText = @"CREATE PROCEDURE dbo.P AS
+BEGIN
+    BEGIN TRANSACTION
+    COMMIT TRANSACTION
+END"
+            })!;
+
+        [Fact]
+        public void Validate_TransactionBoundaryTableMissing_ShouldReport()
+        {
+            var markdown = WrapSpec("### SELECT 대상 테이블\n\n내용 없음\n");
+
+            var result = new MechanicalValidator().Validate(markdown, TransactionExpectations());
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing);
+        }
+
+        [Fact]
+        public void Validate_TransactionBoundaryRowsPresent_ShouldNotReport()
+        {
+            var markdown = WrapSpec(
+                "### SELECT 대상 테이블\n\n내용 없음\n\n"
+                + TransactionBoundaryExtractor.TableHeading + "\n\n"
+                + "| 라인 | 종류 | 이름 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 3 | BEGIN TRANSACTION | (없음) |\n"
+                + "| 4 | COMMIT TRANSACTION | (없음) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, TransactionExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing);
+        }
+
+        [Fact]
+        public void Validate_TransactionBoundaryRowMissing_ShouldReportThatRow()
+        {
+            var markdown = WrapSpec(
+                TransactionBoundaryExtractor.TableHeading + "\n\n"
+                + "| 라인 | 종류 | 이름 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 3 | BEGIN TRANSACTION | (없음) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, TransactionExpectations());
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing
+                     && e.Message.Contains("4"));
+        }
+
+        [Fact]
+        public void Validate_TransactionTableFollowedByAnotherTable_ShouldNotBleedIntoIt()
+        {
+            // 작성 계약 4: 표 경계는 빈 줄이고, `|`로 시작하지 않는 임의의 줄도 표를
+            // 끝낸다. 인접 표를 합치면 뒤 표 헤더가 앞 표 너비와 비교돼 거짓 오류가 난다
+            // (2026-08-22 실측: 코퍼스 31개 중 9개에 거짓 양성 10건).
+            var markdown = WrapSpec(
+                TransactionBoundaryExtractor.TableHeading + "\n\n"
+                + "| 라인 | 종류 | 이름 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 3 | BEGIN TRANSACTION | (없음) |\n"
+                + "| 4 | COMMIT TRANSACTION | (없음) |\n"
+                + "\n"
+                + "보조 설명 한 줄.\n"
+                + "\n"
+                + "| 다른 표 | 칸 |\n"
+                + "| :--- | :--- |\n"
+                + "| x | y |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, TransactionExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing);
+        }
+
+        [Fact]
+        public void Validate_IndentedTransactionHeading_ShouldStillBeFound()
+        {
+            // 작성 계약 5: 프롬프트는 헤딩을 3칸 들여써서 렌더한다. 모델이 그것을
+            // 보존하는 회차가 오면 접두사 비교가 실패해 검사가 조용히 죽는다.
+            var markdown = WrapSpec(
+                "   " + TransactionBoundaryExtractor.TableHeading + "\n\n"
+                + "| 라인 | 종류 | 이름 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 3 | BEGIN TRANSACTION | (없음) |\n"
+                + "| 4 | COMMIT TRANSACTION | (없음) |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, TransactionExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing);
+        }
+
+        [Fact]
+        public void Validate_NoTransactionMaterial_ShouldNotReportAnything()
+        {
+            // 작성 계약 1의 뒷면: null 체인을 넓혔으므로 이전에 L1을 안 받던 명세서가
+            // 이제 모든 검사를 받는다. 자기 재료가 비면 조용히 넘어가야 한다.
+            var expectations = SpecExpectations.From(new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "Q", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "Q",
+                DdlText = @"CREATE PROCEDURE dbo.Q AS
+BEGIN
+    DECLARE @v INT
+    SET @v = 1
+END"
+            });
+
+            var result = new MechanicalValidator().Validate(WrapSpec("내용\n"), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.TransactionBoundaryTableMissing);
+        }
+
+        private static SpecExpectations SetAssignmentExpectations() =>
+            SpecExpectations.From(new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "S", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "S",
+                DdlText = @"CREATE PROCEDURE dbo.S AS
+BEGIN
+    DECLARE @v INT
+    SET @v = 1
+    SET @v = @v + 1
+END"
+            })!;
+
+        [Fact]
+        public void Validate_SetAssignmentTableMissing_ShouldReport()
+        {
+            var markdown = WrapSpec("### SELECT 대상 테이블\n\n내용 없음\n");
+
+            var result = new MechanicalValidator().Validate(markdown, SetAssignmentExpectations());
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
+
+        [Fact]
+        public void Validate_SetAssignmentRowsPresent_ShouldNotReport()
+        {
+            var markdown = WrapSpec(
+                "### SELECT 대상 테이블\n\n내용 없음\n\n"
+                + SetAssignmentExtractor.TableHeading + "\n\n"
+                + "| 라인 | 변수 | 대입식 원문 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 4 | @v | 1 |\n"
+                + "| 5 | @v | @v + 1 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, SetAssignmentExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
+
+        [Fact]
+        public void Validate_SetAssignmentExpressionParaphrased_ShouldReportThatRow()
+        {
+            // 대입식을 말로 바꾸면 원문에서 찾을 수 없다. CheckCaseBranches가 조건
+            // 원문까지 대조하는 것과 같은 강도다.
+            var markdown = WrapSpec(
+                SetAssignmentExtractor.TableHeading + "\n\n"
+                + "| 라인 | 변수 | 대입식 원문 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 4 | @v | 1 |\n"
+                + "| 5 | @v | 1씩 증가시킵니다 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, SetAssignmentExpectations());
+
+            Assert.Contains(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing
+                     && e.Message.Contains("5"));
+        }
+
+        [Fact]
+        public void Validate_SetAssignmentTableFollowedByAnotherTable_ShouldNotBleedIntoIt()
+        {
+            // 작성 계약 4: 표 경계는 빈 줄이고 `|`로 시작하지 않는 임의의 줄도 표를
+            // 끝낸다. 2026-08-22 실측: 인접 표를 합쳐 코퍼스 31개 중 9개에 거짓 양성 10건.
+            var markdown = WrapSpec(
+                SetAssignmentExtractor.TableHeading + "\n\n"
+                + "| 라인 | 변수 | 대입식 원문 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 4 | @v | 1 |\n"
+                + "| 5 | @v | @v + 1 |\n"
+                + "\n"
+                + "보조 설명 한 줄.\n"
+                + "\n"
+                + "| 다른 표 | 칸 |\n"
+                + "| :--- | :--- |\n"
+                + "| x | y |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, SetAssignmentExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
+
+        [Fact]
+        public void Validate_IndentedSetAssignmentHeading_ShouldStillBeFound()
+        {
+            // 작성 계약 5: 프롬프트는 헤딩을 3칸 들여쓴다.
+            var markdown = WrapSpec(
+                "   " + SetAssignmentExtractor.TableHeading + "\n\n"
+                + "| 라인 | 변수 | 대입식 원문 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| 4 | @v | 1 |\n"
+                + "| 5 | @v | @v + 1 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, SetAssignmentExpectations());
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
+
+        [Fact]
+        public void Validate_NoSetAssignmentMaterial_ShouldNotReportAnything()
+        {
+            // 작성 계약 1의 뒷면: 체인을 넓혔으므로 이전에 L1을 안 받던 명세서가 이제
+            // 모든 검사를 받는다. 자기 재료가 비면 조용히 넘어가야 한다.
+            var expectations = SpecExpectations.From(new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "T", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "T",
+                DdlText = @"CREATE PROCEDURE dbo.T AS
+BEGIN
+    BEGIN TRANSACTION
+    COMMIT TRANSACTION
+END"
+            });
+
+            var result = new MechanicalValidator().Validate(WrapSpec("내용\n"), expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
     }
 }

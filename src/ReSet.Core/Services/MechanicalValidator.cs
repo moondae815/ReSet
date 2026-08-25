@@ -51,6 +51,12 @@ namespace ReSet.Core.Services
         // CASE 분기 표(기계 확정 - 조건·결과 원문)의 L1 앵커. 위와 같은 이유로 서수
         // 이동은 기능에 영향이 없다.
         CaseBranchTableMissing,
+        // 트랜잭션 경계 표(기계 확정 - 라인·종류·이름)의 L1 앵커. 위와 같은 이유로
+        // 서수 이동은 기능에 영향이 없다.
+        TransactionBoundaryTableMissing,
+        // 변수 대입 표(기계 확정 - 라인·변수·대입식 원문)의 L1 앵커. 위와 같은
+        // 이유로 서수 이동은 기능에 영향이 없다.
+        SetAssignmentTableMissing,
         // 기계 확정 표가 GFM 표로 렌더링되지 않는 형태로 옮겨졌을 때의 L1 앵커.
         // 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
         MachineTableShapeBroken,
@@ -176,6 +182,8 @@ namespace ReSet.Core.Services
                     CheckOrderByExpressions(cleansed, expectations, result);
                     CheckExecutionSemantics(cleansed, expectations, result);
                     CheckCaseBranches(cleansed, expectations, result);
+                    CheckTransactionBoundaries(cleansed, expectations, result);
+                    CheckSetAssignments(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -4452,6 +4460,167 @@ namespace ReSet.Core.Services
             catch (Exception ex)
             {
                 Log.Warning(ex, "[MechanicalValidator] CASE 분기 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 트랜잭션 경계 표의 전사를 대조한다.
+        ///
+        /// 행 키는 (라인, 종류) 둘이다. 이름까지 넣지 않는 이유는 이름 없는 경계가
+        /// 코퍼스의 압도적 다수라 그 칸이 전부 `(없음)`으로 같고, 한 줄에 두 경계가
+        /// 함께 오는 T-SQL 문법이 없어 (라인, 종류)만으로 행이 이미 특정되기
+        /// 때문이다 - 키를 넓히면 대조가 엄해지는 것이 아니라 이름 표기의 사소한
+        /// 흔들림에 거짓 양성만 는다.
+        ///
+        /// [자기 try/catch를 두는 이유] CheckCaseBranches와 같다 - Validate의
+        /// catch-all은 검사 하나가 던지면 Errors를 통째로 지우고 IsValid = true로
+        /// 통과시킨다. 이 catch는 메서드 전체 입도이므로(형제 검사들의 관례) 한
+        /// 행에서 던지면 나머지 행도 대조되지 않는다.
+        /// </summary>
+        private static void CheckTransactionBoundaries(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.TransactionBoundaries.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, TransactionBoundaryExtractor.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 트랜잭션 경계 표가 명세서에 없습니다. "
+                        + $"`{TransactionBoundaryExtractor.TableHeading}` 헤딩과 "
+                        + $"{expectations.TransactionBoundaries.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.TransactionBoundaryTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.TransactionBoundaries)
+                {
+                    var lineToken = fact.Line.ToString();
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == lineToken) && cells.Any(c => c == fact.Kind);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"트랜잭션 경계 표에 라인 {fact.Line}의 `{fact.Kind}` 행이 없습니다. "
+                        + "배치 구현이 재현해야 할 경계이므로 산문으로 대신하거나 행을 합치면 안 됩니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.TransactionBoundaryTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Kind} @ line {fact.Line}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // 작성 계약 6: Validate의 catch-all은 Errors를 통째로 지우고 소프트
+                // 패스시킨다. 가드가 없으면 이 검사의 예외가 기존 검사 전부의 판정을
+                // 삼킨다.
+                Log.Warning(ex, "[MechanicalValidator] 트랜잭션 경계 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 변수 대입 표의 전사를 대조한다.
+        ///
+        /// 행 키는 (라인, 변수, 대입식 원문) 셋이다 - CheckCaseBranches가 조건 원문까지
+        /// 대조하는 것과 같은 강도다. 대입식을 말로 바꾸면("1씩 증가시킵니다") 원문에서
+        /// 찾을 수 없고, 그것이 이 표가 막으려는 바로 그 변형이다. 한 줄에 같은 변수의
+        /// 대입이 둘 올 수 없으므로 이 셋이면 행이 특정된다.
+        ///
+        /// [셀 값이 렌더된 뒤에도 같은 이유] AiService는 이 값을 MarkdownTableCellCodec
+        /// .Escape로 렌더하고(개행 접기 + `|` 이스케이프), SplitTableRowCells는 같은
+        /// 코덱의 SplitRow로 되돌린다. 추출기가 이미 CollapseNewlines를 거친 값을 담으므로
+        /// 왕복이 성립한다 - 그 규칙이 갈리면 개행이 든 대입식은 어떤 산출물도 만족시킬
+        /// 수 없는 요구가 된다.
+        /// </summary>
+        private static void CheckSetAssignments(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.SetAssignments.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, SetAssignmentExtractor.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 변수 대입 표가 명세서에 없습니다. "
+                        + $"`{SetAssignmentExtractor.TableHeading}` 헤딩과 "
+                        + $"{expectations.SetAssignments.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.SetAssignmentTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.SetAssignments)
+                {
+                    var lineToken = fact.Line.ToString();
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == lineToken)
+                            && cells.Any(c => c == fact.Variable)
+                            && cells.Any(c => c == fact.Expression);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"변수 대입 표에 라인 {fact.Line}의 `{fact.Variable}` 행이 없거나 대입식 "
+                        + $"원문이 다릅니다. `{fact.Expression}`을 그대로 옮겨야 합니다 - 대입식을 "
+                        + "말로 바꾸거나 요약하면 원문에서 찾을 수 없습니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.SetAssignmentTableMissing,
+                        Message = message,
+                        RawContext = $"{fact.Variable} @ line {fact.Line}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // 작성 계약 6: 위 CheckTransactionBoundaries와 같은 이유다.
+                Log.Warning(ex, "[MechanicalValidator] 변수 대입 표 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 
