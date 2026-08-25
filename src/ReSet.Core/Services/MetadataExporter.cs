@@ -68,11 +68,22 @@ namespace ReSet.Core.Services
 
                 var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
                 var promptContext = rawPromptContext ?? definition.RawPromptContext ?? string.Empty;
-                await File.WriteAllTextAsync(
-                    Path.Combine(rawDirectory, "prompt-context.md"),
-                    promptContext,
-                    Encoding.UTF8,
-                    cancellationToken);
+                var promptContextPath = Path.Combine(rawDirectory, "prompt-context.md");
+
+                // 캐시 히트 회차는 RawPromptContext가 비어 있다 - 파이프라인이 AI를
+                // 호출한 회차에만 그 값을 채우기 때문이다. 그 빈 값으로 덮으면 앞선
+                // 회차가 실제로 모델에 보낸 원문이 사라져, "결과가 이상할 때 입력부터
+                // 확인하라"는 이 파일의 존재 이유가 없어진다. 남길 것이 없으면 이미
+                // 있는 기록을 지키고, 파일이 아예 없을 때만 빈 파일을 만든다 -
+                // "파일 없음"과 "프롬프트 없음"은 산출물만 보고 구분되어야 한다.
+                if (promptContext.Length > 0 || !File.Exists(promptContextPath))
+                {
+                    await File.WriteAllTextAsync(
+                        promptContextPath,
+                        promptContext,
+                        Encoding.UTF8,
+                        cancellationToken);
+                }
 
                 if (artifactMode == DependencyArtifactMode.PortableBundle)
                 {
