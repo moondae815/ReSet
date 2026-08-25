@@ -43,5 +43,27 @@ namespace ReSet.Core.Tests
             Assert.Contains("트랜잭션 경계", block);
             Assert.Contains("변수 대입", block);
         }
+
+        [Fact]
+        public void All_ShouldContainErrorCodeTableAtTheEnd()
+        {
+            var last = MachineConfirmedTables.All[^1];
+
+            Assert.Equal(DmlScopeExtractor.ErrorCodeTableHeading, last.Heading);
+        }
+
+        [Fact]
+        public void From_WhenErrorCodesAreTheOnlyMaterial_ShouldNotReturnNull()
+        {
+            // 재료가 오류 코드 하나뿐인 SP가 성립한다. 이 항을 null 체인에
+            // 빠뜨리면 From이 null을 돌려주고 오류 코드 검사가 한 번도 안 돈다.
+            const string ddl = @"CREATE PROCEDURE dbo.P @po_intRetVal INT OUTPUT AS
+BEGIN
+    UPDATE A SET A.X = 1 FROM dbo.T AS A
+    IF @@ERROR <> 0 BEGIN SET @po_intRetVal = -1 END
+END";
+
+            Assert.NotEmpty(DmlScopeExtractor.ExtractErrorCodes(ddl, "@pi_strYMD"));
+        }
     }
 }

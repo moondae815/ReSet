@@ -1309,6 +1309,31 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 「오류 코드」 표를 렌더한다. 코드 리터럴을 원문 그대로 싣는다 - 연속 범위로
+        /// 접으면(`-1~-23`) 규약 9가 금지하는 바로 그 형태가 되고 갱신 번호와의 대응이
+        /// 사라진다.
+        /// </summary>
+        private static List<string> BuildErrorCodeTableLines(
+            IReadOnlyList<ErrorCodeFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL ERROR CODE TABLE] The following statement-to-error-code pairs are MACHINE-DERIVED from the source DDL. Copy this table verbatim under the exact heading shown. Never merge rows into ranges and never renumber - the pairing is the contract.",
+                $"   {DmlScopeExtractor.ErrorCodeTableHeading}",
+                "   | 문장 | 오류 코드 | 설정 대상 |",
+                "   | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add($"   | {fact.Operation} {fact.StatementOrdinal} | {EscapeTableCell(fact.Code)} | {EscapeTableCell(fact.Variable)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 한 사실 종류(실행 의미 · CASE 분기)를 한 갈래의 프롬프트에 어떻게 실을지 -
         /// Task 17, 최종 브랜치 리뷰 2차(Important). 이전에는 bool 두 개
         /// (crudAnalysisSectionPresent · logicFlowSectionPresent)로 "표냐 참고
@@ -1425,6 +1450,16 @@ Based on the structured reference context above, reverse engineer the stored pro
                 if (setAssignments.Count > 0)
                 {
                     lines.AddRange(BuildSetAssignmentTableLines(setAssignments));
+                }
+
+                // SpecExpectations.From()의 errorCodes와 같은 규칙(SpecExpectations.ResolveDateParameter)
+                // 으로 기준일 파라미터를 고른다 - 두 곳이 갈리면 모델이 표를 그대로 베껴도
+                // L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
+                var errorCodeDateParameter = SpecExpectations.ResolveDateParameter(spDef.StaticAnalysis);
+                var errorCodes = DmlScopeExtractor.ExtractErrorCodes(spDef.DdlText, errorCodeDateParameter);
+                if (errorCodes.Count > 0)
+                {
+                    lines.AddRange(BuildErrorCodeTableLines(errorCodes));
                 }
             }
 
