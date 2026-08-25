@@ -8145,7 +8145,29 @@ END";
             // U-앵커는 4를 가리키는데 코드 앵커(-13)는 명세서에서 9로 환산된다.
             // `-9` 주석은 목차 ErrorCodes 전사 대조를 만족시키기 위한 것(위 2행
             // 테스트와 같은 이유)이다.
-            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+            //
+            // [픽스 라운드 1 - U-앵커가 가리키는 갱신 4 행도 명세서에 함께 둔다]
+            // 이 행이 없으면 "U-앵커 우선"으로 잘못 뮤테이션해도(불일치 시
+            // statement.Anchor를 그대로 반환) 갱신 4로 매칭되는 명세서 행이
+            // 없어 candidates.Count != 1로 우연히 침묵한다 - 그러면 이 테스트는
+            // "불일치 시 침묵" 규칙이 아니라 하위 매칭 가드 덕에 통과해 뮤테이션을
+            // 못 잡는다. 갱신 4 행(ZZZ 요구)을 함께 둬서, U-앵커가 잘못 채택되면
+            // 실제로 갱신 4와 대조돼 ZZZ 결측 오류가 나도록 만든다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 4, 40, "TSettleMst",
+                            new[] { "ZZZ" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
 
             var markdown = "### S11 단계\n\n```sql\n" +
                 "-- 원본 오류코드 -9\n" +
@@ -8158,7 +8180,12 @@ END";
                 markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
-            Assert.Empty(result.Errors);
+            // 갱신 4(ZZZ)·갱신 9(YMD) 어느 쪽으로도 대조돼서는 안 된다 - 문장이
+            // 후보에서 완전히 빠져야 한다. 문장 개수 대조(검사 A)는 이 픽스처가
+            // 명세서 행 2개 대 마크다운 문장 1개로 어긋나 별도로 발화할 수 있으나
+            // (이 테스트가 보는 것과 무관), 그 메시지는 컬럼 이름을 담지 않는다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ZZZ"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
         }
 
         [Fact]
@@ -8184,7 +8211,30 @@ END";
             // 환산 시 Kind도 대조해야 한다 - 코드 사전이 ("UPDATE", 9)를 주는데
             // 문장이 DELETE면 매칭이 아니다. U-앵커도 없으므로 결과는 판정표
             // 5행("둘 다 없음")과 같아야 한다.
-            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+            //
+            // [픽스 라운드 1 - 같은 Ordinal에 다른 Kind 행을 함께 둔다]
+            // 명세서에 UPDATE 9만 있으면 ResolveOrdinal 내부의 Kind 가드를
+            // 지워도(문장이 DELETE인데 코드 사전의 UPDATE 9를 그대로 채택) 하위
+            // 그룹핑(`r.Kind.Equals(group.Key.Kind, …)`)이 DELETE 9 행을 못 찾아
+            // 우연히 침묵한다 - 그러면 이 테스트는 ResolveOrdinal의 Kind 가드가
+            // 아니라 하위 매칭 가드 덕에 통과해 뮤테이션을 못 잡는다. DELETE 9
+            // 행(ZZZ 요구)을 함께 둬서, Kind를 안 가리면 실제로 DELETE 9와
+            // 대조돼 ZZZ 결측 오류가 나도록 만든다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("DELETE", 9, 91, "TSettleMst",
+                            new[] { "ZZZ" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
 
             var markdown = "### S11 단계\n\n```sql\n" +
                 "SET @v_currentStepId = -13;\n" +
@@ -8195,6 +8245,7 @@ END";
                 markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ZZZ"));
             Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
         }
 
@@ -8223,7 +8274,28 @@ END";
         public void ValidateBatchStep_CheckC_ConflictingAnchors_StaysSilent()
         {
             // 검사 C도 두 축이 불일치하면 침묵해야 한다.
-            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+            //
+            // [픽스 라운드 1 - U-앵커가 가리키는 갱신 4 행도 함께 둔다]
+            // 위 검사 B의 같은 이유(ValidateBatchStep_CheckB_ConflictingAnchors_
+            // StaysSilent 참고) - 갱신 4 행이 없으면 "U-앵커 우선" 뮤테이션이
+            // candidates.Count != 1로 우연히 침묵해 이 테스트가 그 뮤테이션을
+            // 못 잡는다. 갱신 4 행은 TxAmt를 인정하지 않으므로, U-앵커가 잘못
+            // 채택되면 실제로 갱신 4와 대조돼 "명세서에 없는" TxAmt 오류가 난다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 4, 40, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
 
             var markdown = "### S11 단계\n\n```sql\n" +
                 "/* U4: 앵커는 4를 가리키는데 */\n" +
