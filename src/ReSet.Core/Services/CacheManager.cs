@@ -157,7 +157,21 @@ namespace ReSet.Core.Services
         //     TSettlePeriodMst.YMD), 추가 0. 그 결과가 프롬프트의 스키마 표·SELECT 대상 표 재료다.
         //     두 변경 모두 기존 객체의 프롬프트 바이트를 바꾸므로(문장이 빠지거나 컬럼이 빠짐)
         //     "영향 객체 0" 예외가 성립하지 않아 올린다. (main 대조: 인상 직전 main 값 14.)
-        private const int CurrentCacheFormatVersion = 15;
+        // 16: 2026-08-25 기계 확정 표 확장 - 「트랜잭션 경계」·「변수 대입」 두 표가
+        //     새로 생겼다. 프롬프트 입력(BuildMachineFactBlockLines가 싣는 표 뼈대 둘)과
+        //     출력 계약(명세서가 그 표 둘을 담아야 한다)이 **함께** 바뀌었으므로 인상
+        //     대상이다 - Critic만 느슨해지는 변경도, 영향 객체 0인 조건부 블록도 아니다.
+        //     두 표는 모든 SP·함수에 무조건 실리므로 기존 31개 객체의 프롬프트 바이트가
+        //     전부 달라진다. 안 올리면 재생성이 캐시 적중으로 건너뛰어져 검증 자체가
+        //     일어나지 않고, 표 둘이 없는 옛 산출물이 다음 감사에서 그대로 결함이 된다.
+        //     L1도 함께 조였다(CheckTransactionBoundaries·CheckSetAssignments) - 캐시
+        //     히트 산출물에는 L1이 영영 안 돌므로 이 인상이 그 검사들이 처음 도는 자리다.
+        //     캐시 인상 **전에** 코퍼스 전수 스윕을 돌려 거짓 양성 0을 확인했다(31쌍,
+        //     다른 검사 카운트 BASE와 동일). 오탐을 안은 채 전건 재생성을 걸면 그것이
+        //     곧바로 재시도 소진으로 번지기 때문이다.
+        //     (main 대조: 인상 직전 main 값 15. 다른 브랜치도 15 이하라 16이 비어 있음을
+        //     확인했다 - reset-l1-check 스킬의 번호 충돌 규칙.)
+        private const int CurrentCacheFormatVersion = 16;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
