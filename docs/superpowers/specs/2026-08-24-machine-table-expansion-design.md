@@ -286,13 +286,54 @@ SET 표에서 3건을 빼면 표가 "전수"가 아니게 되고, 다음 사람�
 **프롬프트가 길어진다.** 코퍼스 기준 205행이 늘어 객체당 평균 약 15행이다. 토큰 비용은 늘지만
 `SchemaPromptColumnSelector`가 절약하는 규모에 비하면 작다.
 
+## 코퍼스 전수 스윕 실측 (2026-08-25, Task 6)
+
+BASE는 `axis-b-step-check`(`6bc3641`), NEW는 Task 5 커밋(`889958e`)이다. 계획서는 BASE를
+"Task 1 직전 SHA"(`fa2bf9d`)로 적었지만 그 뒤 이 브랜치가 축 B를 병합해 `MechanicalValidator`가
+따로 바뀌었다 — 그 SHA를 쓰면 축 B의 검증기 수정이 차분에 섞여 "옆 검사에 번졌는가"를 읽을 수
+없다. 그래서 **축 B 병합분은 같고 확장분만 다른** 지점을 BASE로 잡았다.
+
+세대 왜곡 없음: `output/.sp_cache_index.json` 분포 `{15: 31}` · 브랜치 코드 15 · main 15.
+
+```
+코퍼스 31쌍 · 로드 실패 0 · null expectations BASE 0 → NEW 0
+  TransactionBoundaryTableMissing: 12건 (전부 "표 부재", 행 어긋남 0)
+    UP_Util_PG_Client_CMRate_Ins · UP_UTIL_SETTLE_CANCEL_INS · UP_UTIL_SETTLE_COMM_UPD
+    UP_UTIL_SETTLE_EXCEPTION_PROC · UP_UTIL_SETTLE_EXPECT_PROC · UP_UTIL_SETTLE_INS
+    UP_UTIL_SETTLE_INS_EXTRA · UP_UTIL_SETTLE_INS_EXTRA4PLCARD · UP_UTIL_SETTLE_PROC_ETC
+    UP_Util_Settle_Summary · UP_UTIL_SETTLE_SUMMARY_ETC · UP_UTIL_STAT_PGCOLLECT_INS
+  SetAssignmentTableMissing:       27건 (전부 "표 부재", 행 어긋남 0)
+    위 12개 중 11개(SUMMARY_EXTRA·Summary_AcqManual 추가, PGCOLLECT 포함) + UF_* 함수 13개
+  다른 검사 카운트: BASE와 동일 — DmlScopeTableMissing 1건(UP_UTIL_SETTLE_COMM_UPD,
+                   축 B가 이미 알고 있는 술어 컬럼 칸 결함)이 BASE·NEW 양쪽에 똑같이 있다
+```
+
+**거짓 양성 0.** 39건 전부 `기계 확정 … 표가 명세서에 없습니다` 한 종류이고, 코퍼스의
+`Spec.md`는 이 표들이 생기기 전 프롬프트로 만들어진 것이라 실제로 그 표가 없다 — §3이 예고한
+전이 상태의 실물 관측이지 오탐이 아니다. **행 어긋남(전사 불일치) 유형은 0건**이므로 대조
+로직이 정상 산출물을 결함으로 지목한 사례는 하나도 없다.
+
+`null expectations`는 BASE에서 이미 0이라 체인 확장의 효과가 이 코퍼스에서는 관측되지
+않는다 — 31개 객체 전부가 다른 재료를 이미 갖고 있다. 체인 항이 일하는 것은
+`SpecExpectationsTransactionAndSetTests`의 재료 하나짜리 픽스처가 대신 잠근다.
+
 ## 미확정 사항 — 구현 첫 단계에서 확인한다
 
-1. **실제 건수가 백로그 예측과 맞는가.** 트랜잭션 105 · SET 97은 커버리지 맵의 **문장 유형 집계**에서
-   나온 수다. 추출기가 실제로 내는 **행 수**는 다를 수 있다(한 문장이 한 행이므로 같아야 하지만,
-   `SAVE TRAN` 0건 가정과 파스 경계에서 어긋날 여지가 있다).
-2. **`Expression` 원문에 파이프·개행이 든 사례가 실물에 있는가.** 있으면 셀 이스케이프 왕복이
-   실전에서 검증된다. 없으면 합성 픽스처가 유일한 근거이므로 그 사실을 적는다.
+1. ~~**실제 건수가 백로그 예측과 맞는가.**~~ **확인됨(2026-08-25).** SP 코퍼스 14개 실측:
+   **트랜잭션 105 · SET 103**(`MachineTableExpansionCorpusTests` 출력). 트랜잭션은 예측 105와
+   **정확히 일치**한다(`SAVE TRANSACTION` 0건 가정도 맞았다). SET은 예측 97과 **6 차이**인데
+   추출기의 오동작이 아니다 — 상류 백로그의 `SetVariableStatement` 「건수」 칸이 잎 103에서 3을
+   빼 100을 적고, 같은 칸 서술이 거기서 3을 **한 번 더** 빼 97을 적었다(뺄셈 중복). 잎 103 ·
+   🟥 100 · 합계 205라는 분해는 `CoverageMapGoldenTests.TransitionWindowSpecMissing`의 주석에
+   이미 실측으로 적혀 있고, 이번 스윕이 그 103을 독립적으로 재확인했다. **숫자를 맞추려고
+   추출기를 조정하지 않았다.**
+   함수까지 포함한 전 코퍼스(31쌍) 기준으로는 트랜잭션 105 · **SET 141**이다(함수 13개가 38행).
+   커버리지 맵의 205는 14개 SP만 보므로 이 141과 직접 비교할 값이 아니다.
+2. ~~**`Expression` 원문에 파이프·개행이 든 사례가 실물에 있는가.**~~ **확인됨(2026-08-25):
+   실물 0건.** 따라서 셀 이스케이프 왕복(`MarkdownTableCellCodec.Escape`↔`SplitRow`)은
+   **합성 픽스처가 유일한 근거**로 남는다 — `SetAssignmentExtractorTests`의 파이프·개행
+   픽스처가 그 자리를 지킨다. 실물에 그런 대입식이 처음 들어오는 회차가 이 왕복의 첫 실전
+   시험이다.
 3. **L1 완전일치가 실물 재생성에서 통과하는가.** 이 회차에서는 재생성을 안 돌리므로 **확인되지
    않은 채 남는다.** 재생성 회차의 첫 관측 대상이다.
 
