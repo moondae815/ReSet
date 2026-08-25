@@ -8036,6 +8036,209 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B·C 태스크 6 - 두 신원 축(U-앵커·코드 앵커)을 합쳐 문장을
+        // 귀속시킨다. 판정표(계획서 Task 6·설계 §3):
+        //
+        //   U-앵커 | 코드 앵커 | 판정
+        //   있음   | 없음      | U-앵커 사용(기존 동작 보존)
+        //   없음   | 있음      | 코드 앵커를 환산해 사용
+        //   있음   | 있음·일치 | 사용
+        //   있음   | 있음·불일치 | 침묵(그 문장을 후보에서 뺀다)
+        //   없음   | 없음      | 후보 아님(기존 동작)
+        //
+        // 코드 앵커는 SET @<변수> = <음수 정수 리터럴>; 하나가 구간(직전 문장의
+        // 끝 ~ 이 문장의 시작)에 정확히 하나일 때만 읽힌다
+        // (StepSqlStatementReader.ReadCodeAnchor). 환산은 SpecStatementFacts.
+        // ErrorCodeToOrdinal(원문 코드 → (Kind, Ordinal))로 하고, Kind도
+        // 함께 대조해야 한다(코드 사전이 ("UPDATE", 9)를 주는데 문장이
+        // DELETE면 매칭이 아니다).
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithCode(
+            int ordinal, IReadOnlyList<string> predicateColumns, string? code)
+        {
+            var facts = new SpecStatementFacts(
+                new[]
+                {
+                    new SpecDmlRow("UPDATE", ordinal, ordinal * 10, "TSettleMst",
+                        predicateColumns, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                },
+                Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>());
+
+            if (code != null)
+            {
+                facts = facts with
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { [code] = ("UPDATE", ordinal) }
+                };
+            }
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
+            };
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_UAnchorOnly_UsesUAnchor()
+        {
+            // 판정표 1행: U-앵커 있음·코드 앵커 없음 → U-앵커 사용(기존 동작 보존).
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorOnly_ResolvesOrdinalAndCompares()
+        {
+            // 판정표 2행: U-앵커 없음·코드 앵커 있음 → 코드 앵커를 환산해 사용.
+            // `-- 원본 오류코드 -9` 주석은 LegacyStep의 목차 ErrorCodes(-9) 전사
+            // 대조(검사 A와 무관한 별개 검사)를 만족시키기 위한 것으로, 주석이라
+            // ReadCodeAnchor·ReadAnchor 둘 다 실코드로 보지 않는다.
+            var facts = FactsWithCode(9, new[] { "YMD", "UseState" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 9") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_BothAnchorsAgree_UsesResolvedOrdinal()
+        {
+            // 판정표 3행: 둘 다 있고 일치 → 사용.
+            var facts = FactsWithCode(13, new[] { "YMD", "PGNAME" }, code: "-13");
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U13: 카드사 원가 반영 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD") && e.Contains("PGNAME"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_ConflictingAnchors_StaysSilent()
+        {
+            // 판정표 4행: 둘 다 있고 불일치 → 침묵(그 문장을 후보에서 뺀다).
+            // U-앵커는 4를 가리키는데 코드 앵커(-13)는 명세서에서 9로 환산된다.
+            // `-9` 주석은 목차 ErrorCodes 전사 대조를 만족시키기 위한 것(위 2행
+            // 테스트와 같은 이유)이다.
+            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "/* U4: 앵커는 4를 가리키는데 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Empty(result.Errors);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_NoAnchors_StaysSilent()
+        {
+            // 판정표 5행: 둘 다 없음 → 후보 아님(기존 동작).
+            var facts = FactsWithCode(1, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorKindMismatch_IsIgnored()
+        {
+            // 환산 시 Kind도 대조해야 한다 - 코드 사전이 ("UPDATE", 9)를 주는데
+            // 문장이 DELETE면 매칭이 아니다. U-앵커도 없으므로 결과는 판정표
+            // 5행("둘 다 없음")과 같아야 한다.
+            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "DELETE FROM dbo.TSettleMst WHERE PLTID = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_CodeAnchorOnly_ResolvesOrdinalAndCompares()
+        {
+            // 검사 C도 같은 환산을 받는다 - U-앵커 없이 코드 앵커만으로 명세서에
+            // 없는 최상위 술어 컬럼(TxAmt)을 잡아야 한다. `-9` 주석은 목차
+            // ErrorCodes 전사 대조를 만족시키기 위한 것이다.
+            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p AND A.TxAmt = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("TxAmt") && e.Contains("명세서에 없는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_ConflictingAnchors_StaysSilent()
+        {
+            // 검사 C도 두 축이 불일치하면 침묵해야 한다.
+            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "/* U4: 앵커는 4를 가리키는데 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A WHERE A.TxAmt = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 검사 D - 지역 변수 선언. S14 🔴: 지역 변수 9개가 DECLARE 없이 쓰였고
         // 그중 금액 3종이 원본 MONEY인데 변수명은 int를 시사한다.
         // ─────────────────────────────────────────────────────────────────────
