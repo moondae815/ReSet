@@ -27,6 +27,7 @@
 | 프롬프트 캐시·중단점·토큰 비용 | `architecture.md §4.13` + 범주 2 |
 | 지시서 번들·회차 단위 코드 생성 | `architecture.md §4.11` + 범주 6 |
 | 단계 하한 검사·목차 보강 재료 | `architecture.md §4.12` + 범주 4 |
+| 커버리지 맵·문장 단위 대조 판정 | `architecture.md §5.7` + 범주 4 |
 | 정적 분석·SQL 객체 타입 판정 | `architecture.md §4.3` + `TypeClassificationPolicyTests` |
 | 재귀 의존성 수집·Soft Fail | `architecture.md §4.1` + 범주 2 |
 | AI 공급자 추가·CLI 제공자 | `architecture.md §4.5` + 범주 4 |
@@ -89,7 +90,7 @@
     *   Actor·Critic·Consolidator 중 하나라도 CLI provider면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 차단합니다. `AiSettings:AllowCliProviderInBatch` 옵트인은 claude/codex만 열며 `agy-cli`는 항상 차단합니다(`CliProviderBatchGuardTests`).
     *   파서·검증기가 강제하는 상한·형식과 필수 필드(`ErrorCodes`, `MaxSteps` 상한 40, `LegacyProcedures` 등)는 프롬프트에도 명시하십시오. JSON 예시에만 등장하는 필드는 선택 사항으로 오해됩니다.
     *   Critic 프롬프트에도 분석과 같은 테이블 스키마·UDF DDL·AST 메타데이터와 대상 SP DDL을 포함하십시오([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs)).
-    *   Critic 프롬프트의 기계 확정 표 면제 블록은 [MachineConfirmedTables.cs](./src/ReSet.Core/Services/MachineConfirmedTables.cs)에서 조립해 SP·함수 두 갈래에 싣습니다. DDL 축자 전사 표만 원문 대조 대상이고 「실행 의미」 행은 보고에서 제외하며, 표를 뒤집는 산문은 결함입니다. 새 표는 카탈로그 등록이 강제됩니다(`MachineConfirmedTablesTests`).
+    *   Critic 프롬프트의 기계 확정 표 면제 블록은 [MachineConfirmedTables.cs](./src/ReSet.Core/Services/MachineConfirmedTables.cs)에서 조립해 SP·함수 두 갈래에 싣습니다. DDL 축자 전사 표만 원문 대조 대상이고 「실행 의미」 행은 보고에서 제외하며, 표를 뒤집는 산문은 결함입니다. 새 표는 카탈로그 등록이 강제됩니다(`MachineConfirmedTablesTests`). 등록했으면 `CurrentCacheFormatVersion`도 올리십시오 — 빠뜨리면 재생성이 캐시 적중으로 건너뜁니다(`architecture.md §4.8`).
     *   `AnalysisSettings:AnalyzeReferencedCodeObjects` 사용 시 SP/UDF마다 동일 L1/L2/L3와 캐시를 적용하되 외부 DB 테이블·뷰 상세와 링크드 서버는 제외하십시오(`architecture.md §4.1.1`).
     *   시스템 프롬프트는 영어를 원칙으로 하고 최종 출력·체크리스트 동작 지시에만 한국어 출력 조건과 영어 매칭 트리거를 사용하십시오. 메타데이터 밖 컬럼, DDL 밖 오류 상수, UNION/JOIN·오류 분기 축약을 금지하는 Anti-Shortcut 규칙을 유지하십시오.
     *   `GenerateBySplitAsync`의 첫 단계 캐시 워밍을 유지하고, 예외 재시도에만 지연을 적용하십시오(`RunConsolidatedPipeline_WarmsCacheBeforeFanningOut`, `RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter`).
@@ -207,4 +208,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: 8875e9f -->
+<!-- synced-through: b1da22e -->
