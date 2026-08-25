@@ -743,9 +743,11 @@
   근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 22.
 
 - **검사 B·C 조건 (B) 잔여 108건 표본 20건 판정 — 부분 실측(2026-08-25, Task 11).**
-  **미완 고지 — 이 항목은 부분 실측이다.** 표본 20건 중 **검사 B 10건은 원본 DDL·
-  Spec.md 대조까지 전부 끝냈다**(진짜 2 · 거짓양성 8). **검사 C 표본 10건은 전부
-  미검증**이다(좌표·진단값만, "판정불가 — 미검증"). 다음 회차가 검사 C 표본부터
+  **미완 고지 — 이 항목은 부분 실측이다.** 표본 20건 중 **검사 B 10건은 원본
+  DDL·Spec.md 대조까지 전부 끝냈다**(진짜 2 · 거짓양성 8). **검사 C 표본 10건
+  중 `HasOpaqueJoinSource=True` 3건(#14·#17·#20)도 대조를 끝냈다**(전부
+  거짓양성). **나머지 검사 C 7건(#11-13·#15-16·#18-19, 전부 opaque=False)은
+  미검증**이다(좌표·진단값만, "판정불가 — 미검증"). 다음 회차가 이 7건부터
   이어받으면 하네스·표본 선정 비용 없이 바로 판정에 들어갈 수 있다.
 
   **발화량 실측(조건 B, 326개 전수)** — 검사 B **70건** · 검사 C **38건**(기대치 70·38과
@@ -791,24 +793,34 @@
   | 11 | C | POQSettleBatch1/S09 | UPDATE 2 | USESTATE 초과 | False | `[ProcYMD,YMD,PGNAME,CompanySalesType,TxAmt,ExtraSettleFlag,OutState,OutYMD,USESTATE]` | **판정불가 — 미검증** |
   | 12 | C | POQSettleBatch1/S10 | UPDATE 2 | UseState 초과 | False | `[ProcYMD,YMD,CompanySalesType,UseState,TxAmt,ExtraSettleFlag]`(Join에 PGName,ExtraType) | **판정불가 — 미검증** |
   | 13 | C | POQSettlePrco20/S06 | UPDATE 12 | PGName 초과 | False | `[YMD,PGName,UseState,AYMD,DiscountFlag,ExtraSettleFlag]` | **판정불가 — 미검증** |
-  | 14 | C | POQSettleProc11/S06 | UPDATE 13 | UseState,AYMD 초과 | **True**(#3과 동일 문장) | `[YMD,PGName,UseState,AYMD]` | **판정불가 — 미검증**(단 #3과 같은 CROSS APPLY 문장이므로 같은 원인일 가능성이 높다 — 다음 회차가 먼저 볼 자리) |
+  | 14 | C | POQSettleProc11/S06 | UPDATE 13 | UseState,AYMD 초과 | **True**(#3과 동일 문장) | `[YMD,PGName,UseState,AYMD]` | **거짓양성(확인)** — #3과 같은 문장. UseState·AYMD는 원본 Spec.md의 "파생 테이블 X" 스코프 술어(`(A.UseState<>1 OR (A.UseState=1 AND A.YMD=A.AYMD))`, 321-327행)였는데, CROSS APPLY로 자기조인이 사라지며 대상에 직접 걸리는 최상위 WHERE로 옮겨왔다. 명세서의 "최상위" 술어 컬럼 칸(PLTID,ID,YMD,PGNAME)은 원본 구조를 반영할 뿐 이행 구조의 재배치를 못 따라간다 |
   | 15 | C | POQSettleProc11/S06 | UPDATE 18 | YMD,OutState 초과 | False | `[YMD,UseState,OutState]` | **판정불가 — 미검증** |
   | 16 | C | POQSettleProc12/S07 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,ExtraSettleFlag,OrgDiscountAmt,PGName]` | **판정불가 — 미검증** |
-  | 17 | C | POQSettleProc17/S08 | UPDATE 7 | UseState 초과 | **True** | `[PGName,UseState]` | **판정불가 — 미검증**(코드 -8, #4·#7·#9와 같은 CTE 계열 문장 — CTE 사각지대가 검사 C에도 미치는지 볼 후보) |
+  | 17 | C | POQSettleProc17/S08 | UPDATE 7 | UseState 초과 | **True** | `[PGName,UseState]` | **거짓양성(확인)** — 레거시 `UP_UTIL_SETTLE_COMM_UPD` UPDATE 7. 원본은 UseState IN(2) 필터를 "파생 테이블 D" 스코프에 둔다(Spec.md 344행). 이 잡의 이행 SQL은 CTE `K` 안에 UseState 필터를 두지 않는 대신 최상위 `WHERE X.PGName IN(...) AND X.UseState=2`(`output/Jobs/POQSettleProc17/agent/steps/S08.md:222-258`)로 옮겨 같은 제약을 강제한다 — CTE 사각지대의 거울상(필터가 CTE **밖으로** 나오면 명세서의 "최상위" 칸에 없는 이름이라 "초과"로 오탐) |
   | 18 | C | POQSettleProc19/S11 | UPDATE 11 | RefundFlag,CYMD,AYMD 초과 | False | `[YMD,PGName,RefundFlag,UseState,CYMD,AYMD]` | **판정불가 — 미검증** |
   | 19 | C | POQSettleProc3/S04 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,OrgDiscountAmt,ExtraSettleFlag,PGName]` | **판정불가 — 미검증** |
-  | 20 | C | POQSettleProc16/S08 | UPDATE 7 | CommissionCancelFlag 초과 | **True** | `[CommissionCancelFlag]` | **판정불가 — 미검증**(#17과 같은 코드 -8 계열) |
+  | 20 | C | POQSettleProc16/S08 | UPDATE 7 | CommissionCancelFlag 초과 | **True** | `[CommissionCancelFlag]` | **거짓양성(확인)** — #17과 같은 UPDATE 7(COMM_UPD). 원본의 "파생 테이블 D" 스코프 필터 `B.CommissionCancelFlag=1`(Spec.md 345행)이 이 잡에서는 최상위 조인 파트너 `C`(TClientSettleRate)를 직접 참조하는 `WHERE C.CommissionCancelFlag=1`로 옮겨왔다(`output/Jobs/POQSettleProc16/agent/steps/S08.md:289-335`) — #17과 같은 "CTE 필터 재배치" 갈래 |
 
-  **CTE·파생 테이블 사각지대 갈래 건수(과제가 가장 값지다고 지목한 산출물)** —
-  표본 20건 중 `HasOpaqueJoinSource=True`가 **7건**(B에서 5건: #1·#3·#4·#7·#9,
-  C에서 2건: #17·#20 — #14는 #3과 같은 문장이라 중복 집계하지 않음). **이 중
-  술어(WHERE) 체크가 실제로 발화한 것은 4건(#1·#4·#7·#9, Predicate가 전부 빈
-  배열)이고 전부 원본 DDL·이행 SQL 대조로 거짓양성 확정했다.** 즉 **태스크 22가
-  조인 키 체크만 접었던 CTE 사각지대가, 최상위 WHERE 술어 체크에도 그대로
-  번진다는 것을 이번 표본이 직접 확인했다** — HasOpaqueJoinSource가 서면
-  predicate 체크도 함께 접어야 할 근거다(#3은 opaque=True인데 predicate가
-  일부 남아 있어 다른 원인 — CROSS APPLY 자기조인 소거 — 로 판정했다. 순수
-  CTE·파생테이블 은닉과는 별개 갈래로 센다).
+  **CTE·파생 테이블 사각지대 갈래 건수(과제가 가장 값지다고 지목한 산출물) —
+  20건 표본 전수 확정.** 표본 20건 중 `HasOpaqueJoinSource=True`가 **7건**
+  (B에서 5건: #1·#3·#4·#7·#9, C에서 2건: #17·#20 — #14는 #3과 같은 문장이라
+  중복 집계하지 않음). **이 7건 전부 원본 DDL·이행 SQL 대조로 판정을 끝냈고
+  전부 거짓양성이다** — 두 방향으로 갈린다:
+  - **은닉형(4건, #1·#4·#7·#9)** — Predicate가 완전히 빈 배열. 원본이 요구한
+    최상위 술어가 CTE 안에 통째로 숨어 검사가 "없다"고 오판한다. 태스크 22가
+    조인 키 체크만 접었던 이 사각지대가 **최상위 WHERE 술어 체크에도 그대로
+    번진다는 것을 직접 확인했다.**
+  - **역전형(3건, #3·#14·#17·#20 — #3·#14는 같은 문장)** — 원본에서 CTE·
+    자기조인 안에 있던 필터가 이 잡의 이행 코드에서는 오히려 **최상위로
+    끌려나와** 있다(CROSS APPLY 자기조인 소거, 또는 CTE 밖 WHERE로 재배치).
+    명세서의 "최상위" 술어 칸은 원본 구조 기준이라 이 이름들을 모르고, 검사
+    C가 "명세서에 없는 술어"로 오판한다.
+
+  **결론 — HasOpaqueJoinSource가 서면 predicate 체크(검사 B)와 extras
+  체크(검사 C) 둘 다 접어야 한다는 근거가 이번 표본 7건 전수로 섰다.**
+  은닉형은 검사 B만, 역전형은 검사 C만 발화했지만 원인은 하나(CTE·자기조인
+  구조가 명세서의 "최상위/파생" 스코프 라벨과 이행 코드의 실제 구조를
+  어긋나게 만든다)다.
 
   **네 번째 원인 갈래 — 앵커 코드 자체의 착오(#8).** CTE 은닉·스테이징 아키텍처와
   달리, #8은 검사도 재료도 옳고 **이행 코드 자신이 원본과 다른 오류 코드를
@@ -816,20 +828,25 @@
   방식(태스크 6)의 전제("이행 코드가 원본 오류 코드를 그대로 보존한다")가 깨지는
   실물이다 — 이 코퍼스에 몇 건이나 더 있는지는 이번 표본 밖이라 모른다.
 
-  **오탐률(참고용, 외삽 금지) — 검사 B 표본 10건 전수 확정.** 진짜 **2건**(#5·#6,
-  둘 다 "원본이 명시한 존재-필터 조인이 이행에서 소거" 같은 갈래) · 거짓양성
-  **8건**(#1·#4·#7·#9는 CTE 은닉, #2·#10은 스테이징 키 테이블, #3은 CROSS APPLY
-  자기조인 소거, #8은 앵커 코드 착오) — 오탐률 8/10 = **80%**. **이 비율을 103건
-  전체나 검사 C로 외삽하면 안 된다** — 표본 선정이 다양성 위주였고(무작위가
-  아니다), opaque=True 5건 중 4건이 순수 CTE 거짓양성으로 확인돼 그쪽으로
-  치우쳐 있다. 검사 C 표본 10건은 전부 미검증이라 이 비율이 검사 C에도
-  적용되는지는 전혀 모른다.
+  **오탐률(참고용, 외삽 금지) — 20건 표본 중 13건 판정 완료.** 검사 B 10건
+  전수 + 검사 C의 opaque=True 3건, 합쳐서 13건. 진짜 **2건**(#5·#6, 둘 다
+  "원본이 명시한 존재-필터 조인이 이행에서 소거" 같은 갈래) · 거짓양성
+  **11건**(#1·#4·#7·#9는 CTE 은닉, #2·#10은 스테이징 키 테이블, #3·#14는
+  CROSS APPLY 자기조인 소거, #8은 앵커 코드 착오, #17·#20은 CTE 필터 역전
+  재배치) — 오탐률 11/13 ≈ **85%**. **이 비율을 103건 전체나 남은 검사 C
+  7건으로 외삽하면 안 된다** — 표본 선정이 다양성 위주였고(무작위가 아니다),
+  판정을 마친 13건 중 7건이 opaque=True(전부 거짓양성)라 그쪽으로 크게
+  치우쳐 있다. opaque=False인 검사 C 7건(#11-13·#15-16·#18-19)은 전부
+  미검증이다.
 
-  **다음 회차 시작점** — (a) 검사 C 표본 10건(#11-20) 전부 원본 DDL·Spec.md
-  대조(이 문서가 좌표·진단값을 이미 다 잡아 뒀다), 특히 (b) #14·#17·#20
-  (opaque=True) — CTE 사각지대가 초과 컬럼(검사 C) 판정에도 번지는지가 이번
-  회차가 못 연 물음, (c) #8류(앵커 코드 착오)가 이 코퍼스에 몇 건이나 더
-  있는지 별도로 스윕할 가치가 있다 — 코드 앵커의 전제 자체를 흔드는 사실이다.
+  **다음 회차 시작점** — (a) 검사 C의 opaque=False 7건(#11-13·#15-16·
+  #18-19) 원본 DDL·Spec.md 대조(이 문서가 좌표·진단값을 이미 다 잡아 뒀다),
+  (b) #8류(앵커 코드 착오)가 이 코퍼스에 몇 건이나 더 있는지 별도로 스윕할
+  가치가 있다 — 코드 앵커의 전제 자체를 흔드는 사실이다, (c) 위 "역전형"
+  거짓양성(#3·#14·#17·#20)을 닫으려면 검사 B·C 둘 다 HasOpaqueJoinSource가
+  서면 그 그룹의 predicate·extras 체크를 함께 접어야 한다 — 지금 태스크
+  22가 조인 키 체크에만 건 조건을 predicate·extras 체크로 넓히는 설계가
+  다음 회차의 명확한 시작점이다(코드 변경은 이번 태스크 범위 밖).
 
   근거: 2026-08-25 코퍼스 스윕 + 표본 진단(이 문서가 유일한 기록) — Task 11
   (부분 실측, 이 회차 4번째 도구 호출 한도 중단으로 조사를 끊고 씀. 검사 B
