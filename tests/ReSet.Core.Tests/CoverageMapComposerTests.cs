@@ -200,5 +200,56 @@ END";
         private static StatementCoverage Compose(string spec, string statementType) =>
             CoverageMapComposer.Compose("dbo.P", Def(), spec)
                 .Statements.Single(s => s.Statement.StatementType == statementType);
+
+        [Fact]
+        public void Compose_TransactionStatement_ShouldCountAsExtractorMaterial()
+        {
+            // 배선 7번을 잠근다. ExtractorFactLines에 TransactionBoundaries가 없으면
+            // 표는 생기는데 🟧이 그대로다 - 아무것도 안 깨지면서 목적만 달성 안 된다.
+            const string ddl = @"CREATE PROCEDURE dbo.P AS
+BEGIN
+    BEGIN TRANSACTION
+    COMMIT TRANSACTION
+END";
+            var def = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                DdlText = ddl
+            };
+
+            var coverage = CoverageMapComposer.Compose("dbo.P", def, "## 개요\n");
+            var begin = coverage.Statements.Single(
+                s => s.Statement.StatementType == "BeginTransactionStatement");
+
+            // 재료는 있고 앵커는 없으므로 SpecMissing이다 - 설계서 §3의 전이 상태.
+            Assert.NotEmpty(begin.ExtractorLines);
+            Assert.Equal(CoverageState.SpecMissing, begin.State);
+        }
+
+        [Fact]
+        public void Compose_SetAssignment_ShouldCountAsExtractorMaterial()
+        {
+            const string ddl = @"CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v INT
+    SET @v = 1
+END";
+            var def = new SpDefinition
+            {
+                ObjectKey = CodeObjectKey.Create("DB", "dbo", "P", CodeObjectType.Procedure),
+                Schema = "dbo",
+                Name = "P",
+                DdlText = ddl
+            };
+
+            var coverage = CoverageMapComposer.Compose("dbo.P", def, "## 개요\n");
+            var set = coverage.Statements.Single(
+                s => s.Statement.StatementType == "SetVariableStatement");
+
+            Assert.NotEmpty(set.ExtractorLines);
+            Assert.Equal(CoverageState.SpecMissing, set.State);
+        }
     }
 }

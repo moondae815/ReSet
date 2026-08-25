@@ -1,6 +1,6 @@
 # 기계 확정 표 확장 구현 계획
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 트랜잭션 경계 표와 변수 대입 표를 기계 확정 표로 더해 커버리지 맵의 🟧 382건 중 202건을 관할에 넣는다.
 
@@ -56,6 +56,21 @@ main의 CurrentCacheFormatVersion        → 15
 
 **태스크 순서의 근거:** Task 1·2는 서로 독립이다. Task 6(코퍼스 스윕)은 **Task 8(캐시 인상)보다 반드시 앞**이다 — 거짓 양성을 안은 채 전건 재생성을 걸면 재시도가 소진된다.
 
+> ### [2026-08-24 계획 정정] Task 4를 4a·4b로 가른다
+>
+> **계획의 첫 판이 기존 불변식을 어겼다.** `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog`가 **리플렉션으로 어셈블리의 모든 `TableHeading` 상수를 찾아** `MachineConfirmedTables.All`에 등록됐는지 단언한다(`tests/ReSet.Core.Tests/MachineConfirmedTablesTests.cs:51-67`). 반대 방향 짝(`CatalogHasNoEntryWithoutAHeadingConstant`)도 있다.
+>
+> 즉 **`TableHeading` 선언과 `All` 등록은 같은 커밋에 있어야 한다.** 첫 판은 선언을 Task 1·2에, 등록을 Task 4에 갈라 놓아 그 사이 내내 스위트가 빨갛다. Task 1·2 워커가 **각자 독립적으로** 이것을 발견하고 범위 밖이라 고치지 않은 채 보고했다 — 옳은 판단이다.
+>
+> **정정:** Task 4를 둘로 가른다.
+>
+> - **Task 4a — `MachineConfirmedTables.All` 등록.** Task 1·2만 소비한다(두 `TableHeading` 상수). **웨이브 1 직후 단독으로 돌려 불변식을 복구한다.**
+> - **Task 4b — `AiService` 표 렌더.** Task 3(`SpecExpectations` 속성)을 소비하므로 웨이브 3에 남는다.
+>
+> 두 등록을 한 태스크에 묶는 이유는 **둘 다 `MachineConfirmedTables.cs`의 같은 자리를 고치기 때문**이다 — 갈라서 병렬로 돌리면 체리픽이 충돌한다.
+>
+> 아래 「Task 4」 절은 **Task 4b**로 읽는다. Task 4a는 그 절의 Step 1~3(테스트·`All` 등록)만 떼어 수행하고, Step 4(`AiService` 렌더)는 Task 4b가 한다.
+
 ---
 
 ### Task 1: `TransactionBoundaryExtractor`
@@ -70,7 +85,7 @@ main의 CurrentCacheFormatVersion        → 15
   - `public sealed record TransactionBoundaryFact(int Line, string Kind, string Name)`
   - `public static class TransactionBoundaryExtractor` — `public const string TableHeading`, `public static IReadOnlyList<TransactionBoundaryFact> Extract(string? ddlText)`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/ReSet.Core.Tests/TransactionBoundaryExtractorTests.cs`:
 
@@ -206,12 +221,12 @@ END";
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~TransactionBoundaryExtractorTests"`
 Expected: 컴파일 실패 — `TransactionBoundaryExtractor`가 없다.
 
-- [ ] **Step 3: 구현을 쓴다**
+- [x] **Step 3: 구현을 쓴다**
 
 `src/ReSet.Core/Services/TransactionBoundaryExtractor.cs`:
 
@@ -316,14 +331,14 @@ namespace ReSet.Core.Services
 }
 ```
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~TransactionBoundaryExtractorTests"`
 Expected: PASS (9 tests)
 
 네 타입이 어셈블리에 실재함은 확인했다(`Microsoft.SqlServer.TransactSql.ScriptDom` 180.37.3). 넷 다 `TransactionStatement`를 상속하고 그 기반 타입이 `Name`을 `IdentifierOrValueExpression`으로 갖기 때문에 공용 `Add` 헬퍼 하나가 넷을 다 받는다. **컴파일이 깨지면 그 전제가 틀린 것이므로 실제 타입에 맞추고 CONCERNS에 적어라.**
 
-- [ ] **Step 5: 커밋한다**
+- [x] **Step 5: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/TransactionBoundaryExtractor.cs tests/ReSet.Core.Tests/TransactionBoundaryExtractorTests.cs
@@ -351,7 +366,7 @@ SAVE TRANSACTION은 코퍼스에 0건이지만 담는다. 세이브포인트가 
   - `public sealed record SetAssignmentFact(int Line, string Variable, string Expression)`
   - `public static class SetAssignmentExtractor` — `public const string TableHeading`, `public static IReadOnlyList<SetAssignmentFact> Extract(string? ddlText)`
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/ReSet.Core.Tests/SetAssignmentExtractorTests.cs`:
 
@@ -478,12 +493,12 @@ END";
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~SetAssignmentExtractorTests"`
 Expected: 컴파일 실패 — `SetAssignmentExtractor`가 없다.
 
-- [ ] **Step 3: 구현을 쓴다**
+- [x] **Step 3: 구현을 쓴다**
 
 `src/ReSet.Core/Services/SetAssignmentExtractor.cs`:
 
@@ -606,14 +621,14 @@ namespace ReSet.Core.Services
 }
 ```
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~SetAssignmentExtractorTests"`
 Expected: PASS (9 tests)
 
 `Extract_SelfReferencingIncrement_...`의 기대값 `"@c + 1"`은 토큰 사이 공백을 하나로 접은 결과다. `CollapseWhitespace`가 원문 공백을 정확히 재현하지 못하므로, 실제 출력이 다르면 **기대값을 실측에 맞추되 그 사실을 CONCERNS에 적어라** — "원문 그대로"가 어디까지인지가 이 표의 계약이다.
 
-- [ ] **Step 5: 커밋한다**
+- [x] **Step 5: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/SetAssignmentExtractor.cs tests/ReSet.Core.Tests/SetAssignmentExtractorTests.cs
@@ -644,7 +659,7 @@ WHILE 최상위 상수 재설정은 실행 의미 표에도 있지만 여기서�
 >
 > **반대 방향도 본다.** 항을 더하면 `From`이 객체를 돌려주는 경우가 **넓어진다.** 이전에 재료가 없어 L1을 아예 안 받던 명세서가 이제 **모든** 검사를 받는다. 각 검사가 자기 재료가 빌 때 조용히 early-return 하는지 확인하라(Task 6 스윕이 이걸 실측으로 잡는다).
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 ```csharp
 using Xunit;
@@ -710,12 +725,12 @@ END";
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~SpecExpectationsTransactionAndSetTests"`
 Expected: 컴파일 실패 — `TransactionBoundaries`·`SetAssignments` 속성이 없다.
 
-- [ ] **Step 3: 속성과 배선을 더한다**
+- [x] **Step 3: 속성과 배선을 더한다**
 
 `SpecExpectations` 레코드 본문에 (`CaseBranches` 옆, `SpecExpectations.cs:119` 부근):
 
@@ -747,18 +762,18 @@ Expected: 컴파일 실패 — `TransactionBoundaries`·`SetAssignments` 속성�
 
 그리고 반환하는 객체 초기화에 두 속성을 채운다.
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~SpecExpectations"`
 Expected: PASS
 
 전체도 돌려 기존 테스트가 안 깨지는지 본다: `dotnet test --filter "FullyQualifiedName~ReSet.Core.Tests"`
 
-- [ ] **Step 5: 되돌림으로 계약 1번을 확인한다**
+- [x] **Step 5: 되돌림으로 계약 1번을 확인한다**
 
 두 `&& ...Count == 0` 항을 **임시로 지우고** `From_TransactionOnlyProcedure_ShouldNotReturnNull`을 돌려 **실패하는지** 보라. 실패하지 않으면 그 테스트는 계약 1번을 잠그지 못하는 것이다. 확인 후 원복하고, 방법과 결과를 보고에 적어라.
 
-- [ ] **Step 6: 커밋한다**
+- [x] **Step 6: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/SpecExpectations.cs tests/ReSet.Core.Tests/SpecExpectationsTransactionAndSetTests.cs
@@ -782,7 +797,7 @@ L1이 한 번도 안 돌고 스위트는 초록으로 남는다(작성 계약 1�
 - Consumes: Task 1·2의 `TableHeading` 상수, Task 3의 `SpecExpectations` 속성
 - Produces: 프롬프트에 실리는 표 뼈대. 뒤 태스크가 소비하는 새 심볼은 없다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 ```csharp
 using System.Linq;
@@ -834,12 +849,12 @@ namespace ReSet.Core.Tests
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~MachineConfirmedTablesExpansionTests"`
 Expected: FAIL — `All`에 새 항목이 없다.
 
-- [ ] **Step 3: `MachineConfirmedTables.All` 맨 끝에 두 항목을 더한다**
+- [x] **Step 3: `MachineConfirmedTables.All` 맨 끝에 두 항목을 더한다**
 
 `src/ReSet.Core/Services/MachineConfirmedTables.cs`의 `All` 배열 **마지막 요소 뒤**에:
 
@@ -853,7 +868,7 @@ Expected: FAIL — `All`에 새 항목이 없다.
                 MachineConfirmedTableVerification.DdlTranscription)
 ```
 
-- [ ] **Step 4: `AiService`에 표 렌더 둘을 더한다**
+- [x] **Step 4: `AiService`에 표 렌더 둘을 더한다**
 
 `BuildCaseBranchTableLines`(`AiService.cs:1241`) 옆에 같은 모양으로:
 
@@ -903,7 +918,7 @@ Expected: FAIL — `All`에 새 항목이 없다.
 
 > **밖에서 배선하지 마라.** 호출부 5곳(`:469`·`1814`·`2945`·`3085`·`3259`)이 전부 이 함수 하나를 통하는 것이 *"표 하나가 늘 때 한 갈래만 조용히 못 받는 회귀"*를 막는 구조다.
 
-- [ ] **Step 5: 통과를 확인한다**
+- [x] **Step 5: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~MachineConfirmedTablesExpansionTests"`
 Expected: PASS (3 tests)
@@ -911,7 +926,7 @@ Expected: PASS (3 tests)
 Run: `dotnet test --filter "FullyQualifiedName~AiService"`
 Expected: 기존 테스트 전부 통과. 프롬프트 스냅샷을 비교하는 테스트가 있으면 새 표가 추가돼 깨질 수 있다 — 그때는 **기대값을 갱신하되 무엇이 왜 늘었는지 CONCERNS에 적어라.**
 
-- [ ] **Step 6: 커밋한다**
+- [x] **Step 6: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/MachineConfirmedTables.cs src/ReSet.Core/Services/AiService.cs tests/ReSet.Core.Tests/MachineConfirmedTablesExpansionTests.cs
@@ -944,7 +959,7 @@ All의 맨 끝에 붙인다 - 순서가 곧 Critic 프롬프트 순서이고 접
 - 최소 명세서는 기존 헬퍼 `WrapSpec(string crudBody)`가 만든다. **새 헬퍼를 만들지 마라.**
 - **픽스처를 실제 코퍼스 모양으로 써라** — 인접 표·산문이 낀 표를 포함한다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `MechanicalValidatorTests.cs`에 추가:
 
@@ -1218,12 +1233,12 @@ END"
 
 > 위 두 묶음의 픽스처 줄 번호(트랜잭션 3·4, SET 4·5)는 각 `DdlText` 리터럴에서 세어 나온 값이다. **`WrapSpec`이나 리터럴을 손대면 줄 번호가 밀린다** — 그때는 기대값을 추측하지 말고 추출기를 한 번 돌려 실제 값을 확인하라.
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~MechanicalValidatorTests"`
 Expected: 컴파일 실패 — `ErrorType.TransactionBoundaryTableMissing`이 없다.
 
-- [ ] **Step 3: `ErrorType` 둘을 더한다**
+- [x] **Step 3: `ErrorType` 둘을 더한다**
 
 `MechanicalValidator.cs`의 `ErrorType` enum(`:53` 부근 `CaseBranchTableMissing` 옆):
 
@@ -1232,7 +1247,7 @@ Expected: 컴파일 실패 — `ErrorType.TransactionBoundaryTableMissing`이 �
         SetAssignmentTableMissing,
 ```
 
-- [ ] **Step 4: 검사 둘을 구현한다**
+- [x] **Step 4: 검사 둘을 구현한다**
 
 `CheckCaseBranches`(`:4310`)를 그대로 본떠 쓴다. 대조 키는 **라인 + 종류**(트랜잭션) / **라인 + 변수 + 대입식 원문**(SET)이다.
 
@@ -1307,7 +1322,7 @@ Expected: 컴파일 실패 — `ErrorType.TransactionBoundaryTableMissing`이 �
 
 `CheckSetAssignments`도 같은 모양으로 쓴다. 대조 키는 `fact.Line` + `fact.Variable` + `fact.Expression`이다(`CheckCaseBranches`가 조건 원문까지 대조하는 것과 같은 강도).
 
-- [ ] **Step 5: 검사 목록에 등록한다**
+- [x] **Step 5: 검사 목록에 등록한다**
 
 `MechanicalValidator.cs:178`의 `CheckCaseBranches(...)` 바로 아래:
 
@@ -1316,16 +1331,16 @@ Expected: 컴파일 실패 — `ErrorType.TransactionBoundaryTableMissing`이 �
                     CheckSetAssignments(cleansed, expectations, result);
 ```
 
-- [ ] **Step 6: 통과를 확인한다**
+- [x] **Step 6: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~MechanicalValidatorTests"`
 Expected: PASS (신규 12건 포함, 기존 전부 유지)
 
-- [ ] **Step 7: 되돌림으로 등록을 확인한다**
+- [x] **Step 7: 되돌림으로 등록을 확인한다**
 
 Step 5의 두 줄을 **임시로 지우고** Step 1의 "table missing" 테스트를 돌려 **실패하는지** 보라. 실패하지 않으면 검사가 등록 없이도 도는 것이거나 테스트가 무의미한 것이다. 확인 후 원복하고 방법을 보고에 적어라.
 
-- [ ] **Step 8: 커밋한다**
+- [x] **Step 8: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/MechanicalValidator.cs tests/ReSet.Core.Tests/MechanicalValidatorTests.cs
@@ -1352,7 +1367,7 @@ CheckCaseBranches의 모양을 그대로 따른다 - 자기 절만 보고, 자�
 >
 > 거짓 양성이 특히 위험하다. `VerificationPipelineOrchestrator`가 L1 오류를 재생성 트리거로 삼고 소진되면 `L1Exhausted` 배너를 붙인다. 캐시를 올린 회차라면 전건이 재생성되므로 **거짓 고발이 곧바로 재시도 소진**으로 이어지고, 시정 문구가 틀렸으면 모델이 **베껴야 할 기계 확정 표 자체를 망가뜨린다.**
 
-- [ ] **Step 1: 세대 왜곡을 확인한다**
+- [x] **Step 1: 세대 왜곡을 확인한다**
 
 ```bash
 python3 -c "
@@ -1367,11 +1382,11 @@ grep -n 'CurrentCacheFormatVersion = ' src/ReSet.Core/Services/CacheManager.cs
 
 Expected: `{15: 31}`이고 코드도 15. **분포가 갈려 있으면 스윕 결과가 노이즈다** — 그 차이가 만든 오류 종류를 먼저 걸러내고 읽어라. (2026-08-24 코디네이터 실측: `{15: 31}`, 코드 15, main 15 — 왜곡 없음.)
 
-- [ ] **Step 2: 스윕 하네스를 만든다**
+- [x] **Step 2: 스윕 하네스를 만든다**
 
 `.claude/skills/reset-l1-check/references/corpus-sweep.md`의 `sweep.csproj`와 `Program.cs`를 **그대로** 스크래치 디렉터리에 만든다. `ImplicitUsings`를 빼면 `Console`·`Path`·`List`가 전부 미해결로 떨어진다.
 
-- [ ] **Step 3: BASE와 NEW를 각각 돌린다**
+- [x] **Step 3: BASE와 NEW를 각각 돌린다**
 
 차분으로 읽는다. 절대 건수보다 **수정 전후 비교**가 판정을 만든다.
 
@@ -1381,13 +1396,13 @@ git archive <이 브랜치의 Task 1 직전 SHA> src/ReSet.Core | tar -x -C <임
 
 BASE(신규 검사 없음)와 NEW(현재)를 각각 돌려 `ErrorType` 집계를 비교한다.
 
-- [ ] **Step 4: 읽고 판정한다**
+- [x] **Step 4: 읽고 판정한다**
 
 - **새 두 검사가 0건이면 검사가 자기 존재 이유를 놓친 것이다.** 재료 필터가 너무 좁거나 `From`이 null을 돌려주는 경우다. 이 회차에서는 **31개 객체 전부가 새 표를 안 갖고 있으므로 두 검사가 대부분의 객체에서 발동하는 것이 정상**이다 — 트랜잭션이 있는 객체 수만큼, SET이 있는 객체 수만큼.
 - **다른 검사 종류의 건수가 BASE와 달라졌다면 재료 확장이 옆 검사에 번진 것이다.** 작성 계약 1번이 경고한 바로 그 자리 — `From`의 null 체인을 넓혀 이전에 L1을 안 받던 명세서가 이제 모든 검사를 받게 됐기 때문이다. **하나라도 있으면 원인을 밝히고, 의도한 것이 아니면 좁혀라.**
 - `null expectations` 개수가 BASE보다 줄었으면 그것이 체인 확장의 실물 증거다. 숫자를 적어라.
 
-- [ ] **Step 5: 숫자를 설계서에 적는다**
+- [x] **Step 5: 숫자를 설계서에 적는다**
 
 ```
 코퍼스 N쌍 · 로드 실패 0 · null expectations BASE x → NEW y
@@ -1400,7 +1415,7 @@ BASE(신규 검사 없음)와 NEW(현재)를 각각 돌려 `ErrorType` 집계를
 
 그리고 **추출기가 실제로 낸 행 수**를 설계서 「미확정 사항」1번에 적어 백로그 예측(트랜잭션 105 · SET 97)과 대조하라. **예측이 빗나가면 그 자체가 보고 내용이다 — 숫자를 맞추려고 추출기를 조정하지 마라.**
 
-- [ ] **Step 6: 저장소에 남는 코퍼스 스모크 테스트를 더한다**
+- [x] **Step 6: 저장소에 남는 코퍼스 스모크 테스트를 더한다**
 
 스윕 하네스는 폐기용이다. **저장소에 남아 다음 회차를 지키는 테스트**를 따로 둔다(설계서 §4 층 2). `output/`이 `.gitignore` 대상이라 CI에서는 건너뛰므로 `SkippableTheory`다 — `AxisAGoldenCaseTests`가 그 선례다.
 
@@ -1487,7 +1502,7 @@ namespace ReSet.Core.Tests
 
 **출력된 건수를 설계서 「미확정 사항」1번에, 파이프/개행 건수를 2번에 적어라.** 예측(105 · 97)과 다르면 **그 차이 자체가 보고 내용이다 — 숫자를 맞추려고 추출기를 조정하지 마라.**
 
-- [ ] **Step 7: 스크래치를 지우고 커밋한다**
+- [x] **Step 7: 스크래치를 지우고 커밋한다**
 
 ```bash
 git add docs/superpowers/specs/2026-08-24-machine-table-expansion-design.md tests/ReSet.Core.Tests/MachineTableExpansionCorpusTests.cs
@@ -1515,7 +1530,7 @@ git commit -m "docs: 코퍼스 전수 스윕 결과를 적고 스모크 테스�
 
 > **이 배선이 빠지면 아무것도 안 깨지면서 목적만 달성 안 된다.** 표는 생기는데 커버리지 맵이 그 재료를 안 세어 🟧이 그대로다. 그것을 잠그는 테스트가 이 태스크의 본체다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `CoverageMapComposerTests.cs`에 추가:
 
@@ -1572,12 +1587,12 @@ END";
         }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~CoverageMapComposerTests"`
 Expected: FAIL — `ExtractorLines`가 비어 있고 상태가 `OutOfScope`다.
 
-- [ ] **Step 3: `ExtractorFactLines`에 두 컬렉션을 더한다**
+- [x] **Step 3: `ExtractorFactLines`에 두 컬렉션을 더한다**
 
 `CoverageMapComposer.cs`의 `ExtractorFactLines` 안, 다른 `lines.AddRange(...)` 옆:
 
@@ -1588,7 +1603,7 @@ Expected: FAIL — `ExtractorLines`가 비어 있고 상태가 `OutOfScope`다.
 
 같은 메서드의 doc 주석에 두 재료가 이제 포함된다는 것을 적는다 — 그 주석의 부정확이 이전 회차에서 Critical 오판을 부른 자리다.
 
-- [ ] **Step 4: 전이 상태 각주를 HTML에 더한다**
+- [x] **Step 4: 전이 상태 각주를 HTML에 더한다**
 
 `CoverageMapHtmlWriter`의 요약 절, 「명세서 결함」 각주 옆에 한 줄:
 
@@ -1596,16 +1611,16 @@ Expected: FAIL — `ExtractorLines`가 비어 있고 상태가 `OutOfScope`다.
 
 그리고 그것을 잠그는 테스트를 `CoverageMapHtmlWriterTests.cs`에 더한다(문자열이 렌더된 HTML에 있는지).
 
-- [ ] **Step 5: 통과를 확인한다**
+- [x] **Step 5: 통과를 확인한다**
 
 Run: `dotnet test --filter "FullyQualifiedName~CoverageMap"`
 Expected: PASS
 
-- [ ] **Step 6: 되돌림으로 배선을 확인한다**
+- [x] **Step 6: 되돌림으로 배선을 확인한다**
 
 Step 3의 두 줄을 **임시로 지우고** Step 1의 테스트를 돌려 **실패하는지** 보라. 확인 후 원복하고 방법을 보고에 적어라.
 
-- [ ] **Step 7: 커밋한다**
+- [x] **Step 7: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/CoverageMapComposer.cs src/ReSet.Core/Services/CoverageMapHtmlWriter.cs tests/ReSet.Core.Tests/CoverageMapComposerTests.cs tests/ReSet.Core.Tests/CoverageMapHtmlWriterTests.cs
@@ -1631,7 +1646,7 @@ git commit -m "feat: 커버리지 맵이 새 두 재료를 세고 전이 상태�
 
 > **Task 6이 거짓 양성 0으로 끝났을 때만 이 태스크를 한다.** 거짓 양성을 안은 채 전건 재생성을 걸면 재시도가 소진된다.
 
-- [ ] **Step 1: main과 대조해 번호를 정한다**
+- [x] **Step 1: main과 대조해 번호를 정한다**
 
 ```bash
 git show main:src/ReSet.Core/Services/CacheManager.cs | grep "CurrentCacheFormatVersion ="
@@ -1642,7 +1657,7 @@ grep -n "CurrentCacheFormatVersion = " src/ReSet.Core/Services/CacheManager.cs
 
 **이 저장소에서 다른 세션이 동시에 작업 중이다.** 이 단계에서 반드시 다시 확인하라 — 계획을 쓴 시점의 값이 낡았을 수 있다.
 
-- [ ] **Step 2: 올린다**
+- [x] **Step 2: 올린다**
 
 ```csharp
         private const int CurrentCacheFormatVersion = 16;
@@ -1650,7 +1665,7 @@ grep -n "CurrentCacheFormatVersion = " src/ReSet.Core/Services/CacheManager.cs
 
 주석으로 사유를 남긴다 — 프롬프트 입력(표 뼈대 둘)과 출력 계약(명세서에 표 둘)이 함께 바뀌었다.
 
-- [ ] **Step 3: 전체 검증**
+- [x] **Step 3: 전체 검증**
 
 ```bash
 dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l
@@ -1661,7 +1676,7 @@ Expected: 경고 0, 실패 0.
 
 캐시 인상으로 `CacheManagerTests`의 버전 기대값이 깨질 수 있다 — 그때는 갱신하고 CONCERNS에 적어라.
 
-- [ ] **Step 4: 커밋한다**
+- [x] **Step 4: 커밋한다**
 
 ```bash
 git add src/ReSet.Core/Services/CacheManager.cs tests/ReSet.Core.Tests/CacheManagerTests.cs
@@ -1678,13 +1693,76 @@ git commit -m "chore: 캐시 형식 버전을 16으로 올린다
 
 ## 완료 기준 (계획 전체)
 
-- [ ] Task 1~8의 모든 단계가 체크됐다
-- [ ] `dotnet clean && dotnet build`의 `warning CS` 유일 건수가 **0**, `dotnet test` 실패 0
-- [ ] `MachineConfirmedTables.All`에 새 헤딩 2개가 **맨 끝에** 있다(순서 불변 테스트가 잠근다)
-- [ ] **코퍼스 스윕 숫자가 설계서에 적혔다** — 새 두 검사의 건수 · **거짓 양성 0** · 다른 검사 카운트가 BASE와 같은지
-- [ ] 추출기가 실제로 낸 행 수가 설계서 「미확정 사항」1번에, 대입식의 파이프/개행 건수가 2번에 적혔고, 백로그 예측(105 · 97)과의 차이가 기록됐다
-- [ ] 저장소에 남는 코퍼스 스모크 테스트(`MachineTableExpansionCorpusTests`)가 커밋됐다 — 스윕 하네스는 폐기용이라 별개다
-- [ ] 배선 7번(커버리지 맵)을 잠그는 테스트가 있고 **되돌림으로 확인**됐다
-- [ ] 계약 1번(null 체인)을 잠그는 테스트가 있고 **되돌림으로 확인**됐다
-- [ ] 캐시 버전이 **main과 대조해** 정해졌고, 스윕이 깨끗한 뒤에 올랐다
-- [ ] 재생성은 돌리지 않았고, 그 사실과 설계서 「미확정 사항」3번(L1 완전일치가 실물 재생성에서 통과하는지 미확인)이 남았다
+- [x] Task 1~8의 모든 단계가 체크됐다
+- [x] `dotnet clean && dotnet build`의 `warning CS` 유일 건수가 **0**, `dotnet test` 실패 0
+- [x] `MachineConfirmedTables.All`에 새 헤딩 2개가 **맨 끝에** 있다(순서 불변 테스트가 잠근다)
+- [x] **코퍼스 스윕 숫자가 설계서에 적혔다** — 새 두 검사의 건수 · **거짓 양성 0** · 다른 검사 카운트가 BASE와 같은지
+- [x] 추출기가 실제로 낸 행 수가 설계서 「미확정 사항」1번에, 대입식의 파이프/개행 건수가 2번에 적혔고, 백로그 예측(105 · 97)과의 차이가 기록됐다
+- [x] 저장소에 남는 코퍼스 스모크 테스트(`MachineTableExpansionCorpusTests`)가 커밋됐다 — 스윕 하네스는 폐기용이라 별개다
+- [x] 배선 7번(커버리지 맵)을 잠그는 테스트가 있고 **되돌림으로 확인**됐다
+- [x] 계약 1번(null 체인)을 잠그는 테스트가 있고 **되돌림으로 확인**됐다
+- [x] 캐시 버전이 **main과 대조해** 정해졌고, 스윕이 깨끗한 뒤에 올랐다
+- [x] 재생성은 돌리지 않았고, 그 사실과 설계서 「미확정 사항」3번(L1 완전일치가 실물 재생성에서 통과하는지 미확인)이 남았다
+
+---
+
+## 완료 기록 (2026-08-25)
+
+계획의 8개 태스크가 전부 브랜치에 들어갔다. **위 체크박스는 이 회차에 일괄로 채웠다** —
+Task 1~4·7은 앞선 세션들이 커밋으로 끝냈으나 체크를 남기지 않았고, Task 5·6·8은 이 회차가 했다.
+근거는 커밋과 아래 실측이다.
+
+| Task | 커밋 |
+|---|---|
+| 1 `TransactionBoundaryExtractor` | `0df1791` · `57391b8` |
+| 2 `SetAssignmentExtractor` | `e0d0000` · `0d0fba1` · `308579e` |
+| 3 `SpecExpectations` 배선 | `81b2af1` |
+| 4a `MachineConfirmedTables.All` | `6bc19ea` |
+| 4b `AiService` 표 뼈대 | `b849c7d` |
+| 7 커버리지 맵 + 전이 각주 | `abbc0c6` · `91fc429` · `41a6932` |
+| **5 L1 검사 둘** | `889958e` |
+| **6 코퍼스 전수 스윕** | `8477947` |
+| **8 캐시 버전 16** | `44c0fa7` |
+
+**병합 선행 작업.** Task 5를 시작하기 전에 `axis-b-step-check`를 병합했다(충돌 0). 그 브랜치의
+7개 커밋이 전부 `MechanicalValidator.cs`를 고치고 있어서 — 앵커 재설계·파서 펜스 복구·단계 하한·
+검사 A 정정 — 병합 없이 같은 파일에 검사 둘을 얹으면 나중에 큰 충돌이 난다.
+
+**코퍼스 심링크.** 워크트리에는 `output/`이 없어 코퍼스 테스트 15건이 조용히 건너뛰고 있었다.
+메인 저장소의 `output/`과 `output.bak-2026-08-22/`를 심링크해 **건너뜀 0**으로 만든 뒤에 모든
+게이트를 판정했다(`reset-l1-check` 완료 기준 1번). 심링크 전 2683통과·15건너뜀 → 후 2727통과·0건너뜀.
+
+### 되돌림 검증 (완료 기준 두 항)
+
+- **검사 등록(Task 5 Step 7).** `Validate`의 검사 목록에서 두 줄을 지우니
+  `Validate_TransactionBoundaryTableMissing_ShouldReport`·`Validate_SetAssignmentTableMissing_ShouldReport`가
+  둘 다 실패했다. 원복 후 통과.
+- **배선 7번(커버리지 맵).** `ExtractorFactLines`의 `AddRange` 두 줄을 지우니 3건이 실패했다 —
+  `CoverageMapComposerTests.Compose_TransactionStatement_ShouldCountAsExtractorMaterial` ·
+  `Compose_SetAssignment_ShouldCountAsExtractorMaterial` ·
+  `CoverageMapGoldenTests.Requirement1_CurrentEdition_SpecMissingShouldMatchTransitionWindowCount`.
+  원복 후 통과.
+- **계약 1번(null 체인).** `From`의 AND 사슬에서 `transactionBoundaries`·`setAssignments` 두 항을
+  지우니 `SpecExpectationsTransactionAndSetTests`의 2건(`From_TransactionOnlyProcedure_ShouldNotReturnNull` ·
+  `From_SetAssignmentOnlyProcedure_ShouldNotReturnNull`)이 실패했다. 원복 후 통과.
+
+### 최종 게이트 실측
+
+```
+dotnet clean && dotnet build   →  warning CS 유일 건수 0 · 오류 0
+dotnet test                    →  실패 0 · 건너뜀 0 · 통과 2740
+코퍼스 전수 스윕 (31쌍)         →  거짓 양성 0 · 다른 검사 카운트 BASE와 동일
+MachineConfirmedTables.All     →  새 헤딩 2개가 맨 끝 (순서 불변 테스트가 잠금)
+CacheManager                   →  15 → 16 (main 15, 다른 브랜치 전부 15 이하 확인)
+```
+
+### 남은 것
+
+**재생성은 이 회차에서 돌리지 않았다**(계획의 비목표). 따라서 설계서 「미확정 사항」3번 —
+*L1 완전일치가 실물 재생성에서 통과하는가* — 는 **확인되지 않은 채 남는다.** 캐시가 16으로
+올랐으므로 다음 재생성은 전건이고, 그것이 새 두 검사가 실물에서 처음 도는 자리다.
+`reset-l1-check` 스킬의 경고대로 그 회차의 로그에서 `(시도 N/6)` 오류를 반드시 읽어야 한다.
+
+커버리지 맵의 🟥 205는 **재생성 전까지 유효한 전이 상태**다(설계서 §3). 재생성이 끝나면
+내려가야 하고, 0에 도달하면 `CoverageMapGoldenTests.TransitionWindowSpecMissing` 상수를 지우고
+원래 계약(총계 0)으로 돌아간다.

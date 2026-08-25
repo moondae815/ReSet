@@ -299,6 +299,18 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Render_SpecMissingCount_ShouldCarryTransitionalStateFootnote()
+        {
+            // 설계서 §3의 전이 상태. 명세서가 캐시 버전보다 오래된 판이면 「명세서
+            // 결함」이 크게 나오는데, 이것이 회귀가 아니라 재생성으로 사라질 예정된
+            // 중간 상태라는 것을 각주가 밝혀야 한다.
+            var html = CoverageMapHtmlWriter.Render(new[] { Sample("dbo.A", 0) }, "T");
+
+            Assert.Contains(
+                "명세서가 현재 캐시 버전보다 오래된 판이면 「명세서 결함」이 크게 나옵니다", html);
+        }
+
+        [Fact]
         public void Render_LineWeightedAxis_ShouldShowDenominatorFootnote()
         {
             // I5: 라인 가중의 분모(잎 문장 줄 수 / 원본 전체 줄 수)가 안 보이면

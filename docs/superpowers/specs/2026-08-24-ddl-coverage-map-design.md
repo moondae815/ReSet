@@ -423,7 +423,7 @@ Spec-실림 쪽으로 잡고 있어 충돌 1건이 표면에 드러나지 않았
 | 유형 | 건수 | 표로 담을 수 있는가 |
 |---|---:|---|
 | `ReturnStatement` | 105 | **가능** — 조기 반환 지점 표(줄·반환값·직전 조건)를 새로 만들면 닫힌다. 지금은 어떤 기계 확정 표도 관할하지 않는다. |
-| `SetVariableStatement` | 100 | **부분 가능** — `LoopVariableResetExtractor`가 `WHILE` 최상위 상수 재설정 3건만 담는다(전체의 2.9%). `AggregateAssignmentExtractor`·`NonAggregateAssignmentExtractor`는 `SELECT @v = ...` 형태만 다뤄 `SetVariableStatement`에는 원리적으로 닿지 않는다(실측: 두 추출기 재료 4건 전부 `SelectStatement` 잎에 떨어졌다, 예외 0건). 일반 `SET @v = <식>` 대입 표를 새로 만들면 나머지 97건 대부분을 닫을 수 있다. |
+| `SetVariableStatement` | 100 | **부분 가능** — `LoopVariableResetExtractor`가 `WHILE` 최상위 상수 재설정 3건만 담는다(전체의 2.9%). `AggregateAssignmentExtractor`·`NonAggregateAssignmentExtractor`는 `SELECT @v = ...` 형태만 다뤄 `SetVariableStatement`에는 원리적으로 닿지 않는다(실측: 두 추출기 재료 4건 전부 `SelectStatement` 잎에 떨어졌다, 예외 0건). 일반 `SET @v = <식>` 대입 표를 새로 만들면 나머지 97건 대부분을 닫을 수 있다. **(→ [2026-08-24 Task 7b 정정] 이 행의 「건수」 100은 이미 3건을 뺀 🟧 개수인데, 이 서술이 거기서 3을 한 번 더 빼 97로 적었다 — 새 SET 표가 닫는 것은 97이 아니라 100이다. 실측은 `2026-08-24-machine-table-expansion-design.md` §3.)** |
 | `RollbackTransactionStatement` | 81 | **가능** — `BeginTransactionStatement`(12)·`CommitTransactionStatement`(12)와 묶어 "트랜잭션 경계" 표(줄·종류)를 만들면 105건(81+12+12)이 한 번에 닫힌다. |
 | `DeclareVariableStatement` | 40 | **가능, 단 낮은 우선순위** — Spec.md의 "지역 변수 및 시스템 값" 류 표는 이미 있지만 **`라인` 칸이 없다**(헤더: `변수 명칭 \| 데이터 타입 \| 초기값 또는 원천 \| 연계 컬럼 및 사용 관계`) — 게다가 `(기계 확정 — 수정 금지)` 절도 아니다. `라인` 칸을 더하고 기계 확정으로 승격하면 닫힌다. |
 | `PredicateSetStatement` | 13 | **가능, 단 낮은 우선순위** — 대부분 `SET NOCOUNT ON` 류 세션 옵션이다. `SpecExpectations.SessionOptions`가 이미 이름을 모으지만 **줄 번호가 없다**(`IReadOnlyList<string>`). 줄 번호를 추가하면 닫힌다. |
@@ -434,6 +434,11 @@ Spec-실림 쪽으로 잡고 있어 충돌 1건이 표면에 드러나지 않았
 97) → ③ 조기 반환(105, 단 "무엇을 반환했나"가 항상 확정 사실은 아니라 ①·②보다 설계가 더 필요하다)
 → ④ 지역 변수 선언에 `라인` 칸 추가(40) → ⑤ 세션 옵션에 줄 번호 추가(13) → ⑥ 커서 개별 문장(17).
 ①+②만 닫아도 202/382(53%)가 사라져 🟧 비율이 78.4%→약 37%로 떨어진다.
+
+> **[2026-08-24 Task 7b 실측 정정]** 위 ②의 「최대 97」과 ①+②의 「202/382」는 백로그 표
+> `SetVariableStatement` 행의 뺄셈 중복을 그대로 물려받았다 — 실측은 ② **100**, ①+②
+> **205/382**다(`2026-08-24-machine-table-expansion-design.md` §3에 105 + 100 분해가 있다).
+> 원 수치는 예측 기록으로 보존한다.
 
 ## 미확정 사항 — 2026-08-24 Task 4 실측으로 닫는다
 
@@ -600,6 +605,17 @@ Spec-실림 쪽으로 잡고 있어 충돌 1건이 표면에 드러나지 않았
       없다"는 더 강한 주장이고, 🟥=0만으로는 성립하지 않는다 — §6(3)에서 실물로 확인했다(과거
       판에서 「집합 술어」 표가 비어 있었는데도 「잠금 힌트」 표의 우연한 동일 줄 인용 때문에 그
       잎은 이미 🟥가 아니었다).
+      **[2026-08-24 Task 7b — 위 테스트는 개명됐다]** ※ `grep`으로 위 이름을 찾은 사람을 위해 적는다 —
+      그 메서드는 지금
+      `CoverageMapGoldenTests.Requirement1_CurrentEdition_SpecMissingShouldMatchTransitionWindowCount`다.
+      **위 기록은 고치지 않는다 — 2026-08-24 그 시점의 🟥 = 0은 여전히 참이다.** 바뀐 것은
+      코퍼스가 아니라 도구다: 기계 확정 표 확장 브랜치가 「트랜잭션 경계」·「변수 대입」 표를
+      더하면서 `CoverageMapComposer.ExtractorFactLines`가 새 재료를 세기 시작했고,
+      `output/**/Spec.md`는 아직 옛 프롬프트 산출물이라 앵커가 없어 **같은 코퍼스에서 🟥이 205로
+      열렸다**(예정된 전이 창 — `2026-08-24-machine-table-expansion-design.md` §3의 실측 정정
+      블록에 105 + 100 분해와 함께 있다). 0을 안 거는데 이름이 `ShouldBeZero`로 남으면 이름이
+      거짓말이 되므로 함께 고쳤다. **재생성이 끝나 🟥이 0으로 돌아가면 원래 이름·원래 계약으로
+      되돌린다** — 그 지시는 단언 실패 메시지 안에 실려 있다.
 - [x] §6(2) `output.bak-2026-08-22` 대비 🟥·🟧 감소가 카탈로그 9회차 기록과 같은 방향이다
       **(Task 7 실측)** `CoverageMapGoldenTests.Requirement2_AgainstPriorEdition_DefectsShouldNotHaveGrown`이
       과거 판(14 SP 짝) 🟥+🟧 합계 395 → 현재 판 382로 감소를 확인했다(감소 13건). 14 SP 중

@@ -1260,6 +1260,55 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 「트랜잭션 경계」 표를 렌더한다. 줄·종류·이름만 전사한다 - 감싼 조건은
+        /// `TransactionBoundaryExtractor` 문서가 밝힌 이유로 담지 않는다.
+        /// </summary>
+        private static List<string> BuildTransactionBoundaryTableLines(
+            IReadOnlyList<TransactionBoundaryFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL TRANSACTION BOUNDARY TABLE] The following transaction statements are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 로직 흐름 요약` under the exact heading shown. Never merge rows, never omit a ROLLBACK, and never describe a boundary in prose instead of listing it - the batch implementation must reproduce every one of them.",
+                $"   {TransactionBoundaryExtractor.TableHeading}",
+                "   | 라인 | 종류 | 이름 |",
+                "   | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add($"   | {fact.Line} | {EscapeTableCell(fact.Kind)} | {EscapeTableCell(fact.Name)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
+        /// 「변수 대입」 표를 렌더한다. 대입식 원문을 그대로 싣는다 - 요약하면 그
+        /// 값의 계약이 사라진다. `|` 같은 비트 연산자가 셀 경계로 읽히지 않도록
+        /// <see cref="EscapeTableCell"/>을 반드시 거친다.
+        /// </summary>
+        private static List<string> BuildSetAssignmentTableLines(
+            IReadOnlyList<SetAssignmentFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL VARIABLE ASSIGNMENT TABLE] The following SET assignments are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 로직 흐름 요약` under the exact heading shown. Never summarise an assignment expression and never merge rows - the verbatim expression text is the contract.",
+                $"   {SetAssignmentExtractor.TableHeading}",
+                "   | 라인 | 변수 | 대입식 원문 |",
+                "   | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add($"   | {fact.Line} | {EscapeTableCell(fact.Variable)} | {EscapeTableCell(fact.Expression)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 한 사실 종류(실행 의미 · CASE 분기)를 한 갈래의 프롬프트에 어떻게 실을지 -
         /// Task 17, 최종 브랜치 리뷰 2차(Important). 이전에는 bool 두 개
         /// (crudAnalysisSectionPresent · logicFlowSectionPresent)로 "표냐 참고
@@ -1354,6 +1403,28 @@ Based on the structured reference context above, reverse engineer the stored pro
                     lines.AddRange(caseBranchPresentation == MachineFactPresentation.Table
                         ? BuildCaseBranchTableLines(caseBranches)
                         : BuildCaseBranchReferenceMaterialLines(caseBranches));
+                }
+            }
+
+            // [트랜잭션 경계·변수 대입 - Task 4b, 2026-08-24] 둘 다 CASE 분기와 같은
+            // `## 로직 흐름 요약` 소관이라 caseBranchPresentation을 그대로 재사용한다 -
+            // 새 파라미터를 늘리지 않는다. 다만 CASE 분기와 달리 Reference 변형(참고
+            // 재료 글머리 목록)은 만들지 않는다 - 두 사실은 `## CRUD 분석`이 요구하는
+            // 소스값 매핑에 CASE 식처럼 끼어들 자리가 없어 그 분기(CrudAnalysis,
+            // Reference)에서 참고 재료로 줄 근거가 없다. 그래서 Table일 때만 싣고,
+            // Reference·Omit 둘 다 아무것도 싣지 않는다(Omit과 같은 결과).
+            if (caseBranchPresentation == MachineFactPresentation.Table)
+            {
+                var transactionBoundaries = TransactionBoundaryExtractor.Extract(spDef.DdlText);
+                if (transactionBoundaries.Count > 0)
+                {
+                    lines.AddRange(BuildTransactionBoundaryTableLines(transactionBoundaries));
+                }
+
+                var setAssignments = SetAssignmentExtractor.Extract(spDef.DdlText);
+                if (setAssignments.Count > 0)
+                {
+                    lines.AddRange(BuildSetAssignmentTableLines(setAssignments));
                 }
             }
 

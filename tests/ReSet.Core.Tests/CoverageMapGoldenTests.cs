@@ -57,15 +57,56 @@ namespace ReSet.Core.Tests
         }
 
         // ------------------------------------------------------------------
-        // 요구 1 — 현재 판 🟥이 거의 0이어야 한다 (반증 가능한 예측)
+        // 요구 1 — 현재 판 🟥 총계가 전이 창 실측값에 머무는가
         // ------------------------------------------------------------------
 
+        /// <summary>
+        /// 전이 창의 🟥 총계 실측값. <b>재생성 전까지만 유효한 임시값이다</b> - 영구 계약이
+        /// 아니다. 명세서가 재생성되면 이 값은 내려가야 하고, 0에 도달하면 이 상수를 지우고
+        /// 원래 계약(총계 0)으로 돌아간다.
+        ///
+        /// [왜 205인가 - 분해] 14 SP 코퍼스 실측(2026-08-24, WAVE_BASE <c>abbc0c6</c>):
+        /// <code>
+        ///   트랜잭션 경계  BEGIN 12 + COMMIT 12 + ROLLBACK 81 = 105  (잎 105개 전부 🟥)
+        ///   변수 대입      SetVariableStatement 잎 103개 중 100개가 🟥
+        ///   합계           105 + 100 = 205
+        /// </code>
+        /// SET 잎 103개 중 🟥이 아닌 3개는 <c>dbo.UP_UTIL_SETTLE_PROC_ETC</c>의 69·113·114행이다
+        /// - <c>WHILE</c> 최상위 상수 재설정이라 기존 「실행 의미 (기계 확정 — 수정 금지)」 표
+        /// 앵커가 이미 짚고 있어 🟩을 유지한다(앵커 출처를 직접 찍어 확인했다).
+        ///
+        /// [설계서 예측 202와 3건 어긋난 이유 - 이 브랜치의 결함이 아니다] 확장 설계서 §3의
+        /// 202는 <c>105 + 97</c>이었고, 그 97은 DDL 커버리지 맵 설계서(<c>2026-08-24-ddl-coverage-map-design.md</c>)
+        /// 🟧 백로그 표에서 온 값이다. 그 표의 <c>SetVariableStatement</c> 「건수」 칸 100은
+        /// <b>이미 3건을 뺀 🟧 개수</b>(잎 103 − 재료 붙은 3)인데, 같은 칸의 서술이 거기서
+        /// 3을 <b>한 번 더</b> 빼 "나머지 97건"이라고 적었다. 즉 상류 백로그의 뺄셈 중복이지
+        /// 새 추출기의 오동작이 아니다. 의도한 메커니즘은 정확히 작동했다.
+        /// </summary>
+        private const int TransitionWindowSpecMissing = 205;
+
+        /// <summary>
+        /// 기계 확정 표 확장(<c>2026-08-24-machine-table-expansion</c>) 브랜치가 열어 둔
+        /// <b>전이 창</b>의 실측값을 못박는다. 원래 계약은 "🟥 총계 0"이었다 - 그 계약은
+        /// 명세서 재생성이 끝나면 되돌아온다(아래 <see cref="TransitionWindowSpecMissing"/>
+        /// 주석 참고).
+        /// </summary>
         [SkippableFact]
-        public void Requirement1_CurrentEdition_SpecMissingShouldBeZero()
+        public void Requirement1_CurrentEdition_SpecMissingShouldMatchTransitionWindowCount()
         {
-            // 감사 10회차가 🔴 0 · 🟠 0으로 끝났다. Task 4 실측(14 SP · 잎 487개)도 🟥 0을
-            // 냈다 - 이 테스트는 그것을 회귀로 잠근다. 맵이 🟥을 다수 내면 맵이 틀렸거나
-            // 감사가 놓친 것이다 - 어느 쪽이든 조사할 값어치가 있는 신호다.
+            // [원래 계약] 감사 10회차가 🔴 0 · 🟠 0으로 끝났고 Task 4 실측(14 SP · 잎 487개)도
+            // 🟥 0을 냈다 - 이 테스트는 그 0을 회귀로 잠그고 있었다.
+            //
+            // [왜 0이 아닌가 - 전이 창] 같은 브랜치가 기계 확정 표 둘(「트랜잭션 경계」·
+            // 「변수 대입」)을 새로 만들면서 CoverageMapComposer.ExtractorFactLines가 그
+            // 재료를 세기 시작했다. 그런데 output/**/Spec.md는 아직 옛 프롬프트로 생성된
+            // 것이라 그 표가 없다. 재생성은 별도 회차로 미뤘다. 그래서 설계서 §3이 예측한
+            // 창이 실제로 열렸다:
+            //
+            //     지금        재료 없음 + 앵커 없음 = 🟧 관할 밖
+            //     구현 직후   재료 있음 + 앵커 없음 = 🟥 명세서 결함   ← 여기
+            //     재생성 후   재료 있음 + 앵커 있음 = 🟩 정합
+            //
+            // 205는 맵이 틀린 것이 아니라 맵이 정직하게 말하는 참이다.
             var root = RepoRoot();
             Skip.If(string.IsNullOrEmpty(root), "output/의 실물 SP 산출물을 찾지 못했다 - 요구 1 건너뜀");
 
@@ -96,10 +137,20 @@ namespace ReSet.Core.Tests
 
             _output.WriteLine($"실측 대상: {checkedCount}/{objectDirs.Length} SP");
             _output.WriteLine($"현재 판 🟥 총계: {total}");
-            Assert.True(total == 0,
-                $"🟥이 {total}건 났다. 감사 10회차(🔴 0 · 🟠 0)와 어긋난다 - " +
-                "맵이 틀렸는지 감사가 놓쳤는지 조사하고 사유를 설계서에 적어라. " +
-                "조사 결과 맵이 맞다면 이 단언을 그때의 실측값으로 고쳐라.");
+
+            var direction = total > TransitionWindowSpecMissing
+                ? $"{total - TransitionWindowSpecMissing}건 늘었다. 새 결함이 들어왔거나 추출기 " +
+                  "재료가 또 늘었다 - 위에 찍힌 문장 유형으로 가려라. 트랜잭션 경계·SET 대입 " +
+                  "밖의 유형이 새로 보이면 재료가 는 것이고, 같은 유형인데 건수만 늘었으면 " +
+                  "추출기나 앵커 인식이 퇴행한 것이다."
+                : $"{TransitionWindowSpecMissing - total}건 줄었다. 재생성이 돌았거나 앵커가 " +
+                  $"생겼다 - 기대한 방향이다. 이 단언의 기대값을 실측값 {total}으로 내려라. " +
+                  "0에 도달했으면 TransitionWindowSpecMissing 상수와 이 전이 창 주석을 지우고 " +
+                  "메서드 이름을 Requirement1_CurrentEdition_SpecMissingShouldBeZero로 되돌려 " +
+                  "원래 계약(총계 0)을 복원하라 - 그것이 이 테스트의 최종 형태다.";
+
+            Assert.True(total == TransitionWindowSpecMissing,
+                $"🟥 총계가 {total}건이다. 전이 창 실측값 {TransitionWindowSpecMissing}건에서 {direction}");
         }
 
         // ------------------------------------------------------------------

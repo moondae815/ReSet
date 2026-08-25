@@ -27,11 +27,32 @@ namespace ReSet.Core.Services
         {
             if (string.IsNullOrEmpty(expression)) return string.Empty;
 
-            return expression
+            return CollapseNewlines(expression)
+                .Replace("|", "\\|");
+        }
+
+        /// <summary>
+        /// 개행만 공백 하나로 접는다. 스페이스·탭은 손대지 않는다 - <see cref="Escape"/>가
+        /// 하는 정규화가 정확히 이만큼이기 때문이다.
+        ///
+        /// [왜 이 메서드를 따로 공개하는가 - 2026-08-24 축 B Fix Round 2] 렌더(Escape)와
+        /// 추출기(예: `SetAssignmentExtractor`)가 원문에서 표 셀로 가는 정규화를 각자
+        /// 따로 구현하면 둘이 갈릴 수 있다 - 렌더가 개행만 접는데 추출기가 그보다
+        /// 덜 접으면(예: 리터럴 안 개행을 보존) 모델이 볼 수 있는 값(렌더된 값)과
+        /// `MechanicalValidator`가 대조하는 fact가 영원히 어긋나 개행이 있는 값은
+        /// 어떤 산출물도 만족시킬 수 없는 요구가 된다. 반대로 추출기가 더 접으면(예:
+        /// 스페이스·탭까지 하나로 뭉개면) 렌더가 지키는 값보다 값 충실도를 공짜로
+        /// 버린다. 이 메서드 하나를 두 소비자가 공유하게 해서 그 드리프트를 구조적으로
+        /// 막는다 - 한쪽만 바뀌는 것이 불가능하다.
+        /// </summary>
+        public static string CollapseNewlines(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            return text
                 .Replace("\r\n", " ")
                 .Replace("\n", " ")
-                .Replace("\r", " ")
-                .Replace("|", "\\|");
+                .Replace("\r", " ");
         }
 
         /// <summary>

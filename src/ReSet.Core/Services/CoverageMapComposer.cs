@@ -116,6 +116,9 @@ namespace ReSet.Core.Services
         /// 아니다. 파생 테이블 정의(DerivedColumnDefinition)는 줄 번호가 없어 여기
         /// 들어오지 못한다(설계서 미확정 사항 5번의 실측 대상). <b>SourceComments도
         /// 의도적으로 뺀다</b>(2026-08-24 Fix Round 1 - 실측으로 가른 결정).
+        /// <b>TransactionBoundaries·SetAssignments는 2026-08-24 Task 7이 더했다</b>
+        /// (설계서 §2 배선 7번) - 둘 다 줄·종류(또는 변수)만 담아 SourceComments와
+        /// 같은 배제 사유가 없다.
         ///
         /// [왜 SourceComments를 빼는가 - SpecAnchorIndex의 주석 앵커 배제와 짝이다]
         /// SpecAnchorIndex는 원본 주석 표에서 나온 앵커를 IsCommentAnchor=true로 갈라
@@ -147,6 +150,8 @@ namespace ReSet.Core.Services
             lines.AddRange(expectations.CaseBranches.Select(f => f.Line));
             lines.AddRange(expectations.ReferencedFunctionCalls.Select(f => f.Line));
             lines.AddRange(expectations.RoundingCalls.Select(f => f.Line));
+            lines.AddRange(expectations.TransactionBoundaries.Select(f => f.Line));
+            lines.AddRange(expectations.SetAssignments.Select(f => f.Line));
 
             // ExecutionSemanticFact.Line은 string이다(ExecutionSemanticsFacts.cs:12).
             // 숫자가 아닌 값("-" 등)은 조용히 버린다.

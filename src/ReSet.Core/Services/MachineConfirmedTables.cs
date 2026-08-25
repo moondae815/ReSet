@@ -75,7 +75,14 @@ namespace ReSet.Core.Services
                 DmlScopeExtractor.ReferencedFunctionTableHeading,
                 MachineConfirmedTableVerification.Mixed,
                 "the call site and arguments come from the DDL and are checkable, but the Spec.md "
-                + "link column comes from the pipeline's own output. Never report that column.")
+                + "link column comes from the pipeline's own output. Never report that column."),
+            // 둘 다 DDL 본문에서 그대로 읽히는 전사 표다.
+            new MachineConfirmedTable(
+                TransactionBoundaryExtractor.TableHeading,
+                MachineConfirmedTableVerification.DdlTranscription),
+            new MachineConfirmedTable(
+                SetAssignmentExtractor.TableHeading,
+                MachineConfirmedTableVerification.DdlTranscription)
         };
 
         // [선언 순서 주의] 아래 초기화는 All을 읽는다. 정적 필드 초기화는 선언 순서대로
