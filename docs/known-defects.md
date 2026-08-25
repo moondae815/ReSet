@@ -1025,6 +1025,21 @@
   `Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs")`를 직접 조립해,
   식별자에 `.`이나 파일명 금지문자가 있으면 `OutputPathResolver.EncodePathSegment`를 거치는
   캐시 조회 경로와 갈라진다.
+- **기본 설정에서 `dependency-manifest.json`이 아예 안 생기고 `metadata.json`이 스위치에 걸린다** —
+  두 파일은 "뒤 계층이 원천으로 읽으므로 끌 수단을 두지 않는다"가 설계 의도인데
+  (`MetadataExporter.ExportCodeObjectArtifactsAsync`의 "지시서 번들이 참조 테이블 스키마를
+  만들 때 쓰는 원천이다" 주석), 기본 설정이 그 의도를 지키지 못한다.
+  `AnalysisSettings:AnalyzeReferencedCodeObjects`가 `false`(기본값)면 저장 책임이
+  `Program.SaveRawArtifactsAsync`로 넘어가는데(`SpAnalysisOutcome.FromSingleObjectPipeline`이
+  `Persistence`를 `NotAttempted`로 두고, 호출부가 그 값일 때만 부른다) 그 경로에는
+  `ExportCodeObjectArtifactsAsync` 호출이 없다 — 유일한 호출부가
+  `DependencyAnalysisOrchestrator`(참조분석 ON)다. 그래서 **매니페스트는 어느 설정으로도
+  못 켜고**, `metadata.json`은 `OutputSettings:SaveRawJson` 하나에 통째로 걸린다.
+  같은 이유로 `Objects/` 정본(`object_definition.sql`)도 OFF에서는 만들어지지 않는다.
+  증상은 조용하다 — `--coverage-map`을 Job에 걸면 `CoverageMapCommand.ClosureOf`가 읽을
+  매니페스트가 없어 폐포가 소비 명세서 목록으로 줄어드는데, 실패가 아니라 더 작은 수를
+  찍고 정상 종료한다(`소비 명세서 N개 → 폐포 N개`). `SaveRawJson`까지 꺼져 있으면
+  `LoadObject`가 전건을 건너뛴다.
 
 ### 테스트 커버리지
 
