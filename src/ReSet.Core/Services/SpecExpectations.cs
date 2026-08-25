@@ -413,9 +413,18 @@ namespace ReSet.Core.Services
                 // 성립한다. 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이
                 // null을 돌려주고 SET 대입 검사가 한 번도 돌지 않는다.
                 && setAssignments.Count == 0
-                // errorCodes도 중복항이 아니다 - 오류 가드만 있고 다른 재료가 없는 SP가
-                // 성립한다. 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이
-                // null을 돌려주고 오류 코드 검사가 한 번도 돌지 않는다.
+                // [Fix Round 1 - 계획서의 원래 주석이 틀렸다] 오늘은 중복항이다.
+                // DmlScopeExtractor.ExtractErrorCodes는 RecordErrorCode를 오직
+                // Facts.Add 직후(Record·Visit(InsertSpecification) 안)에서만 부른다 -
+                // 즉 ErrorCodeFact는 이미 DmlScopeFact로 실린 문장 위에만 얹히는
+                // 주석(annotation)이라, errorCodes가 비지 않으면 dmlScopeFacts도
+                // 반드시 비지 않는다(같은 DDL로 두 추출기를 각각 돌려
+                // DmlScopeFacts.Count == 1을 실측해 확인했다 - "오류 가드만 있고
+                // 다른 재료가 없는 SP"는 오늘 성립하지 않는다). setPredicates·
+                // referencedFunctionCalls와 같은 이유로 그래도 잇는다: 이 항이
+                // 실제로 다른 항과 독립해 작동하는 날(예: SELECT 가드로 넓어지되
+                // 그 SELECT가 Facts에 실리지 않는 경로가 생기는 등)이 오면 이 항이
+                // 없는 채 그 변화가 조용히 오류 코드 검사를 죽인다.
                 && errorCodes.Count == 0
                 // insertTargetTables는 중복항이 아니다 - INSERT 매핑 표 대조(§4 D)는
                 // dmlScopeFacts 등 다른 재료가 하나도 없는 SP에서도 필요할 수 있다
