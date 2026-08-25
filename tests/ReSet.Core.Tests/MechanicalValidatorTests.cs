@@ -7724,6 +7724,99 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B·C 태스크 10 - INSERT 문장을 후보에서 뺀다.
+        //
+        // 코퍼스 전수 스윕(2026-08-25, 326개 단계) 실측: 코드 앵커를 켠 뒤
+        // 검사 B 발화가 1건 → 269건으로 늘었는데 그중 199건(74%, 15개 조합)이
+        // 이 축의 구조적 거짓양성이었다. 원인은 StepSqlStatementReader.cs의
+        // DmlCollector.Visit(InsertStatement)가 `Add("INSERT", node,
+        // node.InsertSpecification?.Target, null, null)`로 where·from에 항상
+        // null을 넘긴다는 데 있다(같은 파일 Visit(UpdateStatement)·
+        // Visit(DeleteStatement)는 실제 WhereClause·FromClause를 넘긴다) -
+        // 그래서 모든 INSERT 문장의 PredicateColumns·JoinColumns는 실제 SQL과
+        // 무관하게 구조적으로 항상 빈 목록이고, 검사 B는 그 빈 목록을 "명세서가
+        // 확정한 술어 컬럼이 없다"로 오인한다. 실물:
+        // output/Jobs/POQSettleBatch1/agent/steps/S04.md:39-52가 실제로는
+        // `WHERE USESTATE = 0`을 담은 INSERT...SELECT인데도 이 결함으로
+        // 오탐이 났다.
+        //
+        // 이 좁힘은 **INSERT를 영구히 검사하지 않는다는 정책이 아니다** - 재료
+        // (StepSqlStatementReader가 where·from을 null로 넘기는 배선) 결손에
+        // 대한 한시적 조치다. **되돌릴 지점**: DmlCollector.Visit(InsertStatement)이
+        // `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
+        // 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면, 그때 이 좁힘도
+        // 함께 걷어내고 재측정해야 한다(그 배선 수정 자체는 이 태스크 범위 밖).
+        //
+        // 검사 C(CheckAnchoredStatementExtras)도 같은 이유로 INSERT를 후보에서
+        // 뺀다 - extras 역시 Statement.PredicateColumns(구조적으로 항상 빈
+        // 목록)에서만 뽑으므로 오늘은 침묵하지만, 검사 B만 고치고 검사 C를 그대로
+        // 두면 두 검사가 서로 다른 후보 집합을 본다는 불변식이 깨진다(코퍼스
+        // 스윕상 검사 C의 38건은 12개 조합 전부 UPDATE라 이 좁힘의 영향을 받지
+        // 않아야 한다).
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckB()
+        {
+            // 실물 결함 모양(S04.md:39-52)을 재현한다: INSERT INTO ... SELECT ...
+            // WHERE ...는 실제로 술어 컬럼(USESTATE)을 담지만, DmlCollector가
+            // INSERT의 where·from을 항상 null로 넘겨 StepSqlStatement.PredicateColumns가
+            // 구조적으로 비어 있다. 좁히기 전에는 이 빈 목록을 근거로 검사 B가
+            // "명세서가 확정한 최상위 WHERE 술어 컬럼 USESTATE이(가) 없습니다"를
+            // 낸다 - 문장이 실제로는 그 컬럼을 담고 있는데도.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
+                        new[] { "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S04 단계\n\n```sql\n" +
+                "-- 갱신 5\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
+                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckC()
+        {
+            // 검사 C도 같은 (Ordinal, Kind) 그룹핑·후보 선정 경로를 타므로 INSERT를
+            // 같이 뺀다 - 오늘은 extras가 구조적으로 항상 비어 있어 이 시나리오
+            // 단독으로는 검사 C가 발화하지 않지만(Statement.PredicateColumns가
+            // where=null이라 항상 빈 목록), 두 검사가 같은 후보 집합 규약을
+            // 지킨다는 것을 회귀로 고정한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
+                        new[] { "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S04 단계\n\n```sql\n" +
+                "-- 갱신 5\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
+                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0 AND RUNID = @pi_runId;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는 술어 컬럼"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 검사 C - 명세서에 없는 최상위 술어 컬럼이 문장에 붙었는가.
         //
         // [이 검사가 POQSettleBatch1 축 B 감사의 S07 🟠·S09 🟠 어느 쪽도 닫지

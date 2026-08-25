@@ -6128,6 +6128,41 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// INSERT 문장을 검사 B(<see cref="CheckAnchoredStatementFacts"/>)·검사 C
+        /// (<see cref="CheckAnchoredStatementExtras"/>)의 후보에서 뺀다.
+        ///
+        /// [한시적 좁힘 - 「INSERT는 검사하지 않는다」는 영구 정책이 아니다]
+        /// 코퍼스 전수 스윕 실측(2026-08-25, 326개 단계)에서 코드 앵커를 켠 뒤
+        /// 검사 B 발화가 1건 → 269건으로 늘었는데, 그중 199건(74%, 15개 조합)이
+        /// 이 축 하나의 구조적 거짓양성이었다. 원인은 재료(<see cref="StepSqlStatementReader"/>)
+        /// 쪽에 있다 - StepSqlStatementReader.cs:464-465의
+        /// `Visit(InsertStatement) => Add("INSERT", node, node.InsertSpecification?.Target,
+        /// null, null)`가 where·from 자리에 항상 null을 넘긴다(같은 파일의
+        /// Visit(UpdateStatement)·Visit(DeleteStatement)는 실제 WhereClause·
+        /// FromClause를 넘기는 것과 대조적이다). 그 결과 모든 INSERT 문장의
+        /// StepSqlStatement.PredicateColumns·JoinColumns는 실제 SQL 내용과
+        /// 무관하게 구조적으로 항상 빈 목록이다 - 검사 B는 그 빈 목록을 "명세서가
+        /// 확정한 술어 컬럼이 없다"로 오인한다. 실물: `INSERT INTO ... SELECT ...
+        /// WHERE USESTATE = 0` 모양의 output/Jobs/POQSettleBatch1/agent/steps/
+        /// S04.md:39-52가 실제로는 술어를 담고 있는데도 이 결함으로 오탐이 났다.
+        ///
+        /// [되돌릴 지점] DmlCollector.Visit(InsertStatement)이
+        /// `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
+        /// 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면(이 태스크의 쓰기
+        /// 허용 범위 밖 - StepSqlStatementReader.cs는 건드리지 않는다), 그 시점에
+        /// 이 좁힘을 걷어내고 재측정해야 한다.
+        ///
+        /// [검사 C도 함께 좁히는 이유] 검사 C의 extras도 같은
+        /// Statement.PredicateColumns(구조적으로 항상 빈 목록)에서만 뽑으므로
+        /// 오늘은 이미 침묵한다(스윕상 검사 C 38건은 12개 조합 전부 UPDATE). 하지만
+        /// 검사 B만 좁히고 검사 C를 그대로 두면 두 검사가 서로 다른 후보 집합을
+        /// 본다는 불변식이 깨져, 위 배선이 나중에 고쳐질 때 검사 C만 조용히 INSERT를
+        /// 다시 보기 시작하는 비대칭을 만든다 - 그래서 한쪽만 고치면 다른 쪽으로 샌다.
+        /// </summary>
+        private static bool IsCandidateForAnchoredStatementCheck(StepSqlStatement statement) =>
+            !statement.Kind.Equals("INSERT", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 레거시 SP별 <see cref="SpecStatementFacts.ErrorCodeToOrdinal"/>을 하나로
         /// 합친다. 같은 코드 문자열이 서로 다른 SP에서 서로 다른 (Kind, Ordinal)로
         /// 나타나면 어느 SP 것인지 알 수 없으므로 - <see cref="CheckAnchoredStatementFacts"/>가
@@ -6222,6 +6257,7 @@ namespace ReSet.Core.Services
 
             var codeMap = MergeErrorCodeMaps(facts);
             var anchored = statements
+                .Where(IsCandidateForAnchoredStatementCheck)
                 .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
                 .Where(a => a.Ordinal.HasValue)
                 .ToList();
@@ -6430,6 +6466,7 @@ namespace ReSet.Core.Services
 
             var codeMap = MergeErrorCodeMaps(facts);
             var anchored = statements
+                .Where(IsCandidateForAnchoredStatementCheck)
                 .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
                 .Where(a => a.Ordinal.HasValue)
                 .ToList();
