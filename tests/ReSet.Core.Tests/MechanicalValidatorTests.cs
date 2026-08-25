@@ -8537,5 +8537,70 @@ END"
                 result.DetailedErrors,
                 e => e.Type == ErrorType.SetAssignmentTableMissing);
         }
+
+        /// <summary>
+        /// 4개 필수 위치 인자를 빈 컬렉션으로 채운 `SpecExpectations`. `ErrorCodes` 등
+        /// `init` 전용 속성만 object initializer로 얹어 쓰기 위한 최소 뼈대다.
+        /// </summary>
+        private static SpecExpectations EmptySpecExpectations() =>
+            new(
+                new List<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                new List<string>());
+
+        [Fact]
+        public void ErrorCodeTable_WhenSpecOmitsARow_ShouldReportMissing()
+        {
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 1, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 2, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | -1 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenTranscribedVerbatim_ShouldNotReport()
+        {
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[] { new ErrorCodeFact("UPDATE", 9, "-13", "@po_intRetVal") }
+            };
+
+            var markdown = WrapSpec(
+                DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 9 | -13 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenThereAreNoFacts_ShouldNotRequireTheTable()
+        {
+            // 오류 가드가 없는 SP는 표가 없는 것이 정상이다. 요구하면 만족 불가능한
+            // 지시가 되어 재시도를 소진한다(2026-08-24 검사 A C1과 같은 부류).
+            var expectations = EmptySpecExpectations();
+
+            var result = new MechanicalValidator().Validate(WrapSpec("내용\n"), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
     }
 }

@@ -57,6 +57,9 @@ namespace ReSet.Core.Services
         // 변수 대입 표(기계 확정 - 라인·변수·대입식 원문)의 L1 앵커. 위와 같은
         // 이유로 서수 이동은 기능에 영향이 없다.
         SetAssignmentTableMissing,
+        // 오류 코드 표(기계 확정 - 문장·오류 코드·설정 대상)의 L1 앵커. 위와 같은
+        // 이유로 서수 이동은 기능에 영향이 없다.
+        ErrorCodeTableMissing,
         // 기계 확정 표가 GFM 표로 렌더링되지 않는 형태로 옮겨졌을 때의 L1 앵커.
         // 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
         MachineTableShapeBroken,
@@ -184,6 +187,7 @@ namespace ReSet.Core.Services
                     CheckCaseBranches(cleansed, expectations, result);
                     CheckTransactionBoundaries(cleansed, expectations, result);
                     CheckSetAssignments(cleansed, expectations, result);
+                    CheckErrorCodes(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -4621,6 +4625,89 @@ namespace ReSet.Core.Services
             {
                 // 작성 계약 6: 위 CheckTransactionBoundaries와 같은 이유다.
                 Log.Warning(ex, "[MechanicalValidator] 변수 대입 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 오류 코드 표의 전사를 대조한다.
+        ///
+        /// 행 키는 (문장, 오류 코드, 설정 대상) 셋이다 - CheckSetAssignments가 (라인,
+        /// 변수, 대입식 원문)으로 행을 특정하는 것과 같은 강도다. 「문장」 칸은
+        /// `{Operation} {StatementOrdinal}`(`UPDATE 9`)로, DmlScopeExtractor가 채번하는
+        /// 바로 그 번호와 AiService의 렌더가 그대로 왕복한다.
+        ///
+        /// [불변식 1] `expectations.ErrorCodes.Count == 0`이면 표를 요구하지 않는다
+        /// (조기 반환). 오류 가드가 없는 SP는 표가 없는 것이 정상이다 - 요구하면
+        /// 만족 불가능한 지시가 되어 재시도를 소진한다(2026-08-24 검사 A C1).
+        ///
+        /// [불변식 2] 메시지가 인쇄하는 근거와 판정 근거가 같아야 한다 - 검사 E가
+        /// 2026-08-24에 이 규칙을 어겨 129건 중 70건에 거짓 문장을 인쇄했다. 아래
+        /// 메시지는 판정에 쓴 statementToken · fact.Code · fact.Variable 셋만 인쇄한다.
+        /// </summary>
+        private static void CheckErrorCodes(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ErrorCodes.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, DmlScopeExtractor.ErrorCodeTableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 오류 코드 표가 명세서에 없습니다. "
+                        + $"`{DmlScopeExtractor.ErrorCodeTableHeading}` 헤딩과 "
+                        + $"{expectations.ErrorCodes.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ErrorCodeTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.ErrorCodes)
+                {
+                    var statementToken = $"{fact.Operation} {fact.StatementOrdinal}";
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == statementToken)
+                            && cells.Any(c => c == fact.Code)
+                            && cells.Any(c => c == fact.Variable);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"오류 코드 표에 `{statementToken}` 행이 없거나 오류 코드·설정 대상이 "
+                        + $"다릅니다. `{fact.Code}`를 `{fact.Variable}`에 설정하는 행을 그대로 "
+                        + "옮겨야 합니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ErrorCodeTableMissing,
+                        Message = message,
+                        RawContext = $"{statementToken} @ {fact.Code}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // 작성 계약 6: 위 CheckTransactionBoundaries와 같은 이유다.
+                Log.Warning(ex, "[MechanicalValidator] 오류 코드 표 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 
