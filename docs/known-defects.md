@@ -743,11 +743,10 @@
   근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 22.
 
 - **검사 B·C 조건 (B) 잔여 108건 표본 20건 판정 — 부분 실측(2026-08-25, Task 11).**
-  **미완 고지 — 이 항목은 부분 실측이다.** 표본 20건 중 **7건만 원본 DDL·Spec.md 대조까지
-  끝냈다**(진짜 1 · 거짓양성 6). 나머지 13건은 좌표와 진단값(아래 표)만 잡았고 판정은
-  "판정불가 — 미검증"이다. 검사 C 표본 10건은 **전부 미검증**이다(좌표·진단값만).
-  다음 회차가 이 표의 "판정불가" 행부터 이어받으면 하네스·표본 선정 비용 없이 바로
-  판정에 들어갈 수 있다.
+  **미완 고지 — 이 항목은 부분 실측이다.** 표본 20건 중 **검사 B 10건은 원본 DDL·
+  Spec.md 대조까지 전부 끝냈다**(진짜 2 · 거짓양성 8). **검사 C 표본 10건은 전부
+  미검증**이다(좌표·진단값만, "판정불가 — 미검증"). 다음 회차가 검사 C 표본부터
+  이어받으면 하네스·표본 선정 비용 없이 바로 판정에 들어갈 수 있다.
 
   **발화량 실측(조건 B, 326개 전수)** — 검사 B **70건** · 검사 C **38건**(기대치 70·38과
   정확히 일치).
@@ -784,11 +783,11 @@
   | 3 | B(술어) | POQSettleProc11/S06 | UPDATE 13 | ID 없음 | **True** | `[YMD,PGName,UseState,AYMD]` | **거짓양성(추정, 근거 확인함)** — 원본 SP는 `TSettleMst`를 자기 자신에 PLTID+ID로 조인해 필터링했으나(Spec.md 236·321-322행), 이행 코드는 `CROSS APPLY`로 대상 행에 직접 상관 계산해 그 자기조인 자체가 사라졌다(`output/Jobs/POQSettleProc11/agent/steps/S06.md:379-446`). CROSS APPLY는 조인 키 없이 행 단위 상관이라 "ID"가 구조적으로 불필요해졌다 — 다만 PLTID+ID 유일성 전제가 실제로 깨지는 배포가 있는지는 확인 못 함 |
   | 4 | B(술어) | POQSettleProc12/S08 | UPDATE 7 | PLTID 없음 | **True** | `[]` | **거짓양성** — CTE(`CandidatePLTID`→`CancelGroup`) 안에서만 PLTID를 쓰고, 최상위 UPDATE는 `ON X.ID=K.MaxID`로만 조인한다(`output/Jobs/POQSettleProc12/agent/steps/S08.md:250-299`) |
   | 5 | B(술어+조인) | POQSettleProc13/S09 | UPDATE 3 | PGNAME,MALLID,CollectPeriodID,CollectFlag(술어)+PGNAME,MALLID,CollectPeriodID(조인) 없음 | False | `[YMD,InState,InYMD]` | **진짜 결함(확인)** — 원본 DDL(`raw/metadata.json` DdlText 69-80행)이 `TPGCMRate B`·`TPGCollectPeriodMst C`를 PGNAME/MALLID/CollectPeriodID로 조인하고 CollectFlag=1까지 재검증하는데, 이행 SQL(`output/Jobs/POQSettleProc13/agent/steps/S09.md:99-107`)은 이 조인·필터를 통째로 뺐다 — `WHERE A.YMD=@pi_strYMD AND A.InState=1 AND ISNULL(A.InYMD,'')=''`뿐이다. CTE·스테이징 어느 쪽도 아니고 원본이 명시한 재검증 조건이 순수 누락됐다 |
-  | 6 | B(술어) | POQSettleProc17/S07 | UPDATE 10 | MALLID 없음 | False | `[YMD,PGName,TID,CID,UseState,AYMD]` | **판정불가 — 미검증**. 원본 DDL은 `TPGCMRate B`를 PGNAME+MALLID로 조인하지만(Spec.md 233·302-303행) SET절이 B의 컬럼을 쓰지 않아(`A.PGCOMM`만 참조) 조인 목적이 존재 필터인지 확인 못 함 — 이행 SQL은 이 조인을 뺐다(`output/Jobs/POQSettleProc17/agent/steps/S07.md:339-352`). #5와 같은 갈래(원본 조인 소거)로 보이나 원본 DDL의 B 조인 목적을 끝까지 못 밝혔다 |
+  | 6 | B(술어) | POQSettleProc17/S07 | UPDATE 10 | MALLID 없음 | False | `[YMD,PGName,TID,CID,UseState,AYMD]` | **진짜 결함(확인)** — 원본 DDL(`raw/metadata.json` DdlText 271-280행)이 `TSettleMst A ,TPGCMRate B WITH(NOLOCK)`를 `A.PGNAME=B.PGNAME AND A.MALLID=B.MALLID`로 조인하는데(SET절은 B 컬럼을 안 쓴다 — 순수 존재 필터), 이행 SQL(`output/Jobs/POQSettleProc17/agent/steps/S07.md:339-352`)은 이 조인 자체를 뺐다. #5와 같은 갈래(원본이 명시한 존재-필터용 조인이 이행에서 통째로 소거) |
   | 7 | B(술어) | POQSettleProc19/S11 | UPDATE 7 | PLTID 없음 | **True** | `[]` | **거짓양성** — #4와 동일 패턴(CTE `PartialTarget`, 최상위 조인은 `X.ID=P.ID`뿐). `output/Jobs/POQSettleProc19/agent/steps/S11.md:281-317` |
-  | 8 | B(술어) | POQSettleProc19/S11 | UPDATE 10 | CYMD,AYMD,RefundFlag 없음 | False | `[YMD,PGName,UseState]` | **판정불가 — 미검증** |
+  | 8 | B(술어) | POQSettleProc19/S11 | UPDATE 10 | CYMD,AYMD,RefundFlag 없음 | False | `[YMD,PGName,UseState]` | **거짓양성(확인) — 세 번째 원인 갈래: 앵커 코드 자체가 착오.** 이행 SQL의 이 문장은 주석("9. easybank 취소 및 부분취소 수수료")·필터(`PGName='easybank'`)로 보아 원본의 **UPDATE 9**(Spec.md 276·361·490행 — "갱신 9는 easybank")이고, 원본 DDL은 이 문장에 오류 코드 **`-10`**을 쓴다(`raw/metadata.json` DdlText 300-320행). 그런데 이행 SQL은 이 문장에 `SET @v_currentStepId = -11`을 달았다 — `-11`은 원본에서 **다른 문장**(KFTC/INIBANK, UPDATE 10)의 코드다(DdlText 329-345행). 코드 앵커가 엉뚱한 스펙 행(UPDATE10)에 귀속시켜 "CYMD,AYMD,RefundFlag 없음"을 냈지만, 올바른 행(UPDATE9: CLIENTID,PGNAME,MALLID,YMD,USESTATE)과 대조하면 이 문장의 실제 컬럼(Predicate+Join)이 전부 충족한다 — CTE·스테이징과는 다른 원인(이행 코드 자신의 오류 코드 오기재) |
   | 9 | B(술어) | POQSettleProc8/S10 | UPDATE 5 | ProcYMD,YMD,PGNAME,CompanySalesType,TxAmt,CLVTType,ExtraSettleFlag 없음(전량) | **True** | `[]` | **거짓양성** — CTE(`BeforeValue`) 안에 전체 필터가 있고 최상위는 `ON B.ID=S.ID`뿐(`output/Jobs/POQSettleProc8/agent/steps/S10.md:419-453`) |
-  | 10 | B(술어) | POQSettleProc9/S13 | DELETE 4 | OUTSTATE 없음 | False | `[]`(Join은 `[RunId,TargetName,YMD,OUTYMD]`) | **판정불가 — 미검증**. Predicate가 완전히 비어 있는데 HasOpaqueJoinSource는 False — CTE가 아닌 다른 사각지대(예: 스칼라 서브쿼리 WHERE, `ColumnCollector`가 원래 건너뛰는 자리) 의심되나 원본 대조 못 함 |
+  | 10 | B(술어) | POQSettleProc9/S13 | DELETE 4 | OUTSTATE 없음 | False | `[]`(Join은 `[RunId,TargetName,YMD,OUTYMD]`) | **거짓양성(확인) — 네 번째 원인: 스테이징 키 테이블 아키텍처.** 레거시 `UP_Util_Settle_Summary`의 원본 DELETE 4는 단순 `WHERE YMD=@pi_strYMD AND OUTSTATE IN (2,9)`(raw DdlText 64-66행)이지만, S13은 "SummarySwapExecutor: 검증된 작업 결과를 네 운영 테이블에 단일 트랜잭션으로 교체"하는 아키텍처로 이행돼, 실제 DELETE는 사전 계산된 `batch.POQSettleS13AffectedKey`(RunId/TargetName/YMD/OUTYMD로 조인)에만 의존한다(`output/Jobs/POQSettleProc9/agent/steps/S13.md:246-254`). OUTSTATE 필터는 그 키 테이블을 채우는 앞선 INSERT/스테이징 단계에 있을 것으로 추정되나, INSERT는 `IsCandidateForAnchoredStatementCheck`가 후보에서 빼 검사에 보이지 않는다 — #2와 같은 "2단계 스테이징" 갈래 |
   | 11 | C | POQSettleBatch1/S09 | UPDATE 2 | USESTATE 초과 | False | `[ProcYMD,YMD,PGNAME,CompanySalesType,TxAmt,ExtraSettleFlag,OutState,OutYMD,USESTATE]` | **판정불가 — 미검증** |
   | 12 | C | POQSettleBatch1/S10 | UPDATE 2 | UseState 초과 | False | `[ProcYMD,YMD,CompanySalesType,UseState,TxAmt,ExtraSettleFlag]`(Join에 PGName,ExtraType) | **판정불가 — 미검증** |
   | 13 | C | POQSettlePrco20/S06 | UPDATE 12 | PGName 초과 | False | `[YMD,PGName,UseState,AYMD,DiscountFlag,ExtraSettleFlag]` | **판정불가 — 미검증** |
@@ -811,21 +810,30 @@
   일부 남아 있어 다른 원인 — CROSS APPLY 자기조인 소거 — 로 판정했다. 순수
   CTE·파생테이블 은닉과는 별개 갈래로 센다).
 
-  **오탐률(참고용, 외삽 금지)** — 원본까지 대조를 끝낸 7건 중 6건이 거짓양성,
-  1건이 진짜(6/7 ≈ 86%). **이 비율을 103건 전체나 20건 표본 전체로 외삽하면 안
-  된다** — 표본 선정 자체가 "HasOpaqueJoinSource가 서는 자리"를 의도적으로 더
-  많이 포함하도록 다양성 위주로 뽑았고(무작위가 아니다), 판정을 마친 7건 중
-  5건이 opaque=True 계열이라 거짓양성 쪽으로 치우쳐 있다. 남은 13건(opaque=False가
-  대부분)을 마저 판정해야 이 20건 표본 안에서라도 신뢰할 만한 비율이 나온다.
+  **네 번째 원인 갈래 — 앵커 코드 자체의 착오(#8).** CTE 은닉·스테이징 아키텍처와
+  달리, #8은 검사도 재료도 옳고 **이행 코드 자신이 원본과 다른 오류 코드를
+  문장에 붙였다**(easybank 문장에 KFTC/INIBANK의 코드 `-11`을 닮). 코드 앵커
+  방식(태스크 6)의 전제("이행 코드가 원본 오류 코드를 그대로 보존한다")가 깨지는
+  실물이다 — 이 코퍼스에 몇 건이나 더 있는지는 이번 표본 밖이라 모른다.
 
-  **다음 회차 시작점** — (a) #6·#8·#10·#11-13·#15-16·#18-19 (opaque=False, 술어
-  결측/초과) 9건의 원본 DDL·Spec.md 대조, (b) #14·#17·#20 (opaque=True, 검사 C)
-  3건 — CTE 사각지대가 초과 컬럼(검사 C) 판정에도 번지는지가 미확인 물음, (c)
-  #6이 남긴 물음("원본 조인이 존재-필터용인지 SET절 참조용인지, 이행이 뺀 것이
-  틀렸는지") — #5와 같은 갈래인지 마저 밝힐 것.
+  **오탐률(참고용, 외삽 금지) — 검사 B 표본 10건 전수 확정.** 진짜 **2건**(#5·#6,
+  둘 다 "원본이 명시한 존재-필터 조인이 이행에서 소거" 같은 갈래) · 거짓양성
+  **8건**(#1·#4·#7·#9는 CTE 은닉, #2·#10은 스테이징 키 테이블, #3은 CROSS APPLY
+  자기조인 소거, #8은 앵커 코드 착오) — 오탐률 8/10 = **80%**. **이 비율을 103건
+  전체나 검사 C로 외삽하면 안 된다** — 표본 선정이 다양성 위주였고(무작위가
+  아니다), opaque=True 5건 중 4건이 순수 CTE 거짓양성으로 확인돼 그쪽으로
+  치우쳐 있다. 검사 C 표본 10건은 전부 미검증이라 이 비율이 검사 C에도
+  적용되는지는 전혀 모른다.
+
+  **다음 회차 시작점** — (a) 검사 C 표본 10건(#11-20) 전부 원본 DDL·Spec.md
+  대조(이 문서가 좌표·진단값을 이미 다 잡아 뒀다), 특히 (b) #14·#17·#20
+  (opaque=True) — CTE 사각지대가 초과 컬럼(검사 C) 판정에도 번지는지가 이번
+  회차가 못 연 물음, (c) #8류(앵커 코드 착오)가 이 코퍼스에 몇 건이나 더
+  있는지 별도로 스윕할 가치가 있다 — 코드 앵커의 전제 자체를 흔드는 사실이다.
 
   근거: 2026-08-25 코퍼스 스윕 + 표본 진단(이 문서가 유일한 기록) — Task 11
-  (부분 실측, 이 회차 4번째 도구 호출 한도 중단으로 조사를 끊고 씀).
+  (부분 실측, 이 회차 4번째 도구 호출 한도 중단으로 조사를 끊고 씀. 검사 B
+  표본 10건은 전수 확정, 검사 C 표본 10건은 좌표·진단값만 남기고 미검증).
 
 - **오류 코드 앵커 코퍼스 스윕 게이트 실측(2026-08-25, Task 8) — 캐시 인상(Task 9) 전 오탐 게이트.
   (A)명세서 그대로(코드 매핑 빈 사전)·(B)DDL에서 뽑은 매핑 주입(재생성 후 상태) 두 조건으로 쟀다.**
