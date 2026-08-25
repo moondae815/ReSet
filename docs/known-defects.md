@@ -742,6 +742,141 @@
   구분 방법 — `StepValidationResult.Errors`가 `List<string>`).
   근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 22.
 
+- **오류 코드 앵커 코퍼스 스윕 게이트 실측(2026-08-25, Task 8) — 캐시 인상(Task 9) 전 오탐 게이트.
+  (A)명세서 그대로(코드 매핑 빈 사전)·(B)DDL에서 뽑은 매핑 주입(재생성 후 상태) 두 조건으로 쟀다.**
+
+  **닭-달걀 해법(설계 §4)**: 코퍼스가 세대 16이라 「오류 코드」 표가 아직 어느 `Spec.md`에도
+  없다(그 표는 캐시 17 재생성에서 생긴다 — Task 9). 그래서 하네스가 명세서를 기다리지 않고
+  `DmlScopeExtractor.ExtractErrorCodes(ddlText, dateParameterName)`를 원본 DDL(`raw/metadata.json`의
+  `DdlText`, 날짜 파라미터는 `SpecExpectations.ResolveDateParameter`와 같은 규칙으로 `ProcedureParameters`에서
+  "YMD" 포함 이름을 찾아 해석)에 직접 돌려 매핑을 만들고, `SpecStatementFacts.ErrorCodeToOrdinal`에
+  `with` 식으로 주입해 검증기에 먹였다. 기계 확정 표는 축자 전사 계약이라 추출기 출력이 곧
+  재생성 후 표 내용이다.
+
+  **다섯 수치**
+
+  ① 「오류 코드」 표가 나오는 SP 수: **12/31**(`UP_Util_PG_Client_CMRate_Ins`·`UP_UTIL_SETTLE_CANCEL_INS`·
+  `UP_UTIL_SETTLE_COMM_UPD`·`UP_UTIL_SETTLE_EXCEPTION_PROC`·`UP_UTIL_SETTLE_EXPECT_PROC`·
+  `UP_UTIL_SETTLE_INS`·`UP_UTIL_SETTLE_INS_EXTRA`·`UP_UTIL_SETTLE_INS_EXTRA4PLCARD`·
+  `UP_Util_Settle_Summary`·`UP_UTIL_SETTLE_SUMMARY_ETC`·`UP_UTIL_SETTLE_SUMMARY_EXTRA`·
+  `UP_UTIL_STAT_PGCOLLECT_INS`, 1~18행). 나머지 19개는 10개 SQL 스칼라 함수(`Functions`)+
+  7개 외부 함수(`External/SETTLE_CARD_DB/Functions`) 17개(가드 관용구 자체가 없는 함수라
+  당연히 빈 표)와, DML은 있으나 가드가 없는 프로시저 2개(③ 참고)다.
+
+  ② 가드 안에 비음수 코드를 두는 SP 수: **2** — `UP_UTIL_SETTLE_SUMMARY_ETC`
+  (DELETE 1=1001, INSERT 1=1002)·`UP_UTIL_SETTLE_SUMMARY_EXTRA`(DELETE 1~4=4001,4003,4005,4007·
+  INSERT 1~4=4002,4004,4006,4008). §2(단계 쪽 코드 앵커 판독)는 음수만 후보로 잡으므로 이 10개
+  행은 원본 표에 기록되되 환산 상대를 영원히 못 만난다(설계 §2가 이미 예견한 대가).
+
+  ③ TRY…CATCH로 현대화돼 가드가 없는 SP 수: **2** — `UP_UTIL_SETTLE_PROC_ETC`·
+  `UP_Util_Settle_Summary_AcqManual`(둘 다 `BEGIN TRY`를 씀, `IF @@ERROR` 가드 관용구가 없어
+  원천적으로 표가 빈다 — 결함이 아니라 적용 밖).
+
+  ④ 코드 앵커가 잡히는 단계 파일 수: **199/326**(사전 추정 ~197과 근접, `StepSqlStatementReader.Read`가
+  이 워크트리에서 326개 전수를 다시 읽어 `CodeAnchor != null`인 문장을 가진 파일 수로 셌다).
+
+  ⑤ 검사 A·B·C·D·E 발화량(326개 전수, `ValidateBatchStep` 실전 호출):
+
+  | 검사 | (A) 명세서 그대로 | (B) DDL 매핑 주입 |
+  | :--- | ---: | ---: |
+  | A | 20 | 20 |
+  | B | 1 | 269 |
+  | C | 0 | 38 |
+  | D | 18 | 18 |
+  | E | 59 | 59 |
+
+  **회귀(before/after, 같은 세대 16 코퍼스) — 0.** 과제 지시대로 세대 15 시절 옛 수치(A=20,
+  D=52, E=59)와 직접 비교하지 않았다. 대신 `git archive 253d9ba -- src/ReSet.Core`로 main
+  최신 tip(우리 작업이 하나도 없는 상태)의 소스만 별도 스크래치 디렉터리에 뽑아 별도
+  콘솔 하네스로 빌드해 같은 326개 코퍼스를 돌렸다 — **before(main 253d9ba): A=20, D=18,
+  E=59.** after(WAVE_BASE bc495a6, (A)·(B) 두 조건 동일): A=20, D=18, E=59. **완전히 일치 —
+  회귀 0.** (참고로 D=18은 세대 15 스윕의 D=52와 다르지만, main tip도 같은 세대 16 코퍼스에서
+  D=18을 내므로 이 회차의 효과가 아니라 세대 16 재생성 자체가 만든 차이다 — 옛 수치와
+  비교하지 말라는 과제 지시가 실측으로 확인됐다.)
+
+  **S07 갱신 13 — (A)·(B) 둘 다에서 계속 잡힘(회귀 0).** 메시지 원문(양쪽 동일):
+  > `S07 섹션의 UPDATE 13(갱신 13) 문장에 명세서가 확정한 최상위 WHERE 술어 컬럼 YMD,
+  > PGNAME이(가) 없습니다. 명세서 DML 범위 표 UPDATE 13 행의 값은 \`PLTID, ID, YMD,
+  > PGNAME\`입니다 — 이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.`
+
+  **S11 갱신 9 — (B)조건에서 새로 잡힘(이 회차의 목표 달성).** (A)조건에서는 여전히 0건
+  (표가 명세서에 없으므로 당연하다). (B)조건 메시지 원문:
+  > `S11 섹션의 UPDATE 9(갱신 9) 문장에 명세서가 확정한 조인 키 YMD, UseState이(가)
+  > 없습니다. 명세서 DML 범위 표 UPDATE 9 행의 값은 \`PLTID, YMD, UseState, DiscountFlag,
+  > DiscountAmt, TxAmt, Amt, ClientID, PGName, MallID\`입니다 — 이 컬럼이 빠지면 갱신 대상
+  > 행 집합이 원본과 달라집니다.`
+
+  **표본 오탐 판정 — 검사 B(269건 > 30, 표본) · 검사 C(38건 > 30, 표본).**
+
+  검사 B 269건을 (Kind, Ordinal, 누락 컬럼) 조합으로 묶으면 **34개 고유 조합**이다 — 코퍼스
+  22개 Job 중 다수가 같은 레거시 SP를 같은 코드로 반복 호출하는 공용 전처리 단계(S04~S06
+  등)를 쓰기 때문에 269건 대부분이 같은 결함의 잡 단위 반복이다. 34개 조합을 전부 직접
+  분류했다(>30건 표본 최소 10건 요구를 충족하고 남는다):
+
+  - **거짓 양성 확정 15개 조합(199/269건, 74%) — 구조적 원인을 소스에서 직접 확인했다.**
+    `StepSqlStatementReader.cs`의 `DmlCollector.Visit(InsertStatement node)`가
+    `Add("INSERT", node, node.InsertSpecification?.Target, null, null)`로 **INSERT 문장에는
+    `where`·`from`을 항상 `null`로 넘긴다** — INSERT가 `SELECT ... WHERE ...` 원천을 가져도
+    그 WHERE는 절대 읽히지 않는다. 그 결과 모든 INSERT 문장의 `PredicateColumns`·`JoinColumns`가
+    구조적으로 항상 빈 목록이라, 명세서가 요구하는 컬럼이 하나라도 있으면 검사 B가 무조건
+    "없습니다"를 낸다. 실물로 확인: `output/Jobs/POQSettleBatch1/agent/steps/S04.md:39-52`의
+    `INSERT INTO SETTLE_POQ_DB.dbo.TPGSettleRate ... SELECT ... FROM
+    SETTLE_POQ_DB.dbo.TPGCMRate WHERE USESTATE = 0;`는 명세서(`UP_Util_PG_Client_CMRate_Ins/
+    docs/Spec.md:233`)가 요구하는 `USESTATE`를 **실제로 담고 있는데도** 검사가 "없다"고
+    보고한다. 15개 조합(`UP_Util_PG_Client_CMRate_Ins` INSERT 1~5·`UP_UTIL_SETTLE_INS` INSERT
+    1·`UP_UTIL_SETTLE_CANCEL_INS` INSERT 1·나머지 INSERT 1~4 계열)이 전부 이 원인이다.
+    **CTE 사각지대와는 다른, 더 넓은 구조적 결함이다** — INSERT는 조인 여부·CTE 유무와
+    무관하게 항상 이 함정에 걸린다. 되돌릴 지점: `StepSqlStatementReader.cs`의
+    `DmlCollector.Visit(InsertStatement)` — `InsertSpecification.InsertSource`가
+    `SelectInsertSource`면 그 안의 `QuerySpecification.WhereClause`·`FromClause`를 넘기도록
+    고치면 닫힌다(이번 태스크의 쓰기 허용 범위 밖 — 다음 회차 판단거리로 남긴다, 코드는
+    고치지 않았다).
+  - **S07 갱신 13(1개 조합, 4건) · S11 갱신 9(1개 조합, 1건) — 진짜, 기존/신규 결함 그대로.**
+    위 특별 확인 참고.
+  - **나머지 UPDATE·DELETE 계열 17개 조합(65건) — 부분 확인, 대부분 미확인으로 남긴다.**
+    `ColumnCollector`(같은 파일)는 `ScalarSubquery`·`QueryDerivedTable` 안쪽을 의도적으로
+    건너뛴다(주석: "스칼라 하위질의 안쪽으로 내려가지 않는다 - 최상위 술어 컬럼만 센다") —
+    이것은 버그가 아니라 설계 의도다(명세서 DML 범위 표 자신도 "최상위" 술어만 이 칸에
+    담고 "파생 테이블" 스코프는 별도 집합 술어 표 칸에 담는 같은 구분을 쓴다). 다만 `PLTID
+    IN (SELECT PLTID FROM ...)`처럼 IN의 좌변이 최상위에 있으면 여전히 잡혀야 하는데,
+    표본 하나(`POQSettleProc1/S04`의 코드 `-2`)를 열어 보니 **같은 코드 `-2`가 두 개 이상의
+    물리 UPDATE 문장(KFTC·INIBANK 등 PG종류별로 쪼갠 문장)에 반복돼 있어**, 명세서의 단일
+    "UPDATE 2"가 여러 물리 문장으로 분해된 것인지 검사가 여러 조각을 하나로 합쳐 보는
+    것이 실제로 맞는 대응인지 이번 스윕만으로 판별하지 못했다. **시간·도구 호출 예산
+    제약으로 17개 조합 중 1개만 부분적으로 열어 봤고 나머지 16개(예: `UPDATE 10 MALLID`·
+    `UPDATE 18 PLTID`·`UPDATE 7 PLTID` 등)는 명세서·단계 파일을 직접 대조하지 못했다 —
+    정직하게 미확인으로 남긴다.**
+
+  검사 C 38건은 (Kind, Ordinal, 초과 컬럼) 조합으로 묶으면 **12개 고유 조합**이고 **전부
+  UPDATE 계열이며 INSERT는 0건**이다(위 INSERT null 배선 때문에 INSERT는 애초에
+  PredicateColumns가 비어 "초과 컬럼"이 생길 수 없다 — C가 INSERT에서 항상 조용한 것은
+  이 결함의 부작용이지 검사 C 자체의 결함은 아니다). 가장 흔한 조합은 `UPDATE 2`에 `UseState`
+  초과(11건)·`UPDATE 4`에 `UseState` 초과(9건)·`UPDATE 12`에 `PGName` 초과(6건)다. **12개
+  조합 모두 명세서·단계 파일을 직접 대조하지 못했다 — 시간 예산 제약으로 미확인으로
+  남긴다.** 다음 회차가 이 12개 좌표를 출발점으로 쓸 수 있다.
+
+  **predicate 쪽 CTE 사각지대(과제가 특별히 지목한 물음)** — `ColumnCollector`가
+  `ScalarSubquery`·`QueryDerivedTable`을 건너뛰는 것은 **설계 의도**임을 소스 주석으로
+  확인했다(위 참고). 이것이 오탐으로 이어지는지는 위 "나머지 UPDATE 계열 17개 조합"의
+  미확인 범위와 겹친다 — **판별하지 못했다.** 다음 회차가 이 물음을 마저 닫아야 한다.
+
+  **하네스**: 워크트리 안 스크래치 콘솔 프로젝트 2개, 둘 다 저장소 미커밋·종료 후 삭제.
+  (1) `scratch-sweep-task8/`(`ReSet.Core.csproj` 참조) — `raw/metadata.json`(31개)을
+  `SpDefinition`으로 역직렬화해 원본 DDL·`ProcedureParameters`를 얻고
+  `DmlScopeExtractor.ExtractErrorCodes`로 ①~③을 재고, `Spec.md`(31개)를
+  `SpecStatementFactsExtractor.Extract`로 읽어 (A)조건 재료를, 그 위에 DDL 매핑을
+  `with` 주입해 (B)조건 재료를 만든 뒤 `BatchStepPlanParser.TryParse`로 22개 Job의
+  326개 단계를 열어 `MechanicalValidator.ValidateBatchStep`을 실전 그대로 호출해 ④·⑤를
+  쟀다. (2) `/private/tmp/.../scratchpad/main-tip-sweep/`(`git archive 253d9ba --
+  src/ReSet.Core`로 뽑은 소스를 참조) — before 기준선 A·D·E만 같은 방식으로 쟀다.
+  근거: 2026-08-25 코퍼스 스윕(이 문서가 유일한 기록) — Task 8.
+
+  **Task 7(커버리지 배선) 폐기 사유 — 다음 사람이 같은 시도를 반복하지 않도록.**
+  「오류 코드 표는 **관계 표**라 라인 커버리지를 늘리지 않는다 — `ErrorCodeFact`에 `Line`이
+  없고, 가드의 `SET @po_intRetVal = -N` 라인은 `SetAssignmentExtractor`가 이미 담아
+  `CoverageMapComposer.cs:154`가 커버리지에 싣고 있다. 이 표를 `ExtractorFactLines`에
+  더하는 배선은 어떤 상태도 바꾸지 못한다(2026-08-25 리플렉션 프로브 실측).」
+
 - **병합 전 코퍼스 스윕 게이트 실측(2026-08-24, Task 19) — Task 16 C1·C2·Task 17 C3·I1·Task 18 I2를 모두 적용한 뒤 재측정** —
   `output/Jobs/*/agent/steps/*.md`를 스크래치 하네스로 스윕했다. 하네스는
   `VerificationPipelineOrchestrator.GenerateStepSectionWithFloorRetryAsync`의
