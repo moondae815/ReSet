@@ -110,5 +110,17 @@ namespace ReSet.Core.Tests
             Assert.Contains("[Control Step Error Codes]", result.SystemPrompt);
             Assert.Contains("-9010..-9019", result.SystemPrompt);
         }
+
+        [Fact]
+        public async Task Plan_Rule9ShouldPointBackAtRule6_2ForOriginlessSteps()
+        {
+            // 규칙 9는 홀로 읽히면 "원본 코드만 재사용하라"는 문서 전체 금지처럼
+            // 읽혀, 레거시 출신이 없는 단계가 규칙 6-2의 기계적 예약 코드
+            // (예: -9160)를 쓰는 것마저 주저하게 만든다 - B100...B161 결함을 낳은
+            // 바로 그 모호함이다. 규칙 9가 6-2를 가리켜야 그 모호함이 닫힌다.
+            var result = await CaptureAsync();
+
+            Assert.Contains("follow rule 6-2 instead", result.SystemPrompt);
+        }
     }
 }
