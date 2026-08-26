@@ -6149,11 +6149,13 @@ namespace ReSet.Core.Services
         /// `N'BATCH-LOCK-001'`, 실측 17단계)를 잡되, 이 Job의 단계 목록에 있는 코드는
         /// 침묵한다. 자기 코드(`N'S01'`)는 BatchControlContract가
         /// batch.BatchStepJournal.StepCode를 nvarchar(10)으로 규정하므로 저널에 자기
-        /// 신원을 쓰는 정당한 용법이고(실측 12단계), 다른 단계의 코드(`N'S02'`)도
-        /// "첫 미완료 단계 코드"처럼 다른 단계를 가리키는 정당한 상태 변수일 수 있다
-        /// (실측: POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). 목록에 없는
-        /// 코드(`N'S99'`)는 여전히 발화한다 - <paramref name="allSteps"/>가 null이면
-        /// (재료 없음) 종전대로 자기 코드만 예외로 둔다.
+        /// 신원을 쓰는 정당한 용법이다(실측 12단계). 다른 단계의 코드(`N'S02'`)까지
+        /// 넓힌 것은 <b>방어적 예외</b>다 - 코퍼스에 리터럴 대입 형태로는 실측 0건이고
+        /// (자기 코드 대입만 20건), 근거는 실측이 아니라 정의다: 이 Job의 단계 목록에
+        /// 있는 코드는 정의상 모델이 지어낸 어휘가 아니므로 "지어낸 오류 코드"라고
+        /// 발화하면 거짓 진술이 된다. 목록에 없는 코드(`N'S99'`)는 여전히 발화한다 -
+        /// <paramref name="allSteps"/>가 null이면(재료 없음) 종전대로 자기 코드만
+        /// 예외로 둔다.
         /// </summary>
         private static void CheckControlStepErrorCodeBand(
             string stepMarkdown,
@@ -6166,7 +6168,17 @@ namespace ReSet.Core.Services
             var blockStart = ControlStepErrorCodes.BlockStart(step.Code);
             if (blockStart == null) return;
 
-            var reported = new HashSet<string>(StringComparer.Ordinal);
+            // 키가 (이름, 값)이다. 값만으로 키잉하면 판정이 선언 순서에 의존한다 -
+            // 타입 자리를 `\w+`로 넓히면서 비INT 선언의 값도 이 집합을 선점하게 됐고,
+            // 같은 값을 쓰는 비INT 선언이 앞에 오면 뒤따르는 정수 축 위반이 통째로
+            // 사라졌다(리뷰 Important 2가 실행으로 재현: `NVARCHAR(10) = 1` 다음
+            // `INT = 1`은 침묵하고, 순서를 뒤집으면 발화한다). 미탐은 조용해서 다음
+            // 회차가 발견하지 못한다. 이름을 키에 넣으면 원래 취지(같은 변수의 같은
+            // 값을 여러 번 발화하지 않음)는 그대로이면서 순서 의존이 사라진다.
+            // 이름은 소문자로 접어 넣는다 - `trackedVars`·`intDeclaredVars`가 이미
+            // OrdinalIgnoreCase인 것과 같은 이유로, 같은 변수를 `@v_currentStepId`와
+            // `@v_currentstepid`로 번갈아 쓴 문서가 같은 값을 두 번 발화하지 않게 한다.
+            var reported = new HashSet<(string Name, string Raw)>();
 
             foreach (var (cleaned, offset) in CleanedSqlFences(stepMarkdown))
             {
@@ -6255,7 +6267,7 @@ namespace ReSet.Core.Services
                     // 말하면 그 자체가 거짓 주장이다).
                     if (raw.Length == 0) continue;
 
-                    if (!reported.Add(raw)) continue;
+                    if (!reported.Add((name.ToLowerInvariant(), raw))) continue;
 
                     // NULL은 컴파일된다 - 이 값이 바람직한 초기값인지는 별개 문제이고
                     // 이 검사가 결정할 사안이 아니다.
@@ -6266,12 +6278,23 @@ namespace ReSet.Core.Services
                     // 이 Job의 단계 목록에 있는 코드는 침묵한다 - 자기 코드
                     // (`N'S01'`)는 BatchControlContract가
                     // batch.BatchStepJournal.StepCode를 nvarchar(10)으로 규정하므로
-                    // 저널에 자기 신원을 쓰는 정당한 용법이고(실측 12단계), 다른
-                    // 단계의 코드(`N'S02'`)도 "첫 미완료 단계 코드"처럼 다른 단계를
-                    // 가리키는 정당한 상태 변수일 수 있다(실측:
-                    // POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). allSteps가
-                    // null이면(재료 없음) 자기 코드만 예외로 둔다 - 재료가 없다는
-                    // 사실을 결함 없음으로 바꾸지 않는다.
+                    // 저널에 자기 신원을 쓰는 정당한 용법이다(실측 12단계).
+                    //
+                    // [최종 픽스(리뷰 Important 3) - 근거 문면 정정] 자기 코드에서
+                    // 이 Job의 단계 목록 전체로 넓힌 것을 앞서
+                    // `POQSettleProc16/S02`의 `@v_firstIncompleteStepCode`로
+                    // 정당화했는데, 그 변수는 `DECLARE @v_firstIncompleteStepCode
+                    // CHAR(3);`(초기값 없음)이고 값은 `SELECT`로 들어온다 - 이 검사가
+                    // 보는 리터럴 대입 경로에 애초에 도달하지 않으므로 근거가 되지
+                    // 않는다. 실제 근거는 이렇다: 타 단계 코드를 리터럴로 대입하는
+                    // 자리는 코퍼스 전수 실측에서 **0건**이고(자기 코드 대입 20건),
+                    // 이 확대는 실측 사례가 아니라 정의에 기댄 방어적 예외다 - 이
+                    // Job의 단계 목록에 있는 코드는 정의상 모델이 지어낸 어휘가
+                    // 아니므로, 그것을 "지어낸 오류 코드"라고 발화하면 거짓 진술이
+                    // 된다. 없는 사례를 근거로 적지 않는다.
+                    //
+                    // allSteps가 null이면(재료 없음) 자기 코드만 예외로 둔다 -
+                    // 재료가 없다는 사실을 결함 없음으로 바꾸지 않는다.
                     //
                     // [픽스 라운드 1(리뷰 I3)] 리터럴이 제어 계약의 상태 어휘
                     // (Running·Succeeded·Failed·Skipped·Pending·Held·Released 등,
@@ -6424,6 +6447,43 @@ namespace ReSet.Core.Services
         // 검사에 도달조차 못 했다(실측 17단계). 이름 패턴은 넓히지 않는다 - 넓히면
         // 메시지 변수 88건·ERROR_NUMBER() 계열 42건이 딸려 온다.
         //
+        // [최종 픽스(리뷰 Important 1) - 이름 자리를 `\w*[Ss]tep\w*`에서 좁힌 이유]
+        // 옛 이름 패턴은 "이름에 step이 든 모든 변수"를 잡았다. 타입 자리가 INT
+        // 고정이던 동안에는 그 폭이 안전했다 - 이름·메시지 변수는 INT로 선언되지
+        // 않아 매치 자체가 안 됐다. 타입 자리를 넓히면서 그 게이트가 사라졌고,
+        // 서술용 문자열이 곧바로 판정 대상이 됐다. 리뷰어가 실행으로 재현한 오탐:
+        //   `@v_stepName NVARCHAR(100) = N'날짜 검증'`
+        //   `@v_stepErrorMessage NVARCHAR(200) = N'선행 단계가...'`
+        //   `@v_stepTargetTable SYSNAME = N'batch.BatchStepJournal'`
+        // 셋 다 "문자열 코드 '...'을 대입합니다 - ... 음수 정수를 씁니다"로 발화한다.
+        // 거짓 진술(단계 이름은 오류 코드가 아니다) 위에 해로운 지시(이름을 -9030으로
+        // 바꾸라)를 얹는 발화다.
+        //
+        // 그래서 이름을 `...Step(_)?Code` / `...Step(_)?Id` / `...Step(_)?Status`로
+        // 좁힌다 - "단계의 코드"·"단계의 식별자"·"단계의 상태"라고 이름이 스스로
+        // 말하는 것, 즉 이 검사가 발화문에서 "상태 변수"라고 부르는 것만 본다.
+        // (`Status`를 남기는 이유: 예외 2(BatchControlContract.AllowedStatusValues)가
+        // 겨냥하는 자리가 바로 `SET @v_stepStatus = N'Running'`이다. 이것까지 범위
+        // 밖으로 밀면 예외 2가 닿을 곳이 없어진다.)
+        // 코퍼스 전수 실측이 이 좁히기를 뒷받침한다(측정 조건은
+        // docs/known-defects.md의 「측정 조건」과 같다. 131개 제어 단계):
+        //   - 좁히기 전 발화: 문자열 축 26건/17단계, 숫자 축 161건/44단계
+        //   - 좁히기 후 발화: 문자열 축 26건/17단계(그대로), 숫자 축 160건/43단계
+        //   - 사라진 1건은 `POQSettlePrco20/S16`의 `@v_expectedPriorStepCount`
+        //     (`int = 15`) - known-defects.md가 `Ruling 4`로 범위 밖에 미뤄 둔
+        //     기존 오탐이다. 진짜 발화는 두 축 모두 하나도 사라지지 않았다.
+        // 실제로 발화하는 이름은 두 축을 합쳐 `@v_currentStepCode`·`@v_currentStepId`
+        // 둘뿐이고 둘 다 이 좁힌 패턴에 들어온다. 코퍼스에 있는 다른 `step` 이름
+        // (`@StepCode`·`@v_stepCode`·`@p_StepCode`·`@v_firstIncompleteStepCode`·
+        // `@v_actualStepCode`·`@po_ResumeFromStepCode`)도 그대로 남는다.
+        // 빠지는 것은 `@v_stepStartedAtUtc`·`@v_isStepCompleted`·`@v_requiredStepCount`·
+        // `@v_completedStepCount`·`@v_expectedPriorStepCount`·`@RequiredStep` -
+        // 코드도 식별자도 아닌 변수들이다.
+        //
+        // 접미사가 `Step` 바로 뒤에 붙을 것을 요구한다(`\w*` 꼬리를 두지 않는다).
+        // "이름이 `Code`/`Id`로 끝나기만 하면"으로 두면 `@v_isStepValid`처럼 `id`로
+        // 끝나는 영어 단어가 그대로 다시 들어온다 - 좁히기의 취지가 무너진다.
+        //
         // [픽스 라운드 1(리뷰 I2) - 값 자리를 정규식에서 뺀 이유]
         // 예전에는 `\s*(?<value>[^\s;,)]+)`로 값도 같은 정규식이 잡았다. 이 매칭은
         // `cleaned`(BlankCommentsAndStrings가 문자열·주석을 공백으로 지운 사본) 위에서
@@ -6435,7 +6495,7 @@ namespace ReSet.Core.Services
         // 우연한 앵커였을 뿐이다. 값 자리를 정규식에서 떼어 `=` 뒤 원문에서 직접
         // 찾게 하면 이 비대칭이 사라진다.
         private static readonly Regex ControlCodeAssignmentPattern = new(
-            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+(?<type>\w+)\s*(?:\([^)]*\))?\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)",
+            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep_?(?:[Cc]ode|[Ii][Dd]|[Ss]tatus))\s+(?<type>\w+)\s*(?:\([^)]*\))?\s*=|SET\s+@(?<name>\w*[Ss]tep_?(?:[Cc]ode|[Ii][Dd]|[Ss]tatus))\s*=)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>

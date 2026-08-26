@@ -2747,10 +2747,17 @@ SELECT 1 FROM dbo.TSettleMst;
         [Fact]
         public void ValidateBatchStep_ShouldAcceptAnotherKnownStepsIdentifier()
         {
-            // 실측(POQSettleProc16/S02): `@v_firstIncompleteStepCode`는 "첫 미완료
-            // 단계의 코드"를 담는 정당한 변수이고 값은 다른 단계의 코드다. 리터럴이
-            // 이 Job의 단계 목록에 있는 코드와 일치하면 침묵해야 한다 - 자기 코드로만
-            // 좁히면 이 정당한 용법이 오탐이 된다.
+            // 예외 1을 자기 코드에서 이 Job의 단계 목록 전체로 넓힌 것은 **방어적
+            // 예외**다. 앞서 이 자리에 적혀 있던 "실측(POQSettleProc16/S02):
+            // `@v_firstIncompleteStepCode`"는 근거가 되지 않는다 - 그 변수는
+            // `DECLARE @v_firstIncompleteStepCode CHAR(3);`(초기값 없음)이고 값은
+            // `SELECT`로 들어와, 이 검사가 보는 리터럴 대입 경로에 도달하지 않는다.
+            // 타 단계 코드를 리터럴로 대입하는 자리는 코퍼스 전수 실측 **0건**이다
+            // (자기 코드 대입만 20건). 그래도 예외를 두는 근거는 실측이 아니라
+            // 정의다: 이 Job의 단계 목록에 있는 코드는 정의상 지어낸 어휘가 아니므로
+            // "지어낸 오류 코드"라고 발화하면 거짓 진술이 된다. 이 테스트가 고정하는
+            // 것은 그 정의다(변수 이름은 이 검사와 무관하다 - `...StepCode`로 끝나기만
+            // 하면 같은 경로를 탄다).
             var s01 = new BatchStepPlan(
                 "S01", "실행 등록", new string[0], new[] { "dbo.TSettleMst" },
                 new[] { "-9010" }, false, new string[0]);
@@ -2779,9 +2786,13 @@ SELECT 1 FROM dbo.TSettleMst;
         public void ValidateBatchStep_ShouldNotFlagATimestampOrFlagStateVariable()
         {
             // 실측 2건: `@v_stepStartedAtUtc DATETIME2(3) = SYSUTCDATETIME()`와
-            // `@v_isStepCompleted BIT = 0`. 이름은 상태 변수 패턴에 걸리지만 코드가 아니다.
-            // 규칙이 "타입이 비INT면 위반"이었다면 이 둘이 걸렸을 것이다 - 값으로 가르는
-            // 이유가 이것이다.
+            // `@v_isStepCompleted BIT = 0`. 규칙이 "타입이 비INT면 위반"이었다면 이
+            // 둘이 걸렸을 것이다 - 값으로 가르는 이유가 이것이다.
+            //
+            // [최종 픽스(리뷰 Important 1)] 이 둘은 이제 이름 패턴에서도 빠진다
+            // (`Step` 바로 뒤가 `Code`/`Id`/`Status`가 아니다). 이 테스트는 그
+            // 좁히기 이전부터 지키던 침묵을 그대로 고정한다 - 이름 패턴을 되돌려도,
+            // 타입 규칙을 되돌려도 여기서 죽는다.
             var step = new BatchStepPlan(
                 "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
                 new[] { "-9030" }, false, new string[0]);
@@ -2799,6 +2810,143 @@ SELECT 1 FROM dbo.TSettleMst;
             var result = Validate(markdown, step);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+        }
+
+        [Theory]
+        [InlineData("DECLARE @v_stepName NVARCHAR(100) = N'날짜 검증';", "날짜 검증")]
+        [InlineData("DECLARE @v_stepErrorMessage NVARCHAR(200) = N'선행 단계가 완료되지 않았습니다.';", "선행 단계가")]
+        [InlineData("DECLARE @v_stepTargetTable SYSNAME = N'batch.BatchStepJournal';", "batch.BatchStepJournal")]
+        [InlineData("DECLARE @v_expectedPriorStepCount int = 15;", "15")]
+        [InlineData("DECLARE @v_isStepValid NVARCHAR(5) = N'Y';", "Y")]
+        public void ValidateBatchStep_ShouldNotFlagADescriptiveStepNamedVariable(
+            string declaration, string valueFragment)
+        {
+            // [최종 픽스(리뷰 Important 1)] 이름 패턴이 `@\w*[Ss]tep\w*`이던 동안에는
+            // "이름에 step이 든 모든 변수"가 판정 대상이었다. 타입 자리가 INT 고정이던
+            // 동안에는 그 폭이 안전했지만(서술 변수는 INT로 선언되지 않는다), 문자열
+            // 축이 그 게이트를 걷어내면서 서술용 문자열이 곧바로 오류 코드로 발화했다.
+            // 리뷰어가 실행으로 재현한 발화:
+            //   "S03 섹션이 상태 변수에 문자열 코드 '날짜 검증'을 대입합니다.
+            //    레거시 출신이 없는 단계는 예약 블록(-9030부터 10개)의 음수 정수를 씁니다"
+            // 거짓 진술(단계 이름은 오류 코드가 아니다) 위에 해로운 지시(이름을
+            // -9030으로 바꾸라)를 얹는 발화다.
+            //
+            // 이름을 `...Step(_)?Code|Id|Status`로 좁혀 닫았다. 이 테스트가 그 좁히기를
+            // 고정한다 - 다음 재작성이 이름 패턴을 다시 넓히면 여기서 죽는다.
+            // `@v_expectedPriorStepCount`는 덤으로 닫힌 기존 오탐이고(숫자 축,
+            // known-defects.md의 `Ruling 4`가 범위 밖으로 미뤄 둔 실측 1건),
+            // `@v_isStepValid`는 "이름이 Code/Id로 끝나기만 하면"으로 좁혔을 때 다시
+            // 들어오는 형태다(`Valid`가 `id`로 끝난다) - 접미사를 `Step` 바로 뒤로
+            // 묶은 이유가 이것이다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = $@"### S03 입력 기준시점 고정
+
+```sql
+{declaration}
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(valueFragment));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldFlagAStepCodeNamedVariableAfterTheNarrowing()
+        {
+            // 좁히기가 진짜 발화까지 죽이지 않았음을 고정한다. 코퍼스가 실제로
+            // 발화시키는 이름은 `@v_currentStepCode`·`@v_currentStepId` 둘뿐이고
+            // (문자열 축 26건/17단계, 숫자 축 160건/43단계) 둘 다 좁힌 패턴에 들어온다.
+            // 위 오탐 테스트만 있으면 "이름 패턴을 아무것도 매치하지 않게" 만드는
+            // 변이가 조용히 통과한다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = @"### S03 입력 기준시점 고정
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+DECLARE @v_currentStepId INT = 1;
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("문자열 코드") && e.Contains("B120"));
+            Assert.Contains(result.Errors, e => e.Contains("예약 블록 밖의 제어 코드 '1'"));
+        }
+
+        [Theory]
+        // 같은 두 선언, 순서만 다르다. 판정이 갈리면 회귀다.
+        [InlineData(@"DECLARE @v_stepCode NVARCHAR(10) = 1;
+DECLARE @v_currentStepId INT = 1;")]
+        [InlineData(@"DECLARE @v_currentStepId INT = 1;
+DECLARE @v_stepCode NVARCHAR(10) = 1;")]
+        public void ValidateBatchStep_ShouldNotDependOnDeclarationOrder(string declarations)
+        {
+            // [최종 픽스(리뷰 Important 2)] `reported`가 값(`raw`)만으로 키잉하는 동안
+            // 판정이 선언 순서에 의존했다. 타입 자리를 `\w+`로 넓히면서 비INT 선언의
+            // 값도 이 집합을 선점하게 됐고, 같은 값을 쓰는 비INT 선언이 앞에 오면
+            // 뒤따르는 정수 축 위반이 통째로 사라졌다 - 직전 회차에 병합돼 이미
+            // 43단계를 발화시키고 있는 숫자 축 검사에 이 브랜치가 넣은 미탐이다.
+            // 미탐은 조용해서 다음 회차가 발견하지 못하므로 회귀 테스트로 고정한다.
+            //
+            // `NVARCHAR(10) = 1`은 T-SQL에서 정상 컴파일되고(암묵 변환) 이 검사는
+            // 그래서 침묵한다 - 침묵하는 쪽이 발화하는 쪽을 삼키면 안 된다는 것이
+            // 이 테스트의 요지다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = $@"### S03 입력 기준시점 고정
+
+```sql
+{declarations}
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("예약 블록 밖의 제어 코드 '1'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldReportTheSameValueOnceForEachVariable()
+        {
+            // dedupe의 원래 취지(같은 변수의 같은 값을 여러 번 발화하지 않음)는
+            // 그대로 두고, 서로 다른 변수는 각각 발화한다. 값만으로 키잉하면 뒤에 온
+            // 변수의 위반이 앞선 변수에 가려진다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = @"### S03 입력 기준시점 고정
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+DECLARE @v_stepCode NVARCHAR(10) = N'B120';
+SET @v_stepCode = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            // 변수 둘 - 발화도 둘. 같은 변수의 재대입(SET)은 한 번만 발화한다.
+            Assert.Equal(2, result.Errors.Count(e => e.Contains("문자열 코드") && e.Contains("B120")));
         }
 
         [Fact]

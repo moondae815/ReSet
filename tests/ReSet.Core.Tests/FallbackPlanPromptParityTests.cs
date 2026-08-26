@@ -155,8 +155,15 @@ namespace ReSet.Core.Tests
             // FIX ROUND 1 - Important 2: 검사(MechanicalValidator)는 StepCode를 선언한
             // 네 개 계약 표 어디에 쓰이든, 그리고 이 Job의 단계 목록에 있는 어떤 코드든
             // (자기 코드만이 아니라 다른 단계를 가리키는 코드도) 예외로 둔다. 프롬프트가
-            // "저널에 쓰이는 자기 코드"로만 좁히면 검사가 침묵하는
-            // `@v_firstIncompleteStepCode` 같은 정당한 패턴까지 금지하는 셈이 된다.
+            // "저널에 쓰이는 자기 코드"로만 좁히면 프롬프트가 검사보다 좁아진다 -
+            // 검사가 침묵하는 자리를 프롬프트가 금지하는 역전이 생긴다.
+            //
+            // [최종 픽스(리뷰 Important 3)] 이 자리에 근거로 적혀 있던
+            // `@v_firstIncompleteStepCode`는 실측 근거가 아니다 - 그 변수는
+            // `CHAR(3)` 무초기값 + `SELECT` 대입이라 이 검사의 리터럴 대입 경로에
+            // 도달하지 않는다. 타 단계 코드를 리터럴로 대입하는 자리는 코퍼스
+            // 실측 0건이고, 예외를 넓힌 근거는 실측이 아니라 정의다(이 Job의 단계
+            // 목록에 있는 코드는 정의상 지어낸 어휘가 아니다).
             var result = await CaptureAsync();
 
             Assert.Contains("a step code from this Job's step list (`N'S01'`) stays a string wherever it is used", result.SystemPrompt);
