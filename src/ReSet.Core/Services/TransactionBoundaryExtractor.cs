@@ -36,8 +36,15 @@ namespace ReSet.Core.Services
         /// 블록을 특정할 때 **같은 값**을 봐야 한다. 검사 쪽에 복사본을 두면 프롬프트가
         /// 바뀌는 날 조용히 낡고, 헤더 대조가 아무 블록도 못 찾아 관대한 폴백으로
         /// 후퇴하면서 결함이 소리 없이 되살아난다 - 그동안 테스트는 계속 초록이다.
+        ///
+        /// IReadOnlyList로 노출한다(이 저장소의 관례 - ExecutionSemanticsFacts.AllKinds,
+        /// BatchInfraObjectCollector.Schemas, MechanicalValidator.RequiredConsolidatedHeaders가
+        /// 전부 같다). string[]이면 프롬프트 렌더(AiService)와 L1 헤더 대조
+        /// (MechanicalValidator) 중 어느 한쪽이 원소를 실수로 고쳐 써도 컴파일이 통과해,
+        /// 이 상수가 지키려던 "같은 값을 본다"는 계약이 런타임에 조용히 깨진다.
         /// </summary>
-        public static readonly string[] TableHeaderCells = { "라인", "종류", "이름" };
+        public static readonly IReadOnlyList<string> TableHeaderCells =
+            new[] { "라인", "종류", "이름" };
 
         public const string NoName = "(없음)";
 

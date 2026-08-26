@@ -4628,12 +4628,21 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// [start, end) 구간을 빈 줄이나 `|`로 시작하지 않는 임의의 줄을 경계로 삼아
-        /// `|` 행 블록들로 쪼갠다. `ReportTableShapeBreaks`(:4646 부근)가 같은 절단
-        /// 규칙을 이미 구현해 뒀다 - 이 헬퍼는 그 규칙을 CheckTransactionBoundaries·
-        /// CheckSetAssignments가 재사용할 수 있게 뽑은 것이다(형제 검사인
-        /// CheckCaseBranches·CheckReferencedFunctions는 이번 라운드에서 건드리지
-        /// 않는다 - 별도 스윕 필요, 2026-08-24 리뷰 백로그 D4). 나중에 그 둘을
-        /// 이 헬퍼로 옮길 때는 호출부 모양이 이미 맞으므로 한 줄 교체면 된다.
+        /// `|` 행 블록들로 쪼갠다. `ReportTableShapeBreaks`가 같은 절단 규칙을 인라인
+        /// 루프로 이미 구현해 뒀다 - 이 헬퍼는 그 규칙을 이름 붙여 뽑은 것이다.
+        /// (줄 번호는 적지 않는다 - 이 주석의 앞선 판이 적어 뒀던 `:4646 부근`은
+        /// 이식 뒤 실제 위치와 어긋나 있었다. 멤버 이름만 남겨 다시 낡지 않게 한다.)
+        ///
+        /// [2026-08-26 현재 실제 이용 현황 - 계획서의 의도와 다르므로 그대로 적는다]
+        /// 이 헬퍼를 쓰는 것은 `CollectTableMatchRows` 하나뿐이고, 그것을 부르는 검사도
+        /// `CheckTransactionBoundaries` 하나뿐이다. `CheckSetAssignments`는 <b>아직</b>
+        /// 절 전체의 `|` 줄을 뭉뚱그리는 순진한 루프를 쓴다 - 블록 좁힘이 이식되지
+        /// 않았다는 뜻이다(스윕 보고서가 그 검사를 "이식 가능"으로 표시했으니 이미 된
+        /// 줄 알고 건너뛰지 말 것). 형제 검사인 `CheckCaseBranches`·
+        /// `CheckReferencedFunctions`도 마찬가지로 순진한 루프다 - 별도 스윕 필요,
+        /// 2026-08-24 리뷰 백로그 D4. 셋 중 어느 것을 옮기든 호출부 모양은 이미
+        /// 맞으므로 루프를 `CollectTableMatchRows` 호출로 바꾸면 된다 - 다만 그 검사의
+        /// 기대 헤더 셀 상수를 함께 마련해야 한다.
         /// </summary>
         private static List<List<string>> SplitIntoTableBlocks(
             IReadOnlyList<string> lines, int start, int end)
