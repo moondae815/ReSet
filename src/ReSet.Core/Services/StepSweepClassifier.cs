@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace ReSet.Core.Services
 {
@@ -38,15 +40,62 @@ namespace ReSet.Core.Services
             return SweepCheck.Unclassified;
         }
 
+        // "S07 섹션의 UPDATE 13(갱신 13) 문장에" / "... 문장이" 양쪽을 잡는다.
+        private static readonly Regex CoordinatePattern = new(
+            @"섹션의\s+(?<kind>[A-Z]+)\s+(?<ordinal>\d+)\s*\(",
+            RegexOptions.Compiled);
+
+        // 검사 B: "확정한 <라벨> A, B이(가) 없습니다".
+        // 라벨을 `.*?`로 넘기면 게으른 수량자가 라벨의 일부를 items에 남긴다
+        // ("컬럼 YMD, PGNAME"). 라벨은 두 개뿐이므로(MechanicalValidator.cs:6334·6345)
+        // 그대로 못 박는다 - 라벨이 늘면 여기도 늘려야 하고, 그때 태스크 1의
+        // 판별 조각 테스트와 함께 갱신한다.
+        private static readonly Regex MissingItemsPattern = new(
+            @"확정한\s+(?:최상위\s+WHERE\s+술어\s+컬럼|조인\s+키)\s+(?<items>.*?)이\(가\)\s*없습니다",
+            RegexOptions.Compiled);
+
+        // 검사 C: "없는 술어 컬럼 A, B을(를) 씁니다"
+        private static readonly Regex ExtraItemsPattern = new(
+            @"없는\s+술어\s+컬럼\s+(?<items>.*?)을\(를\)\s*씁니다",
+            RegexOptions.Compiled);
+
         /// <summary>
         /// 발화 하나를 판정표의 한 행으로 만든다.
         ///
-        /// [태스크 3에서는 좌표 없이] 검사 B·C 좌표(Kind·Ordinal·Items) 추출은
-        /// 태스크 4가 채운다. 여기서는 자리만 만든다.
+        /// [왜 좌표를 메시지에서 뽑는가] StepValidationResult가 구조화된 값을 내지 않으므로
+        /// 메시지가 유일한 출처다. 뽑히지 않아도 발화는 센다 - 집계까지 잃으면 검사가
+        /// 침묵한 것과 구분되지 않는다.
         /// </summary>
         public static SweepFinding Describe(
             string jobName, string stepCode, SweepCheck check,
-            SweepCondition condition, string message) =>
-            new(jobName, stepCode, check, condition, message);
+            SweepCondition condition, string message)
+        {
+            var finding = new SweepFinding(jobName, stepCode, check, condition, message);
+            if (check != SweepCheck.B && check != SweepCheck.C) return finding;
+
+            var coordinate = CoordinatePattern.Match(message);
+            if (coordinate.Success)
+            {
+                finding = finding with
+                {
+                    Kind = coordinate.Groups["kind"].Value,
+                    Ordinal = int.Parse(coordinate.Groups["ordinal"].Value),
+                };
+            }
+
+            var items = check == SweepCheck.B
+                ? MissingItemsPattern.Match(message)
+                : ExtraItemsPattern.Match(message);
+
+            if (items.Success)
+            {
+                finding = finding with { Items = SplitItems(items.Groups["items"].Value) };
+            }
+
+            return finding;
+        }
+
+        private static IReadOnlyList<string> SplitItems(string raw) =>
+            raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 }
