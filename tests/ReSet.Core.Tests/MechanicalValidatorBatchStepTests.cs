@@ -2260,5 +2260,106 @@ SET @po_intRetVal = @v_currentStepId;
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAStringControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleBatch1/S03, 설계서가 인용하는 바로 그 예): 이 SP는
+            // `@po_strRetCode NVARCHAR(10) OUTPUT`으로 문자열 코드를 돌려준다.
+            // `N'B120'`은 유효한 T-SQL이다 - 블랭크 사본에서는 문자열 내용이
+            // 공백으로 지워져 값이 'N'으로 잘리고, 그 잘린 값을 근거로
+            // "컴파일되지 않는다"는 거짓 주장을 했다. 문자열 코드 제어 단계를
+            // 허용할지 금지할지는 이 검사가 결정할 문제가 아니다 - 침묵해야 한다.
+            var step = new BatchStepPlan(
+                "S03", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S03 통합 검증
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepCode = N'B120';
+SET @po_strRetCode = @v_currentStepCode;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'N'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimALongStringControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleProc18/S01): `@v_currentStepId nvarchar(64)`에
+            // `N'BATCH-VAL-001'`을 대입한다. NVARCHAR로 선언된 변수는 이
+            // 검사(INT 예약 블록)의 대상이 아니다.
+            var step = new BatchStepPlan(
+                "S01", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S01 통합 검증
+
+```sql
+DECLARE @v_currentStepId nvarchar(64) = N'BATCH-VAL-001';
+SELECT 1 FROM dbo.TSettleMst;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimANullInitialValueDoesNotCompile()
+        {
+            // 실측(POQSettleProc8/S18,S19 등 코퍼스 전역의 부트스트랩 관용구):
+            // `DECLARE @v_currentStepId INT = NULL;`은 유효한 T-SQL이다.
+            // 이 규약 아래 NULL이 바람직한 초기값인지는 별개 문제이지만,
+            // "컴파일되지 않는다"는 주장만은 거짓이므로 절대 내면 안 된다.
+            var step = new BatchStepPlan(
+                "S18", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S18 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = NULL;
+SELECT 1 FROM dbo.TSettleMst;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotApplyTheBandRuleToAVariableNeverDeclaredAsInt()
+        {
+            // 문자열/NULL 스킵과는 별개로, 같은 펜스에서 INT로 선언된 적이 없는
+            // 변수의 SET은 값이 (따옴표 없는) 숫자처럼 보여도 이 검사의 대상이
+            // 아니다 - 그 변수가 실제로 INT인지 모르기 때문이다. 이 테스트는
+            // INT 선언 게이트가 무력화되면(따옴표·NULL 스킵과 무관하게) 실패한다.
+            var step = new BatchStepPlan(
+                "S03", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S03 통합 검증
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepCode = 42;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
     }
 }

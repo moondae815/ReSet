@@ -5980,29 +5980,71 @@ namespace ReSet.Core.Services
         /// 두 가지를 본다: 상태 변수에 대입되는 비수치 토큰(B161)과, 수치지만 이 단계의
         /// 블록 밖인 값. 후자를 보는 이유는 반환값만으로 단계를 특정할 수 있어야 하기
         /// 때문이다.
+        ///
+        /// [픽스 라운드 1] 코퍼스에 문자열 코드로 응답하는 제어 단계가 실재한다
+        /// (`@po_strRetCode NVARCHAR(10) OUTPUT`에 `N'B120'`을 담는 POQSettleBatch1/S03
+        /// 등). 이 검사는 그 형태를 허용할지 금지할지 결정하지 않는다 - INT로 선언된
+        /// 적 없는 변수의 SET은 애초에 보지 않고(펜스 단위 게이팅), NULL과 문자열
+        /// 리터럴은 만나면 조용히 넘긴다. `DECLARE ... INT = NULL`은 유효한 T-SQL이라
+        /// "컴파일되지 않는다"는 말을 못 붙인다. 값은 <see cref="BlankCommentsAndStrings"/>가
+        /// 지운 사본이 아니라 원문에서 읽는다 - 사본에서 읽으면 문자열 리터럴 내용이
+        /// 공백으로 지워져 `N'B120'`이 `N`으로 잘리고, 그 잘린 값을 근거로 거짓 주장을
+        /// 하게 된다(실측: "값이 아닌 값 'N'을 대입합니다").
         /// </summary>
         private static void CheckControlStepErrorCodeBand(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
         {
             // 레거시 출신이 있으면 원본 코드를 쓰는 것이 정상이다.
             if (step.LegacyProcedures.Count > 0) return;
-            if (ControlStepErrorCodes.BlockStart(step.Code) == null) return;
+            var blockStart = ControlStepErrorCodes.BlockStart(step.Code);
+            if (blockStart == null) return;
 
             var reported = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            foreach (var (cleaned, offset) in CleanedSqlFences(stepMarkdown))
             {
+                // 펜스 단위로 새로 센다 - 다른 펜스의 DECLARE가 이 펜스의 SET을
+                // INT로 인증하면 안 된다.
+                var intDeclaredVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 foreach (Match assignment in ControlCodeAssignmentPattern.Matches(cleaned))
                 {
-                    var raw = assignment.Groups["value"].Value.Trim();
+                    var name = assignment.Groups["name"].Value;
+                    var isIntDeclare = assignment.Groups["declare"].Success;
+
+                    if (isIntDeclare)
+                    {
+                        intDeclaredVars.Add(name);
+                    }
+                    else if (!intDeclaredVars.Contains(name))
+                    {
+                        // 이 펜스에서 INT로 선언된 적이 없는 변수다 - 문자열 상태
+                        // 변수(N'B120' 등)일 수 있으므로 대상이 아니다.
+                        continue;
+                    }
+
+                    var raw = ExtractRawAssignmentValue(
+                        stepMarkdown, offset + assignment.Groups["value"].Index).Trim();
                     if (!reported.Add(raw)) continue;
+
+                    // NULL은 컴파일된다 - 이 값이 바람직한 초기값인지는 별개 문제이고
+                    // 이 검사가 결정할 사안이 아니다.
+                    if (string.Equals(raw, "NULL", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    // 문자열 리터럴(옵션 N 접두사)도 이 검사의 대상이 아니다 - 문자열
+                    // 코드로 응답하는 제어 단계를 이 검사가 판정하지 않는다.
+                    if (raw.Length > 0 &&
+                        (raw[0] == '\'' || (raw.Length > 1 && (raw[0] == 'N' || raw[0] == 'n') && raw[1] == '\'')))
+                    {
+                        continue;
+                    }
 
                     if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
                     {
                         result.Errors.Add(
                             $"{step.Code} 섹션이 상태 변수에 숫자가 아닌 값 '{raw}'을 대입합니다. " +
                             $"T-SQL에서 해석되지 않는 식별자라 컴파일되지 않습니다 - " +
-                            $"이 단계의 예약 블록({ControlStepErrorCodes.BlockStart(step.Code)}부터 10개)을 쓰십시오.");
+                            $"이 단계의 예약 블록({blockStart}부터 10개)을 쓰십시오.");
                         continue;
                     }
 
@@ -6013,18 +6055,74 @@ namespace ReSet.Core.Services
                     {
                         result.Errors.Add(
                             $"{step.Code} 섹션이 예약 블록 밖의 제어 코드 '{raw}'을 돌려줍니다. " +
-                            $"레거시 출신이 없는 단계는 {ControlStepErrorCodes.BlockStart(step.Code)}부터 " +
+                            $"레거시 출신이 없는 단계는 {blockStart}부터 " +
                             $"{ControlStepErrorCodes.BlockSize}개의 블록만 씁니다.");
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// 지운 사본이 아니라 원문 <paramref name="stepMarkdown"/>에서 대입값을 읽는다.
+        /// 문자열 리터럴은 <see cref="BlankCommentsAndStrings"/>가 공백으로 지우므로,
+        /// 사본에서 읽으면 `N'B120'`이 `N`으로 잘린다 - 잘린 값을 근거로 결함을
+        /// 보고하면 그 자체가 거짓 주장이다. <paramref name="start"/>는 지운 사본에서
+        /// 찾은 값 자리의 오프셋을 더한 절대 위치다(공백은 원문·사본이 길이를
+        /// 보존하며 같은 위치에 있으므로 그대로 옮길 수 있다).
+        /// </summary>
+        private static string ExtractRawAssignmentValue(string stepMarkdown, int start)
+        {
+            if (start < 0 || start >= stepMarkdown.Length) return string.Empty;
+
+            var i = start;
+            if ((stepMarkdown[i] == 'N' || stepMarkdown[i] == 'n') &&
+                i + 1 < stepMarkdown.Length && stepMarkdown[i + 1] == '\'')
+            {
+                i++;
+            }
+
+            if (i < stepMarkdown.Length && stepMarkdown[i] == '\'')
+            {
+                var j = i + 1;
+                while (j < stepMarkdown.Length)
+                {
+                    if (stepMarkdown[j] == '\'')
+                    {
+                        if (j + 1 < stepMarkdown.Length && stepMarkdown[j + 1] == '\'')
+                        {
+                            j += 2;
+                            continue;
+                        }
+
+                        j++;
+                        break;
+                    }
+
+                    j++;
+                }
+
+                return stepMarkdown[start..j];
+            }
+
+            var end = start;
+            while (end < stepMarkdown.Length &&
+                   !char.IsWhiteSpace(stepMarkdown[end]) &&
+                   stepMarkdown[end] != ';' && stepMarkdown[end] != ',' && stepMarkdown[end] != ')')
+            {
+                end++;
+            }
+
+            return stepMarkdown[start..end];
+        }
+
         // 상태 변수에 값을 대입하는 자리. DECLARE 초기값과 SET 갱신을 함께 본다.
         // 값 자리를 `[^\s;,)]+`로 잡는 이유: 숫자만 잡으면 B161 같은 비수치 토큰이
         // 매치되지 않아 그대로 통과한다 - 기존 CheckStepIdInitialValue가 놓친 이유다.
+        // `declare` 그룹은 이 대입이 `DECLARE ... INT =`에서 왔는지 표시한다 - SET은
+        // 타입을 못 가지므로, 같은 펜스에서 INT로 선언된 적 있는 변수인지는 이 그룹으로
+        // 판단하고 이름은 `name`으로 추적한다.
         private static readonly Regex ControlCodeAssignmentPattern = new(
-            @"(?:DECLARE\s+@\w*[Ss]tep\w*\s+INT\s*=|SET\s+@\w*[Ss]tep\w*\s*=)\s*(?<value>[^\s;,)]+)",
+            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+INT\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)\s*(?<value>[^\s;,)]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
