@@ -115,5 +115,15 @@ namespace ReSet.Core.Tests
             Assert.Contains("reserved block", prompt);
             Assert.Contains("does not compile", prompt);
         }
+
+        [Fact]
+        public async Task Critic_ShouldCheckTheStringCodeAxis()
+        {
+            // 생성 규칙이 요구하는데 아무도 채점하지 않으면 어긋나도 통과하고,
+            // 자가 수정이 그 축에 영영 닿지 않는다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("string status code", prompt);
+        }
     }
 }

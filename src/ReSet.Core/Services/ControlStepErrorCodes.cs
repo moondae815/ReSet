@@ -72,13 +72,24 @@ namespace ReSet.Core.Services
 
         /// <summary>프롬프트에 싣는 문구. 규칙 6-1과 제어 계약 표가 함께 쓴다.</summary>
         public const string PromptClause =
-            "[Control Step Error Codes] A step with NO legacy origin has no original error code to preserve, " +
-            "so it MUST NOT invent one. Each such step owns a reserved block of 10 negative integers derived " +
-            "from its step code: block start = -9000 - (N * 10), where N is the number in `S<N>`. S01 owns " +
-            "-9010..-9019, S16 owns -9160..-9169. The block start (-9160 for S16) is that step's GENERAL " +
-            "failure code and MUST appear in the section; use block start minus 1, 2, ... only to distinguish " +
-            "further failure points within the same step. NEVER write a non-numeric code such as `B161` - " +
-            "`DECLARE @v_currentStepId INT = B161` does not compile, because B161 is an unresolved identifier. " +
+            "[Control Step Error Codes] A step with NO legacy origin has no original error code to preserve. " +
+            "It MUST NOT invent one - instead it uses the reserved block this document assigns to it. " +
+            "Each such step owns a block of 10 negative integers derived from its step code: " +
+            "block start = -9000 - (N * 10), where N is the number in `S<N>`. S01 owns -9010..-9019, " +
+            "S16 owns -9160..-9169. The block start (-9160 for S16) is that step's GENERAL failure code and " +
+            "MUST appear in the section; use block start minus 1, 2, ... only to distinguish further failure " +
+            "points within the same step - initialize the state variable to `0`, not to the block start; " +
+            "`0` means 'no failure point reached yet', and initializing to a real code makes the step report " +
+            "a failure it never had. " +
+            "The status code is an integer status code: declare the state variable as INT and assign only " +
+            "integers from the block. NEVER assign a string code such as `N'B161'` or `N'BATCH-LOCK-001'` - " +
+            "an invented string vocabulary is exactly what this rule exists to prevent, and a non-numeric " +
+            "bare token such as `B161` does not even compile (`DECLARE @v INT = B161` has no such identifier). " +
+            "One string stays a string: the step identifier written to `batch.BatchStepJournal.StepCode` stays a string " +
+            "(`N'S01'`), because the control contract declares that column `nvarchar(10)`. That is identity, not a code. " +
+            "Checkpoint/execution status values are not step error codes either: `Running`, `Succeeded`, `Failed`, " +
+            "`Skipped`, `Pending`, `Held`, `Released` (the vocabulary the Batch Control Table Contract defines) " +
+            "describe run state, not why a step failed, and stay as the strings that contract already defines. " +
             "Steps that DO replace a legacy procedure keep that procedure's exact original codes and MUST NOT " +
             "use this reserved band.";
     }

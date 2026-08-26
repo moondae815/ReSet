@@ -140,5 +140,45 @@ namespace ReSet.Core.Tests
                 "is the one place in this document where a continuous range is correct",
                 result.SystemPrompt);
         }
+
+        [Fact]
+        public async Task Plan_ShouldRequireAnIntegerStatusCodeForOriginlessSteps()
+        {
+            var result = await CaptureAsync();
+
+            Assert.Contains("integer status code", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task Plan_ShouldKeepTheStepIdentifierAsAString()
+        {
+            // 이 구분이 없으면 모델이 저널의 StepCode까지 숫자로 바꾸려 들 수 있고,
+            // 그것은 BatchControlContract(StepCode nvarchar(10)) 위반이 된다.
+            var result = await CaptureAsync();
+
+            Assert.Contains("step identifier written to `batch.BatchStepJournal.StepCode` stays a string", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task Plan_ShouldTellTheModelToInitializeTheStateVariableToZero()
+        {
+            // M4: 블록 시작을 "일반 실패 코드"라고만 하면 모델이 그것을 초기값으로 삼고,
+            // CheckStepIdInitialValue("어느 코드와도 겹치지 않는 값으로 초기화하라")와
+            // 부딪힌다.
+            var result = await CaptureAsync();
+
+            Assert.Contains("initialize the state variable to `0`, not to the block start", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task Plan_ShouldExemptCheckpointStatusValuesFromTheStringCodeBan()
+        {
+            // 직전 태스크가 만든 CheckControlStepErrorCodeBand는 BatchControlContract의
+            // 상태 어휘(Running·Succeeded 등)를 침묵시킨다. 프롬프트가 이 예외를
+            // 말하지 않으면 검사가 지키지 않는 금지를 모델에게 지시하는 셈이 된다.
+            var result = await CaptureAsync();
+
+            Assert.Contains("are not step error codes either", result.SystemPrompt);
+        }
     }
 }
