@@ -140,7 +140,7 @@ private sealed class SubordinatePredicateCollector : TSqlFragmentVisitor
 명세서가 `OutState`를 술어로 기대하면 접혀 버린다). `ON` 절은 조인이지 필터가
 아니고, 조인 키 대조는 기존 가드 담당이다.
 
-### 문장 전체를 순회하면 안 되는 이유 — 진입점을 셋으로 한정한다
+### 문장 전체를 순회하면 안 되는 이유 — 진입점을 넷으로 한정한다
 
 `statement.Accept(subordinate)`로 전체를 순회하면 **`SET` 절 안의 하위질의까지
 걸린다.** 기존 테스트가 그 모양을 이미 담고 있다
@@ -156,12 +156,12 @@ WHERE Y.YMD = @p AND Y.UseState = 1;
 아니다. 이것을 하위 스코프 술어로 세면, 우연히 이름이 같은 컬럼이 진짜 소실을
 가려 잘못 침묵시킨다.
 
-그래서 문장 전체가 아니라 **대상 행을 거를 수 있는 세 자리에서만** 수집한다:
+그래서 문장 전체가 아니라 **대상 행을 거를 수 있는 네 자리에서만** 수집한다:
 
 ```csharp
 var subordinate = new SubordinatePredicateCollector();
 ctes?.Accept(subordinate);    // WITH 절 - CTE 본문
-from?.Accept(subordinate);    // FROM 절 - 파생 테이블
+from?.Accept(subordinate);    // FROM 절 - 파생 테이블 + JOIN ON 절 안의 하위질의
 where?.Accept(subordinate);   // 최상위 WHERE 안의 EXISTS·IN·스칼라 하위질의
 ```
 
@@ -169,6 +169,24 @@ where?.Accept(subordinate);   // 최상위 WHERE 안의 EXISTS·IN·스칼라 �
 `Add(...)`로 함께 넘겨 받는다 — 타입을 추론하거나 캐스트하지 않는다.
 `DeleteStatement`도 같다. `INSERT`는 검사 B·C의 후보가 아니므로
 (`IsCandidateForAnchoredStatementCheck`) 넘기지 않아도 되지만, 넘겨도 무해하다.
+
+**네 번째 자리 — `from?.Accept(subordinate)`가 JOIN `ON` 절 안의 하위질의까지
+훑는다.** 코드는 세 번의 `Accept` 호출(`ctes`·`from`·`where`)만 하지만, `from`
+순회는 파생 테이블뿐 아니라 `JOIN ... ON` 절의 하위질의도 함께 방문한다 —
+`FromClause`의 기본 순회가 `ON` 절 안으로 내려가기 때문이다. 실측:
+
+```sql
+UPDATE Y SET Y.X = 1 FROM dbo.TSettleMst AS Y
+INNER JOIN dbo.TCost AS C ON C.PLTID = Y.PLTID
+  AND C.ID IN (SELECT Z.ID FROM dbo.TZ AS Z WHERE Z.Hidden = 1)
+WHERE Y.YMD = @p;
+```
+
+`SubordinatePredicateColumns`에 `Hidden`이 잡힌다(`Sub=[Hidden]`). 이 자리는
+설계 초안에 없었다 — **동작 자체는 방어 가능하다**: `INNER JOIN`이면 그 하위질의가
+대상 행을 실제로 거르므로(조인 파트너 행이 `WHERE Z.Hidden = 1`을 만족하지 않으면
+조인 자체가 성립하지 않는다), 갱신 대상 행을 거르는 술어로 세는 것이 의도와
+어긋나지 않는다. 문서화가 뒤늦게 이 자리를 인정하는 것뿐이다.
 
 ## 4. 판정 — 컬럼 단위로 거른다
 
@@ -240,6 +258,32 @@ public sealed record SpecStatementFacts(
 것이 실제로 동등한지는 사람의 판정이고, 그 판정 자리는 스윕 보고서의 「판정」
 칸이다. 이 구분만으로도 30건 이상이 "확인해야 할 것"에서 "구조를 안 것"으로
 바뀐다.
+
+**동명 컬럼이 진짜 소실을 가릴 수 있다.** `SubordinatePredicateColumns`가 모으는
+것은 **테이블 한정 없이 이름만**이다 — 어느 스코프의 어느 테이블 컬럼인지는
+버리고 문자열만 남는다. 그래서 이행이 최상위 `WHERE` 필터를 정말로 잃었더라도,
+**무관한 테이블의 동명 컬럼**이 하위 스코프 어딘가에 있으면 그 소실을 침묵시킬
+수 있다. 예:
+
+```sql
+WHERE Y.PLTID IN (SELECT Z.PLTID FROM dbo.TZ AS Z WHERE Z.YMD = @p)
+```
+
+`Y.YMD` 필터가 최상위에서 사라졌더라도, `TZ`(무관한 테이블)의 `Z.YMD`가
+`SubordinatePredicateColumns`에 `YMD`로 잡혀 "이전됐다"로 오판할 수 있다
+(실측: `Sub=[YMD]`). §0이 이미 인식한 것과 같은 부류의 위험이다 — 거기서는
+`SET` 절의 동명 컬럼이 갱신 대상 컬럼을 술어로 오인해 잘못 침묵시키는 것을
+근거로 `SET` 절을 배제했다. **여기 남은 세 자리(CTE 본문·파생 테이블·JOIN
+ON/최상위 WHERE 하위질의)에도 같은 위험이 원리상 남아 있다** — 테이블 한정이
+없다는 것 자체가 원인이라, `SET` 절을 뺀 것으로는 막히지 않는다.
+
+**오늘 코퍼스에는 이 경로로 침묵한 건이 없다.** 2026-08-26 재측정에서 사라진
+41건(`UPDATE 2·17·18`의 33건 + `UPDATE 13`의 8건)을 전부 부류별로 추적한
+결과, 모두 원본 명세서에도 같은 필터가 실제로 존재하는 정당한 이전이었다 —
+동명이나 우연에 기댄 침묵은 하나도 없었다. 그래서 이 위험은 **오늘은 이론
+상의 것**이지만, 코퍼스가 늘거나 새 관용구가 들어오면 실제로 침묵을 만들 수
+있다. 닫으려면 `SubordinatePredicateColumns`가 이름만이 아니라 **테이블(또는
+별칭) 한정 수집**으로 바뀌어야 한다 — 다음 회차 개선 항목으로 남긴다.
 
 ## 7. S07 U13 재판정
 

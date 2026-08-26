@@ -37,8 +37,14 @@ namespace ReSet.Core.Services
         string? CodeAnchor = null)
     {
         /// <summary>
-        /// 하위 스코프(CTE 본문·파생 테이블·최상위 WHERE 안의 하위질의)의 WHERE에
-        /// 나오는 컬럼. <see cref="PredicateColumns"/>와 겹치지 않는다.
+        /// 하위 스코프(CTE 본문·파생 테이블·최상위 WHERE 안의 하위질의·JOIN ON 안의
+        /// 하위질의)의 WHERE에 나오는 컬럼. <see cref="PredicateColumns"/>와 겹칠 수
+        /// 있다 — 최상위 WHERE가 두 수집기의 공통 진입점이라(`where?.Accept(predicates)`·
+        /// `where?.Accept(subordinate)`), 최상위 WHERE 안의 하위질의에 최상위와 같은
+        /// 이름의 컬럼이 있으면 양쪽에 다 잡힌다(예: `WHERE Y.YMD = @p AND EXISTS
+        /// (SELECT 1 FROM B WHERE B.YMD = @p AND B.ID = Y.ID)` → Pred=[YMD],
+        /// Sub=[YMD, ID, ID]). 판정에는 무해하다 — 검사 B는 두 값이 모두 있으면
+        /// 어차피 침묵하므로 겹침 자체가 결과를 바꾸지 않는다.
         ///
         /// [무엇을 위한 값인가] 원본이 최상위 WHERE에 두었던 술어를 이행이 하위
         /// 스코프로 옮기는 관용구가 실재한다(2026-08-26 표본 판정 30건). 최상위만
@@ -504,9 +510,16 @@ namespace ReSet.Core.Services
                 from?.Accept(joins);
                 statement.Accept(grouping);
 
-                // 대상 행을 거를 수 있는 세 자리에서만 모은다. statement.Accept로
-                // 문장 전체를 훑으면 SET 절 안의 하위질의까지 걸리는데, 그건 갱신할
-                // "값"을 고르는 술어이지 갱신할 "행"을 고르는 술어가 아니다.
+                // 대상 행을 거를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON 절
+                // 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다 - 파생
+                // 테이블과 JOIN ON 하위질의는 둘 다 from?.Accept 한 번으로 함께
+                // 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
+                // INNER JOIN이면 대상 행을 실제로 거르므로 여기서 모으는 것이
+                // 의도와 어긋나지 않는다(실측: `INNER JOIN dbo.TCost AS C ON
+                // ... AND C.ID IN (SELECT Z.ID FROM dbo.TZ AS Z WHERE Z.Hidden = 1)`
+                // → Sub=[Hidden]). statement.Accept로 문장 전체를 훑으면 SET 절
+                // 안의 하위질의까지 걸리는데, 그건 갱신할 "값"을 고르는 술어이지
+                // 갱신할 "행"을 고르는 술어가 아니다.
                 var subordinate = new SubordinatePredicateCollector();
                 ctes?.Accept(subordinate);
                 from?.Accept(subordinate);
