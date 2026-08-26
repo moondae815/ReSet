@@ -48,6 +48,13 @@ namespace ReSet.Core.Tests
             Assert.False(ControlStepErrorCodes.IsReserved(-1));
             Assert.True(ControlStepErrorCodes.IsReserved(-9010));
             Assert.True(ControlStepErrorCodes.IsReserved(-9400));
+
+            // 경계 자체를 정확히 고정한다. -9000은 S00의 블록 시작값이자 Task 2의
+            // 충돌 가드(레거시 코드가 예약 대역에 걸치는지 판정)가 기대는 정확한 값이다.
+            // 위 네 값은 모두 실제 경계에서 9 이상 떨어져 있어 ReservedCeiling이
+            // -9000에서 -9005로 밀리거나 비교가 <=에서 <로 바뀌어도 그대로 통과한다.
+            Assert.True(ControlStepErrorCodes.IsReserved(-9000));
+            Assert.False(ControlStepErrorCodes.IsReserved(-8999));
         }
     }
 }
