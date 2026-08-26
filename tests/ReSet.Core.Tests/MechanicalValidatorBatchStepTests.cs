@@ -2432,5 +2432,202 @@ SET @v_currentStepId = ERROR_NUMBER();
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandACodeThatOnlyASplitProcedureOwes()
+        {
+            // 실측(POQSettleProc4): UP_UTIL_SETTLE_EXCEPTION_PROC이 18개 단계에 나뉘어
+            // 있다. 단계마다 그 SP의 코드 전량을 요구하면 18개 단계가 만족 불가능한
+            // 요구를 받는다 - 문장 개수 대조가 이미 같은 이유로 면제받는다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책 1", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책 1
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1", "-2" }
+                });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandACodeANonSplitProcedureOwes()
+        {
+            // 같은 단계가 분할되지 않은 SP도 맡고 있고 그 SP가 그 코드를 가지면
+            // 귀속이 확실하므로 계속 요구한다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X", "dbo.UP_Y" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1" },
+                    ["UP_Y"] = new[] { "-2" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutAttributionMaterial_ShouldKeepTheOldBehaviour()
+        {
+            // 재료가 없다는 사실을 결함 없음으로 바꾸지 않는다 - allSteps == null일
+            // 때의 하위 호환과 같은 태도다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandACodeWithNoKnownOwner()
+        {
+            // codesByProcedure 어디에도 이 코드를 가진 SP가 없으면(owners.Count == 0)
+            // 귀속을 확정할 수 없다. "분할 SP에서만 유래" 판정은 소유자가 있어야
+            // 성립하므로, 소유자가 아예 없을 때 면제로 뒤집으면 안 된다 - 그것은
+            // "누가 빚졌는지 모른다"를 "아무도 안 빚졌다"로 오독하는 것이다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-99" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-99'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandASharedCodeWhenAStepOwnsBothASplitAndANonSplitProcedure()
+        {
+            // 같은 단계가 분할된 SP(UP_X)와 분할되지 않은 SP(UP_Y)를 함께 맡고, 두 SP가
+            // 같은 코드를 가지는 경우. 소유자 중 하나(UP_Y)라도 분할되지 않았으면
+            // 귀속이 확실하므로 계속 요구한다 - 분할 SP가 섞여 있다는 이유로
+            // 비분할 SP의 의무까지 면제하면 안 된다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X", "dbo.UP_Y" }, new[] { "dbo.T1" },
+                new[] { "-5" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-5" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = 0;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-5" },
+                    ["UP_Y"] = new[] { "-5" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-5'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandATableThatOnlyASplitProcedureOwes()
+        {
+            // 테이블 축의 같은 판정. UP_X가 S10·S11에 나뉘어 있고 정적 분석이 그 SP의
+            // 쓰기 대상으로 dbo.T2를 낸다면, 이 단계 하나가 dbo.T2 전체를 언급할
+            // 의무는 없다 - 문서 단위 검사(Task 5)가 그 의무를 회수한다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T2" },
+                new string[0], false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T2" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = 0;
+SELECT 1;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T2" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                tablesByProcedure: new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new SpecTargetTableExtractor.StepTableSets(
+                        new[] { "dbo.T2" }, Array.Empty<string>())
+                });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'dbo.T2'"));
+        }
     }
 }

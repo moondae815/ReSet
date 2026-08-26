@@ -5689,7 +5689,14 @@ SELECT 1;
                 // 모두 카탈로그가 없던 이전 동작과 같아진다.
                 // brainstorming: 이 테스트들은 1/3을 돌지 않으므로 null이다. 골격
                 // 프롬프트가 절 자체를 싣지 않아 브레인스토밍이 없던 이전 동작과 같다.
-                knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null, cancellationToken
+                //
+                // [분할 SP 귀속 배선] codesByProcedure·tablesByProcedure도 같은 이유로
+                // 빈 사전이다 - 이 테스트들은 분할 SP 귀속 축을 검증하지 않으므로
+                // 재료가 없다는 사실이 소프트 스킵을 유발해 이전 동작과 같아진다.
+                knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
+                cancellationToken
             })!;
 
             await task;

@@ -1910,7 +1910,8 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, currentBrainstorming, cancellationToken);
+                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, currentBrainstorming,
+                                specReturnCodes, specTargetTables, cancellationToken);
 
                             if (split != null)
                             {
@@ -2375,6 +2376,8 @@ namespace ReSet.Core.Services
                             knownTableNames,
                             parametersByProcedure,
                             currentBrainstorming,
+                            specReturnCodes,
+                            specTargetTables,
                             cancellationToken);
 
                         if (split != null)
@@ -3024,6 +3027,12 @@ namespace ReSet.Core.Services
             IReadOnlyList<string> knownTableNames,
             IReadOnlyDictionary<string, IReadOnlyList<string>> parametersByProcedure,
             string? brainstorming,
+            // [분할 SP 귀속 배선] 분할 SP의 코드·테이블을 단계마다 요구하지 않으려면
+            // 프로시저 단위 귀속 재료가 GenerateStepSectionWithFloorRetryAsync까지
+            // 내려가야 한다 - step.ErrorCodes는 평평한 목록이라 이 메서드가 직접
+            // 만들 수 없다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
             CancellationToken cancellationToken)
         {
             var targeted = previousSkeleton != null && previousSkeletonResult != null &&
@@ -3113,7 +3122,7 @@ namespace ReSet.Core.Services
 
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
-                        knownTableNames, stepInterfaces, cancellationToken);
+                        knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, cancellationToken);
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -3204,6 +3213,10 @@ namespace ReSet.Core.Services
             string jobName,
             IReadOnlyList<string> knownTableNames,
             IReadOnlyList<StepInterface> stepInterfaces,
+            // [분할 SP 귀속 배선] GenerateBySplitAsync가 받은 귀속 재료를 그대로 내려받아
+            // ValidateBatchStep에 넘긴다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
             CancellationToken cancellationToken)
         {
             const int maxTries = 5;   // 최초 1회 + 재시도 4회 - 근거는 위 docstring 참고
@@ -3285,7 +3298,12 @@ namespace ReSet.Core.Services
                     // 인자가 빠지면 그 판정을 못 해 분할된 SP를 담당하는 모든 단계가
                     // 영구히 만족 불가능한 개수 요구를 받는다(위 클래스 docstring 및
                     // MechanicalValidator.IsLegacyProcedureSplitAcrossSteps 참고).
-                    allSteps: steps);
+                    allSteps: steps,
+                    // [분할 SP 귀속 배선] 분할된 SP에서만 유래한 코드·테이블은 이 단계
+                    // 하나가 전량을 요구받지 않는다 - 문서 단위 검사(Task 5)가 그 의무를
+                    // 회수한다.
+                    codesByProcedure: codesByProcedure,
+                    tablesByProcedure: tablesByProcedure);
                 if (stepResult.IsValid)
                 {
                     return (content, null);

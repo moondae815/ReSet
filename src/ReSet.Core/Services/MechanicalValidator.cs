@@ -269,6 +269,13 @@ namespace ReSet.Core.Services
         /// 하나가 그 SP의 문장 전부를 담당한다고 본다 - 호출부
         /// (<see cref="VerificationPipelineOrchestrator"/>)가 아직 이 인자를 넘기지
         /// 않는 상태에서는 이 매개변수가 있어도 실행 중 동작은 바뀌지 않는다.</param>
+        /// <param name="codesByProcedure">원본 프로시저 맨이름별로 명세서 산문에서 뽑은 반환
+        /// 코드(<see cref="SpecReturnCodeExtractor"/>). <paramref name="allSteps"/>와 함께
+        /// "이 단계의 코드가 분할된 SP에서만 유래하는가"를 판정하는 데 쓴다 - step.ErrorCodes는
+        /// 평평한 목록이라 어느 코드가 어느 SP 것인지 이 인자 없이는 알 수 없다. 생략하거나
+        /// null이면 이 판정을 하지 않고 예전처럼 단계가 선언한 코드 전부를 요구한다.</param>
+        /// <param name="tablesByProcedure">원본 프로시저 맨이름별로 정적 분석이 낸 쓰기 대상
+        /// 테이블(<see cref="SpecTargetTableExtractor"/>). 테이블 축의 같은 판정에 쓴다.</param>
         public StepValidationResult ValidateBatchStep(
             string? stepMarkdown,
             BatchStepPlan step,
@@ -277,7 +284,12 @@ namespace ReSet.Core.Services
             IReadOnlyList<StepInterface>? stepInterfaces = null,
             IReadOnlyCollection<string>? runRowOwnedTables = null,
             IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null,
-            IReadOnlyList<BatchStepPlan>? allSteps = null)
+            IReadOnlyList<BatchStepPlan>? allSteps = null,
+            // [분할 SP 귀속] 코드·테이블이 어느 SP에서 왔는지는 step.ErrorCodes가 평평한
+            // 목록이라 알 수 없다. 프로시저 단위 재료를 함께 받아야 "분할된 SP에서만
+            // 유래한 것"을 가려낼 수 있다. 재료가 없으면(null) 종전 동작 그대로다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
         {
             var result = new StepValidationResult();
 
@@ -348,6 +360,13 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                // 이 테이블을 빚지는 SP가 전부 분할돼 있으면 이 단계 하나가 전체를
+                // 언급할 의무는 없다 - 문서 단위 검사(Task 5)가 그 의무를 회수한다.
+                if (IsTableOwedOnlyBySplitProcedures(bareName, step, allSteps, tablesByProcedure))
+                {
+                    continue;
+                }
+
                 if (!ContainsToken(stepMarkdown, bareName))
                 {
                     result.Errors.Add($"{step.Code} 섹션에 대상 테이블 '{table}'이 등장하지 않습니다.");
@@ -357,6 +376,12 @@ namespace ReSet.Core.Services
             foreach (var errorCode in step.ErrorCodes)
             {
                 if (string.IsNullOrWhiteSpace(errorCode))
+                {
+                    continue;
+                }
+
+                // 같은 판정. 분할된 SP에서만 유래한 코드는 단계마다 요구하지 않는다.
+                if (IsOwedOnlyBySplitProcedures(errorCode.Trim(), step, allSteps, codesByProcedure))
                 {
                     continue;
                 }
@@ -469,6 +494,54 @@ namespace ReSet.Core.Services
                 !string.Equals(other.Code, ownStepCode, StringComparison.OrdinalIgnoreCase) &&
                 other.LegacyProcedures.Any(p =>
                     BareObjectName(p).Equals(bare, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        /// <summary>
+        /// 이 코드를 빚지는 SP가 전부 분할돼 있는가. 하나라도 분할되지 않은 SP가
+        /// 그 코드를 가지면 귀속이 확실하므로 이 단계에서 계속 요구한다.
+        ///
+        /// 재료가 없으면 false - 종전대로 요구한다. 재료 없음을 결함 없음으로
+        /// 바꾸지 않는다.
+        /// </summary>
+        private static bool IsOwedOnlyBySplitProcedures(
+            string code,
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure)
+        {
+            if (allSteps == null || codesByProcedure == null) return false;
+
+            var owners = step.LegacyProcedures
+                .Where(p => codesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(p), out var codes) &&
+                            codes.Any(c => string.Equals(c.Trim(), code, StringComparison.Ordinal)))
+                .ToList();
+
+            if (owners.Count == 0) return false;
+
+            return owners.All(p => IsLegacyProcedureSplitAcrossSteps(p, step.Code, allSteps));
+        }
+
+        /// <summary>
+        /// 테이블 축의 같은 판정. 오류코드와 달리 테이블은 정적 분석의 쓰기 집합에서
+        /// 온다(<see cref="SpecTargetTableExtractor"/>).
+        /// </summary>
+        private static bool IsTableOwedOnlyBySplitProcedures(
+            string bareTable,
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure)
+        {
+            if (allSteps == null || tablesByProcedure == null) return false;
+
+            var owners = step.LegacyProcedures
+                .Where(p => tablesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(p), out var sets) &&
+                            sets.WriteTables.Any(t => BareObjectName(t)
+                                .Equals(bareTable, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            if (owners.Count == 0) return false;
+
+            return owners.All(p => IsLegacyProcedureSplitAcrossSteps(p, step.Code, allSteps));
         }
 
         private static string FirstNonEmptyLine(string markdown)
