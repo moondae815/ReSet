@@ -101,5 +101,14 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain("[Original Procedure Interface]", result.UserPrompt);
         }
+
+        [Fact]
+        public async Task Plan_ShouldCarryTheControlStepErrorCodeClause()
+        {
+            var result = await CaptureAsync();
+
+            Assert.Contains("[Control Step Error Codes]", result.SystemPrompt);
+            Assert.Contains("-9010..-9019", result.SystemPrompt);
+        }
     }
 }

@@ -104,5 +104,16 @@ namespace ReSet.Core.Tests
             Assert.Contains("same column list in the same order", prompt);
             Assert.Contains("USESTATE", prompt);
         }
+
+        [Fact]
+        public async Task Critic_ShouldCheckTheControlStepErrorCodeBand()
+        {
+            // 생성 규칙이 요구하는데 아무도 채점하지 않으면 어긋나도 통과하고,
+            // 자가 수정이 그 축에 영영 닿지 않는다 - 직전 회차에서 실측한 실패 방식이다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("reserved block", prompt);
+            Assert.Contains("does not compile", prompt);
+        }
     }
 }
