@@ -140,15 +140,35 @@ private sealed class SubordinatePredicateCollector : TSqlFragmentVisitor
 명세서가 `OutState`를 술어로 기대하면 접혀 버린다). `ON` 절은 조인이지 필터가
 아니고, 조인 키 대조는 기존 가드 담당이다.
 
-`Add(...)`에서 한 줄로 채운다:
+### 문장 전체를 순회하면 안 되는 이유 — 진입점을 셋으로 한정한다
+
+`statement.Accept(subordinate)`로 전체를 순회하면 **`SET` 절 안의 하위질의까지
+걸린다.** 기존 테스트가 그 모양을 이미 담고 있다
+(`CollectsTopLevelPredicateAndJoinColumns_ButNotSubqueryColumns`):
+
+```sql
+UPDATE Y SET Y.CLCOMM = (SELECT TOP 1 X.Amt FROM dbo.TCost AS X WHERE X.Hidden = 1)
+FROM dbo.TSettleMst AS Y INNER JOIN dbo.TCost AS C ON C.PLTID = Y.PLTID
+WHERE Y.YMD = @p AND Y.UseState = 1;
+```
+
+`X.Hidden`은 **갱신할 값을 고르는 술어**이지 **갱신 대상 행을 고르는 술어**가
+아니다. 이것을 하위 스코프 술어로 세면, 우연히 이름이 같은 컬럼이 진짜 소실을
+가려 잘못 침묵시킨다.
+
+그래서 문장 전체가 아니라 **대상 행을 거를 수 있는 세 자리에서만** 수집한다:
 
 ```csharp
 var subordinate = new SubordinatePredicateCollector();
-statement.Accept(subordinate);
+ctes?.Accept(subordinate);    // WITH 절 - CTE 본문
+from?.Accept(subordinate);    // FROM 절 - 파생 테이블
+where?.Accept(subordinate);   // 최상위 WHERE 안의 EXISTS·IN·스칼라 하위질의
 ```
 
-`statement`는 `TSqlStatement`이므로 `WithCtesAndXmlNamespaces`(CTE 절)까지 기본
-순회가 들어간다.
+`ctes`는 `Visit(UpdateStatement node)`의 `node.WithCtesAndXmlNamespaces`를
+`Add(...)`로 함께 넘겨 받는다 — 타입을 추론하거나 캐스트하지 않는다.
+`DeleteStatement`도 같다. `INSERT`는 검사 B·C의 후보가 아니므로
+(`IsCandidateForAnchoredStatementCheck`) 넘기지 않아도 되지만, 넘겨도 무해하다.
 
 ## 4. 판정 — 컬럼 단위로 거른다
 
