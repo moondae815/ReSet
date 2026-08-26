@@ -242,15 +242,26 @@ if (statement.CodeAnchor != null
 `IsCandidateForAnchoredStatementCheck`에서 INSERT 배제를 걷어도 **UPDATE·DELETE의
 서수는 흔들리지 않는다**. 명세서 쪽도 `IsComparableDmlRow`가 이미 INSERT를 통과시킨다.
 
-배제를 걷는 변경은 한 줄이다.
+배제를 걷는 것은 `IsCandidateForAnchoredStatementCheck` 메서드와 그 긴 문서 주석을
+**통째로 지우고** `ResolveAnchoredStatements`의 호출을 함께 걷는 것이다.
 
 ```csharp
-private static bool IsCandidateForAnchoredStatementCheck(StepSqlStatement statement) => true;
+// 전
+var resolved = statements
+    .Where(IsCandidateForAnchoredStatementCheck)
+    .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
+    .Where(a => a.Ordinal.HasValue)
+    .ToList();
+
+// 후
+var resolved = statements
+    .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
+    .Where(a => a.Ordinal.HasValue)
+    .ToList();
 ```
 
-메서드와 그 긴 문서 주석을 통째로 지우고 `ResolveAnchoredStatements`의 `.Where(...)`
-호출도 함께 걷는다. 남겨 두면 "왜 항상 참인 술어가 있는가"를 다음 사람이 다시
-풀어야 한다.
+`=> true`로 바꿔 남겨 두지 않는다 — 항상 참인 술어는 "왜 이게 있는가"를 다음 사람이
+다시 풀게 만든다.
 
 지우기 전에 그 주석이 담은 근거(스윕 실측 269→199건, 원인 배선, 되돌릴 지점)는
 `docs/known-defects.md`로 옮긴다 — 코드에서 사라지되 기록에서는 사라지지 않게.
