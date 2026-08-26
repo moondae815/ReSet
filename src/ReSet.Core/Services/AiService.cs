@@ -2125,24 +2125,43 @@ Based on the reference context above, reverse engineer the user defined function
 [Few-Shot Examples for Modernization Patterns]
 * Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
 ```sql
--- DECLARE the capture flag the CATCH block below will check. Default to 0 (not captured)
--- so an early failure - before the shadow actually exists - correctly skips the restore.
-DECLARE @v_shadowCaptured BIT = 0;
--- Create Shadow Table. Name pattern: batch_shadow.<Table>_RunId_<StepCode>, where the
--- literal token _RunId_ is a placeholder substituted with the actual run identifier at
--- execution time. Write that token verbatim - do NOT bake a sample identifier into the name.
-SELECT * INTO batch_shadow.TargetTable_RunId_S13 FROM dbo.TargetTable WHERE 1=0;
--- Bulk Insert into Shadow
-INSERT INTO batch_shadow.TargetTable_RunId_S13 (Col1, Col2)
-SELECT Col1, SUM(Col2) FROM SourceTable GROUP BY Col1;
+-- The shadow name carries the run identifier, so the name is only known at run time and
+-- MUST be assembled (rule 4-1). NEVER write a placeholder token literally - a name such as
+-- batch_shadow.TargetTable_RunId_S13 creates a table physically named _RunId_, which every
+-- run then shares, and the run identifier it was supposed to carry is gone.
+DECLARE @v_shadowCaptured BIT = 0;  -- CATCH checks this: 0 means there is nothing to restore
+-- Spell it in exactly this shape: a literal prefix ending in '_', the run id expression,
+-- then a literal N'_<StepCode>'. The bootstrap round scans for this shape to learn which
+-- shadow tables to create, and a name built any other way is never created.
+DECLARE @v_shadow NVARCHAR(300) =
+    N'batch_shadow.TargetTable_' + CAST(@pi_runId AS NVARCHAR(20)) + N'_S13';
+DECLARE @v_sql NVARCHAR(MAX);
+
+-- (rule 4a) Create the shadow BEFORE BEGIN TRAN. Issued inside the transaction it would
+-- disappear with the rollback and the restore would then fail on a missing object.
+SET @v_sql = N'SELECT * INTO ' + @v_shadow + N' FROM dbo.TargetTable WHERE 1 = 0;';
+EXEC sp_executesql @v_sql;
+
+-- (rule 4c) A dynamic batch is a separate scope: outer variables are passed as
+-- sp_executesql parameters, never referenced inside the dynamic text.
+SET @v_sql = N'INSERT INTO ' + @v_shadow + N' (Col1, Col2)
+    SELECT Col1, SUM(Col2) FROM dbo.SourceTable WHERE BatchDate = @p_batchDate GROUP BY Col1;';
+EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @pi_strYMD;
+
 -- Only now has the shadow actually been captured - flip the flag so the CATCH block knows
 -- a restore is possible.
 SET @v_shadowCaptured = 1;
+
 -- Single Transaction Swap
 BEGIN TRAN;
-  DELETE FROM dbo.TargetTable; -- Original target data purge
-  INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13;
+  -- (rule 4b) Delete exactly the range this step owns, never the whole table.
+  DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
+  SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow + N';';
+  EXEC sp_executesql @v_sql;
 COMMIT TRAN;
+
+-- (rule 4e) State the shadow's lifetime where you describe the step, e.g. the bootstrap
+-- purge job drops batch_shadow tables older than 24 hours.
 ```
 
 * Chunking Pattern (Combining chunking keys with existing business filters):
@@ -2169,8 +2188,11 @@ BEGIN CATCH
     -- Restore only when a shadow was actually captured (rule 4). Delete the SAME range first.
     IF @v_shadowCaptured = 1
     BEGIN
-        DELETE FROM dbo.TargetTable WHERE BatchDate = @BatchDate;
-        INSERT INTO dbo.TargetTable SELECT * FROM batch_shadow.TargetTable_RunId_S13 WHERE BatchDate = @BatchDate;
+        DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
+        -- Same assembled name as the capture above - the shadow has no literal name to spell.
+        SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow
+                   + N' WHERE BatchDate = @p_batchDate;';
+        EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @pi_strYMD;
     END
     -- Return the tracked code. Do NOT `THROW` here: it unwinds past the caller's
     -- OUTPUT parameter assignment and the original return code is lost (rules 6-1 and 13).
@@ -3729,15 +3751,21 @@ Write the Batch Migration Plan for {targetLanguage} based on the legacy SQL SP d
         public async Task<AiResult> BrainstormBatchPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect. Your task is to brainstorm and analyze the overarching architecture for consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application named '{jobName}'.
-DO NOT write code or detailed markdown plans. ONLY output your analysis: identify common domain logic, dependencies, and propose whether a Tasklet or Chunk-based architecture is more suitable.";
+DO NOT write code or detailed markdown plans. ONLY output your analysis.
+Cover exactly these three things:
+1. Common domain logic - what the procedures share (the same source tables, the same rounding rules, the same business date), and where consolidating would change results rather than only reorganize them.
+2. Execution order and dependencies - which procedures must run before which, and which touch the same target table and therefore MUST NOT run in parallel.
+3. For each procedure, whether its work can be split into committed chunks or must complete as one unit. State the reason: a step that aggregates with GROUP BY, joins across databases, or has no single key that partitions its target rows cannot be chunked. The downstream step list carries this as a per-step boolean, so decide it per procedure rather than for the job as a whole.
+Describe the architecture in terms of the target stack ({targetLanguage}) and of the source semantics. Do NOT reach for a specific framework's vocabulary unless the target stack is that framework - naming a pattern from an unrelated framework does not tell the next stage anything it can act on.";
 
             var userPrompt = new System.Text.StringBuilder();
             userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
             userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
-            userPrompt.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
+            var procedureSpecs = FeedbackSpec.OnlyProcedureSpecs(specs);
+            userPrompt.AppendLine($"Total Legacy Stored Procedures to Consolidate: {procedureSpecs.Count} procedures");
             userPrompt.AppendLine();
             userPrompt.AppendLine("[Provided Stored Procedure Specifications]");
-            foreach (var spec in specs)
+            foreach (var spec in procedureSpecs)
             {
                 userPrompt.AppendLine($"---");
                 userPrompt.AppendLine($"Filename: {spec.FileName}");
@@ -3746,6 +3774,8 @@ DO NOT write code or detailed markdown plans. ONLY output your analysis: identif
                 userPrompt.AppendLine($"[Content End]");
                 userPrompt.AppendLine();
             }
+
+            AppendFeedbackSection(userPrompt, specs);
             userPrompt.AppendLine("Please analyze the specifications and provide your architectural brainstorming.");
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
@@ -3867,7 +3897,7 @@ The previous structure below repeatedly failed cross-review. Do NOT reproduce it
             return aiResult;
         }
 
-        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(string planStructure, System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(string planStructure, System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, IReadOnlyList<StepInterface>? stepInterfaces = null, CancellationToken cancellationToken = default)
 
         {
             var systemPrompt = $@"You are a principal database modernization architect consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
@@ -3876,21 +3906,27 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            userPrompt.AppendLine($"Unified Batch Job Name: {jobName}");
-            userPrompt.AppendLine($"Target Language Stack: {targetLanguage}");
-            userPrompt.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
-            userPrompt.AppendLine();
-            userPrompt.AppendLine("[Provided Stored Procedure Specifications]");
 
-            foreach (var spec in specs)
-            {
-                userPrompt.AppendLine($"---");
-                userPrompt.AppendLine($"Filename: {spec.FileName}");
-                userPrompt.AppendLine($"[Content Start]");
-                userPrompt.AppendLine(spec.Content);
-                userPrompt.AppendLine($"[Content End]");
-                userPrompt.AppendLine();
-            }
+            // 분할 생성과 같은 컨텍스트를 싣는다. 이 경로는 분할이 실패했을 때만 도는
+            // 폴백이지만 산출물도 받는 검사도 같다. 직접 조립하던 동안은 제어 계약 표와
+            // 원본 인터페이스 표, 승인된 단계 목록이 빠져 있었고, 그래서 규칙 5가
+            // "[Original Procedure Interface] 표에 적힌 파라미터가 전부다"라고 말하는데
+            // 그 표가 프롬프트에 없는 상태가 됐다 - 없는 근거를 가리키는 규칙은
+            // 지킬 방법이 없다.
+            //
+            // sharedConventions는 빈 문자열이다. 이 호출은 문서 전체를 지금 쓰므로
+            // "이미 문서에 쓰인 규약"이라는 것이 존재하지 않는다.
+            AppendSharedStepContext(
+                userPrompt,
+                BatchStepPlanParser.TryParse(planStructure) ?? new List<BatchStepPlan>(),
+                sharedConventions: string.Empty,
+                specs,
+                stepInterfaces ?? new List<StepInterface>(),
+                targetLanguage,
+                jobName);
+
+            userPrompt.AppendLine();
+            AppendStatementAnchorRules(userPrompt);
 
             userPrompt.AppendLine();
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
@@ -3934,6 +3970,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             string targetLanguage,
             string jobName,
             string? effort = null,
+            string? brainstorming = null,
             CancellationToken cancellationToken = default)
         {
             var placeholders = new StringBuilder();
@@ -3961,6 +3998,24 @@ Consolidate the provided specifications into a single unified batch job named '{
             // 골격 프롬프트만 값이 바뀌어 단계 호출과의 공유 접두사가 어긋난다.
             AppendSharedStepContext(
                 userPrompt, steps, string.Empty, specs, Array.Empty<StepInterface>(), targetLanguage, jobName);
+
+            // 1/3 브레인스토밍 원문. 골격이 아키텍처 개요와 흐름도를 쓰는 자리이고,
+            // 그 판단이 나온 곳이 여기다. 전달하지 않던 동안은 목차 제목에 살아남은
+            // 만큼만 본문에 도달했다 - 청크 가능 여부의 근거, 병렬 금지의 이유,
+            // 통합이 결과를 바꾸는 지점 같은 서술은 제목이 담을 수 있는 것이 아니다.
+            //
+            // 공유 접두사 뒤에 붙인다. AppendSharedStepContext까지가 단계 호출과
+            // 바이트가 같아야 하는 구간이고, 여기서부터는 골격 전용이라 어긋나도 된다.
+            if (!string.IsNullOrWhiteSpace(brainstorming))
+            {
+                userPrompt.AppendLine("[Architecture Brainstorming — analysis that produced the structure below]");
+                userPrompt.AppendLine("Treat this as reasoning to carry into the overview and the flowchart, not as text to copy.");
+                userPrompt.AppendLine("Where it conflicts with the approved structure below, the approved structure wins.");
+                userPrompt.AppendLine();
+                userPrompt.AppendLine(brainstorming);
+                userPrompt.AppendLine();
+            }
+
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
@@ -4022,29 +4077,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             AppendSharedStepContext(
                 userPrompt, allSteps, sharedConventions, specs, stepInterfaces, targetLanguage, jobName);
 
-            // [축 B 감사가 요구하는 세 가지 - POQSettleBatch1 2026-08-24]
-            // 앵커가 없으면 단계 검사가 문장을 명세서의 갱신 N에 붙일 수 없어 조인 키·술어
-            // 컬럼 대조가 통째로 꺼진다. 규약 두 조항은 실측에서 금액·행 집합을 바꾼 치환이다.
-            // 이 블록은 floorFeedback보다 앞, 캐시 접두사(userPrompt) 안쪽에 둔다 - floorFeedback은
-            // volatileSuffix에 실려 반드시 프롬프트 말미에 붙어야 한다(아래 참고).
-            userPrompt.AppendLine("### 문장 앵커와 의미 보존 (필수)");
-            userPrompt.AppendLine();
-            userPrompt.AppendLine("- **각 DML 문장 바로 앞에 명세서의 갱신 번호를 주석으로 답니다.** " +
-                "`/* U13: 카드사 원가 반영 */` 형식입니다(`갱신 13`·`UPDATE 13`도 인정됩니다). " +
-                "번호가 있어야 검증이 명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조합니다. " +
-                "앵커와 설명은 **하나의 주석에** 담으십시오. 주석을 둘로 나누면(`/* U13 */`와 " +
-                "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다.");
-            userPrompt.AppendLine("- **스칼라 하위질의를 `CROSS APPLY`/`OUTER APPLY`로 바꾸지 마십시오.** " +
-                "명세서가 대입 우변을 스칼라 하위질의로 적은 자리는 무결과일 때 `NULL`이 대입되는 자리입니다. " +
-                "`CROSS APPLY`는 그 행을 갱신 대상에서 통째로 제외해, 같은 문장의 다른 컬럼 대입까지 사라집니다. " +
-                "원본(명세서)이 이미 `CROSS APPLY`/`OUTER APPLY` 형태라면 이 조항은 해당하지 않습니다. " +
-                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
-            userPrompt.AppendLine("- **비집계 조회 여러 문장을 집계 한 문장으로 합치지 마십시오.** " +
-                "명세서가 `SELECT @v = col` 뒤에 `@@ROWCOUNT > 1` 분기를 둔 자리는 \"없음\"과 \"여럿\"을 " +
-                "가르는 자리입니다. `MAX(col)` 한 문장으로 합치면 \"없음\"의 표현이 `0`에서 `NULL`로 바뀌어 " +
-                "분기가 역전됩니다. 원본(명세서)이 이미 집계 한 문장 형태라면 이 조항은 해당하지 않습니다. " +
-                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
-            userPrompt.AppendLine();
+            AppendStatementAnchorRules(userPrompt);
 
             // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
             // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
@@ -4090,6 +4123,73 @@ Consolidate the provided specifications into a single unified batch job named '{
         /// 단계별 값이 섞여 들어가면 프롬프트 캐시가 매 호출 미스가 되어,
         /// 분할 생성의 입력 비용이 1배에서 N배로 뛴다.
         /// </summary>
+        /// <summary>
+        /// 검토 피드백을 제 이름을 단 자리에 싣는다.
+        ///
+        /// 파이프라인은 피드백을 명세서 목록에 끼워 넣어 나른다. 그대로 두면
+        /// "[Provided Stored Procedure Specifications]" 안에 프로시저 명세서인 것처럼
+        /// 놓이고 프로시저 개수도 하나 부푼다. 명세서 자리에서는 걷어내고
+        /// (<see cref="FeedbackSpec.OnlyProcedureSpecs"/>) 여기에서 따로 싣는다.
+        ///
+        /// 실을 피드백이 없으면 한 줄도 쓰지 않는다 - 1차 회차 프롬프트가 재시도
+        /// 회차와 같은 바이트를 유지해야 접두사 캐시가 산다.
+        /// </summary>
+        /// <summary>
+        /// 문장 앵커와 의미 보존 세 조항. 분할 생성과 단일 호출 폴백이 함께 쓴다.
+        ///
+        /// 폴백에도 실어야 하는 이유: 분할이 실패했을 때만 도는 경로지만, 그때 나오는
+        /// 것도 같은 산출물이고 같은 검사를 받는다. 앵커가 없으면 단계 검사가 문장을
+        /// 명세서의 갱신 N에 붙이지 못해 조인 키·술어 컬럼 대조가 통째로 꺼진다 -
+        /// 검사가 실패하는 것이 아니라 실행되지 않는다. 한 곳에 두는 이유는 두 벌로
+        /// 적어두면 한쪽만 고쳐져 경로에 따라 다른 문서가 나오기 때문이다.
+        /// </summary>
+        private static void AppendStatementAnchorRules(StringBuilder builder)
+        {
+            // [축 B 감사가 요구하는 세 가지 - POQSettleBatch1 2026-08-24]
+            // 앵커가 없으면 단계 검사가 문장을 명세서의 갱신 N에 붙일 수 없어 조인 키·술어
+            // 컬럼 대조가 통째로 꺼진다. 규약 두 조항은 실측에서 금액·행 집합을 바꾼 치환이다.
+            // 이 블록은 floorFeedback보다 앞, 캐시 접두사(userPrompt) 안쪽에 둔다 - floorFeedback은
+            // volatileSuffix에 실려 반드시 프롬프트 말미에 붙어야 한다(아래 참고).
+            builder.AppendLine("### 문장 앵커와 의미 보존 (필수)");
+            builder.AppendLine();
+            builder.AppendLine("- **각 DML 문장 바로 앞에 명세서의 갱신 번호를 주석으로 답니다.** " +
+                "`/* U13: 카드사 원가 반영 */` 형식입니다(`갱신 13`·`UPDATE 13`도 인정됩니다). " +
+                "번호가 있어야 검증이 명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조합니다. " +
+                "앵커와 설명은 **하나의 주석에** 담으십시오. 주석을 둘로 나누면(`/* U13 */`와 " +
+                "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다.");
+            builder.AppendLine("- **스칼라 하위질의를 `CROSS APPLY`/`OUTER APPLY`로 바꾸지 마십시오.** " +
+                "명세서가 대입 우변을 스칼라 하위질의로 적은 자리는 무결과일 때 `NULL`이 대입되는 자리입니다. " +
+                "`CROSS APPLY`는 그 행을 갱신 대상에서 통째로 제외해, 같은 문장의 다른 컬럼 대입까지 사라집니다. " +
+                "원본(명세서)이 이미 `CROSS APPLY`/`OUTER APPLY` 형태라면 이 조항은 해당하지 않습니다. " +
+                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
+            builder.AppendLine("- **비집계 조회 여러 문장을 집계 한 문장으로 합치지 마십시오.** " +
+                "명세서가 `SELECT @v = col` 뒤에 `@@ROWCOUNT > 1` 분기를 둔 자리는 \"없음\"과 \"여럿\"을 " +
+                "가르는 자리입니다. `MAX(col)` 한 문장으로 합치면 \"없음\"의 표현이 `0`에서 `NULL`로 바뀌어 " +
+                "분기가 역전됩니다. 원본(명세서)이 이미 집계 한 문장 형태라면 이 조항은 해당하지 않습니다. " +
+                "명세서와 다르게 바꿔야 할 이유가 있으면 그 사실과 이유를 단계 본문에 적으십시오.");
+            builder.AppendLine();
+        }
+
+        private static void AppendFeedbackSection(
+            StringBuilder builder,
+            System.Collections.Generic.List<(string FileName, string Content)> specs)
+        {
+            var feedback = FeedbackSpec.OnlyFeedback(specs);
+            if (feedback.Count == 0)
+            {
+                return;
+            }
+
+            builder.AppendLine(FeedbackSpec.PromptHeader);
+            foreach (var entry in feedback)
+            {
+                builder.AppendLine("---");
+                builder.AppendLine($"Source: {entry.FileName}");
+                builder.AppendLine(entry.Content);
+                builder.AppendLine();
+            }
+        }
+
         private static void AppendSharedStepContext(
             StringBuilder builder,
             IReadOnlyList<BatchStepPlan> allSteps,
@@ -4101,11 +4201,12 @@ Consolidate the provided specifications into a single unified batch job named '{
         {
             builder.AppendLine($"Unified Batch Job Name: {jobName}");
             builder.AppendLine($"Target Language Stack: {targetLanguage}");
-            builder.AppendLine($"Total Legacy Stored Procedures to Consolidate: {specs.Count} procedures");
+            var procedureSpecs = FeedbackSpec.OnlyProcedureSpecs(specs);
+            builder.AppendLine($"Total Legacy Stored Procedures to Consolidate: {procedureSpecs.Count} procedures");
             builder.AppendLine();
             builder.AppendLine("[Provided Stored Procedure Specifications]");
 
-            foreach (var spec in specs)
+            foreach (var spec in procedureSpecs)
             {
                 builder.AppendLine("---");
                 builder.AppendLine($"Filename: {spec.FileName}");
@@ -4115,6 +4216,13 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine();
             }
 
+            AppendFeedbackSection(builder, specs);
+
+            // 목록이 비면 머리글도 내지 않는다. 빈 머리글은 "승인된 단계가 하나도
+            // 없다"는 뜻으로 읽혀, 목차를 못 읽은 것과 목차가 단계를 안 냈다는 것이
+            // 구분되지 않는다.
+            if (allSteps.Count > 0)
+            {
             builder.AppendLine("[Approved Step List]");
             foreach (var candidate in allSteps)
             {
@@ -4126,6 +4234,7 @@ Consolidate the provided specifications into a single unified batch job named '{
                     $"| Chunkable: {candidate.Chunkable}");
             }
             builder.AppendLine();
+            }
 
             // 골격 호출은 sharedConventions를 아직 갖고 있지 않다(자신이 그것을
             // 써야 하는 쪽이다). 그 호출에도 이 헤더를 무조건 찍으면 "규약이 이미
@@ -4174,17 +4283,24 @@ Consolidate the provided specifications into a single unified batch job named '{
 1. Business Logic and Flow Accuracy (ScoreAccuracy):
    - Assess if the business logic and rules of individual specifications are accurately preserved in the consolidated batch job.
    - Verify that queries using `UNION`, `UNION ALL`, or multi-table JOINs are preserved in full. Penalize if source tables or aggregation formulas were simplified, merged, or omitted.
+   - Verify that every branch of a `UNION ALL` projects the same column list in the same order, including the constant discriminator columns (`0 AS USESTATE`, `2 AS USESTATE`, `3 AS USESTATE`). A branch that omits a discriminator the other branches carry makes the statement invalid and loses the value that told the branches apart.
+   - Verify that each DML statement carries the specification's update number as a single comment immediately before it (`/* U13: ... */`). Without that anchor the mechanical check cannot bind the statement to the specification's DML scope table, so the join-key and predicate-column comparison is not run at all - it does not fail, it silently does not happen. Penalize a step whose DML statements carry no anchor, and penalize an anchor split across two comments.
+   - Verify that a scalar subquery in an assignment was NOT rewritten as `CROSS APPLY`/`OUTER APPLY` unless the specification already used that form. A scalar subquery assigns `NULL` when it finds nothing; `CROSS APPLY` drops the row from the update entirely, taking the other column assignments in the same statement with it.
+   - Verify that several non-aggregate lookups were NOT merged into one aggregate statement unless the specification already used that form. Where the specification writes `SELECT @v = col` followed by an `@@ROWCOUNT > 1` branch, it is separating 'none' from 'several'; `MAX(col)` changes 'none' from `0` to `NULL` and inverts the branch.
 2. Data Model and CRUD Completeness (ScoreCrud):
    - Verify if table CRUD accesses are properly sequenced and chunked (Paging Reader) in the data pipeline.
    - For chunked DELETE-INSERT patterns, verify if chunking keys are added to the DELETE filter to prevent unintended full-table deletions.
    - Verify if original business filters (e.g., `WHERE Status = 'P'`) are strictly preserved alongside chunking ranges. Penalize if original filters are omitted.
 3. Integration and Interface Definition (ScoreInterface):
    - Assess if parameter mapping, data exchange contracts, and API integration requirements are fully detailed.
+   - Verify that NO step added an input parameter for restart, skipping, or bypassing a guard. A step's interface is exactly the parameter list of the original procedure it replaces; restart skipping happens outside the step, in the orchestrator. Penalize heavily if a guard was made switchable by a caller.
+   - Verify that every NEW batch-only object (staging table, journal, checkpoint, control-total table, helper procedure) lives in the `batch` schema and every shadow table lives in `batch_shadow`. Penalize a job-named schema such as `poqbatch` or `<JobName>Batch`, and penalize any object placed under `dbo` that the plan itself creates - the bootstrap round only creates objects found under those two schema names.
+   - Verify that all steps spell the control tables and their status values identically (`Succeeded`, never `Completed`; no `ExecutionStatus`/`StepState`/`CompletionStatus` variants). If two steps spell one logical table differently, no single DDL satisfies both and restart is blocked on every run.
 4. Exception Handling, Transaction and Isolation Policy (ScoreException):
    - Check if Session-level `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` is used (Penalize heavily if `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` is proposed).
    - Check if `XACT_ABORT ON` is explicitly used with `TRY...CATCH`, and verify that the EXACT original error codes are preserved and returned (Penalize if error codes are remapped or omitted).
    - Check if Checkpoint-based Step Skip logic (Restartability) is clearly defined so completed steps do not block restarts with pre-validation errors.
-   - Check if Shadow Table strategies cover all target tables, define capacity/purge policies, and include explicit Rollback/Restore pseudo-code.
+   - Shadow tables are a LAST RESORT, not a requirement. A step whose work fits in one transaction and relies on `ROLLBACK TRAN` alone is CORRECT - do NOT penalize it for having no shadow table, and penalize it if it adds a compensating DELETE in the CATCH block on top of the rollback (that deletes rows the rollback already restored). ONLY for steps that actually use a shadow: check that the strategy covers ALL target tables the step modifies, defines a capacity/purge policy, and includes explicit Rollback/Restore pseudo-code.
    - Check that no `WITH (NOLOCK)` or `NOLOCK` hints remain anywhere in the generated pseudocode. They force READ UNCOMMITTED and violate the SNAPSHOT isolation policy. Penalize heavily if any remain.
    - For INSERT-only steps, verify the rollback relies on `ROLLBACK TRAN` or an explicit `DELETE WHERE [ChunkKey]` compensation rather than a Shadow table.
    - Verify that Shadow restore logic DELETEs the affected target range before re-inserting from the Shadow table. Restoring without the preceding DELETE duplicates rows.
@@ -4224,7 +4340,9 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
             var stablePrompt = new StringBuilder();
             stablePrompt.AppendLine("[Provided Stored Procedure Specifications]");
 
-            foreach (var spec in specs)
+            // 피드백은 접두사에 넣지 않는다 - 회차마다 내용이 바뀌므로 접두사 일치가
+            // 매 회차 깨져 명세서 전량(실측 481KB)의 캐시가 통째로 무효가 된다.
+            foreach (var spec in FeedbackSpec.OnlyProcedureSpecs(specs))
             {
                 stablePrompt.AppendLine($"---");
                 stablePrompt.AppendLine($"Filename: {spec.FileName}");
@@ -4233,6 +4351,7 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
             }
 
             var volatileSuffix = new StringBuilder();
+            AppendFeedbackSection(volatileSuffix, specs);
             volatileSuffix.AppendLine($"Unified Batch Job Name: {jobName}");
             volatileSuffix.AppendLine();
             volatileSuffix.AppendLine("[Consolidated Batch Modernization Plan Markdown]");

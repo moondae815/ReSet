@@ -83,6 +83,28 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void TryParse_WithDuplicateStepCodes_ReturnsNull()
+        {
+            // Code가 겹치면 분할 생성이 `sections[step.Code] = markdown`으로 모으는
+            // 과정에서 나중 것이 앞의 것을 덮어쓴다. 호출은 두 번 나가고 문서에는
+            // 하나만 남는데 사라진 쪽은 아무 데도 보고되지 않는다.
+            Assert.Null(BatchStepPlanParser.TryParse(
+                "```json\n{ \"Steps\": [ " +
+                "{ \"Code\": \"S01\", \"Name\": \"날짜 검증\" }, " +
+                "{ \"Code\": \"S01\", \"Name\": \"영업일 잠금\" } ] }\n```"));
+        }
+
+        [Fact]
+        public void TryParse_WithStepCodesDifferingOnlyByCase_ReturnsNull()
+        {
+            // 섹션 사전과 헤딩 대조가 대소문자를 가리지 않으므로 s01과 S01도 겹친다.
+            Assert.Null(BatchStepPlanParser.TryParse(
+                "```json\n{ \"Steps\": [ " +
+                "{ \"Code\": \"S01\", \"Name\": \"날짜 검증\" }, " +
+                "{ \"Code\": \"s01\", \"Name\": \"영업일 잠금\" } ] }\n```"));
+        }
+
+        [Fact]
         public void TryParse_WithStepMissingCode_ReturnsNull()
         {
             Assert.Null(BatchStepPlanParser.TryParse(

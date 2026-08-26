@@ -836,16 +836,24 @@ END",
             Assert.NotNull(result.SystemPrompt);
             var systemPrompt = result.SystemPrompt!;
             Assert.DoesNotContain("A1B2C3", systemPrompt);
+
             // 접기 로직이 인식하는 표기인지를 문자열이 아니라 그 로직으로 확인한다.
-            var shadowNames = System.Text.RegularExpressions.Regex
-                .Matches(systemPrompt, @"batch_shadow\.[A-Za-z_][A-Za-z_0-9<>]*")
-                .Select(m => m.Value)
+            //
+            // 프롬프트 전체를 한 번에 넘긴다 - 조각을 따로 넘기면 안 된다. 규칙 4-1이
+            // 요구하는 런타임 조립은 `N'batch_shadow.T_' + <식> + N'_S13'` 한 덩어리로
+            // 읽혀야 온전한 이름이 되고, 앞조각만 떼어 넘기면 실행 식별자가 없는
+            // `batch_shadow.T_`가 되어 실제 동작과 다른 것을 재게 된다.
+            var shadowNames = BatchInfraObjectCollector.Collect(systemPrompt).Names
+                .Where(name => name.StartsWith("batch_shadow.", System.StringComparison.OrdinalIgnoreCase))
                 .ToList();
+
             Assert.NotEmpty(shadowNames);
             Assert.All(shadowNames, name =>
-                Assert.Contains(
-                    BatchInfraObjectCollector.RunIdPlaceholder,
-                    BatchInfraObjectCollector.Collect(name).Names.Single()));
+                Assert.Contains(BatchInfraObjectCollector.RunIdPlaceholder, name));
+
+            // 조립형과 산문의 언급이 서로 다른 항목으로 갈리면 한 테이블이 회차 0
+            // 목록에 두 이름으로 오른다 - 이 검사가 애초에 막으려던 것이다.
+            Assert.Single(shadowNames);
         }
 
         [Fact]
