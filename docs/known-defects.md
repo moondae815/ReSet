@@ -1178,8 +1178,11 @@
 
   **(가) 무엇을 고쳤는가.** `StepSqlStatementReader`에 `SubordinatePredicateCollector`
   방문자를 더해 하위 스코프 — CTE 본문·파생 테이블·최상위 `WHERE` 안의
-  하위질의(`EXISTS`·`IN`도 `ScalarSubquery`라 함께 걸린다) — **세 자리**의
-  `WHERE` 컬럼만 모아 `StepSqlStatement.SubordinatePredicateColumns`로 싣는다.
+  하위질의(`EXISTS`·`IN`도 `ScalarSubquery`라 함께 걸린다) — **세 자리**(이후
+  JOIN `ON` 절 하위질의도 걸리는 것이 추가로 확인돼 넷으로 늘었다 — 설계
+  문서 §3 「네 번째 자리」 참고. 이 문단 자체는 원 기록 보존을 위해 고치지
+  않는다)의 `WHERE` 컬럼만 모아 `StepSqlStatement.SubordinatePredicateColumns`로
+  싣는다.
   `SET` 절 안의 하위질의는 갱신할 "행"이 아니라 "값"을 고르는 술어라
   제외한다(뮤테이션으로 확인 — `statement.Accept`로 문장 전체를 훑게
   바꾸면 `DoesNotCollectPredicatesFromSetClauseSubqueries`가 죽는다).
@@ -1277,11 +1280,11 @@
     WHERE 없음)`로 인용하고 "U13(predicate는 진짜 결측이지만 join 쪽
     'ClientID, CardCPID'는 거짓)"이라 판정했다. "**S07은 실물로
     닫혔다**"는 문구도 같은 절에 있다.
-  - **(5-3-1)(이번 라운드, 위 문단)** — "B 0→1도 Task 22 앵커 판독 수정으로
+  - **(5-3-1)(이번 라운드)** — "B 0→1도 Task 22 앵커 판독 수정으로
     검사 B가 전수 1건 발화하게 된 결과이고, 그 1건이 진짜 결함이다(S07 갱신
     13 — 위 「오류 코드 앵커 코퍼스 스윕 게이트 실측(2026-08-25, Task 8)」
     항목이 (A)·(B) 양쪽에서 회귀 0으로 계속 잡히는 것을 이미 확인했다)"라고
-    적었다(위 (5-3-1) 항목). 이번 재측정으로 조건 A 기준 검사 B가
+    적었다((5-3-1) 항목). 이번 재측정으로 조건 A 기준 검사 B가
     1 → 0으로 줄어 뒤집힌 것이 바로 이 좌표다 — 정정하지 않고 그대로
     둔다.
 
