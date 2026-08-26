@@ -4627,6 +4627,127 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// [start, end) 구간을 빈 줄이나 `|`로 시작하지 않는 임의의 줄을 경계로 삼아
+        /// `|` 행 블록들로 쪼갠다. `ReportTableShapeBreaks`(:4646 부근)가 같은 절단
+        /// 규칙을 이미 구현해 뒀다 - 이 헬퍼는 그 규칙을 CheckTransactionBoundaries·
+        /// CheckSetAssignments가 재사용할 수 있게 뽑은 것이다(형제 검사인
+        /// CheckCaseBranches·CheckReferencedFunctions는 이번 라운드에서 건드리지
+        /// 않는다 - 별도 스윕 필요, 2026-08-24 리뷰 백로그 D4). 나중에 그 둘을
+        /// 이 헬퍼로 옮길 때는 호출부 모양이 이미 맞으므로 한 줄 교체면 된다.
+        /// </summary>
+        private static List<List<string>> SplitIntoTableBlocks(
+            IReadOnlyList<string> lines, int start, int end)
+        {
+            var blocks = new List<List<string>>();
+            var current = new List<string>();
+            for (var i = start; i < end; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    current.Add(lines[i]);
+                }
+                else if (current.Count > 0)
+                {
+                    blocks.Add(current);
+                    current = new List<string>();
+                }
+            }
+            if (current.Count > 0) blocks.Add(current);
+            return blocks;
+        }
+
+        /// <summary>행이 기대 헤더 셀을 전부 담고 있으면 헤더 행으로 본다(순서는 안
+        /// 본다 - 렌더가 셀 순서를 바꿀 이유는 없지만 판정을 그것에 기대지 않는다).</summary>
+        private static bool IsHeaderRow(string row, IReadOnlyList<string> expectedHeaderCells)
+        {
+            var cells = SplitTableRowCells(row);
+            return expectedHeaderCells.All(expected => cells.Any(c => c == expected));
+        }
+
+        /// <summary>
+        /// [start, end) 구간에서 대조 대상 행을 고른다.
+        ///
+        /// [2026-08-24 리뷰 FIX ROUND 1 - 왜 헤더 매칭 블록으로 좁히는가] 옛 구현(이
+        /// 표 둘의 최초 판)은 절 전체의 `|` 줄을 블록 구분 없이 한데 모았다. 그러면
+        /// 헤딩 절 안에 산문으로 구분된 별개 블록이 있을 때, 그 블록의 행이 우연히
+        /// 기대 토큰(라인 번호 등)을 담고 있으면 진짜 표에서 빠진 행을 그 우연한
+        /// 일치가 덮어버린다(리뷰어 재현: 라인 4 `COMMIT TRANSACTION`이 진짜 표에는
+        /// 없는데 산문 뒤 별도 한 줄이 그 토큰을 담고 있어 결손 0건으로 나왔다).
+        ///
+        /// [2026-08-24 리뷰 FIX ROUND 2 - 왜 첫 일치 블록이 아니라 일치 블록 전부의
+        /// 합집합인가] 라운드 1은 `FirstOrDefault`로 헤더가 일치하는 "첫" 블록만
+        /// 썼다. 그런데 같은 헤딩 절에 헤더가 일치하는 블록이 둘 이상일 수 있다 -
+        /// L1 재시도에서 모델이 틀린 표를 지우지 않고 아래에 고친 표를 덧붙이는
+        /// 모양이 정확히 이것이다. 첫 블록이 불완전하면(리뷰어 재현 P2) 그 아래
+        /// 완전한 두 번째 블록이 있어도 결손이 잘못 보고됐고, 진짜 표 앞에 같은
+        /// 컬럼명의 범례 블록이 있으면(리뷰어 재현 P10) 범례가 "자기 표"로
+        /// 오인되어 그 아래 완전하고 올바른 진짜 표가 통째로 무시됐다. 그래서 헤더가
+        /// 일치하는 블록을 전부 모아 그 데이터 행의 합집합을 대조 대상으로 쓴다 -
+        /// 사실이 그 중 어느 블록에서 발견되든 표가 있다고 인정한다. (B)는 그대로
+        /// 지켜진다: 미끼 블록에는 헤더 행이 없으므로 여전히 합집합에서 배제된다.
+        ///
+        /// [2026-08-24 리뷰 FIX ROUND 3 M1 - (B) 배제가 대칭적이라는 뜻] 위 배제는
+        /// 미끼 블록에만 적용되는 특수 규칙이 아니라 "첫 행이 기대 헤더 셀을 갖추지
+        /// 못한 블록은 전부 배제한다"는 하나의 규칙이다. 그래서 진짜 표 블록이라도
+        /// 첫 행이 헤더로 인식되지 못하면(예: 범례 블록 바로 다음에 빈 줄 없이
+        /// 진짜 표의 첫 데이터 행이 붙어 그 앞줄이 헤더 자리를 차지한 경우, 재현
+        /// A11 - 결손이 실제 개수보다 많이 잡힌다) 똑같이 배제된다. 실해는 낮다 -
+        /// 그런 문서는 이미 GFM이 깨져 있어 `MachineTableShapeBroken`이 함께 뜨므로
+        /// 작성자가 결손 메시지만 보고 엉뚱한 데를 고칠 위험은 아래 메시지 힌트가
+        /// 줄인다.
+        ///
+        /// [후퇴가 정확히 무엇을 막고 무엇을 안 막는가] 헤더가 일치하는 블록이
+        /// 하나도 없으면(예: 헤더 행 자체가 없는 렌더) 오늘까지의 관대한 동작으로
+        /// 후퇴해 구간의 모든 `|` 줄을 그대로 쓴다 - 헤딩 바로 다음 줄이 산문이라
+        /// 첫 블록에 헤더가 없는 정상 문서에서 거짓 「표 없음」이 새로 나면 안 되기
+        /// 때문이다. 이 후퇴가 막는 것은 "헤더를 못 찾은 경우"뿐이다 - "헤더는
+        /// 찾았는데 그 블록이 부서진 GFM 표인 경우"(구분선 없이 헤더만 있거나,
+        /// 표 한가운데 빈 줄이 끼어 헤더와 데이터가 서로 다른 블록으로 갈라진
+        /// 경우)는 이 함수의 소관이 아니다 - 그 형태 결함은 `CheckMachineTableShape`/
+        /// `ReportTableShapeBreaks`가 잡아야 할 몫이고, 실측(2026-08-24 리뷰 조사)으로는
+        /// 그 경로가 이 두 표를 이미 카탈로그에 담고 있지만 두 형태 모두에서
+        /// 침묵한다 - 다만 두 형태의 침묵 원인은 서로 다르다(2026-08-24 FIX ROUND 3
+        /// M3, 백로그 D6에 정확히 남기기 위해 갈라 적는다): 표 한가운데 빈 줄이 낀
+        /// 경우는 `ReportTableShapeBreaks`도 블록을 나누고 각 블록 내부 폭만
+        /// 비교하므로 헤더와 데이터가 서로 다른 블록으로 갈라진 것 자체를 볼 길이
+        /// 없다. 반면 구분선 없이 헤더만 있는 경우는 블록 쪼개짐과 무관하다 -
+        /// `ReportTableShapeBreaks`는 애초에 구분선(`| :--- | ... |`) 유무를 보지
+        /// 않고 그 블록의 첫 행을 무조건 "헤더"로 간주해 나머지 행과 폭만 비교하므로,
+        /// 구분선이 빠진 것 자체는 그 메서드의 판정 범위 밖이다. 코퍼스 전체에
+        /// 번지는 별도 메서드라 이번 라운드에서 손대지 않는다 - 리뷰 백로그.
+        /// 이 함수는 그런 부서진 블록도 헤더만 있으면 합집합에 태우므로, 사실 대조
+        /// 자체는 여전히 정확하게 실패한다(행이 없다고 보고된다) - 다만 원인이
+        /// "행이 없음"이 아니라 "표 모양이 깨짐"일 수 있다는 것은 호출부의 오류
+        /// 메시지가 별도로 알려준다.
+        /// </summary>
+        private static List<string> CollectTableMatchRows(
+            IReadOnlyList<string> lines, int start, int end, IReadOnlyList<string> expectedHeaderCells)
+        {
+            var blocks = SplitIntoTableBlocks(lines, start, end);
+            var matched = blocks
+                .Where(block => block.Count > 0 && IsHeaderRow(block[0], expectedHeaderCells))
+                .SelectMany(block => block.Skip(1))
+                .ToList();
+
+            if (matched.Count > 0)
+            {
+                return matched;
+            }
+
+            // 후퇴: 헤더로 자기 블록을 하나도 특정할 수 없으면 옛 동작대로 구간의
+            // 모든 `|` 줄을 그대로 쓴다. 관대함을 유지해 새 거짓 양성을 만들지 않는다.
+            var all = new List<string>();
+            for (var i = start; i < end; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    all.Add(lines[i]);
+                }
+            }
+            return all;
+        }
+
+        /// <summary>
         /// 기계 확정 트랜잭션 경계 표의 전사를 대조한다.
         ///
         /// 행 키는 (라인, 종류) 둘이다. 이름까지 넣지 않는 이유는 이름 없는 경계가
@@ -4666,14 +4787,9 @@ namespace ReSet.Core.Services
                     return;
                 }
 
-                var rowLines = new List<string>();
-                for (var i = headingIndex + 1; i < endIndex; i++)
-                {
-                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
-                    {
-                        rowLines.Add(lines[i]);
-                    }
-                }
+                var rowLines = CollectTableMatchRows(
+                    lines, headingIndex + 1, endIndex,
+                    TransactionBoundaryExtractor.TableHeaderCells);
 
                 foreach (var fact in expectations.TransactionBoundaries)
                 {
