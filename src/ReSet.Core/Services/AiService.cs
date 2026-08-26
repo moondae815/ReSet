@@ -1270,7 +1270,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             {
                 "   [CRITICAL TRANSACTION BOUNDARY TABLE] The following transaction statements are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 로직 흐름 요약` under the exact heading shown. Never merge rows, never omit a ROLLBACK, and never describe a boundary in prose instead of listing it - the batch implementation must reproduce every one of them.",
                 $"   {TransactionBoundaryExtractor.TableHeading}",
-                "   | 라인 | 종류 | 이름 |",
+                $"   | {string.Join(" | ", TransactionBoundaryExtractor.TableHeaderCells)} |",
                 "   | :--- | :--- | :--- |"
             };
 

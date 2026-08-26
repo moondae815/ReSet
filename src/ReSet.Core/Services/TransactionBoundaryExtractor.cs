@@ -31,6 +31,14 @@ namespace ReSet.Core.Services
         public const string TableHeading =
             "### 트랜잭션 경계 " + MachineConfirmedTables.HeadingSuffix;
 
+        /// <summary>
+        /// 이 표의 헤더 셀. 프롬프트가 이 표를 렌더할 때와 L1이 명세서에서 이 표의
+        /// 블록을 특정할 때 **같은 값**을 봐야 한다. 검사 쪽에 복사본을 두면 프롬프트가
+        /// 바뀌는 날 조용히 낡고, 헤더 대조가 아무 블록도 못 찾아 관대한 폴백으로
+        /// 후퇴하면서 결함이 소리 없이 되살아난다 - 그동안 테스트는 계속 초록이다.
+        /// </summary>
+        public static readonly string[] TableHeaderCells = { "라인", "종류", "이름" };
+
         public const string NoName = "(없음)";
 
         public static IReadOnlyList<TransactionBoundaryFact> Extract(string? ddlText)
