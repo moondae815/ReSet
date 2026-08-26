@@ -482,32 +482,57 @@ namespace ReSet.Core.Services
 
             public override void Visit(UpdateStatement node) =>
                 Add("UPDATE", node, node.UpdateSpecification?.Target,
-                    node.UpdateSpecification?.WhereClause, node.UpdateSpecification?.FromClause,
+                    One(node.UpdateSpecification?.WhereClause),
+                    One(node.UpdateSpecification?.FromClause),
+                    node.UpdateSpecification?.FromClause,
                     node.WithCtesAndXmlNamespaces);
 
             public override void Visit(DeleteStatement node) =>
                 Add("DELETE", node, node.DeleteSpecification?.Target,
-                    node.DeleteSpecification?.WhereClause, node.DeleteSpecification?.FromClause,
+                    One(node.DeleteSpecification?.WhereClause),
+                    One(node.DeleteSpecification?.FromClause),
+                    node.DeleteSpecification?.FromClause,
                     node.WithCtesAndXmlNamespaces);
 
-            public override void Visit(InsertStatement node) =>
-                Add("INSERT", node, node.InsertSpecification?.Target, null, null,
+            /// <summary>
+            /// INSERT의 술어는 InsertSpecification이 아니라 원천 SELECT에 있다.
+            /// UNION 원천이면 QuerySpecification이 여럿이고, DmlScopeExtractor는
+            /// 그것들을 같은 서수 하나로 합쳐 명세서 DML 범위 표에 적는다 -
+            /// 그래서 읽기 쪽도 합친다.
+            ///
+            /// targetAliasScope가 null인 이유: INSERT 대상은 별칭일 수 없고
+            /// (`INSERT INTO &lt;별칭&gt;`은 문법에 없다), 원천 SELECT의 FROM은
+            /// 대상과 다른 이름 범위다. 거기에 `FROM dbo.TFoo AS TSettleMst`가
+            /// 있으면 `INSERT INTO TSettleMst`의 대상이 TFoo로 잘못 풀린다.
+            /// </summary>
+            public override void Visit(InsertStatement node)
+            {
+                var specs = DmlScopeExtractor
+                    .SourceQuerySpecifications(node.InsertSpecification?.InsertSource)
+                    .ToList();
+
+                Add("INSERT", node, node.InsertSpecification?.Target,
+                    specs.Select(s => s.WhereClause).OfType<WhereClause>().ToList(),
+                    specs.Select(s => s.FromClause).OfType<FromClause>().ToList(),
+                    targetAliasScope: null,
                     node.WithCtesAndXmlNamespaces);
+            }
 
             private void Add(
                 string kind,
                 TSqlStatement statement,
                 TableReference? target,
-                WhereClause? where,
-                FromClause? from,
+                IReadOnlyList<WhereClause> wheres,
+                IReadOnlyList<FromClause> froms,
+                FromClause? targetAliasScope,
                 WithCtesAndXmlNamespaces? ctes)
             {
                 var predicates = new ColumnCollector();
                 var joins = new ColumnCollector();
                 var grouping = new GroupingProbe();
 
-                where?.Accept(predicates);
-                from?.Accept(joins);
+                foreach (var where in wheres) where.Accept(predicates);
+                foreach (var from in froms) from.Accept(joins);
                 statement.Accept(grouping);
 
                 // 대상 행을 거를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON 절
@@ -522,18 +547,18 @@ namespace ReSet.Core.Services
                 // 갱신할 "행"을 고르는 술어가 아니다.
                 var subordinate = new SubordinatePredicateCollector();
                 ctes?.Accept(subordinate);
-                from?.Accept(subordinate);
-                where?.Accept(subordinate);
+                foreach (var from in froms) from.Accept(subordinate);
+                foreach (var where in wheres) where.Accept(subordinate);
 
                 Found.Add((
                     new StepSqlStatement(
                         kind,
-                        ResolveTargetTable(target, from),
+                        ResolveTargetTable(target, targetAliasScope),
                         Anchor: null,
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
                         grouping.Found,
-                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, from))
+                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
                     },
@@ -542,12 +567,19 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
+            /// 절 하나를 목록으로 감싼다. UPDATE·DELETE는 절이 최대 하나이므로
+            /// 이걸 쓰고, INSERT만 원천 명세 수만큼 여럿을 넘긴다.
+            /// </summary>
+            private static IReadOnlyList<T> One<T>(T? node) where T : class =>
+                node is null ? Array.Empty<T>() : new[] { node };
+
+            /// <summary>
             /// FROM 절의 조인 파트너 중 CTE·파생 테이블이 있는지 본다 - 위
             /// <see cref="StepSqlStatement.HasOpaqueJoinSource"/> 문서 참고.
             /// </summary>
-            private static bool DetectOpaqueJoinSource(TSqlStatement statement, FromClause? from)
+            private static bool DetectOpaqueJoinSource(TSqlStatement statement, IReadOnlyList<FromClause> froms)
             {
-                if (from == null) return false;
+                if (froms.Count == 0) return false;
 
                 var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 if (statement is StatementWithCtesAndXmlNamespaces withCtes &&
@@ -562,8 +594,9 @@ namespace ReSet.Core.Services
                     }
                 }
 
+                // UNION 원천의 한 갈래만 불투명해도 접는다 - 오탐보다 침묵이 안전한 방향이다.
                 var probe = new OpaqueJoinSourceProbe(cteNames);
-                from.Accept(probe);
+                foreach (var from in froms) from.Accept(probe);
                 return probe.Found;
             }
 
