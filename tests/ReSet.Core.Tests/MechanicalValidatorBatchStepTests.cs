@@ -46,6 +46,11 @@ namespace ReSet.Core.Tests
 
         private static readonly string[] Catalog = { "dbo.TSettleMst", "dbo.TStatPGCollect", "dbo.TSettleMiss" };
 
+        private static StepValidationResult Validate(string markdown, BatchStepPlan step) =>
+            new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
         private static IReadOnlyList<StepInterface> Interfaces(string code, params string[] parameters) =>
             new[] { new StepInterface(code, new[] { "dbo.X" }, parameters) };
 
@@ -2136,6 +2141,124 @@ SET @RunId = SCOPE_IDENTITY();");
                 runRowOwnedTables: OwnsBatchRun);
 
             Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("batch.BatchRun"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectANonNumericControlCode()
+        {
+            // 실측(reset-20260824.log, 4회): `DECLARE @v_currentStepId INT = B161`.
+            // B161은 해석되지 않는 식별자라 이 SQL은 컴파일되지 않는다. 기존
+            // CheckStepIdInitialValue는 DECLARE 정규식이 `-?\d+`만 읽어 이것을 놓친다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = B161;
+SELECT 1 FROM dbo.TSettleMst;
+SET @po_intRetVal = @v_currentStepId;
+```
+-9160
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B161"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAControlCodeOutsideTheStepsBlock()
+        {
+            // 대역만 맞고 블록이 틀리면 반환값으로 단계를 특정할 수 없다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9010;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("-9010"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptCodesInsideTheStepsBlock()
+        {
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9161;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("-9161"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotApplyTheBandRuleToAStepWithALegacyOrigin()
+        {
+            // 레거시 출신이 있는 단계의 -9는 원본 코드다. 대역 검사를 적용하면
+            // 정상 단계가 전부 걸린다.
+            var step = new BatchStepPlan(
+                "S05", "원장 생성", new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                new[] { "dbo.TSettleMst" }, new[] { "-9" }, false, new string[0]);
+
+            var markdown = @"### S05 원장 생성
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SET @v_currentStepId = -9;
+SELECT 1 FROM dbo.TSettleMst;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotFlagTheZeroInitialValueAsOutsideTheBlock()
+        {
+            // 0은 "아직 실패 지점을 지나지 않았다"는 초기값이지 블록 밖 코드가 아니다.
+            // 레거시 출신이 없는 단계라도 이 초기화 자체는 정상이어야 한다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9160;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
         }
     }
 }

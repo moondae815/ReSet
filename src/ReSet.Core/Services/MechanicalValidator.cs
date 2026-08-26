@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -377,6 +378,7 @@ namespace ReSet.Core.Services
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
+            SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -5966,6 +5968,64 @@ namespace ReSet.Core.Services
                 }
             }
         }
+
+        /// <summary>
+        /// 레거시 출신이 없는 단계는 자기 예약 블록 안의 코드만 돌려줘야 한다.
+        ///
+        /// 실측(POQSettleBatch1): 규약이 없던 동안 목차가 B100·B110·B160 같은 코드를
+        /// 스스로 발급했고, 등장 검사는 그것들이 본문에 있는지 확인하고 통과시켰다 -
+        /// 검사가 지어낸 어휘를 인증한 것이다. 그중 하나가 SQL로 새어
+        /// `DECLARE @v_currentStepId INT = B161`이 4회 나왔는데 컴파일되지 않는다.
+        ///
+        /// 두 가지를 본다: 상태 변수에 대입되는 비수치 토큰(B161)과, 수치지만 이 단계의
+        /// 블록 밖인 값. 후자를 보는 이유는 반환값만으로 단계를 특정할 수 있어야 하기
+        /// 때문이다.
+        /// </summary>
+        private static void CheckControlStepErrorCodeBand(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            // 레거시 출신이 있으면 원본 코드를 쓰는 것이 정상이다.
+            if (step.LegacyProcedures.Count > 0) return;
+            if (ControlStepErrorCodes.BlockStart(step.Code) == null) return;
+
+            var reported = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            {
+                foreach (Match assignment in ControlCodeAssignmentPattern.Matches(cleaned))
+                {
+                    var raw = assignment.Groups["value"].Value.Trim();
+                    if (!reported.Add(raw)) continue;
+
+                    if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
+                    {
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 상태 변수에 숫자가 아닌 값 '{raw}'을 대입합니다. " +
+                            $"T-SQL에서 해석되지 않는 식별자라 컴파일되지 않습니다 - " +
+                            $"이 단계의 예약 블록({ControlStepErrorCodes.BlockStart(step.Code)}부터 10개)을 쓰십시오.");
+                        continue;
+                    }
+
+                    // 0은 "아직 실패 지점을 지나지 않았다"는 초기값이다. 규칙 6-1이 그렇게 쓴다.
+                    if (value == 0) continue;
+
+                    if (!ControlStepErrorCodes.IsInBlock(step.Code, value))
+                    {
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 예약 블록 밖의 제어 코드 '{raw}'을 돌려줍니다. " +
+                            $"레거시 출신이 없는 단계는 {ControlStepErrorCodes.BlockStart(step.Code)}부터 " +
+                            $"{ControlStepErrorCodes.BlockSize}개의 블록만 씁니다.");
+                    }
+                }
+            }
+        }
+
+        // 상태 변수에 값을 대입하는 자리. DECLARE 초기값과 SET 갱신을 함께 본다.
+        // 값 자리를 `[^\s;,)]+`로 잡는 이유: 숫자만 잡으면 B161 같은 비수치 토큰이
+        // 매치되지 않아 그대로 통과한다 - 기존 CheckStepIdInitialValue가 놓친 이유다.
+        private static readonly Regex ControlCodeAssignmentPattern = new(
+            @"(?:DECLARE\s+@\w*[Ss]tep\w*\s+INT\s*=|SET\s+@\w*[Ss]tep\w*\s*=)\s*(?<value>[^\s;,)]+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
         /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
