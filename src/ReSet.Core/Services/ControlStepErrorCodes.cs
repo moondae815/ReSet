@@ -22,7 +22,10 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class ControlStepErrorCodes
     {
-        /// <summary>한 단계에 주어지는 코드 개수. 실측 최대는 단계당 2개였다.</summary>
+        /// <summary>한 단계에 주어지는 코드 개수. `POQSettleBatch1` 하나만 봤을 때는
+        /// 단계당 2개(B160·B161)였으나, 코퍼스 전체(20개 Job)로 다시 재면 최대는
+        /// `POQSettleProc19/S17`의 3개(B170·B171·B172)다 - 여전히 10에는 크게
+        /// 못 미친다.</summary>
         public const int BlockSize = 10;
 
         /// <summary>대역의 시작. 이 값 이하가 예약이다.</summary>
