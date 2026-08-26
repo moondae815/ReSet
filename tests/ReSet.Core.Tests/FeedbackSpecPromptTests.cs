@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NSubstitute;
@@ -76,6 +77,29 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain(FeedbackSpec.PromptHeader, result.UserPrompt);
             Assert.Contains("Total Legacy Stored Procedures to Consolidate: 2 procedures", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task StepSection_ShouldKeepTheFeedbackOutOfTheSharedPrefix()
+        {
+            // 실제로 피드백이 접두사에 실리는 곳은 골격·단계 섹션이다(리뷰 호출은
+            // 오케스트레이터가 원본 specs를 넘기므로 애초에 피드백을 받지 않는다).
+            // 단계 섹션 프롬프트는 N개 단계가 공유하는 접두사이고, 피드백이 그 안에
+            // 있으면 재시도 회차마다 N개 호출의 접두사가 전부 무효가 된다.
+            var (service, client) = Build();
+            var step = new BatchStepPlan("S01", "날짜 검증", new[] { "dbo.UP_A" },
+                new string[0], new string[0], false, new string[0]);
+
+            await service.GenerateBatchStepSectionAsync(
+                step, new[] { step }, "공통 규약", SpecsWithFeedback(),
+                new StepInterface[0], "C#", "Job_Test");
+
+            var call = client.ReceivedCalls().Single(c => c.GetMethodInfo().Name == nameof(IAiClient.ChatAsync));
+            var sharedPrefix = (string)call.GetArguments()[1]!;
+            var volatileSuffix = (string?)call.GetArguments()[4];
+
+            Assert.DoesNotContain("S05가 틀렸습니다.", sharedPrefix);
+            Assert.Contains("S05가 틀렸습니다.", volatileSuffix);
         }
 
         [Fact]

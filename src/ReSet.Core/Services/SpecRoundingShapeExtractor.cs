@@ -218,7 +218,9 @@ namespace ReSet.Core.Services
                     var wrapsWholeArgument = (before == '(' || before == ',')
                         && (after == ')' || after == ',');
 
-                    if (!wrapsWholeArgument && !IsSingleTerm(shape, open + 1, close))
+                    if (!wrapsWholeArgument
+                        && !IsSingleTerm(shape, open + 1, close)
+                        && !BindsTighterThanItsContext(shape, open, close))
                     {
                         continue;
                     }
@@ -233,8 +235,102 @@ namespace ReSet.Core.Services
             return shape;
         }
 
+        /// <summary>
+        /// 괄호 안이 바깥보다 <b>엄격히</b> 강하게 결합하는가. 그렇다면 괄호를 지워도
+        /// 파싱이 같다.
+        ///
+        /// 실측: 이 사례가 현 코퍼스에 이미 있다. 25종 모양 중 네 쌍이
+        /// <c>?+?/10.0</c>과 <c>?+(?/10.0)</c>처럼 같은 계산의 표기 차이로 갈려 있었고
+        /// (Proc2·6·8·9 대 Proc10), 명세서와 계획서가 서로 다른 쪽을 고르는 순간
+        /// 반올림 누락 오탐이 난다 - 여분 괄호 축약이 애초에 닫으려던 그 결함이다.
+        ///
+        /// 등호를 허용하지 않는 이유가 이 판정의 전부다. <c>a-(b-c)</c>와 <c>a/(b*c)</c>는
+        /// 안팎의 우선순위가 같은데 값이 다르다(좌결합이라 괄호가 결합을 실제로 바꾼다).
+        /// 엄격 부등호만 쓰면 그런 경우가 조건에서 저절로 떨어진다. 좌결합의 왼쪽
+        /// 피연산자 자리(<c>(a+b)+c</c>)는 우선순위가 같아도 안전하지만 별도 판단이
+        /// 필요하므로 여기서 다루지 않는다 - 덜 지우는 쪽이 안전하다.
+        /// </summary>
+        private static bool BindsTighterThanItsContext(string shape, int open, int close)
+        {
+            var inner = MinimumTopLevelPrecedence(shape, open + 1, close);
+            if (inner == 0)
+            {
+                // 최상위 연산자가 없다. 그것은 IsSingleTerm이 이미 판정하는 경우다.
+                return false;
+            }
+
+            var left = open > 0 ? Precedence(shape[open - 1]) : 0;
+            var right = close + 1 < shape.Length ? Precedence(shape[close + 1]) : 0;
+
+            // 왼쪽 피연산자 자리에서는 우선순위가 같아도 지울 수 있다. 이 연산자들은
+            // 전부 좌결합이므로 `(a+b)+c`는 `a+b+c`로, `(a*b)/c`는 `a*b/c`로 이미 읽힌다.
+            // 오른쪽 자리에서는 같은 우선순위가 위험하다 - `a-(b-c)`는 `a-b-c`가 아니다.
+            if (left == 0 && right > 0)
+            {
+                return inner >= right;
+            }
+
+            return (left == 0 || inner > left) && (right == 0 || inner > right);
+        }
+
+        /// <summary>
+        /// T-SQL 연산자 우선순위. 큰 값이 강하게 결합한다. 연산자가 아니면 0.
+        /// 비트 연산자는 <c>+ -</c>와 같은 단계다(T-SQL 규정).
+        /// </summary>
+        private static int Precedence(char c) => c switch
+        {
+            '*' or '/' or '%' => 3,
+            '+' or '-' or '&' or '^' or '|' => 2,
+            '=' or '<' or '>' or '!' => 1,
+            _ => 0
+        };
+
+        /// <summary>구간의 최상위 연산자 중 가장 약한 것의 우선순위. 없으면 0.</summary>
+        private static int MinimumTopLevelPrecedence(string shape, int start, int end)
+        {
+            var depth = 0;
+            var min = 0;
+            for (var i = start; i < end; i++)
+            {
+                var c = shape[i];
+                if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                }
+                else if (depth == 0)
+                {
+                    if (c == ',')
+                    {
+                        // 최상위 콤마가 있으면 인자 목록이라 괄호를 지울 수 없다.
+                        return 0;
+                    }
+
+                    var p = Precedence(c);
+                    if (p > 0 && (min == 0 || p < min))
+                    {
+                        min = p;
+                    }
+                }
+            }
+
+            return min;
+        }
+
+        /// <summary>
+        /// 이름을 이루는 문자인가. 여는 괄호 바로 앞이 이것이면 함수 호출 괄호이므로
+        /// 축약 후보로 삼지 않는다.
+        ///
+        /// <c>?</c>를 포함하는 이유: 이 판정이 도는 시점에는 <see cref="Normalize"/>가
+        /// 이미 비보존 식별자를 <c>?</c>로 지웠다. <c>?</c>를 이름 문자로 보지 않으면
+        /// UDF 호출(<c>dbo.UF_X(A)</c> → <c>?(?)</c>)의 괄호가 후보가 되어, 주석이
+        /// 말하는 가드가 실제로는 보존 토큰(round·cast·isnull·sum)에만 걸린다.
+        /// </summary>
         private static bool IsNameCharacter(char c) =>
-            char.IsLetterOrDigit(c) || c == '_';
+            char.IsLetterOrDigit(c) || c == '_' || c == '?';
 
         /// <summary>여는 괄호의 짝 위치. 짝이 없으면 -1.</summary>
         private static int FindMatch(string shape, int open)
@@ -263,6 +359,12 @@ namespace ReSet.Core.Services
         /// <paramref name="start"/>부터 <paramref name="end"/> 직전까지가 항 하나인가 -
         /// 최상위에 연산자도 콤마도 없는가. 부호가 붙은 숫자(<c>-1</c>)는 최상위 <c>-</c>가
         /// 있으므로 항이 아니라고 본다. 덜 지우는 쪽이 안전하다.
+        ///
+        /// 비트 연산자(<c>&amp; | ^</c>)와 비교 연산자를 빠뜨리면 안 된다. T-SQL에서 <c>&amp;</c>는
+        /// <c>|</c>보다 강하게 결합하므로 <c>a&amp;(b|c)</c>와 <c>a&amp;b|c</c>는 값이 다른데,
+        /// 이 목록에 없으면 <c>(b|c)</c>가 항 하나로 판정돼 두 수식이 같은 모양이 된다.
+        /// 현 코퍼스에 비트 연산자는 없지만, 결합을 바꾸는 괄호는 구분돼야 한다는 것이
+        /// 이 축약의 유일한 제약이다.
         /// </summary>
         private static bool IsSingleTerm(string shape, int start, int end)
         {
@@ -278,8 +380,10 @@ namespace ReSet.Core.Services
                 {
                     depth--;
                 }
-                else if (depth == 0 && (c is '+' or '-' or '*' or '/' or '%' or ','))
+                else if (depth == 0 && (c == ',' || Precedence(c) > 0))
                 {
+                    // 연산자 목록은 Precedence 한 곳에만 둔다. 두 벌로 적으면 한쪽에만
+                    // 연산자가 추가돼, 그 연산자를 담은 괄호가 "항 하나"로 판정된다.
                     return false;
                 }
             }

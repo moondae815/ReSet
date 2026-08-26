@@ -2123,42 +2123,74 @@ Based on the reference context above, reverse engineer the user defined function
 15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.
 
 [Few-Shot Examples for Modernization Patterns]
-* Shadow Table Swap Pattern (For complex aggregations where chunking is impossible):
+* Shadow Table Pattern (ONLY for a rebuild that commits in chunks - see rule 4):
 ```sql
--- The shadow name carries the run identifier, so the name is only known at run time and
--- MUST be assembled (rule 4-1). NEVER write a placeholder token literally - a name such as
--- batch_shadow.TargetTable_RunId_S13 creates a table physically named _RunId_, which every
--- run then shares, and the run identifier it was supposed to carry is gone.
+-- Why this step may use a shadow at all: it rebuilds one business date and COMMITS the
+-- rebuild in chunks, so a ROLLBACK puts back only the failing chunk and the rows the
+-- earlier chunks destroyed are already gone. A step that finishes in ONE transaction must
+-- NOT use a shadow and must NOT compensate in CATCH - ROLLBACK TRAN already restored it,
+-- and deleting those rows again in an auto-committed CATCH destroys data that was never lost.
+
 DECLARE @v_shadowCaptured BIT = 0;  -- CATCH checks this: 0 means there is nothing to restore
--- Spell it in exactly this shape: a literal prefix ending in '_', the run id expression,
--- then a literal N'_<StepCode>'. The bootstrap round scans for this shape to learn which
--- shadow tables to create, and a name built any other way is never created.
+
+-- The run identifier is NOT a parameter of this step. A step's interface is exactly the
+-- original procedure's parameter list (rule 5), so read the identifier from the control
+-- table instead of adding an input.
+-- Spell the job name literally: it is the Unified Batch Job Name given at the top of this
+-- prompt, and it is a constant of this document. (The N'...' below is not a name - replace
+-- it. Business names are spelled literally; only the shadow name is assembled.)
+DECLARE @v_jobName NVARCHAR(128) = N'...';
+DECLARE @v_runId BIGINT =
+    (SELECT RunId FROM batch.BatchRun
+      WHERE JobName = @v_jobName AND BatchYmd = @pi_strYMD AND RunStatus = N'Running');
+
+-- Spell the shadow name in exactly this shape: a literal prefix ending in '_', the run id
+-- expression, then a literal N'_<StepCode>'. The bootstrap round scans for this shape to
+-- learn which shadow tables to create, and a name built any other way is never created.
+-- NEVER write a placeholder token literally: a name spelled with _RunId_ in it creates a
+-- table physically named that, which every run then shares.
 DECLARE @v_shadow NVARCHAR(300) =
-    N'batch_shadow.TargetTable_' + CAST(@pi_runId AS NVARCHAR(20)) + N'_S13';
+    N'batch_shadow.TargetTable_' + CAST(@v_runId AS NVARCHAR(20)) + N'_S13';
 DECLARE @v_sql NVARCHAR(MAX);
 
--- (rule 4a) Create the shadow BEFORE BEGIN TRAN. Issued inside the transaction it would
--- disappear with the rollback and the restore would then fail on a missing object.
+-- (rule 4a) Create the shadow BEFORE the first BEGIN TRAN. Issued inside a transaction it
+-- would disappear with the rollback and the restore would then fail on a missing object.
 SET @v_sql = N'SELECT * INTO ' + @v_shadow + N' FROM dbo.TargetTable WHERE 1 = 0;';
 EXEC sp_executesql @v_sql;
 
--- (rule 4c) A dynamic batch is a separate scope: outer variables are passed as
--- sp_executesql parameters, never referenced inside the dynamic text.
-SET @v_sql = N'INSERT INTO ' + @v_shadow + N' (Col1, Col2)
-    SELECT Col1, SUM(Col2) FROM dbo.SourceTable WHERE BatchDate = @p_batchDate GROUP BY Col1;';
+-- The shadow holds the rows this step is ABOUT TO DESTROY - it is a backup, not a staging
+-- area for the new rows. Copy them whole (`SELECT *`), never a subset of columns: a shadow
+-- row missing the range key cannot be found by that key when the restore looks for it.
+-- (rule 4c) A dynamic batch is a separate scope, so values are passed as sp_executesql
+-- parameters and never referenced inside the dynamic text.
+SET @v_sql = N'INSERT INTO ' + @v_shadow + N' SELECT * FROM dbo.TargetTable WHERE BatchDate = @p_batchDate;';
 EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @pi_strYMD;
-
--- Only now has the shadow actually been captured - flip the flag so the CATCH block knows
--- a restore is possible.
 SET @v_shadowCaptured = 1;
 
--- Single Transaction Swap
+-- (rule 4b) Destroy exactly the range this step owns - never `DELETE FROM Target` without
+-- a WHERE, which discards rows belonging to other business dates.
 BEGIN TRAN;
-  -- (rule 4b) Delete exactly the range this step owns, never the whole table.
   DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
-  SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow + N';';
-  EXEC sp_executesql @v_sql;
 COMMIT TRAN;
+
+-- Rebuild in chunks, each chunk in its own transaction (rule 8-1). The chunk key must be a
+-- column that actually exists in the target schema (rule 12).
+DECLARE @v_chunkSize INT = 10000, @v_cursor INT, @v_maxKey INT;
+SELECT @v_cursor = MIN(Col1), @v_maxKey = MAX(Col1)
+FROM dbo.SourceTable WHERE BatchDate = @pi_strYMD;
+
+WHILE @v_cursor <= @v_maxKey
+BEGIN
+    BEGIN TRAN;
+    INSERT INTO dbo.TargetTable (BatchDate, Col1, Col2)
+    SELECT @pi_strYMD, Col1, SUM(Col2)
+    FROM dbo.SourceTable
+    WHERE BatchDate = @pi_strYMD
+      AND Col1 >= @v_cursor AND Col1 < @v_cursor + @v_chunkSize
+    GROUP BY Col1;
+    COMMIT TRAN;
+    SET @v_cursor = @v_cursor + @v_chunkSize;
+END
 
 -- (rule 4e) State the shadow's lifetime where you describe the step, e.g. the bootstrap
 -- purge job drops batch_shadow tables older than 24 hours.
@@ -2181,18 +2213,21 @@ BEGIN
 END
 ```
 
-* Shadow Table Restore in CATCH block for DELETE-INSERT patterns:
+* CATCH block for the chunk-committed rebuild above (NOT for a single-transaction step):
 ```sql
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;
-    -- Restore only when a shadow was actually captured (rule 4). Delete the SAME range first.
+    -- That rollback undid only the chunk that failed. The chunks committed before it are
+    -- durable, and the DELETE that emptied the range is durable too - which is exactly why
+    -- this step captured a shadow. A step that runs in ONE transaction reaches this point
+    -- fully restored and MUST NOT run any of the following (rule 4).
     IF @v_shadowCaptured = 1
     BEGIN
         DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
-        -- Same assembled name as the capture above - the shadow has no literal name to spell.
-        SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow
-                   + N' WHERE BatchDate = @p_batchDate;';
-        EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @pi_strYMD;
+        -- Same assembled name as the capture above - the shadow has no literal name to
+        -- spell. It holds only this step's range, so it is restored whole.
+        SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow + N';';
+        EXEC sp_executesql @v_sql;
     END
     -- Return the tracked code. Do NOT `THROW` here: it unwinds past the caller's
     -- OUTPUT parameter assignment and the original return code is lost (rules 6-1 and 13).
@@ -3897,7 +3932,7 @@ The previous structure below repeatedly failed cross-review. Do NOT reproduce it
             return aiResult;
         }
 
-        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(string planStructure, System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, IReadOnlyList<StepInterface>? stepInterfaces = null, CancellationToken cancellationToken = default)
+        public async Task<AiResult> GenerateConsolidatedBatchPlanAsync(string planStructure, System.Collections.Generic.List<(string FileName, string Content)> specs, string targetLanguage, string jobName, string? effort = null, IReadOnlyList<StepInterface>? stepInterfaces = null, string? brainstorming = null, CancellationToken cancellationToken = default)
 
         {
             var systemPrompt = $@"You are a principal database modernization architect consolidating multiple legacy stored procedure specifications into a single {targetLanguage} batch application and scheduler plan (Consolidated Batch Modernization Plan).
@@ -3928,10 +3963,24 @@ Consolidate the provided specifications into a single unified batch job named '{
             userPrompt.AppendLine();
             AppendStatementAnchorRules(userPrompt);
 
+            // 이 경로도 아키텍처 개요와 흐름도를 쓴다 - 분할 경로에서 골격이 하는 일을
+            // 문서 전체와 함께 한 번에 한다. 브레인스토밍이 도달해야 하는 자리가 여기다.
+            if (!string.IsNullOrWhiteSpace(brainstorming))
+            {
+                userPrompt.AppendLine();
+                userPrompt.AppendLine("[Architecture Brainstorming — analysis that produced the structure below]");
+                userPrompt.AppendLine("Treat this as reasoning to carry into the overview and the flowchart, not as text to copy.");
+                userPrompt.AppendLine("Where it conflicts with the approved structure below, the approved structure wins.");
+                userPrompt.AppendLine();
+                userPrompt.AppendLine(brainstorming);
+            }
+
             userPrompt.AppendLine();
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
+            AppendFeedbackSection(userPrompt, specs);
+
             userPrompt.AppendLine("Please draft the Consolidated Batch Modernization Plan, STRICTLY adhering to the [Approved Document Structure & Plan] above.");
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
@@ -3971,6 +4020,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             string jobName,
             string? effort = null,
             string? brainstorming = null,
+            IReadOnlyList<StepInterface>? stepInterfaces = null,
             CancellationToken cancellationToken = default)
         {
             var placeholders = new StringBuilder();
@@ -3994,10 +4044,19 @@ Consolidate the provided specifications into a single unified batch job named '{
 " + ConsolidatedPlanRules;
 
             var userPrompt = new StringBuilder();
-            // 골격은 단계 본문을 쓰지 않으므로 원본 인터페이스 재료가 필요 없다. 넣으면
-            // 골격 프롬프트만 값이 바뀌어 단계 호출과의 공유 접두사가 어긋난다.
+
+            // 원본 인터페이스 표를 골격에도 싣는다. 골격은 단계 본문을 쓰지 않지만
+            // ConsolidatedPlanRules를 통째로 받고, 그 규칙 5가 "[Original Procedure
+            // Interface] 표에 적힌 파라미터가 전부"라고 말한다. 표가 없으면 규칙이
+            // 프롬프트에 없는 근거를 가리키게 된다 - 지킬 방법이 없는 지시다.
+            //
+            // 캐시 접두사에 대해: 골격과 단계 호출의 프롬프트가 통째로 같아지지는 않는다.
+            // 골격은 sharedConventions를 갖지 못하기 때문이다 - 그것은 골격의 *출력*에서
+            // 나온다. 실제로 지켜야 하는 불변식은 "N개 단계 호출끼리 접두사가 같다"이고,
+            // 두 경로가 공유하는 것은 그 앞의 명세서 전량(실측 481KB)이다.
             AppendSharedStepContext(
-                userPrompt, steps, string.Empty, specs, Array.Empty<StepInterface>(), targetLanguage, jobName);
+                userPrompt, steps, string.Empty, specs,
+                stepInterfaces ?? Array.Empty<StepInterface>(), targetLanguage, jobName);
 
             // 1/3 브레인스토밍 원문. 골격이 아키텍처 개요와 흐름도를 쓰는 자리이고,
             // 그 판단이 나온 곳이 여기다. 전달하지 않던 동안은 목차 제목에 살아남은
@@ -4019,6 +4078,8 @@ Consolidate the provided specifications into a single unified batch job named '{
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
+            AppendFeedbackSection(userPrompt, specs);
+
             userPrompt.AppendLine("Please draft the skeleton, STRICTLY adhering to the [Skeleton Contract] and the [Approved Document Structure & Plan] above.");
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
@@ -4092,6 +4153,12 @@ Consolidate the provided specifications into a single unified batch job named '{
                 volatileSuffix.AppendLine("[Previous Attempt Rejected]");
                 volatileSuffix.AppendLine(floorFeedback);
             }
+
+            // 검토 피드백도 회차마다 바뀌므로 여기 싣는다. 공유 컨텍스트에 두면 재시도
+            // 회차마다 N개 단계 호출의 접두사가 전부 무효가 된다 - 명세서 전량(실측
+            // 481KB)이 매 회차 다시 올라간다.
+            volatileSuffix.AppendLine();
+            AppendFeedbackSection(volatileSuffix, specs);
 
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
@@ -4216,24 +4283,27 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine();
             }
 
-            AppendFeedbackSection(builder, specs);
+            // 피드백은 여기서 싣지 않는다. 이 블록은 회차 간 바이트가 같아야 캐시가 사는
+            // 접두사이고, 피드백은 회차마다 바뀐다. 각 호출부가 프롬프트 말미(단계 섹션은
+            // volatileSuffix)에 싣는다.
 
             // 목록이 비면 머리글도 내지 않는다. 빈 머리글은 "승인된 단계가 하나도
             // 없다"는 뜻으로 읽혀, 목차를 못 읽은 것과 목차가 단계를 안 냈다는 것이
             // 구분되지 않는다.
             if (allSteps.Count > 0)
             {
-            builder.AppendLine("[Approved Step List]");
-            foreach (var candidate in allSteps)
-            {
-                builder.AppendLine(
-                    $"- {candidate.Code} | {candidate.Name} " +
-                    $"| Legacy: {string.Join(", ", candidate.LegacyProcedures)} " +
-                    $"| Tables: {string.Join(", ", candidate.TargetTables)} " +
-                    $"| ErrorCodes: {string.Join(", ", candidate.ErrorCodes)} " +
-                    $"| Chunkable: {candidate.Chunkable}");
-            }
-            builder.AppendLine();
+                builder.AppendLine("[Approved Step List]");
+                foreach (var candidate in allSteps)
+                {
+                    builder.AppendLine(
+                        $"- {candidate.Code} | {candidate.Name} " +
+                        $"| Legacy: {string.Join(", ", candidate.LegacyProcedures)} " +
+                        $"| Tables: {string.Join(", ", candidate.TargetTables)} " +
+                        $"| ErrorCodes: {string.Join(", ", candidate.ErrorCodes)} " +
+                        $"| Chunkable: {candidate.Chunkable}");
+                }
+
+                builder.AppendLine();
             }
 
             // 골격 호출은 sharedConventions를 아직 갖고 있지 않다(자신이 그것을

@@ -111,6 +111,69 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Extract_ShouldIgnoreParenthesesAroundATighterBindingSubexpression()
+        {
+            // 실측: 현 코퍼스 25종 모양 중 네 쌍이 이 표기 차이로 갈려 있었다
+            // (Proc2·6·8·9의 `?+?/10.0` 대 Proc10의 `?+(?/10.0)`). 곱셈·나눗셈은
+            // 덧셈보다 강하게 결합하므로 괄호가 하는 일이 없다.
+            var wrapped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)+(X.B/10.0),0,Y.CommRoundFlag)`");
+            var bare = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)+X.B/10.0,0,Y.CommRoundFlag)`");
+
+            Assert.Equal(bare, wrapped);
+        }
+
+        [Theory]
+        [InlineData("-", "-")]  // a-(b-c) != a-b-c
+        [InlineData("/", "*")]  // a/(b*c) != a/b*c
+        [InlineData("-", "+")]  // a-(b+c) != a-b+c
+        [InlineData("/", "/")]  // a/(b/c) != a/b/c
+        public void Extract_ShouldKeepParenthesesWhoseContentBindsNoTighter(string outer, string inner)
+        {
+            // 우선순위가 같으면 좌결합이라 괄호가 결합을 실제로 바꾼다. 엄격 부등호를
+            // 쓰는 이유가 이 네 경우다 - 등호를 허용하면 값이 다른 수식이 같은 모양이 된다.
+            var grouped = Shapes(
+                $"`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag){outer}(X.B{inner}X.C),0,Y.CommRoundFlag)`");
+            var ungrouped = Shapes(
+                $"`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag){outer}X.B{inner}X.C,0,Y.CommRoundFlag)`");
+
+            Assert.NotEqual(grouped, ungrouped);
+        }
+
+        [Fact]
+        public void Extract_ShouldKeepParenthesesThatRegroupBitwiseOperators()
+        {
+            // T-SQL에서 `&`는 `|`와 같은 단계이고 좌결합이므로 a&(b|c) != a&b|c 이다.
+            // 연산자 목록에서 비트 연산자를 빠뜨리면 `(b|c)`가 항 하나로 판정돼
+            // 두 수식이 같은 모양이 된다.
+            var grouped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)&(X.B|X.C),0,Y.CommRoundFlag)`");
+            var ungrouped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)&X.B|X.C,0,Y.CommRoundFlag)`");
+
+            Assert.NotEqual(grouped, ungrouped);
+        }
+
+        [Theory]
+        [InlineData("+")]
+        [InlineData("-")]
+        [InlineData("*")]
+        [InlineData("/")]
+        [InlineData("%")]
+        [InlineData("&")]
+        [InlineData("|")]
+        [InlineData("^")]
+        public void Extract_ShouldTreatEveryOperatorAsATopLevelOperator(string op)
+        {
+            // 바깥을 `*`로 둔다. `*`보다 강하게 결합하는 연산자는 없으므로 어느 연산자든
+            // 괄호가 남아야 한다. 연산자 목록에서 하나라도 빠지면 그 괄호가 "항 하나"로
+            // 판정돼 지워지고 두 모양이 같아진다 - 그 누락을 이 검사가 잡는다.
+            var grouped = Shapes(
+                $"`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)*(X.B{op}X.C),0,Y.VatRoundFlag)`");
+            var ungrouped = Shapes(
+                $"`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)*X.B{op}X.C,0,Y.VatRoundFlag)`");
+
+            Assert.NotEqual(grouped, ungrouped);
+        }
+
+        [Fact]
         public void Extract_ShouldSkipAnExpressionWhoseRoundingModeComesFromAFunction()
         {
             // 실측(POQSettleProc14·15 S08): 원본이 반올림 방식을 플래그 컬럼이 아니라
