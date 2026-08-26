@@ -57,6 +57,9 @@ namespace ReSet.Core.Services
         // 변수 대입 표(기계 확정 - 라인·변수·대입식 원문)의 L1 앵커. 위와 같은
         // 이유로 서수 이동은 기능에 영향이 없다.
         SetAssignmentTableMissing,
+        // 오류 코드 표(기계 확정 - 문장·오류 코드·설정 대상)의 L1 앵커. 위와 같은
+        // 이유로 서수 이동은 기능에 영향이 없다.
+        ErrorCodeTableMissing,
         // 기계 확정 표가 GFM 표로 렌더링되지 않는 형태로 옮겨졌을 때의 L1 앵커.
         // 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
         MachineTableShapeBroken,
@@ -184,6 +187,7 @@ namespace ReSet.Core.Services
                     CheckCaseBranches(cleansed, expectations, result);
                     CheckTransactionBoundaries(cleansed, expectations, result);
                     CheckSetAssignments(cleansed, expectations, result);
+                    CheckErrorCodes(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -4625,6 +4629,89 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 기계 확정 오류 코드 표의 전사를 대조한다.
+        ///
+        /// 행 키는 (문장, 오류 코드, 설정 대상) 셋이다 - CheckSetAssignments가 (라인,
+        /// 변수, 대입식 원문)으로 행을 특정하는 것과 같은 강도다. 「문장」 칸은
+        /// `{Operation} {StatementOrdinal}`(`UPDATE 9`)로, DmlScopeExtractor가 채번하는
+        /// 바로 그 번호와 AiService의 렌더가 그대로 왕복한다.
+        ///
+        /// [불변식 1] `expectations.ErrorCodes.Count == 0`이면 표를 요구하지 않는다
+        /// (조기 반환). 오류 가드가 없는 SP는 표가 없는 것이 정상이다 - 요구하면
+        /// 만족 불가능한 지시가 되어 재시도를 소진한다(2026-08-24 검사 A C1).
+        ///
+        /// [불변식 2] 메시지가 인쇄하는 근거와 판정 근거가 같아야 한다 - 검사 E가
+        /// 2026-08-24에 이 규칙을 어겨 129건 중 70건에 거짓 문장을 인쇄했다. 아래
+        /// 메시지는 판정에 쓴 statementToken · fact.Code · fact.Variable 셋만 인쇄한다.
+        /// </summary>
+        private static void CheckErrorCodes(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ErrorCodes.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, DmlScopeExtractor.ErrorCodeTableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 오류 코드 표가 명세서에 없습니다. "
+                        + $"`{DmlScopeExtractor.ErrorCodeTableHeading}` 헤딩과 "
+                        + $"{expectations.ErrorCodes.Count}개 행을 그대로 옮겨야 합니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ErrorCodeTableMissing,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowLines = new List<string>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal))
+                    {
+                        rowLines.Add(lines[i]);
+                    }
+                }
+
+                foreach (var fact in expectations.ErrorCodes)
+                {
+                    var statementToken = $"{fact.Operation} {fact.StatementOrdinal}";
+                    var present = rowLines.Any(row =>
+                    {
+                        var cells = SplitTableRowCells(row);
+                        return cells.Any(c => c == statementToken)
+                            && cells.Any(c => c == fact.Code)
+                            && cells.Any(c => c == fact.Variable);
+                    });
+                    if (present) continue;
+
+                    var message =
+                        $"오류 코드 표에 `{statementToken}` 행이 없거나 오류 코드·설정 대상이 "
+                        + $"다릅니다. `{fact.Code}`를 `{fact.Variable}`에 설정하는 행을 그대로 "
+                        + "옮겨야 합니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ErrorCodeTableMissing,
+                        Message = message,
+                        RawContext = $"{statementToken} @ {fact.Code}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // 작성 계약 6: 위 CheckTransactionBoundaries와 같은 이유다.
+                Log.Warning(ex, "[MechanicalValidator] 오류 코드 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
         /// 기계 확정 표가 GFM 표로 렌더링되는 형태인지 본다.
         ///
         /// [왜 행 내용 대조로는 부족한가] 값이 전부 맞아도 구분 행의 셀 수가 헤더와
@@ -6005,6 +6092,101 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 문장의 실효 Ordinal을 정한다 - U-앵커(주석)와 코드 앵커(오류 코드 SET
+        /// 리터럴) 둘을 합쳐 하나의 판정으로 만든다. 판정표(Task 6·설계 §3):
+        ///
+        ///   U-앵커 | 코드 앵커     | 판정
+        ///   있음   | 없음          | U-앵커 사용(기존 동작 보존)
+        ///   없음   | 있음          | 코드 앵커를 환산해 사용
+        ///   있음   | 있음·일치     | 사용
+        ///   있음   | 있음·불일치   | null(귀속 불가 → 침묵)
+        ///   없음   | 없음          | null(후보 아님)
+        ///
+        /// [왜 Kind도 대조하는가] <paramref name="codeMap"/>은 오류 코드 원문 →
+        /// (그 코드를 설정하는 문장의 Kind, Ordinal)이다. 코드가 우연히 일치해도
+        /// Kind가 다르면(예: 사전은 UPDATE 9인데 문장은 DELETE) 다른 문장이므로
+        /// 매칭이 아니다.
+        /// </summary>
+        private static int? ResolveOrdinal(
+            StepSqlStatement statement,
+            IReadOnlyDictionary<string, (string Kind, int Ordinal)> codeMap)
+        {
+            int? fromCode = null;
+            if (statement.CodeAnchor != null
+                && codeMap.TryGetValue(statement.CodeAnchor, out var mapped)
+                && string.Equals(mapped.Kind, statement.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                fromCode = mapped.Ordinal;
+            }
+
+            if (statement.Anchor.HasValue && fromCode.HasValue)
+            {
+                return statement.Anchor.Value == fromCode.Value ? statement.Anchor : null;
+            }
+
+            return statement.Anchor ?? fromCode;
+        }
+
+        /// <summary>
+        /// INSERT 문장을 검사 B(<see cref="CheckAnchoredStatementFacts"/>)·검사 C
+        /// (<see cref="CheckAnchoredStatementExtras"/>)의 후보에서 뺀다.
+        ///
+        /// [한시적 좁힘 - 「INSERT는 검사하지 않는다」는 영구 정책이 아니다]
+        /// 코퍼스 전수 스윕 실측(2026-08-25, 326개 단계)에서 코드 앵커를 켠 뒤
+        /// 검사 B 발화가 1건 → 269건으로 늘었는데, 그중 199건(74%, 15개 조합)이
+        /// 이 축 하나의 구조적 거짓양성이었다. 원인은 재료(<see cref="StepSqlStatementReader"/>)
+        /// 쪽에 있다 - StepSqlStatementReader.cs:464-465의
+        /// `Visit(InsertStatement) => Add("INSERT", node, node.InsertSpecification?.Target,
+        /// null, null)`가 where·from 자리에 항상 null을 넘긴다(같은 파일의
+        /// Visit(UpdateStatement)·Visit(DeleteStatement)는 실제 WhereClause·
+        /// FromClause를 넘기는 것과 대조적이다). 그 결과 모든 INSERT 문장의
+        /// StepSqlStatement.PredicateColumns·JoinColumns는 실제 SQL 내용과
+        /// 무관하게 구조적으로 항상 빈 목록이다 - 검사 B는 그 빈 목록을 "명세서가
+        /// 확정한 술어 컬럼이 없다"로 오인한다. 실물: `INSERT INTO ... SELECT ...
+        /// WHERE USESTATE = 0` 모양의 output/Jobs/POQSettleBatch1/agent/steps/
+        /// S04.md:39-52가 실제로는 술어를 담고 있는데도 이 결함으로 오탐이 났다.
+        ///
+        /// [되돌릴 지점] DmlCollector.Visit(InsertStatement)이
+        /// `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
+        /// 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면(이 태스크의 쓰기
+        /// 허용 범위 밖 - StepSqlStatementReader.cs는 건드리지 않는다), 그 시점에
+        /// 이 좁힘을 걷어내고 재측정해야 한다.
+        ///
+        /// [검사 C도 함께 좁히는 이유] 검사 C의 extras도 같은
+        /// Statement.PredicateColumns(구조적으로 항상 빈 목록)에서만 뽑으므로
+        /// 오늘은 이미 침묵한다(스윕상 검사 C 38건은 12개 조합 전부 UPDATE). 하지만
+        /// 검사 B만 좁히고 검사 C를 그대로 두면 두 검사가 서로 다른 후보 집합을
+        /// 본다는 불변식이 깨져, 위 배선이 나중에 고쳐질 때 검사 C만 조용히 INSERT를
+        /// 다시 보기 시작하는 비대칭을 만든다 - 그래서 한쪽만 고치면 다른 쪽으로 샌다.
+        /// </summary>
+        private static bool IsCandidateForAnchoredStatementCheck(StepSqlStatement statement) =>
+            !statement.Kind.Equals("INSERT", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 레거시 SP별 <see cref="SpecStatementFacts.ErrorCodeToOrdinal"/>을 하나로
+        /// 합친다. 같은 코드 문자열이 서로 다른 SP에서 서로 다른 (Kind, Ordinal)로
+        /// 나타나면 어느 SP 것인지 알 수 없으므로 - <see cref="CheckAnchoredStatementFacts"/>가
+        /// (Ordinal, Kind) 중복 매칭을 침묵으로 처리하는 것과 같은 규약으로 -
+        /// 그 코드는 병합 결과에서 뺀다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, (string Kind, int Ordinal)> MergeErrorCodeMaps(
+            IReadOnlyList<SpecStatementFacts> facts)
+        {
+            var merged = new Dictionary<string, (string Kind, int Ordinal)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var group in facts.SelectMany(f => f.ErrorCodeToOrdinal)
+                .GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var distinctValues = group.Select(kv => kv.Value).Distinct().ToList();
+                if (distinctValues.Count == 1)
+                {
+                    merged[group.Key] = distinctValues[0];
+                }
+            }
+
+            return merged;
+        }
+
+        /// <summary>
         /// 앵커가 달린 문장이 명세서 그 행의 조인 키와 최상위 WHERE 술어 컬럼을
         /// 전부 담았는지 본다.
         ///
@@ -6020,10 +6202,13 @@ namespace ReSet.Core.Services
         ///
         /// [Task 12 - 앵커가 하나도 없으면 조용히 지나간다]
         /// 예전에는 여기서 "갱신 번호를 주석으로 달지 않았다"는 요구를 1건 냈다.
-        /// 코퍼스 스윕 실측(326개 단계 파일)상 이 검사는 이 코퍼스에서 앵커를
-        /// 사실상 항상 0개로 읽는다 - 앵커가 없어서가 아니라 ReadAnchor가 못
-        /// 읽어서다. 자세한 근거와 되돌린 시도는 docs/known-defects.md와 아래
-        /// 반환문의 주석을 보라.
+        /// 당시 코퍼스 스윕 실측(326개 단계 파일)상 이 검사는 이 코퍼스에서
+        /// 앵커를 사실상 항상 0개로 읽었다 - 앵커가 없어서가 아니라 ReadAnchor가
+        /// 못 읽어서였다. Task 22가 U-앵커(주석)를, 이 태스크(Task 6)가 코드
+        /// 앵커(오류 코드 SET 리터럴)를 되살린 뒤로는 더 이상 사실이 아니다 -
+        /// 지금은 둘 중 하나만 있어도, 또는 둘이 일치해도 문장이 후보에 남고,
+        /// 이 조기 반환은 **둘 다 없을 때만** 걸린다. 자세한 근거는
+        /// docs/known-defects.md와 아래 반환문의 주석을 보라.
         ///
         /// [왜 이름만 보고 값은 보지 않는가]
         /// 같은 조건을 명세서는 `UseState IN (0)`, 단계는 `UseState = 0`으로 쓴다.
@@ -6070,19 +6255,23 @@ namespace ReSet.Core.Services
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
             if (rows.Count == 0) return;
 
-            var anchored = statements.Where(s => s.Anchor.HasValue).ToList();
+            var codeMap = MergeErrorCodeMaps(facts);
+            var anchored = statements
+                .Where(IsCandidateForAnchoredStatementCheck)
+                .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
+                .Where(a => a.Ordinal.HasValue)
+                .ToList();
             if (anchored.Count == 0)
             {
                 // [Task 12 - 폴백을 침묵으로 바꾼 이유. docs/known-defects.md 참고]
                 // 예전에는 여기서 "갱신 번호를 주석으로 달지 않았다"는 요구를 냈다.
                 // 그 문구는 사실이 아니고 해롭다 - 코퍼스 스윕 실측(2026-08-24,
                 // 326개 단계 파일)상 앵커는 항상 달려 있다(S07이 `/* U1: … */`,
-                // `/* U2: … */`를 쓰는 식). ReadAnchor가 못 읽을 뿐이다: 실물은
+                // `/* U2: … */`를 쓰는 식). 당시 ReadAnchor가 못 읽을 뿐이었다: 실물은
                 // `/* U1: … */` → `SET @v_currentStepId = -101;` → `UPDATE …` 순서인데
                 // (AiService의 오류 추적 규칙이 요구하는 필수 SET), ReadAnchor는 문장
                 // 바로 앞의 공백·주석만 보고 그 사이에 낀 SET을 건너뛰지 않아 앵커를
-                // 못 찾는다. 그래서 이 코퍼스에서는 앵커가 항상 0개로 잡히고, 위
-                // 요구는 매번 거짓으로 발화한다.
+                // 못 찾았다.
                 //
                 // 이 오류는 SuggestedPromptFix → floorFeedback을 타고 재생성
                 // 프롬프트에 그대로 실린다. 모델이 그 지시를 따라 앵커를 (이미
@@ -6094,13 +6283,22 @@ namespace ReSet.Core.Services
                 // 살렸으나(S07 0/8 → 8/8), 실측 결과 주석↔DML 대응이 산출물에서
                 // 이미 어긋나 있어(미구현 갱신의 서술 주석에는 DML이 없고, 그 뒤
                 // 무관한 실제 DML이 그 주석을 훔친다) 오귀속 오류를 냈다 - 되돌렸다.
-                // 그래서 지금은 앵커가 하나도 없으면 이 검사를 조용히 지나간다.
+                //
+                // [현재 사실 - Task 6(코드 앵커) 기준]
+                // 위 문단은 되돌리기 전까지의 이력이다. Task 22가 「구간 내
+                // 유일성」 규칙으로 U-앵커(ReadAnchor)를 다시 살렸고, 이 태스크가
+                // 같은 규칙을 재사용하는 코드 앵커(CodeAnchor, 오류 코드 SET
+                // 리터럴)를 ResolveOrdinal로 합쳐 후보에 더한다. 그래서 지금 이
+                // 조기 반환은 "앵커가 항상 0개"가 아니라 **U-앵커·코드 앵커가 둘
+                // 다 없을 때만** 걸린다 - 둘 중 하나만 있어도, 또는 둘이 일치해도
+                // 문장은 후보에 남는다(둘이 불일치하면 ResolveOrdinal이 그 문장만
+                // null로 걸러 후보에서 뺀다 - 이 조기 반환과는 다른 경로다).
                 return;
             }
 
             // 같은 (앵커, 종류)로 묶는다 - 청크 분할된 조각들을 논리적으로 한 문장으로
             // 합쳐서 본다.
-            var groups = anchored.GroupBy(s => (Ordinal: s.Anchor!.Value, Kind: s.Kind.ToUpperInvariant()));
+            var groups = anchored.GroupBy(a => (Ordinal: a.Ordinal!.Value, Kind: a.Statement.Kind.ToUpperInvariant()));
 
             foreach (var group in groups)
             {
@@ -6115,7 +6313,7 @@ namespace ReSet.Core.Services
                 // 그 스테이징 전용 제어 컬럼(ImageRunId·ImageType)이 원본 predicate와
                 // 안 맞아 거짓 발화했다. `CheckStatementCountAgainstSpec`(검사 A)이
                 // 이미 (Kind, TargetTable)로 대조하는 것과 같은 규약이다.
-                var groupTargetTable = group.First().TargetTable;
+                var groupTargetTable = group.First().Statement.TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
                     r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
@@ -6124,8 +6322,8 @@ namespace ReSet.Core.Services
 
                 var row = candidates[0];
 
-                var predicateColumns = group.SelectMany(s => s.PredicateColumns).ToList();
-                var joinColumns = group.SelectMany(s => s.JoinColumns).ToList();
+                var predicateColumns = group.SelectMany(a => a.Statement.PredicateColumns).ToList();
+                var joinColumns = group.SelectMany(a => a.Statement.JoinColumns).ToList();
 
                 // 술어 칸은 "조인 결합 포함"이므로 WHERE·ON 합집합과 대조하지만,
                 // 조인 키 칸은 ON절(JoinColumns)에만 대조한다 - 위 문서 참고.
@@ -6142,7 +6340,7 @@ namespace ReSet.Core.Services
                 // 있어 최상위만 보는 JoinColumns로는 볼 수 없다. 최상위 WHERE 술어
                 // 컬럼 대조는 이 사각지대와 무관하므로(S07 U13의 실제 결함 YMD·PGNAME
                 // 누락은 이쪽에서 여전히 잡힌다) 그대로 둔다.
-                if (!group.Any(s => s.HasOpaqueJoinSource))
+                if (!group.Any(a => a.Statement.HasOpaqueJoinSource))
                 {
                     ReportMissing("조인 키", row.JoinKeys, joinPresent);
                 }
@@ -6266,9 +6464,18 @@ namespace ReSet.Core.Services
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
             if (rows.Count == 0) return;
 
-            var anchored = statements.Where(s => s.Anchor.HasValue).ToList();
-            // 앵커 부재는 CheckAnchoredStatementFacts가 이미 1건으로 보고한다 -
-            // 여기서 중복 보고하지 않는다.
+            var codeMap = MergeErrorCodeMaps(facts);
+            var anchored = statements
+                .Where(IsCandidateForAnchoredStatementCheck)
+                .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
+                .Where(a => a.Ordinal.HasValue)
+                .ToList();
+            // 앵커 부재(U-앵커·코드 앵커 둘 다 없음, 또는 둘이 불일치해 귀속할 수
+            // 없음)는 CheckAnchoredStatementFacts도 같은 조건에서 아무것도
+            // 보고하지 않고 조용히 return한다(위 [현재 사실] 문단 참고) - "이미
+            // 1건으로 보고한다"가 아니라 "귀속할 수 없으면 침묵한다"는 이 저장소의
+            // 규약을 두 함수가 함께 따르는 것이다. 여기서 새로 보고를 시작할
+            // 이유가 없다.
             if (anchored.Count == 0) return;
 
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -6277,14 +6484,14 @@ namespace ReSet.Core.Services
                 foreach (var column in table.Columns) allowed.Add(column.Name);
             }
 
-            var groups = anchored.GroupBy(s => (Ordinal: s.Anchor!.Value, Kind: s.Kind.ToUpperInvariant()));
+            var groups = anchored.GroupBy(a => (Ordinal: a.Ordinal!.Value, Kind: a.Statement.Kind.ToUpperInvariant()));
 
             foreach (var group in groups)
             {
                 // [태스크 22] TargetTable도 함께 대조한다 - CheckAnchoredStatementFacts와
                 // 같은 이유(위 문서 참고). 대상 테이블이 다르면 스테이징 전용 제어
                 // 컬럼(ImageRunId·ImageType 등)을 "명세서에 없는 술어"로 오인한다.
-                var groupTargetTable = group.First().TargetTable;
+                var groupTargetTable = group.First().Statement.TargetTable;
                 var candidates = rows.Where(r =>
                     r.Ordinal == group.Key.Ordinal &&
                     r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
@@ -6300,7 +6507,7 @@ namespace ReSet.Core.Services
                     StringComparer.OrdinalIgnoreCase);
 
                 var extras = group
-                    .SelectMany(s => s.PredicateColumns)
+                    .SelectMany(a => a.Statement.PredicateColumns)
                     .Where(c => !known.Contains(c) && !allowed.Contains(c))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();

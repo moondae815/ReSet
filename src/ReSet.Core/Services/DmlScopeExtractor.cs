@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Serilog;
 
@@ -164,6 +165,24 @@ namespace ReSet.Core.Services
         /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
         public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
     }
+
+    /// <param name="Operation">"INSERT", "UPDATE", "DELETE" 중 하나. `DmlScopeFact.Operation`과 같은 어휘다.</param>
+    /// <param name="StatementOrdinal">
+    /// 종류별 순번. DML 범위 표의 「문장」 칸(`UPDATE 9`)이 쓰는 것과 같은 채번
+    /// (<see cref="DmlScopeExtractor.BuildStatementOrdinals"/>)으로 계산하므로 글자까지
+    /// 같은 것을 가리킨다.
+    ///
+    /// [왜 이 레코드가 DmlScopeExtractor 안에 사는가] 번호를 집는 주체가 하나여야
+    /// 한다. 밖에서 다시 세면 두 채번이 조용히 어긋나고, 어긋난 매핑은 엉뚱한 행과
+    /// 대조하는 거짓 시정 지시가 된다.
+    /// </param>
+    /// <param name="Code">정수 리터럴 원문 그대로("-1"). 부호를 떼거나 정규화하지 않는다.</param>
+    /// <param name="Variable">대입 대상 변수 원문("@po_intRetVal").</param>
+    public sealed record ErrorCodeFact(
+        string Operation,
+        int StatementOrdinal,
+        string Code,
+        string Variable);
 
     /// <param name="Operation">
     /// "INSERT", "UPDATE", "DELETE", "SELECT" 중 하나.
@@ -472,6 +491,10 @@ namespace ReSet.Core.Services
         public const string SetPredicateTableHeading = "### 집합 술어 (기계 확정 — 수정 금지)";
         public const string ReferencedFunctionTableHeading = "### 참조 함수 (기계 확정 — 수정 금지)";
         public const string LockHintTableHeading = "### 잠금 힌트 (기계 확정 — 수정 금지)";
+        public const string ErrorCodeTableHeading = "### 오류 코드 (기계 확정 — 수정 금지)";
+
+        /// <summary>부호 있는 정수 리터럴만. 공백을 낀 `- 1`도 파서가 그렇게 낼 수 있어 허용한다.</summary>
+        private static readonly Regex IntegerLiteralPattern = new(@"^-\s*\d+$|^\d+$", RegexOptions.Compiled);
 
         public static IReadOnlyList<DmlScopeFact> Extract(string? ddlText, string dateParameterName)
         {
@@ -719,6 +742,60 @@ namespace ReSet.Core.Services
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[DmlScopeExtractor] 잠금 힌트 수집 실패 - 빈 목록으로 진행합니다.");
                 return Array.Empty<LockHintFact>();
+            }
+        }
+
+        /// <summary>
+        /// 「오류 코드」 표의 재료. DML 문장 바로 뒤 `IF` 가드 본문의 정수 리터럴 대입을
+        /// 그 문장의 종류별 순번에 귀속시킨다.
+        ///
+        /// [왜 Extract와 같은 방문자를 다시 돌리는가] 번호를 집는 주체가 하나여야
+        /// 하기 때문이다. `DmlScopeVisitor`가 이미 DML 범위 표의 사실(Facts)을 문서
+        /// 순서로 쌓고, 그 순서가 곧 <see cref="BuildStatementOrdinals"/>가 매기는 번호다
+        /// (그 메서드 문서 - "채번 출처가 둘이면 옳게 베낀 표가 거부된다"). 이 메서드는
+        /// 별도로 세지 않고 <c>DmlScopeVisitor.Facts</c> 위에서 그 함수를 그대로 불러
+        /// 오류 코드가 가리키는 문장과 DML 범위 표의 「문장」 칸이 항상 같은 번호를
+        /// 가리키게 한다. 파스를 한 번 더 하는 비용은 형제 `Extract*` 메서드들이 이미
+        /// 지불하고 있는 것과 같다.
+        ///
+        /// [파서 오류 정책] `Extract`와 같다 - `fragment == null`만 보고 파서가 낸
+        /// 오류 목록은 <c>out _</c>로 버린다. `ExtractLockHints`처럼 오류가 하나라도
+        /// 있으면 빈 목록을 내는 정책과 다르다 - 같은 파일 안에서도 진입점마다 이미
+        /// 정책이 갈라져 있고, 이 메서드는 DmlScopeFact와 짝을 맞추는 재료이므로
+        /// `Extract`의 정책을 따른다.
+        /// </summary>
+        public static IReadOnlyList<ErrorCodeFact> ExtractErrorCodes(string? ddlText, string dateParameterName)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<ErrorCodeFact>();
+
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                var fragment = parser.Parse(reader, out _);
+                if (fragment == null) return Array.Empty<ErrorCodeFact>();
+
+                var visitor = new DmlScopeVisitor(dateParameterName ?? string.Empty);
+                fragment.Accept(visitor);
+
+                // 채번은 DML 범위 표의 「문장」 칸과 같은 함수 하나로 한다 - 방문자
+                // 안에서 따로 세지 않는다(위 요약 참고).
+                var ordinals = BuildStatementOrdinals(visitor.Facts);
+                var result = new List<ErrorCodeFact>();
+                foreach (var pending in visitor.PendingErrorCodes)
+                {
+                    result.Add(new ErrorCodeFact(
+                        pending.Operation,
+                        ordinals[pending.FactIndex],
+                        pending.Code,
+                        pending.Variable));
+                }
+
+                return result;
+            }
+            catch (Exception)
+            {
+                return Array.Empty<ErrorCodeFact>();
             }
         }
 
@@ -1363,6 +1440,104 @@ namespace ReSet.Core.Services
 
             public List<DmlScopeFact> Facts { get; } = new();
 
+            /// <summary>
+            /// (연산, `Facts`의 색인, 코드, 변수). 색인으로만 들고 있는 이유 - 이 방문자는
+            /// 채번을 하지 않는다(<see cref="BuildStatementOrdinals"/> 문서 참고). 순번은
+            /// <c>ExtractErrorCodes</c>가 순회를 마친 뒤 <c>Facts</c> 전체에 그 함수를 한 번
+            /// 불러 얻는다 - 여기서 따로 세면 두 채번이 어긋날 수 있다.
+            /// </summary>
+            public List<(string Operation, int FactIndex, string Code, string Variable)> PendingErrorCodes { get; } = new();
+
+            /// <summary>
+            /// DML 문장의 <c>*Specification</c> 객체 → 그 문장 바로 뒤 가드에서 읽은
+            /// (코드, 변수). <see cref="ExplicitVisit(StatementList)"/>가 자식을 방문하기
+            /// **전에** 채우므로, 각 Specification 방문 시점엔 이미 준비돼 있다.
+            /// </summary>
+            private readonly Dictionary<TSqlFragment, (string Code, string Variable)> _guardCodes = new();
+
+            /// <summary>
+            /// 문장 목록을 형제 순서로 훑어 "DML 바로 다음 형제가 IF면 그 본문의
+            /// 오류 코드를 그 DML에 귀속"시킨다.
+            ///
+            /// [왜 여기인가] 이 방문자는 `UpdateSpecification`을 방문하지 `UpdateStatement`를
+            /// 방문하지 않는다. Specification에서는 형제 문장을 볼 수 없다. 문장 목록이
+            /// 형제 순서를 아는 유일한 자리다.
+            ///
+            /// [왜 "바로 다음 형제"인가] 사이에 다른 문장이 끼면 귀속을 포기한다. 뒤쪽
+            /// 가드까지 훑어 가면 가드 없는 DML이 다음 DML의 코드를 훔친다.
+            /// </summary>
+            public override void ExplicitVisit(StatementList node)
+            {
+                var statements = node.Statements;
+                for (var i = 0; i + 1 < statements.Count; i++)
+                {
+                    var spec = DmlSpecificationOf(statements[i]);
+                    if (spec == null) continue;
+
+                    if (statements[i + 1] is not IfStatement guard) continue;
+
+                    var code = FindErrorCodeAssignment(guard.ThenStatement);
+                    if (code == null) continue;
+
+                    _guardCodes[spec] = code.Value;
+                }
+
+                base.ExplicitVisit(node);
+            }
+
+            /// <summary>DML 문장이면 그 Specification을, 아니면 null을 준다.</summary>
+            private static TSqlFragment? DmlSpecificationOf(TSqlStatement statement) => statement switch
+            {
+                UpdateStatement u => u.UpdateSpecification,
+                InsertStatement ins => ins.InsertSpecification,
+                DeleteStatement d => d.DeleteSpecification,
+                _ => null
+            };
+
+            /// <summary>
+            /// 가드 본문에서 `SET @v = &lt;정수 리터럴&gt;` 대입을 찾는다. 정확히 하나일
+            /// 때만 돌려준다 - 둘 이상이면 어느 것이 이 문장의 코드인지 귀속할 수 없다.
+            ///
+            /// [왜 리터럴 텍스트로 판정하는가] ScriptDom은 `-1`을 `UnaryExpression`으로도
+            /// `IntegerLiteral`로도 낼 수 있다. AST 모양을 맞히는 대신 원문 토큰을 이어
+            /// 붙여 정수인지만 본다 - 이 표의 계약이 "원문 슬라이스"이므로 판정도 원문에서
+            /// 하는 것이 일관된다.
+            /// </summary>
+            private static (string Code, string Variable)? FindErrorCodeAssignment(TSqlStatement? body)
+            {
+                if (body == null) return null;
+
+                var finder = new GuardAssignmentFinder();
+                body.Accept(finder);
+                return finder.Found.Count == 1 ? finder.Found[0] : null;
+            }
+
+            private sealed class GuardAssignmentFinder : TSqlFragmentVisitor
+            {
+                public List<(string Code, string Variable)> Found { get; } = new();
+
+                public override void Visit(SetVariableStatement node)
+                {
+                    var variable = node.Variable?.Name;
+                    if (string.IsNullOrWhiteSpace(variable)) return;
+
+                    var text = TextOf(node.Expression).Trim();
+                    if (!IntegerLiteralPattern.IsMatch(text)) return;
+
+                    Found.Add((text, variable!));
+                }
+            }
+
+            /// <summary>사전 계산된 가드 코드가 있으면 방금 <c>Facts</c>에 실린 문장의
+            /// 색인으로 확정한다. 순번은 아직 매기지 않는다 - <c>ExtractErrorCodes</c>가
+            /// 순회를 마친 뒤 한 번에 매긴다.</summary>
+            private void RecordErrorCode(string operation, TSqlFragment specification)
+            {
+                if (!_guardCodes.TryGetValue(specification, out var found)) return;
+
+                PendingErrorCodes.Add((operation, Facts.Count - 1, found.Code, found.Variable));
+            }
+
             public override void Visit(UpdateSpecification node) =>
                 Record("UPDATE", node, node.Target, node.WhereClause, node.FromClause);
 
@@ -1535,6 +1710,8 @@ namespace ReSet.Core.Services
                     predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource),
                     ResolveGroupByColumns(groupByPerBranch),
                     DateParameterAppearsInNestedQuery(node)));
+
+                RecordErrorCode("INSERT", node);
             }
 
             /// <summary>
@@ -1750,6 +1927,8 @@ namespace ReSet.Core.Services
                     Array.Empty<string>(),
                     null,
                     DateParameterAppearsInNestedQuery(statement)));
+
+                RecordErrorCode(operation, statement);
             }
         }
 

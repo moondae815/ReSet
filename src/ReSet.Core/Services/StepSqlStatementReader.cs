@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Serilog;
@@ -19,6 +20,12 @@ namespace ReSet.Core.Services
     /// CheckAnchoredStatementFacts)가 이 신호가 서면 "조인 키 없음"을 보고하지
     /// 않도록 스스로를 가린다 - 값을 보정하지 않고 신뢰할 수 없다는 사실만 남긴다.
     /// </param>
+    /// <param name="CodeAnchor">
+    /// 같은 구간(직전 문장의 끝 ~ 이 문장의 시작)에서 읽은 음수 오류 코드 라벨
+    /// (`SET @&lt;변수&gt; = &lt;음수 정수 리터럴&gt;;`)의 코드 원문(예: `"-13"`).
+    /// 구간에 그런 대입이 정확히 하나가 아니면 null. <see cref="Anchor"/>와는
+    /// 독립적으로 읽히며 둘이 공존할 수 있다.
+    /// </param>
     public sealed record StepSqlStatement(
         string Kind,
         string TargetTable,
@@ -26,7 +33,8 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> PredicateColumns,
         IReadOnlyList<string> JoinColumns,
         bool HasGrouping,
-        bool HasOpaqueJoinSource = false);
+        bool HasOpaqueJoinSource = false,
+        string? CodeAnchor = null);
 
     /// <summary>
     /// 단계 지시서의 ```sql 펜스에서 DML 문장을 읽는다.
@@ -178,7 +186,8 @@ namespace ReSet.Core.Services
                 var globalTokenIndex = FindTokenIndexAtOffset(originalTokens, globalStart);
                 statements.Add(statement with
                 {
-                    Anchor = ReadAnchor(originalTokens, previousEnd, globalTokenIndex)
+                    Anchor = ReadAnchor(originalTokens, previousEnd, globalTokenIndex),
+                    CodeAnchor = ReadCodeAnchor(originalTokens, previousEnd, globalTokenIndex)
                 });
                 previousEnd = globalEnd;
             }
@@ -342,6 +351,71 @@ namespace ReSet.Core.Services
             }
 
             return matchCount == 1 ? ordinal : null;
+        }
+
+        /// 음수 정수 리터럴 대입만. `@v = 0`·`@v = @@ROWCOUNT`는 후보가 아니다.
+        /// <see cref="ReadCodeAnchor"/> 참고 - 왜 부호로 좁히는지는 그쪽 문서에 있다.
+        private static readonly Regex CodeAnchorPattern = new(
+            @"\bSET\s+@[A-Za-z_][A-Za-z_0-9]*\s*=\s*(?<code>-\s*\d+)\s*;?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// <see cref="ReadAnchor"/>가 쓰는 것과 같은 구간(직전 문장의 끝 ~ 이
+        /// 문장의 시작)에서 음수 오류 코드 라벨을 읽는다.
+        ///
+        /// [왜 같은 구간을 재사용하는가]
+        /// 두 앵커(U-주석 기반 <see cref="Anchor"/>와 이 코드 앵커)가 서로 다른
+        /// 구간을 쓰면 서로 다른 자리를 가리킬 수 있다 - 태스크 22가 세운
+        /// 「구간 내 유일성」의 안전성 논거가 그 순간 무너진다. 그래서 새 구간
+        /// 계산을 만들지 않고 <see cref="ReadAnchor"/>와 동일한 windowStartOffset·
+        /// firstTokenIndex를 받는다.
+        ///
+        /// [왜 "정확히 하나일 때만"인가]
+        /// <see cref="ReadAnchor"/>와 같은 이유다 - 구간에 후보가 둘 이상이면 그
+        /// 중 어느 것이 이 문장의 라벨인지 기계적으로 알 수 없다.
+        ///
+        /// [왜 음수만 후보인가]
+        /// 규약 6-1이 요구하는 `DECLARE @v_currentStepId INT = 0;` 초기화와
+        /// `SET @v_cnt = @@ROWCOUNT;` 같은 관용구가 전부 비음수라, 음수로 좁혀야
+        /// 이들이 후보에서 자연히 빠지고 「구간에 정확히 하나」가 실제로 성립한다.
+        ///
+        /// [왜 토큰 하나가 아니라 텍스트를 재구성해 정규식을 돌리는가]
+        /// `SET @v = -13;`은 SET·변수·`=`·`-`·`13`·`;` 여러 토큰에 걸친다.
+        /// <see cref="ReadAnchor"/>처럼 토큰 하나씩 보는 방식으로는 이 모양을
+        /// 잡을 수 없다 - 구간 안 토큰의 원문 Text를 이어붙여 그 문자열에
+        /// 정규식을 돌린다. 토큰은 Offset 기준으로 빈틈없이 이어지므로 이어붙인
+        /// 문자열은 원본 펜스의 해당 구간과 문자 단위로 같다.
+        ///
+        /// [왜 주석 토큰은 빼는가 - 리뷰 라운드 1 발견 2]
+        /// `ReadAnchor`는 주석 토큰만 후보로 본다. 이 메서드는 반대로 실코드만
+        /// 봐야 한다 - 주석 안에 `-- 예시: SET @v_currentStepId = -101;`처럼
+        /// 예시 문구가 있으면(실물: output/Jobs/POQSettleProc12/agent/common/
+        /// 01-step-contract.md) 그 문구가 실제 SET 문이 아닌데도 잡힌다. 주석
+        /// 토큰의 Text를 통째로 빼되 공백 하나로 치환한다 - 그냥 빼면 주석
+        /// 앞뒤 실토큰이 공백 없이 이어붙어(`SET-- 주석 --@v`처럼) 엉뚱하게
+        /// 합쳐질 위험이 있다.
+        /// </summary>
+        private static string? ReadCodeAnchor(IList<TSqlParserToken> tokens, int windowStartOffset, int firstTokenIndex)
+        {
+            var windowStartTokenIndex = FindTokenIndexAtOffset(tokens, windowStartOffset);
+
+            var window = new StringBuilder();
+            for (int i = windowStartTokenIndex; i < firstTokenIndex; i++)
+            {
+                var token = tokens[i];
+                if (token.TokenType is TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment)
+                {
+                    window.Append(' ');
+                    continue;
+                }
+
+                window.Append(token.Text);
+            }
+
+            var matches = CodeAnchorPattern.Matches(window.ToString());
+            if (matches.Count != 1) return null;
+
+            return Regex.Replace(matches[0].Groups["code"].Value, @"\s+", string.Empty);
         }
 
         /// <summary>

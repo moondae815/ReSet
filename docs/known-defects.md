@@ -742,6 +742,335 @@
   구분 방법 — `StepValidationResult.Errors`가 `List<string>`).
   근거: 2026-08-24 코퍼스 스윕(이 문서가 유일한 기록) — 태스크 22.
 
+- **검사 B·C 조건 (B) 잔여 108건 표본 20건 판정 — 부분 실측(2026-08-25, Task 11).**
+  **미완 고지 — 이 항목은 부분 실측이다.** 표본 20건 중 **검사 B 10건은 원본
+  DDL·Spec.md 대조까지 전부 끝냈다**(진짜 2 · 거짓양성 8). **검사 C 표본 10건
+  중 `HasOpaqueJoinSource=True` 3건(#14·#17·#20)도 대조를 끝냈다**(전부
+  거짓양성). **나머지 검사 C 7건(#11-13·#15-16·#18-19, 전부 opaque=False)은
+  미검증**이다(좌표·진단값만, "판정불가 — 미검증"). 다음 회차가 이 7건부터
+  이어받으면 하네스·표본 선정 비용 없이 바로 판정에 들어갈 수 있다.
+
+  **발화량 실측(조건 B, 326개 전수)** — 검사 B **70건** · 검사 C **38건**(기대치 70·38과
+  정확히 일치).
+
+  **하네스**: 스크래치 콘솔 프로젝트
+  (`/private/tmp/claude-501/-Users-payletter-git-root-ReSet/ad026d45-890b-4455-a887-8fbd0518e8d5/scratchpad/task11-sweep/`,
+  `ReSet.Core.csproj` 참조, 저장소 미커밋). `output/Procedures/*/raw/metadata.json`을
+  `SpDefinition`으로 역직렬화해 `DmlScopeExtractor.ExtractErrorCodes(DdlText, dateParam)`로
+  SP별 오류 코드 맵을 만들고(같은 코드가 둘 이상 문장에 붙으면 Spec 레벨과 같은 dedup
+  규칙으로 제거), `SpecStatementFactsExtractor.Extract(specs)`로 만든 (A)조건 재료에
+  `with` 식으로 그 맵을 `ErrorCodeToOrdinal`에 주입해 (B)조건을 만들었다. 각 Job의
+  `raw/PlanStructure.md`를 `BatchStepPlanParser.TryParse`로 읽고 `agent/steps/S*.md`마다
+  `MechanicalValidator.ValidateBatchStep`을 실전 그대로 호출해(`stepInterfaces`·
+  `runRowOwnedTables`는 null, `statementFactsByProcedure`엔 (B)조건 재료, `allSteps`엔
+  그 Job의 전체 단계) 검사 B·C 메시지만 문구로 걸렀다. `MechanicalValidator.BareObjectName`은
+  internal이라 같은 로직(마지막 점 뒤만 남기고 대괄호 트림)을 하네스에 복제했다.
+  추가로 `CheckAnchoredStatementFacts`/`CheckAnchoredStatementExtras`의 그룹핑
+  (`ResolveOrdinal`·`MergeErrorCodeMaps`)을 표본 진단용으로 하네스에 복제해, 표본
+  20건 각각의 `TargetTable`·`HasOpaqueJoinSource`·`PredicateColumns`·`JoinColumns`·
+  앵커(U/코드)를 함께 뽑았다.
+
+  **표본 선정** — 검사 B 70건 중 S07 갱신 13(스텝 코드가 정확히 "S07"인 5건)과
+  S11 갱신 9(1건, `POQSettleBatch1/S11`)를 제외한 64건(70−5−1=64, 과제가 예고한
+  "~64건"과 일치)에서 서로 다른 (잡, 단계, 갱신 번호) 조합 10건을 잡았다. 검사 C
+  38건에서 같은 방식으로 10건. 한 잡에 몰리지 않게 배분했다(B 표본은 8개 잡,
+  C 표본은 8개 잡에 분산).
+
+  **표본 20건 좌표·진단·판정**
+
+  | # | 검사 | 좌표(잡/단계) | 종류·갱신 | 누락/초과 컬럼(메시지) | HasOpaqueJoinSource | Predicate(실측) | 판정 |
+  |---|---|---|---|---|---|---|---|
+  | 1 | B(술어) | POQSettlePrco20/S06 | UPDATE 2 | YMD,PGName,DiscountFlag 없음 | **True** | `[]` | **거짓양성** — CTE(`PromoSource`→`PromoCalc`) 안에 YMD/PGName/DiscountFlag 필터가 있고, 최상위 UPDATE는 `ON A.PLTID=B.PLTID AND A.ID=B.ID`만 조인한다. Spec.md 254-256행이 이 조건들을 "최상위" 스코프로 적었으나(원본 SP 기준) 이행 시 CTE로 재구성됐다. `output/Jobs/POQSettlePrco20/agent/steps/S06.md:98-197`, `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md:225,254-257` |
+  | 2 | B(조인) | POQSettleProc11/S09 | UPDATE 2 | ExtraType 없음 | False | `[ProcYMD,YMD,CompanySalesType,UseState,TxAmt,ExtraSettleFlag]` | **거짓양성** — ExtraType 필터(`P.ExtraType IN (2,3)`)는 이 UPDATE보다 먼저 실행되는 INSERT가 채우는 스테이징 테이블 `batch.S09SourceCardExtraScope`를 만들 때 걸린다(`output/Jobs/POQSettleProc11/agent/steps/S09.md:300-336`). INSERT는 `IsCandidateForAnchoredStatementCheck`가 후보에서 빼므로 이 필터가 검사에 보이지 않는다 — CTE가 아니라 "2단계 스테이징 선계산" 아키텍처의 사각지대 |
+  | 3 | B(술어) | POQSettleProc11/S06 | UPDATE 13 | ID 없음 | **True** | `[YMD,PGName,UseState,AYMD]` | **거짓양성(추정, 근거 확인함)** — 원본 SP는 `TSettleMst`를 자기 자신에 PLTID+ID로 조인해 필터링했으나(Spec.md 236·321-322행), 이행 코드는 `CROSS APPLY`로 대상 행에 직접 상관 계산해 그 자기조인 자체가 사라졌다(`output/Jobs/POQSettleProc11/agent/steps/S06.md:379-446`). CROSS APPLY는 조인 키 없이 행 단위 상관이라 "ID"가 구조적으로 불필요해졌다 — 다만 PLTID+ID 유일성 전제가 실제로 깨지는 배포가 있는지는 확인 못 함 |
+  | 4 | B(술어) | POQSettleProc12/S08 | UPDATE 7 | PLTID 없음 | **True** | `[]` | **거짓양성** — CTE(`CandidatePLTID`→`CancelGroup`) 안에서만 PLTID를 쓰고, 최상위 UPDATE는 `ON X.ID=K.MaxID`로만 조인한다(`output/Jobs/POQSettleProc12/agent/steps/S08.md:250-299`) |
+  | 5 | B(술어+조인) | POQSettleProc13/S09 | UPDATE 3 | PGNAME,MALLID,CollectPeriodID,CollectFlag(술어)+PGNAME,MALLID,CollectPeriodID(조인) 없음 | False | `[YMD,InState,InYMD]` | **진짜 결함(확인)** — 원본 DDL(`raw/metadata.json` DdlText 69-80행)이 `TPGCMRate B`·`TPGCollectPeriodMst C`를 PGNAME/MALLID/CollectPeriodID로 조인하고 CollectFlag=1까지 재검증하는데, 이행 SQL(`output/Jobs/POQSettleProc13/agent/steps/S09.md:99-107`)은 이 조인·필터를 통째로 뺐다 — `WHERE A.YMD=@pi_strYMD AND A.InState=1 AND ISNULL(A.InYMD,'')=''`뿐이다. CTE·스테이징 어느 쪽도 아니고 원본이 명시한 재검증 조건이 순수 누락됐다 |
+  | 6 | B(술어) | POQSettleProc17/S07 | UPDATE 10 | MALLID 없음 | False | `[YMD,PGName,TID,CID,UseState,AYMD]` | **진짜 결함(확인)** — 원본 DDL(`raw/metadata.json` DdlText 271-280행)이 `TSettleMst A ,TPGCMRate B WITH(NOLOCK)`를 `A.PGNAME=B.PGNAME AND A.MALLID=B.MALLID`로 조인하는데(SET절은 B 컬럼을 안 쓴다 — 순수 존재 필터), 이행 SQL(`output/Jobs/POQSettleProc17/agent/steps/S07.md:339-352`)은 이 조인 자체를 뺐다. #5와 같은 갈래(원본이 명시한 존재-필터용 조인이 이행에서 통째로 소거) |
+  | 7 | B(술어) | POQSettleProc19/S11 | UPDATE 7 | PLTID 없음 | **True** | `[]` | **거짓양성** — #4와 동일 패턴(CTE `PartialTarget`, 최상위 조인은 `X.ID=P.ID`뿐). `output/Jobs/POQSettleProc19/agent/steps/S11.md:281-317` |
+  | 8 | B(술어) | POQSettleProc19/S11 | UPDATE 10 | CYMD,AYMD,RefundFlag 없음 | False | `[YMD,PGName,UseState]` | **거짓양성(확인) — 세 번째 원인 갈래: 앵커 코드 자체가 착오.** 이행 SQL의 이 문장은 주석("9. easybank 취소 및 부분취소 수수료")·필터(`PGName='easybank'`)로 보아 원본의 **UPDATE 9**(Spec.md 276·361·490행 — "갱신 9는 easybank")이고, 원본 DDL은 이 문장에 오류 코드 **`-10`**을 쓴다(`raw/metadata.json` DdlText 300-320행). 그런데 이행 SQL은 이 문장에 `SET @v_currentStepId = -11`을 달았다 — `-11`은 원본에서 **다른 문장**(KFTC/INIBANK, UPDATE 10)의 코드다(DdlText 329-345행). 코드 앵커가 엉뚱한 스펙 행(UPDATE10)에 귀속시켜 "CYMD,AYMD,RefundFlag 없음"을 냈지만, 올바른 행(UPDATE9: CLIENTID,PGNAME,MALLID,YMD,USESTATE)과 대조하면 이 문장의 실제 컬럼(Predicate+Join)이 전부 충족한다 — CTE·스테이징과는 다른 원인(이행 코드 자신의 오류 코드 오기재) |
+  | 9 | B(술어) | POQSettleProc8/S10 | UPDATE 5 | ProcYMD,YMD,PGNAME,CompanySalesType,TxAmt,CLVTType,ExtraSettleFlag 없음(전량) | **True** | `[]` | **거짓양성** — CTE(`BeforeValue`) 안에 전체 필터가 있고 최상위는 `ON B.ID=S.ID`뿐(`output/Jobs/POQSettleProc8/agent/steps/S10.md:419-453`) |
+  | 10 | B(술어) | POQSettleProc9/S13 | DELETE 4 | OUTSTATE 없음 | False | `[]`(Join은 `[RunId,TargetName,YMD,OUTYMD]`) | **거짓양성(확인) — 네 번째 원인: 스테이징 키 테이블 아키텍처.** 레거시 `UP_Util_Settle_Summary`의 원본 DELETE 4는 단순 `WHERE YMD=@pi_strYMD AND OUTSTATE IN (2,9)`(raw DdlText 64-66행)이지만, S13은 "SummarySwapExecutor: 검증된 작업 결과를 네 운영 테이블에 단일 트랜잭션으로 교체"하는 아키텍처로 이행돼, 실제 DELETE는 사전 계산된 `batch.POQSettleS13AffectedKey`(RunId/TargetName/YMD/OUTYMD로 조인)에만 의존한다(`output/Jobs/POQSettleProc9/agent/steps/S13.md:246-254`). OUTSTATE 필터는 그 키 테이블을 채우는 앞선 INSERT/스테이징 단계에 있을 것으로 추정되나, INSERT는 `IsCandidateForAnchoredStatementCheck`가 후보에서 빼 검사에 보이지 않는다 — #2와 같은 "2단계 스테이징" 갈래 |
+  | 11 | C | POQSettleBatch1/S09 | UPDATE 2 | USESTATE 초과 | False | `[ProcYMD,YMD,PGNAME,CompanySalesType,TxAmt,ExtraSettleFlag,OutState,OutYMD,USESTATE]` | **판정불가 — 미검증** |
+  | 12 | C | POQSettleBatch1/S10 | UPDATE 2 | UseState 초과 | False | `[ProcYMD,YMD,CompanySalesType,UseState,TxAmt,ExtraSettleFlag]`(Join에 PGName,ExtraType) | **판정불가 — 미검증** |
+  | 13 | C | POQSettlePrco20/S06 | UPDATE 12 | PGName 초과 | False | `[YMD,PGName,UseState,AYMD,DiscountFlag,ExtraSettleFlag]` | **판정불가 — 미검증** |
+  | 14 | C | POQSettleProc11/S06 | UPDATE 13 | UseState,AYMD 초과 | **True**(#3과 동일 문장) | `[YMD,PGName,UseState,AYMD]` | **거짓양성(확인)** — #3과 같은 문장. UseState·AYMD는 원본 Spec.md의 "파생 테이블 X" 스코프 술어(`(A.UseState<>1 OR (A.UseState=1 AND A.YMD=A.AYMD))`, 321-327행)였는데, CROSS APPLY로 자기조인이 사라지며 대상에 직접 걸리는 최상위 WHERE로 옮겨왔다. 명세서의 "최상위" 술어 컬럼 칸(PLTID,ID,YMD,PGNAME)은 원본 구조를 반영할 뿐 이행 구조의 재배치를 못 따라간다 |
+  | 15 | C | POQSettleProc11/S06 | UPDATE 18 | YMD,OutState 초과 | False | `[YMD,UseState,OutState]` | **판정불가 — 미검증** |
+  | 16 | C | POQSettleProc12/S07 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,ExtraSettleFlag,OrgDiscountAmt,PGName]` | **판정불가 — 미검증** |
+  | 17 | C | POQSettleProc17/S08 | UPDATE 7 | UseState 초과 | **True** | `[PGName,UseState]` | **거짓양성(확인)** — 레거시 `UP_UTIL_SETTLE_COMM_UPD` UPDATE 7. 원본은 UseState IN(2) 필터를 "파생 테이블 D" 스코프에 둔다(Spec.md 344행). 이 잡의 이행 SQL은 CTE `K` 안에 UseState 필터를 두지 않는 대신 최상위 `WHERE X.PGName IN(...) AND X.UseState=2`(`output/Jobs/POQSettleProc17/agent/steps/S08.md:222-258`)로 옮겨 같은 제약을 강제한다 — CTE 사각지대의 거울상(필터가 CTE **밖으로** 나오면 명세서의 "최상위" 칸에 없는 이름이라 "초과"로 오탐) |
+  | 18 | C | POQSettleProc19/S11 | UPDATE 11 | RefundFlag,CYMD,AYMD 초과 | False | `[YMD,PGName,RefundFlag,UseState,CYMD,AYMD]` | **판정불가 — 미검증** |
+  | 19 | C | POQSettleProc3/S04 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,OrgDiscountAmt,ExtraSettleFlag,PGName]` | **판정불가 — 미검증** |
+  | 20 | C | POQSettleProc16/S08 | UPDATE 7 | CommissionCancelFlag 초과 | **True** | `[CommissionCancelFlag]` | **거짓양성(확인)** — #17과 같은 UPDATE 7(COMM_UPD). 원본의 "파생 테이블 D" 스코프 필터 `B.CommissionCancelFlag=1`(Spec.md 345행)이 이 잡에서는 최상위 조인 파트너 `C`(TClientSettleRate)를 직접 참조하는 `WHERE C.CommissionCancelFlag=1`로 옮겨왔다(`output/Jobs/POQSettleProc16/agent/steps/S08.md:289-335`) — #17과 같은 "CTE 필터 재배치" 갈래 |
+
+  **CTE·파생 테이블 사각지대 갈래 건수(과제가 가장 값지다고 지목한 산출물) —
+  20건 표본 전수 확정.** 표본 20건 중 `HasOpaqueJoinSource=True`가 **7건**
+  (B에서 5건: #1·#3·#4·#7·#9, C에서 2건: #17·#20 — #14는 #3과 같은 문장이라
+  중복 집계하지 않음). **이 7건 전부 원본 DDL·이행 SQL 대조로 판정을 끝냈고
+  전부 거짓양성이다** — 두 방향으로 갈린다:
+  - **은닉형(4건, #1·#4·#7·#9)** — Predicate가 완전히 빈 배열. 원본이 요구한
+    최상위 술어가 CTE 안에 통째로 숨어 검사가 "없다"고 오판한다. 태스크 22가
+    조인 키 체크만 접었던 이 사각지대가 **최상위 WHERE 술어 체크에도 그대로
+    번진다는 것을 직접 확인했다.**
+  - **역전형(3건, #3·#14·#17·#20 — #3·#14는 같은 문장)** — 원본에서 CTE·
+    자기조인 안에 있던 필터가 이 잡의 이행 코드에서는 오히려 **최상위로
+    끌려나와** 있다(CROSS APPLY 자기조인 소거, 또는 CTE 밖 WHERE로 재배치).
+    명세서의 "최상위" 술어 칸은 원본 구조 기준이라 이 이름들을 모르고, 검사
+    C가 "명세서에 없는 술어"로 오판한다.
+
+  **결론 — HasOpaqueJoinSource가 서면 predicate 체크(검사 B)와 extras
+  체크(검사 C) 둘 다 접어야 한다는 근거가 이번 표본 7건 전수로 섰다.**
+  은닉형은 검사 B만, 역전형은 검사 C만 발화했지만 원인은 하나(CTE·자기조인
+  구조가 명세서의 "최상위/파생" 스코프 라벨과 이행 코드의 실제 구조를
+  어긋나게 만든다)다.
+
+  **네 번째 원인 갈래 — 앵커 코드 자체의 착오(#8).** CTE 은닉·스테이징 아키텍처와
+  달리, #8은 검사도 재료도 옳고 **이행 코드 자신이 원본과 다른 오류 코드를
+  문장에 붙였다**(easybank 문장에 KFTC/INIBANK의 코드 `-11`을 닮). 코드 앵커
+  방식(태스크 6)의 전제("이행 코드가 원본 오류 코드를 그대로 보존한다")가 깨지는
+  실물이다 — 이 코퍼스에 몇 건이나 더 있는지는 이번 표본 밖이라 모른다.
+
+  **오탐률(참고용, 외삽 금지) — 20건 표본 중 13건 판정 완료.** 검사 B 10건
+  전수 + 검사 C의 opaque=True 3건, 합쳐서 13건. 진짜 **2건**(#5·#6, 둘 다
+  "원본이 명시한 존재-필터 조인이 이행에서 소거" 같은 갈래) · 거짓양성
+  **11건**(#1·#4·#7·#9는 CTE 은닉, #2·#10은 스테이징 키 테이블, #3·#14는
+  CROSS APPLY 자기조인 소거, #8은 앵커 코드 착오, #17·#20은 CTE 필터 역전
+  재배치) — 오탐률 11/13 ≈ **85%**. **이 비율을 103건 전체나 남은 검사 C
+  7건으로 외삽하면 안 된다** — 표본 선정이 다양성 위주였고(무작위가 아니다),
+  판정을 마친 13건 중 7건이 opaque=True(전부 거짓양성)라 그쪽으로 크게
+  치우쳐 있다. opaque=False인 검사 C 7건(#11-13·#15-16·#18-19)은 전부
+  미검증이다.
+
+  **다음 회차 시작점** — (a) 검사 C의 opaque=False 7건(#11-13·#15-16·
+  #18-19) 원본 DDL·Spec.md 대조(이 문서가 좌표·진단값을 이미 다 잡아 뒀다),
+  (b) #8류(앵커 코드 착오)가 이 코퍼스에 몇 건이나 더 있는지 별도로 스윕할
+  가치가 있다 — 코드 앵커의 전제 자체를 흔드는 사실이다, (c) 위 "역전형"
+  거짓양성(#3·#14·#17·#20)을 닫으려면 검사 B·C 둘 다 HasOpaqueJoinSource가
+  서면 그 그룹의 predicate·extras 체크를 함께 접어야 한다 — 지금 태스크
+  22가 조인 키 체크에만 건 조건을 predicate·extras 체크로 넓히는 설계가
+  다음 회차의 명확한 시작점이다(코드 변경은 이번 태스크 범위 밖).
+
+  근거: 2026-08-25 코퍼스 스윕 + 표본 진단(이 문서가 유일한 기록) — Task 11
+  (부분 실측, 이 회차 4번째 도구 호출 한도 중단으로 조사를 끊고 씀. 검사 B
+  표본 10건은 전수 확정, 검사 C 표본 10건은 좌표·진단값만 남기고 미검증).
+
+- **오류 코드 앵커 코퍼스 스윕 게이트 실측(2026-08-25, Task 8) — 캐시 인상(Task 9) 전 오탐 게이트.
+  (A)명세서 그대로(코드 매핑 빈 사전)·(B)DDL에서 뽑은 매핑 주입(재생성 후 상태) 두 조건으로 쟀다.**
+
+  **닭-달걀 해법(설계 §4)**: 코퍼스가 세대 16이라 「오류 코드」 표가 아직 어느 `Spec.md`에도
+  없다(그 표는 캐시 17 재생성에서 생긴다 — Task 9). 그래서 하네스가 명세서를 기다리지 않고
+  `DmlScopeExtractor.ExtractErrorCodes(ddlText, dateParameterName)`를 원본 DDL(`raw/metadata.json`의
+  `DdlText`, 날짜 파라미터는 `SpecExpectations.ResolveDateParameter`와 같은 규칙으로 `ProcedureParameters`에서
+  "YMD" 포함 이름을 찾아 해석)에 직접 돌려 매핑을 만들고, `SpecStatementFacts.ErrorCodeToOrdinal`에
+  `with` 식으로 주입해 검증기에 먹였다. 기계 확정 표는 축자 전사 계약이라 추출기 출력이 곧
+  재생성 후 표 내용이다.
+
+  **다섯 수치**
+
+  ① 「오류 코드」 표가 나오는 SP 수: **12/31**(`UP_Util_PG_Client_CMRate_Ins`·`UP_UTIL_SETTLE_CANCEL_INS`·
+  `UP_UTIL_SETTLE_COMM_UPD`·`UP_UTIL_SETTLE_EXCEPTION_PROC`·`UP_UTIL_SETTLE_EXPECT_PROC`·
+  `UP_UTIL_SETTLE_INS`·`UP_UTIL_SETTLE_INS_EXTRA`·`UP_UTIL_SETTLE_INS_EXTRA4PLCARD`·
+  `UP_Util_Settle_Summary`·`UP_UTIL_SETTLE_SUMMARY_ETC`·`UP_UTIL_SETTLE_SUMMARY_EXTRA`·
+  `UP_UTIL_STAT_PGCOLLECT_INS`, 1~18행). 나머지 19개는 10개 SQL 스칼라 함수(`Functions`)+
+  7개 외부 함수(`External/SETTLE_CARD_DB/Functions`) 17개(가드 관용구 자체가 없는 함수라
+  당연히 빈 표)와, DML은 있으나 가드가 없는 프로시저 2개(③ 참고)다.
+
+  ② 가드 안에 비음수 코드를 두는 SP 수: **2** — `UP_UTIL_SETTLE_SUMMARY_ETC`
+  (DELETE 1=1001, INSERT 1=1002)·`UP_UTIL_SETTLE_SUMMARY_EXTRA`(DELETE 1~4=4001,4003,4005,4007·
+  INSERT 1~4=4002,4004,4006,4008). §2(단계 쪽 코드 앵커 판독)는 음수만 후보로 잡으므로 이 10개
+  행은 원본 표에 기록되되 환산 상대를 영원히 못 만난다(설계 §2가 이미 예견한 대가).
+
+  ③ TRY…CATCH로 현대화돼 가드가 없는 SP 수: **2** — `UP_UTIL_SETTLE_PROC_ETC`·
+  `UP_Util_Settle_Summary_AcqManual`(둘 다 `BEGIN TRY`를 씀, `IF @@ERROR` 가드 관용구가 없어
+  원천적으로 표가 빈다 — 결함이 아니라 적용 밖).
+
+  ④ 코드 앵커가 잡히는 단계 파일 수: **199/326**(사전 추정 ~197과 근접, `StepSqlStatementReader.Read`가
+  이 워크트리에서 326개 전수를 다시 읽어 `CodeAnchor != null`인 문장을 가진 파일 수로 셌다).
+
+  ⑤ 검사 A·B·C·D·E 발화량(326개 전수, `ValidateBatchStep` 실전 호출):
+
+  | 검사 | (A) 명세서 그대로 | (B) DDL 매핑 주입 |
+  | :--- | ---: | ---: |
+  | A | 20 | 20 |
+  | B | 1 | 269 |
+  | C | 0 | 38 |
+  | D | 18 | 18 |
+  | E | 59 | 59 |
+
+  **회귀(before/after, 같은 세대 16 코퍼스) — 0.** 과제 지시대로 세대 15 시절 옛 수치(A=20,
+  D=52, E=59)와 직접 비교하지 않았다. 대신 `git archive 253d9ba -- src/ReSet.Core`로 main
+  최신 tip(우리 작업이 하나도 없는 상태)의 소스만 별도 스크래치 디렉터리에 뽑아 별도
+  콘솔 하네스로 빌드해 같은 326개 코퍼스를 돌렸다 — **before(main 253d9ba): A=20, D=18,
+  E=59.** after(WAVE_BASE bc495a6, (A)·(B) 두 조건 동일): A=20, D=18, E=59. **완전히 일치 —
+  회귀 0.** (참고로 D=18은 세대 15 스윕의 D=52와 다르지만, main tip도 같은 세대 16 코퍼스에서
+  D=18을 내므로 이 회차의 효과가 아니라 세대 16 재생성 자체가 만든 차이다 — 옛 수치와
+  비교하지 말라는 과제 지시가 실측으로 확인됐다.)
+
+  **S07 갱신 13 — (A)·(B) 둘 다에서 계속 잡힘(회귀 0).** 메시지 원문(양쪽 동일):
+  > `S07 섹션의 UPDATE 13(갱신 13) 문장에 명세서가 확정한 최상위 WHERE 술어 컬럼 YMD,
+  > PGNAME이(가) 없습니다. 명세서 DML 범위 표 UPDATE 13 행의 값은 \`PLTID, ID, YMD,
+  > PGNAME\`입니다 — 이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.`
+
+  **S11 갱신 9 — (B)조건에서 새로 잡힘(이 회차의 목표 달성).** (A)조건에서는 여전히 0건
+  (표가 명세서에 없으므로 당연하다). (B)조건 메시지 원문:
+  > `S11 섹션의 UPDATE 9(갱신 9) 문장에 명세서가 확정한 조인 키 YMD, UseState이(가)
+  > 없습니다. 명세서 DML 범위 표 UPDATE 9 행의 값은 \`PLTID, YMD, UseState, DiscountFlag,
+  > DiscountAmt, TxAmt, Amt, ClientID, PGName, MallID\`입니다 — 이 컬럼이 빠지면 갱신 대상
+  > 행 집합이 원본과 달라집니다.`
+
+  **표본 오탐 판정 — 검사 B(269건 > 30, 표본) · 검사 C(38건 > 30, 표본).**
+
+  검사 B 269건을 (Kind, Ordinal, 누락 컬럼) 조합으로 묶으면 **34개 고유 조합**이다 — 코퍼스
+  22개 Job 중 다수가 같은 레거시 SP를 같은 코드로 반복 호출하는 공용 전처리 단계(S04~S06
+  등)를 쓰기 때문에 269건 대부분이 같은 결함의 잡 단위 반복이다. 34개 조합을 전부 직접
+  분류했다(>30건 표본 최소 10건 요구를 충족하고 남는다):
+
+  - **거짓 양성 확정 15개 조합(199/269건, 74%) — 구조적 원인을 소스에서 직접 확인했다.**
+    `StepSqlStatementReader.cs`의 `DmlCollector.Visit(InsertStatement node)`가
+    `Add("INSERT", node, node.InsertSpecification?.Target, null, null)`로 **INSERT 문장에는
+    `where`·`from`을 항상 `null`로 넘긴다** — INSERT가 `SELECT ... WHERE ...` 원천을 가져도
+    그 WHERE는 절대 읽히지 않는다. 그 결과 모든 INSERT 문장의 `PredicateColumns`·`JoinColumns`가
+    구조적으로 항상 빈 목록이라, 명세서가 요구하는 컬럼이 하나라도 있으면 검사 B가 무조건
+    "없습니다"를 낸다. 실물로 확인: `output/Jobs/POQSettleBatch1/agent/steps/S04.md:39-52`의
+    `INSERT INTO SETTLE_POQ_DB.dbo.TPGSettleRate ... SELECT ... FROM
+    SETTLE_POQ_DB.dbo.TPGCMRate WHERE USESTATE = 0;`는 명세서(`UP_Util_PG_Client_CMRate_Ins/
+    docs/Spec.md:233`)가 요구하는 `USESTATE`를 **실제로 담고 있는데도** 검사가 "없다"고
+    보고한다. 15개 조합(`UP_Util_PG_Client_CMRate_Ins` INSERT 1~5·`UP_UTIL_SETTLE_INS` INSERT
+    1·`UP_UTIL_SETTLE_CANCEL_INS` INSERT 1·나머지 INSERT 1~4 계열)이 전부 이 원인이다.
+    **CTE 사각지대와는 다른, 더 넓은 구조적 결함이다** — INSERT는 조인 여부·CTE 유무와
+    무관하게 항상 이 함정에 걸린다. 되돌릴 지점: `StepSqlStatementReader.cs`의
+    `DmlCollector.Visit(InsertStatement)` — `InsertSpecification.InsertSource`가
+    `SelectInsertSource`면 그 안의 `QuerySpecification.WhereClause`·`FromClause`를 넘기도록
+    고치면 닫힌다(이번 태스크의 쓰기 허용 범위 밖 — 다음 회차 판단거리로 남긴다, 코드는
+    고치지 않았다).
+  - **S07 갱신 13(1개 조합, 4건) · S11 갱신 9(1개 조합, 1건) — 진짜, 기존/신규 결함 그대로.**
+    위 특별 확인 참고.
+  - **나머지 UPDATE·DELETE 계열 17개 조합(65건) — 부분 확인, 대부분 미확인으로 남긴다.**
+    `ColumnCollector`(같은 파일)는 `ScalarSubquery`·`QueryDerivedTable` 안쪽을 의도적으로
+    건너뛴다(주석: "스칼라 하위질의 안쪽으로 내려가지 않는다 - 최상위 술어 컬럼만 센다") —
+    이것은 버그가 아니라 설계 의도다(명세서 DML 범위 표 자신도 "최상위" 술어만 이 칸에
+    담고 "파생 테이블" 스코프는 별도 집합 술어 표 칸에 담는 같은 구분을 쓴다). 다만 `PLTID
+    IN (SELECT PLTID FROM ...)`처럼 IN의 좌변이 최상위에 있으면 여전히 잡혀야 하는데,
+    표본 하나(`POQSettleProc1/S04`의 코드 `-2`)를 열어 보니 **같은 코드 `-2`가 두 개 이상의
+    물리 UPDATE 문장(KFTC·INIBANK 등 PG종류별로 쪼갠 문장)에 반복돼 있어**, 명세서의 단일
+    "UPDATE 2"가 여러 물리 문장으로 분해된 것인지 검사가 여러 조각을 하나로 합쳐 보는
+    것이 실제로 맞는 대응인지 이번 스윕만으로 판별하지 못했다. **시간·도구 호출 예산
+    제약으로 17개 조합 중 1개만 부분적으로 열어 봤고 나머지 16개(예: `UPDATE 10 MALLID`·
+    `UPDATE 18 PLTID`·`UPDATE 7 PLTID` 등)는 명세서·단계 파일을 직접 대조하지 못했다 —
+    정직하게 미확인으로 남긴다.**
+
+  검사 C 38건은 (Kind, Ordinal, 초과 컬럼) 조합으로 묶으면 **12개 고유 조합**이고 **전부
+  UPDATE 계열이며 INSERT는 0건**이다(위 INSERT null 배선 때문에 INSERT는 애초에
+  PredicateColumns가 비어 "초과 컬럼"이 생길 수 없다 — C가 INSERT에서 항상 조용한 것은
+  이 결함의 부작용이지 검사 C 자체의 결함은 아니다). 가장 흔한 조합은 `UPDATE 2`에 `UseState`
+  초과(11건)·`UPDATE 4`에 `UseState` 초과(9건)·`UPDATE 12`에 `PGName` 초과(6건)다. **12개
+  조합 모두 명세서·단계 파일을 직접 대조하지 못했다 — 시간 예산 제약으로 미확인으로
+  남긴다.** 다음 회차가 이 12개 좌표를 출발점으로 쓸 수 있다.
+
+  **predicate 쪽 CTE 사각지대(과제가 특별히 지목한 물음)** — `ColumnCollector`가
+  `ScalarSubquery`·`QueryDerivedTable`을 건너뛰는 것은 **설계 의도**임을 소스 주석으로
+  확인했다(위 참고). 이것이 오탐으로 이어지는지는 위 "나머지 UPDATE 계열 17개 조합"의
+  미확인 범위와 겹친다 — **판별하지 못했다.** 다음 회차가 이 물음을 마저 닫아야 한다.
+
+  **하네스**: 워크트리 안 스크래치 콘솔 프로젝트 2개, 둘 다 저장소 미커밋·종료 후 삭제.
+  (1) `scratch-sweep-task8/`(`ReSet.Core.csproj` 참조) — `raw/metadata.json`(31개)을
+  `SpDefinition`으로 역직렬화해 원본 DDL·`ProcedureParameters`를 얻고
+  `DmlScopeExtractor.ExtractErrorCodes`로 ①~③을 재고, `Spec.md`(31개)를
+  `SpecStatementFactsExtractor.Extract`로 읽어 (A)조건 재료를, 그 위에 DDL 매핑을
+  `with` 주입해 (B)조건 재료를 만든 뒤 `BatchStepPlanParser.TryParse`로 22개 Job의
+  326개 단계를 열어 `MechanicalValidator.ValidateBatchStep`을 실전 그대로 호출해 ④·⑤를
+  쟀다. (2) `/private/tmp/.../scratchpad/main-tip-sweep/`(`git archive 253d9ba --
+  src/ReSet.Core`로 뽑은 소스를 참조) — before 기준선 A·D·E만 같은 방식으로 쟀다.
+  근거: 2026-08-25 코퍼스 스윕(이 문서가 유일한 기록) — Task 8.
+
+  **Task 7(커버리지 배선) 폐기 사유 — 다음 사람이 같은 시도를 반복하지 않도록.**
+  「오류 코드 표는 **관계 표**라 라인 커버리지를 늘리지 않는다 — `ErrorCodeFact`에 `Line`이
+  없고, 가드의 `SET @po_intRetVal = -N` 라인은 `SetAssignmentExtractor`가 이미 담아
+  `CoverageMapComposer.cs:154`가 커버리지에 싣고 있다. 이 표를 `ExtractorFactLines`에
+  더하는 배선은 어떤 상태도 바꾸지 못한다(2026-08-25 리플렉션 프로브 실측).」
+  **골든 테스트 관점 보강** — 최종 리뷰어 확인: 설계서 배선표는 이 배선을 하라고
+  적었지만 실제로는 하지 않은 것이 옳았다. `ExtractorFactLines`(위 141행)는
+  `IReadOnlyList<int>` 하나로 접혀 `CoverageMapComposer.Compose`가 잎 문장의
+  State를 가르는 유일한 입력이고, `ErrorCodeFact`엔 애초에 `Line`이 없다 —
+  그대로 `.Select(f => f.Line)`을 써 넣으면 컴파일이 안 되고, StatementOrdinal을
+  Line으로 잘못 재해석해 억지로 끼워 넣으면 엉뚱한 잎에 사실이 붙어
+  `CoverageMapGoldenTests`의 요구 1(🟥 총계 0)·요구 3(줄 37·167·190·206의
+  앵커 개수 정확히 일치)을 깨뜨렸을 것이다. 배선표의 오류가 코드로 옮겨지기
+  전에 골든 테스트가 걸러 낼 자리였다는 뜻이지, 실제로 짜서 돌려 본 결과는
+  아니다.
+
+- **캐시 17 인상 전 선결 조건 — I2·I3·재매핑 위험을 한 자리에 모은다(2026-08-25,
+  최종 whole-branch 리뷰).** 셋 다 "병합 후, 캐시 17 재생성 전"이라는 같은
+  창을 가리킨다 — 흩어져 있으면 인상하는 사람이 셋 중 하나만 보고 진행할
+  위험이 있어 여기 한 절로 묶는다.
+
+  **(1) 지금 이 축은 무동작이다 — 병합해도 S11 갱신 9류는 아직 안 닫힌다 (I2).**
+  `CacheManager.cs:174`의 `CurrentCacheFormatVersion`은 **16**이고,
+  `output/.sp_cache_index.json`의 31개 항목은 **전부 `FormatVersion: 16`**이다
+  (직접 확인: `entries` 31개, `FormatVersion` 집합이 `{16}` 하나뿐). 그래서
+  「오류 코드」 표가 아직 어느 `Spec.md`에도 없고 → `ReadErrorCodeToOrdinal`이
+  항상 빈 사전을 돌려주고 → `ResolveOrdinal`의 코드 앵커 경로는 **도달
+  불가**다. Task 8이 잰 코퍼스 2건(0.6%, (A)조건) → 199건(60%, (B)조건 —
+  코드 앵커가 실제로 켜졌을 때 잡히는 단계 파일 수) 확대는 **캐시 17 +
+  전건 재생성 뒤에야** 일어난다. 그동안 실제로 켜지는 유일한 변화는
+  `IsCandidateForAnchoredStatementCheck`(`MechanicalValidator.cs:6162-6163`)가
+  INSERT 문장을 후보에서 빼는 것뿐이다 — 즉 **검사 B·C의 관할이 순수하게
+  줄어든다**(영향은 사실상 0이지만 부호는 음수다). **다음 사람이 코드만
+  보고 "이 축은 이미 작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+
+  **(2) 코드 사전이 SP로 스코프되지 않는다 (I3).** `MergeErrorCodeMaps`
+  (`MechanicalValidator.cs:6172` 부근)는 같은 코드 문자열이 서로 다른 SP에서
+  **서로 다른 값**으로 충돌할 때만 그 코드를 빼고, 한 SP에만 있는 코드는
+  그대로 병합 사전에 남는다. 레거시 SP가 둘 이상인 단계에서 SP A에만 있는
+  코드(예: `-13`)는 남고, 그 코드를 단 문장이 실제로는 SP B에서 왔어도
+  SP A의 (Kind, Ordinal)로 환산될 수 있다. 하위 가드(`candidates.Count != 1`
+  판정 + TargetTable 대조, `CheckAnchoredStatementFacts`·
+  `CheckAnchoredStatementExtras` 공통)가 일부만 막는다 — 두 SP가 같은 물리
+  테이블을 갱신하면 TargetTable 대조를 그대로 통과한다. **재매핑 위험과
+  뿌리가 같다: 사전의 키가 코드 하나뿐이고 SP로 한정되지 않는다.**
+  **미측정** — 코퍼스에 다중 레거시 SP 단계가 몇 건인지는 이번 라운드
+  범위 밖이다. 인상 전에 세야 할 수치다.
+
+  **(3) 오류 코드 재매핑 — AiService 규약 9의 전제가 실제로 깨진다.** 실측
+  (`output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/raw/metadata.json`
+  `DdlText` 290·319·344행): 원본 `UP_UTIL_SETTLE_COMM_UPD`는 inivacct
+  블록(`PGNAME IN ('inivacct')`)에 **`-9`**, easybank 블록(`PGNAME IN
+  ('easybank')`)에 `-10`, KFTC/INIBANK 블록(`PGNAME IN ('KFTC','INIBANK')`)에
+  `-11`을 쓰는데, 이행 코드(`output/Jobs/POQSettleProc19/agent/steps/
+  S11.md:319,362,395` 부근 — 주석 "8. inivacct 취소수수료"·"9. easybank
+  취소 및 부분취소 수수료"·"10. KFTC, INIBANK 환불서비스 수수료")는 같은
+  세 블록에 각각 `-10`·`-11`·`-12`를 단다. **`-9`가 소실되고 이후 전체가
+  1씩 밀렸다** — 한 문장의 오기재가 아니라 SP 꼬리 전체의 체계적 이동이다.
+  `AiService.cs:2117`(`[Error Codes]` 항목, "You MUST strictly reuse the
+  EXACT original error codes... DO NOT remap or invent new error codes")가
+  재매핑을 금지하지만 **프롬프트 수준 강제**라 지켜지지 않았다. **§3
+  불일치 침묵이 이를 못 막는다** — 그 문장 주변에 U-앵커가 없어서다(코퍼스
+  326개 단계 파일 중 U-앵커를 실제로 쓰는 파일은 직접 세어 **2개뿐**,
+  `POQSettleBatch1/S07.md`·`POQSettleProc10/S08.md`). 나머지 324개는 코드
+  앵커가 **유일한 신원 축**이라 대조할 상대가 없다. 결과는 거짓양성이
+  아니라 **거짓 귀속**: 문장 X를 행 Y와 대조해 엉뚱한 행의 술어 결측을
+  요구하고, 그 요구가 `SuggestedPromptFix → floorFeedback`을 타고 재생성
+  프롬프트에 실려 재시도를 소진한다.
+
+  **(4) 방어 후보 — 코드 집합 대조.** 단계의 코드 라벨 **집합**이 그 SP
+  표의 코드 **집합**과 어긋나면 그 단계에서 코드 축을 **통째로 끈다.**
+  관측된 사례가 `-9` 소실("표에는 있는데 단계에는 없다")이라 이 검사에
+  걸린다 — 밀림을 직접 보는 대신 **밀림의 원인(라벨 소실)**을 본다.
+  문장 단위가 아니라 집합 단위라 값싸다. 기존 「귀속할 수 없으면
+  침묵한다」 규약과 같은 결이다. **(2)의 SP 미스코프도 상당 부분 함께
+  좁아진다** — 집합이 어긋나는 SP는 애초에 코드 축이 꺼지므로
+  `MergeErrorCodeMaps`의 병합 결과가 잘못 쓰일 기회 자체가 준다.
+  *(코디네이터와 최종 리뷰어가 이 방어를 독립적으로 같은 결론으로
+  제안했다 — 다음 사람에게 신뢰도 신호가 된다.)*
+
+  **(5) 인상 전 재측정 항목.** 한 번에 닫으려면 함께 재라: 다중 레거시
+  SP 단계 수((2)의 노출량) · 남은 발화 103건(위 Task 11 표본 오탐률 85%
+  참고)의 오탐률 · 코드 집합이 어긋나는 SP 수.
+
+  근거: 위 Task 8·11 실측 + 이번 라운드 재확인(`CacheManager.cs`,
+  `output/.sp_cache_index.json`, `MechanicalValidator.cs`, `AiService.cs`,
+  `output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/raw/metadata.json`,
+  `output/Jobs/POQSettleProc19/agent/steps/S11.md` 직접 대조) — 최종
+  whole-branch 리뷰 I2·I3·재매핑 위험 통합.
+
 - **병합 전 코퍼스 스윕 게이트 실측(2026-08-24, Task 19) — Task 16 C1·C2·Task 17 C3·I1·Task 18 I2를 모두 적용한 뒤 재측정** —
   `output/Jobs/*/agent/steps/*.md`를 스크래치 하네스로 스윕했다. 하네스는
   `VerificationPipelineOrchestrator.GenerateStepSectionWithFloorRetryAsync`의

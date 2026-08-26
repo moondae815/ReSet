@@ -127,6 +127,10 @@ namespace ReSet.Core.Services
         public IReadOnlyList<SetAssignmentFact> SetAssignments { get; init; }
             = Array.Empty<SetAssignmentFact>();
 
+        /// <summary>DML 문장별 오류 코드. 갱신 번호와 코드만 담는다.</summary>
+        public IReadOnlyList<ErrorCodeFact> ErrorCodes { get; init; }
+            = Array.Empty<ErrorCodeFact>();
+
         /// <summary>
         /// 파서가 확정한 INSERT 대상 테이블(canonical 표기). 매핑 표의 테이블명 칸이
         /// 이것과 표기까지 같은지 대조하는 기준이다.
@@ -275,6 +279,7 @@ namespace ReSet.Core.Services
             // 갈리면 모델이 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
             var transactionBoundaries = TransactionBoundaryExtractor.Extract(spDef.DdlText);
             var setAssignments = SetAssignmentExtractor.Extract(spDef.DdlText);
+            var errorCodes = DmlScopeExtractor.ExtractErrorCodes(spDef.DdlText, ResolveDateParameter(analysis));
 
             // INSERT 매핑 표의 테이블명 표기 대조(CheckInsertMappingTableNames)의 기대값이다.
             // 파서(SqlStaticParser)가 이미 확정해 둔 InsertTables를 그대로 옮긴다 - 별도
@@ -408,6 +413,19 @@ namespace ReSet.Core.Services
                 // 성립한다. 이 항을 빠뜨리면 재료가 이것 하나뿐인 픽스처에서 From이
                 // null을 돌려주고 SET 대입 검사가 한 번도 돌지 않는다.
                 && setAssignments.Count == 0
+                // [Fix Round 1 - 계획서의 원래 주석이 틀렸다] 오늘은 중복항이다.
+                // DmlScopeExtractor.ExtractErrorCodes는 RecordErrorCode를 오직
+                // Facts.Add 직후(Record·Visit(InsertSpecification) 안)에서만 부른다 -
+                // 즉 ErrorCodeFact는 이미 DmlScopeFact로 실린 문장 위에만 얹히는
+                // 주석(annotation)이라, errorCodes가 비지 않으면 dmlScopeFacts도
+                // 반드시 비지 않는다(같은 DDL로 두 추출기를 각각 돌려
+                // DmlScopeFacts.Count == 1을 실측해 확인했다 - "오류 가드만 있고
+                // 다른 재료가 없는 SP"는 오늘 성립하지 않는다). setPredicates·
+                // referencedFunctionCalls와 같은 이유로 그래도 잇는다: 이 항이
+                // 실제로 다른 항과 독립해 작동하는 날(예: SELECT 가드로 넓어지되
+                // 그 SELECT가 Facts에 실리지 않는 경로가 생기는 등)이 오면 이 항이
+                // 없는 채 그 변화가 조용히 오류 코드 검사를 죽인다.
+                && errorCodes.Count == 0
                 // insertTargetTables는 중복항이 아니다 - INSERT 매핑 표 대조(§4 D)는
                 // dmlScopeFacts 등 다른 재료가 하나도 없는 SP에서도 필요할 수 있다
                 // (예: 파서가 INSERT 대상만 잡고 다른 신호는 하나도 못 뽑은 경우).
@@ -464,6 +482,7 @@ namespace ReSet.Core.Services
                 CaseBranches = caseBranches,
                 TransactionBoundaries = transactionBoundaries,
                 SetAssignments = setAssignments,
+                ErrorCodes = errorCodes,
                 InsertTargetTables = insertTargetTables,
                 NullableColumnsByTable = nullableColumnsByTable,
                 ParameterNames = parameterNames,

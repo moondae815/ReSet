@@ -82,6 +82,11 @@ namespace ReSet.Core.Services
                 MachineConfirmedTableVerification.DdlTranscription),
             new MachineConfirmedTable(
                 SetAssignmentExtractor.TableHeading,
+                MachineConfirmedTableVerification.DdlTranscription),
+            // DDL 본문에서 그대로 읽히는 전사 표다 - 문장 번호·오류 코드 리터럴·대입
+            // 대상 변수 모두 원문에 있다.
+            new MachineConfirmedTable(
+                DmlScopeExtractor.ErrorCodeTableHeading,
                 MachineConfirmedTableVerification.DdlTranscription)
         };
 

@@ -7724,6 +7724,99 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B·C 태스크 10 - INSERT 문장을 후보에서 뺀다.
+        //
+        // 코퍼스 전수 스윕(2026-08-25, 326개 단계) 실측: 코드 앵커를 켠 뒤
+        // 검사 B 발화가 1건 → 269건으로 늘었는데 그중 199건(74%, 15개 조합)이
+        // 이 축의 구조적 거짓양성이었다. 원인은 StepSqlStatementReader.cs의
+        // DmlCollector.Visit(InsertStatement)가 `Add("INSERT", node,
+        // node.InsertSpecification?.Target, null, null)`로 where·from에 항상
+        // null을 넘긴다는 데 있다(같은 파일 Visit(UpdateStatement)·
+        // Visit(DeleteStatement)는 실제 WhereClause·FromClause를 넘긴다) -
+        // 그래서 모든 INSERT 문장의 PredicateColumns·JoinColumns는 실제 SQL과
+        // 무관하게 구조적으로 항상 빈 목록이고, 검사 B는 그 빈 목록을 "명세서가
+        // 확정한 술어 컬럼이 없다"로 오인한다. 실물:
+        // output/Jobs/POQSettleBatch1/agent/steps/S04.md:39-52가 실제로는
+        // `WHERE USESTATE = 0`을 담은 INSERT...SELECT인데도 이 결함으로
+        // 오탐이 났다.
+        //
+        // 이 좁힘은 **INSERT를 영구히 검사하지 않는다는 정책이 아니다** - 재료
+        // (StepSqlStatementReader가 where·from을 null로 넘기는 배선) 결손에
+        // 대한 한시적 조치다. **되돌릴 지점**: DmlCollector.Visit(InsertStatement)이
+        // `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
+        // 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면, 그때 이 좁힘도
+        // 함께 걷어내고 재측정해야 한다(그 배선 수정 자체는 이 태스크 범위 밖).
+        //
+        // 검사 C(CheckAnchoredStatementExtras)도 같은 이유로 INSERT를 후보에서
+        // 뺀다 - extras 역시 Statement.PredicateColumns(구조적으로 항상 빈
+        // 목록)에서만 뽑으므로 오늘은 침묵하지만, 검사 B만 고치고 검사 C를 그대로
+        // 두면 두 검사가 서로 다른 후보 집합을 본다는 불변식이 깨진다(코퍼스
+        // 스윕상 검사 C의 38건은 12개 조합 전부 UPDATE라 이 좁힘의 영향을 받지
+        // 않아야 한다).
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckB()
+        {
+            // 실물 결함 모양(S04.md:39-52)을 재현한다: INSERT INTO ... SELECT ...
+            // WHERE ...는 실제로 술어 컬럼(USESTATE)을 담지만, DmlCollector가
+            // INSERT의 where·from을 항상 null로 넘겨 StepSqlStatement.PredicateColumns가
+            // 구조적으로 비어 있다. 좁히기 전에는 이 빈 목록을 근거로 검사 B가
+            // "명세서가 확정한 최상위 WHERE 술어 컬럼 USESTATE이(가) 없습니다"를
+            // 낸다 - 문장이 실제로는 그 컬럼을 담고 있는데도.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
+                        new[] { "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S04 단계\n\n```sql\n" +
+                "-- 갱신 5\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
+                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckC()
+        {
+            // 검사 C도 같은 (Ordinal, Kind) 그룹핑·후보 선정 경로를 타므로 INSERT를
+            // 같이 뺀다 - 오늘은 extras가 구조적으로 항상 비어 있어 이 시나리오
+            // 단독으로는 검사 C가 발화하지 않지만(Statement.PredicateColumns가
+            // where=null이라 항상 빈 목록), 두 검사가 같은 후보 집합 규약을
+            // 지킨다는 것을 회귀로 고정한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
+                        new[] { "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S04 단계\n\n```sql\n" +
+                "-- 갱신 5\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
+                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0 AND RUNID = @pi_runId;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는 술어 컬럼"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 검사 C - 명세서에 없는 최상위 술어 컬럼이 문장에 붙었는가.
         //
         // [이 검사가 POQSettleBatch1 축 B 감사의 S07 🟠·S09 🟠 어느 쪽도 닫지
@@ -8033,6 +8126,281 @@ END";
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
             Assert.Single(result.Errors, e => e.Contains("TxAmt") && e.Contains("명세서에 없는"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 B·C 태스크 6 - 두 신원 축(U-앵커·코드 앵커)을 합쳐 문장을
+        // 귀속시킨다. 판정표(계획서 Task 6·설계 §3):
+        //
+        //   U-앵커 | 코드 앵커 | 판정
+        //   있음   | 없음      | U-앵커 사용(기존 동작 보존)
+        //   없음   | 있음      | 코드 앵커를 환산해 사용
+        //   있음   | 있음·일치 | 사용
+        //   있음   | 있음·불일치 | 침묵(그 문장을 후보에서 뺀다)
+        //   없음   | 없음      | 후보 아님(기존 동작)
+        //
+        // 코드 앵커는 SET @<변수> = <음수 정수 리터럴>; 하나가 구간(직전 문장의
+        // 끝 ~ 이 문장의 시작)에 정확히 하나일 때만 읽힌다
+        // (StepSqlStatementReader.ReadCodeAnchor). 환산은 SpecStatementFacts.
+        // ErrorCodeToOrdinal(원문 코드 → (Kind, Ordinal))로 하고, Kind도
+        // 함께 대조해야 한다(코드 사전이 ("UPDATE", 9)를 주는데 문장이
+        // DELETE면 매칭이 아니다).
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithCode(
+            int ordinal, IReadOnlyList<string> predicateColumns, string? code)
+        {
+            var facts = new SpecStatementFacts(
+                new[]
+                {
+                    new SpecDmlRow("UPDATE", ordinal, ordinal * 10, "TSettleMst",
+                        predicateColumns, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                },
+                Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>());
+
+            if (code != null)
+            {
+                facts = facts with
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { [code] = ("UPDATE", ordinal) }
+                };
+            }
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
+            };
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_UAnchorOnly_UsesUAnchor()
+        {
+            // 판정표 1행: U-앵커 있음·코드 앵커 없음 → U-앵커 사용(기존 동작 보존).
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorOnly_ResolvesOrdinalAndCompares()
+        {
+            // 판정표 2행: U-앵커 없음·코드 앵커 있음 → 코드 앵커를 환산해 사용.
+            // `-- 원본 오류코드 -9` 주석은 LegacyStep의 목차 ErrorCodes(-9) 전사
+            // 대조(검사 A와 무관한 별개 검사)를 만족시키기 위한 것으로, 주석이라
+            // ReadCodeAnchor·ReadAnchor 둘 다 실코드로 보지 않는다.
+            var facts = FactsWithCode(9, new[] { "YMD", "UseState" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 9") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_BothAnchorsAgree_UsesResolvedOrdinal()
+        {
+            // 판정표 3행: 둘 다 있고 일치 → 사용.
+            var facts = FactsWithCode(13, new[] { "YMD", "PGNAME" }, code: "-13");
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U13: 카드사 원가 반영 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD") && e.Contains("PGNAME"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_ConflictingAnchors_StaysSilent()
+        {
+            // 판정표 4행: 둘 다 있고 불일치 → 침묵(그 문장을 후보에서 뺀다).
+            // U-앵커는 4를 가리키는데 코드 앵커(-13)는 명세서에서 9로 환산된다.
+            // `-9` 주석은 목차 ErrorCodes 전사 대조를 만족시키기 위한 것(위 2행
+            // 테스트와 같은 이유)이다.
+            //
+            // [픽스 라운드 1 - U-앵커가 가리키는 갱신 4 행도 명세서에 함께 둔다]
+            // 이 행이 없으면 "U-앵커 우선"으로 잘못 뮤테이션해도(불일치 시
+            // statement.Anchor를 그대로 반환) 갱신 4로 매칭되는 명세서 행이
+            // 없어 candidates.Count != 1로 우연히 침묵한다 - 그러면 이 테스트는
+            // "불일치 시 침묵" 규칙이 아니라 하위 매칭 가드 덕에 통과해 뮤테이션을
+            // 못 잡는다. 갱신 4 행(ZZZ 요구)을 함께 둬서, U-앵커가 잘못 채택되면
+            // 실제로 갱신 4와 대조돼 ZZZ 결측 오류가 나도록 만든다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 4, 40, "TSettleMst",
+                            new[] { "ZZZ" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "/* U4: 앵커는 4를 가리키는데 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            // 갱신 4(ZZZ)·갱신 9(YMD) 어느 쪽으로도 대조돼서는 안 된다 - 문장이
+            // 후보에서 완전히 빠져야 한다. 문장 개수 대조(검사 A)는 이 픽스처가
+            // 명세서 행 2개 대 마크다운 문장 1개로 어긋나 별도로 발화할 수 있으나
+            // (이 테스트가 보는 것과 무관), 그 메시지는 컬럼 이름을 담지 않는다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ZZZ"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_NoAnchors_StaysSilent()
+        {
+            // 판정표 5행: 둘 다 없음 → 후보 아님(기존 동작).
+            var facts = FactsWithCode(1, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE A SET A.CLCOMM = 1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorKindMismatch_IsIgnored()
+        {
+            // 환산 시 Kind도 대조해야 한다 - 코드 사전이 ("UPDATE", 9)를 주는데
+            // 문장이 DELETE면 매칭이 아니다. U-앵커도 없으므로 결과는 판정표
+            // 5행("둘 다 없음")과 같아야 한다.
+            //
+            // [픽스 라운드 1 - 같은 Ordinal에 다른 Kind 행을 함께 둔다]
+            // 명세서에 UPDATE 9만 있으면 ResolveOrdinal 내부의 Kind 가드를
+            // 지워도(문장이 DELETE인데 코드 사전의 UPDATE 9를 그대로 채택) 하위
+            // 그룹핑(`r.Kind.Equals(group.Key.Kind, …)`)이 DELETE 9 행을 못 찾아
+            // 우연히 침묵한다 - 그러면 이 테스트는 ResolveOrdinal의 Kind 가드가
+            // 아니라 하위 매칭 가드 덕에 통과해 뮤테이션을 못 잡는다. DELETE 9
+            // 행(ZZZ 요구)을 함께 둬서, Kind를 안 가리면 실제로 DELETE 9와
+            // 대조돼 ZZZ 결측 오류가 나도록 만든다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("DELETE", 9, 91, "TSettleMst",
+                            new[] { "ZZZ" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "DELETE FROM dbo.TSettleMst WHERE PLTID = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ZZZ"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_CodeAnchorOnly_ResolvesOrdinalAndCompares()
+        {
+            // 검사 C도 같은 환산을 받는다 - U-앵커 없이 코드 앵커만으로 명세서에
+            // 없는 최상위 술어 컬럼(TxAmt)을 잡아야 한다. `-9` 주석은 목차
+            // ErrorCodes 전사 대조를 만족시키기 위한 것이다.
+            var facts = FactsWithCode(9, new[] { "YMD" }, code: "-13");
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- 원본 오류코드 -9\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A WHERE A.YMD = @p AND A.TxAmt = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("TxAmt") && e.Contains("명세서에 없는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_ConflictingAnchors_StaysSilent()
+        {
+            // 검사 C도 두 축이 불일치하면 침묵해야 한다.
+            //
+            // [픽스 라운드 1 - U-앵커가 가리키는 갱신 4 행도 함께 둔다]
+            // 위 검사 B의 같은 이유(ValidateBatchStep_CheckB_ConflictingAnchors_
+            // StaysSilent 참고) - 갱신 4 행이 없으면 "U-앵커 우선" 뮤테이션이
+            // candidates.Count != 1로 우연히 침묵해 이 테스트가 그 뮤테이션을
+            // 못 잡는다. 갱신 4 행은 TxAmt를 인정하지 않으므로, U-앵커가 잘못
+            // 채택되면 실제로 갱신 4와 대조돼 "명세서에 없는" TxAmt 오류가 난다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", 4, 40, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("UPDATE", 9, 90, "TSettleMst",
+                            new[] { "YMD" }, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+                {
+                    ErrorCodeToOrdinal = new Dictionary<string, (string, int)> { ["-13"] = ("UPDATE", 9) }
+                }
+            };
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "/* U4: 앵커는 4를 가리키는데 */\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A WHERE A.TxAmt = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -8536,6 +8904,71 @@ END"
             Assert.DoesNotContain(
                 result.DetailedErrors,
                 e => e.Type == ErrorType.SetAssignmentTableMissing);
+        }
+
+        /// <summary>
+        /// 4개 필수 위치 인자를 빈 컬렉션으로 채운 `SpecExpectations`. `ErrorCodes` 등
+        /// `init` 전용 속성만 object initializer로 얹어 쓰기 위한 최소 뼈대다.
+        /// </summary>
+        private static SpecExpectations EmptySpecExpectations() =>
+            new(
+                new List<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                new List<string>());
+
+        [Fact]
+        public void ErrorCodeTable_WhenSpecOmitsARow_ShouldReportMissing()
+        {
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 1, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 2, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | -1 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenTranscribedVerbatim_ShouldNotReport()
+        {
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[] { new ErrorCodeFact("UPDATE", 9, "-13", "@po_intRetVal") }
+            };
+
+            var markdown = WrapSpec(
+                DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 9 | -13 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenThereAreNoFacts_ShouldNotRequireTheTable()
+        {
+            // 오류 가드가 없는 SP는 표가 없는 것이 정상이다. 요구하면 만족 불가능한
+            // 지시가 되어 재시도를 소진한다(2026-08-24 검사 A C1과 같은 부류).
+            var expectations = EmptySpecExpectations();
+
+            var result = new MechanicalValidator().Validate(WrapSpec("내용\n"), expectations);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
         }
     }
 }
