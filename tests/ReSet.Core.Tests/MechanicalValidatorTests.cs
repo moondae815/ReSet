@@ -7657,10 +7657,18 @@ END";
         [Fact]
         public void ValidateBatchStep_AnchoredStatementWithOpaqueJoinSource_SuppressesJoinKeyReportOnly()
         {
-            // 실물 모양(S07 U13): 조인 파트너가 CTE라 조인 키 칸(ClientID,
-            // CardCPID - 실제로는 CTE 안에 있다)은 못 미더워 침묵해야 하지만,
-            // 최상위 WHERE 술어 컬럼 누락(YMD, PGNAME)은 CTE와 무관하게 여전히
-            // 잡아야 한다 - S07 갱신 13의 실제 결함이 이 모양이다.
+            // 이 픽스처가 잠그는 것 - (1) 조인 파트너가 CTE면(HasOpaqueJoinSource)
+            // 조인 키 칸 대조는 침묵한다 - CTE 안 실제 키를 최상위 JoinColumns로는
+            // 볼 수 없기 때문이다. (2) 최상위 WHERE 술어 컬럼은 컬럼 단위로
+            // 판정한다 - 이 합성 사례는 PGNAME만 CTE로 이전했고 YMD는 SQL
+            // 어디에도 없는 "하나는 이전, 하나는 소실" 조합이라 PGNAME은
+            // 침묵하고 YMD만 발화해야 한다.
+            //
+            // [주의] 이 SQL은 실물 S07 U13이 아니라 그 모양을 본뜬 합성 사례다.
+            // 실제 POQSettleBatch1/S07의 U13은 YMD와 PGNAME을 둘 다 CTE 안
+            // WHERE(`WHERE A.YMD = @pi_strYMD AND A.PGNAME IN (…)`)에 두므로
+            // 둘 다 이전이고, 검사 B는 완전히 침묵한다 - 그 재판정은 Task 3이
+            // 기록한다.
             var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
                 ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
@@ -7690,7 +7698,15 @@ END";
                 markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
-            Assert.Contains(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼") && e.Contains("YMD") && e.Contains("PGNAME"));
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+
+            // 메시지 뒷부분은 명세서 행의 값을 그대로 인용하므로 PGNAME이
+            // 정당하게 나온다(명세서가 확정한 전체 목록). 보고된 "빠진 컬럼"
+            // 목록만 잘라서 본다 - 거기엔 YMD만 있어야 한다.
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("YMD", reported);
+            Assert.DoesNotContain("PGNAME", reported);
+
             Assert.DoesNotContain(result.Errors, e => e.Contains("조인 키"));
         }
 
@@ -8170,6 +8186,83 @@ END";
             {
                 ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
             };
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 하위 스코프 이전 — 원본이 최상위에 두었던 술어를 이행이 CTE·파생
+        // 테이블·EXISTS로 옮긴다. 그 컬럼은 없어진 것이 아니라 옮겨간 것이므로
+        // 검사 B가 발화하면 거짓양성이다(2026-08-26 표본 판정 30건).
+        //
+        // 컬럼 단위로 거른다 - 전부-접기가 아니다. 하나는 이전이고 하나는 진짜
+        // 소실이면 소실만 발화해야 한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_PredicateRelocatedIntoCte_IsSilent()
+        {
+            var facts = FactsWithCode(13, new[] { "YMD", "PGName" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                ";WITH CardCost AS (\n" +
+                "    SELECT A.PLTID, A.ID FROM dbo.TSettleMst AS A\n" +
+                "    WHERE A.YMD = @p AND A.PGName = 'PLCard'\n" +
+                ")\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y\n" +
+                "INNER JOIN CardCost AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("갱신 13"));
+        }
+
+        // 전부-접기 구현은 이 테스트에 죽는다.
+        [Fact]
+        public void ValidateBatchStep_CheckB_OneRelocatedOneMissing_ReportsOnlyTheMissing()
+        {
+            var facts = FactsWithCode(13, new[] { "YMD", "PGName" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                ";WITH CardCost AS (\n" +
+                "    SELECT A.PLTID, A.ID FROM dbo.TSettleMst AS A\n" +
+                "    WHERE A.YMD = @p\n" +
+                ")\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y\n" +
+                "INNER JOIN CardCost AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("갱신 13"));
+
+            // 메시지 뒷부분은 명세서 행의 값을 그대로 인용하므로 YMD가 정당하게
+            // 나온다. 보고된 "빠진 컬럼" 목록만 잘라서 본다.
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("PGName", reported);
+            Assert.DoesNotContain("YMD", reported);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_NoSubordinateScope_StillReportsMissing()
+        {
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y WHERE Y.UseState = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
         }
 
         [Fact]

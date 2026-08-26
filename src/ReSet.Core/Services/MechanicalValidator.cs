@@ -6385,6 +6385,25 @@ namespace ReSet.Core.Services
                     predicateColumns.Concat(joinColumns), StringComparer.OrdinalIgnoreCase);
                 var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
 
+                // [하위 스코프 이전 - 소실과 구분한다]
+                // 원본이 최상위 WHERE에 두었던 술어를 이행이 CTE·파생 테이블·
+                // EXISTS로 옮기는 관용구가 실재한다(2026-08-26 표본 판정 30건 -
+                // EXCEPTION_PROC UPDATE 2·17·18). 그 컬럼은 없어진 것이 아니라
+                // 옮겨간 것이므로 요구로 들면 거짓양성이고, 그 요구는
+                // SuggestedPromptFix를 타고 재생성 프롬프트에 실려 재시도를
+                // 소진시킨다.
+                //
+                // group은 청크 분할 조각들을 묶은 것이므로 조각 어디의 하위 스코프에
+                // 있어도 이전으로 본다 - 조각들이 논리적으로 한 문장이라는 기존
+                // 전제와 같다.
+                //
+                // 이것이 의미 동등을 증명하지는 않는다(설계 §6). 동등성은 조인이
+                // 대상 행 집합을 보존하느냐에 달렸고 그 전제는 로컬에서 검증할 수
+                // 없다. 여기서 말하는 것은 "옮겨갔다"까지다.
+                var relocated = new HashSet<string>(
+                    group.SelectMany(a => a.Statement.SubordinatePredicateColumns),
+                    StringComparer.OrdinalIgnoreCase);
+
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
 
                 // [태스크 22] 조인 파트너가 CTE·파생 테이블이면(HasOpaqueJoinSource)
@@ -6401,7 +6420,11 @@ namespace ReSet.Core.Services
 
                 void ReportMissing(string label, IReadOnlyList<string> expected, HashSet<string> present)
                 {
-                    var missing = expected.Where(c => !present.Contains(c)).ToList();
+                    // 컬럼 단위로 거른다 - 전부-접기가 아니다. 하나는 이전이고 하나는
+                    // 진짜 소실이면 소실만 발화해야 한다.
+                    var missing = expected
+                        .Where(c => !present.Contains(c) && !relocated.Contains(c))
+                        .ToList();
                     if (missing.Count == 0) return;
 
                     result.Errors.Add(
