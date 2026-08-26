@@ -2953,5 +2953,116 @@ SELECT 1 FROM dbo.TSettleMst;
 
             Assert.Contains(result.Errors, e => e.Contains("B120"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldSkipABlockCommentBeforeReadingTheValue()
+        {
+            // [픽스 라운드 2 - 새 Important] 실측(POQSettleProc8/agent/common/
+            // 01-step-contract.md:34,37, docs/BatchMigrationPlan.md:319,322):
+            // `SET @v_currentStepId = /* 이 DML의 정확한 레거시 오류 코드 */ -9161;`.
+            // 값 위치를 원문에서 직접 찾도록 바꾸면서(픽스 라운드 1, 리뷰 I2) 주석을
+            // 건너뛰지 않으면 `raw`가 "/*"가 되어 "숫자가 아닌 값 '/*'을 대입합니다"라는
+            // 거짓 발화가 나간다 - 주석을 건너뛰고 그 뒤의 실제 값(-9161, 블록 안)을
+            // 읽어야 침묵한다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = /* 이 DML의 정확한 레거시 오류 코드 */ -9161;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("/*"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("숫자가 아닌 값"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotFlagAValueThatIsOnlyAComment()
+        {
+            // 값 자리가 주석뿐이면(`= /* ... */;`) 공백·주석을 다 걷어낸 뒤 남는
+            // 토큰이 없다 - 대입할 값 자체가 없으므로 판정할 재료가 없다. 침묵이
+            // 맞다(빈 값을 근거로 "숫자가 아닌 값 ''을 대입합니다"라고 말하면 그
+            // 자체가 거짓 주장이다 - 귀속할 수 없으면 침묵한다는 이 검사의 원칙과
+            // 같다).
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = /* 이 DML의 정확한 레거시 오류 코드 */;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("/*"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("숫자가 아닌 값"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldSkipALineCommentBeforeReadingTheValue()
+        {
+            // 한 줄 주석(`--`) 형태도 블록 주석과 같이 건너뛰어야 한다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -- 이 DML의 정확한 레거시 오류 코드
+    -9161;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("숫자가 아닌 값"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotReadPastTheClosingFenceWhenEqualsIsTheLastToken()
+        {
+            // [픽스 라운드 2 - 부수 문제] `=`가 펜스의 마지막 비공백 내용이면, 값을
+            // 원문에서 찾는 루프의 상한이 펜스 끝(offset + cleaned.Length)에 묶여
+            // 있어야 한다 - 문서 전체 끝까지로 두면 닫는 ``` 와 그 뒤 산문(여기서는
+            // "-9999")까지 값으로 읽는다. 펜스 안에 값 토큰이 없으므로 판정 없이
+            // 침묵해야 한다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT =
+```
+그다음 설명 -9999
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("```"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("-9999"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("숫자가 아닌 값"));
+        }
     }
 }

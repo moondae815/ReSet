@@ -6195,18 +6195,66 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    // `=`까지만 잡는 정규식이 끝난 바로 뒤부터, 원문에서 공백을
+                    // `=`까지만 잡는 정규식이 끝난 바로 뒤부터, 원문에서 공백과 주석을
                     // 건너뛰어 값의 첫 글자를 찾는다(픽스 라운드 1, 리뷰 I2). `cleaned`
                     // 위에서 값 자리까지 잡으면 N 접두사 없는 문자열 리터럴이 공백과
                     // 구분되지 않아 매치 자체가 실패했다 - 원문에는 따옴표가 그대로
-                    // 남아 있으므로 원문의 공백만 건너뛰면 정확한 위치를 찾는다.
+                    // 남아 있으므로 원문에서 직접 찾아야 정확한 위치를 찾는다.
+                    //
+                    // [픽스 라운드 2 - 리뷰 신규 Important] `cleaned`는 문자열'과 주석'
+                    // 둘 다 지운 사본인데, 값 위치를 원문으로 옮기면서 문자열은
+                    // 되살렸지만 주석은 처리하지 않아 회귀가 생겼다(실측
+                    // POQSettleProc8/agent/common/01-step-contract.md:34,37,
+                    // docs/BatchMigrationPlan.md:319,322: `SET @v_currentStepId =
+                    // /* 이 DML의 정확한 레거시 오류 코드 */;`). 주석을 건너뛰지 않으면
+                    // `raw`가 `"/*"`가 되어 "숫자가 아닌 값 '/*'을 대입합니다"라는
+                    // 거짓 발화가 나간다 - 이 함수의 클래스 주석이 경계하는 바로 그
+                    // 결함(잘린 값을 근거로 결함을 보고하는 것)과 같은 종류다.
+                    // `SkipCommentToken`(순수 스캐너, 절대 인덱스로 호출 가능)으로
+                    // `--`·`/* */` 주석을 건너뛰고 공백과 번갈아 반복한다.
+                    //
+                    // 상한을 `offset + cleaned.Length`(이 펜스의 끝)로 묶는다 -
+                    // `stepMarkdown.Length`(문서 전체 끝)로 두면 `=`가 펜스의 마지막
+                    // 비공백 내용일 때 닫는 ``` 펜스와 그 뒤 산문까지 값으로 읽을 수
+                    // 있다(코퍼스 0건이지만 방어값이 없었다).
+                    var fenceEnd = offset + cleaned.Length;
                     var valueStart = offset + assignment.Index + assignment.Length;
-                    while (valueStart < stepMarkdown.Length && char.IsWhiteSpace(stepMarkdown[valueStart]))
+                    while (valueStart < fenceEnd)
                     {
-                        valueStart++;
+                        if (char.IsWhiteSpace(stepMarkdown[valueStart]))
+                        {
+                            valueStart++;
+                            continue;
+                        }
+
+                        var commentEnd = SkipCommentToken(stepMarkdown, valueStart);
+                        if (commentEnd.HasValue)
+                        {
+                            valueStart = commentEnd.Value;
+                            continue;
+                        }
+
+                        break;
                     }
 
+                    // 공백·주석을 다 걷어낸 뒤에도 이 펜스 안에 남는 토큰이 없으면
+                    // (`= /* 주석 */;`처럼 값 자리가 주석뿐이거나, `=`가 펜스의 마지막
+                    // 비공백 내용인 경우) 값 자체가 없다 - `ExtractRawAssignmentValue`를
+                    // 부르지 않는다. 안 그러면 그 함수가 펜스 경계를 모른 채 원문을
+                    // 계속 스캔해 닫는 ``` 와 그 뒤 산문까지 값으로 읽는다(코퍼스 0건인
+                    // 방어값). 대입할 값이 없다는 것과 값이 컴파일 안 된다는 것은
+                    // 다른 사실이므로, 귀속할 수 없으면 침묵한다.
+                    if (valueStart >= fenceEnd) continue;
+
                     var raw = ExtractRawAssignmentValue(stepMarkdown, valueStart).Trim();
+
+                    // 값이 주석뿐이고 그 뒤에 아무 토큰도 없으면(`= /* 주석 */;`) 공백과
+                    // 주석을 다 걷어낸 뒤 남는 것이 없다 - 대입할 값 자체가 없으므로
+                    // 판정할 재료가 없다. 귀속할 수 없으면 침묵한다는 이 함수 전체의
+                    // 원칙과 같다(빈 문자열을 근거로 "숫자가 아닌 값 ''을 대입합니다"라고
+                    // 말하면 그 자체가 거짓 주장이다).
+                    if (raw.Length == 0) continue;
+
                     if (!reported.Add(raw)) continue;
 
                     // NULL은 컴파일된다 - 이 값이 바람직한 초기값인지는 별개 문제이고
