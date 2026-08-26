@@ -53,6 +53,16 @@ namespace ReSet.Core.Services
                 : string.Join(", ", gaps.PlanParseFailedJobs);
             b.AppendLine($"- 목차 파싱 실패 Job: {failed}");
 
+            // 리뷰 발견 (6) - "목차 파싱 실패"와 원인이 다르다: JSON은 정상 파싱되지만
+            // BatchStepPlanParser.MaxSteps(40) 상한을 넘어 버려진 Job이다. 같은
+            // 라벨로 뭉치면 라벨을 믿고 JSON을 디버깅하러 가는 사람이 헛수고한다.
+            if (gaps.StepCountCapExceededJobs.Count > 0)
+            {
+                b.AppendLine(
+                    $"- 목차 단계 수 상한(40단계) 초과로 제외된 Job: " +
+                    $"{string.Join(", ", gaps.StepCountCapExceededJobs)}");
+            }
+
             // 리뷰 발견 (3) - 프로시저 참조를 못 찾으면(SweepCommand의 디렉터리 색인
             // 미스, StepSweepService의 DdlByProcedure 조회 미스) 조용히 continue하던
             // 두 자리의 합. 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다.

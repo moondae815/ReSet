@@ -273,6 +273,24 @@ UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
             Assert.Contains("PoisonJob", report.Gaps.JobsThatThrew);
         }
 
+        // 리뷰 발견 (6) — 목차 JSON은 정상 파싱되지만 상한(40단계) 초과로 버려진
+        // Job은 "목차 파싱 실패"와 다른 라벨로 실려야 한다. SweepCommand가
+        // SweepInput.StepCountCapExceededJobs로 채우면 Sweep이 그대로
+        // HarnessGaps에 실어야 한다.
+        [Fact]
+        public void StepCountCapExceededJobsSurviveIntoTheReport()
+        {
+            var input = new SweepInput(new List<SweepJob>(), new List<string>(), 0)
+            {
+                StepCountCapExceededJobs = new[] { "POQSettleProc4 (선언 73단계)" },
+            };
+
+            var gaps = StepSweepService.Sweep(input).Gaps;
+
+            Assert.Equal(
+                new[] { "POQSettleProc4 (선언 73단계)" }, gaps.StepCountCapExceededJobs);
+        }
+
         [Fact]
         public void ParseFailedJobsAndMissingStepFilesSurviveIntoTheReport()
         {

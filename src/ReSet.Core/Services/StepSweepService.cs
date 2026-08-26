@@ -284,6 +284,7 @@ namespace ReSet.Core.Services
                         unresolvedProcedureReferences + input.UnresolvedProcedureDirectoryLookups,
                     JobsWithZeroMeasuredPairs = jobsWithZeroMeasuredPairs,
                     JobsThatThrew = jobsThatThrew,
+                    StepCountCapExceededJobs = input.StepCountCapExceededJobs,
                 });
         }
 

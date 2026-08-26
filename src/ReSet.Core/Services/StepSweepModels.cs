@@ -100,6 +100,13 @@ namespace ReSet.Core.Services
         /// 실측 326쌍)을 부분 보고 없이 죽인다.
         /// </summary>
         public IReadOnlyList<string> JobsThatThrew { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// <see cref="SweepInput.StepCountCapExceededJobs"/>를 그대로 실어 나른다 -
+        /// "목차 파싱 실패"와 "상한 초과로 제외"를 같은 라벨로 뭉치면 라벨을 믿고
+        /// JSON을 디버깅하러 가는 사람이 헛수고한다.
+        /// </summary>
+        public IReadOnlyList<string> StepCountCapExceededJobs { get; init; } = Array.Empty<string>();
     }
 
     /// <param name="MultiProcedureSteps">참조 원본 SP가 2개 이상인 단계 수.</param>

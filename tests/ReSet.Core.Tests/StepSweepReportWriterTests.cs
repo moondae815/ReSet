@@ -130,6 +130,32 @@ namespace ReSet.Core.Tests
             Assert.Contains("PoisonJob", header);
         }
 
+        // 리뷰 발견 (6) — "목차 파싱 실패"와 "상한(40단계) 초과로 제외"는 원인이
+        // 다르다(전자는 JSON 자체를 못 읽고, 후자는 JSON은 정상 파싱되지만 버려진다).
+        // 같은 라벨로 뭉치면 상한 초과 Job을 파싱 실패로 오인해 JSON을 디버깅하러
+        // 가는 헛수고를 한다.
+        [Fact]
+        public void HeaderListsStepCountCapExceededJobsSeparatelyFromParseFailures()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0),
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false)
+                {
+                    StepCountCapExceededJobs = new[] { "POQSettleProc4 (선언 73단계)" },
+                });
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var header = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("POQSettleProc4 (선언 73단계)", header);
+            Assert.Contains("상한", header);
+        }
+
         // (B)가 상한이라는 사실을 보고서가 스스로 말해야 한다 - 재생성 후 실제
         // 발화량의 예측으로 읽히면 다음 사람이 잘못된 기대를 갖는다.
         [Fact]

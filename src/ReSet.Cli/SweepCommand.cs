@@ -33,7 +33,9 @@ namespace ReSet.Cli
 
             var jobs = new List<SweepJob>();
             var parseFailed = new List<string>();
+            var stepCountCapExceeded = new List<string>();
             var missingStepFiles = 0;
+            var unresolvedProcedureDirectoryLookups = 0;
 
             foreach (var jobDir in Directory
                          .GetDirectories(jobsDir)
@@ -42,13 +44,25 @@ namespace ReSet.Cli
                 var jobName = Path.GetFileName(jobDir);
 
                 var planPath = Path.Combine(jobDir, "raw", "PlanStructure.md");
-                var steps = File.Exists(planPath)
-                    ? BatchStepPlanParser.TryParse(File.ReadAllText(planPath))
-                    : null;
+                var planMarkdown = File.Exists(planPath) ? File.ReadAllText(planPath) : null;
+                var steps = planMarkdown != null ? BatchStepPlanParser.TryParse(planMarkdown) : null;
 
                 if (steps == null || steps.Count == 0)
                 {
-                    parseFailed.Add(jobName);
+                    // 목차 JSON은 정상 파싱되지만 BatchStepPlanParser.MaxSteps(40) 상한을
+                    // 넘어 버려지는 경우와 진짜 파싱 실패를 TryParse의 반환값(null)만으로는
+                    // 구분할 수 없다 - 둘 다 null이다. 라벨을 믿고 JSON을 디버깅하러 가면
+                    // 헛수고한다(POQSettleProc4가 실제 사례 - JSON은 73단계로 정상
+                    // 파싱되지만 상한 때문에 버려진다).
+                    if (planMarkdown != null && ExceedsStepCountCap(planMarkdown, out var declaredCount))
+                    {
+                        stepCountCapExceeded.Add($"{jobName} (선언 {declaredCount}단계)");
+                    }
+                    else
+                    {
+                        parseFailed.Add(jobName);
+                    }
+
                     continue;
                 }
 
@@ -76,7 +90,14 @@ namespace ReSet.Cli
                 foreach (var procedure in procedures)
                 {
                     var bare = StepSweepService.BareProcedureName(procedure);
-                    if (!procedureDirs.TryGetValue(bare, out var dir)) continue;
+                    if (!procedureDirs.TryGetValue(bare, out var dir))
+                    {
+                        // 프로시저 참조를 못 찾았다 - 카운터 없이 continue하지 않는다.
+                        // StepSweepService의 DdlByProcedure 조회 미스와 합산돼
+                        // HarnessGaps.UnresolvedProcedureReferences에 실린다.
+                        unresolvedProcedureDirectoryLookups++;
+                        continue;
+                    }
 
                     var specPath = Path.Combine(dir, "docs", "Spec.md");
                     var metaPath = Path.Combine(dir, "raw", "metadata.json");
@@ -102,7 +123,11 @@ namespace ReSet.Cli
             }
 
             var report = StepSweepService.Sweep(
-                new SweepInput(jobs, parseFailed, missingStepFiles));
+                new SweepInput(jobs, parseFailed, missingStepFiles)
+                {
+                    UnresolvedProcedureDirectoryLookups = unresolvedProcedureDirectoryLookups,
+                    StepCountCapExceededJobs = stepCountCapExceeded,
+                });
 
             // 아무것도 재지 못했는데 0으로 끝나면 파이프라인이 초록으로 통과한다.
             if (report.Gaps.MeasuredPairs == 0) return null;
@@ -114,6 +139,64 @@ namespace ReSet.Cli
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, markdown);
             return path;
+        }
+
+        /// <summary>
+        /// 목차 JSON이 정상 파싱되지만 BatchStepPlanParser.MaxSteps(40) 상한을 넘어
+        /// 버려졌는지를 판정한다. TryParse의 반환값(null)만으로는 진짜 파싱 실패와
+        /// 구분할 수 없다 - 둘 다 null이다(BatchStepPlan.cs:154-159). 라벨을 믿고
+        /// JSON을 디버깅하러 가면 헛수고한다(POQSettleProc4가 실제 사례 - JSON은
+        /// 73단계로 정상 파싱되지만 상한 때문에 버려진다).
+        ///
+        /// PlanStructureEnricherTests.JsonBlockRegexLiteral_ShouldExistExactlyOnceInSourceTree가
+        /// BatchStepPlanParser의 펜스 정규식 리터럴이 소스 트리에 단 한 곳(그 파일)만
+        /// 있어야 한다고 지킨다 - 다시 구현하면 두 곳이 어긋날 수 있다는 뜻이다.
+        /// BatchStepPlanParser는 읽기 전용(수정 금지)이라 내부 판정을 밖으로 못 내므로,
+        /// 여기서는 그 정규식을 베끼지 않고 문자열 검색(IndexOf)만으로 펜스를 찾는다 -
+        /// 진단 전용이라 정확한 재구현이 아니어도 된다(닫는 펜스를 못 찾으면 그냥
+        /// 상한 초과가 아니라고 본다 - 어차피 TryParse도 이미 null을 반환한 뒤에만
+        /// 호출되므로 "블록을 못 찾음"과 "상한 초과 아님"을 구분 못 해도 결과는
+        /// 같다, 둘 다 parseFailed로 간다).
+        /// </summary>
+        private static bool ExceedsStepCountCap(string planStructureMarkdown, out int declaredStepCount)
+        {
+            declaredStepCount = 0;
+            var searchFrom = 0;
+
+            while (true)
+            {
+                var fenceStart = planStructureMarkdown.IndexOf("```json", searchFrom, StringComparison.Ordinal);
+                if (fenceStart < 0) return false;
+
+                var bodyStart = planStructureMarkdown.IndexOf('\n', fenceStart);
+                if (bodyStart < 0) return false;
+                bodyStart++;
+
+                var fenceEnd = planStructureMarkdown.IndexOf("```", bodyStart, StringComparison.Ordinal);
+                if (fenceEnd < 0) return false;
+
+                var body = planStructureMarkdown[bodyStart..fenceEnd];
+                searchFrom = fenceEnd + 3;
+
+                try
+                {
+                    using var document = JsonDocument.Parse(body);
+                    if (document.RootElement.TryGetProperty("Steps", out var stepsProperty) &&
+                        stepsProperty.ValueKind == JsonValueKind.Array)
+                    {
+                        declaredStepCount = stepsProperty.GetArrayLength();
+                        if (declaredStepCount > BatchStepPlanParser.MaxSteps)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // 이 블록은 진짜 못 읽는다 - 상한 초과 판정과 무관하다. 다음
+                    // 블록(있다면)을 본다.
+                }
+            }
         }
 
         private static Dictionary<string, string> IndexProcedureDirectories(string outputDir)
