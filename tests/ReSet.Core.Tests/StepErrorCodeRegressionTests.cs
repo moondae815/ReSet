@@ -45,8 +45,17 @@ namespace ReSet.Core.Tests
             Assert.Equal(16, after.Single(s => s.Code == "S06").ErrorCodes.Count);
         }
 
+        /// <summary>
+        /// 옛 명제("레거시 출신이 없으면 ErrorCodes가 비고, 대조 항목이 없어서
+        /// 하한 검사를 통과한다")는 더 이상 참이 아니다 - PlanStructureEnricher가
+        /// 이제 그런 단계에 예약 대역 코드를 발급한다(S00 → -9000, Task 2). 그러나
+        /// 이 테스트가 원래 지키던 성질 - "레거시 출신이 없는 단계가 코드가 없다는
+        /// 이유로 결함 판정을 받지 않는다" - 은 여전히 지켜져야 한다. 다만 방식이
+        /// 바뀐다: 대조 항목이 0개라서 통과하는 것이 아니라, 발급된 코드가 본문에
+        /// 실제로 등장해서 통과한다.
+        /// </summary>
         [Fact]
-        public void StepsWithoutLegacyOriginStayEmptyAndPassTheFloorCheck()
+        public void StepsWithoutLegacyOriginReceiveTheReservedCodeAndPassTheFloorCheckWhenTheBodyCarriesIt()
         {
             var codes = SpecReturnCodeExtractor.Extract(new[]
             {
@@ -60,12 +69,44 @@ namespace ReSet.Core.Tests
                     new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown)!;
 
             var s00 = steps.Single(s => s.Code == "S00");
-            Assert.Empty(s00.ErrorCodes);
 
-            var body = $"### {s00.Code} {s00.Name}\n\n```sql\nSELECT 1 FROM {s00.TargetTables[0]};\n```";
+            // S00의 블록 시작은 -9000 - 0*10 = -9000이다.
+            Assert.Equal(new[] { "-9000" }, s00.ErrorCodes);
+
+            var body = $"### {s00.Code} {s00.Name}\n\n```sql\nSELECT 1 FROM {s00.TargetTables[0]};\n```\n\n-9000";
             var result = new MechanicalValidator().ValidateBatchStep(body, s00, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid);
+        }
+
+        /// <summary>
+        /// 새 설계의 실제 회귀 방어선이다. 예약 코드가 발급됐는데 본문이 그 코드를
+        /// 담지 않으면 하한 검사가 걸어야 한다 - 그렇지 않으면 예약 대역 발급은
+        /// 검증되지 않는 장식일 뿐이고, 옛 결함(모델이 지어낸 코드가 아무 대조 없이
+        /// 통과하던 것)과 본질이 같은 구멍이 다시 열린다.
+        /// </summary>
+        [Fact]
+        public void StepsWithoutLegacyOriginFailTheFloorCheckWhenTheBodyOmitsTheReservedCode()
+        {
+            var codes = SpecReturnCodeExtractor.Extract(new[]
+            {
+                ("dbo.UP_UTIL_SETTLE_COMM_UPD", Fixture("SettleCommUpdSpecExcerpt.md")),
+            });
+
+            var steps = BatchStepPlanParser.TryParse(
+                PlanStructureEnricher.Enrich(
+                    Fixture("PlanStructureWithEmptyErrorCodes.md"),
+                    codes,
+                    new Dictionary<string, SpecTargetTableExtractor.StepTableSets>()).Markdown)!;
+
+            var s00 = steps.Single(s => s.Code == "S00");
+
+            // 발급된 코드(-9000)를 본문에 싣지 않는다 - 옛 테스트의 본문과 같은 모양이다.
+            var body = $"### {s00.Code} {s00.Name}\n\n```sql\nSELECT 1 FROM {s00.TargetTables[0]};\n```";
+            var result = new MechanicalValidator().ValidateBatchStep(body, s00, Array.Empty<string>(), NoConditions);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("-9000"));
         }
 
         [Fact]
