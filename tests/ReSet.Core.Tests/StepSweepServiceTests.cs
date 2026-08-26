@@ -343,5 +343,44 @@ END";
             Assert.Equal(0, indicators.StepsMissingSpecCodes);
             Assert.Equal(0, indicators.StepsWithUnknownCodes);
         }
+
+        // 리뷰 발견 A: 펜스 파싱 실패는 "코드 라벨 소실"이 아니라 "도구가 그
+        // 관용구를 못 읽는다"는 신호다. 이 SQL은
+        // StepSqlStatementReaderTests.GenuinelyUnparsableDmlStatement_CountsAsOneLostStatement가
+        // 이미 lostStatementCount=1을 낸다고 확정한 것과 같은 문장이다 -
+        // SELECT 목록이 통째로 주석이라 ScriptDom이 못 읽는다. 직접 실행해
+        // 확인했다: StepSqlStatementReader.Read(markdown, out var lost)는
+        // statements.Count=0, lost=1을 낸다.
+        //
+        // SP 표(DdlOneUpdateWithCode)에는 -13이 있으므로, 이 스킵이 없으면
+        // stepCodes가 빈 채로 specCodes={-13}과 대조돼 StepsMissingSpecCodes가
+        // 거짓으로 발화한다 - 이 테스트는 그 거짓 발화를 막는다.
+        private const string StepMarkdownUnparsableFence = @"### S01. 정산 마스터 갱신
+
+설명 문단이다.
+
+```sql
+INSERT INTO dbo.T SELECT /* 주석뿐 */ FROM dbo.S;
+```
+";
+
+        [Fact]
+        public void StepWithUnparsableFenceIsSkippedNotCountedAsMismatch()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = StepMarkdownUnparsableFence,
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(0, indicators.StepsMissingSpecCodes);
+            Assert.Equal(0, indicators.StepsWithUnknownCodes);
+            Assert.Equal(1, indicators.StepsSkippedForParseFailure);
+        }
     }
 }

@@ -65,7 +65,27 @@ namespace ReSet.Core.Services
     public sealed record SweepIndicators(
         int MultiProcedureSteps,
         int StepsMissingSpecCodes,
-        int StepsWithUnknownCodes);
+        int StepsWithUnknownCodes)
+    {
+        /// <summary>
+        /// 단계 SQL 펜스 파싱 실패(StepSqlStatementReader의 lostStatementCount &gt; 0)로
+        /// 코드 집합 대조(StepsMissingSpecCodes·StepsWithUnknownCodes)에서 통째로 뺀 단계 수.
+        ///
+        /// [왜 빼는가] 펜스가 파싱에 실패하면 stepCodes가 실제보다 적게(또는 비게) 나온다 -
+        /// 이건 "코드 라벨이 소실됐다"는 신호가 아니라 "도구가 그 관용구를 못 읽는다"는
+        /// 신호다. 코퍼스 실측으로는 891개 펜스 중 191개(21%), 326개 파일 중 119개(36%)가
+        /// 최소 하나의 파싱 실패를 겪는다(StepSqlStatementReader.cs:70-77) - 이 신호를
+        /// 무시하면 StepsMissingSpecCodes가 재는 것이 "코드 라벨 소실"이 아니라 "ScriptDom이
+        /// 못 읽는 관용구의 분포"로 뒤바뀐다. 검사 A(CheckStatementCountAgainstSpec)가
+        /// lostStatementCount &gt; 0일 때 개수 대조 전체를 접는 것과 같은 이유다.
+        ///
+        /// [이 값이 크면 무슨 뜻인가] 코드 집합 지표(StepsMissingSpecCodes·
+        /// StepsWithUnknownCodes) 자체의 표본이 그만큼 줄었다는 뜻이다 - 두 지표의
+        /// 분모가 전체 측정 단계 수가 아니라 "측정 단계 수 - 이 값"임을 항상 함께
+        /// 읽어야 한다. 값이 크면 그 두 지표를 그대로 믿을 수 없다는 신호다.
+        /// </summary>
+        public int StepsSkippedForParseFailure { get; init; }
+    }
 
     public sealed record SweepReport(
         IReadOnlyList<SweepFinding> Findings,

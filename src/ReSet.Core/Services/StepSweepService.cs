@@ -191,12 +191,23 @@ namespace ReSet.Core.Services
         /// -9/-10/-11을 쓰는데 이행 코드는 같은 세 블록에 -10/-11/-12를 단다. -9가
         /// 소실되고 이후 전체가 1씩 밀렸다. 밀림을 직접 보는 대신 밀림의 원인(라벨
         /// 소실)을 본다 - 집합 단위라 값싸다.
+        ///
+        /// [펜스 파싱 실패는 소실이 아니다] StepSqlStatementReader의 실측(코퍼스
+        /// 891개 펜스 중 191개(21%), 326개 파일 중 119개(36%)가 최소 하나의 파싱
+        /// 실패를 겪는다 - StepSqlStatementReader.cs:70-77)이 보여주듯, 펜스가
+        /// 파싱에 실패하면 stepCodes가 실제보다 적게(또는 비게) 나온다. 그 상태로
+        /// specCodes와 대조하면 "코드 라벨이 소실됐다"가 아니라 "도구가 그 관용구를
+        /// 못 읽는다"를 재게 된다. 검사 A(CheckStatementCountAgainstSpec)가
+        /// lostStatementCount &gt; 0일 때 개수 대조 전체를 접는 것과 같은 이유로,
+        /// 이 지표도 그 단계를 코드 집합 대조에서 통째로 빼고 StepsSkippedForParseFailure로
+        /// 그 사실을 드러낸다 - 줄어든 측정 범위를 숨기지 않는다(§6).
         /// </summary>
         private static SweepIndicators ComputeIndicators(SweepInput input)
         {
             var multiProcedureSteps = 0;
             var missingSpecCodes = 0;
             var unknownCodes = 0;
+            var skippedForParseFailure = 0;
 
             foreach (var job in input.Jobs)
             {
@@ -210,8 +221,16 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
+                    var stepStatements = StepSqlStatementReader.Read(markdown, out var lostStatementCount);
+
+                    if (lostStatementCount > 0)
+                    {
+                        skippedForParseFailure++;
+                        continue;
+                    }
+
                     var stepCodes = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (var statement in StepSqlStatementReader.Read(markdown))
+                    foreach (var statement in stepStatements)
                     {
                         if (!string.IsNullOrWhiteSpace(statement.CodeAnchor))
                         {
@@ -245,7 +264,10 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return new SweepIndicators(multiProcedureSteps, missingSpecCodes, unknownCodes);
+            return new SweepIndicators(multiProcedureSteps, missingSpecCodes, unknownCodes)
+            {
+                StepsSkippedForParseFailure = skippedForParseFailure,
+            };
         }
     }
 }
