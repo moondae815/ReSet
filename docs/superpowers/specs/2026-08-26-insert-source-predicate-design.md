@@ -228,6 +228,43 @@ private static bool DetectOpaqueJoinSource(TSqlStatement statement, IReadOnlyLis
 파생 테이블 X 안의 필터는 `froms`를 타고 하위로 잡힌다 — `UP_UTIL_SETTLE_INS`의
 `INSERT 1`이 정확히 그 모양이다.
 
+### 4.6 재편입이 드러내는 메시지 어법 결함
+
+검사 B·C의 메시지가 `Kind`와 무관하게 `(갱신 N)`을 붙인다.
+
+```csharp
+$"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장에 명세서가 확정한 " +
+```
+
+`갱신`은 명세서가 **UPDATE 갱신 절 표**에만 쓰는 말이다. INSERT·DELETE에는 그 표가
+없다 — 명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건이고, DML 범위 표의 문장 칸은
+`INSERT 1`·`DELETE 2`처럼 영문으로 적힌다(`SpecSetTarget` 문서 주석의 실측).
+
+DELETE는 이미 검사 B·C 후보이므로 오늘도 `DELETE 3(갱신 3)`을 낸다. 재편입은 이
+오기를 INSERT 21행으로 넓힌다. 그래서 재편입 **앞에** 고친다.
+
+```csharp
+var gloss = row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+    ? $"(갱신 {row.Ordinal})"
+    : string.Empty;
+```
+
+**딸린 결합:** `StepSweepClassifier.CoordinatePattern`이 여는 괄호를 **필수로**
+요구한다.
+
+```csharp
+@"섹션의\s+(?<kind>[A-Z]+)\s+(?<ordinal>\d+)\s*\("
+```
+
+주석을 떼면 INSERT·DELETE 발화가 좌표를 잃는다 — 발화 수는 세지만 (종류, 서수)가
+비어 판정표가 그 행을 좌표 없이 싣는다. 괄호를 경계로 쓰지 않게 바꾼다.
+
+```csharp
+@"섹션의\s+(?<kind>[A-Z]+)\s+(?<ordinal>\d+)(?=\s|\()"
+```
+
+이 둘은 읽기 배선과 파일이 겹치지 않으므로 병렬로 진행할 수 있다.
+
 ## 5. 검사 재편입
 
 `ResolveOrdinal`은 위치가 아니라 신원으로 서수를 정한다.
@@ -303,6 +340,14 @@ var resolved = statements
 | `Insert_TargetNotResolvedFromSourceAlias` | `INSERT INTO TSettleMst .. FROM dbo.TFoo AS TSettleMst` → 대상은 `TSettleMst` (4.2 회귀) |
 | `Insert_OpaqueSourceJoin_SetsHasOpaqueJoinSource` | 원천이 CTE·파생 테이블에 조인하면 참 |
 | `Update_UnchangedAfterPluralSignature` | 기존 UPDATE 기대값 그대로 (회귀) |
+
+어법 쪽(재편입 앞):
+
+| 이름 | 확인하는 것 |
+|---|---|
+| `CheckB_NonUpdateKind_OmitsUpdateGloss` | DELETE 발화에 `(갱신 N)`이 붙지 않는다 |
+| `CheckB_UpdateKind_KeepsUpdateGloss` | UPDATE 발화에는 그대로 붙는다 |
+| `Describe_NonUpdateKind_WithoutGloss_StillExtractsCoordinates` | 괄호 없는 메시지에서도 스윕이 (종류, 서수)를 뽑는다 |
 
 검증 쪽(2단계):
 
