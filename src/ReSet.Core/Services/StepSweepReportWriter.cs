@@ -168,7 +168,20 @@ namespace ReSet.Core.Services
             b.AppendLine($"| 다중 레거시 SP 단계 수 | {indicators.MultiProcedureSteps} |");
             b.AppendLine($"| SP 표에는 있는데 단계에 없는 코드가 있는 단계 수 | {indicators.StepsMissingSpecCodes} |");
             b.AppendLine($"| 단계에는 있는데 SP 표에 없는 코드가 있는 단계 수 | {indicators.StepsWithUnknownCodes} |");
+            b.AppendLine(
+                $"| 펜스 파싱 실패로 코드 집합 대조에서 제외한 단계 수 | " +
+                $"{indicators.StepsSkippedForParseFailure} |");
             b.AppendLine();
+
+            if (indicators.StepsSkippedForParseFailure > 0)
+            {
+                b.AppendLine(
+                    $"펜스 파싱 실패로 {indicators.StepsSkippedForParseFailure}개 단계를 코드 집합 " +
+                    "대조에서 제외했다 - 위 두 코드 집합 지표(SP 표에는 있는데 단계에 없는 코드, " +
+                    "단계에는 있는데 SP 표에 없는 코드)의 분모가 그만큼 줄었다는 뜻이다. 이 값이 " +
+                    "크면 두 지표가 코퍼스 전체를 대표하지 않는다.");
+                b.AppendLine();
+            }
         }
 
         private static int Count(

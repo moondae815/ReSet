@@ -143,5 +143,57 @@ namespace ReSet.Core.Tests
             Assert.Contains("측정 쌍: 0 (Job 0개)", markdown);
             Assert.Contains("단계 파일 누락: 0", markdown);
         }
+
+        // 펜스 파싱 실패로 코드 집합 대조에서 뺀 단계 수를 지표 표에 안 실으면, 그
+        // 지표의 분모가 줄어든 사실이 보고서 어디에도 드러나지 않는다.
+        [Fact]
+        public void IndicatorsTableShowsStepsSkippedForParseFailureCount()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(3, 2, 1) { StepsSkippedForParseFailure = 7 },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var indicators = Section(markdown, "## 캐시 17 선결 지표");
+
+            Assert.Contains("| 펜스 파싱 실패로 코드 집합 대조에서 제외한 단계 수 | 7 |", indicators);
+        }
+
+        // 제외 건수가 0이 아니면, 코드 집합 지표(위 두 행)의 분모가 줄었다는 사실을
+        // 사람이 놓치지 않도록 경고 문장을 낸다.
+        [Fact]
+        public void NonZeroSkippedCountEmitsWarningAboutReducedDenominator()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(3, 2, 1) { StepsSkippedForParseFailure = 7 },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var indicators = Section(markdown, "## 캐시 17 선결 지표");
+
+            Assert.Contains("7", indicators);
+            Assert.Contains("분모", indicators);
+        }
+
+        // 제외 건수가 0이면 경고를 내지 않는다 - 매번 나오면 아무도 안 읽는다. 공유
+        // Report() 픽스처는 StepsSkippedForParseFailure가 기본값 0이므로 그대로 쓴다.
+        [Fact]
+        public void ZeroSkippedCountEmitsNoWarning()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16");
+            var indicators = Section(markdown, "## 캐시 17 선결 지표");
+
+            Assert.DoesNotContain("분모", indicators);
+        }
     }
 }
