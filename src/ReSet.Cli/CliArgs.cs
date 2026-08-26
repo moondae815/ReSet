@@ -18,6 +18,9 @@ namespace ReSet.Cli
         /// DB·AI 없이 output/ 산출물만 읽는다.</summary>
         public string? CoverageMapTarget { get; set; }
 
+        /// <summary>--sweep. DB·AI 없이 output/ 산출물만으로 단계 검사 A~E를 전수 스윕한다.</summary>
+        public bool RunSweep { get; set; }
+
         public bool IsBatchMode => AnalyzeAll || TargetProcedures.Count > 0 || GeneratePolicy
             || !string.IsNullOrEmpty(ExtractSnapshotPath)
             || !string.IsNullOrEmpty(CoverageMapTarget);
