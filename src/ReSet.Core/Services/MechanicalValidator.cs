@@ -404,7 +404,7 @@ namespace ReSet.Core.Services
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
-            SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result));
+            SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -6140,16 +6140,26 @@ namespace ReSet.Core.Services
         ///
         /// [픽스 라운드 1] 코퍼스에 문자열 코드로 응답하는 제어 단계가 실재한다
         /// (`@po_strRetCode NVARCHAR(10) OUTPUT`에 `N'B120'`을 담는 POQSettleBatch1/S03
-        /// 등). 이 검사는 그 형태를 허용할지 금지할지 결정하지 않는다 - INT로 선언된
-        /// 적 없는 변수의 SET은 애초에 보지 않고(펜스 단위 게이팅), NULL과 문자열
-        /// 리터럴은 만나면 조용히 넘긴다. `DECLARE ... INT = NULL`은 유효한 T-SQL이라
-        /// "컴파일되지 않는다"는 말을 못 붙인다. 값은 <see cref="BlankCommentsAndStrings"/>가
-        /// 지운 사본이 아니라 원문에서 읽는다 - 사본에서 읽으면 문자열 리터럴 내용이
-        /// 공백으로 지워져 `N'B120'`이 `N`으로 잘리고, 그 잘린 값을 근거로 거짓 주장을
-        /// 하게 된다(실측: "값이 아닌 값 'N'을 대입합니다").
+        /// 등). 값은 <see cref="BlankCommentsAndStrings"/>가 지운 사본이 아니라 원문에서
+        /// 읽는다 - 사본에서 읽으면 문자열 리터럴 내용이 공백으로 지워져 `N'B120'`이
+        /// `N`으로 잘리고, 그 잘린 값을 근거로 거짓 주장을 하게 된다(실측: "값이 아닌
+        /// 값 'N'을 대입합니다").
+        ///
+        /// [Task 2] 문자열 리터럴도 이제 판정 대상이다 - 지어낸 오류 어휘(`N'B120'`·
+        /// `N'BATCH-LOCK-001'`, 실측 17단계)를 잡되, 이 Job의 단계 목록에 있는 코드는
+        /// 침묵한다. 자기 코드(`N'S01'`)는 BatchControlContract가
+        /// batch.BatchStepJournal.StepCode를 nvarchar(10)으로 규정하므로 저널에 자기
+        /// 신원을 쓰는 정당한 용법이고(실측 12단계), 다른 단계의 코드(`N'S02'`)도
+        /// "첫 미완료 단계 코드"처럼 다른 단계를 가리키는 정당한 상태 변수일 수 있다
+        /// (실측: POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). 목록에 없는
+        /// 코드(`N'S99'`)는 여전히 발화한다 - <paramref name="allSteps"/>가 null이면
+        /// (재료 없음) 종전대로 자기 코드만 예외로 둔다.
         /// </summary>
         private static void CheckControlStepErrorCodeBand(
-            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result,
+            IReadOnlyList<BatchStepPlan>? allSteps = null)
         {
             // 레거시 출신이 있으면 원본 코드를 쓰는 것이 정상이다.
             if (step.LegacyProcedures.Count > 0) return;
@@ -6163,20 +6173,25 @@ namespace ReSet.Core.Services
                 // 펜스 단위로 새로 센다 - 다른 펜스의 DECLARE가 이 펜스의 SET을
                 // INT로 인증하면 안 된다.
                 var intDeclaredVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var trackedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (Match assignment in ControlCodeAssignmentPattern.Matches(cleaned))
                 {
                     var name = assignment.Groups["name"].Value;
-                    var isIntDeclare = assignment.Groups["declare"].Success;
+                    var isDeclare = assignment.Groups["declare"].Success;
 
-                    if (isIntDeclare)
+                    if (isDeclare)
                     {
-                        intDeclaredVars.Add(name);
+                        trackedVars.Add(name);
+                        if (IsIntegerType(assignment.Groups["type"].Value))
+                        {
+                            intDeclaredVars.Add(name);
+                        }
                     }
-                    else if (!intDeclaredVars.Contains(name))
+                    else if (!trackedVars.Contains(name))
                     {
-                        // 이 펜스에서 INT로 선언된 적이 없는 변수다 - 문자열 상태
-                        // 변수(N'B120' 등)일 수 있으므로 대상이 아니다.
+                        // 이 펜스에서 선언된 적이 없는 변수다. 어떤 타입인지 알 수
+                        // 없으므로 판정하지 않는다 - 귀속할 수 없으면 침묵한다.
                         continue;
                     }
 
@@ -6188,11 +6203,39 @@ namespace ReSet.Core.Services
                     // 이 검사가 결정할 사안이 아니다.
                     if (string.Equals(raw, "NULL", StringComparison.OrdinalIgnoreCase)) continue;
 
-                    // 문자열 리터럴(옵션 N 접두사)도 이 검사의 대상이 아니다 - 문자열
-                    // 코드로 응답하는 제어 단계를 이 검사가 판정하지 않는다.
-                    if (raw.Length > 0 &&
-                        (raw[0] == '\'' || (raw.Length > 1 && (raw[0] == 'N' || raw[0] == 'n') && raw[1] == '\'')))
+                    // 문자열 리터럴(옵션 N 접두사)이면 값을 꺼내 판정한다.
+                    //
+                    // 이 Job의 단계 목록에 있는 코드는 침묵한다 - 자기 코드
+                    // (`N'S01'`)는 BatchControlContract가
+                    // batch.BatchStepJournal.StepCode를 nvarchar(10)으로 규정하므로
+                    // 저널에 자기 신원을 쓰는 정당한 용법이고(실측 12단계), 다른
+                    // 단계의 코드(`N'S02'`)도 "첫 미완료 단계 코드"처럼 다른 단계를
+                    // 가리키는 정당한 상태 변수일 수 있다(실측:
+                    // POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). 그 밖의
+                    // 문자열은 지어낸 오류 어휘다(실측 17단계: N'B120'·
+                    // N'BATCH-LOCK-001' 등). allSteps가 null이면(재료 없음) 자기
+                    // 코드만 예외로 둔다 - 재료가 없다는 사실을 결함 없음으로
+                    // 바꾸지 않는다.
+                    //
+                    // "컴파일되지 않습니다"라고 쓰지 않는다 - N'B120'은 컴파일된다.
+                    // 거짓 진술은 이 저장소가 두 라운드를 들여 걷어낸 것이다.
+                    var literal = TryReadStringLiteral(raw);
+                    if (literal != null)
                     {
+                        var isKnownStepCode = allSteps != null
+                            ? allSteps.Any(s => string.Equals(s.Code, literal, StringComparison.OrdinalIgnoreCase))
+                            : string.Equals(literal, step.Code, StringComparison.OrdinalIgnoreCase);
+
+                        if (isKnownStepCode)
+                        {
+                            continue;
+                        }
+
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 상태 변수에 문자열 코드 '{literal}'을 대입합니다. " +
+                            $"레거시 출신이 없는 단계는 예약 블록({blockStart}부터 " +
+                            $"{ControlStepErrorCodes.BlockSize}개)의 음수 정수를 씁니다 - " +
+                            $"이 Job의 단계 코드를 저널에 쓰는 것만 문자열로 둡니다.");
                         continue;
                     }
 
@@ -6218,6 +6261,15 @@ namespace ReSet.Core.Services
                     {
                         continue;
                     }
+
+                    // 여기까지 남았다는 것은 NULL도, 문자열 리터럴도, 변수·CASE·함수
+                    // 호출도 아닌 맨값(주로 따옴표 없는 숫자 토큰)이라는 뜻이다. 이 값을
+                    // 정수 축(파싱 실패·블록 밖)으로 판정하려면 이 변수가 이 펜스에서
+                    // INT로 선언된 적이 있어야 한다 - 그렇지 않으면(NVARCHAR 등) 실제
+                    // 타입을 모르는 채로 "정수가 아니라 컴파일 안 된다"거나 "블록
+                    // 밖"이라고 단정할 수 없다(예: NVARCHAR 변수에 42를 SET하면 SQL이
+                    // 문자열 "42"로 암묵 변환할 뿐이라 이 축의 위반이 아니다).
+                    if (!intDeclaredVars.Contains(name)) continue;
 
                     if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
                     {
@@ -6298,12 +6350,50 @@ namespace ReSet.Core.Services
         // 상태 변수에 값을 대입하는 자리. DECLARE 초기값과 SET 갱신을 함께 본다.
         // 값 자리를 `[^\s;,)]+`로 잡는 이유: 숫자만 잡으면 B161 같은 비수치 토큰이
         // 매치되지 않아 그대로 통과한다 - 기존 CheckStepIdInitialValue가 놓친 이유다.
-        // `declare` 그룹은 이 대입이 `DECLARE ... INT =`에서 왔는지 표시한다 - SET은
-        // 타입을 못 가지므로, 같은 펜스에서 INT로 선언된 적 있는 변수인지는 이 그룹으로
-        // 판단하고 이름은 `name`으로 추적한다.
+        // `declare` 그룹은 이 대입이 DECLARE에서 왔는지, `type` 그룹은 무슨 타입으로
+        // 선언됐는지 표시한다.
+        //
+        // 타입 자리를 INT에서 `\w+`로 넓힌 이유: `DECLARE @v_currentStepCode
+        // NVARCHAR(10) = N'B120'`이 INT만 볼 때는 아예 매치되지 않아, 문자열 코드가
+        // 검사에 도달조차 못 했다(실측 17단계). 이름 패턴은 넓히지 않는다 - 넓히면
+        // 메시지 변수 88건·ERROR_NUMBER() 계열 42건이 딸려 온다.
         private static readonly Regex ControlCodeAssignmentPattern = new(
-            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+INT\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)\s*(?<value>[^\s;,)]+)",
+            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+(?<type>\w+)\s*(?:\([^)]*\))?\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)\s*(?<value>[^\s;,)]+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// 정수 타입인가. 상태 코드로 쓸 수 있는 타입을 가린다.
+        ///
+        /// 비정수라고 곧바로 위반은 아니다 - 실측에서 `@v_stepStartedAtUtc DATETIME2`와
+        /// `@v_isStepCompleted BIT`가 상태 변수 이름 패턴에 걸렸지만 코드가 아니었다.
+        /// 위반 여부는 타입이 아니라 대입되는 값이 정한다.
+        /// </summary>
+        private static bool IsIntegerType(string? type) =>
+            type != null &&
+            (type.Equals("int", StringComparison.OrdinalIgnoreCase) ||
+             type.Equals("bigint", StringComparison.OrdinalIgnoreCase) ||
+             type.Equals("smallint", StringComparison.OrdinalIgnoreCase) ||
+             type.Equals("tinyint", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// `'...'` 또는 `N'...'` 형태이면 따옴표 안 내용을, 아니면 null.
+        /// 값은 원문에서 읽었으므로 리터럴 내용이 살아 있다.
+        /// </summary>
+        private static string? TryReadStringLiteral(string raw)
+        {
+            if (raw.Length >= 2 && raw[0] == '\'' && raw[^1] == '\'')
+            {
+                return raw[1..^1];
+            }
+
+            if (raw.Length >= 3 && (raw[0] == 'N' || raw[0] == 'n') &&
+                raw[1] == '\'' && raw[^1] == '\'')
+            {
+                return raw[2..^1];
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.

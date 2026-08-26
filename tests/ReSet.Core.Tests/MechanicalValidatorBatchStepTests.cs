@@ -2341,9 +2341,16 @@ SELECT 1 FROM dbo.TSettleMst;
         public void ValidateBatchStep_ShouldNotApplyTheBandRuleToAVariableNeverDeclaredAsInt()
         {
             // 문자열/NULL 스킵과는 별개로, 같은 펜스에서 INT로 선언된 적이 없는
-            // 변수의 SET은 값이 (따옴표 없는) 숫자처럼 보여도 이 검사의 대상이
-            // 아니다 - 그 변수가 실제로 INT인지 모르기 때문이다. 이 테스트는
-            // INT 선언 게이트가 무력화되면(따옴표·NULL 스킵과 무관하게) 실패한다.
+            // 변수의 SET은 값이 (따옴표 없는) 숫자처럼 보여도 정수 축(파싱 실패·
+            // 블록 밖)으로 판정하지 않는다 - 그 변수가 실제로 INT인지 모르기
+            // 때문이다(예: NVARCHAR 변수에 42를 SET하면 SQL이 문자열 "42"로 암묵
+            // 변환할 뿐이다). 이 테스트는 INT 선언 게이트가 무력화되면(따옴표·NULL
+            // 스킵과 무관하게) 실패한다.
+            //
+            // [Task 2] DECLARE 초기값은 자기 코드(N'S03')로 둔다 - Task 2 이후
+            // `NVARCHAR(10) = N'B120'` 자체가 이 검사의 별개 축(문자열 코드 축)에서
+            // 정당하게 발화하므로, 자기 코드가 아닌 리터럴을 쓰면 이 테스트가
+            // 검증하려는 "정수 축 게이트"와 무관한 이유로 실패한다.
             var step = new BatchStepPlan(
                 "S03", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
                 new string[0], false, new string[0]);
@@ -2351,7 +2358,7 @@ SELECT 1 FROM dbo.TSettleMst;
             var markdown = @"### S03 통합 검증
 
 ```sql
-DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+DECLARE @v_currentStepCode NVARCHAR(10) = N'S03';
 SELECT 1 FROM dbo.TSettleMst;
 SET @v_currentStepCode = 42;
 ```
@@ -2628,6 +2635,218 @@ SELECT 1;
                 });
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("'dbo.T2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAStringErrorCodeInAControlStep()
+        {
+            // 실측(POQSettleBatch1/S03, POQSettleProc13 등 17단계): 레거시 출신이 없는
+            // 단계가 N'B120'·N'BATCH-LOCK-001' 같은 문자열 코드를 쓴다. B1xx를 INT 축에서
+            // 몰아낸 뒤에도 문자열 자리에는 지어낸 어휘가 그대로 남아 있었다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = @"### S03 입력 기준시점 고정
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B120"));
+            // 이 값은 컴파일된다. 거짓 진술을 하면 안 된다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일되지 않습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptAStepIdentifierStringInAControlStep()
+        {
+            // 실측 12단계: `DECLARE @v_stepCode nvarchar(10) = N'S01'`은 정당하다.
+            // BatchControlContract가 batch.BatchStepJournal.StepCode를 nvarchar(10)으로
+            // 규정하므로, 자기 신원을 저널에 쓰려면 문자열이어야 한다. 이것을 위반으로
+            // 잡으면 제어 계약을 어기라고 요구하는 셈이다. allSteps를 넘기지 않으므로
+            // (null) 자기 코드만 예외로 두는 경로를 탄다.
+            var step = new BatchStepPlan(
+                "S01", "실행 등록", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9010" }, false, new string[0]);
+
+            var markdown = @"### S01 실행 등록
+
+```sql
+DECLARE @v_stepCode nvarchar(10) = N'S01';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9010
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("S01'") || e.Contains("문자열 코드"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAnotherStepsIdentifierWhenAllStepsIsNull()
+        {
+            // allSteps가 없으면(재료 없음) 종전대로 자기 코드만 예외다 - 재료가 없다는
+            // 사실을 결함 없음으로 바꾸지 않는다. Validate 헬퍼는 allSteps를 넘기지
+            // 않으므로 이 단계 목록에 S02가 실재하더라도 이 호출에서는 알 길이 없고,
+            // 자기 코드가 아닌 문자열은 여전히 발화해야 한다.
+            var step = new BatchStepPlan(
+                "S01", "실행 등록", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9010" }, false, new string[0]);
+
+            var markdown = @"### S01 실행 등록
+
+```sql
+DECLARE @v_stepCode nvarchar(10) = N'S02';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9010
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("S02"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAnotherStepsIdentifier()
+        {
+            // 예외는 "이 Job의 단계 목록에 있는 코드"에 걸린다. 목록에 없는 단계
+            // (N'S99')는 이 Job에 실재하지 않는 신원이므로 예외 없이 발화해야 한다 -
+            // 예외를 "단계 코드 형태이면"으로 넓히면 이 없는 단계까지 통과한다.
+            var s01 = new BatchStepPlan(
+                "S01", "실행 등록", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9010" }, false, new string[0]);
+            var s02 = new BatchStepPlan(
+                "S02", "선행 확인", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9020" }, false, new string[0]);
+
+            var markdown = @"### S01 실행 등록
+
+```sql
+DECLARE @v_stepCode nvarchar(10) = N'S99';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9010
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s01, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s01, s02 });
+
+            Assert.Contains(result.Errors, e => e.Contains("S99"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptAnotherKnownStepsIdentifier()
+        {
+            // 실측(POQSettleProc16/S02): `@v_firstIncompleteStepCode`는 "첫 미완료
+            // 단계의 코드"를 담는 정당한 변수이고 값은 다른 단계의 코드다. 리터럴이
+            // 이 Job의 단계 목록에 있는 코드와 일치하면 침묵해야 한다 - 자기 코드로만
+            // 좁히면 이 정당한 용법이 오탐이 된다.
+            var s01 = new BatchStepPlan(
+                "S01", "실행 등록", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9010" }, false, new string[0]);
+            var s02 = new BatchStepPlan(
+                "S02", "선행 확인", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9020" }, false, new string[0]);
+
+            var markdown = @"### S01 실행 등록
+
+```sql
+DECLARE @v_firstIncompleteStepCode nvarchar(10) = N'S02';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9010
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s01, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s01, s02 });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotFlagATimestampOrFlagStateVariable()
+        {
+            // 실측 2건: `@v_stepStartedAtUtc DATETIME2(3) = SYSUTCDATETIME()`와
+            // `@v_isStepCompleted BIT = 0`. 이름은 상태 변수 패턴에 걸리지만 코드가 아니다.
+            // 규칙이 "타입이 비INT면 위반"이었다면 이 둘이 걸렸을 것이다 - 값으로 가르는
+            // 이유가 이것이다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = @"### S03 입력 기준시점 고정
+
+```sql
+DECLARE @v_stepStartedAtUtc DATETIME2(3) = SYSUTCDATETIME();
+DECLARE @v_isStepCompleted BIT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillBeSilentOnNonLiteralValues()
+        {
+            // 오탐 두 라운드를 들여 걷어낸 침묵이다. 이번 변경이 되살리면 회귀다.
+            var step = new BatchStepPlan(
+                "S22", "정리", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9220" }, false, new string[0]);
+
+            var markdown = @"### S22 정리
+
+```sql
+DECLARE @v_currentStepId INT = NULL;
+SET @v_currentStepId = @LegacyCode;
+SET @v_currentStepId = CASE WHEN 1 = 1 THEN -9221 ELSE -9222 END;
+SET @v_currentStepId = ERROR_NUMBER();
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9220
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일되지 않습니다"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotApplyTheStringRuleToAStepWithALegacyOrigin()
+        {
+            // 레거시 출신이 있으면 원본 규약을 따른다. 이 검사의 관할이 아니다.
+            var step = new BatchStepPlan(
+                "S05", "원장 생성", new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                new[] { "dbo.TSettleMst" }, new[] { "-9" }, false, new string[0]);
+
+            var markdown = @"### S05 원장 생성
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
         }
     }
 }
