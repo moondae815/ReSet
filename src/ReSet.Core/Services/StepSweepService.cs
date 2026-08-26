@@ -16,6 +16,14 @@ namespace ReSet.Core.Services
     public static class StepSweepService
     {
         /// <summary>
+        /// SweepCommand가 접두사 제거 규칙을 다시 구현하지 않게 하는 창구.
+        /// MechanicalValidator.BareObjectName이 internal이라 CLI에서 직접 못 부른다.
+        /// 규칙이 두 곳에 생기면 조회가 미묘하게 어긋난다.
+        /// </summary>
+        public static string BareProcedureName(string qualifiedName) =>
+            MechanicalValidator.BareObjectName(qualifiedName);
+
+        /// <summary>
         /// 원본 DDL에서 캐시 17 이후의 코드→서수 사전을 만든다.
         ///
         /// [왜 표로 렌더링해서 리더에 먹이는가] ExtractErrorCodes의 결과를 직접 사전으로

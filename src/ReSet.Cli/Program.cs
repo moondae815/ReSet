@@ -85,6 +85,10 @@ namespace ReSet.Cli
                 {
                     cliArgs.CoverageMapTarget = args[++i];
                 }
+                else if (arg.Equals("--sweep", StringComparison.OrdinalIgnoreCase))
+                {
+                    cliArgs.RunSweep = true;
+                }
             }
 
             return cliArgs;
@@ -166,6 +170,24 @@ namespace ReSet.Cli
                 }
 
                 AnsiConsole.MarkupLine($"[green]커버리지 맵 생성 완료:[/] {Markup.Escape(written)}");
+                return;
+            }
+
+            // 스윕 모드 - 커버리지 맵과 같은 이유로 배치 가드보다 앞에 둔다: DB·AI 없이
+            // output/ 산출물만 읽는 실행이 CLI provider 배치 가드에 걸려서는 안 된다.
+            if (cliArgs.RunSweep)
+            {
+                var written = SweepCommand.Run(outputDir, Directory.GetCurrentDirectory());
+                if (written == null)
+                {
+                    AnsiConsole.MarkupLine("[red]스윕할 대상을 찾지 못했습니다.[/]");
+                    // 커버리지 맵 분기와 같은 규약이다 - 종료 코드 0으로 끝나면
+                    // 아무것도 만들지 않았는데도 파이프라인이 초록으로 통과한다.
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                AnsiConsole.MarkupLine($"[green]스윕 보고서: {Markup.Escape(written)}[/]");
                 return;
             }
 
