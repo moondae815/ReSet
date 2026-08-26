@@ -6039,6 +6039,29 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
+                    // [픽스 라운드 2] 이 검사가 판정할 수 있는 재료는 컴파일 시점에
+                    // 고정된 리터럴뿐이다 - 값이 실행 시점에 정해지면 그 값이 예약
+                    // 블록 안인지 알 방법이 없고, "컴파일되지 않는다"는 주장은 명백히
+                    // 거짓이 된다. 귀속할 수 없으면 침묵한다는 이 저장소의 기존
+                    // 원칙과 같다. 세 형태를 뺀다:
+                    //   - `@`로 시작 - 변수 참조(`@LegacyCode`) 또는 시스템 변수
+                    //     (`@@ERROR`). 실측(POQSettleProc6/S22):
+                    //     `SET @v_currentStepId = @LegacyCode;`는 `SET @a = @b`
+                    //     그대로라 컴파일된다 - `@LegacyCode`는 B161과 달리 선언된
+                    //     변수를 가리키는 유효한 식별자다. "숫자가 아닌 토큰"이라는
+                    //     점은 B161과 같지만, B161은 아무것도 가리키지 않는 미해석
+                    //     식별자라 컴파일이 안 되고 `@LegacyCode`는 선언된 변수를
+                    //     가리켜 컴파일된다 - 이 차이가 두 토큰을 가른다.
+                    //   - `CASE`로 시작 - `CASE WHEN ... THEN -9221 ELSE -9222 END`
+                    //     처럼 분기마다 다른 리터럴을 낼 수 있는 식이다.
+                    //   - `(`를 포함 - `ERROR_NUMBER()`처럼 함수 호출 형태다.
+                    if (raw.StartsWith("@", StringComparison.Ordinal) ||
+                        raw.StartsWith("CASE", StringComparison.OrdinalIgnoreCase) ||
+                        raw.Contains('('))
+                    {
+                        continue;
+                    }
+
                     if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
                     {
                         result.Errors.Add(

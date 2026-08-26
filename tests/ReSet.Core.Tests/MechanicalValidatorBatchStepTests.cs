@@ -2361,5 +2361,76 @@ SET @v_currentStepCode = 42;
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAVariableReferenceControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleProc6/S22): `SET @v_currentStepId = @LegacyCode;`.
+            // `@LegacyCode`는 선언된 변수를 가리키는 유효한 식별자다 - `SET @a = @b`는
+            // 컴파일된다. B161과 달리 이 값은 실행 시점에 정해지므로 이 검사가
+            // 리터럴로 판정할 수 없다 - 침묵해야 한다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = @LegacyCode;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimACaseExpressionControlCodeDoesNotCompile()
+        {
+            // `CASE WHEN ... THEN -9221 ELSE -9222 END`은 실행 시점에 갈리는 식이다 -
+            // 값 자리 첫 토큰 `CASE`만으로는 이 검사가 리터럴을 판정할 수 없다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = CASE WHEN @x = 1 THEN -9221 ELSE -9222 END;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAFunctionCallControlCodeDoesNotCompile()
+        {
+            // `ERROR_NUMBER()`, `@@ERROR` 같은 함수 호출·시스템 변수도 실행 시점
+            // 값이다 - 리터럴이 아니므로 이 검사가 판정할 수 없다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = ERROR_NUMBER();
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
     }
 }
