@@ -783,4 +783,65 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Contains("UseState", statement.PredicateColumns);
         Assert.Contains("PLTID", statement.JoinColumns);
     }
+    // ─────────────────────────────────────────────────────────────────────
+    // 하위 범위의 JOIN ON — 최상위와의 비대칭을 없앤다.
+    //
+    // [왜 필요한가 - 2026-08-26 코퍼스 판정 15건]
+    // 최상위 대조는 `PredicateColumns ∪ JoinColumns`다(명세서 술어 칸이 "조인 결합
+    // 포함"이므로). 그런데 하위 범위는 WHERE만 봐서, CTE 안 `ON A.CLIENTID = B.CLIENTID`의
+    // 조인 키가 이전으로 인정되지 않았다. 명세서는 그 컬럼을 술어 칸에 적으므로
+    // 검사 B가 "없어졌다"고 오인했다 - 증가분 37건 중 15건이 이 축이다
+    // (docs/known-defects.md (5-3-3) 부류 1).
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SubordinateJoinOn_ColumnsAreCollected()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH ClientRateSource AS (\n" +
+            "  SELECT A.CLIENTID, B.Rate FROM dbo.TClient AS A\n" +
+            "  INNER JOIN dbo.TRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            "  WHERE A.USESTATE = 0\n" +
+            ")\n" +
+            "UPDATE Y SET Y.CLCOMM = C.Rate\n" +
+            "FROM dbo.TSettleMst AS Y INNER JOIN ClientRateSource AS C ON C.CLIENTID = Y.CLIENTID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);   // 종전에도 잡혔다
+        Assert.Contains("CLIENTID", statement.SubordinatePredicateColumns);   // CTE 안 ON - 이번에 추가
+    }
+
+    [Fact]
+    public void SubordinateJoinOn_DoesNotReachIntoDeeperDerivedTable_AtThisLevel()
+    {
+        // ColumnCollector가 QueryDerivedTable 하강을 막으므로 이 층에서는 그 층의 ON만
+        // 모은다. 더 깊은 층은 SubordinatePredicateCollector가 그 QuerySpecification을
+        // 따로 방문할 때 잡는다 - 중복도 누락도 없다는 것을 못으로 박는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Outer2 AS (\n" +
+            "  SELECT X.PLTID FROM (\n" +
+            "    SELECT D.PLTID FROM dbo.TDeep AS D INNER JOIN dbo.TOther AS E ON D.DeepLeft = E.DeepRight\n" +
+            "  ) AS X INNER JOIN dbo.TMid AS M ON X.PLTID = M.PLTID\n" +
+            ")\n" +
+            "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y INNER JOIN Outer2 AS O ON O.PLTID = Y.PLTID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("PLTID", statement.SubordinatePredicateColumns);    // CTE 층의 ON
+        Assert.Contains("DeepLeft", statement.SubordinatePredicateColumns); // 더 깊은 층도 결국 잡힌다
+
+        // [이 단언이 하강 차단을 실제로 잰다]
+        // 위 둘만으로는 부족하다 - ColumnCollector가 QueryDerivedTable 하강을 막지
+        // **않았더라도** 둘 다 통과한다. 차단이 관측되는 자리는 **중복**이다.
+        // 바깥 층에서 하강했다면 안쪽 ON의 컬럼을 거기서 한 번, 안쪽
+        // QuerySpecification을 따로 방문할 때 또 한 번 모아 두 번 들어온다.
+        //
+        // [왜 조인 양변의 이름을 다르게 두는가 - 이 테스트를 처음 쓸 때 걸린 함정]
+        // `ON D.Key = E.Key`처럼 양변 이름이 같으면 한 번의 수집만으로도 컬럼 참조가
+        // **둘** 잡힌다(ColumnCollector는 이름을 모은다). 그러면 중복 수가 하강 여부를
+        // 가리지 못한다. 양변을 DeepLeft·DeepRight로 갈라야 판별자가 된다.
+        // (SubordinatePredicateColumns는 중복 제거를 하지 않는다 - 별개 미결 항목.)
+        Assert.Equal(1, statement.SubordinatePredicateColumns
+            .Count(c => string.Equals(c, "DeepLeft", StringComparison.OrdinalIgnoreCase)));
+    }
+
 }

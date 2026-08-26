@@ -1942,7 +1942,42 @@
   명세서 전건 재생성)를 네 원인을 고치기 **전에** 진행하면, 코퍼스에 거짓 오류
   33건이 한꺼번에 켜진다. 원인 수정을 로드맵 4 앞에 놓아야 한다.
 
-  **부류 1 (15건) — `SubordinatePredicateCollector`가 하위 `ON`을 안 모은다.**
+  **부류 1 (15건) — `SubordinatePredicateCollector`가 하위 `ON`을 안 모았다. 2026-08-26 해소.**
+  아래 진단대로 `Visit(QuerySpecification)`이 `node.FromClause`도 읽게 고쳤다(WHERE만
+  읽던 것에 한 줄 추가). 최상위 대조가 술어와 조인을 합집합으로 보는 것과 대칭을 맞춘
+  것이다. `ColumnCollector`가 파생 테이블·스칼라 하위질의 하강을 막으므로 이 층에서는
+  그 층의 `ON`만 모으고, 더 깊은 층은 같은 방문자가 그 `QuerySpecification`을 따로
+  만날 때 잡는다.
+  - **코퍼스 실측(통제 `9a39b51` 대비).** 발화 86 → **62건**(검사 B 61 → 37, 검사 C 25 불변,
+    검사 A·D·E·미분류 불변). 사라진 27건 = 이 부류의 INSERT 18건 + 같은 모양의 기존
+    UPDATE 9건. 그중 3건은 조인 키만 이전으로 인정되고 나머지 컬럼이 남아 좁혀진 채
+    다시 나타난다(`INSERT 4 | ClientID, PGName, MallID, UseState, ContractCancelYMD`
+    → `UseState, ContractCancelYMD`) — 남은 것은 **부류 2**(별칭 은닉)이고 원인이 달라
+    이번에 안 건드렸다. `ReportMissing`이 컬럼 단위로 거르는 설계가 그대로 드러난 것이다.
+  - **덤으로 닫힌 UPDATE 9건**은 INSERT 재편입 이전부터 있던 발화다. 두 레거시 SP
+    (`UP_UTIL_SETTLE_EXCEPTION_PROC` 3건 · `UP_UTIL_SETTLE_COMM_UPD` 6건)에서 실물로
+    같은 모양을 확인했다 — `POQSettleProc1/S04`의 CTE **`CardSource`** 안
+    `INNER JOIN PLCardDB.dbo.TPLCardTxMst AS P ON P.PLTID = S.PLTID`(S04.md:445),
+    `POQSettleProc1/S05`의 같은 `WITH` 체인 **두 번째 CTE `FinalCancel`** 안
+    `INNER JOIN EligiblePLTID AS E ON E.PLTID = S.PLTID`(S05.md:331-332). 둘 다
+    하위 범위의 **INNER** 조인이다.
+  - **서수 대응을 손으로 확인하지 않은 근거 — 그리고 그 한계.** 이 수정은 읽고 있는
+    문장의 하위 목록에만 더한다. 다만 `ReportMissing`의 `relocated`는
+    `group.SelectMany(a => a.Statement.SubordinatePredicateColumns)`로 **그 서수 그룹
+    전체**를 합치므로(청크 분할처럼 한 서수에 조각이 여럿 붙는 경우를 위한 기존 설계),
+    "그 문장 자신의 하위 범위에 있다"가 코드 수준에서 항상 참인 것은 아니다.
+    리뷰가 `ReportMissing`을 계측해 전수 스윕을 돌린 결과 **이전으로 침묵한 컬럼
+    163건 전부가 `groupSize=1`**이었다 — 이 코퍼스에서는 조각이 섞이지 않는다.
+    코드의 보장이 아니라 **이 세대 코퍼스의 실측**이다.
+  - **잔존 오탐 하나(부류 1 아님).** `POQSettleProc19/S11`의 `UPDATE 7 | PLTID`는
+    수정 후에도 발화한다 - 거기서 `PLTID`는 CTE의 `SELECT` 투영과 `GROUP BY`에만 있고
+    `WHERE`·`ON` 어디에도 없다. 이 수정이 투영을 이전으로 인정하지 않는다는 실측
+    증거이기도 하다(침묵이 과대하지 않다). 원인이 달라 이번 범위 밖이다.
+  - 회귀는 `StepSqlStatementReaderTests.SubordinateJoinOn_*` 둘과
+    `MechanicalValidatorTests.ValidateBatchStep_CheckB_SubordinateJoinKey_IsTreatedAsRelocated`가
+    잠근다. 셋 다 `node.FromClause?.Accept(inner)`를 지우면 죽는 것을 변이로 확인했다.
+
+  **[아래는 해소 전 진단 기록이다]**
   레거시 `dbo.UP_Util_PG_Client_CMRate_Ins`를 이식한 여덟 Job이 같은 관용구를
   쓴다 — 원본의 콤마 조인을 CTE의 `INNER JOIN … ON`으로 옮기고 `INSERT`의
   최상위 `FROM`은 그 CTE 하나만 남긴다(이 한 줄은 축자 인용이 아니라 모양
