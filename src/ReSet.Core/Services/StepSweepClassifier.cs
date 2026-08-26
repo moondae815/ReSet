@@ -37,5 +37,16 @@ namespace ReSet.Core.Services
 
             return SweepCheck.Unclassified;
         }
+
+        /// <summary>
+        /// 발화 하나를 판정표의 한 행으로 만든다.
+        ///
+        /// [태스크 3에서는 좌표 없이] 검사 B·C 좌표(Kind·Ordinal·Items) 추출은
+        /// 태스크 4가 채운다. 여기서는 자리만 만든다.
+        /// </summary>
+        public static SweepFinding Describe(
+            string jobName, string stepCode, SweepCheck check,
+            SweepCondition condition, string message) =>
+            new(jobName, stepCode, check, condition, message);
     }
 }

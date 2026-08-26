@@ -66,5 +66,118 @@ namespace ReSet.Core.Services
 
             return builder.ToString();
         }
+
+        /// <summary>
+        /// 코퍼스 전수를 훑어 검사 A~E의 발화를 조건 (A)·(B) 양쪽으로 모은다.
+        ///
+        /// [왜 두 조건을 함께 재는가] 고를 수 있으면 잘못 고를 수 있다. 실제로 한 번
+        /// 그랬다 - 조건 (B)를 재야 할 자리에서 (A)를 재고 "코퍼스가 변했다"고 보고한
+        /// 일이 있었다. 두 조건의 차이 자체가 캐시 17이 켜질 때의 변화량이라 어차피
+        /// 둘 다 필요하다.
+        /// </summary>
+        public static SweepReport Sweep(SweepInput input)
+        {
+            var validator = CreateValidator();
+            var findings = new List<SweepFinding>();
+            var measuredPairs = 0;
+            var measuredJobs = 0;
+
+            foreach (var job in input.Jobs)
+            {
+                var conditionColumns = SpecConditionColumnExtractor.Extract(job.Specs);
+                var factsAsIs = SpecStatementFactsExtractor.Extract(job.Specs);
+                var factsSimulated = InjectSimulatedCodes(factsAsIs, job);
+
+                var measuredInThisJob = false;
+
+                foreach (var step in job.Steps)
+                {
+                    // 목차가 선언했으나 실물이 없는 단계다. 빈 문자열을 넘기면
+                    // "섹션 내용이 비어있습니다"가 발화해 결손이 결함으로 둔갑한다.
+                    if (!job.StepMarkdownByCode.TryGetValue(step.Code, out var markdown)
+                        || string.IsNullOrWhiteSpace(markdown))
+                    {
+                        continue;
+                    }
+
+                    measuredPairs++;
+                    measuredInThisJob = true;
+
+                    Collect(SweepCondition.AsIs, factsAsIs);
+                    Collect(SweepCondition.SimulatedCache17, factsSimulated);
+
+                    void Collect(
+                        SweepCondition condition,
+                        IReadOnlyDictionary<string, SpecStatementFacts> facts)
+                    {
+                        // 오케스트레이터(VerificationPipelineOrchestrator.cs:3238)의 호출을
+                        // 그대로 본뜬다. 갈라지면 파이프라인이 실제로 하지 않는 판정을 재게 된다.
+                        // stepInterfaces·runRowOwnedTables는 DB 메타데이터가 필요해 로컬에서
+                        // 만들 수 없다. A~E 어느 검사도 그 둘을 읽지 않는다 -
+                        // CheckStepInterface(:600)·CheckFirstStepRowCreation(:1518)만 쓴다.
+                        var result = validator.ValidateBatchStep(
+                            markdown, step,
+                            Array.Empty<string>(),
+                            conditionColumns,
+                            stepInterfaces: null,
+                            runRowOwnedTables: null,
+                            statementFactsByProcedure: facts,
+                            allSteps: job.Steps);
+
+                        foreach (var message in result.Errors)
+                        {
+                            var check = StepSweepClassifier.Classify(message);
+                            findings.Add(
+                                StepSweepClassifier.Describe(
+                                    job.JobName, step.Code, check, condition, message));
+                        }
+                    }
+                }
+
+                if (measuredInThisJob) measuredJobs++;
+            }
+
+            return new SweepReport(
+                findings,
+                ComputeIndicators(input),
+                new HarnessGaps(
+                    input.PlanParseFailedJobs,
+                    input.MissingStepFiles,
+                    measuredPairs,
+                    measuredJobs,
+                    StepInterfacesWereNull: true,
+                    RunRowOwnedTablesWereNull: true,
+                    KnownTableNamesWereEmpty: true));
+        }
+
+        /// <summary>SP별 재료에 조건 (B)의 코드 사전을 갈아 끼운다. 제품 코드는 안 바뀐다 - init 속성이다.</summary>
+        private static IReadOnlyDictionary<string, SpecStatementFacts> InjectSimulatedCodes(
+            IReadOnlyDictionary<string, SpecStatementFacts> facts, SweepJob job)
+        {
+            var injected = new Dictionary<string, SpecStatementFacts>(
+                facts, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (procedure, ddl) in job.DdlByProcedure)
+            {
+                var key = MechanicalValidator.BareObjectName(procedure);
+                if (!injected.TryGetValue(key, out var existing)) continue;
+
+                job.DateParameterByProcedure.TryGetValue(procedure, out var dateParameter);
+                injected[key] = existing with
+                {
+                    ErrorCodeToOrdinal = BuildSimulatedErrorCodeMap(ddl, dateParameter ?? string.Empty),
+                };
+            }
+
+            return injected;
+        }
+
+        /// <summary>
+        /// 스윕에 필요한 검증기를 만든다. 생성자의 유일한 매개변수(useMermaidCli)는
+        /// 다이어그램 검증에만 쓰이고 A~E 어느 검사도 건드리지 않으므로 기본값을 쓴다.
+        /// </summary>
+        private static MechanicalValidator CreateValidator() => new();
+
+        private static SweepIndicators ComputeIndicators(SweepInput input) => new(0, 0, 0);
     }
 }
