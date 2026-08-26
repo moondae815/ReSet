@@ -87,6 +87,74 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ShouldPassWhenTheTableAppearsInAtLeastOneSharingStep()
+        {
+            // 계획서가 준 네 테스트는 codesByProcedure만 넘긴다. tablesByProcedure를
+            // 아예 안 보고 스킵해도 그 네 테스트는 통과한다 - 테이블 축을 단독으로
+            // 세워 확인한다.
+            var tables = new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_X"] = new(new[] { "dbo.T2" }, new string[0])
+            };
+
+            var sections = new Dictionary<string, string>
+            {
+                ["S10"] = "INSERT INTO dbo.T2 VALUES (1);",
+                ["S11"] = "SET @v = -2;"
+            };
+
+            var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
+                sections, new[] { S10, S11 }, null, tables);
+
+            Assert.Empty(defects);
+        }
+
+        [Fact]
+        public void ShouldFlagEverySharingStepWhenATableAppearsNowhere()
+        {
+            var tables = new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_X"] = new(new[] { "dbo.T2" }, new string[0])
+            };
+
+            var sections = new Dictionary<string, string>
+            {
+                ["S10"] = "SET @v = -1;",
+                ["S11"] = "SET @v = -2;"
+            };
+
+            var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
+                sections, new[] { S10, S11 }, null, tables);
+
+            Assert.Equal(2, defects.Count);
+            Assert.Contains("T2", defects["S10"].Reason);
+            Assert.Contains("T2", defects["S11"].Reason);
+        }
+
+        [Fact]
+        public void WithNullSections_ShouldReportNothingAndNotThrow()
+        {
+            // sectionsByStepCode·allSteps는 시그니처가 non-nullable로 선언하지만, 호출부
+            // 결함으로 null이 들어올 수 있다 - 조기 반환이 없으면 아래 SelectMany·
+            // TryGetValue가 그대로 NullReferenceException을 던진다.
+            var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
+                null!, new[] { S10, S11 }, Codes, null);
+
+            Assert.Empty(defects);
+        }
+
+        [Fact]
+        public void WithNullAllSteps_ShouldReportNothingAndNotThrow()
+        {
+            var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
+                new Dictionary<string, string> { ["S10"] = "SET @v = -1;" }, null!, Codes, null);
+
+            Assert.Empty(defects);
+        }
+
+        [Fact]
         public void WithoutMaterial_ShouldReportNothing()
         {
             var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
