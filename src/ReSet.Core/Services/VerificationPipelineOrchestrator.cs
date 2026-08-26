@@ -3251,6 +3251,24 @@ namespace ReSet.Core.Services
         /// 말고 다른 병합 지점(예: MechanicalValidator 내부의 같은 문서 검사 안에서의
         /// 병합, §617 이하)에는 영향이 없다 - 그곳은 항상 Kind가 QualityFloor끼리라
         /// 이 판단 자체가 필요 없다.
+        ///
+        /// [최종 리뷰 재검증 — 파급은 배너만이 아니다] 이 Kind는
+        /// <see cref="VerificationCoverage.From"/>이 "검증됨" 단계 수를 세는
+        /// 유일한 재료이기도 하다(`StepsVerified`가 Unverifiable·GenerationFailed만
+        /// 빼고 QualityFloor는 검증됨에 포함시킨다 - 그 클래스 docstring 참고).
+        /// GenerationFailed+QualityFloor 조합에서 GenerationFailed를 지키는
+        /// 판단은 배너 순서뿐 아니라 이 집계에도 영향을 준다: 예전의 무조건
+        /// 덮어쓰기 버그 아래서는 Kind가 QualityFloor로 강등돼 본문이 아예
+        /// 생성된 적 없는 단계가 `StepsVerified`에 포함되고 `HasUnverifiedSteps`가
+        /// 그 단계를 놓쳤다 - "단계 검증: N/N" 아래에 "이 단계는 생성에
+        /// 실패했습니다"라고 적힌 섹션이 숨는, `StepDefectKind`를 애초에 가르게
+        /// 만든 바로 그 사고(위 클래스 docstring, `StepDefect.cs`의 `GenerationFailed`
+        /// 주석)가 되살아난다. 지금 판단은 그 사고를 막는다 - 문서 단위 검사가
+        /// 같은 코드에 또 결함을 얹었다는 사실이 "본문이 생성됐다"는 사실을
+        /// 만들어 내지 않기 때문이다. `VerificationCoverageTests.
+        /// MergeFloorViolation_GenerationFailedPlusQualityFloor_StaysExcludedFromVerifiedCount`가
+        /// 이 결합(이 메서드의 반환값 → `VerificationCoverage.From`의 집계)을
+        /// 리플렉션으로 직접 고정한다.
         /// </summary>
         private static StepDefect MergeFloorViolation(StepDefect prior, StepDefect defect)
         {

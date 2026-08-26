@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
 using Xunit;
@@ -219,6 +220,63 @@ namespace ReSet.Core.Tests
                 Steps(10), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
 
             Assert.Equal(8, coverage.StepsVerified);
+        }
+
+        /// <summary>
+        /// <see cref="VerificationPipelineOrchestrator"/>의 private static
+        /// <c>MergeFloorViolation</c>을 리플렉션으로 직접 호출한다. 이 메서드는
+        /// 클래스 밖에서 볼 수 없지만, 그 반환값의 Kind가 바로 이 클래스
+        /// (<see cref="VerificationCoverage"/>)가 "검증됨"을 세는 유일한 재료다 -
+        /// 그 결합을 실물 코드로 고정하지 않으면 두 파일이 각자 옳아도 합쳐서
+        /// 틀릴 수 있다.
+        /// </summary>
+        private static StepDefect InvokeMergeFloorViolation(StepDefect prior, StepDefect defect)
+        {
+            var method = typeof(VerificationPipelineOrchestrator).GetMethod(
+                "MergeFloorViolation", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            return (StepDefect)method!.Invoke(null, new object[] { prior, defect })!;
+        }
+
+        /// <summary>
+        /// 최종 리뷰 재검증 항목 2 픽스: <c>MergeFloorViolation</c>의 심각도 기반
+        /// Kind 승격이 이 클래스의 "검증됨" 집계에 닿는 하류 파급을 고정한다.
+        ///
+        /// 시나리오: 한 단계의 본문 생성이 전부 실패해(<see
+        /// cref="StepDefectKind.GenerationFailed"/>) 재시도 예산을 다 썼는데,
+        /// 그 단계가 하필 분할 SP도 나눠 맡고 있어 문서 단위 검사
+        /// (<see cref="MechanicalValidator.ValidateSplitProcedureObligations"/>)가
+        /// 같은 코드에 <see cref="StepDefectKind.QualityFloor"/> 결함을 또
+        /// 얹는다. 예전의 무조건 덮어쓰기 버그 아래서는 이 대입이 QualityFloor로
+        /// 강등시켜 <see cref="VerificationCoverage.StepsVerified"/>가 이
+        /// 단계를 "검증됨"으로 잘못 셌다 - 본문이 아예 없는 단계인데도. 지금은
+        /// GenerationFailed가 더 심각해 유지되고, 그 결과 이 단계는 계속
+        /// "검증 안 됨"으로 남는다 - 문서 단위 검사가 같은 코드를 걸었다는
+        /// 사실이 "본문이 생성됐다"는 사실을 만들어 내지 않기 때문이다.
+        /// </summary>
+        [Fact]
+        public void MergeFloorViolation_GenerationFailedPlusQualityFloor_StaysExcludedFromVerifiedCount()
+        {
+            var prior = new StepDefect(StepDefectKind.GenerationFailed, "S01 (생성 실패)");
+            var documentLevelDefect = new StepDefect(StepDefectKind.QualityFloor,
+                "UP_X를 나눠 맡은 단계(S01, S02)의 본문을 모두 합쳐도 -9가 등장하지 않습니다.");
+
+            var merged = InvokeMergeFloorViolation(prior, documentLevelDefect);
+
+            // Kind는 더 심각한 GenerationFailed를 유지해야 한다 - QualityFloor로
+            // 강등되면 아래 커버리지 단언이 깨진다.
+            Assert.Equal(StepDefectKind.GenerationFailed, merged.Kind);
+            Assert.Contains("생성 실패", merged.Reason);
+            Assert.Contains("UP_X", merged.Reason);
+
+            var violations = new Dictionary<string, StepDefect> { ["S01"] = merged };
+            var coverage = VerificationCoverage.From(
+                Steps(1), violations, hasDocumentCodeGap: false, hasUncoveredProcedures: false);
+
+            // 본문이 생성된 적 없는 단계는 문서 단위 검사가 함께 걸었다는 이유로
+            // "검증됨"으로 세면 안 된다.
+            Assert.Equal(0, coverage.StepsVerified);
+            Assert.True(coverage.HasUnverifiedSteps);
         }
     }
 }
