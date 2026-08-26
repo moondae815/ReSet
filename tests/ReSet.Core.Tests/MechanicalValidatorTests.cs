@@ -8202,6 +8202,66 @@ END";
             };
         }
 
+        /// <summary>
+        /// DELETE 행 하나짜리 명세서 재료. 기존 FactsWithCode는 Kind를 "UPDATE"로
+        /// 못 박고 있어 어법 테스트에는 쓸 수 없다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithDeleteRow(
+            int ordinal, IReadOnlyList<string> predicateColumns)
+        {
+            var facts = new SpecStatementFacts(
+                new[]
+                {
+                    new SpecDmlRow("DELETE", ordinal, ordinal * 10, "TSettleMst",
+                        predicateColumns, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                },
+                Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>());
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
+            };
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_NonUpdateKind_OmitsUpdateGloss()
+        {
+            // "(갱신 N)"은 명세서의 UPDATE 갱신 절 표를 가리키는 말이다. DELETE·INSERT에는
+            // 그 표가 없다(명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건 - SpecSetTarget 문서).
+            var facts = FactsWithDeleteRow(3, new[] { "YMD" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- DELETE 3\n" +
+                "DELETE A FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.Contains("DELETE 3 문장에", error);
+            Assert.DoesNotContain("갱신 3", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_UpdateKind_KeepsUpdateGloss()
+        {
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.Contains("UPDATE 13(갱신 13) 문장에", error);
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // 하위 스코프 이전 — 원본이 최상위에 두었던 술어를 이행이 CTE·파생
         // 테이블·EXISTS로 옮긴다. 그 컬럼은 없어진 것이 아니라 옮겨간 것이므로

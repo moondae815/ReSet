@@ -6774,8 +6774,15 @@ namespace ReSet.Core.Services
                         .ToList();
                     if (missing.Count == 0) return;
 
+                    // "갱신 N"은 명세서의 UPDATE 갱신 절 표를 가리키는 말이다. INSERT·DELETE에는
+                    // 그 표가 없으므로(명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건 - SpecSetTarget
+                    // 문서 주석) 붙이지 않는다.
+                    var gloss = row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+                        ? $"(갱신 {row.Ordinal})"
+                        : string.Empty;
+
                     result.Errors.Add(
-                        $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장에 명세서가 확정한 " +
+                        $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}{gloss} 문장에 명세서가 확정한 " +
                         $"{label} {string.Join(", ", missing)}이(가) 없습니다. 명세서 DML 범위 표 " +
                         $"{row.Kind} {row.Ordinal} 행의 값은 `{string.Join(", ", expected)}`입니다 — " +
                         "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.");
@@ -6934,8 +6941,15 @@ namespace ReSet.Core.Services
 
                 if (extras.Count == 0) continue;
 
+                // "갱신 N"은 명세서의 UPDATE 갱신 절 표를 가리키는 말이다. INSERT·DELETE에는
+                // 그 표가 없으므로(명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건 - SpecSetTarget
+                // 문서 주석) 붙이지 않는다.
+                var gloss = row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+                    ? $"(갱신 {row.Ordinal})"
+                    : string.Empty;
+
                 result.Errors.Add(
-                    $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장이 명세서에 없는 " +
+                    $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}{gloss} 문장이 명세서에 없는 " +
                     $"술어 컬럼 {string.Join(", ", extras)}을(를) 씁니다. 명세서 DML 범위 표 " +
                     $"{row.Kind} {row.Ordinal} 행의 최상위 술어 컬럼은 " +
                     $"`{string.Join(", ", row.PredicateColumns)}`뿐입니다 — " +
