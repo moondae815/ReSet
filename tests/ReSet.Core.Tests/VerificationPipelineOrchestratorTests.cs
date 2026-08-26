@@ -5724,7 +5724,12 @@ SELECT 1;
             Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             IReadOnlyList<string> knownTableNames,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            // 기본값(null)은 종전 동작(빈 사전 - 분할 SP 귀속 축을 검증하지 않는
+            // 테스트들의 동작)을 그대로 유지한다. 문서 단위 병합(§FloorViolations
+            // Kind/사유 보존) 테스트만 실제 값을 넘긴다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
                 "GenerateBySplitAsync",
@@ -5741,13 +5746,9 @@ SELECT 1;
                 // 모두 카탈로그가 없던 이전 동작과 같아진다.
                 // brainstorming: 이 테스트들은 1/3을 돌지 않으므로 null이다. 골격
                 // 프롬프트가 절 자체를 싣지 않아 브레인스토밍이 없던 이전 동작과 같다.
-                //
-                // [분할 SP 귀속 배선] codesByProcedure·tablesByProcedure도 같은 이유로
-                // 빈 사전이다 - 이 테스트들은 분할 SP 귀속 축을 검증하지 않으므로
-                // 재료가 없다는 사실이 소프트 스킵을 유발해 이전 동작과 같아진다.
                 knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null,
-                new Dictionary<string, IReadOnlyList<string>>(),
-                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
+                codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
+                tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
                 cancellationToken
             })!;
 
@@ -5825,6 +5826,85 @@ SELECT 1;
             await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// 최종 리뷰 지적(항목 1): 단계 병합 루프(§floorViolations[stepResult.Code] = ...)가
+        /// 이미 얻은 StepDefect를 문서 단위 분할 SP 검사(<see cref="MechanicalValidator.ValidateSplitProcedureObligations"/>)의
+        /// 결과로 무조건 덮어써 단계 자신의 진단 사유를 지웠다.
+        ///
+        /// S01은 목차 자체가 부실해(TargetTables·ErrorCodes 둘 다 비어 있음) 자기
+        /// 하한 검사를 실행조차 못 해 Unverifiable로 확정된다. S01·S02는 같은 분할
+        /// SP(USP_Split)를 나눠 맡는데 그 SP가 요구하는 오류코드 -9가 둘의 본문을
+        /// 합쳐도 등장하지 않아, 문서 단위 검사가 QualityFloor 결함을 얹는다.
+        ///
+        /// 고쳐지기 전 코드는 S01의 Unverifiable 사유("TargetTables가 비어 있어...")를
+        /// 통째로 버리고 QualityFloor 사유만 남겼다. 이 테스트는 두 사유가 모두 살아
+        /// 있는지, 그리고 Kind가 더 심각한 쪽(QualityFloor - 실제로 확인된 결함이라
+        /// "검증 불가"보다 배너에서 위로 온다)으로 정해지는지를 고정한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBySplitAsync_SplitProcedureObligationDefect_MergesWithExistingStepFloorViolation()
+        {
+            const string sharedProcedureStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""분담 1"", ""LegacyProcedures"": [""USP_Split""], ""TargetTables"": [], ""ErrorCodes"": [] },
+    { ""Code"": ""S02"", ""Name"": ""분담 2"", ""LegacyProcedures"": [""USP_Split""], ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    // S01: 목차 자체가 비어 있어(TargetTables·ErrorCodes 없음) 무슨
+                    // 본문을 내든 자기 하한 검사가 Unverifiable로 즉시 확정된다.
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\n본문입니다.\n\n```sql\nSELECT 1;\n```" }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            var steps = BatchStepPlanParser.TryParse(sharedProcedureStepsJson);
+            Assert.NotNull(steps);
+            var specs = new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") };
+
+            // USP_Split이 요구하는 오류코드 -9는 S01·S02 어느 본문에도 없다 -
+            // 문서 단위 검사가 둘 다 지목한다.
+            var codesByProcedure = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["USP_Split"] = new[] { "-9" }
+            };
+
+            var result = await InvokeGenerateBySplitAsync(
+                orchestrator, "목차", steps!, specs, "C#", "Job_Test",
+                NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
+                Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
+                codesByProcedure: codesByProcedure);
+            Assert.NotNull(result);
+
+            var violations = GetFloorViolations(result!);
+            Assert.True(violations.ContainsKey("S01"));
+
+            var merged = violations["S01"];
+            // 두 사유가 모두 살아 있어야 한다 - 어느 한쪽도 통째로 지워지면 안 된다.
+            Assert.Contains("TargetTables", merged.Reason);
+            Assert.Contains("USP_Split", merged.Reason);
+            Assert.Contains("-9", merged.Reason);
+            // 실제로 확인된 결함(QualityFloor)이 "검증 불가"(Unverifiable)보다
+            // 배너 우선순위가 높다 - 병합 결과는 QualityFloor로 승격된다.
+            Assert.Equal(StepDefectKind.QualityFloor, merged.Kind);
         }
 
         /// <summary>

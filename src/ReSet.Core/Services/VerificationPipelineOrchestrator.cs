@@ -3196,15 +3196,18 @@ namespace ReSet.Core.Services
             // 분할된 SP의 의무는 단계가 아니라 문서가 진다. 단계 검사에서 뺀 것을
             // 여기서 합쳐 본다 - 여기가 sections와 steps를 함께 가진 유일한 지점이다.
             //
-            // 아래 대입은 이 단계가 위 루프에서 이미 다른 사유로 얻은 StepDefect를
-            // 무조건 덮어쓴다 - 두 발화를 합쳐 진단을 보존하지 않는다. 그래도 괜찮은
-            // 이유: Kind는 배너가 어느 절에 싣는지만 가르고(§2614 이하의 byKind 분류),
-            // 이 단계가 "결함 있음"이라는 사실 자체는 잃지 않는다 - 그저 표시되는
-            // 사유·분류가 문서 단위 검사의 것으로 바뀔 뿐이다.
+            // [최종 리뷰 픽스] 예전에는 이 대입이 위 루프에서 이미 다른 사유로 얻은
+            // StepDefect를 무조건 덮어썼다 - 그 사유가 배너·회차 파일에 남는 유일한
+            // 문구인데도. MechanicalValidator.ValidateSplitProcedureObligations 자신은
+            // 같은 코드가 두 분할 SP에 걸릴 때 `already with { Reason = ... }`로 이어
+            // 붙여 보존하는데(§617 이하), 그 대칭을 여기서는 지키지 않았다 - 아래
+            // MergeFloorViolation이 그 대칭을 맞춘다.
             foreach (var (code, defect) in _validator.ValidateSplitProcedureObligations(
                          sections, steps, codesByProcedure, tablesByProcedure))
             {
-                floorViolations[code] = defect;
+                floorViolations[code] = floorViolations.TryGetValue(code, out var prior)
+                    ? MergeFloorViolation(prior, defect)
+                    : defect;
             }
 
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
@@ -3220,6 +3223,56 @@ namespace ReSet.Core.Services
                 sections,
                 floorViolations);
         }
+
+        /// <summary>
+        /// 한 단계에 대해 이미 있던 StepDefect(prior)와 문서 단위 분할 SP 검사가 새로
+        /// 낸 StepDefect(defect)를 합친다. 사유는 항상 이어 붙인다 - 어느 쪽도 지우지
+        /// 않는다.
+        ///
+        /// [Kind는 왜 항상 defect를 따르지 않고 "더 심각한 쪽"을 고르는가]
+        /// 배너 조립부(§2586 이하 주석)가 이미 세 Kind의 심각도 순서를 정해 뒀다 -
+        /// 나중에 붙는 배너일수록 문서 위로 얹혀 먼저 읽히므로, 최종 순서(위→아래)는
+        /// GenerationFailed(생성 실패) → QualityFloor(하한 미달) → Unverifiable(검증
+        /// 불가)다. 이 메서드가 받는 defect는 <see cref="MechanicalValidator.ValidateSplitProcedureObligations"/>가
+        /// 낸 것이라 Kind가 항상 QualityFloor다.
+        ///
+        /// - prior가 Unverifiable(단계 자신은 대조할 재료가 없어 검사를 못 돌림)이고
+        ///   defect가 QualityFloor(문서 단위로는 실제 결함을 확인함)이면, 후자가 더
+        ///   확실하고 더 심각한 진단이므로 QualityFloor로 승격한다 - "검증 불가"
+        ///   배너 아래에 실려 덜 읽히게 두면 안 된다.
+        /// - prior가 GenerationFailed(본문 자체가 없음)이면 그대로 유지한다 - 본문이
+        ///   아예 없다는 사실이 "합쳐도 코드가 없다"는 사실보다 더 심각하고, 이미
+        ///   GenerationFailed가 QualityFloor보다 위에 얹히도록 정해져 있다.
+        /// - prior가 QualityFloor면 Kind는 바뀌지 않는다(둘 다 QualityFloor).
+        ///
+        /// 이 판단은 리뷰가 제시한 "prior의 Kind를 그대로 유지"안과 다르다 - 그 안은
+        /// Unverifiable+QualityFloor 조합에서 실제로 확인된 결함을 "검증 불가"
+        /// 배너 밑에 묻어 버린다. 근거와 판단은 이 메서드에 국한된 것이라, 여기
+        /// 말고 다른 병합 지점(예: MechanicalValidator 내부의 같은 문서 검사 안에서의
+        /// 병합, §617 이하)에는 영향이 없다 - 그곳은 항상 Kind가 QualityFloor끼리라
+        /// 이 판단 자체가 필요 없다.
+        /// </summary>
+        private static StepDefect MergeFloorViolation(StepDefect prior, StepDefect defect)
+        {
+            var reason = prior.Reason + " " + defect.Reason;
+            var kind = FloorViolationSeverity(prior.Kind) >= FloorViolationSeverity(defect.Kind)
+                ? prior.Kind
+                : defect.Kind;
+            return new StepDefect(kind, reason);
+        }
+
+        /// <summary>
+        /// §2586 이하의 배너 조립 순서(위로 갈수록 심각)를 그대로 숫자로 옮긴 것.
+        /// 이 숫자 자체에는 의미가 없다 - 오직 <see cref="MergeFloorViolation"/>의
+        /// 비교에만 쓰인다.
+        /// </summary>
+        private static int FloorViolationSeverity(StepDefectKind kind) => kind switch
+        {
+            StepDefectKind.GenerationFailed => 2,
+            StepDefectKind.QualityFloor => 1,
+            StepDefectKind.Unverifiable => 0,
+            _ => 0,
+        };
 
         /// <summary>
         /// 단계 섹션 하나를 만들고 하한을 검사한다. 미달이면 그 단계만 재시도한다 —

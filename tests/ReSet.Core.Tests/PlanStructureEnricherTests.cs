@@ -412,6 +412,81 @@ namespace ReSet.Core.Tests
             Assert.Contains(sink.Messages, m => m.Contains("보강 재료가 없어") && m.Contains("보강을 건너뜁니다"));
         }
 
+        /// <summary>
+        /// 최종 리뷰 지적(항목 2): enrichedCodeCount가 "명세서에서 보강"과 "예약 대역
+        /// 발급" 둘 다를 세는데 문구는 "명세서에서 보강했습니다" 하나뿐이었다.
+        /// 이 단계는 LegacyProcedures가 비어 있어 명세서 대조 자체가 없고(MergeCodes의
+        /// procedures.Count == 0 분기), 코드는 순전히 예약 대역에서 발급된다 - "명세서에서
+        /// 보강했습니다"는 거짓 진술이 된다.
+        /// </summary>
+        [Fact]
+        public void Enrich_WhenOnlyReservedBandIssued_DoesNotClaimEnrichedFromSpec()
+        {
+            const string controlStepOnly = @"# 목차
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""실행 잠금 사전검증"",
+      ""LegacyProcedures"": [],
+      ""TargetTables"": [""dbo.BatchExecution""],
+      ""ErrorCodes"": [],
+      ""Chunkable"": false
+    }
+  ]
+}
+```
+";
+            var empty = new Dictionary<string, IReadOnlyList<string>>();
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                PlanStructureEnricher.Enrich(controlStepOnly, empty, EmptyTables);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            // 명세서에서 온 것이 0건이므로 이 문구가 나오면 거짓 진술이다.
+            Assert.DoesNotContain(sink.Messages, m => m.Contains("명세서에서 보강했습니다"));
+            // 예약 대역 발급 사실은 별도 문구로, 정확한 개수(1개)와 함께 남아야 한다.
+            Assert.Contains(sink.Messages, m => m.Contains("예약") && m.Contains("1개"));
+        }
+
+        /// <summary>
+        /// 한 회차에 명세서 보강과 예약 대역 발급이 함께 일어나면(Structure가 그 예다 -
+        /// S00은 예약 발급, S01·S02는 명세서 보강) 두 카운터가 각자의 진짜 개수를
+        /// 실어야 한다 - 하나로 합쳐 세면 어느 쪽이 몇 건인지 로그로 추적할 수 없다.
+        /// </summary>
+        [Fact]
+        public void Enrich_WhenBothSpecEnrichmentAndReservedIssuanceHappen_LogsBothCountsSeparately()
+        {
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                // Structure: S00(LegacyProcedures 없음 - 예약 발급 1건),
+                // S01·S02(LegacyProcedures 있음, Codes()가 둘 다 채움 - 명세서 보강 2건).
+                PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m => m.Contains("명세서에서 보강했습니다") && m.Contains("2개"));
+            Assert.Contains(sink.Messages, m => m.Contains("예약") && m.Contains("1개"));
+        }
+
         private sealed class CapturingSink : ILogEventSink
         {
             public List<string> Messages { get; } = new();

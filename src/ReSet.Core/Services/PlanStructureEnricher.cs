@@ -131,7 +131,14 @@ namespace ReSet.Core.Services
                     return null;
                 }
 
-                var enrichedCodeCount = 0;
+                // [최종 리뷰 픽스] MergeCodes는 서로 다른 두 기전을 섞어서 낸다 -
+                // 명세서에서 실제로 코드를 물려받은 경우(procedures.Count > 0)와,
+                // 레거시 출신이 없어 예약 대역에서 새 코드를 발급한 경우(procedures.Count
+                // == 0)다. 예전에는 하나의 카운터(enrichedCodeCount)로 둘을 합쳐 세고
+                // "명세서에서 보강했습니다"라는 문구 하나로 냈다 - 명세서에서 온 것이
+                // 0건이어도(전부 예약 발급이어도) 그 문장이 나와 거짓 진술이 됐다.
+                var enrichedFromSpecCount = 0;
+                var issuedReservedCount = 0;
                 var enrichedTableCount = 0;
                 foreach (var stepNode in steps)
                 {
@@ -140,12 +147,19 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    var merged = MergeCodes(step, codesByProcedure);
+                    var merged = MergeCodes(step, codesByProcedure, out var isReservedIssuance);
                     if (merged != null)
                     {
                         step["ErrorCodes"] = new JsonArray(
                             Array.ConvertAll(merged, c => (JsonNode?)JsonValue.Create(c)));
-                        enrichedCodeCount++;
+                        if (isReservedIssuance)
+                        {
+                            issuedReservedCount++;
+                        }
+                        else
+                        {
+                            enrichedFromSpecCount++;
+                        }
                     }
 
                     if (RewriteTables(step, tablesByProcedure, dropped))
@@ -154,9 +168,14 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                if (enrichedCodeCount > 0)
+                if (enrichedFromSpecCount > 0)
                 {
-                    Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedCodeCount);
+                    Log.Information("목차의 오류코드를 명세서에서 보강했습니다 - 단계 수: {Count}개", enrichedFromSpecCount);
+                }
+
+                if (issuedReservedCount > 0)
+                {
+                    Log.Information("목차의 오류코드에 제어 단계 예약 대역 코드를 발급했습니다 - 단계 수: {Count}개", issuedReservedCount);
                 }
 
                 if (enrichedTableCount > 0)
@@ -164,9 +183,7 @@ namespace ReSet.Core.Services
                     Log.Information("목차의 대상 테이블을 정적 분석에서 보강했습니다 - 단계 수: {Count}개", enrichedTableCount);
                 }
 
-                // 예약 대역 발급도 enrichedCodeCount에 잡힌다(MergeCodes가 그 경로도
-                // 담당하므로). 호출부가 "재료 없이도 뭔가 바뀌었는가"를 판단하는 데 쓴다.
-                anyStepChanged = enrichedCodeCount > 0 || enrichedTableCount > 0;
+                anyStepChanged = enrichedFromSpecCount > 0 || issuedReservedCount > 0 || enrichedTableCount > 0;
 
                 // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
                 return root.ToJsonString(WriteOptions) + "\n";
@@ -186,8 +203,11 @@ namespace ReSet.Core.Services
         /// 경로에서 여러 번 오간다.
         /// </summary>
         private static string[]? MergeCodes(
-            JsonObject step, IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+            JsonObject step,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
+            out bool isReservedIssuance)
         {
+            isReservedIssuance = false;
             var declared = ReadStringArray(step, "ErrorCodes");
             var procedures = ReadStringArray(step, "LegacyProcedures");
 
@@ -198,6 +218,7 @@ namespace ReSet.Core.Services
             // 예약 대역에서 결정적으로 발급한다.
             if (procedures.Count == 0)
             {
+                isReservedIssuance = true;
                 var blockStart = ControlStepErrorCodes.BlockStart(ReadScalarString(step, "Code"));
                 if (blockStart == null)
                 {
