@@ -8452,6 +8452,32 @@ END";
         }
 
         [Fact]
+        public void ValidateBatchStep_CheckB_SubordinateJoinKey_IsTreatedAsRelocated()
+        {
+            // 명세서 DML 범위 표의 술어 칸은 "조인 결합 포함"이라 조인 키도 담는다.
+            // 이행이 그 조인을 CTE 안으로 옮기면 최상위에는 없지만 소실은 아니다 -
+            // 하위 범위 대조가 WHERE만 보던 동안에는 이것이 "없어졌다"로 오인됐다
+            // (코퍼스 실측 15건, docs/known-defects.md (5-3-3) 부류 1).
+            var facts = FactsWithCode(13, new[] { "CLIENTID" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                ";WITH ClientRateSource AS (\n" +
+                "  SELECT A.CLIENTID, B.Rate FROM dbo.TClient AS A\n" +
+                "  INNER JOIN dbo.TRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+                ")\n" +
+                "UPDATE Y SET Y.CLCOMM = C.Rate\n" +
+                "FROM dbo.TSettleMst AS Y INNER JOIN ClientRateSource AS C ON C.Rate = Y.CLCOMM;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
         public void ValidateBatchStep_CheckB_UAnchorOnly_UsesUAnchor()
         {
             // 판정표 1행: U-앵커 있음·코드 앵커 없음 → U-앵커 사용(기존 동작 보존).

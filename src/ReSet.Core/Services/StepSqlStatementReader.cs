@@ -732,12 +732,45 @@ namespace ReSet.Core.Services
             private readonly List<string> _columns = new();
             public IReadOnlyList<string> Columns => _columns;
 
+            /// <summary>
+            /// 이 층의 WHERE와 **FROM(JOIN ON 포함)** 둘 다에서 모은다.
+            ///
+            /// [왜 FROM도 보는가 - 2026-08-26 코퍼스 판정 15건]
+            /// 최상위 대조는 `PredicateColumns ∪ JoinColumns`다 - 명세서 DML 범위 표의
+            /// 술어 칸이 "조인 결합 포함"이기 때문이다(MechanicalValidator의
+            /// predicatePresent 참고). 그런데 이 수집기가 WHERE만 보면 하위 범위만
+            /// 조인을 잃어 **비대칭**이 생긴다. 실물: CTE `ClientRateSource` 안의
+            /// `ON A.CLIENTID = B.CLIENTID`는 이전으로 인정되지 않는데 명세서는 CLIENTID를
+            /// 술어 칸에 적으므로, 검사 B가 "명세서가 확정한 컬럼이 없어졌다"고 오인한다.
+            /// INSERT 재편입 증가분 37건 중 15건이 이 축 하나였다
+            /// (docs/known-defects.md (5-3-3) 부류 1).
+            ///
+            /// ColumnCollector가 QueryDerivedTable·ScalarSubquery 하강을 막으므로 여기서
+            /// 모으는 것은 **이 층의** FROM 절뿐이다. 더 깊은 층은 이 방문자가 그
+            /// QuerySpecification을 따로 만날 때 잡으므로 중복도 누락도 없다
+            /// (SubordinateJoinOn_DoesNotReachIntoDeeperDerivedTable_AtThisLevel이 잠근다).
+            ///
+            /// [한계 둘 - 이 수집은 「거를 수 있는 술어」보다 넓다]
+            /// (1) **조인 종류를 가리지 않는다.** 위 Add()의 주석은 하위 수집을 정당화하며
+            /// "JOIN ON 하위질의는 INNER JOIN이면 대상 행을 실제로 거르므로"라고 조건을
+            /// 못 박는데, 여기서는 행을 거르지 않는 LEFT/RIGHT/FULL JOIN의 ON까지 이전으로
+            /// 인정한다. 원본이 최상위 WHERE에 두었던 진짜 필터가 사라졌는데 마침 같은
+            /// 이름이 어떤 외부 조인의 ON에 있으면 검사가 조용해진다. 최상위 JoinColumns
+            /// 수집도 같은 성질을 이미 갖고 있어 **대칭**이지만, 좁은 쪽으로 맞춘 것이
+            /// 아니라 넓은 쪽으로 맞춘 것이다. 2026-08-26 실측: QualifiedJoinType이
+            /// Inner인 ON만 모으는 변형으로 코퍼스를 전수 재측정해도 발화가 62건으로
+            /// 동일했다 - 오늘 코퍼스에서는 이 차이가 한 건도 드러나지 않는 **잠복**이다.
+            /// (2) FROM 절에는 ON 말고도 컬럼 참조가 올 수 있다(CROSS APPLY 함수 인자,
+            /// PIVOT 컬럼 목록 등). 그것들도 함께 이전으로 인정된다. 이 코퍼스에 그런
+            /// 구문이 있는지는 재지 않았다.
+            /// </summary>
             public override void Visit(QuerySpecification node)
             {
-                if (node.WhereClause == null) return;
+                if (node.WhereClause == null && node.FromClause == null) return;
 
                 var inner = new ColumnCollector();
-                node.WhereClause.Accept(inner);
+                node.WhereClause?.Accept(inner);
+                node.FromClause?.Accept(inner);
                 _columns.AddRange(inner.Columns);
             }
         }
