@@ -1721,6 +1721,18 @@ namespace ReSet.Core.Services
             // 단계별 조립은 steps를 가진 GenerateBySplitAsync가 한다.
             var parametersByProcedure = StepInterfaceFacts.CollectParameters(definitions);
 
+            // 단일 호출 경로(폴백·L3 재생성)도 원본 인터페이스 표를 받아야 한다 -
+            // 규칙 5가 그 표를 가리키며 "여기 적힌 파라미터가 전부"라고 말하기 때문이다.
+            // 목차를 못 읽으면 빈 목록을 주고, 그때는 AiService가 절 자체를 싣지 않는다
+            // (빈 표는 "원본 파라미터가 없다"로 읽혀 없는 근거가 된다).
+            List<StepInterface> InterfacesFor(string? structure)
+            {
+                var parsed = BatchStepPlanParser.TryParse(structure ?? string.Empty);
+                return parsed == null
+                    ? new List<StepInterface>()
+                    : StepInterfaceFacts.Build(parsed, parametersByProcedure).ToList();
+            }
+
             // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
             // 파싱에 실패해 단일 호출로 폴백하는 회차에서도 뜨지만, 설정이 로컬
             // 공급자와 함께 쓰이고 있다는 사실 자체는 여전히 참이고 조치도 같다.
@@ -1846,7 +1858,7 @@ namespace ReSet.Core.Services
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
                     if (!string.IsNullOrEmpty(feedbackLog))
                     {
-                        specsCopy.Add(("Feedback_Log.txt", $"[이전 시도에 대한 검토 피드백]:\n{feedbackLog}\n위 에러/피드백 사항을 전적으로 수용하여 통합 설계서를 완성해 주세요."));
+                        specsCopy.Add((FeedbackSpec.CriticFileName, $"[이전 시도에 대한 검토 피드백]:\n{feedbackLog}\n위 에러/피드백 사항을 전적으로 수용하여 통합 설계서를 완성해 주세요."));
                     }
 
                     AiResult aiResult = new AiResult();
@@ -1886,7 +1898,7 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, cancellationToken);
+                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, currentBrainstorming, cancellationToken);
 
                             if (split != null)
                             {
@@ -1922,7 +1934,13 @@ namespace ReSet.Core.Services
                             // 만든다. 골격 행과 키를 나눠 두 행이 나란히 남게 한다 — 분할을
                             // 시도했다가 폴백했다는 사실이 화면에 보여야 한다.
                             progressScope.AddTask("phase3single", "3/3. 최종 생성 중 (단일 호출)...");
-                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase3single");
+
+                            // 폴백도 원본 인터페이스 표를 받아야 한다 - 규칙 5가 그 표를
+                            // 가리키며 "여기 적힌 파라미터가 전부"라고 말하기 때문이다.
+                            // 목차를 못 읽어 폴백한 회차라면 단계 목록이 없어 표도 비는데,
+                            // 그때는 AiService가 절 자체를 싣지 않는다(빈 표가 "원본
+                            // 파라미터가 없다"로 읽히는 것을 막는다).
+                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(currentPlanStructure), cancellationToken), progressScope, "phase3single");
                         }
                     }
                     consolidatedPlan = splitMarkdown ?? aiResult.Content;
@@ -2287,7 +2305,7 @@ namespace ReSet.Core.Services
                     }
 
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
-                    specsCopy.Add(("User_Feedback_Log.txt", $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}\n사용자 의견을 수용하여 설계 내용을 수정 및 보완해 주십시오."));
+                    specsCopy.Add((FeedbackSpec.UserFileName, $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}\n사용자 의견을 수용하여 설계 내용을 수정 및 보완해 주십시오."));
 
                     // 분할 상태가 있으면 분할로 재생성한다. 통짜 단일 호출은 단계마다
                     // 확보한 본문을 한 번에 무너뜨린다 — 이 경로가 존재하는 이유다.
@@ -2344,6 +2362,7 @@ namespace ReSet.Core.Services
                             reuseSkeleton ? stepsToRegenerate : new List<string>(),
                             knownTableNames,
                             parametersByProcedure,
+                            currentBrainstorming,
                             cancellationToken);
 
                         if (split != null)
@@ -2375,7 +2394,7 @@ namespace ReSet.Core.Services
                         try
                         {
                             var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(
-                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), cancellationToken);
                             rePlan = aiResult.Content;
                             finalAiResult = aiResult;
 
@@ -2442,8 +2461,8 @@ namespace ReSet.Core.Services
                         try
                         {
                             var specsRe = new System.Collections.Generic.List<(string FileName, string Content)>(specsCopy);
-                            specsRe.Add(("L1_Re_Fix.txt", l1Re.SuggestedPromptFix ?? string.Empty));
-                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsRe, targetLanguage, jobName, _consolidatorEffort, cancellationToken);
+                            specsRe.Add((FeedbackSpec.L1FixFileName, l1Re.SuggestedPromptFix ?? string.Empty));
+                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsRe, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), cancellationToken);
                             rePlan = aiResult.Content;
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -2992,6 +3011,7 @@ namespace ReSet.Core.Services
             IReadOnlyList<string> defectiveSteps,
             IReadOnlyList<string> knownTableNames,
             IReadOnlyDictionary<string, IReadOnlyList<string>> parametersByProcedure,
+            string? brainstorming,
             CancellationToken cancellationToken)
         {
             var targeted = previousSkeleton != null && previousSkeletonResult != null &&
@@ -3014,7 +3034,7 @@ namespace ReSet.Core.Services
                 {
                     var skeletonResult = await WrapWithProgress(
                         _consolidatorService.GenerateBatchPlanSkeletonAsync(
-                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, cancellationToken),
+                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, brainstorming, cancellationToken),
                         progressScope, "phase3");
 
                     if (skeletonResult == null || string.IsNullOrWhiteSpace(skeletonResult.Content))
@@ -3176,13 +3196,18 @@ namespace ReSet.Core.Services
 
             // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
             // 단계마다 뽑아도 결과가 같으므로 재시도 루프 밖에서 한 번만 만든다.
+            //
+            // 피드백 항목을 걷어내고 뽑는다 - 재시도 회차의 specs에는 Feedback_Log.txt가
+            // 섞여 있는데 그것은 명세서가 아니다. 걷어내지 않으면 지적문이 인용한 SQL이
+            // 존재하지 않는 프로시저(BareObjectName이 "txt"로 읽는다)의 재료로 등록된다.
+            var procedureSpecs = FeedbackSpec.OnlyProcedureSpecs(specs);
             var conditionColumns = MergeSpecMaterials(
-                SpecConditionColumnExtractor.Extract(specs),
-                SpecRoundingShapeExtractor.Extract(specs));
+                SpecConditionColumnExtractor.Extract(procedureSpecs),
+                SpecRoundingShapeExtractor.Extract(procedureSpecs));
 
             // 명세서가 문장 단위로 확정한 사실(DML 범위 표·갱신 절·지역 변수 표). 조건 컬럼과
             // 같은 이유로 재시도 루프 밖에서 한 번만 만든다 - 단계마다 뽑아도 결과가 같다.
-            var statementFacts = SpecStatementFactsExtractor.Extract(specs);
+            var statementFacts = SpecStatementFactsExtractor.Extract(procedureSpecs);
 
             // 실행 행을 만들 책임이 이 단계에 있는가. 단계 검사는 단계 하나만 보므로
             // 스스로 알 수 없고, 목록 전체를 가진 여기가 판정해 넘긴다. 이 배선이

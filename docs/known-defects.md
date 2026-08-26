@@ -166,10 +166,6 @@
 
 ### 배치 계획 생성
 
-- **브레인스토밍 원문이 3/3에 전달되지 않는다** — `IAiService.GenerateConsolidatedBatchPlanAsync`
-  시그니처에 자리가 없어, 아키텍처 판단(Tasklet/Chunk 선택 등)이 목차 제목에 살아남은
-  만큼만 본문에 도달한다.
-  출처: `2026-08-05-batch-structure-redraft-design.md` ①
 - **목차가 S01의 `TargetTables`를 채우지 못한다** — `PlanStructureEnricher.RewriteTables`,
   `AiService.DraftBatchPlanStructureAsync`. Proc14 회차에서 결함 1건으로 실제 비용을 냈다
   (`87d6e30`이 별개 사안으로 남김). 보강기가 정적 분석의 쓰기 대상으로 `TargetTables`를

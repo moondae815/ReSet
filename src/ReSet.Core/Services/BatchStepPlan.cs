@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Serilog;
@@ -155,6 +156,27 @@ namespace ReSet.Core.Services
                 {
                     Log.Warning("단계 목록 개수가 허용 범위를 벗어났습니다 - 개수: {Count}개, 상한: {Max}개",
                         steps.Count, MaxSteps);
+                    return null;
+                }
+
+                // Code가 겹치면 본문이 조용히 사라진다. 분할 생성은 단계마다 섹션을
+                // 만들어 `sections[step.Code] = markdown`으로 모으는데, 같은 Code가
+                // 둘이면 나중 것이 앞의 것을 덮어쓴다. 두 단계를 다 생성하느라 호출은
+                // 두 번 나가고, 문서에는 하나만 남고, 사라진 쪽은 아무 데도 보고되지
+                // 않는다 - 커버리지 검사도 목차 기준으로 도니 겹친 Code를 한 단계로
+                // 셀 뿐이다. Code나 Name이 없을 때와 같은 이유로 목록 전체를 버린다:
+                // 어느 쪽이 진짜인지 여기서는 알 수 없고, 골라내면 목차가 서술한
+                // 실행 순서와 어긋난 목록을 쓰게 된다.
+                var duplicatedCodes = steps
+                    .GroupBy(step => step.Code, StringComparer.OrdinalIgnoreCase)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key)
+                    .ToList();
+
+                if (duplicatedCodes.Count > 0)
+                {
+                    Log.Warning("단계 목록에 Code가 겹치는 항목이 있어 전체를 버립니다 - 겹친 Code: {Codes}",
+                        string.Join(", ", duplicatedCodes));
                     return null;
                 }
 
