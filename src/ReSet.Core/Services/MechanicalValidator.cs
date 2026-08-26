@@ -6693,8 +6693,22 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 서수를 둘
-        /// 이상이 주장하면 그 서수를 통째로 뺀다.</b>
+        /// 모호성 계산이 쓰는 (Kind, Ordinal) 키 비교자. Kind는 이 파일의 관례대로
+        /// <see cref="StringComparison.OrdinalIgnoreCase"/>로 본다
+        /// (<see cref="ResolveOrdinal"/>의 codeMap Kind 대조와 같은 규약).
+        /// </summary>
+        private static readonly IEqualityComparer<(string Kind, int Ordinal)> AnchoredStatementKeyComparer =
+            EqualityComparer<(string Kind, int Ordinal)>.Create(
+                (x, y) => x.Ordinal == y.Ordinal
+                    && string.Equals(x.Kind, y.Kind, StringComparison.OrdinalIgnoreCase),
+                key => HashCode.Combine(
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(key.Kind), key.Ordinal));
+
+        /// <summary>
+        /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 (종류, 서수)를
+        /// 둘 이상이 주장하면 그 (종류, 서수)를 통째로 뺀다.</b> 묶음의 단위는 서수가
+        /// 아니라 (종류, 서수)다 - 서수는 종류별로 1부터 다시 시작하므로 명세서 DML
+        /// 범위 표의 `INSERT 4`와 `DELETE 4`는 애초에 서로 다른 행이다.
         ///
         /// [왜 집합 수준에서 막는가] <see cref="ResolveOrdinal"/>은 문장 단위 함수라
         /// 중복을 볼 수 없다 - 그게 정상이다. 모호성은 한 문장의 성질이 아니라 문장
@@ -6727,63 +6741,62 @@ namespace ReSet.Core.Services
         /// 그 모양을 못으로 박는다), 코드 재사용에는 U-앵커가 없다. 그래서 <b>그룹의 어느
         /// 조각도 U-앵커를 갖지 않을 때만</b> 버린다. 이 조건을 「겹치면 무조건 버린다」로
         /// 넓히면 청크 대조가 통째로 죽는다 - 실제로 그렇게 짰다가 위 테스트가 잡았다.
+        ///
+        /// [키를 좁히는 것은 발화를 늘리기만 하지 않는다 - 줄이는 방향도 있다]
+        /// 묶음 키를 서수에서 (종류, 서수)로 좁히면 그룹이 쪼개지고, 「그룹의 어느 조각도
+        /// U-앵커를 갖지 않는다」는 위 조건이 <b>거짓에서 참으로 뒤집힐 수 있다</b> -
+        /// 즉 예전에 발화하던 자리가 새로 침묵할 수 있다. 실물 프로브로 재현한 모양:
+        /// 한 단계에 코드 앵커만 가진 UPDATE 둘(서수 4)과 U-앵커를 가진 INSERT
+        /// 하나(서수 4)가 있으면, 좁히기 전에는 INSERT의 U-앵커가 서수 4 그룹 전체를
+        /// 청크 분할로 살려 `UPDATE 4`가 발화했고, 좁힌 뒤에는 UPDATE 둘만의 앵커 없는
+        /// 그룹이 되어 침묵한다.
+        ///
+        /// 새 동작이 옳다 - 청크 조각은 정의상 같은 종류이므로 <b>다른 종류의 U-앵커는
+        /// 청크 증거가 아니다</b>. 다만 방향은 기록해 둔다:
+        /// <c>docs/known-defects.md</c> (5-3-2)의 「사라진 0건」은 이번 세대 코퍼스의
+        /// 실측이지 「이 수정은 침묵을 만들 수 없다」는 증명이 아니다.
+        /// <c>ValidateBatchStep_CheckB_OtherKindUAnchor_DoesNotRescueReusedOrdinal</c>이
+        /// 이 방향을 못 박는다.
         /// </summary>
         private static List<(StepSqlStatement Statement, int? Ordinal)> ResolveAnchoredStatements(
             IReadOnlyList<StepSqlStatement> statements,
             IReadOnlyDictionary<string, (string Kind, int Ordinal)> codeMap)
         {
             var resolved = statements
-                .Where(IsCandidateForAnchoredStatementCheck)
                 .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
                 .Where(a => a.Ordinal.HasValue)
                 .ToList();
 
+            // [왜 키에 Kind가 있는가 - 서수는 종류별로 1부터 다시 시작한다]
+            // 명세서 DML 범위 표의 `INSERT 4`와 `DELETE 4`는 서로 다른 행이다.
+            // ResolveOrdinal도 codeMap 조회에서 Kind 일치를 요구해 같은 규약을
+            // 지키는데, 예전에는 이 모호성 계산만 Ordinal로 묶어 그걸 잃었다.
+            // 삭제된 INSERT 배제 필터가 GroupBy '앞에서' INSERT를 걸러내는 동안에는
+            // 충돌이 드러나지 않았다 - 그 좁힘을 걷자 드러났다.
+            //
+            // 실측(2026-08-26, INSERT 재편입 코퍼스 스윕): 레거시
+            // `dbo.UP_Util_Settle_Summary`의 명세서는 DELETE 1~4와 INSERT 1~4를 둘 다
+            // 갖고 단계 SQL이 코드 -1~-4를 DELETE에, -5~-8을 INSERT에 붙인다.
+            // Ordinal만으로 묶었을 때 `POQSettleProc1/S11`·`POQSettleProc9/S13`의
+            // `DELETE 4 · OUTSTATE` 발화 둘이 같은 단계의 `INSERT 4`와 한 그룹이 되어
+            // 함께 버려졌다 - 진짜 결함이 거짓 침묵으로 사라졌다.
+            //
+            // 묶는 키와 되거르는 키가 갈라지면 이 결함이 그대로 되살아나므로 키 계산을
+            // KeyOf 한 자리에 모은다.
+            static (string Kind, int Ordinal) KeyOf((StepSqlStatement Statement, int? Ordinal) a) =>
+                (a.Statement.Kind, a.Ordinal!.Value);
+
             // U-앵커를 가진 조각이 하나라도 있으면 청크 분할이다 - 버리지 않는다.
             var ambiguous = resolved
-                .GroupBy(a => a.Ordinal!.Value)
+                .GroupBy(KeyOf, AnchoredStatementKeyComparer)
                 .Where(g => g.Count() > 1 && g.All(a => !a.Statement.Anchor.HasValue))
                 .Select(g => g.Key)
-                .ToHashSet();
+                .ToHashSet(AnchoredStatementKeyComparer);
 
             return ambiguous.Count == 0
                 ? resolved
-                : resolved.Where(a => !ambiguous.Contains(a.Ordinal!.Value)).ToList();
+                : resolved.Where(a => !ambiguous.Contains(KeyOf(a))).ToList();
         }
-
-        /// <summary>
-        /// INSERT 문장을 검사 B(<see cref="CheckAnchoredStatementFacts"/>)·검사 C
-        /// (<see cref="CheckAnchoredStatementExtras"/>)의 후보에서 뺀다.
-        ///
-        /// [한시적 좁힘 - 「INSERT는 검사하지 않는다」는 영구 정책이 아니다]
-        /// 코퍼스 전수 스윕 실측(2026-08-25, 326개 단계)에서 코드 앵커를 켠 뒤
-        /// 검사 B 발화가 1건 → 269건으로 늘었는데, 그중 199건(74%, 15개 조합)이
-        /// 이 축 하나의 구조적 거짓양성이었다. 원인은 재료(<see cref="StepSqlStatementReader"/>)
-        /// 쪽에 있다 - StepSqlStatementReader.cs:464-465의
-        /// `Visit(InsertStatement) => Add("INSERT", node, node.InsertSpecification?.Target,
-        /// null, null)`가 where·from 자리에 항상 null을 넘긴다(같은 파일의
-        /// Visit(UpdateStatement)·Visit(DeleteStatement)는 실제 WhereClause·
-        /// FromClause를 넘기는 것과 대조적이다). 그 결과 모든 INSERT 문장의
-        /// StepSqlStatement.PredicateColumns·JoinColumns는 실제 SQL 내용과
-        /// 무관하게 구조적으로 항상 빈 목록이다 - 검사 B는 그 빈 목록을 "명세서가
-        /// 확정한 술어 컬럼이 없다"로 오인한다. 실물: `INSERT INTO ... SELECT ...
-        /// WHERE USESTATE = 0` 모양의 output/Jobs/POQSettleBatch1/agent/steps/
-        /// S04.md:39-52가 실제로는 술어를 담고 있는데도 이 결함으로 오탐이 났다.
-        ///
-        /// [되돌릴 지점] DmlCollector.Visit(InsertStatement)이
-        /// `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
-        /// 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면(이 태스크의 쓰기
-        /// 허용 범위 밖 - StepSqlStatementReader.cs는 건드리지 않는다), 그 시점에
-        /// 이 좁힘을 걷어내고 재측정해야 한다.
-        ///
-        /// [검사 C도 함께 좁히는 이유] 검사 C의 extras도 같은
-        /// Statement.PredicateColumns(구조적으로 항상 빈 목록)에서만 뽑으므로
-        /// 오늘은 이미 침묵한다(스윕상 검사 C 38건은 12개 조합 전부 UPDATE). 하지만
-        /// 검사 B만 좁히고 검사 C를 그대로 두면 두 검사가 서로 다른 후보 집합을
-        /// 본다는 불변식이 깨져, 위 배선이 나중에 고쳐질 때 검사 C만 조용히 INSERT를
-        /// 다시 보기 시작하는 비대칭을 만든다 - 그래서 한쪽만 고치면 다른 쪽으로 샌다.
-        /// </summary>
-        private static bool IsCandidateForAnchoredStatementCheck(StepSqlStatement statement) =>
-            !statement.Kind.Equals("INSERT", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 레거시 SP별 <see cref="SpecStatementFacts.ErrorCodeToOrdinal"/>을 하나로
@@ -7001,11 +7014,30 @@ namespace ReSet.Core.Services
                         .ToList();
                     if (missing.Count == 0) return;
 
+                    // "갱신 N"은 명세서의 UPDATE 갱신 절 표를 가리키는 말이다. INSERT·DELETE에는
+                    // 그 표가 없으므로(명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건 - SpecSetTarget
+                    // 문서 주석) 붙이지 않는다.
+                    var gloss = row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+                        ? $"(갱신 {row.Ordinal})"
+                        : string.Empty;
+
+                    // 꼬리 문장도 종류에 맞는 말을 쓴다. INSERT가 고르는 것은 "갱신
+                    // 대상 행"이 아니라 원천에서 "실릴 행"이다 - 이 메시지는
+                    // SuggestedPromptFix를 타고 재생성 프롬프트에 그대로 실리므로
+                    // 틀린 어휘가 산출물에 되먹여진다. 검사 C
+                    // (CheckAnchoredStatementExtras)의 꼬리는 종류 중립이라 이 갈래가 없다.
+                    var affectedRows = row.Kind.ToUpperInvariant() switch
+                    {
+                        "INSERT" => "실릴 행",
+                        "DELETE" => "삭제 대상 행",
+                        _ => "갱신 대상 행"
+                    };
+
                     result.Errors.Add(
-                        $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장에 명세서가 확정한 " +
+                        $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}{gloss} 문장에 명세서가 확정한 " +
                         $"{label} {string.Join(", ", missing)}이(가) 없습니다. 명세서 DML 범위 표 " +
                         $"{row.Kind} {row.Ordinal} 행의 값은 `{string.Join(", ", expected)}`입니다 — " +
-                        "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.");
+                        $"이 컬럼이 빠지면 {affectedRows} 집합이 원본과 달라집니다.");
                 }
             }
         }
@@ -7161,8 +7193,15 @@ namespace ReSet.Core.Services
 
                 if (extras.Count == 0) continue;
 
+                // "갱신 N"은 명세서의 UPDATE 갱신 절 표를 가리키는 말이다. INSERT·DELETE에는
+                // 그 표가 없으므로(명세서 전체에서 `(삽입 N`·`(삭제 N`은 0건 - SpecSetTarget
+                // 문서 주석) 붙이지 않는다.
+                var gloss = row.Kind.Equals("UPDATE", StringComparison.OrdinalIgnoreCase)
+                    ? $"(갱신 {row.Ordinal})"
+                    : string.Empty;
+
                 result.Errors.Add(
-                    $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}(갱신 {row.Ordinal}) 문장이 명세서에 없는 " +
+                    $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}{gloss} 문장이 명세서에 없는 " +
                     $"술어 컬럼 {string.Join(", ", extras)}을(를) 씁니다. 명세서 DML 범위 표 " +
                     $"{row.Kind} {row.Ordinal} 행의 최상위 술어 컬럼은 " +
                     $"`{string.Join(", ", row.PredicateColumns)}`뿐입니다 — " +
