@@ -53,6 +53,26 @@ namespace ReSet.Core.Services
                 : string.Join(", ", gaps.PlanParseFailedJobs);
             b.AppendLine($"- 목차 파싱 실패 Job: {failed}");
 
+            // 리뷰 발견 (3) - 프로시저 참조를 못 찾으면(SweepCommand의 디렉터리 색인
+            // 미스, StepSweepService의 DdlByProcedure 조회 미스) 조용히 continue하던
+            // 두 자리의 합. 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다.
+            b.AppendLine($"- 미해결 프로시저 참조: {gaps.UnresolvedProcedureReferences}");
+
+            // 리뷰 발견 (4) - 목차 파싱은 됐지만(PlanParseFailedJobs에는 안 실림)
+            // 측정 쌍이 0인 Job. Job별 표는 발화 0인 Job의 행을 생략하므로 거기서도
+            // 안 드러난다 - 대상 범위가 준 것이 개선처럼 읽히지 않게 이름을 댄다.
+            var zeroMeasured = gaps.JobsWithZeroMeasuredPairs.Count == 0
+                ? "없음"
+                : string.Join(", ", gaps.JobsWithZeroMeasuredPairs);
+            b.AppendLine($"- 측정 쌍 0인 Job: {zeroMeasured}");
+
+            // 리뷰 발견 (7) - Job 단위 가드가 삼킨 예외의 Job 이름. 조용히 삼키지
+            // 않는다 - 몇 개는 못 쟀는지 다음 사람이 알아야 한다.
+            if (gaps.JobsThatThrew.Count > 0)
+            {
+                b.AppendLine($"- 예외로 건너뛴 Job: {string.Join(", ", gaps.JobsThatThrew)}");
+            }
+
             if (gaps.StepInterfacesWereNull)
             {
                 b.AppendLine(

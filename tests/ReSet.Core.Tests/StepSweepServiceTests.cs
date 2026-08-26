@@ -76,6 +76,28 @@ END";
             Assert.Empty(brokenFacts["UP_TEST"].ErrorCodeToOrdinal);
         }
 
+        // 리뷰 발견 (7) — 셀 안에 `|`가 있으면(예: 설정 대상이 `FLAGS | 4`처럼 비트
+        // 연산 문자열이면) 표가 잘못 쪼개진다. ReadErrorCodeToOrdinal은 「문장」·「오류
+        // 코드」 두 칸만 읽어 이 특정 손상을 지금은 관찰하지 못한다(손상은 그 뒤
+        // 「설정 대상」 칸에서만 난다) - "현재 도달 불가"의 의미가 이것이다. 그래도
+        // 실패 양식 자체가 나쁘다: 표가 깨지면 리더가 빈 사전이 아니라 틀린 사전을
+        // 낼 수 있고 그건 조용하다. AiService.cs:1329가 쓰는
+        // MarkdownTableCellCodec.Escape를 그대로 써서 렌더 시점에 막는다 - 그래서
+        // 이 테스트는 렌더된 문자열 자체를 직접 본다.
+        [Fact]
+        public void RenderErrorCodeTableEscapesPipeCharactersInCells()
+        {
+            var facts = new List<ErrorCodeFact>
+            {
+                new("UPDATE", 1, "-13", "FLAGS | 4"),
+            };
+
+            var rendered = StepSweepService.RenderErrorCodeTable(facts);
+
+            Assert.Contains(@"FLAGS \| 4", rendered);
+            Assert.DoesNotContain("| FLAGS | 4 |", rendered);
+        }
+
         // 명세서: UPDATE 1은 TSettleMst를 YMD·PGNAME으로 필터한다고 확정한다.
         private const string SpecWithOneUpdateRow = @"
 ### DML 범위 (기계 확정 — 수정 금지)
@@ -169,6 +191,86 @@ UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
             Assert.Equal(1, gaps.MeasuredJobs);
             Assert.True(gaps.StepInterfacesWereNull);
             Assert.True(gaps.RunRowOwnedTablesWereNull);
+        }
+
+        // 리뷰 발견 (3) — SweepCommand.cs:79와 StepSweepService.cs:252(위 Critical의
+        // 자리)가 같은 실패 양식이다: 프로시저 참조를 못 찾으면 카운터 없이 continue한다.
+        // DdlByProcedure를 비워 그 상태를 재현한다 - LegacyProcedures가 가리키는
+        // "dbo.UP_TEST"가 어디에도 없다.
+        [Fact]
+        public void GapsCountsUnresolvedProcedureReferencesFromMissingDdlLookup()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                DdlByProcedure = new Dictionary<string, string>(),
+            };
+
+            var gaps = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Gaps;
+
+            Assert.Equal(1, gaps.UnresolvedProcedureReferences);
+        }
+
+        // SweepCommand.cs:79(프로시저 디렉터리를 못 찾은 CLI 쪽 미해결)를 서비스가
+        // 합산해서 실어야 한다 - 같은 필드에 두 실패 양식이 모인다.
+        [Fact]
+        public void GapsAddsCliReportedUnresolvedProcedureDirectoryLookups()
+        {
+            var input = new SweepInput(new List<SweepJob>(), new List<string>(), 0)
+            {
+                UnresolvedProcedureDirectoryLookups = 3,
+            };
+
+            var gaps = StepSweepService.Sweep(input).Gaps;
+
+            Assert.Equal(3, gaps.UnresolvedProcedureReferences);
+        }
+
+        // 리뷰 발견 (4) — 측정 쌍이 0인 Job이 이름 없이 사라진다. StepSweepReportWriter의
+        // 클래스 주석이 스스로 경고하는 함정("대상 범위가 줄면 개선처럼 보인다")이 여기서
+        // 실제로 벌어진다 - 이 Job의 모든 단계가 markdown이 없어 측정 쌍이 0인데,
+        // PlanParseFailedJobs에는 안 실린다(목차 파싱 자체는 성공했으므로).
+        [Fact]
+        public void GapsListsJobNamesWithZeroMeasuredPairs()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string>(),
+            };
+
+            var gaps = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Gaps;
+
+            Assert.Equal(new[] { "TestJob" }, gaps.JobsWithZeroMeasuredPairs);
+        }
+
+        // 측정 쌍이 있는 Job은 이 목록에 실리면 안 된다 - 실리면 정상 Job까지
+        // "측정 0"으로 오인된다.
+        [Fact]
+        public void MeasuredJobIsNotListedAsZeroMeasuredPairs()
+        {
+            var gaps = StepSweepService.Sweep(OneJobInput()).Gaps;
+
+            Assert.Empty(gaps.JobsWithZeroMeasuredPairs);
+        }
+
+        // 리뷰 발견 (7) — 한 Job이 던지면 326쌍 전체가 부분 보고 없이 죽는다. Job 단위
+        // 가드로 감싸 다른 Job은 여전히 측정되고, 던진 Job의 이름은 HarnessGaps에
+        // 남아야 한다(조용히 삼키면 "무엇을 못 쟀는지" 자체가 사라진다).
+        [Fact]
+        public void SweepContinuesPastAJobThatThrowsAndRecordsItInGaps()
+        {
+            var goodJob = OneJobInput().Jobs[0];
+            var poisonJob = goodJob with { JobName = "PoisonJob", Steps = null! };
+
+            var input = new SweepInput(
+                new List<SweepJob> { poisonJob, goodJob }, new List<string>(), 0);
+
+            var report = StepSweepService.Sweep(input);
+
+            Assert.Equal(1, report.Gaps.MeasuredPairs);
+            Assert.Equal(1, report.Gaps.MeasuredJobs);
+            Assert.Contains("PoisonJob", report.Gaps.JobsThatThrew);
         }
 
         [Fact]

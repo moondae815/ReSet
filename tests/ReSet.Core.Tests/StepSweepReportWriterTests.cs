@@ -48,6 +48,88 @@ namespace ReSet.Core.Tests
             Assert.Contains("runRowOwnedTables", markdown);
         }
 
+        // 리뷰 발견 (3) — 프로시저 참조를 못 찾은 건수를 안 실으면 0인지 안 잰
+        // 것인지 구분이 안 된다. 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다.
+        [Fact]
+        public void HeaderCarriesUnresolvedProcedureReferenceCount()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0),
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false)
+                {
+                    UnresolvedProcedureReferences = 0,
+                });
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var header = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("미해결 프로시저 참조: 0", header);
+        }
+
+        // 리뷰 발견 (4) — 측정 쌍이 0인 Job이 이름 없이 사라진다. Job별 표는 발화 0인
+        // Job의 행을 생략하므로 거기서도 안 드러난다 - 머리말에서 이름으로 열거해야
+        // 한다.
+        [Fact]
+        public void HeaderListsJobsWithZeroMeasuredPairsByName()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0),
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false)
+                {
+                    JobsWithZeroMeasuredPairs = new[] { "POQSettleProc5", "POQSettleProc20" },
+                });
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var header = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("POQSettleProc5", header);
+            Assert.Contains("POQSettleProc20", header);
+        }
+
+        // 목록이 비면 "없음"이라고 명시해야 한다 - 빈 문자열을 그대로 내면 결손이
+        // 없다는 사실과 안 적었다는 사실을 구분 못 한다(PlanParseFailedJobs의 선례와
+        // 같은 이유).
+        [Fact]
+        public void HeaderStatesNoneWhenNoJobHasZeroMeasuredPairs()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16");
+            var header = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("측정 쌍 0인 Job: 없음", header);
+        }
+
+        // 리뷰 발견 (7) — Job 단위 가드가 삼킨 예외를 조용히 넘기지 않는다.
+        [Fact]
+        public void HeaderListsJobsThatThrew()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0),
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false)
+                {
+                    JobsThatThrew = new[] { "PoisonJob" },
+                });
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var header = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("PoisonJob", header);
+        }
+
         // (B)가 상한이라는 사실을 보고서가 스스로 말해야 한다 - 재생성 후 실제
         // 발화량의 예측으로 읽히면 다음 사람이 잘못된 기대를 갖는다.
         [Fact]
@@ -111,6 +193,11 @@ namespace ReSet.Core.Tests
         }
 
         // 미분류가 0이 아니면 검사 문구가 바뀐 것이다. 표에 안 실으면 아무도 모른다.
+        //
+        // 리뷰 발견 (5) — Checks 배열이 발화 0이어도 "미분류" 행을 항상 내므로
+        // Assert.Contains("미분류", ...) 하나만으로는 라벨이 늘 있다는 것만 증명하고
+        // 카운트가 조용히 0으로 굳어도 못 잡는다(뮤테이션으로 확인됨). 행 전체를
+        // 대조해 (A) 열의 실제 카운트(1)까지 검증한다.
         [Fact]
         public void UnclassifiedCountIsShown()
         {
@@ -118,7 +205,7 @@ namespace ReSet.Core.Tests
                 Report(new SweepFinding("J", "S01", SweepCheck.Unclassified, SweepCondition.AsIs, "m")),
                 "abc1234", "16");
 
-            Assert.Contains("미분류", markdown);
+            Assert.Contains("| 미분류 | 1 | 0 |", markdown);
         }
 
         // 목차 파싱 실패 Job이 하나도 없으면 "없음"이라고 명시해야 한다 - 빈 문자열을

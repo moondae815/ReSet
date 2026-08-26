@@ -45,7 +45,25 @@ namespace ReSet.Core.Services
     public sealed record SweepInput(
         IReadOnlyList<SweepJob> Jobs,
         IReadOnlyList<string> PlanParseFailedJobs,
-        int MissingStepFiles);
+        int MissingStepFiles)
+    {
+        /// <summary>
+        /// SweepCommand가 프로시저 디렉터리를 못 찾아 조용히 건너뛴 참조 수(CLI 쪽
+        /// 미해결). 서비스 쪽 미해결(DdlByProcedure 조회 실패)과 합산돼
+        /// <see cref="HarnessGaps.UnresolvedProcedureReferences"/>에 실린다 - 같은
+        /// 실패 양식이 파일 시스템 경계 양쪽에 있어서다.
+        /// </summary>
+        public int UnresolvedProcedureDirectoryLookups { get; init; }
+
+        /// <summary>
+        /// 목차 JSON은 정상 파싱되지만 BatchStepPlanParser.MaxSteps(40) 상한을 넘어
+        /// 버려진 Job. PlanStructure.md가 진짜 파싱 실패인지 상한 초과인지
+        /// TryParse의 반환값(null)만으로는 구분할 수 없다 - 둘 다 null이다. 라벨을
+        /// 믿고 JSON을 디버깅하러 가면 헛수고한다(POQSettleProc4가 실제 사례 -
+        /// JSON은 73단계로 정상 파싱되지만 상한 때문에 버려진다).
+        /// </summary>
+        public IReadOnlyList<string> StepCountCapExceededJobs { get; init; } = Array.Empty<string>();
+    }
 
     /// <summary>
     /// 대상 범위가 줄어든 것이 개선처럼 보이지 않게 매번 보고서에 싣는 값들.
@@ -57,7 +75,32 @@ namespace ReSet.Core.Services
         int MeasuredJobs,
         bool StepInterfacesWereNull,
         bool RunRowOwnedTablesWereNull,
-        bool KnownTableNamesWereEmpty);
+        bool KnownTableNamesWereEmpty)
+    {
+        /// <summary>
+        /// 프로시저 참조를 못 찾아 카운터 없이 넘어간 두 자리의 합 -
+        /// SweepCommand.cs(프로시저 디렉터리 색인 미스)와 StepSweepService의
+        /// DdlByProcedure 조회 미스(코드 집합 지표 계산 중). 코퍼스 실측으로는
+        /// 현재 0건이지만, 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다 -
+        /// 다음 사람이 같은 함정(조용한 continue)을 다시 못 보게 하는 것이 목적이다.
+        /// </summary>
+        public int UnresolvedProcedureReferences { get; init; }
+
+        /// <summary>
+        /// 목차 파싱은 성공했으나(Job이 input.Jobs에 들어옴) 측정 쌍이 0인 Job의
+        /// 이름. StepSweepReportWriter의 클래스 주석이 스스로 경고하는 함정 -
+        /// "대상 범위가 줄면 그 감소가 개선처럼 읽힌다" - 이 Job별 표(발화 0인 Job의
+        /// 행을 생략한다)에서도 안 드러나므로 머리말에서 이름으로 열거해야 한다.
+        /// </summary>
+        public IReadOnlyList<string> JobsWithZeroMeasuredPairs { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// Sweep 중 예외를 던진 Job. Job 단위 가드가 이 Job만 건너뛰고 나머지는
+        /// 계속 측정한다 - 가드가 없으면 한 Job의 결함이 전체 측정 쌍(코퍼스
+        /// 실측 326쌍)을 부분 보고 없이 죽인다.
+        /// </summary>
+        public IReadOnlyList<string> JobsThatThrew { get; init; } = Array.Empty<string>();
+    }
 
     /// <param name="MultiProcedureSteps">참조 원본 SP가 2개 이상인 단계 수.</param>
     /// <param name="StepsMissingSpecCodes">SP 표에는 있는데 단계 SQL에 없는 코드가 있는 단계 수.</param>
