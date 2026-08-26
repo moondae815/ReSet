@@ -1170,6 +1170,118 @@
   55·452·525행) · 이행 SQL(`POQSettleProc14/S07`, `POQSettleProc17/S07`,
   `POQSettlePrco20/S06`, `POQSettleProc1/S04`, `POQSettleBatch1/S10`) 직접 대조.
 
+  **(5-2-6) 하위 스코프 술어 재료 — 검사 B가 소실과 이전을 구분한다
+  (2026-08-26, 설계 `docs/superpowers/specs/2026-08-26-subordinate-predicate-design.md`).
+  검사 B가 68 → 31(조건 B)로 줄어 기대한 「30건 이상」을 웃돌았다 — 원인은
+  수집기 과대 포집이 아니라 컬럼 단위 판정이 정상 동작해 잔여 결측 3건이
+  새 항목으로 다시 잡혔기 때문이다.**
+
+  **(가) 무엇을 고쳤는가.** `StepSqlStatementReader`에 `SubordinatePredicateCollector`
+  방문자를 더해 하위 스코프 — CTE 본문·파생 테이블·최상위 `WHERE` 안의
+  하위질의(`EXISTS`·`IN`도 `ScalarSubquery`라 함께 걸린다) — **세 자리**의
+  `WHERE` 컬럼만 모아 `StepSqlStatement.SubordinatePredicateColumns`로 싣는다.
+  `SET` 절 안의 하위질의는 갱신할 "행"이 아니라 "값"을 고르는 술어라
+  제외한다(뮤테이션으로 확인 — `statement.Accept`로 문장 전체를 훑게
+  바꾸면 `DoesNotCollectPredicatesFromSetClauseSubqueries`가 죽는다).
+  `MechanicalValidator`의 `CheckAnchoredStatementFacts`(`ReportMissing`)는
+  이제 **컬럼 단위**로 거른다 — 최상위에 없는 컬럼이 이 재료에 있으면 그
+  컬럼만 침묵하고, 같은 문장에서 다른 컬럼이 정말 없으면 그 컬럼은 그대로
+  발화한다(전부-접기가 아니다).
+
+  **(나) 실측 델타.** 재측정 산출물:
+  `docs/audit-reports/sweeps/2026-08-26-step-sweep-c.md`.
+
+  | 검사 | (A) 오늘 | (B) 캐시 17 모사 |
+  |---|---:|---:|
+  | A | 20 | 20 |
+  | B | **0** | **31**(68에서 -37) |
+  | C | 0 | 18 |
+  | D | 18 | 18 |
+  | E | 59 | 59 |
+
+  검사 A·C·D·E는 이전 측정(`-step-sweep-b.md`)과 완전히 같다 — 이 변경이
+  검사 B의 술어 대조 밖을 건드리지 않았다는 뜻이다. 「검사 B·C 발화 목록」
+  표(조건 A·B 합계, 이하 원행 기준)를 키 `(검사, 조건, Job, 단계, 문장, 항목)`로
+  대조한 결과:
+
+  ```
+  87 → 49 (사라짐 41, 새로 생김 3)
+    [10건] 검사 B · UPDATE 2 · YMD, PGName, DiscountFlag
+    [10건] 검사 B · UPDATE 17 · YMD, PGName
+    [10건] 검사 B · UPDATE 18 · PLTID
+    [ 5건] 검사 B · UPDATE 13 · YMD, PGNAME
+    [ 3건] 검사 B · UPDATE 13 · PLTID, YMD, PGNAME
+    [ 2건] 검사 B · UPDATE 2 · YMD, DiscountFlag
+    [ 1건] 검사 B · UPDATE 5 · ProcYMD, YMD, PGNAME, CompanySalesType, TxAmt, CLVTType, ExtraSettleFlag
+  새로 생김: [('B','B','POQSettleProc1','S04','UPDATE 13','PLTID'),
+             ('B','B','POQSettleProc12','S07','UPDATE 13','PLTID'),
+             ('B','B','POQSettleProc16','S07','UPDATE 13','PLTID')]
+  ```
+
+  `UPDATE 2·17·18`(표본 판정이 확정한 세 관용구, 변형 포함 33건)은 이번
+  측정에서도 전부 침묵했다 — (5-2-4)의 판정과 일치한다. **새로 더해진 것은
+  `UPDATE 13`의 `YMD, PGNAME` 관용구**로, 7개 단계(`POQSettleBatch1/S07`(조건
+  A·B 둘 다 잡혀 2건) · `POQSettlePrco20/S06` · `POQSettleProc14/S07` ·
+  `POQSettleProc19/S10` · `POQSettleProc1/S04` · `POQSettleProc12/S07` ·
+  `POQSettleProc16/S07`)에서 총 8건 났다. 이 중 **5건**(`POQSettleBatch1/S07`
+  둘 다 · `Prco20/S06` · `Proc14/S07` · `Proc19/S10`)은 `YMD`·`PGNAME`
+  둘뿐이라 완전히 침묵했다. **나머지 3건**(`Proc1/S04` · `Proc12/S07` ·
+  `Proc16/S07`)은 원래 `PLTID, YMD, PGNAME` 셋이 없다고 발화했는데, `YMD`·
+  `PGNAME`만 하위 스코프 이전으로 침묵하고 `PLTID`는 그 세 Job의 실제 SQL
+  구조에서 하위 스코프 `WHERE`에도 없어 최상위 결측인 채로 남는다 — 발화
+  자체는 계속되지만 항목 목록이 `PLTID, YMD, PGNAME` → `PLTID`로 바뀌어
+  대조 스크립트에는 "새로 생김"으로 잡힌다. **이것이 "새로 생김 3건"의
+  정체다 — 수집기가 과대 포집해 없던 발화를 만든 것이 아니라, 컬럼 단위
+  판정이 이전된 컬럼과 진짜 결측 컬럼을 갈라 보여 준 것이다.** 조건 B
+  기준 순감소 37(=사라짐 40 − 새로 생김 3, 원행 기준은 조건 A 1건이 더해져
+  41 − 3 = 38)로, 기대한 "30건 이상 감소"를 웃돈다 — 세 관용구(33) +
+  `UPDATE 13`류(8) = 41이 그 근거다.
+
+  **(다) 기존 가드의 근거가 무너진 것.** `MechanicalValidator.cs`의 태스크
+  22 주석은 조인 키 칸 대조를 접으면서 최상위 `WHERE` 술어 컬럼 대조는
+  그대로 뒀다 — "그 사각지대와 무관하다(S07 U13의 실제 결함 YMD·PGNAME
+  누락은 이쪽에서 여전히 잡힌다)"는 것이 근거였다. 실물
+  `POQSettleBatch1/S07` U13을 합성 재현해 확인한 결과 이 근거가 성립하지
+  않는다 — U13은 `YMD`·`PGNAME`을 **둘 다** CTE 안 `WHERE`에 두고
+  `PLTID+ID`로 조인하므로, 표본 판정이 확정한 다른 30여 건과 **같은 이전
+  관용구**다. 해당 주석은 실측대로 고쳐 남겼다(`MechanicalValidator.cs`
+  6409행 부근, "[바뀐 것]" 절).
+
+  **(라) S07 U13 재판정 — 「검사 B로 닫힘」 → 「구조적 거짓양성이었다」.**
+  `docs/audit-defect-catalog.md` 1절 11회차 행이 "S07 갱신13 최상위 WHERE
+  — 검사 B"를 🟠 7건 중 닫힘 2건의 하나로 들었던 것을 정정한다(닫힘 2 →
+  1건 + 구조적 거짓양성 1건). **감사가 이 자리를 지목한 것 자체는
+  옳았다** — 원본(`dbo.UP_UTIL_SETTLE_EXCEPTION_PROC`)이 최상위에 두었던
+  `YMD`·`PGName` 필터가 이행(`POQSettleBatch1/S07` U13)의 최상위 `WHERE`에
+  없는 것은 사실이다. 이번 판정이 다루는 것은 그 사실 자체가 아니라,
+  **최상위 밖으로 옮겨간 필터가 없어진 것인지 이전한 것인지**다 — 실물
+  확인 결과 이전이었다.
+
+  **(마) 이 변경이 주장하지 않는 것 — 의미 동등성.**
+  `SubordinatePredicateColumns`는 "옮겨갔다"까지만 말한다.
+  `UPDATE Y ... INNER JOIN <CTE> AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID`가
+  원본과 같은 행 집합을 갱신하려면 `(PLTID, ID)`가 CTE 결과에서 유일해야
+  하는데, 이 유일성은 로컬(빈 스키마 Docker)에서 검증할 수 없다(메모리
+  `db-access-constraints.md`). 그래서 이 재측정은 침묵한 41건이 결함이
+  아니라고 **확정하지 않는다** — 검사 B의 관할 밖으로 옮겼을 뿐이고,
+  이전이 실제로 동등한지는 사람이 판단할 몫이다(스윕 보고서 「판정」 칸).
+
+  **(바) 검사 C는 별개 작업.** 이 변경은 검사 B(명세서 최상위 술어가
+  이행에 없다)만 건드렸고 실측대로 검사 C는 18 → 18로 불변이다. 검사
+  C(이행 최상위에 명세서에 없는 초과 술어가 있다)의 거울상 — 이행이
+  최상위 밖으로 옮긴 술어가 아니라 **명세서가 최상위에 없다고 확정한
+  술어를 이행이 최상위에 신설한 경우** — 는 이전 방향이 반대라 이 재료로
+  닫히지 않는다. 명세서 쪽 「집합 술어」 표에 스코프 라벨이 있어야 하는데
+  `SpecStatementFacts`가 아직 싣지 않는다. 다음 회차 항목이다.
+
+  근거: `docs/audit-reports/sweeps/2026-08-26-step-sweep-c.md` ·
+  `docs/superpowers/specs/2026-08-26-subordinate-predicate-design.md` §6·§7 ·
+  `src/ReSet.Core/Services/StepSqlStatementReader.cs`
+  (`SubordinatePredicateCollector`) ·
+  `src/ReSet.Core/Services/MechanicalValidator.cs:6396` 부근(`relocated`·
+  `ReportMissing`) · `tests/ReSet.Core.Tests/StepSqlStatementReaderTests.cs` ·
+  `MechanicalValidatorTests.cs`의 하위 스코프 케이스.
+
   **(5-2-5) 코드 앵커 재사용 가드 (2026-08-26). 표본 판정이 예측한 대로
   침묵했고, 새 발화는 0건이다.**
 
