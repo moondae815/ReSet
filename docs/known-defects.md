@@ -250,6 +250,39 @@
   시도하지 않았다** — 다음 회차가 소급 여부를 정할 때 참고할 재료로만 남긴다.
   출처: `2026-08-26-step-obligation-attribution-design.md` §배경 「분할 SP는
   기전이 확실하고 비용은 아직 0이다」
+
+  [2026-08-26 결정] T4·T5는 **기록만 유지**한다. `MaxSteps` 인상과
+  `POQSettleProc5` 재생성은 이 항목이 이미 적어 둔 대로 별건으로 남긴다 —
+  위 문단의 "다음 회차가 소급 여부를 정할 때 참고할 재료로만 남긴다"를
+  공식 결정으로 확정하고, 이번 라운드는 둘 다 시도하지 않는다.
+
+  [2026-08-26 정정 — 44개 중 1개는 오탐이다] 이 항목의 44개 단계(위 목록)
+  중 실제로 몇 건이 "제어 단계가 예약 블록 밖의 정수를 돌려준다"는 주장을
+  참으로 만드는지 발화 원인 변수를 단계별로 다시 쟀다. 결과:
+
+  ```
+  188건  @v_currentstepid            (43개 단계)  ← 진짜
+    1건  @v_expectedpriorstepcount   (1개 단계)   ← 오탐
+  ```
+
+  오탐 1건은 `POQSettlePrco20/S16`이다. 이 단계의
+  `@v_expectedPriorStepCount int = 15`
+  (`output/Jobs/POQSettlePrco20/agent/steps/S16.md:58`)는 상태 코드가 아니라
+  "직전 완료 단계 개수" 비교값인데, 변수명에 `Step`이 들어가 예약 블록 검사
+  정규식에 걸린다. 위 44개 목록에서 `POQSettlePrco20`이 정확히 1개 단계
+  (`S16`)만 갖고 있고 나머지 세 Job(`POQSettleProc16` 6·`POQSettleProc2`
+  10·`POQSettleProc6` 27)의 합이 정확히 43이라는 점(6+10+27=43)이 이 실측과
+  정확히 들어맞는다. **정정된 진짜 수치는 43개 단계**다.
+
+  **이 회차에서 고치지 않는다.** 고치려면 검사를 "양수 정수는 코드가
+  아니다"로 좁혀야 하는데, 그러면 `1,2,3…`·`1800,1801…`류의 자기 코드
+  체계를 쓰는 단계 6개 이상(위 44개 목록 중 `POQSettleProc2`·
+  `POQSettleProc6` 다수)이 함께 빠져나간다 — 그 단계들의 정수도 마찬가지로
+  양수다. 양수를 코드로 볼지는 "정당한 개수 변수"와 "정당한 자기 코드
+  체계"를 값만으로 가르는 별도 설계 판단이 필요하고, 이번 라운드 범위
+  밖이다. 도구가 실제로 발화하는 161건·44개라는 수치 자체는 코드를 고치지
+  않았으므로 그대로다 — 이 문단은 그중 43이 실질 위반, 1이 오탐임을
+  표시하는 주석이다.
 - **문자열 코드로 응답하는 제어 단계의 규약이 아직 없다(침묵)** — 코퍼스에
   `@po_strRetCode NVARCHAR(10) OUTPUT`에 `N'B120'`을 쓰는, 레거시 출신이 없는
   제어 단계가 실재한다(`POQSettleBatch1/S03`, `POQSettleProc18`). 설계
@@ -257,10 +290,112 @@
   정수 예약 대역(`-9000 - N*10`)을 쓴다고만 정했고, 이 단계들은 INT를 돌려주지
   않는다. `CheckControlStepErrorCodeBand`는 문자열 리터럴을 만나면 조용히
   넘긴다 — 금지도 승인도 아니다. 이 형태로 규약을 넓힐지는 별도 설계가 필요하다.
+
+  [2026-08-26 결정] **INT로 통일**한다. 상태 코드 값은 예약 블록의 음수
+  정수여야 하고, 자기 단계 식별자(`N'S01'`)만 문자열로 남는다.
+
+  실측(측정 조건): `output/Jobs/*`의 `raw/PlanStructure.md`를
+  `BatchStepPlanParser`로 읽고(`MaxSteps` 40 초과 Job 제외),
+  `LegacyProcedures`가 빈 단계만 골라 `agent/steps/<Code>.md`를 본다. 대상
+  131개 제어 단계. 상태 변수를 비INT로 선언한 단계가 27개인데, 그 안에
+  문자열 **오류 코드** 17개 · **단계 식별자** 12개 · 타임스탬프·플래그
+  2개가 섞여 있었다(일부 단계는 두 갈래에 걸쳐 있어 합이 27을 넘는다 —
+  예: `POQSettlePrco20/S16`은 오류 코드(`@v_currentStepCode`)와 개수
+  변수(`@v_expectedPriorStepCount`, 위 44단계 항목의 오탐)가 한 단계 안에
+  공존한다). 앞서 기록된 "26개"는 이 갈래를 세지 않은 수였다.
+
+  17단계 목록: `POQSettleProc13`(S01,S02,S03,S16,S17,S18) ·
+  `POQSettleProc19`(S02,S03,S04,S17) · `POQSettleProc14`(S03,S16,S17) ·
+  `POQSettleProc18`(S01,S18) · `POQSettleBatch1`(S03) ·
+  `POQSettlePrco20`(S16).
+
+  왜 타입이 아니라 값으로 가르는가: 정당한 `@v_stepCode nvarchar(10) =
+  N'S01'`과 위반인 `@v_currentStepCode NVARCHAR(10) = N'B120'`은 타입이
+  같다.
+
+  이 검사가 새로 만드는 예외는 둘이다 — 다음 회차가 "왜 이건 안
+  걸리지?"를 다시 조사하지 않도록 적는다.
+  - **예외 1**: 리터럴이 이 Job의 단계 목록에 있는 코드면 침묵한다(자기
+    단계 식별자 문제만이 아니다). 실측 근거: `POQSettleProc16/S02`의
+    `@v_firstIncompleteStepCode` — 재시작 시 "첫 미완료 단계"를 가리키는
+    정당한 변수.
+  - **예외 2**: `BatchControlContract.AllowedStatusValues`(12개: `Running`·
+    `Succeeded`·`Failed`·`Restarting`·`Skipped`·`Pending`·`Held`·
+    `Released`·`Info`·`Warning`·`Error`·`Critical`)에 있으면 침묵한다.
+    근거: `N'Running'`을 "문자열 코드"로 발화하면 거짓 진술이 된다.
+
+  두 예외 적용 후 코퍼스 전체(131개 제어 단계, 위 17개보다 넓은 범위 —
+  이쪽은 리터럴 대입 발화 건수를 셌다)에서 실제로 발화하는 변수는
+  **둘뿐**이다:
+
+  ```
+  39건  @v_currentStepId    예: POQSettleProc13/S01 → BATCH-RUN-001
+  38건  @v_currentStepCode  예: POQSettleBatch1/S03 → B120
+  ```
+
+  `POQSettlePrco20/S16`의 `@v_currentStepCode nvarchar(64) = N'BATCH-PUBLISH-001'`
+  (`output/Jobs/POQSettlePrco20/agent/steps/S16.md:57`)도 이 38건 중
+  하나다 — 두 예외 중 어디에도 걸리지 않는다(`BATCH-PUBLISH-001`은 이
+  Job의 단계 코드도, `AllowedStatusValues` 12개 중 하나도 아니다).
 - **44개 단계 재생성 범위를 기존 산출물에 소급할지 미정** — 예약 대역 발급이
   기존 `output/` 코퍼스의 44개 단계를 결함으로 판정하게 되는데, 그 재생성을
   다음 회차에 바로 적용할지(기존 산출물도 소급) 신규 계획서부터로 한정할지
   사용자 결정이 필요하다.
+
+  [2026-08-26 결정] **강제하지 않고 수렴시킨다.** 검사는 켜 둔 채로 두고,
+  해당 Job을 다시 돌릴 때 자연히 걸려 고쳐지게 한다. 유예 장치는 넣지
+  않는다 — 새 코드가 필요하고 "유예를 언제 끝낼 것인가"라는 새 미결을
+  만든다.
+
+  **총계 재확정** — 처음엔 "숫자 축 44 + 문자열 축 17 − 겹침 1 = 60단계"로
+  셀 계획이었다. 그런데 위 44단계 항목의 정정대로 숫자 축의 진짜는 43이라,
+  단순히 "43 + 17 − 1 = 59"로 다시 뺄 수 있어 보인다 — **이 계산은
+  틀렸다.** 겹침을 직접 확인해야 한다: 오탐으로 숫자 축에서 빠진 단계
+  (`POQSettlePrco20/S16`)가 애초에 두 축의 겹침으로 잡혔던 바로 그
+  단계인지 실측했더니, **같다.** 근거는 위에서 이미 인용한
+  `output/Jobs/POQSettlePrco20/agent/steps/S16.md`다 — 57행의
+  `@v_currentStepCode nvarchar(64) = N'BATCH-PUBLISH-001'`(문자열 축 위반,
+  17개 안에 포함)과 58행의 `@v_expectedPriorStepCount int = 15`(숫자 축
+  오탐, 44개 중 유일한 오탐)이 **같은 단계** 안에 공존한다.
+
+  집합으로 보면: 숫자 축 43개(정정된 진짜)는 이제 `POQSettlePrco20/S16`을
+  포함하지 않는다(오탐으로 빠졌으므로). 문자열 축 17개는 여전히 그 단계를
+  포함한다. 두 집합의 교집합은 원래 1(`POQSettlePrco20/S16`)이었다가 이제
+  0으로 줄어든다 — 그 단계가 숫자 축에서 빠지면서 겹침 자체가 사라졌기
+  때문이다. 합집합(전체 결함 단계 수)은 그래서 **43 + 17 − 0 = 60단계로
+  그대로**다. "43 + 17 − 1 = 59"가 틀린 이유는 이미 사라진 겹침을 두 번째로
+  빼기 때문이다 — 오탐 제거는 그 단계를 숫자 축에서 문자열 축 전용으로
+  옮길 뿐, 전체 결함 목록에서 지우지 않는다(그 단계는 `@v_currentStepCode`
+  위반으로 여전히 정당하게 걸린다).
+
+  Job 수도 다시 세면: 숫자 축 43개가 속한 Job은 `POQSettleProc16`·
+  `POQSettleProc2`·`POQSettleProc6` 3개(`POQSettlePrco20`은 숫자 축에서
+  빠졌다), 문자열 축 17개가 속한 Job은 `POQSettleProc13`·`POQSettleProc19`·
+  `POQSettleProc14`·`POQSettleProc18`·`POQSettleBatch1`·`POQSettlePrco20`
+  6개, 겹치는 Job은 `POQSettlePrco20` 하나뿐이라 3+6−1=**9개 Job**이다.
+  (이전 초안이 "10개 Job"으로 적었던 것은 이 산식으로 재확인되지 않는다 —
+  직접 나열하면 9개뿐이므로 여기서 9로 정정한다.)
+- **출력 파라미터를 통한 상태/오류 코드 축은 이번 라운드에서 열지 않는다**
+  — 위 두 항목이 다루는 것은 제어 단계 **내부** 상태 변수(`@v_...`)뿐이고,
+  T-SQL `OUTPUT` 파라미터로 호출자에게 반환되는 코드는 별개 축이다. 제어
+  단계 131개 중 `CREATE PROCEDURE`가 있는 것은 **36개(27%)**뿐이다 — 대상
+  Job의 target language가 C#이라 대부분이 T-SQL 프로시저가 아니기
+  때문이다. 그 36개 안에서도 어느 파라미터가 반환 코드인지를 이름으로
+  가려야 한다: `@po_intRetVal int`(24) · `@po_strErrMsg varchar`(21,
+  메시지) · `@po_isValid bit`(2, 플래그) · `@po_runId bigint`(1, 식별자) ·
+  `@po_intRetVal nvarchar`(1, 이름과 타입이 어긋남).
+
+  이름 추정은 이 저장소에서 이미 두 번 오탐을 냈다. 위 44단계 항목의
+  `POQSettlePrco20/S16`(`@v_expectedPriorStepCount`가 이름에 `Step`이
+  들어가 걸린 것)도 같은 종류의 문제를 보탠다 — 이름으로 "이 변수가
+  코드다"를 가리는 순간 오탐 여지가 생긴다. 반면 값 축(예약 음수 대역
+  검사)은 131개를 이름 추정 없이 균일하게 덮는다.
+
+  남는 여지: `@po_intRetVal`인데 `nvarchar`인 1건은 이름 추정이 필요 없다
+  (이름과 타입이 이미 어긋나 있어 이름만으로 코드 파라미터를 알 수
+  있으므로). 다만 1건이라 지금 검사를 만들 값어치가 없다고 판단했다 — 이
+  축을 열려는 다음 사람은 이 수치(36개/27%, 파라미터별 분포)부터 다시
+  재야 한다.
 
 ### 정적 분석 / 프롬프트 계약
 
