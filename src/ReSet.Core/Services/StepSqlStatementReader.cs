@@ -34,7 +34,28 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> JoinColumns,
         bool HasGrouping,
         bool HasOpaqueJoinSource = false,
-        string? CodeAnchor = null);
+        string? CodeAnchor = null)
+    {
+        /// <summary>
+        /// 하위 스코프(CTE 본문·파생 테이블·최상위 WHERE 안의 하위질의)의 WHERE에
+        /// 나오는 컬럼. <see cref="PredicateColumns"/>와 겹치지 않는다.
+        ///
+        /// [무엇을 위한 값인가] 원본이 최상위 WHERE에 두었던 술어를 이행이 하위
+        /// 스코프로 옮기는 관용구가 실재한다(2026-08-26 표본 판정 30건). 최상위만
+        /// 보는 대조는 그것을 "없어졌다"로 읽는다. 이 값이 있으면 검사 B가
+        /// <b>소실과 이전을 구분</b>할 수 있다.
+        ///
+        /// [무엇을 뜻하지 않는가] 하위 스코프에 있다고 의미 동등은 아니다.
+        /// 동등성은 조인이 대상 행 집합을 보존하느냐에 달렸고 그 전제는 로컬에서
+        /// 검증할 수 없다. 이 값은 "옮겨갔다"까지만 말한다.
+        ///
+        /// [SET 절은 세지 않는다] 갱신할 "값"을 고르는 하위질의의 술어는 갱신할
+        /// "행"을 고르는 술어가 아니다. 세면 우연히 이름이 같은 컬럼이 진짜 소실을
+        /// 가린다.
+        /// </summary>
+        public IReadOnlyList<string> SubordinatePredicateColumns { get; init; }
+            = Array.Empty<string>();
+    }
 
     /// <summary>
     /// 단계 지시서의 ```sql 펜스에서 DML 문장을 읽는다.
@@ -455,21 +476,25 @@ namespace ReSet.Core.Services
 
             public override void Visit(UpdateStatement node) =>
                 Add("UPDATE", node, node.UpdateSpecification?.Target,
-                    node.UpdateSpecification?.WhereClause, node.UpdateSpecification?.FromClause);
+                    node.UpdateSpecification?.WhereClause, node.UpdateSpecification?.FromClause,
+                    node.WithCtesAndXmlNamespaces);
 
             public override void Visit(DeleteStatement node) =>
                 Add("DELETE", node, node.DeleteSpecification?.Target,
-                    node.DeleteSpecification?.WhereClause, node.DeleteSpecification?.FromClause);
+                    node.DeleteSpecification?.WhereClause, node.DeleteSpecification?.FromClause,
+                    node.WithCtesAndXmlNamespaces);
 
             public override void Visit(InsertStatement node) =>
-                Add("INSERT", node, node.InsertSpecification?.Target, null, null);
+                Add("INSERT", node, node.InsertSpecification?.Target, null, null,
+                    node.WithCtesAndXmlNamespaces);
 
             private void Add(
                 string kind,
                 TSqlStatement statement,
                 TableReference? target,
                 WhereClause? where,
-                FromClause? from)
+                FromClause? from,
+                WithCtesAndXmlNamespaces? ctes)
             {
                 var predicates = new ColumnCollector();
                 var joins = new ColumnCollector();
@@ -479,6 +504,14 @@ namespace ReSet.Core.Services
                 from?.Accept(joins);
                 statement.Accept(grouping);
 
+                // 대상 행을 거를 수 있는 세 자리에서만 모은다. statement.Accept로
+                // 문장 전체를 훑으면 SET 절 안의 하위질의까지 걸리는데, 그건 갱신할
+                // "값"을 고르는 술어이지 갱신할 "행"을 고르는 술어가 아니다.
+                var subordinate = new SubordinatePredicateCollector();
+                ctes?.Accept(subordinate);
+                from?.Accept(subordinate);
+                where?.Accept(subordinate);
+
                 Found.Add((
                     new StepSqlStatement(
                         kind,
@@ -487,7 +520,10 @@ namespace ReSet.Core.Services
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
                         grouping.Found,
-                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, from)),
+                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, from))
+                    {
+                        SubordinatePredicateColumns = subordinate.Columns.ToList(),
+                    },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
             }
@@ -627,6 +663,34 @@ namespace ReSet.Core.Services
 
             /// <summary>파생 테이블(FROM 절 안의 (SELECT …) 별칭) 안쪽도 최상위가 아니다.</summary>
             public override void ExplicitVisit(QueryDerivedTable node) { }
+        }
+
+        /// <summary>
+        /// 하위 스코프의 WHERE 컬럼만 모은다.
+        ///
+        /// [왜 QuerySpecification이 곧 하위 스코프인가] UPDATE·DELETE의 최상위
+        /// WHERE는 QuerySpecification이 아니라 UpdateSpecification·
+        /// DeleteSpecification에 달린다. 그래서 이 방문자가 만나는 모든
+        /// QuerySpecification은 정의상 CTE 본문이거나 파생 테이블이거나
+        /// 하위질의다 - "여기가 최상위인가"를 따로 판정할 필요가 없다.
+        ///
+        /// [ColumnCollector를 재사용하는 이유] 스코프마다 "그 스코프의 최상위
+        /// WHERE만"이라는 같은 규칙이 적용된다. 더 안쪽 스코프는 이 방문자의
+        /// 기본 순회가 각각 따로 방문해 모은다.
+        /// </summary>
+        private sealed class SubordinatePredicateCollector : TSqlFragmentVisitor
+        {
+            private readonly List<string> _columns = new();
+            public IReadOnlyList<string> Columns => _columns;
+
+            public override void Visit(QuerySpecification node)
+            {
+                if (node.WhereClause == null) return;
+
+                var inner = new ColumnCollector();
+                node.WhereClause.Accept(inner);
+                _columns.AddRange(inner.Columns);
+            }
         }
 
         /// <summary>문장 전체(WHERE의 IN 서브쿼리 포함)에 GROUP BY·HAVING이 있는지만 본다 - 값은 안 본다.</summary>

@@ -57,6 +57,100 @@ public sealed class StepSqlStatementReaderTests
         Assert.DoesNotContain("Hidden", statement.PredicateColumns);   // 스칼라 하위질의 안쪽
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // 하위 스코프 술어 — 원본이 최상위에 두었던 술어를 이행이 CTE·파생 테이블·
+    // EXISTS로 옮기면, 최상위만 보는 PredicateColumns로는 "없어졌다"로 보인다.
+    // 소실과 이전을 구분하려면 옮겨간 자리도 재료로 실어야 한다.
+    // 대상 행을 거를 수 있는 세 자리(WITH·FROM·최상위 WHERE)에서만 모은다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CollectsCtePredicatesIntoSubordinateColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH FeeSource AS (\n" +
+            "    SELECT A.PLTID, A.ID FROM dbo.TSettleMst AS A\n" +
+            "    WHERE A.YMD = @p AND A.PGName = 'pointpay'\n" +
+            ")\n" +
+            "UPDATE Y SET Y.PGComm = 0 FROM dbo.TSettleMst AS Y\n" +
+            "INNER JOIN FeeSource AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("YMD", statement.SubordinatePredicateColumns);
+        Assert.Contains("PGName", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("YMD", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void CollectsDerivedTablePredicatesIntoSubordinateColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE Y SET Y.PGComm = X.Amt FROM dbo.TSettleMst AS Y\n" +
+            "INNER JOIN (\n" +
+            "    SELECT S.PLTID, S.ID, 1 AS Amt FROM dbo.TSettleMst AS S\n" +
+            "    WHERE S.DiscountFlag = 'Y'\n" +
+            ") AS X ON X.PLTID = Y.PLTID AND X.ID = Y.ID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("DiscountFlag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("DiscountFlag", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void CollectsExistsSubqueryPredicatesIntoSubordinateColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.OutState = 9 FROM dbo.TSettleMst AS A\n" +
+            "WHERE A.UseState = 0\n" +
+            "  AND EXISTS (SELECT 1 FROM dbo.TSettleMst AS B\n" +
+            "              WHERE B.PLTID = A.PLTID AND B.OutState = 9);"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("PLTID", statement.SubordinatePredicateColumns);
+        Assert.Contains("UseState", statement.PredicateColumns);
+        Assert.DoesNotContain("PLTID", statement.PredicateColumns);
+    }
+
+    // 갱신할 "값"을 고르는 술어이지 갱신할 "행"을 고르는 술어가 아니다. 이것을
+    // 세면 우연히 이름이 같은 컬럼이 진짜 소실을 가려 잘못 침묵시킨다.
+    [Fact]
+    public void DoesNotCollectPredicatesFromSetClauseSubqueries()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE Y SET Y.CLCOMM = (SELECT TOP 1 X.Amt FROM dbo.TCost AS X WHERE X.Hidden = 1)\n" +
+            "FROM dbo.TSettleMst AS Y WHERE Y.YMD = @p;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("Hidden", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("Hidden", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void CollectsNestedSubordinateScopes()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Outer1 AS (\n" +
+            "    SELECT S.PLTID FROM dbo.TSettleMst AS S\n" +
+            "    WHERE S.YMD = @p\n" +
+            "      AND S.PLTID IN (SELECT T.PLTID FROM dbo.TTx AS T WHERE T.Cancelled = 1)\n" +
+            ")\n" +
+            "UPDATE Y SET Y.OutState = 9 FROM dbo.TSettleMst AS Y\n" +
+            "INNER JOIN Outer1 AS X ON X.PLTID = Y.PLTID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("YMD", statement.SubordinatePredicateColumns);
+        Assert.Contains("Cancelled", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void SubordinateColumnsAreEmptyWhenNoSubordinateScopeExists()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y WHERE Y.YMD = @p;"));
+
+        Assert.Empty(Assert.Single(statements).SubordinatePredicateColumns);
+    }
+
     [Fact]
     public void FlagsGroupingWhenGroupByOrHavingPresent()
     {
