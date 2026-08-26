@@ -6410,9 +6410,18 @@ namespace ReSet.Core.Services
                 // 조인 키 칸 대조는 접는다 - 실물(S07 U2·U13·U17)은 원본 단일 UPDATE를
                 // `UPDATE 대상 ... FROM 대상 AS Y INNER JOIN <계산용 CTE> ON <좁은 키>`로
                 // 재구성하는데, 진짜 필터(PGName·ClientID 등)는 그 CTE 안의 WHERE에
-                // 있어 최상위만 보는 JoinColumns로는 볼 수 없다. 최상위 WHERE 술어
-                // 컬럼 대조는 이 사각지대와 무관하므로(S07 U13의 실제 결함 YMD·PGNAME
-                // 누락은 이쪽에서 여전히 잡힌다) 그대로 둔다.
+                // 있어 최상위만 보는 JoinColumns로는 볼 수 없다 - 그 근거는 그대로
+                // 유효하다.
+                //
+                // [바뀐 것] 태스크 22 시절엔 "최상위 WHERE 술어 컬럼 대조는 이
+                // 사각지대와 무관하다(S07 U13의 실제 결함 YMD·PGNAME 누락은 이쪽에서
+                // 여전히 잡힌다)"고 적었으나, 실물 확인 결과 성립하지 않는다 - S07
+                // U13은 YMD·PGNAME을 둘 다 CTE 안 WHERE에 두므로 다른 30건과 같은
+                // 이전 관용구다(2026-08-26 표본 판정, 설계 §0). 그래서 이제 두 대조가
+                // 서로 다른 이유로 하위 스코프를 다룬다 - 조인 키는
+                // HasOpaqueJoinSource로 통째로 접고, 술어는 위 relocated로 컬럼
+                // 단위로 거른다(둘 다 이전이면 둘 다 침묵, 하나만 이전이면 남은
+                // 하나만 발화).
                 if (!group.Any(a => a.Statement.HasOpaqueJoinSource))
                 {
                     ReportMissing("조인 키", row.JoinKeys, joinPresent);

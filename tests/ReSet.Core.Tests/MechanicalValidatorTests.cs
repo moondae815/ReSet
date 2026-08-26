@@ -8253,16 +8253,26 @@ END";
         {
             var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
 
+            // 최상위 WHERE를 아예 없앤다 - 남겨두면(예: `WHERE Y.UseState = 0`)
+            // 명세서에 없는 최상위 술어가 생겨 검사 C(CheckAnchoredStatementExtras,
+            // 무관한 별도 검사)가 "갱신 13"·"YMD"를 함께 담은 별개 메시지를 내고,
+            // 그 메시지가 아래 단언을 우연히 통과시킨다 - 검사 B가 실제로 발화했는지는
+            // 증명하지 못한 채로.
             var markdown = "### S07 단계\n\n```sql\n" +
                 "-- U13\n" +
-                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y WHERE Y.UseState = 0;\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y;\n" +
                 "```\n";
 
             var result = new MechanicalValidator().ValidateBatchStep(
                 markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
-            Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
+            // 검사 B의 라벨("최상위 WHERE 술어 컬럼")로 좁혀서 단 하나만 잡히는지
+            // 본다 - 검사 C는 같은 라벨을 쓰지 않으므로 둘 이상 잡히면 그 자체가
+            // 실패다.
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("YMD", reported);
         }
 
         [Fact]
