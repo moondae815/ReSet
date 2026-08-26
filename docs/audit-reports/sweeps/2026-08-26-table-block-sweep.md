@@ -42,7 +42,7 @@ L1 기계 검증기(`MechanicalValidator`)의 표 대조 검사들은 헤딩 절
 | `CheckTransactionBoundaries` (4643) | `TransactionBoundaryExtractor.TableHeading` | `TransactionBoundaryExtractor` | 1272 (헤더 행 1273) | 절 전체 평면 수집 |
 | `CheckSetAssignments` (4723) | `SetAssignmentExtractor.TableHeading` | `SetAssignmentExtractor` | 1297 (헤더 행 1298) | 절 전체 평면 수집 |
 | `CheckErrorCodes` (4806) | `DmlScopeExtractor.ErrorCodeTableHeading` | `DmlScopeExtractor` | 1322 (헤더 행 1323) | 절 전체 평면 수집 |
-| `ReportTableShapeBreaks` (4965) | 호출부가 준다 — `MachineConfirmedTables.All`의 11개 헤딩(`CheckMachineTableShape` 4899) + `InsertHeadingPrefix` 절(`CheckInsertMappingTableShape` 4941) | 카탈로그 | 표마다 다름 | **이미 블록 인식** (빈 줄을 경계로 쪼갬, 4968-4982) |
+| `ReportTableShapeBreaks` (4965) | 호출부가 준다 — `MachineConfirmedTables.All`의 11개 헤딩(`CheckMachineTableShape` 4891) + `InsertHeadingPrefix` 절(`CheckInsertMappingTableShape` 4922) | 카탈로그 | 표마다 다름 | **이미 블록 인식** (빈 줄을 경계로 쪼갬, 4968-4982) |
 
 세 줄이 표의 결론이다.
 
@@ -111,12 +111,25 @@ L1 기계 검증기(`MechanicalValidator`)의 표 대조 검사들은 헤딩 절
 `raw/metadata.json`의 DDL에 추출기를 돌려 얻은 실제 기대 사실로, 같은 문서에 대해
 관대 수집과 좁힘 수집의 판정을 하나씩 견줬다. 대상은 추출기가 값싸게 재현되는 세 검사다.
 
-| 검사 (`output/`) | 절 있는 문서 | 대조한 기대 사실 | **(가)** | **(나)** |
+| 검사 (`output/`) | 절 있는 문서 [^3-1] | 대조한 기대 사실 | **(가)** | **(나)** |
 | :--- | ---: | ---: | ---: | ---: |
 | `CheckCaseBranches` | 12 | 175 | 0 | 0 |
 | `CheckSetAssignments` | 20 | 119 | 0 | 0 |
 | `CheckTransactionBoundaries` | 12 | **105** | **0** | **0** |
 | 합계 | — | **399** | **0** | **0** |
+
+[^3-1]: **이 칸은 §2-1의 "절 발견"보다 작다 — 사실 대조가 절 있는 문서 전부를 덮지
+    않았다.** `CheckSetAssignments`는 27 대 20, `CheckCaseBranches`는 16 대 12다.
+    원인을 규명했다: 2단계 루프가 `<저장소>/Procedures`와 `<저장소>/Functions` 두
+    디렉터리만 돌아, `output/External/SETTLE_CARD_DB/Functions/` 아래 7개 객체가
+    통째로 빠졌다. 실측으로 확인한 차이다 — 변수 대입 절을 가진 27개 문서 중 7개가
+    `External/` 아래이고(27 − 7 = 20), CASE 분기 절을 가진 16개 중 4개가 그렇다
+    (16 − 4 = 12). 그 7개 객체에는 `raw/metadata.json`이 모두 있으므로 재료가 없어서가
+    아니라 **경로 열거를 좁게 짠 내 실수**다.
+    **게이트 값에는 영향이 없다** — 트랜잭션 경계 절을 가진 12개 문서 중 `External/`
+    아래는 0개이므로 `CheckTransactionBoundaries`는 12 대 12로 절 있는 문서를 전부
+    덮었다. 나머지 두 검사의 (가)·(나) 0건은 `External/` 11개 문서-검사 짝을 뺀
+    범위에서의 값이다.
 
 **사례 목록: 0건.** 399개 기대 사실 가운데 `관대=present, 좁힘=absent`인 것이 하나도 없었다.
 
@@ -192,18 +205,35 @@ L1 기계 검증기(`MechanicalValidator`)의 표 대조 검사들은 헤딩 절
    **구조 대조만** 했다 — "절 안에 블록이 둘 이상인가", "좁힘이 블록을 찾는가"까지다.
    블록이 하나뿐이면 두 수집이 같은 집합을 내므로 판정이 갈릴 수 없다는 논증으로
    (가)·(나) 0을 말한 것이지, 기대 사실 하나하나를 돌려 본 것이 아니다.
-2. **`Spec.md`만 봤다.** `BatchMigrationPlan.md`·`PlanStructure.md` 등 다른 산출물은
+   그 세 검사도 절 있는 문서를 전부 덮지는 못했다 — `External/` 아래 객체가 2단계에서
+   빠진 경위는 §3의 각주에 적었다.
+2. **계획서가 지정한 코퍼스 경로는 문서 0건이었다 — 고쳐서 돌렸다.**
+   Task 1 브리프의 프로브 코드는 `Path.Combine(root, "Jobs")` 아래에서 `Spec.md`를
+   찾는다. 그 글롭(`output/Jobs/**/Spec.md`)에 걸리는 문서는 **0건**이다 —
+   `output/Jobs/<잡이름>/` 아래에 있는 것은 `docs/BatchMigrationPlan.md`·
+   `docs/Thinking.md`·`raw/PlanStructure.md`이지 `Spec.md`가 아니다. 이 물결이 재는
+   기계 확정 표는 **명세서**에 있고, 명세서의 실제 위치는
+   `output/{Procedures,Functions,External/<DB>/Functions}/<객체>/docs/Spec.md`다
+   (현행 `output/` 31건, `output.bak-2026-08-22` 31건, 합 62건 — 그중
+   `output/Procedures/*/docs/Spec.md`가 14건).
+   **브리프 코드를 그대로 돌렸다면 프로브는 문서 0건을 순회하고, 건너뜀도 실패도 없이
+   모든 검사에 "블록 2개 이상 0건"을 찍어 "영향 0"이라는 결론이 나왔을 것이다.**
+   심링크를 걸었으므로 `Skip`도 걸리지 않았을 것이고, 코퍼스 없이 검증하는 것을
+   막으려고 만든 `CorpusSkip`의 안전망도 이 실패 모양은 못 잡는다 — 코퍼스는 있는데
+   글롭이 빈 경우이기 때문이다. 다음 태스크의 브리프가 이 글롭을 재사용하지 않도록
+   여기 적어 둔다. **경로를 고쳐 62개 문서를 실제로 읽은 값이 이 보고서의 수치다.**
+3. **`Spec.md`만 봤다.** `BatchMigrationPlan.md`·`PlanStructure.md` 등 다른 산출물은
    범위 밖이다. 이 검사들은 `Validate(markdown, expectations)` 경로에서 돌므로 Spec.md가
    주 소비자지만, `ValidateConsolidated`·`ValidateBatchStep` 경로는 확인하지 않았다.
-3. **절 앵커를 못 찾은 문서는 이 측정에 들어오지 않는다.** 예를 들어 `CheckErrorCodes`는
+4. **절 앵커를 못 찾은 문서는 이 측정에 들어오지 않는다.** 예를 들어 `CheckErrorCodes`는
    62개 문서 전부에서 절이 없어 한 줄도 재지 못했다. `CheckReferencedFunctionsCore`도
    현행 8건뿐이다 — 표본이 얇다.
-4. **좁힘 규칙을 하나로 가정했다.** "블록의 첫 행에 헤더 칸이 **전부** 들어 있으면 그
+5. **좁힘 규칙을 하나로 가정했다.** "블록의 첫 행에 헤더 칸이 **전부** 들어 있으면 그
    블록의 데이터 행을 쓴다"로 잡았다. Task 2가 실제로 도입할 `TableHeaderCells`의 판정
    규칙이 이와 다르면(부분집합 허용, 순서 요구 등) §2의 "좁힘 인식 실패" 수치가 달라진다.
    특히 §2-2의 27건은 **규칙 선택에 그대로 좌우되는 숫자**다.
-5. **코퍼스가 62개 문서다.** 우연한 토큰 일치는 문서 수와 표 밀도에 비례해 나타난다.
+6. **코퍼스가 62개 문서다.** 우연한 토큰 일치는 문서 수와 표 밀도에 비례해 나타난다.
    오늘 0건이라는 것이 규모가 커져도 0건이라는 뜻은 아니다 — 그것이 이 물결의 전제였다.
-6. **거짓 음성의 "잠재량"은 안 쟀다.** 관대 수집이 지금 무관한 행을 얼마나 대조 대상에
+7. **거짓 음성의 "잠재량"은 안 쟀다.** 관대 수집이 지금 무관한 행을 얼마나 대조 대상에
    넣고 있는지(§3-1의 세 문서에서 각각 표 하나분 — 헤더·구분 행까지 10줄·10줄·12줄)는
    셌지만, 그 행들이 앞으로 어떤 사실과 우연히 맞을 수 있는지는 정량화하지 않았다.
