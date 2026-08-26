@@ -125,5 +125,18 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("string status code", prompt);
         }
+
+        [Fact]
+        public async Task Critic_ShouldExemptCheckpointStatusValuesFromTheStringCodeBan()
+        {
+            // FIX ROUND 1 - Important 1: 채점 기준 3의 바로 두 줄 위(AiService.cs:4369)가
+            // "all steps spell ... status values identically (`Succeeded`, never
+            // `Completed`)"라고 요구한다. 그 상태값은 문자 그대로 문자열로 대입된다
+            // (`SET @v_stepStatus = N'Running'`). 예외를 달지 않으면 같은 ScoreInterface
+            // 블록 안에서 Critic이 정상 계획서를 감점하고, 그 축에서 채점이 불가능해진다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("are also not step error codes and stay strings", prompt);
+        }
     }
 }

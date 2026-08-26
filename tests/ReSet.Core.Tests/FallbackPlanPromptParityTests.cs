@@ -152,11 +152,14 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task Plan_ShouldKeepTheStepIdentifierAsAString()
         {
-            // 이 구분이 없으면 모델이 저널의 StepCode까지 숫자로 바꾸려 들 수 있고,
-            // 그것은 BatchControlContract(StepCode nvarchar(10)) 위반이 된다.
+            // FIX ROUND 1 - Important 2: 검사(MechanicalValidator)는 StepCode를 선언한
+            // 네 개 계약 표 어디에 쓰이든, 그리고 이 Job의 단계 목록에 있는 어떤 코드든
+            // (자기 코드만이 아니라 다른 단계를 가리키는 코드도) 예외로 둔다. 프롬프트가
+            // "저널에 쓰이는 자기 코드"로만 좁히면 검사가 침묵하는
+            // `@v_firstIncompleteStepCode` 같은 정당한 패턴까지 금지하는 셈이 된다.
             var result = await CaptureAsync();
 
-            Assert.Contains("step identifier written to `batch.BatchStepJournal.StepCode` stays a string", result.SystemPrompt);
+            Assert.Contains("a step code from this Job's step list (`N'S01'`) stays a string wherever it is used", result.SystemPrompt);
         }
 
         [Fact]

@@ -85,8 +85,9 @@ namespace ReSet.Core.Services
             "integers from the block. NEVER assign a string code such as `N'B161'` or `N'BATCH-LOCK-001'` - " +
             "an invented string vocabulary is exactly what this rule exists to prevent, and a non-numeric " +
             "bare token such as `B161` does not even compile (`DECLARE @v INT = B161` has no such identifier). " +
-            "One string stays a string: the step identifier written to `batch.BatchStepJournal.StepCode` stays a string " +
-            "(`N'S01'`), because the control contract declares that column `nvarchar(10)`. That is identity, not a code. " +
+            "One string stays a string: a step code from this Job's step list (`N'S01'`) stays a string wherever " +
+            "it is used - every `StepCode` column in the control contract is `nvarchar(10)`, and a variable that " +
+            "names another step (the first incomplete step on restart) is identity, not a code. " +
             "Checkpoint/execution status values are not step error codes either: `Running`, `Succeeded`, `Failed`, " +
             "`Skipped`, `Pending`, `Held`, `Released` (the vocabulary the Batch Control Table Contract defines) " +
             "describe run state, not why a step failed, and stay as the strings that contract already defines. " +
