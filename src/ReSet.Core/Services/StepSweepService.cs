@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace ReSet.Core.Services
@@ -178,6 +179,68 @@ namespace ReSet.Core.Services
         /// </summary>
         private static MechanicalValidator CreateValidator() => new();
 
-        private static SweepIndicators ComputeIndicators(SweepInput input) => new(0, 0, 0);
+        /// <summary>
+        /// 캐시 17 인상 전에 세야 할 노출량 둘.
+        ///
+        /// [다중 레거시 SP 단계] MergeErrorCodeMaps는 코드 문자열만을 키로 삼고 SP로
+        /// 스코프하지 않는다. SP A에만 있는 코드가 병합 사전에 남아, 실제로는 SP B에서
+        /// 온 문장을 A의 (Kind, Ordinal)로 환산할 수 있다. 하위 가드(후보 1개 판정 +
+        /// TargetTable 대조)는 두 SP가 같은 물리 테이블을 갱신하면 통과한다.
+        ///
+        /// [코드 집합 어긋남] 실측 사례가 있다 - UP_UTIL_SETTLE_COMM_UPD의 원본은
+        /// -9/-10/-11을 쓰는데 이행 코드는 같은 세 블록에 -10/-11/-12를 단다. -9가
+        /// 소실되고 이후 전체가 1씩 밀렸다. 밀림을 직접 보는 대신 밀림의 원인(라벨
+        /// 소실)을 본다 - 집합 단위라 값싸다.
+        /// </summary>
+        private static SweepIndicators ComputeIndicators(SweepInput input)
+        {
+            var multiProcedureSteps = 0;
+            var missingSpecCodes = 0;
+            var unknownCodes = 0;
+
+            foreach (var job in input.Jobs)
+            {
+                foreach (var step in job.Steps)
+                {
+                    if (step.LegacyProcedures.Count > 1) multiProcedureSteps++;
+
+                    if (!job.StepMarkdownByCode.TryGetValue(step.Code, out var markdown)
+                        || string.IsNullOrWhiteSpace(markdown))
+                    {
+                        continue;
+                    }
+
+                    var stepCodes = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var statement in StepSqlStatementReader.Read(markdown))
+                    {
+                        if (!string.IsNullOrWhiteSpace(statement.CodeAnchor))
+                        {
+                            stepCodes.Add(statement.CodeAnchor!);
+                        }
+                    }
+
+                    var specCodes = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var procedure in step.LegacyProcedures)
+                    {
+                        if (!job.DdlByProcedure.TryGetValue(procedure, out var ddl)) continue;
+                        job.DateParameterByProcedure.TryGetValue(procedure, out var dateParameter);
+
+                        foreach (var code in BuildSimulatedErrorCodeMap(
+                                     ddl, dateParameter ?? string.Empty).Keys)
+                        {
+                            specCodes.Add(code);
+                        }
+                    }
+
+                    // 양쪽이 다 비면 대조할 것이 없다 - 어긋남이 아니라 무재료다.
+                    if (stepCodes.Count == 0 && specCodes.Count == 0) continue;
+
+                    if (specCodes.Except(stepCodes, StringComparer.Ordinal).Any()) missingSpecCodes++;
+                    if (stepCodes.Except(specCodes, StringComparer.Ordinal).Any()) unknownCodes++;
+                }
+            }
+
+            return new SweepIndicators(multiProcedureSteps, missingSpecCodes, unknownCodes);
+        }
     }
 }

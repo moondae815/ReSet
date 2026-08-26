@@ -188,5 +188,101 @@ END";
             Assert.Equal(0, report.Gaps.MeasuredPairs);
             Assert.Empty(report.Findings);
         }
+
+        [Fact]
+        public void MultiProcedureStepsAreCounted()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                Steps = new List<BatchStepPlan>
+                {
+                    new("S01", "둘", new List<string> { "dbo.UP_A", "dbo.UP_B" },
+                        new List<string>(), new List<string>(), false, new List<string>()),
+                    new("S02", "하나", new List<string> { "dbo.UP_A" },
+                        new List<string>(), new List<string>(), false, new List<string>()),
+                },
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = StepMarkdownMissingPgName,
+                    ["S02"] = StepMarkdownMissingPgName,
+                },
+            };
+
+            var report = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.MultiProcedureSteps);
+        }
+
+        // UP_UTIL_SETTLE_COMM_UPD의 -9 소실 모양이다. SP 표에는 -13이 있는데
+        // 단계 SQL은 -14만 단다 - 라벨이 밀렸다는 신호다.
+        [Fact]
+        public void CodeSetMismatchIsCountedInBothDirections()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = StepMarkdownMissingPgName.Replace("-13", "-14"),
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(1, indicators.StepsMissingSpecCodes);   // 표의 -13이 단계에 없다
+            Assert.Equal(1, indicators.StepsWithUnknownCodes);   // 단계의 -14가 표에 없다
+        }
+
+        [Fact]
+        public void MatchingCodeSetsCountAsNeitherMismatch()
+        {
+            var indicators = StepSweepService.Sweep(OneJobInput()).Indicators;
+
+            Assert.Equal(0, indicators.StepsMissingSpecCodes);
+            Assert.Equal(0, indicators.StepsWithUnknownCodes);
+        }
+
+        // 뮤테이션 발견: `if (stepCodes.Count == 0 && specCodes.Count == 0) continue;`를
+        // 지워도 이 계획의 다른 세 테스트는 죽지 않는다 - 두 빈 집합의 Except는
+        // 방향에 상관없이 항상 비어 있으므로 그 가드는 현재 코드에서 관찰 가능한
+        // 차이를 만들지 않는다. 그래도 "무재료는 어긋남이 아니다"라는 계약을
+        // 테스트로 명시적으로 못박아 둔다.
+        [Fact]
+        public void NoCodeMaterialOnEitherSideIsNotCountedAsMismatch()
+        {
+            const string stepMarkdownNoCodeAnchor = @"### S01. 정산 마스터 갱신
+
+설명 문단이다.
+
+```sql
+UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD;
+```
+";
+            const string ddlWithNoErrorCode = @"
+CREATE PROCEDURE dbo.UP_TEST @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD AND PGNAME = 'X';
+END";
+
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = stepMarkdownNoCodeAnchor,
+                },
+                DdlByProcedure = new Dictionary<string, string>
+                {
+                    ["dbo.UP_TEST"] = ddlWithNoErrorCode,
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(0, indicators.StepsMissingSpecCodes);
+            Assert.Equal(0, indicators.StepsWithUnknownCodes);
+        }
     }
 }
