@@ -63,6 +63,54 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Extract_ShouldIgnoreParenthesesThatOnlyWrapAWholeArgument()
+        {
+            // 실측(POQSettleBatch1 S05·S07): 명세서가 첫 인자를 괄호로 한 번 더 감싸고
+            // 계획서는 감싸지 않았을 뿐인데 문자열 정확 일치라 "반올림 계산 누락"으로
+            // 갈렸다. ROUND((a+b),0,f)와 ROUND(a+b,0,f)는 같은 계산이고 같은 금액이다.
+            // 이 오탐 하나로 네 단계가 재시도 5회를 헛되이 소진하고 정확한 문서에
+            // 거짓 경고가 붙었다.
+            var wrapped = Shapes("`ROUND((ROUND(X.A,0,Y.CommSumRoundFlag)+ROUND(X.B,0,Y.CommSumRoundFlag)),0,Y.CommRoundFlag)`");
+            var bare = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)+ROUND(X.B,0,Y.CommSumRoundFlag),0,Y.CommRoundFlag)`");
+
+            Assert.Equal(bare, wrapped);
+        }
+
+        [Fact]
+        public void Extract_ShouldIgnoreParenthesesThatOnlyWrapASinglePrimary()
+        {
+            // 실측(POQSettleBatch1 S09·S10): 명세서가 뺄셈의 오른쪽 항 ROUND 호출을
+            // 괄호로 감쌌다 - a-(ROUND(...)). 감싼 것이 항 하나뿐이면 어떤 자리에 놓여도
+            // 결합이 달라지지 않는다.
+            var wrapped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)-(ROUND(X.B,0,Y.CommSumRoundFlag)),0,Y.VatRoundFlag)`");
+            var bare = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)-ROUND(X.B,0,Y.CommSumRoundFlag),0,Y.VatRoundFlag)`");
+
+            Assert.Equal(bare, wrapped);
+        }
+
+        [Fact]
+        public void Extract_ShouldKeepParenthesesThatChangeTheBinding()
+        {
+            // 괄호를 전부 지우면 이 둘이 같아진다 - 그러면 금액이 달라지는 진짜 결함을
+            // 놓친다. 지우는 것은 "지워도 파싱이 그대로인 괄호"뿐이다.
+            var grouped = Shapes("`ROUND((ROUND(X.A,0,Y.CommSumRoundFlag)+X.B)*X.C,0,Y.CommRoundFlag)`");
+            var ungrouped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)+X.B*X.C,0,Y.CommRoundFlag)`");
+
+            Assert.NotEqual(grouped, ungrouped);
+        }
+
+        [Fact]
+        public void Extract_ShouldKeepParenthesesThatGroupASubtrahend()
+        {
+            // a-(b+c)와 a-b+c는 다른 금액이다. 감싼 것이 항 하나가 아니고 인자 전체도
+            // 아니면 남긴다.
+            var grouped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)-(X.B+X.C),0,Y.VatRoundFlag)`");
+            var ungrouped = Shapes("`ROUND(ROUND(X.A,0,Y.CommSumRoundFlag)-X.B+X.C,0,Y.VatRoundFlag)`");
+
+            Assert.NotEqual(grouped, ungrouped);
+        }
+
+        [Fact]
         public void Extract_ShouldSkipAnExpressionWhoseRoundingModeComesFromAFunction()
         {
             // 실측(POQSettleProc14·15 S08): 원본이 반올림 방식을 플래그 컬럼이 아니라
