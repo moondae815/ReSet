@@ -6478,8 +6478,10 @@ namespace ReSet.Core.Services
                     StringComparer.OrdinalIgnoreCase.GetHashCode(key.Kind), key.Ordinal));
 
         /// <summary>
-        /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 서수를 둘
-        /// 이상이 주장하면 그 서수를 통째로 뺀다.</b>
+        /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 (종류, 서수)를
+        /// 둘 이상이 주장하면 그 (종류, 서수)를 통째로 뺀다.</b> 묶음의 단위는 서수가
+        /// 아니라 (종류, 서수)다 - 서수는 종류별로 1부터 다시 시작하므로 명세서 DML
+        /// 범위 표의 `INSERT 4`와 `DELETE 4`는 애초에 서로 다른 행이다.
         ///
         /// [왜 집합 수준에서 막는가] <see cref="ResolveOrdinal"/>은 문장 단위 함수라
         /// 중복을 볼 수 없다 - 그게 정상이다. 모호성은 한 문장의 성질이 아니라 문장
@@ -6512,6 +6514,22 @@ namespace ReSet.Core.Services
         /// 그 모양을 못으로 박는다), 코드 재사용에는 U-앵커가 없다. 그래서 <b>그룹의 어느
         /// 조각도 U-앵커를 갖지 않을 때만</b> 버린다. 이 조건을 「겹치면 무조건 버린다」로
         /// 넓히면 청크 대조가 통째로 죽는다 - 실제로 그렇게 짰다가 위 테스트가 잡았다.
+        ///
+        /// [키를 좁히는 것은 발화를 늘리기만 하지 않는다 - 줄이는 방향도 있다]
+        /// 묶음 키를 서수에서 (종류, 서수)로 좁히면 그룹이 쪼개지고, 「그룹의 어느 조각도
+        /// U-앵커를 갖지 않는다」는 위 조건이 <b>거짓에서 참으로 뒤집힐 수 있다</b> -
+        /// 즉 예전에 발화하던 자리가 새로 침묵할 수 있다. 실물 프로브로 재현한 모양:
+        /// 한 단계에 코드 앵커만 가진 UPDATE 둘(서수 4)과 U-앵커를 가진 INSERT
+        /// 하나(서수 4)가 있으면, 좁히기 전에는 INSERT의 U-앵커가 서수 4 그룹 전체를
+        /// 청크 분할로 살려 `UPDATE 4`가 발화했고, 좁힌 뒤에는 UPDATE 둘만의 앵커 없는
+        /// 그룹이 되어 침묵한다.
+        ///
+        /// 새 동작이 옳다 - 청크 조각은 정의상 같은 종류이므로 <b>다른 종류의 U-앵커는
+        /// 청크 증거가 아니다</b>. 다만 방향은 기록해 둔다:
+        /// <c>docs/known-defects.md</c> (5-3-2)의 「사라진 0건」은 이번 세대 코퍼스의
+        /// 실측이지 「이 수정은 침묵을 만들 수 없다」는 증명이 아니다.
+        /// <c>ValidateBatchStep_CheckB_OtherKindUAnchor_DoesNotRescueReusedOrdinal</c>이
+        /// 이 방향을 못 박는다.
         /// </summary>
         private static List<(StepSqlStatement Statement, int? Ordinal)> ResolveAnchoredStatements(
             IReadOnlyList<StepSqlStatement> statements,
@@ -6776,11 +6794,23 @@ namespace ReSet.Core.Services
                         ? $"(갱신 {row.Ordinal})"
                         : string.Empty;
 
+                    // 꼬리 문장도 종류에 맞는 말을 쓴다. INSERT가 고르는 것은 "갱신
+                    // 대상 행"이 아니라 원천에서 "실릴 행"이다 - 이 메시지는
+                    // SuggestedPromptFix를 타고 재생성 프롬프트에 그대로 실리므로
+                    // 틀린 어휘가 산출물에 되먹여진다. 검사 C
+                    // (CheckAnchoredStatementExtras)의 꼬리는 종류 중립이라 이 갈래가 없다.
+                    var affectedRows = row.Kind.ToUpperInvariant() switch
+                    {
+                        "INSERT" => "실릴 행",
+                        "DELETE" => "삭제 대상 행",
+                        _ => "갱신 대상 행"
+                    };
+
                     result.Errors.Add(
                         $"{step.Code} 섹션의 {row.Kind} {row.Ordinal}{gloss} 문장에 명세서가 확정한 " +
                         $"{label} {string.Join(", ", missing)}이(가) 없습니다. 명세서 DML 범위 표 " +
                         $"{row.Kind} {row.Ordinal} 행의 값은 `{string.Join(", ", expected)}`입니다 — " +
-                        "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.");
+                        $"이 컬럼이 빠지면 {affectedRows} 집합이 원본과 달라집니다.");
                 }
             }
         }

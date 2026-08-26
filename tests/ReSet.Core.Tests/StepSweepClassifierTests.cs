@@ -68,7 +68,7 @@ namespace ReSet.Core.Tests
             var message =
                 "S07 섹션의 INSERT 2 문장에 명세서가 확정한 최상위 WHERE 술어 컬럼 UseState이(가) " +
                 "없습니다. 명세서 DML 범위 표 INSERT 2 행의 값은 `UseState`입니다 — " +
-                "이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.";
+                "이 컬럼이 빠지면 실릴 행 집합이 원본과 달라집니다.";
 
             var finding = StepSweepClassifier.Describe(
                 "POQSettleBatch1", "S07", SweepCheck.B, SweepCondition.AsIs, message);

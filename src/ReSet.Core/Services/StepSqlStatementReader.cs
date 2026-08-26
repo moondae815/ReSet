@@ -39,9 +39,10 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 하위 스코프(CTE 본문·파생 테이블·최상위 WHERE 안의 하위질의·JOIN ON 안의
         /// 하위질의)의 WHERE에 나오는 컬럼. <see cref="PredicateColumns"/>와 겹칠 수
-        /// 있다 — 최상위 WHERE가 두 수집기의 공통 진입점이라(`where?.Accept(predicates)`·
-        /// `where?.Accept(subordinate)`), 최상위 WHERE 안의 하위질의에 최상위와 같은
-        /// 이름의 컬럼이 있으면 양쪽에 다 잡힌다(예: `WHERE Y.YMD = @p AND EXISTS
+        /// 있다 — 최상위 WHERE가 두 수집기의 공통 진입점이라(<c>DmlCollector.Add</c>가
+        /// 절마다 `where.Accept(predicates)`·`where.Accept(subordinate)`를 각각 부른다),
+        /// 최상위 WHERE 안의 하위질의에 최상위와 같은 이름의 컬럼이 있으면 양쪽에
+        /// 다 잡힌다(예: `WHERE Y.YMD = @p AND EXISTS
         /// (SELECT 1 FROM B WHERE B.YMD = @p AND B.ID = Y.ID)` → Pred=[YMD],
         /// Sub=[YMD, ID, ID]). 판정에는 무해하다 — 검사 B는 두 값이 모두 있으면
         /// 어차피 침묵하므로 겹침 자체가 결과를 바꾸지 않는다.
@@ -539,8 +540,8 @@ namespace ReSet.Core.Services
                 // 절 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다.
                 // UPDATE·DELETE에서는 "거를 대상 행"이고 INSERT에서는 "실릴 원천
                 // 행"이다 - 셋 다 같은 네 자리를 본다. 파생
-                // 테이블과 JOIN ON 하위질의는 둘 다 from?.Accept 한 번으로 함께
-                // 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
+                // 테이블과 JOIN ON 하위질의는 둘 다 절 하나당 from.Accept 한 번으로
+                // 함께 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
                 // INNER JOIN이면 대상 행을 실제로 거르므로 여기서 모으는 것이
                 // 의도와 어긋나지 않는다(실측: `INNER JOIN dbo.TCost AS C ON
                 // ... AND C.ID IN (SELECT Z.ID FROM dbo.TZ AS Z WHERE Z.Hidden = 1)`

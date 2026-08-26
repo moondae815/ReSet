@@ -7754,97 +7754,12 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // 검사 B·C 태스크 10 - INSERT 문장을 후보에서 뺀다.
-        //
-        // 코퍼스 전수 스윕(2026-08-25, 326개 단계) 실측: 코드 앵커를 켠 뒤
-        // 검사 B 발화가 1건 → 269건으로 늘었는데 그중 199건(74%, 15개 조합)이
-        // 이 축의 구조적 거짓양성이었다. 원인은 StepSqlStatementReader.cs의
-        // DmlCollector.Visit(InsertStatement)가 `Add("INSERT", node,
-        // node.InsertSpecification?.Target, null, null)`로 where·from에 항상
-        // null을 넘긴다는 데 있다(같은 파일 Visit(UpdateStatement)·
-        // Visit(DeleteStatement)는 실제 WhereClause·FromClause를 넘긴다) -
-        // 그래서 모든 INSERT 문장의 PredicateColumns·JoinColumns는 실제 SQL과
-        // 무관하게 구조적으로 항상 빈 목록이고, 검사 B는 그 빈 목록을 "명세서가
-        // 확정한 술어 컬럼이 없다"로 오인한다. 실물:
-        // output/Jobs/POQSettleBatch1/agent/steps/S04.md:39-52가 실제로는
-        // `WHERE USESTATE = 0`을 담은 INSERT...SELECT인데도 이 결함으로
-        // 오탐이 났다.
-        //
-        // 이 좁힘은 **INSERT를 영구히 검사하지 않는다는 정책이 아니다** - 재료
-        // (StepSqlStatementReader가 where·from을 null로 넘기는 배선) 결손에
-        // 대한 한시적 조치다. **되돌릴 지점**: DmlCollector.Visit(InsertStatement)이
-        // `InsertSpecification.InsertSource`의 SELECT에서 WHERE·FROM을 실제로
-        // 꺼내 PredicateColumns·JoinColumns를 채우도록 고쳐지면, 그때 이 좁힘도
-        // 함께 걷어내고 재측정해야 한다(그 배선 수정 자체는 이 태스크 범위 밖).
-        //
-        // 검사 C(CheckAnchoredStatementExtras)도 같은 이유로 INSERT를 후보에서
-        // 뺀다 - extras 역시 Statement.PredicateColumns(구조적으로 항상 빈
-        // 목록)에서만 뽑으므로 오늘은 침묵하지만, 검사 B만 고치고 검사 C를 그대로
-        // 두면 두 검사가 서로 다른 후보 집합을 본다는 불변식이 깨진다(코퍼스
-        // 스윕상 검사 C의 38건은 12개 조합 전부 UPDATE라 이 좁힘의 영향을 받지
-        // 않아야 한다).
+        // [INSERT 배제 필터는 이제 없다 - 2026-08-26 해소]
+        // 검사 B·C가 한때 INSERT를 후보에서 뺐다. 그 좁힘의 원인(INSERT 술어 배선
+        // 결함)과 해소, 좁힘을 걷은 뒤 드러난 재사용 가드 결함까지 모두
+        // docs/known-defects.md (5-3-2)에 있다. 오늘의 INSERT 계약은 이 파일의
+        // ValidateBatchStep_CheckB_Insert*·ValidateBatchStep_CheckC_Insert*가 못 박는다.
         // ─────────────────────────────────────────────────────────────────────
-
-        [Fact]
-        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckB()
-        {
-            // 실물 결함 모양(S04.md:39-52)을 재현한다: INSERT INTO ... SELECT ...
-            // WHERE ...는 실제로 술어 컬럼(USESTATE)을 담지만, DmlCollector가
-            // INSERT의 where·from을 항상 null로 넘겨 StepSqlStatement.PredicateColumns가
-            // 구조적으로 비어 있다. 좁히기 전에는 이 빈 목록을 근거로 검사 B가
-            // "명세서가 확정한 최상위 WHERE 술어 컬럼 USESTATE이(가) 없습니다"를
-            // 낸다 - 문장이 실제로는 그 컬럼을 담고 있는데도.
-            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
-                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
-                        new[] { "USESTATE" }, Array.Empty<string>(),
-                        Array.Empty<string>(), Array.Empty<string>()) },
-                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
-            };
-
-            var markdown = "### S04 단계\n\n```sql\n" +
-                "-- 갱신 5\n" +
-                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
-                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0;\n" +
-                "```\n";
-
-            var result = new MechanicalValidator().ValidateBatchStep(
-                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
-                new Dictionary<string, SpecConditions>(), null, null, facts);
-
-            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
-        }
-
-        [Fact]
-        public void ValidateBatchStep_AnchoredInsertStatement_IsExcludedFromCheckC()
-        {
-            // 검사 C도 같은 (Ordinal, Kind) 그룹핑·후보 선정 경로를 타므로 INSERT를
-            // 같이 뺀다 - 오늘은 extras가 구조적으로 항상 비어 있어 이 시나리오
-            // 단독으로는 검사 C가 발화하지 않지만(Statement.PredicateColumns가
-            // where=null이라 항상 빈 목록), 두 검사가 같은 후보 집합 규약을
-            // 지킨다는 것을 회귀로 고정한다.
-            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
-                    new[] { new SpecDmlRow("INSERT", 5, 120, "TSettleMst",
-                        new[] { "USESTATE" }, Array.Empty<string>(),
-                        Array.Empty<string>(), Array.Empty<string>()) },
-                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
-            };
-
-            var markdown = "### S04 단계\n\n```sql\n" +
-                "-- 갱신 5\n" +
-                "INSERT INTO dbo.TSettleMst (PLTID, YMD)\n" +
-                "SELECT PLTID, YMD FROM dbo.TSettleSrc WHERE USESTATE = 0 AND RUNID = @pi_runId;\n" +
-                "```\n";
-
-            var result = new MechanicalValidator().ValidateBatchStep(
-                markdown, LegacyStep("S04"), new[] { "dbo.TSettleMst" },
-                new Dictionary<string, SpecConditions>(), null, null, facts);
-
-            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는 술어 컬럼"));
-        }
 
         // ─────────────────────────────────────────────────────────────────────
         // 검사 C - 명세서에 없는 최상위 술어 컬럼이 문장에 붙었는가.
@@ -8383,6 +8298,73 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B 메시지의 꼬리 문장 — 종류에 맞는 말을 쓴다.
+        //
+        // 꼬리는 "이 컬럼이 빠지면 <무엇> 집합이 원본과 달라집니다"인데 한때
+        // 종류와 무관하게 "갱신 대상 행"이라고만 적었다. INSERT 발화에서 그것은
+        // 틀린 말이고, 이 메시지는 SuggestedPromptFix를 타고 재생성 프롬프트에
+        // 그대로 실리므로 잘못된 어휘가 산출물에 되먹여진다.
+        //
+        // 검사 C의 꼬리("조건을 더하면 원본이 처리하던 행이 처리되지 않습니다")는
+        // 종류 중립이라 그대로 둔다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_InsertKind_TailSpeaksOfInsertedRows()
+        {
+            var facts = FactsWithInsertRow(1, new[] { "UseState" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U1: 정산 요약 적재 */\n" +
+                "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+                "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.EndsWith("이 컬럼이 빠지면 실릴 행 집합이 원본과 달라집니다.", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_DeleteKind_TailSpeaksOfDeletedRows()
+        {
+            var facts = FactsWithDeleteRow(3, new[] { "YMD" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- DELETE 3\n" +
+                "DELETE A FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.EndsWith("이 컬럼이 빠지면 삭제 대상 행 집합이 원본과 달라집니다.", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_UpdateKind_TailSpeaksOfUpdatedRows()
+        {
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "-- U13\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.EndsWith("이 컬럼이 빠지면 갱신 대상 행 집합이 원본과 달라집니다.", error);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 하위 스코프 이전 — 원본이 최상위에 두었던 술어를 이행이 CTE·파생
         // 테이블·EXISTS로 옮긴다. 그 컬럼은 없어진 것이 아니라 옮겨간 것이므로
         // 검사 B가 발화하면 거짓양성이다(2026-08-26 표본 판정 30건).
@@ -8576,6 +8558,42 @@ END";
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
             Assert.Contains(result.Errors, e => e.Contains("DELETE 4 문장에") && e.Contains("OutState"));
+            Assert.Contains(result.Errors, e => e.Contains("INSERT 4 문장에") && e.Contains("UseState"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_OtherKindUAnchor_DoesNotRescueReusedOrdinal()
+        {
+            // 키를 (종류, 서수)로 좁히는 것은 발화를 늘리기만 하지 않는다 - 줄이는
+            // 방향도 있고, 이 테스트가 그 방향을 못 박는다.
+            //
+            // 한 단계에 코드 앵커만 가진 UPDATE 둘(서수 4)과 U-앵커를 가진 INSERT
+            // 하나(서수 4)가 있다. 서수만으로 묶던 시절에는 INSERT의 U-앵커가 서수 4
+            // 그룹 전체를 「청크 분할」로 살려 UPDATE 둘까지 후보로 남았고 `UPDATE 4`가
+            // 발화했다. 이제는 UPDATE 둘만의 앵커 없는 그룹이 되어 침묵한다.
+            //
+            // 새 동작이 옳다 - 청크 조각은 정의상 같은 종류이므로 다른 종류의 U-앵커는
+            // 청크 증거가 될 수 없다. 아래 INSERT 단언은 이 시나리오의 전제(INSERT가
+            // 실제로 U-앵커로 서수 4에 귀속되는 살아 있는 후보다)를 함께 고정한다.
+            var facts = FactsSharingOrdinal(
+                4,
+                ("UPDATE", "-13", "TSettleMst", "YMD"),
+                ("INSERT", "-8", "TSettleSum", "UseState"));
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLComm = A.CLComm * -1 FROM dbo.TSettleMst AS A;\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLTotal = A.CLComm + A.CLVT FROM dbo.TSettleMst AS A;\n" +
+                "/* U4: 정산 요약 적재 */\n" +
+                "INSERT INTO dbo.TSettleSum (YMD) SELECT S.YMD FROM dbo.TSettleMst AS S;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst", "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("UPDATE 4"));
             Assert.Contains(result.Errors, e => e.Contains("INSERT 4 문장에") && e.Contains("UseState"));
         }
 
