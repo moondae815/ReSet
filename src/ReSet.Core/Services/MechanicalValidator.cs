@@ -6466,6 +6466,18 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 모호성 계산이 쓰는 (Kind, Ordinal) 키 비교자. Kind는 이 파일의 관례대로
+        /// <see cref="StringComparison.OrdinalIgnoreCase"/>로 본다
+        /// (<see cref="ResolveOrdinal"/>의 codeMap Kind 대조와 같은 규약).
+        /// </summary>
+        private static readonly IEqualityComparer<(string Kind, int Ordinal)> AnchoredStatementKeyComparer =
+            EqualityComparer<(string Kind, int Ordinal)>.Create(
+                (x, y) => x.Ordinal == y.Ordinal
+                    && string.Equals(x.Kind, y.Kind, StringComparison.OrdinalIgnoreCase),
+                key => HashCode.Combine(
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(key.Kind), key.Ordinal));
+
+        /// <summary>
         /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 서수를 둘
         /// 이상이 주장하면 그 서수를 통째로 뺀다.</b>
         ///
@@ -6510,16 +6522,35 @@ namespace ReSet.Core.Services
                 .Where(a => a.Ordinal.HasValue)
                 .ToList();
 
+            // [왜 키에 Kind가 있는가 - 서수는 종류별로 1부터 다시 시작한다]
+            // 명세서 DML 범위 표의 `INSERT 4`와 `DELETE 4`는 서로 다른 행이다.
+            // ResolveOrdinal도 codeMap 조회에서 Kind 일치를 요구해 같은 규약을
+            // 지키는데, 예전에는 이 모호성 계산만 Ordinal로 묶어 그걸 잃었다.
+            // 삭제된 INSERT 배제 필터가 GroupBy '앞에서' INSERT를 걸러내는 동안에는
+            // 충돌이 드러나지 않았다 - 그 좁힘을 걷자 드러났다.
+            //
+            // 실측(2026-08-26, INSERT 재편입 코퍼스 스윕): 레거시
+            // `dbo.UP_Util_Settle_Summary`의 명세서는 DELETE 1~4와 INSERT 1~4를 둘 다
+            // 갖고 단계 SQL이 코드 -1~-4를 DELETE에, -5~-8을 INSERT에 붙인다.
+            // Ordinal만으로 묶었을 때 `POQSettleProc1/S11`·`POQSettleProc9/S13`의
+            // `DELETE 4 · OUTSTATE` 발화 둘이 같은 단계의 `INSERT 4`와 한 그룹이 되어
+            // 함께 버려졌다 - 진짜 결함이 거짓 침묵으로 사라졌다.
+            //
+            // 묶는 키와 되거르는 키가 갈라지면 이 결함이 그대로 되살아나므로 키 계산을
+            // KeyOf 한 자리에 모은다.
+            static (string Kind, int Ordinal) KeyOf((StepSqlStatement Statement, int? Ordinal) a) =>
+                (a.Statement.Kind, a.Ordinal!.Value);
+
             // U-앵커를 가진 조각이 하나라도 있으면 청크 분할이다 - 버리지 않는다.
             var ambiguous = resolved
-                .GroupBy(a => a.Ordinal!.Value)
+                .GroupBy(KeyOf, AnchoredStatementKeyComparer)
                 .Where(g => g.Count() > 1 && g.All(a => !a.Statement.Anchor.HasValue))
                 .Select(g => g.Key)
-                .ToHashSet();
+                .ToHashSet(AnchoredStatementKeyComparer);
 
             return ambiguous.Count == 0
                 ? resolved
-                : resolved.Where(a => !ambiguous.Contains(a.Ordinal!.Value)).ToList();
+                : resolved.Where(a => !ambiguous.Contains(KeyOf(a))).ToList();
         }
 
         /// <summary>

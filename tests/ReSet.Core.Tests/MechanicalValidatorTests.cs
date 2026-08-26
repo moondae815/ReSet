@@ -8312,22 +8312,35 @@ END";
         [Fact]
         public void ValidateBatchStep_CheckB_InsertPresence_DoesNotShiftUpdateOrdinal()
         {
-            // ResolveOrdinal은 위치가 아니라 신원(U-앵커·코드 앵커)으로 서수를 정한다.
-            // 같은 단계에 INSERT가 섞여도 UPDATE 13의 판정은 그대로여야 한다.
-            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+            // [이 테스트가 무는 것 - 리뷰 라운드 1에서 다시 짰다]
+            // 앞선 판(명세서 재료에 INSERT 행이 없어 INSERT의 Ordinal이 애초에 null인
+            // 픽스처)은 INSERT를 지워도, 옛 배제 필터를 되살려도 똑같이 통과해서 아무것도
+            // 물지 않았다. 그래서 INSERT가 **실제로 서수로 환산되는** 재료를 준다.
+            //
+            // 둘 다 U-앵커 없이 코드 앵커로만 서수를 얻게 두는 것이 핵심이다 -
+            // ResolveAnchoredStatements의 재사용 가드가 그때만 작동하므로, 가드가
+            // 서수를 종류 없이 묶으면 INSERT 13이 UPDATE 13을 끌고 함께 버려진다.
+            // 즉 이 테스트는 "INSERT를 후보로 되돌려도 UPDATE 서수 판정이 흔들리지
+            // 않는다"를 두 방향에서 문다: INSERT가 후보에서 빠지면 INSERT 단언이,
+            // 가드가 Kind를 잃으면 두 단언이 함께 죽는다.
+            var facts = FactsSharingOrdinal(
+                13,
+                ("UPDATE", "-13", "TSettleMst", "YMD"),
+                ("INSERT", "-8", "TSettleSum", "UseState"));
 
             var markdown = "### S07 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -8;\n" +
                 "INSERT INTO dbo.TSettleSum (YMD) SELECT S.YMD FROM dbo.TSettleMst AS S;\n" +
-                "-- U13\n" +
+                "SET @v_currentStepId = -13;\n" +
                 "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y;\n" +
                 "```\n";
 
             var result = new MechanicalValidator().ValidateBatchStep(
-                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst", "dbo.TSettleSum" },
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
-            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
-            Assert.Contains("UPDATE 13(갱신 13) 문장에", error);
+            Assert.Contains(result.Errors, e => e.Contains("UPDATE 13(갱신 13) 문장에") && e.Contains("YMD"));
+            Assert.Contains(result.Errors, e => e.Contains("INSERT 13 문장에") && e.Contains("UseState"));
         }
 
         [Fact]
@@ -8499,6 +8512,72 @@ END";
             "SET @v_currentStepId = -13;\n" +
             "UPDATE A SET A.CLTotal = A.CLComm + A.CLVT FROM dbo.TSettleMst AS A;\n" +
             "```\n";
+
+        /// <summary>
+        /// <b>같은 서수를 서로 다른 종류가 함께 쓰는</b> 명세서 재료. 서수는 문장
+        /// 종류별로 1부터 다시 시작하므로 이런 표가 정상이다 - 실물
+        /// `dbo.UP_Util_Settle_Summary`의 명세서가 DELETE 1~4와 INSERT 1~4를 둘 다
+        /// 갖고 오류 코드 -1~-4/-5~-8로 가른다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsSharingOrdinal(
+            int ordinal,
+            (string Kind, string Code, string TargetTable, string PredicateColumn) first,
+            (string Kind, string Code, string TargetTable, string PredicateColumn) second)
+        {
+            var facts = new SpecStatementFacts(
+                new[]
+                {
+                    new SpecDmlRow(first.Kind, ordinal, ordinal * 10, first.TargetTable,
+                        new[] { first.PredicateColumn }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()),
+                    new SpecDmlRow(second.Kind, ordinal, ordinal * 10 + 5, second.TargetTable,
+                        new[] { second.PredicateColumn }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>())
+                },
+                Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            {
+                ErrorCodeToOrdinal = new Dictionary<string, (string, int)>
+                {
+                    [first.Code] = (first.Kind, ordinal),
+                    [second.Code] = (second.Kind, ordinal)
+                }
+            };
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
+            };
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_SameOrdinalDifferentKinds_BothReport()
+        {
+            // 서수는 문장 종류별로 1부터 다시 시작한다 - 명세서 DML 범위 표의
+            // `DELETE 4`와 `INSERT 4`는 서로 다른 행이다. 재사용 가드가 Ordinal만으로
+            // 묶으면 이 둘이 한 그룹이 되어 "한 서수를 둘이 주장한다"로 오인하고 둘 다
+            // 조용히 버린다. 실측(2026-08-26): INSERT 재편입 스윕에서
+            // `POQSettleProc1/S11`·`POQSettleProc9/S13`의 `DELETE 4 · OUTSTATE` 발화
+            // 둘이 이 충돌로 사라졌다.
+            var facts = FactsSharingOrdinal(
+                4,
+                ("DELETE", "-4", "TSettleMst", "OutState"),
+                ("INSERT", "-8", "TSettleSum", "UseState"));
+
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -4;\n" +
+                "DELETE A FROM dbo.TSettleMst AS A;\n" +
+                "SET @v_currentStepId = -8;\n" +
+                "INSERT INTO dbo.TSettleSum (YMD)\n" +
+                "SELECT S.YMD FROM dbo.TSettleMst AS S;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst", "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("DELETE 4 문장에") && e.Contains("OutState"));
+            Assert.Contains(result.Errors, e => e.Contains("INSERT 4 문장에") && e.Contains("UseState"));
+        }
 
         [Fact]
         public void ValidateBatchStep_CheckB_CodeAnchorClaimedByTwoStatements_IsSilent()

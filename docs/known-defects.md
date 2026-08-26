@@ -1607,6 +1607,18 @@
   `docs/superpowers/specs/2026-08-26-insert-source-predicate-design.md`,
   재측정은 `docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md`.
 
+  **좁힘을 걷자 그 뒤에 숨어 있던 결함 하나가 함께 드러났다.**
+  `MechanicalValidator.ResolveAnchoredStatements`의 코드 재사용 가드가 모호성을
+  `Ordinal`만으로 묶고 있었다. 서수는 문장 종류별로 1부터 다시 시작하므로 명세서
+  DML 범위 표의 `INSERT 4`와 `DELETE 4`는 서로 다른 행인데, 한 그룹이 되어 "한
+  서수를 둘이 주장한다"로 오인됐다. 배제 필터가 INSERT를 이 계산 **앞에서**
+  걸러내는 동안에는 드러날 수 없던 결함이다. 실측: 재편입 스윕에서 통제군 49건 →
+  54건으로 순증 +5로 보였으나 내용 대조하면 새로 7건·사라진 2건이었고, 사라진 둘
+  (`POQSettleProc1/S11`·`POQSettleProc9/S13`의 `DELETE 4 · OUTSTATE`)이 정확히 이
+  충돌이었다 - 레거시 `dbo.UP_Util_Settle_Summary`는 DELETE 1~4와 INSERT 1~4를 둘
+  다 갖고 코드 -1~-4/-5~-8로 가른다. 가드의 묶음 키와 되거르는 키를 둘 다
+  `(Kind, Ordinal)`로 고쳤다.
+
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
   출처는 `CheckBatchControlVocabulary` 36% · `CheckCatchDiscardsReturnCode`
