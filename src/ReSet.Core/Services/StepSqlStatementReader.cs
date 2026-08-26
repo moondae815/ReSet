@@ -535,8 +535,10 @@ namespace ReSet.Core.Services
                 foreach (var from in froms) from.Accept(joins);
                 statement.Accept(grouping);
 
-                // 대상 행을 거를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON 절
-                // 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다 - 파생
+                // 실릴·바뀔 행을 고를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON
+                // 절 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다.
+                // UPDATE·DELETE에서는 "거를 대상 행"이고 INSERT에서는 "실릴 원천
+                // 행"이다 - 셋 다 같은 네 자리를 본다. 파생
                 // 테이블과 JOIN ON 하위질의는 둘 다 from?.Accept 한 번으로 함께
                 // 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
                 // INNER JOIN이면 대상 행을 실제로 거르므로 여기서 모으는 것이

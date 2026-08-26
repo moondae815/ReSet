@@ -1579,6 +1579,34 @@
   Task 19 옛 기준선과 벌어지는 것은 세대 전환 자체가 만든 차이지 이번
   회차의 결함이 아니다.
 
+  **(5-3-2) INSERT 술어 배선 결함과 그 한시적 좁힘 — 해소됨 (2026-08-26).**
+  `StepSqlStatementReader`의 `DmlCollector.Visit(InsertStatement)`이 `Add`의
+  where·from 자리에 항상 `null`을 넘겼다. 같은 클래스의
+  `Visit(UpdateStatement)`·`Visit(DeleteStatement)`가 실제 절을 넘기는 것과
+  대조적이다. `InsertSpecification`에는 `WhereClause`·`FromClause` 속성이 없고
+  술어는 `InsertSource`(→ `SelectInsertSource.Select`)의 `QuerySpecification`
+  안에 있는데, 그 자리에 넘길 속성이 없어 `null`이 갔다.
+
+  그 결과 모든 INSERT 문장의 `PredicateColumns`·`JoinColumns`가 SQL 내용과
+  무관하게 구조적으로 항상 빈 목록이었고, 검사 B가 그 빈 목록을 "명세서가
+  확정한 술어 컬럼이 없다"로 오인했다. 코퍼스 전수 스윕(2026-08-25, 326개
+  단계)에서 코드 앵커를 켠 뒤 검사 B 발화가 1건 → 269건으로 늘었는데 그중
+  **199건(74%, 15개 조합)**이 이 축 하나의 구조적 거짓양성이었다. 실물:
+  `output/Jobs/POQSettleBatch1/agent/steps/S04.md`의
+  `INSERT INTO ... SELECT ... WHERE USESTATE = 0`이 실제로는 술어를 담고
+  있는데도 오탐이 났다.
+
+  임시 대응으로 `MechanicalValidator`에 `IsCandidateForAnchoredStatementCheck`를
+  두어 INSERT를 검사 B·C 후보에서 뺐다. 검사 C도 함께 좁혔는데, 한쪽만 좁히면
+  두 검사가 서로 다른 후보 집합을 보게 되어 배선이 고쳐질 때 검사 C만 조용히
+  INSERT를 다시 보기 시작하는 비대칭이 생기기 때문이다.
+
+  2026-08-26에 배선을 고쳤다(`DmlCollector.Add`의 절 인자를 목록으로 바꾸고
+  `DmlScopeExtractor.SourceQuerySpecifications`로 원천 명세들의 절을 넘긴다).
+  좁힘은 걷어냈다. 설계는
+  `docs/superpowers/specs/2026-08-26-insert-source-predicate-design.md`,
+  재측정은 `docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md`.
+
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
   출처는 `CheckBatchControlVocabulary` 36% · `CheckCatchDiscardsReturnCode`

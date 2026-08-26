@@ -8223,6 +8223,113 @@ END";
             };
         }
 
+        /// <summary>
+        /// INSERT 행 하나짜리 명세서 재료.
+        /// </summary>
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithInsertRow(
+            int ordinal, IReadOnlyList<string> predicateColumns)
+        {
+            var facts = new SpecStatementFacts(
+                new[]
+                {
+                    new SpecDmlRow("INSERT", ordinal, ordinal * 10, "TSettleSum",
+                        predicateColumns, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>())
+                },
+                Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>());
+
+            return new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = facts
+            };
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_InsertMissingPredicate_Reports()
+        {
+            // 명세서가 INSERT 1의 최상위 술어로 UseState를 확정했는데 단계 SQL의
+            // 원천 SELECT에 그 필터가 없다 - 실릴 행 집합이 원본과 달라진다.
+            var facts = FactsWithInsertRow(1, new[] { "UseState" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U1: 정산 요약 적재 */\n" +
+                "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+                "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.Contains("INSERT 1 문장에", error);
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("UseState", reported);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_InsertWithPredicate_Silent()
+        {
+            // 오탐 회귀 방지 - 이 침묵이 깨지면 코퍼스 스윕 199건(전체의 74%)의
+            // 구조적 거짓양성이 되살아난 것이다.
+            var facts = FactsWithInsertRow(1, new[] { "UseState" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U1: 정산 요약 적재 */\n" +
+                "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+                "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S WHERE S.UseState = 0;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_InsertExtraPredicate_Reports()
+        {
+            // 명세서가 INSERT 1의 최상위 술어를 UseState 하나로 확정했는데 단계가
+            // YMD를 더 붙였다 - 실릴 행 집합이 원본보다 좁아진다.
+            var facts = FactsWithInsertRow(1, new[] { "UseState" });
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "/* U1: 정산 요약 적재 */\n" +
+                "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+                "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S\n" +
+                "WHERE S.UseState = 0 AND S.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleSum" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("명세서에 없는"));
+            Assert.Contains("INSERT 1 문장이", error);
+            Assert.Contains("YMD", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_InsertPresence_DoesNotShiftUpdateOrdinal()
+        {
+            // ResolveOrdinal은 위치가 아니라 신원(U-앵커·코드 앵커)으로 서수를 정한다.
+            // 같은 단계에 INSERT가 섞여도 UPDATE 13의 판정은 그대로여야 한다.
+            var facts = FactsWithCode(13, new[] { "YMD" }, code: null);
+
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "INSERT INTO dbo.TSettleSum (YMD) SELECT S.YMD FROM dbo.TSettleMst AS S;\n" +
+                "-- U13\n" +
+                "UPDATE Y SET Y.CLCOMM = 1 FROM dbo.TSettleMst AS Y;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+            Assert.Contains("UPDATE 13(갱신 13) 문장에", error);
+        }
+
         [Fact]
         public void ValidateBatchStep_CheckB_NonUpdateKind_OmitsUpdateGloss()
         {
