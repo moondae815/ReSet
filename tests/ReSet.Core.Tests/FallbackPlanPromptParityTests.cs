@@ -101,5 +101,44 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain("[Original Procedure Interface]", result.UserPrompt);
         }
+
+        [Fact]
+        public async Task Plan_ShouldCarryTheControlStepErrorCodeClause()
+        {
+            var result = await CaptureAsync();
+
+            Assert.Contains("[Control Step Error Codes]", result.SystemPrompt);
+            Assert.Contains("-9010..-9019", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task Plan_Rule9ShouldPointBackAtRule6_2ForOriginlessSteps()
+        {
+            // 규칙 9는 홀로 읽히면 "원본 코드만 재사용하라"는 문서 전체 금지처럼
+            // 읽혀, 레거시 출신이 없는 단계가 규칙 6-2의 기계적 예약 코드
+            // (예: -9160)를 쓰는 것마저 주저하게 만든다 - B100...B161 결함을 낳은
+            // 바로 그 모호함이다. 규칙 9가 6-2를 가리켜야 그 모호함이 닫힌다.
+            var result = await CaptureAsync();
+
+            Assert.Contains("follow rule 6-2 instead", result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task Plan_Rule9ShouldScopeItsRemapAndRangeBansToLegacyOriginSteps()
+        {
+            // 라운드 1은 첫 문장만 한정했다. 뒤의 "신규 발급 금지"·"연속 범위
+            // 금지" 두 문장은 여전히 무조건형이었고, 둘 다 규칙 6-2와 정면으로
+            // 맞선다 - 6-2는 레거시 없는 단계에 새 코드를 발급하고, 그 블록을
+            // 연속 범위(`-9010..-9019`)로 제시한다. 세 문장 모두 레거시 출신
+            // 단계에 한정된다는 것이 문면에 있어야 한다.
+            var result = await CaptureAsync();
+
+            Assert.Contains(
+                "A step that replaces a legacy procedure MUST strictly reuse the EXACT original error codes",
+                result.SystemPrompt);
+            Assert.Contains(
+                "is the one place in this document where a continuous range is correct",
+                result.SystemPrompt);
+        }
     }
 }

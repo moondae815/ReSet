@@ -8,12 +8,16 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
 using NSubstitute;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class VerificationPipelineOrchestratorTests : IDisposable
     {
         private readonly IDbMetadataService _dbService;
@@ -4978,6 +4982,17 @@ SELECT 1;
         private static string HealthyStepSection(string code, string table, string errorCode) =>
             $"### {code} 단계\n\n대상은 {table}이고 오류코드는 {errorCode}이다.\n\n```sql\nSELECT 1;\n```";
 
+        /// <summary>
+        /// 단일 호출 폴백이 남기는 로그(<c>Log.Information</c>)를 붙잡는 싱크.
+        /// PlanStructureEnricherTests의 같은 이름 클래스와 같은 용도지만, 이 파일이
+        /// 그 클래스를 재사용할 수 없어(private nested) 그대로 다시 둔다.
+        /// </summary>
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
+        }
+
         /// <summary>하한을 통과하지 못하는 섹션 — 코드 블록이 없다.</summary>
         private static string SubFloorStepSection(string code) =>
             $"### {code} 단계\n\n산문만 있고 코드 블록이 없다.\n";
@@ -5449,6 +5464,43 @@ SELECT 1;
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
         }
 
+        /// <summary>
+        /// 이 폴백 경로(목차가 단계 목록을 못 낸 최초 생성)에는 단계별 본문 사전이
+        /// 없어 분할 SP 문서 단위 검사(Task 5)를 돌릴 수 없다. 그 사실이 로그로
+        /// 남지 않으면 "검사해서 깨끗함"과 구별되지 않는다 - 검사를 안 돌린 것과
+        /// 돌려서 결함이 없었던 것은 다른 사실이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithoutStepList_LogsThatSplitProcedureObligationCheckWasSkipped()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            // 목차에 JSON 블록이 없다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차 산문만 있다" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown.Replace("<!-- STEP:S01 -->\n<!-- STEP:S02 -->", "### S01 단계\n본문") });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                await RunBatchPipeline(aiService);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m =>
+                m.Contains("분할 SP 문서 단위 검사를 실행하지 않았습니다") && m.Contains("Job_Test"));
+        }
+
         [Fact]
         public async Task RunConsolidatedPipeline_WhenSkeletonReturnsBlank_FallsBackToSingleCall()
         {
@@ -5672,7 +5724,12 @@ SELECT 1;
             Dictionary<string, StepDefect> previousViolations,
             IReadOnlyList<string> defectiveSteps,
             IReadOnlyList<string> knownTableNames,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            // 기본값(null)은 종전 동작(빈 사전 - 분할 SP 귀속 축을 검증하지 않는
+            // 테스트들의 동작)을 그대로 유지한다. 문서 단위 병합(§FloorViolations
+            // Kind/사유 보존) 테스트만 실제 값을 넘긴다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
                 "GenerateBySplitAsync",
@@ -5689,7 +5746,10 @@ SELECT 1;
                 // 모두 카탈로그가 없던 이전 동작과 같아진다.
                 // brainstorming: 이 테스트들은 1/3을 돌지 않으므로 null이다. 골격
                 // 프롬프트가 절 자체를 싣지 않아 브레인스토밍이 없던 이전 동작과 같다.
-                knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null, cancellationToken
+                knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null,
+                codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
+                tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
+                cancellationToken
             })!;
 
             await task;
@@ -5766,6 +5826,85 @@ SELECT 1;
             await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// 최종 리뷰 지적(항목 1): 단계 병합 루프(§floorViolations[stepResult.Code] = ...)가
+        /// 이미 얻은 StepDefect를 문서 단위 분할 SP 검사(<see cref="MechanicalValidator.ValidateSplitProcedureObligations"/>)의
+        /// 결과로 무조건 덮어써 단계 자신의 진단 사유를 지웠다.
+        ///
+        /// S01은 목차 자체가 부실해(TargetTables·ErrorCodes 둘 다 비어 있음) 자기
+        /// 하한 검사를 실행조차 못 해 Unverifiable로 확정된다. S01·S02는 같은 분할
+        /// SP(USP_Split)를 나눠 맡는데 그 SP가 요구하는 오류코드 -9가 둘의 본문을
+        /// 합쳐도 등장하지 않아, 문서 단위 검사가 QualityFloor 결함을 얹는다.
+        ///
+        /// 고쳐지기 전 코드는 S01의 Unverifiable 사유("TargetTables가 비어 있어...")를
+        /// 통째로 버리고 QualityFloor 사유만 남겼다. 이 테스트는 두 사유가 모두 살아
+        /// 있는지, 그리고 Kind가 더 심각한 쪽(QualityFloor - 실제로 확인된 결함이라
+        /// "검증 불가"보다 배너에서 위로 온다)으로 정해지는지를 고정한다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBySplitAsync_SplitProcedureObligationDefect_MergesWithExistingStepFloorViolation()
+        {
+            const string sharedProcedureStepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""분담 1"", ""LegacyProcedures"": [""USP_Split""], ""TargetTables"": [], ""ErrorCodes"": [] },
+    { ""Code"": ""S02"", ""Name"": ""분담 2"", ""LegacyProcedures"": [""USP_Split""], ""TargetTables"": [""dbo.T2""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    // S01: 목차 자체가 비어 있어(TargetTables·ErrorCodes 없음) 무슨
+                    // 본문을 내든 자기 하한 검사가 Unverifiable로 즉시 확정된다.
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\n본문입니다.\n\n```sql\nSELECT 1;\n```" }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            var steps = BatchStepPlanParser.TryParse(sharedProcedureStepsJson);
+            Assert.NotNull(steps);
+            var specs = new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") };
+
+            // USP_Split이 요구하는 오류코드 -9는 S01·S02 어느 본문에도 없다 -
+            // 문서 단위 검사가 둘 다 지목한다.
+            var codesByProcedure = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["USP_Split"] = new[] { "-9" }
+            };
+
+            var result = await InvokeGenerateBySplitAsync(
+                orchestrator, "목차", steps!, specs, "C#", "Job_Test",
+                NullProgressScope.Instance, null, null, null, new Dictionary<string, StepDefect>(),
+                Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
+                codesByProcedure: codesByProcedure);
+            Assert.NotNull(result);
+
+            var violations = GetFloorViolations(result!);
+            Assert.True(violations.ContainsKey("S01"));
+
+            var merged = violations["S01"];
+            // 두 사유가 모두 살아 있어야 한다 - 어느 한쪽도 통째로 지워지면 안 된다.
+            Assert.Contains("TargetTables", merged.Reason);
+            Assert.Contains("USP_Split", merged.Reason);
+            Assert.Contains("-9", merged.Reason);
+            // 실제로 확인된 결함(QualityFloor)이 "검증 불가"(Unverifiable)보다
+            // 배너 우선순위가 높다 - 병합 결과는 QualityFloor로 승격된다.
+            Assert.Equal(StepDefectKind.QualityFloor, merged.Kind);
         }
 
         /// <summary>
@@ -7595,6 +7734,79 @@ SELECT 1;
             // 기록이 새어 나오면 여기서 잡힌다.
             Assert.DoesNotContain("하한 미달", result.Plan);
             Assert.DoesNotContain("S01", result.Plan);
+        }
+
+        /// <summary>
+        /// L3 피드백 재생성이 재수립한 목차를 파싱하지 못해 통짜 단일 호출로
+        /// 떨어지는 이 경로도 단계별 본문 사전이 없어 분할 SP 문서 단위 검사를
+        /// 돌릴 수 없다. 최초 생성 폴백(:1959 부근)과 다른 자리인데 같은 사실을
+        /// 남겨야 한다 - 리뷰에서 이 자리 하나가 실제로 빠졌었다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_L3RedraftFallsBackToSingleCall_LogsThatSplitProcedureObligationCheckWasSkipped()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+
+            // 최초 목차는 파싱 가능(S01/S02). 재수립 후 목차는 산문만 있어 단계
+            // 목록을 파싱할 수 없다 — 통짜 단일 호출 폴백을 강제한다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차 산문만 있다" });
+
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 재작성된 통짜 문서\n\n본문." });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            userInteraction.CreateProgressScope(Arg.Any<string>()).Returns((IMultiProgressScope?)null);
+            var reviewCount = 0;
+            userInteraction.RequestHumanReviewAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(_ => ++reviewCount == 1
+                    ? new HumanReviewResult
+                    {
+                        Decision = UserDecision.ProvideFeedback,
+                        UserFeedback = "구조를 다시 짜줘",
+                        RedraftStructure = true
+                    }
+                    : new HumanReviewResult { Decision = UserDecision.Approve });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(), userInteraction,
+                "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                await orchestrator.RunConsolidatedPipelineAsync(
+                    specs, "C#", "RedraftFallbackLogJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            Assert.Contains(sink.Messages, m =>
+                m.Contains("분할 SP 문서 단위 검사를 실행하지 않았습니다") && m.Contains("RedraftFallbackLogJob"));
         }
 
         /// <summary>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -268,6 +269,13 @@ namespace ReSet.Core.Services
         /// 하나가 그 SP의 문장 전부를 담당한다고 본다 - 호출부
         /// (<see cref="VerificationPipelineOrchestrator"/>)가 아직 이 인자를 넘기지
         /// 않는 상태에서는 이 매개변수가 있어도 실행 중 동작은 바뀌지 않는다.</param>
+        /// <param name="codesByProcedure">원본 프로시저 맨이름별로 명세서 산문에서 뽑은 반환
+        /// 코드(<see cref="SpecReturnCodeExtractor"/>). <paramref name="allSteps"/>와 함께
+        /// "이 단계의 코드가 분할된 SP에서만 유래하는가"를 판정하는 데 쓴다 - step.ErrorCodes는
+        /// 평평한 목록이라 어느 코드가 어느 SP 것인지 이 인자 없이는 알 수 없다. 생략하거나
+        /// null이면 이 판정을 하지 않고 예전처럼 단계가 선언한 코드 전부를 요구한다.</param>
+        /// <param name="tablesByProcedure">원본 프로시저 맨이름별로 정적 분석이 낸 쓰기 대상
+        /// 테이블(<see cref="SpecTargetTableExtractor"/>). 테이블 축의 같은 판정에 쓴다.</param>
         public StepValidationResult ValidateBatchStep(
             string? stepMarkdown,
             BatchStepPlan step,
@@ -276,7 +284,12 @@ namespace ReSet.Core.Services
             IReadOnlyList<StepInterface>? stepInterfaces = null,
             IReadOnlyCollection<string>? runRowOwnedTables = null,
             IReadOnlyDictionary<string, SpecStatementFacts>? statementFactsByProcedure = null,
-            IReadOnlyList<BatchStepPlan>? allSteps = null)
+            IReadOnlyList<BatchStepPlan>? allSteps = null,
+            // [분할 SP 귀속] 코드·테이블이 어느 SP에서 왔는지는 step.ErrorCodes가 평평한
+            // 목록이라 알 수 없다. 프로시저 단위 재료를 함께 받아야 "분할된 SP에서만
+            // 유래한 것"을 가려낼 수 있다. 재료가 없으면(null) 종전 동작 그대로다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
         {
             var result = new StepValidationResult();
 
@@ -317,9 +330,10 @@ namespace ReSet.Core.Services
                     $"{step.Code}의 목차 TargetTables가 비어 있어 대상 테이블 대조를 실행할 수 없습니다.");
             }
 
-            // 레거시 출신이 없는 단계는 보존할 원본 코드가 애초에 없다 - 대조 항목 0개가
-            // 정상이다. 이것을 결함으로 들면 계획이 새로 설계한 정상 단계에 배너가 붙어
-            // 배너의 변별력이 사라진다.
+            // 레거시 출신이 없는 단계는 보존할 원본 코드가 없다. 그래서 이 결함은 레거시
+            // 출신이 있을 때만 든다. 다만 "대조 항목 0개"로 두지는 않는다 -
+            // PlanStructureEnricher가 예약 대역에서 코드를 발급하므로, 그 단계도 자기
+            // 블록 코드로 대조된다(ControlStepErrorCodes 참고).
             //
             // TargetTables 축은 여기에 딸리지 않는다. 출신이 없다는 것과 쓰는 테이블이
             // 없다는 것은 다른 사실이고, 아무것도 쓰지 않는다는 선언은 그 자체로 확인이 필요하다.
@@ -347,6 +361,13 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                // 이 테이블을 빚지는 SP가 전부 분할돼 있으면 이 단계 하나가 전체를
+                // 언급할 의무는 없다 - 문서 단위 검사(Task 5)가 그 의무를 회수한다.
+                if (IsTableOwedOnlyBySplitProcedures(bareName, step, allSteps, tablesByProcedure))
+                {
+                    continue;
+                }
+
                 if (!ContainsToken(stepMarkdown, bareName))
                 {
                     result.Errors.Add($"{step.Code} 섹션에 대상 테이블 '{table}'이 등장하지 않습니다.");
@@ -356,6 +377,12 @@ namespace ReSet.Core.Services
             foreach (var errorCode in step.ErrorCodes)
             {
                 if (string.IsNullOrWhiteSpace(errorCode))
+                {
+                    continue;
+                }
+
+                // 같은 판정. 분할된 SP에서만 유래한 코드는 단계마다 요구하지 않는다.
+                if (IsOwedOnlyBySplitProcedures(errorCode.Trim(), step, allSteps, codesByProcedure))
                 {
                     continue;
                 }
@@ -377,6 +404,7 @@ namespace ReSet.Core.Services
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
+            SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -467,6 +495,137 @@ namespace ReSet.Core.Services
                 !string.Equals(other.Code, ownStepCode, StringComparison.OrdinalIgnoreCase) &&
                 other.LegacyProcedures.Any(p =>
                     BareObjectName(p).Equals(bare, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        /// <summary>
+        /// 이 코드를 빚지는 SP가 전부 분할돼 있는가. 하나라도 분할되지 않은 SP가
+        /// 그 코드를 가지면 귀속이 확실하므로 이 단계에서 계속 요구한다.
+        ///
+        /// 재료가 없으면 false - 종전대로 요구한다. 재료 없음을 결함 없음으로
+        /// 바꾸지 않는다.
+        /// </summary>
+        private static bool IsOwedOnlyBySplitProcedures(
+            string code,
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure)
+        {
+            if (allSteps == null || codesByProcedure == null) return false;
+
+            var owners = step.LegacyProcedures
+                .Where(p => codesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(p), out var codes) &&
+                            codes.Any(c => string.Equals(c.Trim(), code, StringComparison.Ordinal)))
+                .ToList();
+
+            if (owners.Count == 0) return false;
+
+            return owners.All(p => IsLegacyProcedureSplitAcrossSteps(p, step.Code, allSteps));
+        }
+
+        /// <summary>
+        /// 테이블 축의 같은 판정. 오류코드와 달리 테이블은 정적 분석의 쓰기 집합에서
+        /// 온다(<see cref="SpecTargetTableExtractor"/>).
+        /// </summary>
+        private static bool IsTableOwedOnlyBySplitProcedures(
+            string bareTable,
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure)
+        {
+            if (allSteps == null || tablesByProcedure == null) return false;
+
+            var owners = step.LegacyProcedures
+                .Where(p => tablesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(p), out var sets) &&
+                            sets.WriteTables.Any(t => BareObjectName(t)
+                                .Equals(bareTable, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            if (owners.Count == 0) return false;
+
+            return owners.All(p => IsLegacyProcedureSplitAcrossSteps(p, step.Code, allSteps));
+        }
+
+        /// <summary>
+        /// 분할된 SP의 코드·테이블이 그 SP를 나눠 맡은 단계들의 본문을 합친 것에
+        /// 등장하는지 본다.
+        ///
+        /// [왜 문서 단위인가]
+        /// 단계마다 SP 전량을 요구하면 만족 불가능하다 - 실측(POQSettleProc4)에서
+        /// UP_UTIL_SETTLE_EXCEPTION_PROC이 18개 단계에 나뉘어 있다. 그렇다고 면제만
+        /// 하면 그 SP의 코드가 문서 어디에도 없어도 통과한다. 의무를 단계에서 문서로
+        /// 올리면 보장을 잃지 않고 불가능한 요구만 없앤다.
+        ///
+        /// [대가]
+        /// 결함을 한 단계로 지목하지 못한다. 어느 단계가 그 코드를 맡았어야 하는지
+        /// 알 방법이 없으므로 공유 단계 전부를 지목한다. 문서 전체 재생성보다는 싸다.
+        /// </summary>
+        public IReadOnlyDictionary<string, StepDefect> ValidateSplitProcedureObligations(
+            IReadOnlyDictionary<string, string> sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure)
+        {
+            var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
+            if (sectionsByStepCode == null || allSteps == null) return defects;
+
+            var procedures = allSteps
+                .SelectMany(s => s.LegacyProcedures)
+                .Select(BareObjectName)
+                .Where(p => p.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var procedure in procedures)
+            {
+                var sharing = allSteps
+                    .Where(s => s.LegacyProcedures.Any(p =>
+                        BareObjectName(p).Equals(procedure, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                // 한 단계만 맡으면 단계 검사가 그대로 본다. 여기서 또 보면 두 번 발화된다.
+                if (sharing.Count < 2) continue;
+
+                var combined = string.Join("\n", sharing
+                    .Select(s => sectionsByStepCode.TryGetValue(s.Code, out var body) ? body : string.Empty));
+
+                var missing = new List<string>();
+
+                if (codesByProcedure != null &&
+                    codesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(procedure), out var codes))
+                {
+                    missing.AddRange(codes
+                        .Select(c => c.Trim())
+                        .Where(c => c.Length > 0 && !ContainsToken(combined, c)));
+                }
+
+                if (tablesByProcedure != null &&
+                    tablesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(procedure), out var sets))
+                {
+                    missing.AddRange(sets.WriteTables
+                        .Select(BareObjectName)
+                        .Where(t => t.Length > 0 && !ContainsToken(combined, t)));
+                }
+
+                if (missing.Count == 0) continue;
+
+                var stepList = string.Join(", ", sharing.Select(s => s.Code));
+                var reason =
+                    $"{procedure}를 나눠 맡은 단계({stepList})의 본문을 모두 합쳐도 " +
+                    $"{string.Join(", ", missing)}가 등장하지 않습니다.";
+
+                // 같은 단계가 서로 다른 두 분할 SP를 겸할 수 있다(드물지만 실재) -
+                // 그때 이 대입이 그대로 덮어쓰면 먼저 처리된 SP의 진단이 사라진다.
+                // 이 메서드가 내는 결함은 전부 QualityFloor라 Kind 충돌은 없으므로
+                // 사유 문구만 이어 붙이면 된다.
+                foreach (var step in sharing)
+                {
+                    defects[step.Code] = defects.TryGetValue(step.Code, out var already)
+                        ? already with { Reason = already.Reason + " " + reason }
+                        : new StepDefect(StepDefectKind.QualityFloor, reason);
+                }
+            }
+
+            return defects;
         }
 
         private static string FirstNonEmptyLine(string markdown)
@@ -5966,6 +6125,185 @@ namespace ReSet.Core.Services
                 }
             }
         }
+
+        /// <summary>
+        /// 레거시 출신이 없는 단계는 자기 예약 블록 안의 코드만 돌려줘야 한다.
+        ///
+        /// 실측(POQSettleBatch1): 규약이 없던 동안 목차가 B100·B110·B160 같은 코드를
+        /// 스스로 발급했고, 등장 검사는 그것들이 본문에 있는지 확인하고 통과시켰다 -
+        /// 검사가 지어낸 어휘를 인증한 것이다. 그중 하나가 SQL로 새어
+        /// `DECLARE @v_currentStepId INT = B161`이 4회 나왔는데 컴파일되지 않는다.
+        ///
+        /// 두 가지를 본다: 상태 변수에 대입되는 비수치 토큰(B161)과, 수치지만 이 단계의
+        /// 블록 밖인 값. 후자를 보는 이유는 반환값만으로 단계를 특정할 수 있어야 하기
+        /// 때문이다.
+        ///
+        /// [픽스 라운드 1] 코퍼스에 문자열 코드로 응답하는 제어 단계가 실재한다
+        /// (`@po_strRetCode NVARCHAR(10) OUTPUT`에 `N'B120'`을 담는 POQSettleBatch1/S03
+        /// 등). 이 검사는 그 형태를 허용할지 금지할지 결정하지 않는다 - INT로 선언된
+        /// 적 없는 변수의 SET은 애초에 보지 않고(펜스 단위 게이팅), NULL과 문자열
+        /// 리터럴은 만나면 조용히 넘긴다. `DECLARE ... INT = NULL`은 유효한 T-SQL이라
+        /// "컴파일되지 않는다"는 말을 못 붙인다. 값은 <see cref="BlankCommentsAndStrings"/>가
+        /// 지운 사본이 아니라 원문에서 읽는다 - 사본에서 읽으면 문자열 리터럴 내용이
+        /// 공백으로 지워져 `N'B120'`이 `N`으로 잘리고, 그 잘린 값을 근거로 거짓 주장을
+        /// 하게 된다(실측: "값이 아닌 값 'N'을 대입합니다").
+        /// </summary>
+        private static void CheckControlStepErrorCodeBand(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            // 레거시 출신이 있으면 원본 코드를 쓰는 것이 정상이다.
+            if (step.LegacyProcedures.Count > 0) return;
+            var blockStart = ControlStepErrorCodes.BlockStart(step.Code);
+            if (blockStart == null) return;
+
+            var reported = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (cleaned, offset) in CleanedSqlFences(stepMarkdown))
+            {
+                // 펜스 단위로 새로 센다 - 다른 펜스의 DECLARE가 이 펜스의 SET을
+                // INT로 인증하면 안 된다.
+                var intDeclaredVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (Match assignment in ControlCodeAssignmentPattern.Matches(cleaned))
+                {
+                    var name = assignment.Groups["name"].Value;
+                    var isIntDeclare = assignment.Groups["declare"].Success;
+
+                    if (isIntDeclare)
+                    {
+                        intDeclaredVars.Add(name);
+                    }
+                    else if (!intDeclaredVars.Contains(name))
+                    {
+                        // 이 펜스에서 INT로 선언된 적이 없는 변수다 - 문자열 상태
+                        // 변수(N'B120' 등)일 수 있으므로 대상이 아니다.
+                        continue;
+                    }
+
+                    var raw = ExtractRawAssignmentValue(
+                        stepMarkdown, offset + assignment.Groups["value"].Index).Trim();
+                    if (!reported.Add(raw)) continue;
+
+                    // NULL은 컴파일된다 - 이 값이 바람직한 초기값인지는 별개 문제이고
+                    // 이 검사가 결정할 사안이 아니다.
+                    if (string.Equals(raw, "NULL", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    // 문자열 리터럴(옵션 N 접두사)도 이 검사의 대상이 아니다 - 문자열
+                    // 코드로 응답하는 제어 단계를 이 검사가 판정하지 않는다.
+                    if (raw.Length > 0 &&
+                        (raw[0] == '\'' || (raw.Length > 1 && (raw[0] == 'N' || raw[0] == 'n') && raw[1] == '\'')))
+                    {
+                        continue;
+                    }
+
+                    // [픽스 라운드 2] 이 검사가 판정할 수 있는 재료는 컴파일 시점에
+                    // 고정된 리터럴뿐이다 - 값이 실행 시점에 정해지면 그 값이 예약
+                    // 블록 안인지 알 방법이 없고, "컴파일되지 않는다"는 주장은 명백히
+                    // 거짓이 된다. 귀속할 수 없으면 침묵한다는 이 저장소의 기존
+                    // 원칙과 같다. 세 형태를 뺀다:
+                    //   - `@`로 시작 - 변수 참조(`@LegacyCode`) 또는 시스템 변수
+                    //     (`@@ERROR`). 실측(POQSettleProc6/S22):
+                    //     `SET @v_currentStepId = @LegacyCode;`는 `SET @a = @b`
+                    //     그대로라 컴파일된다 - `@LegacyCode`는 B161과 달리 선언된
+                    //     변수를 가리키는 유효한 식별자다. "숫자가 아닌 토큰"이라는
+                    //     점은 B161과 같지만, B161은 아무것도 가리키지 않는 미해석
+                    //     식별자라 컴파일이 안 되고 `@LegacyCode`는 선언된 변수를
+                    //     가리켜 컴파일된다 - 이 차이가 두 토큰을 가른다.
+                    //   - `CASE`로 시작 - `CASE WHEN ... THEN -9221 ELSE -9222 END`
+                    //     처럼 분기마다 다른 리터럴을 낼 수 있는 식이다.
+                    //   - `(`를 포함 - `ERROR_NUMBER()`처럼 함수 호출 형태다.
+                    if (raw.StartsWith("@", StringComparison.Ordinal) ||
+                        raw.StartsWith("CASE", StringComparison.OrdinalIgnoreCase) ||
+                        raw.Contains('('))
+                    {
+                        continue;
+                    }
+
+                    if (!int.TryParse(raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
+                    {
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 상태 변수에 숫자가 아닌 값 '{raw}'을 대입합니다. " +
+                            $"T-SQL에서 해석되지 않는 식별자라 컴파일되지 않습니다 - " +
+                            $"이 단계의 예약 블록({blockStart}부터 10개)을 쓰십시오.");
+                        continue;
+                    }
+
+                    // 0은 "아직 실패 지점을 지나지 않았다"는 초기값이다. 규칙 6-1이 그렇게 쓴다.
+                    if (value == 0) continue;
+
+                    if (!ControlStepErrorCodes.IsInBlock(step.Code, value))
+                    {
+                        result.Errors.Add(
+                            $"{step.Code} 섹션이 예약 블록 밖의 제어 코드 '{raw}'을 돌려줍니다. " +
+                            $"레거시 출신이 없는 단계는 {blockStart}부터 " +
+                            $"{ControlStepErrorCodes.BlockSize}개의 블록만 씁니다.");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 지운 사본이 아니라 원문 <paramref name="stepMarkdown"/>에서 대입값을 읽는다.
+        /// 문자열 리터럴은 <see cref="BlankCommentsAndStrings"/>가 공백으로 지우므로,
+        /// 사본에서 읽으면 `N'B120'`이 `N`으로 잘린다 - 잘린 값을 근거로 결함을
+        /// 보고하면 그 자체가 거짓 주장이다. <paramref name="start"/>는 지운 사본에서
+        /// 찾은 값 자리의 오프셋을 더한 절대 위치다(공백은 원문·사본이 길이를
+        /// 보존하며 같은 위치에 있으므로 그대로 옮길 수 있다).
+        /// </summary>
+        private static string ExtractRawAssignmentValue(string stepMarkdown, int start)
+        {
+            if (start < 0 || start >= stepMarkdown.Length) return string.Empty;
+
+            var i = start;
+            if ((stepMarkdown[i] == 'N' || stepMarkdown[i] == 'n') &&
+                i + 1 < stepMarkdown.Length && stepMarkdown[i + 1] == '\'')
+            {
+                i++;
+            }
+
+            if (i < stepMarkdown.Length && stepMarkdown[i] == '\'')
+            {
+                var j = i + 1;
+                while (j < stepMarkdown.Length)
+                {
+                    if (stepMarkdown[j] == '\'')
+                    {
+                        if (j + 1 < stepMarkdown.Length && stepMarkdown[j + 1] == '\'')
+                        {
+                            j += 2;
+                            continue;
+                        }
+
+                        j++;
+                        break;
+                    }
+
+                    j++;
+                }
+
+                return stepMarkdown[start..j];
+            }
+
+            var end = start;
+            while (end < stepMarkdown.Length &&
+                   !char.IsWhiteSpace(stepMarkdown[end]) &&
+                   stepMarkdown[end] != ';' && stepMarkdown[end] != ',' && stepMarkdown[end] != ')')
+            {
+                end++;
+            }
+
+            return stepMarkdown[start..end];
+        }
+
+        // 상태 변수에 값을 대입하는 자리. DECLARE 초기값과 SET 갱신을 함께 본다.
+        // 값 자리를 `[^\s;,)]+`로 잡는 이유: 숫자만 잡으면 B161 같은 비수치 토큰이
+        // 매치되지 않아 그대로 통과한다 - 기존 CheckStepIdInitialValue가 놓친 이유다.
+        // `declare` 그룹은 이 대입이 `DECLARE ... INT =`에서 왔는지 표시한다 - SET은
+        // 타입을 못 가지므로, 같은 펜스에서 INT로 선언된 적 있는 변수인지는 이 그룹으로
+        // 판단하고 이름은 `name`으로 추적한다.
+        private static readonly Regex ControlCodeAssignmentPattern = new(
+            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+INT\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)\s*(?<value>[^\s;,)]+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
         /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.

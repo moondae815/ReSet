@@ -46,6 +46,11 @@ namespace ReSet.Core.Tests
 
         private static readonly string[] Catalog = { "dbo.TSettleMst", "dbo.TStatPGCollect", "dbo.TSettleMiss" };
 
+        private static StepValidationResult Validate(string markdown, BatchStepPlan step) =>
+            new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
         private static IReadOnlyList<StepInterface> Interfaces(string code, params string[] parameters) =>
             new[] { new StepInterface(code, new[] { "dbo.X" }, parameters) };
 
@@ -2136,6 +2141,493 @@ SET @RunId = SCOPE_IDENTITY();");
                 runRowOwnedTables: OwnsBatchRun);
 
             Assert.Contains(result.Errors, e => e.Contains("INSERT") && e.Contains("batch.BatchRun"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectANonNumericControlCode()
+        {
+            // 실측(reset-20260824.log, 4회): `DECLARE @v_currentStepId INT = B161`.
+            // B161은 해석되지 않는 식별자라 이 SQL은 컴파일되지 않는다. 기존
+            // CheckStepIdInitialValue는 DECLARE 정규식이 `-?\d+`만 읽어 이것을 놓친다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = B161;
+SELECT 1 FROM dbo.TSettleMst;
+SET @po_intRetVal = @v_currentStepId;
+```
+-9160
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B161"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAControlCodeOutsideTheStepsBlock()
+        {
+            // 대역만 맞고 블록이 틀리면 반환값으로 단계를 특정할 수 없다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9010;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("-9010"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptCodesInsideTheStepsBlock()
+        {
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = -9160;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9161;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("-9161"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotApplyTheBandRuleToAStepWithALegacyOrigin()
+        {
+            // 레거시 출신이 있는 단계의 -9는 원본 코드다. 대역 검사를 적용하면
+            // 정상 단계가 전부 걸린다.
+            var step = new BatchStepPlan(
+                "S05", "원장 생성", new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                new[] { "dbo.TSettleMst" }, new[] { "-9" }, false, new string[0]);
+
+            var markdown = @"### S05 원장 생성
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SET @v_currentStepId = -9;
+SELECT 1 FROM dbo.TSettleMst;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotFlagTheZeroInitialValueAsOutsideTheBlock()
+        {
+            // 0은 "아직 실패 지점을 지나지 않았다"는 초기값이지 블록 밖 코드가 아니다.
+            // 레거시 출신이 없는 단계라도 이 초기화 자체는 정상이어야 한다.
+            var step = new BatchStepPlan(
+                "S16", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9160" }, false, new string[0]);
+
+            var markdown = @"### S16 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = -9160;
+SET @po_intRetVal = @v_currentStepId;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAStringControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleBatch1/S03, 설계서가 인용하는 바로 그 예): 이 SP는
+            // `@po_strRetCode NVARCHAR(10) OUTPUT`으로 문자열 코드를 돌려준다.
+            // `N'B120'`은 유효한 T-SQL이다 - 블랭크 사본에서는 문자열 내용이
+            // 공백으로 지워져 값이 'N'으로 잘리고, 그 잘린 값을 근거로
+            // "컴파일되지 않는다"는 거짓 주장을 했다. 문자열 코드 제어 단계를
+            // 허용할지 금지할지는 이 검사가 결정할 문제가 아니다 - 침묵해야 한다.
+            var step = new BatchStepPlan(
+                "S03", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S03 통합 검증
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepCode = N'B120';
+SET @po_strRetCode = @v_currentStepCode;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'N'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimALongStringControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleProc18/S01): `@v_currentStepId nvarchar(64)`에
+            // `N'BATCH-VAL-001'`을 대입한다. NVARCHAR로 선언된 변수는 이
+            // 검사(INT 예약 블록)의 대상이 아니다.
+            var step = new BatchStepPlan(
+                "S01", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S01 통합 검증
+
+```sql
+DECLARE @v_currentStepId nvarchar(64) = N'BATCH-VAL-001';
+SELECT 1 FROM dbo.TSettleMst;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimANullInitialValueDoesNotCompile()
+        {
+            // 실측(POQSettleProc8/S18,S19 등 코퍼스 전역의 부트스트랩 관용구):
+            // `DECLARE @v_currentStepId INT = NULL;`은 유효한 T-SQL이다.
+            // 이 규약 아래 NULL이 바람직한 초기값인지는 별개 문제이지만,
+            // "컴파일되지 않는다"는 주장만은 거짓이므로 절대 내면 안 된다.
+            var step = new BatchStepPlan(
+                "S18", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S18 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = NULL;
+SELECT 1 FROM dbo.TSettleMst;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotApplyTheBandRuleToAVariableNeverDeclaredAsInt()
+        {
+            // 문자열/NULL 스킵과는 별개로, 같은 펜스에서 INT로 선언된 적이 없는
+            // 변수의 SET은 값이 (따옴표 없는) 숫자처럼 보여도 이 검사의 대상이
+            // 아니다 - 그 변수가 실제로 INT인지 모르기 때문이다. 이 테스트는
+            // INT 선언 게이트가 무력화되면(따옴표·NULL 스킵과 무관하게) 실패한다.
+            var step = new BatchStepPlan(
+                "S03", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S03 통합 검증
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepCode = 42;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("예약 블록"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAVariableReferenceControlCodeDoesNotCompile()
+        {
+            // 실측(POQSettleProc6/S22): `SET @v_currentStepId = @LegacyCode;`.
+            // `@LegacyCode`는 선언된 변수를 가리키는 유효한 식별자다 - `SET @a = @b`는
+            // 컴파일된다. B161과 달리 이 값은 실행 시점에 정해지므로 이 검사가
+            // 리터럴로 판정할 수 없다 - 침묵해야 한다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = @LegacyCode;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimACaseExpressionControlCodeDoesNotCompile()
+        {
+            // `CASE WHEN ... THEN -9221 ELSE -9222 END`은 실행 시점에 갈리는 식이다 -
+            // 값 자리 첫 토큰 `CASE`만으로는 이 검사가 리터럴을 판정할 수 없다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = CASE WHEN @x = 1 THEN -9221 ELSE -9222 END;
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotClaimAFunctionCallControlCodeDoesNotCompile()
+        {
+            // `ERROR_NUMBER()`, `@@ERROR` 같은 함수 호출·시스템 변수도 실행 시점
+            // 값이다 - 리터럴이 아니므로 이 검사가 판정할 수 없다.
+            var step = new BatchStepPlan(
+                "S22", "통합 검증", new string[0], new[] { "dbo.TSettleMst" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S22 통합 검증
+
+```sql
+DECLARE @v_currentStepId INT = 0;
+SELECT 1 FROM dbo.TSettleMst;
+SET @v_currentStepId = ERROR_NUMBER();
+```
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("컴파일"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandACodeThatOnlyASplitProcedureOwes()
+        {
+            // 실측(POQSettleProc4): UP_UTIL_SETTLE_EXCEPTION_PROC이 18개 단계에 나뉘어
+            // 있다. 단계마다 그 SP의 코드 전량을 요구하면 18개 단계가 만족 불가능한
+            // 요구를 받는다 - 문장 개수 대조가 이미 같은 이유로 면제받는다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책 1", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책 1
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1", "-2" }
+                });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandACodeANonSplitProcedureOwes()
+        {
+            // 같은 단계가 분할되지 않은 SP도 맡고 있고 그 SP가 그 코드를 가지면
+            // 귀속이 확실하므로 계속 요구한다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X", "dbo.UP_Y" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1" },
+                    ["UP_Y"] = new[] { "-2" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutAttributionMaterial_ShouldKeepTheOldBehaviour()
+        {
+            // 재료가 없다는 사실을 결함 없음으로 바꾸지 않는다 - allSteps == null일
+            // 때의 하위 호환과 같은 태도다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-2" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-2'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandACodeWithNoKnownOwner()
+        {
+            // codesByProcedure 어디에도 이 코드를 가진 SP가 없으면(owners.Count == 0)
+            // 귀속을 확정할 수 없다. "분할 SP에서만 유래" 판정은 소유자가 있어야
+            // 성립하므로, 소유자가 아예 없을 때 면제로 뒤집으면 안 된다 - 그것은
+            // "누가 빚졌는지 모른다"를 "아무도 안 빚졌다"로 오독하는 것이다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1", "-99" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-1" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = -1;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-1" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-99'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillDemandASharedCodeWhenAStepOwnsBothASplitAndANonSplitProcedure()
+        {
+            // 같은 단계가 분할된 SP(UP_X)와 분할되지 않은 SP(UP_Y)를 함께 맡고, 두 SP가
+            // 같은 코드를 가지는 경우. 소유자 중 하나(UP_Y)라도 분할되지 않았으면
+            // 귀속이 확실하므로 계속 요구한다 - 분할 SP가 섞여 있다는 이유로
+            // 비분할 SP의 의무까지 면제하면 안 된다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X", "dbo.UP_Y" }, new[] { "dbo.T1" },
+                new[] { "-5" }, false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T1" },
+                new[] { "-5" }, false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = 0;
+DELETE FROM dbo.T1 WHERE YMD = @pi_strYMD;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T1" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                codesByProcedure: new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new[] { "-5" },
+                    ["UP_Y"] = new[] { "-5" }
+                });
+
+            Assert.Contains(result.Errors, e => e.Contains("'-5'"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotDemandATableThatOnlyASplitProcedureOwes()
+        {
+            // 테이블 축의 같은 판정. UP_X가 S10·S11에 나뉘어 있고 정적 분석이 그 SP의
+            // 쓰기 대상으로 dbo.T2를 낸다면, 이 단계 하나가 dbo.T2 전체를 언급할
+            // 의무는 없다 - 문서 단위 검사(Task 5)가 그 의무를 회수한다.
+            var s10 = new BatchStepPlan(
+                "S10", "예외 정책", new[] { "dbo.UP_X" }, new[] { "dbo.T2" },
+                new string[0], false, new string[0]);
+            var s11 = new BatchStepPlan(
+                "S11", "예외 정책 2", new[] { "dbo.UP_X" }, new[] { "dbo.T2" },
+                new string[0], false, new string[0]);
+
+            var markdown = @"### S10 예외 정책
+
+```sql
+SET @v_currentStepId = 0;
+SELECT 1;
+```
+";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, s10, new[] { "dbo.T2" },
+                new Dictionary<string, SpecConditions>(),
+                allSteps: new[] { s10, s11 },
+                tablesByProcedure: new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["UP_X"] = new SpecTargetTableExtractor.StepTableSets(
+                        new[] { "dbo.T2" }, Array.Empty<string>())
+                });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("'dbo.T2'"));
         }
     }
 }

@@ -689,7 +689,21 @@ INSERT INTO dbo.TStatPGCollect SELECT 1;
                 ErrorCodes = Array.Empty<string>(),
             };
 
-            var result = _validator.ValidateBatchStep(S10HealthySection, plan, Array.Empty<string>(), NoConditions);
+            // [Task 3] S10HealthySection의 `-1`은 레거시 코드다. 이 테스트가 흉내 내는
+            // 무출신 단계는 그 값을 쓸 자격이 없다(CheckControlStepErrorCodeBand 참고) -
+            // 예약 블록 안의 값(S10 블록 시작 -9100)으로 바꿔 두 관심사(오류코드 대조 vs
+            // 제어 코드 대역)를 섞지 않는다.
+            const string section = @"### 14. S10 PG 회수 통계 생성
+
+`S10`은 `TStatPGCollect`를 재생성한다. `TSettleMst`가 원천이다.
+
+```sql
+SET XACT_ABORT ON;
+DECLARE @v_currentStepId int = -9100;
+INSERT INTO dbo.TStatPGCollect SELECT 1;
+```";
+
+            var result = _validator.ValidateBatchStep(section, plan, Array.Empty<string>(), NoConditions);
 
             Assert.True(result.IsValid);
             Assert.Empty(result.PlanDefects);
