@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ReSet.Core.Services;
 using ReSet.Core.Services.Clients;
@@ -25,7 +27,14 @@ namespace ReSet.Core.Tests
 
             await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job");
 
-            return mockHandler.LastRequestBody;
+            // 요청 본문 전체가 아니라 system 메시지만 돌려준다. 본문에는 명세서 원문이
+            // 함께 실리므로, `Succeeded`·`CROSS APPLY` 같은 토큰은 채점 기준이 빠져도
+            // 명세서 쪽에서 걸려 통과할 수 있다 - fixture가 자라면 조용히 무력해진다.
+            using var document = JsonDocument.Parse(mockHandler.LastRequestBody);
+            return document.RootElement.GetProperty("messages")
+                .EnumerateArray()
+                .Single(message => message.GetProperty("role").GetString() == "system")
+                .GetProperty("content").GetString()!;
         }
 
         [Fact]

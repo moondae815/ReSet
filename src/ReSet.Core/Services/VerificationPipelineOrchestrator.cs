@@ -1884,9 +1884,21 @@ namespace ReSet.Core.Services
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
                         }
 
-                        // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 조용히
-                        // 현행 단일 호출로 폴백한다 — 분할은 개선이지 필수가 아니다.
+                        // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 단일 호출로
+                        // 폴백한다 — 분할은 개선이지 필수가 아니다.
                         currentSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+                        if (currentSteps == null)
+                        {
+                            // 화면에 알린다. 폴백은 단계마다 확보한 본문을 한 번에
+                            // 무너뜨리는 경로라(:2311 참고) 대가가 크고, 원인은 대개
+                            // 목차 JSON의 사소한 흠(Code 중복·Name 누락)이다. 조용히
+                            // 강등되면 사용자는 왜 이 회차만 품질이 다른지 알 수 없다.
+                            // 상세 사유는 BatchStepPlanParser가 경고 로그에 남긴다.
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - 목차에서 단계 목록을 읽지 못해 단일 호출로 생성합니다 " +
+                                "(로그의 단계 목록 경고를 확인하십시오).");
+                        }
+
                         if (currentSteps != null)
                         {
                             // 골격은 개요·흐름도·검증 SQL을 완성하고, 단계 상세 H2에는
@@ -1940,7 +1952,7 @@ namespace ReSet.Core.Services
                             // 목차를 못 읽어 폴백한 회차라면 단계 목록이 없어 표도 비는데,
                             // 그때는 AiService가 절 자체를 싣지 않는다(빈 표가 "원본
                             // 파라미터가 없다"로 읽히는 것을 막는다).
-                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(currentPlanStructure), cancellationToken), progressScope, "phase3single");
+                            aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(currentPlanStructure), currentBrainstorming, cancellationToken), progressScope, "phase3single");
                         }
                     }
                     consolidatedPlan = splitMarkdown ?? aiResult.Content;
@@ -2394,7 +2406,7 @@ namespace ReSet.Core.Services
                         try
                         {
                             var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(
-                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), cancellationToken);
+                                structureForRegeneration, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), currentBrainstorming, cancellationToken);
                             rePlan = aiResult.Content;
                             finalAiResult = aiResult;
 
@@ -2462,7 +2474,7 @@ namespace ReSet.Core.Services
                         {
                             var specsRe = new System.Collections.Generic.List<(string FileName, string Content)>(specsCopy);
                             specsRe.Add((FeedbackSpec.L1FixFileName, l1Re.SuggestedPromptFix ?? string.Empty));
-                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsRe, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), cancellationToken);
+                            var aiResult = await _consolidatorService.GenerateConsolidatedBatchPlanAsync(structureForRegeneration, specsRe, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(structureForRegeneration), currentBrainstorming, cancellationToken);
                             rePlan = aiResult.Content;
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -3017,6 +3029,11 @@ namespace ReSet.Core.Services
             var targeted = previousSkeleton != null && previousSkeletonResult != null &&
                 previousSections != null && defectiveSteps.Count > 0;
 
+            // 단계별 인터페이스. steps가 이미 확정돼 있으므로 골격 호출보다 앞에서 만든다 -
+            // 골격도 이 표를 받아야 한다(규칙 5가 그 표를 가리킨다). 재시도 루프 밖이라
+            // 단계마다 뽑아도 결과가 같다.
+            var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure);
+
             string skeleton;
             AiResult generation;
 
@@ -3034,7 +3051,7 @@ namespace ReSet.Core.Services
                 {
                     var skeletonResult = await WrapWithProgress(
                         _consolidatorService.GenerateBatchPlanSkeletonAsync(
-                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, brainstorming, cancellationToken),
+                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, brainstorming, stepInterfaces, cancellationToken),
                         progressScope, "phase3");
 
                     if (skeletonResult == null || string.IsNullOrWhiteSpace(skeletonResult.Content))
@@ -3053,9 +3070,6 @@ namespace ReSet.Core.Services
             }
 
             var conventions = BatchPlanAssembler.ExtractSharedConventions(skeleton);
-            // steps가 여기서 처음 확정되므로 단계별 인터페이스도 여기서 만든다.
-            // 재시도 루프 밖이다 - 단계마다 뽑아도 결과가 같다.
-            var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure);
             var sections = previousSections != null
                 ? new Dictionary<string, string>(previousSections)
                 : new Dictionary<string, string>();

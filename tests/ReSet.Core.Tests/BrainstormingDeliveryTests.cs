@@ -80,6 +80,42 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task Fallback_ShouldAlsoCarryTheBrainstormingText()
+        {
+            // 단일 호출 폴백은 골격이 하는 일(아키텍처 개요·흐름도)을 문서 전체와 함께
+            // 한 번에 한다. 브레인스토밍이 도달해야 하는 자리가 정확히 여기다 -
+            // known-defects가 지목했던 것도 이 시그니처였다.
+            IAiService service = new AiService(Client(), 0.2f);
+            var specs = new List<(string FileName, string Content)> { ("dbo.UP_A", "본문") };
+
+            var result = await service.GenerateConsolidatedBatchPlanAsync(
+                "## 목차", specs, "C#", "Job_Test",
+                effort: null, stepInterfaces: null, brainstorming: "S05는 GROUP BY 집계라 청크 분할이 불가능하다.");
+
+            Assert.Contains("[Architecture Brainstorming", result.UserPrompt);
+            Assert.Contains("S05는 GROUP BY 집계라 청크 분할이 불가능하다.", result.UserPrompt);
+        }
+
+        [Fact]
+        public async Task Skeleton_ShouldCarryTheInterfaceTableRule5PointsAt()
+        {
+            // 골격도 ConsolidatedPlanRules를 통째로 받는다. 규칙 5가 가리키는 표가
+            // 없으면 프롬프트에 없는 근거를 가리키는 지시가 된다.
+            IAiService service = new AiService(Client(), 0.2f);
+            var specs = new List<(string FileName, string Content)> { ("dbo.UP_A", "본문") };
+            var interfaces = StepInterfaceFacts.Build(
+                Steps,
+                new Dictionary<string, IReadOnlyList<string>> { ["UP_A"] = new[] { "@pi_strYMD CHAR(8)" } });
+
+            var result = await service.GenerateBatchPlanSkeletonAsync(
+                Steps, "## 목차", specs, "C#", "Job_Test",
+                effort: null, brainstorming: null, stepInterfaces: interfaces);
+
+            Assert.Contains("[Original Procedure Interface]", result.UserPrompt);
+            Assert.Contains("@pi_strYMD", result.UserPrompt);
+        }
+
+        [Fact]
         public async Task Brainstorm_ShouldNotForceAnUnrelatedFrameworksVocabulary()
         {
             // 산출물은 batch 스키마의 T-SQL 프로시저다. Spring Batch의 Tasklet/Chunk를
