@@ -6128,6 +6128,64 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 검사 B·C가 함께 쓰는 후보 목록. 문장을 서수로 환산하고, <b>한 서수를 둘
+        /// 이상이 주장하면 그 서수를 통째로 뺀다.</b>
+        ///
+        /// [왜 집합 수준에서 막는가] <see cref="ResolveOrdinal"/>은 문장 단위 함수라
+        /// 중복을 볼 수 없다 - 그게 정상이다. 모호성은 한 문장의 성질이 아니라 문장
+        /// 집합의 성질이다.
+        ///
+        /// [무엇을 막는가 - 2026-08-26 코퍼스 실측]
+        /// <c>AiService</c>의 [Precise Error Tracking]은 문장마다 고유한
+        /// <c>SET @v_currentStepId</c>를 요구하지만 실물은 한 코드를 여러 문장에 붙인다.
+        /// 326개 단계 중 100개에 중복이 있고, 명세서 사전에 실제로 실리는 음수 코드로
+        /// 좁혀도 81개(25%)다. <c>POQSettleBatch1/S10</c>은 <c>-2</c>를 INSERT 하나와
+        /// UPDATE 둘, 세 문장에 붙였다. Kind 대조가 INSERT는 걸러내지만 UPDATE 둘은
+        /// 모두 같은 서수로 환산돼 엉뚱한 행과 대조됐다 - 스윕 발화 109건 중
+        /// 87건(80%)이 그 자리에서 났다.
+        ///
+        /// [대가] 커버리지가 준다. 중복 코드 단계에 진짜 결함이 있어도 함께 침묵한다.
+        /// 그럼에도 이 저장소의 「귀속할 수 없으면 침묵한다」 규약을 따르는 쪽이 맞다 -
+        /// 잘못된 행과 대조해 낸 요구는 <c>SuggestedPromptFix</c>를 타고 재생성
+        /// 프롬프트에 실려 재시도를 소진시킨다. 침묵의 대가는 스윕 보고서의
+        /// 「코드 앵커가 둘 이상의 문장에 붙은 단계 수」 지표가 드러낸다.
+        ///
+        /// [청크 분할과 구분해야 한다 - 같은 앵커 반복이 늘 모호성은 아니다]
+        /// 같은 앵커가 여러 문장에 반복되는 경우가 둘 있고 정반대다. <b>청크 분할</b>은
+        /// 논리적으로 한 문장이 조각난 것이라 합쳐서 한 번 대조하는 것이 옳고
+        /// (<see cref="CheckAnchoredStatementExtras"/>가 「같은 (앵커, 종류)로 묶는다」로
+        /// 이미 그렇게 한다), <b>코드 재사용</b>은 서로 다른 문장이 같은 라벨을 쓴 것이라
+        /// 합치면 없는 술어 집합이 만들어진다.
+        ///
+        /// 앵커 값만으로는 구분되지 않지만 <b>출처가 구분해 준다</b> - 청크는 조각마다
+        /// U-앵커를 다시 적고(<c>ValidateBatchStep_ExtraPredicate_ChunkedAnchoredStatementsReportOnce</c>가
+        /// 그 모양을 못으로 박는다), 코드 재사용에는 U-앵커가 없다. 그래서 <b>그룹의 어느
+        /// 조각도 U-앵커를 갖지 않을 때만</b> 버린다. 이 조건을 「겹치면 무조건 버린다」로
+        /// 넓히면 청크 대조가 통째로 죽는다 - 실제로 그렇게 짰다가 위 테스트가 잡았다.
+        /// </summary>
+        private static List<(StepSqlStatement Statement, int? Ordinal)> ResolveAnchoredStatements(
+            IReadOnlyList<StepSqlStatement> statements,
+            IReadOnlyDictionary<string, (string Kind, int Ordinal)> codeMap)
+        {
+            var resolved = statements
+                .Where(IsCandidateForAnchoredStatementCheck)
+                .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
+                .Where(a => a.Ordinal.HasValue)
+                .ToList();
+
+            // U-앵커를 가진 조각이 하나라도 있으면 청크 분할이다 - 버리지 않는다.
+            var ambiguous = resolved
+                .GroupBy(a => a.Ordinal!.Value)
+                .Where(g => g.Count() > 1 && g.All(a => !a.Statement.Anchor.HasValue))
+                .Select(g => g.Key)
+                .ToHashSet();
+
+            return ambiguous.Count == 0
+                ? resolved
+                : resolved.Where(a => !ambiguous.Contains(a.Ordinal!.Value)).ToList();
+        }
+
+        /// <summary>
         /// INSERT 문장을 검사 B(<see cref="CheckAnchoredStatementFacts"/>)·검사 C
         /// (<see cref="CheckAnchoredStatementExtras"/>)의 후보에서 뺀다.
         ///
@@ -6256,11 +6314,7 @@ namespace ReSet.Core.Services
             if (rows.Count == 0) return;
 
             var codeMap = MergeErrorCodeMaps(facts);
-            var anchored = statements
-                .Where(IsCandidateForAnchoredStatementCheck)
-                .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
-                .Where(a => a.Ordinal.HasValue)
-                .ToList();
+            var anchored = ResolveAnchoredStatements(statements, codeMap);
             if (anchored.Count == 0)
             {
                 // [Task 12 - 폴백을 침묵으로 바꾼 이유. docs/known-defects.md 참고]
@@ -6465,11 +6519,7 @@ namespace ReSet.Core.Services
             if (rows.Count == 0) return;
 
             var codeMap = MergeErrorCodeMaps(facts);
-            var anchored = statements
-                .Where(IsCandidateForAnchoredStatementCheck)
-                .Select(s => (Statement: s, Ordinal: ResolveOrdinal(s, codeMap)))
-                .Where(a => a.Ordinal.HasValue)
-                .ToList();
+            var anchored = ResolveAnchoredStatements(statements, codeMap);
             // 앵커 부재(U-앵커·코드 앵커 둘 다 없음, 또는 둘이 불일치해 귀속할 수
             // 없음)는 CheckAnchoredStatementFacts도 같은 조건에서 아무것도
             // 보고하지 않고 조용히 return한다(위 [현재 사실] 문단 참고) - "이미

@@ -37,6 +37,33 @@ namespace ReSet.Core.Tests
                 SpecNewest = specNewest,
             });
 
+        // 가드가 침묵시킨 대가를 보고서가 드러내야 한다 - 조용한 결손은 이 저장소가
+        // 반복해 겪은 실패 양식이다.
+        [Fact]
+        public void IndicatorsTableShowsStepsWithReusedCodeAnchors()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(3, 2, 1) { StepsWithReusedCodeAnchors = 81 },
+                new HarnessGaps(
+                    new List<string>(), 51, 326, 18,
+                    StepInterfacesWereNull: true,
+                    RunRowOwnedTablesWereNull: true,
+                    KnownTableNamesWereEmpty: true));
+
+            var section = Section(StepSweepReportWriter.Render(report, "abc1234", "16"), "## 캐시 17 선결 지표");
+            Assert.Contains("| 코드 앵커가 둘 이상의 문장에 붙은 단계 수 | 81 |", section);
+        }
+
+        // 0이어도 행은 나와야 한다 - 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다.
+        [Fact]
+        public void ReusedCodeAnchorRowPrintsEvenWhenZero()
+        {
+            var section = Section(
+                StepSweepReportWriter.Render(Report(), "abc1234", "16"), "## 캐시 17 선결 지표");
+            Assert.Contains("| 코드 앵커가 둘 이상의 문장에 붙은 단계 수 | 0 |", section);
+        }
+
         private static DateTimeOffset D(string ymd) =>
             DateTimeOffset.Parse(ymd + "T00:00:00+09:00");
 

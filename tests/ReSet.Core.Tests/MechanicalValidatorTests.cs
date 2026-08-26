@@ -8190,6 +8190,84 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("갱신 13") && e.Contains("YMD"));
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 코드 앵커 재사용 가드 — 한 서수를 둘 이상의 문장이 주장하면 침묵한다.
+        //
+        // [왜 필요한가 - 2026-08-26 코퍼스 실측]
+        // AiService의 [Precise Error Tracking]은 문장마다 고유한
+        // `SET @v_currentStepId`를 요구하지만 실물은 한 코드를 여러 문장에 붙인다 -
+        // 326개 단계 중 100개(음수 코드로 좁히면 81개, 25%)가 그렇고,
+        // POQSettleBatch1/S10은 `-2`를 INSERT 하나와 UPDATE 둘, 세 문장에 붙였다.
+        // ResolveOrdinal은 문장 단위 함수라 중복을 볼 수 없다(그게 정상이다 -
+        // 모호성은 집합 수준의 성질이다). 그 결과 같은 Kind의 문장 둘이 모두 같은
+        // 서수로 환산돼 엉뚱한 행과 대조됐다. 스윕 발화 109건 중 87건(80%)이
+        // 그 자리에서 났다.
+        //
+        // 「귀속할 수 없으면 침묵한다」는 이 저장소의 규약을 그대로 따른다.
+        // 대가는 커버리지다 - 중복 코드 단계에 진짜 결함이 있어도 함께 침묵한다.
+        // 그 대가는 스윕 보고서의 지표가 드러낸다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private const string TwoStatementsSharingOneCode =
+            "### S10 단계\n\n```sql\n" +
+            "SET @v_currentStepId = -13;\n" +
+            "UPDATE A SET A.CLComm = A.CLComm * -1 FROM dbo.TSettleMst AS A;\n" +
+            "SET @v_currentStepId = -13;\n" +
+            "UPDATE A SET A.CLTotal = A.CLComm + A.CLVT FROM dbo.TSettleMst AS A;\n" +
+            "```\n";
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorClaimedByTwoStatements_IsSilent()
+        {
+            var facts = FactsWithCode(9, new[] { "YMD", "UseState" }, code: "-13");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                TwoStatementsSharingOneCode, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("갱신 9"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_CodeAnchorClaimedByTwoStatements_IsSilent()
+        {
+            // 검사 C는 "명세서에 없는 술어"를 본다. 명세서 UPDATE 9에 술어가 없고
+            // 두 문장이 WHERE를 쓰면 원래는 초과 술어로 발화한다 - 가드가 그것도 막는다.
+            var facts = FactsWithCode(9, Array.Empty<string>(), code: "-13");
+
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLComm = 1 FROM dbo.TSettleMst AS A WHERE A.UseState = 0;\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLVT = 2 FROM dbo.TSettleMst AS A WHERE A.UseState = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_CodeAnchorOnOneStatement_StillFires()
+        {
+            // 가드가 코드 앵커 축을 통째로 끄지 않았음을 못 박는다. 이 테스트가 없으면
+            // "항상 침묵한다"는 구현이 위 두 테스트를 통과시킨다.
+            var facts = FactsWithCode(9, new[] { "YMD", "UseState" }, code: "-13");
+
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE A SET A.CLComm = A.CLComm * -1 FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 9") && e.Contains("YMD"));
+        }
+
         [Fact]
         public void ValidateBatchStep_CheckB_CodeAnchorOnly_ResolvesOrdinalAndCompares()
         {

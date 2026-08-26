@@ -215,6 +215,9 @@ namespace ReSet.Core.Services
             b.AppendLine(
                 $"| 펜스 파싱 실패로 코드 집합 대조에서 제외한 단계 수 | " +
                 $"{indicators.StepsSkippedForParseFailure} |");
+            b.AppendLine(
+                $"| 코드 앵커가 둘 이상의 문장에 붙은 단계 수 | " +
+                $"{indicators.StepsWithReusedCodeAnchors} |");
             b.AppendLine();
 
             if (indicators.StepsSkippedForParseFailure > 0)

@@ -111,6 +111,7 @@ namespace ReSet.Core.Services
             var missingSpecCodes = 0;
             var unknownCodes = 0;
             var skippedForParseFailure = 0;
+            var stepsWithReusedCodeAnchors = 0;
             var unresolvedProcedureReferences = 0;
 
             foreach (var job in input.Jobs)
@@ -184,6 +185,19 @@ namespace ReSet.Core.Services
                         // [코드 집합 어긋남]·[펜스 파싱 실패는 소실이 아니다] 절 참고.
                         var stepStatements =
                             StepSqlStatementReader.Read(markdown, out var lostStatementCount);
+
+                        // [가드가 침묵시킨 대가의 크기]
+                        // MechanicalValidator.ResolveAnchoredStatements가 한 서수를 둘
+                        // 이상이 주장하면 그 서수를 버린다. 그 침묵은 옳지만 관할이
+                        // 줄어든 만큼을 보고서가 말해야 한다. 검증기가 보는 것과 같은
+                        // 문장 집합에서 세므로 근사가 아니라 같은 재료다(다만 명세서
+                        // 사전에 없는 코드의 중복까지 세는 상위 근사인 것은
+                        // SweepIndicators.StepsWithReusedCodeAnchors 문서 참고).
+                        var hasReusedCode = stepStatements
+                            .Where(st => !string.IsNullOrWhiteSpace(st.CodeAnchor))
+                            .GroupBy(st => st.CodeAnchor!, StringComparer.Ordinal)
+                            .Any(g => g.Count() > 1);
+                        if (hasReusedCode) stepsWithReusedCodeAnchors++;
 
                         if (lostStatementCount > 0)
                         {
@@ -270,6 +284,7 @@ namespace ReSet.Core.Services
                 new SweepIndicators(multiProcedureSteps, missingSpecCodes, unknownCodes)
                 {
                     StepsSkippedForParseFailure = skippedForParseFailure,
+                    StepsWithReusedCodeAnchors = stepsWithReusedCodeAnchors,
                 },
                 new HarnessGaps(
                     input.PlanParseFailedJobs,

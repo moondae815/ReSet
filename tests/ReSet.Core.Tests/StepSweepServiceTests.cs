@@ -323,6 +323,36 @@ UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
             Assert.Empty(report.Findings);
         }
 
+        // 가드가 침묵시킨 대가의 크기. 코드 앵커가 둘 이상의 문장에 붙은 단계를 센다.
+        [Fact]
+        public void StepsWithReusedCodeAnchorsAreCounted()
+        {
+            var reused = "### S01. 재사용\n\n설명.\n\n```sql\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD;\n" +
+                "SET @v_currentStepId = -13;\n" +
+                "UPDATE dbo.TSettleMst SET UseState = 2 WHERE YMD = @pi_strYMD;\n" +
+                "```\n";
+
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string> { ["S01"] = reused },
+            };
+
+            var report = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.StepsWithReusedCodeAnchors);
+        }
+
+        [Fact]
+        public void StepWithoutReusedCodeAnchorsIsNotCounted()
+        {
+            var indicators = StepSweepService.Sweep(OneJobInput()).Indicators;
+
+            Assert.Equal(0, indicators.StepsWithReusedCodeAnchors);
+        }
+
         [Fact]
         public void MultiProcedureStepsAreCounted()
         {

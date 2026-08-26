@@ -171,6 +171,23 @@ namespace ReSet.Core.Services
         /// 읽어야 한다. 값이 크면 그 두 지표를 그대로 믿을 수 없다는 신호다.
         /// </summary>
         public int StepsSkippedForParseFailure { get; init; }
+
+        /// <summary>
+        /// 한 코드 앵커가 둘 이상의 문장에 붙은 단계 수 - 코드 축이 그 단계에서
+        /// (부분적으로) 꺼진 곳이다.
+        ///
+        /// [왜 이 값이 보고서에 있어야 하는가] MechanicalValidator의 모호성 가드
+        /// (ResolveAnchoredStatements)가 그런 서수를 침묵시킨다. 침묵은 옳지만
+        /// 대가가 있다 - 그 단계에 진짜 결함이 있어도 함께 묻힌다. 이 값이 그
+        /// 대가의 크기다. 크면 검사 B·C의 관할이 그만큼 좁다는 뜻이고, 근본
+        /// 해결은 생성기가 문장마다 고유 코드를 쓰게 하는 것이다.
+        ///
+        /// [정확히 「침묵당한 건수」는 아니다] 명세서 사전에 실리지 않는 코드
+        /// (예: 범용 catch-all `4000`)의 중복까지 세는 상위 근사다 - 그런 코드는
+        /// 애초에 서수로 환산되지 않아 침묵시킬 것도 없다. 정확한 수치를 내려면
+        /// 검증기에서 배선을 빼야 하고, 그 결합보다 이 근사가 낫다고 봤다.
+        /// </summary>
+        public int StepsWithReusedCodeAnchors { get; init; }
     }
 
     public sealed record SweepReport(
