@@ -228,6 +228,27 @@ namespace ReSet.Core.Services
         };
 
         /// <summary>
+        /// 모든 표의 <see cref="ControlColumn.AllowedValues"/>를 모은 합집합 -
+        /// 이 계약이 정의하는 상태 어휘 전체(Running·Succeeded·Failed·Skipped·
+        /// Restarting·Pending·Held·Released·Info·Warning·Error·Critical 등).
+        ///
+        /// [왜 이름이 아니라 이 집합으로 판정하는가]
+        /// MechanicalValidator의 제어 단계 문자열 코드 검사(CheckControlStepErrorCodeBand)가
+        /// `SET @v_stepStatus = N'Running'` 같은 대입을 오류 코드로 오판하지 않으려면
+        /// "이 리터럴이 상태값인가"를 계약에 물어야 한다. 변수 이름이 Status로
+        /// 끝나는지로 추정하면 이 저장소가 이미 두 번 실패한 "이름으로 성격을
+        /// 짐작하는" 방식을 반복하는 것이고, 코퍼스가 실제로 관측한 이름
+        /// 변주(StepState·ExecutionStatus 등, BatchControlContract 클래스 주석
+        /// 참고)마다 새 추정 규칙을 추가해야 한다. 계약이 이미 정의한 값 집합을
+        /// 그대로 조회하면 이름과 무관하게 정확하다.
+        /// </summary>
+        public static IReadOnlySet<string> AllowedStatusValues { get; } = Tables
+            .SelectMany(t => t.Columns)
+            .Where(c => c.AllowedValues is { Count: > 0 })
+            .SelectMany(c => c.AllowedValues!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 한정자가 있든 없든, 대소문자가 어떻든 찾는다. 단계 문서는 같은 테이블을
         /// batch.BatchRun으로도 BatchRun으로도 쓴다 - 한쪽만 인식하면 검사가 절반만 돈다.
         /// </summary>

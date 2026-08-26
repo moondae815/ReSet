@@ -6195,8 +6195,18 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    var raw = ExtractRawAssignmentValue(
-                        stepMarkdown, offset + assignment.Groups["value"].Index).Trim();
+                    // `=`까지만 잡는 정규식이 끝난 바로 뒤부터, 원문에서 공백을
+                    // 건너뛰어 값의 첫 글자를 찾는다(픽스 라운드 1, 리뷰 I2). `cleaned`
+                    // 위에서 값 자리까지 잡으면 N 접두사 없는 문자열 리터럴이 공백과
+                    // 구분되지 않아 매치 자체가 실패했다 - 원문에는 따옴표가 그대로
+                    // 남아 있으므로 원문의 공백만 건너뛰면 정확한 위치를 찾는다.
+                    var valueStart = offset + assignment.Index + assignment.Length;
+                    while (valueStart < stepMarkdown.Length && char.IsWhiteSpace(stepMarkdown[valueStart]))
+                    {
+                        valueStart++;
+                    }
+
+                    var raw = ExtractRawAssignmentValue(stepMarkdown, valueStart).Trim();
                     if (!reported.Add(raw)) continue;
 
                     // NULL은 컴파일된다 - 이 값이 바람직한 초기값인지는 별개 문제이고
@@ -6211,11 +6221,21 @@ namespace ReSet.Core.Services
                     // 저널에 자기 신원을 쓰는 정당한 용법이고(실측 12단계), 다른
                     // 단계의 코드(`N'S02'`)도 "첫 미완료 단계 코드"처럼 다른 단계를
                     // 가리키는 정당한 상태 변수일 수 있다(실측:
-                    // POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). 그 밖의
-                    // 문자열은 지어낸 오류 어휘다(실측 17단계: N'B120'·
-                    // N'BATCH-LOCK-001' 등). allSteps가 null이면(재료 없음) 자기
-                    // 코드만 예외로 둔다 - 재료가 없다는 사실을 결함 없음으로
-                    // 바꾸지 않는다.
+                    // POQSettleProc16/S02의 `@v_firstIncompleteStepCode`). allSteps가
+                    // null이면(재료 없음) 자기 코드만 예외로 둔다 - 재료가 없다는
+                    // 사실을 결함 없음으로 바꾸지 않는다.
+                    //
+                    // [픽스 라운드 1(리뷰 I3)] 리터럴이 제어 계약의 상태 어휘
+                    // (Running·Succeeded·Failed·Skipped·Pending·Held·Released 등,
+                    // BatchControlContract.AllowedStatusValues)에 있어도 침묵한다 -
+                    // `SET @v_stepStatus = N'Running'`은 체크포인트 상태값이지
+                    // 오류 코드가 아니다. 변수 이름(Status로 끝나는지)으로 추정하지
+                    // 않고 계약을 그대로 조회한다 - 이 저장소가 "이름으로 성격을
+                    // 짐작하는" 방식으로 두 번 실패한 뒤 세운 원칙과 같다. 코퍼스
+                    // 전수 grep에서 대입 형태로는 0건이지만, 같은 어휘가 변수 이름
+                    // 옆에서 실제로 쓰이고 있어 다음 생성분의 대입 형태 발화를
+                    // 미리 막는다. 그 밖의 문자열은 지어낸 오류 어휘다(실측
+                    // 17단계: N'B120'·N'BATCH-LOCK-001' 등).
                     //
                     // "컴파일되지 않습니다"라고 쓰지 않는다 - N'B120'은 컴파일된다.
                     // 거짓 진술은 이 저장소가 두 라운드를 들여 걷어낸 것이다.
@@ -6226,7 +6246,7 @@ namespace ReSet.Core.Services
                             ? allSteps.Any(s => string.Equals(s.Code, literal, StringComparison.OrdinalIgnoreCase))
                             : string.Equals(literal, step.Code, StringComparison.OrdinalIgnoreCase);
 
-                        if (isKnownStepCode)
+                        if (isKnownStepCode || BatchControlContract.AllowedStatusValues.Contains(literal))
                         {
                             continue;
                         }
@@ -6347,18 +6367,27 @@ namespace ReSet.Core.Services
             return stepMarkdown[start..end];
         }
 
-        // 상태 변수에 값을 대입하는 자리. DECLARE 초기값과 SET 갱신을 함께 본다.
-        // 값 자리를 `[^\s;,)]+`로 잡는 이유: 숫자만 잡으면 B161 같은 비수치 토큰이
-        // 매치되지 않아 그대로 통과한다 - 기존 CheckStepIdInitialValue가 놓친 이유다.
-        // `declare` 그룹은 이 대입이 DECLARE에서 왔는지, `type` 그룹은 무슨 타입으로
-        // 선언됐는지 표시한다.
+        // 상태 변수에 값을 대입하는 `=`까지만 잡는다. DECLARE 초기값과 SET 갱신을
+        // 함께 본다. `declare` 그룹은 이 대입이 DECLARE에서 왔는지, `type` 그룹은
+        // 무슨 타입으로 선언됐는지 표시한다.
         //
         // 타입 자리를 INT에서 `\w+`로 넓힌 이유: `DECLARE @v_currentStepCode
         // NVARCHAR(10) = N'B120'`이 INT만 볼 때는 아예 매치되지 않아, 문자열 코드가
         // 검사에 도달조차 못 했다(실측 17단계). 이름 패턴은 넓히지 않는다 - 넓히면
         // 메시지 변수 88건·ERROR_NUMBER() 계열 42건이 딸려 온다.
+        //
+        // [픽스 라운드 1(리뷰 I2) - 값 자리를 정규식에서 뺀 이유]
+        // 예전에는 `\s*(?<value>[^\s;,)]+)`로 값도 같은 정규식이 잡았다. 이 매칭은
+        // `cleaned`(BlankCommentsAndStrings가 문자열·주석을 공백으로 지운 사본) 위에서
+        // 도는데, N 접두사 없는 문자열 리터럴(`= 'B011'`)은 여는 따옴표까지 전부
+        // 공백으로 지워져 `=` 뒤에 `;`까지 공백만 남는다 - `[^\s;,)]+`는 공백이 아닌
+        // 첫 글자를 요구하므로 이 값 전체가 아예 매치되지 않았다(실측
+        // POQSettleProc19/S02: `DECLARE @v_currentStepCode varchar(64) = 'B011'`).
+        // `N'B120'`이 매치됐던 것은 `N`이 따옴표 밖의 글자라 지워지지 않고 살아남는
+        // 우연한 앵커였을 뿐이다. 값 자리를 정규식에서 떼어 `=` 뒤 원문에서 직접
+        // 찾게 하면 이 비대칭이 사라진다.
         private static readonly Regex ControlCodeAssignmentPattern = new(
-            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+(?<type>\w+)\s*(?:\([^)]*\))?\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)\s*(?<value>[^\s;,)]+)",
+            @"(?:(?<declare>DECLARE)\s+@(?<name>\w*[Ss]tep\w*)\s+(?<type>\w+)\s*(?:\([^)]*\))?\s*=|SET\s+@(?<name>\w*[Ss]tep\w*)\s*=)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>

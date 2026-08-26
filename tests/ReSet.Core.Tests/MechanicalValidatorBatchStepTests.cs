@@ -2848,5 +2848,110 @@ SELECT 1 FROM dbo.TSettleMst;
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
         }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAStringErrorCodeContainingParentheses()
+        {
+            // [픽스 라운드 1(리뷰 I1)] 문자열 리터럴 블록은 `raw.Contains('(')` 검사
+            // (함수 호출 판정)보다 앞에 있어야 한다 - 안 그러면 괄호가 든 문자열
+            // (`N'B(1)'`)이 `ERROR_NUMBER()`류 함수 호출로 오인돼 조용히 넘어간다.
+            // 이 테스트가 그 위치 불변식을 고정한다: 블록을 아래로 옮기는 변이는
+            // 이 테스트를 죽여야 한다.
+            var step = new BatchStepPlan(
+                "S03", "입력 기준시점 고정", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9030" }, false, new string[0]);
+
+            var markdown = @"### S03 입력 기준시점 고정
+
+```sql
+DECLARE @v_currentStepCode NVARCHAR(10) = N'B(1)';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9030
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B(1)"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAnUnprefixedStringErrorCode()
+        {
+            // [픽스 라운드 1(리뷰 I2)] 실측(POQSettleProc19/S02):
+            // `DECLARE @v_currentStepCode varchar(64) = 'B011'`. N 접두사 없는 문자열
+            // 리터럴도 TryReadStringLiteral의 첫 갈래(`raw[0] == '\''`)를 타야 한다 -
+            // N 접두사가 있는 형태만 테스트하면 이 갈래를 지우는 변이가 살아남는다.
+            var step = new BatchStepPlan(
+                "S02", "선행 확인", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9020" }, false, new string[0]);
+
+            var markdown = @"### S02 선행 확인
+
+```sql
+DECLARE @v_currentStepCode varchar(64) = 'B011';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9020
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B011"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldAcceptAContractStatusValueAssignment()
+        {
+            // [픽스 라운드 1(리뷰 I3, 컨트롤러 판정)] `Running`은
+            // BatchControlContract(batch.BatchStepJournal.StepStatus 등)가 정의한
+            // 체크포인트 상태값이지 오류 코드가 아니다. 이름으로 "상태 변수 같다"고
+            // 추정하지 않고 BatchControlContract.AllowedStatusValues를 그대로
+            // 조회해서 침묵해야 한다 - 코퍼스 전수 grep에서 대입 형태로는 0건이지만
+            // 같은 어휘가 변수 이름 옆에서 실제로 쓰이고 있어 다음 생성분의 대입
+            // 형태 발화를 미리 막는다.
+            var step = new BatchStepPlan(
+                "S07", "진행 갱신", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9070" }, false, new string[0]);
+
+            var markdown = @"### S07 진행 갱신
+
+```sql
+DECLARE @v_stepStatus NVARCHAR(20) = NULL;
+SET @v_stepStatus = N'Running';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9070
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("문자열 코드"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldRejectAnUnknownStringEvenOnAStatusNamedVariable()
+        {
+            // 계약 조회이지 이름 추정이 아니라는 것을 고정한다 - 변수 이름이
+            // Status로 끝나도, 그 값이 계약의 상태 어휘에 없으면(`B120`) 여전히
+            // 지어낸 오류 코드로 발화해야 한다.
+            var step = new BatchStepPlan(
+                "S07", "진행 갱신", new string[0], new[] { "dbo.TSettleMst" },
+                new[] { "-9070" }, false, new string[0]);
+
+            var markdown = @"### S07 진행 갱신
+
+```sql
+DECLARE @v_stepStatus NVARCHAR(20) = NULL;
+SET @v_stepStatus = N'B120';
+SELECT 1 FROM dbo.TSettleMst;
+```
+-9070
+";
+
+            var result = Validate(markdown, step);
+
+            Assert.Contains(result.Errors, e => e.Contains("B120"));
+        }
     }
 }
