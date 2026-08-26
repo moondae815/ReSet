@@ -232,7 +232,12 @@ namespace ReSet.Core.Services
                         }
                     }
 
-                    // 양쪽이 다 비면 대조할 것이 없다 - 어긋남이 아니라 무재료다.
+                    // 양쪽이 다 비면 무재료다 - 어긋남이 아니다. 현재 로직에서는 이
+                    // continue가 없어도 관찰 가능한 차이가 없다: 빈 집합끼리의 Except는
+                    // 방향에 상관없이 항상 비어 있으므로 아래 두 if는 어차피 발화하지
+                    // 않는다. 그래도 남겨 둔다 - 의도를 코드에 적어 두는 값이 있고,
+                    // 카운팅 방식이 Except가 아닌 것으로 바뀌면(예: 코드별 개별 집계)
+                    // 이 가드가 실제로 필요해진다.
                     if (stepCodes.Count == 0 && specCodes.Count == 0) continue;
 
                     if (specCodes.Except(stepCodes, StringComparer.Ordinal).Any()) missingSpecCodes++;

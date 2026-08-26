@@ -105,6 +105,20 @@ BEGIN
     IF @@ERROR <> 0 SET @v_err = -13;
 END";
 
+        // 단계 SQL: 코드 라벨이 둘(-13, -99)이다. SP 표(DdlOneUpdateWithCode)에는
+        // -13 하나뿐이므로 -99는 단계 쪽에만 있는 여분 코드다 - 방향성 테스트 전용.
+        private const string StepMarkdownWithExtraCode = @"### S01. 정산 마스터 갱신
+
+설명 문단이다.
+
+```sql
+SET @v_currentStepId = -13;
+UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD;
+SET @v_currentStepId = -99;
+UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
+```
+";
+
         private static SweepInput OneJobInput() => new(
             new List<SweepJob>
             {
@@ -234,6 +248,50 @@ END";
             Assert.Equal(1, indicators.StepsWithUnknownCodes);   // 단계의 -14가 표에 없다
         }
 
+        // 비대칭 픽스처 - 단계 코드 집합이 SP 표 집합의 진부분집합이다(-13만 있고
+        // 표에는 -13·-14가 있다). StepsMissingSpecCodes만 발화해야 하고
+        // StepsWithUnknownCodes는 발화하면 안 된다. Except 방향이 뒤집히면
+        // (0, 1)로 나와 이 단언이 죽는다.
+        [Fact]
+        public void StepCodesAreProperSubsetOfSpecCodes_OnlyMissingSpecCodesFires()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                DdlByProcedure = new Dictionary<string, string>
+                {
+                    ["dbo.UP_TEST"] = DdlWithTwoCodes,
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(1, indicators.StepsMissingSpecCodes);
+            Assert.Equal(0, indicators.StepsWithUnknownCodes);
+        }
+
+        // 비대칭 픽스처 - 단계 코드 집합이 SP 표 집합의 진상위집합이다(단계에는
+        // -13·-99가 있고 표에는 -13뿐이다). StepsWithUnknownCodes만 발화해야 하고
+        // StepsMissingSpecCodes는 발화하면 안 된다. Except 방향이 뒤집히면
+        // (1, 0)으로 나와 이 단언이 죽는다.
+        [Fact]
+        public void StepCodesAreProperSupersetOfSpecCodes_OnlyUnknownCodesFires()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = StepMarkdownWithExtraCode,
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(0, indicators.StepsMissingSpecCodes);
+            Assert.Equal(1, indicators.StepsWithUnknownCodes);
+        }
+
         [Fact]
         public void MatchingCodeSetsCountAsNeitherMismatch()
         {
@@ -246,8 +304,9 @@ END";
         // 뮤테이션 발견: `if (stepCodes.Count == 0 && specCodes.Count == 0) continue;`를
         // 지워도 이 계획의 다른 세 테스트는 죽지 않는다 - 두 빈 집합의 Except는
         // 방향에 상관없이 항상 비어 있으므로 그 가드는 현재 코드에서 관찰 가능한
-        // 차이를 만들지 않는다. 그래도 "무재료는 어긋남이 아니다"라는 계약을
-        // 테스트로 명시적으로 못박아 둔다.
+        // 차이를 만들지 않는다. 이 테스트도 그 가드 유무를 구분하지 못한다 -
+        // 가드를 지워도 이 테스트는 여전히 통과한다. 그럼에도 "무재료는 어긋남이
+        // 아니다"라는 계약을 테스트로 명시적으로 못박아 두는 것이 목적이다.
         [Fact]
         public void NoCodeMaterialOnEitherSideIsNotCountedAsMismatch()
         {
