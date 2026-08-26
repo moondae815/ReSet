@@ -168,7 +168,123 @@ namespace ReSet.Core.Services
                 return PreservedTokens.Contains(bare) ? bare.ToLowerInvariant() : "?";
             });
 
-            return erased.ToLowerInvariant();
+            return StripRedundantParentheses(erased.ToLowerInvariant());
+        }
+
+        /// <summary>
+        /// 지워도 파싱이 그대로인 괄호만 없앤다.
+        ///
+        /// [이 축약이 필요한 이유]
+        /// 실측(POQSettleBatch1 S05·S07·S09·S10): 명세서가 <c>ROUND((a+b),0,f)</c>로 적고
+        /// 계획서가 <c>ROUND(a+b,0,f)</c>로 적었을 뿐인데, 대조가 문자열 정확 일치라
+        /// "반올림 계산 누락"으로 갈렸다. 같은 계산이고 같은 금액이다. 하한 미달 배너가
+        /// 붙은 네 단계가 전부 이 오탐이었고, 각 단계가 재시도 5회를 헛되이 소진했다.
+        ///
+        /// [괄호를 전부 지우지 않는 이유]
+        /// 괄호는 결합을 정한다. <c>(a+b)*c</c>와 <c>a+b*c</c>는 다른 금액이고,
+        /// 전부 지우면 이 검사가 잡아야 할 진짜 결함이 통과한다. 그래서 지워도
+        /// 결합이 달라지지 않음이 증명되는 두 경우만 없앤다.
+        ///
+        /// 1. 인자 슬롯 전체를 감싼 괄호 - 앞이 <c>(</c>나 <c>,</c>이고 짝 뒤가
+        ///    <c>)</c>나 <c>,</c>. 양옆이 구분자라 결합할 상대가 없다.
+        /// 2. 항 하나만 감싼 괄호 - 안쪽 최상위에 연산자가 없다. 어느 자리에 놓여도
+        ///    하나의 항으로 읽히므로 괄호가 하는 일이 없다.
+        ///
+        /// 함수 호출 괄호(여는 괄호 앞이 식별자)는 후보로 삼지 않는다.
+        /// 축약이 새 후보를 만들 수 있어(<c>((a))</c>) 더 지울 것이 없을 때까지 돈다.
+        /// </summary>
+        private static string StripRedundantParentheses(string shape)
+        {
+            bool changed;
+            do
+            {
+                changed = false;
+                for (var open = 1; open < shape.Length; open++)
+                {
+                    if (shape[open] != '(' || IsNameCharacter(shape[open - 1]))
+                    {
+                        continue;
+                    }
+
+                    var close = FindMatch(shape, open);
+                    if (close < 0)
+                    {
+                        continue;
+                    }
+
+                    var before = shape[open - 1];
+                    var after = close + 1 < shape.Length ? shape[close + 1] : '\0';
+
+                    var wrapsWholeArgument = (before == '(' || before == ',')
+                        && (after == ')' || after == ',');
+
+                    if (!wrapsWholeArgument && !IsSingleTerm(shape, open + 1, close))
+                    {
+                        continue;
+                    }
+
+                    shape = shape.Remove(close, 1).Remove(open, 1);
+                    changed = true;
+                    break;
+                }
+            }
+            while (changed);
+
+            return shape;
+        }
+
+        private static bool IsNameCharacter(char c) =>
+            char.IsLetterOrDigit(c) || c == '_';
+
+        /// <summary>여는 괄호의 짝 위치. 짝이 없으면 -1.</summary>
+        private static int FindMatch(string shape, int open)
+        {
+            var depth = 0;
+            for (var i = open; i < shape.Length; i++)
+            {
+                if (shape[i] == '(')
+                {
+                    depth++;
+                }
+                else if (shape[i] == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return i;
+                    }
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// <paramref name="start"/>부터 <paramref name="end"/> 직전까지가 항 하나인가 -
+        /// 최상위에 연산자도 콤마도 없는가. 부호가 붙은 숫자(<c>-1</c>)는 최상위 <c>-</c>가
+        /// 있으므로 항이 아니라고 본다. 덜 지우는 쪽이 안전하다.
+        /// </summary>
+        private static bool IsSingleTerm(string shape, int start, int end)
+        {
+            var depth = 0;
+            for (var i = start; i < end; i++)
+            {
+                var c = shape[i];
+                if (c == '(')
+                {
+                    depth++;
+                }
+                else if (c == ')')
+                {
+                    depth--;
+                }
+                else if (depth == 0 && (c is '+' or '-' or '*' or '/' or '%' or ','))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }
