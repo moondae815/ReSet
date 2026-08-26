@@ -612,9 +612,15 @@ namespace ReSet.Core.Services
                     $"{procedure}를 나눠 맡은 단계({stepList})의 본문을 모두 합쳐도 " +
                     $"{string.Join(", ", missing)}가 등장하지 않습니다.";
 
+                // 같은 단계가 서로 다른 두 분할 SP를 겸할 수 있다(드물지만 실재) -
+                // 그때 이 대입이 그대로 덮어쓰면 먼저 처리된 SP의 진단이 사라진다.
+                // 이 메서드가 내는 결함은 전부 QualityFloor라 Kind 충돌은 없으므로
+                // 사유 문구만 이어 붙이면 된다.
                 foreach (var step in sharing)
                 {
-                    defects[step.Code] = new StepDefect(StepDefectKind.QualityFloor, reason);
+                    defects[step.Code] = defects.TryGetValue(step.Code, out var already)
+                        ? already with { Reason = already.Reason + " " + reason }
+                        : new StepDefect(StepDefectKind.QualityFloor, reason);
                 }
             }
 

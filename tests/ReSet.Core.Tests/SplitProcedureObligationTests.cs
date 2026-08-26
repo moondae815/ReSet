@@ -155,6 +155,46 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void WhenAStepSharesTwoDifferentSplitProcedures_BothMissingReasonsSurvive()
+        {
+            // S20은 UP_A(S20·S21이 나눠 맡음)와 UP_B(S20·S22가 나눠 맡음) 양쪽에 다
+            // 걸쳐 있다. 두 프로시저 모두 결함이 있으면, 나중에 처리되는 프로시저의
+            // 대입이 먼저 것을 통째로 덮어써 첫 결함의 진단이 사라질 수 있다 -
+            // 같은 단계가 서로 다른 두 분할 SP를 겸하는 흔치 않은 경우다.
+            var s20 = new BatchStepPlan(
+                "S20", "겸임", new[] { "dbo.UP_A", "dbo.UP_B" }, new[] { "dbo.T1" },
+                new string[0], false, new string[0]);
+            var s21 = new BatchStepPlan(
+                "S21", "UP_A 분담", new[] { "dbo.UP_A" }, new[] { "dbo.T1" },
+                new string[0], false, new string[0]);
+            var s22 = new BatchStepPlan(
+                "S22", "UP_B 분담", new[] { "dbo.UP_B" }, new[] { "dbo.T1" },
+                new string[0], false, new string[0]);
+
+            var codes = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_A"] = new[] { "-1" },
+                ["UP_B"] = new[] { "-2" }
+            };
+
+            var sections = new Dictionary<string, string>
+            {
+                ["S20"] = "본문에 아무 코드도 없다.",
+                ["S21"] = "본문에 아무 코드도 없다.",
+                ["S22"] = "본문에 아무 코드도 없다."
+            };
+
+            var defects = new MechanicalValidator().ValidateSplitProcedureObligations(
+                sections, new[] { s20, s21, s22 }, codes, null);
+
+            Assert.Equal(3, defects.Count);
+            Assert.Contains("-1", defects["S20"].Reason);
+            Assert.Contains("-2", defects["S20"].Reason);
+            Assert.Contains("-1", defects["S21"].Reason);
+            Assert.Contains("-2", defects["S22"].Reason);
+        }
+
+        [Fact]
         public void WithoutMaterial_ShouldReportNothing()
         {
             var defects = new MechanicalValidator().ValidateSplitProcedureObligations(

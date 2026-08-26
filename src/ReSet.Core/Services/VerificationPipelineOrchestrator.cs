@@ -1954,12 +1954,9 @@ namespace ReSet.Core.Services
                             // 그때는 AiService가 절 자체를 싣지 않는다(빈 표가 "원본
                             // 파라미터가 없다"로 읽히는 것을 막는다).
                             //
-                            // 분할 SP 문서 단위 검사(Task 5)도 이 경로에서는 돌리지 않는다.
-                            // 그 검사는 단계 코드 → 본문 사전(sections)을 요구하는데 이
-                            // 경로에는 그런 사전이 없다 - 문서 전체에서 "어디든 등장하면
-                            // 통과"로 약화시키면 무관한 단계에 적힌 코드로도 통과해 버린다.
-                            Log.Information(
-                                "단일 호출 경로라 분할 SP 문서 단위 검사를 실행하지 않았습니다 - Job: {JobName}", jobName);
+                            // 분할 SP 문서 단위 검사(Task 5)도 이 경로에서는 돌리지 않는다 -
+                            // 이유는 LogSplitProcedureObligationSkipped 문서 참고.
+                            LogSplitProcedureObligationSkipped(jobName);
 
                             aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(currentPlanStructure), currentBrainstorming, cancellationToken), progressScope, "phase3single");
                         }
@@ -2413,6 +2410,10 @@ namespace ReSet.Core.Services
                             // 이미 막아 둔 것과 같은 부류의 결함이다.
                             reViolations = new Dictionary<string, StepDefect>();
                         }
+
+                        // 이 경로도 단일 호출이라 분할 SP 문서 단위 검사(Task 5)를 돌리지
+                        // 않는다 - 이유는 LogSplitProcedureObligationSkipped 문서 참고.
+                        LogSplitProcedureObligationSkipped(jobName);
 
                         try
                         {
@@ -2915,6 +2916,25 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 단일 호출 폴백에서는 분할 SP 문서 단위 검사(<see cref="MechanicalValidator.
+        /// ValidateSplitProcedureObligations"/>, Task 5)를 돌리지 않는다 - 그 검사는
+        /// 단계 코드 → 본문 사전(sections)을 요구하는데 이 경로에는 그런 사전이
+        /// 애초에 없다. 문서 전체에서 "어디든 등장하면 통과"로 약화시킬 수는
+        /// 있으나, 그러면 무관한 단계에 적힌 코드로도 통과해 버린다.
+        ///
+        /// 실행하지 못했다는 사실을 로그로 남기지 않으면 "검사해서 깨끗함"과
+        /// 구별되지 않는다 - 검사를 안 돌린 것과 돌려서 결함이 없었던 것은 다른
+        /// 사실이다. 호출 자리가 둘(최초 생성 폴백·L3 피드백 재생성 폴백)이라
+        /// 인라인 로그 대신 헬퍼로 묶는다 - 그래야 세 번째 폴백이 생겨도 이
+        /// 사실이 빠지지 않는다(리뷰에서 실제로 한 자리가 빠졌던 적이 있다).
+        /// </summary>
+        private static void LogSplitProcedureObligationSkipped(string jobName)
+        {
+            Log.Information(
+                "단일 호출 경로라 분할 SP 문서 단위 검사를 실행하지 않았습니다 - Job: {JobName}", jobName);
+        }
+
+        /// <summary>
         /// 목차의 스텝이 원본 명세서 전부를 커버하는지 검사해, 어느 스텝의
         /// LegacyProcedures에도 등장하지 않는 명세서를 돌려준다.
         ///
@@ -3175,6 +3195,12 @@ namespace ReSet.Core.Services
 
             // 분할된 SP의 의무는 단계가 아니라 문서가 진다. 단계 검사에서 뺀 것을
             // 여기서 합쳐 본다 - 여기가 sections와 steps를 함께 가진 유일한 지점이다.
+            //
+            // 아래 대입은 이 단계가 위 루프에서 이미 다른 사유로 얻은 StepDefect를
+            // 무조건 덮어쓴다 - 두 발화를 합쳐 진단을 보존하지 않는다. 그래도 괜찮은
+            // 이유: Kind는 배너가 어느 절에 싣는지만 가르고(§2614 이하의 byKind 분류),
+            // 이 단계가 "결함 있음"이라는 사실 자체는 잃지 않는다 - 그저 표시되는
+            // 사유·분류가 문서 단위 검사의 것으로 바뀔 뿐이다.
             foreach (var (code, defect) in _validator.ValidateSplitProcedureObligations(
                          sections, steps, codesByProcedure, tablesByProcedure))
             {
