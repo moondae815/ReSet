@@ -219,6 +219,17 @@ namespace ReSet.Core.Services
 
             foreach (var job in input.Jobs)
             {
+                // step.LegacyProcedures는 원문이고 코퍼스의 43%(314개 참조 중 134개)가
+                // 스키마 접두사 없이 실린다. 반면 DdlByProcedure·DateParameterByProcedure는
+                // SweepCommand.cs:97-98이 항상 디렉터리 이름("dbo.UP_X")으로 키잉한다.
+                // 원문 그대로 TryGetValue를 쓰면 접두사 없는 단계에서 조회가 조용히
+                // 빗나가 specCodes가 항상 빈 집합이 되고, 두 지표가 서로 다른 방향으로
+                // 어긋난 값을 낸다(specCodes가 늘 비면 StepsMissingSpecCodes는 과소,
+                // StepsWithUnknownCodes는 과대). InjectSimulatedCodes(위 :171)가 이미
+                // 같은 문제를 BareObjectName으로 정규화해 푼다 - 같은 규약을 여기서도 쓴다.
+                var ddlByBareName = ToBareNameKeyed(job.DdlByProcedure);
+                var dateParameterByBareName = ToBareNameKeyed(job.DateParameterByProcedure);
+
                 foreach (var step in job.Steps)
                 {
                     if (step.LegacyProcedures.Count > 1) multiProcedureSteps++;
@@ -249,8 +260,9 @@ namespace ReSet.Core.Services
                     var specCodes = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var procedure in step.LegacyProcedures)
                     {
-                        if (!job.DdlByProcedure.TryGetValue(procedure, out var ddl)) continue;
-                        job.DateParameterByProcedure.TryGetValue(procedure, out var dateParameter);
+                        var bareName = MechanicalValidator.BareObjectName(procedure);
+                        if (!ddlByBareName.TryGetValue(bareName, out var ddl)) continue;
+                        dateParameterByBareName.TryGetValue(bareName, out var dateParameter);
 
                         foreach (var code in BuildSimulatedErrorCodeMap(
                                      ddl, dateParameter ?? string.Empty).Keys)
@@ -276,6 +288,32 @@ namespace ReSet.Core.Services
             {
                 StepsSkippedForParseFailure = skippedForParseFailure,
             };
+        }
+
+        /// <summary>
+        /// SweepCommand가 디렉터리 이름("dbo.UP_X")으로 채운 사전을 맨이름 키로
+        /// 다시 인덱싱한다 - <see cref="ComputeIndicators"/>가 step.LegacyProcedures의
+        /// 원문(접두사 있을 수도 없을 수도)으로 조회할 수 있게 하기 위해서다.
+        ///
+        /// [맨이름 충돌 결정] 다른 스키마의 같은 오브젝트명이 충돌하면 나중에 순회된
+        /// 값이 이긴다 - Dictionary 인덱서 대입이 그렇게 동작하고,
+        /// <see cref="InjectSimulatedCodes"/>(위 :171 부근)도 이미 같은 규약으로
+        /// 짜여 있다. 조용히 고른 것이 아니라 명시한다: 이 스윕은 스텝이 어느
+        /// 스키마를 가리키는지 선언하지 않으므로(step.LegacyProcedures가 맨이름일 때
+        /// 스키마 정보 자체가 없다) 둘을 구분해 조회할 근거가 없다. "드물게
+        /// 다른 스키마의 코드 집합과 섞일 수 있음"을 감수하고 "맨이름 단계는 아예
+        /// 못 잰다"를 피하는 쪽을 택했다.
+        /// </summary>
+        private static Dictionary<string, string> ToBareNameKeyed(
+            IReadOnlyDictionary<string, string> byQualifiedName)
+        {
+            var byBareName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (qualifiedName, value) in byQualifiedName)
+            {
+                byBareName[MechanicalValidator.BareObjectName(qualifiedName)] = value;
+            }
+
+            return byBareName;
         }
     }
 }

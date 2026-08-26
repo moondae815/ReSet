@@ -248,6 +248,48 @@ UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
             Assert.Equal(1, indicators.StepsWithUnknownCodes);   // 단계의 -14가 표에 없다
         }
 
+        // 리뷰 발견 Critical: step.LegacyProcedures는 원문이고 코퍼스의 43%(314개 중
+        // 134개)가 스키마 접두사 없이 실린다. 반면 DdlByProcedure·DateParameterByProcedure는
+        // 항상 디렉터리 이름("dbo.UP_TEST")으로 키잉된다(SweepCommand.cs:97-98). 조회가
+        // 원문 그대로 TryGetValue를 쓰면 접두사 없는 단계에서 매번 빗나가 specCodes가
+        // 조용히 빈 집합이 된다. 이 테스트는 그 상태를 재현한다 - LegacyProcedures는
+        // 맨이름("UP_TEST")인데 DdlByProcedure의 키는 접두사가 있다("dbo.UP_TEST").
+        //
+        // SP 표에는 -13뿐이고 단계 SQL에는 -14뿐이다(라벨이 밀린 모양). 조회가
+        // 정규화 없이 원문을 쓰면 specCodes가 항상 비어 StepsMissingSpecCodes가
+        // 0으로 과소 집계된다(정답은 1) - 수정 전 코드에서 이 단언이 죽는 것을
+        // 먼저 확인했다.
+        [Fact]
+        public void MissingSpecCodesFiresEvenWhenLegacyProcedureLacksSchemaPrefix()
+        {
+            var job = OneJobInput().Jobs[0] with
+            {
+                Steps = new List<BatchStepPlan>
+                {
+                    new("S01", "정산 마스터 갱신",
+                        new List<string> { "UP_TEST" }, // 접두사 없음 - 코퍼스의 43% 모양
+                        new List<string> { "TSettleMst" },
+                        new List<string> { "-13" },
+                        false,
+                        new List<string>()),
+                },
+                StepMarkdownByCode = new Dictionary<string, string>
+                {
+                    ["S01"] = StepMarkdownMissingPgName.Replace("-13", "-14"),
+                },
+                DdlByProcedure = new Dictionary<string, string>
+                {
+                    ["dbo.UP_TEST"] = DdlOneUpdateWithCode, // 디렉터리 이름 - 항상 접두사 있음
+                },
+            };
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            Assert.Equal(1, indicators.StepsMissingSpecCodes); // 표의 -13이 단계에 없다
+            Assert.Equal(1, indicators.StepsWithUnknownCodes); // 단계의 -14가 표에 없다
+        }
+
         // 비대칭 픽스처 - 단계 코드 집합이 SP 표 집합의 진부분집합이다(-13만 있고
         // 표에는 -13·-14가 있다). StepsMissingSpecCodes만 발화해야 하고
         // StepsWithUnknownCodes는 발화하면 안 된다. Except 방향이 뒤집히면
