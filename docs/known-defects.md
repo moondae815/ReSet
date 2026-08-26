@@ -209,6 +209,45 @@
   </details>
 
   출처: `2026-08-26-step-obligation-attribution-design.md` §7
+- **T4(단계 검사의 분할 SP 면제)·T5(문서 단위 분할 SP 검사)가 이 코퍼스의
+  어떤 Job에서도 실행되지 않는다 — 원인은 코디네이터가 처음 짚은 것보다
+  하나 더 있다.** 코디네이터는 "분할 SP를 가진 Job은 `POQSettleProc4`·
+  `POQSettleProc7` 둘뿐이고, 둘 다 `BatchStepPlanParser.TryParse`가 `null`을
+  돌려줘 단일 호출로 폴백하므로(그 경로는 T4·T5를 명시적으로 끈다) 두 검사가
+  0회 실행된다"고 실측했다.
+
+  **이 문서 작업에서 같은 조건을 임시 xunit 프로브(22개 Job 전부의
+  `raw/PlanStructure.md`를 `LegacyProcedures` 기준으로 직접 대조, 실행 후
+  삭제)로 다시 재보니, "분할 SP를 가진 Job은 둘뿐"이라는 전제가 정확하지
+  않았다** — `POQSettleProc5`도 분할 SP를 가진다. 32단계를 선언하고
+  `MaxSteps`(40) 이내라 파싱은 정상이며(`BatchStepPlanParser.TryParse` 성공),
+  `UP_Util_PG_Client_CMRate_Ins`(S02~S07, 6단계)를 포함해 프로시저 8개가
+  각각 2~6개 단계에 걸쳐 있다. 문서 자신의 "1.1.2 레거시 프로시저 ↔ 스텝
+  역추적 매핑표"가 그 분해를 명시적으로 설명한다.
+
+  **다만 `POQSettleProc5`에는 `raw/`만 있고 `agent/`가 통째로 없다** — 목차
+  생성까지만 하고 단계 본문 생성 자체가 실행된 적이 없는 Job이다(이 사실
+  자체는 새 발견이 아니다 — 위 「병합 전 코퍼스 스윕 게이트 실측」 항목의
+  「(3) I2 가드」가 "`agent/steps`가 있는 18개 Job, 326개 단계 안에서 같은
+  레거시 SP가 2개 이상 단계에 걸치는 사례가 0건"이라고 이미 못박아 뒀고,
+  이 문서 방금 위 `find`로 그 18개 Job 이름을 다시 확인했다 — `POQSettleProc4`·
+  `5`·`7`·`20`(대소문자·오타가 있는 `POQSettlePrco20`과는 다른 디렉터리다)
+  넷만 `agent/steps`가 없다. 이번에 더한 것은 그 공백이 T4·T5 도달성과
+  어떻게 겹치는지다).
+
+  **정정된 결론**: T4·T5가 이 코퍼스에서 한 번도 안 도는 이유는 "분할 SP를
+  가진 Job이 파싱 실패 둘뿐이라서"가 아니라, 세 사실이 우연히 겹쳤기
+  때문이다 — ① 분할 SP를 가진 유일한 파싱 가능 Job(`POQSettleProc5`)이
+  애초에 생성되지 않았고, ② `agent/steps`가 있어 실제로 검사가 도는 18개
+  Job 중에는 분할 SP가 하나도 없으며(위 I2 가드 실측과 일치), ③ 나머지 두
+  후보(`POQSettleProc4`·`POQSettleProc7`)는 파싱 실패로 단일 호출 폴백에
+  빠져 검사 자체가 꺼진다. `MaxSteps`를 올려 `POQSettleProc4`를 분할 경로로
+  들여보내는 것과는 별개로, `POQSettleProc5`를 완주시키면(재생성) T4·T5가
+  실제로 처음 발동하는 사례를 볼 수 있을 것으로 예상된다.
+  **`MaxSteps` 변경도 `POQSettleProc5` 재생성도 이번 라운드 범위 밖이라
+  시도하지 않았다** — 다음 회차가 소급 여부를 정할 때 참고할 재료로만 남긴다.
+  출처: `2026-08-26-step-obligation-attribution-design.md` §배경 「분할 SP는
+  기전이 확실하고 비용은 아직 0이다」
 - **문자열 코드로 응답하는 제어 단계의 규약이 아직 없다(침묵)** — 코퍼스에
   `@po_strRetCode NVARCHAR(10) OUTPUT`에 `N'B120'`을 쓰는, 레거시 출신이 없는
   제어 단계가 실재한다(`POQSettleBatch1/S03`, `POQSettleProc18`). 설계
