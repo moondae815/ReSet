@@ -1942,7 +1942,42 @@
   명세서 전건 재생성)를 네 원인을 고치기 **전에** 진행하면, 코퍼스에 거짓 오류
   33건이 한꺼번에 켜진다. 원인 수정을 로드맵 4 앞에 놓아야 한다.
 
-  **부류 1 (15건) — `SubordinatePredicateCollector`가 하위 `ON`을 안 모은다.**
+  **부류 1 (15건) — `SubordinatePredicateCollector`가 하위 `ON`을 안 모았다. 2026-08-26 해소.**
+  아래 진단대로 `Visit(QuerySpecification)`이 `node.FromClause`도 읽게 고쳤다(WHERE만
+  읽던 것에 한 줄 추가). 최상위 대조가 술어와 조인을 합집합으로 보는 것과 대칭을 맞춘
+  것이다. `ColumnCollector`가 파생 테이블·스칼라 하위질의 하강을 막으므로 이 층에서는
+  그 층의 `ON`만 모으고, 더 깊은 층은 같은 방문자가 그 `QuerySpecification`을 따로
+  만날 때 잡는다.
+  - **코퍼스 실측(통제 `9a39b51` 대비).** 발화 86 → **62건**(검사 B 61 → 37, 검사 C 25 불변,
+    검사 A·D·E·미분류 불변). 사라진 27건 = 이 부류의 INSERT 18건 + 같은 모양의 기존
+    UPDATE 9건. 그중 3건은 조인 키만 이전으로 인정되고 나머지 컬럼이 남아 좁혀진 채
+    다시 나타난다(`INSERT 4 | ClientID, PGName, MallID, UseState, ContractCancelYMD`
+    → `UseState, ContractCancelYMD`) — 남은 것은 **부류 2**(별칭 은닉)이고 원인이 달라
+    이번에 안 건드렸다. `ReportMissing`이 컬럼 단위로 거르는 설계가 그대로 드러난 것이다.
+  - **덤으로 닫힌 UPDATE 9건**은 INSERT 재편입 이전부터 있던 발화다. 두 레거시 SP
+    (`UP_UTIL_SETTLE_EXCEPTION_PROC` 3건 · `UP_UTIL_SETTLE_COMM_UPD` 6건)에서 실물로
+    같은 모양을 확인했다 — `POQSettleProc1/S04`의 CTE **`CardSource`** 안
+    `INNER JOIN PLCardDB.dbo.TPLCardTxMst AS P ON P.PLTID = S.PLTID`(S04.md:445),
+    `POQSettleProc1/S05`의 같은 `WITH` 체인 **두 번째 CTE `FinalCancel`** 안
+    `INNER JOIN EligiblePLTID AS E ON E.PLTID = S.PLTID`(S05.md:331-332). 둘 다
+    하위 범위의 **INNER** 조인이다.
+  - **서수 대응을 손으로 확인하지 않은 근거 — 그리고 그 한계.** 이 수정은 읽고 있는
+    문장의 하위 목록에만 더한다. 다만 `ReportMissing`의 `relocated`는
+    `group.SelectMany(a => a.Statement.SubordinatePredicateColumns)`로 **그 서수 그룹
+    전체**를 합치므로(청크 분할처럼 한 서수에 조각이 여럿 붙는 경우를 위한 기존 설계),
+    "그 문장 자신의 하위 범위에 있다"가 코드 수준에서 항상 참인 것은 아니다.
+    리뷰가 `ReportMissing`을 계측해 전수 스윕을 돌린 결과 **이전으로 침묵한 컬럼
+    163건 전부가 `groupSize=1`**이었다 — 이 코퍼스에서는 조각이 섞이지 않는다.
+    코드의 보장이 아니라 **이 세대 코퍼스의 실측**이다.
+  - **잔존 오탐 하나(부류 1 아님).** `POQSettleProc19/S11`의 `UPDATE 7 | PLTID`는
+    수정 후에도 발화한다 - 거기서 `PLTID`는 CTE의 `SELECT` 투영과 `GROUP BY`에만 있고
+    `WHERE`·`ON` 어디에도 없다. 이 수정이 투영을 이전으로 인정하지 않는다는 실측
+    증거이기도 하다(침묵이 과대하지 않다). 원인이 달라 이번 범위 밖이다.
+  - 회귀는 `StepSqlStatementReaderTests.SubordinateJoinOn_*` 둘과
+    `MechanicalValidatorTests.ValidateBatchStep_CheckB_SubordinateJoinKey_IsTreatedAsRelocated`가
+    잠근다. 셋 다 `node.FromClause?.Accept(inner)`를 지우면 죽는 것을 변이로 확인했다.
+
+  **[아래는 해소 전 진단 기록이다]**
   레거시 `dbo.UP_Util_PG_Client_CMRate_Ins`를 이식한 여덟 Job이 같은 관용구를
   쓴다 — 원본의 콤마 조인을 CTE의 `INNER JOIN … ON`으로 옮기고 `INSERT`의
   최상위 `FROM`은 그 CTE 하나만 남긴다(이 한 줄은 축자 인용이 아니라 모양
@@ -2129,6 +2164,48 @@
        원본 계약으로 서술한다. SQL만 걷어내고 산문을 남기면 다음 재생성이 그 산문을
        읽고 조건을 되살린다.
   - 소스 코드가 아니라 산출물 결함이므로 이 회차에서는 고치지 않고 기록만 한다.
+
+  **(5-3-5) 이름을 역할의 대리로 쓰는 면제·검사 — 두 축의 근거 열 건 (2026-08-26).**
+  위 부류 5(6건)와 제어 단계 코드 축(4건)이 같은 병의 양면이다. 한쪽은 **면제**가,
+  다른 쪽은 **검사**가 이름 모양으로 역할을 추정한다. 다음 회차에 한 항목으로 묶는다.
+  - **면제 쪽 6건 (부류 5).** `CheckAnchoredStatementExtras`의 `allowed`가
+    `BatchControlContract.Tables`의 컬럼 **이름** 집합이라, 계약이 아는 실행 식별자
+    `RunId`를 쓴 단계는 침묵하고 `ExecutionId`를 쓴 같은 구조의 단계는 발화한다.
+    발화를 가르는 것이 술어의 업무적 성질이 아니라 이행자가 고른 이름이다.
+  - **검사 쪽 4건 (제어 단계 코드 축, 세션 reset-b6 제공).** `ControlCodeAssignmentPattern`이
+    넓었을 때(`@\w*[Ss]tep\w*`) `@v_stepName = N'날짜 검증'`·`@v_stepErrorMessage`·
+    `@v_stepTargetTable = N'batch.BatchStepJournal'` 셋을 "문자열 오류 코드"로 오인했다.
+    좁힌 뒤(`@\w*[Ss]tep_?(?:[Cc]ode|[Ii][Dd]|[Ss]tatus)`) 그 셋은 죽었으나
+    `@v_currentStepIdentifier`가 **미탐**으로 새로 생겼다 — 접미사를 `Step` 직후에
+    묶어서 꼬리가 붙은 이름이 빠진다.
+  - **핵심 논거.** 한 브랜치 안에서 **넓은 이름 패턴이 오탐 셋을 만들고 좁힌 패턴이
+    미탐 하나를 만들었다.** 이름으로 역할을 추정하는 한 오탐과 미탐을 맞바꿀 뿐
+    벗어나지 못한다. 경계 사례가 그 대가를 보여준다 — 접미사를 "이름 끝 매칭"으로
+    하면 `@v_isStepValid`의 `Valid`가 `id`로 끝나 다시 들어오므로 `Step` 직후 결합을
+    택했고, 그 선택이 곧 위 미탐이다.
+  - **함께 봐야 하는 짝 (변이 주입으로 확인, reset-b6의 재리뷰).** 패턴의 `Status`
+    접미사와 예외 2(`BatchControlContract.AllowedStatusValues`)가 **서로를
+    지탱한다.** `@v_stepStatus`가 예외 2에 도달할 수 있는 유일한 경로이기 때문이다 —
+    계약의 상태 어휘를 담을 이름은 `Status`로 끝나고, 그런 이름은 접미사에 `Status`가
+    있어야 패턴에 잡힌다. (`AllowedStatusValues`는 리터럴 목록이 아니라 `Tables`의 각
+    컬럼 `AllowedValues`를 합쳐 계산한 집합이다 — 개수를 인용하지 말 것.)
+    ```
+    T-1  접미사에서 |[Ss]tatus 를 뺀다
+         → MechanicalValidatorBatchStepTests의 ...ShouldRejectAnUnknownStringEvenOnAStatusNamedVariable 이 죽는다
+    T-2  T-1 상태에서 추가로 예외 2를 무력화한다
+         → 추가로 죽는 테스트가 없다            ← 죽은 가지의 지문
+    대조  현 코드에서 T-2만 단독 적용
+         → ...ShouldAcceptAContractStatusValueAssignment 가 죽는다 (정상)
+    ```
+    접미사만 손대면 예외 2는 **코드에 남아 있지만 아무도 지나가지 않는 죽은 가지**가
+    된다. 테스트는 여전히 초록이고(그 테스트도 같이 죽으니까) 다음 사람은 예외 2가
+    검증되고 있다고 믿는다. **역할 기반으로 갈아엎을 때 둘을 함께 봐야 한다.**
+  - **T-2의 절차는 이 항목 밖에서도 쓸모가 있다.** "무력화했는데 추가로 죽는 테스트가
+    없다"가 「테스트가 초록이다」와 「검증되고 있다」를 가르는 방법이다.
+  - **하지 말 것.** 면제를 이름 목록으로 닫는 것(`BatchControlContract`에 `ExecutionId`
+    추가). 당장은 닫히지만 다음 이행자가 고를 네 번째 이름에서 재발한다. 게시문의
+    `FROM`이 원본 원천이 아니라 **그 단계가 만든 스테이징·섀도 테이블**인지로 판정해야
+    한다.
 
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
