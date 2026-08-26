@@ -299,10 +299,35 @@
   `LegacyProcedures`가 빈 단계만 골라 `agent/steps/<Code>.md`를 본다. 대상
   131개 제어 단계. 상태 변수를 비INT로 선언한 단계가 27개인데, 그 안에
   문자열 **오류 코드** 17개 · **단계 식별자** 12개 · 타임스탬프·플래그
-  2개가 섞여 있었다(일부 단계는 두 갈래에 걸쳐 있어 합이 27을 넘는다 —
-  예: `POQSettlePrco20/S16`은 오류 코드(`@v_currentStepCode`)와 개수
-  변수(`@v_expectedPriorStepCount`, 위 44단계 항목의 오탐)가 한 단계 안에
-  공존한다). 앞서 기록된 "26개"는 이 갈래를 세지 않은 수였다.
+  2개가 섞여 있었다. 앞서 기록된 "26개"는 이 갈래를 세지 않은 수였다.
+
+  [2026-08-26 정정 — 위 "합이 27을 넘는" 예시가 틀렸었다] 이 문단은 원래
+  `POQSettlePrco20/S16`을 예로 들어 `@v_currentStepCode`(오류 코드)와
+  `@v_expectedPriorStepCount`(개수 변수)가 한 단계에 공존해 27을 넘겼다고
+  적었다. **그 예시는 근거가 안 된다** — `output/Jobs/POQSettlePrco20/agent/steps/S16.md:58`의
+  `@v_expectedPriorStepCount`는 `int`형이다. "비INT 27개" 집합에 애초에
+  들어가지 않으므로 17·12·2 어느 갈래에도 속할 수 없고, 이 초과와 무관한
+  다른 축(위 44단계 항목의 숫자 축 오탐)의 이야기였다.
+
+  **진짜 사례(실측)**: `output/Jobs/POQSettleBatch1/agent/steps/S03.md:22-23`
+  ```
+  DECLARE @v_currentStepCode NVARCHAR(10) = N'B120';
+  DECLARE @v_stepStartedAtUtc DATETIME2(3) = SYSUTCDATETIME();
+  ```
+  이 한 단계(`POQSettleBatch1/S03`)에 비INT 선언이 **둘** 있다 —
+  `@v_currentStepCode`(NVARCHAR, 문자열 오류 코드 갈래)와
+  `@v_stepStartedAtUtc`(DATETIME2, 타임스탬프 갈래)다. "27개 단계"는 단계
+  단위로 세지만 "17·12·2"는 갈래(변수 종류)별로 세므로, 이 단계 하나가
+  "27"에는 1로 잡히면서 "17"과 "2" 양쪽에 걸쳐 계수된다 — 계수 단위가
+  달라 단순 합산이 성립하지 않는 실제 사례다. 같은 패턴(코드 변수 +
+  `step`이 들어간 이름의 비코드 변수 공존)은 임시 프로브 기록
+  (`.superpowers/sdd/2026-08-26-control-step-code-type/task-1-report.md`
+  「갈래 2」)에도 별도로 남아 있어 우연이 아니다. **다만 이 사례 하나로
+  31−27=4 전체가 설명되는지는 이번 회차에 전수 재확인하지 않았다** — 27개
+  전체를 훑어 몇 개 단계가 몇 개 갈래에 걸치는지 정확히 세면 4를 정확히
+  맞출 수 있는지 알 수 있다. 다음 사람이 재려면 이 27개 목록부터 만들어야
+  한다(현재 저장소에는 27개·12개·2개 각각의 단계 목록이 파일로 남아있지
+  않다 — 17개 목록만 위에 있다).
 
   17단계 목록: `POQSettleProc13`(S01,S02,S03,S16,S17,S18) ·
   `POQSettleProc19`(S02,S03,S04,S17) · `POQSettleProc14`(S03,S16,S17) ·
@@ -372,9 +397,23 @@
   `POQSettleProc2`·`POQSettleProc6` 3개(`POQSettlePrco20`은 숫자 축에서
   빠졌다), 문자열 축 17개가 속한 Job은 `POQSettleProc13`·`POQSettleProc19`·
   `POQSettleProc14`·`POQSettleProc18`·`POQSettleBatch1`·`POQSettlePrco20`
-  6개, 겹치는 Job은 `POQSettlePrco20` 하나뿐이라 3+6−1=**9개 Job**이다.
-  (이전 초안이 "10개 Job"으로 적었던 것은 이 산식으로 재확인되지 않는다 —
-  직접 나열하면 9개뿐이므로 여기서 9로 정정한다.)
+  6개다.
+
+  [2026-08-26 정정 — 겹침이 1이 아니라 0이다, 산술도 틀렸었다] 이 문단은
+  원래 "겹치는 Job은 `POQSettlePrco20` 하나뿐이라 3+6−1=9개 Job"이라고
+  적었다. **둘 다 틀렸다.** 산술로는 3+6−1은 8이지 9가 아니다. 논리로는
+  바로 앞 문장에서 이미 "`POQSettlePrco20`은 숫자 축에서 빠졌다"고 인정해
+  놓고, 숫자 축 3개 Job 집합의 원소가 아닌 Job을 그 집합과 "겹친다"고
+  다시 센 것 — 원소가 아니면 겹칠 수 없다. 두 문단 전에 단계 수준 겹침을
+  1→0으로 정정한 것과 같은 논리를 Job 수준에는 적용하지 않은 자기모순이다.
+  숫자 축 집합 {`POQSettleProc16`,`POQSettleProc2`,`POQSettleProc6`}과
+  문자열 축 집합 {`POQSettleProc13`,`POQSettleProc19`,`POQSettleProc14`,
+  `POQSettleProc18`,`POQSettleBatch1`,`POQSettlePrco20`}을 직접 대조하면
+  공통 원소가 없다 — 겹침은 **0**이다. 올바른 산식은 3+6−0=**9개 Job**
+  이고(결론 수치 자체는 우연히 맞았다), 근거는 겹침 0에서 나온 3+6−0이지
+  틀린 "겹침 1, 3+6−1"이 아니다. (이전 초안이 "10개 Job"으로 적었던 것도
+  이 산식으로 재확인되지 않는다 — 직접 나열하면 9개뿐이므로 9로
+  정정한다.)
 - **출력 파라미터를 통한 상태/오류 코드 축은 이번 라운드에서 열지 않는다**
   — 위 두 항목이 다루는 것은 제어 단계 **내부** 상태 변수(`@v_...`)뿐이고,
   T-SQL `OUTPUT` 파라미터로 호출자에게 반환되는 코드는 별개 축이다. 제어
