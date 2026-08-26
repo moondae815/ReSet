@@ -285,6 +285,10 @@ namespace ReSet.Core.Services
                     JobsWithZeroMeasuredPairs = jobsWithZeroMeasuredPairs,
                     JobsThatThrew = jobsThatThrew,
                     StepCountCapExceededJobs = input.StepCountCapExceededJobs,
+                    StepBundleOldest = input.StepBundleOldest,
+                    StepBundleNewest = input.StepBundleNewest,
+                    SpecOldest = input.SpecOldest,
+                    SpecNewest = input.SpecNewest,
                 });
         }
 

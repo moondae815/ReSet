@@ -66,6 +66,8 @@ namespace ReSet.Core.Services
             // 리뷰 발견 (3) - 프로시저 참조를 못 찾으면(SweepCommand의 디렉터리 색인
             // 미스, StepSweepService의 DdlByProcedure 조회 미스) 조용히 continue하던
             // 두 자리의 합. 0이라고 말하는 것과 아무 말도 안 하는 것은 다르다.
+            b.AppendLine($"- 단계 번들 세대: {Generation(gaps.StepBundleOldest, gaps.StepBundleNewest)}");
+            b.AppendLine($"- 명세서 세대: {Generation(gaps.SpecOldest, gaps.SpecNewest)}");
             b.AppendLine($"- 미해결 프로시저 참조: {gaps.UnresolvedProcedureReferences}");
 
             // 리뷰 발견 (4) - 목차 파싱은 됐지만(PlanParseFailedJobs에는 안 실림)
@@ -98,6 +100,18 @@ namespace ReSet.Core.Services
             if (gaps.KnownTableNamesWereEmpty)
             {
                 b.AppendLine("- `knownTableNames`가 비어 유령 테이블 검사가 소프트 스킵됐다.");
+            }
+
+            if (gaps.StepBundleNewest is { } stepNewest
+                && gaps.SpecNewest is { } specNewest
+                && stepNewest < specNewest)
+            {
+                b.AppendLine();
+                b.AppendLine(
+                    "**단계 번들이 명세서보다 낡았다.** 축 B의 기준값은 명세서이므로, 이 스윕이 " +
+                    "잡은 불일치 중 일부는 이행 결함이 아니라 **세대 차이**일 수 있다 — 폐기된 " +
+                    "명세서로 만든 지시서를 현행 명세서와 맞댄 것이기 때문이다. 번들을 재생성한 " +
+                    "뒤 다시 재는 것이 순서다(`docs/audit-defect-catalog.md` 3절).");
             }
 
             b.AppendLine();
@@ -212,6 +226,19 @@ namespace ReSet.Core.Services
                     "크면 두 지표가 코퍼스 전체를 대표하지 않는다.");
                 b.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// mtime 범위를 사람이 읽는 한 줄로. 값이 없어도 "알 수 없음"으로 행을 낸다 -
+        /// 모른다는 사실이 사라지면 그것도 감춰진 결손이다(§6).
+        /// </summary>
+        private static string Generation(DateTimeOffset? oldest, DateTimeOffset? newest)
+        {
+            if (oldest is not { } from || newest is not { } to) return "알 수 없음";
+
+            var a = from.ToString("yyyy-MM-dd");
+            var z = to.ToString("yyyy-MM-dd");
+            return a == z ? a : $"{a} ~ {z}";
         }
 
         private static int Count(

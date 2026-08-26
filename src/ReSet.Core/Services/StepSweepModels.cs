@@ -56,6 +56,22 @@ namespace ReSet.Core.Services
         public int UnresolvedProcedureDirectoryLookups { get; init; }
 
         /// <summary>
+        /// 측정한 단계 지시서 파일의 mtime 범위. CLI가 파일을 읽으며 채운다 -
+        /// 서비스는 디스크를 모르므로 여기로 받는다. 그대로
+        /// <see cref="HarnessGaps.StepBundleOldest"/>로 넘어간다.
+        /// </summary>
+        public DateTimeOffset? StepBundleOldest { get; init; }
+
+        /// <inheritdoc cref="StepBundleOldest"/>
+        public DateTimeOffset? StepBundleNewest { get; init; }
+
+        /// <summary>대조 기준인 명세서(Spec.md)의 mtime 범위. 같은 이유로 CLI가 채운다.</summary>
+        public DateTimeOffset? SpecOldest { get; init; }
+
+        /// <inheritdoc cref="SpecOldest"/>
+        public DateTimeOffset? SpecNewest { get; init; }
+
+        /// <summary>
         /// 목차 JSON은 정상 파싱되지만 BatchStepPlanParser.MaxSteps(40) 상한을 넘어
         /// 버려진 Job. PlanStructure.md가 진짜 파싱 실패인지 상한 초과인지
         /// TryParse의 반환값(null)만으로는 구분할 수 없다 - 둘 다 null이다. 라벨을
@@ -85,6 +101,26 @@ namespace ReSet.Core.Services
         /// 다음 사람이 같은 함정(조용한 continue)을 다시 못 보게 하는 것이 목적이다.
         /// </summary>
         public int UnresolvedProcedureReferences { get; init; }
+
+        /// <summary>
+        /// 측정한 단계 지시서 파일의 mtime 범위(가장 오래된 것 ~ 가장 새것).
+        ///
+        /// [왜 보고서가 이것을 알아야 하는가] 축 B의 기준값은 명세서다. 단계 번들이
+        /// 명세서보다 낡았으면 이 스윕이 대조한 불일치는 이행 결함이 아니라 세대
+        /// 차이일 수 있다 - docs/audit-defect-catalog.md 3절이 그 오염을 경고한다.
+        /// 그런데 보고서는 캐시 FormatVersion만 싣고 번들 세대는 안 실어서, 보고서만
+        /// 읽는 사람은 그 326쌍이 언제 만들어진 것인지 알 수 없었다.
+        /// </summary>
+        public DateTimeOffset? StepBundleOldest { get; init; }
+
+        /// <inheritdoc cref="StepBundleOldest"/>
+        public DateTimeOffset? StepBundleNewest { get; init; }
+
+        /// <summary>대조 기준인 명세서(Spec.md)의 mtime 범위. 위와 나란히 놓아야 세대 차이가 읽힌다.</summary>
+        public DateTimeOffset? SpecOldest { get; init; }
+
+        /// <inheritdoc cref="SpecOldest"/>
+        public DateTimeOffset? SpecNewest { get; init; }
 
         /// <summary>
         /// 목차 파싱은 성공했으나(Job이 input.Jobs에 들어옴) 측정 쌍이 0인 Job의

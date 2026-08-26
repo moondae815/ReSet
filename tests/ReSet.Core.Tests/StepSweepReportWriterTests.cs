@@ -17,6 +17,79 @@ namespace ReSet.Core.Tests
                 KnownTableNamesWereEmpty: true));
 
         /// <summary>
+        /// 세대 정보를 담은 HarnessGaps. 단계 번들과 명세서의 mtime 범위는
+        /// SweepCommand가 실물에서 읽어 넣는다 - 여기서는 합성값이다.
+        /// </summary>
+        private static SweepReport ReportWithGenerations(
+            DateTimeOffset? stepOldest, DateTimeOffset? stepNewest,
+            DateTimeOffset? specOldest, DateTimeOffset? specNewest) => new(
+            Array.Empty<SweepFinding>(),
+            new SweepIndicators(3, 2, 1),
+            new HarnessGaps(
+                new List<string>(), 51, 326, 18,
+                StepInterfacesWereNull: true,
+                RunRowOwnedTablesWereNull: true,
+                KnownTableNamesWereEmpty: true)
+            {
+                StepBundleOldest = stepOldest,
+                StepBundleNewest = stepNewest,
+                SpecOldest = specOldest,
+                SpecNewest = specNewest,
+            });
+
+        private static DateTimeOffset D(string ymd) =>
+            DateTimeOffset.Parse(ymd + "T00:00:00+09:00");
+
+        // 보고서만 읽는 사람은 그 326쌍이 언제 만들어진 번들인지 알 수 없었다.
+        // 축 B의 기준값이 명세서이므로 두 세대를 나란히 놓아야 대조가 유효한지 판단된다.
+        [Fact]
+        public void HeaderCarriesStepBundleAndSpecGenerations()
+        {
+            var markdown = StepSweepReportWriter.Render(
+                ReportWithGenerations(D("2026-08-12"), D("2026-08-24"), D("2026-08-25"), D("2026-08-25")),
+                "abc1234", "16");
+            var head = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("2026-08-12 ~ 2026-08-24", head);
+            Assert.Contains("2026-08-25", head);
+        }
+
+        // 세대 차이가 있으면 이 스윕이 대조한 것이 이행 결함이 아니라 세대 차이일 수
+        // 있다. 그 사실을 보고서가 스스로 말해야 한다.
+        [Fact]
+        public void StaleStepBundlesRaiseAGenerationWarning()
+        {
+            var markdown = StepSweepReportWriter.Render(
+                ReportWithGenerations(D("2026-08-12"), D("2026-08-24"), D("2026-08-25"), D("2026-08-25")),
+                "abc1234", "16");
+
+            Assert.Contains("단계 번들이 명세서보다 낡았다", Section(markdown, "## 실행 조건"));
+        }
+
+        // 매번 나오면 아무도 안 읽는다. 번들이 명세서만큼 새로우면 경고가 없어야 한다.
+        [Fact]
+        public void CurrentStepBundlesRaiseNoGenerationWarning()
+        {
+            var markdown = StepSweepReportWriter.Render(
+                ReportWithGenerations(D("2026-08-25"), D("2026-08-26"), D("2026-08-25"), D("2026-08-25")),
+                "abc1234", "16");
+
+            Assert.DoesNotContain("단계 번들이 명세서보다 낡았다", Section(markdown, "## 실행 조건"));
+        }
+
+        // 값이 없어도 행 자체는 나와야 한다 - 모른다는 사실이 사라지면 안 된다(§6).
+        [Fact]
+        public void UnknownGenerationsStillPrintTheirRows()
+        {
+            var markdown = StepSweepReportWriter.Render(
+                ReportWithGenerations(null, null, null, null), "abc1234", "16");
+            var head = Section(markdown, "## 실행 조건");
+
+            Assert.Contains("단계 번들 세대: 알 수 없음", head);
+            Assert.Contains("명세서 세대: 알 수 없음", head);
+        }
+
+        /// <summary>
         /// `header`부터 다음 "## " 절 제목 직전까지만 잘라낸다. 여러 절이 같은 문자열
         /// 부분열을 낼 수 있어(예: Job별 표 행이 총계 표 행과 같은 문자열을 포함) 절을
         /// 가리지 않고 Assert.Contains(markdown 전체)만 쓰면 엉뚱한 절에서 우연히

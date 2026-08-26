@@ -35,6 +35,13 @@ namespace ReSet.Cli
             var parseFailed = new List<string>();
             var stepCountCapExceeded = new List<string>();
             var missingStepFiles = 0;
+
+            // [번들 세대] 축 B의 기준값은 명세서다. 단계 번들이 명세서보다 낡았으면 이
+            // 스윕이 잡은 불일치는 이행 결함이 아니라 세대 차이일 수 있다 -
+            // docs/audit-defect-catalog.md 3절이 그 오염을 경고한다. 보고서가 그 판단
+            // 재료를 스스로 싣게 파일 mtime 범위를 여기서 모은다(서비스는 디스크를 모른다).
+            var stepMtimes = new List<DateTimeOffset>();
+            var specMtimes = new List<DateTimeOffset>();
             var unresolvedProcedureDirectoryLookups = 0;
 
             foreach (var jobDir in Directory
@@ -77,6 +84,7 @@ namespace ReSet.Cli
                     }
 
                     markdownByCode[step.Code] = File.ReadAllText(stepPath);
+                    stepMtimes.Add(File.GetLastWriteTime(stepPath));
                 }
 
                 var specs = new List<(string FileName, string Content)>();
@@ -108,6 +116,7 @@ namespace ReSet.Cli
                     // "...md"를 넘기면 키가 "md"가 되어 모든 조회가 빗나간다.
                     var name = Path.GetFileName(dir);
                     specs.Add((name, File.ReadAllText(specPath)));
+                    specMtimes.Add(File.GetLastWriteTime(specPath));
 
                     // metadata.json에는 BOM이 붙어 있다. File.ReadAllText가 자동으로 벗긴다
                     // (CoverageMapCommand.cs:203과 같은 규약).
@@ -127,6 +136,10 @@ namespace ReSet.Cli
                 {
                     UnresolvedProcedureDirectoryLookups = unresolvedProcedureDirectoryLookups,
                     StepCountCapExceededJobs = stepCountCapExceeded,
+                    StepBundleOldest = stepMtimes.Count == 0 ? null : stepMtimes.Min(),
+                    StepBundleNewest = stepMtimes.Count == 0 ? null : stepMtimes.Max(),
+                    SpecOldest = specMtimes.Count == 0 ? null : specMtimes.Min(),
+                    SpecNewest = specMtimes.Count == 0 ? null : specMtimes.Max(),
                 });
 
             // 아무것도 재지 못했는데 0으로 끝나면 파이프라인이 초록으로 통과한다.
