@@ -2130,6 +2130,48 @@
        읽고 조건을 되살린다.
   - 소스 코드가 아니라 산출물 결함이므로 이 회차에서는 고치지 않고 기록만 한다.
 
+  **(5-3-5) 이름을 역할의 대리로 쓰는 면제·검사 — 두 축의 근거 열 건 (2026-08-26).**
+  위 부류 5(6건)와 제어 단계 코드 축(4건)이 같은 병의 양면이다. 한쪽은 **면제**가,
+  다른 쪽은 **검사**가 이름 모양으로 역할을 추정한다. 다음 회차에 한 항목으로 묶는다.
+  - **면제 쪽 6건 (부류 5).** `CheckAnchoredStatementExtras`의 `allowed`가
+    `BatchControlContract.Tables`의 컬럼 **이름** 집합이라, 계약이 아는 실행 식별자
+    `RunId`를 쓴 단계는 침묵하고 `ExecutionId`를 쓴 같은 구조의 단계는 발화한다.
+    발화를 가르는 것이 술어의 업무적 성질이 아니라 이행자가 고른 이름이다.
+  - **검사 쪽 4건 (제어 단계 코드 축, 세션 reset-b6 제공).** `ControlCodeAssignmentPattern`이
+    넓었을 때(`@\w*[Ss]tep\w*`) `@v_stepName = N'날짜 검증'`·`@v_stepErrorMessage`·
+    `@v_stepTargetTable = N'batch.BatchStepJournal'` 셋을 "문자열 오류 코드"로 오인했다.
+    좁힌 뒤(`@\w*[Ss]tep_?(?:[Cc]ode|[Ii][Dd]|[Ss]tatus)`) 그 셋은 죽었으나
+    `@v_currentStepIdentifier`가 **미탐**으로 새로 생겼다 — 접미사를 `Step` 직후에
+    묶어서 꼬리가 붙은 이름이 빠진다.
+  - **핵심 논거.** 한 브랜치 안에서 **넓은 이름 패턴이 오탐 셋을 만들고 좁힌 패턴이
+    미탐 하나를 만들었다.** 이름으로 역할을 추정하는 한 오탐과 미탐을 맞바꿀 뿐
+    벗어나지 못한다. 경계 사례가 그 대가를 보여준다 — 접미사를 "이름 끝 매칭"으로
+    하면 `@v_isStepValid`의 `Valid`가 `id`로 끝나 다시 들어오므로 `Step` 직후 결합을
+    택했고, 그 선택이 곧 위 미탐이다.
+  - **함께 봐야 하는 짝 (변이 주입으로 확인, reset-b6의 재리뷰).** 패턴의 `Status`
+    접미사와 예외 2(`BatchControlContract.AllowedStatusValues`)가 **서로를
+    지탱한다.** `@v_stepStatus`가 예외 2에 도달할 수 있는 유일한 경로이기 때문이다 —
+    계약의 상태 어휘를 담을 이름은 `Status`로 끝나고, 그런 이름은 접미사에 `Status`가
+    있어야 패턴에 잡힌다. (`AllowedStatusValues`는 리터럴 목록이 아니라 `Tables`의 각
+    컬럼 `AllowedValues`를 합쳐 계산한 집합이다 — 개수를 인용하지 말 것.)
+    ```
+    T-1  접미사에서 |[Ss]tatus 를 뺀다
+         → MechanicalValidatorBatchStepTests의 ...ShouldRejectAnUnknownStringEvenOnAStatusNamedVariable 이 죽는다
+    T-2  T-1 상태에서 추가로 예외 2를 무력화한다
+         → 추가로 죽는 테스트가 없다            ← 죽은 가지의 지문
+    대조  현 코드에서 T-2만 단독 적용
+         → ...ShouldAcceptAContractStatusValueAssignment 가 죽는다 (정상)
+    ```
+    접미사만 손대면 예외 2는 **코드에 남아 있지만 아무도 지나가지 않는 죽은 가지**가
+    된다. 테스트는 여전히 초록이고(그 테스트도 같이 죽으니까) 다음 사람은 예외 2가
+    검증되고 있다고 믿는다. **역할 기반으로 갈아엎을 때 둘을 함께 봐야 한다.**
+  - **T-2의 절차는 이 항목 밖에서도 쓸모가 있다.** "무력화했는데 추가로 죽는 테스트가
+    없다"가 「테스트가 초록이다」와 「검증되고 있다」를 가르는 방법이다.
+  - **하지 말 것.** 면제를 이름 목록으로 닫는 것(`BatchControlContract`에 `ExecutionId`
+    추가). 당장은 닫히지만 다음 이행자가 고를 네 번째 이름에서 재발한다. 게시문의
+    `FROM`이 원본 원천이 아니라 **그 단계가 만든 스테이징·섀도 테이블**인지로 판정해야
+    한다.
+
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
   출처는 `CheckBatchControlVocabulary` 36% · `CheckCatchDiscardsReturnCode`
