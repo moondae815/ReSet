@@ -147,7 +147,24 @@
     *   기능 추가, 버그 수정, 구조 변경 등 코드 베이스를 수정해야 할 경우, 가급적 독립적인 `git worktree`를 생성하여 별도의 작업 공간에서 코드를 작성하고 검증(빌드 및 테스트)을 수행하십시오.
     *   작업 및 테스트가 성공적으로 완료된 후 변경 사항을 병합(Merge)하고, 작업이 끝난 워크트리는 안전하게 정리(Remove)하는 사이클을 유지하십시오.
     *   `.claude/worktrees/` 격리 세션(`EnterWorktree`)에서는 `git -C <main>`도 사용자 `!` 입력도 가드가 main 병합을 막습니다. `ExitWorktree(keep)`로 main 루트에 돌아간 뒤 `git merge --ff-only <branch>` → 테스트 → `git worktree remove` → `git branch -d` 순으로 마무리하십시오.
-    *   워크트리에는 gitignore 대상인 `output/`이 없습니다. 코퍼스를 읽는 테스트는 그 환경에서 **건너뜀**으로 표시되므로(`건너뜀 0`이어야 실제로 돈 것), `ln -s <메인 저장소>/output output`을 건 뒤 테스트하십시오(`.git/info/exclude`에 `output`이 등록되어 있습니다).
+    *   워크트리에는 gitignore 대상인 코퍼스 재료 **둘**이 없습니다 — `output/`과 `output.bak-2026-08-22/`. **둘 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
+
+        ```bash
+        ln -s <메인 저장소>/output output
+        ln -s <메인 저장소>/output.bak-2026-08-22 output.bak-2026-08-22
+        ```
+
+        하나만 걸면 안 됩니다. 두 계열이 코퍼스 루트를 다르게 해석해, **총 건너뜀 수가 줄어드는데도 다른 테스트가 꺼집니다.**
+
+        | 메인 저장소 **안**에 만든 워크트리 | 추출기·골든 계열 | `CoverageMapGoldenTests` 요구 2·3 |
+        | --- | --- | --- |
+        | 링크 없음 | 건너뜀 | 통과 (조상 탐색이 메인 저장소까지 올라가 재료 둘을 다 찾음) |
+        | `output`만 | 통과 | **건너뜀** (탐색이 워크트리에서 멈추는데 거기엔 스냅샷이 없음) |
+        | 둘 다 | 통과 | 통과 |
+
+        `output/`만 거는 것은 한쪽을 살리면서 다른 쪽을 끕니다 — 건너뜀 수가 줄어 진전처럼 보이는 함정입니다. **건너뜀 0만이 전부 돈 것입니다.**
+
+        「반쯤」 상태는 `CorpusSetupGuardTests`가 빨간불로 막습니다. 계열이 왜 갈리는지, 그리고 이 규칙이 없어서 두 세션이 각각 어떻게 당했는지는 그 클래스 주석에 있습니다. (저장소 **밖**에 만든 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어납니다 — 위 표는 안쪽 워크트리 기준입니다.)
 
 ---
 
@@ -199,6 +216,7 @@ dotnet test
 
 - [ ] 컴파일 에러가 0개이고, 경고가 **정확히 8건**(모두 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 0건으로 보이므로 반드시 `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`로 세야 한다. 8건보다 많으면 이번 변경이 새 경고를 넣은 것이다.
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
+- [ ] 워크트리라면 코퍼스 재료 **둘**을 심링크했는가? 하나만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
 - [ ] SQL 객체 타입을 `Contains("TABLE"/"VIEW"/"FUNCTION"/"PROCEDURE")`로 직접 판정한 곳이 없는가? (`SqlObjectTypeClassifier`에 위임해야 하며 `TypeClassificationPolicyTests`가 자동 검사한다)

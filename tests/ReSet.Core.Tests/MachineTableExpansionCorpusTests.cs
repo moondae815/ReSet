@@ -26,27 +26,11 @@ namespace ReSet.Core.Tests
         public MachineTableExpansionCorpusTests(ITestOutputHelper output) => _output = output;
 
         /// <summary>
-        /// 저장소 루트를 찾는다.
-        ///
-        /// [왜 `output/` 존재만 보면 안 되는가 - 2026-08-25 실측] 다른 테스트들이
-        /// `bin/Debug/net10.0/output/Procedures/` 아래에 합성 픽스처(dbo.USP_Root 등)를
-        /// 만든다. `Directory.Exists(dir/"output")`으로 올라가면 그 픽스처 디렉터리가
-        /// **먼저** 걸려 스모크가 실물 코퍼스 대신 픽스처 1개를 재고 "객체 1 · 트랜잭션
-        /// 합 0 · SET 합 0"을 초록으로 찍는다 - 건너뜀도 실패도 아닌 조용한 오측이다.
-        /// 그래서 `CoverageMapGoldenTests.RepoRoot`의 관례를 따라 **실물 코퍼스에만 있는
-        /// 객체 하나**를 앵커로 삼는다.
+        /// 코퍼스 루트. 판정 근거(왜 "output/이 있다"로 판정하지 않는가)는
+        /// <see cref="CorpusPaths.RepoRoot"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
+        /// 2026-08-26에 그리로 모았다.
         /// </summary>
-        private static string RepoRoot()
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null && !File.Exists(Path.Combine(
-                       dir.FullName, "output", "Procedures",
-                       "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "raw", "metadata.json")))
-            {
-                dir = dir.Parent;
-            }
-            return dir?.FullName ?? string.Empty;
-        }
+        private static string RepoRoot() => CorpusPaths.RepoRoot();
 
         [SkippableFact]
         public void Extractors_OverTheCorpus_ShouldReportCountsWithoutExploding()

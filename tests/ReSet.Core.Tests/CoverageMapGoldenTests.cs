@@ -24,24 +24,11 @@ namespace ReSet.Core.Tests
         public CoverageMapGoldenTests(ITestOutputHelper output) => _output = output;
 
         /// <summary>
-        /// Task 4(<c>CoverageMapProbeTests</c>)가 이미 겪은 함정을 그대로 피한다: "output/
-        /// 디렉터리를 가진 조상"까지만 올라가면 <c>bin/Debug/net10.0/output/</c>에 다른
-        /// 테스트가 남긴 가짜 산출물(스크래치 <c>dbo.USP_Root</c> 1건)을 집어 조용히 틀린
-        /// 숫자를 낸다. 그래서 "output/이 있다"가 아니라 "이 게이트가 아는 실물 SP 하나가
-        /// 실제로 있다"로 판정 기준을 좁힌다. <c>CoverageMapProbeTests.RepoRoot</c>와 같은
-        /// 판정이다 - 새로 짜지 않고 재사용한다.
+        /// 코퍼스 루트. 판정 근거(왜 "output/이 있다"로 판정하지 않는가)는
+        /// <see cref="CorpusPaths.RepoRoot"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
+        /// 2026-08-26에 그리로 모았다.
         /// </summary>
-        private static string RepoRoot()
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null && !File.Exists(Path.Combine(
-                       dir.FullName, "output", "Procedures",
-                       "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "raw", "metadata.json")))
-            {
-                dir = dir.Parent;
-            }
-            return dir?.FullName ?? string.Empty;
-        }
+        private static string RepoRoot() => CorpusPaths.RepoRoot();
 
         private static ObjectCoverage? Load(string root, string outputDirName, string objectName)
         {
@@ -124,9 +111,9 @@ namespace ReSet.Core.Tests
             var root = RepoRoot();
             Skip.If(string.IsNullOrEmpty(root), "output/의 실물 SP 산출물을 찾지 못했다 - 요구 2 건너뜀");
 
-            var bakDir = Path.Combine(root, "output.bak-2026-08-22", "Procedures");
+            var bakDir = Path.Combine(root, CorpusPaths.PriorEdition, "Procedures");
             Skip.IfNot(Directory.Exists(bakDir),
-                "output.bak-2026-08-22가 없다(.gitignore 대상) - 과거 판 대조 건너뜀");
+                $"{CorpusPaths.PriorEdition}가 없다(.gitignore 대상) - 과거 판 대조 건너뜀");
 
             var priorTotal = 0;
             var currentTotal = 0;
@@ -136,7 +123,7 @@ namespace ReSet.Core.Tests
             foreach (var objectDir in Directory.GetDirectories(bakDir))
             {
                 var name = Path.GetFileName(objectDir);
-                var prior = Load(root, "output.bak-2026-08-22", name);
+                var prior = Load(root, CorpusPaths.PriorEdition, name);
                 var current = Load(root, "output", name);
                 if (prior == null || current == null)
                 {
@@ -200,9 +187,9 @@ namespace ReSet.Core.Tests
             var root = RepoRoot();
             Skip.If(string.IsNullOrEmpty(root), "output/의 실물 SP 산출물을 찾지 못했다 - 요구 3 건너뜀");
 
-            var prior = Load(root, "output.bak-2026-08-22", name);
+            var prior = Load(root, CorpusPaths.PriorEdition, name);
             var current = Load(root, "output", name);
-            Skip.If(prior == null, "과거 판(output.bak-2026-08-22)에 INS_EXTRA4PLCARD 산출물이 없다 - 요구 3 건너뜀");
+            Skip.If(prior == null, $"과거 판({CorpusPaths.PriorEdition})에 INS_EXTRA4PLCARD 산출물이 없다 - 요구 3 건너뜀");
             Skip.If(current == null, "현재 판(output)에 INS_EXTRA4PLCARD 산출물이 없다 - 요구 3 건너뜀");
 
             static int CountSetPredicateAnchorsAt(ObjectCoverage coverage, int line) =>

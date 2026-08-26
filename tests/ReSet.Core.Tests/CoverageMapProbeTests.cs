@@ -27,25 +27,11 @@ namespace ReSet.Core.Tests
         public CoverageMapProbeTests(ITestOutputHelper output) => _output = output;
 
         /// <summary>
-        /// [2026-08-24 실측 정정] 플랜 원안은 "output/ 디렉터리를 가진 조상"을 찾을 때까지
-        /// 올라가는데, 실측에서 <c>tests/ReSet.Core.Tests/bin/Debug/net10.0/output/</c>이
-        /// 이미 존재하는 것이 확인됐다 - 다른 테스트(`DependencyAnalysisOrchestratorTests` 류)가
-        /// CWD 상대경로로 남긴 `dbo.USP_Root` 1건짜리 스크래치 산출물이다. 원안대로면 그
-        /// 얕은 자리에서 멈춰 실물 14 SP 코퍼스 대신 그 스크래치를 "실측"하고, 게이트가
-        /// 조용히 틀린 숫자를 낸다(Skip도 아니고 실패도 아니라 더 위험하다). 그래서 "output/이
-        /// 있다"가 아니라 "이 게이트가 아는 실물 SP 하나가 실제로 있다"로 판정 기준을 좁힌다.
+        /// 코퍼스 루트. 판정 근거(왜 "output/이 있다"로 판정하지 않는가)는
+        /// <see cref="CorpusPaths.RepoRoot"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
+        /// 2026-08-26에 그리로 모았다.
         /// </summary>
-        private static string RepoRoot()
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null && !File.Exists(Path.Combine(
-                       dir.FullName, "output", "Procedures",
-                       "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "raw", "metadata.json")))
-            {
-                dir = dir.Parent;
-            }
-            return dir?.FullName ?? string.Empty;
-        }
+        private static string RepoRoot() => CorpusPaths.RepoRoot();
 
         private static SpDefinition? LoadSpDef(string metaPath)
         {
