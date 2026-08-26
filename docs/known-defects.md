@@ -1114,6 +1114,62 @@
   `InjectSimulatedCodes`(조건 (B) 코드 사전 주입)가 이미 쓰던 규약과
   같다 — `MechanicalValidator.BareObjectName`으로 정규화한 키로 조회한다.
 
+  **(5-2-4) 109건 중 59건 표본 판정 (2026-08-26). 가장 큰 결과는 개별
+  결함이 아니라 축의 전제가 깨졌다는 것이다.**
+
+  109행이 **31개 부류**로 접힌다 — 같은 원본 SP가 여러 Job에 반복 이관돼
+  같은 (SP, 문장, 항목) 좌표가 반복되기 때문이다. `UP_UTIL_SETTLE_EXCEPTION_PROC`
+  하나가 52행을 차지한다. 부류당 1건을 실물로 판정하면 부류 전체가 닫힌다.
+
+  **(가) 코드 라벨 재사용이 축의 전제를 깬다 — 이번 판정의 핵심.**
+  `AiService`의 [Precise Error Tracking] 규약은 문장마다 고유한
+  `SET @v_currentStepId`를 요구하지만, 실물은 **한 코드를 여러 문장에
+  붙인다.** `POQSettleBatch1/S10`은 `-2`를 INSERT 1개와 UPDATE 2개,
+  **세 문장**에 붙였다. `ResolveOrdinal`(`MechanicalValidator.cs:6110`)은
+  문장마다 독립적으로 코드→서수를 매기고 **단계 쪽 중복을 막는 가드가
+  없다** — 명세서 쪽 사전(`ReadErrorCodeToOrdinal`)만 중복 코드를 뺀다.
+  `Kind` 대조가 INSERT는 걸러내지만 UPDATE 둘은 **모두 같은 서수로**
+  환산돼 엉뚱한 행과 대조된다.
+
+  실측:
+  - 발화 109건 중 **87건(80%)**이 코드 앵커가 중복된 단계에서 났다.
+  - 발화가 난 (Job, 단계) 50개 중 **35개(70%)**가 중복 앵커를 가진다.
+  - **코퍼스 전체 326개 단계 파일 중 100개(31%)**에 중복 앵커가 있다.
+
+  **이 실패 모드를 §5의 「코드 집합 대조」 방어가 못 잡는다.** 집합 대조는
+  *어떤* 코드가 있는지를 보지, *몇 문장이* 한 코드를 공유하는지를 안 본다.
+  `-2`를 세 번 쓰는 단계도 집합은 SP 표와 같을 수 있다. **필요한 방어는
+  따로다** — 한 코드 앵커가 같은 Kind의 문장 둘 이상에 매칭되면 그 코드(또는
+  그 단계)의 코드 축을 끈다. 캐시 17 인상 전에 이것이 (4)의 집합 대조보다
+  우선한다.
+
+  **(나) 구조적 거짓양성 세 부류(30건) — 전부 의미 동등이다.**
+  - `EXCEPTION_PROC UPDATE 2 · YMD, PGName, DiscountFlag`(10건) — **계산용
+    서브쿼리 관용구**. 원본은 `UPDATE … FROM TSettleMst AA JOIN (계산 서브쿼리) BB`로
+    술어를 AA에 최상위로 걸고, 이행은 그 술어를 파생 테이블 안으로 옮긴 뒤
+    `A.ID = X.ID AND A.PLTID = X.PLTID`로 조인한다. **행 동일성으로 조인하므로
+    갱신 대상 집합이 같다.**
+  - `EXCEPTION_PROC UPDATE 17 · YMD, PGName`(10건) — 같은 관용구의 CTE 판
+    (`;WITH FeeSource AS …`, 술어가 CTE 안).
+  - `EXCEPTION_PROC UPDATE 18 · PLTID`(10건) — 원본 `WHERE PLTID IN (하위질의)`를
+    이행이 `EXISTS (… B.PLTID = A.PLTID …)`로 재작성해 PLTID가 상관 술어가 됐다.
+
+  **(다) 검사 C가 (나)의 사각지대를 메운 실례.** 위 `UPDATE 18` 부류에서
+  `POQSettleProc14/S07` **한 Job만** 최상위에 `A.YMD = @pi_strYMD`를 더했다 —
+  원본에는 없는 술어이고 **갱신 범위를 그날 행으로 좁힌다.** 검사 B는
+  PLTID 결측(거짓양성)으로 발화했고, 검사 C가 같은 문장에서 YMD 초과를
+  잡았다(발화 목록 57번). 나머지 9개 Job은 그 추가가 없다. **둘을 함께 봐야
+  진짜가 드러난다**는 설계 가정이 실물로 확인됐다.
+
+  판정 결과는 `docs/audit-reports/sweeps/2026-08-26-step-sweep.md`의
+  「판정」 칸에 채웠다 — **59건 판정 · 50건 미판정.** 미판정 잔여는 중복
+  앵커가 없는 발화(검사 B 16 · 검사 C 6)와 소수 부류들이다.
+
+  근거: 위 보고서 · `MechanicalValidator.cs:6110` `ResolveOrdinal` ·
+  원본 DDL(`output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/raw/metadata.json`
+  55·452·525행) · 이행 SQL(`POQSettleProc14/S07`, `POQSettleProc17/S07`,
+  `POQSettlePrco20/S06`, `POQSettleProc1/S04`, `POQSettleBatch1/S10`) 직접 대조.
+
   **(5-2-3) 최종 리뷰가 남긴 다음 회차 항목 (2026-08-26, 전부 오늘 실측
   영향 0 — 도달 불가이거나 테스트 공백이다).** 적어 두는 이유는 (5-2-1)의
   교훈 때문이다 — 조용한 결손은 도달 가능해지는 날 아무도 못 본다.

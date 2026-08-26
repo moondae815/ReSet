@@ -108,114 +108,114 @@
 
 | # | 검사 | 조건 | Job | 단계 | 문장 | 항목 | 판정 |
 | ---: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | B | A | POQSettleBatch1 | S07 | UPDATE 13 | YMD, PGNAME |  |
-| 2 | B | B | POQSettleBatch1 | S07 | UPDATE 13 | YMD, PGNAME |  |
-| 3 | C | B | POQSettleBatch1 | S09 | UPDATE 2 | USESTATE |  |
-| 4 | C | B | POQSettleBatch1 | S10 | UPDATE 2 | UseState |  |
+| 1 | B | A | POQSettleBatch1 | S07 | UPDATE 13 | YMD, PGNAME | 진짜 결함(앞 회차 실물 확인) |
+| 2 | B | B | POQSettleBatch1 | S07 | UPDATE 13 | YMD, PGNAME | 진짜 결함(앞 회차 실물 확인) |
+| 3 | C | B | POQSettleBatch1 | S09 | UPDATE 2 | USESTATE | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 4 | C | B | POQSettleBatch1 | S10 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
 | 5 | B | B | POQSettleBatch1 | S11 | UPDATE 9 | YMD, UseState |  |
-| 6 | B | B | POQSettlePrco20 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 6 | B | B | POQSettlePrco20 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 7 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | MALLID |  |
 | 8 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | PGNAME, MALLID |  |
 | 9 | B | B | POQSettlePrco20 | S06 | UPDATE 13 | YMD, PGNAME |  |
 | 10 | B | B | POQSettlePrco20 | S06 | UPDATE 15 | MobileCo |  |
-| 11 | B | B | POQSettlePrco20 | S06 | UPDATE 17 | YMD, PGName |  |
-| 12 | B | B | POQSettlePrco20 | S06 | UPDATE 18 | PLTID |  |
+| 11 | B | B | POQSettlePrco20 | S06 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 12 | B | B | POQSettlePrco20 | S06 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 13 | C | B | POQSettlePrco20 | S06 | UPDATE 12 | PGName |  |
 | 14 | C | B | POQSettlePrco20 | S07 | UPDATE 7 | UseState |  |
-| 15 | C | B | POQSettlePrco20 | S08 | UPDATE 4 | UseState |  |
-| 16 | C | B | POQSettlePrco20 | S09 | UPDATE 2 | UseState |  |
-| 17 | B | B | POQSettleProc1 | S04 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 15 | C | B | POQSettlePrco20 | S08 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 16 | C | B | POQSettlePrco20 | S09 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 17 | B | B | POQSettleProc1 | S04 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 18 | B | B | POQSettleProc1 | S04 | UPDATE 13 | PLTID, YMD, PGNAME |  |
-| 19 | B | B | POQSettleProc1 | S04 | UPDATE 17 | YMD, PGName |  |
-| 20 | B | B | POQSettleProc1 | S04 | UPDATE 18 | PLTID |  |
+| 19 | B | B | POQSettleProc1 | S04 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 20 | B | B | POQSettleProc1 | S04 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 21 | B | B | POQSettleProc1 | S05 | UPDATE 7 | PLTID |  |
 | 22 | B | B | POQSettleProc1 | S11 | DELETE 4 | OUTSTATE |  |
-| 23 | B | B | POQSettleProc11 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 23 | B | B | POQSettleProc11 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 24 | B | B | POQSettleProc11 | S06 | UPDATE 10 | MALLID |  |
 | 25 | B | B | POQSettleProc11 | S06 | UPDATE 10 | PGNAME, MALLID |  |
 | 26 | B | B | POQSettleProc11 | S06 | UPDATE 13 | ID |  |
-| 27 | B | B | POQSettleProc11 | S06 | UPDATE 17 | YMD, PGName |  |
+| 27 | B | B | POQSettleProc11 | S06 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
 | 28 | C | B | POQSettleProc11 | S06 | UPDATE 13 | UseState, AYMD |  |
 | 29 | C | B | POQSettleProc11 | S06 | UPDATE 18 | YMD, OutState |  |
 | 30 | C | B | POQSettleProc11 | S07 | UPDATE 7 | UseState, CommissionCancelFlag |  |
-| 31 | C | B | POQSettleProc11 | S08 | UPDATE 4 | UseState |  |
+| 31 | C | B | POQSettleProc11 | S08 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
 | 32 | B | B | POQSettleProc11 | S09 | UPDATE 2 | ExtraType |  |
-| 33 | C | B | POQSettleProc11 | S09 | UPDATE 2 | UseState |  |
-| 34 | B | B | POQSettleProc12 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 33 | C | B | POQSettleProc11 | S09 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 34 | B | B | POQSettleProc12 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 35 | B | B | POQSettleProc12 | S07 | UPDATE 13 | PLTID, YMD, PGNAME |  |
-| 36 | B | B | POQSettleProc12 | S07 | UPDATE 17 | YMD, PGName |  |
-| 37 | B | B | POQSettleProc12 | S07 | UPDATE 18 | PLTID |  |
+| 36 | B | B | POQSettleProc12 | S07 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 37 | B | B | POQSettleProc12 | S07 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 38 | C | B | POQSettleProc12 | S07 | UPDATE 1 | ExtraSettleFlag |  |
 | 39 | C | B | POQSettleProc12 | S07 | UPDATE 12 | PGName |  |
 | 40 | B | B | POQSettleProc12 | S08 | UPDATE 7 | PLTID |  |
 | 41 | B | B | POQSettleProc12 | S11 | UPDATE 2 | PGName, ExtraType |  |
-| 42 | C | B | POQSettleProc12 | S11 | UPDATE 2 | UseState |  |
-| 43 | B | B | POQSettleProc13 | S07 | UPDATE 2 | YMD, DiscountFlag |  |
+| 42 | C | B | POQSettleProc12 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 43 | B | B | POQSettleProc13 | S07 | UPDATE 2 | YMD, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 44 | B | B | POQSettleProc13 | S08 | UPDATE 7 | PLTID |  |
-| 45 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag |  |
-| 46 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID |  |
-| 47 | C | B | POQSettleProc13 | S10 | UPDATE 4 | UseState |  |
-| 48 | C | B | POQSettleProc13 | S11 | UPDATE 2 | UseState |  |
-| 49 | B | B | POQSettleProc14 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 45 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag | 진짜 결함(앞 회차 실물 확인) |
+| 46 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID | 진짜 결함(앞 회차 실물 확인) |
+| 47 | C | B | POQSettleProc13 | S10 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 48 | C | B | POQSettleProc13 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 49 | B | B | POQSettleProc14 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 50 | B | B | POQSettleProc14 | S07 | UPDATE 10 | MALLID |  |
 | 51 | B | B | POQSettleProc14 | S07 | UPDATE 10 | PGNAME, MALLID |  |
 | 52 | B | B | POQSettleProc14 | S07 | UPDATE 13 | YMD, PGNAME |  |
-| 53 | B | B | POQSettleProc14 | S07 | UPDATE 17 | YMD, PGName |  |
-| 54 | B | B | POQSettleProc14 | S07 | UPDATE 18 | PLTID |  |
+| 53 | B | B | POQSettleProc14 | S07 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 54 | B | B | POQSettleProc14 | S07 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 55 | C | B | POQSettleProc14 | S07 | UPDATE 1 | ExtraSettleFlag |  |
 | 56 | C | B | POQSettleProc14 | S07 | UPDATE 12 | PGName |  |
-| 57 | C | B | POQSettleProc14 | S07 | UPDATE 18 | YMD |  |
+| 57 | C | B | POQSettleProc14 | S07 | UPDATE 18 | YMD | 진짜 후보 — 원본에 없는 최상위 YMD 추가(범위 축소) |
 | 58 | B | B | POQSettleProc14 | S08 | UPDATE 7 | PLTID |  |
-| 59 | C | B | POQSettleProc14 | S10 | UPDATE 4 | UseState |  |
-| 60 | C | B | POQSettleProc14 | S11 | UPDATE 2 | UseState |  |
-| 61 | B | B | POQSettleProc15 | S07 | UPDATE 2 | YMD, DiscountFlag |  |
-| 62 | B | B | POQSettleProc15 | S07 | UPDATE 18 | PLTID |  |
-| 63 | C | B | POQSettleProc15 | S10 | UPDATE 4 | UseState |  |
-| 64 | C | B | POQSettleProc15 | S11 | UPDATE 2 | UseState |  |
-| 65 | B | B | POQSettleProc16 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 59 | C | B | POQSettleProc14 | S10 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 60 | C | B | POQSettleProc14 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 61 | B | B | POQSettleProc15 | S07 | UPDATE 2 | YMD, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
+| 62 | B | B | POQSettleProc15 | S07 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
+| 63 | C | B | POQSettleProc15 | S10 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 64 | C | B | POQSettleProc15 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 65 | B | B | POQSettleProc16 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 66 | B | B | POQSettleProc16 | S07 | UPDATE 13 | PLTID, YMD, PGNAME |  |
-| 67 | B | B | POQSettleProc16 | S07 | UPDATE 17 | YMD, PGName |  |
-| 68 | B | B | POQSettleProc16 | S07 | UPDATE 18 | PLTID |  |
+| 67 | B | B | POQSettleProc16 | S07 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 68 | B | B | POQSettleProc16 | S07 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 69 | C | B | POQSettleProc16 | S07 | UPDATE 12 | PGName |  |
 | 70 | B | B | POQSettleProc16 | S08 | UPDATE 7 | PLTID |  |
 | 71 | C | B | POQSettleProc16 | S08 | UPDATE 7 | CommissionCancelFlag |  |
 | 72 | C | B | POQSettleProc16 | S10 | UPDATE 4 | UseState |  |
-| 73 | C | B | POQSettleProc16 | S11 | UPDATE 2 | UseState |  |
-| 74 | B | B | POQSettleProc17 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
-| 75 | B | B | POQSettleProc17 | S07 | UPDATE 10 | MALLID |  |
-| 76 | B | B | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID |  |
+| 73 | C | B | POQSettleProc16 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 74 | B | B | POQSettleProc17 | S07 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
+| 75 | B | B | POQSettleProc17 | S07 | UPDATE 10 | MALLID | 진짜 결함(앞 회차 실물 확인) |
+| 76 | B | B | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID | 진짜 결함(앞 회차 실물 확인) |
 | 77 | B | B | POQSettleProc17 | S07 | UPDATE 13 | ID |  |
-| 78 | B | B | POQSettleProc17 | S07 | UPDATE 17 | YMD, PGName |  |
-| 79 | B | B | POQSettleProc17 | S07 | UPDATE 18 | PLTID |  |
+| 78 | B | B | POQSettleProc17 | S07 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 79 | B | B | POQSettleProc17 | S07 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 80 | C | B | POQSettleProc17 | S07 | UPDATE 12 | PGName |  |
 | 81 | B | B | POQSettleProc17 | S08 | UPDATE 7 | PLTID |  |
 | 82 | C | B | POQSettleProc17 | S08 | UPDATE 7 | UseState |  |
-| 83 | C | B | POQSettleProc17 | S10 | UPDATE 4 | UseState |  |
-| 84 | C | B | POQSettleProc17 | S11 | UPDATE 2 | UseState |  |
-| 85 | C | B | POQSettleProc18 | S10 | UPDATE 4 | UseState |  |
-| 86 | C | B | POQSettleProc18 | S11 | UPDATE 2 | UseState |  |
-| 87 | C | B | POQSettleProc19 | S08 | UPDATE 4 | UseState |  |
-| 88 | C | B | POQSettleProc19 | S09 | UPDATE 2 | UseState |  |
-| 89 | B | B | POQSettleProc19 | S10 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
+| 83 | C | B | POQSettleProc17 | S10 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 84 | C | B | POQSettleProc17 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 85 | C | B | POQSettleProc18 | S10 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 86 | C | B | POQSettleProc18 | S11 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 87 | C | B | POQSettleProc19 | S08 | UPDATE 4 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 88 | C | B | POQSettleProc19 | S09 | UPDATE 2 | UseState | 거짓 귀속 — 같은 코드 라벨이 여러 문장에 붙어 오환산 |
+| 89 | B | B | POQSettleProc19 | S10 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
 | 90 | B | B | POQSettleProc19 | S10 | UPDATE 10 | MALLID |  |
 | 91 | B | B | POQSettleProc19 | S10 | UPDATE 10 | PGNAME, MALLID |  |
 | 92 | B | B | POQSettleProc19 | S10 | UPDATE 13 | YMD, PGNAME |  |
-| 93 | B | B | POQSettleProc19 | S10 | UPDATE 17 | YMD, PGName |  |
-| 94 | B | B | POQSettleProc19 | S10 | UPDATE 18 | PLTID |  |
+| 93 | B | B | POQSettleProc19 | S10 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 94 | B | B | POQSettleProc19 | S10 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 95 | C | B | POQSettleProc19 | S10 | UPDATE 12 | PGName |  |
 | 96 | B | B | POQSettleProc19 | S11 | UPDATE 7 | PLTID |  |
 | 97 | B | B | POQSettleProc19 | S11 | UPDATE 10 | CYMD, AYMD, RefundFlag |  |
 | 98 | C | B | POQSettleProc19 | S11 | UPDATE 11 | RefundFlag, CYMD, AYMD |  |
-| 99 | B | B | POQSettleProc3 | S04 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
-| 100 | B | B | POQSettleProc3 | S04 | UPDATE 17 | YMD, PGName |  |
-| 101 | B | B | POQSettleProc3 | S04 | UPDATE 18 | PLTID |  |
+| 99 | B | B | POQSettleProc3 | S04 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
+| 100 | B | B | POQSettleProc3 | S04 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 101 | B | B | POQSettleProc3 | S04 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 102 | C | B | POQSettleProc3 | S04 | UPDATE 1 | ExtraSettleFlag |  |
 | 103 | B | B | POQSettleProc3 | S05 | UPDATE 7 | PLTID |  |
 | 104 | B | B | POQSettleProc8 | S10 | UPDATE 5 | ProcYMD, YMD, PGNAME, CompanySalesType, TxAmt, CLVTType, ExtraSettleFlag |  |
 | 105 | B | B | POQSettleProc8 | S12 | DELETE 4 | OUTSTATE |  |
-| 106 | B | B | POQSettleProc9 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag |  |
-| 107 | B | B | POQSettleProc9 | S06 | UPDATE 17 | YMD, PGName |  |
-| 108 | B | B | POQSettleProc9 | S06 | UPDATE 18 | PLTID |  |
+| 106 | B | B | POQSettleProc9 | S06 | UPDATE 2 | YMD, PGName, DiscountFlag | 거짓양성 — 계산용 서브쿼리 관용구(술어가 파생 테이블로, 최상위는 PLTID+ID 행 동일성 조인) |
+| 107 | B | B | POQSettleProc9 | S06 | UPDATE 17 | YMD, PGName | 거짓양성 — CTE 관용구(술어가 CTE 안으로) |
+| 108 | B | B | POQSettleProc9 | S06 | UPDATE 18 | PLTID | 거짓양성 — IN→EXISTS 재작성으로 PLTID가 상관 하위질의로 이동 |
 | 109 | B | B | POQSettleProc9 | S13 | DELETE 4 | OUTSTATE |  |
 
 ## 캐시 17 선결 지표
