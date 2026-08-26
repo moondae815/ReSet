@@ -122,5 +122,23 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("follow rule 6-2 instead", result.SystemPrompt);
         }
+
+        [Fact]
+        public async Task Plan_Rule9ShouldScopeItsRemapAndRangeBansToLegacyOriginSteps()
+        {
+            // 라운드 1은 첫 문장만 한정했다. 뒤의 "신규 발급 금지"·"연속 범위
+            // 금지" 두 문장은 여전히 무조건형이었고, 둘 다 규칙 6-2와 정면으로
+            // 맞선다 - 6-2는 레거시 없는 단계에 새 코드를 발급하고, 그 블록을
+            // 연속 범위(`-9010..-9019`)로 제시한다. 세 문장 모두 레거시 출신
+            // 단계에 한정된다는 것이 문면에 있어야 한다.
+            var result = await CaptureAsync();
+
+            Assert.Contains(
+                "A step that replaces a legacy procedure MUST strictly reuse the EXACT original error codes",
+                result.SystemPrompt);
+            Assert.Contains(
+                "is the one place in this document where a continuous range is correct",
+                result.SystemPrompt);
+        }
     }
 }
