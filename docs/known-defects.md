@@ -1612,12 +1612,216 @@
   `Ordinal`만으로 묶고 있었다. 서수는 문장 종류별로 1부터 다시 시작하므로 명세서
   DML 범위 표의 `INSERT 4`와 `DELETE 4`는 서로 다른 행인데, 한 그룹이 되어 "한
   서수를 둘이 주장한다"로 오인됐다. 배제 필터가 INSERT를 이 계산 **앞에서**
-  걸러내는 동안에는 드러날 수 없던 결함이다. 실측: 재편입 스윕에서 통제군 49건 →
-  54건으로 순증 +5로 보였으나 내용 대조하면 새로 7건·사라진 2건이었고, 사라진 둘
-  (`POQSettleProc1/S11`·`POQSettleProc9/S13`의 `DELETE 4 · OUTSTATE`)이 정확히 이
-  충돌이었다 - 레거시 `dbo.UP_Util_Settle_Summary`는 DELETE 1~4와 INSERT 1~4를 둘
-  다 갖고 코드 -1~-4/-5~-8로 가른다. 가드의 묶음 키와 되거르는 키를 둘 다
-  `(Kind, Ordinal)`로 고쳤다.
+  걸러내는 동안에는 드러날 수 없던 결함이다. 가드를 고치기 **전**(`87db24d`)의
+  실측은 통제군 49건 → 재편입 54건으로 순증 +5로 보였으나 내용 대조하면 새로
+  7건·사라진 2건이었고, 사라진 둘(`POQSettleProc1/S11`·`POQSettleProc9/S13`의
+  `DELETE 4 · OUTSTATE`)이 정확히 이 충돌이었다 - 레거시
+  `dbo.UP_Util_Settle_Summary`는 DELETE 1~4와 INSERT 1~4를 둘 다 갖고 코드
+  -1~-4/-5~-8로 가른다. 가드의 묶음 키와 되거르는 키를 둘 다 `(Kind, Ordinal)`로
+  고쳤다.
+
+  **가드 수정 후 값 (2026-08-26, 태스크 4 재측정 — 위 49→54는 수정 전 값이므로
+  인용하지 말 것).** 같은 방식으로 다시 재면 통제군 49건 → 재편입 **86건**,
+  내용 대조로 **새로 37건 · 사라진 0건**이다(검사 B 31→61, 검사 C 18→25). 즉
+  가드 수정이 노렸던 것이 그대로 확인됐다 — **`DELETE 4 · OUTSTATE` 2건이
+  복구됐고**(`POQSettleProc1/S11`·`POQSettleProc9/S13`, 여기에 통제·재편입
+  양쪽에 이미 있던 `POQSettleProc8/S12`까지 세 건이 모두 재편입 보고서에
+  그대로 살아 있다), 거짓 침묵으로 사라지는 발화가 이제 하나도 없다. 검사
+  A(20)·D(18)·E(59)·미분류(1138)와 「캐시 17 선결 지표」 절은 통제군과 문자
+  단위로 같다 — 모수가 줄어 발화가 준 것이 아니다. 통제군은 `sweep-c`가 아니라
+  `ORIGINAL_BASE`(`8002668`)에 붙인 분리 워크트리에서 같은 코퍼스로 직접 뽑았다
+  (`sweep-c`는 `fcf26a6` 산이라 그 뒤 병합된 `c09985c`의 검사 둘 때문에 미분류가
+  977 → 1138로 늘어 +161의 거짓 경보가 난다).
+
+  **(5-3-3) 증가분 37건 판정 — 진짜 결함 1 · 구조적 오탐 33 · 판정 불가 3
+  (2026-08-26, 태스크 4).**
+  37건은 (검사, Job, 단계, 서수, 항목) 좌표로는 15가지, 원인으로 접으면 여섯
+  부류다. 각 부류마다 `output/Jobs/<Job>/agent/steps/<단계>.md`의 그 INSERT
+  문장과 `output/Procedures/<SP>/docs/Spec.md`의 DML 범위 표·집합 술어 표를
+  열었고, 부류 판정은 `raw/metadata.json`의 `DdlText`(원본 DDL)까지 대조해
+  확정했다. 부류로 접은 것은 인스턴스를 최소 둘 열어 구조가 같음을 확인한
+  뒤에만 했다.
+
+  | # | 부류 | 건수 | 판정 |
+  |---:|---|---:|---|
+  | 1 | CTE 조인 키가 하위 범위에 있다 | 15 | 구조적 오탐 |
+  | 2 | CTE 투영 별칭이 컬럼 이름을 가린다 | 3 | 구조적 오탐 |
+  | 3 | 스테이징 분해 — 술어가 앵커 없는 앞 문장에 있다 | 9 | 구조적 오탐 |
+  | 4 | 스테이징 분해 — 집계가 `EXEC`로 위임됐다 | 3 | 판정 불가 |
+  | 5 | 스테이징 실행 식별자를 검사 C가 "더한 술어"로 본다 | 6 | 구조적 오탐 |
+  | 6 | 원본에 없는 필터를 단계가 새로 걸었다 | 1 | **진짜 결함** |
+
+  **부류 1 (15건) — `SubordinatePredicateCollector`가 하위 `ON`을 안 모은다.**
+  레거시 `dbo.UP_Util_PG_Client_CMRate_Ins`를 이식한 여덟 Job이 같은 관용구를
+  쓴다 — 원본의 콤마 조인을 CTE의 `INNER JOIN … ON`으로 옮기고 `INSERT`의
+  최상위 `FROM`은 그 CTE 하나만 남긴다(이 한 줄은 축자 인용이 아니라 모양
+  요약이다. 축자 인용은 바로 아래 실물 항목에 있다). 명세서 DML 범위 표의 술어 칸은
+  헤더가 못 박듯 「조인 결합 포함」이라 `CLIENTID`가 그 칸에 들어 있는데,
+  `CheckAnchoredStatementFacts`가 이전(relocation)을 걸러낼 때 쓰는
+  `StepSqlStatement.SubordinatePredicateColumns`는
+  `SubordinatePredicateCollector.Visit(QuerySpecification)`이 `node.WhereClause`
+  **하나만** 읽어 만든다 — 하위 범위의 `FROM`/`ON`은 보지 않는다. 그래서 CTE
+  안 `WHERE`에 있는 `USESTATE`·`ContractCancelYMD`는 이전으로 인정돼 침묵하고,
+  같은 CTE 안 `ON`에만 있는 `CLIENTID`(및 `PGName`·`MallID`)만 "없다"로 발화한다.
+  최상위 대조가 술어와 조인을 합집합으로 보는 것(`predicatePresent =
+  PredicateColumns ∪ JoinColumns`)과 하위 대조가 `WHERE`만 보는 것 사이의
+  비대칭이 원인이다. 실물 둘: `POQSettleProc11/S03`(`ClientRateSource`·
+  `ClientExtraRateSource`)과 `POQSettleProc12/S04`(`ClientRateSource`·
+  `ClientExtraSource`)를 열어 두 CTE의 `ON`/`WHERE` 배치가 같음을 확인했고,
+  원본 DDL 96~98·112~114행이 `A.CLIENTID = B.CLIENTID`를 최상위 `WHERE`의
+  콤마 조인 등식으로 갖는 것도 확인했다 — 조인 자체는 보존돼 있다.
+  나머지 여섯(`POQSettlePrco20/S03`·`POQSettleProc13/S04`·`POQSettleProc14/S04`·
+  `POQSettleProc18/S05`·`POQSettleProc19/S05`·`POQSettleProc8/S04`)은
+  `StepSqlStatementReader.Read`로 직접 읽어 `HasOpaqueJoinSource=true` ·
+  `PredicateColumns=[]` · `JoinColumns=[]` ·
+  `SubordinatePredicateColumns=[USESTATE…ContractCancelYMD]`가 모두 같음을 확인했다.
+
+  **부류 2 (3건) — 이름 기반 대조가 투영 별칭을 못 뚫는다.**
+  `POQSettlePrco20/S03`와 `POQSettleProc17/S04`는 CTE를 둘로 쌓아 바깥 CTE가
+  `A.USESTATE AS ContractUseState`, `B.ContractCancelYMD AS CMRateCancelYMD`
+  (Proc17은 `RateUseState`·`RateCancelYMD`)처럼 **이름을 바꿔** 투영하고 안쪽
+  CTE가 그 별칭으로 거른다. 필터는 그대로 있으나 수집되는 컬럼 이름이
+  `ContractUseState`라 명세서의 `UseState`와 글자가 달라 이전으로 인정되지
+  않는다. 그래서 부류 1의 `ClientID·PGName·MallID`에 `UseState`·
+  `ContractCancelYMD`까지 얹혀 다섯 컬럼이 통째로 발화한다
+  (`POQSettleProc17/S04`의 `INSERT 2`는 `ContractCancelYMD`만 별칭이 원래 이름과
+  겹쳐 `CLIENTID, USESTATE` 둘만 난다). 검사는 컬럼 **이름**으로만 대조하므로
+  별칭 사슬을 따라가려면 재료 쪽(`StepSqlStatementReader`)이 바뀌어야 한다.
+
+  **부류 3 (9건) — 코드 앵커가 분해된 두 문장 중 뒤쪽에만 붙는다.**
+  이행이 원본 한 문장을 「원천 → 스테이징 적재」와 「스테이징 → 대상 게시」
+  둘로 쪼개는 관용구다. 원본의 업무 술어는 앞 문장에 그대로 살아 있는데
+  코드 앵커(`SET @v_currentStepId = -N`)는 뒤 문장에만 유효하게 붙어, 검사가
+  술어가 없는 게시 문장을 명세서 행과 맞댄다.
+  - `POQSettleProc2/S13` 4건(`INSERT 1~4`) — 원본
+    `dbo.UP_Util_Settle_Summary`의 `WHERE YMD = @pi_strYMD` / `AND USESTATE = 2`
+    / `AND INSTATE = 1` / `AND OUTSTATE IN (2,9)`(DDL 91·126~127·163~164·
+    203~204행)이 단계의 After-Image 집계문
+    에 문자 그대로 보존돼 있다 — 예: `INSERT INTO batch_shadow.S13_TSettleByTX_After`
+    … `FROM SETTLE_POQ_DB.dbo.TSettleMst AS M` · `WHERE M.YMD = @pi_strYMD`이고,
+    나머지 셋은 여기에 `AND M.USESTATE = 2` · `AND M.INSTATE = 1` ·
+    `AND M.OUTSTATE IN (2, 9)`가 각각 붙는다. 게시문은
+    `FROM batch_shadow.S13_TSettleByTX_After` · `WHERE ExecutionId = @pi_executionId`
+    (대상별로 테이블 이름만 다름)뿐이다.
+  - `POQSettleProc8/S06` 2건(`INSERT 1`의 술어 칸과 조인 키 칸이 각각 한 번씩) —
+    원본 `dbo.UP_UTIL_SETTLE_CANCEL_INS`의 네 술어와 조인 키 `PLTID`가 단계의
+    스테이징 적재문(`INSERT INTO SETTLE_POQ_DB.stage.S06CancelSettle` … `FROM PaymentDB.dbo.TTxMst AS A`
+    · `INNER JOIN SETTLE_POQ_DB.dbo.TSettleMst AS B` · `ON B.PLTID = A.PLTID`
+    · `WHERE A.YMDCANCEL = @pi_strYMD` · `AND B.USESTATE = 0`
+    · `AND ISNULL(B.CompanySalesType, 4) NOT IN (0, 1, 2, 3)`)에 전부 있다. 그 문장의 앵커는 `SET @v_currentStepId = NULL;`이라 서수로 환산되지
+    않고, `-1`은 게시문(`FROM SETTLE_POQ_DB.stage.S06CancelSettle` · `WHERE RunId = @pi_RunId`)이 쥔다.
+  - `POQSettleProc1/S02`·`POQSettleProc8/S05` 각 1건(조인 키 `PGName`) — 원본
+    `dbo.UP_UTIL_SETTLE_INS`의 최상위 조인은 `) X` + `LEFT OUTER JOIN TPGProperty Y WITH(NOLOCK) ON X.PGName = Y.PGName`
+    (DDL 300~301행) 하나뿐이고, 두 단계 모두 그 조인을
+    Candidate/Stage 적재 쪽에 보존한다(S02 `FROM SettlementUnion AS X` · `LEFT JOIN SETTLE_POQ_DB.dbo.TPGProperty AS Y`
+    · `ON Y.PGName = X.PGName`, S05 `FROM RawUnion AS R`
+    · `LEFT JOIN SETTLE_POQ_DB.dbo.TPGProperty AS P` · `ON P.PGName = R.PGName`).
+  - `POQSettleProc9/S03` 1건(`INSERT 1`의 `USESTATE`) — 여기서는 앵커가 **소실**
+    된다. `ReadCodeAnchor`의 구간은 「직전에 수집된 DML 문장의 끝」부터라서, 펜스
+    첫 DML인 `INSERT INTO batch_work.TPGSettleRate_Run_S03 … WHERE USESTATE = 0`
+    앞에는 사전 검증 블록의 `SET @v_currentStepId = -9;`·`= -1;`·`= -3;`·`= -5;`·
+    `= -7;`·`= -9;` 여섯 줄이 통째로 들어와 후보가 여럿이 되고, 「구간에 정확히 하나」 규칙에 걸려 `null`이 된다.
+    그 결과 서수 1을 게시문 혼자 주장해 재사용 가드에 걸리지 않고 대조된다 —
+    서수 2~5는 적재문·게시문이 둘 다 앵커를 얻어 모호성으로 침묵한다. 같은
+    단계 안에서 서수 하나만 발화하는 이 비대칭 자체가 이 원인의 지문이다.
+
+  **부류 4 (3건) — 판정 불가.** `POQSettleProc9/S13`의 `INSERT 2·3·4`. 이 단계도
+  부류 3과 같은 스테이징 분해인데, 집계 절반이
+  `EXEC batch.BuildS13PartialCancelSummary` / `BuildS13InSummary` /
+  `BuildS13OutSummary`로 위임돼 있고 **그 프로시저 본문이 코퍼스 어디에도 없다**
+  (`output/` 전체에서 이 이름은 호출부와 로그에만 나온다). 단계는 주석으로
+  "원본 필터 `YMD = @pi_strYMD AND USESTATE = 2`를 모두 유지한다"고 적지만
+  주석은 실행되지 않는다. 필터가 실제로 보존됐는지는 위임된 본문 없이는 가를 수
+  없으므로 판정 불가로 남긴다. 같은 단계의 `INSERT 1`은 집계가 인라인이라
+  (`INSERT INTO batch_work.TSettleByTX_Run_S13 … WHERE YMD = @pi_strYMD`)
+  적재문·게시문이 둘 다 앵커를 얻어 모호성으로 침묵한다 — 이 대비가 셋을
+  결함으로 단정하지 못하게 하는 근거이기도 하다.
+
+  **부류 5 (6건) — 검사 C가 스테이징 실행 식별자를 "더한 술어"로 본다.**
+  `POQSettleProc2/S13`의 `ExecutionId` 4건과 `POQSettleProc1/S02`의 `YMD`,
+  `POQSettleProc8/S05`의 `ProcessingYMD`. 셋 다 부류 3의 게시문이 **자기 실행이
+  적재한 스테이징 행만 되읽기 위해** 거는 술어다. **왜 이 부류는 검사 C가
+  발화하면 안 되는가**: `CheckAnchoredStatementExtras`는 이미 이 부류를 면제할
+  뜻으로 `BatchControlContract.Tables`의 컬럼 이름을 `allowed`로 깔아 두었다.
+  그런데 면제가 **역할이 아니라 이름**으로 걸려 있다 — 계약이 아는 실행
+  식별자는 `RunId` 하나뿐이고 `ExecutionId`는 계약 어디에도 없다. 증거는 같은
+  코퍼스 안에 있다: `POQSettleProc9/S13`은 `POQSettleProc2/S13`과 **구조가 같은**
+  스테이징 분해인데 식별자를 `RunId`로 부르기 때문에 검사 C가 한 건도 발화하지
+  않고, `POQSettleProc8/S06`의 게시문(`WHERE RunId = @pi_RunId`)도 같은 이유로
+  조용하다. 즉 발화 여부를 가르는 것은 술어의 업무적 성질이 아니라 이행자가 고른
+  이름이다. 업무적으로는 셋 다 행 집합을 좁히지 않는다 — `POQSettleProc1/S02`의
+  `YMD`는 특히 명백해서, 원본이 대상 컬럼 `YMD`에 항상 리터럴 `@pi_strYMD`를
+  넣으므로 — `UNION ALL` 세 갈래가 모두 `SELECT @pi_strYMD ... AS YMD`로 시작한다
+  (DDL 109·167·228행) — Candidate 테이블의 모든 행이 그 조건을 만족한다. 다음 회차의 재료: 면제 기준을 이름 목록이 아니라
+  **원천 테이블의 역할**로 옮겨야 한다(게시문의 `FROM`이 원본 원천이 아니라
+  이 단계가 만든 스테이징·섀도 테이블이면 그 테이블의 실행 스코프 술어는
+  더해진 업무 조건이 아니다). 이름 목록만 늘리면 다음 이행자가 고를 네 번째
+  이름에서 같은 오탐이 다시 난다. 곁다리로, 이름 불일치 자체는 실재하는 결함이나
+  검사 C의 관할이 아니다 — 배치 제어 어휘 검사
+  (`CheckBatchControlVocabulary`, 미분류로 집계되는 검사)가 맡을 자리다.
+
+  **(5-3-4) 축 B 결함 — `POQSettleProc17/S06`이 원본에 없는 수수료율 속성
+  필터 넷을 새로 건다 (2026-08-26, 태스크 4 부류 6). 🔴**
+
+  - **Job·단계**: `POQSettleProc17` / `S06`
+    (`output/Jobs/POQSettleProc17/agent/steps/S06.md`)
+  - **레거시 SP·서수**: `dbo.UP_UTIL_SETTLE_CANCEL_INS`의 `INSERT 1`
+    (단계 앵커 `SET @v_currentStepId = -1;`)
+  - **명세서 행**: `output/Procedures/dbo.UP_UTIL_SETTLE_CANCEL_INS/docs/Spec.md`
+    「DML 범위 (기계 확정)」의 `INSERT 1` 행 — 술어 칸은
+    `PLTID, YMDCANCEL, USESTATE, CompanySalesType`뿐이다. 같은 문서의
+    「집합 술어 (기계 확정)」표도 이 문장에 대해 최상위 술어 넷
+    (`A.PLTID = B.PLTID` · `A.YMDCANCEL = @pi_strYMD` · `B.USESTATE = 0` ·
+    `ISNULL(B.CompanySalesType,4) NOT IN (0,1,2,3)`)만 싣고 하위 범위 행은
+    하나도 없다.
+  - **원본 실물**: `raw/metadata.json`의 `DdlText`를 직접 읽었다. 원본 `INSERT`의
+    `WHERE`는 위 넷이 전부이고 `CLVTTYPE`·`CLCOMMTYPE`·`PGVTTYPE`·`PGCOMMTYPE`에
+    대한 조건은 없다 — 이 컬럼들은 `SELECT` 목록에서 대상 컬럼으로 **복제만**
+    된다 — DDL 40~41행이 `,B.PAYERNAME, B.SERVICENAME, B.PRODUCTNAME, B.TXAMT, B.CLCOMMTYPE`
+    / `,B.CLVTTYPE, B.CLCOMM, B.CLVT, B.CLETC, B.PGCOMMTYPE`이다. 헤더 아래 두 줄
+    `-- INCVTAX => 부가가치세(0:미포함, 1:포함)` ·
+    `-- COMMISSIONTYPE => 정산율(0:정율, 1:정액)`은 값의 뜻을 적은 범례 주석이지
+    필터가 아니다.
+  - **단계 실물**: 단계는 그 범례를 조건으로 바꿔 놓았다. `CROSS APPLY`로
+    네 컬럼에 별칭을 붙인 뒤
+
+    ```sql
+            CROSS APPLY
+            (
+                SELECT
+                    B.CLVTTYPE   AS CLIENT_INCVTAX,
+                    B.CLCOMMTYPE AS CLIENT_COMMISSIONTYPE,
+                    B.PGVTTYPE   AS PG_INCVTAX,
+                    B.PGCOMMTYPE AS PG_COMMISSIONTYPE
+            ) AS RateType
+            WHERE A.YMDCancel = @pi_strYMD
+              AND B.USESTATE = 0
+              AND ISNULL(B.CompanySalesType, 4) NOT IN (0, 1, 2, 3)
+
+              -- 고객사 수수료율 속성 검증 분기
+              AND RateType.CLIENT_INCVTAX IN (0, 1)
+              AND RateType.CLIENT_COMMISSIONTYPE IN (0, 1)
+
+              -- PG 수수료율 속성 검증 분기
+              AND RateType.PG_INCVTAX IN (0, 1)
+              AND RateType.PG_COMMISSIONTYPE IN (0, 1);
+    ```
+
+    주석이 "검증 분기"라고 부르지만 원본에는 대응하는 분기가 없다.
+  - **영향**: `CLVTTYPE`·`CLCOMMTYPE`·`PGVTTYPE`·`PGCOMMTYPE` 중 하나라도 0·1이
+    아닌 취소 거래는 이행본에서 `TSettleMst`에 **취소 정산 행이 만들어지지
+    않는다**. 원본은 그 행도 넣는다. 조용한 누락이라 대상 테이블만 봐서는 드러나지
+    않는다. 실제 노출량은 운영 데이터의 값 분포에 달렸고 로컬 Docker는 빈
+    스키마라 여기서는 셀 수 없다 — 건수는 미상, 방향은 확정이다.
+  - **교차 확인**: 같은 SP를 이식한 `POQSettleProc8/S06`은 네 조건이 없고 원본
+    술어 넷만 그대로 쓴다. 두 이행본을 갈라놓는 것은 명세서가 아니라 이 단계의
+    추가 조건이다.
+  - **판정 근거**: 검사 C(`CheckAnchoredStatementExtras`)의 참양성이다. 위
+    부류 5와 달리 이 술어들은 스테이징 스코프가 아니라 원본 원천
+    (`PaymentDB.dbo.TTxMst` ⋈ `TSettleMst`)에 직접 걸리며, 업무 행 집합을
+    실제로 좁힌다.
+  - **처리**: 단계 SQL에서 네 조건을 걷어내야 한다. 소스 코드가 아니라 산출물
+    결함이므로 이 회차에서는 고치지 않고 기록만 한다.
 
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
