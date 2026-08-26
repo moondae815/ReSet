@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -51,13 +52,13 @@ namespace ReSet.Core.Services
                 return new PlanStructureEnrichment(planStructureMarkdown ?? string.Empty, empty);
             }
 
+            // "재료가 없다"는 사실만으로 보강 자체를 건너뛸 수 없다 - 레거시 출신이
+            // 없는 단계는 codesByProcedure·tablesByProcedure가 통째로 비어도 예약
+            // 대역에서 코드를 발급받는다(MergeCodes). 그 발급은 이 재료에 기대지
+            // 않는다. 그래서 이 두 변수는 "정말 아무것도 못 채웠는가"를 뒤에서
+            // 판단하는 재료로만 쓰고, 여기서 곧장 반환하지 않는다.
             var hasCodes = codesByProcedure != null && codesByProcedure.Count > 0;
             var hasTables = tablesByProcedure != null && tablesByProcedure.Count > 0;
-            if (!hasCodes && !hasTables)
-            {
-                Log.Warning("명세서와 정적 분석에서 추출한 보강 재료가 없어 목차 보강을 건너뜁니다.");
-                return new PlanStructureEnrichment(planStructureMarkdown, empty);
-            }
 
             // 블록 선택은 파서가 소유한다. 여기서 따로 고르면 파일에 기록된 목차와
             // 파이프라인이 실제로 쓰는 목차가 갈라진다.
@@ -73,7 +74,8 @@ namespace ReSet.Core.Services
                 located.Value.Body,
                 codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
                 tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
-                dropped);
+                dropped,
+                out var anyStepChanged);
 
             if (rewritten == null)
             {
@@ -81,6 +83,15 @@ namespace ReSet.Core.Services
                 // 포기하는 것이 맞다 - 다른 블록을 고치면 두 목차가 갈라지고, 그 불일치는
                 // 어디에도 드러나지 않는다. 보강되지 않은 단계는 하한 검사가 "검증 불가"로
                 // 보고하므로 침묵하지도 않는다.
+                return new PlanStructureEnrichment(planStructureMarkdown, empty);
+            }
+
+            if (!hasCodes && !hasTables && !anyStepChanged)
+            {
+                // 명세서·정적 분석 재료도 없고 예약 대역 발급도 없었다 - 정말 아무것도
+                // 못 채운 것이다. 운영자가 "보강이 돌았는데 못 채운 것"과 "추출이 0건이라
+                // 시작조차 안 된 것"을 로그만 보고 구별할 수 있어야 한다.
+                Log.Warning("명세서와 정적 분석에서 추출한 보강 재료가 없어 목차 보강을 건너뜁니다.");
                 return new PlanStructureEnrichment(planStructureMarkdown, empty);
             }
 
@@ -105,8 +116,10 @@ namespace ReSet.Core.Services
             string json,
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
-            List<string> dropped)
+            List<string> dropped,
+            out bool anyStepChanged)
         {
+            anyStepChanged = false;
             try
             {
                 var root = JsonNode.Parse(json);
@@ -151,6 +164,10 @@ namespace ReSet.Core.Services
                     Log.Information("목차의 대상 테이블을 정적 분석에서 보강했습니다 - 단계 수: {Count}개", enrichedTableCount);
                 }
 
+                // 예약 대역 발급도 enrichedCodeCount에 잡힌다(MergeCodes가 그 경로도
+                // 담당하므로). 호출부가 "재료 없이도 뭔가 바뀌었는가"를 판단하는 데 쓴다.
+                anyStepChanged = enrichedCodeCount > 0 || enrichedTableCount > 0;
+
                 // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
                 return root.ToJsonString(WriteOptions) + "\n";
             }
@@ -174,10 +191,36 @@ namespace ReSet.Core.Services
             var declared = ReadStringArray(step, "ErrorCodes");
             var procedures = ReadStringArray(step, "LegacyProcedures");
 
-            // 레거시 출신이 없으면 보존할 원본 코드가 애초에 없다. 비운 채 둔다.
+            // 레거시 출신이 없으면 보존할 원본 코드가 없다. 그렇다고 비워 두면 모델이
+            // 자기 체계를 지어낸다 - 실측(POQSettleBatch1)에서 목차가 B100·B110·B160
+            // 같은 코드를 발급했고 계획서에 54회 등장했으며, 그중 하나가
+            // `DECLARE @v_currentStepId INT = B161`로 새어 컴파일되지 않는 SQL이 됐다.
+            // 예약 대역에서 결정적으로 발급한다.
             if (procedures.Count == 0)
             {
-                return null;
+                var blockStart = ControlStepErrorCodes.BlockStart(ReadScalarString(step, "Code"));
+                if (blockStart == null)
+                {
+                    return null;
+                }
+
+                // 레거시 코드가 예약 대역에 걸리면 발급하지 않는다. 조용히 겹치는 것이
+                // 지어낸 어휘보다 나쁘다 - 원본 코드가 제어 코드로 오인된다.
+                if (AnyLegacyCodeIsReserved(codesByProcedure))
+                {
+                    Log.Warning(
+                        "레거시 오류코드가 제어 단계 예약 대역과 겹쳐 예약 코드를 발급하지 않습니다 - 단계: {Code}",
+                        ReadScalarString(step, "Code"));
+                    return null;
+                }
+
+                var issued = blockStart.Value.ToString(CultureInfo.InvariantCulture);
+
+                // 합집합이 아니라 교체다. 모델이 지어낸 코드를 남기면 등장 검사가 계속
+                // 그것을 인증한다.
+                return declared.Count == 1 && declared[0] == issued
+                    ? null
+                    : new[] { issued };
             }
 
             var merged = new List<string>(declared);
@@ -321,6 +364,28 @@ namespace ReSet.Core.Services
             }
 
             return changed;
+        }
+
+        /// <summary>
+        /// 명세서에서 뽑은 레거시 코드 중 예약 대역에 걸리는 것이 있는가.
+        /// 있으면 제어 단계 발급을 포기한다 - 겹친 코드는 어느 쪽 뜻인지 알 수 없다.
+        /// </summary>
+        private static bool AnyLegacyCodeIsReserved(
+            IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure)
+        {
+            foreach (var codes in codesByProcedure.Values)
+            {
+                foreach (var code in codes)
+                {
+                    if (int.TryParse(code, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
+                        && ControlStepErrorCodes.IsReserved(value))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static string ReadScalarString(JsonObject step, string name) =>

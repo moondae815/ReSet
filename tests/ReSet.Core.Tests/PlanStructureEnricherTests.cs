@@ -87,12 +87,81 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void Enrich_ShouldLeaveStepsWithNoLegacyProcedureEmpty()
+        public void Enrich_ShouldIssueAReservedCodeInsteadOfLeavingStepsWithNoLegacyProcedureEmpty()
         {
-            // 레거시 출신이 없는 단계는 보존할 원본 코드가 애초에 없다.
+            // 레거시 출신이 없는 단계는 보존할 원본 코드가 없다 - 그렇다고 비워 두면
+            // 모델이 자기 체계를 지어낸다(실측: POQSettleBatch1의 B100·B160 등).
+            // 이제는 비우는 대신 예약 대역에서 결정적으로 발급한다. S00의 블록
+            // 시작은 -9000 - 0*10 = -9000이다.
             var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
-            Assert.Empty(Step(enriched, "S00").ErrorCodes);
+            Assert.Equal(new[] { "-9000" }, Step(enriched, "S00").ErrorCodes);
+        }
+
+        [Fact]
+        public void Enrich_ShouldIssueAReservedCodeToAStepWithNoLegacyOrigin()
+        {
+            // 실측(POQSettleBatch1): 목차가 B100·B101·B110·B120·B121·B160·B161을 스스로
+            // 발급했고 계획서에 54회 등장했다. 규약이 없으니 모델이 지어낸 것이다.
+            // 발급을 결정적으로 만들면 회차 간 값이 같아 산출물 diff도 안정된다.
+            var result = PlanStructureEnricher.Enrich(
+                Structure,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
+
+            Assert.Contains("\"-9000\"", result.Markdown);
+        }
+
+        [Fact]
+        public void Enrich_ShouldReplaceAFabricatedCodeRatherThanUnionWithIt()
+        {
+            // 합집합하면 지어낸 어휘가 살아남아 등장 검사가 계속 그것을 인증한다.
+            // S00만 바꾼다 - Structure에는 "ErrorCodes": [] 선언이 S00·S02 두 곳에
+            // 있어 무조건 전체 치환하면 레거시 출신이 있는 S02의 선언값까지 우연히
+            // 바뀌어(그 값은 이 태스크가 건드리지 않는 경로다) 이 테스트가 검증하려는
+            // "레거시 없는 단계 전용" 성질이 흐려진다.
+            var structure = Structure.Replace(
+                "\"TargetTables\": [\"dbo.BatchExecution\"],\n      \"ErrorCodes\": [],",
+                "\"TargetTables\": [\"dbo.BatchExecution\"],\n      \"ErrorCodes\": [\"B100\"],");
+
+            var result = PlanStructureEnricher.Enrich(
+                structure,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
+
+            Assert.DoesNotContain("B100", result.Markdown);
+        }
+
+        [Fact]
+        public void Enrich_ShouldNotIssueAReservedCodeToAStepThatReplacesALegacyProcedure()
+        {
+            // 레거시 출신이 있으면 보존할 원본 코드가 있다. 예약 코드를 섞으면 원본
+            // 코드와 제어 코드가 한 목록에 들어가 대조 기준이 흐려진다.
+            var result = PlanStructureEnricher.Enrich(
+                Structure,
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["UP_Util_PG_Client_CMRate_Ins"] = new[] { "-9" }
+                },
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
+
+            Assert.DoesNotContain("\"-9010\"", result.Markdown);
+        }
+
+        [Fact]
+        public void Enrich_ShouldSkipIssuingWhenALegacyCodeFallsInTheReservedBand()
+        {
+            // 다른 코퍼스가 -9010을 쓰는 SP를 가져오면 조용히 겹치는 것이 최악이다.
+            // 겹칠 여지가 보이면 발급을 포기한다 - 덜 하는 쪽이 안전하다.
+            var result = PlanStructureEnricher.Enrich(
+                Structure,
+                new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["UP_Util_PG_Client_CMRate_Ins"] = new[] { "-9010" }
+                },
+                new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
+
+            Assert.DoesNotContain("\"-9000\"", result.Markdown);
         }
 
         [Fact]
@@ -301,6 +370,29 @@ namespace ReSet.Core.Tests
             // codesByProcedure와 tablesByProcedure가 통째로 비면 원본을 그대로
             // 돌려주는데, 흔적이 없으면 "보강이 돌았는데 못 채운 것"과 "추출이 0건이라
             // 시작조차 안 된 것"을 운영자가 로그만 보고 구별할 수 없다.
+            //
+            // Structure는 못 쓴다 - 그 S00은 레거시 출신이 없어 재료가 통째로 비어도
+            // 예약 대역 코드를 받는다(이 태스크가 추가한 동작). 그러면 "정말 아무것도
+            // 못 채운" 경우가 아니게 되어 이 경고의 전제가 깨진다. 모든 단계가 레거시
+            // 출신을 가진 구조를 따로 써서 "정말 아무것도 못 채웠다"는 조건을 지킨다.
+            const string allStepsHaveLegacyOrigin = @"# 목차
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S01"",
+      ""Name"": ""수수료율 스냅샷"",
+      ""LegacyProcedures"": [""UP_Util_PG_Client_CMRate_Ins""],
+      ""TargetTables"": [""dbo.TPGSettleRate""],
+      ""ErrorCodes"": [],
+      ""Chunkable"": true
+    }
+  ]
+}
+```
+";
+
             var empty = new Dictionary<string, IReadOnlyList<string>>();
 
             var sink = new CapturingSink();
@@ -308,8 +400,8 @@ namespace ReSet.Core.Tests
             Log.Logger = new LoggerConfiguration().MinimumLevel.Warning().WriteTo.Sink(sink).CreateLogger();
             try
             {
-                var enriched = PlanStructureEnricher.Enrich(Structure, empty, EmptyTables).Markdown;
-                Assert.Equal(Structure, enriched);
+                var enriched = PlanStructureEnricher.Enrich(allStepsHaveLegacyOrigin, empty, EmptyTables).Markdown;
+                Assert.Equal(allStepsHaveLegacyOrigin, enriched);
             }
             finally
             {
@@ -689,7 +781,11 @@ namespace ReSet.Core.Tests
         public void Enrich_ShouldIgnoreNonStringEntriesInLegacyProcedures()
         {
             // 가드가 없으면 숫자 123이 문자열로 읽혀 codesByProcedure의 "123" 키에
-            // 매칭된다. 그 키를 실제로 채워 두어야 가드 제거가 테스트를 깬다.
+            // 매칭된다. 그 키를 실제로 채워 두어야 가드 제거가 테스트를 깬다 -
+            // 가드가 없으면 결과가 ["-99"]가 되어 아래 기대값과 달라진다.
+            //
+            // 가드가 걸러 procedures가 빈 목록이 되면 이 단계는 "레거시 출신 없음"
+            // 경로를 타 예약 대역(S01 → -9010)을 발급받는다 - S00 테스트와 같은 이유다.
             const string numericProcedure = @"```json
 {
   ""Steps"": [
@@ -709,7 +805,7 @@ namespace ReSet.Core.Tests
                 new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
 
             var step = BatchStepPlanParser.TryParse(result.Markdown)![0];
-            Assert.Empty(step.ErrorCodes);
+            Assert.Equal(new[] { "-9010" }, step.ErrorCodes);
         }
 
         [Fact]
