@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ReSet.Core.Services;
 using Xunit;
@@ -14,6 +15,23 @@ namespace ReSet.Core.Tests
                 StepInterfacesWereNull: true,
                 RunRowOwnedTablesWereNull: true,
                 KnownTableNamesWereEmpty: true));
+
+        /// <summary>
+        /// `header`부터 다음 "## " 절 제목 직전까지만 잘라낸다. 여러 절이 같은 문자열
+        /// 부분열을 낼 수 있어(예: Job별 표 행이 총계 표 행과 같은 문자열을 포함) 절을
+        /// 가리지 않고 Assert.Contains(markdown 전체)만 쓰면 엉뚱한 절에서 우연히
+        /// 일치해 회귀를 놓친다.
+        /// </summary>
+        private static string Section(string markdown, string header)
+        {
+            var start = markdown.IndexOf(header, StringComparison.Ordinal);
+            Assert.True(start >= 0, $"section header not found: {header}");
+            var contentStart = start + header.Length;
+            var nextHeaderStart = markdown.IndexOf("\n## ", contentStart, StringComparison.Ordinal);
+            return nextHeaderStart < 0
+                ? markdown.Substring(contentStart)
+                : markdown.Substring(contentStart, nextHeaderStart - contentStart);
+        }
 
         // 결손을 안 실으면 줄어든 대상 범위가 개선처럼 보인다.
         [Fact]
@@ -48,8 +66,13 @@ namespace ReSet.Core.Tests
                     new SweepFinding("J1", "S01", SweepCheck.A, SweepCondition.AsIs, "m")),
                 "abc1234", "16");
 
-            Assert.Contains("| B | 0 | 2 |", markdown);
-            Assert.Contains("| A | 1 | 0 |", markdown);
+            // 총계 절만 잘라서 본다 - Job별 표의 행("| J1 | B | 0 | 2 |" 등)이 같은
+            // 부분열을 내므로 markdown 전체에서 찾으면 (A)/(B) 열이 뒤바뀌어도 우연히
+            // 통과한다.
+            var totals = Section(markdown, "## 검사별 발화량");
+
+            Assert.Contains("| B | 0 | 2 |", totals);
+            Assert.Contains("| A | 1 | 0 |", totals);
         }
 
         [Fact]
@@ -66,6 +89,12 @@ namespace ReSet.Core.Tests
             Assert.Contains("UPDATE 3", markdown);
             Assert.Contains("PGNAME, MALLID", markdown);
             Assert.Contains("판정", markdown);
+
+            // "판정"이 헤더 글자로만 있어도 위 단언은 통과한다 - 데이터 행의 마지막 칸이
+            // 실제로 비어 있는지는 행 전체를 그대로 대조해야 잡힌다.
+            Assert.Contains(
+                "| 1 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID |  |",
+                markdown);
         }
 
         [Fact]
@@ -90,6 +119,29 @@ namespace ReSet.Core.Tests
                 "abc1234", "16");
 
             Assert.Contains("미분류", markdown);
+        }
+
+        // 목차 파싱 실패 Job이 하나도 없으면 "없음"이라고 명시해야 한다 - 빈 문자열을
+        // 그대로 내면 결손이 없다는 사실과 결손 항목을 안 적었다는 사실을 구분 못 한다.
+        // 공유 Report() 픽스처는 항상 값이 채워진 HarnessGaps를 주기 때문에 이 분기와
+        // 0인 카운트가 실제로 찍히는지는 별도 픽스처로만 확인할 수 있다.
+        [Fact]
+        public void EmptyPlanParseFailedJobsRendersNoneAndZeroCountsStillPrint()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0),
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+
+            Assert.Contains("목차 파싱 실패 Job: 없음", markdown);
+            Assert.Contains("측정 쌍: 0 (Job 0개)", markdown);
+            Assert.Contains("단계 파일 누락: 0", markdown);
         }
     }
 }
