@@ -62,6 +62,21 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "USESTATE" }, finding.Items);
         }
 
+        [Fact]
+        public void Describe_NonUpdateKind_WithoutGloss_StillExtractsCoordinates()
+        {
+            var message =
+                "S07 섹션의 INSERT 2 문장에 명세서가 확정한 최상위 WHERE 술어 컬럼 UseState이(가) " +
+                "없습니다. 명세서 DML 범위 표 INSERT 2 행의 값은 `UseState`입니다 — " +
+                "이 컬럼이 빠지면 실릴 행 집합이 원본과 달라집니다.";
+
+            var finding = StepSweepClassifier.Describe(
+                "POQSettleBatch1", "S07", SweepCheck.B, SweepCondition.AsIs, message);
+
+            Assert.Equal("INSERT", finding.Kind);
+            Assert.Equal(2, finding.Ordinal);
+        }
+
         // 검사 A·D·E의 메시지에는 문장 좌표가 없다. 억지로 뽑아 채우면 없는 좌표가
         // 판정표에 실려 사람이 그 자리를 찾으러 간다.
         [Fact]

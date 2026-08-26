@@ -40,9 +40,11 @@ namespace ReSet.Core.Services
             return SweepCheck.Unclassified;
         }
 
-        // "S07 섹션의 UPDATE 13(갱신 13) 문장에" / "... 문장이" 양쪽을 잡는다.
+        // "S07 섹션의 UPDATE 13(갱신 13) 문장에" / "S07 섹션의 INSERT 2 문장에" 양쪽을 잡는다.
+        // 여는 괄호는 UPDATE에만 붙으므로(MechanicalValidator의 gloss 참고) 경계로 쓸 수 없다 -
+        // 서수 뒤의 공백이나 괄호 어느 쪽이든 받는다.
         private static readonly Regex CoordinatePattern = new(
-            @"섹션의\s+(?<kind>[A-Z]+)\s+(?<ordinal>\d+)\s*\(",
+            @"섹션의\s+(?<kind>[A-Z]+)\s+(?<ordinal>\d+)(?=\s|\()",
             RegexOptions.Compiled);
 
         // 검사 B: "확정한 <라벨> A, B이(가) 없습니다".

@@ -644,4 +644,143 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
 
         Assert.Null(statement.CodeAnchor);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // INSERT 원천 술어 배선(설계 2026-08-26-insert-source-predicate-design.md).
+    //
+    // InsertSpecification에는 WhereClause·FromClause 속성이 없다 - 술어는
+    // InsertSource(→ SelectInsertSource.Select)의 QuerySpecification 안에 있다.
+    // 예전에는 그 자리에 null을 넘겨 모든 INSERT의 PredicateColumns가 구조적으로
+    // 항상 비었고, 그 빈 목록이 검사 B의 거짓양성 199건(코퍼스 스윕 269건 중 74%)을
+    // 만들었다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Insert_SourceWhere_FillsPredicateColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+            "SELECT S.YMD, SUM(S.TXAMT) FROM dbo.TSettleMst AS S\n" +
+            "WHERE S.UseState = 0 AND S.YMD = @p\n" +
+            "GROUP BY S.YMD;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Equal("INSERT", statement.Kind);
+        Assert.Contains("UseState", statement.PredicateColumns);
+        Assert.Contains("YMD", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void Insert_SourceJoin_FillsJoinColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+            "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S\n" +
+            "INNER JOIN dbo.TCost AS C ON C.PLTID = S.PLTID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("PLTID", statement.JoinColumns);
+    }
+
+    [Fact]
+    public void Insert_UnionSource_MergesBothBranches()
+    {
+        // DmlScopeExtractor는 UNION 갈래들을 같은 서수 하나로 합쳐 명세서에 적는다.
+        // 읽기 쪽이 한 갈래만 보면 나머지 갈래의 술어가 "없어졌다"로 보인다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+            "SELECT S.YMD, S.TXAMT FROM dbo.TSettleMst AS S WHERE S.UseState = 0\n" +
+            "UNION ALL\n" +
+            "SELECT T.YMD, T.TXAMT FROM dbo.TSettleEtc AS T WHERE T.Cancelled = 1;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("UseState", statement.PredicateColumns);
+        Assert.Contains("Cancelled", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void Insert_ValuesSource_CollectsNothing()
+    {
+        // VALUES 원천은 조건 없이 실리는 행이라 대조할 술어가 없다.
+        // SourceQuerySpecifications가 빈 열거를 내고, 그 결과 목록이 비어야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO batch.BatchStepJournal (RunId, StepCode) VALUES (1, 'S07');"));
+
+        var statement = Assert.Single(statements);
+        Assert.Empty(statement.PredicateColumns);
+        Assert.Empty(statement.JoinColumns);
+        Assert.Empty(statement.SubordinatePredicateColumns);
+        Assert.False(statement.HasOpaqueJoinSource);
+    }
+
+    [Fact]
+    public void Insert_DerivedTableSource_GoesToSubordinate()
+    {
+        // UP_UTIL_SETTLE_INS의 INSERT 1이 이 모양이다 - 명세서는 최상위 술어 칸에
+        // "(없음)"을 적고 실제 필터는 「집합 술어」표에 "파생 테이블 X"로 따로 적는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleMst (YMD, PGNAME)\n" +
+            "SELECT X.YMD, X.PGNAME FROM (\n" +
+            "  SELECT A.YMD, A.PGNAME FROM dbo.TRaw AS A WHERE A.UseState = 0\n" +
+            ") AS X;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("UseState", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("UseState", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void Insert_TargetNotResolvedFromSourceAlias()
+    {
+        // INSERT 대상은 별칭일 수 없다. 원천 FROM의 별칭 사전을 대상 해석에 쓰면
+        // 여기서 대상이 "TFoo"로 잘못 풀린다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO TSettleMst (YMD)\n" +
+            "SELECT TSettleMst.YMD FROM dbo.TFoo AS TSettleMst WHERE TSettleMst.UseState = 0;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Equal("TSettleMst", statement.TargetTable);
+    }
+
+    [Fact]
+    public void Insert_OpaqueSourceJoin_SetsHasOpaqueJoinSource()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH CardCost AS (SELECT A.PLTID, A.Amt FROM dbo.TCost AS A WHERE A.YMD = @p)\n" +
+            "INSERT INTO dbo.TSettleSum (YMD, Amt)\n" +
+            "SELECT S.YMD, C.Amt FROM dbo.TSettleMst AS S\n" +
+            "INNER JOIN CardCost AS C ON C.PLTID = S.PLTID;"));
+
+        var statement = Assert.Single(statements);
+        Assert.True(statement.HasOpaqueJoinSource);
+    }
+
+    [Fact]
+    public void Insert_CteBodyPredicate_GoesToSubordinate()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH CardCost AS (SELECT A.PLTID FROM dbo.TCost AS A WHERE A.YMD = @p)\n" +
+            "INSERT INTO dbo.TSettleSum (PLTID)\n" +
+            "SELECT C.PLTID FROM CardCost AS C;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("YMD", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("YMD", statement.PredicateColumns);
+    }
+
+    [Fact]
+    public void Update_UnchangedAfterPluralClauseSignature()
+    {
+        // Add의 절 인자가 목록이 된 뒤에도 UPDATE 경로의 관측 동작은 그대로다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE Y SET Y.CLCOMM = 1\n" +
+            "FROM dbo.TSettleMst AS Y INNER JOIN dbo.TCost AS C ON C.PLTID = Y.PLTID\n" +
+            "WHERE Y.YMD = @p AND Y.UseState = 1;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Equal("TSettleMst", statement.TargetTable);
+        Assert.Contains("YMD", statement.PredicateColumns);
+        Assert.Contains("UseState", statement.PredicateColumns);
+        Assert.Contains("PLTID", statement.JoinColumns);
+    }
 }

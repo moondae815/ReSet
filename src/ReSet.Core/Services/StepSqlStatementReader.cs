@@ -39,9 +39,10 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 하위 스코프(CTE 본문·파생 테이블·최상위 WHERE 안의 하위질의·JOIN ON 안의
         /// 하위질의)의 WHERE에 나오는 컬럼. <see cref="PredicateColumns"/>와 겹칠 수
-        /// 있다 — 최상위 WHERE가 두 수집기의 공통 진입점이라(`where?.Accept(predicates)`·
-        /// `where?.Accept(subordinate)`), 최상위 WHERE 안의 하위질의에 최상위와 같은
-        /// 이름의 컬럼이 있으면 양쪽에 다 잡힌다(예: `WHERE Y.YMD = @p AND EXISTS
+        /// 있다 — 최상위 WHERE가 두 수집기의 공통 진입점이라(<c>DmlCollector.Add</c>가
+        /// 절마다 `where.Accept(predicates)`·`where.Accept(subordinate)`를 각각 부른다),
+        /// 최상위 WHERE 안의 하위질의에 최상위와 같은 이름의 컬럼이 있으면 양쪽에
+        /// 다 잡힌다(예: `WHERE Y.YMD = @p AND EXISTS
         /// (SELECT 1 FROM B WHERE B.YMD = @p AND B.ID = Y.ID)` → Pred=[YMD],
         /// Sub=[YMD, ID, ID]). 판정에는 무해하다 — 검사 B는 두 값이 모두 있으면
         /// 어차피 침묵하므로 겹침 자체가 결과를 바꾸지 않는다.
@@ -482,38 +483,65 @@ namespace ReSet.Core.Services
 
             public override void Visit(UpdateStatement node) =>
                 Add("UPDATE", node, node.UpdateSpecification?.Target,
-                    node.UpdateSpecification?.WhereClause, node.UpdateSpecification?.FromClause,
+                    One(node.UpdateSpecification?.WhereClause),
+                    One(node.UpdateSpecification?.FromClause),
+                    node.UpdateSpecification?.FromClause,
                     node.WithCtesAndXmlNamespaces);
 
             public override void Visit(DeleteStatement node) =>
                 Add("DELETE", node, node.DeleteSpecification?.Target,
-                    node.DeleteSpecification?.WhereClause, node.DeleteSpecification?.FromClause,
+                    One(node.DeleteSpecification?.WhereClause),
+                    One(node.DeleteSpecification?.FromClause),
+                    node.DeleteSpecification?.FromClause,
                     node.WithCtesAndXmlNamespaces);
 
-            public override void Visit(InsertStatement node) =>
-                Add("INSERT", node, node.InsertSpecification?.Target, null, null,
+            /// <summary>
+            /// INSERT의 술어는 InsertSpecification이 아니라 원천 SELECT에 있다.
+            /// UNION 원천이면 QuerySpecification이 여럿이고, DmlScopeExtractor는
+            /// 그것들을 같은 서수 하나로 합쳐 명세서 DML 범위 표에 적는다 -
+            /// 그래서 읽기 쪽도 합친다.
+            ///
+            /// targetAliasScope가 null인 이유: INSERT 대상은 별칭일 수 없고
+            /// (`INSERT INTO &lt;별칭&gt;`은 문법에 없다), 원천 SELECT의 FROM은
+            /// 대상과 다른 이름 범위다. 거기에 `FROM dbo.TFoo AS TSettleMst`가
+            /// 있으면 `INSERT INTO TSettleMst`의 대상이 TFoo로 잘못 풀린다.
+            /// </summary>
+            public override void Visit(InsertStatement node)
+            {
+                var specs = DmlScopeExtractor
+                    .SourceQuerySpecifications(node.InsertSpecification?.InsertSource)
+                    .ToList();
+
+                Add("INSERT", node, node.InsertSpecification?.Target,
+                    specs.Select(s => s.WhereClause).OfType<WhereClause>().ToList(),
+                    specs.Select(s => s.FromClause).OfType<FromClause>().ToList(),
+                    targetAliasScope: null,
                     node.WithCtesAndXmlNamespaces);
+            }
 
             private void Add(
                 string kind,
                 TSqlStatement statement,
                 TableReference? target,
-                WhereClause? where,
-                FromClause? from,
+                IReadOnlyList<WhereClause> wheres,
+                IReadOnlyList<FromClause> froms,
+                FromClause? targetAliasScope,
                 WithCtesAndXmlNamespaces? ctes)
             {
                 var predicates = new ColumnCollector();
                 var joins = new ColumnCollector();
                 var grouping = new GroupingProbe();
 
-                where?.Accept(predicates);
-                from?.Accept(joins);
+                foreach (var where in wheres) where.Accept(predicates);
+                foreach (var from in froms) from.Accept(joins);
                 statement.Accept(grouping);
 
-                // 대상 행을 거를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON 절
-                // 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다 - 파생
-                // 테이블과 JOIN ON 하위질의는 둘 다 from?.Accept 한 번으로 함께
-                // 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
+                // 실릴·바뀔 행을 고를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON
+                // 절 안의 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다.
+                // UPDATE·DELETE에서는 "거를 대상 행"이고 INSERT에서는 "실릴 원천
+                // 행"이다 - 셋 다 같은 네 자리를 본다. 파생
+                // 테이블과 JOIN ON 하위질의는 둘 다 절 하나당 from.Accept 한 번으로
+                // 함께 잡힌다(FROM 절 순회가 JOIN ON 절도 훑는다). JOIN ON 하위질의는
                 // INNER JOIN이면 대상 행을 실제로 거르므로 여기서 모으는 것이
                 // 의도와 어긋나지 않는다(실측: `INNER JOIN dbo.TCost AS C ON
                 // ... AND C.ID IN (SELECT Z.ID FROM dbo.TZ AS Z WHERE Z.Hidden = 1)`
@@ -522,18 +550,18 @@ namespace ReSet.Core.Services
                 // 갱신할 "행"을 고르는 술어가 아니다.
                 var subordinate = new SubordinatePredicateCollector();
                 ctes?.Accept(subordinate);
-                from?.Accept(subordinate);
-                where?.Accept(subordinate);
+                foreach (var from in froms) from.Accept(subordinate);
+                foreach (var where in wheres) where.Accept(subordinate);
 
                 Found.Add((
                     new StepSqlStatement(
                         kind,
-                        ResolveTargetTable(target, from),
+                        ResolveTargetTable(target, targetAliasScope),
                         Anchor: null,
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
                         grouping.Found,
-                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, from))
+                        HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
                     },
@@ -542,12 +570,19 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
+            /// 절 하나를 목록으로 감싼다. UPDATE·DELETE는 절이 최대 하나이므로
+            /// 이걸 쓰고, INSERT만 원천 명세 수만큼 여럿을 넘긴다.
+            /// </summary>
+            private static IReadOnlyList<T> One<T>(T? node) where T : class =>
+                node is null ? Array.Empty<T>() : new[] { node };
+
+            /// <summary>
             /// FROM 절의 조인 파트너 중 CTE·파생 테이블이 있는지 본다 - 위
             /// <see cref="StepSqlStatement.HasOpaqueJoinSource"/> 문서 참고.
             /// </summary>
-            private static bool DetectOpaqueJoinSource(TSqlStatement statement, FromClause? from)
+            private static bool DetectOpaqueJoinSource(TSqlStatement statement, IReadOnlyList<FromClause> froms)
             {
-                if (from == null) return false;
+                if (froms.Count == 0) return false;
 
                 var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 if (statement is StatementWithCtesAndXmlNamespaces withCtes &&
@@ -562,8 +597,9 @@ namespace ReSet.Core.Services
                     }
                 }
 
+                // UNION 원천의 한 갈래만 불투명해도 접는다 - 오탐보다 침묵이 안전한 방향이다.
                 var probe = new OpaqueJoinSourceProbe(cteNames);
-                from.Accept(probe);
+                foreach (var from in froms) from.Accept(probe);
                 return probe.Found;
             }
 

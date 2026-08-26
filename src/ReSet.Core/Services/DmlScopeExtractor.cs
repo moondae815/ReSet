@@ -1432,6 +1432,40 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
+        /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
+        ///
+        /// [왜 internal인가] StepSqlStatementReader.DmlCollector가 같은 규칙을
+        /// 써야 한다. 재구현하면 이 저장소가 이미 두 벌 들고 있는 중복이 세 벌이
+        /// 되고, 그 중복이 정확히 INSERT 술어 결함을 만든 원인이다.
+        /// </summary>
+        internal static IEnumerable<QuerySpecification> SourceQuerySpecifications(InsertSource? source) =>
+            source is SelectInsertSource select
+                ? QuerySpecificationsOf(select.Select)
+                : Enumerable.Empty<QuerySpecification>();
+
+        /// <summary>
+        /// QueryExpression 안의 QuerySpecification을 전부 낸다 - UNION(BinaryQueryExpression)과
+        /// 괄호(QueryParenthesisExpression) 갈래를 모두 편다.
+        /// </summary>
+        internal static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
+        {
+            switch (query)
+            {
+                case QuerySpecification spec:
+                    yield return spec;
+                    break;
+                case BinaryQueryExpression binary:
+                    foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
+                    foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
+                    break;
+                case QueryParenthesisExpression paren:
+                    foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
+                    break;
+            }
+        }
+
         private sealed class DmlScopeVisitor : TSqlFragmentVisitor
         {
             private readonly string _dateParameter;
@@ -1817,15 +1851,6 @@ namespace ReSet.Core.Services
             }
 
             /// <summary>
-            /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
-            /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
-            /// </summary>
-            private static IEnumerable<QuerySpecification> SourceQuerySpecifications(InsertSource? source) =>
-                source is SelectInsertSource select
-                    ? QuerySpecificationsOf(select.Select)
-                    : Enumerable.Empty<QuerySpecification>();
-
-            /// <summary>
             /// 문장 안의 스칼라 하위 질의·파생 테이블에 기준일 파라미터가 나타나는가
             /// (DmlScopeFact.DateParameterInNestedQuery 문서).
             /// </summary>
@@ -1962,27 +1987,6 @@ namespace ReSet.Core.Services
             string.IsNullOrWhiteSpace(text)
                 ? string.Empty
                 : System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
-
-        /// <summary>
-        /// INSERT의 원천에서 QuerySpecification을 전부 끌어낸다. VALUES 원천이면
-        /// 아무것도 내지 않는다 - 조건 없이 실리는 행이라 대조할 술어가 없다.
-        /// </summary>
-        private static IEnumerable<QuerySpecification> QuerySpecificationsOf(QueryExpression? query)
-        {
-            switch (query)
-            {
-                case QuerySpecification spec:
-                    yield return spec;
-                    break;
-                case BinaryQueryExpression binary:
-                    foreach (var s in QuerySpecificationsOf(binary.FirstQueryExpression)) yield return s;
-                    foreach (var s in QuerySpecificationsOf(binary.SecondQueryExpression)) yield return s;
-                    break;
-                case QueryParenthesisExpression paren:
-                    foreach (var s in QuerySpecificationsOf(paren.QueryExpression)) yield return s;
-                    break;
-            }
-        }
 
         /// <summary>
         /// 그 SELECT 문장이 훑는 자리가 있는가 - `SELECT n`으로 번호를 줄지 가르는

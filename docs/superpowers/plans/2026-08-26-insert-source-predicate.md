@@ -404,7 +404,13 @@ Expected: 전부 통과. 기존 테스트가 하나라도 깨지면 UPDATE·DELE
 dotnet run --project src/ReSet.Cli -- --sweep
 ```
 
-새로 생긴 `docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md`의 판정 표가 `2026-08-26-step-sweep-c.md`와 같은지 본다. 기대값:
+새로 생긴 `docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md`의 판정 표를 본다.
+
+**주의 — `sweep-c`의 미분류 977과 대조하지 말 것.** `sweep-c`는 `fcf26a6`에서 생성됐고
+그 뒤 병합된 `c09985c`가 검사 둘을 새로 넣어 미분류가 1138로 늘었다. 그 +161은 이번
+변경과 무관하다. 검사 A~E만 대조하거나, 태스크 4 Step 2의 통제 스윕 방법을 쓴다.
+
+검사 A~E 기대값:
 
 ```
 | 검사 | (A) 오늘 | (B) 캐시 17 모사 |
@@ -602,6 +608,7 @@ git commit -m "fix: 갱신 절 주석을 UPDATE 발화에만 붙이고 스윕 �
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/MechanicalValidator.cs` — `IsCandidateForAnchoredStatementCheck` 제거, `ResolveAnchoredStatements`의 호출 제거
+- Modify: `src/ReSet.Core/Services/StepSqlStatementReader.cs` — `Add` 안의 주석 어법만 (Step 0)
 - Modify: `docs/known-defects.md` — 지워지는 주석의 근거를 이관
 - Test: `tests/ReSet.Core.Tests/MechanicalValidatorTests.cs`
 
@@ -610,6 +617,25 @@ git commit -m "fix: 갱신 절 주석을 UPDATE 발화에만 붙이고 스윕 �
 - Produces: 검사 B·C가 INSERT 문장을 후보로 받는다. 태스크 4가 이 상태를 잰다.
 
 **왜 서수가 흔들리지 않는가:** `ResolveOrdinal`은 위치가 아니라 신원으로 서수를 정한다 — `codeMap` 조회가 `Kind` 일치를 요구하고(`string.Equals(mapped.Kind, statement.Kind, ...)`), U-앵커는 문장에 직접 붙는다. 명세서 쪽 `IsComparableDmlRow`도 이미 INSERT를 통과시킨다. 따라서 후보 필터를 걷는 것이 UPDATE·DELETE 판정에 미치는 영향은 없다 — Step 1의 테스트가 이를 못 박는다.
+
+- [ ] **Step 0: `Add`의 주석이 이제 INSERT도 서술하게 고친다**
+
+태스크 1 리뷰의 Minor 지적이다. `src/ReSet.Core/Services/StepSqlStatementReader.cs`의
+`Add` 안에 있는 "대상 행을 거를 수 있는 네 자리..." 주석은 UPDATE·DELETE 어법으로 쓰였다
+("대상 행" = 이미 있는 행을 거른다). INSERT에는 거를 대상 행이 없다 — 어떤 **원천 행이
+실릴지**를 고른다. 동작은 검증됐고(태스크 1의 `Insert_CteBodyPredicate_GoesToSubordinate`·
+`Insert_DerivedTableSource_GoesToSubordinate`), 어법만 어긋난다.
+
+주석의 기존 내용(네 자리 열거, JOIN ON 하위질의 실측, SET 절을 세지 않는 이유)은 **한 줄도
+지우지 말고**, 첫 문장만 세 종류를 함께 서술하게 고친다. 예:
+
+```
+// 실릴·바뀔 행을 고를 수 있는 네 자리(WITH 본문·파생 테이블·JOIN ON 절 안의
+// 하위질의·최상위 WHERE 안의 하위질의)에서만 모은다. UPDATE·DELETE에서는 "거를
+// 대상 행"이고 INSERT에서는 "실릴 원천 행"이다 - 셋 다 같은 네 자리를 본다.
+```
+
+이 파일에서 이 주석 말고는 아무것도 건드리지 않는다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -790,6 +816,7 @@ Expected: 전부 통과. 기존 검사 B·C 테스트가 깨지면 그 픽스처
 
 ```bash
 git add src/ReSet.Core/Services/MechanicalValidator.cs \
+        src/ReSet.Core/Services/StepSqlStatementReader.cs \
         tests/ReSet.Core.Tests/MechanicalValidatorTests.cs \
         docs/known-defects.md
 git commit -m "fix: INSERT를 검사 B·C 후보로 되돌리고 한시적 좁힘의 근거를 기록으로 옮긴다"
@@ -815,9 +842,30 @@ dotnet run --project src/ReSet.Cli -- --sweep
 
 `docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md`가 생긴다. `output/`은 읽기만 한다.
 
-- [ ] **Step 2: `sweep-c`와 대조한다**
+- [ ] **Step 2: 통제 스윕과 대조한다**
 
-기준값(`2026-08-26-step-sweep-c.md`):
+**`sweep-c`를 기준선으로 쓰지 말 것.** 그 보고서는 `fcf26a6`에서 생성됐는데, 그 뒤 병합된
+`c09985c`가 검사 둘(`CheckControlStepErrorCodeBand`·`ValidateSplitProcedureObligations`)을
+새로 넣었다. 그 발화는 분류기 표지 A~E에 없어 전부 미분류로 들어가므로, `sweep-c`의
+미분류 977과 대조하면 **+161의 거짓 경보**가 난다(태스크 1 통합 때 실측으로 확인).
+
+올바른 기준선은 **같은 베이스에서 내 변경만 뺀 통제 스윕**이다.
+
+```bash
+cd /Users/payletter/git-root/ReSet
+git worktree add --detach .worktrees/control-<base> <ORIGINAL_BASE>
+ln -s /Users/payletter/git-root/ReSet/output .worktrees/control-<base>/output
+cd .worktrees/control-<base> && dotnet run --project src/ReSet.Cli -- --sweep
+```
+
+두 보고서를 전문 대조한다. 커밋 해시 줄(`- 커밋:`) 말고 다른 차이가 이번 변경의 결과다.
+
+```bash
+diff .worktrees/control-<base>/docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md \
+     .worktrees/insert-source-predicate/docs/audit-reports/sweeps/2026-08-26-step-sweep-d.md
+```
+
+참고 — `ORIGINAL_BASE`(8002668)의 통제값:
 
 ```
 | 검사 | (A) 오늘 | (B) 캐시 17 모사 |
@@ -826,9 +874,12 @@ dotnet run --project src/ReSet.Cli -- --sweep
 | C |  0 | 18 |
 | D | 18 | 18 |
 | E | 59 | 59 |
+| 미분류 | 1138 | 1138 |
 ```
 
 검사 A·D·E는 **변하지 않아야 한다** — 이번 변경이 닿지 않는 검사다. 변했으면 회귀이므로 멈춘다.
+미분류도 변하지 않아야 한다 — INSERT 재편입은 검사 B·C 표지를 단 메시지를 늘릴 뿐이다.
+끝나면 통제 워크트리를 지운다.
 
 검사 B·C의 증가분이 이번 라운드의 결과물이다. 선결 지표(다중 레거시 SP 단계 수, 집합 어긋남, 펜스 파싱 실패, 코드 앵커 중복)도 함께 대조해 **모수가 줄어서 발화가 준 것이 아닌지** 확인한다.
 
