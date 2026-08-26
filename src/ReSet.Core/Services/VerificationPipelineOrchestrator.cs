@@ -1953,6 +1953,14 @@ namespace ReSet.Core.Services
                             // 목차를 못 읽어 폴백한 회차라면 단계 목록이 없어 표도 비는데,
                             // 그때는 AiService가 절 자체를 싣지 않는다(빈 표가 "원본
                             // 파라미터가 없다"로 읽히는 것을 막는다).
+                            //
+                            // 분할 SP 문서 단위 검사(Task 5)도 이 경로에서는 돌리지 않는다.
+                            // 그 검사는 단계 코드 → 본문 사전(sections)을 요구하는데 이
+                            // 경로에는 그런 사전이 없다 - 문서 전체에서 "어디든 등장하면
+                            // 통과"로 약화시키면 무관한 단계에 적힌 코드로도 통과해 버린다.
+                            Log.Information(
+                                "단일 호출 경로라 분할 SP 문서 단위 검사를 실행하지 않았습니다 - Job: {JobName}", jobName);
+
                             aiResult = await WrapWithProgress(_consolidatorService.GenerateConsolidatedBatchPlanAsync(currentPlanStructure, specsCopy, targetLanguage, jobName, _consolidatorEffort, InterfacesFor(currentPlanStructure), currentBrainstorming, cancellationToken), progressScope, "phase3single");
                         }
                     }
@@ -3163,6 +3171,14 @@ namespace ReSet.Core.Services
                 {
                     floorViolations[stepResult.Code] = stepResult.FloorViolation;
                 }
+            }
+
+            // 분할된 SP의 의무는 단계가 아니라 문서가 진다. 단계 검사에서 뺀 것을
+            // 여기서 합쳐 본다 - 여기가 sections와 steps를 함께 가진 유일한 지점이다.
+            foreach (var (code, defect) in _validator.ValidateSplitProcedureObligations(
+                         sections, steps, codesByProcedure, tablesByProcedure))
+            {
+                floorViolations[code] = defect;
             }
 
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.

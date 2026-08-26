@@ -544,6 +544,83 @@ namespace ReSet.Core.Services
             return owners.All(p => IsLegacyProcedureSplitAcrossSteps(p, step.Code, allSteps));
         }
 
+        /// <summary>
+        /// 분할된 SP의 코드·테이블이 그 SP를 나눠 맡은 단계들의 본문을 합친 것에
+        /// 등장하는지 본다.
+        ///
+        /// [왜 문서 단위인가]
+        /// 단계마다 SP 전량을 요구하면 만족 불가능하다 - 실측(POQSettleProc4)에서
+        /// UP_UTIL_SETTLE_EXCEPTION_PROC이 18개 단계에 나뉘어 있다. 그렇다고 면제만
+        /// 하면 그 SP의 코드가 문서 어디에도 없어도 통과한다. 의무를 단계에서 문서로
+        /// 올리면 보장을 잃지 않고 불가능한 요구만 없앤다.
+        ///
+        /// [대가]
+        /// 결함을 한 단계로 지목하지 못한다. 어느 단계가 그 코드를 맡았어야 하는지
+        /// 알 방법이 없으므로 공유 단계 전부를 지목한다. 문서 전체 재생성보다는 싸다.
+        /// </summary>
+        public IReadOnlyDictionary<string, StepDefect> ValidateSplitProcedureObligations(
+            IReadOnlyDictionary<string, string> sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure,
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure)
+        {
+            var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
+            if (sectionsByStepCode == null || allSteps == null) return defects;
+
+            var procedures = allSteps
+                .SelectMany(s => s.LegacyProcedures)
+                .Select(BareObjectName)
+                .Where(p => p.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var procedure in procedures)
+            {
+                var sharing = allSteps
+                    .Where(s => s.LegacyProcedures.Any(p =>
+                        BareObjectName(p).Equals(procedure, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                // 한 단계만 맡으면 단계 검사가 그대로 본다. 여기서 또 보면 두 번 발화된다.
+                if (sharing.Count < 2) continue;
+
+                var combined = string.Join("\n", sharing
+                    .Select(s => sectionsByStepCode.TryGetValue(s.Code, out var body) ? body : string.Empty));
+
+                var missing = new List<string>();
+
+                if (codesByProcedure != null &&
+                    codesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(procedure), out var codes))
+                {
+                    missing.AddRange(codes
+                        .Select(c => c.Trim())
+                        .Where(c => c.Length > 0 && !ContainsToken(combined, c)));
+                }
+
+                if (tablesByProcedure != null &&
+                    tablesByProcedure.TryGetValue(SpecReturnCodeExtractor.BareName(procedure), out var sets))
+                {
+                    missing.AddRange(sets.WriteTables
+                        .Select(BareObjectName)
+                        .Where(t => t.Length > 0 && !ContainsToken(combined, t)));
+                }
+
+                if (missing.Count == 0) continue;
+
+                var stepList = string.Join(", ", sharing.Select(s => s.Code));
+                var reason =
+                    $"{procedure}를 나눠 맡은 단계({stepList})의 본문을 모두 합쳐도 " +
+                    $"{string.Join(", ", missing)}가 등장하지 않습니다.";
+
+                foreach (var step in sharing)
+                {
+                    defects[step.Code] = new StepDefect(StepDefectKind.QualityFloor, reason);
+                }
+            }
+
+            return defects;
+        }
+
         private static string FirstNonEmptyLine(string markdown)
         {
             foreach (var line in markdown.Split('\n'))
