@@ -548,15 +548,11 @@ namespace ReSet.Core.Services
                 // → Sub=[Hidden]). statement.Accept로 문장 전체를 훑으면 SET 절
                 // 안의 하위질의까지 걸리는데, 그건 갱신할 "값"을 고르는 술어이지
                 // 갱신할 "행"을 고르는 술어가 아니다.
-                var subordinate = new SubordinatePredicateCollector();
+                var aliases = CteProjectionAliases.Build(ctes);
+                var subordinate = new SubordinatePredicateCollector(aliases);
                 ctes?.Accept(subordinate);
                 foreach (var from in froms) from.Accept(subordinate);
                 foreach (var where in wheres) where.Accept(subordinate);
-
-                // 바깥 CTE가 이름을 바꿔 투영하고 안쪽 CTE가 그 별칭으로 거르면
-                // 위 수집은 별칭 이름만 얻는다. 명세서는 원래 컬럼 이름을 적으므로
-                // 글자가 달라 이전으로 인정되지 않는다((5-3-3) 부류 2, 코퍼스 3건).
-                var aliases = CteProjectionAliases.Build(ctes);
 
                 Found.Add((
                     new StepSqlStatement(
@@ -568,7 +564,7 @@ namespace ReSet.Core.Services
                         grouping.Found,
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
-                        SubordinatePredicateColumns = aliases.Expand(subordinate.Columns),
+                        SubordinatePredicateColumns = subordinate.Columns.ToList(),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
@@ -720,19 +716,6 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 하위 스코프의 WHERE 컬럼만 모은다.
-        ///
-        /// [왜 QuerySpecification이 곧 하위 스코프인가] UPDATE·DELETE의 최상위
-        /// WHERE는 QuerySpecification이 아니라 UpdateSpecification·
-        /// DeleteSpecification에 달린다. 그래서 이 방문자가 만나는 모든
-        /// QuerySpecification은 정의상 CTE 본문이거나 파생 테이블이거나
-        /// 하위질의다 - "여기가 최상위인가"를 따로 판정할 필요가 없다.
-        ///
-        /// [ColumnCollector를 재사용하는 이유] 스코프마다 "그 스코프의 최상위
-        /// WHERE만"이라는 같은 규칙이 적용된다. 더 안쪽 스코프는 이 방문자의
-        /// 기본 순회가 각각 따로 방문해 모은다.
-        /// </summary>
-        /// <summary>
         /// CTE가 투영하며 붙인 별칭을 원천 컬럼 이름으로 되돌리는 사상.
         ///
         /// [왜 필요한가 - 2026-08-27 코퍼스 판정 3건]
@@ -755,23 +738,51 @@ namespace ReSet.Core.Services
         /// ResolveAnchoredStatements의 모호 서수 제거) - 조용한 거짓 음성보다
         /// 사람이 판정하는 거짓 양성이 낫다.
         ///
-        /// [한계 둘 - 여기서 풀지 않는 같은 결함]
-        /// (3) **최상위에는 붙이지 않는다.** 최상위 WHERE·JOIN ON이 CTE 별칭을
+        /// [여기서 풀지 않는 같은 결함 둘 - 근거의 세기가 다르다]
+        /// (가) **최상위에는 붙이지 않는다.** 최상위 WHERE·JOIN ON이 CTE 별칭을
         /// 참조하면 그 이름이 PredicateColumns·JoinColumns에 들어가 같은 masking이
-        /// 난다. 2026-08-27 실측 0건 - 부류 2의 두 단계는 최상위에 WHERE도 JOIN도
-        /// 없어 다섯 컬럼 전부가 하위를 통해서만 온다. 잠복이다.
-        /// (4) **파생 테이블 별칭은 보지 않는다.** `(SELECT A.USESTATE AS Foo …) X`를
+        /// 난다. **코퍼스 전수 실측 0건** - 최상위에도 해석을 붙인 빌드로 전수 스윕을
+        /// 돌려 발화가 59에서 한 건도 움직이지 않는 것을 확인했다(2026-08-27).
+        /// (나) **파생 테이블 별칭은 보지 않는다.** `(SELECT A.USESTATE AS Foo …) X`를
         /// 바깥에서 `WHERE X.Foo = …`로 거르면 같은 모양인데 CTE가 아니라 잡히지
-        /// 않는다. 이 코퍼스에 그런 구문이 있는지는 재지 않았다.
+        /// 않는다. **이쪽은 재지 않았다** - (가)의 탐침은 CTE 별칭을 최상위까지
+        /// 넓힌 것일 뿐, 파생 테이블 투영은 이 사상이 아예 보지 않는 다른 원천이다.
+        /// (가)와 (나)를 「실측 0건」으로 묶어 적지 말 것.
         ///
         /// [사슬은 한 홉만] 별칭을 다시 별칭으로 덮는 CTE 사슬은 따라가지 않는다.
         /// 실물 두 건 모두 한 홉이다.
         /// </summary>
         private sealed class CteProjectionAliases
         {
-            /// <summary>별칭 → 원천 컬럼. 값이 null이면 충돌로 버려진 별칭이다.</summary>
-            private readonly Dictionary<string, string?> _map =
-                new(StringComparer.OrdinalIgnoreCase);
+            /// <summary>
+            /// (CTE 이름, 별칭) → 원천 컬럼. 값이 null이면 모호해서 버려진 별칭이다.
+            ///
+            /// [왜 CTE 이름이 키에 들어가는가 - 2026-08-27 리뷰 F1]
+            /// 처음에는 별칭 이름 하나로만 키를 잡았는데, 그러면 사상이 문장 전역이
+            /// 되어 **아무 관계 없는 스코프의 같은 이름 실컬럼**에 붙는다. 실측:
+            /// `;WITH Unused AS (SELECT A.CANCELYMD AS YMD …) DELETE … WHERE EXISTS
+            /// (SELECT 1 FROM dbo.TZ AS Z WHERE Z.YMD = @p)`가 Sub=[YMD, CANCELYMD]를
+            /// 냈다. `Unused`는 아무도 읽지 않고 걸러지는 것은 `TZ.YMD`인데
+            /// `CANCELYMD`가 relocated에 실려, **명세서가 확정한 CANCELYMD 필터를
+            /// 이행이 실제로 지웠어도 검사 B가 침묵한다.** 이 변경 자신이 내건
+            /// 「모호하면 해석하지 않는다」를 정면으로 어기는 거짓 음성 경로였다.
+            /// </summary>
+            private readonly Dictionary<(string Cte, string Alias), string?> _map =
+                new(new CteAliasKeyComparer());
+
+            /// <summary>CTE 이름 집합. 스코프가 무엇을 읽는지 판정할 때 쓴다.</summary>
+            private readonly HashSet<string> _cteNames = new(StringComparer.OrdinalIgnoreCase);
+
+            private sealed class CteAliasKeyComparer : IEqualityComparer<(string Cte, string Alias)>
+            {
+                public bool Equals((string Cte, string Alias) x, (string Cte, string Alias) y) =>
+                    StringComparer.OrdinalIgnoreCase.Equals(x.Cte, y.Cte)
+                    && StringComparer.OrdinalIgnoreCase.Equals(x.Alias, y.Alias);
+
+                public int GetHashCode((string Cte, string Alias) key) => HashCode.Combine(
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(key.Cte),
+                    StringComparer.OrdinalIgnoreCase.GetHashCode(key.Alias));
+            }
 
             public static CteProjectionAliases Build(WithCtesAndXmlNamespaces? ctes)
             {
@@ -780,18 +791,22 @@ namespace ReSet.Core.Services
 
                 foreach (var cte in ctes.CommonTableExpressions)
                 {
+                    var name = cte.ExpressionName?.Value;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    aliases._cteNames.Add(name!);
+
                     // 별칭을 정의하는 CTE 본문이 UNION이면 캐스트 하나로는 갈래를
                     // 못 편다. 이 헬퍼가 그 자리를 이미 갖고 있다.
                     foreach (var spec in DmlScopeExtractor.QuerySpecificationsOf(cte.QueryExpression))
                     {
-                        aliases.RecordSpec(cte.Columns, spec);
+                        aliases.RecordSpec(name!, cte.Columns, spec);
                     }
                 }
 
                 return aliases;
             }
 
-            private void RecordSpec(IList<Identifier>? declared, QuerySpecification spec)
+            private void RecordSpec(string cte, IList<Identifier>? declared, QuerySpecification spec)
             {
                 var elements = spec.SelectElements;
                 if (elements == null) return;
@@ -806,7 +821,7 @@ namespace ReSet.Core.Services
 
                     for (var i = 0; i < declared.Count; i++)
                     {
-                        Record(declared[i]?.Value, SourceColumnOf(elements[i]));
+                        Record(cte, declared[i]?.Value, SourceColumnOf(elements[i]));
                     }
 
                     return;
@@ -814,7 +829,7 @@ namespace ReSet.Core.Services
 
                 foreach (var element in elements.OfType<SelectScalarExpression>())
                 {
-                    Record(element.ColumnName?.Value, SourceColumnOf(element));
+                    Record(cte, element.ColumnName?.Value, SourceColumnOf(element));
                 }
             }
 
@@ -823,53 +838,135 @@ namespace ReSet.Core.Services
                     ? column.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value
                     : null;
 
-            private void Record(string? alias, string? source)
+            private void Record(string cte, string? alias, string? source)
             {
-                if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(source)) return;
+                if (string.IsNullOrWhiteSpace(alias)) return;
 
-                if (!_map.TryGetValue(alias!, out var existing))
+                var key = (cte, alias!);
+
+                // [왜 원천이 null이어도 자리를 차지하는가 - 2026-08-27 리뷰 F2]
+                // 원천 식이 컬럼 참조가 아니면(CONVERT·ISNULL·CASE·리터럴·함수)
+                // 어느 컬럼에서 왔는지 알 수 없다. 그건 "정의가 없다"가 아니라
+                // **"정의가 모호하다"**이므로 그 별칭을 오염시켜야 한다. 그냥
+                // 넘어가면 경쟁하는 정의로 세어지지 않아, 같은 이름을 붙인 다른
+                // 정의가 무경쟁으로 이긴다.
+                if (string.IsNullOrWhiteSpace(source))
                 {
-                    _map[alias!] = source;
+                    _map[key] = null;
                     return;
                 }
 
-                if (existing == null) return;   // 이미 충돌로 버려졌다
+                if (!_map.TryGetValue(key, out var existing))
+                {
+                    _map[key] = source;
+                    return;
+                }
 
                 // 항등 사상(`X AS X`)도 경쟁하는 정의로 센다. 빼면 같은 이름을
                 // 그대로 투영하는 CTE가 다른 CTE의 개명과 충돌해도 안 걸린다.
                 if (!string.Equals(existing, source, StringComparison.OrdinalIgnoreCase))
                 {
-                    _map[alias!] = null;
+                    _map[key] = null;
                 }
             }
 
             /// <summary>
-            /// 수집된 이름에 해석된 원천 이름을 **더한다**. 별칭은 남긴다 - 명세서에
-            /// 별칭 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른
-            /// 대조가 무엇을 보고 있었는지 알 수 없게 된다.
+            /// 이 스코프의 FROM이 읽는 CTE 이름들. 별칭 해석의 적용 범위다.
+            /// 파생 테이블·하위질의 안쪽은 그 QuerySpecification을 따로 방문할 때
+            /// 그 층의 FROM으로 다시 판정되므로 여기서 내려가지 않는다.
             /// </summary>
-            public List<string> Expand(IReadOnlyList<string> columns)
+            public IReadOnlyCollection<string> CtesReadBy(FromClause? from)
             {
-                var expanded = new List<string>(columns);
-                if (_map.Count == 0) return expanded;
+                var read = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (from == null || _cteNames.Count == 0) return read;
+
+                var finder = new NamedSourceFinder();
+                from.Accept(finder);
+                foreach (var name in finder.Names)
+                {
+                    if (_cteNames.Contains(name)) read.Add(name);
+                }
+
+                return read;
+            }
+
+            /// <summary>
+            /// 이 스코프가 읽는 CTE들이 정의한 별칭에 한해, 해석된 원천 이름을 낸다.
+            /// 호출자가 수집된 이름 뒤에 **더한다** - 별칭은 남는다. 명세서에 별칭
+            /// 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른 대조가
+            /// 무엇을 보고 있었는지 알 수 없게 된다.
+            ///
+            /// 한 스코프가 CTE 둘을 읽고 둘이 같은 별칭을 다른 원천에 붙였으면
+            /// 그 별칭은 이 스코프에서 모호하므로 아무것도 내지 않는다.
+            /// </summary>
+            public IEnumerable<string> Resolve(
+                IReadOnlyCollection<string> ctesRead, IReadOnlyList<string> columns)
+            {
+                if (_map.Count == 0 || ctesRead.Count == 0) yield break;
 
                 foreach (var column in columns)
                 {
-                    if (_map.TryGetValue(column, out var source)
-                        && source != null
-                        && !string.Equals(source, column, StringComparison.OrdinalIgnoreCase))
-                    {
-                        expanded.Add(source);
-                    }
-                }
+                    string? resolved = null;
+                    var ambiguous = false;
 
-                return expanded;
+                    foreach (var cte in ctesRead)
+                    {
+                        if (!_map.TryGetValue((cte, column), out var source)) continue;
+                        if (source == null) { ambiguous = true; break; }
+                        if (resolved == null) { resolved = source; continue; }
+                        if (!string.Equals(resolved, source, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ambiguous = true;
+                            break;
+                        }
+                    }
+
+                    if (ambiguous || resolved == null) continue;
+                    if (string.Equals(resolved, column, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    yield return resolved;
+                }
             }
         }
 
+        /// <summary>이 층의 FROM이 이름으로 참조하는 원천(테이블·CTE)의 마지막 식별자.</summary>
+        private sealed class NamedSourceFinder : TSqlFragmentVisitor
+        {
+            private readonly List<string> _names = new();
+            public IReadOnlyList<string> Names => _names;
+
+            public override void Visit(NamedTableReference node)
+            {
+                var name = node.SchemaObject?.BaseIdentifier?.Value;
+                if (!string.IsNullOrWhiteSpace(name)) _names.Add(name!);
+            }
+
+            // 파생 테이블·스칼라 하위질의 안쪽은 이 층이 아니다. 그 층의 FROM은
+            // 그 QuerySpecification을 따로 방문할 때 판정된다.
+            public override void ExplicitVisit(QueryDerivedTable node) { }
+            public override void ExplicitVisit(ScalarSubquery node) { }
+        }
+
+        /// <summary>
+        /// 하위 스코프의 WHERE 컬럼만 모은다.
+        ///
+        /// [왜 QuerySpecification이 곧 하위 스코프인가] UPDATE·DELETE의 최상위
+        /// WHERE는 QuerySpecification이 아니라 UpdateSpecification·
+        /// DeleteSpecification에 달린다. 그래서 이 방문자가 만나는 모든
+        /// QuerySpecification은 정의상 CTE 본문이거나 파생 테이블이거나
+        /// 하위질의다 - "여기가 최상위인가"를 따로 판정할 필요가 없다.
+        ///
+        /// [ColumnCollector를 재사용하는 이유] 스코프마다 "그 스코프의 최상위
+        /// WHERE만"이라는 같은 규칙이 적용된다. 더 안쪽 스코프는 이 방문자의
+        /// 기본 순회가 각각 따로 방문해 모은다.
+        /// </summary>
         private sealed class SubordinatePredicateCollector : TSqlFragmentVisitor
         {
             private readonly List<string> _columns = new();
+            private readonly CteProjectionAliases _aliases;
+
+            public SubordinatePredicateCollector(CteProjectionAliases aliases) => _aliases = aliases;
+
             public IReadOnlyList<string> Columns => _columns;
 
             /// <summary>
@@ -912,6 +1009,12 @@ namespace ReSet.Core.Services
                 node.WhereClause?.Accept(inner);
                 node.FromClause?.Accept(inner);
                 _columns.AddRange(inner.Columns);
+
+                // 이 스코프가 읽는 CTE가 개명해 투영한 이름이면 원천 컬럼 이름을
+                // 함께 싣는다. 읽지 않는 CTE의 별칭은 붙지 않는다 - 그것이 리뷰
+                // F1이 잡은 거짓 음성 경로였다.
+                _columns.AddRange(
+                    _aliases.Resolve(_aliases.CtesReadBy(node.FromClause), inner.Columns));
             }
         }
 
