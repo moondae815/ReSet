@@ -1176,4 +1176,128 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Contains("Flag", statement.SubordinatePredicateColumns);
         Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 단계 내부 스테이징 계보 — 이행이 원본 한 문장을 「스테이징 적재」와
+    // 「대상 게시」로 쪼개면 술어는 앞 문장에 남고 앵커는 뒤 문장에 붙는다
+    // (docs/known-defects.md (5-3-3) 부류 3·5, 코퍼스 15건).
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Lineage_PublishFromEarlierStagingWrite_InheritsItsColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO batch_shadow.S13_After\n" +
+            "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M\n" +
+            "WHERE M.YMD = @pi_strYMD AND M.USESTATE = 2;\n" +
+            "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+            "SELECT PLTID FROM batch_shadow.S13_After\n" +
+            "WHERE ExecutionId = @pi_executionId;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleByTX");
+        var source = Assert.Single(publish.LineageSources);
+        Assert.Equal("S13_After", source.SourceTable);
+        Assert.Contains("YMD", source.Columns);
+        Assert.Contains("USESTATE", source.Columns);
+
+        // 적재문 자신은 계보가 없다 - 원천 TSettleMst 를 앞서 쓴 문장이 없다.
+        Assert.Empty(statements.Single(s => s.TargetTable == "S13_After").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_SourceNotWrittenEarlier_YieldsNoLineage()
+    {
+        // [불변식] 원천이 하나라도 앞서 쓰인 적 없으면 빈 목록이어야 한다.
+        // 부분집합을 내면 검사 쪽 All(…)이 공허하게 참이 되어, 실물 테이블을
+        // 함께 읽는 문장이 스테이징 전용으로 판정된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S06Cancel\n" +
+            "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMDCANCEL = @p;\n" +
+            "INSERT INTO dbo.TSettleMst\n" +
+            "SELECT S.PLTID FROM stage.S06Cancel AS S\n" +
+            "INNER JOIN dbo.TReal AS R ON R.PLTID = S.PLTID;"));
+
+        Assert.Empty(statements.Single(s => s.TargetTable == "TSettleMst").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_WriteAfterRead_IsNotCounted()
+    {
+        // 앞선다는 것은 문서 순서다. 뒤에서 쓰는 테이블은 계보가 아니다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleMst\n" +
+            "SELECT S.PLTID FROM stage.S06Cancel AS S;\n" +
+            "INSERT INTO stage.S06Cancel\n" +
+            "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMDCANCEL = @p;"));
+
+        Assert.Empty(statements.Single(s => s.TargetTable == "TSettleMst").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_CteNameIsNotARowSource()
+    {
+        // CTE 이름은 테이블이 아니다. 세면 「원천이 전부 앞선 쓰기 대상」이
+        // 거짓이 되어 진짜 계보를 놓친다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate\n" +
+            "SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM Pick;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("Pick", publish.RowSourceTables);
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public void Lineage_DoesNotFollowChains()
+    {
+        // 한 홉만. S1 → S2 → 게시 사슬에서 게시문은 S2의 컬럼만 받는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S1 SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.HopOne = 1;\n" +
+            "INSERT INTO stage.S2 SELECT PLTID FROM stage.S1 WHERE HopTwo = 2;\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PLTID FROM stage.S2;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        var columns = publish.LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("HopTwo", columns);
+        Assert.DoesNotContain("HopOne", columns);
+    }
+
+    [Fact]
+    public void Lineage_InheritsJoinAndSubordinateColumns()
+    {
+        // 적재문의 조인 키와 하위 범위 컬럼도 함께 물려받는다 - 부류 3의 실물
+        // 둘(Proc1/S02·Proc8/S05)이 조인 키 PGName만으로 발화했다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Src AS ( SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.SubCol = 1 )\n" +
+            "INSERT INTO stage.S02Candidate\n" +
+            "SELECT X.PGName FROM Src AS X\n" +
+            "LEFT JOIN dbo.TPGProperty AS Y ON Y.PGName = X.PGName;\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM stage.S02Candidate;"));
+
+        var columns = statements.Single(s => s.TargetTable == "TSettleMst")
+            .LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("PGName", columns);   // 조인 키
+        Assert.Contains("SubCol", columns);   // 하위 범위
+    }
+
+    [Fact]
+    public void Lineage_SpansFences()
+    {
+        // [실물] POQSettleProc2/S13은 적재가 펜스 2, 게시가 펜스 3에 있다.
+        // ReadFence 안에서 계보를 돌면 이 관용구를 통째로 놓친다.
+        var markdown =
+            "### S13 단계\n\n```sql\n" +
+            "INSERT INTO batch_shadow.S13_After\n" +
+            "SELECT M.PLTID FROM dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+            "```\n\n```sql\n" +
+            "INSERT INTO dbo.TSettleByTX SELECT PLTID FROM batch_shadow.S13_After;\n" +
+            "```\n";
+
+        var statements = StepSqlStatementReader.Read(markdown);
+        var columns = statements.Single(s => s.TargetTable == "TSettleByTX")
+            .LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("YMD", columns);
+    }
 }

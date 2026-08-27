@@ -26,6 +26,10 @@ namespace ReSet.Core.Services
     /// 구간에 그런 대입이 정확히 하나가 아니면 null. <see cref="Anchor"/>와는
     /// 독립적으로 읽히며 둘이 공존할 수 있다.
     /// </param>
+    /// <param name="SourceTable">이 문장이 읽는, 같은 단계의 앞선 문장이 쓴 테이블.</param>
+    /// <param name="Columns">그 앞선 문장의 술어·조인 키·하위 범위 컬럼 전부.</param>
+    public sealed record StepLineageSource(string SourceTable, IReadOnlyList<string> Columns);
+
     public sealed record StepSqlStatement(
         string Kind,
         string TargetTable,
@@ -62,6 +66,30 @@ namespace ReSet.Core.Services
         /// </summary>
         public IReadOnlyList<string> SubordinatePredicateColumns { get; init; }
             = Array.Empty<string>();
+
+        /// <summary>
+        /// 이 문장의 FROM·JOIN이 이름으로 참조하는 테이블(마지막 식별자).
+        /// CTE 이름은 제외한다 - 테이블이 아니다. 파생 테이블·스칼라 하위질의
+        /// 안쪽은 이 층이 아니므로 NamedSourceFinder가 하강을 막는다.
+        /// </summary>
+        public IReadOnlyList<string> RowSourceTables { get; init; }
+            = Array.Empty<string>();
+
+        /// <summary>
+        /// 이 문장이 읽는 「단계 내부 스테이징」 후보와 그것을 쓴 문장의 컬럼.
+        ///
+        /// [불변식 - 검사 쪽이 이것에 의존한다] 행 원천이 **전부** 앞선 쓰기 대상일
+        /// 때만 채워진다. 하나라도 앞서 쓰인 적 없는 테이블이면 빈 목록이다.
+        /// 이 불변식이 없으면 검사 쪽의 All(…)이 부분집합 위에서 공허하게 참이 된다.
+        ///
+        /// [명세서 대상 제외는 여기서 하지 않는다] 리더는 명세서를 보지 않는다.
+        /// 원본이 쓰는 테이블을 걸러 내는 것은 MechanicalValidator의 몫이다 -
+        /// 그 제외가 없으면 DELETE 후 INSERT로 재게시하고 다시 UPDATE … FROM 하는
+        /// 흔한 관용구가 게시문으로 오분류된다(설계서 §2-1, 코퍼스 탐침 118건 중
+        /// 최다 원천이 원본 대상 테이블 tsettlemst 52건).
+        /// </summary>
+        public IReadOnlyList<StepLineageSource> LineageSources { get; init; }
+            = Array.Empty<StepLineageSource>();
     }
 
     /// <summary>
@@ -151,7 +179,7 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return statements;
+            return AttachLineage(statements);
         }
 
         private static (IReadOnlyList<StepSqlStatement> Statements, int LostStatementCount) ReadFence(string sql)
@@ -221,6 +249,71 @@ namespace ReSet.Core.Services
             }
 
             return (statements, lostStatementCount);
+        }
+
+        /// <summary>
+        /// 단계 전체에서 「행 원천이 전부 앞선 문장의 쓰기 대상」인 문장을 찾아
+        /// 그 쓰기 문장의 컬럼을 매단다.
+        ///
+        /// [왜 Read에서 도는가 - 실물] 적재문과 게시문이 **다른 펜스**에 있다.
+        /// POQSettleProc2/S13은 적재가 펜스 2, 게시가 펜스 3이다. ReadFence 안에서
+        /// 돌면 이 관용구를 통째로 놓친다.
+        ///
+        /// [왜 오프셋이 아니라 인덱스인가] Read는 펜스를 문서 순서로 순회하고
+        /// ReadFence는 반환 전에 오프셋으로 정렬한다. 누적 리스트가 이미 문서
+        /// 순서이므로 인덱스가 곧 순서다.
+        ///
+        /// [한 홉만] 사슬(A → S1, S1을 읽어 S2를 씀, S2를 읽는 문장)은 따라가지
+        /// 않는다. 실물 셋 다 한 홉이고, 미추적은 오탐 방향이라 안전하다.
+        ///
+        /// [제어 흐름은 보지 않는다] 앞선다는 것은 문서 순서다. 조건부로만 실행되는
+        /// 적재문의 술어도 상속되는데 이는 침묵 방향이다 - 한계로 기록한다.
+        /// </summary>
+        private static IReadOnlyList<StepSqlStatement> AttachLineage(
+            IReadOnlyList<StepSqlStatement> statements)
+        {
+            if (statements.Count < 2) return statements;
+
+            var writtenAt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var attached = new List<StepSqlStatement>(statements.Count);
+
+            for (var i = 0; i < statements.Count; i++)
+            {
+                var statement = statements[i];
+                var sources = statement.RowSourceTables;
+
+                // 원천이 하나도 없거나(VALUES 삽입 등) 하나라도 앞서 쓰인 적이
+                // 없으면 계보가 아니다 - 불변식.
+                if (sources.Count > 0 && sources.All(writtenAt.ContainsKey))
+                {
+                    attached.Add(statement with
+                    {
+                        LineageSources = sources
+                            .Select(s => new StepLineageSource(
+                                s, ColumnsOf(statements[writtenAt[s]])))
+                            .ToList()
+                    });
+                }
+                else
+                {
+                    attached.Add(statement);
+                }
+
+                // 자기 자신은 뒤 문장에게만 보인다 - 먼저 읽고 나중에 등록한다.
+                if (!string.IsNullOrEmpty(statement.TargetTable))
+                {
+                    writtenAt.TryAdd(statement.TargetTable, i);
+                }
+            }
+
+            return attached;
+
+            static IReadOnlyList<string> ColumnsOf(StepSqlStatement writer) => writer
+                .PredicateColumns
+                .Concat(writer.JoinColumns)
+                .Concat(writer.SubordinatePredicateColumns)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         /// <summary>
@@ -565,9 +658,46 @@ namespace ReSet.Core.Services
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
+                        RowSourceTables = CollectRowSourceTables(froms, ctes),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
+            }
+
+            /// <summary>
+            /// FROM·JOIN의 이름 테이블에서 CTE 이름을 뺀 것. 대상 테이블 자신도
+            /// 뺀다 - UPDATE … FROM 대상 AS A 는 자기를 읽는 것이 아니다.
+            ///
+            /// [왜 ctes도 훑는가 - Lineage_CteNameIsNotARowSource가 잡은 결함]
+            /// 최상위 FROM이 CTE 이름만 참조하면(`FROM Pick`) froms만 보고는 CTE
+            /// 이름을 뺀 뒤 아무것도 안 남는다 - 실제로 행을 내는 물리 테이블은
+            /// CTE 본문(`Pick AS (SELECT … FROM stage.S02Candidate)`) 안에 있다.
+            /// ctes를 함께 훑어야 그 물리 테이블이 원천으로 잡힌다. NamedSourceFinder가
+            /// 파생 테이블·스칼라 하위질의 하강은 이미 막으므로 CTE 본문 안의 더 깊은
+            /// 층까지 새지 않는다.
+            /// </summary>
+            private static IReadOnlyList<string> CollectRowSourceTables(
+                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes)
+            {
+                var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (ctes?.CommonTableExpressions != null)
+                {
+                    foreach (var cte in ctes.CommonTableExpressions)
+                    {
+                        var name = cte.ExpressionName?.Value;
+                        if (!string.IsNullOrWhiteSpace(name)) cteNames.Add(name!);
+                    }
+                }
+
+                var finder = new NamedSourceFinder();
+                foreach (var from in froms) from.Accept(finder);
+                ctes?.Accept(finder);
+
+                return finder.Sources
+                    .Select(s => s.Source)
+                    .Where(s => !cteNames.Contains(s))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
             }
 
             /// <summary>
