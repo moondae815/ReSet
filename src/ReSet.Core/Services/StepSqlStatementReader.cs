@@ -700,12 +700,28 @@ namespace ReSet.Core.Services
         private sealed class ColumnCollector : TSqlFragmentVisitor
         {
             private readonly List<string> _columns = new();
+            private readonly List<(string? Qualifier, string Name)> _references = new();
+
             public IReadOnlyList<string> Columns => _columns;
+
+            /// <summary>
+            /// 같은 참조를 한정자와 함께 남긴 것. 대조는 이름만 쓰지만, CTE 투영
+            /// 별칭 해석은 `R.Flag`(실테이블 R의 실컬럼)와 한정자 없는 `Flag`를
+            /// 갈라야 한다 - 이름만 보면 둘이 구분되지 않아 무관한 컬럼에 별칭
+            /// 해석이 붙는다(리뷰 R1).
+            /// </summary>
+            public IReadOnlyList<(string? Qualifier, string Name)> References => _references;
 
             public override void Visit(ColumnReferenceExpression node)
             {
-                var last = node.MultiPartIdentifier?.Identifiers?.LastOrDefault();
-                if (!string.IsNullOrWhiteSpace(last?.Value)) _columns.Add(last!.Value);
+                var identifiers = node.MultiPartIdentifier?.Identifiers;
+                var last = identifiers?.LastOrDefault();
+                if (string.IsNullOrWhiteSpace(last?.Value)) return;
+
+                _columns.Add(last!.Value);
+                _references.Add((
+                    identifiers!.Count >= 2 ? identifiers[identifiers.Count - 2].Value : null,
+                    last.Value));
             }
 
             /// <summary>스칼라 하위질의 안쪽으로 내려가지 않는다 - 최상위 술어 컬럼만 센다.</summary>
@@ -875,19 +891,19 @@ namespace ReSet.Core.Services
             /// 파생 테이블·하위질의 안쪽은 그 QuerySpecification을 따로 방문할 때
             /// 그 층의 FROM으로 다시 판정되므로 여기서 내려가지 않는다.
             /// </summary>
-            public IReadOnlyCollection<string> CtesReadBy(FromClause? from)
+            public IReadOnlyDictionary<string, string> CteBindingsIn(FromClause? from)
             {
-                var read = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (from == null || _cteNames.Count == 0) return read;
+                var bindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (from == null || _cteNames.Count == 0) return bindings;
 
                 var finder = new NamedSourceFinder();
                 from.Accept(finder);
-                foreach (var name in finder.Names)
+                foreach (var (binding, source) in finder.Sources)
                 {
-                    if (_cteNames.Contains(name)) read.Add(name);
+                    if (_cteNames.Contains(source)) bindings[binding] = source;
                 }
 
-                return read;
+                return bindings;
             }
 
             /// <summary>
@@ -896,22 +912,52 @@ namespace ReSet.Core.Services
             /// 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른 대조가
             /// 무엇을 보고 있었는지 알 수 없게 된다.
             ///
-            /// 한 스코프가 CTE 둘을 읽고 둘이 같은 별칭을 다른 원천에 붙였으면
-            /// 그 별칭은 이 스코프에서 모호하므로 아무것도 내지 않는다.
+            /// [한정자를 보는 이유 - 2026-08-27 재리뷰 R1]
+            /// 이름만 보면 같은 스코프의 **다른 원천에 있는 동명 실컬럼**에 별칭
+            /// 해석이 붙는다. 실측: `Filtered AS (SELECT 1 FROM B1 INNER JOIN
+            /// dbo.TReal AS R ON … WHERE R.Flag = 9)`에서 걸러지는 것은 `TReal.Flag`
+            /// 인데 B1의 `Flag → USESTATE`가 실렸다. F1을 스코프 단위로 가둔 뒤에도
+            /// **스코프 안**에 같은 병이 축소판으로 남아 있었다.
+            ///
+            /// 그래서 해석은 두 경우에만 한다.
+            /// - **한정자가 없다.** 유효한 T-SQL에서 한정자 없는 이름이 통과했다면
+            ///   그 스코프에서 그 이름을 가진 원천이 하나뿐이라는 뜻이다(둘이면
+            ///   「모호한 컬럼 이름」으로 파싱이 아니라 실행이 거부된다). 따라서
+            ///   그 하나가 별칭을 정의한 CTE다.
+            /// - **한정자가 이 스코프에서 CTE에 결합돼 있다.** `FROM Base AS X`의
+            ///   `X.Flag`가 그 경우다. 실테이블 별칭이면 해석하지 않는다.
+            ///
+            /// 후보 CTE 둘 이상이 같은 별칭을 다르게 정의하면 이 스코프에서 모호하므로
+            /// 아무것도 내지 않는다.
             /// </summary>
             public IEnumerable<string> Resolve(
-                IReadOnlyCollection<string> ctesRead, IReadOnlyList<string> columns)
+                IReadOnlyDictionary<string, string> bindings,
+                IReadOnlyList<(string? Qualifier, string Name)> references)
             {
-                if (_map.Count == 0 || ctesRead.Count == 0) yield break;
+                if (_map.Count == 0 || bindings.Count == 0) yield break;
 
-                foreach (var column in columns)
+                foreach (var (qualifier, name) in references)
                 {
+                    IEnumerable<string> candidates;
+                    if (string.IsNullOrWhiteSpace(qualifier))
+                    {
+                        candidates = bindings.Values;
+                    }
+                    else if (bindings.TryGetValue(qualifier!, out var cte))
+                    {
+                        candidates = new[] { cte };
+                    }
+                    else
+                    {
+                        continue;   // 실테이블 별칭 - 이 CTE들과 무관하다
+                    }
+
                     string? resolved = null;
                     var ambiguous = false;
 
-                    foreach (var cte in ctesRead)
+                    foreach (var candidate in candidates)
                     {
-                        if (!_map.TryGetValue((cte, column), out var source)) continue;
+                        if (!_map.TryGetValue((candidate, name), out var source)) continue;
                         if (source == null) { ambiguous = true; break; }
                         if (resolved == null) { resolved = source; continue; }
                         if (!string.Equals(resolved, source, StringComparison.OrdinalIgnoreCase))
@@ -922,23 +968,30 @@ namespace ReSet.Core.Services
                     }
 
                     if (ambiguous || resolved == null) continue;
-                    if (string.Equals(resolved, column, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(resolved, name, StringComparison.OrdinalIgnoreCase)) continue;
 
                     yield return resolved;
                 }
             }
         }
 
-        /// <summary>이 층의 FROM이 이름으로 참조하는 원천(테이블·CTE)의 마지막 식별자.</summary>
+        /// <summary>
+        /// 이 층의 FROM이 이름으로 참조하는 원천과, 그것을 가리키는 결합 이름.
+        /// 별칭이 있으면 별칭이(T-SQL은 별칭을 붙이면 원래 이름을 못 쓴다),
+        /// 없으면 원천 이름 자신이 결합 이름이다.
+        /// </summary>
         private sealed class NamedSourceFinder : TSqlFragmentVisitor
         {
-            private readonly List<string> _names = new();
-            public IReadOnlyList<string> Names => _names;
+            private readonly List<(string Binding, string Source)> _sources = new();
+            public IReadOnlyList<(string Binding, string Source)> Sources => _sources;
 
             public override void Visit(NamedTableReference node)
             {
                 var name = node.SchemaObject?.BaseIdentifier?.Value;
-                if (!string.IsNullOrWhiteSpace(name)) _names.Add(name!);
+                if (string.IsNullOrWhiteSpace(name)) return;
+
+                var alias = node.Alias?.Value;
+                _sources.Add((string.IsNullOrWhiteSpace(alias) ? name! : alias!, name!));
             }
 
             // 파생 테이블·스칼라 하위질의 안쪽은 이 층이 아니다. 그 층의 FROM은
@@ -1014,7 +1067,7 @@ namespace ReSet.Core.Services
                 // 함께 싣는다. 읽지 않는 CTE의 별칭은 붙지 않는다 - 그것이 리뷰
                 // F1이 잡은 거짓 음성 경로였다.
                 _columns.AddRange(
-                    _aliases.Resolve(_aliases.CtesReadBy(node.FromClause), inner.Columns));
+                    _aliases.Resolve(_aliases.CteBindingsIn(node.FromClause), inner.References));
             }
         }
 
