@@ -475,7 +475,7 @@ namespace ReSet.Core.Tests
             Assert.Contains("| 자기 대상을 읽는 문장 수 | 606 |", section);
             Assert.Contains("| 자기 대상을 읽어 스테이징 면제가 취소된 문장 수 | 707 |", section);
             Assert.Contains("| 하위 범위 술어 컬럼을 가진 문장 수 | 808 |", section);
-            Assert.Contains("| 그 컬럼의 총수 | 909 |", section);
+            Assert.Contains("| 하위 범위 술어 컬럼의 총수 | 909 |", section);
             Assert.Contains("| 스테이징 원천의 총수 | 1010 |", section);
         }
 

@@ -295,7 +295,8 @@ namespace ReSet.Core.Services
             b.AppendLine(
                 "| 하위 범위 술어 컬럼을 가진 문장 수 | " +
                 $"{indicators.StatementsWithSubordinatePredicates} |");
-            b.AppendLine($"| 그 컬럼의 총수 | {indicators.SubordinatePredicateColumnTotal} |");
+            b.AppendLine(
+                $"| 하위 범위 술어 컬럼의 총수 | {indicators.SubordinatePredicateColumnTotal} |");
             b.AppendLine($"| 스테이징 원천의 총수 | {indicators.StagingSourceTotal} |");
             b.AppendLine();
             b.AppendLine(
