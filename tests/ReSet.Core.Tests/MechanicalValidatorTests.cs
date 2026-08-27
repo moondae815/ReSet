@@ -8922,6 +8922,51 @@ END";
         }
 
         [Fact]
+        public void ValidateBatchStep_CheckB_StagingLineagePartialRelocation_ReportsOnlyTheMissing()
+        {
+            // 하위범위 경로의 OneRelocatedOneMissing과 같은 잠금을 계보 경로에도
+            // 건다. 적재문에 YMD만 있고 USESTATE는 없으면, 게시문에서 YMD는
+            // 침묵하고 USESTATE만 발화해야 한다 - 전부-접기(계보가 하나라도 있으면
+            // 그 그룹의 ReportMissing을 통째로 건너뛰는 식)로 구현하면 발화해야 할
+            // USESTATE까지 침묵하게 되어 이 테스트가 죽는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD", "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            // 적재문의 최상위 WHERE에는 YMD만 있다 - USESTATE는 적재문에도 없다.
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After WHERE ExecutionId = @e;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+
+            // 메시지 뒷부분은 명세서 행의 값을 그대로 인용하므로 YMD가 정당하게
+            // 나온다. 보고된 "빠진 컬럼" 목록만 잘라서 본다.
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("USESTATE", reported);
+            Assert.DoesNotContain("YMD", reported);
+        }
+
+        [Fact]
         public void ValidateBatchStep_CheckC_CodeAnchorOnly_ResolvesOrdinalAndCompares()
         {
             // 검사 C도 같은 환산을 받는다 - U-앵커 없이 코드 앵커만으로 명세서에
