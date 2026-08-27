@@ -507,6 +507,59 @@ POQSettleProc13  S14  0
 > `SELECT … INTO`는 **SELECT 번호를 받고 DML 번호를 못 받으며, `INTO` 대상은 쓰인 테이블로
 > 기록되지 않는다.** 코퍼스에는 `SELECT … INTO`를 담은 `sql` 펜스가 **130개** 있다.
 >
+> > **[2026-08-27 정정] ②는 「맞는 사실 둘」을 틀린 축에 붙였다 — 축이 둘이고 둘 다 참이다.**
+> >
+> > ②가 든 두 좌표는 `fb80420`에서도 그대로 실재한다. 그러나 그 둘은 **원본 DDL을 읽는**
+> > 방문자이고, ③의 짝짓기가 오른쪽에 쓰는 **「단계 DML 순서」를 만드는 방문자가 아니다.**
+> > 이 저장소에는 `TSqlFragmentVisitor` 파생이 여럿이라, 클래스를 안 좁히고 파일·저장소
+> > 전체를 훑으면 **같은 이름의 다른 방문자**가 걸린다. **어느 방문자인가를 먼저 고정하라.**
+> >
+> > | 축 | 클래스 | 무엇을 읽나 | `SELECT … INTO`가 |
+> > |---|---|---|---|
+> > | **A** | **`DmlCollector`**(`StepSqlStatementReader`) | **단계 지시서** | **문장으로 안 나온다 — 미방문** |
+> > | B | `SqlStaticParser` · `DmlScopeExtractor` | 원본 DDL | 방문되지만 `INTO` 미분류 |
+> >
+> > **축 A — ③이 실제로 쓰는 쪽. 여기서 빈자리는 「분류」가 아니라 「방문」이다.**
+> > `src/ReSet.Core/Services/StepSqlStatementReader.cs:628`의
+> > `private sealed class DmlCollector : TSqlFragmentVisitor`는 오버라이드가 셋뿐이다 —
+> > `Visit(UpdateStatement)`(641)·`Visit(DeleteStatement)`(648)·`Visit(InsertStatement)`(666).
+> > **`SelectStatement` 오버라이드도 없고 `ExplicitVisit`도 없다**(클래스 범위 628–913 전수 확인).
+> > `Read`가 문장을 만드는 유일한 원천이 이 방문자의 `Found`이고(같은 파일 255), `Found`는
+> > 저 셋의 `Add`로만 찬다. 그래서 `SELECT … INTO`는 **파싱 결과에 존재하지 않는다.**
+> > 실행으로 확정했다(HEAD `fb80420`):
+> >
+> > ```
+> > 입력 (```sql 펜스):
+> >   SELECT A.PLTID, A.YMD INTO batch_shadow.Snap FROM dbo.TTxMst AS A WHERE A.YMD = @p;
+> >   INSERT INTO dbo.TOut SELECT PLTID FROM batch_shadow.Snap;
+> >
+> > StepSqlStatementReader.Read 결과:
+> >   문장 수 = 1 (lost=0)
+> >   INSERT -> TOut rowsrc=[Snap]
+> > ```
+> >
+> > **`lost=0`이 핵심이다** — 잃어버린 문장으로도 세지 않는다. 쓰기로 안 잡히는 게 아니라
+> > **존재 자체가 없고, 그 부재가 조용하다.**
+> >
+> > **그래서 ②만 읽고 `IntoClause` 분류를 추가하러 가면 엉뚱한 데를 고친다** — 축 A에는
+> > 분류할 대상 자체가 없다. 축 A가 필요로 하는 것은 분류가 아니라 **방문**이다.
+> >
+> > **축 B — ②가 적은 것은 이 축에서 전부 참이다. 버리지 말 것.**
+> > `SqlStaticParser.cs:140`·`DmlScopeExtractor.cs:1609`는 `fb80420`에서도 같은 줄에 있고,
+> > `IntoClause`·`SelectInto` 처리 **0건**도 그대로다(`grep`이 무는 4건은 전부
+> > `MechanicalValidator.SplitIntoClauses`라는 무관한 이름이고, ScriptDom에서 이 절의 실제
+> > 자리는 `SelectStatement.Into`다). 원본 DDL 축에서 `SELECT … INTO`는 **방문되지만 `INTO`가
+> > 미분류**라 SELECT 번호만 받고 DML 번호를 못 받는다 — ②의 서술 그대로다.
+> >
+> > **①의 펜스 사각지대도 그대로 유효하다.** 다만 좌표 하나가 옮겼다 — `FencePattern`은
+> > `118b9a6`의 `:83`이 아니라 `fb80420`의 `StepSqlStatementReader.cs:141`이다
+> > (`MechanicalValidator.cs:802`는 그대로).
+> >
+> > **②의 `130`은 이 회차가 재현하지 못했다.** 조각마다 ScriptDom으로 파싱해
+> > `SelectStatement.Into`를 센 값은 단계 문서 326개에서 `sql` 펜스 **26개·문장 74개**다
+> > (`sql` 펜스 총수 891은 ①과 일치한다). `130`의 측정 방법이 기록돼 있지 않아 어느 쪽이
+> > 맞는지 이 회차가 가르지 못했다 — **다만 두 축의 판정은 이 수치에 걸려 있지 않다.**
+>
 > **두 사각지대의 결론은 같다 — 리더가 안 보거나 쓰기로 안 세는 문장은 「DML 순서」에
 > 안 들어간다.** ③이 짝지으라고 한 바로 그 순서다. 정규식으로 순서를 세고 리더로 짜면
 > 두 번호가 어긋나고, **그 어긋남은 조용하다.**
@@ -529,3 +582,14 @@ POQSettleProc13  S14  0
 ③ 이름의 표기 형태를 객체의 대리로 쓰면 조용히 샌다(§3-3 — `dbo.` 접두사 유무로 형제 2개를 놓쳤다).
 ④ 소스에서 패턴으로 능력을 판정하면 호출 규약 차이에 걸린다(위 ③ 상자 — `Visit` grep이
 `ExplicitVisit`을 놓친다). **넷 다 「근사로 재고 그 침묵을 통과로 읽는」 같은 실수다.**
+
+> **[2026-08-27 정정] 함정은 넷이 아니라 다섯이다 — ⑤가 앞의 넷과 성질이 다르다.**
+>
+> ⑤ **맞는 사실을 틀린 축에 붙이면, 사실 확인만으로는 안 걸린다**(위 ②의 정정 상자).
+> 직전 회차가 인용한 좌표(`SqlStaticParser.cs:140`·`DmlScopeExtractor.cs:1609`)는 **전부
+> 실재했고 지금도 실재한다.** 그런데도 결론이 틀렸다 — 그 둘은 **원본 DDL 축**의 방문자인데
+> ③이 묻는 것은 **단계 지시서 축**(`DmlCollector`)이었기 때문이다.
+>
+> **①–④는 「근사로 재고 침묵을 통과로 읽는」 실수라 더 정확히 재면 걸린다. ⑤는 아니다** —
+> 인용을 하나씩 열어 봐도 전부 참이라 통과한다. ⑤를 거르는 것은 정확도가 아니라
+> **「이 주장이 어느 클래스·어느 축의 것인가」를 먼저 고정하는 것**뿐이다.
