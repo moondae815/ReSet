@@ -712,6 +712,25 @@ namespace ReSet.Core.Services
             /// 따라간다 - 참조되지 않는 CTE의 본문은 아예 방문하지 않는다.
             /// NamedSourceFinder가 파생 테이블·스칼라 하위질의 하강은 이미 막으므로
             /// 방문한 CTE 본문 안의 더 깊은 층까지 새지 않는다.
+            ///
+            /// [남은 한계 셋 - 픽스 라운드 2 재리뷰, 재지 않았다 vs 재서 안전 방향임을
+            /// 확인했다를 가른다]
+            /// (1) **CTE 본문 안의 파생 테이블이 또 다른 CTE를 참조하면 그 사슬이
+            /// 안 보인다** - NamedSourceFinder가 파생 테이블 하강을 막기 때문이다.
+            /// **재서 안전 방향임을 확인했다**: 이 층이 놓치는 것은 원천 후보 자체이므로
+            /// 결과는 과소(계보를 놓침) 쪽이다 - 검사가 조용해지는 게 아니라 이전을
+            /// 못 받아 여전히 발화한다.
+            /// (2) **CTE 이름과 스키마 한정 실물 테이블이 베이스 식별자를 공유하면**
+            /// (예: CTE `Foo`와 `dbo.Foo`가 한 문장에 공존) BFS가 진짜 테이블 참조를
+            /// 이미 방문한 CTE로 삼켜 그 물리 테이블을 원천에서 놓칠 수 있다.
+            /// **재서 안전 방향임을 확인했다**: 이것도 과소 쪽이다 - 실제로 검증하지는
+            /// 않았고 추론으로 짚었다(코퍼스 실측이 아니다).
+            /// (3) **selfTarget 제외가 "마지막 식별자만" 규약**(Task 1 원래 설계의
+            /// 이름 정규화를 그대로 물려받음)이라 `dbo.Foo`가 대상일 때 스키마가
+            /// 다른 `stage.Foo`까지 함께 제외될 수 있다 - 이번 픽스가 새로 만든
+            /// 한계가 아니다. **재지 않았다** - 코퍼스의 스테이징 명명(`stage.`·
+            /// `batch_shadow.`·`batch_work.`·`dbo.__poq_`)이 대상과 다른 베이스
+            /// 이름을 쓰므로 발생 가능성은 낮다고 보이지만 실측하지는 않았다.
             /// </summary>
             private static IReadOnlyList<string> CollectRowSourceTables(
                 IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes, string selfTarget)
@@ -734,14 +753,20 @@ namespace ReSet.Core.Services
                 }
 
                 var physicalTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                // [방어적 - 어떤 테스트도 이 줄의 필요성을 재지 않는다] 이 방문 기록이
-                // 없으면 두 CTE가 서로를 참조하는 순환이나 같은 CTE를 두 경로에서
-                // 참조하는 다이아몬드에서 무한 루프·중복 처리가 날 수 있다. 이
-                // 코퍼스에는 그런 순환·다이아몬드가 없어 실제로 제거해 봐도(2026-08-27
-                // 픽스 라운드 1) 열한 개 테스트가 전부 그대로 통과한다 - 이 줄을
-                // 죽이는 테스트가 없다는 뜻이다. 무한 루프를 실제로 만드는 순환 CTE
-                // 테스트는 테스트 스위트 자체를 멈출 위험이 있어 만들지 않았다 - 이
-                // 줄은 검증된 결정이 아니라 방어적 코드로 남겨 둔다.
+                // [실전 위험 - 실측 확인, 방어적 추측이 아니다] 이 방문 기록이 없으면
+                // 두 CTE가 서로를 참조하는 순환(A→B, B→A)에서 진짜 무한 루프가 난다.
+                // ScriptDom은 문법 전용 파서라 비재귀 CTE의 순환 참조를 실행 시점
+                // 규칙(전방 참조 금지·바인딩 오류)과 무관하게 그대로 파싱하므로,
+                // 사람이 손으로 쓴 - 실행 불가능할 수도 있는 - 단계 SQL이 이 리더를
+                // 그대로 통과한다. 픽스 라운드 2 재리뷰가 이 줄을 실제로 지우고
+                // 순환 CTE를 돌려 dotnet test가 CPU 100%로 20초 넘게 멈추는 것을
+                // 강제 종료 전까지 직접 확인했다 - 이론이 아니라 실측. 다이아몬드
+                // (같은 CTE를 두 경로에서 참조)는 순환과 다르다 - physicalTables가
+                // HashSet이라 다이아몬드는 이 줄의 유무와 무관하게 최종 출력이
+                // 같으므로 다이아몬드 테스트로는 이 줄의 필요성을 잴 수 없고, 순환만
+                // 잴 수 있다. Lineage_CyclicCte_ReadReturnsWithinBoundedTime이 유계
+                // 타임아웃(Task.WhenAny)으로 이 줄을 잠근다 - 순환을 직접 돌지만
+                // 무한정 기다리지 않으므로 스위트를 멈추지 않는다.
                 var visitedCtes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var frontier = new Queue<IReadOnlyList<FromClause>>();
                 frontier.Enqueue(froms);

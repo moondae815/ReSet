@@ -1,4 +1,6 @@
+using System;
 using System.Linq;
+using System.Threading.Tasks;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -1367,6 +1369,47 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         var publish = statements.Single(s => s.TargetTable == "TSettleMst");
         Assert.DoesNotContain("InnerCte", publish.RowSourceTables);
         Assert.DoesNotContain("OuterCte", publish.RowSourceTables);
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public async Task Lineage_CyclicCte_ReadReturnsWithinBoundedTime()
+    {
+        // 픽스 라운드 2 재리뷰 실측 - Critical이 아니라 이 가드 자체가 실전
+        // 위험임을 실측으로 확인했다. ScriptDom은 문법 전용 파서라 비재귀 CTE의
+        // 순환 참조(A→B, B→A)를 실행 시점 규칙(전방 참조 금지·바인딩 오류)과
+        // 무관하게 그대로 파싱한다 - 사람이 손으로 쓴, 실행 불가능할 수도 있는
+        // 단계 SQL이 이 리더를 그대로 통과한다는 뜻이다. 재리뷰가 visitedCtes
+        // 가드를 실제로 지우고 이 입력을 돌려 dotnet test가 CPU 100%로 20초
+        // 넘게 멈추는 것을 강제 종료 전까지 직접 확인했다 - 이론이 아니라 실측.
+        // 순환을 직접 도는 테스트는 무한 루프면 스위트 전체를 멈출 위험이 있어
+        // 유계 타임아웃(Task.WhenAny)으로 안전하게 잠근다 - 가드가 있으면 이 호출은
+        // 밀리초 안에 끝나므로 타임아웃을 넉넉히 잡아도 오탐(거짓 실패) 위험이
+        // 없다.
+        var sql =
+            ";WITH A AS ( SELECT X FROM B ), B AS ( SELECT X FROM A )\n" +
+            "INSERT INTO dbo.T SELECT X FROM A;";
+
+        var readTask = Task.Run(() => StepSqlStatementReader.Read(Fence(sql)));
+        var winner = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(winner == readTask, "순환 CTE 입력에서 Read가 10초 안에 반환하지 못했다 - visitedCtes 가드가 없으면 이렇게 무한 루프에 빠진다.");
+    }
+
+    [Fact]
+    public void Lineage_CteReferencedWithDifferentCase_StillResolvesToPhysicalTable()
+    {
+        // Minor - 픽스 라운드 2 재리뷰. cteBodies 딕셔너리가 대소문자를 무시하지
+        // 않으면, CTE를 한 대소문자로 선언하고 다른 대소문자로 참조하는 실물
+        // SQL(대소문자가 늘 일관되진 않다)에서 그 CTE가 물리 테이블로 오분류된다
+        // - 방향은 과소(계보를 놓침)이므로 안전하지만, 검사 B/C가 침묵하는
+        // 대신 그 문장이 그냥 계보 없음으로 떨어져 원래 기대한 이전이 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM PICK;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
         Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
     }
 }
