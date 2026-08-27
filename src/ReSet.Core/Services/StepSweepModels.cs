@@ -188,6 +188,58 @@ namespace ReSet.Core.Services
         /// 검증기에서 배선을 빼야 하고, 그 결합보다 이 근사가 낫다고 봤다.
         /// </summary>
         public int StepsWithReusedCodeAnchors { get; init; }
+
+        /// <summary>
+        /// [침묵 분모] 캐시 17 이 앵커를 정상화하면 발화가 켜지는 만큼 **가려져 있던
+        /// 침묵도 함께 켜진다.** 좌표 차분으로는 그 부류가 보이지 않는다 - 가드가
+        /// 조건 (A)에서도 (B)에서도 같은 좌표를 침묵시키면 차분이 정의상 0 이기 때문이다.
+        ///
+        /// 승격 전에는 앵커가 안 풀려 면제가 **도달 불가능**하다. 그래서 아래 계수들의
+        /// 증가분이 곧 「이번에 새로 생긴 침묵」이다.
+        ///
+        /// [사유가 아니라 분모다] 어느 좌표가 어느 가드에 침묵당했는지는 세지 않는다 -
+        /// 그러려면 검증기가 판정 사유를 내보내야 하고, 그 결합보다 이 분모가 낫다고
+        /// 봤다(StepsWithReusedCodeAnchors 가 같은 판단을 적는다).
+        /// </summary>
+        public int AnchorsResolved { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int AnchorsUnresolved { get; init; }
+
+        /// <summary>
+        /// 서수로는 환산됐으나 (Kind, Ordinal) 모호성 가드가 버린 문장 수.
+        /// ResolveOrdinal 이 값을 낸 문장 수에서 ResolveAnchoredStatements 가 돌려준
+        /// 문장 수를 뺀 값이라 근사가 아니라 같은 재료다.
+        /// </summary>
+        public int AnchorsDroppedForAmbiguity { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int StatementsWithLineage { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int StatementsReadingOnlyStaging { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int StatementsReadingOwnTarget { get; init; }
+
+        /// <summary>
+        /// 원천이 전부 스테이징인데 자기 대상을 함께 읽어 **면제가 취소된** 문장 수.
+        ///
+        /// [이 회차에서 가장 중요한 계수] 2026-08-27 최종 리뷰의 Critical 이 이 자리다 -
+        /// 방어선 둘이 서로의 전제를 무너뜨려 검사 C 가 35 좌표에서 꺼졌는데 발견 당시
+        /// **관측 변화가 0 이었다.** 승격 후에도 이 값이 0 이면 방어가 도달하지 못한
+        /// 것이고, 그건 수정이 살아 있다는 증거가 아니라 재지 않았다는 증거다.
+        /// </summary>
+        public int StagingExemptionsCancelledByOwnTarget { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int StatementsWithSubordinatePredicates { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int SubordinatePredicateColumnTotal { get; init; }
+
+        /// <inheritdoc cref="AnchorsResolved"/>
+        public int StagingSourceTotal { get; init; }
     }
 
     public sealed record SweepReport(

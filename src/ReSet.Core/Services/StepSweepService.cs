@@ -114,6 +114,17 @@ namespace ReSet.Core.Services
             var stepsWithReusedCodeAnchors = 0;
             var unresolvedProcedureReferences = 0;
 
+            var anchorsResolved = 0;
+            var anchorsUnresolved = 0;
+            var anchorsDroppedForAmbiguity = 0;
+            var statementsWithLineage = 0;
+            var statementsReadingOnlyStaging = 0;
+            var statementsReadingOwnTarget = 0;
+            var stagingExemptionsCancelledByOwnTarget = 0;
+            var statementsWithSubordinatePredicates = 0;
+            var subordinatePredicateColumnTotal = 0;
+            var stagingSourceTotal = 0;
+
             foreach (var job in input.Jobs)
             {
                 try
@@ -198,6 +209,59 @@ namespace ReSet.Core.Services
                             .GroupBy(st => st.CodeAnchor!, StringComparer.Ordinal)
                             .Any(g => g.Count() > 1);
                         if (hasReusedCode) stepsWithReusedCodeAnchors++;
+
+                        // [침묵 분모] SweepIndicators.AnchorsResolved 문서 참고.
+                        // 조건 (B)의 사전으로 센다 - 캐시 17 이후의 관할을 재는 것이
+                        // 목적이고, 조건 (A)로 세면 사전이 비어 전부 0 이 나와 승격
+                        // 전후를 대조할 기준선이 생기지 않는다.
+                        var simulatedFactsForStep = step.LegacyProcedures
+                            .Select(p => MechanicalValidator.BareObjectName(p))
+                            .Where(factsSimulated.ContainsKey)
+                            .Select(bare => factsSimulated[bare])
+                            .ToList();
+
+                        var codeMapForStep = MechanicalValidator.MergeErrorCodeMaps(simulatedFactsForStep);
+                        var specTargetsForStep = MechanicalValidator.BuildSpecTargets(simulatedFactsForStep);
+
+                        var ordinalResolvable = stepStatements
+                            .Count(st => MechanicalValidator.ResolveOrdinal(st, codeMapForStep).HasValue);
+                        var anchoredForStep =
+                            MechanicalValidator.ResolveAnchoredStatements(stepStatements, codeMapForStep);
+
+                        anchorsResolved += anchoredForStep.Count;
+                        anchorsUnresolved += stepStatements.Count - ordinalResolvable;
+                        anchorsDroppedForAmbiguity += ordinalResolvable - anchoredForStep.Count;
+
+                        foreach (var st in stepStatements)
+                        {
+                            if (st.LineageSources.Count > 0) statementsWithLineage++;
+                            if (st.ReadsOwnTarget) statementsReadingOwnTarget++;
+
+                            var stagingSourceCount =
+                                MechanicalValidator.StagingSources(st, specTargetsForStep).Count();
+                            stagingSourceTotal += stagingSourceCount;
+
+                            var readsOnlyStaging =
+                                MechanicalValidator.ReadsOnlyStaging(st, specTargetsForStep);
+                            if (readsOnlyStaging) statementsReadingOnlyStaging++;
+
+                            // [왜 ReadsOwnTarget 을 직접 안 보는가] 조건을 베끼면
+                            // ReadsOnlyStaging 이 조건을 하나 더 얻을 때 갈린다.
+                            // 「원천이 전부 스테이징인데 면제가 안 났다」로 유도하면
+                            // 무슨 이유로 취소됐든 계속 옳게 센다.
+                            var allSourcesAreStaging = st.LineageSources.Count > 0
+                                && stagingSourceCount == st.LineageSources.Count;
+                            if (allSourcesAreStaging && !readsOnlyStaging)
+                            {
+                                stagingExemptionsCancelledByOwnTarget++;
+                            }
+
+                            if (st.SubordinatePredicateColumns.Count > 0)
+                            {
+                                statementsWithSubordinatePredicates++;
+                                subordinatePredicateColumnTotal += st.SubordinatePredicateColumns.Count;
+                            }
+                        }
 
                         if (lostStatementCount > 0)
                         {
@@ -285,6 +349,16 @@ namespace ReSet.Core.Services
                 {
                     StepsSkippedForParseFailure = skippedForParseFailure,
                     StepsWithReusedCodeAnchors = stepsWithReusedCodeAnchors,
+                    AnchorsResolved = anchorsResolved,
+                    AnchorsUnresolved = anchorsUnresolved,
+                    AnchorsDroppedForAmbiguity = anchorsDroppedForAmbiguity,
+                    StatementsWithLineage = statementsWithLineage,
+                    StatementsReadingOnlyStaging = statementsReadingOnlyStaging,
+                    StatementsReadingOwnTarget = statementsReadingOwnTarget,
+                    StagingExemptionsCancelledByOwnTarget = stagingExemptionsCancelledByOwnTarget,
+                    StatementsWithSubordinatePredicates = statementsWithSubordinatePredicates,
+                    SubordinatePredicateColumnTotal = subordinatePredicateColumnTotal,
+                    StagingSourceTotal = stagingSourceTotal,
                 },
                 new HarnessGaps(
                     input.PlanParseFailedJobs,
