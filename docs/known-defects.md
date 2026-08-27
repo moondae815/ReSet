@@ -2324,38 +2324,61 @@
   남긴다 — 명세서 대상 제외와 같은 방식으로 "이행이 만든 스테이징 스키마
   이름 자체"도 정규화에서 스키마까지 함께 보게 좁히면 이 충돌이 닫힌다.
 
-  **코퍼스 범위 (최종 리뷰 I3, 2026-08-27 직접 확인 - 리뷰가 제시한 수치를
-  그대로 옮기지 않고 재확인한 결과, 수치가 다르다).** 리뷰는 "계보 원천이 그
-  단계에서 두 번 이상 쓰인 문장-원천 쌍이 43건, 그중 이행 발명 스키마끼리의
-  베이스 이름 충돌은 15좌표(`POQSettleProc6` 6 · `POQSettleProc9` 9)"라고
-  적었다 - 직접 돌린 프로브(`StepSqlStatementReader.Read`를 코퍼스 546개
-  단계 파일 전수에 돌리고, 각 문장의 `LineageSources` 원천이 같은 파일
-  안에서 2회 이상 쓰기 대상이었는지 대조. 프로브는 커밋하지 않았다)는 **다른
-  수치**를 낸다:
-  - 문장-원천 쌍(원천이 같은 단계에서 2회 이상 쓰인 것) — **47건** (43건이
-    아니다).
-  - 그중 반복 쓰기가 서로 다른 스키마 한정자를 쓴(베이스 이름 충돌 후보)
-    쌍 — **10건**, 5개 단계 파일, 3개 Job(`POQSettleProc6`·`POQSettleProc8`·
-    `POQSettleProc9`).
-  - 10건 중 1건(`POQSettleProc8/S08`, `shadow.TSettleMst` vs
-    `dbo.TSettleMst`)은 **이행 발명 스키마끼리가 아니다** - `dbo.TSettleMst`는
-    명세서 대상 그 자체이므로 위 §2-1이 이미 다루는 「명세서 대상 vs
-    스테이징」 충돌이고, `specTargets` 제외가 이 좌표의 검사 오발화를 이미
-    막는다(계보 원천 컬럼 자체는 여전히 잘못 매이지만, 두 검사 모두
-    `TSettleMst`가 명세서 대상이라 걸러 이 좌표에서는 발현하지 않는다).
-  - 남는 **이행 발명 스키마끼리** 충돌은 **9건**, 4개 단계 파일, 2개 Job —
-    `POQSettleProc6`(`S05`의 `TPGSettleRate4Extra__RunId__S05`·
-    `TClientSettleRate4Extra__RunId__S05`, `S29`의
-    `TStatPGCollect__RunId__S29`, `S03`의 `TPGSettleRate__RunId__S03` - 전부
-    `stage.`/`work.` 대 `recovery.` 충돌) · `POQSettleProc9`(`S13`의
-    `TSettleByTX_Run_S13`, `batch_shadow.` 대 `batch_work.` - 이 문단이 이미
-    기록한 실물).
+  **코퍼스 범위 (최종 리뷰 I3, 2026-08-27 직접 확인 - 픽스 라운드 2에서
+  분모 오류를 잡고 재확인).** 리뷰는 "계보 원천이 그 단계에서 두 번 이상
+  쓰인 문장-원천 쌍이 43건, 그중 이행 발명 스키마끼리의 베이스 이름 충돌은
+  15좌표(`POQSettleProc6` 6 · `POQSettleProc9` 9)"라고 적었다.
 
-  리뷰가 제시한 "43·15(Proc6 6·Proc9 9)"는 이 프로브로 재현되지 않는다 -
-  방법(정규식 근사로 원본 쓰기의 스키마 한정자를 모으는 방식)이 다를 수
-  있고, 어느 쪽이 맞는지 제3의 방법으로 교차검증하지는 않았다. **위 수치
-  (47·10·9)가 이 회차에 직접 돌려 확인한 값**이고, 다음 회차가 이 범위를
-  재료로 쓸 때는 이 문단의 수치를 참고하라.
+  **분모 - 정정.** 라운드 1에서 "코퍼스 546개 단계 파일"이라고 적었는데
+  틀렸다 - 프로브의 파일 탐색 패턴(`"S*.md"`를 `output/Jobs` 전체에
+  재귀 검색)이 `agent/steps/` 밖의 파일(예:
+  `output/Jobs/POQSettleProc7/raw/ddl/SETTLE_CARD_DB.dbo.*.md`처럼 스키마
+  이름이 `S`로 시작하는 DDL 참고 문서 220개)까지 함께 주웠다 -
+  `output.bak-2026-08-22`를 섞은 것이 아니었다(그 심링크는 이번 프로브
+  경로에 아예 들어가지 않는다). 파일 목록을 `output/Jobs/*/agent/steps/*.md`로
+  명시적으로 좁혀 다시 세니 **326개**다(같은 값을 `find`로도 확인:
+  `find output/Jobs -name "*.md" -path "*/steps/*" | wc -l` → 326). 진짜
+  분모는 326이다.
+
+  **43과 47은 둘 다 맞다 - 정의가 다르다.** 분모를 326으로 바로잡아 다시
+  돌린 프로브(`StepSqlStatementReader.Read`를 그 326개 파일 전수에 돌리고,
+  파일 수를 코드로 직접 로그에 남겨 확인. 프로브는 커밋하지 않았다)는 정의에
+  따라 둘 다 재현한다:
+  - **43** - 「읽는 문장보다 **앞선** 쓰기가 2회 이상」. `AttachLineage`의
+    `writtenAt`(TryAdd, 문서 순서로 처리)이 실제로 마주치는 모호성과
+    맞물리는 정의다 - 어떤 문장이 원천 T를 읽을 때, 그 시점까지 T를 쓴
+    문장이 이미 2개 이상이면 `writtenAt`은 첫 번째만 기억하므로 이 읽기의
+    계보가 어느 쓰기를 지칭하는지 모호해진다. 읽은 **뒤에** 오는 쓰기는 이
+    읽기의 계보에 영향을 줄 수 없으므로 세지 않는다. → **43건** (리뷰의
+    수치와 일치).
+  - **47** - 「그 단계 파일 **전체**에서 쓰기가 2회 이상」(순서 무시,
+    상위집합). 라운드 1이 쓴 정의다. → **47건**.
+  둘 다 코드로 직접 확인했고 어느 쪽도 틀리지 않았다 - 43은 기제와 맞물리는
+  부분집합, 47은 그 상위집합이다.
+
+  **베이스 이름 충돌(이행 발명 스키마끼리) - 9가 맞다.** 43(기제와 맞물리는
+  정의) 기준으로 반복 쓰기가 서로 다른 스키마 한정자를 쓴 쌍은 **9건**, 4개
+  단계 파일, 2개 Job(`POQSettleProc6` 3개 단계 · `POQSettleProc9` 1개 단계) -
+  `POQSettleProc6`(`S03`의 `TPGSettleRate__RunId__S03`, `S05`의
+  `TPGSettleRate4Extra__RunId__S05`·`TClientSettleRate4Extra__RunId__S05`,
+  `S29`의 `TStatPGCollect__RunId__S29` - 전부 `stage.`/`work.` 대 `recovery.`
+  충돌) · `POQSettleProc9`(`S13`의 `TSettleByTX_Run_S13`, `batch_shadow.` 대
+  `batch_work.` - 이 문단이 이미 기록한 실물). 47(상위집합) 기준으로는
+  10건 - 나머지 1건(`POQSettleProc8/S08`, `shadow.TSettleMst` vs
+  `dbo.TSettleMst`)은 **이행 발명 스키마끼리가 아니다**(`dbo.TSettleMst`는
+  명세서 대상 그 자체이므로 위 §2-1이 이미 다루는 「명세서 대상 vs
+  스테이징」 충돌이고 `specTargets` 제외가 이 좌표의 검사 오발화를 이미
+  막는다) - 게다가 이 쓰기는 읽기보다 **뒤에** 오므로(`복구` 절의 재삽입)
+  43 정의에서는 애초에 세지 않는다.
+
+  리뷰의 "15"는 정규식 근사가 `SELECT * INTO`를 쓰기로 잘못 센 결과다 -
+  15 중 5개가 `POQSettleProc9/S03`인데, 그 좌표의
+  `batch_shadow.…_Run_S03` 쓰기는 전부 `SELECT * INTO …`이고 리더의
+  `DmlCollector`는 `UpdateStatement`·`DeleteStatement`·`InsertStatement`만
+  방문해 `SELECT INTO`(문법상 `SelectStatement`)를 쓰기로 읽지 않는다 -
+  이 브랜치가 `118건/52건`에서 겪은 것과 같은 종류의 실패(정규식 근사 vs
+  실제 리더)다. **9로 확정한다** - 다음 회차가 이 범위를 재료로 쓸 때는 이
+  문단의 수치(분모 326 · 43/47 · 충돌 9/10)를 참고하라.
 
   **부류 5 (6건) — 검사 C가 스테이징 실행 식별자를 "더한 술어"로 본다.
   2026-08-27 해소(5/6건).**
