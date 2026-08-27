@@ -1132,6 +1132,14 @@
   | 19 | C | POQSettleProc3/S04 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,OrgDiscountAmt,ExtraSettleFlag,PGName]` | **판정불가 — 미검증** |
   | 20 | C | POQSettleProc16/S08 | UPDATE 7 | CommissionCancelFlag 초과 | **True** | `[CommissionCancelFlag]` | **거짓양성(확인)** — #17과 같은 UPDATE 7(COMM_UPD). 원본의 "파생 테이블 D" 스코프 필터 `B.CommissionCancelFlag=1`(Spec.md 345행)이 이 잡에서는 최상위 조인 파트너 `C`(TClientSettleRate)를 직접 참조하는 `WHERE C.CommissionCancelFlag=1`로 옮겨왔다(`output/Jobs/POQSettleProc16/agent/steps/S08.md:289-335`) — #17과 같은 "CTE 필터 재배치" 갈래 |
 
+  > **행 2·10의 기제 서술은 2026-08-26에 낡았다.** 두 행은 "INSERT는
+  > `IsCandidateForAnchoredStatementCheck`가 후보에서 빼므로 이 필터가
+  > 검사에 보이지 않는다"고 적었는데, 그 술어는 (5-3-2)에서 제거됐고 INSERT는
+  > 검사 B·C에 재편입됐다. **판정(거짓양성) 자체는 유효하다** — 다만 지금
+  > 남아 있는 이유가 다르다. 이 둘은 「2단계 스테이징 선계산」 갈래이고,
+  > 앵커가 분해된 문장 중 뒤엣것에만 붙는 원인 (b)로 여전히 열려 있다.
+  > 측정 시점의 기록으로 읽고, 원인은 (b) 항목에서 확인할 것.
+
   **CTE·파생 테이블 사각지대 갈래 건수(과제가 가장 값지다고 지목한 산출물) —
   20건 표본 전수 확정.** 표본 20건 중 `HasOpaqueJoinSource=True`가 **7건**
   (B에서 5건: #1·#3·#4·#7·#9, C에서 2건: #17·#20 — #14는 #3과 같은 문장이라
@@ -1341,11 +1349,28 @@
   항상 빈 사전을 돌려주고 → `ResolveOrdinal`의 코드 앵커 경로는 **도달
   불가**다. Task 8이 잰 코퍼스 2건(0.6%, (A)조건) → 199건(60%, (B)조건 —
   코드 앵커가 실제로 켜졌을 때 잡히는 단계 파일 수) 확대는 **캐시 17 +
-  전건 재생성 뒤에야** 일어난다. 그동안 실제로 켜지는 유일한 변화는
-  `IsCandidateForAnchoredStatementCheck`(`MechanicalValidator.cs:6162-6163`)가
-  INSERT 문장을 후보에서 빼는 것뿐이다 — 즉 **검사 B·C의 관할이 순수하게
-  줄어든다**(영향은 사실상 0이지만 부호는 음수다). **다음 사람이 코드만
-  보고 "이 축은 이미 작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+  전건 재생성 뒤에야** 일어난다. **다음 사람이 코드만 보고 "이 축은 이미
+  작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+
+  ~~그동안 실제로 켜지는 유일한 변화는 `IsCandidateForAnchoredStatementCheck`가
+  INSERT 문장을 후보에서 빼는 것뿐이고, 검사 B·C의 관할이 순수하게 줄어든다
+  (부호는 음수다).~~ **2026-08-26에 뒤집혔다.** 그 술어는 (5-3-2)에서 통째로
+  제거됐다 — 애초에 INSERT를 뺀 이유가 배선 결함의 임시 대응이었고, 배선을
+  고치자 근거가 사라졌다. 지금은 반대다: **INSERT가 검사 B·C에 재편입되어
+  관할이 늘었고 부호는 양수다.** 실측으로 발화가 49 → 86건이 됐다. 인상을
+  검토하는 사람이 이 문단만 보고 "관할이 줄어드는 방향이니 안전하다"고
+  읽으면 정반대다.
+
+  **(1-b) 한 번도 발화한 적 없는 검사가 함께 켜진다 — `CheckErrorCodes`
+  (2026-08-27 실측).** 이 검사는 첫 줄이 `if (expectations.ErrorCodes.Count
+  == 0) return;`이고, 코퍼스에서 그 조건이 **항상 참**이다. 실측: 출력 문서
+  중 `### 오류 코드 (기계 확정 — 수정 금지)` 헤딩을 가진 것 **0건**,
+  스윕 보고서 다섯 편에 오류 코드 관련 발화 **0건**. 즉 (2)의 `MergeErrorCodeMaps`
+  위험과 달리 이쪽은 "일부만 막힌다"가 아니라 **검사 전체가 한 번도 실행돼
+  본 적이 없다**. 캐시 17이 표를 실으면 헤딩 부재 갈래(`기계 확정 오류 코드
+  표가 명세서에 없습니다`)부터 문서 단위로 켜진다. 원인 (a)~(d)와 같은 창에
+  놓고 봐야 하며, 지금 근거 없이 손대지는 않는다(같은 관찰을 `reset-38`이
+  독립으로 보고했고 판단이 일치한다).
 
   **(2) 코드 사전이 SP로 스코프되지 않는다 (I3).** `MergeErrorCodeMaps`
   (`MechanicalValidator.cs:6172` 부근)는 같은 코드 문자열이 서로 다른 SP에서
@@ -1421,8 +1446,9 @@
   단계 수」다. 비율로 적으면 68/280≈**24%**·63/280≈**23%** — 326을
   분모로 쓰면(68/326≈21%·63/326≈19%) 실제보다 낮게 잡혀 과소평가한다.
 
-  **(5-2-1) 정정 — 위 최초 실측값(64/68)이 틀렸었다.** `ComputeIndicators`
-  (`StepSweepService.cs`)가 SP 표 코드 조회를 `step.LegacyProcedures`의
+  **(5-2-1) 정정 — 위 최초 실측값(64/68)이 틀렸었다.** 당시 `ComputeIndicators`
+  (`StepSweepService.cs`, **지금은 그 이름의 메서드가 없다** — 지표 계산은
+  `StepSweepService.Sweep` 본문으로 접혔다)가 SP 표 코드 조회를 `step.LegacyProcedures`의
   원문 그대로 `job.DdlByProcedure`에 넣었는데, `step.LegacyProcedures`는
   코퍼스 실측 314개 참조 중 **134개(43%)가 스키마 접두사 없이** 실리는
   반면 `DdlByProcedure`는 `SweepCommand`가 항상 디렉터리 이름
@@ -2230,11 +2256,11 @@
 
   근거: `dotnet run --project src/ReSet.Cli -- --sweep` 실행 결과
   (`docs/audit-reports/sweeps/2026-08-26-step-sweep.md`, 최초 커밋
-  `facdb52` 기준 — 위 (5-2-1) 정정으로 `ComputeIndicators` 조회 결함을
+  `facdb52` 기준 — 위 (5-2-1) 정정으로 그 지표 계산의 조회 결함을
   고친 뒤 커밋 `cd6be15` 기준으로 재발행했다. 재발행 시점의 수치가
   (5-2)·(5-2-1)·(5-2-2)의 68/63이고, 그 외 다른 절(예: (5-3)의
   B=70·C=38, (5-4)의 미분류 977)은 이번 정정으로 값이 안 바뀌었다 —
-  `ComputeIndicators`가 건드리는 것은 코드 집합 지표 둘뿐이다) + 위
+  이 계산이 건드리는 것은 코드 집합 지표 둘뿐이다) + 위
   Task 8·11 실측 + T7 리뷰가 이미 닫은 원인 규명 (세대 15→16 코퍼스
   재생성, `output/Procedures/*/docs/Spec.md` 14개 전부 2026-08-25
   mtime).
@@ -2293,7 +2319,9 @@
     검사가 **발동했다**(수정 전에는 이 두 Job이 통째로 0건이었다는 것이 C3의
     동기였다). `POQSettleProc2`는 이번 스윕에서 0건인데, 그 Job의 `LegacyProcedures`
     중 값이 있는 3개 항목(`UP_Util_Settle_Summary` 등)도 접두사 없는 이름이라
-    같은 함정에 해당할 수 있다 — 다만 `FindSpecPath`의 `bareNameIndex` 폴백으로
+    같은 함정에 해당할 수 있다 — 다만 맨이름 폴백(당시 `FindSpecPath`의
+    `bareNameIndex`. **둘 다 지금은 없는 이름이다** — 같은 규칙이
+    `MechanicalValidator.BareObjectName`으로 만든 색인에 남아 있다)으로
     `output/Procedures/dbo.UP_Util_Settle_Summary/docs/Spec.md`가 정상적으로
     찾아지는 것은 직접 확인했으므로, 이 0건이 조회 실패가 아니라 실제로
     깨끗한 것인지는 **미확인**(S13~S15 본문을 명세서와 문장 단위로 대조하지
