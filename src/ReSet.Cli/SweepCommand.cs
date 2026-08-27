@@ -146,7 +146,8 @@ namespace ReSet.Cli
             if (report.Gaps.MeasuredPairs == 0) return null;
 
             var markdown = StepSweepReportWriter.Render(
-                report, ShortCommitHash(repoRoot), CacheFormatVersions(outputDir));
+                report, ShortCommitHash(repoRoot), CacheFormatVersions(outputDir),
+                ChangedFileCount(repoRoot));
 
             var path = NextAvailablePath(repoRoot);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -269,6 +270,38 @@ namespace ReSet.Cli
             catch (Exception ex)
             {
                 return $"알 수 없음({ex.GetType().Name})";
+            }
+        }
+
+        /// <summary>
+        /// 커밋되지 않은 변경 파일 수. 읽지 못하면 null - 그때는 보고서가 「알 수 없음」을
+        /// 적는다. 「깨끗」으로 대신하면 이 값이 막으려던 거짓 기록을 다시 만든다.
+        /// </summary>
+        private static int? ChangedFileCount(string repoRoot)
+        {
+            try
+            {
+                var info = new ProcessStartInfo("git", "status --porcelain")
+                {
+                    WorkingDirectory = repoRoot,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                };
+
+                using var process = Process.Start(info);
+                if (process == null) return null;
+
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                if (process.ExitCode != 0) return null;
+
+                return output
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Count(line => line.Trim().Length > 0);
+            }
+            catch (Exception)
+            {
+                return null;
             }
         }
 

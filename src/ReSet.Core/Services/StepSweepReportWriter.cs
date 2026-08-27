@@ -22,13 +22,14 @@ namespace ReSet.Core.Services
             SweepCheck.D, SweepCheck.E, SweepCheck.Unclassified,
         };
 
-        public static string Render(SweepReport report, string commitHash, string cacheFormatVersions)
+        public static string Render(
+            SweepReport report, string commitHash, string cacheFormatVersions, int? changedFileCount)
         {
             var b = new StringBuilder();
 
             b.AppendLine("# 단계 검사 스윕");
             b.AppendLine();
-            AppendConditions(b, report.Gaps, commitHash, cacheFormatVersions);
+            AppendConditions(b, report.Gaps, commitHash, cacheFormatVersions, changedFileCount);
             AppendTotals(b, report.Findings);
             AppendPerJob(b, report.Findings);
             AppendUpperBoundNote(b);
@@ -39,11 +40,28 @@ namespace ReSet.Core.Services
         }
 
         private static void AppendConditions(
-            StringBuilder b, HarnessGaps gaps, string commitHash, string cacheFormatVersions)
+            StringBuilder b, HarnessGaps gaps, string commitHash, string cacheFormatVersions,
+            int? changedFileCount)
         {
             b.AppendLine("## 실행 조건");
             b.AppendLine();
             b.AppendLine($"- 커밋: `{commitHash}`");
+
+            // [왜 트리 청결도를 함께 싣는가 - 2026-08-27]
+            // 「커밋: X」만으로는 「X의 코드가 이 수치를 냈다」가 보증되지 않는다.
+            // 더러운 트리에서 내면 해시는 정직한데 수치는 커밋 안 된 코드의 것이다.
+            // 그 틈으로 거짓 기록이 실제로 커밋됐고, 최종 리뷰어는 「실행 당시 트리가
+            // 깨끗했는지는 재현 없이 확인 불가」로 판정 불가를 남겼다.
+            //
+            // null 은 「깨끗」이 아니라 「알 수 없음」이다 - git 호출이 실패했을 때
+            // 깨끗으로 적으면 이 항목이 막으려던 거짓 기록을 다른 자리에서 다시 만든다.
+            b.AppendLine(changedFileCount switch
+            {
+                0 => "- 작업 트리: 깨끗",
+                > 0 => $"- 작업 트리: **더러움** (변경된 파일 {changedFileCount}개) — "
+                       + "이 수치는 커밋되지 않은 코드가 낸 것이다",
+                _ => "- 작업 트리: 알 수 없음 (git 상태를 읽지 못했다)",
+            });
             b.AppendLine($"- 캐시 인덱스 `FormatVersion` 집합: {cacheFormatVersions}");
             b.AppendLine($"- 측정 쌍: {gaps.MeasuredPairs} (Job {gaps.MeasuredJobs}개)");
             b.AppendLine($"- 단계 파일 누락: {gaps.MissingStepFiles}");

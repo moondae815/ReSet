@@ -257,6 +257,8 @@ ReSet/
         "ApiKey": "",              // https://openrouter.ai/settings/keys 에서 발급 (필수)
         "Endpoint": "https://openrouter.ai/api/v1",
         "NumCtx": null,            // 지정하면 max_tokens로 전달. 비우면 모델 기본값
+        // [중요] Routing은 재현성뿐 아니라 프롬프트 캐싱의 전제 조건입니다. 고정하지 않으면
+        // 회차마다 다른 백엔드로 가서 1회차에 쓴 캐시를 2회차가 읽지 못합니다.
         "Routing": {               // [선택] 백엔드 제공자 라우팅 선호. 비우면 OpenRouter 기본 라우팅
           "Order": [],             // 시도할 제공자 순서 (예: [ "anthropic", "google-vertex" ])
           "AllowFallbacks": null,  // Order가 모두 실패했을 때 다른 제공자로 넘어갈지 여부

@@ -51,7 +51,7 @@ namespace ReSet.Core.Tests
                     RunRowOwnedTablesWereNull: true,
                     KnownTableNamesWereEmpty: true));
 
-            var section = Section(StepSweepReportWriter.Render(report, "abc1234", "16"), "## 캐시 17 선결 지표");
+            var section = Section(StepSweepReportWriter.Render(report, "abc1234", "16", 0), "## 캐시 17 선결 지표");
             Assert.Contains("| 코드 앵커가 둘 이상의 문장에 붙은 단계 수 | 81 |", section);
         }
 
@@ -60,7 +60,7 @@ namespace ReSet.Core.Tests
         public void ReusedCodeAnchorRowPrintsEvenWhenZero()
         {
             var section = Section(
-                StepSweepReportWriter.Render(Report(), "abc1234", "16"), "## 캐시 17 선결 지표");
+                StepSweepReportWriter.Render(Report(), "abc1234", "16", 0), "## 캐시 17 선결 지표");
             Assert.Contains("| 코드 앵커가 둘 이상의 문장에 붙은 단계 수 | 0 |", section);
         }
 
@@ -74,7 +74,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = StepSweepReportWriter.Render(
                 ReportWithGenerations(D("2026-08-12"), D("2026-08-24"), D("2026-08-25"), D("2026-08-25")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
             var head = Section(markdown, "## 실행 조건");
 
             Assert.Contains("2026-08-12 ~ 2026-08-24", head);
@@ -88,7 +88,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = StepSweepReportWriter.Render(
                 ReportWithGenerations(D("2026-08-12"), D("2026-08-24"), D("2026-08-25"), D("2026-08-25")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             Assert.Contains("단계 번들이 명세서보다 낡았다", Section(markdown, "## 실행 조건"));
         }
@@ -99,7 +99,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = StepSweepReportWriter.Render(
                 ReportWithGenerations(D("2026-08-25"), D("2026-08-26"), D("2026-08-25"), D("2026-08-25")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             Assert.DoesNotContain("단계 번들이 명세서보다 낡았다", Section(markdown, "## 실행 조건"));
         }
@@ -109,7 +109,7 @@ namespace ReSet.Core.Tests
         public void UnknownGenerationsStillPrintTheirRows()
         {
             var markdown = StepSweepReportWriter.Render(
-                ReportWithGenerations(null, null, null, null), "abc1234", "16");
+                ReportWithGenerations(null, null, null, null), "abc1234", "16", 0);
             var head = Section(markdown, "## 실행 조건");
 
             Assert.Contains("단계 번들 세대: 알 수 없음", head);
@@ -137,7 +137,7 @@ namespace ReSet.Core.Tests
         [Fact]
         public void HeaderAlwaysCarriesHarnessGaps()
         {
-            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
 
             Assert.Contains("abc1234", markdown);
             Assert.Contains("16", markdown);
@@ -165,7 +165,7 @@ namespace ReSet.Core.Tests
                     UnresolvedProcedureReferences = 0,
                 });
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var header = Section(markdown, "## 실행 조건");
 
             Assert.Contains("미해결 프로시저 참조: 0", header);
@@ -189,7 +189,7 @@ namespace ReSet.Core.Tests
                     JobsWithZeroMeasuredPairs = new[] { "POQSettleProc5", "POQSettleProc20" },
                 });
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var header = Section(markdown, "## 실행 조건");
 
             Assert.Contains("POQSettleProc5", header);
@@ -202,7 +202,7 @@ namespace ReSet.Core.Tests
         [Fact]
         public void HeaderStatesNoneWhenNoJobHasZeroMeasuredPairs()
         {
-            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
             var header = Section(markdown, "## 실행 조건");
 
             Assert.Contains("측정 쌍 0인 Job: 없음", header);
@@ -224,7 +224,7 @@ namespace ReSet.Core.Tests
                     JobsThatThrew = new[] { "PoisonJob" },
                 });
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var header = Section(markdown, "## 실행 조건");
 
             Assert.Contains("PoisonJob", header);
@@ -249,7 +249,7 @@ namespace ReSet.Core.Tests
                     StepCountCapExceededJobs = new[] { "POQSettleProc4 (선언 73단계)" },
                 });
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var header = Section(markdown, "## 실행 조건");
 
             Assert.Contains("POQSettleProc4 (선언 73단계)", header);
@@ -261,7 +261,7 @@ namespace ReSet.Core.Tests
         [Fact]
         public void ReportStatesThatConditionBIsAnUpperBound()
         {
-            Assert.Contains("상한", StepSweepReportWriter.Render(Report(), "abc1234", "16"));
+            Assert.Contains("상한", StepSweepReportWriter.Render(Report(), "abc1234", "16", 0));
         }
 
         [Fact]
@@ -272,7 +272,7 @@ namespace ReSet.Core.Tests
                     new SweepFinding("J1", "S01", SweepCheck.B, SweepCondition.SimulatedCache17, "m"),
                     new SweepFinding("J1", "S02", SweepCheck.B, SweepCondition.SimulatedCache17, "m"),
                     new SweepFinding("J1", "S01", SweepCheck.A, SweepCondition.AsIs, "m")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             // 총계 절만 잘라서 본다 - Job별 표의 행("| J1 | B | 0 | 2 |" 등)이 같은
             // 부분열을 내므로 markdown 전체에서 찾으면 (A)/(B) 열이 뒤바뀌어도 우연히
@@ -291,7 +291,7 @@ namespace ReSet.Core.Tests
                     new SweepFinding("POQSettleProc13", "S09", SweepCheck.B,
                         SweepCondition.SimulatedCache17, "m")
                     { Kind = "UPDATE", Ordinal = 3, Items = new[] { "PGNAME", "MALLID" } }),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             Assert.Contains("POQSettleProc13", markdown);
             Assert.Contains("UPDATE 3", markdown);
@@ -312,7 +312,7 @@ namespace ReSet.Core.Tests
                 Report(
                     new SweepFinding("J1", "S01", SweepCheck.B, SweepCondition.SimulatedCache17, "m"),
                     new SweepFinding("J2", "S01", SweepCheck.B, SweepCondition.SimulatedCache17, "m")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             Assert.Contains("| J1 | B | 0 | 1 |", markdown);
             Assert.Contains("| J2 | B | 0 | 1 |", markdown);
@@ -329,7 +329,7 @@ namespace ReSet.Core.Tests
         {
             var markdown = StepSweepReportWriter.Render(
                 Report(new SweepFinding("J", "S01", SweepCheck.Unclassified, SweepCondition.AsIs, "m")),
-                "abc1234", "16");
+                "abc1234", "16", 0);
 
             Assert.Contains("| 미분류 | 1 | 0 |", markdown);
         }
@@ -350,7 +350,7 @@ namespace ReSet.Core.Tests
                     RunRowOwnedTablesWereNull: false,
                     KnownTableNamesWereEmpty: false));
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
 
             Assert.Contains("목차 파싱 실패 Job: 없음", markdown);
             Assert.Contains("측정 쌍: 0 (Job 0개)", markdown);
@@ -371,7 +371,7 @@ namespace ReSet.Core.Tests
                     RunRowOwnedTablesWereNull: false,
                     KnownTableNamesWereEmpty: false));
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var indicators = Section(markdown, "## 캐시 17 선결 지표");
 
             Assert.Contains("| 펜스 파싱 실패로 코드 집합 대조에서 제외한 단계 수 | 7 |", indicators);
@@ -391,7 +391,7 @@ namespace ReSet.Core.Tests
                     RunRowOwnedTablesWereNull: false,
                     KnownTableNamesWereEmpty: false));
 
-            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
             var indicators = Section(markdown, "## 캐시 17 선결 지표");
 
             Assert.Contains("7", indicators);
@@ -403,10 +403,37 @@ namespace ReSet.Core.Tests
         [Fact]
         public void ZeroSkippedCountEmitsNoWarning()
         {
-            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16");
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
             var indicators = Section(markdown, "## 캐시 17 선결 지표");
 
             Assert.DoesNotContain("분모", indicators);
         }
-    }
+    
+        // 「커밋: X」는 「X의 코드가 이 수치를 냈다」를 보증하지 못한다 - 더러운 트리에서
+        // 내면 해시는 정직한데 수치는 커밋 안 된 코드의 것이다. 2026-08-27 그 틈으로
+        // 거짓 기록이 실제로 커밋됐고 리뷰가 잡았으며, 최종 리뷰어는 「실행 당시 트리가
+        // 깨끗했는지는 재현 없이 확인 불가」로 판정 불가를 남겼다. 그 판정 불가를 없앤다.
+        [Fact]
+        public void ExecutionConditionsReportACleanWorkingTree()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            Assert.Contains("- 작업 트리: 깨끗", markdown);
+        }
+
+        [Fact]
+        public void ExecutionConditionsReportADirtyWorkingTree()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 3);
+            Assert.Contains("- 작업 트리: **더러움** (변경된 파일 3개)", markdown);
+        }
+
+        // git 이 실패했을 때 「깨끗」으로 적으면 이 항목이 막으려던 거짓 기록을 다른
+        // 자리에서 다시 만든다. 모르는 것은 모른다고 적는다.
+        [Fact]
+        public void ExecutionConditionsSayUnknownWhenGitCouldNotBeRead()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", null);
+            Assert.Contains("- 작업 트리: 알 수 없음", markdown);
+        }
+}
 }
