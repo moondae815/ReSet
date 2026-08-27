@@ -844,4 +844,137 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
             .Count(c => string.Equals(c, "DeepLeft", StringComparison.OrdinalIgnoreCase)));
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // CTE 투영 별칭 — 바깥 CTE가 이름을 바꿔 투영하고 안쪽 CTE가 그 별칭으로
+    // 거르면, 수집되는 이름이 명세서의 원래 컬럼 이름과 글자가 달라 이전으로
+    // 인정되지 않는다(docs/known-defects.md (5-3-3) 부류 2, 코퍼스 3건).
+    // 별칭을 원천 컬럼 이름으로 되돌려 **함께** 싣는다 - 별칭도 남긴다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CteProjectionAlias_InlineAs_ResolvesToSourceColumn()
+    {
+        // POQSettlePrco20/S03 축소판. 별칭은 SELECT 목록에만 있고 WHERE에는
+        // 별칭 이름만 나오므로, 해석이 없으면 USESTATE·ContractCancelYMD는
+        // 어디에서도 수집되지 않는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE AS ContractUseState,\n" +
+            "         B.ContractCancelYMD AS CMRateCancelYMD\n" +
+            "  FROM dbo.TClientContract AS A\n" +
+            "  INNER JOIN dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT CLIENTID FROM Base\n" +
+            "  WHERE ContractUseState IN (0, 4) AND CMRateCancelYMD = @p\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CLIENTID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+        Assert.Contains("ContractCancelYMD", statement.SubordinatePredicateColumns);
+
+        // 별칭도 남는다 - 지우면 다른 대조가 무엇에 기대는지 알 수 없다.
+        Assert.Contains("ContractUseState", statement.SubordinatePredicateColumns);
+        Assert.Contains("CMRateCancelYMD", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_PositionalColumnList_ResolvesToSourceColumn()
+    {
+        // POQSettleProc17/S04 축소판. `AS`가 **하나도 없다** - 별칭이 CTE의
+        // 명시 컬럼 목록에 위치로 붙는다. SelectScalarExpression.ColumnName만
+        // 보는 구현은 이 갈래를 통째로 놓친다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, ContractUseState, RateUseState) AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE, B.USESTATE\n" +
+            "  FROM dbo.TClientContract AS A\n" +
+            "  INNER JOIN dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT CID FROM Base WHERE ContractUseState IN (0, 4) AND RateUseState = 5\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_UnionBody_ResolvesThroughEveryBranch()
+    {
+        // 별칭을 **정의하는** CTE 본문이 BinaryQueryExpression이면 캐스트 하나로는
+        // 갈래를 못 편다. DmlScopeExtractor.QuerySpecificationsOf가 그 자리다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS (\n" +
+            "  SELECT A.USESTATE AS ContractUseState FROM dbo.TClientContract AS A\n" +
+            "  UNION ALL\n" +
+            "  SELECT B.USESTATE AS ContractUseState FROM dbo.TClientCMRate AS B\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM Base WHERE ContractUseState = 0\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_ConflictingSources_IsNotResolved()
+    {
+        // 같은 별칭이 서로 다른 원천을 가리키면 해석하지 않는다. 조용한 거짓
+        // 음성보다 사람이 판정하는 거짓 양성을 택하는 이 저장소의 관례다
+        // (MergeErrorCodeMaps의 충돌 코드 제거·재사용 가드의 모호 서수 제거).
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.USESTATE AS Flag FROM dbo.TClientContract AS A ),\n" +
+            "B2 AS ( SELECT C.INSTATE AS Flag FROM dbo.TClientCMRate AS C ),\n" +
+            "Filtered AS ( SELECT 1 AS Kept FROM B1 WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("INSTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_PositionalCountMismatch_IsSkipped()
+    {
+        // 이름 둘에 요소 셋이면 위치 짝짓기가 성립하지 않는다. 그냥 앞에서부터
+        // 짝지으면 Flag가 USESTATE로 잘못 풀린다 - 그 오답이 관측되는 자리다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, Flag) AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE, A.INSTATE FROM dbo.TClientContract AS A\n" +
+            "),\n" +
+            "Filtered AS ( SELECT CID FROM Base WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_SelectStar_IsSkipped()
+    {
+        // 별표는 요소 하나가 몇 컬럼으로 펼쳐지는지 파서가 모른다. 위치 짝짓기의
+        // 전제가 깨지므로 그 CTE는 통째로 건너뛴다.
+        //
+        // [왜 `SELECT *`가 아니라 `SELECT A.*, A.USESTATE`인가 - 이 테스트를 처음
+        // 쓸 때 걸린 함정] 요소가 별표 하나뿐이면 개수(1)가 이름 수(2)와 달라
+        // **개수 검사**에 먼저 걸린다. 그러면 별표 가드를 지워도 이 테스트는
+        // 죽지 않아 자기 이름을 재지 못한다. 개수가 맞으면서 별표가 섞여야
+        // 판별자가 된다 - 가드가 없으면 Flag가 USESTATE로 잘못 풀린다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, Flag) AS (\n" +
+            "  SELECT A.*, A.USESTATE FROM dbo.TClientContract AS A\n" +
+            "),\n" +
+            "Filtered AS ( SELECT CID FROM Base WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
 }

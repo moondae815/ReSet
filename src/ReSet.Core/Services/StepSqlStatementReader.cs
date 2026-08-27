@@ -553,6 +553,11 @@ namespace ReSet.Core.Services
                 foreach (var from in froms) from.Accept(subordinate);
                 foreach (var where in wheres) where.Accept(subordinate);
 
+                // 바깥 CTE가 이름을 바꿔 투영하고 안쪽 CTE가 그 별칭으로 거르면
+                // 위 수집은 별칭 이름만 얻는다. 명세서는 원래 컬럼 이름을 적으므로
+                // 글자가 달라 이전으로 인정되지 않는다((5-3-3) 부류 2, 코퍼스 3건).
+                var aliases = CteProjectionAliases.Build(ctes);
+
                 Found.Add((
                     new StepSqlStatement(
                         kind,
@@ -563,7 +568,7 @@ namespace ReSet.Core.Services
                         grouping.Found,
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
-                        SubordinatePredicateColumns = subordinate.Columns.ToList(),
+                        SubordinatePredicateColumns = aliases.Expand(subordinate.Columns),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
@@ -727,6 +732,141 @@ namespace ReSet.Core.Services
         /// WHERE만"이라는 같은 규칙이 적용된다. 더 안쪽 스코프는 이 방문자의
         /// 기본 순회가 각각 따로 방문해 모은다.
         /// </summary>
+        /// <summary>
+        /// CTE가 투영하며 붙인 별칭을 원천 컬럼 이름으로 되돌리는 사상.
+        ///
+        /// [왜 필요한가 - 2026-08-27 코퍼스 판정 3건]
+        /// 하위 수집기는 컬럼 **이름**만 모으고 검사 B도 이름으로만 대조한다.
+        /// 바깥 CTE가 `A.USESTATE AS ContractUseState`로 투영하고 안쪽 CTE가
+        /// `WHERE ContractUseState IN (0,4)`로 거르면, 필터는 그대로 있는데
+        /// 수집되는 이름이 명세서의 `USESTATE`와 글자가 달라 "명세서가 확정한
+        /// 컬럼이 없어졌다"는 오탐이 난다(docs/known-defects.md (5-3-3) 부류 2).
+        ///
+        /// [두 형태를 다 봐야 한다]
+        /// 실물 두 건이 서로 다른 구문이다. POQSettlePrco20/S03은 인라인 `AS`이고,
+        /// POQSettleProc17/S04는 `AS`가 **하나도 없이** CTE의 명시 컬럼 목록에
+        /// 위치로 붙인다(`;WITH Base (…, ContractUseState, RateUseState) AS
+        /// (SELECT …, A.USESTATE, B.USESTATE …)`). SelectScalarExpression의
+        /// ColumnName만 보는 구현은 뒤쪽을 통째로 놓친다.
+        ///
+        /// [모호하면 해석하지 않는다]
+        /// 같은 별칭이 서로 다른 원천을 가리키면 그 별칭을 버린다. 이 저장소가
+        /// 모호성 앞에서 늘 택하는 방향이다(MergeErrorCodeMaps의 충돌 코드 제거,
+        /// ResolveAnchoredStatements의 모호 서수 제거) - 조용한 거짓 음성보다
+        /// 사람이 판정하는 거짓 양성이 낫다.
+        ///
+        /// [한계 둘 - 여기서 풀지 않는 같은 결함]
+        /// (3) **최상위에는 붙이지 않는다.** 최상위 WHERE·JOIN ON이 CTE 별칭을
+        /// 참조하면 그 이름이 PredicateColumns·JoinColumns에 들어가 같은 masking이
+        /// 난다. 2026-08-27 실측 0건 - 부류 2의 두 단계는 최상위에 WHERE도 JOIN도
+        /// 없어 다섯 컬럼 전부가 하위를 통해서만 온다. 잠복이다.
+        /// (4) **파생 테이블 별칭은 보지 않는다.** `(SELECT A.USESTATE AS Foo …) X`를
+        /// 바깥에서 `WHERE X.Foo = …`로 거르면 같은 모양인데 CTE가 아니라 잡히지
+        /// 않는다. 이 코퍼스에 그런 구문이 있는지는 재지 않았다.
+        ///
+        /// [사슬은 한 홉만] 별칭을 다시 별칭으로 덮는 CTE 사슬은 따라가지 않는다.
+        /// 실물 두 건 모두 한 홉이다.
+        /// </summary>
+        private sealed class CteProjectionAliases
+        {
+            /// <summary>별칭 → 원천 컬럼. 값이 null이면 충돌로 버려진 별칭이다.</summary>
+            private readonly Dictionary<string, string?> _map =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            public static CteProjectionAliases Build(WithCtesAndXmlNamespaces? ctes)
+            {
+                var aliases = new CteProjectionAliases();
+                if (ctes?.CommonTableExpressions == null) return aliases;
+
+                foreach (var cte in ctes.CommonTableExpressions)
+                {
+                    // 별칭을 정의하는 CTE 본문이 UNION이면 캐스트 하나로는 갈래를
+                    // 못 편다. 이 헬퍼가 그 자리를 이미 갖고 있다.
+                    foreach (var spec in DmlScopeExtractor.QuerySpecificationsOf(cte.QueryExpression))
+                    {
+                        aliases.RecordSpec(cte.Columns, spec);
+                    }
+                }
+
+                return aliases;
+            }
+
+            private void RecordSpec(IList<Identifier>? declared, QuerySpecification spec)
+            {
+                var elements = spec.SelectElements;
+                if (elements == null) return;
+
+                if (declared != null && declared.Count > 0)
+                {
+                    // 위치 짝짓기는 개수가 맞고 모든 요소가 스칼라일 때만 성립한다.
+                    // `SELECT *`는 요소 하나가 몇 컬럼으로 펼쳐지는지 파서가 모르므로
+                    // 전제가 깨진다 - 그 CTE는 통째로 건너뛴다.
+                    if (elements.Count != declared.Count) return;
+                    if (elements.Any(e => e is not SelectScalarExpression)) return;
+
+                    for (var i = 0; i < declared.Count; i++)
+                    {
+                        Record(declared[i]?.Value, SourceColumnOf(elements[i]));
+                    }
+
+                    return;
+                }
+
+                foreach (var element in elements.OfType<SelectScalarExpression>())
+                {
+                    Record(element.ColumnName?.Value, SourceColumnOf(element));
+                }
+            }
+
+            private static string? SourceColumnOf(SelectElement element) =>
+                (element as SelectScalarExpression)?.Expression is ColumnReferenceExpression column
+                    ? column.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value
+                    : null;
+
+            private void Record(string? alias, string? source)
+            {
+                if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(source)) return;
+
+                if (!_map.TryGetValue(alias!, out var existing))
+                {
+                    _map[alias!] = source;
+                    return;
+                }
+
+                if (existing == null) return;   // 이미 충돌로 버려졌다
+
+                // 항등 사상(`X AS X`)도 경쟁하는 정의로 센다. 빼면 같은 이름을
+                // 그대로 투영하는 CTE가 다른 CTE의 개명과 충돌해도 안 걸린다.
+                if (!string.Equals(existing, source, StringComparison.OrdinalIgnoreCase))
+                {
+                    _map[alias!] = null;
+                }
+            }
+
+            /// <summary>
+            /// 수집된 이름에 해석된 원천 이름을 **더한다**. 별칭은 남긴다 - 명세서에
+            /// 별칭 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른
+            /// 대조가 무엇을 보고 있었는지 알 수 없게 된다.
+            /// </summary>
+            public List<string> Expand(IReadOnlyList<string> columns)
+            {
+                var expanded = new List<string>(columns);
+                if (_map.Count == 0) return expanded;
+
+                foreach (var column in columns)
+                {
+                    if (_map.TryGetValue(column, out var source)
+                        && source != null
+                        && !string.Equals(source, column, StringComparison.OrdinalIgnoreCase))
+                    {
+                        expanded.Add(source);
+                    }
+                }
+
+                return expanded;
+            }
+        }
+
         private sealed class SubordinatePredicateCollector : TSqlFragmentVisitor
         {
             private readonly List<string> _columns = new();

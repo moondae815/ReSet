@@ -2028,7 +2028,7 @@
   `PredicateColumns=[]` · `JoinColumns=[]` ·
   `SubordinatePredicateColumns=[USESTATE…ContractCancelYMD]`가 모두 같음을 확인했다.
 
-  **부류 2 (3건) — 이름 기반 대조가 투영 별칭을 못 뚫는다.**
+  **부류 2 (3건) — 이름 기반 대조가 투영 별칭을 못 뚫는다. 2026-08-27 해소.**
   `POQSettlePrco20/S03`와 `POQSettleProc17/S04`는 CTE를 둘로 쌓아 바깥 CTE가
   `A.USESTATE AS ContractUseState`, `B.ContractCancelYMD AS CMRateCancelYMD`
   (Proc17은 `RateUseState`·`RateCancelYMD`)처럼 **이름을 바꿔** 투영하고 안쪽
@@ -2039,6 +2039,50 @@
   (`POQSettleProc17/S04`의 `INSERT 2`는 `ContractCancelYMD`만 별칭이 원래 이름과
   겹쳐 `CLIENTID, USESTATE` 둘만 난다). 검사는 컬럼 **이름**으로만 대조하므로
   별칭 사슬을 따라가려면 재료 쪽(`StepSqlStatementReader`)이 바뀌어야 한다.
+
+  **해소 (2026-08-27, 브랜치 `cte-projection-alias`).** `StepSqlStatementReader`에
+  `CteProjectionAliases`를 두어 CTE가 투영하며 붙인 별칭을 원천 컬럼 이름으로
+  되돌리고, 그 이름을 `SubordinatePredicateColumns`에 **더한다**(별칭도 남긴다 —
+  명세서에 별칭 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른 대조가
+  무엇을 보고 있었는지 알 수 없게 된다). `MechanicalValidator`는 손대지 않았다.
+
+  **두 형태를 다 봐야 했다 — 위 진단이 한 가지 구문만 적은 것이 부정확했다.**
+  두 실물이 서로 다른 구문이다.
+
+  | 단계 | 구문 | 짝짓는 근거 |
+  |---|---|---|
+  | `POQSettlePrco20/S03` | 인라인 `AS` | `SelectScalarExpression.ColumnName` |
+  | `POQSettleProc17/S04` | **`AS`가 하나도 없다** | `CommonTableExpression.Columns`에 **위치**로 붙는다 |
+
+  Proc17은 `;WITH Base (…, ContractUseState, RateUseState, ContractCancelYMD,
+  RateCancelYMD) AS (SELECT …, A.USESTATE, B.USESTATE, A.ContractCancelYMD,
+  B.ContractCancelYMD …)` 모양이다. `ColumnName`만 보는 구현은 이 갈래를 통째로
+  놓친다 — 3건 중 2건이 여기 있다.
+
+  **모호하면 해석하지 않는다.** 같은 별칭이 서로 다른 원천을 가리키면 그 별칭을
+  버려 발화를 유지한다. `MergeErrorCodeMaps`의 충돌 코드 제거·
+  `ResolveAnchoredStatements`의 모호 서수 제거와 같은 방향이다 — 조용한 거짓
+  음성보다 사람이 판정하는 거짓 양성이 낫다. 항등 사상(`X AS X`)도 경쟁하는
+  정의로 세지 않으면 개명과의 충돌이 안 걸린다.
+
+  **실측 (통제 워크트리 `3bf32fb` 대조 스윕, 전문 diff).** 발화 62 → 59, 검사 B
+  37 → 34. 사라진 셋이 위 좌표 그대로이고(`Prco20/S03 INSERT 4`,
+  `Proc17/S04 INSERT 2`·`INSERT 4`) 새로 생긴 것은 없다. 발화 표 밖에서 바뀐 줄은
+  그 셋이 빠진 개수 칸 셋뿐 — 미분류·검사 A·D·E·「실행 조건」 절이 전부 문자
+  동일하므로 **분모가 줄어서 조용해진 것이 아니다.**
+
+  **남긴 한계 둘 (코퍼스 실측 0건, 잠복).** 코드 주석에 (3)·(4)로 적었다.
+  최상위 `WHERE`·`JOIN ON`이 CTE 별칭을 참조하면 그 이름이
+  `PredicateColumns`·`JoinColumns`에 들어가 같은 masking이 나는데 거기엔 해석을
+  붙이지 않았다 — 이 3건은 최상위에 `WHERE`도 `JOIN`도 없어 다섯 컬럼 전부가
+  하위를 통해서만 온다. 파생 테이블 별칭도 같은 모양인데 CTE가 아니라 잡히지
+  않는다. 별칭을 다시 별칭으로 덮는 사슬은 한 홉만 따라간다(실물 둘 다 한 홉).
+
+  **가드 여섯이 변이로 죽는 것을 확인했다.** 위치 갈래 제거·인라인 갈래 제거·
+  UNION 갈래 미전개·충돌 탐지 제거·개수 검사 제거·별표 가드 제거 각각이 의도한
+  테스트만 죽인다. 별표 테스트는 처음에 `SELECT *` 하나로 썼다가 **개수 검사에
+  먼저 걸려 자기 이름을 재지 못하는 것**을 변이가 잡아냈다 —
+  `SELECT A.*, A.USESTATE`로 개수를 맞춰야 판별자가 된다.
 
   **부류 3 (9건) — 코드 앵커가 분해된 두 문장 중 뒤쪽에만 붙는다.**
   이행이 원본 한 문장을 「원천 → 스테이징 적재」와 「스테이징 → 대상 게시」
