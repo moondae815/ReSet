@@ -7790,8 +7790,15 @@ namespace ReSet.Core.Services
         /// 어휘를 <b>고발</b>하는 검사라 좁게 잡는 것이 안전 방향이다. 이 검사는 반대로
         /// 결속을 <b>인정</b>하는 자리라, 좁게 잡으면 이행한 계획서를 고발한다.
         /// 실측(POQSettleBatch1:429-497): 언어 이전 뒤의 코드를 ```pseudocode 펜스에
-        /// C# 모양으로 적고 SQL을 그 안의 문자열로 싣는다. ```sql만 보면 이 형태로만
-        /// 결속한 계획서가 오탐으로 반려되고, 그 오탐은 L1 재시도를 소진시킨다.
+        /// C# 모양으로 적고 SQL을 그 안의 문자열로 싣는다.
+        ///
+        /// [이 확대는 예방적이다 - 측정된 사실]
+        /// ```sql로 되돌려도 <b>코퍼스 발화 집합은 14/6 그대로다</b>(측정함). 즉 지금
+        /// 코퍼스에는 이 형태로<b>만</b> 결속한 계획서가 없다 - 확대가 고친 실현된
+        /// 오탐은 없고, 재생성이 그 형태를 낼 때를 막는 것이다. 그런데도 확대가
+        /// 판정을 약화시키지 않는 이유는 <b>쓰기 자리 좁힘이 펜스 종류와 독립</b>이기
+        /// 때문이다 - mermaid·json 펜스가 스캔에 들어와도 그 안에 계약 표를 대상으로 한
+        /// INSERT 컬럼 목록·UPDATE SET·MERGE 가지가 실제로 있을 때만 결속으로 인정된다.
         ///
         /// 코드 블록 <b>밖</b>은 보지 않는다 - 산문이 쓰기 문장을 인용하는 것은 계획을
         /// 말하는 것이지 구현 지시가 아니다(작성 계약 2의 "자기 절로 좁혀라"와 같은 취지).
@@ -7835,6 +7842,87 @@ namespace ReSet.Core.Services
 
                     if (bound) return true;
                 }
+
+                if (MergeBindsColumn(cleaned, bare, columnName, aliases)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 이 펜스의 MERGE 문이 그 표의 그 컬럼을 쓰기 대상으로 삼는가.
+        ///
+        /// [왜 MERGE도 쓰기 자리인가]
+        /// 코퍼스 20건 중 7건이 이미 MERGE로 제어 표를 갱신한다(Proc3·6·7·10·12·13·15).
+        /// Task 1의 측정 보고서 §3-3도 "MERGE가 쓰기 문장인데 초판 스캔이 놓쳤다"고
+        /// 적었고, 형제 헬퍼 <see cref="CreatesRowIn"/>은 같은 계약 표들에 대해 이미
+        /// MERGE를 행 생성으로 인정한다. 인정하지 않으면 이 형태로 결속한 계획서를
+        /// 거짓 고발한다 - 저널에 MERGE하는 계획서가 아직 없을 뿐이라 지금은 잠복이다.
+        ///
+        /// 두 가지를 각각 본다: WHEN MATCHED의 UPDATE SET 대입 대상과, WHEN NOT
+        /// MATCHED의 INSERT 컬럼 목록. 한쪽만 인정하면 반대 가지로 결속한 계획서가
+        /// 그대로 거짓 고발된다.
+        ///
+        /// 별칭은 MERGE 헤더에서 묶인다 - <see cref="ResolveControlTableAliases"/>는
+        /// FROM/JOIN만 보므로 여기서 따로 걷어 합친다. 못 걷으면 코퍼스의 표준 형태
+        /// (`MERGE batch.X AS target … UPDATE SET target.Col = …`)가 "다른 표의 컬럼"으로
+        /// 읽혀 결속이 무시된다.
+        ///
+        /// 판정은 지운 사본만으로 한다 - 값이 아니라 대상 컬럼 이름만 보기 때문이다.
+        /// </summary>
+        private static bool MergeBindsColumn(
+            string cleaned, string bare, string columnName, HashSet<string> aliases)
+        {
+            foreach (Match header in Regex.Matches(
+                cleaned,
+                $@"MERGE\s+(?:INTO\s+)?{QualifiedTableNameFragment(bare)}(?:\s+(?:AS\s+)?(?<alias>[A-Za-z_]\w*))?",
+                RegexOptions.IgnoreCase))
+            {
+                var mergeAliases = new HashSet<string>(aliases, StringComparer.OrdinalIgnoreCase);
+                var alias = header.Groups["alias"].Value;
+
+                // 별칭 자리에 다음 절 키워드가 올 수 있다(`MERGE batch.X USING …`).
+                if (alias.Length > 0 &&
+                    !Regex.IsMatch(alias, @"^(?:USING|ON|WHEN|OUTPUT|AS|WITH)$", RegexOptions.IgnoreCase))
+                {
+                    mergeAliases.Add(alias);
+                }
+
+                // 문 경계는 `;`다. 문자열·주석 안의 `;`는 이미 공백이 되어 있다.
+                var end = cleaned.IndexOf(';', header.Index);
+                var body = end < 0 ? cleaned[header.Index..] : cleaned[header.Index..end];
+
+                var matched = Regex.Match(
+                    body, @"WHEN\s+MATCHED\b[^;]*?THEN\s+UPDATE\s+SET\s+", RegexOptions.IgnoreCase);
+                if (matched.Success)
+                {
+                    // 다음 WHEN 가지가 이 SET 절의 끝이다.
+                    var tail = body[(matched.Index + matched.Length)..];
+                    var nextWhen = Regex.Match(tail, @"\bWHEN\b", RegexOptions.IgnoreCase);
+                    var setClause = nextWhen.Success ? tail[..nextWhen.Index] : tail;
+
+                    foreach (var assignment in SplitTopLevelSegments(setClause))
+                    {
+                        var eq = assignment.IndexOf('=');
+                        if (eq <= 0) continue;
+
+                        var name = UnqualifyControlColumn(assignment[..eq], bare, mergeAliases);
+                        if (name == null) continue;
+                        if (string.Equals(name, columnName, StringComparison.OrdinalIgnoreCase)) return true;
+                    }
+                }
+
+                var inserted = Regex.Match(
+                    body,
+                    @"WHEN\s+NOT\s+MATCHED\b[^;]*?THEN\s+INSERT\s*\((?<cols>[^)]*)\)",
+                    RegexOptions.IgnoreCase);
+                if (!inserted.Success) continue;
+
+                var bound = SplitTopLevelSegments(inserted.Groups["cols"].Value)
+                    .Select(c => StripBracketQuoting(c.Trim()))
+                    .Any(c => string.Equals(c, columnName, StringComparison.OrdinalIgnoreCase));
+
+                if (bound) return true;
             }
 
             return false;

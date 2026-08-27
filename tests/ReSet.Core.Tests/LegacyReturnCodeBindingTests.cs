@@ -353,5 +353,88 @@ namespace ReSet.Core.Tests
                 c => string.Equals(c.Name, "LegacyReturnCode", StringComparison.Ordinal)
                      && c.SqlType == "int");
         }
+
+        // ── 판정 12: MERGE의 WHEN MATCHED UPDATE SET도 쓰기 자리다 ────────────────
+        //
+        // 코퍼스 20건 중 7건이 이미 MERGE로 제어 표를 갱신한다(Proc3·6·7·10·12·13·15,
+        // 실물 모양은 POQSettleProc12:247-258). Task 1 §3-3도 "MERGE가 쓰기 문장인데
+        // 초판 스캔이 놓쳤다"고 경고했고, 형제 헬퍼 CreatesRowIn(:958)은 같은 계약
+        // 표들에 대해 이미 MERGE를 행 생성으로 인정한다. 인정하지 않으면 이 형태로
+        // 결속한 계획서를 거짓 고발한다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheMergeMatchedBranchBindsTheColumn()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                MERGE batch.BatchStepJournal AS target
+                USING
+                (
+                    SELECT @RunId AS RunId, @StepCode AS StepCode
+                ) AS source
+                   ON target.RunId = source.RunId
+                  AND target.StepCode = source.StepCode
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        target.StepStatus = N'Succeeded',
+                        target.LegacyReturnCode = @v_currentStepId,
+                        target.CompletedAtUtc = SYSUTCDATETIME();
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 13: MERGE의 WHEN NOT MATCHED INSERT 컬럼 목록도 쓰기 자리다 ──────
+        //
+        // 같은 MERGE의 반대 가지다. 갱신 가지만 인정하면 행을 새로 만들며 결속하는
+        // 계획서가 거짓 고발된다(POQSettleProc12:256-258이 그 모양이다).
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheMergeNotMatchedBranchBindsTheColumn()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                MERGE batch.BatchStepJournal AS target
+                USING
+                (
+                    SELECT @RunId AS RunId, @StepCode AS StepCode
+                ) AS source
+                   ON target.RunId = source.RunId
+                  AND target.StepCode = source.StepCode
+                WHEN NOT MATCHED THEN
+                    INSERT (RunId, StepCode, StepStatus, LegacyReturnCode, StartedAtUtc)
+                    VALUES (@RunId, @StepCode, N'Running', @v_currentStepId, SYSUTCDATETIME());
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 14: MERGE 헤더의 별칭도 이 표에 묶인다 ───────────────────────────
+        //
+        // 별칭이 FROM/JOIN이 아니라 MERGE 헤더에서 묶이므로
+        // ResolveControlTableAliases만으로는 잡히지 않는다. 못 잡으면 판정 12의
+        // `target.LegacyReturnCode`가 "다른 표의 컬럼"으로 읽혀 결속이 무시된다.
+        // 대괄호 표기(`MERGE INTO [batch].[BatchStepJournal] AS j`)도 같은 자리다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheMergeAliasIsBracketQuoted()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                MERGE INTO [batch].[BatchStepJournal] AS j
+                USING (SELECT @RunId AS RunId) AS s
+                   ON j.RunId = s.RunId
+                WHEN MATCHED THEN
+                    UPDATE SET j.LegacyReturnCode = @v_currentStepId;
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
     }
 }
