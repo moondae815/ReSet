@@ -148,6 +148,47 @@ namespace ReSet.Core.Tests
             Assert.False(AiClientFactory.IsSingleGpuLocalProvider(provider!));
         }
 
+        // OpenRouter는 OpenAI 호환 규격이지만 전용 클라이언트를 쓴다 — OpenAiClient는
+        // 모델명에 gpt-5가 들어가면 Responses API로 분기하는데, OpenRouter의 모델 ID는
+        // openai/gpt-5.6처럼 네임스페이스가 붙어 그 분기에 그대로 걸리기 때문이다.
+        [Theory]
+        [InlineData("openrouter")]
+        [InlineData("OpenRouter")]
+        [InlineData("OPENROUTER")]
+        public void CreateClient_WithOpenRouterProvider_ShouldReturnOpenRouterClient(string provider)
+        {
+            var client = AiClientFactory.CreateClient(provider, "anthropic/claude-sonnet-5", "sk-or-test", "");
+
+            var openRouter = Assert.IsType<OpenRouterClient>(client);
+            Assert.Equal("OpenRouter", openRouter.ProviderName);
+        }
+
+        // OpenRouter는 원격 HTTP API다. 로컬로 분류되면 AST 분할 파이프라인과 온도
+        // 0.05 고정이 원격 모델에 잘못 걸리고, CLI로 분류되면 무인 배치가 막힌다.
+        [Theory]
+        [InlineData("openrouter")]
+        [InlineData("OpenRouter")]
+        public void IsLocalProvider_WithOpenRouter_ReturnsFalse(string provider)
+        {
+            Assert.False(AiClientFactory.IsLocalProvider(provider));
+            Assert.False(AiClientFactory.IsSingleGpuLocalProvider(provider));
+            Assert.False(AiClientFactory.IsCliProvider(provider));
+        }
+
+        // 라우팅 선호는 provider별 선택 인자로만 전달된다 — 지정하지 않으면
+        // OpenRouter 기본 라우팅을 그대로 쓴다.
+        [Fact]
+        public void CreateClient_WithOpenRouterRouting_ShouldPassRoutingToClient()
+        {
+            var routing = new OpenRouterRoutingOptions { Order = new[] { "anthropic" } };
+
+            var client = AiClientFactory.CreateClient(
+                "openrouter", "anthropic/claude-sonnet-5", "sk-or-test", "",
+                openRouterRouting: routing);
+
+            Assert.IsType<OpenRouterClient>(client);
+        }
+
         // Ollama Cloud는 로컬 Ollama와 프로토콜이 같아 같은 클라이언트를 쓰지만,
         // 설정 키는 따로 둔다 — 엔드포인트와 API 키가 로컬과 공존해야 하기 때문이다.
         [Theory]

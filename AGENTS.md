@@ -65,6 +65,7 @@
     *   Ollama effort별 temperature는 low/medium/high/max = 0.1/0.4/0.7/0.9이며, `gemma4`·`qwen3.6`은 effort 매핑을 무시하고 하드코딩된 모델별 설정을 우선합니다. 로컬 모델에는 `repeat_penalty`·`repetition_penalty`·`frequency_penalty`를 주입하십시오(`ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`).
     *   Gemma 4에만 `<|think|>`를 시스템 프롬프트 선두에 넣고 다른 모델은 텍스트 지시만 사용하십시오. `</think>`와 `<|end of thought|>`를 모두 파싱해 추론이 명세서에 새지 않게 하십시오.
     *   `ollama-cloud`는 `OllamaClient(isCloud: true)`를 공유하되 `ProviderName`을 `Ollama Cloud`로 두고 `IsLocalProvider`에서 제외하며, 키는 요청마다 붙이십시오(`OllamaCloudClientTests`).
+    *   OpenRouter는 전용 `OpenRouterClient`를 쓰고(`OpenAiClient`는 모델 ID의 `gpt-5`를 Responses API로 오분기) 로컬·CLI 분류에서 제외하며, 캐시 중단점은 가변 접미사가 있을 때만 블록으로 갈라 찍으십시오(`OpenRouterClientTests`, `IsLocalProvider_WithOpenRouter_ReturnsFalse`).
     *   AI 본문의 대화형 인사·요약과 응답 전체의 코드 블록 래핑을 금지하는 프롬프트를 유지하십시오. Mermaid 블록만 예외입니다.
 
 ### 🎨 범주 3. 인터페이스 및 Spectre.Console 예외 회피 (UI/UX)
@@ -165,6 +166,8 @@
         | 둘 다 | 통과 | 통과 |
 
         `output/`만 거는 것은 한쪽을 살리면서 다른 쪽을 끕니다 — 건너뜀 수가 줄어 진전처럼 보이는 함정입니다. **건너뜀 0만이 전부 돈 것입니다.**
+
+        **`output.bak-2026-08-22/`은 백업이 아니라 재생성할 수 없는 테스트 재료입니다.** `CorpusPaths.PriorEdition`이 상수로 들고 `CoverageMapGoldenTests`가 기준 세대로 씁니다 — 덮어쓰면 실패가 아니라 **건너뜀**이 되어 조용히 무력해집니다. 진짜 백업은 `output.bak-<작업>-<날짜>` 꼴로 뜨십시오.
 
         「반쯤」 상태는 `CorpusSetupGuardTests`가 빨간불로 막습니다. 계열이 왜 갈리는지, 그리고 이 규칙이 없어서 두 세션이 각각 어떻게 당했는지는 그 클래스 주석에 있습니다. (저장소 **밖**에 만든 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어납니다 — 위 표는 안쪽 워크트리 기준입니다.)
 

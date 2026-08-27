@@ -2,10 +2,10 @@
 
 [![.NET 10.0](https://img.shields.io/badge/.NET-10.0-blueviolet.svg)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![SQL Server](https://img.shields.io/badge/SQL%20Server-Database-red.svg)](https://www.microsoft.com/sql-server)
-[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20Ollama--Cloud%20%7C%20mlx%20%7C%20Z.ai%20%7C%20claude--cli%20%7C%20codex--cli%20%7C%20agy--cli-orange.svg)](#)
+[![AI Providers](https://img.shields.io/badge/AI--Providers-OpenAI%20%7C%20Claude%20%7C%20Google%20%7C%20Ollama%20%7C%20Ollama--Cloud%20%7C%20mlx%20%7C%20Z.ai%20%7C%20OpenRouter%20%7C%20claude--cli%20%7C%20codex--cli%20%7C%20agy--cli-orange.svg)](#)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#)
 
-본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)와 사용자 정의 함수(UDF)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
+본 프로젝트는 **SQL Server**에 저장된 Stored Procedure(SP)와 사용자 정의 함수(UDF)를 심층 분석하여, AI(OpenAI, Ollama, Claude, Google Gemini, Z.ai, OpenRouter 등)를 통해 사용자 정의 지침에 맞춘 마크다운 형식의 기능 명세서를 자동 생성하는 개발자용 터미널 기반 CLI(TUI) 도구입니다.
 
 ---
 
@@ -46,7 +46,7 @@
 * **설계서 vs 구현 소스코드 일치성**: C#/Java 코드를 정적으로 분석하고 AI Gap 분석을 실행하여, 명세서 대비 입출력 파라미터, 연산 분기, 트랜잭션 구현 불일치점 및 데이터 액세스 경계(SQL/ORM) 위반 여부를 Gap Report로 도출합니다.
 * **관계지향 모의 데이터(Mock Data) 자동 생성 및 격리 적재**: 보안 규정으로 인해 운영 데이터를 활용할 수 없는 상황에 대처하여, AI가 테이블 DDL과 JOIN문을 파싱해 조인 컬럼 시드 값이 연결된 고품질 모의 데이터(`--gen-mock-data`)를 자동 생성하고, 테스트 실행 시 데이터베이스에 임시 Seeding 한 후 완료 시 자동 복구(Clean-up)합니다.
 * **하이브리드 런타임 수집 & 1:1 대조**: 테스트 케이스 입력을 자동 설계하여 Legacy DB의 SP를 호출하고, 마이그레이션된 소스코드(C# DLL 리플렉션 로드 및 ValueTask 비동기 대기 지원 / Java 외부 프로세스 실행)를 안전하게 트랜잭션 격리(Rollback) 및 타임아웃 하에 구동한 뒤 결과셋 데이터를 1:1로 정밀 비교 대조(`*_CompareReport.md`)합니다.
-* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Ollama Cloud, Z.ai와 `claude-cli`/`codex-cli` 분석 제공자를 지원합니다. Antigravity는 대화형 코딩 브릿지로만 연동합니다. 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)도 적용되어 있습니다.
+* **풍부한 AI 공급자 및 TUI 인터랙션**: OpenAI, Claude, Google, 로컬 Ollama, Ollama Cloud, Z.ai, 수백 종 모델을 중개하는 OpenRouter와 `claude-cli`/`codex-cli` 분석 제공자를 지원합니다. Antigravity는 대화형 코딩 브릿지로만 연동합니다. 로컬 세션 보존, 실시간 자동완성 검색/경로 완성, 비동기 작업 취소(`CancellationToken`) 및 견고한 텍스트 이스케이프(`Markup.Escape`)도 적용되어 있습니다.
 
 ### 5. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 * **테이블 스키마 설명 누락 역추론**: 테이블 및 컬럼 설명(`MS_Description`)이 누락된 항목을 `[설명 누락]`으로 식별한 뒤, 해당 컬럼이 활용되는 SP/UDF/뷰 쿼리의 연산 및 대입 문맥을 추론하여 AI가 `[AI 추론 보완: {Schema}.{Table}.{Column} - {설명}]` 형태로 의미를 자동 역추론합니다.
@@ -188,7 +188,7 @@ ReSet/
     "OfflineSnapshotPath": ""       // [설정] 경로 지정 시 DB 연결을 우회하고 오프라인 스냅샷 파일 기반으로 구동
   },
   "AiSettings": {
-    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli")
+    "Provider": "Claude",          // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "mlx" | "local-openai" | "Z.ai" | "OpenRouter" | "claude-cli" | "codex-cli")
     "AllowCliProviderInBatch": false, // 무인 배치에서 claude-cli/codex-cli 허용 여부. agy-cli는 이 값으로도 허용되지 않음
     "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달되며, 비워 두면 인자를 생략해 해당 CLI의 기본 모델이 쓰입니다
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
@@ -249,6 +249,19 @@ ReSet/
       "Z.ai": {
         "ApiKey": "",              // Z.ai API 키
         "Endpoint": "https://api.z.ai/api"
+      },
+      // OpenRouter는 수백 종 모델을 한 엔드포인트로 중개합니다. ModelName은 네임스페이스가 붙은
+      // OpenRouter 모델 ID로 적습니다(예: "anthropic/claude-sonnet-5", "openai/gpt-5.6").
+      // 네임스페이스를 빼도 해석되지만 어느 벤더로 풀릴지가 OpenRouter에 달려 재현성이 없습니다.
+      "OpenRouter": {
+        "ApiKey": "",              // https://openrouter.ai/settings/keys 에서 발급 (필수)
+        "Endpoint": "https://openrouter.ai/api/v1",
+        "NumCtx": null,            // 지정하면 max_tokens로 전달. 비우면 모델 기본값
+        "Routing": {               // [선택] 백엔드 제공자 라우팅 선호. 비우면 OpenRouter 기본 라우팅
+          "Order": [],             // 시도할 제공자 순서 (예: [ "anthropic", "google-vertex" ])
+          "AllowFallbacks": null,  // Order가 모두 실패했을 때 다른 제공자로 넘어갈지 여부
+          "RequireParameters": null // 요청 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부
+        }
       },
       // CLI 제공자는 ApiKey 없이 Command만 씁니다. 모델은 여기가 아니라 AiSettings:ModelName
       // (Critic/Consolidator는 각자의 ModelName)이 아래 인자로 전달됩니다.
@@ -340,7 +353,7 @@ ReSet/
 ```json
 {
   "AiSettings": {
-    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "mlx" | "local-openai" | "Z.ai" | "claude-cli" | "codex-cli" | "agy-cli")
+    "Provider": "Claude",              // 활성화할 AI 제공자 ("OpenAI" | "Google" | "Claude" | "Ollama" | "ollama-cloud" | "mlx" | "local-openai" | "Z.ai" | "OpenRouter" | "claude-cli" | "codex-cli" | "agy-cli")
     "AllowCliProviderInBatch": false,    // 무인 배치 검증에서 claude-cli/codex-cli 허용 여부. agy-cli는 항상 차단
     "ModelName": "claude-sonnet-5",     // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달됨
     "ActorEffort": "high",           // [설정] L2 검증기 AI의 추론 강도 (low | medium | high | dynamic)
@@ -370,6 +383,10 @@ ReSet/
       "Z.ai": {
         "ApiKey": "",
         "Endpoint": "https://api.z.ai/api"
+      },
+      "OpenRouter": {
+        "ApiKey": "",                        // https://openrouter.ai/settings/keys 에서 발급 (필수)
+        "Endpoint": "https://openrouter.ai/api/v1"
       },
       // CLI 제공자는 ApiKey 없이 Command만 씁니다. 모델은 여기가 아니라 AiSettings:ModelName이
       // 아래 인자로 전달됩니다.
@@ -412,6 +429,9 @@ ReSet/
            "ApiKey": "여기에_새로_발급받은_API키_입력"
          },
          "Z.ai": {
+           "ApiKey": "여기에_새로_발급받은_API키_입력"
+         },
+         "OpenRouter": {
            "ApiKey": "여기에_새로_발급받은_API키_입력"
          }
        }
