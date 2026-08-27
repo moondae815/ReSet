@@ -300,6 +300,15 @@ namespace ReSet.Core.Services
                 }
 
                 // 자기 자신은 뒤 문장에게만 보인다 - 먼저 읽고 나중에 등록한다.
+                //
+                // [한계 - 같은 테이블에 두 번 쓰면 첫 쓰기만 기억한다] TryAdd이므로
+                // `DELETE FROM T; INSERT INTO T ...;`처럼 같은 단계 안에서 T를 두 번
+                // 쓰면, 뒤에서 T를 읽는 문장은 항상 DELETE의 WHERE 컬럼을 물려받고
+                // INSERT의 진짜 술어는 못 본다. 이것은 **과소** 이전 쪽으로 기운다 -
+                // 나중 쓰기의 진짜 술어 변화가 하류에 인정되지 않으므로 침묵이 아니라
+                // 오탐(검사가 여전히 발화) 방향이다. 설계가 밝힌 선호(거짓 음성보다
+                // 거짓 양성)와 일치한다. 가리는 경로는 찾지 못했다 - 코퍼스 실측이
+                // 아니라 추론으로 짚은 한계다.
                 if (!string.IsNullOrEmpty(statement.TargetTable))
                 {
                     writtenAt.TryAdd(statement.TargetTable, i);
@@ -308,6 +317,18 @@ namespace ReSet.Core.Services
 
             return attached;
 
+            // [한 홉만이 유지되는 진짜 이유 - 구조적 우연, ColumnsOf의 결정이 아니다]
+            // writer는 항상 이 함수의 매개변수 `statements`(계보 부착 이전 원본
+            // 스냅샷)에서 온다 - `attached`(계보가 이미 매겨진 목록)가 아니다.
+            // `statements[j]`는 이 함수 안에서 절대 갱신되지 않으므로 그 `.LineageSources`는
+            // 언제나 기본값(빈 목록)이다. 그래서 여기에 `.Concat(writer.LineageSources
+            // .SelectMany(l => l.Columns))`를 더해도 관측 가능한 차이가 전혀 없다 -
+            // 사슬(S1 → S2 → 게시)이 새지 않는 것은 이 메서드가 사슬을 막아서가
+            // 아니라 애초에 `statements[writtenAt[s]]`가 계보를 가질 수 없어서다.
+            // **`writer`를 `attached[writtenAt[s]]`로 바꾸지 말 것** - 그 순간 이
+            // 불변이 깨지고 사슬 추적이 조용히 되살아난다(2026-08-27 픽스 라운드 1
+            // 리뷰가 변이로 확인: 이 Concat을 더해도 Lineage_DoesNotFollowChains가
+            // 죽지 않는다 - 결과만 같고 기제가 다르다는 뜻이다).
             static IReadOnlyList<string> ColumnsOf(StepSqlStatement writer) => writer
                 .PredicateColumns
                 .Concat(writer.JoinColumns)
@@ -647,10 +668,12 @@ namespace ReSet.Core.Services
                 foreach (var from in froms) from.Accept(subordinate);
                 foreach (var where in wheres) where.Accept(subordinate);
 
+                var resolvedTarget = ResolveTargetTable(target, targetAliasScope);
+
                 Found.Add((
                     new StepSqlStatement(
                         kind,
-                        ResolveTargetTable(target, targetAliasScope),
+                        resolvedTarget,
                         Anchor: null,
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
@@ -658,7 +681,7 @@ namespace ReSet.Core.Services
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
-                        RowSourceTables = CollectRowSourceTables(froms, ctes),
+                        RowSourceTables = CollectRowSourceTables(froms, ctes, resolvedTarget),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
@@ -668,36 +691,83 @@ namespace ReSet.Core.Services
             /// FROM·JOIN의 이름 테이블에서 CTE 이름을 뺀 것. 대상 테이블 자신도
             /// 뺀다 - UPDATE … FROM 대상 AS A 는 자기를 읽는 것이 아니다.
             ///
-            /// [왜 ctes도 훑는가 - Lineage_CteNameIsNotARowSource가 잡은 결함]
-            /// 최상위 FROM이 CTE 이름만 참조하면(`FROM Pick`) froms만 보고는 CTE
-            /// 이름을 뺀 뒤 아무것도 안 남는다 - 실제로 행을 내는 물리 테이블은
-            /// CTE 본문(`Pick AS (SELECT … FROM stage.S02Candidate)`) 안에 있다.
-            /// ctes를 함께 훑어야 그 물리 테이블이 원천으로 잡힌다. NamedSourceFinder가
-            /// 파생 테이블·스칼라 하위질의 하강은 이미 막으므로 CTE 본문 안의 더 깊은
-            /// 층까지 새지 않는다.
+            /// [왜 대상 자신을 빼는가 - 리뷰 라운드 1 Critical 1]
+            /// `UPDATE X SET … FROM stage.Foo AS X WHERE …`처럼 대상을 FROM 별칭으로
+            /// 다시 참조하는 관용구는 다른 상류 테이블을 읽는 게 아니라 자기가 이미
+            /// 쓴 행을 되읽을 뿐이다. 이 자기참조가 걸러지지 않으면, Foo가 명세서
+            /// DML 범위 표의 대상이 아닐 때(Task 2/3의 specTargets 필터가 이 경우를
+            /// 막지 못한다 - 그 필터는 "자기참조 테이블이 명세서 대상과 우연히
+            /// 같을 때"만 방어한다) 무관한 앞 문장의 술어가 「이전됨」으로 조용히
+            /// 붙는다(실측: Lineage_SelfReferencingUpdateOnStaging_DoesNotInheritUnrelatedPredicate).
+            ///
+            /// [왜 도달 가능한 CTE만 훑는가 - 리뷰 라운드 1 Critical 2]
+            /// 이전 구현은 `ctes?.Accept(finder)`로 선언된 CTE 전부를 무조건 훑었다.
+            /// 그러면 최상위 질의가 참조하지 않는 죽은 CTE(`WITH Unused AS (…),
+            /// Pick AS (…) SELECT … FROM Pick`의 Unused)의 본문이 앞서 쓰인 테이블을
+            /// 참조하기만 해도 그 테이블이 이 문장의 원천으로 잡히고, 그 죽은 CTE의
+            /// 무관한 술어가 계보로 새며 「원천이 전부 앞선 쓰기여야 한다」 불변식의
+            /// 성립 여부 자체가 죽은 코드에 좌우된다(실측:
+            /// Lineage_UnreachableCte_DoesNotContributeRowSourceOrLineage).
+            /// 그래서 최상위 FROM에서 시작해 실제로 참조되는 CTE만 너비 우선으로
+            /// 따라간다 - 참조되지 않는 CTE의 본문은 아예 방문하지 않는다.
+            /// NamedSourceFinder가 파생 테이블·스칼라 하위질의 하강은 이미 막으므로
+            /// 방문한 CTE 본문 안의 더 깊은 층까지 새지 않는다.
             /// </summary>
             private static IReadOnlyList<string> CollectRowSourceTables(
-                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes)
+                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes, string selfTarget)
             {
-                var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var cteBodies = new Dictionary<string, IReadOnlyList<FromClause>>(
+                    StringComparer.OrdinalIgnoreCase);
                 if (ctes?.CommonTableExpressions != null)
                 {
                     foreach (var cte in ctes.CommonTableExpressions)
                     {
                         var name = cte.ExpressionName?.Value;
-                        if (!string.IsNullOrWhiteSpace(name)) cteNames.Add(name!);
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+
+                        cteBodies[name!] = DmlScopeExtractor
+                            .QuerySpecificationsOf(cte.QueryExpression)
+                            .Select(spec => spec.FromClause)
+                            .OfType<FromClause>()
+                            .ToList();
                     }
                 }
 
-                var finder = new NamedSourceFinder();
-                foreach (var from in froms) from.Accept(finder);
-                ctes?.Accept(finder);
+                var physicalTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // [방어적 - 어떤 테스트도 이 줄의 필요성을 재지 않는다] 이 방문 기록이
+                // 없으면 두 CTE가 서로를 참조하는 순환이나 같은 CTE를 두 경로에서
+                // 참조하는 다이아몬드에서 무한 루프·중복 처리가 날 수 있다. 이
+                // 코퍼스에는 그런 순환·다이아몬드가 없어 실제로 제거해 봐도(2026-08-27
+                // 픽스 라운드 1) 열한 개 테스트가 전부 그대로 통과한다 - 이 줄을
+                // 죽이는 테스트가 없다는 뜻이다. 무한 루프를 실제로 만드는 순환 CTE
+                // 테스트는 테스트 스위트 자체를 멈출 위험이 있어 만들지 않았다 - 이
+                // 줄은 검증된 결정이 아니라 방어적 코드로 남겨 둔다.
+                var visitedCtes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var frontier = new Queue<IReadOnlyList<FromClause>>();
+                frontier.Enqueue(froms);
 
-                return finder.Sources
-                    .Select(s => s.Source)
-                    .Where(s => !cteNames.Contains(s))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
+                while (frontier.Count > 0)
+                {
+                    var currentFroms = frontier.Dequeue();
+                    var finder = new NamedSourceFinder();
+                    foreach (var from in currentFroms) from.Accept(finder);
+
+                    foreach (var source in finder.Sources.Select(s => s.Source))
+                    {
+                        if (cteBodies.TryGetValue(source, out var bodyFroms))
+                        {
+                            if (visitedCtes.Add(source)) frontier.Enqueue(bodyFroms);
+                        }
+                        else
+                        {
+                            physicalTables.Add(source);
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(selfTarget)) physicalTables.Remove(selfTarget);
+
+                return physicalTables.ToList();
             }
 
             /// <summary>

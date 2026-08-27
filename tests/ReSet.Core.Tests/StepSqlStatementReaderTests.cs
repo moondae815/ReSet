@@ -1300,4 +1300,73 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
             .LineageSources.SelectMany(l => l.Columns).ToList();
         Assert.Contains("YMD", columns);
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 픽스 라운드 1 - 독립 리뷰가 합성 SQL로 재현한 Critical 둘.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Lineage_SelfReferencingUpdate_ExcludesOwnTargetFromRowSources()
+    {
+        // Critical 1. `UPDATE 대상 AS A ... FROM 대상 AS A`는 자기 자신을 다시
+        // 참조하는 것이지 다른 테이블을 읽는 것이 아니다. 원천에 자기 대상이
+        // 섞이면 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.X = 1 FROM dbo.T AS A WHERE A.Y = 1;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("T", statement.RowSourceTables);
+    }
+
+    [Fact]
+    public void Lineage_SelfReferencingUpdateOnStaging_DoesNotInheritUnrelatedPredicate()
+    {
+        // Critical 1 - 리뷰가 낸 정확한 재현. Foo는 명세서 대상이 아니므로
+        // Task 2/3의 specTargets 필터가 이 경우를 막지 못한다. 자기 참조
+        // UPDATE는 다른 상류 문장을 읽는 것이 아니라 자기가 이미 쓴 행을
+        // 되읽을 뿐이므로, 앞선 INSERT의 RealFilter를 계보로 물려받으면
+        // 안 된다(무관한 술어가 「이전됨」으로 조용히 붙는다).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Foo SELECT A.PLTID FROM dbo.TX AS A WHERE A.RealFilter = 1;\n" +
+            "UPDATE X SET X.Y = 1 FROM stage.Foo AS X WHERE X.SomeCond = 1;"));
+
+        var selfUpdate = statements.Single(s => s.Kind == "UPDATE");
+        Assert.Empty(selfUpdate.LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_UnreachableCte_DoesNotContributeRowSourceOrLineage()
+    {
+        // Critical 2 - 리뷰가 낸 정확한 재현. 최상위 FROM은 Pick만 참조하고
+        // Unused는 어디서도 참조되지 않는 죽은 CTE다. Unused의 본문이 앞서
+        // 쓰인 Ghost를 참조해도, 이 문장이 실제로 도달하지 않으므로 원천도
+        // 계보도 아니다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Ghost SELECT G.PLTID FROM dbo.TGhostSrc AS G WHERE G.GhostFilter = 1;\n" +
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Unused AS ( SELECT PLTID FROM stage.Ghost ), Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM Pick WHERE SomeRealFilter = 1;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("Ghost", publish.RowSourceTables);
+        Assert.DoesNotContain("Ghost", publish.LineageSources.Select(l => l.SourceTable));
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public void Lineage_CteChainReachability_FollowsNestedCte()
+    {
+        // Critical 2 수정의 부수 결정 - 도달 가능성을 너비 우선으로 따라가므로
+        // CTE가 다른 CTE를 참조하는 사슬(Outer → Inner → 물리 테이블)도 끝까지
+        // 따라가야 한다. 한 겹만 보는 얕은 구현이면 이 테스트가 죽는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH InnerCte AS ( SELECT PGName FROM stage.S02Candidate ), OuterCte AS ( SELECT PGName FROM InnerCte )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM OuterCte;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("InnerCte", publish.RowSourceTables);
+        Assert.DoesNotContain("OuterCte", publish.RowSourceTables);
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
 }
