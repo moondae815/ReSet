@@ -40,6 +40,10 @@ namespace ReSet.Core.Services
         // 어디에도 (int)ErrorType 캐스트나 숫자 직렬화가 없으므로(문자열 이름으로만
         // 비교·표시한다) 기능 영향은 없다.
         BatchRunRowNeverCreated,
+        // 레거시 반환 코드가 계약 저널 컬럼에 결속되지 않는다는 L1 앵커. 위와 같은
+        // 이유로 서수 이동은 기능에 영향이 없다 - 이 코드베이스 어디에도
+        // (int)ErrorType 캐스트나 숫자 직렬화가 없다.
+        LegacyReturnCodeNeverBound,
         // 작업 5 - 잠금 힌트·객체 선언 표의 L1 앵커. 위와 같은 이유로 서수 이동은
         // 기능에 영향이 없다. BuildSuggestedPromptFix의 catch-all 버킷(8. 기계 확정
         // 재료 대조 실패)이 열거되지 않은 타입을 모두 흘려보내므로 이 값도 별도
@@ -230,6 +234,10 @@ namespace ReSet.Core.Services
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
                 CheckVerificationCartesianComparison(cleansed, result);
                 CheckBatchRunRowCreation(cleansed, result);
+                // 자기 try/catch로 감싼다 - 이 catch-all은 검사 하나가 던지면 Errors를
+                // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
+                // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
+                SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
             }
             catch (Exception ex)
             {
@@ -7677,6 +7685,148 @@ namespace ReSet.Core.Services
                   "첫 단계에 INSERT를 두십시오.";
 
             return $"계획서 전체에 `{table.Name}` 행을 만드는 지점이 없습니다. " + body;
+        }
+
+        // [CheckLegacyReturnCodeBinding이 계약에 묻는 두 이름]
+        // 문자열을 검사 본문에 박지 않고 조회 키로만 쓴다 - 실제 대조와 오류 문구는
+        // BatchControlContract가 돌려준 ControlTable.Name·ControlColumn.Name에서 나온다.
+        // 계약이 이름을 바꾸면 조회가 실패해 이 검사는 조용히 꺼지는데, 그 순간을
+        // LegacyReturnCodeBindingTests.BatchControlContract_StillDeclaresTheJournalColumnThisCheckResolves가
+        // 빨간불로 만든다 - 그때 고칠 것은 이 두 상수다.
+        private const string LegacyReturnCodeTableKey = "batch.BatchStepJournal";
+        private const string LegacyReturnCodeColumnKey = "LegacyReturnCode";
+
+        /// <summary>
+        /// 레거시 반환 코드가 계약이 정한 저널 컬럼에 결속되는지 본다.
+        ///
+        /// [왜 지금 강제하는가] 뒤이을 언어 이전에서 트랜잭션과 오류 처리가 C#으로
+        /// 옮겨 가면 T-SQL 반환값(`@po_intRetVal`)이라는 거처가 사라진다. 레거시
+        /// 호출자가 그 정수 코드에 의존하므로 버릴 수는 없고, 계약이 이미 정한
+        /// 거처는 이 컬럼이다. 값을 언어 밖(저널 컬럼)에 못박아야 코드 체계가
+        /// 이전을 견딘다.
+        ///
+        /// [왜 이름이 아니라 결속인가] 코퍼스 20개 전부가 `@po_intRetVal`을
+        /// 보존하는데 운반체 이름은 최소 넷으로 갈린다(LegacyReturnCode·LegacyRetVal·
+        /// LegacyErrorCode·ErrorCode). 이름으로 재면 의무를 이행한 계획서가 실패로
+        /// 잡히고(설계서 초안이 정확히 그 실수를 했다), 반대로 자기가 새로 만든 표에
+        /// 그 이름을 65회 쓴 POQSettleProc12가 가장 성실해 보이는 채로 통과한다.
+        /// 판정 기준은 값이 <b>계약 표의 계약 컬럼에 쓰기 자리로</b> 닿는가 하나다.
+        ///
+        /// [왜 통합 문서에서 보는가]
+        /// <see cref="CheckBatchRunRowCreation"/>과 같은 이유다 - 단계 검사로는 잡을 수
+        /// 없다. 코퍼스 실측(docs/audit-reports/sweeps/2026-08-27-legacy-return-code-sweep.md):
+        /// 결속 실패 14건 중 13건은 계약 표를 문서 어디에서도 부르지 않는다. 어느 한
+        /// 단계 섹션만 보면 "다른 단계가 대신 결속했는지"를 알 수 없어, 이행한 계획서
+        /// 6건에서도 자기 저널 행을 쓰지 않는 단계가 11~12개씩 발화한다(실측). 그
+        /// 오탐은 L1 재시도를 소진시키므로, 판정은 "문서 어딘가에 최소 한 번"으로 닫는다.
+        ///
+        /// [왜 소프트 스킵을 두지 않는가]
+        /// <see cref="CheckBatchRunRowCreation"/>은 표가 언급조차 없으면 침묵한다 -
+        /// 그 계약을 쓰지 않는 Job일 수 있어서다. 여기서는 반대다. 표를 부르지 않는
+        /// 것 자체가 이 의무의 전형적인 결손이고(실패 14건 중 13건), 침묵하면 그
+        /// 13건이 전부 통과한다. 대신 조건 1이 문지기 역할을 한다 - 보존할 레거시
+        /// 반환값이 없는 계획서는 애초에 이 의무를 지지 않는다.
+        ///
+        /// [귀속 근거] 조건 1은 원문 전체에서 본다 - 인터페이스 표에만 적고 SQL에는
+        /// 쓰지 않는 계획서가 실재하므로 펜스만 보면 놓친다. 조건 2는 SQL 펜스 안의
+        /// <b>쓰기 자리</b>만 본다: 산문·매핑 표의 언급은 약속이지 결속이 아니고
+        /// (POQSettleProc15:1043이 그 모양이다), 값을 되읽는 SELECT도 결속이 아니다
+        /// (POQSettleProc9:4365). 쓰기 자리 판정은 <see cref="CheckUpdateSetTargets"/>·
+        /// <see cref="CheckInsertColumnTargets"/>가 이미 쓰는 관례를 그대로 따른다 -
+        /// 대괄호 인용과 별칭 UPDATE를 둘 다 인식해야 정상 결속이 오탐으로 잡히지 않는다.
+        /// </summary>
+        private static void CheckLegacyReturnCodeBinding(string markdown, ValidationResult result)
+        {
+            var table = BatchControlContract.Find(LegacyReturnCodeTableKey);
+            var column = table?.Columns.FirstOrDefault(
+                c => string.Equals(c.Name, LegacyReturnCodeColumnKey, StringComparison.OrdinalIgnoreCase));
+
+            if (table == null || column == null)
+            {
+                // 계약이 이 표·컬럼을 더 이상 갖지 않는다. 무엇을 요구해야 할지 모르는
+                // 상태에서 지목하면 거짓 고발이 된다(작성 계약 7).
+                Log.Warning(
+                    "레거시 반환 코드 결속 검사가 계약에서 `{Table}`.`{Column}`을 찾지 못해 건너뜁니다.",
+                    LegacyReturnCodeTableKey, LegacyReturnCodeColumnKey);
+                return;
+            }
+
+            // 조건 1: 이 계획서가 보존할 레거시 반환값을 갖는가.
+            if (!Regex.IsMatch(markdown, @"@po_\w*RetVal\b", RegexOptions.IgnoreCase)) return;
+
+            // 조건 2: 계약 표에 쓰는 문장이 계약 컬럼을 대상으로 삼는가.
+            if (BindsColumnInWrite(markdown, table, column.Name)) return;
+
+            var message =
+                $"계획서가 레거시 반환 코드(`@po_intRetVal`)를 보존하면서 그 값을 " +
+                $"`{table.Name}`의 `{column.Name}` 컬럼에 쓰는 지점이 계획서 전체에 없습니다. " +
+                "이 값의 거처는 그 컬럼 하나입니다 - 언어 이전으로 T-SQL 반환값이 사라지면 " +
+                "레거시 호출자가 읽던 코드가 어디에도 남지 않습니다. 산문이나 매핑 표에 " +
+                "적는 것으로는 결속이 되지 않으므로, 그 표에 쓰는 INSERT의 컬럼 목록이나 " +
+                $"UPDATE의 SET 절에서 `{column.Name}`을 대상으로 삼으십시오.";
+
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.LegacyReturnCodeNeverBound,
+                Message = message,
+                RawContext = $"{table.Name}.{column.Name}"
+            });
+        }
+
+        /// <summary>
+        /// 이 문서의 SQL 펜스 어딘가가 그 제어 표의 그 컬럼을 <b>쓰기 대상</b>으로
+        /// 삼는가. 쓰기 자리는 둘뿐이다 - UPDATE의 SET 대입 대상과 INSERT의 컬럼 목록.
+        /// WHERE·JOIN·SELECT는 읽기이므로 결속이 아니다.
+        ///
+        /// 두 자리의 해체는 <see cref="CheckUpdateSetTargets"/>·
+        /// <see cref="CheckInsertColumnTargets"/>와 같은 조각을 쓴다 - 같은 문제를 두
+        /// 정규식이 각자 풀면 한쪽만 고쳐질 때 다른 쪽이 뒤에 남는다. SET 절의 값은
+        /// 보지 않으므로(대상 컬럼만 본다) 절은 지운 사본이 아니라 원문에서 읽는
+        /// 관례를 그대로 따른다.
+        /// </summary>
+        private static bool BindsColumnInWrite(string markdown, ControlTable table, string columnName)
+        {
+            var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+
+            foreach (var (cleaned, offset) in CleanedSqlFences(markdown))
+            {
+                var aliases = ResolveControlTableAliases(cleaned, bare);
+                var headerAlternatives = new List<string> { QualifiedTableNameFragment(bare) };
+                headerAlternatives.AddRange(aliases.Select(a => Regex.Escape(a) + @"\b"));
+
+                foreach (Match header in Regex.Matches(
+                    cleaned,
+                    $@"UPDATE\s+(?:{string.Join("|", headerAlternatives)})\s+SET\s+",
+                    RegexOptions.IgnoreCase))
+                {
+                    var setClause = ExtractTopLevelClause(markdown, offset + header.Index + header.Length);
+
+                    foreach (var assignment in SplitTopLevelSegments(setClause))
+                    {
+                        var eq = assignment.IndexOf('=');
+                        if (eq <= 0) continue;
+
+                        var name = UnqualifyControlColumn(assignment[..eq], bare, aliases);
+                        if (name == null) continue;
+                        if (string.Equals(name, columnName, StringComparison.OrdinalIgnoreCase)) return true;
+                    }
+                }
+
+                foreach (Match statement in Regex.Matches(
+                    cleaned,
+                    $@"INSERT\s+INTO\s+{QualifiedTableNameFragment(bare)}\s*\((?<cols>[^)]*)\)",
+                    RegexOptions.IgnoreCase))
+                {
+                    var bound = SplitTopLevelSegments(statement.Groups["cols"].Value)
+                        .Select(c => StripBracketQuoting(c.Trim()))
+                        .Any(c => string.Equals(c, columnName, StringComparison.OrdinalIgnoreCase));
+
+                    if (bound) return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

@@ -1,0 +1,324 @@
+using System;
+using System.Linq;
+using ReSet.Core.Services;
+using Xunit;
+
+namespace ReSet.Core.Tests
+{
+    /// <summary>
+    /// 레거시 반환 코드가 계약이 정한 저널 컬럼에 결속되는지 보는 검사의 잠금.
+    ///
+    /// [왜 이름이 아니라 결속인가] 코퍼스 20개 전부가 `@po_intRetVal`을 보존하지만
+    /// 운반체 이름은 최소 넷으로 갈린다(LegacyReturnCode·LegacyRetVal·LegacyErrorCode·
+    /// ErrorCode). 이름으로 재면 의무를 이행한 계획서가 실패로 잡히고, 반대로
+    /// 자기가 만든 표에 그 이름을 65회 쓴 계획서(POQSettleProc12)가 통과한다.
+    /// 판정 기준은 값이 계약 표의 계약 컬럼에 <b>쓰기 자리로</b> 닿는가 하나다.
+    ///
+    /// 픽스처는 실제 코퍼스에서 옮겼다 - 좌표는 각 테스트에 적는다.
+    /// </summary>
+    public class LegacyReturnCodeBindingTests
+    {
+        private static ValidationResult Validate(string markdown) =>
+            new MechanicalValidator().ValidateConsolidated(markdown);
+
+        private static bool Fires(string markdown) =>
+            Validate(markdown).DetailedErrors.Any(
+                e => e.Type == ErrorType.LegacyReturnCodeNeverBound);
+
+        /// <summary>필수 H2 넷을 갖춘 최소 통합 계획서. 본문만 갈아 끼운다.</summary>
+        private static string Plan(string body) => $"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            {body}
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            내용.
+            """;
+
+        // ── 판정 1: 레거시 반환 코드를 보존하는데 결속이 없다 ────────────────────
+        //
+        // 코퍼스 실패 14건 중 13건이 이 모양이다 - 계약 표를 문서 어디에서도
+        // 부르지 않는다(POQSettleProc1·2·3·4·6·7·8·9·10·11·12·13·14). 계약 표가
+        // 없을 때 조용히 넘어가면(CheckBatchRunRowCreation의 "언급되지 않으면
+        // 소프트 스킵" 관례) 이 13건이 전부 통과한다 - 그래서 이 검사는 그
+        // 소프트 스킵을 두지 않는다.
+        [Fact]
+        public void ValidateConsolidated_ReportsWhenTheLegacyCodeIsPreservedButNeverBound()
+        {
+            // POQSettleProc1의 모양: 값이 dbo.POQSettleSqlErrorLog로 간다.
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                INSERT INTO dbo.POQSettleSqlErrorLog
+                    (RunId, StepCode, LegacyRetVal, ErrorMessage, RecordedAt)
+                VALUES
+                    (@v_runId, N'S01', @v_currentStepId, @v_sqlErrorMessage, SYSUTCDATETIME());
+                ```
+                """);
+
+            Assert.True(Fires(markdown));
+        }
+
+        /// <summary>
+        /// 오류 문구는 계약이 가진 이름을 그대로 말해야 한다. 문구가 컬럼을 지목하지
+        /// 않으면 이 오류는 SuggestedPromptFix를 타고 재생성 프롬프트에 실려도 어디에
+        /// 무엇을 쓰라는 지시가 되지 않는다.
+        /// </summary>
+        [Fact]
+        public void ValidateConsolidated_NamesTheContractTableAndColumnInTheMessage()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                UPDATE dbo.POQBatchRun SET LegacyRetVal = @v_currentStepId WHERE RunId = @v_runId;
+                ```
+                """);
+
+            var message = Validate(markdown).DetailedErrors
+                .Single(e => e.Type == ErrorType.LegacyReturnCodeNeverBound).Message;
+
+            Assert.Contains("batch.BatchStepJournal", message);
+            Assert.Contains("LegacyReturnCode", message);
+        }
+
+        // ── 판정 2: 결속이 있으면 침묵한다 ───────────────────────────────────────
+        //
+        // POQSettleProc18:363의 모양. C# 운반체 이름이 무엇이든(여기서는
+        // `@v_legacyRetVal`) 값이 계약 컬럼에 닿으면 이행이다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheValueReachesTheColumnUnderAnyFieldName()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 `LegacyRetVal`로 보존한다.
+
+                ```sql
+                UPDATE batch.BatchStepJournal
+                   SET StepStatus = N'Failed',
+                       LegacyReturnCode = @v_legacyRetVal,
+                       CompletedAtUtc = SYSUTCDATETIME()
+                 WHERE RunId = @p_RunId
+                   AND StepCode = @p_StepCode;
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 3: 보존할 레거시 코드가 없으면 침묵한다 ─────────────────────────
+        //
+        // 레거시 출신이 아닌 제어 단계는 물려받을 반환 코드가 없다. 이 가지가
+        // 없으면 배치 골격만 있는 계획서가 전부 발화한다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenNoLegacyReturnValueIsPreserved()
+        {
+            var markdown = Plan("""
+                이 단계는 레거시 출신 프로시저가 없다.
+
+                ```sql
+                INSERT INTO batch.BatchStepJournal
+                    (RunId, StepCode, StepStatus, StartedAtUtc, CompletedAtUtc, ErrorMessage)
+                VALUES
+                    (@RunId, N'S01', N'Running', SYSUTCDATETIME(), NULL, NULL);
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 4: 컬럼 이름이 계약과 다르면 발화한다 ───────────────────────────
+        //
+        // POQSettleProc15:306-325의 실물. 계약 표에 실제로 쓰고 값도 싣지만 컬럼이
+        // `LegacyErrorCode`다. 표만 보는 검사는 이 한 건을 놓친다 - 코퍼스에서
+        // 유일하게 계약 표를 부르면서 실패한 건이다.
+        [Fact]
+        public void ValidateConsolidated_ReportsWhenTheJournalWriteNamesADifferentColumn()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                INSERT INTO batch.BatchStepJournal
+                (
+                    RunId,
+                    StepCode,
+                    Status,
+                    LegacyErrorCode,
+                    SqlErrorNumber,
+                    ErrorMessage,
+                    RecordedAt
+                )
+                VALUES
+                (
+                    @p_RunId,
+                    @p_StepCode,
+                    N'Failed',
+                    @v_currentStepId,
+                    @v_sqlErrorNumber,
+                    @v_sqlErrorMessage,
+                    SYSUTCDATETIME()
+                );
+                ```
+                """);
+
+            Assert.True(Fires(markdown));
+        }
+
+        // ── 판정 5: 표가 계약 표가 아니면 발화한다 ───────────────────────────────
+        //
+        // POQSettleProc12:239의 실물. 컬럼 이름은 계약과 같지만 자기가 새로 만든
+        // batch.BatchTaskRun 위에 있다. 이름으로 grep하면 가장 성실해 보이는
+        // 계획서가 실패다.
+        [Fact]
+        public void ValidateConsolidated_ReportsWhenTheColumnBelongsToAnotherTable()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 `@v_legacyRetVal`로 보존한다.
+
+                ```sql
+                UPDATE batch.BatchTaskRun
+                   SET Status = N'Committed',
+                       LegacyReturnCode = @v_legacyRetVal,
+                       CompletedAt = sysdatetime()
+                 WHERE RunId = @RunId
+                   AND StepCode = @StepCode;
+                ```
+                """);
+
+            Assert.True(Fires(markdown));
+        }
+
+        // ── 판정 6: 읽기는 결속이 아니다 ─────────────────────────────────────────
+        //
+        // 같은 펜스에 표 이름과 컬럼 이름이 함께 있기만 하면 참으로 보면, 값을
+        // 회수해 읽기만 하는 질의(POQSettleProc9:4365가 그 모양이다)가 결속으로
+        // 통과한다. 쓰기 자리(INSERT 컬럼 목록·UPDATE SET 대상)로 좁혀야 한다.
+        [Fact]
+        public void ValidateConsolidated_ReportsWhenTheColumnOnlyAppearsInAReadingQuery()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                SELECT @po_intRetVal = LegacyReturnCode
+                  FROM batch.BatchStepJournal
+                 WHERE RunId = @RunId
+                   AND StepCode = @StepCode;
+                ```
+                """);
+
+            Assert.True(Fires(markdown));
+        }
+
+        // ── 판정 7: 산문의 약속은 결속이 아니다 ──────────────────────────────────
+        //
+        // POQSettleProc15:1043의 매핑 표가 컬럼 이름을 적지만 SQL은 다른 컬럼에
+        // 쓴다. 문서 전체를 훑으면 그 표 한 줄이 결속으로 오인된다.
+        [Fact]
+        public void ValidateConsolidated_ReportsWhenTheBindingIsOnlyClaimedInProse()
+        {
+            var markdown = Plan("""
+                | 업무 오류 코드 | `LegacyReturnCode` | `@po_intRetVal INT OUTPUT` | 원본 코드를 그대로 기록한다. |
+
+                모든 단계의 `@po_intRetVal`은 `batch.BatchStepJournal.LegacyReturnCode`에 기록한다.
+
+                ```sql
+                UPDATE batch.BatchStepJournal
+                   SET StepStatus = N'Failed',
+                       ErrorMessage = @v_sqlErrorMessage
+                 WHERE RunId = @RunId
+                   AND StepCode = @StepCode;
+                ```
+                """);
+
+            Assert.True(Fires(markdown));
+        }
+
+        // ── 판정 8: 별칭으로 한 UPDATE도 결속이다 ────────────────────────────────
+        //
+        // docs/architecture.md:433-434가 표준 관용으로 명시한 형태다. 이 가지가
+        // 없으면 정상 결속이 실패로 잡힌다(오탐).
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheUpdateBindsThroughAnAlias()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                UPDATE bsj
+                   SET bsj.StepStatus = N'Failed',
+                       bsj.LegacyReturnCode = @v_currentStepId
+                  FROM batch.BatchStepJournal bsj
+                 WHERE bsj.RunId = @RunId;
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 9: 표 이름의 대괄호 인용도 계약 표다 ────────────────────────────
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheTableNameIsBracketQuoted()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                UPDATE [batch].[BatchStepJournal]
+                   SET LegacyReturnCode = @v_currentStepId
+                 WHERE RunId = @RunId;
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        // ── 판정 10: 컬럼 이름의 대괄호 인용도 계약 컬럼이다 ─────────────────────
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheColumnNameIsBracketQuoted()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                INSERT INTO batch.BatchStepJournal
+                    (RunId, StepCode, StepStatus, [LegacyReturnCode], StartedAtUtc)
+                VALUES
+                    (@RunId, N'S01', N'Running', @v_currentStepId, SYSUTCDATETIME());
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
+
+        /// <summary>
+        /// 이 검사는 표 이름과 컬럼 이름을 <see cref="BatchControlContract"/>에서
+        /// 해석한다. 계약이 그 이름을 바꾸면 해석이 실패해 검사가 <b>조용히</b>
+        /// 아무것도 잡지 않게 된다 - 이 테스트가 그 순간을 빨간불로 만든다.
+        /// 검사 본문의 조회 키를 바꾸는 것이 그때 해야 할 일이다.
+        /// </summary>
+        [Fact]
+        public void BatchControlContract_StillDeclaresTheJournalColumnThisCheckResolves()
+        {
+            var table = BatchControlContract.Find("batch.BatchStepJournal");
+
+            Assert.NotNull(table);
+            Assert.Contains(table!.Columns,
+                c => string.Equals(c.Name, "LegacyReturnCode", StringComparison.Ordinal)
+                     && c.SqlType == "int");
+        }
+    }
+}
