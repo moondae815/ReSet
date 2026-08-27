@@ -7776,10 +7776,22 @@ namespace ReSet.Core.Services
 
         /// <summary>
         /// 이 문서의 코드 블록 어딘가가 그 제어 표의 그 컬럼을 <b>쓰기 대상</b>으로
-        /// 삼는가. 쓰기 자리는 둘뿐이다 - UPDATE의 SET 대입 대상과 INSERT의 컬럼 목록.
-        /// WHERE·JOIN·SELECT는 읽기이므로 결속이 아니다.
+        /// 삼는가. 쓰기 자리는 셋이다 - UPDATE의 SET 대입 대상, INSERT의 컬럼 목록,
+        /// 그리고 MERGE의 두 가지(<see cref="MergeBindsColumn"/>). WHERE·JOIN·ON·USING·
+        /// SELECT는 읽기이므로 결속이 아니다.
         ///
-        /// 두 자리의 해체는 <see cref="CheckUpdateSetTargets"/>·
+        /// [컬럼 목록 없는 INSERT … SELECT를 왜 빼는가]
+        /// `INSERT INTO batch.BatchStepJournal SELECT @RunId, …`처럼 컬럼 목록이 없으면
+        /// 값이 <b>어느 컬럼에 실리는지 문서만으로 판정할 수 없다</b> - 위치로 추정하려면
+        /// 표의 물리적 컬럼 순서를 알아야 하는데 그것은 계약이 정하는 사실이 아니다
+        /// (계약은 컬럼 집합을 정하지 순서를 정하지 않는다). 그래서 이 형태는 결속으로
+        /// 인정하지 않고, 그 결과 이 형태로만 결속한 계획서는 <b>거짓 고발된다</b>.
+        /// 실측: 코퍼스에 저널을 대상으로 한 이 형태는 <b>0건</b>이다.
+        /// <b>추정으로 메우지 마라</b> - 순서를 추정해 인정하면 다른 컬럼에 실린 값을
+        /// 결속으로 읽어 결손을 조용히 통과시킨다. 넣으려면 계획서가 컬럼 목록을 쓰도록
+        /// 요구하는 쪽이 옳다.
+        ///
+        /// 세 자리의 해체는 <see cref="CheckUpdateSetTargets"/>·
         /// <see cref="CheckInsertColumnTargets"/>와 같은 조각을 쓴다 - 같은 문제를 두
         /// 정규식이 각자 풀면 한쪽만 고쳐질 때 다른 쪽이 뒤에 남는다. SET 절의 값은
         /// 보지 않으므로(대상 컬럼만 본다) 절은 지운 사본이 아니라 원문에서 읽는
