@@ -678,8 +678,12 @@ END",
             Assert.True(deleteIndex < insertIndex, "복원은 DELETE가 INSERT보다 먼저 나와야 한다.");
         }
 
+        // [3단계 - 2026-08-27] 옛 이름은 ..._ForbidsGotoErrorBranching이었고 규칙 6-1의
+        // "NEVER use legacy `GOTO`-based error branching" 문구를 고정했다. 그 조항은
+        // C# 예외 처리로 자동 대체되므로 규칙에서 뺐다(설계서 §2-2). 같은 자리에서
+        // 이 축의 새 본체인 규칙 3-1(SQL 거처)을 지킨다.
         [Fact]
-        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsGotoErrorBranching()
+        public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsNewStoredProcedures()
         {
             var specs = new System.Collections.Generic.List<(string FileName, string Content)>
             {
@@ -693,7 +697,8 @@ END",
 
             var result = await service.GenerateConsolidatedBatchPlanAsync("Dummy Structure", specs, "C#", "Test_Job");
 
-            Assert.Contains("NEVER use legacy `GOTO`-based error branching", result.SystemPrompt);
+            Assert.Contains("Do NOT define any NEW stored procedure", result.SystemPrompt);
+            Assert.Contains("quote the ORIGINAL legacy procedure", result.SystemPrompt);
         }
 
         [Fact]
@@ -894,7 +899,7 @@ END",
         }
 
         [Fact]
-        public async Task ReviewConsolidatedPlanAsync_Prompt_ChecksChunkTransactionBoundaryAndForbidsGoto()
+        public async Task ReviewConsolidatedPlanAsync_Prompt_ChecksChunkTransactionBoundaryAndForbidsNewProcedures()
         {
             var specs = new System.Collections.Generic.List<(string FileName, string Content)>
             {
@@ -908,13 +913,13 @@ END",
 
             await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job");
 
+            // 채점 기준도 규칙과 같이 옮겨야 한다. Critic이 옛 T-SQL 철자를 계속
+            // 요구하면 자가 수정이 새 규칙을 따른 계획서를 도로 T-SQL로 되돌린다.
             Assert.Contains("iteration of a chunking", mockHandler.LastRequestBody);
-            Assert.Contains("BEGIN TRAN", mockHandler.LastRequestBody);
-            Assert.Contains("COMMIT TRAN", mockHandler.LastRequestBody);
-            Assert.Contains("boundary, rather than wrapping the entire loop in a single outer transaction", mockHandler.LastRequestBody);
-            Assert.Contains("legacy", mockHandler.LastRequestBody);
-            Assert.Contains("GOTO", mockHandler.LastRequestBody);
-            Assert.Contains("based error branching is used anywhere in the pseudocode", mockHandler.LastRequestBody);
+            Assert.Contains("commits its own work in its own transaction", mockHandler.LastRequestBody);
+            Assert.Contains("rather than wrapping the entire loop in a single outer transaction", mockHandler.LastRequestBody);
+            Assert.Contains("NO new stored procedure", mockHandler.LastRequestBody);
+            Assert.Contains("not a quotation of the original", mockHandler.LastRequestBody);
         }
 
         [Fact]

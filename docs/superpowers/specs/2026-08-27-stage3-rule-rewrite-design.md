@@ -294,3 +294,62 @@ Job별로 **76%~100%**로 갈리고 `Proc19`가 76%로 가장 낮다.
 - **`CheckCatchDiscardsReturnCode`의 재조준을 이 설계서가 다루지 않는다.** 선행 설계서
   §4-1이 죽는 검사 셋을 지목했고 이 설계서는 `CheckStepIdInitialValue`에 해당하는 것만
   옮긴다. 나머지 하나는 4단계에서 실제로 침묵하는지 확인한 뒤 판단한다.
+
+## 8. 실행 기록 (2026-08-27)
+
+3단계를 실행했다. **재생성은 하지 않았다** — §4의 순서대로 규칙 변경만 커밋한다.
+
+### 8-1. 실제로 바꾼 것
+
+| 자리 | 무엇 |
+|---|---|
+| **새 규칙 3-1 `[SQL Placement]`** | 선행 설계서 §3-1의 본체. **프롬프트에 없었다** — 없으면 §5의 성공 기준(신규 SP 정의 수 0 수렴)이 잴 대상 자체가 없다 |
+| 규칙 2 | `## 단계별 이행 상세 및 의사코드` 아래 한 줄 — "여기 의사코드는 배치 앱의 코드이지 저장 프로시저 본문이 아니다" |
+| 규칙 4 | 격리는 의무로(거는 자리 미지정), (a) 롤백될 수 있는 트랜잭션 **밖에서** 먼저, (c) 값을 **파라미터로** 넘긴다. `ALTER DATABASE … READ_COMMITTED_SNAPSHOT ON` 금지는 그대로 |
+| 규칙 4-1 | `helper procedure` 제거. `batch`·`batch_shadow` 스키마 강제는 그대로 |
+| 규칙 6-1 | 실패 지점 충실도만 남김. `TRY...CATCH`·`GOTO`·일반 `-1` 조항 제거 |
+| 규칙 8-1 | `BEGIN TRAN`/`COMMIT TRAN` 철자만 제거, 의무는 그대로 |
+
+### 8-2. §2의 표에 없는데 함께 바꾼 것 — Critic 채점 기준
+
+`ReviewConsolidatedPlanAsync`의 채점 기준 다섯을 같은 회차에 옮겼다(격리·부분 커밋·청크
+경계·신규 SP 금지·`helper procedure` 열거).
+
+**함께 옮기지 않으면 규칙 변경이 무효가 되기 때문이다.** Critic이 `BEGIN TRAN`을 계속
+요구하면 자가 수정이 새 규칙을 따른 계획서를 옛 T-SQL 모양으로 되돌린다. 이 짝은
+`CriticCriteriaCoverageTests`가 명시적으로 지키는 계약이다("생성 규칙이 요구하는데 Critic이
+보지 않는 축은, 어긋나도 통과한다").
+
+### 8-3. 남긴 것 — 다음 회차의 몫
+
+- **규칙 11**(INSERT 전용 롤백)의 `ROLLBACK TRAN` 철자. §2의 표에 없어 손대지 않았다.
+  같은 종류의 잔존이다(선행 설계서 §3-2는 이것도 다시 쓸 목록에 넣었다).
+- **`DataAccessPolicy`의 `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`**
+  (`DataAccessPolicyTests:48`이 고정). 이것은 계획서 프롬프트가 아니라 **지시서 번들**의
+  데이터 액세스 경계 규칙이라 별개 판단이 필요하다.
+- **Few-Shot 예시는 T-SQL 그대로다.** 이관 대상 레거시가 T-SQL이므로 예시 자체는 유효하다.
+  다만 "모델은 산문 규칙보다 코드 예시를 따른다"가 이 프롬프트의 전제이므로, **4단계에서
+  생성물이 여전히 T-SQL 프로시저 모양이면 원인 후보 1순위가 여기다.**
+
+### 8-4. 4단계에서 조용해질 수 있는 L1 검사 셋
+
+규칙이 T-SQL 철자를 요구하지 않게 되었으므로, 그 철자에 기대는 검사는 침묵할 수 있다.
+**침묵을 "결함 없음"으로 읽지 말 것** — 발화 0이 이 셋에서는 통과가 아니다.
+
+| 검사 | 무엇에 기대나 |
+|---|---|
+| `CheckStepIdInitialValue` | `DECLARE @v_currentStepId INT = 0` |
+| `CheckCatchDiscardsReturnCode` | `CATCH` 블록의 `RETURN` |
+| `CheckShadowBackupContract` | `BEGIN TRAN` 전후 순서 |
+
+### 8-5. 가드
+
+규칙 블록만 잘라 판정하는 `AiServiceTests_Rich.RulesBlockAsync`를 새로 두었다 — 시스템
+프롬프트 전체로 재면 Few-Shot의 T-SQL에 걸려 늘 실패한다. 새 가드 여덟과 옮긴 가드 셋이
+`ConsolidatedPlanRules_*`·`Critic_ShouldCheckThatNoNewStoredProcedureIsDefined`에 있다.
+
+전체 3,126건 통과 · 건너뜀 0 · 경고 0.
+
+> ⚠️ **AGENTS.md가 크기 예산 상한에 9바이트 남았다**(34,991 / 35,000). 범주 7의 제약이
+> 다섯에서 여섯으로 늘었기 때문이다. 다음 회차가 AGENTS.md를 늘리려면 먼저 줄일 곳을
+> 찾아야 한다(`DocumentationBudgetTests`가 실패 메시지로 어디로 옮길지 안내한다).

@@ -50,6 +50,18 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task Critic_ShouldCheckThatNoNewStoredProcedureIsDefined()
+        {
+            // 규칙 3-1(SQL 거처)의 짝. 4단계의 성공 기준 첫 행이 "신규 SP 정의 수가
+            // 0으로 수렴하는가"인데, Critic이 그 축을 보지 않으면 어긋나도 통과하고
+            // 자가 수정이 거기 영영 닿지 않는다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("NO new stored procedure", prompt);
+            Assert.Contains("not a quotation of the original", prompt);
+        }
+
+        [Fact]
         public async Task Critic_ShouldCheckTheBatchSchemaRule()
         {
             var prompt = await CaptureCriticPromptAsync();

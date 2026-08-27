@@ -134,12 +134,13 @@
     *   프롬프트에 `[MACHINE NOTICE]`(네 표가 담지 않는 문장 — 지금은 MERGE)가 실리면 그 문장은 산문으로 서술하되 기계 확정이 아님을 밝히고, 네 표에 행을 만들지 마십시오(`DmlScopeExtractor.ExtractUncoveredStatements`). 표에 그 문장이 없는 것은 누락이 아닙니다.
     *   「실행 의미」 표의 종류는 일곱입니다 — DB 배치·집계 대입·`@@ROWCOUNT`·커서 수명·식 타입 경로·비집계 대입·루프 내 재설정. 종류를 더할 때는 `ExecutionSemanticsFacts.AllKinds`에 함께 등재하십시오. L1은 종류를 목록과 대조하지 않으므로, 빠뜨리면 잃는 것은 행 대조가 아니라 Critic 면제입니다(`MachineConfirmedTablesTests`).
     *   표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오. 표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽으십시오(`architecture.md §4.12`).
-    *   통합 배치 계획은 다음 5대 제약을 지킵니다.
+    *   통합 배치 계획은 다음 6대 제약을 지킵니다.
         1. SNAPSHOT 격리에서 `WITH (NOLOCK)`을 사용하지 않습니다.
         2. INSERT-only 롤백은 Shadow 백업 대신 `ROLLBACK TRAN` 또는 `DELETE WHERE [ChunkKey]` 보상으로 설계합니다.
-        3. Chunk Key는 실제 타겟 컬럼 또는 PK 해시만 쓰고 원본 필터·오류 코드를 보존하며, 각 `WHILE` 회차에 `BEGIN TRAN/COMMIT TRAN`을 둡니다.
+        3. Chunk Key는 실제 타겟 컬럼 또는 PK 해시만 쓰고 원본 필터·오류 코드를 보존하며, 각 청크 회차가 자기 트랜잭션으로 독립 커밋합니다.
         4. 체크포인트로 재시작 멱등성을 보장하고 Shadow 복원은 같은 범위를 먼저 `DELETE`한 뒤 삽입합니다.
-        5. `XACT_ABORT ON`은 `TRY...CATCH`와 결합하고 `GOTO` 오류 처리는 금지합니다.
+        5. 실패한 문장은 부분 커밋을 남기지 않고 실패 지점의 원본 오류 코드를 기록합니다.
+        6. 단계 로직은 타겟 언어 앱이 소유하고 신규 저장 프로시저를 만들지 않습니다 — `CREATE PROCEDURE`는 원본 인용일 때만 쓰며, 규칙은 의무만 정하고 트랜잭션 API는 정하지 않습니다(`ConsolidatedPlanRules_ForbidNewStoredProcedures`).
     *   `NOT IN`·`ISNULL` 복합 조건은 포함/제외와 NULL 치환 의미를 정확히 기술하십시오.
     *   Mermaid 연결 라벨에는 큰따옴표를 쓰지 않고 노드 텍스트에는 `@` 변수를 자연어로 바꾸십시오. `@@ERROR`만 전체 따옴표로 허용합니다(`PostProcessMarkdown_ShouldCleanseMermaidCode`).
     *   3부 식별자는 같은 인스턴스의 크로스 DB 참조이며 4부 Linked Server로 서술하지 마십시오.

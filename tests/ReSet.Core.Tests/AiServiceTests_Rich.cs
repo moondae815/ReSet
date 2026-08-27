@@ -1672,6 +1672,24 @@ END"
             return result.SystemPrompt!;
         }
 
+        /// <summary>
+        /// 시스템 프롬프트에서 규칙 블록만 잘라낸다.
+        ///
+        /// Few-Shot 예시는 여전히 T-SQL이다 - 이관 대상 레거시가 T-SQL이기 때문이다.
+        /// 그래서 "규칙에 `BEGIN TRAN`이 없다"를 시스템 프롬프트 전체로 재면 예시에
+        /// 걸려 늘 실패한다. 3단계(규칙 본문 다시 쓰기)가 손댄 것은 규칙 블록뿐이므로
+        /// 판정 범위도 거기로 좁힌다.
+        /// </summary>
+        private static async Task<string> RulesBlockAsync()
+        {
+            var prompt = await StepSystemPromptAsync();
+            var open = prompt.IndexOf("[Required Content & Rules]", StringComparison.Ordinal);
+            Assert.True(open >= 0, "규칙 블록의 시작을 찾지 못했다.");
+            var close = prompt.IndexOf("[Few-Shot Examples", open, StringComparison.Ordinal);
+            Assert.True(close > open, "규칙 블록의 끝(Few-Shot 시작)을 찾지 못했다.");
+            return prompt[open..close];
+        }
+
         // 규칙 5가 @pi_bypassPreCheck를 발명해 명령했고, S02가 재시작 모드에서
         // 실행 컨텍스트 전체에 그 값을 참으로 고정해 지급 확정 원장의 -9 하드
         // 스톱이 통째로 사라졌다(감사 🔴).
@@ -1712,9 +1730,15 @@ END"
             var rules = await StepSystemPromptAsync();
 
             Assert.Contains("LAST RESORT", rules);
-            Assert.Contains("BEFORE `BEGIN TRAN`", rules);
+            // (a) 롤백될 수 있는 트랜잭션 "밖에서" 먼저 만든다. 옛 단언은
+            // "BEFORE `BEGIN TRAN`"이라는 T-SQL 철자를 고정하고 있었는데,
+            // 트랜잭션을 여는 주체가 앱으로 옮기면 그 철자가 계획서에 없어도 된다.
+            Assert.Contains("OUTSIDE the transaction", rules);
             Assert.Contains("same range", rules);
-            Assert.Contains("sp_executesql", rules);
+            // (c) 값을 파라미터로 넘긴다. 옛 단언은 `sp_executesql`이라는 T-SQL
+            // 고유 API를 고정했다 - 겨누는 앱이 무엇으로 매개변수화하는지는 규칙이
+            // 정하지 않는다(설계서 §1).
+            Assert.Contains("pass every value as a parameter", rules);
         }
 
         [Fact]
@@ -1744,6 +1768,82 @@ END"
         public async Task ConsolidatedPlanRules_ShadowMustDefineAPurgePolicy()
         {
             Assert.Contains("purge policy", await StepSystemPromptAsync());
+        }
+
+        // [3단계 규칙 본문 다시 쓰기 - 2026-08-27]
+        // 설계서: docs/superpowers/specs/2026-08-27-stage3-rule-rewrite-design.md §2
+        // 규칙은 의무만 정하고 API는 정하지 않는다(§1) - 겨누는 C# 앱이 아직 없어서
+        // `SqlTransaction` 같은 타입을 정하면 존재하지 않는 계약을 지어내는 것이 된다.
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ForbidNewStoredProcedures()
+        {
+            var rules = await RulesBlockAsync();
+
+            Assert.Contains("Do NOT define any NEW stored procedure", rules);
+            Assert.Contains("quote the ORIGINAL legacy procedure", rules);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_SayThePseudocodeIsApplicationCode()
+        {
+            // 규칙 2가 "classes/components와 pseudocode"를 함께 요구하면서 그 의사코드가
+            // C#인지 T-SQL 프로시저 본문인지 말하지 않았다 - 원래 모호함의 발원지다(§2-5).
+            Assert.Contains("not a stored procedure body", await RulesBlockAsync());
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_DropTheTsqlSpellingFromTheRewrittenRules()
+        {
+            var rules = await RulesBlockAsync();
+
+            foreach (var spelling in new[]
+                     {
+                         "BEGIN TRAN", "COMMIT TRAN", "GOTO", "XACT_ABORT",
+                         "TRY...CATCH", "sp_executesql", "SET TRANSACTION ISOLATION LEVEL"
+                     })
+            {
+                Assert.DoesNotContain(spelling, rules, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_KeepSnapshotIsolationAsAnObligation()
+        {
+            var rules = await RulesBlockAsync();
+
+            // 격리 수준은 의무로 남고 거는 자리는 정하지 않는다. DB 수준 지시
+            // (`ALTER DATABASE`) 금지는 언어와 무관하므로 그대로 살아 있어야 한다.
+            Assert.Contains("SNAPSHOT isolation", rules);
+            Assert.Contains("READ_COMMITTED_SNAPSHOT ON", rules);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_KeepThePartialCommitObligation()
+        {
+            // `XACT_ABORT ON`이 지키던 것은 "실패한 문장이 부분 커밋을 남기지 않는다"다.
+            Assert.Contains("partial commit", await RulesBlockAsync());
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ChunkBoundaryStaysAnObligation()
+        {
+            var rules = await RulesBlockAsync();
+
+            Assert.Contains("commits independently", rules);
+            Assert.Contains("Do NOT wrap the entire loop in a single outer transaction", rules);
+        }
+
+        [Fact]
+        public async Task BatchObjectSchemaRule_NoLongerAllowsAHelperProcedure()
+        {
+            // 규칙 4-1이 신규 배치 객체에 helper procedure를 명시 허용하고 있었다 -
+            // 새 규칙("신규 저장 프로시저를 만들지 않는다")과 정면 충돌하는 유일한 자리(§2-4).
+            // 스키마 강제 자체는 그대로다 - 스테이징·저널·그림자 '테이블'은 여전히 필요하다.
+            var rules = await RulesBlockAsync();
+
+            Assert.DoesNotContain("helper procedure", rules);
+            Assert.Contains("batch_shadow", rules);
         }
 
         private static SpDefinition ReferencedFunctionSpDefinition() => new()
