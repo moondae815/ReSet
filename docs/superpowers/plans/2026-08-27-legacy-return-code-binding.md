@@ -34,7 +34,7 @@
 | 파일 | 책임 | 태스크 |
 |---|---|---|
 | `docs/audit-reports/sweeps/2026-08-27-legacy-return-code-sweep.md` | 의무 기준 실측 보고서 — 결속 실패 집합의 정본 | 1 |
-| `src/ReSet.Core/Services/MechanicalValidator.cs` | `CheckLegacyReturnCodeBinding` 추가, `ValidateBatchStep`에서 호출 | 2 |
+| `src/ReSet.Core/Services/MechanicalValidator.cs` | `CheckLegacyReturnCodeBinding` 추가, **`ValidateConsolidated`(통합 계획서 검사)에서 호출** | 2 |
 | `tests/ReSet.Core.Tests/LegacyReturnCodeBindingTests.cs` | 새 파일 — 검사 동작과 변이 잠금 | 2 |
 
 `MechanicalValidator.cs`는 이미 매우 크지만 이 계획에서 쪼개지 않는다 — 배치 단계 검사 12개가 같은 진입점(`ValidateBatchStep`)을 공유하는 구조라, 분리하면 이 작업의 범위를 훨씬 넘는다.
@@ -140,6 +140,18 @@ dotnet test
 ---
 
 ### Task 2: 결속 검사를 더한다
+
+
+> **[실행 결과 — 배선이 계획과 다르다]** 이 계획은 검사를 단계 검사(`ValidateBatchStep`)에
+> 걸도록 썼으나, 실제로는 **통합 계획서 검사 `ValidateConsolidated`**에 걸었다. 근거는 Task 2
+> 실행 중의 실측이다 — ① Task 1이 확정한 실패 14건 중 **13건은 계약 표를 문서 어디에서도
+> 부르지 않아** 단계 섹션 하나로는 귀속이 불가능하고, ② 단계 단위로 재면 이행한 6건에서도
+> 자기 저널 행을 쓰지 않는 단계가 11~12개씩 발화해 **20/20 Job이 발화**한다(그 오탐은 L1
+> 재시도를 소진시킨다). 선례는 같은 파일의 `CheckBatchRunRowCreation`이다("단계 검사로는 잡을
+> 수 없다 … 통합 문서는 계획서 전체를 보므로 '문서 어딘가에 최소 한 번'으로 닫힌다").
+> 그 대가로 오류가 어느 단계인지 지목하지 못하며, 그 한계는 측정 보고서 §8-2에 적혀 있다.
+> 아래 Task 2 본문의 `ValidateBatchStep` 서술은 계획 당시의 것으로 남겨 둔다 — 실제 배선은
+> 이 상자가 정본이다.
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/MechanicalValidator.cs` (`CheckLegacyReturnCodeBinding` 추가, `ValidateBatchStep` 본문 279~420행 구간에서 호출)

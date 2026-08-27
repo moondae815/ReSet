@@ -436,5 +436,62 @@ namespace ReSet.Core.Tests
 
             Assert.False(Fires(markdown));
         }
+
+        // ── 판정 15: 오류는 ValidationResult.Errors에도 실려야 한다 ───────────────
+        //
+        // DetailedErrors만 보는 단언은 이 검사가 생산에서 도는지를 재지 않는다.
+        // IsValid는 Errors.Count로만 정해지고, 그 IsValid가
+        // VerificationPipelineOrchestrator의 재생성 분기와 SuggestedPromptFix를 켠다.
+        // Errors.Add 한 줄이 빠지면 검사는 아무 일도 안 하면서 테스트 전부와 코퍼스
+        // 대조가 초록으로 남는다 - 이 브랜치가 M6b에서 본 "일치가 판정을 보증하지
+        // 않는다"의 가장 나쁜 형태다.
+        [Fact]
+        public void ValidateConsolidated_MarksThePlanInvalidWhenTheBindingIsMissing()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                INSERT INTO dbo.POQSettleSqlErrorLog
+                    (RunId, StepCode, LegacyRetVal, ErrorMessage, RecordedAt)
+                VALUES
+                    (@v_runId, N'S01', @v_currentStepId, @v_sqlErrorMessage, SYSUTCDATETIME());
+                ```
+                """);
+
+            var result = Validate(markdown);
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("LegacyReturnCode"));
+        }
+
+        // ── 판정 16: 한정자는 대조 대상이 아니다 ─────────────────────────────────
+        //
+        // BatchControlContract.Find가 "한정자가 있든 없든" 찾는 것과 같은 관례다
+        // (BatchControlContract.cs:252). 형제 검사들도 QualifiedTableNameFragment로
+        // 스키마를 무시하고 맨이름만 본다 - 단계 문서가 같은 표를 batch.X로도 X로도
+        // 쓰기 때문이다. 그래서 `dbo.BatchStepJournal`에 대한 결속도 인정한다.
+        //
+        // 이 인정은 판정 5(다른 표에 쓰면 발화)와 충돌하지 않는다 - 저기서 갈리는
+        // 것은 맨이름(BatchTaskRun ≠ BatchStepJournal)이고, 여기서 무시되는 것은
+        // 한정자뿐이다. 이 결정은 코퍼스로 변별되지 않으므로(스키마를 요구해도 발화
+        // 집합 14/6 불변, 최종 리뷰 실측) 이 테스트가 유일한 잠금이다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheBindingUsesAnotherSchemaQualifier()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```sql
+                UPDATE dbo.BatchStepJournal
+                   SET StepStatus = N'Failed',
+                       LegacyReturnCode = @v_currentStepId
+                 WHERE RunId = @RunId
+                   AND StepCode = @StepCode;
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
+        }
     }
 }
