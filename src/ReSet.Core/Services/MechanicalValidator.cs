@@ -6972,7 +6972,7 @@ namespace ReSet.Core.Services
         /// 이 집합으로 결정된다.
         ///
         /// [왜 뽑아냈는가] 같은 두 줄이 CheckAnchoredStatementFacts와
-        /// CheckAddedPredicates 두 자리에 복제돼 있었다. 스윕의 침묵 분모가 같은 집합을
+        /// CheckAnchoredStatementExtras 두 자리에 복제돼 있었다. 스윕의 침묵 분모가 같은 집합을
         /// 세 번째로 복제할 자리라 여기서 끊는다 - BareObjectName·BareProcedureName이
         /// 따른 것과 같은 전례다.
         ///
