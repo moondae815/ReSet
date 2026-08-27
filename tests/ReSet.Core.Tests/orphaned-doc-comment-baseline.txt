@@ -1,0 +1,27 @@
+# 한 문서 주석에 <summary>가 둘 이상인 자리의 파일별 상한.
+#
+# C#은 연속된 /// 줄을 하나의 주석으로 묶어 다음 멤버에 붙인다. 그래서 </summary>
+# 뒤에 곧바로 <summary>가 오면 앞 블록이 설명하던 멤버는 문서를 잃고, 그 근거가
+# 엉뚱한 멤버에 실린다. 이 저장소는 근거를 코드 주석에 두는 것이 규약이라
+# 「근거는 있는데 찾을 수 없는」 상태가 된다. 빌드 경고는 나지 않는다.
+#
+# 이 게이트는 단방향이다. 상한 초과만 실패하고 밑으로는 자유다 —
+# documentation-budget-baseline.txt 헤더의 판단을 그대로 따른다. 양방향으로 잠그면
+# 한 자리를 고칠 때마다 실패하는 검사가 되고, 그러면 다음 사람이 이 파일을
+# 무시하도록 길들여진다.
+#
+# 아래 숫자는 2026-08-27에 이미 있던 부채다. **줄이는 것이 목표다.**
+# 한 덩어리를 갚았으면 그 파일의 숫자를 낮춰 적으십시오 — 낮추지 않아도 테스트는
+# 통과하지만, 낮추지 않으면 이 목록이 남은 부채를 과장한 채 굳는다.
+#
+# 갚는 법: 그 자리의 문서 블록을 읽고 어느 멤버를 설명하는지 가른 뒤, 각 블록을
+# 자기 멤버 바로 위로 옮긴다. 기계적 이동이 아니라 귀속 판정이므로 자리마다
+# 사람이 읽어야 한다. 덩어리 크기는 아래 괄호가 대략을 알려 준다.
+
+src/ReSet.Core/Services/AiService.cs = 4
+src/ReSet.Core/Services/MechanicalValidator.cs = 5
+src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs = 1
+src/ReSet.Core/Services/OfflineDbMetadataService.cs = 1
+src/ReSet.Core/Services/SpecRoundingShapeExtractor.cs = 1
+src/ReSet.Core/Services/Clients/Cli/AntigravityCliClient.cs = 1
+tests/ReSet.Core.Tests/AiServiceTests_Rich.cs = 1
