@@ -41,11 +41,18 @@
 | `src/ReSet.Core/Services/MechanicalValidator.cs` | `CheckErrorCodeAssignmentReach` 추가, `ValidateBatchStep`에서 호출 | 2 |
 | `tests/ReSet.Core.Tests/ErrorCodeAssignmentReachTests.cs` | 새 파일 — 검사 동작과 변이 잠금 | 2 |
 
+> **[실행 결과]** 위 표의 **태스크 2 행 둘은 만들어지지 않았다.** Task 2가 취소됐다 — 아래 Task 2 머리의 상자를 보라. 실제로 남은 산출물은 1행(측정 보고서)뿐이다.
+
 `MechanicalValidator.cs`는 이미 매우 크지만 이 계획에서 쪼개지 않는다 — 배치 단계 검사들이 같은 진입점을 공유하는 구조라 분리하면 범위를 훨씬 넘는다.
 
 ---
 
 ### Task 1: 의무 기준으로 대입 실패 집합을 확정한다
+
+> **[실행 결과 — Step 3의 정지 조건이 실제로 발동했다]** 대입 자리에 없던 151개를
+> 전수로 갈랐더니 **「정당한 미대입」이 62건**이었다(정규식의 맹점 87 · 진짜 결손 2).
+> Step 3의 정지 조건대로 **Task 2로 넘어가지 않았다.** 측정 보고서는 계획대로
+> `docs/audit-reports/sweeps/2026-08-27-error-code-reach-sweep.md`에 있다.
 
 **Files:**
 - Create (임시, 끝나면 삭제): `tests/ReSet.Core.Tests/TempReachProbe.cs`
@@ -168,6 +175,33 @@ dotnet test
 ---
 
 ### Task 2: 대입 도달성 검사를 더한다
+
+> **[실행 결과 — Task 2는 취소됐다]** Task 1의 정지 조건이 발동해 이 태스크는 **실행되지
+> 않았다.** 검사를 만들지 않고 **측정만 남기기로** 결정했다. 근거 셋이다.
+>
+> **① 설계대로 만들면 오탐률이 96.9%다.** Task 1이 151개를 전수로 갈라 「정규식의 맹점 87 ·
+> 정당한 미대입 62 · 진짜 결손 2」를 얻었다. 이 검사는 발화 64건 중 **62건이 오탐**이 된다.
+> 원인이 구조적이다 — **`Steps[].ErrorCodes`가 단계별 집합이 아니라 통합 체인 전체의 승인
+> 코드 합집합에 가깝다.** `-9`가 증거다: 124개 단계 문서가 선언하고 86개가 싣는데, **그 검사
+> 분기가 없는 38개 단계에도 선언돼 있다.** 그래서 Task 2 「Interfaces」가 전제한 "발화 집합이
+> 채점표와 정확히 일치"는 성립할 수 없다.
+>
+> **② 실측 결손률이 `2 / 1,476` = 0.14%다.** 그리고 그 둘 중 하나는 **성공 코드(`0`)**라,
+> 검사가 그것을 볼지 자체가 새 설계 판단이다.
+>
+> **③ 진짜 위험인 「밀림」을 대입 유무로는 못 잡는다.** `POQSettleProc19/S11`이 사례다.
+> 원본 `UP_UTIL_SETTLE_COMM_UPD`의 기계 확정 표가 DDL 라인 291→`-9`, 320→`-10`, 345→`-11`,
+> 361→`-12`로 매기는데, 그 단계는 **한 칸씩 밀려** 싣는다 — `-10`을 "8. inivacct"에, `-11`을
+> "9. easybank"에, `-12`를 "10. KFTC"에, 그리고 **`-12`를 "11. hectofirm"에 또** 싣는다.
+> **대입 유무만 보면 떨어져 나간 `-9` 하나만 잡히고 `-10`·`-11`·`-12`는 "대입되어 있으므로"
+> 통과한다.** 이관 후 `inivacct` 갱신이 실패하면 운영자는 `-10`을 받고 **`easybank`를
+> 들여다본다** — 규칙 6-1이 막으려던 바로 그 사고인데, 이 검사는 그것을 못 본다.
+>
+> **아래 Task 2 본문(Files·Interfaces·Step 1~9)은 계획 당시의 것으로 남겨 두며, 실행되지
+> 않았다.** `MechanicalValidator.cs`에 `CheckErrorCodeAssignmentReach`는 없고
+> `tests/ReSet.Core.Tests/ErrorCodeAssignmentReachTests.cs`도 없다. 아래 코드 블록을 그대로
+> 베끼지 말 것. 설계 쪽 정본은
+> `docs/superpowers/specs/2026-08-27-stage3-rule-rewrite-design.md` §3 머리의 정정 상자다.
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/MechanicalValidator.cs` (`CheckErrorCodeAssignmentReach` 추가, `ValidateBatchStep` 본문에서 호출)
