@@ -510,6 +510,7 @@ dotnet run --project src/ReSet.Cli
   - `--codegen`: (TUI 전용) 통합 배치 전환 계획 수립 최종 승인 완료 후, 자동으로 코딩 에이전트 브릿지 프로세스를 기동하여 소스 코드를 생성하도록 설정합니다. (배치 모드에서 `--job-name` 지정 시에도 함께 적용 가능합니다.)
   - `--engine <엔진명>`: 코딩 에이전트 종류를 명시적으로 지정합니다. (`claude` | `agy` | `codex`)
   - `--coverage-map <Job이름|객체이름>`: **DB·AI 연결 없이** `output/` 산출물만으로 커버리지 맵 HTML을 생성합니다. Job 이름을 주면 그 Job의 참조 폐포 전체를, 객체 이름을 주면 그 객체 하나를 대상으로 삼아 `docs/CoverageMap.html`로 냅니다. 재료를 읽지 못해 빠진 객체가 있으면 화면에 함께 알립니다. (예: `--coverage-map dbo.UP_UTIL_SETTLE_INS`)
+  - `--sweep`: **DB·AI 연결 없이** `output/` 산출물만으로 생성된 단계 지시서 전수에 단계 검사를 다시 돌려, 어떤 검사가 어디서 몇 건 발화했는지를 마크다운 보고서로 냅니다. 검사를 고칠 때마다 같은 측정을 다시 돌려 회차 간에 견주기 위한 감사 도구이며, 대상에서 빠진 것이 있으면 발화량 감소가 개선으로 오독되지 않도록 보고서 머리말에 함께 싣습니다. 대상을 하나도 찾지 못하면 종료 코드 1로 끝냅니다.
   
 - **배치 실행 예시**:
   - **특정 SP 지정 분석**:
@@ -609,4 +610,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: b1da22e -->
+<!-- synced-through: 339e430 -->
