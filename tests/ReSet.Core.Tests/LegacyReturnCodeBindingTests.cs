@@ -226,7 +226,10 @@ namespace ReSet.Core.Tests
         // ── 판정 7: 산문의 약속은 결속이 아니다 ──────────────────────────────────
         //
         // POQSettleProc15:1043의 매핑 표가 컬럼 이름을 적지만 SQL은 다른 컬럼에
-        // 쓴다. 문서 전체를 훑으면 그 표 한 줄이 결속으로 오인된다.
+        // 쓴다. 산문에 쓰기 문장을 <b>문장 모양 그대로</b> 인용하는 것도 마찬가지다 -
+        // 코드 블록 밖의 문장은 계획이지 구현 지시가 아니다. 이 픽스처가 인용문을
+        // 담는 이유는 그것이다: 담지 않으면 "문서 전체를 훑는다"는 변이가 살아남는다
+        // (쓰기 자리 좁힘만으로는 산문에 걸릴 것이 없어 판정이 안 갈린다).
         [Fact]
         public void ValidateConsolidated_ReportsWhenTheBindingIsOnlyClaimedInProse()
         {
@@ -234,6 +237,8 @@ namespace ReSet.Core.Tests
                 | 업무 오류 코드 | `LegacyReturnCode` | `@po_intRetVal INT OUTPUT` | 원본 코드를 그대로 기록한다. |
 
                 모든 단계의 `@po_intRetVal`은 `batch.BatchStepJournal.LegacyReturnCode`에 기록한다.
+                예를 들어 `UPDATE batch.BatchStepJournal SET LegacyReturnCode = @v_currentStepId`
+                형태로 기록할 예정이다.
 
                 ```sql
                 UPDATE batch.BatchStepJournal
@@ -245,6 +250,34 @@ namespace ReSet.Core.Tests
                 """);
 
             Assert.True(Fires(markdown));
+        }
+
+        // ── 판정 11: 결속은 SQL 펜스에만 사는 것이 아니다 ────────────────────────
+        //
+        // POQSettleBatch1:429-497의 실물. 언어 이전 뒤의 코드를 ```pseudocode
+        // 펜스에 C# 모양으로 적고 SQL은 그 안의 문자열로 싣는다. ```sql 펜스만
+        // 보면 이 형태로만 결속한 계획서가 실패로 잡힌다 - 오탐은 L1 재시도를
+        // 소진시키므로 코드 블록이면 언어를 가리지 않는다.
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheBindingLivesInAPseudocodeFence()
+        {
+            var markdown = Plan("""
+                원본 출력 `@po_intRetVal`을 그대로 보존한다.
+
+                ```pseudocode
+                async RunStepAsync(runId, cancellationToken):
+                    await connection.ExecuteAsync(
+                        "UPDATE batch.BatchStepJournal
+                            SET StepStatus = 'Failed',
+                                LegacyReturnCode = @LegacyCode,
+                                CompletedAtUtc = SYSUTCDATETIME()
+                          WHERE RunId = @RunId
+                            AND StepCode = @StepCode;",
+                        { RunId = runId, LegacyCode = legacyCode })
+                ```
+                """);
+
+            Assert.False(Fires(markdown));
         }
 
         // ── 판정 8: 별칭으로 한 UPDATE도 결속이다 ────────────────────────────────

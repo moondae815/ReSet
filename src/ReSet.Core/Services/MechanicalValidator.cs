@@ -7775,7 +7775,7 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 이 문서의 SQL 펜스 어딘가가 그 제어 표의 그 컬럼을 <b>쓰기 대상</b>으로
+        /// 이 문서의 코드 블록 어딘가가 그 제어 표의 그 컬럼을 <b>쓰기 대상</b>으로
         /// 삼는가. 쓰기 자리는 둘뿐이다 - UPDATE의 SET 대입 대상과 INSERT의 컬럼 목록.
         /// WHERE·JOIN·SELECT는 읽기이므로 결속이 아니다.
         ///
@@ -7784,12 +7784,23 @@ namespace ReSet.Core.Services
         /// 정규식이 각자 풀면 한쪽만 고쳐질 때 다른 쪽이 뒤에 남는다. SET 절의 값은
         /// 보지 않으므로(대상 컬럼만 본다) 절은 지운 사본이 아니라 원문에서 읽는
         /// 관례를 그대로 따른다.
+        ///
+        /// [왜 ```sql 펜스가 아니라 코드 블록 전부인가]
+        /// 형제 검사는 <see cref="CleanedSqlFences"/>로 ```sql만 본다 - 그쪽은 계약 밖
+        /// 어휘를 <b>고발</b>하는 검사라 좁게 잡는 것이 안전 방향이다. 이 검사는 반대로
+        /// 결속을 <b>인정</b>하는 자리라, 좁게 잡으면 이행한 계획서를 고발한다.
+        /// 실측(POQSettleBatch1:429-497): 언어 이전 뒤의 코드를 ```pseudocode 펜스에
+        /// C# 모양으로 적고 SQL을 그 안의 문자열로 싣는다. ```sql만 보면 이 형태로만
+        /// 결속한 계획서가 오탐으로 반려되고, 그 오탐은 L1 재시도를 소진시킨다.
+        ///
+        /// 코드 블록 <b>밖</b>은 보지 않는다 - 산문이 쓰기 문장을 인용하는 것은 계획을
+        /// 말하는 것이지 구현 지시가 아니다(작성 계약 2의 "자기 절로 좁혀라"와 같은 취지).
         /// </summary>
         private static bool BindsColumnInWrite(string markdown, ControlTable table, string columnName)
         {
             var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
 
-            foreach (var (cleaned, offset) in CleanedSqlFences(markdown))
+            foreach (var (cleaned, offset) in CleanedCodeFences(markdown))
             {
                 var aliases = ResolveControlTableAliases(cleaned, bare);
                 var headerAlternatives = new List<string> { QualifiedTableNameFragment(bare) };
@@ -7827,6 +7838,27 @@ namespace ReSet.Core.Services
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// <see cref="CleanedSqlFences"/>와 같은 것을 언어 태그를 가리지 않고 낸다 -
+        /// ```sql뿐 아니라 ```pseudocode·```csharp 펜스도 SQL 문장을 문자열로 싣는다
+        /// (POQSettleBatch1:429). 인덱스 규약도 같다: 펜스 <b>내용</b>이 원문에서
+        /// 시작하는 위치이고, <see cref="BlankCommentsAndStrings"/>가 길이를 보존하므로
+        /// 지운 사본의 로컬 인덱스에 그대로 더할 수 있다.
+        ///
+        /// 지우는 단위가 펜스인 이유는 <see cref="CleanedSqlFences"/>에 있다 - 문서
+        /// 전체를 한 번에 지우면 산문의 짝 없는 아포스트로피 하나가 뒤따르는 펜스를
+        /// 통째로 비워 검사를 끈다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, int Offset)> CleanedCodeFences(string markdown)
+        {
+            foreach (Match fence in Regex.Matches(
+                markdown, @"```\w*(?<code>.*?)```", RegexOptions.Singleline))
+            {
+                var codeGroup = fence.Groups["code"];
+                yield return (BlankCommentsAndStrings(codeGroup.Value), codeGroup.Index);
+            }
         }
 
         /// <summary>
