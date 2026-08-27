@@ -9100,6 +9100,68 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("CLVTTYPE"));
         }
 
+        [Fact]
+        public void ValidateBatchStep_CheckC_StagingExemptionIsStatementScoped_PinsCurrentGranularity()
+        {
+            // [입도 고정 - 결함을 막는 테스트가 아니라 "지금은 이렇게 동작한다"를
+            // 못 박는 테스트다] ReadsOnlyStaging이 참이면 그 문장의 PredicateColumns
+            // 전체가 면제된다 - 설계가 겨냥한 실행 스코프 식별자(ExecutionId)뿐
+            // 아니라 같은 문장에 동석한 진짜 업무 필터(NewBusinessFlag)까지 함께.
+            //
+            // [왜 컬럼 단위로 못 좁히는가] 검사 C는 검사 B식 "적재문 컬럼과
+            // 대조"를 쓸 수 없다 - 부류 5 결함의 요점 자체가 ExecutionId 같은
+            // 실행 스코프 식별자가 선행 적재문의 술어 컬럼에 아예 나타나지
+            // 않는다는 것이기 때문이다(순수 실행 스코프 추가라 원천 컬럼이
+            // 아니다). "적재문에 있었는가"로는 스코프 식별자와 업무 필터를
+            // 가를 수 없다. 이름 목록으로 가르는 것도 이 작업이 금지한
+            // 방향이다 - 다음 이행자가 고를 네 번째 이름에서 재발한다.
+            //
+            // 이 코퍼스의 부류 5 실물 셋 중 둘(POQSettleProc2/S13·POQSettleProc1/
+            // S02)은 게시문이 단일 술어라 이 잔여 위험이 발현하지 않는다.
+            // 셋째(POQSettleProc8/S05)는 게시문 자체는 두 술어(RunId·
+            // ProcessingYMD)를 걸지만, 그 원천을 채우는 실제 쓰기가 의사코드로만
+            // 있어 LineageSources가 붙지 않아 이 절의 면제를 아예 타지 않는다 -
+            // 그래서 결과적으로도 발현하지 않는다(직접 확인 -
+            // CheckAnchoredStatementExtras 주석 참고).
+            //
+            // 나중에 누가 컬럼 단위로 면제를 좁히면 이 단언이 깨진다 - 그때는
+            // 면제 입도가 바뀐 의도된 변경이므로, 이 테스트를 새 동작에 맞춰
+            // 고치면 된다(결함을 고친 것이 아니다).
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After\n" +
+                "WHERE ExecutionId = @e AND NewBusinessFlag = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            // 지금은 둘 다 조용하다 - ExecutionId(설계가 겨냥한 것)뿐 아니라
+            // NewBusinessFlag(진짜 업무 필터라면 발화해야 할 것)도. 이 단언이
+            // 깨지면 면제 입도가 바뀐 것이다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionId"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("NewBusinessFlag"));
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // 검사 D - 지역 변수 선언. S14 🔴: 지역 변수 9개가 DECLARE 없이 쓰였고
         // 그중 금액 3종이 원본 MONEY인데 변수명은 int를 시사한다.

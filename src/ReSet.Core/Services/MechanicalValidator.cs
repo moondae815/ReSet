@@ -7372,6 +7372,33 @@ namespace ReSet.Core.Services
                 //
                 // allowed는 그대로 둔다 - 배치 제어 테이블을 **직접** 갱신하는
                 // 문장은 계보와 무관하게 여전히 그 면제가 필요하다.
+                //
+                // [한계 - 면제가 문장 단위다, 컬럼 단위가 아니다]
+                // ReadsOnlyStaging이 참이면 그 문장의 PredicateColumns 전체가
+                // 면제된다 - 설계가 겨냥한 실행 스코프 식별자(ExecutionId 등)만이
+                // 아니라, 같은 문장에 동석한 진짜 업무 필터까지. 검사 B식으로
+                // "적재문의 컬럼과 대조"해 컬럼 단위로 좁힐 수 없다 - 부류 5
+                // 결함의 요점 자체가 ExecutionId 같은 실행 스코프 식별자는 원천
+                // 컬럼이 아니라 순수한 실행 스코프 추가라서 선행 적재문의 술어
+                // 컬럼에 아예 나타나지 않는다는 것이기 때문이다. "적재문에
+                // 있었는가"라는 신호가 없으니 그것으로 스코프 식별자와 업무
+                // 필터를 가를 수 없다. 이름 목록으로 가르는 것도 이 작업이
+                // 금지한 방향이다(다음 이행자가 고를 네 번째 이름에서 재발한다 -
+                // 위 [단계 내부 스테이징] 문단의 RunId/ExecutionId 비대칭이 그
+                // 실물 증거다).
+                //
+                // [코퍼스 실측 - 직접 확인, 2026-08-27 픽스 라운드 1]
+                // 부류 5의 실물 셋 중 POQSettleProc2/S13·POQSettleProc1/S02는
+                // 게시문이 단일 술어(ExecutionId 하나, YMD 하나)라 이 잔여
+                // 위험이 발현하지 않는다. POQSettleProc8/S05는 게시문 자체는
+                // RunId·ProcessingYMD 두 술어를 걸지만, 그 원천
+                // stage.TSettleMst_S05를 채우는 실제 쓰기가 이 문서에서
+                // ```text``` 의사코드로만 있고 파싱 가능한 SQL 펜스가 없어
+                // LineageSources가 이 문장에는 애초에 안 붙는다(불변식상
+                // ReadsOnlyStaging이 거짓) - 그래서 이 문장은 이 절의 면제를
+                // 아예 타지 않고, 위 잔여 위험도 이 코퍼스에서는 결과적으로
+                // 발현하지 않는다. 「6건이 전부 단일 술어」로 뭉뚱그리지 않고
+                // 갈라 적는다 - 셋째는 술어 수가 아니라 계보 불성립으로 안전하다.
                 var extras = group
                     .SelectMany(a => ReadsOnlyStaging(a.Statement, specTargets)
                         ? Array.Empty<string>()
