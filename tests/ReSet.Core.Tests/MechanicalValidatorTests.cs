@@ -9027,6 +9027,79 @@ END";
             Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
         }
 
+        [Fact]
+        public void ValidateBatchStep_CheckC_StagingScopePredicate_IsNotExtra()
+        {
+            // (5-3-3) 부류 5. 게시문이 자기 실행이 적재한 스테이징 행만 되읽으려고
+            // 거는 술어다. 원본 원천의 술어가 아니므로 명세서와 대조할 대상 자체가
+            // 아니다. 지금은 BatchControlContract가 아는 RunId만 통과하고
+            // ExecutionId는 발화한다 - 면제가 역할이 아니라 이름으로 걸려 있다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After WHERE ExecutionId = @e;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionId"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_AddedFilterOnOriginalSource_StillFires()
+        {
+            // 회귀 - (5-3-4) 🔴. 이 코퍼스의 유일한 진짜 축 B 결함은 원본 원천을
+            // **직접** 읽는 문장이 원본에 없는 필터를 새로 거는 것이다. 계보에
+            // 스테이징이 없으므로 면제 대상이 아니고 계속 발화해야 한다.
+            // 면제가 탐지력을 먹지 않는다는 것을 이 테스트가 못 박는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleMst",
+                        new[] { "PLTID", "YMDCANCEL" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S06", Name: "S06 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleMst\n" +
+                "SELECT A.PLTID FROM PaymentDB.dbo.TTxMst AS A\n" +
+                "WHERE A.YMDCANCEL = @p AND A.CLVTTYPE = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("CLVTTYPE"));
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // 검사 D - 지역 변수 선언. S14 🔴: 지역 변수 9개가 DECLARE 없이 쓰였고
         // 그중 금액 3종이 원본 MONEY인데 변수명은 int를 시사한다.

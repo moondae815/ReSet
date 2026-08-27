@@ -7329,6 +7329,9 @@ namespace ReSet.Core.Services
             // 이유가 없다.
             if (anchored.Count == 0) return;
 
+            var specTargets = new HashSet<string>(
+                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
+
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var table in BatchControlContract.Tables)
             {
@@ -7357,8 +7360,22 @@ namespace ReSet.Core.Services
                     row.PredicateColumns.Concat(row.JoinKeys).Concat(row.GroupBy).Concat(row.OrderBy),
                     StringComparer.OrdinalIgnoreCase);
 
+                // [단계 내부 스테이징 - 대조할 원천이 아니다]
+                // 게시문이 자기 실행이 적재한 스테이징 행만 되읽으려고 거는 술어는
+                // 원본 원천의 술어가 아니다((5-3-3) 부류 5). 예전에는
+                // BatchControlContract.Tables의 컬럼 이름을 allowed로 깔아 이 부류를
+                // 면제하려 했는데, 면제가 역할이 아니라 **이름**으로 걸려 있어
+                // 계약이 아는 RunId만 통과하고 ExecutionId·ProcessingYMD는 발화했다.
+                // 같은 코퍼스의 POQSettleProc9/S13은 구조가 같은데 식별자를 RunId로
+                // 부른다는 이유만으로 조용했다 - 발화를 가른 것이 업무적 성질이
+                // 아니라 이행자가 고른 이름이었다는 증거다.
+                //
+                // allowed는 그대로 둔다 - 배치 제어 테이블을 **직접** 갱신하는
+                // 문장은 계보와 무관하게 여전히 그 면제가 필요하다.
                 var extras = group
-                    .SelectMany(a => a.Statement.PredicateColumns)
+                    .SelectMany(a => ReadsOnlyStaging(a.Statement, specTargets)
+                        ? Array.Empty<string>()
+                        : a.Statement.PredicateColumns)
                     .Where(c => !known.Contains(c) && !allowed.Contains(c))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
