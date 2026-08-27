@@ -171,7 +171,30 @@ namespace ReSet.Core.Services
         //     곧바로 재시도 소진으로 번지기 때문이다.
         //     (main 대조: 인상 직전 main 값 15. 다른 브랜치도 15 이하라 16이 비어 있음을
         //     확인했다 - reset-l1-check 스킬의 번호 충돌 규칙.)
-        private const int CurrentCacheFormatVersion = 16;
+        // 17: 2026-08-27 「오류 코드」 표(문장 번호·오류 코드·대입 대상 변수)가 산출물에
+        //     실린다. 표 자체는 2026-08-25에 프롬프트와 카탈로그에 들어갔으나 버전은 16에
+        //     머물러 있었다 - 인상 전 스윕에서 단계 검사의 거짓 양성 원인 넷이 남아
+        //     있었고, 그것을 닫기 전에 전건 재생성을 걸면 거짓 오류 33건이 한꺼번에
+        //     켜지기 때문이다(같은 규칙의 두 번째 적용). 원인 넷은 2026-08-27에 닫혔다.
+        //     프롬프트 입력(BuildErrorCodeTableLines가 싣는 표)과 출력 계약(명세서가 그
+        //     표를 담아야 한다)이 함께 바뀌므로 인상 대상이다.
+        //     이 표의 사실은 이미 「DML 범위」로 실린 문장 위에만 얹히므로 커버리지 맵의
+        //     🟧→🟥 전이 창은 열리지 않는다.
+        //     [이 인상이 처음 켜는 검사] CheckErrorCodes는 코퍼스에서 한 번도 돌아 본 적이
+        //     없다 - 캐시 히트 산출물에는 L1이 영영 안 돌기 때문이다. 인상 전에
+        //     ErrorCodeTableCorpusTests로 만족가능성을 확인했다: 31 객체 · 사실을 가진
+        //     객체 12 · 사실 합 84 · 갈래 셋(완전 전사된 표에 발화 0 / 사실 0건 객체는
+        //     조기 반환으로 침묵 / 사실 있는 객체는 표 부재에 발화) 전부 발화 0.
+        //     오탐을 안은 채 전건 재생성을 걸면 그것이 곧바로 재시도 소진으로 번진다.
+        //     [이 인상이 관할을 바꾼다] 앵커가 정상화되면 검사 B·C가 도달하는 문장이
+        //     늘고, 그만큼 가려져 있던 침묵도 함께 켜진다. 승격 전후 스윕의 「침묵
+        //     분모」 절이 그 변화를 센다 - 발화가 늘었는지만 보면 그 부류를 못 본다.
+        //     기준선은 docs/audit-reports/sweeps/2026-08-27-step-sweep-pre-cache17.md.
+        //     (main 대조: 인상 직전 main 값 16. 코디네이터가 전 브랜치를 확인했다 -
+        //     main·origin/main·local/main·worktree-agent-ae7b39ba4f121cbb3 이 16,
+        //     worktree-agent-af1fbecfcf4e8d9d5 가 15. 17이 비어 있음을 확인했다 -
+        //     reset-l1-check 스킬의 번호 충돌 규칙.)
+        private const int CurrentCacheFormatVersion = 17;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
