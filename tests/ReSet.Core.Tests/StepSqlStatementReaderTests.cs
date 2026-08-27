@@ -844,4 +844,336 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
             .Count(c => string.Equals(c, "DeepLeft", StringComparison.OrdinalIgnoreCase)));
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // CTE 투영 별칭 — 바깥 CTE가 이름을 바꿔 투영하고 안쪽 CTE가 그 별칭으로
+    // 거르면, 수집되는 이름이 명세서의 원래 컬럼 이름과 글자가 달라 이전으로
+    // 인정되지 않는다(docs/known-defects.md (5-3-3) 부류 2, 코퍼스 3건).
+    // 별칭을 원천 컬럼 이름으로 되돌려 **함께** 싣는다 - 별칭도 남긴다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CteProjectionAlias_InlineAs_ResolvesToSourceColumn()
+    {
+        // POQSettlePrco20/S03 축소판. 별칭은 SELECT 목록에만 있고 WHERE에는
+        // 별칭 이름만 나오므로, 해석이 없으면 USESTATE·ContractCancelYMD는
+        // 어디에서도 수집되지 않는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE AS ContractUseState,\n" +
+            "         B.ContractCancelYMD AS CMRateCancelYMD\n" +
+            "  FROM dbo.TClientContract AS A\n" +
+            "  INNER JOIN dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT CLIENTID FROM Base\n" +
+            "  WHERE ContractUseState IN (0, 4) AND CMRateCancelYMD = @p\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CLIENTID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+        Assert.Contains("ContractCancelYMD", statement.SubordinatePredicateColumns);
+
+        // 별칭도 남는다 - 지우면 다른 대조가 무엇에 기대는지 알 수 없다.
+        Assert.Contains("ContractUseState", statement.SubordinatePredicateColumns);
+        Assert.Contains("CMRateCancelYMD", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_PositionalColumnList_ResolvesToSourceColumn()
+    {
+        // POQSettleProc17/S04 축소판. `AS`가 **하나도 없다** - 별칭이 CTE의
+        // 명시 컬럼 목록에 위치로 붙는다. SelectScalarExpression.ColumnName만
+        // 보는 구현은 이 갈래를 통째로 놓친다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, ContractUseState, RateUseState) AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE, B.USESTATE\n" +
+            "  FROM dbo.TClientContract AS A\n" +
+            "  INNER JOIN dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT CID FROM Base WHERE ContractUseState IN (0, 4) AND RateUseState = 5\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_UnionBody_ResolvesThroughEveryBranch()
+    {
+        // 별칭을 **정의하는** CTE 본문이 BinaryQueryExpression이면 캐스트 하나로는
+        // 갈래를 못 편다. DmlScopeExtractor.QuerySpecificationsOf가 그 자리다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS (\n" +
+            "  SELECT A.USESTATE AS ContractUseState FROM dbo.TClientContract AS A\n" +
+            "  UNION ALL\n" +
+            "  SELECT B.USESTATE AS ContractUseState FROM dbo.TClientCMRate AS B\n" +
+            "),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM Base WHERE ContractUseState = 0\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_TwoCtesInOneScopeDisagree_IsNotResolved()
+    {
+        // 한 스코프가 CTE 둘을 읽고 둘이 같은 별칭을 다른 원천에 붙이면 그 별칭은
+        // 이 스코프에서 모호하다. 조용한 거짓 음성보다 사람이 판정하는 거짓 양성을
+        // 택하는 이 저장소의 관례를 따라 해석하지 않는다(MergeErrorCodeMaps의 충돌
+        // 코드 제거·재사용 가드의 모호 서수 제거).
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.CLIENTID, A.USESTATE AS Flag FROM dbo.TClientContract AS A ),\n" +
+            "B2 AS ( SELECT C.CLIENTID, C.INSTATE AS Flag FROM dbo.TClientCMRate AS C ),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM B1 INNER JOIN B2 ON B2.CLIENTID = B1.CLIENTID WHERE Flag = 0\n" +
+            ")\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("INSTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_UnreadCte_DoesNotLeakIntoOtherScopes()
+    {
+        // [리뷰 F1] 사상이 문장 전역이면 아무도 읽지 않는 CTE의 별칭이 무관한
+        // 스코프의 **같은 이름 실컬럼**에 붙는다. 여기서 걸러지는 것은 `TZ.YMD`
+        // 이고 `Unused`는 아무도 읽지 않는다. 그런데 CANCELYMD가 실리면,
+        // 명세서가 CANCELYMD를 확정해 두었고 이행이 그 필터를 **실제로 지웠어도**
+        // 검사 B가 침묵한다 - 이 목록을 넓히는 변경의 유일한 위험축이다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Unused AS ( SELECT A.CANCELYMD AS YMD FROM dbo.TContract AS A )\n" +
+            "DELETE FROM dbo.TSettleMst\n" +
+            "WHERE EXISTS (SELECT 1 FROM dbo.TZ AS Z WHERE Z.YMD = @p);"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("YMD", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("CANCELYMD", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_NonColumnSource_PoisonsTheAlias()
+    {
+        // [리뷰 F2] 원천 식이 컬럼 참조가 아니면 어느 컬럼에서 왔는지 알 수 없다.
+        // "정의가 없다"가 아니라 "정의가 모호하다"이므로 경쟁하는 정의로 세야
+        // 한다. 안 세면 B1의 Flag를 거르는 스코프가 B2의 USESTATE를 넘겨받는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.CLIENTID, CONVERT(int, A.INSTATE) AS Flag FROM dbo.T1 AS A ),\n" +
+            "B2 AS ( SELECT C.CLIENTID, C.USESTATE AS Flag FROM dbo.T2 AS C ),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM B1 INNER JOIN B2 ON B2.CLIENTID = B1.CLIENTID WHERE Flag = 0\n" +
+            ")\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_IdentityProjection_CountsAsCompetingDefinition()
+    {
+        // [리뷰 F9] 항등 사상(`X AS X`)을 경쟁 정의로 세지 않으면, 같은 이름을
+        // 그대로 투영하는 갈래가 다른 갈래의 개명과 충돌해도 안 걸린다.
+        // 한 CTE의 UNION 두 갈래가 서로 다르게 말하는 모양으로 못을 박는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B AS (\n" +
+            "  SELECT A.USESTATE AS Flag FROM dbo.T1 AS A\n" +
+            "  UNION ALL\n" +
+            "  SELECT C.Flag AS Flag FROM dbo.T2 AS C\n" +
+            "),\n" +
+            "Filtered AS ( SELECT 1 AS Kept FROM B WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_ResolvesCaseInsensitively()
+    {
+        // [리뷰 F10] T-SQL 기본 대조가 대소문자를 안 가리므로 사상도 안 가려야
+        // 한다. **두 자리**를 한꺼번에 잰다 - 별칭 키(`contractusestate`)와
+        // CTE 이름 조회(`FROM base`). 어느 쪽을 Ordinal로 바꿔도 이 테스트가 죽는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS ( SELECT A.USESTATE AS ContractUseState FROM dbo.T1 AS A ),\n" +
+            "Filtered AS ( SELECT 1 AS Kept FROM base WHERE contractusestate = 0 )\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_NeverEmitsNullIntoTheColumnList()
+    {
+        // [리뷰 F8] "해석하지 않는다"는 결정이 목록의 **형태**로도 지켜져야 한다.
+        // DoesNotContain 단언만으로는 null이 실려도 통과한다 - 이 목록은
+        // MechanicalValidator에서 HashSet<string>으로 들어간다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.CLIENTID, A.USESTATE AS Flag FROM dbo.T1 AS A ),\n" +
+            "B2 AS ( SELECT C.CLIENTID, C.INSTATE AS Flag FROM dbo.T2 AS C ),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM B1 INNER JOIN B2 ON B2.CLIENTID = B1.CLIENTID WHERE Flag = 0\n" +
+            ")\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.All(statement.SubordinatePredicateColumns, Assert.NotNull);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_PositionalCountMismatch_IsSkipped()
+    {
+        // 이름 둘에 요소 셋이면 위치 짝짓기가 성립하지 않는다. 그냥 앞에서부터
+        // 짝지으면 Flag가 USESTATE로 잘못 풀린다 - 그 오답이 관측되는 자리다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, Flag) AS (\n" +
+            "  SELECT A.CLIENTID, A.USESTATE, A.INSTATE FROM dbo.TClientContract AS A\n" +
+            "),\n" +
+            "Filtered AS ( SELECT CID FROM Base WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_SelectStar_IsSkipped()
+    {
+        // 별표는 요소 하나가 몇 컬럼으로 펼쳐지는지 파서가 모른다. 위치 짝짓기의
+        // 전제가 깨지므로 그 CTE는 통째로 건너뛴다.
+        //
+        // [왜 `SELECT *`가 아니라 `SELECT A.*, A.USESTATE`인가 - 이 테스트를 처음
+        // 쓸 때 걸린 함정] 요소가 별표 하나뿐이면 개수(1)가 이름 수(2)와 달라
+        // **개수 검사**에 먼저 걸린다. 그러면 별표 가드를 지워도 이 테스트는
+        // 죽지 않아 자기 이름을 재지 못한다. 개수가 맞으면서 별표가 섞여야
+        // 판별자가 된다 - 가드가 없으면 Flag가 USESTATE로 잘못 풀린다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base (CID, Flag) AS (\n" +
+            "  SELECT A.*, A.USESTATE FROM dbo.TClientContract AS A\n" +
+            "),\n" +
+            "Filtered AS ( SELECT CID FROM Base WHERE Flag = 0 )\n" +
+            "INSERT INTO dbo.TClientSettleRate (CLIENTID) SELECT CID FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_SameNameRealColumnInScope_IsNotResolved()
+    {
+        // [재리뷰 R1] F1을 스코프로 가둔 뒤에도 **스코프 안**에 같은 병이 남아
+        // 있었다. 걸러지는 것은 `TReal.Flag`인데 B1의 `Flag → USESTATE`가 실렸다.
+        // 한정자가 실테이블 별칭이면 해석하지 않아야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.CLIENTID, A.USESTATE AS Flag FROM dbo.T1 AS A ),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM B1 INNER JOIN dbo.TReal AS R ON R.CLIENTID = B1.CLIENTID\n" +
+            "  WHERE R.Flag = 9\n" +
+            ")\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_OtherCteRealColumnInScope_IsNotResolved()
+    {
+        // [재리뷰 R1 시나리오 B] 스코프가 CTE 둘을 읽는데 하나만 그 별칭을
+        // 정의하고, 다른 하나는 **같은 이름의 실컬럼**을 투영한다. 실행 가능한
+        // SQL이면서 F1과 같은 병인 모양이라 「CTE 둘이면 버린다」로는 안 잡힌다 -
+        // 한정자가 B2를 가리키므로 B1의 정의를 쓰면 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH B1 AS ( SELECT A.CLIENTID, A.USESTATE AS Flag FROM dbo.T1 AS A ),\n" +
+            "B2 AS ( SELECT C.CLIENTID, C.Flag FROM dbo.T2 AS C ),\n" +
+            "Filtered AS (\n" +
+            "  SELECT 1 AS Kept FROM B1 INNER JOIN B2 ON B2.CLIENTID = B1.CLIENTID\n" +
+            "  WHERE B2.Flag = 9\n" +
+            ")\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_QualifiedByCteAlias_IsResolved()
+    {
+        // 한정자가 이 스코프에서 CTE에 결합돼 있으면 해석한다. T-SQL은 별칭을
+        // 붙이면 원래 이름을 못 쓰므로, 결합 이름은 별칭 쪽이다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS ( SELECT A.USESTATE AS ContractUseState FROM dbo.T1 AS A ),\n" +
+            "Filtered AS ( SELECT 1 AS Kept FROM Base AS X WHERE X.ContractUseState = 0 )\n" +
+            "INSERT INTO dbo.TOut (X) SELECT Kept FROM Filtered;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_ScopeSourcesDoNotReachIntoDerivedTable()
+    {
+        // [재리뷰 R3] NamedSourceFinder가 QueryDerivedTable 하강을 막는 결정은
+        // 주석이 명시적으로 정당화하는데 무방비였다. 하강하면 파생 테이블 **안**의
+        // `Base`가 바깥 스코프에 결합돼, 바깥의 한정자 없는 `Flag`가 USESTATE로
+        // 풀린다. 이 층의 FROM은 파생 테이블 `D` 하나뿐이다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS ( SELECT A.USESTATE AS Flag FROM dbo.T1 AS A )\n" +
+            "DELETE FROM dbo.TSettleMst\n" +
+            "WHERE ID IN (SELECT ID FROM (SELECT Flag, 1 AS ID FROM Base) AS D WHERE Flag = 9);"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_ScopeSourcesDoNotReachIntoScalarSubquery()
+    {
+        // [재리뷰 R3] 같은 결정의 스칼라 하위질의 판. JOIN ON의 하위질의가 CTE를
+        // 읽어도 그것은 **이 층의 원천이 아니다** - 하강하면 바깥의 한정자 없는
+        // `Flag`가 그 CTE의 별칭으로 풀린다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS ( SELECT A.USESTATE AS Flag FROM dbo.T1 AS A )\n" +
+            "DELETE FROM dbo.TSettleMst\n" +
+            "WHERE ID IN (\n" +
+            "  SELECT R.ID FROM dbo.TReal AS R\n" +
+            "  INNER JOIN dbo.TOther AS O ON O.ID = R.ID AND O.Cnt = (SELECT COUNT(*) FROM Base)\n" +
+            "  WHERE Flag = 9\n" +
+            ");"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    [Fact]
+    public void CteProjectionAlias_ResolutionUsesOnlyThisScopesColumns()
+    {
+        // [재리뷰 R3 - 셋 중 가장 중요] 「어느 CTE를 읽는가」는 잠갔지만 「어느
+        // 컬럼에 적용하는가」는 아무도 재지 않았다. 해석 대상을 이 스코프가 모은
+        // 것에서 누적 목록으로 바꾸면 F1이 그대로 되살아난다 - 앞 스코프의 `Flag`가
+        // `Base`를 읽는 뒤 스코프에서 USESTATE로 풀린다. 두 하위 스코프는 형제이고
+        // 서로의 원천을 모른다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Base AS ( SELECT A.CLIENTID, A.USESTATE AS Flag FROM dbo.T1 AS A )\n" +
+            "DELETE FROM dbo.TSettleMst\n" +
+            "WHERE ID IN (SELECT ID FROM dbo.TZ WHERE Flag = 9)\n" +
+            "  AND ID IN (SELECT CLIENTID FROM Base WHERE CLIENTID > 0);"));
+
+        var statement = Assert.Single(statements);
+        Assert.Contains("Flag", statement.SubordinatePredicateColumns);
+        Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
 }
