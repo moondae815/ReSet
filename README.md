@@ -251,7 +251,8 @@ ReSet/
         "Endpoint": "https://api.z.ai/api"
       },
       // OpenRouter는 수백 종 모델을 한 엔드포인트로 중개합니다. ModelName은 네임스페이스가 붙은
-      // OpenRouter 모델 ID여야 합니다(예: "anthropic/claude-sonnet-5", "openai/gpt-5.6").
+      // OpenRouter 모델 ID로 적습니다(예: "anthropic/claude-sonnet-5", "openai/gpt-5.6").
+      // 네임스페이스를 빼도 해석되지만 어느 벤더로 풀릴지가 OpenRouter에 달려 재현성이 없습니다.
       "OpenRouter": {
         "ApiKey": "",              // https://openrouter.ai/settings/keys 에서 발급 (필수)
         "Endpoint": "https://openrouter.ai/api/v1",
