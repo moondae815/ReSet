@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
@@ -19,6 +20,28 @@ namespace ReSet.Cli
     public class Program
     {
         private static CancellationTokenSource? _currentCts;
+
+        /// <summary>
+        /// OpenRouter의 백엔드 라우팅 선호를 읽는다. provider가 OpenRouter가 아니면
+        /// 이 설정 구획이 없어 자연히 null이 되고, 팩토리도 다른 provider에서는
+        /// 이 인자를 쓰지 않는다.
+        /// </summary>
+        public static ReSet.Core.Services.Clients.OpenRouterRoutingOptions? ReadOpenRouterRouting(
+            IConfiguration configuration, string provider)
+        {
+            var section = configuration.GetSection($"AiSettings:Providers:{provider}:Routing");
+            if (!section.Exists())
+            {
+                return null;
+            }
+
+            var order = section.GetSection("Order").GetChildren()
+                .Select(child => child.Value ?? string.Empty)
+                .ToArray();
+
+            return ReSet.Core.Services.Clients.OpenRouterRoutingOptions.Parse(
+                order, section["AllowFallbacks"], section["RequireParameters"]);
+        }
 
         public static CliArgs ParseCommandLineArgs(string[] args)
         {
@@ -510,7 +533,9 @@ namespace ReSet.Cli
             // Local Chunking 활성화 여부
             bool.TryParse(configuration["AiSettings:EnableLocalChunking"] ?? "true", out bool enableLocalChunking);
 
-            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx, cliCommand);
+            var openRouterRouting = ReadOpenRouterRouting(configuration, provider);
+
+            IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx, cliCommand, openRouterRouting);
             IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking);
 
             // 하이브리드 아키텍처: ActorEffort 파싱
@@ -534,7 +559,8 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:EnableThinking"] ?? "false", out bool criticEnableThinking);
 
                 var criticCommand = configuration[$"AiSettings:Providers:{criticProvider}:Command"];
-                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx, criticCommand);
+                var criticRouting = ReadOpenRouterRouting(configuration, criticProvider);
+                var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx, criticCommand, criticRouting);
                 criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 
@@ -556,7 +582,8 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:EnableThinking"] ?? "false", out bool consolidatorEnableThinking);
 
                 var consolidatorCommand = configuration[$"AiSettings:Providers:{consolidatorProvider}:Command"];
-                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx, consolidatorCommand);
+                var consolidatorRouting = ReadOpenRouterRouting(configuration, consolidatorProvider);
+                var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx, consolidatorCommand, consolidatorRouting);
                 consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking);
             }
 

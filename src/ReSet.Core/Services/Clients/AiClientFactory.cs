@@ -50,7 +50,8 @@ namespace ReSet.Core.Services.Clients
             string endpoint,
             HttpClient? httpClient = null,
             int? numCtx = null,
-            string? command = null)
+            string? command = null,
+            OpenRouterRoutingOptions? openRouterRouting = null)
         {
             if (string.IsNullOrWhiteSpace(provider))
             {
@@ -91,6 +92,12 @@ namespace ReSet.Core.Services.Clients
                 "claude" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "anthropic" => new ClaudeClient(client, apiKey, endpoint, modelName),
                 "google" => new GoogleClient(client, apiKey, endpoint, modelName),
+                // OpenRouter는 OpenAI 호환 규격이지만 OpenAiClient를 공유하지 않는다 —
+                // 그쪽은 모델명에 gpt-5가 들어가면 Responses API로 분기하는데,
+                // OpenRouter의 모델 ID는 openai/gpt-5.6처럼 네임스페이스가 붙어
+                // 그 분기에 그대로 걸린다. 원격 HTTP API이므로 로컬·CLI 어느 분류에도
+                // 들지 않는다.
+                "openrouter" => new OpenRouterClient(client, apiKey, endpoint, modelName, numCtx, openRouterRouting),
                 "z.ai" => new ZaiClient(client, apiKey, endpoint, modelName),
                 "zai" => new ZaiClient(client, apiKey, endpoint, modelName),
                 _ => throw new NotSupportedException($"지원되지 않는 AI Provider입니다: {provider}")

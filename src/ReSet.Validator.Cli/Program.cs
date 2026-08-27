@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +33,28 @@ namespace ReSet.Validator.Cli
     public class Program
     {
         private static CancellationTokenSource? _currentCts;
+
+        /// <summary>
+        /// OpenRouter의 백엔드 라우팅 선호를 읽는다. provider가 OpenRouter가 아니면
+        /// 이 설정 구획이 없어 자연히 null이 되고, 팩토리도 다른 provider에서는
+        /// 이 인자를 쓰지 않는다.
+        /// </summary>
+        public static OpenRouterRoutingOptions? ReadOpenRouterRouting(
+            IConfiguration configuration, string provider)
+        {
+            var section = configuration.GetSection($"AiSettings:Providers:{provider}:Routing");
+            if (!section.Exists())
+            {
+                return null;
+            }
+
+            var order = section.GetSection("Order").GetChildren()
+                .Select(child => child.Value ?? string.Empty)
+                .ToArray();
+
+            return OpenRouterRoutingOptions.Parse(
+                order, section["AllowFallbacks"], section["RequireParameters"]);
+        }
 
         public static ValidatorCliArgs ParseCommandLineArgs(string[] args)
         {
@@ -270,7 +293,8 @@ namespace ReSet.Validator.Cli
             IAiClient aiClient;
             try
             {
-                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, null, cliCommand);
+                aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, null, cliCommand,
+                    ReadOpenRouterRouting(configuration, provider));
             }
             catch (Exception ex)
             {
