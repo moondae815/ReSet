@@ -1132,6 +1132,14 @@
   | 19 | C | POQSettleProc3/S04 | UPDATE 1 | ExtraSettleFlag 초과 | False | `[YMD,UseState,OrgDiscountAmt,ExtraSettleFlag,PGName]` | **판정불가 — 미검증** |
   | 20 | C | POQSettleProc16/S08 | UPDATE 7 | CommissionCancelFlag 초과 | **True** | `[CommissionCancelFlag]` | **거짓양성(확인)** — #17과 같은 UPDATE 7(COMM_UPD). 원본의 "파생 테이블 D" 스코프 필터 `B.CommissionCancelFlag=1`(Spec.md 345행)이 이 잡에서는 최상위 조인 파트너 `C`(TClientSettleRate)를 직접 참조하는 `WHERE C.CommissionCancelFlag=1`로 옮겨왔다(`output/Jobs/POQSettleProc16/agent/steps/S08.md:289-335`) — #17과 같은 "CTE 필터 재배치" 갈래 |
 
+  > **행 2·10의 기제 서술은 2026-08-26에 낡았다.** 두 행은 "INSERT는
+  > `IsCandidateForAnchoredStatementCheck`가 후보에서 빼므로 이 필터가
+  > 검사에 보이지 않는다"고 적었는데, 그 술어는 (5-3-2)에서 제거됐고 INSERT는
+  > 검사 B·C에 재편입됐다. **판정(거짓양성) 자체는 유효하다** — 다만 지금
+  > 남아 있는 이유가 다르다. 이 둘은 「2단계 스테이징 선계산」 갈래이고,
+  > 앵커가 분해된 문장 중 뒤엣것에만 붙는 원인 (b)로 여전히 열려 있다.
+  > 측정 시점의 기록으로 읽고, 원인은 (b) 항목에서 확인할 것.
+
   **CTE·파생 테이블 사각지대 갈래 건수(과제가 가장 값지다고 지목한 산출물) —
   20건 표본 전수 확정.** 표본 20건 중 `HasOpaqueJoinSource=True`가 **7건**
   (B에서 5건: #1·#3·#4·#7·#9, C에서 2건: #17·#20 — #14는 #3과 같은 문장이라
@@ -1341,11 +1349,28 @@
   항상 빈 사전을 돌려주고 → `ResolveOrdinal`의 코드 앵커 경로는 **도달
   불가**다. Task 8이 잰 코퍼스 2건(0.6%, (A)조건) → 199건(60%, (B)조건 —
   코드 앵커가 실제로 켜졌을 때 잡히는 단계 파일 수) 확대는 **캐시 17 +
-  전건 재생성 뒤에야** 일어난다. 그동안 실제로 켜지는 유일한 변화는
-  `IsCandidateForAnchoredStatementCheck`(`MechanicalValidator.cs:6162-6163`)가
-  INSERT 문장을 후보에서 빼는 것뿐이다 — 즉 **검사 B·C의 관할이 순수하게
-  줄어든다**(영향은 사실상 0이지만 부호는 음수다). **다음 사람이 코드만
-  보고 "이 축은 이미 작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+  전건 재생성 뒤에야** 일어난다. **다음 사람이 코드만 보고 "이 축은 이미
+  작동 중"이라 믿지 않게 하는 것이 이 항목의 목적이다.**
+
+  ~~그동안 실제로 켜지는 유일한 변화는 `IsCandidateForAnchoredStatementCheck`가
+  INSERT 문장을 후보에서 빼는 것뿐이고, 검사 B·C의 관할이 순수하게 줄어든다
+  (부호는 음수다).~~ **2026-08-26에 뒤집혔다.** 그 술어는 (5-3-2)에서 통째로
+  제거됐다 — 애초에 INSERT를 뺀 이유가 배선 결함의 임시 대응이었고, 배선을
+  고치자 근거가 사라졌다. 지금은 반대다: **INSERT가 검사 B·C에 재편입되어
+  관할이 늘었고 부호는 양수다.** 실측으로 발화가 49 → 86건이 됐다. 인상을
+  검토하는 사람이 이 문단만 보고 "관할이 줄어드는 방향이니 안전하다"고
+  읽으면 정반대다.
+
+  **(1-b) 한 번도 발화한 적 없는 검사가 함께 켜진다 — `CheckErrorCodes`
+  (2026-08-27 실측).** 이 검사는 첫 줄이 `if (expectations.ErrorCodes.Count
+  == 0) return;`이고, 코퍼스에서 그 조건이 **항상 참**이다. 실측: 출력 문서
+  중 `### 오류 코드 (기계 확정 — 수정 금지)` 헤딩을 가진 것 **0건**,
+  스윕 보고서 다섯 편에 오류 코드 관련 발화 **0건**. 즉 (2)의 `MergeErrorCodeMaps`
+  위험과 달리 이쪽은 "일부만 막힌다"가 아니라 **검사 전체가 한 번도 실행돼
+  본 적이 없다**. 캐시 17이 표를 실으면 헤딩 부재 갈래(`기계 확정 오류 코드
+  표가 명세서에 없습니다`)부터 문서 단위로 켜진다. 원인 (a)~(d)와 같은 창에
+  놓고 봐야 하며, 지금 근거 없이 손대지는 않는다(같은 관찰을 `reset-38`이
+  독립으로 보고했고 판단이 일치한다).
 
   **(2) 코드 사전이 SP로 스코프되지 않는다 (I3).** `MergeErrorCodeMaps`
   (`MechanicalValidator.cs:6172` 부근)는 같은 코드 문자열이 서로 다른 SP에서
@@ -1421,8 +1446,9 @@
   단계 수」다. 비율로 적으면 68/280≈**24%**·63/280≈**23%** — 326을
   분모로 쓰면(68/326≈21%·63/326≈19%) 실제보다 낮게 잡혀 과소평가한다.
 
-  **(5-2-1) 정정 — 위 최초 실측값(64/68)이 틀렸었다.** `ComputeIndicators`
-  (`StepSweepService.cs`)가 SP 표 코드 조회를 `step.LegacyProcedures`의
+  **(5-2-1) 정정 — 위 최초 실측값(64/68)이 틀렸었다.** 당시 `ComputeIndicators`
+  (`StepSweepService.cs`, **지금은 그 이름의 메서드가 없다** — 지표 계산은
+  `StepSweepService.Sweep` 본문으로 접혔다)가 SP 표 코드 조회를 `step.LegacyProcedures`의
   원문 그대로 `job.DdlByProcedure`에 넣었는데, `step.LegacyProcedures`는
   코퍼스 실측 314개 참조 중 **134개(43%)가 스키마 접두사 없이** 실리는
   반면 `DdlByProcedure`는 `SweepCommand`가 항상 디렉터리 이름
@@ -2002,7 +2028,7 @@
   `PredicateColumns=[]` · `JoinColumns=[]` ·
   `SubordinatePredicateColumns=[USESTATE…ContractCancelYMD]`가 모두 같음을 확인했다.
 
-  **부류 2 (3건) — 이름 기반 대조가 투영 별칭을 못 뚫는다.**
+  **부류 2 (3건) — 이름 기반 대조가 투영 별칭을 못 뚫는다. 2026-08-27 해소.**
   `POQSettlePrco20/S03`와 `POQSettleProc17/S04`는 CTE를 둘로 쌓아 바깥 CTE가
   `A.USESTATE AS ContractUseState`, `B.ContractCancelYMD AS CMRateCancelYMD`
   (Proc17은 `RateUseState`·`RateCancelYMD`)처럼 **이름을 바꿔** 투영하고 안쪽
@@ -2013,6 +2039,114 @@
   (`POQSettleProc17/S04`의 `INSERT 2`는 `ContractCancelYMD`만 별칭이 원래 이름과
   겹쳐 `CLIENTID, USESTATE` 둘만 난다). 검사는 컬럼 **이름**으로만 대조하므로
   별칭 사슬을 따라가려면 재료 쪽(`StepSqlStatementReader`)이 바뀌어야 한다.
+
+  **해소 (2026-08-27, 브랜치 `cte-projection-alias`).** `StepSqlStatementReader`에
+  `CteProjectionAliases`를 두어 CTE가 투영하며 붙인 별칭을 원천 컬럼 이름으로
+  되돌리고, 그 이름을 `SubordinatePredicateColumns`에 **더한다**(별칭도 남긴다 —
+  명세서에 별칭 이름이 있을 리 없어 무해하고, 지우면 이 목록에 기대는 다른 대조가
+  무엇을 보고 있었는지 알 수 없게 된다). `MechanicalValidator`는 손대지 않았다.
+
+  **두 형태를 다 봐야 했다 — 위 진단이 한 가지 구문만 적은 것이 부정확했다.**
+  두 실물이 서로 다른 구문이다.
+
+  | 단계 | 구문 | 짝짓는 근거 |
+  |---|---|---|
+  | `POQSettlePrco20/S03` | 인라인 `AS` | `SelectScalarExpression.ColumnName` |
+  | `POQSettleProc17/S04` | **`AS`가 하나도 없다** | `CommonTableExpression.Columns`에 **위치**로 붙는다 |
+
+  Proc17은 `;WITH Base (…, ContractUseState, RateUseState, ContractCancelYMD,
+  RateCancelYMD) AS (SELECT …, A.USESTATE, B.USESTATE, A.ContractCancelYMD,
+  B.ContractCancelYMD …)` 모양이다. `ColumnName`만 보는 구현은 이 갈래를 통째로
+  놓친다 — 3건 중 2건이 여기 있다.
+
+  **모호하면 해석하지 않는다.** 같은 별칭이 서로 다른 원천을 가리키면 그 별칭을
+  버려 발화를 유지한다. `MergeErrorCodeMaps`의 충돌 코드 제거·
+  `ResolveAnchoredStatements`의 모호 서수 제거와 같은 방향이다 — 조용한 거짓
+  음성보다 사람이 판정하는 거짓 양성이 낫다. 항등 사상(`X AS X`)도 경쟁하는
+  정의로 세지 않으면 개명과의 충돌이 안 걸린다.
+
+  **실측 (통제 워크트리 `3bf32fb` 대조 스윕, 전문 diff — 아래 리뷰 수정 뒤 재측정).**
+  발화 62 → 59, 검사 B 37 → 34. 사라진 셋이 위 좌표 그대로이고(`Prco20/S03 INSERT 4`,
+  `Proc17/S04 INSERT 2`·`INSERT 4`) 새로 생긴 것은 없다. 발화 표 밖에서 바뀐 줄은
+  그 셋이 빠진 개수 칸 셋뿐 — 미분류·검사 A·D·E·「실행 조건」 절이 전부 문자
+  동일하므로 **분모가 줄어서 조용해진 것이 아니다.**
+
+  **남긴 한계 둘 — 근거의 세기가 다르다.** 코드 주석에 (가)·(나)로 적었다.
+
+  - **(가) 최상위에는 붙이지 않았다. 코퍼스 전수 실측 0건.** 최상위 `WHERE`·`JOIN ON`이
+    CTE 별칭을 참조하면 같은 masking이 난다. 최상위에도 해석을 붙인 빌드로 전수
+    스윕을 돌려 발화가 59에서 **한 건도 움직이지 않는 것**을 확인했다.
+  - **(나) 파생 테이블 별칭은 재지 않았다.** (가)의 탐침은 CTE 별칭을 최상위까지
+    넓힌 것일 뿐이고, 파생 테이블 투영은 이 사상이 아예 보지 않는 **다른 원천**이다.
+
+  **처음에는 이 둘을 「코퍼스 실측 0건」으로 묶어 적었다.** 실제로 잰 것은 「이
+  3건이 최상위 해석 없이 닫힌다」뿐인데 「코퍼스에 0건」으로 쓴 것이다 — 좁은
+  관찰을 전수인 것처럼 적는, 이 저장소가 오늘만 여러 번 당한 그 모양이다. (가)는
+  실제로 재서 참으로 확인했고 (나)는 여전히 미측정이다. **둘을 묶어 적지 말 것.**
+
+  별칭을 다시 별칭으로 덮는 사슬은 한 홉만 따라간다(실물 둘 다 한 홉).
+
+  **독립 리뷰가 거짓 음성 경로 둘을 잡았다 (2026-08-27, `1b1a274`에서 수정).**
+  둘 다 이 변경 자신이 내건 「모호하면 해석하지 않는다」를 어기고 있었고, 합성
+  SQL로 재현한 뒤 고쳤다.
+
+  - **F1 (Critical) — 사상이 문장 전역이었다.** 아무도 읽지 않는 CTE의 별칭이
+    무관한 스코프의 같은 이름 실컬럼에 붙었다.
+    `;WITH Unused AS (SELECT A.CANCELYMD AS YMD …) DELETE … WHERE EXISTS
+    (SELECT 1 FROM dbo.TZ AS Z WHERE Z.YMD = @p)` → `SUB=[YMD, CANCELYMD]`.
+    걸러지는 것은 `TZ.YMD`인데 `CANCELYMD`가 `relocated`에 실려, **명세서가 확정한
+    필터를 이행이 실제로 지웠어도 검사 B가 침묵한다.** 수정: 키를 (CTE 이름, 별칭)로
+    잡고 그 CTE를 `FROM`으로 읽는 스코프에서만 적용한다.
+  - **F2 (Important) — 충돌 탐지에 구멍이 있었다.** 원천 식이 컬럼 참조가 아니면
+    (`CONVERT`·`ISNULL`·`CASE`·리터럴·함수) 그 정의가 「경쟁하는 정의」로 세어지지
+    않아, 같은 이름을 붙인 다른 정의가 무경쟁으로 이겼다. 수정: 원천을 알 수 없는
+    정의는 무시가 아니라 **오염**으로 처리한다.
+
+  **F1 수정으로 테스트 하나의 전제가 바뀌었다.** 스코프가 CTE 하나만 읽으면 그
+  별칭은 모호하지 않으므로 해석하는 것이 맞다. 진짜 충돌은 **한 스코프가 CTE 둘을
+  읽고 둘이 다르게 정의할 때**이고, 테스트를 그 모양으로 다시 썼다.
+
+  **문서 결함 셋도 리뷰가 잡았다.** (F3) 새 클래스를 삽입하며
+  `SubordinatePredicateCollector`의 클래스 주석을 고아로 만들어 `<summary>`가 둘
+  연달아 달렸다 — XML 문서 생성이 꺼져 있어 빌드가 경고하지 않는다. (F4) 위의
+  「실측 0건」 과잉 단정. (F5) 커밋 전 더러운 트리에서 낸 스윕 보고서가
+  「커밋: `3bf32fb`」로 박힌 채 수정 **후** 수치를 담고 있었다 — 재현 불가능한
+  거짓 기록이라 지우고 정정된 구현 위에서 다시 냈다.
+
+  **스코프 재리뷰가 F1의 축소판(R1)과 무방비 결정 셋(R3)을 더 찾았다 —
+  `dc751d1`에서 수정.** F1을 스코프 단위로 가둔 뒤에도 **스코프 안**에서는
+  여전히 이름만 봤다. `ColumnCollector`가 한정자를 버리므로, 같은 스코프의 다른
+  원천에 동명 실컬럼이 있으면 거기에 별칭 해석이 붙는다.
+
+  ```
+  Filtered AS (SELECT 1 FROM B1 INNER JOIN dbo.TReal AS R ON … WHERE R.Flag = 9)
+  → SUB=[Flag, CLIENTID, CLIENTID, USESTATE]      걸러지는 건 TReal.Flag인데
+  ```
+
+  수정: `ColumnCollector`가 한정자를 함께 남기고(`References`), 해석은 **한정자가
+  없거나 그 한정자가 이 스코프에서 CTE에 결합돼 있을 때만** 한다. 한정자 없는
+  이름이 유효한 T-SQL을 통과했다면 그 스코프에 그 이름을 가진 원천이 하나뿐이라는
+  뜻이므로(둘이면 「모호한 컬럼 이름」으로 거부된다) 그것이 별칭을 정의한 CTE다.
+  리뷰어가 제안한 저비용 완화책(「CTE 아닌 원천이 섞이면 해석 안 함」)을 쓰지 않은
+  이유는, 그 규칙이 **테스트 넷을 공허하게 통과시키기** 때문이다.
+
+  R3의 셋은 전부 「주석이 명시적으로 정당화하는데 아무도 재지 않는」 결정이었다 —
+  파생 테이블·스칼라 하위질의 하강 차단, 그리고 **해석을 이 스코프가 모은 것에만
+  적용한다**는 것. 셋째가 특히 중요하다: 누적 목록으로 바꾸면 F1이 그대로
+  되살아나는데 그때까지 테스트 62개가 전부 초록이었다. **F1 수정의 절반이
+  무방비였다.**
+
+  **가드 열아홉이 변이로 죽는 것을 확인했다.** 위치 갈래·인라인 갈래·UNION 전개·
+  개수 검사·별표 가드·CTE 스코프 제한·비컬럼 오염·항등 경쟁·대소문자 두 자리·
+  스코프 내 충돌·`null` 미유출·실테이블 한정자 무시·CTE 한정자 후보 축소·별칭 결합·
+  파생 테이블 하강 차단·스칼라 하위질의 하강 차단·해석 대상 국소성.
+
+  **세 회차 모두 변이가 코드가 아니라 「테스트의」 결함을 먼저 잡았다.** 별표
+  테스트는 개수 검사에 먼저 걸려 자기 이름을 재지 못했고(`SELECT A.*, A.USESTATE`로
+  개수를 맞춰야 판별자가 된다), 대소문자 변이는 엉뚱한 자리를 짚어 생존했는데
+  그것이 **대소문자 결정이 실은 두 자리에 있고 둘 다 무방비였음**을 드러냈으며,
+  R3의 셋은 초록불 62개 뒤에 숨어 있었다. **초록불은 증거가 아니다.**
+
 
   **부류 3 (9건) — 코드 앵커가 분해된 두 문장 중 뒤쪽에만 붙는다.**
   이행이 원본 한 문장을 「원천 → 스테이징 적재」와 「스테이징 → 대상 게시」
@@ -2230,11 +2364,11 @@
 
   근거: `dotnet run --project src/ReSet.Cli -- --sweep` 실행 결과
   (`docs/audit-reports/sweeps/2026-08-26-step-sweep.md`, 최초 커밋
-  `facdb52` 기준 — 위 (5-2-1) 정정으로 `ComputeIndicators` 조회 결함을
+  `facdb52` 기준 — 위 (5-2-1) 정정으로 그 지표 계산의 조회 결함을
   고친 뒤 커밋 `cd6be15` 기준으로 재발행했다. 재발행 시점의 수치가
   (5-2)·(5-2-1)·(5-2-2)의 68/63이고, 그 외 다른 절(예: (5-3)의
   B=70·C=38, (5-4)의 미분류 977)은 이번 정정으로 값이 안 바뀌었다 —
-  `ComputeIndicators`가 건드리는 것은 코드 집합 지표 둘뿐이다) + 위
+  이 계산이 건드리는 것은 코드 집합 지표 둘뿐이다) + 위
   Task 8·11 실측 + T7 리뷰가 이미 닫은 원인 규명 (세대 15→16 코퍼스
   재생성, `output/Procedures/*/docs/Spec.md` 14개 전부 2026-08-25
   mtime).
@@ -2293,7 +2427,9 @@
     검사가 **발동했다**(수정 전에는 이 두 Job이 통째로 0건이었다는 것이 C3의
     동기였다). `POQSettleProc2`는 이번 스윕에서 0건인데, 그 Job의 `LegacyProcedures`
     중 값이 있는 3개 항목(`UP_Util_Settle_Summary` 등)도 접두사 없는 이름이라
-    같은 함정에 해당할 수 있다 — 다만 `FindSpecPath`의 `bareNameIndex` 폴백으로
+    같은 함정에 해당할 수 있다 — 다만 맨이름 폴백(당시 `FindSpecPath`의
+    `bareNameIndex`. **둘 다 지금은 없는 이름이다** — 같은 규칙이
+    `MechanicalValidator.BareObjectName`으로 만든 색인에 남아 있다)으로
     `output/Procedures/dbo.UP_Util_Settle_Summary/docs/Spec.md`가 정상적으로
     찾아지는 것은 직접 확인했으므로, 이 0건이 조회 실패가 아니라 실제로
     깨끗한 것인지는 **미확인**(S13~S15 본문을 명세서와 문장 단위로 대조하지
