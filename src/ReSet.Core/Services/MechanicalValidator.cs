@@ -6804,8 +6804,12 @@ namespace ReSet.Core.Services
         /// (그 코드를 설정하는 문장의 Kind, Ordinal)이다. 코드가 우연히 일치해도
         /// Kind가 다르면(예: 사전은 UPDATE 9인데 문장은 DELETE) 다른 문장이므로
         /// 매칭이 아니다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
         /// </summary>
-        private static int? ResolveOrdinal(
+        internal static int? ResolveOrdinal(
             StepSqlStatement statement,
             IReadOnlyDictionary<string, (string Kind, int Ordinal)> codeMap)
         {
@@ -6890,8 +6894,12 @@ namespace ReSet.Core.Services
         /// 실측이지 「이 수정은 침묵을 만들 수 없다」는 증명이 아니다.
         /// <c>ValidateBatchStep_CheckB_OtherKindUAnchor_DoesNotRescueReusedOrdinal</c>이
         /// 이 방향을 못 박는다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
         /// </summary>
-        private static List<(StepSqlStatement Statement, int? Ordinal)> ResolveAnchoredStatements(
+        internal static List<(StepSqlStatement Statement, int? Ordinal)> ResolveAnchoredStatements(
             IReadOnlyList<StepSqlStatement> statements,
             IReadOnlyDictionary<string, (string Kind, int Ordinal)> codeMap)
         {
@@ -6937,8 +6945,12 @@ namespace ReSet.Core.Services
         /// 나타나면 어느 SP 것인지 알 수 없으므로 - <see cref="CheckAnchoredStatementFacts"/>가
         /// (Ordinal, Kind) 중복 매칭을 침묵으로 처리하는 것과 같은 규약으로 -
         /// 그 코드는 병합 결과에서 뺀다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
         /// </summary>
-        private static IReadOnlyDictionary<string, (string Kind, int Ordinal)> MergeErrorCodeMaps(
+        internal static IReadOnlyDictionary<string, (string Kind, int Ordinal)> MergeErrorCodeMaps(
             IReadOnlyList<SpecStatementFacts> facts)
         {
             var merged = new Dictionary<string, (string Kind, int Ordinal)>(StringComparer.OrdinalIgnoreCase);
@@ -6954,6 +6966,27 @@ namespace ReSet.Core.Services
 
             return merged;
         }
+
+        /// <summary>
+        /// 명세서 DML 범위 표의 대상 테이블 집합. 계보 판정의 「원본이 쓰는 테이블인가」가
+        /// 이 집합으로 결정된다.
+        ///
+        /// [왜 뽑아냈는가] 같은 두 줄이 CheckAnchoredStatementFacts와
+        /// CheckAddedPredicates 두 자리에 복제돼 있었다. 스윕의 침묵 분모가 같은 집합을
+        /// 세 번째로 복제할 자리라 여기서 끊는다 - BareObjectName·BareProcedureName이
+        /// 따른 것과 같은 전례다.
+        ///
+        /// [왜 OrdinalIgnoreCase인가] 복제된 두 자리가 그랬다. 정규화가 마지막 식별자만
+        /// 쓰므로 대소문자만 다른 표기가 같은 물리 테이블을 가리킨다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
+        /// </summary>
+        internal static HashSet<string> BuildSpecTargets(IEnumerable<SpecStatementFacts> facts) =>
+            new HashSet<string>(
+                facts.SelectMany(f => f.DmlRows).Select(r => r.TargetTable),
+                StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 계보 원천 중 「원본이 쓰는 테이블」을 뺀 것 — 그 나머지가 단계 내부
@@ -6975,8 +7008,12 @@ namespace ReSet.Core.Services
         ///
         /// [왜 이름 규칙이 아닌가] 실물이 batch_shadow.·stage.·batch_work.·
         /// dbo.__poq_ 로 제각각이다. 이름 목록은 다섯 번째 이름에서 깨진다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
         /// </summary>
-        private static IEnumerable<StepLineageSource> StagingSources(
+        internal static IEnumerable<StepLineageSource> StagingSources(
             StepSqlStatement statement, HashSet<string> specTargets) => statement
             .LineageSources
             .Where(l => !specTargets.Contains(l.SourceTable));
@@ -6995,8 +7032,12 @@ namespace ReSet.Core.Services
         /// 실제로는 원본 원천(자기 대상)도 읽는데 그 사실이 이미 지워졌기
         /// 때문이다. <see cref="StepSqlStatement.ReadsOwnTarget"/>이 그 지워진
         /// 사실을 보존하므로, 이 값이 참이면 스테이징만 읽는다고 볼 수 없다.
+        ///
+        /// [왜 internal인가] StepSweepService의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// 스윕이 사본을 두면 규칙이 두 곳에 생겨 미묘하게 갈린다 - BareObjectName이
+        /// 같은 이유로 internal이다.
         /// </summary>
-        private static bool ReadsOnlyStaging(
+        internal static bool ReadsOnlyStaging(
             StepSqlStatement statement, HashSet<string> specTargets) =>
             !statement.ReadsOwnTarget
             && statement.LineageSources.Count > 0
@@ -7071,8 +7112,7 @@ namespace ReSet.Core.Services
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
             if (rows.Count == 0) return;
 
-            var specTargets = new HashSet<string>(
-                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
+            var specTargets = BuildSpecTargets(facts);
 
             var codeMap = MergeErrorCodeMaps(facts);
             var anchored = ResolveAnchoredStatements(statements, codeMap);
@@ -7349,8 +7389,7 @@ namespace ReSet.Core.Services
             // 이유가 없다.
             if (anchored.Count == 0) return;
 
-            var specTargets = new HashSet<string>(
-                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
+            var specTargets = BuildSpecTargets(facts);
 
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var table in BatchControlContract.Tables)
