@@ -1,0 +1,385 @@
+# 오류 코드 대입 도달의 코퍼스 측정 (2026-08-27)
+
+프롬프트 규칙 6-1은 `DECLARE @v_currentStepId INT = 0`이라는 **T-SQL 구문**을 지시하고,
+L1의 `CheckStepIdInitialValue`는 정확히 그 구문을 찾는다. 언어 이전 뒤에 SQL이 저장
+프로시저를 떠나면 그 구문은 사라진다.
+
+그러나 그 규칙이 지키려던 것은 구문이 아니라 **실패 지점 충실도**다 — 실패한 DML마다
+다른 코드를 실어서, CATCH가 "일반적인 -1"이 아니라 **어디서 실패했는지**를 남기게 하는 것.
+
+이 문서는 **그 의무가 지금 코퍼스에서 얼마나 지켜지는지**를 잰 관측 기록이다.
+프로덕션 코드는 바꾸지 않았다. 이 커밋에는 이 보고서만 들어 있다.
+
+**결론 먼저.**
+
+- 대입 자리에 없는 코드 **151개**를 하나씩 열어 셋으로 갈랐다.
+- **정규식의 맹점 87 · 정당한 미대입 62 · 진짜 결손 2.**
+- ⚠️ **정지 조건이 걸렸다.** 「정당한 미대입」이 하나가 아니라 **62건**이다.
+  검사는 "선언 전부"가 아니라 "이 단계가 대체하는 분기의 코드"만 봐야 하고,
+  그 판정은 새 추정이다. **Task 2로 넘어가면 안 된다.**
+
+---
+
+## 0. 코퍼스 경로와 재료 — 먼저 셌다
+
+브리프가 지정한 글롭에 문서가 실제로 있는지 먼저 확인했다.
+
+```
+$ ls /Users/payletter/git-root/ReSet/output/Jobs/*/raw/PlanStructure.md | wc -l
+22
+$ ls /Users/payletter/git-root/ReSet/output/Jobs/*/agent/steps/*.md | wc -l
+326
+```
+
+기대치(`PlanStructure.md` 22, `steps/*.md` 수백 건)와 맞는다. 앞자리가 어긋나지 않았다.
+
+Job 디렉터리는 22개이고 이름은 `Proc1..Proc20`이 **아니다.** 실제 구성은
+`POQSettleBatch1`, `POQSettlePrco20`(원본 오타로 보이나 그대로 둔다), `Proc1`~`Proc20`이다.
+
+### 측정 대상에서 빠진 것
+
+| 사유 | Job | 잃은 재료 |
+|---|---|---|
+| `len(Steps) > 40` (`BatchStepPlanParser.MaxSteps` = 40과 같은 기준) | `POQSettleProc4` (73단계) | 전량 |
+| `PlanStructure.md`에 `Steps` JSON 블록 없음 | `POQSettleProc7` | 전량 |
+| `agent/steps/` 디렉터리가 비어 있음 (단계 문서 미생성) | `POQSettleProc20` | 선언 코드 97개 (19단계) |
+| 〃 | `POQSettleProc5` | 선언 코드 274개 (28단계) |
+| 단계에 `ErrorCodes`가 하나도 없음 | `POQSettleProc6` | — |
+
+**즉 분모 1,476개는 전체가 아니다.** `Proc20`·`Proc5`의 **371개**는 단계 문서가 없어
+아예 읽히지 않았다. `Proc4`·`Proc7`은 통째로 빠졌다. 이 사실이 §6에 다시 나온다.
+
+실제로 코드가 세어진 것은 **Job 17개 · 단계 241개 · 선언 코드 1,476개**다
+(디렉터리 기준으로는 20개 Job이 통과하지만 그중 `Proc20`·`Proc5`·`Proc6`은 기여 0이다).
+
+---
+
+## 1. 컨트롤러 실측의 재현 — 수치는 그대로 재현됐다
+
+컨트롤러가 쓴 프로브를 그대로 돌렸다.
+
+```python
+asg = set(re.findall(r"=\s*(-?\d+)\s*[;,)]", body)) | \
+      set(re.findall(r"SET\s+@\w+\s*=\s*(-?\d+)", body, re.I))
+```
+
+```
+jobs=20 steps=241 decl=1476 appear=1476(100.0%) assign=1325(89.8%)
+missing count: 151
+```
+
+기대치(선언 1,476 · 등장 1,476(100%) · 대입 1,325(90%) · `Proc19` 최저 76%)와 **완전히 일치한다.**
+
+| Job | 단계 | 선언 | 등장 | 대입 | 대입률 |
+|---|---:|---:|---:|---:|---:|
+| POQSettleProc19 | 20 | 108 | 108 | 82 | 75.9% |
+| POQSettleProc8 | 12 | 83 | 83 | 66 | 79.5% |
+| POQSettleProc17 | 18 | 101 | 101 | 83 | 82.2% |
+| POQSettleProc16 | 18 | 101 | 101 | 85 | 84.2% |
+| POQSettleBatch1 | 16 | 96 | 96 | 81 | 84.4% |
+| POQSettleProc13 | 18 | 97 | 97 | 83 | 85.6% |
+| POQSettlePrco20 | 17 | 93 | 93 | 83 | 89.2% |
+| POQSettleProc12 | 12 | 93 | 93 | 83 | 89.2% |
+| POQSettleProc18 | 20 | 93 | 93 | 83 | 89.2% |
+| POQSettleProc14 | 17 | 92 | 92 | 84 | 91.3% |
+| POQSettleProc9 | 12 | 93 | 93 | 88 | 94.6% |
+| POQSettleProc10 | 12 | 85 | 85 | 83 | 97.6% |
+| POQSettleProc1 | 12 | 83 | 83 | 83 | 100.0% |
+| POQSettleProc11 | 12 | 83 | 83 | 83 | 100.0% |
+| POQSettleProc15 | 12 | 83 | 83 | 83 | 100.0% |
+| POQSettleProc2 | 1 | 9 | 9 | 9 | 100.0% |
+| POQSettleProc3 | 12 | 83 | 83 | 83 | 100.0% |
+| **합계** | **241** | **1,476** | **1,476** | **1,325** | **89.8%** |
+
+### "등장 100% / 대입 90%"의 차이가 왜 중요한가
+
+**전자로 재면 검사는 아무것도 잡지 않는다.** 선언된 코드 1,476개는 예외 없이 문서
+어딘가에 나타난다 — 오류 코드 표, 산문, 승인 목록에 적혀 있기 때문이다. "문서에 그
+숫자가 있는가"를 묻는 검사는 코퍼스 전체에서 발화가 0이고, 통과했다는 사실만 남긴다.
+그것은 **의무를 재는 것이 아니라 문서에 표가 있다는 것을 재는 것**이다.
+
+의무는 "코드가 언급된다"가 아니라 "실패한 DML이 그 코드를 **싣는다**"이다. 실을 자리를
+물었을 때 비로소 10%가 갈라져 나오고, 그 10% 안에서만 §3의 진짜 결손이 보인다.
+`POQSettleProc19/S11`의 결손은 등장 기준으로는 완전히 통과한다 — 그 단계의 오류 코드
+표에 `-9` 행이 버젓이 적혀 있고, 거기에 "이 단계에는 해당 분기가 없다"고 쓰여 있기 때문이다.
+
+이 구별은 직전 회차의 결속 검사에서도 판정을 갈랐다. 거기서도 `LegacyReturnCode`라는
+이름이 문서에 **등장**하는 계획서와 그 컬럼에 실제로 값을 **싣는** 계획서는 다른 집합이었고,
+등장으로 재면 20건 전부가 통과했다.
+
+---
+
+## 2. 판정의 의무 정의
+
+판정은 이름이 아니라 **의무 이행 여부**로 한다. 이 스윕이 쓴 정의는 다음과 같다.
+
+> 어떤 단계 문서가 코드 `C`를 선언했을 때, 그 단계가 **`C`로 끝날 수 있는 실행 경로를
+> 갖는다면**, 문서는 그 경로의 실패 지점 직전에서 `C`를 **어떤 운반체에든 실어야 한다**.
+> 운반체가 `SET @v_currentStepId = C`인지, `SET @ErrorCode = N'C'`인지,
+> `throw BatchStepException("C")`인지, `CASE ... THEN C`인지는 묻지 않는다.
+
+운반체를 이름(`@v_currentStepId`, `Legacy*`)으로 찾지 않았다. 직전 회차가 같은 자리에서
+`Legacy*`라는 이름으로 운반체를 찾다 `ErrorCode`·`LegacyErrorCode`를 놓쳤다.
+여기서는 **"코드 리터럴이 어떤 대입·throw·CASE 갈래의 값 자리에 있는가"**만 물었다.
+
+---
+
+## 3. 151개를 세 갈래로 가른 결과
+
+| 갈래 | 뜻 | 건수 | 검사가 |
+|---|---|---:|---|
+| **정규식의 맹점** | 실제로는 실린다 | **87** | 잡으면 안 된다 → 기준을 넓혀야 한다 |
+| **정당한 미대입** | 그 코드가 이 단계에서 발생할 수 없다 | **62** | 잡으면 안 된다 |
+| **진짜 결손** | 선언하고 어디서도 안 싣는다 | **2** | **잡아야 한다** |
+
+Job별 내역:
+
+| Job | 미대입 | 맹점 | 정당 | **결손** |
+|---|---:|---:|---:|---:|
+| POQSettleBatch1 | 15 | 7 | 8 | 0 |
+| POQSettlePrco20 | 10 | 6 | 4 | 0 |
+| POQSettleProc10 | 2 | 0 | 2 | 0 |
+| POQSettleProc12 | 10 | 0 | 10 | 0 |
+| POQSettleProc13 | 14 | 8 | 5 | **1** |
+| POQSettleProc14 | 8 | 7 | 1 | 0 |
+| POQSettleProc16 | 16 | 9 | 7 | 0 |
+| POQSettleProc17 | 18 | 9 | 9 | 0 |
+| POQSettleProc18 | 10 | 10 | 0 | 0 |
+| POQSettleProc19 | 26 | 15 | 10 | **1** |
+| POQSettleProc8 | 17 | 16 | 1 | 0 |
+| POQSettleProc9 | 5 | 0 | 5 | 0 |
+| **합계** | **151** | **87** | **62** | **2** |
+
+### 3-1. 정규식의 맹점 — 87건
+
+**맹점의 87건 중 71건은 코드가 숫자가 아니라는 이유 하나로 걸렸다.**
+
+선언 코드 1,476개 중 **71개가 비수치 코드**(`B100`, `BATCH-LOCK-001`, `APP-RECON-002` …)이고,
+컨트롤러 정규식은 `= -?\d+`만 본다. 따라서 **비수치 코드 71개는 전부, 예외 없이**
+"대입 없음"으로 분류됐다. 그리고 전수 확인 결과 **그 71개는 71개 모두 실제로 실린다.**
+
+즉 90%라는 수치의 절반은 코드 형식 때문에 생긴 것이고, 실측 대입률은 형식을 보정하면
+`1,325 + 71 = 1,396 / 1,476 = 94.6%`다.
+
+실린 형태는 다음과 같다(원문 좌표 포함).
+
+| 운반 형태 | 예 | 좌표 |
+|---|---|---|
+| `SET @변수 = N'코드'` | `SET @ErrorCode = N'B100';` | `POQSettleBatch1/agent/steps/S01.md:28` |
+| 〃 | `SET @po_strIssueCode = N'BATCH-ARG-001';` | `POQSettlePrco20/agent/steps/S01.md:153` |
+| 〃 | `SET @v_currentErrorCode = N'APP-BLOCK-OUT-001';` | `POQSettleProc17/agent/steps/S03.md:97` |
+| `DECLARE @변수 ... = N'코드'` | `DECLARE @v_currentErrorCode nvarchar(64) = N'BATCH-GUARD-001';` | `POQSettleProc18/agent/steps/S03.md:26` |
+| 〃 | `DECLARE @v_currentStepCode nvarchar(40) = N'BATCH-FINALIZE-001';` | `POQSettleProc13/agent/steps/S18.md:29` |
+| `THROW n, N'코드', 1` | `THROW 51002, N'BATCH-LOCK-001', 1;` | `POQSettlePrco20/agent/steps/S02.md:61` |
+| `RAISERROR(N'코드: …')` | `RAISERROR (N'B180: 선행 체크포인트가 …', 16, 1);` | `POQSettleProc19/agent/steps/S18.md:111` |
+| C# 예외 생성자 | `throw new BatchStepException("B200");` | `POQSettleProc19/agent/steps/S20.md:57` |
+| 〃 | `throw BatchStepException("B110", …)` | `POQSettleBatch1/agent/steps/S02.md:28` |
+| C# `const string` | `const string mismatchCode = "APP-RECON-001";` | `POQSettleProc17/agent/steps/S16.md:92` |
+| 〃 | `const string failureCode = "B180";` | `POQSettleProc19/agent/steps/S18.md:17` |
+| C# 결과 팩토리 | `return StepResult.Failed("B160");` | `POQSettleBatch1/agent/steps/S16.md:46` |
+| 〃 | `return StepResult.Failed("APP-RECON-002");` | `POQSettleProc17/agent/steps/S16.md:169` |
+| 속성 대입 | `result.PoIntRetVal = "BATCH-VAL-001"` | `POQSettleProc14/agent/steps/S01.md:41` |
+| 〃 | `IssueCode = "BATCH-RECON-001"` | `POQSettlePrco20/agent/steps/S15.md:40` |
+| 지역 변수 대입 | `currentIssueCode = "BATCH-RECON-001";` | `POQSettleProc18/agent/steps/S17.md:46` |
+
+나머지 **16건은 수치 코드이면서 `CASE` 갈래로 실린 것**이다. 전부 `POQSettleProc8/S07`
+한 단계에 몰려 있다. 좌표는 `POQSettleProc8/agent/steps/S07.md:119-130`:
+
+```sql
+SET @v_currentStepId =
+    CASE @RuleNo
+        WHEN 1 THEN -101 WHEN 2 THEN -102
+        WHEN 3 THEN -1   WHEN 4 THEN -1
+        ...
+        WHEN 17 THEN -28 WHEN 18 THEN -29
+    END;
+```
+
+이 한 문장이 `-101, -102, -1, -2, -3, -4, -5, -10, -11, -19, -20, -201, -21, -27, -28, -29`
+16개를 모두 싣는다. 규칙표 번호(`@RuleNo`)로 실패 지점을 구분하는 방식이며, 의무
+이행이다. `= -?\d+\s*[;,)]` 패턴은 `THEN -101` 뒤에 구분자가 없어 전부 놓친다.
+
+**Task 2가 넓혀야 할 기준은 최소한 위 16가지 형태다.**
+
+### 3-2. 정당한 미대입 — 62건 ⚠️ 정지 조건
+
+62건 전부가 수치 코드이고, 전부 **"이 단계가 대체하는 레거시 프로시저는 그 코드를
+대입하지 않는다"**는 사유다. 전형적인 원문은 이렇다.
+
+> `POQSettleProc16/agent/steps/S09.md:8`
+> `-9`는 승인된 통합 오류 코드 목록에는 포함되지만, 원본 `dbo.UP_UTIL_SETTLE_EXPECT_PROC`의
+> 개별 DML 실패 지점에는 대응하지 않는다. 따라서 S09 구현에서 `-9`를 새 실패 코드로
+> 배정하거나 반환하지 않는다.
+
+> `POQSettleProc13/agent/steps/S06.md:9`
+> `-2`는 원본 `dbo.UP_UTIL_SETTLE_CANCEL_INS`에 대응 DML 분기가 없으므로 이 단계에서
+> 임의로 반환하지 않는다.
+
+**이 주장을 단계 문서의 산문으로 믿지 않았다.** 산문은 틀린 적이 있다(§3-4).
+대신 각 단계의 `PlanStructure.md` → `Steps[].LegacyProcedures`가 지정한 원본
+프로시저를 찾아, 그 `Spec.md`의 **「변수 대입 (기계 확정 — 수정 금지)」** 표와 대조했다.
+그 표는 원본 DDL에서 기계로 뽑은 것이므로 산문과 독립적인 증거다.
+
+대조에 쓴 8개 원본의 기계 확정 대입 리터럴은 다음과 같다(모두 파싱 성공, 빈 표 없음).
+
+| 원본 프로시저 | 기계 확정 대입 리터럴 |
+|---|---|
+| `dbo.UP_UTIL_SETTLE_CANCEL_INS` | `-1` |
+| `dbo.UP_UTIL_SETTLE_COMM_UPD` | `-1 -2 -4 -5 -6 -7 -8 -9 -10 -11 -12 -20 -21 -22 -23` |
+| `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC` | `-1 -2 -3 -4 -5 -10 -11 -19 -20 -21 -27 -28 -29 -101 -102 -201` |
+| `dbo.UP_UTIL_SETTLE_EXPECT_PROC` | `-1 -2 -3 -4 -5 -10 -11 -12 -13 -15 -17` |
+| `dbo.UP_UTIL_SETTLE_PROC_ETC` | `-3 0 4000` |
+| `dbo.UP_UTIL_SETTLE_SUMMARY_ETC` | `0 1001 1002` |
+| `dbo.UP_UTIL_STAT_PGCOLLECT_INS` | `-1` |
+| `dbo.UP_Util_Settle_Summary` | `-1 ~ -8, 0` |
+
+**62건 전부에 대해, 선언된 코드는 그 단계의 `LegacyProcedures`가 기계 확정 표에서
+대입하지 않는 값이었다.** 예컨대 `UP_UTIL_SETTLE_CANCEL_INS`는 실패 시 `-1`만 대입하고
+(`output/Procedures/dbo.UP_UTIL_SETTLE_CANCEL_INS/docs/Spec.md:23, 51, 176`),
+그 프로시저를 대체하는 단계들이 선언한 `-2`, `-9`, `-15`는 발생할 수 없다.
+
+**따라서 정지 조건이 걸렸다.** 「정당한 미대입」은 하나가 아니라 62건이고, 이는 이례가
+아니라 **코퍼스의 지배적 패턴**이다. 원인은 구조적이다 — `PlanStructure.md`의
+`Steps[].ErrorCodes`는 **단계별 코드가 아니라 통합 체인 전체의 승인 코드 합집합에 가깝다.**
+`-9`가 그 증거다. `-9`는 체인의 지급 확정 보호검사 단계가 실제로 대입하지만
+(`POQSettleBatch1/agent/steps/S04.md:28`, `S05.md:36`, `S10.md:45`,
+`POQSettlePrco20/agent/steps/S03.md:49` 등) 그 검사를 갖지 않는 38개 단계에도
+`ErrorCodes`에 실려 있다.
+
+**Task 2의 검사는 "선언 전부"를 볼 수 없다.** "이 단계가 대체하는 분기의 코드"만 봐야
+하고, 그 분기를 무엇으로 판정할지는 이 스윕이 정하지 않은 **새 추정**이다. 이 보고서는
+그 추정에 쓸 재료 하나를 확인해 두었다 — `Steps[].LegacyProcedures` + 원본 `Spec.md`의
+「변수 대입」 표의 교집합. 그러나 그것을 검사 기준으로 승격하는 판단은 이 태스크의 범위 밖이다.
+
+### 3-3. 진짜 결손 — 2건 (채점표)
+
+| # | Job | 단계 | 코드 | 원본 근거 | 단계 문서 근거 |
+|---|---|---|---|---|---|
+| 1 | `POQSettleProc19` | `S11` | `-9` | `dbo.UP_UTIL_SETTLE_COMM_UPD` 원본 DDL **라인 291**에서 `@po_intRetVal = -9` 대입 (`output/Procedures/dbo.UP_UTIL_SETTLE_COMM_UPD/docs/Spec.md:545`) | `output/Jobs/POQSettleProc19/agent/steps/S11.md:22, 320, 517` |
+| 2 | `POQSettleProc13` | `S14` | `0` | `dbo.UP_UTIL_SETTLE_PROC_ETC` 원본 DDL **라인 153**에서 `@po_intRetVal = 0` 대입 (`output/Procedures/dbo.UP_UTIL_SETTLE_PROC_ETC/docs/Spec.md:242`) | `output/Jobs/POQSettleProc13/agent/steps/S14.md:8` |
+
+**결손 1 — `POQSettleProc19/S11`의 `-9`: 실패 지점 대비 코드가 한 칸 밀렸다.**
+
+원본 `UP_UTIL_SETTLE_COMM_UPD`는 갱신 15개마다 다른 코드를 대입한다
+(`Spec.md:490`, `Spec.md:538-552`).
+
+| 원본 갱신 | 원본 코드 | `Proc19/S11`이 실은 코드 | 형제 단계 `Proc17/S08` |
+|---|---|---|---|
+| 8 `inivacct` 취소수수료 | `-9` (DDL 291) | **`-10`** (`S11.md:320`) | `-9` (`S08.md:261`) |
+| 9 `easybank` 취소수수료 | `-10` (DDL 320) | **`-11`** (`S11.md:362`) | `-10` |
+| 10 KFTC·INIBANK 환불 | `-11` (DDL 345) | **`-12`** (`S11.md:395`) | `-11` |
+| 11 `hectofirm` 0원 처리 | `-12` (DDL 361) | **`-12`** (`S11.md:416`) | `-12` |
+
+`-9`가 사라지고, 그 뒤 세 코드가 한 칸씩 밀리며 `-12`가 두 DML에 겹쳐졌다.
+문서는 자기 산문으로 이 어긋남을 정당화한다.
+
+> `S11.md:22` — `-9` … 활성 원본 `dbo.UP_UTIL_SETTLE_COMM_UPD` 본문에는 이 코드를 직접
+> 설정하는 DML 분기가 없다.
+> `S11.md:517` — `-12`는 원본에서 KFTC·INIBANK 환불 처리와 `hectofirm` 처리 두 DML에
+> 공통으로 사용하므로 …
+
+**두 문장 모두 기계 확정 표와 어긋난다.** 원본에는 291번 줄에 `-9` 대입이 있고,
+`-11`(345)과 `-12`(361)는 서로 다른 DML의 것이다.
+
+같은 프로시저를 대체하는 형제 단계는 14개이고, **`-9`를 싣지 않은 것은 `Proc19/S11`
+하나뿐이다.** 나머지 13개(`Batch1/S08`, `Prco20/S07`, `Proc8/S08` … `Proc18/S09`)는
+모두 `inivacct` 갱신 직전에 `-9`를 싣는다. 예: `POQSettleBatch1/agent/steps/S08.md:125`,
+`POQSettleProc17/agent/steps/S08.md:261`.
+
+이것이 규칙 6-1이 막으려던 바로 그 사고다. 이관된 `S11`에서 `inivacct` 갱신이 실패하면
+운영자는 `-10`을 받고 **`easybank` 갱신을 들여다보게 된다.**
+
+**결손 2 — `POQSettleProc13/S14`의 `0`: 원본의 명시적 성공 대입이 사라졌다.**
+
+원본 `UP_UTIL_SETTLE_PROC_ETC`는 커밋 후 `@po_intRetVal = 0`을 명시 대입한다
+(`Spec.md:221, 242`). 단계 문서도 그러겠다고 적는다.
+
+> `S14.md:8` — `LegacyPoIntRetVal`은 `@po_intRetVal`과 동일하게 유지하고, **성공 시에만
+> `0`을 명시 설정한다.**
+
+그러나 본문 SQL은 `-3`(`S14.md:423`)과 `4000`(`S14.md:80, 163, 340, 410, 438, 483`)만
+대입하고 `0`을 어디서도 대입하지 않는다. 게다가 추적 변수는 `0`이 아니라 `4000`으로
+초기화된다(`S14.md:73, 242` — `DECLARE @v_currentStepId int = 4000;`). 약속과 본문이 어긋난다.
+
+**이 결손은 실패 코드가 아니라 성공 코드다.** 실패 지점 충실도를 직접 깨지는 않지만,
+"선언한 코드를 싣는다"는 의무는 깬다. **Task 2가 성공 코드까지 볼 것인지는 설계 판단이며
+이 보고서가 정하지 않는다.** 정지 보고 후 그 판단과 함께 결정해야 한다.
+
+### 3-4. 산문을 근거로 쓰지 않은 이유
+
+`POQSettleBatch1/agent/steps/S08.md:5`는 이렇게 적는다.
+
+> `-15`는 원본에서 주석 처리된 … 역사적 코드이므로 실행 DML에 재배정하지 않으며,
+> **`-9`도 이 프로시저의 실행 DML에 임의 배정하지 않는다.**
+
+그런데 같은 문서 **125번 줄**은 `SET @v_currentStepId = -9;`를 실행하고 그 뒤에
+`UPDATE 8: inivacct 취소 수수료`가 온다 — 원본과 정확히 일치하는 **옳은** 대입이다.
+여기서는 본문이 맞고 산문이 틀렸다. `Proc19/S11`에서는 반대로 산문이 본문의 어긋남을
+덮었다. **어느 쪽이든 산문은 판정 근거가 될 수 없다.** 62건의 정당 판정은 전부 원본
+`Spec.md`의 기계 확정 표로 확인한 것이다.
+
+---
+
+## 4. 자동 판정은 절반만 가능했다 — 표본이 아니라 전수다
+
+**표본을 쓰지 않았다. 151개 전수를 판정했다.** 절차는 다음과 같다.
+
+1. **넓은 운반체 정규식 10종**(변수 대입, `SET`, `RETURN`, `THROW`, `RAISERROR`,
+   `CASE ... THEN`, `ELSE`, 속성 대입, `VALUES`, 예외 생성자)을 151개에 돌렸다.
+   → 68건이 걸리고 83건이 남았다.
+2. **잔여 83건은 한 줄도 빠짐없이 사람이 읽었다.** 각 코드가 등장하는 모든 줄을
+   원문에서 뽑아(총 737줄) 판정했다. §3의 좌표는 그 판독의 결과다.
+3. 1단계에서 걸린 68건도 **전부 눈으로 확인했고, 1건이 오탐이었다.**
+   `POQSettleProc13/S14`의 코드 `0`은 `WHILE @@FETCH_STATUS = 0`(`S14.md:305`)에 걸린
+   것이지 대입이 아니었다 — 그리고 그 1건이 §3-3의 결손 2다.
+   **좁은 정규식이 아니라 넓은 정규식이 거짓 통과를 만들었다.**
+4. 수치 코드 80건은 `Steps[].LegacyProcedures` + 원본 `Spec.md`「변수 대입」 표로
+   **자동 대조**했다. 18건이 걸렸고, 그중 16건은 2단계에서 이미 `CASE` 운반체로 확인된
+   `Proc8/S07`이었으며, 남은 2건이 결손이다.
+
+**자동 판정만으로는 닫히지 않았다.** 1단계 정규식은 오탐 1건을 냈고, 4단계 대조는
+비수치 코드 71건에 대해 아무 말도 할 수 없다(원본 프로시저 자체가 없는 신규 배치 제어
+단계이기 때문이다 — `LegacyProcedures`가 빈 71건과 비수치 코드 71건은 **정확히 같은
+집합**임을 확인했다). 두 자동 수단이 겹쳐 준 것은 **정당/결손의 갈림**이었고,
+**맹점/실린 것의 갈림은 사람이 읽어서 닫았다.**
+
+임시 프로브는 저장소 밖 스크래치패드에서만 돌렸고 남기지 않았다. `output/`에는 쓰지 않았다.
+
+---
+
+## 5. 채점표 — Task 2가 정확히 이 집합만 발화해야 한다
+
+```
+POQSettleProc19  S11  -9
+POQSettleProc13  S14  0
+```
+
+**이 목록이 전부다.** 나머지 149건은 발화하면 안 된다 — 87건은 실제로 실리고
+(§3-1의 16가지 운반 형태를 기준에 넣어야 한다), 62건은 발생할 수 없는 코드다
+(§3-2의 정지 조건이 먼저 풀려야 한다).
+
+---
+
+## 6. 재지 못한 것
+
+1. **분모의 20%는 아예 읽히지 않았다.** `Proc20`(97개)·`Proc5`(274개)는 단계 문서가
+   없어 선언 코드 **371개**가 측정 밖이다. `Proc4`(73단계)·`Proc7`은 통째로 빠졌다.
+   단계 문서가 생기면 결손이 더 나올 수 있다. **결손 2건은 하한이지 총량이 아니다.**
+2. **밀림은 못 잡는다.** `Proc19/S11`에서 실제로 깨진 것은 네 갈래(`-9`,`-10`,`-11`,`-12`)인데,
+   대입 유무만 보는 기준은 **떨어져 나간 `-9` 하나만** 잡는다. `-10`·`-11`·`-12`는
+   "대입되어 있으므로" 통과한다. **코드가 붙은 DML이 원본의 그 DML인지는 이 스윕이 재지 않았다.**
+   실패 지점 충실도의 본체는 이쪽이며, 그것을 재려면 원본 `Spec.md`의 갱신 번호와
+   단계 문서의 DML 순서를 짝지어야 한다 — 이 태스크는 하지 않았다.
+3. **원본 없는 신규 단계는 대조 상대가 없다.** 비수치 코드 71개는 전부 신규 배치 제어
+   단계의 것이고 `LegacyProcedures`가 비어 있다. "그 코드가 발생할 수 있는가"를 판정할
+   기계 확정 근거가 없어, **실린다는 것만 확인했고 빠뜨린 코드가 있는지는 재지 못했다.**
+   선언된 코드를 다 실었는지는 알지만, **실어야 할 코드를 선언조차 안 했는지는 모른다.**
+4. **`Steps[].ErrorCodes`가 단계별 집합이 아니라는 사실 자체를 이 스윕이 고치지 못한다.**
+   62건의 정당 미대입은 코퍼스의 결함이라기보다 계획 구조의 성질이다. 검사를 이 필드
+   위에 세우는 한 62건의 소음을 무엇으로 걸러낼지가 먼저 결정돼야 한다.
+5. **기계 확정 표 자체의 신뢰도는 검증하지 않았다.** 62건의 정당 판정은 원본 `Spec.md`의
+   「변수 대입 (기계 확정 — 수정 금지)」 표가 원본 DDL을 온전히 반영한다는 전제 위에 있다.
+   주석 처리된 코드가 그 표에 들어가는지 여부는 확인하지 않았다
+   (`Batch1/S08`의 `-15` 서술이 그 경계에 있다).
+6. **읽기 전용이었다.** `output/`과 `output.bak-2026-08-22`에는 쓰지 않았고 재생성도 하지 않았다.
+   `AiService.cs`·`ConsolidatedPlanRules`·`MechanicalValidator`는 건드리지 않았다.
