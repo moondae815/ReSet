@@ -176,36 +176,70 @@ POQSettleProc16:72   POQSettleProc17:46   POQSettleProc18:80   POQSettleProc19:4
 
 레거시 코드를 보존은 하되(`@po_intRetVal` 16~156회), 계약 컬럼에 닿지 않는다.
 **"어디로 가는가"를 함께 적는다 — 이 열은 다음 사람이 「어떻게 고칠지」를 정하는 열이다.**
-`DB 테이블`이면 **테이블을 옮기는 일**이고, `C# 객체뿐`이면 **저장 자체를 새로 만드는 일**이다.
-둘은 고치는 방법이 다르므로 이 열의 오기는 판정의 오기만큼 비싸다.
+고침 유형이 셋으로 갈리고, 셋은 드는 비용이 다르다.
 
-아래 14행의 "값이 실제로 가는 곳"은 **전부 원문 write 문장을 열어 확인했다**(§4-1).
+- **컬럼명만 틀림** — 계약 테이블에 이미 쓰고 있고 컬럼 이름만 다르다. 가장 싸다.
+- **테이블 이전** — 값이 이미 DB에 있으나 다른 테이블에 있다. 대상을 옮기는 일이다.
+- **저장 신설** — 값이 C# 객체에만 머문다. 저장 자체를 만들어야 한다.
 
-| Job | 실패 모양 | 값이 실제로 가는 곳 | 좌표(write 문장) |
+**이 열은 세 번 틀렸다**(§4-2). 그래서 이번에는 점 수정을 버리고 14행을 **전수로 다시
+만들었다.** 절차는 이렇다 — ① 그 계획서에서 레거시 코드를 담는 **값 변수**를 먼저
+확정하고(`@po_intRetVal`·`@v_currentStepId`·`@v_legacyRetVal`·`@v_currentErrorCode` 등,
+`SET @a = @b` 별칭 사슬로 추적) ② 그 변수가 **컬럼에 대입되는 자리**와 **`VALUES` 목록에
+놓이는 자리**를 각각 찾은 뒤 ③ 그 문장을 열어 테이블명을 눈으로 읽었다.
+**창 휴리스틱은 쓰지 않았다.**
+
+| Job | 고침 유형 | 값이 실제로 가는 곳 (테이블 · 컬럼) | 좌표(write 문장) |
 | :--- | :--- | :--- | :--- |
-| `POQSettleProc1` | **DB 테이블** | `dbo.POQSettleSqlErrorLog`(컬럼 `LegacyRetVal`) | `INSERT` 420-434 · 2081 · 2904 |
-| `POQSettleProc2` | **DB 테이블** | `batch.POQBatchCheckpoint`(컬럼 `LegacyRetVal`) | `INSERT` 974-989 · `UPDATE` 1961-1964 · 4934-4937 |
-| `POQSettleProc3` | C# 객체뿐 | `StepResult.LegacyReturnCode` — DB 컬럼 아님 | 1354 · 1386 · 1995 |
-| `POQSettleProc4` | C# 객체뿐 | `JobResult.LegacyCode` — DB 컬럼 아님 | 423 · 447-449 |
-| `POQSettleProc6` | **DB 테이블**(셋) | `dbo.POQBatchStepCheckpoint` · `dbo.POQBatchErrorLog` · `dbo.POQBatchRun`(모두 컬럼 `LegacyReturnCode`) | `UPDATE ... = @po_intRetVal` 1170 · `= @v_currentStepId` 1497 · `INSERT` 4675-4683 · `UPDATE` 11685-11688 |
-| `POQSettleProc7` | C# 객체뿐 | `RetValWasAssigned` 플래그 — 저장 대상 없음 | 99 · 275 · 301 |
-| `POQSettleProc8` | **DB 테이블** | `SETTLE_POQ_DB.dbo.BatchStepCheckpoint` — **같은 테이블에 컬럼명이 둘**(`LegacyRetVal` 4997, `LegacyReturnCode` 6114) | `UPDATE` 4996-4998 · 6111-6114 |
-| `POQSettleProc9` | **DB 테이블** | `batch.POQSettleCheckpoint`(컬럼 `LegacyReturnCode`) · 저장 프로시저 `batch.POQSettleError_Log`의 `@LegacyReturnCode` 인자 | `UPDATE` 2207-2209 · 읽기 회수 `SELECT @po_intRetVal = LegacyReturnCode` 4365 · `EXEC` 267-271 |
-| `POQSettleProc10` | **DB 테이블**(같은 표를 **아홉 갈래**로 부른다) | `batch.POQSettleStepRun` 18 · `dbo.POQSettleStepRun` 13 · `POQBatch.SettleStepRun` 5 · `poqbatch.StepRun` 4 · `poqbatch.POQSettleStepRun` 3 · `[batch].[POQSettleStepRun]` 3 · `SETTLE_POQ_DB.POQSettleBatch.StepRun` 2 · `SETTLE_POQ_DB.POQBatch.POQSettleStepRun` 2 · `POQSettleBatch.POQSettleStepRun` 2 (모두 컬럼 `LegacyRetVal`) | `UPDATE` 561-563 · 2211-2213 · 3772-3774 · 5263-5265 |
-| `POQSettleProc11` | **DB 테이블** | `batch.BatchStepExecution` / `dbo.BatchStepExecution`(컬럼 `LegacyIntRetVal`) · `batch.BatchSqlError.LegacyIntRetVal` 5855 | `UPDATE ... = @v_currentStepId` 700 · `= NULL` 677 · `= @po_intRetVal` 5760 · `= -3` 6151 · `EXEC @p_LegacyIntRetVal` 2952 · 매핑 133·290·1149·1792·2413·3609·5507 |
-| `POQSettleProc12` | **DB 테이블 — 컬럼명은 맞고 테이블이 틀림** | `batch.BatchTaskRun.LegacyReturnCode` — 620-631행에서 `CREATE TABLE`로 새로 만든다 | `CREATE TABLE` 618-632 · `UPDATE` 242 · 288 · 1121 · 매핑 1198 |
-| `POQSettleProc13` | C# 객체뿐 | `LegacyPoIntRetVal` — DB 컬럼 아님 | 64 · 72 |
-| `POQSettleProc14` | **DB 테이블**(둘) | `batch.BatchRunStep` · `batch.BatchExecutionJournal`(모두 컬럼 `LegacyRetVal`) | `UPDATE ... = @po_intRetVal` 1757 · `= @v_currentStepId` 1814 · `INSERT` 1819-1826 |
-| `POQSettleProc15` | C# 객체뿐 | `context.LegacyReturnCode` / 결과 모델 — `batch.BatchStepJournal` 쓰기 문장 35개 어디에도 이 컬럼이 없다 | 1043 · 1065 · 1067-1068 · 3614 · 4114 |
+| `POQSettleProc1` | 테이블 이전 | `dbo.POQSettleSqlErrorLog` · `LegacyRetVal` ← `@v_currentStepId` | `INSERT` 420-441(값 439) · 2081 · 2904 |
+| `POQSettleProc2` | 테이블 이전 | `batch.POQBatchCheckpoint` · `LegacyRetVal` — 다만 **컬럼에 실리는 값은 `0`·`NULL`뿐**이고 실제 코드는 `EXEC batch.RecordSqlFailure @pi_legacyRetVal = @v_currentStepId`로 나간다(**그 프로시저의 sink는 계획서에 없다**) | `INSERT` 974-989 · `UPDATE` 1961-1964 · 4934-4937 · `EXEC` 485 · 1025 |
+| `POQSettleProc3` | 테이블 이전 | `batch.BatchSqlError` · `LegacyErrorCode` ← `@v_currentStepId` | `INSERT` 466-485(값 481) · 2275 · 3931 |
+| `POQSettleProc4` | **저장 신설** | `JobResult.LegacyCode` / `StepFailure(StepId, LegacyCode, …)` — DB 컬럼 아님. 55행의 `LegacyCode`는 단계 목록 **문서 표**의 열이지 테이블이 아니다 | 223 · 398 · 423 · 447-449 |
+| `POQSettleProc6` | 테이블 이전 | `dbo.POQBatchStepCheckpoint` · `dbo.POQBatchErrorLog` · `dbo.POQBatchRun` (모두 `LegacyReturnCode`) | `UPDATE` 1170 · 1497 · 5036-5038 · 9076-9078 · `INSERT` 5025-5028 · `UPDATE` 11685-11688 |
+| `POQSettleProc7` | **저장 신설** | `RetValWasAssigned` · `LegacyRetValAssigned` 플래그 — DB 컬럼 아님. 유일한 감사 INSERT(`batch_control.BatchCheckpoint` 397)는 **컬럼 목록이 `(...)`로 생략**되어 있다 | 99 · 275 · 301 · 397 |
+| `POQSettleProc8` | 테이블 이전 | `SETTLE_POQ_DB.dbo.BatchStepCheckpoint` — **한 테이블에 컬럼명이 셋**: `LegacyErrorCode` 3451 · `LegacyRetVal` 4997 · `LegacyReturnCode` 6114 | `UPDATE` 3448-3451 · 4996-4998 · 6111-6114 · `EXEC @LegacyErrorCode` 3443 |
+| `POQSettleProc9` | 테이블 이전 | `batch.POQSettleCheckpoint` · `LegacyReturnCode`(값은 `0`) + 실제 코드는 `EXEC batch.POQSettleError_Log @LegacyReturnCode = @v_currentStepId` | `UPDATE` 2207-2209 · 회수 `SELECT @po_intRetVal = LegacyReturnCode` 4365 · `EXEC` 271 · 1455 · 2004 · 2240 · 2699 · 3110 · 3655 · 4146 · 4663 · 5348 |
+| `POQSettleProc10` | 테이블 이전 | 한 논리 표를 **여러 이름으로** 부른다 · 컬럼은 모두 `LegacyRetVal` ← `@v_currentStepId`. 표기 목록은 아래 별도 표 참조 | `UPDATE` 590 · 2247 · 3233 · 3807 · 5289 · 5748 · 6478 · 7161 · 7735 · 8676 · 9204 · 9681 · 10151 |
+| `POQSettleProc11` | 테이블 이전 | `batch.BatchStepExecution` / `dbo.BatchStepExecution` · `LegacyIntRetVal`, 그리고 `batch.BatchSqlError` · `LegacyIntRetVal` | `UPDATE` 700 · 5760 · `INSERT` 267-280(값 280) · 2390 · 5785 · `EXEC @p_LegacyIntRetVal` 2952 |
+| `POQSettleProc12` | 테이블 이전 | `batch.BatchTaskRun` · `LegacyReturnCode`(618-632행에서 `CREATE TABLE`로 신설) + `batch.BatchErrorJournal` · `LegacyReturnCode` | `CREATE TABLE` 618-632 · `UPDATE` 242 · 288 · 1121 · 3407 · `INSERT` 845-858 |
+| `POQSettleProc13` | 테이블 이전 | `batch.BatchRunStep` · **`ErrorCode nvarchar(40)`** ← `@v_legacyRetVal`/`@po_intRetVal`. 테이블·컬럼명·타입이 모두 다르다(계약은 `int`) | `INSERT` 261-277(값 275) · 703-717(값 715) · `UPDATE` 697 · 904 · 1087 · 1171 · 6389-6392 |
+| `POQSettleProc14` | 테이블 이전 | `batch.BatchRunStep` — **한 테이블에 컬럼명이 셋**: `LegacyRetVal` 1757·1814 · `LegacyReturnValue` 2495·2543 · `LegacyReturnCode` 4272·4285·6625. 추가로 `batch.BatchExecutionJournal`(`LegacyRetVal` 1821 · `LegacyReturnCode` 6617) | `UPDATE` 1755-1757 · 2492-2495 · 4269-4272 · 6623-6625 · `INSERT` 1819-1826 · 6613-6621 |
+| `POQSettleProc15` | **컬럼명만 틀림** | **`batch.BatchStepJournal`** — 계약 테이블에 **실제로 쓴다.** 다만 컬럼이 `LegacyReturnCode`가 아니라 **`LegacyErrorCode`**다 ← `@v_currentStepId` | `INSERT` 306-325(값 321) · 2028 · 4088 · 4493 · 5544 |
 
-**고침 유형별 집계: DB 테이블 이전 9건**(`Proc1`·`2`·`6`·`8`·`9`·`10`·`11`·`12`·`14`),
-**저장 신설 5건**(`Proc3`·`4`·`7`·`13`·`15`).
+**고침 유형별 집계: 컬럼명만 틀림 1건**(`Proc15`) · **테이블 이전 11건**
+(`Proc1`·`2`·`3`·`6`·`8`·`9`·`10`·`11`·`12`·`13`·`14`) · **저장 신설 2건**(`Proc4`·`Proc7`).
 
-`Proc15`가 유일하게 §3-1을 통과하고 §3-2에서 떨어진 건이다. 계약 테이블에 35개 문장
-(`INSERT` 26 · `UPDATE` 9, 좌표 306~6590)을 쓰면서 그중 어느 것도 `LegacyReturnCode`를
-대상으로 삼지 않는다. `LegacyReturnCode` 6회는 전부 매핑 표(1043) 또는 C# 결과 모델
-(1065·1067·1068) 이야기다. **컬럼 이름을 표에 옮겨 적기만 하고 쓰는 문장이 없는** 정확한
-사례다.
+즉 **14건 중 12건은 값이 이미 DB에 있다.** 저장을 새로 만들어야 하는 것은 둘뿐이다.
+
+#### `Proc10`의 표기 목록 — 개수가 아니라 목록으로 적는다
+
+이 행의 표기 갈래는 세 번 세어 세 번 다른 수가 나왔다(8 → 9 → 11). 개수는 **무엇을 세느냐**에
+따라 달라지므로(쓰기 문장만인가, DDL과 산문까지인가) 수 대신 목록을 남긴다.
+아래는 전부 **같은 논리 표 하나**를 가리킨다.
+
+| 표기 | 나오는 자리 |
+| :--- | :--- |
+| `dbo.POQSettleStepRun` | `INSERT`·`UPDATE` |
+| `batch.POQSettleStepRun` | `UPDATE` |
+| `[batch].[POQSettleStepRun]` | `UPDATE` |
+| `poqbatch.POQSettleStepRun` | `UPDATE` |
+| `poqbatch.StepRun` | `UPDATE` |
+| `POQBatch.SettleStepRun` | `UPDATE` |
+| `POQSettleBatch.POQSettleStepRun` | `UPDATE` |
+| `SETTLE_POQ_DB.POQBatch.POQSettleStepRun` | `UPDATE` 10129·10149 · `MERGE` 9884 · `SELECT` 9853 |
+| `SETTLE_POQ_DB.POQSettleBatch.StepRun` | `UPDATE` 9163·9202 · `MERGE` 8919 · `SELECT` 8890 |
+| `POQSettleBatch.StepRun` | `CREATE TABLE` 8795·8797 · 산문 9225 (위 `SETTLE_POQ_DB.` 표기와 같은 객체) |
+| `POQBatch.POQSettleStepRun` | `CREATE TABLE` 9772·9774 (위 `SETTLE_POQ_DB.` 표기와 같은 객체) |
+| `Journal.POQSettleStepRun` | 의사코드 1277 |
+
+**쓰기 문장에 나오는 표기는 9가지, DDL 전용이 2가지, 의사코드가 1가지다.**
+`MERGE`도 쓰기 문장인데 초판의 `INSERT`/`UPDATE` 스캔은 이를 놓쳤다.
+
+`Proc15`가 유일하게 §3-1을 통과하고 §3-2에서 떨어진 건이며, **결손이 가장 얕다.**
+계약 테이블에 쓰는 문장이 35개 있고(`INSERT` 26 · `UPDATE` 9, 좌표 306~6590) 그중 하나는
+레거시 코드를 실제로 싣는다 — 다만 컬럼 이름이 `LegacyErrorCode`다(306-325). 계약이 정한
+`LegacyReturnCode`라는 이름은 이 문서에서 매핑 표(1043)와 C# 결과 모델(1065·1067·1068)에만
+쓰인다. **테이블은 맞고 컬럼 이름만 어긋난 유일한 사례다.**
 
 `Proc12`는 반대 방향의 교훈이다. 컬럼 이름 `LegacyReturnCode`를 65회 쓰고 `int NULL`로
 DDL까지 정의하지만, 그 컬럼은 **자기가 새로 만든 `batch.BatchTaskRun`** 위에 있다. 문자열
@@ -222,7 +256,7 @@ DDL까지 정의하지만, 그 컬럼은 **자기가 새로 만든 `batch.BatchT
 
 - **기계가 결정적으로 닫은 13건:** §3-1의 `grep -ric "stepjournal"`. 계약 테이블을 이름으로
   부르지 않는 계획서는 그 테이블에 쓰는 문장을 가질 수 없다. 대소문자를 무시했고 스키마
-  접두사도 요구하지 않았다. **잔여 가정은 §4-2에 적는다.**
+  접두사도 요구하지 않았다. **잔여 가정은 §4-3에 적는다.**
 - **사람이 읽어 판정한 7건:** 계약 테이블을 부르는 7건(`Batch1`·`Prco20`·`Proc15`~`Proc19`)은
   원문 블록을 직접 읽었다. 정규식이 판정하지 못하는 것이 셋 있기 때문이다.
   (a) `INSERT`의 컬럼 목록과 `VALUES` 절이 떨어져 있어 **무슨 값이 실리는지**는 창(window)
@@ -233,22 +267,42 @@ DDL까지 정의하지만, 그 컬럼은 **자기가 새로 만든 `batch.BatchT
 **즉 실패 14건 중 13건은 정규식이, 1건(`Proc15`)과 이행 6건은 사람이 판정했다.**
 
 ### 4-2. 서술("가는 곳" 열) — 초안은 기계, 확정은 사람 전수
+이 열의 **초안**은 `awk` 창 휴리스틱으로 만들었다 — "각 `LegacyReturnCode`/`LegacyRetVal`
+줄이 어느 `INSERT`/`UPDATE` 문장 **20줄 안**에 있는가"를 세는 방식이다. 그 초안과, 그것을
+점 수정한 두 번의 결과가 **연속으로 틀렸다.**
 
-이 열의 **초안**은 `awk`로 만들었다 — "각 `LegacyReturnCode`/`LegacyRetVal` 줄이 어느
-`INSERT`/`UPDATE` 문장 **20줄 안**에 있는가"를 집계하는 창 휴리스틱이다.
-**그 초안은 틀린 것을 냈다.** 픽스 라운드에서 14행 전부의 write 문장을 열어 확인한 결과:
+| 라운드 | 틀린 행 | 무엇이 틀렸나 |
+| :--- | :--- | :--- |
+| 0 (초판) | `Proc11` | "C# 객체뿐"이라 적었으나 실물은 DB 컬럼(`batch.BatchStepExecution.LegacyIntRetVal` 700) |
+| 1 | `Proc9` | `batch.POQSettleChunkKey`를 운반체로 적었으나 그 표의 컬럼은 `ChunkState`·`LastSqlError`·`LastErrorMessage`뿐(552-571) — 창 휴리스틱의 오귀속 |
+| 1 | `Proc10` | 표기 갈래를 8로 셌다 |
+| 2 (이번) | `Proc13` | "C# 객체뿐"이라 적었으나 실물은 DB 컬럼(`batch.BatchRunStep.ErrorCode` 275·1087·1171) — `Proc11`과 **같은 종류의 오류** |
+| 2 (이번) | `Proc3` | "C# 객체뿐"이라 적었으나 실물은 DB 컬럼(`batch.BatchSqlError.LegacyErrorCode` 481) |
+| 2 (이번) | `Proc15` | "C# 객체뿐"이라 적었으나 **계약 테이블에 쓴다** — 컬럼명만 `LegacyErrorCode`(321) |
+| 2 (이번) | `Proc10` | 표기 갈래를 9로 셌다 — 개수 자체가 잘못된 물음이었다 |
 
-- `Proc11`: "C# 객체뿐"으로 적었으나 **실물은 DB 컬럼**이다(`batch.BatchStepExecution`
-  `LegacyIntRetVal`, `UPDATE ... = @v_currentStepId` 700행). 고침 유형이 정반대로 읽혔다.
-- `Proc9`: `batch.POQSettleChunkKey`를 운반체로 적었으나 **그 테이블은 레거시 코드를 안
-  나른다**(552-571행의 컬럼은 `ChunkState`·`LastSqlError`·`LastErrorMessage`뿐). 창
-  휴리스틱이 근처 줄을 엉뚱한 문장에 붙인 오귀속이다.
-- `Proc10`: 표기 갈래를 "여덟"로 셌으나 **아홉**이다.
-- 나머지 11행(`Proc1`·`2`·`3`·`4`·`6`·`7`·`8`·`12`·`13`·`14`·`15`)은 확인 결과 맞았다.
+**근본 원인은 창 휴리스틱이 아니라 검색 앵커였다.** 세 라운드 내내 `Legacy*`라는 **이름**으로
+운반체를 찾았고, 그래서 `ErrorCode`(`Proc13`)·`LegacyErrorCode`(`Proc3`·`Proc15`)처럼
+**이름에 `Legacy`가 없거나 계약과 다른 컬럼**을 놓쳤다. 이 보고서가 §5에서 설계서를 두고
+지적한 바로 그 병 — **이름을 역할의 대리로 쓰는 것** — 을 이 열이 세 번 반복했다.
 
-**교훈: 창 휴리스틱은 "어느 문장 근처인가"를 셀 뿐 "그 문장의 대상인가"를 세지 못한다.**
-같은 도구로 만든 서술은 같은 방식으로 틀릴 수 있으므로 전수 재확인이 필요했다.
-현재 §3-3의 열은 **20건 전체를 사람이 원문에서 확인한 것**이다.
+이번 전수 작업은 앵커를 **값 변수**로 바꿨다(§3-3의 절차 ①②③). 코드를 담는 변수에서
+출발하면 컬럼이 무엇으로 불리든 걸린다.
+
+**실제로 한 일과 하지 않은 일:**
+
+- **한 일** — 14개 계획서 각각에서 값 변수의 별칭 사슬을 뽑고(`SET @a = @b` 전수 수집),
+  그 변수가 컬럼에 대입되는 자리와 `VALUES` 목록에 놓이는 자리를 정규식으로 **후보**로 모은
+  뒤, **후보가 속한 문장을 열어 테이블명을 눈으로 읽었다.** 표의 좌표는 그렇게 읽은
+  문장의 것이다.
+- **하지 않은 일** — 각 계획서에서 운반체가 등장하는 **모든** 자리를 읽지는 않았다(한
+  파일에 최대 156회 나온다). 표는 **각 (테이블 · 컬럼) 쌍마다 대표 문장**을 싣는다.
+  또한 `EXEC`로 값을 넘기는 경우(`Proc2`·`Proc9`) **그 프로시저 본문이 계획서에 없어서**
+  최종 sink를 확인할 수 없었다 — 표에 그렇게 적었다.
+- **초판의 "20건 전체를 사람이 확인했다"는 사실이 아니었다.** 그때 확인한 것은 7건(판정)과
+  나머지의 대표 좌표뿐이었고, 그래서 이번에 네 행이 더 뒤집혔다. 그 문장을 위 두 항목으로
+  대체한다.
+
 
 ### 4-3. §3-1 제외 논증의 잔여 가정
 
@@ -299,14 +353,16 @@ DDL까지 정의하지만, 그 컬럼은 **자기가 새로 만든 `batch.BatchT
 
 그 결과 두 가지가 동시에 틀렸다. 첫째, 지목된 여섯은 실제로도 실패지만 **이유가 다르고
 고치는 방법도 둘로 갈린다** — "그 이름을 안 쓴다"가 아니라 "계약 컬럼에 닿지 않는다"가
-이유이며, 그 여섯 중 셋(`Proc1`→`dbo.POQSettleSqlErrorLog`, `Proc10`→아홉 갈래
-`POQSettleStepRun`, `Proc11`→`batch.BatchStepExecution`)은 **값이 이미 DB 테이블에 있고
-테이블만 틀린** 경우이고, 나머지 셋(`Proc4`·`Proc7`·`Proc13`)만 C# 객체에 머문다.
+이유이며, 그 여섯 중 **넷**(`Proc1`→`dbo.POQSettleSqlErrorLog`,
+`Proc10`→여러 표기의 `POQSettleStepRun`, `Proc11`→`batch.BatchStepExecution`,
+`Proc13`→`batch.BatchRunStep.ErrorCode`)은 **값이 이미 DB 테이블에 있고 테이블만 틀린**
+경우이고, `Proc4`·`Proc7` 둘만 C# 객체에 머문다.
 둘째, 그리고 더 나쁘게, **나머지 14건을 이행으로
 암묵 판정했다.** 그중 8건(`Proc2`·`3`·`6`·`8`·`9`·`12`·`14`·`15`)이 실패다. 문자열은 있는데
 결속이 없기 때문이다. `Proc12`가 표본이다 — 이름을 65회 쓰고 DDL까지 쓰지만 대상 테이블이
-자기가 만든 `batch.BatchTaskRun`이다. `Proc15`는 계약 테이블에 35개 문장을 쓰면서 그 컬럼만
-빼놓는다.
+자기가 만든 `batch.BatchTaskRun`이다. `Proc15`는 반대로 계약 테이블에 레거시 코드를 **실제로
+싣는데** 컬럼 이름이 `LegacyErrorCode`여서 계약과 어긋난다 — 문자열 검색으로는 어느 쪽도
+보이지 않는다.
 
 **한 문장으로: 이름 검색은 실패 6건을 맞히고 8건을 놓쳤다.** 놓친 8건은 "이름이 있으니
 됐다"는 신호를 냈으므로, 그 목록을 그대로 썼다면 결손의 57%가 조용히 통과했을 것이다.
@@ -336,12 +392,18 @@ DDL까지 정의하지만, 그 컬럼은 **자기가 새로 만든 `batch.BatchT
 5. **`ErrorMessage` 우회는 결속으로 세지 않았다.** 여러 계획서가 코드를 `ErrorMessage`
    문자열에 넣어 보존한다. 레거시 호출자가 정수 코드를 읽는다면 그것은 거처가 아니므로
    실패로 뒀다.
-6. **"가는 곳" 열의 신뢰 수준은 판정보다 낮았다가, 지금은 같아졌다.** 초판의 이 열은 창
-   휴리스틱 초안이었고 3건이 틀렸다(§4-2). 픽스 라운드에서 14행 전부를 원문 확인했으므로
-   현재 값은 판정과 같은 근거를 갖는다. **다만 각 Job에서 운반체가 쓰이는 자리를 전수로
-   센 것은 아니다** — 대표 write 문장을 확인했다. 한 계획서가 여러 테이블에 나누어 쓰는
-   경우(`Proc6` 셋, `Proc14` 둘) 표에 없는 네 번째 테이블이 더 있을 가능성은 남는다.
-7. **동적 SQL의 조립 대상은 표본이 아니라 패턴으로 확인했다.** `INSERT INTO ' +` 15회와
+6. **"가는 곳" 열은 세 라운드에 걸쳐 일곱 번 틀렸다(§4-2).** 이번에 앵커를 이름에서 값
+   변수로 바꿔 전수로 다시 만들었고, 각 (테이블 · 컬럼) 쌍의 대표 write 문장을 열어
+   읽었다. **다만 운반체가 등장하는 모든 자리를 읽은 것은 아니다** — 한 계획서가 여러
+   테이블에 나눠 쓰는 경우(`Proc6` 셋, `Proc8`·`Proc14` 각각 한 테이블에 컬럼명 셋) 표에
+   없는 또 다른 대상이 남아 있을 가능성은 여전하다.
+7. **`EXEC`로 넘어간 값의 최종 저장처는 확인할 수 없었다.** `Proc2`의
+   `batch.RecordSqlFailure`와 `Proc9`의 `batch.POQSettleError_Log`는 **본문이 계획서에
+   없다.** 두 건은 "값이 저장 프로시저 경계를 넘어간다"까지만 확인했고, 그 너머가 어느
+   테이블인지는 이 측정의 범위 밖이다. 두 건의 고침 유형 판정(테이블 이전)은 각각이 별도로
+   갖고 있는 DB 컬럼(`batch.POQBatchCheckpoint.LegacyRetVal`,
+   `batch.POQSettleCheckpoint.LegacyReturnCode`)에 근거한다.
+8. **동적 SQL의 조립 대상은 표본이 아니라 패턴으로 확인했다.** `INSERT INTO ' +` 15회와
    `FROM ' +` 44회의 대상이 모두 Shadow 계열임을 확인했으나(§4-3), 119회의 `QUOTENAME`
    전부를 한 줄씩 읽지는 않았다.
 
