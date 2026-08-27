@@ -58,16 +58,39 @@ namespace ReSet.Core.Tests
             Assert.Equal(string.Empty, configuration["AiSettings:Providers:OpenRouter:ApiKey"]);
         }
 
-        // 기본 설정은 요청을 바꾸지 않아야 한다 - Routing 구획이 있어도 항목이 비어
-        // 있으면 provider 필드를 보내지 않고 OpenRouter 기본 라우팅을 쓴다.
+        // 저장소 기본값은 백엔드를 고정한다. 고정하지 않으면 회차마다 다른 백엔드로
+        // 가서 1회차에 쓴 프롬프트 캐시를 2회차가 읽지 못한다(실측 z-ai/glm-5.2,
+        // 접두사 10,220토큰: 미고정 적중 0에 $0.00776, 고정 시 적중 10,112에 $0.00171).
+        // 순서까지 고정하는 것은 1순위가 막혔을 때 fp4 양자화 백엔드로 조용히
+        // 떨어지지 않게 하기 위해서다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
-        public void AppSettings_DefaultOpenRouterRouting_YieldsNoPreferences(string relativePath)
+        public void AppSettings_PinOpenRouterBackendsInOrder(string relativePath)
         {
-            var configuration = Load(relativePath);
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(Load(relativePath), "OpenRouter");
 
-            Assert.Null(ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "OpenRouter"));
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "digitalocean", "streamlake" }, routing!.Order);
+            Assert.False(routing.AllowFallbacks);
+            Assert.Null(routing.RequireParameters);
+        }
+
+        // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
+        // 있으면 갈 곳을 말하지 않고 길만 막는 요청이 된다. 두 설정 파일 어느 쪽에서든
+        // Order를 지우면서 이 값을 false로 남겨 두는 조합을 막는다.
+        [Theory]
+        [InlineData("src/ReSet.Cli/appsettings.json")]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
+        public void AppSettings_OpenRouterRouting_NeverBlocksFallbacksWithoutOrder(string relativePath)
+        {
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(Load(relativePath), "OpenRouter");
+
+            if (routing?.AllowFallbacks == false)
+            {
+                Assert.NotNull(routing.Order);
+                Assert.NotEmpty(routing.Order!);
+            }
         }
 
         [Fact]

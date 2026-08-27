@@ -257,11 +257,20 @@ ReSet/
         "ApiKey": "",              // https://openrouter.ai/settings/keys 에서 발급 (필수)
         "Endpoint": "https://openrouter.ai/api/v1",
         "NumCtx": null,            // 지정하면 max_tokens로 전달. 비우면 모델 기본값
-        // [중요] Routing은 재현성뿐 아니라 프롬프트 캐싱의 전제 조건입니다. 고정하지 않으면
-        // 회차마다 다른 백엔드로 가서 1회차에 쓴 캐시를 2회차가 읽지 못합니다.
-        "Routing": {               // [선택] 백엔드 제공자 라우팅 선호. 비우면 OpenRouter 기본 라우팅
-          "Order": [],             // 시도할 제공자 순서 (예: [ "anthropic", "google-vertex" ])
-          "AllowFallbacks": null,  // Order가 모두 실패했을 때 다른 제공자로 넘어갈지 여부
+        // [중요] Routing은 재현성뿐 아니라 프롬프트 캐싱의 전제 조건입니다. OpenRouter는
+        // 같은 모델을 여러 백엔드가 서빙하고 호출마다 그중 하나로 보내므로, 고정하지
+        // 않으면 1회차에 캐시를 쓴 백엔드와 2회차가 가는 백엔드가 달라 읽지 못합니다
+        // (실측 z-ai/glm-5.2, 접두사 10,220토큰: 미고정 적중 0에 $0.00776,
+        //  고정 시 적중 10,112에 $0.00171 — 76% 절감). 단가와 양자화(fp8/fp4)도 갈립니다.
+        // [주의] 아래 값은 z-ai/glm-5.2 + deepseek/deepseek-v4-pro-0813 조합에 맞춰
+        // 고른 것입니다. Routing은 provider 단위라 Actor/Critic/Consolidator가 이 목록
+        // 하나를 공유하므로, 모델을 바꾸면 두 모델을 모두 서빙하는 백엔드로 다시
+        // 골라야 합니다. 그러지 않으면 404 "No endpoints found"로 즉시 실패합니다.
+        // 후보 조회: curl -H "Authorization: Bearer $KEY" \
+        //             https://openrouter.ai/api/v1/models/<author>/<slug>/endpoints
+        "Routing": {               // [선택] 백엔드 제공자 라우팅 선호. 구획을 지우면 OpenRouter 기본 라우팅
+          "Order": [ "digitalocean", "streamlake" ], // 시도할 제공자 순서. 캐시 읽기 단가가 낮은 순
+          "AllowFallbacks": false, // 목록 밖으로 넘어가지 않습니다(true면 fp4 백엔드로 샐 수 있음)
           "RequireParameters": null // 요청 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부
         }
       },
