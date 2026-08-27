@@ -7015,6 +7015,33 @@ namespace ReSet.Core.Services
         /// YMD만·조각2엔 PGNAME만 있어 합치면 요구를 전부 충족하는데도 조각 단위로는
         /// 둘 다 부족해 보여 이중으로 오검출한다.
         /// </summary>
+        /// <summary>
+        /// 계보 원천 중 「원본이 쓰는 테이블」을 뺀 것 — 그 나머지가 단계 내부
+        /// 스테이징이다.
+        ///
+        /// [왜 명세서 대상을 빼는가 - 설계서 §2-1 실측] 「앞선 문장이 썼는가」만으로
+        /// 판정하면 DELETE 후 INSERT로 재게시하고 뒤에서 UPDATE … FROM 하는 흔한
+        /// 관용구가 게시문으로 오분류된다. 코퍼스 탐침 118건 중 최다 원천이
+        /// 원본 대상 테이블 자신(tsettlemst 52건)이었다.
+        ///
+        /// [왜 이름 규칙이 아닌가] 실물이 batch_shadow.·stage.·batch_work.·
+        /// dbo.__poq_ 로 제각각이다. 이름 목록은 다섯 번째 이름에서 깨진다.
+        /// </summary>
+        private static IEnumerable<StepLineageSource> StagingSources(
+            StepSqlStatement statement, HashSet<string> specTargets) => statement
+            .LineageSources
+            .Where(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
+        /// 행 원천이 전부 단계 내부 스테이징인가. 리더의 불변식(LineageSources는
+        /// 원천이 전부 앞선 쓰기 대상일 때만 채워진다)에 기대므로, 여기서는
+        /// 명세서 대상이 하나라도 섞였는지만 보면 된다.
+        /// </summary>
+        private static bool ReadsOnlyStaging(
+            StepSqlStatement statement, HashSet<string> specTargets) =>
+            statement.LineageSources.Count > 0
+            && statement.LineageSources.All(l => !specTargets.Contains(l.SourceTable));
+
         private static void CheckAnchoredStatementFacts(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
@@ -7023,6 +7050,9 @@ namespace ReSet.Core.Services
         {
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
             if (rows.Count == 0) return;
+
+            var specTargets = new HashSet<string>(
+                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
 
             var codeMap = MergeErrorCodeMaps(facts);
             var anchored = ResolveAnchoredStatements(statements, codeMap);
@@ -7111,8 +7141,17 @@ namespace ReSet.Core.Services
                 // 이것이 의미 동등을 증명하지는 않는다(설계 §6). 동등성은 조인이
                 // 대상 행 집합을 보존하느냐에 달렸고 그 전제는 로컬에서 검증할 수
                 // 없다. 여기서 말하는 것은 "옮겨갔다"까지다.
+                //
+                // [계보 이전 - 한 층 위의 같은 개념]
+                // 이행이 원본 한 문장을 「스테이징 적재」와 「대상 게시」로 쪼개면
+                // 술어는 앞 문장에 남고 코드 앵커는 뒤 문장에 붙는다((5-3-3) 부류 3).
+                // 하위 범위 이전이 "같은 문장 안에서 옮겨갔다"라면 이것은 "이 문장을
+                // 먹인 문장으로 옮겨갔다"이다. 검사를 끄지 않으므로, 적재문에도 그
+                // 컬럼이 없으면 여전히 발화한다.
                 var relocated = new HashSet<string>(
-                    group.SelectMany(a => a.Statement.SubordinatePredicateColumns),
+                    group.SelectMany(a => a.Statement.SubordinatePredicateColumns
+                        .Concat(StagingSources(a.Statement, specTargets)
+                            .SelectMany(l => l.Columns))),
                     StringComparer.OrdinalIgnoreCase);
 
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
