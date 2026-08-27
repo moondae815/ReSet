@@ -377,9 +377,9 @@ namespace ReSet.Core.Tests
                   AND target.StepCode = source.StepCode
                 WHEN MATCHED THEN
                     UPDATE SET
-                        target.StepStatus = N'Succeeded',
-                        target.LegacyReturnCode = @v_currentStepId,
-                        target.CompletedAtUtc = SYSUTCDATETIME();
+                        StepStatus = N'Succeeded',
+                        LegacyReturnCode = @v_currentStepId,
+                        CompletedAtUtc = SYSUTCDATETIME();
                 ```
                 """);
 
