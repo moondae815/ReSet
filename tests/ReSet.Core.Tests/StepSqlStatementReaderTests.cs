@@ -1336,6 +1336,45 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Empty(selfUpdate.LineageSources);
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // 최종 리뷰 Critical 1 - 자기참조 가드가 RowSourceTables에서 대상 자신을
+    // 지우면서, 그 사실 자체(자기참조가 있었다는 것)를 보존할 곳이 없었다.
+    // ReadsOwnTarget이 그 지워진 사실을 보존한다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ReadsOwnTarget_TrueWhenSelfReferenceIsJoinedWithPreviouslyWrittenStaging()
+    {
+        // 대상 자신을 FROM 별칭으로 되읽으면서(자기참조), 동시에 앞서 쓰인
+        // 스테이징도 JOIN하는 관용구. RowSourceTables에서는 자기참조가 지워져
+        // 스테이징 하나만 남지만, ReadsOwnTarget은 그 지워진 사실을 참으로
+        // 남겨야 한다 - 이 값이 없으면 MechanicalValidator.ReadsOnlyStaging이
+        // "원천이 전부 스테이징"으로 오판한다(최종 리뷰 Critical 1).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Keys SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A " +
+            "INNER JOIN stage.Keys AS K ON K.PLTID = A.PLTID WHERE A.CLVTTYPE = 1;"));
+
+        var update = statements.Single(s => s.Kind == "UPDATE");
+        Assert.True(update.ReadsOwnTarget);
+        Assert.DoesNotContain("TSettleMst", update.RowSourceTables);
+        Assert.Contains("Keys", update.RowSourceTables);
+    }
+
+    [Fact]
+    public void ReadsOwnTarget_FalseWhenStatementHasNoSelfReference()
+    {
+        // 대상이 자기 자신을 FROM 별칭으로 되읽지 않는 평범한 문장 - 대상을
+        // 별칭 없이 직접 이름으로 쓰고(TSettleLog), FROM은 다른(앞서 쓰인)
+        // 스테이징 테이블(Foo)만 참조한다. ReadsOwnTarget은 거짓이어야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Foo SELECT A.PLTID FROM dbo.TX AS A WHERE A.RealFilter = 1;\n" +
+            "UPDATE dbo.TSettleLog SET Z = 1 FROM stage.Foo WHERE TSettleLog.SomeCond = 1;"));
+
+        var update = statements.Single(s => s.Kind == "UPDATE");
+        Assert.False(update.ReadsOwnTarget);
+    }
+
     [Fact]
     public void Lineage_UnreachableCte_DoesNotContributeRowSourceOrLineage()
     {

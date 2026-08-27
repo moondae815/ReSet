@@ -6956,6 +6956,53 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 계보 원천 중 「원본이 쓰는 테이블」을 뺀 것 — 그 나머지가 단계 내부
+        /// 스테이징이다.
+        ///
+        /// [왜 명세서 대상을 빼는가 - 설계서 §2-1 실측, 2026-08-27 정정]
+        /// 이 제외가 막는 것은 재게시 관용구(`DELETE FROM T` → `INSERT INTO T` →
+        /// 뒤에서 `UPDATE A … FROM T AS A`)가 **아니다** - 그 관용구는 이미
+        /// <see cref="StepSqlStatementReader"/>의 자기참조 가드
+        /// (`CollectRowSourceTables`의 `selfTarget` 제외)가 막는다: 그 UPDATE는
+        /// 대상 자신을 FROM 별칭으로 다시 참조할 뿐이므로 애초에 행 원천으로
+        /// 세지 않는다. 이 제외가 실제로 막는 것은 **스키마가 다른 동명 테이블의
+        /// 베이스 이름 충돌**이다 - 정규화가 "마지막 식별자만" 쓰므로,
+        /// `shadow.TSettleMst`(단계가 만든 Before-Image 섀도)와
+        /// `dbo.TSettleMst`(원본 대상 그 자체)가 이름만 같으면 같은 물리
+        /// 테이블로 오인한다(실측: `POQSettleProc8/S08:109·130`,
+        /// `POQSettleProc3/S06`). 두 방어선(자기참조 가드·이 제외)은 서로 다른
+        /// 것을 막으므로 하나를 지워도 다른 하나가 대신 막아 주지 않는다.
+        ///
+        /// [왜 이름 규칙이 아닌가] 실물이 batch_shadow.·stage.·batch_work.·
+        /// dbo.__poq_ 로 제각각이다. 이름 목록은 다섯 번째 이름에서 깨진다.
+        /// </summary>
+        private static IEnumerable<StepLineageSource> StagingSources(
+            StepSqlStatement statement, HashSet<string> specTargets) => statement
+            .LineageSources
+            .Where(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
+        /// 행 원천이 전부 단계 내부 스테이징인가. 리더의 불변식(LineageSources는
+        /// 원천이 전부 앞선 쓰기 대상일 때만 채워진다)에 기대므로, 여기서는
+        /// 명세서 대상이 하나라도 섞였는지만 보면 된다.
+        ///
+        /// [왜 ReadsOwnTarget을 함께 보는가 - 최종 리뷰 Critical 1]
+        /// `UPDATE 대상 … FROM 대상 AS A INNER JOIN &lt;앞서 쓰인 스테이징&gt; …`
+        /// 관용구에서는 리더의 자기참조 가드가 대상 자신을 <see
+        /// cref="StepSqlStatement.RowSourceTables"/>에서 이미 뺀다(재게시
+        /// 관용구를 원천으로 오분류하지 않기 위해). 그러면 남는 원천이
+        /// 스테이징 하나뿐이라 이 문장이 "스테이징만 읽는다"로 잘못 판정된다 -
+        /// 실제로는 원본 원천(자기 대상)도 읽는데 그 사실이 이미 지워졌기
+        /// 때문이다. <see cref="StepSqlStatement.ReadsOwnTarget"/>이 그 지워진
+        /// 사실을 보존하므로, 이 값이 참이면 스테이징만 읽는다고 볼 수 없다.
+        /// </summary>
+        private static bool ReadsOnlyStaging(
+            StepSqlStatement statement, HashSet<string> specTargets) =>
+            !statement.ReadsOwnTarget
+            && statement.LineageSources.Count > 0
+            && statement.LineageSources.All(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
         /// 앵커가 달린 문장이 명세서 그 행의 조인 키와 최상위 WHERE 술어 컬럼을
         /// 전부 담았는지 본다.
         ///
@@ -7015,33 +7062,6 @@ namespace ReSet.Core.Services
         /// YMD만·조각2엔 PGNAME만 있어 합치면 요구를 전부 충족하는데도 조각 단위로는
         /// 둘 다 부족해 보여 이중으로 오검출한다.
         /// </summary>
-        /// <summary>
-        /// 계보 원천 중 「원본이 쓰는 테이블」을 뺀 것 — 그 나머지가 단계 내부
-        /// 스테이징이다.
-        ///
-        /// [왜 명세서 대상을 빼는가 - 설계서 §2-1 실측] 「앞선 문장이 썼는가」만으로
-        /// 판정하면 DELETE 후 INSERT로 재게시하고 뒤에서 UPDATE … FROM 하는 흔한
-        /// 관용구가 게시문으로 오분류된다. 코퍼스 탐침 118건 중 최다 원천이
-        /// 원본 대상 테이블 자신(tsettlemst 52건)이었다.
-        ///
-        /// [왜 이름 규칙이 아닌가] 실물이 batch_shadow.·stage.·batch_work.·
-        /// dbo.__poq_ 로 제각각이다. 이름 목록은 다섯 번째 이름에서 깨진다.
-        /// </summary>
-        private static IEnumerable<StepLineageSource> StagingSources(
-            StepSqlStatement statement, HashSet<string> specTargets) => statement
-            .LineageSources
-            .Where(l => !specTargets.Contains(l.SourceTable));
-
-        /// <summary>
-        /// 행 원천이 전부 단계 내부 스테이징인가. 리더의 불변식(LineageSources는
-        /// 원천이 전부 앞선 쓰기 대상일 때만 채워진다)에 기대므로, 여기서는
-        /// 명세서 대상이 하나라도 섞였는지만 보면 된다.
-        /// </summary>
-        private static bool ReadsOnlyStaging(
-            StepSqlStatement statement, HashSet<string> specTargets) =>
-            statement.LineageSources.Count > 0
-            && statement.LineageSources.All(l => !specTargets.Contains(l.SourceTable));
-
         private static void CheckAnchoredStatementFacts(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,

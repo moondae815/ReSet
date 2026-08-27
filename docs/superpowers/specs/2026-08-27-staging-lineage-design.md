@@ -91,6 +91,7 @@ POQSettleProc3/S06        INSERT -> BatchArtifactWarning <- TSettleMst[YMD,InSta
 |---|---|---|
 | 자기참조 가드(`selfTarget` 제외, Task 1) | 문장이 **자기 자신의 쓰기 대상**을 FROM 별칭으로 되읽는 것(재게시 관용구) | 변이가 `specTargets` 제거에도 안 죽는다는 것으로 반증 |
 | 명세서 대상 제외(`specTargets`, Task 2·3) | **스키마가 다른 동명 테이블**을 이름만 보고 같은 테이블로 오인하는 것 | `POQSettleProc8/S08:109·130`, `POQSettleProc3/S06` |
+| **자기참조 가드 × `ReadsOnlyStaging`의 상호작용(검사 C만, 최종 리뷰 Critical 1)** | 위 둘이 **같은 문장에 동석**하면 자기참조 가드가 대상 자신을 `RowSourceTables`에서 지워, 남는 원천이 진짜 스테이징 하나뿐이라 `ReadsOnlyStaging`이 "스테이징만 읽는다"로 오판한다 — 원본 원천(자기 대상)도 읽는데 그 사실이 이미 지워졌기 때문이다. **두 방어선이 서로 다른 것을 막는다는 것과, 그 둘이 같은 문장에 동석했을 때 서로를 무력화하지 않는다는 것은 별개 명제다** — 이 칸이 그 구분을 명시한다 | `UPDATE A SET … FROM TSettleMst AS A INNER JOIN <앞서 쓰인 스테이징> …`(합성 SQL, 면제 끈 대조군에서 발화 확인). 고침: `StepSqlStatement.ReadsOwnTarget` 플래그를 리더가 기록하고 `ReadsOnlyStaging`이 그 값이 참이면 거짓을 돌려준다 — 검사 B(`StagingSources`를 컬럼 단위로 직접 쓰는 `relocated` 합류)는 이 상호작용의 영향을 받지 않으므로 그대로 둔다 |
 
 > **코퍼스 전수 확인 (2026-08-27, `StepSqlStatementReader.Read`를 직접
 > 호출하는 임시 프로브, 커밋하지 않음).** 전체 2581문장 중 142문장이 비지

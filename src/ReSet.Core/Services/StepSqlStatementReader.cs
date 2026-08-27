@@ -83,13 +83,44 @@ namespace ReSet.Core.Services
         /// 이 불변식이 없으면 검사 쪽의 All(…)이 부분집합 위에서 공허하게 참이 된다.
         ///
         /// [명세서 대상 제외는 여기서 하지 않는다] 리더는 명세서를 보지 않는다.
-        /// 원본이 쓰는 테이블을 걸러 내는 것은 MechanicalValidator의 몫이다 -
-        /// 그 제외가 없으면 DELETE 후 INSERT로 재게시하고 다시 UPDATE … FROM 하는
-        /// 흔한 관용구가 게시문으로 오분류된다(설계서 §2-1, 코퍼스 탐침 118건 중
-        /// 최다 원천이 원본 대상 테이블 tsettlemst 52건).
+        /// 원본이 쓰는 테이블을 걸러 내는 것은 MechanicalValidator의 몫이다.
+        ///
+        /// [그 제외가 막는 것 - 설계서 §2-1 실측, 2026-08-27 정정] 재게시
+        /// 관용구(`DELETE FROM T` → `INSERT INTO T` → 뒤에서 `UPDATE A … FROM T
+        /// AS A`)는 이 제외가 막는 것이 **아니다** - 그 UPDATE는 대상 자신을
+        /// FROM 별칭으로 다시 참조할 뿐이므로 <see cref="CollectRowSourceTables"/>의
+        /// 자기참조 가드가 애초에 행 원천으로 세지 않는다. 명세서 대상 제외가
+        /// 실제로 막는 것은 스키마가 다른 동명 테이블의 베이스 이름 충돌이다(실측:
+        /// `POQSettleProc8/S08:109·130`, `POQSettleProc3/S06`) - 정규화가
+        /// "마지막 식별자만" 쓰므로, 이름만 같으면 서로 다른 물리 테이블을 같은
+        /// 것으로 오인한다.
         /// </summary>
         public IReadOnlyList<StepLineageSource> LineageSources { get; init; }
             = Array.Empty<StepLineageSource>();
+
+        /// <summary>
+        /// 이 문장의 FROM·JOIN이 자기 자신의 갱신·삭제 대상을 별칭으로 다시
+        /// 참조하는가(`UPDATE 대상 … FROM 대상 AS A …` 관용구).
+        ///
+        /// [왜 필요한가 - 최종 리뷰 Critical 1] <see cref="RowSourceTables"/>는
+        /// 이 자기참조를 원천에서 뺀다(재게시 관용구를 원천으로 오분류하지
+        /// 않기 위해 - <see cref="StepSqlStatementReader"/>의
+        /// CollectRowSourceTables 문서 참고). 그런데 `UPDATE 대상 … FROM 대상
+        /// AS A INNER JOIN &lt;앞서 쓰인 스테이징&gt; …`처럼 자기참조와 진짜
+        /// 스테이징 조인이 **같은 문장에 동석**하면, 남는 원천이 스테이징
+        /// 하나뿐이라 <c>MechanicalValidator.ReadsOnlyStaging</c>이 "스테이징만
+        /// 읽는다"로 오판한다 - 실제로는 원본 원천(자기 대상)도 읽는데, 그
+        /// 사실이 RowSourceTables에서 이미 지워졌기 때문이다. 이 플래그가 그
+        /// 지워진 사실을 별도로 보존해, ReadsOnlyStaging이 자기참조가 있는
+        /// 문장은 애초에 "스테이징만" 읽는다고 볼 수 없게 한다.
+        ///
+        /// [검사 B는 영향받지 않는다] 검사 B(<c>CheckAnchoredStatementFacts</c>)의
+        /// `relocated` 합류는 컬럼 단위로 <c>StagingSources</c>를 직접 쓰고
+        /// <c>ReadsOnlyStaging</c>을 거치지 않으므로 이 플래그와 무관하다 -
+        /// 자기 대상을 읽어도 그 컬럼이 실제로 적재문에 있으면 이전으로 보는
+        /// 것이 여전히 맞다.
+        /// </summary>
+        public bool ReadsOwnTarget { get; init; }
     }
 
     /// <summary>
@@ -303,12 +334,24 @@ namespace ReSet.Core.Services
                 //
                 // [한계 - 같은 테이블에 두 번 쓰면 첫 쓰기만 기억한다] TryAdd이므로
                 // `DELETE FROM T; INSERT INTO T ...;`처럼 같은 단계 안에서 T를 두 번
-                // 쓰면, 뒤에서 T를 읽는 문장은 항상 DELETE의 WHERE 컬럼을 물려받고
-                // INSERT의 진짜 술어는 못 본다. 이것은 **과소** 이전 쪽으로 기운다 -
-                // 나중 쓰기의 진짜 술어 변화가 하류에 인정되지 않으므로 침묵이 아니라
-                // 오탐(검사가 여전히 발화) 방향이다. 설계가 밝힌 선호(거짓 음성보다
-                // 거짓 양성)와 일치한다. 가리는 경로는 찾지 못했다 - 코퍼스 실측이
-                // 아니라 추론으로 짚은 한계다.
+                // 쓰면, 뒤에서 T를 읽는 문장은 항상 첫 쓰기의 WHERE 컬럼을 물려받고
+                // 두 번째 쓰기의 진짜 술어는 못 본다.
+                //
+                // [방향 - 정정, 최종 리뷰 I3] 이 문단은 한때 "이것은 과소 이전 쪽으로
+                // 기운다 - 침묵이 아니라 오탐 방향이다. 가리는 경로는 찾지 못했다"고
+                // 적었다 - 이 브랜치 자신의 코퍼스 실측이 그 주장을 반증한다.
+                // `docs/known-defects.md`의 (5-3-3) 부류 4 "부수 효과"가 기록한
+                // `POQSettleProc9/S13`(`INSERT 2·3·4`)의 `YMD` 상실이 정확히 이
+                // 경로다 - 첫 쓰기가 `batch_shadow.…Run_S13`(Before-Image 섀도),
+                // 진짜 적재가 `batch_work.…Run_S13`인데, 이 메서드가 스키마를 보지
+                // 않고 베이스 이름만 키로 쓰므로 두 스키마가 같은 이름으로 충돌해
+                // 첫 쓰기(섀도)의 조인 키 `YMD`가 게시문의 계보로 잘못 매인다 -
+                // 방향은 침묵(검사가 조용해짐)이었지 오탐이 아니었다. 그러므로
+                // "가리는 경로가 없다"고 다시 단정하지 않는다 - 실측된 것은 침묵
+                // 경로 하나이고, 오탐 방향이 실제로 나는 다른 경로가 있는지는
+                // 확인하지 않았다. 코퍼스 범위(영향받는 문장-원천 쌍 수·이행 발명
+                // 스키마끼리의 베이스 이름 충돌 좌표 수)는 `docs/known-defects.md`의
+                // 같은 문단에 남긴다 - 코드는 이번 라운드에 고치지 않는다.
                 if (!string.IsNullOrEmpty(statement.TargetTable))
                 {
                     writtenAt.TryAdd(statement.TargetTable, i);
@@ -669,6 +712,8 @@ namespace ReSet.Core.Services
                 foreach (var where in wheres) where.Accept(subordinate);
 
                 var resolvedTarget = ResolveTargetTable(target, targetAliasScope);
+                var rowSourceTables = CollectRowSourceTables(
+                    froms, ctes, resolvedTarget, out var readsOwnTarget);
 
                 Found.Add((
                     new StepSqlStatement(
@@ -681,7 +726,8 @@ namespace ReSet.Core.Services
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
-                        RowSourceTables = CollectRowSourceTables(froms, ctes, resolvedTarget),
+                        RowSourceTables = rowSourceTables,
+                        ReadsOwnTarget = readsOwnTarget,
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
@@ -733,7 +779,8 @@ namespace ReSet.Core.Services
             /// 이름을 쓰므로 발생 가능성은 낮다고 보이지만 실측하지는 않았다.
             /// </summary>
             private static IReadOnlyList<string> CollectRowSourceTables(
-                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes, string selfTarget)
+                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes, string selfTarget,
+                out bool readsOwnTarget)
             {
                 var cteBodies = new Dictionary<string, IReadOnlyList<FromClause>>(
                     StringComparer.OrdinalIgnoreCase);
@@ -790,7 +837,8 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                if (!string.IsNullOrEmpty(selfTarget)) physicalTables.Remove(selfTarget);
+                readsOwnTarget = !string.IsNullOrEmpty(selfTarget) && physicalTables.Contains(selfTarget);
+                if (readsOwnTarget) physicalTables.Remove(selfTarget);
 
                 return physicalTables.ToList();
             }
