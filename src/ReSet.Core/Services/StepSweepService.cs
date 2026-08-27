@@ -223,13 +223,32 @@ namespace ReSet.Core.Services
                         var codeMapForStep = MechanicalValidator.MergeErrorCodeMaps(simulatedFactsForStep);
                         var specTargetsForStep = MechanicalValidator.BuildSpecTargets(simulatedFactsForStep);
 
+                        // [2026-08-27 재리뷰 Important 1] 분모는 "그 단계의 모든 DML
+                        // 문장"이 아니라 "앵커(U-앵커 또는 CodeAnchor)를 실제로 보유한
+                        // 문장"이어야 한다. ResolveOrdinal은 둘 중 하나도 없으면 항상
+                        // null을 낸다(MechanicalValidator.ResolveOrdinal 본문 참고) -
+                        // 그런 문장은 애초에 서수 후보가 된 적이 없으므로 "미해결"로
+                        // 세면 안 된다. 앵커가 아예 없는 평범한 문장이 지배하는 수를
+                        // "앵커 해결 실패"로 잘못 읽게 만든다(코퍼스 실측:
+                        // AnchorsUnresolved=1641 vs AnchorsResolved+AnchorsDroppedForAmbiguity=940).
+                        //
+                        // [왜 이 판정이 ResolveOrdinal과 같은 집합인가] ResolveOrdinal은
+                        // statement.Anchor(U-앵커)나 fromCode(CodeAnchor를 codeMap에서
+                        // 찾은 값) 중 하나라도 있어야만 non-null을 낼 수 있다 - 즉
+                        // ResolveOrdinal(st, ...).HasValue ⇒ anchorBearing(st)이다.
+                        // 그래서 ordinalResolvable은 언제나 anchorBearing의 부분집합이고
+                        // anchorBearing - ordinalResolvable는 절대 음수가 될 수 없다
+                        // (AnchorsUnresolved_IsZero_WhenNoStatementCarriesAnyAnchor가
+                        // 이 불변식을 고정한다).
+                        var anchorBearing = stepStatements
+                            .Count(st => st.Anchor.HasValue || !string.IsNullOrWhiteSpace(st.CodeAnchor));
                         var ordinalResolvable = stepStatements
                             .Count(st => MechanicalValidator.ResolveOrdinal(st, codeMapForStep).HasValue);
                         var anchoredForStep =
                             MechanicalValidator.ResolveAnchoredStatements(stepStatements, codeMapForStep);
 
                         anchorsResolved += anchoredForStep.Count;
-                        anchorsUnresolved += stepStatements.Count - ordinalResolvable;
+                        anchorsUnresolved += anchorBearing - ordinalResolvable;
                         anchorsDroppedForAmbiguity += ordinalResolvable - anchoredForStep.Count;
 
                         foreach (var st in stepStatements)

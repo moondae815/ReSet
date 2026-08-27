@@ -93,9 +93,15 @@ WHERE Y.PGNAME = S.PGNAME;
 
             Assert.Equal(1, indicators.StagingExemptionsCancelledByOwnTarget);
             Assert.Equal(0, indicators.StatementsReadingOnlyStaging);
-            Assert.True(indicators.StatementsReadingOwnTarget >= 1);
-            Assert.True(indicators.StatementsWithLineage >= 1);
-            Assert.True(indicators.StagingSourceTotal >= 1);
+
+            // 하한(>=1)이 아니라 정확값이다 - 이 셋이 조용히 바뀌어도 하한만
+            // 걸려 있으면 어떤 테스트도 빨개지지 않는다(2026-08-27 재리뷰 Important 2).
+            // 이 픽스처는 문장이 둘뿐이다(스테이징 적재 INSERT 1개 + 자기참조
+            // UPDATE 1개) - 계보는 UPDATE 하나에서만 나므로 1, 자기 대상을 읽는
+            // 문장도 UPDATE 하나뿐이므로 1, 스테이징 원천도 그 UPDATE의 하나뿐이므로 1이다.
+            Assert.Equal(1, indicators.StatementsReadingOwnTarget);
+            Assert.Equal(1, indicators.StatementsWithLineage);
+            Assert.Equal(1, indicators.StagingSourceTotal);
         }
 
         // 대조군 - 자기 대상을 FROM 별칭으로 다시 읽지 않고 스테이징만 조인한다.
@@ -121,11 +127,19 @@ WHERE TSettleMst.YMD = S.YMD AND TSettleMst.PGNAME = S.PGNAME;
             var indicators = SweepIndicatorsFor(StagingExemptionSurvivesMarkdown);
 
             Assert.Equal(0, indicators.StagingExemptionsCancelledByOwnTarget);
-            Assert.True(indicators.StatementsReadingOnlyStaging >= 1);
+
+            // 정확값 - 위 취소 테스트와 같은 이유(2026-08-27 재리뷰 Important 2).
+            // 이 픽스처도 문장 둘(스테이징 적재 INSERT 1개 + 비자기참조 UPDATE
+            // 1개)이라 계보 1·스테이징 원천 1이고, 자기 대상을 읽지 않으므로 0이다.
+            Assert.Equal(1, indicators.StatementsReadingOnlyStaging);
+            Assert.Equal(0, indicators.StatementsReadingOwnTarget);
+            Assert.Equal(1, indicators.StatementsWithLineage);
+            Assert.Equal(1, indicators.StagingSourceTotal);
         }
 
-        // 첫 문장은 코드 앵커(-13)가 DDL 사전과 일치해 서수로 해결되고, 둘째
-        // 문장은 앵커가 아예 없어 해결되지 않는다.
+        // 첫 문장은 코드 앵커(-13)가 DDL 사전과 일치해 서수로 해결된다. 둘째
+        // 문장은 앵커가 아예 없다(U-앵커도 CodeAnchor도 없다) - 애초에 서수
+        // 후보가 된 적이 없으므로 「미해결」로 세면 안 된다.
         private const string AnchorResolutionMarkdown = @"### S01. 정산 마스터 갱신
 
 설명 문단이다.
@@ -138,13 +152,72 @@ UPDATE TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
 ```
 ";
 
+        /// <summary>
+        /// [2026-08-27 재리뷰 Important 1] AnchorsUnresolved의 분모는 「그 단계의
+        /// 모든 DML 문장」이 아니라 「앵커(U-앵커 또는 CodeAnchor)를 실제로 보유한
+        /// 문장」이어야 한다. 둘째 문장은 애초에 앵커가 없어 ResolveOrdinal의
+        /// 후보가 된 적이 없다 - 그것을 「미해결」로 세면 코퍼스 실측에서
+        /// AnchorsUnresolved=1641(진짜 미해결이 아니라 평범한 무앵커 문장이
+        /// 지배하는 수)이 나와 「앵커 해결 실패 1641건」이라는 거짓 인상을 준다.
+        /// </summary>
         [Fact]
         public void AnchorsResolved_And_AnchorsUnresolved_AreCounted()
         {
             var indicators = SweepIndicatorsFor(AnchorResolutionMarkdown);
 
             Assert.Equal(1, indicators.AnchorsResolved);
+            // 둘째 문장은 앵커가 아예 없다 - 분모(앵커 보유 문장)에 안 들어가므로
+            // 미해결도 0이다. 수정 전에는 이 값이 1(무앵커 문장까지 센 값)이었다.
+            Assert.Equal(0, indicators.AnchorsUnresolved);
+        }
+
+        // 둘째 문장은 앵커를 보유한다(CodeAnchor = "-99") - 다만 그 코드가
+        // 조건 (B)의 사전(codeMap)에 없어 서수로 환산되지 않는다. 이것이
+        // AnchorsUnresolved가 실제로 재야 하는 「진짜 미해결」이다 - 앵커가
+        // 없는 것과는 다르다(위 테스트가 그 구분을 본다).
+        private const string AnchorBearingButUnresolvedMarkdown = @"### S01. 정산 마스터 갱신
+
+설명 문단이다.
+
+```sql
+SET @v_currentStepId = -13;
+UPDATE TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD;
+
+SET @v_currentStepId = -99;
+UPDATE TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
+```
+";
+
+        [Fact]
+        public void AnchorsUnresolved_CountsAnchorBearingStatementsThatFailToResolve()
+        {
+            var indicators = SweepIndicatorsFor(AnchorBearingButUnresolvedMarkdown);
+
+            Assert.Equal(1, indicators.AnchorsResolved);
             Assert.Equal(1, indicators.AnchorsUnresolved);
+        }
+
+        // 불변식 - 앵커를 하나도 보유하지 않은 단계는 미해결이 0이어야 한다(음수는
+        // 물론 「무앵커 문장 수만큼의 거짓 미해결」도 나오면 안 된다). 이 성질을
+        // 테스트로 고정한다(2026-08-27 재리뷰 Important 1).
+        private const string NoAnchorAtAllMarkdown = @"### S01. 정산 마스터 갱신
+
+설명 문단이다.
+
+```sql
+UPDATE TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD;
+UPDATE TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
+```
+";
+
+        [Fact]
+        public void AnchorsUnresolved_IsZero_WhenNoStatementCarriesAnyAnchor()
+        {
+            var indicators = SweepIndicatorsFor(NoAnchorAtAllMarkdown);
+
+            Assert.Equal(0, indicators.AnchorsResolved);
+            Assert.Equal(0, indicators.AnchorsUnresolved);
+            Assert.Equal(0, indicators.AnchorsDroppedForAmbiguity);
         }
 
         // 같은 코드(-13)를 두 UPDATE 문장에 붙였다 - 둘 다 (Kind=UPDATE,

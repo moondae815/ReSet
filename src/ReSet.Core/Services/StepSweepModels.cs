@@ -200,6 +200,14 @@ namespace ReSet.Core.Services
         /// [사유가 아니라 분모다] 어느 좌표가 어느 가드에 침묵당했는지는 세지 않는다 -
         /// 그러려면 검증기가 판정 사유를 내보내야 하고, 그 결합보다 이 분모가 낫다고
         /// 봤다(StepsWithReusedCodeAnchors 가 같은 판단을 적는다).
+        ///
+        /// [분모는 앵커를 보유한 문장만이다 - 2026-08-27 재리뷰 Important 1] 그
+        /// 단계의 모든 DML 문장이 아니다. U-앵커도 CodeAnchor도 없는 문장은
+        /// ResolveOrdinal의 후보가 된 적이 없으므로 AnchorsUnresolved에 넣지
+        /// 않는다 - 넣으면 평범한 무앵커 문장 수가 "앵커 해결 실패"로 잘못
+        /// 읽힌다(코퍼스 실측: 분모를 좁히기 전 AnchorsUnresolved=1641 vs
+        /// AnchorsResolved+AnchorsDroppedForAmbiguity=940 - 1641은 진짜 해결
+        /// 실패가 아니었다).
         /// </summary>
         public int AnchorsResolved { get; init; }
 
