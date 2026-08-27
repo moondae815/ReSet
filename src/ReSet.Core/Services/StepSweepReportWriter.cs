@@ -35,6 +35,7 @@ namespace ReSet.Core.Services
             AppendUpperBoundNote(b);
             AppendAnchoredFindings(b, report.Findings);
             AppendIndicators(b, report.Indicators);
+            AppendSilenceDenominators(b, report.Indicators);
 
             return b.ToString();
         }
@@ -247,6 +248,65 @@ namespace ReSet.Core.Services
                     "크면 두 지표가 코퍼스 전체를 대표하지 않는다.");
                 b.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// [왜 이 절이 있는가] 승격 전에는 앵커가 안 풀려 검사 C의 스테이징 면제 같은
+        /// 가드가 도달 불가능하다 - 그래서 승격 전후 값의 **증가분이 곧 이번에 새로
+        /// 생긴 침묵**이다. 좌표 차분(검사별 발화량 표)은 이 부류를 못 본다 - 가드가
+        /// 조건 (A)에서도 (B)에서도 같은 좌표를 침묵시키면 차분이 정의상 0이기
+        /// 때문이다. 계측(<see cref="SweepIndicators"/>)이 있어도 보고서에 안 실리면
+        /// 다음 사람이 못 읽는다 - 이 절이 그 자리다.
+        /// </summary>
+        private static void AppendSilenceDenominators(StringBuilder b, SweepIndicators indicators)
+        {
+            b.AppendLine("## 침묵 분모");
+            b.AppendLine();
+            b.AppendLine(
+                "발화가 늘어난 자리만 보면 가려져 있던 침묵이 함께 켜지는 것을 못 본다. " +
+                "승격 전에는 앵커가 안 풀려 면제가 도달 불가능하므로, 아래 값의 **증가분이 곧 " +
+                "이번에 새로 생긴 침묵**이다. 좌표 차분은 이 부류를 못 본다 - 가드가 조건 " +
+                "(A)에서도 (B)에서도 같은 좌표를 침묵시키면 차분이 정의상 0이기 때문이다.");
+            b.AppendLine();
+            b.AppendLine("| 분모 | 값 |");
+            b.AppendLine("| :--- | ---: |");
+
+            // [라벨이 계획서와 다르다 - 분모를 보이게 적는다]
+            // 태스크 4의 수정으로 이 두 계수의 분모가 "그 단계의 모든 문장"에서
+            // "앵커(U-앵커 또는 CodeAnchor)를 보유한 문장"으로 좁혀졌다 -
+            // SweepIndicators.AnchorsResolved 문서 및 StepSweepService.cs의
+            // anchorBearing 계산 참고. 라벨이 분모를 말하지 않으면 사람이 전체
+            // 문장 대비로 오독한다(코퍼스 실측으로 실제로 그렇게 갈렸다:
+            // AnchorsUnresolved=1641 vs AnchorsResolved+AnchorsDroppedForAmbiguity=940).
+            b.AppendLine($"| 앵커가 서수로 해결된 문장 수 | {indicators.AnchorsResolved} |");
+            b.AppendLine(
+                $"| 앵커는 있으나 서수로 환산되지 않은 문장 수 | {indicators.AnchorsUnresolved} |");
+            b.AppendLine(
+                $"| (Kind, Ordinal) 모호성 가드가 버린 문장 수 | " +
+                $"{indicators.AnchorsDroppedForAmbiguity} |");
+            b.AppendLine($"| 계보 원천을 가진 문장 수 | {indicators.StatementsWithLineage} |");
+            b.AppendLine(
+                $"| 스테이징만 읽어 검사 C 가 면제한 문장 수 | " +
+                $"{indicators.StatementsReadingOnlyStaging} |");
+            b.AppendLine($"| 자기 대상을 읽는 문장 수 | {indicators.StatementsReadingOwnTarget} |");
+            b.AppendLine(
+                "| 자기 대상을 읽어 스테이징 면제가 취소된 문장 수 | " +
+                $"{indicators.StagingExemptionsCancelledByOwnTarget} |");
+            b.AppendLine(
+                "| 하위 범위 술어 컬럼을 가진 문장 수 | " +
+                $"{indicators.StatementsWithSubordinatePredicates} |");
+            b.AppendLine($"| 그 컬럼의 총수 | {indicators.SubordinatePredicateColumnTotal} |");
+            b.AppendLine($"| 스테이징 원천의 총수 | {indicators.StagingSourceTotal} |");
+            b.AppendLine();
+            b.AppendLine(
+                "**「자기 대상을 읽어 스테이징 면제가 취소된 문장 수」가 0 이면 그 방어가 도달하지 " +
+                "못한 것이다.** 수정이 살아 있다는 증거가 아니라 재지 않았다는 증거로 읽는다 " +
+                "(2026-08-27 staging-lineage 최종 리뷰 Critical 1).");
+            b.AppendLine();
+            b.AppendLine(
+                "이 표는 **사유가 아니라 분모**다. 어느 좌표가 어느 가드에 침묵당했는지는 세지 " +
+                "않는다 - 그러려면 검증기가 판정 사유를 내보내야 한다.");
+            b.AppendLine();
         }
 
         /// <summary>

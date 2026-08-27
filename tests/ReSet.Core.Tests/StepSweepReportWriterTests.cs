@@ -435,5 +435,72 @@ namespace ReSet.Core.Tests
             var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", null);
             Assert.Contains("- 작업 트리: 알 수 없음", markdown);
         }
+
+        // 침묵 분모 - 계측(태스크 4)이 있어도 보고서에 안 실리면 다음 사람이 못 읽는다.
+        // 열 개 계수에 서로 다른 값을 넣고 각 값이 자기 라벨 줄에 찍히는지 확인한다 -
+        // 열 개에 같은 값을 넣으면 라벨과 값이 뒤바뀌어도 통과한다.
+        [Fact]
+        public void SilenceDenominatorsSectionPrintsEachCounterOnItsOwnLabel()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0)
+                {
+                    AnchorsResolved = 101,
+                    AnchorsUnresolved = 202,
+                    AnchorsDroppedForAmbiguity = 303,
+                    StatementsWithLineage = 404,
+                    StatementsReadingOnlyStaging = 505,
+                    StatementsReadingOwnTarget = 606,
+                    StagingExemptionsCancelledByOwnTarget = 707,
+                    StatementsWithSubordinatePredicates = 808,
+                    SubordinatePredicateColumnTotal = 909,
+                    StagingSourceTotal = 1010,
+                },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
+            Assert.Contains("## 침묵 분모", markdown);
+
+            var section = Section(markdown, "## 침묵 분모");
+            Assert.Contains("| 앵커가 서수로 해결된 문장 수 | 101 |", section);
+            Assert.Contains("| 앵커는 있으나 서수로 환산되지 않은 문장 수 | 202 |", section);
+            Assert.Contains("| (Kind, Ordinal) 모호성 가드가 버린 문장 수 | 303 |", section);
+            Assert.Contains("| 계보 원천을 가진 문장 수 | 404 |", section);
+            Assert.Contains("| 스테이징만 읽어 검사 C 가 면제한 문장 수 | 505 |", section);
+            Assert.Contains("| 자기 대상을 읽는 문장 수 | 606 |", section);
+            Assert.Contains("| 자기 대상을 읽어 스테이징 면제가 취소된 문장 수 | 707 |", section);
+            Assert.Contains("| 하위 범위 술어 컬럼을 가진 문장 수 | 808 |", section);
+            Assert.Contains("| 그 컬럼의 총수 | 909 |", section);
+            Assert.Contains("| 스테이징 원천의 총수 | 1010 |", section);
+        }
+
+        // 2026-08-27 staging-lineage 최종 리뷰 Critical 1 - 이 계수가 0이면 방어가
+        // 도달하지 못한 것이지 수정이 살아 있다는 증거가 아니다. 그 읽는 법을 절이
+        // 스스로 적어야 한다.
+        [Fact]
+        public void SilenceDenominatorsSectionExplainsHowToReadAZeroCancellationCount()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 침묵 분모");
+
+            Assert.Contains("도달하지 못한 것이다", section);
+            Assert.Contains("재지 않았다는 증거", section);
+        }
+
+        // 이 절은 사유(어느 좌표가 어느 가드에 침묵당했는가)가 아니라 분모라는 것을
+        // 스스로 밝혀야 한다 - 안 그러면 표를 사유 목록으로 오독한다.
+        [Fact]
+        public void SilenceDenominatorsSectionStatesItIsADenominatorNotAReason()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 침묵 분모");
+
+            Assert.Contains("사유가 아니라 분모", section);
+        }
 }
 }
