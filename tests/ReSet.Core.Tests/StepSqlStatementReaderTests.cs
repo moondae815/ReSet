@@ -1,4 +1,6 @@
+using System;
 using System.Linq;
+using System.Threading.Tasks;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -1175,5 +1177,278 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         var statement = Assert.Single(statements);
         Assert.Contains("Flag", statement.SubordinatePredicateColumns);
         Assert.DoesNotContain("USESTATE", statement.SubordinatePredicateColumns);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 단계 내부 스테이징 계보 — 이행이 원본 한 문장을 「스테이징 적재」와
+    // 「대상 게시」로 쪼개면 술어는 앞 문장에 남고 앵커는 뒤 문장에 붙는다
+    // (docs/known-defects.md (5-3-3) 부류 3·5, 코퍼스 15건).
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Lineage_PublishFromEarlierStagingWrite_InheritsItsColumns()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO batch_shadow.S13_After\n" +
+            "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M\n" +
+            "WHERE M.YMD = @pi_strYMD AND M.USESTATE = 2;\n" +
+            "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+            "SELECT PLTID FROM batch_shadow.S13_After\n" +
+            "WHERE ExecutionId = @pi_executionId;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleByTX");
+        var source = Assert.Single(publish.LineageSources);
+        Assert.Equal("S13_After", source.SourceTable);
+        Assert.Contains("YMD", source.Columns);
+        Assert.Contains("USESTATE", source.Columns);
+
+        // 적재문 자신은 계보가 없다 - 원천 TSettleMst 를 앞서 쓴 문장이 없다.
+        Assert.Empty(statements.Single(s => s.TargetTable == "S13_After").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_SourceNotWrittenEarlier_YieldsNoLineage()
+    {
+        // [불변식] 원천이 하나라도 앞서 쓰인 적 없으면 빈 목록이어야 한다.
+        // 부분집합을 내면 검사 쪽 All(…)이 공허하게 참이 되어, 실물 테이블을
+        // 함께 읽는 문장이 스테이징 전용으로 판정된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S06Cancel\n" +
+            "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMDCANCEL = @p;\n" +
+            "INSERT INTO dbo.TSettleMst\n" +
+            "SELECT S.PLTID FROM stage.S06Cancel AS S\n" +
+            "INNER JOIN dbo.TReal AS R ON R.PLTID = S.PLTID;"));
+
+        Assert.Empty(statements.Single(s => s.TargetTable == "TSettleMst").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_WriteAfterRead_IsNotCounted()
+    {
+        // 앞선다는 것은 문서 순서다. 뒤에서 쓰는 테이블은 계보가 아니다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO dbo.TSettleMst\n" +
+            "SELECT S.PLTID FROM stage.S06Cancel AS S;\n" +
+            "INSERT INTO stage.S06Cancel\n" +
+            "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMDCANCEL = @p;"));
+
+        Assert.Empty(statements.Single(s => s.TargetTable == "TSettleMst").LineageSources);
+    }
+
+    [Fact]
+    public void Lineage_CteNameIsNotARowSource()
+    {
+        // CTE 이름은 테이블이 아니다. 세면 「원천이 전부 앞선 쓰기 대상」이
+        // 거짓이 되어 진짜 계보를 놓친다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate\n" +
+            "SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM Pick;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("Pick", publish.RowSourceTables);
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public void Lineage_DoesNotFollowChains()
+    {
+        // 한 홉만. S1 → S2 → 게시 사슬에서 게시문은 S2의 컬럼만 받는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S1 SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.HopOne = 1;\n" +
+            "INSERT INTO stage.S2 SELECT PLTID FROM stage.S1 WHERE HopTwo = 2;\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PLTID FROM stage.S2;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        var columns = publish.LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("HopTwo", columns);
+        Assert.DoesNotContain("HopOne", columns);
+    }
+
+    [Fact]
+    public void Lineage_InheritsJoinAndSubordinateColumns()
+    {
+        // 적재문의 조인 키와 하위 범위 컬럼도 함께 물려받는다 - 부류 3의 실물
+        // 둘(Proc1/S02·Proc8/S05)이 조인 키 PGName만으로 발화했다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            ";WITH Src AS ( SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.SubCol = 1 )\n" +
+            "INSERT INTO stage.S02Candidate\n" +
+            "SELECT X.PGName FROM Src AS X\n" +
+            "LEFT JOIN dbo.TPGProperty AS Y ON Y.PGName = X.PGName;\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM stage.S02Candidate;"));
+
+        var columns = statements.Single(s => s.TargetTable == "TSettleMst")
+            .LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("PGName", columns);   // 조인 키
+        Assert.Contains("SubCol", columns);   // 하위 범위
+    }
+
+    [Fact]
+    public void Lineage_SpansFences()
+    {
+        // [실물] POQSettleProc2/S13은 적재가 펜스 2, 게시가 펜스 3에 있다.
+        // ReadFence 안에서 계보를 돌면 이 관용구를 통째로 놓친다.
+        var markdown =
+            "### S13 단계\n\n```sql\n" +
+            "INSERT INTO batch_shadow.S13_After\n" +
+            "SELECT M.PLTID FROM dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+            "```\n\n```sql\n" +
+            "INSERT INTO dbo.TSettleByTX SELECT PLTID FROM batch_shadow.S13_After;\n" +
+            "```\n";
+
+        var statements = StepSqlStatementReader.Read(markdown);
+        var columns = statements.Single(s => s.TargetTable == "TSettleByTX")
+            .LineageSources.SelectMany(l => l.Columns).ToList();
+        Assert.Contains("YMD", columns);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 픽스 라운드 1 - 독립 리뷰가 합성 SQL로 재현한 Critical 둘.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Lineage_SelfReferencingUpdate_ExcludesOwnTargetFromRowSources()
+    {
+        // Critical 1. `UPDATE 대상 AS A ... FROM 대상 AS A`는 자기 자신을 다시
+        // 참조하는 것이지 다른 테이블을 읽는 것이 아니다. 원천에 자기 대상이
+        // 섞이면 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.X = 1 FROM dbo.T AS A WHERE A.Y = 1;"));
+
+        var statement = Assert.Single(statements);
+        Assert.DoesNotContain("T", statement.RowSourceTables);
+    }
+
+    [Fact]
+    public void Lineage_SelfReferencingUpdateOnStaging_DoesNotInheritUnrelatedPredicate()
+    {
+        // Critical 1 - 리뷰가 낸 정확한 재현. Foo는 명세서 대상이 아니므로
+        // Task 2/3의 specTargets 필터가 이 경우를 막지 못한다. 자기 참조
+        // UPDATE는 다른 상류 문장을 읽는 것이 아니라 자기가 이미 쓴 행을
+        // 되읽을 뿐이므로, 앞선 INSERT의 RealFilter를 계보로 물려받으면
+        // 안 된다(무관한 술어가 「이전됨」으로 조용히 붙는다).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Foo SELECT A.PLTID FROM dbo.TX AS A WHERE A.RealFilter = 1;\n" +
+            "UPDATE X SET X.Y = 1 FROM stage.Foo AS X WHERE X.SomeCond = 1;"));
+
+        var selfUpdate = statements.Single(s => s.Kind == "UPDATE");
+        Assert.Empty(selfUpdate.LineageSources);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 최종 리뷰 Critical 1 - 자기참조 가드가 RowSourceTables에서 대상 자신을
+    // 지우면서, 그 사실 자체(자기참조가 있었다는 것)를 보존할 곳이 없었다.
+    // ReadsOwnTarget이 그 지워진 사실을 보존한다.
+    // ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ReadsOwnTarget_TrueWhenSelfReferenceIsJoinedWithPreviouslyWrittenStaging()
+    {
+        // 대상 자신을 FROM 별칭으로 되읽으면서(자기참조), 동시에 앞서 쓰인
+        // 스테이징도 JOIN하는 관용구. RowSourceTables에서는 자기참조가 지워져
+        // 스테이징 하나만 남지만, ReadsOwnTarget은 그 지워진 사실을 참으로
+        // 남겨야 한다 - 이 값이 없으면 MechanicalValidator.ReadsOnlyStaging이
+        // "원천이 전부 스테이징"으로 오판한다(최종 리뷰 Critical 1).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Keys SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            "UPDATE A SET A.OutState = 2 FROM dbo.TSettleMst AS A " +
+            "INNER JOIN stage.Keys AS K ON K.PLTID = A.PLTID WHERE A.CLVTTYPE = 1;"));
+
+        var update = statements.Single(s => s.Kind == "UPDATE");
+        Assert.True(update.ReadsOwnTarget);
+        Assert.DoesNotContain("TSettleMst", update.RowSourceTables);
+        Assert.Contains("Keys", update.RowSourceTables);
+    }
+
+    [Fact]
+    public void ReadsOwnTarget_FalseWhenStatementHasNoSelfReference()
+    {
+        // 대상이 자기 자신을 FROM 별칭으로 되읽지 않는 평범한 문장 - 대상을
+        // 별칭 없이 직접 이름으로 쓰고(TSettleLog), FROM은 다른(앞서 쓰인)
+        // 스테이징 테이블(Foo)만 참조한다. ReadsOwnTarget은 거짓이어야 한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Foo SELECT A.PLTID FROM dbo.TX AS A WHERE A.RealFilter = 1;\n" +
+            "UPDATE dbo.TSettleLog SET Z = 1 FROM stage.Foo WHERE TSettleLog.SomeCond = 1;"));
+
+        var update = statements.Single(s => s.Kind == "UPDATE");
+        Assert.False(update.ReadsOwnTarget);
+    }
+
+    [Fact]
+    public void Lineage_UnreachableCte_DoesNotContributeRowSourceOrLineage()
+    {
+        // Critical 2 - 리뷰가 낸 정확한 재현. 최상위 FROM은 Pick만 참조하고
+        // Unused는 어디서도 참조되지 않는 죽은 CTE다. Unused의 본문이 앞서
+        // 쓰인 Ghost를 참조해도, 이 문장이 실제로 도달하지 않으므로 원천도
+        // 계보도 아니다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.Ghost SELECT G.PLTID FROM dbo.TGhostSrc AS G WHERE G.GhostFilter = 1;\n" +
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Unused AS ( SELECT PLTID FROM stage.Ghost ), Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM Pick WHERE SomeRealFilter = 1;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("Ghost", publish.RowSourceTables);
+        Assert.DoesNotContain("Ghost", publish.LineageSources.Select(l => l.SourceTable));
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public void Lineage_CteChainReachability_FollowsNestedCte()
+    {
+        // Critical 2 수정의 부수 결정 - 도달 가능성을 너비 우선으로 따라가므로
+        // CTE가 다른 CTE를 참조하는 사슬(Outer → Inner → 물리 테이블)도 끝까지
+        // 따라가야 한다. 한 겹만 보는 얕은 구현이면 이 테스트가 죽는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH InnerCte AS ( SELECT PGName FROM stage.S02Candidate ), OuterCte AS ( SELECT PGName FROM InnerCte )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM OuterCte;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.DoesNotContain("InnerCte", publish.RowSourceTables);
+        Assert.DoesNotContain("OuterCte", publish.RowSourceTables);
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
+    }
+
+    [Fact]
+    public async Task Lineage_CyclicCte_ReadReturnsWithinBoundedTime()
+    {
+        // 픽스 라운드 2 재리뷰 실측 - Critical이 아니라 이 가드 자체가 실전
+        // 위험임을 실측으로 확인했다. ScriptDom은 문법 전용 파서라 비재귀 CTE의
+        // 순환 참조(A→B, B→A)를 실행 시점 규칙(전방 참조 금지·바인딩 오류)과
+        // 무관하게 그대로 파싱한다 - 사람이 손으로 쓴, 실행 불가능할 수도 있는
+        // 단계 SQL이 이 리더를 그대로 통과한다는 뜻이다. 재리뷰가 visitedCtes
+        // 가드를 실제로 지우고 이 입력을 돌려 dotnet test가 CPU 100%로 20초
+        // 넘게 멈추는 것을 강제 종료 전까지 직접 확인했다 - 이론이 아니라 실측.
+        // 순환을 직접 도는 테스트는 무한 루프면 스위트 전체를 멈출 위험이 있어
+        // 유계 타임아웃(Task.WhenAny)으로 안전하게 잠근다 - 가드가 있으면 이 호출은
+        // 밀리초 안에 끝나므로 타임아웃을 넉넉히 잡아도 오탐(거짓 실패) 위험이
+        // 없다.
+        var sql =
+            ";WITH A AS ( SELECT X FROM B ), B AS ( SELECT X FROM A )\n" +
+            "INSERT INTO dbo.T SELECT X FROM A;";
+
+        var readTask = Task.Run(() => StepSqlStatementReader.Read(Fence(sql)));
+        var winner = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(winner == readTask, "순환 CTE 입력에서 Read가 10초 안에 반환하지 못했다 - visitedCtes 가드가 없으면 이렇게 무한 루프에 빠진다.");
+    }
+
+    [Fact]
+    public void Lineage_CteReferencedWithDifferentCase_StillResolvesToPhysicalTable()
+    {
+        // Minor - 픽스 라운드 2 재리뷰. cteBodies 딕셔너리가 대소문자를 무시하지
+        // 않으면, CTE를 한 대소문자로 선언하고 다른 대소문자로 참조하는 실물
+        // SQL(대소문자가 늘 일관되진 않다)에서 그 CTE가 물리 테이블로 오분류된다
+        // - 방향은 과소(계보를 놓침)이므로 안전하지만, 검사 B/C가 침묵하는
+        // 대신 그 문장이 그냥 계보 없음으로 떨어져 원래 기대한 이전이 안 된다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "INSERT INTO stage.S02Candidate SELECT A.PGName FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+            ";WITH Pick AS ( SELECT PGName FROM stage.S02Candidate )\n" +
+            "INSERT INTO dbo.TSettleMst SELECT PGName FROM PICK;"));
+
+        var publish = statements.Single(s => s.TargetTable == "TSettleMst");
+        Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
     }
 }

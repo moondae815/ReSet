@@ -26,6 +26,10 @@ namespace ReSet.Core.Services
     /// 구간에 그런 대입이 정확히 하나가 아니면 null. <see cref="Anchor"/>와는
     /// 독립적으로 읽히며 둘이 공존할 수 있다.
     /// </param>
+    /// <param name="SourceTable">이 문장이 읽는, 같은 단계의 앞선 문장이 쓴 테이블.</param>
+    /// <param name="Columns">그 앞선 문장의 술어·조인 키·하위 범위 컬럼 전부.</param>
+    public sealed record StepLineageSource(string SourceTable, IReadOnlyList<string> Columns);
+
     public sealed record StepSqlStatement(
         string Kind,
         string TargetTable,
@@ -62,6 +66,61 @@ namespace ReSet.Core.Services
         /// </summary>
         public IReadOnlyList<string> SubordinatePredicateColumns { get; init; }
             = Array.Empty<string>();
+
+        /// <summary>
+        /// 이 문장의 FROM·JOIN이 이름으로 참조하는 테이블(마지막 식별자).
+        /// CTE 이름은 제외한다 - 테이블이 아니다. 파생 테이블·스칼라 하위질의
+        /// 안쪽은 이 층이 아니므로 NamedSourceFinder가 하강을 막는다.
+        /// </summary>
+        public IReadOnlyList<string> RowSourceTables { get; init; }
+            = Array.Empty<string>();
+
+        /// <summary>
+        /// 이 문장이 읽는 「단계 내부 스테이징」 후보와 그것을 쓴 문장의 컬럼.
+        ///
+        /// [불변식 - 검사 쪽이 이것에 의존한다] 행 원천이 **전부** 앞선 쓰기 대상일
+        /// 때만 채워진다. 하나라도 앞서 쓰인 적 없는 테이블이면 빈 목록이다.
+        /// 이 불변식이 없으면 검사 쪽의 All(…)이 부분집합 위에서 공허하게 참이 된다.
+        ///
+        /// [명세서 대상 제외는 여기서 하지 않는다] 리더는 명세서를 보지 않는다.
+        /// 원본이 쓰는 테이블을 걸러 내는 것은 MechanicalValidator의 몫이다.
+        ///
+        /// [그 제외가 막는 것 - 설계서 §2-1 실측, 2026-08-27 정정] 재게시
+        /// 관용구(`DELETE FROM T` → `INSERT INTO T` → 뒤에서 `UPDATE A … FROM T
+        /// AS A`)는 이 제외가 막는 것이 **아니다** - 그 UPDATE는 대상 자신을
+        /// FROM 별칭으로 다시 참조할 뿐이므로 <see cref="CollectRowSourceTables"/>의
+        /// 자기참조 가드가 애초에 행 원천으로 세지 않는다. 명세서 대상 제외가
+        /// 실제로 막는 것은 스키마가 다른 동명 테이블의 베이스 이름 충돌이다(실측:
+        /// `POQSettleProc8/S08:109·130`, `POQSettleProc3/S06`) - 정규화가
+        /// "마지막 식별자만" 쓰므로, 이름만 같으면 서로 다른 물리 테이블을 같은
+        /// 것으로 오인한다.
+        /// </summary>
+        public IReadOnlyList<StepLineageSource> LineageSources { get; init; }
+            = Array.Empty<StepLineageSource>();
+
+        /// <summary>
+        /// 이 문장의 FROM·JOIN이 자기 자신의 갱신·삭제 대상을 별칭으로 다시
+        /// 참조하는가(`UPDATE 대상 … FROM 대상 AS A …` 관용구).
+        ///
+        /// [왜 필요한가 - 최종 리뷰 Critical 1] <see cref="RowSourceTables"/>는
+        /// 이 자기참조를 원천에서 뺀다(재게시 관용구를 원천으로 오분류하지
+        /// 않기 위해 - <see cref="StepSqlStatementReader"/>의
+        /// CollectRowSourceTables 문서 참고). 그런데 `UPDATE 대상 … FROM 대상
+        /// AS A INNER JOIN &lt;앞서 쓰인 스테이징&gt; …`처럼 자기참조와 진짜
+        /// 스테이징 조인이 **같은 문장에 동석**하면, 남는 원천이 스테이징
+        /// 하나뿐이라 <c>MechanicalValidator.ReadsOnlyStaging</c>이 "스테이징만
+        /// 읽는다"로 오판한다 - 실제로는 원본 원천(자기 대상)도 읽는데, 그
+        /// 사실이 RowSourceTables에서 이미 지워졌기 때문이다. 이 플래그가 그
+        /// 지워진 사실을 별도로 보존해, ReadsOnlyStaging이 자기참조가 있는
+        /// 문장은 애초에 "스테이징만" 읽는다고 볼 수 없게 한다.
+        ///
+        /// [검사 B는 영향받지 않는다] 검사 B(<c>CheckAnchoredStatementFacts</c>)의
+        /// `relocated` 합류는 컬럼 단위로 <c>StagingSources</c>를 직접 쓰고
+        /// <c>ReadsOnlyStaging</c>을 거치지 않으므로 이 플래그와 무관하다 -
+        /// 자기 대상을 읽어도 그 컬럼이 실제로 적재문에 있으면 이전으로 보는
+        /// 것이 여전히 맞다.
+        /// </summary>
+        public bool ReadsOwnTarget { get; init; }
     }
 
     /// <summary>
@@ -151,7 +210,7 @@ namespace ReSet.Core.Services
                 }
             }
 
-            return statements;
+            return AttachLineage(statements);
         }
 
         private static (IReadOnlyList<StepSqlStatement> Statements, int LostStatementCount) ReadFence(string sql)
@@ -221,6 +280,104 @@ namespace ReSet.Core.Services
             }
 
             return (statements, lostStatementCount);
+        }
+
+        /// <summary>
+        /// 단계 전체에서 「행 원천이 전부 앞선 문장의 쓰기 대상」인 문장을 찾아
+        /// 그 쓰기 문장의 컬럼을 매단다.
+        ///
+        /// [왜 Read에서 도는가 - 실물] 적재문과 게시문이 **다른 펜스**에 있다.
+        /// POQSettleProc2/S13은 적재가 펜스 2, 게시가 펜스 3이다. ReadFence 안에서
+        /// 돌면 이 관용구를 통째로 놓친다.
+        ///
+        /// [왜 오프셋이 아니라 인덱스인가] Read는 펜스를 문서 순서로 순회하고
+        /// ReadFence는 반환 전에 오프셋으로 정렬한다. 누적 리스트가 이미 문서
+        /// 순서이므로 인덱스가 곧 순서다.
+        ///
+        /// [한 홉만] 사슬(A → S1, S1을 읽어 S2를 씀, S2를 읽는 문장)은 따라가지
+        /// 않는다. 실물 셋 다 한 홉이고, 미추적은 오탐 방향이라 안전하다.
+        ///
+        /// [제어 흐름은 보지 않는다] 앞선다는 것은 문서 순서다. 조건부로만 실행되는
+        /// 적재문의 술어도 상속되는데 이는 침묵 방향이다 - 한계로 기록한다.
+        /// </summary>
+        private static IReadOnlyList<StepSqlStatement> AttachLineage(
+            IReadOnlyList<StepSqlStatement> statements)
+        {
+            if (statements.Count < 2) return statements;
+
+            var writtenAt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var attached = new List<StepSqlStatement>(statements.Count);
+
+            for (var i = 0; i < statements.Count; i++)
+            {
+                var statement = statements[i];
+                var sources = statement.RowSourceTables;
+
+                // 원천이 하나도 없거나(VALUES 삽입 등) 하나라도 앞서 쓰인 적이
+                // 없으면 계보가 아니다 - 불변식.
+                if (sources.Count > 0 && sources.All(writtenAt.ContainsKey))
+                {
+                    attached.Add(statement with
+                    {
+                        LineageSources = sources
+                            .Select(s => new StepLineageSource(
+                                s, ColumnsOf(statements[writtenAt[s]])))
+                            .ToList()
+                    });
+                }
+                else
+                {
+                    attached.Add(statement);
+                }
+
+                // 자기 자신은 뒤 문장에게만 보인다 - 먼저 읽고 나중에 등록한다.
+                //
+                // [한계 - 같은 테이블에 두 번 쓰면 첫 쓰기만 기억한다] TryAdd이므로
+                // `DELETE FROM T; INSERT INTO T ...;`처럼 같은 단계 안에서 T를 두 번
+                // 쓰면, 뒤에서 T를 읽는 문장은 항상 첫 쓰기의 WHERE 컬럼을 물려받고
+                // 두 번째 쓰기의 진짜 술어는 못 본다.
+                //
+                // [방향 - 정정, 최종 리뷰 I3] 이 문단은 한때 "이것은 과소 이전 쪽으로
+                // 기운다 - 침묵이 아니라 오탐 방향이다. 가리는 경로는 찾지 못했다"고
+                // 적었다 - 이 브랜치 자신의 코퍼스 실측이 그 주장을 반증한다.
+                // `docs/known-defects.md`의 (5-3-3) 부류 4 "부수 효과"가 기록한
+                // `POQSettleProc9/S13`(`INSERT 2·3·4`)의 `YMD` 상실이 정확히 이
+                // 경로다 - 첫 쓰기가 `batch_shadow.…Run_S13`(Before-Image 섀도),
+                // 진짜 적재가 `batch_work.…Run_S13`인데, 이 메서드가 스키마를 보지
+                // 않고 베이스 이름만 키로 쓰므로 두 스키마가 같은 이름으로 충돌해
+                // 첫 쓰기(섀도)의 조인 키 `YMD`가 게시문의 계보로 잘못 매인다 -
+                // 방향은 침묵(검사가 조용해짐)이었지 오탐이 아니었다. 그러므로
+                // "가리는 경로가 없다"고 다시 단정하지 않는다 - 실측된 것은 침묵
+                // 경로 하나이고, 오탐 방향이 실제로 나는 다른 경로가 있는지는
+                // 확인하지 않았다. 코퍼스 범위(영향받는 문장-원천 쌍 수·이행 발명
+                // 스키마끼리의 베이스 이름 충돌 좌표 수)는 `docs/known-defects.md`의
+                // 같은 문단에 남긴다 - 코드는 이번 라운드에 고치지 않는다.
+                if (!string.IsNullOrEmpty(statement.TargetTable))
+                {
+                    writtenAt.TryAdd(statement.TargetTable, i);
+                }
+            }
+
+            return attached;
+
+            // [한 홉만이 유지되는 진짜 이유 - 구조적 우연, ColumnsOf의 결정이 아니다]
+            // writer는 항상 이 함수의 매개변수 `statements`(계보 부착 이전 원본
+            // 스냅샷)에서 온다 - `attached`(계보가 이미 매겨진 목록)가 아니다.
+            // `statements[j]`는 이 함수 안에서 절대 갱신되지 않으므로 그 `.LineageSources`는
+            // 언제나 기본값(빈 목록)이다. 그래서 여기에 `.Concat(writer.LineageSources
+            // .SelectMany(l => l.Columns))`를 더해도 관측 가능한 차이가 전혀 없다 -
+            // 사슬(S1 → S2 → 게시)이 새지 않는 것은 이 메서드가 사슬을 막아서가
+            // 아니라 애초에 `statements[writtenAt[s]]`가 계보를 가질 수 없어서다.
+            // **`writer`를 `attached[writtenAt[s]]`로 바꾸지 말 것** - 그 순간 이
+            // 불변이 깨지고 사슬 추적이 조용히 되살아난다(2026-08-27 픽스 라운드 1
+            // 리뷰가 변이로 확인: 이 Concat을 더해도 Lineage_DoesNotFollowChains가
+            // 죽지 않는다 - 결과만 같고 기제가 다르다는 뜻이다).
+            static IReadOnlyList<string> ColumnsOf(StepSqlStatement writer) => writer
+                .PredicateColumns
+                .Concat(writer.JoinColumns)
+                .Concat(writer.SubordinatePredicateColumns)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         /// <summary>
@@ -554,10 +711,14 @@ namespace ReSet.Core.Services
                 foreach (var from in froms) from.Accept(subordinate);
                 foreach (var where in wheres) where.Accept(subordinate);
 
+                var resolvedTarget = ResolveTargetTable(target, targetAliasScope);
+                var rowSourceTables = CollectRowSourceTables(
+                    froms, ctes, resolvedTarget, out var readsOwnTarget);
+
                 Found.Add((
                     new StepSqlStatement(
                         kind,
-                        ResolveTargetTable(target, targetAliasScope),
+                        resolvedTarget,
                         Anchor: null,
                         predicates.Columns.ToList(),
                         joins.Columns.ToList(),
@@ -565,9 +726,121 @@ namespace ReSet.Core.Services
                         HasOpaqueJoinSource: DetectOpaqueJoinSource(statement, froms))
                     {
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
+                        RowSourceTables = rowSourceTables,
+                        ReadsOwnTarget = readsOwnTarget,
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
+            }
+
+            /// <summary>
+            /// FROM·JOIN의 이름 테이블에서 CTE 이름을 뺀 것. 대상 테이블 자신도
+            /// 뺀다 - UPDATE … FROM 대상 AS A 는 자기를 읽는 것이 아니다.
+            ///
+            /// [왜 대상 자신을 빼는가 - 리뷰 라운드 1 Critical 1]
+            /// `UPDATE X SET … FROM stage.Foo AS X WHERE …`처럼 대상을 FROM 별칭으로
+            /// 다시 참조하는 관용구는 다른 상류 테이블을 읽는 게 아니라 자기가 이미
+            /// 쓴 행을 되읽을 뿐이다. 이 자기참조가 걸러지지 않으면, Foo가 명세서
+            /// DML 범위 표의 대상이 아닐 때(Task 2/3의 specTargets 필터가 이 경우를
+            /// 막지 못한다 - 그 필터는 "자기참조 테이블이 명세서 대상과 우연히
+            /// 같을 때"만 방어한다) 무관한 앞 문장의 술어가 「이전됨」으로 조용히
+            /// 붙는다(실측: Lineage_SelfReferencingUpdateOnStaging_DoesNotInheritUnrelatedPredicate).
+            ///
+            /// [왜 도달 가능한 CTE만 훑는가 - 리뷰 라운드 1 Critical 2]
+            /// 이전 구현은 `ctes?.Accept(finder)`로 선언된 CTE 전부를 무조건 훑었다.
+            /// 그러면 최상위 질의가 참조하지 않는 죽은 CTE(`WITH Unused AS (…),
+            /// Pick AS (…) SELECT … FROM Pick`의 Unused)의 본문이 앞서 쓰인 테이블을
+            /// 참조하기만 해도 그 테이블이 이 문장의 원천으로 잡히고, 그 죽은 CTE의
+            /// 무관한 술어가 계보로 새며 「원천이 전부 앞선 쓰기여야 한다」 불변식의
+            /// 성립 여부 자체가 죽은 코드에 좌우된다(실측:
+            /// Lineage_UnreachableCte_DoesNotContributeRowSourceOrLineage).
+            /// 그래서 최상위 FROM에서 시작해 실제로 참조되는 CTE만 너비 우선으로
+            /// 따라간다 - 참조되지 않는 CTE의 본문은 아예 방문하지 않는다.
+            /// NamedSourceFinder가 파생 테이블·스칼라 하위질의 하강은 이미 막으므로
+            /// 방문한 CTE 본문 안의 더 깊은 층까지 새지 않는다.
+            ///
+            /// [남은 한계 셋 - 픽스 라운드 2 재리뷰, 재지 않았다 vs 재서 안전 방향임을
+            /// 확인했다를 가른다]
+            /// (1) **CTE 본문 안의 파생 테이블이 또 다른 CTE를 참조하면 그 사슬이
+            /// 안 보인다** - NamedSourceFinder가 파생 테이블 하강을 막기 때문이다.
+            /// **재서 안전 방향임을 확인했다**: 이 층이 놓치는 것은 원천 후보 자체이므로
+            /// 결과는 과소(계보를 놓침) 쪽이다 - 검사가 조용해지는 게 아니라 이전을
+            /// 못 받아 여전히 발화한다.
+            /// (2) **CTE 이름과 스키마 한정 실물 테이블이 베이스 식별자를 공유하면**
+            /// (예: CTE `Foo`와 `dbo.Foo`가 한 문장에 공존) BFS가 진짜 테이블 참조를
+            /// 이미 방문한 CTE로 삼켜 그 물리 테이블을 원천에서 놓칠 수 있다.
+            /// **재서 안전 방향임을 확인했다**: 이것도 과소 쪽이다 - 실제로 검증하지는
+            /// 않았고 추론으로 짚었다(코퍼스 실측이 아니다).
+            /// (3) **selfTarget 제외가 "마지막 식별자만" 규약**(Task 1 원래 설계의
+            /// 이름 정규화를 그대로 물려받음)이라 `dbo.Foo`가 대상일 때 스키마가
+            /// 다른 `stage.Foo`까지 함께 제외될 수 있다 - 이번 픽스가 새로 만든
+            /// 한계가 아니다. **재지 않았다** - 코퍼스의 스테이징 명명(`stage.`·
+            /// `batch_shadow.`·`batch_work.`·`dbo.__poq_`)이 대상과 다른 베이스
+            /// 이름을 쓰므로 발생 가능성은 낮다고 보이지만 실측하지는 않았다.
+            /// </summary>
+            private static IReadOnlyList<string> CollectRowSourceTables(
+                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes, string selfTarget,
+                out bool readsOwnTarget)
+            {
+                var cteBodies = new Dictionary<string, IReadOnlyList<FromClause>>(
+                    StringComparer.OrdinalIgnoreCase);
+                if (ctes?.CommonTableExpressions != null)
+                {
+                    foreach (var cte in ctes.CommonTableExpressions)
+                    {
+                        var name = cte.ExpressionName?.Value;
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+
+                        cteBodies[name!] = DmlScopeExtractor
+                            .QuerySpecificationsOf(cte.QueryExpression)
+                            .Select(spec => spec.FromClause)
+                            .OfType<FromClause>()
+                            .ToList();
+                    }
+                }
+
+                var physicalTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // [실전 위험 - 실측 확인, 방어적 추측이 아니다] 이 방문 기록이 없으면
+                // 두 CTE가 서로를 참조하는 순환(A→B, B→A)에서 진짜 무한 루프가 난다.
+                // ScriptDom은 문법 전용 파서라 비재귀 CTE의 순환 참조를 실행 시점
+                // 규칙(전방 참조 금지·바인딩 오류)과 무관하게 그대로 파싱하므로,
+                // 사람이 손으로 쓴 - 실행 불가능할 수도 있는 - 단계 SQL이 이 리더를
+                // 그대로 통과한다. 픽스 라운드 2 재리뷰가 이 줄을 실제로 지우고
+                // 순환 CTE를 돌려 dotnet test가 CPU 100%로 20초 넘게 멈추는 것을
+                // 강제 종료 전까지 직접 확인했다 - 이론이 아니라 실측. 다이아몬드
+                // (같은 CTE를 두 경로에서 참조)는 순환과 다르다 - physicalTables가
+                // HashSet이라 다이아몬드는 이 줄의 유무와 무관하게 최종 출력이
+                // 같으므로 다이아몬드 테스트로는 이 줄의 필요성을 잴 수 없고, 순환만
+                // 잴 수 있다. Lineage_CyclicCte_ReadReturnsWithinBoundedTime이 유계
+                // 타임아웃(Task.WhenAny)으로 이 줄을 잠근다 - 순환을 직접 돌지만
+                // 무한정 기다리지 않으므로 스위트를 멈추지 않는다.
+                var visitedCtes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var frontier = new Queue<IReadOnlyList<FromClause>>();
+                frontier.Enqueue(froms);
+
+                while (frontier.Count > 0)
+                {
+                    var currentFroms = frontier.Dequeue();
+                    var finder = new NamedSourceFinder();
+                    foreach (var from in currentFroms) from.Accept(finder);
+
+                    foreach (var source in finder.Sources.Select(s => s.Source))
+                    {
+                        if (cteBodies.TryGetValue(source, out var bodyFroms))
+                        {
+                            if (visitedCtes.Add(source)) frontier.Enqueue(bodyFroms);
+                        }
+                        else
+                        {
+                            physicalTables.Add(source);
+                        }
+                    }
+                }
+
+                readsOwnTarget = !string.IsNullOrEmpty(selfTarget) && physicalTables.Contains(selfTarget);
+                if (readsOwnTarget) physicalTables.Remove(selfTarget);
+
+                return physicalTables.ToList();
             }
 
             /// <summary>

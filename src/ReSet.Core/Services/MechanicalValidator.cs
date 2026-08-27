@@ -6956,6 +6956,53 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 계보 원천 중 「원본이 쓰는 테이블」을 뺀 것 — 그 나머지가 단계 내부
+        /// 스테이징이다.
+        ///
+        /// [왜 명세서 대상을 빼는가 - 설계서 §2-1 실측, 2026-08-27 정정]
+        /// 이 제외가 막는 것은 재게시 관용구(`DELETE FROM T` → `INSERT INTO T` →
+        /// 뒤에서 `UPDATE A … FROM T AS A`)가 **아니다** - 그 관용구는 이미
+        /// <see cref="StepSqlStatementReader"/>의 자기참조 가드
+        /// (`CollectRowSourceTables`의 `selfTarget` 제외)가 막는다: 그 UPDATE는
+        /// 대상 자신을 FROM 별칭으로 다시 참조할 뿐이므로 애초에 행 원천으로
+        /// 세지 않는다. 이 제외가 실제로 막는 것은 **스키마가 다른 동명 테이블의
+        /// 베이스 이름 충돌**이다 - 정규화가 "마지막 식별자만" 쓰므로,
+        /// `shadow.TSettleMst`(단계가 만든 Before-Image 섀도)와
+        /// `dbo.TSettleMst`(원본 대상 그 자체)가 이름만 같으면 같은 물리
+        /// 테이블로 오인한다(실측: `POQSettleProc8/S08:109·130`,
+        /// `POQSettleProc3/S06`). 두 방어선(자기참조 가드·이 제외)은 서로 다른
+        /// 것을 막으므로 하나를 지워도 다른 하나가 대신 막아 주지 않는다.
+        ///
+        /// [왜 이름 규칙이 아닌가] 실물이 batch_shadow.·stage.·batch_work.·
+        /// dbo.__poq_ 로 제각각이다. 이름 목록은 다섯 번째 이름에서 깨진다.
+        /// </summary>
+        private static IEnumerable<StepLineageSource> StagingSources(
+            StepSqlStatement statement, HashSet<string> specTargets) => statement
+            .LineageSources
+            .Where(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
+        /// 행 원천이 전부 단계 내부 스테이징인가. 리더의 불변식(LineageSources는
+        /// 원천이 전부 앞선 쓰기 대상일 때만 채워진다)에 기대므로, 여기서는
+        /// 명세서 대상이 하나라도 섞였는지만 보면 된다.
+        ///
+        /// [왜 ReadsOwnTarget을 함께 보는가 - 최종 리뷰 Critical 1]
+        /// `UPDATE 대상 … FROM 대상 AS A INNER JOIN &lt;앞서 쓰인 스테이징&gt; …`
+        /// 관용구에서는 리더의 자기참조 가드가 대상 자신을 <see
+        /// cref="StepSqlStatement.RowSourceTables"/>에서 이미 뺀다(재게시
+        /// 관용구를 원천으로 오분류하지 않기 위해). 그러면 남는 원천이
+        /// 스테이징 하나뿐이라 이 문장이 "스테이징만 읽는다"로 잘못 판정된다 -
+        /// 실제로는 원본 원천(자기 대상)도 읽는데 그 사실이 이미 지워졌기
+        /// 때문이다. <see cref="StepSqlStatement.ReadsOwnTarget"/>이 그 지워진
+        /// 사실을 보존하므로, 이 값이 참이면 스테이징만 읽는다고 볼 수 없다.
+        /// </summary>
+        private static bool ReadsOnlyStaging(
+            StepSqlStatement statement, HashSet<string> specTargets) =>
+            !statement.ReadsOwnTarget
+            && statement.LineageSources.Count > 0
+            && statement.LineageSources.All(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
         /// 앵커가 달린 문장이 명세서 그 행의 조인 키와 최상위 WHERE 술어 컬럼을
         /// 전부 담았는지 본다.
         ///
@@ -7023,6 +7070,9 @@ namespace ReSet.Core.Services
         {
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
             if (rows.Count == 0) return;
+
+            var specTargets = new HashSet<string>(
+                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
 
             var codeMap = MergeErrorCodeMaps(facts);
             var anchored = ResolveAnchoredStatements(statements, codeMap);
@@ -7111,8 +7161,17 @@ namespace ReSet.Core.Services
                 // 이것이 의미 동등을 증명하지는 않는다(설계 §6). 동등성은 조인이
                 // 대상 행 집합을 보존하느냐에 달렸고 그 전제는 로컬에서 검증할 수
                 // 없다. 여기서 말하는 것은 "옮겨갔다"까지다.
+                //
+                // [계보 이전 - 한 층 위의 같은 개념]
+                // 이행이 원본 한 문장을 「스테이징 적재」와 「대상 게시」로 쪼개면
+                // 술어는 앞 문장에 남고 코드 앵커는 뒤 문장에 붙는다((5-3-3) 부류 3).
+                // 하위 범위 이전이 "같은 문장 안에서 옮겨갔다"라면 이것은 "이 문장을
+                // 먹인 문장으로 옮겨갔다"이다. 검사를 끄지 않으므로, 적재문에도 그
+                // 컬럼이 없으면 여전히 발화한다.
                 var relocated = new HashSet<string>(
-                    group.SelectMany(a => a.Statement.SubordinatePredicateColumns),
+                    group.SelectMany(a => a.Statement.SubordinatePredicateColumns
+                        .Concat(StagingSources(a.Statement, specTargets)
+                            .SelectMany(l => l.Columns))),
                     StringComparer.OrdinalIgnoreCase);
 
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
@@ -7290,6 +7349,9 @@ namespace ReSet.Core.Services
             // 이유가 없다.
             if (anchored.Count == 0) return;
 
+            var specTargets = new HashSet<string>(
+                rows.Select(r => r.TargetTable), StringComparer.OrdinalIgnoreCase);
+
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var table in BatchControlContract.Tables)
             {
@@ -7318,8 +7380,49 @@ namespace ReSet.Core.Services
                     row.PredicateColumns.Concat(row.JoinKeys).Concat(row.GroupBy).Concat(row.OrderBy),
                     StringComparer.OrdinalIgnoreCase);
 
+                // [단계 내부 스테이징 - 대조할 원천이 아니다]
+                // 게시문이 자기 실행이 적재한 스테이징 행만 되읽으려고 거는 술어는
+                // 원본 원천의 술어가 아니다((5-3-3) 부류 5). 예전에는
+                // BatchControlContract.Tables의 컬럼 이름을 allowed로 깔아 이 부류를
+                // 면제하려 했는데, 면제가 역할이 아니라 **이름**으로 걸려 있어
+                // 계약이 아는 RunId만 통과하고 ExecutionId·ProcessingYMD는 발화했다.
+                // 같은 코퍼스의 POQSettleProc9/S13은 구조가 같은데 식별자를 RunId로
+                // 부른다는 이유만으로 조용했다 - 발화를 가른 것이 업무적 성질이
+                // 아니라 이행자가 고른 이름이었다는 증거다.
+                //
+                // allowed는 그대로 둔다 - 배치 제어 테이블을 **직접** 갱신하는
+                // 문장은 계보와 무관하게 여전히 그 면제가 필요하다.
+                //
+                // [한계 - 면제가 문장 단위다, 컬럼 단위가 아니다]
+                // ReadsOnlyStaging이 참이면 그 문장의 PredicateColumns 전체가
+                // 면제된다 - 설계가 겨냥한 실행 스코프 식별자(ExecutionId 등)만이
+                // 아니라, 같은 문장에 동석한 진짜 업무 필터까지. 검사 B식으로
+                // "적재문의 컬럼과 대조"해 컬럼 단위로 좁힐 수 없다 - 부류 5
+                // 결함의 요점 자체가 ExecutionId 같은 실행 스코프 식별자는 원천
+                // 컬럼이 아니라 순수한 실행 스코프 추가라서 선행 적재문의 술어
+                // 컬럼에 아예 나타나지 않는다는 것이기 때문이다. "적재문에
+                // 있었는가"라는 신호가 없으니 그것으로 스코프 식별자와 업무
+                // 필터를 가를 수 없다. 이름 목록으로 가르는 것도 이 작업이
+                // 금지한 방향이다(다음 이행자가 고를 네 번째 이름에서 재발한다 -
+                // 위 [단계 내부 스테이징] 문단의 RunId/ExecutionId 비대칭이 그
+                // 실물 증거다).
+                //
+                // [코퍼스 실측 - 직접 확인, 2026-08-27 픽스 라운드 1]
+                // 부류 5의 실물 셋 중 POQSettleProc2/S13·POQSettleProc1/S02는
+                // 게시문이 단일 술어(ExecutionId 하나, YMD 하나)라 이 잔여
+                // 위험이 발현하지 않는다. POQSettleProc8/S05는 게시문 자체는
+                // RunId·ProcessingYMD 두 술어를 걸지만, 그 원천
+                // stage.TSettleMst_S05를 채우는 실제 쓰기가 이 문서에서
+                // ```text``` 의사코드로만 있고 파싱 가능한 SQL 펜스가 없어
+                // LineageSources가 이 문장에는 애초에 안 붙는다(불변식상
+                // ReadsOnlyStaging이 거짓) - 그래서 이 문장은 이 절의 면제를
+                // 아예 타지 않고, 위 잔여 위험도 이 코퍼스에서는 결과적으로
+                // 발현하지 않는다. 「6건이 전부 단일 술어」로 뭉뚱그리지 않고
+                // 갈라 적는다 - 셋째는 술어 수가 아니라 계보 불성립으로 안전하다.
                 var extras = group
-                    .SelectMany(a => a.Statement.PredicateColumns)
+                    .SelectMany(a => ReadsOnlyStaging(a.Statement, specTargets)
+                        ? Array.Empty<string>()
+                        : a.Statement.PredicateColumns)
                     .Where(c => !known.Contains(c) && !allowed.Contains(c))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();

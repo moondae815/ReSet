@@ -8828,6 +8828,148 @@ END";
         }
 
         [Fact]
+        public void ValidateBatchStep_CheckB_StagingLineagePredicate_IsTreatedAsRelocated()
+        {
+            // (5-3-3) 부류 3. 이행이 원본 한 문장을 「스테이징 적재」와 「대상 게시」로
+            // 쪼개면 술어는 앞 문장에 남고 코드 앵커는 뒤 문장에 붙는다. 게시문만
+            // 보면 YMD가 없어진 것처럼 보이지만 없어진 게 아니라 옮겨간 것이다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After WHERE ExecutionId = @e;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_SpecTargetSourceIsNotStaging()
+        {
+            // 원본이 쓰는 테이블은 스테이징이 아니다. (자기 자신이 아닌) 다른
+            // 테이블을 갱신하는 문장이 원본 대상 테이블을 원천으로 다시 읽는
+            // 관용구가 있는데, 그것을 게시문으로 보면 검사가 통째로 조용해진다.
+            // [2026-08-27 정정] 이 제외가 막는 것은 재게시 관용구가 아니다 -
+            // 아래 문단대로 그 관용구는 자기참조 가드가 이미 막는다. 이 제외가
+            // 실제로 막는 것은 스키마가 다른 동명 테이블의 베이스 이름 충돌이다
+            // (설계서 §2-1 실측: `POQSettleProc8/S08:109·130`, `POQSettleProc3/S06`).
+            //
+            // [왜 자기참조 UPDATE가 아닌가] `UPDATE A ... FROM TSettleMst AS A`처럼
+            // 문장 자신의 대상과 원천이 같으면 리더의 자기참조 가드
+            // (StepSqlStatementReader.CollectRowSourceTables의 selfTarget 제외)가
+            // 이미 원천 목록에서 TSettleMst를 빼 LineageSources 자체가 비므로, 이
+            // 문장으로는 여기서 새로 넣은 specTargets 필터를 전혀 거치지 않는다
+            // (뮤테이션 확인으로 드러남 - 실제로는 이 테스트가 죽지 않았다).
+            // 그래서 이 시나리오는 대상이 **다른** 테이블(TSettleLog)로, 자기참조가
+            // 아니면서 원본 대상(TSettleMst)을 원천으로 읽는 문장이어야 한다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        // 명세서 대상 집합을 심는 행 - 이 문장 자체는 앵커로 매칭되지
+                        // 않는다(서수 99는 SQL 어디에도 쓰이지 않는다).
+                        new SpecDmlRow("INSERT", 99, 5, "TSettleMst",
+                            Array.Empty<string>(), Array.Empty<string>(),
+                            Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("INSERT", 1, 10, "TSettleLog",
+                            new[] { "YMD" }, Array.Empty<string>(),
+                            Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "S07 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleLog" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            // 앞 INSERT가 TSettleMst(= 명세서 대상)에 YMD 술어로 쓰고, 뒤 INSERT는
+            // 다른 테이블(TSettleLog)에 쓰면서 그 TSettleMst를 원천으로 읽는다 -
+            // 자기참조가 아니다. 검사 대상 문장 자신의 술어(LogFlag)에는 YMD가
+            // 없으므로, YMD는 진짜로 빠졌고 발화해야 한다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleMst\n" +
+                "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleLog\n" +
+                "SELECT PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE LogFlag = @q;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst", "dbo.TSettleLog" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼") && e.Contains("YMD"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckB_StagingLineagePartialRelocation_ReportsOnlyTheMissing()
+        {
+            // 하위범위 경로의 OneRelocatedOneMissing과 같은 잠금을 계보 경로에도
+            // 건다. 적재문에 YMD만 있고 USESTATE는 없으면, 게시문에서 YMD는
+            // 침묵하고 USESTATE만 발화해야 한다 - 전부-접기(계보가 하나라도 있으면
+            // 그 그룹의 ReportMissing을 통째로 건너뛰는 식)로 구현하면 발화해야 할
+            // USESTATE까지 침묵하게 되어 이 테스트가 죽는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD", "USESTATE" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            // 적재문의 최상위 WHERE에는 YMD만 있다 - USESTATE는 적재문에도 없다.
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After WHERE ExecutionId = @e;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
+
+            // 메시지 뒷부분은 명세서 행의 값을 그대로 인용하므로 YMD가 정당하게
+            // 나온다. 보고된 "빠진 컬럼" 목록만 잘라서 본다.
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("USESTATE", reported);
+            Assert.DoesNotContain("YMD", reported);
+        }
+
+        [Fact]
         public void ValidateBatchStep_CheckC_CodeAnchorOnly_ResolvesOrdinalAndCompares()
         {
             // 검사 C도 같은 환산을 받는다 - U-앵커 없이 코드 앵커만으로 명세서에
@@ -8886,6 +9028,232 @@ END";
                 new Dictionary<string, SpecConditions>(), null, null, facts);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_StagingScopePredicate_IsNotExtra()
+        {
+            // (5-3-3) 부류 5. 게시문이 자기 실행이 적재한 스테이징 행만 되읽으려고
+            // 거는 술어다. 원본 원천의 술어가 아니므로 명세서와 대조할 대상 자체가
+            // 아니다. 지금은 BatchControlContract가 아는 RunId만 통과하고
+            // ExecutionId는 발화한다 - 면제가 역할이 아니라 이름으로 걸려 있다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After WHERE ExecutionId = @e;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionId"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_AddedFilterOnOriginalSource_StillFires()
+        {
+            // 회귀 - (5-3-4) 🔴. 이 코퍼스의 유일한 진짜 축 B 결함은 원본 원천을
+            // **직접** 읽는 문장이 원본에 없는 필터를 새로 거는 것이다. 계보에
+            // 스테이징이 없으므로 면제 대상이 아니고 계속 발화해야 한다.
+            // 면제가 탐지력을 먹지 않는다는 것을 이 테스트가 못 박는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleMst",
+                        new[] { "PLTID", "YMDCANCEL" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S06", Name: "S06 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleMst\n" +
+                "SELECT A.PLTID FROM PaymentDB.dbo.TTxMst AS A\n" +
+                "WHERE A.YMDCANCEL = @p AND A.CLVTTYPE = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("CLVTTYPE"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_StagingExemptionIsStatementScoped_PinsCurrentGranularity()
+        {
+            // [입도 고정 - 결함을 막는 테스트가 아니라 "지금은 이렇게 동작한다"를
+            // 못 박는 테스트다] ReadsOnlyStaging이 참이면 그 문장의 PredicateColumns
+            // 전체가 면제된다 - 설계가 겨냥한 실행 스코프 식별자(ExecutionId)뿐
+            // 아니라 같은 문장에 동석한 진짜 업무 필터(NewBusinessFlag)까지 함께.
+            //
+            // [왜 컬럼 단위로 못 좁히는가] 검사 C는 검사 B식 "적재문 컬럼과
+            // 대조"를 쓸 수 없다 - 부류 5 결함의 요점 자체가 ExecutionId 같은
+            // 실행 스코프 식별자가 선행 적재문의 술어 컬럼에 아예 나타나지
+            // 않는다는 것이기 때문이다(순수 실행 스코프 추가라 원천 컬럼이
+            // 아니다). "적재문에 있었는가"로는 스코프 식별자와 업무 필터를
+            // 가를 수 없다. 이름 목록으로 가르는 것도 이 작업이 금지한
+            // 방향이다 - 다음 이행자가 고를 네 번째 이름에서 재발한다.
+            //
+            // 이 코퍼스의 부류 5 실물 셋 중 둘(POQSettleProc2/S13·POQSettleProc1/
+            // S02)은 게시문이 단일 술어라 이 잔여 위험이 발현하지 않는다.
+            // 셋째(POQSettleProc8/S05)는 게시문 자체는 두 술어(RunId·
+            // ProcessingYMD)를 걸지만, 그 원천을 채우는 실제 쓰기가 의사코드로만
+            // 있어 LineageSources가 붙지 않아 이 절의 면제를 아예 타지 않는다 -
+            // 그래서 결과적으로도 발현하지 않는다(직접 확인 -
+            // CheckAnchoredStatementExtras 주석 참고).
+            //
+            // 나중에 누가 컬럼 단위로 면제를 좁히면 이 단언이 깨진다 - 그때는
+            // 면제 입도가 바뀐 의도된 변경이므로, 이 테스트를 새 동작에 맞춰
+            // 고치면 된다(결함을 고친 것이 아니다).
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 10, "TSettleByTX",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S13", Name: "S13 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S13 단계\n\n```sql\n" +
+                "INSERT INTO batch_shadow.S13_After\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M WHERE M.YMD = @p;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleByTX\n" +
+                "SELECT PLTID FROM batch_shadow.S13_After\n" +
+                "WHERE ExecutionId = @e AND NewBusinessFlag = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleByTX" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            // 지금은 둘 다 조용하다 - ExecutionId(설계가 겨냥한 것)뿐 아니라
+            // NewBusinessFlag(진짜 업무 필터라면 발화해야 할 것)도. 이 단언이
+            // 깨지면 면제 입도가 바뀐 것이다.
+            Assert.DoesNotContain(result.Errors, e => e.Contains("ExecutionId"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("NewBusinessFlag"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_SelfTargetJoinedWithStaging_StillFiresOnAddedPredicate()
+        {
+            // 최종 리뷰 Critical 1 - 정확한 재현. `UPDATE 대상 … FROM 대상 AS A
+            // INNER JOIN <앞서 쓰인 스테이징> …` 관용구에서 자기참조 가드
+            // (StepSqlStatementReader.CollectRowSourceTables의 selfTarget 제외)가
+            // 대상 자신(TSettleMst)을 원천에서 뺀다. 남는 원천이 스테이징
+            // (stage.Keys) 하나뿐이면 ReadsOnlyStaging이 이 문장을 "스테이징만
+            // 읽는다"로 오판해, 원본 원천(TSettleMst)을 읽는데도 검사 C가 통째로
+            // 면제해 버린다 - CLVTTYPE 같은 명세서에 없는 술어가 조용해진다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 1, 10, "TSettleMst",
+                        new[] { "PLTID" }, new[] { "PLTID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S09", Name: "S09 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S09 단계\n\n```sql\n" +
+                "INSERT INTO stage.Keys SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+                "-- UPDATE 1\n" +
+                "UPDATE A SET A.OutState = 2\n" +
+                "FROM SETTLE_POQ_DB.dbo.TSettleMst AS A\n" +
+                "INNER JOIN stage.Keys AS K ON K.PLTID = A.PLTID\n" +
+                "WHERE A.PLTID = K.PLTID AND A.CLVTTYPE = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("CLVTTYPE") && e.Contains("명세서에 없는"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckC_SpecTargetSourceIsNotStaging()
+        {
+            // 최종 리뷰 Important 2 - ReadsOnlyStaging의 specTargets 가지가
+            // 무보증임을 못 박는 테스트다. 이 문장의 행 원천은 둘(TSettleMst·
+            // stage.Keys) - 자기참조가 아니다(대상은 TSettleLog). TSettleMst는
+            // 명세서 대상이므로 스테이징이 아니다. specTargets 가지가 없으면
+            // (l => true로 무력화되면) 이 문장이 "스테이징만 읽는다"로 오판돼
+            // ExtraCol이 조용해진다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SP_A"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        // 명세서 대상 집합을 심는 행 - 이 문장 자체는 앵커로 매칭되지
+                        // 않는다(서수 99는 SQL 어디에도 쓰이지 않는다).
+                        new SpecDmlRow("INSERT", 99, 5, "TSettleMst",
+                            Array.Empty<string>(), Array.Empty<string>(),
+                            Array.Empty<string>(), Array.Empty<string>()),
+                        new SpecDmlRow("INSERT", 1, 10, "TSettleLog",
+                            Array.Empty<string>(), Array.Empty<string>(),
+                            Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var step = new BatchStepPlan(
+                Code: "S06", Name: "S06 단계",
+                LegacyProcedures: new[] { "dbo.SP_A" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleLog" },
+                ErrorCodes: new[] { "-1" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleMst\n" +
+                "SELECT A.PLTID FROM dbo.TTxMst AS A WHERE A.YMD = @p;\n" +
+                "INSERT INTO stage.Keys SELECT B.PLTID FROM dbo.TOther AS B WHERE B.SomeCol = 1;\n" +
+                "-- INSERT 1\n" +
+                "INSERT INTO SETTLE_POQ_DB.dbo.TSettleLog\n" +
+                "SELECT M.PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS M\n" +
+                "INNER JOIN stage.Keys AS K ON K.PLTID = M.PLTID\n" +
+                "WHERE ExtraCol = 1;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step, new[] { "dbo.TSettleMst", "dbo.TSettleLog" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.Contains(result.Errors, e => e.Contains("ExtraCol") && e.Contains("명세서에 없는"));
         }
 
         // ─────────────────────────────────────────────────────────────────────
