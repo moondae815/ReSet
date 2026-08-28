@@ -25,12 +25,47 @@ namespace ReSet.Cli
         /// OpenRouter의 백엔드 라우팅 선호를 읽는다. provider가 OpenRouter가 아니면
         /// 이 설정 구획이 없어 자연히 null이 되고, 팩토리도 다른 provider에서는
         /// 이 인자를 쓰지 않는다.
+        ///
+        /// Routing은 provider 단위 구획이라, 세 역할(Actor/Critic/Consolidator)이 모두
+        /// OpenRouter면 목록 하나를 공유하게 된다. 그런데 어느 백엔드가 그 모델을
+        /// 서빙하는지와 캐시 읽기 단가는 모델마다 달라, 목록 하나로는 한쪽 모델에만
+        /// 맞출 수 있다. <paramref name="modelName"/>을 받아 모델별 목록을 먼저 찾는다:
+        ///
+        ///   1. <c>Routing:ByModel:&lt;모델ID&gt;</c> (대소문자 무시)
+        ///   2. <c>Routing:Default</c>
+        ///   3. <c>Routing</c> 바로 아래의 평면 항목 (기존 형식 - 하위호환)
+        ///
+        /// 1과 2는 항목 단위로 겹친다 - 모델별 항목에 <c>Order</c>만 적어도
+        /// <c>Default</c>의 <c>AllowFallbacks</c>가 살아남는다.
         /// </summary>
         public static ReSet.Core.Services.Clients.OpenRouterRoutingOptions? ReadOpenRouterRouting(
-            IConfiguration configuration, string provider)
+            IConfiguration configuration, string provider, string? modelName = null)
         {
             var section = configuration.GetSection($"AiSettings:Providers:{provider}:Routing");
             if (!section.Exists())
+            {
+                return null;
+            }
+
+            var defaults = ParseRoutingBlock(section.GetSection("Default"));
+            var perModel = ParseRoutingBlock(FindByModelSection(section, modelName));
+
+            // 어느 쪽도 없으면 ByModel/Default를 쓰지 않는 기존 형식이다.
+            if (defaults is null && perModel is null)
+            {
+                return ParseRoutingBlock(section);
+            }
+
+            return ReSet.Core.Services.Clients.OpenRouterRoutingOptions.Merge(defaults, perModel);
+        }
+
+        /// <summary>
+        /// 라우팅 항목 세 개를 한 구획에서 읽는다. 구획이 없으면 null.
+        /// </summary>
+        private static ReSet.Core.Services.Clients.OpenRouterRoutingOptions? ParseRoutingBlock(
+            IConfigurationSection? section)
+        {
+            if (section is null || !section.Exists())
             {
                 return null;
             }
@@ -41,6 +76,30 @@ namespace ReSet.Cli
 
             return ReSet.Core.Services.Clients.OpenRouterRoutingOptions.Parse(
                 order, section["AllowFallbacks"], section["RequireParameters"]);
+        }
+
+        /// <summary>
+        /// 모델 ID로 <c>ByModel</c> 항목을 찾는다. 인덱서 대신 자식을 훑는 것은
+        /// 대소문자를 무시하기 위해서다 - OpenRouter는 모델 ID의 대소문자를 구분하지
+        /// 않으므로, 설정 쪽만 구분하면 목록을 적어 두고도 조용히 Default로 떨어진다.
+        /// </summary>
+        private static IConfigurationSection? FindByModelSection(
+            IConfigurationSection routingSection, string? modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName))
+            {
+                return null;
+            }
+
+            var byModel = routingSection.GetSection("ByModel");
+            if (!byModel.Exists())
+            {
+                return null;
+            }
+
+            var wanted = modelName.Trim();
+            return byModel.GetChildren()
+                .FirstOrDefault(child => string.Equals(child.Key, wanted, StringComparison.OrdinalIgnoreCase));
         }
 
         public static CliArgs ParseCommandLineArgs(string[] args)
@@ -533,7 +592,7 @@ namespace ReSet.Cli
             // Local Chunking 활성화 여부
             bool.TryParse(configuration["AiSettings:EnableLocalChunking"] ?? "true", out bool enableLocalChunking);
 
-            var openRouterRouting = ReadOpenRouterRouting(configuration, provider);
+            var openRouterRouting = ReadOpenRouterRouting(configuration, provider, modelName);
 
             IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx, cliCommand, openRouterRouting);
             IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking);
@@ -559,7 +618,7 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{criticProvider}:EnableThinking"] ?? "false", out bool criticEnableThinking);
 
                 var criticCommand = configuration[$"AiSettings:Providers:{criticProvider}:Command"];
-                var criticRouting = ReadOpenRouterRouting(configuration, criticProvider);
+                var criticRouting = ReadOpenRouterRouting(configuration, criticProvider, criticModel);
                 var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx, criticCommand, criticRouting);
                 criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking);
             }
@@ -582,7 +641,7 @@ namespace ReSet.Cli
                 bool.TryParse(configuration[$"AiSettings:Providers:{consolidatorProvider}:EnableThinking"] ?? "false", out bool consolidatorEnableThinking);
 
                 var consolidatorCommand = configuration[$"AiSettings:Providers:{consolidatorProvider}:Command"];
-                var consolidatorRouting = ReadOpenRouterRouting(configuration, consolidatorProvider);
+                var consolidatorRouting = ReadOpenRouterRouting(configuration, consolidatorProvider, consolidatorModel);
                 var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx, consolidatorCommand, consolidatorRouting);
                 consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking);
             }

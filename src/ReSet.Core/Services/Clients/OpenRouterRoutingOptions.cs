@@ -52,5 +52,37 @@ namespace ReSet.Core.Services.Clients
 
             return options.IsEmpty ? null : options;
         }
+
+        /// <summary>
+        /// 두 라우팅 선호를 항목 단위로 겹친다 - <paramref name="overrideOptions"/>에서
+        /// 값이 지정된 항목만 <paramref name="baseOptions"/>를 덮고, 지정되지 않은
+        /// 항목은 바탕의 값이 그대로 남는다.
+        ///
+        /// 통째로 대체하지 않는 이유: 모델별 목록은 대개 <c>Order</c>만 적는다.
+        /// 대체 방식이면 그때 <c>AllowFallbacks</c>가 조용히 null이 되어 요청에서
+        /// 빠지고, 목록 밖 백엔드(fp4 양자화 포함)로의 이동이 말없이 다시 열린다.
+        /// </summary>
+        public static OpenRouterRoutingOptions? Merge(
+            OpenRouterRoutingOptions? baseOptions,
+            OpenRouterRoutingOptions? overrideOptions)
+        {
+            if (overrideOptions is null)
+            {
+                return baseOptions;
+            }
+            if (baseOptions is null)
+            {
+                return overrideOptions;
+            }
+
+            var merged = new OpenRouterRoutingOptions
+            {
+                Order = overrideOptions.Order ?? baseOptions.Order,
+                AllowFallbacks = overrideOptions.AllowFallbacks ?? baseOptions.AllowFallbacks,
+                RequireParameters = overrideOptions.RequireParameters ?? baseOptions.RequireParameters
+            };
+
+            return merged.IsEmpty ? null : merged;
+        }
     }
 }
