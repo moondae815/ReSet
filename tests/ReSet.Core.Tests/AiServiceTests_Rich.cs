@@ -1797,14 +1797,36 @@ END"
         {
             var rules = await RulesBlockAsync();
 
+            // `GOTO`는 이 목록에서 빠졌다 - 2026-08-29 회신으로 규칙 3-1이 그것을
+            // **금지 조항으로** 다시 담았기 때문이다(아래 ForbidSqlSideControlFlow).
+            // 여기 남은 것들은 규칙이 T-SQL로 *지시하던* 철자다.
             foreach (var spelling in new[]
                      {
-                         "BEGIN TRAN", "COMMIT TRAN", "GOTO", "XACT_ABORT",
+                         "BEGIN TRAN", "COMMIT TRAN", "ROLLBACK TRAN", "XACT_ABORT",
                          "TRY...CATCH", "sp_executesql", "SET TRANSACTION ISOLATION LEVEL"
                      })
             {
                 Assert.DoesNotContain(spelling, rules, StringComparison.Ordinal);
             }
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ForbidSqlSideControlFlow()
+        {
+            // 3단계는 `GOTO` 금지를 "C# 예외 처리가 대체한다"고 보고 뺐다. 통제군
+            // 한 편이 `IF @@ERROR <> 0 GOTO ERR_HANDLER`를 21번 내면서 그 전제가
+            // 깨졌다 - 전송 프롬프트에 `GOTO`가 0건이었으니 모델이 스스로 되돌린 것이고,
+            // 막는 조항이 규칙에도 채점에도 없었다. 규칙 6-1이 아니라 규칙 3-1의
+            // 몫으로 되돌렸다: 오류 코드 충실도가 아니라 제어 흐름의 거처 문제다.
+            var rules = await RulesBlockAsync();
+
+            Assert.Contains("MUST NOT branch on its own outcome", rules);
+            Assert.Contains("`GOTO` error labels", rules);
+            Assert.Contains("`IF @@ERROR <> 0` checks", rules);
+            Assert.Contains("`BEGIN TRY`/`END CATCH` wrapper", rules);
+
+            // 원본 인용은 예외로 남아야 한다 - 레거시 원문에는 그 철자가 들어 있다.
+            Assert.Contains("ONLY inside a quotation of the original legacy procedure", rules);
         }
 
         [Fact]

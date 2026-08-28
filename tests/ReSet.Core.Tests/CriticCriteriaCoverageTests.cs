@@ -58,6 +58,29 @@ namespace ReSet.Core.Tests
             var prompt = await CaptureCriticPromptAsync();
 
             Assert.Contains("NO new stored procedure", prompt);
+        }
+
+        [Fact]
+        public async Task Critic_ShouldPenalizeSqlSideControlFlow()
+        {
+            // 규칙 3-1이 제어 흐름의 거처를 정해도 채점이 보지 않으면 자가 수정이
+            // 닿지 않는다. 3단계가 `GOTO` 조항을 규칙과 채점에서 함께 빼자 통제군
+            // 한 편이 `IF @@ERROR <> 0 GOTO ERR_HANDLER`를 21번 냈다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("branches on its own outcome", prompt);
+            Assert.Contains("`GOTO` error labels", prompt);
+        }
+
+        [Fact]
+        public async Task Critic_ShouldPenalizeAHardCodedIsolationStatement()
+        {
+            // 규칙 4는 "격리를 거는 자리를 정하지 말라"고 한다. 채점에는 그 반대편
+            // (안 적었다고 감점하지 말라)만 있어서, 단계 SQL에 직접 적어 버린 쪽이
+            // 무주공산이었다 - 통제군 한 편이 실제로 5번 적었다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("penalize a step that writes the isolation statement into its own SQL", prompt);
             Assert.Contains("not a quotation of the original", prompt);
         }
 

@@ -353,3 +353,85 @@ Job별로 **76%~100%**로 갈리고 `Proc19`가 76%로 가장 낮다.
 > ⚠️ **AGENTS.md가 크기 예산 상한에 9바이트 남았다**(34,991 / 35,000). 범주 7의 제약이
 > 다섯에서 여섯으로 늘었기 때문이다. 다음 회차가 AGENTS.md를 늘리려면 먼저 줄일 곳을
 > 찾아야 한다(`DocumentationBudgetTests`가 실패 메시지로 어디로 옮길지 안내한다).
+
+## 9. 4단계 1차 통제군과 회신 (2026-08-29)
+
+통제군에서 한 편을 돌렸다(`output.bak-stage4-control-20260828/Jobs/POQSettleBatch2`,
+17단계·4,368줄·255,609바이트). **판정 근거로는 쓸 수 없는 판이다** — 아래 9-2의 이유로
+규칙 효과와 모델 효과가 섞였다. 그래도 회귀 하나를 드러냈고, 그것이 이 절의 본론이다.
+
+### 9-1. 잰 것
+
+같은 축의 기준선 표본은 `POQSettleBatch1`이다(`2026-08-28-stage4-baseline.md` §1).
+
+| 지표 | 기준선 `Batch1` | 1차 통제군 | 읽기 |
+|---|---:|---:|---|
+| 신규 `CREATE PROCEDURE` | 9 (코퍼스 합계 112) | **0** | 규칙 3-1의 방향이지만 **귀속 불가**(9-2) |
+| `GOTO` | 1 | **21** | **회귀 — 이 절의 본론** |
+| `BEGIN TRAN` / `COMMIT TRAN` / `ROLLBACK TRAN` | 19 / — / — | 11 / 13 / 42 | 규칙 4·11과 Few-Shot이 먹인 철자 |
+| `sp_executesql` | — | 8 | 규칙 4(c)가 파라미터를 요구하는데도 남음 |
+| `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` | — | 5 | 규칙 4가 금한 「거는 자리 지정」 |
+| 코드펜스 | — | ```sql 49 · ```csharp 8 · ```pseudocode 2 | **여전히 T-SQL 문서** |
+
+`raw/prompt-context.md`(477KB, 실제 전송분)를 직접 세면 **`GOTO` 0건 · `SET TRANSACTION
+ISOLATION LEVEL SNAPSHOT` 0건 · `XACT_ABORT` 0건**이다. 그 셋은 프롬프트가 먹인 것이
+아니라 **모델이 스스로 되돌린 것**이다. 반면 `ROLLBACK TRAN`은 프롬프트에 100건, `BEGIN
+TRAN`은 24건 실려 있다(규칙 4·11 + Few-Shot + 레거시 원문 인용).
+
+### 9-2. 이 판을 판정에 쓸 수 없는 이유 — 모델이 함께 바뀌었다
+
+`docs/Thinking.md`가 기록한 이 판의 모델은 **`claude-cli` / `claude-sonnet-5`**다.
+기준선 20편은 `gpt-5.6-terra` 또는 `gpt-5.6-sol`이고, 예외는 `Proc4`(`claude-opus-5`)뿐이다.
+
+원인은 실행 스크립트에 있었다. `run-control.sh`는 출력 경로만 환경변수로 격리하고 모델은
+공유 설정(`src/ReSet.Cli/appsettings.local.json`)에서 물려받았는데, 그 파일은 다른 세션이
+명세서 재생성용으로 `claude-cli`로 바꿔 둔 상태였다.
+
+**방증**: 기준선에서 유일하게 Claude로 만든 `Proc4`는 **옛 규칙인데도 신규 SP가 0**이다
+(온전한 계획서가 아니어서 「지켜진 0」은 아니지만, Claude 계열이 원래 `CREATE PROCEDURE`를
+덜 쓴다는 가설을 배제할 수 없게 만든다). 그래서 112 → 0을 규칙 덕으로 돌릴 수 없다.
+
+조치: `run-control.sh`가 Actor·Critic·Consolidator 셋을 `codex-cli`/`gpt-5.6-terra`로
+못박는다. 기준선의 `Batch1`이 `codex-cli`(`gpt-5.6-terra`)였다. Critic·Consolidator가
+그때 무엇이었는지는 산출물에 남지 않아 복원할 수 없어, 셋을 한 모델로 묶어 모델 축을
+아예 상수로 만든다.
+
+### 9-3. 회귀 — `GOTO` 금지를 3단계가 지웠다
+
+§8-1의 표에서 규칙 6-1의 「`TRY...CATCH`·`GOTO` 조항 제거」가 그것이다. 근거는
+"C# 예외 처리로 자동 대체된다"였고, 같은 회차에 채점 기준의
+`..._ForbidsGotoErrorBranching`도 신규 SP 검사로 갈아 끼웠다. 그래서 **규칙에도 채점에도
+막는 조항이 하나도 남지 않았다.** 모델은 여전히 T-SQL 스크립트를 쓰고 있었으므로 전제가
+성립하지 않았고, `IF @@ERROR <> 0 GOTO ERR_HANDLER`가 21번 돌아왔다.
+
+복원 자리를 규칙 6-1이 아니라 **규칙 3-1**로 옮겼다. 이것은 오류 코드 충실도의 문제가
+아니라 **제어 흐름의 거처** 문제이고, 3-1이 이미 "트랜잭션과 오류 처리는 앱이 소유한다"를
+말하고 있다. 원본 인용은 예외로 남긴다 — 레거시 원문에 그 철자가 들어 있다.
+
+### 9-4. 이번 회차에 바꾼 것
+
+| 자리 | 무엇 |
+|---|---|
+| 규칙 3-1 | 제어 흐름 거처 조항 추가 — 보내는 문장이 자기 결과로 분기하지 않는다(`GOTO` 라벨·`IF @@ERROR <> 0`·`BEGIN TRY`/`END CATCH`), 원본 인용만 예외 |
+| 규칙 4 | `ROLLBACK TRAN`·`CATCH block`·`auto-committed CATCH` 철자 제거 (§8-3의 잔존) |
+| 규칙 11 | 같음 — 「단일 트랜잭션 롤백」으로 |
+| 채점 기준 4 | 위 셋을 짝으로 반영 + 제어 흐름 감점 신설 + 격리 문장을 단계 SQL에 직접 쓰면 감점 |
+| `run-control.sh` | 모델 셋 고정 (9-2) |
+| `AGENTS.md` 범주 7 | 6대 → **7대 제약**. 2번의 `ROLLBACK TRAN` 철자 제거, 7번(제어 흐름 거처) 신설 |
+
+가드: `ConsolidatedPlanRules_ForbidSqlSideControlFlow`,
+`Critic_ShouldPenalizeSqlSideControlFlow`,
+`Critic_ShouldPenalizeAHardCodedIsolationStatement`, 그리고
+`ConsolidatedPlanRules_DropTheTsqlSpellingFromTheRewrittenRules`의 목록 교체
+(`GOTO`를 빼고 `ROLLBACK TRAN`을 넣었다 — 전자는 이제 **금지 조항으로** 규칙에 있다).
+
+### 9-5. 여전히 남긴 것
+
+- **Few-Shot 예시는 이번에도 T-SQL 그대로다.** §8-3이 「원인 후보 1순위」로 지목한 자리고,
+  1차 통제군이 ```sql 49 대 ```csharp 8로 그 의심을 키웠다. 다만 규칙만으로 모양이
+  바뀌는지 **2차 통제군에서 먼저 보고** 판단한다 — 지금 함께 바꾸면 또 두 변인이 섞인다.
+- **`DataAccessPolicy`는 이 경로가 아니다.** §8-3이 「별개 판단」이라 적은 것을 이번에
+  확인했다: `InstructionBundleWriter`·`InstructionEntryPointComposer`(에이전트 번들)와
+  `ValidatorAiService`만 그것을 쓴다. 계획서 프롬프트로 새지 않으므로 손대지 않았다.
+- **L1 검사 셋의 침묵**(§8-4)은 아직 확인하지 못했다. 1차 통제군이 T-SQL 모양으로
+  남아 있어 침묵 여부를 가릴 표본이 되지 못한다.

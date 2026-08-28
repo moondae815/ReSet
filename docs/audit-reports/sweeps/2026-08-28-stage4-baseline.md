@@ -168,6 +168,9 @@
    않는다.** 규칙이 API를 정하지 않기로 했으므로 의도된 결과다(설계서 §1).
 3. **L1 검사 셋의 침묵은 통과가 아니다** — `CheckStepIdInitialValue`·
    `CheckCatchDiscardsReturnCode`·`CheckShadowBackupContract`(설계서 §8-4).
+4. **모델을 함께 바꾸면 이 표로 판정할 수 없다.** 기준선 20편은 `gpt-5.6-terra`/`gpt-5.6-sol`
+   이고 예외는 `Proc4`(`claude-opus-5`)뿐이다. 1차 통제군이 `claude-sonnet-5`로 돌아
+   신규 SP 0을 냈지만 귀속이 섞여 폐기했다 — 경위와 조치는 설계서 §9.
 
 ## 5. 재실행 레시피
 

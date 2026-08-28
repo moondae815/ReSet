@@ -682,6 +682,8 @@ END",
         // "NEVER use legacy `GOTO`-based error branching" 문구를 고정했다. 그 조항은
         // C# 예외 처리로 자동 대체되므로 규칙에서 뺐다(설계서 §2-2). 같은 자리에서
         // 이 축의 새 본체인 규칙 3-1(SQL 거처)을 지킨다.
+        // [2026-08-29 회신] `GOTO` 금지 자체는 규칙 3-1로 복원됐다. 그 문구를 고정하는
+        // 것은 AiServiceTests_Rich.ConsolidatedPlanRules_ForbidSqlSideControlFlow다.
         [Fact]
         public async Task GenerateConsolidatedBatchPlanAsync_Prompt_ForbidsNewStoredProcedures()
         {
