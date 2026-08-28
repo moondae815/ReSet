@@ -2589,6 +2589,70 @@
   그 객체를 재생성해 두 행을 없애야 검사를 켠 채로 초록이 된다. 캐시 17 승격 회차의 쓰기
   범위 밖이라 그 회차에서는 기록만 하고 닫지 않았다.
 
+  **(5-3-7) 검사 D 가 통째로 꺼졌다 — 강제 없는 재료에 기댄 검사 (2026-08-28).**
+  캐시 17 전건 재생성 후 **검사 D(`CheckSpecLocalVariablesDeclared`)의 발화가 18 → 0** 이 됐다.
+  좌표 차분으로는 안 보이는 자리였다 — 검사 B·C 의 46 좌표는 네 버킷이 전부 0 으로 깨끗했다
+  (`docs/audit-reports/sweeps/2026-08-28-step-sweep-post-cache17.md`).
+
+  **단계 SQL 이 바뀐 것이 아니다.** 단계 번들은 이 회차에 재생성되지 않았다(`output/Jobs` 최신
+  mtime 2026-08-24, 재생성 당일 변경 0 건). **검사가 재료를 잃었다.**
+
+  ```
+  명세서의 「지역 변수 표」 행 합계   옛(스냅샷) 16행 → 새 0행
+    UP_UTIL_SETTLE_EXCEPTION_PROC   4행 → 0    표가 통째로 사라짐
+    UP_UTIL_SETTLE_PROC_ETC        12행 → 0    표가 통째로 사라짐
+  ```
+
+  `CheckSpecLocalVariablesDeclared` 는 `facts.SelectMany(f => f.LocalVariables)` 를 쓰고
+  `if (variables.Count == 0) return;` 로 조기 반환한다. 표가 없어지자 검사가 조용히 꺼졌다.
+
+  **이 표는 아무도 강제하지 않는다.** `MachineConfirmedTables` 카탈로그에 **없고**, 존재를
+  요구하는 L1 검사가 **없고**, `AiService` 의 프롬프트가 요구하는 문구도 **없다.** 그런데 검사
+  D 는 이 표를 재료로 쓴다. 즉 **검사의 생사가 모델 재량에 달려 있다** — 옛 모델
+  (`gpt-5.6-terra`)은 썼고 새 모델(`deepseek-v4-pro-0813`)은 안 쓴다.
+
+  **잃은 18 건은 진짜 결함이다 (스냅샷으로 복원해 확인).**
+  `output.bak-cache17-20260827` 을 입력으로 스윕을 돌려 승격 전 상태를 재현했고
+  (`FormatVersion {16}` · D 18 · 미분류 1163), 검사 규칙을 그대로 재현해 **18/18 을 복원**했다.
+
+  ```
+  POQSettleBatch1/S14   9개 변수   출처: UP_UTIL_SETTLE_PROC_ETC 의 지역 변수 표
+  POQSettleProc14/S15   같은 9개
+  @v_intID · @v_strClientID · @v_strYMD · @v_strOutYMD · @v_intCLTotal
+  @v_intCLComm · @v_intCLVT · @v_intPostChkAmt1 · @v_intPostChkAmt2
+  ```
+
+  `S14` 에서 그 변수들은 `SELECT @v_intID = MAX(ID)` · `WHERE ID = @v_intID` ·
+  `CLSettleAmt = CLSettleAmt + @v_intCLTotal` 로 쓰이고 **`FETCH NEXT FROM PostCursor INTO`
+  의 대상**이다. 그 문서의 `DECLARE` 는 `@v_currentStepId`·`@v_intIssueType`·`@v_strComment`·
+  `@v_strHUserID`·커서 다섯뿐이고 **9 개 중 하나도 없다.** `S15` 도 같다(`DECLARE` 는
+  `@v_currentStepId`·`@v_shadowTable` 둘뿐).
+
+  **펜스 맹점이 아니다.** 「리더가 ```sql 펜스만 읽는다」는 알려진 결함을 의심해 **문서 전체를
+  펜스 종류 무관·산문 포함으로 뒤졌으나 그 변수들의 `DECLARE` 가 0 건**이다. `S14` 는 sql 펜스가
+  1 개뿐이라 갈릴 여지도 없다.
+
+  **선언 없는 변수에 `FETCH INTO` 하는 것은 T-SQL 컴파일 오류다.** 지시서대로 쓰면 실행되지
+  않는다. 결함 모양은 1 개이고 Job 판 2 개에 걸쳐 발화 18 건(9 변수 × 2 단계)이 된다 —
+  `output/Jobs` 20 편이 같은 원본 SP 의 반복 생성 판이기 때문이다.
+
+  **원인은 캐시 17 이 아니라 모델 교체다.** 같은 회차에 Actor/Critic 이 바뀌었다
+  (`gpt-5.6-terra`/`claude-opus-5` → `deepseek-v4-pro-0813`/`glm-5.2`). 둘은 갈린다 —
+  **기계 확정 표**(추출기가 렌더하고 L1 이 등호로 강제)는 프로시저에서 **차이 0** 으로 실측됐고
+  그래서 검사 B·C 가 깨끗했다. 바뀐 것은 **재량 절**이다: 새 세대가 「오류 코드」를 12 객체에
+  새로 싣고(의도한 변화) 「원본 주석 기록」 3 · 「지역 변수 및 시스템 값」 1 · 「내부 변수와 컬럼
+  관계」 1 · 「제약 및 일관성 고려사항」 1 · 「출력값 규약」 1 등을 잃었다. 미분류 1163 → 1095
+  (−68)도 같은 원인으로 본다.
+
+  **닫는 방향.** 「지역 변수 표」를 **강제 대상으로 올린다** — 프롬프트가 요구하고 L1 이 존재를
+  검사하게 한다. 근거는 갖춰졌다: 표가 없으면 **컴파일 불가 결함이 통째로 안 잡히고**, 표의
+  존재는 순전히 모델 재량이며, 실제로 모델을 바꾸자마자 사라졌다. 캐시 17 승격 회차의 쓰기
+  범위 밖이라 그 회차에서는 기록만 하고 닫지 않았다.
+
+  **같은 형태를 다른 검사에서도 찾아야 한다.** 검사 D 는 「재량 절을 재료로 쓰는 검사」의 한
+  사례일 뿐이다. 어느 검사가 어느 절에 기대는지, 그 절이 강제 대상인지를 전수로 훑는 것이
+  다음 작업이다.
+
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
   출처는 `CheckBatchControlVocabulary` 36% · `CheckCatchDiscardsReturnCode`
