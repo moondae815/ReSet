@@ -91,9 +91,15 @@ namespace ReSet.Core.Tests
         //
         // glm-5.3-flash에 streamlake가 없는 것은 빠뜨린 게 아니다 - 그 백엔드는
         // 이 모델을 서빙하지 않는다. 목록이 모델마다 갈리는 이유가 이것이다.
+        //
+        // glm-5.3의 목록이 한 줄인 것도 빠뜨린 게 아니다 - 이 모델을 서빙하는 곳이
+        // Z.AI 본사 하나뿐이라 2순위로 적을 대상이 없다. 그래도 항목이 있어야 하는
+        // 것은, 없으면 Default(streamlake·novita)로 도는데 그 둘이 서빙하지 않아
+        // AllowFallbacks=false와 맞물려 404로 즉시 죽기 때문이다.
         public static readonly (string Model, string[] Order)[] PinnedBackendsPerModel =
         {
             ("z-ai/glm-5.2", new[] { "sail-research", "novita" }),
+            ("z-ai/glm-5.3", new[] { "z-ai" }),
             ("deepseek/deepseek-v4-pro-0813", new[] { "gmicloud", "deepseek" }),
             ("z-ai/glm-5.3-flash", new[] { "novita", "z-ai" }),
             ("deepseek/deepseek-v4-flash-0731", new[] { "streamlake", "deepinfra" })
