@@ -262,16 +262,28 @@ ReSet/
         // 않으면 1회차에 캐시를 쓴 백엔드와 2회차가 가는 백엔드가 달라 읽지 못합니다
         // (실측 z-ai/glm-5.2, 접두사 10,220토큰: 미고정 적중 0에 $0.00776,
         //  고정 시 적중 10,112에 $0.00171 — 76% 절감). 단가와 양자화(fp8/fp4)도 갈립니다.
-        // [주의] 아래 값은 z-ai/glm-5.2 + deepseek/deepseek-v4-pro-0813 조합에 맞춰
-        // 고른 것입니다. Routing은 provider 단위라 Actor/Critic/Consolidator가 이 목록
-        // 하나를 공유하므로, 모델을 바꾸면 두 모델을 모두 서빙하는 백엔드로 다시
-        // 골라야 합니다. 그러지 않으면 404 "No endpoints found"로 즉시 실패합니다.
-        // 후보 조회: curl -H "Authorization: Bearer $KEY" \
-        //             https://openrouter.ai/api/v1/models/<author>/<slug>/endpoints
-        "Routing": {               // [선택] 백엔드 제공자 라우팅 선호. 구획을 지우면 OpenRouter 기본 라우팅
-          "Order": [ "digitalocean", "streamlake" ], // 시도할 제공자 순서. 캐시 읽기 단가가 낮은 순
-          "AllowFallbacks": false, // 목록 밖으로 넘어가지 않습니다(true면 fp4 백엔드로 샐 수 있음)
-          "RequireParameters": null // 요청 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부
+        // [주의] Routing은 provider 단위 구획이라 Actor/Critic/Consolidator가 이 구획
+        // 하나를 공유합니다. 그런데 어느 백엔드가 그 모델을 서빙하는지도 캐시 읽기
+        // 단가도 모델마다 달라, ByModel이 모델 ID마다 목록을 가릅니다. 조회 순서는
+        // ByModel:<모델ID>(대소문자 무시) → Default이고, ByModel 항목은 Default를 항목
+        // 단위로 덮습니다(Order만 적으면 AllowFallbacks는 Default 것이 그대로 남습니다).
+        // ModelName을 ByModel에 없는 모델로 바꾸면 Default로 도는데, Default의 백엔드가
+        // 그 모델을 서빙하지 않으면 404 "No endpoints found"로 즉시 실패합니다.
+        // 후보와 단가 조회(인증 불필요):
+        //   curl https://openrouter.ai/api/v1/models/<author>/<slug>/endpoints
+        "Routing": {                 // [선택] 백엔드 라우팅 선호. 구획을 지우면 OpenRouter 기본 라우팅
+          "Default": {               // ByModel에 항목이 없는 모델이 쓰는 공용 목록
+            "Order": [ "streamlake", "novita" ],
+            "AllowFallbacks": false, // 목록 밖으로 넘어가지 않습니다(true면 fp4 백엔드로 샐 수 있음)
+            "RequireParameters": null // 요청 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부
+          },
+          "ByModel": {               // 모델 ID별 목록. Order만 적어 위 두 플래그는 물려받습니다
+            "z-ai/glm-5.2": { "Order": [ "sail-research", "novita" ] },
+            "z-ai/glm-5.3": { "Order": [ "z-ai" ] },  // 서빙하는 곳이 본사 하나뿐입니다
+            "deepseek/deepseek-v4-pro-0813": { "Order": [ "gmicloud", "deepseek" ] },
+            "z-ai/glm-5.3-flash": { "Order": [ "novita", "z-ai" ] },
+            "deepseek/deepseek-v4-flash-0731": { "Order": [ "streamlake", "deepinfra" ] }
+          }
         }
       },
       // CLI 제공자는 ApiKey 없이 Command만 씁니다. 모델은 여기가 아니라 AiSettings:ModelName
@@ -641,4 +653,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: 339e430 -->
+<!-- synced-through: f363228 -->
