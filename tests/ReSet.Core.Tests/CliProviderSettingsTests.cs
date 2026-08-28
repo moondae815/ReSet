@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 
@@ -123,6 +125,40 @@ namespace ReSet.Core.Tests
                 Assert.False(routing!.AllowFallbacks, $"{model}의 AllowFallbacks가 닫혀 있지 않습니다");
                 Assert.Null(routing.RequireParameters);
             }
+        }
+
+        // 위 두 검사는 표에 적힌 모델을 설정에서 찾는 한 방향이다. 그래서 설정에만
+        // ByModel 항목을 더하면 어느 검사에도 걸리지 않고 그대로 지나간다 - 근거를
+        // 남기지 않고 고른 백엔드가 조용히 실행에 실린다는 뜻이고, 그 항목은 순서도
+        // AllowFallbacks 상속도 검사받지 않는다. 반대 방향을 여기서 막는다.
+        //
+        // 두 설정 파일이 서로 어긋나는 것도 이 검사와 위 표 검사가 함께 막는다 -
+        // 양쪽 모두 같은 표의 부분집합이면서 상위집합이어야 하므로 집합이 같아진다.
+        [Theory]
+        [InlineData("src/ReSet.Cli/appsettings.json")]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
+        public void AppSettings_PerModelRouting_DeclaresNothingBeyondPinnedTable(string relativePath)
+        {
+            var byModel = Load(relativePath)
+                .GetSection("AiSettings:Providers:OpenRouter:Routing:ByModel");
+
+            Assert.True(byModel.Exists(), $"{relativePath}에 ByModel 구획이 없습니다");
+
+            // 조회가 대소문자를 무시하므로 대조도 무시한다 - 그러지 않으면 표기만
+            // 다른 같은 모델이 "표에 없는 항목"으로 잘못 잡힌다.
+            var pinned = new HashSet<string>(
+                PinnedBackendsPerModel.Select(entry => entry.Model),
+                StringComparer.OrdinalIgnoreCase);
+
+            var unpinned = byModel.GetChildren()
+                .Select(child => child.Key)
+                .Where(key => !pinned.Contains(key))
+                .ToArray();
+
+            Assert.True(
+                unpinned.Length == 0,
+                $"{relativePath}에 표에 없는 ByModel 항목이 있습니다: {string.Join(", ", unpinned)} - " +
+                "PinnedBackendsPerModel에 실측 근거와 함께 행을 더하십시오");
         }
 
         // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
