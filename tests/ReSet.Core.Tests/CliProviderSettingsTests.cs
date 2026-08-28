@@ -68,6 +68,8 @@ namespace ReSet.Core.Tests
         // 때문이다. 공유 목록이던 시절 실제로 난 사고: glm 캐시읽기 최저가인
         // sail-research는 deepseek를 서빙하지 않아, 그 이름을 1순위로 올리면
         // AllowFallbacks=false와 맞물려 Critic이 404 "No endpoints found"로 죽었다.
+        // 아래 표에서 그 이름이 glm의 1순위로 올라가 있는 것이 ByModel이 이 충돌을
+        // 없앴다는 증거다 - 이 항목은 glm 호출에만 적용되어 Critic에 닿지 않는다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
@@ -91,8 +93,8 @@ namespace ReSet.Core.Tests
         // 이 모델을 서빙하지 않는다. 목록이 모델마다 갈리는 이유가 이것이다.
         public static readonly (string Model, string[] Order)[] PinnedBackendsPerModel =
         {
-            ("z-ai/glm-5.2", new[] { "streamlake", "novita" }),
-            ("deepseek/deepseek-v4-pro-0813", new[] { "streamlake", "deepseek" }),
+            ("z-ai/glm-5.2", new[] { "sail-research", "novita" }),
+            ("deepseek/deepseek-v4-pro-0813", new[] { "gmicloud", "deepseek" }),
             ("z-ai/glm-5.3-flash", new[] { "novita", "z-ai" }),
             ("deepseek/deepseek-v4-flash-0731", new[] { "streamlake", "deepinfra" })
         };
@@ -181,7 +183,7 @@ namespace ReSet.Core.Tests
                 configuration, "OpenRouter", "deepseek/deepseek-v4-pro-0813");
 
             Assert.NotNull(routing);
-            Assert.Equal(new[] { "streamlake", "deepseek" }, routing!.Order);
+            Assert.Equal(new[] { "gmicloud", "deepseek" }, routing!.Order);
             Assert.False(routing.AllowFallbacks);
         }
 
