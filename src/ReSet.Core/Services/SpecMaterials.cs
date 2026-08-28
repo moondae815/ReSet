@@ -18,12 +18,11 @@ namespace ReSet.Core.Services
     /// 원본 DDL에서 같은 사실을 뽑는 자리의 이름. null이면 「잴 수 없음」이다 -
     /// 빈 문자열이나 0으로 두지 마십시오. 빈칸은 0으로 읽히고 0은 정상으로 읽힙니다.
     /// </param>
-    /// <param name="ConsumingChecks">이 재료가 0이면 죽는 MechanicalValidator의 검사 이름들.
-    /// 여기 실리는 이름은 SpecMaterialsTests.EveryNamedCheck_ExistsOnMechanicalValidator가
-    /// <c>GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)</c>로
-    /// 대조하므로, <b>public</b> 메서드(예: FindMissingErrorCodes·ValidateSplitProcedureObligations)는
-    /// 실제 소비자여도 여기 적을 수 없다 - 그 이름을 적으면 이 잠금 테스트가 거짓으로
-    /// 시끄럽게 죽는다. 그런 public 소비자가 있으면 이 파일의 재료별 주석에 따로 적는다.</param>
+    /// <param name="ConsumingChecks">이 재료가 0이면 죽는 MechanicalValidator의 검사 이름
+    /// <b>전부</b> - 접근 한정자와 무관하다. 한 재료를 여러 검사가 쓰면(1차 소비자와
+    /// 그 소비자가 위임하는 도우미 등) 전부 싣는다. 여기 실리는 이름은
+    /// SpecMaterialsTests.EveryNamedCheck_ExistsOnMechanicalValidator가 존재를 대조한다
+    /// (그 테스트의 리플렉션 조회가 왜 public도 찾는지는 그 테스트의 문서 참고).</param>
     public sealed record SpecMaterial(
         string Name,
         string ReaderTypeName,
@@ -87,17 +86,24 @@ namespace ReSet.Core.Services
     ///     DdlCounterpart는 null로 둔다 - DDL 추출기가 없어서가 아니라(SqlStaticParser가
     ///     바로 그것이다) "DDL 사실 수 대 명세서 행 수"라는 소실 개념 자체가 이 재료에는
     ///     성립하지 않기 때문이다(Task 2가 이 재료를 census에 넣으려면 이 사실을 먼저
-    ///     반영해야 한다). 소비자는 IsTableOwedOnlyBySplitProcedures(private static bool) -
-    ///     다만 그 소비 형태도 다른 재료와 다르다: 이 재료가 비면 검사가 조용히 꺼지는
-    ///     것이 아니라 분할-SP 면제가 사라져 검사가 오히려 더 엄격해진다(과탐 위험).
-    ///     ValidateSplitProcedureObligations(public)도 같은 재료를 쓰지만 public이라
-    ///     여기 이름을 못 싣는다(위 ConsumingChecks 문서 참고).
+    ///     반영해야 한다). 소비자는 둘이다 - IsTableOwedOnlyBySplitProcedures(private
+    ///     static bool, ValidateBatchStep의 인라인 TargetTables 대조 루프가 쓰는
+    ///     분할-SP 면제 도우미)와 ValidateSplitProcedureObligations(public,
+    ///     MechanicalValidator.cs:570 - tablesByProcedure를 도우미 없이 직접 읽어
+    ///     분할된 SP의 쓰기 대상 테이블이 합본 단계 본문에 있는지를 그 자리에서
+    ///     판정하는 1차 소비자). 소비 형태도 서로 다르다: 전자가 비면 검사가 조용히
+    ///     꺼지는 것이 아니라 분할-SP 면제가 사라져 검사가 오히려 더 엄격해지고
+    ///     (과탐 위험), 후자가 비면 그 문서 단위 대조 자체가 통째로 안 돈다.
     ///   - SpecReturnCodes: 강제 아님, 헤딩 없음(SpecReturnCodeExtractor.cs:29
     ///     ReturnAssignmentRegex가 "@po_intRetVal = N"을 문서 전체에서 찾는다).
     ///     DDL 대응물은 DmlScopeExtractor - ExtractErrorCodes(767행)가 같은 변수
     ///     "@po_intRetVal"의 대입을 DDL AST에서 뽑는다(ErrorCodeFact.Variable, 180행).
-    ///     소비 검사는 IsOwedOnlyBySplitProcedures(private static bool) - 같은 이유로
-    ///     FindMissingErrorCodes(public static)는 실제 소비자이지만 여기 못 싣는다.
+    ///     소비자는 셋이다 - IsOwedOnlyBySplitProcedures(private static bool, 위와 같은
+    ///     역할의 도우미), FindMissingErrorCodes(public static, MechanicalValidator.cs:2082 -
+    ///     목차를 전혀 안 쓰고 "이 코드가 문서 어디에도 없는가"를 직접 대조하는 1차
+    ///     소비자), ValidateSplitProcedureObligations(public, 570행 - codesByProcedure도
+    ///     도우미 없이 직접 읽어 분할된 SP의 코드가 합본 단계 본문에 있는지 판정하는
+    ///     1차 소비자. StepTableSets와 같은 메서드를 공유한다).
     /// </summary>
     public static class SpecMaterials
     {
@@ -189,25 +195,54 @@ namespace ReSet.Core.Services
             // DdlCounterpart가 null인 이유는 DDL 추출기가 없어서가 아니라(SqlStaticParser가
             // 바로 그것이다) "DDL 사실 수 대 명세서 행 수" 소실 개념 자체가 이 재료에는
             // 성립하지 않기 때문이다.
+            //
+            // [소비자 둘 - 1차 소비자와 그 도우미] ValidateSplitProcedureObligations
+            // (public, MechanicalValidator.cs:570)가 tablesByProcedure를 직접 읽는
+            // 1차 소비자다 - 분할된 SP의 쓰기 대상 테이블이 그 SP를 나눠 맡은 단계들의
+            // 합본 본문에 있는지를 도우미 없이 그 자리에서 판정한다.
+            // IsTableOwedOnlyBySplitProcedures(private static bool)는 그 도우미로,
+            // ValidateBatchStep의 인라인 TargetTables 대조 루프에서 분할-SP 면제 여부만
+            // 판정한다 - 이 재료가 비면 그 도우미는 조용히 죽는 게 아니라 면제를 못
+            // 내려 검사가 오히려 더 엄격해진다(과탐 위험). 둘은 서로 다른 실패 양식이라
+            // 함께 싣는다.
             new SpecMaterial(
                 "StepTableSets",
                 nameof(SpecTargetTableExtractor),
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: null,
-                ConsumingChecks: new[] { "IsTableOwedOnlyBySplitProcedures" }),
+                ConsumingChecks: new[]
+                {
+                    "ValidateSplitProcedureObligations",
+                    "IsTableOwedOnlyBySplitProcedures",
+                }),
             // [강제 아님·헤딩 없음] ReturnAssignmentRegex(29행)는 "@po_intRetVal = N"을
             // 문서 전체에서 찾는다 - 헤딩에 매이지 않는다.
             //
             // [DDL 대응물] DmlScopeExtractor.ExtractErrorCodes(767행)가 같은 변수
             // "@po_intRetVal"의 대입을 DDL AST에서 뽑는다(ErrorCodeFact.Variable, 180행).
+            //
+            // [소비자 셋 - 두 1차 소비자와 그 도우미] FindMissingErrorCodes(public static,
+            // MechanicalValidator.cs:2082)는 codesByProcedure를 직접 읽는 1차 소비자다 -
+            // 목차를 전혀 안 쓰고 "이 코드가 문서 어디에도 없는가"를 도우미 없이
+            // 대조한다. ValidateSplitProcedureObligations(public, 570행)도 같은 재료를
+            // 직접 읽는 또 다른 1차 소비자다 - 분할된 SP의 코드가 합본 단계 본문에
+            // 있는지 판정한다(StepTableSets와 메서드를 공유한다).
+            // IsOwedOnlyBySplitProcedures(private static bool)는 세 번째로, 단계별
+            // 하한 검사의 분할-SP 면제만 판정하는 도우미다 - 이 재료가 비면 그 도우미는
+            // 조용히 죽는 게 아니라 면제를 못 내려 검사가 오히려 더 엄격해진다.
             new SpecMaterial(
                 "SpecReturnCodes",
                 nameof(SpecReturnCodeExtractor),
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: nameof(DmlScopeExtractor),
-                ConsumingChecks: new[] { "IsOwedOnlyBySplitProcedures" }),
+                ConsumingChecks: new[]
+                {
+                    "FindMissingErrorCodes",
+                    "ValidateSplitProcedureObligations",
+                    "IsOwedOnlyBySplitProcedures",
+                }),
         };
     }
 }
