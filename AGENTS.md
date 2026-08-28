@@ -60,10 +60,10 @@
 3.  **AI API 응답 널 가드(TryGetProperty) 및 모델 파라미터 매핑을 준수하십시오.**
     *   AI 클라이언트의 JSON 응답은 `TryGetProperty`로 검사하고 필수 필드·오류 응답 누락 시 거절 사유를 담은 `InvalidOperationException`을 던지십시오(`ChatAsync_WithErrorResponse_ShouldThrowInvalidOperationException`, `ChatAsync_WithMissingCandidates_ShouldThrowInvalidOperationException`).
     *   AI 리뷰 호출은 `AiCallRetry`로 감싸고, 클라이언트는 HTTP 상태 코드와 CLI 실패 유형을 예외에 보존하십시오(`AiRetryPolicyTests`). 재시도를 소진한 실패는 `OperationCanceledException`을 상속하지 않는 `AiCallFailedException`으로 올려야 타임아웃이 사용자 취소로 둔갑하지 않습니다.
-    *   모델별 전송 규격과 캐시 중단점은 기존 배선을 유지하십시오. o1/o3은 `reasoning_effort`, gpt-5 Responses는 `prompt_cache_breakpoint`, Claude는 system `cache_control`과 재생성 user 중단점을 사용합니다(`architecture.md §4.5`, `§4.13`).
+    *   모델별 전송 규격과 캐시 중단점은 기존 배선을 유지하십시오(`architecture.md §4.5`, `§4.13`).
     *   gpt-5 Responses의 비어 있지 않은 모든 `summary_text`를 누적하고 뒤의 빈 summary가 앞선 추론을 지우지 않게 하십시오(`ChatAsync_WithGpt5MixedReasoningSummaries_ShouldPreserveNonEmptyReasoningText`).
-    *   Ollama effort별 temperature는 low/medium/high/max = 0.1/0.4/0.7/0.9이며, `gemma4`·`qwen3.6`은 effort 매핑을 무시하고 하드코딩된 모델별 설정을 우선합니다. 로컬 모델에는 `repeat_penalty`·`repetition_penalty`·`frequency_penalty`를 주입하십시오(`ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`).
-    *   Gemma 4에만 `<|think|>`를 시스템 프롬프트 선두에 넣고 다른 모델은 텍스트 지시만 사용하십시오. `</think>`와 `<|end of thought|>`를 모두 파싱해 추론이 명세서에 새지 않게 하십시오.
+    *   Ollama effort별 temperature와 로컬 모델 페널티 주입은 기존 매핑을 유지하십시오(`ChatAsync_ShouldDiversifyTemperatureBasedOnEffort`, `architecture.md §4.5`).
+    *   Gemma 4에만 `<|think|>`를 시스템 프롬프트 선두에 넣고, `</think>`와 `<|end of thought|>`를 모두 파싱해 추론이 명세서에 새지 않게 하십시오(`architecture.md §4.5`).
     *   `ollama-cloud`는 `OllamaClient(isCloud: true)`를 공유하되 `ProviderName`을 `Ollama Cloud`로 두고 `IsLocalProvider`에서 제외하며, 키는 요청마다 붙이십시오(`OllamaCloudClientTests`).
     *   OpenRouter는 전용 `OpenRouterClient`를 쓰고(`OpenAiClient`는 모델 ID의 `gpt-5`를 Responses API로 오분기) 로컬·CLI 분류에서 제외하며, 캐시 중단점은 가변 접미사가 있을 때만 블록으로 갈라 찍으십시오(`OpenRouterClientTests`, `IsLocalProvider_WithOpenRouter_ReturnsFalse`).
     *   AI 본문의 대화형 인사·요약과 응답 전체의 코드 블록 래핑을 금지하는 프롬프트를 유지하십시오. Mermaid 블록만 예외입니다.
@@ -81,18 +81,18 @@
 ### ⚙️ 범주 4. 검증 오케스트레이션 및 파이프라인 흐름 (Verification Workflow)
 6.  **3단계 검증 파이프라인의 역할 분리 및 L2 Actor-Critic을 운용하십시오.**
     *   L1 [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs)는 필수 섹션, Anti-Shortcut Fast-Fail, Mermaid 린팅을 담당합니다. `CleanseMermaidCode`를 린팅 전에 적용하고 `CleansedMarkdown`은 성공 여부와 무관하게 최종 원문에 반영하십시오(`architecture.md §4.4.1`).
-    *   하한 검사용 `ErrorCodes`는 도구가 명세서에서 채우며 빈 배열은 검증 불가입니다. 원본 SP가 없는 단계만 예외입니다. `TargetTables`는 `SpecTargetTableExtractor`의 쓰기 집합으로 교체하고 버린 선언은 경고로 남기며, DDL 범위용 `SchemaTables`와 합치지 마십시오(`MechanicalValidatorTests`, `SpecTargetTableExtractorTests`).
+    *   하한 검사용 `ErrorCodes`의 빈 배열은 검증 불가이며(원본 SP 없는 단계만 예외), `TargetTables`는 `SpecTargetTableExtractor`의 쓰기 집합으로 채우고 `SchemaTables`와 합치지 마십시오(`MechanicalValidatorTests`, `SpecTargetTableExtractorTests`, `architecture.md §4.12`).
     *   스키마 주장은 DB 전체가 아니라 프롬프트에 실린 컬럼과 대조하십시오(`SchemaPromptColumnSelectorTests`, `SchemaClaimGateRegressionTests`). Mermaid의 `@@ERROR`는 허용합니다.
-    *   L2 [AiService.cs](./src/ReSet.Core/Services/AiService.cs)는 `MaxL2Attempts` 안에서 보완하고 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드를 누적하십시오. `ActorEffort: "dynamic"`의 차등 Effort 병렬 생성·Fast-Pass·Consolidator와 로컬 분할 흐름은 `architecture.md §4.4.2`를 따릅니다.
+    *   L2 [AiService.cs](./src/ReSet.Core/Services/AiService.cs)는 `MaxL2Attempts` 안에서 보완하고 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드를 누적하십시오(`architecture.md §4.4.2`).
     *   로컬 분기는 `AiClientFactory.IsLocalProvider()`만 사용하십시오. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
     *   품질 임계치는 감쇄하지 마십시오. 최종 점수 미달 문서도 `[!CAUTION]` 배너와 점수·피드백을 붙여 보존하십시오. 종료 상태는 [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs)의 네 값만 사용합니다(`architecture.md §4.4.4`).
-    *   L3 [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)는 미리보기·DB 역동기화를 제어하며 배치 모드만 자동 승인합니다. Core는 UI에 의존하지 않고, `ConsoleProgressScope`는 `ConcurrentDictionary`·`TaskCompletionSource`로 백그라운드 갱신하십시오.
+    *   L3 [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)만 미리보기·DB 역동기화를 제어하고 배치 모드만 자동 승인하십시오. Core는 UI에 의존하지 않습니다(`architecture.md §4.4`).
     *   신규 공급자는 [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 구현해 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
     *   `claude-cli`·`codex-cli`·`agy-cli`는 `Command`만 사용하고 실패를 [CliFailureClassifier.cs](./src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)로 보고하며 자동 폴백하지 마십시오. 응답 봉투의 토큰을 기록하되 미보고 항목을 0으로 채우지 마십시오([CliUsage.cs](./src/ReSet.Core/Services/Clients/Cli/CliUsage.cs)).
     *   Actor·Critic·Consolidator 중 하나라도 CLI provider면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 차단합니다. `AiSettings:AllowCliProviderInBatch` 옵트인은 claude/codex만 열며 `agy-cli`는 항상 차단합니다(`CliProviderBatchGuardTests`).
     *   파서·검증기가 강제하는 상한·형식과 필수 필드(`ErrorCodes`, `MaxSteps` 상한 40, `LegacyProcedures` 등)는 프롬프트에도 명시하십시오. JSON 예시에만 등장하는 필드는 선택 사항으로 오해됩니다.
     *   Critic 프롬프트에도 분석과 같은 테이블 스키마·UDF DDL·AST 메타데이터와 대상 SP DDL을 포함하십시오([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs)).
-    *   Critic 프롬프트의 기계 확정 표 면제 블록은 [MachineConfirmedTables.cs](./src/ReSet.Core/Services/MachineConfirmedTables.cs)에서 조립해 SP·함수 두 갈래에 싣습니다. DDL 축자 전사 표만 원문 대조 대상이고 「실행 의미」 행은 보고에서 제외하며, 표를 뒤집는 산문은 결함입니다. 새 표는 카탈로그 등록이 강제됩니다(`MachineConfirmedTablesTests`). 등록했으면 `CurrentCacheFormatVersion`도 올리십시오 — 빠뜨리면 재생성이 캐시 적중으로 건너뜁니다(`architecture.md §4.8`).
+    *   Critic 프롬프트의 기계 확정 표 면제 블록은 [MachineConfirmedTables.cs](./src/ReSet.Core/Services/MachineConfirmedTables.cs)에서만 조립하고, 새 표는 카탈로그에 등록한 뒤 `CurrentCacheFormatVersion`도 함께 올리십시오(`MachineConfirmedTablesTests`, `architecture.md §4.8`, `§4.9`).
     *   캐시 버전 인상을 미룰 때는 선결 조건과 근거를 `architecture.md §4.8`에 남기십시오. 안 남기면 다음 세션이 그것을 미등록 결함으로 오판해 인상하고, 전건 재생성이 오탐을 안은 채 걸립니다.
     *   `AnalysisSettings:AnalyzeReferencedCodeObjects` 사용 시 SP/UDF마다 동일 L1/L2/L3와 캐시를 적용하되 외부 DB 테이블·뷰 상세와 링크드 서버는 제외하십시오(`architecture.md §4.1.1`).
     *   시스템 프롬프트는 영어를 원칙으로 하고 최종 출력·체크리스트 동작 지시에만 한국어 출력 조건과 영어 매칭 트리거를 사용하십시오. 메타데이터 밖 컬럼, DDL 밖 오류 상수, UNION/JOIN·오류 분기 축약을 금지하는 Anti-Shortcut 규칙을 유지하십시오.
@@ -125,15 +125,14 @@
     *   C# 보간 프롬프트의 `{}`는 `{{}}`로 이스케이프하십시오. 정산 정책서는 DDL 분기와 데이터 프로파일링을 결합해 지정된 5개 헤더를 따릅니다.
     *   CRUD·컬럼 매핑은 `외 다수`·`등`으로 줄이지 말고 물리 컬럼과 원천값을 1:1로 모두 적으십시오. UPDATE 매핑은 `SqlStaticParser.AstUpdateMappings`가 채우며 AI fill-in 방식으로 되돌리지 마십시오(`MechanicalValidatorTests.Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt`).
     *   파라미터·컬럼 제약은 DDL의 타입·기본값만 근거로 쓰고 임의의 `NOT NULL`을 만들지 마십시오. 스키마 덤프는 `SchemaPromptColumnSelector`가 고른 참조·키·인덱스 컬럼으로 제한하십시오(`SchemaPromptColumnSelectorTests`).
-    *   L1은 기계 확정 표의 셀 수, `### INSERT 대상 테이블:` 절 스코프 안 매핑 표 테이블명 표기(Ordinal), 같은 줄 앵커가 있는 널 허용 주장, 파라미터 표의 `@이름` 행과 `ProcedureParameters`의 1:1, 파라미터 표의 연결 컬럼 `테이블.컬럼`이 DDL에서 그 변수와 결합되는지(함수 인자 동반은 연결 아님)를 함께 봅니다. 프롬프트 스키마 표의 컬럼 필터는 INSERT·UPDATE 대상 컬럼도 입력원으로 삼고, `DB 배치` 문장은 소속 DB 안/밖을 가릅니다(`architecture.md §4.9`).
-    *   「집합 술어」 표의 행 단위는 최상위 `AND` 항이고, 마지막 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 — 요약·번역·생략하지 마십시오(`architecture.md §4.12`). 문장 칸이 `SELECT n`인 행의 술어는 쓰는 대상 행이 아니라 **읽는 행**을 가르니 그렇게 서술하십시오.
-    *   「집합 술어」 표의 범위 칸에는 `최상위`·`파생 테이블 X` 외에 `조인 ON T`(그 테이블을 들여오는 JOIN의 ON 절 항, 조인 키 등식은 제외)가 있습니다 — WHERE 항과 같은 필터로 서술하되, `LEFT OUTER 조인 ON T`처럼 외부 조인이면 대상 행을 좁히는 필터가 아니라 **짝이 되는 조건**으로 서술하십시오(캐시 버전 14).
-    *   「잠금 힌트」 표의 문장 칸은 `SELECT n`·`IF n`도 담고 범위 칸에 `하위 질의`가 있습니다 — 그 값은 술어 안에 한정되지 않고, SELECT 목록·`SET` 절처럼 그 문장 안에서 다시 열린 질의가 훑는 자리를 모두 가리킵니다. 「DML 범위」·「집합 술어」 표는 `SELECT n`까지만 담고 `IF n` 행이 없으며, 「DML 범위」에는 범위 칸 자체가 없습니다(`architecture.md §4.12`).
-    *   「참조 함수」 표에는 문장 칸이 없습니다 — 넓어진 문장 집합(DML 셋 + 독립 SELECT + `IF` 술어)은 「호출 위치」 칸의 `SELECT n (라인 L)`·`IF n (라인 L)`으로 나타납니다(`architecture.md §4.12`).
-    *   「잠금 힌트」와 「참조 함수」의 `IF n`을 가로질러 대조하지 마십시오(「참조 함수」 표에 `IF n` 행이 있으면 프롬프트 도입문이 같은 경고를 싣습니다) — 채번 조건이 달라(앞은 술어에 하위 질의가 있을 때, 뒤는 술어에 알려진 함수 호출이 있을 때) 같은 `IF 1`이 다른 문장일 수 있습니다. `SELECT n`과 DML 번호만 네 표에서 맞물립니다(`DmlScopeExtractor.LockHintVisitor.ExplicitVisit(IfStatement)` 문서).
-    *   프롬프트에 `[MACHINE NOTICE]`(네 표가 담지 않는 문장 — 지금은 MERGE)가 실리면 그 문장은 산문으로 서술하되 기계 확정이 아님을 밝히고, 네 표에 행을 만들지 마십시오(`DmlScopeExtractor.ExtractUncoveredStatements`). 표에 그 문장이 없는 것은 누락이 아닙니다.
-    *   「실행 의미」 표의 종류는 일곱입니다 — DB 배치·집계 대입·`@@ROWCOUNT`·커서 수명·식 타입 경로·비집계 대입·루프 내 재설정. 종류를 더할 때는 `ExecutionSemanticsFacts.AllKinds`에 함께 등재하십시오. L1은 종류를 목록과 대조하지 않으므로, 빠뜨리면 잃는 것은 행 대조가 아니라 Critic 면제입니다(`MachineConfirmedTablesTests`).
-    *   표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오. 표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽으십시오(`architecture.md §4.12`).
+    *   L1이 함께 보는 것과 프롬프트 스키마 표·`DB 배치`의 입력원은 기존 배선을 유지하십시오(`architecture.md §4.9`, `§4.12`).
+    *   「집합 술어」 표는 최상위 `AND` 항 단위이고 「술어 원문」 칸은 DDL 원문 그대로여야 합니다 — 요약·번역·생략하지 마십시오(`architecture.md §4.12`).
+    *   「집합 술어」 범위 칸의 `조인 ON T`는 WHERE 항과 같은 필터로, 외부 조인이면 짝이 되는 조건으로 서술하십시오(`architecture.md §4.12`).
+    *   「참조 함수」 표에는 문장 칸이 없고 「호출 위치」 칸이 그 역할을 합니다(`architecture.md §4.12`).
+    *   「잠금 힌트」와 「참조 함수」의 `IF n`을 가로질러 대조하지 마십시오 — 채번 조건이 달라 같은 번호가 다른 문장입니다(`architecture.md §4.12`).
+    *   `[MACHINE NOTICE]`가 실린 문장은 산문으로 서술하되 기계 확정이 아님을 밝히고 네 표에 행을 만들지 마십시오(`architecture.md §4.12`).
+    *   「실행 의미」 표에 종류를 더할 때는 `ExecutionSemanticsFacts.AllKinds`에도 함께 등재하십시오 — 빠뜨리면 Critic 면제를 잃습니다(`MachineConfirmedTablesTests`).
+    *   표마다 문장 집합이 다른 것은 의도된 비대칭이니 맞추지 마십시오(네 표 중 「잠금 힌트」만 `IF n` 행과 범위 칸을 갖습니다). 표의 내용을 서술하기 전에 렌더러의 헤더 줄을 먼저 읽으십시오(`architecture.md §4.12`).
     *   통합 배치 계획은 다음 6대 제약을 지킵니다.
         1. SNAPSHOT 격리에서 `WITH (NOLOCK)`을 사용하지 않습니다.
         2. INSERT-only 롤백은 Shadow 백업 대신 `ROLLBACK TRAN` 또는 `DELETE WHERE [ChunkKey]` 보상으로 설계합니다.
@@ -222,7 +221,7 @@ dotnet test
 
 개발 에이전트는 코드 수정을 마치고 작업을 제출하기 전에 다음 항목을 직접 자가 검증해야 합니다.
 
-- [ ] 컴파일 에러가 0개이고, 경고가 **정확히 8건**(모두 `tests/ReSet.Core.Tests/DbMetadataServiceTests.cs`의 기존 CS8600/CS8602)인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 0건으로 보이므로 반드시 `dotnet clean && dotnet build 2>&1 | grep -E "warning CS" | sort -u | wc -l`로 세야 한다. 8건보다 많으면 이번 변경이 새 경고를 넣은 것이다.
+- [ ] 컴파일 에러 0개, 경고 **0건**인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 이미 있던 경고도 0으로 보이므로 `dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"`로 세야 한다. (기대 개수를 적지 않는다 — 여기 「정확히 8건」으로 적혀 있던 줄이 `8875e9f`가 그 경고를 지운 뒤로도 낡은 채 남아 있었다.)
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
 - [ ] 워크트리라면 코퍼스 재료 **둘**을 심링크했는가? 하나만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
