@@ -391,10 +391,24 @@ TRAN`은 24건 실려 있다(규칙 4·11 + Few-Shot + 레거시 원문 인용).
 (온전한 계획서가 아니어서 「지켜진 0」은 아니지만, Claude 계열이 원래 `CREATE PROCEDURE`를
 덜 쓴다는 가설을 배제할 수 없게 만든다). 그래서 112 → 0을 규칙 덕으로 돌릴 수 없다.
 
-조치: `run-control.sh`가 Actor·Critic·Consolidator 셋을 `codex-cli`/`gpt-5.6-terra`로
-못박는다. 기준선의 `Batch1`이 `codex-cli`(`gpt-5.6-terra`)였다. Critic·Consolidator가
-그때 무엇이었는지는 산출물에 남지 않아 복원할 수 없어, 셋을 한 모델로 묶어 모델 축을
-아예 상수로 만든다.
+조치: `run-control.sh`가 역할 셋의 모델을 환경변수로 못박는다.
+
+| 역할 | 통제군 고정값 | 근거 |
+|---|---|---|
+| Actor | `codex-cli` / `gpt-5.6-terra` | 기준선의 같은 축 표본 `Batch1`이 그것이다(`docs/Thinking.md`) |
+| Critic | `claude-cli` / **`claude-sonnet-5`** | 저장소 기본값의 역할 배치 — Critic만 다른 계열이다 |
+| Consolidator | `codex-cli` / `gpt-5.6-terra` | 저장소 기본값에서 Actor와 같다 |
+
+**기준선의 Critic은 복원할 수 없다.** `Thinking.md`는 「기본 분석 AI」(Actor)만 적고,
+`src/ReSet.Cli/appsettings.local.json`은 git 추적 밖이라 이력이 없다. 그래서 커밋된
+`appsettings.json`의 역할 배치(Actor·Consolidator = `gpt-5.6-terra`, Critic =
+`claude-sonnet-5`)를 정본으로 삼는다.
+
+> ⚠️ **Critic을 Actor와 같은 모델로 묶지 말 것.** 첫 판에서 「모델 축을 상수로 만든다」며
+> 셋을 한 모델로 적었다가 되돌렸다. 그것은 통제가 아니라 **파이프라인 모양의 변경**이다 —
+> Actor-Critic의 요점이 독립된 채점자이고, 묶으면 방금 `GOTO`를 쓴 모델에게 `GOTO`가
+> 있느냐고 묻는 꼴이 되어 §9-4가 새로 넣은 제어 흐름 감점이 바로 그 축에서 무력해진다.
+> **통제는 변인을 기준선 값에 붙들어 두는 것이지 없애는 것이 아니다.**
 
 ### 9-3. 회귀 — `GOTO` 금지를 3단계가 지웠다
 
