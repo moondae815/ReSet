@@ -212,102 +212,107 @@
 
 ## 검사 B·C 발화 목록
 
-판정 칸은 비어 있다 — 원본 DDL과 이행 SQL을 읽어 사람이 채운다.
+**판정 칸을 채웠다 (2026-08-28).** 좌표마다 단계 SQL · 명세서의 DML 범위 표와 집합 술어 표 ·
+`raw/metadata.json`의 원본 DDL을 열어 대조했다. 부류 번호의 정의와 각 부류의 근거는
+`docs/known-defects.md` **(5-3-8)**에 있다 — 이 표는 그 판정의 좌표별 색인이다.
+
+같은 좌표가 조건 (A)·(B) 두 행으로 나오므로 **행 92 = 좌표 46**이다. 판을 접으면 원본 문장
+17가지이고 원인으로 접으면 12부류다. 합계: **진짜 결함 33 · 구조적 오탐 10 · 판정 불가 3.**
 
 | # | 검사 | 조건 | Job | 단계 | 문장 | 항목 | 판정 |
 | ---: | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | B | A | POQSettleBatch1 | S11 | UPDATE 9 | YMD, UseState |  |
-| 2 | B | B | POQSettleBatch1 | S11 | UPDATE 9 | YMD, UseState |  |
-| 3 | B | A | POQSettlePrco20 | S06 | UPDATE 10 | MALLID |  |
-| 4 | B | A | POQSettlePrco20 | S06 | UPDATE 10 | PGNAME, MALLID |  |
-| 5 | B | A | POQSettlePrco20 | S06 | UPDATE 15 | MobileCo |  |
-| 6 | C | A | POQSettlePrco20 | S06 | UPDATE 12 | PGName |  |
-| 7 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | MALLID |  |
-| 8 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | PGNAME, MALLID |  |
-| 9 | B | B | POQSettlePrco20 | S06 | UPDATE 15 | MobileCo |  |
-| 10 | C | B | POQSettlePrco20 | S06 | UPDATE 12 | PGName |  |
-| 11 | C | A | POQSettlePrco20 | S07 | UPDATE 7 | UseState |  |
-| 12 | C | B | POQSettlePrco20 | S07 | UPDATE 7 | UseState |  |
-| 13 | B | A | POQSettleProc1 | S11 | DELETE 4 | OUTSTATE |  |
-| 14 | B | B | POQSettleProc1 | S11 | DELETE 4 | OUTSTATE |  |
-| 15 | B | A | POQSettleProc11 | S06 | UPDATE 10 | MALLID |  |
-| 16 | B | A | POQSettleProc11 | S06 | UPDATE 10 | PGNAME, MALLID |  |
-| 17 | B | A | POQSettleProc11 | S06 | UPDATE 13 | ID |  |
-| 18 | C | A | POQSettleProc11 | S06 | UPDATE 13 | UseState, AYMD |  |
-| 19 | C | A | POQSettleProc11 | S06 | UPDATE 18 | YMD, OutState |  |
-| 20 | B | B | POQSettleProc11 | S06 | UPDATE 10 | MALLID |  |
-| 21 | B | B | POQSettleProc11 | S06 | UPDATE 10 | PGNAME, MALLID |  |
-| 22 | B | B | POQSettleProc11 | S06 | UPDATE 13 | ID |  |
-| 23 | C | B | POQSettleProc11 | S06 | UPDATE 13 | UseState, AYMD |  |
-| 24 | C | B | POQSettleProc11 | S06 | UPDATE 18 | YMD, OutState |  |
-| 25 | C | A | POQSettleProc11 | S07 | UPDATE 7 | UseState, CommissionCancelFlag |  |
-| 26 | C | B | POQSettleProc11 | S07 | UPDATE 7 | UseState, CommissionCancelFlag |  |
-| 27 | C | A | POQSettleProc12 | S07 | UPDATE 1 | ExtraSettleFlag |  |
-| 28 | C | A | POQSettleProc12 | S07 | UPDATE 12 | PGName |  |
-| 29 | C | B | POQSettleProc12 | S07 | UPDATE 1 | ExtraSettleFlag |  |
-| 30 | C | B | POQSettleProc12 | S07 | UPDATE 12 | PGName |  |
-| 31 | B | A | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag |  |
-| 32 | B | A | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID |  |
-| 33 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag |  |
-| 34 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID |  |
-| 35 | B | A | POQSettleProc14 | S07 | UPDATE 10 | MALLID |  |
-| 36 | B | A | POQSettleProc14 | S07 | UPDATE 10 | PGNAME, MALLID |  |
-| 37 | C | A | POQSettleProc14 | S07 | UPDATE 1 | ExtraSettleFlag |  |
-| 38 | C | A | POQSettleProc14 | S07 | UPDATE 12 | PGName |  |
-| 39 | C | A | POQSettleProc14 | S07 | UPDATE 18 | YMD |  |
-| 40 | B | B | POQSettleProc14 | S07 | UPDATE 10 | MALLID |  |
-| 41 | B | B | POQSettleProc14 | S07 | UPDATE 10 | PGNAME, MALLID |  |
-| 42 | C | B | POQSettleProc14 | S07 | UPDATE 1 | ExtraSettleFlag |  |
-| 43 | C | B | POQSettleProc14 | S07 | UPDATE 12 | PGName |  |
-| 44 | C | B | POQSettleProc14 | S07 | UPDATE 18 | YMD |  |
-| 45 | C | A | POQSettleProc14 | S10 | UPDATE 4 | UseState |  |
-| 46 | C | B | POQSettleProc14 | S10 | UPDATE 4 | UseState |  |
-| 47 | C | A | POQSettleProc16 | S07 | UPDATE 12 | PGName |  |
-| 48 | C | B | POQSettleProc16 | S07 | UPDATE 12 | PGName |  |
-| 49 | C | A | POQSettleProc16 | S08 | UPDATE 7 | CommissionCancelFlag |  |
-| 50 | C | B | POQSettleProc16 | S08 | UPDATE 7 | CommissionCancelFlag |  |
-| 51 | C | A | POQSettleProc17 | S06 | INSERT 1 | CLIENT_INCVTAX, CLIENT_COMMISSIONTYPE, PG_INCVTAX, PG_COMMISSIONTYPE |  |
-| 52 | C | B | POQSettleProc17 | S06 | INSERT 1 | CLIENT_INCVTAX, CLIENT_COMMISSIONTYPE, PG_INCVTAX, PG_COMMISSIONTYPE |  |
-| 53 | B | A | POQSettleProc17 | S07 | UPDATE 10 | MALLID |  |
-| 54 | B | A | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID |  |
-| 55 | B | A | POQSettleProc17 | S07 | UPDATE 13 | ID |  |
-| 56 | C | A | POQSettleProc17 | S07 | UPDATE 12 | PGName |  |
-| 57 | B | B | POQSettleProc17 | S07 | UPDATE 10 | MALLID |  |
-| 58 | B | B | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID |  |
-| 59 | B | B | POQSettleProc17 | S07 | UPDATE 13 | ID |  |
-| 60 | C | B | POQSettleProc17 | S07 | UPDATE 12 | PGName |  |
-| 61 | B | A | POQSettleProc17 | S08 | UPDATE 7 | PLTID |  |
-| 62 | C | A | POQSettleProc17 | S08 | UPDATE 7 | UseState |  |
-| 63 | B | B | POQSettleProc17 | S08 | UPDATE 7 | PLTID |  |
-| 64 | C | B | POQSettleProc17 | S08 | UPDATE 7 | UseState |  |
-| 65 | C | A | POQSettleProc18 | S10 | UPDATE 4 | UseState |  |
-| 66 | C | B | POQSettleProc18 | S10 | UPDATE 4 | UseState |  |
-| 67 | B | A | POQSettleProc19 | S10 | UPDATE 10 | MALLID |  |
-| 68 | B | A | POQSettleProc19 | S10 | UPDATE 10 | PGNAME, MALLID |  |
-| 69 | C | A | POQSettleProc19 | S10 | UPDATE 12 | PGName |  |
-| 70 | B | B | POQSettleProc19 | S10 | UPDATE 10 | MALLID |  |
-| 71 | B | B | POQSettleProc19 | S10 | UPDATE 10 | PGNAME, MALLID |  |
-| 72 | C | B | POQSettleProc19 | S10 | UPDATE 12 | PGName |  |
-| 73 | B | A | POQSettleProc19 | S11 | UPDATE 7 | PLTID |  |
-| 74 | B | A | POQSettleProc19 | S11 | UPDATE 10 | CYMD, AYMD, RefundFlag |  |
-| 75 | B | B | POQSettleProc19 | S11 | UPDATE 7 | PLTID |  |
-| 76 | B | B | POQSettleProc19 | S11 | UPDATE 10 | CYMD, AYMD, RefundFlag |  |
-| 77 | C | A | POQSettleProc3 | S04 | UPDATE 1 | ExtraSettleFlag |  |
-| 78 | C | B | POQSettleProc3 | S04 | UPDATE 1 | ExtraSettleFlag |  |
-| 79 | B | A | POQSettleProc8 | S05 | INSERT 1 | PGName |  |
-| 80 | C | A | POQSettleProc8 | S05 | INSERT 1 | ProcessingYMD |  |
-| 81 | B | B | POQSettleProc8 | S05 | INSERT 1 | PGName |  |
-| 82 | C | B | POQSettleProc8 | S05 | INSERT 1 | ProcessingYMD |  |
-| 83 | B | A | POQSettleProc8 | S12 | DELETE 4 | OUTSTATE |  |
-| 84 | B | B | POQSettleProc8 | S12 | DELETE 4 | OUTSTATE |  |
-| 85 | B | A | POQSettleProc9 | S13 | DELETE 4 | OUTSTATE |  |
-| 86 | B | A | POQSettleProc9 | S13 | INSERT 2 | USESTATE |  |
-| 87 | B | A | POQSettleProc9 | S13 | INSERT 3 | INSTATE |  |
-| 88 | B | A | POQSettleProc9 | S13 | INSERT 4 | OUTSTATE |  |
-| 89 | B | B | POQSettleProc9 | S13 | DELETE 4 | OUTSTATE |  |
-| 90 | B | B | POQSettleProc9 | S13 | INSERT 2 | USESTATE |  |
-| 91 | B | B | POQSettleProc9 | S13 | INSERT 3 | INSTATE |  |
-| 92 | B | B | POQSettleProc9 | S13 | INSERT 4 | OUTSTATE |  |
+| 1 | B | A | POQSettleBatch1 | S11 | UPDATE 9 | YMD, UseState | 부류 3 · 진짜 결함 |
+| 2 | B | B | POQSettleBatch1 | S11 | UPDATE 9 | YMD, UseState | 부류 3 · 진짜 결함 |
+| 3 | B | A | POQSettlePrco20 | S06 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 4 | B | A | POQSettlePrco20 | S06 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 5 | B | A | POQSettlePrco20 | S06 | UPDATE 15 | MobileCo | 부류 3 · 진짜 결함 |
+| 6 | C | A | POQSettlePrco20 | S06 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 7 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 8 | B | B | POQSettlePrco20 | S06 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 9 | B | B | POQSettlePrco20 | S06 | UPDATE 15 | MobileCo | 부류 3 · 진짜 결함 |
+| 10 | C | B | POQSettlePrco20 | S06 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 11 | C | A | POQSettlePrco20 | S07 | UPDATE 7 | UseState | 부류 4 · 진짜 결함 |
+| 12 | C | B | POQSettlePrco20 | S07 | UPDATE 7 | UseState | 부류 4 · 진짜 결함 |
+| 13 | B | A | POQSettleProc1 | S11 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 14 | B | B | POQSettleProc1 | S11 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 15 | B | A | POQSettleProc11 | S06 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 16 | B | A | POQSettleProc11 | S06 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 17 | B | A | POQSettleProc11 | S06 | UPDATE 13 | ID | 부류 8 · 구조적 오탐 |
+| 18 | C | A | POQSettleProc11 | S06 | UPDATE 13 | UseState, AYMD | 부류 8 · 구조적 오탐 |
+| 19 | C | A | POQSettleProc11 | S06 | UPDATE 18 | YMD, OutState | 부류 8 · 구조적 오탐 |
+| 20 | B | B | POQSettleProc11 | S06 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 21 | B | B | POQSettleProc11 | S06 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 22 | B | B | POQSettleProc11 | S06 | UPDATE 13 | ID | 부류 8 · 구조적 오탐 |
+| 23 | C | B | POQSettleProc11 | S06 | UPDATE 13 | UseState, AYMD | 부류 8 · 구조적 오탐 |
+| 24 | C | B | POQSettleProc11 | S06 | UPDATE 18 | YMD, OutState | 부류 8 · 구조적 오탐 |
+| 25 | C | A | POQSettleProc11 | S07 | UPDATE 7 | UseState, CommissionCancelFlag | 부류 4 · 진짜 결함 |
+| 26 | C | B | POQSettleProc11 | S07 | UPDATE 7 | UseState, CommissionCancelFlag | 부류 4 · 진짜 결함 |
+| 27 | C | A | POQSettleProc12 | S07 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 28 | C | A | POQSettleProc12 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 29 | C | B | POQSettleProc12 | S07 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 30 | C | B | POQSettleProc12 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 31 | B | A | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag | 부류 3 · 진짜 결함 |
+| 32 | B | A | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID | 부류 3 · 진짜 결함 |
+| 33 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID, CollectFlag | 부류 3 · 진짜 결함 |
+| 34 | B | B | POQSettleProc13 | S09 | UPDATE 3 | PGNAME, MALLID, CollectPeriodID | 부류 3 · 진짜 결함 |
+| 35 | B | A | POQSettleProc14 | S07 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 36 | B | A | POQSettleProc14 | S07 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 37 | C | A | POQSettleProc14 | S07 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 38 | C | A | POQSettleProc14 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 39 | C | A | POQSettleProc14 | S07 | UPDATE 18 | YMD | 부류 2 · 진짜 결함 |
+| 40 | B | B | POQSettleProc14 | S07 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 41 | B | B | POQSettleProc14 | S07 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 42 | C | B | POQSettleProc14 | S07 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 43 | C | B | POQSettleProc14 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 44 | C | B | POQSettleProc14 | S07 | UPDATE 18 | YMD | 부류 2 · 진짜 결함 |
+| 45 | C | A | POQSettleProc14 | S10 | UPDATE 4 | UseState | 부류 10 · 구조적 오탐 |
+| 46 | C | B | POQSettleProc14 | S10 | UPDATE 4 | UseState | 부류 10 · 구조적 오탐 |
+| 47 | C | A | POQSettleProc16 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 48 | C | B | POQSettleProc16 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 49 | C | A | POQSettleProc16 | S08 | UPDATE 7 | CommissionCancelFlag | 부류 4 · 진짜 결함 |
+| 50 | C | B | POQSettleProc16 | S08 | UPDATE 7 | CommissionCancelFlag | 부류 4 · 진짜 결함 |
+| 51 | C | A | POQSettleProc17 | S06 | INSERT 1 | CLIENT_INCVTAX, CLIENT_COMMISSIONTYPE, PG_INCVTAX, PG_COMMISSIONTYPE | 부류 7 · 진짜 결함 |
+| 52 | C | B | POQSettleProc17 | S06 | INSERT 1 | CLIENT_INCVTAX, CLIENT_COMMISSIONTYPE, PG_INCVTAX, PG_COMMISSIONTYPE | 부류 7 · 진짜 결함 |
+| 53 | B | A | POQSettleProc17 | S07 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 54 | B | A | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 55 | B | A | POQSettleProc17 | S07 | UPDATE 13 | ID | 부류 8 · 구조적 오탐 |
+| 56 | C | A | POQSettleProc17 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 57 | B | B | POQSettleProc17 | S07 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 58 | B | B | POQSettleProc17 | S07 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 59 | B | B | POQSettleProc17 | S07 | UPDATE 13 | ID | 부류 8 · 구조적 오탐 |
+| 60 | C | B | POQSettleProc17 | S07 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 61 | B | A | POQSettleProc17 | S08 | UPDATE 7 | PLTID | 부류 9 · 구조적 오탐 |
+| 62 | C | A | POQSettleProc17 | S08 | UPDATE 7 | UseState | 부류 4 · 진짜 결함 |
+| 63 | B | B | POQSettleProc17 | S08 | UPDATE 7 | PLTID | 부류 9 · 구조적 오탐 |
+| 64 | C | B | POQSettleProc17 | S08 | UPDATE 7 | UseState | 부류 4 · 진짜 결함 |
+| 65 | C | A | POQSettleProc18 | S10 | UPDATE 4 | UseState | 부류 10 · 구조적 오탐 |
+| 66 | C | B | POQSettleProc18 | S10 | UPDATE 4 | UseState | 부류 10 · 구조적 오탐 |
+| 67 | B | A | POQSettleProc19 | S10 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 68 | B | A | POQSettleProc19 | S10 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 69 | C | A | POQSettleProc19 | S10 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 70 | B | B | POQSettleProc19 | S10 | UPDATE 10 | MALLID | 부류 1 · 진짜 결함 |
+| 71 | B | B | POQSettleProc19 | S10 | UPDATE 10 | PGNAME, MALLID | 부류 1 · 진짜 결함 |
+| 72 | C | B | POQSettleProc19 | S10 | UPDATE 12 | PGName | 부류 2 · 진짜 결함 |
+| 73 | B | A | POQSettleProc19 | S11 | UPDATE 7 | PLTID | 부류 9 · 구조적 오탐 |
+| 74 | B | A | POQSettleProc19 | S11 | UPDATE 10 | CYMD, AYMD, RefundFlag | 부류 6 · 진짜 결함 |
+| 75 | B | B | POQSettleProc19 | S11 | UPDATE 7 | PLTID | 부류 9 · 구조적 오탐 |
+| 76 | B | B | POQSettleProc19 | S11 | UPDATE 10 | CYMD, AYMD, RefundFlag | 부류 6 · 진짜 결함 |
+| 77 | C | A | POQSettleProc3 | S04 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 78 | C | B | POQSettleProc3 | S04 | UPDATE 1 | ExtraSettleFlag | 부류 2 · 진짜 결함 |
+| 79 | B | A | POQSettleProc8 | S05 | INSERT 1 | PGName | 부류 11 · 구조적 오탐 |
+| 80 | C | A | POQSettleProc8 | S05 | INSERT 1 | ProcessingYMD | 부류 11 · 구조적 오탐 |
+| 81 | B | B | POQSettleProc8 | S05 | INSERT 1 | PGName | 부류 11 · 구조적 오탐 |
+| 82 | C | B | POQSettleProc8 | S05 | INSERT 1 | ProcessingYMD | 부류 11 · 구조적 오탐 |
+| 83 | B | A | POQSettleProc8 | S12 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 84 | B | B | POQSettleProc8 | S12 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 85 | B | A | POQSettleProc9 | S13 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 86 | B | A | POQSettleProc9 | S13 | INSERT 2 | USESTATE | 부류 12 · 판정 불가 |
+| 87 | B | A | POQSettleProc9 | S13 | INSERT 3 | INSTATE | 부류 12 · 판정 불가 |
+| 88 | B | A | POQSettleProc9 | S13 | INSERT 4 | OUTSTATE | 부류 12 · 판정 불가 |
+| 89 | B | B | POQSettleProc9 | S13 | DELETE 4 | OUTSTATE | 부류 5 · 진짜 결함 |
+| 90 | B | B | POQSettleProc9 | S13 | INSERT 2 | USESTATE | 부류 12 · 판정 불가 |
+| 91 | B | B | POQSettleProc9 | S13 | INSERT 3 | INSTATE | 부류 12 · 판정 불가 |
+| 92 | B | B | POQSettleProc9 | S13 | INSERT 4 | OUTSTATE | 부류 12 · 판정 불가 |
 
 ## 캐시 17 선결 지표
 
