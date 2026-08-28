@@ -1346,7 +1346,12 @@
   > `FormatVersion: 17`**이 됐다. 아래 (1)·(1-b)의 현재형 서술은 **그 창 안의 기록**으로
   > 읽어야 하며 오늘의 상태가 아니다. 결과는 (5-3-8)에 있다 — 이 절이 예고한 「검사 B·C가
   > 켜진다」는 46 좌표로 실현됐고, 「한 번도 발화한 적 없는 검사가 함께 켜진다」는
-  > `CheckErrorCodes` 발화 **0건**으로 지나갔다(사전 만족 가능성 확인이 값을 냈다).
+  > **문서마다 「표가 없습니다」가 나는 사태 없이** 지나갔다(태스크 2의 사전 만족 가능성
+  > 확인이 값을 냈다). **`CheckErrorCodes` 발화 수는 셋을 갈라 적어야 한다** — 카나리아
+  > 구간 **0건** · **재생성 전 구간 1건**(`EXPECT_PROC`, 표 통째 누락 → 자가 수정이
+  > 회복시켰다) · 최종 산출물 잔존 **0건**. 이 검사가 죽은 코드가 아니라는 유일한 증거가
+  > 그 1건이므로 뭉뚱그려 0으로 적으면 안 된다.
+  > 아래 (1)의 `CacheManager.cs:174`는 당시 행이고 지금은 **`:197`**이다.
 
   **(1) 〈그 창 안의 기록〉 지금 이 축은 무동작이다 — 병합해도 S11 갱신 9류는 아직 안 닫힌다 (I2).**
   당시 `CacheManager.cs:174`의 `CurrentCacheFormatVersion`은 **16**이었고,
@@ -2675,7 +2680,10 @@
   **승격 결과.** `CacheManager.cs`의 `CurrentCacheFormatVersion`이 **17**이고
   (`58c1ef6`), `output/.sp_cache_index.json`의 **31개 항목이 전부 `FormatVersion: 17`**
   이다(2026-08-28 16:12 재확인 · 사후 스윕 시점 15:30에도 같은 값). **재생성에서 제외된
-  객체는 없다.** 프로시저 14 · 같은 DB 함수 10 · 외부 DB 함수 7 = 31.
+  객체는 없다** — 즉 제외 객체 이름 목록은 공집합이다. 다만 **중간에 「다시 태우지 않는다」로
+  결정된 객체가 둘 있었다**: `UP_UTIL_SETTLE_EXCEPTION_PROC`(L1 미통과 — 참조 함수 표·크로스
+  DB 참조) · `UP_UTIL_SETTLE_INS_EXTRA`(L2 미통과 — AI 교차 리뷰). **둘 다 「오류 코드」 표는
+  담고 나왔고** 이후 캐시 17에 도달해 최종 제외가 아니다. 프로시저 14 · 같은 DB 함수 10 · 외부 DB 함수 7 = 31.
 
   **함수는 `--sp`로 겨눌 수 없다 — 의존성으로만 재생성된다.** `Program.cs`의 객체
   선택자는 `--sp`와 `--all` 둘뿐이고 둘 다 SP 목록만 본다. 카나리아 1차가
@@ -2756,9 +2764,9 @@
   **부류 2 (10좌표) — 원본에 없는 필터.** (5-3-4)와 같은 모양이고 실물이 셋이다.
   - `EXCEPTION_PROC` UPDATE 12(원천 카드 PG 프로모션 할인) 6판 — 여섯 판 전부
     `A.PGName IN (@v_strCardPGNames 목록)`을 **더했다.** 원본 UPDATE 12에는 PGName
-    조건이 **아예 없다**(DDL 314~324행). 카드 PG가 아닌 행은 이제 할인 정보를 못 받는다.
+    조건이 **아예 없다**(DDL 313~323행 — 명세서 기계 표가 못 박은 라인 313). 카드 PG가 아닌 행은 이제 할인 정보를 못 받는다.
   - `EXCEPTION_PROC` UPDATE 1(비원천 PG 프로모션 할인) 3판 —
-    `ISNULL(A.ExtraSettleFlag, 0) = 0`을 **더했다.** 원본(DDL 39~48행)에 없다.
+    `ISNULL(A.ExtraSettleFlag, 0) = 0`을 **더했다.** 원본(DDL 38~47행)에 없다.
   - `EXCEPTION_PROC` UPDATE 18 1판(`POQSettleProc14/S07`) — `A.YMD = @pi_strYMD`를
     최상위에 **더했다.** 원본은 `PLTID IN (SELECT … WHERE YMD = @pi_strYMD …)`로
     **하위 질의에서만** 기준일을 쓰고 갱신 대상 A의 날짜는 제한하지 않는다. 명세서가
@@ -2785,8 +2793,10 @@
   `B.CommissionCancelFlag = 1`)는 전부 안쪽 파생 테이블 `D`에 있고, 갱신 대상 `X`는
   `K.PLTID`·`K.ID`(PLTID별 `MAX(ID)`)로만 정해진다 — **대상 행의 상태를 제한하지
   않는다.** 판 넷(Prco20/S07 `UseState` · Proc11/S07 `UseState, CommissionCancelFlag` ·
-  Proc16/S08 `CommissionCancelFlag` · Proc17/S08 `UseState`)이 그 술어를 **대상 행에**
-  걸었다. 후보 행과 대상 행은 같은 행이 아니므로 집합이 달라진다.
+  Proc16/S08 `CommissionCancelFlag` · Proc17/S08 `UseState`)이 그 술어를 **대상 스코프로**
+  옮겼다. 후보 행과 대상 행은 같은 행이 아니므로 집합이 달라진다.
+  (셋은 갱신 대상 자신에 걸었고, **Proc16만은 대상에 조인된 요율 행 `C`에** 걸었다 —
+  원본이 그 플래그를 보는 요율 행은 후보 행 쪽 것이라 여기서도 행이 갈린다.)
   **`POQSettleProc19/S11`이 대조군이다** — 같은 문장을 CTE로 옮기되 필터를 **후보
   스코프에 그대로 두었고**, 검사 C가 그 판에서는 **한 건도 발화하지 않는다.** 즉 이
   발화는 「평탄화하면 무조건 난다」가 아니라 술어가 어느 행에 걸렸는지를 실제로 가른다.
@@ -2796,8 +2806,11 @@
   판 셋이 전부 이것을 **키 테이블 조인 삭제**로 바꿨다 —
   `dbo.__poq_S11_AffectedOutKeyManifest`(Proc1/S11) ·
   `stage.S12AffectedOutKey`(Proc8/S12) · `batch.POQSettleS13AffectedKey`(Proc9/S13).
-  **셋 다 그 키 테이블을 채우는 문장이 산출물 어디에도 없다** — 각 이름은 자기 단계
-  파일에서만 나오고(`grep -rl`로 형제 단계 전수 확인) 그 안에서 **읽기(JOIN)만** 있다.
+  **셋 다 그 키 테이블을 채우는 문장이 산출물 어디에도 없다** — `output/`·`docs/`·`src/`
+  전수 `grep -rl` 결과 각 이름이 나오는 곳은 **자기 단계 파일 · 같은 Job의
+  `docs/BatchMigrationPlan.md` · `output/logs/`뿐**이고, 단계 파일 안에서는 **읽기(JOIN)만**
+  있다(계획서는 단계 내용의 재수록, 로그는 실행 기록이라 어느 쪽도 쓰기 문장이 아니다).
+  **형제 단계 파일에는 이름 자체가 없다.**
   삭제 범위가 정의되지 않았으므로 `OUTSTATE IN (2,9)`가 보존됐는지 여부 이전에 **문장이
   무엇을 지우는지 산출물만으로 알 수 없다.** `TSettleByOUT`은 `OUTSTATE`를 그룹 키로
   갖는 집계 테이블이라 키에 `OUTSTATE`가 빠지면 다른 상태 행까지 지운다.
@@ -2874,8 +2887,10 @@
      한 좌표의 판정이 그 판 전체의 무결을 뜻하지 않는다.
   3. **이름만 대조하므로 같은 컬럼을 다른 테이블에서 읽는 것을 못 본다.**
      `EXCEPTION_PROC` UPDATE 12에서 원본은 `B.DiscountFlag = 'Y'`(PLCard 원천)인데
-     Proc17/S07·Proc19/S10은 `ISNULL(A.DiscountFlag,'N') = 'Y'`(갱신 대상 자신)로
-     바꿨다. 컬럼 이름이 같아 검사 B·C 둘 다 만족한다.
+     **판 셋이 갱신 대상 자신을 읽는다** — `POQSettlePrco20/S06`은 `A.DiscountFlag = 'Y'`,
+     `POQSettleProc17/S07`·`POQSettleProc19/S10`은 `ISNULL(A.DiscountFlag,'N') = 'Y'`.
+     나머지 셋(Proc12·Proc14·Proc16)은 `B`를 유지한다. 컬럼 이름이 같아 검사 B·C 둘 다
+     만족한다. **판별은 실물 여섯 판을 열어 했다** — 이름 대조로는 갈리지 않는다.
 
   **잰 것과 안 잰 것.**
   - **잰 것**: 캐시 `FormatVersion` 분포(31/31) · 3자 좌표 차분 다섯 영역 · 침묵 분모
