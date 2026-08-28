@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\ReSet.Core\ReSet.Core.csproj" />
     <ProjectReference Include="..\..\src\ReSet.Cli\ReSet.Cli.csproj" />
     <ProjectReference Include="..\..\src\ReSet.Validator.Core\ReSet.Validator.Core.csproj" />
+    <ProjectReference Include="..\..\src\ReSet.Validator.Cli\ReSet.Validator.Cli.csproj" />
   </ItemGroup>
 
 </Project>

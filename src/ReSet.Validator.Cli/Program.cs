@@ -37,13 +37,45 @@ namespace ReSet.Validator.Cli
         /// <summary>
         /// OpenRouter의 백엔드 라우팅 선호를 읽는다. provider가 OpenRouter가 아니면
         /// 이 설정 구획이 없어 자연히 null이 되고, 팩토리도 다른 provider에서는
-        /// 이 인자를 쓰지 않는다.
+        /// 이 인자를 쓰지 않는다. 조회 순서는 분석기 CLI와 같다:
+        ///
+        ///   1. <c>Routing:ByModel:&lt;모델ID&gt;</c> (대소문자 무시)
+        ///   2. <c>Routing:Default</c>
+        ///   3. <c>Routing</c> 바로 아래의 평면 항목 (기존 형식 - 하위호환)
+        ///
+        /// 1과 2는 <see cref="OpenRouterRoutingOptions.Merge"/>로 항목 단위로 겹친다.
+        ///
+        /// [주의] 이 메서드는 ReSet.Cli.Program의 같은 이름 메서드와 짝을 이룬다.
+        /// 두 CLI는 서로를 참조하지 않고 ReSet.Core는 설정 패키지에 의존하지 않아
+        /// 지금은 각자 갖고 있다. 한쪽만 고치면 다른 쪽에서 라우팅이 오류 없이
+        /// 사라지므로 - 새 형식 설정에서 평면 Order를 못 찾아 null이 된다 - 반드시
+        /// 함께 고친다.
         /// </summary>
         public static OpenRouterRoutingOptions? ReadOpenRouterRouting(
-            IConfiguration configuration, string provider)
+            IConfiguration configuration, string provider, string? modelName = null)
         {
             var section = configuration.GetSection($"AiSettings:Providers:{provider}:Routing");
             if (!section.Exists())
+            {
+                return null;
+            }
+
+            var defaults = ParseRoutingBlock(section.GetSection("Default"));
+            var perModel = ParseRoutingBlock(FindByModelSection(section, modelName));
+
+            // 어느 쪽도 없으면 ByModel/Default를 쓰지 않는 기존 형식이다.
+            if (defaults is null && perModel is null)
+            {
+                return ParseRoutingBlock(section);
+            }
+
+            return OpenRouterRoutingOptions.Merge(defaults, perModel);
+        }
+
+        /// <summary>라우팅 항목 세 개를 한 구획에서 읽는다. 구획이 없으면 null.</summary>
+        private static OpenRouterRoutingOptions? ParseRoutingBlock(IConfigurationSection? section)
+        {
+            if (section is null || !section.Exists())
             {
                 return null;
             }
@@ -54,6 +86,30 @@ namespace ReSet.Validator.Cli
 
             return OpenRouterRoutingOptions.Parse(
                 order, section["AllowFallbacks"], section["RequireParameters"]);
+        }
+
+        /// <summary>
+        /// 모델 ID로 <c>ByModel</c> 항목을 찾는다. 인덱서 대신 자식을 훑는 것은
+        /// 대소문자를 무시하기 위해서다 - OpenRouter는 모델 ID의 대소문자를 구분하지
+        /// 않으므로, 설정 쪽만 구분하면 목록을 적어 두고도 조용히 Default로 떨어진다.
+        /// </summary>
+        private static IConfigurationSection? FindByModelSection(
+            IConfigurationSection routingSection, string? modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName))
+            {
+                return null;
+            }
+
+            var byModel = routingSection.GetSection("ByModel");
+            if (!byModel.Exists())
+            {
+                return null;
+            }
+
+            var wanted = modelName.Trim();
+            return byModel.GetChildren()
+                .FirstOrDefault(child => string.Equals(child.Key, wanted, StringComparison.OrdinalIgnoreCase));
         }
 
         public static ValidatorCliArgs ParseCommandLineArgs(string[] args)
@@ -294,7 +350,7 @@ namespace ReSet.Validator.Cli
             try
             {
                 aiClient = AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, null, cliCommand,
-                    ReadOpenRouterRouting(configuration, provider));
+                    ReadOpenRouterRouting(configuration, provider, modelName));
             }
             catch (Exception ex)
             {
