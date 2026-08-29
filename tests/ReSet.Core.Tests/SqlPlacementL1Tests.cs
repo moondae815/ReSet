@@ -528,6 +528,164 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("batch 스키마에 두십시오", fix);
         }
 
+        // ── 펜스 짝이 안 맞으면 넷이 함께 침묵한다 ──────────────────────────────
+        //
+        // `CleanedAppCodeFences`는 ```와 ```를 **문서 순서대로 짝지어** 펜스를 뽑는다.
+        // 열린 채 닫히지 않은 펜스가 하나 있으면 짝이 밀려, 펜스1의 닫는 자리부터
+        // 펜스2의 여는 자리까지의 **산문이 코드로 읽힌다.**
+        //
+        // 그때 「이 토큰이 코드 안에 있다」는 귀속은 성립하지 않는다. 작성 계약 7이
+        // 「귀속이 불가능하면 침묵하라」다 - 이 가드는 있을 법한 결함을 미리 막는 검사가
+        // 아니라 **그 헬퍼의 성립 조건**이다.
+        //
+        // 노출량 실측(계획서 23편): 홀수 펜스 문서는 **0편**이라 아직 실현된 적이 없다.
+        // 그러나 밀렸을 때 산문에서 걸리는 양은 `NOLOCK` 457 · 제어 흐름 68 · API 41이다.
+        // `NOLOCK` 검사의 설계 근거 자체가 「산문 약 300 대 코드 0」이므로 그 근거가
+        // 그대로 뒤집힌다.
+        //
+        // 형제 헬퍼 `CleanedSqlFences`·`CleanedCodeFences`는 건드리지 않는다 - 명세서
+        // 경로의 검사들이 함께 쓰고 있어 판정 범위가 바뀐다.
+
+        /// <summary>
+        /// 필수 H2 넷을 갖추되 <b>여분의 펜스 마커 하나</b>를 앞에 둔 계획서.
+        ///
+        /// 마커가 홀수(5개)라 페어링이 한 칸 밀리고, 그 결과 <c>{body}</c>의 <b>산문이
+        /// 코드로 잡힌다</b>. 실측으로 확인한 배치다 - 마커를 앞에 넣지 않으면
+        /// 잡히는 구간이 어긋나기만 하고 본문은 계속 펜스 밖에 남는다.
+        /// </summary>
+        private static string PlanWithUnbalancedFence(string body) => $"""
+            ## 통합 배치 아키텍처 개요
+
+            ```
+
+            내용.
+
+            ```sql
+            SELECT 1;
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            {body}
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## Mermaid 기반 통합 흐름도
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            내용.
+            """;
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentOnAllFourWhenTheFencesDoNotPair()
+        {
+            // 본문은 산문이다. 짝이 밀리면 이 산문이 「코드」로 읽혀 넷이 전부 발화한다.
+            var markdown = PlanWithUnbalancedFence("""
+                원본의 `WITH (NOLOCK)` 힌트는 전부 제거한다. `GOTO` 라벨과
+                `IF @@ERROR <> 0` 검사, `BEGIN TRY`/`END CATCH` 감싸기를 쓰지 않는다.
+                `SqlConnection`이나 `TransactionScope` 같은 실존 타입도 이름 대지 않으며,
+                `CREATE PROCEDURE`로 새 저장 프로시저를 정의하지 않는다.
+                """);
+
+            var result = Validate(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e =>
+                e.Type == ErrorType.NoLockHintInCode ||
+                e.Type == ErrorType.FrameworkTypePrescribed ||
+                e.Type == ErrorType.SqlSideControlFlow ||
+                e.Type == ErrorType.NewDatabaseObjectDefined);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_PassesADocumentMarkdigConsidersWellFormed()
+        {
+            // ⚠️ 이 테스트를 처음 쓸 때의 전제가 틀렸다. 「짝이 안 맞으니 Markdig가
+            // 뒤따르는 H2를 삼켜 필수 헤더 누락으로 어차피 반려될 것」이라고 적었는데,
+            // 실행해 보니 **IsValid == true**였다.
+            //
+            // Markdig는 이 문서를 정상으로 본다 - 정보 문자열이 붙은 ```sql을 닫는
+            // 자리로 인정하지 않으므로 마커 다섯이 블록 둘로 온전히 갈린다. 즉
+            // **문서가 깨진 것이 아니라 옛 정규식이 깨져 있었다.**
+            //
+            // 그래서 「간접 방어」가 성립하지 않는다. 문서가 무효라서 유령이 함께
+            // 떨어지는 것이 아니라, **L1이 초록인 채로 넷만 유령을 냈다.** 이 테스트가
+            // 그 사실을 고정한다.
+            var markdown = PlanWithUnbalancedFence("내용.");
+
+            var result = Validate(markdown);
+
+            Assert.True(result.IsValid);
+            Assert.Empty(result.Errors);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StillFiresWhenTheFencesPair()
+        {
+            // 가드가 정상 문서를 끄지 않는다는 회귀 가드. 같은 위반을 짝이 맞는
+            // 펜스에 담으면 그대로 잡혀야 한다.
+            var markdown = Plan("""
+                ```sql
+                SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMst WITH (NOLOCK);
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        // ── mermaid: CLI가 보고한 파스 오류는 강등하지 않는다 ───────────────────
+        //
+        // `ValidateMermaid`에는 Fallback으로 가는 갈래가 넷 있다 - CLI 종료 코드 != 0 ·
+        // 시간 초과 · 예외 · CLI 비활성. 뒤 셋은 「도구가 답을 못 줬다」이고 첫째만
+        // **「도구가 정상 실행되어 파스 오류를 보고했다」**, 즉 확정된 발견이다.
+        //
+        // 실측(2026-08-29 3차 통제군): `sequenceDiagram`의 `Settle--->Batch`가 CLI에
+        // 두 번 잡히고도 채택본에 남았다. 코퍼스 23편의 mermaid 블록 60개를 mmdc로
+        // 전수 검증하니 58 통과 · 2 실패이고 실패 둘이 전부 그 부류다.
+        //
+        // CLI가 필요한 갈래는 단위 테스트로 못 돌린다. 여기서는 **CLI를 끈 판정기**가
+        // 종전대로 Fallback만 쓰는지(=강등 갈래가 안 바뀌었는지)를 고정한다.
+
+        [Fact]
+        public void ValidateConsolidated_WithoutTheMermaidCliDoesNotReportACompileError()
+        {
+            // 기본 생성자는 useMermaidCli: false다. 그 경로는 「도구가 답을 못 줬다」이므로
+            // 컴파일 오류를 만들면 안 된다 - 만들면 CLI 없는 환경 전체가 반려된다.
+            var markdown = Plan("""
+                ```mermaid
+                sequenceDiagram
+                Settle--->Batch: S12 반환 코드 전달
+                ```
+                """);
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.MermaidCliError);
+        }
+
+        [Fact]
+        public void SuggestedPromptFix_NamesTheMeasuredArrowClass()
+        {
+            // 시정 문구가 측정된 부류를 이름으로 짚어야 한다. 버킷 3의 체크리스트가
+            // `->`·`- ->`만 들고 있어 `--->`(flowchart에는 유효)가 빠져 있었다.
+            var result = new ValidationResult { IsConsolidated = true };
+            result.Errors.Add("mermaid 컴파일 실패");
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.MermaidCliError,
+                Message = "Parse error on line 20",
+            });
+
+            var fix = result.SuggestedPromptFix;
+
+            Assert.NotNull(fix);
+            Assert.Contains("sequenceDiagram", fix);
+            Assert.Contains("->>", fix);
+        }
+
         // ── 발화량과 시정 문구 ──────────────────────────────────────────────────
 
         [Fact]

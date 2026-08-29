@@ -5866,10 +5866,33 @@ namespace ReSet.Core.Services
                                 if (process.ExitCode != 0)
                                 {
                                     var stderr = process.StandardError.ReadToEnd().Trim();
-                                    Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}. Fallback 기계 검증으로 전환합니다.", stderr);
-                                    
-                                    // 린트 실패를 치명적 오류로 처리하지 않고, Fallback 기계 린터로 검증 우회
-                                    ValidateMermaidFallback(mermaidContent, result);
+
+                                    // [강등하지 않는다 - 2026-08-29]
+                                    // 이 갈래만 다른 셋과 성격이 다르다. 시간 초과·예외·
+                                    // CLI 비활성은 "도구가 답을 못 줬다"이고, 여기는
+                                    // **"도구가 정상 실행되어 파스 오류를 보고했다"**이다 -
+                                    // 확정된 발견이지 도구 부재가 아니다. 넷을 같은 경로로
+                                    // 흘리면 확정된 오류가 노드 라벨만 보는 Fallback 린터에게
+                                    // 넘어가고, 그 린터가 못 보는 부류는 그대로 산출물에 실린다.
+                                    //
+                                    // 실측(2026-08-29 3차 통제군): `sequenceDiagram`의
+                                    // `Settle--->Batch`가 CLI에 두 번 잡히고도 채택본에 남았다
+                                    // (`--->`는 flowchart에는 있고 sequenceDiagram에는 없다).
+                                    // 코퍼스 23편의 mermaid 블록 60개를 mmdc로 전수 검증하니
+                                    // **58 통과 · 2 실패**이고 실패 둘이 전부 이 부류다 -
+                                    // 즉 새로 반려되는 것은 23편 중 2편이고 시정도 한 부류다.
+                                    var message =
+                                        "Mermaid 다이어그램이 렌더러에서 컴파일되지 않습니다. " +
+                                        "아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. " +
+                                        $"{stderr}";
+                                    Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
+                                    result.Errors.Add(message);
+                                    result.DetailedErrors.Add(new DetailedError
+                                    {
+                                        Type = ErrorType.MermaidCliError,
+                                        Message = message,
+                                        RawContext = mermaidContent.Trim()
+                                    });
                                 }
                             }
                             else
@@ -8125,6 +8148,31 @@ namespace ReSet.Core.Services
         /// 계획서 22편의 mermaid 발화는 지금 0이므로 이 제외의 실측 비용은 0이고,
         /// 대신 거짓 고발 부류 하나가 통째로 닫힌다.
         ///
+        /// [왜 정규식이 아니라 Markdig인가 - 2026-08-29]
+        /// 예전에는 ```` ```(?&lt;lang&gt;\w*)(?&lt;code&gt;.*?)``` ````로 뽑았다. 그 정규식과
+        /// Markdig는 <b>「닫는 펜스」의 정의가 다르다</b> - 정규식은 ```` ```sql ````을 닫는
+        /// 자리로 읽지만 Markdig는 정보 문자열이 붙은 펜스를 닫는 자리로 인정하지 않는다.
+        /// 그래서 여분의 마커 하나가 끼면 <b>정규식만 창이 한 칸 밀려 산문을 코드라고
+        /// 말한다.</b> 실측으로 그 배치를 재현했다(테스트 `PlanWithUnbalancedFence`) —
+        /// 마커 다섯인 문서에서 Markdig는 블록 둘을 보고 <b>L1을 통과시키는데</b>,
+        /// 정규식은 `## 단계별 …` 이하 산문을 코드로 잡는다.
+        ///
+        /// 「간접 방어가 있다」고 볼 수 없는 이유가 그것이다 - 문서가 무효라서 함께
+        /// 떨어지는 것이 아니라, <b>L1이 초록인 채로 이 넷만 유령을 낸다.</b> 그때 실리는
+        /// 지적은 실측상 `NOLOCK` 457 · 제어 흐름 68 · API 41이고, 모델은 없는 것을
+        /// 지우려 재시도를 태운다.
+        ///
+        /// 가드로 막지 않고 파서를 바꾼 것은 조건을 정할 수 없어서다. 「마커 개수가
+        /// 홀수」는 틀린 조건이다 - 위 문서가 홀수인데 Markdig에겐 정상이고, 반대로
+        /// 짝수여도 정보 문자열 배치에 따라 정규식만 밀린다. <b>불일치를 재는 대신
+        /// 없앤다</b> - `ValidateMarkdownStructure`와 `PostProcessMarkdown`이 이미 이
+        /// 파서를 쓰므로, 이제 「코드인가」의 정의가 이 파일 안에서 하나다.
+        ///
+        /// 형제 헬퍼 <see cref="CleanedSqlFences"/>·<see cref="CleanedCodeFences"/>는
+        /// 같은 정규식을 쓰지만 <b>건드리지 않는다</b> - 명세서 경로의 검사들이 함께
+        /// 쓰고 있어 판정 범위가 바뀐다. 그쪽을 옮기려면 그 경로의 코퍼스 스윕이 따로
+        /// 필요하다.
+        ///
         /// [`//`를 지우는 이유] <see cref="BlankCommentsAndStrings"/>는 SQL 주석
         /// (<c>--</c>·<c>/* */</c>)과 <c>'…'</c>만 지운다. 그런데 이 셋이 겨누는 위반은
         /// ```csharp 펜스에 살고 거기 주석 기호는 <c>//</c>다. 공용
@@ -8133,18 +8181,24 @@ namespace ReSet.Core.Services
         /// </summary>
         private static IEnumerable<(string Cleaned, int Offset)> CleanedAppCodeFences(string markdown)
         {
-            foreach (Match fence in Regex.Matches(
-                markdown, @"```(?<lang>\w*)(?<code>.*?)```", RegexOptions.Singleline))
+            foreach (var block in Markdown.Parse(markdown).Descendants<FencedCodeBlock>())
             {
-                if (string.Equals(fence.Groups["lang"].Value, "mermaid", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(block.Info, "mermaid", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                var codeGroup = fence.Groups["code"];
-                yield return (
-                    BlankSlashSlashComments(BlankCommentsAndStrings(codeGroup.Value)),
-                    codeGroup.Index);
+                if (block.Lines.Count == 0) continue;
+
+                // 원문에서 잘라 낸다 - 줄을 다시 이어 붙이면 개행 표기(\r\n)나 들여쓰기
+                // 처리에 따라 길이가 달라져, 지운 사본의 인덱스를 원문에 댈 수 없다.
+                var slices = block.Lines.Lines;
+                var start = slices[0].Slice.Start;
+                var end = slices[block.Lines.Count - 1].Slice.End;
+                if (start < 0 || end < start || end >= markdown.Length) continue;
+
+                var code = markdown[start..(end + 1)];
+                yield return (BlankSlashSlashComments(BlankCommentsAndStrings(code)), start);
             }
         }
 
@@ -9063,6 +9117,7 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
                 sb.AppendLine("**[Mermaid 문법 자율 교정 체크리스트]**:");
                 sb.AppendLine("  1. **화살표 구문**: `->` 나 `- ->`는 오류입니다. 반드시 `-->` 또는 `-.->` 또는 `==>` 중 하나를 사용하십시오.");
+                sb.AppendLine("  1-1. **다이어그램 종류마다 화살표가 다릅니다**: `--->`(대시 셋 이상)는 `flowchart`에서는 유효하지만 `sequenceDiagram`에는 없는 문법입니다. `sequenceDiagram`에서는 `->>`(실선 화살표) 또는 `-->>`(점선 화살표)를 쓰십시오. 실측상 렌더러가 반려한 다이어그램은 전부 이 자리였습니다.");
                 sb.AppendLine("  2. **블록 짝 맞춤**: `subgraph [제목]`으로 시작했다면 블록 끝에 반드시 `end` 키워드를 작성했는지 확인하십시오.");
                 sb.AppendLine("  3. **특수 기호**: 라벨 텍스트 내에 괄호, 특수기호, 기호 등이 들어간 경우 100% 큰따옴표(`\"` `\"`)로 묶어 명시하십시오.");
                 sb.AppendLine();
