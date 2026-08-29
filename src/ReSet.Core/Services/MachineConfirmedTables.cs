@@ -87,6 +87,13 @@ namespace ReSet.Core.Services
             // 대상 변수 모두 원문에 있다.
             new MachineConfirmedTable(
                 DmlScopeExtractor.ErrorCodeTableHeading,
+                MachineConfirmedTableVerification.DdlTranscription),
+            // DDL 본문의 DECLARE를 그대로 옮긴 전사 표다 - 변수명·타입·초기값 셋 다
+            // 원문에 있다. known-defects (5-3-7)의 강제: 이 표가 카탈로그 밖에 있는
+            // 동안 그 존재가 모델 재량이었고, 모델 교체만으로 코퍼스에서 통째로
+            // 사라져 검사 D가 18 → 0으로 꺼졌다.
+            new MachineConfirmedTable(
+                LocalVariableDeclarationExtractor.TableHeading,
                 MachineConfirmedTableVerification.DdlTranscription)
         };
 

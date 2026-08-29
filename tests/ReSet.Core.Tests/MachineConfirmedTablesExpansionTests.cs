@@ -54,11 +54,44 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void All_ShouldContainErrorCodeTableAtTheEnd()
+        public void All_ShouldContainTheLocalVariableTableAtTheEnd()
         {
+            // [2026-08-29 갱신] 이 단언의 취지는 "끼우지 마라"이지 "오류 코드 표가
+            // 영원히 마지막"이 아니다. 지역 변수 표가 새 마지막이 됐다(known-defects
+            // (5-3-7)의 강제). 다음에 표를 더하는 사람은 여기 이름을 자기 표로 바꾸고,
+            // 그 행위가 "맨 뒤에 붙였다"의 증거가 된다.
             var last = MachineConfirmedTables.All[^1];
 
-            Assert.Equal(DmlScopeExtractor.ErrorCodeTableHeading, last.Heading);
+            Assert.Equal(LocalVariableDeclarationExtractor.TableHeading, last.Heading);
+        }
+
+        [Fact]
+        public void All_ShouldContainTheLocalVariableTable()
+        {
+            var headings = MachineConfirmedTables.All.Select(t => t.Heading).ToList();
+
+            Assert.Contains(LocalVariableDeclarationExtractor.TableHeading, headings);
+        }
+
+        [Fact]
+        public void All_ShouldAppendTheLocalVariableTableAfterTheErrorCodeTable()
+        {
+            // 순서가 곧 Critic 프롬프트에 실리는 순서다. 기존 항목 사이에 끼우면
+            // 그 뒤 항목들의 바이트가 통째로 밀린다.
+            var headings = MachineConfirmedTables.All.Select(t => t.Heading).ToList();
+
+            Assert.True(
+                headings.IndexOf(LocalVariableDeclarationExtractor.TableHeading)
+                    > headings.IndexOf(DmlScopeExtractor.ErrorCodeTableHeading),
+                "새 표는 기존 마지막 항목 뒤에 와야 한다");
+        }
+
+        [Fact]
+        public void CriticExemptionBlock_ShouldCoverTheLocalVariableTable()
+        {
+            // All에 넣으면 Critic 면제가 자동으로 따라온다. 이것이 없으면 Critic이
+            // 새 표를 환각으로 오판하고 L1은 반대로 전사를 요구해 교착이 된다.
+            Assert.Contains("지역 변수", MachineConfirmedTables.CriticExemptionBlock);
         }
 
         [Fact]
