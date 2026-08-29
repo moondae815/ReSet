@@ -165,6 +165,69 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ValidateBatchStep_ShouldLeaveALocallyDefinedRoutineToTheNewObjectCheck()
+        {
+            // 소유권 이전. 미지 테이블 검사가 이 이름을 "실재하지 않는 테이블"로 잡고
+            // "신규 객체라면 batch 스키마에 두십시오"라고 답하는데, 규칙 3-1은 신규
+            // 저장 프로시저를 **아예** 금지하므로 틀린 지시다. 정의는 문서 검사
+            // (CheckNewDatabaseObjectDefinition)가 규칙 3-1의 문구로 답한다.
+            //
+            // 실측(2026-08-29): ① 발화 190건 중 15건이 이 모양이다 - 같은 단계 본문이
+            // 그 이름을 CREATE로 정의한다. 관례는 CheckNonCanonicalBatchSchema와 같다
+            // ("여기서 다시 들면 같은 참조가 두 개의 다른 이름으로 걸린다").
+            var markdown = Section("""
+                CREATE OR ALTER PROCEDURE dbo.usp_POQSettelProc8_S11
+                AS
+                BEGIN
+                    SELECT 1 FROM dbo.TSettleMst;
+                END
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(
+                result.Errors,
+                e => e.Contains("usp_POQSettelProc8_S11", StringComparison.Ordinal)
+                     && e.Contains("스키마 카탈로그에도", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillFlagARoutineThisStepOnlyCalls()
+        {
+            // 소유권은 **정의**를 따라간다. 이 단계가 부르기만 하고 정의는 다른 절에
+            // 있으면 문서 검사가 그 정의를 잡지만, 이 단계에서는 여전히 카탈로그에
+            // 없는 참조다 - 침묵시키면 아무 데도 정의가 없는 호출까지 함께 사라진다.
+            var markdown = Section("EXEC dbo.WritePOQBatchError @Code = -1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.Contains(
+                result.Errors,
+                e => e.Contains("WritePOQBatchError", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldNotAdviseCreatingAProcedureInTheBatchSchema()
+        {
+            // 남는 발화의 시정 문구가 규칙 3-1과 부딪히면 안 된다. 규칙 4-1도
+            // "이 규칙은 신규 TABLE을 다스린다; 3-1이 신규 프로시저를 통째로
+            // 금지하므로 batch 스키마 프로시저는 이 규칙이 여는 선택지가 아니다"
+            // 라고 이미 못박아 두었다.
+            var markdown = Section("EXEC dbo.WritePOQBatchError @Code = -1;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            var reported = Assert.Single(
+                result.Errors, e => e.Contains("WritePOQBatchError", StringComparison.Ordinal));
+
+            Assert.DoesNotContain("신규 객체라면 batch 스키마에 두십시오", reported);
+            Assert.Contains("저장 프로시저", reported);
+        }
+
+        [Fact]
         public void ValidateBatchStep_ShouldNotFlagAnotherStepsLegacyProcedure()
         {
             // 목차가 이 Job의 원본이라고 선언한 것은 **어느 단계 몫이든** 실재하는

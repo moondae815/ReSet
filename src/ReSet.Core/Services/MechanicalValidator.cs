@@ -88,6 +88,9 @@ namespace ReSet.Core.Services
         NoLockHintInCode,
         FrameworkTypePrescribed,
         SqlSideControlFlow,
+        // 규칙 3-1의 마지막 미강제 조항 - 신규 저장 프로시저·함수·트리거 정의
+        // (조사 §5 B급 4). 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
+        NewDatabaseObjectDefined,
         General
     }
 
@@ -251,6 +254,7 @@ namespace ReSet.Core.Services
                 SafeCheck(() => CheckNoLockHints(cleansed, result));
                 SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
                 SafeCheck(() => CheckSqlSideControlFlow(cleansed, result));
+                SafeCheck(() => CheckNewDatabaseObjectDefinition(cleansed, result));
             }
             catch (Exception ex)
             {
@@ -1986,6 +1990,22 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                // 이 단계가 스스로 정의하는 루틴은 <see cref="CheckNewDatabaseObjectDefinition"/>의
+                // 것이다. 바로 위 IsNonCanonicalBatchObject와 같은 관례다 - 여기서 다시
+                // 들면 같은 참조가 두 개의 다른 이름으로 걸리고, 더 나쁘게는 <b>시정
+                // 문구가 서로 반대를 말한다</b>: 이 검사는 "신규 객체라면 batch 스키마에
+                // 두십시오"라고 답하는데 규칙 3-1은 신규 저장 프로시저를 아예 금지한다
+                // (규칙 4-1도 "3-1이 신규 프로시저를 통째로 금지하므로 batch 스키마
+                // 프로시저는 이 규칙이 여는 선택지가 아니다"라고 못박아 두었다).
+                // 실측(2026-08-29): 발화 190건 중 15건이 이 모양이었다.
+                //
+                // <b>정의</b>가 있을 때만 넘긴다 - 부르기만 하는 이름까지 침묵시키면
+                // 아무 데도 정의가 없는 호출이 함께 사라진다.
+                if (DefinesRoutine(stepMarkdown, candidate))
+                {
+                    continue;
+                }
+
                 var bare = BareObjectName(candidate);
 
                 // 맨이름이 한정자면 객체 참조가 아니라 `SETTLE_POQ_DB.dbo`처럼 DB와
@@ -2002,10 +2022,18 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                // [시정 문구 - 규칙 3-1과 부딪히지 않게]
+                // 예전 문구는 "신규 객체라면 batch 스키마에 두십시오"였는데, 지목된
+                // 이름이 프로시저일 때 그것은 규칙 3-1이 금지한 바로 그 일을 하라는
+                // 지시가 된다. 재생성을 태우면서 규칙 위반 쪽으로 미는 문구였다.
+                // 신규 객체가 허용되는 것은 테이블뿐이라는 사실을 문구가 직접 말한다.
                 result.Errors.Add(
                     $"{step.Code} 섹션이 `{candidate}`를 참조하지만 이 작업의 스키마 카탈로그에도, " +
-                    "이 계획서가 만드는 batch 스키마 객체에도 없습니다. 실재하는 대상으로 바꾸거나, " +
-                    "신규 객체라면 batch 스키마에 두십시오.");
+                    "이 계획서가 만드는 batch 스키마 객체에도 없습니다. 실재하는 대상으로 바꾸십시오. " +
+                    "새로 만들 수 있는 것은 배치 전용 <b>테이블</b>뿐이며 그것은 `batch`(작업 객체) 또는 " +
+                    "`batch_shadow`(섀도) 스키마에 두어야 합니다(규칙 4-1). 새 <b>저장 프로시저·함수·" +
+                    "트리거</b>는 어느 스키마에도 만들지 마십시오 - 규칙 3-1이 금지합니다. 그 로직은 " +
+                    "애플리케이션이 보내는 문장으로 표현하십시오.");
             }
         }
 
@@ -7920,6 +7948,50 @@ namespace ReSet.Core.Services
             @"\bGOTO\s+[A-Za-z_]\w*|@@ERROR\b|\bBEGIN\s+TRY\b|\bEND\s+TRY\b|\bBEGIN\s+CATCH\b|\bEND\s+CATCH\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        /// <summary>
+        /// 규칙 3-1이 금지한 신규 DB 객체 정의. 규칙 본문이 셋을 함께 든다 -
+        /// "Do NOT define any NEW stored procedure, function, or trigger".
+        ///
+        /// <c>CREATE</c>와 종류 사이를 <c>\s+</c>로 두는 것이 중요하다 - 레거시 DDL의
+        /// 실제 표기가 <c>CREATE                           PROCEDURE</c>이고, 계획서는
+        /// <c>CREATE OR ALTER PROCEDURE</c>를 쓴다. 리터럴로 세면 둘 다 0으로 나온다
+        /// (조사 §10-1이 같은 함정을 적었다). 이름은 대괄호 인용도 받는다 -
+        /// 코퍼스 113건 중 2건이 <c>[batch].[ApplyS08CommonCommissionTax]</c> 모양이다.
+        /// </summary>
+        private static readonly Regex NewDatabaseObjectPattern = new(
+            @"\bCREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b" +
+            @"\s*(?<name>(?:\[[^\]]+\]|[\w#]+)(?:\s*\.\s*(?:\[[^\]]+\]|[\w#]+))*)?",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 이 본문이 그 식별자를 새 루틴으로 <b>정의</b>하는가. 소유권 판정이므로
+        /// 정의만 본다 - 호출(`EXEC dbo.X`)은 정의가 아니고, 정의가 어디에도 없는
+        /// 호출은 미지 참조로 계속 잡혀야 한다.
+        ///
+        /// 이름 대조는 맨이름으로 한다 - 지목된 식별자는 `dbo.usp_X`인데 정의는
+        /// `[dbo].[usp_X]`나 다른 한정자로 쓸 수 있다.
+        /// </summary>
+        private static bool DefinesRoutine(string markdown, string candidate)
+        {
+            var bare = BareObjectName(candidate);
+            if (bare.Length == 0) return false;
+
+            foreach (var (cleaned, _) in CleanedAppCodeFences(markdown))
+            {
+                foreach (Match definition in NewDatabaseObjectPattern.Matches(cleaned))
+                {
+                    var name = definition.Groups["name"].Value;
+                    if (name.Length == 0) continue;
+                    if (string.Equals(BareObjectName(name), bare, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>발화가 아무리 많아도 메시지에 싣는 실물 줄의 수.</summary>
         private const int SqlPlacementExampleLimit = 5;
 
@@ -8181,6 +8253,68 @@ namespace ReSet.Core.Services
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.SqlSideControlFlow,
+                Message = message,
+                RawContext = hits[0].Line
+            });
+        }
+
+        /// <summary>
+        /// 규칙 3-1 - 이 배치를 위해 새 저장 프로시저·함수·트리거를 정의하는 것.
+        ///
+        /// [조사 §5 B급 4] 규칙 3-1의 조항 중 마지막까지 기계 강제가 0이던 자리다.
+        /// 기준선 코퍼스가 신규 `CREATE PROCEDURE`를 합계 112개 냈고, 2차 통제군의
+        /// 0은 <b>규칙의 효력이 아니라 모델의 습성</b>이었다 - 같은 모델의 1차
+        /// 통제군이 옛 규칙으로도 0이었고, 기준선의 유일한 Claude 표본 `Proc4`도
+        /// 옛 규칙에 0이다(§6-(2)). 이 축은 지금까지 한 번도 강제된 적이 없다.
+        ///
+        /// [왜 단계 검사가 아니라 문서 검사인가]
+        /// 실측: 계획서의 `CREATE PROCEDURE` 113개 중 109개는 단계 절 안에 있지만,
+        /// 나머지 <b>4개가 전부 「### 공통 SQL 오류 추적 패턴」 절의 Tasklet 래퍼</b>다
+        /// (Proc10·Proc2·Proc3·Proc8). 배치 전체가 그 하나에 걸리므로 그 넷이 가장
+        /// 무거운 위반이고, 단계 검사로 만들면 정확히 그것을 놓친다.
+        ///
+        /// [왜 원본 인용 예외를 두지 않는가 - 조사 §4의 권고를 채택하지 않았다]
+        /// §4는 「이 이름이 이 Job의 레거시 프로시저인가」를 물으려
+        /// <c>ValidateConsolidated</c>의 시그니처를 넓히라고 권했다(선택지 1).
+        /// 실측이 그 권고를 뒤집는다:
+        ///
+        /// (1) <b>인용 예외가 도달 불가능하다.</b> 계획서 프롬프트
+        ///     (`raw/prompt-context.md`)에 원본 프로시저 DDL이 실리지 않는다 - Actor가
+        ///     받는 것은 명세서 산문이고, 프롬프트 전체에서 `CREATE PROCEDURE`는 규칙
+        ///     본문 두 곳뿐이다. 인용할 원본을 손에 쥔 적이 없다.
+        /// (2) 코퍼스 113개가 <b>전부 지어낸 이름</b>이다.
+        /// (3) 결정적으로, <b>로스터를 넣으면 검사가 약해진다.</b> 레거시명과 겹치는
+        ///     유일한 1건(`POQSettlePrco20:1900`의 `dbo.UP_UTIL_SETTLE_CANCEL_INS`)이
+        ///     인용이 아니라 <b>재정의</b>이고, 로스터는 그 진짜 위반을 통과시킨다.
+        ///     도달 불가능한 예외를 사느라 실현된 위반 하나를 놓치는 거래다.
+        ///
+        /// 프롬프트 조성이 바뀌어 원본 DDL이 실리게 되면 그때 (1)이 무너진다. 그 회차에
+        /// 로스터를 붙이면 되고, 재료는 `StepInterfaceFacts.CollectSchemaCatalog`가
+        /// 이미 같은 자리에서 만든다.
+        ///
+        /// 스코프는 형제 검사 셋과 같다(<see cref="CleanedAppCodeFences"/>) - mermaid
+        /// 노드 라벨은 원본 흐름을 인용하는 그림 텍스트이지 정의가 아니다.
+        /// </summary>
+        private static void CheckNewDatabaseObjectDefinition(string markdown, ValidationResult result)
+        {
+            var hits = CollectCodeTokenHits(
+                markdown, CleanedAppCodeFences(markdown), NewDatabaseObjectPattern);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서가 이 배치를 위해 새 저장 프로시저·함수·트리거를 정의합니다. " +
+                "규칙 3-1은 단계 로직의 거처를 대상 언어 배치 애플리케이션으로 정합니다 - " +
+                "SQL은 그 애플리케이션이 <b>보내는 문장</b>으로만 나타나야 하고, 새 DB 객체를 " +
+                "만드는 것은 로직을 데이터베이스에 되돌려 놓는 것입니다. 정의를 지우고 그 본문을 " +
+                "애플리케이션 의사코드와 그 코드가 보내는 개별 문장으로 푸십시오. 트랜잭션 경계와 " +
+                "오류 관측은 애플리케이션이 소유합니다. 배치 전용 <b>테이블</b>은 여전히 필요하며 " +
+                "규칙 4-1(`batch`·`batch_shadow` 스키마)이 다스립니다 - 프로시저는 그 규칙이 여는 " +
+                $"선택지가 아닙니다. ({SummarizeCodeTokenHits(hits)})";
+
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.NewDatabaseObjectDefined,
                 Message = message,
                 RawContext = hits[0].Line
             });
@@ -8879,7 +9013,8 @@ namespace ReSet.Core.Services
             // 몫이고, 이 버킷은 그 몫을 대신하지 않는다.
             var sqlPlacementTypes = new[]
             {
-                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow
+                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow,
+                ErrorType.NewDatabaseObjectDefined
             };
             var sqlPlacementErrors = DetailedErrors.FindAll(e => Array.IndexOf(sqlPlacementTypes, e.Type) >= 0);
             if (sqlPlacementErrors.Count > 0)
@@ -8914,7 +9049,8 @@ namespace ReSet.Core.Services
                 ErrorType.HeaderMissing, ErrorType.MermaidQuoteMissing, ErrorType.MermaidCliError,
                 ErrorType.UpdateMappingMissing, ErrorType.SchemaClaimFalse,
                 ErrorType.TableIdentitySplit, ErrorType.General,
-                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow
+                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow,
+                ErrorType.NewDatabaseObjectDefined
             };
             var unbucketed = DetailedErrors.FindAll(e => Array.IndexOf(bucketed, e.Type) < 0);
             if (unbucketed.Count > 0)

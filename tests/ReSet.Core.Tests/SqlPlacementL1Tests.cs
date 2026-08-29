@@ -362,6 +362,172 @@ namespace ReSet.Core.Tests
             Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
         }
 
+        // ── 규칙 3-1: 신규 저장 프로시저·함수·트리거 금지 ───────────────────────
+        //
+        // 조사 §5 B급 4. 강제가 0건이던 마지막 조항이다. 코퍼스 실측: 계획서 22편에
+        // `CREATE PROCEDURE` 113개가 있고 **전부 지어낸 이름**이다. 문서 검사인 이유도
+        // 실측이다 - 109개는 단계 절 안이지만 나머지 4개가 전부 「공통 SQL 오류 추적
+        // 패턴」 절의 Tasklet 래퍼이고, 그것이 배치 전체가 걸린 가장 무거운 신규 SP다.
+        //
+        // 원본 인용 예외는 두지 않는다. 조사 §4는 「이 이름이 레거시인가」를 물으려
+        // 시그니처를 넓히라고 권했지만, 프롬프트에 원본 DDL이 실리지 않아 인용이
+        // 도달 불가능하고, 로스터를 넣으면 오히려 약해진다 - 레거시명과 겹치는 유일한
+        // 1건(POQSettlePrco20:1900)이 인용이 아니라 **재정의**라 로스터가 그 진짜
+        // 위반을 통과시킨다.
+
+        [Fact]
+        public void ValidateConsolidated_ReportsANewStoredProcedure()
+        {
+            // POQSettleProc8/S11:39 실물.
+            var markdown = Plan("""
+                ```sql
+                CREATE OR ALTER PROCEDURE dbo.usp_POQSettelProc8_S11
+                    @pi_strYMD CHAR(8)
+                AS
+                BEGIN
+                    SELECT 1;
+                END
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsABracketQuotedName()
+        {
+            // POQSettleProc10 실물. 코퍼스 113건 중 2건이 이 표기다.
+            var markdown = Plan("""
+                ```sql
+                CREATE OR ALTER PROCEDURE [batch].[ApplyS08CommonCommissionTax]
+                AS
+                BEGIN
+                    SELECT 1;
+                END
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsTheLegacySpellingWithManySpaces()
+        {
+            // 레거시 DDL의 실제 표기가 `CREATE                           PROCEDURE`다
+            // (dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA). 리터럴로 세면 0으로 잘못 나온다.
+            var markdown = Plan("""
+                ```sql
+                CREATE                           PROCEDURE dbo.usp_S05_Rebuild
+                AS
+                BEGIN
+                    SELECT 1;
+                END
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsANewFunctionAndTrigger()
+        {
+            // 규칙 3-1의 문면은 "any NEW stored procedure, function, or trigger"다.
+            // 코퍼스 실측은 프로시저 113 · 함수 0 · 트리거 0이라, 이 둘은 아직
+            // 실현되지 않은 축을 미리 못박는 트립와이어다.
+            var fn = Plan("""
+                ```sql
+                CREATE FUNCTION dbo.ufn_CanonicalSource(@ymd CHAR(8)) RETURNS TABLE AS RETURN SELECT 1 AS x;
+                ```
+                """);
+            var trigger = Plan("""
+                ```sql
+                CREATE TRIGGER dbo.trg_TSettleMst_Audit ON dbo.TSettleMst AFTER INSERT AS SELECT 1;
+                ```
+                """);
+
+            Assert.True(Fires(fn, ErrorType.NewDatabaseObjectDefined));
+            Assert.True(Fires(trigger, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheProseDeclaresTheProhibition()
+        {
+            // POQSettleBatch3:379 실물.
+            var markdown = Plan("""
+                이 단계는 신규 저장 프로시저를 정의하지 않으며, 아래 SQL은 모두
+                애플리케이션이 전송하는 개별 문장이다. `CREATE PROCEDURE`는 원본
+                프로시저를 인용할 때 외에는 이 문서에 나타나지 않는다.
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheDefinitionIsOnlyQuotedInAComment()
+        {
+            var markdown = Plan("""
+                ```sql
+                /* 원본은 CREATE PROCEDURE dbo.UP_UTIL_SETTLE_INS로 시작하지만
+                   본 이관은 신규 프로시저를 만들지 않는다. */
+                DELETE FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @pi_strYMD;
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenAMermaidNodeLabelNamesTheOriginal()
+        {
+            var markdown = Plan("""
+                ```mermaid
+                flowchart TD
+                STRT["CREATE PROCEDURE dbo.UP_UTIL_SETTLE_INS (원본)"] --> DONE["끝"]
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NewDatabaseObjectDefined));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsEveryNewObjectInOneError()
+        {
+            // POQSettleProc2가 한 문서에 18개를 정의한다. 정의마다 오류를 만들면
+            // SuggestedPromptFix가 못 읽을 것이 된다.
+            var markdown = Plan("""
+                ```sql
+                CREATE OR ALTER PROCEDURE batch.ExecuteS01Initialization AS BEGIN SELECT 1; END
+                CREATE OR ALTER PROCEDURE batch.ExecuteS04BasicSettlementRebuild AS BEGIN SELECT 1; END
+                CREATE OR ALTER PROCEDURE batch.ExecuteS06ExceptionRules AS BEGIN SELECT 1; END
+                ```
+                """);
+
+            var fired = Validate(markdown).DetailedErrors
+                .Where(e => e.Type == ErrorType.NewDatabaseObjectDefined)
+                .ToList();
+
+            Assert.Single(fired);
+            Assert.Contains("ExecuteS01Initialization", fired[0].Message);
+            Assert.Contains("ExecuteS06ExceptionRules", fired[0].Message);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_TellsTheModelToSendStatementsInsteadOfDefiningAProcedure()
+        {
+            var markdown = Plan("""
+                ```sql
+                CREATE OR ALTER PROCEDURE dbo.usp_POQSettelProc8_S11 AS BEGIN SELECT 1; END
+                ```
+                """);
+
+            var fix = Validate(markdown).SuggestedPromptFix;
+
+            Assert.NotNull(fix);
+            Assert.Contains("SQL 거처 규칙 위반", fix);
+            // 미지 테이블 검사가 하던 그 틀린 지시가 여기서 반복되면 안 된다.
+            Assert.DoesNotContain("batch 스키마에 두십시오", fix);
+        }
+
         // ── 발화량과 시정 문구 ──────────────────────────────────────────────────
 
         [Fact]
