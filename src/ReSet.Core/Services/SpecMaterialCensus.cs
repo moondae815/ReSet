@@ -287,12 +287,19 @@ namespace ReSet.Core.Services
             // 앞에 추가된 행(DmlRows·ErrorCodeToOrdinal·SetTargets)은 루프 도중에
             // 값을 실으면 아직 최종값이 아닌 0을 갖게 된다 - 그래서 루프가 다 끝난
             // 뒤 한 번에 채운다.
+            //
+            // [미결 Minor 4 - 리스트 인스턴스를 공유하지 않는다] JobsSkippedForFailure는
+            // "같은 값"을 모든 행에 실어야 하지만 "같은 리스트 인스턴스"를 실으면
+            // 안 된다 - 호출자가 한 행의 결과를 IReadOnlyList<string>에서
+            // List<string>으로 캐스팅해 고치면 여덟 행이 함께 바뀐다. 재료 루프 안에서
+            // 매번 새로 만드는 loss(ObjectsWithLoss)는 이 문제가 원래 없다 - 여기서도
+            // 같은 모양으로 행마다 독립된 배열을 만든다.
             return rows
                 .Select(row => row with
                 {
                     FoldedProcedureCount = procedures.Count,
                     DdlParseFailureCount = ddlParseFailureCount,
-                    JobsSkippedForFailure = jobsSkippedForFailure,
+                    JobsSkippedForFailure = jobsSkippedForFailure.ToArray(),
                 })
                 .ToList();
         }

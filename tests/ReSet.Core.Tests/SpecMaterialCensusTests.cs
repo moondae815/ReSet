@@ -404,5 +404,40 @@ END";
             Assert.Equal(0, row.SpecRowCount);
             Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
         }
+
+        /// <summary>
+        /// [미결 Minor 4] JobsSkippedForFailure는 <see cref="SpecMaterialCensusRow.FoldedProcedureCount"/>와
+        /// 같은 이유로(census 전체의 분모라서) 모든 행에 "같은 값"을 실어야 하지만,
+        /// 그 값을 여덟 행이 전부 "같은 리스트 인스턴스"를 참조하는 방식으로 실으면
+        /// 안 된다 - 호출자가 한 행의 결과를 IReadOnlyList&lt;string&gt;에서
+        /// List&lt;string&gt;으로 캐스팅해 고치면 나머지 일곱 행도 함께 바뀐다.
+        /// ObjectsWithLoss(소실 목록)는 재료 루프 안에서 매번 새 리스트를 만들어 이
+        /// 문제가 없다 - JobsSkippedForFailure만 루프 밖에서 만든 리스트 하나를 모든
+        /// 행에 그대로 물려 공유가 생긴다.
+        ///
+        /// [빈 목록을 쓰면 안 되는 이유] List&lt;T&gt;.ToArray()는 Count == 0일 때 .NET
+        /// 런타임이 내부적으로 공유 빈 배열 인스턴스를 돌려준다 - 그 경우엔 참조
+        /// 동일성 검사가 "공유돼도 무해한" 우연한 통과가 된다(빈 배열은 추가할 수
+        /// 없어 사실상 불변이다). 그래서 poison Job으로 목록을 실제로 채워 이 잠금이
+        /// 우연한 통과가 아니게 한다.
+        /// </summary>
+        [Fact]
+        public void Count_EachRowGetsItsOwnJobsSkippedForFailureListInstance()
+        {
+            var poisonJob = new SweepJob(
+                "PoisonJob",
+                new List<BatchStepPlan>(),
+                new Dictionary<string, string>(),
+                new[] { ("dbo.P", SpecWithoutVariables) },
+                null!,
+                new Dictionary<string, string>());
+
+            var rows = SpecMaterialCensus.Count(new[] { poisonJob });
+
+            Assert.True(rows.Count > 1, "이 테스트는 행이 둘 이상이어야 공유 여부를 관측할 수 있다.");
+            Assert.Equal(new[] { "PoisonJob" }, rows[0].JobsSkippedForFailure);
+
+            Assert.NotSame(rows[0].JobsSkippedForFailure, rows[1].JobsSkippedForFailure);
+        }
     }
 }
