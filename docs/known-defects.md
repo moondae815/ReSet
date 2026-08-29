@@ -2640,6 +2640,11 @@
   > 여기서는 검사 발화가 아니라 원본 DECLARE 대비 표 행 수 자체를 재서, 발화 손실 18건 뒤에
   > **표가 코퍼스 전 프로시저에서 통째로 사라졌다**는 것을 확인한다.
   >
+  > **[2026-08-29 정정, Task 10]** 위 69와 「14개 전부」는 부풀어 있었다 —
+  > 아래 강제 절 (다)·(라)가 정정한다. 69에는 프로시저 파라미터 29건이 섞여
+  > 있었고(진짜 지역 변수는 40), 실질 소실은 9편이다(5편은 애초에 지역
+  > 변수가 없어 잃을 것이 없다). 이 문단은 원문 그대로 두고 정정만 잇는다.
+  >
   > **DDL 쪽 「안 쟀음」(대응물은 있으나 이 회차가 안 셈) — 넷.** `DmlRows`(명세서 행 102) ·
   > `ErrorCodeToOrdinal`(명세서 행 78) · `SetTargets`(명세서 행 52) · `SpecReturnCodes`(명세서
   > 쪽도 이 회차가 안 세어 마찬가지로 「안 쟀음」 — 아래 참고) — 넷 다 DDL 대응물 이름은
@@ -2677,6 +2682,14 @@
   > `SpecStatementFactsExtractor`가 못 읽는다(그 리더의 알려진 한계 6번). 즉 14건 중 적어도
   > 1건은 "모델이 안 썼다"가 아니라 "리더가 못 읽는다"일 가능성이 있고, 이 계기는 그 둘을
   > 가르지 못한다 — 나머지 13건도 마찬가지로 미분류다.
+  >
+  > **[2026-08-29 정정, Task 10]** 아래 강제 절 (마)가 이 미분류를 닫는다 —
+  > 12편은 「지역 변수」 문자열조차 없어 「모델이 안 썼다」, 1편
+  > (`UP_UTIL_SETTLE_SUMMARY_ETC`)은 mermaid 노드 라벨뿐이라 마찬가지로
+  > 「모델이 안 썼다」, 1편(`UP_UTIL_SETTLE_EXCEPTION_PROC`)은 표를 썼는데
+  > 헤딩이 없어 「리더가 못 읽는다」다 — 위에서 이 마지막 사례로 추측했던
+  > 객체(`UP_UTIL_SETTLE_SUMMARY_EXTRA`)가 아니라 `EXCEPTION_PROC`이 실물
+  > 반례였다. 이 문단은 원문 그대로 두고 정정만 잇는다.
   >
   > **이 계기는 강제를 걸지 않는다.** `SpecMaterials.All`의 여덟 재료 중 강제(`Enforced`)로
   > 표시된 것은 `DmlRows`·`ErrorCodeToOrdinal` 둘뿐이고 `LocalVariables`는 여전히 강제
@@ -2731,6 +2744,117 @@
   > 그리고 보고서 자신). `LocalVariables`를 포함한 재료 분모 실측값도 1차·2차가 문자
   > 단위로 같았다 — 두 실행 사이에 바뀐 것은 명세서 쪽 라벨 표기 로직뿐, 코퍼스도 계수
   > 로직의 산술도 그대로였다.
+
+  > **[2026-08-29 강제] 이 표가 기계 확정 표가 됐다.** 설계서
+  > `docs/superpowers/specs/2026-08-29-local-variable-table-enforcement-design.md`.
+  >
+  > **(가) 강제 세 층이 섰다.**
+  > - **카탈로그** — `MachineConfirmedTables.All`의 마지막 항목
+  >   (`### 지역 변수 (기계 확정 — 수정 금지)`, `DdlTranscription`).
+  > - **프롬프트** — `AiService.BuildLocalVariableTableLines`. 갈래 다섯 중 셋에
+  >   `Table`(SP 전체 · 함수 · `OverviewAndParameters`), 둘은 `Omit`
+  >   (`CrudAnalysis` · `LogicAndVisualization`). **헤딩 리터럴을 함께 싣는다.**
+  > - **L1** — `CheckLocalVariableDeclarationTable`, **양방향**(사실→행,
+  >   행→사실). `Validate(markdown, expectations)`에만 배선.
+  > - **캐시** 17 → 18.
+  >
+  > **(나) ★ 오늘 검사 D는 여전히 침묵한다 — 그리고 어느 경로에서인지.**
+  > **이 회차는 재생성을 하지 않았다**(사용자 결정). 코퍼스 명세서가 옛 판이라
+  > 재료가 아직 없다. **발화 0을 통과로 읽지 마라.**
+  >
+  > 침묵의 범위도 적는다. 새 검사는 `Validate` 경로에만 있다. 두 세션이 각각
+  > 실측했다:
+  >
+  > ```
+  > Validate(markdown, specExpectations)   6회 호출  ← 전부 RunCodeObjectPipelineCoreAsync
+  > ValidateConsolidated(markdown)         2회       ← RunConsolidatedPipelineAsync
+  > ValidateBatchStep(...)                 1회       ← GenerateStepSectionWithFloorRetryAsync
+  > ```
+  >
+  > `RunCodeObjectPipelineCoreAsync`에 닿는 공개 진입점은
+  > `RunCodeObjectPipelineAsync` 하나이고 그것을 부르는 곳은 `Program.cs:1833`
+  > (SP 분석 경로)뿐이다. **배치 Job 흐름은 그 자리를 안 지난다.** →
+  > **계획서·단계 생성에서는 이 검사가 한 번도 안 돈다.**
+  >
+  > **(다) ★★ 「DDL 사실 69」에 프로시저 파라미터가 섞여 있었다 — 새 결함.**
+  > **(5-3-7)의 기존 실측 배너가 인용하는 69가 부풀어 있다.**
+  >
+  > ```
+  > 69 = 40 (진짜 DECLARE 지역 변수) + 29 (프로시저 파라미터 중복계수)
+  > ```
+  >
+  > **원인:** 이 ScriptDom 판에서 **`ProcedureParameter`가
+  > `DeclareVariableElement`의 하위 타입**이라, `Visit(DeclareVariableElement)`
+  > 만 오버라이드한 방문자가 파라미터 노드에서도 발화한다.
+  > `SpecMaterialCensus.DeclaredVariableVisitor`에 그 필터가 없다.
+  > (`LocalVariableDeclarationExtractor`는
+  > `if (node is ProcedureParameter) return;`로 명시 배제한다.)
+  >
+  > **확인 경로 셋(리뷰어가 각각 독립으로):** 코퍼스 테스트 재실행 · 원시
+  > `metadata.json`의 `StaticAnalysis.ProcedureParameters` 직접 합산(29) ·
+  > **별도 프로그램으로 기제 재현**(그 방문자가 `ProcedureParameter` 노드에서
+  > 발화하는 것을 실행 확인).
+  >
+  > 명세서의 「지역 변수 표」는 파라미터를 안 싣는다(파라미터는
+  > `## 파라미터 목록` 소관). **DDL 쪽만 파라미터를 세는 것은 대조가 아니다 —
+  > 분모가 부풀어 소실이 실제보다 커 보인다.**
+  >
+  > **(라) ★★ 「14 프로시저 전량 소실」을 정정한다.**
+  > **진짜 소실은 9편이다.** census의 소실 판정이
+  > `ddlCount > 0 && specCount == 0`인데 그 `ddlCount`가 파라미터를 포함해
+  > 14편 전부가 `> 0`이었다. 파라미터를 빼면:
+  >
+  > ```
+  > 실질 소실 9편 (지역 변수 사실 합 40)
+  >   UP_UTIL_SETTLE_COMM_UPD(1) · UP_UTIL_SETTLE_EXCEPTION_PROC(3) ·
+  >   UP_UTIL_SETTLE_EXPECT_PROC(1) · UP_UTIL_SETTLE_INS_EXTRA(3) ·
+  >   UP_UTIL_SETTLE_INS_EXTRA4PLCARD(1) · UP_UTIL_SETTLE_PROC_ETC(12) ·
+  >   UP_UTIL_SETTLE_SUMMARY_ETC(15) · UP_UTIL_SETTLE_SUMMARY_EXTRA(1) ·
+  >   UP_Util_Settle_Summary_AcqManual(3)
+  >
+  > 잃을 것이 없는 5편 (지역 변수 0)
+  >   UP_UTIL_SETTLE_CANCEL_INS · UP_UTIL_SETTLE_INS ·
+  >   UP_UTIL_STAT_PGCOLLECT_INS · UP_Util_PG_Client_CMRate_Ins ·
+  >   UP_Util_Settle_Summary
+  > ```
+  >
+  > **강제 결정은 안 바뀐다** — 지역 변수를 가진 9편에서는 소실이 여전히
+  > 전량이다. **그러나 다음 사람이 읽는 분모가 달라진다.**
+  >
+  > **(마) 소실 14건의 원인 분해가 닫혔다.** 위에서 이 회차가 「원인 귀속은
+  > 안 갈랐다」고 적은 자리를 이것이 닫는다.
+  >
+  > ```
+  > 12편  「지역 변수」 문자열조차 없다          → 모델이 안 썼다
+  >  1편  SUMMARY_ETC — mermaid 노드 라벨뿐     → 모델이 안 썼다
+  >  1편  EXCEPTION_PROC — 표를 썼는데 헤딩이 없다 → 리더가 못 읽는다
+  > ```
+  >
+  > `EXCEPTION_PROC`의 실물은
+  > `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md:87-92`다
+  > — `## 파라미터 목록` 아래 산문 뒤에 표만 놓여 있다. **렌더러가 헤딩
+  > 리터럴을 함께 싣게 하면서 그 실패 모드가 구조적으로 사라졌다.**
+  >
+  > **(바) 「한 번도 안 돌아 본 검사」 위험은 승격 전에 닫았다.**
+  > `LocalVariableTableCorpusTests`의 실측:
+  >
+  > ```
+  > 객체 31 · 사실을 가진 객체 25 · 사실 합 101
+  >   프로시저 14 · 9 · 40   |   함수(같은 DB) 10 · 9 · 23   |   함수(외부 DB) 7 · 7 · 38
+  > 갈래 셋(완전 전사 → 발화 0 / 사실 0건 → 침묵 / 사실 있는데 표 없음 → 발화)
+  > 전부 만족
+  > ```
+  >
+  > `ErrorCodeTableCorpusTests`가 캐시 17 승격 때 한 것과 같은 자다.
+  >
+  > **(사) 변이 검증 결과.** 열넷 중 열셋 사망 · 하나 생존. 생존은
+  > **표시 계층**(렌더러가 `InitialValue` 칸을 언제나 빈 칸으로) — 기존
+  > 프롬프트 테스트가 이름·타입 문자열만 봐서 못 잡았다. 행 모양 단언으로
+  > 보강했고 재주입으로 사망을 확인했다.
+  >
+  > **직전 회차 보고서가 「다음 회차 변이 목록은 출력 칸마다 하나씩으로
+  > 짜라」고 권고했고, 그 권고 때문에 넣은 변이가 유일한 생존자였다.**
+  > 상세: `docs/audit-reports/sweeps/2026-08-29-local-variable-mutations.md`.
 
   **단계 SQL 이 바뀐 것이 아니다.** 단계 번들은 이 회차에 재생성되지 않았다(`output/Jobs` 최신
   mtime 2026-08-24, 재생성 당일 변경 0 건). **검사가 재료를 잃었다.**
