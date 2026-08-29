@@ -721,5 +721,37 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다", section);
             Assert.Contains("jobs가 null일 때만 조기 반환한다", section);
         }
+
+        /// <summary>
+        /// [미결 Minor 5 - Count → Render 이음매] 위의 두 "조사 실패" 테스트는
+        /// 각각 반쪽만 잡는다 - MaterialCensusSectionStatesInvestigationFailedWhenEmpty는
+        /// materialCensus.Count == 0(빈 목록)을 손으로 만든 값으로 잡고,
+        /// MaterialCensusSectionStatesInvestigationFailedWhenFoldedProcedureCountIsZero는
+        /// FoldedProcedureCount == 0을 손으로 만든 여덟 행으로 잡는다 - 둘 다
+        /// SpecMaterialCensus.Count를 직접 부르지 않는다. "계산은 맞는데 아무도 안
+        /// 부른다"와 "부르긴 하는데 결과가 안 이어진다"를 잡는 것은 이 자리뿐이다 -
+        /// SpecMaterialCensus.Count(빈 jobs)의 결과를 그대로 Render에 넣어 표
+        /// 대신 조사 실패가 인쇄되는지 끝까지 잇는다.
+        /// </summary>
+        [Fact]
+        public void MaterialCensusSectionStatesInvestigationFailedWhenCountIsFedDirectlyToRender()
+        {
+            var materialCensus = SpecMaterialCensus.Count(Array.Empty<SweepJob>());
+
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0) { MaterialCensus = materialCensus },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("조사가 실패했다", section);
+            Assert.DoesNotContain("| 재료 |", section);
+        }
 }
 }
