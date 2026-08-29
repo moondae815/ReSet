@@ -85,9 +85,16 @@ namespace ReSet.Core.Services
                 // [ScriptDom 실물과 설계 문서의 어긋남] ProcedureParameter는 ScriptDom
                 // 계층에서 DeclareVariableElement의 하위 타입이라(리플렉션으로 확인:
                 // ProcedureParameter.BaseType == DeclareVariableElement), 이 오버라이드
-                // 하나로는 파라미터도 함께 걸린다. TSqlFragmentVisitor에 Visit(ProcedureParameter)
-                // 전용 오버로드가 없어 ProcedureParameter.Accept가 이 메서드로 디스패치되기
-                // 때문이다. 관할 경계(파라미터는 `## 파라미터 목록`이 담는다)를 지키려면
+                // 하나로는 파라미터도 함께 걸린다. `TSqlFragmentVisitor`에
+                // `Visit(ProcedureParameter)` 전용 오버로드는 실재한다(2026-08-29 리뷰
+                // 재현: 리플렉션으로 확인) - 그런데도 이 메서드가 파라미터까지 받는
+                // 이유는 `ProcedureParameter.Accept`가 자기 자신의 오버로드를 부르기
+                // 전에 먼저 base(`DeclareVariableElement`)의 `Accept`로 연쇄해
+                // `Visit(DeclareVariableElement)`를 함께 태우기 때문이다(실측: 파라미터
+                // 하나를 담은 DDL을 Accept하면 `Visit(DeclareVariableElement)`가 먼저,
+                // `Visit(ProcedureParameter)`가 그다음에 호출된다 - 이 클래스는 후자를
+                // 오버라이드하지 않으므로 그쪽은 아무 일도 하지 않는 기반 구현으로
+                // 간다). 관할 경계(파라미터는 `## 파라미터 목록`이 담는다)를 지키려면
                 // 런타임 타입으로 걸러야 한다.
                 if (node is ProcedureParameter) return;
 

@@ -53,8 +53,21 @@ END"));
         }
 
         [Fact]
-        public void LocalVariableDeclarations_ShouldDefaultToEmptyNotNull()
+        public void From_WhenDdlHasNoDeclare_ShouldProduceEmptyLocalVariableList()
         {
+            // [이 테스트가 실제로 재는 것] `SpecExpectations.From`은 언제나
+            // `LocalVariableDeclarations`를 명시적으로 대입한다 - 이 테스트는 그 값을
+            // 재는 것이지 record의 기본값 메커니즘을 재는 것이 아니다(2026-08-29 리뷰,
+            // 이름이 넓었다). DECLARE가 없는 DDL을 넣으면 추출기가 빈 목록을 낸다는
+            // 사실만 확인한다.
+            //
+            // [진짜 기본값 의존 호출부] record의 기본 매개변수 값에 실제로 기대는
+            // 곳은 `MechanicalValidatorTests
+            // .Validate_WhenSameCanonicalIsInBothColumnSetAndColumnlessSet_ShouldNotSelfConflict`
+            // (MechanicalValidatorTests.cs:1733)다 - `From()`을 거치지 않고
+            // `SpecExpectations`를 4개 인자로 직접 생성하며 `LocalVariableDeclarations`를
+            // 생략한다. 그 호출이 컴파일되고 빈 목록으로 동작하는 것이 record 기본값의
+            // 실물 증거다.
             var expectations = SpecExpectations.From(Def(@"
 CREATE PROCEDURE dbo.P
 AS

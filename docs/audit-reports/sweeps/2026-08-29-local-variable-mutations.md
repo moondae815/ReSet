@@ -140,10 +140,16 @@
 
      **지우면 실제로 덮개가 사라지는 것은
      `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나다** — 그것만이
-     **두 축 모두**에서 고유하다(변이 1 축은 나머지 둘과 공유하지만, 변이 2·14
+     **두 축 모두**에서 고유하다(변이 1 축은 나머지 둘과 공유하지만, 변이 2
      축은 그것만 덮는다). **두 `TheMachineHeading_…`은 덮개를 더하지 않고
      진단 해상도를 더한다** — 실패가 났을 때 원인이 상수 쪽인지 리더 배열
      쪽인지 표 파싱 쪽인지를 갈라 준다.
+     **(2026-08-29 리뷰 정정 — "고유성" 문구의 정밀화.** 「두 축 모두에서
+     고유하다」는 변이 2에 대해서만 참이다. 변이 14에서는 위 AXIS TABLE이
+     보이듯 선행 여섯(`SpecStatementFactsExtractorTests` 다섯 ·
+     `SpecMaterialCensusTests` 하나)도 함께 죽으므로,
+     `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나를 지워도 변이
+     14의 덮개 자체는 사라지지 않는다 — 고유성은 변이 2 축에서만 성립한다.)
 
      **그러나 Task 6 전체의 값은 여전히 두 축 모두에 있다.** 선행 여섯과
      Task 4의 둘 중 어느 것도 「생산 상수가 리더에 실제로 닿는가」를 안 본다
@@ -389,8 +395,10 @@ Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
   ("생산 `TableHeading` 상수가 리더가 아는 접두사로 시작하는가")을 구성 경로만
   다르게 단언한다 — **변이 1 축에서 셋은 서로 중복이고, 셋 중 아무 하나만
   있어도 선행 여섯이 못 잡는 실패군이 닫힌다.** 지우면 실제로 덮개가 사라지는
-  것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나뿐(두 축 모두
-  고유)이고, 두 `TheMachineHeading_…`은 덮개가 아니라 진단 해상도를 더한다.
+  것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나뿐(변이 2 축
+  기준 — 변이 14에서는 선행 여섯도 함께 죽으므로 고유성이 변이 2에만 있다.
+  본문 §2 정정 참고)이고, 두 `TheMachineHeading_…`은 덮개가 아니라 진단
+  해상도를 더한다.
   **이 문단은 네 라운드(과대 → 과대 → 과소 → 과대)에 걸쳐 흔들렸고, 매번
   데이터에서 결론을 새로 도출하면서 한 축을 빠뜨렸다 — 마지막에야 소스
   (`LocalVariableTableSeamTests.cs`·`AiService.cs:1357`)를 직접 읽어 확정했다.**
