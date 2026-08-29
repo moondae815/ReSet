@@ -479,3 +479,95 @@ TRAN`은 24건 실려 있다(규칙 4·11 + Few-Shot + 레거시 원문 인용).
   `ValidatorAiService`만 그것을 쓴다. 계획서 프롬프트로 새지 않으므로 손대지 않았다.
 - **L1 검사 셋의 침묵**(§8-4)은 아직 확인하지 못했다. 1차 통제군이 T-SQL 모양으로
   남아 있어 침묵 여부를 가릴 표본이 되지 못한다.
+
+## 10. 4단계 2차 통제군 — 규칙이 먹었다 (2026-08-29)
+
+`output.bak-stage4-control-20260828/Jobs/POQSettleBatch3`. **완주했다** — 중단 기록 0,
+생성 실패 0, S01~S16 열여섯 단계 전부 7~22KB의 실체 본문. 4,071줄 · 225,608바이트.
+
+구성: Actor `claude-cli`/`claude-sonnet-5` (1차와 **같다**) · Critic `OpenRouter`/`z-ai/glm-5.3`
+· Consolidator `claude-cli`/`claude-sonnet-5`. codex-cli와 OpenAI API 쿼터가 모두 소진돼
+Critic 모델이 바뀌었다(경위는 `run-pair-batch2.sh` 머리말).
+
+Critic 이력: 1회차 `HasDefects: true`(8/9/**7/7**/10, 결함 `S11`·`S13`·`S16` — 원본 오류
+코드 발명·저널 테이블명 불일치) → 자가 수정 → 2·3회차 `false`(9/10/9/9/10).
+**1차를 죽인 자가 수정 루프가 이번에는 끝까지 돌았다.**
+
+### 10-1. 세 판을 같은 잣대로
+
+**측정 방법이 §9-1과 다르다.** 생 grep은 산문의 「`GOTO`를 쓰지 않는다」까지 세어 버린다.
+여기서는 코드펜스 **안**이면서 주석 줄(`--`·`/*`·`//`)이 아닌 것만 센다.
+`CREATE PROCEDURE`만 `CREATE\s+(OR\s+ALTER\s+)?PROCEDURE` 정규식이다 — 세 판의 실물이
+전부 `CREATE OR ALTER PROCEDURE`라 리터럴로 세면 0으로 잘못 나온다.
+
+| 지표(코드 안) | 기준선 `Batch1` terra·옛규칙 | 1차 `Batch2` sonnet5·옛규칙·**죽음** | 2차 `Batch3` sonnet5·**새규칙**·완주 |
+|---|---:|---:|---:|
+| 완주 | ✔ | **✘ 52/100 구제** | ✔ |
+| 신규 저장 프로시저 | **9** | 0 | **0** |
+| `GOTO` | 0 | **20** | **0** |
+| `IF @@ERROR` | 0 | **18** | **0** |
+| `BEGIN TRY` / `END CATCH` | **16 / 16** | 2 / 2 | **0 / 0** |
+| `BEGIN TRAN` / `COMMIT TRAN` | 17 / 18 | 10 / 10 | **4 / 4** |
+| `ROLLBACK TRAN` | 19 | 9 | **1** |
+| `WITH (NOLOCK)` | 0 | 2 | **0** |
+| `sp_executesql` | 1 | 6 | **0** |
+| `SET TRANSACTION ISOLATION` | **12** | 0 | **0** |
+| 펜스 `sql` : `csharp` | 38 : 1 | 49 : 8 | 69 : 12 |
+
+### 10-2. 무엇이 규칙에 귀속되고 무엇이 안 되는가
+
+**귀속된다 — Actor가 같고 규칙만 다르다(`Batch2` → `Batch3`).**
+
+`GOTO` 20 → 0 · `IF @@ERROR` 18 → 0 · `BEGIN TRY`/`END CATCH` 2 → 0 · `sp_executesql` 6 → 0 ·
+`NOLOCK` 2 → 0. **`0748ee1`이 복원한 제어 흐름 조항이 겨눈 그대로다.**
+
+「1차가 죽어서 그런 것 아니냐」는 성립하지 않는다. 1차의 `GOTO`는 본문이 정상 생성된
+단계들(S01·S02와 S08 부근)에 흩어져 있었다 — 중단의 산물이 아니라 문체였다.
+
+**귀속되지 않는다 — 신규 저장 프로시저 0.**
+
+`Batch2`도 **옛 규칙으로 이미 0이었다.** 즉 `claude-sonnet-5`는 애초에 `CREATE PROCEDURE`를
+쓰지 않는다. §9-2가 `Proc4`(claude-opus-5, 옛 규칙, 0)를 근거로 제기한 의심이 **확증됐다.**
+규칙 3-1이 신규 SP를 없앴는지는 **`gpt-5.6-terra`로 돌린 판에서만 답할 수 있다**
+(`run-control.sh` 또는 `run-control-api.sh`, 쿼터 회복 후).
+
+기준선 `Batch1` 대비 `9 → 0`은 모델 교체와 섞여 있어 근거로 쓰지 않는다.
+
+### 10-3. 채점자 교체는 성공이었다
+
+`z-ai/glm-5.3`을 Critic으로 쓴 것은 이 저장소에서 처음이다(설정이 「Critic.」으로 지정한
+것은 `deepseek/deepseek-v4-pro-0813`이고 캐시읽기가 7배 싸다). 바꾼 이유는 deepseek-pro가
+명세서 Actor로 썼을 때 요구된 표를 조용히 빠뜨린 전력이다(`known-defects.md` 5-3-7).
+
+**검증됐다.** 추론 로그가 새 기준 둘을 **이름으로 짚어 판정한다**:
+
+- *"No GOTO/IF @@ERROR/TRY CATCH in step's own SQL: **check**."*
+- *"criterion: 'penalize a step that writes the isolation statement into its own SQL' —
+  check SQL blocks for 'SET TRANSACTION ISOLATION LEVEL' — **none**."*
+- *"No new stored procedure/function/trigger: **none defined**."*
+
+1차의 codex-cli Critic이 **명시 조항 없이** 파생해 잡던 것을(§9-3의 정정 상자) 이제
+명시 조항으로 결정적으로 판정한다. 조항을 둔 값이 여기서 나왔다.
+
+### 10-4. 남은 것 둘 — 다음 회차의 몫
+
+**(1) 규칙 3-1의 마지막 문장이 지켜지지 않는다 — API를 지정하고 있다.**
+
+3-1은 *"do NOT prescribe a specific API, class, or framework type for transactions,
+connections, or error handling"* 라고 못박는데, 계획서는 `conn.BeginTransaction()`(8회) ·
+`conn.BeginTransaction(IsolationLevel.Snapshot)` · `SqlConnection` · `SqlCommand`를 쓴다.
+**Critic이 이것을 보고도 통과시켰다** — 추론 로그가 *"C# BeginTransaction(IsolationLevel.
+Snapshot) in S08, S11, S12, S15 — application…"* 이라 적고 감점하지 않았다. 격리 감점 기준을
+「단계 SQL에 쓰지 마라」로만 적어 **앱 코드 쪽 API 지정은 무주공산으로 남았다.**
+채점 기준에 3-1의 API 금지를 따로 세워야 한다.
+
+**(2) `S05` 한 단계만 아직 T-SQL 스크립트다.**
+
+코드 안에 남은 `BEGIN TRAN`/`COMMIT TRAN` **네 쌍이 전부 `S05`**다(나머지 하나는 `S13`의
+`text` 펜스 의사코드). `WHILE` 청크 루프를 `DECLARE @v_…` T-SQL로 쓰고 그 안에서 경계를 연다.
+Critic도 *"S05 loop is a hybrid. It could be considered a defect"* 라고 망설이다 통과시켰다.
+
+**Few-Shot이 원인 후보 1순위라는 §8-3의 지목은 아직 유효하지만, 무게가 줄었다** —
+문서 전체가 T-SQL이던 1차와 달리 이제 한 단계에 갇혀 있고, `csharp` 펜스가 12로 늘었다.
+Few-Shot을 건드리기 전에 `S05`가 왜 예외인지부터 봐야 한다(청크 루프 예시가 T-SQL인 것과
+관련이 있을 수 있다).
