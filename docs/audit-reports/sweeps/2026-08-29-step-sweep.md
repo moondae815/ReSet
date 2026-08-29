@@ -2,8 +2,8 @@
 
 ## 실행 조건
 
-- 커밋: `8c7a2da`
-- 작업 트리: 깨끗
+- 커밋: `5877722`
+- 작업 트리: **더러움** (변경된 파일 5개) — 이 수치는 커밋되지 않은 코드가 낸 것이다
 - 캐시 인덱스 `FormatVersion` 집합: {17} — 항목 31개
 - 측정 쌍: 326 (Job 18개)
 - 단계 파일 누락: 51
@@ -249,8 +249,8 @@ StepTableSets는 SpecTargetTableExtractor가 명세서 마크다운을 전혀 �
 | ErrorCodeToOrdinal | 안 쟀음 | 78 | 없음 |
 | SetTargets | 안 쟀음 | 52 | 없음 |
 | LocalVariables | 69 | 0 | dbo.UP_UTIL_SETTLE_CANCEL_INS, dbo.UP_UTIL_SETTLE_COMM_UPD, dbo.UP_UTIL_SETTLE_EXCEPTION_PROC, dbo.UP_UTIL_SETTLE_EXPECT_PROC, dbo.UP_UTIL_SETTLE_INS, dbo.UP_UTIL_SETTLE_INS_EXTRA, dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD, dbo.UP_UTIL_SETTLE_PROC_ETC, dbo.UP_UTIL_SETTLE_SUMMARY_ETC, dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA, dbo.UP_UTIL_STAT_PGCOLLECT_INS, dbo.UP_Util_PG_Client_CMRate_Ins, dbo.UP_Util_Settle_Summary, dbo.UP_Util_Settle_Summary_AcqManual |
-| SpecConditions | 잴 수 없음 | 해당 없음 | 없음 |
-| RoundingShapes | 잴 수 없음 | 해당 없음 | 없음 |
+| SpecConditions | 잴 수 없음 | 안 쟀음 | 없음 |
+| RoundingShapes | 잴 수 없음 | 안 쟀음 | 없음 |
 | StepTableSets | 잴 수 없음 | 해당 없음 | 없음 |
-| SpecReturnCodes | 안 쟀음 | 해당 없음 | 없음 |
+| SpecReturnCodes | 안 쟀음 | 안 쟀음 | 없음 |
 

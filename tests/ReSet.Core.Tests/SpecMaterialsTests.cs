@@ -112,5 +112,41 @@ namespace ReSet.Core.Tests
             Assert.Contains("FindMissingErrorCodes", material.ConsumingChecks);
             Assert.Contains("ValidateSplitProcedureObligations", material.ConsumingChecks);
         }
+
+        /// <summary>
+        /// [왜 이 테스트인가 - Fix Round 1, 2026-08-29 리뷰 Important] `ReadsSpecMarkdown`은
+        /// `DdlCounterpart`와 대칭인 손 적은 판정이다 - 리뷰가 잡아낸 결함은 정확히
+        /// 이 판정이 손으로 틀리게 적혀도 컴파일러가 못 잡는다는 것이었다
+        /// (`SpecConditions`·`RoundingShapes`·`SpecReturnCodes`가 명세서를 실제로
+        /// 읽는데도 "안 읽는다"로 뭉개져 있었다). 이 테스트는 그 판정을 리플렉션으로
+        /// 기계 확인한다 - `ReaderTypeName`이 가리키는 타입의 `Extract` 메서드가 실제로
+        /// 명세서 튜플 `(string FileName, string Content)`을 인자로 받는지 직접 보고,
+        /// 카탈로그의 값과 대조한다. `StepTableSets`만 `SpDefinition`을 받아 이 모양이
+        /// 아니다 - 그것이 유일하게 "안 읽는다"여야 하는 이유다.
+        /// </summary>
+        [Fact]
+        public void ReadsSpecMarkdown_MatchesTheExtractMethodsParameterType()
+        {
+            foreach (var material in SpecMaterials.All)
+            {
+                var readerType = typeof(SpecMaterials).Assembly.GetTypes()
+                    .Single(t => t.Name == material.ReaderTypeName);
+                var extract = readerType.GetMethod("Extract", BindingFlags.Public | BindingFlags.Static);
+                Assert.True(extract != null,
+                    $"{material.ReaderTypeName}에 public static Extract가 없습니다.");
+
+                var parameterType = extract!.GetParameters().Single().ParameterType;
+                var elementType = parameterType.GetGenericArguments().Single();
+                var actuallyReadsSpecMarkdown =
+                    elementType.IsGenericType
+                    && elementType.GetGenericTypeDefinition() == typeof(ValueTuple<,>)
+                    && elementType.GetGenericArguments().SequenceEqual(new[] { typeof(string), typeof(string) });
+
+                Assert.True(material.ReadsSpecMarkdown == actuallyReadsSpecMarkdown,
+                    $"{material.Name}: 카탈로그는 ReadsSpecMarkdown={material.ReadsSpecMarkdown}로 " +
+                    $"적었지만, {material.ReaderTypeName}.Extract의 인자 타입을 보면 그것이 " +
+                    $"{(actuallyReadsSpecMarkdown ? "참" : "거짓")}입니다.");
+            }
+        }
     }
 }

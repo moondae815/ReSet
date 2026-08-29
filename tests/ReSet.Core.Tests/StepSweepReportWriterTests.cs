@@ -503,12 +503,17 @@ namespace ReSet.Core.Tests
             Assert.Contains("사유가 아니라 분모", section);
         }
 
-        // 재료 분모 - 태스크 4. 네 상태(쟀다·잴 수 없다·안 쟀다·명세서 쪽 없음)를 전부
-        // 다른 값으로 채워 라벨과 값이 뒤바뀌는 것을 잡는다. LocalVariables는
-        // DdlCounterpart가 있고 DdlFactCount도 있어 "쟀다"다. DmlRows는 DdlCounterpart가
-        // 있지만(nameof(DmlScopeExtractor)) DdlFactCount가 null이라 "안 쟀다"다.
-        // SpecConditions는 DdlCounterpart 자체가 null이라 "잴 수 없다"다. 그리고
-        // SpecConditions의 SpecRowCount도 null이라 "명세서 쪽 없음"이다.
+        // 재료 분모 - 태스크 4, Fix Round 1(2026-08-29 리뷰 Important)에서 갱신. 명세서
+        // 쪽도 DDL 쪽과 대칭으로 세 상태(쟀다·안 쟀다·해당 없음)를 가른다.
+        // LocalVariables는 DdlCounterpart도 있고 DdlFactCount도 있어 DDL 쪽이 "쟀다"다.
+        // DmlRows는 DdlCounterpart가 있지만(nameof(DmlScopeExtractor)) DdlFactCount가
+        // null이라 DDL 쪽이 "안 쟀다"다. SpecConditions는 DdlCounterpart가 null이라 DDL
+        // 쪽이 "잴 수 없다"이지만, ReadsSpecMarkdown은 참이므로(SpecConditionColumnExtractor가
+        // 실제로 명세서를 읽는다) SpecRowCount가 null이면 명세서 쪽은 "안 쟀다"여야 한다
+        // - "해당 없음"으로 새면 리뷰가 잡은 결함(DDL 쪽에서 가른 구별을 명세서 쪽에서
+        // 안 가른 것)이 재현된다. StepTableSets만 ReadsSpecMarkdown이 거짓이라(
+        // SpecTargetTableExtractor는 명세서를 아예 안 읽는다) 명세서 쪽이 정말로
+        // "해당 없음"이다.
         [Fact]
         public void MaterialCensusSectionDistinguishesAllFourNullStates()
         {
@@ -521,6 +526,7 @@ namespace ReSet.Core.Tests
                         new SpecMaterialCensusRow("LocalVariables", 11, 22, new[] { "dbo.UP_X" }),
                         new SpecMaterialCensusRow("DmlRows", null, 33, Array.Empty<string>()),
                         new SpecMaterialCensusRow("SpecConditions", null, null, Array.Empty<string>()),
+                        new SpecMaterialCensusRow("StepTableSets", null, null, Array.Empty<string>()),
                     },
                 },
                 new HarnessGaps(
@@ -534,12 +540,19 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("| LocalVariables | 11 | 22 | dbo.UP_X |", section);
             Assert.Contains("| DmlRows | 안 쟀음 | 33 | 없음 |", section);
-            Assert.Contains("| SpecConditions | 잴 수 없음 | 해당 없음 | 없음 |", section);
+            Assert.Contains("| SpecConditions | 잴 수 없음 | 안 쟀음 | 없음 |", section);
+            Assert.Contains("| StepTableSets | 잴 수 없음 | 해당 없음 | 없음 |", section);
 
             // 이 태스크의 핵심 실패 양식 - "안 쟀음"이 "잴 수 없음"이나 0으로 새면
             // 안 된다. DmlRows 행에서 그 오염을 잡는다.
             Assert.DoesNotContain("| DmlRows | 잴 수 없음 |", section);
             Assert.DoesNotContain("| DmlRows | 0 |", section);
+
+            // Fix Round 1의 핵심 회귀 - SpecConditions는 명세서를 실제로 읽는 리더
+            // (SpecConditionColumnExtractor)가 있으므로 명세서 쪽이 "해당 없음"으로
+            // 새면 안 된다. "해당 없음"은 ReadsSpecMarkdown이 거짓인 StepTableSets만의
+            // 몫이다.
+            Assert.DoesNotContain("| SpecConditions | 잴 수 없음 | 해당 없음 |", section);
         }
 
         // 정상 경로에서는 SpecMaterialCensus.Count가 언제나 SpecMaterials.All과 같은

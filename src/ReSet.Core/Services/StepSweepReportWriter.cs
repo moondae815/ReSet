@@ -363,6 +363,8 @@ namespace ReSet.Core.Services
 
             var ddlCounterpartByMaterial = SpecMaterials.All
                 .ToDictionary(m => m.Name, m => m.DdlCounterpart, StringComparer.Ordinal);
+            var readsSpecMarkdownByMaterial = SpecMaterials.All
+                .ToDictionary(m => m.Name, m => m.ReadsSpecMarkdown, StringComparer.Ordinal);
 
             b.AppendLine("| 재료 | DDL 사실 수 | 명세서 행 수 | 소실 프로시저 |");
             b.AppendLine("| :--- | ---: | ---: | :--- |");
@@ -372,8 +374,10 @@ namespace ReSet.Core.Services
                 var ddlCounterpart = ddlCounterpartByMaterial.TryGetValue(row.MaterialName, out var c)
                     ? c
                     : null;
+                var readsSpecMarkdown = readsSpecMarkdownByMaterial.TryGetValue(row.MaterialName, out var r)
+                    && r;
                 var ddl = FormatDdlFactCount(row.DdlFactCount, ddlCounterpart);
-                var spec = FormatSpecRowCount(row.SpecRowCount);
+                var spec = FormatSpecRowCount(row.SpecRowCount, readsSpecMarkdown);
                 var loss = row.ObjectsWithLoss.Count == 0
                     ? "없음"
                     : string.Join(", ", row.ObjectsWithLoss);
@@ -395,8 +399,20 @@ namespace ReSet.Core.Services
             return ddlCounterpart == null ? "잴 수 없음" : "안 쟀음";
         }
 
-        private static string FormatSpecRowCount(int? specRowCount) =>
-            specRowCount?.ToString() ?? "해당 없음";
+        /// <summary>
+        /// DDL 쪽(<see cref="FormatDdlFactCount"/>)과 대칭인 세 상태 - 쟀다(정수) ·
+        /// 안 쟀다(명세서를 읽는 리더가 실재하나 이 회차가 아직 안 셈) · 해당 없음
+        /// (명세서 쪽 개념 자체가 없음, <c>StepTableSets</c>뿐). Fix Round 1(2026-08-29
+        /// 리뷰 Important) 전에는 `specRowCount?.ToString() ?? "해당 없음"`으로
+        /// 뒤 두 상태를 뭉갰다 - `SpecConditions`·`RoundingShapes`·`SpecReturnCodes`는
+        /// 명세서를 실제로 읽는데도 "해당 없음"으로 잘못 인쇄됐다. `readsSpecMarkdown`은
+        /// <see cref="SpecMaterial.ReadsSpecMarkdown"/>에서 온다.
+        /// </summary>
+        private static string FormatSpecRowCount(int? specRowCount, bool readsSpecMarkdown)
+        {
+            if (specRowCount != null) return specRowCount.Value.ToString();
+            return readsSpecMarkdown ? "안 쟀음" : "해당 없음";
+        }
 
         /// <summary>
         /// mtime 범위를 사람이 읽는 한 줄로. 값이 없어도 "알 수 없음"으로 행을 낸다 -

@@ -2610,12 +2610,18 @@
   좌표 차분으로는 안 보이는 자리였다 — 검사 B·C 의 46 좌표는 네 버킷이 전부 0 으로 깨끗했다
   (`docs/audit-reports/sweeps/2026-08-28-step-sweep-post-cache17.md`).
 
-  > **[2026-08-29 실측] 「같은 형태를 다른 검사에서 전수로 찾는다」의 답 — 노출된 재료는 1개,
-  > 14 프로시저 전량이 소실이다.** 커밋 `8c7a2da`(재료 분모 계기, `SpecMaterials`·
-  > `SpecMaterialCensus`·`StepSweepReportWriter`)에서 `dotnet run --project src/ReSet.Cli --
-  > --sweep`을 실행 시각 2026-08-29 10:15~10:20 KST에 돌렸다
-  > (`docs/audit-reports/sweeps/2026-08-29-step-sweep.md`, 스윕 CLI가 스스로 지은 이름 — 계획서가
-  > 적은 `2026-08-28-step-sweep-material-census.md`는 틀린 이름이었다). 카탈로그는 재료 여덟을
+  > **[2026-08-29 실측, Fix Round 1(같은 날)에서 라벨을 정정] 「같은 형태를 다른 검사에서
+  > 전수로 찾는다」의 답 — 노출된 재료는 1개, 14 프로시저 전량이 소실이다.** 커밋 `8c7a2da`
+  > 위에 재료 분모 계기(`SpecMaterials`·`SpecMaterialCensus`·`StepSweepReportWriter`)로
+  > `dotnet run --project src/ReSet.Cli -- --sweep`을 두 차례 돌렸다 — 1차는 2026-08-29
+  > 10:15~10:20 KST(커밋 `5877722`), 2차는 리뷰가 명세서 쪽 라벨 결함(아래 참고)을 잡은 뒤
+  > `SpecMaterial.ReadsSpecMarkdown`을 더해 `FormatSpecRowCount`를 고친 상태로 같은 날
+  > 10:35 KST경 재실행했다(`docs/audit-reports/sweeps/2026-08-29-step-sweep.md`, 스윕 CLI가
+  > 스스로 지은 이름 — 계획서가 적은 `2026-08-28-step-sweep-material-census.md`는 틀린
+  > 이름이었다). 두 실행 모두 `LocalVariables`의 실측값(DDL 69·명세서 0·소실 14 프로시저)과
+  > `DmlRows`·`ErrorCodeToOrdinal`·`SetTargets`의 명세서 행 수(102·78·52)는 **문자 단위로
+  > 같았다** — 바뀐 것은 아래 「잴 수 없음/안 쟀음/해당 없음」 셋을 가르는 **명세서 쪽 라벨
+  > 뿐**이고, 그 근거는 실제 코드 재측정(reflection lock test)이다. 카탈로그는 재료 여덟을
   > 싣지만 **실제로 「DDL 사실 수 대 명세서 행 수」 소실을 판정할 수 있는 재료는 하나뿐이다**
   > (`LocalVariables`) — 나머지 일곱은 아래처럼 「잴 수 없음」이거나 「안 쟀음」이라 소실 여부
   > 자체가 미정이다. 즉 이번 실측이 낸 답은 **소실 1건, 그 1건이 코퍼스 전체(14 프로시저)를
@@ -2634,18 +2640,36 @@
   > 여기서는 검사 발화가 아니라 원본 DECLARE 대비 표 행 수 자체를 재서, 발화 손실 18건 뒤에
   > **표가 코퍼스 전 프로시저에서 통째로 사라졌다**는 것을 확인한다.
   >
-  > **안 쟀음(대응물은 있으나 이 회차가 안 셈) — 넷.** `DmlRows`(명세서 행 102) ·
+  > **DDL 쪽 「안 쟀음」(대응물은 있으나 이 회차가 안 셈) — 넷.** `DmlRows`(명세서 행 102) ·
   > `ErrorCodeToOrdinal`(명세서 행 78) · `SetTargets`(명세서 행 52) · `SpecReturnCodes`(명세서
-  > 쪽 개념 자체가 「해당 없음」) — 넷 다 DDL 대응물 이름은 카탈로그에 있다
-  > (`DmlScopeExtractor`·`SqlStaticParser`)지만 이 회차의 `SpecMaterialCensus.DdlCounters`가
-  > 그 리더를 아직 안 불렀다. **「잴 수 없음」과 뭉개지 않았다** — DDL 쪽 표는 `안 쟀음`이라고
-  > 따로 적는다.
+  > 쪽도 이 회차가 안 세어 마찬가지로 「안 쟀음」 — 아래 참고) — 넷 다 DDL 대응물 이름은
+  > 카탈로그에 있다(`DmlScopeExtractor`·`SqlStaticParser`)지만 이 회차의
+  > `SpecMaterialCensus.DdlCounters`가 그 리더를 아직 안 불렀다. **「잴 수 없음」과 뭉개지
+  > 않았다** — DDL 쪽 표는 `안 쟀음`이라고 따로 적는다.
   >
-  > **잴 수 없음(DDL 대응물 자체가 없음) — 셋.** `SpecConditions` · `RoundingShapes` ·
+  > **DDL 쪽 「잴 수 없음」(DDL 대응물 자체가 없음) — 셋.** `SpecConditions` · `RoundingShapes` ·
   > `StepTableSets`. 이 셋은 원인이 「대응물이 있는데 안 셌다」가 아니라 「비교할 DDL 사실
   > 자체가 없거나(`SpecConditions`·`RoundingShapes`, "같은 사실"이 아니라서) 개념 자체가
   > 성립하지 않는다(`StepTableSets` — `SpecTargetTableExtractor`가 명세서를 아예 안 읽고
   > DDL 정적 분석 결과를 그대로 접은 것이라 "명세서 쪽 행 수"가 없다).
+  >
+  > **명세서 쪽은 DDL 쪽과 독립으로 갈라야 한다 — 1차 실측(2026-08-29 10:15~10:20 KST)이
+  > 놓친 것이 정확히 이것이었다.** `SpecMaterial.DdlCounterpart`가 「대응물이 있는가」를
+  > 나타내듯, `SpecMaterial.ReadsSpecMarkdown`(이번 라운드에서 추가, 리플렉션으로
+  > `Extract` 인자 타입을 직접 봐서 잠금)이 「명세서를 읽는 리더가 실재하는가」를 나타낸다.
+  > `SpecConditionColumnExtractor`(`SpecConditions`) · `SpecRoundingShapeExtractor`
+  > (`RoundingShapes`) · `SpecReturnCodeExtractor`(`SpecReturnCodes`) **셋 다 명세서
+  > 마크다운을 실제로 읽는다** — DDL 대응물이 없거나(`SpecConditions`·`RoundingShapes`)
+  > 이 회차가 DDL 쪽을 아직 안 셌을 뿐(`SpecReturnCodes`), 명세서 쪽 리더 자체는 있다.
+  > 그래서 셋 다 명세서 쪽 상태는 「해당 없음」이 아니라 **「안 쟀음」**이다(`SpecRowCount`가
+  > `null`이고 이 회차의 `SpecMaterialCensus.SpecCounters`가 아직 그 리더를 안 부른
+  > 것뿐). **「해당 없음」은 `StepTableSets` 하나뿐이다** — `SpecTargetTableExtractor.Extract`는
+  > `IEnumerable<SpDefinition>?`만 받고 명세서 마크다운은 아예 인자로도 안 받는다
+  > (`ReadsSpecMarkdown = false`인 유일한 재료). 1차 실측 문단은 이 셋을 한 덩어리로
+  > 뭉개 `SpecReturnCodes`의 명세서 쪽을 「해당 없음」이라고 잘못 적었었다 — DDL 쪽에서
+  > 갈랐던 구별을 명세서 쪽에서 안 가른 것과 같은 결함이 재현된 것이었고, 여덟 행 중
+  > 셋(`SpecConditions`·`RoundingShapes`·`SpecReturnCodes`)이 틀렸었다. 2차 실측이 그
+  > 셋을 「안 쟀음」으로 바로잡았다 — 위 「[2026-08-29 실측 …]」 배너의 최종 표가 그 결과다.
   >
   > **원인 귀속은 안 갈랐다.** `LocalVariables`의 소실 14건이 「모델이 표를 안 썼다」인지
   > 「리더가 못 읽는다」인지 이 계기는 구별하지 못한다. 실물 반례가 이미 있다 —
@@ -2657,9 +2681,16 @@
   > **이 계기는 강제를 걸지 않는다.** `SpecMaterials.All`의 여덟 재료 중 강제(`Enforced`)로
   > 표시된 것은 `DmlRows`·`ErrorCodeToOrdinal` 둘뿐이고 `LocalVariables`는 여전히 강제
   > 밖이다. **다음 회차의 범위는 이 수치가 정한다** — 최소한으로는 `LocalVariables`를
-  > 강제 대상으로 올리는 것(위 「닫는 방향」과 같은 결), 넓히면 `SpecMaterialCensus.DdlCounters`에
-  > 나머지 넷(`DmlRows`·`ErrorCodeToOrdinal`·`SetTargets`·`SpecReturnCodes`)의 DDL 쪽 계수를
-  > 채워 "안 쟀음"을 실측으로 바꾸는 것이다.
+  > 강제 대상으로 올리는 것(위 「닫는 방향」과 같은 결), 넓히면 두 방향으로 「안 쟀음」을
+  > 실측으로 바꾸는 것이다: DDL 쪽은 `SpecMaterialCensus.DdlCounters`에 나머지 넷
+  > (`DmlRows`·`ErrorCodeToOrdinal`·`SetTargets`·`SpecReturnCodes`)의 계수를 채우는 것,
+  > 명세서 쪽은 `SpecMaterialCensus.SpecCounters`가 지금 넷(`DmlRows`·`ErrorCodeToOrdinal`·
+  > `SetTargets`·`LocalVariables`, 전부 `SpecStatementFactsExtractor` 한 리더가 낸다)에만
+  > 걸려 있는 것을 나머지 셋(`SpecConditions`·`RoundingShapes`·`SpecReturnCodes`)까지
+  > 넓히는 것이다 — **셋 다 읽는 리더(`SpecConditionColumnExtractor`·
+  > `SpecRoundingShapeExtractor`·`SpecReturnCodeExtractor`)는 이미 실재하는데도 이 회차가
+  > 안 세었다**(그래서 「해당 없음」이 아니라 「안 쟀음」이다). 다음 회차의 범위에 이 명세서
+  > 쪽 미측정 셋도 들어간다.
   >
   > **주의 둘 (Task 1·2가 실물로 확정, `MechanicalValidator.cs` 전수 grep으로 확인).**
   > (1) `SetTargets`는 **소비자가 공집합**이다 — `SpecStatementFactsExtractor`가 추출은
@@ -2688,6 +2719,12 @@
   > **문자 단위로 전부 같다**(「검사 B·C 발화 목록」의 92행 좌표도 동일 — 다른 점은 그 보고서가
   > 사후에 사람이 채운 「판정」 칸뿐이다). 값이 하나도 안 움직였으므로 **이 삽입은 순수
   > 가산이고, 이 회차의 코퍼스는 `post-cache17` 실측 시점과 같은 상태였다**고 판정한다.
+  > **2차 실행(라벨 정정 후) 때도 같은 다섯 지표를 다시 대조해 문자 단위로 동일함을
+  > 재확인했다** — 작업 트리는 그때 「더러움 (변경된 파일 5개)」였다(리뷰 수정이 아직
+  > 커밋 전이었기 때문— `SpecMaterials.cs`·`StepSweepReportWriter.cs`와 그 테스트 둘,
+  > 그리고 보고서 자신). `LocalVariables`를 포함한 재료 분모 실측값도 1차·2차가 문자
+  > 단위로 같았다 — 두 실행 사이에 바뀐 것은 명세서 쪽 라벨 표기 로직뿐, 코퍼스도 계수
+  > 로직의 산술도 그대로였다.
 
   **단계 SQL 이 바뀐 것이 아니다.** 단계 번들은 이 회차에 재생성되지 않았다(`output/Jobs` 최신
   mtime 2026-08-24, 재생성 당일 변경 0 건). **검사가 재료를 잃었다.**

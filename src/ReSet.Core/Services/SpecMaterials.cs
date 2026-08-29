@@ -16,7 +16,20 @@ namespace ReSet.Core.Services
     /// <param name="Enforced">그 헤딩이 MachineConfirmedTables.All에 있는가.</param>
     /// <param name="DdlCounterpart">
     /// 원본 DDL에서 같은 사실을 뽑는 자리의 이름. null이면 「잴 수 없음」이다 -
-    /// 빈 문자열이나 0으로 두지 마십시오. 빈칸은 0으로 읽히고 0은 정상으로 읽힙니다.
+    /// 빈 문자열이나 0으로 두지 마십시오. 빈칸은 0으로 읽힙니다.
+    /// </param>
+    /// <param name="ReadsSpecMarkdown">
+    /// <c>DdlCounterpart</c>와 대칭인 명세서 쪽 신호다 - 참이면 「명세서를 읽는 리더가
+    /// 실재한다」는 뜻이고, <c>SpecMaterialCensusRow.SpecRowCount</c>가 <c>null</c>일 때
+    /// 그 이유가 「안 쟀음」(개념은 있으나 이 회차가 아직 안 셈)인지 「해당 없음」(명세서
+    /// 쪽 개념 자체가 없음)인지를 가른다. `SpecMaterialsTests.
+    /// ReadsSpecMarkdown_MatchesTheExtractMethodsParameterType`이 이 값을 리플렉션으로
+    /// 기계 확인한다 - <c>ReaderTypeName</c>이 가리키는 타입의 <c>Extract</c> 인자가
+    /// 명세서 튜플 <c>(string FileName, string Content)</c>인지 직접 보고 대조한다.
+    /// 손으로 잘못 적어도 컴파일러가 못 잡는 값이라, `SpecConditions`·`RoundingShapes`·
+    /// `SpecReturnCodes`가 한때 거짓으로 적혀 있었다(2026-08-29 Fix Round 1) - 셋 다
+    /// 명세서를 실제로 읽는데도 「안 읽는다」로 뭉개져 있었다. `StepTableSets`만
+    /// `SpDefinition`(DDL 정적 분석 결과)을 받아 실제로 거짓이다.
     /// </param>
     /// <param name="ConsumingChecks">이 재료가 0이면 죽는 MechanicalValidator의 검사 이름
     /// <b>전부</b> - 접근 한정자와 무관하다. 한 재료를 여러 검사가 쓰면(1차 소비자와
@@ -29,6 +42,7 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> SectionHeadings,
         bool Enforced,
         string? DdlCounterpart,
+        bool ReadsSpecMarkdown,
         IReadOnlyList<string> ConsumingChecks);
 
     /// <summary>
@@ -115,6 +129,7 @@ namespace ReSet.Core.Services
                 new[] { DmlScopeExtractor.DmlScopeTableHeading },
                 Enforced: true,
                 DdlCounterpart: nameof(DmlScopeExtractor),
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[]
                 {
                     "CheckAnchoredStatementFacts",
@@ -127,6 +142,7 @@ namespace ReSet.Core.Services
                 new[] { DmlScopeExtractor.ErrorCodeTableHeading },
                 Enforced: true,
                 DdlCounterpart: nameof(DmlScopeExtractor),
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[]
                 {
                     "CheckAnchoredStatementFacts",
@@ -149,6 +165,7 @@ namespace ReSet.Core.Services
                 new[] { "### UPDATE 대상 테이블:" },
                 Enforced: false,
                 DdlCounterpart: nameof(SqlStaticParser),
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: Array.Empty<string>()),
             new SpecMaterial(
                 "LocalVariables",
@@ -156,6 +173,7 @@ namespace ReSet.Core.Services
                 new[] { "### 지역 변수", "### 내부 변수" },
                 Enforced: false,
                 DdlCounterpart: "SpecMaterialCensus",
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[] { "CheckSpecLocalVariablesDeclared" }),
             // [강제 아님·헤딩 없음] SpecConditionColumnExtractor는 특정 "### " 헤딩을
             // 요구하지 않는다 - 문서 전체를 훑으며 만나는 아무 헤딩이든 UDF 소속
@@ -171,6 +189,7 @@ namespace ReSet.Core.Services
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: null,
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[] { "CheckMissingConditionColumns" }),
             // [강제 아님·헤딩 없음] ReadShapes(99행)는 문서 전체 텍스트에서 정규식
             // "ROUND\s*\("로 중첩 ROUND 식을 찾는다 - 특정 헤딩에 매이지 않는다.
@@ -186,6 +205,7 @@ namespace ReSet.Core.Services
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: null,
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[] { "ReportMissingRoundingShapes" }),
             // [근본이 다른 재료] SpecTargetTableExtractor.Extract는 스펙 마크다운을 전혀
             // 받지 않는다 - 시그니처가 `Extract(IEnumerable<SpDefinition>? definitions)`이고
@@ -211,6 +231,7 @@ namespace ReSet.Core.Services
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: null,
+                ReadsSpecMarkdown: false,
                 ConsumingChecks: new[]
                 {
                     "ValidateSplitProcedureObligations",
@@ -237,6 +258,7 @@ namespace ReSet.Core.Services
                 Array.Empty<string>(),
                 Enforced: false,
                 DdlCounterpart: nameof(DmlScopeExtractor),
+                ReadsSpecMarkdown: true,
                 ConsumingChecks: new[]
                 {
                     "FindMissingErrorCodes",
