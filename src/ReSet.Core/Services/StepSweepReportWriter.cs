@@ -36,6 +36,7 @@ namespace ReSet.Core.Services
             AppendAnchoredFindings(b, report.Findings);
             AppendIndicators(b, report.Indicators);
             AppendSilenceDenominators(b, report.Indicators);
+            AppendMaterialCensus(b, report.Indicators.MaterialCensus);
 
             return b.ToString();
         }
@@ -309,6 +310,93 @@ namespace ReSet.Core.Services
                 "않는다 - 그러려면 검증기가 판정 사유를 내보내야 한다.");
             b.AppendLine();
         }
+
+        /// <summary>
+        /// [왜 이 절이 있는가] SpecMaterialCensus가 재료가 비면 조기 반환해 조용히
+        /// 꺼진다 - 이 절은 그 침묵을 죽인다. 계기(<see cref="SweepIndicators.MaterialCensus"/>)가
+        /// 있어도 보고서에 안 실리면 다음 사람이 못 읽는다.
+        ///
+        /// [null 세 상태를 라벨로 가른다] <see cref="SpecMaterialCensusRow.DdlFactCount"/>의
+        /// null은 「이 회차가 안 냈다」는 뜻 하나뿐이고, 왜 안 냈는지는 행이 안 들고
+        /// 있다 - <see cref="SpecMaterials.All"/>에서 그 재료의
+        /// <see cref="SpecMaterial.DdlCounterpart"/>를 조회해야 「잴 수 없음」(대응물
+        /// 자체가 없음)과 「안 쟀음」(대응물은 있으나 이 회차가 아직 안 셈)을 가를 수
+        /// 있다. 둘을 뭉개면 「대응물이 아예 없다」와 「대응물은 있는데 아직 안 세기로
+        /// 했다」가 같은 문구로 보여 다음 회차의 범위를 잘못 정하게 한다.
+        /// </summary>
+        private static void AppendMaterialCensus(
+            StringBuilder b, IReadOnlyList<SpecMaterialCensusRow> materialCensus)
+        {
+            b.AppendLine("## 재료 분모");
+            b.AppendLine();
+            b.AppendLine(
+                "**이 절의 분모는 프로시저다.** 위 표들의 (Job, 단계) 쌍과는 단위가 다르므로 " +
+                "그 쌍 수로 나누지 마라.");
+            b.AppendLine();
+            b.AppendLine(
+                "**이 수는 소실을 세지 원인을 귀속하지 않는다.** DDL 사실 수는 있는데 명세서 " +
+                "행 수가 0이어도, 「모델이 표를 안 썼다」와 「리더가 못 읽는다」가 같은 수로 " +
+                "보인다.");
+            b.AppendLine();
+            b.AppendLine(
+                "SpecMaterialCensus는 재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다 - 이 " +
+                "절은 그 침묵을 죽이려고 있다.");
+            b.AppendLine();
+            b.AppendLine(
+                "SetTargets는 추출되지만 MechanicalValidator의 어느 검사도 안 쓴다 - " +
+                "소비자가 공집합이다. 그래서 이 재료의 소실은 급하지 않다.");
+            b.AppendLine();
+            b.AppendLine(
+                "StepTableSets는 SpecTargetTableExtractor가 명세서 마크다운을 전혀 읽지 " +
+                "않고 원본 DDL 정적 분석 결과를 그대로 프로시저별로 접은 것이다 - " +
+                "「명세서 쪽 행 수」라는 개념 자체가 없다.");
+            b.AppendLine();
+
+            if (materialCensus.Count == 0)
+            {
+                b.AppendLine(
+                    "**조사가 실패했다** - 정상 경로에서는 언제나 재료 수만큼 행이 나온다. " +
+                    "빈 표는 「재료가 없다」가 아니라 「계기가 결과를 못 냈다」는 뜻이다.");
+                b.AppendLine();
+                return;
+            }
+
+            var ddlCounterpartByMaterial = SpecMaterials.All
+                .ToDictionary(m => m.Name, m => m.DdlCounterpart, StringComparer.Ordinal);
+
+            b.AppendLine("| 재료 | DDL 사실 수 | 명세서 행 수 | 소실 프로시저 |");
+            b.AppendLine("| :--- | ---: | ---: | :--- |");
+
+            foreach (var row in materialCensus)
+            {
+                var ddlCounterpart = ddlCounterpartByMaterial.TryGetValue(row.MaterialName, out var c)
+                    ? c
+                    : null;
+                var ddl = FormatDdlFactCount(row.DdlFactCount, ddlCounterpart);
+                var spec = FormatSpecRowCount(row.SpecRowCount);
+                var loss = row.ObjectsWithLoss.Count == 0
+                    ? "없음"
+                    : string.Join(", ", row.ObjectsWithLoss);
+
+                b.AppendLine($"| {row.MaterialName} | {ddl} | {spec} | {loss} |");
+            }
+
+            b.AppendLine();
+        }
+
+        /// <summary>
+        /// 세 상태 - 쟀다(정수) · 잴 수 없다(대응물 자체가 없음) · 안 쟀다(대응물은
+        /// 있으나 이 회차가 아직 안 셈). 계획서 초안의 `?.ToString() ?? "잴 수 없음"`은
+        /// 뒤 두 상태를 뭉갠다 - 그러면 안 된다.
+        /// </summary>
+        private static string FormatDdlFactCount(int? ddlFactCount, string? ddlCounterpart)
+        {
+            if (ddlFactCount != null) return ddlFactCount.Value.ToString();
+            return ddlCounterpart == null ? "잴 수 없음" : "안 쟀음";
+        }
+
+        private static string FormatSpecRowCount(int? specRowCount) =>
+            specRowCount?.ToString() ?? "해당 없음";
 
         /// <summary>
         /// mtime 범위를 사람이 읽는 한 줄로. 값이 없어도 "알 수 없음"으로 행을 낸다 -

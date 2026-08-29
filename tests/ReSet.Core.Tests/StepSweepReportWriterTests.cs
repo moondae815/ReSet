@@ -502,5 +502,104 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("사유가 아니라 분모", section);
         }
+
+        // 재료 분모 - 태스크 4. 네 상태(쟀다·잴 수 없다·안 쟀다·명세서 쪽 없음)를 전부
+        // 다른 값으로 채워 라벨과 값이 뒤바뀌는 것을 잡는다. LocalVariables는
+        // DdlCounterpart가 있고 DdlFactCount도 있어 "쟀다"다. DmlRows는 DdlCounterpart가
+        // 있지만(nameof(DmlScopeExtractor)) DdlFactCount가 null이라 "안 쟀다"다.
+        // SpecConditions는 DdlCounterpart 자체가 null이라 "잴 수 없다"다. 그리고
+        // SpecConditions의 SpecRowCount도 null이라 "명세서 쪽 없음"이다.
+        [Fact]
+        public void MaterialCensusSectionDistinguishesAllFourNullStates()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0)
+                {
+                    MaterialCensus = new[]
+                    {
+                        new SpecMaterialCensusRow("LocalVariables", 11, 22, new[] { "dbo.UP_X" }),
+                        new SpecMaterialCensusRow("DmlRows", null, 33, Array.Empty<string>()),
+                        new SpecMaterialCensusRow("SpecConditions", null, null, Array.Empty<string>()),
+                    },
+                },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("| LocalVariables | 11 | 22 | dbo.UP_X |", section);
+            Assert.Contains("| DmlRows | 안 쟀음 | 33 | 없음 |", section);
+            Assert.Contains("| SpecConditions | 잴 수 없음 | 해당 없음 | 없음 |", section);
+
+            // 이 태스크의 핵심 실패 양식 - "안 쟀음"이 "잴 수 없음"이나 0으로 새면
+            // 안 된다. DmlRows 행에서 그 오염을 잡는다.
+            Assert.DoesNotContain("| DmlRows | 잴 수 없음 |", section);
+            Assert.DoesNotContain("| DmlRows | 0 |", section);
+        }
+
+        // 정상 경로에서는 SpecMaterialCensus.Count가 언제나 SpecMaterials.All과 같은
+        // 수만큼 행을 낸다. MaterialCensus가 비면 "재료가 없다"가 아니라 "계기가 결과를
+        // 못 냈다"는 뜻이고, 표를 그대로 그리면 빈 표가 "재료 없음"으로 읽힌다 - 그래서
+        // 명시적으로 조사 실패를 인쇄해야 한다.
+        [Fact]
+        public void MaterialCensusSectionStatesInvestigationFailedWhenEmpty()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("조사가 실패했다", section);
+            Assert.DoesNotContain("| 재료 |", section);
+        }
+
+        // 이 절의 분모(프로시저)는 다른 절의 분모((Job, 단계) 쌍)와 다르다 - 안 적으면
+        // 다음 사람이 그 쌍 수로 나눈다.
+        [Fact]
+        public void MaterialCensusSectionStatesItsDenominatorIsProcedures()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("분모는 프로시저", section);
+        }
+
+        // 이 수는 소실을 세지 원인을 귀속하지 않는다 - 「모델이 표를 안 썼다」와
+        // 「리더가 못 읽는다」가 같은 수로 보인다.
+        [Fact]
+        public void MaterialCensusSectionStatesItDoesNotAttributeCause()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("원인을 귀속하지 않는다", section);
+        }
+
+        // Task 1이 확정한 사실 - SetTargets는 추출되지만 소비자가 공집합이라 소실이
+        // 급하지 않다. 안 적으면 다음 사람이 긴급으로 읽는다.
+        [Fact]
+        public void MaterialCensusSectionNotesSetTargetsHasNoConsumers()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("SetTargets", section);
+            Assert.Contains("소비자가 공집합", section);
+        }
+
+        // Task 1이 확정한 사실 - StepTableSets는 DDL 정적 분석 결과를 자기 자신과
+        // 대조하는 꼴이라 "명세서 쪽 행 수"라는 개념 자체가 없다.
+        [Fact]
+        public void MaterialCensusSectionNotesStepTableSetsHasNoSpecSideConcept()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("StepTableSets", section);
+            Assert.Contains("개념 자체가 없다", section);
+        }
 }
 }
