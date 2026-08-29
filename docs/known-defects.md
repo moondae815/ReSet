@@ -2683,12 +2683,18 @@
   > 1건은 "모델이 안 썼다"가 아니라 "리더가 못 읽는다"일 가능성이 있고, 이 계기는 그 둘을
   > 가르지 못한다 — 나머지 13건도 마찬가지로 미분류다.
   >
-  > **[2026-08-29 정정, Task 10 · Fix Round 1에서 판 구분을 보강]** 아래 강제
-  > 절 (마)가 이 미분류를 닫는다(**현재 코퍼스 판 기준**) — 12편은 「지역
-  > 변수」 문자열조차 없어 「모델이 안 썼다」, 1편(`UP_UTIL_SETTLE_SUMMARY_ETC`)
-  > 은 mermaid 노드 라벨뿐이라 마찬가지로 「모델이 안 썼다」, 1편
-  > (`UP_UTIL_SETTLE_EXCEPTION_PROC`)은 표를 썼는데 헤딩이 없어 「리더가 못
-  > 읽는다」다.
+  > **[2026-08-29 정정, Task 10 · Fix Round 1·2를 거쳐 판 구분과 원인
+  > 분해를 보강]** 아래 강제 절 (마)가 이 미분류를 닫는다(**현재 코퍼스
+  > 판의 9편 기준** — 분모가 14가 아니라 9인 이유는 (라) 참고). Fix Round 1이
+  > 처음 옮겨 적은 12/1/1 분해는 「지역 변수」 문자열 grep에 기댔다가
+  > `AcqManual`(「내부 변수」)·`EXPECT_PROC`(「변수 선언」)을 놓쳤고, Fix
+  > Round 2가 9편을 전부 직접 열어 **3편(「리더가 못 읽는다」:
+  > `UP_UTIL_SETTLE_EXCEPTION_PROC`·`UP_UTIL_SETTLE_EXPECT_PROC`·
+  > `UP_Util_Settle_Summary_AcqManual`) · 6편(「모델이 안 썼다」:
+  > `UP_UTIL_SETTLE_COMM_UPD`·`UP_UTIL_SETTLE_INS_EXTRA`·
+  > `UP_UTIL_SETTLE_INS_EXTRA4PLCARD`·`UP_UTIL_SETTLE_PROC_ETC`·
+  > `UP_UTIL_SETTLE_SUMMARY_ETC`·`UP_UTIL_SETTLE_SUMMARY_EXTRA`)**로
+  > 다시 쟀다. 근거는 (마)에 있다.
   >
   > **위 문단이 이 실패 모드의 예로 든 `UP_UTIL_SETTLE_SUMMARY_EXTRA`는 틀린
   > 예가 아니라 다른 판의 예다.** 위 문단은 승격 전 스냅샷
@@ -2699,7 +2705,9 @@
   > `SpecStatementFactsExtractor`의 「알려진 한계 6번」 주석도 같은 승격 전
   > 판을 근거로 쓰였다. **현재 코퍼스 판에서는 이 객체에 그 표 자체가
   > 없다**(「지역 변수」·「내부 변수」 문자열 0건, 직접 확인) — 그래서 현재
-  > 판의 「썼는데 못 읽는다」 사례는 `EXCEPTION_PROC`이다. **같은 실패
+  > 판에서 이 실패 모드(표는 썼는데 헤딩이 없다)의 사례는 `EXCEPTION_PROC`과
+  > `UP_Util_Settle_Summary_AcqManual`이다((마)가 `EXPECT_PROC`의 다른
+  > 하위 유형까지 포함해 셋 전부를 잰다). **같은 실패
   > 모드(전용 헤딩 없이 표만 남긴다)가 두 판에서 각각 다른 객체로 나타났다**
   > — 모델·판이 바뀌어도 반복되는 실패 양식이라는 증거로 읽는다.
   >
@@ -2839,19 +2847,60 @@
   > **강제 결정은 안 바뀐다** — 지역 변수를 가진 9편에서는 소실이 여전히
   > 전량이다. **그러나 다음 사람이 읽는 분모가 달라진다.**
   >
-  > **(마) 소실 14건의 원인 분해가 닫혔다(현재 코퍼스 판 기준).** 위에서
-  > 이 회차가 「원인 귀속은 안 갈랐다」고 적은 자리를 이것이 닫는다.
+  > **(마) 소실 14건의 원인 분해가 닫혔다(현재 코퍼스 판 기준, 9편에 대해).**
+  > 위에서 이 회차가 「원인 귀속은 안 갈랐다」고 적은 자리를 이것이 닫는다.
+  > **분모는 (라)가 정정한 9편이다** — 지역 변수가 0인 5편은 잃을 것이 없어
+  > 원인을 물을 대상이 아니다.
+  >
+  > **[Fix Round 2] 최초 판정(12/1/1, 「지역 변수」 문자열 grep 기준)이
+  > 틀렸다.** `AcqManual`은 「**내부** 변수」, `EXPECT_PROC`은 「**변수
+  > 선언**」이라 그 grep에 안 걸려 「없다」로 잘못 읽혔다 — 안 나오는 grep을
+  > 「없다」로 읽는 이 회차의 네 번째 같은 실패다. **9편 각각의 Spec.md를
+  > 직접 열어, 헤딩 이름과 무관하게 `@`로 시작하는 변수명을 담은 표가
+  > 있는지부터 다시 쟀다.**
   >
   > ```
-  > 12편  「지역 변수」 문자열조차 없다          → 모델이 안 썼다
-  >  1편  SUMMARY_ETC — mermaid 노드 라벨뿐     → 모델이 안 썼다
-  >  1편  EXCEPTION_PROC — 표를 썼는데 헤딩이 없다 → 리더가 못 읽는다
+  > 리더가 못 읽는다 — 3편 (사실 합 7)
+  >   EXCEPTION_PROC(3) · EXPECT_PROC(1) · AcqManual(3)
+  >
+  > 모델이 안 썼다 — 6편 (사실 합 33)
+  >   COMM_UPD(1) · INS_EXTRA(3) · INS_EXTRA4PLCARD(1) · PROC_ETC(12) ·
+  >   SUMMARY_ETC(15) · SUMMARY_EXTRA(1)
   > ```
   >
-  > `EXCEPTION_PROC`의 실물은
-  > `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md:87-92`다
-  > — `## 파라미터 목록` 아래 산문 뒤에 표만 놓여 있다. **렌더러가 헤딩
-  > 리터럴을 함께 싣게 하면서 그 실패 모드가 구조적으로 사라졌다.**
+  > **「리더가 못 읽는다」 셋, 근거(직접 재확인).**
+  > - `EXCEPTION_PROC` — `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC
+  >   /docs/Spec.md:85-92`. 85행 산문("지역 변수와 시스템 값은 프로시저
+  >   매개변수가 아닙니다") 뒤 87행부터 표가 바로 온다 — 전용 `###`/`##`
+  >   헤딩이 아예 없다. 89~91행 세 「지역 변수」 행이 DECLARE 사실 3건과
+  >   정확히 맞는다(92행은 `@@ERROR` 「시스템 값」 행이라 DECLARE가 아니다).
+  > - `EXPECT_PROC` — `output/Procedures/dbo.UP_UTIL_SETTLE_EXPECT_PROC
+  >   /docs/Spec.md:368-372`. **`### 변수 선언`**이라는, 리더가 모르는
+  >   **세 번째** 헤딩 아래 `| 변수 | 데이터 타입 | 초깃값 | 설명 |` 표에
+  >   행 1개(`@v_PLCardSettlePeriodPG`) — DECLARE 사실 1건과 정확히 맞는다.
+  > - `AcqManual` — `output/Procedures/dbo.UP_Util_Settle_Summary_AcqManual
+  >   /docs/Spec.md:50-54`. `## 파라미터 목록`의 매개변수 표 바로 다음 줄에
+  >   빈 줄 하나만 두고 `| 내부 변수 명칭 | 데이터 타입 | 초기값 | 원천 및
+  >   대상 컬럼 관계 |` 표가 이어진다 — 전용 헤딩 없음. 52~54행 세 행
+  >   (`@v_strOutYMD`·`@v_strClientID`·`@v_strPGName`)이 DECLARE 사실
+  >   3건과 정확히 맞는다.
+  >
+  > **「모델이 안 썼다」 여섯, 확인.** 여섯 편 모두 Spec.md 전체에 변수명
+  > (`@`)을 담은 전용 표가 **없다** — 변수가 DML 컬럼 매핑 표의 값 칸,
+  > 산문 서술(예: `INS_EXTRA4PLCARD:337` "`@v_strReqYMD`를 VARCHAR(8)로
+  > 선언하고 `''`로 초기화"), mermaid 노드 라벨(`SUMMARY_ETC:241`
+  > `DECLAREVARS["지역 변수 선언 (14개 커서 대상 변수 포함)"]`)로만 흩어져
+  > 나온다. `PROC_ETC`(12건)는 그중 일부만 산문(189행)에 나열하고 「등」으로
+  > 나머지를 뭉갠다.
+  >
+  > **함의.** 리더의 헤딩 접두사 목록(`LocalVariableHeadingPrefixes`)이
+  > 모델이 실제로 쓰는 헤딩 변종보다 좁다. 이 조사에서 실제로 본 변종은
+  > 넷이다 — 「### 지역 변수 …」 계열 · 「### 내부 변수 …」 계열(승격 전
+  > 판에서만 확인, 현재 판 9편 중에는 없음) · **헤딩 없음**
+  > (`EXCEPTION_PROC`·`AcqManual`) · **`### 변수 선언`**(`EXPECT_PROC`).
+  > **기계 확정 표가 헤딩을 고정하므로 앞으로 새로 생성되는 문서에는 이
+  > 문제가 다시 생기지 않지만, 옛 판을 다시 읽거나 재생성 전 문서를 감사할
+  > 일이 있으면 이 변종 목록이 필요하다.**
   >
   > **(바) 「한 번도 안 돌아 본 검사」 위험은 승격 전에 닫았다.**
   > `LocalVariableTableCorpusTests`의 실측:
