@@ -8,8 +8,10 @@
 
 ## 맨 앞 — 세 가지 대답
 
-1. **몇이 죽고 몇이 살았는가.** 열셋 중 **열둘이 즉시 죽었다.** **하나(변이 9 —
-   렌더러가 `InitialValue` 칸을 언제나 빈 칸으로 냄)가 살아남았다.**
+1. **몇이 죽고 몇이 살았는가.** 최초 열셋 중 **열둘이 즉시 죽었다.** **하나(변이 9 —
+   렌더러가 `InitialValue` 칸을 언제나 빈 칸으로 냄)가 살아남았다.** 픽스 라운드
+   2에서 Task 6의 고유 값을 실측으로 확정하기 위해 **변이 14(리더 쪽)를 추가**했고
+   — 이것도 죽었다(9개 테스트, 본문 §2 참고). **합산 열넷 중 열셋 죽음·하나 생존.**
 2. **예측이 빗나간 자리.**
    - **변이 1 (픽스 라운드 1에서 재실측 — 최초 보고가 불완전했다)**: 계획서는
      "이음매 테스트 · 카탈로그 테스트"가 죽는다고 적었다. **최초 보고는 이 변이를
@@ -38,21 +40,75 @@
      표가 Critic 면제 블록에 실리는가"이지 "헤딩 이름이 안 바뀌었는가"가 아니다
      — 다음 사람이 이 테스트를 헤딩 개명 방어로 믿고 의지하면 안 된다.
 
-     **Task 6에 대한 인과 — 정정.** `CriticExemptionBlock_ShouldCoverTheLocalVariableTable`은
-     Task 3의 커밋 `19cc7098`(카탈로그 등록)에서 추가됐고 Task 6(이음매)보다
-     앞선다(`git log`로 확인). **그러므로 "Task 6이 없었으면 이 헤딩 개명이 전
-     테스트를 통과했을 것"은 이 사례에 대해 거짓이다** — Task 6 이전에도 이
-     우연한 리터럴 하나가 헤딩 개명을 잡았을 것이다. **Task 6이 고유하게 잡는
-     것은 이 헤딩 개명(변이 1)이 아니라 변이 2(렌더러의 헤더 칸 이름 변경)다.**
-     변이 2를 같은 방식(필터 없는 전건 재실행)으로 다시 확인한 사망 목록은
+     **Task 6에 대한 인과 — 두 번째 정정(픽스 라운드 2).** 픽스 라운드 1이 위에
+     적은 "변이 2를 잡는 셋은 전부 Task 6 계열 커밋에서 나왔다"도 **틀렸다** —
+     이번에도 `git log`의 커밋 메시지·파일명만 보고 귀속했지 **그 커밋의 실제
+     diff를 열어보지 않았다.** `git show e00f787d`로 직접 확인한 결과:
+
+     - `WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` ·
+       `FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows`는 **Task 4**의
+       커밋 `e00f787d`(13:49:23, `LocalVariableTablePromptTests.cs`를 새로 만든
+       커밋)에서 **처음부터**
+       `Assert.Contains("| 변수 명칭 | 데이터 타입 | 초기값 |", prompt)`를
+       갖고 있었다 — Task 6의 첫 커밋 `86210730`(14:25:43)보다 앞선다.
+     - `TheRenderedTable_ShouldBeReadableByTheCheckDReader`만 **Task 6** 계열이
+       맞다 — `LocalVariableTableSeamTests.cs` 자체가 `86210730`에서 신설됐고,
+       이 테스트는 그 파일 안에서 `3ec3d3f9`가
+       `TheMachineHeader_ShouldCarryTheTwoColumnFragmentsTheReaderLooksFor`를
+       재작성해 만든 것이다(`git show 3ec3d3f9`로 확인).
+
+     그러므로 **"Task 6이 없었으면 변이 2는 전 테스트를 통과했을 것"도 거짓이다**
+     — Task 4의 두 테스트가 Task 6과 무관하게 이미 그 변이를 잡는다. Task 6이
+     변이 2에서 고유하게 더한 것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader`
+     하나뿐이다.
+
+     **리더 쪽 변이(신규 — 변이 14)로 Task 6의 고유 값을 직접 쟀다.** 위 정정이
+     추측으로 끝나지 않도록, 이번 라운드에서 실제로 리더를 망가뜨리는 변이를
+     추가해 돌렸다: `SpecStatementFactsExtractor.LocalVariableHeadingPrefixes`에서
+     `"### 지역 변수"`를 빼고(`"### 내부 변수"`만 남김) 렌더러·상수·카탈로그는
+     하나도 안 건드린 채 전건 재실행. 죽은 테스트 아홉:
      `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` ·
-     `LocalVariableTablePromptTests.WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` ·
-     `...FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows` 셋뿐이고, **카탈로그
-     테스트는 그중 어느 것도 죽지 않는다** — 헤더 칸 이름("변수 명칭")은
-     `MachineConfirmedTables`가 전혀 다루지 않는 별개의 축이기 때문이다. 이
-     셋은 전부 Task 6 계열 커밋(`e00f787d` "지역 변수 표를 Actor 프롬프트의 세
-     갈래에 싣는다" 및 그 뒤 이음매 커밋들)에서 나왔다 — **Task 6이 없었으면
-     변이 2는 전 테스트를 통과했을 것이고, 그것이 Task 6의 고유 값이다.**
+     `...TheMachineHeading_ShouldBeReadableByTheCheckDReader` ·
+     `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` ·
+     `SpecMaterialCensusTests.Count_WhenSpecHasTheTable_ReportsNoLoss` ·
+     `SpecStatementFactsExtractorTests.SystemValues_AreMarkedAndNotTreatedAsLocalVariables` ·
+     `...LocalVariables_RecognizeExpectProcTypeOnlyHeaderAndSystemIntegerMarker` ·
+     `...LocalVariables_CommUpdShape_StillReadsAndConditionHeaderCorrectly` ·
+     `...LocalVariables_RecognizeProcEtcHeadingAndTypeOnlyHeader` ·
+     `...LocalVariables_RecognizeAcqManualHeadingAndSystemStateMarker`.
+
+     `LocalVariableTableSeamTests`(Task 6 소속) 셋이 죽었지만, **정확히 같은
+     실패를 이 계획보다 앞선 리더 단위 테스트 여섯 개가 이미 독립적으로 잡는다.**
+     `git log`로 확인한 커밋 날짜: `SpecStatementFactsExtractorTests`의 관련
+     테스트들은 `a9b613ae`(2026-08-24 11:03)·`dd7f9ea5`·`61ae1162` 등에서,
+     `SpecMaterialCensusTests.Count_WhenSpecHasTheTable_ReportsNoLoss`는
+     `878be98b`(2026-08-29 09:16)에서 왔다 — 둘 다 이 계획서의 첫 커밋
+     `c35dd116`(2026-08-29 13:01)과 Task 6의 첫 커밋 `86210730`(14:25)보다
+     앞선다. **즉 리더 축에서는 Task 6이 고유하게 추가한 방어가 없다** — 리더
+     자체의 정확성은 이 계획이 시작되기 전부터 이미 잠겨 있었고, Task 6의
+     세 테스트는 그 기존 방어와 같은 실패를 다른 경로(직접 마크다운 조립 ·
+     리플렉션으로 접두사 배열 확인)로 재확인할 뿐이다.
+
+     **TASK 6 UNIQUE VALUE(실측 결론, 추측 아님).** 변이 2와 변이 14를 합쳐 보면
+     Task 6이 이 계획 전체에서 실제로 새로 더한 유일한 방어는
+     `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader`
+     하나다 — "손으로 쓴 픽스처가 아니라 렌더러(`AiService.BuildLocalVariableTableLines`)가
+     실제로 낸 프롬프트 문자열을 진짜 리더(`SpecStatementFactsExtractor`)에
+     그대로 먹여 본다"는 이 결합만 이 테스트 하나가 유일하게 가지고, 나머지는
+     각각 Task 4(렌더러가 낸 문자열에 부분 문자열이 있는지만 확인, 리더를
+     부르지 않음)나 이 계획 이전의 리더 단위 테스트(손으로 쓴 마크다운으로
+     리더만 확인, 렌더러를 부르지 않음)와 기능이 겹친다.
+
+     **같은 오류가 두 번 반복됐다 — 공통 원인.** 픽스 라운드 1은 변이 1의 귀속
+     오류(필터가 걸린 재실행이라 일부 테스트가 실행에서 빠짐)를 스스로 찾아
+     고쳤지만, 바로 그 정정 문단 안에서 변이 2의 귀속을 **커밋을 열어보지
+     않고 커밋 메시지 제목과 파일 이름만으로 추정**해 똑같은 모양의 오류를
+     새로 만들었다. 두 사고의 뿌리는 같다 — **"어느 테스트가 무엇을 잡는가"는
+     실행 결과와 `git show`/`git log -p`로 그 커밋의 실제 diff를 열어 확인해야
+     하고, 필터 문자열이나 커밋 메시지·파일명으로 추정하면 안 된다.** 이번
+     라운드는 `git show e00f787d`·`git show 3ec3d3f9`로 diff를 직접 열어 세
+     번째 반복을 막았다. **이 문장이 이 보고서가 다음 회차에 남길 가장 값진
+     줄이다.**
    - **변이 8**: 계획서는 `WhenTheHeadingIsMissing_ShouldReportOnce` 하나만
      꼽았는데, 실측은 그 테스트에 더해 `LocalVariableTableCorpusTests`(코퍼스
      31 객체 전건 검사)도 함께 죽였다 — 그 코퍼스 테스트가
@@ -88,7 +144,7 @@
 | # | 변이 | 예상 | 실측 | 죽은 테스트 |
 | ---: | :--- | :--- | :--- | :--- |
 | 1 | `TableHeading`을 `"### 로컬 변수 " + HeadingSuffix`로(production 상수) | 이음매·카탈로그 테스트 | **죽음** — 카탈로그 테스트 중 자기참조 넷(`All_ShouldContainTheLocalVariableTable` 등 + 반사 불변식)은 안 죽고, 한글 리터럴을 손으로 박은 하나(`CriticExemptionBlock_ShouldCoverTheLocalVariableTable`)는 우연히 죽는다(전건 재실행으로 재확인, 위 참고) | `LocalVariableDeclarationExtractorTests.TableHeading_ShouldUseTheSharedSuffix` · `LocalVariableTableSeamTests.TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` · `MachineConfirmedTablesExpansionTests.CriticExemptionBlock_ShouldCoverTheLocalVariableTable` |
-| 2 | 렌더러 헤더 `변수 명칭` → `변수 이름` | 이음매 종단 테스트 | **죽음**, 예측대로 | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `LocalVariableTablePromptTests.WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` · `...FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows` |
+| 2 | 렌더러 헤더 `변수 명칭` → `변수 이름` | 이음매 종단 테스트 | **죽음**, 단 셋 중 둘(`WholeSpBranch_…`·`FunctionBranch_…`)은 Task 4 소속, Task 6 고유는 `TheRenderedTable_…` 하나뿐(픽스 라운드 2에서 재귀속) | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `LocalVariableTablePromptTests.WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` · `...FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows` |
 | 3 | `MachineConfirmedTables.All`에서 등록 제거 | 확장 테스트 넷 + 반사 불변식 | **죽음**, 예측 정확히 일치 | `MachineConfirmedTablesExpansionTests.All_ShouldContainTheLocalVariableTableAtTheEnd` · `...All_ShouldContainTheLocalVariableTable` · `...All_ShouldAppendTheLocalVariableTableAfterTheErrorCodeTable` · `...CriticExemptionBlock_ShouldCoverTheLocalVariableTable` · `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog` |
 | 4 | `OverviewAndParameters` 갈래를 `Omit`으로 | `OverviewAndParametersBranch_ShouldCarryTheTable` | **죽음**, 예측 정확히 일치 | `LocalVariableTablePromptTests.OverviewAndParametersBranch_ShouldCarryTheTable` |
 | 5 | `CrudAnalysis` 갈래를 `Table`로 | `BranchesThatCannotWriteParameterList_…` | **죽음**, 예측 정확히 일치 | `LocalVariableTablePromptTests.BranchesThatCannotWriteParameterList_ShouldNotCarryTheTable(sectionType: "CrudAnalysis")` |
@@ -100,6 +156,7 @@
 | 11 | 추출기의 이름 접기(`_seen.Add`) 제거 | `Extract_ShouldFoldRepeatedNamesKeepingTheFirst` | **죽음**, 예측 정확히 일치 | `LocalVariableDeclarationExtractorTests.Extract_ShouldFoldRepeatedNamesKeepingTheFirst` |
 | 12 | 추출기의 `if (node is ProcedureParameter) return;` 제거 | `Extract_ShouldNotReturnProcedureParameters` + 코퍼스 CENSUS DELTA | **죽음**, 예측보다 넓음(과소 예측) + CENSUS DELTA 40→69 관측 | `LocalVariableDeclarationExtractorTests.Extract_ShouldNotReturnProcedureParameters` · `...Extract_ShouldReturnNameTypeAndInitialValue` |
 | 13 | `CacheManager.CurrentCacheFormatVersion`을 17로 | `CacheManagerTests.UpdateCache_StampsTheCurrentFormatVersion` | **죽음**, 예측 정확히 일치(락 테스트 실재 확인) | `CacheManagerTests.UpdateCache_StampsTheCurrentFormatVersion` |
+| 14(신규, 픽스 라운드 2) | `SpecStatementFactsExtractor.LocalVariableHeadingPrefixes`에서 `"### 지역 변수"` 제거(리더 쪽, 렌더러·상수·카탈로그는 불변) | (신규 - Task 6의 고유 값을 실측으로 확정하기 위해 추가) | **죽음, 9개** — `LocalVariableTableSeamTests` 셋(Task 6 소속) + 이 계획보다 앞선 리더 단위 테스트 여섯 개(중복 방어, Task 6의 고유 기여 아님) | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` · `SpecMaterialCensusTests.Count_WhenSpecHasTheTable_ReportsNoLoss` · `SpecStatementFactsExtractorTests.SystemValues_AreMarkedAndNotTreatedAsLocalVariables` · `...LocalVariables_RecognizeExpectProcTypeOnlyHeaderAndSystemIntegerMarker` · `...LocalVariables_CommUpdShape_StillReadsAndConditionHeaderCorrectly` · `...LocalVariables_RecognizeProcEtcHeadingAndTypeOnlyHeader` · `...LocalVariables_RecognizeAcqManualHeadingAndSystemStateMarker` |
 
 ## SURVIVORS
 
@@ -226,11 +283,26 @@ Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
   다만 그것은 설계된 헤딩-개명 방어가 아니라 그 테스트의 작성 방식이 우연히
   겹친 것이고, Task 6(이음매)보다 앞선 Task 3 커밋(`19cc7098`)에서 이미
   존재했다 — 그래서 "Task 6이 없었으면 이 개명이 전 테스트를 통과했을 것"은
-  거짓이다. **Task 6이 고유하게 잡는 것은 변이 2(렌더러 헤더 칸 이름 변경)다**
-  — 그 변이에는 카탈로그 테스트가 전혀 반응하지 않는다(전건 재실행으로 확인,
-  본문 §2 참고). 다음에 이 축을 다시 감사할 사람이 "카탈로그 테스트가 헤딩
+  거짓이다. 다음에 이 축을 다시 감사할 사람이 "카탈로그 테스트가 헤딩
   리터럴까지 잠근다"고 일반화하지 않도록, 그리고 "필터를 걸고 돌린 재실행이
   전건 결과와 같다"고 가정하지 않도록 이 문서에 남긴다.
+- **정정(픽스 라운드 2) — 같은 오류가 반복됐다.** 픽스 라운드 1이 낸 "Task 6이
+  고유하게 잡는 것은 변이 2다, 그 셋은 전부 Task 6 계열 커밋에서 나왔다"도
+  틀렸다 — `git show e00f787d`로 직접 열어보니 셋 중 둘(`WholeSpBranch_…`·
+  `FunctionBranch_…`)은 **Task 4**의 커밋에서 이미 헤더 행 단언을 갖고 있었다.
+  Task 6이 변이 2에서 고유하게 잡는 것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader`
+  하나뿐이다. 이를 리더 쪽 변이(신규 — 변이 14, `SpecStatementFactsExtractor`의
+  헤딩 접두사 배열에서 `"### 지역 변수"` 제거)로 독립 검증했고, 그 변이에서도
+  Task 6의 세 테스트가 이 계획보다 앞선 리더 단위 테스트 여섯 개와 정확히
+  같은 실패를 낸다는 것을 확인했다 — 즉 **리더 축에서 Task 6의 고유 기여는
+  없다.** Task 6이 이 계획 전체에서 실제로 새로 더한 것은
+  `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 단 하나(렌더러 실제
+  출력을 실제 리더에 먹여 보는 유일한 결합)다. **두 번의 정정이 같은 뿌리에서
+  났다** — "어느 테스트가 무엇을 잡는가"를 필터 문자열(라운드 1)이나 커밋
+  메시지·파일명(라운드 2)으로 추정했지 그 커밋의 실제 diff나 실행 결과를
+  보지 않았다. **다음에 이 축을 감사할 사람에게: 귀속 주장은 반드시
+  `git show <commit>`으로 그 diff를 열어보거나 변이를 직접 돌려 확인한
+  뒤에만 적어라.**
 - 변이 9의 생존은 값진 신호다(위 "직전 회차 권고의 인과" 참고) - 표시 계층은
   계수 로직보다 방어가 얇다. 이번에 발견된 틈(행 전체 모양 vs 부분 문자열
   포함)은 이 표 하나에 국한된 보강으로 닫았지만, 같은 패턴(부분 문자열 포함
