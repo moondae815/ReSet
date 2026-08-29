@@ -148,5 +148,63 @@ namespace ReSet.Core.Tests
                     $"{(actuallyReadsSpecMarkdown ? "참" : "거짓")}입니다.");
             }
         }
+
+        /// <summary>
+        /// [왜 이 테스트인가 - Fix Round 1, 2026-08-29 리뷰 Important 3] `ReaderTypeName`은
+        /// `ReadsSpecMarkdown_MatchesTheExtractMethodsParameterType`가, `ConsumingChecks`는
+        /// `EveryNamedCheck_ExistsOnMechanicalValidator`가, `Enforced`는
+        /// `EveryEnforcedMaterial_HasItsHeadingInMachineConfirmedTables`가 잠근다.
+        /// `DdlCounterpart`만 기계 확인이 없었다 - 「잴 수 없음/안 쟀음」을 가르는 값인데도
+        /// 오기 하나가 그 재료를 영구히 "잴 수 없음"으로 인쇄해 다음 회차의 범위에서
+        /// 조용히 빼 버릴 수 있었다. `LocalVariables`의 `DdlCounterpart`가 한때 손으로 적은
+        /// 문자열 리터럴("SpecMaterialCensus")이었던 것이 정확히 그 위험이 실물로 있었다는
+        /// 증거다 - 값 자체는 우연히 맞았지만 오타가 나도 이 테스트가 없으면 아무도 몰랐다.
+        /// </summary>
+        [Fact]
+        public void DdlCounterpart_NamesATypeThatActuallyExistsInTheAssembly()
+        {
+            var typeNames = typeof(SpecMaterials).Assembly.GetTypes()
+                .Select(t => t.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var material in SpecMaterials.All.Where(m => m.DdlCounterpart != null))
+            {
+                Assert.True(typeNames.Contains(material.DdlCounterpart!),
+                    $"{material.Name}: DdlCounterpart `{material.DdlCounterpart}`가 어셈블리에 " +
+                    "실재하는 타입이 아닙니다 - 오기이거나 지워진 타입입니다.");
+            }
+        }
+
+        /// <summary>
+        /// [왜 이 테스트인가 - Fix Round 1, 2026-08-29 리뷰 Important 4] 카탈로그 잠금
+        /// (`EverySpecReader_IsListedInTheCatalog`)은 `Spec*Extractor` 타입 이름 집합만
+        /// 대조한다. 그런데 재료 여덟 중 넷은 리더 하나(`SpecStatementFactsExtractor`)가
+        /// 낸다 - `SpecStatementFacts`의 public 멤버 넷(`DmlRows`·`SetTargets`·
+        /// `LocalVariables`·`ErrorCodeToOrdinal`)이 각각 한 재료다. 누가 그 레코드에
+        /// 다섯째 멤버를 더하면 리더 이름은 그대로라 `EverySpecReader_IsListedInTheCatalog`는
+        /// 계속 초록이고, 카탈로그는 여덟에 머물고, census는 그 재료를 안 세고, 보고서에
+        /// 행조차 안 생긴다 - `SpecMaterialCensusTests.Count_EveryMaterialInCatalog_AppearsAsARow`가
+        /// "가장 조용한 실패 양식"이라 부르는 그것인데, 그 테스트는 카탈로그 대비 census만
+        /// 보지 코드(SpecStatementFacts 레코드) 대비 카탈로그는 안 본다. 이 테스트가 그
+        /// 마지막 틈을 리플렉션으로 막는다.
+        /// </summary>
+        [Fact]
+        public void SpecStatementFactsPublicMembers_AreAllListedInTheCatalog()
+        {
+            var recordMemberNames = typeof(SpecStatementFacts)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Select(p => p.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var catalogNamesForThisReader = SpecMaterials.All
+                .Where(m => m.ReaderTypeName == nameof(SpecStatementFactsExtractor))
+                .Select(m => m.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var missing = recordMemberNames.Except(catalogNamesForThisReader).ToList();
+            Assert.True(missing.Count == 0,
+                "SpecStatementFacts의 public 멤버가 카탈로그(SpecMaterials.All)에 없습니다: " +
+                $"{string.Join(", ", missing)}");
+        }
     }
 }

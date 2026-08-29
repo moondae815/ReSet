@@ -70,10 +70,13 @@ namespace ReSet.Core.Services
     ///     2026-08-29). CheckUpdateSetTargets라는 이름이 있지만 그것은 배치 제어 테이블
     ///     계약(BatchControlContract) 검사이고 완전히 다른 메커니즘이다 - 이 재료를 전혀
     ///     읽지 않는다. 이 재료는 추출되지만 한 번도 소비되지 않는다.
-    ///   - LocalVariables: 강제 아님(§0). DDL 대응물은 이번 회차가 만드는
-    ///     SpecMaterialCensus.CountDeclaredVariables(Task 2, DeclareVariableElement를
-    ///     Visit하는 방문자) - 문자열 리터럴로 이름 댄다(아직 존재하지 않는 타입이라
-    ///     nameof를 못 쓴다). 소비 검사는 CheckSpecLocalVariablesDeclared 하나.
+    ///   - LocalVariables: 강제 아님(§0). DDL 대응물은 SpecMaterialCensus
+    ///     .CountDeclaredVariables(Task 2, DeclareVariableElement를 Visit하는
+    ///     방문자) - nameof(SpecMaterialCensus)로 이름 댄다. Task 2가 그 타입을
+    ///     만들기 전에는 아직 존재하지 않는 타입이라 문자열 리터럴을 썼었다
+    ///     (Fix Round 1, 2026-08-29 리뷰 Important 3에서 nameof로 바꿨다 - 그
+    ///     근거는 그 시점에 이미 만료됐는데도 리터럴이 남아 있었다). 소비 검사는
+    ///     CheckSpecLocalVariablesDeclared 하나.
     ///   - SpecConditions(BodyColumns·ByUdf): 강제 아님, 헤딩 없음(문서 전체를 훑는다 -
     ///     SpecConditionColumnExtractor.cs:142 HeadingRegex는 어떤 헤딩이든 UDF 소속
     ///     경계로만 쓰지 특정 헤딩을 요구하지 않는다). DDL 대응물은 null - 근접한 후보로
@@ -157,8 +160,16 @@ namespace ReSet.Core.Services
             // CheckUpdateSetTargets(1121행)뿐인데, 그 메서드는 BatchControlContract(제어
             // 테이블 계약)를 stepMarkdown에서 정규식으로 직접 훑는 별개 검사이고
             // SpecStatementFacts.SetTargets를 인자로도 받지 않는다. 이 재료가 실제로
-            // MechanicalValidator 어디에도 안 흘러간다 - (5-3-7)보다 더 나쁜 모양이다:
+            // MechanicalValidator 어디에도 안 흘러간다 - **모양은** (5-3-7)보다 나쁘다:
             // 저건 "쓰다가 죽은" 것이고 이건 "한 번도 안 쓰인" 것이다.
+            //
+            // [그러나 급박도는 반대다 - Fix Round 1, 2026-08-29 리뷰 Important 6]
+            // (5-3-7)이 급했던 이유는 검사가 재료를 잃어 "조용히 꺼질" 위험이 실재했기
+            // 때문이다 - 표가 있었다가 사라지면 그 표에 기대는 검사도 함께 죽는다.
+            // 이 재료는 소비자가 처음부터 공집합이라 그 위험 자체가 성립하지 않는다 -
+            // 잃을 검사가 없다. 그래서 최종 리뷰어 판정은 "급하지 않다"이고 이 회차가
+            // 그 판정을 따른다. 다만 "추출 비용만 내고 아무도 안 쓴다"는 사실 자체는
+            // 결함으로 남긴다 - known-defects.md (5-3-9)에 번호를 달았다.
             new SpecMaterial(
                 "SetTargets",
                 nameof(SpecStatementFactsExtractor),
@@ -172,7 +183,7 @@ namespace ReSet.Core.Services
                 nameof(SpecStatementFactsExtractor),
                 new[] { "### 지역 변수", "### 내부 변수" },
                 Enforced: false,
-                DdlCounterpart: "SpecMaterialCensus",
+                DdlCounterpart: nameof(SpecMaterialCensus),
                 ReadsSpecMarkdown: true,
                 ConsumingChecks: new[] { "CheckSpecLocalVariablesDeclared" }),
             // [강제 아님·헤딩 없음] SpecConditionColumnExtractor는 특정 "### " 헤딩을
