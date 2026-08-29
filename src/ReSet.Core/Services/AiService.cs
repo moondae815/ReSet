@@ -1355,7 +1355,7 @@ Based on the structured reference context above, reverse engineer the stored pro
             {
                 "   [CRITICAL LOCAL VARIABLE TABLE] The following DECLARE'd local variables are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 파라미터 목록` under the exact heading shown. Never rename a variable, never change or abbreviate a declared type, and never add a row for a procedure parameter - the declared type is the contract, and an implementer who guesses a type from the variable name will truncate money values.",
                 $"   {LocalVariableDeclarationExtractor.TableHeading}",
-                "   | 변수 명칭 | 데이터 타입 | 초기값 |",
+                $"   | {string.Join(" | ", LocalVariableDeclarationExtractor.TableHeaderCells)} |",
                 "   | :--- | :--- | :--- |"
             };
 

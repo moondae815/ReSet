@@ -47,6 +47,24 @@ namespace ReSet.Core.Services
         public const string TableHeading =
             "### 지역 변수 " + MachineConfirmedTables.HeadingSuffix;
 
+        /// <summary>
+        /// 이 표의 헤더 셀. 프롬프트가 이 표를 렌더할 때(`AiService
+        /// .BuildLocalVariableTableLines`)와 L1이 명세서에서 이 표의 블록을 특정할
+        /// 때(`MechanicalValidator.CheckLocalVariableDeclarationTable`) **같은 값**을
+        /// 봐야 한다 - `TransactionBoundaryExtractor.TableHeaderCells`와 같은 이유,
+        /// 같은 모양이다. 한쪽에 사본을 두면 다른 쪽이 바뀌는 날 조용히 낡고, L1의
+        /// 헤더 대조가 아무 블록도 못 찾아 관대한 폴백(구간의 모든 `|` 줄을 그대로
+        /// 씀)으로 후퇴하면서 대조 자체가 조용히 무력화된다 - 2026-08-29 리뷰가
+        /// private 사본 둘로 실험해 이 드리프트를 실제로 재현했다(한쪽만 바꾸면
+        /// 오탐이 되살아나거나, 대조가 눈치채지 못한 채 통과한다).
+        ///
+        /// IReadOnlyList로 노출한다(이 저장소의 관례 - ExecutionSemanticsFacts.AllKinds,
+        /// BatchInfraObjectCollector.Schemas, MechanicalValidator.RequiredConsolidatedHeaders,
+        /// TransactionBoundaryExtractor.TableHeaderCells가 전부 같다).
+        /// </summary>
+        public static readonly IReadOnlyList<string> TableHeaderCells =
+            new[] { "변수 명칭", "데이터 타입", "초기값" };
+
         public static IReadOnlyList<LocalVariableDeclarationFact> Extract(string? ddlText)
         {
             if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LocalVariableDeclarationFact>();

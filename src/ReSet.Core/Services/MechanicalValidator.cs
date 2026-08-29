@@ -5021,18 +5021,22 @@ namespace ReSet.Core.Services
         /// 쓰면 "정방향은 봤는데 역방향은 못 본 행"이 생겨 유지보수 부담만 커진다 -
         /// 그래서 정방향도 같은 좁힌 창으로 통일한다.
         ///
-        /// [헤더 셀을 여기 하드코딩하는 이유] `TransactionBoundaryExtractor
-        /// .TableHeaderCells`처럼 추출기에 상수로 노출해 AiService 렌더와 공유하는
-        /// 편이 원칙적으로 낫다(단일 진실 공급원). 그럼에도 여기 그대로 적는 이유는
-        /// 이 값이 `AiService.cs:1358`의 렌더 리터럴("| 변수 명칭 | 데이터 타입 |
-        /// 초기값 |")과 반드시 같아야 하는 계약이기 때문이다 - 어긋나면 헤더 대조가
-        /// 아무 블록도 못 찾아 `CollectTableMatchRows`의 관대한 폴백(구간의 모든 `|`
-        /// 줄)으로 후퇴하면서 이 수정이 조용히 무효화된다. 두 리터럴을 바꿀 때는
-        /// 반드시 함께 바꿔야 한다.
+        /// [왜 헤더 셀을 여기 하드코딩하지 않는가 - 2026-08-29 픽스 라운드 2]
+        /// 이 자리에 private 상수로 사본을 두었던 첫 판은, 그 값이
+        /// `AiService.BuildLocalVariableTableLines`의 렌더 리터럴과 반드시 같아야
+        /// 하는데도 그 계약을 지킬 강제가 주석뿐이었다 - 리뷰가 실험으로 증명했다:
+        /// 렌더 쪽 리터럴만 바꾸면 `CollectTableMatchRows`가 헤더 일치 블록을 하나도
+        /// 못 찾아 관대한 폴백(구간의 모든 `|` 줄을 그대로 씀)으로 조용히
+        /// 후퇴하는데, 그래도 `LocalVariableTableL1Tests`·`LocalVariableTableCorpusTests`
+        /// 는 각자 헤더 문자열의 독립 사본을 픽스처로 쓰므로 전부 초록으로
+        /// 남았다. **주석은 강제가 아니다** - (5-3-7)이 겨눈 바로 그 형태(프롬프트
+        /// 문구도 L1도 없이 관례에만 기댄 표)를 이 상수 자체가 반복하고 있었다.
+        /// `TransactionBoundaryExtractor.TableHeaderCells`의 선례를 그대로 따라
+        /// `LocalVariableDeclarationExtractor.TableHeaderCells`로 옮겨
+        /// `AiService`(렌더)와 여기(대조)가 같은 상수를 읽게 한다 - 이제 값을 바꾸는
+        /// 사람은 두 리터럴이 아니라 한 상수만 바꾸므로 드리프트가 구조적으로
+        /// 불가능하다.
         /// </summary>
-        private static readonly IReadOnlyList<string> LocalVariableTableHeaderCells =
-            new[] { "변수 명칭", "데이터 타입", "초기값" };
-
         private static void CheckLocalVariableDeclarationTable(
             string markdown, SpecExpectations expectations, ValidationResult result)
         {
@@ -5064,7 +5068,8 @@ namespace ReSet.Core.Services
                 // 헤더 행 자체를 이미 건너뛰고(`block.Skip(1)`), 구분 행은 `:---`
                 // 모양이라 아래 판정이 걸러 낸다.
                 var rowCells = CollectTableMatchRows(
-                        lines, headingIndex + 1, endIndex, LocalVariableTableHeaderCells)
+                        lines, headingIndex + 1, endIndex,
+                        LocalVariableDeclarationExtractor.TableHeaderCells)
                     .Select(SplitTableRowCells)
                     .ToList();
 
