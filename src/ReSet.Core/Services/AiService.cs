@@ -470,7 +470,8 @@ namespace ReSet.Core.Services
                 spDef,
                 executionSemanticsPresentation: MachineFactPresentation.Table,
                 caseBranchPresentation: MachineFactPresentation.Table,
-                uncoveredNoticePresentation: MachineFactPresentation.Table));
+                uncoveredNoticePresentation: MachineFactPresentation.Table,
+                localVariablePresentation: MachineFactPresentation.Table));
 
             // 축 A 🔴(EXCEPTION_PROC): SET 우변이 X.PGCOMM에서 멈추면 그 정의(프로모션
             // 원가 기준금액 IIF 분기)가 소실된다. DmlScopeFacts와 같은 이유로 표를
@@ -1334,6 +1335,41 @@ Based on the structured reference context above, reverse engineer the stored pro
         }
 
         /// <summary>
+        /// 「지역 변수」 표를 렌더한다. 헤딩 리터럴을 함께 실어 모델이 헤딩을 지어낼
+        /// 자리를 없앤다.
+        ///
+        /// [왜 헤딩까지 싣는가 - 실측] 현 코퍼스의 EXCEPTION_PROC은 지역 변수 표를
+        /// 실제로 썼는데 전용 헤딩을 안 붙였다(Spec.md:87-92, `## 파라미터 목록` 아래
+        /// 산문 뒤에 표만). SpecStatementFactsExtractor.ReadLocalVariables는 헤딩으로만
+        /// 구간을 잡으므로 그 표를 못 읽고 0을 낸다 - known-defects (5-3-7)의 소실
+        /// 14건 중 1건이 그 원인이다. 헤딩을 프롬프트가 주면 그 실패 모드가 없다.
+        ///
+        /// [목적지가 `## 파라미터 목록`인 근거] 두 세대 실측 - 현 코퍼스의 유일한
+        /// 잔존(UF_GET_OUTYMD4REFUND)도, 승격 전 스냅샷(output.bak-cache17-20260827)의
+        /// 둘도 전부 그 절 아래에 있었다.
+        /// </summary>
+        private static List<string> BuildLocalVariableTableLines(
+            IReadOnlyList<LocalVariableDeclarationFact> facts)
+        {
+            var lines = new List<string>
+            {
+                "   [CRITICAL LOCAL VARIABLE TABLE] The following DECLARE'd local variables are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## 파라미터 목록` under the exact heading shown. Never rename a variable, never change or abbreviate a declared type, and never add a row for a procedure parameter - the declared type is the contract, and an implementer who guesses a type from the variable name will truncate money values.",
+                $"   {LocalVariableDeclarationExtractor.TableHeading}",
+                "   | 변수 명칭 | 데이터 타입 | 초기값 |",
+                "   | :--- | :--- | :--- |"
+            };
+
+            foreach (var fact in facts)
+            {
+                lines.Add(
+                    $"   | {EscapeTableCell(fact.Name)} | {EscapeTableCell(fact.DataType)} | {EscapeTableCell(fact.InitialValue)} |");
+            }
+
+            lines.Add("");
+            return lines;
+        }
+
+        /// <summary>
         /// 한 사실 종류(실행 의미 · CASE 분기)를 한 갈래의 프롬프트에 어떻게 실을지 -
         /// Task 17, 최종 브랜치 리뷰 2차(Important). 이전에는 bool 두 개
         /// (crudAnalysisSectionPresent · logicFlowSectionPresent)로 "표냐 참고
@@ -1401,7 +1437,8 @@ Based on the structured reference context above, reverse engineer the stored pro
             SpDefinition spDef,
             MachineFactPresentation executionSemanticsPresentation,
             MachineFactPresentation caseBranchPresentation,
-            MachineFactPresentation uncoveredNoticePresentation)
+            MachineFactPresentation uncoveredNoticePresentation,
+            MachineFactPresentation localVariablePresentation)
         {
             var lines = new List<string>();
 
@@ -1477,6 +1514,24 @@ Based on the structured reference context above, reverse engineer the stored pro
             // CrudAnalysis)에만 "표에 넣지 마라"를 주고, 표를 받지 않는 개요·로직 갈래에는
             // 참고형 한 줄만 준다. 자기가 쓸 수 없는 목적지에 대한 지시를 받은 모델은 H2를
             // 어기고 헤딩을 합성하거나 지시를 버린다(위 Task 14/17 실측과 같은 모양).
+            // [지역 변수 표 - known-defects (5-3-7)의 강제, 2026-08-29]
+            // caseBranchPresentation을 재사용하지 않는다 - 그 셋(CASE 분기·트랜잭션
+            // 경계·변수 대입)의 목적지는 `## 로직 흐름 요약`인데 이 표의 목적지는
+            // `## 파라미터 목록`이라 갈래별 값이 다르다. 자기 파라미터를 갖는 이유가
+            // 그것이다.
+            //
+            // Reference 변형을 만들지 않는다 - 이 표를 못 쓰는 두 갈래(CrudAnalysis·
+            // LogicAndVisualization)는 변수 선언 목록을 산문으로 서술할 자리도 없다.
+            // 그래서 Table이 아니면 아무것도 싣지 않는다(Reference == Omit).
+            if (localVariablePresentation == MachineFactPresentation.Table)
+            {
+                var localVariables = LocalVariableDeclarationExtractor.Extract(spDef.DdlText);
+                if (localVariables.Count > 0)
+                {
+                    lines.AddRange(BuildLocalVariableTableLines(localVariables));
+                }
+            }
+
             lines.AddRange(BuildUncoveredStatementNoticeLines(spDef, uncoveredNoticePresentation));
 
             return lines;
@@ -1921,7 +1976,8 @@ Based on the structured reference context above, reverse engineer the stored pro
                 functionDef,
                 executionSemanticsPresentation: MachineFactPresentation.Table,
                 caseBranchPresentation: MachineFactPresentation.Table,
-                uncoveredNoticePresentation: MachineFactPresentation.Table);
+                uncoveredNoticePresentation: MachineFactPresentation.Table,
+                localVariablePresentation: MachineFactPresentation.Table);
             if (machineFactLinesForFunctionDef.Count > 0)
             {
                 systemPrompt += "\n\n" + string.Join("\n", machineFactLinesForFunctionDef);
@@ -3208,7 +3264,8 @@ DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW'
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Reference,
                     caseBranchPresentation: MachineFactPresentation.Omit,
-                    uncoveredNoticePresentation: MachineFactPresentation.Reference));
+                    uncoveredNoticePresentation: MachineFactPresentation.Reference,
+                    localVariablePresentation: MachineFactPresentation.Table));
 
                 sbRules.Add($"{rIdx++}. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.");
                 sbRules.Add($"{rIdx++}. Do not wrap the entire response in a markdown code block.");
@@ -3348,7 +3405,8 @@ DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW'
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Table,
                     caseBranchPresentation: MachineFactPresentation.Reference,
-                    uncoveredNoticePresentation: MachineFactPresentation.Table));
+                    uncoveredNoticePresentation: MachineFactPresentation.Table,
+                    localVariablePresentation: MachineFactPresentation.Omit));
 
                 // 이 분기도 BuildSpecificationPrompts와 같은 파생 테이블 정의 표를 받아야
                 // 한다 - VerificationPipelineOrchestrator의 지역 모델 흐름은
@@ -3522,7 +3580,8 @@ DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW'
                     spDef,
                     executionSemanticsPresentation: MachineFactPresentation.Reference,
                     caseBranchPresentation: MachineFactPresentation.Table,
-                    uncoveredNoticePresentation: MachineFactPresentation.Reference));
+                    uncoveredNoticePresentation: MachineFactPresentation.Reference,
+                    localVariablePresentation: MachineFactPresentation.Omit));
                 sbRules.Add($"{rIdx++}. If `WITH(NOLOCK)` or `NOLOCK` read hints are used, analyze their transaction isolation implications (dirty read risk, data consistency impact) in the exception/constraint section. Base this analysis on the reference lock-hint facts above (if provided) and on the source DDL directly for any scan those facts do not cover (e.g. cursor declarations, standalone SELECTs, subqueries inside control-flow predicates, a statement's own top-level WHERE subqueries, or CTE bodies) - do not suppress a hint you can see in the DDL just because it is outside those reference facts, and do not assert or contradict which table or scan carries a hint beyond what the reference facts or the DDL itself state.");
                 sbRules.Add($"{rIdx++}. Visualize the business flow using a Mermaid flowchart TD diagram:");
                 sbRules.Add("   - Node text labels must be wrapped in double quotes.");
