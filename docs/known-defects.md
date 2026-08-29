@@ -2610,6 +2610,85 @@
   좌표 차분으로는 안 보이는 자리였다 — 검사 B·C 의 46 좌표는 네 버킷이 전부 0 으로 깨끗했다
   (`docs/audit-reports/sweeps/2026-08-28-step-sweep-post-cache17.md`).
 
+  > **[2026-08-29 실측] 「같은 형태를 다른 검사에서 전수로 찾는다」의 답 — 노출된 재료는 1개,
+  > 14 프로시저 전량이 소실이다.** 커밋 `8c7a2da`(재료 분모 계기, `SpecMaterials`·
+  > `SpecMaterialCensus`·`StepSweepReportWriter`)에서 `dotnet run --project src/ReSet.Cli --
+  > --sweep`을 실행 시각 2026-08-29 10:15~10:20 KST에 돌렸다
+  > (`docs/audit-reports/sweeps/2026-08-29-step-sweep.md`, 스윕 CLI가 스스로 지은 이름 — 계획서가
+  > 적은 `2026-08-28-step-sweep-material-census.md`는 틀린 이름이었다). 카탈로그는 재료 여덟을
+  > 싣지만 **실제로 「DDL 사실 수 대 명세서 행 수」 소실을 판정할 수 있는 재료는 하나뿐이다**
+  > (`LocalVariables`) — 나머지 일곱은 아래처럼 「잴 수 없음」이거나 「안 쟀음」이라 소실 여부
+  > 자체가 미정이다. 즉 이번 실측이 낸 답은 **소실 1건, 그 1건이 코퍼스 전체(14 프로시저)를
+  > 덮는다**는 것이다.
+  >
+  > **잰 것 — `LocalVariables`.** DDL 사실 수(원본 `DECLARE` 값 변수 수 합계) **69** ·
+  > 명세서 행 수(「지역 변수」 표 합계) **0** · 소실 프로시저 **14개 전부**:
+  > `dbo.UP_UTIL_SETTLE_CANCEL_INS` · `dbo.UP_UTIL_SETTLE_COMM_UPD` ·
+  > `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC` · `dbo.UP_UTIL_SETTLE_EXPECT_PROC` ·
+  > `dbo.UP_UTIL_SETTLE_INS` · `dbo.UP_UTIL_SETTLE_INS_EXTRA` ·
+  > `dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD` · `dbo.UP_UTIL_SETTLE_PROC_ETC` ·
+  > `dbo.UP_UTIL_SETTLE_SUMMARY_ETC` · `dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA` ·
+  > `dbo.UP_UTIL_STAT_PGCOLLECT_INS` · `dbo.UP_Util_PG_Client_CMRate_Ins` ·
+  > `dbo.UP_Util_Settle_Summary` · `dbo.UP_Util_Settle_Summary_AcqManual`. 위 (5-3-7) 본문이
+  > 좌표 차분으로는 못 보고 잃은 18건(검사 D 발화)이라고 적은 것과 **같은 결함의 다른 잣대**다 —
+  > 여기서는 검사 발화가 아니라 원본 DECLARE 대비 표 행 수 자체를 재서, 발화 손실 18건 뒤에
+  > **표가 코퍼스 전 프로시저에서 통째로 사라졌다**는 것을 확인한다.
+  >
+  > **안 쟀음(대응물은 있으나 이 회차가 안 셈) — 넷.** `DmlRows`(명세서 행 102) ·
+  > `ErrorCodeToOrdinal`(명세서 행 78) · `SetTargets`(명세서 행 52) · `SpecReturnCodes`(명세서
+  > 쪽 개념 자체가 「해당 없음」) — 넷 다 DDL 대응물 이름은 카탈로그에 있다
+  > (`DmlScopeExtractor`·`SqlStaticParser`)지만 이 회차의 `SpecMaterialCensus.DdlCounters`가
+  > 그 리더를 아직 안 불렀다. **「잴 수 없음」과 뭉개지 않았다** — DDL 쪽 표는 `안 쟀음`이라고
+  > 따로 적는다.
+  >
+  > **잴 수 없음(DDL 대응물 자체가 없음) — 셋.** `SpecConditions` · `RoundingShapes` ·
+  > `StepTableSets`. 이 셋은 원인이 「대응물이 있는데 안 셌다」가 아니라 「비교할 DDL 사실
+  > 자체가 없거나(`SpecConditions`·`RoundingShapes`, "같은 사실"이 아니라서) 개념 자체가
+  > 성립하지 않는다(`StepTableSets` — `SpecTargetTableExtractor`가 명세서를 아예 안 읽고
+  > DDL 정적 분석 결과를 그대로 접은 것이라 "명세서 쪽 행 수"가 없다).
+  >
+  > **원인 귀속은 안 갈랐다.** `LocalVariables`의 소실 14건이 「모델이 표를 안 썼다」인지
+  > 「리더가 못 읽는다」인지 이 계기는 구별하지 못한다. 실물 반례가 이미 있다 —
+  > `UP_UTIL_SETTLE_SUMMARY_EXTRA`는 지역 변수 표를 **쓰긴 썼는데** 전용 헤딩이 없어
+  > `SpecStatementFactsExtractor`가 못 읽는다(그 리더의 알려진 한계 6번). 즉 14건 중 적어도
+  > 1건은 "모델이 안 썼다"가 아니라 "리더가 못 읽는다"일 가능성이 있고, 이 계기는 그 둘을
+  > 가르지 못한다 — 나머지 13건도 마찬가지로 미분류다.
+  >
+  > **이 계기는 강제를 걸지 않는다.** `SpecMaterials.All`의 여덟 재료 중 강제(`Enforced`)로
+  > 표시된 것은 `DmlRows`·`ErrorCodeToOrdinal` 둘뿐이고 `LocalVariables`는 여전히 강제
+  > 밖이다. **다음 회차의 범위는 이 수치가 정한다** — 최소한으로는 `LocalVariables`를
+  > 강제 대상으로 올리는 것(위 「닫는 방향」과 같은 결), 넓히면 `SpecMaterialCensus.DdlCounters`에
+  > 나머지 넷(`DmlRows`·`ErrorCodeToOrdinal`·`SetTargets`·`SpecReturnCodes`)의 DDL 쪽 계수를
+  > 채워 "안 쟀음"을 실측으로 바꾸는 것이다.
+  >
+  > **주의 둘 (Task 1·2가 실물로 확정, `MechanicalValidator.cs` 전수 grep으로 확인).**
+  > (1) `SetTargets`는 **소비자가 공집합**이다 — `SpecStatementFactsExtractor`가 추출은
+  > 하지만 `MechanicalValidator`의 어느 검사도 `SpecStatementFacts.SetTargets`를 읽지 않는다
+  > (`CheckUpdateSetTargets`라는 이름이 있지만 그것은 배치 제어 테이블 계약을 보는 완전히
+  > 다른 검사다). **이 재료의 소실은 급하지 않다** — 안 적으면 다음 사람이 급한 것으로
+  > 오해한다. (2) `StepTableSets`는 **소실 개념 자체가 없다** — `SpecTargetTableExtractor`가
+  > 명세서 마크다운을 전혀 안 읽고 원본 DDL 정적 분석 결과를 그대로 프로시저별로 접은 것이라,
+  > 대조할 "명세서 쪽"이 애초에 없다.
+  >
+  > **계기의 한계를 정직하게 적는다.** 변이 검증(Task 5, 커밋 이력 `878be98`~`8c7a2da`)에서
+  > 변이 여덟 중 **넷이 살아남았다** — 그중 둘은 **계획서가 「이 테스트가 잡는다」고 장담한
+  > 자리**였다: 판 접기를 없앤 변이를 `Count_FoldsTheSameProcedureAcrossJobs`가 안 잡았고,
+  > 소실 조건의 `&&` 좌변(`ddlCount > 0`)을 없앤 변이를 `Count_WhenSpecHasTheTable_ReportsNoLoss`가
+  > 안 잡았다. **보강한 테스트를 넣은 뒤 같은 변이를 다시 넣어 이번에는 죽는 것까지 확인했다.**
+  > 근거와 재현 절차는 `docs/audit-reports/sweeps/2026-08-29-material-census-mutations.md`에
+  > 있다 — 이 사실을 숨기면 이 문단 자체가 (5-3-7)이 된다는 것이 그 보고서의 결론이다.
+  >
+  > **트리 청결도와 코퍼스 공유.** 이 실측을 뜬 워크트리는 `8c7a2da`(= WAVE_BASE) 기준으로
+  > 깨끗했다. 다만 이 회차 작업 도중 **다른 세션이 `main`에 커밋 셋**(`0748ee1`·`22ff6e3`·
+  > `ea44007`, 4단계 reset-7b 통제군 축)을 넣었다 — 이 워크트리는 그 커밋들과 무관한
+  > 베이스라 직접 영향은 없지만, **스윕이 읽는 `output/` 코퍼스는 메인 체크아웃에서
+  > 심링크해 공유한다.** 코퍼스가 그 사이 움직였는지는 실측으로 배제했다 — 이 스윕의
+  > 「검사별 발화량」·「Job별 발화량」·「캐시 17 선결 지표」(2·68·63·46·60)·「침묵 분모」
+  > (856/233/84/142/105/786/35/252/3408/141) 열 값이 `2026-08-28-step-sweep-post-cache17.md`와
+  > **문자 단위로 전부 같다**(「검사 B·C 발화 목록」의 92행 좌표도 동일 — 다른 점은 그 보고서가
+  > 사후에 사람이 채운 「판정」 칸뿐이다). 값이 하나도 안 움직였으므로 **이 삽입은 순수
+  > 가산이고, 이 회차의 코퍼스는 `post-cache17` 실측 시점과 같은 상태였다**고 판정한다.
+
   **단계 SQL 이 바뀐 것이 아니다.** 단계 번들은 이 회차에 재생성되지 않았다(`output/Jobs` 최신
   mtime 2026-08-24, 재생성 당일 변경 0 건). **검사가 재료를 잃었다.**
 
