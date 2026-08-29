@@ -33,6 +33,18 @@ BEGIN
     SELECT @v_intID = 1;
 END";
 
+        private const string DdlWithNoDeclares = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    SELECT 1;
+END";
+
+        private const string DdlWithOneDeclare = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v_intID INT;
+END";
+
         /// <summary>
         /// [실물 규약 - 결함 B] SweepJob.Specs의 FileName은 파일 경로가 아니라
         /// 프로시저 이름 그 자체다("dbo.UP_X.md"가 아니라 "dbo.UP_X") -
@@ -58,6 +70,31 @@ END";
         public void CountDeclaredVariables_OnUnparsableDdl_ReturnsZeroInsteadOfThrowing()
         {
             Assert.Equal(0, SpecMaterialCensus.CountDeclaredVariables("this is not sql ((("));
+        }
+
+        /// <summary>
+        /// [태스크 5 변이 4 - 조율자가 리뷰의 미결 항목을 측정으로 바꾸려고 더한 변이가
+        /// 잡은 결함] DeclareCursorStatement의 자식은 Name·CursorDefinition뿐이라
+        /// DeclareVariableElement와 구조적으로 분리돼 있다 - "커서를 안 센다"는 참이지만,
+        /// 이 테스트가 있기 전에는 그 참을 잠그는 단언이 없었다. Visit(DeclareCursorStatement)를
+        /// 추가해 커서 이름도 세게 만드는 변이를 넣어도 이 테스트가 생기기 전에는 census
+        /// 스위트 70개 전부가 그대로 통과했다(2026-08-29 변이 검증 - docs/audit-reports/
+        /// sweeps/2026-08-29-material-census-mutations.md 참고).
+        /// </summary>
+        [Fact]
+        public void CountDeclaredVariables_DoesNotCountCursorDeclarations()
+        {
+            const string ddlWithCursor = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v_intID INT;
+    DECLARE cur_X CURSOR FOR SELECT 1;
+    OPEN cur_X;
+    CLOSE cur_X;
+    DEALLOCATE cur_X;
+END";
+
+            Assert.Equal(1, SpecMaterialCensus.CountDeclaredVariables(ddlWithCursor));
         }
 
         /// <summary>
@@ -93,6 +130,27 @@ END";
         }
 
         /// <summary>
+        /// [태스크 5 변이 2 - 계획서 변이가 잡은 결함] 소실 조건은 「DDL 사실이 있는데
+        /// 명세서에 없다」(ddlCount &gt; 0 &amp;&amp; specCount == 0)여야지, 「명세서에
+        /// 없다」(specCount == 0)만으로는 안 된다 - DDL도 명세서도 둘 다 표가 없는
+        /// 프로시저(지역 변수를 아예 안 쓰는 흔한 경우)까지 소실로 잘못 잡는다.
+        /// 이 테스트가 생기기 전에는 그 조건에서 &amp;&amp;를 지워도(specCount == 0 하나로
+        /// 넓혀도) census 스위트 전체가 그대로 통과했다 - 기존 픽스처가 전부
+        /// DdlWithTwoDeclares(ddlCount == 2 &gt; 0)만 썼기 때문이다.
+        /// </summary>
+        [Fact]
+        public void Count_WhenDdlHasNoFactsAndSpecHasNone_DoesNotReportLoss()
+        {
+            var rows = SpecMaterialCensus.Count(
+                new[] { Job("JobA", "dbo.P", SpecWithoutVariables, DdlWithNoDeclares) });
+
+            var row = rows.Single(r => r.MaterialName == "LocalVariables");
+            Assert.Equal(0, row.DdlFactCount);
+            Assert.Equal(0, row.SpecRowCount);
+            Assert.Empty(row.ObjectsWithLoss);
+        }
+
+        /// <summary>
         /// [판 접기] 같은 원본 SP가 Job 다섯 판에 나와도 한 번만 세어야 한다.
         /// 안 접으면 소실이 5배로 세어져 수가 통째로 왜곡된다 - 태스크 12의 판
         /// 접기와 같은 함정이다.
@@ -110,6 +168,30 @@ END";
             var row = rows.Single(r => r.MaterialName == "LocalVariables");
             Assert.Equal(2, row.DdlFactCount);
             Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
+        }
+
+        /// <summary>
+        /// [태스크 5 변이 1·5 - 판 접기의 동점 규칙은 「첫 판 승」이다] 위 판 접기
+        /// 테스트는 Job 셋의 DDL이 바이트 동일해서 ContainsKey 가드를 지워 매번
+        /// 덮어써도(=마지막 판이 이기게 해도) 통과한다 - Dictionary 자체가 프로시저
+        /// 이름을 유일 키로 접기 때문에 중복 카운팅은 가드와 무관하게 막힌다. 가드가
+        /// 실제로 결정하는 것은 Job마다 내용이 "다를" 때 어느 판이 남는가뿐이다.
+        /// 실물에서는 한 스윕 안에서 같은 프로시저가 언제나 같은 단일 Spec.md/DDL을
+        /// 읽어 내용이 바이트 동일하므로 이 분기는 오늘의 코퍼스로는 도달 불가하다 -
+        /// 그래도 정책 자체는(향후 판별 코퍼스에서 조용한 비결정성이 되지 않도록)
+        /// 여기서 못 박는다: 첫 번째로 만난 Job의 내용이 남아야 한다.
+        /// </summary>
+        [Fact]
+        public void Count_WhenProcedureAppearsInMultipleJobsWithDifferentDdl_FirstJobWins()
+        {
+            var rows = SpecMaterialCensus.Count(new[]
+            {
+                Job("JobA", "dbo.P", SpecWithoutVariables, DdlWithOneDeclare),
+                Job("JobB", "dbo.P", SpecWithoutVariables, DdlWithTwoDeclares),
+            });
+
+            var row = rows.Single(r => r.MaterialName == "LocalVariables");
+            Assert.Equal(1, row.DdlFactCount);
         }
 
         /// <summary>
