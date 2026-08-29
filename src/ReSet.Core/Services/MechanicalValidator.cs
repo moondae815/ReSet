@@ -81,6 +81,13 @@ namespace ReSet.Core.Services
         // 참조 함수 표의 행 단위 대조 실패 앵커(2026-08-23 ③(b) 최종 리뷰 에스컬레이션 1).
         // 이전에는 헤딩 부재를 SetPredicateMismatch로 빌려 보고했다.
         ReferencedFunctionMismatch,
+        // SQL 거처 축(규칙 3-1·10)의 L1 앵커 셋. 강제 수단 전수 조사
+        // (docs/audit-reports/sweeps/2026-08-29-rule-enforcement-census.md §5)가
+        // A급으로 고른 것들이다 - 그때까지 이 셋은 검사가 0건이었다. 위와 같은
+        // 이유로 서수 이동은 기능에 영향이 없다.
+        NoLockHintInCode,
+        FrameworkTypePrescribed,
+        SqlSideControlFlow,
         General
     }
 
@@ -238,6 +245,12 @@ namespace ReSet.Core.Services
                 // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
                 // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
+                // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
+                // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
+                // 있었다. 셋 다 재료를 받지 않으므로 시그니처가 그대로다.
+                SafeCheck(() => CheckNoLockHints(cleansed, result));
+                SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
+                SafeCheck(() => CheckSqlSideControlFlow(cleansed, result));
             }
             catch (Exception ex)
             {
@@ -7835,6 +7848,321 @@ namespace ReSet.Core.Services
         // 계약이 이름을 바꾸면 조회가 실패해 이 검사는 조용히 꺼지는데, 그 순간을
         // LegacyReturnCodeBindingTests.BatchControlContract_StillDeclaresTheJournalColumnThisCheckResolves가
         // 빨간불로 만든다 - 그때 고칠 것은 이 두 상수다.
+        // ── SQL 거처 축(규칙 3-1·10)의 L1 검사 셋 ────────────────────────────────
+        //
+        // 강제 수단 전수 조사(docs/audit-reports/sweeps/2026-08-29-rule-enforcement-census.md
+        // §5)가 A급으로 고른 것들이다. 그때까지 이 셋은 검사가 0건이었고, 그래서
+        // 프롬프트와 Critic 두 층만으로 서 있었다 - 둘 다 모델 재량이라 채점자가
+        // 바뀌면 함께 꺼진다. 실측 전례: 2차 통제군의 Critic(glm-5.3)이 API 지정
+        // 11건을 추론 로그에 적고도 통과시켰다(설계서 §10-4).
+
+        /// <summary>
+        /// 규칙 10이 금지한 잠금 힌트. 규칙이 "explicitly remove ALL"이라 예외가 없다.
+        /// `READUNCOMMITTED`를 함께 드는 것은 같은 격리 수준을 다른 철자로 여는 힌트라
+        /// 하나만 막으면 다른 하나로 새기 때문이다.
+        /// </summary>
+        private static readonly Regex NoLockHintPattern = new(
+            @"\bNOLOCK\b|\bREADUNCOMMITTED\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 규칙 3-1이 이름 대기를 금지한 실존 데이터 접근 타입들. 규칙 본문이 여는
+        /// 열거("<c>SqlConnection</c>, <c>IsolationLevel.Snapshot</c>, <c>TransactionScope</c>,
+        /// <c>DbContext</c>, <c>PreparedStatement</c>, <c>EntityManager</c> and their kin")를
+        /// 그 근친까지 편 것이다. <b>.NET만 들지 않는다</b> - 이 도구는
+        /// <c>targetLanguage</c>로 Java도 겨눈다.
+        ///
+        /// [왜 대소문자를 구분하는가] 무시하면 코퍼스의 변수명 <c>sqlConnection</c>
+        /// 5건이 걸린다(POQSettleProc18:1567). 규칙이 금지한 것은 <b>타입을 이름 대는
+        /// 것</b>이고 camelCase 지역 변수에는 그 귀속이 서지 않는다(작성 계약 7).
+        /// 그 문서는 어차피 타입 자체를 9번 써서 이미 걸린다.
+        /// </summary>
+        private static readonly Regex PrescribedFrameworkTypePattern = new(
+            @"\b(?:SqlConnection|SqlCommand|SqlParameter|SqlTransaction|SqlDataReader|SqlDataAdapter" +
+            @"|SqlBulkCopy|OleDbConnection|OdbcConnection|NpgsqlConnection|MySqlConnection|OracleConnection" +
+            @"|DbContext|DbConnection|DbCommand|DbTransaction|IDbConnection|IDbCommand|IDbTransaction" +
+            @"|TransactionScope|PreparedStatement|CallableStatement|EntityManager|SessionFactory" +
+            @"|JdbcTemplate|HikariDataSource)\b|\bIsolationLevel\s*\.\s*\w+",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// 규칙 3-1이 금지한 「보내는 문장이 자기 결과로 분기한다」의 T-SQL 철자.
+        ///
+        /// [왜 펜스 언어를 가리지 않는가] 판정식이 전부 T-SQL 고유 철자라 앱 코드의
+        /// 진짜 <c>try</c>/<c>catch</c>와는 겹치지 않는다. 반대로 앱 펜스 안에 SQL을
+        /// 문자열로 싣는 형태가 코퍼스에 실재하므로(POQSettleBatch1:429) 언어로 봐주면
+        /// 그 자리가 통째로 빠진다.
+        /// </summary>
+        private static readonly Regex SqlSideControlFlowPattern = new(
+            @"\bGOTO\s+[A-Za-z_]\w*|@@ERROR\b|\bBEGIN\s+TRY\b|\bEND\s+TRY\b|\bBEGIN\s+CATCH\b|\bEND\s+CATCH\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>발화가 아무리 많아도 메시지에 싣는 실물 줄의 수.</summary>
+        private const int SqlPlacementExampleLimit = 5;
+
+        /// <summary>코드 블록 안에서 잡은 어휘 하나와 그것이 있던 원문 줄.</summary>
+        private readonly record struct CodeTokenHit(string Token, string Line);
+
+        /// <summary>
+        /// <see cref="CleanedCodeFences"/>와 같은 것을 내되 둘을 더 한다.
+        ///
+        /// [```mermaid를 빼는 이유] 노드 라벨은 원본 흐름을 <b>인용하는 그림 텍스트</b>이지
+        /// 앱이 보내는 문장이 아니다. 원본 명세서의 mermaid가 실제로
+        /// <c>SELECT … WITH(NOLOCK)</c>(UP_UTIL_SETTLE_INS_EXTRA:458)와
+        /// <c>IF @@ERROR &lt;&gt; 0</c>(UP_Util_PG_Client_CMRate_Ins:390)을 라벨에 담는다.
+        /// 계획서 22편의 mermaid 발화는 지금 0이므로 이 제외의 실측 비용은 0이고,
+        /// 대신 거짓 고발 부류 하나가 통째로 닫힌다.
+        ///
+        /// [`//`를 지우는 이유] <see cref="BlankCommentsAndStrings"/>는 SQL 주석
+        /// (<c>--</c>·<c>/* */</c>)과 <c>'…'</c>만 지운다. 그런데 이 셋이 겨누는 위반은
+        /// ```csharp 펜스에 살고 거기 주석 기호는 <c>//</c>다. 공용
+        /// <see cref="SkipCommentToken"/>에 <c>//</c>를 더하지 않는 것은 그 헬퍼를
+        /// 명세서 경로의 검사들이 함께 쓰기 때문이다 - 여기서만 한 겹 덧씌운다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, int Offset)> CleanedAppCodeFences(string markdown)
+        {
+            foreach (Match fence in Regex.Matches(
+                markdown, @"```(?<lang>\w*)(?<code>.*?)```", RegexOptions.Singleline))
+            {
+                if (string.Equals(fence.Groups["lang"].Value, "mermaid", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var codeGroup = fence.Groups["code"];
+                yield return (
+                    BlankSlashSlashComments(BlankCommentsAndStrings(codeGroup.Value)),
+                    codeGroup.Index);
+            }
+        }
+
+        /// <summary>
+        /// <c>//</c>부터 줄 끝까지를 공백으로 지운 사본을 낸다. 개행과 길이를 보존하므로
+        /// 사본에서 찾은 인덱스를 원문에 그대로 댈 수 있다 -
+        /// <see cref="BlankCommentsAndStrings"/>와 같은 규약이다.
+        ///
+        /// 호출 규약도 같다: 문자열 인용을 먼저 지운 사본에 걸어야 한다. 순서를 바꾸면
+        /// 문자열 값 안의 <c>//</c>(URL 등)가 주석으로 오인되어 뒤따르는 진짜 위반이
+        /// 함께 사라진다. 그 오인은 침묵 방향이라 거짓 고발을 만들지는 않는다.
+        /// </summary>
+        private static string BlankSlashSlashComments(string text)
+        {
+            var chars = text.ToCharArray();
+
+            for (var i = 0; i + 1 < chars.Length; i++)
+            {
+                if (chars[i] != '/' || chars[i + 1] != '/') continue;
+
+                var lineEnd = text.IndexOf('\n', i);
+                var stop = lineEnd < 0 ? chars.Length : lineEnd;
+                for (var j = i; j < stop; j++) chars[j] = ' ';
+                i = stop;
+            }
+
+            return new string(chars);
+        }
+
+        /// <summary>
+        /// 펜스별 사본에서 그 어휘를 전부 찾아 (어휘, 원문 줄) 쌍으로 모은다.
+        /// 인덱스 규약은 <see cref="CleanedCodeFences"/>의 것이다 - 사본이 길이를
+        /// 보존하므로 로컬 인덱스에 펜스 오프셋을 더하면 원문 좌표가 된다.
+        /// </summary>
+        private static List<CodeTokenHit> CollectCodeTokenHits(
+            string markdown, IEnumerable<(string Cleaned, int Offset)> fences, Regex pattern)
+        {
+            var hits = new List<CodeTokenHit>();
+
+            foreach (var (cleaned, offset) in fences)
+            {
+                foreach (Match hit in pattern.Matches(cleaned))
+                {
+                    hits.Add(new CodeTokenHit(
+                        Regex.Replace(hit.Value.Trim(), @"\s+", " "),
+                        LineAt(markdown, offset + hit.Index)));
+                }
+            }
+
+            return hits;
+        }
+
+        /// <summary>그 인덱스가 놓인 원문 한 줄을 다듬어 돌려준다.</summary>
+        private static string LineAt(string markdown, int index)
+        {
+            if (index < 0 || index >= markdown.Length) return string.Empty;
+
+            var start = markdown.LastIndexOf('\n', index) + 1;
+            var end = markdown.IndexOf('\n', index);
+            if (end < 0) end = markdown.Length;
+
+            return markdown[start..end].Trim();
+        }
+
+        /// <summary>
+        /// 발화를 한 줄 요약으로 접는다.
+        ///
+        /// [왜 검사당 오류 하나인가] 옛 코퍼스 한 편이 제어 흐름 토큰을 280개 낸다
+        /// (POQSettleProc6 실측). 토큰마다 <see cref="DetailedError"/>를 만들면
+        /// <see cref="ValidationResult.SuggestedPromptFix"/>가 읽을 수 없는 것이 되어,
+        /// 재시도 예산은 쓰면서 모델에게 닿는 지시는 오히려 흐려진다.
+        /// <see cref="CheckLegacyReturnCodeBinding"/>이 같은 이유로 문서당 하나를 낸다.
+        /// </summary>
+        private static string SummarizeCodeTokenHits(IReadOnlyList<CodeTokenHit> hits)
+        {
+            var tokens = hits
+                .Select(hit => hit.Token)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
+                .Select(token => $"`{token}`")
+                .ToList();
+
+            var examples = hits
+                .Select(hit => hit.Line)
+                .Where(line => line.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .Take(SqlPlacementExampleLimit)
+                .Select(line => line.Length <= 120 ? line : line[..120] + "…")
+                .ToList();
+
+            var summary = new StringBuilder();
+            summary.Append($"발화 {hits.Count}건 · 어휘: {string.Join(", ", tokens)}");
+
+            if (examples.Count > 0)
+            {
+                summary.Append($" · 실물: {string.Join(" / ", examples)}");
+            }
+
+            return summary.ToString();
+        }
+
+        /// <summary>
+        /// 규칙 10 - 코드 블록에 남은 `NOLOCK` 잠금 힌트.
+        ///
+        /// [왜 산문이 아니라 코드만 보는가] 이것이 이 검사의 전부다. 계획서 22편
+        /// 실측에서 `NOLOCK`은 <b>산문에 약 300건, 코드 안에 0건</b>이다 - 산문의 것은
+        /// 전부 "원본의 `WITH(NOLOCK)` 힌트는 전부 제거한다"는 <b>이행 서술</b>이다.
+        /// 문서 전수 grep은 그 이행 서술을 거의 전량 고발한다. 잘못 지목한 L1 오류는
+        /// 재생성으로 고칠 수 없다(작성 계약 7).
+        ///
+        /// [진짜 양성이 코퍼스에 0인데 왜 두는가] 지금 0인 것은 <b>모델이 지켜서</b>이지
+        /// 강제되어서가 아니다 - 조사 §6-(1)이 말한 「조용히 꺼지는」 자리가 정확히 이
+        /// 모양이다. 모델이 베끼는 재료 쪽에는 연료가 실재한다: 레거시 DDL 17개 파일에
+        /// `NOLOCK` 43건, 그리고 <b>프롬프트에 실리는</b> 원본 명세서 3편의 코드블록
+        /// 안에 6건.
+        ///
+        /// 조사 §5가 근거로 든 「1차 통제군 코드 안 2건」은 계수 착시였다 - §10-1의
+        /// 줄 단위 주석 필터가 `/* */` 블록의 <b>이어지는 줄</b>을 못 걸러
+        /// POQSettleBatch2:1380("NOLOCK 힌트는 … 전부 제거되었다")을 위반으로 셌다.
+        /// </summary>
+        private static void CheckNoLockHints(string markdown, ValidationResult result)
+        {
+            var hits = CollectCodeTokenHits(markdown, CleanedAppCodeFences(markdown), NoLockHintPattern);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 코드 블록이 `NOLOCK` 잠금 힌트를 담고 있습니다. 규칙 10은 예외 없이 " +
+                "전부 제거하라고 요구합니다 - 모든 단계가 SNAPSHOT 격리에서 돌기 때문에 " +
+                "`NOLOCK`은 READ UNCOMMITTED로 되돌려 그 정책을 정면으로 깹니다. 원본 SQL에서 " +
+                "옮겨 온 힌트를 지우고, 격리는 SNAPSHOT 의무로만 말하십시오. " +
+                $"({SummarizeCodeTokenHits(hits)})";
+
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.NoLockHintInCode,
+                Message = message,
+                RawContext = hits[0].Line
+            });
+        }
+
+        /// <summary>
+        /// 규칙 3-1 - 실존 데이터 접근 프레임워크 타입을 이름 대는 것.
+        ///
+        /// [실측 근거] 2차 통제군에서 11건이고, <b>Critic이 보고도 통과시켰다</b> -
+        /// 추론 로그가 "C# BeginTransaction(IsolationLevel.Snapshot) in S08, S11, S12,
+        /// S15 — application…"이라 적고 감점하지 않았다(설계서 §10-4). 겨냥은 이름이
+        /// 아니라 결과다: 그 문서 안에 <b>서로 다른 가짜 API가 둘</b>이 되어
+        /// (공통 설계는 `ISettleBatchConnection`, S08은 `SqlConnection`), 이행 라운드가
+        /// 존재한 적 없는 계약 둘을 화해시켜야 한다.
+        ///
+        /// [왜 코드 모양 자체를 막지 않는가] 규칙 2가 의사코드를 필수 산출물로 요구하므로
+        /// 코드를 못 쓰게 하면 쓸 것이 없어진다. 규칙 3-1이 옳다고 명시한 자리표시자
+        /// (`conn.beginTransaction()`·`connectionFactory.open()`)는 이 판정식에 걸리지
+        /// 않는다 - 금지만 적고 대안을 안 주면 표현 수단이 없어져 T-SQL 철자로 후퇴한다
+        /// (`S13`이 실제로 그 길로 가 `BEGIN TRAN`을 되살렸다). 그래서 시정 문구도
+        /// 자리표시자를 이름으로 보여 준다.
+        /// </summary>
+        private static void CheckPrescribedFrameworkType(string markdown, ValidationResult result)
+        {
+            var hits = CollectCodeTokenHits(
+                markdown, CleanedAppCodeFences(markdown), PrescribedFrameworkTypePattern);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 코드 블록이 실존 데이터 접근 프레임워크의 타입을 이름 대고 있습니다. " +
+                "규칙 3-1은 트랜잭션·커넥션·오류 처리에 특정 API나 클래스를 지정하지 말라고 " +
+                "못박습니다 - 그 타입이 속할 배치 애플리케이션은 아직 존재하지 않으므로, " +
+                "이름을 대는 순간 아무도 서명하지 않은 계약이 생기고 문서 안에 서로 다른 " +
+                "가짜 API가 둘이 됩니다. 일반 자리표시자로 바꾸십시오 - " +
+                "`conn.beginTransaction()`·`connectionFactory.open()`·`repository.execute(...)`가 " +
+                "메커니즘을 못박지 않고 모양만 보여 주는 옳은 표기이며, 한 문서는 한 표기로 " +
+                $"통일해야 합니다. ({SummarizeCodeTokenHits(hits)})";
+
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.FrameworkTypePrescribed,
+                Message = message,
+                RawContext = hits[0].Line
+            });
+        }
+
+        /// <summary>
+        /// 규칙 3-1 - 보내는 문장이 자기 결과로 분기하는 것.
+        ///
+        /// [실측 근거] 1차 통제군에서 `GOTO` 20 · `IF @@ERROR` 18. 3단계가 규칙 6-1에서
+        /// 그 조항을 지우면서 채점 기준의 짝까지 함께 갈아 끼워 <b>규칙에도 채점에도
+        /// 명시 조항이 하나도 남지 않은</b> 회귀였다(설계서 §9-3). 조항을 규칙 3-1로
+        /// 옮겨 되살리자 2차 통제군에서 0이 됐다. 그 0은 아직 <b>모델이 지킨 0</b>이다.
+        ///
+        /// [왜 인용 예외를 두지 않는가] 규칙 3-1은 이 철자가 "원본 인용 안에서만" 허용된다고
+        /// 적지만, 그 예외는 <b>도달 불가능하다</b>. 계획서 프롬프트(`raw/prompt-context.md`)에는
+        /// 원본 프로시저 DDL이 실리지 않는다 - Actor가 받는 것은 명세서 산문이고,
+        /// 프롬프트 전체에서 `CREATE PROCEDURE`는 규칙 본문 두 곳뿐이다. 인용할 원본을
+        /// 손에 쥔 적이 없다.
+        ///
+        /// 계획서 22편 전수 실측이 같은 것을 말한다: `CREATE PROCEDURE` 113개가 전부
+        /// 지어낸 이름이고(레거시명과 겹치는 유일한 1건도 인용이 아니라 <b>재정의</b>다),
+        /// 제어 흐름 토큰 1,695건 중 레거시명 펜스 <b>안</b>에 있는 것은 3건뿐이며 그
+        /// 3건마저 그 재정의 안에 있다 - 인용이 아니므로 지목이 옳다.
+        ///
+        /// 그러므로 이 검사는 조사 §4가 요구한 원본 프로시저 목록을 <b>기다리지 않는다</b>.
+        /// 그 재료는 신규 저장 프로시저 검사(조사 §5 B급 4)의 것이다 - 거기서는 판정
+        /// 전체가 이름이기 때문이다. 그 재료가 들어오면 이 검사도 같은 헬퍼로 예외를
+        /// 얻을 수 있다.
+        /// </summary>
+        private static void CheckSqlSideControlFlow(string markdown, ValidationResult result)
+        {
+            var hits = CollectCodeTokenHits(
+                markdown, CleanedAppCodeFences(markdown), SqlSideControlFlowPattern);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 코드 블록에서 SQL 문장이 자기 실행 결과를 보고 분기합니다. " +
+                "규칙 3-1은 제어 흐름의 거처를 애플리케이션으로 정합니다 - `GOTO` 오류 라벨, " +
+                "`IF @@ERROR <> 0` 검사, `BEGIN TRY`/`END CATCH` 감싸기를 단계 자신의 SQL에 " +
+                "쓰지 마십시오. 애플리케이션이 실패를 관측하고 다음에 무엇을 할지 정합니다. " +
+                "원본 오류 코드는 버리는 것이 아니라 앱의 실패 경로가 받아 기록하십시오 " +
+                $"(규칙 6-1·9). ({SummarizeCodeTokenHits(hits)})";
+
+            result.Errors.Add(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.SqlSideControlFlow,
+                Message = message,
+                RawContext = hits[0].Line
+            });
+        }
+
         private const string LegacyReturnCodeTableKey = "batch.BatchStepJournal";
         private const string LegacyReturnCodeColumnKey = "LegacyReturnCode";
 
@@ -8517,11 +8845,40 @@ namespace ReSet.Core.Services
                 sb.AppendLine();
             }
 
-            // 8. 위 버킷 어디에도 담기지 않은 오류
+            // 8. SQL 거처 규칙 위반 (규칙 3-1·10)
+            //
+            // [왜 이 셋만 catch-all에 맡기지 않는가] 아래 catch-all의 머리말은
+            // "프롬프트가 제공한 기계 확정 표를 그대로 담지 않았습니다 … 표의 행을
+            // 축자로 옮기십시오"라고 말한다. 이 셋에는 그것이 <b>틀린 지시</b>다 -
+            // 문제는 표를 안 옮긴 것이 아니라 SQL과 제어 흐름의 거처이고, 틀린 시정
+            // 문구를 받은 모델은 베껴야 할 표 쪽을 건드린다. catch-all은 아래에
+            // 그대로 남는다 - 다음 검사가 같은 구멍에 빠지지 않게 하는 것이 그 자리의
+            // 몫이고, 이 버킷은 그 몫을 대신하지 않는다.
+            var sqlPlacementTypes = new[]
+            {
+                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow
+            };
+            var sqlPlacementErrors = DetailedErrors.FindAll(e => Array.IndexOf(sqlPlacementTypes, e.Type) >= 0);
+            if (sqlPlacementErrors.Count > 0)
+            {
+                sb.AppendLine("### 🚨 8. SQL 거처 규칙 위반 (규칙 3-1·10)");
+                sb.AppendLine("단계 로직은 대상 언어 배치 애플리케이션의 것이고, SQL은 그 애플리케이션이 보내는 문장으로만 나타납니다. 트랜잭션 경계·오류 관측·롤백 판단은 애플리케이션 코드가 소유합니다. 아래 지적을 반영하되, 코드 블록 자체를 지우지는 마십시오 - 규칙 2가 의사코드를 필수 산출물로 요구합니다.");
+                foreach (var err in sqlPlacementErrors)
+                {
+                    sb.AppendLine($"  - {err.Message}");
+                }
+                sb.AppendLine();
+                sb.AppendLine("**[올바른 표기]**: 특정 API를 못박지 않는 자리표시자를 쓰고, 한 문서에서 한 표기로 통일하십시오.");
+                sb.AppendLine("  * **오류 (X)**: `using var tran = conn.BeginTransaction(IsolationLevel.Snapshot);` 또는 `IF @@ERROR <> 0 GOTO ERR_HANDLER;`");
+                sb.AppendLine("  * **해결 (O)**: `tx = conn.beginTransaction()` … 실패는 애플리케이션이 관측해 원본 오류 코드를 기록");
+                sb.AppendLine();
+            }
+
+            // 9. 위 버킷 어디에도 담기지 않은 오류
             //
             // [버킷 하나를 더 만들지 않고 catch-all을 쓰는 이유 - 2026-08-20 리뷰 #1]
             // SuggestedPromptFix는 모델에 닿는 유일한 통로다(result.Errors는 사람에게만
-            // 간다). 그런데 위 일곱 버킷이 타입을 열거하는 구조라, 새 ErrorType을 쓰는
+            // 간다). 그런데 위 여덟 버킷이 타입을 열거하는 구조라, 새 ErrorType을 쓰는
             // 검사를 추가하면서 버킷을 안 만들면 그 오류는 <b>내용이 통째로 빠진 채</b>
             // 머리말과 맺음말만 모델에게 간다 - 검사는 재시도 예산을 쓰면서 "형식 오류가
             // 있었다"만 알린다. 실측: 기계 확정 표 셋(DML 범위·파생 테이블·집합 술어)이
@@ -8533,12 +8890,13 @@ namespace ReSet.Core.Services
             {
                 ErrorType.HeaderMissing, ErrorType.MermaidQuoteMissing, ErrorType.MermaidCliError,
                 ErrorType.UpdateMappingMissing, ErrorType.SchemaClaimFalse,
-                ErrorType.TableIdentitySplit, ErrorType.General
+                ErrorType.TableIdentitySplit, ErrorType.General,
+                ErrorType.NoLockHintInCode, ErrorType.FrameworkTypePrescribed, ErrorType.SqlSideControlFlow
             };
             var unbucketed = DetailedErrors.FindAll(e => Array.IndexOf(bucketed, e.Type) < 0);
             if (unbucketed.Count > 0)
             {
-                sb.AppendLine("### 🚨 8. 기계 확정 재료 대조 실패");
+                sb.AppendLine("### 🚨 9. 기계 확정 재료 대조 실패");
                 sb.AppendLine("프롬프트가 제공한 기계 확정 표를 문서가 그대로 담지 않았습니다. 아래 지적을 그대로 반영하되, 표의 헤딩과 행을 축자로 옮기십시오.");
                 foreach (var err in unbucketed)
                 {

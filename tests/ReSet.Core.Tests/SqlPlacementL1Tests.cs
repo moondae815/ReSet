@@ -1,0 +1,454 @@
+using System.Linq;
+using ReSet.Core.Services;
+using Xunit;
+
+namespace ReSet.Core.Tests
+{
+    /// <summary>
+    /// SQL 거처 축(규칙 3-1·10)의 L1 잠금.
+    ///
+    /// [무엇을 재는가] 물음은 「규칙이 있는가」가 아니라 「모델이 바뀌어도
+    /// 지켜지는가」다. 전수 조사
+    /// (docs/audit-reports/sweeps/2026-08-29-rule-enforcement-census.md §5)가
+    /// 이 셋을 A급으로 골랐다 - 정규식 하나로 판정되고, 재료가 필요 없고,
+    /// 실측된 위반이 있다.
+    ///
+    /// [스코프가 이 검사들의 전부다] 셋 다 문서 전수가 아니라 코드 펜스만 본다.
+    /// 계획서 22편 실측이 그 이유다:
+    ///   - `NOLOCK`: 산문 약 300건("원본의 `WITH(NOLOCK)`는 전부 제거한다") 대 코드 0건.
+    ///     문서 전수 grep은 거의 전량이 이행 서술을 고발한다.
+    ///   - `SqlConnection`: 산문 35 대 코드 26.
+    /// mermaid 펜스도 제외한다 - 노드 라벨은 원본 흐름을 인용하는 그림 텍스트이지
+    /// 앱이 보내는 문장이 아니다(원본 명세서의 mermaid가 실제로
+    /// `IF @@ERROR &lt;&gt; 0`·`WITH(NOLOCK)`을 라벨에 담는다).
+    ///
+    /// 픽스처는 합성하지 않고 실제 코퍼스에서 옮겼다 - 좌표는 각 테스트에 적는다.
+    /// </summary>
+    public class SqlPlacementL1Tests
+    {
+        private static ValidationResult Validate(string markdown) =>
+            new MechanicalValidator().ValidateConsolidated(markdown);
+
+        private static bool Fires(string markdown, ErrorType type) =>
+            Validate(markdown).DetailedErrors.Any(e => e.Type == type);
+
+        /// <summary>필수 H2 넷을 갖춘 최소 통합 계획서. 본문만 갈아 끼운다.</summary>
+        private static string Plan(string body) => $"""
+            ## 통합 배치 아키텍처 개요
+
+            내용.
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            flowchart TD
+            A["시작"] --> B["끝"]
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            {body}
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            내용.
+            """;
+
+        // ── 규칙 10: NOLOCK 금지 ────────────────────────────────────────────────
+        //
+        // 규칙이 "explicitly remove ALL"이라 예외가 없다. 계획서 코퍼스 22편에는
+        // 코드 안 발화가 0건이지만, 모델이 베끼는 재료 쪽에는 연료가 실재한다 -
+        // 레거시 DDL 17개 파일에 43건, 프롬프트에 실리는 원본 명세서 3편의
+        // 코드블록 안에 6건. 지금 0인 것은 모델이 지켜서일 뿐이고, 그것이
+        // 조사 §6-(1)이 말한 「조용히 꺼지는」 자리다.
+
+        [Fact]
+        public void ValidateConsolidated_ReportsANoLockHintInsideASqlFence()
+        {
+            // 원본 명세서 dbo.UP_UTIL_SETTLE_INS_EXTRA가 인용한 실물 SELECT.
+            var markdown = Plan("""
+                ### S03 — 차액정산 요청일 조회
+
+                ```sql
+                SELECT @v_strReqYMD = MIN(ReqYMD)
+                FROM   PaymentDB.dbo.TExtraSettleIn WITH(NOLOCK)
+                WHERE  ResYMD = @pi_strYMD;
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsANoLockHintWrittenWithASpaceAndBrackets()
+        {
+            var markdown = Plan("""
+                ```sql
+                SELECT PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst AS B WITH (NOLOCK)
+                WHERE B.YMD = @pi_strYMD;
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheProseOnlySaysTheHintWasRemoved()
+        {
+            // 코퍼스에 약 300건 있는 모양이다. POQSettleBatch3:89·494·870 등.
+            var markdown = Plan("""
+                ### S04 — 정산원장 재적재
+
+                이 단계는 SNAPSHOT 격리 수준 아래에서 실행되어야 하며, 원본 SQL의
+                `WITH (NOLOCK)` 힌트는 SNAPSHOT 격리 정책과 충돌하므로 모든 단계의
+                이행 SQL에서 제거한다. `NOLOCK` 힌트는 어떤 조회에도 사용하지 않는다.
+
+                ```sql
+                SELECT PLTID FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @pi_strYMD;
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheHintNameOnlyAppearsInABlockCommentContinuationLine()
+        {
+            // POQSettleBatch2:1372-1380 실물. 조사 §5가 「1차 통제군 코드 안 2건」의
+            // 근거로 삼은 바로 그 줄이다 - 줄 단위 주석 필터가 `/* */` 블록의
+            // 이어지는 줄을 못 걸러 위반으로 셌으나, 실제로는 NOLOCK을 제거했다는
+            // 주석이다. 이 테스트가 그 오탐을 고정한다.
+            var markdown = Plan("""
+                ```sql
+                /* I1: 취소 정산 데이터 등록 (원본 INSERT 1, 라인 29)
+                   NOLOCK 힌트는 SNAPSHOT 격리 정책에 따라 전부 제거되었다(원본은 A, B 양쪽에 WITH(NOLOCK) 사용). */
+                INSERT INTO SETTLE_POQ_DB.dbo.TSettleMst (YMD, PLTID)
+                SELECT A.YMD, A.PLTID FROM PaymentDB.dbo.TTxMst AS A WHERE A.YMDCANCEL = @pi_strYMD;
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenAMermaidNodeLabelQuotesTheOriginalHint()
+        {
+            // 원본 명세서 dbo.UP_UTIL_SETTLE_INS_EXTRA:458의 실물 노드 라벨.
+            // 그림 텍스트는 앱이 보내는 문장이 아니다.
+            var markdown = Plan("""
+                ```mermaid
+                flowchart TD
+                SELREQ["SELECT @v_strReqYMD = MIN(ReqYMD) FROM PaymentDB.dbo.TExtraSettleIn WITH(NOLOCK)"]
+                SELREQ --> DONE["끝"]
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.NoLockHintInCode));
+        }
+
+        // ── 규칙 3-1: 실존 프레임워크 타입 지정 금지 ────────────────────────────
+        //
+        // 2차 통제군에서 11건. Critic(glm-5.3)이 추론 로그에 그것을 적고도
+        // 감점하지 않았다(설계서 §10-4). 프롬프트와 Critic 두 층이 다 흘린 자리다.
+
+        [Fact]
+        public void ValidateConsolidated_ReportsARealFrameworkTypeNamedInApplicationPseudocode()
+        {
+            // POQSettleBatch3:2056 실물(S08). 공통 설계는
+            // `ISettleBatchConnection`/`connectionFactory.open()`으로 부르는데
+            // 이 단계만 실존 타입으로 같은 것을 부른다 - 이행 라운드가 존재한 적
+            // 없는 계약 둘을 화해시켜야 한다.
+            var markdown = Plan("""
+                ### S08 — 정산 예외 규칙 적용
+
+                ```csharp
+                public async Task<int> ExecuteAsync(long runId, string batchYmd, SqlConnection conn)
+                {
+                    using var tran = conn.BeginTransaction(IsolationLevel.Snapshot);
+                }
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.FrameworkTypePrescribed));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsANonDotNetFrameworkTypeToo()
+        {
+            // 이 도구는 targetLanguage로 Java도 겨눈다. 규칙 3-1이 .NET만 들지
+            // 않는 이유가 그것이다(설계서 §10-4).
+            var markdown = Plan("""
+                ```pseudocode
+                PreparedStatement ps = conn.prepareStatement(sql);
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.FrameworkTypePrescribed));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheCodeUsesAGenericPlaceholder()
+        {
+            // 규칙 3-1이 옳다고 명시한 모양이다. 여기서 감점하면 표현 수단이
+            // 없어져 T-SQL 철자로 후퇴한다 - `S13`이 실제로 그 길로 갔다.
+            var markdown = Plan("""
+                ```pseudocode
+                conn = connectionFactory.open()
+                tx = conn.beginTransaction()
+                repository.execute(deleteStatement, params)
+                tx.commit()
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.FrameworkTypePrescribed));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheProseOnlyForbidsTheType()
+        {
+            var markdown = Plan("""
+                이 문서는 트랜잭션·커넥션·오류 처리에 특정 API를 지정하지 않는다.
+                `SqlConnection`이나 `TransactionScope` 같은 실존 타입을 이름 대지 않고,
+                일반 자리표시자만 쓴다.
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.FrameworkTypePrescribed));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenOnlyAVariableIsNamedAfterTheType()
+        {
+            // POQSettleProc18:1567 실물. 규칙이 금지한 것은 타입을 이름 대는
+            // 것이고, camelCase 변수명은 그 귀속이 서지 않는다(작성 계약 7).
+            var markdown = Plan("""
+                ```csharp
+                await sqlConnection.ExecuteAsync(command, cancellationToken);
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.FrameworkTypePrescribed));
+        }
+
+        // ── 규칙 3-1: SQL 쪽 제어 흐름 금지 ─────────────────────────────────────
+        //
+        // 1차 통제군에서 `GOTO` 20 · `IF @@ERROR` 18. 3단계가 규칙에서도 채점에서도
+        // 그 조항을 함께 지운 회귀였고(설계서 §9-3), 조항을 되살리자 2차 통제군에서
+        // 0이 됐다. 지금 이 축은 프롬프트와 Critic 두 층뿐이다.
+
+        [Fact]
+        public void ValidateConsolidated_ReportsAGotoErrorLabelInStepSql()
+        {
+            // POQSettleBatch2:329-334 실물.
+            var markdown = Plan("""
+                ```sql
+                IF @v_dupCnt > 0
+                BEGIN
+                    ROLLBACK TRAN;
+                    GOTO HandleDuplicateRun;
+                END
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsAStatementBranchingOnItsOwnOutcome()
+        {
+            // POQSettleBatch2:1575 실물.
+            var markdown = Plan("""
+                ```sql
+                UPDATE A SET A.PGComm = 0 FROM SETTLE_POQ_DB.dbo.TSettleMst AS A WHERE A.YMD = @pi_strYMD;
+                IF @@ERROR <> 0 GOTO ERR_HANDLER;
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsATryCatchWrapperAroundStepSql()
+        {
+            var markdown = Plan("""
+                ```sql
+                BEGIN TRY
+                    DELETE FROM SETTLE_POQ_DB.dbo.TStatPGCollect WHERE INYMD = @pi_strYMD;
+                END TRY
+                BEGIN CATCH
+                    ROLLBACK TRAN;
+                END CATCH
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_ReportsTheTsqlSpellingEvenInsideAnApplicationFence()
+        {
+            // 앱 펜스에 SQL을 문자열로 싣는 형태가 코퍼스에 실재한다
+            // (POQSettleBatch1:429). 판정식이 T-SQL 철자라 앱의 진짜 try/catch와
+            // 겹치지 않으므로, 펜스 언어로 봐주지 않는다.
+            var markdown = Plan("""
+                ```csharp
+                var sql = @"BEGIN TRY DELETE FROM dbo.TStatPGCollect END TRY BEGIN CATCH ROLLBACK TRAN END CATCH";
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheApplicationOwnsTheFailurePath()
+        {
+            // 규칙 3-1이 요구하는 모양이다 - 앱이 실패를 관측하고 다음을 정한다.
+            var markdown = Plan("""
+                ```pseudocode
+                tx = conn.beginTransaction()
+                try:
+                    repository.execute(updateStatement, params)
+                    tx.commit()
+                except StepFailure as failure:
+                    tx.rollback()
+                    journal.recordLegacyReturnCode(failure.legacyCode)
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheProseOnlyDeclaresTheProhibition()
+        {
+            // POQSettleBatch3:379 실물.
+            var markdown = Plan("""
+                이 단계는 신규 저장 프로시저를 정의하지 않으며, 아래 SQL은 모두
+                애플리케이션이 전송하는 개별 문장이다. `GOTO` 라벨이나
+                `IF @@ERROR <> 0` 검사, `BEGIN TRY`/`END CATCH` 감싸기를 단계 SQL에
+                쓰지 않는다.
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenTheTokenOnlyAppearsInASqlComment()
+        {
+            // POQSettleBatch3:1469 실물. 조사 §10-1의 줄 단위 필터는 이 모양을
+            // 위반으로 셌다.
+            var markdown = Plan("""
+                ```sql
+                /* 갱신 3(U3): 취소 거래건 부호 반전 - 원본에 전용 @@ERROR 검사 없음(전용 오류코드 없음) */
+                UPDATE SETTLE_POQ_DB.dbo.TSettleMst SET CLCOMM = CLCOMM * (-1) WHERE YMD = @pi_strYMD;
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentWhenAMermaidNodeLabelQuotesTheOriginalBranch()
+        {
+            // 원본 명세서 dbo.UP_Util_PG_Client_CMRate_Ins:390의 실물 노드 라벨.
+            var markdown = Plan("""
+                ```mermaid
+                graph TD
+                DELPG["DELETE FROM TPGSettleRate WHERE YMD = @pi_strYMD"]
+                DELPG --> CHKDELPG["IF @@ERROR <> 0"]
+                CHKDELPG -->|예| ROLL1["ROLLBACK TRAN"]
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        // ── 발화량과 시정 문구 ──────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateConsolidated_ReportsOneErrorPerCheckNoMatterHowManyTokensFire()
+        {
+            // 옛 코퍼스 한 편이 제어 흐름 토큰을 최대 280개 낸다. 토큰마다 오류를
+            // 하나씩 만들면 SuggestedPromptFix가 못 읽을 것이 된다.
+            var markdown = Plan("""
+                ```sql
+                IF @@ERROR <> 0 GOTO ERR1;
+                IF @@ERROR <> 0 GOTO ERR2;
+                IF @@ERROR <> 0 GOTO ERR3;
+                BEGIN TRY
+                    SELECT 1;
+                END TRY
+                BEGIN CATCH
+                    SELECT 2;
+                END CATCH
+                ```
+                """);
+
+            var fired = Validate(markdown).DetailedErrors
+                .Where(e => e.Type == ErrorType.SqlSideControlFlow)
+                .ToList();
+
+            Assert.Single(fired);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_TellsTheModelWhatToWriteInsteadOfTheFrameworkType()
+        {
+            // 시정 문구가 틀리면 재생성으로 고칠 수 없다. catch-all 버킷 8은
+            // "기계 확정 표를 축자로 옮기십시오"라고 말하는데, 이 셋에는 그것이
+            // 틀린 지시다.
+            var markdown = Plan("""
+                ```csharp
+                using var tran = conn.BeginTransaction(IsolationLevel.Snapshot);
+                ```
+                """);
+
+            var fix = Validate(markdown).SuggestedPromptFix;
+
+            Assert.NotNull(fix);
+            Assert.Contains("conn.beginTransaction()", fix);
+            Assert.DoesNotContain("기계 확정 표를 문서가 그대로 담지 않았습니다", fix);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_MarksThePlanInvalidWhenAnySqlPlacementCheckFires()
+        {
+            var markdown = Plan("""
+                ```sql
+                SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMst WITH (NOLOCK);
+                ```
+                """);
+
+            Assert.False(Validate(markdown).IsValid);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_StaysSilentOnAPlanThatObeysAllThree()
+        {
+            var markdown = Plan("""
+                ### S05 — 정산원장 재적재
+
+                이 단계는 SNAPSHOT 격리 수준 아래에서 실행되어야 하며, 원본의
+                `WITH(NOLOCK)` 힌트는 전부 제거한다. 트랜잭션 경계와 실패 판단은
+                애플리케이션이 소유한다.
+
+                ```pseudocode
+                tx = conn.beginTransaction()
+                for chunk in chunks(targetKeys):
+                    repository.execute(deleteStatement, chunk)
+                tx.commit()
+                ```
+
+                ```sql
+                DELETE FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @pi_strYMD AND PLTID BETWEEN @lo AND @hi;
+                ```
+                """);
+
+            var result = Validate(markdown);
+
+            Assert.DoesNotContain(result.DetailedErrors, e =>
+                e.Type == ErrorType.NoLockHintInCode ||
+                e.Type == ErrorType.FrameworkTypePrescribed ||
+                e.Type == ErrorType.SqlSideControlFlow);
+        }
+    }
+}

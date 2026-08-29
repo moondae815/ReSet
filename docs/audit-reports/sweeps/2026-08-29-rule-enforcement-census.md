@@ -23,7 +23,7 @@
 | 진입점 | 검사 수 | 받는 것 | 이 조사의 대상 |
 |---|---:|---|:--|
 | `Validate(markdown, expectations)` | 26 | SP 명세서 | ✘ 축 B의 것 |
-| `ValidateConsolidated(markdown)` | **4** | 계획서 본문**만** | ✔ |
+| `ValidateConsolidated(markdown)` | **4** → **7**(§5 이행) | 계획서 본문**만** | ✔ |
 | `ValidateBatchStep(...)` | **16** | 단계 + `SpecExpectations` | ✔ |
 
 `ValidateConsolidated`가 받는 것이 `string` 하나뿐이라는 사실이 §4의 설계 제약을 낳는다.
@@ -43,7 +43,7 @@
 | 2-a | 검증 SQL의 `CROSS JOIN` 금지 | ✔ | `CheckVerificationCartesianComparison` |
 | 2-b | 의사코드는 앱 코드다 | ✘ | |
 | 3 | 순서 보존·병렬 금지 | ✘ | |
-| **3-1** | **SQL 거처** — 신규 SP·제어 흐름·API 금지 | **✘** | **없음** |
+| **3-1** | **SQL 거처** — 신규 SP·제어 흐름·API 금지 | ◐ | 제어 흐름 `CheckSqlSideControlFlow`·API `CheckPrescribedFrameworkType` (2026-08-29 §5 이행). **신규 SP는 여전히 없다**(B급 4) |
 | 4 | SNAPSHOT 격리 의무 | ✘ | |
 | 4 | Shadow 역학 (a)~(e) | ◐ | `CheckShadowBackupContract` |
 | 4-1 | `batch`·`batch_shadow` 스키마 | ✔ | `CheckNonCanonicalBatchSchema` |
@@ -56,7 +56,7 @@
 | 8 | 청크 필터 보존 | ◐ | `CheckMissingConditionColumns` 부분 |
 | 8-1 | 청크마다 자기 트랜잭션 | ✘ | |
 | 9 | 원본 오류 코드 재사용 | ◐ | 레거시 **없는** 단계만(`CheckControlStepErrorCodeBand`) |
-| 10 | `NOLOCK` 금지 | **✘** | 검사 0건 |
+| 10 | `NOLOCK` 금지 | ✔ | `CheckNoLockHints` (2026-08-29 §5 이행) |
 | 11 | INSERT 전용 롤백 | ◐ | `CheckShadowBackupContract` 부분 |
 | 12 | 청크 키가 실재하는 컬럼인가 | ✘ | 테이블은 보나 **컬럼은 안 본다** |
 | 13 | 출력 파라미터 매핑 | ◐ | `CheckStepInterface` 부분 |
@@ -65,6 +65,10 @@
 
 **온전 6 · 부분 7 · 전무 11** (하위 조항을 갈라 24행).
 규칙 번호로는 21개이고, 규칙 2와 4가 성격이 다른 조항을 품고 있어 표에서 갈랐다.
+
+> 이 셋은 **잰 시각(`dd6041e`)의 값이다.** §5의 A급 셋을 이행한 뒤로는
+> **온전 7 · 부분 8 · 전무 9**다 — 규칙 10이 전무 → 온전, 규칙 3-1이 전무 → 부분.
+> 위 표의 그 두 행은 이행 후 값으로 갱신했다.
 
 > ⚠️ **부분(◐)을 「있다」로 읽지 말 것.** 규칙 9가 대표적이다 — 강제되는 것은
 > 「레거시 출신이 **없는** 단계가 예약 대역을 지키는가」뿐이고, 규칙 9의 본문인
@@ -115,12 +119,47 @@
 
 | # | 규칙 | 판정식 | 실측 근거 |
 |---|---|---|---|
-| 1 | **10 NOLOCK** | `WITH\s*\(\s*NOLOCK` | 규칙이 "explicitly remove ALL"이라 예외가 없다. 1차 통제군 코드 안 2건 |
+| 1 | **10 NOLOCK** | `WITH\s*\(\s*NOLOCK` | 규칙이 "explicitly remove ALL"이라 예외가 없다. ~~1차 통제군 코드 안 2건~~ → **0건, 아래 정정** |
 | 2 | **3-1 API 지정** | `SqlConnection`·`SqlCommand`·`SqlParameter`·`IsolationLevel\.`·`TransactionScope`·`DbContext`·`PreparedStatement`·`EntityManager` | **2차 통제군 11건. Critic이 보고도 통과시켰다** |
 | 3 | **3-1 제어 흐름** | 새 SQL의 `GOTO`·`IF @@ERROR`·`BEGIN TRY` | 1차 통제군 `GOTO` 20 · `@@ERROR` 18 |
 
-3번의 유일한 설계점은 **원본 인용을 어떻게 가르는가**다. §4와 같은 물음이므로 4번과
-함께 다루면 한 번에 풀린다.
+~~3번의 유일한 설계점은 **원본 인용을 어떻게 가르는가**다. §4와 같은 물음이므로 4번과
+함께 다루면 한 번에 풀린다.~~ → **아래 정정.**
+
+> ✅ **이행하며 둘을 정정했다 (2026-08-29). 셋 다 `ValidateConsolidated`에 들어갔다**
+> (`CheckNoLockHints`·`CheckPrescribedFrameworkType`·`CheckSqlSideControlFlow`).
+>
+> **(가) 1번의 실측 근거가 계수 착시였다.** 「1차 통제군 코드 안 2건」은 §10-1의 **줄 단위**
+> 주석 필터(`--`·`/*`·`//`로 *시작하는* 줄만 제외)가 `/* */` 블록의 **이어지는 줄**을 못
+> 걸러 낸 것이다. 그 줄은 `POQSettleBatch2:1380`이고 내용은 *"NOLOCK 힌트는 SNAPSHOT 격리
+> 정책에 따라 전부 제거되었다"* — **위반의 정반대**다. 문자열·주석을 제대로 지우고 다시
+> 세면 **22편 전부 코드 안 0건**이다. 반면 산문에는 약 300건 있다("원본의 `WITH(NOLOCK)`는
+> 전부 제거한다"). **이 축에서 문서 전수 grep은 거의 전량이 이행 서술을 고발한다.**
+>
+> 그래도 검사를 넣었다. 지금 0인 것은 **모델이 지켜서**이지 강제되어서가 아니고, 그것이
+> §6-(1)이 말한 자리다. 연료는 재료 쪽에 실재한다 — 레거시 DDL 17개 파일에 `NOLOCK` 43건,
+> **프롬프트에 실리는** 원본 명세서 3편의 코드블록 안에 6건.
+>
+> **(나) 3번은 4번을 기다릴 필요가 없었다.** 규칙 3-1의 「원본 인용」 예외는 **도달
+> 불가능하다** — `raw/prompt-context.md`에 원본 DDL이 실리지 않는다. Actor가 받는 것은
+> 명세서 산문이고, 프롬프트 전체에서 `CREATE PROCEDURE`는 규칙 본문 두 곳뿐이다.
+> **인용할 원본을 손에 쥔 적이 없다.**
+>
+> 코퍼스 22편이 같은 것을 말한다: `CREATE PROCEDURE` 113개가 **전부 지어낸 이름**이고,
+> 레거시명과 겹치는 유일한 1건(`dbo.UP_UTIL_SETTLE_CANCEL_INS`, Prco20:1900)도 인용이 아니라
+> **재정의**다. 제어 흐름 토큰 1,695건 중 레거시명 펜스 **안**에 있는 것은 3건뿐이고, 그
+> 3건마저 그 재정의 안에 있다 — 인용이 아니므로 지목이 옳다. 예외를 뺀 대가가 0이다.
+>
+> **§4의 권고(시그니처 확대)는 4번에 대해서는 그대로 유효하다.** 거기서는 판정 전체가
+> 이름이기 때문이다. 다만 그 재료가 없으면 검사가 불가능하다는 뜻은 아니라는 것도 위가
+> 함께 보인다 — 인용이 도달 불가능한 한 `CREATE PROCEDURE`는 언제나 위반이다. 재료는
+> 그 사실이 프롬프트 조성 변경으로 뒤집힐 때의 보험이다.
+>
+> **스윕**: 계획서 22편 전수. 거짓 양성 0 · 진짜 양성 `SqlSideControlFlow` 21편(2,233 토큰) ·
+> `FrameworkTypePrescribed` 12편(59 토큰) · `NoLockHintInCode` 0. BASE 대비 다른 검사 카운트
+> 불변(`LegacyReturnCodeNeverBound` 14 · `BatchRunRowNeverCreated` 2). **2차 통제군
+> `POQSettleBatch3`은 제어 흐름에서 침묵하고 API에서만 발화한다** — §10-2·§10-4가 각각
+> 「규칙이 닫았다」와 「안 닫혔다」로 적은 그대로다.
 
 ### B급 — 구조를 넓혀야 함
 
