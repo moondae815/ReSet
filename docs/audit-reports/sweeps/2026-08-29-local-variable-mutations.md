@@ -12,12 +12,17 @@
    렌더러가 `InitialValue` 칸을 언제나 빈 칸으로 냄)가 살아남았다.** 픽스 라운드
    2에서 Task 6의 고유 값을 실측으로 확정하기 위해 **변이 14(리더 쪽)를 추가**했고
    — 이것도 죽었다(9개 테스트, 본문 §2 참고). **합산 열넷 중 열셋 죽음·하나 생존.**
-   (**픽스 라운드 3 — 사후 정정**: 죽음/생존 수는 이 라운드에서 안 바뀌었지만,
-   변이 2·14 결과에서 "Task 6은 값이 거의 없다"로 읽을 만한 결론이 있었다면
-   그것은 **과소평가였다.** 변이 1(상수-축)에서는 Task 6의 테스트 둘이 이
-   계획보다 앞선 리더 테스트 여섯 개가 전혀 못 잡는 실패군 — **이 계획이
-   존재하는 이유인 (5-3-7) 그 자체** — 을 고유하게 잡는다. 축별 상세는
-   본문 §2와 CONCERNS의 픽스 라운드 3 항목 참고.)
+   (**픽스 라운드 3·4 — 사후 정정**: 죽음/생존 수는 이 라운드들에서 안 바뀌었다.
+   **변이 1 축에서 Task 6의 세 테스트(`TheMachineHeading_ShouldBeReadableByTheCheckDReader`·
+   `TheRenderedTable_ShouldBeReadableByTheCheckDReader`·
+   `TheMachineHeading_ShouldStartWithAKnownReaderPrefix`)는 서로 중복이다** —
+   셋 다 결국 같은 사실("생산 `TableHeading` 상수가 리더가 아는 접두사로
+   시작하는가")을 구성 경로만 다르게 단언하고, **셋 중 아무 하나만 있어도**
+   이 계획보다 앞선 리더 테스트 여섯 개가 전혀 못 잡는 그 실패군 —
+   **이 계획이 존재하는 이유인 (5-3-7) 그 자체** — 이 닫힌다. 지우면 실제로
+   덮개가 사라지는 것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader`
+   하나뿐이다(두 축 모두에서 고유). 축별 상세는 본문 §2 「TASK 6 UNIQUE
+   VALUE」와 CONCERNS 참고.)
 2. **예측이 빗나간 자리.**
    - **변이 1 (픽스 라운드 1에서 재실측 — 최초 보고가 불완전했다)**: 계획서는
      "이음매 테스트 · 카탈로그 테스트"가 죽는다고 적었다. **최초 보고는 이 변이를
@@ -89,6 +94,8 @@
      않고 "겹친다"로 뭉뚱그렸다. 같은 여섯 테스트가 두 변이에서 실제로 어떻게
      갈리는지 이 보고서 자신의 MUTATION TABLE 데이터로 대조하면:
 
+     **AXIS TABLE — 변이 1(상수-축) vs 변이 14(배열-축) 생사 대조**
+
      | 테스트(군) | 변이 1(production 상수 `TableHeading` 개명) | 변이 14(리더 접두사 **배열**에서 원소 제거) |
      | :--- | :--- | :--- |
      | `SpecStatementFactsExtractorTests` 다섯 | **안 죽는다** | **죽는다** |
@@ -116,30 +123,38 @@
      상수 값만 보고 리더를 아예 안 부르므로 그 갭을 못 채운다 — 상수-축에서
      리더까지 실제로 불러 검증하는 것은 `LocalVariableTableSeamTests`뿐이다.
 
-     **TASK 6 UNIQUE VALUE(실측 결론, 축별로 가름).**
-     - **변이 2·14 축(렌더러 헤더 칸 이름 · 리더 접두사 배열)**에서 Task 6이
-       고유하게 잡는 것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader`
-       하나다 — 이 축에서는 이 계획 이전의 리더 단위 테스트 여섯 개와
-       Task 4의 두 테스트가 각자 다른 조각을 이미 덮고 있어서다.
-     - **변이 1 축(production 헤딩 상수 개명)**에서는
-       `TheMachineHeading_ShouldBeReadableByTheCheckDReader`와
-       `TheMachineHeading_ShouldStartWithAKnownReaderPrefix`가 **선행 여섯이
-       전혀 못 잡는 실패군을 고유하게 잡는다** — 근거는 위 표: 변이 1에서
-       선행 여섯은 전부 통과하고 이 둘만(그리고 `TheRenderedTable_…`도) 죽는다.
-       이 실패군이 정확히 (5-3-7)의 모양이다.
-     - 두 `TheMachineHeading_…`은 **잡는 실패군이 같고 진단 폭만 다르다** —
-       `...ShouldBeReadableByTheCheckDReader`는 손으로 쓴 표를 리더에 먹여
-       종단으로 확인하고, `...ShouldStartWithAKnownReaderPrefix`는 리플렉션으로
-       접두사 배열만 격리해 상수가 그 배열의 원소로 시작하는지만 본다. 이
-       차이는 Minor한 진단 편의(어느 쪽이 실패해도 원인 좁히기가 다를 뿐)이지
-       별개의 방어선이 아니다.
-     - **요약: Task 6은 두 축 모두에서 값이 있다** — 변이 2·14 축에서는
-       "렌더러 실제 출력을 실제 리더에 먹인다"는 종단 결합을 유일하게
-       제공하고, 변이 1 축에서는 "생산 헤딩 상수가 리더의 접두사와 실제로
-       맞물리는지"를 유일하게 검증한다(이 계획이 시작된 원인 그 자체,
-       known-defects (5-3-7)).
+     **TASK 6 UNIQUE VALUE(픽스 라운드 4 — 소스를 직접 읽어 확정, 재도출 아님).**
+     `LocalVariableTableSeamTests.cs`의 세 테스트 본문과 `AiService.cs:1357`을
+     직접 읽어 확인했다: `TheMachineHeading_ShouldBeReadableByTheCheckDReader`는
+     `LocalVariableDeclarationExtractor.TableHeading` 상수를 손으로 조립한
+     마크다운에 넣어 리더에 먹이고, `TheRenderedTable_ShouldBeReadableByTheCheckDReader`는
+     실제 렌더러를 부르는데 그 렌더러(`AiService.cs:1357`)가 같은 상수를
+     프롬프트에 넣고 같은 리더에 먹이며, `TheMachineHeading_ShouldStartWithAKnownReaderPrefix`는
+     리플렉션으로 접두사 배열을 읽어 같은 상수를 대조한다.
 
-     **같은 오류가 세 번 반복됐다.**
+     **변이 1 축에서 Task 6의 세 테스트는 서로 중복이다.** 셋 다 결국 같은
+     사실을 단언한다 — 「생산 `TableHeading` 상수가 리더가 아는 접두사로
+     시작하는가」 — 구성 경로만 다르다(손으로 조립한 마크다운 · 실제 렌더러
+     출력 · 리플렉션으로 배열 격리). **셋 중 아무 하나만 있어도 선행 여섯이
+     못 잡는 그 실패군이 닫힌다.**
+
+     **지우면 실제로 덮개가 사라지는 것은
+     `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나다** — 그것만이
+     **두 축 모두**에서 고유하다(변이 1 축은 나머지 둘과 공유하지만, 변이 2·14
+     축은 그것만 덮는다). **두 `TheMachineHeading_…`은 덮개를 더하지 않고
+     진단 해상도를 더한다** — 실패가 났을 때 원인이 상수 쪽인지 리더 배열
+     쪽인지 표 파싱 쪽인지를 갈라 준다.
+
+     **그러나 Task 6 전체의 값은 여전히 두 축 모두에 있다.** 선행 여섯과
+     Task 4의 둘 중 어느 것도 「생산 상수가 리더에 실제로 닿는가」를 안 본다
+     — 그것이 `docs/known-defects.md` **(5-3-7)**의 실패 양식 그 자체다.
+
+     **이 문단(Task 6 unique value 결론) 자체가 네 라운드에 걸쳐 흔들렸다.**
+     같은 문단이 과대 → 과대 → 과소 → 과대로 네 번 흔들렸고, 매번 데이터에서
+     결론을 새로 도출하면서 한 축을 빠뜨렸다. 마지막에야 소스를 직접 읽어
+     확정했다.
+
+     **같은 귀속 오류가 세 번 반복됐다.**
      1. `--filter LocalVariable`가 사망 목록을 잘라냈다(라운드 1 이전 — 원 보고).
      2. 커밋 메시지 제목과 파일 이름만으로 테스트의 소속(Task 4 vs Task 6)을
         추정했다(라운드 1의 정정 자체에서 새로 남).
@@ -147,16 +162,19 @@
         문서 안에 이미 있는 반증 데이터(변이 1에서 선행 여섯이 살아남는다는,
         라운드 1이 스스로 재확인한 사실)를 대조하지 않았다**(라운드 2).
 
-     셋을 관통하는 지침: **"어느 테스트가 무엇을 잡는가"는 실행 결과와
+     **관통 지침은 하나가 아니라 둘이다 — 각각이 덮는 반복이 다르다.**
+     **첫째 지침**("어느 테스트가 무엇을 잡는가"는 실행 결과와
      `git show`/`git log -p`로 그 커밋의 실제 diff를 열어 확인해야 하고,
-     필터 문자열이나 커밋 메시지·파일명으로 추정하면 안 된다.** 그리고
-     이번 라운드가 더한 것: **결론을 쓰기 전에 같은 문서 안의 다른 측정과
+     필터 문자열이나 커밋 메시지·파일명으로 추정하면 안 된다)은 **반복 1·2를
+     덮지만 반복 3은 안 덮는다** — 라운드 2는 변이를 제대로 돌렸고 diff도
+     옳게 읽었는데, 그 부분 결과를 전체로 일반화하며 문서 안의 반증 데이터를
+     안 봤다. **둘째 지침**(결론을 쓰기 전에 같은 문서 안의 다른 측정과
      대조하라 — 새 측정이 옛 측정을 뒤집는지, 아니면 축이 달라서 둘 다
-     참인지 먼저 보라.** 부분 증거의 결론(가령 "변이 X에서 A만 고유하게
-     죽는다")을 전체 문장("이 계획 전체에서 A만 고유하다")으로 승격하기 전에,
-     보고서 안의 다른 변이·다른 축 데이터가 그 승격을 반증하지 않는지
-     반드시 되짚어야 한다. **이 문장이 이 보고서가 다음 회차에 남길 가장
-     값진 줄이다.**
+     참인지 먼저 보라)이 반복 3을 덮는다. 부분 증거의 결론(가령 "변이 X에서
+     A만 고유하게 죽는다")을 전체 문장("이 계획 전체에서 A만 고유하다")으로
+     승격하기 전에, 보고서 안의 다른 변이·다른 축 데이터가 그 승격을
+     반증하지 않는지 반드시 되짚어야 한다. **이 지침 둘이 이 보고서가 다음
+     회차에 남길 가장 값진 줄이다.**
    - **변이 8**: 계획서는 `WhenTheHeadingIsMissing_ShouldReportOnce` 하나만
      꼽았는데, 실측은 그 테스트에 더해 `LocalVariableTableCorpusTests`(코퍼스
      31 객체 전건 검사)도 함께 죽였다 — 그 코퍼스 테스트가
@@ -204,7 +222,7 @@
 | 11 | 추출기의 이름 접기(`_seen.Add`) 제거 | `Extract_ShouldFoldRepeatedNamesKeepingTheFirst` | **죽음**, 예측 정확히 일치 | `LocalVariableDeclarationExtractorTests.Extract_ShouldFoldRepeatedNamesKeepingTheFirst` |
 | 12 | 추출기의 `if (node is ProcedureParameter) return;` 제거 | `Extract_ShouldNotReturnProcedureParameters` + 코퍼스 CENSUS DELTA | **죽음**, 예측보다 넓음(과소 예측) + CENSUS DELTA 40→69 관측 | `LocalVariableDeclarationExtractorTests.Extract_ShouldNotReturnProcedureParameters` · `...Extract_ShouldReturnNameTypeAndInitialValue` |
 | 13 | `CacheManager.CurrentCacheFormatVersion`을 17로 | `CacheManagerTests.UpdateCache_StampsTheCurrentFormatVersion` | **죽음**, 예측 정확히 일치(락 테스트 실재 확인) | `CacheManagerTests.UpdateCache_StampsTheCurrentFormatVersion` |
-| 14(신규, 픽스 라운드 2) | `SpecStatementFactsExtractor.LocalVariableHeadingPrefixes`에서 `"### 지역 변수"` 제거(리더 쪽, 렌더러·상수·카탈로그는 불변) | (신규 - Task 6의 고유 값을 실측으로 확정하기 위해 추가) | **죽음, 9개** — `LocalVariableTableSeamTests` 셋(Task 6 소속) + 이 계획보다 앞선 리더 단위 테스트 여섯 개. **이 변이(배열-축) 하나만 보면 중복이지만, 변이 1(상수-축)에서는 그 여섯이 안 죽고 Task 6의 둘만 고유하게 죽는다 — 픽스 라운드 3의 AXIS TABLE·TASK 6 UNIQUE VALUE 참고, 「Task 6 고유 기여 없음」은 과소평가였다.** | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` · `SpecMaterialCensusTests.Count_WhenSpecHasTheTable_ReportsNoLoss` · `SpecStatementFactsExtractorTests.SystemValues_AreMarkedAndNotTreatedAsLocalVariables` · `...LocalVariables_RecognizeExpectProcTypeOnlyHeaderAndSystemIntegerMarker` · `...LocalVariables_CommUpdShape_StillReadsAndConditionHeaderCorrectly` · `...LocalVariables_RecognizeProcEtcHeadingAndTypeOnlyHeader` · `...LocalVariables_RecognizeAcqManualHeadingAndSystemStateMarker` |
+| 14(신규, 픽스 라운드 2) | `SpecStatementFactsExtractor.LocalVariableHeadingPrefixes`에서 `"### 지역 변수"` 제거(리더 쪽, 렌더러·상수·카탈로그는 불변) | (신규 - Task 6의 고유 값을 실측으로 확정하기 위해 추가) | **죽음, 9개** — `LocalVariableTableSeamTests` 셋(Task 6 소속) + 이 계획보다 앞선 리더 단위 테스트 여섯 개. **변이 1 축에서 Task 6의 세 테스트는 서로 중복이다(셋 중 아무 하나만 있어도 선행 여섯이 못 잡는 실패군이 닫힌다); 지우면 실제로 덮개가 사라지는 것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나뿐이고, 두 `TheMachineHeading_…`은 덮개가 아니라 진단 해상도를 더한다 — 픽스 라운드 4의 AXIS TABLE·TASK 6 UNIQUE VALUE 참고.** | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` · `SpecMaterialCensusTests.Count_WhenSpecHasTheTable_ReportsNoLoss` · `SpecStatementFactsExtractorTests.SystemValues_AreMarkedAndNotTreatedAsLocalVariables` · `...LocalVariables_RecognizeExpectProcTypeOnlyHeaderAndSystemIntegerMarker` · `...LocalVariables_CommUpdShape_StillReadsAndConditionHeaderCorrectly` · `...LocalVariables_RecognizeProcEtcHeadingAndTypeOnlyHeader` · `...LocalVariables_RecognizeAcqManualHeadingAndSystemStateMarker` |
 
 ## SURVIVORS
 
@@ -363,6 +381,19 @@ Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
   직접 돌려 확인한 뒤에만 적어라. (2) **결론을 쓰기 전에 같은 문서 안의 다른
   측정과 대조하라** — 새 측정이 옛 측정을 뒤집는지, 아니면 축이 달라서 둘 다
   참인지 먼저 보고 나서 일반화하라.
+- **정정(픽스 라운드 4) — 라운드 3도 과대평가였다.** 라운드 3이 "변이 1에서
+  `TheMachineHeading_ShouldBeReadableByTheCheckDReader`·
+  `TheMachineHeading_ShouldStartWithAKnownReaderPrefix` 둘만 고유하게 죽는다"고
+  쓴 것도 데이터에서 결론을 다시 도출한 것이었다 — `LocalVariableTableSeamTests.cs`의
+  세 테스트 본문과 `AiService.cs:1357`을 직접 읽어 보면 셋 다 결국 같은 사실
+  ("생산 `TableHeading` 상수가 리더가 아는 접두사로 시작하는가")을 구성 경로만
+  다르게 단언한다 — **변이 1 축에서 셋은 서로 중복이고, 셋 중 아무 하나만
+  있어도 선행 여섯이 못 잡는 실패군이 닫힌다.** 지우면 실제로 덮개가 사라지는
+  것은 `TheRenderedTable_ShouldBeReadableByTheCheckDReader` 하나뿐(두 축 모두
+  고유)이고, 두 `TheMachineHeading_…`은 덮개가 아니라 진단 해상도를 더한다.
+  **이 문단은 네 라운드(과대 → 과대 → 과소 → 과대)에 걸쳐 흔들렸고, 매번
+  데이터에서 결론을 새로 도출하면서 한 축을 빠뜨렸다 — 마지막에야 소스
+  (`LocalVariableTableSeamTests.cs`·`AiService.cs:1357`)를 직접 읽어 확정했다.**
 - 변이 9의 생존은 값진 신호다(위 "직전 회차 권고의 인과" 참고) - 표시 계층은
   계수 로직보다 방어가 얇다. 이번에 발견된 틈(행 전체 모양 vs 부분 문자열
   포함)은 이 표 하나에 국한된 보강으로 닫았지만, 같은 패턴(부분 문자열 포함
