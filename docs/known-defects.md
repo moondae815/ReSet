@@ -2791,41 +2791,6 @@
   사례일 뿐이다. 어느 검사가 어느 절에 기대는지, 그 절이 강제 대상인지를 전수로 훑는 것이
   다음 작업이다.
 
-  **(5-3-9) `SetTargets` — 배선된 적 없는 재료: 추출 비용만 있고 소비자가 없다
-  (2026-08-29, Fix Round 2 최종 리뷰 Important 6).** (5-3-7) 배너의 「주의 둘」 (1)번이
-  각주로 적었던 사실을 여기 자기 번호로 옮긴다 — 각주로 남으면 결함 목록을 훑는 다음
-  사람이 못 본다.
-
-  `SpecStatementFactsExtractor`가 명세서의 「### UPDATE 대상 테이블:」 절을 읽어
-  `SpecStatementFacts.SetTargets`를 매 프로시저마다 만든다. `MechanicalValidator.cs` 전수
-  grep(`grep -rn "SetTargets" src/ReSet.Core/Services/MechanicalValidator.cs`)에 걸리는
-  것은 `CheckUpdateSetTargets`(1121행) 하나뿐인데, 그 메서드는 `BatchControlContract`(배치
-  제어 테이블 계약)를 `stepMarkdown`에서 정규식으로 직접 훑는 완전히 다른 검사이고
-  `SpecStatementFacts.SetTargets`를 인자로도 받지 않는다. **이 재료는 추출되지만
-  `MechanicalValidator` 어디에도 흘러가지 않는다 — 한 번도 배선된 적이 없다.**
-
-  **모양은 (5-3-7)보다 나쁘다 — 급박도는 반대다.** (5-3-7)은 "쓰다가 죽은" 결함이었다 —
-  표가 있었다가 재료가 사라지자 그 표에 기대던 검사(D)가 조용히 꺼졌다. 이 재료는 "한 번도
-  안 쓰인" 결함이다 — 처음부터 소비자가 없었다. 모양만 보면 후자가 더 근본적이지만,
-  **급박도는 정확히 반대다**: (5-3-7)이 급했던 이유는 검사가 재료를 잃어 회귀를 조용히
-  놓칠 위험이 실재했기 때문이다. 이 재료는 소비자가 처음부터 공집합이라 "검사가 조용히
-  꺼질" 위험 자체가 성립하지 않는다 — 잃을 검사가 없다. **최종 리뷰어 판정: 급하지
-  않다.** 다만 "추출 비용만 내고 아무도 안 쓴다"는 사실 자체는 결함으로 남긴다 — 리더가
-  매 프로시저마다 이 표를 파싱하는 비용을 내면서 그 결과를 아무도 안 읽는 것은, 다음
-  회차가 이 재료에 소비자를 배선하려 할 때 "왜 지금까지 아무도 안 썼는가"를 먼저 물어야
-  한다는 신호이기도 하다.
-
-  **닫는 방향(둘 중 하나, 다음 회차 판단).** (1) 소비자를 배선한다 — `SetTargets`를 실제로
-  대조하는 검사를 만든다(예: 명세서가 확정한 UPDATE 대상 테이블과 원본 DDL의
-  `AstUpdateMappings`를 대조). (2) 추출을 접는다 — 아무도 안 쓰는 재료를 계속 뽑는 것
-  자체가 낭비라면 `SpecStatementFacts.SetTargets`와 그 리더 부분을 제거하고
-  `SpecMaterials.All`에서도 뺀다. 이 회차는 어느 쪽도 택하지 않는다 — 판정만 기록한다.
-
-  근거: `src/ReSet.Core/Services/SpecMaterials.cs`(SetTargets 항목 주석) ·
-  `src/ReSet.Core/Services/SpecStatementFactsExtractor.cs:37-50`(`SpecStatementFacts`의
-  네 멤버 정의) · `docs/audit-reports/sweeps/2026-08-29-step-sweep.md`(「재료 분모」 절,
-  SetTargets 행 — DDL 사실 수 「안 쟀음」, 명세서 행 수 52, 소실 칸 「잴 수 없음」).
-
   **(5-3-8) 캐시 17 승격 결과와 `post-(A)` 46 좌표의 부류 판정 — 진짜 결함 33 ·
   구조적 오탐 10 · 판정 불가 3 (2026-08-28, 로드맵 4 마감).**
   (5-3-3)이 증가분 37건에 쓴 방법을 그대로 썼다 — 좌표마다
@@ -3062,6 +3027,41 @@
     기계 확정 표 대조가 **프로시저에서 차이 0**으로 나왔으므로, 검사 B·C가 읽는 층에
     한해서는 세대 차이가 발화를 만들지 않았다. 번들 재생성(로드맵 5) 뒤 다시 재는 것이
     순서다.
+
+  **(5-3-9) `SetTargets` — 배선된 적 없는 재료: 추출 비용만 있고 소비자가 없다
+  (2026-08-29, Fix Round 2 최종 리뷰 Important 6).** (5-3-7) 배너의 「주의 둘」 (1)번이
+  각주로 적었던 사실을 여기 자기 번호로 옮긴다 — 각주로 남으면 결함 목록을 훑는 다음
+  사람이 못 본다.
+
+  `SpecStatementFactsExtractor`가 명세서의 「### UPDATE 대상 테이블:」 절을 읽어
+  `SpecStatementFacts.SetTargets`를 매 프로시저마다 만든다. `MechanicalValidator.cs` 전수
+  grep(`grep -rn "SetTargets" src/ReSet.Core/Services/MechanicalValidator.cs`)에 걸리는
+  것은 `CheckUpdateSetTargets`(1121행) 하나뿐인데, 그 메서드는 `BatchControlContract`(배치
+  제어 테이블 계약)를 `stepMarkdown`에서 정규식으로 직접 훑는 완전히 다른 검사이고
+  `SpecStatementFacts.SetTargets`를 인자로도 받지 않는다. **이 재료는 추출되지만
+  `MechanicalValidator` 어디에도 흘러가지 않는다 — 한 번도 배선된 적이 없다.**
+
+  **모양은 (5-3-7)보다 나쁘다 — 급박도는 반대다.** (5-3-7)은 "쓰다가 죽은" 결함이었다 —
+  표가 있었다가 재료가 사라지자 그 표에 기대던 검사(D)가 조용히 꺼졌다. 이 재료는 "한 번도
+  안 쓰인" 결함이다 — 처음부터 소비자가 없었다. 모양만 보면 후자가 더 근본적이지만,
+  **급박도는 정확히 반대다**: (5-3-7)이 급했던 이유는 검사가 재료를 잃어 회귀를 조용히
+  놓칠 위험이 실재했기 때문이다. 이 재료는 소비자가 처음부터 공집합이라 "검사가 조용히
+  꺼질" 위험 자체가 성립하지 않는다 — 잃을 검사가 없다. **최종 리뷰어 판정: 급하지
+  않다.** 다만 "추출 비용만 내고 아무도 안 쓴다"는 사실 자체는 결함으로 남긴다 — 리더가
+  매 프로시저마다 이 표를 파싱하는 비용을 내면서 그 결과를 아무도 안 읽는 것은, 다음
+  회차가 이 재료에 소비자를 배선하려 할 때 "왜 지금까지 아무도 안 썼는가"를 먼저 물어야
+  한다는 신호이기도 하다.
+
+  **닫는 방향(둘 중 하나, 다음 회차 판단).** (1) 소비자를 배선한다 — `SetTargets`를 실제로
+  대조하는 검사를 만든다(예: 명세서가 확정한 UPDATE 대상 테이블과 원본 DDL의
+  `AstUpdateMappings`를 대조). (2) 추출을 접는다 — 아무도 안 쓰는 재료를 계속 뽑는 것
+  자체가 낭비라면 `SpecStatementFacts.SetTargets`와 그 리더 부분을 제거하고
+  `SpecMaterials.All`에서도 뺀다. 이 회차는 어느 쪽도 택하지 않는다 — 판정만 기록한다.
+
+  근거: `src/ReSet.Core/Services/SpecMaterials.cs`(SetTargets 항목 주석) ·
+  `src/ReSet.Core/Services/SpecStatementFactsExtractor.cs:37-50`(`SpecStatementFacts`의
+  네 멤버 정의) · `docs/audit-reports/sweeps/2026-08-29-step-sweep.md`(「재료 분모」 절,
+  SetTargets 행 — DDL 사실 수 「안 쟀음」, 명세서 행 수 52, 소실 칸 「잴 수 없음」).
 
   **(5-4) 미분류 977은 분류기 고장이 아니다 — 다만 내부 분포가 안 보인다.**
   리뷰어가 1954개 원시 메시지를 전수 귀속시켜 미귀속 0을 확인했다. 주
