@@ -11,17 +11,48 @@
 1. **몇이 죽고 몇이 살았는가.** 열셋 중 **열둘이 즉시 죽었다.** **하나(변이 9 —
    렌더러가 `InitialValue` 칸을 언제나 빈 칸으로 냄)가 살아남았다.**
 2. **예측이 빗나간 자리.**
-   - **변이 1**: 계획서는 "이음매 테스트 · **카탈로그 테스트**"가 죽는다고
-     적었다. 실측은 이음매 테스트(`LocalVariableTableSeamTests` 셋)와
-     `LocalVariableDeclarationExtractorTests.TableHeading_ShouldUseTheSharedSuffix`가
-     죽었지만, **카탈로그 테스트(`MachineConfirmedTablesExpansionTests`,
-     `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog`)는
-     구조적으로 안 죽는다** — 그 테스트들은 전부 `LocalVariableDeclarationExtractor.TableHeading`
-     **자기 자신을 읽어** `MachineConfirmedTables.All`과 대조하므로, 상수 값이
-     무엇으로 바뀌든 양쪽이 같은 값을 보는 자기참조 비교가 되어 항상 통과한다.
-     이 축의 카탈로그 테스트는 "값이 무엇이냐"가 아니라 "등록됐냐"만 잠근다 —
-     값 자체의 리터럴 잠금은 이음매 테스트와 `TableHeading_ShouldUseTheSharedSuffix`
-     둘의 몫이다.
+   - **변이 1 (픽스 라운드 1에서 재실측 — 최초 보고가 불완전했다)**: 계획서는
+     "이음매 테스트 · 카탈로그 테스트"가 죽는다고 적었다. **최초 보고는 이 변이를
+     `--filter LocalVariable`로만 돌려** 클래스명에 "LocalVariable"이 없는
+     `MachineConfirmedTablesExpansionTests`를 실행 대상에서 빠뜨렸고, 그 결과
+     "카탈로그 테스트는 구조적으로 안 죽는다"는 과장된 결론을 냈다. **전건
+     테스트(`dotnet test tests/ReSet.Core.Tests --no-build`, 필터 없음)로 다시
+     돌려 확인한 사망 목록은 다섯이다**: `LocalVariableDeclarationExtractorTests.TableHeading_ShouldUseTheSharedSuffix` ·
+     `LocalVariableTableSeamTests.TheMachineHeading_ShouldBeReadableByTheCheckDReader` ·
+     `...TheRenderedTable_ShouldBeReadableByTheCheckDReader` ·
+     `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` ·
+     **`MachineConfirmedTablesExpansionTests.CriticExemptionBlock_ShouldCoverTheLocalVariableTable`**.
+
+     카탈로그 쪽 테스트 자체도 갈린다. `All_ShouldContainTheLocalVariableTable` ·
+     `All_ShouldContainTheLocalVariableTableAtTheEnd` ·
+     `All_ShouldAppendTheLocalVariableTableAfterTheErrorCodeTable`와 반사 불변식
+     `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog`
+     넷은 전부 `LocalVariableDeclarationExtractor.TableHeading` **자기 자신을 읽어**
+     `MachineConfirmedTables.All`과 대조하므로, 상수 값이 무엇으로 바뀌든 양쪽이
+     같은 값을 보는 자기참조 비교가 되어 언제나 통과한다 — 이 넷은 실제로 안
+     죽었다(재실측으로 확인). 반면 `CriticExemptionBlock_ShouldCoverTheLocalVariableTable`은
+     `Assert.Contains("지역 변수", MachineConfirmedTables.CriticExemptionBlock)`로
+     한글 리터럴 `"지역 변수"`를 **손으로 박아** 뒀다 — 헤딩이 "로컬 변수"로
+     바뀌면 그 부분 문자열이 블록 텍스트에서 사라져 죽는다. **다만 이것은 설계된
+     헤딩-개명 방어가 아니라 작성 방식의 우연이다.** 이 테스트의 목적은 "새
+     표가 Critic 면제 블록에 실리는가"이지 "헤딩 이름이 안 바뀌었는가"가 아니다
+     — 다음 사람이 이 테스트를 헤딩 개명 방어로 믿고 의지하면 안 된다.
+
+     **Task 6에 대한 인과 — 정정.** `CriticExemptionBlock_ShouldCoverTheLocalVariableTable`은
+     Task 3의 커밋 `19cc7098`(카탈로그 등록)에서 추가됐고 Task 6(이음매)보다
+     앞선다(`git log`로 확인). **그러므로 "Task 6이 없었으면 이 헤딩 개명이 전
+     테스트를 통과했을 것"은 이 사례에 대해 거짓이다** — Task 6 이전에도 이
+     우연한 리터럴 하나가 헤딩 개명을 잡았을 것이다. **Task 6이 고유하게 잡는
+     것은 이 헤딩 개명(변이 1)이 아니라 변이 2(렌더러의 헤더 칸 이름 변경)다.**
+     변이 2를 같은 방식(필터 없는 전건 재실행)으로 다시 확인한 사망 목록은
+     `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` ·
+     `LocalVariableTablePromptTests.WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` ·
+     `...FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows` 셋뿐이고, **카탈로그
+     테스트는 그중 어느 것도 죽지 않는다** — 헤더 칸 이름("변수 명칭")은
+     `MachineConfirmedTables`가 전혀 다루지 않는 별개의 축이기 때문이다. 이
+     셋은 전부 Task 6 계열 커밋(`e00f787d` "지역 변수 표를 Actor 프롬프트의 세
+     갈래에 싣는다" 및 그 뒤 이음매 커밋들)에서 나왔다 — **Task 6이 없었으면
+     변이 2는 전 테스트를 통과했을 것이고, 그것이 Task 6의 고유 값이다.**
    - **변이 8**: 계획서는 `WhenTheHeadingIsMissing_ShouldReportOnce` 하나만
      꼽았는데, 실측은 그 테스트에 더해 `LocalVariableTableCorpusTests`(코퍼스
      31 객체 전건 검사)도 함께 죽였다 — 그 코퍼스 테스트가
@@ -56,7 +87,7 @@
 
 | # | 변이 | 예상 | 실측 | 죽은 테스트 |
 | ---: | :--- | :--- | :--- | :--- |
-| 1 | `TableHeading`을 `"### 로컬 변수 " + HeadingSuffix`로(production 상수) | 이음매·카탈로그 테스트 | **죽음** — 카탈로그 테스트는 자기참조라 실제로는 안 죽는다(예측 빗나감, 위 참고) | `LocalVariableDeclarationExtractorTests.TableHeading_ShouldUseTheSharedSuffix` · `LocalVariableTableSeamTests.TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` |
+| 1 | `TableHeading`을 `"### 로컬 변수 " + HeadingSuffix`로(production 상수) | 이음매·카탈로그 테스트 | **죽음** — 카탈로그 테스트 중 자기참조 넷(`All_ShouldContainTheLocalVariableTable` 등 + 반사 불변식)은 안 죽고, 한글 리터럴을 손으로 박은 하나(`CriticExemptionBlock_ShouldCoverTheLocalVariableTable`)는 우연히 죽는다(전건 재실행으로 재확인, 위 참고) | `LocalVariableDeclarationExtractorTests.TableHeading_ShouldUseTheSharedSuffix` · `LocalVariableTableSeamTests.TheMachineHeading_ShouldBeReadableByTheCheckDReader` · `...TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `...TheMachineHeading_ShouldStartWithAKnownReaderPrefix` · `MachineConfirmedTablesExpansionTests.CriticExemptionBlock_ShouldCoverTheLocalVariableTable` |
 | 2 | 렌더러 헤더 `변수 명칭` → `변수 이름` | 이음매 종단 테스트 | **죽음**, 예측대로 | `LocalVariableTableSeamTests.TheRenderedTable_ShouldBeReadableByTheCheckDReader` · `LocalVariableTablePromptTests.WholeSpBranch_ShouldCarryTheTableWithItsHeadingAndRows` · `...FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows` |
 | 3 | `MachineConfirmedTables.All`에서 등록 제거 | 확장 테스트 넷 + 반사 불변식 | **죽음**, 예측 정확히 일치 | `MachineConfirmedTablesExpansionTests.All_ShouldContainTheLocalVariableTableAtTheEnd` · `...All_ShouldContainTheLocalVariableTable` · `...All_ShouldAppendTheLocalVariableTableAfterTheErrorCodeTable` · `...CriticExemptionBlock_ShouldCoverTheLocalVariableTable` · `MachineConfirmedTablesTests.EveryMachineConfirmedHeadingConstant_IsRegisteredInTheCatalog` |
 | 4 | `OverviewAndParameters` 갈래를 `Omit`으로 | `OverviewAndParametersBranch_ShouldCarryTheTable` | **죽음**, 예측 정확히 일치 | `LocalVariableTablePromptTests.OverviewAndParametersBranch_ShouldCarryTheTable` |
@@ -187,12 +218,19 @@ Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
 
 ## CONCERNS
 
-- 계획서의 예측 문구("카탈로그 테스트"가 변이 1을 잡는다)는 구조적으로 성립하지
-  않는다 - 카탈로그 테스트들은 값 자체가 아니라 "등록 여부"만 자기참조로
-  잠그므로, 상수 리터럴을 잠그는 실제 방어는 이음매 테스트와
-  `TableHeading_ShouldUseTheSharedSuffix`에 있다. 다음에 이 축을 다시 감사할
-  사람이 "카탈로그 테스트가 리터럴까지 잠근다"고 오해하지 않도록 이 문서에
-  남긴다.
+- **정정(픽스 라운드 1).** 계획서의 예측 문구("카탈로그 테스트"가 변이 1을
+  잡는다)에 대한 최초 판정("구조적으로 안 죽는다")은 **필터가 걸린 재실행
+  탓에 불완전했다** — 카탈로그 테스트 넷(자기참조)은 정말 안 죽지만,
+  `MachineConfirmedTablesExpansionTests.CriticExemptionBlock_ShouldCoverTheLocalVariableTable`
+  하나는 한글 리터럴을 손으로 박아 뒀기 때문에 죽는다(전건 재실행으로 확인).
+  다만 그것은 설계된 헤딩-개명 방어가 아니라 그 테스트의 작성 방식이 우연히
+  겹친 것이고, Task 6(이음매)보다 앞선 Task 3 커밋(`19cc7098`)에서 이미
+  존재했다 — 그래서 "Task 6이 없었으면 이 개명이 전 테스트를 통과했을 것"은
+  거짓이다. **Task 6이 고유하게 잡는 것은 변이 2(렌더러 헤더 칸 이름 변경)다**
+  — 그 변이에는 카탈로그 테스트가 전혀 반응하지 않는다(전건 재실행으로 확인,
+  본문 §2 참고). 다음에 이 축을 다시 감사할 사람이 "카탈로그 테스트가 헤딩
+  리터럴까지 잠근다"고 일반화하지 않도록, 그리고 "필터를 걸고 돌린 재실행이
+  전건 결과와 같다"고 가정하지 않도록 이 문서에 남긴다.
 - 변이 9의 생존은 값진 신호다(위 "직전 회차 권고의 인과" 참고) - 표시 계층은
   계수 로직보다 방어가 얇다. 이번에 발견된 틈(행 전체 모양 vs 부분 문자열
   포함)은 이 표 하나에 국한된 보강으로 닫았지만, 같은 패턴(부분 문자열 포함
