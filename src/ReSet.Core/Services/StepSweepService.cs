@@ -365,13 +365,26 @@ namespace ReSet.Core.Services
 
             // [계기 하나가 보고서 전체를 죽이면 안 된다] SpecMaterialCensus.Count는
             // 위 per-job 루프의 jobsThatThrew 가드 밖에서, input.Jobs 전체를 한
-            // 번에 훑는다. Count 자신의 job 순회는 job.Specs/job.DdlByProcedure가
-            // null이면 가드 없이 그 자리에서 예외를 던진다(SpecMaterialCensus.cs -
-            // 그 파일은 이 태스크의 쓰기 집합 밖이라 고치지 않는다). 이 try/catch가
-            // 없으면 그 예외가 Sweep() 밖으로 그대로 새어, 이미 완료된 per-job
-            // 루프가 낸 지표(위의 measuredPairs 등 전부)까지 함께 사라진다 - 새
-            // 계기 하나 때문에 기존 보고서 전체가 죽는 것은 이 파일이 이미 지키는
-            // 소프트 페일 관용구(:361의 jobsThatThrew)와 AGENTS.md 범주 2를 어긴다.
+            // 번에 훑는다.
+            //
+            // Count 자신도 이제 Job마다 가드한다 - 한 Job의 Specs/DdlByProcedure
+            // 처리가 던지면 그 Job만 건너뛰고(이름은
+            // SpecMaterialCensusRow.JobsSkippedForFailure에 실려 보고서가 인쇄한다)
+            // 나머지 Job의 census는 그대로 낸다.
+            //
+            // 그런데도 아래 try/catch를 남기는 이유 - 이음매와 Count의 per-job
+            // 가드는 서로 다른 실패 자리를 막는 대체재가 아니다. per-job 가드는
+            // "Job 하나"의 결함을 그 Job 하나로 가두지만, Count에는 그 밖에도
+            // 예외가 날 수 있는 자리가 있다(예: 판 접기 뒤 재료별 계수 루프,
+            // SpecMaterials.All 순회, SpecStatementFactsExtractor.Extract 호출) -
+            // 그런 자리가 던지면 per-job 가드를 거치지 않고 Count() 밖으로 그대로
+            // 샌다. 그 예외가 여기서도 안 잡히면 Sweep() 밖으로 새어, 이미 완료된
+            // per-job 루프가 낸 지표(위의 measuredPairs 등 전부)까지 함께
+            // 사라진다 - 새 계기 하나 때문에 기존 보고서 전체가 죽는 것은 이
+            // 파일이 이미 지키는 소프트 페일 관용구(:361의 jobsThatThrew)와
+            // AGENTS.md 범주 2를 어긴다. 둘 중 하나가 "중복이니 지우자"의 대상이
+            // 아니다 - 걷어내면 그 걷어낸 쪽이 막던 실패 자리가 다시 무방비가
+            // 된다.
             var materialCensus = new List<SpecMaterialCensusRow>();
             try
             {
