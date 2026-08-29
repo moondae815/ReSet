@@ -91,6 +91,10 @@ namespace ReSet.Core.Services
         // 규칙 3-1의 마지막 미강제 조항 - 신규 저장 프로시저·함수·트리거 정의
         // (조사 §5 B급 4). 위와 같은 이유로 서수 이동은 기능에 영향이 없다.
         NewDatabaseObjectDefined,
+        // 지역 변수 표(기계 확정)의 전사 대조 앵커. known-defects (5-3-7) - 이 표는
+        // 강제가 없어 모델 교체만으로 사라졌고 검사 D가 조용히 꺼졌다. 위 항목들과
+        // 같은 이유로 서수 이동은 기능에 영향이 없다.
+        LocalVariableTableMismatch,
         General
     }
 
@@ -202,6 +206,7 @@ namespace ReSet.Core.Services
                     CheckCaseBranches(cleansed, expectations, result);
                     CheckTransactionBoundaries(cleansed, expectations, result);
                     CheckSetAssignments(cleansed, expectations, result);
+                    CheckLocalVariableDeclarationTable(cleansed, expectations, result);
                     CheckErrorCodes(cleansed, expectations, result);
                 }
             }
@@ -4981,6 +4986,118 @@ namespace ReSet.Core.Services
             {
                 // 작성 계약 6: 위 CheckTransactionBoundaries와 같은 이유다.
                 Log.Warning(ex, "[MechanicalValidator] 변수 대입 표 대조 실패 - 이 검사만 건너뜁니다.");
+            }
+        }
+
+        /// <summary>
+        /// 기계 확정 지역 변수 표의 전사를 양방향으로 대조한다.
+        ///
+        /// [왜 양방향인가 - (5-3-6)을 되풀이하지 않는다]
+        /// CheckErrorCodes·CheckSetAssignments·CheckTransactionBoundaries 셋은
+        /// `foreach (var fact in expectations.X)`로만 돌아 "모든 사실에 행이 있는가"만
+        /// 본다. 모델이 표에 행을 더해도 통과하고, 그 가짜 행이 앵커 해결을 망가뜨릴 수
+        /// 있다((5-3-6)). 전사 표에서 사실 없는 행은 그 자체로 위반이므로 새 검사는
+        /// 처음부터 양방향으로 둔다. <b>이것이 기존 셋의 역방향을 닫지는 않는다</b> -
+        /// 그쪽은 넣는 순간 실제 위반이 발화해 재생성이 함께 필요하다.
+        ///
+        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
+        /// Errors를 통째로 지우고 통과시킨다. 새 검사의 실패가 기존 검사의 판정까지
+        /// 삼키면 안 된다(CheckMachineTableShape와 같은 근거).
+        /// </summary>
+        private static void CheckLocalVariableDeclarationTable(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.LocalVariableDeclarations.Count == 0) return;
+
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var (headingIndex, endIndex) = LocateHeadingSection(
+                    lines, LocalVariableDeclarationExtractor.TableHeading);
+
+                if (headingIndex < 0)
+                {
+                    var missing =
+                        $"기계 확정 지역 변수 표가 명세서에 없습니다. "
+                        + $"`{LocalVariableDeclarationExtractor.TableHeading}` 헤딩과 "
+                        + $"{expectations.LocalVariableDeclarations.Count}개 행을 `## 파라미터 목록`에 "
+                        + "그대로 옮겨야 합니다 — 표만 두고 헤딩을 빼면 리더가 그 표를 못 읽습니다.";
+                    result.Errors.Add(missing);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.LocalVariableTableMismatch,
+                        Message = missing
+                    });
+                    return;
+                }
+
+                var rowCells = new List<IReadOnlyList<string>>();
+                for (var i = headingIndex + 1; i < endIndex; i++)
+                {
+                    if (!lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
+
+                    var cells = SplitTableRowCells(lines[i]);
+                    // 헤더 행과 구분 행은 대조 대상이 아니다. 구분 행은 `:---` 모양이고
+                    // 헤더 행은 `@`로 시작하는 칸이 없다 - 아래 판정이 둘 다 걸러 낸다.
+                    rowCells.Add(cells);
+                }
+
+                // 정방향 - 모든 DECLARE 사실에 행이 있는가.
+                foreach (var fact in expectations.LocalVariableDeclarations)
+                {
+                    var present = rowCells.Any(cells =>
+                        cells.Any(c => string.Equals(c, fact.Name, StringComparison.OrdinalIgnoreCase))
+                        && cells.Any(c => c == fact.DataType));
+                    if (present) continue;
+
+                    var message =
+                        $"지역 변수 표에 `{fact.Name}` 행이 없거나 선언 타입이 다릅니다. "
+                        + $"원본 DDL은 이 변수를 `{fact.DataType}`으로 선언합니다 — 그대로 옮겨야 합니다. "
+                        + "타입을 이름으로 추측하면 금액 변수가 정수로 선언되어 절삭됩니다.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.LocalVariableTableMismatch,
+                        Message = message,
+                        RawContext = fact.Name
+                    });
+                }
+
+                // 역방향 - 모든 행에 DECLARE 사실이 있는가. 전사 표이므로 사실 없는
+                // 행은 그 자체로 위반이다(모델이 지어낸 변수).
+                //
+                // [`@@` 접두사를 빼는 이유] 옛 세대의 표는 `@@ERROR` 같은 시스템 값
+                // 행을 함께 실었다(EXCEPTION_PROC 실물). 그 행은 DECLARE 사실이 아니므로
+                // 역방향이 전부 발화시킨다. T-SQL 문법상 `@@`는 사용자가 DECLARE할 수
+                // 없는 시스템 전역값이라 언제나 안전하게 제외할 수 있다 - 검사 D
+                // (CheckSpecLocalVariablesDeclared)가 같은 이유로 같은 방어를 갖는다.
+                var known = new HashSet<string>(
+                    expectations.LocalVariableDeclarations.Select(f => f.Name),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var cells in rowCells)
+                {
+                    var name = cells.FirstOrDefault(c =>
+                        c.StartsWith("@", StringComparison.Ordinal)
+                        && !c.StartsWith("@@", StringComparison.Ordinal));
+                    if (name == null || known.Contains(name)) continue;
+
+                    var message =
+                        $"지역 변수 표에 원본 DDL이 선언하지 않은 `{name}` 행이 있습니다. "
+                        + "이 표는 기계 확정 전사표이므로 행을 더하면 안 됩니다 — "
+                        + "원본에 없는 변수는 지우십시오.";
+                    result.Errors.Add(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.LocalVariableTableMismatch,
+                        Message = message,
+                        RawContext = name
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] 지역 변수 표 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
 
