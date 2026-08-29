@@ -378,6 +378,7 @@ namespace ReSet.Core.Services
                     StatementsWithSubordinatePredicates = statementsWithSubordinatePredicates,
                     SubordinatePredicateColumnTotal = subordinatePredicateColumnTotal,
                     StagingSourceTotal = stagingSourceTotal,
+                    MaterialCensus = SpecMaterialCensus.Count(input.Jobs),
                 },
                 new HarnessGaps(
                     input.PlanParseFailedJobs,

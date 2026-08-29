@@ -248,6 +248,27 @@ namespace ReSet.Core.Services
 
         /// <inheritdoc cref="AnchorsResolved"/>
         public int StagingSourceTotal { get; init; }
+
+        /// <summary>
+        /// 명세서 재료가 원본 DDL 대비 소실됐는지, 프로시저 단위로 센다
+        /// (<see cref="SpecMaterialCensus"/> 참고).
+        ///
+        /// [분모가 다르다] 이 목록의 단위는 프로시저이고, 이 보고서의 다른 수치는
+        /// (Job, 단계) 쌍이다. 같은 표에서 나누지 마십시오.
+        ///
+        /// [이 값이 재는 것은 소실이지 원인이 아니다] <see cref="SpecMaterialCensus"/>
+        /// 클래스 문서 참고.
+        ///
+        /// [null의 뜻을 이어 적는다] <see cref="SpecMaterialCensusRow.DdlFactCount"/>·
+        /// <see cref="SpecMaterialCensusRow.SpecRowCount"/>의 null은 「이 회차가 그
+        /// 수를 내지 않았다」는 뜻이고 0과 구별해야 한다 - 빈칸은 0으로 읽히고 0은
+        /// 정상으로 읽힌다. 대응물이 없어서 잴 수 없는 것인지, 대응물은 있는데 이
+        /// 회차가 아직 안 세는 것인지는 이 행이 안 들고 있다 - 보고서 라이터가
+        /// <see cref="SpecMaterials.All"/>에서 그 재료의
+        /// <see cref="SpecMaterial.DdlCounterpart"/>를 조회해 라벨을 갈라야 한다.
+        /// </summary>
+        public IReadOnlyList<SpecMaterialCensusRow> MaterialCensus { get; init; }
+            = new List<SpecMaterialCensusRow>();
     }
 
     public sealed record SweepReport(

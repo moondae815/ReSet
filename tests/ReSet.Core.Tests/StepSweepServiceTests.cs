@@ -574,5 +574,47 @@ INSERT INTO dbo.T SELECT /* 주석뿐 */ FROM dbo.S;
             Assert.Equal(0, indicators.StepsWithUnknownCodes);
             Assert.Equal(1, indicators.StepsSkippedForParseFailure);
         }
+
+        private const string DdlWithTwoDeclaresForCensus = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    DECLARE @v_intID INT;
+    DECLARE @v_intCLTotal MONEY;
+    SELECT @v_intID = 1;
+END";
+
+        private const string SpecWithoutLocalVariablesTable = @"# Spec
+
+### 처리 개요
+
+지역 변수 표가 없는 명세서다.
+";
+
+        // [왜 Sweep 이음매인가] 계수가 배선까지 함께 시험된다. 리플렉션으로 내부
+        // 함수를 부르면 "계산은 맞는데 아무도 안 부른다"를 못 잡는다.
+        //
+        // 픽스처는 SpecMaterialCensusTests.Count_WhenDdlHasFactsButSpecHasNone_ReportsLossWithObjectName과
+        // 같은 모양이다 - DDL은 DECLARE 둘, 명세서는 지역 변수 표가 없다. 이
+        // 재료(LocalVariables)만 Spec·Ddl 양쪽을 실제로 세므로 소실이 관찰
+        // 가능한 유일한 재료다(SpecMaterialCensus 클래스 문서 참고).
+        [Fact]
+        public void IndicatorsCarryMaterialCensusThroughSweep()
+        {
+            var job = new SweepJob(
+                "CensusJob",
+                new List<BatchStepPlan>(),
+                new Dictionary<string, string>(),
+                new[] { ("dbo.P", SpecWithoutLocalVariablesTable) },
+                new Dictionary<string, string> { ["dbo.P"] = DdlWithTwoDeclaresForCensus },
+                new Dictionary<string, string>());
+
+            var indicators = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0)).Indicators;
+
+            var row = indicators.MaterialCensus.Single(r => r.MaterialName == "LocalVariables");
+            Assert.Equal(2, row.DdlFactCount);
+            Assert.Equal(0, row.SpecRowCount);
+            Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
+        }
     }
 }
