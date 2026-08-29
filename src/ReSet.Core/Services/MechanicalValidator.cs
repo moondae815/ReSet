@@ -416,7 +416,7 @@ namespace ReSet.Core.Services
 
             CheckForbiddenShortcuts(stepMarkdown, step, result);
             CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
-            CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result);
+            CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps);
             CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
             CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
             CheckBatchControlVocabulary(stepMarkdown, step, result);
@@ -1899,7 +1899,8 @@ namespace ReSet.Core.Services
             string stepMarkdown,
             BatchStepPlan step,
             IReadOnlyCollection<string> knownTableNames,
-            StepValidationResult result)
+            StepValidationResult result,
+            IReadOnlyList<BatchStepPlan>? allSteps = null)
         {
             if (knownTableNames.Count == 0)
             {
@@ -1925,7 +1926,29 @@ namespace ReSet.Core.Services
             // 한정자 화이트리스트(BuildKnownQualifiers)에는 넣지 않는다 - `dbo.UP_...`의
             // `dbo`는 이미 카탈로그가 아는 한정자이고, 거기 넣으면 카탈로그가 보증하지
             // 않는 새 한정자까지 인정하게 된다.
-            foreach (var declared in step.LegacyProcedures)
+            //
+            // [단계 단위가 아니라 목차 단위다 - 2026-08-29]
+            // 목차가 이 Job의 원본이라고 선언한 것은 <b>어느 단계 몫이든</b> 실재하는
+            // 객체다. 자기 단계 것만 보면, 다른 단계가 대체하는 원본을 언급하는 단계
+            // (오케스트레이터 단계가 흔히 그렇다)에서 그 이름이 유령이 된다.
+            //
+            // ⚠️ <b>이 확대가 고친 실현된 오탐은 없다(측정함).</b> 같은 회차에 잰
+            // 미지 테이블 발화 219건 중 원본 SP 오탐 29건은 이 확대로 하나도 줄지
+            // 않았다 - 그 29건의 원인은 목차가 아니라 카탈로그였고
+            // (`VerificationPipelineOrchestrator`의 knownTableNames가 의존 대상만 담고
+            // 원본 SP 자신을 안 담았다), 목차의 `LegacyProcedures` 칸은 그 두 편에서
+            // 사실상 비어 있었다(Proc6은 33단계 전부 빈 칸, Proc2는 18단계에 3개).
+            // 확대를 남기는 이유는 두 재료의 출처가 다르기 때문이다 - 카탈로그는
+            // 정적 분석이, 이 칸은 목차가 채운다. 목차가 선언했는데 정적 분석 대상이
+            // 아닌 원본(중첩 호출 SP 등)은 카탈로그로 닫히지 않는다.
+            //
+            // allSteps가 없으면 종전대로 자기 단계 것만 본다 - 이 인자를 넘기지 않는
+            // 호출 경로에서 판정이 갑자기 넓어지지 않게 한다.
+            var declaredProcedures = allSteps == null
+                ? step.LegacyProcedures
+                : allSteps.SelectMany(s => s.LegacyProcedures);
+
+            foreach (var declared in declaredProcedures)
             {
                 var bare = BareObjectName(declared);
                 if (bare.Length > 0)

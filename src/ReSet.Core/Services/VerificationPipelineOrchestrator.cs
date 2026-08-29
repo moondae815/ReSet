@@ -1699,14 +1699,11 @@ namespace ReSet.Core.Services
             }
 
             // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
-            // 검증기는 그때 검사를 건너뛴다(소프트 스킵).
-            var knownTableNames = (definitions ?? Array.Empty<SpDefinition>())
-                .SelectMany(sp => sp.Dependencies)
-                .Select(dep => string.IsNullOrEmpty(dep.Database)
-                    ? $"{dep.Schema}.{dep.Name}"
-                    : $"{dep.Database}.{dep.Schema}.{dep.Name}")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            // 검증기는 그때 검사를 건너뛴다(소프트 스킵). 조립 근거는
+            // StepInterfaceFacts.CollectSchemaCatalog에 있다 - 의존 대상뿐 아니라
+            // 이 Job이 대체하는 원본 프로시저 자신도 카탈로그다. 이 값은 검증
+            // 경로에만 흐르고 AI 프롬프트로는 가지 않으므로 캐시 계약과 무관하다.
+            var knownTableNames = StepInterfaceFacts.CollectSchemaCatalog(definitions);
 
             if (knownTableNames.Count == 0)
             {

@@ -35,6 +35,44 @@ namespace ReSet.Core.Services
     public static class StepInterfaceFacts
     {
         /// <summary>
+        /// 미지 테이블 검사(<see cref="MechanicalValidator.ValidateBatchStep"/>)가 쓰는
+        /// 스키마 카탈로그를 만든다. 담는 것은 둘이다 - 정적 분석이 확정한 <b>의존
+        /// 대상</b>과, 이 Job이 대체하는 <b>원본 프로시저 자신</b>.
+        ///
+        /// [원본 자신을 왜 담는가 - 2026-08-29 ① 전수 분류]
+        /// 의존 대상만 담으면 원본 SP가 카탈로그 밖에 남아, 단계가 "S04가 대체하는
+        /// `dbo.UP_UTIL_SETTLE_INS`의 후속이다"라고 적을 때 그 이름이 유령으로
+        /// 고발됐다. 실측: 계획서 20편·359단계에서 미지 테이블 발화 219건 중
+        /// <b>29건(12개 이름)이 전부 이것</b>이었고, 원본 SP 목록을 나열하는
+        /// 오케스트레이터 단계를 둔 POQSettleProc2·POQSettleProc6 두 편에 몰려 있었다.
+        /// 이 재료를 더해 219 → 190이 됐고 다른 검사 카운트는 하나도 변하지 않았다.
+        ///
+        /// <see cref="MechanicalValidator"/> 쪽의 `step.LegacyProcedures` 화이트리스트로는
+        /// 닫히지 않는다 - 그 칸은 목차가 채우는데 실측상 비어 있다(Proc6은 33단계
+        /// 전부 빈 칸, Proc2는 18단계에 3개뿐). 목차의 선언이 아니라 정적 분석의
+        /// 로스터를 근거로 삼는 이유가 그것이다.
+        ///
+        /// 비면 빈 목록을 낸다 - 호출부가 그때 검사를 건너뛴다(소프트 스킵). 카탈로그가
+        /// 없다는 사실을 "모든 테이블이 유령이다"라는 판정으로 바꾸지 않기 위해서다.
+        /// </summary>
+        public static IReadOnlyList<string> CollectSchemaCatalog(
+            IReadOnlyList<SpDefinition>? definitions)
+        {
+            var defs = definitions ?? Array.Empty<SpDefinition>();
+
+            return defs
+                .SelectMany(sp => sp.Dependencies)
+                .Select(dep => string.IsNullOrEmpty(dep.Database)
+                    ? $"{dep.Schema}.{dep.Name}"
+                    : $"{dep.Database}.{dep.Schema}.{dep.Name}")
+                .Concat(defs
+                    .Select(sp => $"{sp.Schema}.{sp.Name}")
+                    .Where(name => !string.IsNullOrWhiteSpace(name) && name.Trim('.').Length > 0))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        /// <summary>
         /// 프로시저 맨이름과 한정명 양쪽으로 찾을 수 있게 담는다.
         ///
         /// [맨이름이 모호해지면 빼는 이유]

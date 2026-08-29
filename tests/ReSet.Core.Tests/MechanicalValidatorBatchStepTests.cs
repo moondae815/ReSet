@@ -165,6 +165,87 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void ValidateBatchStep_ShouldNotFlagAnotherStepsLegacyProcedure()
+        {
+            // 목차가 이 Job의 원본이라고 선언한 것은 **어느 단계 몫이든** 실재하는
+            // 객체다. 화이트리스트가 `step.LegacyProcedures`, 즉 자기 단계 것만 보면
+            // 다른 단계가 대체하는 원본을 언급하는 단계에서 그 이름이 유령이 된다.
+            //
+            // ⚠️ 이 확대가 코퍼스에서 고친 오탐은 0건이다(측정함) - 실측 29건의
+            // 원인은 목차가 아니라 카탈로그였다(원본 SP 자신이 knownTableNames에
+            // 없었다). 남기는 이유는 두 재료의 출처가 달라서다: 목차가 선언했는데
+            // 정적 분석 대상이 아닌 원본은 카탈로그로 닫히지 않는다.
+            var owner = new BatchStepPlan(
+                Code: "S02", Name: "정산 등록",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var orchestrator = Step("dbo.TSettleMst");
+
+            var markdown = Section("SELECT 1 FROM dbo.TSettleMst;")
+                + "\n\nS02가 대체하는 `dbo.UP_UTIL_SETTLE_INS`의 순서를 보존한다.\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, orchestrator, Catalog, NoConditions,
+                allSteps: new[] { owner, orchestrator });
+
+            Assert.DoesNotContain(
+                result.Errors,
+                e => e.Contains("UP_UTIL_SETTLE_INS", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ShouldStillFlagAProcedureNoStepDeclares()
+        {
+            // 넓힌 화이트리스트가 판정을 약하게 만들지 않는다는 가드. 목차가 어느
+            // 단계에서도 선언하지 않은 이름은 여전히 유령이다 - 실측 E-1 30건
+            // (`dbo.usp_POQSettelProc8_S11` 등 계획서가 스스로 지어낸 프로시저)이
+            // 계속 잡혀야 한다.
+            var owner = new BatchStepPlan(
+                Code: "S02", Name: "정산 등록",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var orchestrator = Step("dbo.TSettleMst");
+            var markdown = Section("EXEC dbo.usp_POQSettleProc8_S11 @Ymd;");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, orchestrator, Catalog, NoConditions,
+                allSteps: new[] { owner, orchestrator });
+
+            Assert.Contains(
+                result.Errors,
+                e => e.Contains("usp_POQSettleProc8_S11", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutTheStepRoster_StillTrustsItsOwnLegacyProcedure()
+        {
+            // allSteps는 선택 인자다. 넘기지 않는 호출부(기존 테스트 다수)에서 종전
+            // 동작이 그대로여야 한다 - 자기 단계가 선언한 원본은 여전히 실재로 친다.
+            var owner = new BatchStepPlan(
+                Code: "S02", Name: "정산 등록",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_INS" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var markdown = Section("SELECT 1 FROM dbo.TSettleMst;")
+                + "\n\n`dbo.UP_UTIL_SETTLE_INS`를 이관한다.\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, owner, Catalog, NoConditions);
+
+            Assert.DoesNotContain(
+                result.Errors,
+                e => e.Contains("UP_UTIL_SETTLE_INS", StringComparison.Ordinal));
+        }
+
+        [Fact]
         public void ValidateBatchStep_ShouldStillFlagExactlyOneUnknownDboTable()
         {
             // 회귀 가드: dbo가 카탈로그에서 알려진 한정자라도, 객체명 자체가

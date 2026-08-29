@@ -179,4 +179,71 @@ public sealed class StepInterfaceFactsTests
 
         Assert.Empty(built);
     }
+
+    // ── 스키마 카탈로그 조립 ────────────────────────────────────────────────
+    //
+    // 미지 테이블 검사가 이 목록 하나로 "실재하는가"를 판정한다. 실측
+    // (2026-08-29 ① 전수 분류): 계획서 20편·359단계의 발화 219건 중 29건이
+    // 「원본 SP 자신이 카탈로그에 없다」 하나였고, 이 재료를 더해 190이 됐다.
+
+    [Fact]
+    public void CollectSchemaCatalog_IncludesTheAnalyzedProcedureItself()
+    {
+        var catalog = StepInterfaceFacts.CollectSchemaCatalog(new[]
+        {
+            new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_UTIL_SETTLE_INS",
+                Dependencies = { new DependencyInfo { Schema = "dbo", Name = "TSettleMst" } },
+            },
+        });
+
+        Assert.Contains("dbo.UP_UTIL_SETTLE_INS", catalog);
+        Assert.Contains("dbo.TSettleMst", catalog);
+    }
+
+    [Fact]
+    public void CollectSchemaCatalog_KeepsTheDatabaseQualifierOnDependencies()
+    {
+        var catalog = StepInterfaceFacts.CollectSchemaCatalog(new[]
+        {
+            new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_UTIL_SETTLE_INS",
+                Dependencies = { new DependencyInfo { Database = "PaymentDB", Schema = "dbo", Name = "TTxMst" } },
+            },
+        });
+
+        Assert.Contains("PaymentDB.dbo.TTxMst", catalog);
+    }
+
+    [Fact]
+    public void CollectSchemaCatalog_DoesNotRepeatANameThatIsAlsoADependency()
+    {
+        // 한 SP가 다른 SP를 부르면 그 이름이 의존 대상이자 로스터 항목이 된다.
+        var catalog = StepInterfaceFacts.CollectSchemaCatalog(new[]
+        {
+            new SpDefinition
+            {
+                Schema = "dbo",
+                Name = "UP_Util_Settle_Summary",
+                Dependencies = { new DependencyInfo { Schema = "dbo", Name = "UP_UTIL_SETTLE_SUMMARY_ETC" } },
+            },
+            new SpDefinition { Schema = "dbo", Name = "UP_UTIL_SETTLE_SUMMARY_ETC" },
+        });
+
+        Assert.Single(catalog, name =>
+            string.Equals(name, "dbo.UP_UTIL_SETTLE_SUMMARY_ETC", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void CollectSchemaCatalog_WithNoDefinitions_StaysEmptySoTheCheckSoftSkips()
+    {
+        // 비어 있으면 CheckUnknownTableReferences가 검사 자체를 건너뛴다. 카탈로그가
+        // 없다는 사실을 "모든 테이블이 유령이다"로 바꾸지 않기 위한 계약이다.
+        Assert.Empty(StepInterfaceFacts.CollectSchemaCatalog(null));
+        Assert.Empty(StepInterfaceFacts.CollectSchemaCatalog(Array.Empty<SpDefinition>()));
+    }
 }
