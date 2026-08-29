@@ -590,5 +590,48 @@ Critic도 *"S05 loop is a hybrid. It could be considered a defect"* 라고 망�
 
 **Few-Shot이 원인 후보 1순위라는 §8-3의 지목은 아직 유효하지만, 무게가 줄었다** —
 문서 전체가 T-SQL이던 1차와 달리 이제 한 단계에 갇혀 있고, `csharp` 펜스가 12로 늘었다.
-Few-Shot을 건드리기 전에 `S05`가 왜 예외인지부터 봐야 한다(청크 루프 예시가 T-SQL인 것과
-관련이 있을 수 있다).
+
+> ✅ **원인을 짚고 닫았다 (2026-08-29).**
+>
+> **원인은 「Few-Shot이 T-SQL이다」보다 한 단계 안쪽이다.** 계획서 프롬프트의 워크드
+> 예시는 **`sql` 넷뿐이고 대상 언어 예시가 0개**였다. 산문 규칙만 앱 코드를 요구하고
+> 따라 쓸 본보기는 전부 T-SQL이었다 — 그래서 **즉흥할 여지가 있는 단계는 규칙을 따르고,
+> 템플릿과 정확히 겹치는 단계는 템플릿을 따랐다.**
+>
+> `S05`가 후자의 유일한 사례다. 규칙 2가 「chunk paging pseudocode」를 필수 산출물로
+> 이름 붙이는데, 그 이름에 대응하는 예시 둘(#2 Chunking · #4 INSERT-only Compensation)이
+> `S05`의 상황(INSERT 전용 · 섀도 없음 · 청크)과 정확히 겹친다.
+>
+> **반례가 진단을 확정한다.** `S03`도 `Chunkable: true`인데 C#으로 썼다. 차이는 규모다 —
+> `S03`은 대상 테이블 5·오류 코드 11이라 **바깥 구조(함수)가 필요했고** 그걸 만드느라
+> 루프가 함수 안으로 흡수됐다. `S05`는 테이블 1·오류 코드 2로 **감쌀 것이 없어** 템플릿에
+> 그대로 내려앉았다. 곁증거로 `S13`은 앱 의사코드를 쓰면서 **트랜잭션 동사만** T-SQL로
+> 남겼다 — 예시 넷이 보여주는 바로 그 자리에서만 흔들린다.
+>
+> **처방: 예시를 두 층으로 갈랐다.** 바깥은 언어 중립 의사코드(```pseudocode 3),
+> 안쪽은 앱이 보내는 문장(```sql 5). `BEGIN TRAN`·`COMMIT TRAN`·`BEGIN CATCH`·`RETURN`이
+> 예시에서 **전부 0**이 됐다. 바깥 층을 대상 언어로 쓸 수 없는 것은 제약이자 이점이다 —
+> `ConsolidatedPlanRules`가 `const`라 `targetLanguage`를 못 받고, 마침 규칙 3-1도
+> 특정 API를 정하지 말라고 한다.
+>
+> **함께 고친 모순**: 예시 #3이 `BEGIN CATCH` / `RETURN @v_currentStepId`로 **규칙 3-1이
+> 금지한 바로 그 모양을 시범 보이고 있었다.** 앱 실패 경로로 다시 썼다.
+>
+> **새 의무 한 줄**: *Keep every SQL statement in its own ```sql block.* 리더가 ```sql
+> 펜스만 읽는 알려진 결함이 있어, 문장이 스크립트 안에 섞이면 L1 검사가 그것을 못 본다.
+> 두 층 구조가 그 노출을 줄인다.
+>
+> ⚠️ **좁힌 것 하나 — 기계 계약에 걸렸다.** 섀도 **이름 조립**은 앱 층으로 못 옮긴다.
+> `BatchInfraObjectCollector`가 부트스트랩이 만들 섀도 목록을 뽑는데 그 정규식이
+> `N'batch_shadow.X_' + <식> + N'_S13'`라는 **T-SQL 조립 모양만** 읽는다. 앱 어법으로
+> 옮기면 목록이 비어 **생성되지 않는 섀도**를 참조하는 계획서가 나온다 — 테스트가 아니라
+> 실제 파손이다. 그래서 조립과 create/capture/restore 문장은 동적 SQL 그대로 두고,
+> **루프·트랜잭션 경계·실패 경로 제어 흐름만** 옮겼다. `sp_executesql`도 그대로 남는다.
+>
+> 가드: `ConsolidatedPlanRules_FewShotShowsChunkLoopAsApplicationCode`(신설) ·
+> `_FewShotFailurePathRecordsTheTrackedCode`(개명·재작성) ·
+> `..._ShadowRestoreDeletesBeforeInsert`(자르는 자리 이동, 검사 순서 유지) ·
+> `FewShot_ShouldNotDemonstrateAShadowForASingleTransactionStep`(철자 갱신).
+>
+> **확인**: 다음 통제군에서 `S05`가 앱 코드로 나오는지 본다. 사용자 결정으로 terra 판보다
+> 먼저 고쳤으므로, 그 판은 이 가설의 대조군이 아니라 **처방의 시험대**가 된다.

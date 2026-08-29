@@ -1709,19 +1709,47 @@ END"
             Assert.Contains("unconditionally", rules);
         }
 
-        // Few-Shot의 CATCH가 THROW로 끝나 규칙 6-1(상태 변수를 반환하라)과
-        // 규칙 13(출력 파라미터를 누락 없이 매핑하라)을 무력화했다. 모델은
-        // 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        // Few-Shot의 실패 경로가 추적한 코드를 잃으면 규칙 6-1(실패 지점을 이름
+        // 붙여 기록하라)과 규칙 13(출력 파라미터를 누락 없이 매핑하라)이 무력해진다.
+        // 모델은 산문 규칙보다 코드 예시를 따른다 - 실측 5건이 그렇게 나왔다.
+        //
+        // [2026-08-29] 옛 이름은 ..._FewShotCatchReturnsInsteadOfRethrowing이었고
+        // `BEGIN CATCH` 블록에서 `THROW;` 부재와 `RETURN` 존재를 봤다. 그 철자는
+        // 저장 프로시저 본문의 것이라 규칙 3-1과 모순되어 앱 실패 경로로 다시 썼다.
+        // **계약은 같다 - 코드를 기록한 뒤 중단하지, 그냥 던져서 잃지 않는다.**
         [Fact]
-        public async Task ConsolidatedPlanRules_FewShotCatchReturnsInsteadOfRethrowing()
+        public async Task ConsolidatedPlanRules_FewShotFailurePathRecordsTheTrackedCode()
         {
             var rules = await StepSystemPromptAsync();
-            var open = rules.IndexOf("BEGIN CATCH", StringComparison.Ordinal);
-            var close = rules.IndexOf("END CATCH", open, StringComparison.Ordinal);
-            var catchBlock = rules[open..close];
+            var open = rules.IndexOf("ON FAILURE", StringComparison.Ordinal);
+            Assert.True(open >= 0, "Few-Shot의 실패 경로 블록을 찾지 못했다.");
+            var close = rules.IndexOf("```", open, StringComparison.Ordinal);
+            var failBlock = rules[open..close];
 
-            Assert.DoesNotContain("THROW;", catchBlock);
-            Assert.Contains("RETURN", catchBlock);
+            Assert.Contains("LegacyReturnCode", failBlock);
+            Assert.DoesNotContain("RETURN ", failBlock);
+            Assert.DoesNotContain("THROW", failBlock);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotShowsChunkLoopAsApplicationCode()
+        {
+            // 2차 통제군의 S05가 유일하게 T-SQL 스크립트로 남았다. 원인은 「chunk
+            // paging pseudocode」의 워크드 예시가 프롬프트에 넷 있는데 전부 T-SQL이고
+            // 대상 언어 예시가 0개였던 것이다(설계서 §10-4 ②). 루프와 트랜잭션
+            // 경계는 앱 층에, 보내는 문장은 sql 층에 둔다.
+            var prompt = await StepSystemPromptAsync();
+
+            Assert.Contains("FOR EACH chunk", prompt);
+            Assert.Contains("beginTransaction()", prompt);
+
+            // 앱 층이 T-SQL 철자로 경계를 열면 두 층으로 가른 뜻이 없어진다.
+            Assert.DoesNotContain("BEGIN TRAN", prompt);
+            Assert.DoesNotContain("COMMIT TRAN", prompt);
+
+            // 문장은 자기 sql 블록에 남아야 한다 - 리더가 ```sql 펜스만 읽으므로
+            // 앱 층 안에 DML을 섞으면 L1 검사가 그 문장을 보지 못한다.
+            Assert.Contains("Keep every SQL statement in its own ```sql block", prompt);
         }
 
         [Fact]

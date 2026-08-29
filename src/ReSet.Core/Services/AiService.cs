@@ -2192,123 +2192,153 @@ Based on the reference context above, reverse engineer the user defined function
 15. Do not append any conversational filler, polite greetings, or unrelated explanations at the end. Terminate immediately.
 
 [Few-Shot Examples for Modernization Patterns]
+These examples have TWO layers. The OUTER layer is the batch application's code - loops,
+transaction boundaries, error observation - written as language-neutral pseudocode because
+rule 3-1 forbids pinning a specific API or framework type. The INNER layer is the SQL the
+application sends, unchanged T-SQL. Keep every SQL statement in its own ```sql block and
+have the application layer reference it by name: a statement buried inside application
+pseudocode is invisible to the tools that read this document, and a step whose DML cannot
+be read cannot be checked against its specification.
+
 * Shadow Table Pattern (ONLY for a rebuild that commits in chunks - see rule 4):
+```pseudocode
+// Why this step may use a shadow at all: it rebuilds one business date and COMMITS the
+// rebuild in chunks, so rolling back puts back only the failing chunk and the rows the
+// earlier chunks destroyed are already gone. A step that finishes in ONE transaction must
+// NOT use a shadow and must NOT compensate afterwards - the rollback already restored it,
+// and deleting those rows again destroys data that was never lost.
+
+// The run identifier is NOT a parameter of this step. A step's interface is exactly the
+// original procedure's parameter list (rule 5), so read the identifier from the control
+// table instead of adding an input. Spell the job name literally: it is the Unified Batch
+// Job Name given at the top of this prompt, and it is a constant of this document.
+runId = queryScalar(SQL_CURRENT_RUN_ID, { p_jobName: <this document's job name>, p_ymd: batchYmd })
+
+// (rule 4a) Create and fill the shadow BEFORE opening the transaction that can roll back.
+// Created inside that transaction it would disappear with the rollback and the restore
+// would then fail on a missing object.
+// The shadow NAME is assembled inside the statement, not here - the bootstrap round scans
+// the SQL for that assembled shape to learn which shadow tables to create (rule 4-1), and
+// a name assembled anywhere else is never seen and never created.
+execute(SQL_CREATE_AND_CAPTURE_SHADOW, { p_runId: runId, p_batchDate: batchYmd })
+shadowCaptured = true
+
+// (rule 4b) Destroy exactly the range this step owns, in its own transaction.
+beginTransaction()
+execute(SQL_DELETE_RANGE, { p_batchDate: batchYmd })
+commit()
+
+// Rebuild in chunks. Each chunk opens and closes its OWN transaction (rule 8-1) so a
+// mid-run failure leaves the earlier chunks durably committed. The chunk key must be a
+// column that actually exists in the target schema (rule 12).
+FOR EACH chunk IN chunkRanges(SQL_CHUNK_BOUNDS, { p_batchDate: batchYmd }, size: 10000):
+    beginTransaction()
+    execute(SQL_INSERT_CHUNK, { p_batchDate: batchYmd, p_from: chunk.from, p_to: chunk.to })
+    commit()
+
+// (rule 4e) State the shadow's lifetime where you describe the step, e.g. the bootstrap
+// purge job drops batch_shadow tables older than 24 hours.
+```
+The statements that loop sends. The shadow holds the rows this step is ABOUT TO DESTROY -
+it is a backup, not a staging area for the new rows. Copy them whole (`SELECT *`), never a
+subset of columns: a shadow row missing the range key cannot be found by that key when the
+restore looks for it.
 ```sql
--- Why this step may use a shadow at all: it rebuilds one business date and COMMITS the
--- rebuild in chunks, so a ROLLBACK puts back only the failing chunk and the rows the
--- earlier chunks destroyed are already gone. A step that finishes in ONE transaction must
--- NOT use a shadow and must NOT compensate in CATCH - ROLLBACK TRAN already restored it,
--- and deleting those rows again in an auto-committed CATCH destroys data that was never lost.
+-- SQL_CURRENT_RUN_ID
+SELECT RunId FROM batch.BatchRun
+ WHERE JobName = @p_jobName AND BatchYmd = @p_ymd AND RunStatus = N'Running';
 
-DECLARE @v_shadowCaptured BIT = 0;  -- CATCH checks this: 0 means there is nothing to restore
-
--- The run identifier is NOT a parameter of this step. A step's interface is exactly the
--- original procedure's parameter list (rule 5), so read the identifier from the control
--- table instead of adding an input.
--- Spell the job name literally: it is the Unified Batch Job Name given at the top of this
--- prompt, and it is a constant of this document. (The N'...' below is not a name - replace
--- it. Business names are spelled literally; only the shadow name is assembled.)
-DECLARE @v_jobName NVARCHAR(128) = N'...';
-DECLARE @v_runId BIGINT =
-    (SELECT RunId FROM batch.BatchRun
-      WHERE JobName = @v_jobName AND BatchYmd = @pi_strYMD AND RunStatus = N'Running');
-
+-- SQL_CREATE_AND_CAPTURE_SHADOW
 -- Spell the shadow name in exactly this shape: a literal prefix ending in '_', the run id
 -- expression, then a literal N'_<StepCode>'. The bootstrap round scans for this shape to
 -- learn which shadow tables to create, and a name built any other way is never created.
 -- NEVER write a placeholder token literally: a name spelled with _RunId_ in it creates a
 -- table physically named that, which every run then shares.
 DECLARE @v_shadow NVARCHAR(300) =
-    N'batch_shadow.TargetTable_' + CAST(@v_runId AS NVARCHAR(20)) + N'_S13';
+    N'batch_shadow.TargetTable_' + CAST(@p_runId AS NVARCHAR(20)) + N'_S13';
 DECLARE @v_sql NVARCHAR(MAX);
-
--- (rule 4a) Create the shadow BEFORE the first BEGIN TRAN. Issued inside a transaction it
--- would disappear with the rollback and the restore would then fail on a missing object.
+-- (rule 4c) A dynamic batch is a separate scope, so VALUES are passed as parameters and
+-- never referenced inside the dynamic text. Only the table NAME is interpolated - a table
+-- name cannot be bound as a parameter.
 SET @v_sql = N'SELECT * INTO ' + @v_shadow + N' FROM dbo.TargetTable WHERE 1 = 0;';
 EXEC sp_executesql @v_sql;
-
--- The shadow holds the rows this step is ABOUT TO DESTROY - it is a backup, not a staging
--- area for the new rows. Copy them whole (`SELECT *`), never a subset of columns: a shadow
--- row missing the range key cannot be found by that key when the restore looks for it.
--- (rule 4c) A dynamic batch is a separate scope, so values are passed as sp_executesql
--- parameters and never referenced inside the dynamic text.
 SET @v_sql = N'INSERT INTO ' + @v_shadow + N' SELECT * FROM dbo.TargetTable WHERE BatchDate = @p_batchDate;';
-EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @pi_strYMD;
-SET @v_shadowCaptured = 1;
+EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @p_batchDate;
 
--- (rule 4b) Destroy exactly the range this step owns - never `DELETE FROM Target` without
--- a WHERE, which discards rows belonging to other business dates.
-BEGIN TRAN;
-  DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
-COMMIT TRAN;
+-- SQL_DELETE_RANGE - never `DELETE FROM Target` without a WHERE, which discards rows
+-- belonging to other business dates (rule 4b)
+DELETE FROM dbo.TargetTable WHERE BatchDate = @p_batchDate;
 
--- Rebuild in chunks, each chunk in its own transaction (rule 8-1). The chunk key must be a
--- column that actually exists in the target schema (rule 12).
-DECLARE @v_chunkSize INT = 10000, @v_cursor INT, @v_maxKey INT;
-SELECT @v_cursor = MIN(Col1), @v_maxKey = MAX(Col1)
-FROM dbo.SourceTable WHERE BatchDate = @pi_strYMD;
+-- SQL_CHUNK_BOUNDS
+SELECT MIN(Col1), MAX(Col1) FROM dbo.SourceTable WHERE BatchDate = @p_batchDate;
 
-WHILE @v_cursor <= @v_maxKey
-BEGIN
-    BEGIN TRAN;
-    INSERT INTO dbo.TargetTable (BatchDate, Col1, Col2)
-    SELECT @pi_strYMD, Col1, SUM(Col2)
-    FROM dbo.SourceTable
-    WHERE BatchDate = @pi_strYMD
-      AND Col1 >= @v_cursor AND Col1 < @v_cursor + @v_chunkSize
-    GROUP BY Col1;
-    COMMIT TRAN;
-    SET @v_cursor = @v_cursor + @v_chunkSize;
-END
-
--- (rule 4e) State the shadow's lifetime where you describe the step, e.g. the bootstrap
--- purge job drops batch_shadow tables older than 24 hours.
+-- SQL_INSERT_CHUNK
+INSERT INTO dbo.TargetTable (BatchDate, Col1, Col2)
+SELECT @p_batchDate, Col1, SUM(Col2) FROM dbo.SourceTable
+ WHERE BatchDate = @p_batchDate
+   AND Col1 >= @p_from AND Col1 < @p_to
+ GROUP BY Col1;
 ```
 
 * Chunking Pattern (Combining chunking keys with existing business filters):
+```pseudocode
+FOR EACH chunk IN chunkRanges(SQL_ID_BOUNDS, {}, size: 10000):
+    beginTransaction()
+    execute(SQL_COPY_CHUNK, { p_from: chunk.from, p_to: chunk.to })
+    commit()
+```
 ```sql
-DECLARE @MinID INT, @MaxID INT, @CurrentID INT, @ChunkSize INT = 10000;
-SELECT @MinID = MIN(ID), @MaxID = MAX(ID) FROM SourceTable WHERE Status = 'P'; -- Existing filter
-SET @CurrentID = @MinID;
-WHILE @CurrentID <= @MaxID
-BEGIN
-    BEGIN TRAN;
-    INSERT INTO TargetTable (ID, Col1)
-    SELECT ID, Col1 FROM SourceTable
-    WHERE Status = 'P' -- Preserve original filter!
-      AND ID >= @CurrentID AND ID < @CurrentID + @ChunkSize; -- Chunking condition
-    COMMIT TRAN;
-    SET @CurrentID = @CurrentID + @ChunkSize;
-END
+-- SQL_ID_BOUNDS - the original business filter belongs here too, or the bounds cover rows
+-- the copy will never touch
+SELECT MIN(ID), MAX(ID) FROM SourceTable WHERE Status = 'P';
+
+-- SQL_COPY_CHUNK
+INSERT INTO TargetTable (ID, Col1)
+SELECT ID, Col1 FROM SourceTable
+ WHERE Status = 'P'                          -- Preserve original filter!
+   AND ID >= @p_from AND ID < @p_to;         -- Chunking condition
 ```
 
-* CATCH block for the chunk-committed rebuild above (NOT for a single-transaction step):
+* Failure path for the chunk-committed rebuild above (NOT for a single-transaction step):
+```pseudocode
+ON FAILURE observed by the application:
+    // Roll back the transaction that is still open. That rollback undid only the chunk that
+    // failed. The chunks committed before it are durable, and the DELETE that emptied the
+    // range is durable too - which is exactly why this step captured a shadow. A step that
+    // runs in ONE transaction reaches this point fully restored and MUST NOT run any of the
+    // following (rule 4).
+    rollbackIfOpen()
+
+    IF shadowCaptured:
+        beginTransaction()
+        // Restore is DELETE first, then INSERT. Re-inserting without the preceding delete
+        // duplicates every row the earlier chunks already committed.
+        execute(SQL_RESTORE_DELETE, { p_batchDate: batchYmd })
+        // Same assembled name as the capture above - the shadow has no literal name to
+        // spell. It holds only this step's range, so it is restored whole.
+        execute(SQL_RESTORE_INSERT)
+        commit()
+
+    // Record the tracked failure code BEFORE the failure leaves this step (rules 6-1, 13).
+    // Letting the exception propagate untouched loses the code the step worked to track,
+    // and the journal then shows one generic failure for every statement in the step.
+    writeStepJournal(runId, StepCode, status: ""Failed"", LegacyReturnCode: currentStepErrorCode)
+    stop the pipeline
+```
 ```sql
-BEGIN CATCH
-    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
-    -- That rollback undid only the chunk that failed. The chunks committed before it are
-    -- durable, and the DELETE that emptied the range is durable too - which is exactly why
-    -- this step captured a shadow. A step that runs in ONE transaction reaches this point
-    -- fully restored and MUST NOT run any of the following (rule 4).
-    IF @v_shadowCaptured = 1
-    BEGIN
-        DELETE FROM dbo.TargetTable WHERE BatchDate = @pi_strYMD;
-        -- Same assembled name as the capture above - the shadow has no literal name to
-        -- spell. It holds only this step's range, so it is restored whole.
-        SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow + N';';
-        EXEC sp_executesql @v_sql;
-    END
-    -- Return the tracked code. Do NOT `THROW` here: it unwinds past the caller's
-    -- OUTPUT parameter assignment and the original return code is lost (rules 6-1 and 13).
-    SET @po_intRetVal = @v_currentStepId;
-    RETURN @v_currentStepId;
-END CATCH
+-- SQL_RESTORE_DELETE
+DELETE FROM dbo.TargetTable WHERE BatchDate = @p_batchDate;
+
+-- SQL_RESTORE_INSERT - same assembled name as the capture above
+SET @v_sql = N'INSERT INTO dbo.TargetTable SELECT * FROM ' + @v_shadow + N';';
+EXEC sp_executesql @v_sql;
 ```
 
 * INSERT-only Compensation (No Shadow table needed for rollback):
 ```sql
--- If an INSERT-only chunked batch fails in the middle, rollback committed chunks using business keys:
-DELETE FROM TargetTable WHERE BatchDate = @BatchDate AND ProcessStatus = 'NEW';
+-- If an INSERT-only chunked batch fails in the middle, roll back committed chunks using
+-- business keys - no shadow, no restore:
+DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW';
 ```";
 
         private ReviewResult ParseReviewResult(string? responseContent, string contextName)

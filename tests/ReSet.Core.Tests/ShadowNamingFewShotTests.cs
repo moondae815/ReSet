@@ -76,7 +76,11 @@ namespace ReSet.Core.Tests
             var prompt = await CapturePlanPromptAsync();
 
             Assert.Contains("COMMITS the", prompt);
-            Assert.Contains("NOT use a shadow and must NOT compensate in CATCH", prompt);
+            // [2026-08-29] 옛 단언은 "compensate in CATCH"라는 T-SQL 철자를 고정했다.
+            // 규칙 3-1이 새 SQL의 TRY/CATCH를 금지하므로 예시에서 그 철자를 걷었다 -
+            // **계약은 같다**: 단일 트랜잭션 단계는 Shadow도 사후 보상도 쓰지 않는다.
+            Assert.Contains("NOT use a shadow and must NOT compensate afterwards", prompt);
+            Assert.DoesNotContain("compensate in CATCH", prompt);
         }
 
         [Fact]
