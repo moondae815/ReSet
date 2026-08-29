@@ -38,6 +38,19 @@ END";
             DdlText = Ddl
         };
 
+        // 함수 갈래(BuildFunctionSpecificationPrompts, `GenerateSpecificationAsync`가
+        // `ObjectType == Function`일 때 위임하는 곳)도 SP 전체 갈래와 같이
+        // localVariablePresentation: Table을 받는다 - 픽스 라운드 1, 리뷰 커버리지
+        // 공백 지적. DDL은 함수 몸체로도 유효한 형태를 그대로 재사용한다.
+        private static SpDefinition FunctionDef() => new()
+        {
+            ObjectKey = CodeObjectKey.Create("DB", "dbo", "F", CodeObjectType.Function),
+            ObjectType = CodeObjectType.Function,
+            Schema = "dbo",
+            Name = "F",
+            DdlText = Ddl
+        };
+
         private static IAiService Service()
         {
             var client = Substitute.For<IAiClient>();
@@ -67,6 +80,18 @@ END";
         }
 
         [Fact]
+        public async Task FunctionBranch_ShouldCarryTheTableWithItsHeadingAndRows()
+        {
+            var result = await Service().GenerateSpecificationAsync(FunctionDef(), "");
+            var prompt = Both(result);
+
+            Assert.Contains(LocalVariableDeclarationExtractor.TableHeading, prompt);
+            Assert.Contains("| 변수 명칭 | 데이터 타입 | 초기값 |", prompt);
+            Assert.Contains("@v_intCLTotal", prompt);
+            Assert.Contains("MONEY", prompt);
+        }
+
+        [Fact]
         public async Task OverviewAndParametersBranch_ShouldCarryTheTable()
         {
             // 이 갈래가 `## 파라미터 목록`을 쓴다 - 표의 거처다.
@@ -87,15 +112,26 @@ END";
             // 않는다는 뜻이다(BuildMachineFactBlockLines의 Omit 분기 - Table이 아니면
             // 아무것도 싣지 않는다).
             //
-            // [왜 "@v_intCLTotal"을 여기서 단언하지 않는가] `BuildSpecSectionPrompts`는
+            // [왜 "@v_intCLTotal" 원문 그대로는 여기서 단언하지 않는가] `BuildSpecSectionPrompts`는
             // 갈래와 무관하게 `<sp-source-ddl>`에 원문 DDL 전체를 항상 싣는다
             // (AiService.cs:3648-3652, 2026-07-16/17자 기존 코드로 Task 4 이전부터
             // 있었다). 그 블록이 모든 식별자(변수·파라미터·테이블명 포함)를 이미
             // 그대로 노출하므로 "@v_intCLTotal 문자열이 프롬프트 어디에도 없다"는
             // 이 렌더러의 Table/Omit 분기와 무관하게 항상 거짓이다 - 이 표 렌더러가
-            // 원문 DDL 노출 여부를 결정하지 않는다. 그래서 이 표의 몫인 헤딩만
-            // 잠그고, 원문 DDL의 부수 효과는 이 테스트의 관심사 밖으로 둔다.
+            // 원문 DDL 노출 여부를 결정하지 않는다.
+            //
+            // [대신 행 모양으로 다시 잡는다 - 픽스 라운드 1, Important]
+            // 원문 DDL은 `DECLARE @v_intCLTotal MONEY = 0`으로 렌더되어 파이프가
+            // 없다 - 그래서 이 마크다운 행 문자열(BuildLocalVariableTableLines가
+            // 실제로 내는 모양, EscapeTableCell을 거쳐도 이 값들은 그대로다)은
+            // <sp-source-ddl>의 원문 누출과 절대 충돌하지 않으면서, 렌더러가
+            // 회귀해 이 갈래에 진짜 표 행을 흘리면 그때는 걸린다. 위 헤딩
+            // 단언(TableHeading)만으로는 "헤딩 없이 행만 새는" 회귀를 놓친다 -
+            // 이 표가 헤딩과 행을 같은 호출에서 함께 내므로 실전에서는 일어나기
+            // 어렵지만, 단언 두 개가 서로 다른 실패 모드를 잡는 편이 한 개보다
+            // 강하다.
             Assert.DoesNotContain(LocalVariableDeclarationExtractor.TableHeading, prompt);
+            Assert.DoesNotContain("| @v_intCLTotal | MONEY | 0 |", prompt);
         }
     }
 }
