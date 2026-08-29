@@ -127,6 +127,19 @@ namespace ReSet.Core.Services
         public IReadOnlyList<SetAssignmentFact> SetAssignments { get; init; }
             = Array.Empty<SetAssignmentFact>();
 
+        /// <summary>
+        /// 원본 DDL의 DECLARE 지역 변수. 「지역 변수 (기계 확정 — 수정 금지)」 표의
+        /// 기대값이다.
+        ///
+        /// [왜 이 재료가 L1 기대값이 되어야 하는가 - known-defects (5-3-7)]
+        /// 이 표는 세 층(카탈로그·L1·프롬프트) 어디서도 요구되지 않아 존재 자체가
+        /// 모델 재량이었고, 모델 교체만으로 코퍼스 14 프로시저 전량에서 사라졌다.
+        /// 그 표를 재료로 쓰는 CheckSpecLocalVariablesDeclared(검사 D)가 18 → 0으로
+        /// 조용히 꺼졌고, 잃은 18건은 진짜 결함이었다.
+        /// </summary>
+        public IReadOnlyList<LocalVariableDeclarationFact> LocalVariableDeclarations { get; init; } =
+            Array.Empty<LocalVariableDeclarationFact>();
+
         /// <summary>DML 문장별 오류 코드. 갱신 번호와 코드만 담는다.</summary>
         public IReadOnlyList<ErrorCodeFact> ErrorCodes { get; init; }
             = Array.Empty<ErrorCodeFact>();
@@ -279,6 +292,7 @@ namespace ReSet.Core.Services
             // 갈리면 모델이 표를 그대로 베껴도 L1이 틀렸다고 하는 재현 불가능한 실패가 난다.
             var transactionBoundaries = TransactionBoundaryExtractor.Extract(spDef.DdlText);
             var setAssignments = SetAssignmentExtractor.Extract(spDef.DdlText);
+            var localVariableDeclarations = LocalVariableDeclarationExtractor.Extract(spDef.DdlText);
             var errorCodes = DmlScopeExtractor.ExtractErrorCodes(spDef.DdlText, ResolveDateParameter(analysis));
 
             // INSERT 매핑 표의 테이블명 표기 대조(CheckInsertMappingTableNames)의 기대값이다.
@@ -454,6 +468,14 @@ namespace ReSet.Core.Services
                 // 표 대조는 돌아야 한다 - 이 항을 빠뜨리면 그 경우 CheckParameterTableRows가
                 // 한 번도 돌지 않는다(authoring-contract §1).
                 && parameterNames.Count == 0
+                // localVariableDeclarations는 중복항이 아니다 - 본문에 DML이 하나도 없고
+                // WITH 절도 없는 객체(계산만 하는 스칼라 함수 등)가 DECLARE만 가질 수
+                // 있다. 이 항을 빠뜨리면 그 객체에서 From이 null을 돌려주고
+                // CheckLocalVariableDeclarationTable이 한 번도 돌지 않는다 - 위
+                // objectDeclaration 항이 실측으로 적은 것과 같은 실패 양식이고,
+                // 이 계획이 닫으려는 (5-3-7)이 정확히 "검사가 재료를 잃어 조용히 꺼지는"
+                // 그 모양이다(authoring-contract §1).
+                && localVariableDeclarations.Count == 0
                 // parameterColumnBindings는 DDL만으로 채워지므로 StaticAnalysis가 없는 객체에서도
                 // 올 수 있다 - 항을 잇지 않으면 그 경우 CheckParameterColumnClaims가 한 번도 돌지
                 // 않는다(authoring-contract §1). knownTableNames는 StaticAnalysis에서만 오므로
@@ -482,6 +504,7 @@ namespace ReSet.Core.Services
                 CaseBranches = caseBranches,
                 TransactionBoundaries = transactionBoundaries,
                 SetAssignments = setAssignments,
+                LocalVariableDeclarations = localVariableDeclarations,
                 ErrorCodes = errorCodes,
                 InsertTargetTables = insertTargetTables,
                 NullableColumnsByTable = nullableColumnsByTable,
