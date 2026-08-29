@@ -2614,7 +2614,7 @@
   > 전수로 찾는다」의 답 — 노출된 재료는 1개, 14 프로시저 전량이 소실이다.** 커밋 `8c7a2da`
   > 위에 재료 분모 계기(`SpecMaterials`·`SpecMaterialCensus`·`StepSweepReportWriter`)로
   > `dotnet run --project src/ReSet.Cli -- --sweep`을 두 차례 돌렸다 — 1차는 2026-08-29
-  > 10:15~10:20 KST(커밋 `5877722`), 2차는 리뷰가 명세서 쪽 라벨 결함(아래 참고)을 잡은 뒤
+  > 10:15~10:20 KST(격리 워크트리 커밋 `5877722` — `main`에서는 체리픽되어 `8eea795`다), 2차는 리뷰가 명세서 쪽 라벨 결함(아래 참고)을 잡은 뒤
   > `SpecMaterial.ReadsSpecMarkdown`을 더해 `FormatSpecRowCount`를 고친 상태로 같은 날
   > 10:35 KST경 재실행했다(`docs/audit-reports/sweeps/2026-08-29-step-sweep.md`, 스윕 CLI가
   > 스스로 지은 이름 — 계획서가 적은 `2026-08-28-step-sweep-material-census.md`는 틀린
