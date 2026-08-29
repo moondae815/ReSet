@@ -194,7 +194,19 @@ namespace ReSet.Core.Services
         //     main·origin/main·local/main·worktree-agent-ae7b39ba4f121cbb3 이 16,
         //     worktree-agent-af1fbecfcf4e8d9d5 가 15. 17이 비어 있음을 확인했다 -
         //     reset-l1-check 스킬의 번호 충돌 규칙.)
-        private const int CurrentCacheFormatVersion = 17;
+        // 18: 2026-08-29 - 기계 확정 「지역 변수」 표 신설(known-defects (5-3-7)).
+        //     MachineConfirmedTables.All에 표가 하나 늘어 Critic 면제 블록의 바이트가
+        //     바뀌고, Actor 프롬프트의 세 갈래(SP 전체·함수·OverviewAndParameters)에
+        //     새 표가 실린다. AGENTS.md 95행이 카탈로그 등록과 함께 올리라고 못박는다.
+        //     [이 회차는 재생성을 하지 않는다] 강제만 걸고 다음 재생성이 켜게 둔다 -
+        //     그래서 이 승격은 "다음에 생성을 돌리는 사람이 전건 재생성을 문다"는 뜻이다.
+        //     한 번도 안 돌아 본 검사가 오탐을 안고 켜지는 위험은 승격 전에 닫았다:
+        //     LocalVariableTableCorpusTests가 31 객체 전건에서 만족 가능성을 잰다
+        //     (ErrorCodeTableCorpusTests가 캐시 17 승격 때 한 것과 같은 자) - 이 표는
+        //     이 물결의 다른 작업(Task 7)이 함께 들여온다.
+        //     번호 충돌 확인: 전 브랜치에서 18이 비어 있음을 확인했다(main·origin/main·
+        //     local/main·이 물결의 워크트리 브랜치 전부 17 또는 그 이하).
+        private const int CurrentCacheFormatVersion = 18;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

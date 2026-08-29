@@ -578,10 +578,18 @@ namespace ReSet.Core.Tests
             //     (3) 계기를 변이로 검증했다 - 변이 셋 전부 죽음. 오탐을 안은 채 전건
             //     재생성을 걸면 그것이 곧바로 재시도 소진으로 번지므로, 그 확인이 이
             //     인상의 전제였다.
+            // 18: 기계 확정 「지역 변수」 표가 새로 생겼다(known-defects (5-3-7)).
+            //     MachineConfirmedTables.All에 표가 하나 늘어 Critic 면제 블록의 바이트가
+            //     바뀌고, Actor 프롬프트의 세 갈래(SP 전체·함수·OverviewAndParameters)에
+            //     새 표가 실린다. CacheManager.cs의 버전 18 주석 참고.
+            //     [이 회차는 재생성을 하지 않는다] 위 회차들과 달리 이 승격 자체는 전건
+            //     재생성을 실행하지 않는다 - 강제만 걸고 다음에 생성을 돌리는 사람이 그것을
+            //     문다. 오탐 위험은 승격 전에 닫았다 - LocalVariableTableCorpusTests가
+            //     31 객체 전건에서 만족 가능성을 쟀다(이 물결의 다른 작업이 함께 들여온다).
             //
             // 이 리터럴은 일부러 못 박혀 있다. 버전을 올리면 이 테스트가 깨지고, 깨진
             // 자리에서 "정말 전건 재분석을 의도했는가"를 한 번 더 묻게 된다.
-            Assert.Equal(17, (int)entry["FormatVersion"]!);
+            Assert.Equal(18, (int)entry["FormatVersion"]!);
         }
 
         [Fact]
