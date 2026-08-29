@@ -671,3 +671,20 @@ Critic도 *"S05 loop is a hybrid. It could be considered a defect"* 라고 망�
 > 이어야 변인이 하나다. 여기서 모델을 terra로 바꾸면 규칙 효과와 모델 효과가 섞여
 > §9-2가 겪은 오염이 그대로 재현된다. §10-2의 terra 요구는 소멸했으므로
 > (그 절의 ⛔ 상자) 그쪽과 겸하려 들 이유도 없다.
+>
+> ✅ **돌렸고, 먹었다 (2026-08-29 `POQSettleBatch4`).** 판독:
+> `docs/audit-reports/sweeps/2026-08-29-stage4-pair-batch4.md`
+>
+> | `S05` 국소 | `Batch3` | `Batch4` |
+> |---|---|---|
+> | 펜스 구성 | `sql` · `sql` · `sql` | **`pseudocode` · `sql`** |
+> | `BEGIN TRAN` / `COMMIT TRAN` | 3 / 3 | **0 / 0** |
+>
+> 문서 전체에서도 `BEGIN TRAN`/`COMMIT TRAN`/`ROLLBACK TRAN`이 4/4/1 → **0/0/0**이고,
+> `csharp` 펜스 12개가 **0이 되고 `pseudocode` 17개로 갈렸다** — 처방이 바깥 층을
+> 언어 중립으로 못박은 그대로다. `S05`의 실물은 `journal.insertRunning(...)` ·
+> `beginTransaction()` · `try:` 바깥 층과 `execute(SQL_S05_DELETE, {...})` 안쪽 층이다.
+>
+> 판은 완주했고(17단계 전부 실체, 생성 실패 0) L2 소진으로 5차 시도(84/100)가 채택됐다.
+> **`Batch2`와 달리 본문이 죽어서 채택된 것이 아니다** — 채택본은 L1을 오류 0으로
+> 통과했다. 막은 것은 Critic의 예외처리 축 7/10 하나다.
