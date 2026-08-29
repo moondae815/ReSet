@@ -266,6 +266,17 @@ namespace ReSet.Core.Services
         /// 회차가 아직 안 세는 것인지는 이 행이 안 들고 있다 - 보고서 라이터가
         /// <see cref="SpecMaterials.All"/>에서 그 재료의
         /// <see cref="SpecMaterial.DdlCounterpart"/>를 조회해 라벨을 갈라야 한다.
+        ///
+        /// [빈 목록은 「재료가 없다」가 아니라 「조사가 실패했다」는 뜻이다]
+        /// 정상 경로에서는 <see cref="SpecMaterialCensus.Count"/>가 언제나
+        /// <see cref="SpecMaterials.All"/>과 같은 수만큼의 행을 낸다
+        /// (SpecMaterialCensusTests.Count_EveryMaterialInCatalog_AppearsAsARow가
+        /// 잠근다). 그래서 이 목록이 비어 있으면 그 자체가 신호다 - StepSweepService.Sweep이
+        /// SpecMaterialCensus.Count 호출을 try/catch로 감싸 한 계기의 실패가 이미
+        /// 완료된 다른 지표까지 함께 죽이지 않게 하는데, catch에 걸리면 이 목록이
+        /// 빈 채로 떨어진다. 빈 표를 「쟀는데 아무 재료도 없다」로 읽으면 이 회차가
+        /// 통째로 없애려는 바로 그 침묵을 다시 만드는 것이다 - 보고서 라이터는
+        /// 이 목록이 비어 있을 때 명시적으로 "조사 실패"를 인쇄해야 한다.
         /// </summary>
         public IReadOnlyList<SpecMaterialCensusRow> MaterialCensus { get; init; }
             = new List<SpecMaterialCensusRow>();

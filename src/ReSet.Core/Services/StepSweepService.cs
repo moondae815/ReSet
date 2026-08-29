@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Serilog;
 
 namespace ReSet.Core.Services
 {
@@ -362,6 +363,31 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // [계기 하나가 보고서 전체를 죽이면 안 된다] SpecMaterialCensus.Count는
+            // 위 per-job 루프의 jobsThatThrew 가드 밖에서, input.Jobs 전체를 한
+            // 번에 훑는다. Count 자신의 job 순회는 job.Specs/job.DdlByProcedure가
+            // null이면 가드 없이 그 자리에서 예외를 던진다(SpecMaterialCensus.cs -
+            // 그 파일은 이 태스크의 쓰기 집합 밖이라 고치지 않는다). 이 try/catch가
+            // 없으면 그 예외가 Sweep() 밖으로 그대로 새어, 이미 완료된 per-job
+            // 루프가 낸 지표(위의 measuredPairs 등 전부)까지 함께 사라진다 - 새
+            // 계기 하나 때문에 기존 보고서 전체가 죽는 것은 이 파일이 이미 지키는
+            // 소프트 페일 관용구(:361의 jobsThatThrew)와 AGENTS.md 범주 2를 어긴다.
+            var materialCensus = new List<SpecMaterialCensusRow>();
+            try
+            {
+                materialCensus = SpecMaterialCensus.Count(input.Jobs).ToList();
+            }
+            catch (Exception ex)
+            {
+                // 조용히 삼키지 않는다 - 로그 없는 catch는 이 지표 전체가 맞서고
+                // 있는 그 침묵이다. materialCensus는 빈 목록으로 남는다 - 그
+                // 빈 목록이 "재료가 없다"가 아니라 "조사가 실패했다"는 뜻인 이유는
+                // MaterialCensus 속성 문서(StepSweepModels.cs) 참고.
+                Log.Warning(
+                    ex,
+                    "[StepSweepService] SpecMaterialCensus.Count 실패 - MaterialCensus를 빈 목록으로 진행합니다.");
+            }
+
             return new SweepReport(
                 findings,
                 new SweepIndicators(multiProcedureSteps, missingSpecCodes, unknownCodes)
@@ -378,7 +404,7 @@ namespace ReSet.Core.Services
                     StatementsWithSubordinatePredicates = statementsWithSubordinatePredicates,
                     SubordinatePredicateColumnTotal = subordinatePredicateColumnTotal,
                     StagingSourceTotal = stagingSourceTotal,
-                    MaterialCensus = SpecMaterialCensus.Count(input.Jobs),
+                    MaterialCensus = materialCensus,
                 },
                 new HarnessGaps(
                     input.PlanParseFailedJobs,

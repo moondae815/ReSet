@@ -616,5 +616,33 @@ END";
             Assert.Equal(0, row.SpecRowCount);
             Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
         }
+
+        // Fix Round 1 Important — SpecMaterialCensus.Count(input.Jobs)는 이 파일이
+        // 이미 쓰는 per-job try/catch(jobsThatThrew) 밖에서 호출된다. Count 자신의
+        // job 순회는 job.Specs/job.DdlByProcedure가 null이면 가드 없이 foreach를
+        // 돌아 NullReferenceException을 던진다(SpecMaterialCensus.cs 관찰 - 고치지
+        // 않는다, 쓰기 집합 밖). 그 예외가 Sweep() 밖으로 그대로 새면 이미 완료된
+        // per-job 루프의 모든 지표(goodJob의 측정 결과 포함)까지 함께 사라진다.
+        //
+        // 이 테스트는 DdlByProcedure=null인 "poison" Job과 정상 Job을 함께 넣어
+        // (1) Sweep이 죽지 않고, (2) 정상 Job의 지표(MeasuredPairs)가 그대로
+        // 살아남고, (3) MaterialCensus는 실패를 감추지 않고 빈 목록으로 떨어지고,
+        // (4) 기존 가드(jobsThatThrew)는 그대로 poison Job 이름을 남긴다는 것을
+        // 함께 단언한다.
+        [Fact]
+        public void MaterialCensusFailureDoesNotCrashSweepAndOtherIndicatorsSurvive()
+        {
+            var goodJob = OneJobInput().Jobs[0];
+            var poisonJob = goodJob with { JobName = "CensusPoisonJob", DdlByProcedure = null! };
+
+            var input = new SweepInput(
+                new List<SweepJob> { poisonJob, goodJob }, new List<string>(), 0);
+
+            var report = StepSweepService.Sweep(input);
+
+            Assert.Empty(report.Indicators.MaterialCensus);
+            Assert.Equal(1, report.Gaps.MeasuredPairs);
+            Assert.Contains("CensusPoisonJob", report.Gaps.JobsThatThrew);
+        }
     }
 }
