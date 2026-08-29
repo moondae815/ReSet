@@ -77,6 +77,11 @@ END";
             Assert.Contains("| 변수 명칭 | 데이터 타입 | 초기값 |", prompt);
             Assert.Contains("@v_intCLTotal", prompt);
             Assert.Contains("MONEY", prompt);
+            // [변이 검증 - 2026-08-29] 위 세 단언은 이름·타입 칸만 본다. 렌더러가
+            // InitialValue 칸을 언제나 빈 칸으로 내도(Ddl의 `= 0`을 버려도) 위
+            // 단언은 전부 그대로 초록이었다 - 행 전체 모양을 잡는 이 단언이 그
+            // 표시 계층 결함을 잡는다.
+            Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
         }
 
         [Fact]
@@ -89,6 +94,7 @@ END";
             Assert.Contains("| 변수 명칭 | 데이터 타입 | 초기값 |", prompt);
             Assert.Contains("@v_intCLTotal", prompt);
             Assert.Contains("MONEY", prompt);
+            Assert.Contains("| @v_intCLTotal | MONEY | 0 |", prompt);
         }
 
         [Fact]
