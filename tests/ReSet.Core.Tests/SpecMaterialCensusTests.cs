@@ -350,6 +350,33 @@ END";
         }
 
         /// <summary>
+        /// [미결 Minor 2] DdlParseFailureCount는 재료 루프 안에서 재료마다 다시
+        /// 세어지면 안 된다 - 프로시저당 한 번만 세야 한다. DdlCounters는 private
+        /// static이라 테스트에서 두 번째 계수기를 실제로 주입할 수 없다(오늘은
+        /// LocalVariables 하나뿐이다) - 그래서 "재료가 둘이면 값이 두 배가 된다"를
+        /// 직접 재현할 수는 없다. 대신 프로시저 수와 파싱 실패 수의 관계를
+        /// 고정한다: 여덟 재료 중 파싱을 세는 재료가 늘어도 실패 프로시저 셋 중
+        /// 둘이 실패하면 값은 (재료 수) × (실패 프로시저 수) = 16이 아니라 정확히
+        /// 2여야 한다. 오늘의 단일 계수기 구성에서는 이 값이 우연히도 이미
+        /// 일치한다 - 이 테스트는 회귀를 새로 잡기보다, 다음 계수기가 추가될 때
+        /// 프로시저당 집계 불변식이 깨지면 알아채도록 고정하는 것이 목적이다.
+        /// </summary>
+        [Fact]
+        public void Count_DdlParseFailureCountIsPerProcedureNotPerMaterial()
+        {
+            var rows = SpecMaterialCensus.Count(new[]
+            {
+                Job("JobA", "dbo.P1", SpecWithoutVariables, "THIS IS NOT VALID T-SQL ((("),
+                Job("JobB", "dbo.P2", SpecWithoutVariables, "ALSO NOT VALID T-SQL ((("),
+                Job("JobC", "dbo.P3", SpecWithoutVariables, DdlWithTwoDeclares),
+            });
+
+            Assert.All(rows, row => Assert.Equal(3, row.FoldedProcedureCount));
+            Assert.All(rows, row => Assert.Equal(2, row.DdlParseFailureCount));
+            Assert.All(rows, row => Assert.True(row.DdlParseFailureCount <= row.FoldedProcedureCount));
+        }
+
+        /// <summary>
         /// [Fix Round 2 Minor - per-job 격리] Count() 자신의 job 순회는 이 태스크
         /// 이전에는 가드가 없어 job.DdlByProcedure가 null이면 그 자리에서 예외를
         /// 던졌다(NullReferenceException) - StepSweepService의 per-job try/catch

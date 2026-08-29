@@ -245,7 +245,16 @@ namespace ReSet.Core.Services
             // 문서 참고). DdlCounters에 실제로 재는 재료가 하나(LocalVariables)뿐이라
             // 아래 재료 루프를 도는 동안 그 재료를 처리할 때만 값이 늘어난다 - 같은
             // DDL 텍스트를 이중으로 파싱하지 않으려고 별도 사전 패스를 두지 않는다.
-            var ddlParseFailureCount = 0;
+            //
+            // [미결 Minor 2 - 프로시저당 한 번] 카운터를 정수 증가가 아니라
+            // 프로시저 이름의 집합으로 센다. DdlCounters에 계수기가 하나뿐인
+            // 오늘은 정수 증가와 값이 같지만, 둘째 DDL 계수기가 생기면 그 계수기도
+            // 같은 프로시저에 대해 파싱 실패를 낼 수 있고(같은 DDL 텍스트를 각자
+            // 파싱하므로 실패가 상관될 개연성이 높다) - 정수 증가는 그 경우 같은
+            // 프로시저를 두 번 세어 인쇄값을 조용히 두 배로 만든다. 집합에 이름을
+            // 더하는 것은(Add) 이미 있는 이름을 다시 더해도 개수가 안 늘어나므로
+            // 이 결함이 구조적으로 불가능해진다.
+            var ddlParseFailedProcedures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var material in SpecMaterials.All)
             {
@@ -271,7 +280,7 @@ namespace ReSet.Core.Services
                         ddlByProcedure.TryGetValue(procedure, out var ddl);
                         var (ddlCount, parseFailed) = ddlCounter!(ddl);
                         ddlFacts += ddlCount;
-                        if (parseFailed) ddlParseFailureCount++;
+                        if (parseFailed) ddlParseFailedProcedures.Add(procedure);
 
                         if (ddlCount > 0 && specCount == 0) loss.Add(procedure);
                     }
@@ -298,7 +307,7 @@ namespace ReSet.Core.Services
                 .Select(row => row with
                 {
                     FoldedProcedureCount = procedures.Count,
-                    DdlParseFailureCount = ddlParseFailureCount,
+                    DdlParseFailureCount = ddlParseFailedProcedures.Count,
                     JobsSkippedForFailure = jobsSkippedForFailure.ToArray(),
                 })
                 .ToList();
