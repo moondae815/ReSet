@@ -32,7 +32,43 @@ namespace ReSet.Core.Services
         string MaterialName,
         int? DdlFactCount,
         int? SpecRowCount,
-        IReadOnlyList<string> ObjectsWithLoss);
+        IReadOnlyList<string> ObjectsWithLoss)
+    {
+        /// <summary>
+        /// 이 회차가 접은 프로시저 수(재료 분모 절의 분모) - Job 여러 판에 걸친
+        /// 같은 프로시저를 한 번으로 접은 뒤의 수다. <see cref="SpecMaterialCensus.Count"/>가
+        /// 낸 모든 행에 같은 값이 실린다 - 재료별 분모가 아니라 census 전체의
+        /// 분모라서다. Count()의 반환 타입을 바꾸면(예: 별도 래퍼 레코드) 이 값을
+        /// 쓰는 StepSweepService.cs의 호출부(`SpecMaterialCensus.Count(input.Jobs).ToList()`)를
+        /// 함께 고쳐야 하는데 그 파일은 이 태스크의 쓰기 집합 밖이다 - 그래서 기존
+        /// 시그니처를 유지한 채 행마다 같은 값을 실어 나르는 쪽을 택했다.
+        /// 0이면(그리고 Count가 빈 목록을 내지 않았다면) 프로시저를 하나도 못
+        /// 접었다는 뜻이고, 보고서 라이터는 이 값이 0일 때 표 대신 "조사 실패"를
+        /// 인쇄해야 한다 - 그러지 않으면 8개 행이 전부 "0 / 0 / 없음"으로 찍혀
+        /// "쟀는데 소실이 없다"로 오독된다.
+        /// </summary>
+        public int FoldedProcedureCount { get; init; }
+
+        /// <summary>
+        /// 위 <see cref="FoldedProcedureCount"/>의 부분집합 - DECLARE 파싱에 실패해
+        /// 소프트 페일(0)로 진행한 프로시저 수. <see cref="SpecMaterialCensus.CountDeclaredVariables"/>가
+        /// 실패해도 0을 돌려주므로(AGENTS.md 범주 2), 그 0이 "변수가 없다"인지
+        /// "파싱을 못 했다"인지 이 값이 없으면 구별할 수 없다. LocalVariables 하나만
+        /// 재는 값이지만(다른 재료는 DDL 카운터 자체가 없다) 모든 행에 같은 값을
+        /// 싣는다 - 이유는 <see cref="FoldedProcedureCount"/>와 같다.
+        /// </summary>
+        public int DdlParseFailureCount { get; init; }
+
+        /// <summary>
+        /// 이 Job의 명세서·DDL을 접다가 예외가 나서 census에서 통째로 건너뛴 Job
+        /// 이름. StepSweepService가 이미 지키는 per-job try/catch 관용구
+        /// (jobsThatThrew)를 census 자신의 루프 안으로도 내린 결과다 - 이 가드가
+        /// 없으면 Job 하나의 결함이 여덟 재료 × 전체 Job의 census를 통째로 날리고
+        /// 어느 Job이 던졌는지도 안 남는다. 모든 행에 같은 값이 실린다 - 이유는
+        /// <see cref="FoldedProcedureCount"/>와 같다.
+        /// </summary>
+        public IReadOnlyList<string> JobsSkippedForFailure { get; init; } = Array.Empty<string>();
+    }
 
     /// <summary>
     /// 명세서 재료가 원본 DDL 대비 소실됐는지, 프로시저 단위로 센다.
@@ -96,11 +132,17 @@ namespace ReSet.Core.Services
         /// DdlCounterpart가 null이 아니므로 「잴 수 없음」은 아니지만, 이 회차가
         /// 그 대응 리더(DmlScopeExtractor 재사용 또는 신규 배선)를 아직 안
         /// 만들었으므로 「안 쟀다」로 null을 낸다(결함 D).
+        ///
+        /// [왜 튜플을 내는가 - Fix Round 1 Important 2] 값(개수)만으로는 그 0이
+        /// "DECLARE가 없다"인지 "파싱에 실패해 소프트 페일했다"인지 구별할 수 없다.
+        /// CountDeclaredVariables(string?)의 공개 시그니처는 바꾸지 않는다 - Task 2가
+        /// 승인·통합했고 테스트가 잠근다. 대신 내부 전용 CountDeclaredVariablesCore가
+        /// 실패 여부를 out으로 더 내고, 이 딕셔너리는 그 내부 경로를 감싼다.
         /// </summary>
-        private static readonly IReadOnlyDictionary<string, Func<string?, int>> DdlCounters =
-            new Dictionary<string, Func<string?, int>>(StringComparer.Ordinal)
+        private static readonly IReadOnlyDictionary<string, Func<string?, (int Count, bool ParseFailed)>> DdlCounters =
+            new Dictionary<string, Func<string?, (int, bool)>>(StringComparer.Ordinal)
             {
-                ["LocalVariables"] = CountDeclaredVariables,
+                ["LocalVariables"] = ddl => (CountDeclaredVariablesCore(ddl, out var failed), failed),
             };
 
         /// <summary>이 회차가 명세서 쪽 행 수를 실제로 내는 재료 이름의 목록. 테스트용 노출.</summary>
@@ -121,21 +163,62 @@ namespace ReSet.Core.Services
             // 태스크 12에서 실제로 밟은 함정이다.
             var specByProcedure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ddlByProcedure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // [Fix Round 1 Minor - per-job try/catch] StepSweepService가 이미 지키는
+            // 관용구(jobsThatThrew)를 이 루프 안으로도 내린다. 이 가드가 없으면 한
+            // Job의 결함(예: DdlByProcedure == null)이 이 메서드 전체를 던지게 하고,
+            // 그 예외를 StepSweepService의 이음매 try/catch가 잡으면 이미 계산됐어야
+            // 할 나머지 열일곱 Job의 census까지 통째로 빈 목록이 된다 - 검사가
+            // 재료를 잃는 것과 정확히 같은 침묵이다. 이음매의 try/catch는 대체재가
+            // 아니다 - 이 회차 이후에도 남겨 둔다(정말로 예외가 여기서 새면 여전히
+            // 마지막 방어선이어야 한다).
+            var jobsSkippedForFailure = new List<string>();
             foreach (var job in jobs)
             {
-                foreach (var (fileName, content) in job.Specs)
+                try
                 {
-                    // [실물 규약] SweepJob.Specs의 FileName은 파일 경로가 아니라
-                    // 프로시저 이름("dbo.UP_X")이고 ".md" 접미사가 없다
-                    // (SweepJob 문서 주석 · SweepCommand.cs:117 실측). StripExtension은
-                    // 이 규약이 실물에서 한 번도 깨진 적이 없더라도 남겨 둔다 -
-                    // 지우면 나중에 ".md"를 실은 호출자가 조용히 전량 미스를 낸다.
-                    var name = StripExtension(fileName);
-                    if (!specByProcedure.ContainsKey(name)) specByProcedure[name] = content;
+                    // [원자성 - 부분 적용 방지] job.Specs 순회는 끝까지 성공했는데
+                    // job.DdlByProcedure 순회가 그다음에 던지면(예: null 컬렉션),
+                    // specByProcedure/ddlByProcedure에 직접 쓰던 옛 버전은 이 Job의
+                    // Spec만 절반 반영한 채로 catch에 들어간다 - "이 Job의 재료를
+                    // census에서 건너뜁니다"라는 로그 문구와 실제 동작이 어긋난다.
+                    // 그래서 이 Job의 몫을 임시 목록에 먼저 모으고, 둘 다 끝까지
+                    // 성공한 뒤에야 공유 사전에 병합한다.
+                    var jobSpecs = new List<(string Name, string Content)>();
+                    foreach (var (fileName, content) in job.Specs)
+                    {
+                        // [실물 규약] SweepJob.Specs의 FileName은 파일 경로가 아니라
+                        // 프로시저 이름("dbo.UP_X")이고 ".md" 접미사가 없다
+                        // (SweepJob 문서 주석 · SweepCommand.cs:117 실측). StripExtension은
+                        // 이 규약이 실물에서 한 번도 깨진 적이 없더라도 남겨 둔다 -
+                        // 지우면 나중에 ".md"를 실은 호출자가 조용히 전량 미스를 낸다.
+                        jobSpecs.Add((StripExtension(fileName), content));
+                    }
+
+                    var jobDdls = new List<(string Procedure, string Ddl)>();
+                    foreach (var (procedure, ddl) in job.DdlByProcedure)
+                    {
+                        jobDdls.Add((procedure, ddl));
+                    }
+
+                    foreach (var (name, content) in jobSpecs)
+                    {
+                        if (!specByProcedure.ContainsKey(name)) specByProcedure[name] = content;
+                    }
+                    foreach (var (procedure, ddl) in jobDdls)
+                    {
+                        if (!ddlByProcedure.ContainsKey(procedure)) ddlByProcedure[procedure] = ddl;
+                    }
                 }
-                foreach (var (procedure, ddl) in job.DdlByProcedure)
+                catch (Exception ex)
                 {
-                    if (!ddlByProcedure.ContainsKey(procedure)) ddlByProcedure[procedure] = ddl;
+                    // 조용히 삼키지 않는다 - 로그와 함께 Job 이름을 census 결과에
+                    // 실어 보고서가 인쇄하게 한다(SpecMaterialCensusRow.JobsSkippedForFailure).
+                    Log.Warning(
+                        ex,
+                        "[SpecMaterialCensus] Job {JobName} 처리 실패 - 이 Job의 재료를 census에서 건너뜁니다.",
+                        job.JobName);
+                    jobsSkippedForFailure.Add(job.JobName);
                 }
             }
 
@@ -155,6 +238,14 @@ namespace ReSet.Core.Services
                 .Union(ddlByProcedure.Keys, StringComparer.OrdinalIgnoreCase)
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
+
+            // [Fix Round 1 Important 2 - 파싱 실패 분모] LocalVariables의 DDL 카운터가
+            // 소프트 페일(0)로 넘어간 프로시저 수. 재료별이 아니라 census 전체의
+            // 분모라 모든 행에 같은 값을 싣는다(SpecMaterialCensusRow.DdlParseFailureCount
+            // 문서 참고). DdlCounters에 실제로 재는 재료가 하나(LocalVariables)뿐이라
+            // 아래 재료 루프를 도는 동안 그 재료를 처리할 때만 값이 늘어난다 - 같은
+            // DDL 텍스트를 이중으로 파싱하지 않으려고 별도 사전 패스를 두지 않는다.
+            var ddlParseFailureCount = 0;
 
             foreach (var material in SpecMaterials.All)
             {
@@ -178,8 +269,9 @@ namespace ReSet.Core.Services
                     if (ddlCounted)
                     {
                         ddlByProcedure.TryGetValue(procedure, out var ddl);
-                        var ddlCount = ddlCounter!(ddl);
+                        var (ddlCount, parseFailed) = ddlCounter!(ddl);
                         ddlFacts += ddlCount;
+                        if (parseFailed) ddlParseFailureCount++;
 
                         if (ddlCount > 0 && specCount == 0) loss.Add(procedure);
                     }
@@ -188,7 +280,21 @@ namespace ReSet.Core.Services
                 rows.Add(new SpecMaterialCensusRow(material.Name, ddlFacts, specRows, loss));
             }
 
-            return rows;
+            // [왜 여기서 한 번 더 도는가] FoldedProcedureCount·DdlParseFailureCount는
+            // 모든 행에 같은 값이 실려야 하는 census 전체의 분모다(레코드 문서 참고).
+            // DdlParseFailureCount는 재료 루프 안에서 LocalVariables를 처리할 때만
+            // 늘어나는데, LocalVariables는 SpecMaterials.All의 네 번째 항목이라 그
+            // 앞에 추가된 행(DmlRows·ErrorCodeToOrdinal·SetTargets)은 루프 도중에
+            // 값을 실으면 아직 최종값이 아닌 0을 갖게 된다 - 그래서 루프가 다 끝난
+            // 뒤 한 번에 채운다.
+            return rows
+                .Select(row => row with
+                {
+                    FoldedProcedureCount = procedures.Count,
+                    DdlParseFailureCount = ddlParseFailureCount,
+                    JobsSkippedForFailure = jobsSkippedForFailure,
+                })
+                .ToList();
         }
 
         /// <summary>
@@ -196,8 +302,19 @@ namespace ReSet.Core.Services
         /// 세지 않는다 - 검사 D(CheckSpecLocalVariablesDeclared)가 보는 것은 값
         /// 변수다.
         /// </summary>
-        public static int CountDeclaredVariables(string? ddlText)
+        public static int CountDeclaredVariables(string? ddlText) =>
+            CountDeclaredVariablesCore(ddlText, out _);
+
+        /// <summary>
+        /// <see cref="CountDeclaredVariables"/>의 내부 구현. 공개 시그니처(파싱
+        /// 실패 여부를 안 내는 int 하나)는 Task 2가 승인·통합했고 테스트가
+        /// 잠근다 - 바꾸지 않는다. 이 내부 경로만 실패 여부를 out으로 더 내서
+        /// census의 파싱 실패 분모(SpecMaterialCensusRow.DdlParseFailureCount)를
+        /// 셀 수 있게 한다.
+        /// </summary>
+        private static int CountDeclaredVariablesCore(string? ddlText, out bool parseFailed)
         {
+            parseFailed = false;
             if (string.IsNullOrWhiteSpace(ddlText)) return 0;
 
             try
@@ -205,7 +322,11 @@ namespace ReSet.Core.Services
                 var parser = new TSql160Parser(true);
                 using var reader = new StringReader(ddlText);
                 var fragment = parser.Parse(reader, out var errors);
-                if (fragment == null || (errors != null && errors.Count > 0)) return 0;
+                if (fragment == null || (errors != null && errors.Count > 0))
+                {
+                    parseFailed = true;
+                    return 0;
+                }
 
                 var visitor = new DeclaredVariableVisitor();
                 fragment.Accept(visitor);
@@ -215,6 +336,7 @@ namespace ReSet.Core.Services
             {
                 // AGENTS.md 범주 2 - 파싱은 실패할 수 있으므로 소프트 페일한다.
                 Log.Warning(ex, "[SpecMaterialCensus] DECLARE 수집 실패 - 0으로 진행합니다.");
+                parseFailed = true;
                 return 0;
             }
         }

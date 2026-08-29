@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -514,6 +515,13 @@ namespace ReSet.Core.Tests
         // 안 가른 것)이 재현된다. StepTableSets만 ReadsSpecMarkdown이 거짓이라(
         // SpecTargetTableExtractor는 명세서를 아예 안 읽는다) 명세서 쪽이 정말로
         // "해당 없음"이다.
+        //
+        // [Fix Round 2, 최종 리뷰 Important 1] 소실 칸(네 번째 열)도 세 상태를 가른다 -
+        // DdlFactCount·SpecRowCount 중 하나라도 null이면 소실 여부를 판정할 수 없으므로
+        // "잴 수 없음"이다. 양쪽이 모두 실측인데 목록이 비어야 비로소 "없음"이다. 이전
+        // 회차는 `ddlCounted` 분기 밖에서는 loss가 언제나 빈 목록으로 남는다는 사실을
+        // 놓쳐 DmlRows·ErrorCodeToOrdinal·SetTargets·SpecReturnCodes 네 재료가 "안
+        // 쟀음"인데도 소실 칸에는 "없음"이 찍혔다 - "쟀는데 소실이 없다"로 오독된다.
         [Fact]
         public void MaterialCensusSectionDistinguishesAllFourNullStates()
         {
@@ -523,10 +531,26 @@ namespace ReSet.Core.Tests
                 {
                     MaterialCensus = new[]
                     {
-                        new SpecMaterialCensusRow("LocalVariables", 11, 22, new[] { "dbo.UP_X" }),
-                        new SpecMaterialCensusRow("DmlRows", null, 33, Array.Empty<string>()),
-                        new SpecMaterialCensusRow("SpecConditions", null, null, Array.Empty<string>()),
-                        new SpecMaterialCensusRow("StepTableSets", null, null, Array.Empty<string>()),
+                        new SpecMaterialCensusRow("LocalVariables", 11, 22, new[] { "dbo.UP_X" })
+                        {
+                            FoldedProcedureCount = 4,
+                        },
+                        new SpecMaterialCensusRow("DmlRows", null, 33, Array.Empty<string>())
+                        {
+                            FoldedProcedureCount = 4,
+                        },
+                        new SpecMaterialCensusRow("ErrorCodeToOrdinal", 5, 5, Array.Empty<string>())
+                        {
+                            FoldedProcedureCount = 4,
+                        },
+                        new SpecMaterialCensusRow("SpecConditions", null, null, Array.Empty<string>())
+                        {
+                            FoldedProcedureCount = 4,
+                        },
+                        new SpecMaterialCensusRow("StepTableSets", null, null, Array.Empty<string>())
+                        {
+                            FoldedProcedureCount = 4,
+                        },
                     },
                 },
                 new HarnessGaps(
@@ -539,9 +563,12 @@ namespace ReSet.Core.Tests
             var section = Section(markdown, "## 재료 분모");
 
             Assert.Contains("| LocalVariables | 11 | 22 | dbo.UP_X |", section);
-            Assert.Contains("| DmlRows | 안 쟀음 | 33 | 없음 |", section);
-            Assert.Contains("| SpecConditions | 잴 수 없음 | 안 쟀음 | 없음 |", section);
-            Assert.Contains("| StepTableSets | 잴 수 없음 | 해당 없음 | 없음 |", section);
+            Assert.Contains("| DmlRows | 안 쟀음 | 33 | 잴 수 없음 |", section);
+            // [대조군] 양쪽이 모두 실측이고 소실이 없으면 "없음"이 맞다 - 이 값이 없으면
+            // 위 DmlRows 단언이 "언제나 잴 수 없음이라고 말하는" 계수로도 통과한다.
+            Assert.Contains("| ErrorCodeToOrdinal | 5 | 5 | 없음 |", section);
+            Assert.Contains("| SpecConditions | 잴 수 없음 | 안 쟀음 | 잴 수 없음 |", section);
+            Assert.Contains("| StepTableSets | 잴 수 없음 | 해당 없음 | 잴 수 없음 |", section);
 
             // 이 태스크의 핵심 실패 양식 - "안 쟀음"이 "잴 수 없음"이나 0으로 새면
             // 안 된다. DmlRows 행에서 그 오염을 잡는다.
@@ -553,6 +580,12 @@ namespace ReSet.Core.Tests
             // 새면 안 된다. "해당 없음"은 ReadsSpecMarkdown이 거짓인 StepTableSets만의
             // 몫이다.
             Assert.DoesNotContain("| SpecConditions | 잴 수 없음 | 해당 없음 |", section);
+
+            // Fix Round 2의 핵심 회귀 - 소실 칸이 "없음"으로 새면 안 된다. 리뷰가 잡은
+            // 실제 산출물이 정확히 이 문자열이었다.
+            Assert.DoesNotContain("| DmlRows | 안 쟀음 | 33 | 없음 |", section);
+            Assert.DoesNotContain("| SpecConditions | 잴 수 없음 | 안 쟀음 | 없음 |", section);
+            Assert.DoesNotContain("| StepTableSets | 잴 수 없음 | 해당 없음 | 없음 |", section);
         }
 
         // 정상 경로에서는 SpecMaterialCensus.Count가 언제나 SpecMaterials.All과 같은
@@ -613,6 +646,80 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("StepTableSets", section);
             Assert.Contains("개념 자체가 없다", section);
+        }
+
+        // [Fix Round 2, 최종 리뷰 Important 2-1] 「재료 분모」 절이 자기 분모를 안
+        // 찍었다 - jobs가 비었거나 프로시저 해석이 전부 실패하면 여덟 행이 전부
+        // "0 / 0 / 없음"으로 찍혀 "쟀는데 소실이 없다"로 읽힌다. 「침묵 분모」 절이
+        // 이미 쓰는 관용구(분모를 숫자로 명시)를 그대로 옮긴다.
+        [Fact]
+        public void MaterialCensusSectionPrintsItsDenominatorHeader()
+        {
+            var rows = SpecMaterials.All
+                .Select(m => new SpecMaterialCensusRow(m.Name, null, null, Array.Empty<string>())
+                {
+                    FoldedProcedureCount = 14,
+                    DdlParseFailureCount = 2,
+                })
+                .ToList();
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0) { MaterialCensus = rows },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("접은 프로시저 14개", section);
+            Assert.Contains("DDL 파싱 실패 2개", section);
+        }
+
+        // [Fix Round 2, 최종 리뷰 Important 2-2] MaterialCensus가 8행을 다 냈어도
+        // FoldedProcedureCount가 0이면(jobs가 비었거나 프로시저 해석이 전부 실패한
+        // 경우) 표를 그리지 말고 "조사 실패"를 인쇄해야 한다 - 그러지 않으면 "0 / 0 /
+        // 없음" 여덟 줄이 "쟀는데 소실이 없다"는 정상 결과로 읽힌다. 기존
+        // MaterialCensusSectionStatesInvestigationFailedWhenEmpty는 목록 자체가 빈
+        // (Count == 0) 경우만 잡는다 - 이 테스트는 목록은 8행이 다 있지만 분모가 0인
+        // 다른 실패 양식을 잡는다.
+        [Fact]
+        public void MaterialCensusSectionStatesInvestigationFailedWhenFoldedProcedureCountIsZero()
+        {
+            var rows = SpecMaterials.All
+                .Select(m => new SpecMaterialCensusRow(m.Name, null, null, Array.Empty<string>()))
+                .ToList();
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0) { MaterialCensus = rows },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var markdown = StepSweepReportWriter.Render(report, "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.Contains("조사가 실패했다", section);
+            Assert.DoesNotContain("| 재료 |", section);
+        }
+
+        // [Fix Round 2, 최종 리뷰 Important 2-4] 보고서 문장이 실제 코드와 달랐다 -
+        // "SpecMaterialCensus는 재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다"는
+        // 틀렸다. 실제로는 jobs가 null일 때만 조기 반환하고, jobs가 비어 있거나
+        // 프로시저 해석이 전부 실패해도 조기 반환 없이 0을 찍는다. 문장을 코드에
+        // 맞췄다.
+        [Fact]
+        public void MaterialCensusSectionDescribesTheEarlyReturnAccurately()
+        {
+            var markdown = StepSweepReportWriter.Render(Report(), "abc1234", "16", 0);
+            var section = Section(markdown, "## 재료 분모");
+
+            Assert.DoesNotContain("재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다", section);
+            Assert.Contains("jobs가 null일 때만 조기 반환한다", section);
         }
 }
 }

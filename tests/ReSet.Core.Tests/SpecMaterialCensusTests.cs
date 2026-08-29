@@ -292,5 +292,117 @@ END";
             Assert.All(SpecMaterialCensus.SpecCountedMaterials, name => Assert.Contains(name, catalogNames));
             Assert.All(SpecMaterialCensus.DdlCountedMaterials, name => Assert.Contains(name, catalogNames));
         }
+
+        /// <summary>
+        /// [Fix Round 1 Important 2 - 접힌 프로시저 수] 「재료 분모」 절이 자기 분모를
+        /// 인쇄하려면 그 분모(접은 프로시저 수)가 census 출력에 실려야 한다. 이 값은
+        /// 재료별이 아니라 census 전체의 값이라 모든 행에 같은 값이 실려야 한다 -
+        /// 그러지 않으면 라이터가 어느 행을 읽어도 같은 분모를 볼 수 있다는 보장이
+        /// 없다.
+        /// </summary>
+        [Fact]
+        public void Count_CarriesTheFoldedProcedureCountOnEveryRow()
+        {
+            var rows = SpecMaterialCensus.Count(new[]
+            {
+                Job("JobA", "dbo.P1", SpecWithoutVariables, DdlWithTwoDeclares),
+                Job("JobB", "dbo.P2", SpecWithoutVariables, DdlWithOneDeclare),
+            });
+
+            Assert.All(rows, row => Assert.Equal(2, row.FoldedProcedureCount));
+        }
+
+        /// <summary>
+        /// [Fix Round 1 Important 2 - DDL 파싱 실패 분모] CountDeclaredVariables는
+        /// 파싱에 실패해도 0을 소프트 페일로 돌려준다(AGENTS.md 범주 2) - 그 0이
+        /// "DECLARE가 없다"인지 "파싱을 못 했다"인지는 이 카운터가 없으면 census
+        /// 출력만 보고는 구별할 수 없다. FoldedProcedureCount와 마찬가지로 census
+        /// 전체의 분모라 모든 행에 같은 값이 실려야 한다.
+        /// </summary>
+        [Fact]
+        public void Count_CarriesTheDdlParseFailureCountOnEveryRow()
+        {
+            var rows = SpecMaterialCensus.Count(new[]
+            {
+                Job("JobA", "dbo.P", SpecWithoutVariables, "THIS IS NOT VALID T-SQL ((("),
+            });
+
+            Assert.All(rows, row => Assert.Equal(1, row.DdlParseFailureCount));
+
+            var localVariablesRow = rows.Single(r => r.MaterialName == "LocalVariables");
+            Assert.Equal(0, localVariablesRow.DdlFactCount);
+        }
+
+        /// <summary>
+        /// [대조군] DECLARE가 정말로 하나도 없는 정상 DDL은 파싱 실패가 아니다 -
+        /// 위 테스트가 "DDL 사실 0"이기만 하면 통과하는 계수로도 거짓 초록이 되지
+        /// 않게 막는다.
+        /// </summary>
+        [Fact]
+        public void Count_DoesNotCountValidDdlWithNoDeclaresAsAParseFailure()
+        {
+            var rows = SpecMaterialCensus.Count(new[]
+            {
+                Job("JobA", "dbo.P", SpecWithoutVariables, DdlWithNoDeclares),
+            });
+
+            Assert.All(rows, row => Assert.Equal(0, row.DdlParseFailureCount));
+        }
+
+        /// <summary>
+        /// [Fix Round 1 Minor - per-job 격리] Count() 자신의 job 순회는 이 태스크
+        /// 이전에는 가드가 없어 job.DdlByProcedure가 null이면 그 자리에서 예외를
+        /// 던졌다(NullReferenceException) - StepSweepService의 per-job try/catch
+        /// (jobsThatThrew)와 대칭인 가드가 이 파일에는 없었다. 그 결과 Job 하나의
+        /// 결함이 이음매(StepSweepService)의 바깥쪽 try/catch에 걸려 나머지 열일곱
+        /// Job의 census까지 통째로 빈 목록이 됐다. 이 테스트는 poison Job과 정상
+        /// Job을 함께 넣어 (1) Count가 던지지 않고, (2) 정상 Job의 데이터가 살아
+        /// 남고, (3) poison Job 이름이 JobsSkippedForFailure에 실리는 것을 확인한다.
+        /// </summary>
+        [Fact]
+        public void Count_SkipsAPoisonedJobWithoutLosingOtherJobsData()
+        {
+            var goodJob = Job("GoodJob", "dbo.P", SpecWithoutVariables, DdlWithTwoDeclares);
+            var poisonJob = goodJob with { JobName = "PoisonJob", DdlByProcedure = null! };
+
+            var rows = SpecMaterialCensus.Count(new[] { poisonJob, goodJob });
+
+            var localVariablesRow = rows.Single(r => r.MaterialName == "LocalVariables");
+            Assert.Equal(2, localVariablesRow.DdlFactCount);
+            Assert.Equal(new[] { "dbo.P" }, localVariablesRow.ObjectsWithLoss);
+            Assert.All(rows, row => Assert.Contains("PoisonJob", row.JobsSkippedForFailure));
+        }
+
+        /// <summary>
+        /// [Fix Round 1 Minor - 원자성] 한 Job의 Specs 순회는 끝까지 성공하고
+        /// DdlByProcedure 순회만 던지면, 공유 사전에 직접 쓰는 구현은 그 Job의
+        /// Specs만 절반 반영한 채로 catch에 들어간다 - "이 Job의 재료를 census에서
+        /// 건너뜁니다"라는 로그 문구와 실제 동작이 어긋난다. 이 테스트는 poison
+        /// Job의 명세서 내용(SpecWithVariables, 표 있음)을 goodJob의 것(표 없음)과
+        /// 일부러 다르게 둬서, poison Job의 Specs가 조금이라도 새어 들어오면
+        /// SpecRowCount가 goodJob 단독일 때와 달라지는 것으로 잡는다.
+        /// </summary>
+        [Fact]
+        public void Count_PoisonedJobDoesNotPartiallyContributeItsSpecsBeforeFailingOnDdl()
+        {
+            var poisonJob = new SweepJob(
+                "PoisonJob",
+                new List<BatchStepPlan>(),
+                new Dictionary<string, string>(),
+                new[] { ("dbo.P", SpecWithVariables) },
+                null!,
+                new Dictionary<string, string>());
+            var goodJob = Job("GoodJob", "dbo.P", SpecWithoutVariables, DdlWithTwoDeclares);
+
+            var rows = SpecMaterialCensus.Count(new[] { poisonJob, goodJob });
+
+            var row = rows.Single(r => r.MaterialName == "LocalVariables");
+            // poisonJob("dbo.P" → 표 있음, 명세서 행 2)이 조금이라도 반영됐다면
+            // SpecRowCount가 2가 된다. 원자적으로 통째로 빠졌다면 goodJob의
+            // SpecWithoutVariables(표 없음)만 반영돼 0이고, DDL 사실(2)이 있는데
+            // 명세서 행이 없으므로 소실로 잡힌다.
+            Assert.Equal(0, row.SpecRowCount);
+            Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
+        }
     }
 }

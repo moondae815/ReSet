@@ -617,17 +617,21 @@ END";
             Assert.Equal(new[] { "dbo.P" }, row.ObjectsWithLoss);
         }
 
-        // Fix Round 1 Important — SpecMaterialCensus.Count(input.Jobs)는 이 파일이
-        // 이미 쓰는 per-job try/catch(jobsThatThrew) 밖에서 호출된다. Count 자신의
-        // job 순회는 job.Specs/job.DdlByProcedure가 null이면 가드 없이 foreach를
-        // 돌아 NullReferenceException을 던진다(SpecMaterialCensus.cs 관찰 - 고치지
-        // 않는다, 쓰기 집합 밖). 그 예외가 Sweep() 밖으로 그대로 새면 이미 완료된
-        // per-job 루프의 모든 지표(goodJob의 측정 결과 포함)까지 함께 사라진다.
+        // Fix Round 1 Important(원래 서술) — SpecMaterialCensus.Count(input.Jobs)는
+        // 이 파일이 이미 쓰는 per-job try/catch(jobsThatThrew) 밖에서 호출됐고, Count
+        // 자신의 job 순회는 job.Specs/job.DdlByProcedure가 null이면 가드 없이
+        // foreach를 돌아 NullReferenceException을 던졌다 - 그 예외가 StepSweepService의
+        // 이음매 try/catch에 걸리면 이미 계산됐어야 할 나머지 Job의 census까지 통째로
+        // 빈 목록이 됐다. 그 원인이었던 SpecMaterialCensus.cs가 Fix Round 2에서
+        // 쓰기 집합 안으로 들어와 직접 고쳤다 - Minor(같은 파일 위쪽의
+        // jobsThatThrew와 반대로 census는 per-job 가드가 없었다는 지적).
         //
-        // 이 테스트는 DdlByProcedure=null인 "poison" Job과 정상 Job을 함께 넣어
-        // (1) Sweep이 죽지 않고, (2) 정상 Job의 지표(MeasuredPairs)가 그대로
-        // 살아남고, (3) MaterialCensus는 실패를 감추지 않고 빈 목록으로 떨어지고,
-        // (4) 기존 가드(jobsThatThrew)는 그대로 poison Job 이름을 남긴다는 것을
+        // [Fix Round 2 - 고친 뒤의 기대값] Count() 자신의 per-job try/catch가 poison
+        // Job의 결함을 그 Job 하나로 가둔다. 그래서 이 테스트는 (1) Sweep이 죽지
+        // 않고, (2) 정상 Job의 지표(MeasuredPairs)가 살아남고, (3) MaterialCensus는
+        // 더 이상 통째로 비지 않고 goodJob의 데이터를 그대로 담고, (4) 이음매 밖
+        // 가드(jobsThatThrew, 단계 검사 루프 쪽)가 poison Job 이름을 남기고, (5)
+        // census 자신의 새 가드(JobsSkippedForFailure)도 같은 이름을 남긴다는 것을
         // 함께 단언한다.
         [Fact]
         public void MaterialCensusFailureDoesNotCrashSweepAndOtherIndicatorsSurvive()
@@ -640,7 +644,20 @@ END";
 
             var report = StepSweepService.Sweep(input);
 
-            Assert.Empty(report.Indicators.MaterialCensus);
+            Assert.NotEmpty(report.Indicators.MaterialCensus);
+            var localVariablesRow = report.Indicators.MaterialCensus
+                .Single(r => r.MaterialName == "LocalVariables");
+            // goodJob의 DdlOneUpdateWithCode 하나만 반영됐다는 뜻이다(poison Job이
+            // 원자적으로 통째로 빠졌다 - 부분 반영이었다면 두 Job의 스펙/DDL이 섞여
+            // 이 값이 달라질 수 있다). 값 자체(2)는 CountDeclaredVariables의 실측이다
+            // - DdlOneUpdateWithCode 본문의 DECLARE는 하나(@v_err)지만, 괄호 없는
+            // 프로시저 매개변수 선언(@pi_strYMD CHAR(8))도 DeclareVariableElement로
+            // 잡힌다(SpecMaterialCensusTests가 별도로 잠그지 않는 파서 실측 동작 -
+            // 이 테스트의 관심사는 그 수의 절대값이 아니라 poison Job이 하나도 안
+            // 섞였다는 것이다).
+            Assert.Equal(2, localVariablesRow.DdlFactCount);
+            Assert.Contains("CensusPoisonJob", localVariablesRow.JobsSkippedForFailure);
+
             Assert.Equal(1, report.Gaps.MeasuredPairs);
             Assert.Contains("CensusPoisonJob", report.Gaps.JobsThatThrew);
         }

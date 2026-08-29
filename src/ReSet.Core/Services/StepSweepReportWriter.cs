@@ -312,9 +312,8 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// [왜 이 절이 있는가] SpecMaterialCensus가 재료가 비면 조기 반환해 조용히
-        /// 꺼진다 - 이 절은 그 침묵을 죽인다. 계기(<see cref="SweepIndicators.MaterialCensus"/>)가
-        /// 있어도 보고서에 안 실리면 다음 사람이 못 읽는다.
+        /// [왜 이 절이 있는가] 계기(<see cref="SweepIndicators.MaterialCensus"/>)가 있어도
+        /// 보고서에 안 실리면 다음 사람이 못 읽는다 - 이 절은 그 침묵을 죽인다.
         ///
         /// [null 세 상태를 라벨로 가른다] <see cref="SpecMaterialCensusRow.DdlFactCount"/>의
         /// null은 「이 회차가 안 냈다」는 뜻 하나뿐이고, 왜 안 냈는지는 행이 안 들고
@@ -323,6 +322,14 @@ namespace ReSet.Core.Services
         /// 자체가 없음)과 「안 쟀음」(대응물은 있으나 이 회차가 아직 안 셈)을 가를 수
         /// 있다. 둘을 뭉개면 「대응물이 아예 없다」와 「대응물은 있는데 아직 안 세기로
         /// 했다」가 같은 문구로 보여 다음 회차의 범위를 잘못 정하게 한다.
+        ///
+        /// [소실 칸도 세 상태다 - Fix Round 2, 최종 리뷰 Important 1] DdlFactCount·
+        /// SpecRowCount 중 하나라도 null이면 소실 여부 자체를 판정할 수 없다 - 양축이
+        /// 다 실측이어야만 「없음」과 「있음」을 가를 수 있다. 이전 회차는
+        /// <see cref="SpecMaterialCensus.Count"/>의 loss 리스트가 ddlCounted 분기
+        /// 안에서만 채워진다는 사실을 소실 칸 서식에 반영하지 않아, DDL을 안 세는
+        /// 일곱 재료가 언제나 빈 loss 목록을 받고 그것이 "없음"으로 인쇄됐다 -
+        /// 「소실을 쟀더니 없더라」와 「소실을 잴 수 없었다」가 같은 글자였다.
         /// </summary>
         private static void AppendMaterialCensus(
             StringBuilder b, IReadOnlyList<SpecMaterialCensusRow> materialCensus)
@@ -338,9 +345,15 @@ namespace ReSet.Core.Services
                 "행 수가 0이어도, 「모델이 표를 안 썼다」와 「리더가 못 읽는다」가 같은 수로 " +
                 "보인다.");
             b.AppendLine();
+            // [Fix Round 2, 최종 리뷰 Important 2-4] 이전 문장("SpecMaterialCensus는
+            // 재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다")은 코드와 달랐다 -
+            // SpecMaterialCensus.Count는 jobs == null일 때만 조기 반환한다. jobs가
+            // 비어 있거나 프로시저 해석이 전부 실패해도 조기 반환하지 않고 접은
+            // 프로시저 수(FoldedProcedureCount) 0인 행을 낸다. 문장을 코드에 맞췄다.
             b.AppendLine(
-                "SpecMaterialCensus는 재료(SweepJob)가 비면 조기 반환해 조용히 꺼진다 - 이 " +
-                "절은 그 침묵을 죽이려고 있다.");
+                "SpecMaterialCensus.Count는 jobs가 null일 때만 조기 반환한다. jobs가 비어 " +
+                "있거나 프로시저 해석이 전부 실패해도 조기 반환하지 않고 접은 프로시저 수 " +
+                "0인 행을 낸다 - 아래 분모 줄과 「조사 실패」 인쇄가 그 경우의 침묵을 죽인다.");
             b.AppendLine();
             b.AppendLine(
                 "SetTargets는 추출되지만 MechanicalValidator의 어느 검사도 안 쓴다 - " +
@@ -357,6 +370,33 @@ namespace ReSet.Core.Services
                 b.AppendLine(
                     "**조사가 실패했다** - 정상 경로에서는 언제나 재료 수만큼 행이 나온다. " +
                     "빈 표는 「재료가 없다」가 아니라 「계기가 결과를 못 냈다」는 뜻이다.");
+                b.AppendLine();
+                return;
+            }
+
+            // [Fix Round 2, 최종 리뷰 Important 2-1] 「침묵 분모」 절이 이미 쓰는
+            // 관용구를 그대로 옮긴다 - 분모를 숫자로 인쇄하지 않으면 여덟 행이 전부
+            // "0 / 0 / 없음"으로 찍혀도 그것이 "쟀는데 소실이 없다"인지 "애초에 아무
+            // 프로시저도 못 접었다"인지 구별할 수 없다. 모든 행에 같은 값이 실려
+            // 있으므로(SpecMaterialCensusRow.FoldedProcedureCount 문서 참고) 첫 행만
+            // 읽으면 된다.
+            var foldedProcedureCount = materialCensus[0].FoldedProcedureCount;
+            var ddlParseFailureCount = materialCensus[0].DdlParseFailureCount;
+
+            b.AppendLine($"- 접은 프로시저 {foldedProcedureCount}개 · DDL 파싱 실패 {ddlParseFailureCount}개");
+            b.AppendLine();
+
+            // [Fix Round 2, 최종 리뷰 Important 2-2] materialCensus.Count == 0 검사만으로는
+            // 못 잡는 실패 양식이다 - jobs가 비었거나 프로시저 해석이 전부 실패해도
+            // SpecMaterialCensus.Count는 여덟 행을 그대로 낸다(모두 0 또는 null). 그
+            // 여덟 행을 표로 그대로 그리면 "0 / 0 / 없음"이 "쟀는데 소실이 없다"는
+            // 정상 결과로 읽힌다 - 분모가 0이면 표 대신 조사 실패를 인쇄한다.
+            if (foldedProcedureCount == 0)
+            {
+                b.AppendLine(
+                    "**조사가 실패했다** - 접은 프로시저 수가 0이다. jobs가 비었거나 프로시저 " +
+                    "해석이 전부 실패했다는 뜻이다. 아래 여덟 행이 모두 \"0 / 0 / 없음\"으로 " +
+                    "보이더라도 그것은 「쟀는데 소실이 없다」가 아니라 「잴 대상 자체가 없었다」다.");
                 b.AppendLine();
                 return;
             }
@@ -378,14 +418,26 @@ namespace ReSet.Core.Services
                     && r;
                 var ddl = FormatDdlFactCount(row.DdlFactCount, ddlCounterpart);
                 var spec = FormatSpecRowCount(row.SpecRowCount, readsSpecMarkdown);
-                var loss = row.ObjectsWithLoss.Count == 0
-                    ? "없음"
-                    : string.Join(", ", row.ObjectsWithLoss);
+                var loss = FormatLoss(row.DdlFactCount, row.SpecRowCount, row.ObjectsWithLoss);
 
                 b.AppendLine($"| {row.MaterialName} | {ddl} | {spec} | {loss} |");
             }
 
             b.AppendLine();
+        }
+
+        /// <summary>
+        /// 소실 칸의 세 상태 - 잴 수 없다(DdlFactCount·SpecRowCount 중 하나라도
+        /// null이라 소실 여부를 판정할 수 없다) · 없다(양쪽 다 실측인데 목록이 빔) ·
+        /// 있다(이름). <see cref="SpecMaterialCensus.Count"/>의 loss 리스트는
+        /// ddlCounted 분기 안에서만 채워지므로, DDL을 안 세는 재료는 ObjectsWithLoss가
+        /// 언제나 빈 목록으로 돌아온다 - 이 메서드가 없으면 "안 쟀음"과 "없음"이
+        /// 같은 글자로 찍힌다(2026-08-29 최종 리뷰 Important 1).
+        /// </summary>
+        private static string FormatLoss(int? ddlFactCount, int? specRowCount, IReadOnlyList<string> loss)
+        {
+            if (ddlFactCount == null || specRowCount == null) return "잴 수 없음";
+            return loss.Count == 0 ? "없음" : string.Join(", ", loss);
         }
 
         /// <summary>
