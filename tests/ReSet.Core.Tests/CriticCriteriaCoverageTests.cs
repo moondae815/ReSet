@@ -81,6 +81,26 @@ namespace ReSet.Core.Tests
             var prompt = await CaptureCriticPromptAsync();
 
             Assert.Contains("penalize a step that writes the isolation statement into its own SQL", prompt);
+        }
+
+        [Fact]
+        public async Task Critic_ShouldPenalizeNamingARealFrameworkType()
+        {
+            // 2차 통제군에서 Critic이 `conn.BeginTransaction(IsolationLevel.Snapshot)`을
+            // 보고도 통과시켰다 - 격리 감점을 "단계 SQL에 쓰지 마라"로만 적어
+            // 앱 코드 쪽 API 지정이 무주공산이었다. 규칙 3-1이 요구하는데 채점이
+            // 보지 않는 축이므로 자가 수정이 영영 닿지 않는다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("names NO type from a real data-access framework", prompt);
+
+            // 반대편도 함께 막는다 - 일반 자리표시자까지 감점하면 옳게 쓴 단계가
+            // 깎이고 자가 수정이 T-SQL 철자로 되돌린다.
+            Assert.Contains("do NOT penalize them", prompt);
+
+            // 표기 분열: 한 문서가 같은 것을 두 이름으로 부르면 이행 라운드가
+            // 존재한 적 없는 계약 둘을 화해시켜야 한다.
+            Assert.Contains("two different invented names", prompt);
             Assert.Contains("not a quotation of the original", prompt);
         }
 

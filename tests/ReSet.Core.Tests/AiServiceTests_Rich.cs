@@ -1830,6 +1830,33 @@ END"
         }
 
         [Fact]
+        public async Task ConsolidatedPlanRules_ForbidNamingARealFrameworkType()
+        {
+            // 규칙 3-1의 마지막 문장("do NOT prescribe a specific API, class, or
+            // framework type")은 2차 통제군에서 지켜지지 않았다 - 계획서가
+            // `SqlConnection`·`SqlCommand`·`IsolationLevel.Snapshot`을 그대로 썼다.
+            // 문언이 추상적이라 모델이 자기 사례로 옮기지 못한 것이므로 실물을 든다.
+            var rules = await RulesBlockAsync();
+
+            Assert.Contains("NEVER name a type from a real data-access framework", rules);
+            Assert.Contains("SqlConnection", rules);
+            Assert.Contains("IsolationLevel.Snapshot", rules);
+
+            // 겨누는 언어가 C#만이 아니다(`targetLanguage`). Java 쪽 예시도 있어야
+            // 모델이 "이건 .NET 이야기"로 좁혀 읽지 않는다.
+            Assert.Contains("PreparedStatement", rules);
+
+            // 금지만 적으면 표현 수단이 없어져 T-SQL 철자로 후퇴한다 - 실제로
+            // 2차 통제군의 S13이 그 길로 가 `BEGIN TRAN`을 되살렸다.
+            Assert.Contains("Generic placeholder names ARE correct", rules);
+            Assert.Contains("conn.beginTransaction()", rules);
+
+            // 표기 일관성은 이번에 새로 생기는 의무다. 규칙이 말하지 않으면
+            // 채점만 감점하는 짝 깨짐이 된다(3단계의 정반대 방향).
+            Assert.Contains("ONE such notation for the WHOLE document", rules);
+        }
+
+        [Fact]
         public async Task ConsolidatedPlanRules_KeepSnapshotIsolationAsAnObligation()
         {
             var rules = await RulesBlockAsync();

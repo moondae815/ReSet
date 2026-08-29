@@ -559,7 +559,28 @@ connections, or error handling"* 라고 못박는데, 계획서는 `conn.BeginTr
 **Critic이 이것을 보고도 통과시켰다** — 추론 로그가 *"C# BeginTransaction(IsolationLevel.
 Snapshot) in S08, S11, S12, S15 — application…"* 이라 적고 감점하지 않았다. 격리 감점 기준을
 「단계 SQL에 쓰지 마라」로만 적어 **앱 코드 쪽 API 지정은 무주공산으로 남았다.**
-채점 기준에 3-1의 API 금지를 따로 세워야 한다.
+
+> ✅ **닫았다 (2026-08-29).** 문서 안에 **서로 다른 가짜 API가 둘**이라는 것이 실측으로
+> 드러난 것이 결정적이었다 — 공통 설계는 `ISettleBatchConnection`/`connectionFactory.open()`
+> 로, `S08`은 `SqlConnection`/`SqlCommand`/`IsolationLevel.Snapshot`으로 같은 것을 부른다.
+> 이행 라운드가 **존재한 적 없는 계약 둘**을 화해시켜야 한다.
+>
+> 감점 범위는 **실존 프레임워크 타입만**으로 정했다. 계획서는 규칙 2에 따라 의사코드를
+> 반드시 실어야 하므로 코드 모양 자체를 막으면 쓸 것이 없어진다. 그래서 셋을 함께 넣었다.
+>
+> | 자리 | 무엇 |
+> |---|---|
+> | 규칙 3-1 | 금지 실물 열거(`SqlConnection`·`IsolationLevel.Snapshot`·`TransactionScope`·`DbContext`·`PreparedStatement`·`EntityManager`). **.NET만 들지 않는다** — 이 도구는 `targetLanguage`로 Java도 겨눈다 |
+> | 규칙 3-1 | **일반 자리표시자는 옳다고 명시**(`conn.beginTransaction()`·`connectionFactory.open()`). 금지만 적으면 표현 수단이 없어져 T-SQL 철자로 후퇴한다 — `S13`이 실제로 그 길로 가 `BEGIN TRAN`을 되살렸다 |
+> | 규칙 3-1 | **표기 일관성**을 새 의무로. 한 문서는 한 표기 |
+> | 채점 기준 4 | 위 셋의 짝. 자리표시자 **과잉 감점 금지**를 함께 적었다 — 안 적으면 Critic이 반대편으로 무너진다 |
+>
+> **일관성을 채점에만 넣지 않은 이유**: 규칙에 없던 새 의무라, 채점만 넣으면 Actor가 듣지도
+> 못한 것으로 감점당한다. 3단계가 겪은 짝 깨짐(규칙만 바꾸고 채점을 안 바꿈)의 **정반대
+> 방향**이다. 같은 회차에 옮겨야 한다.
+>
+> 가드: `ConsolidatedPlanRules_ForbidNamingARealFrameworkType` ·
+> `Critic_ShouldPenalizeNamingARealFrameworkType`.
 
 **(2) `S05` 한 단계만 아직 T-SQL 스크립트다.**
 
