@@ -92,6 +92,33 @@ END";
         }
 
         [Fact]
+        public void WhenAParameterTableFollowsInTheSameSection_ShouldNotReportItsRows()
+        {
+            // 리뷰 재현(Important 1). `## 파라미터 목록` 안에서 기계 표가 매개변수
+            // 표보다 먼저 오면, 역방향 대조가 절 전체의 `|` 줄을 뭉뚱그려 매개변수
+            // 표의 행까지 "원본 DDL이 선언하지 않은 지역 변수"로 오탐한다. 매개변수
+            // 표 헤더는 지역 변수 표 헤더와 다르고(「매개변수 명칭」 vs 「변수 명칭」),
+            // 데이터 행은 코퍼스 실물(COMM_UPD 등)처럼 백틱 없이 `@pi_strYMD`로 적는다.
+            var doc =
+                "## 파라미터 목록\n\n"
+                + LocalVariableDeclarationExtractor.TableHeading + "\n"
+                + "| 변수 명칭 | 데이터 타입 | 초기값 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + CompleteRows
+                + "\n"
+                + "| 매개변수 명칭 | 데이터 타입 | 설명 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| @pi_strYMD | VARCHAR(8) | 조회 기준일 |\n"
+                + "| @po_intRetVal | INT | 반환값 |\n"
+                + "\n### 다음 절\n";
+
+            var result = Validate(doc, Expectations());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@pi_strYMD"));
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@po_intRetVal"));
+        }
+
+        [Fact]
         public void WhenThereAreNoDeclarations_ShouldStaySilent()
         {
             var expectations = SpecExpectations.From(new SpDefinition

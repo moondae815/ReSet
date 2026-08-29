@@ -5003,7 +5003,36 @@ namespace ReSet.Core.Services
         /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
         /// Errors를 통째로 지우고 통과시킨다. 새 검사의 실패가 기존 검사의 판정까지
         /// 삼키면 안 된다(CheckMachineTableShape와 같은 근거).
+        ///
+        /// [2026-08-29 리뷰 FIX - 왜 CollectTableMatchRows로 창을 좁히는가] 옛
+        /// 구현은 헤딩부터 다음 `##`/`###`까지의 모든 `|` 줄을 블록 구분 없이 모았다.
+        /// `## 파라미터 목록` 절 안에서 이 기계 표가 매개변수 표보다 먼저 오면(별도
+        /// `###` 헤딩 없이 바로 이어지는 매개변수 표 - 코퍼스 실물), 역방향 대조가
+        /// 매개변수 표의 행(`@pi_strYMD` 등, 백틱 없이 적힘)까지 "원본 DDL이 선언하지
+        /// 않은 지역 변수"로 오탐했다(리뷰 재현, `LocalVariableTableL1Tests
+        /// .WhenAParameterTableFollowsInTheSameSection_ShouldNotReportItsRows`).
+        /// L1 실패는 `VerificationPipelineOrchestrator.ComposeAfterL1Failure`가 되돌림을
+        /// 부르므로, 이 오탐은 보고가 아니라 재시도 소진으로 번진다.
+        ///
+        /// `CheckTransactionBoundaries`가 이미 같은 문제(헤딩 절에 여러 `|` 블록이
+        /// 섞이는 것)를 `CollectTableMatchRows`(헤더가 일치하는 블록만 모으는 헬퍼)로
+        /// 풀어 뒀다 - 새 헬퍼를 만들지 않고 그 관용구를 그대로 따른다. 정방향은
+        /// 사실에 있는 이름만 찾으므로 옛 창에서도 안전했지만, 역방향과 다른 창을
+        /// 쓰면 "정방향은 봤는데 역방향은 못 본 행"이 생겨 유지보수 부담만 커진다 -
+        /// 그래서 정방향도 같은 좁힌 창으로 통일한다.
+        ///
+        /// [헤더 셀을 여기 하드코딩하는 이유] `TransactionBoundaryExtractor
+        /// .TableHeaderCells`처럼 추출기에 상수로 노출해 AiService 렌더와 공유하는
+        /// 편이 원칙적으로 낫다(단일 진실 공급원). 그럼에도 여기 그대로 적는 이유는
+        /// 이 값이 `AiService.cs:1358`의 렌더 리터럴("| 변수 명칭 | 데이터 타입 |
+        /// 초기값 |")과 반드시 같아야 하는 계약이기 때문이다 - 어긋나면 헤더 대조가
+        /// 아무 블록도 못 찾아 `CollectTableMatchRows`의 관대한 폴백(구간의 모든 `|`
+        /// 줄)으로 후퇴하면서 이 수정이 조용히 무효화된다. 두 리터럴을 바꿀 때는
+        /// 반드시 함께 바꿔야 한다.
         /// </summary>
+        private static readonly IReadOnlyList<string> LocalVariableTableHeaderCells =
+            new[] { "변수 명칭", "데이터 타입", "초기값" };
+
         private static void CheckLocalVariableDeclarationTable(
             string markdown, SpecExpectations expectations, ValidationResult result)
         {
@@ -5031,16 +5060,13 @@ namespace ReSet.Core.Services
                     return;
                 }
 
-                var rowCells = new List<IReadOnlyList<string>>();
-                for (var i = headingIndex + 1; i < endIndex; i++)
-                {
-                    if (!lines[i].TrimStart().StartsWith("|", StringComparison.Ordinal)) continue;
-
-                    var cells = SplitTableRowCells(lines[i]);
-                    // 헤더 행과 구분 행은 대조 대상이 아니다. 구분 행은 `:---` 모양이고
-                    // 헤더 행은 `@`로 시작하는 칸이 없다 - 아래 판정이 둘 다 걸러 낸다.
-                    rowCells.Add(cells);
-                }
+                // 헤더 행과 구분 행은 대조 대상이 아니다. CollectTableMatchRows가
+                // 헤더 행 자체를 이미 건너뛰고(`block.Skip(1)`), 구분 행은 `:---`
+                // 모양이라 아래 판정이 걸러 낸다.
+                var rowCells = CollectTableMatchRows(
+                        lines, headingIndex + 1, endIndex, LocalVariableTableHeaderCells)
+                    .Select(SplitTableRowCells)
+                    .ToList();
 
                 // 정방향 - 모든 DECLARE 사실에 행이 있는가.
                 foreach (var fact in expectations.LocalVariableDeclarations)
