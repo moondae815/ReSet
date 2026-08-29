@@ -267,16 +267,28 @@ namespace ReSet.Core.Services
         /// <see cref="SpecMaterials.All"/>에서 그 재료의
         /// <see cref="SpecMaterial.DdlCounterpart"/>를 조회해 라벨을 갈라야 한다.
         ///
-        /// [빈 목록은 「재료가 없다」가 아니라 「조사가 실패했다」는 뜻이다]
-        /// 정상 경로에서는 <see cref="SpecMaterialCensus.Count"/>가 언제나
-        /// <see cref="SpecMaterials.All"/>과 같은 수만큼의 행을 낸다
+        /// [실패 양식이 둘이다 - 하나만 적으면 나머지가 정상으로 읽힌다]
+        ///
+        /// (1) **빈 목록** - 정상 경로에서는 <see cref="SpecMaterialCensus.Count"/>가
+        /// 언제나 <see cref="SpecMaterials.All"/>과 같은 수만큼의 행을 낸다
         /// (SpecMaterialCensusTests.Count_EveryMaterialInCatalog_AppearsAsARow가
         /// 잠근다). 그래서 이 목록이 비어 있으면 그 자체가 신호다 - StepSweepService.Sweep이
         /// SpecMaterialCensus.Count 호출을 try/catch로 감싸 한 계기의 실패가 이미
         /// 완료된 다른 지표까지 함께 죽이지 않게 하는데, catch에 걸리면 이 목록이
-        /// 빈 채로 떨어진다. 빈 표를 「쟀는데 아무 재료도 없다」로 읽으면 이 회차가
+        /// 빈 채로 떨어진다.
+        ///
+        /// (2) **행은 여덟인데 분모가 0** - jobs가 비었거나 프로시저 해석이 전부
+        /// 실패하면 <see cref="SpecMaterialCensus.Count"/>는 조기 반환하지 않고
+        /// <see cref="SpecMaterialCensusRow.FoldedProcedureCount"/>가 0인 행을
+        /// 여덟 개 그대로 낸다 - 목록 길이만 보면 (1)과 달리 정상으로 보인다.
+        /// StepSweepReportWriter는 이 경우에도 표 대신 "조사 실패"를 인쇄해야
+        /// 한다 - 그러지 않으면 여덟 행이 전부 "0 / 0 / 없음"으로 찍혀
+        /// 「쟀는데 소실이 없다」로 오독된다.
+        ///
+        /// 두 양식 모두 빈 표를 「쟀는데 아무 재료도 없다」로 읽으면 이 회차가
         /// 통째로 없애려는 바로 그 침묵을 다시 만드는 것이다 - 보고서 라이터는
-        /// 이 목록이 비어 있을 때 명시적으로 "조사 실패"를 인쇄해야 한다.
+        /// 목록이 비었을 때, 그리고 분모가 0일 때 각각 명시적으로 "조사 실패"를
+        /// 인쇄해야 한다.
         /// </summary>
         public IReadOnlyList<SpecMaterialCensusRow> MaterialCensus { get; init; }
             = new List<SpecMaterialCensusRow>();
