@@ -350,19 +350,26 @@ END";
         }
 
         /// <summary>
-        /// [미결 Minor 2] DdlParseFailureCount는 재료 루프 안에서 재료마다 다시
-        /// 세어지면 안 된다 - 프로시저당 한 번만 세야 한다. DdlCounters는 private
-        /// static이라 테스트에서 두 번째 계수기를 실제로 주입할 수 없다(오늘은
-        /// LocalVariables 하나뿐이다) - 그래서 "재료가 둘이면 값이 두 배가 된다"를
-        /// 직접 재현할 수는 없다. 대신 프로시저 수와 파싱 실패 수의 관계를
-        /// 고정한다: 여덟 재료 중 파싱을 세는 재료가 늘어도 실패 프로시저 셋 중
-        /// 둘이 실패하면 값은 (재료 수) × (실패 프로시저 수) = 16이 아니라 정확히
-        /// 2여야 한다. 오늘의 단일 계수기 구성에서는 이 값이 우연히도 이미
-        /// 일치한다 - 이 테스트는 회귀를 새로 잡기보다, 다음 계수기가 추가될 때
-        /// 프로시저당 집계 불변식이 깨지면 알아채도록 고정하는 것이 목적이다.
+        /// [Fix Round 1 - 이름이 실제보다 넓게 주장하지 않게 좁힌다] 이 테스트가
+        /// **오늘 실제로 잠그는 것**: 실패 프로시저 수(3개 중 2개)와 인쇄되는
+        /// DdlParseFailureCount가 정확히 일치한다는 것뿐이다 - "X를 시험한다"는
+        /// 이름인데 X를 안 잡으면 거짓 안심을 준다(이 회차 자체가
+        /// Count_FoldsTheSameProcedureAcrossJobs에서 그 함정을 밟았다: 이름은
+        /// "여러 Job에 걸친 판 접기"인데 픽스처 DDL이 바이트 동일해 덮어쓰기·
+        /// 건너뛰기가 관측 불가였다).
+        ///
+        /// [이 테스트가 **안** 잠그는 것] "재료(계수기)가 둘 이상일 때도 프로시저당
+        /// 한 번만 센다"는 **이 테스트로 시험하지 않는다.** DdlCounters는 private
+        /// static이라 테스트에서 둘째 계수기를 실제로 주입할 수 없다(오늘은
+        /// LocalVariables 하나뿐이다). 대신 그 보장은 **구조적**이다 - Count()가
+        /// int 증가가 아니라 실패 프로시저 이름의 HashSet에 Add하므로, 같은
+        /// 프로시저를 여러 계수기가 각각 실패로 표시해도 HashSet.Add의 멱등성 때문에
+        /// 중복 계수가 애초에 성립하지 않는다(SpecMaterialCensus.cs의
+        /// ddlParseFailedProcedures 문서 참고). 그래서 그 보장을 잠그는 별도
+        /// 시험은 필요 없다 - 없다고 「빠진 시험」으로 오해해 만들려 들지 마라.
         /// </summary>
         [Fact]
-        public void Count_DdlParseFailureCountIsPerProcedureNotPerMaterial()
+        public void Count_DdlParseFailureCountMatchesTheNumberOfFailingProceduresInTodaysSingleCounterConfiguration()
         {
             var rows = SpecMaterialCensus.Count(new[]
             {
