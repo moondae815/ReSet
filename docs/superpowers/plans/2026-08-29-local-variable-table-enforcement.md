@@ -616,9 +616,11 @@ Expected: 3 passed
 
 그다음 **(다)의 한 줄을 잠시 지우고** 다시 돌린다.
 Expected: `From_WhenLocalVariablesAreTheOnlyMaterial_ShouldNotReturnNull`이 **FAIL**.
-확인했으면 `git checkout -- src/ReSet.Core/Services/SpecExpectations.cs`로 되돌리고 (다)~(라)를 다시 넣는다.
+확인했으면 `git checkout -- src/ReSet.Core/Services/SpecExpectations.cs`로 되돌린다.
 
-**되돌릴 때 `mv`를 쓰지 마라 — `git checkout -- <경로>`를 쓴다.** 직전 회차에서 변이 검증 뒤 `dotnet test`가 낡은 DLL을 조용히 재사용한 사고가 있었다.
+**⚠ 그 되돌림은 (가)(나)(다)(라) 넷을 전부 지운다 — 이 파일의 모든 변경을 `HEAD`로 되돌리기 때문이다.** (다) 한 줄만 되살아나는 것이 아니다. **넷을 전부 다시 넣고, 넷이 다 살아 있는지 `git diff`로 확인한 뒤 재빌드하라.** 되돌림 사고에서 한 자리가 조용히 빠지는 것이 정확히 이 순간에 생긴다. (2026-08-29 이행 중 워커가 실물로 확인해 올린 자리다.)
+
+**되돌릴 때 `mv`를 쓰지 마라 — `git checkout -- <경로>`를 쓴다.** 직전 회차에서 변이 검증 뒤 `dotnet test`가 낡은 DLL을 조용히 재사용한 사고가 있었다. 필요하면 `dotnet build --no-incremental`로 강제 재빌드한다.
 
 - [ ] **Step 5: 전체 게이트**
 
