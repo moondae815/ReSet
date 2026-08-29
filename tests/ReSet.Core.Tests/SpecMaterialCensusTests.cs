@@ -294,7 +294,7 @@ END";
         }
 
         /// <summary>
-        /// [Fix Round 1 Important 2 - 접힌 프로시저 수] 「재료 분모」 절이 자기 분모를
+        /// [Fix Round 2 Important 2 - 접힌 프로시저 수] 「재료 분모」 절이 자기 분모를
         /// 인쇄하려면 그 분모(접은 프로시저 수)가 census 출력에 실려야 한다. 이 값은
         /// 재료별이 아니라 census 전체의 값이라 모든 행에 같은 값이 실려야 한다 -
         /// 그러지 않으면 라이터가 어느 행을 읽어도 같은 분모를 볼 수 있다는 보장이
@@ -313,7 +313,7 @@ END";
         }
 
         /// <summary>
-        /// [Fix Round 1 Important 2 - DDL 파싱 실패 분모] CountDeclaredVariables는
+        /// [Fix Round 2 Important 2 - DDL 파싱 실패 분모] CountDeclaredVariables는
         /// 파싱에 실패해도 0을 소프트 페일로 돌려준다(AGENTS.md 범주 2) - 그 0이
         /// "DECLARE가 없다"인지 "파싱을 못 했다"인지는 이 카운터가 없으면 census
         /// 출력만 보고는 구별할 수 없다. FoldedProcedureCount와 마찬가지로 census
@@ -350,7 +350,7 @@ END";
         }
 
         /// <summary>
-        /// [Fix Round 1 Minor - per-job 격리] Count() 자신의 job 순회는 이 태스크
+        /// [Fix Round 2 Minor - per-job 격리] Count() 자신의 job 순회는 이 태스크
         /// 이전에는 가드가 없어 job.DdlByProcedure가 null이면 그 자리에서 예외를
         /// 던졌다(NullReferenceException) - StepSweepService의 per-job try/catch
         /// (jobsThatThrew)와 대칭인 가드가 이 파일에는 없었다. 그 결과 Job 하나의
@@ -374,7 +374,7 @@ END";
         }
 
         /// <summary>
-        /// [Fix Round 1 Minor - 원자성] 한 Job의 Specs 순회는 끝까지 성공하고
+        /// [Fix Round 2 Minor - 원자성] 한 Job의 Specs 순회는 끝까지 성공하고
         /// DdlByProcedure 순회만 던지면, 공유 사전에 직접 쓰는 구현은 그 Job의
         /// Specs만 절반 반영한 채로 catch에 들어간다 - "이 Job의 재료를 census에서
         /// 건너뜁니다"라는 로그 문구와 실제 동작이 어긋난다. 이 테스트는 poison

@@ -150,7 +150,7 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// [왜 이 테스트인가 - Fix Round 1, 2026-08-29 리뷰 Important 3] `ReaderTypeName`은
+        /// [왜 이 테스트인가 - Fix Round 2, 2026-08-29 리뷰 Important 3] `ReaderTypeName`은
         /// `ReadsSpecMarkdown_MatchesTheExtractMethodsParameterType`가, `ConsumingChecks`는
         /// `EveryNamedCheck_ExistsOnMechanicalValidator`가, `Enforced`는
         /// `EveryEnforcedMaterial_HasItsHeadingInMachineConfirmedTables`가 잠근다.
@@ -176,7 +176,7 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// [왜 이 테스트인가 - Fix Round 1, 2026-08-29 리뷰 Important 4] 카탈로그 잠금
+        /// [왜 이 테스트인가 - Fix Round 2, 2026-08-29 리뷰 Important 4] 카탈로그 잠금
         /// (`EverySpecReader_IsListedInTheCatalog`)은 `Spec*Extractor` 타입 이름 집합만
         /// 대조한다. 그런데 재료 여덟 중 넷은 리더 하나(`SpecStatementFactsExtractor`)가
         /// 낸다 - `SpecStatementFacts`의 public 멤버 넷(`DmlRows`·`SetTargets`·

@@ -133,7 +133,7 @@ namespace ReSet.Core.Services
         /// 그 대응 리더(DmlScopeExtractor 재사용 또는 신규 배선)를 아직 안
         /// 만들었으므로 「안 쟀다」로 null을 낸다(결함 D).
         ///
-        /// [왜 튜플을 내는가 - Fix Round 1 Important 2] 값(개수)만으로는 그 0이
+        /// [왜 튜플을 내는가 - Fix Round 2 Important 2] 값(개수)만으로는 그 0이
         /// "DECLARE가 없다"인지 "파싱에 실패해 소프트 페일했다"인지 구별할 수 없다.
         /// CountDeclaredVariables(string?)의 공개 시그니처는 바꾸지 않는다 - Task 2가
         /// 승인·통합했고 테스트가 잠근다. 대신 내부 전용 CountDeclaredVariablesCore가
@@ -164,7 +164,7 @@ namespace ReSet.Core.Services
             var specByProcedure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ddlByProcedure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // [Fix Round 1 Minor - per-job try/catch] StepSweepService가 이미 지키는
+            // [Fix Round 2 Minor - per-job try/catch] StepSweepService가 이미 지키는
             // 관용구(jobsThatThrew)를 이 루프 안으로도 내린다. 이 가드가 없으면 한
             // Job의 결함(예: DdlByProcedure == null)이 이 메서드 전체를 던지게 하고,
             // 그 예외를 StepSweepService의 이음매 try/catch가 잡으면 이미 계산됐어야
@@ -239,7 +239,7 @@ namespace ReSet.Core.Services
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToList();
 
-            // [Fix Round 1 Important 2 - 파싱 실패 분모] LocalVariables의 DDL 카운터가
+            // [Fix Round 2 Important 2 - 파싱 실패 분모] LocalVariables의 DDL 카운터가
             // 소프트 페일(0)로 넘어간 프로시저 수. 재료별이 아니라 census 전체의
             // 분모라 모든 행에 같은 값을 싣는다(SpecMaterialCensusRow.DdlParseFailureCount
             // 문서 참고). DdlCounters에 실제로 재는 재료가 하나(LocalVariables)뿐이라
