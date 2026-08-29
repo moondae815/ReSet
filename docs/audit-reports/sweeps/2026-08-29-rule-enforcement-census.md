@@ -92,7 +92,7 @@
 
 | 검사 | 무엇에 묶여 있나 | 상태 |
 |---|---|---|
-| `CheckStepIdInitialValue` | `DECLARE @v_currentStepId INT = 0` — T-SQL 철자 | **침묵 예고**(설계서 §8-4) |
+| `CheckStepIdInitialValue` | `DECLARE @v_currentStepId INT = 0` — T-SQL 철자 **+ `step.ErrorCodes`** | **침묵 예고**(설계서 §8-4). **닻이 셋이다** — 아래 상자 |
 | `CheckCatchDiscardsReturnCode` | `CATCH` 블록의 존재 | **침묵 예고** |
 | `CheckSpecLocalVariablesDeclared` | 명세서 「지역 변수 표」 | **이미 18 → 0으로 꺼졌던 전례**(`known-defects.md` 5-3-7) |
 | `CheckUnknownTableReferences` | 스키마 카탈로그가 비면 **조용히 건너뛴다**(`:1891`) | 조건부 침묵 |
@@ -100,6 +100,15 @@
 앞의 둘은 3단계·이번 회차가 프롬프트에서 그 철자를 걷어냈으므로 **지금 침묵하고 있을
 가능성이 높다.** 2차 통제군에서 L1 발화가 0이었으나, 그것이 「깨끗」인지 「침묵」인지
 **가르지 않았다.** 가르는 것이 이 조사의 후속 과제다.
+
+> ⬆️ **`CheckStepIdInitialValue`의 닻은 셋이다 (2026-08-29 확인,
+> `2026-08-29-critic-exception-axis.md` §9-1).** 철자만 보고 재정박하면 못 고친다.
+> ① `step.ErrorCodes`가 비면 `:6439`에서 **즉시 return** — 코퍼스 실측 **94/499 단계(18.8%)**가
+> 빈 배열이다. ② `CatchBlockPattern` + `SET @po_intRetVal = @var` T-SQL 철자.
+> ③ **판정 전체가 `declaredCodeSet.Contains(initial)`**(`:6464`) — **모델이 같은 회차에 쓴 집합**이다.
+> 오염이 **양방향**으로 흔든다: 빠뜨리면 조용히 놓치고, 부풀리면(3차 통제군 S12·S13처럼
+> 부모 SP 집합을 통째로 복제) **없던 결함을 만든다.** ②③ 재정박은 **오라클 교체를 공유**하므로
+> 한 회차에 묶는 것이 싸다.
 
 > **판정법**: 발화 0을 통과로 읽지 말고, 그 검사가 **재료를 얻었는지**를 따로 확인한다.
 > 검사 D가 그렇게 꺼졌다 — 좌표 차분도 침묵 분모도 못 봤고, 검사별 총 발화량을 전후로
