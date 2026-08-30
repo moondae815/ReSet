@@ -6495,19 +6495,26 @@ SELECT 1;
         }
 
         /// <summary>
-        /// 코드 리뷰 지적 사항(Finding 3) 픽스: 1회차는 분할 경로로 S01이 하한
-        /// 미달로 기록된다. 2회차는 (Critic이 특정 단계를 지목하지 않아) 골격부터
-        /// 다시 만들어야 하는데, 그 골격 호출이 실패한다(빈 응답) — GenerateBySplitAsync가
-        /// null을 돌려주고 호출부가 단일 호출(GenerateConsolidatedBatchPlanAsync)로
-        /// 폴백한다.
+        /// 단계 동결(Task 7, 설계서 §3-2(b)) 배선 이후로 아래 두 회귀 테스트의 전제가
+        /// 성립하지 않게 되어 이 테스트로 대체한다.
         ///
-        /// 그 단일 호출 문서는 분할 문서와 완전히 다른 구조라 S01이라는 섹션 자체가
-        /// 없다. 픽스 전에는 stepFloorViolations가 이 폴백 경로에서 지워지지 않아,
-        /// 1회차가 남긴 "S01 (하한 미달)" 기록이 그대로 살아남아 존재하지도 않는
-        /// 단계를 가리키는 배너가 최종(단일 호출) 문서에 붙었다.
+        /// 옛 전제: Critic이 특정 단계를 지목하지 않으면 pendingDefectiveSteps가
+        /// 비어 다음 회차가 골격부터(또는 문서 전체를) 다시 만들었다 — 그 과정에서
+        /// S01의 "하한 미달" 기록이 완전히 다른 구조의 새 문서에 잘못 살아남거나
+        /// (Finding 3), 반대로 새 문서에 S01 섹션 자체가 없어 배너만 붙고 본문은
+        /// 사라지는 과소 보고가 났다.
+        ///
+        /// 새 전제(§3-2(b)): 동결은 하한 검사·오류 코드 검사·Critic 지목 셋의 AND다.
+        /// S01처럼 하한 검사에 걸린(QualityFloor) 단계는 Critic이 지목하지 않아도
+        /// StepFreezeState.OpenSteps가 항상 Open으로 낸다. 따라서 이 시나리오에서
+        /// 2회차는 "지목 없음 -> 골격 재시도 -> 실패 -> 단일 호출 폴백" 경로를
+        /// 아예 타지 않는다 - 캐시된 골격/S02 섹션을 재사용하며 S01만 targeted로
+        /// 다시 뽑는다. 옛 두 테스트가 만들려던 전제(캐시된 골격이 비고 문서
+        /// 구조가 완전히 바뀜)가 이 배선 아래에서는 구성 자체가 불가능하다 -
+        /// 알려진 결함이 있는 한 그 단계는 항상 targeted 목록에 남기 때문이다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipeline_WhenSplitFallsBackAfterSkeletonRetryFails_ClearsStaleFloorViolations()
+        public async Task RunConsolidatedPipeline_WhenStepHasKnownFloorViolation_TargetsOnlyThatStepWithoutFullRegeneration()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -6515,97 +6522,11 @@ SELECT 1;
             aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
 
-            // 1회차 골격은 성공, 2회차 골격은 빈 응답(실패)으로 분할이 무산된다.
-            var skeletonCall = 0;
+            // 골격은 1회만 응답을 배선한다 - 두 번째 호출이 일어나면(캐시가 재사용
+            // 되지 않았다는 뜻) NSubstitute가 기본값(빈 AiResult)을 돌려주어
+            // 아래 "골격 1회만 호출" 단언이 그 자체로 실패를 드러낸다.
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
-                .Returns(_ => skeletonCall++ == 0
-                    ? new AiResult { Content = SkeletonMarkdown }
-                    : new AiResult { Content = "" });
-
-            // 1회차: S01은 코드 블록이 없어 하한 미달로 기록된다. S02는 정상.
-            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    var step = call.Arg<BatchStepPlan>();
-                    return step.Code == "S01"
-                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." }
-                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
-                });
-
-            // 2회차: 골격이 실패해 폴백하는 단일 호출 문서. S01/S02와 무관한
-            // 완전히 다른 구조라 하한 미달을 겪은 옛 코드가 어디에도 없다.
-            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult
-                {
-                    Content = SkeletonMarkdown.Replace(
-                        "<!-- STEP:S01 -->\n<!-- STEP:S02 -->",
-                        "### 전체 단계\n\n단일 호출로 만든 본문.\n\n```sql\nSELECT 1;\n```")
-                });
-
-            // 1회차는 (특정 단계 지목 없이) 문서 전반 결함으로 실패, 2회차는 통과.
-            var reviewCall = 0;
-            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(_ => reviewCall++ == 0
-                    ? new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
-                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
-
-            var result = await RunBatchPipeline(aiService);
-
-            // 실제로 단일 호출 폴백을 탔는지 먼저 확인한다 — 아니면 이 테스트가
-            // 의도한 경로를 검증하지 못한다.
-            await aiService.Received(1).GenerateConsolidatedBatchPlanAsync(
-                Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
-            Assert.Contains("전체 단계", result.Plan);
-
-            // 핵심 불변식: 더 이상 존재하지 않는 S01의 하한 미달 기록이 완전히
-            // 다른 구조의 최종 문서에 남으면 안 된다.
-            Assert.DoesNotContain("하한 미달", result.Plan);
-            Assert.DoesNotContain("S01", result.Plan);
-        }
-
-        /// <summary>
-        /// 회귀 재현: 위 테스트가 고친 폴백 분기(1775줄 부근)는 stepFloorViolations만
-        /// 지우고 lastSkeleton/lastSkeletonResult/lastStepSections는 남겨뒀다. 3회차
-        /// 시나리오로 재현한다 — 1회차는 분할로 S01(하한 미달, 기록됨)·S02(정상)를
-        /// 만든다. 2회차는 (1회차가 어떤 단계도 지목하지 않아) 골격부터 다시 만들어야
-        /// 하는데 그 골격 호출이 빈 응답을 돌려줘 단일 호출로 폴백한다 — 여기서
-        /// stepFloorViolations는 비워지지만 lastSkeleton과 lastStepSections(S01의
-        /// 하한 미달 본문 포함)는 버그 있는 코드에서 살아남는다. 2회차는 점수가
-        /// 올라 최고점 후보를 갱신하므로(개선) 목차 재수립이 발동하지 않고, S02를
-        /// 결함으로 지목한다. 3회차는 지목 재생성(targeted)으로 들어가는데, 버그
-        /// 있는 코드에서는 previousSkeleton/previousSections가 여전히 non-null이라
-        /// targeted 조건을 충족해 S02만 새로 만들고 S01은 1회차의 캐시된 하한 미달
-        /// 본문을 위반 기록 없이 그대로 재조립한다. 3회차 리뷰가 통과하면 최종
-        /// 문서는 Passed로 끝나면서도 하한 미달 S01 본문을 배너 없이 실어 나른다 —
-        /// 이 기능이 막으려는 바로 그 과소 보고다.
-        ///
-        /// 픽스 전에는 이 테스트가 다음 셋 다 실패한다: 골격 호출이 2회에 그친다
-        /// (3회여야 한다 — 캐시가 지워졌다면 3회차도 골격부터 다시 만들어야 한다),
-        /// 최종 문서에 "하한 미달" 배너가 없다, S01이 배너 없이 결함 본문 그대로
-        /// 실린다. 픽스 전 상태에서 직접 실행해 세 단언이 모두 실패하는 것을
-        /// 확인했다.
-        /// </summary>
-        [Fact]
-        public async Task RunConsolidatedPipeline_WhenSplitFallsBackMidRetryLoop_ClearsCacheSoALaterTargetedRegenCannotResurrectTheStaleFloorViolation()
-        {
-            var aiService = Substitute.For<IAiService>();
-            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Brainstorm" });
-            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
-
-            // 1회차 골격은 성공, 2회차 골격은 빈 응답(폴백 유발), 3회차는 픽스가
-            // 캐시를 지웠다면 다시 골격부터 만들어야 하므로 성공을 돌려준다.
-            var skeletonCall = 0;
-            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
-                .Returns(_ =>
-                {
-                    var call = skeletonCall++;
-                    return call == 1
-                        ? new AiResult { Content = "" }
-                        : new AiResult { Content = SkeletonMarkdown };
-                });
+                .Returns(new AiResult { Content = SkeletonMarkdown });
 
             // S01은 몇 번을 다시 만들어도 코드 블록이 없어 하한 미달. S02는 항상 정상.
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
@@ -6617,45 +6538,44 @@ SELECT 1;
                         : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });
 
-            // 2회차의 골격 실패로 인한 단일 호출 폴백 문서.
-            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult
-                {
-                    Content = SkeletonMarkdown.Replace(
-                        "<!-- STEP:S01 -->\n<!-- STEP:S02 -->",
-                        "### 전체 단계\n\n단일 호출로 만든 본문.\n\n```sql\nSELECT 1;\n```")
-                });
-
-            // 1회차: 결함이 있으나 특정 단계를 지목하지 않는다(문서 전반 결함) —
-            // 그래야 2회차가 지목 재생성이 아니라 전체 재생성(골격부터)으로 간다.
-            // 2회차: 점수가 올라(최고점 후보 갱신, 재수립 미발동) S02를 지목한다.
-            // 3회차: 통과.
+            // 1회차: 결함이 있으나 특정 단계를 지목하지 않는다(문서 전반 결함) -
+            // 옛 코드라면 이것만으로 다음 회차가 골격부터 다시 만들었다. 2회차: 통과.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(_ =>
-                {
-                    var call = reviewCall++;
-                    return call switch
-                    {
-                        0 => new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
-                        1 => new ReviewResult { HasDefects = true, FeedbackComment = "S02 결함", DefectiveSteps = { "S02" }, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
-                        _ => new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 },
-                    };
-                });
+                .Returns(_ => reviewCall++ == 0
+                    ? new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
 
             var result = await RunBatchPipeline(aiService);
 
-            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
-
-            // 캐시가 실제로 통째로 지워졌다는 증거: 3회차도 골격부터 다시 만들어야
-            // 한다. 버그 있는 코드에서는 지목 재생성이 캐시를 재사용해 이 호출이
-            // 일어나지 않는다(2회에 그친다).
-            await aiService.Received(3).GenerateBatchPlanSkeletonAsync(
+            // 골격은 1회만 불린다 - 2회차가 캐시된 골격을 재사용했다는 증거다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
 
+            // 단일 호출 폴백이 전혀 일어나지 않는다.
+            await aiService.DidNotReceive().GenerateConsolidatedBatchPlanAsync(
+                Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // S01은 계속 하한 미달이라 GenerateStepSectionWithFloorRetryAsync의 내부
+            // 재시도(maxTries=5, :3518)를 라운드마다 전부 소진한다 - 1회차(최초 생성)
+            // + 2회차(targeted 재생성)로 5*2=10회. 숫자 자체보다 "1회차분(5회)을
+            // 넘겨 2회차에도 다시 불렸다"가 이 단언의 핵심이다.
+            await aiService.Received(10).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // S02는 결함이 없어 동결된다 - 1회차 한 번만 불린다(바이트 그대로 재사용).
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
             // 핵심 불변식: S01이 하한 미달 본문 그대로 최종 문서에 실린다면, 반드시
-            // 그 사실을 배너가 알려야 한다 — 침묵해서는 안 된다.
+            // 그 사실을 배너가 알려야 한다 - 침묵해서는 안 된다. 기계가 아는 결함은
+            // 동결되지 않으므로 Critic이 다시 지목하지 않아도 계속 추적된다.
             Assert.Contains("dbo.T1과 -1만 있다", result.Plan!);
             Assert.Contains("하한 미달", result.Plan!);
             Assert.Contains("S01", result.Plan!);

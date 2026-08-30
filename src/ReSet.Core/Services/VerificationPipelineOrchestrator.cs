@@ -1820,6 +1820,10 @@ namespace ReSet.Core.Services
             // 조용히 사라진다.
             var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
+            // 어느 단계도 선언하지 않은 원본 오류 코드의 누락 - 본문이 아니라 목차의
+            // 결함이다(설계서 §3-5(b)). 회차를 넘어 살아 있어야 다음 회차의 재설계
+            // 조건(Task 8)이 이번 회차에 기계가 찾은 사실을 읽을 수 있다.
+            var machineFoundStructureDefect = false;
 
             // 목차가 낼 ErrorCodes는 하한 검사의 유일한 대조 기준인데, 실측 두 회차에서
             // 26개 단계 중 25개가 빈 배열이었다. 명세서에서 뽑아 채운다. 명세서는 루프
@@ -2303,17 +2307,30 @@ namespace ReSet.Core.Services
                             }
                         }
 
-                        // 어느 단계가 문제인지 Critic이 구조화 신호로 알려줬다면
-                        // 골격과 통과한 단계를 재사용하고 그 단계만 다시 뽑는다.
-                        // FeedbackComment 산문에서 코드를 파싱하지 않는다 —
-                        // RegenerationScopeSelector가 그 방식의 실패를 이미 기록했다.
+                        // 어느 단계가 문제인지 세 신호를 합쳐 정한다. Critic 지목만 쓰면
+                        // 기계가 아는 결함(하한 미달·오류 코드 누락)이 있는 단계가 동결된다.
                         pendingDefectiveSteps.Clear();
-                        if (currentSteps != null && l2Result.DefectiveSteps.Count > 0)
+                        var codeAttribution = ErrorCodeAttribution.Attribute(missingErrorCodes, currentSteps);
+                        var openSteps = StepFreezeState.OpenSteps(
+                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, codeAttribution.StepCodes);
+
+                        if (openSteps != null)
                         {
-                            pendingDefectiveSteps.AddRange(
-                                l2Result.DefectiveSteps.Where(code =>
-                                    currentSteps.Any(step =>
-                                        string.Equals(step.Code, code, StringComparison.OrdinalIgnoreCase))));
+                            pendingDefectiveSteps.AddRange(openSteps);
+                        }
+
+                        // 어느 단계도 선언하지 않은 원본 오류 코드가 누락됐다면 그것은
+                        // 본문이 아니라 목차의 결함이다(설계서 §3-5(b)). 기계가 발견한
+                        // 이 사실을 Critic의 자기 신고와 OR로 합쳐 재설계 조건에 넘긴다.
+                        //
+                        // 합치지 않으면 HasUnattributed가 소비자 없는 신호로 남는다 -
+                        // 만들어졌으나 아무도 안 쓰는 산출물이 이 계획에서 두 번 나왔다.
+                        machineFoundStructureDefect = codeAttribution.HasUnattributed;
+                        if (machineFoundStructureDefect)
+                        {
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
+                                "목차 결함으로 기록합니다.");
                         }
 
                         attempt++;
