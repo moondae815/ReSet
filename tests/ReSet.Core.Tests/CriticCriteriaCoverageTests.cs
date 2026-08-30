@@ -70,6 +70,12 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("branches on its own outcome", prompt);
             Assert.Contains("`GOTO` error labels", prompt);
+
+            // [2026-08-30] 열거에 `IF @@ROWCOUNT`를 더했다. 일반 조항("branches on its
+            // own outcome")이 이미 덮지만 **모델은 열거를 따른다** - 3차 통제군 채택본이
+            // `IF @@ROWCOUNT = 0 INSERT …`(업서트)를 단계가 보내는 SQL에 남겼고 Critic이
+            // 그것을 경미로 지적했다. 규칙과 채점을 같은 회차에 옮긴다(§10-4의 짝 규약).
+            Assert.Contains("`IF @@ROWCOUNT`", prompt);
         }
 
         [Fact]

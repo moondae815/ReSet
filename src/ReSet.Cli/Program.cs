@@ -997,6 +997,71 @@ namespace ReSet.Cli
 
                     try
                     {
+                        // TUI 흐름과 같은 재료 폐포를 건다(설계서 §7-2). 이 경로를 빼면
+                        // 같은 도구가 진입 경로에 따라 다른 재료를 쓰게 된다.
+                        var entryPointSpecPaths = specsData
+                            .Select(spec => Path.Combine("Procedures", spec.FileName, "docs", "Spec.md"))
+                            .Where(relative => File.Exists(Path.Combine(outputDir, relative)))
+                            .ToList();
+
+                        var closure = BatchStepCatalog.CloseOverProcedureReferences(outputDir, entryPointSpecPaths);
+
+                        foreach (var added in closure.Added)
+                        {
+                            Serilog.Log.Information("[배치 설계] 참조 프로시저 재료 추가: {SpecPath}", added);
+
+                            var addedIdentifier = BatchStepCatalog.ExtractProcedureIdentifier(added);
+                            var addedFullPath = Path.Combine(outputDir, added);
+                            if (addedIdentifier is null || !File.Exists(addedFullPath)) continue;
+
+                            specsData.Add((addedIdentifier, await File.ReadAllTextAsync(addedFullPath, activeCts.Token)));
+                        }
+
+                        if (closure.Added.Count > 0)
+                        {
+                            var addedLoad = await BatchStepCatalog.LoadDefinitionsAsync(
+                                outputDir, closure.Added, activeCts.Token);
+                            spDefs.AddRange(addedLoad.Definitions);
+
+                            // 명세는 있는데 raw/metadata.json이 없거나 못 읽으면 그 SP가
+                            // specs에는 들어가고 definitions에는 안 들어간다(설계서 §7-1) -
+                            // 아무도 안 알리면 재료를 잃은 검사가 조용해진다. 이 경로는
+                            // 비대화형이라 화면이 아니라 로그로 낸다(TUI 흐름은 화면에도 낸다,
+                            // Program.cs:1568-1578과 대응).
+                            foreach (var missing in addedLoad.MissingMetadata)
+                            {
+                                Serilog.Log.Warning(
+                                    "[배치 설계] 참조 프로시저 {SpecPath} 의 메타데이터(raw/metadata.json)가 없어 정의 재료에서 제외됩니다.",
+                                    missing);
+                            }
+
+                            foreach (var failed in addedLoad.FailedToParse)
+                            {
+                                Serilog.Log.Warning(
+                                    "[배치 설계] 참조 프로시저 {SpecPath} 의 메타데이터를 읽지 못해 정의 재료에서 제외됩니다.",
+                                    failed);
+                            }
+                        }
+
+                        if (closure.CapExceeded)
+                        {
+                            Serilog.Log.Warning("[배치 설계] 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.");
+                        }
+
+                        // 참조 프로시저를 재료 목록 끝에 덧붙였을 뿐이라 실행 순서가
+                        // closure.SpecPaths(참조자 바로 뒤에 삽입된 순서)와 어긋난다.
+                        // LoadDefinitionsAsync의 계약이 입력 순서를 실행 순서로 쓰므로
+                        // (설계서 §6) 여기서 다시 줄 세운다. 폐포에 없는 항목(경로를
+                        // 못 만든 것 등)은 ReorderByClosure의 계약대로 하나도 안 사라진다.
+                        specsData = BatchStepCatalog.ReorderByClosure(
+                            specsData,
+                            spec => Path.Combine("Procedures", spec.FileName, "docs", "Spec.md"),
+                            closure).ToList();
+                        spDefs = BatchStepCatalog.ReorderByClosure(
+                            spDefs,
+                            def => Path.Combine("Procedures", $"{def.Schema}.{def.Name}", "docs", "Spec.md"),
+                            closure).ToList();
+
                         var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: activeCts.Token);
                         var consolidatedPlan = pipelineResult.Plan;
                         var aiResult = pipelineResult.Result;
@@ -1508,8 +1573,25 @@ namespace ReSet.Cli
                         });
                         AnsiConsole.WriteLine();
 
+                        // 사람이 고른 것은 진입점이고, 그것이 부르는 프로시저 타입 참조는
+                        // 도구가 재료에 더한다(설계서 §4). 함수는 더하지 않는다 - 부모
+                        // 명세의 「참조 함수 표」가 호출식 전문을 이미 담는다.
+                        var closure = BatchStepCatalog.CloseOverProcedureReferences(outputDir, selectedFiles);
+                        foreach (var added in closure.Added)
+                        {
+                            AnsiConsole.MarkupLine(
+                                $"[cyan]참조 프로시저를 재료에 추가했습니다: {Markup.Escape(added)}[/]");
+                            Serilog.Log.Information("[배치 설계] 참조 프로시저 재료 추가: {SpecPath}", added);
+                        }
+
+                        if (closure.CapExceeded)
+                        {
+                            AnsiConsole.MarkupLine(
+                                "[yellow]경고: 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.[/]");
+                        }
+
                         var specsData = new List<(string FileName, string Content)>();
-                        foreach (var fileName in selectedFiles)
+                        foreach (var fileName in closure.SpecPaths)
                         {
                             var fullPath = Path.Combine(outputDir, fileName);
                             var content = await File.ReadAllTextAsync(fullPath);
@@ -1541,7 +1623,7 @@ namespace ReSet.Cli
                             // 계획 수립 전에 뜬다 - 종전에는 계획이 다 끝난 뒤에야 그 SP가
                             // 지시서에서 빠진다는 사실을 알렸다.
                             var loadResult = await BatchStepCatalog.LoadDefinitionsAsync(
-                                outputDir, selectedFiles, activeCts.Token);
+                                outputDir, closure.SpecPaths, activeCts.Token);
                             var spDefs = loadResult.Definitions.ToList();
 
                             foreach (var missing in loadResult.MissingMetadata)

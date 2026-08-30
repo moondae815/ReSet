@@ -8351,7 +8351,13 @@ namespace ReSet.Core.Services
         /// 그 자리가 통째로 빠진다.
         /// </summary>
         private static readonly Regex SqlSideControlFlowPattern = new(
-            @"\bGOTO\s+[A-Za-z_]\w*|@@ERROR\b|\bBEGIN\s+TRY\b|\bEND\s+TRY\b|\bBEGIN\s+CATCH\b|\bEND\s+CATCH\b",
+            @"\bGOTO\s+[A-Za-z_]\w*|@@ERROR\b|\bBEGIN\s+TRY\b|\bEND\s+TRY\b|\bBEGIN\s+CATCH\b|\bEND\s+CATCH\b" +
+            // `@@ROWCOUNT`는 `IF`가 붙었을 때만 위반이다. 맨값으로 읽어 변수에 담는 것
+            // (`SET @v_lockDeleted = @@ROWCOUNT;`)은 몇 행이 바뀌었는지를 앱에 넘기는
+            // 정상 이행이고, 코퍼스 실측에서 그 형태가 28건이다 - 함께 잡으면 정상
+            // 이행이 통째로 L1 실패가 된다(L1 실패는 보고가 아니라 되돌림이다).
+            // 분기 형태는 50건이고 그중 새 규칙 판이 1건(POQSettleBatch4:4119의 업서트)이다.
+            @"|\bIF\s+@@ROWCOUNT\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
@@ -8681,8 +8687,10 @@ namespace ReSet.Core.Services
             var message =
                 "계획서의 코드 블록에서 SQL 문장이 자기 실행 결과를 보고 분기합니다. " +
                 "규칙 3-1은 제어 흐름의 거처를 애플리케이션으로 정합니다 - `GOTO` 오류 라벨, " +
-                "`IF @@ERROR <> 0` 검사, `BEGIN TRY`/`END CATCH` 감싸기를 단계 자신의 SQL에 " +
-                "쓰지 마십시오. 애플리케이션이 실패를 관측하고 다음에 무엇을 할지 정합니다. " +
+                "`IF @@ERROR <> 0` 검사, `IF @@ROWCOUNT` 분기, `BEGIN TRY`/`END CATCH` 감싸기를 " +
+                "단계 자신의 SQL에 쓰지 마십시오. 애플리케이션이 실패를 관측하고 다음에 무엇을 " +
+                "할지 정합니다. 바뀐 행 수가 필요하면 `SET @v = @@ROWCOUNT`로 읽어 넘기고 " +
+                "분기는 애플리케이션에서 하십시오 - 업서트도 마찬가지입니다. " +
                 "원본 오류 코드는 버리는 것이 아니라 앱의 실패 경로가 받아 기록하십시오 " +
                 $"(규칙 6-1·9). ({SummarizeCodeTokenHits(hits)})";
 

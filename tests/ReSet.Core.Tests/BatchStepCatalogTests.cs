@@ -242,6 +242,286 @@ namespace ReSet.Core.Tests
             File.WriteAllText(Path.Combine(docsDirectory, "Spec.md"), "# Spec");
         }
 
+        /// <summary>
+        /// 매니페스트의 Nodes 중 타입 접미사가 Procedure 인 것만 돌려준다.
+        /// 함수를 함께 돌려주면 프롬프트가 34% 늘고 부모 명세의 「참조 함수 표」와
+        /// 중복된다(설계서 §2). 자기 자신도 빼야 한다 - 매니페스트는 자기 키를
+        /// Nodes 에 함께 싣는다(실물 확인).
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_ReturnsOnlyProcedureTypedNodesThatHaveASpec()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var refs = BatchStepCatalog
+                    .ReadProcedureReferences(root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"))
+                    .Select(p => p.Replace(Path.DirectorySeparatorChar, '/'))
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .ToList();
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_Child/docs/Spec.md" },
+                    refs);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestIsMissing()
+        {
+            var root = CreateOutputTree();
+            try
+            {
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Root", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestIsNotJson()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw", "dependency-manifest.json"),
+                    "{ this is not json");
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 「문법 오류」(위 테스트, JsonException) 와는 다른 경우다 - 이 JSON 은 문법이
+        /// 맞지만 "Nodes": null 로 퇴화한 모양이다. System.Text.Json 은 키가 명시적으로
+        /// null 이면 ManifestShape.Nodes 의 `= new()` 기본값을 덮어써 null 을 그대로
+        /// 싣는다. manifest.Nodes 를 null 검사 없이 순회하면 NullReferenceException 이
+        /// catch 블록 밖에서 던져진다 - §8 의 "예외를 밖으로 던지지 않는다" 위반이다.
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestHasAnExplicitNullNodes()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw", "dependency-manifest.json"),
+                    """
+                    { "Key": "DB.dbo.USP_Parent.Procedure", "Nodes": null }
+                    """);
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 매니페스트가 가리키는 명세 파일이 실제로 없으면 더하지 않는다. 없는 파일을
+        /// 재료 목록에 넣으면 뒤의 적재기가 그것을 MissingMetadata 로 세어, 사람이
+        /// 고르지도 않은 항목 때문에 경고가 뜬다.
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_SkipsANodeWhoseSpecFileDoesNotExist()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.Delete(Path.Combine(root, "Procedures", "dbo.USP_Child", "docs", "Spec.md"));
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 더해진 항목은 자기를 부른 항목 <b>바로 뒤</b>에 온다. LoadDefinitionsAsync 의
+        /// 계약이 「입력 순서가 곧 배치 스텝 실행 순서」이고, 하위 프로시저는 부모 흐름
+        /// 안에서 실행되므로 끝에 붙이면 실행 순서가 틀린다(설계서 §6).
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_InsertsEachAdditionRightAfterItsReferrer()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Tail"));
+
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Tail", "docs", "Spec.md")
+                    });
+
+                Assert.Equal(
+                    new[]
+                    {
+                        "Procedures/dbo.USP_Parent/docs/Spec.md",
+                        "Procedures/dbo.USP_Child/docs/Spec.md",
+                        "Procedures/dbo.USP_Tail/docs/Spec.md"
+                    },
+                    closure.SpecPaths.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_Child/docs/Spec.md" },
+                    closure.Added.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+                Assert.False(closure.CapExceeded);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 실물이 순환이다 - Summary 가 EXTRA 를 부르고 EXTRA 가 Summary 를 부른다.
+        /// visited 가 없으면 끝나지 않는다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_TerminatesOnACycle()
+        {
+            var root = CreateCyclicManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[] { Path.Combine("Procedures", "dbo.USP_A", "docs", "Spec.md") });
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_A/docs/Spec.md", "Procedures/dbo.USP_B/docs/Spec.md" },
+                    closure.SpecPaths.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 이미 진입점에 있는 것은 다시 더하지 않는다. 사람이 부모와 자식을 둘 다
+        /// 골랐을 때 자식이 두 번 실리면 프롬프트에 같은 명세가 두 번 간다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_DoesNotDuplicateAnAlreadySelectedProcedure()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md")
+                    });
+
+                Assert.Empty(closure.Added);
+                Assert.Equal(2, closure.SpecPaths.Count);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 폐포가 진입점의 2배를 넘으면 더 넓히지 않는다. BatchStepPlanParser.MaxSteps 가
+        /// 이미 쓰는 폭주 방어와 같은 관용이다(설계서 §5).
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_StopsAtTheCapAndReportsIt()
+        {
+            var root = CreateChainManifestTree(length: 6);
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[] { Path.Combine("Procedures", "dbo.USP_C0", "docs", "Spec.md") });
+
+                Assert.True(closure.CapExceeded);
+                Assert.Equal(2, closure.SpecPaths.Count);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 진입점이 빈 목록이면 빈 폐포를 돌려주고 던지지 않는다 - outputRoot를
+        /// 건드리기도 전에 조기 반환하는 계약을 명문으로 잠근다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_ReturnsEmptyClosureForEmptyEntryPoints()
+        {
+            var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                "이-경로는-없다-그리고-안-건드려진다", Array.Empty<string>());
+
+            Assert.Empty(closure.SpecPaths);
+            Assert.Empty(closure.Added);
+            Assert.False(closure.CapExceeded);
+        }
+
+        /// <summary>
+        /// 대소문자만 다른 중복 진입점은 같은 프로시저다. Global Constraints(경로
+        /// 표기 항)가 비교·중복 판정에 StringComparer.OrdinalIgnoreCase를 명문으로
+        /// 요구한다 - Windows·macOS 양쪽에서 같은 판정을 내기 위해서다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_CollapsesCaseDifferingDuplicateEntryPoints()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("procedures", "DBO.usp_parent", "docs", "spec.md")
+                    });
+
+                // dbo.USP_Parent가 매니페스트로 dbo.USP_Child를 부르지만, 진입점
+                // 자체의 대소문자만 다른 중복은 하나로 뭉쳐야 한다.
+                Assert.Equal(
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md")
+                    },
+                    closure.SpecPaths);
+                Assert.Equal(
+                    new[] { Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md") },
+                    closure.Added);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         private static string CreateOutputTree()
         {
             var root = Path.Combine(Path.GetTempPath(), $"ReSet-BatchCatalog-{Guid.NewGuid():N}");
@@ -258,6 +538,144 @@ namespace ReSet.Core.Tests
             var docsDirectory = Path.Combine(root, relativeObjectDirectory, "docs");
             Directory.CreateDirectory(docsDirectory);
             File.WriteAllText(Path.Combine(docsDirectory, "Spec.md"), "# Spec");
+        }
+
+        /// <summary>
+        /// 부모 하나가 프로시저 하나와 함수 하나를 부르는 최소 트리. 매니페스트의
+        /// SpecPath 는 매니페스트 자신의 디렉터리 기준 상대 경로다(실물이 그렇다).
+        /// </summary>
+        private static string CreateManifestTree()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Manifest-{Guid.NewGuid():N}");
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Parent"));
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Child"));
+            WriteSpec(root, Path.Combine("Functions", "dbo.UF_Helper"));
+
+            var rawDirectory = Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw");
+            Directory.CreateDirectory(rawDirectory);
+            File.WriteAllText(
+                Path.Combine(rawDirectory, "dependency-manifest.json"),
+                """
+                {
+                  "Key": "DB.dbo.USP_Parent.Procedure",
+                  "Nodes": [
+                    { "Key": "DB.dbo.USP_Parent.Procedure", "Status": "Succeeded", "SpecPath": "docs/Spec.md" },
+                    { "Key": "DB.dbo.USP_Child.Procedure", "Status": "Succeeded", "SpecPath": "../dbo.USP_Child/docs/Spec.md" },
+                    { "Key": "DB.dbo.UF_Helper.Function", "Status": "Succeeded", "SpecPath": "../../Functions/dbo.UF_Helper/docs/Spec.md" }
+                  ]
+                }
+                """);
+
+            return root;
+        }
+
+        /// <summary>A 가 B 를 부르고 B 가 A 를 부르는 순환 트리.</summary>
+        private static string CreateCyclicManifestTree()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Cycle-{Guid.NewGuid():N}");
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_A"));
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_B"));
+            WriteManifest(root, "dbo.USP_A", "dbo.USP_B");
+            WriteManifest(root, "dbo.USP_B", "dbo.USP_A");
+            return root;
+        }
+
+        /// <summary>C0 → C1 → … 로 이어지는 사슬. 상한 시험용이다.</summary>
+        private static string CreateChainManifestTree(int length)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Chain-{Guid.NewGuid():N}");
+            for (var i = 0; i < length; i++)
+            {
+                WriteSpec(root, Path.Combine("Procedures", $"dbo.USP_C{i}"));
+            }
+
+            for (var i = 0; i < length - 1; i++)
+            {
+                WriteManifest(root, $"dbo.USP_C{i}", $"dbo.USP_C{i + 1}");
+            }
+
+            return root;
+        }
+
+        /// <summary>
+        /// closure.SpecPaths 안에 있는 항목은 그 순서대로 나와야 한다 - 원래 리스트의
+        /// 순서(끝에 덧붙는 순서)와는 무관하다. 배치 모드가 참조 프로시저를 끝에
+        /// 붙인 뒤 이 헬퍼로 재정렬하는 것이 바로 이 계약에 기댄다.
+        /// </summary>
+        [Fact]
+        public void ReorderByClosure_OrdersMatchedItemsByClosureSpecPathOrder()
+        {
+            var pathA = Path.Combine("Procedures", "dbo.A", "docs", "Spec.md");
+            var pathB = Path.Combine("Procedures", "dbo.B", "docs", "Spec.md");
+            var closure = new BatchStepCatalog.ProcedureClosure(
+                new[] { pathB, pathA }, Array.Empty<string>(), false);
+
+            // 원래 리스트 순서는 A, B(끝에 덧붙은 것처럼) - 폐포 순서는 B, A다.
+            var items = new[] { ("A", pathA), ("B", pathB) };
+
+            var reordered = BatchStepCatalog.ReorderByClosure(items, item => item.Item2, closure);
+
+            Assert.Equal(new[] { "B", "A" }, reordered.Select(i => i.Item1));
+        }
+
+        /// <summary>
+        /// closure.SpecPaths에 없는 항목(경로를 못 만들었거나 폐포가 모르는 것)은
+        /// 하나도 사라지면 안 된다 - 재정렬의 핵심 안전장치다. 이 항목은 자신의
+        /// 원래 바로 앞에 있던, 매치된 항목이 재정렬로 어디로 옮겨가든 그 뒤에
+        /// 붙어서 원래 상대 위치를 유지한다.
+        /// </summary>
+        [Fact]
+        public void ReorderByClosure_KeepsUnmatchedItemsAndLosesNothing()
+        {
+            var pathA = Path.Combine("Procedures", "dbo.A", "docs", "Spec.md");
+            var pathB = Path.Combine("Procedures", "dbo.B", "docs", "Spec.md");
+            // 폐포 순서는 B, A(입력 순서 A, B와 반대) - X는 아무 매치도 안 되고 원래
+            // 아무 매치 앞에도 없었으므로 맨 앞에 남는다. Y는 원래 A 바로 뒤에
+            // 있었으므로, A가 재정렬로 어디로 옮겨가든 A 바로 뒤에 붙는다.
+            var closure = new BatchStepCatalog.ProcedureClosure(
+                new[] { pathB, pathA }, Array.Empty<string>(), false);
+
+            var items = new[]
+            {
+                ("X", (string?)null),
+                ("A", pathA),
+                ("Y", (string?)null),
+                ("B", pathB)
+            };
+
+            var reordered = BatchStepCatalog.ReorderByClosure(items, item => item.Item2, closure);
+
+            Assert.Equal(new[] { "X", "B", "A", "Y" }, reordered.Select(i => i.Item1));
+            Assert.Equal(items.Length, reordered.Count);
+        }
+
+        [Fact]
+        public void ReorderByClosure_ReturnsEmptyListForEmptyInput()
+        {
+            var closure = new BatchStepCatalog.ProcedureClosure(
+                Array.Empty<string>(), Array.Empty<string>(), false);
+
+            var reordered = BatchStepCatalog.ReorderByClosure(
+                Array.Empty<(string, string?)>(), item => item.Item2, closure);
+
+            Assert.Empty(reordered);
+        }
+
+        private static void WriteManifest(string root, string owner, string callee)
+        {
+            var rawDirectory = Path.Combine(root, "Procedures", owner, "raw");
+            Directory.CreateDirectory(rawDirectory);
+            File.WriteAllText(
+                Path.Combine(rawDirectory, "dependency-manifest.json"),
+                $$"""
+                {
+                  "Key": "DB.{{owner}}.Procedure",
+                  "Nodes": [
+                    { "Key": "DB.{{owner}}.Procedure", "Status": "Succeeded", "SpecPath": "docs/Spec.md" },
+                    { "Key": "DB.{{callee}}.Procedure", "Status": "Succeeded", "SpecPath": "../{{callee}}/docs/Spec.md" }
+                  ]
+                }
+                """);
         }
     }
 }

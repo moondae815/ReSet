@@ -266,6 +266,45 @@ namespace ReSet.Core.Tests
             Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
         }
 
+        /// <summary>
+        /// 4단계 3차 통제군 채택본의 실물이다(`POQSettleBatch4:4119`,
+        /// `SQL_S15_CHECKPOINT_UPSERT_SUCCEEDED`). Critic이 경미로 지적했으나 채택본에
+        /// 살아남았다 - 규칙 3-1의 일반 조항("a statement MUST NOT branch on its own
+        /// outcome")이 이미 덮는 모양인데 열거에 없어 아무도 강제하지 않았다.
+        /// </summary>
+        [Fact]
+        public void ValidateConsolidated_ReportsAnUpsertBranchingOnItsOwnRowCount()
+        {
+            var markdown = Plan("""
+                ```sql
+                UPDATE batch.BatchCheckpoint SET Status = N'Succeeded' WHERE RunId = @p_runId;
+                IF @@ROWCOUNT = 0
+                    INSERT INTO batch.BatchCheckpoint (RunId, Status) VALUES (@p_runId, N'Succeeded');
+                ```
+                """);
+
+            Assert.True(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
+        /// <summary>
+        /// 그 짝이다. <c>@@ROWCOUNT</c>를 <b>읽어 변수에 담는</b> 것은 분기가 아니다 -
+        /// 몇 행이 바뀌었는지는 앱이 받아 판단할 사실이고, 규칙 3-1이 요구하는 모양이
+        /// 정확히 그것이다. 코퍼스 실측에서 이 형태가 <b>28건</b>이라 함께 잡으면
+        /// 정상 이행이 통째로 L1 실패가 된다(L1 실패는 되돌림이다).
+        /// </summary>
+        [Fact]
+        public void ValidateConsolidated_IsSilentWhenRowCountIsOnlyRead()
+        {
+            var markdown = Plan("""
+                ```sql
+                DELETE FROM batch.BatchRunLock WHERE JobName = @p_jobName;
+                SET @v_lockDeleted = @@ROWCOUNT;
+                ```
+                """);
+
+            Assert.False(Fires(markdown, ErrorType.SqlSideControlFlow));
+        }
+
         [Fact]
         public void ValidateConsolidated_ReportsATryCatchWrapperAroundStepSql()
         {
