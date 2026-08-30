@@ -140,7 +140,7 @@
         4. 체크포인트로 재시작 멱등성을 보장하고 Shadow 복원은 같은 범위를 먼저 `DELETE`한 뒤 삽입합니다.
         5. 실패한 문장은 부분 커밋을 남기지 않고 실패 지점의 원본 오류 코드를 기록합니다.
         6. 단계 로직은 타겟 언어 앱이 소유하고 신규 저장 프로시저를 만들지 않습니다 — `CREATE PROCEDURE`는 원본 인용일 때만 쓰며, 규칙은 의무만 정하고 트랜잭션 API는 정하지 않습니다(`ConsolidatedPlanRules_ForbidNewStoredProcedures`).
-        7. 제어 흐름도 앱이 소유하므로 단계가 보내는 SQL은 자기 결과로 분기하지 않습니다 — `GOTO` 오류 라벨·`IF @@ERROR <> 0` 분기·`BEGIN TRY`/`END CATCH` 감싸기는 원본 인용에서만 허용합니다(`ConsolidatedPlanRules_ForbidSqlSideControlFlow`).
+        7. 제어 흐름도 앱이 소유하므로 단계가 보내는 SQL은 자기 결과로 분기하지 않습니다 — `GOTO` 오류 라벨·`IF @@ERROR <> 0` 분기·`IF @@ROWCOUNT` 분기·`BEGIN TRY`/`END CATCH` 감싸기는 원본 인용에서만 허용합니다(`ConsolidatedPlanRules_ForbidSqlSideControlFlow`).
     *   `NOT IN`·`ISNULL` 복합 조건은 포함/제외와 NULL 치환 의미를 정확히 기술하십시오.
     *   Mermaid 연결 라벨에는 큰따옴표를 쓰지 않고 노드 텍스트에는 `@` 변수를 자연어로 바꾸십시오. `@@ERROR`만 전체 따옴표로 허용합니다(`PostProcessMarkdown_ShouldCleanseMermaidCode`).
     *   3부 식별자는 같은 인스턴스의 크로스 DB 참조이며 4부 Linked Server로 서술하지 마십시오.
@@ -237,4 +237,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: c2465a07 -->
+<!-- synced-through: e1734ce1 -->
