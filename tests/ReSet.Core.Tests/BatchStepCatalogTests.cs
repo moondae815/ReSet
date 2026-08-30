@@ -242,6 +242,90 @@ namespace ReSet.Core.Tests
             File.WriteAllText(Path.Combine(docsDirectory, "Spec.md"), "# Spec");
         }
 
+        /// <summary>
+        /// 매니페스트의 Nodes 중 타입 접미사가 Procedure 인 것만 돌려준다.
+        /// 함수를 함께 돌려주면 프롬프트가 34% 늘고 부모 명세의 「참조 함수 표」와
+        /// 중복된다(설계서 §2). 자기 자신도 빼야 한다 - 매니페스트는 자기 키를
+        /// Nodes 에 함께 싣는다(실물 확인).
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_ReturnsOnlyProcedureTypedNodesThatHaveASpec()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var refs = BatchStepCatalog
+                    .ReadProcedureReferences(root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"))
+                    .Select(p => p.Replace(Path.DirectorySeparatorChar, '/'))
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .ToList();
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_Child/docs/Spec.md" },
+                    refs);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestIsMissing()
+        {
+            var root = CreateOutputTree();
+            try
+            {
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Root", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestIsNotJson()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw", "dependency-manifest.json"),
+                    "{ this is not json");
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 매니페스트가 가리키는 명세 파일이 실제로 없으면 더하지 않는다. 없는 파일을
+        /// 재료 목록에 넣으면 뒤의 적재기가 그것을 MissingMetadata 로 세어, 사람이
+        /// 고르지도 않은 항목 때문에 경고가 뜬다.
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_SkipsANodeWhoseSpecFileDoesNotExist()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.Delete(Path.Combine(root, "Procedures", "dbo.USP_Child", "docs", "Spec.md"));
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         private static string CreateOutputTree()
         {
             var root = Path.Combine(Path.GetTempPath(), $"ReSet-BatchCatalog-{Guid.NewGuid():N}");
@@ -258,6 +342,35 @@ namespace ReSet.Core.Tests
             var docsDirectory = Path.Combine(root, relativeObjectDirectory, "docs");
             Directory.CreateDirectory(docsDirectory);
             File.WriteAllText(Path.Combine(docsDirectory, "Spec.md"), "# Spec");
+        }
+
+        /// <summary>
+        /// 부모 하나가 프로시저 하나와 함수 하나를 부르는 최소 트리. 매니페스트의
+        /// SpecPath 는 매니페스트 자신의 디렉터리 기준 상대 경로다(실물이 그렇다).
+        /// </summary>
+        private static string CreateManifestTree()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Manifest-{Guid.NewGuid():N}");
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Parent"));
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Child"));
+            WriteSpec(root, Path.Combine("Functions", "dbo.UF_Helper"));
+
+            var rawDirectory = Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw");
+            Directory.CreateDirectory(rawDirectory);
+            File.WriteAllText(
+                Path.Combine(rawDirectory, "dependency-manifest.json"),
+                """
+                {
+                  "Key": "DB.dbo.USP_Parent.Procedure",
+                  "Nodes": [
+                    { "Key": "DB.dbo.USP_Parent.Procedure", "Status": "Succeeded", "SpecPath": "docs/Spec.md" },
+                    { "Key": "DB.dbo.USP_Child.Procedure", "Status": "Succeeded", "SpecPath": "../dbo.USP_Child/docs/Spec.md" },
+                    { "Key": "DB.dbo.UF_Helper.Function", "Status": "Succeeded", "SpecPath": "../../Functions/dbo.UF_Helper/docs/Spec.md" }
+                  ]
+                }
+                """);
+
+            return root;
         }
     }
 }

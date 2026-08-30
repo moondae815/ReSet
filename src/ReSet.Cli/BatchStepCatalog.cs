@@ -157,5 +157,93 @@ namespace ReSet.Cli
 
             return null;
         }
+
+        private const string ManifestFileName = "dependency-manifest.json";
+
+        /// <summary>
+        /// 이 명세가 부르는 <b>프로시저 타입</b> 참조 객체의 명세 경로를 outputRoot 기준
+        /// 상대 경로로 돌려준다.
+        ///
+        /// [왜 프로시저만인가] 함수 참조는 결손이 아니다 - 부모 명세의 「참조 함수 표」가
+        /// 호출 지점·라인·호출식 전문을 이미 담고, 계획서는 함수를 재구현하지 않는다.
+        /// 실측(설계서 §2): 함수 참조 30건을 함께 더하면 프롬프트가 +34%가 된다.
+        ///
+        /// [왜 파일 존재를 확인하는가] 없는 경로를 재료 목록에 넣으면
+        /// <see cref="LoadDefinitionsAsync"/>가 그것을 MissingMetadata 로 세어, 사람이
+        /// 고르지도 않은 항목 때문에 경고가 뜬다.
+        ///
+        /// 매니페스트가 없거나 JSON 이 아니면 빈 목록이다 - 재료 없음을 실패로 바꾸지 않는다.
+        /// </summary>
+        public static IReadOnlyList<string> ReadProcedureReferences(
+            string outputRoot, string specRelativePath)
+        {
+            if (string.IsNullOrWhiteSpace(outputRoot) || string.IsNullOrWhiteSpace(specRelativePath))
+            {
+                return Array.Empty<string>();
+            }
+
+            var objectDirectory = Path.GetDirectoryName(
+                Path.GetDirectoryName(Path.Combine(outputRoot, specRelativePath)));
+            if (objectDirectory is null) return Array.Empty<string>();
+
+            var manifestPath = Path.Combine(objectDirectory, "raw", ManifestFileName);
+            if (!File.Exists(manifestPath)) return Array.Empty<string>();
+
+            ManifestShape? manifest;
+            try
+            {
+                manifest = JsonSerializer.Deserialize<ManifestShape>(
+                    File.ReadAllText(manifestPath),
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+            {
+                Log.Warning(
+                    exception,
+                    "[배치 설계] 의존 매니페스트를 읽지 못했습니다 (계속 진행): {ManifestPath}",
+                    manifestPath);
+                return Array.Empty<string>();
+            }
+
+            if (manifest is null) return Array.Empty<string>();
+
+            var results = new List<string>();
+            foreach (var node in manifest.Nodes)
+            {
+                if (string.IsNullOrWhiteSpace(node.Key) || string.IsNullOrWhiteSpace(node.SpecPath)) continue;
+                if (!node.Key.EndsWith(".Procedure", StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.Equals(node.Key, manifest.Key, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var absolute = Path.GetFullPath(Path.Combine(objectDirectory, node.SpecPath));
+                if (!File.Exists(absolute))
+                {
+                    // 설계서 §8: 없으면 조용히 빼되 한 줄 남긴다. 매니페스트가 가리키는데
+                    // 파일이 없다는 것은 분석이 중간에 끊겼다는 뜻이라 사람이 알아야 한다.
+                    Log.Warning(
+                        "[배치 설계] 참조 프로시저의 명세가 없어 재료에서 제외합니다: {NodeKey} ({SpecPath})",
+                        node.Key, absolute);
+                    continue;
+                }
+
+                results.Add(Path.GetRelativePath(outputRoot, absolute));
+            }
+
+            return results;
+        }
+
+        // 매니페스트에서 이 클래스가 쓰는 두 칸만 받는다. MetadataExporter 의 전체
+        // 모델을 여기서 다시 만들지 않는 이유는 그것이 private 이고, 이 판정에 필요한
+        // 것이 Key 와 SpecPath 둘뿐이기 때문이다.
+        private sealed class ManifestShape
+        {
+            public string Key { get; init; } = string.Empty;
+            public List<ManifestNodeShape> Nodes { get; init; } = new();
+        }
+
+        private sealed class ManifestNodeShape
+        {
+            public string Key { get; init; } = string.Empty;
+            public string SpecPath { get; init; } = string.Empty;
+        }
     }
 }
