@@ -1612,6 +1612,49 @@ END",
             Assert.True(feedback > marker, "피드백은 지시문 뒤에 붙어야 한다");
         }
 
+        // 실측(POQSettleBatch4): 6차가 5차 대비 정합성 8->7, 예외 7->6으로 떨어졌다.
+        // 지적된 단계를 백지에서 다시 쓰면 고친 것과 멀쩡하던 것을 함께 다시 쓴다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_WithPreviousBody_SendsRevisionContract()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
+                effort: null, floorFeedback: "청크 진행 위치를 기록하라",
+                previousBody: "### S01. 수수료율 스냅샷\n\n```sql\nSELECT 1;\n```");
+
+            Assert.NotNull(result.UserPrompt);
+            var userPrompt = result.UserPrompt!;
+            Assert.Contains("[Previous Section Body]", userPrompt);
+            Assert.Contains("SELECT 1;", userPrompt);
+            Assert.Contains("byte-for-byte", userPrompt);
+        }
+
+        // previousBody가 없으면 프롬프트가 한 바이트도 달라지면 안 된다.
+        // 1차 회차 프롬프트가 재시도 회차와 같은 바이트를 유지해야 접두사 캐시가 산다.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_WithoutPreviousBody_DoesNotMentionRevision()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job");
+
+            Assert.NotNull(result.UserPrompt);
+            var userPrompt = result.UserPrompt!;
+            Assert.DoesNotContain("[Previous Section Body]", userPrompt);
+            Assert.DoesNotContain("[Revision Contract]", userPrompt);
+        }
+
         /// <summary>
         /// 축 B 단계 검사는 DML 문장을 명세서의 "갱신 N"에 앵커 주석으로 대응시킨다.
         /// 앵커가 없으면 조인 키·술어 컬럼 대조가 통째로 꺼지므로 프롬프트가 앵커
