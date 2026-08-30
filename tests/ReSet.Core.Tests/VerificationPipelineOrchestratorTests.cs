@@ -7390,6 +7390,75 @@ SELECT 1;
             Assert.Equal(4, sectionCalls);
         }
 
+        /// <summary>
+        /// FIX ROUND 3 (코디네이터 설계 판정) - "지목 없는 리뷰 재호출" 게이트를
+        /// 우회하는 두 번째 트리거. StructureDefective=true인데 이번 회차엔
+        /// 아직 재수립이 발동하지 않은 경우(정체 스트릭이 2에 안 닿음 -
+        /// StructureRedraftPolicy.TryConsume 참고)다. AxisThresholdForced 경우와
+        /// 같은 코드 블록을 지나지만 근거는 다르다 - §3-2~§3-6 어디에도 이
+        /// 서브케이스가 명시돼 있지 않아, 코디네이터가 "예산을 쓰는 회차는
+        /// 무언가를 바꿔야 한다"는 원칙으로 전량 재생성을 확정했다(동결이 아니라).
+        /// 이 테스트는 그 확정을 공개 진입점으로 고정한다.
+        ///
+        /// 동어반복이 아님을 확인한 방법: FIX ROUND 3의 StructureDefective 분기
+        /// (`if (l2Result.StructureDefective) { lastStepSections = null; }`)만
+        /// 되돌려(AxisThresholdForced 분기·L1 분기는 그대로 두고) 이 테스트를
+        /// 다시 돌려 RED(2회 실측)를 확인했다 - AxisThresholdForced=false로
+        /// 두어 케이스 2의 수정이 이 테스트에 관여하지 않게 픽스처를 짰다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_StructureDefectiveWithoutLocationBeforeRedraft_RegeneratesAllSectionsNextRound()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var sectionCalls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    System.Threading.Interlocked.Increment(ref sectionCalls);
+                    var step = call.Arg<BatchStepPlan>();
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+            // 두 회차 모두 StructureDefective만 세우고 DefectiveSteps는 비운다.
+            // 점수는 기준(8) 이상으로 둬 AxisThresholdForced가 절대 서지 않게
+            // 한다 - 케이스 2(FIX ROUND 2)의 수정이 이 테스트에 관여하면 이
+            // 테스트가 "StructureDefective 분기 자체"를 고정하지 못한다. 1회차는
+            // 항상 최고 후보로 등록되므로(BestAttempt.TryRecord) 정체 스트릭이
+            // 0에서 시작해 1회차에서는 재수립이 발동하지 않는다 - 이 테스트가
+            // 노리는 "재수립 발동 전" 조건이 자연히 성립한다.
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult
+                {
+                    HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함(자리 없음)",
+                    ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 두 회차 모두 구조 결함이 지속돼 채점 예산(총 2회)이 소진돼 구제
+            // 채택으로 끝난다 - 이 값이 다르면 픽스처가 가정한 경로(매 회차
+            // StructureDefective가 지목 없이 계속됨)를 타지 않았다는 뜻이라
+            // 아래 카운트 어서션이 무의미해진다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+
+            // 핵심 불변식: 2단계(S01·S02) × 2회차(최초 + StructureDefective 재생성) = 4회.
+            // 고치기 전(이 FIX ROUND 이전)에는 2회차의 pending이 비어 2회만 관측된다.
+            Assert.Equal(4, sectionCalls);
+        }
+
         // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와
         // 목차에 없는 코드("S99")를 함께 지목해도, 실제 존재하는 단계만 대소문자
         // 무시 매칭으로 재생성되고 지어낸 코드는 조용히 버려져야 한다.

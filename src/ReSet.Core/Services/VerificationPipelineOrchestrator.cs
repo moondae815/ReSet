@@ -2533,22 +2533,56 @@ namespace ReSet.Core.Services
                         }
                         else if (pendingDefectiveSteps.Count == 0)
                         {
-                            // [FIX ROUND 2 - Task 9b 리뷰] 여기 도달했다는 것은 위
-                            // 게이트(:2495)를 SkeletonDefective가 아닌 다른 사유로
-                            // 우회했다는 뜻이다 - AxisThresholdForced(점수 미달로
-                            // 강제된 결함, 지목할 문서 자리가 애초에 없다) 또는
-                            // StructureDefective인데 이번 회차엔 재수립이 발동하지
-                            // 않은 경우(정체 스트릭 미충족)뿐이다. 둘 다 L1 귀속
-                            // 실패와 같은 부류다 - 지목이 없는데도 채점 예산
-                            // (attempt)을 쓴다. lastStepSections를 그대로 두면
-                            // 다음 회차의 GenerateBySplitAsync가 canTargetSections=
-                            // true·defectiveSteps=빈 리스트를 받아 pending이 비고,
-                            // 예산만 태우고 문서가 바이트 그대로 반복된다(실측:
-                            // 이 FIX ROUND의 재현 테스트 - AxisThresholdForced로
-                            // 고정). SkeletonDefective 분기만 예외인 이유는 그
-                            // 분기가 "골격만 고치고 섹션은 동결"을 §3-6이 명시적으로
-                            // 의도했기 때문이다 - 여기는 그 의도가 없다.
-                            lastStepSections = null;
+                            // 여기 도달했다는 것은 위 게이트(:2495)를
+                            // SkeletonDefective가 아닌 다른 사유로 우회했다는
+                            // 뜻이다 - 아래 두 트리거 중 최소 하나는 반드시
+                            // 참이다(게이트 조건의 부정). 둘은 근거가 다르므로
+                            // 따로 적는다 - 다음 사람이 "어느 트리거가 이 자리를
+                            // 지나는가"를 하나로 뭉뚱그려 읽지 않게 한다.
+
+                            if (l2Result.AxisThresholdForced)
+                            {
+                                // [FIX ROUND 2 - Task 9b 리뷰, 확정] 점수 미달로
+                                // 강제된 결함 - 지목할 문서 자리가 애초에 없다.
+                                // L1 귀속 실패와 같은 부류다: 지목이 없는데도
+                                // 채점 예산(attempt)을 쓴다. lastStepSections를
+                                // 그대로 두면 다음 회차의 GenerateBySplitAsync가
+                                // canTargetSections=true·defectiveSteps=빈
+                                // 리스트를 받아 pending이 비고, 예산만 태우고
+                                // 문서가 바이트 그대로 반복된다(실측 - 재현
+                                // 테스트 RunConsolidatedPipeline_
+                                // AxisThresholdForcedWithoutLocation_
+                                // RegeneratesAllSectionsNextRound가 고치기 전
+                                // 2회/기대 4회로 이 사실을 고정한다).
+                                lastStepSections = null;
+                            }
+
+                            if (l2Result.StructureDefective)
+                            {
+                                // [FIX ROUND 3 - 코디네이터 설계 판정, §3-2~§3-6
+                                // 어디에도 이 서브케이스가 명시돼 있지 않다 -
+                                // 이 분기의 선택(동결이 아니라 전량)은 실측
+                                // 회귀가 아니라 코디네이터가 그 자리에서 내린
+                                // 설계 판단이다. 다음 사람이 그 근거를 여기서
+                                // 찾을 수 있도록 판단 자체를 옮겨 적는다.
+                                //
+                                // StructureDefective인데 이번 회차엔 재수립이
+                                // 아직 발동하지 않은 경우다(정체 스트릭이 2에
+                                // 안 닿음, StructureRedraftPolicy.TryConsume
+                                // 참고). §3-2(a)의 "자리 못 댐 -> 공짜 재검토"는
+                                // attempt를 올리지 않으므로 동결이 낭비가
+                                // 아니지만, StructureDefective=true는 그 게이트를
+                                // 우회해 attempt++를 한다(Task 8 설계 - 구조
+                                // 결함은 재검토로 풀리지 않으므로). 예산을 쓰면서
+                                // 동결하면 바이트 동일한 문서로 채점 예산만
+                                // 태운다 - 이 라운드가 고친 Critical과 정확히
+                                // 같은 형태다. 그래서 전량 재생성이 맞다: 같은
+                                // 목차로 다시 만드는 것이 목차 결함 자체를
+                                // 고치지는 않지만, 정체 스트릭이 2에 닿아
+                                // 재설계가 발동할 때까지 회차가 헛돌지는 않게
+                                // 한다.
+                                lastStepSections = null;
+                            }
                         }
 
                         attempt++;
