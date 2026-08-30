@@ -1731,6 +1731,50 @@ END"
             Assert.DoesNotContain("THROW", failBlock);
         }
 
+        // 위 가드의 짝이다. 실패 경로가 `currentStepErrorCode`를 **읽는** 것만 보여주고
+        // 그 변수가 어떻게 생겨나 어떻게 갱신되는지를 안 보여주면, 모델은 초기값을
+        // 스스로 짓는다 - 4단계 3차 통제군에서 실제로 `currentStepErrorCode = 0`을
+        // 골랐고 `0`은 그 단계들의 **성공 코드**다. 그러면 첫 코드-특정 대입 전에 난
+        // 장애가 성공 코드로 기록된다(실물: `POQSettleBatch4/S13`의
+        // `reqYmd = queryScalar(SQL_S13_REQ_YMD, …)`가 try 안 첫 문장이다).
+        //
+        // 규칙 6-1은 이미 "update it immediately BEFORE each DML statement … and record
+        // that variable when the step fails"라고 적고 있었다 - 새 의무가 아니라
+        // **예시가 그 의무를 안 보여준 것**이다. 그래서 채점 기준은 건드리지 않았다
+        // (기준 4가 "collapsed into one generic failure value"로 이미 덮는다).
+        //
+        // 감시값을 `NULL`로 고른 이유: `BatchControlContract`가
+        // `LegacyReturnCode`를 nullable `int`로 확정하므로(ControlColumn(..., true))
+        // **계약 자신의 「값 없음」**이고 어떤 레거시 코드와도 겹칠 수 없다. 지어낸
+        // 감시값은 이 저장소가 두 번 데인 자리다(`B161`은 컴파일조차 안 됐다).
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotShowsTheTrackedCodeLifecycle()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            var loop = rules.IndexOf("FOR EACH chunk", StringComparison.Ordinal);
+            Assert.True(loop >= 0, "Few-Shot의 청크 루프 예시를 찾지 못했다.");
+            var close = rules.IndexOf("```", loop, StringComparison.Ordinal);
+            var block = rules[..close];
+
+            // 초기값이 보여야 한다. 그리고 그것이 숫자면 안 된다 - 숫자는 곧 어떤
+            // 원본 코드와 겹칠 수 있다는 뜻이고, 그 겹침이 이 가드가 막는 결함이다.
+            var init = System.Text.RegularExpressions.Regex.Match(
+                block, @"currentStepErrorCode\s*=\s*(?<v>\S+)");
+            Assert.True(init.Success, "추적 변수의 초기 대입이 예시에 없다.");
+            Assert.False(
+                System.Text.RegularExpressions.Regex.IsMatch(init.Groups["v"].Value, @"^-?\d+$"),
+                $"추적 변수의 초기값이 숫자 '{init.Groups["v"].Value}'다 - 원본 코드와 겹칠 수 있다.");
+
+            // 문장 앞 갱신도 보여야 한다. 초기값만 보여주면 "한 번 정하고 끝"으로 읽힌다.
+            var loopBlock = rules[loop..close];
+            Assert.Matches(@"currentStepErrorCode\s*=\s*-?\d+", loopBlock);
+            Assert.True(
+                loopBlock.IndexOf("currentStepErrorCode", StringComparison.Ordinal)
+                    < loopBlock.IndexOf("execute(", StringComparison.Ordinal),
+                "갱신이 문장 뒤에 있다 - 규칙 6-1은 문장 **앞**을 요구한다.");
+        }
+
         [Fact]
         public async Task ConsolidatedPlanRules_FewShotShowsChunkLoopAsApplicationCode()
         {

@@ -2270,6 +2270,14 @@ be read cannot be checked against its specification.
 // Job Name given at the top of this prompt, and it is a constant of this document.
 runId = queryScalar(SQL_CURRENT_RUN_ID, { p_jobName: <this document's job name>, p_ymd: batchYmd })
 
+// (rule 6-1) The step-local failure-point variable. It starts as NULL - the batch control
+// contract declares LegacyReturnCode as a nullable int, so NULL is that column's own way of
+// saying 'no failure point identified yet'. Do NOT start it at a number: every number is
+// some statement's original code, so a failure before the first update would be journalled
+// under a code that names the wrong statement - or, if the number happens to be the success
+// code, under one that says nothing failed at all.
+currentStepErrorCode = NULL
+
 // (rule 4a) Create and fill the shadow BEFORE opening the transaction that can roll back.
 // Created inside that transaction it would disappear with the rollback and the restore
 // would then fail on a missing object.
@@ -2289,6 +2297,10 @@ commit()
 // column that actually exists in the target schema (rule 12).
 FOR EACH chunk IN chunkRanges(SQL_CHUNK_BOUNDS, { p_batchDate: batchYmd }, size: 10000):
     beginTransaction()
+    // (rule 6-1) Update it immediately BEFORE the statement, never after - the value must
+    // already name this statement at the moment the statement can fail. Use the original
+    // code this statement carries in the source specification (rule 9 governs which code).
+    currentStepErrorCode = -1
     execute(SQL_INSERT_CHUNK, { p_batchDate: batchYmd, p_from: chunk.from, p_to: chunk.to })
     commit()
 
