@@ -2428,49 +2428,65 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
-                        feedbackLog = CriticFeedbackLog.Compose(
-                            feedbackHistory,
-                            "※ 지시사항: 위 지적사항을 모두 반영하여 본문을 수정하십시오. " +
-                            "이전 라운드에서 이미 기준 점수를 통과한 항목의 서술 수준을 낮추지 마십시오. " +
-                            "제공된 '원본 명세서(Specifications)'와 위 피드백을 절대적 기준으로 삼으십시오. " +
-                            "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
-                            "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
-
-                        // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
-                        // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
-                        if (redraftPolicy.TryConsume(
-                                improvedThisAttempt,
-                                l2Result.StructureDefective || machineFoundStructureDefect))
+                        // [FINAL FIX A - Important 3 + Minor 1·2] reviewRetriedThisAttempt는
+                        // "자리 없는 결함" 게이트가 같은 attempt 안에서 공짜 재검토를
+                        // 부른 뒤에만 참이 된다(아래 게이트 참고). 그 재검토로 돌아온
+                        // 두 번째 리뷰는 재생성의 근거가 될 수 없다고 이미 판정된
+                        // 리뷰이므로, 그것을 근거로 삼는 세 가지 부작용을 여기서
+                        // 막는다 - (1) 정체 스트릭을 같은 attempt 안에서 두 번 올려
+                        // §3-4가 요구하는 "2회 연속 attempt"를 "같은 attempt를 두 번
+                        // 셈"으로 바꾸는 TryConsume 재호출, (2) CriticFeedbackLog에
+                        // 같은 attempt 번호로 두 항목이 남는 이중 기록, (3) 빈
+                        // pendingDefectiveSteps를 "결함 없음"의 증거로 써 모든
+                        // 에스컬레이션 카운터를 리셋하는 UpdateRepeatedDefects. 첫
+                        // 번째 패스(reviewRetriedThisAttempt가 아직 false)에서는
+                        // 종전과 똑같이 전부 실행된다.
+                        if (!reviewRetriedThisAttempt)
                         {
-                            var redrafted = await DraftReplacementPlanStructureAsync(
-                                "재시도가 점수를 개선하지 못해 목차를 다시 설계합니다",
-                                specReturnCodes,
-                                specTargetTables,
-                                currentPlanStructure, currentBrainstorming, feedbackLog,
-                                targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
+                            CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
+                            feedbackLog = CriticFeedbackLog.Compose(
+                                feedbackHistory,
+                                "※ 지시사항: 위 지적사항을 모두 반영하여 본문을 수정하십시오. " +
+                                "이전 라운드에서 이미 기준 점수를 통과한 항목의 서술 수준을 낮추지 마십시오. " +
+                                "제공된 '원본 명세서(Specifications)'와 위 피드백을 절대적 기준으로 삼으십시오. " +
+                                "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
+                                "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
 
-                            // 이 경로는 새 목차를 바로 다음 회차가 소비하므로 여기서 확정
-                            // 기록한다. 기록에 실패하면 재수립을 없었던 일로 되돌려
-                            // PlanStructure.md와 실제로 쓰이는 목차를 어긋나게 두지 않는다.
-                            if (redrafted != null &&
-                                await TryCommitPlanStructureAsync(
-                                    "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
+                            // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
+                            // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
+                            if (redraftPolicy.TryConsume(
+                                    improvedThisAttempt,
+                                    l2Result.StructureDefective || machineFoundStructureDefect))
                             {
-                                currentPlanStructure = redrafted;
-                                // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
-                                // 재사용하면 새 목차가 없는 단계를 계속 실어 나른다.
-                                ClearSplitGenerationCacheAfterRedraft(
-                                    out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
-                                    out stepFloorViolations, pendingDefectiveSteps, repeatedDefects);
+                                var redrafted = await DraftReplacementPlanStructureAsync(
+                                    "재시도가 점수를 개선하지 못해 목차를 다시 설계합니다",
+                                    specReturnCodes,
+                                    specTargetTables,
+                                    currentPlanStructure, currentBrainstorming, feedbackLog,
+                                    targetLanguage, jobName, sourceProcedureRoster, cancellationToken);
 
-                                // TASK 12 - 새 목차는 아직 판정된 적이 없다. 옛 목차에서
-                                // 발견한 목차 결함 사실을 그대로 들고 가면, 새 목차가
-                                // 실제로 코드를 제대로 귀속하더라도 다음 정체 판정에서
-                                // 낡은 "참"이 또 재설계를 부른다(§3-4는 Job당 1회
-                                // 상한이 있어 두 번째 재설계는 막히지만, 그 상한에
-                                // 기대는 것은 이 값의 의미를 지키는 것과 다르다).
-                                machineFoundStructureDefect = false;
+                                // 이 경로는 새 목차를 바로 다음 회차가 소비하므로 여기서 확정
+                                // 기록한다. 기록에 실패하면 재수립을 없었던 일로 되돌려
+                                // PlanStructure.md와 실제로 쓰이는 목차를 어긋나게 두지 않는다.
+                                if (redrafted != null &&
+                                    await TryCommitPlanStructureAsync(
+                                        "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
+                                {
+                                    currentPlanStructure = redrafted;
+                                    // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
+                                    // 재사용하면 새 목차가 없는 단계를 계속 실어 나른다.
+                                    ClearSplitGenerationCacheAfterRedraft(
+                                        out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
+                                        out stepFloorViolations, pendingDefectiveSteps, repeatedDefects);
+
+                                    // TASK 12 - 새 목차는 아직 판정된 적이 없다. 옛 목차에서
+                                    // 발견한 목차 결함 사실을 그대로 들고 가면, 새 목차가
+                                    // 실제로 코드를 제대로 귀속하더라도 다음 정체 판정에서
+                                    // 낡은 "참"이 또 재설계를 부른다(§3-4는 Job당 1회
+                                    // 상한이 있어 두 번째 재설계는 막히지만, 그 상한에
+                                    // 기대는 것은 이 값의 의미를 지키는 것과 다르다).
+                                    machineFoundStructureDefect = false;
+                                }
                             }
                         }
 
@@ -2485,7 +2501,8 @@ namespace ReSet.Core.Services
                         // 회차에 오류 코드 누락이 없었다는 증거다. OpenSteps의 시그니처
                         // (세 신호의 AND)는 그대로 둔다 - L1 게이트가 앞으로 느슨해지면
                         // 이 자리에 다시 실제 신호를 넘겨야 하고, 그때도 이 함수는 안
-                        // 바뀐다(설계서 §3-2(b)).
+                        // 바뀐다(설계서 §3-2(b)). 이 계산 자체는 재검토 패스마다 다시
+                        // 해야 한다 - 이번 패스의 리뷰가 이번에는 자리를 댔을 수도 있다.
                         pendingDefectiveSteps.Clear();
                         var openSteps = StepFreezeState.OpenSteps(
                             currentSteps, l2Result.DefectiveSteps, stepFloorViolations, Array.Empty<string>());
@@ -2495,10 +2512,13 @@ namespace ReSet.Core.Services
                             pendingDefectiveSteps.AddRange(openSteps);
                         }
 
-                        // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
-                        // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
-                        // 받는다(§3-8).
-                        UpdateRepeatedDefects();
+                        if (!reviewRetriedThisAttempt)
+                        {
+                            // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
+                            // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
+                            // 받는다(§3-8).
+                            UpdateRepeatedDefects();
+                        }
 
                         // 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
                         // 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.

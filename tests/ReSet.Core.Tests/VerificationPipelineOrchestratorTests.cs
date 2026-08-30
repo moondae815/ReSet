@@ -7690,6 +7690,97 @@ SELECT 1;
         }
 
         /// <summary>
+        /// FINAL FIX A - Important 3. TryConsume은 자리 없는 결함의 "공짜 재검토"
+        /// 게이트보다 앞에서 실행된다. 같은 attempt 안에서 재검토가 한 번 더
+        /// 리뷰를 부르면(자리 없음 -> 공짜 재검토 -> 구조 결함으로 판정 전환),
+        /// TryConsume이 그 회차 안에서 두 번 불려 정체 스트릭을 1이 아니라
+        /// 2로 올린다 - §3-4가 요구하는 "2회 연속 attempt"가 아니라 "같은
+        /// attempt를 두 번 셈"이 된다.
+        ///
+        /// 시나리오: 1회차는 위치 있는 결함으로 최고 후보가 된다(정체 스트릭
+        /// 리셋). 2회차 1차 리뷰는 위치 없는 결함(StructureDefective:false) -
+        /// 개선 없음이라 스트릭이 1이 되고, 자리 없음 게이트가 공짜 재검토를
+        /// 부른다. 같은 2회차의 2차 리뷰는 StructureDefective:true로 바뀐다 -
+        /// 여전히 개선은 없다. 고치기 전에는 이 두 번째 호출이 TryConsume을
+        /// 다시 불러 스트릭을 2로 올리고 재설계가 2회차 안에서 바로 발동한다.
+        /// 고친 뒤에는 2회차 전체가 정체 "1회"로만 세어져야 하고, 3회차가
+        /// 곧바로 깨끗이 통과하면(TryConsume에 도달하지 않는다) 재설계가
+        /// 전혀 발동하지 않아야 한다 - DraftBatchPlanStructureAsync는 최초
+        /// 목차 설계 1회만 받는다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_FreeReReviewWithinOneAttempt_DoesNotDoubleCountStagnantStreak()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1회차: 위치 있는 결함 - 최고 후보(90점)로 기록, 스트릭 리셋.
+                        0 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "S02 결함", DefectiveSteps = { "S02" },
+                            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+                        }),
+                        // 2회차 1차: 위치 없음, 구조 결함 아님 - 개선 없음(스트릭 1), 공짜 재검토.
+                        1 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7
+                        }),
+                        // 2회차 2차(공짜 재검토): 위치 없음, 구조 결함으로 전환 - 여전히 개선 없음.
+                        2 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함(자리 없음)",
+                            ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7
+                        }),
+                        // 3회차: 깨끗이 통과 - TryConsume에 아예 도달하지 않는다.
+                        _ => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = false,
+                            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+                        }),
+                    };
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 3회차가 깨끗이 통과해 정상 종료된다.
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 핵심 불변식: 2회차 전체(공짜 재검토 포함)가 정체 "1회"로만 세어져야
+            // 한다. 고치기 전에는 같은 2회차 안에서 스트릭이 2로 올라 재설계가
+            // 바로 발동해 DraftBatchPlanStructureAsync가 재설계분까지 2회
+            // 관측된다 - 고친 뒤에는 최초 설계 1회만 있어야 한다.
+            await aiService.Received(1).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
         /// FINAL FIX A - Critical 1. "결함이 있다면서 자리를 못 대는 리뷰"가 두 번
         /// 연속되어 리뷰 무효로 확정되는 다섯 번째 비정상 종료도, 다른 넷(생성 실패·
         /// L1 소진·채점 예산 소진·리뷰 실패)과 마찬가지로 RetryRescue를 거쳐야 한다.
