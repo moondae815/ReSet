@@ -208,7 +208,11 @@ namespace ReSet.Cli
             if (manifest is null) return Array.Empty<string>();
 
             var results = new List<string>();
-            foreach (var node in manifest.Nodes)
+            // "Nodes": null 은 문법은 맞지만 퇴화한 모양이다 - System.Text.Json 이 키가
+            // 명시적으로 null 이면 ManifestShape.Nodes 의 `= new()` 기본값을 덮어쓴다.
+            // null 검사 없이 순회하면 catch 블록 밖에서 NullReferenceException 이 던져져
+            // §8 의 "예외를 밖으로 던지지 않는다"를 어긴다.
+            foreach (var node in manifest.Nodes ?? Enumerable.Empty<ManifestNodeShape>())
             {
                 if (string.IsNullOrWhiteSpace(node.Key) || string.IsNullOrWhiteSpace(node.SpecPath)) continue;
                 if (!node.Key.EndsWith(".Procedure", StringComparison.OrdinalIgnoreCase)) continue;

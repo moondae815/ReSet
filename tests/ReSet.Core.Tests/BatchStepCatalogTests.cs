@@ -305,6 +305,34 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
+        /// 「문법 오류」(위 테스트, JsonException) 와는 다른 경우다 - 이 JSON 은 문법이
+        /// 맞지만 "Nodes": null 로 퇴화한 모양이다. System.Text.Json 은 키가 명시적으로
+        /// null 이면 ManifestShape.Nodes 의 `= new()` 기본값을 덮어써 null 을 그대로
+        /// 싣는다. manifest.Nodes 를 null 검사 없이 순회하면 NullReferenceException 이
+        /// catch 블록 밖에서 던져진다 - §8 의 "예외를 밖으로 던지지 않는다" 위반이다.
+        /// </summary>
+        [Fact]
+        public void ReadProcedureReferences_IsSilentWhenTheManifestHasAnExplicitNullNodes()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(root, "Procedures", "dbo.USP_Parent", "raw", "dependency-manifest.json"),
+                    """
+                    { "Key": "DB.dbo.USP_Parent.Procedure", "Nodes": null }
+                    """);
+
+                Assert.Empty(BatchStepCatalog.ReadProcedureReferences(
+                    root, Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
         /// 매니페스트가 가리키는 명세 파일이 실제로 없으면 더하지 않는다. 없는 파일을
         /// 재료 목록에 넣으면 뒤의 적재기가 그것을 MissingMetadata 로 세어, 사람이
         /// 고르지도 않은 항목 때문에 경고가 뜬다.
