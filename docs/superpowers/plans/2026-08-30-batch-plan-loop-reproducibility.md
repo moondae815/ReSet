@@ -2469,7 +2469,7 @@ git commit -m "feat: 섹션 재생성을 패치로 바꾼다 — 고친 것과 �
 - Modify: `src/ReSet.Cli/appsettings.json` · `src/ReSet.Cli/Program.cs`
 
 **Interfaces:**
-- Consumes: `BatchStepPlan.LegacyProcedures`, `AiClientFactory.IsLocalProvider`
+- Consumes: `BatchStepPlan.LegacyProcedures`, **`AiClientFactory.IsCliProvider`** (제공자 분류의 정본. 여기서 `EndsWith("-cli")` 같은 사본을 만들지 마라 — 한쪽만 고쳐질 때 조용히 어긋난다)
 - Produces: `PromptContextScope.ResolveMode(string providerName, string? configured) -> ContextScopeMode`, `PromptContextScope.NarrowSpecs(specs, step, callGraph) -> List<(string FileName, string Content)>`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
@@ -2737,7 +2737,7 @@ namespace ReSet.Core.Services
 dotnet test tests/ReSet.Core.Tests --filter FullyQualifiedName~PromptContextScopeTests
 ```
 
-기대: 12개 전부 PASS.
+기대: 13개 전부 PASS (`[Theory]` 인라인 데이터가 전개되어 12가 아니라 13이다).
 
 - [ ] **Step 5: `AiService`가 이 모드를 쓰게 한다**
 
