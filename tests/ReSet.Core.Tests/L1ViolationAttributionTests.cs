@@ -97,5 +97,86 @@ namespace ReSet.Core.Tests
 
             Assert.Null(L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps));
         }
+
+        // PlanBoundaryResolver.TryLocateByCode가 이미 겪은 함정과 같다: 헤딩 제목이
+        // 다른 단계의 코드를 언급하면("S02 (S01 이후)") 부분 문자열 대조는 먼저 걸리는
+        // S01로 잘못 귀속한다. 헤딩이 스스로 선언하는 선행 코드만 인정해야 한다.
+        [Fact]
+        public void HeadingMentioningAnotherStepCode_AttributesToOwnLeadingCode()
+        {
+            const string doc = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### S01. 잠금과 RunId 발급
+
+                ```sql
+                SELECT 1;
+                ```
+
+                ### S02 (S01 이후)
+
+                ```sql
+                BEGIN TRY
+                    INSERT INTO dbo.TS02 SELECT 1;
+                END TRY
+                BEGIN CATCH
+                END CATCH
+                ```
+                """;
+            var steps = new[] { Step("S01"), Step("S02") };
+
+            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Equal("S02", code);
+        }
+
+        // 코드 펜스 안의 `###`로 시작하는 줄(주석 등)은 헤딩이 아니다 - 실려 있는 것이
+        // 실제 단계 코드(S99)라도 마찬가지다. 헤딩 탐지가 이를 존중하지 않으면 펜스 안
+        // 텍스트가 단계 경계를 흔들어 currentStep이 엉뚱하게 바뀐다.
+        [Fact]
+        public void HeadingLineInsideFence_IsNotTreatedAsStepBoundary()
+        {
+            const string doc = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### S01. 첫 단계
+
+                ```sql
+                ### S99. 주석 안의 위조 헤딩
+                END TRY
+                ```
+                """;
+            var steps = new[] { Step("S01"), Step("S99") };
+
+            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Equal("S01", code);
+        }
+
+        // 펜스가 끝까지 닫히지 않으면 펜스 상태를 신뢰할 수 없다 - MarkdownSectionLocator가
+        // 이미 세운 원칙대로 펜스를 무시하고 다시 스캔해야 한다. 그러지 않으면 이후 모든
+        // 헤딩이 "펜스 안"으로 오인되어 단계 경계를 영영 못 찾고, currentStep이 첫 단계에
+        // 멈춰 문서 나머지 전부를 그 단계 것으로 삼켜버린다(미탐).
+        [Fact]
+        public void UnclosedFence_DoesNotSwallowRestOfDocument()
+        {
+            const string doc = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### S01. 첫 단계
+
+                ```sql
+                SELECT 1;
+
+                ### S02. 둘째 단계
+
+                END TRY
+                """;
+            var steps = new[] { Step("S01"), Step("S02") };
+
+            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Equal("S02", code);
+        }
     }
 }

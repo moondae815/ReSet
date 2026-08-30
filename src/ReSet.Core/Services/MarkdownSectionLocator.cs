@@ -105,5 +105,44 @@ namespace ReSet.Core.Services
         /// <summary>`## 제목`에서 `#`과 공백을 걷어낸 제목 부분. 느슨 매칭이 대조하는 것은 이 텍스트다.</summary>
         private static string HeadingText(string headingLine) =>
             headingLine.TrimStart().TrimStart('#').Trim();
+
+        /// <summary>
+        /// 각 줄이 코드 펜스 안에 있는지를 <see cref="FindIndexOutsideFence"/>와 같은 원칙으로
+        /// 미리 계산한다. 단일 조건을 찾는 <see cref="FindIndexOutsideFence"/>는 여러 줄을
+        /// 순회하며 어휘도 찾고 헤딩도 찾아야 하는 호출부(예: L1ViolationAttribution)에는
+        /// 맞지 않는다 - 매 줄마다 처음부터 다시 스캔하게 되거나, 펜스 판정을 호출부가
+        /// 직접 다시 구현하게 된다. 후자는 이 클래스의 존재 이유(펜스 미닫힘 폴백을
+        /// 두 곳이 각자 갖는 사고)를 그대로 반복한다.
+        ///
+        /// 펜스가 끝까지 닫히지 않으면 배열 전체를 false로 되돌린다 -
+        /// <see cref="FindIndexOutsideFence"/>가 펜스 상태를 신뢰할 수 없을 때 펜스를 무시하고
+        /// 다시 스캔하는 것과 같은 이유다: 오탐(코드 안의 헤딩)보다 미탐(이후 모든 헤딩을
+        /// 놓쳐 한 섹션이 문서 나머지 전부를 삼키는 것)이 훨씬 나쁘다.
+        /// </summary>
+        public static IReadOnlyList<bool> ComputeFenceFlags(IReadOnlyList<string> lines)
+        {
+            var flags = new bool[lines.Count];
+            var inFence = false;
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (lines[i].TrimStart().StartsWith("```", StringComparison.Ordinal))
+                {
+                    // 여닫는 줄 자체는 펜스 토글 마커이지 본문이 아니므로 펜스 밖으로 둔다.
+                    inFence = !inFence;
+                    flags[i] = false;
+                    continue;
+                }
+
+                flags[i] = inFence;
+            }
+
+            if (inFence)
+            {
+                Array.Clear(flags, 0, flags.Length);
+            }
+
+            return flags;
+        }
     }
 }
