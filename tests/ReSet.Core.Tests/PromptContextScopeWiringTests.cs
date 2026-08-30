@@ -152,5 +152,36 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("이웃도 아니고 이 단계 소유도 아닌 명세서", result.UserPrompt);
         }
+
+        // [상류 계약] PromptContextScope.NarrowSpecs는 specs의 FileName이
+        // BatchStepCatalog.ExtractProcedureIdentifier가 뽑아내는 순수 "schema.name"
+        // 형태로만 온다는 전제 위에 있다(경로나 확장자가 붙지 않는다). 이 전제가
+        // 깨지면 NarrowSpecs는 아무것도 매치하지 못해 전량 반환 폴백으로 조용히
+        // 무력화된다 - 결함이 아니라 안전한 무효화지만, 그 사실이 눈에 띄지
+        // 않는다. 이 테스트는 실물 경로 형태 둘 다에서 뽑힌 식별자가 실제로
+        // Narrow의 좁히기를 발동시키는지 고정한다.
+        [Theory]
+        [InlineData("Procedures/dbo.UP_Util_Settle_Summary/docs/Spec.md")]
+        [InlineData("External/OtherDb/Procedures/dbo.UP_Util_Settle_Summary/docs/Spec.md")]
+        public async Task NarrowMode_MatchesTheIdentifierBatchStepCatalogExtracts(string specRelativePath)
+        {
+            var identifier = ReSet.Cli.BatchStepCatalog.ExtractProcedureIdentifier(specRelativePath);
+            Assert.NotNull(identifier);
+
+            var (service, _) = Build("claude-cli");
+            var steps = new[] { Step("S11", identifier!) };
+            var specs = new List<(string FileName, string Content)>
+            {
+                (identifier!, "S11 명세서 본문"),
+                ("dbo.UP_Unrelated_Other", "이웃도 아니고 이 단계 소유도 아닌 명세서")
+            };
+
+            var result = await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약", specs, Array.Empty<StepInterface>(), "C#", "Job_Test",
+                callGraph: new Dictionary<string, IReadOnlyList<string>>());
+
+            Assert.Contains("S11 명세서 본문", result.UserPrompt);
+            Assert.DoesNotContain("이웃도 아니고 이 단계 소유도 아닌 명세서", result.UserPrompt);
+        }
     }
 }

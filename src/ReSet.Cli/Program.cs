@@ -592,10 +592,18 @@ namespace ReSet.Cli
             // Local Chunking 활성화 여부
             bool.TryParse(configuration["AiSettings:EnableLocalChunking"] ?? "true", out bool enableLocalChunking);
 
+            // [Task 10b] 단계 본문 호출의 입력 범위. 비어 있으면 AiService 생성자가
+            // 제공자로 정한다(PromptContextScope.ResolveMode 참고) - 세 서비스
+            // (aiService·criticService·consolidatorService) 모두에 같은 설정 문자열을
+            // 주는 이유는 Consolidator가 별도로 구성되지 않으면 aiService 인스턴스를
+            // 그대로 재사용하기 때문이다(아래 627행). 재사용 여부와 무관하게 항상
+            // 옳은 모드가 나오려면 세 생성 자리 모두 같은 값을 받아야 한다.
+            var promptContextScope = configuration["AiSettings:PromptContextScope"];
+
             var openRouterRouting = ReadOpenRouterRouting(configuration, provider, modelName);
 
             IAiClient aiClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(provider, modelName, apiKey, endpoint, httpClient, numCtx, cliCommand, openRouterRouting);
-            IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking);
+            IAiService aiService = new AiService(aiClient, temp, enableOllamaThinking, criticThresholdScore, enableLocalChunking, promptContextScope);
 
             // 하이브리드 아키텍처: ActorEffort 파싱
             var actorEffort = configuration["AiSettings:ActorEffort"];
@@ -620,7 +628,7 @@ namespace ReSet.Cli
                 var criticCommand = configuration[$"AiSettings:Providers:{criticProvider}:Command"];
                 var criticRouting = ReadOpenRouterRouting(configuration, criticProvider, criticModel);
                 var criticClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(criticProvider, criticModel, criticApiKey, criticEndpoint, httpClient, criticNumCtx, criticCommand, criticRouting);
-                criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking);
+                criticService = new AiService(criticClient, temp, criticEnableThinking, criticThresholdScore, enableLocalChunking, promptContextScope);
             }
 
             // 하이브리드 아키텍처: Consolidator 서비스 구성
@@ -643,7 +651,7 @@ namespace ReSet.Cli
                 var consolidatorCommand = configuration[$"AiSettings:Providers:{consolidatorProvider}:Command"];
                 var consolidatorRouting = ReadOpenRouterRouting(configuration, consolidatorProvider, consolidatorModel);
                 var consolidatorClient = ReSet.Core.Services.Clients.AiClientFactory.CreateClient(consolidatorProvider, consolidatorModel, consolidatorApiKey, consolidatorEndpoint, httpClient, consolidatorNumCtx, consolidatorCommand, consolidatorRouting);
-                consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking);
+                consolidatorService = new AiService(consolidatorClient, temp, consolidatorEnableThinking, criticThresholdScore, enableLocalChunking, promptContextScope);
             }
 
             IMetadataExporter metadataExporter = new MetadataExporter();
