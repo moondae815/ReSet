@@ -1867,6 +1867,11 @@ namespace ReSet.Core.Services
             // 회차를 "시도했다"로 세면 실측(POQSettleBatch4)처럼 6회 중 2회가
             // 조용히 사라진다.
             int l1RepairAttempt = 0;
+            // 루프가 계산한 오류 코드 누락을 AttachPipelineBanners로 그대로 넘기기 위한
+            // 자리. 메서드 밖에서 다시 계산하면 같은 사실이 두 곳에 생겨 갈라진다
+            // (설계서 §3-5(a)).
+            IReadOnlyDictionary<string, IReadOnlyList<string>> missingErrorCodes =
+                new Dictionary<string, IReadOnlyList<string>>();
             var bestAttempt = new BestAttempt();
             while (true)
             {
@@ -2025,6 +2030,27 @@ namespace ReSet.Core.Services
                 // L1: 기계적 무결성 검사
                 var l1Result = _validator.ValidateConsolidated(consolidatedPlan);
                 consolidatedPlan = l1Result.CleansedMarkdown ?? consolidatedPlan;
+
+                // 원본 오류 코드 누락은 결정적으로 판정된다. 루프 밖 배너로만 내보내면
+                // 재시도에 한 번도 먹이지 못한다 - 실측에서 이 축이 미달 5편 중 3편의
+                // 유일한 불합격 사유였다.
+                //
+                // 계산 결과는 아래 AttachPipelineBanners로 넘긴다. 같은 사실을 두 곳에서
+                // 각자 계산하면 갈라진다.
+                missingErrorCodes = MechanicalValidator.FindMissingErrorCodes(consolidatedPlan, specReturnCodes);
+                if (missingErrorCodes.Count > 0)
+                {
+                    foreach (var (procedure, codes) in missingErrorCodes)
+                    {
+                        l1Result.Errors.Add(
+                            $"원본 프로시저 `{procedure}`의 반환 코드 {string.Join(", ", codes)}이(가) " +
+                            "계획서 어디에도 없습니다. 레거시 호출자가 읽던 코드가 사라지므로, " +
+                            "해당 단계 본문에 원본 코드를 그대로 실으십시오.");
+                    }
+
+                    l1Result.IsValid = false;
+                }
+
                 if (!l1Result.IsValid)
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
@@ -2393,7 +2419,8 @@ namespace ReSet.Core.Services
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             VerificationCoverage? coverage;
             (consolidatedPlan, coverage) = AttachPipelineBanners(
-                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName);
+                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName,
+                missingErrorCodes);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
@@ -2689,7 +2716,8 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
-            string jobName)
+            string jobName,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? precomputedMissingCodes = null)
         {
             // 문서 헤더와 지시서 §0 양쪽이 소비할 커버리지 사실. 이 메서드 안에서
             // 만들어지는 세 재료(adoptedSteps, stepFloorViolations, missingCodes)를
@@ -2811,8 +2839,12 @@ namespace ReSet.Core.Services
             // 먼저 일어났다. 목차를 전혀 쓰지 않는다는 것이 이 검사의 존재 이유다.
             if (!string.IsNullOrEmpty(consolidatedPlan))
             {
+                // 루프가 이미 계산했으면 그 값을 쓴다. 같은 사실을 두 번 계산하면
+                // 한쪽만 고쳐지는 사고가 난다 - 이 저장소가 이미 겪었다.
+                //
                 // consolidatedPlan이 아니라 documentBody를 스캔한다 - 위 요약 참조.
-                var missingCodes = MechanicalValidator.FindMissingErrorCodes(documentBody, specReturnCodes);
+                var missingCodes = precomputedMissingCodes
+                    ?? MechanicalValidator.FindMissingErrorCodes(documentBody, specReturnCodes);
                 if (missingCodes.Count > 0)
                 {
                     hasDocumentCodeGap = true;
