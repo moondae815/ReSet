@@ -2066,6 +2066,14 @@ namespace ReSet.Core.Services
                     // 참조). 코드 대조는 배너 없는 원본이 필요하므로 bestAttempt.Current가
                     // 들고 있는 채점 시점의 원본을 쓴다.
                     documentBodyForChecks = bestAttempt.Current!.Markdown;
+                    // missingErrorCodes는 실패한 이번 회차가 아니라 완전히 이전
+                    // iteration에서 남은 값일 수 있다 - 생성 자체가 실패해 이번 회차는
+                    // L1 검사(:2083 부근)에 도달조차 못 했다. 채택되는 문서는
+                    // documentBodyForChecks(=bestAttempt.Current.Markdown)이므로
+                    // AttachPipelineBanners로 넘길 값도 그 문서 기준으로 다시
+                    // 계산해야 한다(설계서 §3-5(a)) - 안 그러면 L1을 통과한(오류
+                    // 코드가 있는) 문서에 방금 폐기한 회차의 누락 배너가 붙는다.
+                    missingErrorCodes = MechanicalValidator.FindMissingErrorCodes(documentBodyForChecks, specReturnCodes);
                     consolidatedPlan = rescued.Markdown;
                     break;
                 }
@@ -2284,6 +2292,12 @@ namespace ReSet.Core.Services
                             // rescued.Markdown은 이미 배너가 붙은 문자열이다 - 원본은
                             // bestAttempt.Current에서 가져온다.
                             documentBodyForChecks = bestAttempt.Current!.Markdown;
+                            // missingErrorCodes는 방금 소진된 이번 회차(L1 실패 -
+                            // 오류 코드가 비어 있지 않았을 수 있다)의 값이지, 채택되는
+                            // documentBodyForChecks(이미 L1을 통과했던 회차)의 값이
+                            // 아니다. 그대로 넘기면 코드가 있는 문서에 누락 배너가
+                            // 붙는다(설계서 §3-5(a)).
+                            missingErrorCodes = MechanicalValidator.FindMissingErrorCodes(documentBodyForChecks, specReturnCodes);
                             consolidatedPlan = rescued.Markdown;
                             break;
                         }

@@ -6575,6 +6575,165 @@ SELECT 1;
         }
 
         /// <summary>
+        /// FINAL FIX A - Important 1. 생성 실패 구제(:2047 부근)에서 missingErrorCodes는
+        /// 실패한 이번 회차가 아니라 "완전히 이전 iteration에서 남은 것"일 수 있다 -
+        /// 출고되는 문서(documentBodyForChecks == bestAttempt.Current.Markdown)와
+        /// 무관한 값이다.
+        ///
+        /// 시나리오: 1회차는 원본 오류코드("-1")를 담아 L1을 통과하고 최고 후보로
+        /// 기록된다(점수가 더 높다). 자리 없는 결함으로 공짜 재검토가 한 번 일어나는데,
+        /// 그 재검토가 부른 재생성이 코드를 빠뜨려 L1이 실패한다 - 귀속할 목차가 없어
+        /// (폴백 경로) 전량 재생성으로 다음 회차로 넘어간다. 2회차도 같은 패턴(코드
+        /// 있음 -> 통과 -> 낮은 점수로 기록 안 됨 -> 코드 없음 -> L1 실패 -> 전량
+        /// 재생성)을 반복한 뒤, 3회차의 생성 호출이 예외를 던진다. 이 시점의
+        /// missingErrorCodes는 2회차의 L1 실패에서 남은 값(코드 있음)인데, 실제로
+        /// 채택되는 문서(1회차, 최고 후보)는 코드를 담고 있다 - 배너와 VerificationCoverage가
+        /// 존재하지도 않는 누락을 보고해서는 안 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_GenerationFailureRescue_RecomputesMissingErrorCodesForShippedDocument()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "@po_intRetVal = -1") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var cleanDoc = header + "\n원본 오류코드 -1을 그대로 보존한다.";
+            var missingCodeDoc = header + "\n오류코드가 빠졌다.";
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+
+            var genCall = 0;
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = genCall++;
+                    return call switch
+                    {
+                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과
+                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 1회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
+                        2 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 2회차: 코드 있음, L1 통과
+                        3 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
+                        _ => throw new InvalidOperationException("AI 생성 호출 중단(시뮬레이션)"),
+                    };
+                });
+
+            var reviewCall = 0;
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1회차 리뷰: 자리 없는 결함, 더 높은 점수 - 최고 후보가 된다.
+                        0 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
+                        }),
+                        // 2회차 리뷰: 자리 없는 결함, 더 낮은 점수 - 최고 후보를 갱신하지 못한다.
+                        _ => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5
+                        }),
+                    };
+                });
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 생성 실패로 구제가 일어났고, 채택된 문서는 1회차(코드를 담고 있다)다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.NotNull(result.Review);
+            Assert.Equal(80, result.Review!.NormalizedScore);
+
+            // 핵심 불변식: 채택된 문서가 코드를 담고 있으므로 오류코드 누락 배너도,
+            // VerificationCoverage의 문서 코드 갭 신호도 서지 않아야 한다. 고치기
+            // 전에는 2회차 L1 실패에서 남은 missingErrorCodes가 그대로 살아남아
+            // 이 배너를 잘못 세웠다.
+            Assert.DoesNotContain("오류코드 누락", result.Plan);
+            Assert.NotNull(result.Coverage);
+            Assert.False(result.Coverage!.HasDocumentCodeGap);
+        }
+
+        /// <summary>
+        /// FINAL FIX A - Important 1의 두 번째 자리. L1 소진 구제(:2277 부근)에서
+        /// missingErrorCodes는 방금 소진된 회차(실패한, 코드가 빠진 문서)의 값인데
+        /// documentBodyForChecks는 그 attempt를 통과했던 최고 후보(코드를 담은
+        /// 문서)다. 위 생성 실패 테스트와 다른 자리를 고정한다 - 저건 "완전히
+        /// 이전 회차의 값"이고 이건 "실패한 이번 회차 자신의 값"이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L1ExhaustedRescue_RecomputesMissingErrorCodesForShippedDocument()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "@po_intRetVal = -1") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var cleanDoc = header + "\n원본 오류코드 -1을 그대로 보존한다.";
+            var missingCodeDoc = header + "\n오류코드가 빠졌다.";
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+
+            var genCall = 0;
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = genCall++;
+                    return call switch
+                    {
+                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과, 최고 후보로 기록
+                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 1회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
+                        2 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 2회차: 코드 있음, L1 통과, 최고 후보 갱신 못함
+                        3 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
+                        _ => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 3회차: 코드 빠짐, L1 실패 - 예산 소진(3<3 거짓)
+                    };
+                });
+
+            var reviewCall = 0;
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        0 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
+                        }),
+                        _ => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5
+                        }),
+                    };
+                });
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.NotNull(result.Review);
+            Assert.Equal(80, result.Review!.NormalizedScore);
+
+            // 채택된 문서(1회차, 코드를 담음)에는 누락이 없어야 한다 - 고치기 전에는
+            // 3회차(방금 소진된, 코드가 빠진 회차)의 missingErrorCodes가 그대로
+            // 살아남아 이 배너를 잘못 세웠다.
+            Assert.DoesNotContain("오류코드 누락", result.Plan);
+            Assert.NotNull(result.Coverage);
+            Assert.False(result.Coverage!.HasDocumentCodeGap);
+        }
+
+        /// <summary>
         /// C3(Task 9 보정)를 고정하는 테스트.
         ///
         /// stepFloorViolations는 아직(Task 10 이전) 최종 문서나 어떤 AI 호출 인자에도
