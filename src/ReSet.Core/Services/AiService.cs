@@ -4337,8 +4337,11 @@ Consolidate the provided specifications into a single unified batch job named '{
                 : specs;
 
             var userPrompt = new StringBuilder();
+            // totalProcedureCount는 원본 specs(좁히기 전) 기준이다 - Narrow에서도
+            // "Total"이 배치 전체의 실제 수를 말해야 한다.
             AppendSharedStepContext(
-                userPrompt, allSteps, sharedConventions, scopedSpecs, stepInterfaces, targetLanguage, jobName);
+                userPrompt, allSteps, sharedConventions, scopedSpecs, stepInterfaces, targetLanguage, jobName,
+                totalProcedureCount: FeedbackSpec.OnlyProcedureSpecs(specs).Count);
 
             AppendStatementAnchorRules(userPrompt);
 
@@ -4513,12 +4516,20 @@ Consolidate the provided specifications into a single unified batch job named '{
             System.Collections.Generic.List<(string FileName, string Content)> specs,
             IReadOnlyList<StepInterface> stepInterfaces,
             string targetLanguage,
-            string jobName)
+            string jobName,
+            // [Task 10b FIX ROUND 1] Narrow 모드에서 specs는 이미 좁혀진 부분집합이다.
+            // "Total"은 그 부분집합이 아니라 배치 전체가 통합하는 실제 수를 말해야
+            // 한다 - 안 그러면 바로 다음 [Approved Step List](여러 단계·여러
+            // 프로시저, narrowing과 무관)와 자기모순인 프롬프트가 된다. null이면
+            // (좁히지 않는 세 호출부의 종전 동작) specs 자신의 개수를 쓴다 - Full
+            // 모드에서는 specs가 곧 전체이므로 이 값이 있든 없든 바이트가 같다.
+            int? totalProcedureCount = null)
         {
             builder.AppendLine($"Unified Batch Job Name: {jobName}");
             builder.AppendLine($"Target Language Stack: {targetLanguage}");
             var procedureSpecs = FeedbackSpec.OnlyProcedureSpecs(specs);
-            builder.AppendLine($"Total Legacy Stored Procedures to Consolidate: {procedureSpecs.Count} procedures");
+            var declaredTotal = totalProcedureCount ?? procedureSpecs.Count;
+            builder.AppendLine($"Total Legacy Stored Procedures to Consolidate: {declaredTotal} procedures");
             builder.AppendLine();
             builder.AppendLine("[Provided Stored Procedure Specifications]");
 

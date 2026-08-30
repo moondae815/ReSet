@@ -153,6 +153,31 @@ namespace ReSet.Core.Tests
             Assert.Contains("이웃도 아니고 이 단계 소유도 아닌 명세서", result.UserPrompt);
         }
 
+        // [FIX ROUND 1 - Minor] Narrow는 본문(프로시저 명세서 표)만 좁힌다. 같은
+        // 프롬프트 안의 "Total Legacy Stored Procedures to Consolidate"는 배치
+        // 전체가 통합하는 수를 말해야 한다 - 좁혀진 수를 말하면 바로 다음 절인
+        // [Approved Step List](여러 단계·여러 프로시저, narrowing과 무관)와
+        // 자기모순이 되어 모델을 오도한다.
+        [Fact]
+        public async Task NarrowMode_DeclaresTheFullProcedureCountNotTheNarrowedCount()
+        {
+            var (service, _) = Build("claude-cli");
+            var steps = new[]
+            {
+                Step("S11", "dbo.UP_Util_Settle_Summary"),
+                Step("S20", "dbo.UP_Unrelated_Other")
+            };
+
+            var result = await service.GenerateBatchStepSectionAsync(
+                steps[0], steps, "공통 규약", Specs(), Array.Empty<StepInterface>(), "C#", "Job_Test",
+                callGraph: new Dictionary<string, IReadOnlyList<string>>());
+
+            // Specs()는 명세서 3개(S11 소유 1개 + 이웃 1개 + 무관 1개)를 낸다. 본문
+            // 표는 S11 소유분 하나만 싣지만 Total은 3이어야 한다.
+            Assert.Contains("Total Legacy Stored Procedures to Consolidate: 3 procedures", result.UserPrompt);
+            Assert.DoesNotContain("이웃도 아니고 이 단계 소유도 아닌 명세서", result.UserPrompt);
+        }
+
         // [상류 계약] PromptContextScope.NarrowSpecs는 specs의 FileName이
         // BatchStepCatalog.ExtractProcedureIdentifier가 뽑아내는 순수 "schema.name"
         // 형태로만 온다는 전제 위에 있다(경로나 확장자가 붙지 않는다). 이 전제가
