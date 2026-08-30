@@ -969,6 +969,38 @@ namespace ReSet.Cli
 
                     try
                     {
+                        // TUI 흐름과 같은 재료 폐포를 건다(설계서 §7-2). 이 경로를 빼면
+                        // 같은 도구가 진입 경로에 따라 다른 재료를 쓰게 된다.
+                        var entryPointSpecPaths = specsData
+                            .Select(spec => Path.Combine("Procedures", spec.FileName, "docs", "Spec.md"))
+                            .Where(relative => File.Exists(Path.Combine(outputDir, relative)))
+                            .ToList();
+
+                        var closure = BatchStepCatalog.CloseOverProcedureReferences(outputDir, entryPointSpecPaths);
+
+                        foreach (var added in closure.Added)
+                        {
+                            Serilog.Log.Information("[배치 설계] 참조 프로시저 재료 추가: {SpecPath}", added);
+
+                            var addedIdentifier = BatchStepCatalog.ExtractProcedureIdentifier(added);
+                            var addedFullPath = Path.Combine(outputDir, added);
+                            if (addedIdentifier is null || !File.Exists(addedFullPath)) continue;
+
+                            specsData.Add((addedIdentifier, await File.ReadAllTextAsync(addedFullPath, activeCts.Token)));
+                        }
+
+                        if (closure.Added.Count > 0)
+                        {
+                            var addedLoad = await BatchStepCatalog.LoadDefinitionsAsync(
+                                outputDir, closure.Added, activeCts.Token);
+                            spDefs.AddRange(addedLoad.Definitions);
+                        }
+
+                        if (closure.CapExceeded)
+                        {
+                            Serilog.Log.Warning("[배치 설계] 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.");
+                        }
+
                         var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: activeCts.Token);
                         var consolidatedPlan = pipelineResult.Plan;
                         var aiResult = pipelineResult.Result;
