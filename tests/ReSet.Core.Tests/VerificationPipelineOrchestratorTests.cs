@@ -5064,7 +5064,7 @@ namespace ReSet.Core.Tests
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
                 Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
-                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
 
             var specs = new List<(string, string)> { ("spec1.md", "content1") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -5079,12 +5079,14 @@ namespace ReSet.Core.Tests
             aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
-            // 1차 70, 2차 60(정체 -> L2 재설계), 3차는 통과. 통과 회차가 최고점이므로
-            // 구제 채택이 끼어들지 않고 L2 재설계 목차가 그대로 현행으로 남는다.
+            // 1차 70, 2·3차 60(2회 연속 정체 + 구조 결함 지목 -> 3차에서 L2 재설계),
+            // 4차는 통과. 통과 회차가 최고점이므로 구제 채택이 끼어들지 않고 L2
+            // 재설계 목차가 그대로 현행으로 남는다.
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
                     _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }));
 
             userInteraction.RequestHumanReviewAsync("L2L3RedraftJob", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
@@ -6691,7 +6693,7 @@ SELECT 1;
         /// S01만 다시 뽑지만 여전히 미달이고 점수도 더 낮다(개선 아님) - 종전 단일
         /// 조건 정책(1회 미갱신)이 재설계를 발동시킨다. 재설계는
         /// ClearSplitGenerationCacheAfterRedraft로 currentSteps를 null로 만든다.
-        /// 3회차는 재설계 뒤 골격부터 전량 다시 만들고(캐시가 없으므로) 이번엔
+        /// 4회차는 재설계 뒤 골격부터 전량 다시 만들고(캐시가 없으므로) 이번엔
         /// S01도 건강해 통과한다.
         ///
         /// 이 테스트는 (1) 재설계 직후 이어지는 StepFreezeState.OpenSteps 호출이
@@ -6713,22 +6715,22 @@ SELECT 1;
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = SkeletonMarkdown });
 
-            // 1회차와 2회차(결함이 있으나 최고 후보로 기록됨 / 점수가 더 낮아 개선이
-            // 아님 - 종전 단일 조건 정책이 재설계를 발동시킨다)는 review가 미리
-            // 선언돼야 GenerateBatchStepSectionAsync가 "몇 회차인지"를 review 완료
-            // 횟수로 판정할 수 있다. reviewCall은 두 배선이 공유한다.
+            // 1~3회차(1차는 최고 후보로 기록됨, 2·3차는 점수가 더 낮아 2회 연속
+            // 정체 + 구조 결함 지목으로 3회차에서 재설계가 발동한다)는 review가
+            // 미리 선언돼야 GenerateBatchStepSectionAsync가 "몇 회차인지"를 review
+            // 완료 횟수로 판정할 수 있다. reviewCall은 두 배선이 공유한다.
             var reviewCall = 0;
 
-            // S01은 review가 2번 끝나기 전까지(1회차 생성, 2회차의 targeted 재생성)
-            // 코드 블록이 없어 하한 미달이고, 3회차(재설계 뒤 전량 재생성)부터는
-            // 건강하다. reviewCall로 회차를 가리는 이유: 하한 재시도가 한 회차
-            // 안에서 GenerateBatchStepSectionAsync를 최대 5번(maxTries) 불러
+            // S01은 review가 3번 끝나기 전까지(1~3회차 생성, 그중 2·3회차는 targeted
+            // 재생성) 코드 블록이 없어 하한 미달이고, 4회차(재설계 뒤 전량 재생성)
+            // 부터는 건강하다. reviewCall로 회차를 가리는 이유: 하한 재시도가 한
+            // 회차 안에서 GenerateBatchStepSectionAsync를 최대 5번(maxTries) 불러
             // 누적 호출 횟수로는 회차 경계를 알 수 없다.
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
                 {
                     var step = call.Arg<BatchStepPlan>();
-                    if (step.Code == "S01" && reviewCall < 2)
+                    if (step.Code == "S01" && reviewCall < 3)
                     {
                         return new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." };
                     }
@@ -6743,21 +6745,27 @@ SELECT 1;
                     {
                         0 => new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
                         1 => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 문서 전반 결함", ScoreAccuracy = 5, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
+                        2 => new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 5, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
                         _ => new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 },
                     };
                 });
 
             var ui = Substitute.For<IVerificationUserInteraction>();
-            var result = await RunBatchPipelineWithUi(aiService, ui, isBatchMode: true);
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "3", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // 예외 없이 통과로 끝난다 - null이 된 currentSteps를 OpenSteps가
             // 처리하지 못하면 이 지점까지 오지 못하고 NullReferenceException으로 죽는다.
             Assert.Equal(VerificationOutcome.Passed, result.Outcome);
 
             // 골격은 두 번만 불린다: 1회차(최초) + 3회차(재설계로 캐시가 지워져
-            // 전량 재생성). 2회차는 S01의 살아있는 하한 위반 덕에 targeted라
+            // 전량 재생성). 2·3회차는 S01의 살아있는 하한 위반 덕에 targeted라
             // 캐시된 골격을 재사용해 호출하지 않는다. 세 번이 되면(재설계 뒤에도
-            // targeted로 오인해 캐시를 재사용하려 한 것이거나, 반대로 2회차조차
+            // targeted로 오인해 캐시를 재사용하려 한 것이거나, 반대로 2·3회차조차
             // 캐시를 못 쓴 것이다) 계약이 깨진 것이다.
             await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
@@ -7097,20 +7105,26 @@ SELECT 1;
                         : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });
 
-            // 1·2회차는 60점으로 정체(최고점 갱신 없음) → 2회차에서 목차 재수립이
-            // 발동한다(StructureRedraftPolicy: 미갱신 1회로 발동). 3회차는 새 목차로
-            // 통과.
+            // 1~3회차는 60점 + 구조 결함 지목으로 정체(최고점 갱신 없음, 2회 연속
+            // 정체가 3회차에서 성립) → 3회차에서 목차 재수립이 발동한다. 4회차는
+            // 새 목차로 통과.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(_ =>
                 {
                     var call = reviewCall++;
-                    return call < 2
-                        ? new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
+                    return call < 3
+                        ? new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
                         : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
                 });
 
-            var result = await RunBatchPipeline(aiService);
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "3", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             // 목차가 실제로 재수립되어 새 코드로 문서가 조립됐는지 먼저 확인한다.
             Assert.Contains("T01", result.Plan);
