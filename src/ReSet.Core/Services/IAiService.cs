@@ -38,6 +38,23 @@ namespace ReSet.Core.Services
         /// </summary>
         public List<string> DefectiveSteps { get; set; } = new();
 
+        /// <summary>
+        /// 공통 규약(골격)과 단계 본문이 서로 모순되는가.
+        ///
+        /// 이 필드가 필요한 이유: 실측 「필수 수정 3」은 1.4절이 선언한 그룹 트랜잭션
+        /// 계약과 S11~S13 의사코드의 모순이었다. 어느 한 단계의 결함이 아니므로 각
+        /// 섹션은 자기 안에서 일관되고, 단계 재생성으로는 영원히 고쳐지지 않는다.
+        /// 담을 자리가 없던 동안은 관련 단계들이 DefectiveSteps에 실렸고, 그 단계들이
+        /// 각자 다시 쓰이며 모순이 재생산됐다.
+        /// </summary>
+        public bool SkeletonDefective { get; set; }
+
+        /// <summary>
+        /// 목차 자체가 결함인가 — 단계 누락, 단계 배치 오류, 청킹 불가 단계의 청킹 지정.
+        /// StructureRedraftPolicy가 목차 재설계를 발동할 두 조건 중 하나다.
+        /// </summary>
+        public bool StructureDefective { get; set; }
+
         // 5대 기준별 정량적 평가 점수 (각 0~10점)
         public int ScoreAccuracy { get; set; }     // 비즈니스 정합성
         public int ScoreCrud { get; set; }         // CRUD 및 데이터 매핑

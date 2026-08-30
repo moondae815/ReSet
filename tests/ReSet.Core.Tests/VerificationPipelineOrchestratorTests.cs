@@ -3766,6 +3766,10 @@ namespace ReSet.Core.Tests
             {
                 HasDefects = true,
                 FeedbackComment = "정합성 검증 SQL이 비어 있습니다",
+                // SkeletonDefective를 세워 지목 없는 리뷰가 "자리를 못 댄 리뷰"로 재호출
+                // 되지 않게 한다 - 이 테스트가 보는 것은 QualityRejected에 리뷰가
+                // 실리는지이지, 재호출/무효화 경로가 아니다.
+                SkeletonDefective = true,
                 ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4
             };
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -4346,12 +4350,14 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new AiResult { Content = plan2 }),
                     _ => throw new InvalidOperationException("generation timed out"));
 
+            // SkeletonDefective를 세워 지목 없는 리뷰가 "자리를 못 댄 리뷰"로 재호출을
+            // 타지 않게 한다 - 이 테스트는 그 경로가 아니라 3차 생성 실패의 구제를 본다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
                 .Returns(Task.FromResult(new ReviewResult
-                { HasDefects = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 7, ScoreReadability = 5, ScoreException = 7 }));
+                { HasDefects = true, SkeletonDefective = true, ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 7, ScoreReadability = 5, ScoreException = 7 }));
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
                 .Returns(Task.FromResult(new ReviewResult
-                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+                { HasDefects = true, SkeletonDefective = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
 
             _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4420,12 +4426,14 @@ namespace ReSet.Core.Tests
                     _ => throw new InvalidOperationException("generation timed out"));
 
             // 1차 88점이 최고, 2차는 생성에 성공하지만 64점.
+            // SkeletonDefective를 세워 지목 없는 리뷰가 재호출 경로로 빠지지 않게 한다 -
+            // 이 테스트가 보는 것은 채택된 시도의 AiResult 귀속이지 리뷰 재호출이 아니다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
                 .Returns(Task.FromResult(new ReviewResult
-                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+                { HasDefects = true, SkeletonDefective = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
                 .Returns(Task.FromResult(new ReviewResult
-                { HasDefects = true, ScoreAccuracy = 6, ScoreCrud = 5, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7 }));
+                { HasDefects = true, SkeletonDefective = true, ScoreAccuracy = 6, ScoreCrud = 5, ScoreInterface = 7, ScoreReadability = 7, ScoreException = 7 }));
 
             _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
                 .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
@@ -4603,9 +4611,11 @@ namespace ReSet.Core.Tests
                     _ => Task.FromResult(new AiResult { Content = plan1 }),
                     _ => Task.FromResult(new AiResult { Content = plan2 }));
 
+            // SkeletonDefective를 세워 지목 없는 리뷰가 재호출 경로로 빠지지 않게 한다 -
+            // 이 테스트가 보는 것은 2차 리뷰 호출 실패의 구제이지 재호출/무효화가 아니다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획1고유표시")), "Job_Test")
                 .Returns(Task.FromResult(new ReviewResult
-                { HasDefects = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
+                { HasDefects = true, SkeletonDefective = true, ScoreAccuracy = 9, ScoreCrud = 10, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 7 }));
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Is<string>(s => s.Contains("계획2고유표시")), "Job_Test")
                 .Returns<Task<ReviewResult>>(_ => throw new InvalidOperationException("critic down"));
 
@@ -6372,6 +6382,85 @@ SELECT 1;
             await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// 실측 「필수 수정 3」: 1.4절의 그룹 트랜잭션 선언과 S11~S13 의사코드가 모순됐다.
+        /// 어느 한 단계의 결함이 아니므로 단계 재생성으로는 고쳐지지 않는다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_SkeletonDefective_RegeneratesSkeletonOnly()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var plan = header + "\n본문";
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new ReviewResult
+                    {
+                        HasDefects = true, SkeletonDefective = true, FeedbackComment = "골격 모순",
+                        ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 6, ScoreReadability = 9
+                    }),
+                    _ => Task.FromResult(new ReviewResult
+                    {
+                        HasDefects = false,
+                        ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                    }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 지목이 비었어도 SkeletonDefective가 참이므로 리뷰 재호출로 빠지지 않는다.
+            _userInteraction.Received().NotifyStatus(
+                Arg.Is<string>(s => s.Contains("골격만 다시 만듭니다")));
+        }
+
+        /// <summary>
+        /// 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
+        /// 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocation_RetriesReviewOnce()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var plan = header + "\n본문";
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 두 번 다 자리를 못 댄다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = "어딘가 결함이 있다",
+                    ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6
+                }));
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.ReviewNotRun, result.Outcome);
+            _userInteraction.Received().NotifyError(
+                Arg.Is<string>(s => s.Contains("자리를 대지 못했습니다")));
         }
 
         /// <summary>

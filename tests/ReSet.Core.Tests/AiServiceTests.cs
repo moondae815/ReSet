@@ -1804,6 +1804,54 @@ END",
             Assert.Empty(review.DefectiveSteps);
         }
 
+        // 전역 결함(골격 모순)과 구조 결함(목차 자체가 결함)은 DefectiveSteps와 별개의
+        // 필드다 - 둘 다 세워도 지목 자체는 그대로 파싱돼야 한다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_ParsesSkeletonAndStructureDefectiveFromJson()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":true,\\\"FeedbackComment\\\":\\\"골격 모순\\\"," +
+                "\\\"DefectiveSteps\\\":[\\\"S11\\\"]," +
+                "\\\"SkeletonDefective\\\":true,\\\"StructureDefective\\\":true," +
+                "\\\"ScoreAccuracy\\\":7,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            Assert.True(review.SkeletonDefective);
+            Assert.True(review.StructureDefective);
+        }
+
+        // 두 필드가 응답에 없으면 기본값 false여야 한다 - 단일 SP 명세서 리뷰
+        // 프롬프트에는 이 필드가 없으므로 항상 이 경로를 탄다.
+        [Fact]
+        public async Task ReviewConsolidatedPlanAsync_WithoutSkeletonOrStructureDefective_DefaultsToFalse()
+        {
+            var reviewJson = "{\\\"HasDefects\\\":false,\\\"FeedbackComment\\\":\\\"\\\"," +
+                "\\\"ScoreAccuracy\\\":9,\\\"ScoreCrud\\\":9,\\\"ScoreInterface\\\":9,\\\"ScoreException\\\":9,\\\"ScoreReadability\\\":9}";
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"" + reviewJson + "\"}}]}";
+            var httpClient = new HttpClient(new MockHttpMessageHandler(mockResponse));
+            IAiService service = new AiService(
+                new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o"), 0.2f);
+
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var review = await service.ReviewConsolidatedPlanAsync(specs, "## 계획서", "Test_Job");
+
+            Assert.False(review.SkeletonDefective);
+            Assert.False(review.StructureDefective);
+        }
+
         // 캐시는 접두사 일치다. 잡 이름이 명세서보다 앞에 있으면 잡이 바뀔 때마다
         // 뒤따르는 명세서 전량(실측 481KB)이 무효가 된다.
         [Fact]

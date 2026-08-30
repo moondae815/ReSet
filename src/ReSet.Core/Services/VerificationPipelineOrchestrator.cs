@@ -1877,6 +1877,12 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, IReadOnlyList<string>> missingErrorCodes =
                 new Dictionary<string, IReadOnlyList<string>>();
             var bestAttempt = new BestAttempt();
+            // 결함이 있다면서 자리를 못 대는 리뷰의 재호출 상한(회차당 1회) 플래그.
+            // 회차(attempt) 단위로 살아 있어야 한다 - while(true) 몸통 안에서
+            // 선언하면 재호출 자체가 만드는 continue(attempt 불변)에도 매번
+            // 초기화되어 상한이 걸리지 않는다. attempt가 실제로 올라갈 때만
+            // 아래에서 명시적으로 되돌린다.
+            bool reviewRetriedThisAttempt = false;
             while (true)
             {
                 var attemptText = attempt == 1 ? "1차 분석" : $"자가 수정 보완 ({attempt}회째)";
@@ -2169,6 +2175,8 @@ namespace ReSet.Core.Services
                         else
                         {
                             attempt++;
+                            // 새 회차가 시작된다 - 리뷰 재호출 상한도 새로 받는다.
+                            reviewRetriedThisAttempt = false;
                         }
 
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
@@ -2311,7 +2319,9 @@ namespace ReSet.Core.Services
 
                         // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
                         // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
-                        if (redraftPolicy.TryConsume(improvedThisAttempt))
+                        if (redraftPolicy.TryConsume(
+                                improvedThisAttempt,
+                                l2Result.StructureDefective || machineFoundStructureDefect))
                         {
                             var redrafted = await DraftReplacementPlanStructureAsync(
                                 "재시도가 점수를 개선하지 못해 목차를 다시 설계합니다",
@@ -2357,7 +2367,55 @@ namespace ReSet.Core.Services
                             pendingDefectiveSteps.AddRange(openSteps);
                         }
 
+                        // 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
+                        // 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
+                        //
+                        // 재호출은 한 회차당 1회다. 상한이 없으면 Critic이 계속 자리를
+                        // 못 대는 동안 유료 호출이 무한히 돈다. 두 번째도 못 대면 통과가
+                        // 아니라 "리뷰 무효"로 확정한다 - 자리를 못 대는 리뷰를 통과로
+                        // 읽는 것이 이 설계가 막으려는 침묵이다.
+                        if (pendingDefectiveSteps.Count == 0 &&
+                            !l2Result.SkeletonDefective &&
+                            !l2Result.StructureDefective)
+                        {
+                            if (!reviewRetriedThisAttempt)
+                            {
+                                reviewRetriedThisAttempt = true;
+                                _userInteraction.NotifyStatus(
+                                    $"[yellow]{jobName}[/] - Critic이 결함을 신고했으나 자리를 대지 못해 리뷰를 다시 요청합니다.");
+                                continue;   // attempt 를 올리지 않는다
+                            }
+
+                            _userInteraction.NotifyError(
+                                $"{jobName} - Critic이 두 번 연속 결함의 자리를 대지 못했습니다. 리뷰 무효로 확정합니다.");
+                            planOutcome = VerificationOutcome.ReviewNotRun;
+                            documentBodyForChecks = consolidatedPlan;
+                            consolidatedPlan =
+                                VerificationBanner.ReviewNotRun("Critic이 결함의 자리를 대지 못했습니다.") + consolidatedPlan;
+                            break;
+                        }
+
+                        if (l2Result.SkeletonDefective)
+                        {
+                            // 골격만 버린다. 섹션은 동결 상태로 남겨 다음 회차가
+                            // 새 골격 아래에 그대로 조립한다. 성립하지 않으면
+                            // 회귀 롤백이 그 회차를 되감는다.
+                            //
+                            // [알려진 한계] GenerateBySplitAsync의 targeted 판정은
+                            // "골격 재사용"과 "지목 단계만 재생성"을 한 조건으로 묶는다
+                            // (previousSkeleton != null && defectiveSteps.Count > 0).
+                            // 골격을 null로 비우면 그 판정이 항상 거짓이 되어 다음 회차는
+                            // 지목 여부와 무관하게 전 단계를 다시 만든다 - "섹션은 동결"이
+                            // 문서화하는 이상적 동작과 실제 배선이 split 경로에서는 갈린다.
+                            lastSkeleton = null;
+                            lastSkeletonResult = null;
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
+                        }
+
                         attempt++;
+                        // 새 회차가 시작된다 - 리뷰 재호출 상한도 새로 받는다.
+                        reviewRetriedThisAttempt = false;
                         continue;
                     }
                     else

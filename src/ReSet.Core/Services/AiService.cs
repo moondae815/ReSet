@@ -2440,11 +2440,22 @@ DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW'
                         }
                     }
 
+                    // 전역 결함(골격 모순)과 구조 결함(목차 자체가 결함)은 단일 SP 명세서
+                    // 리뷰 프롬프트에는 없는 필드라 그 경로에서는 항상 기본값(false)이다.
+                    var skeletonDefective =
+                        resultRoot.TryGetProperty("SkeletonDefective", out var skeletonProp) &&
+                        skeletonProp.ValueKind == JsonValueKind.True;
+                    var structureDefective =
+                        resultRoot.TryGetProperty("StructureDefective", out var structureProp) &&
+                        structureProp.ValueKind == JsonValueKind.True;
+
                     return new ReviewResult
                     {
                         HasDefects = hasDefects,
                         FeedbackComment = feedbackComment,
                         DefectiveSteps = defectiveSteps,
+                        SkeletonDefective = skeletonDefective,
+                        StructureDefective = structureDefective,
                         ScoreAccuracy = scoreAccuracy,
                         ScoreCrud = scoreCrud,
                         ScoreInterface = scoreInterface,
@@ -4559,8 +4570,10 @@ Consolidate the provided specifications into a single unified batch job named '{
 
 [Defective Step Attribution]
 - `DefectiveSteps` MUST list the step codes (e.g. `S08`) of the `###` sections under `## 단계별 이행 상세 및 의사코드` that caused the defects, using the exact codes as written in the document.
-- Include a step ONLY when rewriting that one section would fix the defect. Leave the array EMPTY when the defect is document-wide (a missing H2, a broken flowchart, an inconsistency across steps).
-- An empty array causes the whole document to be regenerated, so listing steps precisely is what makes the repair cheap.
+- Include a step ONLY when rewriting that one section would fix the defect.
+- `DefectiveSteps` is MANDATORY whenever `HasDefects` is true. If a defect is real, you can point to the `###` section that carries it. An empty list with `HasDefects: true` will be rejected as an invalid review.
+- Set `SkeletonDefective` to true when the shared-conventions subsections (transaction boundaries, checkpoint status values, the common error-tracking pattern) CONTRADICT the step bodies. That defect belongs to the skeleton, not to any one step — also list the contradicting steps in `DefectiveSteps`.
+- Set `StructureDefective` to true when the approved step list itself is wrong: a source procedure that no step claims, a step placed out of order, or a step marked chunkable that cannot be chunked.
 
 [Output Format]
 Output ONLY the final JSON payload. Do not include markdown block markers (```json) or conversational text. Output raw JSON:
@@ -4568,6 +4581,8 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
   ""HasDefects"": true or false (boolean),
   ""FeedbackComment"": ""Detailed correction instructions if defects are found. Return empty string if HasDefects is false."",
   ""DefectiveSteps"": [""S08"", ""S10""],
+  ""SkeletonDefective"": false,
+  ""StructureDefective"": false,
   ""ScoreAccuracy"": 10,
   ""ScoreCrud"": 10,
   ""ScoreInterface"": 10,
