@@ -2513,6 +2513,35 @@ namespace ReSet.Core.Services
 
                             _userInteraction.NotifyError(
                                 $"{jobName} - Critic이 두 번 연속 결함의 자리를 대지 못했습니다. 리뷰 무효로 확정합니다.");
+
+                            // 다른 넷(생성 실패·L1 소진·채점 예산 소진·리뷰 실패)과 같은
+                            // 채택 규칙을 거친다. 여기서 그냥 이번 회차 문서를 확정하면
+                            // 이미 검증을 마친 더 높은 점수의 최고 후보를 버리고 방금
+                            // 자리를 못 댄(그래서 재생성의 근거조차 될 수 없다고 이미
+                            // 판정한) 문서를 내보내는 모순이 생긴다 - BestAttempt의
+                            // 존재 이유 자체를 이 자리만 무시하는 회귀였다.
+                            var rescued = RetryRescue.TryRescue(
+                                bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.ReviewInvalidated);
+                            if (rescued != null)
+                            {
+                                _userInteraction.NotifyError(
+                                    $"{jobName} - 가장 높은 점수를 받은 {rescued.AttemptNumber}차 시도" +
+                                    $"({rescued.Review.NormalizedScore}/100)를 채택합니다.");
+
+                                currentPlanStructure = await AdoptPlanStructureForRescueAsync(
+                                    outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                RestoreAdoptedGenerationState(
+                                    adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
+                                finalAiResult = rescued.Generation ?? finalAiResult;
+                                planReview = rescued.Review;
+                                planOutcome = VerificationOutcome.QualityRejected;
+                                // rescued.Markdown에는 이미 배너가 붙어 있다 - 원본은
+                                // bestAttempt.Current에서 가져온다.
+                                documentBodyForChecks = bestAttempt.Current!.Markdown;
+                                consolidatedPlan = rescued.Markdown;
+                                break;
+                            }
+
                             planOutcome = VerificationOutcome.ReviewNotRun;
                             documentBodyForChecks = consolidatedPlan;
                             consolidatedPlan =

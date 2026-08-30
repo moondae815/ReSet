@@ -13,7 +13,11 @@ namespace ReSet.Core.Services
         L1Exhausted,
 
         /// <summary>L2 리뷰 호출이 실패했다.</summary>
-        ReviewFailed
+        ReviewFailed,
+
+        /// <summary>Critic이 결함을 신고했으나 두 번 연속 자리를 대지 못해 리뷰를
+        /// 재생성의 근거로 쓸 수 없다고 확정했다.</summary>
+        ReviewInvalidated
     }
 
     /// <summary>

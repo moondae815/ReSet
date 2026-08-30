@@ -6527,9 +6527,17 @@ SELECT 1;
         /// <summary>
         /// 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
         /// 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
+        ///
+        /// [FINAL FIX A - Critical 1] 두 번 연속 자리를 못 대 리뷰가 무효로
+        /// 확정되는 순간에도 RetryRescue를 거친다. 1차 시도가 이미 후보로
+        /// 기록돼 있으므로(BestAttempt.TryRecord는 결함 여부와 무관하게 등록한다)
+        /// 이 종료는 점수 없는 ReviewNotRun이 아니라 그 후보를 채택한
+        /// QualityRejected여야 한다 - 다른 넷(생성 실패·L1 소진·채점 예산
+        /// 소진·리뷰 실패)과 같은 채택 규칙이다. 종전 버전은 이 자리만
+        /// RetryRescue를 우회해 이미 검증된 후보를 두고도 점수를 잃었다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocation_RetriesReviewOnce()
+        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocation_RescuesRecordedBestAttempt()
         {
             var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
             var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -6556,9 +6564,14 @@ SELECT 1;
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
-            Assert.Equal(VerificationOutcome.ReviewNotRun, result.Outcome);
             _userInteraction.Received().NotifyError(
                 Arg.Is<string>(s => s.Contains("자리를 대지 못했습니다")));
+
+            // 1차 시도(유일한 후보, 60점)가 채택되어 점수가 살아 있다 - 종전
+            // ReviewNotRun 회귀는 이 자리에서 점수를 통째로 잃었다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.NotNull(result.Review);
+            Assert.Equal(60, result.Review!.NormalizedScore);
         }
 
         /// <summary>
@@ -7460,6 +7473,77 @@ SELECT 1;
             // 핵심 불변식: 2단계(S01·S02) × 2회차(최초 + StructureDefective 재생성) = 4회.
             // 고치기 전(이 FIX ROUND 이전)에는 2회차의 pending이 비어 2회만 관측된다.
             Assert.Equal(4, sectionCalls);
+        }
+
+        /// <summary>
+        /// FINAL FIX A - Critical 1. "결함이 있다면서 자리를 못 대는 리뷰"가 두 번
+        /// 연속되어 리뷰 무효로 확정되는 다섯 번째 비정상 종료도, 다른 넷(생성 실패·
+        /// L1 소진·채점 예산 소진·리뷰 실패)과 마찬가지로 RetryRescue를 거쳐야 한다.
+        ///
+        /// 시나리오: 1차 시도는 "S01" 위치를 지목한 결함으로 84점을 받아 최고
+        /// 후보로 기록된다. 2차 시도는 74점인데 위치를 대지 못하는 결함을 두 번
+        /// 연속 신고한다(자리를 못 대는 리뷰는 재생성의 근거가 될 수 없으므로
+        /// 공짜 재검토가 한 번 일어난 뒤에도 여전히 자리가 없다). 고치기 전에는
+        /// 이 지점이 아무 구제도 거치지 않고 74점 문서를 그대로 배너 없는 원본
+        /// 점수 없이 확정했다 - 84점 최고 후보가 버려지는 정확히 그 회귀다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_TwoConsecutiveNoLocationDefects_RescuesBestAttemptInsteadOfShippingWorseDocument()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1차: 위치가 있는 결함 - 84점. 최고 후보로 기록된다.
+                        0 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "S01 결함", DefectiveSteps = { "S01" },
+                            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 8, ScoreReadability = 8, ScoreException = 8
+                        }),
+                        // 2차 첫 리뷰: 위치 없는 결함 - 74점(1차보다 낮음).
+                        _ => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 8, ScoreCrud = 7, ScoreInterface = 8, ScoreReadability = 7, ScoreException = 7
+                        }),
+                    };
+                });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 74점 문서가 아니라 84점 최고 후보가 채택되어야 한다 - 다른 넷과
+            // 같은 RetryRescue 채택 규칙을 거친다는 증거다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+            Assert.NotNull(result.Review);
+            Assert.Equal(84, result.Review!.NormalizedScore);
+
+            // 헤더가 점수를 전혀 못 보고하던 종전 회귀가 없다는 증거.
+            Assert.Contains("84/100", result.Plan);
         }
 
         // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와

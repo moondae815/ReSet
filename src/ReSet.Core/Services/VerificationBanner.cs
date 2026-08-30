@@ -79,6 +79,7 @@ public static class VerificationBanner
             RetryAbortReason.GenerationFailed => "AI 생성 호출 실패",
             RetryAbortReason.L1Exhausted => "L1 기계 검증 실패",
             RetryAbortReason.ReviewFailed => "L2 리뷰 호출 실패",
+            RetryAbortReason.ReviewInvalidated => "Critic 결함 위치 지목 실패",
             _ => "알 수 없는 사유"
         };
 
