@@ -16,17 +16,22 @@ namespace ReSet.Core.Services
         private readonly bool _enableOllamaThinking;
         private readonly int _criticScoreThreshold;
         private readonly bool _enableAstChunking;
+        private readonly ContextScopeMode _contextScope;
 
         public string ProviderName => _aiClient.ProviderName;
         public string ModelName => _aiClient.ModelName;
 
-        public AiService(IAiClient aiClient, float temperature, bool enableOllamaThinking = false, int criticScoreThreshold = 8, bool enableAstChunking = true)
+        // contextScope는 세션 내내 같은 제공자를 쓰므로 생성자에서 한 번 확정해도
+        // 된다 - 회차별로 달라지는 것은 호출 그래프뿐이고, 그것은
+        // GenerateBatchStepSectionAsync가 인자로 받는다(PromptContextScope 참고).
+        public AiService(IAiClient aiClient, float temperature, bool enableOllamaThinking = false, int criticScoreThreshold = 8, bool enableAstChunking = true, string? contextScope = null)
         {
             _aiClient = aiClient ?? throw new ArgumentNullException(nameof(aiClient));
             _temperature = temperature;
             _enableOllamaThinking = enableOllamaThinking;
             _criticScoreThreshold = criticScoreThreshold;
             _enableAstChunking = enableAstChunking;
+            _contextScope = PromptContextScope.ResolveMode(_aiClient.ProviderName, contextScope);
         }
 
         private string FormatTableSchemaToMarkdown(DependencyInfo dep, SpDefinition spDef)
@@ -4301,6 +4306,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             string? effort = null,
             string? floorFeedback = null,
             string? previousBody = null,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph = null,
             CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
@@ -4316,9 +4322,23 @@ Consolidate the provided specifications into a single unified batch job named '{
 
 " + ConsolidatedPlanRules;
 
+            // Full 모드에서는 접두사가 바이트 하나도 달라지면 안 된다 - 단계 N개가
+            // 공유하는 캐시가 통째로 죽는다. 그래서 좁히기는 Narrow에서만 한다.
+            //
+            // 피드백(Feedback_Log.txt 등)은 걷어내고 넘긴다 - NarrowSpecs는 "이
+            // 단계의 프로시저와 1-hop 이웃"만 찾는 판정이고, 피드백은 그 어느 쪽도
+            // 아니다. 걷어내지 않아도 이름이 매치되지 않아 자연히 빠지지만, 하나도
+            // 안 맞으면 "전량 반환"으로 폴백하는 NarrowSpecs의 안전장치가 피드백까지
+            // 되돌려줄 수 있어 여기서 명시적으로 제외한다. 피드백 자체는 이 값과
+            // 무관하게 아래 AppendFeedbackSection(volatileSuffix, specs)가 원본
+            // specs에서 그대로 실어 나른다.
+            var scopedSpecs = _contextScope == ContextScopeMode.Narrow
+                ? PromptContextScope.NarrowSpecs(FeedbackSpec.OnlyProcedureSpecs(specs), step, callGraph)
+                : specs;
+
             var userPrompt = new StringBuilder();
             AppendSharedStepContext(
-                userPrompt, allSteps, sharedConventions, specs, stepInterfaces, targetLanguage, jobName);
+                userPrompt, allSteps, sharedConventions, scopedSpecs, stepInterfaces, targetLanguage, jobName);
 
             AppendStatementAnchorRules(userPrompt);
 

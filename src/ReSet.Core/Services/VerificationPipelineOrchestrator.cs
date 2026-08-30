@@ -1739,6 +1739,12 @@ namespace ReSet.Core.Services
             // 단계별 조립은 steps를 가진 GenerateBySplitAsync가 한다.
             var parametersByProcedure = StepInterfaceFacts.CollectParameters(definitions);
 
+            // [Task 10b] PromptContextScope.NarrowSpecs의 1-hop 이웃 재료. 같은 자리에서
+            // 만드는 이유는 parametersByProcedure와 같다 - 둘 다 definitions에서 오고
+            // 같은 경로(GenerateBySplitAsync → GenerateStepSectionWithFloorRetryAsync →
+            // AiService.GenerateBatchStepSectionAsync)로 흘러간다.
+            var callGraph = StepInterfaceFacts.BuildCallGraph(definitions);
+
             // 단일 호출 경로(폴백·L3 재생성)도 원본 인터페이스 표를 받아야 한다 -
             // 규칙 5가 그 표를 가리키며 "여기 적힌 파라미터가 전부"라고 말하기 때문이다.
             // 목차를 못 읽으면 빈 목록을 주고, 그때는 AiService가 절 자체를 싣지 않는다
@@ -1974,7 +1980,7 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, currentBrainstorming,
+                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, currentBrainstorming,
                                 specReturnCodes, specTargetTables, cancellationToken, repeatedDefects);
 
                             if (split != null)
@@ -2825,6 +2831,7 @@ namespace ReSet.Core.Services
                             reuseSkeleton ? stepsToRegenerate : new List<string>(),
                             knownTableNames,
                             parametersByProcedure,
+                            callGraph,
                             currentBrainstorming,
                             specReturnCodes,
                             specTargetTables,
@@ -3518,6 +3525,10 @@ namespace ReSet.Core.Services
             IReadOnlyList<string> defectiveSteps,
             IReadOnlyList<string> knownTableNames,
             IReadOnlyDictionary<string, IReadOnlyList<string>> parametersByProcedure,
+            // [Task 10b] PromptContextScope.NarrowSpecs의 1-hop 이웃 재료.
+            // parametersByProcedure와 같은 자리에서 만들어져(둘 다 definitions에서
+            // 온다) GenerateStepSectionWithFloorRetryAsync까지 그대로 내려간다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
             string? brainstorming,
             // [분할 SP 귀속 배선] 분할 SP의 코드·테이블을 단계마다 요구하지 않으려면
             // 프로시저 단위 귀속 재료가 GenerateStepSectionWithFloorRetryAsync까지
@@ -3657,8 +3668,8 @@ namespace ReSet.Core.Services
 
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
-                        knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, cancellationToken,
-                        PreviousBodyFor(step.Code));
+                        knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
+                        cancellationToken, PreviousBodyFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -3838,6 +3849,10 @@ namespace ReSet.Core.Services
             // ValidateBatchStep에 넘긴다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
+            // [Task 10b] PromptContextScope.NarrowSpecs의 1-hop 이웃 재료. AiService의
+            // Narrow 모드에서만 쓰이고 Full 모드는 이 값을 무시한다 - 접두사 바이트
+            // 불변식(§14)이 그 경계에 있다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
             CancellationToken cancellationToken,
             // 직전 회차가 이 단계에 대해 채택했던 본문(§3-8). null이면 백지에서
             // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
@@ -3895,7 +3910,8 @@ namespace ReSet.Core.Services
                     // StepInterfaceFacts.Build로 한 번 만들어 여기까지 그대로 넘긴다.
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
                         step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
-                        _consolidatorEffort, floorFeedback, previousBody, cancellationToken);
+                        _consolidatorEffort, floorFeedback, previousBody,
+                        callGraph: callGraph, cancellationToken: cancellationToken);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
