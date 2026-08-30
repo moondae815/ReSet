@@ -737,12 +737,14 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
 
-                    // L1 수리는 자기 예산을 쓴다. 채점 예산(attempt)은 올리지 않는다 -
-                    // 채점을 못 받은 회차를 "시도했다"로 세면 실측처럼 6회 중 2회가
-                    // 조용히 사라진다.
-                    l1RepairAttempt++;
-                    bool canRetry = l1RepairAttempt <= _maxL1RepairAttempts;
-                    if (canRetry)
+                    // ── 순서가 이 블록의 전부다 ──
+                    // (1) 귀속을 **먼저** 시도해 pendingDefectiveSteps 를 채운다 (아래 블록)
+                    // (2) 그 결과로 예산을 고른다
+                    //
+                    // 뒤집으면 회귀가 난다. 귀속 불가한 문서 전역 위반(헤더 누락·Mermaid
+                    // 문법 오류)이 L1 예산(기본 2)만 받게 되어 개정 전 채점 예산(기본 6)보다
+                    // **적어지고**, 이 태스크가 없애려는 L1 소진을 오히려 더 쉽게 만든다.
+                    // 리뷰가 실제로 이 회귀를 잡았다(초판이 그렇게 쓰여 있었다).
                     {
                         // 위반을 단계에 귀속해 그 단계만 다시 뽑는다. 실측(POQSettleBatch4
                         // 시도 3)의 L1 실패는 `END TRY` 하나였는데 문서 전체를 다시 만들었다.
@@ -796,11 +798,29 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
                             }
                         }
 
-                        if (pendingDefectiveSteps.Count > 0)
+                    }   // ← 귀속 블록 끝. 여기서부터 (2) 예산 선택이다.
+
+                    // 지목 재생성(귀속 성공)은 L1 자기 예산을 쓰고 채점 예산을 건드리지
+                    // 않는다. 전량 재생성(귀속 실패)은 채점 대상 문서를 새로 만드는
+                    // 일이므로 채점 예산을 쓴다 - 예산 분리 이전(단일 _maxAttempts)
+                    // 동작과 같아서 회귀가 아니다.
+                    bool attributedToSteps = pendingDefectiveSteps.Count > 0;
+                    bool canRetry = attributedToSteps
+                        ? l1RepairAttempt + 1 <= _maxL1RepairAttempts
+                        : _maxAttempts == -1 || attempt < _maxAttempts;
+
+                    if (canRetry)
+                    {
+                        if (attributedToSteps)
                         {
+                            l1RepairAttempt++;
                             _userInteraction.NotifyStatus(
                                 $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", pendingDefectiveSteps)} 단계로 " +
                                 "좁혀 그 단계만 다시 만듭니다.");
+                        }
+                        else
+                        {
+                            attempt++;
                         }
 
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
@@ -808,9 +828,14 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
                     }
 ```
 
-`attempt++`를 지운 것에 주의한다 — `continue`만 남는다.
+**두 경로가 각자의 카운터만 올린다.** 귀속 성공은 `l1RepairAttempt`, 실패는 `attempt`.
+어느 쪽도 상대의 카운터를 건드리지 않는다.
 
 L2 결함 분기의 `canRetry`는 그대로 둔다(`_maxAttempts == -1 || attempt < _maxAttempts`).
+
+**테스트로 두 방향을 모두 고정하라.** 한쪽만 재면 이 회귀가 다시 들어온다 — 초판의
+테스트가 「L1 실패가 채점 예산을 안 먹는다」만 재고 「귀속 실패 시엔 먹어야 한다」를
+안 재서, 리뷰가 별도로 잡을 때까지 결함이 통과했다.
 
 `MechanicalValidator`에 위반 어휘 추출기를 추가한다. `ValidationResult.DetailedErrors`가 이미 유형별 오류를 들고 있으므로 거기서 뽑는다:
 
