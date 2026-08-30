@@ -2305,14 +2305,14 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
             // 자기 신고는 "결함 없음"인데 CRUD 한 축만 기준(8) 미만이다.
-            // SkeletonDefective를 세워, EnforceScoreThreshold가 뒤집는 HasDefects가
-            // 지목 없는 리뷰의 재호출/무효화 경로로 빠지지 않게 한다 - 이 테스트가
-            // 보는 것은 축 미달 재시도이지 재호출 상한이 아니다.
+            // 지목 없음도 SkeletonDefective/StructureDefective 미설정도 그대로
+            // 둔다 - EnforceScoreThreshold가 강제한 결함은 AxisThresholdForced로
+            // 표시되어 재호출 상한 게이트를 우회해야 정상이다(이 상호작용 자체가
+            // 이 테스트의 관찰 대상이다).
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
                 .Returns(_ => Task.FromResult(new ReviewResult
                 {
                     HasDefects = false,
-                    SkeletonDefective = true,
                     ScoreAccuracy = 10,
                     ScoreCrud = 3,
                     ScoreInterface = 10,

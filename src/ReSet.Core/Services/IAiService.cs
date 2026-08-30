@@ -55,6 +55,21 @@ namespace ReSet.Core.Services
         /// </summary>
         public bool StructureDefective { get; set; }
 
+        /// <summary>
+        /// Critic JSON에서 오는 값이 아니다 - 이 클래스의 다른 필드는 전부 모델이
+        /// 채우지만, 이것은 오케스트레이터의 EnforceScoreThreshold가 채점 후 스스로
+        /// 세운다. 모델이 "결함 없음"이라 신고했는데 5축 중 하나가 기준 미달이라
+        /// HasDefects를 강제로 true로 덮어썼을 때만 참이다.
+        ///
+        /// 이 필드가 필요한 이유: 지목 없는 HasDefects 리뷰의 재호출 상한
+        /// (§3-2(a))은 "Critic 스스로 결함을 신고했는데 자리를 못 댄" 경우를 잡으려는
+        /// 것이다. 축 게이트가 강제한 결함은 애초에 문서 어느 한 자리의 결함이
+        /// 아니라 점수의 문제이므로 지목할 자리가 없는 것이 정상이다 - 그런데도
+        /// 상한을 적용하면 축 미달 재시도가 예산을 다 쓰기도 전에 리뷰 무효로
+        /// 잘못 종료된다.
+        /// </summary>
+        public bool AxisThresholdForced { get; set; }
+
         // 5대 기준별 정량적 평가 점수 (각 0~10점)
         public int ScoreAccuracy { get; set; }     // 비즈니스 정합성
         public int ScoreCrud { get; set; }         // CRUD 및 데이터 매핑

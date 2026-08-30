@@ -2374,7 +2374,13 @@ namespace ReSet.Core.Services
                         // 못 대는 동안 유료 호출이 무한히 돈다. 두 번째도 못 대면 통과가
                         // 아니라 "리뷰 무효"로 확정한다 - 자리를 못 대는 리뷰를 통과로
                         // 읽는 것이 이 설계가 막으려는 침묵이다.
-                        if (pendingDefectiveSteps.Count == 0 &&
+                        //
+                        // AxisThresholdForced는 이 게이트에서 제외한다 - EnforceScoreThreshold가
+                        // 축 미달로 강제한 결함은 Critic 자신의 신고가 아니라 점수의 문제라
+                        // 애초에 지목할 문서 자리가 없다. 그것까지 상한에 걸면 축 미달
+                        // 재시도가 채점 예산을 다 쓰기도 전에 리뷰 무효로 잘못 끝난다.
+                        if (!l2Result.AxisThresholdForced &&
+                            pendingDefectiveSteps.Count == 0 &&
                             !l2Result.SkeletonDefective &&
                             !l2Result.StructureDefective)
                         {
@@ -3768,6 +3774,11 @@ namespace ReSet.Core.Services
                     "[파이프라인] Critic이 결함 없음으로 신고했으나 기준({Threshold}) 미만 축이 있어 결함으로 덮어씁니다 - " +
                     "대상: {Target}, 시도: {Attempt}, 미달 축: {FailedAxes}",
                     _criticScoreThreshold, target, attempt, string.Join(", ", failedAxes));
+
+                // 이 결함은 모델의 자기 신고가 아니라 축 게이트가 강제한 것이다 -
+                // 문서 어느 한 자리를 지목할 수 없는 게 정상이므로, 지목 없는
+                // 리뷰의 재호출 상한(§3-2(a))을 태우면 안 된다.
+                review.AxisThresholdForced = true;
             }
 
             review.HasDefects = true;
