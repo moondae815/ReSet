@@ -2225,6 +2225,34 @@ namespace ReSet.Core.Services
                             attempt++;
                             // 새 회차가 시작된다 - 리뷰 재호출 상한도 새로 받는다.
                             reviewRetriedThisAttempt = false;
+
+                            // [FIX ROUND 2 - Task 9b 리뷰] 귀속 실패는 "전량 재생성"
+                            // 의도로 채점 예산(attempt)을 쓰지만, lastStepSections를
+                            // 그대로 두면 다음 회차의 GenerateBySplitAsync가
+                            // canTargetSections=true·defectiveSteps=빈 리스트를 받아
+                            // pending이 빈 리스트가 된다 - 예산만 태우고 문서가
+                            // 바이트 그대로 반복되는 침묵 회귀다(실측: 이 FIX ROUND의
+                            // 재현 테스트).
+                            //
+                            // GenerateBySplitAsync 자신의 pending 계산(defectiveSteps.
+                            // Count > 0 여부)을 고치지 않은 이유: 그 계산은
+                            // SkeletonDefective(§3-6, 골격만 새로 만들고 지목 없는
+                            // 섹션은 동결)와 L2 "결함은 있으나 자리를 못 댐" 재호출
+                            // (지목 없이 같은 문서를 공짜로 재검토하는 경로, 예산을
+                            // 쓰지 않는다)에서도 defectiveSteps=빈 리스트로 호출된다.
+                            // 그 두 경로는 "동결이 맞다"이고 이 경로만 "전량이
+                            // 맞다"이므로, GenerateBySplitAsync 자신은 이 셋을
+                            // 구분할 수 없다 - 호출부가 "이번엔 캐시가 없다"고
+                            // 알려야 한다. L3 피드백 재생성 호출부가 이미 같은
+                            // 관용구(reuseSkeleton이 거짓이면 previousSections까지
+                            // null로 넘겨 canTargetSections를 함께 거짓으로 만드는
+                            // 것)를 쓰고 있어, 그 전례를 그대로 따른다.
+                            //
+                            // lastSkeleton은 건드리지 않는다 - 골격이 원인이라는
+                            // 신호가 없다(SkeletonDefective가 아니다). 골격까지
+                            // 새로 만들면 이 경로의 비용이 §3-6이 분리해 낸 이득을
+                            // 다시 합쳐 버린다.
+                            lastStepSections = null;
                         }
 
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
@@ -2502,6 +2530,25 @@ namespace ReSet.Core.Services
                             lastSkeletonResult = null;
                             _userInteraction.NotifyStatus(
                                 $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
+                        }
+                        else if (pendingDefectiveSteps.Count == 0)
+                        {
+                            // [FIX ROUND 2 - Task 9b 리뷰] 여기 도달했다는 것은 위
+                            // 게이트(:2495)를 SkeletonDefective가 아닌 다른 사유로
+                            // 우회했다는 뜻이다 - AxisThresholdForced(점수 미달로
+                            // 강제된 결함, 지목할 문서 자리가 애초에 없다) 또는
+                            // StructureDefective인데 이번 회차엔 재수립이 발동하지
+                            // 않은 경우(정체 스트릭 미충족)뿐이다. 둘 다 L1 귀속
+                            // 실패와 같은 부류다 - 지목이 없는데도 채점 예산
+                            // (attempt)을 쓴다. lastStepSections를 그대로 두면
+                            // 다음 회차의 GenerateBySplitAsync가 canTargetSections=
+                            // true·defectiveSteps=빈 리스트를 받아 pending이 비고,
+                            // 예산만 태우고 문서가 바이트 그대로 반복된다(실측:
+                            // 이 FIX ROUND의 재현 테스트 - AxisThresholdForced로
+                            // 고정). SkeletonDefective 분기만 예외인 이유는 그
+                            // 분기가 "골격만 고치고 섹션은 동결"을 §3-6이 명시적으로
+                            // 의도했기 때문이다 - 여기는 그 의도가 없다.
+                            lastStepSections = null;
                         }
 
                         attempt++;

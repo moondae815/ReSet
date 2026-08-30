@@ -7241,6 +7241,155 @@ SELECT 1;
             Assert.Contains("4차", capturedPreviousBody[4]);
         }
 
+        /// <summary>
+        /// 골격의 공용 규약 절(어느 단계 헤딩보다도 앞)에 규칙 3-1 위반
+        /// (<c>GOTO</c>)을 심는다. <see cref="L1ViolationAttribution.AttributeByLexeme"/>는
+        /// 문서를 줄 단위로 훑다가 첫 단계 헤딩을 만나기 전에 어휘를 찾으면
+        /// currentStep이 아직 null이라 귀속을 포기한다(그 클래스 docstring 참고) -
+        /// 그래서 이 위반은 반드시 귀속 실패한다.
+        /// </summary>
+        private const string SkeletonMarkdownWithUnattributableGoto = @"## 통합 배치 아키텍처 개요
+개요.
+
+## Mermaid 기반 통합 흐름도
+```mermaid
+flowchart TD
+A[""시작""] --> B[""끝""]
+```
+
+## 단계별 이행 상세 및 의사코드
+### 공통 SQL 오류 추적 패턴
+공통 규약.
+
+```sql
+GOTO ErrorHandler;
+```
+
+<!-- STEP:S01 -->
+<!-- STEP:S02 -->
+
+## 통합 데이터 정합성 검증 SQL 세트
+```sql
+SELECT 1;
+```";
+
+        /// <summary>
+        /// FIX ROUND 2 (Task 9b 리뷰) - 이월된 결함의 재현. L1 위반이 어느 단계로도
+        /// 귀속되지 않으면(§3-3) 코드 자신은 "전량 재생성" 의도로 채점 예산
+        /// (attempt)을 쓰지만, 골격이 재사용되는 한 previousSections는 비어 있지
+        /// 않아 canTargetSections=true가 되고 defectiveSteps는 빈 채로 남는다.
+        /// 고쳐지기 전에는 이 조합이 pending을 빈 리스트로 만들어 아무 단계도
+        /// 다시 만들지 않는다 - 예산만 태우고 문서는 바이트 그대로 반복된다.
+        ///
+        /// 골격 자체에 귀속 불가능한 위반(GOTO)을 심어 뒀으므로 골격이 재사용되는
+        /// 한 L1은 매 회차 같은 이유로 계속 실패한다 - 그래서 리뷰(L2)에는 도달하지
+        /// 않고, 오직 "귀속 실패 -> 전량 재생성"의 섹션 호출 횟수만으로 고정한다.
+        /// maxL2Attempts="1"(총 예산 2회)로 정확히 2회차까지 돈다: 1회차(최초
+        /// 생성, 당연히 전량)와 2회차(귀속 실패에 대한 재생성, 이 테스트가 고치는
+        /// 자리)다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_L1AttributionFailureInSplitPath_RegeneratesAllSectionsNextRound()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            // 골격은 매 회차 이 귀속 불가 위반을 그대로 낸다 - reuseSkeleton이면
+            // 애초에 다시 호출되지 않고, 만약 재호출되더라도 같은 결함을 낸다.
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdownWithUnattributableGoto });
+
+            var sectionCalls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    System.Threading.Interlocked.Increment(ref sectionCalls);
+                    var step = call.Arg<BatchStepPlan>();
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+            // 리뷰는 도달하지 않아야 정상이다(L1이 매 회차 실패) - 혹시 도달하면
+            // 즉시 통과로 끝나게만 배선해 둔다.
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            // maxL2Attempts="1" -> 총 채점 예산 2회. 1회차(최초 전량)와 2회차
+            // (귀속 실패 재생성)까지만 돌고 예산이 소진되어 끝난다.
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // L1이 끝까지 실패하므로 리뷰 없이 L1Exhausted로 끝나야 한다 - 이 값이
+            // 다르면 위 픽스처가 이 테스트가 가정한 실패 경로를 타지 않았다는
+            // 뜻이므로(예: 리뷰까지 도달), 아래 카운트 어서션 자체가 무의미해진다.
+            Assert.Equal(VerificationOutcome.L1Exhausted, result.Outcome);
+            await aiService.DidNotReceive().ReviewConsolidatedPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 핵심 불변식: 2단계(S01·S02) × 2회차(최초 + 귀속 실패 재생성) = 4회.
+            // 고치기 전에는 2회차의 pending이 비어 2회만 관측된다.
+            Assert.Equal(4, sectionCalls);
+        }
+
+        /// <summary>
+        /// FIX ROUND 2 (Task 9b 리뷰, 자체 발견) - L1 귀속 실패를 고치며 확인해야
+        /// 했던 세 번째 경로. AxisThresholdForced(Critic 자기 신고는 결함 없음이지만
+        /// 점수가 기준 미달이라 강제된 결함)는 "지목 없는 리뷰 재호출" 게이트에서
+        /// 의도적으로 제외된다(§2495 주석: "애초에 지목할 문서 자리가 없다") -
+        /// 그런데 그 제외는 L1 귀속 실패와 정확히 같은 모양의 구멍을 낸다: 지목
+        /// 없이 채점 예산(attempt)만 쓰고 pending은 빈 채로 남는다. 고치기 전에는
+        /// 이 테스트도 2회만 관측했다(귀속 실패 재현 테스트와 동일한 실패 모양).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_AxisThresholdForcedWithoutLocation_RegeneratesAllSectionsNextRound()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var sectionCalls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    System.Threading.Interlocked.Increment(ref sectionCalls);
+                    var step = call.Arg<BatchStepPlan>();
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+            // Critic 자기 신고는 결함 없음이지만 모든 축이 기준(8) 미달 - EnforceScoreThreshold가
+            // HasDefects를 강제로 뒤집고 AxisThresholdForced를 세운다. DefectiveSteps는
+            // 비어 있다(자기 신고가 "없음"이었으니 당연하다).
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 두 회차 모두 점수 미달이라 채점 예산(총 2회)이 소진돼 구제 채택으로
+            // 끝난다 - 이 값이 다르면 픽스처가 가정한 경로(AxisThresholdForced가
+            // 매 회차 계속됨)를 타지 않았다는 뜻이라 아래 카운트 어서션이 무의미해진다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
+
+            // 핵심 불변식: 2단계(S01·S02) × 2회차(최초 + AxisThresholdForced 재생성) = 4회.
+            // 고치기 전에는 2회차의 pending이 비어 2회만 관측된다.
+            Assert.Equal(4, sectionCalls);
+        }
+
         // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와
         // 목차에 없는 코드("S99")를 함께 지목해도, 실제 존재하는 단계만 대소문자
         // 무시 매칭으로 재생성되고 지어낸 코드는 조용히 버려져야 한다.
