@@ -6069,7 +6069,11 @@ SELECT 1;
             // 테스트들의 동작)을 그대로 유지한다. 문서 단위 병합(§FloorViolations
             // Kind/사유 보존) 테스트만 실제 값을 넘긴다.
             IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
-            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null,
+            // Task 9 Step 4(§3-8) - 에스컬레이션 사전. 기본값(null)은 종전 동작을
+            // 유지한다: 에스컬레이션을 걸지 않고 previousSections가 있는 대로
+            // previousBody를 넘긴다.
+            IReadOnlyDictionary<string, int>? repeatedDefects = null)
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
                 "GenerateBySplitAsync",
@@ -6089,7 +6093,8 @@ SELECT 1;
                 knownTableNames, new Dictionary<string, IReadOnlyList<string>>(), null,
                 codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
                 tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
-                cancellationToken
+                cancellationToken,
+                repeatedDefects
             })!;
 
             await task;
@@ -7012,6 +7017,129 @@ SELECT 1;
             // 핵심 불변식: 채택된 1회차 문서는 하한 위반이 전혀 없다. 2회차(다른
             // 회차)의 위반 기록이 배너로 새어 나오면 안 된다.
             Assert.DoesNotContain("하한 미달", result.Plan!);
+        }
+
+        /// <summary>
+        /// Task 9 Step 4 - 지목 재생성이 previousBody를 실제로 넘기는지 배선을 고정한다.
+        /// 1회차는 S01이 Critic에게 지목돼(defectiveSteps=[S01]) 2회차가 S01만 다시
+        /// 만든다(골격·S02는 캐시 재사용). 이때 넘겨지는 previousBody는 1회차가 만든
+        /// S01의 본문 바이트 그대로여야 한다 - 그래야 프롬프트가 "다시 써라"가 아니라
+        /// "이 본문을 패치하라"가 된다(설계서 §3-8).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_TargetedRegeneration_PassesPreviousSectionBodyForRegeneratedStep()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01Bodies = new List<string> { "### S01 단계\n\n대상은 dbo.T1이고 오류코드는 -1이다(1차).\n\n```sql\nSELECT 1;\n```" };
+            var s01Call = 0;
+            var capturedPreviousBody = new List<string?>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                    }
+
+                    capturedPreviousBody.Add(call.ArgAt<string?>(9));
+                    s01Call++;
+                    var body = s01Call == 1
+                        ? s01Bodies[0]
+                        : "### S01 단계\n\n대상은 dbo.T1이고 오류코드는 -1이다(2차, 패치됨).\n\n```sql\nSELECT 1;\n```";
+                    return Task.FromResult(new AiResult { Content = body });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ => reviewCall++ == 0
+                    ? new ReviewResult { HasDefects = true, FeedbackComment = "S01 결함", DefectiveSteps = { "S01" }, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await RunBatchPipeline(aiService);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+            Assert.Equal(2, capturedPreviousBody.Count);
+            // 1회차 생성은 이전 섹션이 없으므로 previousBody가 없어야 한다.
+            Assert.Null(capturedPreviousBody[0]);
+            // 2회차 생성(지목 재생성)은 1회차가 만든 S01 본문을 바이트 그대로 받아야 한다.
+            Assert.Equal(s01Bodies[0], capturedPreviousBody[1]);
+        }
+
+        /// <summary>
+        /// Task 9 Step 4 - 에스컬레이션. 같은 단계(S01)가 연속 2회 Critic에게 지목되면
+        /// 3회차는 previousBody 없이(백지 재작성) 다시 만들어야 한다. 「최소 변경만
+        /// 하고 근본 결함을 안 고친다」가 패치 고유의 실패 모드이고, 그 상태로 예산을
+        /// 계속 태우면 안 되기 때문이다(설계서 §3-8).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_SameStepFlaggedTwiceConsecutively_EscalatesToBlankRewrite()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01Call = 0;
+            var capturedPreviousBody = new List<string?>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                    }
+
+                    capturedPreviousBody.Add(call.ArgAt<string?>(9));
+                    s01Call++;
+                    var body = $"### S01 단계\n\n대상은 dbo.T1이고 오류코드는 -1이다({s01Call}차).\n\n```sql\nSELECT 1;\n```";
+                    return Task.FromResult(new AiResult { Content = body });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call < 2
+                        ? new ReviewResult { HasDefects = true, FeedbackComment = "S01 결함", DefectiveSteps = { "S01" }, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                        : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            // maxL2Attempts=2 -> 총 채점 예산 3회. S01이 연속 2회(1·2회차) 지목되고
+            // 3회차에 통과하는 궤적을 담으려면 3회차까지 진행해야 한다.
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+            Assert.Equal(3, capturedPreviousBody.Count);
+            // 1회차: 이전 섹션 없음.
+            Assert.Null(capturedPreviousBody[0]);
+            // 2회차: 1회 지목 - 아직 에스컬레이션 전이라 패치(1회차 본문)를 받는다.
+            Assert.NotNull(capturedPreviousBody[1]);
+            Assert.Contains("1차", capturedPreviousBody[1]);
+            // 3회차: 같은 결함으로 연속 2회(1·2회차) 지목됐으므로 에스컬레이션 -
+            // 캐시된 2회차 본문이 있어도 previousBody 없이 백지로 다시 쓴다.
+            Assert.Null(capturedPreviousBody[2]);
         }
 
         // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와

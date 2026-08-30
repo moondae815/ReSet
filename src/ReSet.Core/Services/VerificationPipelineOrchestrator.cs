@@ -1820,6 +1820,33 @@ namespace ReSet.Core.Services
             // 조용히 사라진다.
             var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
+            // 같은 단계가 같은 결함으로 연속 몇 회 지목됐는지(§3-8 에스컬레이션).
+            // pendingDefectiveSteps가 채워질 때마다(L1 귀속·L2 Critic 지목) 갱신한다 -
+            // 지목된 단계는 +1, 지목에서 빠진 단계는 0으로 되돌린다. 값이 2 이상이면
+            // 다음 회차는 그 단계에 previousBody를 주지 않고 백지로 다시 쓴다 -
+            // 「최소 변경만 하고 근본 결함을 안 고친다」가 패치 고유의 실패 모드이고,
+            // 그 상태로 예산을 계속 태우면 안 되기 때문이다.
+            var repeatedDefects = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            // pendingDefectiveSteps가 이번 회차의 최종값으로 채워질 때마다(L1 귀속·L2
+            // Critic 지목 직후) 호출한다. currentSteps/pendingDefectiveSteps는 이
+            // while 루프 몸통이 매 회차 갱신하는 살아있는 변수라 클로저로 최신값을
+            // 그대로 읽는다.
+            void UpdateRepeatedDefects()
+            {
+                foreach (var code in currentSteps?.Select(s => s.Code) ?? Enumerable.Empty<string>())
+                {
+                    if (pendingDefectiveSteps.Contains(code, StringComparer.OrdinalIgnoreCase))
+                    {
+                        repeatedDefects[code] = repeatedDefects.TryGetValue(code, out var n) ? n + 1 : 1;
+                    }
+                    else
+                    {
+                        repeatedDefects.Remove(code);
+                    }
+                }
+            }
+
             // 어느 단계도 선언하지 않은 원본 오류 코드의 누락 - 본문이 아니라 목차의
             // 결함이다(설계서 §3-5(b)). 회차를 넘어 살아 있어야 다음 회차의 재설계
             // 조건(Task 8)이 이번 회차에 기계가 찾은 사실을 읽을 수 있다.
@@ -1948,7 +1975,7 @@ namespace ReSet.Core.Services
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
                                 pendingDefectiveSteps, knownTableNames, parametersByProcedure, currentBrainstorming,
-                                specReturnCodes, specTargetTables, cancellationToken);
+                                specReturnCodes, specTargetTables, cancellationToken, repeatedDefects);
 
                             if (split != null)
                             {
@@ -2169,6 +2196,11 @@ namespace ReSet.Core.Services
                     // if 블록 진입 전에 이미 이번 회차 값으로 계산해 뒀다(위 참고) -
                     // 여기서 다시 계산하지 않고 그 결과만 반영한다.
                     foreach (var code in codeAttribution.StepCodes) AddOwner(code);
+
+                    // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
+                    // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
+                    // 받는다(§3-8).
+                    UpdateRepeatedDefects();
 
                     // 귀속 결과로 예산을 고른다. 지목 재생성(귀속 성공)은 L1 자기
                     // 예산을 쓰고 채점 예산(attempt)을 건드리지 않는다. 전량 재생성
@@ -2414,6 +2446,11 @@ namespace ReSet.Core.Services
                         {
                             pendingDefectiveSteps.AddRange(openSteps);
                         }
+
+                        // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
+                        // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
+                        // 받는다(§3-8).
+                        UpdateRepeatedDefects();
 
                         // 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
                         // 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
@@ -3397,7 +3434,13 @@ namespace ReSet.Core.Services
             // 만들 수 없다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            // 같은 단계가 같은 결함으로 연속 몇 회 지목됐는지(§3-8 에스컬레이션).
+            // null이면 에스컬레이션을 절대 걸지 않는다 - L3 사용자 피드백 재생성
+            // 호출부(연속 회차 개념이 없다)가 그 경우다. 값이 2 이상인 단계는
+            // previousBody를 넘기지 않고 백지로 다시 쓴다 - 패치가 최소 변경만
+            // 하고 근본 결함을 못 고치는 상태로 예산을 계속 태우지 않기 위해서다.
+            IReadOnlyDictionary<string, int>? repeatedDefects = null)
         {
             // 골격 재사용 여부와 "지목 단계만 재생성" 여부는 독립이다. 예전에는
             // 하나의 targeted 판정으로 묶여 있어서, previousSkeleton이 없으면(예:
@@ -3476,6 +3519,30 @@ namespace ReSet.Core.Services
                 floorViolations.Remove(step.Code);
             }
 
+            // 지목 재생성이 백지가 아니라 패치가 되게 한다(§3-8). previousSections는
+            // 이 메서드 진입 시점의 매개변수이지 위에서 복사한 sections가 아니다 -
+            // sections는 아래 RunStepAsync 결과 병합 전까지 previousSections와 값이
+            // 같지만, 굳이 원본을 읽어 "재생성 전 스냅샷"이라는 의미를 코드로도
+            // 분명히 한다. 같은 결함으로 연속 2회 지목된 단계는 에스컬레이션으로
+            // previousBody를 주지 않는다 - 패치가 근본 결함을 못 고치고 최소 변경만
+            // 반복하는 상태로 예산을 계속 태우지 않기 위해서다.
+            string? PreviousBodyFor(string code)
+            {
+                if (previousSections == null || !previousSections.TryGetValue(code, out var priorBody))
+                {
+                    return null;
+                }
+
+                if (repeatedDefects != null &&
+                    repeatedDefects.TryGetValue(code, out var repeatCount) &&
+                    repeatCount >= 2)
+                {
+                    return null;
+                }
+
+                return priorBody;
+            }
+
             // 동시 실행 수 제한. Dispose하지 않는다 — SemaphoreSlim이 Dispose로 놓는
             // 자원은 지연 할당되는 AvailableWaitHandle뿐이고 이 코드는 그것을 쓰지
             // 않으므로, 놓을 것이 애초에 없다.
@@ -3499,7 +3566,8 @@ namespace ReSet.Core.Services
 
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
-                        knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, cancellationToken);
+                        knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, cancellationToken,
+                        PreviousBodyFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -3679,7 +3747,12 @@ namespace ReSet.Core.Services
             // ValidateBatchStep에 넘긴다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            // 직전 회차가 이 단계에 대해 채택했던 본문(§3-8). null이면 백지에서
+            // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
+            // 이번 회차 안에서 시도마다 갱신되지만, previousBody는 "패치의 대상"
+            // 자체라 회차 안에서 바뀌면 안 된다.
+            string? previousBody = null)
         {
             const int maxTries = 5;   // 최초 1회 + 재시도 4회 - 근거는 위 docstring 참고
 
@@ -3731,7 +3804,7 @@ namespace ReSet.Core.Services
                     // StepInterfaceFacts.Build로 한 번 만들어 여기까지 그대로 넘긴다.
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
                         step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
-                        _consolidatorEffort, floorFeedback, cancellationToken: cancellationToken);
+                        _consolidatorEffort, floorFeedback, previousBody, cancellationToken);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
