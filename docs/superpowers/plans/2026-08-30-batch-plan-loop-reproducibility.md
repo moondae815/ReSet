@@ -2425,7 +2425,16 @@ dotnet test tests/ReSet.Core.Tests --filter FullyQualifiedName~GenerateBatchStep
 같은 클래스에 헬퍼를 둔다:
 
 ```csharp
-        /// <summary>두 문자열이 앞에서부터 몇 글자를 공유하는가. 패치 변경 비율의 근사다.</summary>
+        /// <summary>
+        /// 두 문자열이 앞에서부터 몇 글자를 공유하는가. 패치 변경 비율의 **근사**다.
+        ///
+        /// 이 근사가 틀리는 자리를 알고 써라. 섹션 **앞부분**을 고치면 공통 접두사가
+        /// 0에 가까워져 작은 정당한 패치가 「전면 재작성」으로 보이고, 반대로 **뒷부분**만
+        /// 크게 고치면 접두사가 길어 「작은 수정」으로 보인다.
+        ///
+        /// 그래서 이 값은 경보가 아니라 **관측**이다 — 임계로 막지 않는 이유가 그것이다.
+        /// 읽는 사람은 한 회차의 절대값이 아니라 **회차 간 추세**로 봐야 한다.
+        /// </summary>
         private static int LongestCommonPrefixLength(string a, string b)
         {
             var limit = Math.Min(a.Length, b.Length);
