@@ -4775,7 +4775,7 @@ namespace ReSet.Core.Tests
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
                 Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
-                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
 
             var specs = new List<(string, string)> { ("spec1.md", "content1") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -4786,11 +4786,13 @@ namespace ReSet.Core.Tests
                 .Returns(new AiResult { Content = "첫 목차" }, new AiResult { Content = "재설계 목차" });
             aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
-            // 1차 60, 2차 60(정체 -> 재설계), 3차는 재설계 목차로 통과.
+            // 1·2·3차 60(2회 연속 정체 + 구조 결함 지목 -> 3차에서 재설계), 4차는
+            // 재설계 목차로 통과.
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
                     _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }));
 
             await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "PreserveJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -7796,11 +7798,15 @@ SELECT 1;
                 .Returns(_ =>
                 {
                     var call = reviewCall++;
+                    // StructureDefective를 모든 회차에 세운다 - 지목 없는 리뷰가
+                    // 재호출 상한(회차당 1회)으로 빠지지 않게 하면서(round0 역시
+                    // 최고 후보 등록 전에 지목 유무 검사를 거친다), 1·2회차의
+                    // 2회 연속 정체가 2회차에서 재설계를 발동시킨다.
                     return call switch
                     {
-                        0 => new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8 },
-                        1 => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 결함", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 },
-                        _ => new ReviewResult { HasDefects = true, FeedbackComment = "목차 B도 결함", ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4 },
+                        0 => new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8 },
+                        1 => new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "여전히 결함", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 },
+                        _ => new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "목차 B도 결함", ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4 },
                     };
                 });
 
