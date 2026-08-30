@@ -6572,18 +6572,24 @@ SELECT 1;
         ///
         /// 그래서 픽스 자체를 ClearSplitGenerationCacheAfterRedraft라는 이름의 private
         /// static 메서드로 뽑아 리플렉션으로 직접 고정한다. 동작을 바꾸지 않는 순수한
-        /// 추출이며, 이 테스트는 그 메서드가 다섯 항목(골격/골격 AiResult/섹션/단계
-        /// 목록/하한 위반 기록)을 전부 지우는지 — 특히 이전에 빠뜨렸던
-        /// stepFloorViolations를 지우는지 — 를 고정한다. lastSkeletonResult는
-        /// 최종 픽스(지목 재생성이 스텁 대신 실제 골격 AiResult를 재사용하는 것)에서
-        /// 추가됐다 — 재수립 시 이 값을 안 지우면 새 목차의 첫 회차(지목 없이 전부
-        /// 재생성)가 여전히 targeted 조건(previousSkeletonResult != null)을 만족해
-        /// 옛 골격의 AiResult를 잘못 재사용할 뻔했다. 다만 RunConsolidatedPipelineAsync
+        /// 추출이며, 이 테스트는 그 메서드가 여섯 항목(골격/골격 AiResult/섹션/단계
+        /// 목록/하한 위반 기록/§3-8 에스컬레이션 카운터)을 전부 지우는지 — 특히
+        /// 이전에 빠뜨렸던 stepFloorViolations를 지우는지 — 를 고정한다.
+        /// lastSkeletonResult는 최종 픽스(지목 재생성이 스텁 대신 실제 골격 AiResult를
+        /// 재사용하는 것)에서 추가됐다 — 재수립 시 이 값을 안 지우면 새 목차의 첫
+        /// 회차(지목 없이 전부 재생성)가 여전히 targeted 조건(previousSkeletonResult
+        /// != null)을 만족해 옛 골격의 AiResult를 잘못 재사용할 뻔했다.
+        ///
+        /// [FIX ROUND 1 - Task 9b 리뷰] repeatedDefects는 이 항목들 중 가장 최근에
+        /// 추가된 것이다 - 단계 코드가 흔히 일반적이라(S01·S02) 재수립된 새 문서가
+        /// 옛 코드를 재사용하는 일이 흔하고, 지우지 않으면 폐기된 문서에서 쌓인
+        /// 카운트가 무관한 새 문서로 새어 나간다. 다만 RunConsolidatedPipelineAsync
         /// 루프가 재수립 시점에 실제로 이 메서드를 호출하는지는 이 테스트가 아니라
-        /// 코드 리뷰로 확인해야 한다.
+        /// 코드 리뷰(및 아래 RunConsolidatedPipeline_StructureRedraftReusesStepCode_
+        /// ResetsRepeatedDefectCounterForNewLineage)로 확인해야 한다.
         /// </summary>
         [Fact]
-        public void ClearSplitGenerationCacheAfterRedraft_ClearsAllFiveCachedItemsIncludingFloorViolations()
+        public void ClearSplitGenerationCacheAfterRedraft_ClearsAllSixCachedItemsIncludingRepeatedDefects()
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
                 "ClearSplitGenerationCacheAfterRedraft",
@@ -6591,6 +6597,7 @@ SELECT 1;
             Assert.NotNull(method);
 
             var pendingDefectiveSteps = new List<string> { "S02" };
+            var repeatedDefects = new Dictionary<string, int> { ["S01"] = 2 };
             var args = new object?[]
             {
                 "골격 텍스트",                                                    // lastSkeleton (out)
@@ -6602,6 +6609,7 @@ SELECT 1;
                 },
                 new Dictionary<string, StepDefect> { ["S01"] = new StepDefect(StepDefectKind.QualityFloor, "S01 (하한 미달)") },   // stepFloorViolations (out)
                 pendingDefectiveSteps,
+                repeatedDefects,
             };
 
             method!.Invoke(null, args);
@@ -6615,6 +6623,9 @@ SELECT 1;
             var clearedViolations = Assert.IsType<Dictionary<string, StepDefect>>(args[4]);
             Assert.Empty(clearedViolations);
             Assert.Empty(pendingDefectiveSteps);
+            // FIX ROUND 1에서 새로 추가된 항목: repeatedDefects도 통째로 비어야
+            // 한다 - 옛 코드("S01")의 카운트가 남아 있으면 안 된다.
+            Assert.Empty(repeatedDefects);
         }
 
         // Task 10: 하한 미달 단계가 배너로 노출된다. 지금까지 stepFloorViolations는
@@ -7140,6 +7151,94 @@ SELECT 1;
             // 3회차: 같은 결함으로 연속 2회(1·2회차) 지목됐으므로 에스컬레이션 -
             // 캐시된 2회차 본문이 있어도 previousBody 없이 백지로 다시 쓴다.
             Assert.Null(capturedPreviousBody[2]);
+        }
+
+        /// <summary>
+        /// FIX ROUND 1 (Task 9b 리뷰): repeatedDefects가 목차 재수립 때 함께 지워지지
+        /// 않으면, 재수립 이전 문서에서 쌓인 카운트가 재수립 이후의 무관한 새 문서로
+        /// 새어 나간다. 단계 코드가 흔히 S01·S02처럼 일반적이라 재수립 뒤에도 같은
+        /// 코드가 재사용되는 일이 흔하다(이 테스트가 그 재사용을 그대로 재현한다).
+        ///
+        /// 궤적: 1~3회차는 S01이 연속 지목되며 정체해 3회차에서 목차가 재수립된다
+        /// (재수립도 같은 S01/S02 코드를 낸다 - 실측에서 흔한 패턴). 4회차는 재수립
+        /// 직후라 전량 재생성(이전 섹션 없음)이고, 그 안에서 S01이 "새 문서 기준
+        /// 처음" 지목된다. 5회차는 그 지목에 대한 재생성인데 - repeatedDefects가
+        /// 재수립 때 지워졌다면 아직 1회 지목(4회차 1회)뿐이라 패치(previousBody
+        /// non-null)를 받아야 한다. 지워지지 않았다면 재수립 이전에 쌓인 스택(2)이
+        /// 그대로 남아 4회차 지목과 합쳐져 부당하게 에스컬레이션(백지, null)된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_StructureRedraftReusesStepCode_ResetsRepeatedDefectCounterForNewLineage()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            // 재수립도 같은 S01/S02 코드를 낸다 - 일반적인 단계 코드가 재수립 뒤에도
+            // 재사용되는 실측 패턴을 그대로 재현한다.
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new AiResult { Content = "## 목차\n" + StepsJson },
+                    new AiResult { Content = "## 재설계 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01Call = 0;
+            var capturedPreviousBody = new List<string?>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code != "S01")
+                    {
+                        return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                    }
+
+                    capturedPreviousBody.Add(call.ArgAt<string?>(9));
+                    s01Call++;
+                    var body = $"### S01 단계\n\n대상은 dbo.T1이고 오류코드는 -1이다({s01Call}차).\n\n```sql\nSELECT 1;\n```";
+                    return Task.FromResult(new AiResult { Content = body });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 재수립 전: 3연속 정체(구조 결함) - 3회차에서 재수립이 발동한다.
+                        < 3 => new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", DefectiveSteps = { "S01" }, ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
+                        // 재수립 후 4회차: 새 문서에서 S01이 처음 지목된다. 점수를
+                        // 재수립 전 최고(6점대)보다 확실히 높여 회귀 롤백
+                        // (RestoreAdoptedGenerationState)이 lastStepSections를 되돌리지
+                        // 않게 한다 - 그래야 5회차가 4회차가 실제로 만든 본문을
+                        // previousSections로 받는다.
+                        3 => new ReviewResult { HasDefects = true, StructureDefective = false, FeedbackComment = "재수립 후 첫 지목", DefectiveSteps = { "S01" }, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                        _ => new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 },
+                    };
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "5", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+            // 5회: 1·2·3회차(재수립 전), 4·5회차(재수립 후).
+            Assert.Equal(5, capturedPreviousBody.Count);
+            // 4회차: 재수립 직후 전량 재생성이라 이전 섹션 자체가 없다.
+            Assert.Null(capturedPreviousBody[3]);
+            // 핵심 불변식: 5회차는 "이 문서"에서 S01이 두 번째로 지목된 것뿐이다
+            // (재수립 이전 지목 두 번은 폐기된 무관한 문서의 것이다). repeatedDefects가
+            // 재수립 때 함께 지워지지 않으면 이 값이 이미 2 이상으로 남아 있어(재수립
+            // 이전에 S01이 연속 2회 지목됐다) previousBody가 부당하게 null(백지
+            // 에스컬레이션)이 된다.
+            Assert.NotNull(capturedPreviousBody[4]);
+            Assert.Contains("4차", capturedPreviousBody[4]);
         }
 
         // R2 (Task 9 리뷰에서 이월): Critic이 대소문자가 다른 유효 코드("s01")와

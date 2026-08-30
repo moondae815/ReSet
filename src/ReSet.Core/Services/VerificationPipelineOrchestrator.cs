@@ -1999,7 +1999,7 @@ namespace ReSet.Core.Services
                                 // 기록과 그 기록이 가리키던 섹션이 함께 죽게 한다.
                                 ClearSplitGenerationCacheAfterRedraft(
                                     out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
-                                    out stepFloorViolations, pendingDefectiveSteps);
+                                    out stepFloorViolations, pendingDefectiveSteps, repeatedDefects);
                             }
                         }
 
@@ -2414,7 +2414,7 @@ namespace ReSet.Core.Services
                                 // 재사용하면 새 목차가 없는 단계를 계속 실어 나른다.
                                 ClearSplitGenerationCacheAfterRedraft(
                                     out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
-                                    out stepFloorViolations, pendingDefectiveSteps);
+                                    out stepFloorViolations, pendingDefectiveSteps, repeatedDefects);
 
                                 // TASK 12 - 새 목차는 아직 판정된 적이 없다. 옛 목차에서
                                 // 발견한 목차 결함 사실을 그대로 들고 가면, 새 목차가
@@ -2800,7 +2800,7 @@ namespace ReSet.Core.Services
                             // 직전 문서가 그대로 남으므로, 성공한 뒤에만 비운다.
                             ClearSplitGenerationCacheAfterRedraft(
                                 out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
-                                out stepFloorViolations, pendingDefectiveSteps);
+                                out stepFloorViolations, pendingDefectiveSteps, repeatedDefects);
                         }
                         // 취소는 전파한다. 삼키면 아래 continue가 돌아 취소한
                         // 사용자에게 같은 승인 화면을 한 번 더 내민다.
@@ -3267,6 +3267,14 @@ namespace ReSet.Core.Services
         /// 남겨두면, 그 위반 기록이 사라진 뒤에도 캐시된 섹션 자체는 살아남아
         /// 나중 회차의 지목 재생성이 하한 미달 섹션을 위반 기록 없이(=배너 없이)
         /// 그대로 재조립할 수 있다 — 실제로 그런 실수가 있었다.
+        ///
+        /// [FIX ROUND 1 - Task 9b 리뷰] repeatedDefects(§3-8 에스컬레이션 카운터)도
+        /// 여기서 함께 지운다. 단계 코드는 흔히 S01·S02처럼 일반적이라 재수립된
+        /// 새 문서가 같은 코드를 재사용하는 일이 흔하다 - 지우지 않으면 폐기된
+        /// 문서에서 쌓인 카운트가 무관한 새 문서로 새어 나가, 그 문서에서는 아직
+        /// 한 번도 지목되지 않은 코드가 첫 지목만으로 곧장 백지 재작성으로
+        /// 에스컬레이션된다. 이 클래스 docstring이 이미 "하나만 남기면 조용히
+        /// 어긋난다"고 경고한 바로 그 실패 모드를 새 상태에서 반복하지 않는다.
         /// </summary>
         private static void ClearSplitGenerationCacheAfterRedraft(
             out string? lastSkeleton,
@@ -3274,7 +3282,8 @@ namespace ReSet.Core.Services
             out Dictionary<string, string>? lastStepSections,
             out IReadOnlyList<BatchStepPlan>? currentSteps,
             out Dictionary<string, StepDefect> stepFloorViolations,
-            List<string> pendingDefectiveSteps)
+            List<string> pendingDefectiveSteps,
+            Dictionary<string, int> repeatedDefects)
         {
             lastSkeleton = null;
             lastSkeletonResult = null;
@@ -3282,6 +3291,7 @@ namespace ReSet.Core.Services
             currentSteps = null;
             stepFloorViolations = new Dictionary<string, StepDefect>();
             pendingDefectiveSteps.Clear();
+            repeatedDefects.Clear();
         }
 
         /// <summary>
