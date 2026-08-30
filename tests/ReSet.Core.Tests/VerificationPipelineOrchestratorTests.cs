@@ -5017,7 +5017,7 @@ namespace ReSet.Core.Tests
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
                 Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
-                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
 
             var specs = new List<(string, string)> { ("spec1.md", "content1") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -5030,12 +5030,14 @@ namespace ReSet.Core.Tests
             aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(ci => Task.FromResult(new AiResult { Content = plan + $"\n본문 출처: {ci.ArgAt<string>(0)}" }));
 
-            // 70 -> 60 -> 50. 2차가 최고점을 못 넘겨 재설계가 발동하고, 3차는 더 나빠진다.
+            // 70 -> 60 -> 60(2회 연속 정체 + 구조 결함 지목 -> 3차에서 재설계) -> 40.
+            // 1차가 최고점이라 예산 소진 시 1차가 채택된다.
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
-                    _ => Task.FromResult(new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 }));
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 4, ScoreCrud = 4, ScoreInterface = 4, ScoreException = 4, ScoreReadability = 4 }));
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "RescueStructureJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -7855,14 +7857,16 @@ SELECT 1;
                     return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });
 
-            // 1차는 통과 점수, 2차는 더 낮은 점수(재수립 유발), 3차는 결함 →
-            // 예산 소진 시 RetryRescue가 최고점인 1차를 채택한다.
+            // 1차는 통과 점수, 2·3차는 더 낮은 점수(회귀) → 예산 소진 시
+            // RetryRescue가 최고점인 1차를 채택한다. SkeletonDefective를 세워
+            // 지목 없는 리뷰가 재호출 상한으로 빠지지 않게 한다 - 이 테스트가
+            // 보는 것은 채택된 시도의 AiResult 귀속이지 재호출이 아니다.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(_ => ++reviewCall switch
                 {
-                    1 => new ReviewResult { HasDefects = true, FeedbackComment = "보완", ScoreAccuracy = 7, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
-                    _ => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
+                    1 => new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = "보완", ScoreAccuracy = 7, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    _ => new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }
                 });
 
             var result = await RunBatchPipeline(aiService);
