@@ -994,6 +994,25 @@ namespace ReSet.Cli
                             var addedLoad = await BatchStepCatalog.LoadDefinitionsAsync(
                                 outputDir, closure.Added, activeCts.Token);
                             spDefs.AddRange(addedLoad.Definitions);
+
+                            // 명세는 있는데 raw/metadata.json이 없거나 못 읽으면 그 SP가
+                            // specs에는 들어가고 definitions에는 안 들어간다(설계서 §7-1) -
+                            // 아무도 안 알리면 재료를 잃은 검사가 조용해진다. 이 경로는
+                            // 비대화형이라 화면이 아니라 로그로 낸다(TUI 흐름은 화면에도 낸다,
+                            // Program.cs:1568-1578과 대응).
+                            foreach (var missing in addedLoad.MissingMetadata)
+                            {
+                                Serilog.Log.Warning(
+                                    "[배치 설계] 참조 프로시저 {SpecPath} 의 메타데이터(raw/metadata.json)가 없어 정의 재료에서 제외됩니다.",
+                                    missing);
+                            }
+
+                            foreach (var failed in addedLoad.FailedToParse)
+                            {
+                                Serilog.Log.Warning(
+                                    "[배치 설계] 참조 프로시저 {SpecPath} 의 메타데이터를 읽지 못해 정의 재료에서 제외됩니다.",
+                                    failed);
+                            }
                         }
 
                         if (closure.CapExceeded)
