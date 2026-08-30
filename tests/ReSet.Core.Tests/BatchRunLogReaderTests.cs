@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ReSet.Core.Services;
@@ -297,33 +298,77 @@ namespace ReSet.Core.Tests
             Assert.Equal(0, metrics.TotalAttempts);
         }
 
-        // 기준선 검증(코디네이터 실측 오라클, 2026-08-30). Skip하지 않는다 - 재료가
-        // 없으면 그 사실이 실패로 드러나야 한다(Skip은 이 저장소가 반복해 데인 조용한
-        // 실패 양식이다). 저장소 루트는 CorpusPaths.RepoRoot()의 조상 탐색 관례를
-        // 그대로 쓴다 - 이 통제군 로그 트리는 output/·output.bak-2026-08-22/와 같은
-        // 방식으로 워크트리에 심링크해 둔다.
+        // 기준선 검증. [Fix Round 2] 전체 로그(output.bak-stage4-control-20260828/)를
+        // 직접 읽는 버전은 지웠다 - 그 트리는 문서화된 워크트리 코퍼스 관례(재료
+        // 둘: output/·output.bak-2026-08-22/)에 없는 세 번째 재료라, 그 관례만 지킨
+        // 워크트리·클린 클론·CI에서는 항상 Assert.True(File.Exists(...))가 실패해
+        // 게이트(실패 0)에 닿을 수 없었다. 대신 그 실물 로그에서 스크립트로 잘라낸
+        // 발췌(Fixtures/POQSettleBatch4RunExcerpt.log, 손으로 고치지 않음)를
+        // 저장소에 커밋해 쓴다 - SchemaClaimGateRegressionTests 등이 이미 쓰는
+        // "output/ 실물 발췌를 Fixtures/에 커밋한다" 관례를 그대로 따른다.
+        // 이 방식은 output/이 아예 없는 환경에서도, 심링크 없이도 통과한다.
         [Fact]
-        public void Read_Batch4BaselineLog()
+        public void Read_Batch4Excerpt_MatchesRecomputedOracle()
         {
-            var root = CorpusPaths.RepoRoot();
-            var path = Path.Combine(root, "output.bak-stage4-control-20260828", "logs-batch4", "reset-20260829.log");
-
-            Assert.True(File.Exists(path),
-                $"통제군 기준선 로그가 없습니다: '{path}'. " +
-                "output.bak-stage4-control-20260828/를 output/·output.bak-2026-08-22/와 같은 방식으로 심링크했는지 확인하십시오.");
-
+            var path = Path.Combine(
+                RepoPaths.FindRepoRoot(), "tests", "ReSet.Core.Tests", "Fixtures", "POQSettleBatch4RunExcerpt.log");
             var metrics = BatchRunLogReader.Read(File.ReadAllText(path));
 
+            // 궤적과 단조성 위반은 발췌에서도 원본과 동일해야 한다 - 이 계획 전체가
+            // 검증하려는 핵심 오라클이다.
             Assert.Equal(new[] { 78, 76, 84, 74 }, metrics.Trajectory.Select(a => a.NormalizedScore).ToArray());
             Assert.Equal(2, metrics.MonotonicityViolations);
             Assert.Equal(2, metrics.L1ExhaustedAttempts);
             Assert.Equal(6, metrics.TotalAttempts);
-            Assert.Equal(24_065_539, metrics.CacheWriteTokens);
-            Assert.Equal(775_702, metrics.CacheReadTokens);
-            Assert.Equal(2_054_632, metrics.OutputTokens);
+            Assert.True(metrics.StructureRedrafted);
+
+            // 토큰 합계·벽시계는 발췌에 실제로 담긴 줄에서 나오는 값이다 - 전체 로그의
+            // 합계가 아니다. 발췌는 토큰 사용량 줄 3개(238908+10069+255039 캐시 쓰기,
+            // 0+0+8518 캐시 읽기, 7544+9176+21192 출력)와 원본 파일의 첫·마지막
+            // 타임스탬프 줄을 그대로 담는다.
+            Assert.Equal(238_908 + 10_069 + 255_039, metrics.CacheWriteTokens);
+            Assert.Equal(0 + 0 + 8_518, metrics.CacheReadTokens);
+            Assert.Equal(7_544 + 9_176 + 21_192, metrics.OutputTokens);
             Assert.NotNull(metrics.WallClock);
             Assert.Equal(new TimeSpan(2, 23, 26), metrics.WallClock!.Value);
-            Assert.True(metrics.StructureRedrafted);
+        }
+
+        // 창 경계. 실측(코퍼스 output.bak-* 전수 639개 로그): 앵커에서 5축 완성까지의
+        // 최대 거리는 11줄이다. 상한 15는 그 위 4줄의 여유다 - 정확히 15줄째에서
+        // 완성되는 블록은 채택돼야 한다. 이 여유가 방금 실측한 최대치보다 큰지,
+        // 다음 사람이 상수를 고칠 때 이 값으로 확인할 수 있다.
+        [Fact]
+        public void Read_ScoreCompletingAtWindowBoundary_IsAccepted()
+        {
+            var lines = new List<string> { "2026-08-29 10:00:00.000 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료" };
+            for (var i = 0; i < 10; i++) lines.Add($"필러 줄 {i}");
+            lines.Add("\"ScoreAccuracy\": 8,");
+            lines.Add("\"ScoreCrud\": 8,");
+            lines.Add("\"ScoreInterface\": 8,");
+            lines.Add("\"ScoreException\": 8,");
+            lines.Add("\"ScoreReadability\": 8"); // 앵커로부터 15번째 줄
+
+            var metrics = BatchRunLogReader.Read(string.Join("\n", lines));
+
+            Assert.Single(metrics.Trajectory);
+        }
+
+        // 16번째 줄에서 완성되면 창을 넘겨 버려진다 - 거짓 궤적보다 빈 궤적이 낫다는
+        // 정책이 창 경계에서도 지켜지는지 고정한다.
+        [Fact]
+        public void Read_ScoreCompletingPastWindowBoundary_IsDiscarded()
+        {
+            var lines = new List<string> { "2026-08-29 10:00:00.000 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료" };
+            for (var i = 0; i < 11; i++) lines.Add($"필러 줄 {i}");
+            lines.Add("\"ScoreAccuracy\": 8,");
+            lines.Add("\"ScoreCrud\": 8,");
+            lines.Add("\"ScoreInterface\": 8,");
+            lines.Add("\"ScoreException\": 8,");
+            lines.Add("\"ScoreReadability\": 8"); // 앵커로부터 16번째 줄
+
+            var metrics = BatchRunLogReader.Read(string.Join("\n", lines));
+
+            Assert.Empty(metrics.Trajectory);
         }
     }
 }

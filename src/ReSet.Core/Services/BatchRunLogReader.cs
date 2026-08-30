@@ -56,11 +56,18 @@ namespace ReSet.Core.Services
     public static class BatchRunLogReader
     {
         /// <summary>
-        /// 앵커 뒤 몇 줄까지 점수 블록을 기다리는가. 실물 로그의 최장 형태
-        /// (앵커 -> DBG 헤더 -> ```json 펜스 -> { -> HasDefects -> FeedbackComment ->
-        /// DefectiveSteps -> 점수 5줄 -> ScoreReadability)는 앵커에서 11번째 줄에서
-        /// 끝난다. 이 값은 그보다 넉넉하되, 중복 JSON 블록의 점수 줄(약 16번째 줄
-        /// 이후)에는 닿지 않을 만큼 좁다.
+        /// 앵커 뒤 몇 줄까지 점수 블록을 기다리는가.
+        ///
+        /// [2026-08-30 실측 - Fix Round 2] 이 저장소의 모든 `output.bak-*` 트리에
+        /// 있는 로그 639개 전수에서 "앵커 -> 5축 완성"까지의 거리를 쟀다. 최댓값은
+        /// 11줄이다(앵커 -> DBG 헤더 -> ```json 펜스 -> { -> HasDefects ->
+        /// FeedbackComment -> DefectiveSteps -> 점수 5줄 -> ScoreReadability).
+        /// 상한 15는 그 위 4줄의 여유다.
+        ///
+        /// 이 여유는 JSON이 한 줄로 덤프되는 지금 형식에 기대고 있다.
+        /// `FeedbackComment`나 `DefectiveSteps`가 여러 줄로 pretty-print되도록
+        /// 형식이 바뀌면, 정상 블록도 이 창을 넘어 조용히 잘릴 수 있다 - 그때는
+        /// 이 상수만 올릴 게 아니라 639개를 다시 재야 한다.
         /// </summary>
         private const int MaxAnchorWindowLines = 15;
 
