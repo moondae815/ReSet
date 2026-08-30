@@ -2029,70 +2029,87 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
 
-                    // L1 수리는 자기 예산을 쓴다. 채점 예산(attempt)은 올리지 않는다 -
-                    // 채점을 못 받은 회차를 "시도했다"로 세면 실측처럼 6회 중 2회가
-                    // 조용히 사라진다.
-                    l1RepairAttempt++;
-                    bool canRetry = l1RepairAttempt <= _maxL1RepairAttempts;
+                    // 예산을 고르기 *전에* 귀속을 먼저 시도한다. 순서가 핵심이다 -
+                    // 귀속 성공(지목 재생성)과 귀속 실패(전량 재생성)는 서로 다른
+                    // 예산을 쓴다(설계서 §3-3 마지막 문단·§5-4 불변식 #5-1·#10).
+                    // 세기 전에 세면(귀속과 무관하게 l1RepairAttempt만 올리면) 문서
+                    // 전역 위반(귀속 불가 - 헤더 누락 등)이 채점 예산 대신 L1 자기
+                    // 예산만 받아, 이 태스크가 없애려는 L1 소진을 그 부류에 한해
+                    // 오히려 쉽게 만드는 회귀가 된다.
+                    //
+                    // 위반을 단계에 귀속해 그 단계만 다시 뽑는다. 실측(POQSettleBatch4
+                    // 시도 3)의 L1 실패는 `END TRY` 하나였는데 문서 전체를 다시 만들었다.
+                    //
+                    // 귀속하지 못하면 pendingDefectiveSteps가 비고, 그러면 종전대로
+                    // 전량 재생성이 된다 - 억지로 아무 단계에나 붙이면 멀쩡한 단계를
+                    // 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
+                    //
+                    // 귀속은 두 갈래다. 위반 유형 자체가 자리를 아는 것은 그 규칙으로
+                    // 바로 귀속하고, 나머지만 어휘 검색으로 넘긴다.
+                    //
+                    // 나누는 이유: BatchRunRowNeverCreated와 LegacyReturnCodeNeverBound는
+                    // **없는 것이 위반**이라 문서에서 어휘를 찾을 수 없다. 어휘 검색에만
+                    // 맡기면 영원히 귀속 실패로 떨어져 전량 재생성을 부른다 - 설계서
+                    // §3-5(c) 표가 이 둘을 하드 귀속으로 규정한 이유가 그것이다.
+                    pendingDefectiveSteps.Clear();
+
+                    void AddOwner(string? code)
+                    {
+                        if (!string.IsNullOrEmpty(code) &&
+                            !pendingDefectiveSteps.Contains(code, StringComparer.OrdinalIgnoreCase))
+                        {
+                            pendingDefectiveSteps.Add(code);
+                        }
+                    }
+
+                    foreach (var detail in l1Result.DetailedErrors)
+                    {
+                        switch (detail.Type)
+                        {
+                            case ErrorType.BatchRunRowNeverCreated:
+                                // RunId 발급 계약은 단계 목록의 첫 단계가 진다.
+                                if (currentSteps is { Count: > 0 }) AddOwner(currentSteps[0].Code);
+                                break;
+
+                            case ErrorType.LegacyReturnCodeNeverBound:
+                                // 이 값의 거처는 오류 코드를 선언한 단계들이다.
+                                foreach (var step in currentSteps ?? Enumerable.Empty<BatchStepPlan>())
+                                {
+                                    if (step.ErrorCodes.Count > 0) AddOwner(step.Code);
+                                }
+                                break;
+
+                            default:
+                                foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
+                                {
+                                    AddOwner(L1ViolationAttribution.AttributeByLexeme(
+                                        consolidatedPlan, lexeme, currentSteps));
+                                }
+                                break;
+                        }
+                    }
+
+                    // 귀속 결과로 예산을 고른다. 지목 재생성(귀속 성공)은 L1 자기
+                    // 예산을 쓰고 채점 예산(attempt)을 건드리지 않는다. 전량 재생성
+                    // (귀속 실패)은 채점 대상 문서를 새로 만드는 일이므로 채점 예산을
+                    // 쓴다 - 예산 분리 이전(단일 _maxAttempts) 동작과 같아 회귀가 아니다.
+                    bool attributedToSteps = pendingDefectiveSteps.Count > 0;
+                    bool canRetry = attributedToSteps
+                        ? l1RepairAttempt + 1 <= _maxL1RepairAttempts
+                        : _maxAttempts == -1 || attempt < _maxAttempts;
+
                     if (canRetry)
                     {
-                        // 위반을 단계에 귀속해 그 단계만 다시 뽑는다. 실측(POQSettleBatch4
-                        // 시도 3)의 L1 실패는 `END TRY` 하나였는데 문서 전체를 다시 만들었다.
-                        //
-                        // 귀속하지 못하면 pendingDefectiveSteps가 비고, 그러면 종전대로
-                        // 전량 재생성이 된다 - 억지로 아무 단계에나 붙이면 멀쩡한 단계를
-                        // 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
-                        //
-                        // 귀속은 두 갈래다. 위반 유형 자체가 자리를 아는 것은 그 규칙으로
-                        // 바로 귀속하고, 나머지만 어휘 검색으로 넘긴다.
-                        //
-                        // 나누는 이유: BatchRunRowNeverCreated와 LegacyReturnCodeNeverBound는
-                        // **없는 것이 위반**이라 문서에서 어휘를 찾을 수 없다. 어휘 검색에만
-                        // 맡기면 영원히 귀속 실패로 떨어져 전량 재생성을 부른다 - 설계서
-                        // §3-5(c) 표가 이 둘을 하드 귀속으로 규정한 이유가 그것이다.
-                        pendingDefectiveSteps.Clear();
-
-                        void AddOwner(string? code)
+                        if (attributedToSteps)
                         {
-                            if (!string.IsNullOrEmpty(code) &&
-                                !pendingDefectiveSteps.Contains(code, StringComparer.OrdinalIgnoreCase))
-                            {
-                                pendingDefectiveSteps.Add(code);
-                            }
-                        }
-
-                        foreach (var detail in l1Result.DetailedErrors)
-                        {
-                            switch (detail.Type)
-                            {
-                                case ErrorType.BatchRunRowNeverCreated:
-                                    // RunId 발급 계약은 단계 목록의 첫 단계가 진다.
-                                    if (currentSteps is { Count: > 0 }) AddOwner(currentSteps[0].Code);
-                                    break;
-
-                                case ErrorType.LegacyReturnCodeNeverBound:
-                                    // 이 값의 거처는 오류 코드를 선언한 단계들이다.
-                                    foreach (var step in currentSteps ?? Enumerable.Empty<BatchStepPlan>())
-                                    {
-                                        if (step.ErrorCodes.Count > 0) AddOwner(step.Code);
-                                    }
-                                    break;
-
-                                default:
-                                    foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
-                                    {
-                                        AddOwner(L1ViolationAttribution.AttributeByLexeme(
-                                            consolidatedPlan, lexeme, currentSteps));
-                                    }
-                                    break;
-                            }
-                        }
-
-                        if (pendingDefectiveSteps.Count > 0)
-                        {
+                            l1RepairAttempt++;
                             _userInteraction.NotifyStatus(
                                 $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", pendingDefectiveSteps)} 단계로 " +
                                 "좁혀 그 단계만 다시 만듭니다.");
+                        }
+                        else
+                        {
+                            attempt++;
                         }
 
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);

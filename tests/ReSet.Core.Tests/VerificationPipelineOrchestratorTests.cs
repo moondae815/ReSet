@@ -1957,29 +1957,117 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// 실측(POQSettleBatch4): 6회 중 2회가 L1에서 소진되어 채점을 못 받았다.
-        /// L1 위반은 결정적 결함이므로 자기 예산으로 처리하고 채점 예산을 건드리면 안 된다.
+        /// FIX ROUND 1 - Critical 리뷰가 지적한 대로, 이 테스트의 원래 badPlan
+        /// ("L1을 통과하지 못하는 문서")은 헤더가 통째로 빠진 <b>귀속 불가</b>(문서
+        /// 전역) 위반이었다 - "귀속 성공이 채점 예산을 안 먹는다"를 증명하지 못하고
+        /// 있었다(오히려 반대쪽 성질을 우연히 테스트했다). S01 섹션 안에서 실제로
+        /// 발견되는 어휘(`END TRY`)로 귀속이 성사되는 문서로 픽스처를 바꿔, 진짜
+        /// 귀속 성공 경로를 태운다.
+        ///
+        /// maxL2Attempts를 0으로 줘 채점 예산을 1회(attempt=1 고정)로 조인다 - 지목
+        /// 재생성이 이 예산을 건드리면 두 번째 L1 검사 전에 즉시 소진되어 실패한다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipelineAsync_L1Failure_DoesNotConsumeScoringBudget()
+        public async Task RunConsolidatedPipelineAsync_L1AttributionSuccess_DoesNotConsumeScoringBudget()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01Calls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01" && ++s01Calls == 1)
+                    {
+                        // 규칙 3-1(SQL 쪽 제어 흐름) 위반 - `END TRY`가 S01 섹션 안에서
+                        // 실제로 발견된다. 어휘 검색 귀속이 이 문자열을 문서에서 찾아
+                        // S01로 좁힌다.
+                        return new AiResult
+                        {
+                            Content = $"### {step.Code} 단계\n\n대상은 {step.TargetTables[0]}이고 오류코드는 {step.ErrorCodes[0]}이다.\n\n" +
+                                      "```sql\nBEGIN TRY\n    SELECT 1;\nEND TRY\nBEGIN CATCH\nEND CATCH\n```"
+                        };
+                    }
+
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            // maxL2Attempts=0 -> 총 채점 예산 1회(attempt는 1에서 오르면 안 된다).
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, ui, "0", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8,
+                stepConcurrency: 1, maxL1RepairAttempts: 2);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 지목 재생성이 정말 일어났는지: 골격은 1회만, S01은 2회(최초+수리), S02는 1회.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // attempt가 1에 고정된 채로 통과했다 - 채점 예산을 안 건드렸다는 직접 증거다.
+            ui.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
+        }
+
+        /// <summary>
+        /// FIX ROUND 1 - Critical: 위 badPlan("L1을 통과하지 못하는 문서")은 헤더 전부가
+        /// 빠진 <b>귀속 불가</b> 위반이다 - 위 테스트는 사실 이 성질(귀속 실패 시엔
+        /// 전량 재생성이 되고, 그 전량 재생성은 채점 예산을 먹어야 한다)을 검증하지
+        /// 못했다. 예산을 고르기 전에 귀속을 먼저 시도해야 한다 - 그러지 않으면
+        /// 문서 전역 위반(헤더 누락 등, 애초에 단계로 귀속할 수 없는 위반)이
+        /// _maxL1RepairAttempts(기본 2)만 받고 소진되어, 이 태스크가 없애려는
+        /// L1 소진을 오히려 쉽게 만든다.
+        ///
+        /// badPlan을 3회(＞ 기본 _maxL1RepairAttempts=2) 반복시키고도 goodPlan에
+        /// 도달하는지, 그리고 attempt(채점 예산)가 실제로 1→2→3으로 오르는지를
+        /// NotifyL1Errors 호출로 직접 확인한다 - l1RepairAttempt만 올리는 버그
+        /// 코드에서는 attempt가 계속 1에 머물고, 3번째 badPlan에서 예산이
+        /// 소진돼(l1RepairAttempt=3 > 2) goodPlan에 닿지 못한 채 L1Exhausted로 끝난다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L1AttributionFailure_ConsumesScoringBudget()
         {
             var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
             var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
-            var badPlan = "L1을 통과하지 못하는 문서";
+            var badPlan = "L1을 통과하지 못하는 문서"; // 헤더 전부 누락 - 귀속 불가(문서 전역) 위반.
             var goodPlan = header + "\nOK";
 
-            // 채점 예산 1회(총 시도 2회) + L1 수리 예산 2회.
-            // L1이 예산을 공유하면 badPlan 두 번으로 소진되어 goodPlan에 도달하지 못한다.
+            // 채점 예산을 넉넉히 주되(maxL2Attempts=5 -> 총 6회), L1 자기 예산은
+            // 기본값(2)으로 둔다. badPlan 3회는 L1 자기 예산을 넘지만, 귀속 실패이므로
+            // 채점 예산을 써야 하고 채점 예산은 badPlan 3회 + goodPlan 1회를 넉넉히 담는다.
             var orchestrator = new VerificationPipelineOrchestrator(
-                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4",
-                maxL1RepairAttempts: 2);
+                _dbService, _aiService, _validator, _userInteraction, "5", "gpt-4");
 
             _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = "Brainstorm Result" });
             _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(new AiResult { Content = "Plan Structure" });
+                .Returns(new AiResult { Content = "Plan Structure" }); // 단계 JSON이 없어 단일 호출 경로로 폴백한다.
             _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(
+                    _ => Task.FromResult(new AiResult { Content = badPlan }),
                     _ => Task.FromResult(new AiResult { Content = badPlan }),
                     _ => Task.FromResult(new AiResult { Content = badPlan }),
                     _ => Task.FromResult(new AiResult { Content = goodPlan }));
@@ -1994,9 +2082,13 @@ namespace ReSet.Core.Tests
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
-            // L1을 두 번 수리하고도 채점 회차가 남아 통과에 도달한다.
             Assert.Equal(VerificationOutcome.Passed, result.Outcome);
-            _userInteraction.Received(2).NotifyL1Errors("Job_Test", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<List<string>>());
+
+            // attempt가 각 귀속 실패 회차마다 실제로 올랐다 - l1RepairAttempt만 올랐다면
+            // 셋 다 attempt=1로 찍혀 아래 세 어서션 중 뒤의 둘이 실패한다.
+            _userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
+            _userInteraction.Received(1).NotifyL1Errors("Job_Test", 2, Arg.Any<int>(), Arg.Any<List<string>>());
+            _userInteraction.Received(1).NotifyL1Errors("Job_Test", 3, Arg.Any<int>(), Arg.Any<List<string>>());
         }
 
         [Fact]
@@ -4381,10 +4473,11 @@ namespace ReSet.Core.Tests
 
             Assert.NotNull(result.Plan);
             Assert.Contains("계획1고유표시", result.Plan);
-            // L1 수리는 자기 예산(maxL1RepairAttempts, 기본 2)을 쓰고 채점 예산(attempt)을
-            // 올리지 않는다 - 1차가 L2 결함으로 attempt를 2로 올린 뒤, 이어지는 L1 실패
-            // 두 번은 attempt를 그대로 둔다. 그래서 소진 시점의 채택 경위는 "2차"다.
-            Assert.Contains("2차 시도가 L1 기계 검증 실패로 중단되어", result.Plan);
+            // "헤더가 없는 잘못된 계획"은 문서 전역 위반(귀속 불가)이다 - 단계도, 어휘도
+            // 없어 어떤 단계로도 좁힐 수 없다. 귀속 실패는 전량 재생성이고 전량 재생성은
+            // 채점 예산(attempt)을 쓴다(예산 분리 이전과 동일). 1차 L2 결함(attempt=2)
+            // 다음 L1 실패 두 번이 attempt를 2->3으로 올려 소진 시점은 "3차"다.
+            Assert.Contains("3차 시도가 L1 기계 검증 실패로 중단되어", result.Plan);
             Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", result.Plan);
         }
 
@@ -5270,6 +5363,121 @@ SELECT 1;
                 Arg.Any<string>(),
                 Arg.Is<string?>(feedback => feedback != null && feedback.Contains("batch.BatchRun") && feedback.Contains("INSERT")),
                 Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// FIX ROUND 1 - Important: L1 실패 분기의 하드 귀속 두 갈래
+        /// (<see cref="ErrorType.BatchRunRowNeverCreated"/>·
+        /// <see cref="ErrorType.LegacyReturnCodeNeverBound"/>)는 오케스트레이터 레벨
+        /// 테스트로 전혀 덮이지 않았다. StepsJson의 TargetTables는 dbo.T1/dbo.T2뿐이라
+        /// BatchControlContract.ResolveRowCreators가 어느 단계에도 batch.BatchRun의
+        /// 소유권을 주지 않는다 - 그래서 단계 생성 중의 담당 배선(위 테스트)이 아니라
+        /// 문서 레벨 ValidateConsolidated만 이 위반을 낸다. 그 위반이 정말 첫 단계(S01)로
+        /// 하드 귀속되는지를 지목 재생성의 관측 가능한 결과(골격 재사용·S01만 재호출·
+        /// NotifyStatus 문구)로 확인한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_BatchRunRowNeverCreated_AttributesToFirstStep()
+        {
+            var aiService = SplitCapableAiService();
+
+            var s01Calls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01" && ++s01Calls == 1)
+                    {
+                        // S01이 RunId 발급 행을 UPDATE만 하고 INSERT하지 않는다.
+                        return new AiResult
+                        {
+                            Content = $"### {step.Code} 단계\n\n대상은 {step.TargetTables[0]}이고 오류코드는 {step.ErrorCodes[0]}이다.\n\n" +
+                                      "```sql\nUPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @RunId;\n```"
+                        };
+                    }
+
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var result = await RunBatchPipelineWithUi(aiService, ui, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 지목 재생성이 정말 일어났는지: 골격은 1회만, S01만 2회(최초+수리), S02는 1회.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 첫 단계(S01)로 좁혔다는 화면 고지.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("L1 위반을") && m.Contains("S01") && !m.Contains("S02")));
+        }
+
+        /// <summary>
+        /// FIX ROUND 1 - Important: LegacyReturnCodeNeverBound는 오류 코드를 선언한
+        /// 단계 <b>전부</b>로 하드 귀속된다. StepsJson의 S01·S02 모두 ErrorCodes를
+        /// 선언하므로 둘 다 지목 재생성 대상이 되는지 확인한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_LegacyReturnCodeNeverBound_AttributesToStepsDeclaringErrorCodes()
+        {
+            var aiService = SplitCapableAiService();
+
+            // 레거시 반환값을 보존한다고 선언하되(조건 1 충족), 결속 쓰기 지점은
+            // 첫 회차 어디에도 없다 - HealthyStepSection은 SELECT만 한다.
+            var skeletonWithLegacyRetVal = SkeletonMarkdown.Replace(
+                "공통 규약.", "공통 규약. 레거시 반환값 @po_intRetVal 을 보존한다.");
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = skeletonWithLegacyRetVal });
+
+            var s01Calls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01" && ++s01Calls == 2)
+                    {
+                        // 지목 재생성(2회차)에서 결속을 채운다 - 문서 어딘가 최소
+                        // 한 번이면 충분하므로 S02는 건강한 본문 그대로 둬도 된다.
+                        return new AiResult
+                        {
+                            Content = "### S01 단계\n\n대상은 dbo.T1이고 오류코드는 -1이다.\n\n```sql\n" +
+                                      "INSERT INTO batch.BatchStepJournal (StepCode, LegacyReturnCode) VALUES ('S01', @po_intRetVal);\n```"
+                        };
+                    }
+
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var result = await RunBatchPipelineWithUi(aiService, ui, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 지목 재생성이 정말 일어났는지: 골격은 1회만, 오류코드를 선언한 S01·S02
+            // 둘 다 2회(최초+수리) - 한쪽만 지목했다면 다른 쪽은 1회에 머문다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 두 단계 모두로 좁혔다는 화면 고지.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(m => m.Contains("L1 위반을") && m.Contains("S01") && m.Contains("S02")));
         }
 
         [Fact]
