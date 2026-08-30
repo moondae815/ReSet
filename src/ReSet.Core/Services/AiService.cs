@@ -4300,6 +4300,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             string jobName,
             string? effort = null,
             string? floorFeedback = null,
+            string? previousBody = null,
             CancellationToken cancellationToken = default)
         {
             var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
@@ -4327,6 +4328,21 @@ Consolidate the provided specifications into a single unified batch job named '{
             // 12단계가 공유하던 캐시가 통째로 죽는다.
             var volatileSuffix = new StringBuilder();
             volatileSuffix.AppendLine($"Now write the section for step {step.Code} ({step.Name}) ONLY.");
+
+            // 직전 본문이 있으면 백지 재작성이 아니라 패치를 요구한다.
+            // 실측(POQSettleBatch4): 6차가 5차 대비 정합성 8->7, 예외 7->6으로 떨어졌다 -
+            // 지적된 자리를 고치면서 멀쩡하던 자리를 함께 다시 썼기 때문이다.
+            if (!string.IsNullOrWhiteSpace(previousBody))
+            {
+                volatileSuffix.AppendLine();
+                volatileSuffix.AppendLine("[Previous Section Body]");
+                volatileSuffix.AppendLine(previousBody);
+                volatileSuffix.AppendLine();
+                volatileSuffix.AppendLine("[Revision Contract]");
+                volatileSuffix.AppendLine("- Output the FULL section again, but change ONLY what the feedback below identifies.");
+                volatileSuffix.AppendLine("- Every sentence not implicated by the feedback MUST be reproduced byte-for-byte.");
+                volatileSuffix.AppendLine("- Do NOT rewrite, reorder, or \"improve\" untouched parts.");
+            }
 
             if (!string.IsNullOrWhiteSpace(floorFeedback))
             {
@@ -4361,7 +4377,28 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             Log.Information("AI 배치 단계 섹션 생성 응답 수신 완료 - JobName: {JobName}, Step: {Step}, 응답 길이: {Length}",
                 jobName, step.Code, aiResult.Content.Length);
+
+            if (!string.IsNullOrWhiteSpace(previousBody) && aiResult.Content.Length > 0)
+            {
+                // 패치가 재작성으로 변질됐는지의 신호. 자동으로 막지는 않는다 -
+                // 정당한 대규모 수정과 구분할 기준이 아직 없다.
+                var ratio = 1.0 - (LongestCommonPrefixLength(previousBody!, aiResult.Content)
+                    / (double)Math.Max(previousBody!.Length, aiResult.Content.Length));
+                Log.Information(
+                    "AI 배치 단계 섹션 패치 변경 비율 - JobName: {JobName}, Step: {Step}, 비율: {Ratio:P1}",
+                    jobName, step.Code, ratio);
+            }
+
             return aiResult;
+        }
+
+        /// <summary>두 문자열이 앞에서부터 몇 글자를 공유하는가. 패치 변경 비율의 근사다.</summary>
+        private static int LongestCommonPrefixLength(string a, string b)
+        {
+            var limit = Math.Min(a.Length, b.Length);
+            var i = 0;
+            while (i < limit && a[i] == b[i]) i++;
+            return i;
         }
 
         /// <summary>
