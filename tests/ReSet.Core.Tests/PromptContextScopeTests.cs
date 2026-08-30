@@ -56,6 +56,16 @@ namespace ReSet.Core.Tests
             Assert.Equal(ContextScopeMode.Narrow, PromptContextScope.ResolveMode("claude-cli", "쓰레기값"));
         }
 
+        // 제공자 분류는 AiClientFactory.IsCliProvider가 정본이다(정확 일치 허용목록).
+        // ResolveMode가 "-cli" 접미사 자체를 다시 판정하면, 그 허용목록에 없으면서
+        // 이름만 우연히 "-cli"로 끝나는 제공자가 잘못 Narrow로 분류된다 - 두 곳이
+        // 같은 사실을 따로 판정할 때 나는 바로 그 결함이다.
+        [Fact]
+        public void UnknownProviderEndingInCliSuffix_DoesNotDefaultToNarrow()
+        {
+            Assert.Equal(ContextScopeMode.Full, PromptContextScope.ResolveMode("fake-vendor-cli", configured: null));
+        }
+
         [Fact]
         public void NarrowSpecs_KeepsTheStepsOwnProcedure()
         {

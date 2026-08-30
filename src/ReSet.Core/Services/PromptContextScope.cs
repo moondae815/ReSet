@@ -36,11 +36,14 @@ namespace ReSet.Core.Services
                 return explicitMode;
             }
 
-            // CLI 제공자는 프롬프트를 단일 텍스트로만 받는다. 블록 배열도 다중 user
-            // 메시지도 넘길 수단이 없어 cache_control을 찍을 자리가 물리적으로 없다.
-            var isCli =
-                providerName != null &&
-                providerName.EndsWith("-cli", StringComparison.OrdinalIgnoreCase);
+            // 제공자 분류는 AiClientFactory.IsCliProvider가 정본이다(정확 일치
+            // 허용목록: claude-cli·codex-cli·agy-cli). 여기서 "-cli" 접미사 같은
+            // 별도 판정을 다시 만들면, 그 저장소 관례를 따르지 않는 이름이 한쪽만
+            // 고쳐질 때 조용히 어긋난다 - 이름이 우연히 "-cli"로 끝나지만 허용목록에
+            // 없는 제공자가 잘못 Narrow로 분류되거나, 허용목록에 있지만 "-cli"로
+            // 끝나지 않는 미래의 CLI 제공자가 Full로 남아 이 태스크의 축소 효과를
+            // 전혀 받지 못한다.
+            var isCli = providerName != null && Clients.AiClientFactory.IsCliProvider(providerName);
 
             return isCli ? ContextScopeMode.Narrow : ContextScopeMode.Full;
         }
@@ -89,22 +92,25 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 명세서 파일명과 프로시저 이름을 맞춘다. 파일명에 확장자나 경로가 붙는 경우가
-        /// 있어 완전 일치만으로는 못 찾는다.
+        /// 명세서 파일명과 프로시저 이름을 맞춘다.
         ///
-        /// 단순 부분 문자열 포함(IndexOf)은 쓰지 않는다 - "dbo.UP_Util_Settle_Summary"가
-        /// "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA"의 접두 부분 문자열이라 오탐으로 매치된다
-        /// (NarrowSpecs_PreservesSourceOrder에서 실측). 경로 마지막 세그먼트에서 확장자를
-        /// 뗀 값과 정확히 일치할 때만 인정한다.
+        /// 정확 일치(대소문자 무시)만 쓴다. 단순 부분 문자열 포함(IndexOf)은 쓰지
+        /// 않는다 - "dbo.UP_Util_Settle_Summary"가 "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA"의
+        /// 접두 부분 문자열이라 오탐으로 매치된다(NarrowSpecs_PreservesSourceOrder에서
+        /// 실측). 대소문자 무시는 이 저장소의 관례를 따른다 - CodeObjectKey가 객체
+        /// 동일성의 정본으로 OrdinalIgnoreCase를 쓴다.
+        ///
+        /// 경로나 확장자가 붙은 형태(예: "Procedures/dbo.X/docs/Spec.md")는 처리하지
+        /// 않는다 - 이 클래스에 닿는 실제 FileName은 BatchStepCatalog.ExtractProcedureIdentifier가
+        /// 이미 맨 "schema.name" 식별자로 뽑아준 것이라(Program.cs의 specsData 구성부
+        /// 참고), 경로/확장자 형태가 여기 도달할 일이 없다. 이 클래스가 그 상류 계약에
+        /// 기대고 있다는 뜻이다 - Task 10b가 실물 specs를 여기 연결할 때 이 가정이
+        /// 여전히 성립하는지(FileName이 정말 순수 식별자로 오는지) 다시 확인해야 한다.
+        /// 성립하지 않게 되면 이 메서드는 아무것도 매치하지 못해 NarrowSpecs가 항상
+        /// 전량 반환으로 폴백한다 - 조용히 틀리는 대신 안전하게 무력화된다.
         /// </summary>
-        private static bool MatchesSpecName(string fileName, string procedureName)
-        {
-            if (string.IsNullOrWhiteSpace(fileName)) return false;
-            if (string.Equals(fileName, procedureName, StringComparison.OrdinalIgnoreCase)) return true;
-
-            var lastSegment = fileName.Split('/', '\\').Last();
-            var withoutExtension = System.IO.Path.GetFileNameWithoutExtension(lastSegment);
-            return string.Equals(withoutExtension, procedureName, StringComparison.OrdinalIgnoreCase);
-        }
+        private static bool MatchesSpecName(string fileName, string procedureName) =>
+            !string.IsNullOrWhiteSpace(fileName) &&
+            string.Equals(fileName, procedureName, StringComparison.OrdinalIgnoreCase);
     }
 }
