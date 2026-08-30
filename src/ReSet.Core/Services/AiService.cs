@@ -4392,7 +4392,18 @@ Consolidate the provided specifications into a single unified batch job named '{
             return aiResult;
         }
 
-        /// <summary>두 문자열이 앞에서부터 몇 글자를 공유하는가. 패치 변경 비율의 근사다.</summary>
+        /// <summary>
+        /// 두 문자열이 앞에서부터 몇 글자를 공유하는가. 패치 변경 비율의 근사다.
+        ///
+        /// 근사가 틀리는 자리: 섹션 앞부분을 고치면 공통 접두사가 0에 가까워져,
+        /// 작은 정당한 패치도 「전면 재작성」처럼 보인다. 반대로 뒷부분만 크게
+        /// 고치면 접두사가 길게 남아 실제로는 큰 수정인데도 「작은 수정」처럼
+        /// 보인다 - 이 값은 변경량이 아니라 변경 위치에 민감하다.
+        ///
+        /// 그래서 이 비율은 경보가 아니라 관측이다(임계로 막지 않는 이유이기도
+        /// 하다). 로그를 읽을 때는 한 회차의 절대값이 아니라 회차 간 추세로
+        /// 봐야 한다 - 100%가 찍혀도 실제로는 첫 줄만 고친 것일 수 있다.
+        /// </summary>
         private static int LongestCommonPrefixLength(string a, string b)
         {
             var limit = Math.Min(a.Length, b.Length);
