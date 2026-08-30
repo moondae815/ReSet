@@ -2887,11 +2887,19 @@ AiSettings__Critic__Provider=OpenRouter \
 AiSettings__Critic__ModelName=z-ai/glm-5.3 \
 AiSettings__Consolidator__Provider=claude-cli \
 AiSettings__Consolidator__ModelName=claude-sonnet-5 \
-AiSettings__AllowCliProviderInBatch=true \
     dotnet run --project src/ReSet.Cli
 ```
 
-기존 `run-pair-batch4.sh`의 환경변수 이름과 값을 그대로 대조해 맞춘다 — 위 목록에 빠진 변수가 있으면 그 파일의 것을 따른다.
+> **✅ 이 스크립트는 이미 작성돼 있다** — `output.bak-stage4-control-20260828/run-verify-batch4.sh`.
+> 짝 스크립트 `run-pair-batch4.sh`와 환경변수를 대조해 맞췄고, 실행 전 점검·SP 14편·
+> 합격 기준·판독 레시피를 머리말에 담았다. Step 1 은 건너뛰고 Step 2 로 간다.
+
+**초안에서 두 가지를 실측으로 고쳤다:**
+
+| 초안 | 실측 | 근거 |
+| :--- | :--- | :--- |
+| `AiSettings__AllowCliProviderInBatch=true` 를 넘긴다 | **넘기지 않는다** | 그 키는 **검증기(`ReSet.Validator.Cli`) 자기 설정에서만** 읽힌다. `src/ReSet.Validator.Cli/appsettings.json:5` 주석이 「분석기 쪽을 열어도 여기는 닫힌 채 남습니다」라고 명시한다. 분석기(`ReSet.Cli`) 실행에 넘기면 아무 일도 일어나지 않는다. 짝 스크립트에 없는 것이 옳았다 |
+| SP 「14편」이라고만 적음 | **이름 14개를 확정** | `Jobs/POQSettleBatch4/docs/BatchMigrationPlan.md` 에서 추출. 짝 스크립트 주석의 12편 목록은 **Batch3 용**이라 그대로 쓰면 통제가 깨진다 |
 
 - [ ] **Step 2: 판을 돌린다**
 
@@ -2899,7 +2907,18 @@ AiSettings__AllowCliProviderInBatch=true \
 zsh output.bak-stage4-control-20260828/run-verify-batch4.sh
 ```
 
-Job 이름은 `POQSettleBatch5`로 입력한다. SP 목록은 기준선과 같은 14편을 고른다.
+Job 이름은 `POQSettleBatch5`로 입력한다. SP 목록은 기준선과 **같은 14편**을 고른다 —
+스크립트 머리말에 이름이 다 적혀 있다. 한 편이라도 다르면 통제가 깨진다.
+
+```
+dbo.UP_Util_PG_Client_CMRate_Ins        dbo.UP_UTIL_SETTLE_CANCEL_INS
+dbo.UP_UTIL_SETTLE_COMM_UPD             dbo.UP_UTIL_SETTLE_EXCEPTION_PROC
+dbo.UP_UTIL_SETTLE_EXPECT_PROC          dbo.UP_UTIL_SETTLE_INS
+dbo.UP_UTIL_SETTLE_INS_EXTRA            dbo.UP_UTIL_SETTLE_INS_EXTRA4PLCARD
+dbo.UP_UTIL_SETTLE_PROC_ETC             dbo.UP_Util_Settle_Summary
+dbo.UP_Util_Settle_Summary_AcqManual    dbo.UP_UTIL_SETTLE_SUMMARY_ETC
+dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA        dbo.UP_UTIL_STAT_PGCOLLECT_INS
+```
 
 - [ ] **Step 3: 판독한다**
 
@@ -2927,6 +2946,11 @@ var metrics = BatchRunLogReader.Read(File.ReadAllText(
 | 최종 환산 점수 | 84 | 하락하지 않을 것 | |
 
 호출당 캐시 쓰기는 `metrics.CacheWriteTokens`를 토큰 사용량 로그 행 수로 나눠 구한다. 총량으로 재면 회차 수 변화에 오염되지만 호출당은 그렇지 않다 — §3-9가 줄이는 것이 호출당 입력이기 때문이다.
+
+⛔ **L1 발화 줄 수를 소진 회차로 읽지 마라.** Task 3(§3-3) 이후에는 **복구에 성공한**
+회차도 같은 로그 줄을 남긴다. 그래서 이 브랜치가 노리는 성공이 실패로 읽힌다.
+소진 회차는 `BatchRunLogReader.UnscoredAttempts`(= `TotalAttempts - Trajectory.Count`)
+로만 센다. 최종 리뷰가 이 혼동을 Important 로 잡아 Fix B 가 고쳤다.
 
 **단조성 위반이 1건이라도 나오면 Task 2의 구현 결함이다.** 롤백이 어느 경로에서 안 걸리는지 로그로 좁힌다 — 채점 직후 블록을 지나지 않는 종료 경로가 있을 가능성이 높다.
 
