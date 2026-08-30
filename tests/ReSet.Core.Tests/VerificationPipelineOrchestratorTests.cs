@@ -9233,5 +9233,116 @@ SELECT 1;
             // 기계 발견 배너는 최초 발견 시 한 번만 뜬다.
             ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
         }
+
+        // TASK 12 - 낡은 machineFoundStructureDefect가 이미 해소된 목차 결함으로
+        // 멀쩡한 목차를 갈아엎으면 안 된다(실측 사고 POQSettleBatch4의 재발).
+        //
+        // "해소"는 §3-5(b)의 정의 그대로 판정한다 - missingErrorCodes가 실제로
+        // 채워진(=L1이 의미 있게 재평가한) 회차에 그 코드들이 전부 어느 단계에는
+        // 귀속되는 것을 확인해야 "참"이 "거짓"으로 갱신된다. 텍스트에 코드가
+        // 우연히 실려 missingErrorCodes가 비는 것만으로는(§3-5(b)의 정의상 그
+        // 자체로 결함이 아니게 되지만) 이 값을 갱신할 근거(의미 있는 재평가)가
+        // 없으므로 건드리지 않는다 - 이 테스트는 그 갱신 근거가 실제로 오는
+        // 시나리오를 쓴다.
+        //
+        // 시나리오: 1회차는 S01이 -1(귀속됨)과 -7(USP_Orphan, 귀속 실패)을
+        // 함께 누락해 목차 결함이 발견된다(배너 1회). S01의 지목 재생성이
+        // -1과 -7을 모두 실어 L1이 통과한다. 이후 Critic이 S02를 지목해
+        // 재생성을 유도하는데, 이번엔 S02가 자신이 선언한 -3(USP_Two, S02가
+        // 귀속)을 하한 재시도 5회 내내 싣지 못해 진짜로 누락된다 - 이때
+        // missingErrorCodes={-3}은 비어있지 않고, -3의 귀속은 성공(S02가
+        // 소유)하므로 machineFoundStructureDefect가 "거짓"으로 정정된다.
+        // 이후 두 회차가 점수 정체(2회 연속)를 만들어도 Critic이
+        // StructureDefective를 세우지 않는 한 재설계가 발동해서는 안 된다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_MachineFoundStructureDefectResolvedByLaterAttribution_DoesNotRedraft()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘째 단계\", \"LegacyProcedures\": [\"USP_Two\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-3\"] }\n" +
+                "  ]\n}\n```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01: 1~5번째 호출은 -1도 -7도 싣지 않아(하한 재시도 5회 전량 소진)
+            // L1이 -1과 -7을 함께 지목한다. 6번째부터는 계속 둘 다 싣는다(다시
+            // 무너지지 않는다).
+            var s01Call = 0;
+            // S02: 1번째 호출은 건강하다(-3 있음). 2~6번째 호출(Critic 지목
+            // 재생성의 하한 재시도 5회 전량 소진)은 -3을 뺀다 - S02가 선언한
+            // 자신의 코드가 진짜로 누락되는 회차를 만든다. 7번째부터는 다시
+            // -3을 싣는다.
+            var s02Call = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01")
+                    {
+                        s01Call++;
+                        return s01Call <= 5
+                            ? new AiResult { Content = "### S01 단계\n\ndbo.T1이고 반환 코드는 없다.\n\n```sql\nSELECT 1;\n```" }
+                            : new AiResult { Content = "### S01 단계\n\ndbo.T1이고 -1과 -7을 모두 반환한다.\n\n```sql\nSELECT 1;\n```" };
+                    }
+
+                    s02Call++;
+                    if (s02Call == 1 || s02Call >= 7)
+                    {
+                        return new AiResult { Content = HealthyStepSection("S02", "dbo.T2", "-3") };
+                    }
+
+                    return new AiResult { Content = "### S02 단계\n\ndbo.T2이고 반환 코드는 없다.\n\n```sql\nSELECT 1;\n```" };
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1회차(최초 채점) - S02를 지목해 다음 회차에 -3 누락을 유도한다.
+                        0 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S02" }, FeedbackComment = "결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }),
+                        // 2·3회차 - S01을 지목해(재호출 상한을 피하며) 점수 정체를 만든다.
+                        1 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "여전히 결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                        2 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "정체", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                        // 마무리 - 통과.
+                        _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }),
+                    };
+                });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "5", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -1 이다."),
+                ("dbo.USP_Orphan", "@po_intRetVal = -7 이다."),
+                ("dbo.USP_Two", "@po_intRetVal = -3 이다."),
+            };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 핵심 단언: 점수가 2회 연속 정체됐는데도(streak==2) 목차는 재설계되지
+            // 않는다 - 낡은 machineFoundStructureDefect가 그사이 진짜로 해소됐기
+            // 때문이다. 재설계됐다면 DraftBatchPlanStructureAsync가 2번 불렸을
+            // 것이다.
+            await aiService.Received(1).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(s => s.Contains("재시도가 점수를 개선하지 못해 목차를 다시 설계합니다")));
+
+            // 최초 발견 배너는 여전히 한 번은 뜬다 - 발견 자체는 실재했다.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
+        }
     }
 }
