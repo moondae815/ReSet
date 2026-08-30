@@ -2407,12 +2407,12 @@ namespace ReSet.Core.Services
                             // 새 골격 아래에 그대로 조립한다. 성립하지 않으면
                             // 회귀 롤백이 그 회차를 되감는다.
                             //
-                            // [알려진 한계] GenerateBySplitAsync의 targeted 판정은
-                            // "골격 재사용"과 "지목 단계만 재생성"을 한 조건으로 묶는다
-                            // (previousSkeleton != null && defectiveSteps.Count > 0).
-                            // 골격을 null로 비우면 그 판정이 항상 거짓이 되어 다음 회차는
-                            // 지목 여부와 무관하게 전 단계를 다시 만든다 - "섹션은 동결"이
-                            // 문서화하는 이상적 동작과 실제 배선이 split 경로에서는 갈린다.
+                            // 골격만 지운다 - lastStepSections는 그대로 둔다.
+                            // GenerateBySplitAsync는 "골격 재사용"과 "지목 단계만
+                            // 재생성"을 독립으로 판정하므로(§3-6), 골격이 없어도
+                            // 섹션 캐시가 살아 있으면 다음 회차는 pendingDefectiveSteps로
+                            // 지목된 단계만 다시 만들고 나머지는 캐시된 바이트를
+                            // 그대로 쓴다.
                             lastSkeleton = null;
                             lastSkeletonResult = null;
                             _userInteraction.NotifyStatus(
@@ -3299,17 +3299,21 @@ namespace ReSet.Core.Services
         /// 앞 단계에 66%를 쓰고 뒤를 굶겼다(실측). 단계마다 독립 호출이면 그
         /// 경쟁 자체가 사라진다.
         ///
-        /// defectiveSteps가 비어 있지 않고 이전 골격·섹션이 남아 있으면 지목된
-        /// 단계만 다시 뽑는다. 골격 호출은 하지 않는다.
+        /// 이전 섹션 캐시가 남아 있으면 defectiveSteps로 지목된 단계만 다시 뽑고
+        /// 나머지는 캐시된 바이트를 그대로 쓴다. 이전 골격이 남아 있으면 골격
+        /// 호출도 건너뛴다 - 두 판단은 독립이다(reuseSkeleton/canTargetSections
+        /// 참고, §3-6). previousSkeleton이 없는데 previousSections는 있는 경우
+        /// (SkeletonDefective로 골격만 지운 경우)가 그 독립성이 필요한 이유다.
         ///
         /// 골격을 얻지 못하면 null을 돌려주고 호출부가 단일 호출로 폴백한다.
         ///
-        /// 지목 재생성(targeted)은 골격 호출을 건너뛰므로 그 자신의 AiResult가
-        /// 없다 — previousSkeletonResult로 넘겨받은, 골격을 실제로 생성했던 회차의
-        /// AiResult를 그대로 재사용한다. 빈 스텁을 새로 만들지 않는 이유: AGENTS.md가
-        /// 문서화한 계약대로 raw/prompt-context.md와 docs/Thinking.md는 채택된
-        /// 시도가 실제로 무엇을 프롬프트/사고했는지를 서술해야 하고, SystemPrompt·
-        /// UserPrompt·ThinkingText가 전부 null인 스텁은 그 계약을 어긴다.
+        /// 골격을 재사용할 때(reuseSkeleton)는 골격 호출을 건너뛰므로 그 자신의
+        /// AiResult가 없다 — previousSkeletonResult로 넘겨받은, 골격을 실제로
+        /// 생성했던 회차의 AiResult를 그대로 재사용한다. 빈 스텁을 새로 만들지
+        /// 않는 이유: AGENTS.md가 문서화한 계약대로 raw/prompt-context.md와
+        /// docs/Thinking.md는 채택된 시도가 실제로 무엇을 프롬프트/사고했는지를
+        /// 서술해야 하고, SystemPrompt·UserPrompt·ThinkingText가 전부 null인
+        /// 스텁은 그 계약을 어긴다.
         /// </summary>
         private async Task<SplitGeneration?> GenerateBySplitAsync(
             string planStructure,
@@ -3334,8 +3338,20 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
             CancellationToken cancellationToken)
         {
-            var targeted = previousSkeleton != null && previousSkeletonResult != null &&
-                previousSections != null && defectiveSteps.Count > 0;
+            // 골격 재사용 여부와 "지목 단계만 재생성" 여부는 독립이다. 예전에는
+            // 하나의 targeted 판정으로 묶여 있어서, previousSkeleton이 없으면(예:
+            // SkeletonDefective로 골격만 지운 경우) 지목과 무관하게 전 단계가
+            // 다시 만들어졌다 - "골격만 다시 만든다"는 상태 메시지가 거짓이 되는
+            // 결함이었다(§3-6).
+            //
+            // reuseSkeleton: 골격 호출 자체를 건너뛸지. previousSkeleton이 있어야만
+            // 가능하다.
+            var reuseSkeleton = previousSkeleton != null && previousSkeletonResult != null;
+            // canTargetSections: 섹션을 통째로 다시 만들지, 지목된 것만 만들지.
+            // 재사용할 섹션 캐시(previousSections)가 있어야만 가능하다 - 캐시가
+            // 없으면(첫 생성이거나 재설계 직후 캐시가 통째로 지워진 경우) 지목이
+            // 있어도 비교할 대상이 없어 전부 새로 만든다.
+            var canTargetSections = previousSections != null;
 
             // 단계별 인터페이스. steps가 이미 확정돼 있으므로 골격 호출보다 앞에서 만든다 -
             // 골격도 이 표를 받아야 한다(규칙 5가 그 표를 가리킨다). 재시도 루프 밖이라
@@ -3345,7 +3361,7 @@ namespace ReSet.Core.Services
             string skeleton;
             AiResult generation;
 
-            if (targeted)
+            if (reuseSkeleton)
             {
                 skeleton = previousSkeleton!;
                 generation = previousSkeletonResult!;
@@ -3387,9 +3403,10 @@ namespace ReSet.Core.Services
             // 절대 건드리지 않는다.
             var floorViolations = new Dictionary<string, StepDefect>(previousViolations);
 
-            // 지목 재생성이면 지목된 단계만, 아니면 전부 만든다.
+            // 섹션 캐시가 있으면 지목된 단계만, 없으면 전부 만든다. 골격을 다시
+            // 만들었는지는 이 판단과 무관하다(위 canTargetSections 주석 참고).
             // 지목 코드가 목록에 없으면(모델이 지어낸 코드) 무시한다.
-            var pending = targeted
+            var pending = canTargetSections
                 ? steps.Where(step => defectiveSteps.Contains(step.Code, StringComparer.OrdinalIgnoreCase)).ToList()
                 : steps.ToList();
 

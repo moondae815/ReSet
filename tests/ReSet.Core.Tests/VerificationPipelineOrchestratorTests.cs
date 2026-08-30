@@ -6169,6 +6169,74 @@ SELECT 1;
         }
 
         /// <summary>
+        /// Critical 1 (§3-6): SkeletonDefective가 골격을 지워도(previousSkeleton == null)
+        /// 섹션 캐시(previousSections)가 살아 있으면 "골격 재사용 여부"와 "지목 단계만
+        /// 재생성 여부"는 갈라져야 한다. 종전에는 하나의 targeted 판정으로 묶여
+        /// previousSkeleton == null이면 무조건 전 단계가 다시 만들어졌다 - 골격만
+        /// 다시 만든다는 상태 메시지("골격만 다시 만듭니다")가 거짓이 되는 결함이었다.
+        /// </summary>
+        [Fact]
+        public async Task GenerateBySplitAsync_SkeletonNulledWithLiveSections_RegeneratesSkeletonOnlyAndFreezesUntargetedSections()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            var dbService = Substitute.For<IDbMetadataService>();
+            var validator = new MechanicalValidator();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            var steps = BatchStepPlanParser.TryParse(StepsJson);
+            Assert.NotNull(steps);
+            var specs = new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") };
+
+            // 이전 회차의 섹션 캐시 - S02는 이 바이트 그대로 재사용돼야 한다.
+            var previousSections = new Dictionary<string, string>
+            {
+                ["S01"] = "### S01 단계\n\n낡은 골격 아래에서 만든 본문.",
+                ["S02"] = "### S02 단계\n\n건드리면 안 되는 본문.",
+            };
+
+            // SkeletonDefective 처리와 같은 입력: previousSkeleton은 null(골격을
+            // 지웠다)이지만 previousSections는 살아 있고, defectiveSteps는 골격과
+            // 모순된 S01만 지목한다.
+            var result = await InvokeGenerateBySplitAsync(
+                orchestrator, "목차", steps!, specs, "C#", "Job_Test",
+                NullProgressScope.Instance, null, null, previousSections, new Dictionary<string, StepDefect>(),
+                new[] { "S01" }, Array.Empty<string>(), CancellationToken.None);
+            Assert.NotNull(result);
+
+            // 골격은 다시 만들어야 한다 - previousSkeleton이 없다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+
+            // S01(지목됨)만 다시 생성한다.
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 핵심 불변식: 지목되지 않은 S02는 섹션 생성 호출 자체가 일어나지 않고,
+            // 캐시된 바이트가 그대로 조립 결과에 실린다.
+            await aiService.DidNotReceive().GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            var sections = GetSections(result!);
+            Assert.Equal(previousSections["S02"], sections["S02"]);
+        }
+
+        /// <summary>
         /// 최종 리뷰 지적(항목 1): 단계 병합 루프(§floorViolations[stepResult.Code] = ...)가
         /// 이미 얻은 StepDefect를 문서 단위 분할 SP 검사(<see cref="MechanicalValidator.ValidateSplitProcedureObligations"/>)의
         /// 결과로 무조건 덮어써 단계 자신의 진단 사유를 지웠다.
@@ -6366,7 +6434,7 @@ SELECT 1;
         }
 
         [Fact]
-        public async Task RunConsolidatedPipeline_WithoutDefectiveSteps_RegeneratesTheWholeDocument()
+        public async Task RunConsolidatedPipeline_WithoutDefectiveSteps_RetriesReviewWithoutRegenerating()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -6390,10 +6458,20 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            // 지목이 없으면 골격부터 다시 만든다.
-            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+            // 지목도 SkeletonDefective/StructureDefective도 없으면 결함의 자리를
+            // 못 댄 리뷰다 - 재생성 없이 리뷰만 한 번 더 부른다(§3-2(a)). 골격 재사용과
+            // 섹션 캐시가 모두 있으므로 골격도, 어떤 단계 섹션도 다시 만들지 않는다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+            // 1회차(S01, S02) 이후로 어떤 단계도 다시 만들지 않는다.
+            await aiService.Received(2).GenerateBatchStepSectionAsync(
+                Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            // 리뷰는 두 번(1회 정상 + 1회 재호출) 불려야 한다.
+            await aiService.Received(2).ReviewConsolidatedPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
 
         /// <summary>
@@ -6980,26 +7058,20 @@ SELECT 1;
         }
 
         /// <summary>
-        /// 코드 리뷰 지적 사항 픽스: 오케스트레이터 레벨 필터
-        /// (RunConsolidatedPipelineAsync ~1922-1928)와 GenerateBySplitAsync 내부
-        /// 필터(~2318)는 서로 다른 질문에 답한다 — 겉보기 동작이 겹쳐 보였을 뿐
-        /// 대체 관계가 아니다. 안쪽 필터는 "이미 targeted 모드에 들어간 뒤 어느
-        /// 단계를 건드릴지"를 정한다. 바깥쪽(오케스트레이터) 필터는 "지목된 코드
-        /// 중 유효한 것이 하나라도 있어 targeted 모드에 들어갈 자격이 있는지"를
-        /// 정한다. Critic이 지목한 코드가 전부 지어낸 것이면 바깥쪽 필터가
-        /// pendingDefectiveSteps를 비워 다음 회차가 targeted가 아니라 전체
-        /// 재생성으로 폴백해야 한다. 바깥쪽 필터가 없으면 pendingDefectiveSteps에
-        /// 지어낸 코드("S99")가 그대로 남아 defectiveSteps.Count &gt; 0이 되고,
-        /// GenerateBySplitAsync는 targeted 모드로 들어가지만 그 안쪽 필터가
-        /// "S99"와 매칭되는 단계를 하나도 찾지 못해 pending이 빈 목록이 된다 —
-        /// 즉 단 하나의 단계도 다시 만들지 않고 결함 있는 본문을 그대로 Critic에게
-        /// 다시 제출하는 조용한 무동작(no-op)이 발생한다.
+        /// 지어낸 코드("S99", 목차에 없는 코드)만 지목된 경우, 오케스트레이터
+        /// 레벨 필터(StepFreezeState.OpenSteps)가 그것을 걸러 pendingDefectiveSteps를
+        /// 비운다. 예전에는(Task 8 이전) 이 상태가 "지목 없음"과 같이 취급돼
+        /// 골격부터 전체 재생성을 불렀다.
         ///
-        /// 리뷰어가 실제로 이 버그를 재현해 두 단계 모두 생성 호출이 2회에서
-        /// 1회로 줄어드는 것을 확인했다. 이 테스트가 그 사실을 고정한다.
+        /// Task 8 이후에는 pendingDefectiveSteps가 비고 SkeletonDefective/
+        /// StructureDefective도 없으면 "결함이 있다면서 자리를 못 댄 리뷰"로 분류돼
+        /// 재생성 없이 리뷰만 다시 부른다(§3-2(a)) - 지어낸 코드도 실질적으로
+        /// "자리를 못 댐"의 한 형태이기 때문이다. 그래서 이 시나리오는 이제
+        /// RunConsolidatedPipeline_WithoutDefectiveSteps_RetriesReviewWithoutRegenerating와
+        /// 같은 모양으로 끝난다 - 골격도 어떤 단계도 다시 만들지 않는다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipeline_WithOnlyInventedDefectiveSteps_FallsBackToFullRegeneration()
+        public async Task RunConsolidatedPipeline_WithOnlyInventedDefectiveSteps_RetriesReviewWithoutRegenerating()
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -7024,21 +7096,21 @@ SELECT 1;
 
             await RunBatchPipeline(aiService);
 
-            // 지목 코드가 전부 지어낸 것이면 targeted 모드에 들어갈 자격이 없다.
-            // 골격을 다시 만들어야 한다(1회차 최초 생성 + 2회차 전체 재생성 = 2회).
-            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+            // 지어낸 코드만 지목된 상태는 지목 없음과 같은 취급을 받는다 - 재생성
+            // 없이 리뷰만 다시 부른다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
-            // 두 단계 모두 전체 재생성 대상이다. 하나라도 1회면 그 단계가 조용히
-            // 재사용되며 결함 있는 본문이 그대로 다시 제출된 것이다.
-            await aiService.Received(2).GenerateBatchStepSectionAsync(
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
-            await aiService.Received(2).GenerateBatchStepSectionAsync(
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await aiService.Received(2).ReviewConsolidatedPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
 
         // 재수립된 목차용 골격. 코드가 다른 목차로 문서가 다시 조립될 때 배너가
@@ -7705,11 +7777,14 @@ SELECT 1;
         /// LegacyProcedures에도 없으니 매 재시도 회차마다 "커버되지 않음"으로
         /// 잘못 보고된다. 검사는 반드시 원본 specs 인자와 대조해야 한다.
         ///
-        /// 1회차를 결함으로 실패시켜 feedbackLog를 만들고, 2회차의 골격 호출에
-        /// 실제로 Feedback_Log.txt가 섞여 들어갔는지 먼저 확인해(안 그러면 아래
-        /// 부재 단언이 이 경로를 지나지 않고 우연히 통과했을 수 있다) 그 경로가
-        /// 정말 실행됐음을 증명한 뒤, 최종 문서에 그 파일명이 커버리지 누락으로
-        /// 보고되지 않았음을 확인한다.
+        /// 1회차는 S01을 지목한 결함으로 실패시켜 feedbackLog를 만든다(지목이
+        /// 있어야 Task 8의 재호출 게이트를 타지 않고 실제 재생성 회차로 이어진다 -
+        /// 지목이 없으면 재생성 자체가 일어나지 않아 이 테스트가 노리는 경로를
+        /// 볼 수 없다). 2회차의 지목 재생성이 실제로 Feedback_Log.txt가 섞인
+        /// specsCopy를 받았는지 먼저 확인해(안 그러면 아래 부재 단언이 이 경로를
+        /// 지나지 않고 우연히 통과했을 수 있다) 그 경로가 정말 실행됐음을 증명한
+        /// 뒤, 최종 문서에 그 파일명이 커버리지 누락으로 보고되지 않았음을
+        /// 확인한다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipeline_AfterFeedbackRetry_DoesNotReportFeedbackLogAsUncoveredProcedure()
@@ -7728,24 +7803,25 @@ SELECT 1;
                     return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
                 });
 
-            // 1회차는 결함으로 실패시켜 feedbackLog를 만든다. 2회차는 점수가
-            // 올라 통과한다.
+            // 1회차는 S01을 지목한 결함으로 실패시켜 feedbackLog를 만든다. 2회차는
+            // 점수가 올라 통과한다.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(_ => reviewCall++ == 0
-                    ? new ReviewResult { HasDefects = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
+                    ? new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
                     : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
 
             var result = await RunBatchPipeline(aiService);
 
             Assert.Equal(VerificationOutcome.Passed, result.Outcome);
 
-            // 이 테스트가 실제로 노리는 경로를 먼저 확인한다: 2회차 골격 호출이
-            // 진짜로 Feedback_Log.txt를 포함한 specsCopy를 받았는가.
-            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
-                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+            // 이 테스트가 실제로 노리는 경로를 먼저 확인한다: 2회차 S01 지목
+            // 재생성이 진짜로 Feedback_Log.txt를 포함한 specsCopy를 받았는가.
+            // (골격은 캐시를 재사용해 다시 불리지 않으므로 지목 재생성 호출을 본다.)
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Is<List<(string, string)>>(specs => specs.Any(s => s.Item1 == "Feedback_Log.txt")),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+                Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
 
             // 핵심 불변식: Feedback_Log.txt는 프로시저 명세서가 아니므로 커버리지
             // 검사 대상이 아니다.
@@ -8027,11 +8103,12 @@ SELECT 1;
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = SkeletonMarkdown });
 
-            // 코드별 생성 회차를 센다. 1차 시도는 두 단계 모두 회차 1을 낸다. 정체로
-            // 인한 2차 시도는 (지목 없이 전면 재생성이므로) 두 단계 모두 회차 2를
-            // 내지만 점수가 더 낮아 채택되지 않는다. 구제는 1차를 채택해야 하므로,
-            // 뒤이은 L3 지목 재생성에서 지목되지 않은 S01은 "회차 1"을 그대로 실어야
-            // 한다 — 캐시가 되감기지 않으면 "회차 2"가 새어 나온다.
+            // 코드별 생성 회차를 센다. 1차 시도는 두 단계 모두 회차 1을 낸다. 2차
+            // 시도는 (S01·S02를 함께 지목해 targeted 경로로 둘 다 다시 만들므로)
+            // 두 단계 모두 회차 2를 내지만 점수가 더 낮아 채택되지 않는다. 구제는
+            // 1차를 채택해야 하므로, 뒤이은 L3 지목 재생성에서 지목되지 않은
+            // S01은 "회차 1"을 그대로 실어야 한다 — 캐시가 되감기지 않으면
+            // "회차 2"가 새어 나온다.
             var sectionCallCounts = new Dictionary<string, int>();
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -8048,12 +8125,15 @@ SELECT 1;
 
             // 1차는 결함이 있지만 최고점, 2차는 결함이 있고 더 낮은 점수 → maxL2Attempts="1"
             // (=_maxAttempts 2)이므로 2차에서 예산이 소진돼 RetryRescue가 1차를 채택한다.
+            // 두 회차 모두 S01·S02를 함께 지목한다 - 섹션 캐시가 있는 채로 지목이
+            // 비면(Task 8 이후) 재생성 자체가 일어나지 않으므로, 이 테스트가 노리는
+            // "2차가 실제로 두 단계를 다시 만든다"를 보려면 지목이 있어야 한다.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(_ => ++reviewCall switch
                 {
-                    1 => new ReviewResult { HasDefects = true, FeedbackComment = "보완", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
-                    _ => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 보완", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 }
+                    1 => new ReviewResult { HasDefects = true, DefectiveSteps = { "S01", "S02" }, FeedbackComment = "보완", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    _ => new ReviewResult { HasDefects = true, DefectiveSteps = { "S01", "S02" }, FeedbackComment = "여전히 보완", ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5 }
                 });
 
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
