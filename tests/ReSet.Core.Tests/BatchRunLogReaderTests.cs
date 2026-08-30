@@ -140,13 +140,63 @@ namespace ReSet.Core.Tests
             Assert.Equal(2, metrics.MonotonicityViolations);
         }
 
+        // [Fix Round 3 - Important 4] 이름과 뜻이 바뀌었다. "L1 소진 회차"는 로그에
+        // "L1 기계 검증 오류 발견" 줄이 몇 번 찍혔는지가 아니라 "채점을 받지 못한
+        // 회차가 몇 개인가"다. §3-3 이후로는 L1 위반이 귀속·수리되면 같은 줄이
+        // 찍히면서도 채점 예산을 먹지 않는다(Read_AttributedAndRepairedL1Violation_
+        // DoesNotCountAsUnscored가 그 경우를 고정한다) - 그래서 줄 수를 세면 안 되고,
+        // TotalAttempts - Trajectory.Count(채점된 회차 수)를 써야 한다. Batch4
+        // 기준선은 두 계산이 우연히 같은 값(2)을 내는데, 그 규칙이 바뀌던 시절
+        // (L1 실패 = 곧 전량 재생성 = 곧 회차 소모)의 유물일 뿐이다.
         [Fact]
-        public void Read_CountsL1ExhaustedAttempts()
+        public void Read_CountsUnscoredAttempts()
         {
             var metrics = BatchRunLogReader.Read(Batch4Shape);
 
-            Assert.Equal(2, metrics.L1ExhaustedAttempts);
+            Assert.Equal(2, metrics.UnscoredAttempts);
             Assert.Equal(6, metrics.TotalAttempts);
+        }
+
+        // Important 4가 지목한 회귀 시나리오: §3-3 이후 L1 위반이 귀속·수리되면
+        // "L1 기계 검증 오류 발견 (시도 N/M)" 줄이 찍히지만, 같은 회차가 결국
+        // 채점까지 도달한다. 줄 수로 세면(옛 규칙) 이 경우도 1회 소진으로 잘못
+        // 세지만, 새 규칙(TotalAttempts - Trajectory.Count)은 회차가 실제로
+        // 채점됐으므로 0을 낸다.
+        [Fact]
+        public void Read_AttributedAndRepairedL1Violation_DoesNotCountAsUnscored()
+        {
+            var log = """
+                2026-08-29 10:00:00.000 +09:00 [WRN] [Job] L1 기계 검증 오류 발견 (시도 1/6):
+                2026-08-29 10:01:00.000 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료
+                2026-08-29 10:01:00.001 +09:00 [DBG] [AI 응답 내용]:
+                {
+                  "ScoreAccuracy": 8,
+                  "ScoreCrud": 8,
+                  "ScoreInterface": 8,
+                  "ScoreException": 8,
+                  "ScoreReadability": 8
+                }
+                """;
+
+            var metrics = BatchRunLogReader.Read(log);
+
+            Assert.Equal(1, metrics.TotalAttempts);
+            Assert.Single(metrics.Trajectory);
+            Assert.Equal(0, metrics.UnscoredAttempts);
+        }
+
+        // 조용한 0. `MaxL2Attempts: "unlimited"`이면 로그가 "(시도 3/검증 완료까지)"를
+        // 찍는다(ConsoleUserInteraction.cs:97). 분모가 숫자가 아니라고 회차 번호(분자)
+        // 파싱까지 통째로 실패하면 TotalAttempts가 조용히 0이 되어 "성공"처럼 읽힌다 -
+        // "못 읽었다"와 "0이다"는 다른 사실이어야 한다.
+        [Fact]
+        public void Read_UnlimitedMaxAttempts_StillParsesAttemptNumber()
+        {
+            var log = "2026-08-29 10:00:00.000 +09:00 [WRN] [Job] L1 기계 검증 오류 발견 (시도 3/검증 완료까지):";
+
+            var metrics = BatchRunLogReader.Read(log);
+
+            Assert.Equal(3, metrics.TotalAttempts);
         }
 
         [Fact]
@@ -170,12 +220,34 @@ namespace ReSet.Core.Tests
             Assert.Equal(23, metrics.WallClock.Value.Minutes);
         }
 
+        // [Fix Round 3 - Minor 5] 옛 RedraftLine은 L2 정체 재설계("재시도가 점수를
+        // 개선하지 못해...")와 L3 사용자 요청 재설계("사용자가 문서 구조 변경을
+        // 요청하여...")를 같은 필드로 뭉갰다 - 루프 사건과 사람의 행동이 다른데도.
+        // Batch4Shape에는 L2 정체 재설계만 있다.
         [Fact]
-        public void Read_DetectsStructureRedraft()
+        public void Read_DetectsLoopStagnationRedraft()
         {
             var metrics = BatchRunLogReader.Read(Batch4Shape);
 
-            Assert.True(metrics.StructureRedrafted);
+            Assert.True(metrics.LoopStagnationRedrafted);
+            Assert.False(metrics.UserRequestedRedrafted);
+        }
+
+        // 두 사건이 실제로 갈리는지 직접 고정한다 - 문구가 다르면 서로 다른 필드에만
+        // 잡혀야 한다.
+        [Fact]
+        public void Read_DistinguishesLoopStagnationRedraftFromUserRequestedRedraft()
+        {
+            var loopOnly = "2026-08-29 10:00:00.000 +09:00 [INF] Job - 재시도가 점수를 개선하지 못해 목차를 다시 설계합니다...";
+            var userOnly = "2026-08-29 10:00:00.000 +09:00 [INF] Job - 사용자가 문서 구조 변경을 요청하여 목차를 다시 설계합니다...";
+
+            var loopMetrics = BatchRunLogReader.Read(loopOnly);
+            var userMetrics = BatchRunLogReader.Read(userOnly);
+
+            Assert.True(loopMetrics.LoopStagnationRedrafted);
+            Assert.False(loopMetrics.UserRequestedRedrafted);
+            Assert.False(userMetrics.LoopStagnationRedrafted);
+            Assert.True(userMetrics.UserRequestedRedrafted);
         }
 
         // 실물 로그는 같은 점수 블록을 [AI 응답 내용]과 [추출된 JSON 내용]으로 두 번
@@ -318,9 +390,10 @@ namespace ReSet.Core.Tests
             // 검증하려는 핵심 오라클이다.
             Assert.Equal(new[] { 78, 76, 84, 74 }, metrics.Trajectory.Select(a => a.NormalizedScore).ToArray());
             Assert.Equal(2, metrics.MonotonicityViolations);
-            Assert.Equal(2, metrics.L1ExhaustedAttempts);
+            Assert.Equal(2, metrics.UnscoredAttempts);
             Assert.Equal(6, metrics.TotalAttempts);
-            Assert.True(metrics.StructureRedrafted);
+            Assert.True(metrics.LoopStagnationRedrafted);
+            Assert.False(metrics.UserRequestedRedrafted);
 
             // 토큰 합계·벽시계는 발췌에 실제로 담긴 줄에서 나오는 값이다 - 전체 로그의
             // 합계가 아니다. 발췌는 토큰 사용량 줄 3개(238908+10069+255039 캐시 쓰기,

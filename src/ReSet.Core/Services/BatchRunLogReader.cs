@@ -19,17 +19,39 @@ namespace ReSet.Core.Services
     /// <summary>
     /// 실행 한 판의 재현성 지표. WallClock이 nullable인 이유: 재료가 없을 때
     /// 0으로 채우면 "0초에 끝났다"는 거짓 측정값이 남는다.
+    ///
+    /// <para>
+    /// [2026-08-30 수정 - Fix Round 3, Important 4] <c>UnscoredAttempts</c>는
+    /// "L1 오류 로그 줄이 몇 번 찍혔는가"가 아니라 "채점을 받지 못한 회차가 몇
+    /// 개인가"다. 이 둘은 다르다 - §3-3 이후로는 L1 위반이 단계에 귀속되어
+    /// 수리되면, "L1 기계 검증 오류 발견 (시도 N/M)" 줄이 여전히 찍히면서도
+    /// 그 회차가 결국 채점까지 도달할 수 있다(예산을 먹지 않는다). 로그 줄 수를
+    /// 세면 이 경우를 소진으로 오판해, §3-3이 만들려는 개선이 판정에서
+    /// 사라진다. 그래서 "TotalAttempts - Trajectory.Count(채점된 회차 수)"로
+    /// 계산한다 - 이 값만이 "채점을 못 받은 회차의 수"라는 정의와 일치한다.
+    /// Batch4 기준선에서 둘(줄 수 대 이 계산)이 우연히 같은 값(2)을 내는 것은
+    /// 그 로그가 "L1 실패 = 곧 전량 재생성 = 곧 회차 소모"였던 옛 규칙 아래서
+    /// 났기 때문이지, 이 계산이 늘 로그 줄 수와 같다는 뜻이 아니다.
+    /// </para>
     /// </summary>
     public sealed record BatchRunMetrics(
         IReadOnlyList<AttemptScore> Trajectory,
         int MonotonicityViolations,
-        int L1ExhaustedAttempts,
+        int UnscoredAttempts,
         int TotalAttempts,
         long CacheWriteTokens,
         long CacheReadTokens,
         long OutputTokens,
         TimeSpan? WallClock,
-        bool StructureRedrafted);
+        // [Fix Round 3 - Minor 5] 옛 하나의 StructureRedrafted 필드는 L2 정체
+        // 재설계(루프가 스스로 판단해 다시 그리는 사건)와 L3 사용자 요청
+        // 재설계(사람이 명시적으로 요구한 행동)를 같은 불리언으로 뭉갰다.
+        // 두 사건은 로그 문구로 갈린다 - VerificationPipelineOrchestrator.cs의
+        // 두 호출 지점이 각각 "재시도가 점수를 개선하지 못해..."와 "사용자가
+        // 문서 구조 변경을 요청하여..."로 서로 다른 접두문을 쓰기 때문에,
+        // 정규식으로 정직하게 갈랐다.
+        bool LoopStagnationRedrafted,
+        bool UserRequestedRedrafted);
 
     /// <summary>
     /// 실행 로그에서 재현성 지표를 뽑는다.
@@ -75,14 +97,27 @@ namespace ReSet.Core.Services
         private static readonly Regex ScoreLine = new(
             @"""Score(?<axis>Accuracy|Crud|Interface|Exception|Readability)""\s*:\s*(?<value>\d+)",
             RegexOptions.Compiled);
-        private static readonly Regex AttemptLine = new(@"\(시도 (?<n>\d+)/(?<max>\d+)\)", RegexOptions.Compiled);
-        private static readonly Regex L1Line = new(@"L1 기계 검증 오류 발견 \(시도 \d+/\d+\)", RegexOptions.Compiled);
+        // [Fix Round 3 - 조용한 0] max가 항상 숫자라고 가정하면 안 된다.
+        // `MaxL2Attempts: "unlimited"`이면 ConsoleUserInteraction.cs:97이
+        // "(시도 3/검증 완료까지)"를 찍는다 - 분모가 숫자가 아니라고 분자(회차
+        // 번호) 파싱까지 실패하면 TotalAttempts가 조용히 0이 되어 "회차가
+        // 없었다"는 거짓 성공처럼 읽힌다. 그래서 분모는 숫자 또는 이 리터럴
+        // 문구 중 하나를 받는다.
+        private static readonly Regex AttemptLine = new(
+            @"\(시도 (?<n>\d+)/(?:\d+|검증 완료까지)\)", RegexOptions.Compiled);
         private static readonly Regex UsageLine = new(
             @"캐시 쓰기:\s*(?<w>\d+),\s*캐시 읽기:\s*(?<r>\d+),\s*출력:\s*(?<o>\d+)",
             RegexOptions.Compiled);
         private static readonly Regex TimestampLine = new(
             @"^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+", RegexOptions.Compiled);
-        private static readonly Regex RedraftLine = new(@"목차를 다시 설계합니다", RegexOptions.Compiled);
+
+        // [Fix Round 3 - Minor 5] 두 재설계 사건을 접두문으로 가른다. 접미
+        // "목차를 다시 설계합니다"는 공유하지만, 앞의 주어·이유가 사건의 출처를
+        // 정직하게 말해준다(VerificationPipelineOrchestrator.cs:2433, :2752).
+        private static readonly Regex LoopStagnationRedraftLine = new(
+            @"재시도가 점수를 개선하지 못해 목차를 다시 설계합니다", RegexOptions.Compiled);
+        private static readonly Regex UserRequestedRedraftLine = new(
+            @"사용자가 문서 구조 변경을 요청하여 목차를 다시 설계합니다", RegexOptions.Compiled);
 
         public static BatchRunMetrics Read(string? logText)
         {
@@ -90,9 +125,10 @@ namespace ReSet.Core.Services
 
             var trajectory = new List<AttemptScore>();
             long cacheWrite = 0, cacheRead = 0, output = 0;
-            int l1Exhausted = 0, totalAttempts = 0;
+            int totalAttempts = 0;
             DateTime? first = null, last = null;
-            var redrafted = false;
+            var loopStagnationRedrafted = false;
+            var userRequestedRedrafted = false;
 
             var collecting = false;
             var linesSinceAnchor = 0;
@@ -163,8 +199,13 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                if (L1Line.IsMatch(line)) l1Exhausted++;
-                if (RedraftLine.IsMatch(line)) redrafted = true;
+                // [Fix Round 3 - Important 4] L1 오류 줄 자체는 더 이상 세지 않는다.
+                // 귀속·수리된 L1 위반도 같은 줄을 찍으면서 채점까지 도달할 수 있어,
+                // 줄 수가 "채점 못 받은 회차 수"와 더 이상 같지 않다. 아래 루프 끝의
+                // UnscoredAttempts = TotalAttempts - Trajectory.Count가 그 정의를
+                // 직접 계산한다.
+                if (LoopStagnationRedraftLine.IsMatch(line)) loopStagnationRedrafted = true;
+                if (UserRequestedRedraftLine.IsMatch(line)) userRequestedRedrafted = true;
 
                 var attempt = AttemptLine.Match(line);
                 if (attempt.Success)
@@ -182,16 +223,26 @@ namespace ReSet.Core.Services
                 }
             }
 
+            // "채점을 받지 못한 회차의 수"의 정의 그 자체. 로그 줄 수가 아니라
+            // TotalAttempts(관측된 최대 시도 번호)에서 Trajectory.Count(실제로
+            // 5축이 다 채워져 채점된 회차 수)를 뺀다. Math.Max(0, ...)는 방어적
+            // 하한이다 - 두 수가 서로 다른 신호(하나는 "(시도 N/M)" 텍스트, 하나는
+            // 앵커+점수 블록)에서 나오므로, 로그가 부분적이거나 형식이 어긋나면
+            // 이론상 음수가 나올 수 있다. 그럴 땐 "모른다"에 가까운 0이 "음수
+            // 소진"이라는 무의미한 값보다 낫다.
+            var unscoredAttempts = Math.Max(0, totalAttempts - trajectory.Count);
+
             return new BatchRunMetrics(
                 trajectory,
                 CountMonotonicityViolations(trajectory),
-                l1Exhausted,
+                unscoredAttempts,
                 totalAttempts,
                 cacheWrite,
                 cacheRead,
                 output,
                 first.HasValue && last.HasValue ? last.Value - first.Value : null,
-                redrafted);
+                loopStagnationRedrafted,
+                userRequestedRedrafted);
         }
 
         /// <summary>
