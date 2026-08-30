@@ -46,18 +46,24 @@ namespace ReSet.Core.Services
 
                 if (!fenceFlags[i])
                 {
-                    var heading = TryReadStepHeading(line, steps);
-                    if (heading != null)
+                    var (isHeading, code) = ReadStepHeading(line, steps);
+                    if (isHeading)
                     {
-                        currentStep = heading;
+                        // 헤딩을 만나면 항상 갱신한다 - 코드가 확정되면 그 코드로,
+                        // 확정되지 않으면(아래 ReadStepHeading 참고) null로 리셋한다.
+                        // "헤딩인데 판정 불가"를 "헤딩이 아니다"와 같게 다루면(= 갱신하지
+                        // 않으면) 직전의 무관한 단계가 currentStep에 그대로 남아, 그 뒤
+                        // 어휘가 엉뚱한 단계로 새어 들어간다 - 억지 귀속과 같은 결과다.
+                        currentStep = code;
                         continue;
                     }
                 }
 
                 if (line.IndexOf(lexeme, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    // currentStep이 null이면 아직 어떤 단계 섹션에도 들어가지 않았다는 뜻 -
-                    // 공통 규약 절의 어휘이므로 단계에 붙이지 않는다.
+                    // currentStep이 null이면 아직 어떤 단계 섹션에도 들어가지 않았거나
+                    // (공통 규약 절), 판정 불가한 헤딩 아래로 들어와 리셋됐다는 뜻이다.
+                    // 어느 쪽이든 단계에 억지로 붙이지 않는다.
                     return currentStep;
                 }
             }
@@ -66,13 +72,24 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 한 줄이 단계 헤딩인지, 헤딩이라면 어느 단계 코드를 선언하는지를 함께 돌려준다.
+        ///
+        /// 반환을 <c>(IsHeading, Code)</c> 둘로 나누는 이유: 호출부가 세 상태를 구분해야
+        /// 한다 - 헤딩이 아니면 currentStep을 그대로 두고, 헤딩이면서 코드가 확정되면
+        /// 그 코드로 갱신하고, 헤딩인데 코드를 확정할 수 없으면(<c>IsHeading=true,
+        /// Code=null</c>) currentStep을 리셋해야 한다. 코드 하나만 돌려주면(이전 버전처럼)
+        /// 뒤의 두 경우가 똑같이 "null"이 되어 구분이 사라진다 - 실측(BatchStepPlan.cs
+        /// 주석)의 "### P20~P23." 같은 여러 단계를 묶은 헤딩이 그 구분 없이는 직전의
+        /// 무관한 단계(P19)로 잘못 귀속됐다.
+        ///
         /// `### S02. 이름` 또는 `#### S02. 이름` 꼴에서 목차가 아는 단계 코드를 읽는다.
         ///
         /// 헤딩 레벨을 `###`로 고정하지 않는 이유: 실측 산출물이 이미 갈린다
         /// (BatchStepPlan 참고) - 한쪽은 단계를 H3에, 다른 쪽은 H4에 두면서 같은 H4에
         /// 단계가 아닌 헤딩(`#### Phase 1.`)을 섞는다. 레벨로 가르는 대신 "헤딩이 선언하는
         /// 선행 코드가 정확히 무엇인가"로 가른다 - `#### Phase 1.`은 선행 토큰이
-        /// "Phase"라 어떤 단계 코드와도 같지 않으므로 자연히 걸러진다.
+        /// "Phase"라 어떤 단계 코드와도 같지 않으므로 자연히 걸러진다(Code=null이지만
+        /// IsHeading=true이므로 currentStep은 리셋된다).
         ///
         /// 선행 토큰만 보는 이유(부분 문자열 포함 판정을 쓰지 않는 이유):
         /// PlanBoundaryResolver.TryLocateByCode가 이미 겪은 함정이다 - "### S02 (S01 이후)"
@@ -80,27 +97,31 @@ namespace ReSet.Core.Services
         /// 귀속되고, 억지 귀속은 멀쩡한 단계를 다시 쓰게 만든다. 헤딩이 스스로 선언하는
         /// 선행 코드만 인정하면 이 함정을 원천에서 피한다.
         ///
-        /// 선행 토큰이 어느 코드와도 정확히 같지 않으면(하나로 판정할 수 없으면) null이다 -
-        /// 목차에 없는 코드와 같은 이유로, 판정 불가한 헤딩은 경계로 쓰지 않는다.
+        /// 선행 토큰이 어느 코드와도 정확히 같지 않으면(하나로 판정할 수 없으면) Code는
+        /// null이다 - "### P20~P23."처럼 여러 단계를 묶은 헤딩, 목차에 없는 코드, 코드와
+        /// 무관한 하위 헤딩이 모두 이 경우다.
         /// </summary>
-        private static string? TryReadStepHeading(string line, IReadOnlyList<BatchStepPlan> steps)
+        private static (bool IsHeading, string? Code) ReadStepHeading(
+            string line, IReadOnlyList<BatchStepPlan> steps)
         {
             var trimmed = line.TrimStart();
-            if (!trimmed.StartsWith("#", StringComparison.Ordinal)) return null;
+            if (!trimmed.StartsWith("#", StringComparison.Ordinal)) return (false, null);
 
             var afterMarker = trimmed.TrimStart('#').TrimStart();
             var leadingToken = afterMarker
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
                 .FirstOrDefault();
-            if (string.IsNullOrEmpty(leadingToken)) return null;
+            if (string.IsNullOrEmpty(leadingToken)) return (true, null);
 
             var normalizedToken = leadingToken.Trim('.', ':', ')', ',', ';');
 
-            return steps
+            var code = steps
                 .Select(step => step.Code)
-                .FirstOrDefault(code =>
-                    !string.IsNullOrWhiteSpace(code) &&
-                    string.Equals(code, normalizedToken, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(c =>
+                    !string.IsNullOrWhiteSpace(c) &&
+                    string.Equals(c, normalizedToken, StringComparison.OrdinalIgnoreCase));
+
+            return (true, code);
         }
     }
 }

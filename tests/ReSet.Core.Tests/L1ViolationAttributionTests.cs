@@ -178,5 +178,62 @@ namespace ReSet.Core.Tests
 
             Assert.Equal("S02", code);
         }
+
+        // 실측(BatchStepPlan.cs 주석): 한 헤딩이 여러 단계를 묶기도 한다("### P20~P23.").
+        // 그 헤딩은 어느 코드로도 판정할 수 없으므로(P19도, P20~P23 중 어느 것도 정확히
+        // 같지 않다) 경계를 "판정 불가"로 리셋해야 한다. 리셋하지 않으면 그 아래 어휘가
+        // 직전의 무관한 단계(P19)로 새어 들어가 - 이 클래스가 막으려는 바로 그 오귀속이다.
+        [Fact]
+        public void LexemeUnderBundledMultiCodeHeading_ReturnsNull()
+        {
+            const string doc = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### P19. 정산 대사
+
+                ```sql
+                SELECT 1;
+                ```
+
+                ### P20~P23. 후처리 일괄
+
+                ```sql
+                BEGIN TRY
+                    SELECT 1;
+                END TRY
+                BEGIN CATCH
+                END CATCH
+                ```
+                """;
+            var steps = new[] { Step("P19"), Step("P20"), Step("P21"), Step("P22"), Step("P23") };
+
+            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Null(code);
+        }
+
+        // 무관한 하위 헤딩("#### Phase 1.")은 어느 단계 코드로도 판정되지 않는다.
+        // 판정 불가한 헤딩을 만나면 currentStep을 리셋해야 한다 - 그러지 않으면 그
+        // 헤딩 아래 어휘가 직전 단계(S01)로 새어 들어간다.
+        [Fact]
+        public void UnresolvedHeadingAfterKnownStep_ResetsCurrentStep()
+        {
+            const string doc = """
+                ### S01. 첫 단계
+
+                ```sql
+                SELECT 1;
+                ```
+
+                #### Phase 1. 무관한 하위 표시
+
+                END TRY
+                """;
+            var steps = new[] { Step("S01") };
+
+            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Null(code);
+        }
     }
 }
