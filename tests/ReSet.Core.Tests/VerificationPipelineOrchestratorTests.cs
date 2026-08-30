@@ -1961,8 +1961,16 @@ namespace ReSet.Core.Tests
         /// ("L1을 통과하지 못하는 문서")은 헤더가 통째로 빠진 <b>귀속 불가</b>(문서
         /// 전역) 위반이었다 - "귀속 성공이 채점 예산을 안 먹는다"를 증명하지 못하고
         /// 있었다(오히려 반대쪽 성질을 우연히 테스트했다). S01 섹션 안에서 실제로
-        /// 발견되는 어휘(`END TRY`)로 귀속이 성사되는 문서로 픽스처를 바꿔, 진짜
-        /// 귀속 성공 경로를 태운다.
+        /// 발견되는 어휘(`BEGIN TRY`·`END CATCH`)로 귀속이 성사되는 문서로 픽스처를
+        /// 바꿔, 진짜 귀속 성공 경로를 태운다.
+        ///
+        /// [FIX ROUND 2] 귀속을 끄는 것은 `END TRY`가 아니라 `BEGIN TRY`와
+        /// `END CATCH`다 - <see cref="MechanicalValidator.ViolationLexemes"/>는
+        /// SqlSideControlFlow 메시지의 <b>고정 문구</b>(`GOTO`·`IF @@ERROR &lt;&gt; 0`·
+        /// `BEGIN TRY`·`END CATCH`)에서만 백틱 토큰을 뽑는다 - SummarizeCodeTokenHits가
+        /// 덧붙이는 동적 꼬리(실제 발화 어휘·실물 줄)는 보지 않는다. 이 사실을 모르고
+        /// 픽스처의 SQL을 바꾸면(예: BEGIN TRY/END CATCH 없이 END TRY만 남기면) 어느
+        /// 고정 토큰도 문서에서 찾지 못해 귀속이 조용히 끊긴다.
         ///
         /// maxL2Attempts를 0으로 줘 채점 예산을 1회(attempt=1 고정)로 조인다 - 지목
         /// 재생성이 이 예산을 건드리면 두 번째 L1 검사 전에 즉시 소진되어 실패한다.
@@ -1985,9 +1993,11 @@ namespace ReSet.Core.Tests
                     var step = call.Arg<BatchStepPlan>();
                     if (step.Code == "S01" && ++s01Calls == 1)
                     {
-                        // 규칙 3-1(SQL 쪽 제어 흐름) 위반 - `END TRY`가 S01 섹션 안에서
-                        // 실제로 발견된다. 어휘 검색 귀속이 이 문자열을 문서에서 찾아
-                        // S01로 좁힌다.
+                        // 규칙 3-1(SQL 쪽 제어 흐름) 위반 - ViolationLexemes가 뽑는
+                        // 고정 토큰 `BEGIN TRY`·`END CATCH`가 S01 섹션 안에서 실제로
+                        // 발견된다(END TRY는 메시지 고정 문구에 없어 귀속에 쓰이지
+                        // 않는다). 어휘 검색 귀속이 이 문자열을 문서에서 찾아 S01로
+                        // 좁힌다.
                         return new AiResult
                         {
                             Content = $"### {step.Code} 단계\n\n대상은 {step.TargetTables[0]}이고 오류코드는 {step.ErrorCodes[0]}이다.\n\n" +
