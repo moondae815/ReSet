@@ -27,7 +27,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Batch4Roster_ClosesFromTwelveToFourteen()
         {
-            var repoRoot = RepoPaths.FindRepoRoot();
+            var repoRoot = TryFindRepoRoot();
             Skip.If(string.IsNullOrEmpty(repoRoot), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(repoRoot!, "output");
@@ -73,7 +73,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Closure_NeverAddsAFunctionSpec()
         {
-            var repoRoot = RepoPaths.FindRepoRoot();
+            var repoRoot = TryFindRepoRoot();
             Skip.If(string.IsNullOrEmpty(repoRoot), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(repoRoot!, "output");
@@ -91,6 +91,26 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain(
                 closure.SpecPaths,
                 p => p.Replace(Path.DirectorySeparatorChar, '/').Contains("/Functions/", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// RepoPaths.FindRepoRoot()는 ReSet.slnx가 없으면 null이 아니라 예외를
+        /// 던진다(CancellationPolicyScanner.cs:242-256) - 이 클래스가 예전에 쓰던
+        /// `Skip.If(string.IsNullOrEmpty(repoRoot), …)` 가드는 그래서 절대 발동하지
+        /// 않았다. AxisAGoldenCaseTests.TryFindRepoRoot()의 관용을 그대로 따른다 -
+        /// 테스트 어셈블리가 도는 환경이면 ReSet.slnx는 항상 있으므로(코퍼스 폴더의
+        /// 존재 여부와 무관하게 저장소 자체는 있다) 예외를 null로만 감싼다.
+        /// </summary>
+        private static string? TryFindRepoRoot()
+        {
+            try
+            {
+                return RepoPaths.FindRepoRoot();
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
         }
     }
 }
