@@ -668,6 +668,24 @@ namespace ReSet.Cli
                 stepConcurrency = 4;
             }
 
+            // L1 위반 수리 전용 예산. 채점 예산(MaxL2Attempts)과 분리한다 - 실측
+            // (POQSettleBatch4 2026-08-29)에서 6회 중 2회가 L1에서 소진돼 채점을
+            // 못 받았다. stepConcurrency와 같은 패턴(문자열 설정을 직접 파싱)을
+            // 쓰는 이유는 이 파일이 이미 AiSettings 정수 설정 전부를 이렇게 읽고
+            // 있어서다 - Configuration.GetValue<T>를 새로 끌어오면 같은 값을
+            // 두 가지 방식으로 읽는 것이 되어 다음에 셋 중 무엇을 볼지 헷갈린다.
+            var maxL1RepairAttemptsRaw = configuration["AiSettings:MaxL1RepairAttempts"];
+            if (!int.TryParse(maxL1RepairAttemptsRaw, out int maxL1RepairAttempts))
+            {
+                if (!string.IsNullOrEmpty(maxL1RepairAttemptsRaw))
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]경고: AiSettings:MaxL1RepairAttempts 값('{Markup.Escape(maxL1RepairAttemptsRaw)}')이 숫자가 아니어서 기본값 2를 사용합니다.[/]");
+                }
+
+                maxL1RepairAttempts = 2;
+            }
+
             var orchestrator = new VerificationPipelineOrchestrator(
                 dbService, 
                 aiService, 
@@ -682,7 +700,8 @@ namespace ReSet.Cli
                 criticEffort,
                 consolidatorEffort,
                 criticThresholdScore,
-                stepConcurrency
+                stepConcurrency,
+                maxL1RepairAttempts
             );
             var recursiveOrchestrator = new VerificationPipelineOrchestrator(
                 dbService,
@@ -698,7 +717,8 @@ namespace ReSet.Cli
                 criticEffort,
                 consolidatorEffort,
                 criticThresholdScore,
-                stepConcurrency
+                stepConcurrency,
+                maxL1RepairAttempts
             );
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
                 dbService,

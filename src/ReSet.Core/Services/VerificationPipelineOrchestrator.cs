@@ -29,6 +29,19 @@ namespace ReSet.Core.Services
         private readonly int _criticScoreThreshold;
         private readonly int _stepConcurrency;
 
+        /// <summary>
+        /// L1 위반 수리 시도의 상한. 채점 예산(_maxAttempts)과 분리돼 있다.
+        ///
+        /// 나눈 이유: 실측(POQSettleBatch4 2026-08-29)에서 6회 중 2회가 L1에서 소진되어
+        /// 채점조차 받지 못했다. L1 위반은 결정적 결함이라 자리를 특정할 수 있고, 그 자리만
+        /// 고치면 되는데도 채점 회차를 통째로 먹었다.
+        ///
+        /// RunCodeObjectPipelineAsync는 아직 이 예산을 쓰지 않는다 - _maxAttempts가
+        /// 그 경로의 L1·L2를 여전히 함께 센다. 이 필드는 RunConsolidatedPipelineAsync의
+        /// L1 분기에만 배선된다.
+        /// </summary>
+        private readonly int _maxL1RepairAttempts;
+
         public VerificationPipelineOrchestrator(
             IDbMetadataService dbService,
             IAiService aiService,
@@ -43,7 +56,8 @@ namespace ReSet.Core.Services
             string? criticEffort = null,
             string? consolidatorEffort = null,
             int criticScoreThreshold = 8,
-            int stepConcurrency = 1)     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
+            int stepConcurrency = 1,     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
+            int maxL1RepairAttempts = 2) // L1 위반 수리 전용 예산. 채점 예산과 분리한다.
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -59,6 +73,7 @@ namespace ReSet.Core.Services
             _criticScoreThreshold = criticScoreThreshold;
             // 0·음수는 1로 절상한다. 상한은 두지 않는다 — 사용자가 12를 원하면 12를 쓴다.
             _stepConcurrency = Math.Max(1, stepConcurrency);
+            _maxL1RepairAttempts = Math.Max(1, maxL1RepairAttempts);
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -75,11 +90,17 @@ namespace ReSet.Core.Services
                 _maxL2Attempts = 1; // 기본값
             }
 
-            // 이 예산은 L1 실패와 L2 실패가 공유한다. 설정 이름(MaxL2Attempts)과 달리
-            // L2 전용이 아니다 — L1에서 소진되면 채점된 후보 수가 설정값보다 적어진다.
-            // 2026-08-05 실행에서 3회 예산 중 1회를 L1 실패가 가져가 채점된 시도가 2회뿐이었다.
-            // 예산을 나누지 않기로 한 이유는 RetryRescue가 최고점 후보를 구제하므로
-            // 남는 손해가 "좋은 문서 상실"이 아니라 "개선 기회 1회 상실"이기 때문이다.
+            // [RunCodeObjectPipelineAsync] 이 예산은 아직 L1 실패와 L2 실패가 공유한다.
+            // 설정 이름(MaxL2Attempts)과 달리 L2 전용이 아니다 — L1에서 소진되면 채점된
+            // 후보 수가 설정값보다 적어진다. 2026-08-05 실행에서 3회 예산 중 1회를 L1
+            // 실패가 가져가 채점된 시도가 2회뿐이었다. 예산을 나누지 않기로 한 이유는
+            // RetryRescue가 최고점 후보를 구제하므로 남는 손해가 "좋은 문서 상실"이 아니라
+            // "개선 기회 1회 상실"이기 때문이다.
+            //
+            // [RunConsolidatedPipelineAsync] 이 경로는 위와 다르다 - L1 실패는
+            // _maxL1RepairAttempts(자기 예산)를 쓰고 이 _maxAttempts는 건드리지 않는다.
+            // 실측(POQSettleBatch4 2026-08-29)에서 6회 중 2회가 L1에서 소진돼 채점조차
+            // 못 받았기 때문이다.
             _maxAttempts = _maxL2Attempts == -1 ? -1 : 1 + _maxL2Attempts;
         }
 
@@ -1842,6 +1863,10 @@ namespace ReSet.Core.Services
 
             // 설정에 따른 최대 시도 횟수 적용 (N회 또는 검증 완료까지)
             int attempt = 1;
+            // L1 위반 수리 시도. attempt(채점 예산)와 분리한다 - 채점을 못 받은
+            // 회차를 "시도했다"로 세면 실측(POQSettleBatch4)처럼 6회 중 2회가
+            // 조용히 사라진다.
+            int l1RepairAttempt = 0;
             var bestAttempt = new BestAttempt();
             while (true)
             {
@@ -2004,11 +2029,73 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
 
-                    bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
+                    // L1 수리는 자기 예산을 쓴다. 채점 예산(attempt)은 올리지 않는다 -
+                    // 채점을 못 받은 회차를 "시도했다"로 세면 실측처럼 6회 중 2회가
+                    // 조용히 사라진다.
+                    l1RepairAttempt++;
+                    bool canRetry = l1RepairAttempt <= _maxL1RepairAttempts;
                     if (canRetry)
                     {
+                        // 위반을 단계에 귀속해 그 단계만 다시 뽑는다. 실측(POQSettleBatch4
+                        // 시도 3)의 L1 실패는 `END TRY` 하나였는데 문서 전체를 다시 만들었다.
+                        //
+                        // 귀속하지 못하면 pendingDefectiveSteps가 비고, 그러면 종전대로
+                        // 전량 재생성이 된다 - 억지로 아무 단계에나 붙이면 멀쩡한 단계를
+                        // 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
+                        //
+                        // 귀속은 두 갈래다. 위반 유형 자체가 자리를 아는 것은 그 규칙으로
+                        // 바로 귀속하고, 나머지만 어휘 검색으로 넘긴다.
+                        //
+                        // 나누는 이유: BatchRunRowNeverCreated와 LegacyReturnCodeNeverBound는
+                        // **없는 것이 위반**이라 문서에서 어휘를 찾을 수 없다. 어휘 검색에만
+                        // 맡기면 영원히 귀속 실패로 떨어져 전량 재생성을 부른다 - 설계서
+                        // §3-5(c) 표가 이 둘을 하드 귀속으로 규정한 이유가 그것이다.
+                        pendingDefectiveSteps.Clear();
+
+                        void AddOwner(string? code)
+                        {
+                            if (!string.IsNullOrEmpty(code) &&
+                                !pendingDefectiveSteps.Contains(code, StringComparer.OrdinalIgnoreCase))
+                            {
+                                pendingDefectiveSteps.Add(code);
+                            }
+                        }
+
+                        foreach (var detail in l1Result.DetailedErrors)
+                        {
+                            switch (detail.Type)
+                            {
+                                case ErrorType.BatchRunRowNeverCreated:
+                                    // RunId 발급 계약은 단계 목록의 첫 단계가 진다.
+                                    if (currentSteps is { Count: > 0 }) AddOwner(currentSteps[0].Code);
+                                    break;
+
+                                case ErrorType.LegacyReturnCodeNeverBound:
+                                    // 이 값의 거처는 오류 코드를 선언한 단계들이다.
+                                    foreach (var step in currentSteps ?? Enumerable.Empty<BatchStepPlan>())
+                                    {
+                                        if (step.ErrorCodes.Count > 0) AddOwner(step.Code);
+                                    }
+                                    break;
+
+                                default:
+                                    foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
+                                    {
+                                        AddOwner(L1ViolationAttribution.AttributeByLexeme(
+                                            consolidatedPlan, lexeme, currentSteps));
+                                    }
+                                    break;
+                            }
+                        }
+
+                        if (pendingDefectiveSteps.Count > 0)
+                        {
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", pendingDefectiveSteps)} 단계로 " +
+                                "좁혀 그 단계만 다시 만듭니다.");
+                        }
+
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
-                        attempt++;
                         continue;
                     }
                     else

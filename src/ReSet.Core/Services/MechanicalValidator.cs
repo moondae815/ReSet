@@ -277,6 +277,36 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// L1 위반 하나에서 문서를 훑을 어휘를 뽑는다. L1ViolationAttribution이
+        /// 이것으로 위반이 실린 단계를 찾는다.
+        ///
+        /// 백틱으로 감싼 토큰만 쓴다 - 검사 메시지는 규칙 설명과 어휘를 함께 싣는데,
+        /// 산문까지 문서에서 찾으면 아무 단계에나 걸린다. 어휘가 없는 메시지는
+        /// 귀속 대상이 아니다(문서 전역 위반이다).
+        ///
+        /// ValidationResult 전체가 아니라 DetailedError 하나를 받는 이유: 호출부가
+        /// 위반 유형별로 다른 귀속 규칙을 쓴다. 전체를 받으면 유형이 뭉개져
+        /// 하드 귀속 대상과 어휘 검색 대상을 가를 수 없다.
+        /// </summary>
+        public static IReadOnlyList<string> ViolationLexemes(DetailedError error)
+        {
+            var lexemes = new List<string>();
+            if (error == null) return lexemes;
+
+            foreach (Match match in Regex.Matches(
+                error.Message ?? string.Empty, @"`(?<token>[^`\n]{2,80})`"))
+            {
+                var token = match.Groups["token"].Value.Trim();
+                if (token.Length > 0 && !lexemes.Contains(token, StringComparer.OrdinalIgnoreCase))
+                {
+                    lexemes.Add(token);
+                }
+            }
+
+            return lexemes;
+        }
+
+        /// <summary>
         /// 단계 섹션 하나가 구현 지시서로서의 최소 요건을 갖췄는지 검사한다.
         ///
         /// 이 검사가 필요한 이유: 실측한 산출물에서 L2가 88점을 준 문서의 S10이

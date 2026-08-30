@@ -236,4 +236,56 @@ namespace ReSet.Core.Tests
             Assert.Null(code);
         }
     }
+
+    // MechanicalValidator.ViolationLexemes 테스트. L1ViolationAttribution.AttributeByLexeme가
+    // 검색할 어휘를 이 메서드가 DetailedError에서 뽑는다 - 둘은 짝을 이룬다.
+    //
+    // [계획서 결함 정정] 계획서 원문의 테스트 스니펫은 `ValidationResult`(Errors 컬렉션)를
+    // 넘겨 `MechanicalValidator.ViolationLexemes(result)`를 부르지만, 같은 계획서가
+    // 선언한 메서드 시그니처는 `ViolationLexemes(DetailedError error)`다 - 오케스트레이터의
+    // switch도 `l1Result.DetailedErrors`를 순회하며 `detail`(DetailedError) 하나씩 넘긴다.
+    // 계획서의 두 조각이 서로 다른 타입을 가정해 테스트가 컴파일되지 않는다. 실제 배선인
+    // DetailedError 시그니처를 기준으로 테스트를 맞춘다.
+    public class MechanicalValidatorViolationLexemesTests
+    {
+        // 실측(POQSettleBatch4 시도 3): 규칙 3-1 위반 메시지가 어휘를 백틱으로 싣는다 -
+        // "(발화 1건 · 어휘: `END TRY` · ...)". 산문까지 문서에서 찾으면 아무 단계에나 걸린다.
+        [Fact]
+        public void ViolationLexemes_ExtractsBacktickedTokensOnly()
+        {
+            var error = new DetailedError
+            {
+                Type = ErrorType.SqlSideControlFlow,
+                Message = "계획서의 코드 블록에서 SQL 문장이 자기 실행 결과를 보고 분기합니다. `END TRY` 를 쓰지 마십시오."
+            };
+
+            Assert.Equal(new[] { "END TRY" }, MechanicalValidator.ViolationLexemes(error));
+        }
+
+        [Fact]
+        public void ViolationLexemes_WithoutBackticks_ReturnsEmpty()
+        {
+            var error = new DetailedError { Type = ErrorType.General, Message = "문서 전역에 문제가 있습니다." };
+
+            Assert.Empty(MechanicalValidator.ViolationLexemes(error));
+        }
+
+        [Fact]
+        public void ViolationLexemes_Deduplicates()
+        {
+            var error = new DetailedError
+            {
+                Type = ErrorType.SqlSideControlFlow,
+                Message = "`END TRY` 금지, `END TRY` 를 다시 지적한다"
+            };
+
+            Assert.Single(MechanicalValidator.ViolationLexemes(error));
+        }
+
+        [Fact]
+        public void ViolationLexemes_NullError_ReturnsEmpty()
+        {
+            Assert.Empty(MechanicalValidator.ViolationLexemes(null!));
+        }
+    }
 }

@@ -1956,6 +1956,49 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
         }
 
+        /// <summary>
+        /// 실측(POQSettleBatch4): 6회 중 2회가 L1에서 소진되어 채점을 못 받았다.
+        /// L1 위반은 결정적 결함이므로 자기 예산으로 처리하고 채점 예산을 건드리면 안 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_L1Failure_DoesNotConsumeScoringBudget()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var badPlan = "L1을 통과하지 못하는 문서";
+            var goodPlan = header + "\nOK";
+
+            // 채점 예산 1회(총 시도 2회) + L1 수리 예산 2회.
+            // L1이 예산을 공유하면 badPlan 두 번으로 소진되어 goodPlan에 도달하지 못한다.
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4",
+                maxL1RepairAttempts: 2);
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = badPlan }),
+                    _ => Task.FromResult(new AiResult { Content = badPlan }),
+                    _ => Task.FromResult(new AiResult { Content = goodPlan }));
+
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), goodPlan, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                }));
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // L1을 두 번 수리하고도 채점 회차가 남아 통과에 도달한다.
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+            _userInteraction.Received(2).NotifyL1Errors("Job_Test", Arg.Any<int>(), Arg.Any<int>(), Arg.Any<List<string>>());
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L2ValidationError_AttemptsSelfCorrection()
         {
@@ -4338,7 +4381,10 @@ namespace ReSet.Core.Tests
 
             Assert.NotNull(result.Plan);
             Assert.Contains("계획1고유표시", result.Plan);
-            Assert.Contains("3차 시도가 L1 기계 검증 실패로 중단되어", result.Plan);
+            // L1 수리는 자기 예산(maxL1RepairAttempts, 기본 2)을 쓰고 채점 예산(attempt)을
+            // 올리지 않는다 - 1차가 L2 결함으로 attempt를 2로 올린 뒤, 이어지는 L1 실패
+            // 두 번은 attempt를 그대로 둔다. 그래서 소진 시점의 채택 경위는 "2차"다.
+            Assert.Contains("2차 시도가 L1 기계 검증 실패로 중단되어", result.Plan);
             Assert.DoesNotContain("L1 기계 검증을 통과하지 못했습니다", result.Plan);
         }
 
