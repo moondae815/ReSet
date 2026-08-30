@@ -7231,6 +7231,158 @@ SELECT 1;
             Assert.Contains("-7", result.Plan);
         }
 
+        /// <summary>
+        /// FIX ROUND 2 - Critical: 누락된 원본 오류 코드가 그 코드를 선언한 단계로
+        /// 귀속되면 그 단계만 지목 재생성돼야 한다(설계서 §3-5(b)) - 골격을 포함한
+        /// 전량 재생성이 아니다. 이 귀속은 L1 귀속 블록(§3-5(c) 자리)에서 일어나야
+        /// 한다 - 오류 코드 누락 자체가 L1에서 판정되기 때문이다.
+        ///
+        /// 명세서 파일을 S01·S02용으로 각각 따로 둔다(USP_Spec1 -1, USP_Spec2 -9010) -
+        /// PlanStructureEnricher가 LegacyProcedures로 지목된 파일의 코드를 그 단계에
+        /// 병합하므로, 한 파일에 두 코드를 몰아 두면 두 코드 모두 그 파일을 가리키는
+        /// 유일한 단계로 병합돼 "선언 안 한 단계"를 재현할 수 없다. LegacyProcedures가
+        /// 비면 그 단계는 예약 대역 코드로 교체되므로(모델이 지어낸 코드 방지), S02도
+        /// 반드시 자기 몫의 LegacyProcedures를 선언해야 "-9010"이 그대로 남는다.
+        ///
+        /// 1회차 문서는 S02 섹션에 -9010이 빠져 있다 - L1이 결정적으로 잡는다.
+        /// 귀속되면(S02) L1 자기 예산으로 S02만 다시 뽑고, 골격과 S01은 건드리지
+        /// 않는다. 2회차의 S02 재생성은 -9010을 포함해 L1을 통과하고 L2도 통과한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenMissingErrorCodeIsAttributedToADeclaringStep_TargetsOnlyThatStep()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n    { \"Code\": \"S02\", \"Name\": \"둘째 단계\", \"LegacyProcedures\": [\"USP_Spec2\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-9010\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S02는 1회차의 내부 하한 재시도(GenerateStepSectionWithFloorRetryAsync,
+            // maxTries=5) 5번을 모두 -9010 없는 본문으로 소진시킨다 - 첫 시도만
+            // 실패시키면 그 내부 재시도가 스스로 회복해 문서 조립 전에 -9010이
+            // 채워져, 이 테스트가 검증하려는 "문서 조립 뒤 L1이 결정적으로 잡는"
+            // 경로 자체를 타지 않는다. 6번째 호출(2회차, L1의 targeted 재생성)부터
+            // 정상 본문(ErrorCodes[0] 포함)을 낸다.
+            var s02Calls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S02" && ++s02Calls <= 5)
+                    {
+                        return new AiResult { Content = "### S02 단계\n\n대상은 dbo.T2이다.\n\n```sql\nSELECT 1;\n```" };
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            // 명세서 둘: 하나는 -1(S01 몫), 다른 하나는 -9010(S02 몫)만 반환한다.
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -1 이다."),
+                ("dbo.USP_Spec2", "@po_intRetVal = -9010 이다."),
+            };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 골격은 한 번만 불린다 - 귀속이 성공해 지목 재생성(targeted)으로
+            // 갔다는 증거다. 실패했다면(귀속 안 됨) 전량 재생성이 되어 골격을
+            // 다시 불렀을 것이다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+
+            // S01은 건드리지 않는다(동결) - 한 번만 불린다.
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // S02는 1회차에 내부 하한 재시도 5회(모두 실패, 소진) + 2회차 L1 지목
+            // 재생성 1회(성공)로 총 6번 불린다.
+            await aiService.Received(6).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // L1이 S02로 좁혀 지목 재생성했다는 직접 증거.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("S02") && s.Contains("좁혀")));
+
+            // -9010은 S02가 선언했으므로 귀속이 성공한다 - 목차 결함이 아니다.
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
+        }
+
+        /// <summary>
+        /// FIX ROUND 2 - Critical: 어느 단계도 선언하지 않은 원본 오류 코드의 누락은
+        /// 본문이 아니라 목차의 결함이다(설계서 §3-5(b)). L1 귀속 블록에서 이 사실을
+        /// 잡아 machineFoundStructureDefect를 참으로 만들고 "목차 결함으로 기록합니다"
+        /// 배너를 띄워야 한다 - Task 8이 이 값을 재설계 조건에 반영한다.
+        ///
+        /// 명세서를 둘로 나눈다 - 하나(USP_Spec1)는 S01이 LegacyProcedures로 지목해
+        /// -1이 정상 병합되고, 다른 하나(USP_Orphan)는 어느 단계도 지목하지 않아
+        /// PlanStructureEnricher가 그 -7을 어떤 단계에도 병합하지 못한다(한 파일에
+        /// 두 코드를 몰아 두면 그 파일을 지목하는 유일한 단계에 둘 다 병합돼
+        /// "선언 안 한 단계"가 재현되지 않는다 - 위 테스트의 주석 참고). 그 결과
+        /// -7은 목차 어디에도 선언되지 않은 채로 남아 진짜 귀속 실패가 된다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenMissingErrorCodeHasNoDeclaringStep_ReportsStructureDefectOnce()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            // USP_Spec1의 -1은 S01이 지목해 정상 병합된다. USP_Orphan의 -7은 어느
+            // 단계도 LegacyProcedures로 지목하지 않아 목차 어디에도 선언되지 않는다.
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -1 이다."),
+                ("dbo.USP_Orphan", "@po_intRetVal = -7 이다."),
+            };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 귀속 실패이므로 채점 예산이 전량 재생성에 소비되고 결국 소진된다.
+            Assert.Equal(VerificationOutcome.L1Exhausted, result.Outcome);
+
+            // 핵심 단언: 어느 단계도 선언하지 않은 코드의 누락이 목차 결함으로
+            // 기록된다. 매 회차 반복되지 않고 상태가 새로 참이 된 처음 한 번만 뜬다.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
+        }
+
         // POQSettleProc7 재현: 모델이 빈 Steps 목록을 내면 분할이 무산되는데,
         // 종전에는 문서에 그 사실이 전혀 남지 않았다.
         [Fact]

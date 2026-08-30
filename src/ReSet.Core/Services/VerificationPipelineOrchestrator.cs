@@ -2055,6 +2055,29 @@ namespace ReSet.Core.Services
                     l1Result.IsValid = false;
                 }
 
+                // 누락 코드를 단계로 귀속한다(설계서 §3-5(b)). missingErrorCodes는
+                // 방금 위에서 이번 회차 값으로 채워졌다 - 오류 코드 검사는 L1에서
+                // 판정되므로 귀속도 여기서 일어나야 한다(FIX ROUND 2 리뷰 지적:
+                // L2 지목 수집부에 있던 자리는 L1 게이트가 이미 막아 항상 빈 입력만
+                // 받아 §3-5(b)가 구조적으로 도달 불가능했다).
+                //
+                // L1이 통과한 회차(missingErrorCodes 비었음)에도 매번 다시 계산한다 -
+                // if(!l1Result.IsValid) 안에서만 계산하면 그 회차에 결함이 없어 이
+                // 블록을 건너뛸 때 machineFoundStructureDefect가 직전 회차의 "참"
+                // 값을 그대로 들고 있다가 결함이 고쳐진 뒤에도 영원히 목차 결함으로
+                // 잘못 보고한다.
+                var codeAttribution = ErrorCodeAttribution.Attribute(missingErrorCodes, currentSteps);
+                var previouslyFoundStructureDefect = machineFoundStructureDefect;
+                machineFoundStructureDefect = codeAttribution.HasUnattributed;
+                // 상태가 새로 참이 될 때만 알린다 - 결함이 지속되는 매 회차마다 같은
+                // 배너를 반복하면 화면에서 진짜 변화를 가린다(FIX ROUND 1).
+                if (machineFoundStructureDefect && !previouslyFoundStructureDefect)
+                {
+                    _userInteraction.NotifyStatus(
+                        $"[yellow]{jobName}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
+                        "목차 결함으로 기록합니다.");
+                }
+
                 if (!l1Result.IsValid)
                 {
                     _userInteraction.NotifyL1Errors(jobName, attempt, _maxAttempts, l1Result.Errors);
@@ -2118,6 +2141,12 @@ namespace ReSet.Core.Services
                                 break;
                         }
                     }
+
+                    // 오류 코드 누락은 DetailedErrors에 실리지 않아(Errors 문자열로만
+                    // 실린다) 위 switch 순회로는 닿지 못한다. codeAttribution은 이
+                    // if 블록 진입 전에 이미 이번 회차 값으로 계산해 뒀다(위 참고) -
+                    // 여기서 다시 계산하지 않고 그 결과만 반영한다.
+                    foreach (var code in codeAttribution.StepCodes) AddOwner(code);
 
                     // 귀속 결과로 예산을 고른다. 지목 재생성(귀속 성공)은 L1 자기
                     // 예산을 쓰고 채점 예산(attempt)을 건드리지 않는다. 전량 재생성
@@ -2280,34 +2309,6 @@ namespace ReSet.Core.Services
                             "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
                             "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
 
-                        // 어느 단계도 선언하지 않은 원본 오류 코드가 누락됐다면 그것은
-                        // 본문이 아니라 목차의 결함이다(설계서 §3-5(b)). 재설계 판정
-                        // (바로 아래 TryConsume)보다 반드시 먼저 계산해야 한다 - 늦게
-                        // 계산하면(원래 위치는 재설계 판정 뒤였다) 이번 회차가 발견한
-                        // 사실이 재설계 판정에는 한 회차 늦게, 즉 다른 회차의 사실로
-                        // 반영된다(FIX ROUND 1 리뷰 지적). currentSteps는 재설계가
-                        // 발동하면 이 시점 이후 null로 바뀌므로(ClearSplitGenerationCacheAfterRedraft),
-                        // 그 전에 이번 회차 값으로 한 번만 계산해 두 자리(재설계 판정·
-                        // 아래 pendingDefectiveSteps 수집)가 같은 사실을 공유하게 한다.
-                        // 두 번 계산하면 같은 사실이 두 곳에서 갈라진다 - AttachPipelineBanners
-                        // 주석이 이미 경고하는 바로 그 결함이다.
-                        var codeAttribution = ErrorCodeAttribution.Attribute(missingErrorCodes, currentSteps);
-
-                        // 합치지 않으면 HasUnattributed가 소비자 없는 신호로 남는다 -
-                        // 만들어졌으나 아무도 안 쓰는 산출물이 이 계획에서 두 번 나왔다.
-                        // Task 8이 이 값을 재설계 조건에 Critic의 자기 신고와 OR로 합친다.
-                        var previouslyFoundStructureDefect = machineFoundStructureDefect;
-                        machineFoundStructureDefect = codeAttribution.HasUnattributed;
-                        // 상태가 새로 참이 될 때만 알린다 - 결함이 지속되는 매 회차마다
-                        // 같은 배너를 반복하면 화면에서 진짜 변화(고쳐짐·새로 생김)를
-                        // 가린다.
-                        if (machineFoundStructureDefect && !previouslyFoundStructureDefect)
-                        {
-                            _userInteraction.NotifyStatus(
-                                $"[yellow]{jobName}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
-                                "목차 결함으로 기록합니다.");
-                        }
-
                         // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
                         // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
                         if (redraftPolicy.TryConsume(improvedThisAttempt))
@@ -2336,16 +2337,20 @@ namespace ReSet.Core.Services
                         }
 
                         // 어느 단계가 문제인지 세 신호를 합쳐 정한다. Critic 지목만 쓰면
-                        // 기계가 아는 결함(하한 미달·오류 코드 누락)이 있는 단계가 동결된다.
-                        // codeAttribution.StepCodes는 위에서 이미 계산한 값을 그대로
-                        // 쓴다 - 두 번 계산하지 않는다. currentSteps는 여기서 다시 읽는다 -
-                        // 방금 재설계가 일어났다면 이미 null이고(ClearSplitGenerationCacheAfterRedraft),
-                        // OpenSteps는 그 null을 그대로 받아 null 계약대로 null을 돌려준다
-                        // (steps가 null이면 다른 인자와 무관하게 null - 낡은 codeAttribution.StepCodes가
-                        // 재설계 뒤에 되살아나 붙지 않는다).
+                        // 기계가 아는 결함(하한 미달)이 있는 단계가 동결된다.
+                        //
+                        // 오류 코드 신호는 여기서 항상 빈 목록이다 - 오류 코드 누락은
+                        // L1에서 판정되고 위쪽 L1 블록이 이미 귀속까지 마친다(FIX ROUND 2).
+                        // missingErrorCodes가 비어 있지 않았다면 l1Result.IsValid가
+                        // false가 되어 이 L2 코드에 도달하기 전에 위 L1 분기가 continue나
+                        // break로 처리했을 것이다 - 즉 여기 도달했다는 사실 자체가 이번
+                        // 회차에 오류 코드 누락이 없었다는 증거다. OpenSteps의 시그니처
+                        // (세 신호의 AND)는 그대로 둔다 - L1 게이트가 앞으로 느슨해지면
+                        // 이 자리에 다시 실제 신호를 넘겨야 하고, 그때도 이 함수는 안
+                        // 바뀐다(설계서 §3-2(b)).
                         pendingDefectiveSteps.Clear();
                         var openSteps = StepFreezeState.OpenSteps(
-                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, codeAttribution.StepCodes);
+                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, Array.Empty<string>());
 
                         if (openSteps != null)
                         {
