@@ -2775,26 +2775,47 @@ dotnet test tests/ReSet.Core.Tests --filter FullyQualifiedName~PromptContextScop
 
 - [ ] **Step 5: `AiService`가 이 모드를 쓰게 한다**
 
-`AiService`에 필드와 생성자 인자를 추가한다(기존 인자 뒤에):
+> **⛔ 이 절의 초판은 반증됐다. 아래는 실측으로 고친 판이다.**
+>
+> 초판은 `AiService`가 `_callGraph`를 **생성자로** 받고, 그 데이터를
+> `DependencyAnalysisOrchestrator`가 들고 있다고 가정했다. Task 10 워커가 `BLOCKED`로
+> 멈추며 **둘 다 코드로 반증했다.**
+>
+> 1. `AiService`는 `Program.cs` 598~646행에서 생성되고 호출 그래프 재료(`spDefs`)는
+>    1508행에서 로드된다 — **생성자 주입이 시간적으로 불가능하다.**
+> 2. `aiService`/`consolidatorService`는 세션 동안 메뉴 루프가 여러 Job을 순차 실행할 때
+>    **재사용되는 단일 인스턴스**다. 생성자에 그래프를 고정하면 두 번째 Job부터 첫 Job의
+>    그래프로 고착된다. **생성자 주입과 인스턴스 재사용이 구조적으로 상충한다.**
+> 3. `DependencyAnalysisOrchestrator`는 메뉴 1(개별 SP 역공학) 경로이고 프로시저→피호출
+>    사상을 필드로 들지 않는다. **실제 재료는 `SpDefinition.Dependencies`**이고, 그것은
+>    이미 `RunConsolidatedPipelineAsync(definitions: spDefs)`로 오케스트레이터에 닿는다.
 
-```csharp
-        private readonly ContextScopeMode _contextScope;
-        private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _callGraph;
-```
+**그래프는 생성자가 아니라 파라미터로 관통시킨다.**
 
-`GenerateBatchStepSectionAsync` 안에서 `AppendSharedStepContext`에 넘길 명세서를 고른다:
+`GenerateBatchStepSectionAsync`가 호출 그래프를 **인자로** 받는다. 오케스트레이터가
+`spDefs`의 `Dependencies`에서 그래프를 만들어 호출 경로
+(`RunConsolidatedPipelineAsync` → `GenerateBySplitAsync` → `GenerateStepSectionWithFloorRetryAsync`)로
+관통시킨다.
+
+모드(`ContextScopeMode`)는 제공자에서 파생되므로 생성자로 받아도 된다 — 세션 내내 같은
+제공자를 쓰기 때문이다. **그래프만 회차별 데이터다.**
 
 ```csharp
             // Full 모드에서는 접두사가 바이트 하나도 달라지면 안 된다 - 단계 N개가
             // 공유하는 캐시가 통째로 죽는다. 그래서 좁히기는 Narrow에서만 한다.
             var scopedSpecs = _contextScope == ContextScopeMode.Narrow
-                ? PromptContextScope.NarrowSpecs(specs, step, _callGraph)
+                ? PromptContextScope.NarrowSpecs(specs, step, callGraph)
                 : specs;
 
             var userPrompt = new StringBuilder();
             AppendSharedStepContext(
                 userPrompt, allSteps, sharedConventions, scopedSpecs, stepInterfaces, targetLanguage, jobName);
 ```
+
+**시그니처를 늘릴 때 주의**: 이 저장소에서 `GenerateBatchStepSectionAsync`에 파라미터를
+하나 더한 대가가 **호출부 1곳 + NSubstitute 위치 인수 85곳**이었다(Task 9a 실측).
+「선택적 파라미터로 두면 안 깨진다」는 **거짓이다** — 위치 인수 호출과 `Arg.Any<T>()`
+나열은 개수가 어긋난다. 이름 붙은 인수를 쓰는 테스트만 무사하다.
 
 - [ ] **Step 6: 설정과 배선을 추가한다**
 
