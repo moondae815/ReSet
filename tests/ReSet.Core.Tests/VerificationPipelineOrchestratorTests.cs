@@ -6886,10 +6886,12 @@ SELECT 1;
                 .Returns(_ =>
                 {
                     var call = reviewCall++;
-                    // 1회차: 88점, 특정 단계를 지목하지 않아(문서 전반 결함) 2회차는
-                    // 전체 재생성으로 간다. 2회차: 60점 — 최고점 후보를 갱신 못 한다.
+                    // 1회차: 88점, SkeletonDefective로 골격부터 전체 재생성을
+                    // 유발한다(지목 없는 리뷰는 이제 재호출 상한을 타므로, 이
+                    // 테스트가 보려는 "문서 전반 결함 -> 전체 재생성" 경로를 보려면
+                    // 자리를 대야 한다). 2회차: 60점 — 최고점 후보를 갱신 못 한다.
                     return call == 0
-                        ? new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 8 }
+                        ? new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 8 }
                         : new ReviewResult { HasDefects = true, FeedbackComment = "여전히 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
                 });
 
@@ -9002,22 +9004,24 @@ SELECT 1;
                     _ => Task.FromResult(new AiResult { Content = planB }),
                     _ => Task.FromResult(new AiResult { Content = planC }));
 
+            // SkeletonDefective를 세워 지목 없는 리뷰가 재호출 상한으로 빠지지
+            // 않게 한다 - 이 테스트가 보는 것은 회귀 롤백이지 재호출이 아니다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planA, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult
                 {
-                    HasDefects = true, FeedbackComment = "A 결함",
+                    HasDefects = true, SkeletonDefective = true, FeedbackComment = "A 결함",
                     ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 10
                 }));
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planB, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult
                 {
-                    HasDefects = true, FeedbackComment = "B 결함",
+                    HasDefects = true, SkeletonDefective = true, FeedbackComment = "B 결함",
                     ScoreAccuracy = 6, ScoreCrud = 8, ScoreInterface = 6, ScoreException = 9, ScoreReadability = 9
                 }));
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planC, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult
                 {
-                    HasDefects = true, FeedbackComment = "C 결함",
+                    HasDefects = true, SkeletonDefective = true, FeedbackComment = "C 결함",
                     ScoreAccuracy = 8, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 7, ScoreReadability = 9
                 }));
 
