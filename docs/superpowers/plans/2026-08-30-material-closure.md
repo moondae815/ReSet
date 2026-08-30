@@ -803,9 +803,32 @@ Run: `sed -n '960,975p' src/ReSet.Cli/Program.cs`
                         {
                             Serilog.Log.Warning("[배치 설계] 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.");
                         }
+
+                        // specsData/spDefs를 closure.SpecPaths 순서로 다시 줄 세운다 -
+                        // BatchStepCatalog.ReorderByClosure를 쓴다(아래 정정 참고).
+                        specsData = BatchStepCatalog.ReorderByClosure(
+                            specsData,
+                            spec => Path.Combine("Procedures", spec.FileName, "docs", "Spec.md"),
+                            closure).ToList();
+                        spDefs = BatchStepCatalog.ReorderByClosure(
+                            spDefs,
+                            def => Path.Combine("Procedures", $"{def.Schema}.{def.Name}", "docs", "Spec.md"),
+                            closure).ToList();
 ```
 
-> **왜 여기서는 `closure.SpecPaths`를 안 쓰는가**: 이 흐름의 `specsData`는 분석 루프가 이미 채웠고 그 순서가 사람이 준 `--target` 순서다. 그것을 폐포 순서로 갈아엎으면 실행 순서가 바뀐다. 더해진 것만 뒤에 붙이는 것이 이 경로에서 순서를 안 흐트러뜨리는 방법이다.
+> **정정(최종 전체 브랜치 리뷰, 2026-08-30)**: 위 상자의 원래 문면은 「`specsData`를 폐포
+> 순서로 갈아엎으면 `--target` 순서가 바뀐다」고 적었는데, 그건 틀렸다.
+> `BatchStepCatalog.CloseOverProcedureReferences`는 `var ordered = new
+> List<string>(entryPointSpecPaths)`로 시작해 **`Insert`만** 한다 — 진입점의
+> 상대 순서는 구조적으로 보존된다. 그 잘못된 근거로 `closure.Added`만 재료 목록
+> **끝에** 붙였더니, 설계서 §6이 「끝에 붙이면 실행 순서가 틀린다」고 못박은 바로
+> 그 순서가 만들어졌다(실측: TUI는 `[…, Summary, AcqManual, EXTRA, …]`, 배치는
+> `[…, Summary, …, AcqManual, EXTRA]`). `SpecPaths`는 진입점 순서를 보존하므로
+> 그것으로 재정렬해도 `--target` 순서는 바뀌지 않는다 — 그래서
+> `BatchStepCatalog.ReorderByClosure`(단위 테스트 가능한 정적 헬퍼)로
+> `specsData`·`spDefs`를 `closure.SpecPaths` 순서로 재정렬하도록 고쳤다.
+> 폐포에 없는 항목(경로를 못 만든 것 등)은 원래 상대 위치를 유지한 채 하나도
+> 사라지지 않는다 — `ReorderByClosure`의 계약이자 단위 테스트로 잠긴 것이다.
 
 - [ ] **Step 3: 빌드한다**
 

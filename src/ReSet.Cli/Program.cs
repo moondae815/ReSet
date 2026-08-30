@@ -1001,6 +1001,20 @@ namespace ReSet.Cli
                             Serilog.Log.Warning("[배치 설계] 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.");
                         }
 
+                        // 참조 프로시저를 재료 목록 끝에 덧붙였을 뿐이라 실행 순서가
+                        // closure.SpecPaths(참조자 바로 뒤에 삽입된 순서)와 어긋난다.
+                        // LoadDefinitionsAsync의 계약이 입력 순서를 실행 순서로 쓰므로
+                        // (설계서 §6) 여기서 다시 줄 세운다. 폐포에 없는 항목(경로를
+                        // 못 만든 것 등)은 ReorderByClosure의 계약대로 하나도 안 사라진다.
+                        specsData = BatchStepCatalog.ReorderByClosure(
+                            specsData,
+                            spec => Path.Combine("Procedures", spec.FileName, "docs", "Spec.md"),
+                            closure).ToList();
+                        spDefs = BatchStepCatalog.ReorderByClosure(
+                            spDefs,
+                            def => Path.Combine("Procedures", $"{def.Schema}.{def.Name}", "docs", "Spec.md"),
+                            closure).ToList();
+
                         var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: activeCts.Token);
                         var consolidatedPlan = pipelineResult.Plan;
                         var aiResult = pipelineResult.Result;

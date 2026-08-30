@@ -158,6 +158,92 @@ namespace ReSet.Cli
             return null;
         }
 
+        /// <summary>
+        /// <paramref name="items"/>를 <paramref name="closure"/>.<see cref="ProcedureClosure.SpecPaths"/>
+        /// 순서로 재정렬한다. <paramref name="relativePathOf"/>가 돌려준 경로가
+        /// <c>SpecPaths</c>에 있는 항목은 그 순서대로 나온다.
+        ///
+        /// <c>SpecPaths</c>에 없는 항목(경로를 못 만든 것 포함, <paramref name="relativePathOf"/>가
+        /// null을 돌려줘도 된다)은 <b>하나도 사라지지 않는다</b> — 자신의 원래 바로
+        /// 앞에 있던 매치된 항목이 재정렬로 어디로 옮겨가든 그 뒤에 그대로 붙어
+        /// 원래 상대 위치를 유지한다. 앞에 매치된 항목이 하나도 없었으면 맨 앞에 남는다.
+        ///
+        /// [왜 필요한가] 배치 모드(`Program.cs`)는 진입점으로 채운 재료 목록 끝에
+        /// 참조 프로시저를 덧붙인다. <see cref="LoadDefinitionsAsync"/>의 계약은
+        /// 입력 순서를 실행 순서로 쓰므로, 끝에 붙은 채로 넘기면 실행 순서가 틀린다
+        /// (설계서 §6). 이 헬퍼가 <c>SpecPaths</c>(참조자 바로 뒤에 삽입된 순서)로
+        /// 다시 줄 세운다. TUI 흐름은 애초에 <c>SpecPaths</c>를 직접 순회해 재료를
+        /// 짓기 때문에 이 헬퍼가 필요 없다.
+        /// </summary>
+        public static IReadOnlyList<T> ReorderByClosure<T>(
+            IReadOnlyList<T> items,
+            Func<T, string?> relativePathOf,
+            ProcedureClosure closure)
+        {
+            if (items is null || items.Count == 0)
+            {
+                return Array.Empty<T>();
+            }
+
+            var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < closure.SpecPaths.Count; i++)
+            {
+                // 폐포 안에 같은 경로가 중복되면 처음 나온 자리를 신뢰한다(실물에서
+                // 중복은 안 생기지만, 방어적으로 첫 등장만 쓴다).
+                if (!order.ContainsKey(closure.SpecPaths[i]))
+                {
+                    order[closure.SpecPaths[i]] = i;
+                }
+            }
+
+            // 매치된 항목: (폐포 인덱스, 원래 인덱스, 항목). 원래 인덱스는 같은 폐포
+            // 인덱스를 공유하는 항목들 사이의 동률을 원래 순서로 깬다.
+            var matched = new List<(int ClosureIndex, int OriginalIndex, T Item)>();
+            // 매치 안 된 항목은 자기 바로 앞의 매치된 항목(폐포 인덱스)에 붙는다.
+            // -1은 "아직 아무것도 매치 안 됐을 때"(맨 앞)를 뜻한다.
+            var unmatchedAfter = new Dictionary<int, List<T>>();
+
+            var anchor = -1;
+            for (var i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                var path = relativePathOf(item);
+                if (path is not null && order.TryGetValue(path, out var closureIndex))
+                {
+                    matched.Add((closureIndex, i, item));
+                    anchor = closureIndex;
+                    continue;
+                }
+
+                if (!unmatchedAfter.TryGetValue(anchor, out var bucket))
+                {
+                    bucket = new List<T>();
+                    unmatchedAfter[anchor] = bucket;
+                }
+                bucket.Add(item);
+            }
+
+            var result = new List<T>(items.Count);
+
+            if (unmatchedAfter.TryGetValue(-1, out var leading))
+            {
+                result.AddRange(leading);
+                unmatchedAfter.Remove(-1);
+            }
+
+            foreach (var entry in matched.OrderBy(m => m.ClosureIndex).ThenBy(m => m.OriginalIndex))
+            {
+                result.Add(entry.Item);
+                if (unmatchedAfter.TryGetValue(entry.ClosureIndex, out var bucket))
+                {
+                    result.AddRange(bucket);
+                    unmatchedAfter.Remove(entry.ClosureIndex);
+                }
+            }
+
+            return result;
+        }
+
         private const string ManifestFileName = "dependency-manifest.json";
 
         /// <summary>
