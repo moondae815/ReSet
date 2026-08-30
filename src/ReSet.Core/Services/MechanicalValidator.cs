@@ -435,6 +435,7 @@ namespace ReSet.Core.Services
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
+            SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -6491,6 +6492,210 @@ namespace ReSet.Core.Services
 
                     result.Errors.Add(message);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 레거시 출신 단계가 <b>원본 명세에 없는 오류 코드를 발명</b>했는지 본다.
+        /// <see cref="CheckControlStepErrorCodeBand"/>의 정확한 여집합이다 - 저쪽은
+        /// 레거시 출신이 <b>없는</b> 단계만, 이쪽은 <b>있는</b> 단계만 본다.
+        ///
+        /// [왜 필요한가] 규칙 9는 "레거시 출신 단계는 원본 코드를 그대로 쓴다"인데,
+        /// 강제되던 것은 여집합(예약 대역)뿐이고 <b>본문은 아무도 안 봤다</b>
+        /// (`docs/audit-reports/sweeps/2026-08-29-rule-enforcement-census.md` §2).
+        /// 대가는 실측됐다 - 4단계 3차 통제군에서 예외처리 축이 그 판의 <b>유일한</b>
+        /// 불합격 사유였고 Critic 발화의 절반이 이 부류였는데, `S04`의 `-2` 발명은
+        /// Critic이 채택 회차에서 놓쳐 <b>무경고로 배송됐다</b>
+        /// (`.../2026-08-29-critic-exception-axis.md` §8).
+        ///
+        /// [왜 목차가 아니라 명세서가 오라클인가] `step.ErrorCodes`(목차)는 계획서를
+        /// 쓴 것과 <b>같은 회차의 같은 모델</b>이 채운다 - 3차 통제군의 S11·S12·S13이
+        /// 발명한 코드를 목차에도 함께 실었다. 발명과 선언이 같이 움직이므로 목차로
+        /// 대조하면 이 결함이 정의상 통과한다. <paramref name="codesByProcedure"/>는
+        /// <see cref="SpecReturnCodeExtractor"/>가 명세서에서 뽑은 것이라 그 손을 타지
+        /// 않는다(같은 판독 §7).
+        ///
+        /// [왜 순방향이 아닌가] "선언한 코드가 대입되었는가"(순방향)는 이미 접혔다 -
+        /// 실측 151건 중 62건이 <b>정당한 미대입</b>이라 96.9%가 거짓 고발이었다
+        /// (`docs/superpowers/specs/2026-08-27-stage3-rule-rewrite-design.md` §3의 상자).
+        /// 역방향에는 그 갈래가 없다: 명세에 없는 코드를 실었으면 발명이다.
+        /// </summary>
+        /// <param name="codesByProcedure">프로시저 맨이름별 명세서 반환 코드. null이면
+        /// 침묵한다 - 재료 없음을 결함 없음으로도 있음으로도 바꾸지 않는다.</param>
+        private static void CheckLegacyStepErrorCodeInvention(
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure)
+        {
+            // 여집합을 지킨다. 레거시 출신이 없으면 물려받을 원본이 없고, 그 단계는
+            // CheckControlStepErrorCodeBand가 예약 대역으로 판정한다. 둘이 같은 대입을
+            // 겹쳐 고발하면 시정 지시가 서로 모순된다.
+            if (step.LegacyProcedures.Count == 0) return;
+            if (codesByProcedure == null) return;
+
+            // 성공 코드 `0`은 항상 허용한다. 원본 다수가 성공 시 @po_intRetVal을 아예
+            // 대입하지 않아("명시적 실패 신호 없음 = 성공") 명세에서 뽑히지 않는데,
+            // 계획서가 `0`을 기록하는 것은 그 관행을 따른 정상 이행이다.
+            var allowed = new HashSet<string>(StringComparer.Ordinal) { "0" };
+
+            // 조회는 원문이 아니라 BareObjectName으로 한다 - LegacyProcedures 항목의
+            // 43%가 스키마 접두사 없이 적히므로(:446의 실측) 원문 조회로는 그 항목이
+            // 영원히 재료를 못 찾고, 검사가 아무 신호 없이 꺼진다.
+            // CheckMissingConditionColumns(:1514)와 같은 규약이다.
+            var hasMaterial = false;
+            foreach (var procedure in step.LegacyProcedures)
+            {
+                if (string.IsNullOrWhiteSpace(procedure)) continue;
+                if (!codesByProcedure.TryGetValue(BareObjectName(procedure), out var codes)) continue;
+                if (codes == null) continue;
+
+                foreach (var code in codes)
+                {
+                    var trimmed = code?.Trim();
+                    if (string.IsNullOrEmpty(trimmed)) continue;
+                    allowed.Add(trimmed);
+                    hasMaterial = true;
+                }
+            }
+
+            // 명세에서 리터럴 코드가 하나도 안 나오는 SP가 실재한다 - 실측 14편 중
+            // `dbo.UP_Util_Settle_Summary_AcqManual`이 그렇고, 그 원본은 오류를
+            // 음수 코드가 아니라 ERROR_NUMBER()로 낸다. 빈 허용 집합을 "아무 코드도
+            // 허용하지 않는다"로 읽으면 그 단계의 모든 대입이 발명으로 고발된다.
+            // 재료를 못 얻은 것과 결함이 없는 것은 다르다 - 귀속할 수 없으면 침묵한다.
+            //
+            // 이 침묵은 조사 §3의 "좋은 일이 방어를 끈다"와 같은 형태이므로, 이 자리에
+            // 걸린 단계 수를 코퍼스 스윕으로 따로 재서 기준선을 문서에 남긴다.
+            if (!hasMaterial) return;
+
+            // 키가 값 하나다 - CheckControlStepErrorCodeBand가 (이름, 값)으로 키잉하는
+            // 것과 다르다. 저쪽은 메시지가 변수를 지목하므로 변수마다 따로 발화하는 것이
+            // 정보를 더하지만, 이 검사가 내는 사실은 "이 단계가 코드 X를 발명했다"이고
+            // 변수는 그 사실에 들어가지 않는다. 이름을 키에 넣으면 같은 문장이 두 번
+            // 나간다 - 실측(POQSettleProc16/S07)에서 서로 다른 두 변수가 같은 `-9`를
+            // 대입해 글자까지 똑같은 오류가 둘 실렸다. 중복 시정 지시는 재시도 예산만
+            // 태운다.
+            var reported = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (cleaned, offset) in CleanedCodeFencesExcludingDiagrams(stepMarkdown))
+            {
+                foreach (Match assignment in LegacyReturnCodeAssignmentPattern.Matches(cleaned))
+                {
+                    var name = assignment.Groups["name"].Value;
+
+                    // 값 자리는 지운 사본이 아니라 원문에서 찾는다. `cleaned`는 문자열과
+                    // 주석을 공백으로 지운 사본이라 값 위치는 보존되지만 값 자체가
+                    // 사라져 있다. CheckControlStepErrorCodeBand가 두 라운드에 걸쳐
+                    // 세운 규약을 그대로 따른다(공백과 주석을 번갈아 건너뛴 뒤 첫 토큰).
+                    var fenceEnd = offset + cleaned.Length;
+                    var valueStart = offset + assignment.Index + assignment.Length;
+                    while (valueStart < fenceEnd)
+                    {
+                        if (char.IsWhiteSpace(stepMarkdown[valueStart]))
+                        {
+                            valueStart++;
+                            continue;
+                        }
+
+                        var commentEnd = SkipCommentToken(stepMarkdown, valueStart);
+                        if (commentEnd.HasValue)
+                        {
+                            valueStart = commentEnd.Value;
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    if (valueStart >= fenceEnd) continue;
+
+                    var raw = ExtractRawAssignmentValue(stepMarkdown, valueStart).Trim();
+                    if (raw.Length == 0) continue;
+
+                    // 정수 리터럴만 판정한다. 변수(`LegacyReturnCode: currentStepErrorCode`)·
+                    // CASE·함수 호출(`ERROR_NUMBER()`)·문자열은 값이 실행 시점에 정해지므로
+                    // "명세에 없는 코드"라고 단정할 수 없다. 변수를 넘기는 자리는 그 변수의
+                    // 대입 자리를 이미 따로 보므로, 여기서 또 세면 같은 결함이 두 번 발화한다.
+                    if (!int.TryParse(
+                            raw, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
+                    {
+                        continue;
+                    }
+
+                    if (allowed.Contains(raw)) continue;
+                    if (!reported.Add(raw)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 오류 코드 '{raw}'을(를) 대입하는데, 이 단계의 원본 " +
+                        $"({string.Join(", ", step.LegacyProcedures)}) 명세는 그 코드를 정의하지 " +
+                        $"않습니다 - 명세가 정의한 것은 {string.Join(", ", allowed.OrderBy(c => c, StringComparer.Ordinal))}입니다. " +
+                        "원본에 없는 코드를 새로 만들지 말고(규칙 9), 원본이 매핑하지 않는 실패는 " +
+                        "원본의 예외 경로 코드로 관측하십시오.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 대입 자리에서 오류 코드를 받는 변수의 이름 족.
+        ///
+        /// [왜 이름으로 좁히는가] 펜스 안의 모든 음수 리터럴을 보면 업무 상수
+        /// (`WHERE Amount &gt; -1`, `OFFSET -1`)와 오류 코드를 가를 수 없다.
+        /// <see cref="SpecReturnCodeExtractor"/>가 명세서 쪽에서 <c>@po_intRetVal</c>
+        /// 하나로 좁힌 것과 같은 이유다.
+        ///
+        /// [왜 <c>@po_intRetVal</c> 하나로는 안 되는가] 3단계 규칙 다시 쓰기 이후
+        /// 계획서의 의사코드는 앱 코드라 T-SQL 변수 철자를 쓰지 않는다. 실측 대상인
+        /// `S04`의 `-2` 발명도 <c>currentStepErrorCode = -2</c> 형태이고, 코퍼스에서
+        /// 이 자리의 철자는 15가지다(<c>@po_intRetVal</c> 446 · <c>@v_currentErrorCode</c>
+        /// 99 · <c>LegacyReturnCode</c> 43 · <c>LegacyRetVal</c> 41 · …).
+        /// 셋 다 <c>RetVal</c>·<c>ErrorCode</c>·<c>ReturnCode</c> 중 하나로 끝난다.
+        ///
+        /// 끝의 <c>\b</c>가 <c>ErrorCodes</c>(표·목록)와 <c>errorCodeCount</c>를 뺀다 -
+        /// 그것은 코드를 담는 자리가 아니다. <c>DECLARE @v INT = -1</c>처럼 타입이
+        /// 끼어드는 형태와 <c>LegacyReturnCode: -1</c>처럼 콜론을 쓰는 앱 코드 인자
+        /// 형태를 함께 받는다.
+        /// </summary>
+        private static readonly Regex LegacyReturnCodeAssignmentPattern = new(
+            @"(?:\bSET\s+|\bDECLARE\s+)?@?(?<name>\w*(?:RetVal|ErrorCode|ReturnCode))\b\s*(?:\w+\s*(?:\([^)]*\))?\s*)?[:=]\s*",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// <see cref="CleanedCodeFences"/>에서 <b>mermaid를 뺀</b> 짝.
+        ///
+        /// [왜 기존 것을 안 고치는가] <see cref="CleanedCodeFences"/>는 언어 태그를
+        /// 가리지 않고 모든 펜스를 낸다. 거기에 mermaid 제외를 넣으면 그 헬퍼를 쓰는
+        /// 다른 검사들의 판정이 함께 움직인다 - 이 회차가 재지 않은 변화이므로 넣지
+        /// 않는다. 이 검사만 좁은 짝을 쓴다.
+        ///
+        /// [왜 sql만으로는 안 되는가] <see cref="CleanedSqlFences"/>는 <c>```sql</c>만
+        /// 본다. 3단계 규칙 다시 쓰기 이후 트랜잭션 경계와 오류 처리는 앱 코드로
+        /// 옮겨갔고, 그 코드는 <c>```pseudocode</c>·<c>```csharp</c> 펜스에 실린다 -
+        /// 코퍼스 실측 sql 1,605 · csharp 203 · pseudocode 48 · text 33.
+        /// 4단계 3차 통제군 채택본에서 <c>currentStepErrorCode</c> 대입은
+        /// <b>전량이 pseudocode 펜스 안</b>이므로, sql만 보는 리더는 이 축에서 통째로 눈먼다.
+        ///
+        /// [왜 mermaid를 빼는가] 다이어그램의 노드 라벨은 문장이 아니라 그림이다.
+        /// 라벨에 적힌 <c>currentStepErrorCode = -2</c>는 그 값을 대입하는 코드가
+        /// 아니라 흐름을 설명하는 글이므로, 세면 산문을 고발하는 것과 같다.
+        /// 이 저장소가 NOLOCK 축에서 이미 겪은 함정이다 - 문서 전수 grep은 거의
+        /// 전량이 이행 서술을 고발했다.
+        /// </summary>
+        private static IEnumerable<(string Cleaned, int Offset)> CleanedCodeFencesExcludingDiagrams(
+            string stepMarkdown)
+        {
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown,
+                @"```(?<lang>[A-Za-z0-9_+-]*)[^\n]*\n(?<body>.*?)```",
+                RegexOptions.Singleline))
+            {
+                if (string.Equals(fence.Groups["lang"].Value, "mermaid", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var body = fence.Groups["body"];
+                yield return (BlankCommentsAndStrings(body.Value), body.Index);
             }
         }
 
