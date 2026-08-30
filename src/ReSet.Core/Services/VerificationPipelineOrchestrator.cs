@@ -3683,7 +3683,7 @@ namespace ReSet.Core.Services
                     // StepInterfaceFacts.Build로 한 번 만들어 여기까지 그대로 넘긴다.
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
                         step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
-                        _consolidatorEffort, floorFeedback, cancellationToken);
+                        _consolidatorEffort, floorFeedback, cancellationToken: cancellationToken);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
