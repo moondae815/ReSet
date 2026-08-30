@@ -6581,15 +6581,23 @@ SELECT 1;
         /// 출고되는 문서(documentBodyForChecks == bestAttempt.Current.Markdown)와
         /// 무관한 값이다.
         ///
-        /// 시나리오: 1회차는 원본 오류코드("-1")를 담아 L1을 통과하고 최고 후보로
-        /// 기록된다(점수가 더 높다). 자리 없는 결함으로 공짜 재검토가 한 번 일어나는데,
-        /// 그 재검토가 부른 재생성이 코드를 빠뜨려 L1이 실패한다 - 귀속할 목차가 없어
-        /// (폴백 경로) 전량 재생성으로 다음 회차로 넘어간다. 2회차도 같은 패턴(코드
-        /// 있음 -> 통과 -> 낮은 점수로 기록 안 됨 -> 코드 없음 -> L1 실패 -> 전량
-        /// 재생성)을 반복한 뒤, 3회차의 생성 호출이 예외를 던진다. 이 시점의
-        /// missingErrorCodes는 2회차의 L1 실패에서 남은 값(코드 있음)인데, 실제로
-        /// 채택되는 문서(1회차, 최고 후보)는 코드를 담고 있다 - 배너와 VerificationCoverage가
-        /// 존재하지도 않는 누락을 보고해서는 안 된다.
+        /// [FIX ROUND 2] Important 2(자리 없는 결함 게이트에 currentSteps != null
+        /// 요구)가 같은 시리즈에 먼저 커밋되면서, 폴백(currentSteps == null) 경로는
+        /// 더 이상 "공짜 재검토"로 같은 attempt 안에서 두 번째 생성 호출을 만들지
+        /// 않는다 - attempt당 생성 호출은 정확히 1회다. 종전 픽스처(공짜 재검토가
+        /// 만드는 여분의 호출을 가정)는 이 사실이 바뀐 뒤 실제로는 일반 예산 소진
+        /// (:2677 부근 else)에 떨어져 이 테스트가 고정하려던 자리에 전혀 닿지
+        /// 못했다(리뷰 지적, 디버그 마커로 격리 확인 - "[DBG-ENTER] ordinary
+        /// L2-exhaustion else branch"만 찍히고 GenerationFailed 마커는 찍히지
+        /// 않음).
+        ///
+        /// 시나리오(attempt당 생성 호출 1회로 재설계): 1회차는 원본 오류코드("-1")를
+        /// 담아 L1을 통과하고 최고 후보로 기록된다. 2회차는 코드가 빠져 L1이
+        /// 실패한다 - 귀속할 목차가 없어(폴백 경로) 전량 재생성으로 3회차로
+        /// 넘어간다. 3회차의 생성 호출이 예외를 던진다. 이 시점의 missingErrorCodes는
+        /// 2회차의 L1 실패에서 남은 값(코드 없음)인데, 실제로 채택되는 문서(1회차,
+        /// 유일한 후보)는 코드를 담고 있다 - 배너와 VerificationCoverage가 존재하지도
+        /// 않는 누락을 보고해서는 안 된다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipelineAsync_GenerationFailureRescue_RecomputesMissingErrorCodesForShippedDocument()
@@ -6614,35 +6622,20 @@ SELECT 1;
                     var call = genCall++;
                     return call switch
                     {
-                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과
-                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 1회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
-                        2 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 2회차: 코드 있음, L1 통과
-                        3 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
-                        _ => throw new InvalidOperationException("AI 생성 호출 중단(시뮬레이션)"),
+                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과, 최고(유일한) 후보로 기록
+                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차: 코드 없음, L1 실패 - 귀속 불가(폴백) -> 전량 재생성
+                        _ => throw new InvalidOperationException("AI 생성 호출 중단(시뮬레이션)"),  // 3회차: 생성 자체가 예외
                     };
                 });
 
-            var reviewCall = 0;
+            // 리뷰는 1회차에서만 성공한다(2·3회차는 L1 실패/생성 예외로 L2에 도달하지
+            // 않는다) - 이 값이 유일한 bestAttempt 후보가 된다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(_ =>
+                .Returns(Task.FromResult(new ReviewResult
                 {
-                    var call = reviewCall++;
-                    return call switch
-                    {
-                        // 1회차 리뷰: 자리 없는 결함, 더 높은 점수 - 최고 후보가 된다.
-                        0 => Task.FromResult(new ReviewResult
-                        {
-                            HasDefects = true, FeedbackComment = "자리 없는 결함",
-                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
-                        }),
-                        // 2회차 리뷰: 자리 없는 결함, 더 낮은 점수 - 최고 후보를 갱신하지 못한다.
-                        _ => Task.FromResult(new ReviewResult
-                        {
-                            HasDefects = true, FeedbackComment = "자리 없는 결함",
-                            ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5
-                        }),
-                    };
-                });
+                    HasDefects = true, FeedbackComment = "자리 없는 결함",
+                    ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
+                }));
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -6667,6 +6660,9 @@ SELECT 1;
         /// documentBodyForChecks는 그 attempt를 통과했던 최고 후보(코드를 담은
         /// 문서)다. 위 생성 실패 테스트와 다른 자리를 고정한다 - 저건 "완전히
         /// 이전 회차의 값"이고 이건 "실패한 이번 회차 자신의 값"이다.
+        ///
+        /// [FIX ROUND 2] 위 테스트와 같은 이유로 attempt당 생성 호출 1회로
+        /// 재설계했다 - Important 2 이후 폴백 경로에는 공짜 재검토가 없다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L1ExhaustedRescue_RecomputesMissingErrorCodesForShippedDocument()
@@ -6691,33 +6687,19 @@ SELECT 1;
                     var call = genCall++;
                     return call switch
                     {
-                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과, 최고 후보로 기록
-                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 1회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
-                        2 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 2회차: 코드 있음, L1 통과, 최고 후보 갱신 못함
-                        3 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차 공짜 재검토가 부른 재생성: 코드 빠짐, L1 실패
-                        _ => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 3회차: 코드 빠짐, L1 실패 - 예산 소진(3<3 거짓)
+                        0 => Task.FromResult(new AiResult { Content = cleanDoc }),        // 1회차: 코드 있음, L1 통과, 최고(유일한) 후보로 기록
+                        1 => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 2회차: 코드 없음, L1 실패 -> 전량 재생성(attempt 2<3)
+                        _ => Task.FromResult(new AiResult { Content = missingCodeDoc }),  // 3회차: 코드 없음, L1 실패 - 예산 소진(3<3 거짓)
                     };
                 });
 
-            var reviewCall = 0;
+            // 리뷰는 1회차에서만 성공한다(2·3회차는 L1 실패로 L2에 도달하지 않는다).
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(_ =>
+                .Returns(Task.FromResult(new ReviewResult
                 {
-                    var call = reviewCall++;
-                    return call switch
-                    {
-                        0 => Task.FromResult(new ReviewResult
-                        {
-                            HasDefects = true, FeedbackComment = "자리 없는 결함",
-                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
-                        }),
-                        _ => Task.FromResult(new ReviewResult
-                        {
-                            HasDefects = true, FeedbackComment = "자리 없는 결함",
-                            ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5, ScoreException = 5, ScoreReadability = 5
-                        }),
-                    };
-                });
+                    HasDefects = true, FeedbackComment = "자리 없는 결함",
+                    ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreException = 8, ScoreReadability = 8
+                }));
 
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
@@ -7778,6 +7760,125 @@ SELECT 1;
             await aiService.Received(1).DraftBatchPlanStructureAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(),
                 Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+
+        /// <summary>
+        /// FINAL FIX A - FIX ROUND 2 (코디네이터 지적). Important 3의 가드
+        /// (<c>!reviewRetriedThisAttempt</c>)는 "같은 attempt에서 재호출됐는가"만
+        /// 보고 CriticFeedbackLog.Record/UpdateRepeatedDefects를 통째로 건너뛰었다.
+        /// 그런데 공짜 재검토의 두 번째 패스가 이번에는 실제로 결함 위치를 댈 수도
+        /// 있다 - 그렇다면 그 리뷰는 유효하고, 결함 추적·피드백 기록에 정상 참여해야
+        /// 한다. 가드 조건을 "재호출됐고 그 두 번째도 자리를 못 댔는가"로 좁힌다.
+        ///
+        /// 시나리오: 1회차는 S01을 지목(위치 있음, repeatedDefects[S01]=1). 2회차
+        /// 1차는 위치 없음(공짜 재검토 유발) - 이 패스는 첫 패스이므로 어차피
+        /// 실행되어 repeatedDefects에서 S01이 제거된다(0). 2회차 2차(재검토 결과)는
+        /// 이번엔 S01을 다시 지목한다 - 유효한 리뷰다. 고치기 전에는 이 패스가
+        /// 통째로 건너뛰어져 repeatedDefects[S01]이 여전히 0으로 남고, 2차 리뷰의
+        /// 더 구체적인 피드백 문구도 CriticFeedbackLog에 기록되지 않는다. 3회차도
+        /// S01을 지목(정상 단일 패스)해 repeatedDefects[S01]을 고치면 2(에스컬레이션
+        /// 임계), 고치기 전이면 1(임계 미달)로 만든다. 4회차의 S01 재생성이
+        /// §3-8 에스컬레이션대로 백지(<c>previousBody == null</c>)를 받는지가
+        /// UpdateRepeatedDefects 쪽 수정의 증거이고, 그 재생성에 넘어가는 specs에
+        /// 2회차 2차의 구체적 피드백 문구가 실렸는지가 CriticFeedbackLog 쪽 수정의
+        /// 증거다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_SecondPassFindsLocation_CountsAsValidReviewForRepeatedDefectsAndFeedbackLog()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var s01PreviousBodies = new List<string?>();
+            var s01Specs = new List<List<(string FileName, string Content)>>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01")
+                    {
+                        s01PreviousBodies.Add(call.ArgAt<string?>(9));
+                        s01Specs.Add(call.ArgAt<List<(string FileName, string Content)>>(3));
+                    }
+                    return Task.FromResult(new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) });
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1회차: S01 지목(위치 있음) - repeatedDefects[S01] = 1.
+                        0 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "S01 최초 지목", DefectiveSteps = { "S01" },
+                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreReadability = 8, ScoreException = 8
+                        }),
+                        // 2회차 1차: 위치 없음 - 공짜 재검토 유발. 첫 패스라 어차피
+                        // 실행되어 repeatedDefects[S01]이 0으로 리셋된다.
+                        1 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "자리 없는 결함",
+                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreReadability = 8, ScoreException = 8
+                        }),
+                        // 2회차 2차(재검토 결과): 이번엔 S01을 지목 - 유효한 리뷰다.
+                        2 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "재검토에서 S01 결함 확인됨",
+                            DefectiveSteps = { "S01" },
+                            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+                        }),
+                        // 3회차: S01을 다시 지목(정상 단일 패스) - 고친 뒤라면
+                        // repeatedDefects[S01]이 2에 닿아 에스컬레이션이 걸린다.
+                        3 => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = true, FeedbackComment = "S01 세 번째 지목", DefectiveSteps = { "S01" },
+                            ScoreAccuracy = 8, ScoreCrud = 8, ScoreInterface = 8, ScoreReadability = 8, ScoreException = 8
+                        }),
+                        // 4회차: 깨끗이 통과 - 여기서 파이프라인이 끝난다.
+                        _ => Task.FromResult(new ReviewResult
+                        {
+                            HasDefects = false,
+                            ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreReadability = 9, ScoreException = 9
+                        }),
+                    };
+                });
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                Substitute.For<IVerificationUserInteraction>(), "3", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+            var specs = new List<(string, string)> { ("dbo.USP_Spec1", "content1") };
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // S01은 네 번 생성된다: (0) 최초 생성(1회차 진입), (1) 1회차 지목으로
+            // 2회차 1차 생성 시점에 재생성, (2) 2회차 2차 지목으로 3회차 생성
+            // 시점에 재생성, (3) 3회차 지목으로 4회차 생성 시점에 재생성. pending은
+            // 항상 "직전 리뷰가 확정한 값"이라 반영이 한 회차 늦게 나타난다.
+            Assert.Equal(4, s01PreviousBodies.Count);
+
+            // Minor 1의 증거: 마지막 재생성(3회차 지목이 확정한 §3-8 에스컬레이션
+            // 판단 시점)은 repeatedDefects[S01]이 2에 닿아 백지(previousBody ==
+            // null)를 받아야 한다. 2회차 2차의 유효한 지목이 카운터에 반영되지
+            // 않으면 1에서 멈춰 이 재생성이 여전히 patch(비-null)를 받는다.
+            Assert.Null(s01PreviousBodies[3]);
+
+            // Minor 2의 증거: 2회차 2차 지목이 확정한 재생성(위 목록의 (2), 즉
+            // s01Specs[2])에 넘어가는 specs에는 2회차 2차의 더 구체적인 피드백
+            // ("재검토에서 S01 결함 확인됨")이 실려 있어야 한다. CriticFeedbackLog.
+            // Record가 그 패스에서 건너뛰어지면 이 문구는 어디에도 기록되지 않는다.
+            Assert.Contains(s01Specs[2], spec => spec.Content.Contains("재검토에서 S01 결함 확인됨"));
         }
 
         /// <summary>

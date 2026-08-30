@@ -2428,20 +2428,58 @@ namespace ReSet.Core.Services
                     bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
                     if (canRetry)
                     {
-                        // [FINAL FIX A - Important 3 + Minor 1·2] reviewRetriedThisAttempt는
-                        // "자리 없는 결함" 게이트가 같은 attempt 안에서 공짜 재검토를
-                        // 부른 뒤에만 참이 된다(아래 게이트 참고). 그 재검토로 돌아온
-                        // 두 번째 리뷰는 재생성의 근거가 될 수 없다고 이미 판정된
-                        // 리뷰이므로, 그것을 근거로 삼는 세 가지 부작용을 여기서
-                        // 막는다 - (1) 정체 스트릭을 같은 attempt 안에서 두 번 올려
-                        // §3-4가 요구하는 "2회 연속 attempt"를 "같은 attempt를 두 번
-                        // 셈"으로 바꾸는 TryConsume 재호출, (2) CriticFeedbackLog에
-                        // 같은 attempt 번호로 두 항목이 남는 이중 기록, (3) 빈
-                        // pendingDefectiveSteps를 "결함 없음"의 증거로 써 모든
-                        // 에스컬레이션 카운터를 리셋하는 UpdateRepeatedDefects. 첫
-                        // 번째 패스(reviewRetriedThisAttempt가 아직 false)에서는
-                        // 종전과 똑같이 전부 실행된다.
-                        if (!reviewRetriedThisAttempt)
+                        // 어느 단계가 문제인지 세 신호를 합쳐 정한다. Critic 지목만 쓰면
+                        // 기계가 아는 결함(하한 미달)이 있는 단계가 동결된다.
+                        //
+                        // 오류 코드 신호는 여기서 항상 빈 목록이다 - 오류 코드 누락은
+                        // L1에서 판정되고 위쪽 L1 블록이 이미 귀속까지 마친다(FIX ROUND 2).
+                        // missingErrorCodes가 비어 있지 않았다면 l1Result.IsValid가
+                        // false가 되어 이 L2 코드에 도달하기 전에 위 L1 분기가 continue나
+                        // break로 처리했을 것이다 - 즉 여기 도달했다는 사실 자체가 이번
+                        // 회차에 오류 코드 누락이 없었다는 증거다. OpenSteps의 시그니처
+                        // (세 신호의 AND)는 그대로 둔다 - L1 게이트가 앞으로 느슨해지면
+                        // 이 자리에 다시 실제 신호를 넘겨야 하고, 그때도 이 함수는 안
+                        // 바뀐다(설계서 §3-2(b)). 이 계산 자체는 재검토 패스마다 다시
+                        // 해야 한다 - 이번 패스의 리뷰가 이번에는 자리를 댔을 수도 있다.
+                        // [FIX ROUND 2] 아래 secondPassStillHasNoLocation 판정에도
+                        // 필요해 TryConsume/CriticFeedbackLog보다 앞으로 옮겼다 - 목차
+                        // 재설계가 이 값을 다시 비울 수 있지만, 재설계는 첫 패스에서만
+                        // 일어나고(reviewRetriedThisAttempt == false) 그 경우
+                        // secondPassStillHasNoLocation은 애초에 거짓이라 순서가 결과에
+                        // 영향을 주지 않는다.
+                        pendingDefectiveSteps.Clear();
+                        var openSteps = StepFreezeState.OpenSteps(
+                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, Array.Empty<string>());
+
+                        if (openSteps != null)
+                        {
+                            pendingDefectiveSteps.AddRange(openSteps);
+                        }
+
+                        // [FINAL FIX A - Important 3 + Minor 1·2, FIX ROUND 2 좁힘]
+                        // reviewRetriedThisAttempt 단독 가드는 과했다 - 같은 attempt의
+                        // 공짜 재검토로 돌아온 두 번째 리뷰가 "이번에는" 실제로 자리를
+                        // 댈 수 있고, 그렇다면 그 리뷰는 유효해 결함 추적·피드백
+                        // 기록에 정상 참여해야 한다(코디네이터 지적). 세 소비자의
+                        // 조건은 서로 다르다:
+                        //
+                        // - CriticFeedbackLog.Record/UpdateRepeatedDefects: "재호출됐고
+                        //   그 두 번째도 자리를 못 댔을 때"만 건너뛴다
+                        //   (secondPassStillHasNoLocation) - 아래 게이트와 같은 술어를
+                        //   쓴다. 재검토가 이번엔 자리를 댔다면(pendingDefectiveSteps가
+                        //   채워졌다면) 이 값은 거짓이라 정상 실행된다.
+                        // - redraftPolicy.TryConsume: 여전히 reviewRetriedThisAttempt
+                        //   단독으로 가둔다 - §3-4의 "2회 연속 attempt"는 attempt
+                        //   번호로 세는 것이지 리뷰의 위치 유효성과 무관하다. 같은
+                        //   attempt의 두 번째 패스라면(이번에 자리를 댔더라도) 그
+                        //   attempt는 여전히 "정체 판정 대상 회차"가 아니다.
+                        bool secondPassStillHasNoLocation = reviewRetriedThisAttempt &&
+                            !l2Result.AxisThresholdForced &&
+                            pendingDefectiveSteps.Count == 0 &&
+                            !l2Result.SkeletonDefective &&
+                            !l2Result.StructureDefective;
+
+                        if (!secondPassStillHasNoLocation)
                         {
                             CriticFeedbackLog.Record(feedbackHistory, attempt, l2Result, _criticScoreThreshold);
                             feedbackLog = CriticFeedbackLog.Compose(
@@ -2451,7 +2489,10 @@ namespace ReSet.Core.Services
                                 "제공된 '원본 명세서(Specifications)'와 위 피드백을 절대적 기준으로 삼으십시오. " +
                                 "특히 비즈니스 로직 누락이 지적된 경우, 원본 명세서의 해당 Step(프로시저) 내용을 다시 " +
                                 "주의 깊게 정독하여 누락된 비즈니스 로직(UNION, 커서, JOIN, 필터 조건 등)을 완벽히 복원하십시오.");
+                        }
 
+                        if (!reviewRetriedThisAttempt)
+                        {
                             // 재시도가 점수를 못 올리면 원인은 본문이 아니라 목차일 수 있다.
                             // 3/3만 반복해서는 구조가 원인인 결함이 영원히 고쳐지지 않는다.
                             if (redraftPolicy.TryConsume(
@@ -2490,29 +2531,7 @@ namespace ReSet.Core.Services
                             }
                         }
 
-                        // 어느 단계가 문제인지 세 신호를 합쳐 정한다. Critic 지목만 쓰면
-                        // 기계가 아는 결함(하한 미달)이 있는 단계가 동결된다.
-                        //
-                        // 오류 코드 신호는 여기서 항상 빈 목록이다 - 오류 코드 누락은
-                        // L1에서 판정되고 위쪽 L1 블록이 이미 귀속까지 마친다(FIX ROUND 2).
-                        // missingErrorCodes가 비어 있지 않았다면 l1Result.IsValid가
-                        // false가 되어 이 L2 코드에 도달하기 전에 위 L1 분기가 continue나
-                        // break로 처리했을 것이다 - 즉 여기 도달했다는 사실 자체가 이번
-                        // 회차에 오류 코드 누락이 없었다는 증거다. OpenSteps의 시그니처
-                        // (세 신호의 AND)는 그대로 둔다 - L1 게이트가 앞으로 느슨해지면
-                        // 이 자리에 다시 실제 신호를 넘겨야 하고, 그때도 이 함수는 안
-                        // 바뀐다(설계서 §3-2(b)). 이 계산 자체는 재검토 패스마다 다시
-                        // 해야 한다 - 이번 패스의 리뷰가 이번에는 자리를 댔을 수도 있다.
-                        pendingDefectiveSteps.Clear();
-                        var openSteps = StepFreezeState.OpenSteps(
-                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, Array.Empty<string>());
-
-                        if (openSteps != null)
-                        {
-                            pendingDefectiveSteps.AddRange(openSteps);
-                        }
-
-                        if (!reviewRetriedThisAttempt)
+                        if (!secondPassStillHasNoLocation)
                         {
                             // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
                             // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
