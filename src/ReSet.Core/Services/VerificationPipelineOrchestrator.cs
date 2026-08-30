@@ -2607,14 +2607,27 @@ namespace ReSet.Core.Services
                             lastSkeleton != null &&
                             lastStepSections != null;
 
-                        // GenerateBySplitAsync는 "골격 재사용"과 "지목된 단계만 재생성"을
-                        // defectiveSteps 하나로 함께 결정한다(재시도 루프가 요구하는 계약 —
-                        // 지목이 비면 골격까지 새로 만든다, 아래 테스트가 고정: WithoutDefectiveSteps_
-                        // RegeneratesTheWholeDocument). L3의 "지목 없음"은 뜻이 다르다 — 목차·골격은
-                        // 그대로 두고 전 단계만 다시 쓰라는 것이다. 그래서 지목이 비어 있으면 목차의
-                        // 전체 코드를 defectiveSteps로 넘긴다: targeted 판정(Count>0)은 참이 되어
-                        // 골격 호출을 건너뛰고, pending 필터는 모든 코드를 통과시켜 전 단계가
-                        // 재생성된다.
+                        // GenerateBySplitAsync 자신은 "골격 재사용"(reuseSkeleton)과 "지목
+                        // 단계만 재생성"(canTargetSections)을 독립으로 판정한다(§3-6, Critical 1 -
+                        // SkeletonDefective가 골격만 지우고 섹션은 동결하는 경로가 이 분리를 쓴다.
+                        // 고정 테스트: RunConsolidatedPipeline_WithoutDefectiveSteps_
+                        // RetriesReviewWithoutRegenerating).
+                        //
+                        // 이 L3 호출부는 그 분리를 쓰지 않는다 - 아래에서 previousSkeleton·
+                        // previousSections·defectiveSteps 세 인자 모두를 이 지역 reuseSkeleton
+                        // 하나로 함께 켜고 끈다(reuseSkeleton ? X : null/빈 목록 패턴). L3의
+                        // "지목 없음"은 재시도 루프의 그것과 뜻이 다르다 — 목차·골격은 그대로
+                        // 두고 전 단계만 다시 쓰라는 것이다. 그래서 reuseSkeleton이 거짓이면
+                        // (구조 재수립·골격 지목·캐시 없음) previousSections까지 null로 넘겨
+                        // canTargetSections도 함께 거짓이 되게 하고, stepsToRegenerate는 지목이
+                        // 비었을 때 목차의 전체 코드로 채워 reuseSkeleton이 참인 경로에서도
+                        // 전 단계가 재생성되게 한다.
+                        //
+                        // 이것이 의도적 설계인지(사용자가 명시적으로 골격을 다시 만들라고
+                        // 했으니 그 아래 단계 본문도 새 골격에 맞는지 전부 다시 확인시키는
+                        // 편이 낫다는 판단), 아니면 L3도 Critical 1의 분리로 이득을 볼 수
+                        // 있는데 아직 배선만 안 된 것인지는 이 자리의 기록만으로는 확정할
+                        // 수 없다 - 이 호출부가 분리를 쓰지 않는다는 사실만 적어 둔다.
                         var stepsToRegenerate = reviewResult.TargetStepCodes.Count > 0
                             ? reviewResult.TargetStepCodes
                             : stepsForRegeneration.Select(step => step.Code).ToList();
