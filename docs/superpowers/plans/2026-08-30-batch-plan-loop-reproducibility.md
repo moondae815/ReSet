@@ -636,7 +636,7 @@ git commit -m "feat: 회귀한 회차를 최고 후보로 되감는다 — 회�
 
 **Interfaces:**
 - Consumes: Task 2의 롤백 (같은 루프) · **Task 6의 `L1ViolationAttribution.AttributeByLexeme`**
-- Produces: 생성자 파라미터 `int maxL1RepairAttempts = 2` (기존 파라미터 **뒤에** 붙인다 — 앞에 끼우면 위치 인자로 부르는 기존 호출부가 조용히 깨진다) · `MechanicalValidator.ViolationLexemes(ValidationResult) -> IReadOnlyList<string>`
+- Produces: 생성자 파라미터 `int maxL1RepairAttempts = 2` (기존 파라미터 **뒤에** 붙인다 — 앞에 끼우면 위치 인자로 부르는 기존 호출부가 조용히 깨진다) · `MechanicalValidator.ViolationLexemes(DetailedError) -> IReadOnlyList<string>`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -750,14 +750,49 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
                         // 귀속하지 못하면 pendingDefectiveSteps가 비고, 그러면 종전대로
                         // 전량 재생성이 된다 - 억지로 아무 단계에나 붙이면 멀쩡한 단계를
                         // 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
+                        //
+                        // 귀속은 두 갈래다. 위반 유형 자체가 자리를 아는 것은 그 규칙으로
+                        // 바로 귀속하고, 나머지만 어휘 검색으로 넘긴다.
+                        //
+                        // 나누는 이유: BatchRunRowNeverCreated와 LegacyReturnCodeNeverBound는
+                        // **없는 것이 위반**이라 문서에서 어휘를 찾을 수 없다. 어휘 검색에만
+                        // 맡기면 영원히 귀속 실패로 떨어져 전량 재생성을 부른다 - 설계서
+                        // §3-5(c) 표가 이 둘을 하드 귀속으로 규정한 이유가 그것이다.
                         pendingDefectiveSteps.Clear();
-                        foreach (var lexeme in MechanicalValidator.ViolationLexemes(l1Result))
+
+                        void AddOwner(string? code)
                         {
-                            var owner = L1ViolationAttribution.AttributeByLexeme(
-                                consolidatedPlan, lexeme, currentSteps);
-                            if (owner != null && !pendingDefectiveSteps.Contains(owner, StringComparer.OrdinalIgnoreCase))
+                            if (!string.IsNullOrEmpty(code) &&
+                                !pendingDefectiveSteps.Contains(code, StringComparer.OrdinalIgnoreCase))
                             {
-                                pendingDefectiveSteps.Add(owner);
+                                pendingDefectiveSteps.Add(code);
+                            }
+                        }
+
+                        foreach (var detail in l1Result.DetailedErrors)
+                        {
+                            switch (detail.Type)
+                            {
+                                case ErrorType.BatchRunRowNeverCreated:
+                                    // RunId 발급 계약은 단계 목록의 첫 단계가 진다.
+                                    if (currentSteps is { Count: > 0 }) AddOwner(currentSteps[0].Code);
+                                    break;
+
+                                case ErrorType.LegacyReturnCodeNeverBound:
+                                    // 이 값의 거처는 오류 코드를 선언한 단계들이다.
+                                    foreach (var step in currentSteps ?? Enumerable.Empty<BatchStepPlan>())
+                                    {
+                                        if (step.ErrorCodes.Count > 0) AddOwner(step.Code);
+                                    }
+                                    break;
+
+                                default:
+                                    foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
+                                    {
+                                        AddOwner(L1ViolationAttribution.AttributeByLexeme(
+                                            consolidatedPlan, lexeme, currentSteps));
+                                    }
+                                    break;
                             }
                         }
 
@@ -781,34 +816,46 @@ L2 결함 분기의 `canRetry`는 그대로 둔다(`_maxAttempts == -1 || attemp
 
 ```csharp
         /// <summary>
-        /// L1 위반 메시지에서 문서를 훑을 어휘를 뽑는다. L1ViolationAttribution이
+        /// L1 위반 하나에서 문서를 훑을 어휘를 뽑는다. L1ViolationAttribution이
         /// 이것으로 위반이 실린 단계를 찾는다.
         ///
         /// 백틱으로 감싼 토큰만 쓴다 - 검사 메시지는 규칙 설명과 어휘를 함께 싣는데,
         /// 산문까지 문서에서 찾으면 아무 단계에나 걸린다. 어휘가 없는 메시지는
         /// 귀속 대상이 아니다(문서 전역 위반이다).
+        ///
+        /// ValidationResult 전체가 아니라 DetailedError 하나를 받는 이유: 호출부가
+        /// 위반 유형별로 다른 귀속 규칙을 쓴다. 전체를 받으면 유형이 뭉개져
+        /// 하드 귀속 대상과 어휘 검색 대상을 가를 수 없다.
         /// </summary>
-        public static IReadOnlyList<string> ViolationLexemes(ValidationResult result)
+        public static IReadOnlyList<string> ViolationLexemes(DetailedError error)
         {
             var lexemes = new List<string>();
-            if (result?.Errors == null) return lexemes;
+            if (error == null) return lexemes;
 
-            foreach (var error in result.Errors)
+            foreach (System.Text.RegularExpressions.Match match in
+                System.Text.RegularExpressions.Regex.Matches(
+                    error.Message ?? string.Empty, @"`(?<token>[^`\n]{2,80})`"))
             {
-                foreach (System.Text.RegularExpressions.Match match in
-                    System.Text.RegularExpressions.Regex.Matches(error ?? string.Empty, @"`(?<token>[^`\n]{2,80})`"))
+                var token = match.Groups["token"].Value.Trim();
+                if (token.Length > 0 && !lexemes.Contains(token, StringComparer.OrdinalIgnoreCase))
                 {
-                    var token = match.Groups["token"].Value.Trim();
-                    if (token.Length > 0 && !lexemes.Contains(token, StringComparer.OrdinalIgnoreCase))
-                    {
-                        lexemes.Add(token);
-                    }
+                    lexemes.Add(token);
                 }
             }
 
             return lexemes;
         }
 ```
+
+**`DetailedError`에 유형이 이미 있다.** `ErrorType`은 `BatchRunRowNeverCreated` ·
+`LegacyReturnCodeNeverBound` · `SqlSideControlFlow`를 포함해 37개 값을 든다
+(`MechanicalValidator.cs`의 `ErrorType` enum). 문자열을 뒤져 유형을 추정하지 마라 —
+구조화 신호가 이미 있다.
+
+**주의**: `l1Result.DetailedErrors`가 비고 `Errors`만 채워지는 검사가 있는지 확인하라.
+있다면 그 검사들은 위 `switch`의 `default`에도 닿지 못해 귀속이 통째로 건너뛰어진다.
+그 경우 `DetailedErrors`가 빈 위반은 어휘 검색으로 넘기는 폴백을 두되, **폴백이 돌았다는
+사실을 로그에 남겨라** — 조용히 넘어가면 어느 검사가 구조화 신호를 안 내는지 아무도 모른다.
 
 이 메서드의 테스트를 함께 쓴다:
 
@@ -1059,7 +1106,7 @@ git commit -m "feat: 오류 코드 누락 검사를 루프 안으로 올린다 �
 
 **Interfaces:**
 - Consumes: `BatchStepPlan(string Code, string Name, IReadOnlyList<string> LegacyProcedures, IReadOnlyList<string> TargetTables, IReadOnlyList<string> ErrorCodes, bool Chunkable, IReadOnlyList<string> SchemaTables)`
-- Produces: `ErrorCodeAttribution.Attribute(IReadOnlyDictionary<string, IReadOnlyList<string>> missingByProcedure, IReadOnlyList<BatchStepPlan>? steps) -> AttributionResult(IReadOnlyList<string> StepCodes, bool HasUnattributed)`
+- Produces: `ErrorCodeAttribution.Attribute(IReadOnlyDictionary<string, IReadOnlyList<string>> missingByProcedure, IReadOnlyList<BatchStepPlan>? steps) -> ErrorCodeAttributionResult(IReadOnlyList<string> StepCodes, bool HasUnattributed)`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -1788,14 +1835,27 @@ namespace ReSet.Core.Services
                         // 어느 단계가 문제인지 세 신호를 합쳐 정한다. Critic 지목만 쓰면
                         // 기계가 아는 결함(하한 미달·오류 코드 누락)이 있는 단계가 동결된다.
                         pendingDefectiveSteps.Clear();
-                        var errorCodeSteps = ErrorCodeAttribution
-                            .Attribute(missingErrorCodes, currentSteps).StepCodes;
+                        var codeAttribution = ErrorCodeAttribution.Attribute(missingErrorCodes, currentSteps);
                         var openSteps = StepFreezeState.OpenSteps(
-                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, errorCodeSteps);
+                            currentSteps, l2Result.DefectiveSteps, stepFloorViolations, codeAttribution.StepCodes);
 
                         if (openSteps != null)
                         {
                             pendingDefectiveSteps.AddRange(openSteps);
+                        }
+
+                        // 어느 단계도 선언하지 않은 원본 오류 코드가 누락됐다면 그것은
+                        // 본문이 아니라 목차의 결함이다(설계서 §3-5(b)). 기계가 발견한
+                        // 이 사실을 Critic의 자기 신고와 OR로 합쳐 재설계 조건에 넘긴다.
+                        //
+                        // 합치지 않으면 HasUnattributed가 소비자 없는 신호로 남는다 -
+                        // 만들어졌으나 아무도 안 쓰는 산출물이 이 계획에서 두 번 나왔다.
+                        machineFoundStructureDefect = codeAttribution.HasUnattributed;
+                        if (machineFoundStructureDefect)
+                        {
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
+                                "목차 결함으로 기록합니다.");
                         }
 ```
 
@@ -2041,10 +2101,23 @@ dotnet test tests/ReSet.Core.Tests --filter FullyQualifiedName~StructureRedraftP
 
 - [ ] **Step 6: 오케스트레이터가 두 플래그를 쓰게 한다**
 
-재설계 호출부를 바꾼다:
+재설계 호출부를 바꾼다. **Critic의 자기 신고와 기계가 발견한 목차 결함을 OR로 합친다** —
+Task 7이 `machineFoundStructureDefect`에 담아 둔 값이 그것이다(어느 단계도 선언하지 않은
+원본 오류 코드의 누락, 설계서 §3-5(b)).
 
 ```csharp
-                        if (redraftPolicy.TryConsume(improvedThisAttempt, l2Result.StructureDefective))
+                        if (redraftPolicy.TryConsume(
+                                improvedThisAttempt,
+                                l2Result.StructureDefective || machineFoundStructureDefect))
+```
+
+루프 앞에 회차별 변수를 선언한다(Task 7이 채우고 이 자리가 읽는다):
+
+```csharp
+            // 기계가 발견한 목차 결함. Critic의 StructureDefective와 OR로 합쳐진다 -
+            // 목차가 원본 오류 코드를 어느 단계에도 배정하지 않은 것은 모델의 판단을
+            // 기다릴 일이 아니라 결정적으로 아는 사실이다.
+            bool machineFoundStructureDefect = false;
 ```
 
 지목이 빈 경우의 처리를 바꾼다. `:2343`의 「지목이 비면 골격까지 새로 만든다」 자리에서, Task 7이 넣은 `openSteps` 계산 뒤에 다음을 둔다:
