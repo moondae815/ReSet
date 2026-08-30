@@ -354,6 +354,121 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// 더해진 항목은 자기를 부른 항목 <b>바로 뒤</b>에 온다. LoadDefinitionsAsync 의
+        /// 계약이 「입력 순서가 곧 배치 스텝 실행 순서」이고, 하위 프로시저는 부모 흐름
+        /// 안에서 실행되므로 끝에 붙이면 실행 순서가 틀린다(설계서 §6).
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_InsertsEachAdditionRightAfterItsReferrer()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                WriteSpec(root, Path.Combine("Procedures", "dbo.USP_Tail"));
+
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Tail", "docs", "Spec.md")
+                    });
+
+                Assert.Equal(
+                    new[]
+                    {
+                        "Procedures/dbo.USP_Parent/docs/Spec.md",
+                        "Procedures/dbo.USP_Child/docs/Spec.md",
+                        "Procedures/dbo.USP_Tail/docs/Spec.md"
+                    },
+                    closure.SpecPaths.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_Child/docs/Spec.md" },
+                    closure.Added.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+                Assert.False(closure.CapExceeded);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 실물이 순환이다 - Summary 가 EXTRA 를 부르고 EXTRA 가 Summary 를 부른다.
+        /// visited 가 없으면 끝나지 않는다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_TerminatesOnACycle()
+        {
+            var root = CreateCyclicManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[] { Path.Combine("Procedures", "dbo.USP_A", "docs", "Spec.md") });
+
+                Assert.Equal(
+                    new[] { "Procedures/dbo.USP_A/docs/Spec.md", "Procedures/dbo.USP_B/docs/Spec.md" },
+                    closure.SpecPaths.Select(p => p.Replace(Path.DirectorySeparatorChar, '/')).ToList());
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 이미 진입점에 있는 것은 다시 더하지 않는다. 사람이 부모와 자식을 둘 다
+        /// 골랐을 때 자식이 두 번 실리면 프롬프트에 같은 명세가 두 번 간다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_DoesNotDuplicateAnAlreadySelectedProcedure()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md")
+                    });
+
+                Assert.Empty(closure.Added);
+                Assert.Equal(2, closure.SpecPaths.Count);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        /// <summary>
+        /// 폐포가 진입점의 2배를 넘으면 더 넓히지 않는다. BatchStepPlanParser.MaxSteps 가
+        /// 이미 쓰는 폭주 방어와 같은 관용이다(설계서 §5).
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_StopsAtTheCapAndReportsIt()
+        {
+            var root = CreateChainManifestTree(length: 6);
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[] { Path.Combine("Procedures", "dbo.USP_C0", "docs", "Spec.md") });
+
+                Assert.True(closure.CapExceeded);
+                Assert.Equal(2, closure.SpecPaths.Count);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         private static string CreateOutputTree()
         {
             var root = Path.Combine(Path.GetTempPath(), $"ReSet-BatchCatalog-{Guid.NewGuid():N}");
@@ -399,6 +514,51 @@ namespace ReSet.Core.Tests
                 """);
 
             return root;
+        }
+
+        /// <summary>A 가 B 를 부르고 B 가 A 를 부르는 순환 트리.</summary>
+        private static string CreateCyclicManifestTree()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Cycle-{Guid.NewGuid():N}");
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_A"));
+            WriteSpec(root, Path.Combine("Procedures", "dbo.USP_B"));
+            WriteManifest(root, "dbo.USP_A", "dbo.USP_B");
+            WriteManifest(root, "dbo.USP_B", "dbo.USP_A");
+            return root;
+        }
+
+        /// <summary>C0 → C1 → … 로 이어지는 사슬. 상한 시험용이다.</summary>
+        private static string CreateChainManifestTree(int length)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ReSet-Chain-{Guid.NewGuid():N}");
+            for (var i = 0; i < length; i++)
+            {
+                WriteSpec(root, Path.Combine("Procedures", $"dbo.USP_C{i}"));
+            }
+
+            for (var i = 0; i < length - 1; i++)
+            {
+                WriteManifest(root, $"dbo.USP_C{i}", $"dbo.USP_C{i + 1}");
+            }
+
+            return root;
+        }
+
+        private static void WriteManifest(string root, string owner, string callee)
+        {
+            var rawDirectory = Path.Combine(root, "Procedures", owner, "raw");
+            Directory.CreateDirectory(rawDirectory);
+            File.WriteAllText(
+                Path.Combine(rawDirectory, "dependency-manifest.json"),
+                $$"""
+                {
+                  "Key": "DB.{{owner}}.Procedure",
+                  "Nodes": [
+                    { "Key": "DB.{{owner}}.Procedure", "Status": "Succeeded", "SpecPath": "docs/Spec.md" },
+                    { "Key": "DB.{{callee}}.Procedure", "Status": "Succeeded", "SpecPath": "../{{callee}}/docs/Spec.md" }
+                  ]
+                }
+                """);
         }
     }
 }

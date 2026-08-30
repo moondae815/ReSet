@@ -161,6 +161,67 @@ namespace ReSet.Cli
         private const string ManifestFileName = "dependency-manifest.json";
 
         /// <summary>
+        /// 진입점 목록을 프로시저 참조 폐포로 닫은 결과.
+        /// </summary>
+        /// <param name="SpecPaths">진입점 + 더해진 것. 순서가 실행 순서다.</param>
+        /// <param name="Added">더해진 것만. 호출부가 사람에게 알리는 데 쓴다.</param>
+        /// <param name="CapExceeded">상한에 걸려 더 넓히지 않고 멈췄는가.</param>
+        public sealed record ProcedureClosure(
+            IReadOnlyList<string> SpecPaths,
+            IReadOnlyList<string> Added,
+            bool CapExceeded);
+
+        /// <summary>
+        /// 사람이 고른 <b>진입점</b> 목록에, 그것이 부르는 프로시저 타입 참조를 고정점까지
+        /// 더한다. 사람의 선택 의미는 바뀌지 않는다 - 진입점은 그대로이고 <b>재료</b>만 닫는다.
+        ///
+        /// [왜 참조자 바로 뒤인가] <see cref="LoadDefinitionsAsync"/>의 계약이 순서를
+        /// 실행 순서로 쓴다. 하위 프로시저는 부모 흐름 <b>안에서</b> 실행되므로 끝에
+        /// 붙이면 실행 순서가 틀린다(설계서 §6).
+        ///
+        /// [왜 상한이 필요한가] 매니페스트가 예상보다 넓게 물리면 프롬프트가 폭주한다.
+        /// <c>BatchStepPlanParser.MaxSteps</c>가 이미 쓰는 방어와 같은 관용이다.
+        /// </summary>
+        public static ProcedureClosure CloseOverProcedureReferences(
+            string outputRoot, IReadOnlyList<string> entryPointSpecPaths)
+        {
+            if (entryPointSpecPaths is null || entryPointSpecPaths.Count == 0)
+            {
+                return new ProcedureClosure(Array.Empty<string>(), Array.Empty<string>(), false);
+            }
+
+            var cap = entryPointSpecPaths.Count * 2;
+            var ordered = new List<string>(entryPointSpecPaths);
+            var seen = new HashSet<string>(entryPointSpecPaths, StringComparer.OrdinalIgnoreCase);
+            var added = new List<string>();
+            var capExceeded = false;
+
+            // 인덱스로 돈다 - 더해진 항목도 자기 참조를 펼쳐야 고정점이 된다.
+            for (var i = 0; i < ordered.Count && !capExceeded; i++)
+            {
+                var insertAt = i + 1;
+                foreach (var reference in ReadProcedureReferences(outputRoot, ordered[i]))
+                {
+                    if (!seen.Add(reference)) continue;
+
+                    if (ordered.Count >= cap)
+                    {
+                        capExceeded = true;
+                        Log.Warning(
+                            "[배치 설계] 참조 폐포가 상한({Cap})에 걸려 더 넓히지 않습니다. 진입점 {EntryCount}개.",
+                            cap, entryPointSpecPaths.Count);
+                        break;
+                    }
+
+                    ordered.Insert(insertAt++, reference);
+                    added.Add(reference);
+                }
+            }
+
+            return new ProcedureClosure(ordered, added, capExceeded);
+        }
+
+        /// <summary>
         /// 이 명세가 부르는 <b>프로시저 타입</b> 참조 객체의 명세 경로를 outputRoot 기준
         /// 상대 경로로 돌려준다.
         ///
