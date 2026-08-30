@@ -1480,8 +1480,25 @@ namespace ReSet.Cli
                         });
                         AnsiConsole.WriteLine();
 
+                        // 사람이 고른 것은 진입점이고, 그것이 부르는 프로시저 타입 참조는
+                        // 도구가 재료에 더한다(설계서 §4). 함수는 더하지 않는다 - 부모
+                        // 명세의 「참조 함수 표」가 호출식 전문을 이미 담는다.
+                        var closure = BatchStepCatalog.CloseOverProcedureReferences(outputDir, selectedFiles);
+                        foreach (var added in closure.Added)
+                        {
+                            AnsiConsole.MarkupLine(
+                                $"[cyan]참조 프로시저를 재료에 추가했습니다: {Markup.Escape(added)}[/]");
+                            Serilog.Log.Information("[배치 설계] 참조 프로시저 재료 추가: {SpecPath}", added);
+                        }
+
+                        if (closure.CapExceeded)
+                        {
+                            AnsiConsole.MarkupLine(
+                                "[yellow]경고: 참조 폐포가 상한에 걸려 일부 참조 프로시저가 재료에서 빠졌습니다.[/]");
+                        }
+
                         var specsData = new List<(string FileName, string Content)>();
-                        foreach (var fileName in selectedFiles)
+                        foreach (var fileName in closure.SpecPaths)
                         {
                             var fullPath = Path.Combine(outputDir, fileName);
                             var content = await File.ReadAllTextAsync(fullPath);
@@ -1513,7 +1530,7 @@ namespace ReSet.Cli
                             // 계획 수립 전에 뜬다 - 종전에는 계획이 다 끝난 뒤에야 그 SP가
                             // 지시서에서 빠진다는 사실을 알렸다.
                             var loadResult = await BatchStepCatalog.LoadDefinitionsAsync(
-                                outputDir, selectedFiles, activeCts.Token);
+                                outputDir, closure.SpecPaths, activeCts.Token);
                             var spDefs = loadResult.Definitions.ToList();
 
                             foreach (var missing in loadResult.MissingMetadata)
