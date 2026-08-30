@@ -277,8 +277,21 @@ namespace ReSet.Cli
             }
 
             var cap = entryPointSpecPaths.Count * 2;
-            var ordered = new List<string>(entryPointSpecPaths);
-            var seen = new HashSet<string>(entryPointSpecPaths, StringComparer.OrdinalIgnoreCase);
+
+            // 대소문자만 다른 중복 진입점은 같은 프로시저다(Global Constraints: 경로
+            // 비교·중복 판정은 OrdinalIgnoreCase). seen은 이미 OrdinalIgnoreCase로
+            // 만들지만 예전 코드는 ordered를 entryPointSpecPaths에서 그대로 복사해
+            // seen과 별개로 중복을 남겼다 - 처음 나온 표기만 남기고 접는다.
+            var ordered = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entryPoint in entryPointSpecPaths)
+            {
+                if (seen.Add(entryPoint))
+                {
+                    ordered.Add(entryPoint);
+                }
+            }
+
             var added = new List<string>();
             var capExceeded = false;
 

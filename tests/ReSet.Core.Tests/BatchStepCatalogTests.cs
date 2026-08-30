@@ -469,6 +469,59 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// 진입점이 빈 목록이면 빈 폐포를 돌려주고 던지지 않는다 - outputRoot를
+        /// 건드리기도 전에 조기 반환하는 계약을 명문으로 잠근다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_ReturnsEmptyClosureForEmptyEntryPoints()
+        {
+            var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                "이-경로는-없다-그리고-안-건드려진다", Array.Empty<string>());
+
+            Assert.Empty(closure.SpecPaths);
+            Assert.Empty(closure.Added);
+            Assert.False(closure.CapExceeded);
+        }
+
+        /// <summary>
+        /// 대소문자만 다른 중복 진입점은 같은 프로시저다. Global Constraints(경로
+        /// 표기 항)가 비교·중복 판정에 StringComparer.OrdinalIgnoreCase를 명문으로
+        /// 요구한다 - Windows·macOS 양쪽에서 같은 판정을 내기 위해서다.
+        /// </summary>
+        [Fact]
+        public void CloseOverProcedureReferences_CollapsesCaseDifferingDuplicateEntryPoints()
+        {
+            var root = CreateManifestTree();
+            try
+            {
+                var closure = BatchStepCatalog.CloseOverProcedureReferences(
+                    root,
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("procedures", "DBO.usp_parent", "docs", "spec.md")
+                    });
+
+                // dbo.USP_Parent가 매니페스트로 dbo.USP_Child를 부르지만, 진입점
+                // 자체의 대소문자만 다른 중복은 하나로 뭉쳐야 한다.
+                Assert.Equal(
+                    new[]
+                    {
+                        Path.Combine("Procedures", "dbo.USP_Parent", "docs", "Spec.md"),
+                        Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md")
+                    },
+                    closure.SpecPaths);
+                Assert.Equal(
+                    new[] { Path.Combine("Procedures", "dbo.USP_Child", "docs", "Spec.md") },
+                    closure.Added);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         private static string CreateOutputTree()
         {
             var root = Path.Combine(Path.GetTempPath(), $"ReSet-BatchCatalog-{Guid.NewGuid():N}");
