@@ -6582,6 +6582,95 @@ SELECT 1;
         }
 
         /// <summary>
+        /// FIX ROUND 1 - Important: codeAttribution/machineFoundStructureDefect 계산이
+        /// 재설계 판정(redraftPolicy.TryConsume) 뒤에 있으면 그 계산에 쓰이는 currentSteps가
+        /// "이번 회차 것"이 아니라 "재설계가 이미 지워버린 것"이 될 위험이 있다 -
+        /// ClearSplitGenerationCacheAfterRedraft가 currentSteps를 null로 만들기 때문이다.
+        ///
+        /// 시나리오: 1회차는 S01이 하한 미달로 기록된 채 최고 후보가 된다. 2회차는
+        /// (S01의 살아있는 floor violation 덕에) targeted로 캐시된 골격을 재사용해
+        /// S01만 다시 뽑지만 여전히 미달이고 점수도 더 낮다(개선 아님) - 종전 단일
+        /// 조건 정책(1회 미갱신)이 재설계를 발동시킨다. 재설계는
+        /// ClearSplitGenerationCacheAfterRedraft로 currentSteps를 null로 만든다.
+        /// 3회차는 재설계 뒤 골격부터 전량 다시 만들고(캐시가 없으므로) 이번엔
+        /// S01도 건강해 통과한다.
+        ///
+        /// 이 테스트는 (1) 재설계 직후 이어지는 StepFreezeState.OpenSteps 호출이
+        /// null이 된 currentSteps를 그대로 받아 예외 없이 null 계약을 타는지,
+        /// (2) pendingDefectiveSteps가 S01 같은 옛 코드를 들고 다음 회차로 새지
+        /// 않아 3회차가 targeted가 아니라 전량(골격 포함) 재생성을 하는지,
+        /// (3) 이번 시나리오에는 기계가 발견한 목차 결함(귀속 실패한 원본 오류
+        /// 코드 누락)이 없으므로 재설계가 currentSteps를 지운 것과 무관하게
+        /// "목차 결함으로 기록합니다" 배너가 헛되이 뜨지 않는지를 확인한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenRedraftFires_OpenStepsHandlesNulledStepsAndDoesNotFalselyReportStructureDefect()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // 1회차와 2회차(결함이 있으나 최고 후보로 기록됨 / 점수가 더 낮아 개선이
+            // 아님 - 종전 단일 조건 정책이 재설계를 발동시킨다)는 review가 미리
+            // 선언돼야 GenerateBatchStepSectionAsync가 "몇 회차인지"를 review 완료
+            // 횟수로 판정할 수 있다. reviewCall은 두 배선이 공유한다.
+            var reviewCall = 0;
+
+            // S01은 review가 2번 끝나기 전까지(1회차 생성, 2회차의 targeted 재생성)
+            // 코드 블록이 없어 하한 미달이고, 3회차(재설계 뒤 전량 재생성)부터는
+            // 건강하다. reviewCall로 회차를 가리는 이유: 하한 재시도가 한 회차
+            // 안에서 GenerateBatchStepSectionAsync를 최대 5번(maxTries) 불러
+            // 누적 호출 횟수로는 회차 경계를 알 수 없다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    if (step.Code == "S01" && reviewCall < 2)
+                    {
+                        return new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 있다." };
+                    }
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        0 => new ReviewResult { HasDefects = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                        1 => new ReviewResult { HasDefects = true, FeedbackComment = "여전히 문서 전반 결함", ScoreAccuracy = 5, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
+                        _ => new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 },
+                    };
+                });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var result = await RunBatchPipelineWithUi(aiService, ui, isBatchMode: true);
+
+            // 예외 없이 통과로 끝난다 - null이 된 currentSteps를 OpenSteps가
+            // 처리하지 못하면 이 지점까지 오지 못하고 NullReferenceException으로 죽는다.
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 골격은 두 번만 불린다: 1회차(최초) + 3회차(재설계로 캐시가 지워져
+            // 전량 재생성). 2회차는 S01의 살아있는 하한 위반 덕에 targeted라
+            // 캐시된 골격을 재사용해 호출하지 않는다. 세 번이 되면(재설계 뒤에도
+            // targeted로 오인해 캐시를 재사용하려 한 것이거나, 반대로 2회차조차
+            // 캐시를 못 쓴 것이다) 계약이 깨진 것이다.
+            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+
+            // 이번 시나리오에는 기계가 발견한 목차 결함(어느 단계도 선언하지 않은
+            // 원본 오류 코드 누락)이 없다 - 재설계가 currentSteps를 지운 것과 무관하게
+            // 그 사실이 "목차 결함"으로 잘못 보고돼서는 안 된다.
+            ui.DidNotReceive().NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
+        }
+
+        /// <summary>
         /// 코드 리뷰 지적 사항(Finding 2, 과소 보고 방향) 픽스: 1회차는 S01이
         /// 하한 미달로 기록된 채 최고점 후보가 된다. 2회차는 지목 재생성으로
         /// S01만 고치지만(그 회차 자신의 라이브 stepFloorViolations에서 S01이
