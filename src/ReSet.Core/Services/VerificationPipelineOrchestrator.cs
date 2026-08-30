@@ -2067,14 +2067,30 @@ namespace ReSet.Core.Services
                 // L2 지목 수집부에 있던 자리는 L1 게이트가 이미 막아 항상 빈 입력만
                 // 받아 §3-5(b)가 구조적으로 도달 불가능했다).
                 //
-                // L1이 통과한 회차(missingErrorCodes 비었음)에도 매번 다시 계산한다 -
-                // if(!l1Result.IsValid) 안에서만 계산하면 그 회차에 결함이 없어 이
-                // 블록을 건너뛸 때 machineFoundStructureDefect가 직전 회차의 "참"
-                // 값을 그대로 들고 있다가 결함이 고쳐진 뒤에도 영원히 목차 결함으로
-                // 잘못 보고한다.
+                // TASK 12 - 이 신호는 L1(발견 시점)에서 L2 재설계 판정(소비 시점,
+                // :2322)으로 회차를 넘어야 한다. ErrorCodeAttribution.Attribute는
+                // missingErrorCodes가 비면(Count==0) 평가 자체를 하지 않고 무조건
+                // false를 돌려준다 - 그런데 L2에 도달하는 회차는 정의상 l1Result.IsValid가
+                // 참인 회차, 즉 missingErrorCodes가 반드시 빈 회차다. "매 회차 무조건
+                // 덮어쓴다"였던 이전 규칙(FIX ROUND 1)대로면 L2에 도달하는 바로 그
+                // 회차에 이 값이 항상 false로 리셋되어 재설계 조건이 구조적으로 도달
+                // 불가능했다(코디네이터 실측).
+                //
+                // 고친 규칙: missingErrorCodes가 실제로 채워져 귀속을 "의미 있게"
+                // 평가한 회차에만 값을 갱신한다(참이든 거짓이든). 빈 회차(Count==0)는
+                // 평가 자체가 없었다는 뜻이므로 직전 값을 그대로 들고 간다 - 그래야
+                // 발견 회차의 사실이 L1을 통과한 다음 회차의 L2 판정까지 살아남는다.
+                // 낡은 값이 영원히 눌어붙는 것은 두 자리에서 막는다: (1) 여기서
+                // missingErrorCodes가 다시 채워지고 이번엔 전부 귀속되면(진짜 해소)
+                // false로 갱신되고, (2) 목차가 실제로 재설계되면(:2340 부근) 새 목차는
+                // 아직 판정된 적이 없으므로 명시적으로 리셋한다.
                 var codeAttribution = ErrorCodeAttribution.Attribute(missingErrorCodes, currentSteps);
                 var previouslyFoundStructureDefect = machineFoundStructureDefect;
-                machineFoundStructureDefect = codeAttribution.HasUnattributed;
+                if (missingErrorCodes.Count > 0)
+                {
+                    machineFoundStructureDefect = codeAttribution.HasUnattributed;
+                }
+
                 // 상태가 새로 참이 될 때만 알린다 - 결함이 지속되는 매 회차마다 같은
                 // 배너를 반복하면 화면에서 진짜 변화를 가린다(FIX ROUND 1).
                 if (machineFoundStructureDefect && !previouslyFoundStructureDefect)
@@ -2343,6 +2359,14 @@ namespace ReSet.Core.Services
                                 ClearSplitGenerationCacheAfterRedraft(
                                     out lastSkeleton, out lastSkeletonResult, out lastStepSections, out currentSteps,
                                     out stepFloorViolations, pendingDefectiveSteps);
+
+                                // TASK 12 - 새 목차는 아직 판정된 적이 없다. 옛 목차에서
+                                // 발견한 목차 결함 사실을 그대로 들고 가면, 새 목차가
+                                // 실제로 코드를 제대로 귀속하더라도 다음 정체 판정에서
+                                // 낡은 "참"이 또 재설계를 부른다(§3-4는 Job당 1회
+                                // 상한이 있어 두 번째 재설계는 막히지만, 그 상한에
+                                // 기대는 것은 이 값의 의미를 지키는 것과 다르다).
+                                machineFoundStructureDefect = false;
                             }
                         }
 

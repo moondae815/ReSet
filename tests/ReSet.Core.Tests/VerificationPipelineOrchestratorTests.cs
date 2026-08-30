@@ -9144,5 +9144,94 @@ SELECT 1;
             _userInteraction.Received().NotifyStatus(
                 Arg.Is<string>(s => s.Contains("최고 후보") && s.Contains("되돌립니다")));
         }
+
+        // TASK 12 - 기계가 L1에서 발견한 목차 결함(§3-5(b))이 재설계 판정(§3-4)까지
+        // 살아남아야 한다.
+        //
+        // 기존 코드의 결함: machineFoundStructureDefect가 참이 되려면 missingErrorCodes가
+        // 비어있지 않아야 하는데(귀속 실패), 그 순간 l1Result.IsValid도 함께 false가 되어
+        // 그 회차는 L2(재설계 판정이 있는 곳)에 아예 도달하지 못한다. 게다가 값이 매 회차
+        // (missingErrorCodes가 빈) L1 통과 회차에도 무조건 재계산돼 곧바로 false로
+        // 덮어써진다 - "발견 시점"과 "소비 시점"이 서로 다른 회차인데 다리가 없다.
+        //
+        // 시나리오: 1회차는 S01이 -1(USP_Spec1, S01이 귀속)과 -7(USP_Orphan, 어느
+        // 단계도 선언하지 않음 - 귀속 실패)을 함께 누락한다. -1의 귀속 성공 덕에 L1은
+        // S01만 지목 재생성하고, 그 재생성 본문이 -1과 -7을 모두 실어 L1이 통과한다.
+        // 이 순간 machineFoundStructureDefect의 재계산 입력(missingErrorCodes)은 비어
+        // 있으므로, 방금 발견한 "참"이 그대로 살아 있어야만 뒤이은 2회 연속 정체 판정에서
+        // 재설계가 발동한다. Critic은 StructureDefective를 한 번도 세우지 않는다 - 기계
+        // 신호 단독으로 재설계가 발동하는지 보는 것이다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_MachineFoundStructureDefectAlone_TriggersRedraftAfterStagnation()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n  ]\n}\n```";
+            var redraftedStepsJson = "```json\n{\n  \"Steps\": [\n    { \"Code\": \"S01\", \"Name\": \"재설계 단계\", \"LegacyProcedures\": [\"USP_Spec1\", \"USP_Orphan\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\", \"-7\"] }\n  ]\n}\n```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson }, new AiResult { Content = "## 재설계 목차\n" + redraftedStepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01: 1~5번째 호출(최초 생성 1회 + 하한 재시도 4회, maxTries=5 전량
+            // 소진)은 -1도 -7도 싣지 않는다 - 하한 재시도는 S01 자신이 선언한
+            // -1만 보므로(§3-5(b)의 목차 귀속과는 다른 층) 5회 모두 지나가고
+            // "하한 미달"로만 기록된다. 그 결과 L1이 -1(귀속 성공)과 -7(귀속
+            // 실패, 목차 결함)을 함께 지목하고, 6번째 호출(L1의 지목 재생성)부터
+            // 둘 다 싣는다.
+            var s01Call = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    s01Call++;
+                    return s01Call <= 5
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1이고 반환 코드는 없다.\n\n```sql\nSELECT 1;\n```" }
+                        : new AiResult { Content = "### S01 단계\n\ndbo.T1이고 -1과 -7을 모두 반환한다.\n\n```sql\nSELECT 1;\n```" };
+                });
+
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    var call = reviewCall++;
+                    return call switch
+                    {
+                        // 1회차(최초 채점) - 항상 개선으로 기록돼 정체 판정에 들어가지 않는다.
+                        0 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }),
+                        // 2·3회차 - 점수가 오르지 않아 2회 연속 정체가 성립한다.
+                        1 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "여전히 결함", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                        2 => Task.FromResult(new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "정체", ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 7 }),
+                        // 재설계 뒤 회차 - 통과로 마무리한다.
+                        _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 }),
+                    };
+                });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "5", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "@po_intRetVal = -1 이다."),
+                ("dbo.USP_Orphan", "@po_intRetVal = -7 이다."),
+            };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 핵심 단언: Critic은 한 번도 StructureDefective를 세우지 않았는데도
+            // 목차가 재설계된다 - 기계가 L1에서 찾은 목차 결함이 L2 정체 판정까지
+            // 살아남았다는 직접 증거다.
+            await aiService.Received(2).DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("재시도가 점수를 개선하지 못해 목차를 다시 설계합니다")));
+
+            // 기계 발견 배너는 최초 발견 시 한 번만 뜬다.
+            ui.Received(1).NotifyStatus(Arg.Is<string>(s => s.Contains("목차 결함으로 기록합니다")));
+        }
     }
 }
