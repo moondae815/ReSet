@@ -2310,6 +2310,30 @@ namespace ReSet.Core.Services
                         // Steps는 폐기본을 서술하는 모순이 생긴다.
                         currentSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
 
+                        // TASK 12 FIX ROUND 1 리뷰 지적 - 이 자리도 currentPlanStructure를
+                        // 다른 회차의 상태로 교체하지만, machineFoundStructureDefect는
+                        // 의도적으로 손대지 않는다. 재설계 자리(:2369 부근)의 리셋
+                        // ("아직 판정된 적 없는 새 구조")과 겉보기엔 같은 상황 같지만
+                        // 아니다 - 두 가지를 실측으로 모두 기각했다.
+                        //
+                        // (1) 재설계 자리처럼 false로 리셋: RunConsolidatedPipeline_
+                        // MachineFoundStructureDefectAlone_TriggersRedraftAfterStagnation을
+                        // 깬다. 채택본(bestAttempt)은 이미 L1 지목 재생성으로 §3-5(b)
+                        // 결함을 발견까지 마친 뒤의 상태인데, 이 롤백은 개선 없는 *매
+                        // 회차*(정체 스트릭을 세는 그 회차들) 일어난다 - 재설계처럼
+                        // "가끔, 끝에 한 번"이 아니다. 여기서 false로 밀면 :2340의
+                        // 재설계 판정이 그 발견을 정체 2회째에 채 보기도 전에 지운다.
+                        //
+                        // (2) adoptedState에 값을 스냅샷해 뒀다가 복원: RunConsolidatedPipeline_
+                        // MachineFoundStructureDefectResolvedByLaterAttribution_DoesNotRedraft를
+                        // 깬다. 그 채택본이 최고 후보가 되던 시점의 값(참)이, 그 *이후*
+                        // 회차에서 이뤄진 진짜 해소(§3-5(b) 재평가로 거짓 확정)보다
+                        // 낡은 값이라 롤백이 해소된 사실을 지우고 낡은 참을 되살린다.
+                        //
+                        // 그래서 여기서는 살아있는 값을 그대로 둔다 - 바로 위에서
+                        // feedbackHistory를 되돌리지 않는 것과 같은 원칙이다: 버려진
+                        // 회차가 알아낸 사실(발견이든 해소든)도 정보이고, 롤백은 산출물
+                        // 텍스트만 되감을 뿐 그 사실까지 되감지 않는다.
                         _userInteraction.NotifyStatus(
                             $"[yellow]{jobName}[/] - {attempt}차 시도({l2Result.NormalizedScore}/100)가 " +
                             $"최고 후보({bestAttempt.Current.AttemptNumber}차, {bestAttempt.Current.Review.NormalizedScore}/100)를 " +
