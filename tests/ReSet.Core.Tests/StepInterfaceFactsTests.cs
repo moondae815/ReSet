@@ -100,6 +100,38 @@ public sealed class StepInterfaceFactsTests
         Assert.Empty(StepInterfaceFacts.Build(new[] { Step("S05", "dbo.X") }, null));
     }
 
+    // PromptContextScope.NarrowSpecs가 1-hop 이웃을 찾는 재료다. 테이블은 명세서가
+    // 없으므로 담지 않는다 - 담아도 NarrowSpecs가 매치할 대상이 없어 잡음만 된다.
+    [Fact]
+    public void BuildCallGraph_KeepsOnlyProcedureAndFunctionCallees()
+    {
+        var caller = new SpDefinition { Schema = "dbo", Name = "UP_Util_Settle_Summary" };
+        caller.Dependencies.Add(new DependencyInfo { Schema = "dbo", Name = "UP_UTIL_SETTLE_SUMMARY_EXTRA", Type = "SQL_STORED_PROCEDURE" });
+        caller.Dependencies.Add(new DependencyInfo { Schema = "dbo", Name = "TSettleMst", Type = "USER_TABLE" });
+
+        var graph = StepInterfaceFacts.BuildCallGraph(new[] { caller });
+
+        var callees = Assert.Single(graph, kv => kv.Key == "dbo.UP_Util_Settle_Summary").Value;
+        Assert.Equal(new[] { "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA" }, callees);
+    }
+
+    [Fact]
+    public void BuildCallGraph_OmitsAProcedureThatCallsNoOtherCodeObject()
+    {
+        var caller = new SpDefinition { Schema = "dbo", Name = "UP_UTIL_SETTLE_INS" };
+        caller.Dependencies.Add(new DependencyInfo { Schema = "dbo", Name = "TSettleMst", Type = "USER_TABLE" });
+
+        var graph = StepInterfaceFacts.BuildCallGraph(new[] { caller });
+
+        Assert.Empty(graph);
+    }
+
+    [Fact]
+    public void BuildCallGraph_NullDefinitions_ReturnsAnEmptyGraph()
+    {
+        Assert.Empty(StepInterfaceFacts.BuildCallGraph(null));
+    }
+
     [Fact]
     public void ParameterNames_StripsTheTypeAndKeepsTheAtSign()
     {

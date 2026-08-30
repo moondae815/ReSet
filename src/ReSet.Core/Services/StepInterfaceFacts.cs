@@ -129,6 +129,44 @@ namespace ReSet.Core.Services
             return map;
         }
 
+        /// <summary>
+        /// 프로시저 자신이 호출하는 다른 코드 객체(프로시저·함수)의 그래프.
+        /// <see cref="PromptContextScope.NarrowSpecs"/>의 1-hop 이웃 판정 재료다.
+        ///
+        /// [테이블을 빼는 이유]
+        /// Dependencies에는 테이블도 섞여 있다(<see cref="SqlObjectTypeClassifier.IsCodeObject"/>로
+        /// 가른다). NarrowSpecs가 찾는 "이웃"은 명세서를 가진 대상뿐이고, 명세서는
+        /// 프로시저·함수에만 있다 - 테이블을 넣어도 매칭될 명세서가 없어 순수 잡음이다.
+        ///
+        /// [호출이 없는 프로시저를 담지 않는 이유]
+        /// CollectParameters와 같은 소프트 스킵 관례다. 빈 목록을 사실로 내보내면
+        /// "이 프로시저는 아무것도 호출하지 않는다"는 확정된 사실처럼 읽히는데,
+        /// 실제로는 "찾지 못했다"와 구분되지 않는다.
+        /// </summary>
+        public static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildCallGraph(
+            IReadOnlyList<SpDefinition>? definitions)
+        {
+            var map = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            if (definitions == null) return map;
+
+            foreach (var def in definitions)
+            {
+                if (def?.Name == null) continue;
+
+                var callees = def.Dependencies
+                    .Where(dep => SqlObjectTypeClassifier.IsCodeObject(dep.Type))
+                    .Select(dep => $"{dep.Schema}.{dep.Name}")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (callees.Count == 0) continue;
+
+                map[$"{def.Schema}.{def.Name}"] = callees;
+            }
+
+            return map;
+        }
+
         public static IReadOnlyList<StepInterface> Build(
             IReadOnlyList<BatchStepPlan>? steps,
             IReadOnlyDictionary<string, IReadOnlyList<string>>? parametersByProcedure)
