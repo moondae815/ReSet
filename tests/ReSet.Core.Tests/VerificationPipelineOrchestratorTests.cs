@@ -6974,13 +6974,14 @@ SELECT 1;
                 .Returns(_ =>
                 {
                     var call = reviewCall++;
-                    // 1회차: 88점, SkeletonDefective로 골격부터 전체 재생성을
-                    // 유발한다(지목 없는 리뷰는 이제 재호출 상한을 타므로, 이
-                    // 테스트가 보려는 "문서 전반 결함 -> 전체 재생성" 경로를 보려면
-                    // 자리를 대야 한다). 2회차: 60점 — 최고점 후보를 갱신 못 한다.
+                    // 1회차: 88점, S01을 지목해 2회차의 targeted 재생성을 유발한다
+                    // (Critical 1 이후 캐시가 있는 채로 지목이 비면 아무것도
+                    // 다시 만들지 않으므로, 이 테스트가 노리는 "2회차가 S01을 다시
+                    // 만들어 하한 미달을 낸다"를 보려면 실제 지목이 있어야 한다).
+                    // 2회차: 60점 — 최고점 후보를 갱신 못 한다.
                     return call == 0
-                        ? new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = "문서 전반 결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 8 }
-                        : new ReviewResult { HasDefects = true, FeedbackComment = "여전히 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
+                        ? new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "S01 결함", ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 8 }
+                        : new ReviewResult { HasDefects = true, DefectiveSteps = { "S01" }, FeedbackComment = "여전히 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
                 });
 
             var dbService = Substitute.For<IDbMetadataService>();
@@ -6995,10 +6996,19 @@ SELECT 1;
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
             Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
-            // 2회차가 실제로 골격부터 전체 재생성을 했는지(의도한 경로인지) 확인한다.
-            await aiService.Received(2).GenerateBatchPlanSkeletonAsync(
+            // 2회차가 골격을 재사용(targeted)했는지 확인한다 - 캐시가 있는 채로
+            // S01만 지목했으므로 골격은 다시 불리지 않는다(§3-6). S01의 정확한
+            // 호출 횟수는 단언하지 않는다 - 하한 미달 재시도(GenerateStepSectionWithFloorRetryAsync,
+            // maxTries)가 내부적으로 여러 번 호출하기 때문이다.
+            await aiService.Received(1).GenerateBatchPlanSkeletonAsync(
                 Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<CancellationToken>());
+            // 지목되지 않은 S02는 1회차에서만 만들어져야 한다 - 캐시된 바이트가
+            // 그대로 재사용된다.
+            await aiService.Received(1).GenerateBatchStepSectionAsync(
+                Arg.Is<BatchStepPlan>(s => s.Code == "S02"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
+                Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
             // 핵심 불변식: 채택된 1회차 문서는 하한 위반이 전혀 없다. 2회차(다른
             // 회차)의 위반 기록이 배너로 새어 나오면 안 된다.
             Assert.DoesNotContain("하한 미달", result.Plan!);
