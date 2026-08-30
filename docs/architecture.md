@@ -48,7 +48,7 @@ flowchart TD
 | | [SessionManager](../src/ReSet.Cli/SessionManager.cs) | 로컬 세션 파일(`.session.json`)을 활용한 직전 로그인 정보 관리 및 서버·DB명 즉시 수정 기능 제공. |
 | | [CliArgs](../src/ReSet.Cli/CliArgs.cs) | CLI 아규먼트 파싱 결과(`--conn`, `--sp`, `--all`, `--job-name` 등)를 담는 데이터 모델. |
 | | [ValidationUiProxy](../src/ReSet.Cli/ValidationUiProxy.cs) | 검증기(Validator)의 L1/L2/L3 요약 보고서를 Spectre.Console을 활용하여 렌더링하는 TUI 브릿지 구현체. |
-| | [BatchStepCatalog](../src/ReSet.Cli/BatchStepCatalog.cs) | 통합 배치 설계의 스텝 후보 명세서를 선별하고 각 스텝의 분석 메타데이터를 복원하며, 복원 실패를 누락·파싱 실패로 나누어 호출부가 사유를 그대로 알릴 수 있게 합니다. `ExtractProcedureIdentifier`는 상대 경로에서 `Procedures` 세그먼트 바로 다음의 객체 식별자(`dbo.UP_X` 형태)를 뽑습니다 — 마지막 세그먼트는 항상 `Spec.md`이므로 그걸 쓰면 안 됩니다. |
+| | [BatchStepCatalog](../src/ReSet.Cli/BatchStepCatalog.cs) | 통합 배치 설계의 스텝 후보 명세서를 선별하고 각 스텝의 분석 메타데이터를 복원하며, 복원 실패를 누락·파싱 실패로 나누어 호출부가 사유를 그대로 알릴 수 있게 합니다. `ExtractProcedureIdentifier`는 상대 경로에서 `Procedures` 세그먼트 바로 다음의 객체 식별자(`dbo.UP_X` 형태)를 뽑습니다 — 마지막 세그먼트는 항상 `Spec.md`이므로 그걸 쓰면 안 됩니다. `CloseOverProcedureReferences`는 사람이 고른 진입점이 부르는 프로시저 타입 참조(함수 제외)의 명세를 참조자 바로 뒤에 삽입해 고정점까지 재료를 넓히고(TUI·`--job-name` 배치 모드 둘 다 적용), `ReorderByClosure`는 이미 순서가 흐트러진 재료 목록(배치 모드가 참조 프로시저를 끝에 덧붙인 뒤)을 이 폐포 순서로 다시 줄 세우면서 폐포에 없는 항목도 하나 안 잃습니다. |
 | | [SpecHeaderReader](../src/ReSet.Cli/SpecHeaderReader.cs) | 저장된 `Spec.md` 상단의 YAML 헤더에서 검증 종료 상태와 Critic 점수를 되읽어, 캐시로 복원된 명세서도 신규 분석과 동일하게 보고되도록 합니다. |
 | | [TargetProcedureResolver](../src/ReSet.Cli/TargetProcedureResolver.cs) | `--sp`로 지목한 이름을 DB 프로시저 목록에 대조한다 — 점이 있으면 전체 이름, 없으면 스키마를 뺀 이름으로 대소문자 무시 비교하고 약칭·부분 이름은 맞추지 않는다. 미일치는 `Unmatched`로 돌려 CLI가 "경고 후 진행"이 아니라 종료 코드 1로 끝내게 한다(약칭으로 지정한 재생성이 전부 조용히 건너뛰어진 2026-08-23 실측). |
 | | [CoverageMapCommand](../src/ReSet.Cli/CoverageMapCommand.cs) | `--coverage-map`의 진입점. DB·AI 연결 없이 `output/` 산출물만으로 커버리지 맵 HTML을 낸다. Job 이름이면 그 Job의 참조 폐포를, 객체 이름이면 그 객체 하나를 대상으로 삼는다. 재료를 못 읽어 빠진 객체는 조용히 넘기지 않고 화면에 남긴다 — 폐포에서 몇 개가 빠지면 맵은 멀쩡해 보이는데 대조 범위가 줄어든 것을 아무도 모르기 때문이다(§5.7) |
@@ -271,12 +271,17 @@ graph TD
 
 ```mermaid
 graph TD
-    %% 1단계: 이미 저장된 명세서를 모은다 - 이 경로는 SP를 다시 분석하지 않는다
+    %% 1단계: 이미 저장된 명세서를 모은다 - 이 경로는 SP를 다시 분석하지 않는다.
+    %% 사람/--target이 고른 것은 진입점일 뿐이다 - 두 분기 모두 그 진입점이
+    %% 부르는 프로시저 타입 참조의 명세를 CloseOverProcedureReferences로 재료에
+    %% 더한다(함수 참조는 안 더한다).
     subgraph Collect ["1. 대상 명세서 수집 (Collection)"]
         EnterB["통합 배치 마이그레이션 설계 경로 진입"] --> ModeB{"배치 모드 여부?"}
         ModeB -- "아니오 (TUI)" --> PickSpecs["순차 단일 선택 루프로 저장된 Spec.md를 큐에 적재<br/>(물리 선택 순서 보장, 5.2절)"]
         ModeB -- "예 (--job-name)" --> AutoSpecs["BatchStepCatalog으로 스텝 후보 선별 및<br/>스텝별 분석 메타데이터 복원"]
-        PickSpecs & AutoSpecs --> JobName["Job 이름 확정 및 출력 루트 결정<br/>(output/Jobs 하위)"]
+        PickSpecs --> CloseTui["CloseOverProcedureReferences로 참조 프로시저 명세를<br/>재료에 추가(closure.SpecPaths 순서 그대로 사용)"]
+        AutoSpecs --> CloseBatch["CloseOverProcedureReferences로 재료 추가 후<br/>ReorderByClosure로 폐포 순서에 맞게 재정렬"]
+        CloseTui & CloseBatch --> JobName["Job 이름 확정 및 출력 루트 결정<br/>(output/Jobs 하위)"]
     end
 
     %% 2단계: 명세서 경로의 dynamic/단일 분기와 달리 항상 3단계 순차 생성이다
