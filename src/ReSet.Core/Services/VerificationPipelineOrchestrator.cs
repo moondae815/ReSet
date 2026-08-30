@@ -2198,8 +2198,15 @@ namespace ReSet.Core.Services
                             default:
                                 foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
                                 {
-                                    AddOwner(L1ViolationAttribution.AttributeByLexeme(
-                                        consolidatedPlan, lexeme, currentSteps));
+                                    // 체계적 위반(규칙 3-1/10류)은 한 어휘가 여러 단계
+                                    // 섹션에 나타난다 - 첫 발견 하나로 멈추면 나머지
+                                    // 단계는 영영 얼어붙는다(최종 whole-branch 리뷰,
+                                    // Important 5). 귀속되는 단계 전부를 연다.
+                                    foreach (var code in L1ViolationAttribution.AttributeByLexeme(
+                                        consolidatedPlan, lexeme, currentSteps))
+                                    {
+                                        AddOwner(code);
+                                    }
                                 }
                                 break;
                         }

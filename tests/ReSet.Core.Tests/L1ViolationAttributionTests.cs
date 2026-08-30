@@ -46,9 +46,9 @@ namespace ReSet.Core.Tests
         {
             var steps = new[] { Step("S01"), Step("S02"), Step("S03") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(Document, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(Document, "END TRY", steps);
 
-            Assert.Equal("S02", code);
+            Assert.Equal(new[] { "S02" }, codes);
         }
 
         [Fact]
@@ -56,46 +56,84 @@ namespace ReSet.Core.Tests
         {
             var steps = new[] { Step("S01"), Step("S02"), Step("S03") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(Document, "batch.BatchRun", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(Document, "batch.BatchRun", steps);
 
-            Assert.Equal("S01", code);
+            Assert.Equal(new[] { "S01" }, codes);
         }
 
         // 어디에도 없으면 귀속하지 않는다. 억지로 붙이면 멀쩡한 단계를 다시 쓴다.
         [Fact]
-        public void LexemeNotFound_ReturnsNull()
+        public void LexemeNotFound_ReturnsEmpty()
         {
             var steps = new[] { Step("S01"), Step("S02") };
 
-            Assert.Null(L1ViolationAttribution.AttributeByLexeme(Document, "MERGE INTO", steps));
+            Assert.Empty(L1ViolationAttribution.AttributeByLexeme(Document, "MERGE INTO", steps));
         }
 
         [Fact]
-        public void NullSteps_ReturnsNull()
+        public void NullSteps_ReturnsEmpty()
         {
-            Assert.Null(L1ViolationAttribution.AttributeByLexeme(Document, "END TRY", steps: null));
+            Assert.Empty(L1ViolationAttribution.AttributeByLexeme(Document, "END TRY", steps: null));
         }
 
         // 단계 헤딩 앞(공통 규약 절)에 있는 어휘는 어느 단계의 것도 아니다.
         // 골격의 결함이므로 단계에 붙이면 안 된다.
         [Fact]
-        public void LexemeBeforeAnyStepHeading_ReturnsNull()
+        public void LexemeBeforeAnyStepHeading_ReturnsEmpty()
         {
             var doc = "## 단계별 이행 상세 및 의사코드\n\n공통 규약에서 END TRY 를 금지한다.\n\n### S01. 첫 단계\n\n본문\n";
             var steps = new[] { Step("S01") };
 
-            Assert.Null(L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps));
+            Assert.Empty(L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps));
         }
 
         // 목차에 없는 단계 헤딩 안에서 발견되면 귀속하지 않는다 -
         // 그 헤딩은 우리가 아는 단계가 아니다.
         [Fact]
-        public void LexemeInUnknownStepSection_ReturnsNull()
+        public void LexemeInUnknownStepSection_ReturnsEmpty()
         {
             var doc = "## 단계별 이행 상세 및 의사코드\n\n### S99. 모르는 단계\n\nEND TRY\n";
             var steps = new[] { Step("S01") };
 
-            Assert.Null(L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps));
+            Assert.Empty(L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps));
+        }
+
+        // Important 5 (최종 whole-branch 리뷰): 규칙 3-1/10 위반은 체계적이다 - 모델이
+        // 한 단계에서 BEGIN TRY/END CATCH 를 쓰면 보통 여러 단계에서 쓴다. 첫 발견에서
+        // 멈추면 나머지 단계는 StepFreezeState가 영영 열지 않아 L1이 다음 회차에도
+        // 같은 위반으로 다시 실패하고, l1RepairAttempt(Job 전체 예산)만 태운다.
+        // 매칭되는 단계를 전부 모아야 한다.
+        [Fact]
+        public void LexemeInTwoStepSections_AttributesToBothSteps()
+        {
+            const string doc = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### S01. 첫 단계
+
+                ```sql
+                BEGIN TRY
+                    SELECT 1;
+                END TRY
+                BEGIN CATCH
+                END CATCH
+                ```
+
+                ### S02. 둘째 단계
+
+                ```sql
+                BEGIN TRY
+                    SELECT 2;
+                END TRY
+                BEGIN CATCH
+                END CATCH
+                ```
+                """;
+            var steps = new[] { Step("S01"), Step("S02") };
+
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+
+            Assert.Equal(new[] { "S01", "S02" }, codes);
         }
 
         // PlanBoundaryResolver.TryLocateByCode가 이미 겪은 함정과 같다: 헤딩 제목이
@@ -125,9 +163,9 @@ namespace ReSet.Core.Tests
                 """;
             var steps = new[] { Step("S01"), Step("S02") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
 
-            Assert.Equal("S02", code);
+            Assert.Equal(new[] { "S02" }, codes);
         }
 
         // 코드 펜스 안의 `###`로 시작하는 줄(주석 등)은 헤딩이 아니다 - 실려 있는 것이
@@ -148,9 +186,9 @@ namespace ReSet.Core.Tests
                 """;
             var steps = new[] { Step("S01"), Step("S99") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
 
-            Assert.Equal("S01", code);
+            Assert.Equal(new[] { "S01" }, codes);
         }
 
         // 펜스가 끝까지 닫히지 않으면 펜스 상태를 신뢰할 수 없다 - MarkdownSectionLocator가
@@ -174,9 +212,9 @@ namespace ReSet.Core.Tests
                 """;
             var steps = new[] { Step("S01"), Step("S02") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
 
-            Assert.Equal("S02", code);
+            Assert.Equal(new[] { "S02" }, codes);
         }
 
         // 실측(BatchStepPlan.cs 주석): 한 헤딩이 여러 단계를 묶기도 한다("### P20~P23.").
@@ -184,7 +222,7 @@ namespace ReSet.Core.Tests
         // 같지 않다) 경계를 "판정 불가"로 리셋해야 한다. 리셋하지 않으면 그 아래 어휘가
         // 직전의 무관한 단계(P19)로 새어 들어가 - 이 클래스가 막으려는 바로 그 오귀속이다.
         [Fact]
-        public void LexemeUnderBundledMultiCodeHeading_ReturnsNull()
+        public void LexemeUnderBundledMultiCodeHeading_ReturnsEmpty()
         {
             const string doc = """
                 ## 단계별 이행 상세 및 의사코드
@@ -207,9 +245,9 @@ namespace ReSet.Core.Tests
                 """;
             var steps = new[] { Step("P19"), Step("P20"), Step("P21"), Step("P22"), Step("P23") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
 
-            Assert.Null(code);
+            Assert.Empty(codes);
         }
 
         // 무관한 하위 헤딩("#### Phase 1.")은 어느 단계 코드로도 판정되지 않는다.
@@ -231,9 +269,9 @@ namespace ReSet.Core.Tests
                 """;
             var steps = new[] { Step("S01") };
 
-            var code = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
+            var codes = L1ViolationAttribution.AttributeByLexeme(doc, "END TRY", steps);
 
-            Assert.Null(code);
+            Assert.Empty(codes);
         }
     }
 

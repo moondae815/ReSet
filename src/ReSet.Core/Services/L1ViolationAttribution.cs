@@ -11,14 +11,24 @@ namespace ReSet.Core.Services
     /// 규칙 3-1 위반 `END TRY` 하나였고 4차는 `batch.BatchRun` INSERT 부재였다.
     /// 지점이 특정되는 결함인데도 문서 전체를 다시 만들었고, 그렇게 두 회차를 태웠다.
     ///
-    /// 귀속하지 못하면 null을 돌려준다. 억지로 아무 단계에나 붙이면 멀쩡한 단계를
-    /// 다시 쓰게 되어, 회귀 롤백이 막으려는 회귀를 다시 들인다. 호출부는 null을
+    /// 귀속하지 못하면 빈 목록을 돌려준다. 억지로 아무 단계에나 붙이면 멀쩡한 단계를
+    /// 다시 쓰게 되어, 회귀 롤백이 막으려는 회귀를 다시 들인다. 호출부는 빈 목록을
     /// "전량 재생성"으로 읽는다.
+    ///
+    /// 한 어휘가 문서 안 여러 단계 섹션에 나타나면 그 단계 전부를 담는다 - 처음
+    /// 발견한 단계 하나로 멈추지 않는다(최종 whole-branch 리뷰, Important 5 참고).
     /// </summary>
     public static class L1ViolationAttribution
     {
         /// <summary>
-        /// 어휘가 처음 나타나는 자리를 감싼 단계 헤딩의 단계 코드를 돌려준다.
+        /// 어휘가 나타나는 모든 자리를 감싼 단계 헤딩들의 단계 코드를 돌려준다(중복 없이,
+        /// 처음 나온 순서대로). 하나만 돌려주면 안 되는 이유(최종 whole-branch 리뷰,
+        /// Important 5): 규칙 3-1(`BEGIN TRY`/`END TRY`)·규칙 10류 위반은 체계적이다 -
+        /// 모델이 한 단계에서 그렇게 쓰면 보통 여러 단계에서 그렇게 쓴다.
+        /// `MechanicalValidator`는 검사당 <c>DetailedError</c> 하나만 내므로(발생당이
+        /// 아니다) 이 메서드가 첫 발견에서 멈추면 나머지 위반 단계는 <c>StepFreezeState</c>가
+        /// 영영 열지 않는다 - L1이 다음 회차에도 같은 위반으로 다시 실패하면서
+        /// Job 전체 예산인 <c>l1RepairAttempt</c>만 태우다가 소진된다.
         ///
         /// 코드 펜스 안을 건너뛰지 않는 이유: 위반 어휘 자체가 대개 SQL 코드 블록
         /// 안에 있다(`END TRY`가 그렇다). 헤딩 탐지만 펜스를 존중한다 -
@@ -26,19 +36,20 @@ namespace ReSet.Core.Services
         /// 헤딩 후보 판정에서만 펜스 안 줄을 걸러낸다. 펜스 안에 `###`로 시작하는 줄이
         /// 있어도(예: SQL 주석) 그것은 진짜 단계 헤딩이 아니다.
         /// </summary>
-        public static string? AttributeByLexeme(
+        public static IReadOnlyList<string> AttributeByLexeme(
             string? documentMarkdown, string lexeme, IReadOnlyList<BatchStepPlan>? steps)
         {
             if (string.IsNullOrEmpty(documentMarkdown) ||
                 string.IsNullOrWhiteSpace(lexeme) ||
                 steps == null || steps.Count == 0)
             {
-                return null;
+                return Array.Empty<string>();
             }
 
             var lines = MarkdownSectionLocator.SplitLines(documentMarkdown);
             var fenceFlags = MarkdownSectionLocator.ComputeFenceFlags(lines);
             string? currentStep = null;
+            var attributedSteps = new List<string>();
 
             for (var i = 0; i < lines.Count; i++)
             {
@@ -59,16 +70,20 @@ namespace ReSet.Core.Services
                     }
                 }
 
-                if (line.IndexOf(lexeme, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (line.IndexOf(lexeme, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    currentStep != null &&
+                    !attributedSteps.Contains(currentStep, StringComparer.OrdinalIgnoreCase))
                 {
                     // currentStep이 null이면 아직 어떤 단계 섹션에도 들어가지 않았거나
                     // (공통 규약 절), 판정 불가한 헤딩 아래로 들어와 리셋됐다는 뜻이다.
-                    // 어느 쪽이든 단계에 억지로 붙이지 않는다.
-                    return currentStep;
+                    // 어느 쪽이든 단계에 억지로 붙이지 않는다 - 이 발생은 그냥 건너뛰고
+                    // 스캔을 계속한다(멈추지 않는다). 뒤에 나오는 판정 가능한 단계까지
+                    // 이 발생 하나 때문에 포기하면 안 된다.
+                    attributedSteps.Add(currentStep);
                 }
             }
 
-            return null;
+            return attributedSteps;
         }
 
         /// <summary>
