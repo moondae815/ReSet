@@ -2305,10 +2305,14 @@ namespace ReSet.Core.Tests
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
             // 자기 신고는 "결함 없음"인데 CRUD 한 축만 기준(8) 미만이다.
+            // SkeletonDefective를 세워, EnforceScoreThreshold가 뒤집는 HasDefects가
+            // 지목 없는 리뷰의 재호출/무효화 경로로 빠지지 않게 한다 - 이 테스트가
+            // 보는 것은 축 미달 재시도이지 재호출 상한이 아니다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), plan, "Job_Test")
                 .Returns(_ => Task.FromResult(new ReviewResult
                 {
                     HasDefects = false,
+                    SkeletonDefective = true,
                     ScoreAccuracy = 10,
                     ScoreCrud = 3,
                     ScoreInterface = 10,
@@ -2449,7 +2453,7 @@ namespace ReSet.Core.Tests
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
                 Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
-                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
 
             var specs = new List<(string, string)> { ("dbo.UP_UTIL_SETTLE_INS", "content1") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -2461,8 +2465,8 @@ namespace ReSet.Core.Tests
             aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
-            // 정체를 만들어 재설계를 유발한다.
-            var stalled = new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
+            // 2회 연속 정체 + 구조 결함 지목으로 재설계를 유발한다.
+            var stalled = new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(stalled));
 
@@ -4680,8 +4684,9 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("잔재에 영향을 받지", thirdPrompt);
         }
 
-        // 총 3회 예산에서 1·2차가 같은 점수로 미달하면 3차는 새 목차로 생성돼야 한다.
-        // 목차가 원인인 결함은 3/3만 반복해서는 절대 고쳐지지 않는다.
+        // 총 4회 예산에서 1~3차가 같은 점수로 미달하면(2회 연속 정체) 4차는 새
+        // 목차로 생성돼야 한다 - 단, Critic이 구조 결함(StructureDefective)을
+        // 함께 지목했을 때만. 목차가 원인인 결함은 반복만으로는 고쳐지지 않는다.
         [Fact]
         public async Task RunConsolidatedPipelineAsync_ScoreStalls_RedraftsPlanStructure()
         {
@@ -4689,7 +4694,7 @@ namespace ReSet.Core.Tests
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
                 Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
-                userInteraction, "2", "gpt-4", null, aiService, aiService, null, null, null, 8);
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
 
             var specs = new List<(string, string)> { ("spec1.md", "content1") };
             var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -4701,8 +4706,9 @@ namespace ReSet.Core.Tests
             aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
-            // 세 회차 모두 60점 미달. 최고점이 갱신되지 않으므로 2차에서 정체가 잡힌다.
-            var stalled = new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
+            // 네 회차 모두 60점 미달 + 구조 결함 지목. 최고점이 갱신되지 않으므로
+            // 2회 연속 정체가 성립하는 3차에서 재설계가 잡힌다.
+            var stalled = new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 };
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(stalled));
 
@@ -8797,16 +8803,16 @@ SELECT 1;
             aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(call => new AiResult { Content = FixedErrorCodeSection(call.Arg<BatchStepPlan>().Code) });
 
-            // 1·2회차는 60점으로 정체(최고점 갱신 없음) -> 2회차에서 목차 재수립이
-            // 발동한다(StructureRedraftPolicy: 미갱신 1회로 발동). 3회차는 재수립된
-            // 목차로 통과한다.
+            // 1~3회차는 60점 + 구조 결함 지목으로 정체(최고점 갱신 없음, 2회 연속
+            // 정체가 3회차에서 성립) -> 3회차에서 목차 재수립이 발동한다. 4회차는
+            // 재수립된 목차로 통과한다.
             var reviewCall = 0;
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(_ =>
                 {
                     var call = reviewCall++;
-                    return call < 2
-                        ? new ReviewResult { HasDefects = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
+                    return call < 3
+                        ? new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "구조 결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }
                         : new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
                 });
 
@@ -8814,7 +8820,7 @@ SELECT 1;
             var validator = new MechanicalValidator();
             var userInteraction = Substitute.For<IVerificationUserInteraction>();
             var orchestrator = new VerificationPipelineOrchestrator(
-                dbService, aiService, validator, userInteraction, "2", "gpt-4", null,
+                dbService, aiService, validator, userInteraction, "3", "gpt-4", null,
                 aiService, aiService, "high", "high", "default", 8);
             var specs = new List<(string, string)> { ("dbo.UP_X", "`@po_intRetVal = -7`") };
             var jobName = "ErrorCodeRedraftEnrichJob";
