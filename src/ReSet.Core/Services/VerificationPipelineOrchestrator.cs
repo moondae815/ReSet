@@ -2512,7 +2512,18 @@ namespace ReSet.Core.Services
                         // 축 미달로 강제한 결함은 Critic 자신의 신고가 아니라 점수의 문제라
                         // 애초에 지목할 문서 자리가 없다. 그것까지 상한에 걸면 축 미달
                         // 재시도가 채점 예산을 다 쓰기도 전에 리뷰 무효로 잘못 끝난다.
-                        if (!l2Result.AxisThresholdForced &&
+                        //
+                        // currentSteps != null도 이 게이트에서 요구한다 - 단계 목록을
+                        // 못 낸 폴백 경로(단일 호출)는 "###" 단계 섹션 자체가 없어
+                        // Critic이 애초에 위치를 댈 수 없다. §3-2(a)의 전제("결함이
+                        // 실제라면 자리를 댈 수 있다")가 성립하지 않는 곳에서 "자리를
+                        // 못 댔다"를 결함으로 다루면, 공짜가 아닌 재호출(폴백은 전량
+                        // 유료 재생성이다)이 한 번 도는 즉시 무효로 확정돼 MaxL2Attempts
+                        // 예산 전체를 단 1회 만에 포기한다. currentSteps가 없으면 이
+                        // 블록을 건너뛰어 아래 일반 재시도 경로(attempt++)로 흘러
+                        // 정상적으로 예산을 소비하게 한다.
+                        if (currentSteps != null &&
+                            !l2Result.AxisThresholdForced &&
                             pendingDefectiveSteps.Count == 0 &&
                             !l2Result.SkeletonDefective &&
                             !l2Result.StructureDefective)

@@ -6528,16 +6528,16 @@ SELECT 1;
         /// 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
         /// 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
         ///
-        /// [FINAL FIX A - Critical 1] 두 번 연속 자리를 못 대 리뷰가 무효로
-        /// 확정되는 순간에도 RetryRescue를 거친다. 1차 시도가 이미 후보로
-        /// 기록돼 있으므로(BestAttempt.TryRecord는 결함 여부와 무관하게 등록한다)
-        /// 이 종료는 점수 없는 ReviewNotRun이 아니라 그 후보를 채택한
-        /// QualityRejected여야 한다 - 다른 넷(생성 실패·L1 소진·채점 예산
-        /// 소진·리뷰 실패)과 같은 채택 규칙이다. 종전 버전은 이 자리만
-        /// RetryRescue를 우회해 이미 검증된 후보를 두고도 점수를 잃었다.
+        /// [FINAL FIX A - Critical 1 + Important 2] 이 픽스처는 폴백(단일 호출)
+        /// 경로다(목차가 단계 목록을 못 냄 -> currentSteps == null). Important 2로
+        /// "자리 없는 결함" 게이트 자체가 currentSteps != null을 요구하게 됐으므로,
+        /// 이 경로는 그 게이트를 타지 않고 일반 재시도(attempt++)로 예산을
+        /// 정상 소비한다. maxL2Attempts="1"(총 2회) 소진 뒤 Critical 1 이전과
+        /// 마찬가지로 RetryRescue가 최고 후보(1차, 유일한 후보)를 채택해야
+        /// 한다 - 점수 없는 ReviewNotRun이 아니라 QualityRejected다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocation_RescuesRecordedBestAttempt()
+        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocationOnFallbackPath_RescuesRecordedBestAttempt()
         {
             var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
             var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
@@ -6553,7 +6553,7 @@ SELECT 1;
             _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new AiResult { Content = plan }));
 
-            // 두 번 다 자리를 못 댄다.
+            // 두 회차 모두 자리를 못 댄다 - 폴백 경로는 이 상태를 벗어날 수 없다.
             _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new ReviewResult
                 {
@@ -6564,11 +6564,12 @@ SELECT 1;
             var result = await orchestrator.RunConsolidatedPipelineAsync(
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
 
+            // Important 2 이후에는 "자리를 못 댔다"가 아니라 예산 소진(정상 채점
+            // 예산 소진)이 사유다 - 폴백 경로에는 지목 위치 개념 자체가 없다.
             _userInteraction.Received().NotifyError(
-                Arg.Is<string>(s => s.Contains("자리를 대지 못했습니다")));
+                Arg.Is<string>(s => s.Contains("가장 높은 점수를 받은")));
 
-            // 1차 시도(유일한 후보, 60점)가 채택되어 점수가 살아 있다 - 종전
-            // ReviewNotRun 회귀는 이 자리에서 점수를 통째로 잃었다.
+            // 1차 시도(유일한 후보, 60점)가 채택되어 점수가 살아 있다.
             Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
             Assert.NotNull(result.Review);
             Assert.Equal(60, result.Review!.NormalizedScore);
@@ -6731,6 +6732,60 @@ SELECT 1;
             Assert.DoesNotContain("오류코드 누락", result.Plan);
             Assert.NotNull(result.Coverage);
             Assert.False(result.Coverage!.HasDocumentCodeGap);
+        }
+
+        /// <summary>
+        /// FINAL FIX A - Important 2. 목차가 단계 목록을 못 낸 폴백(단일 호출)
+        /// 경로에는 "###" 단계 섹션이 아예 없어 Critic이 결함의 위치를 댈 수
+        /// 없다 - StepFreezeState.OpenSteps(null, …)은 항상 null을 돌려주므로
+        /// pendingDefectiveSteps는 이 경로에서 영원히 빈다. §3-2(a)의 "결함이
+        /// 실제라면 자리를 댈 수 있다"는 전제가 여기서는 성립하지 않는다.
+        ///
+        /// 고치기 전에는 이 전제 위에 세운 게이트가 이 경로에도 그대로 적용돼,
+        /// 자리 없는 결함이 1회차에 뜨자마자(유료 전량 재생성 한 번 뒤) 리뷰
+        /// 무효로 확정하고 MaxL2Attempts 예산 전체(여기서는 3회)를 1회 만에
+        /// 포기했다. 고친 뒤에는 이 경로가 일반 재시도(attempt++)로 흘러
+        /// 예산을 정상적으로 소비해야 한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_DefectWithoutLocationOnFallbackPath_ConsumesFullAttemptBudgetInsteadOfAbandoningAfterOneFreeRetry()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var plan = header + "\n본문";
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+
+            // 매 회차 자리 없는 결함이 뜬다 - 폴백 경로는 이 상태를 벗어날 수 없다.
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = "어딘가 결함이 있다",
+                    ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6
+                }));
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 예산(maxL2Attempts="2" -> 총 3회) 전체를 정상적으로 소비한다 - 자리
+            // 없는 결함 1회 신고 뒤 유료 재생성 1회만 하고 포기하지 않는다.
+            await _aiService.Received(3).GenerateConsolidatedBatchPlanAsync(
+                Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(),
+                Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+            await _aiService.Received(3).ReviewConsolidatedPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 예산 소진 후 정상 구제로 끝난다 - 자리 없음을 이유로 한 번 만에
+            // 무효로 확정되는 ReviewNotRun이 아니다.
+            Assert.Equal(VerificationOutcome.QualityRejected, result.Outcome);
         }
 
         /// <summary>
