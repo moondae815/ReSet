@@ -628,13 +628,15 @@ git commit -m "feat: 회귀한 회차를 최고 후보로 되감는다 — 회�
 
 **Files:**
 - Modify: `src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs` (생성자 + L1 실패 분기 `:2005-2050`)
+- Modify: `src/ReSet.Core/Services/MechanicalValidator.cs` (`ViolationLexemes` 추가)
 - Modify: `src/ReSet.Cli/appsettings.json`
 - Modify: `src/ReSet.Cli/Program.cs`
 - Test: `tests/ReSet.Core.Tests/VerificationPipelineOrchestratorTests.cs`
+- Test: `tests/ReSet.Core.Tests/L1ViolationAttributionTests.cs` (`ViolationLexemes` 테스트 셋 추가)
 
 **Interfaces:**
-- Consumes: Task 2의 롤백 (같은 루프)
-- Produces: 생성자 파라미터 `int maxL1RepairAttempts = 2` (기존 파라미터 **뒤에** 붙인다 — 앞에 끼우면 위치 인자로 부르는 기존 호출부가 조용히 깨진다)
+- Consumes: Task 2의 롤백 (같은 루프) · **Task 6의 `L1ViolationAttribution.AttributeByLexeme`**
+- Produces: 생성자 파라미터 `int maxL1RepairAttempts = 2` (기존 파라미터 **뒤에** 붙인다 — 앞에 끼우면 위치 인자로 부르는 기존 호출부가 조용히 깨진다) · `MechanicalValidator.ViolationLexemes(ValidationResult) -> IReadOnlyList<string>`
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -742,6 +744,30 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
                     bool canRetry = l1RepairAttempt <= _maxL1RepairAttempts;
                     if (canRetry)
                     {
+                        // 위반을 단계에 귀속해 그 단계만 다시 뽑는다. 실측(POQSettleBatch4
+                        // 시도 3)의 L1 실패는 `END TRY` 하나였는데 문서 전체를 다시 만들었다.
+                        //
+                        // 귀속하지 못하면 pendingDefectiveSteps가 비고, 그러면 종전대로
+                        // 전량 재생성이 된다 - 억지로 아무 단계에나 붙이면 멀쩡한 단계를
+                        // 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
+                        pendingDefectiveSteps.Clear();
+                        foreach (var lexeme in MechanicalValidator.ViolationLexemes(l1Result))
+                        {
+                            var owner = L1ViolationAttribution.AttributeByLexeme(
+                                consolidatedPlan, lexeme, currentSteps);
+                            if (owner != null && !pendingDefectiveSteps.Contains(owner, StringComparer.OrdinalIgnoreCase))
+                            {
+                                pendingDefectiveSteps.Add(owner);
+                            }
+                        }
+
+                        if (pendingDefectiveSteps.Count > 0)
+                        {
+                            _userInteraction.NotifyStatus(
+                                $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", pendingDefectiveSteps)} 단계로 " +
+                                "좁혀 그 단계만 다시 만듭니다.");
+                        }
+
                         feedbackLog = CriticFeedbackLog.ComposeAfterL1Failure(l1Result.SuggestedPromptFix, feedbackHistory);
                         continue;
                     }
@@ -750,6 +776,83 @@ L1 실패 분기(`if (!l1Result.IsValid)`)의 `canRetry` 판정을 바꾼다:
 `attempt++`를 지운 것에 주의한다 — `continue`만 남는다.
 
 L2 결함 분기의 `canRetry`는 그대로 둔다(`_maxAttempts == -1 || attempt < _maxAttempts`).
+
+`MechanicalValidator`에 위반 어휘 추출기를 추가한다. `ValidationResult.DetailedErrors`가 이미 유형별 오류를 들고 있으므로 거기서 뽑는다:
+
+```csharp
+        /// <summary>
+        /// L1 위반 메시지에서 문서를 훑을 어휘를 뽑는다. L1ViolationAttribution이
+        /// 이것으로 위반이 실린 단계를 찾는다.
+        ///
+        /// 백틱으로 감싼 토큰만 쓴다 - 검사 메시지는 규칙 설명과 어휘를 함께 싣는데,
+        /// 산문까지 문서에서 찾으면 아무 단계에나 걸린다. 어휘가 없는 메시지는
+        /// 귀속 대상이 아니다(문서 전역 위반이다).
+        /// </summary>
+        public static IReadOnlyList<string> ViolationLexemes(ValidationResult result)
+        {
+            var lexemes = new List<string>();
+            if (result?.Errors == null) return lexemes;
+
+            foreach (var error in result.Errors)
+            {
+                foreach (System.Text.RegularExpressions.Match match in
+                    System.Text.RegularExpressions.Regex.Matches(error ?? string.Empty, @"`(?<token>[^`\n]{2,80})`"))
+                {
+                    var token = match.Groups["token"].Value.Trim();
+                    if (token.Length > 0 && !lexemes.Contains(token, StringComparer.OrdinalIgnoreCase))
+                    {
+                        lexemes.Add(token);
+                    }
+                }
+            }
+
+            return lexemes;
+        }
+```
+
+이 메서드의 테스트를 함께 쓴다:
+
+```csharp
+        // 실측(POQSettleBatch4 시도 3): 규칙 3-1 위반 메시지가 어휘를 백틱으로 싣는다 -
+        // "(발화 1건 · 어휘: `END TRY` · ...)". 산문까지 문서에서 찾으면 아무 단계에나 걸린다.
+        [Fact]
+        public void ViolationLexemes_ExtractsBacktickedTokensOnly()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                Errors = { "계획서의 코드 블록에서 SQL 문장이 자기 실행 결과를 보고 분기합니다. `END TRY` 를 쓰지 마십시오." }
+            };
+
+            Assert.Equal(new[] { "END TRY" }, MechanicalValidator.ViolationLexemes(result));
+        }
+
+        [Fact]
+        public void ViolationLexemes_WithoutBackticks_ReturnsEmpty()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                Errors = { "문서 전역에 문제가 있습니다." }
+            };
+
+            Assert.Empty(MechanicalValidator.ViolationLexemes(result));
+        }
+
+        [Fact]
+        public void ViolationLexemes_Deduplicates()
+        {
+            var result = new ValidationResult
+            {
+                IsValid = false,
+                Errors = { "`END TRY` 금지", "`END TRY` 를 다시 지적한다" }
+            };
+
+            Assert.Single(MechanicalValidator.ViolationLexemes(result));
+        }
+```
+
+**이 배선 때문에 Task 3은 Task 6에 의존한다.** Task 6이 먼저 병합돼 있어야 `L1ViolationAttribution`을 부를 수 있다.
 
 - [ ] **Step 5: 테스트가 통과하는지 확인한다**
 
@@ -1191,7 +1294,7 @@ git commit -m "feat: 누락 오류 코드를 선언 단계로 귀속한다 — �
 
 **Interfaces:**
 - Consumes: `MarkdownSectionLocator.SplitLines(string?) -> List<string>`, `BatchStepPlan`
-- Produces: `L1ViolationAttribution.AttributeByLexeme(string documentMarkdown, string lexeme, IReadOnlyList<BatchStepPlan>? steps) -> string?` (단계 코드 또는 null)
+- Produces: `L1ViolationAttribution.AttributeByLexeme(string documentMarkdown, string lexeme, IReadOnlyList<BatchStepPlan>? steps) -> string?` (단계 코드 또는 null) — **Task 3의 L1 분기가 이것을 소비한다**
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
