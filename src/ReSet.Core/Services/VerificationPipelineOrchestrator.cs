@@ -2095,6 +2095,39 @@ namespace ReSet.Core.Services
                             lastStepSections == null ? null : new Dictionary<string, string>(lastStepSections),
                             new Dictionary<string, StepDefect>(stepFloorViolations));
                     }
+                    else if (bestAttempt.Current != null)
+                    {
+                        // 회귀 롤백. 이번 회차는 최고 후보보다 나쁘므로 산출물을 버리고
+                        // 최고 후보 상태로 되감는다 - 다음 회차가 나쁜 문서 위에서
+                        // 시작하면 회차를 늘려도 품질이 오른다는 보장이 없다.
+                        // 실측(POQSettleBatch4): 78 -> 76 -> 84 -> 74. 마지막이 첫 회차보다 낮았다.
+                        //
+                        // 피드백 누적(feedbackHistory)은 되돌리지 않는다. 버린 회차에서
+                        // 얻은 지적도 정보이고, 그것까지 버리면 같은 결함을 다시 만든다.
+                        //
+                        // 단순 대입이 아니라 AdoptPlanStructureForRescueAsync를 거친다 -
+                        // 이 회차 사이에 목차 재수립(StructureRedraftPolicy)이 있었다면
+                        // PlanStructure.md가 이미 그 재수립본으로 갱신돼 있다. 여기서
+                        // 메모리만 되돌리고 파일을 그대로 두면, 나중에 예산 소진으로
+                        // 도달하는 구제 경로(AdoptPlanStructureForRescueAsync 재호출)가
+                        // "현재==채택본"으로 보고 아무 일도 하지 않아 파일에는 채택되지
+                        // 않은 재수립 목차가 그대로 남는다(실측: 재현된 회귀).
+                        currentPlanStructure = await AdoptPlanStructureForRescueAsync(
+                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                        RestoreAdoptedGenerationState(
+                            adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
+
+                        // currentSteps는 RestoreAdoptedGenerationState가 되돌리지 않는다
+                        // (살아있는 루프 변수라서다 - :1827의 주석 참조). 여기서 채택된
+                        // 목차 하나에서 다시 파싱하지 않으면 Sections는 채택본인데
+                        // Steps는 폐기본을 서술하는 모순이 생긴다.
+                        currentSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
+
+                        _userInteraction.NotifyStatus(
+                            $"[yellow]{jobName}[/] - {attempt}차 시도({l2Result.NormalizedScore}/100)가 " +
+                            $"최고 후보({bestAttempt.Current.AttemptNumber}차, {bestAttempt.Current.Review.NormalizedScore}/100)를 " +
+                            "넘지 못해 최고 후보 상태로 되돌립니다.");
+                    }
                 }
 
                 if (reviewSuccess && l2Result != null && l2Result.HasDefects)

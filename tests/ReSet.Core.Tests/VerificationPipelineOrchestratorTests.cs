@@ -8380,5 +8380,64 @@ SELECT 1;
                 jobName,
                 Arg.Is<List<string>>(list => list.Any(m => m.Contains("TGhost"))));
         }
+
+        /// <summary>
+        /// 실측(POQSettleBatch4 2026-08-29): 궤적이 78 -> 76 -> 84 -> 74였다.
+        /// 회차 n이 최고점을 못 넘으면 그 회차 산출물을 버리고 최고 후보 상태로
+        /// 되감아야 한다 - 그래야 다음 회차가 76점짜리가 아니라 78점짜리 위에서 시작한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_ScoreRegression_RollsBackToBestCandidate()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+            var header = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+            var planA = header + "\nA";   // 78점
+            var planB = header + "\nB";   // 76점 - 회귀
+            var planC = header + "\nC";   // 84점
+
+            // 총 3회를 돌 수 있도록 maxL2Attempts를 2로 준다(총 시도 = 1 + 2).
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "2", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new AiResult { Content = planA }),
+                    _ => Task.FromResult(new AiResult { Content = planB }),
+                    _ => Task.FromResult(new AiResult { Content = planC }));
+
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planA, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = "A 결함",
+                    ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 7, ScoreException = 7, ScoreReadability = 10
+                }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planB, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = "B 결함",
+                    ScoreAccuracy = 6, ScoreCrud = 8, ScoreInterface = 6, ScoreException = 9, ScoreReadability = 9
+                }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), planC, "Job_Test", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = "C 결함",
+                    ScoreAccuracy = 8, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 7, ScoreReadability = 9
+                }));
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 최고점 84(planC)가 채택된다.
+            Assert.NotNull(result.Review);
+            Assert.Equal(84, result.Review!.NormalizedScore);
+
+            // 회귀한 2회차에서 롤백이 화면에 고지되어야 한다.
+            _userInteraction.Received().NotifyStatus(
+                Arg.Is<string>(s => s.Contains("최고 후보") && s.Contains("되돌립니다")));
+        }
     }
 }
