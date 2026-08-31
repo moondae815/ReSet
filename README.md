@@ -193,8 +193,16 @@ ReSet/
     "ModelName": "claude-sonnet-5", // 사용할 LLM 모델명. CLI 제공자에도 그대로 적용되어 CLI의 모델 인자로 전달되며, 비워 두면 인자를 생략해 해당 CLI의 기본 모델이 쓰입니다
     "Temperature": 0.2,            // [설명] Ollama ActorEffort 설정 시 이 값은 무시되고 강제 변환됩니다. 단, Gemma 4(Temp=1.0, top_p=0.95, top_k=64), Qwen3.6(Temp=0.6, top_p=0.95, top_k=20) 등 특정 모델은 최적 설정으로 하드코딩됩니다.
     "EnableLocalChunking": true,   // [설정] 로컬 LLM 구동 시 AST 기반 분할(Chunking) 생성 방식 활성화 여부 (기본값: true)
-    "MaxL2Attempts": 5,            // L2 AI 교차 리뷰 실패 시 추가로 재시도할 자가 보완 횟수 (1 이상의 정수 또는 "unlimited" 지정 시 검증 완료까지 무제한)
+    // 재시도 횟수. 총 시도 = 1 + 이 값(이 설정에서는 6회). 이름과 달리 L2 전용이 아니라 L1 실패와
+    // 공유하는 예산이므로, 단일 코드 객체 파이프라인에서는 L1에서 소진되면 채점되는 시도가 총 시도
+    // 수보다 적어집니다(그 경우에도 최고점 후보는 구제 채택됩니다). 통합 배치 계획 경로는 다릅니다 —
+    // L1 실패는 아래 MaxL1RepairAttempts를 따로 씁니다. ("unlimited" 지정 시 검증 완료까지 무제한)
+    "MaxL2Attempts": 5,
     "MaxTotalAttempts": 20,        // [코드 생성 자가 수정 루프] MaxL2Attempts가 "unlimited"여도 넘지 못하는 총 시도 상한 (1 이상의 정수, 기본값: 20). "unlimited"는 받지 않음
+    // [통합 계획서] L1 기계 검증 위반을 수리하는 시도의 상한(Job 전체 예산). 위쪽 채점 예산과 분리돼
+    // 있어, 위반이 특정 단계로 귀속되면 그 단계만 다시 만들고 채점 회차를 소모하지 않습니다. 귀속에
+    // 실패한 위반은 종전대로 전량 재생성이며 채점 예산을 씁니다 (1 이상의 정수, 기본값: 2)
+    "MaxL1RepairAttempts": 2,
     // [통합 배치] 단계 본문 동시 생성 수 (기본값: 4, 1이면 순차인 종전 동작). 첫 단계는 설정값과
     // 무관하게 항상 단독 실행되어 프롬프트 접두사 캐시를 채운 뒤 나머지를 이 수만큼 동시 생성하며,
     // 값을 올려도 전체 벽시계는 골격 호출(약 2분) 아래로 내려가지 않습니다. Claude는 두 번째
@@ -202,6 +210,12 @@ ReSet/
     // local-openai)에서는 1을 권장 — 단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족해질
     // 수 있고, 1을 넘기면 실행 시작 시 경고가 표시되지만 값이 강제로 바뀌지는 않습니다
     "StepConcurrency": 4,
+    // [통합 배치] 단계 본문 호출이 실을 명세서의 범위. ""(기본)이면 제공자로 정합니다 — CLI 제공자
+    // (claude-cli·codex-cli·agy-cli)는 "Narrow", 그 외는 "Full". "Full"은 명세서 전량을 접두사에 실어
+    // 단계 간 프롬프트 캐시를 노리고, "Narrow"는 그 단계의 프로시저와 그것이 호출하는 1-hop 이웃만
+    // 싣습니다. CLI 제공자는 프롬프트를 단일 텍스트로만 받아 캐시 지정 자리가 없어 "Full"을 써도
+    // 캐시가 살지 않습니다(실측 재사용률 3.1%)
+    "PromptContextScope": "",
     "TimeoutSeconds": 3600,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
     "ActorEffort": "high",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
     "Critic": {
@@ -653,4 +667,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: e1734ce1 -->
+<!-- synced-through: 4a30cdac -->

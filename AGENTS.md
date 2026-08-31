@@ -84,7 +84,7 @@
     *   하한 검사용 `ErrorCodes`의 빈 배열은 검증 불가이며(원본 SP 없는 단계만 예외), `TargetTables`는 `SpecTargetTableExtractor`의 쓰기 집합으로 채우고 `SchemaTables`와 합치지 마십시오(`MechanicalValidatorTests`, `SpecTargetTableExtractorTests`, `architecture.md §4.12`).
     *   스키마 주장은 DB 전체가 아니라 프롬프트에 실린 컬럼과 대조하십시오(`SchemaPromptColumnSelectorTests`, `SchemaClaimGateRegressionTests`). Mermaid의 `@@ERROR`는 허용합니다.
     *   L2 [AiService.cs](./src/ReSet.Core/Services/AiService.cs)는 `MaxL2Attempts` 안에서 보완하고 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드를 누적하십시오(`architecture.md §4.4.2`).
-    *   로컬 분기는 `AiClientFactory.IsLocalProvider()`만 사용하십시오. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
+    *   로컬 분기는 `AiClientFactory.IsLocalProvider()`, CLI 분기는 같은 팩토리의 `IsCliProvider()`만 사용하십시오 — `PromptContextScope`의 Full/Narrow 판정도 이것을 부릅니다. 사본을 두면 `-cli`로 끝나지 않는 CLI 제공자가 Full에 남습니다. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
     *   품질 임계치는 감쇄하지 마십시오. 최종 점수 미달 문서도 `[!CAUTION]` 배너와 점수·피드백을 붙여 보존하십시오. 종료 상태는 [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs)의 네 값만 사용합니다(`architecture.md §4.4.4`).
     *   L3 [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)만 미리보기·DB 역동기화를 제어하고 배치 모드만 자동 승인하십시오. Core는 UI에 의존하지 않습니다(`architecture.md §4.4`).
     *   신규 공급자는 [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 구현해 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
@@ -151,14 +151,15 @@
     *   기능 추가, 버그 수정, 구조 변경 등 코드 베이스를 수정해야 할 경우, 가급적 독립적인 `git worktree`를 생성하여 별도의 작업 공간에서 코드를 작성하고 검증(빌드 및 테스트)을 수행하십시오.
     *   작업 및 테스트가 성공적으로 완료된 후 변경 사항을 병합(Merge)하고, 작업이 끝난 워크트리는 안전하게 정리(Remove)하는 사이클을 유지하십시오.
     *   `.claude/worktrees/` 격리 세션(`EnterWorktree`)에서는 `git -C <main>`도 사용자 `!` 입력도 가드가 main 병합을 막습니다. `ExitWorktree(keep)`로 main 루트에 돌아간 뒤 `git merge --ff-only <branch>` → 테스트 → `git worktree remove` → `git branch -d` 순으로 마무리하십시오.
-    *   워크트리에는 gitignore 대상인 코퍼스 재료 **둘**이 없습니다 — `output/`과 `output.bak-2026-08-22/`. **둘 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
+    *   워크트리에는 gitignore 대상인 코퍼스 재료 **셋**이 없습니다 — `output/`, `output.bak-2026-08-22/`, `output.bak-stage4-control-20260828/`. **셋 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
 
         ```bash
         ln -s <메인 저장소>/output output
         ln -s <메인 저장소>/output.bak-2026-08-22 output.bak-2026-08-22
+        ln -s <메인 저장소>/output.bak-stage4-control-20260828 output.bak-stage4-control-20260828
         ```
 
-        하나만 걸면 안 됩니다. 두 계열이 코퍼스 루트를 다르게 해석해, **총 건너뜀 수가 줄어드는데도 다른 테스트가 꺼집니다.**
+        일부만 걸면 안 됩니다. 두 계열이 코퍼스 루트를 다르게 해석해, **총 건너뜀 수가 줄어드는데도 다른 테스트가 꺼집니다.** 셋째(`stage4-control`)는 `ProcedureClosureCorpusTests`·`LegacyErrorCodeInventionCorpusTests`·`BatchRunLogReaderTests`의 재료입니다.
 
         | 메인 저장소 **안**에 만든 워크트리 | 추출기·골든 계열 | `CoverageMapGoldenTests` 요구 2·3 |
         | --- | --- | --- |
@@ -226,7 +227,7 @@ dotnet test
 
 - [ ] 컴파일 에러 0개, 경고 **0건**인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 이미 있던 경고도 0으로 보이므로 `dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"`로 세야 한다. (기대 개수를 적지 않는다 — 여기 「정확히 8건」으로 적혀 있던 줄이 `8875e9f`가 그 경고를 지운 뒤로도 낡은 채 남아 있었다.)
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
-- [ ] 워크트리라면 코퍼스 재료 **둘**을 심링크했는가? 하나만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
+- [ ] 워크트리라면 코퍼스 재료 **셋**을 심링크했는가? 일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
 - [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? 기계 검사로 대신할 수 없다 — 문서 전문 대조는 오탐 88%다(레거시 SQL·CTE·BCL 이름이 같은 백틱을 쓴다). 실측: `IsCandidateForAnchoredStatementCheck` 제거가 문서 네 자리를 남겼고 그중 하나는 캐시 인상 판단의 방향을 반대로 말했다.
@@ -237,4 +238,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: e1734ce1 -->
+<!-- synced-through: 4a30cdac -->
