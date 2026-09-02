@@ -25,6 +25,16 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class SpecReturnCodeExtractor
     {
+        /// <summary>
+        /// 원본이 반환값을 담는 변수의 이름. 위 요약의 근거로 이 이름 하나로 좁힌다.
+        ///
+        /// [왜 상수로 내놓는가] <see cref="ErrorCodeMaterial"/>이 DDL 쪽 가드에서
+        /// 같은 변수만 골라내야 한다 - 이름을 그쪽에 다시 적으면 두 재료가 다른
+        /// 변수를 보게 되고, 그 어긋남은 "명세서에 있는데 DDL에 없다"는 모양으로만
+        /// 드러나 원인을 찾기 어렵다.
+        /// </summary>
+        public const string ReturnVariableName = "@po_intRetVal";
+
         private static readonly Regex ReturnAssignmentRegex = new(
             @"@po_intRetVal\s*=\s*(?<code>-?\d+)",
             RegexOptions.Compiled);

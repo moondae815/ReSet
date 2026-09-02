@@ -1864,7 +1864,17 @@ namespace ReSet.Core.Services
             //
             // specsCopy가 아니라 specs를 넘긴다 - specsCopy에는 Feedback_Log.txt가
             // 붙는데 그것은 명세서가 아니다.
-            var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+            //
+            // [왜 산문만으로는 안 되는가 - 2026-08-31 POQSettleBatch5 대조 실행]
+            // 명세서 산문은 같은 사실을 "`@po_intRetVal = -5`를 설정한 뒤"로도,
+            // "`-5`를 반환합니다"로도 적는다. 뒤쪽 표현만 쓴 회차에서 원본에 실재하는
+            // 코드가 재료에서 빠져 S16이 "발명했다"고 고발당했다. 원본 DDL의 AST를
+            // 합집합으로 더해 그 흔들림을 막는다 - 근거와 실측은 ErrorCodeMaterial에 있다.
+            //
+            // 이 파이프라인에서 재료를 만드는 자리는 여기 하나뿐이어야 한다. 배너의
+            // 하한 검사도 이 값을 그대로 받는다 - 두 곳이 각자 만들면 오라클이 갈린다.
+            var specReturnCodes = ErrorCodeMaterial.Merge(
+                SpecReturnCodeExtractor.Extract(specs), definitions);
 
             // 목차 단계는 명세서를 받지 않으므로 이름을 알 방법이 이 명단뿐이다.
             // 반드시 원본 specs를 쓴다 - specsCopy는 재시도 회차마다 Feedback_Log.txt가
@@ -2796,7 +2806,8 @@ namespace ReSet.Core.Services
             var adoptedSteps = BatchStepPlanParser.TryParse(currentPlanStructure);
             VerificationCoverage? coverage;
             (consolidatedPlan, coverage) = AttachPipelineBanners(
-                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs, jobName,
+                consolidatedPlan, documentBodyForChecks, stepFloorViolations, adoptedSteps, specs,
+                specReturnCodes, jobName,
                 missingErrorCodes);
 
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
@@ -3068,7 +3079,8 @@ namespace ReSet.Core.Services
                     // 재시도 루프 종료 직후 계산한 커버리지는 더 이상 이 문서를
                     // 서술하지 않는다.
                     (consolidatedPlan, coverage) = AttachPipelineBanners(
-                        consolidatedPlan, consolidatedPlan, stepFloorViolations, adoptedSteps, specs, jobName);
+                        consolidatedPlan, consolidatedPlan, stepFloorViolations, adoptedSteps, specs,
+                        specReturnCodes, jobName);
 
                     // 분할 경로(stepsForRegeneration != null)에서는 위의 L1 자가 수정을
                     // 일부러 건너뛴다 — 통짜 재작성이 단계별로 확보한 본문을 무너뜨리기
@@ -3107,6 +3119,7 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, StepDefect> stepFloorViolations,
             IReadOnlyList<BatchStepPlan>? adoptedSteps,
             System.Collections.Generic.List<(string FileName, string Content)> specs,
+            IReadOnlyDictionary<string, IReadOnlyList<string>> specReturnCodes,
             string jobName,
             IReadOnlyDictionary<string, IReadOnlyList<string>>? precomputedMissingCodes = null)
         {
@@ -3223,7 +3236,10 @@ namespace ReSet.Core.Services
                 consolidatedPlan = VerificationBanner.SplitGenerationSkipped() + consolidatedPlan;
             }
 
-            var specReturnCodes = SpecReturnCodeExtractor.Extract(specs);
+            // specReturnCodes는 호출부가 만들어 넘긴다 - 여기서 다시 만들면 루프 안의
+            // CheckLegacyStepErrorCodeInvention과 다른 재료를 보게 된다(아래 "같은
+            // 사실을 두 번 계산하면" 주석과 같은 이유이고, 그 사고를 이미 겪었다:
+            // 이 메서드는 산문만 보고 루프는 산문 ∪ DDL을 보는 상태가 있었다).
 
             // 분할 여부와 무관하게 항상 돈다. 폴백 경로에만 걸면 "분할은 됐으나 목차
             // 메타데이터가 비어 단계별 대조가 무실행"인 회차를 놓친다 - 실측에서 그쪽이
