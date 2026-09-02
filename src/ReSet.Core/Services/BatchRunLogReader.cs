@@ -63,8 +63,23 @@ namespace ReSet.Core.Services
     /// 방어는 셋이다. (1) `리뷰 응답 수신 완료` 앵커 뒤에서만, 앵커로부터
     /// <see cref="MaxAnchorWindowLines"/>줄 안에서만 읽는다. (2) 다섯 값이 모두
     /// 0~10이어야 채택한다. 하나라도 벗어나면 그 블록 전체를 버린다 - 거짓 궤적보다
-    /// 짧은 궤적이 낫다. (3) 다섯 값이 다 모이면 즉시 그 회차를 확정하고 그 창에서는
-    /// 더 읽지 않는다.
+    /// 짧은 궤적이 낫다. (3) 다섯 값이 다 모이면 그 창에서는 더 읽지 않는다.
+    /// (4) 그러나 **즉시 확정하지는 않는다** - 다음 앵커(또는 로그 끝)까지 파싱 실패
+    /// 줄이 나오지 않은 것을 보고서야 궤적에 싣는다.
+    ///
+    /// [2026-09-02 A2 - 대조 실행이 드러낸 조용한 결함 둘] 둘 다 이 리더가 **파이프라인이
+    /// 실제로 쓴 점수가 아니라 모델이 뱉은 원문**을 읽는 데서 온다.
+    /// (a) 다섯 축이 <b>한 줄에</b> 실린 JSON을 못 읽었다 - `ScoreLine.Match`가 줄당 첫
+    /// 매치만 취해 축이 영영 다섯이 안 됐고, 그 회차(84점)가 통째로 사라졌다. 위 상수
+    /// 주석이 「JSON이 한 줄로 덤프되는 지금 형식」을 전제한다고 적어 둔 것과 정규식이
+    /// 요구하는 것이 정반대였다 - 639편 실측이 pretty-print만 봤다. 지금은 `Matches`로
+    /// 한 줄 안의 다섯 축을 모두 읽는다.
+    /// (b) 파이프라인이 파싱 실패로 <b>버린</b> 응답에서 점수를 건졌다 - 원문의 82점이
+    /// 궤적에 실렸지만 파이프라인은 그 회차를 0점으로 처리하고 되돌렸다. 위 (4)가 그것을
+    /// 막는다.
+    /// 이 판에서는 (a)가 한 회차를 빼고 (b)가 한 회차를 더해 **상쇄**됐다 -
+    /// `Trajectory.Count`가 우연히 맞았고 그래서 `UnscoredAttempts`만 옳았다.
+    /// 다음 판엔 상쇄되지 않는다.
     ///
     /// [2026-08-30 수정 - Fix Round 1] 예전 규칙은 "앵커 뒤에서 점수 줄이 아닌
     /// 타임스탬프 줄을 만나면 블록이 끝난 것"이었다. 실물 로그(POQSettleBatch4
@@ -111,6 +126,17 @@ namespace ReSet.Core.Services
         private static readonly Regex TimestampLine = new(
             @"^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+", RegexOptions.Compiled);
 
+        // [2026-09-02 A2] 파이프라인이 응답을 **버렸다**는 신호.
+        // AiService.ParseReviewResult의 catch가 찍는 줄이고, 그때 ReviewResult는
+        // 다섯 축이 전부 0으로 돌아간다 - 즉 원문에 무슨 숫자가 있든 그 회차의
+        // 점수는 0이다. 실측(reset-20260830.log:32539)에서 원문은 82점이었는데
+        // 파이프라인은 같은 로그 32577행에 "3차 시도(0/100)"라고 적었다.
+        //
+        // 컨텍스트 이름을 패턴에 넣지 않는다 - 같은 메서드가 단일 SP 리뷰에서도
+        // 불리므로 문구만 잡고, 어느 회차의 실패인지는 앵커와의 순서가 정한다.
+        private static readonly Regex ReviewParseFailureLine = new(
+            @"JSON 검토 보고서 파싱 중 오류 발생", RegexOptions.Compiled);
+
         // [Fix Round 3 - Minor 5] 두 재설계 사건을 접두문으로 가른다. 접미
         // "목차를 다시 설계합니다"는 공유하지만, 앞의 주어·이유가 사건의 출처를
         // 정직하게 말해준다(VerificationPipelineOrchestrator.cs:2433, :2752).
@@ -134,6 +160,10 @@ namespace ReSet.Core.Services
             var linesSinceAnchor = 0;
             var axes = new Dictionary<string, int>(StringComparer.Ordinal);
 
+            // 다섯 축이 모였지만 아직 확정하지 않은 회차. 다음 앵커나 로그 끝에서
+            // 확정되고, 그 전에 파싱 실패 줄을 만나면 버려진다.
+            AttemptScore? pending = null;
+
             foreach (var line in lines)
             {
                 var ts = TimestampLine.Match(line);
@@ -147,10 +177,27 @@ namespace ReSet.Core.Services
 
                 if (ReviewAnchor.IsMatch(line))
                 {
+                    // 앞 회차가 여기까지 실패 줄 없이 왔으면 파이프라인이 그것을 썼다.
+                    if (pending != null)
+                    {
+                        trajectory.Add(pending);
+                        pending = null;
+                    }
+
                     collecting = true;
                     linesSinceAnchor = 0;
                     axes.Clear();
                     continue;
+                }
+
+                // 이 앵커의 응답을 파이프라인이 버렸다. 원문에 점수가 있어도 그 회차의
+                // 점수는 0이므로 궤적에 실으면 안 된다. 아직 창 안에서 축을 모으는
+                // 중이었다면 그것도 함께 버린다.
+                if (ReviewParseFailureLine.IsMatch(line))
+                {
+                    pending = null;
+                    collecting = false;
+                    axes.Clear();
                 }
 
                 if (collecting)
@@ -165,29 +212,36 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
-                        var score = ScoreLine.Match(line);
-                        if (score.Success)
+                        // 줄당 첫 매치가 아니라 **모든** 매치를 읽는다 - JSON이 한 줄로
+                        // 덤프되면 다섯 축이 같은 줄에 있다(위 (a)).
+                        var scores = ScoreLine.Matches(line);
+                        if (scores.Count > 0)
                         {
-                            var value = int.Parse(score.Groups["value"].Value, CultureInfo.InvariantCulture);
-                            if (value < 0 || value > 10)
+                            foreach (Match score in scores)
                             {
-                                // 점수가 아니다. 이 블록을 통째로 버린다.
-                                collecting = false;
-                                axes.Clear();
-                            }
-                            else
-                            {
+                                var value = int.Parse(score.Groups["value"].Value, CultureInfo.InvariantCulture);
+                                if (value < 0 || value > 10)
+                                {
+                                    // 점수가 아니다. 이 블록을 통째로 버린다.
+                                    collecting = false;
+                                    axes.Clear();
+                                    break;
+                                }
+
                                 axes[score.Groups["axis"].Value] = value;
                                 if (axes.Count == 5)
                                 {
-                                    trajectory.Add(new AttemptScore(
+                                    // 확정하지 않고 보류한다 - 파이프라인이 이 응답을
+                                    // 파싱하지 못하고 버릴 수 있다(위 (b)).
+                                    pending = new AttemptScore(
                                         axes["Accuracy"], axes["Crud"], axes["Interface"],
-                                        axes["Exception"], axes["Readability"]));
+                                        axes["Exception"], axes["Readability"]);
                                     // 창이 남아 있어도 여기서 멈춘다 - 실물 로그는 같은
                                     // 점수를 [추출된 JSON 내용]으로 한 번 더 싣는데, 계속
                                     // 읽으면 그 중복을 두 번째 회차로 세게 된다.
                                     collecting = false;
                                     axes.Clear();
+                                    break;
                                 }
                             }
 
@@ -221,6 +275,13 @@ namespace ReSet.Core.Services
                     cacheRead += long.Parse(usage.Groups["r"].Value, CultureInfo.InvariantCulture);
                     output += long.Parse(usage.Groups["o"].Value, CultureInfo.InvariantCulture);
                 }
+            }
+
+            // 마지막 회차는 뒤에 앵커가 없다. 로그가 끝날 때까지 실패 줄이 없었으므로
+            // 파이프라인이 그 점수를 썼다.
+            if (pending != null)
+            {
+                trajectory.Add(pending);
             }
 
             // "채점을 받지 못한 회차의 수"의 정의 그 자체. 로그 줄 수가 아니라

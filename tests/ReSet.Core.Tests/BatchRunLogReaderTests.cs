@@ -443,5 +443,138 @@ namespace ReSet.Core.Tests
 
             Assert.Empty(metrics.Trajectory);
         }
+
+        // ── 2026-09-02 A2: POQSettleBatch5 대조 실행이 드러낸 조용한 결함 둘 ──
+        //
+        // 둘 다 이 판에서는 서로 상쇄돼 Trajectory.Count가 우연히 맞았다(그래서
+        // UnscoredAttempts만 옳았다). 다음 판엔 상쇄되지 않는다.
+
+        /// <summary>
+        /// 다섯 축이 한 줄에 실린 JSON. 실물이다 - `output.bak-stage4-control-20260828/
+        /// logs-batch5-verify/reset-20260831.log:2286`이 6차(84점)를 이 형태로 실었고,
+        /// 옛 리더는 그 회차를 통째로 잃었다.
+        ///
+        /// 원인은 `ScoreLine.Match(line)`이 줄당 **첫 매치만** 취하는 것이다. 한 줄에
+        /// 다섯 축이 다 있으면 Accuracy 하나만 담기고, 다음 줄(`[추출된 JSON 내용]`
+        /// 중복)에서 또 Accuracy만 담겨 덮어쓴다 - 다섯이 영영 안 모여 창을 넘고 버려진다.
+        /// 클래스 주석이 「JSON이 한 줄로 덤프되는 지금 형식」을 전제한다고 적어 둔 것과
+        /// 정규식이 요구하는 것이 정반대였다. 639편 실측이 pretty-print만 봤다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenAllFiveAxesAreOnOneLine_ShouldStillScoreTheAttempt()
+        {
+            const string log = """
+                2026-08-31 00:00:37.011 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1497
+                2026-08-31 00:00:37.011 +09:00 [DBG] [AI 응답 내용]:
+                {"HasDefects":true,"FeedbackComment":"결함","DefectiveSteps":["S16"],"ScoreAccuracy":8,"ScoreCrud":9,"ScoreInterface":9,"ScoreException":6,"ScoreReadability":10}
+                2026-08-31 00:00:37.011 +09:00 [DBG] [추출된 JSON 내용]: {"HasDefects":true,"FeedbackComment":"결함","DefectiveSteps":["S16"],"ScoreAccuracy":8,"ScoreCrud":9,"ScoreInterface":9,"ScoreException":6,"ScoreReadability":10}
+                2026-08-31 00:00:37.125 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 6/6): 결함
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            var only = Assert.Single(m.Trajectory);
+            Assert.Equal(42, only.TotalScore);
+            Assert.Equal(84, only.NormalizedScore);
+        }
+
+        /// <summary>
+        /// 파이프라인이 파싱에 실패해 **버린** 응답에서 점수를 건지면 안 된다.
+        ///
+        /// 실물이다 - `reset-20260830.log:32539`의 응답은 원문에 8·9·9·6·9(82점)를
+        /// 실었지만 `FeedbackComment`가 잘려 JSON이 깨졌고, `ParseReviewResult`가
+        /// 예외를 받아 **다섯 축을 전부 0으로** 돌렸다. 파이프라인 자신이 같은 로그
+        /// 32577행에 「3차 시도(**0**/100)가 최고 후보(1차, 78/100)를 넘지 못해」라고
+        /// 적었는데, 옛 리더는 그 회차를 82점으로 궤적에 실었다.
+        ///
+        /// 그래서 다섯 축이 모여도 즉시 확정하지 않는다 - 다음 앵커(또는 로그 끝)까지
+        /// 파싱 실패 줄이 안 나온 것을 보고 확정한다. 실패 줄은 응답 본문 **뒤에**,
+        /// 다음 앵커 **앞에** 오므로 짝이 정확하다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenThePipelineDiscardedTheResponse_ShouldNotScoreThatAttempt()
+        {
+            const string log = """
+                2026-08-30 23:13:29.121 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1468
+                2026-08-30 23:13:29.121 +09:00 [DBG] [AI 응답 내용]:
+                {
+                  "HasDefects": true,
+                  "FeedbackComment": "결함",
+                  "DefectiveSteps": ["S16"],
+                  "ScoreAccuracy": 8,
+                  "ScoreCrud": 9,
+                  "ScoreInterface": 9,
+                  "ScoreException": 6,
+                  "ScoreReadability": 9
+                }
+                2026-08-30 23:13:29.124 +09:00 [ERR] JSON 검토 보고서 파싱 중 오류 발생 (POQSettleBatch5)
+                System.Text.Json.JsonReaderException: '0xEC' is invalid after a value. Expected either ',', '}', or ']'. LineNumber: 2 | BytePositionInLine: 473.
+                2026-08-30 23:13:29.267 +09:00 [INF] POQSettleBatch5 - 3차 시도(0/100)가 최고 후보(1차, 78/100)를 넘지 못해 최고 후보 상태로 되돌립니다.
+                2026-08-30 23:13:29.300 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 3/6): 결함
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Empty(m.Trajectory);
+
+            // 그 회차는 「채점을 못 받은 회차」다 - 정의상 소진으로 세어야 한다.
+            Assert.Equal(3, m.TotalAttempts);
+            Assert.Equal(3, m.UnscoredAttempts);
+        }
+
+        /// <summary>
+        /// 실패는 그 회차 하나만 버린다. 앞뒤 회차는 살아 있어야 한다 - 실패 줄
+        /// 하나가 궤적 전체를 지우면 「거짓 궤적보다 짧은 궤적이 낫다」가 아니라
+        /// 그냥 재료를 잃는 것이다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenOneOfThreeResponsesFailedToParse_ShouldDiscardOnlyThatOne()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1999
+                2026-08-30 22:42:51.128 +09:00 [DBG] [AI 응답 내용]:
+                {"HasDefects":true,"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                2026-08-30 22:42:51.500 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 1/6): 결함
+                2026-08-30 23:13:29.121 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1468
+                2026-08-30 23:13:29.121 +09:00 [DBG] [AI 응답 내용]:
+                {"HasDefects":true,"ScoreAccuracy":1,"ScoreCrud":1,"ScoreInterface":1,"ScoreException":1,"ScoreReadability":1}
+                2026-08-30 23:13:29.124 +09:00 [ERR] JSON 검토 보고서 파싱 중 오류 발생 (POQSettleBatch5)
+                2026-08-30 23:13:29.300 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 2/6): 결함
+                2026-08-30 23:30:57.479 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1311
+                2026-08-30 23:30:57.479 +09:00 [DBG] [AI 응답 내용]:
+                {"HasDefects":true,"ScoreAccuracy":9,"ScoreCrud":9,"ScoreInterface":10,"ScoreException":7,"ScoreReadability":10}
+                2026-08-30 23:30:57.675 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 3/6): 결함
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(new[] { 78, 90 }, m.Trajectory.Select(a => a.NormalizedScore).ToArray());
+            Assert.Equal(3, m.TotalAttempts);
+            Assert.Equal(1, m.UnscoredAttempts);
+        }
+
+        /// <summary>
+        /// 실패 줄이 **다음** 앵커 뒤에 오면 그것은 그 다음 회차의 실패다 - 이미
+        /// 확정된 앞 회차를 소급해 지우면 안 된다.
+        /// </summary>
+        [Fact]
+        public void Read_ParseFailureAfterALaterAnchor_ShouldNotRetroactivelyDiscardTheEarlierAttempt()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1999
+                2026-08-30 22:42:51.128 +09:00 [DBG] [AI 응답 내용]:
+                {"HasDefects":true,"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                2026-08-30 22:42:51.500 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 1/6): 결함
+                2026-08-30 23:13:29.121 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 0
+                2026-08-30 23:13:29.124 +09:00 [ERR] JSON 검토 보고서 파싱 중 오류 발생 (POQSettleBatch5)
+                2026-08-30 23:13:29.300 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 2/6): 결함
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            var only = Assert.Single(m.Trajectory);
+            Assert.Equal(78, only.NormalizedScore);
+        }
+
     }
 }
