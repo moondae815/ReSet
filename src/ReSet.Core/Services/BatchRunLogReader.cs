@@ -17,6 +17,23 @@ namespace ReSet.Core.Services
     }
 
     /// <summary>
+    /// 호출 종류 하나의 집계. 종류는 로그의 「AI … 요청 전송」 줄에서 그대로 온다 -
+    /// 판독기가 종류 목록을 알지 않는다. 새 호출 갈래가 생기면 저절로 한 줄이 는다.
+    ///
+    /// [왜 종류별로 가르는가 - 2026-08-31 §7-7] 「호출당 캐시 쓰기」를 전체 호출로
+    /// 나누면 <b>개선이 성공할수록 나빠진다</b>. §3-9(입력 축소)가 좁힌 것은 단계
+    /// 섹션 호출뿐이고, 골격·브레인스토밍·목차는 의도적으로 안 건드린다. 회차가 줄어
+    /// 분모가 97→68로 작아지자 그 고정비의 몫이 커져, 단계 섹션 호출이 기준을 통과
+    /// (91,455 ≤ 99,000)했는데도 전체 평균은 102,090으로 미달로 읽혔다.
+    /// </summary>
+    public sealed record AiCallGroup(
+        string Kind, int Calls, long CacheWriteTokens, long CacheReadTokens, long OutputTokens)
+    {
+        /// <summary>호출당 캐시 쓰기. 호출이 0이면 0이다 - 나눗셈을 호출부에 미루지 않는다.</summary>
+        public long CacheWritePerCall => Calls == 0 ? 0 : CacheWriteTokens / Calls;
+    }
+
+    /// <summary>
     /// 실행 한 판의 재현성 지표. WallClock이 nullable인 이유: 재료가 없을 때
     /// 0으로 채우면 "0초에 끝났다"는 거짓 측정값이 남는다.
     ///
@@ -51,7 +68,34 @@ namespace ReSet.Core.Services
         // 문서 구조 변경을 요청하여..."로 서로 다른 접두문을 쓰기 때문에,
         // 정규식으로 정직하게 갈랐다.
         bool LoopStagnationRedrafted,
-        bool UserRequestedRedrafted);
+        bool UserRequestedRedrafted,
+
+        // [2026-09-02 A3] 아래 셋은 기존 필드 뒤에 붙인다 - 앞에 끼우면 위치
+        // 인자로 만드는 자리가 조용히 어긋난다.
+
+        /// <summary>호출 종류별 집계. §3-9의 대상인 단계 섹션 호출을 따로 읽기 위한 재료다.</summary>
+        IReadOnlyList<AiCallGroup> CallsByKind,
+
+        /// <summary>
+        /// 점수가 직전 최고점 아래로 내려갔는데 <b>되돌림 로그가 없는</b> 회차의 수.
+        /// §3-1이 실제로 약속한 것이고, 롤백이 옳게 작동하면 0이다.
+        /// <see cref="BatchRunMetrics.MonotonicityViolations"/>와 달리 완벽한 롤백
+        /// 아래서 0에 닿을 수 있다.
+        /// </summary>
+        int UnrolledBackRegressions,
+
+        /// <summary>
+        /// 로그가 말하는 최종 채택본의 환산 점수. 채택 줄도 통과 줄도 없으면 null이다 -
+        /// 0으로 채우면 없는 판정이 생긴다.
+        /// </summary>
+        int? AdoptedScore,
+
+        /// <summary>
+        /// 최종 채택본이 궤적의 최고점인가. 판정할 재료가 없으면 null이다.
+        /// 게이트 통과로 끝난 판은 <b>마지막 회차</b>가 채택되므로 이 값이 false일
+        /// 수 있다 - 그 자리가 이 검사의 존재 이유다.
+        /// </summary>
+        bool? AdoptedIsBest);
 
     /// <summary>
     /// 실행 로그에서 재현성 지표를 뽑는다.
@@ -134,6 +178,41 @@ namespace ReSet.Core.Services
         //
         // 컨텍스트 이름을 패턴에 넣지 않는다 - 같은 메서드가 단일 SP 리뷰에서도
         // 불리므로 문구만 잡고, 어느 회차의 실패인지는 앵커와의 순서가 정한다.
+        // [2026-09-02 A3] §3-1이 약속한 것을 재는 재료. 롤백 줄은
+        // VerificationPipelineOrchestrator.cs:2435가, 채택 줄은 같은 파일의 네 자리
+        // (:1035 중단 · :1072/:2299 L1 · :1182/:2719 L2 · :1201/:2750 리뷰 실패)가
+        // 공유하는 문구다. 게이트 통과로 끝난 판에는 채택 줄이 없고
+        // ConsoleUserInteraction.NotifyValidationSuccess의 통과 줄만 남는다 -
+        // 그때 채택되는 것은 마지막 회차다.
+        private static readonly Regex RollbackLine = new(
+            @"(?<n>\d+)차 시도\((?<s>\d+)/100\)가 최고 후보\(", RegexOptions.Compiled);
+        private static readonly Regex AdoptionLine = new(
+            @"가장 높은 점수를 받은 (?<n>\d+)차 시도\((?<s>\d+)/100\)를 채택합니다", RegexOptions.Compiled);
+        private static readonly Regex ValidationPassedLine = new(
+            @"L1/L2 자동 검증 모두 통과", RegexOptions.Compiled);
+
+        // 사용량 줄을 어느 호출에 귀속할지 정하는 줄.
+        //
+        // [왜 요청이 아니라 응답인가 - 2026-09-02 실측] 단계 섹션 호출은 **병렬로
+        // 돈다**. `reset-20260830.log`의 22:25:51 부근에서 S18 재시도 요청 바로 뒤에
+        // 온 사용량이 실제로는 S20의 것이었고, 요청 줄로 짝지으면 68건 중 10건
+        // (673,030 토큰, 9.7%)이 짝을 잃는다. 사용량은 클라이언트가 찍고 응답은
+        // 서비스가 곧바로 찍으므로 그 둘이 제어 흐름으로 붙어 있다 - 실측 68건 중
+        // 66건이 **정확히 다음 줄**이고, 나머지 둘(브레인스토밍·목차 수립)은 응답
+        // 줄 자체가 없는 갈래다. 그 둘은 순차 실행이라 요청 줄로 짝지어도 옳다.
+        private static readonly Regex AiRequestLine = new(
+            @"AI (?<kind>[^-]+?) 요청 전송", RegexOptions.Compiled);
+        private static readonly Regex AiResponseLine = new(
+            @"AI (?<kind>[^-]+?) 응답 수신 완료", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 사용량 줄에서 몇 줄 안의 응답 줄까지 자기 짝으로 보는가. 실측 66건이
+        /// 전부 정확히 1이고, 2는 그 위의 여유다. 종류가 다른 호출끼리는 동시에
+        /// 돌지 않으므로(골격 → 단계 섹션은 단계가 갈린다) 병렬 구간에서 줄이
+        /// 끼어들어도 귀속되는 <b>종류</b>는 같다.
+        /// </summary>
+        private const int MaxUsageToResponseLines = 2;
+
         private static readonly Regex ReviewParseFailureLine = new(
             @"JSON 검토 보고서 파싱 중 오류 발생", RegexOptions.Compiled);
 
@@ -164,8 +243,55 @@ namespace ReSet.Core.Services
             // 확정되고, 그 전에 파싱 실패 줄을 만나면 버려진다.
             AttemptScore? pending = null;
 
+            // [A3] 되돌림 줄이 말한 점수를 나온 순서대로 담는다. 채점받지 못한
+            // 회차(0점 처리)의 줄도 그대로 담긴다 - 궤적과 짝지을 때 건너뛴다.
+            var rollbackScores = new List<int>();
+            int? adoptedScore = null;
+            var sawValidationPassed = false;
+
+            // [A3] 호출 종류별 집계. 순서를 지키려고 목록과 색인을 함께 든다.
+            var callKinds = new List<string>();
+            var callTotals = new Dictionary<string, (int Calls, long Write, long Read, long Output)>(StringComparer.Ordinal);
+            const string UnknownKind = "(요청 줄 없음)";
+
+            // 요청 줄은 한 번만 쓰인다. 요청이 실패해 사용량 줄이 안 나오면, 다음
+            // 사용량 줄이 낡은 종류를 조용히 빨아들이는 것을 막는다. 이것은
+            // 응답 줄이 없는 갈래를 위한 **폴백**이다.
+            string? pendingKind = null;
+
+            // 짝지을 응답 줄을 기다리는 사용량. 창을 넘으면 폴백으로 확정된다.
+            (int Line, long Write, long Read, long Output, string? Fallback)? pendingUsage = null;
+            var lineNumber = 0;
+
+            void Attribute(string kind, long w, long r, long o)
+            {
+                if (!callTotals.TryGetValue(kind, out var totals))
+                {
+                    callKinds.Add(kind);
+                    totals = (0, 0, 0, 0);
+                }
+
+                callTotals[kind] = (totals.Calls + 1, totals.Write + w, totals.Read + r, totals.Output + o);
+            }
+
+            void FlushPendingUsage()
+            {
+                if (pendingUsage == null) return;
+                var u = pendingUsage.Value;
+                Attribute(u.Fallback ?? UnknownKind, u.Write, u.Read, u.Output);
+                pendingUsage = null;
+            }
+
             foreach (var line in lines)
             {
+                lineNumber++;
+
+                // 창을 넘긴 사용량은 자기 응답 줄이 없는 갈래다 - 폴백으로 확정한다.
+                if (pendingUsage != null && lineNumber - pendingUsage.Value.Line > MaxUsageToResponseLines)
+                {
+                    FlushPendingUsage();
+                }
+
                 var ts = TimestampLine.Match(line);
                 if (ts.Success &&
                     DateTime.TryParseExact(ts.Groups["ts"].Value, "yyyy-MM-dd HH:mm:ss",
@@ -268,14 +394,58 @@ namespace ReSet.Core.Services
                         totalAttempts, int.Parse(attempt.Groups["n"].Value, CultureInfo.InvariantCulture));
                 }
 
+                var request = AiRequestLine.Match(line);
+                if (request.Success)
+                {
+                    pendingKind = request.Groups["kind"].Value.Trim();
+                }
+
+                var response = AiResponseLine.Match(line);
+                if (response.Success && pendingUsage != null)
+                {
+                    var u = pendingUsage.Value;
+                    Attribute(response.Groups["kind"].Value.Trim(), u.Write, u.Read, u.Output);
+                    pendingUsage = null;
+                }
+
+                var rollback = RollbackLine.Match(line);
+                if (rollback.Success)
+                {
+                    rollbackScores.Add(int.Parse(rollback.Groups["s"].Value, CultureInfo.InvariantCulture));
+                }
+
+                var adoption = AdoptionLine.Match(line);
+                if (adoption.Success)
+                {
+                    adoptedScore = int.Parse(adoption.Groups["s"].Value, CultureInfo.InvariantCulture);
+                }
+
+                if (ValidationPassedLine.IsMatch(line))
+                {
+                    sawValidationPassed = true;
+                }
+
                 var usage = UsageLine.Match(line);
                 if (usage.Success)
                 {
-                    cacheWrite += long.Parse(usage.Groups["w"].Value, CultureInfo.InvariantCulture);
-                    cacheRead += long.Parse(usage.Groups["r"].Value, CultureInfo.InvariantCulture);
-                    output += long.Parse(usage.Groups["o"].Value, CultureInfo.InvariantCulture);
+                    var w = long.Parse(usage.Groups["w"].Value, CultureInfo.InvariantCulture);
+                    var r = long.Parse(usage.Groups["r"].Value, CultureInfo.InvariantCulture);
+                    var o = long.Parse(usage.Groups["o"].Value, CultureInfo.InvariantCulture);
+
+                    cacheWrite += w;
+                    cacheRead += r;
+                    output += o;
+
+                    // 앞의 사용량이 아직 짝을 못 찾았으면 여기서 폴백으로 확정한다 -
+                    // 사용량 둘이 하나의 응답 줄을 나눠 가질 수는 없다.
+                    FlushPendingUsage();
+
+                    pendingUsage = (lineNumber, w, r, o, pendingKind);
+                    pendingKind = null;
                 }
             }
+
+            FlushPendingUsage();
 
             // 마지막 회차는 뒤에 앵커가 없다. 로그가 끝날 때까지 실패 줄이 없었으므로
             // 파이프라인이 그 점수를 썼다.
@@ -293,6 +463,17 @@ namespace ReSet.Core.Services
             // 소진"이라는 무의미한 값보다 낫다.
             var unscoredAttempts = Math.Max(0, totalAttempts - trajectory.Count);
 
+            // 채택본은 채택 줄이 말한다. 그 줄이 없고 통과 줄만 있으면 게이트를
+            // 통과해 끝난 판이고, 그때 채택되는 것은 마지막 회차다.
+            if (adoptedScore == null && sawValidationPassed && trajectory.Count > 0)
+            {
+                adoptedScore = trajectory[^1].NormalizedScore;
+            }
+
+            bool? adoptedIsBest = adoptedScore.HasValue && trajectory.Count > 0
+                ? adoptedScore.Value == trajectory.Max(a => a.NormalizedScore)
+                : null;
+
             return new BatchRunMetrics(
                 trajectory,
                 CountMonotonicityViolations(trajectory),
@@ -303,7 +484,68 @@ namespace ReSet.Core.Services
                 output,
                 first.HasValue && last.HasValue ? last.Value - first.Value : null,
                 loopStagnationRedrafted,
-                userRequestedRedrafted);
+                userRequestedRedrafted,
+                callKinds
+                    .Select(k => new AiCallGroup(k, callTotals[k].Calls, callTotals[k].Write, callTotals[k].Read, callTotals[k].Output))
+                    .ToList(),
+                CountUnrolledBackRegressions(trajectory, rollbackScores),
+                adoptedScore,
+                adoptedIsBest);
+        }
+
+        /// <summary>
+        /// 점수가 직전 최고점 아래로 내려갔는데 되돌림 줄이 없는 회차의 수.
+        ///
+        /// [왜 이것이 §3-1의 지표인가] §3-1이 약속한 것은 「하락한 회차의 산출물을
+        /// 버리고 최고 후보 상태로 되감는다」이지 「Critic 점수가 안 내려간다」가
+        /// 아니다. 롤백은 문서 상태를 되돌릴 뿐 다음 회차의 채점을 올려 주지
+        /// 않으므로, <see cref="CountMonotonicityViolations"/>는 롤백이 완벽해도
+        /// 0이 되지 않는다(§7-6).
+        ///
+        /// [짝짓기 규칙] 되돌림 줄은 궤적보다 <b>많을 수</b> 있다 - 채점받지 못한
+        /// 회차(파싱 실패로 0점 처리)도 되돌림 줄을 남기는데 궤적에는 없다. 그래서
+        /// 하락 회차마다 남은 되돌림 줄에서 같은 점수를 <b>앞으로 훑어</b> 찾고,
+        /// 찾으면 거기까지 소비한다. 못 찾으면 위반 하나를 세되 <b>아무것도 소비하지
+        /// 않는다</b> - 소비하면 뒤의 정상 회차까지 줄줄이 위반으로 번진다.
+        /// 남는 방향은 무해하고 모자라는 방향만 결함이다.
+        /// </summary>
+        private static int CountUnrolledBackRegressions(
+            IReadOnlyList<AttemptScore> trajectory, IReadOnlyList<int> rollbackScores)
+        {
+            var violations = 0;
+            var runningMax = int.MinValue;
+            var next = 0;
+
+            foreach (var attempt in trajectory)
+            {
+                var score = attempt.NormalizedScore;
+
+                if (runningMax != int.MinValue && score < runningMax)
+                {
+                    var found = -1;
+                    for (var i = next; i < rollbackScores.Count; i++)
+                    {
+                        if (rollbackScores[i] == score)
+                        {
+                            found = i;
+                            break;
+                        }
+                    }
+
+                    if (found >= 0)
+                    {
+                        next = found + 1;
+                    }
+                    else
+                    {
+                        violations++;
+                    }
+                }
+
+                runningMax = Math.Max(runningMax, score);
+            }
+
+            return violations;
         }
 
         /// <summary>

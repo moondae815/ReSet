@@ -576,5 +576,245 @@ namespace ReSet.Core.Tests
             Assert.Equal(78, only.NormalizedScore);
         }
 
+
+        // ── 2026-09-02 A3: 지표 둘을 §3-1·§3-9가 실제로 약속한 것으로 재정의한다 ──
+
+        /// <summary>
+        /// §3-1이 약속한 것은 「점수가 내려간 회차마다 되돌림이 있었는가」다.
+        /// <c>MonotonicityViolations</c>(원점수 궤적의 하락 회차 수)는 롤백이
+        /// 완벽해도 0이 되지 않으므로 그 약속을 재지 못한다 - 롤백은 문서 상태를
+        /// 되돌릴 뿐 다음 회차의 Critic 점수를 올려 주지 않는다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenEveryRegressionHasARollbackLine_ReportsNoUnrolledBackRegression()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                2026-08-30 22:42:51.500 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 1/6): 결함
+                2026-08-30 22:59:41.351 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":9,"ScoreCrud":9,"ScoreInterface":5,"ScoreException":6,"ScoreReadability":9}
+                2026-08-30 22:59:41.534 +09:00 [INF] POQSettleBatch5 - 2차 시도(76/100)가 최고 후보(1차, 78/100)를 넘지 못해 최고 후보 상태로 되돌립니다.
+                2026-08-30 22:59:41.600 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 2/6): 결함
+                2026-08-31 00:00:37.127 +09:00 [ERR] POQSettleBatch5 - [[L2 AI 리뷰]] 최종 보완 실패. 가장 높은 점수를 받은 1차 시도(78/100)를 채택합니다.
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(new[] { 78, 76 }, m.Trajectory.Select(a => a.NormalizedScore).ToArray());
+            Assert.Equal(0, m.UnrolledBackRegressions);
+            Assert.Equal(78, m.AdoptedScore);
+            Assert.True(m.AdoptedIsBest);
+        }
+
+        /// <summary>
+        /// 되돌림 없이 하락한 회차가 있으면 그것이 §3-1의 구현 결함이다 - 이 지표는
+        /// 그때만 0이 아니어야 한다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenARegressionHasNoRollbackLine_ReportsIt()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                2026-08-30 22:42:51.500 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 1/6): 결함
+                2026-08-30 22:59:41.351 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":9,"ScoreCrud":9,"ScoreInterface":5,"ScoreException":6,"ScoreReadability":9}
+                2026-08-30 22:59:41.600 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 2/6): 결함
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(1, m.UnrolledBackRegressions);
+        }
+
+        /// <summary>
+        /// 채점받지 못한 회차(파싱 실패로 0점 처리된 회차)도 되돌림 줄을 남긴다.
+        /// 궤적에는 그 회차가 없으므로 되돌림 줄이 하나 남는데, 그것을 결함으로
+        /// 세면 안 된다 - 남는 방향은 무해하고, 모자라는 방향만 결함이다.
+        /// </summary>
+        [Fact]
+        public void Read_ExtraRollbackLineForADiscardedAttempt_IsNotCountedAsAViolation()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                2026-08-30 23:13:29.121 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":9,"ScoreCrud":9,"ScoreInterface":9,"ScoreException":6,"ScoreReadability":9}
+                2026-08-30 23:13:29.124 +09:00 [ERR] JSON 검토 보고서 파싱 중 오류 발생 (POQSettleBatch5)
+                2026-08-30 23:13:29.267 +09:00 [INF] POQSettleBatch5 - 2차 시도(0/100)가 최고 후보(1차, 78/100)를 넘지 못해 최고 후보 상태로 되돌립니다.
+                2026-08-30 23:20:32.075 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":8,"ScoreCrud":9,"ScoreInterface":6,"ScoreException":5,"ScoreReadability":9}
+                2026-08-30 23:20:32.212 +09:00 [INF] POQSettleBatch5 - 3차 시도(74/100)가 최고 후보(1차, 78/100)를 넘지 못해 최고 후보 상태로 되돌립니다.
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(new[] { 78, 74 }, m.Trajectory.Select(a => a.NormalizedScore).ToArray());
+            Assert.Equal(0, m.UnrolledBackRegressions);
+        }
+
+        /// <summary>
+        /// 게이트를 통과해 끝난 판에는 「가장 높은 점수를 받은 …를 채택합니다」 줄이
+        /// 없다 - 그때 채택되는 것은 마지막 회차다. 그 마지막이 최고점이 아닐 수
+        /// 있고, 이 검사는 그 자리에서 발화해야 한다.
+        /// </summary>
+        [Fact]
+        public void Read_OnThePassPath_AdoptsTheLastAttemptAndCanReportItIsNotTheBest()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":9,"ScoreCrud":9,"ScoreInterface":10,"ScoreException":7,"ScoreReadability":10}
+                2026-08-30 22:42:51.500 +09:00 [WRN] [POQSettleBatch5] L2 AI 리뷰 결함 발견 (시도 1/6): 결함
+                2026-08-30 22:59:41.351 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":9,"ScoreCrud":8,"ScoreInterface":9,"ScoreException":7,"ScoreReadability":9}
+                2026-08-30 22:59:41.534 +09:00 [INF] [POQSettleBatch5] L1/L2 자동 검증 모두 통과!
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(new[] { 90, 84 }, m.Trajectory.Select(a => a.NormalizedScore).ToArray());
+            Assert.Equal(84, m.AdoptedScore);
+            Assert.False(m.AdoptedIsBest);
+        }
+
+        /// <summary>
+        /// 채택 줄도 통과 줄도 없으면 「모른다」다 - 0이나 false로 채우면 없는
+        /// 판정이 생긴다.
+        /// </summary>
+        [Fact]
+        public void Read_WithNoAdoptionOrPassLine_ReportsAdoptedScoreAsUnknown()
+        {
+            const string log = """
+                2026-08-30 22:42:51.128 +09:00 [INF] AI 통합 배치 계획서 리뷰 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 1
+                {"ScoreAccuracy":8,"ScoreCrud":8,"ScoreInterface":8,"ScoreException":7,"ScoreReadability":8}
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Null(m.AdoptedScore);
+            Assert.Null(m.AdoptedIsBest);
+        }
+
+        /// <summary>
+        /// §3-9(입력 축소)가 실제로 좁힌 것은 <b>단계 섹션 호출</b>이다. 「호출당
+        /// 캐시 쓰기」를 전체 호출로 나누면 개선이 성공할수록(회차가 줄어 분모가
+        /// 작아질수록) 지표가 나빠진다 - 대조 실행에서 실제로 그랬다. 그래서
+        /// 호출 종류별로 가른다.
+        ///
+        /// 귀속은 <b>바로 앞의 요청 줄</b>이 정한다. 요청 줄은 한 번만 쓰인다 -
+        /// 요청이 실패해 사용량 줄이 안 나오면, 다음 사용량 줄이 낡은 종류를
+        /// 조용히 빨아들이는 것을 막는다.
+        /// </summary>
+        [Fact]
+        public void Read_AttributesTokenUsageToThePrecedingRequestKind()
+        {
+            const string log = """
+                2026-08-30 22:02:35.575 +09:00 [INF] AI 배치 계획 브레인스토밍 요청 전송 - JobName: POQSettleBatch5, TargetLanguage: C#, Effort: high
+                2026-08-30 22:07:46.606 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 271982, 캐시 읽기: 0, 출력: 28716, 추론: 미보고
+                2026-08-30 22:09:24.249 +09:00 [INF] AI 배치 계획 골격 생성 요청 전송 - JobName: POQSettleBatch5, 단계 수: 20개
+                2026-08-30 22:09:30.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 300000, 캐시 읽기: 10, 출력: 100, 추론: 미보고
+                2026-08-30 22:12:05.076 +09:00 [INF] AI 배치 단계 섹션 생성 요청 전송 - JobName: POQSettleBatch5, Step: S01, 재시도 피드백: false
+                2026-08-30 22:12:40.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 90000, 캐시 읽기: 20, 출력: 200, 추론: 미보고
+                2026-08-30 22:13:05.076 +09:00 [INF] AI 배치 단계 섹션 생성 요청 전송 - JobName: POQSettleBatch5, Step: S02, 재시도 피드백: false
+                2026-08-30 22:13:40.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 92910, 캐시 읽기: 30, 출력: 300, 추론: 미보고
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            var steps = Assert.Single(m.CallsByKind, g => g.Kind.Contains("단계 섹션"));
+            Assert.Equal(2, steps.Calls);
+            Assert.Equal(182910, steps.CacheWriteTokens);
+            Assert.Equal(91455, steps.CacheWritePerCall);
+
+            // 전체로 나누면 지표가 이 값을 훨씬 넘는다 - 그것이 §7-7이 적은 함정이다.
+            Assert.Equal(754892 / 4, m.CacheWriteTokens / 4);
+            Assert.Equal(4, m.CallsByKind.Sum(g => g.Calls));
+        }
+
+        /// <summary>
+        /// 요청 줄 없이 나온 사용량은 「모름」으로 모은다. 마지막 종류에 붙이면
+        /// 어느 호출이 얼마를 썼는지가 조용히 틀린다.
+        /// </summary>
+        [Fact]
+        public void Read_UsageWithoutItsOwnRequestLine_IsAttributedToUnknown()
+        {
+            const string log = """
+                2026-08-30 22:12:05.076 +09:00 [INF] AI 배치 단계 섹션 생성 요청 전송 - JobName: POQSettleBatch5, Step: S01, 재시도 피드백: false
+                2026-08-30 22:12:40.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 90000, 캐시 읽기: 20, 출력: 200, 추론: 미보고
+                2026-08-30 22:13:40.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 5, 캐시 읽기: 0, 출력: 1, 추론: 미보고
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            var steps = Assert.Single(m.CallsByKind, g => g.Kind.Contains("단계 섹션"));
+            Assert.Equal(1, steps.Calls);
+            Assert.Equal(90000, steps.CacheWriteTokens);
+
+            var unknown = Assert.Single(m.CallsByKind, g => !g.Kind.Contains("단계 섹션"));
+            Assert.Equal(1, unknown.Calls);
+            Assert.Equal(5, unknown.CacheWriteTokens);
+        }
+
+
+        /// <summary>
+        /// 단계 섹션 호출은 <b>병렬로 돈다</b> - 요청 줄이 자기 사용량 줄 바로 앞에
+        /// 오지 않는다. 실측(`reset-20260830.log:22:25:51`)에서 S18 재시도 요청 바로
+        /// 뒤의 사용량이 실제로는 S20의 것이었다. 그래서 짝은 요청이 아니라
+        /// <b>바로 뒤의 응답 줄</b>이 정한다 - 사용량은 클라이언트가 찍고 응답은
+        /// 서비스가 곧바로 찍으므로 둘은 제어 흐름으로 붙어 있다(실측 68건 중 66건이
+        /// 정확히 다음 줄이고, 나머지 둘은 응답 줄 자체가 없는 갈래다).
+        /// </summary>
+        [Fact]
+        public void Read_WhenCallsAreInterleaved_AttributesUsageByTheFollowingResponseLine()
+        {
+            const string log = """
+                2026-08-30 22:09:24.249 +09:00 [INF] AI 배치 계획 골격 생성 요청 전송 - JobName: POQSettleBatch5, 단계 수: 20개
+                2026-08-30 22:09:30.000 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 300000, 캐시 읽기: 0, 출력: 100, 추론: 미보고
+                2026-08-30 22:09:30.001 +09:00 [INF] AI 배치 계획 골격 생성 응답 수신 완료 - JobName: POQSettleBatch5, 응답 길이: 100
+                2026-08-30 22:25:11.000 +09:00 [INF] AI 배치 단계 섹션 생성 요청 전송 - JobName: POQSettleBatch5, Step: S18, 재시도 피드백: false
+                2026-08-30 22:25:11.100 +09:00 [INF] AI 배치 단계 섹션 생성 요청 전송 - JobName: POQSettleBatch5, Step: S20, 재시도 피드백: false
+                2026-08-30 22:25:51.526 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 90000, 캐시 읽기: 8802, 출력: 16137, 추론: 미보고
+                2026-08-30 22:25:51.526 +09:00 [INF] AI 배치 단계 섹션 생성 응답 수신 완료 - JobName: POQSettleBatch5, Step: S18, 응답 길이: 8750
+                2026-08-30 22:25:57.689 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 92910, 캐시 읽기: 8802, 출력: 5846, 추론: 미보고
+                2026-08-30 22:25:57.690 +09:00 [INF] AI 배치 단계 섹션 생성 응답 수신 완료 - JobName: POQSettleBatch5, Step: S20, 응답 길이: 4480
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            var steps = Assert.Single(m.CallsByKind, g => g.Kind.Contains("단계 섹션"));
+            Assert.Equal(2, steps.Calls);
+            Assert.Equal(91455, steps.CacheWritePerCall);
+
+            var skeleton = Assert.Single(m.CallsByKind, g => g.Kind.Contains("골격"));
+            Assert.Equal(1, skeleton.Calls);
+
+            // 귀속되지 않은 호출이 있으면 안 된다 - 실측에서 요청 줄로 짝지었을 때
+            // 68건 중 10건(673,030 토큰)이 「요청 줄 없음」으로 샜다.
+            Assert.Equal(3, m.CallsByKind.Sum(g => g.Calls));
+            Assert.Equal(2, m.CallsByKind.Count);
+        }
+
+        /// <summary>
+        /// 응답 줄이 없는 갈래(브레인스토밍·목차 수립)는 요청 줄로 짝짓는다. 그
+        /// 둘은 순차 실행이라 요청 바로 뒤가 자기 사용량이다.
+        /// </summary>
+        [Fact]
+        public void Read_WhenNoResponseLineFollows_FallsBackToTheRequestLine()
+        {
+            const string log = """
+                2026-08-30 22:02:35.575 +09:00 [INF] AI 배치 계획 브레인스토밍 요청 전송 - JobName: POQSettleBatch5, TargetLanguage: C#, Effort: high
+                2026-08-30 22:07:46.606 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 271982, 캐시 읽기: 0, 출력: 28716, 추론: 미보고
+                2026-08-30 22:09:24.231 +09:00 [INF] AI 배치 계획 목차 수립 요청 전송 - JobName: POQSettleBatch5
+                2026-08-30 22:09:24.240 +09:00 [INF] claude-cli 토큰 사용량 - 입력: 2, 캐시 쓰기: 8696, 캐시 읽기: 0, 출력: 10800, 추론: 미보고
+                """;
+
+            var m = BatchRunLogReader.Read(log);
+
+            Assert.Equal(2, m.CallsByKind.Count);
+            Assert.Equal(271982, Assert.Single(m.CallsByKind, g => g.Kind.Contains("브레인스토밍")).CacheWriteTokens);
+            Assert.Equal(8696, Assert.Single(m.CallsByKind, g => g.Kind.Contains("목차")).CacheWriteTokens);
+        }
+
     }
 }
