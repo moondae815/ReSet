@@ -267,5 +267,23 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
                 result.Defects,
                 d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
         }
+
+        [Fact]
+        public void Validate_ShouldReportWrongSource_WhenDriftedHeadingDoesNotNormalizeToAllowedSource()
+        {
+            // 정규화가 허용되지 않은 원천을 실수로 수락하지 않는지 확인.
+            // Spec이 드리프트 형태(## 2. 파라미터 목록)를 가지고 있고,
+            // 기능 요구사항이 그것을 인용하면 정규화(파라미터 목록)가 실제로
+            // 헤딩을 찾을 수 있지만 여전히 허용되지 않은 원천이므로 오류다.
+            // 정규화가 과다 축약되지 않았는지 확인하는 가드.
+            var prd = "## 기능 요구사항\n\n| ID | 요구사항 | 근거 | 확신도 |\n| :--- | :--- | :--- | :--- |\n"
+                + "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 2. 파라미터 목록 > \"@BaseDate\" | 도출 |\n";
+
+            var result = PrdAttributionValidator.Validate(prd, DriftedSpec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceSourceNotAllowed && d.RequirementId == "REQ-FUNC-01");
+        }
     }
 }
