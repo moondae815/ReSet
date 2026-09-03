@@ -49,6 +49,50 @@ namespace ReSet.Core.Services
     {
         private static readonly string[] AllowedConfidence = { "도출", "추정" };
 
+        /// <summary>근거 칸을 헤딩과 인용 구절로 가른 것.</summary>
+        public sealed record PrdEvidenceReference(string Heading, string Quote);
+
+        /// <summary>
+        /// `## CRUD 분석 &gt; "TB_SETTLE_DAILY에 INSERT"` 형태를 가른다.
+        ///
+        /// 줄번호가 아니라 헤딩+인용을 쓰는 이유: 줄번호는 Spec을 다시 생성하는
+        /// 순간 전부 거짓이 되지만, 헤딩과 원문 구절은 두 문서가 같은 이야기를
+        /// 하는 한 살아 있다.
+        /// </summary>
+        public static bool TryParseEvidence(string? raw, out PrdEvidenceReference reference)
+        {
+            reference = new PrdEvidenceReference(string.Empty, string.Empty);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return false;
+            }
+
+            var separator = raw.IndexOf('>');
+            if (separator < 0)
+            {
+                return false;
+            }
+
+            var heading = raw[..separator].Trim();
+            var rest = raw[(separator + 1)..].Trim();
+
+            var first = rest.IndexOfAny(new[] { '"', '"' });
+            var last = rest.LastIndexOfAny(new[] { '"', '"' });
+            if (first < 0 || last <= first)
+            {
+                return false;
+            }
+
+            var quote = rest[(first + 1)..last].Trim();
+            if (heading.Length == 0 || quote.Length == 0)
+            {
+                return false;
+            }
+
+            reference = new PrdEvidenceReference(heading, quote);
+            return true;
+        }
+
         public static PrdValidationResult Validate(string? prdMarkdown, string? specMarkdown)
         {
             var defects = new List<PrdDefect>();
@@ -85,6 +129,40 @@ namespace ReSet.Core.Services
                         requirement.Section,
                         requirement.Id,
                         "근거 칸이 비어 있습니다. '추정' 항목도 재구성의 출발점이 된 인용을 달아야 합니다."));
+                }
+
+                var rule = PrdSectionContract.Sections.First(s => s.Heading == requirement.Section);
+
+                if (!requirement.Id.StartsWith(rule.IdPrefix + "-", StringComparison.Ordinal))
+                {
+                    defects.Add(new PrdDefect(
+                        PrdDefectType.IdPrefixMismatch,
+                        requirement.Section,
+                        requirement.Id,
+                        $"'{requirement.Section}'의 요구 ID는 '{rule.IdPrefix}-'로 시작해야 합니다."));
+                }
+
+                if (!TryParseEvidence(requirement.EvidenceRaw, out var evidence))
+                {
+                    if (!string.IsNullOrWhiteSpace(requirement.EvidenceRaw))
+                    {
+                        defects.Add(new PrdDefect(
+                            PrdDefectType.EvidenceMissing,
+                            requirement.Section,
+                            requirement.Id,
+                            "근거 칸이 '## 헤딩 > \"원문 구절\"' 형식이 아닙니다."));
+                    }
+
+                    continue;
+                }
+
+                if (!rule.AllowedSources.Contains(evidence.Heading))
+                {
+                    defects.Add(new PrdDefect(
+                        PrdDefectType.EvidenceSourceNotAllowed,
+                        requirement.Section,
+                        requirement.Id,
+                        $"'{requirement.Section}'은 {string.Join(", ", rule.AllowedSources)}에서만 파생할 수 있습니다. 실제 인용: '{evidence.Heading}'"));
                 }
             }
 

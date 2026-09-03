@@ -93,5 +93,46 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 
             Assert.Contains(result.Defects, d => d.Type == PrdDefectType.EvidenceMissing);
         }
+
+        [Fact]
+        public void Validate_ShouldReportIdPrefixMismatch_WhenRowSitsInTheWrongSection()
+        {
+            var row = "| REQ-FUNC-01 | 미집계 건을 적재한다 | ## CRUD 분석 > \"TB_SETTLE_DAILY에 INSERT\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.IdPrefixMismatch && d.RequirementId == "REQ-FUNC-01");
+        }
+
+        [Fact]
+        public void Validate_ShouldReportEvidenceSourceNotAllowed_WhenCitingAnUnmappedSection()
+        {
+            // 기능 요구사항은 로직 흐름 요약에서만 파생한다. 파라미터 목록 인용은
+            // 실재하더라도 파생 계약 위반이다.
+            var prd = PrdWith(GoodDataRow).Replace(
+                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 로직 흐름 요약 > \"기준일자를 검증한다\" | 도출 |",
+                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 파라미터 목록 > \"@BaseDate\" | 도출 |");
+
+            var result = PrdAttributionValidator.Validate(prd, Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceSourceNotAllowed && d.RequirementId == "REQ-FUNC-01");
+        }
+
+        [Fact]
+        public void Validate_ShouldAllowEitherSource_ForTheNonFunctionalSection()
+        {
+            // 예외 및 비기능 요구사항만 원천이 둘이다. 둘 다 통과해야 한다.
+            var prd = PrdWith(GoodDataRow).Replace(
+                "| REQ-NFR-01 | 중복 적재를 막는다 | ## CRUD 분석 > \"중복 검사\" | 추정 |",
+                "| REQ-NFR-01 | 중복 적재를 막는다 | ## 로직 흐름 요약 > \"미집계 건을 조회한다\" | 추정 |");
+
+            var result = PrdAttributionValidator.Validate(prd, Spec);
+
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
+        }
     }
 }
