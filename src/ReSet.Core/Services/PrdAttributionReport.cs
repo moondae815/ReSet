@@ -31,8 +31,8 @@ namespace ReSet.Core.Services
                 {
                     var subject = string.IsNullOrEmpty(defect.RequirementId)
                         ? defect.Section
-                        : $"{defect.Section} / {defect.RequirementId}";
-                    sb.AppendLine($"> - `{subject}` — {defect.Message}");
+                        : $"{defect.Section} / {SafeForMarkdownBullet(defect.RequirementId)}";
+                    sb.AppendLine($"> - `{subject}` — {SafeForMarkdownBullet(defect.Message)}");
                 }
             }
 
@@ -70,6 +70,21 @@ namespace ReSet.Core.Services
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// 모델이 작성한 텍스트 내 마크다운 문법을 무효화한다.
+        /// 섹션은 파서가 화이트리스트한 다섯 개 중 하나이므로 신뢰할 수 있어 제외한다.
+        /// </summary>
+        private static string SafeForMarkdownBullet(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
+
+            // 백틱은 코드 스팬을 닫고, 별표와 언더스코어는 강조를 활성화한다.
+            return text
+                .Replace("`", "´")
+                .Replace("*", "·")
+                .Replace("_", "-");
         }
     }
 }
