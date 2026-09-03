@@ -49,6 +49,33 @@ namespace ReSet.Core.Services
     {
         private static readonly string[] AllowedConfidence = { "도출", "추정" };
 
+        /// <summary>
+        /// 인용 대조용 정규화. 공백과 마크다운 강조·표 파이프를 걷어낸다.
+        ///
+        /// 이것이 없으면 Spec 본문의 `**강조**`나 표 정렬 공백 때문에 멀쩡한 인용이
+        /// 결함으로 보고된다. 오탐이 잦은 검사는 곧 꺼지므로, 대조는 두 문자열이
+        /// 같은 내용을 말하는지만 본다.
+        /// </summary>
+        private static string NormalizeForQuoteMatch(string text)
+        {
+            var kept = text.Where(ch => !char.IsWhiteSpace(ch)
+                                        && ch != '*' && ch != '`' && ch != '|'
+                                        && ch != '_' && ch != '~');
+            return string.Concat(kept);
+        }
+
+        /// <summary>지정 헤딩 아래 본문만 이어 붙인다. 헤딩이 없으면 null.</summary>
+        private static string? ExtractSectionBody(IReadOnlyList<string> specLines, string heading)
+        {
+            var (headerIndex, endIndex) = MarkdownSectionLocator.LocateSection(specLines, heading, "## ");
+            if (headerIndex < 0)
+            {
+                return null;
+            }
+
+            return string.Join("\n", specLines.Skip(headerIndex + 1).Take(endIndex - headerIndex - 1));
+        }
+
         /// <summary>근거 칸을 헤딩과 인용 구절로 가른 것.</summary>
         public sealed record PrdEvidenceReference(string Heading, string Quote);
 
@@ -97,6 +124,8 @@ namespace ReSet.Core.Services
         {
             var defects = new List<PrdDefect>();
             var prdLines = MarkdownSectionLocator.SplitLines(prdMarkdown);
+            var specLines = MarkdownSectionLocator.SplitLines(specMarkdown);
+            var sectionBodyCache = new Dictionary<string, string?>(StringComparer.Ordinal);
 
             foreach (var rule in PrdSectionContract.Sections)
             {
@@ -163,6 +192,32 @@ namespace ReSet.Core.Services
                         requirement.Section,
                         requirement.Id,
                         $"'{requirement.Section}'은 {string.Join(", ", rule.AllowedSources)}에서만 파생할 수 있습니다. 실제 인용: '{evidence.Heading}'"));
+                }
+
+                if (!sectionBodyCache.TryGetValue(evidence.Heading, out var body))
+                {
+                    body = ExtractSectionBody(specLines, evidence.Heading);
+                    sectionBodyCache[evidence.Heading] = body;
+                }
+
+                if (body is null)
+                {
+                    defects.Add(new PrdDefect(
+                        PrdDefectType.EvidenceHeadingNotFound,
+                        requirement.Section,
+                        requirement.Id,
+                        $"근거로 인용한 헤딩 '{evidence.Heading}'이 원본 명세서에 없습니다."));
+                    continue;
+                }
+
+                if (!NormalizeForQuoteMatch(body).Contains(
+                        NormalizeForQuoteMatch(evidence.Quote), StringComparison.Ordinal))
+                {
+                    defects.Add(new PrdDefect(
+                        PrdDefectType.EvidenceQuoteNotFound,
+                        requirement.Section,
+                        requirement.Id,
+                        $"인용 구절 \"{evidence.Quote}\"을 '{evidence.Heading}' 절 본문에서 찾을 수 없습니다."));
                 }
             }
 

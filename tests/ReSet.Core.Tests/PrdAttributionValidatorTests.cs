@@ -134,5 +134,70 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 
             Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
         }
+
+        [Fact]
+        public void Validate_ShouldReportHeadingNotFound_WhenSpecHasNoSuchHeading()
+        {
+            var specWithoutCrud = Spec.Replace("## CRUD 분석", "## 데이터 조작 분석");
+            var prd = PrdWith(GoodDataRow);
+
+            var result = PrdAttributionValidator.Validate(prd, specWithoutCrud);
+
+            Assert.Contains(result.Defects, d => d.Type == PrdDefectType.EvidenceHeadingNotFound);
+        }
+
+        [Fact]
+        public void Validate_ShouldReportQuoteNotFound_WhenTheQuoteIsNotInThatSection()
+        {
+            // 인용 구절이 Spec 어디에도 없다.
+            var row = "| REQ-DATA-01 | 미집계 건을 적재한다 | ## CRUD 분석 > \"TB_SETTLE_MONTHLY에 INSERT\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
+        }
+
+        [Fact]
+        public void Validate_ShouldReportQuoteNotFound_WhenTheQuoteLivesInAnotherSection()
+        {
+            // 구절은 Spec에 있지만 인용한 헤딩 아래가 아니다. 문서 전체 검색으로
+            // 대조하면 이것을 놓친다.
+            var row = "| REQ-DATA-01 | 기준일자를 검증한다 | ## CRUD 분석 > \"기준일자를 검증한다\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
+        }
+
+        [Fact]
+        public void Validate_ShouldTolerateMarkdownEmphasisAndSpacingInTheSpec()
+        {
+            // Spec 본문의 강조 표기는 인용과 글자가 달라 보이게 만든다. 이것으로
+            // 오탐이 나면 검사는 곧 꺼진다.
+            var emphasised = Spec.Replace(
+                "TB_SETTLE_DAILY에 INSERT 한다.",
+                "**TB_SETTLE_DAILY**에 `INSERT` 한다.");
+
+            var result = PrdAttributionValidator.Validate(PrdWith(GoodDataRow), emphasised);
+
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
+        }
+
+        [Fact]
+        public void Validate_ShouldFire_WhenASingleCharacterOfTheQuoteIsAltered()
+        {
+            // 결함 주입 회귀. 이것이 없으면 검사가 살아 있는지 알 수 없다.
+            var tampered = PrdWith(GoodDataRow).Replace(
+                "TB_SETTLE_DAILY에 INSERT",
+                "TB_SETTLE_DAIL7에 INSERT");
+
+            var result = PrdAttributionValidator.Validate(tampered, Spec);
+
+            Assert.Contains(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
+        }
     }
 }
