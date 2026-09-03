@@ -81,10 +81,17 @@ namespace ReSet.Core.Services
             if (string.IsNullOrEmpty(text)) return text ?? string.Empty;
 
             // 백틱은 코드 스팬을 닫고, 별표와 언더스코어는 강조를 활성화한다.
+            // 대괄호는 링크 [text](url)와 이미지 ![alt](url) 구문을 이루는데, 괄호만으로는
+            // 링크가 되지 않으므로 ( )는 제외한다. < 는 자동 링크 <url> 과 인라인 HTML 을
+            // 활성화하지만, > 는 보통 텍스트에 포함되어도 무해하고 우리 메시지에도 이미
+            // 포함되어 있으므로 제외한다.
             return text
                 .Replace("`", "´")
                 .Replace("*", "·")
-                .Replace("_", "-");
+                .Replace("_", "-")
+                .Replace("[", "⟦")
+                .Replace("]", "⟧")
+                .Replace("<", "‹");
         }
     }
 }

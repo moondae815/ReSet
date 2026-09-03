@@ -73,6 +73,50 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void BuildBanner_MessageWithMarkdownLink_DoesNotRenderAsLink()
+        {
+            // Message는 검증기가 구성하며, 요구자가 작성한 인용 구절을 포함할 수 있다.
+            // 그 인용이 마크다운 링크 구문을 포함하면 배너에서 링크로 렌더링되면 안 된다.
+            // 제거: SafeForMarkdownBullet에서 [ 와 ] 대체를 제거하면 이 테스트는 실패한다.
+            var banner = PrdAttributionReport.BuildBanner(ResultWith(new PrdDefect(
+                PrdDefectType.EvidenceQuoteNotFound,
+                "## 데이터 요구사항",
+                "REQ-DATA-01",
+                "근거 칸의 인용: '[정상 확인됨](https://example.invalid)'")));
+
+            // CAUTION 헤더와 미검증 공개 문단은 유지되어야 한다.
+            Assert.Contains("CAUTION", banner);
+            Assert.Contains("미검증", banner);
+
+            // 링크 구문이 무효화되어야 한다. 원본 대괄호는 없어야 한다.
+            Assert.DoesNotContain("[정상", banner);
+            Assert.DoesNotContain("](https", banner);
+            // 대괄호가 수학 기호로 대체되어야 한다.
+            Assert.Contains("⟦정상 확인됨⟧", banner);
+        }
+
+        [Fact]
+        public void BuildBanner_MessageWithAutolinkOrInlineHtml_DoesNotRender()
+        {
+            // Message에 자동 링크 <url> 이나 인라인 HTML <tag> 가 포함되면 렌더링되면 안 된다.
+            // 제거: SafeForMarkdownBullet에서 < 대체를 제거하면 이 테스트는 실패한다.
+            var banner = PrdAttributionReport.BuildBanner(ResultWith(new PrdDefect(
+                PrdDefectType.EvidenceQuoteNotFound,
+                "## 데이터 요구사항",
+                "REQ-DATA-01",
+                "근거 칸의 HTML: '<b>정상 확인됨</b>' 또는 <https://example.invalid>")));
+
+            // CAUTION 헤더와 미검증 공개 문단은 유지되어야 한다.
+            Assert.Contains("CAUTION", banner);
+            Assert.Contains("미검증", banner);
+
+            // HTML 및 자동 링크 구문이 무효화되어야 한다.
+            Assert.DoesNotContain("<b>", banner);
+            Assert.DoesNotContain("</b>", banner);
+            Assert.DoesNotContain("<https://example.invalid>", banner);
+        }
+
+        [Fact]
         public void BuildPromptFix_ShouldNameEveryDefectiveRequirement()
         {
             var fix = PrdAttributionReport.BuildPromptFix(ResultWith(
