@@ -88,7 +88,7 @@ namespace ReSet.Core.Services
                 ? exact
                 : MarkdownSectionLocator.LocateSection(
                     specLines,
-                    "## " + NormalizeHeading(heading),
+                    NormalizeHeading(heading),
                     "## ",
                     exact: false);
 

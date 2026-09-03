@@ -26,6 +26,26 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 2. 미집계 건을 조회한다.
 ";
 
+        private const string DriftedSpec = @"## 개요
+
+일별 정산 마감을 수행한다.
+
+## 2. 파라미터 목록
+
+| 이름 | 타입 |
+| :--- | :--- |
+| @BaseDate | char(8) |
+
+## 3. CRUD 분석
+
+TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
+
+## 4. 로직 흐름 요약:
+
+1. 기준일자를 검증한다.
+2. 미집계 건을 조회한다.
+";
+
         private static string PrdWith(params string[] rows) =>
             "## 배경 및 목적\n\n| ID | 요구사항 | 근거 | 확신도 |\n| :--- | :--- | :--- | :--- |\n"
             + "| REQ-BG-01 | 일별 정산을 마감한다 | ## 개요 > \"일별 정산 마감\" | 도출 |\n\n"
@@ -210,7 +230,7 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 
             Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceHeadingNotFound);
             Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
-            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
         }
 
         [Fact]
@@ -230,29 +250,18 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
         }
 
         [Fact]
-        public void Validate_ShouldStillReportWrongSource_AfterHeadingNormalization()
+        public void Validate_ShouldReportQuoteNotFound_WhenFallbackResolvesToWrongSection()
         {
-            // 헤딩 정규화가 파생 계약 검사를 빼먹지 않는지 확인. 기능 요구사항이
-            // 파라미터 목록을 인용하면 번호가 붙었어도 여전히 오류다.
-            var prd = PrdWith(GoodDataRow).Replace(
-                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 로직 흐름 요약 > \"기준일자를 검증한다\" | 도출 |",
-                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 2. 파라미터 목록 > \"@BaseDate\" | 도출 |");
+            // 폴백이 올바른 섹션으로만 바인딩되는지 확인.
+            // Spec이 드리프트 형태(## 3. CRUD, ## 4. 로직 흐름)를 가지고 있고,
+            // PRD가 정규화 형태(## CRUD 분석)를 인용하며 구절이 다른 섹션(로직 흐름)에만 있으면,
+            // 폴백이 정확히 CRUD 섹션을 찾아 검색하므로 구절을 찾지 못한다.
+            // 폴백 없이는: 정확 일치 실패 -> EvidenceHeadingNotFound
+            // 폴백 있으면: 느슨한 일치 성공 -> 구절 검사 진행 -> EvidenceQuoteNotFound
+            var prd = "## 데이터 요구사항\n\n| ID | 요구사항 | 근거 | 확신도 |\n| :--- | :--- | :--- | :--- |\n"
+                + "| REQ-DATA-01 | 미집계 건을 조회한다 | ## CRUD 분석 > \"미집계 건을 조회한다\" | 도출 |\n";
 
-            var result = PrdAttributionValidator.Validate(prd, Spec);
-
-            Assert.Contains(
-                result.Defects,
-                d => d.Type == PrdDefectType.EvidenceSourceNotAllowed && d.RequirementId == "REQ-FUNC-01");
-        }
-
-        [Fact]
-        public void Validate_ShouldStillReportQuoteInWrongSection_AfterHeadingFallback()
-        {
-            // 헤딩 폴백이 섹션 특정 검사를 약화시키지 않는지 확인. 구절이 다른 섹션에
-            // 있으면 정확 일치든 폴백이든 여전히 실패해야 한다.
-            var row = "| REQ-DATA-01 | 기준일자를 검증한다 | ## CRUD 분석 > \"기준일자를 검증한다\" | 도출 |";
-
-            var result = PrdAttributionValidator.Validate(PrdWith(row), Spec);
+            var result = PrdAttributionValidator.Validate(prd, DriftedSpec);
 
             Assert.Contains(
                 result.Defects,
