@@ -230,7 +230,7 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 
             Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceHeadingNotFound);
             Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
-            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
         }
 
         [Fact]
