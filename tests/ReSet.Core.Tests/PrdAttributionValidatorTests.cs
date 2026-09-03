@@ -199,5 +199,64 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 
             Assert.Contains(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
         }
+
+        [Fact]
+        public void Validate_ShouldToleratePrefixedHeading_WhenSpecHasNumberedHeading()
+        {
+            // Spec의 헤딩이 번호가 붙어 있으면(## 3. CRUD 분석) PRD의 일반 형태(## CRUD 분석)
+            // 와 대조할 수 있어야 한다. 정확 일치를 먼저 시도하고 폴백한다.
+            var numberedSpec = Spec.Replace("## CRUD 분석", "## 3. CRUD 분석");
+            var result = PrdAttributionValidator.Validate(PrdWith(GoodDataRow), numberedSpec);
+
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceHeadingNotFound);
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
+        }
+
+        [Fact]
+        public void Validate_ShouldToleratePrefixedHeading_WhenPrdCitesNumberedHeading()
+        {
+            // 거울 사례: PRD가 번호를 포함해 인용(## 3. CRUD 분석)하고 Spec이 없으면,
+            // 정규화된 형태로 대조한다.
+            var prd = PrdWith(GoodDataRow).Replace(
+                "## CRUD 분석",
+                "## 3. CRUD 분석");
+
+            var result = PrdAttributionValidator.Validate(prd, Spec);
+
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceHeadingNotFound);
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceSourceNotAllowed);
+            Assert.DoesNotContain(result.Defects, d => d.Type == PrdDefectType.EvidenceQuoteNotFound);
+        }
+
+        [Fact]
+        public void Validate_ShouldStillReportWrongSource_AfterHeadingNormalization()
+        {
+            // 헤딩 정규화가 파생 계약 검사를 빼먹지 않는지 확인. 기능 요구사항이
+            // 파라미터 목록을 인용하면 번호가 붙었어도 여전히 오류다.
+            var prd = PrdWith(GoodDataRow).Replace(
+                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 로직 흐름 요약 > \"기준일자를 검증한다\" | 도출 |",
+                "| REQ-FUNC-01 | 기준일자를 검증한다 | ## 2. 파라미터 목록 > \"@BaseDate\" | 도출 |");
+
+            var result = PrdAttributionValidator.Validate(prd, Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceSourceNotAllowed && d.RequirementId == "REQ-FUNC-01");
+        }
+
+        [Fact]
+        public void Validate_ShouldStillReportQuoteInWrongSection_AfterHeadingFallback()
+        {
+            // 헤딩 폴백이 섹션 특정 검사를 약화시키지 않는지 확인. 구절이 다른 섹션에
+            // 있으면 정확 일치든 폴백이든 여전히 실패해야 한다.
+            var row = "| REQ-DATA-01 | 기준일자를 검증한다 | ## CRUD 분석 > \"기준일자를 검증한다\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), Spec);
+
+            Assert.Contains(
+                result.Defects,
+                d => d.Type == PrdDefectType.EvidenceQuoteNotFound && d.RequirementId == "REQ-DATA-01");
+        }
     }
 }

@@ -64,10 +64,34 @@ namespace ReSet.Core.Services
             return string.Concat(kept);
         }
 
-        /// <summary>지정 헤딩 아래 본문만 이어 붙인다. 헤딩이 없으면 null.</summary>
+        /// <summary>마크다운 헤딩에서 부호를 정규화한다. 앞의 # 문자, 공백, 접두 숫자·번호, 뒤의 구두점을 제거한다.</summary>
+        private static string NormalizeHeading(string heading)
+        {
+            var text = heading.TrimStart('#').Trim();
+
+            // 접두 숫자 제거 (3. 또는 3) 또는 3 - 형태)
+            var match = System.Text.RegularExpressions.Regex.Match(text, @"^\d+[.\)\s-]+(.*)$");
+            if (match.Success)
+            {
+                text = match.Groups[1].Value.Trim();
+            }
+
+            // 뒤의 구두점 제거 (:)
+            return text.TrimEnd(':').Trim();
+        }
+
+        /// <summary>지정 헤딩 아래 본문만 이어 붙인다. 헤딩이 없으면 null. 정확 일치를 먼저 시도하고, 실패하면 부분 일치로 폴백한다.</summary>
         private static string? ExtractSectionBody(IReadOnlyList<string> specLines, string heading)
         {
-            var (headerIndex, endIndex) = MarkdownSectionLocator.LocateSection(specLines, heading, "## ");
+            var exact = MarkdownSectionLocator.LocateSection(specLines, heading, "## ");
+            var (headerIndex, endIndex) = exact.HeaderIndex >= 0
+                ? exact
+                : MarkdownSectionLocator.LocateSection(
+                    specLines,
+                    "## " + NormalizeHeading(heading),
+                    "## ",
+                    exact: false);
+
             if (headerIndex < 0)
             {
                 return null;
@@ -185,7 +209,10 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                if (!rule.AllowedSources.Contains(evidence.Heading))
+                var normalizedEvidence = NormalizeHeading(evidence.Heading);
+                var isAllowedSource = rule.AllowedSources.Any(source =>
+                    NormalizeHeading(source).Equals(normalizedEvidence, StringComparison.Ordinal));
+                if (!isAllowedSource)
                 {
                     defects.Add(new PrdDefect(
                         PrdDefectType.EvidenceSourceNotAllowed,
