@@ -58,10 +58,15 @@
 | `IPrdDerivationService` / `PrdDerivationService` | `ReSet.Core/Services` | Spec.md 읽기 → AI 호출 → 귀속 검사 → 저장. **DB 의존 없음** |
 | `IAiService.GeneratePrdFromSpecAsync` | `ReSet.Core/Services` | PRD 생성 프롬프트 조립과 호출 |
 | `PrdAttributionValidator` | `ReSet.Core/Services` | §6의 귀속 검사 |
-| `OutputPathResolver.ResolvePrdPath` | 기존 클래스에 추가 | `docs/Prd.md` 경로의 단일 출처 |
+| `OutputPathResolver.PrdFileName` 상수 | 기존 클래스에 추가 | `Prd.md` 파일명의 단일 출처 |
 
 `PrdDerivationService`의 입력은 파일 하나다. 연결 문자열도, 정적 분석도, 스키마
 카탈로그도 받지 않는다. 이 좁은 입력이 소급 적용과 재생성을 싸게 만든다.
+
+경로는 `CodeObjectKey`가 아니라 **발견한 docs 디렉터리에서 파생**한다. 키를 만들려면
+분석 루트 DB 이름이 필요한데 이 경로는 DB에 접속하지 않으므로 그것을 알 수 없고,
+알아내려고 설정을 다시 읽으면 좁은 입력이라는 이점이 사라진다. 대신 파일명 상수만
+`OutputPathResolver`에 두어 조립처가 갈라지지 않게 한다.
 
 ### 4.2 `MechanicalValidator`에 넣지 않는 이유
 
