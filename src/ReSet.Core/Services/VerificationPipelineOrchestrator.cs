@@ -1745,6 +1745,35 @@ namespace ReSet.Core.Services
             // AiService.GenerateBatchStepSectionAsync)로 흘러간다.
             var callGraph = StepInterfaceFacts.BuildCallGraph(definitions);
 
+            // Narrow 모드에서 이 사전이 비면 각 단계는 자기 명세서만 받는다 - 이 모드의
+            // 요점인 1-hop 이웃이 통째로 빠진다. PromptContextScope.NarrowSpecs가 적은
+            // 대로 이웃을 빼면 이 유형의 결함이 오히려 늘어나므로(실측 「필수 수정 1·2」:
+            // S13/S12가 S11 명세의 오류 코드를 지켜야 했다) 조용히 지나갈 자리가 아니다.
+            //
+            // 값을 뒤집지 않고 알리기만 하는 이유는 위 StepConcurrency 경고와 같다 -
+            // 빈 그래프는 결함일 수도, 사실일 수도 있다(BuildCallGraph는 어느 프로시저도
+            // 다른 코드 객체를 부르지 않으면 정당하게 빈 사전을 낸다). 기계가 둘을 가를
+            // 수 없으므로 사람에게 넘긴다.
+            //
+            // Full 모드에는 알리지 않는다 - 그쪽은 명세서 전량을 실어 이 사전을 아예 쓰지
+            // 않으므로 빈 그래프가 아무것도 잃게 하지 않는다. 모드를 여기서 다시 판정하지
+            // 않고 _consolidatorService가 확정한 값을 읽는 이유는 IAiService.ContextScope에 있다.
+            // 판독기가 스냅샷을 다시 파싱하지 않고도 「이 판이 어느 모드로 돌았고 이웃이
+            // 실렸는가」를 알 수 있어야 한다 - 설계 §7-9가 통제군 판독에서 정확히 이 두
+            // 사실을 로그에서 못 찾아 한 줄을 요청했다. 경고와 달리 조건 없이 남긴다.
+            Log.Information(
+                "단계 본문 명세서 범위: {Scope} - 원본 호출 그래프 {CallerCount}편이 1-hop 이웃을 낸다 (JobName: {JobName})",
+                _consolidatorService.ContextScope, callGraph.Count, jobName);
+
+            if (callGraph.Count == 0 && _consolidatorService.ContextScope == ContextScopeMode.Narrow)
+            {
+                _userInteraction.NotifyStatus(
+                    $"[yellow]{jobName}[/] - 명세서 범위가 Narrow인데 원본 호출 그래프가 비어 있습니다. " +
+                    "각 단계가 자기 프로시저의 명세서만 받고 1-hop 이웃은 하나도 싣지 않습니다 - " +
+                    "원본들이 정말 서로를 부르지 않는지, 아니면 의존성 수집이 되지 않은 것인지 확인하십시오. " +
+                    "이웃이 빠지면 이웃 명세가 규정한 오류 코드·인터페이스를 지키지 못하는 결함이 늘어납니다.");
+            }
+
             // 단일 호출 경로(폴백·L3 재생성)도 원본 인터페이스 표를 받아야 한다 -
             // 규칙 5가 그 표를 가리키며 "여기 적힌 파라미터가 전부"라고 말하기 때문이다.
             // 목차를 못 읽으면 빈 목록을 주고, 그때는 AiService가 절 자체를 싣지 않는다

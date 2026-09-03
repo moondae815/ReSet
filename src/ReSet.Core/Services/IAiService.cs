@@ -9,6 +9,17 @@ namespace ReSet.Core.Services
     {
         string ProviderName { get; }
         string ModelName { get; }
+
+        /// <summary>
+        /// 이 서비스가 단계 본문 호출에 실을 명세서 범위. 설정과 제공자로 이미 확정된
+        /// 값이다(<see cref="PromptContextScope.ResolveMode"/>).
+        ///
+        /// [왜 노출하는가] 오케스트레이터가 「Narrow인데 1-hop 이웃이 0이다」를 알리려면
+        /// 이 값을 알아야 하는데, 자기가 다시 ResolveMode를 부르면 판정이 두 자리로
+        /// 갈라진다 - 설정으로 명시한 Full/Narrow가 한쪽에만 반영되면 경고가 거짓이 된다.
+        /// 확정한 쪽이 확정한 값을 그대로 내준다.
+        /// </summary>
+        ContextScopeMode ContextScope { get; }
         Task<AiResult> GenerateSpecificationAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default);
         Task<AiResult> DeconstructSpLogicAsync(SpDefinition spDef, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default, Action<(int current, int total, string message)>? progressCallback = null);
         Task<AiResult> GenerateSpecSectionAsync(SpDefinition spDef, string sectionType, string userInstructions, string? feedbackLog = null, string? effort = null, CancellationToken cancellationToken = default);

@@ -1964,13 +1964,18 @@ namespace ReSet.Core.Tests
         /// 발견되는 어휘(`BEGIN TRY`·`END CATCH`)로 귀속이 성사되는 문서로 픽스처를
         /// 바꿔, 진짜 귀속 성공 경로를 태운다.
         ///
-        /// [FIX ROUND 2] 귀속을 끄는 것은 `END TRY`가 아니라 `BEGIN TRY`와
-        /// `END CATCH`다 - <see cref="MechanicalValidator.ViolationLexemes"/>는
-        /// SqlSideControlFlow 메시지의 <b>고정 문구</b>(`GOTO`·`IF @@ERROR &lt;&gt; 0`·
-        /// `BEGIN TRY`·`END CATCH`)에서만 백틱 토큰을 뽑는다 - SummarizeCodeTokenHits가
-        /// 덧붙이는 동적 꼬리(실제 발화 어휘·실물 줄)는 보지 않는다. 이 사실을 모르고
-        /// 픽스처의 SQL을 바꾸면(예: BEGIN TRY/END CATCH 없이 END TRY만 남기면) 어느
-        /// 고정 토큰도 문서에서 찾지 못해 귀속이 조용히 끊긴다.
+        /// [FIX ROUND 2 - 2026-09-03 정정] 이 자리에 「ViolationLexemes는 메시지의
+        /// <b>고정 문구</b>에서만 토큰을 뽑고 동적 꼬리는 보지 않는다」고 적혀 있었다.
+        /// <b>둘 다 틀렸다</b> - 실측하면 고정 문구 여섯과 동적 어휘가 <b>전부</b>
+        /// 뽑혔고, 그 고정 문구가 산문에 걸려 위반 없는 단계까지 여는 것이 결함이었다
+        /// (<see cref="SqlPlacementAttributionTests"/>).
+        ///
+        /// 지금은 <see cref="MechanicalValidator.ViolationLexemes"/>가 SQL 거처 축 넷에
+        /// 대해 <see cref="DetailedError.Lexemes"/> - <b>발화가 실제로 있던 원문 줄</b> -
+        /// 만 돌려준다. 그래서 이 픽스처의 귀속을 끄는 것은 특정 토큰이 아니라 <b>펜스
+        /// 안에 실제 위반 줄이 있다는 사실</b> 자체다. 픽스처의 SQL에서 제어 흐름
+        /// 철자를 전부 빼면 발화가 사라져 L1이 통과하고, 이 테스트가 재려던 지목
+        /// 재생성 경로를 타지 않는다.
         ///
         /// maxL2Attempts를 0으로 줘 채점 예산을 1회(attempt=1 고정)로 조인다 - 지목
         /// 재생성이 이 예산을 건드리면 두 번째 L1 검사 전에 즉시 소진되어 실패한다.

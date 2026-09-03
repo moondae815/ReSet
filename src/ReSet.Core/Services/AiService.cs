@@ -20,6 +20,7 @@ namespace ReSet.Core.Services
 
         public string ProviderName => _aiClient.ProviderName;
         public string ModelName => _aiClient.ModelName;
+        public ContextScopeMode ContextScope => _contextScope;
 
         // contextScope는 세션 내내 같은 제공자를 쓰므로 생성자에서 한 번 확정해도
         // 된다 - 회차별로 달라지는 것은 호출 그래프뿐이고, 그것은

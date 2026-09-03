@@ -103,6 +103,27 @@ namespace ReSet.Core.Services
         public ErrorType Type { get; set; }
         public string Message { get; set; } = string.Empty;
         public string? RawContext { get; set; }
+
+        /// <summary>
+        /// 이 위반을 문서에서 되찾을 어휘. 비어 있거나 null이면
+        /// <see cref="MechanicalValidator.ViolationLexemes"/>가 종전대로
+        /// <see cref="Message"/>의 백틱 토큰을 훑는다.
+        ///
+        /// [왜 필드가 필요한가] 메시지 스캔은 「메시지의 백틱 토큰 = 지목된 식별자」일
+        /// 때만 옳다. 대부분의 검사가 그렇지만 SQL 거처 축 넷(규칙 3-1·10)은 규칙
+        /// <b>설명</b> 안에 금지 어휘를 백틱으로 싣는다 - SqlSideControlFlow 하나가
+        /// `GOTO`·`IF @@ERROR &lt;&gt; 0`·`IF @@ROWCOUNT`·`BEGIN TRY`·`END CATCH`·
+        /// `SET @v = @@ROWCOUNT` 여섯을 고정 문구로 담는다. 그 여섯이 귀속 어휘가 되면
+        /// <see cref="L1ViolationAttribution.AttributeByLexeme"/>가 산문에서 그것을 찾아
+        /// 위반이 없는 단계까지 연다 - 실측(2026-09-03)에서 S01만 위반한 문서의
+        /// S01·S02·S03이 전부 열렸고, S02·S03이 가진 것은 "원본의 `BEGIN TRY` 감싸기는
+        /// 앱으로 옮겼습니다" 같은 <b>이행 서술</b>뿐이었다. 규칙 10의 `NOLOCK`은 계획서
+        /// 22편에서 산문 약 300건 대 코드 0건이라 한 발화가 모든 단계를 여는 데까지 간다.
+        ///
+        /// 억지 귀속의 대가는 <see cref="L1ViolationAttribution"/>이 적은 그대로다 -
+        /// 멀쩡한 단계를 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
+        /// </summary>
+        public IReadOnlyList<string>? Lexemes { get; set; }
     }
 
     public class MechanicalValidator
@@ -292,6 +313,22 @@ namespace ReSet.Core.Services
         {
             var lexemes = new List<string>();
             if (error == null) return lexemes;
+
+            // 검사가 어휘를 직접 실었으면 그것이 전부다 - 메시지 스캔을 뒤에 덧붙이면
+            // 막으려던 고정 문구가 그대로 다시 들어온다(DetailedError.Lexemes 참고).
+            if (error.Lexemes is { Count: > 0 })
+            {
+                foreach (var explicitLexeme in error.Lexemes)
+                {
+                    if (!string.IsNullOrWhiteSpace(explicitLexeme) &&
+                        !lexemes.Contains(explicitLexeme, StringComparer.OrdinalIgnoreCase))
+                    {
+                        lexemes.Add(explicitLexeme);
+                    }
+                }
+
+                return lexemes;
+            }
 
             foreach (Match match in Regex.Matches(
                 error.Message ?? string.Empty, @"`(?<token>[^`\n]{2,80})`"))
@@ -8543,6 +8580,32 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 이 발화들을 문서에서 되찾을 어휘 - 발화가 <b>실제로 있던 원문 줄</b>을
+        /// 중복 없이 담는다. <see cref="DetailedError.Lexemes"/>로 실려
+        /// <see cref="L1ViolationAttribution.AttributeByLexeme"/>가 이것으로만 단계를 찾는다.
+        ///
+        /// [왜 토큰이 아니라 줄인가] 둘 다 안 되는 이유가 각각 있다.
+        /// 토큰(<c>hit.Token</c>)은 (a) 산문의 인용에도 걸린다 - "원본의 `BEGIN TRY`
+        /// 감싸기는 앱으로 옮겼습니다"가 정확히 그 모양이고, 그것을 여는 것이 이
+        /// 필드가 막으려는 새김이다. (b) 공백이 접혀 있어(<c>\s+</c> → 한 칸) 원문에
+        /// <c>CREATE                PROCEDURE</c>처럼 적힌 발화는 어느 줄에서도 다시
+        /// 찾을 수 없다 - 그 단계만 얼어붙어 다음 회차에 같은 위반으로 다시 실패한다.
+        /// 원문 줄은 <see cref="LineAt"/>가 원본 마크다운에서 그대로 떠 오므로 두
+        /// 함정이 모두 없다.
+        ///
+        /// 메시지의 「실물:」 예시와 같은 <c>hits</c>에서 나오지만 여기서는 자르지
+        /// 않는다 - 그쪽은 사람과 모델이 읽는 표본이라 다섯으로 접고
+        /// (<see cref="SqlPlacementExampleLimit"/>), 이쪽은 열려야 할 단계를 하나도
+        /// 빠뜨리면 안 되는 재료다.
+        /// </summary>
+        private static IReadOnlyList<string> AttributionLexemes(IReadOnlyList<CodeTokenHit> hits) =>
+            hits
+                .Select(hit => hit.Line)
+                .Where(line => line.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+        /// <summary>
         /// 발화를 한 줄 요약으로 접는다.
         ///
         /// [왜 검사당 오류 하나인가] 옛 코퍼스 한 편이 제어 흐름 토큰을 280개 낸다
@@ -8615,7 +8678,8 @@ namespace ReSet.Core.Services
             {
                 Type = ErrorType.NoLockHintInCode,
                 Message = message,
-                RawContext = hits[0].Line
+                RawContext = hits[0].Line,
+                Lexemes = AttributionLexemes(hits)
             });
         }
 
@@ -8657,7 +8721,8 @@ namespace ReSet.Core.Services
             {
                 Type = ErrorType.FrameworkTypePrescribed,
                 Message = message,
-                RawContext = hits[0].Line
+                RawContext = hits[0].Line,
+                Lexemes = AttributionLexemes(hits)
             });
         }
 
@@ -8706,7 +8771,8 @@ namespace ReSet.Core.Services
             {
                 Type = ErrorType.SqlSideControlFlow,
                 Message = message,
-                RawContext = hits[0].Line
+                RawContext = hits[0].Line,
+                Lexemes = AttributionLexemes(hits)
             });
         }
 
@@ -8768,7 +8834,8 @@ namespace ReSet.Core.Services
             {
                 Type = ErrorType.NewDatabaseObjectDefined,
                 Message = message,
-                RawContext = hits[0].Line
+                RawContext = hits[0].Line,
+                Lexemes = AttributionLexemes(hits)
             });
         }
 
