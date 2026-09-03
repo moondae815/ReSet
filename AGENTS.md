@@ -84,7 +84,7 @@
     *   하한 검사용 `ErrorCodes`의 빈 배열은 검증 불가이며(원본 SP 없는 단계만 예외), `TargetTables`는 `SpecTargetTableExtractor`의 쓰기 집합으로 채우고 `SchemaTables`와 합치지 마십시오(`MechanicalValidatorTests`, `SpecTargetTableExtractorTests`, `architecture.md §4.12`).
     *   스키마 주장은 DB 전체가 아니라 프롬프트에 실린 컬럼과 대조하십시오(`SchemaPromptColumnSelectorTests`, `SchemaClaimGateRegressionTests`). Mermaid의 `@@ERROR`는 허용합니다.
     *   L2 [AiService.cs](./src/ReSet.Core/Services/AiService.cs)는 `MaxL2Attempts` 안에서 보완하고 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드를 누적하십시오(`architecture.md §4.4.2`).
-    *   로컬 분기는 `AiClientFactory.IsLocalProvider()`, CLI 분기는 같은 팩토리의 `IsCliProvider()`만 사용하십시오 — `PromptContextScope`의 Full/Narrow 판정도 이것을 부릅니다. 사본을 두면 `-cli`로 끝나지 않는 CLI 제공자가 Full에 남습니다. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
+    *   로컬 분기는 `AiClientFactory.IsLocalProvider()`, CLI 분기는 같은 팩토리의 `IsCliProvider()`만 사용하십시오 — `PromptContextScope`의 Full/Narrow 판정도 이것을 부릅니다. 사본을 두면 `-cli`로 끝나지 않는 CLI 제공자가 Full에 남습니다. 확정된 범위가 필요하면 `IAiService.ContextScope`를 읽고 `ResolveMode`를 다시 부르지 마십시오. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
     *   품질 임계치는 감쇄하지 마십시오. 최종 점수 미달 문서도 `[!CAUTION]` 배너와 점수·피드백을 붙여 보존하십시오. 종료 상태는 [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs)의 네 값만 사용합니다(`architecture.md §4.4.4`).
     *   L3 [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)만 미리보기·DB 역동기화를 제어하고 배치 모드만 자동 승인하십시오. Core는 UI에 의존하지 않습니다(`architecture.md §4.4`).
     *   신규 공급자는 [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 구현해 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
@@ -238,4 +238,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: d94cf178 -->
+<!-- synced-through: e605b5eb -->

@@ -214,7 +214,8 @@ ReSet/
     // (claude-cli·codex-cli·agy-cli)는 "Narrow", 그 외는 "Full". "Full"은 명세서 전량을 접두사에 실어
     // 단계 간 프롬프트 캐시를 노리고, "Narrow"는 그 단계의 프로시저와 그것이 호출하는 1-hop 이웃만
     // 싣습니다. CLI 제공자는 프롬프트를 단일 텍스트로만 받아 캐시 지정 자리가 없어 "Full"을 써도
-    // 캐시가 살지 않습니다(실측 재사용률 3.1%)
+    // 캐시가 살지 않습니다(실측 재사용률 3.1%). "Narrow"인데 원본 호출 그래프가 비어 1-hop
+    // 이웃이 하나도 실리지 않으면 실행 시작 시 경고가 표시되지만 값이 강제로 바뀌지는 않습니다
     "PromptContextScope": "",
     "TimeoutSeconds": 3600,         // AI API 호출 시 HttpClient 타임아웃 시간 (초 단위, 기본값: 300)
     "ActorEffort": "high",      // [Actor-Critic] dynamic 설정 시 Low/Medium/High 차등 Effort로 3종 후보군 생성 및 점진적 합성 가동
@@ -667,4 +668,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: d94cf178 -->
+<!-- synced-through: e605b5eb -->
