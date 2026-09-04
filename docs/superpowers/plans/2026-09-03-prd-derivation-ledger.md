@@ -147,3 +147,158 @@ Task 8: 도입 스윕(브리프 3·4단계)은 보류 — API 크레딧 소모 +
 후속 후보(범위 밖, 병합 후): PRD 가 근거 Spec 의 검증 상태를 싣지 않는다(sourceOutcome: null). L1Exhausted Spec 에서 나온 PRD 가 합격 Spec 에서 나온 것과 똑같이 읽힌다.
 최종 수정 물결: 3건 전부 addressed (commit 326679d2). 재리뷰: F1 한 단어·문장 참, 기존 테스트 무손상, F2·F3 단언 둘 다 명명된 변형에서 RED, 「미검증」은 배너에만 존재. 병합 차단 없음.
 브랜치 완성: 18 커밋 (7ad1fb9d..326679d2). 남은 결정 둘 — 도입 스윕(API 크레딧+공유 코퍼스 쓰기), main 병합. 둘 다 사람 결정.
+
+---
+
+# 도입 스윕 (Task 8 3·4단계) — 2026-09-04
+
+계획 `2026-09-03-prd-derivation.md` Task 8 의 마지막 두 단계다. 기능은 `6f797c76` 으로
+병합됐지만 **실재하는 문서에서 검사가 무언가를 잡는지는 미확인**이었고, 이 절이 그것을 닫는다.
+
+작업공간: 격리 워크트리 `.worktrees/prd-sweep` (branch `feature/prd-adoption-sweep`, main `bcdbdbb8` 기준).
+코퍼스 링크 셋 셋 다 연결. AI 제공자 `claude-cli` / `claude-sonnet-5` / effort `high`.
+
+피어 조율: 피어 `reset-b8` 이 통제군 5판을 준비 중이었다. 확인 결과 얼어붙은 입력은
+`output.bak-stage4-control-20260828/` 하나이고 `output/` 은 자유였다. 피어가 전수로 재 준 것:
+`output/` 을 읽는 코퍼스 테스트 중 `docs/` 를 **파일명 없이 훑는 자리는 0건**이며
+진짜 도화선은 `metadata.json` 이다 — 이 스윕은 `docs/Prd.md` 만 쓰므로 해당 없다.
+
+## 합격 기준 (돌리기 전에 선언함)
+
+1. 게이트: 실패 0 · 건너뜀 0 · `warning CS` 0. 통과 수 절대값은 게이트로 안 쓴다.
+2. `Validate_ShouldFire_WhenASingleCharacterOfTheQuoteIsAltered` 통과 = 검사 생존.
+3. 최소 3건 도출, 각 건 배너의 귀속 결함 수 기록.
+4. **발화 0 은 합격이 아니라 의심 신호.** 0 이면 (2) 재확인 → 실재 문서에서 검사가
+   정말 그 인용을 보는지 손으로 대조 → 그래도 0 이면 사실로만 적고 합격 선언 금지.
+5. 발화가 나오면 최소 3건을 열어 오탐/진짜를 가르고, 오탐이면 원인을 고쳐 회귀를 남긴다.
+   원장의 미뤄둔 항목과 같은 것이면 그 줄을 갱신한다.
+
+## 잰 것
+
+게이트(스윕 전, `bcdbdbb8`): 실패 0 · 건너뜀 0 · 통과 3506 · warning CS 0.
+게이트(수정 후): 실패 0 · 건너뜀 0 · **통과 3512** · warning CS 0 — 정확히 신규 테스트 6건만큼 늘었다.
+`Prd.md` 8건이 코퍼스에 생긴 뒤에도 HEAD 판 전체 수는 3506 그대로였다(피어의 사전 재기와 일치).
+
+**도출 8건 (`output/Procedures`, 기존 `Prd.md` 0건이라 덮어쓰기 없음)**
+
+| 대상 | 첫 판정 | 최종(배너) |
+| --- | --- | --- |
+| `dbo.UP_Util_Settle_Summary_AcqManual` | (미계측) | 0 |
+| `dbo.UP_Util_PG_Client_CMRate_Ins` | 0 | 0 |
+| `dbo.UP_UTIL_SETTLE_PROC_ETC` | 0 | 0 |
+| `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC` | **1 발화** | 0 (교정 재호출이 지움) |
+| `dbo.UP_UTIL_SETTLE_CANCEL_INS` | (미계측) | 0 |
+| `dbo.UP_UTIL_STAT_PGCOLLECT_INS` | (미계측) | 0 |
+| `dbo.UP_UTIL_SETTLE_INS` | (미계측) | 0 |
+| `dbo.UP_UTIL_SETTLE_COMM_UPD` | (미계측) | **6** (`ConfidenceVocabulary`×3 · `EvidenceMissing`×3) |
+
+**첫 판정만 재는 프로브 4건 (코퍼스에 쓰지 않음)**
+
+| 대상 | 첫 판정 결함 |
+| --- | --- |
+| `dbo.UP_UTIL_SETTLE_EXCEPTION_PROC` | 8 |
+| `dbo.UP_UTIL_SETTLE_EXPECT_PROC` | 12 |
+| `dbo.UP_UTIL_SETTLE_INS_EXTRA` | 0 |
+| `dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA` | **18** |
+
+### 계측 결함 하나 — 최종값만 보면 발화가 안 보인다
+
+`PrdDerivationService` 는 첫 판정이 실패하면 교정 재호출 1회를 하고, 그 사실을
+`Log.Information` 으로만 남긴다. 스윕 하네스에 Serilog 싱크가 없던 첫 배치 4건은
+그래서 첫 판정이 가려졌다. 싱크를 달고서야 `EXCEPTION_PROC` 의 발화가 보였고,
+프로브를 따로 만들고서야 발화의 **실제 규모(38건)**가 보였다. 최종 결함 수만 보는
+스윕은 이 기능의 검사 활동을 6/8 에서 0 으로 읽는다.
+
+## 판정 — 발화 전량이 같은 원인의 오탐이었다
+
+프로브 38건 + 코퍼스 6건, 전부 `ConfidenceVocabulary` 와 `EvidenceMissing` 이 **같은 행에서 짝으로** 났다.
+
+실측한 행(`COMM_UPD`):
+
+```
+| REQ-IN-01 | …정산 기준일을 입력 조건으로… | ## 파라미터 목록 > "@pi_strYMD | CHAR(8) | 입력 | 명시 없음 | 정산 기준일 (YYYYMMDD)" | 도출 |
+```
+
+인용은 `Spec.md` 111행에 **글자 그대로 실재**한다. 즉 모델은 정확했고, 검사가 낸 두 진단
+(「확신도가 `CHAR(8)` 이다」·「근거 칸이 형식이 아니다」)은 **둘 다 거짓**이었다.
+
+원인은 `PrdDocumentParser.SplitRow` 의 날것 `body.Split('|')` 이다. 생성 프롬프트는 근거를
+"verbatim 인용"으로 요구하는데 `Spec.md` 의 알찬 사실은 표 안에 산다 — 모델이 지시를
+지킬수록 인용에 표 파이프가 섞이고, 행이 여덟 칸으로 터져 근거 칸에는 조각만, 확신도
+칸에는 `CHAR(8)` 이 들어간다.
+
+설계 §6.1-4 는 이미 「**표 파이프**를 정규화한 뒤 대조한다」고 못박았고 `NormalizeForQuoteMatch`
+는 실제로 `|` 를 지운다. **비교기는 파이프를 감안하는데 그 앞의 행 분해기가 비교에 닿기도
+전에 행을 부수고 있었다.** 저장소에는 이 왕복을 위한 중립 헬퍼 `MarkdownTableCellCodec` 이
+이미 있고 `AiService`·`MechanicalValidator` 가 공유하는데, `PrdDocumentParser` 는 파이프 분해를
+손수 다시 구현한 **네 번째 자리이자 유일하게 헬퍼를 안 쓰는 자리**였다 — R6(「같은 Spec
+헤딩의 세 번째 소비자인데 폴백만 빠졌다」)과 같은 모양이다.
+
+거짓 진단의 값은 배너에서 끝나지 않는다. 그것이 `BuildPromptFix` 를 타고 교정 재호출의
+피드백이 되어 모델에게 「확신도를 9 에서 고쳐라」는 **실행 불가능한 지시**로 간다.
+
+### Ruling R16: 행 분해를 공용 헬퍼로 옮기고, 터진 행은 계약 문법으로 도로 잇는다
+
+세 갈래로 고쳤다.
+
+1. `PrdDocumentParser.SplitRow` 가 `MarkdownTableCellCodec.SplitRow` 를 쓴다 — 이스케이프된
+   `\|` 를 칸 경계가 아니라 칸 내용으로 되돌린다.
+2. 칸이 계약(4)보다 많으면 `RejoinOverSplitEvidence` 가 근거 칸 문법(`## 헤딩 > "구절"`)을
+   읽어 그 문법이 여는 칸부터 인용이 닫히는 칸까지만 도로 잇는다. **추측으로 붙이지 않는다.**
+   문법이 없으면 손대지 않고 원래대로 고발되게 둔다 — 어긋난 행을 조용히 그럴듯하게
+   만들면 검사가 문서 결함을 숨기게 된다. 칸 수가 계약과 같은 행은 아예 건드리지 않으므로
+   **지금 통과하는 문서의 판정은 이 되살리기로 달라질 수 없다.**
+3. 생성 프롬프트 규칙 4 에 「인용 안의 `|` 는 `\|` 로 적어라」를 더했다. 파서가 터진 행을
+   되살리더라도, **사람이 읽는 표**는 프롬프트가 이스케이프를 시켜야 어긋나지 않는다.
+
+근거: 이 오탐은 발화의 100% 였다. 고치지 않으면 스윕이 낸 유일한 신호가 전부 거짓이고,
+그 거짓이 사람용 배너와 교정 루프 양쪽을 오염시킨다. 틀렸을 때 비용: 되살리기가 계약
+문법을 잘못 읽으면 이미 어긋난 행에서만 근거 칸 경계가 밀린다 — 정상 행은 사정거리 밖이다.
+
+회귀 6건을 남겼고 **네 건은 수정을 되돌리면 RED 임을 실측 확인**했다
+(`Parse_ShouldKeepEscapedPipeInsideTheEvidenceCell`, `Parse_ShouldRecoverTheRow_WhenTheExcerptCarriesUnescapedPipes`,
+`Validate_ShouldStayClean_WhenTheExcerptIsASpecTableRowWithPipes`, `Validate_ShouldStayClean_WhenTheExcerptEscapesItsPipes`).
+나머지 둘은 되살리기가 **넘치지 않는지**를 고정한다
+(`Parse_ShouldNotReassemble_WhenNoCellOpensTheEvidenceGrammar`, `GeneratePrdFromSpecAsync_ShouldTellTheModelToEscapePipesInsideTheExcerpt`).
+
+### 고친 뒤 다시 잰 것
+
+같은 초안 4편을 고친 검사로 다시 재니 **38 → 0**. 코퍼스 8편 전부 결함 0.
+
+| | 표 행 | 파서가 본 행 | 결함 | 행 단위 생존 | R7 의존 행 |
+| --- | --- | --- | --- | --- | --- |
+| 코퍼스 8편 합계 | 283 | 283 | 0 | 283 발화 · 0 침묵 | 0 |
+
+## 검사가 죽지 않았음을 어떻게 알았나
+
+「발화 0」을 문서 품질로 읽으려면 검사의 생존을 따로 세워야 한다(선언한 기준 4).
+합성 픽스처(§8.2)만으로는 부족해 **실재 코퍼스 문서의 모든 행**에 같은 주입을 했다:
+행마다 인용의 마지막 글자 하나를 바꿔 넣고 그 행이 발화하는지 봤다.
+
+- 283행 중 **283행 발화, 침묵 0**.
+- 파서가 본 행 수 = 파일의 `REQ-` 표 행 수 (계약 밖 섹션에 숨은 행 0 — 최종 리뷰 F1 이
+  걱정한 구멍이 이 8편에는 없다).
+
+## 미뤄둔 항목 대조
+
+- **R7(공백 전삭제 정규화, park)** — 「T8 스윕에서 이 형태가 실제로 나오는지 보고, 나오면
+  그때 좁힌다」였다. **실측: 코퍼스 8편 283행 중 이 구멍에 기대는 행 0.** 공백을 지우는
+  대신 하나로 접어도 매치가 깨지는 행이 하나도 없었다. **park 을 유지한다** — 이제
+  근거가 추정이 아니라 실측이다.
+- **Task 2 minor(다중 따옴표에서 `LastIndexOfAny` 오절단)** — 스윕에서 재현되지 않았다.
+  감사 하네스가 두 편에서 「인용 추출 실패 1」을 냈으나 확인 결과 **하네스 자신의 한계**다
+  (되살린 칸의 `" | "` 이음새가 원문 줄의 간격과 달라 치환이 실패). 검사기 자신은 그 행들에
+  결함 0 을 냈다. **이 줄은 미뤄둔 채로 둔다.**
+- **Task 3 minor(느슨 폴백 `Contains` 부분 문자열 겹침)** — 계약 헤딩 넷이 여전히 서로
+  부분 문자열이 아니라 발동하지 않았다. 그대로 둔다.
+- **Task 3 minor(`EvidenceSourceNotAllowed` 가 `continue` 안 해 중복 발화)** — 이번 발화가
+  전부 다른 두 종류였으므로 재현되지 않았다. 그대로 둔다.
+
+## 남은 사실과 다음
+
+- `COMM_UPD` 는 거짓 배너(결함 6건)를 단 채 저장됐었다. 고친 코드로 **재생성**해 걷어냈다.
+  나머지 7편은 배너가 처음부터 깨끗했으므로 손대지 않았다.
+- 이 스윕은 `output/Procedures` 14건 중 **8건**을 덮었다. 나머지 6건은 도출하지 않았다.
+- **범위 밖으로 남긴 것**: 이스케이프 안 된 파이프가 든 행은 되살려도 **사람이 볼 때는
+  여전히 표가 어긋난다.** 그것을 결함으로 고발하려면 §6.1 의 여섯 가지에 일곱째를
+  더해야 하므로 설계 변경이다. 프롬프트 규칙으로 예방만 하고 검사는 넓히지 않았다.

@@ -74,5 +74,23 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("REQ-DATA-01", userPrompt);
         }
+
+        [Fact]
+        public async Task GeneratePrdFromSpecAsync_ShouldTellTheModelToEscapePipesInsideTheExcerpt()
+        {
+            // 도입 스윕(2026-09-04) 실측. 규칙 1·4가 "verbatim 인용"을 요구하는데 Spec의
+            // 알찬 사실은 표 안에 살아서, 모델이 지시를 지킬수록 인용에 표 파이프가
+            // 섞여 들어와 네 칸짜리 행이 터졌다. 파서 쪽은 터진 행을 도로 잇지만,
+            // 프롬프트가 이스케이프를 시켜야 **사람이 읽는 표도** 어긋나지 않는다.
+            var (service, _) = Build();
+
+            var result = await service.GeneratePrdFromSpecAsync("dbo.UP_TEST", "## 개요\n\n본문", null, null, CancellationToken.None);
+
+            Assert.NotNull(result.SystemPrompt);
+            var systemPrompt = result.SystemPrompt!;
+
+            Assert.Contains("\\|", systemPrompt);
+        }
+
     }
 }

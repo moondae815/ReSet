@@ -4892,6 +4892,7 @@ Your ONLY source is the Korean specification document supplied by the user. You 
 {contract}3. Each section's body is a four-column markdown table with this exact header row:
    | ID | 요구사항 | 근거 | 확신도 |
 4. The 근거 cell format is `## <specification heading> > ""<verbatim excerpt>""`. The excerpt MUST appear verbatim inside that heading's section. Never cite line numbers.
+   If the excerpt contains a `|` character — specification facts often live in markdown tables — write each one as `\|` so the four-column row is not split apart.
 5. The 확신도 cell is exactly one of two words: `도출` (the excerpt directly supports the requirement) or `추정` (you reconstructed it from several facts). A `추정` row still requires the excerpt it started from.
 6. Requirement IDs are `<prefix>-<two digits>`, numbered from 01 within each section.
 7. Do not include Mermaid diagrams. Do not wrap the response in a markdown code block. Do not add greetings or a closing summary.
