@@ -1171,7 +1171,8 @@ namespace ReSet.Cli
                         "2. 통합 배치 마이그레이션 설계 (Batch Design)",
                         "3. 마이그레이션 코딩 에이전트 구동 (Code Generation)",
                         "4. 통합 정산 정책 문서 도출 (Policy Extraction)",
-                        "5. 프로그램 종료 (Exit)"
+                        "5. 명세서 기반 요구사항 도출 (PRD Derivation)",
+                        "6. 프로그램 종료 (Exit)"
                     };
 
                     var selectedMenu = AnsiConsole.Prompt(
@@ -1180,7 +1181,7 @@ namespace ReSet.Cli
                             .AddChoices(choicesMenu)
                     );
 
-                    if (selectedMenu.StartsWith("5"))
+                    if (selectedMenu.StartsWith("6"))
                     {
                         AnsiConsole.MarkupLine("[blue]도구를 종료합니다.[/]");
                         break;
@@ -1886,6 +1887,95 @@ namespace ReSet.Cli
                         catch (Exception ex)
                         {
                             AnsiConsole.MarkupLine($"[red]에러:[/] 정책 문서 도출 중 오류 발생: {Markup.Escape(ex.Message)}");
+                            AnsiConsole.WriteLine();
+                            Console.ReadKey(true);
+                        }
+                        finally
+                        {
+                            _currentCts = globalCts;
+                        }
+                    }
+                    else if (selectedMenu.StartsWith("5"))
+                    {
+                        var targets = PrdTargetDiscovery.Find(outputDir);
+                        if (targets.Count == 0)
+                        {
+                            AnsiConsole.MarkupLine("[yellow]경고: 명세서(Spec.md)가 있는 분석 산출물이 없습니다. 개별 SP 분석을 먼저 수행하세요.[/]");
+                            continue;
+                        }
+
+                        var picked = AnsiConsole.Prompt(
+                            new MultiSelectionPrompt<string>()
+                                .Title("[bold green]요구사항 문서를 도출할 대상을 선택하세요[/]")
+                                .PageSize(20)
+                                .InstructionsText("[grey](스페이스로 선택, 엔터로 확정)[/]")
+                                .AddChoices(targets.Select(t =>
+                                    t.HasExistingPrd ? $"{t.Label} (기존 Prd.md 있음)" : t.Label)));
+
+                        if (picked.Count == 0)
+                        {
+                            continue;
+                        }
+
+                        var selectedTargets = targets
+                            .Where(t => picked.Any(p => p.StartsWith(t.Label, StringComparison.Ordinal)))
+                            .ToList();
+
+                        if (selectedTargets.Any(t => t.HasExistingPrd)
+                            && !AnsiConsole.Confirm("[yellow]기존 Prd.md가 있는 대상이 포함되어 있습니다. 덮어쓰시겠습니까?[/]", false))
+                        {
+                            selectedTargets = selectedTargets.Where(t => !t.HasExistingPrd).ToList();
+                        }
+
+                        IPrdDerivationService prdService = new PrdDerivationService(aiService);
+
+                        using var activeCts = new CancellationTokenSource();
+                        _currentCts = activeCts;
+
+                        try
+                        {
+                            foreach (var target in selectedTargets)
+                            {
+                                try
+                                {
+                                    PrdDerivationOutcome? outcome = null;
+                                    await AnsiConsole.Status()
+                                        .StartAsync($"{Markup.Escape(target.Label)} 요구사항 문서 도출 중...", async _ =>
+                                        {
+                                            outcome = await prdService.DeriveAsync(
+                                                target.DocsDirectory, target.Label, actorEffort, activeCts.Token);
+                                        });
+
+                                    if (outcome is null)
+                                    {
+                                        continue;
+                                    }
+
+                                    if (outcome.AttributionClean)
+                                    {
+                                        AnsiConsole.MarkupLine($"[green]완료:[/] {Markup.Escape(outcome.PrdPath)}");
+                                    }
+                                    else
+                                    {
+                                        AnsiConsole.MarkupLine(
+                                            $"[yellow]완료(귀속 결함 {outcome.Defects.Count}건, 배너 표기):[/] {Markup.Escape(outcome.PrdPath)}");
+                                    }
+
+                                    AnsiConsole.WriteLine();
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException)
+                                {
+                                    AnsiConsole.MarkupLine(
+                                        $"[red]에러: {Markup.Escape(target.Label)} 요구사항 문서 도출 실패:[/] {Markup.Escape(ex.Message)}");
+                                }
+                            }
+
+                            AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 계속합니다...[/]");
+                            Console.ReadKey(true);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            AnsiConsole.MarkupLine("\n[yellow]요구사항 문서 도출 작업이 중단되었습니다. 메인 메뉴로 돌아갑니다.[/]");
                             AnsiConsole.WriteLine();
                             Console.ReadKey(true);
                         }
