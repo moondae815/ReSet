@@ -158,6 +158,20 @@ fi
 existing_logs=($LOGDIR/*.log(N))
 if (( ${#existing_logs} > 0 )); then
   echo "중단: $LOGDIR 에 로그가 이미 있다. 이어 붙으면 회차 경계를 가를 수 없다." >&2
+  echo "  실패한 회차의 잔재라면 지우고 다시 돌려라:  rm -rf $LOGDIR" >&2
+  exit 1
+fi
+
+# ── 가드 5: 덮어쓴 절대경로가 실제로 그 자리를 가리키는가
+#
+# 가드 3 이 입력 "내용"을 보는 것과 달리 이쪽은 입력 "자리"를 본다. 경로 하나를 덮는 것을
+# 빠뜨리면 CLI 가 엉뚱한 루트에 새 코퍼스를 만들고, 그것은 조용한 성공으로 보인다.
+if [[ ! -f "$REPO/output/offline_snapshot.json" ]]; then
+  echo "중단: 오프라인 스냅샷이 없다 ($REPO/output/offline_snapshot.json)." >&2
+  exit 1
+fi
+if [[ ! -d "$REPO/output/Jobs/$JOB" ]]; then
+  echo "중단: 재생성 대상이 실물 코퍼스에 없다 ($REPO/output/Jobs/$JOB)." >&2
   exit 1
 fi
 
@@ -184,9 +198,19 @@ echo " '1. 개별 SP 역공학 분석' 을 고르면 명세서가 재생성되�
 echo "───────────────────────────────────────────────"
 
 cd $RUNROOT
+# [경로 셋을 전부 절대경로로 덮는 이유 - 첫 실행이 여기서 죽었다 (2026-09-04)]
+# appsettings.json 의 경로 셋(OutputSettings:Directory · OfflineSnapshotPath ·
+# LoggingSettings:LogDirectory)은 **cwd 상대**(`./output/...`)다. 이 스크립트는 위에서
+# $RUNROOT 로 cd 하므로, 덮지 않으면 실행 워크트리 안의 없는 `output/` 을 본다.
+# 로그만 덮었던 첫 판은 "오프라인 스냅샷 파일을 찾을 수 없습니다" 로 즉시 죽었다 -
+# 그나마 그것이 다행이었다. 조용히 통과했다면 CLI 가 `.worktrees/regen-run/output/` 에
+# **새 코퍼스를 만들어** 실물은 그대로 둔 채 「재생성했다」고 믿게 됐을 것이다.
+#
 # 모델을 환경변수로 못박는다. 경로만 격리하면 appsettings.local.json 에서 샌다 -
 # 공유 설정을 물려받아 기준선과 다른 모델로 돈 사고가 실제로 있었다(1차 통제군 POQSettleBatch2).
 # 값 자체는 현행 기본과 같지만, 명시해야 나중에 그 파일이 바뀌어도 이 회차의 서술이 참으로 남는다.
+OutputSettings__Directory=$REPO/output \
+DatabaseSettings__OfflineSnapshotPath=$REPO/output/offline_snapshot.json \
 LoggingSettings__LogDirectory=$LOGDIR \
 AiSettings__Provider=claude-cli \
 AiSettings__ModelName=claude-sonnet-5 \
