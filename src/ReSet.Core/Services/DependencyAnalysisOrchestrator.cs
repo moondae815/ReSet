@@ -563,8 +563,17 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 paths.ResolveDocsDirectory(analysis.Key),
                 "Thinking.md");
 
-            // 추론 본문이 비어도 쓴다. 이 자리는 성공한 노드에만 닿으므로, 파일이 없다는
-            // 것과 추론이 없었다는 것을 산출물만 보고 구분할 수 있어야 한다.
+            // 캐시 히트 회차는 ThinkingText가 비어 있다 — 파이프라인이 AI를 호출한
+            // 회차에만 그 값을 채우기 때문이다. 그 빈 값으로 덮으면 앞선 회차의 추론
+            // 기록이 자리표시자와 오늘 날짜로 사라진다. 남길 것이 없으면 이미 있는
+            // 기록을 지키고, 파일이 아예 없을 때만 자리표시자 판본을 만든다 —
+            // "파일 없음"과 "추론 없음"은 산출물만 보고 구분되어야 한다.
+            // (raw/prompt-context.md가 MetadataExporter에서 받는 보호와 같은 규약)
+            if (string.IsNullOrWhiteSpace(analysis.ThinkingText) && File.Exists(thinkingPath))
+            {
+                return;
+            }
+
             await File.WriteAllTextAsync(
                 thinkingPath,
                 ThinkingLogDocument.Compose(

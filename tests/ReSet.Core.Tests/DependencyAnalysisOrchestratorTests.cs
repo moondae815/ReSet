@@ -271,6 +271,93 @@ public sealed class DependencyAnalysisOrchestratorTests
         }
     }
 
+    /// <summary>
+    /// 캐시 히트 회차는 ThinkingText가 비어 있다(VerificationPipelineOrchestrator가
+    /// AI를 호출한 회차에만 채운다). 그 빈 값으로 덮으면 앞선 회차의 추론 기록이
+    /// 「추론 없음」 자리표시자와 오늘 날짜로 사라진다 — raw/prompt-context.md가
+    /// MetadataExporter에서 보호받는 것과 같은 사건이다.
+    /// 파일이 아예 없을 때 자리표시자 판본을 남기는 계약은 그대로 지킨다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_PreservesExistingThinkingLogWhenReasoningIsEmpty()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingCache-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var paths = new OutputPathResolver(root.Database, outputRoot);
+        var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+
+        try
+        {
+            // 1회차: 실제로 AI를 호출해 추론을 남겼다.
+            var analyzing = new DependencyAnalysisOrchestrator(
+                metadata,
+                (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+                {
+                    SpDef = Definition(key),
+                    SpecMarkdown = "# Spec",
+                    ThinkingText = "private reasoning from attempt 1"
+                }));
+            await analyzing.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            // 2회차: 캐시 히트라 추론 본문이 없다.
+            var cached = new DependencyAnalysisOrchestrator(
+                metadata,
+                (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+                {
+                    SpDef = Definition(key),
+                    SpecMarkdown = "# Spec",
+                    ThinkingText = null,
+                    FromCache = true
+                }));
+            await cached.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var thinking = await File.ReadAllTextAsync(thinkingPath);
+            Assert.Contains("private reasoning from attempt 1", thinking);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 위 보존 규칙이 「파일이 없으면 반드시 만든다」를 깨뜨리지 않는지 함께 잠근다.
+    /// 파일 없음과 추론 없음은 산출물만 보고 구분되어야 한다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WritesPlaceholderThinkingLogWhenFileIsAbsent()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingEmpty-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                ThinkingText = null
+            }));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+            Assert.True(File.Exists(thinkingPath));
+            Assert.Contains("# AI 추론 과정 로그", await File.ReadAllTextAsync(thinkingPath));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
     [Fact]
     public async Task AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts()
     {
