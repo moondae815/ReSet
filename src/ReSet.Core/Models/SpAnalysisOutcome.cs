@@ -14,7 +14,6 @@ public sealed record SpAnalysisOutcome
     public string? ThinkingText { get; init; }
     public VerificationOutcome Outcome { get; init; }
 
-    public AnalysisScope Scope { get; init; }
     public GraphCompletion Completion { get; init; }
     public bool FromCache { get; init; }
     public DateTime? AnalyzedAt { get; init; }
@@ -25,13 +24,14 @@ public sealed record SpAnalysisOutcome
     /// 오케스트레이터 경로. 그래프에서 루트 분석 결과를 찾아 옮긴다.
     /// 캐시 상태는 루트 노드의 것이다 — 노드마다 다른 값을 하나로 접으면
     /// 어느 쪽으로 접어도 거짓이 된다.
-    /// 수집 범위는 호출부가 <paramref name="scope"/>로 알려준다. 여기서 정하면
-    /// 비재귀 요청의 결과가 자기 범위를 거짓으로 신고한다.
+    /// 수집 범위(AnalysisScope)는 여기에 담지 않는다. 그 값을 쓰는 곳은
+    /// Spec.md 헤더 하나뿐이고, 그것은 DependencyAnalysisOrchestrator가
+    /// 요청을 보고 직접 정한다. 여기에 사본을 두면 아무도 안 읽는 채로
+    /// 원본과 어긋날 수 있고, 어긋나도 산출물도 테스트도 변하지 않는다.
     /// </summary>
     public static SpAnalysisOutcome FromDependencyGraph(
         CodeObjectPipelineResult result,
-        CodeObjectKey rootKey,
-        AnalysisScope scope)
+        CodeObjectKey rootKey)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(rootKey);
@@ -45,7 +45,6 @@ public sealed record SpAnalysisOutcome
             Review = root?.Review,
             ThinkingText = root?.ThinkingText,
             Outcome = root?.Outcome ?? VerificationOutcome.ReviewNotRun,
-            Scope = scope,
             Completion = result.Completion,
             FromCache = root?.FromCache ?? false,
             AnalyzedAt = root?.AnalyzedAt,

@@ -8,17 +8,16 @@ public sealed class SpAnalysisOutcomeTests
     [Fact]
     public void DefaultValues_AreTheSafeSideOfEachEnum()
     {
-        // 대입을 빠뜨린 생성부가 "더 넓게 봤다"거나 "저장했다"고 자칭하지 않아야 한다.
+        // 대입을 빠뜨린 생성부가 "저장했다"거나 "끝까지 돌았다"고 자칭하지 않아야 한다.
         var outcome = new SpAnalysisOutcome();
 
-        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
         Assert.Equal(GraphCompletion.Complete, outcome.Completion);
         Assert.Equal(ArtifactPersistence.NotAttempted, outcome.Persistence);
         Assert.Empty(outcome.PersistenceErrors);
     }
 
     [Fact]
-    public void FromDependencyGraph_CarriesGraphPersistenceAndTheCallersScope()
+    public void FromDependencyGraph_CarriesTheRootAnalysisAndGraphPersistence()
     {
         var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Root", CodeObjectType.Procedure);
         var definition = new SpDefinition { ObjectKey = rootKey, Schema = "dbo", Name = "USP_Root" };
@@ -42,10 +41,9 @@ public sealed class SpAnalysisOutcomeTests
             }
         };
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
 
         Assert.Equal("# 루트", outcome.SpecMarkdown);
-        Assert.Equal(AnalysisScope.Direct, outcome.Scope);
         Assert.Equal(GraphCompletion.PartialCancelled, outcome.Completion);
         Assert.Equal(ArtifactPersistence.Failed, outcome.Persistence);
         Assert.Equal(new[] { "디스크 쓰기 거부" }, outcome.PersistenceErrors);
@@ -79,13 +77,10 @@ public sealed class SpAnalysisOutcomeTests
             }
         };
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Transitive);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
 
         Assert.False(outcome.FromCache);
         Assert.Null(outcome.AnalyzedAt);
-        // scope를 되읽는 단언이 이 파일에서 전부 Direct면 구현을 하드코딩으로 되돌려도
-        // 스위트가 초록이다. 한 자리는 다른 값을 넘겨 그 뮤턴트를 죽인다.
-        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
     }
 
     [Fact]
@@ -94,12 +89,11 @@ public sealed class SpAnalysisOutcomeTests
         var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Root", CodeObjectType.Procedure);
         var result = new CodeObjectPipelineResult();
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
 
         Assert.Null(outcome.SpecMarkdown);
         Assert.Null(outcome.Definition);
         Assert.Null(outcome.Review);
         Assert.Equal(VerificationOutcome.ReviewNotRun, outcome.Outcome);
-        Assert.Equal(AnalysisScope.Direct, outcome.Scope);
     }
 }

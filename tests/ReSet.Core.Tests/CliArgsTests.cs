@@ -102,6 +102,8 @@ namespace ReSet.Core.Tests
         /// 없었고 metadata.json은 스위치 하나에 걸려 있었다.
         /// verificationPipelineOrchestrator에 null을 넘겨도 통과한다는 것이 곧 증거다 —
         /// OFF가 그 인자를 더 이상 역참조하지 않는다.
+        /// OFF 명세서의 범위 표기(전이 의존성)는 여기가 아니라 산출물에서 잠근다 —
+        /// DependencyAnalysisOrchestratorTests의 AnalyzeAsync_WhenReferencesAreDisabled_StampsTransitiveScope.
         /// </summary>
         [Fact]
         public async Task RunConfiguredAnalysisAsync_WhenReferencesAreDisabled_StillUsesOrchestrator()
@@ -133,7 +135,6 @@ namespace ReSet.Core.Tests
 
             Assert.Equal("SnapshotDB", dependencyOrchestrator.LastRootKey?.Database);
             Assert.False(dependencyOrchestrator.LastRequest?.AnalyzeReferencedCodeObjects);
-            Assert.Equal(AnalysisScope.Transitive, result.Scope);
         }
 
         [Fact]

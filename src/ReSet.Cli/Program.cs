@@ -918,11 +918,6 @@ namespace ReSet.Cli
                             migrationPlan = migrationResult.Content;
                         }
 
-                        if (!Directory.Exists(outputDir))
-                        {
-                            Directory.CreateDirectory(outputDir);
-                        }
-
                         // 저장은 오케스트레이터가 끝냈다(참조분석 ON/OFF 공통).
 
                         // 계획서는 이번 실행이 방금 만든 산출물이라 캐시에서 나올 수 없다.
@@ -1346,11 +1341,6 @@ namespace ReSet.Cli
                             {
                                 AnsiConsole.MarkupLine("[red]분석이 중단되었거나 명세서 생성에 실패했습니다.[/]");
                                 continue;
-                            }
-
-                            if (!Directory.Exists(outputDir))
-                            {
-                                Directory.CreateDirectory(outputDir);
                             }
 
                             // 저장은 오케스트레이터가 끝냈다(참조분석 ON/OFF 공통).
@@ -2016,10 +2006,7 @@ namespace ReSet.Cli
 
             RenderAnalysisDiagnostics(result);
 
-            return SpAnalysisOutcome.FromDependencyGraph(
-                result,
-                rootKey,
-                analyzeReferencedCodeObjects ? AnalysisScope.Direct : AnalysisScope.Transitive);
+            return SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
         }
 
         private static async Task<string> ResolveAnalysisDatabaseAsync(
