@@ -32,6 +32,7 @@ namespace ReSet.Core.Services
         Task<AiResult> GenerateBatchStepSectionAsync(BatchStepPlan step, IReadOnlyList<BatchStepPlan> allSteps, string sharedConventions, System.Collections.Generic.List<(string FileName, string Content)> specs, IReadOnlyList<StepInterface> stepInterfaces, string targetLanguage, string jobName, string? effort = null, string? floorFeedback = null, string? previousBody = null, IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph = null, CancellationToken cancellationToken = default);
         Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default);
         Task<AiResult> GenerateSettlementPolicyRulebookAsync(System.Collections.Generic.List<SpDefinition> spDefs, string profilingDataJson, CancellationToken cancellationToken = default);
+        Task<AiResult> GeneratePrdFromSpecAsync(string objectLabel, string specMarkdown, string? attributionFeedback = null, string? effort = null, CancellationToken cancellationToken = default);
     }
 
     public class ReviewResult

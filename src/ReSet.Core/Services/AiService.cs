@@ -4826,5 +4826,76 @@ Combine the conditional logic and data mappings of SPs with common code master d
 
             return aiResult;
         }
+
+        /// <summary>
+        /// 완성된 명세서 하나만을 근거로 요구사항 문서를 도출한다.
+        ///
+        /// [왜 원본 DDL을 싣지 않는가] 근거를 Spec.md로 한정해야 귀속 검사의 오라클이
+        /// 성립한다. DDL을 함께 실으면 모델이 명세서에 없는 사실을 요구로 올리고,
+        /// 그것은 어떤 인용으로도 대조할 수 없다.
+        /// </summary>
+        public async Task<AiResult> GeneratePrdFromSpecAsync(
+            string objectLabel,
+            string specMarkdown,
+            string? attributionFeedback = null,
+            string? effort = null,
+            CancellationToken cancellationToken = default)
+        {
+            // 헤딩·ID 접두사·허용 근거를 계약(PrdSectionContract)에서 그대로 읽는다 -
+            // 여기서 하드코딩하면 검증기(PrdAttributionValidator)와 조용히 갈라진다.
+            var contract = new StringBuilder();
+            foreach (var rule in PrdSectionContract.Sections)
+            {
+                contract.AppendLine(
+                    $"   - `{rule.Heading}` — requirement IDs MUST start with `{rule.IdPrefix}-`; evidence MUST cite only: {string.Join(" or ", rule.AllowedSources)}");
+            }
+
+            var systemPrompt = $@"You are a business analyst reconstructing the product requirements that a legacy stored procedure implements.
+Your ONLY source is the Korean specification document supplied by the user. You have no access to the original SQL.
+
+[Absolute rules]
+1. Every requirement MUST carry evidence quoted verbatim from the specification. Never invent a fact that is not in the document.
+2. Write the document in Korean using EXACTLY these five H2 sections, in this order:
+{contract}3. Each section's body is a four-column markdown table with this exact header row:
+   | ID | 요구사항 | 근거 | 확신도 |
+4. The 근거 cell format is `## <specification heading> > ""<verbatim excerpt>""`. The excerpt MUST appear verbatim inside that heading's section. Never cite line numbers.
+5. The 확신도 cell is exactly one of two words: `도출` (the excerpt directly supports the requirement) or `추정` (you reconstructed it from several facts). A `추정` row still requires the excerpt it started from.
+6. Requirement IDs are `<prefix>-<two digits>`, numbered from 01 within each section.
+7. Do not include Mermaid diagrams. Do not wrap the response in a markdown code block. Do not add greetings or a closing summary.
+8. Describe what the business needs, not how the procedure implements it. Do not restate SQL, table joins, or control flow.";
+
+            var userPrompt = new StringBuilder();
+            userPrompt.AppendLine($"[Target object] {objectLabel}");
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("[Specification document — the only source of truth]");
+            userPrompt.AppendLine(specMarkdown);
+
+            if (!string.IsNullOrWhiteSpace(attributionFeedback))
+            {
+                userPrompt.AppendLine();
+                userPrompt.AppendLine("[Attribution check feedback — the previous draft failed these]");
+                userPrompt.AppendLine(attributionFeedback);
+            }
+
+            Log.Information("AI 요구사항 문서 도출 요청 전송 - 대상: {Object}", objectLabel);
+
+            // cancellationToken을 위치 인자로 넘기면 volatileUserSuffix에 바인딩된다.
+            // 명명 인자를 쓴다 - 기존 호출부(바로 위 GenerateSettlementPolicyRulebookAsync)도
+            // 모두 이 방식이다.
+            var aiResult = await _aiClient.ChatAsync(
+                systemPrompt,
+                userPrompt.ToString(),
+                _temperature,
+                effort: effort,
+                cancellationToken: cancellationToken)
+                ?? new AiResult();
+
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+
+            Log.Information("AI 요구사항 문서 도출 완료 - 응답 길이: {Length}", aiResult.Content?.Length ?? 0);
+
+            return aiResult;
+        }
     }
 }

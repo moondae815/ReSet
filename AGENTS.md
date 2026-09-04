@@ -33,6 +33,7 @@
 | 재귀 의존성 수집·Soft Fail | `architecture.md §4.1` + 범주 2 |
 | AI 공급자 추가·CLI 제공자 | `architecture.md §4.5` + 범주 4 |
 | 정합성 검증기(Validator) | `architecture.md §4.6` + 범주 5 |
+| `Prd.md` 도출·귀속 검사 | `architecture.md §4.14` + 범주 4 |
 | 취소 처리 | 범주 2 + `CancellationPolicyTests` |
 | 프롬프트 문구·환각 차단 규칙 | `architecture.md §4.9` + 범주 7 |
 
@@ -99,6 +100,7 @@
     *   `GenerateBySplitAsync`의 첫 단계 캐시 워밍을 유지하고, 예외 재시도에만 지연을 적용하십시오(`RunConsolidatedPipeline_WarmsCacheBeforeFanningOut`, `RunConsolidatedPipeline_WhenStepGenerationThrows_DelaysRetryWithJitter`).
     *   `ValidateBatchStep`에는 스키마 카탈로그를 세 번째 인자로 넘기고 2인자 오버로드를 만들지 마십시오(`KnownTableWiringPolicyTests`).
     *   Critic 점수와 기준 점수의 대조는 [CriticScoreGate](./src/ReSet.Core/Services/CriticScoreGate.cs)만 사용하고 사본을 만들지 마십시오. 사본을 두면 불합격 배너의 미달 항목과 재시도 판정이 갈립니다(`CriticScoreGateTests`).
+    *   `Prd.md` 귀속 검사(`PrdAttributionValidator`)는 `MechanicalValidator`에 합치지 마십시오 — 오라클이 다릅니다(`SpecExpectations`가 아니라 `Spec.md` 텍스트 하나). 캐시도 타지 않으므로 `CurrentCacheFormatVersion`을 올리지 마십시오. 이 검사가 확인하는 것은 근거 인용의 실재뿐이니 '검증됨'으로 서술하지 마십시오(`architecture.md §4.14`).
 
 ### 🔒 범주 5. 타겟 런타임 격리 및 리소스 정리 (Lifecycle & Sandbox)
 7.  **타겟 러너 격리 및 모의 데이터(Mock Data) 적재 수명주기를 준수하십시오.**
@@ -238,4 +240,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: e605b5eb -->
+<!-- synced-through: 95111290 -->

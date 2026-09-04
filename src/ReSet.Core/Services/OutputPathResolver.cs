@@ -9,6 +9,16 @@ namespace ReSet.Core.Services;
 public sealed class OutputPathResolver
 {
     private const string SpecFileName = "Spec.md";
+
+    /// <summary>
+    /// 산출물 파일명의 단일 출처. PRD 도출은 이미 발견한 docs 디렉터리 옆에 쓰므로
+    /// CodeObjectKey를 만들지 않지만, 파일명만은 여기서 가져가 조립처가 갈라지지 않게 한다.
+    /// </summary>
+    public const string PrdFileName = "Prd.md";
+
+    /// <summary>위 상수와 같은 이유로 공개한다 - 디렉터리 스캔이 이 이름을 찾는다.</summary>
+    public const string SpecFileNamePublic = SpecFileName;
+
     private const string ManifestFileName = "dependency-manifest.json";
     private const string CanonicalDdlFileName = "object_definition.sql";
     private readonly string _currentDatabase;

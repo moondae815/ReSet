@@ -63,7 +63,7 @@ flowchart TD
 | | [SnapshotManager](../src/ReSet.Core/Services/SnapshotManager.cs) | 온라인 모드에서 `DbMetadataService`가 수집한 데이터를 `DbSnapshot` JSON 파일로 추출(`ExportSnapshotAsync`)하거나, 오프라인 시 파일을 읽어들여(`ImportSnapshotAsync`) 제공하는 관리 서비스. |
 | | [SqlStaticParser](../src/ReSet.Core/Services/SqlStaticParser.cs) | Microsoft.SqlServer.TransactSql.ScriptDom 기반 정적 구문 파서. 프로시저 파라미터 및 선언 변수 수집, 테이블 CRUD 분류, 중첩 제어문 들여쓰기 요약, sp_executesql/EXEC 동적 SQL 감지, UDF 및 Linked Server 감지 수행. 접두사 없는 컬럼에 대한 로컬 스코프 정밀 분석 및 주입된 실제 스키마 메타데이터 기반 1:1 대조 리졸버 연동 및 대용량 SQL 논리 구문 분할(Chunking) 지원. |
 | | [AiService](../src/ReSet.Core/Services/AiService.cs) | LLM 프롬프트 조립(설명 누락 컬럼 역추론, AST 기반 INSERT 빈칸 채우기 템플릿 자동 주입 포함), AST 기반 실제 사용 컬럼 위주 스키마 필터링 포맷팅, 구역별 분할 프롬프트 및 체크리스트 빌드, 통합 배치 수립 시 Brainstorming 및 PlanStructure 설계 분할 요청 처리, 주입받은 `IAiClient`를 통한 AI API 호출 및 JSON 파싱. |
-| | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
+| | [IAiService](../src/ReSet.Core/Services/IAiService.cs) | `GenerateSpecSectionAsync`·`GeneratePrdFromSpecAsync` 등 AI 호출 공통 기능의 계약 정의 인터페이스. |
 | | [IAiClient](../src/ReSet.Core/Services/IAiClient.cs) | AI 모델 간의 공통 텍스트 통신 및 추론(Thinking) 데이터 취합 결과를 다루는 추상 인터페이스. `volatileUserSuffix` 인자로 요청마다 달라지는 지시를 공통 컨텍스트와 분리해 받습니다. |
 | | [AiRetryPolicy](../src/ReSet.Core/Services/AiRetryPolicy.cs), [AiCallRetry](../src/ReSet.Core/Services/AiCallRetry.cs) | AI 호출의 일시적 실패를 다시 시도하는 공용 인프라.<br/>`AiRetryPolicy`는 예외에 실린 유형(HTTP 상태 코드, `CliFailureKind`, 취소 토큰)만 보고 일시·치명·취소를 가르는 순수 함수로, 메시지 산문은 보지 않습니다. `AiCallRetry`는 그 판정에 따라 짧은 무작위 지연을 두고 다시 부르며, 예산을 소진하면 `AiCallFailedException`으로 감쌉니다 — 이 예외는 `OperationCanceledException`을 상속하지 않아 취소 필터에 걸려 "사용자 취소"로 둔갑하지 않습니다. |
 | | [PromptCacheBreakpointPolicy](../src/ReSet.Core/Services/PromptCacheBreakpointPolicy.cs) | 프롬프트 캐시 중단점을 찍을지 판정하는 클래스.<br/>안정 접두사의 해시를 기억해 두 번째 전송부터 `cache_control`을 찍습니다. 캐시 쓰기가 1.25배라 첫 전송에 찍으면 1회차로 끝나는 잡에서 손해가 확정됩니다. |
@@ -123,11 +123,14 @@ flowchart TD
 | | [VerificationBanner](../src/ReSet.Core/Services/VerificationBanner.cs) | L1 미통과, 품질 미달, 리뷰 미수행, 참조 미완, 단계 하한 미달, 단계 검증 불가, 목차 커버리지 누락, 분할 미실행, 오류코드 누락 상태를 문서 본문 앞의 경고 배너로 조립하는 단일 렌더러. `StepFloorViolations`·`UnverifiableSteps`·`UncoveredProcedures` 셋은 예외입니다 — 문서 자체는 `Passed`로 종료돼도, 첫째는 개별 단계가 재시도 후에도 기계적 하한을 못 채웠음을, 둘째는 내용이 멀쩡할 수 있으나 대조할 재료가 목차에 없어 검사가 돌지 못했음을, 셋째는 목차의 어느 단계도 특정 원본 프로시저를 다루겠다고 선언하지 않았음을 각각 조용히 알립니다. 세 사실은 다릅니다 — 부실한 단계는 최소한 존재는 알리고, 검증 불가는 부실 여부 자체가 미지이며, 커버되지 않은 프로시저는 최종 문서 어디에도 흔적이 없습니다. `CoverageUnverifiable`은 셋째의 짝으로, 모든 단계가 출신 표기를 비워 커버리지 대조 자체가 불가능했던 경우를 누락과 구분해 알립니다(§4.4.5). `GenerationFailedSteps`는 첫째의 짝으로, 재시도까지 모두 빈 응답이 돌아와 섹션 본문 자체가 없는 단계를 하한 미달과 구분합니다 — 저것은 "최소 요건을 못 채웠다"이고 이것은 "채울 본문이 없어 검사가 돌지도 못했다"라, 합치면 본문 없는 단계가 검증률에 검증됨으로 잡힙니다. `OmissionComments`는 계획서 자신이 코드 자리에 주석을 세워 둔 곳을 알리며, 그 자리의 결함 중 가장 가벼우므로 가장 먼저 붙여 문서 맨 아래에서 읽히게 합니다(배너는 앞에 붙이므로 부착 순서와 읽는 순서가 반대입니다). |
 | | [CriticScoreGate](../src/ReSet.Core/Services/CriticScoreGate.cs) | Critic의 5축 점수를 기준 점수와 대조하는 단일 지점. 재시도를 결정하는 게이트, 재생성 범위 선택, 불합격 배너가 같은 판정과 같은 순서를 공유합니다 — 사본을 두면 "불합격인데 미달 항목 없음"이나 그 반대가 생기고, 실제로 통합 계획서 루프에는 이 비교 자체가 없어 낮은 점수와 "검증 상태: 통과"가 나란히 찍혔습니다. |
 | | [OmissionCommentScanner](../src/ReSet.Core/Services/OmissionCommentScanner.cs) | 계획서의 코드 펜스 안에서 구현 대신 서 있는 주석(`-- 나머지 실제 컬럼도 … 모두 기술`)을 찾습니다. 지시서 규칙 7은 코딩 에이전트에게 그 형태를 금지하는데 계획서가 그것을 본보기로 보이면 에이전트가 그대로 복사합니다. 재생성을 걸지 않는 이유는 같은 펜스에 보존을 지시하는 주석(`… 를 모두 유지한다`)도 있어 기계가 둘을 완벽히 가르지 못하고, 차단하면 모델이 표현만 바꿔 우회하며 재시도만 소모하기 때문입니다. 패턴을 좁게 유지합니다 — 배너가 잦으면 사람이 읽지 않습니다. |
-| | [OutputPathResolver](../src/ReSet.Core/Services/OutputPathResolver.cs), [SpecificationLinker](../src/ReSet.Core/Services/SpecificationLinker.cs) | 현재/외부 DB를 구분한 객체별 출력 경로를 계산하고, 성공한 직접 참조 객체에만 상대 명세서 링크를 생성합니다. |
+| | [OutputPathResolver](../src/ReSet.Core/Services/OutputPathResolver.cs), [SpecificationLinker](../src/ReSet.Core/Services/SpecificationLinker.cs) | 현재/외부 DB를 구분한 객체별 출력 경로를 계산하고, 성공한 직접 참조 객체에만 상대 명세서 링크를 생성합니다. `PrdFileName`·`SpecFileNamePublic` 상수도 여기서 가져가 PRD 도출이 조립하는 파일명이 갈라지지 않게 합니다. |
 | | [MetadataExporter](../src/ReSet.Core/Services/MetadataExporter.cs) | JSON 덤프, Raw 프롬프트 마크다운, 개별 DDL 및 테이블 스키마(`raw/ddl/*.md`) 내보내기. 재귀 분석에서는 객체별 표준 DDL·의존성 매니페스트를 내보내며, `Reference` 또는 `PortableBundle` 모드에 따라 참조 SP/UDF DDL 사본을 제어합니다. 통합 배치(Job) 분석 단계에서는 언어별 기반 계약 스텁(`AbstractSettleTasklet`, `SettleContracts` 등)을 내보내고, 지시서 번들 구성 자체는 `InstructionBundleWriter`에 위임합니다. 스텁 **본문**은 더 이상 이 클래스의 인라인 문자열이 아니라 `DataAccessPolicy`가 소유하며, 여기서는 언어별로 파일을 쓰는 I/O만 담당합니다 — 인라인 문자열이던 동안 그 계약 자산에는 테스트가 닿지 않았습니다. |
 | | [DataAccessPolicy](../src/ReSet.Core/Services/DataAccessPolicy.cs) | SQL/ORM 데이터 액세스 경계 규칙 문구와 생성 프로젝트용 테스트·계약 스텁을 단독 소유하는 정적 클래스. `InstructionRules`는 진입점 지시서에, `VerificationCriteria`는 L2 Gap 판정 프롬프트 5번 항목에, `TaskletOrmComment`는 `AbstractSettleTasklet` 스텁 주석에 실립니다. `ArchitectureTestStub`·`RepositoryContractStub`은 대상 언어에 따라 NetArchTest(C#) 또는 ArchUnit(Java) 본문을 각각 별도 상수로 내보냅니다 — 한쪽을 치환해 다른 쪽을 만들면 컴파일되지 않기 때문입니다. `AbstractTaskletStub`·`SettleContextStub`·`StepLogicTestStub`·`AssemblyCompletenessTestStub`도 여기로 모였습니다. 스텁을 이 클래스 밖의 인라인 문자열로 되돌리지 마십시오 — `AgentContractStubTests`가 닿지 못하는 계약 자산이 되며, 실제로 그 상태였던 `AbstractSettleTasklet`만 유일하게 검사받지 못했습니다. ORM 경계 주석 치환은 두 언어가 서로 다른 자리표시자를 쓰므로 접근자 안에서 끝냅니다 — 호출부에 남기면 호출부가 늘 때마다 자리표시자가 그대로 나갈 위험이 생깁니다. |
 | | [PlanBoundaryResolver](../src/ReSet.Core/Services/PlanBoundaryResolver.cs) | 확정된 계획서를 골격·단계·검증 조각으로 자르는 경계 결정기. 생성 단계의 조각은 **경계 앵커로만** 쓰고 본문은 언제나 최종 정제 문서에서 잘라냅니다(조각이 나온 뒤에도 정제·자가 교정·구제 채택으로 문서가 계속 바뀌기 때문). 앵커 → 단계 코드 → 단일 파일의 3단 폴백을 거치며, 단계 하나라도 경계를 못 찾으면 부분 분할을 남기지 않고 전체를 단일 파일로 되돌립니다. 두 분할이 모두 성공한 경로에서도 어느 조각에도 담기지 않은 구간(예: 검증 SQL 뒤 부록)은 전부 개요로 흡수해, 조각 나누기가 계획서의 어느 줄도 잃지 않게 합니다. |
 | | [MarkdownSectionLocator](../src/ReSet.Core/Services/MarkdownSectionLocator.cs) | 코드 펜스 안의 헤딩을 오인하지 않는 마크다운 섹션 탐색기. 닫히지 않은 펜스에 대한 재스캔 폴백을 포함하며 `BatchPlanAssembler`와 경계 결정기가 공유합니다. |
+| | [PrdSectionContract](../src/ReSet.Core/Services/PrdSectionContract.cs), [PrdDocumentParser](../src/ReSet.Core/Services/PrdDocumentParser.cs), [PrdAttributionValidator](../src/ReSet.Core/Services/PrdAttributionValidator.cs), [PrdAttributionReport](../src/ReSet.Core/Services/PrdAttributionReport.cs) | `Prd.md`의 섹션→근거 파생 고정표, 요구 표 파서, 근거 인용의 실재를 대조하는 귀속 검사기, 그 결과를 재시도 피드백과 문서 배너로 옮기는 렌더러. 오라클이 `Spec.md` 텍스트 하나뿐이라 `MechanicalValidator`와 분리되어 있다(§4.14). |
+| | [PrdDerivationService](../src/ReSet.Core/Services/PrdDerivationService.cs), [IPrdDerivationService](../src/ReSet.Core/Services/IPrdDerivationService.cs) | 완성된 `Spec.md` 하나를 읽어 AI 호출 → 귀속 검사 → 실패 시 1회 재시도 → 저장까지 수행한다. DB 연결 없이 파일 하나만 입력받는다(§4.14). |
+| | [PrdTargetDiscovery](../src/ReSet.Core/Services/PrdTargetDiscovery.cs), [PrdTargetSelection](../src/ReSet.Core/Services/PrdTargetSelection.cs) | `output/Procedures/`에서 `Spec.md`가 있는 대상을 찾고, TUI 다중 선택의 표시 문자열을 정확 일치로만 대상에 되짚는다 — 한 Label이 다른 Label의 접두어가 되는 코퍼스에서 부분 일치가 고르지 않은 대상까지 끌어오는 것을 막는다(§4.14). |
 | | [MarkdownTableCellCodec](../src/ReSet.Core/Services/MarkdownTableCellCodec.cs) | 마크다운 표 셀의 이스케이프와 복원을 렌더(`AiService`)와 대조(`MechanicalValidator`)가 공유하는 중립 헬퍼. 셀 안에 든 파이프 문자(비트 연산자 등)와 개행이 표를 어긋내지 않게 접고, 행을 나눌 때 이스케이프된 파이프를 칸 내용으로 되돌립니다. 왕복의 두 짝이 갈리면 검증기가 조립기에 의존하게 되므로 어느 쪽에도 속하지 않는 자리에 둡니다. |
 | | [DdlStatementEnumerator](../src/ReSet.Core/Services/DdlStatementEnumerator.cs) | 원본 DDL을 AST 잎(문장) 단위로 열거해 커버리지 맵의 분모를 만든다. "명세서가 얼마나 짚었는가"를 재려면 먼저 셀 대상이 결정론적으로 확정돼야 한다(§5.7) |
 | | [SpecAnchorIndex](../src/ReSet.Core/Services/SpecAnchorIndex.cs) | 명세서가 라인 번호로 짚은 자리(앵커)를 표에서 걷어 색인한다. 원본 주석 표에서 나온 앵커는 `IsCommentAnchor`로 갈라 판정에서 뺀다 — "38번 줄에 이런 주석이 있었다"가 "38번 줄의 문장이 문서화됐다"를 뜻하지 않기 때문이다(§5.7) |
@@ -193,7 +196,7 @@ flowchart TD
 ## 3. 전체 실행 라이프사이클 및 데이터 흐름 (Visual Execution Flow)
 
 ### 3.1. 프로그램 거시 실행 흐름
-ReSet 프로그램이 기동되어 설정을 파싱하고 DB에 연결한 뒤, 사용자가 고른 실행 경로에 따라 분기하는 거시적인(Macro) 흐름은 다음과 같습니다. 네 갈래 중 1번(개별 SP 역공학 분석)과 2번(통합 배치 마이그레이션 설계)의 상세 파이프라인을 아래에 접어 두었고, 3번(코딩 에이전트 구동)의 상세 시퀀스는 3.3절에, 4번(통합 정산 정책 문서 도출)의 메커니즘은 4.10절에 있습니다.
+ReSet 프로그램이 기동되어 설정을 파싱하고 DB에 연결한 뒤, 사용자가 고른 실행 경로에 따라 분기하는 거시적인(Macro) 흐름은 다음과 같습니다. 다섯 갈래 중 1번(개별 SP 역공학 분석)과 2번(통합 배치 마이그레이션 설계)의 상세 파이프라인을 아래에 접어 두었고, 3번(코딩 에이전트 구동)의 상세 시퀀스는 3.3절에, 4번(통합 정산 정책 문서 도출)의 메커니즘은 4.10절에, 5번(명세서 기반 요구사항 도출)의 메커니즘은 4.14절에 있습니다.
 
 ```mermaid
 graph TD
@@ -222,10 +225,11 @@ graph TD
     Entry -- "2. 통합 배치 마이그레이션 설계" --> PathBatch["저장된 Spec.md 조합 ➔ 통합 계획 파이프라인 ➔<br/>Jobs 하위 산출물 및 지시서 번들 생성"]
     Entry -- "3. 코딩 에이전트 구동" --> PathCodegen["기작성 지시서 선택 ➔ 외부 에이전트 자가 수정 루프<br/>(상세 흐름은 3.3절 참고)"]
     Entry -- "4. 통합 정산 정책 문서 도출" --> PathPolicy["DDL 상수 분기 분석 + 마스터 데이터 프로파일링 ➔<br/>정산 정책서 저장"]
+    Entry -- "5. 명세서 기반 요구사항 도출" --> PathPrd["기존 Spec.md 선택(DB 미접속) ➔<br/>귀속 검사(1회 재시도) ➔ Prd.md 저장"]
 
     %% 통합 설계가 만든 지시서를 코딩 에이전트 경로가 소비한다
     PathBatch --> PathCodegen
-    PathAnalysis & PathCodegen & PathPolicy --> End["종료<br/>(TUI는 메인 메뉴로 복귀)"]
+    PathAnalysis & PathCodegen & PathPolicy & PathPrd --> End["종료<br/>(TUI는 메인 메뉴로 복귀)"]
 ```
 
 <details>
@@ -940,6 +944,60 @@ Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 �
 같은 이유로 잡 이름은 명세서 뒤에 놓는다. 캐시는 접두사 일치라, 잡마다 달라지는 한 줄이
 앞에 있으면 뒤따르는 명세서 전량이 무효가 된다.
 
+### 4.14. 명세서 기반 요구사항 도출 (PRD Derivation)
+
+메인 메뉴 `5`에서 완성된 `Spec.md` 하나만 읽어 업무 요구사항 문서 `Prd.md`를 같은
+`docs/` 디렉터리에 낸다. `Spec.md`는 "어떻게 동작하는가"를 적지만 업무 담당자가 알고
+싶은 것은 그 앞이므로, 지금은 사람이 명세서를 읽고 손으로 역산하던 것을 문서로 고정한다.
+
+* **왜 별도 메뉴이고 왜 DB에 접속하지 않는가**: 코드에는 "무엇을 했는가"만 있고 "무엇을
+  요구했는가"는 없다. `Spec.md`만 근거로 삼으면 도출은 재서술 아니면 추론일 수밖에
+  없으므로, 이 기능은 문장력이 아니라 **모든 요구 항목이 자기 근거를 들고 다니게
+  만드는 것**을 중심으로 설계했다. 입력을 파일 하나(완성된 `Spec.md`)로 좁히면 이미
+  쌓인 산출물에 재분석 없이 그대로 소급 적용할 수 있고, 그 실질적 배당금 때문에 1번
+  분석 실행에 이어 붙이지 않고 별도 메뉴로 기동한다. 경로는 `CodeObjectKey`가 아니라
+  발견한 `docs/` 디렉터리에서 파생한다 — 키를 만들려면 DB에 접속해 분석 루트를
+  알아내야 하는데, 그러면 좁은 입력이라는 이점이 사라진다.
+* **섹션 파생 고정형**: `Prd.md`의 다섯 섹션은 `PrdSectionContract`가 `Spec.md` 섹션과의
+  파생 관계를 고정한다 — `## 배경 및 목적`←`## 개요`, `## 수행 조건 및 입력 계약`←
+  `## 파라미터 목록`, `## 데이터 요구사항`←`## CRUD 분석`, `## 기능 요구사항`←
+  `## 로직 흐름 요약`, `## 예외 및 비기능 요구사항`←`## CRUD 분석`+`## 로직 흐름 요약`.
+  `## 비즈니스 흐름 시각화`(Mermaid)는 파생 원천에서 제외한다 — 다이어그램은 요구가
+  아니라 표현이다. 요구 표의 각 행은 `REQ-<섹션약어>-NN` ID, `<Spec 헤딩> >
+  "<원문 구절>"` 형태의 근거, 그리고 `도출`(인용이 요구를 직접 지지)·`추정`(여러
+  사실을 엮어 재구성) 확신도 **둘뿐**을 담는다. 줄번호를 근거로 쓰지 않는 이유는
+  `Spec.md`를 다시 생성하는 순간 줄번호가 전부 거짓이 되기 때문이다 — 헤딩과 원문
+  구절은 두 문서가 같은 이야기를 하는 한 유효하다.
+* **귀속 검사(`PrdAttributionValidator`)가 재는 여섯 가지**: 섹션 존재, ID 접두사와
+  소속 섹션의 일치, 근거 헤딩이 그 섹션에 허용된 파생 원천에 속하는지, 근거 헤딩이
+  `Spec.md`에 실재하는지(`MarkdownSectionLocator` 재사용), 인용 구절이 그 헤딩
+  본문에 실재하는지(공백·마크다운 강조·표 파이프 정규화 후 부분 문자열 대조),
+  확신도 어휘가 `도출`·`추정` 중 하나인지. 기준값의 출처가 모델이 건드릴 수 없는
+  `Spec.md` 원문이라는 점이 이 검사의 신뢰 근거다.
+* **명시적으로 남기는 구멍 — 귀속 오배치**: 인용은 진짜인데 요구 서술이 그 인용과
+  무관한 경우는 이 오라클로 잴 수 없다. 모델이 `Spec.md`에서 아무 구절이나 복사해
+  붙이면 위 여섯 검사를 전부 통과하기 때문이다. PRD에는 L2 Actor-Critic이 없으므로
+  이 구멍은 사람 검토에 남고, `PrdAttributionReport`가 만드는 문서 상단 배너가 항상
+  "근거 인용의 **실재**만 기계 검증되었고 요구와 근거의 **대응**은 미검증"이라고
+  명시한다. 검사가 실제보다 강한 척하는 쪽이 검사가 약한 것보다 위험하다.
+* **실패 처리**: L2 보정 루프가 없으므로 검사 실패 시 결함 목록을 피드백으로 붙여
+  **1회만** 재호출한다. 그래도 남으면 결함을 배너에 박고 **저장한다** — 정산
+  정책서·단일 SP 계획서와 같은 "임계치 미달 문서도 배너를 달아 보존" 원칙이다.
+* **일부러 건드리지 않은 것**: 캐시를 타지 않고 `CacheManager.CurrentCacheFormatVersion`도
+  올리지 않는다 — 올리면 PRD와 무관한 SP 전건이 재생성 대상이 된다. 검사는
+  `MechanicalValidator`에 넣지 않는다 — 그 클래스의 재료는 `SpecExpectations`(원본
+  DDL·정적 분석 유래)인데 PRD의 오라클은 `Spec.md` 텍스트 하나뿐이라, 재료가 다른
+  검사를 합치면 `IsConsolidated` 분기가 더 번진다. `Prd.md`는 L1 귀속 검사만 거치고
+  L2 Actor-Critic·L3 사용자 승인에는 진입하지 않으며, 배치 계획서·코딩 지시서의
+  입력으로도 배선하지 않는다.
+* **대상 범위와 선택**: `PrdTargetDiscovery`는 `output/Procedures/` 아래 `docs/Spec.md`가
+  있는 대상만 찾는다 — `Functions/`(UDF)·`External/`은 1차 범위 밖이다(함수 명세서에서
+  "업무 요구"를 뽑는 것은 의미가 얇다). 다중 선택 UI에서 표시 문자열을 대상으로
+  되짚을 때 `PrdTargetSelection`은 접두어·부분 일치를 쓰지 않고 정확 일치만 허용한다
+  — 실제 코퍼스에는 한 객체의 Label이 다른 객체 Label의 접두어인 사례가 있어(예:
+  `dbo.UP_UTIL_SETTLE_INS`가 `..._EXTRA`의 접두어), 부분 일치로 되짚으면 사용자가
+  고르지 않은 대상까지 함께 걸려 기존 `Prd.md`를 확인 없이 덮어쓸 수 있다.
+
 ---
 
 ## 5. TUI/CLI 부가 기능 및 복구 파이프라인 (Secondary Features)
@@ -995,4 +1053,4 @@ Anthropic API에는 암묵적 캐싱이 없어 `cache_control`을 명시해야 �
 * **침묵 분모 — 차분이 볼 수 없는 것**: 검사별 발화량 표는 좌표 차분이라, 가드가 조건 (A)에서도 (B)에서도 같은 좌표를 침묵시키면 차분이 **정의상 0**입니다. 그래서 캐시 17이 앵커를 정상화해 발화가 켜질 때 **가려져 있던 침묵도 함께 켜지는 것**을 총량만 보면 놓칩니다. 보고서는 「침묵 분모」 절에 앵커 해결·미해결·모호성 가드로 버려진 문장 수를 따로 싣습니다 — 승격 전에는 앵커가 안 풀려 면제가 도달 불가능하므로, 이 계수들의 증가분이 곧 「이번에 새로 생긴 침묵」입니다. 어느 좌표가 **어느 가드에** 침묵당했는지는 세지 않습니다: 그러려면 검증기가 판정 사유를 내보내야 하고, 그 결합보다 분모 쪽이 낫다고 봤습니다. 미해결의 분모는 그 단계의 모든 DML 문장이 아니라 **앵커를 보유한 문장**만입니다 — U-앵커도 코드 앵커도 없는 문장은 `ResolveOrdinal`의 후보가 된 적이 없어, 넣으면 평범한 무앵커 문장 수가 「앵커 해결 실패」로 잘못 읽힙니다(좁히기 전 1,641 대 해결+모호 940 — 1,641은 진짜 해결 실패가 아니었습니다).
 * **재료 분모 — 검사가 재료를 잃었는지 발화가 아니라 원시 계수로 잰다**: 검사별 발화량은 「재료가 있는데 위반이 없다」와 「재료 자체가 없다」를 구별하지 못합니다. 실제로 모델 교체만으로 명세서의 「지역 변수 표」가 사라져 단계 검사 D가 18 → 0으로 꺼졌는데, 좌표 차분도 침묵 분모도 그것을 못 봤습니다((5-3-7)). 그래서 보고서는 `SpecMaterials` 카탈로그의 재료마다 **원본 DDL 사실 수 대 명세서 행 수**를 프로시저 단위로 세어 「재료 분모」 절에 싣습니다. 못 잰 칸은 0이 아니라 **「안 쟀음」(대응물은 있으나 계수기 미구현)·「잴 수 없음」(대응물 자체가 없음)**으로 인쇄합니다 — 0으로 찍으면 미구현이 정상으로 읽힙니다. **이 계기가 낸 수치도 한 번 정정됐습니다**: `LocalVariables`의 DDL 사실 69는 `DeclaredVariableVisitor`가 `ProcedureParameter`를 함께 세어 부푼 값이고(69 = 진짜 DECLARE 40 + 파라미터 29), 그래서 「14 프로시저 전량 소실」도 실질 9편이었습니다(나머지 5편은 지역 변수가 0이라 잃을 것이 없습니다). 분모가 부풀면 소실이 실제보다 커 보입니다.
 
-<!-- synced-through: e605b5eb -->
+<!-- synced-through: 95111290 -->
