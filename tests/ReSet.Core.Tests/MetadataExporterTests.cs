@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
 using ReSet.Core.Models;
@@ -429,6 +428,14 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", context1);
             Assert.Contains("TBL_TestDep", context1);
             Assert.Contains("의존 테이블 설명", context1);
+
+            // 표의 컬럼 행 전체를 셀 순서까지 못박는다. 이 표는 에이전트 지시서가
+            // 링크로 실소비하는 Jobs/[Job]/raw/ddl/*.md이므로, 셀 하나가 조용히
+            // 비면 지시서가 컬럼의 제약과 설명을 잃은 채로 코딩 에이전트에게 간다.
+            // 픽스처의 컬럼 하나가 일곱 셀을 모두 덮는다: 이름·타입·Null 허용(No)·
+            // Identity(No)·기본값(빈 칸)·제약 조건(PRIMARY KEY)·설명(PK 컬럼).
+            Assert.Contains("| 컬럼명 | 데이터 타입 | Null 허용 | Identity | 기본값 | 제약 조건 | 설명 |", context1);
+            Assert.Contains("| ID | INT | No | No |  | PRIMARY KEY | PK 컬럼 |", context1);
 
             Assert.Contains("raw/ddl/dbo.TBL_TestDep.md", content);
             Assert.Contains("todo.md", content);
