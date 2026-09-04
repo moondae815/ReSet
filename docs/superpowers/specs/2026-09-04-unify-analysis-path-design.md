@@ -58,6 +58,27 @@ ON은 원문을 그대로 쓴다).
 
 **따라서 통일은 이 축을 지운다는 뜻이 아니라, 한 코드가 두 값을 다루게 한다는 뜻이다.**
 
+### 2.1 이 결정이 지키는 것 — 계획서 `Narrow` 모드의 1-hop 이웃
+
+수집 범위를 보존해야 하는 이유는 명세서 품질만이 아니다. **배치 계획서의 단계 본문
+생성이 같은 재료에 기대고 있다**(다른 세션의 제보로 확인, 2026-09-04).
+
+`VerificationPipelineOrchestrator`가 `StepInterfaceFacts.BuildCallGraph(definitions)`로
+호출 그래프를 만들고, `ContextScopeMode.Narrow`일 때 `PromptContextScope.NarrowSpecs`가
+그것으로 각 단계에 실을 **1-hop 이웃 명세서**를 고른다. 이 그래프가 비면 각 단계는 자기
+명세서만 받고, 이웃이 규정한 오류 코드·인터페이스를 지키지 못하는 결함이 늘어난다
+(`VerificationPipelineOrchestrator.cs:1768`이 그 경우를 사람에게 경고한다).
+
+**그 재료는 오케스트레이터의 그래프도 매니페스트도 아니라 `SpDefinition.Dependencies`다**
+(`StepInterfaceFacts.cs:147`). 그리고 CLI가 `spDefs`에 담는 정의는
+`analysis.Definition = pipelineResult.SpDef`, 즉 **파이프라인이 수집한 그것**이다
+(`DependencyAnalysisOrchestrator.cs:252`).
+
+따라서 §4.1의 플래그가 OFF에서 `directDependenciesOnly: false`를 유지하는 한 이 재료는
+**두 모드 모두 지금과 같다.** 반대로 `MaxDepth = 0` 안을 택했다면 OFF의 `Dependencies`가
+직접 의존성으로 줄어 **계획서 단계 본문의 이웃이 조용히 얇아졌을 것이다** — 명세서
+품질보다 발견하기 어려운 회귀다. Task 3의 회귀 테스트가 이 성질을 잠근다.
+
 ## 3. 확정된 전제 (사람 결정, 2026-09-04)
 
 | 축 | 결정 |

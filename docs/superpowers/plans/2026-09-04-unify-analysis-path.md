@@ -402,6 +402,41 @@ CLI는 아직 이 기능을 쓰지 않는다. 이 태스크는 **능력만** 만
     }
 
     /// <summary>
+    /// 결과가 담는 정의는 파이프라인이 수집한 그것이어야 한다 — 발견 단계가 쓴
+    /// 직접 의존성 판본으로 바뀌면 안 된다. 이 정의의 Dependencies가 CLI의 spDefs를
+    /// 거쳐 StepInterfaceFacts.BuildCallGraph로 흘러가고, 그것이 계획서 Narrow 모드의
+    /// 1-hop 이웃을 고른다. 얇아져도 명세서는 멀쩡해 보이고 계획서 단계 본문만
+    /// 조용히 나빠지므로, 여기서 잠근다(설계 §2.1).
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_CarriesPipelineCollectedDependencies()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var neighbour = Key("USP_Neighbour", CodeObjectType.Procedure);
+
+        // 발견 단계가 보는 정의에는 의존성이 없다.
+        var metadata = CreateMetadataService(Definition(root));
+
+        // 파이프라인은 전이적으로 모아 이웃을 담아 돌려준다.
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key, neighbour),
+                SpecMarkdown = "# Spec"
+            }));
+
+        var result = await sut.AnalyzeAsync(
+            root,
+            Request() with { AnalyzeReferencedCodeObjects = false },
+            CancellationToken.None);
+
+        var analysis = Assert.Single(result.AnalysisResults);
+        var dependency = Assert.Single(analysis.Definition!.Dependencies);
+        Assert.Equal("USP_Neighbour", dependency.Name);
+    }
+
+    /// <summary>
     /// 재귀 모드는 지금 그대로여야 한다. 플래그의 기본값이 뒤집히면 기존 사용자가
     /// 아무것도 바꾸지 않았는데 산출물이 줄어든다.
     /// </summary>
