@@ -5,10 +5,13 @@ namespace ReSet.Core.Tests
     /// <summary>
     /// 코퍼스 설정이 "전부 아니면 전무"인지 지킨다 - **반쯤 설정된 상태**를 막는 가드다.
     ///
-    /// [실측 - 코퍼스 재료는 둘이고, 두 계열이 서로 다르게 반응한다 (2026-08-26)]
-    /// 재료는 `output/`과 <see cref="CorpusPaths.PriorEdition"/> 둘이다. **메인 저장소 안에
-    /// 만든** 워크트리에 무엇을 거느냐에 따라 이렇게 갈린다(전수 실측). 저장소 밖에 만든
-    /// 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어난다.
+    /// [실측 - 코퍼스 재료는 셋이고, 계열마다 다르게 반응한다 (2026-08-26 · 2026-09-04)]
+    /// 재료는 `output/`, <see cref="CorpusPaths.PriorEdition"/>, <see cref="CorpusPaths.ControlEdition"/>
+    /// 셋이다. 아래 표는 앞의 둘로 잰 것이고(2026-08-26 전수 실측), 셋째는 그때 이 가드
+    /// 밖에 있었다 - 그래서 빠뜨려도 빨간불이 없고 <c>ProcedureClosureCorpusTests</c>가
+    /// **조용히 건너뛰었다**(2026-09-04에 닫았다. 아래 두 번째 시험이 그것이다).
+    /// **메인 저장소 안에 만든** 워크트리에 무엇을 거느냐에 따라 이렇게 갈린다. 저장소
+    /// 밖에 만든 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어난다.
     ///
     ///   링크 없음  : AxisAGoldenCaseTests 계열 15건 건너뜀 · CoverageMapGolden 요구 2·3 통과
     ///   output만   : 그 15건 통과 · **요구 2·3 건너뜀**  → 총 건너뜀 2
@@ -89,6 +92,49 @@ namespace ReSet.Core.Tests
                 "  ln -s <메인 저장소>/output output\n" +
                 $"  ln -s <메인 저장소>/{CorpusPaths.PriorEdition} {CorpusPaths.PriorEdition}\n" +
                 "둘 다 걸면 건너뜀 0이다. 세 단계 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
+        }
+
+        /// <summary>
+        /// 셋째 재료(<see cref="CorpusPaths.ControlEdition"/>)에 대한 같은 시험.
+        ///
+        /// [왜 별건인가 - 2026-09-04]
+        /// 이 재료는 2026-09-03까지 가드 **밖**에 있었다. 빠뜨리면
+        /// <c>ProcedureClosureCorpusTests</c>가 조용히 건너뛰는데, 건너뜀 수가 1 늘 뿐이라
+        /// 위쪽 「반쯤」보다도 눈에 안 띈다. 그 사이 두 세션이 각각 이 자리에서 서로에게
+        /// 틀린 안내를 주고받았다(한쪽은 「재료는 둘」, 다른 쪽은 「셋째가 빠지면 가드가
+        /// 막는다」 - 둘 다 틀렸다). 가드가 모르는 재료를 문서만으로 지키게 두면 그런
+        /// 일이 반복된다.
+        ///
+        /// 위 시험과 합치지 않는 이유: 실패 메시지가 「무엇을 걸어야 하는가」를 정확히
+        /// 대야 한다. 둘을 한 단언으로 묶으면 어느 재료가 빠졌는지 메시지가 흐려지고,
+        /// 그 흐린 메시지가 바로 이 재료를 놓치게 만든 조건이다.
+        /// </summary>
+        [SkippableFact]
+        public void CorpusSetup_WhenOutputIsPresent_ControlEditionMustAlsoBePresent()
+        {
+            var root = CorpusPaths.RepoRoot();
+
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var hasControl = CorpusPaths.ControlEditionExists(root);
+
+            // 위 시험과 같은 규약이다 - 있으면 어디서든 단언하고, 없으면서 연결된
+            // 워크트리도 아닐 때만 건너뛴다. 통제군 트리는 그때 그 실행의 산출이라
+            // 스냅샷과 마찬가지로 재생성할 수 없다.
+            Skip.If(
+                !hasControl && !CorpusPaths.IsLinkedWorktree(root),
+                "연결된 워크트리가 아니고 통제군 입력 트리도 없다 - 그 트리는 재생성할 수 " +
+                "없으므로 독립 체크아웃에서는 요구하지 않는다.");
+
+            Assert.True(
+                hasControl,
+                $"코퍼스가 반쯤 설정됐다 - `output/`은 닿는데 `{CorpusPaths.ControlEdition}/`이 없다. " +
+                "이 상태에서는 `ProcedureClosureCorpusTests`가 조용히 건너뛴다(건너뜀 수는 1만 늘어 " +
+                "눈에 띄지 않는다). 심링크를 **셋 다** 걸어라:\n" +
+                "  ln -s <메인 저장소>/output output\n" +
+                $"  ln -s <메인 저장소>/{CorpusPaths.PriorEdition} {CorpusPaths.PriorEdition}\n" +
+                $"  ln -s <메인 저장소>/{CorpusPaths.ControlEdition} {CorpusPaths.ControlEdition}\n" +
+                "셋 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
         }
     }
 }

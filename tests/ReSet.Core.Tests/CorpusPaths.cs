@@ -30,6 +30,25 @@ namespace ReSet.Core.Tests
         public const string PriorEdition = "output.bak-2026-08-22";
 
         /// <summary>
+        /// 통제군 입력 트리 이름. <c>ProcedureClosureCorpusTests</c>가 이 트리의
+        /// `Jobs/POQSettleBatch4/raw/prompt-context.md`에서 로스터 12편을 읽고,
+        /// <c>LegacyErrorCodeInventionCorpusTests</c>가 <c>RESET_SWEEP_ROOT</c>로
+        /// 같은 트리에 자를 대 볼 수 있다.
+        ///
+        /// <see cref="PriorEdition"/>과 마찬가지로 `.git/info/exclude`의 `output.bak-*`에
+        /// 걸려 `output/`과는 <b>별개로</b> 없을 수 있고, 통제군 실행의 산출이라
+        /// 재생성할 수 없다.
+        ///
+        /// [왜 상수로 드는가 - 2026-09-04]
+        /// 이 이름은 테스트 두 곳에 문자열로 흩어져 있었고 가드는 이것을 아예 몰랐다.
+        /// 그래서 셋째 재료를 빠뜨린 워크트리는 빨간불 없이 <b>조용히 건너뛰었다</b> -
+        /// 가드가 막는다는 <see cref="PriorEdition"/>의 보증이 이 재료에는 없었다.
+        /// 2026-09-03에 두 세션이 각각 이 자리에서 서로에게 틀린 안내를 주고받았다
+        /// (한쪽은 「재료는 둘」, 다른 쪽은 「셋째가 빠지면 가드가 막는다」 - 둘 다 틀렸다).
+        /// </summary>
+        public const string ControlEdition = "output.bak-stage4-control-20260828";
+
+        /// <summary>
         /// 코퍼스가 사는 저장소 루트. 못 찾으면 빈 문자열.
         ///
         /// [왜 "output/이 있다"로 판정하지 않는가 - 2026-08-24·08-25 실측]
@@ -79,5 +98,19 @@ namespace ReSet.Core.Tests
         public static bool PriorEditionExists(string root) =>
             !string.IsNullOrEmpty(root) &&
             Directory.Exists(Path.Combine(root, PriorEdition, "Procedures"));
+
+        /// <summary>
+        /// 통제군 입력 트리가 실제로 닿는가.
+        ///
+        /// 디렉터리 존재가 아니라 <b>소비자가 실제로 읽는 파일</b>로 판정한다 -
+        /// <c>ProcedureClosureCorpusTests</c>가 이 파일 하나로 로스터를 만들고, 없으면
+        /// 건너뛴다. 가드가 디렉터리만 보면 "링크는 걸렸는데 안이 비었다"를 통과시켜,
+        /// 가드는 초록인데 테스트는 건너뛰는 조합이 생긴다 - 이 클래스가 막으려는
+        /// 「성공처럼 보이는 반쯤」의 또 다른 모양이다.
+        /// </summary>
+        public static bool ControlEditionExists(string root) =>
+            !string.IsNullOrEmpty(root) &&
+            File.Exists(Path.Combine(
+                root, ControlEdition, "Jobs", "POQSettleBatch4", "raw", "prompt-context.md"));
     }
 }
