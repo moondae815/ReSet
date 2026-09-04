@@ -273,6 +273,157 @@ namespace ReSet.Core.Tests
 
             Assert.Empty(codes);
         }
+
+        /// <summary>
+        /// 골격 구역 픽스처. 실측(반복 실행 판2·판3)이 채점 예산을 태운 자리 셋을 모두 담는다 -
+        /// 공통 규약 절(`IF @@ROWCOUNT`), H2 「Mermaid 기반 통합 흐름도」의 깨진 다이어그램,
+        /// 그리고 단계 섹션 뒤에 오는 마지막 H2(`NOLOCK`). 셋 다 단계 헤딩 밖이다.
+        /// </summary>
+        private const string DocumentWithSkeleton = """
+            ## 통합 배치 아키텍처 개요
+
+            | 순서 | 단계 | 허용 오류 코드 |
+            |---|---|---|
+            | S01 | 잠금과 RunId 발급 | `-9010` |
+
+            ## Mermaid 기반 통합 흐름도
+
+            ```mermaid
+            sequenceDiagram
+            LOCK--->ORCH: lock held
+            ORCH-->>LOCK: released
+            ```
+
+            ## 단계별 이행 상세 및 의사코드
+
+            ### 공통 SQL 오류 추적 패턴
+
+            ```sql
+            IF @@ROWCOUNT = 0
+                RETURN;
+            ```
+
+            ### S01. 잠금과 RunId 발급
+
+            ```sql
+            INSERT INTO batch.BatchRun (JobName) VALUES (@JobName);
+            ```
+
+            ## 통합 데이터 정합성 검증 SQL 세트
+
+            ```sql
+            SELECT COUNT(*) FROM batch.ControlTotal WITH (NOLOCK);
+            ```
+            """;
+
+        // 실측(반복 실행 판2): 공통 규약 절의 `IF @@ROWCOUNT = 0`이 어느 단계에도 안 붙어
+        // 귀속 실패 → 전량 재생성 → 채점 예산 소모였다. 이제 골격으로 귀속된다.
+        [Fact]
+        public void LexemeInSharedConventions_IsAttributedToSkeleton()
+        {
+            var steps = new[] { Step("S01") };
+
+            var attribution = L1ViolationAttribution.Attribute(DocumentWithSkeleton, "IF @@ROWCOUNT", steps);
+
+            Assert.True(attribution.Skeleton);
+            Assert.Empty(attribution.StepCodes);
+        }
+
+        // 마지막 H2(정합성 검증 SQL 세트)도 골격이 쓴 자리다 - 단계 섹션 "뒤"라는
+        // 이유로 직전 단계에 새어 들어가면 멀쩡한 단계를 다시 쓰게 된다.
+        [Fact]
+        public void LexemeInTrailingH2_IsAttributedToSkeleton()
+        {
+            var steps = new[] { Step("S01") };
+
+            var attribution = L1ViolationAttribution.Attribute(DocumentWithSkeleton, "NOLOCK", steps);
+
+            Assert.True(attribution.Skeleton);
+            Assert.Empty(attribution.StepCodes);
+        }
+
+        // 같은 어휘가 두 구역에 있으면 둘 다 연다 - 한쪽만 고치면 다음 회차에 같은
+        // 위반으로 다시 실패한다(단계 여럿일 때와 같은 이유).
+        [Fact]
+        public void LexemeInBothRegions_OpensSkeletonAndStep()
+        {
+            var steps = new[] { Step("S01") };
+
+            var attribution = L1ViolationAttribution.Attribute(DocumentWithSkeleton, "batch.", steps);
+
+            Assert.True(attribution.Skeleton);
+            Assert.Equal(new[] { "S01" }, attribution.StepCodes);
+        }
+
+        // 단계 목록이 없으면(단일 호출 폴백 경로) 골격이라는 개념 자체가 없다 -
+        // 그 경로에는 재사용할 골격도 섹션 캐시도 없어 전량 재생성이 유일한 답이다.
+        [Fact]
+        public void Attribute_NullSteps_ClaimsNothing()
+        {
+            var attribution = L1ViolationAttribution.Attribute(DocumentWithSkeleton, "NOLOCK", null);
+
+            Assert.False(attribution.Skeleton);
+            Assert.Empty(attribution.StepCodes);
+        }
+
+        // 실측(반복 실행 판3): mermaid 컴파일 오류 14건이 전부 골격의 같은 화살표였는데
+        // `MermaidCliError` 메시지에는 백틱이 하나도 없어 어휘가 비고, 귀속이 항상
+        // 실패했다. 블록 본문을 문서에서 되찾아 구역을 판정한다.
+        [Fact]
+        public void AttributeBlock_MermaidInSkeleton_IsAttributedToSkeleton()
+        {
+            var steps = new[] { Step("S01") };
+            var block = "sequenceDiagram\nLOCK--->ORCH: lock held\nORCH-->>LOCK: released";
+
+            var attribution = L1ViolationAttribution.AttributeBlock(DocumentWithSkeleton, block, steps);
+
+            Assert.True(attribution.Skeleton);
+            Assert.Empty(attribution.StepCodes);
+        }
+
+        // 코퍼스 22편의 mermaid 블록 50개는 전부 골격에 있었지만, 유형만 보고 무조건
+        // 골격에 귀속하면 단계 안 mermaid가 깨졌을 때 그 단계가 영영 얼어붙는다.
+        [Fact]
+        public void AttributeBlock_MermaidInsideStepSection_IsAttributedToThatStep()
+        {
+            var steps = new[] { Step("S01"), Step("S02") };
+            var document = """
+                ## 단계별 이행 상세 및 의사코드
+
+                ### S01. 잠금
+
+                ```mermaid
+                flowchart TD
+                A-->B
+                ```
+
+                ### S02. 정산
+
+                ```sql
+                SELECT 1;
+                ```
+                """;
+
+            var attribution = L1ViolationAttribution.AttributeBlock(document, "flowchart TD\nA-->B", steps);
+
+            Assert.False(attribution.Skeleton);
+            Assert.Equal(new[] { "S01" }, attribution.StepCodes);
+        }
+
+        // 블록을 문서에서 못 찾으면 억지로 붙이지 않는다 - 호출부가 유형별 폴백을
+        // 고를 수 있도록 "찾지 못했다"를 그대로 알린다.
+        [Fact]
+        public void AttributeBlock_BlockNotFound_ClaimsNothing()
+        {
+            var steps = new[] { Step("S01") };
+
+            var attribution = L1ViolationAttribution.AttributeBlock(
+                DocumentWithSkeleton, "flowchart TD\nZZZ-->YYY", steps);
+
+            Assert.False(attribution.Skeleton);
+            Assert.Empty(attribution.StepCodes);
+        }
+
     }
 
     // MechanicalValidator.ViolationLexemes 테스트. L1ViolationAttribution.AttributeByLexeme가

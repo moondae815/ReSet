@@ -4208,6 +4208,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             string? effort = null,
             string? brainstorming = null,
             IReadOnlyList<StepInterface>? stepInterfaces = null,
+            SkeletonRevision? revision = null,
             CancellationToken cancellationToken = default)
         {
             var placeholders = new StringBuilder();
@@ -4269,12 +4270,44 @@ Consolidate the provided specifications into a single unified batch job named '{
 
             userPrompt.AppendLine("Please draft the skeleton, STRICTLY adhering to the [Skeleton Contract] and the [Approved Document Structure & Plan] above.");
 
+            // 골격 수리 회차. 이 블록은 프롬프트 맨 끝에 붙는다 - 앞의
+            // AppendSharedStepContext까지가 단계 호출과 바이트가 같아야 하는 구간이라
+            // 회차마다 달라지는 것을 그 앞에 끼우면 N개 단계 호출의 캐시가 통째로 죽는다
+            // (단계 본문 호출의 volatileSuffix가 같은 이유로 나뉘어 있다).
+            if (revision != null)
+            {
+                userPrompt.AppendLine();
+                if (!string.IsNullOrWhiteSpace(revision.PreviousSkeleton))
+                {
+                    // 이미 만들어진 단계 섹션은 이 골격 아래에서 동결된 채 그대로 붙는다.
+                    // 그래서 골격이 지고 있는 두 표(단계 목록·단계별 허용 오류 코드)가
+                    // 다시 쓰다 흔들리면 문서가 스스로 모순된다 - 백지로 다시 쓰지 않고
+                    // 패치를 요구하는 이유가 그것이고, 지켜졌는지는 프롬프트가 아니라
+                    // SkeletonRevisionGuard가 기계로 본다.
+                    userPrompt.AppendLine("[Previous Skeleton]");
+                    userPrompt.AppendLine(revision.PreviousSkeleton);
+                    userPrompt.AppendLine();
+                    userPrompt.AppendLine("[Revision Contract]");
+                    userPrompt.AppendLine("- Output the FULL skeleton again, but change ONLY what the machine validation failure below identifies.");
+                    userPrompt.AppendLine("- Every other line MUST be reproduced byte-for-byte — including the step roster table, the per-step error-code table, and the four mandatory H2 headings.");
+                    userPrompt.AppendLine("- The step bodies have ALREADY been written against this skeleton and are frozen; do NOT change any contract they depend on beyond the fix.");
+                    userPrompt.AppendLine("- Do NOT rewrite, reorder, or \"improve\" untouched parts.");
+                    userPrompt.AppendLine();
+                }
+
+                userPrompt.AppendLine("[Machine Validation Failure — fix exactly this]");
+                userPrompt.AppendLine(revision.Feedback);
+            }
+
             if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(ProviderName) && _enableOllamaThinking)
             {
                 systemPrompt += "\n\n[Ollama Thinking Requirements]\n- Detail your analytical thoughts inside <think> and </think> tags before writing the plan. The final markdown must be placed outside the think tags.";
             }
 
-            Log.Information("AI 배치 계획 골격 생성 요청 전송 - JobName: {JobName}, 단계 수: {Count}개", jobName, steps.Count);
+            Log.Information(
+                "AI 배치 계획 골격 생성 요청 전송 - JobName: {JobName}, 단계 수: {Count}개, 수리 회차: {Repair}",
+                jobName, steps.Count,
+                revision == null ? "아니오" : revision.PreviousSkeleton == null ? "백지 재작성" : "패치");
 
             var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort, cancellationToken: cancellationToken);
             if (aiResult == null) aiResult = new AiResult();

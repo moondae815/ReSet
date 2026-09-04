@@ -1855,6 +1855,20 @@ namespace ReSet.Core.Services
             // 조용히 사라진다.
             var stepFloorViolations = new Dictionary<string, StepDefect>();
             var pendingDefectiveSteps = new List<string>();
+            // 골격 지목 재생성 요청. L1 위반이 단계 섹션 *밖*(공통 규약 절·흐름도·
+            // 마지막 검증 SQL 세트)에 있을 때만 채워진다. null이면 골격은 손대지 않는다.
+            //
+            // 이것이 없던 동안 골격 위반은 어느 재생성 경로로도 닿지 않았다 - 지목
+            // 재생성은 단계 섹션만 열고, 귀속 실패의 폴백인 전량 재생성조차 lastSkeleton을
+            // 남겨 둔다(그 자리 주석이 "골격이 원인이라는 신호가 없다"고 적는다). 반복
+            // 실행 판3에서 깨진 mermaid 하나가 글자 하나 안 바뀐 채 6회차를 전부 태운 것이
+            // 그 결과다.
+            SkeletonRevision? pendingSkeletonRevision = null;
+            // 골격이 연속 몇 회 지목됐는지(§3-8 에스컬레이션의 골격판). 2에 닿으면
+            // 패치를 포기하고 백지로 다시 쓴다 - 「최소 변경만 하고 근본 결함을 안
+            // 고친다」가 패치 고유의 실패 모드이고, 그 상태로 수리 예산을 계속 태우면
+            // 안 되기 때문이다. 단계 쪽 repeatedDefects와 같은 규칙이다.
+            var skeletonRepeatCount = 0;
             // 같은 단계가 같은 결함으로 연속 몇 회 지목됐는지(§3-8 에스컬레이션).
             // pendingDefectiveSteps가 채워질 때마다(L1 귀속·L2 Critic 지목) 갱신한다 -
             // 지목된 단계는 +1, 지목에서 빠진 단계는 0으로 되돌린다. 값이 2 이상이면
@@ -2020,7 +2034,8 @@ namespace ReSet.Core.Services
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
                                 pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, currentBrainstorming,
-                                specReturnCodes, specTargetTables, cancellationToken, repeatedDefects);
+                                specReturnCodes, specTargetTables, cancellationToken, repeatedDefects,
+                                pendingSkeletonRevision);
 
                             if (split != null)
                             {
@@ -2049,6 +2064,10 @@ namespace ReSet.Core.Services
                         }
 
                         pendingDefectiveSteps.Clear();
+                        // 골격 수리 요청도 이번 회차의 생성이 소비했다. 남겨 두면 다음
+                        // 회차가 이유 없이 골격을 다시 만든다 - 지목이 회차를 넘어
+                        // 새는 것을 pendingDefectiveSteps와 같은 자리에서 막는다.
+                        pendingSkeletonRevision = null;
 
                         if (splitMarkdown == null)
                         {
@@ -2217,6 +2236,26 @@ namespace ReSet.Core.Services
                         }
                     }
 
+                    // 골격에 귀속된 위반의 메시지. 골격 수리 프롬프트가 이것만 싣는다 -
+                    // 단계에 귀속된 위반까지 실으면 골격을 그 단계 결함까지 고치라고
+                    // 떠미는 셈이고, 그것은 골격이 할 수 있는 일이 아니다.
+                    var skeletonErrors = new List<string>();
+
+                    void AddSkeletonOwner(DetailedError detail)
+                    {
+                        var message = detail.Message ?? string.Empty;
+                        if (message.Length > 0 && !skeletonErrors.Contains(message, StringComparer.Ordinal))
+                        {
+                            skeletonErrors.Add(message);
+                        }
+                    }
+
+                    // 검사들이 실제로 읽은 문서로 귀속한다. PostProcessMarkdown이 mermaid
+                    // 블록 안을 손보므로(노드 라벨 인용 정규화), 원본으로 대조하면 그
+                    // 블록을 되찾지 못한다 - 검사가 본 것과 귀속이 보는 것이 갈라지면
+                    // 안 된다. 그 밖의 자리는 두 문서가 같다.
+                    var attributionSource = l1Result.CleansedMarkdown ?? consolidatedPlan;
+
                     foreach (var detail in l1Result.DetailedErrors)
                     {
                         switch (detail.Type)
@@ -2234,18 +2273,41 @@ namespace ReSet.Core.Services
                                 }
                                 break;
 
+                            case ErrorType.HeaderMissing:
+                                // 필수 H2 넷은 전부 골격이 쓴다(Skeleton Contract의
+                                // "Write ALL four mandatory H2 sections in full"). 단계
+                                // 섹션을 다시 만들어서는 절대 고쳐지지 않는 위반이다.
+                                AddSkeletonOwner(detail);
+                                break;
+
+                            case ErrorType.MermaidCliError:
+                                {
+                                    // 이 유형은 메시지가 mermaid 컴파일 로그라 백틱 토큰이
+                                    // 하나도 없다 - 어휘 검색은 항상 빈 어휘를 내고 귀속이
+                                    // 구조적으로 불가능했다. 블록 본문을 문서에서 되찾아
+                                    // 구역을 판정한다(반복 실행 판3의 7회 발화 전부가 이
+                                    // 부류였고, 그 판의 골격은 첫 실패 이후 한 번도 다시
+                                    // 만들어지지 않았다).
+                                    var located = L1ViolationAttribution.AttributeBlock(
+                                        attributionSource, detail.RawContext, currentSteps);
+                                    foreach (var code in located.StepCodes) AddOwner(code);
+                                    if (located.Skeleton) AddSkeletonOwner(detail);
+                                    break;
+                                }
+
                             default:
                                 foreach (var lexeme in MechanicalValidator.ViolationLexemes(detail))
                                 {
                                     // 체계적 위반(규칙 3-1/10류)은 한 어휘가 여러 단계
                                     // 섹션에 나타난다 - 첫 발견 하나로 멈추면 나머지
                                     // 단계는 영영 얼어붙는다(최종 whole-branch 리뷰,
-                                    // Important 5). 귀속되는 단계 전부를 연다.
-                                    foreach (var code in L1ViolationAttribution.AttributeByLexeme(
-                                        consolidatedPlan, lexeme, currentSteps))
-                                    {
-                                        AddOwner(code);
-                                    }
+                                    // Important 5). 귀속되는 자리 전부를 연다.
+                                    var attribution = L1ViolationAttribution.Attribute(
+                                        attributionSource, lexeme, currentSteps);
+                                    foreach (var code in attribution.StepCodes) AddOwner(code);
+                                    // 같은 어휘가 단계와 골격에 함께 있으면 둘 다 연다.
+                                    // 한쪽만 고치면 다음 회차에 같은 위반으로 다시 실패한다.
+                                    if (attribution.Skeleton) AddSkeletonOwner(detail);
                                 }
                                 break;
                         }
@@ -2257,6 +2319,12 @@ namespace ReSet.Core.Services
                     // 여기서 다시 계산하지 않고 그 결과만 반영한다.
                     foreach (var code in codeAttribution.StepCodes) AddOwner(code);
 
+                    // 골격 수리는 재사용할 골격과 섹션 캐시가 둘 다 있을 때만 뜻이 있다.
+                    // 하나라도 없으면(단일 호출 폴백 회차, 목차 재수립 직후) 그 회차는
+                    // 어차피 문서를 통째로 만드는 회차이고, 그것은 채점 예산을 쓰는
+                    // 전량 재생성이다 - 골격 수리로 위장해 L1 예산으로 돌리면 안 된다.
+                    var canRepairSkeleton = skeletonErrors.Count > 0 && lastSkeleton != null && lastStepSections != null;
+
                     // pendingDefectiveSteps가 이번 회차의 최종값이 된 직후 - 다음
                     // 회차의 GenerateBySplitAsync가 이 값을 defectiveSteps로 그대로
                     // 받는다(§3-8).
@@ -2266,19 +2334,42 @@ namespace ReSet.Core.Services
                     // 예산을 쓰고 채점 예산(attempt)을 건드리지 않는다. 전량 재생성
                     // (귀속 실패)은 채점 대상 문서를 새로 만드는 일이므로 채점 예산을
                     // 쓴다 - 예산 분리 이전(단일 _maxAttempts) 동작과 같아 회귀가 아니다.
-                    bool attributedToSteps = pendingDefectiveSteps.Count > 0;
-                    bool canRetry = attributedToSteps
+                    bool attributed = pendingDefectiveSteps.Count > 0 || canRepairSkeleton;
+                    bool canRetry = attributed
                         ? l1RepairAttempt + 1 <= _maxL1RepairAttempts
                         : _maxAttempts == -1 || attempt < _maxAttempts;
 
                     if (canRetry)
                     {
-                        if (attributedToSteps)
+                        if (attributed)
                         {
                             l1RepairAttempt++;
+
+                            var repairTargets = new List<string>();
+                            if (canRepairSkeleton)
+                            {
+                                // 같은 자리가 연속으로 다시 지목되면 패치를 포기하고
+                                // 백지로 올린다 - 단계 패치의 에스컬레이션과 같은 규칙이다
+                                // (§3-8). 백지는 목차에서 다시 만들므로 단계 목록 표와
+                                // 오류 코드 표가 목차 기준으로 재구성되고, 동결된 섹션도
+                                // 같은 목차에서 나왔으므로 두 표의 출처는 여전히 하나다.
+                                skeletonRepeatCount++;
+                                var blankRewrite = skeletonRepeatCount >= 2;
+                                pendingSkeletonRevision = new SkeletonRevision(
+                                    string.Join("\n", skeletonErrors),
+                                    blankRewrite ? null : lastSkeleton);
+                                repairTargets.Add(blankRewrite ? "골격(백지 재작성)" : "골격");
+                            }
+                            else
+                            {
+                                skeletonRepeatCount = 0;
+                            }
+
+                            repairTargets.AddRange(pendingDefectiveSteps);
+
                             _userInteraction.NotifyStatus(
-                                $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", pendingDefectiveSteps)} 단계로 " +
-                                "좁혀 그 단계만 다시 만듭니다.");
+                                $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", repairTargets)} 자리로 " +
+                                "좁혀 그 자리만 다시 만듭니다.");
                         }
                         else
                         {
@@ -2308,10 +2399,19 @@ namespace ReSet.Core.Services
                             // null로 넘겨 canTargetSections를 함께 거짓으로 만드는
                             // 것)를 쓰고 있어, 그 전례를 그대로 따른다.
                             //
-                            // lastSkeleton은 건드리지 않는다 - 골격이 원인이라는
-                            // 신호가 없다(SkeletonDefective가 아니다). 골격까지
-                            // 새로 만들면 이 경로의 비용이 §3-6이 분리해 낸 이득을
-                            // 다시 합쳐 버린다.
+                            // 골격도 함께 버린다. 예전에는 "골격이 원인이라는 신호가
+                            // 없다"며 lastSkeleton을 남겼는데, 그 판단이 이 결함의
+                            // 절반이었다 - 자리를 못 찾은 위반은 골격에 있을 수도
+                            // 있고, 남겨 두면 그 부류는 어느 재생성으로도 닿지
+                            // 못한다(반복 실행 판3: 깨진 다이어그램이 글자 하나 안
+                            // 바뀐 채 6회차를 태웠다). 이제 골격에 자리가 잡히는
+                            // 위반은 위쪽 골격 수리 경로가 L1 예산으로 먼저 가져가므로,
+                            // 여기 남는 것은 "어디인지 모른다"뿐이고 그때의 정직한
+                            // 답은 문서 전체다. §3-6이 분리해 낸 이득은 그 경로에
+                            // 그대로 남아 있다 - 이 갈래는 애초에 섹션 전량을 다시
+                            // 만들어 골격 호출 하나보다 훨씬 비싸다.
+                            lastSkeleton = null;
+                            lastSkeletonResult = null;
                             lastStepSections = null;
                         }
 
@@ -3687,7 +3787,11 @@ namespace ReSet.Core.Services
             // 호출부(연속 회차 개념이 없다)가 그 경우다. 값이 2 이상인 단계는
             // previousBody를 넘기지 않고 백지로 다시 쓴다 - 패치가 최소 변경만
             // 하고 근본 결함을 못 고치는 상태로 예산을 계속 태우지 않기 위해서다.
-            IReadOnlyDictionary<string, int>? repeatedDefects = null)
+            IReadOnlyDictionary<string, int>? repeatedDefects = null,
+            // 골격 자신이 고쳐야 할 자리일 때만 채워진다(L1 위반이 단계 섹션 밖에
+            // 있는 경우). 채워지면 골격을 재사용하지 않고 다시 만들되, 섹션은
+            // defectiveSteps가 비어 있는 한 동결된 채로 남는다.
+            SkeletonRevision? skeletonRevision = null)
         {
             // 골격 재사용 여부와 "지목 단계만 재생성" 여부는 독립이다. 예전에는
             // 하나의 targeted 판정으로 묶여 있어서, previousSkeleton이 없으면(예:
@@ -3696,8 +3800,10 @@ namespace ReSet.Core.Services
             // 결함이었다(§3-6).
             //
             // reuseSkeleton: 골격 호출 자체를 건너뛸지. previousSkeleton이 있어야만
-            // 가능하다.
-            var reuseSkeleton = previousSkeleton != null && previousSkeletonResult != null;
+            // 가능하다. 골격 수리 회차(skeletonRevision)는 고쳐야 하는 것이 골격
+            // 자신이므로 재사용하지 않는다 - 그 경우에도 섹션은 지목이 없는 한
+            // 동결된 채 남는다(canTargetSections는 아래에서 따로 판정한다).
+            var reuseSkeleton = previousSkeleton != null && previousSkeletonResult != null && skeletonRevision == null;
             // canTargetSections: 섹션을 통째로 다시 만들지, 지목된 것만 만들지.
             // 재사용할 섹션 캐시(previousSections)가 있어야만 가능하다 - 캐시가
             // 없으면(첫 생성이거나 재설계 직후 캐시가 통째로 지워진 경우) 지목이
@@ -3725,8 +3831,9 @@ namespace ReSet.Core.Services
                 try
                 {
                     var skeletonResult = await WrapWithProgress(
-                        _consolidatorService.GenerateBatchPlanSkeletonAsync(
-                            steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort, brainstorming, stepInterfaces, cancellationToken),
+                        GenerateSkeletonWithGuardAsync(
+                            steps, planStructure, specs, targetLanguage, jobName, brainstorming,
+                            stepInterfaces, skeletonRevision, cancellationToken),
                         progressScope, "phase3");
 
                     if (skeletonResult == null || string.IsNullOrWhiteSpace(skeletonResult.Content))
@@ -3886,6 +3993,79 @@ namespace ReSet.Core.Services
                 skeleton,
                 sections,
                 floorViolations);
+        }
+
+        /// <summary>
+        /// 골격을 한 번 만들고, 그것이 수리(패치) 회차였다면 <see cref="SkeletonRevisionGuard"/>로
+        /// 정합을 확인한다. 앵커를 잃었으면 <b>잃은 것을 이름으로 대고</b> 한 번만 다시 부른다.
+        ///
+        /// [왜 재시도가 한 번인가]
+        /// 이것은 <c>GenerateStepSectionWithFloorRetryAsync</c>의 대칭이다 - 그쪽도 하한
+        /// 검사에 걸리면 무엇이 모자란지 대고 다시 부른다. 상한을 두지 않으면 모델이 계속
+        /// 표를 흘리는 동안 유료 호출이 무한히 도는 경로가 열린다.
+        ///
+        /// [왜 두 번째도 실패하면 그냥 채택하는가]
+        /// 여기서 결과를 버리면 그 회차는 <b>수리 예산을 쓰고도 문서가 바이트 그대로</b>
+        /// 남는다 - 설계서 §3-2가 "예산을 쓰는 회차는 무언가를 바꿔야 한다"로 금지한
+        /// 바로 그 상태다. 잃은 앵커는 다음 회차의 L1(오류 코드 누락·헤더 누락)이 자기
+        /// 경로로 다시 잡고, 그래도 점수가 떨어지면 §3-1의 회귀 롤백이 되돌린다. 그래서
+        /// 여기서는 조용히 넘기지 않고 <b>알리기만</b> 한다.
+        /// </summary>
+        private async Task<AiResult?> GenerateSkeletonWithGuardAsync(
+            IReadOnlyList<BatchStepPlan> steps,
+            string planStructure,
+            System.Collections.Generic.List<(string FileName, string Content)> specs,
+            string targetLanguage,
+            string jobName,
+            string? brainstorming,
+            IReadOnlyList<StepInterface> stepInterfaces,
+            SkeletonRevision? revision,
+            CancellationToken cancellationToken)
+        {
+            var result = await _consolidatorService.GenerateBatchPlanSkeletonAsync(
+                steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort,
+                brainstorming, stepInterfaces, revision, cancellationToken);
+
+            // 백지 재작성(PreviousSkeleton이 null)에는 가드를 걸지 않는다 - 그 회차는
+            // 애초에 "직전 골격을 보존한다"는 계약이 없다(에스컬레이션이 그 계약을
+            // 일부러 버린 것이다).
+            if (revision?.PreviousSkeleton == null || result == null || string.IsNullOrWhiteSpace(result.Content))
+            {
+                return result;
+            }
+
+            var lost = SkeletonRevisionGuard.FindLostAnchors(revision.PreviousSkeleton, result.Content, steps);
+            if (lost.Count == 0) return result;
+
+            _userInteraction.NotifyStatus(
+                $"[yellow]{jobName}[/] - 고쳐진 골격이 {string.Join(", ", lost)}을(를) 잃어 " +
+                "그 자리를 대고 한 번 더 요청합니다.");
+
+            var retryFeedback =
+                revision.Feedback + "\n\n" +
+                "[Anchors You Dropped — restore them verbatim]\n" +
+                string.Join("\n", lost.Select(anchor => "- " + anchor)) + "\n" +
+                "These belong to the frozen step sections' contract. Reproduce them exactly as they were.";
+
+            var retried = await _consolidatorService.GenerateBatchPlanSkeletonAsync(
+                steps, planStructure, specs, targetLanguage, jobName, _consolidatorEffort,
+                brainstorming, stepInterfaces, revision with { Feedback = retryFeedback }, cancellationToken);
+
+            if (retried == null || string.IsNullOrWhiteSpace(retried.Content)) return result;
+
+            var stillLost = SkeletonRevisionGuard.FindLostAnchors(revision.PreviousSkeleton, retried.Content, steps);
+            if (stillLost.Count > 0)
+            {
+                _userInteraction.NotifyWarnings(
+                    jobName,
+                    new List<string>
+                    {
+                        $"고쳐진 골격이 {string.Join(", ", stillLost)}을(를) 여전히 잃은 채로 채택됩니다 - " +
+                        "동결된 단계 섹션과 어긋날 수 있습니다."
+                    });
+            }
+
+            return retried;
         }
 
         /// <summary>
