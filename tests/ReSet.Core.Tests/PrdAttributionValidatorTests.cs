@@ -46,6 +46,31 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
 2. 미집계 건을 조회한다.
 ";
 
+
+        private const string SpecWithCrudTable = @"## 개요
+
+일별 정산 마감을 수행한다.
+
+## 파라미터 목록
+
+| 이름 | 타입 |
+| :--- | :--- |
+| @BaseDate | char(8) |
+
+## CRUD 분석
+
+TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
+
+| 대상 | 연산 | 비고 |
+| :--- | :--- | :--- |
+| TB_SETTLE_DAILY | INSERT 1 | 상수 9를 대입합니다. |
+
+## 로직 흐름 요약
+
+1. 기준일자를 검증한다.
+2. 미집계 건을 조회한다.
+";
+
         private static string PrdWith(params string[] rows) =>
             "## 배경 및 목적\n\n| ID | 요구사항 | 근거 | 확신도 |\n| :--- | :--- | :--- | :--- |\n"
             + "| REQ-BG-01 | 일별 정산을 마감한다 | ## 개요 > \"일별 정산 마감\" | 도출 |\n\n"
@@ -285,5 +310,36 @@ TB_SETTLE_DAILY에 INSERT 한다. 중복 검사를 먼저 수행한다.
                 result.Defects,
                 d => d.Type == PrdDefectType.EvidenceSourceNotAllowed && d.RequirementId == "REQ-FUNC-01");
         }
+
+        [Fact]
+        public void Validate_ShouldStayClean_WhenTheExcerptIsASpecTableRowWithPipes()
+        {
+            // 도입 스윕(2026-09-04) 실측 회귀. 프롬프트가 "verbatim 인용"을 요구하고
+            // Spec의 알찬 사실이 표 안에 있으므로 모델은 표 행을 통째로 인용한다.
+            // 되돌리면 이 행 하나가 결함 둘(확신도 어휘 + 근거 형식)을 내는데,
+            // **둘 다 거짓 진단**이다 - 저자는 확신도를 '도출'로 적었고 근거 칸도
+            // 계약 형식이다. 그 거짓이 사람용 배너와 교정 재호출 피드백에 함께 실렸다.
+            var row = "| REQ-DATA-01 | 지급불가 상태값을 일치시킨다 "
+                + "| ## CRUD 분석 > \"TB_SETTLE_DAILY | INSERT 1 | 상수 9를 대입합니다.\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), SpecWithCrudTable);
+
+            Assert.Empty(result.Defects);
+        }
+
+        [Fact]
+        public void Validate_ShouldStayClean_WhenTheExcerptEscapesItsPipes()
+        {
+            // 프롬프트가 시키는 이스케이프 표기(`\|`)로 적힌 같은 인용. 두 표기가 모두
+            // 통해야 프롬프트를 고치기 전에 나온 문서와 고친 뒤에 나온 문서가 같은
+            // 판정을 받는다.
+            var row = "| REQ-DATA-01 | 지급불가 상태값을 일치시킨다 "
+                + "| ## CRUD 분석 > \"TB_SETTLE_DAILY \\| INSERT 1 \\| 상수 9를 대입합니다.\" | 도출 |";
+
+            var result = PrdAttributionValidator.Validate(PrdWith(row), SpecWithCrudTable);
+
+            Assert.Empty(result.Defects);
+        }
+
     }
 }
