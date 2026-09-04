@@ -22,29 +22,6 @@ public sealed record SpAnalysisOutcome
     public IReadOnlyList<string> PersistenceErrors { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// 참조분석 OFF 경로. 단일 객체 파이프라인 결과를 옮긴다.
-    /// 저장은 호출부가 하므로 Persistence는 NotAttempted다.
-    /// </summary>
-    public static SpAnalysisOutcome FromSingleObjectPipeline(CodeObjectPipelineResult result)
-    {
-        ArgumentNullException.ThrowIfNull(result);
-
-        return new SpAnalysisOutcome
-        {
-            SpecMarkdown = result.SpecMarkdown,
-            Definition = result.SpDef,
-            Review = result.Review,
-            ThinkingText = result.ThinkingText,
-            Outcome = result.Outcome,
-            Scope = AnalysisScope.Transitive,
-            Completion = GraphCompletion.Complete,
-            FromCache = result.FromCache,
-            AnalyzedAt = result.AnalyzedAt,
-            Persistence = ArtifactPersistence.NotAttempted
-        };
-    }
-
-    /// <summary>
     /// 오케스트레이터 경로. 그래프에서 루트 분석 결과를 찾아 옮긴다.
     /// 캐시 상태는 루트 노드의 것이다 — 노드마다 다른 값을 하나로 접으면
     /// 어느 쪽으로 접어도 거짓이 된다.

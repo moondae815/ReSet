@@ -18,38 +18,7 @@ public sealed class SpAnalysisOutcomeTests
     }
 
     [Fact]
-    public void FromSingleObjectPipeline_MarksTransitiveScopeAndLeavesPersistenceToTheCaller()
-    {
-        var definition = new SpDefinition { Schema = "dbo", Name = "USP_A" };
-        var review = new ReviewResult { ScoreAccuracy = 9 };
-        var analyzedAt = new DateTime(2026, 8, 1, 14, 22, 3);
-        var result = new CodeObjectPipelineResult
-        {
-            SpecMarkdown = "# 본문",
-            SpDef = definition,
-            Review = review,
-            ThinkingText = "reasoning",
-            Outcome = VerificationOutcome.Passed,
-            FromCache = true,
-            AnalyzedAt = analyzedAt
-        };
-
-        var outcome = SpAnalysisOutcome.FromSingleObjectPipeline(result);
-
-        Assert.Equal("# 본문", outcome.SpecMarkdown);
-        Assert.Same(definition, outcome.Definition);
-        Assert.Same(review, outcome.Review);
-        Assert.Equal("reasoning", outcome.ThinkingText);
-        Assert.Equal(VerificationOutcome.Passed, outcome.Outcome);
-        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
-        Assert.Equal(GraphCompletion.Complete, outcome.Completion);
-        Assert.True(outcome.FromCache);
-        Assert.Equal(analyzedAt, outcome.AnalyzedAt);
-        Assert.Equal(ArtifactPersistence.NotAttempted, outcome.Persistence);
-    }
-
-    [Fact]
-    public void FromDependencyGraph_MarksDirectScopeAndCarriesGraphPersistence()
+    public void FromDependencyGraph_CarriesGraphPersistenceAndTheCallersScope()
     {
         var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Root", CodeObjectType.Procedure);
         var definition = new SpDefinition { ObjectKey = rootKey, Schema = "dbo", Name = "USP_Root" };
@@ -110,10 +79,13 @@ public sealed class SpAnalysisOutcomeTests
             }
         };
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Transitive);
 
         Assert.False(outcome.FromCache);
         Assert.Null(outcome.AnalyzedAt);
+        // scope를 되읽는 단언이 이 파일에서 전부 Direct면 구현을 하드코딩으로 되돌려도
+        // 스위트가 초록이다. 한 자리는 다른 값을 넘겨 그 뮤턴트를 죽인다.
+        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
     }
 
     [Fact]
