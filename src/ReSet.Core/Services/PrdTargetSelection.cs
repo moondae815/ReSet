@@ -28,8 +28,26 @@ namespace ReSet.Core.Services
         /// </summary>
         public static IReadOnlyList<PrdTarget> Resolve(
             IReadOnlyList<PrdTarget> targets, IReadOnlyList<string> pickedDisplayLabels)
+            => Resolve(targets, pickedDisplayLabels, ToDisplayLabel);
+
+        /// <summary>
+        /// 선택된 표시 문자열들을 <paramref name="labelSelector"/>가 만든 표시 문자열과
+        /// 정확히 일치하는 대상으로만 되짚는다.
+        ///
+        /// CLI 쪽에서 마크업 이스케이프가 걸린 문자열을 선택지로 보여줄 때 쓴다 - Core는
+        /// Spectre.Console을 참조할 수 없어 이스케이프 자체는 여기서 못 하지만, "선택지를
+        /// 만든 함수"와 "되짚을 때 쓰는 함수"가 다르면 이스케이프된 선택 문자열이 이스케이프
+        /// 안 된 사전 키와 어긋나 전부 조용히 매칭 실패한다(선택했는데 아무 일도 안 일어나는
+        /// 침묵 결함 - 되짚기 실패보다 더 위험하다). 그래서 호출부는 AddChoices에 넘긴 것과
+        /// 정확히 같은 <paramref name="labelSelector"/> 함수 하나를 여기에도 넘겨야 한다 -
+        /// 선택지 생성과 키 생성이 같은 함수 인스턴스에서 나오도록 강제한다.
+        /// </summary>
+        public static IReadOnlyList<PrdTarget> Resolve(
+            IReadOnlyList<PrdTarget> targets,
+            IReadOnlyList<string> pickedDisplayLabels,
+            Func<PrdTarget, string> labelSelector)
         {
-            var byDisplayLabel = targets.ToDictionary(ToDisplayLabel, t => t, StringComparer.Ordinal);
+            var byDisplayLabel = targets.ToDictionary(labelSelector, t => t, StringComparer.Ordinal);
 
             var resolved = new List<PrdTarget>();
             foreach (var picked in pickedDisplayLabels)
