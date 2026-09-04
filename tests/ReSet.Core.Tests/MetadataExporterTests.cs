@@ -284,12 +284,14 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// rawPromptContext 인자를 넘기지 않아도 definition.RawPromptContext가 쓰인다.
-        /// 그리고 그 결과는 metadata.json·dependency-manifest.json과 같은 집에 놓인다 -
-        /// prompt-context.md는 정본 DDL이 아니라 회차별 분석 흔적이기 때문이다.
+        /// rawPromptContext 인자 생략은 예외가 아니라 실제 경로다 - 유일한 생산 호출자
+        /// (DependencyAnalysisOrchestrator.cs:473)가 그 인자를 넘기지 않으므로,
+        /// definition.RawPromptContext 폴백이 끊기면 모든 회차의 프롬프트 원문이 빈다.
+        /// 저장 자리(metadata.json과 같은 집)도 함께 확인한다 - prompt-context.md는
+        /// 정본 DDL이 아니라 회차별 분석 흔적이라 정본 폴더에 남으면 안 된다.
         /// </summary>
         [Fact]
-        public async Task ExportCodeObjectArtifactsAsync_WritesPromptContextNextToManifest()
+        public async Task ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted()
         {
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
             var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Prompt", CodeObjectType.Procedure);
