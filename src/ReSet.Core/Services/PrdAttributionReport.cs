@@ -13,6 +13,10 @@ namespace ReSet.Core.Services
         ///
         /// 기계가 확인한 것은 「인용이 실재하는가」까지이고 「요구와 근거가 대응하는가」는
         /// 확인하지 않았다. 그 경계를 적지 않으면 독자가 검사를 실제보다 강하게 믿는다.
+        ///
+        /// 「모든」이라 쓰지 않는다: PrdDocumentParser는 PrdSectionContract가 정한 다섯 헤딩
+        /// 사이의 표만 읽는다. 모델이 그 계약 밖에 요구 표를 더 만들면 그 행은 파서도,
+        /// 따라서 이 검사도 보지 못한다 — 배너는 「검사된」 항목만큼만 말할 수 있다.
         /// </summary>
         public static string BuildBanner(PrdValidationResult result)
         {
@@ -21,7 +25,7 @@ namespace ReSet.Core.Services
             if (result.IsValid)
             {
                 sb.AppendLine("> [!NOTE]");
-                sb.AppendLine("> **귀속 검사**: 모든 요구 항목의 근거 인용이 원본 명세서에 **실재**함을 기계로 확인했습니다.");
+                sb.AppendLine("> **귀속 검사**: 검사된 요구 항목의 근거 인용이 원본 명세서에 **실재**함을 기계로 확인했습니다.");
             }
             else
             {

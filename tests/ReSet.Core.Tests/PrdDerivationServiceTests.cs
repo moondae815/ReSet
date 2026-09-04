@@ -80,6 +80,16 @@ TB_SETTLE_DAILY에 INSERT 한다.
             Assert.Equal(Path.Combine(_docsDir, "Prd.md"), outcome.PrdPath);
             Assert.True(File.Exists(outcome.PrdPath));
             Assert.True(outcome.AttributionClean);
+
+            var written = await File.ReadAllTextAsync(outcome.PrdPath);
+
+            // 회귀 방지: 배너가 프런트매터 앞으로 옮겨지면 "---"가 오프셋 0을 잃어
+            // YAML로 파싱되지 않고 가로줄로 렌더링된다.
+            Assert.StartsWith("---", written);
+
+            // 회귀 방지: BuildBanner 호출이 IsValid 분기 안으로 들어가면 결함이
+            // 없는 문서에서 미검증 공개 문단이 통째로 사라진다.
+            Assert.Contains("미검증", written);
         }
 
         [Fact]
