@@ -3688,10 +3688,13 @@
   본다. 현재 그런 사용은 없다.
 - **편의 생성자의 파이프라인 인자 매핑에 단위 테스트가 없다 (2026-09-04)** —
   `DependencyAnalysisOrchestrator`의 `(metadataService, pipelineOrchestrator)` 생성자가
-  `directDependenciesOnly: request.AnalyzeReferencedCodeObjects`로 넘기는 한 줄. 오케스트레이터
-  테스트는 전부 러너를 주입하는 4인자 생성자를 쓰는데 **프로덕션은 편의 생성자를 쓴다.**
-  플래그가 러너까지 도달하는 것은 테스트가 지키지만, 그 값이 파이프라인 인자로 옳게
-  옮겨지는 것은 지키지 못한다 — 뮤턴트 `directDependenciesOnly: true`가 전 테스트를 통과한다.
+  `directDependenciesOnly: request.AnalyzeReferencedCodeObjects`로 넘기는 한 줄.
+  플래그를 뒤집는 테스트는 전부 러너를 주입하는 생성자를 쓰므로 이 람다를 지나지 않는다.
+  **확장할 자리는 이미 있다** — `DependencyAnalysisOrchestratorTests`의
+  `AnalyzeAsync_ProductionPipelineWiring_ResolvesExternalObjectCacheUnderExternalDirectory`
+  하나가 편의 생성자와 진짜 파이프라인으로 도는데, 요청이 `Request()`의 기본값(플래그 참)이라
+  **두 값을 구분하지 못한다.** 그래서 뮤턴트 `directDependenciesOnly: true`가 전 테스트를
+  통과한다. 그 테스트에 플래그를 끈 짝을 더하는 것이 가장 짧은 길이다.
 - **`FormatTableSchemaToMarkdown`의 인덱스 표와 기본값 셀이 미보호 (2026-09-04)** —
   `MetadataExporter`의 `## 인덱스 정보` 표(다섯 셀·삼항 둘·`string.Join`)를 단언하는 테스트가
   하나도 없고, 컬럼 표의 기본값 셀도 비-null 픽스처가 없어 값이 한 번도 렌더를 통과하지
@@ -3701,6 +3704,13 @@
   계약 테스트 둘은 해석기만 잠그므로, `Program.cs`를 `Path.Combine(outputDir, "Procedures", …)`
   손조립으로 되돌려도 전부 초록이다. 저장소에 소스 스캐너 정책 테스트 관례가 있다
   (`tests/ReSet.Core.Tests/*PolicyScanner.cs`).
+- **`VerificationPipelineOrchestrator.CreateProcedureKey`가 프로덕션 호출부 0인 채 `public static`으로
+  남는다 (2026-09-04)** — 결함이 아니라 **미등재 결정**이다. 이 조립을 쓰던 비재귀 경로가
+  오케스트레이터로 통일되며 사라져, 지금 부르는 것은 `PipelineTestExtensions` 하나뿐이다.
+  「프로덕션과 테스트가 같은 조립을 쓰게 하는 단일 지점」이라는 원래 근거는 프로덕션 쪽이
+  없어진 순간 함께 사라졌으므로 선택지는 둘이다 — 조립을 그 어댑터 안으로 옮기고 public API를
+  내리거나, 프로덕션 호출부가 돌아올 것을 보고 그대로 두거나. 지금은 후자이고 메서드 주석이
+  그 사실을 적는다. 적어 두지 않으면 다음 사람이 같은 판단을 처음부터 다시 한다.
 
 ### 그 밖
 
