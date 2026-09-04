@@ -204,7 +204,7 @@ git commit -m "fix: 캐시 히트가 Thinking.md의 추론 기록을 지우지 �
 - [ ] **Step 1: 기존 경로 단언 3건을 새 자리로 고치고, 옛 자리 역단언을 더한다**
 
 `tests/ReSet.Core.Tests/MetadataExporterTests.cs`에서 아래 세 줄을 찾아 바꾼다. 세 줄은
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl`(`:308` 부근),
+`ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted`(`:287`),
 `ExportCodeObjectArtifactsAsync_WritesMetadataJsonNextToManifest`(`:380` 부근),
 `ExportCodeObjectArtifactsAsync_PreservesExistingPromptContextWhenPromptIsEmpty`(`:403` 부근)에 있다.
 
@@ -226,9 +226,23 @@ var promptPath = Path.Combine(
     outputRoot, "Procedures", "dbo.USP_CacheHit", "raw", "prompt-context.md");
 ```
 
-첫 번째 테스트는 이름이 자리와 어긋나므로 함께 고친다 —
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl` →
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToManifest`.
+> **정정(2026-09-04, 실행 중 발견).** 이 계획서 초판은 `:287`의 테스트 이름을
+> `ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl`이라고 적고
+> 그것을 `…NextToManifest`로 고치라고 지시했다. **그런 이름의 테스트는 저장소에 없다** —
+> 계획서를 쓸 때 메서드 시그니처가 안 보이는 창으로 본문만 읽고 이름을 지어냈다.
+> `:287`의 실제 이름은 `ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted`이고,
+> 그 이름이 말하는 것은 **자리**가 아니라 `rawPromptContext` 인자를 생략하면
+> `definition.RawPromptContext`가 쓰인다는 **다른 성질**이다.
+>
+> 따라서 **이름은 바꾸지 않는다.** 리뷰가 그렇게 확정했고, 근거는 일반론보다 강했다 —
+> 인자 생략 폴백은 **유일 커버리지**이면서 실사용 경로다(유일한 프로덕션 호출부
+> `DependencyAnalysisOrchestrator.cs:473`이 `rawPromptContext`를 생략한다). 반면 자리는
+> 형제 테스트 둘이 이미 독립적으로 잠그고 있다. 즉 이 이름을 자리 쪽으로 바꾸면
+> **세 번 덮인 성질을 가리키는 이름 아래에서 유일하게 덮인 성질이 깨지게** 된다.
+>
+> 역단언(`Objects/`에 안 생긴다)과 폴백 사실을 적은 XML doc 주석은 **남긴다.**
+> 자리의 부재에 이름을 주고 싶으면 별도 테스트로 만든다
+> (`…LeavesNoPromptContextInCanonicalFolder`).
 
 그리고 그 테스트의 `Assert.Equal("actual prompt body", …)` 바로 아래에 역단언을 더한다.
 
