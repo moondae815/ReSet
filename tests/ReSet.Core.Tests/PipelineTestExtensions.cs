@@ -10,8 +10,8 @@ namespace ReSet.Core.Tests;
 /// </summary>
 /// <remarks>
 /// 키 조립은 반드시 <see cref="VerificationPipelineOrchestrator.CreateProcedureKey"/>를
-/// 거친다. 여기서 사본을 만들면 이 어댑터를 쓰는 테스트들이 프로덕션이 아니라
-/// 사본을 검증하게 되고, 비재귀 경로를 지키는 테스트가 0개가 된다.
+/// 거친다. 그 메서드는 비재귀 경로가 오케스트레이터로 통일된 뒤로 호출부가 여기뿐이므로,
+/// 사본을 만들면 그것을 지나는 테스트가 0개가 된다.
 /// 반환 형태(튜플 평탄화)만이 이 파일이 갖는 테스트 전용 로직이다.
 /// </remarks>
 internal static class PipelineTestExtensions

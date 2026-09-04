@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
 using ReSet.Core.Models;
@@ -9,41 +8,6 @@ namespace ReSet.Core.Tests
 {
     public class MetadataExporterTests
     {
-        [Fact]
-        public async Task ExportRawMetadataAsync_ShouldCreateJsonFile_WhenSaveJsonIsTrue()
-        {
-            // Arrange
-            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter");
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-
-            var spDef = new SpDefinition
-            {
-                Schema = "dbo",
-                Name = "USP_TestExporter",
-                DdlText = "SELECT 1;"
-            };
-            var rawContext = "Test Context Header\nSELECT 1;";
-            
-            // IMetadataExporter 선언
-            IMetadataExporter exporter = new MetadataExporter();
-
-            // Act
-            await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, true, false, false);
-
-            // Assert
-            var expectedJsonPath = Path.Combine(testOutputDir, "raw", "metadata.json");
-            Assert.True(File.Exists(expectedJsonPath));
-
-            // Clean up
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-        }
-
         [Fact]
         public async Task AppendFeedbackToInstructionsAsync_ShouldAppendFeedback_WhenFileExists()
         {
@@ -67,160 +31,6 @@ namespace ReSet.Core.Tests
 
             // Clean up
             if (Directory.Exists(testOutputDir)) Directory.Delete(testOutputDir, true);
-        }
-
-        [Fact]
-        public async Task ExportRawMetadataAsync_ShouldIncludeDescriptionsInMarkdown_WhenSaveFilesIsTrue()
-        {
-            // Arrange
-            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_desc");
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-
-            var spDef = new SpDefinition
-            {
-                Schema = "dbo",
-                Name = "USP_TestExporterDesc",
-                DdlText = "SELECT 1;"
-            };
-            
-            var depInfo = new DependencyInfo
-            {
-                Schema = "dbo",
-                Name = "TBL_TestDesc",
-                Type = "USER_TABLE",
-                DiscoveryDepth = 1,
-                Description = "테스트용 테이블 설명"
-            };
-            depInfo.Columns.Add(new ColumnInfo
-            {
-                ColumnName = "COL_Test",
-                DataType = "INT",
-                IsNullable = false,
-                IsPrimaryKey = true,
-                Description = "테스트용 컬럼 설명"
-            });
-            spDef.Dependencies.Add(depInfo);
-
-            var rawContext = "Test Context Header";
-            IMetadataExporter exporter = new MetadataExporter();
-
-            // Act
-            await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, false, false, true);
-
-            // Assert
-            var expectedMdPath = Path.Combine(testOutputDir, "raw", "ddl", "tables", "dbo.TBL_TestDesc.md");
-            Assert.True(File.Exists(expectedMdPath));
-
-            var mdContent = await File.ReadAllTextAsync(expectedMdPath);
-            Assert.Contains("테스트용 테이블 설명", mdContent);
-            Assert.Contains("테스트용 컬럼 설명", mdContent);
-
-            // Clean up
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-        }
-
-        [Fact]
-        public async Task ExportRawMetadataAsync_ShouldSaveContext_WhenSaveContextIsTrue()
-        {
-            // Arrange
-            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_context");
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-
-            var spDef = new SpDefinition
-            {
-                Schema = "dbo",
-                Name = "USP_TestExporterContext",
-                DdlText = "SELECT 1;"
-            };
-            var rawContext = "Test Context Content";
-            IMetadataExporter exporter = new MetadataExporter();
-
-            // Act
-            await exporter.ExportRawMetadataAsync(spDef, rawContext, testOutputDir, false, true, false);
-
-            // Assert
-            var expectedContextPath = Path.Combine(testOutputDir, "raw", "prompt-context.md");
-            Assert.True(File.Exists(expectedContextPath));
-            var savedContext = await File.ReadAllTextAsync(expectedContextPath);
-            Assert.Contains(rawContext, savedContext);
-
-            // Clean up
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-        }
-
-        [Fact]
-        public async Task ExportRawMetadataAsync_ShouldExportProceduresAndFunctions_WhenSaveFilesIsTrue()
-        {
-            // Arrange
-            var testOutputDir = Path.Combine(Directory.GetCurrentDirectory(), "test_output_exporter_objects");
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
-
-            var spDef = new SpDefinition
-            {
-                Schema = "dbo",
-                Name = "USP_TestExporterObjects",
-                DdlText = "SELECT 1;"
-            };
-
-            var procDep = new DependencyInfo
-            {
-                Schema = "dbo",
-                Name = "USP_ChildProc",
-                Type = "SQL_STORED_PROCEDURE",
-                DiscoveryDepth = 2,
-                ReferencedDdlText = "CREATE PROCEDURE dbo.USP_ChildProc AS SELECT 2;"
-            };
-
-            var funcDep = new DependencyInfo
-            {
-                Schema = "dbo",
-                Name = "UFN_ChildFunc",
-                Type = "SQL_SCALAR_FUNCTION",
-                DiscoveryDepth = 2,
-                ReferencedDdlText = "CREATE FUNCTION dbo.UFN_ChildFunc() RETURNS INT AS BEGIN RETURN 1; END;"
-            };
-
-            spDef.Dependencies.Add(procDep);
-            spDef.Dependencies.Add(funcDep);
-
-            IMetadataExporter exporter = new MetadataExporter();
-
-            // Act
-            await exporter.ExportRawMetadataAsync(spDef, "dummy context", testOutputDir, false, false, true);
-
-            // Assert
-            var expectedProcPath = Path.Combine(testOutputDir, "raw", "ddl", "procedures", "dbo.USP_ChildProc.sql");
-            var expectedFuncPath = Path.Combine(testOutputDir, "raw", "ddl", "functions", "dbo.UFN_ChildFunc.sql");
-
-            Assert.True(File.Exists(expectedProcPath));
-            Assert.True(File.Exists(expectedFuncPath));
-
-            var procContent = await File.ReadAllTextAsync(expectedProcPath);
-            var funcContent = await File.ReadAllTextAsync(expectedFuncPath);
-
-            Assert.Equal(procDep.ReferencedDdlText, procContent);
-            Assert.Equal(funcDep.ReferencedDdlText, funcContent);
-
-            // Clean up
-            if (Directory.Exists(testOutputDir))
-            {
-                Directory.Delete(testOutputDir, true);
-            }
         }
 
         [Fact]
@@ -283,6 +93,13 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// rawPromptContext 인자 생략은 예외가 아니라 실제 경로다 - 유일한 생산 호출자
+        /// (DependencyAnalysisOrchestrator.cs:473)가 그 인자를 넘기지 않으므로,
+        /// definition.RawPromptContext 폴백이 끊기면 모든 회차의 프롬프트 원문이 빈다.
+        /// 저장 자리(metadata.json과 같은 집)도 함께 확인한다 - prompt-context.md는
+        /// 정본 DDL이 아니라 회차별 분석 흔적이라 정본 폴더에 남으면 안 된다.
+        /// </summary>
         [Fact]
         public async Task ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted()
         {
@@ -305,8 +122,13 @@ namespace ReSet.Core.Tests
                     DependencyArtifactMode.Reference,
                     outputRoot);
 
-                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_Prompt.Procedure", "raw", "prompt-context.md");
+                var promptPath = Path.Combine(outputRoot, "Procedures", "dbo.USP_Prompt", "raw", "prompt-context.md");
                 Assert.Equal("actual prompt body", await File.ReadAllTextAsync(promptPath));
+
+                // 정본 폴더에는 DDL만 남는다. 한 객체의 raw가 두 집으로 쪼개지면
+                // §11의 되짚는 순서("모델이 무엇을 봤나 → raw/prompt-context.md")가 거짓이 된다.
+                Assert.False(File.Exists(Path.Combine(
+                    outputRoot, "Objects", "dbo.USP_Prompt.Procedure", "raw", "prompt-context.md")));
             }
             finally
             {
@@ -377,7 +199,7 @@ namespace ReSet.Core.Tests
                     DependencyArtifactMode.Reference,
                     outputRoot);
 
-                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_EmptyPrompt.Procedure", "raw", "prompt-context.md");
+                var promptPath = Path.Combine(outputRoot, "Procedures", "dbo.USP_EmptyPrompt", "raw", "prompt-context.md");
                 Assert.True(File.Exists(promptPath));
                 Assert.Equal(string.Empty, await File.ReadAllTextAsync(promptPath));
             }
@@ -400,7 +222,7 @@ namespace ReSet.Core.Tests
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
             var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CacheHit", CodeObjectType.Procedure);
             var promptPath = Path.Combine(
-                outputRoot, "Objects", "dbo.USP_CacheHit.Procedure", "raw", "prompt-context.md");
+                outputRoot, "Procedures", "dbo.USP_CacheHit", "raw", "prompt-context.md");
 
             try
             {
@@ -606,6 +428,14 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("CREATE PROCEDURE dbo.USP_Sp1 AS SELECT 1;", context1);
             Assert.Contains("TBL_TestDep", context1);
             Assert.Contains("의존 테이블 설명", context1);
+
+            // 표의 컬럼 행 전체를 셀 순서까지 못박는다. 이 표는 에이전트 지시서가
+            // 링크로 실소비하는 Jobs/[Job]/raw/ddl/*.md이므로, 셀 하나가 조용히
+            // 비면 지시서가 컬럼의 제약과 설명을 잃은 채로 코딩 에이전트에게 간다.
+            // 픽스처의 컬럼 하나가 일곱 셀을 모두 덮는다: 이름·타입·Null 허용(No)·
+            // Identity(No)·기본값(빈 칸)·제약 조건(PRIMARY KEY)·설명(PK 컬럼).
+            Assert.Contains("| 컬럼명 | 데이터 타입 | Null 허용 | Identity | 기본값 | 제약 조건 | 설명 |", context1);
+            Assert.Contains("| ID | INT | No | No |  | PRIMARY KEY | PK 컬럼 |", context1);
 
             Assert.Contains("raw/ddl/dbo.TBL_TestDep.md", content);
             Assert.Contains("todo.md", content);

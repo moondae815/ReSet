@@ -141,6 +141,44 @@ public class OutputPathResolverTests
             paths.ResolveSpecPath(key));
     }
 
+    /// <summary>
+    /// 이름에 예약문자가 있으면 손조립 경로($"{schema}.{name}")는 명세서·캐시 조회
+    /// 경로와 갈라진다. 해석기는 %XX로 인코딩하므로 두 자리가 같은 폴더를 가리킨다.
+    /// Program.SaveMigrationPlanAsync와 RenderAnalysisResultPanel이 이 계약에 기댄다.
+    /// 문자는 플랫폼을 타지 않는 것으로 고른다 - ':'는 Windows에서만 금지문자라
+    /// macOS·Linux에서 인코딩되지 않지만, '.'과 '/'는 EncodePathSegment가
+    /// 어느 플랫폼에서나 조건 없이 인코딩한다.
+    /// </summary>
+    [Fact]
+    public void ResolveDocsDirectory_EncodesReservedCharactersInObjectName()
+    {
+        var paths = new OutputPathResolver("PaymentDB", "/tmp/output");
+        var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP.Odd/Name", CodeObjectType.Procedure);
+
+        var directory = paths.ResolveDocsDirectory(key);
+
+        Assert.Equal("/tmp/output/Procedures/dbo.USP%2EOdd%2FName/docs", directory);
+        Assert.NotEqual(
+            Path.Combine("/tmp/output", "Procedures", $"{key.Schema}.{key.Name}", "docs"),
+            directory);
+    }
+
+    /// <summary>
+    /// 배치 전환 계획서(BatchMigrationPlan.md)는 명세서 옆에 놓인다는 것이
+    /// Program.SaveMigrationPlanAsync가 기대는 계약이다. 이 둘이 갈라지면
+    /// 계획서만 다른 폴더에 남아 아무도 찾지 못한다.
+    /// </summary>
+    [Fact]
+    public void ResolveDocsDirectory_IsTheDirectoryThatHoldsTheSpec()
+    {
+        var paths = new OutputPathResolver("PaymentDB", "/tmp/output");
+        var key = CodeObjectKey.Create("PaymentDB", "dbo", "usp_Settle", CodeObjectType.Procedure);
+
+        Assert.Equal(
+            Path.GetDirectoryName(paths.ResolveSpecPath(key)),
+            paths.ResolveDocsDirectory(key));
+    }
+
     [Fact]
     public void Constructor_RejectsMissingDatabaseOrOutputRoot()
     {

@@ -25,7 +25,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.OutputDirectory,
                 request.EnableCache,
                 cancellationToken,
-                directDependenciesOnly: true,
+                directDependenciesOnly: request.AnalyzeReferencedCodeObjects,
                 includeExternalCodeObjects: true,
                 analysisDatabase: request.AnalysisDatabase),
             new MetadataExporter(),
@@ -160,41 +160,48 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
             execution.RegisterCanonicalKey(definition.ObjectKey);
 
-            foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
+            // OFF는 "깊이 0"이 아니라 "그래프를 만들지 않는다"이다. 자식을 발견해
+            // 실행 목록에 넣으면 OFF에서도 자식마다 AI 비용이 나가고, 사용자가 고르지
+            // 않은 Spec.md가 생긴다. 루트가 잃는 정보는 파이프라인이 전이적 메타데이터를
+            // 대신 실어 메운다(DependencyAnalysisRequest.AnalyzeReferencedCodeObjects).
+            if (request.AnalyzeReferencedCodeObjects)
             {
-                var target = CreateDependencyKey(dependency, key.Database);
-                if (target is null)
+                foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
                 {
-                    continue;
-                }
-
-                execution.AddEdge(key, target, dependency.IsDynamicSqlCandidate);
-                var child = execution.GetOrAddNode(target);
-                var targetDepth = depth + 1;
-
-                if (targetDepth > request.MaxDepth)
-                {
-                    if (!execution.HasDepthAtMost(target, request.MaxDepth))
+                    var target = CreateDependencyKey(dependency, key.Database);
+                    if (target is null)
                     {
-                        Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                        continue;
                     }
-                    continue;
-                }
 
-                if (target.Type == CodeObjectType.Unresolved)
-                {
-                    Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다.");
-                    continue;
-                }
+                    execution.AddEdge(key, target, dependency.IsDynamicSqlCandidate);
+                    var child = execution.GetOrAddNode(target);
+                    var targetDepth = depth + 1;
 
-                if (!request.AllowExternalDatabaseConnections &&
-                    !string.Equals(target.Database, execution.CurrentDatabase, StringComparison.OrdinalIgnoreCase))
-                {
-                    Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 데이터베이스 연결이 허용되지 않았습니다.");
-                    continue;
-                }
+                    if (targetDepth > request.MaxDepth)
+                    {
+                        if (!execution.HasDepthAtMost(target, request.MaxDepth))
+                        {
+                            Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                        }
+                        continue;
+                    }
 
-                await DiscoverAsync(target, targetDepth, request, execution, cancellationToken);
+                    if (target.Type == CodeObjectType.Unresolved)
+                    {
+                        Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다.");
+                        continue;
+                    }
+
+                    if (!request.AllowExternalDatabaseConnections &&
+                        !string.Equals(target.Database, execution.CurrentDatabase, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 데이터베이스 연결이 허용되지 않았습니다.");
+                        continue;
+                    }
+
+                    await DiscoverAsync(target, targetDepth, request, execution, cancellationToken);
+                }
             }
 
             node.Status = AnalysisNodeStatus.Queued;
@@ -438,6 +445,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                         analysis.Key,
                         analysis.SpecMarkdown ?? string.Empty,
                         graph,
+                        ResolveScope(request),
                         cancellationToken);
 
                     try
@@ -526,8 +534,17 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             request.ModelName,
             request.ActorEffort,
             analysis.AnalyzedAt ?? DateTime.Now,
-            AnalysisScope.Direct);
+            ResolveScope(request));
     }
+
+    /// <summary>
+    /// 이 회차가 실제로 수집한 의존성의 범위. 헤더의 「분석 범위」 도장과 「참조 코드 객체」
+    /// 절이 같은 값을 읽어야 한 문서가 자기 수집 범위를 두 가지로 신고하지 않는다.
+    /// </summary>
+    private static AnalysisScope ResolveScope(DependencyAnalysisRequest request) =>
+        request.AnalyzeReferencedCodeObjects
+            ? AnalysisScope.Direct
+            : AnalysisScope.Transitive;
 
     /// <summary>
     /// 이 문서가 참조하는 객체 중 분석이 끝나지 않은 것들의 이름을 모은다.
@@ -563,8 +580,17 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 paths.ResolveDocsDirectory(analysis.Key),
                 "Thinking.md");
 
-            // 추론 본문이 비어도 쓴다. 이 자리는 성공한 노드에만 닿으므로, 파일이 없다는
-            // 것과 추론이 없었다는 것을 산출물만 보고 구분할 수 있어야 한다.
+            // 캐시 히트 회차는 ThinkingText가 비어 있다 — 파이프라인이 AI를 호출한
+            // 회차에만 그 값을 채우기 때문이다. 그 빈 값으로 덮으면 앞선 회차의 추론
+            // 기록이 자리표시자와 오늘 날짜로 사라진다. 남길 것이 없으면 이미 있는
+            // 기록을 지키고, 파일이 아예 없을 때만 자리표시자 판본을 만든다 —
+            // "파일 없음"과 "추론 없음"은 산출물만 보고 구분되어야 한다.
+            // (raw/prompt-context.md가 MetadataExporter에서 받는 보호와 같은 규약)
+            if (string.IsNullOrWhiteSpace(analysis.ThinkingText) && File.Exists(thinkingPath))
+            {
+                return;
+            }
+
             await File.WriteAllTextAsync(
                 thinkingPath,
                 ThinkingLogDocument.Compose(

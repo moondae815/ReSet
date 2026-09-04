@@ -35,6 +35,7 @@
 | `src/ReSet.Cli/Program.cs` | OFF 분기·저장 게이트·전용 저장 메서드 삭제, 계획서 경로 정리 |
 | `src/ReSet.Cli/appsettings.json` | `SaveRaw*` 세 키 삭제 |
 | `tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs` | 새 동작 4건 |
+| `tests/ReSet.Core.Tests/SpAnalysisOutcomeTests.cs` | **계획서 초판이 빠뜨렸다.** Task 3의 3인자 시그니처가 호출부 3곳을 깨고, Task 4의 `FromSingleObjectPipeline` 삭제가 그 테스트 1건을 지운다 |
 | `tests/ReSet.Core.Tests/MetadataExporterTests.cs` | 경로 단언 3건 갱신, 죽은 테스트 4건 삭제 |
 | `docs/output-artifacts.md` · `docs/known-defects.md` | 규칙 단일화 반영 |
 
@@ -204,7 +205,7 @@ git commit -m "fix: 캐시 히트가 Thinking.md의 추론 기록을 지우지 �
 - [ ] **Step 1: 기존 경로 단언 3건을 새 자리로 고치고, 옛 자리 역단언을 더한다**
 
 `tests/ReSet.Core.Tests/MetadataExporterTests.cs`에서 아래 세 줄을 찾아 바꾼다. 세 줄은
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl`(`:308` 부근),
+`ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted`(`:287`),
 `ExportCodeObjectArtifactsAsync_WritesMetadataJsonNextToManifest`(`:380` 부근),
 `ExportCodeObjectArtifactsAsync_PreservesExistingPromptContextWhenPromptIsEmpty`(`:403` 부근)에 있다.
 
@@ -226,9 +227,23 @@ var promptPath = Path.Combine(
     outputRoot, "Procedures", "dbo.USP_CacheHit", "raw", "prompt-context.md");
 ```
 
-첫 번째 테스트는 이름이 자리와 어긋나므로 함께 고친다 —
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl` →
-`ExportCodeObjectArtifactsAsync_WritesPromptContextNextToManifest`.
+> **정정(2026-09-04, 실행 중 발견).** 이 계획서 초판은 `:287`의 테스트 이름을
+> `ExportCodeObjectArtifactsAsync_WritesPromptContextNextToCanonicalDdl`이라고 적고
+> 그것을 `…NextToManifest`로 고치라고 지시했다. **그런 이름의 테스트는 저장소에 없다** —
+> 계획서를 쓸 때 메서드 시그니처가 안 보이는 창으로 본문만 읽고 이름을 지어냈다.
+> `:287`의 실제 이름은 `ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted`이고,
+> 그 이름이 말하는 것은 **자리**가 아니라 `rawPromptContext` 인자를 생략하면
+> `definition.RawPromptContext`가 쓰인다는 **다른 성질**이다.
+>
+> 따라서 **이름은 바꾸지 않는다.** 리뷰가 그렇게 확정했고, 근거는 일반론보다 강했다 —
+> 인자 생략 폴백은 **유일 커버리지**이면서 실사용 경로다(유일한 프로덕션 호출부
+> `DependencyAnalysisOrchestrator.cs:473`이 `rawPromptContext`를 생략한다). 반면 자리는
+> 형제 테스트 둘이 이미 독립적으로 잠그고 있다. 즉 이 이름을 자리 쪽으로 바꾸면
+> **세 번 덮인 성질을 가리키는 이름 아래에서 유일하게 덮인 성질이 깨지게** 된다.
+>
+> 역단언(`Objects/`에 안 생긴다)과 폴백 사실을 적은 XML doc 주석은 **남긴다.**
+> 자리의 부재에 이름을 주고 싶으면 별도 테스트로 만든다
+> (`…LeavesNoPromptContextInCanonicalFolder`).
 
 그리고 그 테스트의 `Assert.Equal("actual prompt body", …)` 바로 아래에 역단언을 더한다.
 
@@ -597,10 +612,16 @@ git commit -m "feat: 오케스트레이터가 비재귀 분석 요청을 받게 
 - Modify: `src/ReSet.Cli/Program.cs` — `RunConfiguredAnalysisAsync`(`:2014-2083`), 게이트 블록 2개(`:935`, `:1384`), `SaveRawArtifactsAsync`(`:2204-2286`), `SaveDocumentsAsync`(`:2288~`), 지역 변수(`:364-366`)
 - Modify: `src/ReSet.Core/Models/SpAnalysisOutcome.cs` — `FromSingleObjectPipeline` 삭제
 - Test: `tests/ReSet.Core.Tests/CliArgsTests.cs`
+- Test: `tests/ReSet.Core.Tests/SpAnalysisOutcomeTests.cs` — `FromSingleObjectPipeline_MarksTransitiveScopeAndLeavesPersistenceToTheCaller`(`:21`·`:37`)가 지워지는 심볼을 검사하므로 함께 지운다. 같은 파일의 `FromDependencyGraph_MissingRoot_…`는 scope가 인자가 된 뒤로 **자기가 방금 넘긴 값을 되읽는 단언**이 됐다 — 이름(`…MarksDirectScope…`)도 함께 볼 것
 
 **Interfaces:**
 - Consumes: Task 3의 `AnalyzeReferencedCodeObjects`와 3인자 `FromDependencyGraph`
 - Produces: `RunConfiguredAnalysisAsync`는 시그니처가 그대로이고, 이제 **항상** `Persistence != NotAttempted`인 결과를 낸다.
+
+> **정정(2026-09-04).** 이 태스크가 `SaveDocumentsAsync`를 지우면서 `BatchMigrationPlan.md`의
+> 추론(`ThinkingText`)이 어느 조합에서도 남지 않게 된다. **이것은 사고가 아니라 의도된
+> 수렴이다** — 자세한 근거와 복원 자리는 아래 「실행 중 확정된 정정 모음」에 있고,
+> Task 7이 원장에 등재한다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -858,14 +879,22 @@ CLI에서 출력 경로를 손으로 조립하던 자리 둘이 Task 4에서 사
     public void ResolveDocsDirectory_EncodesReservedCharactersInObjectName()
     {
         var paths = new OutputPathResolver("PaymentDB", "/tmp/output");
-        var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP:Odd", CodeObjectType.Procedure);
+        var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP.Odd/Name", CodeObjectType.Procedure);
 
         var directory = paths.ResolveDocsDirectory(key);
 
-        Assert.DoesNotContain(":", Path.GetFileName(Path.GetDirectoryName(directory)!));
-        Assert.EndsWith("docs", directory);
+        Assert.Equal("/tmp/output/Procedures/dbo.USP%2EOdd%2FName/docs", directory);
+        Assert.NotEqual(
+            Path.Combine("/tmp/output", "Procedures", $"{key.Schema}.{key.Name}", "docs"),
+            directory);
     }
 ```
+
+> **정정(2026-09-04, Task 7이 발견).** 이 계획서 초판은 이름을 `"USP:Odd"`로 두고
+> `Assert.DoesNotContain(":")`에 「기대: 통과」라고 적었는데 **그 테스트는 실패한다.**
+> `EncodePathSegment`가 인코딩하는 것은 `.`·`%`·경로 구분자·`Path.GetInvalidFileNameChars()`뿐이고,
+> **유닉스에서 그 집합은 `{'\0','/'}`이라 `:`가 그대로 통과한다.** 실제 구현이 쓴
+> `.`·`/`로 고쳐 적었다. 손조립과 갈라진다는 것을 역단언으로 함께 못박는다.
 
 - [ ] **Step 2: 계약 테스트를 돌린다**
 
@@ -919,7 +948,11 @@ dotnet test --filter "FullyQualifiedName~ResolveDocsDirectory_EncodesReservedCha
 grep -n 'Path.Combine(outputDir, "Procedures"' src/ReSet.Cli/Program.cs
 ```
 
-기대: **출력 없음.**
+> **정정(2026-09-04, Task 4 리뷰가 발견).** 기대값이 「출력 없음」이 아니다 —
+> `RenderAnalysisResultPanel`이 **화면에 낼 문자열**을 만들 때 같은 조립을 한다.
+> 그 자리는 파일을 쓰지 않으므로 경로 규약의 문제가 아니지만, 표시 경로가 실제
+> 저장 경로와 갈라지면 사람이 없는 파일을 찾게 된다. **두 자리를 다 고치고**
+> 기대값을 「출력 없음」으로 유지하는 편이 낫다.
 
 - [ ] **Step 5: 전체 검증**
 
@@ -1033,3 +1066,20 @@ dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"   # 기대: 0
 dotnet test                                                  # 기대: 실패 0, 건너뜀 0
 grep -rn "SaveRawJson\|ExportRawMetadataAsync\|FromSingleObjectPipeline" src tests docs AGENTS.md README.md | grep -v "/obj/\|/bin/"   # 기대: 출력 없음
 ```
+
+
+---
+
+## 실행 중 확정된 정정 모음 (2026-09-04)
+
+- **Task 4의 `SpAnalysisOutcome.Scope`는 결국 매개변수화가 아니라 삭제로 닫혔다.**
+  Task 3이 `FromDependencyGraph`를 3인자로 만들었지만, Task 4가 `SaveDocumentsAsync`를
+  지우면서 그 필드의 **유일한 프로덕션 소비자가 사라졌다.** 설계 §4.3(3)이 고치라 한
+  하드코딩 둘 중 이쪽은 죽은 필드를 채우는 일이었고, 살아 있는 것은
+  `BuildPersistedSpecification` 하나다. 따라서 이 계획서 본문의 3인자 `FromDependencyGraph`
+  서술과 `result.Scope` 단언 지시는 **낡았다** — 최종 상태는 2인자이고 `Scope` 필드는 없다.
+- **계획서 추론(`BatchMigrationPlan.md`의 `ThinkingText`) 손실은 의도된 수렴이다.**
+  `SaveDocumentsAsync`가 게이트 안에 있었으므로 ON은 이미 버리고 있었고, OFF도 캐시 히트
+  회차에는 버렸다. 통일로 OFF의 비캐시 회차까지 버리게 된다 — **그 한 조합에서는 실제
+  축소**다. 복원은 별건이며 자리는 `SaveMigrationPlanAsync` 옆이지 오케스트레이터가 아니다
+  (거기 접으면 Task 1이 닫은 덮어쓰기 위험이 되돌아온다). Task 7이 문서에 남긴다.

@@ -67,8 +67,16 @@ namespace ReSet.Core.Services
                     cancellationToken);
 
                 var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
+
+                var manifestPath = paths.ResolveManifestPath(objectKey);
+                var objectRawDirectory = Path.GetDirectoryName(manifestPath)!;
+                Directory.CreateDirectory(objectRawDirectory);
+
+                // 이 파일은 정본이 아니라 회차별 분석 흔적이므로 metadata.json·
+                // dependency-manifest.json과 같은 집에 둔다. 정본 폴더(Objects/)에 두면
+                // 한 객체의 raw가 두 폴더로 쪼개져, 문서가 안내하는 되짚는 순서가 깨진다.
                 var promptContext = rawPromptContext ?? definition.RawPromptContext ?? string.Empty;
-                var promptContextPath = Path.Combine(rawDirectory, "prompt-context.md");
+                var promptContextPath = Path.Combine(objectRawDirectory, "prompt-context.md");
 
                 // 캐시 히트 회차는 RawPromptContext가 비어 있다 - 파이프라인이 AI를
                 // 호출한 회차에만 그 값을 채우기 때문이다. 그 빈 값으로 덮으면 앞선
@@ -90,18 +98,14 @@ namespace ReSet.Core.Services
                     await ExportReferencedCodeDdlsAsync(definition, rawDirectory, cancellationToken);
                 }
 
-                var manifestPath = paths.ResolveManifestPath(objectKey);
-                Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-                var objectDirectoryForManifest = Path.GetDirectoryName(Path.GetDirectoryName(manifestPath)!)!;
+                var objectDirectoryForManifest = Path.GetDirectoryName(objectRawDirectory)!;
                 var manifest = BuildManifest(definition, objectKey, graph, paths, objectDirectoryForManifest);
                 var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(manifestPath, json, Encoding.UTF8, cancellationToken);
 
                 // 지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천이다.
                 // 매니페스트와 같은 디렉터리에 두어야 Spec.md 경로에서 규칙적으로 찾을 수 있다.
-                var metadataPath = Path.Combine(
-                    Path.GetDirectoryName(manifestPath)!,
-                    "metadata.json");
+                var metadataPath = Path.Combine(objectRawDirectory, "metadata.json");
                 await File.WriteAllTextAsync(
                     metadataPath,
                     JsonSerializer.Serialize(definition, new JsonSerializerOptions { WriteIndented = true }),
@@ -249,125 +253,6 @@ namespace ReSet.Core.Services
             public string Source { get; init; } = string.Empty;
             public string Target { get; init; } = string.Empty;
             public bool IsDynamicSqlCandidate { get; init; }
-        }
-
-        public async Task ExportRawMetadataAsync(
-            SpDefinition spDef, 
-            string rawPromptContext, 
-            string baseOutputDir, 
-            bool saveJson, 
-            bool saveContext, 
-            bool saveFiles)
-        {
-            var cleanSpName = $"{spDef.Schema}.{spDef.Name}";
-            Log.Information("Raw 메타데이터 디스크 내보내기 시작 - SP: {SpName}, OutputDir: {OutputDir}", cleanSpName, baseOutputDir);
-
-            try
-            {
-                // 1. 출력 기본 디렉터리 생성 보장
-                if (!Directory.Exists(baseOutputDir))
-                {
-                    Directory.CreateDirectory(baseOutputDir);
-                }
-
-                // 2. 단일 JSON 덤프 저장
-                var rawFolder = Path.Combine(baseOutputDir, "raw");
-                if (!Directory.Exists(rawFolder))
-                {
-                    Directory.CreateDirectory(rawFolder);
-                }
-
-                if (saveJson)
-                {
-                    var jsonPath = Path.Combine(rawFolder, "metadata.json");
-                    Log.Debug("Raw JSON 덤프 작성 중: {JsonPath}", jsonPath);
-                    var options = new JsonSerializerOptions { WriteIndented = true };
-                    var jsonContent = JsonSerializer.Serialize(spDef, options);
-                    await File.WriteAllTextAsync(jsonPath, jsonContent, Encoding.UTF8);
-                }
-
-                // 3. 프롬프트 컨텍스트 저장
-                if (saveContext)
-                {
-                    var contextPath = Path.Combine(rawFolder, "prompt-context.md");
-                    Log.Debug("Raw 프롬프트 컨텍스트 파일 작성 중: {ContextPath}", contextPath);
-
-                    // 기존 .txt 파일이 있다면 삭제 처리
-                    var oldTxtFile = Path.Combine(rawFolder, "prompt-context.txt");
-                    if (File.Exists(oldTxtFile))
-                    {
-                        try { File.Delete(oldTxtFile); } catch {}
-                    }
-
-                    var sb = new StringBuilder();
-                    sb.AppendLine("# AI 입력 프롬프트 원천 콘텍스트 (Raw Prompt Context)");
-                    sb.AppendLine();
-                    sb.AppendLine("본 문서는 저장 프로시저 역공학 분석을 위해 AI 모델에 실제 전송된 조립 완료 프롬프트 원문입니다.");
-                    sb.AppendLine();
-                    sb.AppendLine("---");
-                    sb.AppendLine();
-                    sb.AppendLine(rawPromptContext);
-
-                    await File.WriteAllTextAsync(contextPath, sb.ToString(), Encoding.UTF8);
-                }
-
-                // 4. 개별 파일/폴더 분산 저장
-                if (saveFiles)
-                {
-                    var ddlFolder = Path.Combine(rawFolder, "ddl");
-                    Log.Debug("개별 DDL/MD 분산 덤프 작성 중: {DdlFolder}", ddlFolder);
-                    if (!Directory.Exists(ddlFolder))
-                    {
-                        Directory.CreateDirectory(ddlFolder);
-                    }
-
-                    // 메인 SP DDL 저장
-                    var spDdlPath = Path.Combine(ddlFolder, "sp_definition.sql");
-                    await File.WriteAllTextAsync(spDdlPath, spDef.DdlText, Encoding.UTF8);
-
-                    // 의존성 순회하여 개별 덤프
-                    foreach (var dep in spDef.Dependencies)
-                    {
-                        var depFileName = string.IsNullOrEmpty(dep.Database)
-                            ? $"{dep.Schema}.{dep.Name}"
-                            : $"{dep.Database}.{dep.Schema}.{dep.Name}";
-
-                        // 테이블 스키마 md 저장
-                        if (dep.Columns.Count > 0)
-                        {
-                            var tablesFolder = Path.Combine(ddlFolder, "tables");
-                            if (!Directory.Exists(tablesFolder))
-                            {
-                                Directory.CreateDirectory(tablesFolder);
-                            }
-
-                            var mdTableContent = FormatTableSchemaToMarkdown(dep);
-                            await File.WriteAllTextAsync(Path.Combine(tablesFolder, $"{depFileName}.md"), mdTableContent, Encoding.UTF8);
-                        }
-
-                        // 코드형 객체 DDL 저장
-                        if (!string.IsNullOrEmpty(dep.ReferencedDdlText))
-                        {
-                            var subFolderType =
-                                SqlObjectTypeClassifier.ResolveCodeObjectType(dep.Type) == CodeObjectType.Procedure
-                                    ? "procedures"
-                                    : "functions";
-                            var codeFolder = Path.Combine(ddlFolder, subFolderType);
-                            if (!Directory.Exists(codeFolder))
-                            {
-                                Directory.CreateDirectory(codeFolder);
-                            }
-
-                            await File.WriteAllTextAsync(Path.Combine(codeFolder, $"{depFileName}.sql"), dep.ReferencedDdlText, Encoding.UTF8);
-                        }
-                    }
-                }
-                Log.Information("Raw 메타데이터 디스크 내보내기 성공 - SP: {SpName}", cleanSpName);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Raw 메타데이터 내보내기 중 예외가 발생했습니다 (격리됨) - SP: {SpName}", cleanSpName);
-            }
         }
 
         public async Task<BundleResult> ExportConsolidatedMigrationInstructionsAsync(

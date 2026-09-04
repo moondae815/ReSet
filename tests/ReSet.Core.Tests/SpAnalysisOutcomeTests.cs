@@ -8,48 +8,16 @@ public sealed class SpAnalysisOutcomeTests
     [Fact]
     public void DefaultValues_AreTheSafeSideOfEachEnum()
     {
-        // 대입을 빠뜨린 생성부가 "더 넓게 봤다"거나 "저장했다"고 자칭하지 않아야 한다.
+        // 대입을 빠뜨린 생성부가 "저장했다"거나 "끝까지 돌았다"고 자칭하지 않아야 한다.
         var outcome = new SpAnalysisOutcome();
 
-        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
         Assert.Equal(GraphCompletion.Complete, outcome.Completion);
         Assert.Equal(ArtifactPersistence.NotAttempted, outcome.Persistence);
         Assert.Empty(outcome.PersistenceErrors);
     }
 
     [Fact]
-    public void FromSingleObjectPipeline_MarksTransitiveScopeAndLeavesPersistenceToTheCaller()
-    {
-        var definition = new SpDefinition { Schema = "dbo", Name = "USP_A" };
-        var review = new ReviewResult { ScoreAccuracy = 9 };
-        var analyzedAt = new DateTime(2026, 8, 1, 14, 22, 3);
-        var result = new CodeObjectPipelineResult
-        {
-            SpecMarkdown = "# 본문",
-            SpDef = definition,
-            Review = review,
-            ThinkingText = "reasoning",
-            Outcome = VerificationOutcome.Passed,
-            FromCache = true,
-            AnalyzedAt = analyzedAt
-        };
-
-        var outcome = SpAnalysisOutcome.FromSingleObjectPipeline(result);
-
-        Assert.Equal("# 본문", outcome.SpecMarkdown);
-        Assert.Same(definition, outcome.Definition);
-        Assert.Same(review, outcome.Review);
-        Assert.Equal("reasoning", outcome.ThinkingText);
-        Assert.Equal(VerificationOutcome.Passed, outcome.Outcome);
-        Assert.Equal(AnalysisScope.Transitive, outcome.Scope);
-        Assert.Equal(GraphCompletion.Complete, outcome.Completion);
-        Assert.True(outcome.FromCache);
-        Assert.Equal(analyzedAt, outcome.AnalyzedAt);
-        Assert.Equal(ArtifactPersistence.NotAttempted, outcome.Persistence);
-    }
-
-    [Fact]
-    public void FromDependencyGraph_MarksDirectScopeAndCarriesGraphPersistence()
+    public void FromDependencyGraph_CarriesTheRootAnalysisAndGraphPersistence()
     {
         var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Root", CodeObjectType.Procedure);
         var definition = new SpDefinition { ObjectKey = rootKey, Schema = "dbo", Name = "USP_Root" };
@@ -76,7 +44,6 @@ public sealed class SpAnalysisOutcomeTests
         var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
 
         Assert.Equal("# 루트", outcome.SpecMarkdown);
-        Assert.Equal(AnalysisScope.Direct, outcome.Scope);
         Assert.Equal(GraphCompletion.PartialCancelled, outcome.Completion);
         Assert.Equal(ArtifactPersistence.Failed, outcome.Persistence);
         Assert.Equal(new[] { "디스크 쓰기 거부" }, outcome.PersistenceErrors);
@@ -128,6 +95,5 @@ public sealed class SpAnalysisOutcomeTests
         Assert.Null(outcome.Definition);
         Assert.Null(outcome.Review);
         Assert.Equal(VerificationOutcome.ReviewNotRun, outcome.Outcome);
-        Assert.Equal(AnalysisScope.Direct, outcome.Scope);
     }
 }

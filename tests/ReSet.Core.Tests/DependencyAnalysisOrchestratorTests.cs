@@ -271,6 +271,138 @@ public sealed class DependencyAnalysisOrchestratorTests
         }
     }
 
+    /// <summary>
+    /// 캐시 히트 회차는 ThinkingText가 비어 있다(VerificationPipelineOrchestrator가
+    /// AI를 호출한 회차에만 채운다). 그 빈 값으로 덮으면 앞선 회차의 추론 기록이
+    /// 「추론 없음」 자리표시자와 오늘 날짜로 사라진다 — raw/prompt-context.md가
+    /// MetadataExporter에서 보호받는 것과 같은 사건이다.
+    /// 파일이 아예 없을 때 자리표시자 판본을 남기는 계약은 그대로 지킨다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_PreservesExistingThinkingLogWhenReasoningIsEmpty()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingCache-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var paths = new OutputPathResolver(root.Database, outputRoot);
+        var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+
+        try
+        {
+            // 1회차: 실제로 AI를 호출해 추론을 남겼다.
+            var analyzing = new DependencyAnalysisOrchestrator(
+                metadata,
+                (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+                {
+                    SpDef = Definition(key),
+                    SpecMarkdown = "# Spec",
+                    ThinkingText = "private reasoning from attempt 1"
+                }));
+            await analyzing.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            // 2회차: 캐시 히트라 추론 본문이 없다.
+            var cached = new DependencyAnalysisOrchestrator(
+                metadata,
+                (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+                {
+                    SpDef = Definition(key),
+                    SpecMarkdown = "# Spec",
+                    ThinkingText = null,
+                    FromCache = true
+                }));
+            await cached.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var thinking = await File.ReadAllTextAsync(thinkingPath);
+            Assert.Contains("private reasoning from attempt 1", thinking);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 위 보존 규칙이 「파일이 없으면 반드시 만든다」를 깨뜨리지 않는지 함께 잠근다.
+    /// 파일 없음과 추론 없음은 산출물만 보고 구분되어야 한다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WritesPlaceholderThinkingLogWhenFileIsAbsent()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingEmpty-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                ThinkingText = null
+            }));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+            Assert.True(File.Exists(thinkingPath));
+            Assert.Contains("# AI 추론 과정 로그", await File.ReadAllTextAsync(thinkingPath));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 보존 규칙의 세 번째 축: 추론이 <b>있는</b> 회차는 이미 있는 Thinking.md를 갱신해야 한다.
+    /// 이 축이 없으면 가드를 <c>if (File.Exists(thinkingPath)) return;</c>로 바꾼 뮤턴트가
+    /// 위 두 테스트를 포함해 전 테스트를 조용히 통과한다 — 두 테스트 모두 새 임시
+    /// 디렉터리에서 시작해 「파일이 이미 있고 추론도 있는」 회차에 닿지 않기 때문이다.
+    /// 그 뮤턴트는 Thinking.md를 첫 회차 이후 영구 동결시켜 새 추론이 절대 반영되지 않게
+    /// 하는데, 같은 출력 디렉터리에 반복해 도는 것은 캐시 히트가 아닌 평범한 재분석의
+    /// 정상 사용법이다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_OverwritesExistingThinkingLogWhenReasoningIsPresent()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingRefresh-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var paths = new OutputPathResolver(root.Database, outputRoot);
+        var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+
+        DependencyAnalysisOrchestrator Analyzing(string reasoning) => new(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                ThinkingText = reasoning
+            }));
+
+        try
+        {
+            // 1회차와 2회차 모두 AI를 호출해 서로 다른 추론을 남겼다.
+            await Analyzing("private reasoning from attempt 1").AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+            await Analyzing("private reasoning from attempt 2").AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var thinking = await File.ReadAllTextAsync(thinkingPath);
+            Assert.Contains("private reasoning from attempt 2", thinking);
+            Assert.DoesNotContain("private reasoning from attempt 1", thinking);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
     [Fact]
     public async Task AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts()
     {
@@ -1049,6 +1181,200 @@ public sealed class DependencyAnalysisOrchestratorTests
             () => sut.AnalyzeAsync(root, Request(), CancellationToken.None));
 
         Assert.Contains("데이터베이스", exception.Message);
+    }
+
+    /// <summary>
+    /// 참조분석 OFF는 "깊이 0"이 아니라 "그래프를 만들지 않는다"이다. 자식을 발견해
+    /// 실행 목록에 넣으면 OFF에서도 자식마다 AI 비용이 나가고, 자식 Spec.md가 생겨
+    /// 사용자가 고른 것과 다른 산출물이 남는다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_AnalyzesRootOnly()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var executed = new List<CodeObjectKey>();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                executed.Add(key);
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        var result = await sut.AnalyzeAsync(
+            root,
+            Request() with { AnalyzeReferencedCodeObjects = false },
+            CancellationToken.None);
+
+        Assert.Equal(new[] { root }, executed);
+        Assert.Empty(result.Edges);
+        Assert.Equal(root, Assert.Single(result.Nodes).Key);
+    }
+
+    /// <summary>
+    /// OFF 회차의 명세서는 전이적으로 모은 메타데이터로 쓰인다. 머리에 "직접 의존성"이
+    /// 박히면 문서가 자기 수집 범위를 거짓으로 신고한다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_StampsTransitiveScope()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Scope-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot) with { AnalyzeReferencedCodeObjects = false },
+                CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("분석 범위: 전이 의존성", spec);
+            Assert.DoesNotContain("분석 범위: 직접 의존성", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 머리의 「분석 범위」 도장만 고쳐서는 부족하다. 같은 문서의 「참조 코드 객체」 절이
+    /// OFF의 빈 그래프를 보고 "직접 참조하는 코드 객체가 없습니다"라고 쓰면, 옆의
+    /// metadata.json이 피호출 객체를 나열하는 동안 명세서 혼자 반대를 말한다. 그리고 그
+    /// 문장은 여기서 끝나지 않는다 — PersistArtifactsAsync가 링커 결과를
+    /// analysis.SpecMarkdown에 되쓰고, 그것이 지시서 번들을 거쳐 코딩 에이전트에게 간다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_DoesNotClaimTheObjectHasNoReferences()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-RefClause-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot) with { AnalyzeReferencedCodeObjects = false },
+                CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.DoesNotContain("직접 참조하는 코드 객체가 없습니다", spec);
+            Assert.Contains("참조분석을 끄고 분석해 직접 참조를 열거하지 않았습니다", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// ON에서 정말로 참조가 없는 객체는 그 사실을 계속 신고해야 한다. OFF 문구가
+    /// 두 경우를 모두 덮으면 이번 수정은 거짓을 다른 거짓으로 바꾼 것에 지나지 않는다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreEnabledAndRootHasNone_StatesTheObjectHasNoReferences()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-RefClauseOn-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("직접 참조하는 코드 객체가 없습니다", spec);
+            Assert.DoesNotContain("참조분석을 끄고", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 결과가 담는 정의는 파이프라인이 수집한 그것이어야 한다 — 발견 단계가 쓴
+    /// 직접 의존성 판본으로 바뀌면 안 된다. 이 정의의 Dependencies가 CLI의 spDefs를
+    /// 거쳐 StepInterfaceFacts.BuildCallGraph로 흘러가고, 그것이 계획서 Narrow 모드의
+    /// 1-hop 이웃을 고른다. 얇아져도 명세서는 멀쩡해 보이고 계획서 단계 본문만
+    /// 조용히 나빠지므로, 여기서 잠근다(설계 §2.1).
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_CarriesPipelineCollectedDependencies()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var neighbour = Key("USP_Neighbour", CodeObjectType.Procedure);
+
+        // 발견 단계가 보는 정의에는 의존성이 없다.
+        var metadata = CreateMetadataService(Definition(root));
+
+        // 파이프라인은 전이적으로 모아 이웃을 담아 돌려준다.
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key, neighbour),
+                SpecMarkdown = "# Spec"
+            }));
+
+        var result = await sut.AnalyzeAsync(
+            root,
+            Request() with { AnalyzeReferencedCodeObjects = false },
+            CancellationToken.None);
+
+        var analysis = Assert.Single(result.AnalysisResults);
+        var dependency = Assert.Single(analysis.Definition!.Dependencies);
+        Assert.Equal("USP_Neighbour", dependency.Name);
+    }
+
+    /// <summary>
+    /// 재귀 모드는 지금 그대로여야 한다. 플래그의 기본값이 뒤집히면 기존 사용자가
+    /// 아무것도 바꾸지 않았는데 산출물이 줄어든다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_ByDefault_StillAnalyzesReferencesAndStampsDirectScope()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ScopeDirect-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            Assert.Equal(2, result.Nodes.Count);
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("분석 범위: 직접 의존성", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
     }
 
     private static DependencyAnalysisRequest Request(

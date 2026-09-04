@@ -24,6 +24,7 @@ public sealed class SpecificationLinker
         CodeObjectKey parentKey,
         string markdown,
         CodeObjectPipelineResult graph,
+        AnalysisScope scope,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(parentKey);
@@ -47,7 +48,19 @@ public sealed class SpecificationLinker
 
         if (childEdges.Count == 0)
         {
-            content.AppendLine("- 직접 참조하는 코드 객체가 없습니다.");
+            // 빈 그래프는 두 가지 사실을 뜻할 수 있고, 둘은 같은 문장을 받으면 안 된다.
+            // ON(Direct)에서는 발견이 직접 참조를 열거했고 하나도 없었다는 관측이다.
+            // OFF(Transitive)에서는 발견이 애초에 그래프를 만들지 않았다는 뜻일 뿐인데
+            // (DependencyAnalysisOrchestrator가 자식 탐색 자체를 건너뛴다), 여기에
+            // ON 문장을 쓰면 문서가 객체에 대한 단언을 내놓는다 - 같은 폴더의
+            // metadata.json이 피호출 객체를 나열하고 있는데도. "없다"와 "안 물어봤다"는
+            // 산출물만 보고 구분되어야 한다(Thinking.md·raw/prompt-context.md가 받는
+            // 것과 같은 규약). 침묵(절 생략)으로는 그 구분이 서지 않으므로 문장을 낸다.
+            content.AppendLine(scope == AnalysisScope.Direct
+                ? "- 직접 참조하는 코드 객체가 없습니다."
+                : "- 참조분석을 끄고 분석해 직접 참조를 열거하지 않았습니다. "
+                  + "참조가 없다는 뜻이 아니며, 이 회차가 수집한 의존성은 "
+                  + "`../raw/metadata.json`에 있습니다.");
         }
         else
         {

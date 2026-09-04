@@ -93,6 +93,48 @@ namespace ReSet.Core.Tests
 
             Assert.Equal("SnapshotDB", dependencyOrchestrator.LastRootKey?.Database);
             Assert.Equal("SnapshotDB", result.Definition?.ObjectKey?.Database);
+            Assert.True(dependencyOrchestrator.LastRequest?.AnalyzeReferencedCodeObjects);
+        }
+
+        /// <summary>
+        /// 참조분석 OFF도 오케스트레이터를 탄다. 예전에는 CLI가 파이프라인을 직접 부르고
+        /// 저장까지 손으로 했는데, 그 경로에는 dependency-manifest.json도 Objects/ 정본도
+        /// 없었고 metadata.json은 스위치 하나에 걸려 있었다.
+        /// verificationPipelineOrchestrator에 null을 넘겨도 통과한다는 것이 곧 증거다 —
+        /// OFF가 그 인자를 더 이상 역참조하지 않는다.
+        /// OFF 명세서의 범위 표기(전이 의존성)는 여기가 아니라 산출물에서 잠근다 —
+        /// DependencyAnalysisOrchestratorTests의 AnalyzeAsync_WhenReferencesAreDisabled_StampsTransitiveScope.
+        /// </summary>
+        [Fact]
+        public async Task RunConfiguredAnalysisAsync_WhenReferencesAreDisabled_StillUsesOrchestrator()
+        {
+            var snapshot = new DbSnapshot { Database = "SnapshotDB" };
+            var metadata = new OfflineDbMetadataService(snapshot);
+            var dependencyOrchestrator = new CapturingDependencyAnalysisOrchestrator();
+
+            var result = await Program.RunConfiguredAnalysisAsync(
+                analyzeReferencedCodeObjects: false,
+                dependencyOrchestrator,
+                verificationPipelineOrchestrator: null!,
+                metadata,
+                connectionString: string.Empty,
+                configuredDatabase: "ConfiguredDB",
+                schema: "dbo",
+                name: "usp_Root",
+                maxDepth: 2,
+                provider: "OpenAI",
+                modelName: "gpt-test",
+                actorEffort: "high",
+                instructions: "rules",
+                isBatchMode: true,
+                outputDirectory: "/tmp/output",
+                enableCache: false,
+                allowExternalDatabaseConnections: false,
+                DependencyArtifactMode.Reference,
+                CancellationToken.None);
+
+            Assert.Equal("SnapshotDB", dependencyOrchestrator.LastRootKey?.Database);
+            Assert.False(dependencyOrchestrator.LastRequest?.AnalyzeReferencedCodeObjects);
         }
 
         [Fact]
@@ -144,6 +186,7 @@ namespace ReSet.Core.Tests
             : IDependencyAnalysisOrchestrator
         {
             public CodeObjectKey? LastRootKey { get; private set; }
+            public DependencyAnalysisRequest? LastRequest { get; private set; }
 
             public Task<CodeObjectPipelineResult> AnalyzeAsync(
                 CodeObjectKey rootKey,
@@ -151,6 +194,7 @@ namespace ReSet.Core.Tests
                 CancellationToken cancellationToken = default)
             {
                 LastRootKey = rootKey;
+                LastRequest = request;
                 var definition = new SpDefinition
                 {
                     ObjectKey = rootKey,

@@ -3647,25 +3647,31 @@
   `CodegenLoopPolicy.BuildUnverifiedFeedback`이 `CustOrderHist`와 `CustOrderHist.Batch`만
   들어, `CodegenArtifactNaming.JobProjectDirectoryNames`가 인정하는 밑줄 제거 변형 2개가
   빠졌다. 거짓은 아니고 누락이 실패를 만들지 않는다.
-- **`SaveMigrationPlanAsync`가 `EncodePathSegment`를 쓰지 않는다** — `ReSet.Cli/Program.cs`가
-  `Path.Combine(outputDir, "Procedures", $"{schema}.{name}", "docs")`를 직접 조립해,
-  식별자에 `.`이나 파일명 금지문자가 있으면 `OutputPathResolver.EncodePathSegment`를 거치는
-  캐시 조회 경로와 갈라진다.
-- **기본 설정에서 `dependency-manifest.json`이 아예 안 생기고 `metadata.json`이 스위치에 걸린다** —
-  두 파일은 "뒤 계층이 원천으로 읽으므로 끌 수단을 두지 않는다"가 설계 의도인데
-  (`MetadataExporter.ExportCodeObjectArtifactsAsync`의 "지시서 번들이 참조 테이블 스키마를
-  만들 때 쓰는 원천이다" 주석), 기본 설정이 그 의도를 지키지 못한다.
-  `AnalysisSettings:AnalyzeReferencedCodeObjects`가 `false`(기본값)면 저장 책임이
-  `Program.SaveRawArtifactsAsync`로 넘어가는데(`SpAnalysisOutcome.FromSingleObjectPipeline`이
-  `Persistence`를 `NotAttempted`로 두고, 호출부가 그 값일 때만 부른다) 그 경로에는
-  `ExportCodeObjectArtifactsAsync` 호출이 없다 — 유일한 호출부가
-  `DependencyAnalysisOrchestrator`(참조분석 ON)다. 그래서 **매니페스트는 어느 설정으로도
-  못 켜고**, `metadata.json`은 `OutputSettings:SaveRawJson` 하나에 통째로 걸린다.
-  같은 이유로 `Objects/` 정본(`object_definition.sql`)도 OFF에서는 만들어지지 않는다.
-  증상은 조용하다 — `--coverage-map`을 Job에 걸면 `CoverageMapCommand.ClosureOf`가 읽을
-  매니페스트가 없어 폐포가 소비 명세서 목록으로 줄어드는데, 실패가 아니라 더 작은 수를
-  찍고 정상 종료한다(`소비 명세서 N개 → 폐포 N개`). `SaveRawJson`까지 꺼져 있으면
-  `LoadObject`가 전건을 건너뛴다.
+- **배치 설계의 진입점 목록이 인코딩 없는 경로로 파일계에 묻는다 (2026-09-04)** —
+  `ReSet.Cli/Program.cs`의 `entryPointSpecPaths` 조립. `spec.FileName`은 `$"{Schema}.{Name}"`
+  (인코딩 없음)인데 `.Where(relative => File.Exists(Path.Combine(outputDir, relative)))`가
+  **실제 파일계에 묻는다.** 오케스트레이터는 `OutputPathResolver.EncodePathSegment`가 만든
+  폴더에 썼으므로, 이름에 `.`·`%`·`/`·`\`가 있으면 `File.Exists`가 빗나가고 그 SP는
+  **경고 한 줄 없이** 진입점에서 빠진다 → 폐포에서 빠진다 → 통합 계획서가 재료를 잃는다.
+  이 문서의 **「검사 앞단이 입력을 부순다」와 같은 계열**이다: 쓰는 쪽이 아니라 **거르는 쪽이**
+  입력을 떨어뜨린다. 바로 아래 `ReorderByClosure`에 넘기는 키 두 자리도 같은 조립을 쓰지만
+  그쪽 피해는 손실이 아니라 **순서**다(계약상 항목이 사라지지 않는다).
+  `SaveMigrationPlanAsync`의 손조립은 2026-09-04에 해석기 경유로 닫혔고, 남은 것이 이 자리다.
+- **SP 하나짜리 배치 전환 계획서의 추론이 어디에도 남지 않는다 (2026-09-04)** —
+  `AiService.GenerateBatchMigrationPlanAsync`가 낸 `AiResult.ThinkingText`를 CLI가 읽지 않고
+  `Content`만 쓴다. 참조분석 ON은 이 자리를 예전부터 버렸고(저장이 `Persistence == NotAttempted`
+  게이트 안에 있었다), OFF는 비캐시 회차만 보존했으며, 분석 경로 통일로 둘 다 버리게 됐다 —
+  **그 한 조합에서는 실제 축소다.** 객체의 `docs/Thinking.md`는 명세서 파이프라인의 추론만
+  담으므로 대체재가 아니다. 복원 자리는 `Program.SaveMigrationPlanAsync` **옆**이지
+  오케스트레이터가 아니다 — 거기 접으면 `Thinking.md`를 덮게 되어 캐시 히트 회차의
+  덮어쓰기 위험이 되돌아온다.
+- **~~기본 설정에서 `dependency-manifest.json`이 아예 안 생기고 `metadata.json`이 스위치에 걸린다~~
+  → 해소(2026-09-04)** — 분석과 저장이 `DependencyAnalysisOrchestrator` 한 경로로 통일되면서
+  매니페스트·`metadata.json`·`Objects/` 정본이 참조분석 설정과 무관하게 항상 나오고,
+  `SaveRawJson`·`SaveRawContext`·`SaveRawFiles` 세 키는 삭제됐다.
+  **남는 사실은 결손이 아니다** — 참조분석 OFF의 커버리지 폐포는 **루트 한 노드**다.
+  자식을 분석하지 않았으므로 폐포에 넣을 산출물이 없다는 뜻이며, **폐포가 커진 것이 아니라**
+  매니페스트가 없어 조용히 폴백하던 갈래가 사라진 것이다.
 
 ### 테스트 커버리지
 
@@ -3680,6 +3686,31 @@
 - **`SpecExpectationsWiringPolicyScanner`가 `this._validator`를 못 잡는다** —
   `member.Expression is not IdentifierNameSyntax receiver` 판정이 `IdentifierNameSyntax`만
   본다. 현재 그런 사용은 없다.
+- **편의 생성자의 파이프라인 인자 매핑에 단위 테스트가 없다 (2026-09-04)** —
+  `DependencyAnalysisOrchestrator`의 `(metadataService, pipelineOrchestrator)` 생성자가
+  `directDependenciesOnly: request.AnalyzeReferencedCodeObjects`로 넘기는 한 줄.
+  플래그를 뒤집는 테스트는 전부 러너를 주입하는 생성자를 쓰므로 이 람다를 지나지 않는다.
+  **확장할 자리는 이미 있다** — `DependencyAnalysisOrchestratorTests`의
+  `AnalyzeAsync_ProductionPipelineWiring_ResolvesExternalObjectCacheUnderExternalDirectory`
+  하나가 편의 생성자와 진짜 파이프라인으로 도는데, 요청이 `Request()`의 기본값(플래그 참)이라
+  **두 값을 구분하지 못한다.** 그래서 뮤턴트 `directDependenciesOnly: true`가 전 테스트를
+  통과한다. 그 테스트에 플래그를 끈 짝을 더하는 것이 가장 짧은 길이다.
+- **`FormatTableSchemaToMarkdown`의 인덱스 표와 기본값 셀이 미보호 (2026-09-04)** —
+  `MetadataExporter`의 `## 인덱스 정보` 표(다섯 셀·삼항 둘·`string.Join`)를 단언하는 테스트가
+  하나도 없고, 컬럼 표의 기본값 셀도 비-null 픽스처가 없어 값이 한 번도 렌더를 통과하지
+  않는다(컬럼 행 자체는 `MetadataExporterTests`가 셀 순서까지 잠근다). **인접 사실**: 이
+  메서드는 `AiService`에 사본이 하나 더 있어, 한쪽에 건 검사가 다른 쪽을 보호하지 않는다.
+- **CLI 호출부에 경로 손조립 회귀 방지책이 없다 (2026-09-04)** — `OutputPathResolverTests`의
+  계약 테스트 둘은 해석기만 잠그므로, `Program.cs`를 `Path.Combine(outputDir, "Procedures", …)`
+  손조립으로 되돌려도 전부 초록이다. 저장소에 소스 스캐너 정책 테스트 관례가 있다
+  (`tests/ReSet.Core.Tests/*PolicyScanner.cs`).
+- **`VerificationPipelineOrchestrator.CreateProcedureKey`가 프로덕션 호출부 0인 채 `public static`으로
+  남는다 (2026-09-04)** — 결함이 아니라 **미등재 결정**이다. 이 조립을 쓰던 비재귀 경로가
+  오케스트레이터로 통일되며 사라져, 지금 부르는 것은 `PipelineTestExtensions` 하나뿐이다.
+  「프로덕션과 테스트가 같은 조립을 쓰게 하는 단일 지점」이라는 원래 근거는 프로덕션 쪽이
+  없어진 순간 함께 사라졌으므로 선택지는 둘이다 — 조립을 그 어댑터 안으로 옮기고 public API를
+  내리거나, 프로덕션 호출부가 돌아올 것을 보고 그대로 두거나. 지금은 후자이고 메서드 주석이
+  그 사실을 적는다. 적어 두지 않으면 다음 사람이 같은 판단을 처음부터 다시 한다.
 
 ### 그 밖
 
@@ -3692,8 +3723,6 @@
 - **SP 목록이 시작 시 1회만 로드**되어 세션 중 DB 변경이 반영되지 않는다.
 - **TUI 선택 목록이 객체 디렉터리 이름만 렌더링**해 서로 다른 DB의 동명 프로시저가
   구분되지 않는다.
-- **비재귀 경로가 `DependencyAnalysisOrchestrator`로 통일되지 않았다** — 요청 모델과
-  파이프라인 호출, 배치 모드를 함께 재배선해야 한다.
 - **파서가 한정자 붙은 `INSERT` 대상 컬럼을 참조로 세지 않는다 (2026-08-22 실측)** — `X.PRODUCTNAME`처럼
   별칭 한정자가 붙은 대상 컬럼이 `StaticAnalysis.ReferencedColumnsPerTable`에 들어가지 않는다.
   실측: `UP_UTIL_SETTLE_INS_EXTRA`의 `TSettleMst` `INSERT` 대상 40개 중 `PRODUCTNAME` 하나만
@@ -3719,6 +3748,7 @@
 
 | 무엇 | 어떻게 |
 |---|---|
+| **비재귀(참조분석 OFF) 분석 경로가 오케스트레이터로 통일되지 않았다** | `DependencyAnalysisRequest.AnalyzeReferencedCodeObjects` 하나가 그래프 재귀와 메타데이터 수집 범위를 **함께** 정하게 하고, CLI의 OFF 분기와 그 전용 저장 코드를 지웠다. 수집 범위를 함께 넘기는 것이 요점이다 — `MaxDepth = 0`으로 태웠다면 OFF의 `SpDefinition.Dependencies`가 직접 의존성으로 줄어 계획서 단계 본문의 1-hop 이웃이 조용히 얇아졌다. 설계: `2026-09-04-unify-analysis-path-design.md` |
 | 축 A 재감사 🟠 2건 (`PGName NOT IN` 리터럴 · PG 화이트리스트) | 집합 술어를 기계 확정 재료로 승격. `DmlScopeExtractor.ExtractSetPredicates` → `AiService.BuildSetPredicateTableLines` → `MechanicalValidator.CheckSetPredicates`. 설계: `2026-08-18-set-predicate-material-design.md` |
 | C# 아키텍처 규칙이 단일 어셈블리 스코프 | `8e4af04`가 `ArchitectureTests` 스텁에 `Targets`를 넣어 대상 0건 통과를 막고, `c86d7b7`이 워밍업으로 xUnit 병렬 순서 의존 거짓 실패를 없앴다 |
 | `StepLogicTests` 배치 위치가 어느 지시서에도 없다 | `TaskFileComposer`가 `tests/StepLogicTests{확장자}`를 경로째 안내(`8d9ba62`·`37cd381`이 "원본을 지우지 말 것"까지 명시) |

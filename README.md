@@ -159,13 +159,12 @@ ReSet/
     │           ├── dependency-manifest.json # 의존 객체 식별자와 수집 경로 매니페스트
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
-    │           ├── chunks/                 # [로컬 LLM 전용] AST 분할 생성 시 조각별 응답 캐시
-    │           └── ddl/                    # 본문 및 참조 객체들의 DDL 백업
+    │           └── chunks/                 # [로컬 LLM 전용] AST 분할 생성 시 조각별 응답 캐시
     ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
     ├── Unresolved/                  # 종류를 판정하지 못한 객체의 산출물 (Procedures/Functions와 같은 구조)
     ├── Objects/                     # 코드 객체별 표준 DDL 보관소
     │   └── [Schema].[이름].[Type]/  # 스키마·이름이 겹치는 다른 종류의 객체를 구분하려 Type까지 붙인다
-    │       └── raw/                 # object_definition.sql (표준 DDL 정본) 및 prompt-context.md
+    │       └── raw/                 # object_definition.sql (표준 DDL 정본), PortableBundle 모드의 참조 DDL 사본
     ├── [Job이름]_Settlement_Policy_Rulebook.md  # 정산 정책 문서 (L1/L2를 거치지 않는 미검증 산출물)
     ├── .sp_cache_index.json         # 재분석을 건너뛰기 위한 해시 색인 (지우면 캐시 전체 무효화)
     └── External/[Database]/         # 같은 인스턴스 내 다른 DB 객체의 산출물 격리 경로 (크로스 DB 분석 활성 시)
@@ -332,9 +331,6 @@ ReSet/
   "OutputSettings": {
     "Directory": "./output",       // 명세서 파일이 저장될 출력 디렉터리
     "InstructionsFile": "./instructions.md", // 분석 규칙 지침 파일 명칭
-    "SaveRawJson": true,           // [설정] SpDefinition JSON 파일 저장 여부
-    "SaveRawContext": true,        // [설정] 조립된 프롬프트 마크다운 원문 저장 여부
-    "SaveRawFiles": true,          // [설정] 의존성 개별 객체 파일/폴더 분산 덤프 여부
     "EnableCache": true,          // [설정] DDL 해시 기반 로컬 증분 분석 캐싱 활성화 여부
     "DependencyArtifactMode": "Reference" // [설정] 참조 객체 DDL 저장 방식 (Reference | PortableBundle)
   },
@@ -383,8 +379,8 @@ ReSet/
 
 > [!TIP]
 > **💡 재귀 분석 산출물 모드**
-> * `AnalyzeReferencedCodeObjects`는 기본적으로 `false`입니다. 활성화하면 하위 SP/UDF도 각각 검증 파이프라인을 거쳐 객체별 `Spec.md`와 의존성 매니페스트를 생성합니다.
-> * `DependencyArtifactMode`의 기본값 `Reference`는 각 코드 객체의 표준 DDL을 한 번만 저장하고 명세서·매니페스트의 상대 경로로 연결합니다. `PortableBundle`은 이 표준 DDL에 더해, 참조된 SP/UDF DDL 사본을 각 객체의 `raw/ddl/`에 포함합니다.
+> * `AnalyzeReferencedCodeObjects`는 기본적으로 `false`입니다. 활성화하면 하위 SP/UDF도 각각 검증 파이프라인을 거쳐 객체별 `Spec.md`를 생성합니다. 끄든 켜든 분석과 저장은 같은 경로를 타므로 산출물의 **자리 규칙**은 동일하고, 끄면 루트 하나만 분석하므로 의존성 매니페스트가 루트 한 노드짜리로 나옵니다. 다만 **두 파일의 내용은 갈립니다** — 이 값이 수집 범위도 함께 정해서, `Spec.md` 머리의 `분석 범위` 표기(`직접 의존성` ↔ `전이 의존성`)와 `metadata.json`이 담는 의존성의 폭(직접만 ↔ 전이적)이 달라집니다.
+> * `DependencyArtifactMode`의 기본값 `Reference`는 각 코드 객체의 표준 DDL을 한 번만 저장하고 명세서·매니페스트의 상대 경로로 연결합니다. `PortableBundle`은 이 표준 DDL에 더해, 참조된 SP/UDF DDL 사본을 `Objects/[객체]/raw/ddl/`에 포함합니다.
 
 > [!TIP]
 > **💡 Actor-Critic 및 점진적 합성 가동 가이드**
@@ -677,4 +673,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: 95111290 -->
+<!-- synced-through: 7ab3d10c -->

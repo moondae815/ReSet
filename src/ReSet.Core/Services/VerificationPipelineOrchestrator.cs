@@ -1687,12 +1687,15 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 비재귀(참조분석 OFF) 경로가 <see cref="RunCodeObjectPipelineAsync"/>에 넘길
-        /// 프로시저 키를 만든다. 연결 문자열에서 DB명을 못 얻으면 빈 문자열을 쓴다.
+        /// <see cref="RunCodeObjectPipelineAsync"/>에 넘길 프로시저 키를 만든다.
+        /// 연결 문자열에서 DB명을 못 얻으면 빈 문자열을 쓴다.
         /// </summary>
         /// <remarks>
-        /// 프로덕션 호출부와 테스트가 각자 같은 조립 로직을 갖고 있으면 테스트가
-        /// 프로덕션이 아니라 사본을 검증하게 된다. 그 사본을 없애기 위한 단일 지점이다.
+        /// **이제 테스트 전용이다.** 이 조립을 쓰던 비재귀(참조분석 OFF) 프로덕션 경로는
+        /// 2026-09-04에 <c>DependencyAnalysisOrchestrator</c>로 통일되면서 사라졌고,
+        /// 그 경로의 DB는 <c>Program.ResolveAnalysisDatabaseAsync</c>가 정한다
+        /// (InitialCatalog → DB 조회 → 설정값 순으로 폴백하므로 빈 값을 내지 않는다).
+        /// 남은 호출부는 <c>PipelineTestExtensions</c> 하나다.
         /// </remarks>
         public static CodeObjectKey CreateProcedureKey(
             string connectionString,
