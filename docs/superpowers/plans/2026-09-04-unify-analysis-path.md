@@ -935,7 +935,11 @@ dotnet test --filter "FullyQualifiedName~ResolveDocsDirectory_EncodesReservedCha
 grep -n 'Path.Combine(outputDir, "Procedures"' src/ReSet.Cli/Program.cs
 ```
 
-기대: **출력 없음.**
+> **정정(2026-09-04, Task 4 리뷰가 발견).** 기대값이 「출력 없음」이 아니다 —
+> `RenderAnalysisResultPanel`이 **화면에 낼 문자열**을 만들 때 같은 조립을 한다.
+> 그 자리는 파일을 쓰지 않으므로 경로 규약의 문제가 아니지만, 표시 경로가 실제
+> 저장 경로와 갈라지면 사람이 없는 파일을 찾게 된다. **두 자리를 다 고치고**
+> 기대값을 「출력 없음」으로 유지하는 편이 낫다.
 
 - [ ] **Step 5: 전체 검증**
 
@@ -1049,3 +1053,20 @@ dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"   # 기대: 0
 dotnet test                                                  # 기대: 실패 0, 건너뜀 0
 grep -rn "SaveRawJson\|ExportRawMetadataAsync\|FromSingleObjectPipeline" src tests docs AGENTS.md README.md | grep -v "/obj/\|/bin/"   # 기대: 출력 없음
 ```
+
+
+---
+
+## 실행 중 확정된 정정 모음 (2026-09-04)
+
+- **Task 4의 `SpAnalysisOutcome.Scope`는 결국 매개변수화가 아니라 삭제로 닫혔다.**
+  Task 3이 `FromDependencyGraph`를 3인자로 만들었지만, Task 4가 `SaveDocumentsAsync`를
+  지우면서 그 필드의 **유일한 프로덕션 소비자가 사라졌다.** 설계 §4.3(3)이 고치라 한
+  하드코딩 둘 중 이쪽은 죽은 필드를 채우는 일이었고, 살아 있는 것은
+  `BuildPersistedSpecification` 하나다. 따라서 이 계획서 본문의 3인자 `FromDependencyGraph`
+  서술과 `result.Scope` 단언 지시는 **낡았다** — 최종 상태는 2인자이고 `Scope` 필드는 없다.
+- **계획서 추론(`BatchMigrationPlan.md`의 `ThinkingText`) 손실은 의도된 수렴이다.**
+  `SaveDocumentsAsync`가 게이트 안에 있었으므로 ON은 이미 버리고 있었고, OFF도 캐시 히트
+  회차에는 버렸다. 통일로 OFF의 비캐시 회차까지 버리게 된다 — **그 한 조합에서는 실제
+  축소**다. 복원은 별건이며 자리는 `SaveMigrationPlanAsync` 옆이지 오케스트레이터가 아니다
+  (거기 접으면 Task 1이 닫은 덮어쓰기 위험이 되돌아온다). Task 7이 문서에 남긴다.
