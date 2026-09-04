@@ -67,8 +67,16 @@ namespace ReSet.Core.Services
                     cancellationToken);
 
                 var rawDirectory = Path.GetDirectoryName(canonicalDdlPath)!;
+
+                var manifestPath = paths.ResolveManifestPath(objectKey);
+                var objectRawDirectory = Path.GetDirectoryName(manifestPath)!;
+                Directory.CreateDirectory(objectRawDirectory);
+
+                // 이 파일은 정본이 아니라 회차별 분석 흔적이므로 metadata.json·
+                // dependency-manifest.json과 같은 집에 둔다. 정본 폴더(Objects/)에 두면
+                // 한 객체의 raw가 두 폴더로 쪼개져, 문서가 안내하는 되짚는 순서가 깨진다.
                 var promptContext = rawPromptContext ?? definition.RawPromptContext ?? string.Empty;
-                var promptContextPath = Path.Combine(rawDirectory, "prompt-context.md");
+                var promptContextPath = Path.Combine(objectRawDirectory, "prompt-context.md");
 
                 // 캐시 히트 회차는 RawPromptContext가 비어 있다 - 파이프라인이 AI를
                 // 호출한 회차에만 그 값을 채우기 때문이다. 그 빈 값으로 덮으면 앞선
@@ -90,18 +98,14 @@ namespace ReSet.Core.Services
                     await ExportReferencedCodeDdlsAsync(definition, rawDirectory, cancellationToken);
                 }
 
-                var manifestPath = paths.ResolveManifestPath(objectKey);
-                Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-                var objectDirectoryForManifest = Path.GetDirectoryName(Path.GetDirectoryName(manifestPath)!)!;
+                var objectDirectoryForManifest = Path.GetDirectoryName(objectRawDirectory)!;
                 var manifest = BuildManifest(definition, objectKey, graph, paths, objectDirectoryForManifest);
                 var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(manifestPath, json, Encoding.UTF8, cancellationToken);
 
                 // 지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천이다.
                 // 매니페스트와 같은 디렉터리에 두어야 Spec.md 경로에서 규칙적으로 찾을 수 있다.
-                var metadataPath = Path.Combine(
-                    Path.GetDirectoryName(manifestPath)!,
-                    "metadata.json");
+                var metadataPath = Path.Combine(objectRawDirectory, "metadata.json");
                 await File.WriteAllTextAsync(
                     metadataPath,
                     JsonSerializer.Serialize(definition, new JsonSerializerOptions { WriteIndented = true }),

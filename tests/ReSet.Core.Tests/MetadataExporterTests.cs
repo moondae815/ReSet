@@ -283,8 +283,13 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// rawPromptContext 인자를 넘기지 않아도 definition.RawPromptContext가 쓰인다.
+        /// 그리고 그 결과는 metadata.json·dependency-manifest.json과 같은 집에 놓인다 -
+        /// prompt-context.md는 정본 DDL이 아니라 회차별 분석 흔적이기 때문이다.
+        /// </summary>
         [Fact]
-        public async Task ExportCodeObjectArtifactsAsync_WritesDefinitionPromptContextEvenWhenArgumentIsOmitted()
+        public async Task ExportCodeObjectArtifactsAsync_WritesPromptContextNextToManifest()
         {
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
             var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Prompt", CodeObjectType.Procedure);
@@ -305,8 +310,13 @@ namespace ReSet.Core.Tests
                     DependencyArtifactMode.Reference,
                     outputRoot);
 
-                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_Prompt.Procedure", "raw", "prompt-context.md");
+                var promptPath = Path.Combine(outputRoot, "Procedures", "dbo.USP_Prompt", "raw", "prompt-context.md");
                 Assert.Equal("actual prompt body", await File.ReadAllTextAsync(promptPath));
+
+                // 정본 폴더에는 DDL만 남는다. 한 객체의 raw가 두 집으로 쪼개지면
+                // §11의 되짚는 순서("모델이 무엇을 봤나 → raw/prompt-context.md")가 거짓이 된다.
+                Assert.False(File.Exists(Path.Combine(
+                    outputRoot, "Objects", "dbo.USP_Prompt.Procedure", "raw", "prompt-context.md")));
             }
             finally
             {
@@ -377,7 +387,7 @@ namespace ReSet.Core.Tests
                     DependencyArtifactMode.Reference,
                     outputRoot);
 
-                var promptPath = Path.Combine(outputRoot, "Objects", "dbo.USP_EmptyPrompt.Procedure", "raw", "prompt-context.md");
+                var promptPath = Path.Combine(outputRoot, "Procedures", "dbo.USP_EmptyPrompt", "raw", "prompt-context.md");
                 Assert.True(File.Exists(promptPath));
                 Assert.Equal(string.Empty, await File.ReadAllTextAsync(promptPath));
             }
@@ -400,7 +410,7 @@ namespace ReSet.Core.Tests
             var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-MetadataExporter-{Guid.NewGuid():N}");
             var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP_CacheHit", CodeObjectType.Procedure);
             var promptPath = Path.Combine(
-                outputRoot, "Objects", "dbo.USP_CacheHit.Procedure", "raw", "prompt-context.md");
+                outputRoot, "Procedures", "dbo.USP_CacheHit", "raw", "prompt-context.md");
 
             try
             {
