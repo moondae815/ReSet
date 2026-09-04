@@ -358,6 +358,51 @@ public sealed class DependencyAnalysisOrchestratorTests
         }
     }
 
+    /// <summary>
+    /// 보존 규칙의 세 번째 축: 추론이 <b>있는</b> 회차는 이미 있는 Thinking.md를 갱신해야 한다.
+    /// 이 축이 없으면 가드를 <c>if (File.Exists(thinkingPath)) return;</c>로 바꾼 뮤턴트가
+    /// 위 두 테스트를 포함해 전 테스트를 조용히 통과한다 — 두 테스트 모두 새 임시
+    /// 디렉터리에서 시작해 「파일이 이미 있고 추론도 있는」 회차에 닿지 않기 때문이다.
+    /// 그 뮤턴트는 Thinking.md를 첫 회차 이후 영구 동결시켜 새 추론이 절대 반영되지 않게
+    /// 하는데, 같은 출력 디렉터리에 반복해 도는 것은 캐시 히트가 아닌 평범한 재분석의
+    /// 정상 사용법이다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_OverwritesExistingThinkingLogWhenReasoningIsPresent()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ThinkingRefresh-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var paths = new OutputPathResolver(root.Database, outputRoot);
+        var thinkingPath = Path.Combine(paths.ResolveDocsDirectory(root), "Thinking.md");
+
+        DependencyAnalysisOrchestrator Analyzing(string reasoning) => new(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key),
+                SpecMarkdown = "# Spec",
+                ThinkingText = reasoning
+            }));
+
+        try
+        {
+            // 1회차와 2회차 모두 AI를 호출해 서로 다른 추론을 남겼다.
+            await Analyzing("private reasoning from attempt 1").AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+            await Analyzing("private reasoning from attempt 2").AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var thinking = await File.ReadAllTextAsync(thinkingPath);
+            Assert.Contains("private reasoning from attempt 2", thinking);
+            Assert.DoesNotContain("private reasoning from attempt 1", thinking);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
     [Fact]
     public async Task AnalyzeAsync_ReportsEachCodeObjectBeforeItsPipelineStarts()
     {
