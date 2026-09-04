@@ -618,6 +618,11 @@ git commit -m "feat: 오케스트레이터가 비재귀 분석 요청을 받게 
 - Consumes: Task 3의 `AnalyzeReferencedCodeObjects`와 3인자 `FromDependencyGraph`
 - Produces: `RunConfiguredAnalysisAsync`는 시그니처가 그대로이고, 이제 **항상** `Persistence != NotAttempted`인 결과를 낸다.
 
+> **정정(2026-09-04).** 이 태스크가 `SaveDocumentsAsync`를 지우면서 `BatchMigrationPlan.md`의
+> 추론(`ThinkingText`)이 어느 조합에서도 남지 않게 된다. **이것은 사고가 아니라 의도된
+> 수렴이다** — 자세한 근거와 복원 자리는 아래 「실행 중 확정된 정정 모음」에 있고,
+> Task 7이 원장에 등재한다.
+
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/ReSet.Core.Tests/CliArgsTests.cs`의 기존 테스트 `RunConfiguredAnalysisAsync_UsesOfflineSnapshotDatabaseForRecursiveRoot` 바로 아래에 더한다. 같은 파일의 대역 `CapturingDependencyAnalysisOrchestrator`(`:143`)를 그대로 쓴다.
@@ -874,14 +879,22 @@ CLI에서 출력 경로를 손으로 조립하던 자리 둘이 Task 4에서 사
     public void ResolveDocsDirectory_EncodesReservedCharactersInObjectName()
     {
         var paths = new OutputPathResolver("PaymentDB", "/tmp/output");
-        var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP:Odd", CodeObjectType.Procedure);
+        var key = CodeObjectKey.Create("PaymentDB", "dbo", "USP.Odd/Name", CodeObjectType.Procedure);
 
         var directory = paths.ResolveDocsDirectory(key);
 
-        Assert.DoesNotContain(":", Path.GetFileName(Path.GetDirectoryName(directory)!));
-        Assert.EndsWith("docs", directory);
+        Assert.Equal("/tmp/output/Procedures/dbo.USP%2EOdd%2FName/docs", directory);
+        Assert.NotEqual(
+            Path.Combine("/tmp/output", "Procedures", $"{key.Schema}.{key.Name}", "docs"),
+            directory);
     }
 ```
+
+> **정정(2026-09-04, Task 7이 발견).** 이 계획서 초판은 이름을 `"USP:Odd"`로 두고
+> `Assert.DoesNotContain(":")`에 「기대: 통과」라고 적었는데 **그 테스트는 실패한다.**
+> `EncodePathSegment`가 인코딩하는 것은 `.`·`%`·경로 구분자·`Path.GetInvalidFileNameChars()`뿐이고,
+> **유닉스에서 그 집합은 `{'\0','/'}`이라 `:`가 그대로 통과한다.** 실제 구현이 쓴
+> `.`·`/`로 고쳐 적었다. 손조립과 갈라진다는 것을 역단언으로 함께 못박는다.
 
 - [ ] **Step 2: 계약 테스트를 돌린다**
 
