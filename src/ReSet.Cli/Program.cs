@@ -1909,17 +1909,17 @@ namespace ReSet.Cli
                                 .Title("[bold green]요구사항 문서를 도출할 대상을 선택하세요[/]")
                                 .PageSize(20)
                                 .InstructionsText("[grey](스페이스로 선택, 엔터로 확정)[/]")
-                                .AddChoices(targets.Select(t =>
-                                    t.HasExistingPrd ? $"{t.Label} (기존 Prd.md 있음)" : t.Label)));
+                                .AddChoices(targets.Select(PrdTargetSelection.ToDisplayLabel)));
 
                         if (picked.Count == 0)
                         {
                             continue;
                         }
 
-                        var selectedTargets = targets
-                            .Where(t => picked.Any(p => p.StartsWith(t.Label, StringComparison.Ordinal)))
-                            .ToList();
+                        // 표시 문자열을 정확히 일치시켜서만 대상으로 되짚는다 - Label 간
+                        // 접두어 포함 관계(코퍼스 실측, PrdTargetSelection 주석 참고)가 있어
+                        // StartsWith 같은 부분 일치로 되짚으면 고르지 않은 대상까지 딸려온다.
+                        var selectedTargets = PrdTargetSelection.Resolve(targets, picked).ToList();
 
                         if (selectedTargets.Any(t => t.HasExistingPrd)
                             && !AnsiConsole.Confirm("[yellow]기존 Prd.md가 있는 대상이 포함되어 있습니다. 덮어쓰시겠습니까?[/]", false))
