@@ -1246,6 +1246,72 @@ public sealed class DependencyAnalysisOrchestratorTests
     }
 
     /// <summary>
+    /// 머리의 「분석 범위」 도장만 고쳐서는 부족하다. 같은 문서의 「참조 코드 객체」 절이
+    /// OFF의 빈 그래프를 보고 "직접 참조하는 코드 객체가 없습니다"라고 쓰면, 옆의
+    /// metadata.json이 피호출 객체를 나열하는 동안 명세서 혼자 반대를 말한다. 그리고 그
+    /// 문장은 여기서 끝나지 않는다 — PersistArtifactsAsync가 링커 결과를
+    /// analysis.SpecMarkdown에 되쓰고, 그것이 지시서 번들을 거쳐 코딩 에이전트에게 간다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_DoesNotClaimTheObjectHasNoReferences()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-RefClause-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot) with { AnalyzeReferencedCodeObjects = false },
+                CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.DoesNotContain("직접 참조하는 코드 객체가 없습니다", spec);
+            Assert.Contains("참조분석을 끄고 분석해 직접 참조를 열거하지 않았습니다", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// ON에서 정말로 참조가 없는 객체는 그 사실을 계속 신고해야 한다. OFF 문구가
+    /// 두 경우를 모두 덮으면 이번 수정은 거짓을 다른 거짓으로 바꾼 것에 지나지 않는다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreEnabledAndRootHasNone_StatesTheObjectHasNoReferences()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-RefClauseOn-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("직접 참조하는 코드 객체가 없습니다", spec);
+            Assert.DoesNotContain("참조분석을 끄고", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
     /// 결과가 담는 정의는 파이프라인이 수집한 그것이어야 한다 — 발견 단계가 쓴
     /// 직접 의존성 판본으로 바뀌면 안 된다. 이 정의의 Dependencies가 CLI의 spDefs를
     /// 거쳐 StepInterfaceFacts.BuildCallGraph로 흘러가고, 그것이 계획서 Narrow 모드의

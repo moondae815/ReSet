@@ -445,6 +445,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                         analysis.Key,
                         analysis.SpecMarkdown ?? string.Empty,
                         graph,
+                        ResolveScope(request),
                         cancellationToken);
 
                     try
@@ -533,10 +534,17 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             request.ModelName,
             request.ActorEffort,
             analysis.AnalyzedAt ?? DateTime.Now,
-            request.AnalyzeReferencedCodeObjects
-                ? AnalysisScope.Direct
-                : AnalysisScope.Transitive);
+            ResolveScope(request));
     }
+
+    /// <summary>
+    /// 이 회차가 실제로 수집한 의존성의 범위. 헤더의 「분석 범위」 도장과 「참조 코드 객체」
+    /// 절이 같은 값을 읽어야 한 문서가 자기 수집 범위를 두 가지로 신고하지 않는다.
+    /// </summary>
+    private static AnalysisScope ResolveScope(DependencyAnalysisRequest request) =>
+        request.AnalyzeReferencedCodeObjects
+            ? AnalysisScope.Direct
+            : AnalysisScope.Transitive;
 
     /// <summary>
     /// 이 문서가 참조하는 객체 중 분석이 끝나지 않은 것들의 이름을 모은다.
