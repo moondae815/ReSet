@@ -25,7 +25,7 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
                 request.OutputDirectory,
                 request.EnableCache,
                 cancellationToken,
-                directDependenciesOnly: true,
+                directDependenciesOnly: request.AnalyzeReferencedCodeObjects,
                 includeExternalCodeObjects: true,
                 analysisDatabase: request.AnalysisDatabase),
             new MetadataExporter(),
@@ -160,41 +160,48 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
 
             execution.RegisterCanonicalKey(definition.ObjectKey);
 
-            foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
+            // OFF는 "깊이 0"이 아니라 "그래프를 만들지 않는다"이다. 자식을 발견해
+            // 실행 목록에 넣으면 OFF에서도 자식마다 AI 비용이 나가고, 사용자가 고르지
+            // 않은 Spec.md가 생긴다. 루트가 잃는 정보는 파이프라인이 전이적 메타데이터를
+            // 대신 실어 메운다(DependencyAnalysisRequest.AnalyzeReferencedCodeObjects).
+            if (request.AnalyzeReferencedCodeObjects)
             {
-                var target = CreateDependencyKey(dependency, key.Database);
-                if (target is null)
+                foreach (var dependency in GetDirectCodeObjectDependencies(definition, key))
                 {
-                    continue;
-                }
-
-                execution.AddEdge(key, target, dependency.IsDynamicSqlCandidate);
-                var child = execution.GetOrAddNode(target);
-                var targetDepth = depth + 1;
-
-                if (targetDepth > request.MaxDepth)
-                {
-                    if (!execution.HasDepthAtMost(target, request.MaxDepth))
+                    var target = CreateDependencyKey(dependency, key.Database);
+                    if (target is null)
                     {
-                        Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                        continue;
                     }
-                    continue;
-                }
 
-                if (target.Type == CodeObjectType.Unresolved)
-                {
-                    Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다.");
-                    continue;
-                }
+                    execution.AddEdge(key, target, dependency.IsDynamicSqlCandidate);
+                    var child = execution.GetOrAddNode(target);
+                    var targetDepth = depth + 1;
 
-                if (!request.AllowExternalDatabaseConnections &&
-                    !string.Equals(target.Database, execution.CurrentDatabase, StringComparison.OrdinalIgnoreCase))
-                {
-                    Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 데이터베이스 연결이 허용되지 않았습니다.");
-                    continue;
-                }
+                    if (targetDepth > request.MaxDepth)
+                    {
+                        if (!execution.HasDepthAtMost(target, request.MaxDepth))
+                        {
+                            Skip(child, AnalysisNodeStatus.SkippedDepth, $"최대 의존성 깊이({request.MaxDepth})를 초과했습니다.");
+                        }
+                        continue;
+                    }
 
-                await DiscoverAsync(target, targetDepth, request, execution, cancellationToken);
+                    if (target.Type == CodeObjectType.Unresolved)
+                    {
+                        Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 코드 객체 유형을 추가 조회 없이 확인할 수 없습니다.");
+                        continue;
+                    }
+
+                    if (!request.AllowExternalDatabaseConnections &&
+                        !string.Equals(target.Database, execution.CurrentDatabase, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Skip(child, AnalysisNodeStatus.SkippedExternal, "외부 데이터베이스 연결이 허용되지 않았습니다.");
+                        continue;
+                    }
+
+                    await DiscoverAsync(target, targetDepth, request, execution, cancellationToken);
+                }
             }
 
             node.Status = AnalysisNodeStatus.Queued;
@@ -526,7 +533,9 @@ public sealed class DependencyAnalysisOrchestrator : IDependencyAnalysisOrchestr
             request.ModelName,
             request.ActorEffort,
             analysis.AnalyzedAt ?? DateTime.Now,
-            AnalysisScope.Direct);
+            request.AnalyzeReferencedCodeObjects
+                ? AnalysisScope.Direct
+                : AnalysisScope.Transitive);
     }
 
     /// <summary>

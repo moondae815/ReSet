@@ -1183,6 +1183,134 @@ public sealed class DependencyAnalysisOrchestratorTests
         Assert.Contains("데이터베이스", exception.Message);
     }
 
+    /// <summary>
+    /// 참조분석 OFF는 "깊이 0"이 아니라 "그래프를 만들지 않는다"이다. 자식을 발견해
+    /// 실행 목록에 넣으면 OFF에서도 자식마다 AI 비용이 나가고, 자식 Spec.md가 생겨
+    /// 사용자가 고른 것과 다른 산출물이 남는다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_AnalyzesRootOnly()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var executed = new List<CodeObjectKey>();
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) =>
+            {
+                executed.Add(key);
+                return Task.FromResult(PipelineResult(key));
+            });
+
+        var result = await sut.AnalyzeAsync(
+            root,
+            Request() with { AnalyzeReferencedCodeObjects = false },
+            CancellationToken.None);
+
+        Assert.Equal(new[] { root }, executed);
+        Assert.Empty(result.Edges);
+        Assert.Equal(root, Assert.Single(result.Nodes).Key);
+    }
+
+    /// <summary>
+    /// OFF 회차의 명세서는 전이적으로 모은 메타데이터로 쓰인다. 머리에 "직접 의존성"이
+    /// 박히면 문서가 자기 수집 범위를 거짓으로 신고한다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_StampsTransitiveScope()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-Scope-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var metadata = CreateMetadataService(Definition(root));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            await sut.AnalyzeAsync(
+                root,
+                Request(outputDirectory: outputRoot) with { AnalyzeReferencedCodeObjects = false },
+                CancellationToken.None);
+
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("분석 범위: 전이 의존성", spec);
+            Assert.DoesNotContain("분석 범위: 직접 의존성", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
+    /// <summary>
+    /// 결과가 담는 정의는 파이프라인이 수집한 그것이어야 한다 — 발견 단계가 쓴
+    /// 직접 의존성 판본으로 바뀌면 안 된다. 이 정의의 Dependencies가 CLI의 spDefs를
+    /// 거쳐 StepInterfaceFacts.BuildCallGraph로 흘러가고, 그것이 계획서 Narrow 모드의
+    /// 1-hop 이웃을 고른다. 얇아져도 명세서는 멀쩡해 보이고 계획서 단계 본문만
+    /// 조용히 나빠지므로, 여기서 잠근다(설계 §2.1).
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_WhenReferencesAreDisabled_CarriesPipelineCollectedDependencies()
+    {
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var neighbour = Key("USP_Neighbour", CodeObjectType.Procedure);
+
+        // 발견 단계가 보는 정의에는 의존성이 없다.
+        var metadata = CreateMetadataService(Definition(root));
+
+        // 파이프라인은 전이적으로 모아 이웃을 담아 돌려준다.
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(new CodeObjectPipelineResult
+            {
+                SpDef = Definition(key, neighbour),
+                SpecMarkdown = "# Spec"
+            }));
+
+        var result = await sut.AnalyzeAsync(
+            root,
+            Request() with { AnalyzeReferencedCodeObjects = false },
+            CancellationToken.None);
+
+        var analysis = Assert.Single(result.AnalysisResults);
+        var dependency = Assert.Single(analysis.Definition!.Dependencies);
+        Assert.Equal("USP_Neighbour", dependency.Name);
+    }
+
+    /// <summary>
+    /// 재귀 모드는 지금 그대로여야 한다. 플래그의 기본값이 뒤집히면 기존 사용자가
+    /// 아무것도 바꾸지 않았는데 산출물이 줄어든다.
+    /// </summary>
+    [Fact]
+    public async Task AnalyzeAsync_ByDefault_StillAnalyzesReferencesAndStampsDirectScope()
+    {
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"ReSet-ScopeDirect-{Guid.NewGuid():N}");
+        var root = Key("USP_Root", CodeObjectType.Procedure);
+        var child = Key("FN_Child", CodeObjectType.Function);
+        var metadata = CreateMetadataService(Definition(root, child), Definition(child));
+        var sut = new DependencyAnalysisOrchestrator(
+            metadata,
+            (_, key, _) => Task.FromResult(PipelineResult(key)));
+
+        try
+        {
+            var result = await sut.AnalyzeAsync(
+                root, Request(outputDirectory: outputRoot), CancellationToken.None);
+
+            Assert.Equal(2, result.Nodes.Count);
+            var paths = new OutputPathResolver(root.Database, outputRoot);
+            var spec = await File.ReadAllTextAsync(paths.ResolveSpecPath(root));
+            Assert.Contains("분석 범위: 직접 의존성", spec);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot)) Directory.Delete(outputRoot, true);
+        }
+    }
+
     private static DependencyAnalysisRequest Request(
         int maxDepth = 3,
         string outputDirectory = "/tmp/output",

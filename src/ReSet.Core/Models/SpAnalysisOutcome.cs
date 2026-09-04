@@ -45,13 +45,16 @@ public sealed record SpAnalysisOutcome
     }
 
     /// <summary>
-    /// 참조분석 ON 경로. 그래프에서 루트 분석 결과를 찾아 옮긴다.
+    /// 오케스트레이터 경로. 그래프에서 루트 분석 결과를 찾아 옮긴다.
     /// 캐시 상태는 루트 노드의 것이다 — 노드마다 다른 값을 하나로 접으면
     /// 어느 쪽으로 접어도 거짓이 된다.
+    /// 수집 범위는 호출부가 <paramref name="scope"/>로 알려준다. 여기서 정하면
+    /// 비재귀 요청의 결과가 자기 범위를 거짓으로 신고한다.
     /// </summary>
     public static SpAnalysisOutcome FromDependencyGraph(
         CodeObjectPipelineResult result,
-        CodeObjectKey rootKey)
+        CodeObjectKey rootKey,
+        AnalysisScope scope)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(rootKey);
@@ -65,7 +68,7 @@ public sealed record SpAnalysisOutcome
             Review = root?.Review,
             ThinkingText = root?.ThinkingText,
             Outcome = root?.Outcome ?? VerificationOutcome.ReviewNotRun,
-            Scope = AnalysisScope.Direct,
+            Scope = scope,
             Completion = result.Completion,
             FromCache = root?.FromCache ?? false,
             AnalyzedAt = root?.AnalyzedAt,

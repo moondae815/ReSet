@@ -73,7 +73,7 @@ public sealed class SpAnalysisOutcomeTests
             }
         };
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
 
         Assert.Equal("# 루트", outcome.SpecMarkdown);
         Assert.Equal(AnalysisScope.Direct, outcome.Scope);
@@ -110,7 +110,7 @@ public sealed class SpAnalysisOutcomeTests
             }
         };
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
 
         Assert.False(outcome.FromCache);
         Assert.Null(outcome.AnalyzedAt);
@@ -122,7 +122,7 @@ public sealed class SpAnalysisOutcomeTests
         var rootKey = CodeObjectKey.Create("PaymentDB", "dbo", "USP_Root", CodeObjectType.Procedure);
         var result = new CodeObjectPipelineResult();
 
-        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
+        var outcome = SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
 
         Assert.Null(outcome.SpecMarkdown);
         Assert.Null(outcome.Definition);

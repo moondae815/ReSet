@@ -18,6 +18,15 @@ public sealed record DependencyAnalysisRequest
     public bool AllowExternalDatabaseConnections { get; init; }
 
     /// <summary>
+    /// 루트가 참조하는 SP/UDF까지 그래프로 분석할지. 이 값 하나가 두 축을 함께
+    /// 결정한다 — 그래프 재귀 여부와, 파이프라인의 메타데이터 수집 범위다.
+    /// <c>false</c>면 그래프는 루트 한 노드로 끝나고, 대신 루트가 전이적 의존성
+    /// 메타데이터를 전부 받는다(자식이 자기 명세서를 갖지 않으므로 루트 하나가
+    /// 전부를 설명해야 한다).
+    /// </summary>
+    public bool AnalyzeReferencedCodeObjects { get; init; } = true;
+
+    /// <summary>
     /// 분석 기준 데이터베이스. <see cref="IDependencyAnalysisOrchestrator.AnalyzeAsync"/>가
     /// 루트 객체의 DB로 덮어쓰므로 호출자가 설정할 필요는 없다.
     /// 이 값이 <c>OutputPathResolver</c>의 "현재 DB" 기준이 되며,
@@ -44,6 +53,7 @@ public sealed record DependencyAnalysisRequest
         builder.Append(", OutputDirectory = ").Append(OutputDirectory);
         builder.Append(", EnableCache = ").Append(EnableCache);
         builder.Append(", AllowExternalDatabaseConnections = ").Append(AllowExternalDatabaseConnections);
+        builder.Append(", AnalyzeReferencedCodeObjects = ").Append(AnalyzeReferencedCodeObjects);
         builder.Append(", AnalysisDatabase = ").Append(AnalysisDatabase);
         builder.Append(", DependencyArtifactMode = ").Append(DependencyArtifactMode);
         builder.Append(", Progress = ").Append(Progress);

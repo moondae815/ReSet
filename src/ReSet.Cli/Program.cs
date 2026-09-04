@@ -2080,7 +2080,7 @@ namespace ReSet.Cli
 
             RenderAnalysisDiagnostics(result);
 
-            return SpAnalysisOutcome.FromDependencyGraph(result, rootKey);
+            return SpAnalysisOutcome.FromDependencyGraph(result, rootKey, AnalysisScope.Direct);
         }
 
         private static async Task<string> ResolveAnalysisDatabaseAsync(
