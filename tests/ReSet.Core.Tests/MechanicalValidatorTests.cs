@@ -140,6 +140,81 @@ graph TD
             Assert.Contains("A[\"시작 (사용자ID)\"]", result.CleansedMarkdown);
         }
 
+        /// <summary>
+        /// 정화기가 <b>flowchart 문법으로 sequenceDiagram 을 부수던</b> 결함의 회귀 검사다.
+        ///
+        /// [실측 - 반복 실행 R3·F1·F2 를 태운 것이 이것이다 (2026-09-04)]
+        /// <c>CleanseMermaidCode</c> 의 화살표 보정(<c>-[^-]&gt;</c> → <c>--&gt;</c>)은 flowchart
+        /// 전용인데 <b>모든</b> mermaid 블록에 적용됐다. 그래서 sequenceDiagram 의 유효한
+        /// <c>--&gt;&gt;</c>(점선+화살촉)가 <c>---&gt;</c>로 바뀌었는데 그 토큰은 sequenceDiagram
+        /// 문법에 <b>없다</b> — 정화기가 멀쩡한 다이어그램을 부순 뒤 그것을 mmdc 에 넘겨
+        /// 파스 오류를 받은 것이다.
+        ///
+        /// 대가가 컸다. 수리 프롬프트는 모델에게 <b>모델이 쓰지 않은 줄</b>을 고치라고 했고,
+        /// 모델이 다시 <c>--&gt;&gt;</c>로 쓰면 정화기가 또 부쉈다. 판 F2 는 그렇게 세 번
+        /// 연속 실패해 L1 예산을 소진하고 채점에 한 번도 도달하지 못했다(판 R3 는 6회차를
+        /// 통째로 태웠다). 저장까지 가면 더 나쁘다 — 파이프라인이 정화본을 산출물로
+        /// 채택하므로(<c>consolidatedPlan = l1Result.CleansedMarkdown</c>) 부서진 다이어그램이
+        /// 그대로 배송된다. 실측: 통제군 13편 중 3편을 새로 부수고, 두 트리에 이미 부서진
+        /// 채 저장된 문서가 6편 있다.
+        ///
+        /// <b>원인 귀속을 한 번 틀렸다</b>: 로그의 오류 메시지만 보고 「모델이 sequenceDiagram
+        /// 화살표를 반복해 틀린다」로 적었는데, 실제로 재 보니 모델은 맞게 썼고 도구가 부쉈다.
+        /// </summary>
+        [Fact]
+        public void PostProcessMarkdown_SequenceDiagramArrows_AreLeftIntact()
+        {
+            var markdown = @"```mermaid
+sequenceDiagram
+    ORCH->>DB: 커밋 요청
+    DB-->>ORCH: 커밋 완료
+    ORCH-)DB: 비동기
+    DB--x ORCH: 실패
+```";
+
+            var cleansed = _validator.PostProcessMarkdown(markdown);
+
+            // 정화기가 손대지 않아야 한다 - 이 블록의 화살표는 전부 유효하다.
+            Assert.Equal(markdown, cleansed);
+            // 특히 이 둘: 부수면 mmdc 가 파스 오류를 내고 L1 예산을 태운다.
+            Assert.Contains("DB-->>ORCH", cleansed);
+            Assert.Contains("ORCH->>DB", cleansed);
+            Assert.DoesNotContain("--->", cleansed);
+        }
+
+        /// <summary>
+        /// 위 수정이 flowchart 정화를 끄지 않았는지 고정한다. 종류를 가리는 것이지
+        /// 정화를 그만두는 것이 아니다 - flowchart 의 노드 라벨 정화는 그대로 돌아야 한다.
+        /// </summary>
+        [Fact]
+        public void PostProcessMarkdown_FlowchartCleansing_StillApplies()
+        {
+            var markdown = @"```mermaid
+graph TD
+    A[시작 (사용자ID)] --> B[종료]
+```";
+
+            var cleansed = _validator.PostProcessMarkdown(markdown);
+
+            Assert.Contains("A[\"시작 (사용자ID)\"]", cleansed);
+        }
+
+        /// <summary>
+        /// 종류를 알 수 없으면 손대지 않는다. 극성이 중요하다 - 실측에서 「적용」은
+        /// 파괴였고 「건너뜀」은 무해했으므로, 확실히 flowchart 계열일 때만 정화한다.
+        /// </summary>
+        [Fact]
+        public void PostProcessMarkdown_UnknownDiagramType_IsLeftIntact()
+        {
+            var markdown = @"```mermaid
+stateDiagram-v2
+    [*] --> Running
+    Running --> [*]
+```";
+
+            Assert.Equal(markdown, _validator.PostProcessMarkdown(markdown));
+        }
+
         [Fact]
         public void ValidateConsolidated_WithValidMarkdown_ShouldReturnTrue()
         {

@@ -6098,8 +6098,72 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// mermaid 블록이 flowchart 계열(<c>flowchart</c>·<c>graph</c>)인가. 종류를 알 수
+        /// 없으면 <b>거짓</b>이다.
+        ///
+        /// [극성이 중요하다] 실측(2026-09-04)에서 정화를 "적용"하는 것은 flowchart 밖에서
+        /// 전부 파괴였고 "건너뛰는" 것은 무해했다. 그러므로 확실히 flowchart 계열일 때만
+        /// 참이다 - mermaid 프런트매터(<c>---</c>)로 시작하는 블록처럼 판정이 서지 않는
+        /// 경우도 건너뛴다.
+        /// </summary>
+        private static bool IsFlowchartFamily(string mermaid)
+        {
+            foreach (var raw in mermaid.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None))
+            {
+                var line = raw.Trim();
+                // 빈 줄과 지시자 주석(%%{init: ...}%% 포함)은 종류를 말하지 않는다.
+                if (line.Length == 0 || line.StartsWith("%%", StringComparison.Ordinal)) continue;
+
+                foreach (var keyword in new[] { "flowchart", "graph" })
+                {
+                    if (line.StartsWith(keyword, StringComparison.OrdinalIgnoreCase) &&
+                        (line.Length == keyword.Length || char.IsWhiteSpace(line[keyword.Length])))
+                    {
+                        return true;
+                    }
+                }
+
+                // 첫 유효 줄이 종류 선언이다. 그것이 flowchart 계열이 아니면 끝이다.
+                return false;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// [왜 flowchart 계열에만 도는가 - 반복 실행 R3·F1·F2 를 태운 결함(2026-09-04)]
+        /// 아래 규칙은 전부 flowchart 문법을 전제한다 - 노드 셰이프(<c>A[...]</c>), 링크
+        /// 라벨(<c>--&gt;|label|</c>), <c>subgraph</c>. sequenceDiagram 에는 그 문법이 아예
+        /// 없어서 대부분의 규칙은 그냥 안 걸리는데, <b>화살표 보정 하나만은 걸리고 그것이
+        /// 파괴다</b>: <c>-[^-]&gt;</c> → <c>--&gt;</c> 가 유효한 <c>--&gt;&gt;</c>(점선+화살촉)를
+        /// <c>---&gt;</c>로 바꾸는데, 그 토큰은 sequenceDiagram 문법에 <b>없다</b>
+        /// (flowchart 에서는 대시를 늘린 긴 링크라 유효하다 - 그래서 여기서만 정당하다).
+        /// <c>-&gt;&gt;</c>(실선+화살촉)도 <c>--&gt;</c>가 되어 화살촉을 잃는다.
+        ///
+        /// 그래서 정화기가 멀쩡한 다이어그램을 부순 뒤 그것을 mmdc 에 넘겨 파스 오류를
+        /// 받았다. 수리 프롬프트는 모델에게 <b>모델이 쓰지 않은 줄</b>을 고치라고 했고,
+        /// 모델이 다시 옳게 쓰면 정화기가 또 부쉈다 - 판 F2 가 그렇게 세 번 연속 실패해
+        /// L1 예산을 소진하고 채점에 한 번도 못 갔다. 파이프라인이 정화본을 산출물로
+        /// 채택하므로(<c>consolidatedPlan = l1Result.CleansedMarkdown</c>) 부서진
+        /// 다이어그램이 그대로 배송되기도 했다(두 트리에 6편).
+        ///
+        /// 실측으로 확인한 것: 통제군 sequenceDiagram 13편에 정화를 걸면 3편이 새로 깨지고,
+        /// <b>깨지지 않은 변경은 하나도 없었다</b> - 전부 화살촉 소실 아니면 문법 파괴였다.
+        /// 그러므로 이 종류에서 정화가 지키는 것은 없고, 건너뛰는 데 대가가 없다.
+        ///
+        /// <c>stateDiagram</c>(코퍼스 27편)도 같은 오발을 받고 있었다 - 노드 셰이프 정규식이
+        /// <c>[*]</c>에 걸려 <c>Unlocked --&gt; [*]</c>의 공백을 지운다(11편). 파스는 되지만
+        /// 지키는 것도 없다. 그래서 판정을 "flowchart 계열인가"로 두고, 아닌 것은 전부
+        /// 건너뛴다 - 종류를 하나씩 열거해 예외 목록을 기르는 것보다 극성이 안전하다.
+        /// </summary>
         private string CleanseMermaidCode(string mermaid)
         {
+            if (!IsFlowchartFamily(mermaid))
+            {
+                return mermaid;
+            }
+
             var lines = mermaid.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             var resultLines = new List<string>();
 
