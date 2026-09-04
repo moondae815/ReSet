@@ -35,6 +35,7 @@
 | `src/ReSet.Cli/Program.cs` | OFF 분기·저장 게이트·전용 저장 메서드 삭제, 계획서 경로 정리 |
 | `src/ReSet.Cli/appsettings.json` | `SaveRaw*` 세 키 삭제 |
 | `tests/ReSet.Core.Tests/DependencyAnalysisOrchestratorTests.cs` | 새 동작 4건 |
+| `tests/ReSet.Core.Tests/SpAnalysisOutcomeTests.cs` | **계획서 초판이 빠뜨렸다.** Task 3의 3인자 시그니처가 호출부 3곳을 깨고, Task 4의 `FromSingleObjectPipeline` 삭제가 그 테스트 1건을 지운다 |
 | `tests/ReSet.Core.Tests/MetadataExporterTests.cs` | 경로 단언 3건 갱신, 죽은 테스트 4건 삭제 |
 | `docs/output-artifacts.md` · `docs/known-defects.md` | 규칙 단일화 반영 |
 
@@ -611,6 +612,7 @@ git commit -m "feat: 오케스트레이터가 비재귀 분석 요청을 받게 
 - Modify: `src/ReSet.Cli/Program.cs` — `RunConfiguredAnalysisAsync`(`:2014-2083`), 게이트 블록 2개(`:935`, `:1384`), `SaveRawArtifactsAsync`(`:2204-2286`), `SaveDocumentsAsync`(`:2288~`), 지역 변수(`:364-366`)
 - Modify: `src/ReSet.Core/Models/SpAnalysisOutcome.cs` — `FromSingleObjectPipeline` 삭제
 - Test: `tests/ReSet.Core.Tests/CliArgsTests.cs`
+- Test: `tests/ReSet.Core.Tests/SpAnalysisOutcomeTests.cs` — `FromSingleObjectPipeline_MarksTransitiveScopeAndLeavesPersistenceToTheCaller`(`:21`·`:37`)가 지워지는 심볼을 검사하므로 함께 지운다. 같은 파일의 `FromDependencyGraph_MissingRoot_…`는 scope가 인자가 된 뒤로 **자기가 방금 넘긴 값을 되읽는 단언**이 됐다 — 이름(`…MarksDirectScope…`)도 함께 볼 것
 
 **Interfaces:**
 - Consumes: Task 3의 `AnalyzeReferencedCodeObjects`와 3인자 `FromDependencyGraph`

@@ -198,6 +198,12 @@ Job 단위 `Jobs/[Job]/raw/ddl/`을 만들 때 여전히 쓴다. 그 자리는 �
 OFF에서 새로 생기는 것: `dependency-manifest.json`(1노드) · `Objects/` 정본 ·
 스위치 없는 `metadata.json`.
 
+> **`PortableBundle`의 범위가 OFF에서 넓어진다**(Task 3 리뷰가 짚었다, 2026-09-04).
+> `ExportReferencedCodeDdlsAsync`는 `definition.Dependencies`를 순회하는데, OFF의 그것은
+> **전이적**이다. 따라서 OFF + `PortableBundle` 조합은 손자 객체의 DDL까지 폴더에 담는다.
+> 이것은 옳다 — 번들은 그 명세서가 **실제로 무엇을 보고 쓰였는지**를 담아야 하고,
+> OFF의 명세서는 전이적 메타데이터로 쓰였다. 다만 폴더가 ON 때보다 커지므로 적어 둔다.
+
 ## 5. 이 설계가 닫지 **않는** 것
 
 정직하게 적는다. 아래는 이번 작업의 성과로 주장하지 않는다.
