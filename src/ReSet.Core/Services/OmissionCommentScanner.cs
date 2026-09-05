@@ -68,10 +68,17 @@ namespace ReSet.Core.Services
         private static readonly Regex StepIdMarkerRegex = new(
             @"^SET\s+@v_currentStepId\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        // 꼬리 검사가 "DML 문이 시작한다"고 인정할 때만 쓰는 좁은 판별자 - 줄 전체가 아니라
-        // 줄의 <b>맨 앞</b>에서 시작해야 한다(문장 어딘가에 낱말이 있는 것과 다르다).
+        // 꼬리 검사가 "문장이 시작한다"고 인정할 때만 쓰는 좁은 판별자 - 줄 전체가
+        // 아니라 줄의 <b>맨 앞</b>에서 시작해야 한다(문장 어딘가에 낱말이 있는 것과
+        // 다르다). [오탐 - 실측 2026-09-05 라운드 4] UPDATE/INSERT/DELETE 만
+        // 인정하면 SELECT·WITH(CTE)·MERGE·EXEC 로 시작하는 진짜 문장은 앵커를
+        // 영영 못 찾는다 - 규칙 준수를 설명하는 산문 주석(POQSettleProc19의
+        // "C#은 아래 SELECT 결과를 ... 적재한 뒤 ... UPDATE 또는 INSERT를
+        // 발행하지 않는다")이 우연히 DmlVerbRegex·DmlClauseRegex(SELECT)를 만족시켜
+        // 게이트를 통과한 뒤, 뒤따르는 진짜 SELECT 문을 앵커로 인정받지 못해
+        // 생략으로 오판됐다. `;WITH`처럼 세미콜론이 CTE 앞에 붙는 관용구도 받는다.
         private static readonly Regex LeadingDmlStatementRegex = new(
-            @"^(UPDATE|INSERT|DELETE)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            @"^;?(UPDATE|INSERT|DELETE|SELECT|WITH|MERGE|EXEC)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static IReadOnlyList<string> Scan(string? planMarkdown)
         {

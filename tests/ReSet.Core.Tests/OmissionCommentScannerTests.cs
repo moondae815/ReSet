@@ -230,5 +230,30 @@ namespace ReSet.Core.Tests
 
             Assert.Single(OmissionCommentScanner.Scan(plan));
         }
+
+        [Fact]
+        public void Scan_ShouldNotFlagInstructionCommentAnchoredByRealSelect()
+        {
+            // 실제 산출물(POQSettleProc19/BatchMigrationPlan.md:7247-7252)의 오탐.
+            // 이 주석은 규칙 준수를 설명하는 산문("활성 DataReader 상태에서 UPDATE
+            // 또는 INSERT를 발행하지 않는다")이라 DmlVerbRegex·DmlClauseRegex(SELECT)
+            // 를 우연히 만족시킨다. 그 뒤에는 실제로 생략된 DML 이 아니라 진짜 SELECT
+            // 문이 그대로 서 있다 - 종전에는 UPDATE/INSERT/DELETE 만 앵커로 인정해
+            // SELECT 로 시작하는 문장은 영원히 앵커를 못 찾았다.
+            var plan = string.Join("\n",
+                "```sql",
+                "    /*",
+                "      C#은 아래 SELECT 결과를 List<Group>으로 먼저 적재한 뒤,",
+                "      같은 연결 및 같은 트랜잭션에서 각 그룹을 순차 처리한다.",
+                "      활성 DataReader 상태에서 UPDATE 또는 INSERT를 발행하지 않는다.",
+                "    */",
+                "    SELECT",
+                "        A.ClientID, A.YMD",
+                "    FROM SETTLE_POQ_DB.dbo.TSettleMst AS A",
+                "    WHERE A.YMD = @pi_strYMD;",
+                "```");
+
+            Assert.Empty(OmissionCommentScanner.Scan(plan));
+        }
     }
 }
