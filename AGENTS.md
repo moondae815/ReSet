@@ -233,7 +233,7 @@ dotnet test
 - [ ] 워크트리라면 코퍼스 재료 **셋**을 심링크했는가? 일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
-- [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? 기계 검사로 대신할 수 없다 — 문서 전문 대조는 오탐 88%다(레거시 SQL·CTE·BCL 이름이 같은 백틱을 쓴다). 실측: `IsCandidateForAnchoredStatementCheck` 제거가 문서 네 자리를 남겼고 그중 하나는 캐시 인상 판단의 방향을 반대로 말했다.
+- [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? **그 grep은 이름 없이 산문으로만 쓴 자리를 원리적으로 못 잡는다** — 지운 심볼이 *하던 일*의 명사구로 2차 스윕하라. 기계 검사로 대신할 수 없다(문서 전문 대조는 오탐 88%). 실측 둘은 `docs/known-defects.md`의 「문서 스윕이 놓친 자리」에 있다.
 - [ ] SQL 객체 타입을 `Contains("TABLE"/"VIEW"/"FUNCTION"/"PROCEDURE")`로 직접 판정한 곳이 없는가? (`SqlObjectTypeClassifier`에 위임해야 하며 `TypeClassificationPolicyTests`가 자동 검사한다)
 - [ ] API Key 등 비공개 자격증명이 소스코드나 `appsettings.json`에 하드코딩되지 않고 `appsettings.local.json` 또는 로컬 환경 변수로 격리되었는가?
 - [ ] DB 메타데이터, AI 결과 원문 등을 Spectre.Console TUI에 출력할 때 모든 출력 부에 `Markup.Escape()` 조치를 적용했는가?
