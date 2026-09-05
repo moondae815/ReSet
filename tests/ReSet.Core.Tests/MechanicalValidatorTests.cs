@@ -7793,6 +7793,90 @@ END";
             Assert.DoesNotContain("PGName", reported);
         }
 
+        // 축 B 재감사(2026-09-05)가 원본 DDL 로 확인한 회귀 ② 다. 재생성본
+        // POQSettleBatch1/S05 의 파생 테이블 X 가 같은 컬럼을 두 번 투영한다 —
+        // `ISNULL(B.incVTax,0) AS PGINCVTAX` 와 `B.incVTax AS PGIncVTax`.
+        // T-SQL 식별자는 대소문자를 안 가리므로 **이름 붙은 테이블 식**(파생
+        // 테이블·CTE)에서는 컴파일 오류다(The column was specified multiple times).
+        // 최상위 SELECT 의 중복은 합법이라 이 검사가 보지 않는다.
+        //
+        // 이 검사는 오라클이 없다 — 명세서도 원본 DDL 도 안 본다. SQL 자체가
+        // 서지 않는 것을 본다.
+        [Fact]
+        public void ValidateBatchStep_DerivedTableProjectsTheSameNameTwice_IsReported()
+        {
+            // 실물 모양을 그대로 쓴다 - 합성 픽스처가 실물보다 단순해서 코퍼스에서
+            // 침묵한 전례가 같은 날 있었다(접힘 좁힘 첫 시도).
+            var markdown = "### S05 단계\n\n```sql\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, CLVT)\n" +
+                "SELECT X.PLTID, X.PGINCVTAX\n" +
+                "FROM (\n" +
+                "    SELECT A.PLTID,\n" +
+                "           ISNULL(B.incVTax, 0) AS PGINCVTAX,\n" +
+                "           B.incVTax AS PGIncVTax\n" +
+                "    FROM dbo.TExtraSettleIn AS A\n" +
+                "    LEFT OUTER JOIN dbo.TPGSettleRate4Extra AS B ON B.YMD = A.YMD\n" +
+                ") X;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S05"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("출력 컬럼 이름이 중복"));
+            Assert.Contains("PGINCVTAX", error, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CteProjectsTheSameNameTwice_IsReported()
+        {
+            var markdown = "### S05 단계\n\n```sql\n" +
+                ";WITH K AS (\n" +
+                "    SELECT A.PLTID, A.CLVT AS Amt, A.CLCOMM AS AMT\n" +
+                "    FROM dbo.TSettleMst AS A\n" +
+                ")\n" +
+                "UPDATE Y SET Y.CLVT = 1 FROM dbo.TSettleMst AS Y JOIN K ON K.PLTID = Y.PLTID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S05"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.Single(result.Errors, e => e.Contains("출력 컬럼 이름이 중복"));
+        }
+
+        // 최상위 SELECT 의 중복 컬럼은 T-SQL 에서 합법이다 - 결과셋에 같은 이름이
+        // 둘 있어도 된다. 이름 붙은 테이블 식일 때만 오류다.
+        [Fact]
+        public void ValidateBatchStep_TopLevelSelectDuplicateNames_IsNotReported()
+        {
+            var markdown = "### S05 단계\n\n```sql\n" +
+                "SELECT A.CLVT AS Amt, A.CLCOMM AS Amt FROM dbo.TSettleMst AS A;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S05"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("출력 컬럼 이름이 중복"));
+        }
+
+        // `SELECT *` 는 출력 이름을 알 수 없다 - 판정 불가라 조용히 넘긴다.
+        [Fact]
+        public void ValidateBatchStep_DerivedTableWithStar_IsNotReported()
+        {
+            var markdown = "### S05 단계\n\n```sql\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID)\n" +
+                "SELECT X.PLTID FROM (SELECT *, A.PLTID AS PLTID FROM dbo.TSettleMst AS A) X;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S05"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("출력 컬럼 이름이 중복"));
+        }
+
         [Fact]
         public void ValidateBatchStep_AnchoredStatementWithOpaqueJoinSource_SuppressesJoinKeyReportOnly()
         {

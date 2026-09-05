@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Syntax;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Serilog;
 
 namespace ReSet.Core.Services
@@ -501,6 +502,7 @@ namespace ReSet.Core.Services
             CheckShadowBackupContract(stepMarkdown, step, result);
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
+            SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
             SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
 
@@ -6533,6 +6535,116 @@ namespace ReSet.Core.Services
             }
         }
 
+
+        /// <summary>
+        /// 파생 테이블·CTE 가 같은 출력 컬럼 이름을 두 번 내는 것을 본다.
+        ///
+        /// [왜 오라클이 없는가]
+        /// 이 검사는 명세서도 원본 DDL 도 안 본다 - **SQL 자체가 서지 않는 것**을 본다.
+        /// T-SQL 은 이름 붙은 테이블 식(파생 테이블·CTE)에 중복 컬럼명을 금지한다
+        /// (`The column '…' was specified multiple times for '…'`). 최상위 SELECT 의
+        /// 중복은 합법이므로 보지 않는다 - 결과셋에 같은 이름이 둘 있어도 된다.
+        ///
+        /// [왜 생겼는가 - 축 B 재감사 2026-09-05]
+        /// 재생성본 `POQSettleBatch1/S05` 의 파생 테이블 X 가 같은 컬럼을 두 번 투영한다 -
+        /// `ISNULL(B.incVTax,0) AS PGINCVTAX` 와 `B.incVTax AS PGIncVTax`. 원본 DDL 로
+        /// 확인한 회귀이고 전 산출물에는 한 쌍뿐이었다. 조인 키 회귀 둘은 검사 B 의
+        /// 접힘을 좁혀 잡았으나(`83bdf03f`) 이 부류는 **그 계열의 검사가 아예 없었다.**
+        ///
+        /// [침묵하는 자리 - 판정 불가는 조용히 넘긴다]
+        /// (1) `SELECT *` 가 있으면 출력 이름을 알 수 없다. (2) 별칭 없는 식은 이름이
+        /// 없어 T-SQL 이 별도 오류를 내지만(`No column name was specified`) 그 부류는
+        /// 이 검사의 몫이 아니다. (3) 구문 오류로 파싱이 안 되면 판정하지 않는다 -
+        /// 그 자리는 다른 검사가 본다.
+        /// </summary>
+        private static void CheckDuplicateProjectionNames(string stepMarkdown, StepValidationResult result)
+        {
+            // [왜 CleanedSqlFences를 쓰지 않는가 - 실측]
+            // 그 헬퍼는 주석과 문자열 리터럴을 공백으로 지운 **정화본**을 낸다 -
+            // 토큰·정규식 검사가 주석 안의 `NOLOCK`에 걸리지 않게 하려는 것이다.
+            // 그 정화본은 **파서에 먹일 수 없다**: 실물(POQSettleBatch1/S05)로 재니
+            // 원문은 파스 오류 0인데 문자열을 지운 판은 11이었다(`'' AS PAYERID`가
+            // `   AS PAYERID`가 되어 구문이 깨진다). 구문을 보는 검사는 원문을 파싱한다.
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                var fragment = parser.Parse(new StringReader(fence.Groups["sql"].Value), out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0)) continue;
+
+                var probe = new DuplicateProjectionProbe();
+                fragment.Accept(probe);
+
+                foreach (var (owner, name) in probe.Duplicates)
+                {
+                    result.Errors.Add(
+                        $"{owner}의 출력 컬럼 이름이 중복됩니다: `{name}`. " +
+                        "T-SQL은 파생 테이블·CTE의 컬럼 이름이 유일할 것을 요구하므로 " +
+                        "이 SQL은 실행되지 않습니다(식별자는 대소문자를 구분하지 않습니다). " +
+                        "한 쪽을 지우거나 다른 이름을 주십시오.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 이름 붙은 테이블 식의 출력 이름을 모아 중복을 낸다.
+        /// `Visit`(ExplicitVisit 아님)을 쓰므로 중첩된 파생 테이블도 함께 방문된다.
+        /// </summary>
+        private sealed class DuplicateProjectionProbe : TSqlFragmentVisitor
+        {
+            public List<(string Owner, string Name)> Duplicates { get; } = new();
+
+            public override void Visit(QueryDerivedTable node) =>
+                Inspect($"파생 테이블 `{node.Alias?.Value ?? "?"}`", node.QueryExpression, null);
+
+            public override void Visit(CommonTableExpression node) =>
+                Inspect($"CTE `{node.ExpressionName?.Value ?? "?"}`", node.QueryExpression,
+                    node.Columns?.Select(c => c.Value).ToList());
+
+            private void Inspect(string owner, QueryExpression? query, List<string>? explicitColumns)
+            {
+                List<string> names;
+                if (explicitColumns is { Count: > 0 })
+                {
+                    names = explicitColumns;
+                }
+                else
+                {
+                    var spec = FirstSpecification(query);
+                    if (spec?.SelectElements == null) return;
+
+                    names = new List<string>();
+                    foreach (var element in spec.SelectElements)
+                    {
+                        if (element is not SelectScalarExpression scalar) return; // `SELECT *` 등 - 판정 불가
+                        var name = scalar.ColumnName?.Value;
+                        if (string.IsNullOrWhiteSpace(name) &&
+                            scalar.Expression is ColumnReferenceExpression reference)
+                        {
+                            name = reference.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
+                        }
+                        if (string.IsNullOrWhiteSpace(name)) return; // 이름 없는 식 - 이 검사의 몫이 아니다
+                        names.Add(name!);
+                    }
+                }
+
+                foreach (var duplicate in names
+                    .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+                    .Where(g => g.Count() > 1))
+                {
+                    Duplicates.Add((owner, duplicate.Key));
+                }
+            }
+
+            /// <summary>UNION 갈래는 첫 갈래가 출력 이름을 정한다.</summary>
+            private static QuerySpecification? FirstSpecification(QueryExpression? query) => query switch
+            {
+                QuerySpecification specification => specification,
+                BinaryQueryExpression binary => FirstSpecification(binary.FirstQueryExpression),
+                QueryParenthesisExpression parenthesis => FirstSpecification(parenthesis.QueryExpression),
+                _ => null
+            };
+        }
         /// <summary>
         /// CATCH가 돌려주는 상태 변수의 초기값이 업무 오류 코드나 성공 코드와 겹치는지 본다.
         ///
