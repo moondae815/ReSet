@@ -106,6 +106,63 @@ def token_hit(token, body):
     return re.search(r"[A-Za-z0-9_]\." + re.escape(column) + r"(?!\w)", body, re.IGNORECASE) is not None
 
 
+def token_hit_literal(token, body):
+    """토큰 하나가 본문에 있는가 - **별칭 문자까지 그대로 요구하는 리터럴 대조**.
+
+    [조정자 보탬 - 2026-09-05] 「사라진 발화」에는 서로 다른 분모 둘이 있고, 섞어
+    적으면 안 된다.
+
+      1. 축 −1 의 합격선 = **옛 생산 규칙**(`base(현행) × any`, 늘 리터럴 대조) 대비
+         사라진 것. 이것이 0 이어야 한다 - `evaluate_corpus(... , "any")`(위
+         `token_hit`, 별칭 불문)가 그 옛 규칙의 대조 방식 자체는 그대로 쓴다(옛
+         규칙은 별칭.컬럼 토큰이 없어 별칭 불문 여부가 결과에 영향을 안 준다).
+
+      2. 별도 관찰(열린 항목) = **라운드 1 중간 규칙**(`별칭.컬럼 × majority`를 이미
+         채택했지만 아직 별칭을 그대로 요구하던 시점, 커밋 `fa854333`) 대비 사라진
+         것. 스윕 미분류가 1177 → 1110(-67)로 움직인 그 자리다 - 별칭 불문 대조
+         (`token_hit`)가 걷어낸 것이고, **의도한 제거**(별칭 오탐)지만 그 안에 진짜
+         결함이 섞였는지는 전수 감사되지 않았다.
+
+    이 함수는 2번을 정확히 재기 위해 라운드 1 이전의 리터럴 대조를 재현한다 -
+    별칭.컬럼 토큰도 별칭을 떼지 않고 그대로 부분 문자열로 찾는다.
+    """
+    return token.lower() in body.lower()
+
+
+def is_fired_literal_majority(tk, body):
+    """`별칭.컬럼 × majority`를 **라운드 1 이전의 리터럴 대조**로 판정한다.
+
+    `is_fired(tk, body, "majority")`와 유일한 차이는 `token_hit` 대신
+    `token_hit_literal`을 쓰는 것이다 - 별칭.컬럼 토큰도 별칭 문자까지 그대로
+    요구한다.
+    """
+    hits = sum(1 for t in tk if token_hit_literal(t, body))
+    return hits * 2 < len(tk)
+
+
+def evaluate_corpus_literal_majority(patterns):
+    """`evaluate_corpus(patterns, "majority")`와 같되 리터럴 대조를 쓴다 - 위 두 함수 참고."""
+    spec_index = {}
+    for sp in sorted(glob.glob(SPECS)):
+        proc_dir_name = os.path.basename(os.path.dirname(os.path.dirname(sp)))
+        spec_index[bare(proc_dir_name)] = sp
+
+    fired = comparable = zero = 0
+    fired_sites = set()
+    for job, code, body, procs in corpus_step_records():
+        spec_paths = [spec_index[bare(p)] for p in procs if bare(p) in spec_index]
+        for sp in spec_paths:
+            for ordinal, tk in read_targets(sp, patterns):
+                if not tk:
+                    zero += 1
+                    continue
+                comparable += 1
+                if is_fired_literal_majority(tk, body):
+                    fired += 1
+                    fired_sites.add(f"{job}/{code}(갱신{ordinal})")
+    return fired, comparable, zero, fired_sites
+
+
 def is_fired(tk, body, rule):
     """토큰 목록 하나(갱신 하나)가 규칙 아래서 발화하는가.
 
@@ -283,10 +340,11 @@ def main():
 
     print()
     print("=" * 96)
-    print("축 −1 — 양방향 비교 (옛 규칙 base(현행)×any 대 후보×규칙)")
+    print("축 −1 [합격선] — 분모: 옛 생산 규칙(base(현행)×any, 리터럴 대조) 대비 사라진 발화")
+    print("이 표의 '사라진발화'가 0이어야 그 후보×규칙이 축 −1을 통과한다.")
     print("=" * 96)
     old_sites = corpus_sites_by_row[("base (현행)", "any")]
-    print(f"옛 규칙(base×any) 코퍼스 전역 발화: {len(old_sites)}건")
+    print(f"옛 생산 규칙(base×any) 코퍼스 전역 발화: {len(old_sites)}건")
     print()
     print(f"{'후보':22} {'규칙':9} {'새 발화':>8} {'교집합':>8} {'신규발화':>8} {'사라진발화':>10}")
     print("-" * 72)
@@ -301,6 +359,29 @@ def main():
                   f"{len(gained):>8} {len(lost):>10}{marker}")
             if lost:
                 print(f"    사라진 자리: {sorted(lost)}")
+
+    print()
+    print("=" * 96)
+    print("별도 관찰 [열린 항목, 합격선 아님] — 분모: 라운드 1 중간 규칙")
+    print("(별칭.컬럼×majority, 아직 별칭까지 리터럴로 요구하던 시점, 커밋 fa854333)")
+    print("대비 별칭 불문 대조(현재) 로 사라진 발화 - 스윕 미분류 1177→1110(-67)의 정체.")
+    print("=" * 96)
+    alias_patterns = CANDIDATES["base + 별칭.컬럼"]
+    _, _, _, round1_sites = evaluate_corpus_literal_majority(alias_patterns)
+    current_majority_sites = corpus_sites_by_row[("base + 별칭.컬럼", "majority")]
+    round1_lost = round1_sites - current_majority_sites
+    round1_gained = current_majority_sites - round1_sites
+    print(f"라운드 1 중간 규칙(별칭.컬럼×majority×리터럴) 코퍼스 전역 발화: {len(round1_sites)}건")
+    print(f"현재(별칭.컬럼×majority×별칭불문) 코퍼스 전역 발화: {len(current_majority_sites)}건")
+    print(f"교집합: {len(round1_sites & current_majority_sites)}건 / "
+          f"신규(별칭 불문이 새로 잡음): {len(round1_gained)}건 / "
+          f"사라짐(별칭 불문이 걷어냄): {len(round1_lost)}건")
+    print()
+    print("사라진 이 자리들은 '의도한 제거'(별칭 불일치 오탐, Fix Round 1 §6-1)로 추정되나")
+    print("전수 감사되지 않았다 - 그중 진짜 결함이 섞여 있는지는 열린 물음이다.")
+    print(f"사라진 자리 전부({len(round1_lost)}건):")
+    for s in sorted(round1_lost):
+        print(f"  {s}")
     return 0
 
 
