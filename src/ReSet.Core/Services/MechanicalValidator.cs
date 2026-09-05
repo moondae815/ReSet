@@ -387,7 +387,12 @@ namespace ReSet.Core.Services
             // 목록이라 알 수 없다. 프로시저 단위 재료를 함께 받아야 "분할된 SP에서만
             // 유래한 것"을 가려낼 수 있다. 재료가 없으면(null) 종전 동작 그대로다.
             IReadOnlyDictionary<string, IReadOnlyList<string>>? codesByProcedure = null,
-            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null)
+            IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets>? tablesByProcedure = null,
+            // [N5] 원본 DDL. 조인 짝은 명세서에 없는 사실이라 검사 때 원본에서 재파생한다 -
+            // 그 결정과 근거(명세서에 싣는 A안을 기각한 이유)는
+            // docs/audit-reports/2026-09-05-축B-잔여결함-분류.md §10 에 있다.
+            // 없으면(null) 조인 짝 대조를 하지 않는다 - 종전 동작 그대로다.
+            IReadOnlyDictionary<string, string>? ddlByProcedure = null)
         {
             var result = new StepValidationResult();
 
@@ -564,6 +569,8 @@ namespace ReSet.Core.Services
                         countCheckFacts, statements, lostStatementCount, step, result));
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
+                    SafeCheck(() => CheckAnchoredStatementJoinPairs(
+                        facts, statements, step, ddlByProcedure, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
                     // countCheckFacts 를 쓰는 이유: 이 검사는 앵커 계열(B·C·D)의 "앵커가
                     // 달린 문장은 정확해야 한다"가 아니라 개수 대조와 같은 "그 갱신이
@@ -7746,6 +7753,175 @@ namespace ReSet.Core.Services
             !statement.ReadsOwnTarget
             && statement.LineageSources.Count > 0
             && statement.LineageSources.All(l => !specTargets.Contains(l.SourceTable));
+
+        /// <summary>
+        /// 이행이 <b>원본에 없는 조인 등식</b>을 더했는지 본다 (N5).
+        ///
+        /// [왜 컬럼 이름으로는 안 보이는가] 명세서 DML 범위 표의 조인 키 칸은 컬럼
+        /// <b>이름만</b> 싣는다. 그래서 이행이 결합을 다른 테이블로 옮겨도 이름 집합이
+        /// 그대로면 <see cref="CheckAnchoredStatementFacts"/>가 통과한다. 실물:
+        /// <c>EXPECT_PROC</c> 갱신 11 이 <c>TClientCMRate</c> 결합을 <c>B.*</c>(주결제수단)
+        /// 에서 <c>A.*</c>(포인트결제 자신)로 옮겼다 - 명세서 서술과 정반대인데 이름
+        /// 집합은 한 글자도 안 달라졌다.
+        ///
+        /// [기준값이 명세서가 아니라 원본 DDL 인 이유] 조인 짝은 명세서에 실린 적이 없다.
+        /// 실을 수도 있었으나(A안) <b>재생성이 재료를 지운 전례</b>가 이 저장소에 셋 있어
+        /// 기각했다 - <c>raw/metadata.json</c>의 <c>DdlText</c>는 불변 입력이라 지워지지
+        /// 않는다. 결정과 비용 계산은
+        /// <c>docs/audit-reports/2026-09-05-축B-잔여결함-분류.md</c> §10.
+        ///
+        /// [왜 「더한 것」만 보고 「잃은 것」은 안 보는가] 이행이 결합을 CTE·파생
+        /// 테이블로 옮기는 관용구가 실재한다(검사 B 가 <c>relocated</c> 합류를 만든 바로
+        /// 그 이유). 최상위만 보는 대조는 그 이전을 「잃었다」로 읽고, 그 오탐은
+        /// <c>SuggestedPromptFix</c>를 타고 재생성 프롬프트에 실려 재시도를 소진시킨다.
+        ///
+        /// [무엇을 못 가르는가 - 발화 사유를 정확히 읽어라] 자기결합의 별칭 재귀속
+        /// 그 자체는 <b>테이블 정규화 뒤에 같은 짝</b>이 되어 보이지 않는다. 위 실물이
+        /// 발화하는 것은 이행이 <c>A.ClientID = B.ClientID</c>를 <b>함께 더했기</b>
+        /// 때문이고, 메시지도 그렇게 적는다. 코퍼스 원본 DDL 전체에서 자기결합은
+        /// 1 건이라 별칭 그래프 동형은 사지 않았다(설계 §5).
+        /// </summary>
+        private static void CheckAnchoredStatementJoinPairs(
+            IReadOnlyList<SpecStatementFacts> facts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure,
+            StepValidationResult result)
+        {
+            if (ddlByProcedure == null || ddlByProcedure.Count == 0) return;
+
+            var original = BuildOriginalJoinPairs(step, ddlByProcedure);
+            if (original.Count == 0) return;
+
+            var codeMap = MergeErrorCodeMaps(facts);
+            var anchored = ResolveAnchoredStatements(statements, codeMap);
+            if (anchored.Count == 0) return;
+
+            // 청크 분할된 조각을 한 문장으로 합쳐 본다 - 검사 B 와 같은 묶음이다.
+            var groups = anchored.GroupBy(a => (Ordinal: a.Ordinal!.Value, Kind: a.Statement.Kind.ToUpperInvariant()));
+
+            foreach (var group in groups)
+            {
+                var targetTable = group.First().Statement.TargetTable;
+                if (!original.TryGetValue((group.Key.Kind, group.Key.Ordinal, targetTable), out var originalPairs)) continue;
+
+                // 원본이 짝을 하나도 안 내면 대조가 성립하지 않는다 - 침묵한다.
+                if (originalPairs.Count == 0) continue;
+
+                var implementationPairs = group
+                    .SelectMany(a => a.Statement.JoinPairs)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (implementationPairs.Count == 0) continue;
+
+                // [코퍼스 실측이 요구한 좁힘 - 2026-09-05]
+                // 이 검사가 근거를 갖는 물음은 **원본이 이미 조인하던 테이블들 사이에서**
+                // 결합이 옮겨졌는가다. 이행이 원본에 없던 테이블을 새로 끌어오면 그것은
+                // 결합 재배치가 아니라 **원천 대체**이고, 행 집합이 달라졌는지는 이
+                // 검사가 답할 근거가 없다.
+                //
+                // 좁히지 않으면 실물 둘이 오탐으로 나온다 -
+                // (1) POQSettleProc11/S09 는 원본의 `TPGProperty` 조인을 그 단계가 뜬
+                //     범위 스냅샷 `batch.S09SourceCardExtraScope` 로 바꾼다. 검사 C 가
+                //     같은 모양을 `ReadsOnlyStaging` 으로 이미 면제하는 관용구다.
+                // (2) POQSettleProc19/S11 은 **앵커가 다른 문장을 가리켜** 원본 UPDATE 10
+                //     (KFTC·INIBANK)과 이행 easybank 문장이 대조됐다. 그 오귀속은 이 검사의
+                //     것이 아니라 앵커 층의 것이다 - 같은 자리에 검사 B 도 이미 발화한다
+                //     (`CYMD, AYMD, RefundFlag`).
+                //
+                // [대가] 이행이 <b>진짜로</b> 새 테이블을 끌어와 행을 좁히는 자리는 침묵한다.
+                // 놓치는 쪽이 안전한 기본값이라는 이 파일의 규약을 따른다.
+                var originalTables = new HashSet<string>(
+                    originalPairs.SelectMany(TablesOfPair), StringComparer.OrdinalIgnoreCase);
+
+                var added = implementationPairs
+                    .Where(p => !originalPairs.Contains(p, StringComparer.OrdinalIgnoreCase))
+                    .Where(p => TablesOfPair(p).All(originalTables.Contains))
+                    .ToList();
+                if (added.Count == 0) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 {group.Key.Kind} {group.Key.Ordinal}({targetTable}) 문장이 " +
+                    $"원본에 없는 조인 짝 {string.Join(", ", added)}을(를) 씁니다. 원본의 조인 짝은 " +
+                    $"`{string.Join(", ", originalPairs)}`뿐입니다 — 결합을 더하거나 다른 테이블로 " +
+                    "옮기면 원본이 고르던 행이 아닌 행을 고릅니다.");
+            }
+        }
+
+        /// <summary>
+        /// <c>테이블.컬럼=테이블.컬럼</c> 짝에서 두 테이블 이름을 뽑는다.
+        /// 정규화가 <see cref="JoinPairNormalizer"/> 한 곳에서 나므로 모양이 고정이다.
+        /// </summary>
+        private static IEnumerable<string> TablesOfPair(string pair)
+        {
+            foreach (var side in pair.Split('='))
+            {
+                var dot = side.LastIndexOf('.');
+                if (dot > 0) yield return side[..dot];
+            }
+        }
+
+        /// <summary>
+        /// 단계가 대체하는 레거시 SP 의 원본 DDL 에서 <c>(종류, 서수, 대상)</c> → 조인 짝을 만든다.
+        ///
+        /// [서수는 <see cref="DmlScopeExtractor.BuildStatementOrdinals"/>가 유일한 출처다]
+        /// 밖에서 다시 세면 두 채번이 조용히 어긋나고, 어긋난 매핑은 <b>엉뚱한 문장과
+        /// 대조한 거짓 시정 지시</b>가 된다.
+        ///
+        /// [같은 키가 둘 이상이면 버린다] 한 단계가 레거시 SP 를 여럿 대체하면
+        /// <c>UPDATE 1</c>이 여러 SP 에서 나올 수 있다. 귀속할 수 없으면 침묵한다 -
+        /// <see cref="MergeErrorCodeMaps"/>와 같은 규약이다.
+        /// </summary>
+        private static Dictionary<(string Kind, int Ordinal, string Target), IReadOnlyList<string>>
+            BuildOriginalJoinPairs(BatchStepPlan step, IReadOnlyDictionary<string, string> ddlByProcedure)
+        {
+            var result = new Dictionary<(string, int, string), IReadOnlyList<string>>(new JoinPairKeyComparer());
+            var ambiguous = new HashSet<(string, int, string)>(new JoinPairKeyComparer());
+
+            foreach (var procedure in step.LegacyProcedures)
+            {
+                var bare = BareObjectName(procedure);
+                if (!ddlByProcedure.TryGetValue(bare, out var ddl) || string.IsNullOrWhiteSpace(ddl)) continue;
+
+                var scopeFacts = DmlScopeExtractor.Extract(ddl, string.Empty);
+                var ordinals = DmlScopeExtractor.BuildStatementOrdinals(scopeFacts);
+
+                for (var i = 0; i < scopeFacts.Count; i++)
+                {
+                    var fact = scopeFacts[i];
+
+                    // 대상은 해석된 이름으로 잡는다 - 원본은 `UPDATE A`(별칭)로 적고
+                    // 이행 리더는 그것을 물리 테이블로 푼다.
+                    var target = string.IsNullOrWhiteSpace(fact.ResolvedTargetTable)
+                        ? fact.Target
+                        : fact.ResolvedTargetTable;
+                    var key = (fact.Operation.ToUpperInvariant(), ordinals[i], BareObjectName(target));
+
+                    if (result.ContainsKey(key)) { ambiguous.Add(key); continue; }
+                    result[key] = fact.JoinPairs;
+                }
+            }
+
+            foreach (var key in ambiguous) result.Remove(key);
+            return result;
+        }
+
+        /// <summary>
+        /// <c>(종류, 서수, 대상)</c> 키 비교자. 종류·대상은 이 파일의 관례대로
+        /// 대소문자를 무시한다 - 대상 테이블 표기가 원본과 이행에서 갈릴 수 있다.
+        /// </summary>
+        private sealed class JoinPairKeyComparer : IEqualityComparer<(string Kind, int Ordinal, string Target)>
+        {
+            public bool Equals((string Kind, int Ordinal, string Target) x, (string Kind, int Ordinal, string Target) y) =>
+                x.Ordinal == y.Ordinal
+                && string.Equals(x.Kind, y.Kind, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Target, y.Target, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Kind, int Ordinal, string Target) key) => HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(key.Kind),
+                key.Ordinal,
+                StringComparer.OrdinalIgnoreCase.GetHashCode(key.Target));
+        }
 
         /// <summary>
         /// 앵커가 달린 문장이 명세서 그 행의 조인 키와 최상위 WHERE 술어 컬럼을

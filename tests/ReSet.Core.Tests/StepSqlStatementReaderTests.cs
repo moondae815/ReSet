@@ -1451,4 +1451,55 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         var publish = statements.Single(s => s.TargetTable == "TSettleMst");
         Assert.Contains("S02Candidate", publish.LineageSources.Select(l => l.SourceTable));
     }
+
+    // ── N5: 조인 짝 ──────────────────────────────────────────────
+    // 설계: docs/superpowers/specs/2026-09-05-n5-join-pair-design.md §2-2
+    // 이행 쪽은 **최상위만** 본다. 별칭은 테이블로 해석하고 두 변을 정렬해
+    // 방향을 없앤다 - 명세서 별칭과 생성본 별칭이 다를 수 있기 때문이다.
+
+    [Fact]
+    public void JoinPairs_ResolveAliasesToTables_AndAreDirectionless()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.OutYMD = 1\n" +
+            "  FROM dbo.TSettleMst A\n" +
+            "  JOIN dbo.TSettleMst B ON A.MPLTID = B.PLTID\n" +
+            "  JOIN dbo.TClientCMRate C ON A.ClientID = C.ClientID\n" +
+            " WHERE A.YMD = @p;"));
+
+        var statement = Assert.Single(statements);
+        Assert.Equal(
+            new[] { "TClientCMRate.ClientID=TSettleMst.ClientID", "TSettleMst.MPLTID=TSettleMst.PLTID" },
+            statement.JoinPairs.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void JoinPairs_DropTheEqualityWhenAnAliasIsNotAPhysicalTable()
+    {
+        // 파생 테이블 별칭은 물리 테이블이 아니다 - 짝을 만들면 없는 사실이 생긴다.
+        // 설계 §2-3 침묵 조건 2.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.OutYMD = 1\n" +
+            "  FROM dbo.TSettleMst A\n" +
+            "  JOIN (SELECT PLTID FROM dbo.TSettleMst) D ON A.MPLTID = D.PLTID\n" +
+            " WHERE A.YMD = @p;"));
+
+        Assert.Empty(Assert.Single(statements).JoinPairs);
+    }
+
+    [Fact]
+    public void JoinPairs_IgnoreEqualitiesWithinOneAlias()
+    {
+        // 같은 한정자 안의 비교는 조인이 아니다 - DmlScopeExtractor 의
+        // HaveDifferentQualifiers 와 같은 규약(리뷰 라운드 2 가 오탐 여섯 자리로 샀다).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.OutYMD = 1\n" +
+            "  FROM dbo.TSettleMst A\n" +
+            "  JOIN dbo.TSettleMst B ON A.YMD = A.AYMD AND A.MPLTID = B.PLTID\n" +
+            " WHERE A.YMD = @p;"));
+
+        Assert.Equal(
+            new[] { "TSettleMst.MPLTID=TSettleMst.PLTID" },
+            Assert.Single(statements).JoinPairs.ToArray());
+    }
 }

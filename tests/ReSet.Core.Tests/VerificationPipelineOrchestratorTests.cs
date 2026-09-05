@@ -6180,8 +6180,11 @@ SELECT 1;
                 // 프롬프트가 절 자체를 싣지 않아 브레인스토밍이 없던 이전 동작과 같다.
                 // callGraph(Task 10b): 이 테스트들은 SpDefinition을 조달하지 않으므로
                 // 빈 사전이 이전 동작(1-hop 이웃 없음)과 같다.
+                // ddlByProcedure(N5): 이 테스트들은 SpDefinition을 조달하지 않으므로
+                // 빈 사전이 이전 동작(조인 짝 대조 없음)과 같다.
                 knownTableNames, new Dictionary<string, IReadOnlyList<string>>(),
-                new Dictionary<string, IReadOnlyList<string>>(), null,
+                new Dictionary<string, IReadOnlyList<string>>(),
+                new Dictionary<string, string>(), null,
                 codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
                 tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
                 cancellationToken,

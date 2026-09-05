@@ -181,7 +181,12 @@ namespace ReSet.Core.Services
                                 stepInterfaces: null,
                                 runRowOwnedTables: null,
                                 statementFactsByProcedure: facts,
-                                allSteps: job.Steps);
+                                allSteps: job.Steps,
+                                // [N5] 조인 짝 대조의 기준값. 오케스트레이터가
+                                // StepInterfaceFacts.CollectDdl 로 만드는 것과 같은 재료를
+                                // 스윕은 SweepJob.DdlByProcedure 로 받는다 - 키잉만
+                                // 맨이름으로 맞춘다(ToBareNameKeyed 가 이 파일의 규약).
+                                ddlByProcedure: ddlByBareName);
 
                             foreach (var message in result.Errors)
                             {

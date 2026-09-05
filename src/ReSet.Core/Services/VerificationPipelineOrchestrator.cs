@@ -1748,6 +1748,12 @@ namespace ReSet.Core.Services
             // AiService.GenerateBatchStepSectionAsync)로 흘러간다.
             var callGraph = StepInterfaceFacts.BuildCallGraph(definitions);
 
+            // [N5] 조인 짝 대조의 기준값. parametersByProcedure·callGraph 와 같은 자리에서
+            // 만드는 이유가 같다 - 셋 다 definitions 에서 오고 같은 경로로 단계 검증까지
+            // 내려간다. 이 재료는 명세서가 아니라 불변 입력(raw DdlText)이라 재생성이
+            // 지우지 못한다(§10).
+            var ddlByProcedure = StepInterfaceFacts.CollectDdl(definitions);
+
             // Narrow 모드에서 이 사전이 비면 각 단계는 자기 명세서만 받는다 - 이 모드의
             // 요점인 1-hop 이웃이 통째로 빠진다. PromptContextScope.NarrowSpecs가 적은
             // 대로 이웃을 빼면 이 유형의 결함이 오히려 늘어나므로(실측 「필수 수정 1·2」:
@@ -2036,7 +2042,7 @@ namespace ReSet.Core.Services
                             var split = await GenerateBySplitAsync(
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
-                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, currentBrainstorming,
+                                pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, ddlByProcedure, currentBrainstorming,
                                 specReturnCodes, specTargetTables, cancellationToken, repeatedDefects,
                                 pendingSkeletonRevision);
 
@@ -3075,6 +3081,7 @@ namespace ReSet.Core.Services
                             knownTableNames,
                             parametersByProcedure,
                             callGraph,
+                            ddlByProcedure,
                             currentBrainstorming,
                             specReturnCodes,
                             specTargetTables,
@@ -3777,6 +3784,8 @@ namespace ReSet.Core.Services
             // parametersByProcedure와 같은 자리에서 만들어져(둘 다 definitions에서
             // 온다) GenerateStepSectionWithFloorRetryAsync까지 그대로 내려간다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
+            // [N5] 조인 짝 대조의 기준값. callGraph 와 같은 자리에서 만들어져 같은 길로 간다.
+            IReadOnlyDictionary<string, string> ddlByProcedure,
             string? brainstorming,
             // [분할 SP 귀속 배선] 분할 SP의 코드·테이블을 단계마다 요구하지 않으려면
             // 프로시저 단위 귀속 재료가 GenerateStepSectionWithFloorRetryAsync까지
@@ -3924,7 +3933,7 @@ namespace ReSet.Core.Services
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
-                        cancellationToken, PreviousBodyFor(step.Code));
+                        ddlByProcedure, cancellationToken, PreviousBodyFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
                     return new StepSectionResult(step.Code, markdown, violation);
@@ -4181,6 +4190,8 @@ namespace ReSet.Core.Services
             // Narrow 모드에서만 쓰이고 Full 모드는 이 값을 무시한다 - 접두사 바이트
             // 불변식(§14)이 그 경계에 있다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
+            // [N5] 조인 짝 대조의 기준값 - GenerateBySplitAsync 가 받은 것을 그대로 내려받는다.
+            IReadOnlyDictionary<string, string> ddlByProcedure,
             CancellationToken cancellationToken,
             // 직전 회차가 이 단계에 대해 채택했던 본문(§3-8). null이면 백지에서
             // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
@@ -4273,7 +4284,8 @@ namespace ReSet.Core.Services
                     // 하나가 전량을 요구받지 않는다 - 문서 단위 검사(Task 5)가 그 의무를
                     // 회수한다.
                     codesByProcedure: codesByProcedure,
-                    tablesByProcedure: tablesByProcedure);
+                    tablesByProcedure: tablesByProcedure,
+                    ddlByProcedure: ddlByProcedure);
                 if (stepResult.IsValid)
                 {
                     return (content, null);
