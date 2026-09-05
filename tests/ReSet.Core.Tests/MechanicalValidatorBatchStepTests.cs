@@ -51,6 +51,100 @@ namespace ReSet.Core.Tests
                 markdown, step, new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>());
 
+        /// <summary>
+        /// 실물 코퍼스 모양의 갱신 절 하나. 헤더 문구·칸 순서는
+        /// `output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md`에서 옮겼다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, SpecStatementFacts> SetFacts(string procedure, string spec) =>
+            SpecStatementFactsExtractor.Extract(new[] { (procedure, spec) });
+
+        private const string ExceptionProcSpec = """
+            ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 10 · 원본 DDL 라인 301 · 원문 표기: TSettleMst)
+
+            | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+            | :--- | :--- | :--- | :--- |
+            | SETTLE_POQ_DB.dbo.TSettleMst | PGVT | CAST(ROUND(A.PGCOMM * 0.1, 0, dbo.UF_GET_PGCommOption(A.PGNAME, 5)) AS INT) | 반올림 옵션을 UDF로 받습니다. |
+
+            ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 12 · 원본 DDL 라인 340 · 원문 표기: TSettleMst)
+
+            | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+            | :--- | :--- | :--- | :--- |
+            | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | A.CLCOMM | 컬럼 참조뿐이라 판별 토큰이 없습니다. |
+            """;
+
+        private static StepValidationResult ValidateWithSetFacts(string markdown, string spec)
+        {
+            var step = new BatchStepPlan(
+                Code: "S07", Name: "예외 정책 적용",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC" },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            return new MechanicalValidator().ValidateBatchStep(
+                markdown, step, Catalog, NoConditions,
+                statementFactsByProcedure: SetFacts("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", spec),
+                allSteps: new[] { step });
+        }
+
+        /// <summary>
+        /// 축 B 감사 🔴(POQSettleBatch1/S07)의 실물 모양. 명세서가 갱신의 SET 우변 산식을
+        /// 전문으로 갖는데 단계 본문은 컬럼 이름과 한 줄 주석만 남기고 산식을 버렸다 —
+        /// 상수·계수·UDF 인자가 없으면 이 절만으로 구현할 때 금액이 원본과 달라진다.
+        ///
+        /// 실측(2026-09-05): 감사가 지목한 갱신 10·11 에서 빠진 것이 정확히
+        /// `UF_GET_PGCommOption`·`0.1` 이었고, 코퍼스 전수에서 이 규칙의 발화는 400 건 중
+        /// 6 건 · 전건 감사 결과 거짓 0 건이다.
+        /// </summary>
+        [Fact]
+        public void SetExpression_WhenStepDropsEveryDistinctiveToken_IsReported()
+        {
+            var markdown = Section("""
+                /* U10: PG 부가세 재계산 */
+                UPDATE A SET PGVT = @v_recalculated FROM dbo.TSettleMst AS A;
+                """);
+
+            var result = ValidateWithSetFacts(markdown, ExceptionProcSpec);
+
+            Assert.Contains(result.Errors, e => e.Contains("갱신 10", StringComparison.Ordinal));
+            Assert.Contains(result.Errors, e => e.Contains("UF_GET_PGCommOption", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 산식을 실은 단계는 침묵해야 한다. 재생성본(현행 S08)이 이 모양이고, 그것이
+        /// 이 검사가 <b>만족 가능</b>하다는 증거다 — 모델이 실제로 쓸 수 있는 것을 요구한다.
+        /// </summary>
+        [Fact]
+        public void SetExpression_WhenStepCarriesTheTokens_IsSilent()
+        {
+            var markdown = Section("""
+                /* U10: PG 부가세 재계산 */
+                UPDATE A SET PGVT = CAST(ROUND(A.PGCOMM * 0.1, 0, dbo.UF_GET_PGCommOption(A.PGNAME, 5)) AS INT)
+                FROM dbo.TSettleMst AS A;
+                """);
+
+            var result = ValidateWithSetFacts(markdown, ExceptionProcSpec);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("갱신 10", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// 판별 토큰이 없는 갱신(산식이 컬럼 참조뿐)은 <b>대조가 성립하지 않는다.</b>
+        /// 그런 자리를 발화시키면 정상 문서가 결함이 된다 — 작성 계약 7(귀속이 불가능하면
+        /// 침묵하라). 실측에서 이 부류가 절반이 넘는다(판정 가능 400 대 대조 불가 432).
+        /// </summary>
+        [Fact]
+        public void SetExpression_WhenExpressionHasNoDistinctiveToken_IsNotJudged()
+        {
+            // 갱신 12 의 산식은 `A.CLCOMM` 뿐이라 토큰이 없다. 본문이 그것을 안 담아도
+            // 발화하지 않아야 한다.
+            var markdown = Section("UPDATE A SET CLTotal = 0 FROM dbo.TSettleMst AS A;");
+
+            var result = ValidateWithSetFacts(markdown, ExceptionProcSpec);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("갱신 12", StringComparison.Ordinal));
+        }
+
         private static IReadOnlyList<StepInterface> Interfaces(string code, params string[] parameters) =>
             new[] { new StepInterface(code, new[] { "dbo.X" }, parameters) };
 

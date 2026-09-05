@@ -28,7 +28,18 @@ namespace ReSet.Core.Services
     /// 매핑이다. 서수 없는 제목에 <see cref="Ordinal"/>을 억지로 만들어 붙이면 그
     /// 값이 무엇을 뜻하는지 아무도 모르게 되므로, 이 계약을 UPDATE 전용으로 좁힌다.
     /// </summary>
-    public sealed record SpecSetTarget(int Ordinal, string TargetTable, IReadOnlyList<string> Columns);
+    /// <param name="Expressions">각 컬럼의 「원천 표현식 (SET)」 칸. <paramref name="Columns"/>와
+    /// <b>자리를 맞춘다</b> — 같은 인덱스가 같은 행이다. 칸이 비어 있으면 빈 문자열로 남겨
+    /// 자리를 지킨다(걸러 담으면 뒤 컬럼이 앞 컬럼의 산식을 갖게 된다). 표에 그 칸이 아예
+    /// 없으면 전부 빈 문자열이다.
+    ///
+    /// [왜 표현식이 필요한가 - 축 B 감사 🔴]
+    /// POQSettleBatch1/S07 의 결함은 컬럼 이름이 아니라 <b>우변 산식</b>의 소실이었다 —
+    /// 상수·계수·부호·반올림 자릿수·UDF 인자. 옛 지시서는 컬럼 이름을 주석과 표에 적어 두고
+    /// 산식만 뺐다. 실측(2026-09-05): 컬럼만으로 재면 통째로 빠진 갱신이 결함 문서와 정상
+    /// 문서 양쪽 다 0 이라 <b>결함이 안 보인다.</b></param>
+    public sealed record SpecSetTarget(
+        int Ordinal, string TargetTable, IReadOnlyList<string> Columns, IReadOnlyList<string> Expressions);
 
     public sealed record SpecLocalVariable(string Name, string TypeOrKind, bool IsSystemValue);
 
@@ -246,12 +257,26 @@ namespace ReSet.Core.Services
                 var iColumn = FindColumn(table.Value.Header, "컬럼명");
                 if (iColumn < 0) continue;
 
-                var columns = table.Value.Rows
-                    .Select(cells => Clean(Cell(cells, iColumn)))
-                    .Where(c => c.Length > 0)
+                // 표현식 칸이 없는 표도 있다(옛 세대·다른 모양). 그때는 빈 문자열로 채워
+                // 자리만 지킨다 - 검사 쪽이 "재료가 없다"를 스스로 판정한다.
+                var iExpression = FindColumn(table.Value.Header, "원천 표현식");
+
+                // 컬럼과 표현식을 **한 번에** 걸러야 자리가 맞는다. 따로 Where 를 걸면
+                // 산식 칸이 빈 행에서 짝이 어긋나 뒤 컬럼이 앞 컬럼의 산식을 갖는다.
+                var picked = table.Value.Rows
+                    .Select(cells => (
+                        Column: Clean(Cell(cells, iColumn)),
+                        Expression: iExpression >= 0 ? Clean(Cell(cells, iExpression)) : string.Empty))
+                    .Where(row => row.Column.Length > 0)
                     .ToList();
 
-                if (columns.Count > 0) targets.Add(new SpecSetTarget(ordinal, targetTable, columns));
+                if (picked.Count > 0)
+                {
+                    targets.Add(new SpecSetTarget(
+                        ordinal, targetTable,
+                        picked.Select(row => row.Column).ToList(),
+                        picked.Select(row => row.Expression).ToList()));
+                }
             }
 
             return targets;

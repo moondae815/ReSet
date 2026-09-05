@@ -563,6 +563,11 @@ namespace ReSet.Core.Services
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
+                    // countCheckFacts 를 쓰는 이유: 이 검사는 앵커 계열(B·C·D)의 "앵커가
+                    // 달린 문장은 정확해야 한다"가 아니라 개수 대조와 같은 "그 갱신이
+                    // 이 단계에 있어야 한다" 모양이다. 같은 SP 가 여러 단계에 나뉘면
+                    // 어느 단계가 어느 갱신을 맡는지 알 수 없으므로 침묵해야 한다.
+                    SafeCheck(() => CheckSpecSetExpressions(countCheckFacts, stepMarkdown, step, result));
                 }
             }
 
@@ -8059,6 +8064,104 @@ namespace ReSet.Core.Services
                     $"{row.Kind} {row.Ordinal} 행의 최상위 술어 컬럼은 " +
                     $"`{string.Join(", ", row.PredicateColumns)}`뿐입니다 — " +
                     "조건을 더하면 원본이 처리하던 행이 처리되지 않습니다.");
+            }
+        }
+
+        /// <summary>
+        /// 명세서 갱신 절의 <b>SET 우변 산식</b>이 단계 본문에 실렸는지 본다.
+        ///
+        /// [무엇을 잡는가 - 축 B 감사 🔴 (POQSettleBatch1/S07, 2026-08-24)]
+        /// 「18개 갱신 중 10개의 SET 산식이 통째로 빠졌다」가 그 판정이었다. 단계는 컬럼
+        /// 이름과 `/* U4: … */` 같은 한 줄 주석만 남기고 상수·계수·부호·반올림 자릿수·UDF
+        /// 인자를 버렸다. 그 절만으로 구현하면 금액이 원본과 달라진다.
+        ///
+        /// [왜 컬럼이 아니라 산식인가]
+        /// <see cref="SpecSetTarget.Columns"/>만으로는 <b>이 결함이 안 보인다.</b> 실측
+        /// (2026-09-05): 감사가 🔴로 판정한 문서와 정상 문서를 컬럼으로 재면 「통째로 빠진
+        /// 갱신」이 양쪽 다 0 이다. 옛 지시서가 컬럼 이름은 주석과 표에 적어 두었기 때문이다.
+        ///
+        /// [발화 단위가 토큰이 아니라 갱신인 이유 - 실측이 정했다]
+        /// 토큰 단위로 발화하면 정상 문서(재생성본)에서 3 건이 오탐으로 난다 — 산식의 일부
+        /// 상수는 이행하며 정당하게 사라진다. 갱신 하나의 판별 토큰이 <b>전부</b> 없을 때만
+        /// 발화하면 결함 문서 3 · 정상 문서 0 으로 깨끗이 갈린다.
+        ///
+        /// [침묵의 범위를 알고 써라]
+        /// 산식이 컬럼 참조뿐인 갱신은 판별 토큰이 없어 <b>대조가 성립하지 않는다.</b>
+        /// 코퍼스 실측에서 그 부류가 절반을 넘는다(판정 가능한 갱신 400 대 대조 불가 432).
+        /// 그러므로 이 검사의 발화 0 은 「그 단계의 산식이 온전하다」가 아니라 「판정 가능한
+        /// 갱신 중 통째로 빠진 것이 없다」이다. 분모는 스윕 보고서의 재료 분모 절이 낸다.
+        ///
+        /// [코퍼스 전수 실측 - 2026-09-05]
+        /// 측정 쌍 197 · 판정 가능한 갱신 400 · 발화 6(1.5%) · <b>전건 감사 거짓 0</b>.
+        /// 발화 6 은 Proc10 S09·S10 세 건(문서 전체 어디에도 UDF 이름이 없다)과 Proc9 S06
+        /// 세 건(감사가 🔴로 판정한 것과 같은 갱신 7·10·11)이다.
+        /// </summary>
+        private static void CheckSpecSetExpressions(
+            IReadOnlyList<SpecStatementFacts> facts,
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            foreach (var target in facts.SelectMany(f => f.SetTargets).OrderBy(t => t.Ordinal))
+            {
+                var tokens = DistinctiveExpressionTokens(target.Expressions);
+                // 판별 토큰이 없으면 대조 항목이 0 이다 - 침묵한다(작성 계약 7).
+                if (tokens.Count == 0) continue;
+
+                // 하나라도 있으면 그 갱신의 산식이 어떤 형태로든 실렸다고 본다.
+                if (tokens.Any(token => ContainsToken(stepMarkdown, token))) continue;
+
+                // 본문 결함이므로 PlanDefects 가 아니다 - 재생성으로 고칠 수 있다.
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 원본 갱신 {target.Ordinal}({target.TargetTable})의 SET 산식을 " +
+                    $"담지 않았습니다 - 명세서가 확정한 {string.Join(", ", tokens.Take(6))} 중 하나도 " +
+                    "본문에 없습니다. 상수·계수·반올림 자릿수·UDF 인자가 없으면 이 절만으로 " +
+                    "구현할 때 결과 값이 원본과 달라집니다.");
+            }
+        }
+
+        /// <summary>
+        /// SET 우변 산식에서 <b>판별력 있는</b> 토큰만 뽑는다 - 문자열 리터럴 · <c>UF_</c>
+        /// 계열 함수 이름 · 두 자리 이상 수(소수 포함).
+        ///
+        /// 좁게 잡은 이유가 셋이다. 컬럼 이름은 이행하며 별칭이 바뀌고, `0`·`1` 같은 한 자리
+        /// 수는 아무 문장에나 있어 대조가 무의미하며, 연산자·키워드는 산식이 재작성돼도 남는다.
+        /// 남는 셋은 <b>이행이 바꿀 수 없는 사실</b>이다 - 상수 200 을 180 으로 바꾸면 금액이
+        /// 틀리고, UDF 이름은 호출하지 않으면 존재하지 않는다.
+        ///
+        /// 트리거를 머리로 정하지 않았다(작성 계약 8) - 이 셋으로 코퍼스 전수를 재서
+        /// 거짓 양성 0 을 확인한 뒤 고정했다.
+        /// </summary>
+        private static IReadOnlyList<string> DistinctiveExpressionTokens(IEnumerable<string> expressions)
+        {
+            var tokens = new List<string>();
+            foreach (var expression in expressions ?? Enumerable.Empty<string>())
+            {
+                if (string.IsNullOrWhiteSpace(expression)) continue;
+
+                foreach (Match m in Regex.Matches(expression, @"'([^']{2,})'"))
+                {
+                    Add(m.Groups[1].Value);
+                }
+                foreach (Match m in Regex.Matches(expression, @"\b(UF_[A-Za-z0-9_]+)", RegexOptions.IgnoreCase))
+                {
+                    Add(m.Groups[1].Value);
+                }
+                foreach (Match m in Regex.Matches(expression, @"(?<![\w.])(\d+\.\d+|\d{2,})(?![\w])"))
+                {
+                    Add(m.Groups[1].Value);
+                }
+            }
+
+            return tokens;
+
+            void Add(string token)
+            {
+                token = token.Trim();
+                if (token.Length > 0 && !tokens.Contains(token, StringComparer.OrdinalIgnoreCase))
+                {
+                    tokens.Add(token);
+                }
             }
         }
 

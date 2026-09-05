@@ -100,6 +100,37 @@ public sealed class SpecStatementFactsExtractorTests
         Assert.Equal(new[] { "CLINTCOMM", "CLVT" }, target.Columns);
     }
 
+    // 축 B 감사 🔴(POQSettleBatch1/S07)이 지적한 것은 **컬럼 이름**이 아니라 **우변 산식**의
+    // 소실이다 — 상수·계수·반올림 자릿수·UDF 인자. 그 재료는 표의 「원천 표현식 (SET)」 칸에
+    // 있는데 이 리더가 읽고 버렸다(실측 2026-09-05: 스냅샷 S07 대 현행 S08 을 컬럼으로만
+    // 재면 통째로 빠진 갱신이 양쪽 다 0 이라 결함이 안 보인다).
+    //
+    // 표현식은 컬럼과 **자리를 맞춰** 담는다. 따로 걸러 담으면 빈 칸이 있는 행에서 짝이
+    // 어긋나 「이 컬럼의 산식」을 말할 수 없게 된다.
+    [Fact]
+    public void SetTargets_CarryTheSourceExpression_AlignedWithColumns()
+    {
+        const string spec = """
+            ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 6 · 원본 DDL 라인 187 · 원문 표기: TSettleMst)
+
+            | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+            | :--- | :--- | :--- | :--- |
+            | SETTLE_POQ_DB.dbo.TSettleMst | PGCOMMTYPE | 1 | 상수 `1`을 대입합니다. |
+            | SETTLE_POQ_DB.dbo.TSettleMst | PGCOMM | IIF(MALLID = 'LOLLETTER4', 200, 180) | 분기 상수입니다. |
+            | SETTLE_POQ_DB.dbo.TSettleMst | PGVT |  | 산식 칸이 빈 행입니다. |
+            """;
+
+        var target = Assert.Single(
+            SpecStatementFactsExtractor.Extract(new[] { ("dbo.UP_X", spec) })["UP_X"].SetTargets);
+
+        Assert.Equal(new[] { "PGCOMMTYPE", "PGCOMM", "PGVT" }, target.Columns);
+        Assert.Equal(3, target.Expressions.Count);
+        Assert.Equal("1", target.Expressions[0]);
+        Assert.Contains("LOLLETTER4", target.Expressions[1]);
+        // 빈 칸은 빈 문자열로 남아 자리를 지킨다 - 걸러내면 PGVT 가 PGCOMM 의 산식을 갖게 된다.
+        Assert.Equal(string.Empty, target.Expressions[2]);
+    }
+
     [Fact]
     public void SystemValues_AreMarkedAndNotTreatedAsLocalVariables()
     {
