@@ -69,7 +69,7 @@ namespace ReSet.Core.Tests
 
             | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
             | :--- | :--- | :--- | :--- |
-            | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | A.CLCOMM | 컬럼 참조뿐이라 판별 토큰이 없습니다. |
+            | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | 1 | 한 자리 상수뿐이라 판별 토큰이 없습니다. |
             """;
 
         private static StepValidationResult ValidateWithSetFacts(string markdown, string spec)
@@ -129,14 +129,24 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// 판별 토큰이 없는 갱신(산식이 컬럼 참조뿐)은 <b>대조가 성립하지 않는다.</b>
+        /// 판별 토큰이 없는 갱신(산식이 한 자리 상수뿐)은 <b>대조가 성립하지 않는다.</b>
         /// 그런 자리를 발화시키면 정상 문서가 결함이 된다 — 작성 계약 7(귀속이 불가능하면
-        /// 침묵하라). 실측에서 이 부류가 절반이 넘는다(판정 가능 400 대 대조 불가 432).
+        /// 침묵하라).
+        ///
+        /// [2026-09-05 개정 - A-2] 원래 이 시험은 「컬럼 참조뿐인 산식(`A.CLCOMM`)」으로
+        /// 이 침묵 경계를 보였다. 그런데 그 부류(순수 컬럼 산술)가 정확히 A-2가 닫은
+        /// 사각지대다 - `DistinctiveExpressionTokens`가 이제 별칭.컬럼 토큰을 내므로
+        /// `A.CLCOMM`은 더 이상 토큰 0이 아니다(그 발화는 결함이 아니라 이 회차가 의도한
+        /// 개선이다 - <c>MechanicalValidatorTests.
+        /// ValidateBatchStep_CheckSetExpressions_FiresWhenOnlyPlainColumnArithmeticIsMissing</c>
+        /// 참고). 그래서 이 시험이 지키려는 「진짜 토큰 0」 경계는 한 자리 상수로 옮겼다 -
+        /// 한 자리 수는 여전히 어느 후보에도 안 걸린다(코퍼스 실측, 판독 문서
+        /// docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md).
         /// </summary>
         [Fact]
         public void SetExpression_WhenExpressionHasNoDistinctiveToken_IsNotJudged()
         {
-            // 갱신 12 의 산식은 `A.CLCOMM` 뿐이라 토큰이 없다. 본문이 그것을 안 담아도
+            // 갱신 12 의 산식은 한 자리 상수 `1` 뿐이라 토큰이 없다. 본문이 그것을 안 담아도
             // 발화하지 않아야 한다.
             var markdown = Section("UPDATE A SET CLTotal = 0 FROM dbo.TSettleMst AS A;");
 

@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -105,6 +107,137 @@ namespace ReSet.Core.Tests
 
             Assert.True(defectiveHits > 0,
                 $"결함 판 전체에서 발화하지 않았다 - 검사가 무엇도 가르지 못한다 (발화 {defectiveHits})");
+        }
+
+        /// <summary>
+        /// A-2(2026-09-05) 오라클 - <c>CheckSpecSetExpressions</c>가 결함 판에서 발화하고
+        /// 현행 판에서 침묵하는지 잠근다.
+        ///
+        /// [왜 파일 하나가 아니라 프로덕션 진입점을 다시 부르는가] <c>OmissionCommentScanner.Scan</c>
+        /// 오라클과 달리 이 검사는 명세서 재료(<c>SpecStatementFacts.SetTargets</c>)와 단계
+        /// 목차(<c>BatchStepPlan.LegacyProcedures</c>)를 함께 받아야 판정이 선다. 그래서
+        /// <c>BatchStepPlanParser.TryParse</c>·<c>SpecStatementFactsExtractor.Extract</c>·
+        /// <c>MechanicalValidator.ValidateBatchStep</c>을 그대로 불러 <c>SweepCommand</c>가
+        /// 하는 조립을 이 시험 안에서 다시 한다 - 자체 토큰 채점기를 새로 짜면 그 채점기가
+        /// 재는 것은 프로덕션 판정이 아니라 이 시험이 상상한 판정이 된다.
+        ///
+        /// [왜 명세서 재료가 판 공용인가] 결함 판(08-24 번들)·현행 판(09-04 문서) 둘 다
+        /// `output/Procedures/*/docs/Spec.md`(현재 명세서)를 재료로 쓴다. 계획서 Task 2의
+        /// 파이썬 하네스와 같은 설계다 - Jobs 트리만 두 판으로 가르고, SP 재생성의 영향을
+        /// 받지 않는 Procedures 트리는 공용이다.
+        ///
+        /// [실측치의 출처] 판독 문서(2026-09-05-set-expression-token-readout-b1.md)의
+        /// 결함판 10·현행판 0은 계획서의 파이썬 하네스(정규식으로 명세서 표를 직접 파싱)가
+        /// 낸 값이다. 이 시험은 <b>같은 값을 C# 프로덕션 코드 경로로 독립적으로 재서
+        /// 확인한다</b> - 실측(2026-09-05, 이 시험이 가진 알고리즘 그대로):
+        /// 결함판 10 · 현행판 0. 두 하네스가 같은 값을 냈다(파이썬 대 C# 조기 대사가 갈리면
+        /// 먼저 어느 쪽이 실제 파이프라인 규약(BareObjectName 조회·분할-SP 면제 등)을
+        /// 놓쳤는지부터 의심하라 - 값을 맞추려고 코드를 바꾸지 마라).
+        /// </summary>
+        [SkippableFact]
+        public void SetExpressionCheck_FiresOnDefectiveBundle_AndIsSilentOnCurrentPlan()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+            Skip.If(!CorpusPaths.DefectiveEditionExists(root),
+                $"{CorpusPaths.DefectiveEdition}이 없어 건너뜀 - " +
+                $"ln -s <main>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}");
+
+            var currentPlanPath = Path.Combine(
+                root, "output", "Jobs", "POQSettleBatch1", "docs", "BatchMigrationPlan.md");
+            Skip.If(!File.Exists(currentPlanPath), CorpusSkip.Reason);
+
+            var procedureRoot = Path.Combine(root, "output", "Procedures");
+            Skip.If(!Directory.Exists(procedureRoot), CorpusSkip.Reason);
+
+            var specs = Directory.GetDirectories(procedureRoot)
+                .Select(dir => (FileName: Path.GetFileName(dir), SpecPath: Path.Combine(dir, "docs", "Spec.md")))
+                .Where(x => File.Exists(x.SpecPath))
+                .Select(x => (x.FileName, Content: File.ReadAllText(x.SpecPath)))
+                .ToList();
+            Skip.If(specs.Count == 0, CorpusSkip.Reason);
+
+            var facts = SpecStatementFactsExtractor.Extract(specs);
+
+            var defectivePlanStructurePath = Path.Combine(
+                root, CorpusPaths.DefectiveEdition, "Jobs", "POQSettleBatch1", "raw", "PlanStructure.md");
+            var currentPlanStructurePath = Path.Combine(
+                root, "output", "Jobs", "POQSettleBatch1", "raw", "PlanStructure.md");
+            Skip.If(!File.Exists(defectivePlanStructurePath) || !File.Exists(currentPlanStructurePath),
+                CorpusSkip.Reason);
+
+            var defectiveSteps = BatchStepPlanParser.TryParse(File.ReadAllText(defectivePlanStructurePath));
+            var currentSteps = BatchStepPlanParser.TryParse(File.ReadAllText(currentPlanStructurePath));
+            Skip.If(defectiveSteps == null || currentSteps == null,
+                "목차 JSON을 못 읽어 건너뜀 - raw/PlanStructure.md 형식을 확인하라");
+
+            var defectiveStepsDir = Path.Combine(
+                root, CorpusPaths.DefectiveEdition, "Jobs", "POQSettleBatch1", "agent", "steps");
+            var defectiveHits = defectiveSteps!.Sum(step =>
+            {
+                var stepPath = Path.Combine(defectiveStepsDir, $"{step.Code}.md");
+                var markdown = File.Exists(stepPath) ? File.ReadAllText(stepPath) : null;
+                return CountSetExpressionHits(markdown, step, defectiveSteps, facts);
+            });
+
+            var currentSections = SplitCombinedPlanIntoStepSections(File.ReadAllText(currentPlanPath));
+            var currentHits = currentSteps!.Sum(step =>
+            {
+                currentSections.TryGetValue(step.Code, out var markdown);
+                return CountSetExpressionHits(markdown, step, currentSteps, facts);
+            });
+
+            // 10·0 은 우리가 만든 수가 아니라 판독 문서(위 클래스 주석)가 독립 하네스로
+            // 잰 수다. 이 값이 어긋나면 먼저 그 판독 문서를 다시 확인하라.
+            Assert.Equal(10, defectiveHits);
+            Assert.Equal(0, currentHits);
+        }
+
+        private static int CountSetExpressionHits(
+            string? stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            IReadOnlyDictionary<string, SpecStatementFacts> facts)
+        {
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return 0;
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                stepMarkdown, step, System.Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(),
+                stepInterfaces: null, runRowOwnedTables: null,
+                statementFactsByProcedure: facts, allSteps: allSteps);
+
+            return result.Errors.Count(e => e.Contains("SET 산식"));
+        }
+
+        /// <summary>
+        /// 현행 판(<c>BatchMigrationPlan.md</c>)은 단계별 파일이 아니라 한 문서에
+        /// <c>### S01</c> 식 헤딩으로 이어 붙어 있다. <c>step_bodies_current</c>
+        /// (계획서 파이썬 하네스, measure-set-expression-tokens.py)와 같은 방식으로
+        /// 헤딩 경계로 자른다.
+        /// </summary>
+        private static Dictionary<string, string> SplitCombinedPlanIntoStepSections(string combinedMarkdown)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(combinedMarkdown);
+            var headings = new List<(int Index, string Code)>();
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var m = Regex.Match(lines[i], @"^###\s+(S\d\d)\b");
+                if (m.Success)
+                {
+                    headings.Add((i, m.Groups[1].Value));
+                }
+            }
+
+            var sections = new Dictionary<string, string>();
+            for (var k = 0; k < headings.Count; k++)
+            {
+                var start = headings[k].Index;
+                var end = k + 1 < headings.Count ? headings[k + 1].Index : lines.Count;
+                sections[headings[k].Code] = string.Join("\n", lines.Skip(start).Take(end - start));
+            }
+
+            return sections;
         }
     }
 }

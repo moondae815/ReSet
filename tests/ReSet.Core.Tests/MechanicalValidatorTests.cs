@@ -10032,5 +10032,68 @@ END"
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
         }
+
+        // ── CheckSpecSetExpressions: 순수 컬럼 산술 갱신 ────────────────────
+        // 2026-09-05 A-2: 판별 토큰이 인용 리터럴·UF_·2자리 숫자뿐이던 동안,
+        // 순수 컬럼 산술만으로 이뤄진 갱신은 토큰 0 이라 구조적으로 안 보였다
+        // (코퍼스 52건 중 27건). 채택 규칙은
+        // docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md 참고
+        // (base + 별칭.컬럼 × majority).
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithPlainArithmeticSet() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 1,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "CLTOTAL" },
+                            Expressions: new[] { "A.CLCOMM + A.CLVT + A.CLETC" })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+        private static BatchStepPlan CommUpdStep(string code) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: new[] { "dbo.UP_UTIL_SETTLE_COMM_UPD" },
+            TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
+            ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_FiresWhenOnlyPlainColumnArithmeticIsMissing()
+        {
+            // 판별 토큰이 인용 리터럴·UF_·2자리 숫자뿐이던 동안, 순수 컬럼 산술만으로
+            // 이뤄진 갱신은 토큰 0 이라 구조적으로 보이지 않았다(코퍼스 52건 중 27건).
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE dbo.TSettleMst SET CLTOTAL = 0 WHERE YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithPlainArithmeticSet());
+
+            Assert.Contains(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_StaysSilentWhenExpressionIsCarried()
+        {
+            // 오탐 경계. 산식이 본문에 실려 있으면 발화하지 않는다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE dbo.TSettleMst\n" +
+                "SET CLTOTAL = A.CLCOMM + A.CLVT + A.CLETC\n" +
+                "WHERE YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithPlainArithmeticSet());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
     }
 }

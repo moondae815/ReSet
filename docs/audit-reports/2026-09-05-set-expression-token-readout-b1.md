@@ -123,3 +123,57 @@ base + 부호반전            majority           9          0       28     24
 남은 18건은 별칭.컬럼도, 인용 리터럴·UF_·2자리 숫자도 안 걸리는 표현식이다(예: 순수 상수 대입,
 단항 컬럼 값 복사 등으로 추정 — 이 판독에서는 개별 표현식까지 분해하지 않았다). 다음 회차가 이 잔량을
 다루려면 어떤 표현식이 남는지 표본을 다시 뽑아야 한다.
+
+## 5. Task 3 — 구현 후 실측 (2026-09-05, 이 문서 §3-1이 고른 규칙을 코드에 반영한 뒤)
+
+### 5-1. C# 오라클로 재확인한 값 — 파이썬 하네스와 대조
+
+이 문서 §2·§3의 10·0(결함판·현행판)은 계획서 Task 2의 **파이썬 하네스**
+(`scripts/measure-set-expression-tokens.py`, 정규식으로 명세서 표를 직접 파싱)가 낸 값이다.
+Task 3은 그 값을 **C# 프로덕션 코드 경로**(`BatchStepPlanParser.TryParse` →
+`SpecStatementFactsExtractor.Extract` → `MechanicalValidator.ValidateBatchStep` →
+`CheckSpecSetExpressions`, `tests/ReSet.Core.Tests/StepCheckOracleTests.cs`의
+`SetExpressionCheck_FiresOnDefectiveBundle_AndIsSilentOnCurrentPlan`)로 독립적으로 다시 쟀다.
+
+```
+결함판(output.bak-batch1-preregen-20260904/Jobs/POQSettleBatch1) : 10
+현행판(output/Jobs/POQSettleBatch1/docs/BatchMigrationPlan.md)    : 0
+```
+
+**두 하네스가 정확히 같은 값을 냈다(10·0).** 파이썬 하네스는 명세서 표를 정규식으로 직접 읽고
+단계 본문 전체를 소문자 부분 문자열로 대조하지만, C# 오라클은 실제 파이프라인 규약
+(`BareObjectName` 조회, 분할-SP 면제, `ContainsToken`의 단어 경계 정규식)을 그대로 거친다 -
+그런데도 값이 갈리지 않았다는 것은 이 규칙에서는 그 규약 차이가 결과에 영향을 주지 않았다는
+뜻이다(우연히 같을 수도 있으므로, 다음 회차에 규칙을 다시 바꾸면 이 대조를 다시 해야 한다 -
+값을 맞추려고 어느 한쪽을 조정하지 마라).
+
+### 5-2. 스윕 회귀 게이트 (계획서 Task 3 Step 5)
+
+```
+dotnet run --project src/ReSet.Cli -- --sweep
+→ 보고서(내 워크트리): docs/audit-reports/sweeps/2026-09-05-step-sweep-c.md
+  (실행 시점 HEAD b07a24ca, 작업 트리에 이 태스크의 변경 4개 파일만 얹은 상태)
+```
+
+**이름 정정**: `SweepCommand.NextAvailablePath`가 내 워크트리에서 실제로 낸 파일명은
+`-b`였다(내 워크트리에는 그 시점까지 `2026-09-05-step-sweep.md`만 있었으므로). 그런데
+같은 날 조정자(병행 세션)의 `2026-09-05-step-sweep-b.md`가 이미 main에 있어 이름이
+겹친다 - main 기준으로는 내 것이 `-c`가 된다. 커밋 전에 로컬에서 `-c`로 개칭했다. 이
+보고서는 **커밋하지 않고 워크트리에만 둔다** - 경로와 아래 표의 수치가 기록이다.
+
+| 검사 | 기준선(`b07a24ca`, 조정자 실측) | Task 3 구현 후 | 델타 |
+| :--- | ---: | ---: | ---: |
+| A | 18 | 18 | 0 |
+| B | 27 | 27 | 0 |
+| C | 20 | 20 | 0 |
+| D | 9 | 9 | 0 |
+| E | 56 | 56 | 0 |
+| 미분류 | 1097 | 1177 | **+80** |
+
+A~E는 한 자리도 움직이지 않았다 - 회귀 없음. 미분류만 늘었다 - 기대한 그대로다
+(`CheckSpecSetExpressions`는 `StepSweepClassifier`가 모르는 메시지라 미분류로 잡힌다).
++80은 코퍼스 전체(Job 18개, 측정 쌍 328)에서 규칙을 `any`에서 `majority`로, 후보를
+`base`에서 `base + 별칭.컬럼`으로 바꾸며 새로 발화한 갱신 수다 - POQSettleBatch1 하나만
+쟀을 때의 결함판 10건(§5-1)보다 훨씬 크다. 이 문서는 그 차이를 코퍼스 전체 대 Job 하나의
+표본 크기 차이로 설명하며, 개별 갱신까지 분해해 재확인하지는 않았다 - 다음 회차가 필요하면
+Job별 발화 목록을 다시 뽑아야 한다.
