@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **기준 커밋**: `33222fcb` 이상에서 분기한다. 병행 세션 `reset-ab`가 `MechanicalValidator.cs:7827` 부근(검사 B 접힘)을 이미 커밋했다.
+- **기준 커밋**: `d625ad01` 이상에서 분기한다. 병행 세션 `reset-ab`가 `MechanicalValidator.cs`에 두 번 손댔다 — 검사 B 접힘(`83bdf03f`)과 `CheckDuplicateProjectionNames` 신설(`1f7ea018`). **줄 번호로 자리를 지목하지 마라**: 뒤의 커밋이 112줄을 밀었고 파일 머리에 `using Microsoft.SqlServer.TransactSql.ScriptDom;`이 생겼다. 이름으로 찾아라.
 - **작업 공간**: 격리 `git worktree`에서만 빌드·테스트한다. 공유 체크아웃은 인덱스·`appsettings.local.json`·`bin`/`obj`가 새고 `git stash`도 공유된다.
 - **코퍼스 심링크 넷** — 워크트리에서 **가장 먼저** 건다. 전부 gitignore 대상이라 새 워크트리에 없다. **일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 진전처럼 보인다**(`CorpusSetupGuardTests` 머리 주석의 실측 사고 둘).
 
@@ -47,7 +47,7 @@
 | `tests/ReSet.Core.Tests/CorpusPaths.cs` | 넷째 코퍼스 재료(결함 판) 상수·존재 판정을 더한다 | 1 |
 | `tests/ReSet.Core.Tests/CorpusSetupGuardTests.cs` | 넷째 재료의 「반쯤 설정」을 실패로 잡는다 | 1 |
 | `tests/ReSet.Core.Tests/CorpusSkip.cs` · `AGENTS.md` | 재료 목록 「둘」·「셋」을 「넷」으로 정정한다 | 1 |
-| `src/ReSet.Core/Services/MechanicalValidator.cs` (8126~8193) | `CheckSpecSetExpressions`·`DistinctiveExpressionTokens` — 명세서 SET 산식이 단계 본문에 실렸는지 본다 | 3 |
+| `src/ReSet.Core/Services/MechanicalValidator.cs` (`CheckSpecSetExpressions`·`DistinctiveExpressionTokens`) | `CheckSpecSetExpressions`·`DistinctiveExpressionTokens` — 명세서 SET 산식이 단계 본문에 실렸는지 본다 | 3 |
 | `tests/ReSet.Core.Tests/MechanicalValidatorTests.cs` | 위의 단위 경계 | 3 |
 | `scripts/measure-set-expression-tokens.py` (신규) | A-2 후보별 발화/오탐을 두 판에서 재는 측정 하네스 | 2 |
 | `docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md` (신규) | 측정 결과와 규칙 선택 근거 | 2 |
@@ -592,7 +592,7 @@ git commit -m "docs: SET 산식 토큰 후보를 두 판에 돌려 재고 규칙
 ## Task 3: 고른 규칙을 `DistinctiveExpressionTokens`에 반영한다 (A-2)
 
 **Files:**
-- Modify: `src/ReSet.Core/Services/MechanicalValidator.cs:8126-8193`
+- Modify: `src/ReSet.Core/Services/MechanicalValidator.cs` — `CheckSpecSetExpressions`·`DistinctiveExpressionTokens` (줄 번호로 찾지 마라: `d625ad01`이 112줄 밀었다. 이름으로 찾아라)
 - Modify: `tests/ReSet.Core.Tests/MechanicalValidatorTests.cs`
 - Modify: `tests/ReSet.Core.Tests/StepCheckOracleTests.cs`
 
@@ -686,7 +686,7 @@ dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~CheckSetExpressi
 
 - [ ] **Step 3: 판독 문서가 고른 후보를 구현한다**
 
-`MechanicalValidator.cs:8162`의 `DistinctiveExpressionTokens`에 채택 패턴을 더한다.
+`DistinctiveExpressionTokens`에 채택 패턴을 더한다.
 아래는 「별칭.컬럼」이 채택된 경우의 예다 — **판독 문서가 다른 것을 골랐으면 그것을 쓴다.**
 
 ```csharp
@@ -700,7 +700,7 @@ dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~CheckSetExpressi
                 }
 ```
 
-규칙(`any`/`all`/과반)이 바뀌었으면 `CheckSpecSetExpressions:8139`의 판정도 함께 바꾼다.
+규칙(`any`/`all`/과반)이 바뀌었으면 `CheckSpecSetExpressions`의 판정도 함께 바꾼다.
 
 ```csharp
                 // 판정 규칙은 위 판독 문서가 실측으로 골랐다. 바꾸려면 같은 하네스를
