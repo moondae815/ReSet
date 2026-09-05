@@ -8393,9 +8393,22 @@ namespace ReSet.Core.Services
             {
                 if (string.IsNullOrWhiteSpace(expression)) continue;
 
-                foreach (Match m in Regex.Matches(expression, @"'([^']{2,})'"))
+                // [정크 하드 토큰 - 판독 §8-3-4, 2026-09-05]
+                // 길이 조건(`{2,}`)을 정규식 안에 두면 안 된다. 짧은 리터럴(`''`·`'A'`)
+                // 앞에서 매칭이 실패하면 엔진이 그 리터럴을 **소비하지 않고** 한 칸
+                // 전진하므로, 다음 시도가 그 리터럴의 **닫는** 따옴표에서 시작해
+                // 인접한 두 리터럴 **사이의 본문**을 통째로 걷는다. 실물:
+                // `ISNULL(dbo.UF_GET_OUTYMD4REFUND(…), '') = ''`
+                // (UP_UTIL_SETTLE_EXPECT_PROC 갱신 10)이 `) =` 를 하드 토큰으로 냈고,
+                // 그 정크는 아무 SQL 문서에나 걸려 하드 풀 [정크, UDF] 를 1/2(절반)
+                // 적중으로 만들어 **UDF 부재를 가렸다**(코퍼스 199 중 3 자리).
+                //
+                // 그래서 짝은 여는 따옴표에서만 맞추고(리터럴을 반드시 소비한다),
+                // 길이 판별은 잡은 뒤에 한다. 이 순서가 규칙 자체는 바꾸지 않는다 -
+                // 두 글자 미만 리터럴이 토큰이 아닌 것은 그대로다.
+                foreach (Match m in Regex.Matches(expression, @"'([^']*)'"))
                 {
-                    Add(m.Groups[1].Value);
+                    if (m.Groups[1].Value.Length >= 2) Add(m.Groups[1].Value);
                 }
                 foreach (Match m in Regex.Matches(expression, @"\b(UF_[A-Za-z0-9_]+)", RegexOptions.IgnoreCase))
                 {

@@ -10253,6 +10253,15 @@ END"
         // output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md). 하드 사실
         // (숫자) 아홉 개 중 셋(연월일 성격의 `2005`·`04`·`06`)이 이행 중 다른 표현으로
         // 재구성돼 본문에 그대로 안 남았다 - 나머지 여섯은 그대로 남았다.
+        //
+        // [픽스처가 자기 주석과 어긋나 있었다 - 판독 §8-3-3, 2026-09-05]
+        // 하드 아홉은 1000000·1500·100000·100·150·2005·04·06·3000 인데, 이 픽스처를
+        // 쓰는 시험의 본문이 `3000` 을 안 실어 실제로는 **5/9** 였다. 경계(5×2 ≥ 9)가
+        // 여전히 잠겨 시험은 통과했으므로 **아무도 몰랐다** - 통과는 픽스처가 옳다는
+        // 증거가 아니다. 틀린 것은 픽스처 하나이고 규칙도 코드 주석도 실물과 맞다.
+        // 본문에 `- 3000` 을 실어 주석이 말하는 6/9 로 맞췄고, 이 픽스처가 **우연히**
+        // 덮고 있던 경계는 전용 시험
+        // (StaysSilentWhenExactlyHalfOfTheHardFactTokensAreCarried)으로 옮겼다.
         private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithManyHardTokensSet() =>
             new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
             {
@@ -10287,7 +10296,7 @@ END"
             var markdown = "### S08 단계\n\n```sql\n" +
                 "UPDATE T\n" +
                 "   SET CLCOMM = CASE WHEN T.TXAMT >= 1000000 THEN 1500 " +
-                "WHEN T.TXAMT >= 100000 THEN 100 ELSE 150 END + T.COMMISSIONRATE\n" +
+                "WHEN T.TXAMT >= 100000 THEN 100 ELSE 150 END + T.COMMISSIONRATE - 3000\n" +
                 "FROM dbo.TSettleMst AS T\n" +
                 "WHERE YMD = @p;\n" +
                 "```\n";
@@ -10296,6 +10305,106 @@ END"
                 markdown, CommUpdStep("S08"), new[] { "dbo.TSettleMst" },
                 new Dictionary<string, SpecConditions>(), null, null,
                 FactsWithManyHardTokensSet());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        // 실물 코퍼스 모양(UP_UTIL_SETTLE_EXPECT_PROC 갱신 10,
+        // output/Procedures/dbo.UP_UTIL_SETTLE_EXPECT_PROC/docs/Spec.md:146).
+        // 빈 문자열 리터럴 둘이 `ISNULL(…, '') = ''`로 인접한다 - 판독 §8-3-4가
+        // 지목한 정크 하드 토큰의 발원지다.
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithAdjacentEmptyLiteralsSet() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 10,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "OUTYMD" },
+                            Expressions: new[]
+                            {
+                                "CASE WHEN ISNULL(dbo.UF_GET_OUTYMD4REFUND(ClientID,PGName,MallID,YMD), '') = '' " +
+                                "THEN OutYMD ELSE dbo.UF_GET_OUTYMD4REFUND(ClientID,PGName,MallID,YMD) END"
+                            })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_FiresWhenUdfIsMissing_EvenThoughAdjacentEmptyLiteralsLookLikeAToken()
+        {
+            // 판독 §8-3-4(2026-09-05): 인용 리터럴 정규식이 여는 따옴표에서만 짝을 맞추지
+            // 않아, 인접한 두 리터럴 **사이**(`'') = ''`의 `) = `)를 통째로 걷어
+            // 하드 토큰으로 만들었다. 그 정크는 아무 SQL 문서에나 걸리므로 하드 풀이
+            // [정크, UDF]가 되고 1/2(절반) 적중으로 침묵한다 - UDF 부재가 가려진다.
+            //
+            // 본문은 정크가 걸릴 자리(`) = `)를 갖되 UDF는 없다. 발화해야 한다.
+            var markdown = "### S09 단계\n\n```sql\n" +
+                "UPDATE T\n" +
+                "   SET OUTYMD = CASE WHEN ISNULL(T.OutYMD, '') = '' THEN T.OutYMD ELSE T.OutYMD END\n" +
+                "FROM dbo.TSettleMst AS T\n" +
+                "WHERE YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S09"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithAdjacentEmptyLiteralsSet());
+
+            Assert.Contains(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_DoesNotMakeATokenOutOfTheGapBetweenTwoLiterals()
+        {
+            // 위 시험의 반대 방향 - 정크 토큰이 **사라졌다**는 것을 발화 여부가 아니라
+            // 오류 메시지가 나열하는 토큰으로 못 박는다. 발화 수만 보면 규칙을 아무렇게나
+            // 세게 만들어도 통과하므로, 무엇을 세고 있는지를 함께 잠근다.
+            var markdown = "### S09 단계\n\n```sql\nSELECT 1;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S09"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithAdjacentEmptyLiteralsSet());
+
+            var message = Assert.Single(result.Errors, e => e.Contains("SET 산식"));
+            Assert.Contains("UF_GET_OUTYMD4REFUND", message);
+            Assert.DoesNotContain(") =", message);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_StaysSilentWhenExactlyHalfOfTheHardFactTokensAreCarried()
+        {
+            // 경계를 따로 잠근다. 예전에는 FactsWithManyHardTokensSet이 5/9(10 >= 9)로
+            // **우연히** 경계 근처를 덮고 있었는데, 그 픽스처가 자기 주석(9 중 6)과
+            // 어긋나 고쳐지면서(판독 §8-3-3) 그 덮개가 사라졌다. 코퍼스에는 하드가
+            // 정확히 절반인 자리가 7 곳 있다(판독 §8-2) - 그 자리의 동작을 못 박는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 3,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "CLCOMM" },
+                            Expressions: new[] { "1500 + 2005" })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S03 단계\n\n```sql\n" +
+                "UPDATE T SET CLCOMM = 1500 + T.COMMISSIONRATE FROM dbo.TSettleMst AS T;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S03"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                facts);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
         }
