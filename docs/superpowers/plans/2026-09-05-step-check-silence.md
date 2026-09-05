@@ -14,6 +14,18 @@
 
 - **기준 커밋**: `33222fcb` 이상에서 분기한다. 병행 세션 `reset-ab`가 `MechanicalValidator.cs:7827` 부근(검사 B 접힘)을 이미 커밋했다.
 - **작업 공간**: 격리 `git worktree`에서만 빌드·테스트한다. 공유 체크아웃은 인덱스·`appsettings.local.json`·`bin`/`obj`가 새고 `git stash`도 공유된다.
+- **코퍼스 심링크 넷** — 워크트리에서 **가장 먼저** 건다. 전부 gitignore 대상이라 새 워크트리에 없다. **일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 진전처럼 보인다**(`CorpusSetupGuardTests` 머리 주석의 실측 사고 둘).
+
+  ```bash
+  cd <워크트리>
+  ln -s <메인 저장소>/output output
+  ln -s <메인 저장소>/output.bak-2026-08-22 output.bak-2026-08-22
+  ln -s <메인 저장소>/output.bak-stage4-control-20260828 output.bak-stage4-control-20260828
+  ln -s <메인 저장소>/output.bak-batch1-preregen-20260904 output.bak-batch1-preregen-20260904
+  ```
+
+  넷째는 이 계획서가 새로 더하는 것이다(Task 1 Step 5a가 상수·가드·문서에 등록한다).
+  **`dotnet test`의 건너뜀이 0이 아니면 심링크가 덜 걸린 것이다** — 코드를 의심하기 전에 그것부터 본다.
 - **테스트 게이트**: `dotnet test` **실패 0 · 건너뜀 0**. 절대 통과 수를 게이트로 쓰지 않는다(환경 내에서도 최대 5까지 흔들린다).
 - **경고 게이트**: `dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"` → **0**. 증분 빌드는 기존 경고를 다시 보고하지 않는다.
 - **건드리지 않는 파일**: `AiService.cs` · `StepSqlStatementReader.cs` · `docs/known-defects.md` (reset-ab 몫).
@@ -32,6 +44,9 @@
 | `src/ReSet.Core/Services/OmissionCommentScanner.cs` | 계획서 코드 블록에서 「구현 대신 주석이 선 자리」를 찾아 배너 재료를 낸다 | 1 |
 | `tests/ReSet.Core.Tests/OmissionCommentScannerTests.cs` | 위의 발화·오탐 경계를 고정한다 | 1 |
 | `tests/ReSet.Core.Tests/StepCheckOracleTests.cs` (신규) | 고정 오라클 두 판에 검사를 걸어 판정이 갈리는지 잠근다 | 1·3 |
+| `tests/ReSet.Core.Tests/CorpusPaths.cs` | 넷째 코퍼스 재료(결함 판) 상수·존재 판정을 더한다 | 1 |
+| `tests/ReSet.Core.Tests/CorpusSetupGuardTests.cs` | 넷째 재료의 「반쯤 설정」을 실패로 잡는다 | 1 |
+| `tests/ReSet.Core.Tests/CorpusSkip.cs` · `AGENTS.md` | 재료 목록 「둘」·「셋」을 「넷」으로 정정한다 | 1 |
 | `src/ReSet.Core/Services/MechanicalValidator.cs` (8126~8193) | `CheckSpecSetExpressions`·`DistinctiveExpressionTokens` — 명세서 SET 산식이 단계 본문에 실렸는지 본다 | 3 |
 | `tests/ReSet.Core.Tests/MechanicalValidatorTests.cs` | 위의 단위 경계 | 3 |
 | `scripts/measure-set-expression-tokens.py` (신규) | A-2 후보별 발화/오탐을 두 판에서 재는 측정 하네스 | 2 |
@@ -225,9 +240,70 @@ dotnet test tests/ReSet.Core.Tests --filter "FullyQualifiedName~OmissionCommentS
         // 오탐 경계는 이제 문구가 아니라 구조가 지킨다(ScanBlockComments 참고).
 ```
 
-- [ ] **Step 5: 고정 오라클 두 판에 걸어 판정이 갈리는지 잠근다**
+- [ ] **Step 5a: 결함 판을 네 번째 코퍼스 재료로 등록한다**
+
+**이 단계를 건너뛰면 뒤의 오라클 테스트가 코퍼스 없는 워크트리에서 조용히 통과한다.**
+`output.bak-batch1-preregen-20260904/`는 gitignore(`.gitignore:50` `output.bak-*/`) 대상이라
+새 워크트리에 **없다.** 그리고 `AGENTS.md:157`의 정본 목록은 재료를 **셋**으로 적고 있어
+이 넷째는 어느 가드도 모른다 — `CorpusPaths.ControlEdition` 주석이 기록한 사고와 같은 자리다.
+
+`tests/ReSet.Core.Tests/CorpusPaths.cs`에 상수와 존재 판정을 더한다.
+
+```csharp
+        /// <summary>
+        /// 결함 판 번들. <c>StepCheckOracleTests</c>가 「검사가 무엇을 가르는가」를
+        /// 이 트리로 판정한다 — 감사가 🔴로 매긴 산출물이라 <b>재생성할 수 없다.</b>
+        ///
+        /// <see cref="PriorEdition"/>·<see cref="ControlEdition"/>과 같은 이유로
+        /// `.git/info/exclude`의 `output.bak-*`에 걸려 `output/`과 별개로 없을 수 있다.
+        /// 넷째 재료다 — 셋일 때 벌어진 일이 <see cref="ControlEdition"/> 주석에 있다.
+        /// </summary>
+        public const string DefectiveEdition = "output.bak-batch1-preregen-20260904";
+
+        /// <summary>
+        /// 결함 판이 실제로 닿는가. 디렉터리가 아니라 <b>소비자가 읽는 파일</b>로
+        /// 판정한다 — <see cref="ControlEditionExists"/>와 같은 이유다.
+        /// </summary>
+        public static bool DefectiveEditionExists(string root) =>
+            !string.IsNullOrEmpty(root) &&
+            File.Exists(Path.Combine(
+                root, DefectiveEdition, "Jobs", "POQSettleBatch1", "agent", "steps", "S08.md"));
+```
+
+`tests/ReSet.Core.Tests/CorpusSetupGuardTests.cs`에 세 번째 시험을 더한다.
+기존 두 시험의 모양을 그대로 따른다(`[SkippableFact]` · `CorpusPaths.RepoRoot()` ·
+`Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason)` · `IsLinkedWorktree` 좁힘).
+
+```csharp
+        [SkippableFact]
+        public void CorpusSetup_WhenOutputIsPresent_DefectiveEditionMustAlsoBePresent()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+            Skip.If(!CorpusPaths.IsLinkedWorktree(root),
+                "연결된 워크트리가 아니다 - 가드가 막으려는 것은 워크트리 설정 실수다.");
+
+            Assert.True(
+                CorpusPaths.DefectiveEditionExists(root),
+                $"`output/`은 있는데 {CorpusPaths.DefectiveEdition}이 없다. " +
+                "StepCheckOracleTests가 「결함 판에서 발화한다」를 확인하지 못한 채 " +
+                "초록이 된다 - 반쯤 설정된 상태다. " +
+                $"ln -s <main>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}");
+        }
+```
+
+`tests/ReSet.Core.Tests/CorpusSkip.cs`의 `Reason` 문구에서 **「재료 둘」을 「재료 넷」으로** 고치고
+`ControlEdition`·`DefectiveEdition` 두 줄을 `ln -s` 목록에 더한다. (그 문구는 이미 낡아 있었다 —
+정본 `AGENTS.md`는 셋이고 이 상수는 둘이라 적혀 있었다.)
+
+`AGENTS.md:157`과 `:233`의 **「셋」을 「넷」으로** 고치고 `ln -s` 예시에 한 줄을 더한다.
+바이트 예산이 걸린 문서이므로 **줄을 더하는 것 외에 다른 편집을 하지 않는다.**
+
+- [ ] **Step 5b: 고정 오라클 두 판에 걸어 판정이 갈리는지 잠근다**
 
 `tests/ReSet.Core.Tests/StepCheckOracleTests.cs`를 만든다.
+**자체 루트 탐색을 쓰지 않는다** — `CorpusPaths.RepoRoot()`가 실물 SP 메타데이터 파일로
+판정해 `bin/Debug/net10.0/output/`의 스크래치를 걸러 낸다(그 함정의 실측이 그 주석에 있다).
 
 ```csharp
 using System.IO;
@@ -244,42 +320,36 @@ namespace ReSet.Core.Tests
     /// 결함이 있다고 감사가 판정한 판에서 발화하고, 현행 판에서 침묵해야 비로소
     /// 그 검사가 무언가를 가른다고 말할 수 있다.
     ///
-    /// 오라클이 없는 환경(얕은 체크아웃)에서는 Skip 이 아니라 통과시킨다 - 건너뜀 0
-    /// 게이트를 지키기 위해서다. 대신 오라클 부재 자체를 Assert 로 드러내지 않는다.
+    /// [왜 조용히 통과시키지 않는가] `if (없으면) return;`으로 두면 코퍼스가 없는
+    /// 워크트리에서 단언이 한 줄도 안 돌면서 초록이 된다 - <see cref="CorpusSkip"/>가
+    /// 기록한 2026-08-23 사고가 정확히 그것이고, 다른 세션의 parallel-sdd 실행이
+    /// 그 통과를 믿었다. 그래서 Skip 으로 드러낸다. 완료 기준이 「건너뜀 0」이므로
+    /// 심링크를 빠뜨리면 기준이 자동으로 실패한다.
     /// </summary>
     public class StepCheckOracleTests
     {
-        private const string DefectiveBundle =
-            "output.bak-batch1-preregen-20260904/Jobs/POQSettleBatch1/agent/steps";
-        private const string CurrentPlan =
-            "output/Jobs/POQSettleBatch1/docs/BatchMigrationPlan.md";
-
-        private static string? RepoRoot()
-        {
-            var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-            while (dir != null && !File.Exists(Path.Combine(dir.FullName, "ReSet.slnx")))
-            {
-                dir = dir.Parent;
-            }
-
-            return dir?.FullName;
-        }
-
-        [Fact]
+        [SkippableFact]
         public void OmissionScanner_FiresOnDefectiveBundle_AndIsSilentOnCurrentPlan()
         {
-            var root = RepoRoot();
-            if (root == null) return;
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+            Skip.If(!CorpusPaths.DefectiveEditionExists(root),
+                $"{CorpusPaths.DefectiveEdition}이 없어 건너뜀 - " +
+                $"ln -s <main>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}");
 
-            var bundleDir = Path.Combine(root, DefectiveBundle);
-            var planPath = Path.Combine(root, CurrentPlan);
-            if (!Directory.Exists(bundleDir) || !File.Exists(planPath)) return;
+            var bundleDir = Path.Combine(
+                root, CorpusPaths.DefectiveEdition, "Jobs", "POQSettleBatch1", "agent", "steps");
+            var planPath = Path.Combine(
+                root, "output", "Jobs", "POQSettleBatch1", "docs", "BatchMigrationPlan.md");
+            Skip.If(!File.Exists(planPath), CorpusSkip.Reason);
 
             var defectiveHits = Directory.GetFiles(bundleDir, "*.md")
                 .Sum(f => OmissionCommentScanner.Scan(File.ReadAllText(f)).Count);
             var currentHits = OmissionCommentScanner.Scan(File.ReadAllText(planPath)).Count;
 
-            // 실측(2026-09-05): 결함 판 7건 · 현행 판 0건.
+            // 실측(2026-09-05, 커밋 8c00813e): 결함 판 7건 · 현행 판 0건.
+            // 발화 수 자체를 못 박지 않는 이유: 스캐너를 넓히면 결함 판 수가 늘 수 있고
+            // 그것은 개선이다. 잠그는 것은 「갈린다」이지 특정 수가 아니다.
             Assert.True(defectiveHits > 0,
                 $"결함 판에서 발화하지 않았다 - 검사가 무엇도 가르지 못한다 (발화 {defectiveHits})");
             Assert.Equal(0, currentHits);
