@@ -110,6 +110,56 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
+        /// Fix Round 1 Critical(2026-09-05) 회귀 잠금 - 리뷰어가 실물 코퍼스에서 확인한
+        /// 오탐 넷 중 <c>POQSettleProc1/S04</c>를 제외한 나머지 둘.
+        ///
+        ///   POQSettleProc3/agent/steps/S04.md:185-186
+        ///   POQSettleProc9/agent/steps/S06.md:131-132
+        ///
+        /// 둘 다 `UP_UTIL_SETTLE_EXCEPTION_PROC` 갱신 1(`A.TxAmt - B.OrgDiscountAmt`)을
+        /// 별칭만 `S`/`P`로 바꿔 정확히 구현했다. `POQSettleProc1/S04`는 별도 단위 시험
+        /// (<c>SetExpressionCheck_StaysSilentWhenGeneratedAliasDiffersFromSpec_POQSettleProc1S04</c>)이
+        /// 이미 잠갔으므로 여기서는 나머지 둘만 확인한다 - 넷째
+        /// (<c>POQSettleProc1/S04.md:408-409</c>, 갱신 12 - PLCard 원천 DiscountFlag/Amt)도
+        /// 같은 파일·같은 프로시저이므로 저 시험이 함께 잠근다(오류 0건이 그 갱신도
+        /// 포함한 전체 SET 산식 오류 수이기 때문).
+        /// </summary>
+        [SkippableTheory]
+        [InlineData("POQSettleProc3", "S04")]
+        [InlineData("POQSettleProc9", "S06")]
+        public void SetExpressionCheck_StaysSilentWhenGeneratedAliasDiffersFromSpec_AdditionalSites(
+            string job, string code)
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var stepPath = Path.Combine(root, "output", "Jobs", job, "agent", "steps", $"{code}.md");
+            var planStructurePath = Path.Combine(root, "output", "Jobs", job, "raw", "PlanStructure.md");
+            var specPath = Path.Combine(
+                root, "output", "Procedures", "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "docs", "Spec.md");
+            Skip.If(!File.Exists(stepPath) || !File.Exists(planStructurePath) || !File.Exists(specPath),
+                CorpusSkip.Reason);
+
+            var steps = BatchStepPlanParser.TryParse(File.ReadAllText(planStructurePath));
+            Skip.If(steps == null, "목차 JSON을 못 읽어 건너뜀 - raw/PlanStructure.md 형식을 확인하라");
+
+            var step = steps!.FirstOrDefault(s => s.Code == code);
+            Skip.If(step == null, $"{code} 단계가 목차에 없어 건너뜀");
+
+            var facts = SpecStatementFactsExtractor.Extract(
+                new[] { ("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", File.ReadAllText(specPath)) });
+
+            var markdown = File.ReadAllText(stepPath);
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step!, System.Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(),
+                stepInterfaces: null, runRowOwnedTables: null,
+                statementFactsByProcedure: facts, allSteps: steps);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식") && e.Contains("갱신 1("));
+        }
+
+        /// <summary>
         /// A-2(2026-09-05) 오라클 - <c>CheckSpecSetExpressions</c>가 결함 판에서 발화하고
         /// 현행 판에서 침묵하는지 잠근다.
         ///
@@ -191,6 +241,50 @@ namespace ReSet.Core.Tests
             // 잰 수다. 이 값이 어긋나면 먼저 그 판독 문서를 다시 확인하라.
             Assert.Equal(10, defectiveHits);
             Assert.Equal(0, currentHits);
+        }
+
+        /// <summary>
+        /// Fix Round 1 Critical(2026-09-05) 회귀 잠금. 리뷰어가 실물 코퍼스에서 확인한
+        /// 오탐 넷 중 하나 - <c>POQSettleProc1/agent/steps/S04.md:122-123</c>.
+        ///
+        /// `UP_UTIL_SETTLE_EXCEPTION_PROC`의 명세서 갱신 1 산식은
+        /// `A.TxAmt - B.OrgDiscountAmt`(별칭 A/B)인데, 생성본은 별칭을 `S`/`P`로 골라
+        /// `S.TxAmt - P.OrgDiscountAmt`로 <b>정확히 구현했다.</b> 별칭 문자 차이만으로
+        /// "SET 산식을 담지 않았습니다"가 발화하면 정확한 코드가 결함으로 고발된다 -
+        /// <see cref="MechanicalValidator.ContainsSetExpressionToken"/>이 이 자리를
+        /// 침묵시켜야 한다(그 메서드는 private이라 여기서 직접 부르지 않고, 이 시험은
+        /// 실제 코퍼스 파일로 <c>ValidateBatchStep</c>을 불러 결과로 확인한다).
+        /// </summary>
+        [SkippableFact]
+        public void SetExpressionCheck_StaysSilentWhenGeneratedAliasDiffersFromSpec_POQSettleProc1S04()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var stepPath = Path.Combine(root, "output", "Jobs", "POQSettleProc1", "agent", "steps", "S04.md");
+            var planStructurePath = Path.Combine(root, "output", "Jobs", "POQSettleProc1", "raw", "PlanStructure.md");
+            var specPath = Path.Combine(
+                root, "output", "Procedures", "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "docs", "Spec.md");
+            Skip.If(!File.Exists(stepPath) || !File.Exists(planStructurePath) || !File.Exists(specPath),
+                CorpusSkip.Reason);
+
+            var steps = BatchStepPlanParser.TryParse(File.ReadAllText(planStructurePath));
+            Skip.If(steps == null, "목차 JSON을 못 읽어 건너뜀 - raw/PlanStructure.md 형식을 확인하라");
+
+            var step = steps!.FirstOrDefault(s => s.Code == "S04");
+            Skip.If(step == null, "S04 단계가 목차에 없어 건너뜀");
+
+            var facts = SpecStatementFactsExtractor.Extract(
+                new[] { ("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", File.ReadAllText(specPath)) });
+
+            var markdown = File.ReadAllText(stepPath);
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step!, System.Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(),
+                stepInterfaces: null, runRowOwnedTables: null,
+                statementFactsByProcedure: facts, allSteps: steps);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식") && e.Contains("갱신 1("));
         }
 
         private static int CountSetExpressionHits(

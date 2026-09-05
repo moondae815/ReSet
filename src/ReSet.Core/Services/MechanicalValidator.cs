@@ -8221,22 +8221,32 @@ namespace ReSet.Core.Services
         ///
         /// [발화 단위가 토큰이 아니라 갱신인 이유 - 실측이 정했다]
         /// 토큰 단위로 발화하면 정상 문서(재생성본)에서 오탐이 난다 — 산식의 일부
-        /// 상수는 이행하며 정당하게 사라진다. 갱신 하나의 판별 토큰이 <b>과반</b> 없을 때
-        /// 발화한다(2026-09-05 개정 - 아래 참고).
+        /// 상수는 이행하며 정당하게 사라진다. 갱신 하나의 판별 토큰이 <b>절반에 못 미치게</b>
+        /// 있을 때 발화한다(2026-09-05 개정 - 아래 참고). [Fix Round 1 - 용어 정정]
+        /// 코드는 `hits*2 &gt;= tokens.Count`(있는 토큰이 <b>절반 이상</b>이면 침묵)다 -
+        /// 정확히 절반이면(예: 2개 중 1개) 침묵한다. "과반"(정확히 절반 초과)이라 적으면
+        /// 그 경계 사례(정확히 절반)의 실제 동작과 어긋난다.
         ///
         /// [침묵의 범위를 알고 써라]
         /// 산식이 판별 토큰을 하나도 못 내는 갱신은 대조가 성립하지 않는다 - 침묵한다.
         /// 이 검사의 발화 0 은 「그 단계의 산식이 온전하다」가 아니라 「판정 가능한
-        /// 갱신 중 판별 토큰이 과반 빠진 것이 없다」이다.
+        /// 갱신 중 판별 토큰이 절반 넘게 빠진 것이 없다」이다.
         ///
         /// [2026-09-05 개정 - A-2]
         /// 판별 토큰이 인용 리터럴·UF_·2자리 숫자뿐이던 동안, 순수 컬럼 산술만으로 이뤄진
         /// 갱신은 토큰 0 이라 구조적으로 안 보였다(코퍼스 52건 중 27건). 별칭.컬럼 토큰을
-        /// 더하고 판정 규칙을 「하나라도 있으면 통과(any)」에서 「과반 있으면 통과
-        /// (majority)」로 바꿨다 - 별칭.컬럼은 단계 문서 어디에나 흔해 any 규칙과 결합하면
-        /// 오히려 발화가 줄기 때문이다. 후보 넷 × 규칙 셋을 고정 오라클 두 판(결함 판·현행
-        /// 판)에 돌려 재고 골랐다 - 결함판 발화 7→10, 현행판 오탐 0 유지, 토큰0 27→18.
-        /// 근거: docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md
+        /// 더하고 판정 규칙을 「하나라도 있으면 통과(any)」에서 「절반 이상 있으면 통과
+        /// (코드 이름은 majority)」로 바꿨다 - 별칭.컬럼은 단계 문서 어디에나 흔해 any
+        /// 규칙과 결합하면 오히려 발화가 줄기 때문이다. 후보 넷 × 규칙 셋을 고정 오라클
+        /// 두 판(결함 판·현행 판)에 돌려 재고 골랐다 - 결함판 발화 7→10, 현행판 오탐 0
+        /// 유지, 토큰0 27→18. 근거:
+        /// docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md
+        ///
+        /// [Fix Round 1(2026-09-05) - 별칭 불일치 오탐]
+        /// 코퍼스 전역 스윕에서 정확히 구현된 코드가 별칭 문자만 다르다는 이유로
+        /// 오탐 고발당했다 - <see cref="ContainsSetExpressionToken"/> 참고. 판정 규칙
+        /// 자체(절반 이상)는 바뀌지 않았고, 토큰이 "있다"의 판정 방식만 별칭 불문으로
+        /// 고쳤다.
         /// </summary>
         private static void CheckSpecSetExpressions(
             IReadOnlyList<SpecStatementFacts> facts,
@@ -8250,10 +8260,10 @@ namespace ReSet.Core.Services
                 // 판별 토큰이 없으면 대조 항목이 0 이다 - 침묵한다(작성 계약 7).
                 if (tokens.Count == 0) continue;
 
-                // 판정 규칙은 위 판독 문서가 실측으로 골랐다(별칭.컬럼 후보 + 과반).
+                // 판정 규칙은 위 판독 문서가 실측으로 골랐다(별칭.컬럼 후보 + 절반 이상).
                 // 바꾸려면 같은 하네스를 다시 돌려 두 판의 판정이 갈리는지 확인하라 -
                 // 발화 수만으로는 못 고른다.
-                if (tokens.Count(token => ContainsToken(stepMarkdown, token)) * 2 >= tokens.Count) continue;
+                if (tokens.Count(token => ContainsSetExpressionToken(stepMarkdown, token)) * 2 >= tokens.Count) continue;
 
                 // 본문 결함이므로 PlanDefects 가 아니다 - 재생성으로 고칠 수 있다.
                 result.Errors.Add(
@@ -8262,6 +8272,61 @@ namespace ReSet.Core.Services
                     "본문에 없습니다. 상수·계수·반올림 자릿수·UDF 인자가 없으면 이 절만으로 " +
                     "구현할 때 결과 값이 원본과 달라집니다.");
             }
+        }
+
+        /// <summary>
+        /// <see cref="CheckSpecSetExpressions"/> 전용 대조. 별칭.컬럼 토큰(예: <c>A.TxAmt</c>)은
+        /// 별칭 문자를 떼고 <c>.컬럼</c>만 대조한다 - 나머지(인용 리터럴·<c>UF_</c>·숫자)는
+        /// <see cref="ContainsToken"/> 그대로 쓴다.
+        ///
+        /// [Fix Round 1 Critical - 2026-09-05] 코퍼스 전역 스윕에서 `SET 산식` 발화 86건을
+        /// 표본 추출해 보니 그중 다수가 <b>정확히 구현된 코드를 오탐 고발한 것</b>이었다
+        /// (`POQSettleProc1/agent/steps/S04.md:122-123` 등 4곳). 명세서 산식은
+        /// `A.TxAmt - B.OrgDiscountAmt`인데 생성기가 별칭을 `S`/`P`로 골라
+        /// `S.TxAmt - P.OrgDiscountAmt`로 썼다 - 같은 산식이지만 <see cref="ContainsToken"/>의
+        /// 리터럴 부분문자열 대조가 `"A.TxAmt"`를 문자 그대로 찾다 실패했다.
+        ///
+        /// [왜 <see cref="ContainsToken"/> 자체를 안 고치는가] 그 함수는 오류코드·테이블명·
+        /// 컬럼명 등 별칭이 없는 여러 검사가 함께 쓴다(전수 확인, 2026-09-05 - 이 파일
+        /// `ContainsToken(` 아홉 자리). 그 대조를 느슨하게 바꾸면 다른 검사의 판별력이
+        /// 조용히 달라진다. 그래서 SET 산식 경로에서만 별도로 별칭을 벗기고, 그 결과가
+        /// 아닌 나머지 세 종류(리터럴·UF_·숫자)는 여전히 <see cref="ContainsToken"/> 그대로
+        /// 쓴다 - 그 셋에는 애초에 별칭이 없어 대조를 바꿀 이유가 없다.
+        ///
+        /// [왜 컬럼명만 떨어뜨리지 않는가] 컬럼명 단독을 토큰으로 쓰면 흔한 이름이 되어
+        /// 판별력이 죽는다(Task 2 실측 - `any` 규칙에 흔한 토큰을 보태면 발화가 오히려
+        /// 준다). 별칭 접두는 버리되 <b>점(.)이 어떤 식별자 뒤에 와야 한다</b>는 요건은
+        /// 남겨 "그 컬럼이 무언가에 한정되어 쓰였다"는 최소 판별력을 지킨다.
+        /// </summary>
+        private static bool ContainsSetExpressionToken(string stepMarkdown, string token)
+        {
+            var dot = token.IndexOf('.');
+
+            // [Fix Round 1 회귀 - 2026-09-05] 소수 토큰(`0.1`·`100.0`)도 점을 가진다.
+            // 점 뒤가 숫자면 그것은 별칭.컬럼이 아니라 소수의 소수부다 - 컬럼 이름은
+            // SQL 식별자 규칙상 문자·밑줄로 시작하지 숫자로 시작하지 않는다. 이 구분이
+            // 없으면 `0.1`의 ".1"이 본문 어딘가의 무관한 "3.1"(표 번호 등) 같은
+            // 숫자.숫자 문구에 걸려 소수 상수가 실제로는 빠졌는데도 침묵한다(단위
+            // 시험 FiresWhenDecimalConstantIsMissing_EvenNearAnUnrelatedDottedNumber
+            // 가 이 회귀를 잠근다).
+            var isAliasQualifiedColumn = dot > 0 && dot < token.Length - 1 &&
+                (char.IsLetter(token[dot + 1]) || token[dot + 1] == '_');
+
+            if (!isAliasQualifiedColumn)
+            {
+                // 별칭.컬럼 모양이 아니다(리터럴·UF_·숫자) - 종전 그대로 대조한다.
+                return ContainsToken(stepMarkdown, token);
+            }
+
+            var column = token.Substring(dot + 1);
+
+            // `[식별자].컬럼` - 식별자(별칭)는 명세서와 생성본이 다를 수 있으므로 어떤
+            // 식별자든 인정한다. 컬럼 뒤는 ContainsToken과 같은 단어 경계 규약
+            // (ECMAScript `\w` - 한글 조사 앞에서도 경계로 본다).
+            return Regex.IsMatch(
+                stepMarkdown,
+                $@"[A-Za-z0-9_]\.{Regex.Escape(column)}(?!\w)",
+                RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
         }
 
         /// <summary>
@@ -8280,9 +8345,16 @@ namespace ReSet.Core.Services
         /// `A.CLCOMM + A.CLVT + A.CLETC`)이 토큰 0 이라 대조가 아예 성립하지 않았다
         /// (코퍼스 52건 중 27건). 컬럼 이름은 이행하며 별칭이 바뀔 수 있어 <c>any</c>
         /// 규칙과는 못 섞지만(현행 판에서 오탐), <c>CheckSpecSetExpressions</c>의 판정을
-        /// 과반(majority) 규칙으로 함께 바꾸면 결함 판 발화가 늘고 현행 판 오탐은 0 으로
-        /// 유지된다 - 근거는
+        /// 절반 이상(코드 이름은 majority) 규칙으로 함께 바꾸면 결함 판 발화가 늘고
+        /// 현행 판 오탐은 0 으로 유지된다 - 근거는
         /// docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md.
+        ///
+        /// [Fix Round 1(2026-09-05)] 여기서 뽑는 별칭.컬럼 토큰(예: <c>A.TxAmt</c>)의
+        /// 별칭 부분은 <see cref="CheckSpecSetExpressions"/>가
+        /// <see cref="ContainsSetExpressionToken"/>으로 대조할 때 버려진다 - 명세서
+        /// 별칭과 생성본 별칭이 다를 수 있기 때문이다(코퍼스 실물 - 명세서 `A`/`B`,
+        /// 생성본 `S`/`P`). 그래서 이 함수가 뽑는 토큰 문자열 자체(별칭 포함)는
+        /// 오류 메시지 표시용으로만 그대로 두고 바꾸지 않았다.
         /// </summary>
         private static IReadOnlyList<string> DistinctiveExpressionTokens(IEnumerable<string> expressions)
         {

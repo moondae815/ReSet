@@ -10061,6 +10061,25 @@ END"
             TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
             ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
 
+        // Fix Round 1(2026-09-05): 실물 코퍼스 모양(UP_UTIL_SETTLE_EXCEPTION_PROC 갱신 1,
+        // output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md). 명세서는
+        // 별칭 A/B를 쓰지만 생성기는 S/P를 골랐다 - 별칭 문자는 이행 자유도다.
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithTwoAliasArithmeticSet() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 1,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "DiscountAmt" },
+                            Expressions: new[] { "A.TxAmt - B.OrgDiscountAmt" })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
         [Fact]
         public void ValidateBatchStep_CheckSetExpressions_FiresWhenOnlyPlainColumnArithmeticIsMissing()
         {
@@ -10094,6 +10113,69 @@ END"
                 FactsWithPlainArithmeticSet());
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_StaysSilentWhenOnlyTheAliasLetterDiffers()
+        {
+            // Fix Round 1 리뷰 Critical(2026-09-05): 실물 코퍼스(POQSettleProc1/agent/steps/
+            // S04.md:122-123)에서 생성기가 명세서의 별칭 A/B 대신 S/P를 골랐다 -
+            // `S.TxAmt - P.OrgDiscountAmt`는 `A.TxAmt - B.OrgDiscountAmt`를 정확히
+            // 구현한 것인데, 별칭.컬럼 토큰이 리터럴 부분문자열 대조(ContainsToken)에
+            // 걸려 "SET 산식을 담지 않았습니다"로 오탐 발화했다. 별칭은 이행 자유도라
+            // 대조에서 빠져야 한다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE S\n" +
+                "   SET DiscountAmt = S.TxAmt - P.OrgDiscountAmt\n" +
+                "FROM dbo.TSettleMst AS S\n" +
+                "INNER JOIN dbo.TPromotionTxMst AS P ON P.PLTID = S.PLTID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithTwoAliasArithmeticSet());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        // Fix Round 1(2026-09-05): 명세서 산식이 소수 상수 하나뿐인 갱신.
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithDecimalConstantOnlySet() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 1,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "PGVT" },
+                            Expressions: new[] { "0.1" })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_FiresWhenDecimalConstantIsMissing_EvenNearAnUnrelatedDottedNumber()
+        {
+            // Fix Round 1 회귀(2026-09-05): 별칭.컬럼 대조를 별칭 불문으로 고치면서 점(.)
+            // 위치만으로 "별칭.컬럼 모양"을 판정하면, 소수 토큰(`0.1`)도 점을 가지므로
+            // 같은 경로를 타 `.1`을 컬럼처럼 대조하게 된다. 그러면 본문 어딘가의 무관한
+            // "3.1"(표 번호 등, 숫자.숫자 모양) 같은 문구가 `[식별자].1` 패턴에 걸려
+            // 소수 상수가 실제로는 없는데도 침묵한다 - 산식이 완전히 빠졌는데 통과시키는
+            // 회귀다. 컬럼 부분이 문자로 시작할 때만(별칭.컬럼) 별칭 불문 대조를 쓰고,
+            // 숫자로 시작하면(소수) 리터럴 그대로 대조해야 한다.
+            var markdown = "### S07 단계\n\n```sql\n" +
+                "UPDATE dbo.TSettleMst SET PGVT = 0 WHERE YMD = @p; -- 참고 3.1\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S07"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithDecimalConstantOnlySet());
+
+            Assert.Contains(result.Errors, e => e.Contains("SET 산식"));
         }
     }
 }
