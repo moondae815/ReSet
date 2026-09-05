@@ -16,10 +16,12 @@ namespace ReSet.Core.Tests
     public static class CorpusSkip
     {
         public const string Reason =
-            "output/ 코퍼스가 없어 건너뜀 - 워크트리라면 메인 저장소의 재료 **둘**을 모두 " +
+            "output/ 코퍼스가 없어 건너뜀 - 워크트리라면 메인 저장소의 재료 **넷**을 모두 " +
             "심링크한다(.git/info/exclude에 output·output.bak-*가 등록됨):\n" +
             "  ln -s <main>/output output\n" +
             "  ln -s <main>/" + CorpusPaths.PriorEdition + " " + CorpusPaths.PriorEdition + "\n" +
+            "  ln -s <main>/" + CorpusPaths.ControlEdition + " " + CorpusPaths.ControlEdition + "\n" +
+            "  ln -s <main>/" + CorpusPaths.DefectiveEdition + " " + CorpusPaths.DefectiveEdition + "\n" +
             "하나만 걸면 한쪽 계열은 살아나지만 CoverageMapGoldenTests의 과거 판 대조 요구 " +
             "둘이 대신 꺼진다 - 총 건너뜀 수는 줄어 진전처럼 보이는데 실제로는 다른 " +
             "테스트가 안 도는 것이다. 연결된 워크트리라면 CorpusSetupGuardTests가 " +

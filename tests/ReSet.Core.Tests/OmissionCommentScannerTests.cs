@@ -19,11 +19,10 @@ namespace ReSet.Core.Tests
         [Theory]
         [InlineData("    -- 원본 필터 YMD = @pi_strYMD AND USESTATE = 2를 모두 유지한다.")]
         [InlineData("    -- 원본 선행 보호 조건을 그대로 보존한다.")]
-        // 위 두 사례는 애초에 OmissionPatterns 어느 것과도 일치하지 않아 PreservationMarkers
-        // 가드가 없어도 이 테스트는 통과한다(가드를 지워도 초록). 아래 사례는 "나머지...같은"
-        // 패턴과 "유지한다" 마커를 동시에 만족시켜, Empty()의 유일한 근거가 가드가 되게 한다 -
-        // 가드를 지우면 이 케이스만 실패해야 한다.
-        [InlineData("    -- 나머지 컬럼도 같은 방식으로 유지한다")]
+        // "-- 나머지 컬럼도 같은 방식으로 유지한다" 케이스는 2026-09-05 에 제거했다.
+        // PreservationMarkers 화이트리스트가 없어졌기 때문이며, 없앤 이유는
+        // 그 화이트리스트가 감사 🔴(S07 - 갱신 10개 소실)의 문구를 면제했기 때문이다.
+        // 오탐 경계는 이제 문구가 아니라 구조가 지킨다(ScanBlockComments 참고).
         public void Scan_ShouldNotFlagInstructionCommentsThatDemandPreservation(string comment)
         {
             // 오탐 경계를 고정한다. 배너가 잦으면 사람이 읽지 않게 되므로,
@@ -56,6 +55,65 @@ namespace ReSet.Core.Tests
         [InlineData("")]
         public void Scan_ShouldReturnEmptyForBlankInput(string? plan)
         {
+            Assert.Empty(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagBlockCommentStandingInForDml()
+        {
+            // 감사가 🔴로 매긴 실제 모양(S08.md:155-159). UPDATE 문이 서야 할 자리에
+            // 블록 주석이 서 있다. `--`/`//`만 보던 종전 정규식은 이것을 못 봤다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        SET @v_currentStepId = -21;",
+                "        /* UPDATE 13: CLVTType=1 금액 재배치.",
+                "           WHERE YMD=@pi_strYMD",
+                "             AND CLVTType=1 */",
+                "```");
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldNotFlagBlockCommentThatOnlyAnnotatesRealDml()
+        {
+            // 앵커 주석(`/* U13: ... */`)은 뒤에 실제 DML 이 서 있으면 생략이 아니다.
+            // 이 경계가 없으면 규칙 준수 문서가 통째로 발화한다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        /* U13: CLVTType=1 금액 재배치 */",
+                "        UPDATE SETTLE_POQ_DB.dbo.TSettleMst",
+                "        SET CLVT = 0",
+                "        WHERE YMD = @pi_strYMD;",
+                "```");
+
+            Assert.Empty(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagOmissionEvenWhenCommentSaysPreserve()
+        {
+            // 종전 PreservationMarkers 화이트리스트가 면제하던 자리다. "유지한다"가
+            // 붙어 있어도, 그 주석이 선 자리에 실행 가능한 DML 이 없으면 생략이다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        /* UPDATE 4: 고객사 최저수수료. 원본 SET 산식을 그대로 유지한다. */",
+                "```");
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldNotFlagRangeWordThatMerelyContainsTheCharacterMeaningAbove()
+        {
+            // 실제 산출물(BatchMigrationPlan.md)에서 발견한 오탐. "위\s.*동일" 패턴에
+            // 단어 경계가 없어 "범위"의 "위"에도 걸려 "동일"과 짝지어졌다 - "위"가
+            // "위(above)"를 가리키는 게 아니라 "범위(scope)"의 일부일 때도 발화했다.
+            var plan = string.Join("\n",
+                "```sql",
+                "-- SQL_RESTORE2_DELETE (범위 삭제 후 복원 - 동일 YMD만)",
+                "```");
+
             Assert.Empty(OmissionCommentScanner.Scan(plan));
         }
     }

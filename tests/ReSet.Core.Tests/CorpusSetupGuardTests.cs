@@ -136,5 +136,21 @@ namespace ReSet.Core.Tests
                 $"  ln -s <메인 저장소>/{CorpusPaths.ControlEdition} {CorpusPaths.ControlEdition}\n" +
                 "셋 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
         }
+
+        [SkippableFact]
+        public void CorpusSetup_WhenOutputIsPresent_DefectiveEditionMustAlsoBePresent()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+            Skip.If(!CorpusPaths.IsLinkedWorktree(root),
+                "연결된 워크트리가 아니다 - 가드가 막으려는 것은 워크트리 설정 실수다.");
+
+            Assert.True(
+                CorpusPaths.DefectiveEditionExists(root),
+                $"`output/`은 있는데 {CorpusPaths.DefectiveEdition}이 없다. " +
+                "StepCheckOracleTests가 「결함 판에서 발화한다」를 확인하지 못한 채 " +
+                "초록이 된다 - 반쯤 설정된 상태다. " +
+                $"ln -s <main>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}");
+        }
     }
 }

@@ -154,12 +154,13 @@
     *   기능 추가, 버그 수정, 구조 변경 등 코드 베이스를 수정해야 할 경우, 가급적 독립적인 `git worktree`를 생성하여 별도의 작업 공간에서 코드를 작성하고 검증(빌드 및 테스트)을 수행하십시오.
     *   작업 및 테스트가 성공적으로 완료된 후 변경 사항을 병합(Merge)하고, 작업이 끝난 워크트리는 안전하게 정리(Remove)하는 사이클을 유지하십시오.
     *   `.claude/worktrees/` 격리 세션(`EnterWorktree`)에서는 `git -C <main>`도 사용자 `!` 입력도 가드가 main 병합을 막습니다. `ExitWorktree(keep)`로 main 루트에 돌아간 뒤 `git merge --ff-only <branch>` → 테스트 → `git worktree remove` → `git branch -d` 순으로 마무리하십시오.
-    *   워크트리에는 gitignore 대상인 코퍼스 재료 **셋**이 없습니다 — `output/`, `output.bak-2026-08-22/`, `output.bak-stage4-control-20260828/`. **셋 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
+    *   워크트리에는 gitignore 대상인 코퍼스 재료 **넷**이 없습니다 — `output/`, `output.bak-2026-08-22/`, `output.bak-stage4-control-20260828/`. **넷 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
 
         ```bash
         ln -s <메인 저장소>/output output
         ln -s <메인 저장소>/output.bak-2026-08-22 output.bak-2026-08-22
         ln -s <메인 저장소>/output.bak-stage4-control-20260828 output.bak-stage4-control-20260828
+        ln -s <메인 저장소>/output.bak-batch1-preregen-20260904 output.bak-batch1-preregen-20260904
         ```
 
         일부만 걸면 안 됩니다. 두 계열이 코퍼스 루트를 다르게 해석해, **총 건너뜀 수가 줄어드는데도 다른 테스트가 꺼집니다.** 셋째(`stage4-control`)는 `ProcedureClosureCorpusTests`의 재료이고, `LegacyErrorCodeInventionCorpusTests`가 `RESET_SWEEP_ROOT`로 같은 트리에 자를 대 볼 수 있습니다.
@@ -230,7 +231,7 @@ dotnet test
 
 - [ ] 컴파일 에러 0개, 경고 **0건**인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 이미 있던 경고도 0으로 보이므로 `dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"`로 세야 한다. (기대 개수를 적지 않는다 — 여기 「정확히 8건」으로 적혀 있던 줄이 `8875e9f`가 그 경고를 지운 뒤로도 낡은 채 남아 있었다.)
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
-- [ ] 워크트리라면 코퍼스 재료 **셋**을 심링크했는가? 일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
+- [ ] 워크트리라면 코퍼스 재료 **넷**을 심링크했는가? 일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
 - [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? **그 grep은 이름 없이 산문으로만 쓴 자리를 원리적으로 못 잡는다** — 지운 심볼이 *하던 일*의 명사구로 2차 스윕하라. 기계 검사로 대신할 수 없다(문서 전문 대조는 오탐 88%). 실측 둘은 `docs/known-defects.md`의 「문서 스윕이 놓친 자리」에 있다.

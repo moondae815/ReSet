@@ -112,5 +112,24 @@ namespace ReSet.Core.Tests
             !string.IsNullOrEmpty(root) &&
             File.Exists(Path.Combine(
                 root, ControlEdition, "Jobs", "POQSettleBatch4", "raw", "prompt-context.md"));
+
+        /// <summary>
+        /// 결함 판 번들. <c>StepCheckOracleTests</c>가 「검사가 무엇을 가르는가」를
+        /// 이 트리로 판정한다 - 감사가 🔴로 매긴 산출물이라 <b>재생성할 수 없다.</b>
+        ///
+        /// <see cref="PriorEdition"/>·<see cref="ControlEdition"/>과 같은 이유로
+        /// `.git/info/exclude`의 `output.bak-*`에 걸려 `output/`과 별개로 없을 수 있다.
+        /// 넷째 재료다 - 셋일 때 벌어진 일이 <see cref="ControlEdition"/> 주석에 있다.
+        /// </summary>
+        public const string DefectiveEdition = "output.bak-batch1-preregen-20260904";
+
+        /// <summary>
+        /// 결함 판이 실제로 닿는가. 디렉터리가 아니라 <b>소비자가 읽는 파일</b>로
+        /// 판정한다 - <see cref="ControlEditionExists"/>와 같은 이유다.
+        /// </summary>
+        public static bool DefectiveEditionExists(string root) =>
+            !string.IsNullOrEmpty(root) &&
+            File.Exists(Path.Combine(
+                root, DefectiveEdition, "Jobs", "POQSettleBatch1", "agent", "steps", "S08.md"));
     }
 }
