@@ -33,6 +33,10 @@
 - **고정 오라클 둘** — 경로를 바꾸지 않는다:
   - 결함 판 `output.bak-batch1-preregen-20260904/Jobs/POQSettleBatch1/agent/steps/`
   - 현행 판 `output/Jobs/POQSettleBatch1/docs/BatchMigrationPlan.md`
+- **⚠ 오탐을 재는 표본은 검사의 정의역과 같아야 한다** (2026-09-05 실측으로 배웠다):
+  - **A-3**(`OmissionCommentScanner`)은 계획서 **한 편**에 도는 배너 스캐너라 위 두 판이 그 정의역을 덮는다.
+  - **A-2**(`CheckSpecSetExpressions`)는 다르다 — L1 이 **모든 Job 의 모든 단계**에 돌린다. 두 판에서 오탐 0 을 재고 채택했더니 나머지 17 Job 에서 **정확히 구현된 코드를 고발했다**(명세서의 별칭 `A`/`B` 를 생성물이 `S`/`P` 로 바꿔 쓴 자리 — `ContainsToken` 이 리터럴 부분문자열 대조라 못 맞춘다. `output/Jobs/POQSettleProc1/agent/steps/S04.md:122` 등 3 Job 에서 확인).
+  - **규칙**: 고정 두 판은 **「발화하는가」**를 잠그는 데 쓰고, **「오탐이 없는가」는 그 검사가 실제로 도는 정의역 전체에서** 재라.
 - **순서 고정**: Task 1 → 2 → 3 → (승인) → 4. Task 4(재생성)가 A-2의 오라클(`output/Procedures/*/docs/Spec.md`)을 바꾸므로 측정을 가운데 두고 걸치지 않는다.
 
 ---
