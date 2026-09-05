@@ -221,6 +221,23 @@ namespace ReSet.Core.Services
         /// </summary>
         public int AnchorsDroppedForAmbiguity { get; init; }
 
+        /// <summary>
+        /// 원본 문장에는 있는데 이행 <b>최상위</b>에는 없는 조인 짝의 수 (N5).
+        ///
+        /// [왜 발화가 아니라 지표인가] 이행이 결합을 CTE·파생 테이블로 옮기는 관용구가
+        /// 실재한다 - 검사 B 가 <c>relocated</c> 합류를 만든 바로 그 이유다. 최상위만
+        /// 보는 대조는 그 이전을 「잃었다」로 읽고, 그 오탐은 <c>SuggestedPromptFix</c>를
+        /// 타고 재생성 프롬프트에 실려 재시도를 소진시킨다.
+        ///
+        /// [그래도 세는 이유] 안 세면 안 보인다. 검사 D 가 18 → 0 으로 꺼졌는데 아무도
+        /// 모르던 자리가 이 저장소에 있다. 다음 회차가 <b>이 수를 보고</b> 그 방향을
+        /// 켤 것인지 정한다 - 머리로 정하지 않는다.
+        ///
+        /// [이 값은 결함 수가 아니다] 이전(옮김)과 소실(잃음)을 가르지 않는다.
+        /// 상한이지 판정이 아니다.
+        /// </summary>
+        public int JoinPairsLostFromImplementation { get; init; }
+
         /// <inheritdoc cref="AnchorsResolved"/>
         public int StatementsWithLineage { get; init; }
 

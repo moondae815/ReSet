@@ -118,6 +118,7 @@ namespace ReSet.Core.Services
             var anchorsResolved = 0;
             var anchorsUnresolved = 0;
             var anchorsDroppedForAmbiguity = 0;
+            var joinPairsLost = 0;
             var statementsWithLineage = 0;
             var statementsReadingOnlyStaging = 0;
             var statementsReadingOwnTarget = 0;
@@ -252,6 +253,23 @@ namespace ReSet.Core.Services
                             .Count(st => MechanicalValidator.ResolveOrdinal(st, codeMapForStep).HasValue);
                         var anchoredForStep =
                             MechanicalValidator.ResolveAnchoredStatements(stepStatements, codeMapForStep);
+
+                        // [N5 지표] 잃은 조인 짝. 검사와 **같은 비교 규칙**
+                        // (MechanicalValidator.CompareJoinPairs)을 부른다 - 사본을 두면
+                        // 발화와 지표가 다른 규칙을 말하고, 그러면 이 수를 보고 내리는
+                        // 다음 결정이 틀린 분모 위에 선다.
+                        var originalJoinPairs =
+                            MechanicalValidator.BuildOriginalJoinPairs(step, ddlByBareName);
+                        foreach (var a in anchoredForStep)
+                        {
+                            var key = (a.Statement.Kind.ToUpperInvariant(), a.Ordinal!.Value,
+                                a.Statement.TargetTable);
+                            if (!originalJoinPairs.TryGetValue(key, out var originalPairs)) continue;
+                            if (originalPairs.Count == 0) continue;
+
+                            joinPairsLost += MechanicalValidator
+                                .CompareJoinPairs(originalPairs, a.Statement.JoinPairs).Lost.Count;
+                        }
 
                         anchorsResolved += anchoredForStep.Count;
                         anchorsUnresolved += anchorBearing - ordinalResolvable;
@@ -415,6 +433,7 @@ namespace ReSet.Core.Services
                     AnchorsResolved = anchorsResolved,
                     AnchorsUnresolved = anchorsUnresolved,
                     AnchorsDroppedForAmbiguity = anchorsDroppedForAmbiguity,
+                    JoinPairsLostFromImplementation = joinPairsLost,
                     StatementsWithLineage = statementsWithLineage,
                     StatementsReadingOnlyStaging = statementsReadingOnlyStaging,
                     StatementsReadingOwnTarget = statementsReadingOwnTarget,

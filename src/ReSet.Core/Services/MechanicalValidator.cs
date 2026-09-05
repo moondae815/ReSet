@@ -7831,13 +7831,7 @@ namespace ReSet.Core.Services
                 //
                 // [대가] 이행이 <b>진짜로</b> 새 테이블을 끌어와 행을 좁히는 자리는 침묵한다.
                 // 놓치는 쪽이 안전한 기본값이라는 이 파일의 규약을 따른다.
-                var originalTables = new HashSet<string>(
-                    originalPairs.SelectMany(TablesOfPair), StringComparer.OrdinalIgnoreCase);
-
-                var added = implementationPairs
-                    .Where(p => !originalPairs.Contains(p, StringComparer.OrdinalIgnoreCase))
-                    .Where(p => TablesOfPair(p).All(originalTables.Contains))
-                    .ToList();
+                var added = CompareJoinPairs(originalPairs, implementationPairs).Added;
                 if (added.Count == 0) continue;
 
                 result.Errors.Add(
@@ -7846,6 +7840,44 @@ namespace ReSet.Core.Services
                     $"`{string.Join(", ", originalPairs)}`뿐입니다 — 결합을 더하거나 다른 테이블로 " +
                     "옮기면 원본이 고르던 행이 아닌 행을 고릅니다.");
             }
+        }
+
+        /// <summary>
+        /// 원본 짝과 이행 짝을 견준다. <b>이 규칙이 유일한 출처다</b> - 검사는
+        /// <c>Added</c>로 발화하고 스윕 지표는 <c>Lost</c>를 센다. 사본을 두면 발화와
+        /// 지표가 서로 다른 규칙을 말하게 되고, 그러면 지표를 보고 내리는 다음 결정이
+        /// 틀린 분모 위에 선다.
+        ///
+        /// [<c>Added</c>가 테이블 집합으로 좁혀지는 이유 - 2026-09-05 코퍼스 실측]
+        /// 이 검사가 근거를 갖는 물음은 <b>원본이 이미 조인하던 테이블들 사이에서</b>
+        /// 결합이 옮겨졌는가다. 이행이 원본에 없던 테이블을 새로 끌어오면 그것은 결합
+        /// 재배치가 아니라 <b>원천 대체</b>이고, 행 집합이 달라졌는지는 이 검사가 답할
+        /// 근거가 없다. 좁히기 전 코퍼스 발화 셋 중 둘이 그 부류의 오탐이었다 -
+        /// <c>POQSettleProc11/S09</c>(원본 <c>TPGProperty</c> 조인을 단계가 뜬 범위
+        /// 스냅샷으로 대체 — 검사 C 가 <c>ReadsOnlyStaging</c>으로 이미 면제하는 관용구)와
+        /// <c>POQSettleProc19/S11</c>(앵커가 다른 문장을 가리켜 원본 KFTC·INIBANK 와 이행
+        /// easybank 가 대조됐다 — 그 오귀속은 앵커 층의 것이고 같은 자리에 검사 B 도
+        /// 이미 발화한다).
+        ///
+        /// [<c>Lost</c>는 좁히지 않는다] 지표는 상한을 재는 것이라 넓은 쪽이 맞다.
+        /// 그래서 이 값으로 발화하면 안 된다 - <see cref="SweepIndicators.JoinPairsLostFromImplementation"/>.
+        /// </summary>
+        internal static (IReadOnlyList<string> Added, IReadOnlyList<string> Lost) CompareJoinPairs(
+            IReadOnlyList<string> originalPairs, IReadOnlyList<string> implementationPairs)
+        {
+            var originalTables = new HashSet<string>(
+                originalPairs.SelectMany(TablesOfPair), StringComparer.OrdinalIgnoreCase);
+
+            var added = implementationPairs
+                .Where(p => !originalPairs.Contains(p, StringComparer.OrdinalIgnoreCase))
+                .Where(p => TablesOfPair(p).All(originalTables.Contains))
+                .ToList();
+
+            var lost = originalPairs
+                .Where(p => !implementationPairs.Contains(p, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            return (added, lost);
         }
 
         /// <summary>
@@ -7872,7 +7904,7 @@ namespace ReSet.Core.Services
         /// <c>UPDATE 1</c>이 여러 SP 에서 나올 수 있다. 귀속할 수 없으면 침묵한다 -
         /// <see cref="MergeErrorCodeMaps"/>와 같은 규약이다.
         /// </summary>
-        private static Dictionary<(string Kind, int Ordinal, string Target), IReadOnlyList<string>>
+        internal static Dictionary<(string Kind, int Ordinal, string Target), IReadOnlyList<string>>
             BuildOriginalJoinPairs(BatchStepPlan step, IReadOnlyDictionary<string, string> ddlByProcedure)
         {
             var result = new Dictionary<(string, int, string), IReadOnlyList<string>>(new JoinPairKeyComparer());

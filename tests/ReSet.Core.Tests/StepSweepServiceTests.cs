@@ -323,6 +323,47 @@ UPDATE dbo.TSettleMiss SET UseState = 2 WHERE YMD = @pi_strYMD;
             Assert.Empty(report.Findings);
         }
 
+        // [N5] 잃은 조인 짝은 **발화시키지 않고 센다**. 이행이 결합을 CTE·파생
+        // 테이블로 옮기는 관용구가 실재해 최상위만 보는 대조는 그 이전을 「잃었다」로
+        // 읽는다 - 그 오탐은 SuggestedPromptFix 를 타고 재생성 프롬프트에 실려 재시도를
+        // 소진시킨다. 그래도 **세지 않으면 안 보인다**(검사 D 가 18→0 으로 꺼졌는데
+        // 아무도 몰랐던 자리와 같다). 다음 회차가 이 수를 보고 그 방향을 켤지 정한다.
+        // 설계: docs/superpowers/specs/2026-09-05-n5-join-pair-design.md §2-5.
+        [Fact]
+        public void JoinPairsLostFromTheImplementationAreCountedButNotReported()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    SET @po_intRetVal = -13
+    UPDATE A
+    SET    UseState = 1
+    FROM   dbo.TSettleMst A
+    JOIN   dbo.TClientRate B ON A.ClientID = B.ClientID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+            // 이행은 그 결합을 통째로 잃었다 - 조인이 아예 없다.
+            var step = "### S01. 갱신\n\n설명.\n\n```sql\n" +
+                "/* U1: 상태 갱신 */\n" +
+                "UPDATE A SET A.UseState = 1 FROM dbo.TSettleMst A WHERE A.YMD = @pi_strYMD;\n" +
+                "```\n";
+
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string> { ["S01"] = step },
+                DdlByProcedure = new Dictionary<string, string> { ["dbo.UP_TEST"] = ddl },
+            };
+
+            var report = StepSweepService.Sweep(
+                new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.JoinPairsLostFromImplementation);
+            Assert.DoesNotContain(report.Findings, f => f.Message.Contains("조인 짝"));
+        }
+
         // 가드가 침묵시킨 대가의 크기. 코드 앵커가 둘 이상의 문장에 붙은 단계를 센다.
         [Fact]
         public void StepsWithReusedCodeAnchorsAreCounted()
