@@ -245,15 +245,25 @@ namespace ReSet.Core.Tests
 
         /// <summary>
         /// Fix Round 1 Critical(2026-09-05) 회귀 잠금. 리뷰어가 실물 코퍼스에서 확인한
-        /// 오탐 넷 중 하나 - <c>POQSettleProc1/agent/steps/S04.md:122-123</c>.
+        /// 오탐 넷 중 <b>둘</b>이 이 한 파일에 있다 -
+        /// <c>POQSettleProc1/agent/steps/S04.md:122-123</c>(갱신 1)와 같은 파일
+        /// <c>:408-409</c>(갱신 12).
         ///
         /// `UP_UTIL_SETTLE_EXCEPTION_PROC`의 명세서 갱신 1 산식은
         /// `A.TxAmt - B.OrgDiscountAmt`(별칭 A/B)인데, 생성본은 별칭을 `S`/`P`로 골라
-        /// `S.TxAmt - P.OrgDiscountAmt`로 <b>정확히 구현했다.</b> 별칭 문자 차이만으로
-        /// "SET 산식을 담지 않았습니다"가 발화하면 정확한 코드가 결함으로 고발된다 -
+        /// `S.TxAmt - P.OrgDiscountAmt`로 <b>정확히 구현했다.</b> 같은 파일의 갱신 12
+        /// (`B.DiscountFlag`/`B.DiscountAmt`, PLCard 원천)도 생성본이 별칭을 `P`로 골라
+        /// 정확히 구현했다. 별칭 문자 차이만으로 "SET 산식을 담지 않았습니다"가 발화하면
+        /// 정확한 코드가 결함으로 고발된다 -
         /// <see cref="MechanicalValidator.ContainsSetExpressionToken"/>이 이 자리를
         /// 침묵시켜야 한다(그 메서드는 private이라 여기서 직접 부르지 않고, 이 시험은
         /// 실제 코퍼스 파일로 <c>ValidateBatchStep</c>을 불러 결과로 확인한다).
+        ///
+        /// [Fix Round 2 - 시험 자체의 결함] 최초 판은 `e.Contains("갱신 1(")`로 걸러
+        /// 갱신 1만 잠그고 갱신 12는 검증하지 않았다("갱신 1("은 "갱신 12("의 부분문자열이
+        /// 아니라서 그 메시지가 있어도 이 단언은 통과했다). 이 파일은 갱신 1·12 둘 다
+        /// 정확히 구현됐고 다른 진짜 결함도 없어(직접 확인, 2026-09-05) "SET 산식" 오류
+        /// 총건수가 0이어야 한다 - 그래서 부분 문자열 대신 그 총건수를 단언한다.
         /// </summary>
         [SkippableFact]
         public void SetExpressionCheck_StaysSilentWhenGeneratedAliasDiffersFromSpec_POQSettleProc1S04()
@@ -284,7 +294,9 @@ namespace ReSet.Core.Tests
                 stepInterfaces: null, runRowOwnedTables: null,
                 statementFactsByProcedure: facts, allSteps: steps);
 
-            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식") && e.Contains("갱신 1("));
+            // 부분 문자열 필터("갱신 1(") 대신 총건수를 잠근다 - 갱신 12도 놓치지 않는다
+            // (Fix Round 2 - 위 클래스 주석의 "시험 자체의 결함" 참고).
+            Assert.Equal(0, result.Errors.Count(e => e.Contains("SET 산식")));
         }
 
         private static int CountSetExpressionHits(
