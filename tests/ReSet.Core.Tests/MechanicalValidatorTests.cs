@@ -9706,6 +9706,89 @@ END";
             Assert.DoesNotContain(result.Errors, e => e.Contains("성공 코드일 수도 있습니다"));
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // T02 Task 3(독립판, 2026-09-06) - 명부에 있는 SP 에서 지역 변수 기계 표가
+        // 사라지면 발화한다. Task 1·2(초기값·타입 보존 검사)는 코퍼스 실측에서
+        // 오탐 18 대 진짜 2 로 되돌려졌고, `7845ab36` 위에 이 검사만 혼자 선다.
+        //
+        // ⓓⓔ는 반드시 함께 간다 - ⓓ(명부에 있는데 표가 없으면 발화)만 두면
+        // 오탐을 막는 쪽(명부에 없으면 침묵)이 시험에 안 남는다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static StepValidationResult ValidateWithSpec(string markdown, string procedure, string spec)
+        {
+            var step = new BatchStepPlan(
+                Code: "S09", Name: "S09 단계",
+                LegacyProcedures: new[] { procedure },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            return new MechanicalValidator().ValidateBatchStep(
+                markdown, step,
+                new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(),
+                statementFactsByProcedure: SpecStatementFactsExtractor.Extract(
+                    new[] { (procedure, spec) }),
+                allSteps: null);
+        }
+
+        /// ⓓ 명부에 있는 SP 에서 표가 사라지면 발화한다.
+        /// **이 시험이 T02 를 만든 실패 모드 자체를 막는다** - 명세서에서 그 표가
+        /// 사라졌는데 아무도 몰랐고, 검사 D 도 18 → 0 으로 조용히 꺼졌다.
+        [Fact]
+        public void LocalVariableTable_WhenItVanishesFromARosteredSpec_IsReported()
+        {
+            const string specWithoutTable = """
+                ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 1 · 원본 DDL 라인 10 · 원문 표기: TSettleMst)
+
+                | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+                | :--- | :--- | :--- | :--- |
+                | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | 1 | 표가 없는 판입니다. |
+                """;
+
+            var result = ValidateWithSpec("```sql\nSELECT 1;\n```", "dbo.UP_UTIL_SETTLE_PROC_ETC", specWithoutTable);
+
+            Assert.Contains(result.Errors,
+                e => e.Contains("지역 변수") && e.Contains("UP_UTIL_SETTLE_PROC_ETC"));
+        }
+
+        /// ⓔ 명부에 **없는** SP 는 표가 없어도 침묵한다.
+        ///
+        /// [왜 ⓓ만으로는 부족한가 - 실측 2026-09-05]
+        /// 명세서 14편 중 표가 없는 5편(CANCEL_INS · INS · STAT_PGCOLLECT_INS ·
+        /// CMRate_Ins · Settle_Summary)은 **원본 DDL 의 DECLARE 가 전부 0** 이다.
+        /// 「표가 없으면 발화」로 만들면 **오탐 5 대 진짜 최대 1** 이 된다.
+        /// ⓓ만 두면 그 사실이 시험에 안 남아, 다음 사람이 명부를 편의로 읽고 걷어낸다.
+        [Fact]
+        public void LocalVariableTable_WhenAbsentFromAnUnrosteredSpec_IsSilent()
+        {
+            const string specWithoutTable = """
+                ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 1 · 원본 DDL 라인 10 · 원문 표기: TSettleMst)
+
+                | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+                | :--- | :--- | :--- | :--- |
+                | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | 1 | 원본에 DECLARE 가 0 인 SP 입니다. |
+                """;
+
+            var step = new BatchStepPlan(
+                Code: "S15", Name: "PG 수집 통계",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_STAT_PGCOLLECT_INS" },
+                TargetTables: new[] { "dbo.TStatPGCollect" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                "```sql\nSELECT 1;\n```", step,
+                new[] { "dbo.TStatPGCollect" },
+                new Dictionary<string, SpecConditions>(),
+                statementFactsByProcedure: SpecStatementFactsExtractor.Extract(
+                    new[] { ("dbo.UP_UTIL_STAT_PGCOLLECT_INS", specWithoutTable) }),
+                allSteps: null);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("지역 변수 기계 표"));
+        }
+
         // ── Task 5: 트랜잭션 경계 · 변수 대입 표의 전사 대조 ──────────────────
 
         private static SpecExpectations TransactionExpectations() =>

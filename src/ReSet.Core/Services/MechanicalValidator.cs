@@ -565,6 +565,7 @@ namespace ReSet.Core.Services
                     SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
                     SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
+                    SafeCheck(() => CheckLocalVariableTableDidNotVanish(namedFacts, step, result));
                     // countCheckFacts 를 쓰는 이유: 이 검사는 앵커 계열(B·C·D)의 "앵커가
                     // 달린 문장은 정확해야 한다"가 아니라 개수 대조와 같은 "그 갱신이
                     // 이 단계에 있어야 한다" 모양이다. 같은 SP 가 여러 단계에 나뉘면
@@ -8437,6 +8438,71 @@ namespace ReSet.Core.Services
                 {
                     tokens.Add(token);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 명세서에 `### 지역 변수 (기계 확정 — 수정 금지)` 표가 **있어야 하는** 레거시 SP.
+        ///
+        /// [왜 목록인가 - 「표가 없으면 발화」는 오탐이 다수가 된다]
+        /// 2026-09-05 실측(조정자·리뷰어 각각 독립 확인): 소비 명세서 14편 중 표를
+        /// 가진 것이 9편이고, 없는 5편(`CANCEL_INS`·`INS`·`STAT_PGCOLLECT_INS`·
+        /// `CMRate_Ins`·`Settle_Summary`)은 **원본 DDL 의 `DECLARE` 가 전부 0** 이다.
+        /// 「9/14」는 미달이 아니라 전량이다. 무조건 발화시키면 오탐 5 대 진짜 최대
+        /// 1 이 된다.
+        ///
+        /// [왜 이것이 필요한가 - T02 의 발생 경위]
+        /// `PROC_ETC` 의 이 표가 명세서에서 **사라진 적이 있고**, 그때 검사 D
+        /// (<see cref="CheckSpecLocalVariablesDeclared"/>)는 조용히 침묵했다(18 → 0).
+        /// 재료가 사라지는 것을 아무도 모르는 것이 이 저장소가 세 번째로 겪은 실패
+        /// 모드다. 이 명부가 그 침묵을 발화로 바꾼다.
+        ///
+        /// **이 목록을 고치는 것은 사람이다.** 명세서가 재생성되어 새 SP 가 표를
+        /// 얻으면 사람이 여기 더해야 한다 - 검사는 그것을 자동으로 알지 못한다.
+        /// 의도된 설계이고, `documentation-budget-baseline.txt` 가 상한을 사람에게
+        /// 맡긴 것과 같은 전례다. 다섯이 빠진 이유(원본 `DECLARE` 0)를 잊고 이
+        /// 목록에 편의로 채워 넣으면 오탐 5 가 되살아난다.
+        /// </summary>
+        private static readonly HashSet<string> SpecsThatMustDeclareLocalVariables =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                "UP_UTIL_SETTLE_COMM_UPD",
+                "UP_UTIL_SETTLE_EXCEPTION_PROC",
+                "UP_UTIL_SETTLE_EXPECT_PROC",
+                "UP_UTIL_SETTLE_INS_EXTRA",
+                "UP_UTIL_SETTLE_INS_EXTRA4PLCARD",
+                "UP_UTIL_SETTLE_PROC_ETC",
+                "UP_UTIL_SETTLE_SUMMARY_ETC",
+                "UP_UTIL_SETTLE_SUMMARY_EXTRA",
+                "UP_Util_Settle_Summary_AcqManual",
+            };
+
+        /// <summary>
+        /// 명부(<see cref="SpecsThatMustDeclareLocalVariables"/>)에 있는 SP 인데
+        /// 명세서에서 지역 변수 기계 표가 사라졌으면 발화한다.
+        ///
+        /// [독립판 - 2026-09-06] T02 계획의 Task 1·2(초기값·타입 보존 검사)는
+        /// 코퍼스 실측에서 오탐 18 대 진짜 2 로 되돌려져 `7845ab36` 위에는 없다.
+        /// 이 검사(Task 3)만 그 위에 혼자 선다 - <see cref="SpecLocalVariable"/>에
+        /// `InitialValue`가 없는 것은 그 되돌림의 흔적이다.
+        /// </summary>
+        private static void CheckLocalVariableTableDidNotVanish(
+            IReadOnlyList<(string Name, SpecStatementFacts Facts)> namedFacts,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            foreach (var (name, facts) in namedFacts)
+            {
+                var bare = BareObjectName(name);
+                if (!SpecsThatMustDeclareLocalVariables.Contains(bare)) continue;
+                if (facts.LocalVariables.Count > 0) continue;
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 레거시 `{bare}` 명세서에 지역 변수 기계 표가 없습니다. " +
+                    "이 SP 는 원본에 지역 변수가 있어 그 표를 가져야 합니다 — 명세서가 재생성되면서 " +
+                    "표가 사라졌을 수 있습니다. 표가 없으면 타입·초기값을 보는 검사가 침묵하고, " +
+                    "그 침묵은 「통과」로 오독됩니다. 명세서를 다시 생성하거나, 이 SP 가 정말 " +
+                    "지역 변수를 갖지 않게 되었다면 `SpecsThatMustDeclareLocalVariables` 에서 빼십시오.");
             }
         }
 
