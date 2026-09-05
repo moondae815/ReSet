@@ -1752,7 +1752,11 @@ END"
         {
             var rules = await StepSystemPromptAsync();
 
-            var loop = rules.IndexOf("FOR EACH chunk", StringComparison.Ordinal);
+            // 앵커가 `FOR EACH chunk`에서 `WHILE from <= hi`로 바뀌었다 - 정의 없는
+            // `chunkRanges` 헬퍼를 걷어내고 종료 조건을 예시 본문에 되돌렸기 때문이다
+            // (축 B 재감사 2026-09-05). 이 테스트가 잠그는 것은 앵커가 아니라 추적
+            // 변수의 생애주기이므로 단언은 그대로다.
+            var loop = rules.IndexOf("WHILE from <= hi", StringComparison.Ordinal);
             Assert.True(loop >= 0, "Few-Shot의 청크 루프 예시를 찾지 못했다.");
             var close = rules.IndexOf("```", loop, StringComparison.Ordinal);
             var block = rules[..close];
@@ -1784,7 +1788,10 @@ END"
             // 경계는 앱 층에, 보내는 문장은 sql 층에 둔다.
             var prompt = await StepSystemPromptAsync();
 
-            Assert.Contains("FOR EACH chunk", prompt);
+            // 루프가 앱 층에 있다는 증거는 이제 `WHILE ... <= ...` + `beginTransaction()`이다
+            // (`FOR EACH chunk`는 정의 없는 헬퍼와 함께 걷어냈다). 이 테스트의 임무는
+            // 「T-SQL 스크립트가 아니라 앱 코드인가」이지 특정 낱말이 아니다.
+            Assert.Contains("WHILE from <= hi", prompt);
             Assert.Contains("beginTransaction()", prompt);
 
             // 앱 층이 T-SQL 철자로 경계를 열면 두 층으로 가른 뜻이 없어진다.
@@ -1796,6 +1803,36 @@ END"
             Assert.Contains("Keep every SQL statement in its own ```sql block", prompt);
         }
 
+        // 축 B 재감사(2026-09-05)가 낸 자리다. 청크 예시가 `chunkRanges(...)`라는
+        // **저장소 어디에도 정의가 없는** 헬퍼로 루프를 적어, 상한 산술의 보장이
+        // 사양에서 통째로 사라졌다. `dd6041e8` 이전의 T-SQL 예시에는
+        // `WHILE @CurrentID <= @MaxID`라는 종료 조건이 있었고 그것이 최대 키 행을
+        // 마지막 청크에 남겼다 - 그 커밋이 루프를 앱 층으로 옮기면서 함께 잃었다.
+        //
+        // 실물: POQSettleBatch1 재생성본의 S02~S06 다섯 단계가 이 템플릿을 글자
+        // 그대로 채워 `MIN/MAX` 경계에 `>= @p_from AND < @p_to`만 남겼다. 1차 리뷰가
+        // 「최대 키 행이 누락된다」고 고발했으나, 헬퍼 정의가 없으므로 실제로는
+        // **누락이 확정도 아니고 안전도 아닌 미명세**다 - 그것이 이 결함의 모양이다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ChunkLoopDoesNotLeanOnAnUndefinedHelper()
+        {
+            Assert.DoesNotContain("chunkRanges", await StepSystemPromptAsync());
+        }
+
+        // 종료 조건은 프롬프트 주석이 아니라 **예시 본문**에 있어야 한다. 생성된
+        // 단계와 공통 규약은 예시를 베끼지 주석을 베끼지 않는다 - 이 결함이 그렇게
+        // 배송됐다.
+        [Fact]
+        public async Task ConsolidatedPlanRules_ChunkLoopCarriesItsOwnTerminationCondition()
+        {
+            var prompt = await StepSystemPromptAsync();
+
+            // 상한이 포함(MAX)임을 아는 종료 비교. `<`면 최대 키 행을 잃는다.
+            Assert.Matches(@"WHILE\s+\w+\s*<=\s*\w+", prompt);
+
+            // 그리고 커서가 실제로 전진해야 한다 - 배타 상한을 다음 시작으로 삼는다.
+            Assert.Matches(@"\w+\s*=\s*\w+\s*\+\s*\d+", prompt);
+        }
         [Fact]
         public async Task ConsolidatedPlanRules_MakeShadowALastResortWithThreeMechanics()
         {

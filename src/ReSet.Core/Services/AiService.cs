@@ -2300,15 +2300,22 @@ commit()
 
 // Rebuild in chunks. Each chunk opens and closes its OWN transaction (rule 8-1) so a
 // mid-run failure leaves the earlier chunks durably committed. The chunk key must be a
-// column that actually exists in the target schema (rule 12).
-FOR EACH chunk IN chunkRanges(SQL_CHUNK_BOUNDS, { p_batchDate: batchYmd }, size: 10000):
+// column that actually exists in the target schema (rule 12), AND one where `from + size`
+// means something - an integer identity or sequence. If the business key is not (a CHAR(8)
+// date, say), chunk by the identity column and keep the business filter in the WHERE.
+lo, hi = queryRow(SQL_CHUNK_BOUNDS, { p_batchDate: batchYmd })  // MIN, MAX - both inclusive
+IF lo IS NULL: skip the loop      // the bounds query matched no rows
+from = lo
+WHILE from <= hi:                 // `<=`, not `<` - the MAX-key row belongs to the last chunk
+    to = from + 10000             // exclusive upper bound; it pairs with `< @p_to` below
     beginTransaction()
     // (rule 6-1) Update it immediately BEFORE the statement, never after - the value must
     // already name this statement at the moment the statement can fail. Use the original
     // code this statement carries in the source specification (rule 9 governs which code).
     currentStepErrorCode = -1
-    execute(SQL_INSERT_CHUNK, { p_batchDate: batchYmd, p_from: chunk.from, p_to: chunk.to })
+    execute(SQL_INSERT_CHUNK, { p_batchDate: batchYmd, p_from: from, p_to: to })
     commit()
+    from = to
 
 // (rule 4e) State the shadow's lifetime where you describe the step, e.g. the bootstrap
 // purge job drops batch_shadow tables older than 24 hours.
@@ -2356,10 +2363,15 @@ SELECT @p_batchDate, Col1, SUM(Col2) FROM dbo.SourceTable
 
 * Chunking Pattern (Combining chunking keys with existing business filters):
 ```pseudocode
-FOR EACH chunk IN chunkRanges(SQL_ID_BOUNDS, {}, size: 10000):
+lo, hi = queryRow(SQL_ID_BOUNDS, {})   // MIN, MAX - both inclusive
+IF lo IS NULL: skip the loop
+from = lo
+WHILE from <= hi:                     // `<=` keeps the MAX-key row in the last chunk
+    to = from + 10000                 // exclusive upper bound; it pairs with `< @p_to`
     beginTransaction()
-    execute(SQL_COPY_CHUNK, { p_from: chunk.from, p_to: chunk.to })
+    execute(SQL_COPY_CHUNK, { p_from: from, p_to: to })
     commit()
+    from = to
 ```
 ```sql
 -- SQL_ID_BOUNDS - the original business filter belongs here too, or the bounds cover rows
