@@ -49,6 +49,26 @@ namespace ReSet.Core.Services
         private static readonly Regex DmlClauseRegex = new(
             @"\b(WHERE|SET|VALUES|SELECT)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // [왜 약칭 표식도 신호인가 - 실측 2026-09-05] 감사의 🔴(ConsistencyReport.md:138 ·
+        // S07.md:143-152)는 DML 낱말도 절 키워드도 전혀 없다 - `U4:`·`U7~U11:` 같은 갱신
+        // 번호 약칭과 한글 산문뿐이다. DmlVerbRegex && DmlClauseRegex 만 요구하면 이 자리를
+        // 통째로 건너뛴다. `U<n>`·`U<n>~U<m>`·`UPDATE <n>`·`갱신 <n>` 을 후보로 잡는다.
+        private static readonly Regex UpdateLabelRegex = new(
+            @"\b(?:UPDATE\s+\d+|U\d+(?:\s*[~\-]\s*U?\d+)?\s*:|갱신\s*\d+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // "SET @v_currentStepId = N;"은 원본이 각 실행 DML 직전에 남기는 오류 추적
+        // 표식이자 <b>새 단계의 경계</b>다(S08.md 서두: "실행 DML 직전에는 해당 원본
+        // 코드로 @v_currentStepId를 설정한다"). 이 표식 뒤에 오는 것은 이전 주석이
+        // 아니라 다음 단계에 속하므로, 꼬리 검사가 이것을 만나면 앵커를 못 찾은 것이다.
+        private static readonly Regex StepIdMarkerRegex = new(
+            @"^SET\s+@v_currentStepId\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // 꼬리 검사가 "DML 문이 시작한다"고 인정할 때만 쓰는 좁은 판별자 - 줄 전체가 아니라
+        // 줄의 <b>맨 앞</b>에서 시작해야 한다(문장 어딘가에 낱말이 있는 것과 다르다).
+        private static readonly Regex LeadingDmlStatementRegex = new(
+            @"^(UPDATE|INSERT|DELETE)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static IReadOnlyList<string> Scan(string? planMarkdown)
         {
             if (string.IsNullOrWhiteSpace(planMarkdown))
@@ -115,7 +135,9 @@ namespace ReSet.Core.Services
             foreach (Match match in BlockCommentRegex.Matches(fencedBody))
             {
                 var body = match.Groups["body"].Value;
-                if (!DmlVerbRegex.IsMatch(body) || !DmlClauseRegex.IsMatch(body))
+                var describesDml = (DmlVerbRegex.IsMatch(body) && DmlClauseRegex.IsMatch(body))
+                    || UpdateLabelRegex.IsMatch(body);
+                if (!describesDml)
                 {
                     continue;
                 }
@@ -136,16 +158,34 @@ namespace ReSet.Core.Services
             }
         }
 
-        /// <summary>주석 바로 뒤(주석·공백만 건너뛰고)에 DML 문장이 시작하는가.</summary>
+        /// <summary>
+        /// 주석 바로 뒤에 <b>이 주석 자신의</b> DML 문장이 서 있는가.
+        ///
+        /// [연쇄 억제 버그 - 실측 2026-09-05] 종전에는 이 줄이 "SET @"로 시작하지 않고
+        /// 비어 있지도 않으면 그 줄 <i>전체</i>를 DmlVerbRegex 로 검사했다. 뒤따르는
+        /// 다음 블록 주석의 첫 줄(`/* UPDATE 2: ... */`)이 그 검사를 통과해 "UPDATE"
+        /// 낱말을 포함한다는 이유로 「진짜 문장이 뒤따른다」고 오판했다 - 앞 주석이
+        /// 죽고 S08 에서 연쇄의 마지막 하나만 살아남았다(UPDATE 1·2·8·9·10·13·14).
+        ///
+        /// 그래서 두 가지를 <b>줄의 맨 앞</b>에서 먼저 검사해 "멈춤" 신호로 삼는다.
+        /// 다른 블록 주석이 시작하면 그것은 또 다른 자리표시자이지 이 주석의 앵커가
+        /// 아니다. <see cref="StepIdMarkerRegex"/>가 시작하면 새 단계의 경계이므로
+        /// 그 뒤는 다른 단계에 속한다. 둘 다 아니고 줄이 DML 동사로 시작해야만
+        /// 앵커로 인정한다(줄 안 어딘가가 아니라 <b>맨 앞</b> - <see cref="LeadingDmlStatementRegex"/>).
+        /// 그 외의 줄(`DECLARE` 같은 부수 설정문)은 같은 단계에 속할 수 있으므로 건너뛴다.
+        /// </summary>
         private static bool StartsWithDmlStatement(string tail)
         {
             foreach (var line in MarkdownSectionLocator.SplitLines(tail))
             {
                 var s = line.Trim();
                 if (s.Length == 0 || s.StartsWith("--", StringComparison.Ordinal)) continue;
-                // SET @v_... 대입은 문장이 아니라 오류 추적 표식이므로 건너뛴다.
-                if (s.StartsWith("SET @", StringComparison.OrdinalIgnoreCase)) continue;
-                return DmlVerbRegex.IsMatch(s);
+
+                if (s.StartsWith("/*", StringComparison.Ordinal)) return false;
+                if (StepIdMarkerRegex.IsMatch(s)) return false;
+                if (LeadingDmlStatementRegex.IsMatch(s)) return true;
+
+                // DECLARE 등 부수 설정문 - 같은 단계에 속할 수 있으므로 계속 건너뛴다.
             }
 
             return false;

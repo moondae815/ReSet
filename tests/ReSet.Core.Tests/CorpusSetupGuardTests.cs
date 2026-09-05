@@ -5,11 +5,13 @@ namespace ReSet.Core.Tests
     /// <summary>
     /// 코퍼스 설정이 "전부 아니면 전무"인지 지킨다 - **반쯤 설정된 상태**를 막는 가드다.
     ///
-    /// [실측 - 코퍼스 재료는 셋이고, 계열마다 다르게 반응한다 (2026-08-26 · 2026-09-04)]
-    /// 재료는 `output/`, <see cref="CorpusPaths.PriorEdition"/>, <see cref="CorpusPaths.ControlEdition"/>
-    /// 셋이다. 아래 표는 앞의 둘로 잰 것이고(2026-08-26 전수 실측), 셋째는 그때 이 가드
-    /// 밖에 있었다 - 그래서 빠뜨려도 빨간불이 없고 <c>ProcedureClosureCorpusTests</c>가
-    /// **조용히 건너뛰었다**(2026-09-04에 닫았다. 아래 두 번째 시험이 그것이다).
+    /// [실측 - 코퍼스 재료는 넷이고, 계열마다 다르게 반응한다 (2026-08-26 · 2026-09-04 · 2026-09-05)]
+    /// 재료는 `output/`, <see cref="CorpusPaths.PriorEdition"/>, <see cref="CorpusPaths.ControlEdition"/>,
+    /// <see cref="CorpusPaths.DefectiveEdition"/> 넷이다. 아래 표는 처음 둘로 잰 것이고
+    /// (2026-08-26 전수 실측), 셋째·넷째는 그때 이 가드 밖에 있었다 - 그래서 빠뜨려도
+    /// 빨간불이 없고 <c>ProcedureClosureCorpusTests</c>·<c>StepCheckOracleTests</c>가
+    /// **조용히 건너뛰었다**(셋째는 2026-09-04에, 넷째는 2026-09-05에 닫았다. 아래
+    /// 두 번째·세 번째 시험이 그것이다).
     /// **메인 저장소 안에 만든** 워크트리에 무엇을 거느냐에 따라 이렇게 갈린다. 저장소
     /// 밖에 만든 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어난다.
     ///
@@ -130,11 +132,12 @@ namespace ReSet.Core.Tests
                 hasControl,
                 $"코퍼스가 반쯤 설정됐다 - `output/`은 닿는데 `{CorpusPaths.ControlEdition}/`이 없다. " +
                 "이 상태에서는 `ProcedureClosureCorpusTests`가 조용히 건너뛴다(건너뜀 수는 1만 늘어 " +
-                "눈에 띄지 않는다). 심링크를 **셋 다** 걸어라:\n" +
+                "눈에 띄지 않는다). 심링크를 **넷 다** 걸어라:\n" +
                 "  ln -s <메인 저장소>/output output\n" +
                 $"  ln -s <메인 저장소>/{CorpusPaths.PriorEdition} {CorpusPaths.PriorEdition}\n" +
                 $"  ln -s <메인 저장소>/{CorpusPaths.ControlEdition} {CorpusPaths.ControlEdition}\n" +
-                "셋 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
+                $"  ln -s <메인 저장소>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}\n" +
+                "넷 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
         }
 
         [SkippableFact]

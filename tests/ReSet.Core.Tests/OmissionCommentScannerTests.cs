@@ -33,6 +33,19 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void Scan_ShouldFlagTheCaseThePreservationWhitelistUsedToExempt()
+        {
+            // PreservationMarkers 화이트리스트를 지운 직접 회귀 가드다. 지우기 전에는
+            // "유지한다"가 붙어 있다는 이유만으로 이 줄이 면제됐다("나머지...같은"
+            // 패턴과도 동시에 일치하는데도). 이제는 발화해야 한다 - 위
+            // Scan_ShouldNotFlagInstructionCommentsThatDemandPreservation 의 세 번째
+            // [InlineData] 로 있다가 2026-09-05 에 제거된 바로 그 사례다.
+            var plan = "```sql\nSELECT 1;\n    -- 나머지 컬럼도 같은 방식으로 유지한다\n```";
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
         public void Scan_ShouldIgnoreProseOutsideCodeFences()
         {
             // 산문에서 "나머지 단계도 같은 방식으로 적용한다"는 정상적인 설명이다.
@@ -115,6 +128,59 @@ namespace ReSet.Core.Tests
                 "```");
 
             Assert.Empty(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagAbbreviatedUpdateLabelWithNoDmlVerbOrClauseWords()
+        {
+            // 실제 산출물(S07.md:143-144)의 실제 모양. "UPDATE"·"WHERE"/"SET" 같은
+            // DML 낱말이 전혀 없고 갱신 번호 약칭(`U4:`)과 한글 산문뿐이다.
+            // DmlVerbRegex && DmlClauseRegex 만 요구하던 종전 판별자는 이것을 건너뛴다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        SET @v_currentStepId = -1;",
+                "        /* U4: KFTC, YELOPAY, INIBANK, settlevacct, inivacct의 고객사 최저수수료 */",
+                "```");
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagAbbreviatedRangeLabelLikeU7ThroughU11()
+        {
+            // 실제 산출물(S07.md:148)의 모양. "U7~U11:" 처럼 범위 표기도 있다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        /* U7~U11: CheckPay, Toss, TossPoint, EasyBank, kakaopay, KakaoMoney, inivacct 예외 */",
+                "```");
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagEachOmittedCommentInAConsecutiveChain()
+        {
+            // 실제 산출물(S08.md:24-52)의 모양. 생략 주석이 연달아 서 있으면(그 사이
+            // 실제 DML 없이 다음 단계 SET 표식과 다음 블록 주석만 있으면), 앞 주석의
+            // 꼬리 검사가 "다음 주석 안의 UPDATE 낱말"을 보고 실제 문장이 뒤따른다고
+            // 오판해 발화를 죽였다 - 연쇄에서 마지막 하나만 살아남았다.
+            var plan = string.Join("\n",
+                "```sql",
+                "        SET @v_currentStepId = -1;",
+                "        /* UPDATE 1: ALLTHEGATE, NICECARD 할부이자. */",
+                "",
+                "        SET @v_currentStepId = -2;",
+                "        /* UPDATE 2: 해외카드 수수료. */",
+                "",
+                "        SET @v_currentStepId = -4;",
+                "        UPDATE SETTLE_POQ_DB.dbo.TSettleMst",
+                "        SET TXAMT = TXAMT * (-1)",
+                "        WHERE YMD = @pi_strYMD;",
+                "```");
+
+            // UPDATE 1 과 UPDATE 2 는 둘 다 자기 자리에 실행 가능한 DML 이 없다 -
+            // 그 뒤의 UPDATE 문(-4)은 다른 갱신에 속한다. 둘 다 발화해야 한다.
+            Assert.Equal(2, OmissionCommentScanner.Scan(plan).Count);
         }
     }
 }
