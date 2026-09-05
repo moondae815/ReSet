@@ -160,10 +160,19 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Scan_ShouldFlagEachOmittedCommentInAConsecutiveChain()
         {
-            // 실제 산출물(S08.md:24-52)의 모양. 생략 주석이 연달아 서 있으면(그 사이
-            // 실제 DML 없이 다음 단계 SET 표식과 다음 블록 주석만 있으면), 앞 주석의
-            // 꼬리 검사가 "다음 주석 안의 UPDATE 낱말"을 보고 실제 문장이 뒤따른다고
-            // 오판해 발화를 죽였다 - 연쇄에서 마지막 하나만 살아남았다.
+            // 실제 산출물(S08.md:24-52)의 모양. 생략 주석 뒤에 곧바로 다음 블록
+            // 주석이 서 있으면(그 사이 실제 DML 이 없으면), 앞 주석의 꼬리 검사가
+            // "다음 주석 안의 UPDATE 낱말"을 보고 실제 문장이 뒤따른다고 오판해
+            // 발화를 죽였다 - UPDATE 1 이 그 자리다.
+            //
+            // UPDATE 2 도 발화해야 한다. UPDATE 2 는 이미 자신의 단계 표식(-2)을
+            // 달고 있으므로, 그 뒤에 또 다른 표식(-4)이 나오고서야 진짜 UPDATE 가
+            // 나타난다면 그 UPDATE 는 새로 시작한 다음 단계(원본 문서상 "UPDATE
+            // 3")에 속한다 - UPDATE 2 자신의 문장이 아니다(OmissionCommentScanner의
+            // PrecededByStepIdMarker 참고). 이 구분이 없으면 [라운드 2]가 그랬듯
+            // 표식을 무조건 건너뛰어 UPDATE 2를 다시 놓치거나, [라운드 1]이 그랬듯
+            // 표식을 무조건 멈춤으로 삼아 S07 의 정상 완료 자리(주석; 자기 표식;
+            // 진짜 DML)를 오탐한다.
             var plan = string.Join("\n",
                 "```sql",
                 "        SET @v_currentStepId = -1;",
@@ -178,9 +187,48 @@ namespace ReSet.Core.Tests
                 "        WHERE YMD = @pi_strYMD;",
                 "```");
 
-            // UPDATE 1 과 UPDATE 2 는 둘 다 자기 자리에 실행 가능한 DML 이 없다 -
-            // 그 뒤의 UPDATE 문(-4)은 다른 갱신에 속한다. 둘 다 발화해야 한다.
             Assert.Equal(2, OmissionCommentScanner.Scan(plan).Count);
+        }
+
+        [Fact]
+        public void Scan_ShouldNotFlagOmissionWhenRealDmlFollowsAfterStepIdMarker()
+        {
+            // 실제 산출물(S07.md)에서 리뷰어가 최소 재현한 오탐. 라운드 1 이
+            // "SET @v_currentStepId = N;"을 정지 신호(연쇄 억제 버그를 고치려고)로
+            // 바꿨는데, 그 표식은 사실 원본이 "실행 DML 직전에" 남기는 오류 추적
+            // 관용구다(S08.md 서두) - 정지 신호로 삼으면 정상 완료된 자리를 전부
+            // 생략으로 고발한다. 이 표식은 건너뛰고 계속 봐야 한다("--"처럼).
+            var plan = string.Join("\n",
+                "```sql",
+                "        /* U1: 비원천 PG 프로모션 할인 */",
+                "        SET @v_currentStepId = -101;",
+                "        UPDATE A SET A.DiscountFlag = 'Y' FROM T A WHERE A.YMD = @pi_strYMD;",
+                "```");
+
+            Assert.Empty(OmissionCommentScanner.Scan(plan));
+        }
+
+        [Fact]
+        public void Scan_ShouldFlagOmissionWhenAnotherStepMarkerInterruptsBeforeRealDml()
+        {
+            // 실제 산출물(S07.md:240-244, U15)의 모양. 이 주석은 <b>자신의</b>
+            // 단계 표식(-21)을 이미 앞에 달고 있다. 그 뒤에 <b>또 다른</b> 표식(-27)이
+            // 나오고서야 진짜 DML 이 나타난다면, 그 DML 은 새로 시작한 다음 단계에
+            // 속한다 - 이 주석 자신의 문장이 아니다. 표식 하나만 건너뛰는 것만으로는
+            // 이 자리를 못 잡는다("리뷰어 최소 재현"과 모양이 같아 보이지만, 그
+            // 재현은 주석이 자기 표식을 앞에 달고 있지 않다는 점이 다르다).
+            var plan = string.Join("\n",
+                "```sql",
+                "        SET @v_currentStepId = -21;",
+                "        /* U15: impaymobile과 TClientSettleRate4MobileCo 결합 수수료 */",
+                "",
+                "        SET @v_currentStepId = -27;",
+                "        UPDATE SETTLE_POQ_DB.dbo.TSettleMst",
+                "        SET CardAmt = TxAmt",
+                "        WHERE YMD = @pi_strYMD AND PGName = 'payco';",
+                "```");
+
+            Assert.Single(OmissionCommentScanner.Scan(plan));
         }
     }
 }

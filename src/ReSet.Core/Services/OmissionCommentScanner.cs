@@ -57,10 +57,14 @@ namespace ReSet.Core.Services
             @"\b(?:UPDATE\s+\d+|U\d+(?:\s*[~\-]\s*U?\d+)?\s*:|갱신\s*\d+)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        // "SET @v_currentStepId = N;"은 원본이 각 실행 DML 직전에 남기는 오류 추적
-        // 표식이자 <b>새 단계의 경계</b>다(S08.md 서두: "실행 DML 직전에는 해당 원본
-        // 코드로 @v_currentStepId를 설정한다"). 이 표식 뒤에 오는 것은 이전 주석이
-        // 아니라 다음 단계에 속하므로, 꼬리 검사가 이것을 만나면 앵커를 못 찾은 것이다.
+        // "SET @v_currentStepId = N;"은 원본이 <b>실행 DML 직전에</b> 남기는 오류 추적
+        // 관용구다(S08.md 서두: "실행 DML 직전에는 해당 원본 코드로 @v_currentStepId를
+        // 설정한다") - 표식 하나당 DML 하나가 원칙이다. 이 표식을 무조건 멈춤으로
+        // 삼으면(라운드 1) 정상 완료 자리(`/* U1: ... */ SET ...=-101; UPDATE A
+        // SET ... WHERE ...`)를 생략으로 오판하고, 무조건 건너뛰기만 하면(라운드 2)
+        // 이미 자기 표식을 단 주석 뒤에 또 다른 단계의 표식+DML 이 와도 앵커로
+        // 오인한다(S07.md:240-244, U15). 그래서 판정은 <see cref="PrecededByStepIdMarker"/>
+        // 로 나뉜다 - <see cref="StartsWithDmlStatement"/> 참고.
         private static readonly Regex StepIdMarkerRegex = new(
             @"^SET\s+@v_currentStepId\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
@@ -143,8 +147,9 @@ namespace ReSet.Core.Services
                 }
 
                 // 주석 뒤에 실제 DML 이 서 있으면 앵커 주석이다 - 생략이 아니다.
+                var head = fencedBody.Substring(0, match.Index);
                 var tail = fencedBody.Substring(match.Index + match.Length);
-                if (StartsWithDmlStatement(tail))
+                if (StartsWithDmlStatement(tail, alreadyHasOwnStepMarker: PrecededByStepIdMarker(head)))
                 {
                     continue;
                 }
@@ -159,22 +164,62 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 이 블록 주석 <b>바로 앞</b>(공백·`--`만 건너뛰고)이 이미
+        /// <see cref="StepIdMarkerRegex"/>인가 - 즉 이 주석이 <b>자신의</b> 단계
+        /// 표식을 이미 달고 있는가.
+        ///
+        /// [왜 필요한가 - 실측 2026-09-05 라운드 2 재검토] 원본 관용구는 "표식 하나당
+        /// DML 하나"다. 이 주석이 이미 자기 표식을 앞에 달고 있다면, 꼬리에서 <b>또</b>
+        /// 표식을 만나는 것은 다음 단계가 시작됐다는 뜻이지 이 주석 자신의 표식이
+        /// 아니다(S07.md:240-244, U15 - 자기 표식(-21)을 이미 달았는데 꼬리에 다시
+        /// 표식(-27)이 나오고서야 진짜 UPDATE 가 있다. 그 UPDATE 는 다음 단계에
+        /// 속한다). 반대로 이 주석 앞에 표식이 없다면(S07.md:35, U1), 꼬리의 표식은
+        /// 이 주석 자신의 것이므로 건너뛰고 그 뒤의 DML 을 앵커로 인정해야 한다.
+        /// </summary>
+        private static bool PrecededByStepIdMarker(string head)
+        {
+            var lines = MarkdownSectionLocator.SplitLines(head);
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                var s = lines[i].Trim();
+                if (s.Length == 0 || s.StartsWith("--", StringComparison.Ordinal)) continue;
+                return StepIdMarkerRegex.IsMatch(s);
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 주석 바로 뒤에 <b>이 주석 자신의</b> DML 문장이 서 있는가.
         ///
-        /// [연쇄 억제 버그 - 실측 2026-09-05] 종전에는 이 줄이 "SET @"로 시작하지 않고
-        /// 비어 있지도 않으면 그 줄 <i>전체</i>를 DmlVerbRegex 로 검사했다. 뒤따르는
-        /// 다음 블록 주석의 첫 줄(`/* UPDATE 2: ... */`)이 그 검사를 통과해 "UPDATE"
-        /// 낱말을 포함한다는 이유로 「진짜 문장이 뒤따른다」고 오판했다 - 앞 주석이
-        /// 죽고 S08 에서 연쇄의 마지막 하나만 살아남았다(UPDATE 1·2·8·9·10·13·14).
+        /// [연쇄 억제 버그 - 실측 2026-09-05 라운드 1] 종전에는 이 줄이 "SET @"로
+        /// 시작하지 않고 비어 있지도 않으면 그 줄 <i>전체</i>를 DmlVerbRegex 로
+        /// 검사했다. 뒤따르는 다음 블록 주석의 첫 줄(`/* UPDATE 2: ... */`)이 그
+        /// 검사를 통과해 "UPDATE" 낱말을 포함한다는 이유로 「진짜 문장이 뒤따른다」고
+        /// 오판했다 - 앞 주석이 죽고 S08 에서 연쇄의 마지막 하나만 살아남았다.
         ///
-        /// 그래서 두 가지를 <b>줄의 맨 앞</b>에서 먼저 검사해 "멈춤" 신호로 삼는다.
-        /// 다른 블록 주석이 시작하면 그것은 또 다른 자리표시자이지 이 주석의 앵커가
-        /// 아니다. <see cref="StepIdMarkerRegex"/>가 시작하면 새 단계의 경계이므로
-        /// 그 뒤는 다른 단계에 속한다. 둘 다 아니고 줄이 DML 동사로 시작해야만
-        /// 앵커로 인정한다(줄 안 어딘가가 아니라 <b>맨 앞</b> - <see cref="LeadingDmlStatementRegex"/>).
-        /// 그 외의 줄(`DECLARE` 같은 부수 설정문)은 같은 단계에 속할 수 있으므로 건너뛴다.
+        /// 그래서 다음 블록 주석 시작을 <b>멈춤</b> 신호로 삼는다 - 다른 블록 주석이
+        /// 시작하면 그것은 또 다른 자리표시자이지 이 주석의 앵커가 아니다.
+        ///
+        /// [오탐 회귀 - 실측 2026-09-05 라운드 2] 라운드 1은 <see cref="StepIdMarkerRegex"/>
+        /// 도 같은 멈춤 신호로 취급했다. 그러나 그 표식은 원본이 <b>실행 DML 직전에</b>
+        /// 남기는 관용구라(S08.md 서두) 정상 완료된 자리에도 항상 나타난다 - 멈춤
+        /// 신호로 삼으면 「주석; SET 표식; 진짜 UPDATE」 모양의 정상 자리를 전부
+        /// 생략으로 고발한다(리뷰어 최소 재현, S07 17건 중 7건 오탐).
+        ///
+        /// [정밀화 - 실측 2026-09-05 라운드 2 재검토] 표식을 무조건 건너뛰기만 하면
+        /// 이번엔 반대로 놓친다 - <see cref="PrecededByStepIdMarker"/>가 참이면(이
+        /// 주석이 이미 자기 표식을 달고 있으면) 꼬리의 표식은 <b>다음</b> 단계의
+        /// 경계이므로 멈춤(false)이다. 거짓이면(표식이 없으면) 꼬리의 표식은 이
+        /// 주석 자신의 것이므로 건너뛴다("--"·`DECLARE`처럼).
+        ///
+        /// 남는 것은 세 갈래다: 다음 블록 주석이면 멈춤(false), 표식이고 이 주석이
+        /// 이미 자기 표식을 달았으면 멈춤(false)·아니면 건너뛰고 계속 본다, 줄 맨
+        /// 앞이 DML 동사로 시작하면 앵커다(true - 줄 안 어딘가가 아니라 <b>맨 앞</b>
+        /// - <see cref="LeadingDmlStatementRegex"/>). 그 외의 줄(`DECLARE` 같은 부수
+        /// 설정문)은 건너뛴다.
         /// </summary>
-        private static bool StartsWithDmlStatement(string tail)
+        private static bool StartsWithDmlStatement(string tail, bool alreadyHasOwnStepMarker)
         {
             foreach (var line in MarkdownSectionLocator.SplitLines(tail))
             {
@@ -182,7 +227,11 @@ namespace ReSet.Core.Services
                 if (s.Length == 0 || s.StartsWith("--", StringComparison.Ordinal)) continue;
 
                 if (s.StartsWith("/*", StringComparison.Ordinal)) return false;
-                if (StepIdMarkerRegex.IsMatch(s)) return false;
+                if (StepIdMarkerRegex.IsMatch(s))
+                {
+                    if (alreadyHasOwnStepMarker) return false;
+                    continue;
+                }
                 if (LeadingDmlStatementRegex.IsMatch(s)) return true;
 
                 // DECLARE 등 부수 설정문 - 같은 단계에 속할 수 있으므로 계속 건너뛴다.
