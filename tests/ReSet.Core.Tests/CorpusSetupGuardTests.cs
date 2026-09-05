@@ -140,20 +140,45 @@ namespace ReSet.Core.Tests
                 "넷 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
         }
 
+        /// <summary>
+        /// 넷째 재료(<see cref="CorpusPaths.DefectiveEdition"/>)에 대한 같은 시험.
+        ///
+        /// [계약 회귀 - 2026-09-05 통합 후 물결 검증]
+        /// 최초 판은 `Skip.If(!IsLinkedWorktree(root), ...)`로 <b>연결된 워크트리가
+        /// 아니면 무조건 건너뛰었다.</b> 위 두 시험의 계약은 다르다 - 「재료가
+        /// 있으면 어디서든 단언하고, 없으면서 연결된 워크트리도 아닐 때만 건너뛴다」.
+        /// 그 차이 때문에 재료가 실제로 사는 **메인 체크아웃**(연결된 워크트리가
+        /// 아니다)에서 이 가드만 한 번도 안 쟀다 - 가드가 가장 확실히 참을 확인할
+        /// 수 있는 자리에서 침묵했다(메인 전체 테스트: 건너뜀 1). 위 두 시험과
+        /// 같은 계약으로 맞춘다.
+        /// </summary>
         [SkippableFact]
         public void CorpusSetup_WhenOutputIsPresent_DefectiveEditionMustAlsoBePresent()
         {
             var root = CorpusPaths.RepoRoot();
+
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
-            Skip.If(!CorpusPaths.IsLinkedWorktree(root),
-                "연결된 워크트리가 아니다 - 가드가 막으려는 것은 워크트리 설정 실수다.");
+
+            var hasDefective = CorpusPaths.DefectiveEditionExists(root);
+
+            // 위 두 시험과 같은 규약이다 - 있으면 어디서든 단언하고, 없으면서 연결된
+            // 워크트리도 아닐 때만 건너뛴다. 결함 판은 감사가 🔴로 매긴 산출물이라
+            // 스냅샷·통제군 트리와 마찬가지로 재생성할 수 없다.
+            Skip.If(
+                !hasDefective && !CorpusPaths.IsLinkedWorktree(root),
+                "연결된 워크트리가 아니고 결함 판도 없다 - 그 트리는 감사가 🔴로 매긴 " +
+                "산출물이라 재생성할 수 없으므로 독립 체크아웃에서는 요구하지 않는다.");
 
             Assert.True(
-                CorpusPaths.DefectiveEditionExists(root),
+                hasDefective,
                 $"`output/`은 있는데 {CorpusPaths.DefectiveEdition}이 없다. " +
                 "StepCheckOracleTests가 「결함 판에서 발화한다」를 확인하지 못한 채 " +
-                "초록이 된다 - 반쯤 설정된 상태다. " +
-                $"ln -s <main>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}");
+                "초록이 된다 - 반쯤 설정된 상태다. 심링크를 **넷 다** 걸어라:\n" +
+                "  ln -s <메인 저장소>/output output\n" +
+                $"  ln -s <메인 저장소>/{CorpusPaths.PriorEdition} {CorpusPaths.PriorEdition}\n" +
+                $"  ln -s <메인 저장소>/{CorpusPaths.ControlEdition} {CorpusPaths.ControlEdition}\n" +
+                $"  ln -s <메인 저장소>/{CorpusPaths.DefectiveEdition} {CorpusPaths.DefectiveEdition}\n" +
+                "넷 다 걸면 건너뜀 0이다. 표는 AGENTS.md의 워크트리 코퍼스 절에 있다.");
         }
     }
 }
