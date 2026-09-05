@@ -10177,5 +10177,127 @@ END"
 
             Assert.Contains(result.Errors, e => e.Contains("SET 산식"));
         }
+
+        // Fix Round 3(2026-09-05): 실물 코퍼스 모양(POQSettleProc9/agent/steps/S06.md
+        // 갱신10, output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md).
+        // 명세서 산식은 CAST(ROUND(A.PGCOMM * (0.1),0,dbo.UF_GET_PGCommOption(A.PGNAME,5))
+        // AS INT) - 하드 사실(UF_ 이름·소수)과 별칭.컬럼(A.PGCOMM·A.PGNAME)이 섞였다.
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithMixedHardAndAliasTokens() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 10,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "PGVT" },
+                            Expressions: new[]
+                            {
+                                "CAST(ROUND(A.PGCOMM * (0.1),0,dbo.UF_GET_PGCommOption(A.PGNAME,5)) AS INT)"
+                            })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_FiresWhenHardFactTokensAreMissing_EvenIfUnrelatedAliasColumnsMatchElsewhere()
+        {
+            // Fix Round 3 Critical(2026-09-05): 감사가 🔴로 매긴 자리(POQSettleProc9/S06
+            // 갱신10)를 채택 규칙(별칭.컬럼 포함 절반 이상)이 놓쳤다. 산식의 판별 토큰
+            // 넷 중 진짜 결정적인 하드 사실 둘(`UF_GET_PGCommOption`·`0.1`)은 문서
+            // 어디에도 없는데, 별칭.컬럼 둘(`A.PGCOMM`·`A.PGNAME`)이 문서의 **무관한**
+            // 다른 문장에 우연히 걸려 4개 중 2개 적중(절반)으로 침묵했다 - 정확히
+            // 이 산식이 구현됐다는 증거가 하나도 없는데도.
+            //
+            // 고친 규칙: 하드 사실 토큰(리터럴·UF_·숫자)과 별칭.컬럼 토큰을 각자
+            // 별도 풀로 절반 이상씩 요구한다 - 한쪽 풀의 부족을 다른 쪽 풀이 못
+            // 메운다. 이 갱신은 하드 사실이 0/2(절반 미만)이므로 별칭.컬럼이 아무리
+            // 많이 일치해도(여기서는 2/2) 발화해야 한다.
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "UPDATE T1 SET X = A.PGCOMM WHERE Y = 1;\n" +
+                "UPDATE T2 SET Z = A.PGNAME WHERE Y = 2;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S06"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithMixedHardAndAliasTokens());
+
+            Assert.Contains(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_StaysSilentWhenAllHardFactTokensAreCarried_EvenIfAliasColumnsAreRenamed()
+        {
+            // 오탐 경계(Fix Round 3). 하드 사실 토큰이 전부 실려 있고 별칭.컬럼도
+            // (별칭만 다르게) 실려 있으면 여전히 침묵해야 한다 - 이 시험이 없으면
+            // "하드 사실 전부"를 너무 엄격하게 요구해 Fix Round 1이 고친 별칭 불일치
+            // 오탐이 되돌아올 수 있다.
+            var markdown = "### S06 단계\n\n```sql\n" +
+                "UPDATE X\n" +
+                "   SET PGVT = CAST(ROUND(S.PGCOMM * (0.1),0,dbo.UF_GET_PGCommOption(S.PGNAME,5)) AS INT)\n" +
+                "FROM dbo.TSettleMst AS S;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S06"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithMixedHardAndAliasTokens());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
+
+        // Fix Round 3(2026-09-05): 실물 코퍼스 모양(POQSettleBatch1 현행판 S08 갱신5,
+        // output/Procedures/dbo.UP_UTIL_SETTLE_EXCEPTION_PROC/docs/Spec.md). 하드 사실
+        // (숫자) 아홉 개 중 셋(연월일 성격의 `2005`·`04`·`06`)이 이행 중 다른 표현으로
+        // 재구성돼 본문에 그대로 안 남았다 - 나머지 여섯은 그대로 남았다.
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithManyHardTokensSet() =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    Array.Empty<SpecDmlRow>(),
+                    new[]
+                    {
+                        new SpecSetTarget(
+                            Ordinal: 5,
+                            TargetTable: "TSettleMst",
+                            Columns: new[] { "CLCOMM" },
+                            Expressions: new[]
+                            {
+                                "CASE WHEN A.TXAMT >= 1000000 THEN 1500 " +
+                                "WHEN A.TXAMT >= 100000 THEN 100 ELSE 150 END " +
+                                "+ B.COMMISSIONRATE - 2005 - 04 - 06 - 3000"
+                            })
+                    },
+                    Array.Empty<SpecLocalVariable>())
+            };
+
+        [Fact]
+        public void ValidateBatchStep_CheckSetExpressions_StaysSilentWhenMostHardFactTokensAreCarried_EvenIfAFewAreRestructured()
+        {
+            // Fix Round 3 회귀(2026-09-05): 처음 고친 규칙은 "하드 사실은 전부 있어야
+            // 한다"였다. 그런데 재서 확인하니 그 규칙이 POQSettleBatch1 현행판 S08
+            // 갱신5(하드 토큰 9개 중 6개만 그대로 남고 3개는 이행 중 재구성됨 -
+            // Task 2가 `all` 규칙에서 이미 증명한 함정과 같다)를 새 오탐으로 만들었다
+            // (현행판 오탐 1건, 축 1 위반). 그래서 하드 사실도 절반 이상(전부가 아니라)
+            // 요구하도록 낮췄다 - 이 갱신은 하드 사실 9개 중 6개(절반 이상)가 있으므로
+            // 침묵해야 한다.
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "UPDATE T\n" +
+                "   SET CLCOMM = CASE WHEN T.TXAMT >= 1000000 THEN 1500 " +
+                "WHEN T.TXAMT >= 100000 THEN 100 ELSE 150 END + T.COMMISSIONRATE\n" +
+                "FROM dbo.TSettleMst AS T\n" +
+                "WHERE YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, CommUpdStep("S08"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithManyHardTokensSet());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
+        }
     }
 }

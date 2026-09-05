@@ -84,6 +84,12 @@ def bare(name):
     return name.strip().split(".")[-1].lower()
 
 
+def is_alias_column_token(token):
+    """토큰이 별칭.컬럼 모양인가(점 뒤가 문자·밑줄) - 소수(`0.1`)는 점 뒤가 숫자라 제외."""
+    dot = token.find(".")
+    return 0 < dot < len(token) - 1 and (token[dot + 1].isalpha() or token[dot + 1] == "_")
+
+
 def token_hit(token, body):
     """토큰 하나가 본문에 있는가.
 
@@ -93,13 +99,45 @@ def token_hit(token, body):
     별칭.컬럼이 아니라 소수이므로 이 경로를 타지 않는다 - C# 쪽 수정
     (MechanicalValidator.ContainsSetExpressionToken)과 같은 판별자를 쓴다.
     """
-    dot = token.find(".")
-    is_alias_column = 0 < dot < len(token) - 1 and (token[dot + 1].isalpha() or token[dot + 1] == "_")
-    if not is_alias_column:
+    if not is_alias_column_token(token):
         return token.lower() in body.lower()
 
-    column = token[dot + 1:]
+    column = token[token.find(".") + 1:]
     return re.search(r"[A-Za-z0-9_]\." + re.escape(column) + r"(?!\w)", body, re.IGNORECASE) is not None
+
+
+def is_fired(tk, body, rule):
+    """토큰 목록 하나(갱신 하나)가 규칙 아래서 발화하는가.
+
+    [Fix Round 3 Critical - 2026-09-05] `majority`(절반 이상)를 전체 토큰에 공용
+    풀로 적용하면, 흔한 별칭.컬럼 토큰이 문서의 무관한 다른 문장에 우연히 걸려
+    절반을 채워 결정적인 하드 사실(리터럴·UF_·숫자)이 전부 빠졌는데도 침묵한다
+    (실물: POQSettleProc9/S06 갱신10, 감사 🔴 - UF_GET_PGCommOption·0.1 이 문서
+    어디에도 없는데 A.PGCOMM·A.PGNAME 이 무관한 곳에 걸려 4개 중 2개로 침묵했다).
+
+    `hybrid`는 하드 사실과 별칭.컬럼을 **각자 별도 풀로** 절반 이상 요구한다 -
+    한쪽 풀의 부족을 다른 쪽 풀이 못 메운다. 처음엔 하드 사실을 "전부" 요구하는
+    안을 시험했으나, 그러면 현행판(POQSettleBatch1) S08 갱신5(하드 토큰 9개 -
+    2005·04·06 세 개가 이행 중 다른 표현으로 재구성돼 빠짐, 6/9는 있음)가 새
+    오탐이 됐다(재서 확인, 2026-09-05) - "전부"는 Task 2가 이미 `all` 규칙에서
+    증명한 함정을 하드 사실 쪽에서 재현한다. "절반 이상"으로 낮추면 그 자리는
+    침묵하고 Proc9/S06 갱신10(하드 0/2)은 여전히 발화한다.
+    MechanicalValidator.CheckSpecSetExpressions(Fix Round 3)와 같은 규칙이다.
+    """
+    hits = sum(1 for t in tk if token_hit(t, body))
+    if rule == "any":
+        return hits == 0
+    if rule == "all":
+        return hits < len(tk)
+    if rule == "majority":
+        return hits * 2 < len(tk)
+    if rule == "hybrid":
+        hard = [t for t in tk if not is_alias_column_token(t)]
+        alias = [t for t in tk if is_alias_column_token(t)]
+        hard_ok = not hard or sum(1 for t in hard if token_hit(t, body)) * 2 >= len(hard)
+        alias_ok = not alias or sum(1 for t in alias if token_hit(t, body)) * 2 >= len(alias)
+        return not (hard_ok and alias_ok)
+    raise ValueError(f"알 수 없는 규칙: {rule}")
 
 
 def parse_plan_structure_steps(plan_structure_path):
@@ -155,7 +193,7 @@ def evaluate_corpus(patterns, rule):
         spec_index[bare(proc_dir_name)] = sp
 
     fired = comparable = zero = 0
-    fired_sites = []
+    fired_sites = set()
     for job, code, body, procs in corpus_step_records():
         spec_paths = [spec_index[bare(p)] for p in procs if bare(p) in spec_index]
         for sp in spec_paths:
@@ -164,15 +202,9 @@ def evaluate_corpus(patterns, rule):
                     zero += 1
                     continue
                 comparable += 1
-                hits = sum(1 for t in tk if token_hit(t, body))
-                is_fired = (
-                    (rule == "any" and hits == 0)
-                    or (rule == "all" and hits < len(tk))
-                    or (rule == "majority" and hits * 2 < len(tk))
-                )
-                if is_fired:
+                if is_fired(tk, body, rule):
                     fired += 1
-                    fired_sites.append(f"{job}/{code}(갱신{ordinal})")
+                    fired_sites.add(f"{job}/{code}(갱신{ordinal})")
     return fired, comparable, zero, fired_sites
 
 
@@ -209,12 +241,7 @@ def evaluate(bodies, patterns, rule):
                 zero += 1
                 continue
             comparable += 1
-            hits = sum(1 for t in tk if token_hit(t, body))
-            if rule == "any" and hits == 0:
-                fired += 1
-            elif rule == "all" and hits < len(tk):
-                fired += 1
-            elif rule == "majority" and hits * 2 < len(tk):
+            if is_fired(tk, body, rule):
                 fired += 1
     return fired, comparable, zero
 
@@ -229,18 +256,19 @@ def main():
     print("-" * 96)
     corpus_sites_by_row = {}
     for name, patterns in CANDIDATES.items():
-        for rule in ("any", "all", "majority"):
+        for rule in ("any", "all", "majority", "hybrid"):
             df, dc, dz = evaluate(step_bodies_defective(), patterns, rule)
             cf, cc, cz = evaluate(step_bodies_current(), patterns, rule)
             gf, gc, gz, gsites = evaluate_corpus(patterns, rule)
             corpus_sites_by_row[(name, rule)] = gsites
             print(f"{name:22} {rule:9} {df:>10} {cf:>10} {gf:>14} {dc:>8} {dz:>6}")
     print()
-    print("채택 축(Fix Round 1 개정):")
-    print("  축 0  코퍼스 전역 오탐 == 0  (새로 앞에 온다 - 못 넘으면 즉시 기각)")
-    print("  축 1  현행판(POQSettleBatch1 단일 Job) 오탐 == 0")
-    print("  축 2  결함판 발화 > base(현행)×any")
-    print("  축 3  토큰0 잔량 최소")
+    print("채택 축(Fix Round 3 개정):")
+    print("  축 −1  옛 규칙(base×any)이 잡던 코퍼스 전역 발화 중 새 규칙이 놓치는 것 == 0  (맨 앞. 못 넘으면 즉시 기각)")
+    print("  축 0   코퍼스 전역 오탐 == 0")
+    print("  축 1   현행판(POQSettleBatch1 단일 Job) 오탐 == 0")
+    print("  축 2   결함판 발화 > base(현행)×any")
+    print("  축 3   토큰0 잔량 최소")
     print()
     print("[주의] '코퍼스 전역 발화'는 발화 수이지 감사로 확인한 오탐 수가 아니다 -")
     print("전수 감사가 없어 발화 전부의 참/오탐을 가릴 수 없다. 리뷰어가 실물로 확인한")
@@ -252,6 +280,27 @@ def main():
         hit = [s for s in sites if s.startswith("POQSettleProc1/S04")]
         if hit:
             print(f"  {key}: {hit}")
+
+    print()
+    print("=" * 96)
+    print("축 −1 — 양방향 비교 (옛 규칙 base(현행)×any 대 후보×규칙)")
+    print("=" * 96)
+    old_sites = corpus_sites_by_row[("base (현행)", "any")]
+    print(f"옛 규칙(base×any) 코퍼스 전역 발화: {len(old_sites)}건")
+    print()
+    print(f"{'후보':22} {'규칙':9} {'새 발화':>8} {'교집합':>8} {'신규발화':>8} {'사라진발화':>10}")
+    print("-" * 72)
+    for name, patterns in CANDIDATES.items():
+        for rule in ("any", "all", "majority", "hybrid"):
+            new_sites = corpus_sites_by_row[(name, rule)]
+            both = old_sites & new_sites
+            gained = new_sites - old_sites
+            lost = old_sites - new_sites
+            marker = "  <- 축 -1 위반" if lost else ""
+            print(f"{name:22} {rule:9} {len(new_sites):>8} {len(both):>8} "
+                  f"{len(gained):>8} {len(lost):>10}{marker}")
+            if lost:
+                print(f"    사라진 자리: {sorted(lost)}")
     return 0
 
 

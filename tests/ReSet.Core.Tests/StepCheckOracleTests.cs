@@ -21,7 +21,8 @@ namespace ReSet.Core.Tests
     /// 심링크를 빠뜨리면 기준이 자동으로 실패한다.
     ///
     /// [왜 번들 합계가 아니라 S07.md 를 직접 잠그는가 - 회귀 2026-09-05 라운드 1]
-    /// 최초 판은 `defectiveHits > 0`(번들 14개 파일의 발화 합계)만 잠갔다. 이 조건은
+    /// 최초 판은 `defectiveHits > 0`(번들 16개 파일 - S01~S16 - 의 발화 합계)만 잠갔다.
+    /// 이 조건은
     /// 너무 느슨해서 실제 회귀를 가렸다 - 리뷰어가 파일별로 재보니 S07.md(감사가
     /// 🔴로 매긴 그 자리, `ConsistencyReport.md:138`)는 **0건**이었는데도 S08.md가
     /// 1건을 내 합계가 0보다 커서 초록이 됐다. 그래서 대표 자리(S07.md)를 직접
@@ -160,6 +161,53 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
+        /// Fix Round 3 Critical(2026-09-05) 탐지 손실 회귀 잠금 - 축 −1.
+        ///
+        /// 최종 리뷰가 잡은 회귀: `base + 별칭.컬럼 × majority`(Fix Round 1·2가 채택한
+        /// 규칙)는 옛 규칙(`base(현행) × any`)이 잡던 <c>POQSettleProc9/agent/steps/
+        /// S06.md</c> 갱신 10(감사 🔴)을 침묵시켰다. 명세서 산식
+        /// `CAST(ROUND(A.PGCOMM * (0.1),0,dbo.UF_GET_PGCommOption(A.PGNAME,5)) AS INT)`의
+        /// 토큰 넷 중 결정적인 하드 사실 둘(`UF_GET_PGCommOption`·`0.1`)이 문서 어디에도
+        /// 없는데, 별칭.컬럼 둘(`A.PGCOMM`·`A.PGNAME`)이 문서의 무관한 다른 문장에 우연히
+        /// 걸려 4개 중 2개(절반)로 침묵했다.
+        ///
+        /// 고친 규칙(하드 사실·별칭.컬럼 각자 절반 이상)은 이 자리를 다시 발화시켜야 한다 -
+        /// 이 시험이 그것을 잠근다. 없어지면 축 −1이 다시 깨진 것이다.
+        /// </summary>
+        [SkippableFact]
+        public void SetExpressionCheck_FiresWhenHardFactTokensAreMissing_POQSettleProc9S06Ordinal10()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var stepPath = Path.Combine(root, "output", "Jobs", "POQSettleProc9", "agent", "steps", "S06.md");
+            var planStructurePath = Path.Combine(
+                root, "output", "Jobs", "POQSettleProc9", "raw", "PlanStructure.md");
+            var specPath = Path.Combine(
+                root, "output", "Procedures", "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", "docs", "Spec.md");
+            Skip.If(!File.Exists(stepPath) || !File.Exists(planStructurePath) || !File.Exists(specPath),
+                CorpusSkip.Reason);
+
+            var steps = BatchStepPlanParser.TryParse(File.ReadAllText(planStructurePath));
+            Skip.If(steps == null, "목차 JSON을 못 읽어 건너뜀 - raw/PlanStructure.md 형식을 확인하라");
+
+            var step = steps!.FirstOrDefault(s => s.Code == "S06");
+            Skip.If(step == null, "S06 단계가 목차에 없어 건너뜀");
+
+            var facts = SpecStatementFactsExtractor.Extract(
+                new[] { ("dbo.UP_UTIL_SETTLE_EXCEPTION_PROC", File.ReadAllText(specPath)) });
+
+            var markdown = File.ReadAllText(stepPath);
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, step!, System.Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(),
+                stepInterfaces: null, runRowOwnedTables: null,
+                statementFactsByProcedure: facts, allSteps: steps);
+
+            Assert.Contains(result.Errors, e => e.Contains("SET 산식") && e.Contains("갱신 10("));
+        }
+
+        /// <summary>
         /// A-2(2026-09-05) 오라클 - <c>CheckSpecSetExpressions</c>가 결함 판에서 발화하고
         /// 현행 판에서 침묵하는지 잠근다.
         ///
@@ -177,12 +225,18 @@ namespace ReSet.Core.Tests
         /// 받지 않는 Procedures 트리는 공용이다.
         ///
         /// [실측치의 출처] 판독 문서(2026-09-05-set-expression-token-readout-b1.md)의
-        /// 결함판 10·현행판 0은 계획서의 파이썬 하네스(정규식으로 명세서 표를 직접 파싱)가
+        /// 결함판 12·현행판 0은 계획서의 파이썬 하네스(정규식으로 명세서 표를 직접 파싱)가
         /// 낸 값이다. 이 시험은 <b>같은 값을 C# 프로덕션 코드 경로로 독립적으로 재서
         /// 확인한다</b> - 실측(2026-09-05, 이 시험이 가진 알고리즘 그대로):
-        /// 결함판 10 · 현행판 0. 두 하네스가 같은 값을 냈다(파이썬 대 C# 조기 대사가 갈리면
+        /// 결함판 12 · 현행판 0. 두 하네스가 같은 값을 냈다(파이썬 대 C# 조기 대사가 갈리면
         /// 먼저 어느 쪽이 실제 파이프라인 규약(BareObjectName 조회·분할-SP 면제 등)을
         /// 놓쳤는지부터 의심하라 - 값을 맞추려고 코드를 바꾸지 마라).
+        ///
+        /// [Fix Round 3 - 값이 바뀐 이유] 이 값은 10(Fix Round 1·2)에서 12로 늘었다 -
+        /// 규칙을 「별칭.컬럼 절반 이상」에서 「하드 사실·별칭.컬럼 각자 절반 이상」
+        /// (축 −1 대응)으로 바꾸면서, 이 결함 판에서도 별칭.컬럼이 우연히 걸려 침묵하던
+        /// 자리가 다시 발화했다(코드는 안 바뀌었어도 무엇이 결함으로 잡히는지가 바뀌면
+        /// 이 결함 판의 발화 수도 함께 바뀐다 - 정직하게 재서 갱신한다).
         /// </summary>
         [SkippableFact]
         public void SetExpressionCheck_FiresOnDefectiveBundle_AndIsSilentOnCurrentPlan()
@@ -237,9 +291,9 @@ namespace ReSet.Core.Tests
                 return CountSetExpressionHits(markdown, step, currentSteps, facts);
             });
 
-            // 10·0 은 우리가 만든 수가 아니라 판독 문서(위 클래스 주석)가 독립 하네스로
+            // 12·0 은 우리가 만든 수가 아니라 판독 문서(위 클래스 주석)가 독립 하네스로
             // 잰 수다. 이 값이 어긋나면 먼저 그 판독 문서를 다시 확인하라.
-            Assert.Equal(10, defectiveHits);
+            Assert.Equal(12, defectiveHits);
             Assert.Equal(0, currentHits);
         }
 

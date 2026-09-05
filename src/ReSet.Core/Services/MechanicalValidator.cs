@@ -8260,10 +8260,33 @@ namespace ReSet.Core.Services
                 // 판별 토큰이 없으면 대조 항목이 0 이다 - 침묵한다(작성 계약 7).
                 if (tokens.Count == 0) continue;
 
-                // 판정 규칙은 위 판독 문서가 실측으로 골랐다(별칭.컬럼 후보 + 절반 이상).
-                // 바꾸려면 같은 하네스를 다시 돌려 두 판의 판정이 갈리는지 확인하라 -
-                // 발화 수만으로는 못 고른다.
-                if (tokens.Count(token => ContainsSetExpressionToken(stepMarkdown, token)) * 2 >= tokens.Count) continue;
+                // [Fix Round 3 Critical - 2026-09-05] 하드 사실(인용 리터럴·UF_·숫자)과
+                // 별칭.컬럼을 **각자 별도 풀**로 절반 이상 요구한다 - 하나의 공용
+                // 절반-이상 풀로 섞으면 안 된다(한쪽 풀의 부족을 다른 쪽 풀이 못 메운다).
+                // 실물 회귀(POQSettleProc9/S06 갱신10, 감사 🔴): 산식 토큰 넷 중 결정적인
+                // 하드 사실 둘(UF_GET_PGCommOption·0.1)이 본문 어디에도 없는데, 별칭.컬럼
+                // 둘(A.PGCOMM·A.PGNAME)이 문서의 무관한 다른 문장에 우연히 걸려 4개 중
+                // 2개(절반) 적중으로 침묵했다 - 그 산식이 구현됐다는 증거가 전혀 없는데도.
+                //
+                // [왜 하드 사실도 "전부"가 아니라 "절반 이상"인가 - 되짚음] 처음엔 하드
+                // 사실을 전부 요구했다. 그런데 재서 확인하니 현행판(POQSettleBatch1) S08
+                // 갱신5(하드 토큰 9개 중 2005·04·06 세 개가 이행 중 다른 표현으로
+                // 재구성돼 빠지고 6개는 남음)를 새 오탐으로 만들었다(축 1 위반) - "전부"는
+                // Task 2가 `all` 규칙에서 이미 증명한 함정을 하드 사실 쪽에서 그대로
+                // 재현한다. 절반 이상으로 낮추면 그 자리는 침묵하고 Proc9/S06 갱신10
+                // (하드 0/2)은 여전히 발화한다(단위 시험
+                // StaysSilentWhenMostHardFactTokensAreCarried_EvenIfAFewAreRestructured가
+                // 이 경계를 잠근다). 근거:
+                // docs/audit-reports/2026-09-05-set-expression-token-readout-b1.md §7.
+                var hardTokens = tokens.Where(t => !IsAliasQualifiedColumnToken(t)).ToList();
+                var aliasTokens = tokens.Where(IsAliasQualifiedColumnToken).ToList();
+
+                var halfOrMoreHardTokensPresent = hardTokens.Count == 0 ||
+                    hardTokens.Count(t => ContainsSetExpressionToken(stepMarkdown, t)) * 2 >= hardTokens.Count;
+                var halfOrMoreAliasTokensPresent = aliasTokens.Count == 0 ||
+                    aliasTokens.Count(t => ContainsSetExpressionToken(stepMarkdown, t)) * 2 >= aliasTokens.Count;
+
+                if (halfOrMoreHardTokensPresent && halfOrMoreAliasTokensPresent) continue;
 
                 // 본문 결함이므로 PlanDefects 가 아니다 - 재생성으로 고칠 수 있다.
                 result.Errors.Add(
@@ -8300,25 +8323,13 @@ namespace ReSet.Core.Services
         /// </summary>
         private static bool ContainsSetExpressionToken(string stepMarkdown, string token)
         {
-            var dot = token.IndexOf('.');
-
-            // [Fix Round 1 회귀 - 2026-09-05] 소수 토큰(`0.1`·`100.0`)도 점을 가진다.
-            // 점 뒤가 숫자면 그것은 별칭.컬럼이 아니라 소수의 소수부다 - 컬럼 이름은
-            // SQL 식별자 규칙상 문자·밑줄로 시작하지 숫자로 시작하지 않는다. 이 구분이
-            // 없으면 `0.1`의 ".1"이 본문 어딘가의 무관한 "3.1"(표 번호 등) 같은
-            // 숫자.숫자 문구에 걸려 소수 상수가 실제로는 빠졌는데도 침묵한다(단위
-            // 시험 FiresWhenDecimalConstantIsMissing_EvenNearAnUnrelatedDottedNumber
-            // 가 이 회귀를 잠근다).
-            var isAliasQualifiedColumn = dot > 0 && dot < token.Length - 1 &&
-                (char.IsLetter(token[dot + 1]) || token[dot + 1] == '_');
-
-            if (!isAliasQualifiedColumn)
+            if (!IsAliasQualifiedColumnToken(token))
             {
                 // 별칭.컬럼 모양이 아니다(리터럴·UF_·숫자) - 종전 그대로 대조한다.
                 return ContainsToken(stepMarkdown, token);
             }
 
-            var column = token.Substring(dot + 1);
+            var column = token.Substring(token.IndexOf('.') + 1);
 
             // `[식별자].컬럼` - 식별자(별칭)는 명세서와 생성본이 다를 수 있으므로 어떤
             // 식별자든 인정한다. 컬럼 뒤는 ContainsToken과 같은 단어 경계 규약
@@ -8327,6 +8338,25 @@ namespace ReSet.Core.Services
                 stepMarkdown,
                 $@"[A-Za-z0-9_]\.{Regex.Escape(column)}(?!\w)",
                 RegexOptions.IgnoreCase | RegexOptions.ECMAScript);
+        }
+
+        /// <summary>
+        /// 토큰이 별칭.컬럼 모양인가 - <see cref="ContainsSetExpressionToken"/>과
+        /// <see cref="CheckSpecSetExpressions"/>(하드 사실/별칭.컬럼 분리, Fix Round 3)가
+        /// 함께 쓴다.
+        ///
+        /// [Fix Round 1 회귀 - 2026-09-05] 소수 토큰(`0.1`·`100.0`)도 점을 가진다.
+        /// 점 뒤가 숫자면 그것은 별칭.컬럼이 아니라 소수의 소수부다 - 컬럼 이름은 SQL
+        /// 식별자 규칙상 문자·밑줄로 시작하지 숫자로 시작하지 않는다. 이 구분이 없으면
+        /// `0.1`의 ".1"이 본문 어딘가의 무관한 "3.1"(표 번호 등) 같은 숫자.숫자 문구에
+        /// 걸려 소수 상수가 실제로는 빠졌는데도 침묵한다(단위 시험
+        /// FiresWhenDecimalConstantIsMissing_EvenNearAnUnrelatedDottedNumber 가 잠근다).
+        /// </summary>
+        private static bool IsAliasQualifiedColumnToken(string token)
+        {
+            var dot = token.IndexOf('.');
+            return dot > 0 && dot < token.Length - 1 &&
+                (char.IsLetter(token[dot + 1]) || token[dot + 1] == '_');
         }
 
         /// <summary>
