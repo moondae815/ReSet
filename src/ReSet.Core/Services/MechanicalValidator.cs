@@ -7824,7 +7824,25 @@ namespace ReSet.Core.Services
                 // HasOpaqueJoinSource로 통째로 접고, 술어는 위 relocated로 컬럼
                 // 단위로 거른다(둘 다 이전이면 둘 다 침묵, 하나만 이전이면 남은
                 // 하나만 발화).
-                if (!group.Any(a => a.Statement.HasOpaqueJoinSource))
+                // [2026-09-05 좁힘 - 축 B 재감사] 접는 것은 불투명한 상대가 **대상
+                // 자신의 재계산**일 때뿐이다. 위 근거가 그리는 그림이 정확히 그것이고
+                // (`대상 AS Y INNER JOIN <대상을 다시 읽는 CTE>`), 상대가 대상을 아예
+                // 읽지 않으면 "진짜 필터가 그 안에 있다"는 전제 자체가 없다.
+                //
+                // 실측: 접힘을 통째로 끄면 검사 B가 25 → 40(+15)인데 그 15가 두 부류로
+                // 갈린다 - 13은 `ReadsOwnTarget`이 참(대상의 재계산과 조인)이고, 2는
+                // 거짓이며 **그 2가 원본 DDL로 확인된 진짜 회귀**다
+                // (POQSettleBatch1/S05의 `A.OrgYMD` → `A.YMD`, S06의 `MallID` 소실).
+                // 원본 쪽도 같은 선으로 갈린다 - 13은 잃은 키가 최상위 ON에 있었고,
+                // 2는 파생 테이블 **안** 물리 테이블끼리의 조인이었다.
+                //
+                // [먼저 틀린 판별자 - 다시 밟지 말 것] "불투명한 것이 유일 원천이면
+                // 접지 않는다"로 좁히려 했으나 코퍼스 발화가 0이었다. 실물 두 INSERT도
+                // 파생 테이블을 닫은 뒤 최상위에서 `LEFT OUTER JOIN dbo.TPGProperty Y`
+                // 를 걸어 **파트너가 있기** 때문이다. 그 오답은
+                // `ValidateBatchStep_OpaqueSourceThatDoesNotReadTheTarget_...`의 픽스처가
+                // 그 줄을 담고 있어 이제 재현되지 않는다.
+                if (!group.Any(a => a.Statement.HasOpaqueJoinSource && a.Statement.ReadsOwnTarget))
                 {
                     ReportMissing("조인 키", row.JoinKeys, joinPresent);
                 }

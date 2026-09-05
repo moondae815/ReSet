@@ -7744,6 +7744,56 @@ END";
         }
 
         [Fact]
+        public void ValidateBatchStep_OpaqueSourceThatDoesNotReadTheTarget_StillReportsMissingJoinKey()
+        {
+            // 접힘은 Task 22 의 근거만큼만 넓어야 한다. 그 근거는 「대상이 **자기
+            // 재계산**과 조인해 진짜 필터가 그 서브쿼리 안에 있다」이다 - 불투명한
+            // 상대가 대상을 아예 읽지 않으면 그 전제가 없다.
+            //
+            // [이 픽스처가 실물 모양을 그대로 쓰는 이유]
+            // 앞선 시도(2026-09-05)는 「불투명한 것이 유일 원천이면 접지 않는다」였고
+            // 단위 테스트는 통과했지만 코퍼스에서 발화가 0 이었다 - 합성 픽스처가
+            // 실물보다 단순했기 때문이다. 실물(POQSettleBatch1/S05·S06)은 파생 테이블을
+            // 닫은 뒤 최상위에서 `LEFT OUTER JOIN dbo.TPGProperty Y ON Y.PGName = X.PGNAME`
+            // 을 한 번 더 건다. 그 줄이 여기 있어야 이 픽스처가 그때의 오답을 잡는다.
+            //
+            // 여기서 `PGName` 은 파생 테이블 안 ON 에 있어 이전으로 걸러지고,
+            // `OrgYMD` 는 문장 어디에도 없으므로 남는다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                // 키는 LegacyStep 헬퍼가 못박은 프로시저다 - 이 픽스처가 잠그는 것은
+                // SP 정체가 아니라 문장 모양이라 그 값을 그대로 쓴다.
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 63, "TSettleMst",
+                        Array.Empty<string>(), new[] { "PGName", "OrgYMD" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S05 단계\n\n```sql\n" +
+                "-- SQL_INSERT_CHUNK (INSERT 1)\n" +
+                "INSERT INTO dbo.TSettleMst (PLTID, CLCOMM)\n" +
+                "SELECT X.PLTID, X.CLCOMM\n" +
+                "FROM (\n" +
+                "    SELECT A.PLTID, A.CLCOMM, A.PGNAME\n" +
+                "    FROM dbo.TExtraSettleIn AS A\n" +
+                "    LEFT OUTER JOIN dbo.TPGSettleRate4Extra AS B\n" +
+                "        ON B.YMD = A.YMD AND B.PGNAME = A.PGNAME\n" +
+                ") X\n" +
+                "LEFT OUTER JOIN dbo.TPGProperty Y ON Y.PGName = X.PGNAME;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S05"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("조인 키"));
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("OrgYMD", reported);
+            Assert.DoesNotContain("PGName", reported);
+        }
+
+        [Fact]
         public void ValidateBatchStep_AnchoredStatementWithOpaqueJoinSource_SuppressesJoinKeyReportOnly()
         {
             // 이 픽스처가 잠그는 것 - (1) 조인 파트너가 CTE면(HasOpaqueJoinSource)
