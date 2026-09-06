@@ -9,10 +9,10 @@ namespace ReSet.Core.Services
 {
     /// <param name="Line">대입문의 원본 줄 번호.</param>
     /// <param name="Variable">대입 대상 변수명.</param>
-    /// <param name="Column">대입되는 컬럼 원문(별칭이 있으면 별칭까지).</param>
+    /// <param name="Expression">대입식 우변의 원문(감쌈·분기식을 벗기지 않은 그대로).</param>
     /// <param name="Sentence">확정 사실 문장.</param>
     public sealed record NonAggregateAssignmentFact(
-        int Line, string Variable, string Column, string Sentence);
+        int Line, string Variable, string Expression, string Sentence);
 
     /// <summary>
     /// `SELECT @v = 컬럼 FROM ...` 형태의 **비집계** 변수 대입을 뽑는다.
@@ -36,20 +36,36 @@ namespace ReSet.Core.Services
     ///   모르므로 말하지 않는다.
     /// 판정 조건은 <see cref="SurvivingValueIsNull"/>에 있다.
     ///
-    /// [왜 컬럼 참조만 담는가] 식이 집계를 품고 있으면 결론이 정반대로 뒤집힌다.
-    /// 같은 SP의 101행 `SELECT @v = MAX(ID)+1`과 116행 `SELECT @v = ISNULL(SUM(...),0)`이
-    /// 그 실물이다 - 최상위가 이항식/스칼라 함수라 집계 추출기는 담지 않지만, 질의 자체는
-    /// 집계라 무결과여도 한 행이 돌아온다. 컬럼 참조는 잎 노드라 집계를 품을 수 없다.
-    /// CASE 식이나 산술식은 대개 비집계지만 판정에 식 전체를 훑어야 하고 대상 칸 원문도
-    /// 길어져, 담지 않고 침묵한다(AGENTS.md 범주 2와 같은 원칙 - 거짓 행보다 없는 행이
-    /// 낫다).
+    /// [무엇을 담는가 - 2026-09-06 넓힘] 우변이 컬럼 참조이거나, 모든 분기가 컬럼 참조인
+    /// `IIF`/`CASE`이거나, 그 둘을 `ISNULL(X, 리터럴)`/`COALESCE(X, 리터럴)`로 한 겹 감싼
+    /// 것이면 담는다(<see cref="AssignmentExpressionUnwrapper"/>).
+    ///
+    /// 넓혀도 확정 문장이 거짓이 되지 않는 이유가 중요하다 - 이 문장은 **행이 없다**를
+    /// 말하지 우변의 모양을 말하지 않는다. 0행이면 대입 자체가 일어나지 않으므로 우변이
+    /// 무엇으로 감싸여 있든 결론이 같다. 위험은 정반대쪽, 즉 집계 갈래에만 있다
+    /// (거기서는 `ISNULL`이 대입되는 값을 실제로 바꾼다 -
+    /// <see cref="AggregateAssignmentExtractor"/>가 그 갈래를 따로 말한다).
+    ///
+    /// [그래도 좁게 잡는 자리들] 한 분기라도 리터럴·산술식이면 담지 않고, `ELSE` 없는
+    /// `CASE`도 담지 않으며, 감쌈의 기본값이 리터럴이 아니면 벗기지 않는다. 대입식이
+    /// 집계를 품으면 결론이 정반대로 뒤집히므로(무결과여도 한 행이 돌아온다) 그쪽은
+    /// 집계 추출기의 몫이다 - 집계는 잎이 아니라 컬럼 분기 판정에 걸리지 않고, 그것이
+    /// 두 갈래를 배타적으로 만드는 기전이다. 실물: 101행 `MAX(ID)+1`, 116행
+    /// `ISNULL(SUM(...),0)`.
+    ///
+    /// [넓히기 전에 무엇이 빠졌었나] `UF_GET_COMM4CLIENT4PARTIALCANCEL:43`의
+    /// `IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)`가
+    /// 어떤 기계 확정 표에도 없었고, 명세서가 수수료율 분기를 한 줄도 서술하지 않았다
+    /// (2026-09-06 축 A 감사 🔴).
     ///
     /// [집계는 FROM 절에도 산다] 수정 라운드 1 - 식이 컬럼 참조여도
     /// `FROM (SELECT MAX(ID) AS MaxID FROM t) X`처럼 파생 테이블이 집계를 품으면 원본이
     /// 비어도 한 행이 돌아온다. 그러면 이 SELECT는 0행이 되지 않아 "무결과"를 전제한
     /// 문장을 읽는 사람이 정반대로 이해한다. 그래서 FROM 절이 집계를 품으면 담지 않는다.
-    /// **코퍼스에 이 모양은 없다** - 24개 객체의 object_definition.sql을 이 추출기로 훑어
-    /// 이 가드 도입 전후 행이 8행으로 같음을 확인했다.
+    /// **코퍼스에 이 모양은 없다** - 31개 객체(로컬 24 + 외부 7)의 object_definition.sql을
+    /// 이 추출기로 훑어 이 가드 도입 전후 행이 43행으로 같음을 확인했다(2026-09-06 재실측 -
+    /// 코퍼스가 External까지 넓어지고 우변 가드가 감쌈까지 담게 되면서 8행이던 예전 수치가
+    /// 낡았다).
     ///
     /// [집계는 CTE에도 산다] 수정 라운드 2 - 같은 함정인데 붙는 자리가 다르다.
     /// `WITH c AS (SELECT MAX(ID) AS m FROM t) SELECT @v = c.m FROM c`에서 WITH 절은
@@ -304,14 +320,16 @@ namespace ReSet.Core.Services
                     // 문장이 된다. 형제 LoopVariableResetExtractor와 같은 규칙으로 거른다.
                     if (setVariable.AssignmentKind != AssignmentKind.Equals) continue;
 
-                    // 컬럼 참조만 담는다(클래스 주석의 "왜 컬럼 참조만 담는가").
-                    if (setVariable.Expression is not ColumnReferenceExpression column) continue;
-                    if (column.ColumnType != ColumnType.Regular) continue;
+                    // 감쌈을 한 겹 벗겨 안쪽이 "전부 컬럼 참조인 분기식"인지 본다
+                    // (클래스 주석의 "무엇을 담는가"). 대상 칸에는 벗기기 **전** 원문을
+                    // 싣는다 - 벗긴 것을 실으면 원문에 없는 문장이 표에 들어간다.
+                    if (setVariable.Expression == null) continue;
 
-                    var parts = column.MultiPartIdentifier?.Identifiers;
-                    if (parts == null || parts.Count == 0) continue;
-                    var columnText = string.Join(".", parts.Select(id => id.Value));
-                    if (string.IsNullOrWhiteSpace(columnText)) continue;
+                    var unwrapped = AssignmentExpressionUnwrapper.Unwrap(setVariable.Expression);
+                    if (!AssignmentExpressionUnwrapper.TryColumnBranches(unwrapped.Inner, out _)) continue;
+
+                    var expressionText = AssignmentExpressionUnwrapper.TextOf(setVariable.Expression);
+                    if (string.IsNullOrWhiteSpace(expressionText)) continue;
 
                     // AggregateAssignmentExtractor와 같은 방어 - 변수명을 모르면 대상 칸이
                     // 진술 불가능해지므로 행을 내지 않는다.
@@ -327,7 +345,7 @@ namespace ReSet.Core.Services
                         : PreviousValueSurvivesSentence;
 
                     Facts.Add(new NonAggregateAssignmentFact(
-                        setVariable.StartLine, variable, columnText, sentence));
+                        setVariable.StartLine, variable, expressionText, sentence));
                 }
             }
         }

@@ -144,5 +144,24 @@ END";
 
             Assert.Contains(facts, f => f.Kind == ExecutionSemanticsFacts.AggregateAssignmentKind);
         }
+
+        [Fact]
+        public void Collect_NonAggregateAssignmentWithABranchExpression_RendersTheExpressionVerbatim()
+        {
+            // 대상 칸이 컬럼 이름만 실으면 분기가 지워진다 - 이 배선이 🔴 #1 의 나머지 절반이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, A.RateA, A.RateB) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var facts = ExecutionSemanticsFacts.Collect(ddl, null, null, new Dictionary<string, string>());
+
+            var fact = Assert.Single(
+                facts, f => f.Kind == ExecutionSemanticsFacts.NonAggregateAssignmentKind);
+            Assert.Equal("SELECT @v = IIF(A.Flag = 1, A.RateA, A.RateB)", fact.Target);
+        }
     }
 }

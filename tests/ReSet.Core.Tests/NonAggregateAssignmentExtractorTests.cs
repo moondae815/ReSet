@@ -33,7 +33,7 @@ END";
             var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
 
             Assert.Equal("@po_intAmt", fact.Variable);
-            Assert.Equal("SECTIONAMT", fact.Column);
+            Assert.Equal("SECTIONAMT", fact.Expression);
             Assert.Contains("대입 자체가 일어나지 않습니다", fact.Sentence);
             Assert.Contains("NULL이 그대로 남습니다", fact.Sentence);
         }
@@ -236,7 +236,7 @@ END";
 
             var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
             Assert.Equal("@b", fact.Variable);
-            Assert.Equal("ID", fact.Column);
+            Assert.Equal("ID", fact.Expression);
         }
 
         [Fact]
@@ -269,7 +269,7 @@ BEGIN
 END";
 
             var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
-            Assert.Equal("A.ID", fact.Column);
+            Assert.Equal("A.ID", fact.Expression);
         }
 
         [Fact]
@@ -410,6 +410,108 @@ END";
             Assert.Contains("NULL이 그대로 남습니다", fact.Fact);
         }
 
+        [Fact]
+        public void Extract_IifOverTwoColumns_IsCarriedWithTheBranchExpressionVerbatim()
+        {
+            // UF_GET_COMM4CLIENT4PARTIALCANCEL:43 실측 - 축 A 🔴 #1 이다. 이 대입이 표에
+            // 없어서 명세서가 수수료율 분기를 한 줄도 서술하지 않았고, 그 함수를 부르는
+            // 모든 SP 의 금액이 무이자 여부에 따라 갈리는 사실이 통째로 사라졌다.
+            //
+            // 대상 칸은 분기식을 **축자로** 실어야 한다. 컬럼 이름만 실으면 어느 쪽
+            // 컬럼인지가 조건에 달렸다는 사실이 그대로 지워진다.
+            const string ddl = @"
+CREATE FUNCTION dbo.F(@pi_intFreeInterestFlag INT) RETURNS INT
+AS
+BEGIN
+    DECLARE @v_intCommissionRate INT
+    SELECT TOP 1
+           @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)
+    FROM   dbo.TClientCardContractDtlHist A WITH(NOLOCK)
+    WHERE  A.ClientID = '1'
+    RETURN @v_intCommissionRate
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("@v_intCommissionRate", fact.Variable);
+            Assert.Equal(
+                "IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)",
+                fact.Expression);
+            Assert.Contains("대입 자체가 일어나지 않습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_CaseOverColumns_IsCarried()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = CASE WHEN A.Flag = 1 THEN A.RateA ELSE A.RateB END
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("CASE WHEN A.Flag = 1 THEN A.RateA ELSE A.RateB END", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_IsNullOverAColumn_IsCarriedWithTheWrapperInTheTargetCell()
+        {
+            // 감쌈이 벗겨져 갈래가 정해지지만, 대상 칸에는 **감싼 원문**이 실린다.
+            // 확정 문장은 그대로 참이다 - 행이 0이면 대입 자체가 없으므로 ISNULL 이
+            // 돌 자리가 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(A.Rate, 0)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("ISNULL(A.Rate, 0)", fact.Expression);
+            Assert.Contains("대입 자체가 일어나지 않습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IifWithANonColumnBranch_StaysSilent()
+        {
+            // 한 분기가 리터럴이면 담지 않는다. 거짓 행보다 없는 행이 낫다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, A.RateA, 0)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingAnAggregate_StaysSilentHereAndBelongsToTheAggregateSide()
+        {
+            // 두 갈래는 배타적이다. 벗긴 안쪽이 집계면 집계 추출기가 가져간다 -
+            // 집계는 잎이 아니므로 TryColumnBranches 에 걸리지 않는 것이 그 기전이다.
+            // 이 문장이 어느 표에도 안 실리던 것이 UP_UTIL_SETTLE_PROC_ETC 🟠 이었다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(SUM(A.CLTotal), 0)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {
@@ -424,12 +526,29 @@ END";
             // (2) NULL확정이면 그 앞에 같은 변수 대입이 정말 없는지 확인한 뒤 적었다.
             // 코퍼스가 없으면 건너뜀으로 표시된다(CorpusSkip.Reason).
             //
+            // [2026-09-06 감쌈 벗기기] 우변 가드가 "맨 컬럼"에서 "감쌈을 한 겹 벗긴 뒤
+            // 전부 컬럼인 분기식"으로 넓어져 36행에서 43행으로 늘었다. 늘어난 7행은
+            // 전부 원본을 열어 (1) 대상 칸이 원문 그대로인지 (2) 그 SELECT에 FROM이
+            // 있고 집계가 없는지 (3) NULL확정이면 그 앞에 같은 변수 대입이 정말 없는지
+            // 확인했다 - UF_GET_COMM4CLIENT:40·54·70(IIF, 신용카드 수수료율 분기),
+            // UF_GET_COMM4CLIENT4PARTIALCANCEL:43·58(IIF, 축 A 🔴 #1),
+            // UF_Get_ExtraCardCommissionAmt:40·41(ISNULL(컬럼, 리터럴)).
+            //
+            // 힌트로 지목됐던 감쌈 자리 다섯은 실측으로 **기각**됐다 - 하나라도 걸리면
+            // 거짓 행이 되므로 침묵이 옳다.
+            // - UF_GET_COMM4PG4INTEREST:42·UF_GET_COMM4CLIENT4INTEREST:35 - CASE의
+            //   ELSE가 리터럴 0이고, 그마저 최상위가 `CASE ... END / 100.0`(이항식)이라
+            //   감쌈 벗기기 대상 자체가 아니다.
+            // - UF_GET_EXTRACOMM4CLIENT:41·53·66·UF_Get_ExtraCardCommissionAmt:42·47 -
+            //   ISNULL(CASE ...)의 안쪽 CASE가 두 컬럼의 차(`A - B`)를 THEN에 두거나
+            //   ELSE가 리터럴 0이라 "전부 컬럼"이 아니다.
+            //
             // 뒤의 두 단언이 이 회차가 더한 가드 둘의 분모다. CTE 문장이 0건이고 복합
-            // 대입 SelectSetVariable이 0건이라는 것이 곧 이 회차의 두 가드가 위 36행을
+            // 대입 SelectSetVariable이 0건이라는 것이 곧 이 회차의 두 가드가 위 43행을
             // 한 행도 줄이지 않았다는 증거다 - 분모가 0이 아닌 날이 오면 위 목록이
             // 줄어드는지 함께 드러난다.
             //
-            // 클래스 주석의 "FROM 가드 도입 전후 8행 동일"은 여기서 못박히지 않는다.
+            // 클래스 주석의 "FROM 가드 도입 전후 행이 같음"은 여기서 못박히지 않는다.
             // 그 가드의 분모(FROM 절이 집계를 품은 문장 수)는 세지 않으므로 이 테스트가
             // 붙드는 것은 도입 **후**의 행뿐이고, "전후 동일"은 단언 밖의 일회 실측으로
             // 남는다. 넓게 말하지 않으려고 적어 둔다.
@@ -446,7 +565,7 @@ END";
                 foreach (var fact in NonAggregateAssignmentExtractor.Extract(ddl))
                 {
                     var branch = fact.Sentence.Contains("NULL이 그대로 남습니다") ? "NULL확정" : "중립";
-                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Column} [{branch}]");
+                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Expression} [{branch}]");
                 }
 
                 var (cte, setVariable, compound) = CountGuardInputs(ddl);
@@ -458,22 +577,27 @@ END";
             Assert.Equal(
                 new[]
                 {
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:40 @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN(0,2), A.CommissionRate, A.FreeInterestInstCommRate) [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:41 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:42 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:43 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:44 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:54 @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate) [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:55 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:56 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:57 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:58 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:70 @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate) [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:71 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:72 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:73 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:74 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:43 @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate) [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:44 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:45 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:46 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:47 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:58 @v_intCommissionRate = IIF(@pi_intFreeInterestFlag IN(0,2), A.CommissionRate, A.FreeInterestInstCommRate) [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:59 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:60 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:61 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
@@ -486,6 +610,8 @@ END";
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:45 @v_intFreeInterestInstCommCode = FreeInterestInstCommCode [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG4INTEREST.Function:37 @v_intFreeInterestInstCommCode = FreeInterestInstCommCode [NULL확정]",
                     "SETTLE_CARD_DB/dbo.UF_GET_EXTRACOMM4CLIENT.Function:31 @v_intExtraType = ExtraType [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_Get_ExtraCardCommissionAmt.Function:40 @v_intCommissionRate = ISNULL(CommissionRate4, 0) [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_Get_ExtraCardCommissionAmt.Function:41 @v_intCommissionRate4Check = ISNULL(CheckCommissionRate4, 0) [NULL확정]",
                     "dbo.UF_GET_CLIENTSECTIONRATE.Function:14 @po_intAmt = SECTIONAMT [NULL확정]",
                     "dbo.UF_GET_COLLECTYMD.Function:29 @v_intCollectStandard = CollectStandard [NULL확정]",
                     "dbo.UF_GET_COLLECTYMD.Function:30 @v_intCollectType = CollectType [NULL확정]",
@@ -497,8 +623,8 @@ END";
                 },
                 collected.OrderBy(x => x, StringComparer.Ordinal).ToArray());
 
-            Assert.Equal(23, collected.Count(x => x.EndsWith("[NULL확정]", StringComparison.Ordinal)));
-            Assert.Equal(13, collected.Count(x => x.EndsWith("[중립]", StringComparison.Ordinal)));
+            Assert.Equal(27, collected.Count(x => x.EndsWith("[NULL확정]", StringComparison.Ordinal)));
+            Assert.Equal(16, collected.Count(x => x.EndsWith("[중립]", StringComparison.Ordinal)));
 
             Assert.Equal(0, cteNodes);
             Assert.Equal(68, setVariables);
