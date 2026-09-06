@@ -4002,6 +4002,83 @@ SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(
         // 감사 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다. 단계 검사로는
         // 잡을 수 없다 - 어느 단계가 첫 단계인지 단계 문서 하나만 봐서는 모른다.
         // 통합 문서는 계획서 전체를 보므로 여기서 닫는다.
+        // ─────────────────────────────────────────────────────────────────────
+        // D1 제어합계 생산자 — 2026-09-06 POQSettleBatch4 축 B 감사의 S16 🔴 둘째.
+        //
+        // 실물: S16 이 batch.BatchControlTotal 을 `AND StepCode <> N'S16'` 으로 읽어
+        // 「사전 단계가 적재한 제어합계」를 기대값으로 삼는데, 코퍼스 전체에서 그 표로
+        // 들어가는 INSERT 는 S16 자신 하나뿐이다. 그래서 Expected 가 **항상 공집합**이고
+        // `WHEN NOT EXISTS THEN 1` 이 무조건 통과한다 — 검증이 검증을 안 한다.
+        //
+        // [왜 아무도 못 잡았나] batch.BatchControlTotal 의 Origin 은 ProducerInsertsOnly 인데,
+        // 행 출처를 강제하는 세 자리가 전부 그 값을 `continue` 로 걸러낸다. 즉 이 부류의 표는
+        // **「누가 행을 만드는가」를 아무도 묻지 않는다.**
+        //
+        // [단계 검사로는 못 닫는다] 단계 문서 하나만 봐서는 다른 단계가 그 표에 넣는지 모른다.
+        // batch.BatchRun 의 행 생성을 문서 단위에서 닫은 것과 같은 이유다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateConsolidated_WhenSelfExcludingReadHasNoOtherProducer_IsReported()
+        {
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId
+   AND StepCode <> N'S16';
+
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+VALUES (@RunId, N'S16', N'TSettleMst_Sum_TXAMT', @v_actual, SYSUTCDATETIME());"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            // 결과의 내용으로 잠근다 — 표 이름과 제외된 단계 코드가 메시지에 있어야 한다.
+            var error = Assert.Single(result.Errors, e => e.Contains("제어합계"));
+            Assert.Contains("batch.BatchControlTotal", error);
+            Assert.Contains("S16", error);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenAnotherStepProducesTheControlTotal_StaysSilent()
+        {
+            // 음성 ①: 다른 단계가 적재하면 Expected 가 비지 않는다 — 침묵해야 한다.
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S05", @"
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+SELECT @RunId, N'S05', N'TSettleMst_Sum_TXAMT', SUM(TXAMT), SYSUTCDATETIME()
+  FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @p_ymd;"),
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId
+   AND StepCode <> N'S16';"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어합계"));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenReadDoesNotExcludeItself_StaysSilent()
+        {
+            // 음성 ②: 자기 제외가 없으면 자기가 적재한 행도 기대값에 들어온다 — 설계 선택이지
+            // 결함이 아니다. 이 방향을 잠그지 않으면 「생산자가 하나뿐」이라는 이유만으로
+            // 정상 문서를 고발하게 된다.
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId;
+
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+VALUES (@RunId, N'S16', N'TSettleMst_Sum_TXAMT', @v_actual, SYSUTCDATETIME());"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어합계"));
+        }
+
         [Fact]
         public void ValidateConsolidated_RejectsADocumentThatUpdatesBatchRunButNeverInsertsIt()
         {
@@ -4308,6 +4385,28 @@ WHERE RunId = @RunId;");
             var result = new MechanicalValidator().ValidateConsolidated(markdown);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        /// <summary>
+        /// 단계 절이 여럿인 조립본을 만든다. 실물 헤딩은 `### S01: …`·`### S02 | …`·`### S03. …`
+        /// 처럼 구분자가 갈리므로(코퍼스 실측) 검사도 테스트도 코드만 보고 자른다.
+        /// </summary>
+        private static string ConsolidatedDocumentWithSteps(params (string Code, string Sql)[] steps)
+        {
+            var body = new System.Text.StringBuilder();
+            body.AppendLine("## 통합 배치 아키텍처 개요\n\n내용.\n");
+            body.AppendLine("## Mermaid 기반 통합 흐름도\n\n```mermaid\nflowchart TD\nA[\"시작\"] --> B[\"끝\"]\n```\n");
+            body.AppendLine("## 단계별 이행 상세 및 의사코드\n");
+            foreach (var (code, sql) in steps)
+            {
+                body.AppendLine($"### {code}. 단계\n");
+                body.AppendLine("```sql");
+                body.AppendLine(sql.Trim());
+                body.AppendLine("```\n");
+            }
+            body.AppendLine("## 통합 데이터 정합성 검증 SQL 세트\n\n내용.\n");
+            body.AppendLine("## 운영 및 배포 고려사항\n\n내용.");
+            return body.ToString();
         }
 
         /// <summary>

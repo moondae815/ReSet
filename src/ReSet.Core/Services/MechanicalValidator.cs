@@ -272,6 +272,7 @@ namespace ReSet.Core.Services
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
                 CheckVerificationCartesianComparison(cleansed, result);
                 CheckBatchRunRowCreation(cleansed, result);
+                CheckControlTotalProducer(cleansed, result);
                 // 자기 try/catch로 감싼다 - 이 catch-all은 검사 하나가 던지면 Errors를
                 // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
                 // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
@@ -9214,6 +9215,125 @@ namespace ReSet.Core.Services
                     });
                 }
             }
+        }
+
+        /// <summary>
+        /// <see cref="ControlRowOrigin.ProducerInsertsOnly"/> 표를 <c>StepCode &lt;&gt; N'X'</c> 로
+        /// 읽는 자리가 있으면, 그 표에 행을 만드는 <b>X 아닌 다른 단계</b>가 최소 하나 있어야 한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 B 감사, S16 🔴]
+        /// S16 이 <c>batch.BatchControlTotal</c> 을 <c>AND StepCode &lt;&gt; N'S16'</c> 으로 읽어
+        /// 「사전 단계가 적재한 제어합계」를 기대값으로 삼는데, 그 표로 들어가는 INSERT 는
+        /// <b>S16 자신 하나뿐</b>이었다. 그래서 Expected 가 항상 공집합이고
+        /// <c>WHEN NOT EXISTS THEN 1</c> 이 무조건 통과한다 — 검증이 검증을 하지 않는다.
+        ///
+        /// [왜 아무도 못 잡았나] 행 출처를 강제하는 세 자리가 전부 <c>ProducerInsertsOnly</c> 를
+        /// <c>continue</c> 로 걸러낸다(<see cref="CheckFirstStepRowCreation"/> ·
+        /// <see cref="CheckBatchRunRowCreation"/> · <c>BatchControlContract.ResolveRowCreators</c>).
+        /// 즉 이 부류의 표는 <b>「누가 행을 만드는가」를 아무도 묻지 않았다.</b>
+        ///
+        /// [왜 문서 단위인가] 단계 문서 하나만 봐서는 다른 단계가 그 표에 넣는지 알 수 없다.
+        /// <c>batch.BatchRun</c> 의 행 생성을 문서 단위에서 닫은 것과 같은 이유다.
+        ///
+        /// [자기 제외가 없으면 발화하지 않는다] 자기 제외가 없는 읽기는 자기가 적재한 행도
+        /// 기대값에 담으므로 생산자가 하나뿐이어도 공집합이 되지 않는다. 그것은 설계 선택이지
+        /// 결함이 아니다 — <c>…WhenReadDoesNotExcludeItself…</c> 가 그 방향을 잠근다.
+        ///
+        /// [단계 절을 코드로 자르는 이유] 실물 헤딩은 <c>### S01: …</c>·<c>### S02 | …</c>·
+        /// <c>### S03. …</c> 처럼 구분자가 갈린다(코퍼스 실측). 그래서 코드만 보고 자르고,
+        /// 다음 <c>#</c>~<c>###</c> 헤딩에서 절을 닫는다 — 부록의 SQL 이 마지막 단계에
+        /// 딸려 붙지 않게 하려는 것이다(계획서 부록에 이 표로 넣는 SQL 이 실재하는데
+        /// 그것을 실행하는 단계는 어디에도 없다).
+        /// </summary>
+        private static void CheckControlTotalProducer(string markdown, ValidationResult result)
+        {
+            var sections = SplitStepSections(markdown);
+            if (sections.Count == 0) return;
+
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (table.Origin != ControlRowOrigin.ProducerInsertsOnly) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var fragment = QualifiedTableNameFragment(bare);
+
+                // 그 표를 읽으면서 자기 자신을 제외하는 단계를 모은다. 같은 펜스 안에서
+                // 표 참조와 제외 술어가 함께 있을 때만 그 표에 대한 제외로 본다 —
+                // 펜스를 건너 짝지으면 무관한 표의 제외를 이 표에 귀속시킨다.
+                foreach (var (code, body) in sections)
+                {
+                    // [정화본을 쓰지 않는다 - 이 검사가 찾는 것이 문자열 리터럴이다]
+                    // CleanedSqlFences 는 BlankCommentsAndStrings 로 주석과 **문자열**을 지운다.
+                    // 그러면 N'S16' 이 통째로 사라져 이 검사는 영영 발화하지 못한다.
+                    // 실제로 처음 구현이 그 함정에 빠졌고, 같은 기전이 CheckShadowBackupContract
+                    // 를 죽여 놓은 것을 축 B 분류가 이미 짚었다(규약이 런타임 조립을 의무화하는데
+                    // 인식 패턴은 리터럴만 안다). 여기서는 원문 펜스를 본다 — 표 참조와 제외
+                    // 술어가 **같은 펜스** 안에 함께 있을 것을 요구해 주석 오탐을 좁힌다.
+                    var excludesItself = false;
+                    foreach (Match fence in Regex.Matches(
+                        body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                    {
+                        var sql = fence.Groups["sql"].Value;
+                        if (!Regex.IsMatch(sql, $@"\b{fragment}", RegexOptions.IgnoreCase)) continue;
+                        if (Regex.IsMatch(
+                                sql,
+                                $@"StepCode\s*(<>|!=)\s*N?'{Regex.Escape(code)}'",
+                                RegexOptions.IgnoreCase))
+                        {
+                            excludesItself = true;
+                            break;
+                        }
+                    }
+
+                    if (!excludesItself) continue;
+
+                    var otherProducer = sections
+                        .Where(s => !string.Equals(s.Code, code, StringComparison.OrdinalIgnoreCase))
+                        .Any(s => CreatesRowIn(s.Body, bare));
+                    if (otherProducer) continue;
+
+                    result.Errors.Add(
+                        $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
+                        + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
+                        + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
+                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 조립본을 단계 절로 자른다. 헤딩의 구분자가 Job 마다 갈리므로(<c>S01:</c>·<c>S02 |</c>·
+        /// <c>S03.</c>) 코드만 보고 열고, 다음 <c>#</c>~<c>###</c> 헤딩에서 닫는다.
+        /// </summary>
+        private static IReadOnlyList<(string Code, string Body)> SplitStepSections(string markdown)
+        {
+            var sections = new List<(string, string)>();
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            string? current = null;
+            var body = new StringBuilder();
+
+            foreach (var line in lines)
+            {
+                var heading = Regex.Match(line, @"^#{1,3}\s");
+                if (heading.Success)
+                {
+                    if (current != null)
+                    {
+                        sections.Add((current, body.ToString()));
+                        body.Clear();
+                        current = null;
+                    }
+
+                    var step = Regex.Match(line, @"^###\s*(?<code>S\d{2})\b");
+                    if (step.Success) current = step.Groups["code"].Value;
+                    continue;
+                }
+
+                if (current != null) body.AppendLine(line);
+            }
+
+            if (current != null) sections.Add((current, body.ToString()));
+            return sections;
         }
 
         /// <summary>
