@@ -303,7 +303,12 @@ ReSet/
             "z-ai/glm-5.3": { "Order": [ "z-ai" ] },  // 서빙하는 곳이 본사 하나뿐입니다
             "deepseek/deepseek-v4-pro-0813": { "Order": [ "gmicloud", "deepseek" ] },
             "z-ai/glm-5.3-flash": { "Order": [ "novita", "z-ai" ] },
-            "deepseek/deepseek-v4-flash-0731": { "Order": [ "streamlake", "deepinfra" ] }
+            "deepseek/deepseek-v4-flash-0731": { "Order": [ "streamlake", "deepinfra" ] },
+            // 서빙하는 곳이 Tencent 하나뿐입니다(실측 2026-09-06, /endpoints 응답 1건:
+            // fp8 · ctx 1,048,576 · 입력 $0.834/M · 출력 $2.501/M · 캐시읽기 $0.042/M ·
+            // 30분 가동률 100%). input_cache_write 단가가 없어 명시적 캐시 쓰기는
+            // 걸리지 않으므로, 이 항목이 사는 것은 캐시가 아니라 404 회피와 양자화 고정입니다.
+            "tencent/hy4-preview": { "Order": [ "tencent" ] }
           }
         }
       },
