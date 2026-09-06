@@ -46,12 +46,20 @@ namespace ReSet.Core.Services
                 .ToList();
 
             // 2. EXEC로 묶인 무리 - 한 단계에 함께 놓는다고 말할 수 있다.
+            //
+            // [왜 마지막 점 구획으로 대조하는가] EXEC 대상은 스키마를 붙여
+            // (`EXEC dbo.X`) 쓸 수도, 안 붙여(`EXEC X`) 쓸 수도 있다. 대상 이름의
+            // 부분 문자열(EndsWith)로 대조하면 "EXEC Ins"가 이름이 우연히 "Ins"로
+            // 끝나는 dbo.BulkIns를 끌어들이는 오탐이 생긴다(2026-09-06 리뷰 재현).
+            // Normalize는 이미 스키마·대괄호를 벗기고 마지막 구획만 남기므로, 두
+            // 자리(대상 판별·무리 구성) 모두 이 함수 하나만 거치게 해 판정이
+            // 갈리지 않게 한다.
             var callers = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var source in sources)
             {
                 var callees = ExecTargets(source.DdlText)
-                    .Where(c => sources.Any(s => s.Label.EndsWith(c, StringComparison.OrdinalIgnoreCase)
-                                                  || string.Equals(s.Label, c, StringComparison.OrdinalIgnoreCase)))
+                    .Where(c => sources.Any(s =>
+                        string.Equals(Normalize(s.Label), Normalize(c), StringComparison.OrdinalIgnoreCase)))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 if (callees.Count > 0)
                 {
@@ -59,22 +67,40 @@ namespace ReSet.Core.Services
                 }
             }
 
-            var execGroups = new List<List<string>>();
+            var rawExecGroups = new List<List<string>>();
             foreach (var (caller, callees) in callers)
             {
                 var group = new List<string> { caller };
                 group.AddRange(sources
                     .Select(s => s.Label)
                     .Where(label => callees.Any(c =>
-                        label.EndsWith(c, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(label, c, StringComparison.OrdinalIgnoreCase))));
-                execGroups.Add(group.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+                        string.Equals(Normalize(label), Normalize(c), StringComparison.OrdinalIgnoreCase))));
+                rawExecGroups.Add(group.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
             }
 
+            // 3. 이미 자리 잡은 SP는 뒤 구획에서 뺀다 - 명부의 한 SP는 정확히
+            // 한 번만 나와야 SettlementRosterReconciler의 ProcedureDuplicated를
+            // 만들지 않는다. 우선순위는 선행 적재 → 호출 무리 → 순서 미상이다:
+            // 앞 둘은 기계가 근거(쓰기→읽기, EXEC)를 대는 확정 판정이고 순서
+            // 미상은 그 무엇도 확정하지 못한 잔여이므로, 확정 판정이 항상
+            // 잔여보다 우선한다. 이 방향을 지키지 않으면(예: 순서 미상이 먼저
+            // 자리를 차지) 기계가 아는 것이 사람에게 안 보이게 된다.
             var placed = new HashSet<string>(producers, StringComparer.OrdinalIgnoreCase);
-            foreach (var label in execGroups.SelectMany(g => g))
+            var execGroups = new List<List<string>>();
+            foreach (var group in rawExecGroups)
             {
-                placed.Add(label);
+                var remaining = group.Where(label => !placed.Contains(label)).ToList();
+                if (remaining.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var label in remaining)
+                {
+                    placed.Add(label);
+                }
+
+                execGroups.Add(remaining);
             }
 
             var unknown = sources.Select(s => s.Label).Where(l => !placed.Contains(l)).ToList();
