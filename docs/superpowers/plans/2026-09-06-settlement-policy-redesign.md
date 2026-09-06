@@ -3405,6 +3405,7 @@ Expected: `GenerateSettlementPolicyRulebookAsync`를 부르던 자리
   - `public sealed class PolicyRosterBlockedException : Exception` — `IReadOnlyList<RosterDefect> Defects`, `string RosterPath`
   - `public static string PolicyReportBanner.Build(IReadOnlyList<PolicyDefect> defects, int translated, int unmatched, int skippedShort, bool profilingRan)`
   - `public const int SettlementPolicyService.StageSpecCharWarningThreshold = 120_000`
+  - **단계 초안의 귀속 검증에는 그 단계의 헤딩 하나만 넘겨라.** 전체 목록을 넘기면 형제 단계가 전부 `StageMissing` 으로 잡혀 모든 단계가 교정 재호출을 타고, 본문이 엉뚱한 자리로 간다. **그리고 그 사고는 배너의 결함 메시지가 헤딩 문자열을 인용하기 때문에 `Assert.Contains(heading, document)` 류의 존재 검사로는 안 잡힌다** — 파서 결과로 재라.
   - **단계 번호는 반드시 `PolicySectionContract.EffectiveStageNumber(stage.Title, i)` 로만 구하라.** 이 폴백을 손수 다시 쓰면(`... is var n and > 0 ? n : i + 1`) 파서·검증기와 갈라진다 — 실제로 그 갈라짐이 있었고 번호 없는 단계 제목에서 옳은 `S1-01` 이 `S0-` 를 기대받아 오탐으로 고발됐다(2026-09-06, T7 리뷰).
   - `Task<PolicyDerivationOutcome> ISettlementPolicyService.GenerateAsync(string outputRoot, ICodeTableProfiler? profiler, string? effort, CancellationToken cancellationToken = default)`
   - `public static string PolicyDocumentAssembler.Assemble(string overview, IReadOnlyList<string> stageBodies, SettlementCodebook codebook, SettlementProcessRoster roster)`
@@ -3942,8 +3943,15 @@ namespace ReSet.Core.Services
                     .Where(e => e.Procedures.Any(p => stage.Procedures.Contains(p, StringComparer.OrdinalIgnoreCase)))
                     .ToList();
 
+                // [단일 헤딩만 넘긴다] 이 시점의 draft 는 이 단계의 H2 하나만 담는다.
+                // 전체 stageHeadings 를 넘기면 아직 쓰이지 않은 형제 단계가 전부
+                // StageMissing 으로 잡혀 **모든 단계가 무조건 교정 재호출을 타고**,
+                // 「결함 수가 같으면 재호출 결과를 택한다」는 규칙과 맞물려 다른 단계의
+                // 본문이 엉뚱한 자리를 차지한다(2026-09-06 T10 구현 중 재현).
+                // 단계 완전성은 조립된 전체 문서에 대해 6단계에서 한 번만 본다.
                 var body = await GenerateStageWithOneRepairAsync(
-                    stageNumber, stage, stageSources, stageCodeValues, stageHeadings, specsByLabel,
+                    stageNumber, stage, stageSources, stageCodeValues,
+                    new[] { stageHeadings[i] }, specsByLabel,
                     effort, cancellationToken);
 
                 stageBodies.Add(body);
@@ -4012,7 +4020,7 @@ namespace ReSet.Core.Services
             PolicyStage stage,
             IReadOnlyList<(string Label, string SpecMarkdown)> stageSources,
             IReadOnlyList<CodebookEntry> stageCodeValues,
-            IReadOnlyList<string> stageHeadings,
+            IReadOnlyList<string> stageHeadings,   // ← 이 단계의 헤딩 하나만. 위 주석 참고
             IReadOnlyDictionary<string, string> specsByLabel,
             string? effort,
             CancellationToken cancellationToken)
