@@ -49,7 +49,8 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
         Jobs/[Job]/coverage/CoverageMap.html
         [Procedures|Functions]/[객체]/docs/CoverageMap.html
 그 외    logs/  cleansing/  .sp_cache_index.json  offline_snapshot.json
-         [Job이름_]Settlement_Policy_Rulebook.md
+         settlement-process.md (사람 소유 입력)  Policy/SettlementPolicy.md
+         Policy/settlement-codebook.json  Policy/steps/
 ```
 
 두 개의 CLI가 이 계층을 나눠 갖는다. **분석기(`ReSet.Cli`)가 ①~③과 ④의 기동**을,
@@ -302,7 +303,10 @@ Job 이름으로 짝지어 찾는다 — 이 디렉터리 바로 아래가 `[Job
 |---|---|---|---|
 | `logs/reset-YYYYMMDD.log` | 📋 Serilog | 분석기 실행 내내 | 실행 로그. 일별로 갈리며 기본 31개까지 보관 |
 | `logs/reset-validator-YYYYMMDD.log` | 📋 Serilog | 검증기 실행 내내 | 검증기 로그. 분석기와 섞이지 않게 파일명을 분리 |
-| `[Job이름_]Settlement_Policy_Rulebook.md` | 🤖 AI | `--policy` 배치 실행 시 | 여러 SP를 가로질러 뽑은 **정산 정책 룰북.** 계층 ①~④와 무관한 독립 실행이며, SP 단위 계획서처럼 **L1도 L2도 거치지 않아** 헤더에 "검증 없음"이 박힌다 |
+| `Policy/SettlementPolicy.md` | 🤖 AI | `--policy` 배치 실행 또는 TUI 메뉴 `4` | 명세서 코퍼스와 정산 프로세스 명부에서 뽑은 **정산 정책서.** 계층 ①~④와 무관한 독립 실행이며, SP 단위 계획서처럼 **L1도 L2도 거치지 않아** 헤더에 "검증 없음"이 박힌다 |
+| `Policy/settlement-codebook.json` | ⚙️ 결정적 조립(+ DB 연결 시 🗄 DB 조회) | `Policy/SettlementPolicy.md`와 같은 실행 | **코드값 사전.** 좌변(코드 상수)은 DDL에서 오프라인으로 뽑고, 우변(업무 의미)은 DB 연결이 있을 때만 마스터 데이터에서 채운다 |
+| `Policy/steps/*.md` | 🤖 AI | 같은 실행 | 단계별 정책 본문의 **조립 전 원본.** 최종 `SettlementPolicy.md`는 이 조각들을 명부·사전 순서대로 기계적으로 이어 붙인 것이다 |
+| `settlement-process.md` | 🧑 사람 (초안만 ⚙️ 도구) | 명부가 없을 때 최초 실행에서 초안 생성, 그 뒤로는 사람이 직접 편집 | **정산 업무 순서를 정하는 명부.** `output/`의 다른 파일과 달리 재생성 가능한 파생물이 아니라 **사람이 소유하는 입력**이다 — 도구는 파일이 이미 있으면 절대 덮어쓰지 않는다 |
 | `cleansing/[대상]_MetadataCleansing.sql` | 🤖 AI | 메타데이터 결손 발견 시 | AI가 제안한 **DB 메타데이터 보정 SQL.** 자동 실행하지 않고 파일로만 남긴다 — DB를 바꾸는 일은 사람이 읽고 결정할 몫이므로 |
 | `.sp_cache_index.json` | ⚙️ 해시 계산 | 분석 성공 시 | SP 본문과 의존성의 해시로 **재분석을 건너뛰기 위한 색인.** 캐시를 통째로 버리려면 이 파일만 지우면 된다 |
 | `offline_snapshot.json` | 🗄 DB 조회 덤프 | 명시적으로 요청할 때만 | **DB 연결 없이 구동하기 위한 스냅샷.** 운영 DB에 접근할 수 없는 자리에서 시연·재현할 때 쓴다 |
