@@ -33,6 +33,8 @@ namespace ReSet.Core.Services
         Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default);
         Task<AiResult> GenerateSettlementPolicyRulebookAsync(System.Collections.Generic.List<SpDefinition> spDefs, string profilingDataJson, CancellationToken cancellationToken = default);
         Task<AiResult> GeneratePrdFromSpecAsync(string objectLabel, string specMarkdown, string? attributionFeedback = null, string? effort = null, CancellationToken cancellationToken = default);
+        Task<AiResult> GeneratePolicyStageAsync(int stageNumber, string stageTitle, System.Collections.Generic.IReadOnlyList<(string Label, string SpecMarkdown)> sources, System.Collections.Generic.IReadOnlyList<CodebookEntry> codeValues, string? attributionFeedback = null, string? effort = null, CancellationToken cancellationToken = default);
+        Task<AiResult> GeneratePolicyOverviewAsync(System.Collections.Generic.IReadOnlyList<string> stageTitles, string assembledStages, string? effort = null, CancellationToken cancellationToken = default);
     }
 
     public class ReviewResult

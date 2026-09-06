@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -4941,6 +4942,141 @@ Your ONLY source is the Korean specification document supplied by the user. You 
 
             Log.Information("AI 요구사항 문서 도출 완료 - 응답 길이: {Length}", aiResult.Content?.Length ?? 0);
 
+            return aiResult;
+        }
+
+        /// <summary>
+        /// 한 단계의 업무 규칙을 서술한다.
+        ///
+        /// [왜 단계마다 나눠 부르는가] 명세서 14편의 합계가 421,121자(약 19만 토큰)다.
+        /// 단발 호출은 넣더라도 그 분량을 한 번에 요약하라는 요청이 되어 품질이 무너진다.
+        ///
+        /// [왜 코드값을 프롬프트가 정하는가] 사전에 있는 번역만 실려야 완성된 문서를
+        /// 사전과 대조할 수 있다. 모델이 코드값을 지어내면 PolicyDocumentChecks가
+        /// 잡지만, 애초에 지어낼 여지를 주지 않는 편이 재호출을 줄인다.
+        /// </summary>
+        public async Task<AiResult> GeneratePolicyStageAsync(
+            int stageNumber,
+            string stageTitle,
+            IReadOnlyList<(string Label, string SpecMarkdown)> sources,
+            IReadOnlyList<CodebookEntry> codeValues,
+            string? attributionFeedback = null,
+            string? effort = null,
+            CancellationToken cancellationToken = default)
+        {
+            var idPrefix = PolicySectionContract.IdPrefixFor(stageNumber);
+
+            var systemPrompt = $@"You are a business analyst writing a settlement operations handover document for staff who do NOT know the legacy system.
+Your ONLY source is the Korean specification documents supplied by the user. You have no access to the original SQL.
+
+[Absolute rules]
+1. Write in Korean. Output exactly one H2 section titled `## {stageNumber}. {stageTitle}` and nothing else — no preamble, no closing summary, no other headings.
+2. Open with 2 to 4 sentences of prose explaining what this stage does in BUSINESS terms. Then one markdown table.
+3. The table header row MUST be exactly:
+   {PolicySectionContract.TableHeader}
+   followed by the separator row:
+   {PolicySectionContract.TableSeparator}
+4. Rule IDs are `{idPrefix}-<two digits>`, numbered from 01.
+5. `업무 규칙` is one sentence in business language. NEVER describe SQL, joins, table names, or control flow — the reader does not know them.
+6. `근거` MUST be `<procedure> {PolicySectionContract.LabelSeparator}## <specification heading> > ""<verbatim excerpt>""`.
+   The procedure must be one of the identifiers listed under [Source specifications].
+   The excerpt MUST appear verbatim inside that heading's section of THAT procedure's specification.
+   If the excerpt contains a `|` character — specification facts often live in markdown tables — write each one as `\|`.
+7. `코드값` MUST be either `{PolicySectionContract.NoCodeValue}` or one or more values taken VERBATIM from [Code values]. Never invent a code value and never invent its meaning.
+8. Every procedure listed under [Source specifications] MUST be the 근거 of at least one rule.
+9. Do not include Mermaid diagrams. Do not wrap the response in a markdown code block.";
+
+            var userPrompt = new StringBuilder();
+            userPrompt.AppendLine("[Source specifications — the only source of truth]");
+            foreach (var (label, spec) in sources)
+            {
+                userPrompt.AppendLine($"### {label}");
+                userPrompt.AppendLine(spec);
+                userPrompt.AppendLine();
+            }
+
+            userPrompt.AppendLine("[Code values — use only these, verbatim]");
+            if (codeValues.Count == 0)
+            {
+                userPrompt.AppendLine("(없음)");
+            }
+            else
+            {
+                foreach (var entry in codeValues)
+                {
+                    if (entry.Matches.Count == 0)
+                    {
+                        userPrompt.AppendLine($"- `{entry.Value}` : 의미 미상 (마스터 데이터에서 찾지 못함)");
+                        continue;
+                    }
+
+                    foreach (var match in entry.Matches)
+                    {
+                        var row = string.Join(", ", match.Row.Select(kv => $"{kv.Key}={kv.Value}"));
+                        userPrompt.AppendLine($"- `{entry.Value}` : {match.Table} → {row}");
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(attributionFeedback))
+            {
+                userPrompt.AppendLine();
+                userPrompt.AppendLine("[Attribution check feedback — the previous draft failed these]");
+                userPrompt.AppendLine(attributionFeedback);
+            }
+
+            Log.Information("AI 정책 단계 서술 요청 - 단계 {Stage}: {Title}", stageNumber, stageTitle);
+
+            var aiResult = await _aiClient.ChatAsync(
+                systemPrompt, userPrompt.ToString(), _temperature,
+                effort: effort, cancellationToken: cancellationToken) ?? new AiResult();
+
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
+            return aiResult;
+        }
+
+        /// <summary>
+        /// 조립된 단계들 위에 얹을 전체 개요를 쓴다.
+        ///
+        /// 목차는 이미 사람이 명부에 정했고 기계가 조립했다. 여기서 AI가 하는 일은
+        /// 「이 정산 업무 전체가 무엇인가」를 산문으로 여는 것뿐이며, 새 사실을
+        /// 만들지 않는다.
+        /// </summary>
+        public async Task<AiResult> GeneratePolicyOverviewAsync(
+            IReadOnlyList<string> stageTitles,
+            string assembledStages,
+            string? effort = null,
+            CancellationToken cancellationToken = default)
+        {
+            var systemPrompt = @"You are a business analyst writing the opening overview of a settlement operations handover document.
+
+[Absolute rules]
+1. Write in Korean. Output exactly one H2 section titled `## 정산 업무 개요` and nothing else.
+2. Explain, in 3 to 6 short paragraphs, what this settlement process does as a whole and how the stages relate in business terms.
+3. State ONLY what the supplied stage bodies already say. Do not introduce facts that are not there.
+4. Do not restate the stage list as a bullet list — the document already has a table of contents.
+5. Do not include Mermaid diagrams. Do not wrap the response in a markdown code block.";
+
+            var userPrompt = new StringBuilder();
+            userPrompt.AppendLine("[Stages in order]");
+            foreach (var title in stageTitles)
+            {
+                userPrompt.AppendLine($"- {title}");
+            }
+
+            userPrompt.AppendLine();
+            userPrompt.AppendLine("[Assembled stage bodies]");
+            userPrompt.AppendLine(assembledStages);
+
+            Log.Information("AI 정책 개요 서술 요청 - 단계 {Count}개", stageTitles.Count);
+
+            var aiResult = await _aiClient.ChatAsync(
+                systemPrompt, userPrompt.ToString(), _temperature,
+                effort: effort, cancellationToken: cancellationToken) ?? new AiResult();
+
+            aiResult.SystemPrompt = systemPrompt;
+            aiResult.UserPrompt = userPrompt.ToString();
             return aiResult;
         }
     }
