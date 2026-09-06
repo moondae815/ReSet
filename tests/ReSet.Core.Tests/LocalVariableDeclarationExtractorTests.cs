@@ -111,4 +111,61 @@ END";
                 LocalVariableDeclarationExtractor.TableHeading);
         }
     }
+
+    public class LocalVariableDeclarationExtractorConstantsTests
+    {
+        // COMM_UPD 실물의 모양이다 - 상수 하나, 초기값 없는 것 하나,
+        // SET 으로 재대입되는 누산기 하나, SELECT 로 재대입되는 것 하나.
+        private const string Ddl = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    DECLARE @v_valIncVat DECIMAL(2,1) = 1.1;
+    DECLARE @v_cnt INT;
+    DECLARE @v_acc MONEY = 0;
+    DECLARE @v_rate DECIMAL(5,2) = 1.25;
+    SET @v_acc = @v_acc + 1;
+    SELECT @v_rate = 2.5;
+    UPDATE dbo.T SET Amt = CAST(Amt / @v_valIncVat AS INT);
+END";
+
+        [Fact]
+        public void ExtractConstants_KeepsOnlyInitializedAndNeverReassigned()
+        {
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants(Ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("@v_valIncVat", fact.Name);
+            Assert.Equal("DECIMAL(2,1)", fact.DataType, ignoreCase: true);
+            Assert.Equal("1.1", fact.InitialValue);
+        }
+
+        [Fact]
+        public void ExtractConstants_ExcludesVariableReassignedBySelect()
+        {
+            // SetAssignmentExtractor 는 SetVariableStatement 만 본다 - 그것을 그대로
+            // 재사용하면 이 변수가 상수로 분류돼 오탐이 된다.
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants(Ddl);
+
+            Assert.DoesNotContain(facts, f => f.Name == "@v_rate");
+        }
+
+        [Fact]
+        public void ExtractConstants_ExcludesProcedureParameters()
+        {
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants(
+                "CREATE PROCEDURE dbo.UP_TEST @pi_rate DECIMAL(2,1) = 1.1 AS BEGIN SELECT 1; END");
+
+            Assert.Empty(facts);
+        }
+
+        [Fact]
+        public void ExtractConstants_OnUnparsableDdl_IsEmptyNotPartial()
+        {
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants("CREATE PROCEDURE (((");
+
+            Assert.Empty(facts);
+        }
+    }
 }

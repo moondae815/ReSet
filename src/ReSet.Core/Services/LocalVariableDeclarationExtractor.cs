@@ -92,6 +92,73 @@ namespace ReSet.Core.Services
             return visitor.Facts;
         }
 
+        /// <summary>
+        /// 「상수 초기화이면서 `DECLARE` 이후 한 번도 재대입되지 않는」 지역 변수만 낸다.
+        ///
+        /// [왜 별도 메서드인가] <see cref="Extract"/>의 결과는 「선언된 것 전부」다.
+        /// 타입 계약이 드라이버로 새는지를 판정하려면 「값이 컴파일 시점에 확정된 것」만
+        /// 봐야 한다 - 런타임에 값이 정해지는 변수는 애초에 바인딩이 옳을 수 있다.
+        ///
+        /// [왜 SetAssignmentExtractor를 안 쓰는가] 그 추출기는
+        /// `Visit(SetVariableStatement)`만 갖고 있어 `SELECT @x = …`를 보지 못한다
+        /// (실측). 재대입을 놓치면 누산기가 상수로 분류돼 오탐이 된다.
+        ///
+        /// [같은 파스를 쓴다] 선언과 재대입을 서로 다른 파스로 재면 한쪽이 조용히
+        /// 낡는다 - 이 저장소가 오라클 드리프트로 반복해 물린 자리다.
+        /// </summary>
+        public static IReadOnlyList<LocalVariableDeclarationFact> ExtractConstants(string? ddlText)
+        {
+            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LocalVariableDeclarationFact>();
+
+            TSqlFragment? fragment;
+            try
+            {
+                var parser = new TSql160Parser(true);
+                using var reader = new StringReader(ddlText);
+                fragment = parser.Parse(reader, out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0))
+                {
+                    return Array.Empty<LocalVariableDeclarationFact>();
+                }
+            }
+            catch (Exception)
+            {
+                return Array.Empty<LocalVariableDeclarationFact>();
+            }
+
+            var declarations = new DeclarationVisitor();
+            fragment.Accept(declarations);
+
+            var reassigned = new ReassignmentVisitor();
+            fragment.Accept(reassigned);
+
+            return declarations.Facts
+                .Where(f => !string.IsNullOrWhiteSpace(f.InitialValue))
+                .Where(f => !reassigned.Names.Contains(f.Name))
+                .ToList();
+        }
+
+        /// <summary>
+        /// `SET @x = …`와 `SELECT @x = …` 양쪽을 본다. 한쪽만 보면 누산기가 상수로
+        /// 분류된다.
+        /// </summary>
+        private sealed class ReassignmentVisitor : TSqlFragmentVisitor
+        {
+            public HashSet<string> Names { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public override void Visit(SetVariableStatement node)
+            {
+                var name = node.Variable?.Name;
+                if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+            }
+
+            public override void Visit(SelectSetVariable node)
+            {
+                var name = node.Variable?.Name;
+                if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+            }
+        }
+
         private sealed class DeclarationVisitor : TSqlFragmentVisitor
         {
             private readonly HashSet<string> _seen = new(StringComparer.OrdinalIgnoreCase);
