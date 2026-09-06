@@ -1897,7 +1897,7 @@ END CATCH");
 
             // 블록 개수 자체를 못박는다 - Few-Shot이 늘거나 줄면 아래 인덱스별
             // TargetTables 매핑도 같이 검토해야 한다는 신호다.
-            Assert.Equal(4, blocks.Count);
+            Assert.Equal(5, blocks.Count);
 
             var targetTablesByBlock = new[]
             {
@@ -1905,6 +1905,13 @@ END CATCH");
                 new[] { "TargetTable" },     // 1: Chunking Pattern
                 new[] { "dbo.TargetTable" }, // 2: Shadow Table Restore in CATCH block
                 new[] { "TargetTable" },     // 3: INSERT-only Compensation
+                // 4: Legacy Local Variable Pattern (rule 5-1). 이 블록의 유일한 DML이
+                // `UPDATE dbo.TargetTable`이라 스키마까지 붙여 적는다 - 매핑은 블록이
+                // 실제로 쓴 철자를 그대로 따른다(0·2는 `dbo.` 있음, 1·3은 없음).
+                // 실측: L1의 대상 테이블 검사는 섹션 본문 부분 문자열 대조라 `TargetTable`
+                // 로 적어도 통과한다. 그래도 무해한 값이 아니다 - 엉뚱한 이름을 넣으면
+                // 실패하므로, 이 자리는 블록이 정말 그 테이블을 건드리는지를 잠근다.
+                new[] { "dbo.TargetTable" },
             };
 
             for (var i = 0; i < blocks.Count; i++)

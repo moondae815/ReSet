@@ -15,22 +15,39 @@ namespace ReSet.Core.Tests
     /// [리플렉션이 무엇에 닿는가] 규칙 목록과 Few-Shot 절은 둘 다
     /// AiService 의 private const 인 ConsolidatedPlanRules 안에 있고,
     /// GenerateBatchStepSectionAsync 가 그것을 시스템 프롬프트 꼬리에 그대로
-    /// 붙인다. const 는 IsLiteral 이라 아래 훑기가 실제 배송 텍스트에 닿는다.
+    /// 붙인다. 그래서 아래 PromptText()는 그 필드 **하나만** 읽는다.
     /// </summary>
     public class BatchStepPromptContractTests
     {
+        /// <summary>
+        /// 배치 스텝 프롬프트가 실제로 싣는 텍스트 하나만 읽는다.
+        ///
+        /// [왜 좁혔나] 처음에는 AiService의 const 문자열을 전부 이어 붙였다. 그러면
+        /// 규칙 5-1이 배치 스텝 프롬프트가 **아닌** 다른 const로 옮겨져도 초록이다 -
+        /// 통과하지만 아무것도 안 잠그는 검사가 된다. 실측으로 확인했다: 규칙을 다른
+        /// const로 옮긴 뮤턴트에서 넓은 판은 초록, 이 좁은 판은 빨강이었다.
+        ///
+        /// 필드를 못 찾으면 **실패한다.** 조용히 빈 문자열을 돌려주면 이름이 바뀐
+        /// 순간 세 테스트가 전부 초록인 채로 아무것도 안 잠근다.
+        /// </summary>
         private static string PromptText()
         {
-            // 프롬프트 상수는 private이다. 리플렉션으로 전부 이어 붙여 본다 -
-            // 이 저장소가 제품 필드를 리플렉션으로 읽는 관례를 따른다.
-            var sb = new System.Text.StringBuilder();
-            foreach (var f in typeof(AiService).GetFields(
-                         BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Public))
-            {
-                if (f.FieldType == typeof(string) && f.IsLiteral)
-                    sb.AppendLine((string?)f.GetRawConstantValue() ?? string.Empty);
-            }
-            return sb.ToString();
+            var field = typeof(AiService).GetField(
+                "ConsolidatedPlanRules",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            Assert.True(
+                field is not null,
+                "AiService.ConsolidatedPlanRules 를 찾지 못했습니다. 이름이 바뀌었다면 " +
+                "이 테스트가 잠그는 대상도 같이 옮겨졌는지 확인하십시오.");
+
+            var text = field!.GetValue(null) as string;
+
+            Assert.False(
+                string.IsNullOrWhiteSpace(text),
+                "AiService.ConsolidatedPlanRules 가 비어 있습니다.");
+
+            return text!;
         }
 
         [Fact]
