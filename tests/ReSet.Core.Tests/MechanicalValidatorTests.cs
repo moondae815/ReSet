@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -9851,6 +9853,193 @@ END";
 
             Assert.Contains(result.Errors, e => e.Contains("@v_currentStepId") && e.Contains("4000"));
             Assert.DoesNotContain(result.Errors, e => e.Contains("성공 코드일 수도 있습니다"));
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // T02 Task 3(독립판, 2026-09-06) - 명부에 있는 SP 에서 지역 변수 기계 표가
+        // 사라지면 발화한다. Task 1·2(초기값·타입 보존 검사)는 코퍼스 실측에서
+        // 오탐 18 대 진짜 2 로 되돌려졌고, `7845ab36` 위에 이 검사만 혼자 선다.
+        //
+        // ⓓⓔ는 반드시 함께 간다 - ⓓ(명부에 있는데 표가 없으면 발화)만 두면
+        // 오탐을 막는 쪽(명부에 없으면 침묵)이 시험에 안 남는다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static StepValidationResult ValidateWithSpec(string markdown, string procedure, string spec)
+        {
+            var step = new BatchStepPlan(
+                Code: "S09", Name: "S09 단계",
+                LegacyProcedures: new[] { procedure },
+                TargetTables: new[] { "dbo.TSettleMst" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            return new MechanicalValidator().ValidateBatchStep(
+                markdown, step,
+                new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(),
+                statementFactsByProcedure: SpecStatementFactsExtractor.Extract(
+                    new[] { (procedure, spec) }),
+                allSteps: null);
+        }
+
+        /// ⓓ 명부에 있는 SP 에서 표가 사라지면 발화한다.
+        /// **이 시험이 T02 를 만든 실패 모드 자체를 막는다** - 명세서에서 그 표가
+        /// 사라졌는데 아무도 몰랐고, 검사 D 도 18 → 0 으로 조용히 꺼졌다.
+        [Fact]
+        public void LocalVariableTable_WhenItVanishesFromARosteredSpec_IsReported()
+        {
+            const string specWithoutTable = """
+                ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 1 · 원본 DDL 라인 10 · 원문 표기: TSettleMst)
+
+                | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+                | :--- | :--- | :--- | :--- |
+                | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | 1 | 표가 없는 판입니다. |
+                """;
+
+            var result = ValidateWithSpec("```sql\nSELECT 1;\n```", "dbo.UP_UTIL_SETTLE_PROC_ETC", specWithoutTable);
+
+            // 리뷰 Minor(2026-09-06) - "지역 변수"만으로 잠그면 검사 D
+            // (CheckSpecLocalVariablesDeclared)의 발화("...@v_x... MONEY...")에도
+            // 그 조각이 들어 있어, 이 검사가 죽고 검사 D 만 살아도 초록일 수 있다.
+            // ⓔ와 같은 변별력 있는 문구("지역 변수 기계 표")로 잠근다.
+            Assert.Contains(result.Errors,
+                e => e.Contains("지역 변수 기계 표") && e.Contains("UP_UTIL_SETTLE_PROC_ETC"));
+        }
+
+        /// ⓔ 명부에 **없는** SP 는 표가 없어도 침묵한다.
+        ///
+        /// [왜 ⓓ만으로는 부족한가 - 실측 2026-09-05]
+        /// 명세서 14편 중 표가 없는 5편(CANCEL_INS · INS · STAT_PGCOLLECT_INS ·
+        /// CMRate_Ins · Settle_Summary)은 **원본 DDL 의 DECLARE 가 전부 0** 이다.
+        /// 「표가 없으면 발화」로 만들면 **오탐 5 대 진짜 최대 1** 이 된다.
+        /// ⓓ만 두면 그 사실이 시험에 안 남아, 다음 사람이 명부를 편의로 읽고 걷어낸다.
+        [Fact]
+        public void LocalVariableTable_WhenAbsentFromAnUnrosteredSpec_IsSilent()
+        {
+            const string specWithoutTable = """
+                ### UPDATE 대상 테이블: SETTLE_POQ_DB.dbo.TSettleMst (갱신 1 · 원본 DDL 라인 10 · 원문 표기: TSettleMst)
+
+                | 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+                | :--- | :--- | :--- | :--- |
+                | SETTLE_POQ_DB.dbo.TSettleMst | CLTotal | 1 | 원본에 DECLARE 가 0 인 SP 입니다. |
+                """;
+
+            var step = new BatchStepPlan(
+                Code: "S15", Name: "PG 수집 통계",
+                LegacyProcedures: new[] { "dbo.UP_UTIL_STAT_PGCOLLECT_INS" },
+                TargetTables: new[] { "dbo.TStatPGCollect" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false,
+                SchemaTables: Array.Empty<string>());
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                "```sql\nSELECT 1;\n```", step,
+                new[] { "dbo.TStatPGCollect" },
+                new Dictionary<string, SpecConditions>(),
+                statementFactsByProcedure: SpecStatementFactsExtractor.Extract(
+                    new[] { ("dbo.UP_UTIL_STAT_PGCOLLECT_INS", specWithoutTable) }),
+                allSteps: null);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("지역 변수 기계 표"));
+        }
+
+        /// <summary>
+        /// 명부(<c>MechanicalValidator.SpecsThatMustDeclareLocalVariables</c>)가 원본
+        /// DDL 과 여전히 같은 것을 말하는지 코퍼스로 교차 검증한다.
+        ///
+        /// [리뷰 Important(2026-09-06) - 명부 9 중 2 만 시험이 잠근다]
+        /// ⓓⓔ는 각각 `UP_UTIL_SETTLE_PROC_ETC`·`UP_UTIL_STAT_PGCOLLECT_INS` 하나씩만
+        /// 건드린다. 제거로 판정(<c>SpecsThatMustDeclareLocalVariables</c>에서 8 개를
+        /// 지워도 ⓓⓔ·코퍼스 발화·게이트가 전부 그대로 초록이다)해 보면, 명부가
+        /// 9/9 에서 1/9 로 조용히 좁아져도 아무 시험도 못 잡는다는 것이 실제로
+        /// 재현됐다 - 이 저장소가 세 번 겪었다는 그 실패 모드(재료가 사라졌는데
+        /// 아무도 모른다)가 검사 자신의 오라클에서 재현된 것이다. 이 시험이 그
+        /// 좁아짐을 코퍼스로 잠근다.
+        ///
+        /// [비순환인 이유] 명세서의 `### 지역 변수 …` 표를 기준으로 재면 이 검사가
+        /// 보는 바로 그 파일이 기준이 되어 순환이다. 원본 DDL
+        /// (`output/Objects/&lt;스키마&gt;.&lt;이름&gt;.Procedure/raw/object_definition.sql`)의
+        /// 최상위 `DECLARE @` 개수는 명세서 생성과 무관하게 고정된 사실이라 순환이
+        /// 아니다.
+        ///
+        /// [양방향] 명부에 있는데 DDL 이 0 개면(오탐 씨앗) 실패. DDL 이 1 개
+        /// 이상인데 명부에 없으면(누락 - 이 저장소가 세 번 겪은 그 실패 모드) 실패.
+        /// 실측(2026-09-06): `output/Objects/*.Procedure` 14 편(이 코퍼스의 소비
+        /// 명세서 전량과 정확히 같은 수) 중 `DECLARE @` 1 개 이상이 정확히 9 편이고,
+        /// 그 9 편이 명부와 글자 하나까지 일치한다.
+        ///
+        /// [왜 리플렉션인가] 명부는 `private`이고 이 프로젝트에는 InternalsVisibleTo가
+        /// 없다(<c>StepSweepSilenceDenominatorTests.InvokeBuildSpecTargets</c>와 같은
+        /// 전례) - 그래서 사본을 만들지 않고 리플렉션으로 **제품이 실제로 쓰는 그
+        /// 필드**를 읽는다. 이 시험이 문자 그대로의 사본을 들고 있었다면 제품 쪽
+        /// 명부가 좁아져도 이 시험은 여전히 자기 사본과 비교해 초록이었을 것이다.
+        ///
+        /// [건너뜀이 통과로 읽히지 않는 이유] 코퍼스가 없는 환경(갓 클론·CI)에서는
+        /// <see cref="CorpusPaths.RepoRoot"/>가 빈 문자열이라 <c>Skip.If</c>로
+        /// 건너뛴다. 연결된 워크트리에서 코퍼스 재료를 반만 걸면
+        /// <see cref="CorpusSetupGuardTests"/>가 이미 실패로 잡으므로(같은 파일들에
+        /// 의존), 이 시험만 조용히 건너뛰는 반쪽 상태는 없다.
+        /// </summary>
+        [SkippableFact]
+        public void SpecsThatMustDeclareLocalVariables_MatchesOriginalDdlDeclareCount()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var objectsDir = Path.Combine(root, "output", "Objects");
+            var procedureDirs = Directory.Exists(objectsDir)
+                ? Directory.GetDirectories(objectsDir, "*.Procedure")
+                : Array.Empty<string>();
+            Skip.If(procedureDirs.Length == 0, CorpusSkip.Reason);
+
+            var rosterField = typeof(MechanicalValidator).GetField(
+                "SpecsThatMustDeclareLocalVariables", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(rosterField);
+            var roster = (HashSet<string>)rosterField!.GetValue(null)!;
+
+            var mismatches = new List<string>();
+            var checkedCount = 0;
+
+            foreach (var dir in procedureDirs)
+            {
+                var ddlPath = Path.Combine(dir, "raw", "object_definition.sql");
+                // 재료 자체가 없으면 판정 불가 - 귀속할 수 없으므로 건너뛴다(작성
+                // 계약 7과 같은 원칙). 아래 checkedCount로 "다 건너뛰어 0건 판정"을
+                // 통과로 오독하지 않게 막는다.
+                if (!File.Exists(ddlPath)) continue;
+
+                const string suffix = ".Procedure";
+                var folderName = Path.GetFileName(dir); // "dbo.UP_UTIL_SETTLE_COMM_UPD.Procedure"
+                var withoutSuffix = folderName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                    ? folderName.Substring(0, folderName.Length - suffix.Length)
+                    : folderName;
+                var dotIndex = withoutSuffix.IndexOf('.');
+                var bareName = dotIndex >= 0 ? withoutSuffix.Substring(dotIndex + 1) : withoutSuffix;
+
+                var declareCount = Regex.Matches(
+                    File.ReadAllText(ddlPath), @"\bDECLARE\s+@", RegexOptions.IgnoreCase).Count;
+                var inRoster = roster.Contains(bareName);
+                checkedCount++;
+
+                if (declareCount > 0 && !inRoster)
+                {
+                    mismatches.Add(
+                        $"{bareName}: 원본 DDL `DECLARE` {declareCount}개인데 명부에 없다(누락 - " +
+                        "재료가 사라졌는데 아무도 모르는 것과 같은 모양이다)");
+                }
+                else if (declareCount == 0 && inRoster)
+                {
+                    mismatches.Add(
+                        $"{bareName}: 원본 DDL `DECLARE` 0개인데 명부에 있다(오탐 씨앗)");
+                }
+            }
+
+            // 판정할 DDL 재료가 하나도 없으면(전부 파일 누락) 건너뜀으로 표시한다 -
+            // "0건 비교해 0건 불일치"를 "통과"로 읽지 않게 한다.
+            Skip.If(checkedCount == 0, CorpusSkip.Reason);
+
+            Assert.True(mismatches.Count == 0,
+                "명부(SpecsThatMustDeclareLocalVariables)가 원본 DDL과 어긋난다:\n" +
+                string.Join("\n", mismatches));
         }
 
         // ── Task 5: 트랜잭션 경계 · 변수 대입 표의 전사 대조 ──────────────────
