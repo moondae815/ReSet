@@ -509,6 +509,7 @@ namespace ReSet.Core.Services
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
             SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
+            SafeCheck(() => CheckChunkUpperBoundProgress(stepMarkdown, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
             SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
 
@@ -6605,6 +6606,145 @@ namespace ReSet.Core.Services
             }
         }
 
+
+        /// <summary>
+        /// 청크 상한 질의가 <c>MIN</c> 을 쓰는데 그 파생 테이블이 <c>TOP(n) … ORDER BY c</c> 로
+        /// 잘려 있고 WHERE 에 <c>c &gt;= &lt;파라미터&gt;</c> 가 있으면 발화한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 B 감사, S11 🔴]
+        /// <code>
+        /// SELECT MIN(ClientID) FROM (
+        ///   SELECT DISTINCT TOP(@size+1) A.ClientID FROM … WHERE A.ClientID &gt;= @p_from
+        ///    ORDER BY A.ClientID) D
+        /// </code>
+        /// <c>ClientID &gt;= @p_from</c> 으로 거른 집합의 <c>MIN</c> 은 <c>@p_from</c> 자신이다
+        /// (그 키가 집합에 있다 — <c>from</c> 은 직전 회차의 경계 키다). 그래서 <c>to == from</c>
+        /// 이고 범위 <c>&gt;= from AND &lt; to</c> 가 항상 공집합이라 <b>WHILE 이 무한 루프</b>가
+        /// 된다. 후취정산이 전량 미반영된다.
+        ///
+        /// [판별자를 좁힌 근거 — <c>MIN</c> 하나로는 못 가른다]
+        /// 「<c>&gt;= @from</c> 인 첫 키를 찾는다」는 <b>정당한 용법</b>이 있다(다음 청크의 시작을
+        /// 구하는 자리). 결정적인 것은 의도가 아니라 <b>질의 자신의 모순</b>이다 — 파생 테이블이
+        /// <c>TOP(n) … ORDER BY c</c> 오름차순으로 잘려 있는데 바깥이 <c>MIN(c)</c> 을 취하면
+        /// 상위 n 개의 최솟값 = 전체의 최솟값이라 <b>TOP 이 죽은 코드</b>가 된다. 상한을 구하려면
+        /// <c>MAX</c> 여야 한다. 그래서 셋이 <b>동시에</b> 성립할 때만 발화한다 —
+        /// ① 바깥이 <c>MIN(c)</c> ② 파생 테이블에 <c>TOP</c> 과 <c>ORDER BY c</c>
+        /// ③ 그 WHERE 에 <c>c &gt;= &lt;파라미터/변수&gt;</c>.
+        ///
+        /// [이 검사가 쓰지 않는 것] 앵커를 쓰지 않는다 — 문장 모양만 본다. 그래서 앵커가 하나도
+        /// 없어 검사 B·C·D 가 통째로 꺼지는 단계(규칙 9 를 지켜 코드 앵커를 못 만드는 단계)에서도
+        /// 돈다. 그 사각지대는 분류표 §6 에 적혀 있다.
+        ///
+        /// [정화본을 쓰지 않는 이유] <see cref="CheckDuplicateProjectionNames"/> 와 같다 — 구문을
+        /// 보는 검사는 원문을 파싱한다. 문자열 리터럴을 지운 판은 파스가 깨진다.
+        /// </summary>
+        private static void CheckChunkUpperBoundProgress(string stepMarkdown, StepValidationResult result)
+        {
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                var fragment = parser.Parse(new StringReader(fence.Groups["sql"].Value), out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0)) continue;
+
+                var probe = new ChunkUpperBoundProbe();
+                fragment.Accept(probe);
+
+                foreach (var column in probe.Offenders)
+                {
+                    result.Errors.Add(
+                        $"청크 상한 질의가 `MIN({column})` 인데 그 파생 테이블이 " +
+                        $"`{column} >= @…` 로 걸러져 있습니다 — 그 집합의 최솟값은 하한 자신이라 " +
+                        "상한이 하한과 같아지고, 범위가 공집합이 되어 순회가 진행하지 않습니다. " +
+                        $"게다가 `TOP … ORDER BY {column}` 이 죽은 코드가 됩니다(상위 n 개의 " +
+                        $"최솟값은 전체의 최솟값입니다). 상한은 `MAX({column})` 이어야 합니다.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// <c>MIN(c)</c> 을 투영하는 질의의 원천이 파생 테이블이고, 그 파생 테이블이
+        /// <c>TOP</c> 과 <c>ORDER BY c</c> 를 지며 WHERE 에 <c>c &gt;= &lt;파라미터/변수&gt;</c> 가
+        /// 있는 자리를 모은다. 셋을 <b>모두</b> 요구하는 것이 이 프로브의 전부다 — 하나라도 빠지면
+        /// 정당한 용법과 구별되지 않는다(<c>…UsesMax…</c>·<c>…WithoutTop…</c> 가 그 두 방향을 잠근다).
+        /// </summary>
+        private sealed class ChunkUpperBoundProbe : TSqlFragmentVisitor
+        {
+            private readonly List<string> _offenders = new();
+            public IReadOnlyList<string> Offenders => _offenders;
+
+            public override void Visit(QuerySpecification node)
+            {
+                // ① 바깥 투영이 MIN(c) 하나인가
+                var minColumn = SoleMinColumn(node);
+                if (minColumn == null) return;
+
+                // 원천이 파생 테이블인가
+                var derived = node.FromClause?.TableReferences
+                    .OfType<QueryDerivedTable>()
+                    .Select(t => t.QueryExpression)
+                    .OfType<QuerySpecification>()
+                    .FirstOrDefault();
+                if (derived == null) return;
+
+                // ② TOP 과 ORDER BY c
+                if (derived.TopRowFilter == null) return;
+                var ordered = derived.OrderByClause?.OrderByElements
+                    .Select(e => ColumnName(e.Expression))
+                    .Any(n => string.Equals(n, minColumn, StringComparison.OrdinalIgnoreCase)) ?? false;
+                if (!ordered) return;
+
+                // ③ 그 WHERE 에 c >= <파라미터/변수>
+                if (derived.WhereClause == null) return;
+                var lowerBounded = new LowerBoundProbe(minColumn);
+                derived.WhereClause.Accept(lowerBounded);
+                if (!lowerBounded.Found) return;
+
+                if (!_offenders.Contains(minColumn, StringComparer.OrdinalIgnoreCase))
+                {
+                    _offenders.Add(minColumn);
+                }
+            }
+
+            /// <summary>투영이 <c>MIN(c)</c> 하나뿐일 때 그 컬럼 이름. 아니면 null.</summary>
+            private static string? SoleMinColumn(QuerySpecification node)
+            {
+                if (node.SelectElements.Count != 1) return null;
+                if (node.SelectElements[0] is not SelectScalarExpression scalar) return null;
+                if (scalar.Expression is not FunctionCall call) return null;
+                if (!string.Equals(call.FunctionName?.Value, "MIN", StringComparison.OrdinalIgnoreCase)) return null;
+                if (call.Parameters.Count != 1) return null;
+                return ColumnName(call.Parameters[0]);
+            }
+
+            private static string? ColumnName(ScalarExpression? expression)
+            {
+                var parts = (expression as ColumnReferenceExpression)?.MultiPartIdentifier?.Identifiers;
+                return parts == null || parts.Count == 0 ? null : parts[^1].Value;
+            }
+
+            /// <summary>파생 테이블 안쪽은 이 층이 아니다 — 그 층을 만날 때 따로 판정한다.</summary>
+            public override void ExplicitVisit(QueryDerivedTable node) { }
+        }
+
+        /// <summary><c>&lt;컬럼&gt; &gt;= &lt;파라미터/변수&gt;</c> 비교가 있는지만 본다.</summary>
+        private sealed class LowerBoundProbe : TSqlFragmentVisitor
+        {
+            private readonly string _column;
+            public LowerBoundProbe(string column) => _column = column;
+            public bool Found { get; private set; }
+
+            public override void Visit(BooleanComparisonExpression node)
+            {
+                if (node.ComparisonType != BooleanComparisonType.GreaterThanOrEqualTo) return;
+                if (node.FirstExpression is not ColumnReferenceExpression left) return;
+                if (node.SecondExpression is not VariableReference) return;
+
+                var parts = left.MultiPartIdentifier?.Identifiers;
+                var name = parts == null || parts.Count == 0 ? null : parts[^1].Value;
+                if (string.Equals(name, _column, StringComparison.OrdinalIgnoreCase)) Found = true;
+            }
+        }
 
         /// <summary>
         /// 파생 테이블·CTE 가 같은 출력 컬럼 이름을 두 번 내는 것을 본다.

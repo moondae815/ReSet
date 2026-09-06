@@ -7906,6 +7906,96 @@ END";
         //
         // 이 검사는 오라클이 없다 — 명세서도 원본 DDL 도 안 본다. SQL 자체가
         // 서지 않는 것을 본다.
+        // ─────────────────────────────────────────────────────────────────────
+        // D4 청크 순회 진행 — 2026-09-06 POQSettleBatch4 축 B 감사의 S11 🔴.
+        //
+        // 실물: 청크 상한을
+        //   SELECT MIN(ClientID) FROM (
+        //     SELECT DISTINCT TOP(@size+1) A.ClientID FROM … WHERE A.ClientID >= @p_from
+        //      ORDER BY A.ClientID) D
+        // 로 구한다. 그런데 `ClientID >= @p_from` 으로 거른 집합의 MIN 은 @p_from 자신이다
+        // (그 키가 집합에 있으므로 — from 은 직전 회차의 경계 키다). 그래서 to == from 이고
+        // 범위 `>= from AND < to` 가 항상 공집합이라 **WHILE 이 무한 루프**가 된다.
+        // 후취정산이 전량 미반영된다.
+        //
+        // [판별자를 왜 이렇게 좁혔는가 — MIN 하나로는 못 가른다]
+        // 「`>= @from` 인 첫 키를 찾는다」는 **정당한 용법**이 있다(다음 청크의 시작을 구할 때).
+        // 결정적인 것은 의도가 아니라 **질의 자신의 모순**이다 — 파생 테이블이
+        // `TOP(n) … ORDER BY c` 오름차순으로 잘려 있는데 바깥이 `MIN(c)` 을 취하면
+        // 상위 n 개의 최솟값 = 전체의 최솟값이라 **TOP 이 죽은 코드**가 된다. 상한을 구하려면
+        // MAX 여야 한다. 그래서 이 검사는 세 조건이 **동시에** 성립할 때만 발화한다:
+        //   ① 바깥이 MIN(c) ② 파생 테이블에 TOP 과 ORDER BY c ③ 그 WHERE 에 c >= <파라미터>
+        //
+        // 이 검사는 앵커를 쓰지 않는다 — 문장 모양만 본다. S11 처럼 앵커가 붙는 단계뿐 아니라
+        // 앵커가 하나도 없는 단계(S13 계열)에서도 돈다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_ChunkUpperBoundUsesMinOverLowerBoundedSet_IsReported()
+        {
+            // 실물 모양 그대로다(POQSettleBatch4/S11 의 SQL_CHUNK_UPPER_BOUND).
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- SQL_CHUNK_UPPER_BOUND\n" +
+                "SELECT MIN(ClientID)\n" +
+                "  FROM (\n" +
+                "    SELECT DISTINCT TOP (CAST(@p_size AS INT) + 1) A.ClientID\n" +
+                "      FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "     WHERE A.YMD = @p_strYMD\n" +
+                "       AND A.ClientID >= @p_from\n" +
+                "     ORDER BY A.ClientID\n" +
+                "  ) D;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            // 결과의 내용으로 잠근다 — 컬럼 이름과 MAX 처방이 메시지에 있어야 한다.
+            var error = Assert.Single(result.Errors, e => e.Contains("청크 상한"));
+            Assert.Contains("ClientID", error);
+            Assert.Contains("MAX", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ChunkUpperBoundUsesMax_StaysSilent()
+        {
+            // 음성 ①: 같은 모양인데 MAX 다 — 이것이 옳은 상한 질의이므로 침묵해야 한다.
+            // 이 방향을 잠그지 않으면 「TOP + ORDER BY + >= 」만 보고 정상을 고발한다.
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SELECT MAX(ClientID)\n" +
+                "  FROM (\n" +
+                "    SELECT DISTINCT TOP (CAST(@p_size AS INT) + 1) A.ClientID\n" +
+                "      FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "     WHERE A.ClientID >= @p_from\n" +
+                "     ORDER BY A.ClientID\n" +
+                "  ) D;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("청크 상한"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_MinOverLowerBoundedSetWithoutTop_StaysSilent()
+        {
+            // 음성 ②: TOP·ORDER BY 가 없으면 「>= @from 인 첫 키를 찾는다」는 **정당한 용법**이다
+            // (다음 청크의 시작을 구하는 자리). 자기모순이 없으므로 발화하면 안 된다.
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SELECT MIN(A.ClientID)\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                " WHERE A.ClientID >= @p_from;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("청크 상한"));
+        }
+
         [Fact]
         public void ValidateBatchStep_DerivedTableProjectsTheSameNameTwice_IsReported()
         {
