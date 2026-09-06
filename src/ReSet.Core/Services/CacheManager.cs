@@ -214,7 +214,40 @@ namespace ReSet.Core.Services
         //     하나라도 깨지면 이 승격은 근거를 잃는다.
         //     번호 충돌 확인: 전 브랜치에서 18이 비어 있음을 확인했다(main·origin/main·
         //     local/main·이 물결의 워크트리 브랜치 전부 17 또는 그 이하).
-        private const int CurrentCacheFormatVersion = 18;
+        // 19: 2026-09-06 - 「실행 의미」 표의 `집계 대입`·`비집계 대입` 두 갈래가 함께
+        //     넓어졌다(표 종류는 늘지 않는다).
+        //     (1) 비집계 대입: 우변 가드가 「맨 컬럼」에서 「감쌈을 한 겹 벗긴 뒤 전부
+        //     컬럼 참조인 분기식」으로 넓어져 `IIF`·`CASE`·`ISNULL(X, 리터럴)`·
+        //     `COALESCE(X, 리터럴)`로 감싼 대입이 새로 실린다. 실물은
+        //     UF_GET_COMM4CLIENT4PARTIALCANCEL:43의 수수료율 분기(축 A 🔴) -
+        //     넓히기 전에는 어떤 기계 확정 표에도 없고 명세서가 한 줄도 서술하지
+        //     않았다. 비집계 코퍼스 대장
+        //     (NonAggregateAssignmentExtractorTests.Extract_OverTheCorpus_
+        //     ShouldCollectExactlyTheseRows)이 43행(NULL확정 27 · 중립 16)을 못박는다.
+        //     (2) 집계 대입: `ISNULL(<집계>, 리터럴)`·`COALESCE(<집계>, 리터럴)`이 새로
+        //     실리고, 그 행은 문장 갈래가 셋에서 넷("기본값대입")이 된다 - 감쌈 없는
+        //     집계는 무결과 시 NULL을 넣지만 감쌈이 있으면 리터럴 기본값이 그것을
+        //     덮는다. 실물은 UP_UTIL_SETTLE_PROC_ETC:116·130(축 A 🟠) - 넓히기 전에는
+        //     집계 그물(최상위가 집계 이름이어야 함)과 비집계 그물(맨 컬럼이어야 함)
+        //     사이로 새어 어떤 표에도 없었다. 집계 코퍼스 대장
+        //     (AggregateAssignmentExtractorTests.Extract_OverTheCorpus_
+        //     ShouldCollectExactlyTheseRows)이 10행 중 2행을 "기본값대입" 갈래로
+        //     못박는다.
+        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다. 집계 행은 인자를 생략하던
+        //     고정 문자열 `SELECT @v = SUM(...)`에서 `fact.Expression`이 실은 실제
+        //     인자(예: `SELECT @v_intTotal = ISNULL(SUM(A.CLTotal), 0)`)로 바뀌고,
+        //     비집계 행은 컬럼 이름만 싣던 것에서 분기식 축자(예: 위 IIF 전체)로
+        //     바뀐다 - 레코드의 필드 이름도 `Column`에서 `Expression`으로 바뀌었다.
+        //     기존 행이 전부 바뀌는 회차라 옛 엔트리와 새 엔트리를 섞으면 같은 표
+        //     안에서 표기가 갈린다.
+        //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면: 수수료율 분기
+        //     (UF_GET_COMM4CLIENT4PARTIALCANCEL:43류)가 산문에도 표에도 없는 명세서,
+        //     대사 집계식(UP_UTIL_SETTLE_PROC_ETC:116·130류)이 어디에도 없는 명세서,
+        //     그리고 살아남은 옛 행마저 대상 칸이 `SELECT @v = SUM(...)`처럼 인자를
+        //     생략한 낡은 표기 그대로인 명세서가 그대로 배송된다.
+        //     번호 충돌 확인: main·origin/main·integration/settlement-policy·
+        //     feat/settlement-policy-redesign 전부 18이고 19는 비어 있음을 확인했다.
+        private const int CurrentCacheFormatVersion = 19;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
