@@ -140,5 +140,29 @@ namespace ReSet.Core.Tests
 
             Assert.Contains(result.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch && d.RuleId == "S2-01");
         }
+
+        [Fact]
+        public void 제목이_같은_단계_둘에서_첫_단계의_규칙은_잘못된_접두사_기대로_고발되지_않는다()
+        {
+            // 리뷰어가 재현한 입력: 번호 없는 같은 제목의 단계가 둘이면
+            // (파서가 LocateSection의 선재 한계로 같은 절을 두 번 읽어 S1-01
+            // 행이 StageNumber 1과 2로 각각 한 번씩 파싱된다), 검증기가 헤딩
+            // 문자열을 키로 한 맵을 쓰면 맵이 마지막 색인(2)으로 덮어써져
+            // 첫 통과분(StageNumber=1, 진짜로 옳은 S1-01)까지 'S2-' 기대로
+            // 고발됐다. rule.StageNumber를 그대로 쓰면 그 오탐 한 건이 사라져
+            // IdPrefixMismatch 총수가 2에서 1로 준다.
+            var duplicateNamedStages = new[] { "## 수수료율 스냅샷 적재", "## 수수료율 스냅샷 적재" };
+            var body =
+                "## 수수료율 스냅샷 적재\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S1-01 | 요율을 적재한다 | dbo.UP_RATE · ## 개요 > \"요율을 적재\" | - |\n\n"
+                + "## 수수료율 스냅샷 적재\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S2-01 | 간편결제 건을 대상으로 한다 | dbo.UP_INS · ## 개요 > \"impaymobile인 건\" | impaymobile |\n";
+
+            var result = PolicyAttributionValidator.Validate(body, duplicateNamedStages, Specs);
+
+            Assert.Equal(1, result.Defects.Count(d => d.Type == PolicyDefectType.IdPrefixMismatch));
+        }
     }
 }

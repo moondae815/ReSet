@@ -48,16 +48,6 @@ namespace ReSet.Core.Services
             var defects = new List<PolicyDefect>();
             var lines = MarkdownSectionLocator.SplitLines(policyMarkdown);
 
-            // 단계 제목에 번호가 없으면 명부 순서로 매긴다 - PolicyDocumentParser와 같은
-            // 함수를 써야 검증기가 파서와 다른 번호를 기대하는 사고(S1-01이 S0-를
-            // 기대받는 오탐)가 재발하지 않는다.
-            var effectiveStageNumbers = new Dictionary<string, int>(StringComparer.Ordinal);
-            for (var stageIndex = 0; stageIndex < stageHeadings.Count; stageIndex++)
-            {
-                effectiveStageNumbers[stageHeadings[stageIndex]] =
-                    PolicySectionContract.EffectiveStageNumber(stageHeadings[stageIndex], stageIndex);
-            }
-
             // 1. 단계 완전성과 순서
             var positions = new List<(string Heading, int Index)>();
             foreach (var heading in stageHeadings)
@@ -89,10 +79,11 @@ namespace ReSet.Core.Services
 
             foreach (var rule in PolicyDocumentParser.Parse(policyMarkdown, stageHeadings))
             {
-                var expectedStageNumber = effectiveStageNumbers.TryGetValue(rule.StageHeading, out var stageNumber)
-                    ? stageNumber
-                    : rule.StageNumber;
-                var expectedPrefix = PolicySectionContract.IdPrefixFor(expectedStageNumber) + "-";
+                // 단계 번호는 파서가 이미 위치 기준으로 계산해 PolicyRule.StageNumber에
+                // 실어 준다. 검증기가 헤딩 문자열을 키로 다시 유도하면 제목이 같은
+                // 단계 둘이 조용히 덮어써져 옳은 S1-01이 S2-를 기대받아 오탐으로
+                // 고발된다(2026-09-06 실측). 계산 경로는 하나여야 한다.
+                var expectedPrefix = PolicySectionContract.IdPrefixFor(rule.StageNumber) + "-";
                 if (!rule.Id.StartsWith(expectedPrefix, StringComparison.Ordinal))
                 {
                     defects.Add(new PolicyDefect(
