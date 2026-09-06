@@ -177,5 +177,52 @@ namespace ReSet.Core.Tests
             Assert.Equal("1. 단계", roster.Stages[0].Title);
             Assert.Equal(new[] { "dbo.UP_A" }, roster.Stages[0].Procedures);
         }
+
+        // 목록 표식(`- `) 뒤에 숨은 한 줄짜리 주석 항목("- <!-- 메모 -->")은 프로시저로
+        // 읽히지 않는다. 리뷰가 removal-proof로 지적한 자리 - 이 패턴이 유일하게
+        // item.StartsWith("<!--") 가드가 하던 일이다. 스캐너가 이 자리를 흡수한다.
+        [Fact]
+        public void 목록_표식_뒤의_한줄_주석_항목은_프로시저로_읽지_않는다()
+        {
+            const string markdown = @"## 1. 단계
+- <!-- 메모 -->
+- dbo.UP_A
+";
+            var roster = SettlementProcessRosterParser.Parse(markdown);
+
+            Assert.Equal(new[] { "dbo.UP_A" }, roster.Stages[0].Procedures);
+        }
+
+        // 회귀: "- <!-- 여러 줄" 처럼 목록 표식으로 시작하는 줄이 여러 줄 주석 블록을
+        // 열 수도 있다. 이 열림을 인식하지 못하면 블록 안의 "- dbo.UP_X"가 살아 있는
+        // 프로시저로 샌다(리뷰의 「연기된 관찰」).
+        [Fact]
+        public void 목록_표식으로_여는_여러줄_주석_블록_안의_항목은_프로시저로_읽지_않는다()
+        {
+            const string markdown = @"## 1. 단계
+- <!-- 여러 줄
+- dbo.UP_X
+-->
+";
+            var roster = SettlementProcessRosterParser.Parse(markdown);
+
+            Assert.Empty(roster.Stages[0].Procedures);
+        }
+
+        // 음성 예: 위 블록이 "-->"로 제대로 닫힌 뒤에 오는 항목은 정상으로 읽혀야
+        // 한다 - 블록이 안 꺼져 뒷부분을 통째로 삼키는 반대 결함을 막는다.
+        [Fact]
+        public void 목록_표식으로_연_주석_블록이_닫힌_뒤의_항목은_정상으로_읽힌다()
+        {
+            const string markdown = @"## 1. 단계
+- <!-- 여러 줄
+- dbo.UP_X
+-->
+- dbo.UP_Y
+";
+            var roster = SettlementProcessRosterParser.Parse(markdown);
+
+            Assert.Equal(new[] { "dbo.UP_Y" }, roster.Stages[0].Procedures);
+        }
     }
 }
