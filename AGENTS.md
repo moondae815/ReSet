@@ -125,7 +125,7 @@
 ### 🧹 범주 7. 메타데이터 정화 및 주석 보완 (Cleansing & Annotation)
 9.  **메타데이터 정화 및 정책 문서 수립 가이드를 준수하십시오.**
     *   로컬 모델의 스키마 환각을 막기 위해 `*_MetadataCleansing.sql` 자동 생성은 비활성 상태로 유지하십시오. 수동으로 만든 파일이 실제로 있을 때만 승인 후 적용하며, 크로스 DB 파일은 DB 접두사로 구분하고 연결 대상이 아닌 DB에는 실행하지 마십시오.
-    *   C# 보간 프롬프트의 `{}`는 `{{}}`로 이스케이프하십시오. 정산 정책서는 DDL 분기와 데이터 프로파일링을 결합해 지정된 5개 헤더를 따릅니다.
+    *   C# 보간 프롬프트의 `{}`는 `{{}}`로 이스케이프하십시오. 정산 정책서는 Spec.md 근거와 명부가 정한 단계 헤더를 따릅니다.
     *   CRUD·컬럼 매핑은 `외 다수`·`등`으로 줄이지 말고 물리 컬럼과 원천값을 1:1로 모두 적으십시오. UPDATE 매핑은 `SqlStaticParser.AstUpdateMappings`가 채우며 AI fill-in 방식으로 되돌리지 마십시오(`MechanicalValidatorTests.Validate_WhenAnExpectedUpdateColumnIsMissing_ShouldReportIt`).
     *   파라미터·컬럼 제약은 DDL의 타입·기본값만 근거로 쓰고 임의의 `NOT NULL`을 만들지 마십시오. 스키마 덤프는 `SchemaPromptColumnSelector`가 고른 참조·키·인덱스 컬럼으로 제한하십시오(`SchemaPromptColumnSelectorTests`).
     *   L1이 함께 보는 것과 프롬프트 스키마 표·`DB 배치`의 입력원은 기존 배선을 유지하십시오(`architecture.md §4.9`, `§4.12`).
@@ -242,4 +242,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: 7ab3d10c -->
+<!-- synced-through: 47d1c052 -->
