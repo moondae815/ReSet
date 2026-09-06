@@ -7917,6 +7917,90 @@ END";
         // 보는 조인 키 대조는 이를 "없다"고 거짓 보고한다.
         // ─────────────────────────────────────────────────────────────────────
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 C 의 `known` 에서 GROUP BY 칸을 뺀다 — 2026-09-06 축 B 감사의 S15 🔴.
+        //
+        // 실물: 원본 INSERT 1 의 최상위 WHERE 에 없던 `A.OUTSTATE = 9` 를 이행이 새로 걸었다.
+        // 명세서는 OUTSTATE 를 **GROUP BY 키일 뿐 WHERE 에는 없는 자유 그룹키**로 확정한다.
+        // DELETE 가 13 키로 모든 OUTSTATE 그룹을 지우는데 INSERT 는 =9 만 되넣어
+        // **OUTSTATE≠9 요약행이 소실**된다.
+        //
+        // [왜 침묵했나] `known` 이 술어·조인 키뿐 아니라 **GROUP BY·ORDER BY 칸까지** 인정해,
+        // 새로 붙은 술어가 「명세서가 인정한 이름」으로 흡수됐다.
+        //
+        // [논거가 비순환이다] GROUP BY 키가 정당한 필터이기도 하면 명세서는 그것을 **술어 칸에도**
+        // 적는다. 그러니 GROUP BY 에만 있고 술어 칸에 없는 이름을 WHERE 에 새로 거는 것은
+        // 정의상 「원본에 없는 조건」이다.
+        //
+        // [ORDER BY 는 빼지 않았다 - 실측] 함께 빼도 코퍼스 발화가 21 로 같았다(무효). 근거가
+        // 같더라도 오늘 값을 안 하는 변경은 표면만 넓히므로 하지 않는다. 필요해지면 다시 재라.
+        //
+        // [코퍼스 차분] 검사 C 20 → 21. 새 발화가 **정확히 하나**이고 그것이 이 S15 다.
+        // 기준선 20 건은 하나도 바뀌지 않았다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_NewPredicateOnAGroupByOnlyColumn_IsReported()
+        {
+            // 명세서: INSERT 1 의 최상위 술어는 YMD 뿐이고 OUTSTATE 는 GROUP BY 키다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 77, "TSettleByOUT",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        new[] { "YMD", "CLIENTID", "OUTSTATE" }, Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S15 단계\n\n```sql\n" +
+                "/* INSERT 1: 지급 요약 재삽입 */\n" +
+                "INSERT INTO dbo.TSettleByOUT (YMD, CLIENTID, OUTSTATE)\n" +
+                "SELECT A.YMD, A.CLIENTID, A.OUTSTATE\n" +
+                "  FROM dbo.TSettleMst AS A\n" +
+                " WHERE A.YMD = @p_ymd\n" +
+                "   AND A.OUTSTATE = 9\n" +
+                " GROUP BY A.YMD, A.CLIENTID, A.OUTSTATE;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("명세서에 없는"));
+            Assert.Contains("OUTSTATE", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_PredicateOnAColumnThatIsAlsoInThePredicateCell_StaysSilent()
+        {
+            // 음성: 같은 이름이 GROUP BY 이자 **술어 칸에도** 있으면 원본이 실제로 거는
+            // 조건이므로 침묵해야 한다. 이 방향이 비순환 논거의 반대편이다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 77, "TSettleByOUT",
+                        new[] { "YMD", "OUTSTATE" }, Array.Empty<string>(),
+                        new[] { "YMD", "CLIENTID", "OUTSTATE" }, Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S15 단계\n\n```sql\n" +
+                "/* INSERT 1: 지급 요약 재삽입 */\n" +
+                "INSERT INTO dbo.TSettleByOUT (YMD, CLIENTID, OUTSTATE)\n" +
+                "SELECT A.YMD, A.CLIENTID, A.OUTSTATE\n" +
+                "  FROM dbo.TSettleMst AS A\n" +
+                " WHERE A.YMD = @p_ymd\n" +
+                "   AND A.OUTSTATE = 9\n" +
+                " GROUP BY A.YMD, A.CLIENTID, A.OUTSTATE;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
+        }
+
         [Fact]
         public void ValidateBatchStep_AnchoredStatementTargetsADifferentPhysicalTable_StaysSilent()
         {

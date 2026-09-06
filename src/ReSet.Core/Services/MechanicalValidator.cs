@@ -8577,7 +8577,7 @@ namespace ReSet.Core.Services
                 // 술어·조인 키·GROUP BY·ORDER BY 어느 칸에든 등장하면 명세서가 그
                 // 이름을 이 문장에 인정한 것으로 본다 - 더 관대할수록 오탐이 준다.
                 var known = new HashSet<string>(
-                    row.PredicateColumns.Concat(row.JoinKeys).Concat(row.GroupBy).Concat(row.OrderBy),
+                    row.PredicateColumns.Concat(row.JoinKeys).Concat(row.OrderBy),
                     StringComparer.OrdinalIgnoreCase);
 
                 // [단계 내부 스테이징 - 대조할 원천이 아니다]
