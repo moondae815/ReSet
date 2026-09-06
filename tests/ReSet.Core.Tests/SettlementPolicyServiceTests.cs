@@ -248,15 +248,21 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task 한_번도_인용되지_않은_SP를_배너에_싣는다()
         {
+            // 둘째 단언은 배너 구획 자체를 잰다 - "dbo.UP_B"만 찾으면 부록 B가 명부의
+            // 모든 프로시저를 늘 나열하므로 배너가 옳든 그르든 참이 되는 동어반복이었다
+            // (Fix Round 1 리뷰 Minor). 배너가 만드는 정확한 줄("> - dbo.UP_B")은
+            // 부록 B의 표 행("| ... | dbo.UP_B |")과 형태가 달라 서로 혼동되지 않는다.
             WriteRoster();
             var service = new SettlementPolicyService(
                 AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
                           Stage(2, "원장 적재", "dbo.UP_A", "요율을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
+            var document = File.ReadAllText(outcome.PolicyPath);
 
             Assert.Contains(outcome.Defects, d => d.Type == PolicyDefectType.ProcedureNeverCited);
-            Assert.Contains("dbo.UP_B", File.ReadAllText(outcome.PolicyPath));
+            Assert.Contains("[미인용 프로시저]", document);
+            Assert.Contains("> - dbo.UP_B", document);
         }
 
         [Fact]
@@ -305,6 +311,52 @@ namespace ReSet.Core.Tests
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
             Assert.True(File.Exists(outcome.PolicyPath));
+        }
+
+        /// <summary>
+        /// Fix Round 1 리뷰 발견(Important 3) - Policy/steps/*.md가 실제로 쓰이는지
+        /// 재는 테스트가 없었다. WriteStagePartAsync가 무검증이었다.
+        /// </summary>
+        [Fact]
+        public async Task steps_디렉터리에_단계_수만큼_파일이_단계_번호로_시작해_생긴다()
+        {
+            WriteRoster();
+            var service = new SettlementPolicyService(
+                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+
+            await service.GenerateAsync(_root, profiler: null, effort: null);
+
+            var stepsDir = Path.Combine(_root, "Policy", "steps");
+            var files = Directory.GetFiles(stepsDir).Select(Path.GetFileName).OrderBy(f => f).ToList();
+
+            Assert.Equal(2, files.Count);
+            Assert.Contains(files, f => f!.StartsWith("01-"));
+            Assert.Contains(files, f => f!.StartsWith("02-"));
+        }
+
+        /// <summary>
+        /// Fix Round 1 리뷰 발견(Important 3) - 「합쳐진 결과」축의 구멍. 조립된
+        /// 정책서 실물(서비스 전체 경로를 거친 산출물)에 부록 A·B가 실제로
+        /// 나타나고, 부록 B에 명부의 단계·프로시저가 실리는지 잰다.
+        /// PolicyDocumentAssemblerTests가 단위 수준을 재므로 여기서는 통합
+        /// 경로에서 같은 사실이 성립하는지만 확인한다.
+        /// </summary>
+        [Fact]
+        public async Task 조립된_문서에_부록_A와_B가_실제로_나타난다()
+        {
+            WriteRoster();
+            var service = new SettlementPolicyService(
+                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+
+            var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
+            var document = File.ReadAllText(outcome.PolicyPath);
+
+            Assert.Contains("## 부록 A. 코드값 사전", document);
+            Assert.Contains("## 부록 B. 단계별 원본 프로시저", document);
+            Assert.Contains("| 1. 요율 적재 | dbo.UP_A |", document);
+            Assert.Contains("| 2. 원장 적재 | dbo.UP_B |", document);
         }
 
         /// <summary>
