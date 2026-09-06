@@ -98,6 +98,33 @@ namespace ReSet.Core.Services
             = Array.Empty<string>();
 
         /// <summary>
+        /// 이 문장의 <b>최상위</b> FROM 절이 콤마 조인(ANSI-89, <c>FROM A, B WHERE A.k = B.k</c>)을
+        /// 쓰는가. 레거시 SP 의 기본 형태이고 이행이 그것을 원본대로 보존한다.
+        ///
+        /// [무엇을 위한 값인가] 콤마 조인에는 <b>ON 절이 아예 없다</b> - 결합 등식이
+        /// WHERE 에 있다. 그런데 <see cref="JoinColumns"/> 는 FROM 절만 훑어 모으므로
+        /// 이 모양에서는 <b>항상 빈다</b>. 검사 B 의 조인 키 칸이 그 빈 집합과 대조해
+        /// 명세서가 확정한 키 전량을 「없다」로 발화했다(2026-09-06 POQSettleBatch4/S08
+        /// 에서 9 건, 전량 오탐). 그 오탐이 <c>SuggestedPromptFix</c> 를 타고 산출물에
+        /// 되먹여져 재생성 5 회를 태웠다.
+        ///
+        /// [왜 TableReferences 개수인가 - 실측] 콤마 조인이 <c>UnqualifiedJoin</c> 으로
+        /// 파스된다는 것은 틀린 설명이다. TSql150Parser 실측:
+        /// <code>
+        /// FROM A, B                    → FromClause.TableReferences = 2 (NamedTableReference 둘)
+        /// FROM A INNER JOIN B ON …     → 1 (QualifiedJoin)
+        /// FROM A CROSS APPLY f(…)      → 1 (UnqualifiedJoin)
+        /// FROM A, B INNER JOIN C ON …  → 2 (Named + QualifiedJoin)
+        /// </code>
+        /// <c>UnqualifiedJoin</c> 은 CROSS JOIN·APPLY 이지 콤마 조인이 아니다.
+        ///
+        /// [범위] <c>Add()</c> 가 받은 <b>이 층의</b> FROM 절만 본다. 파생 테이블 안쪽의
+        /// 콤마 조인은 그 QuerySpecification 이 따로 잡히므로 여기서 세지 않는다 -
+        /// 방문자를 쓰지 않고 froms 를 직접 세는 이유가 그것이다(하강 위험이 없다).
+        /// </summary>
+        public bool HasCommaJoin { get; init; }
+
+        /// <summary>
         /// 이 문장이 읽는 「단계 내부 스테이징」 후보와 그것을 쓴 문장의 컬럼.
         ///
         /// [불변식 - 검사 쪽이 이것에 의존한다] 행 원천이 **전부** 앞선 쓰기 대상일
@@ -751,6 +778,7 @@ namespace ReSet.Core.Services
                         RowSourceTables = rowSourceTables,
                         ReadsOwnTarget = readsOwnTarget,
                         JoinPairs = CollectJoinPairs(froms, ctes),
+                        HasCommaJoin = froms.Any(f => f.TableReferences.Count >= 2),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));

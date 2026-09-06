@@ -8097,7 +8097,34 @@ namespace ReSet.Core.Services
                 // 조인 키 칸은 ON절(JoinColumns)에만 대조한다 - 위 문서 참고.
                 var predicatePresent = new HashSet<string>(
                     predicateColumns.Concat(joinColumns), StringComparer.OrdinalIgnoreCase);
-                var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
+
+                // [콤마 조인 - 2026-09-06 POQSettleBatch4 축 B 감사]
+                // 콤마 조인(ANSI-89, `FROM A, B WHERE A.k = B.k`)에는 ON 절이 아예 없다.
+                // 결합 등식이 WHERE 에 있으므로 JoinColumns 는 항상 비고, 좁은 재료로
+                // 대조하면 명세서가 확정한 조인 키 **전량**이 「없다」로 발화한다.
+                // 실측: POQSettleBatch4/S08 의 9 건이 전량 이 오탐이었고, 그 오탐이
+                // SuggestedPromptFix 를 타고 산출물에 되먹여져 재생성 5 회를 태웠다
+                // (S08.md:38,167 의 「— 조인 키 AYMD, YMD, PGNAME, MALLID 만 사용」
+                // 주석이 그 되먹임의 자국이다). 레거시 SP 는 이 형태가 기본이라
+                // 콤마 조인을 원본대로 보존한 모든 단계에서 같은 오탐이 난다.
+                //
+                // [왜 문장별로 가르는가 - 무조건 넓히면 실물 검사가 죽는다]
+                // 감사 보고서(§5-2)의 처방은 「조인 키 칸도 술어 칸과 같은 재료로
+                // 대조한다 - 원본이 진짜 조인 키를 잃으면 술어 칸이 잡는다」였다.
+                // **뒷문장이 틀렸다.** 술어 칸의 기준값은 row.PredicateColumns 이고
+                // 조인 키 칸의 기준값은 row.JoinKeys 라, 술어 칸이 빈 행에서는 술어 칸이
+                // 아무것도 안 잡는다. 무조건 넓히면
+                // ValidateBatchStep_JoinKeyPresentOnlyInWhereNotOn_ShouldBeAnError 가
+                // 잠근 실물 결함(조인 키가 ON 에서 WHERE 필터로 퇴행한 S11 🟠)이 통째로
+                // 새 나간다.
+                //
+                // 그래서 **콤마 조인이 실재하는 문장에서만** 넓힌다. 그 문장에는 ON 이
+                // 없으니 「ON 에 없다」가 결함을 뜻하지 않는다. ON 을 쓰는 문장은 좁은
+                // 재료 그대로이므로 그 퇴행은 여전히 잡힌다. 판별자의 실측 근거는
+                // StepSqlStatement.HasCommaJoin 문서를 보라.
+                var joinPresent = group.Any(a => a.Statement.HasCommaJoin)
+                    ? predicatePresent
+                    : new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
 
                 // [하위 스코프 이전 - 소실과 구분한다]
                 // 원본이 최상위 WHERE에 두었던 술어를 이행이 CTE·파생 테이블·

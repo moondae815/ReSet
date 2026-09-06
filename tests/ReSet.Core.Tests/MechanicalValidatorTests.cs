@@ -7700,6 +7700,108 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B 콤마 조인(ANSI-89) 사각지대 - 2026-09-06 POQSettleBatch4 축 B 감사.
+        //
+        // 레거시 SP 는 `FROM A, B WHERE A.k = B.k` 를 기본으로 쓰고 이행이 그것을
+        // 원본대로 보존한다. 그 모양에는 **ON 절이 아예 없다** - 결합 등식이 WHERE 에
+        // 있다. 그런데 JoinColumns 는 FROM 절만 훑어 모으므로 항상 비고, 조인 키 칸이
+        // 명세서가 확정한 키 **전량**을 「없다」로 발화했다(POQSettleBatch4/S08 에서 9 건).
+        // 그 오탐은 SuggestedPromptFix 를 타고 산출물에 되먹여져 재생성 5 회를 태웠고,
+        // S08.md 에 「— 조인 키 AYMD, YMD, PGNAME, MALLID 만 사용」이라는 주석까지 남겼다.
+        //
+        // [판별자를 좁힌 이유 - 감사 보고서의 처방을 그대로 쓰면 안 된다]
+        // 보고서(§5-2)는 「조인 키 칸도 술어 칸과 같은 재료로 대조한다. 원본이 진짜
+        // 조인 키를 잃으면 술어 칸이 잡는다」고 적었다. **뒷문장이 틀렸다** - 술어 칸의
+        // 기준값은 row.PredicateColumns 이고 조인 키 칸의 기준값은 row.JoinKeys 라,
+        // 술어 칸이 비어 있으면 아무것도 안 잡는다. 무조건 넓히면 바로 위
+        // ValidateBatchStep_JoinKeyPresentOnlyInWhereNotOn_ShouldBeAnError 가 잠근
+        // 실물 결함(조인 키가 ON 에서 WHERE 필터로 퇴행)이 통째로 새 나간다.
+        //
+        // 그래서 **콤마 조인이 실재하는 문장에서만** 넓힌다. 그 문장에는 ON 이 없으므로
+        // 「ON 에 없다」가 결함을 뜻하지 않는다. ON 이 있는 문장은 좁은 재료 그대로다.
+        //
+        // [판별자 실측 - 보고서의 기전 설명도 틀렸다] 보고서는 콤마 조인이
+        // `UnqualifiedJoin` 으로 파스된다고 적었으나 아니다. 실측(TSql150Parser):
+        //   `FROM A, B`           → FromClause.TableReferences = 2 (NamedTableReference 둘)
+        //   `FROM A INNER JOIN B` → TableReferences = 1 (QualifiedJoin 하나)
+        //   `FROM A CROSS APPLY f`→ TableReferences = 1 (UnqualifiedJoin 하나)
+        //   `FROM A, B INNER JOIN C ON …` → TableReferences = 2 (Named + QualifiedJoin)
+        // 즉 UnqualifiedJoin 은 CROSS JOIN·APPLY 이지 콤마 조인이 아니다. 판별자는
+        // **최상위 FROM 절의 TableReferences 가 둘 이상인가**이다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_CommaJoinKeysInWhere_StaysSilent()
+        {
+            // 음성 표본. 실물 모양 그대로다 - POQSettleBatch4/S08 의 SQL_UPDATE_4.
+            // 합성 픽스처가 실물보다 단순해 코퍼스에서 침묵한 전례가 있어(접힘 좁힘
+            // 첫 시도, 2026-09-05) 원문을 옮겨 쓴다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 4, 120, "TSettleMst",
+                        Array.Empty<string>(), new[] { "AYMD", "YMD", "PGNAME", "MALLID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 4\n" +
+                "UPDATE A\n" +
+                "SET PGCOMM = PGCOMM + C.CommissionCancelAmt\n" +
+                "FROM SETTLE_POQ_DB.dbo.TSettleMst A, SETTLE_POQ_DB.dbo.TPGSettleRate C\n" +
+                "WHERE A.AYMD = C.YMD\n" +
+                "  AND A.YMD = @p_ymd\n" +
+                "  AND A.PGNAME = C.PGNAME\n" +
+                "  AND A.MALLID = C.MALLID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 키"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CommaJoinWithAKeyActuallyLost_IsStillReported()
+        {
+            // 양성 표본. 음성만 있으면 방향이 뒤집힌 사본(전부-접기)이 조용히 통과한다.
+            // 같은 콤마 조인 모양인데 MALLID 결합을 진짜로 잃었다 - 그 컬럼은 WHERE 에도
+            // ON 에도 없다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 4, 120, "TSettleMst",
+                        Array.Empty<string>(), new[] { "AYMD", "YMD", "PGNAME", "MALLID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 4\n" +
+                "UPDATE A\n" +
+                "SET PGCOMM = PGCOMM + C.CommissionCancelAmt\n" +
+                "FROM SETTLE_POQ_DB.dbo.TSettleMst A, SETTLE_POQ_DB.dbo.TPGSettleRate C\n" +
+                "WHERE A.AYMD = C.YMD\n" +
+                "  AND A.YMD = @p_ymd\n" +
+                "  AND A.PGNAME = C.PGNAME;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            // 잃은 것만 고발해야 한다 - 나열 내용으로 잠근다. 「발화했는가」로 잠그면
+            // 규칙을 아무렇게나 세게 만들어도 초록이다.
+            var error = Assert.Single(result.Errors, e => e.Contains("조인 키"));
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("MALLID", reported);
+            Assert.DoesNotContain("PGNAME", reported);
+            Assert.DoesNotContain("AYMD", reported);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 검사 B 태스크 22 - 문장↔spec 행 대응 재설계 뒤 드러난 두 새 함정.
         //
         // [1] 대상 테이블을 대조하지 않았다. (Ordinal, Kind)만 보면 단계가 완전히
