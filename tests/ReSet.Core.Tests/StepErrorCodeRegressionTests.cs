@@ -359,5 +359,70 @@ namespace ReSet.Core.Tests
 
             Assert.True(result.IsValid);
         }
+
+        // ── 오라클 충돌: 목차가 배정한 스텝 검증 코드 ──
+        //
+        // 실측(POQSettleBatch5 2026-09-06). L1 검사 둘이 서로 반대를 요구해 **어느
+        // 쪽으로 고쳐도 통과가 불가능한** 자리가 났다. S11·S12·S13 이 한 바퀴를 돌았고
+        // (21:17 → 21:35 출발점 복귀) 회차 예산만 태웠다.
+        //
+        //   :495  「원본 오류코드 '-1'가 등장하지 않습니다」    ← step.ErrorCodes(목차)가 오라클
+        //   여기  「'-1'을 대입하는데 명세는 정의하지 않습니다」  ← codesByProcedure(명세서)가 오라클
+        //
+        // 목차는 스텝 인터페이스 사전 검증용 코드(-1·-2)를 단계에 배정하는데 그것은
+        // 원본 프로시저 명세에 없다. 두 정본이 **둘 다 정당하고 공존한다** - 하나로
+        // 줄이면 정당한 것을 지운다. 그래서 처방은 이 검사가 목차 배정분도 허용하는
+        // 것이다(두 검사가 같은 오라클을 보게 만든다).
+        //
+        // 모델의 실패가 아니라는 증거는 산출물 자신에 있었다:
+        //   「통합 배치 스텝 목록(S12)에 명시된 파라미터 검증 오류 코드 -1 및 -2는 …
+        //    이는 원본 프로시저 명세에 존재하는 코드가 아닌 스텝 자체 검증 코드이다」
+
+        /// <summary>
+        /// 목차가 그 단계에 배정한 코드를 본문이 쓰는 것은 <b>지시된 이행</b>이다.
+        /// :495 가 그 코드를 싣도록 요구하므로, 실으면 이 검사가 걸고 빼면 저쪽이 건다.
+        /// </summary>
+        [Fact]
+        public void CodeAssignedByThePlanOutlineIsNotReportedAsInvention()
+        {
+            var step = new BatchStepPlan(
+                "S12", "S12 이름",
+                new[] { "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA" },
+                new[] { "dbo.T1" },
+                new[] { "-1", "-2", "4000" },
+                false, Array.Empty<string>());
+
+            var body = Body("S12", "```sql\nSET @po_intRetVal = -1;\n```\n");
+
+            var result = Validate(
+                body, step,
+                Codes("dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA", "4000"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("대입하는데") && e.Contains("-1"));
+        }
+
+        /// <summary>
+        /// 그러나 검사가 무력해지면 안 된다. 목차에도 명세에도 없는 코드는 여전히
+        /// 발명이다 - 이 단언이 없으면 위 수정이 규칙 9 를 통째로 끈다.
+        /// </summary>
+        [Fact]
+        public void CodeInNeitherTheOutlineNorTheSpecIsStillReported()
+        {
+            var step = new BatchStepPlan(
+                "S12", "S12 이름",
+                new[] { "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA" },
+                new[] { "dbo.T1" },
+                new[] { "-1", "-2", "4000" },
+                false, Array.Empty<string>());
+
+            var body = Body("S12", "```sql\nSET @po_intRetVal = -7;\n```\n");
+
+            var result = Validate(
+                body, step,
+                Codes("dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA", "4000"));
+
+            Assert.False(result.IsValid);
+            Assert.Contains(result.Errors, e => e.Contains("대입하는데") && e.Contains("-7"));
+        }
     }
 }
