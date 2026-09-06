@@ -233,15 +233,18 @@ namespace ReSet.Core.Services
         //     (AggregateAssignmentExtractorTests.Extract_OverTheCorpus_
         //     ShouldCollectExactlyTheseRows)이 10행 중 2행을 "기본값대입" 갈래로
         //     못박는다.
-        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다 - 다만 갈래마다 무게가 다르다.
-        //     집계 쪽은 **기존 8행 전부**가 바뀐다 - 인자를 생략한 고정 문자열
-        //     `SELECT @v = {Aggregate}(...)`에서 `fact.Expression`이 실은 실제 인자
-        //     (예: `SELECT @v_intTotal = MIN(YMD)`)로 바뀐다(레코드 필드는 그대로
-        //     `Expression`이었다 - 값만 고정 문자열이었다). 비집계 쪽은 정반대다 -
-        //     레코드 필드 이름이 `Column`에서 `Expression`으로 바뀌었을 뿐 **맨 컬럼
-        //     대입인 기존 36행의 표기 값은 바이트 단위로 그대로다**(컬럼 참조의
-        //     원문이 곧 컬럼 이름이므로). 새 표기(분기식 축자, 예: 위 IIF 전체)를
-        //     싣는 것은 이 회차가 새로 담기 시작한 7행뿐이다. 옛 엔트리와 새 엔트리를
+        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다 - 다만 갈래마다 전사(前史)가
+        //     다르다. 집계 쪽은 **기존 8행 전부**가 바뀐다 - `AggregateAssignmentFact`
+        //     에는 `Expression` 필드 자체가 없었고(필드는 `Line·Variable·Aggregate·
+        //     HasInitializer·Sentence` 뿐이었다) 대상 칸은 `fact.Aggregate`로 인자를
+        //     생략한 고정 문자열 `SELECT @v = {Aggregate}(...)`였다. 이 회차가
+        //     `Expression`을 레코드에 새로 추가하고(네 번째 위치) 대상 칸을 그 실제
+        //     인자(예: `SELECT @v_intTotal = MIN(YMD)`)로 바꿨다. 비집계 쪽은
+        //     정반대다 - `NonAggregateAssignmentFact`에는 이미 `Column`이라는 필드가
+        //     있었고, 이 회차가 그 필드 **이름만** `Expression`으로 바꿨다. 맨 컬럼
+        //     대입인 기존 36행은 컬럼 참조의 원문이 곧 컬럼 이름이므로 **표기 값이
+        //     바이트 단위로 그대로다**. 새 표기(분기식 축자, 예: 위 IIF 전체)를 싣는
+        //     것은 이 회차가 새로 담기 시작한 7행뿐이다. 옛 엔트리와 새 엔트리를
         //     섞으면 집계 표에서는 표기가 갈리고, 비집계 표에서는 새 7행의 유무 자체가
         //     갈린다.
         //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면: 수수료율 분기
