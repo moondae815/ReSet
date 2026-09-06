@@ -1779,6 +1779,123 @@ END"
                 "갱신이 문장 뒤에 있다 - 규칙 6-1은 문장 **앞**을 요구한다.");
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 비수치 청크 키 예시 — 2026-09-06 POQSettleBatch4 축 B 감사의 🔴 **둘**이
+        // 같은 공백에서 나왔다.
+        //
+        // Few-Shot 의 청크 예시는 `to = from + 10000` **산술 순회** 하나뿐이었다.
+        // 그것은 키가 정수일 때만 성립한다. 실물 레거시의 청크 키는 문자열(ClientID)이거나
+        // 복합(OutYMD|ClientID|PGName)인 경우가 흔한데 그 예시가 **0 개**였다.
+        //
+        // 그 공백이 낸 것 둘:
+        //  · S13 🔴 — 산술 순회를 **문자열 결합 키**에 그대로 베꼈다. 문자열 + 정수는
+        //    결합이 되어 0 행을 잡고 **예외 없이** 끝난다 → 섀도우 복구가 안 돌고
+        //    `Succeeded/0` 으로 보고되는데 `SQL_DELETE_RANGE` 는 이미 커밋돼 있다.
+        //  · S11 🔴 — 비수치 키의 상한 질의를 즉흥으로 만들다 `MIN` 을 썼다. `>= @p_from`
+        //    으로 거른 집합의 `MIN` 은 `@p_from` 자신이라 `to == from` → **무한 루프**.
+        //
+        // 「생성물은 예시를 베끼지 프롬프트 주석을 베끼지 않는다」가 이 저장소의 실측이다
+        // (`7feb3c54`). 그래서 산문 규칙이 아니라 **예시**를 더한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 산식을 실어 나르는 INSERT 예시 — 2026-09-06 축 B 감사의 S03 🔴 셋.
+        //
+        // 실물: `CLCOMM`·`CLETC`·`PGETC` 의 `CAST(… AS INT)` 절삭이 이행에서 사라졌다.
+        // 오라클은 명세서의 `### INSERT 대상 테이블:` 매핑 표에 **문자로 있는데** 그것을
+        // 읽는 추출기가 없어 기계가 못 잡는다(분류표 C 칸).
+        //
+        // 그런데 Few-Shot 의 INSERT … SELECT 예시 넷은 **전부 맨 컬럼이나 단순 SUM 만**
+        // 투영한다 — 매핑 표의 산식을 그대로 실어 나르는 본보기가 **0 개**였다. 청크 키와
+        // 같은 기전이다: 예시가 없는 모양은 모델이 즉흥으로 만들고, 즉흥은 단순화한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotShowsAnInsertThatCarriesAComputedExpression()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            var anchor = rules.IndexOf("-- SQL_INSERT_FROM_MAPPING", StringComparison.Ordinal);
+            Assert.True(anchor >= 0,
+                "매핑 표의 산식을 그대로 싣는 INSERT 예시가 없다 - 맨 컬럼 투영 예시만 있으면 "
+                + "CAST·ROUND 같은 절삭이 이행에서 조용히 떨어진다(S03 의 기전).");
+
+            var close = rules.IndexOf("```", anchor, StringComparison.Ordinal);
+            var block = rules[anchor..close];
+
+            // 결과의 내용으로 잠근다 — 절삭이 산식 안에 살아 있어야 한다.
+            Assert.Contains("CAST(", block, StringComparison.Ordinal);
+            Assert.Contains("AS INT", block, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotShowsANonNumericChunkKeyExample()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            // 비수치 키를 다루는 예시가 있어야 한다. 없으면 모델은 산술 예시 하나만 보고
+            // 문자열 키에 그것을 베낀다(S13 이 그랬다).
+            var anchor = rules.IndexOf("SQL_CHUNK_UPPER_BOUND", StringComparison.Ordinal);
+            Assert.True(anchor >= 0,
+                "비수치 청크 키의 상한 질의 예시가 없다 - 산술 순회 예시만 있으면 "
+                + "문자열·복합 키에 `from + N` 이 그대로 베껴진다.");
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_NonNumericChunkUpperBoundUsesMaxNotMin()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            // 앵커는 **sql 표지**여야 한다 - 같은 이름이 의사코드의 호출식에도 나오므로
+            // 그냥 IndexOf 하면 질의가 아니라 호출 줄에 걸린다(처음 쓴 자가 그랬다).
+            var anchor = rules.IndexOf("-- SQL_CHUNK_UPPER_BOUND", StringComparison.Ordinal);
+            Assert.True(anchor >= 0, "상한 질의 예시를 찾지 못했다.");
+
+            // 구간은 **다음 `-- SQL_` 표지**까지다. 펜스 끝(```)까지 자르면 뒤따르는
+            // SQL_NEXT_KEY 의 정당한 `MIN(...)` 을 함께 삼켜 이 단언이 무의미해진다 —
+            // 처음 쓴 자가 그랬다.
+            var next = rules.IndexOf("-- SQL_", anchor + 1, StringComparison.Ordinal);
+            var fenceEnd = rules.IndexOf("```", anchor, StringComparison.Ordinal);
+            var close = next >= 0 && next < fenceEnd ? next : fenceEnd;
+            Assert.True(close > anchor, "상한 질의 예시 블록의 끝을 찾지 못했다.");
+            var block = rules[anchor..close];
+
+            // 결과의 내용으로 잠근다. `MAX` 가 있어야 하고 `MIN` 이 있으면 안 된다 —
+            // `>= @p_from` 으로 거른 집합의 MIN 은 하한 자신이라 순회가 진행하지 않는다.
+            Assert.Contains("MAX(", block, StringComparison.Ordinal);
+            Assert.DoesNotContain("MIN(", block, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_ArithmeticChunkAdvanceIsScopedToNumericKeys()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            // 산술 순회 예시가 **정수 키 전용**임을 예시 자신이 말해야 한다. 범위를 안 적으면
+            // 그 예시가 모든 키에 대한 본보기로 읽힌다 - 그것이 S13 의 기전이다.
+            // 산술 예시가 **둘 이상**이다(섀도우 재구축 예시와 일반 청킹 예시). 하나만
+            // 검사하면 나머지가 조건 없이 남아 그것이 본보기가 된다 - 처음 쓴 자가
+            // 첫 occurrence 만 봤고, 그 자리는 마침 「* Chunking Pattern」 제목이 없었다.
+            var occurrences = new List<int>();
+            for (var i = rules.IndexOf("to = from + 10000", StringComparison.Ordinal);
+                 i >= 0;
+                 i = rules.IndexOf("to = from + 10000", i + 1, StringComparison.Ordinal))
+            {
+                occurrences.Add(i);
+            }
+
+            Assert.NotEmpty(occurrences);
+            foreach (var advance in occurrences)
+            {
+                var from = Math.Max(0, advance - 900);
+                var around = rules[from..advance];
+                Assert.True(
+                    System.Text.RegularExpressions.Regex.IsMatch(around, @"numeric|NUMERIC|integer|정수"),
+                    $"위치 {advance} 의 산술 순회 예시에 키 타입 조건이 없다 - "
+                    + "조건 없는 예시는 문자열·복합 키에도 본보기가 된다(S13 의 기전).");
+            }
+        }
+
         [Fact]
         public async Task ConsolidatedPlanRules_FewShotShowsChunkLoopAsApplicationCode()
         {

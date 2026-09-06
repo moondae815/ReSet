@@ -4225,6 +4225,10 @@ namespace ReSet.Core.Services
 
             string? adopted = null;
             string? floorFeedback = null;
+            // 채택한 본문이 하한을 못 넘긴 **실제** 사유. adopted와 같은 자리에서만
+            // 갱신해 둘이 항상 같은 시도를 가리키게 한다 - 뒤이은 시도가 빈 응답이면
+            // adopted는 그대로 남으므로, 사유만 따로 갱신하면 다른 본문의 사유가 붙는다.
+            string? adoptedErrors = null;
             // 직전 시도가 예외로 끝났는가. 하한 미달과 구분한다 — 지연이 필요한 것은
             // rate limit 쪽뿐이다.
             bool previousTryThrew = false;
@@ -4305,8 +4309,9 @@ namespace ReSet.Core.Services
                     return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"));
                 }
 
+                adoptedErrors = string.Join(" / ", stepResult.Errors);
                 _userInteraction.NotifyStatus(
-                    $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {string.Join(" / ", stepResult.Errors)}[/]");
+                    $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {adoptedErrors}[/]");
                 floorFeedback = stepResult.SuggestedPromptFix;
             }
 
@@ -4316,7 +4321,20 @@ namespace ReSet.Core.Services
                     new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"));
             }
 
-            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} (하한 미달)"));
+            // [사유를 싣는다 - 2026-09-06 POQSettleBatch4 축 B 감사]
+            // 예전에는 여기서 stepResult.Errors를 버리고 `(하한 미달)`이라는 상수만
+            // 남겼다. 그러면 읽는 사람에게 남는 사유는 배너 문안이 적어 둔 세 요건뿐인데,
+            // ValidateBatchStep이 떨어뜨리는 사유는 그보다 훨씬 많다. 실물
+            // (POQSettleBatch4/S08)은 그 세 요건을 전부 충족하는데도 이 배너를 받았고 -
+            // 진짜 사유는 검사 B의 조인 키 오탐이었다 - 배너를 읽은 감사가 없는 결함을
+            // 찾다가 잘못된 결론을 세웠다.
+            //
+            // Unverifiable 경로가 이미 `{Code} ({reason})` 꼴로 사유를 싣고 있었다.
+            // 같은 규약을 여기에도 쓴다.
+            var floorReason = string.IsNullOrWhiteSpace(adoptedErrors)
+                ? "하한 미달"
+                : $"하한 미달: {adoptedErrors}";
+            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({floorReason})"));
         }
 
         /// <summary>

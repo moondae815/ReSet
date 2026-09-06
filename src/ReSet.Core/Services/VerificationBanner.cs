@@ -101,13 +101,23 @@ public static class VerificationBanner
     ///
     /// 개수 대신 단계명을 싣는다. 읽는 사람이 다음에 할 일이 그 단계의 원본
     /// 프로시저를 직접 보는 것이기 때문이다.
+    ///
+    /// [요건을 문안에 열거하지 않는다 - 2026-09-06 POQSettleBatch4 축 B 감사]
+    /// 예전 문안은 최소 요건을 「블록 1개 이상 · 선언된 대상 테이블 전부 · 원본
+    /// 오류코드 전부」 셋으로 못박아 적었다. 그런데 하한 검사(<c>ValidateBatchStep</c>)가
+    /// 떨어뜨리는 사유는 그보다 훨씬 많다(검사 A·B·C·지역 변수·상태 변수 초기값 …).
+    /// 실물: POQSettleBatch4/S08 은 그 셋을 <b>전부 충족</b>하는데(블록 16 · 대상
+    /// 테이블 18 회 · 오류코드 17 개 전량) 이 배너를 받아, 읽는 사람이 없는 결함을
+    /// 찾게 됐다. 요건 목록은 검사가 늘 때마다 조용히 낡으므로 문안에 두지 않고,
+    /// 실제 사유를 항목 줄이 나르게 한다(<c>GenerateStepSectionWithFloorRetryAsync</c>가
+    /// 마지막 시도의 오류를 <c>StepDefect.Reason</c>에 싣는다).
     /// </summary>
     public static string StepFloorViolations(IReadOnlyList<string> steps)
     {
         var stepLines = RenderBulletList(steps, "(단계명이 기록되지 않았습니다.)");
 
         return "\n> [!WARNING]\n> **[하한 미달] 아래 단계 섹션이 최소 요건을 충족하지 못했습니다.**"
-            + " 최소 요건은 SQL 또는 의사코드 블록 1개 이상, 선언된 대상 테이블 전부, 원본 오류코드 전부입니다."
+            + " 실패한 검사는 각 항목에 함께 적었습니다."
             + " 해당 단계는 원본 프로시저를 직접 확인해야 합니다.\n"
             + stepLines
             + "\n\n";
