@@ -104,7 +104,14 @@ namespace ReSet.Core.Tests
             ("z-ai/glm-5.3", new[] { "z-ai" }),
             ("deepseek/deepseek-v4-pro-0813", new[] { "gmicloud", "deepseek" }),
             ("z-ai/glm-5.3-flash", new[] { "novita", "z-ai" }),
-            ("deepseek/deepseek-v4-flash-0731", new[] { "streamlake", "deepinfra" })
+            ("deepseek/deepseek-v4-flash-0731", new[] { "streamlake", "deepinfra" }),
+            // tencent/hy4-preview의 근거는 다른 항목과 성질이 다르다 - 백엔드 넷을
+            // 비교해 순서를 정한 것이 아니라, **한 곳만 확인됐다**. 2026-09-06 실측
+            // (POQSettleBatch4 재생성, OpenRouter 요청 35건 전량): 요청이
+            // order:["tencent"]·allow_fallbacks:false로 나갔고 응답 공급자가 Tencent
+            // 33건, 라우팅 실패 0. **다른 백엔드가 서빙하는지는 안 쟀으므로** 2순위가
+            // 비어 있다 - 빠뜨린 것이 아니라 재지 않은 것이다.
+            ("tencent/hy4-preview", new[] { "tencent" })
         };
 
         // 모델별 항목은 Order만 적고 AllowFallbacks는 Default에 한 번만 적는다.
