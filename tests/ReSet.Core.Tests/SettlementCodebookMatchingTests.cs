@@ -14,9 +14,14 @@ namespace ReSet.Core.Tests
         private static CodebookEntry Entry(string value, string? column, bool eligible = true) =>
             new(value, column, new[] { "dbo.A" }, eligible, Array.Empty<CodebookMatch>());
 
+        // 프로덕션의 CodeTableProfiler.ToStringRow가 OrdinalIgnoreCase로 행 딕셔너리를
+        // 만든다(ApplyMatches의 1단이 그 계약에 기댄다는 "주의" 주석이 있다). 이 대역이
+        // 기본(대소문자 구분) 비교자를 쓰면 실물과 다른 행을 시험하는 것이라 계약이
+        // 한 번도 실행되지 않는다.
         private static ProfiledTable Table(string name, params (string Col, string Val)[][] rows) =>
             new(name, rows
-                .Select(r => (IReadOnlyDictionary<string, string>)r.ToDictionary(c => c.Col, c => c.Val))
+                .Select(r => (IReadOnlyDictionary<string, string>)r.ToDictionary(
+                    c => c.Col, c => c.Val, StringComparer.OrdinalIgnoreCase))
                 .ToList());
 
         [Fact]
@@ -117,6 +122,19 @@ namespace ReSet.Core.Tests
                 });
 
             Assert.Empty(Assert.Single(book.Entries).Matches);
+        }
+
+        [Fact]
+        public void 컬럼_이름의_대소문자가_달라도_같은_컬럼으로_찾는다()
+        {
+            // entry.Column은 "PayMethod"인데 행 딕셔너리의 실제 키는 "paymethod"다.
+            // 프로덕션 행 딕셔너리가 OrdinalIgnoreCase가 아니면 TryGetValue가 실패해
+            // 이 값이 컬럼을 아는 값인데도 미매칭으로 빠진다.
+            var book = SettlementCodebookBuilder.ApplyMatches(
+                LeftSide(Entry("impaymobile", "PayMethod")),
+                new[] { Table("dbo.TCode", new[] { ("paymethod", "impaymobile") }) });
+
+            Assert.Single(Assert.Single(book.Entries).Matches);
         }
     }
 }
