@@ -39,7 +39,7 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    if (!source.SpecMarkdown.Contains(pair.Value, StringComparison.Ordinal))
+                    if (!IsAdoptable(source.SpecMarkdown, pair.Value))
                     {
                         if (!unlisted.Contains(pair.Value, StringComparer.Ordinal))
                         {
@@ -78,5 +78,51 @@ namespace ReSet.Core.Services
 
             return new SettlementCodebook(entries, unlisted);
         }
+
+        /// <summary>
+        /// 값이 명세서에 채택할 만한 형태로 나타나는지 판정한다.
+        ///
+        /// [왜 부분 문자열만으로는 안 되는가] 순수 Contains는 'SUM'이 'SUMMARY' 안에서
+        /// 조용히 채택되게 만든다 - 값은 없는데 형태만 우연히 겹친 「조용한 거짓
+        /// 채택」이다. 그래서 값이 따옴표(홑·겹·백틱)로 감싸여 있거나, 양쪽 이웃이
+        /// 영숫자·밑줄이 아닌 경계 위치에 있을 때만 채택한다. 명세서가 따옴표 없이
+        /// 서술할 수 있으므로(예: 「결제수단이 impaymobile인 건」) 경계 조건도
+        /// 필요하다. 이 판정에서 걸러진 값은 사라지지 않고 SpecUnlistedConstants에
+        /// 남아 보인다 - 조용한 거짓 채택보다 보이는 누락이 낫다.
+        /// </summary>
+        private static bool IsAdoptable(string specMarkdown, string value)
+        {
+            if (specMarkdown.Contains($"'{value}'", StringComparison.Ordinal) ||
+                specMarkdown.Contains($"\"{value}\"", StringComparison.Ordinal) ||
+                specMarkdown.Contains($"`{value}`", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var index = 0;
+            while ((index = specMarkdown.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+            {
+                var beforeOk = index == 0 || !IsAsciiWordChar(specMarkdown[index - 1]);
+                var afterIndex = index + value.Length;
+                var afterOk = afterIndex >= specMarkdown.Length || !IsAsciiWordChar(specMarkdown[afterIndex]);
+
+                if (beforeOk && afterOk)
+                {
+                    return true;
+                }
+
+                index++;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// ASCII 영숫자·밑줄만 「단어 문자」로 본다. .NET의 \b·char.IsLetterOrDigit는
+        /// 한글도 문자로 쳐서 「impaymobile인」의 「인」을 경계로 인정하지 않는다 -
+        /// 그러면 따옴표 없는 한국어 서술의 경계 매칭이 전부 깨진다.
+        /// </summary>
+        private static bool IsAsciiWordChar(char c) =>
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
     }
 }

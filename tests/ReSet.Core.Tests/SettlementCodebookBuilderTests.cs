@@ -105,5 +105,85 @@ END";
 
             Assert.All(book.Entries, e => Assert.Empty(e.Matches));
         }
+
+        // 리뷰 지적 ①: 앵커링 없는 부분 문자열 대조는 'SUM'이 'SUMMARY' 안에서
+        // 조용히 채택되게 만든다. 경계도 따옴표도 아니므로 채택되지 않고
+        // SpecUnlistedConstants에 남아야 한다 - 조용한 거짓 채택보다 보이는
+        // 누락이 낫다.
+        [Fact]
+        public void 다른_단어의_일부로만_등장하면_채택하지_않는다()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_Word AS
+BEGIN
+    SELECT * FROM T WHERE Kind = 'SUM'
+END";
+            const string spec = @"## 개요
+
+정산 SUMMARY 처리 결과를 반영한다.
+";
+
+            var book = SettlementCodebookBuilder.BuildLeftSide(new[] { Source("dbo.A", ddl, spec) });
+
+            Assert.DoesNotContain(book.Entries, e => e.Value == "SUM");
+            Assert.Contains("SUM", book.SpecUnlistedConstants);
+        }
+
+        [Fact]
+        public void 따옴표_형태로_있으면_채택한다()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_Quoted AS
+BEGIN
+    SELECT * FROM T WHERE Code = 'ABC'
+END";
+            const string spec = @"## 개요
+
+코드값 'ABC'와 관련한 처리다.
+";
+
+            var book = SettlementCodebookBuilder.BuildLeftSide(new[] { Source("dbo.A", ddl, spec) });
+
+            Assert.Contains(book.Entries, e => e.Value == "ABC");
+        }
+
+        [Fact]
+        public void 따옴표_없이도_경계_위치이면_채택한다()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_Boundary2 AS
+BEGIN
+    SELECT * FROM T WHERE PayMethod = 'impaymobile'
+END";
+            const string spec = @"## 개요
+
+결제수단이 impaymobile인 건을 대상으로 한다.
+";
+
+            var book = SettlementCodebookBuilder.BuildLeftSide(new[] { Source("dbo.A", ddl, spec) });
+
+            Assert.Contains(book.Entries, e => e.Value == "impaymobile");
+        }
+
+        // 리뷰 지적 ②: 임계값 3의 위쪽 경계를 잠근다. 길이 2 표본만으로는 임계값을
+        // 3에서 4로 올려도 걸리는 테스트가 없다. 길이 3 표본을 더해 임계값 3에서는
+        // 포함, 4로 올리면 이 테스트가 실패하도록 한다.
+        [Fact]
+        public void 길이_3인_값은_임계값_3에서_매칭_대상이다()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_Three AS
+BEGIN
+    SELECT * FROM T WHERE Kind = 'ABC'
+END";
+            const string spec = @"## 개요
+
+코드는 'ABC'로 표기한다.
+";
+
+            var book = SettlementCodebookBuilder.BuildLeftSide(new[] { Source("dbo.A", ddl, spec) });
+
+            Assert.True(Assert.Single(book.Entries, e => e.Value == "ABC").MatchEligible);
+        }
     }
 }
