@@ -5,10 +5,10 @@ ReSet이 `output/` 아래에 남기는 파일을 **누가·언제·어디에·�
 - 작성일: 2026-08-14 · 최종 갱신: 2026-09-06
 - `output/` 전체는 Git 추적에서 제외된다. 여기 있는 것은 **대부분** 재생성 가능한
   파생물이지만 **전부는 아니다.** 지우기 전에 가려야 할 것은 개수가 아니라 **부류**이고,
-  가르는 물음은 하나다 — 「이 파일의 내용이 **지금의 입력만으로 다시 계산되는가**」.
-  아니라고 답하는 네 부류(**사람이 소유하는 입력 · 앞 판을 덮지 않고 쌓는 기록 ·
-  ReSet이 내용을 쓰지 않는 자리 · 지난 실행에 묶인 것**)는 지워도 **재실행이 되돌려
-  주지 않는다.** 자리와 근거는 **§10에 표로 모았다 — `output/`을 지우거나 재생성하기
+  가르는 물음은 하나다 — 「이 자리를 **다시 채울 입력이 지금도 남아 있고, 그것을
+  채우는 주체가 이 도구인가**」. 아니라고 답하는 네 부류(**사람이 소유하는 입력 ·
+  도구가 앞 판을 덮지 않고 쌓는 기록 · 도구가 아닌 것이 쓰는 자리 · 지난 실행에 묶인
+  것**)는 지워도 **재실행이 되돌려 주지 않는다.** 자리와 근거는 **§10에 표로 모았다 — `output/`을 지우거나 재생성하기
   전에 그 표부터 읽어라.**
 - 그중 `settlement-process.md`(§1 ✍️ 사람, §8)만이 **사람이 소유하는 입력**이고,
   **이것은 지우면 안 된다.** 재생성은 자리표시자 초안만 다시 쓸 뿐
@@ -149,7 +149,7 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 `raw/`로 옮겼다(위 표). 2026-09-04 이전에 만든 `output/` 트리에는 옛 자리에 그대로 남아
 있는데, 이행 스크립트를 두지 않았기 때문이다. **옛 자리의 그 사본은 지우면 돌아오지
 않는다** — 객체 단위에서 이 파일을 쓰는 곳은 이제 객체 디렉터리의 `raw/` 하나뿐이라
-(`MetadataExporter.cs:79`) 재실행은 새 자리에만 쓴다. 옛 사본은 그때 모델에 실제로 보낸
+(`MetadataExporter.cs:79-93`) 재실행은 새 자리에만 쓴다. 옛 사본은 그때 모델에 실제로 보낸
 원문이므로 §10의 ④(지난 실행에 묶인 것)로 다루어라.
 
 마지막 행이 기본값(`Reference`)에서 비어 있는 것은 결손이 아니다. 정본은 위 첫 줄로 이미 한 벌
@@ -321,7 +321,7 @@ Job 이름으로 짝지어 찾는다 — 이 디렉터리 바로 아래가 `[Job
 |---|---|---|---|
 | `logs/reset-YYYYMMDD.log` | 📋 Serilog | 분석기 실행 내내 | 실행 로그. 일별로 갈리며 기본 31개까지 보관 |
 | `logs/reset-validator-YYYYMMDD.log` | 📋 Serilog | 검증기 실행 내내 | 검증기 로그. 분석기와 섞이지 않게 파일명을 분리 |
-| `Policy/SettlementPolicy.md` | 🤖 AI + ⚙️ 결정적 조립 | ①의 **`Procedures/`** 아래에 `Spec.md`가 1편 이상 있고 명부(`settlement-process.md`)가 유효할 때만, `--policy` 배치 실행 또는 TUI 메뉴 `4` | 계층 ①의 명세서 코퍼스와 정산 프로세스 명부에서 뽑은 **정산 정책서.** 계층 ②~④와는 무관하지만 **①은 필수 선행**이다 — 대상이 하나도 없으면 "개별 SP 분석을 먼저 수행하십시오"로 중단한다(`SettlementPolicyService.cs:59-63`). **①을 돌렸다고 충분하지는 않다** — 대상을 찾는 곳이 `output/Procedures`뿐이라(`PolicyTargetDiscovery.cs:25`, 그것이 의도임을 클래스 주석 `:18-19`가 못박는다) `Functions/`·`External/`만 있는 트리는 여기서 걸린다. SP 단위 계획서처럼 **L1도 L2도 거치지 않아** 헤더에 "검증 없음"이 박힌다 |
+| `Policy/SettlementPolicy.md` | 🤖 AI + ⚙️ 결정적 조립 | ①의 **`Procedures/`** 아래에 `Spec.md`가 1편 이상 있고 명부(`settlement-process.md`)가 유효할 때만, `--policy` 배치 실행 또는 TUI 메뉴 `4` | 계층 ①의 명세서 코퍼스와 정산 프로세스 명부에서 뽑은 **정산 정책서.** 계층 ②~④와는 무관하지만 **①은 필수 선행**이다 — 대상이 하나도 없으면 "개별 SP 분석을 먼저 수행하십시오"로 중단한다(`SettlementPolicyService.cs:59-63`). **①을 돌렸다고 충분하지는 않다** — 대상을 찾는 곳이 `output/Procedures`뿐이라(`PolicyTargetDiscovery.cs:25`, 그것이 의도임을 클래스 주석 `:18-19`가 못박는다) `Functions/`·`External/`·`Unresolved/`(`OutputPathResolver.cs:82-91`)만 있는 트리는 여기서 걸린다. SP 단위 계획서처럼 **L1도 L2도 거치지 않아** 헤더에 "검증 없음"이 박힌다 |
 | `Policy/settlement-codebook.json` | ⚙️ 결정적 조립(+ DB 연결 시 🗄 DB 조회) | `Policy/SettlementPolicy.md`와 같은 조건·같은 실행 | **코드값 사전.** 좌변(코드 상수)은 DDL에서 오프라인으로 뽑되, **명세서(`Spec.md`)에 등장하는 값만 채택**한다 — 걸러진 값은 사라지지 않고 `SpecUnlistedConstants`에 남는다. 우변(업무 의미)은 DB 연결이 있을 때만 마스터 데이터에서 채운다 |
 | `Policy/steps/*.md` | 🤖 AI | 같은 조건·같은 실행 | 단계별 정책 본문의 **조립 전 원본.** `SettlementPolicy.md`는 이 조각에 **AI가 별도로 쓴 개요**(어느 조각에도 없다)와 코드값 사전(부록 A)·단계별 원본 프로시저(부록 B) 두 결정적 부록, 검증 헤더·배너를 더해 조립한 것이다 — "이 조각들만 이어 붙인 것"이 아니다 |
 | `settlement-process.md` | ✍️ 사람 (초안만 ⚙️ 도구) | 명부가 없을 때, **①이 끝난 뒤 정책 도출을 처음 돌리는 회차**에 초안 생성. 그 뒤로는 사람이 직접 편집 | **정산 업무 순서를 정하는 명부.** 재생성 가능한 파생물이 아니라 **사람이 소유하는 입력**이다(§10의 ①) — 도구는 파일이 이미 있으면 덮어쓰지 않는다. **「도구의 최초 실행」이 아니다** — 명부 블록보다 앞에서 대상 부재를 먼저 던지므로(`SettlementPolicyService.cs:59-63` → `:66-79`) 위 조건의 `Spec.md`가 0편이면 초안조차 만들어지지 않는다. 지우면 재생성은 자리표시자 초안만 돌려주고 사람이 채운 내용은 못 돌아온다(§10) |
@@ -356,17 +356,31 @@ Job 이름으로 짝지어 찾는다 — 이 디렉터리 바로 아래가 `[Job
 ### 재실행이 되돌려 주지 않는 부류
 
 **개수를 외우지 말고 부류를 보라** — 새 기능이 사람이 채우는 입력이나 회차별 기록을
-하나 더 만들면 그것도 여기 들어온다. 가르는 물음은 **「이 파일의 내용이 지금의
-입력만으로 다시 계산되는가」**이고, 아래 넷이 아니라고 답한다.
+하나 더 만들면 그것도 여기 들어온다. 가르는 물음은 **「이 자리를 다시 채울 입력이
+지금도 남아 있고, 그것을 채우는 주체가 이 도구인가」**다.
+
+**「내용이 문자 그대로 같은가」를 묻는 것이 아니다.** 🤖AI 산출물은 회차마다 문장이
+달라지지만(§1) 입력(`Spec.md`·DDL·계획서)이 그대로 있고 쓰는 주체도 도구이므로
+**같은 자리의 같은 종류가 다시 나온다** — 여기 들어오지 않는다. 아래 넷은 그 둘 중
+하나가 깨진다: **입력이 지나갔거나**(①②④) **쓰는 주체가 도구가 아니다**(③).
 
 | 부류 | 자리 | 재실행이 무엇을 못 하는가 |
 | --- | --- | --- |
 | ① 사람이 소유하는 입력 | `settlement-process.md` (§1 ✍️ · §8) | 도구는 파일이 없을 때만 자리표시자 초안을 쓰고, 있으면 손대지 않는다(`SettlementPolicyService.cs:67`, `SettlementProcessRosterDraft.Build`). 사람이 채운 **단계 이름·순서·`## 제외` 목록**은 어느 입력에도 없다 |
-| ② 앞 판을 덮지 않고 쌓는 기록 | `Jobs/[Job]/raw/PlanStructure.superseded-N.md` (§4) · `Jobs/[Job]/agent/progress.json.corrupt[.타임스탬프]` (§5) · `consistency/ConsistencyReport-Axis[축]-YYYY-MM-DD.md` (§7.1) | 이름을 갈라 보존하는 자리라, 지운 뒤 다시 돌리면 **이번 회차의 것이 빈 번호·빈 이름을 차지할 뿐이다**(`VerificationPipelineOrchestrator.cs:4441-4449`, `AgentProgressStore.cs:129-141`). 과거 판을 만들 입력은 그때의 실행과 함께 지나갔다 |
-| ③ ReSet이 내용을 쓰지 않는 자리 | `Jobs/[Job]/agent/` 직하 · `Jobs/[Job]/src/` (§6) · `consistency/` (§7.1) | 쓴 주체가 외부 에이전트다(§1 🧑‍💻). 번들을 다시 써도 도구가 전적으로 소유하는 하위 디렉터리만 새로 나고 이 자리는 건드리지 않는다(`InstructionBundleWriter.cs:52-57`) — 도구가 애초에 쓰지 않던 것을 도구를 돌려 되살릴 수는 없다 |
-| ④ 지난 실행에 묶인 것 | `Jobs/[Job]/agent/progress.json` (§5) · `logs/` (§8) · `offline_snapshot.json` (§8) | 진행 상태는 **완료된 회차의 유일한 기록**이고(`AgentProgressStore.cs:120-126`), 로그는 날짜별로 갈려 오늘 실행이 어제 파일을 만들지 않는다(`Program.cs:2649`). 스냅샷을 다시 뜨려면 **그것이 대신하려던 DB 연결**이 필요하다(`SnapshotManager.cs:14-20`) |
+| ② 도구가 앞 판을 덮지 않고 쌓는 기록 | `Jobs/[Job]/raw/PlanStructure.superseded-N.md` (§4) · `Jobs/[Job]/agent/progress.json.corrupt[.타임스탬프]` (§5) | 도구가 **빈 번호·빈 이름을 찾아** 보존하는 자리라(`VerificationPipelineOrchestrator.cs:4443-4449`, `AgentProgressStore.cs:132-140`), 지운 뒤 다시 돌리면 **이번 회차의 것이 그 빈자리를 차지할 뿐이다.** 과거 판을 만들 입력은 그때의 실행과 함께 지나갔다 |
+| ③ 도구가 아닌 것이 쓰는 자리 | `Jobs/[Job]/src/` (§6) · `Jobs/[Job]/consistency/` 전체(보존본 `ConsistencyReport-Axis[축]-YYYY-MM-DD.md` 포함, §7.1) · `Jobs/[Job]/agent/` 직하에서 **코딩 에이전트가 남긴** 파일 (아래 문단이 가른다) | 쓴 주체가 외부 에이전트다(§1 🧑‍💻). `src/`에 도구가 하는 일은 디렉터리를 만들어 외부 CLI의 작업 디렉터리로 넘기는 것뿐이고(`ExternalCliCodingEngine.cs:46-52`·`:70`), `consistency/`는 도구 소스 어디에도 쓰는 코드가 없다(`src/` 전체에서 그 경로를 조립하는 자리가 0건이다 — 「안 보인다」가 아니라 **세어 본 결과**다). **도구가 애초에 쓰지 않던 것은 도구를 돌려 되살릴 수 없다** |
+| ④ 지난 실행에 묶인 것 | `Jobs/[Job]/agent/progress.json` (§5) · `Jobs/[Job]/validation/raw/[SP]/Spec.md`·`Source.*` (§6) · 옛 자리에 남은 `Objects/[객체]/raw/prompt-context.md` (§3) · `logs/` (§8) · `offline_snapshot.json` (§8) | 진행 상태는 **완료된 회차의 유일한 기록**이고(`AgentProgressStore.cs:120-126`), 대조 사본은 **그 판정이 실제로 읽은 명세서·소스**라 원본이 바뀐 뒤 다시 돌리면 지금 내용의 사본이 새로 써질 뿐이다(`CodeVerificationOrchestrator.cs:306-311`). 로그는 날짜별로 갈려 오늘 실행이 어제 파일을 만들지 않고(`Program.cs:2649`), 스냅샷을 다시 뜨려면 **그것이 대신하려던 DB 연결**이 필요하다(`SnapshotManager.cs:14-20`) |
 
-자리는 다시 생기지만 **내용이 그 회차의 것이 아닌** 경우도 있다.
+③의 마지막 자리는 **`agent/` 직하 전체가 아니다.** 그 자리에 도구가 직접 쓰는 것은
+`MigrationInstructions.md`·`task-*.md`(`InstructionBundleWriter.cs:232`·`:268`)와
+`progress.json`·`todo.md`(`AgentProgressStore.cs:183-184`), 그리고 `common/`·`steps/`·
+`verification/`·`agent/src/`·`agent/tests/` 하위 디렉터리다(§5). **이것들은 계획서에서
+그대로 다시 계산되므로 넷 중 어디에도 들어가지 않는다**(`progress.json`만 ④다 — 도구가
+쓰지만 되살릴 입력이 지나간 자리다). 번들을 다시 써도 도구가 **정리하지 않는** 것이 그
+목록 밖의 파일이고(`InstructionBundleWriter.cs:52-57`, `Program.cs:2496-2499`), 거기
+사는 것이 에이전트 산출물이다.
+
+자리는 다시 생기지만 **내용이 그 회차의 것이 아닌** 경우도 있다. 지금 자리의
 `[객체]/raw/prompt-context.md`와 `[객체]/docs/Thinking.md`는 캐시 히트 회차에 덮이지
 않도록 보호받는데(§3, `MetadataExporter.cs:87`·`DependencyAnalysisOrchestrator.cs:589`),
 지운 뒤 캐시 히트 회차를 돌리면 **빈 파일과 자리표시자**가 새로 써진다 — 파일은 있는데
