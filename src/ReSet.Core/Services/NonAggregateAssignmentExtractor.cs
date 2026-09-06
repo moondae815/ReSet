@@ -27,7 +27,7 @@ namespace ReSet.Core.Services
     /// UP_UTIL_SETTLE_PROC_ETC가 72행(비집계) · 79행(집계)으로 둘 다 가진 실물이다.
     ///
     /// [남는 값이 무엇인지는 판정될 때만 말한다] 수정 라운드 1 - "직전 대입이 남긴 값이라
-    /// DECLARE 초기값과 다르다"고 뭉뚱그리면 코퍼스 8행 중 7행에서 거짓이 된다. 그 7행은
+    /// DECLARE 초기값과 다르다"고 뭉뚱그리면 코퍼스 43행 중 27행에서 거짓이 된다. 그 27행은
     /// 앞선 대입이 아예 없어서 남는 값이 정확히 NULL이기 때문이다. 그래서 갈래를 둘로
     /// 나눈다(<see cref="AggregateAssignmentExtractor"/>가 초기값 유무로 문장을 가르는
     /// 것과 같은 방식이다).
@@ -82,10 +82,10 @@ namespace ReSet.Core.Services
     /// 축자 전사를 강제하므로 거짓 행을 뒤에서 거를 장치가 없다 - AGENTS.md 범주 2와 같은
     /// 원칙으로 거짓 행보다 없는 행을 고른다.
     ///
-    /// **코퍼스에 이 모양도 없다** - 24개 객체를 파싱해 <c>CommonTableExpression</c> 노드를
+    /// **코퍼스에 이 모양도 없다** - 31개 객체를 파싱해 <c>CommonTableExpression</c> 노드를
     /// 센 결과가 0건이다. 문자열 검색(`WITH ... AS (`)이 아니라 AST 노드 수로 확인했다 -
     /// 코퍼스는 `WITH(NOLOCK)` 힌트를 곳곳에 쓰고 있어 문자열로는 둘이 구분되지 않는다.
-    /// 그 0건과 아래 8행을 함께 못박은 것이
+    /// 그 0건과 아래 43행을 함께 못박은 것이
     /// <c>NonAggregateAssignmentExtractorTests.Extract_OverTheCorpus_...</c>다.
     ///
     /// [복합 대입은 담지 않는다] 수정 라운드 2 - `SELECT @v += col`도 SelectSetVariable로
@@ -93,7 +93,7 @@ namespace ReSet.Core.Services
     /// <see cref="LoopVariableResetExtractor"/>가 같은 자리에서 거르는 것과 같은 규칙으로
     /// <c>AssignmentKind != Equals</c>면 침묵한다. 코퍼스의 복합 대입은 전부
     /// `UPDATE ... SET` 컬럼 대입이라 SelectSetVariable로는 0건이다(위 코퍼스 테스트가
-    /// 26건 중 0건으로 못박는다).
+    /// 68건 중 0건으로 못박는다).
     ///
     /// [왜 FROM 절을 요구하는가] `SELECT @v = ID`처럼 FROM이 없으면 무결과라는 개념이
     /// 없다 - 한 행이 반드시 돌아와 대입이 일어난다. FROM이 없는 문장에 이 사실 문장을
