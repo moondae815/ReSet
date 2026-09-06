@@ -106,5 +106,39 @@ namespace ReSet.Core.Tests
 
             Assert.Contains(result.Defects, d => d.Type == PolicyDefectType.EvidenceMissing);
         }
+
+        [Fact]
+        public void 번호_없는_단계_제목_아래에서는_명부_순서로_ID_접두사를_기대한다()
+        {
+            var unnumberedStages = new[] { "## 수수료율 스냅샷 적재", "## 정산 원장 적재" };
+            var body =
+                "## 수수료율 스냅샷 적재\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S1-01 | 요율을 적재한다 | dbo.UP_RATE · ## 개요 > \"요율을 적재\" | - |\n\n"
+                + "## 정산 원장 적재\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S2-01 | 간편결제 건을 대상으로 한다 | dbo.UP_INS · ## 개요 > \"impaymobile인 건\" | impaymobile |\n";
+
+            var result = PolicyAttributionValidator.Validate(body, unnumberedStages, Specs);
+
+            Assert.DoesNotContain(result.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch);
+        }
+
+        [Fact]
+        public void 번호_있는_단계_제목은_선언된_번호를_그대로_기대한다()
+        {
+            var skippedNumberStages = new[] { "## 1. 수수료율 스냅샷 적재", "## 3. 정산 집계" };
+            var body =
+                "## 1. 수수료율 스냅샷 적재\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S1-01 | 요율을 적재한다 | dbo.UP_RATE · ## 개요 > \"요율을 적재\" | - |\n\n"
+                + "## 3. 정산 집계\n\n" + PolicySectionContract.TableHeader + "\n"
+                + PolicySectionContract.TableSeparator + "\n"
+                + "| S2-01 | 간편결제 건을 대상으로 한다 | dbo.UP_INS · ## 개요 > \"impaymobile인 건\" | impaymobile |\n";
+
+            var result = PolicyAttributionValidator.Validate(body, skippedNumberStages, Specs);
+
+            Assert.Contains(result.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch && d.RuleId == "S2-01");
+        }
     }
 }

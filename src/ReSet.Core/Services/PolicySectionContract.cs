@@ -39,6 +39,20 @@ namespace ReSet.Core.Services
             return match.Success && int.TryParse(match.Groups[1].Value, out var n) ? n : 0;
         }
 
+        /// <summary>
+        /// 단계의 실효 번호. 제목에 번호가 있으면 그것을, 없으면 명부에서의 순서(1부터)를 쓴다.
+        ///
+        /// [왜 이 함수가 있는가] 이 폴백이 두 곳에 따로 있으면 같은 값을 다르게 계산한다.
+        /// 실제로 그랬다 - 검증기는 StageNumberOf 를 그대로 써서 번호 없는 제목에 0 을 얻고,
+        /// 생성기는 i + 1 로 폴백해, 사람이 명부에서 번호를 지우는 순간 올바른 S1-01 이
+        /// S0- 를 기대받아 오탐으로 고발됐다. 파서·검증기·생성기가 전부 이 함수만 부른다.
+        /// </summary>
+        public static int EffectiveStageNumber(string heading, int stageIndex)
+        {
+            var declared = StageNumberOf(heading);
+            return declared > 0 ? declared : stageIndex + 1;
+        }
+
         /// <summary>`dbo.UP_X · ## 헤딩 > "구절"` 을 가른다.</summary>
         public static bool TryParseEvidence(string? raw, out PolicyEvidenceReference reference)
         {

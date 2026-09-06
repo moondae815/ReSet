@@ -33,15 +33,16 @@ namespace ReSet.Core.Services
             var fenceFlags = MarkdownSectionLocator.ComputeFenceFlags(lines);
             var rules = new List<PolicyRule>();
 
-            foreach (var heading in stageHeadings)
+            for (var stageIndex = 0; stageIndex < stageHeadings.Count; stageIndex++)
             {
+                var heading = stageHeadings[stageIndex];
                 var (headerIndex, endIndex) = MarkdownSectionLocator.LocateSection(lines, heading, "## ");
                 if (headerIndex < 0)
                 {
                     continue;
                 }
 
-                var stageNumber = PolicySectionContract.StageNumberOf(heading);
+                var stageNumber = PolicySectionContract.EffectiveStageNumber(heading, stageIndex);
 
                 for (var i = headerIndex + 1; i < endIndex; i++)
                 {
@@ -69,9 +70,78 @@ namespace ReSet.Core.Services
         private static List<string>? SplitRow(string line)
         {
             var trimmed = line.Trim();
-            return trimmed.StartsWith("|", StringComparison.Ordinal)
-                ? MarkdownTableCellCodec.SplitRow(trimmed.Trim('|'))
-                : null;
+            if (!trimmed.StartsWith("|", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var cells = MarkdownTableCellCodec.SplitRow(trimmed.Trim('|'));
+            return RejoinOverSplitEvidence(cells);
+        }
+
+        /// <summary>
+        /// 근거 칸 안의 이스케이프되지 않은 파이프 때문에 다섯 칸 이상으로 터진 행을
+        /// 계약대로 도로 잇는다. PrdDocumentParser.RejoinOverSplitEvidence와 같은 문제를
+        /// 풀지만 앵커가 다르다 - PRD의 근거 칸은 `## 헤딩 > "구절"`로 시작해 "## "로
+        /// 여는 칸을 바로 찾을 수 있지만, 정책서는 `&lt;SP&gt; · ## 헤딩 > "구절"`이라
+        /// SP 식별자가 앞에 붙는다. 그래서 여는 앵커는 "## "로 시작하는 칸이 아니라
+        /// LabelSeparator와 "## "를 함께 담은 칸이다.
+        ///
+        /// [왜 필요한가] 정책서는 근거가 여러 명세서에 흩어져 있어 이 위험이 PRD보다
+        /// 크다 - 생성 프롬프트가 축자 인용을 요구하는데 명세서의 알찬 사실은 표 안에
+        /// 살아서, 모델이 지시를 지킬수록 인용에 표 파이프가 섞인다.
+        ///
+        /// 추측으로 붙이지 않는다 - 근거 칸의 문법이 열리는 자리(SP 라벨 뒤의 "## ")부터
+        /// 인용이 닫히는 칸까지만 잇는다. 문법이 안 보이면 손대지 않고 원래대로 둔다.
+        /// 칸 수가 계약과 같은 행은 아예 건드리지 않으므로 지금 통과하는 문서의 판정은
+        /// 이 되살리기로 달라질 수 없다.
+        /// </summary>
+        private static List<string> RejoinOverSplitEvidence(List<string> cells)
+        {
+            if (cells.Count <= PolicySectionContract.ExpectedCellCount)
+            {
+                return cells;
+            }
+
+            var openAnchor = PolicySectionContract.LabelSeparator + "## ";
+
+            var start = -1;
+            for (var i = 1; i < cells.Count - 1; i++)
+            {
+                if (cells[i].Contains(openAnchor, StringComparison.Ordinal))
+                {
+                    start = i;
+                    break;
+                }
+            }
+
+            if (start < 0)
+            {
+                return cells;
+            }
+
+            var end = -1;
+            for (var i = cells.Count - 2; i >= start; i--)
+            {
+                if (cells[i].EndsWith("\"", StringComparison.Ordinal))
+                {
+                    end = i;
+                    break;
+                }
+            }
+
+            if (end < 0)
+            {
+                return cells;
+            }
+
+            return new List<string>(PolicySectionContract.ExpectedCellCount)
+            {
+                cells[0],
+                string.Join(" | ", cells.GetRange(1, start - 1)),
+                string.Join(" | ", cells.GetRange(start, end - start + 1)),
+                string.Join(" | ", cells.GetRange(end + 1, cells.Count - end - 1)),
+            };
         }
 
         private static bool IsHeaderOrSeparator(List<string> cells) =>

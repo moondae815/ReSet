@@ -48,6 +48,16 @@ namespace ReSet.Core.Services
             var defects = new List<PolicyDefect>();
             var lines = MarkdownSectionLocator.SplitLines(policyMarkdown);
 
+            // 단계 제목에 번호가 없으면 명부 순서로 매긴다 - PolicyDocumentParser와 같은
+            // 함수를 써야 검증기가 파서와 다른 번호를 기대하는 사고(S1-01이 S0-를
+            // 기대받는 오탐)가 재발하지 않는다.
+            var effectiveStageNumbers = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var stageIndex = 0; stageIndex < stageHeadings.Count; stageIndex++)
+            {
+                effectiveStageNumbers[stageHeadings[stageIndex]] =
+                    PolicySectionContract.EffectiveStageNumber(stageHeadings[stageIndex], stageIndex);
+            }
+
             // 1. 단계 완전성과 순서
             var positions = new List<(string Heading, int Index)>();
             foreach (var heading in stageHeadings)
@@ -79,7 +89,10 @@ namespace ReSet.Core.Services
 
             foreach (var rule in PolicyDocumentParser.Parse(policyMarkdown, stageHeadings))
             {
-                var expectedPrefix = PolicySectionContract.IdPrefixFor(rule.StageNumber) + "-";
+                var expectedStageNumber = effectiveStageNumbers.TryGetValue(rule.StageHeading, out var stageNumber)
+                    ? stageNumber
+                    : rule.StageNumber;
+                var expectedPrefix = PolicySectionContract.IdPrefixFor(expectedStageNumber) + "-";
                 if (!rule.Id.StartsWith(expectedPrefix, StringComparison.Ordinal))
                 {
                     defects.Add(new PolicyDefect(
