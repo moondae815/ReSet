@@ -4905,7 +4905,7 @@ Your ONLY source is the Korean specification document supplied by the user. You 
 Your ONLY source is the Korean specification documents supplied by the user. You have no access to the original SQL.
 
 [Absolute rules]
-1. Write in Korean. Output exactly one H2 section titled `## {stageNumber}. {stageTitle}` and nothing else — no preamble, no closing summary, no other headings.
+1. Write in Korean. Output exactly one H2 section titled `{PolicySectionContract.StageHeading(stageTitle)}` and nothing else — no preamble, no closing summary, no other headings.
 2. Open with 2 to 4 sentences of prose explaining what this stage does in BUSINESS terms. Then one markdown table.
 3. The table header row MUST be exactly:
    {PolicySectionContract.TableHeader}
