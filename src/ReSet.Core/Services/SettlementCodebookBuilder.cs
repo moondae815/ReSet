@@ -124,5 +124,56 @@ namespace ReSet.Core.Services
         /// </summary>
         private static bool IsAsciiWordChar(char c) =>
             (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+
+        /// <summary>
+        /// 좌변만 있는 사전에 프로파일링 결과를 붙인다. 2단이다.
+        ///
+        /// 1단 - 컬럼을 아는 값은 같은 이름의 컬럼에서만 찾는다(정밀).
+        /// 2단 - 컬럼을 모르는 값은 아무 문자열 칸에서나 찾되, 길이 조건을 통과한
+        ///        값만 시도한다(MatchEligible).
+        ///
+        /// 실측으로 컬럼까지 잡히는 비율은 값 29개 / 82개다. 즉 2단이 다수 경로이고,
+        /// 길이 조건이 실질적인 잡음 차단선이다.
+        ///
+        /// 부분 문자열은 매칭이 아니다 - 'payco'가 'payco_extra'에 걸리면 사전이
+        /// 거짓 번역을 문서에 허가하게 된다.
+        /// </summary>
+        public static SettlementCodebook ApplyMatches(
+            SettlementCodebook leftSide,
+            IReadOnlyList<ProfiledTable> tables)
+        {
+            var entries = leftSide.Entries.Select(entry =>
+            {
+                if (!entry.MatchEligible)
+                {
+                    return entry;
+                }
+
+                var matches = new List<CodebookMatch>();
+
+                foreach (var table in tables)
+                {
+                    foreach (var row in table.Rows)
+                    {
+                        var hit = entry.Column is null
+                            ? row.Values.Any(v => Equals(v, entry.Value))
+                            : row.TryGetValue(entry.Column, out var cell) && Equals(cell, entry.Value);
+
+                        if (hit)
+                        {
+                            matches.Add(new CodebookMatch(table.Table, row));
+                            break; // 한 테이블에서 첫 행이면 충분하다 - 코드 테이블은 값이 유일하다.
+                        }
+                    }
+                }
+
+                return entry with { Matches = matches };
+            }).ToList();
+
+            return leftSide with { Entries = entries };
+        }
+
+        private static bool Equals(string? cell, string value) =>
+            cell is not null && string.Equals(cell, value, StringComparison.OrdinalIgnoreCase);
     }
 }

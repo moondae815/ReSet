@@ -1316,5 +1316,24 @@ namespace ReSet.Core.Services
 
             return dataList;
         }
+
+        public async Task<int> GetTableRowCountAsync(
+            string connectionString, string? database, string schema, string tableName,
+            CancellationToken cancellationToken = default)
+        {
+            var cleanDb = string.IsNullOrEmpty(database) ? "" : $"[{database.Replace("]", "]]")}].";
+            var escapedSchema = $"[{schema.Replace("]", "]]")}]";
+            var escapedTable = $"[{tableName.Replace("]", "]]")}]";
+
+            var query = $"SELECT COUNT_BIG(1) FROM {cleanDb}{escapedSchema}.{escapedTable};";
+
+            using var conn = new SqlConnection(connectionString);
+            await conn.OpenAsync(cancellationToken);
+            using var cmd = new SqlCommand(query, conn);
+            var scalar = await cmd.ExecuteScalarAsync(cancellationToken);
+
+            // int 범위를 넘는 큰 테이블은 어차피 임계 초과라 상한으로 잘라도 판정이 같다.
+            return scalar is long count ? (int)Math.Min(count, int.MaxValue) : 0;
+        }
     }
 }

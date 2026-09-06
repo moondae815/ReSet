@@ -322,5 +322,11 @@ namespace ReSet.Core.Services
         {
             throw new NotSupportedException("GetTableDataPreviewAsync is not supported in offline mode because table data is not cached in the snapshot.");
         }
+
+        public Task<int> GetTableRowCountAsync(
+            string connectionString, string? database, string schema, string tableName,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException(
+                "GetTableRowCountAsync is not supported in offline mode because table data is not cached in the snapshot.");
     }
 }
