@@ -49,57 +49,6 @@ namespace ReSet.Core.Services
     {
         private static readonly string[] AllowedConfidence = { "도출", "추정" };
 
-        /// <summary>
-        /// 인용 대조용 정규화. 공백과 마크다운 강조·표 파이프를 걷어낸다.
-        ///
-        /// 이것이 없으면 Spec 본문의 `**강조**`나 표 정렬 공백 때문에 멀쩡한 인용이
-        /// 결함으로 보고된다. 오탐이 잦은 검사는 곧 꺼지므로, 대조는 두 문자열이
-        /// 같은 내용을 말하는지만 본다.
-        /// </summary>
-        private static string NormalizeForQuoteMatch(string text)
-        {
-            var kept = text.Where(ch => !char.IsWhiteSpace(ch)
-                                        && ch != '*' && ch != '`' && ch != '|'
-                                        && ch != '_' && ch != '~');
-            return string.Concat(kept);
-        }
-
-        /// <summary>마크다운 헤딩에서 부호를 정규화한다. 앞의 # 문자, 공백, 접두 숫자·번호, 뒤의 구두점을 제거한다.</summary>
-        private static string NormalizeHeading(string heading)
-        {
-            var text = heading.TrimStart('#').Trim();
-
-            // 접두 숫자 제거 (3. 또는 3) 또는 3 - 형태)
-            var match = System.Text.RegularExpressions.Regex.Match(text, @"^\d+[.\)\s-]+(.*)$");
-            if (match.Success)
-            {
-                text = match.Groups[1].Value.Trim();
-            }
-
-            // 뒤의 구두점 제거 (:)
-            return text.TrimEnd(':').Trim();
-        }
-
-        /// <summary>지정 헤딩 아래 본문만 이어 붙인다. 헤딩이 없으면 null. 정확 일치를 먼저 시도하고, 실패하면 부분 일치로 폴백한다.</summary>
-        private static string? ExtractSectionBody(IReadOnlyList<string> specLines, string heading)
-        {
-            var exact = MarkdownSectionLocator.LocateSection(specLines, heading, "## ");
-            var (headerIndex, endIndex) = exact.HeaderIndex >= 0
-                ? exact
-                : MarkdownSectionLocator.LocateSection(
-                    specLines,
-                    "## " + NormalizeHeading(heading),
-                    "## ",
-                    exact: false);
-
-            if (headerIndex < 0)
-            {
-                return null;
-            }
-
-            return string.Join("\n", specLines.Skip(headerIndex + 1).Take(endIndex - headerIndex - 1));
-        }
-
         /// <summary>근거 칸을 헤딩과 인용 구절로 가른 것.</summary>
         public sealed record PrdEvidenceReference(string Heading, string Quote);
 
@@ -209,9 +158,9 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                var normalizedEvidence = NormalizeHeading(evidence.Heading);
+                var normalizedEvidence = EvidenceQuoteMatcher.NormalizeHeading(evidence.Heading);
                 var isAllowedSource = rule.AllowedSources.Any(source =>
-                    NormalizeHeading(source).Equals(normalizedEvidence, StringComparison.Ordinal));
+                    EvidenceQuoteMatcher.NormalizeHeading(source).Equals(normalizedEvidence, StringComparison.Ordinal));
                 if (!isAllowedSource)
                 {
                     defects.Add(new PrdDefect(
@@ -223,7 +172,7 @@ namespace ReSet.Core.Services
 
                 if (!sectionBodyCache.TryGetValue(evidence.Heading, out var body))
                 {
-                    body = ExtractSectionBody(specLines, evidence.Heading);
+                    body = EvidenceQuoteMatcher.ExtractSectionBody(specLines, evidence.Heading);
                     sectionBodyCache[evidence.Heading] = body;
                 }
 
@@ -237,8 +186,7 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
-                if (!NormalizeForQuoteMatch(body).Contains(
-                        NormalizeForQuoteMatch(evidence.Quote), StringComparison.Ordinal))
+                if (!EvidenceQuoteMatcher.QuoteExistsIn(body, evidence.Quote))
                 {
                     defects.Add(new PrdDefect(
                         PrdDefectType.EvidenceQuoteNotFound,
