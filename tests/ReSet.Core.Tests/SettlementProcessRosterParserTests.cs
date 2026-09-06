@@ -224,5 +224,24 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(new[] { "dbo.UP_Y" }, roster.Stages[0].Procedures);
         }
+
+        // 회귀(라운드 3): 목록 표식으로 연 주석이 문서 끝까지 안 닫히면 닫힘-폴백이
+        // 주석 플래그를 전부 지운다. 그러면 본 루프가 그 줄을 평범한 항목으로 다시
+        // 읽어 "<!-- unclosed" 라는 문자열 자체가 프로시저로 명부에 들어간다.
+        // item.StartsWith("<!--") 가드는 폴백과 독립적으로 이 자리를 막는다 - 줄에
+        // "<!--"가 문자 그대로 있다는 사실은 폴백이 플래그를 지우든 말든 모호하지
+        // 않기 때문이다. 2026-09-06 라운드 2 에서 이 가드를 잉여로 보고 지웠다가
+        // 이 회귀를 만들었다 - 그때의 제거 증명(14건)에는 이 표본이 없었다.
+        [Fact]
+        public void 목록_표식으로_열고_안_닫힌_주석은_프로시저로_읽지_않는다()
+        {
+            const string markdown = @"## 1. 단계
+- <!-- unclosed
+- dbo.UP_A
+";
+            var roster = SettlementProcessRosterParser.Parse(markdown);
+
+            Assert.Equal(new[] { "dbo.UP_A" }, roster.Stages[0].Procedures);
+        }
     }
 }
