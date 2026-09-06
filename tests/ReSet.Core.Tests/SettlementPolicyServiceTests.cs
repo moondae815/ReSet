@@ -76,6 +76,18 @@ namespace ReSet.Core.Tests
             + PolicySectionContract.TableHeader + "\n" + PolicySectionContract.TableSeparator + "\n"
             + $"| S{n}-01 | 업무 규칙 | {label} · ## 개요 > \"{quote}\" | {PolicySectionContract.NoCodeValue} |\n";
 
+        /// <summary>
+        /// Stage()와 달리 제목에 번호를 붙이지 않는다 - 명부 헤딩 자체가 번호 없는
+        /// 형태("## 요율 적재")일 때, 서비스가 만드는 stageHeadings("## " + Title)와
+        /// 문자 그대로 일치시키기 위해서다. ID 접두사(S{n}-)는 명부의 등장 순서로
+        /// 계산된 실효 단계 번호를 그대로 쓴다 - EffectiveStageNumber가 옳게 동작하면
+        /// n번째 등장 단계가 항상 Sn- 을 받아야 한다.
+        /// </summary>
+        private static string StageNoNumber(int n, string title, string label, string quote) =>
+            $"## {title}\n\n산문 개요.\n\n"
+            + PolicySectionContract.TableHeader + "\n" + PolicySectionContract.TableSeparator + "\n"
+            + $"| S{n}-01 | 업무 규칙 | {label} · ## 개요 > \"{quote}\" | {PolicySectionContract.NoCodeValue} |\n";
+
         [Fact]
         public async Task 명부가_없으면_초안을_쓰고_중단한다()
         {
@@ -341,6 +353,39 @@ namespace ReSet.Core.Tests
             Assert.Single(stage2Sources);
             Assert.Equal("dbo.UP_B", stage2Sources[0].Label);
             Assert.DoesNotContain(stage2Sources, s => s.Label == "dbo.UP_A");
+        }
+
+        /// <summary>
+        /// 리뷰 발견(Fix Round 1, Important 2) - 단계별 교정 재호출 검증에 단일 헤딩만
+        /// 넘기면 PolicyDocumentParser.Parse 내부의 stageIndex가 항상 0이 되어, 번호
+        /// 없는 제목의 실효 단계 번호가 EffectiveStageNumber(heading, 0)으로 계산된다.
+        /// 명부의 두 번째 이후 단계가 번호를 안 붙이면 늘 1로 잘못 계산되어, 올바르게
+        /// S2-01을 낸 AI 초안이 IdPrefixMismatch로 고발되고 무조건 교정 재호출을 탄다.
+        /// 이 테스트는 그 재호출이 실제로 일어나지 않는지(호출 총량으로) 잰다 -
+        /// 최종 조립 문서는 전체 목록으로 다시 검증되어 결함 자체는 안 보이므로,
+        /// 결함 유무만으로는 이 낭비를 잡을 수 없다.
+        /// </summary>
+        [Fact]
+        public async Task 번호_없는_제목의_두번째_단계는_교정_재호출_없이_받아들여진다()
+        {
+            File.WriteAllText(Path.Combine(_root, "settlement-process.md"),
+                "# 정산 프로세스 명부\n\n## 요율 적재\n- dbo.UP_A\n\n## 원장 적재\n- dbo.UP_B\n\n## 제외\n");
+
+            var ai = AiWriting(
+                StageNoNumber(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
+                StageNoNumber(2, "원장 적재", "dbo.UP_B", "원장을 적재"));
+            var service = new SettlementPolicyService(ai);
+
+            var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
+
+            // 재호출이 없었다면 stageNumber=2로 GeneratePolicyStageAsync를 부른 횟수는
+            // 정확히 1이다(교정 재호출까지 있었다면 2가 된다).
+            await ai.Received(1).GeneratePolicyStageAsync(
+                2, Arg.Any<string>(),
+                Arg.Any<IReadOnlyList<(string, string)>>(), Arg.Any<IReadOnlyList<CodebookEntry>>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            Assert.DoesNotContain(outcome.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch);
         }
     }
 

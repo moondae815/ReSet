@@ -148,17 +148,19 @@ namespace ReSet.Core.Services
                         stage.Title, stageChars, StageSpecCharWarningThreshold);
                 }
 
-                // 이 단계 하나만의 헤딩만 넘긴다 - 초안은 자기 단계의 H2 하나만 담고
-                // 있으므로, 전체 stageHeadings를 넘기면 아직 쓰이지 않은 형제 단계의
-                // 헤딩이 매번 "없다"고 잡혀(StageMissing) 모든 단계가 항상 교정
-                // 재호출을 타게 된다 - 그 재호출이 반환하는 내용까지 같은 잣대로
-                // 재검증되어 결함 수가 같을 때 재호출 쪽을 택하면, 다른 단계의
-                // 본문이 이 단계의 자리를 차지하는 사고로 이어질 수 있다
-                // (2026-09-06 테스트로 재현).
-                // 단계 완전성은 조립된 전체 문서에서 한 번(6단계)만 확인하면 충분하다.
+                // 단일 헤딩만 넘기면(과거 시도) 유령 StageMissing은 사라지지만, 그
+                // 대가로 PolicyDocumentParser.Parse 안의 stageIndex가 항상 0이 되어
+                // 번호 없는 제목의 실효 단계 번호가 EffectiveStageNumber(heading, 0)
+                // 으로 잘못 계산된다 - 명부의 두 번째 이후 단계가 번호를 안 붙이면
+                // 늘 1로 계산되어, 옳게 S2-01을 낸 초안이 IdPrefixMismatch로 고발되고
+                // 무조건 교정 재호출을 탄다(2026-09-06 Fix Round 1 리뷰로 재현).
+                // 그래서 전체 stageHeadings로 검증해 이 단계가 자기 진짜 위치의
+                // 인덱스를 받게 하고, 돌아온 결함에서 "이 단계가 아닌 다른 헤딩이
+                // 없다"는 유령 StageMissing만 걸러낸다 - 위치 정보와 유령 제거를
+                // 함께 얻는다.
                 var body = await GenerateStageWithOneRepairAsync(
                     stageNumber, stage, stageSources, stageCodeValues,
-                    new[] { stageHeadings[i] }, specsByLabel,
+                    stageHeadings, stageHeadings[i], specsByLabel,
                     effort, cancellationToken);
 
                 stageBodies.Add(body);
@@ -221,6 +223,13 @@ namespace ReSet.Core.Services
         /// 단계 하나를 생성하고, 귀속 결함이 있으면 한 번만 교정 재호출한다.
         /// 결함이 늘면 첫 초안을 지킨다 - 결함 수가 유일하게 비교 가능한 척도다
         /// (PrdDerivationService와 같은 규칙).
+        ///
+        /// [왜 전체 stageHeadings를 넘기고 걸러내는가] 단일 헤딩만 넘기면(과거 시도)
+        /// PolicyDocumentParser.Parse 안의 stageIndex가 항상 0이 되어 번호 없는
+        /// 제목의 실효 단계 번호가 틀어진다(EffectiveStageNumber(heading, 0)).
+        /// 전체 목록으로 검증하면 이 단계가 진짜 인덱스를 받아 번호가 옳게 나오고,
+        /// 대신 아직 조립되지 않은 형제 단계의 StageMissing이 함께 딸려 온다 -
+        /// 그 유령만 <see cref="RelevantDefects"/>로 걸러낸다.
         /// </summary>
         private async Task<string> GenerateStageWithOneRepairAsync(
             int stageNumber,
@@ -228,6 +237,7 @@ namespace ReSet.Core.Services
             IReadOnlyList<(string Label, string SpecMarkdown)> stageSources,
             IReadOnlyList<CodebookEntry> stageCodeValues,
             IReadOnlyList<string> stageHeadings,
+            string currentHeading,
             IReadOnlyDictionary<string, string> specsByLabel,
             string? effort,
             CancellationToken cancellationToken)
@@ -236,23 +246,42 @@ namespace ReSet.Core.Services
                 stageNumber, stage.Title, stageSources, stageCodeValues, null, effort, cancellationToken))
                 .Content ?? string.Empty;
 
-            var validation = PolicyAttributionValidator.Validate(draft, stageHeadings, specsByLabel);
-            if (validation.IsValid)
+            var defects = RelevantDefects(draft, stageHeadings, currentHeading, specsByLabel);
+            if (defects.Count == 0)
             {
                 return draft;
             }
 
             Log.Information(
                 "정책 단계 귀속 검사 미통과 - 단계 {Stage}, 결함 {Count}건. 교정 재호출 1회를 시도합니다.",
-                stage.Title, validation.Defects.Count);
+                stage.Title, defects.Count);
 
-            var feedback = string.Join("\n", validation.Defects.Select(d => $"- [{d.RuleId}] {d.Message}"));
+            var feedback = string.Join("\n", defects.Select(d => $"- [{d.RuleId}] {d.Message}"));
             var retry = (await _aiService.GeneratePolicyStageAsync(
                 stageNumber, stage.Title, stageSources, stageCodeValues, feedback, effort, cancellationToken))
                 .Content ?? string.Empty;
 
-            var retryValidation = PolicyAttributionValidator.Validate(retry, stageHeadings, specsByLabel);
-            return retryValidation.Defects.Count <= validation.Defects.Count ? retry : draft;
+            var retryDefects = RelevantDefects(retry, stageHeadings, currentHeading, specsByLabel);
+            return retryDefects.Count <= defects.Count ? retry : draft;
+        }
+
+        /// <summary>
+        /// 단계 하나의 초안을 전체 stageHeadings로 검증하되, 다른(아직 조립되지 않은)
+        /// 형제 단계의 StageMissing은 유령이므로 걸러낸다. 초안은 자기 단계의 H2 하나만
+        /// 담고 있어 형제 헤딩은 찾아질 수가 없다 - 그 결여를 결함으로 세면 모든 단계가
+        /// 무조건 교정 재호출을 타게 된다. 반면 이 단계 자신의 헤딩이 정말 빠졌다면
+        /// (currentHeading에 대한 StageMissing) 그것은 진짜 결함이므로 남긴다.
+        /// </summary>
+        private static IReadOnlyList<PolicyDefect> RelevantDefects(
+            string draft,
+            IReadOnlyList<string> stageHeadings,
+            string currentHeading,
+            IReadOnlyDictionary<string, string> specsByLabel)
+        {
+            var validation = PolicyAttributionValidator.Validate(draft, stageHeadings, specsByLabel);
+            return validation.Defects
+                .Where(d => d.Type != PolicyDefectType.StageMissing || d.Subject == currentHeading)
+                .ToList();
         }
 
         private static async Task WriteStagePartAsync(
