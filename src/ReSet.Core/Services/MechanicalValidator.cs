@@ -230,6 +230,7 @@ namespace ReSet.Core.Services
                     CheckSetAssignments(cleansed, expectations, result);
                     CheckLocalVariableDeclarationTable(cleansed, expectations, result);
                     CheckErrorCodes(cleansed, expectations, result);
+                    CheckErrorCodeUniquenessClaim(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -3804,6 +3805,67 @@ namespace ReSet.Core.Services
                 });
 
             return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        /// <summary>
+        /// 산문이 오류 코드를 「고유」라 단정했는데 <c>### 오류 코드</c> 기계 확정 표의
+        /// 코드 다중집합에 <b>중복이 있으면</b> 기각한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 A 감사]
+        /// <c>UP_UTIL_SETTLE_EXCEPTION_PROC</c> 의 개요가 「각 문장 직후 <c>@@ERROR</c> 검사로
+        /// 실패 시 롤백 후 <b>고유</b> 음수 코드를 출력 파라미터에 설정한다」고 적었는데, 같은
+        /// 문서의 표는 <c>-1</c> 을 UPDATE 3·4 에, <c>-2</c> 를 5·6 에 중복으로 싣는다. 호출자가
+        /// 반환 코드로 실패 지점을 특정할 수 있다고 오해한다.
+        ///
+        /// [왜 이 검사가 안전한가] 판정이 산문 문자열이 아니라 <b>기계 확정 재료의 중복 여부</b>에
+        /// 걸린다. 산문 토큰은 「이 문장이 그 주장을 하는가」를 고르는 데만 쓰이고, 발화 여부는
+        /// <see cref="SpecExpectations.ErrorCodes"/> 가 정한다.
+        ///
+        /// [착수 전 코퍼스 실측] 「고유」가 「코드」와 같은 문장에 있는 명세서는 4 편이고 그중
+        /// 표에 중복이 있는 것은 EXCEPTION_PROC 하나뿐이다 — <b>발화 1 · 오탐 0</b>
+        /// (EXPECT_PROC 11 코드 · INS_EXTRA 5 · Settle_Summary 8 은 전부 서로 달라 침묵).
+        ///
+        /// [알려진 한계 - 미리 적어 둔다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로 쓰인다.
+        /// <c>UP_Util_Settle_Summary</c> 의 「자신의 <b>고유</b> 코드(-1~-8)」는 후자이고 지금은
+        /// 중복이 없어 침묵한다. <b>중복이 있는 「자신의 고유」가 나타나면 오탐이 된다</b> —
+        /// 오늘 코퍼스에는 없다. 그때는 토큰을 좁히지 말고 이 한계를 먼저 재라.
+        ///
+        /// [중복 자체는 고발하지 않는다] 원본이 같은 코드를 두 문장에 쓰는 것은 원본의 성질이지
+        /// 명세서 결함이 아니다. 산문이 「고유」라 단정했을 때만 기각한다 — 그 방향을 잠그지
+        /// 않으면 검사가 원본을 고발하게 된다(<c>…TableHasDuplicatesButProseIsSilent…</c> 가
+        /// 그 자리를 잠근다).
+        /// </summary>
+        private static void CheckErrorCodeUniquenessClaim(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ErrorCodes.Count == 0) return;
+
+            var duplicated = expectations.ErrorCodes
+                .GroupBy(f => f.Code, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .OrderBy(c => c, StringComparer.Ordinal)
+                .ToList();
+            if (duplicated.Count == 0) return;
+
+            // 「고유」·「서로 다른」이 「코드」와 같은 문장에 있을 때만 주장으로 본다.
+            // 문장 단위로 자르는 이유는 문서 어딘가에 두 낱말이 따로 있는 것을 주장으로
+            // 오인하지 않기 위해서다.
+            var claim = SplitIntoSentences(markdown)
+                .FirstOrDefault(sentence =>
+                    sentence.Contains("코드", StringComparison.Ordinal)
+                    && (sentence.Contains("고유", StringComparison.Ordinal)
+                        || sentence.Contains("서로 다른", StringComparison.Ordinal)));
+            if (claim == null) return;
+
+            var offenders = string.Join(", ", duplicated);
+            var trimmed = claim.Trim();
+            if (trimmed.Length > 80) trimmed = trimmed[..80] + "…";
+
+            result.Errors.Add(
+                $"명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 "
+                + $"중복된 코드 {offenders}이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 "
+                + $"특정할 수 없습니다. 해당 서술: \"{trimmed}\"");
         }
 
         /// <summary>

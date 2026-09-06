@@ -10440,6 +10440,114 @@ END"
             Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 오류 코드 「고유」 주장 기각 — 2026-09-06 POQSettleBatch4 축 A 감사.
+        //
+        // 실물: UP_UTIL_SETTLE_EXCEPTION_PROC 의 개요가 「각 문장 직후 @@ERROR 검사로
+        // 실패 시 롤백 후 **고유** 음수 코드를 출력 파라미터에 설정한다」고 적었는데,
+        // 같은 문서의 `오류 코드` 기계 확정 표는 -1 을 UPDATE 3·4 에, -2 를 5·6 에
+        // 중복으로 싣는다. 호출자가 반환 코드로 실패 지점을 특정할 수 있다고 오해한다.
+        //
+        // [왜 이 검사가 안전한가] 판정이 산문 문자열이 아니라 **기계 확정 재료의
+        // 중복 여부**에 걸린다. 착수 전 코퍼스 실측: 「고유」가 「코드」와 같은 문장에
+        // 있는 명세서 4 편 중 표에 중복이 있는 것은 EXCEPTION_PROC 하나뿐이라
+        // 발화 1 · 오탐 0 이다(EXPECT_PROC 11 코드·INS_EXTRA 5·Settle_Summary 8 은
+        // 전부 서로 달라 침묵한다).
+        //
+        // [알려진 한계 - 미리 적는다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로
+        // 쓰인다. Settle_Summary 의 「자신의 고유 코드(-1~-8)」는 후자이고 지금은
+        // 중복이 없어 침묵한다. **중복이 있는 「자신의 고유」가 나타나면 오탐이 된다** —
+        // 오늘 코퍼스에는 없다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ErrorCodeTable_WhenProseClaimsUniqueButTableHasDuplicates_IsReported()
+        {
+            // 실물 모양 그대로다 — 같은 코드가 서로 다른 두 문장에 붙는다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 3, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 4, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 5, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "각 문장 직후 `@@ERROR` 검사로 실패 시 롤백 후 고유 음수 코드를 "
+                + "출력 파라미터에 설정하고 즉시 종료합니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 3 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 4 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 5 | -2 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // 「발화했는가」가 아니라 **메시지가 나열하는 토큰**으로 잠근다 - 규칙을
+            // 아무렇게나 세게 만들어도 발화는 나기 때문이다.
+            var error = Assert.Single(result.Errors, e => e.Contains("고유"));
+            Assert.Contains("-1", error);
+            Assert.DoesNotContain("-2", error);   // 중복이 아닌 코드는 고발하지 않는다
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenProseClaimsUniqueAndTableHasNone_StaysSilent()
+        {
+            // 음성 표본. 한쪽만으로는 방향이 뒤집힌 사본이 조용히 통과한다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 1, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 2, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "각 단계 후 `@@ERROR` 검사에 실패하면 `ROLLBACK TRAN` 후 고유 오류 코드를 "
+                + "`@po_intRetVal` 에 설정하고 즉시 `RETURN` 합니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 2 | -2 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("고유"));
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenTableHasDuplicatesButProseIsSilent_StaysSilent()
+        {
+            // 중복 자체는 원본의 성질이라 결함이 아니다 - 산문이 「고유」라 단정했을
+            // 때만 기각한다. 이 방향을 잠그지 않으면 검사가 원본을 고발하게 된다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 3, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 4, "-1", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "오류 코드 -1 이 두 곳(UPDATE 3·4)에서 중복 사용됩니다. 호출자가 "
+                + "실패 지점을 특정할 수 없습니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 3 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 4 | -1 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("고유"));
+        }
+
         [Fact]
         public void ErrorCodeTable_WhenTranscribedVerbatim_ShouldNotReport()
         {
