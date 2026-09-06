@@ -82,32 +82,40 @@ namespace ReSet.Core.Tests
             Assert.True(appendixBIndex > appendixAIndex);
         }
 
+        /// <summary>
+        /// Fix Round 2 리뷰 발견 - 이전 판은 값("`S02`")과 메시지("Code=S02, ...")를
+        /// 문서 전체 기준으로 따로따로 Assert.Contains 했다. 그러면 둘이 같은 표
+        /// 행에 있는지는 안 보고, 「문서 어딘가에 둘 다 있다」만 본다 - 카테고리를
+        /// 맞바꾸는 변이(매칭됨과 매칭 대상이었으나 못 찾음을 서로 바꿔치기)가
+        /// 7건 전부를 무사히 통과시켰다(2026-09-06 리뷰가 역변이로 실증).
+        /// 값과 메시지를 하나의 연속 문자열(같은 행)로 이어 붙여 단언해야
+        /// "그 값의 그 행에 그 메시지가 왔다"를 실제로 잰다. 실제 출력을 먼저
+        /// 확인해(ZZZ_DEBUG_PRINT로 임시 출력) 이스케이프가 이 값들에는 사실상
+        /// no-op임을(파이프·개행이 없어 MarkdownTableCellCodec.Escape가 손대지
+        /// 않음) 확인한 뒤 그 원문 그대로를 기대값으로 적었다.
+        /// </summary>
         [Fact]
-        public void 매칭된_코드값은_행의_의미를_싣는다()
+        public void 매칭된_코드값은_같은_행에_매칭된_의미와_출처를_싣는다()
         {
             var result = Assemble();
 
-            Assert.Contains("`S02`", result);
-            Assert.Contains("Code=S02, Name=정산보류", result);
-            Assert.Contains("dbo.CommonCode", result);
+            Assert.Contains("| `S02` | Code=S02, Name=정산보류 | dbo.CommonCode | dbo.UP_A |", result);
         }
 
         [Fact]
-        public void 매칭_대상이었지만_찾지_못한_코드값은_찾지_못했다고_구별해_싣는다()
+        public void 매칭_대상이었지만_찾지_못한_코드값은_같은_행에_찾지_못했다고_구별해_싣는다()
         {
             var result = Assemble();
 
-            Assert.Contains("`XYZ999`", result);
-            Assert.Contains("의미 미상 (마스터 데이터에서 찾지 못함)", result);
+            Assert.Contains("| `XYZ999` | 의미 미상 (마스터 데이터에서 찾지 못함) | - | dbo.UP_B |", result);
         }
 
         [Fact]
-        public void 값이_짧아_대상에서_제외된_코드값은_판별_불가로_구별해_싣는다()
+        public void 값이_짧아_대상에서_제외된_코드값은_같은_행에_판별_불가로_구별해_싣는다()
         {
             var result = Assemble();
 
-            Assert.Contains("`Y`", result);
-            Assert.Contains("의미 미상 (값이 짧아 판별 불가)", result);
+            Assert.Contains("| `Y` | 의미 미상 (값이 짧아 판별 불가) | - | dbo.UP_A |", result);
         }
 
         [Fact]
