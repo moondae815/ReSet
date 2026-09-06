@@ -10,7 +10,8 @@ namespace ReSet.Core.Services
     /// [왜 채택을 명세서가 정하는가] 추출은 DDL로 해야 정확하지만(동적 SQL 조각을 걸러야
     /// 하므로 ScriptDom), 채택은 Spec.md가 정해야 「근거는 명세서뿐」이라는 계약이 선다.
     /// 둘을 나눠 두면 정확도와 계약을 함께 가진다. 실측 채택률은 (SP, 상수) 출현 기준
-    /// 114/115다.
+    /// 114/115다 — 다만 아래 <c>IsAdoptable</c>이 자를 좁히기 전, 순수 부분 문자열
+    /// 대조로 잰 값이고 그 뒤 재측정하지 않았다(계보는 `docs/architecture.md`).
     /// </summary>
     public static class SettlementCodebookBuilder
     {
