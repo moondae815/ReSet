@@ -99,6 +99,40 @@ namespace ReSet.Core.Tests
             Assert.Equal("-", rule.CodeValue);
         }
 
+        /// <summary>
+        /// 최종 전체 리뷰 M1 - 되살리기의 닫힘 앵커가 곧은 따옴표만 봤다.
+        /// PolicySectionContract.TryParseEvidence는 굽은 따옴표(“ ”)도 인용으로 받는데
+        /// (모델이 실제로 섞어 쓴다), 되살리기만 `EndsWith("\"")`로 곧은 것만 봤다.
+        /// 그래서 굽은 따옴표로 닫으면서 이스케이프 안 된 파이프를 품은 행은
+        /// 되살아나지 못하고 cells.Count != ExpectedCellCount로 <b>통째로 조용히
+        /// 스킵된다</b> - 결함조차 나지 않는다. 정책서는 근거가 여러 명세서에 흩어져
+        /// 있어 이 위험이 PRD보다 크다(RejoinOverSplitEvidence의 주석이 스스로 적는다).
+        /// </summary>
+        [Fact]
+        public void 굽은_따옴표로_닫은_인용도_파이프_행을_되살린다()
+        {
+            const string policyWithCurlyQuote = @"## 1. 수수료율 스냅샷 적재
+
+| ID | 업무 규칙 | 근거 | 코드값 |
+| :--- | :--- | :--- | :--- |
+| S1-01 | 요율에 FLAGS를 적용한다 | dbo.UP_RATE · ## 개요 > “요율에 FLAGS | 4를 적용한다” | - |
+";
+
+            var rules = PolicyDocumentParser.Parse(
+                policyWithCurlyQuote, new[] { "## 1. 수수료율 스냅샷 적재" });
+
+            var rule = Assert.Single(rules);
+            Assert.Equal("S1-01", rule.Id);
+            Assert.Contains("FLAGS | 4", rule.EvidenceRaw);
+            Assert.Equal("-", rule.CodeValue);
+
+            // 되살아난 근거가 계약의 문법으로도 읽혀야 한다 - 칸 수만 맞추고
+            // 인용을 잘못 잘라 붙이면 여기서 드러난다.
+            Assert.True(PolicySectionContract.TryParseEvidence(rule.EvidenceRaw, out var evidence));
+            Assert.Equal("dbo.UP_RATE", evidence.Label);
+            Assert.Equal("요율에 FLAGS | 4를 적용한다", evidence.Quote);
+        }
+
         [Fact]
         public void 근거_문법이_없는_다섯칸_행은_되살리지_않는다()
         {

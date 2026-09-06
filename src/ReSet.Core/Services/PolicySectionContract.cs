@@ -81,6 +81,21 @@ namespace ReSet.Core.Services
             return declared > 0 ? declared : stageIndex + 1;
         }
 
+        /// <summary>
+        /// 인용을 여닫는 따옴표. 모델은 곧은 것과 굽은 것을 섞어 쓴다.
+        ///
+        /// [왜 계약이 소유하는가 - 2026-09-06 M1] 이 집합이 두 곳에 갈려 있었다.
+        /// <see cref="TryParseEvidence"/>는 굽은 것도 받는데 PolicyDocumentParser의
+        /// 되살리기(RejoinOverSplitEvidence)는 닫힘 앵커를 `EndsWith("\"")`로만 봤다.
+        /// 그래서 굽은 따옴표로 닫으면서 이스케이프 안 된 파이프를 품은 행은 되살아나지
+        /// 못하고 칸 수 불일치로 <b>통째로 조용히 스킵됐다</b> - 결함조차 나지 않는다.
+        /// </summary>
+        private static readonly char[] QuoteChars = { '"', '“', '”' };
+
+        /// <summary>인용을 닫는 따옴표로 끝나는 칸인가. 되살리기의 닫힘 앵커다.</summary>
+        public static bool EndsWithQuote(string? cell) =>
+            !string.IsNullOrEmpty(cell) && Array.IndexOf(QuoteChars, cell[^1]) >= 0;
+
         /// <summary>`dbo.UP_X · ## 헤딩 > "구절"` 을 가른다.</summary>
         public static bool TryParseEvidence(string? raw, out PolicyEvidenceReference reference)
         {
@@ -108,8 +123,8 @@ namespace ReSet.Core.Services
             var heading = rest[..arrow].Trim();
             var quoted = rest[(arrow + 1)..].Trim();
 
-            var first = quoted.IndexOfAny(new[] { '"', '“', '”' });
-            var last = quoted.LastIndexOfAny(new[] { '"', '“', '”' });
+            var first = quoted.IndexOfAny(QuoteChars);
+            var last = quoted.LastIndexOfAny(QuoteChars);
             if (first < 0 || last <= first)
             {
                 return false;
