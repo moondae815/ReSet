@@ -122,6 +122,31 @@ namespace ReSet.Core.Tests
             Assert.Equal(PolicyDefectType.CodeValueNotInCodebook, defect.Type);
         }
 
+        // 벗기기는 표기를 걷어내는 것이지 값을 없애는 것이 아니다. 빈 감쌈 쌍(``)은
+        // 벗기면 빈 문자열이 되어 「빈 조각」 필터에 조용히 먹혔었다(2026-09-06 회귀).
+        // 감싼 표기만 있고 값이 없는 것이므로 원본 그대로 대조에 넘겨 고발돼야 한다.
+        [Fact]
+        public void 빈_감쌈만_있는_코드값은_고발한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "``") },
+                Codebook("impaymobile"));
+
+            var defect = Assert.Single(defects);
+            Assert.Equal(PolicyDefectType.CodeValueNotInCodebook, defect.Type);
+        }
+
+        [Fact]
+        public void 빈_감쌈과_정상_값이_섞이면_빈_쪽만_고발되고_정상_값은_통과한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "``, impaymobile") },
+                Codebook("impaymobile"));
+
+            var defect = Assert.Single(defects);
+            Assert.DoesNotContain("impaymobile", defect.Message);
+        }
+
         [Fact]
         public void 명부의_SP가_모두_인용되면_통과한다()
         {

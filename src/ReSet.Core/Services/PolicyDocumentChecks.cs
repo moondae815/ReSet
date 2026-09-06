@@ -82,10 +82,29 @@ namespace ReSet.Core.Services
         private static IEnumerable<string> SplitCodeValues(string? cell) =>
             (cell ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(Unwrap)
-                .Where(v => v.Length > 0 && v != PolicySectionContract.NoCodeValue);
+                .Select(ResolveValue)
+                .Where(v => v != PolicySectionContract.NoCodeValue);
 
         private static readonly char[] WrapChars = { '`', '\'', '"' };
+
+        /// <summary>
+        /// 조각 하나를 대조에 넘길 최종 값으로 정한다.
+        ///
+        /// [왜 벗긴 결과가 비면 원본으로 되돌리는가] 벗기기는 표기를 걷어내는 것이지
+        /// 값을 없애는 것이 아니다. 벗겨서 빈 문자열이 되면 그것은 감싼 표기만 있고
+        /// 값이 없는 것이므로, 원본 조각 그대로 대조에 넘겨 고발되게 한다.
+        /// 2026-09-06 에 벗기기를 넣으면서 이 자리가 조용히 사라졌었다 - 빈 감쌈 쌍
+        /// (``)이 벗기면 빈 문자열이 되고, 그 뒤에 있던 「빈 조각이면 버린다」 필터가
+        /// 값이 아니라 이 malformed 항목까지 함께 삼켰다. 쉼표 뒤 빈 조각(끝 쉼표 등)은
+        /// Split의 RemoveEmptyEntries가 이미 걸러 raw 자체가 원천적으로 비어 있지 않으므로,
+        /// 이 함수에 들어오는 raw는 항상 비어 있지 않다 - 「값이 아예 없던 자리」와
+        /// 「감쌈만 있고 알맹이가 없는 자리」가 여기서 갈린다.
+        /// </summary>
+        private static string ResolveValue(string raw)
+        {
+            var unwrapped = Unwrap(raw);
+            return unwrapped.Length > 0 ? unwrapped : raw;
+        }
 
         /// <summary>
         /// 값을 감싼 백틱·따옴표 한 겹을 벗긴다.
@@ -94,9 +113,12 @@ namespace ReSet.Core.Services
         /// 그 표기 자체를 오탐으로 고발하면 교정 재호출 피드백이 모델에게 실행
         /// 불가능한 지시가 된다.
         ///
-        /// [왜 짝이 맞을 때만인가] 앞뒤가 같은 문자로 맞아야 감싼 것이다. 한쪽에만
-        /// 있으면 모델이 형식을 잘못 쓴 것이므로 조용히 고쳐 주지 않고 그대로 둬
-        /// 사전 대조가 잡게 한다. 값 안쪽의 문자는 건드리지 않는다 - 바깥 한 겹뿐이다.
+        /// [왜 바깥 짝은 엄격한데 안쪽 공백은 봐주는가] 짝이 안 맞는 것(한쪽에만
+        /// 감싼 문자가 있는 것)은 모델이 형식을 잘못 쓴 신호이므로 조용히 고쳐 주지
+        /// 않고 그대로 둬 사전 대조가 잡게 한다 - 엄격함이 필요한 자리다. 반면 감싼
+        /// 안쪽의 앞뒤 공백(`` ` impaymobile ` ``)은 값의 의미를 바꾸지 않는 표기
+        /// 흔들림이라 Trim으로 봐준다 - 관용해도 잃는 신호가 없는 자리다. 값 안쪽의
+        /// 백틱·따옴표 자체는 건드리지 않는다 - 벗기는 것은 바깥 한 겹뿐이다.
         /// </summary>
         private static string Unwrap(string value)
         {
