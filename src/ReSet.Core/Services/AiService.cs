@@ -2239,6 +2239,7 @@ Based on the reference context above, reverse engineer the user defined function
 4. [Transaction Isolation & Shadow Table] NEVER propose `ALTER DATABASE SET READ_COMMITTED_SNAPSHOT ON` as it is too risky. Every step MUST run under SNAPSHOT isolation - state that obligation for the step, and do NOT prescribe where or how the setting is issued. Shadow tables are a LAST RESORT, not a default: if the step's work fits in a single transaction, let that single transaction roll back and write NO shadow table and NO compensating DELETE in the failure path - the rollback has already restored those rows, so deleting them again afterwards destroys data that was never lost. Only when the step commits in chunks or rebuilds an aggregate (so a rollback cannot restore it) may you use a shadow, and then all of the following mechanics are mandatory: (a) create the shadow OUTSIDE the transaction that can roll back, and before that transaction begins - a shadow created inside the transaction disappears with the rollback and the restore then fails on a missing object; (b) the restore MUST delete exactly the same range the step deleted - NEVER `DELETE FROM Target` without a `WHERE`, which discards rows belonging to other business dates; (c) NEVER build a statement by pasting a value into its text - pass every value as a parameter. A value concatenated into the statement text makes a different statement on every run, so it can be neither bound to the specification nor checked, and a value that needs quoting silently changes what the statement does; (d) if the step modifies MULTIPLE target tables, the shadow strategy MUST cover ALL of them - restoring only some of the tables leaves the step half-rolled-back, a worse inconsistency than no restore at all; (e) define the shadow table's storage lifetime and purge policy (for example, auto-drop it after 24 hours) so it does not permanently consume storage. Mechanics (d) and (e) apply only to steps that actually use a shadow - a step that stays on the single-transaction rollback default above needs neither.
 4-1. " + BatchObjectSchemaRule + @"
 5. [Idempotency & Restartability] Restart skipping happens OUTSIDE the step. The orchestrator reads `batch.BatchCheckpoint` and simply does not call a step whose checkpoint is already `Succeeded`. Therefore a step MUST NOT add an input parameter for restart, skipping, or bypassing - its interface is exactly the parameter list given in the `[Original Procedure Interface]` table. The original pre-validation guards (for example a `-9` abort when a settled ledger row exists) MUST run unconditionally on every call; NEVER place them inside a conditional a caller can switch off. A step that is called is a step that does its full work, guards included.
+5-1. [Local Variable Type Contract] A local variable the source procedure DECLAREs *with an initial value* keeps its DECLARE in the SQL this step sends. Write it inside the ```sql block as `DECLARE @<name> <declared type> = <initial value>;`, spelled exactly as the machine-derived local variable table gives it. Do NOT demote it to a binding parameter of `execute(...)` - the binding list carries the original procedure's parameters only (rule 5). A bound value has no declared type: the driver picks one, and a `DECIMAL(2,1)` that arrives as `FLOAT` changes what `CAST(... AS INT)` truncates. Stating the type in a comment does not pin it.
 6. [Data Modification & Error Handling] When chunking a DELETE-INSERT pattern, you MUST ensure the chunking key is added to the DELETE filter to prevent full-table deletion conflicts. If the step involves multi-table aggregations (`GROUP BY`) or complex cross-DB joins where chunking by a single Primary Key is mathematically impossible, explicitly declare that the step uses 'Single-Transaction Shadow Swap' instead of chunking, and DO NOT add fake chunk keys to the pseudo-code.
 6-1. [Precise Error Tracking] The step MUST be able to name the exact statement that failed. Keep a step-local state variable, update it immediately BEFORE each DML statement with that statement's original error code, and record that variable when the step fails, so the failure point reaches `batch.BatchStepJournal.LegacyReturnCode` instead of a single generic failure value. A statement that fails MUST NOT leave a partial commit behind - the step either completes its unit of work or leaves the target untouched. Which codes to use is rule 9's subject, not this rule's.
 6-2. " + ControlStepErrorCodes.PromptClause + @"
@@ -2426,7 +2427,25 @@ EXEC sp_executesql @v_sql;
 -- If an INSERT-only chunked batch fails in the middle, roll back committed chunks using
 -- business keys - no shadow, no restore:
 DELETE FROM TargetTable WHERE BatchDate = @p_batchDate AND ProcessStatus = 'NEW';
-```";
+```
+
+* Legacy Local Variable Pattern (whenever the source procedure DECLAREs a variable with an
+  initial value - rule 5-1):
+```pseudocode
+// 바인딩 목록에는 원본 프로시저의 파라미터만 들어간다 (rule 5-1).
+// 레거시 지역 변수의 타입 계약은 SQL 안에 남는다.
+execute(SQL_APPLY_RATE, { p_batchDate: batchYmd })
+```
+```sql
+-- SQL_APPLY_RATE
+-- (rule 5-1) 원본이 초기값과 함께 선언한 지역 변수는 여기 그대로 남는다.
+DECLARE @v_someRate DECIMAL(5,2) = 1.25;
+UPDATE dbo.TargetTable SET Amt = CAST(Amt / @v_someRate AS INT) WHERE BatchDate = @p_batchDate;
+```
+The binding list above carries one name and it is the step's own parameter. Passing the rate
+there instead would leave its type to the driver, and a `DECIMAL(5,2)` that arrives as `FLOAT`
+truncates differently. Writing the type in a comment does not pin it.
+";
 
         private ReviewResult ParseReviewResult(string? responseContent, string contextName)
         {
