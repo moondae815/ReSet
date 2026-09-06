@@ -411,38 +411,38 @@ END";
         }
 
         [SkippableFact]
-        public void Extract_OverTheCorpus_ShouldCollectExactlyEightRowsSevenOfThemNullCertain()
+        public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {
             // 클래스 주석이 코퍼스 수치 위에 서 있는데 단위 테스트는 규칙이 흘러도 그대로
             // 통과한다. 형제 LoopVariableResetExtractorTests가 3/11을 못박은 것과 같은
-            // 방식으로 **넷**을 코퍼스에 직접 못박는다 - 비집계 대입 8행, 그중 NULL 확정
-            // 7행, 그리고 이 회차가 더한 가드 둘의 분모(CTE 문장 0건 · 복합 대입 0건)다.
+            // 방식으로 코퍼스에 직접 못박는다.
+            //
+            // [2026-09-06] 코퍼스 뿌리가 output/Objects 로컬 24개에서 output/External의
+            // 외부 DB까지 넓어졌다 - 행 수가 8에서 36(로컬 8 · SETTLE_CARD_DB 28)으로,
+            // NULL 확정이 7에서 23으로, 대입 분모(setVariables)가 26에서 68로 늘었다.
+            // 늘어난 28행은 전부 원본 DDL을 열어 (1) SELECT @변수 = 컬럼 FROM 문인지
+            // (2) NULL확정이면 그 앞에 같은 변수 대입이 정말 없는지 확인한 뒤 적었다.
             // 코퍼스가 없으면 건너뜀으로 표시된다(CorpusSkip.Reason).
             //
-            // 뒤의 두 단언이 그 분모다. CTE 문장이 0건이고 복합 대입 SelectSetVariable이
-            // 0건이라는 것이 곧 **이 회차의** 두 가드가 위 8행을 한 행도 줄이지 않았다는
-            // 증거다 - 분모가 0이 아닌 날이 오면 위 목록이 줄어드는지 함께 드러난다.
+            // 뒤의 두 단언이 이 회차가 더한 가드 둘의 분모다. CTE 문장이 0건이고 복합
+            // 대입 SelectSetVariable이 0건이라는 것이 곧 이 회차의 두 가드가 위 36행을
+            // 한 행도 줄이지 않았다는 증거다 - 분모가 0이 아닌 날이 오면 위 목록이
+            // 줄어드는지 함께 드러난다.
             //
             // 클래스 주석의 "FROM 가드 도입 전후 8행 동일"은 여기서 못박히지 않는다.
             // 그 가드의 분모(FROM 절이 집계를 품은 문장 수)는 세지 않으므로 이 테스트가
-            // 붙드는 것은 도입 **후**의 8행뿐이고, "전후 동일"은 단언 밖의 일회 실측으로
+            // 붙드는 것은 도입 **후**의 행뿐이고, "전후 동일"은 단언 밖의 일회 실측으로
             // 남는다. 넓게 말하지 않으려고 적어 둔다.
-            var root = CorpusRoot();
-            Skip.If(root == null, CorpusSkip.Reason);
+            var objects = CorpusObjects().ToList();
+            Skip.If(objects.Count == 0, CorpusSkip.Reason);
 
             var collected = new List<string>();
             var cteNodes = 0;
             var setVariables = 0;
             var compoundSetVariables = 0;
 
-            foreach (var dir in Directory.GetDirectories(root))
+            foreach (var (name, ddl) in objects)
             {
-                var path = Path.Combine(dir, "raw", "object_definition.sql");
-                if (!File.Exists(path)) continue;
-
-                var ddl = File.ReadAllText(path);
-                var name = Path.GetFileName(dir);
-
                 foreach (var fact in NonAggregateAssignmentExtractor.Extract(ddl))
                 {
                     var branch = fact.Sentence.Contains("NULL이 그대로 남습니다") ? "NULL확정" : "중립";
@@ -458,6 +458,34 @@ END";
             Assert.Equal(
                 new[]
                 {
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:41 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:42 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:43 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:44 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:55 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:56 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:57 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:58 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:71 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:72 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:73 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT.Function:74 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:44 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:45 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:46 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:47 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:59 @v_intCommissionRate4Foreign = B.CommissionRate4Foreign [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:60 @v_intCommissionRate4UPOP = B.CommissionRate4UPOP [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:61 @v_intFreeInterestInstUseFlag = A.FreeInterestInstUseFlag [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4CLIENT4PARTIALCANCEL.Function:62 @v_intFreeInterestInstCommCode = A.FreeInterestInstCommCode [중립]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:40 @v_intCommissionRate = CommissionRate [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:41 @v_intCommissionRate4Check = CommissionRate4Check [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:42 @v_intCommissionRate4Foreign = CommissionRate4Foreign [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:43 @v_intCommissionRate4UPOP = CommissionRate4UPOP [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:44 @v_intFreeInterestInstUseFlag = FreeInterestInstUseFlag [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG.Function:45 @v_intFreeInterestInstCommCode = FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_COMM4PG4INTEREST.Function:37 @v_intFreeInterestInstCommCode = FreeInterestInstCommCode [NULL확정]",
+                    "SETTLE_CARD_DB/dbo.UF_GET_EXTRACOMM4CLIENT.Function:31 @v_intExtraType = ExtraType [NULL확정]",
                     "dbo.UF_GET_CLIENTSECTIONRATE.Function:14 @po_intAmt = SECTIONAMT [NULL확정]",
                     "dbo.UF_GET_COLLECTYMD.Function:29 @v_intCollectStandard = CollectStandard [NULL확정]",
                     "dbo.UF_GET_COLLECTYMD.Function:30 @v_intCollectType = CollectType [NULL확정]",
@@ -469,38 +497,79 @@ END";
                 },
                 collected.OrderBy(x => x, StringComparer.Ordinal).ToArray());
 
-            Assert.Equal(7, collected.Count(x => x.EndsWith("[NULL확정]", StringComparison.Ordinal)));
-            Assert.Equal(1, collected.Count(x => x.EndsWith("[중립]", StringComparison.Ordinal)));
+            Assert.Equal(23, collected.Count(x => x.EndsWith("[NULL확정]", StringComparison.Ordinal)));
+            Assert.Equal(13, collected.Count(x => x.EndsWith("[중립]", StringComparison.Ordinal)));
 
             Assert.Equal(0, cteNodes);
-            Assert.Equal(26, setVariables);
+            Assert.Equal(68, setVariables);
             Assert.Equal(0, compoundSetVariables);
         }
 
         /// <summary>
-        /// 코퍼스 뿌리. 없으면 null - 그때 코퍼스 테스트는 조용히 통과한다(계획서 STEP ZERO).
-        ///
-        /// "output/Objects를 가진 첫 조상"으로 찾으면 안 된다 - 다른 테스트가 실행 중에
-        /// bin/Debug/net10.0/output/Objects에 가짜 객체를 만들어 두어, 그쪽이 먼저 걸리면
-        /// 이 테스트가 남의 테스트 찌꺼기를 코퍼스로 착각한다. 그래서 src/ReSet.Core를 가진
-        /// 조상(저장소 뿌리)을 먼저 찾고 거기서만 본다(형제 LoopVariableResetExtractorTests와
-        /// 같은 앵커).
+        /// 저장소 뿌리. "output/Objects를 가진 첫 조상"으로 찾으면 안 된다 - 다른 테스트가
+        /// 실행 중에 bin/Debug/net10.0/output/Objects에 가짜 객체를 만들어 두어, 그쪽이
+        /// 먼저 걸리면 남의 테스트 찌꺼기를 코퍼스로 착각한다. 그래서 src/ReSet.Core를
+        /// 가진 조상을 찾는다.
         /// </summary>
-        private static string? CorpusRoot()
+        private static string? RepoRoot()
         {
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir != null)
             {
                 if (Directory.Exists(Path.Combine(dir.FullName, "src", "ReSet.Core")))
                 {
-                    var candidate = Path.Combine(dir.FullName, "output", "Objects");
-                    return Directory.Exists(candidate) ? candidate : null;
+                    return dir.FullName;
                 }
 
                 dir = dir.Parent;
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 코퍼스 객체 전량 - 로컬 <c>output/Objects</c> **와** 외부 DB
+        /// <c>output/External/[DB]/Objects</c> 둘 다.
+        ///
+        /// [왜 External을 함께 훑는가 - 2026-09-06] 이 대장은 오래도록 로컬 24개만 훑었다.
+        /// 그런데 명세서가 만들어지는 객체는 그 24개가 아니라 **참조 폐포**이고, 폐포에는
+        /// 외부 DB 함수 7개가 들어 있다(reset-consistency-audit SKILL.md 1-1절). 실제로
+        /// 축 A 🔴 하나의 대상 <c>UF_GET_COMM4CLIENT4PARTIALCANCEL</c>이 그 7개 안에
+        /// 있어서, 로컬만 훑는 자로는 그 결함이 이 대장에 **한 번도 나타나지 않았다.**
+        /// 자가 관할을 좁게 잡으면 결함이 아니라 자가 침묵한다.
+        ///
+        /// 이름은 외부 DB만 <c>[DB]/</c>로 접두한다 - 로컬 이름 24개가 그대로 남아야
+        /// 이 회차의 증분이 diff에서 바로 읽힌다.
+        /// </summary>
+        private static IEnumerable<(string Name, string Ddl)> CorpusObjects()
+        {
+            var root = RepoRoot();
+            if (root == null) yield break;
+
+            var roots = new List<(string Prefix, string Dir)>();
+
+            var local = Path.Combine(root, "output", "Objects");
+            if (Directory.Exists(local)) roots.Add((string.Empty, local));
+
+            var external = Path.Combine(root, "output", "External");
+            if (Directory.Exists(external))
+            {
+                foreach (var db in Directory.GetDirectories(external).OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    var objects = Path.Combine(db, "Objects");
+                    if (Directory.Exists(objects)) roots.Add((Path.GetFileName(db) + "/", objects));
+                }
+            }
+
+            foreach (var (prefix, dir) in roots)
+            {
+                foreach (var objectDir in Directory.GetDirectories(dir).OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    var path = Path.Combine(objectDir, "raw", "object_definition.sql");
+                    if (!File.Exists(path)) continue;
+                    yield return (prefix + Path.GetFileName(objectDir), File.ReadAllText(path));
+                }
+            }
         }
 
         /// <summary>
