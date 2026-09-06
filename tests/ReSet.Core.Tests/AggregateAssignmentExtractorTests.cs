@@ -137,6 +137,109 @@ END";
             Assert.Contains("일어나지 않습니다", fact.Sentence);
         }
 
+        [Fact]
+        public void Extract_IsNullWrappingAnAggregate_SaysTheDefaultIsAssigned()
+        {
+            // UP_UTIL_SETTLE_PROC_ETC:116 실측 - 이 자리가 두 그물 사이로 샜다.
+            // 집계 쪽엔 「최상위가 집계 이름이 아님」, 비집계 쪽엔 「맨 컬럼이 아님」.
+            // 그 결과 대사 집계식이 어떤 기계 확정 표에도 없었다(축 A 🟠).
+            //
+            // 여기서 문장이 갈리는 것이 요점이다 - 감싸지 않은 SUM 은 NULL 을 넣지만
+            // ISNULL 로 감싸면 0 이 들어간다. 「무결과 시 NULL 이 대입됩니다」를 그대로
+            // 실으면 거짓이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v_intTotal INT
+    SELECT @v_intTotal = ISNULL(SUM(A.CLTotal), 0)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("@v_intTotal", fact.Variable);
+            Assert.Equal("SUM", fact.Aggregate);
+            Assert.Equal("ISNULL(SUM(A.CLTotal), 0)", fact.Expression);
+            Assert.Contains("대입이 항상 일어납니다", fact.Sentence);
+            Assert.Contains("0", fact.Sentence);
+            Assert.DoesNotContain("NULL이 대입됩니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_BareAggregate_KeepsSayingNullIsAssigned()
+        {
+            // 감쌈이 없으면 셋째 갈래 그대로다. 넷째 갈래를 더하면서 셋째가 잠식되지
+            // 않았음을 못박는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = SUM(A.CLTotal) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("SUM(A.CLTotal)", fact.Expression);
+            Assert.Contains("무결과 시 NULL이 대입됩니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingCount_KeepsTheCountSentence()
+        {
+            // 우선순위 2 > 3. COUNT 는 NULL 을 내지 않으므로 이 ISNULL 은 무동작이다 -
+            // 「기본값이 대입된다」고 말하면 원인을 틀리게 짚는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(COUNT(A.ID), 0) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Contains("COUNT는 0을 넣습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingAnAggregateUnderGroupBy_KeepsTheGroupBySentence()
+        {
+            // 우선순위 1 > 3. 0 행이면 ISNULL 이 돌 자리가 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(SUM(A.CLTotal), 0)
+    FROM   dbo.T A WITH(NOLOCK)
+    GROUP BY A.ClientID
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Contains("이전 값을 그대로 유지합니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWhoseDefaultIsNotALiteral_StaysSilent()
+        {
+            // 기본값이 리터럴이 아니면 무엇이 들어가는지 말할 수 없다. 벗기지 않으므로
+            // 최상위가 ISNULL 인 채로 남고, 집계 이름 화이트리스트에 걸리지 않아 침묵한다.
+            // 넓히면서도 「모르는 것을 확정 표에 싣는다」 방향으로는 한 발도 안 간다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    DECLARE @d INT = 0
+    SELECT @v = ISNULL(SUM(A.CLTotal), @d) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(AggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {
@@ -159,22 +262,25 @@ END";
                     var branch =
                         fact.Sentence.Contains("이전 값을 그대로 유지합니다") ? "유지"
                         : fact.Sentence.Contains("COUNT는 0을 넣습니다") ? "COUNT0"
+                        : fact.Sentence.Contains("기본값") ? "기본값대입"
                         : "NULL대입";
-                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Aggregate} [{branch}]");
+                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Expression} [{fact.Aggregate}] [{branch}]");
                 }
             }
 
             Assert.Equal(
                 new[]
                 {
-                    "dbo.UF_GET_COLLECTYMD.Function:123 @po_strCollectYMD = MIN [NULL대입]",
-                    "dbo.UF_GET_COLLECTYMD.Function:138 @po_strCollectYMD = MAX [NULL대입]",
-                    "dbo.UF_GET_OUTYMD4REFUND.Function:22 @po_strOutYMD = MIN [NULL대입]",
-                    "dbo.UIF_SettleYMD.Function:125 @po_strSettleYMD = MIN [NULL대입]",
-                    "dbo.UIF_SettleYMD.Function:140 @po_strSettleYMD = MAX [NULL대입]",
-                    "dbo.UP_UTIL_SETTLE_INS_EXTRA.Procedure:21 @v_strReqYMD = MIN [NULL대입]",
-                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:79 @v_intID = MAX [NULL대입]",
-                    "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA.Procedure:25 @v_strReqYMD = MIN [NULL대입]"
+                    "dbo.UF_GET_COLLECTYMD.Function:123 @po_strCollectYMD = MIN(YMD) [MIN] [NULL대입]",
+                    "dbo.UF_GET_COLLECTYMD.Function:138 @po_strCollectYMD = MAX(YMD) [MAX] [NULL대입]",
+                    "dbo.UF_GET_OUTYMD4REFUND.Function:22 @po_strOutYMD = MIN(OutYMD) [MIN] [NULL대입]",
+                    "dbo.UIF_SettleYMD.Function:125 @po_strSettleYMD = MIN(YMD) [MIN] [NULL대입]",
+                    "dbo.UIF_SettleYMD.Function:140 @po_strSettleYMD = MAX(YMD) [MAX] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_INS_EXTRA.Procedure:21 @v_strReqYMD = MIN(ReqYMD) [MIN] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:116 @v_intPostChkAmt1 = ISNULL(SUM(CAST(CLTotal AS MONEY)),0) [SUM] [기본값대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:130 @v_intPostChkAmt2 = ISNULL(SUM(CAST(CLSettleAmt AS MONEY)),0) [SUM] [기본값대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:79 @v_intID = MAX(ID) [MAX] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA.Procedure:25 @v_strReqYMD = MIN(ReqYMD) [MIN] [NULL대입]"
                 },
                 collected.OrderBy(x => x, StringComparer.Ordinal).ToArray());
         }

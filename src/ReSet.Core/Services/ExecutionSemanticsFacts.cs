@@ -104,7 +104,7 @@ namespace ReSet.Core.Services
                 facts.Add(new ExecutionSemanticFact(
                     AggregateAssignmentKind,
                     fact.Line.ToString(),
-                    $"SELECT {fact.Variable} = {fact.Aggregate}(...)",
+                    $"SELECT {fact.Variable} = {fact.Expression}",
                     fact.Sentence));
             }
 
