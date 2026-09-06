@@ -1897,15 +1897,16 @@ END CATCH");
 
             // 블록 개수 자체를 못박는다 - Few-Shot이 늘거나 줄면 아래 인덱스별
             // TargetTables 매핑도 같이 검토해야 한다는 신호다.
-            Assert.Equal(5, blocks.Count);
+            Assert.Equal(6, blocks.Count);
 
             var targetTablesByBlock = new[]
             {
                 new[] { "dbo.TargetTable" }, // 0: Shadow Table Swap Pattern
                 new[] { "TargetTable" },     // 1: Chunking Pattern (NUMERIC key)
                 new[] { "TargetTable" },     // 2: Chunking Pattern (STRING/COMPOSITE key)
-                new[] { "dbo.TargetTable" }, // 3: Shadow Table Restore in CATCH block
-                new[] { "TargetTable" },     // 4: INSERT-only Compensation
+                new[] { "dbo.TargetTable" }, // 3: INSERT carrying a computed expression
+                new[] { "dbo.TargetTable" }, // 4: Shadow Table Restore in CATCH block
+                new[] { "TargetTable" },     // 5: INSERT-only Compensation
             };
 
             for (var i = 0; i < blocks.Count; i++)

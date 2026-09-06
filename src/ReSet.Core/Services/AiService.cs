@@ -2438,6 +2438,25 @@ SELECT MIN(ClientID) FROM SourceTable
  WHERE BatchDate = @p_batchDate AND ClientID > @p_to;
 ```
 
+* Carrying a computed expression from the spec's mapping table into the INSERT:
+```sql
+-- SQL_INSERT_FROM_MAPPING
+-- The `### INSERT 대상 테이블:` mapping table in the spec gives, for every target column,
+-- the SOURCE EXPRESSION - not just a source column. Copy that expression VERBATIM.
+-- A cast or a rounding call is part of the amount, not decoration: dropping
+-- `CAST(... AS INT)` lets an implicit conversion round instead of truncate, and the two
+-- differ by one unit of currency on every row that has a fraction. Same for the third
+-- argument of ROUND - it selects round-vs-truncate and it comes from the source data.
+INSERT INTO dbo.TargetTable (BatchDate, ClientID, CLComm, CLEtc, PGVat)
+SELECT @p_batchDate,
+       X.ClientID,
+       CAST(X.CLComm AS INT),                       -- mapping table says CAST - keep it
+       CAST(X.CLEtc AS INT),
+       CAST(X.PGComm * dbo.UF_GET_INCVTAXRATE(X.PGIncVTax) AS INT)
+  FROM dbo.SourceView AS X
+ WHERE X.BatchDate = @p_batchDate;
+```
+
 * Failure path for the chunk-committed rebuild above (NOT for a single-transaction step):
 ```pseudocode
 ON FAILURE observed by the application:

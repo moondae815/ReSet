@@ -1798,6 +1798,36 @@ END"
         // (`7feb3c54`). 그래서 산문 규칙이 아니라 **예시**를 더한다.
         // ─────────────────────────────────────────────────────────────────────
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 산식을 실어 나르는 INSERT 예시 — 2026-09-06 축 B 감사의 S03 🔴 셋.
+        //
+        // 실물: `CLCOMM`·`CLETC`·`PGETC` 의 `CAST(… AS INT)` 절삭이 이행에서 사라졌다.
+        // 오라클은 명세서의 `### INSERT 대상 테이블:` 매핑 표에 **문자로 있는데** 그것을
+        // 읽는 추출기가 없어 기계가 못 잡는다(분류표 C 칸).
+        //
+        // 그런데 Few-Shot 의 INSERT … SELECT 예시 넷은 **전부 맨 컬럼이나 단순 SUM 만**
+        // 투영한다 — 매핑 표의 산식을 그대로 실어 나르는 본보기가 **0 개**였다. 청크 키와
+        // 같은 기전이다: 예시가 없는 모양은 모델이 즉흥으로 만들고, 즉흥은 단순화한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public async Task ConsolidatedPlanRules_FewShotShowsAnInsertThatCarriesAComputedExpression()
+        {
+            var rules = await StepSystemPromptAsync();
+
+            var anchor = rules.IndexOf("-- SQL_INSERT_FROM_MAPPING", StringComparison.Ordinal);
+            Assert.True(anchor >= 0,
+                "매핑 표의 산식을 그대로 싣는 INSERT 예시가 없다 - 맨 컬럼 투영 예시만 있으면 "
+                + "CAST·ROUND 같은 절삭이 이행에서 조용히 떨어진다(S03 의 기전).");
+
+            var close = rules.IndexOf("```", anchor, StringComparison.Ordinal);
+            var block = rules[anchor..close];
+
+            // 결과의 내용으로 잠근다 — 절삭이 산식 안에 살아 있어야 한다.
+            Assert.Contains("CAST(", block, StringComparison.Ordinal);
+            Assert.Contains("AS INT", block, StringComparison.Ordinal);
+        }
+
         [Fact]
         public async Task ConsolidatedPlanRules_FewShotShowsANonNumericChunkKeyExample()
         {
