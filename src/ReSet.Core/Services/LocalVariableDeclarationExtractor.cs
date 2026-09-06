@@ -67,29 +67,48 @@ namespace ReSet.Core.Services
 
         public static IReadOnlyList<LocalVariableDeclarationFact> Extract(string? ddlText)
         {
-            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LocalVariableDeclarationFact>();
+            if (!TryParse(ddlText, out var fragment)) return Array.Empty<LocalVariableDeclarationFact>();
 
-            TSqlFragment? fragment;
+            var visitor = new DeclarationVisitor();
+            fragment!.Accept(visitor);
+            return visitor.Facts;
+        }
+
+        /// <summary>
+        /// DDL을 한 번 파스한다. 오류가 하나라도 있으면 실패로 친다 -
+        /// SetAssignmentExtractor.Extract와 같은 정책이며, 부분 파스 결과가 기계 확정
+        /// 표에 섞이면 표 전체의 신뢰가 무너지기 때문이다(ScriptDom은 오류가 있어도
+        /// 부분 AST를 실제로 돌려준다: `DECLARE @v_a INT = 7; SELECT (((`는 오류 1과
+        /// 함께 `@v_a`를 담은 트리를 낸다 - 두 테스트가 그 입력으로 이 정책을 잠근다).
+        ///
+        /// [왜 접었나] 이 블록이 <see cref="Extract"/>와 <see cref="ExtractConstants"/>에
+        /// 축자로 두 벌 있었다. 파서 버전이나 오류 정책이 바뀌는 날 한쪽만 바뀌면
+        /// 같은 DDL에 대해 두 메서드가 다른 사실을 내는데, 그것이 이 파일이 문서
+        /// 블록마다 경고하는 오라클 드리프트의 모양 그대로다.
+        ///
+        /// [파스는 호출당 한 번이다] fragment 하나를 돌려주므로 호출자는 방문자를
+        /// 여럿 `Accept`시켜도 같은 트리를 본다 - <see cref="ExtractConstants"/>가
+        /// 선언과 재대입을 같은 파스에서 보는 성질이 여기에 걸려 있다.
+        /// </summary>
+        private static bool TryParse(string? ddlText, out TSqlFragment? fragment)
+        {
+            fragment = null;
+            if (string.IsNullOrWhiteSpace(ddlText)) return false;
+
             try
             {
                 var parser = new TSql160Parser(true);
                 using var reader = new StringReader(ddlText);
-                fragment = parser.Parse(reader, out var errors);
-                if (fragment == null || (errors != null && errors.Count > 0))
-                {
-                    // SetAssignmentExtractor.Extract와 같은 정책 - 부분 파스 결과가
-                    // 기계 확정 표에 섞이면 표 전체의 신뢰가 무너진다.
-                    return Array.Empty<LocalVariableDeclarationFact>();
-                }
+                var parsed = parser.Parse(reader, out var errors);
+                if (parsed == null || (errors != null && errors.Count > 0)) return false;
+
+                fragment = parsed;
+                return true;
             }
             catch (Exception)
             {
-                return Array.Empty<LocalVariableDeclarationFact>();
+                return false;
             }
-
-            var visitor = new DeclarationVisitor();
-            fragment.Accept(visitor);
-            return visitor.Facts;
         }
 
         /// <summary>
@@ -108,26 +127,11 @@ namespace ReSet.Core.Services
         /// </summary>
         public static IReadOnlyList<LocalVariableDeclarationFact> ExtractConstants(string? ddlText)
         {
-            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LocalVariableDeclarationFact>();
+            if (!TryParse(ddlText, out var fragment)) return Array.Empty<LocalVariableDeclarationFact>();
 
-            TSqlFragment? fragment;
-            try
-            {
-                var parser = new TSql160Parser(true);
-                using var reader = new StringReader(ddlText);
-                fragment = parser.Parse(reader, out var errors);
-                if (fragment == null || (errors != null && errors.Count > 0))
-                {
-                    return Array.Empty<LocalVariableDeclarationFact>();
-                }
-            }
-            catch (Exception)
-            {
-                return Array.Empty<LocalVariableDeclarationFact>();
-            }
-
+            // 방문자 둘이 같은 fragment를 본다 - 두 번 파스하면 한쪽이 조용히 낡는다.
             var declarations = new DeclarationVisitor();
-            fragment.Accept(declarations);
+            fragment!.Accept(declarations);
 
             var reassigned = new ReassignmentVisitor();
             fragment.Accept(reassigned);
