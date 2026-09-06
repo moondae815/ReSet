@@ -92,6 +92,56 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 1-hop 이웃 중 <b>실제로 명세서를 가진 것</b>의 수를 센다. Narrow 모드가
+        /// 이웃을 정말 싣는지 사람에게 알릴 때 쓰는 판정값이다.
+        ///
+        /// [왜 callGraph.Count로는 안 되는가] <see cref="StepInterfaceFacts.BuildCallGraph"/>는
+        /// 프로시저뿐 아니라 <b>함수(UDF)도</b> 코드 객체로 담는다. 그런데 명세서는
+        /// <see cref="FeedbackSpec.OnlyProcedureSpecs"/>가 거른 프로시저에만 있으므로
+        /// UDF 이웃은 <see cref="NarrowSpecs"/>가 매칭할 수 없다 - 그래프에는 있는데
+        /// 하나도 실리지 않는다. 실측(POQSettleBatch4, 2026-09-06): 14편이 서로를 전혀
+        /// 부르지 않고 호출 대상이 전부 UDF라 그래프가 7편이었는데 실릴 이웃은 0편이었다.
+        /// 종전의 "Count == 0" 조건은 이 판을 조용히 통과시켰다.
+        ///
+        /// [왜 NarrowSpecs와 같은 자를 쓰는가] 경고가 "이웃이 실린다"고 말하려면 실제로
+        /// 싣는 쪽과 판정 규칙이 같아야 한다. 여기서 별도의 느슨한 비교(부분 문자열 등)를
+        /// 쓰면 경고와 동작이 어긋나 - 경고는 조용한데 이웃은 안 실리는 상태가 다시 생긴다.
+        /// 그래서 <see cref="MatchesSpecName"/>을 그대로 공유한다.
+        /// </summary>
+        public static int CountSpecBackedNeighbours(
+            IReadOnlyList<(string FileName, string Content)>? specs,
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph)
+        {
+            if (specs == null || specs.Count == 0 || callGraph == null || callGraph.Count == 0)
+            {
+                return 0;
+            }
+
+            var neighbours = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in callGraph)
+            {
+                foreach (var callee in entry.Value ?? (IReadOnlyList<string>)Array.Empty<string>())
+                {
+                    if (string.IsNullOrWhiteSpace(callee)) continue;
+
+                    var name = callee.Trim();
+
+                    // 자기 자신은 이웃이 아니다. NarrowSpecs는 이것을 "자기 프로시저"로
+                    // 이미 싣고 있으므로, 여기서 세면 이웃이 없는 판을 있다고 말하게 된다.
+                    if (string.Equals(name, entry.Key, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    if (specs.Any(spec => MatchesSpecName(spec.FileName, name)))
+                    {
+                        neighbours.Add(name);
+                    }
+                }
+            }
+
+            return neighbours.Count;
+        }
+
+        /// <summary>
         /// 명세서 파일명과 프로시저 이름을 맞춘다.
         ///
         /// 정확 일치(대소문자 무시)만 쓴다. 단순 부분 문자열 포함(IndexOf)은 쓰지
