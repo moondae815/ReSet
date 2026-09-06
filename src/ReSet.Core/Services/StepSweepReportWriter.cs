@@ -285,6 +285,11 @@ namespace ReSet.Core.Services
             b.AppendLine(
                 $"| (Kind, Ordinal) 모호성 가드가 버린 문장 수 | " +
                 $"{indicators.AnchorsDroppedForAmbiguity} |");
+            // [N5] 발화가 아니라 상한이다 - SweepIndicators.JoinPairsLostFromImplementation
+            // 문서 참고. 이전(하위 스코프로 옮김)과 소실을 가르지 않는다.
+            b.AppendLine(
+                "| 원본에 있는데 이행 최상위에 없는 조인 짝 수 (발화 아님) | " +
+                $"{indicators.JoinPairsLostFromImplementation} |");
             b.AppendLine($"| 계보 원천을 가진 문장 수 | {indicators.StatementsWithLineage} |");
             b.AppendLine(
                 $"| 스테이징만 읽어 검사 C 가 면제한 문장 수 | " +

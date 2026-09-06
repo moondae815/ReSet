@@ -76,6 +76,28 @@ namespace ReSet.Core.Services
             = Array.Empty<string>();
 
         /// <summary>
+        /// 이 문장 <b>최상위</b>의 조인 등식을 <c>테이블.컬럼=테이블.컬럼</c>으로
+        /// 정규화한 것. 두 변은 정렬해 방향을 없앤다.
+        ///
+        /// [무엇을 위한 값인가 - N5] 명세서 DML 범위 표의 조인 키 칸은 <b>컬럼 이름만</b>
+        /// 싣는다. 그래서 이행이 결합을 다른 별칭으로 옮겨도 이름 집합이 그대로면
+        /// 대조가 통과한다(실물: <c>EXPECT_PROC</c> 갱신 11 의 <c>TClientCMRate</c>
+        /// 결합이 <c>B.*</c> → <c>A.*</c>). 짝으로 보면 그 자리에서 이행이 원본에 없는
+        /// 등식을 함께 더한 것이 보인다.
+        ///
+        /// [왜 별칭을 테이블로 바꾸는가] 별칭 문자는 이행 자유도다 - 명세서 <c>A</c>/<c>B</c>,
+        /// 생성본 <c>S</c>/<c>P</c> 가 실물이다(<see cref="MechanicalValidator"/>의
+        /// SET 산식 경로가 같은 이유로 별칭을 벗긴다).
+        ///
+        /// [왜 최상위만인가 - 원본은 넓게, 이행은 좁게] 이행이 결합을 CTE·파생 테이블로
+        /// 옮기는 관용구가 실재한다. 이행을 좁게 잡아야 그 이전이 「더한 것」으로
+        /// 오인되지 않는다. 설계:
+        /// docs/superpowers/specs/2026-09-05-n5-join-pair-design.md §2-2.
+        /// </summary>
+        public IReadOnlyList<string> JoinPairs { get; init; }
+            = Array.Empty<string>();
+
+        /// <summary>
         /// 이 문장이 읽는 「단계 내부 스테이징」 후보와 그것을 쓴 문장의 컬럼.
         ///
         /// [불변식 - 검사 쪽이 이것에 의존한다] 행 원천이 **전부** 앞선 쓰기 대상일
@@ -728,9 +750,127 @@ namespace ReSet.Core.Services
                         SubordinatePredicateColumns = subordinate.Columns.ToList(),
                         RowSourceTables = rowSourceTables,
                         ReadsOwnTarget = readsOwnTarget,
+                        JoinPairs = CollectJoinPairs(froms, ctes),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
+            }
+
+            /// <summary>
+            /// 최상위 조인 등식을 <c>테이블.컬럼=테이블.컬럼</c>으로 정규화한다.
+            /// 근거와 한계는 <see cref="StepSqlStatement.JoinPairs"/> 참고.
+            ///
+            /// [별칭을 못 풀면 그 등식을 버린다] 파생 테이블·CTE 별칭은 물리 테이블이
+            /// 아니다. 짝을 만들면 없는 사실이 생기고, 그 사실이 「이행이 더했다」의
+            /// 근거가 된다 - 이 검사에서 가장 비싼 오탐이다.
+            /// </summary>
+            private static IReadOnlyList<string> CollectJoinPairs(
+                IReadOnlyList<FromClause> froms, WithCtesAndXmlNamespaces? ctes)
+            {
+                var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var cte in ctes?.CommonTableExpressions ?? Enumerable.Empty<CommonTableExpression>())
+                {
+                    var name = cte.ExpressionName?.Value;
+                    if (!string.IsNullOrWhiteSpace(name)) cteNames.Add(name!);
+                }
+
+                var pairs = new List<string>();
+                foreach (var from in froms)
+                {
+                    // 별칭 → 테이블. NamedSourceFinder 는 파생 테이블·스칼라 하위질의
+                    // 안쪽으로 안 내려가므로 이 층의 이름 원천만 담긴다.
+                    var finder = new NamedSourceFinder();
+                    from.Accept(finder);
+
+                    var aliasToTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var (binding, source) in finder.Sources)
+                    {
+                        if (cteNames.Contains(source)) continue; // CTE 는 물리 테이블이 아니다
+                        aliasToTable[binding] = source;
+                    }
+
+                    var equalities = new JoinEqualityCollector();
+                    from.Accept(equalities);
+
+                    foreach (var (leftQualifier, leftColumn, rightQualifier, rightColumn) in equalities.Equalities)
+                    {
+                        if (!aliasToTable.TryGetValue(leftQualifier, out var leftTable)) continue;
+                        if (!aliasToTable.TryGetValue(rightQualifier, out var rightTable)) continue;
+
+                        var left = $"{leftTable}.{leftColumn}";
+                        var right = $"{rightTable}.{rightColumn}";
+
+                        // 두 변을 정렬해 방향을 없앤다. 대소문자를 무시해 정렬해야
+                        // 원본(`B.ClientID`)과 이행(`A.CLIENTID`)이 같은 순서로 선다.
+                        var pair = StringComparer.OrdinalIgnoreCase.Compare(left, right) <= 0
+                            ? $"{left}={right}"
+                            : $"{right}={left}";
+
+                        if (!pairs.Contains(pair, StringComparer.OrdinalIgnoreCase)) pairs.Add(pair);
+                    }
+                }
+
+                return pairs;
+            }
+
+            /// <summary>
+            /// 이 층 <c>JOIN … ON</c> 의 <b>컬럼 = 컬럼</b> 등식만 모은다. 한정자 둘이
+            /// 같거나 없으면 조인이 아니다 - <c>DmlScopeExtractor</c> 의
+            /// <c>HaveDifferentQualifiers</c> 와 같은 규약이다(리뷰 라운드 2 가 오탐
+            /// 여섯 자리로 산 규칙이라 사본이 아니라 같은 규칙을 지킨다).
+            /// </summary>
+            private sealed class JoinEqualityCollector : TSqlFragmentVisitor
+            {
+                private readonly List<(string, string, string, string)> _equalities = new();
+                public IReadOnlyList<(string LeftQualifier, string LeftColumn, string RightQualifier, string RightColumn)>
+                    Equalities => _equalities;
+
+                public override void Visit(QualifiedJoin node)
+                {
+                    if (node.SearchCondition != null) Collect(node.SearchCondition);
+                }
+
+                private void Collect(BooleanExpression expression)
+                {
+                    switch (expression)
+                    {
+                        case BooleanBinaryExpression binary:
+                            Collect(binary.FirstExpression);
+                            Collect(binary.SecondExpression);
+                            break;
+                        case BooleanParenthesisExpression parenthesis:
+                            Collect(parenthesis.Expression);
+                            break;
+                        case BooleanComparisonExpression comparison
+                            when comparison.ComparisonType == BooleanComparisonType.Equals
+                                 && comparison.FirstExpression is ColumnReferenceExpression left
+                                 && comparison.SecondExpression is ColumnReferenceExpression right:
+                            var lq = Qualifier(left);
+                            var rq = Qualifier(right);
+                            if (lq == null || rq == null) return;
+                            if (string.Equals(lq, rq, StringComparison.OrdinalIgnoreCase)) return;
+                            _equalities.Add((lq, Column(left), rq, Column(right)));
+                            break;
+                    }
+                }
+
+                private static string? Qualifier(ColumnReferenceExpression reference)
+                {
+                    var parts = reference.MultiPartIdentifier?.Identifiers;
+                    return parts == null || parts.Count < 2 ? null : parts[parts.Count - 2].Value;
+                }
+
+                private static string Column(ColumnReferenceExpression reference)
+                {
+                    var parts = reference.MultiPartIdentifier?.Identifiers;
+                    return parts == null || parts.Count == 0 ? string.Empty : parts[parts.Count - 1].Value!;
+                }
+
+                /// <summary>파생 테이블·스칼라 하위질의 안쪽은 최상위가 아니다.</summary>
+                public override void ExplicitVisit(QueryDerivedTable node) { }
+
+                /// <inheritdoc cref="ExplicitVisit(QueryDerivedTable)"/>
+                public override void ExplicitVisit(ScalarSubquery node) { }
             }
 
             /// <summary>

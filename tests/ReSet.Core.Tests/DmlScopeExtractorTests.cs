@@ -54,6 +54,63 @@ END";
             Assert.True(Assert.Single(facts).DateParameterApplied);
         }
 
+        // ── N5: 조인 짝 ──────────────────────────────────────────────
+        // 설계: docs/superpowers/specs/2026-09-05-n5-join-pair-design.md §2-1
+        // 조인 키 칸은 컬럼 이름만 실어 별칭이 옮겨간 것을 못 본다. 짝은 그것을 본다.
+
+        [Fact]
+        public void Extract_JoinPairs_KeepTheTablesOnBothSides()
+        {
+            // EXPECT_PROC 갱신 11 의 실물 모양(N5). 자기결합이라 A·B 가 둘 다
+            // TSettleMst 다 - 테이블 정규화로는 A·B 를 못 가르고, 그 한계는
+            // 설계 §5 에 적혀 있다. 이 시험이 잠그는 것은 **짝이 서고 방향이 없다**는 것이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    OutYMD = 1
+    FROM   SETTLE_POQ_DB.dbo.TSettleMst A
+    JOIN   SETTLE_POQ_DB.dbo.TSettleMst B ON A.MPLTID = B.PLTID
+    JOIN   SETTLE_POQ_DB.dbo.TClientCMRate C ON B.ClientID = C.ClientID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+            var pairs = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).JoinPairs;
+
+            Assert.Equal(
+                new[] { "TClientCMRate.ClientID=TSettleMst.ClientID", "TSettleMst.MPLTID=TSettleMst.PLTID" },
+                pairs.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        }
+
+        [Fact]
+        public void Extract_JoinPairs_AlsoComeFromOldStyleCommaJoinsInWhere()
+        {
+            // 이것을 안 보면 재앙이다. 코퍼스 실측(2026-09-05): 원본 SP 의 조인 짝
+            // 124 중 85 가 WHERE 에 있고, 조인 등식을 가진 문장 38 중 26 은 WHERE 에만
+            // 있다. ON 만 보면 그 26 문장에서 이행의 정상 조인이 전부 「이행이 더한 것」
+            // 으로 보여 오탐이 쏟아진다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE TSettleMst
+    SET    CLComm = 0
+    FROM   TSettleMst        A WITH(NOLOCK)
+          ,TClientSettleRate B WITH(NOLOCK)
+    WHERE  A.CLIENTID = B.CLIENTID
+    AND    A.YMD      = @pi_strYMD
+END";
+
+            var pairs = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).JoinPairs;
+
+            Assert.Equal(
+                new[] { "TClientSettleRate.CLIENTID=TSettleMst.CLIENTID" },
+                pairs.ToArray());
+        }
+
         [Fact]
         public void Extract_JoinKeys_ShouldBeCaptured()
         {

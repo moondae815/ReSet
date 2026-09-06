@@ -8349,6 +8349,153 @@ END";
             };
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // N5 - 조인 짝. 설계: docs/superpowers/specs/2026-09-05-n5-join-pair-design.md
+        //
+        // [픽스처가 실물보다 단순한 곳은 서수 하나뿐이다] 원본 실물은
+        // UP_UTIL_SETTLE_EXPECT_PROC 갱신 11 이고 여기서는 UPDATE 1 로 줄였다.
+        // **모양은 축자로 보존한다** - 자기결합(A·B 가 둘 다 TSettleMst),
+        // TClientCMRate 결합이 B 에 붙는 것, 이행이 그것을 A 로 옮기며 원본에 없는
+        // 등식(A.ClientID = B.ClientID)을 함께 더하는 것. 서수를 줄인 것은 DDL 에
+        // UPDATE 를 열 개 더 놓아도 이 검사가 보는 것이 달라지지 않기 때문이다.
+        // 진짜 증거는 코퍼스 발화이지 이 픽스처가 아니다.
+        private const string ExpectProcJoinDdl = @"
+CREATE PROCEDURE dbo.P
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE A
+    SET    OutYMD = 1
+    FROM   SETTLE_POQ_DB.dbo.TSettleMst A
+    JOIN   SETTLE_POQ_DB.dbo.TSettleMst B ON A.MPLTID = B.PLTID
+    JOIN   SETTLE_POQ_DB.dbo.TClientCMRate C ON B.ClientID = C.ClientID
+    WHERE  A.YMD = @pi_strYMD
+END";
+
+        private static IReadOnlyDictionary<string, SpecStatementFacts> FactsWithUpdateRow(int ordinal) =>
+            new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[]
+                    {
+                        new SpecDmlRow("UPDATE", ordinal, ordinal * 10, "TSettleMst",
+                            Array.Empty<string>(), Array.Empty<string>(),
+                            Array.Empty<string>(), Array.Empty<string>())
+                    },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+        private static IReadOnlyDictionary<string, string> DdlWithJoins() =>
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = ExpectProcJoinDdl
+            };
+
+        [Fact]
+        public void ValidateBatchStep_CheckJoinPairs_ReportsAnEqualityTheOriginalDoesNotHave()
+        {
+            // 이행이 TClientCMRate 결합을 B 에서 A 로 옮기면서 원본에 없는
+            // A.ClientID = B.ClientID 를 함께 더했다. 컬럼 **이름** 집합은 그대로라
+            // 기존 대조는 통과한다 - 짝으로 봐야 보인다.
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "/* U1: 복합결제(포인트결제 정산주기를 주결제수단 정산주기로 재설정) */\n" +
+                "UPDATE A\n" +
+                "   SET A.OutYMD = 1\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TSettleMst B ON A.ClientID = B.ClientID AND A.MPLTID = B.PLTID\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TClientCMRate C ON A.CLIENTID = C.CLIENTID\n" +
+                " WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithUpdateRow(1), null, null, null, DdlWithJoins());
+
+            Assert.Contains(result.Errors, e => e.Contains("조인 짝"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckJoinPairs_StaysSilentWhenOnlyTheAliasLettersDiffer()
+        {
+            // 별칭 문자는 이행 자유도다 - 명세서 A/B, 생성본 S/P 가 실물이다.
+            // 같은 결합을 다른 글자로 적었을 뿐이면 발화하면 안 된다.
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "/* U1: 복합결제 */\n" +
+                "UPDATE S\n" +
+                "   SET S.OutYMD = 1\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst S\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TSettleMst P ON S.MPLTID = P.PLTID\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TClientCMRate R ON P.CLIENTID = R.CLIENTID\n" +
+                " WHERE S.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithUpdateRow(1), null, null, null, DdlWithJoins());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 짝"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckJoinPairs_StaysSilentWhenTheAddedPairBringsInATableTheOriginalNeverJoins()
+        {
+            // 코퍼스 실측(2026-09-05)이 요구한 좁힘이다. 이행이 원본의 조인 상대를
+            // **단계가 만든 스테이징 스냅샷**으로 바꾸는 관용구가 실재한다 -
+            // POQSettleProc11/S09 는 원본의 `TPGProperty` 조인을
+            // `batch.S09SourceCardExtraScope`(그 단계가 RunId 별로 뜬 범위 스냅샷)로
+            // 대체한다. 검사 C 가 같은 모양을 `ReadsOnlyStaging` 으로 이미 면제한다.
+            //
+            // 이 검사가 근거를 갖는 물음은 **원본이 이미 조인하던 테이블들 사이에서**
+            // 결합이 옮겨졌는가다. 원본에 없던 테이블이 등장하면 그것은 원천 대체이고,
+            // 행 집합이 달라졌는지는 이 검사가 답할 수 없다.
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "/* U1: 복합결제 */\n" +
+                "UPDATE A\n" +
+                "   SET A.OutYMD = 1\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TSettleMst B ON A.MPLTID = B.PLTID\n" +
+                "  JOIN batch.S10ScopeSnapshot Z ON A.ClientID = Z.ClientID\n" +
+                " WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithUpdateRow(1), null, null, null, DdlWithJoins());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 짝"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckJoinPairs_StaysSilentWithoutTheOriginalDdl()
+        {
+            // 재료가 없으면 대조가 성립하지 않는다 - 종전 동작 그대로다.
+            //
+            // [이 시험이 잠그는 것과 못 잠그는 것 - 되돌려 재서 확인했다]
+            // 널 가드 한 줄만 없애도 이 시험은 **여전히 통과한다**. 침묵이 세 겹으로
+            // 겹쳐 있기 때문이다(널 가드 · original.Count == 0 · SafeCheck). 그러므로
+            // 이것은 구현 한 줄을 잠그는 시험이 아니라 **계약을 잠그는 시험**이다 -
+            // 「재료가 없으면 발화하지 않는다」. 재료 없음을 결함으로 발화시키는 변경이
+            // 들어오면 잡는다. 겹친 침묵 중 어느 것이 실제로 막았는지는 안 가른다.
+            var markdown = "### S10 단계\n\n```sql\n" +
+                "/* U1: 복합결제 */\n" +
+                "UPDATE A\n" +
+                "   SET A.OutYMD = 1\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "  JOIN SETTLE_POQ_DB.dbo.TSettleMst B ON A.ClientID = B.ClientID AND A.MPLTID = B.PLTID\n" +
+                " WHERE A.YMD = @p;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S10"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null,
+                FactsWithUpdateRow(1));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 짝"));
+        }
+
         /// <summary>
         /// INSERT 행 하나짜리 명세서 재료.
         /// </summary>

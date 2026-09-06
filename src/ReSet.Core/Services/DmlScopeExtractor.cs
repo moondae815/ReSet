@@ -161,6 +161,36 @@ namespace ReSet.Core.Services
         IReadOnlyList<string>? GroupByColumns = null,
         bool DateParameterInNestedQuery = false)
     {
+        /// <summary>
+        /// <see cref="JoinKeys"/>와 같은 등식을 <c>테이블.컬럼=테이블.컬럼</c>으로
+        /// 정규화한 것. 두 변은 대소문자를 무시해 정렬하므로 방향이 없다.
+        ///
+        /// [왜 이름만으로는 부족한가 - N5] 조인 키 칸은 컬럼 <b>이름</b>만 싣는다.
+        /// 그래서 이행이 결합을 다른 테이블로 옮겨도 이름 집합이 그대로면 대조가
+        /// 통과한다(실물: <c>EXPECT_PROC</c> 갱신 11 이 <c>TClientCMRate</c> 결합을
+        /// <c>B.*</c>에서 <c>A.*</c>로 옮겼다).
+        ///
+        /// [별칭을 못 풀면 그 등식은 짝이 되지 않는다] 파생 테이블·CTE 별칭은 물리
+        /// 테이블이 아니다. 그래서 이 목록은 <see cref="JoinKeys"/>보다 짧을 수 있다 -
+        /// 둘의 길이를 같다고 가정하지 마십시오.
+        /// </summary>
+        public IReadOnlyList<string> JoinPairs { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// <see cref="Target"/>이 별칭이면 <c>FROM</c>에서 푼 물리 테이블 이름.
+        /// 못 풀면 <see cref="Target"/> 그대로다.
+        ///
+        /// [왜 Target 을 안 고치는가] <see cref="Target"/>은 DML 범위 표에 <b>원문
+        /// 그대로</b> 실린다. 거기서 별칭을 풀면 프롬프트 바이트가 바뀌고 캐시 포맷
+        /// 버전이 올라가 전건 재생성이 따라온다. 이 값은 검사 전용이라 표에 실리지
+        /// 않는다 - 그래서 캐시는 불변이다.
+        ///
+        /// [무엇을 위한 값인가] 이행 쪽 리더는 `UPDATE A … FROM dbo.TSettleMst A` 의
+        /// 대상을 <c>TSettleMst</c> 로 푼다. 원본이 <c>A</c> 로 남아 있으면 두 문장이
+        /// 같은 문장인데도 대조 키가 어긋난다.
+        /// </summary>
+        public string ResolvedTargetTable { get; init; } = string.Empty;
+
         /// <summary>기본값을 null이 아니라 빈 목록으로 정규화한다 - 기존 생성 자리가
         /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
         public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
@@ -1898,6 +1928,10 @@ namespace ReSet.Core.Services
                 var dateApplied = false;
                 var joinKeys = new List<string>();
 
+                // [N5] 조인 짝의 재료. WHERE(콤마 조인)와 ON 양쪽에서 모은다.
+                var joinReferences =
+                    new List<(string? LeftQualifier, string? LeftColumn, string? RightQualifier, string? RightColumn)>();
+
                 if (where?.SearchCondition != null)
                 {
                     // 최상위 술어만 본다. 서브쿼리 안의 조건은 대상 범위를
@@ -1923,6 +1957,8 @@ namespace ReSet.Core.Services
                             joinKeys.Add(key);
                         }
                     }
+
+                    joinReferences.AddRange(top.JoinKeyReferences);
                 }
 
                 if (from != null)
@@ -1936,6 +1972,8 @@ namespace ReSet.Core.Services
                             joinKeys.Add(key);
                         }
                     }
+
+                    joinReferences.AddRange(joins.JoinKeyReferences);
                 }
 
                 Facts.Add(new DmlScopeFact(
@@ -1951,7 +1989,11 @@ namespace ReSet.Core.Services
                     // UPDATE·DELETE는 최상위 ORDER BY가 문법상 불가하다 - 항상 빈 목록.
                     Array.Empty<string>(),
                     null,
-                    DateParameterAppearsInNestedQuery(statement)));
+                    DateParameterAppearsInNestedQuery(statement))
+                {
+                    JoinPairs = BuildJoinPairs(from, joinReferences),
+                    ResolvedTargetTable = ResolveTargetTableName(from, TextOf(target)),
+                });
 
                 RecordErrorCode(operation, statement);
             }
@@ -2553,6 +2595,14 @@ namespace ReSet.Core.Services
             public List<string> JoinKeys { get; } = new();
 
             /// <summary>
+            /// <see cref="JoinKeys"/>와 <b>같은 판정</b>으로 걸러진 등식을 한정자까지
+            /// 남긴 것. <c>JoinPairs</c> 정규화의 재료다 - 이름만으로는 이행이 결합을
+            /// 다른 테이블로 옮긴 것을 볼 수 없다(N5).
+            /// </summary>
+            public List<(string? LeftQualifier, string? LeftColumn, string? RightQualifier, string? RightColumn)>
+                JoinKeyReferences { get; } = new();
+
+            /// <summary>
             /// 최상위 AND 항마다 사실 하나. Term은 그 항의 노드 자신이다 - 호출부가
             /// 여기서 라인(<see cref="SetPredicateFact.Line"/>)과 원문
             /// (<see cref="SetPredicateFact.PredicateText"/>)을 얻는다. 노드를 그대로
@@ -2846,6 +2896,11 @@ namespace ReSet.Core.Services
                 {
                     AddJoinKey(left);
                     AddJoinKey(right);
+
+                    // [N5] 같은 판정에서 한정자까지 남긴다. 여기서 갈라 적으면
+                    // 「조인 키인가」의 규칙이 두 곳에 생긴다.
+                    JoinKeyReferences.Add((
+                        QualifierOf(left), ColumnOf(left), QualifierOf(right), ColumnOf(right)));
                 }
 
                 base.ExplicitVisit(node);
@@ -2915,6 +2970,9 @@ namespace ReSet.Core.Services
                 if (parts == null || parts.Count < 2) return null;
                 return parts[parts.Count - 2].Value;
             }
+
+            private static string? ColumnOf(ColumnReferenceExpression reference) =>
+                reference.MultiPartIdentifier?.Identifiers?.LastOrDefault()?.Value;
 
             private void AddJoinKey(ColumnReferenceExpression reference)
             {
@@ -3030,6 +3088,10 @@ namespace ReSet.Core.Services
         {
             public List<string> Columns { get; } = new();
 
+            /// <inheritdoc cref="TopLevelPredicateCollector.JoinKeyReferences"/>
+            public List<(string? LeftQualifier, string? LeftColumn, string? RightQualifier, string? RightColumn)>
+                JoinKeyReferences { get; } = new();
+
             public override void Visit(QualifiedJoin node)
             {
                 if (node.SearchCondition == null) return;
@@ -3044,7 +3106,73 @@ namespace ReSet.Core.Services
                         Columns.Add(column);
                     }
                 }
+
+                JoinKeyReferences.AddRange(collector.JoinKeyReferences);
             }
+        }
+
+        /// <summary>
+        /// 이 층 <c>FROM</c>의 별칭 → 테이블. 파생 테이블·스칼라 하위질의 안쪽은
+        /// 내려가지 않는다 - 그 층의 별칭은 이 문장의 조인 상대가 아니다.
+        /// </summary>
+        private sealed class AliasTableCollector : TSqlFragmentVisitor
+        {
+            public Dictionary<string, string> AliasToTable { get; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            public override void Visit(NamedTableReference node)
+            {
+                var table = node.SchemaObject?.BaseIdentifier?.Value;
+                if (string.IsNullOrWhiteSpace(table)) return;
+
+                var alias = node.Alias?.Value;
+                AliasToTable[string.IsNullOrWhiteSpace(alias) ? table! : alias!] = table!;
+            }
+
+            public override void ExplicitVisit(QueryDerivedTable node) { }
+
+            public override void ExplicitVisit(ScalarSubquery node) { }
+        }
+
+        /// <summary>
+        /// 대상이 <c>FROM</c>의 별칭이면 그 물리 테이블 이름으로 푼다.
+        /// 근거는 <see cref="DmlScopeFact.ResolvedTargetTable"/> 참고.
+        /// </summary>
+        private static string ResolveTargetTableName(FromClause? from, string target)
+        {
+            var bare = target.Split('.').Last().Trim('[', ']');
+            if (from == null) return bare;
+
+            var aliases = new AliasTableCollector();
+            from.Accept(aliases);
+
+            return aliases.AliasToTable.TryGetValue(bare, out var table) ? table : bare;
+        }
+
+        /// <summary>
+        /// <see cref="DmlScopeFact.JoinPairs"/>를 만든다. 재료는 <c>ON</c>과
+        /// <c>WHERE</c>(옛 스타일 콤마 조인) 양쪽이다 - 코퍼스 실측(2026-09-05)에서
+        /// 원본 조인 짝 124 중 <b>85 가 WHERE</b>에 있고, 조인 등식을 가진 문장 38 중
+        /// <b>26 은 WHERE 에만</b> 있다. <c>ON</c>만 보면 그 26 문장에서 이행의 정상
+        /// 조인이 전부 「이행이 더한 것」으로 보인다.
+        /// </summary>
+        private static IReadOnlyList<string> BuildJoinPairs(
+            FromClause? from,
+            IReadOnlyList<(string? LeftQualifier, string? LeftColumn, string? RightQualifier, string? RightColumn)> references)
+        {
+            if (from == null || references.Count == 0) return Array.Empty<string>();
+
+            var aliases = new AliasTableCollector();
+            from.Accept(aliases);
+
+            var pairs = new List<string>();
+            foreach (var (lq, lc, rq, rc) in references)
+            {
+                JoinPairNormalizer.AddDistinct(
+                    pairs, JoinPairNormalizer.Normalize(aliases.AliasToTable, lq, lc, rq, rc));
+            }
+
+            return pairs;
         }
     }
 }

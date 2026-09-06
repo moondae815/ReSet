@@ -130,6 +130,57 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 프로시저별 원본 DDL 원문. 조인 짝 대조(N5)가 <b>검사 때</b> 여기서 재파생한다.
+        ///
+        /// [왜 명세서가 아니라 DDL 인가] 조인 짝은 명세서에 실린 적이 없다. 실을 수도
+        /// 있었으나 <b>재생성이 재료를 지운 전례</b>가 셋 있어 기각했다 - 이 값의 출처인
+        /// <c>raw/metadata.json</c>의 <c>DdlText</c>는 불변 입력이라 지워지지 않는다.
+        /// 결정은 <c>docs/audit-reports/2026-09-05-축B-잔여결함-분류.md</c> §10.
+        ///
+        /// [<see cref="CollectParameters"/>와 같은 키잉·같은 모호성 규칙] 맨이름이 서로
+        /// 다른 한정명 둘을 가리키면 그 맨이름을 통째로 뺀다. 사본을 두면 한쪽만
+        /// 고쳐져 조회가 조용히 갈린다.
+        /// </summary>
+        public static IReadOnlyDictionary<string, string> CollectDdl(
+            IReadOnlyList<SpDefinition>? definitions)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (definitions == null) return map;
+
+            var bareNameOwners = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var ambiguousBareNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var def in definitions)
+            {
+                if (def?.Name == null) continue;
+                if (string.IsNullOrWhiteSpace(def.DdlText)) continue;
+
+                var qualifiedName = $"{def.Schema}.{def.Name}";
+                map[qualifiedName] = def.DdlText;
+
+                if (ambiguousBareNames.Contains(def.Name)) continue;
+
+                if (!bareNameOwners.TryGetValue(def.Name, out var owners))
+                {
+                    owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    bareNameOwners[def.Name] = owners;
+                }
+                owners.Add(qualifiedName);
+
+                if (owners.Count > 1)
+                {
+                    ambiguousBareNames.Add(def.Name);
+                    map.Remove(def.Name);
+                    continue;
+                }
+
+                map[def.Name] = def.DdlText;
+            }
+
+            return map;
+        }
+
+        /// <summary>
         /// 프로시저 자신이 호출하는 다른 코드 객체(프로시저·함수)의 그래프.
         /// <see cref="PromptContextScope.NarrowSpecs"/>의 1-hop 이웃 판정 재료다.
         ///
