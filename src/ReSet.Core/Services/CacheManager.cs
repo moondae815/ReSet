@@ -233,18 +233,22 @@ namespace ReSet.Core.Services
         //     (AggregateAssignmentExtractorTests.Extract_OverTheCorpus_
         //     ShouldCollectExactlyTheseRows)이 10행 중 2행을 "기본값대입" 갈래로
         //     못박는다.
-        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다. 집계 행은 인자를 생략하던
-        //     고정 문자열 `SELECT @v = SUM(...)`에서 `fact.Expression`이 실은 실제
-        //     인자(예: `SELECT @v_intTotal = ISNULL(SUM(A.CLTotal), 0)`)로 바뀌고,
-        //     비집계 행은 컬럼 이름만 싣던 것에서 분기식 축자(예: 위 IIF 전체)로
-        //     바뀐다 - 레코드의 필드 이름도 `Column`에서 `Expression`으로 바뀌었다.
-        //     기존 행이 전부 바뀌는 회차라 옛 엔트리와 새 엔트리를 섞으면 같은 표
-        //     안에서 표기가 갈린다.
+        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다 - 다만 갈래마다 무게가 다르다.
+        //     집계 쪽은 **기존 8행 전부**가 바뀐다 - 인자를 생략한 고정 문자열
+        //     `SELECT @v = {Aggregate}(...)`에서 `fact.Expression`이 실은 실제 인자
+        //     (예: `SELECT @v_intTotal = MIN(YMD)`)로 바뀐다(레코드 필드는 그대로
+        //     `Expression`이었다 - 값만 고정 문자열이었다). 비집계 쪽은 정반대다 -
+        //     레코드 필드 이름이 `Column`에서 `Expression`으로 바뀌었을 뿐 **맨 컬럼
+        //     대입인 기존 36행의 표기 값은 바이트 단위로 그대로다**(컬럼 참조의
+        //     원문이 곧 컬럼 이름이므로). 새 표기(분기식 축자, 예: 위 IIF 전체)를
+        //     싣는 것은 이 회차가 새로 담기 시작한 7행뿐이다. 옛 엔트리와 새 엔트리를
+        //     섞으면 집계 표에서는 표기가 갈리고, 비집계 표에서는 새 7행의 유무 자체가
+        //     갈린다.
         //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면: 수수료율 분기
         //     (UF_GET_COMM4CLIENT4PARTIALCANCEL:43류)가 산문에도 표에도 없는 명세서,
         //     대사 집계식(UP_UTIL_SETTLE_PROC_ETC:116·130류)이 어디에도 없는 명세서,
-        //     그리고 살아남은 옛 행마저 대상 칸이 `SELECT @v = SUM(...)`처럼 인자를
-        //     생략한 낡은 표기 그대로인 명세서가 그대로 배송된다.
+        //     그리고 살아남은 옛 집계 행마저 대상 칸이 `SELECT @v = SUM(...)`처럼
+        //     인자를 생략한 낡은 표기 그대로인 명세서가 그대로 배송된다.
         //     번호 충돌 확인: main·origin/main·integration/settlement-policy·
         //     feat/settlement-policy-redesign 전부 18이고 19는 비어 있음을 확인했다.
         private const int CurrentCacheFormatVersion = 19;
