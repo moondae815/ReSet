@@ -66,6 +66,63 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void 사전에_있는_값_여럿을_쉼표로_나열해도_전부_통과한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "impaymobile, payco") },
+                Codebook("impaymobile", "payco"));
+
+            Assert.Empty(defects);
+        }
+
+        // T9 프롬프트가 코드값을 백틱으로 감싸 verbatim 을 요구한다. 그 표기 자체를
+        // 오탐으로 고발하면 교정 재호출 피드백이 모델에게 실행 불가능한 지시가 된다.
+        [Fact]
+        public void 백틱으로_감싼_코드값도_사전에_있으면_통과한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "`impaymobile`") },
+                Codebook("impaymobile"));
+
+            Assert.Empty(defects);
+        }
+
+        [Fact]
+        public void 큰따옴표로_감싼_코드값도_사전에_있으면_통과한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "\"impaymobile\"") },
+                Codebook("impaymobile"));
+
+            Assert.Empty(defects);
+        }
+
+        // 벗기기가 검사를 무력화하지 않았는지 - 감싸도 사전에 없으면 여전히 고발돼야 한다.
+        [Fact]
+        public void 백틱으로_감싸도_사전에_없으면_여전히_고발한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "`지어낸값`") },
+                Codebook("impaymobile"));
+
+            var defect = Assert.Single(defects);
+            Assert.Equal(PolicyDefectType.CodeValueNotInCodebook, defect.Type);
+        }
+
+        // 한쪽에만 감싼 문자가 있으면 모델이 형식을 잘못 쓴 것이다. 조용히 벗겨 주면
+        // 잘못된 형태가 통과해 버리므로, 짝이 맞을 때만 벗겨야 한다.
+        [Fact]
+        public void 한쪽만_감싸진_코드값은_벗기지_않고_고발한다()
+        {
+            var defects = PolicyDocumentChecks.CheckCodeValues(
+                new[] { Rule("S1-01", "dbo.UP_A · ## 개요 > \"x\"", "`impaymobile") },
+                Codebook("impaymobile"));
+
+            var defect = Assert.Single(defects);
+            Assert.Equal(PolicyDefectType.CodeValueNotInCodebook, defect.Type);
+        }
+
+        [Fact]
         public void 명부의_SP가_모두_인용되면_통과한다()
         {
             var defects = PolicyDocumentChecks.CheckProcedureCitationCoverage(

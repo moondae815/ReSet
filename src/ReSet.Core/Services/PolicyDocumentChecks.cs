@@ -82,6 +82,30 @@ namespace ReSet.Core.Services
         private static IEnumerable<string> SplitCodeValues(string? cell) =>
             (cell ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(Unwrap)
                 .Where(v => v.Length > 0 && v != PolicySectionContract.NoCodeValue);
+
+        private static readonly char[] WrapChars = { '`', '\'', '"' };
+
+        /// <summary>
+        /// 값을 감싼 백틱·따옴표 한 겹을 벗긴다.
+        ///
+        /// [왜 벗기는가] T9 프롬프트가 코드값을 백틱으로 감싸 verbatim 을 요구한다.
+        /// 그 표기 자체를 오탐으로 고발하면 교정 재호출 피드백이 모델에게 실행
+        /// 불가능한 지시가 된다.
+        ///
+        /// [왜 짝이 맞을 때만인가] 앞뒤가 같은 문자로 맞아야 감싼 것이다. 한쪽에만
+        /// 있으면 모델이 형식을 잘못 쓴 것이므로 조용히 고쳐 주지 않고 그대로 둬
+        /// 사전 대조가 잡게 한다. 값 안쪽의 문자는 건드리지 않는다 - 바깥 한 겹뿐이다.
+        /// </summary>
+        private static string Unwrap(string value)
+        {
+            if (value.Length >= 2 && value[0] == value[^1] && WrapChars.Contains(value[0]))
+            {
+                return value[1..^1].Trim();
+            }
+
+            return value;
+        }
     }
 }
