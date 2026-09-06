@@ -147,17 +147,12 @@ namespace ReSet.Cli
                 {
                     cliArgs.GeneratePolicy = true;
                 }
-                else if (arg.Equals("--policy-sps", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                else if (arg.Equals("--policy-sps", StringComparison.OrdinalIgnoreCase))
                 {
-                    var sps = args[++i].Split(',');
-                    foreach (var sp in sps)
-                    {
-                        var trimmed = sp.Trim();
-                        if (!string.IsNullOrEmpty(trimmed))
-                        {
-                            cliArgs.PolicyProcedures.Add(trimmed);
-                        }
-                    }
+                    // 조용히 무시하지 않는다 - 무시하면 사용자는 자기가 지정한 SP만
+                    // 들어간 줄 안다. 대상은 이제 명부 파일이 정한다.
+                    throw new ArgumentException(
+                        "--policy-sps는 폐기되었습니다. 정책 도출 대상과 순서는 output/settlement-process.md가 정합니다.");
                 }
                 else if (arg.Equals("--extract-snapshot", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 {
@@ -728,7 +723,10 @@ namespace ReSet.Cli
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
                 dbService,
                 recursiveOrchestrator);
-            ISettlementPolicyService policyService = new SettlementPolicyService(dbService, aiService);
+            ISettlementPolicyService policyService = new SettlementPolicyService(aiService);
+            ICodeTableProfiler? codeTableProfiler = string.IsNullOrEmpty(connectionString)
+                ? null
+                : new CodeTableProfiler(dbService, connectionString);
 
             string instructions = "기본 마크다운 규칙을 적용하여 분석해 주세요.";
             if (File.Exists(instructionsFile))
@@ -762,61 +760,39 @@ namespace ReSet.Cli
             {
                 if (cliArgs.GeneratePolicy)
                 {
-                    AnsiConsole.MarkupLine("[bold blue]=== 정산 정책 문서 자동 도출 배치 프로세스 시작 ===[/]");
-                    var policyTargetSps = new List<string>();
-                    if (cliArgs.PolicyProcedures.Count > 0)
-                    {
-                        var resolution = TargetProcedureResolver.Resolve(cliArgs.PolicyProcedures, spNames);
-                        if (!ReportUnmatchedTargets(resolution.Unmatched)) return;
-                        policyTargetSps.AddRange(resolution.Matched);
-                    }
-                    else
-                    {
-                        policyTargetSps.AddRange(spNames);
-                    }
+                    AnsiConsole.MarkupLine("[bold blue]=== 정산 정책 문서 도출 시작 ===[/]");
 
-                    if (policyTargetSps.Count == 0)
-                    {
-                        AnsiConsole.MarkupLine("[yellow]정책 분석 대상 Stored Procedure가 없습니다. 종료합니다.[/]");
-                        return;
-                    }
-
-                    AnsiConsole.MarkupLine($"[bold blue]총 {policyTargetSps.Count}개의 Stored Procedure에 대해 정산 정책 분석 시작...[/]");
-                    
                     try
                     {
-                        string? rulebook = null;
+                        PolicyDerivationOutcome? outcome = null;
                         await AnsiConsole.Status()
                             .StartAsync("정산 정책 문서 생성 중...", async ctx =>
                             {
-                                rulebook = await policyService.GenerateSettlementPolicyRulebookAsync(connectionString, policyTargetSps, maxDepth, globalCts.Token);
+                                outcome = await policyService.GenerateAsync(
+                                    outputDir, codeTableProfiler, actorEffort, globalCts.Token);
                             });
 
-                        if (string.IsNullOrEmpty(rulebook))
+                        if (outcome is not null)
                         {
-                            throw new Exception("정산 정책 문서 생성 실패");
+                            AnsiConsole.MarkupLine(
+                                $"[green]성공: 정산 정책 문서 생성 완료![/] {Markup.Escape(outcome.PolicyPath)}");
+                            AnsiConsole.MarkupLine(
+                                $"[grey]코드값 번역 {outcome.CodeValuesTranslated}건 · 결함 {outcome.Defects.Count}건[/]");
                         }
-
-                        if (!Directory.Exists(outputDir))
+                    }
+                    catch (PolicyRosterBlockedException ex)
+                    {
+                        AnsiConsole.MarkupLine("[yellow]정산 프로세스 명부가 준비되지 않아 중단했습니다.[/]");
+                        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(ex.RosterPath)}[/]");
+                        foreach (var defect in ex.Defects)
                         {
-                            Directory.CreateDirectory(outputDir);
+                            AnsiConsole.MarkupLine($"  [grey]- {Markup.Escape(defect.Message)}[/]");
                         }
-
-                        var rulebookName = string.IsNullOrEmpty(cliArgs.JobName) ? "Settlement_Policy_Rulebook.md" : $"{cliArgs.JobName}_Settlement_Policy_Rulebook.md";
-                        var rulebookPath = Path.Combine(outputDir, rulebookName);
-
-                        // 이 문서는 SettlementPolicyService가 AI 결과를 그대로 반환한 것이며
-                        // L1도 L2도 거치지 않는다. 검증 파이프라인 산출물과 같은 형식의
-                        // 헤더를 쓰되, 검증되지 않았다는 사실을 명시한다.
-                        await File.WriteAllTextAsync(
-                            rulebookPath,
-                            VerificationDocumentFormatter.FormatUnverifiedDocument(
-                                rulebook, null, provider, modelName, actorEffort, DateTime.Now));
-                        AnsiConsole.MarkupLine($"[green]성공: 정산 정책 문서 생성 완료![/] {Markup.Escape(rulebookPath)}");
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        AnsiConsole.MarkupLine($"[red]에러: 정산 정책 문서 도출 실패:[/] {Markup.Escape(ex.Message)}");
+                        AnsiConsole.MarkupLine(
+                            $"[red]에러: 정산 정책 문서 도출 실패:[/] {Markup.Escape(ex.Message)}");
                     }
                     return;
                 }
@@ -1715,140 +1691,81 @@ namespace ReSet.Cli
                     }
                     else if (selectedMenu.StartsWith("4"))
                     {
-                        var remainingFiles = new List<string>(spNames);
-                        var selectedFiles = new List<string>();
-                        var isCompleted = false;
-                        var isCancelled = false;
-
-                        // 순차적 단일 선택 루프
-                        while (!isCompleted && !isCancelled)
+                        var rosterPath = Path.Combine(outputDir, SettlementPolicyService.RosterFileName);
+                        if (File.Exists(rosterPath))
                         {
-                            AnsiConsole.Clear();
-                            AnsiConsole.Write(new FigletText("ReSet Policy").Color(Color.Green));
-                            AnsiConsole.MarkupLine("[bold green]=== 정산 정책 문서 도출 대상 선택 ===[/]");
-                            AnsiConsole.WriteLine();
-
-                            if (selectedFiles.Count > 0)
+                            var roster = SettlementProcessRosterParser.Parse(
+                                await File.ReadAllTextAsync(rosterPath));
+                            AnsiConsole.Write(new Panel(new Markup(
+                                $"[bold]명부:[/] {Markup.Escape(rosterPath)}\n"
+                                + $"단계 {roster.Stages.Count}개 · 프로시저 {roster.AllStagedProcedures().Count()}개 · 제외 {roster.Excluded.Count}개"))
                             {
-                                var sequenceStr = string.Join(" [bold green], [/] ", selectedFiles.Select(f => $"[yellow]{Markup.Escape(f)}[/]"));
-                                AnsiConsole.Write(new Panel(new Markup(sequenceStr))
-                                {
-                                    Header = new PanelHeader(" [bold cyan]선택된 분석 대상 SP 목록[/] "),
-                                    Border = BoxBorder.Rounded
-                                });
-                                AnsiConsole.WriteLine();
-                            }
+                                Border = BoxBorder.Rounded,
+                                Header = new PanelHeader(" 정산 프로세스 명부 "),
+                            });
 
-                            var choices = new List<string>();
-                            var completeOption = "[-- 선택 완료 및 정책 문서 생성 --]";
-                            var cancelOption = "[-- 메인 메뉴로 돌아가기 --]";
-
-                            if (selectedFiles.Count > 0)
+                            if (!AnsiConsole.Confirm("이 명부로 정책 문서를 생성할까요?", true))
                             {
-                                choices.Add(completeOption);
-                            }
-                            choices.Add(cancelOption);
-                            choices.AddRange(remainingFiles);
-
-                            var selectedChoice = AnsiConsole.Prompt(
-                                new SelectionPrompt<string>()
-                                    .Title($"[green]분석 대상 SP #{selectedFiles.Count + 1}[/]를 선택하거나 검색하세요:")
-                                    .PageSize(12)
-                                    .MoreChoicesText("[grey](더 많은 목록은 방향키를 누르세요)[/]")
-                                    .UseConverter(x => Markup.Escape(x))
-                                    .AddChoices(choices)
-                                    .EnableSearch()
-                            );
-
-                            if (selectedChoice == cancelOption)
-                            {
-                                isCancelled = true;
-                            }
-                            else if (selectedChoice == completeOption)
-                            {
-                                isCompleted = true;
-                            }
-                            else
-                            {
-                                selectedFiles.Add(selectedChoice);
-                                remainingFiles.Remove(selectedChoice);
-
-                                if (remainingFiles.Count == 0)
-                                {
-                                    isCompleted = true;
-                                }
+                                continue;
                             }
                         }
-
-                        if (isCancelled || selectedFiles.Count == 0)
+                        else
                         {
-                            continue;
+                            AnsiConsole.MarkupLine(
+                                "[yellow]정산 프로세스 명부가 없습니다. 초안을 만들고 안내합니다.[/]");
                         }
-
-                        var jobName = AnsiConsole.Prompt(
-                            new TextPrompt<string>("생성할 정산 정책서의 작업(Job) 이름을 입력하세요:")
-                                .DefaultValue("Consolidated_Settlement_Policy")
-                        );
 
                         using var activeCts = new CancellationTokenSource();
                         _currentCts = activeCts;
 
                         try
                         {
-                            string? rulebook = null;
+                            PolicyDerivationOutcome? outcome = null;
                             await AnsiConsole.Status()
                                 .StartAsync("정산 정책 문서 생성 중...", async ctx =>
                                 {
-                                    rulebook = await policyService.GenerateSettlementPolicyRulebookAsync(connectionString, selectedFiles, maxDepth, activeCts.Token);
+                                    outcome = await policyService.GenerateAsync(
+                                        outputDir, codeTableProfiler, actorEffort, activeCts.Token);
                                 });
 
-                            if (string.IsNullOrEmpty(rulebook))
+                            if (outcome is not null)
                             {
-                                AnsiConsole.MarkupLine("[red]정산 정책 문서 생성에 실패했습니다.[/]");
-                                continue;
+                                AnsiConsole.Write(new Panel(new Markup(
+                                    $"[green]정산 정책 문서가 생성되었습니다![/]\n"
+                                    + $"[bold]저장 경로:[/] {Markup.Escape(outcome.PolicyPath)}\n"
+                                    + $"[bold]코드값 사전:[/] {Markup.Escape(outcome.CodebookPath)}\n"
+                                    + $"코드값 번역 {outcome.CodeValuesTranslated}건 · 의미 미상 {outcome.CodeValuesUnmatched}건 · 결함 {outcome.Defects.Count}건"))
+                                {
+                                    Border = BoxBorder.Rounded,
+                                    Header = new PanelHeader(" 정책 분석 완료 "),
+                                });
                             }
-
-                            if (!Directory.Exists(outputDir))
+                        }
+                        catch (PolicyRosterBlockedException ex)
+                        {
+                            AnsiConsole.MarkupLine("\n[yellow]정산 프로세스 명부가 준비되지 않아 중단했습니다.[/]");
+                            AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(ex.RosterPath)}을 열어 다음을 고친 뒤 다시 실행하십시오:[/]");
+                            foreach (var defect in ex.Defects)
                             {
-                                Directory.CreateDirectory(outputDir);
+                                AnsiConsole.MarkupLine($"  [grey]- {Markup.Escape(defect.Message)}[/]");
                             }
-
-                            var rulebookName = $"{jobName}_Settlement_Policy_Rulebook.md";
-                            var rulebookPath = Path.Combine(outputDir, rulebookName);
-
-                            // 이 문서는 SettlementPolicyService가 AI 결과를 그대로 반환한 것이며
-                            // L1도 L2도 거치지 않는다. 검증 파이프라인 산출물과 같은 형식의
-                            // 헤더를 쓰되, 검증되지 않았다는 사실을 명시한다.
-                            await File.WriteAllTextAsync(
-                                rulebookPath,
-                                VerificationDocumentFormatter.FormatUnverifiedDocument(
-                                    rulebook, null, provider, modelName, actorEffort, DateTime.Now));
-                            AnsiConsole.Write(new Panel(new Markup($"[green]정산 정책 문서가 성공적으로 생성되었습니다![/]\n[bold]저장 경로:[/] {Markup.Escape(rulebookPath)}"))
-                            {
-                                Border = BoxBorder.Rounded,
-                                Header = new PanelHeader($" {jobName} 정책 분석 완료 ")
-                            });
-
-                            AnsiConsole.WriteLine();
-                            AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 메인 메뉴로 돌아갑니다...[/]");
-                            Console.ReadKey(true);
                         }
                         catch (OperationCanceledException)
                         {
-                            AnsiConsole.MarkupLine("\n[yellow]정책 문서 도출 작업이 중단되었습니다. 메인 메뉴로 돌아갑니다.[/]");
-                            AnsiConsole.WriteLine();
-                            Console.ReadKey(true);
+                            AnsiConsole.MarkupLine("\n[yellow]정책 문서 도출이 중단되었습니다. 메인 메뉴로 돌아갑니다.[/]");
                         }
                         catch (Exception ex)
                         {
                             AnsiConsole.MarkupLine($"[red]에러:[/] 정책 문서 도출 중 오류 발생: {Markup.Escape(ex.Message)}");
-                            AnsiConsole.WriteLine();
-                            Console.ReadKey(true);
                         }
                         finally
                         {
                             _currentCts = globalCts;
                         }
+
+                        AnsiConsole.WriteLine();
+                        AnsiConsole.MarkupLine("[yellow]아무 키나 누르면 메인 메뉴로 돌아갑니다...[/]");
+                        Console.ReadKey(true);
                     }
                     else if (selectedMenu.StartsWith("5"))
                     {

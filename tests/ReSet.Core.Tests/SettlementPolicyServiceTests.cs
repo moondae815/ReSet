@@ -48,13 +48,20 @@ namespace ReSet.Core.Tests
         private static IAiService AiWriting(params string[] stageBodies)
         {
             var ai = Substitute.For<IAiService>();
-            var call = 0;
             ai.GeneratePolicyStageAsync(
                     Arg.Any<int>(), Arg.Any<string>(),
                     Arg.Any<IReadOnlyList<(string, string)>>(), Arg.Any<IReadOnlyList<CodebookEntry>>(),
                     Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-                .Returns(_ => Task.FromResult(
-                    new AiResult { Content = stageBodies[Math.Min(call++, stageBodies.Length - 1)] }));
+                .Returns(call =>
+                {
+                    // stageNumber(첫 인자)로 고른다 - call 순서로 고르면 교정 재호출이
+                    // 끼어들 때 다른 단계의 본문이 섞여 들어간다(2026-09-06 실측:
+                    // 호출 순번 기반 스텁이 단계 1의 재호출에서 단계 2의 본문을
+                    // 돌려줘 최종 문서에 "## 1." 헤딩이 아예 사라지는 결함을 놓쳤다).
+                    var stageNumber = call.ArgAt<int>(0);
+                    var index = Math.Min(stageNumber - 1, stageBodies.Length - 1);
+                    return Task.FromResult(new AiResult { Content = stageBodies[index] });
+                });
             ai.GeneratePolicyOverviewAsync(
                     Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(),
                     Arg.Any<string?>(), Arg.Any<CancellationToken>())
@@ -135,6 +142,32 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("## 1. 요율 적재", document);
             Assert.Contains("## 2. 원장 적재", document);
+        }
+
+        /// <summary>
+        /// 위 테스트("목차는...")는 부분 문자열 일치라 "결함 메시지 안의 헤딩 인용"으로도
+        /// 조용히 통과할 수 있다(실제로 그 함정을 한 번 밟았다 - StageMissing 배너 문구가
+        /// "## 1. 요율 적재"를 문자 그대로 담고 있어 헤딩이 진짜 절로는 하나도 없는데도
+        /// Assert.Contains가 통과했다). 이 테스트는 그 절이 실제 규칙 표를 담은 자리로
+        /// 파싱되는지(즉 그 단계의 규칙이 배너가 아니라 본문에 있는지) 직접 잰다.
+        /// </summary>
+        [Fact]
+        public async Task 각_단계의_규칙_표는_실제로_그_단계_헤딩_아래에서_파싱된다()
+        {
+            WriteRoster();
+            var service = new SettlementPolicyService(
+                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+
+            var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
+            var document = File.ReadAllText(outcome.PolicyPath);
+
+            var stageHeadings = new[] { "## 1. 요율 적재", "## 2. 원장 적재" };
+            var rules = PolicyDocumentParser.Parse(document, stageHeadings);
+
+            Assert.Contains(rules, r => r.StageHeading == "## 1. 요율 적재" && r.Id == "S1-01");
+            Assert.Contains(rules, r => r.StageHeading == "## 2. 원장 적재" && r.Id == "S2-01");
+            Assert.DoesNotContain(outcome.Defects, d => d.Type == PolicyDefectType.StageMissing);
         }
 
         /// <summary>

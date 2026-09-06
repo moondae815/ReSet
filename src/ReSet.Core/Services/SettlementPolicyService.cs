@@ -148,8 +148,17 @@ namespace ReSet.Core.Services
                         stage.Title, stageChars, StageSpecCharWarningThreshold);
                 }
 
+                // 이 단계 하나만의 헤딩만 넘긴다 - 초안은 자기 단계의 H2 하나만 담고
+                // 있으므로, 전체 stageHeadings를 넘기면 아직 쓰이지 않은 형제 단계의
+                // 헤딩이 매번 "없다"고 잡혀(StageMissing) 모든 단계가 항상 교정
+                // 재호출을 타게 된다 - 그 재호출이 반환하는 내용까지 같은 잣대로
+                // 재검증되어 결함 수가 같을 때 재호출 쪽을 택하면, 다른 단계의
+                // 본문이 이 단계의 자리를 차지하는 사고로 이어질 수 있다
+                // (2026-09-06 테스트로 재현).
+                // 단계 완전성은 조립된 전체 문서에서 한 번(6단계)만 확인하면 충분하다.
                 var body = await GenerateStageWithOneRepairAsync(
-                    stageNumber, stage, stageSources, stageCodeValues, stageHeadings, specsByLabel,
+                    stageNumber, stage, stageSources, stageCodeValues,
+                    new[] { stageHeadings[i] }, specsByLabel,
                     effort, cancellationToken);
 
                 stageBodies.Add(body);

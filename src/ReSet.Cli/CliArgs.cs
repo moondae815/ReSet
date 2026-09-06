@@ -11,7 +11,6 @@ namespace ReSet.Cli
         public string? Engine { get; set; }
         public string? JobName { get; set; }
         public bool GeneratePolicy { get; set; }
-        public List<string> PolicyProcedures { get; set; } = new();
         public string? ExtractSnapshotPath { get; set; }
 
         /// <summary>--coverage-map의 대상. Job 이름이거나 객체 이름이다.
