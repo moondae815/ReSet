@@ -2114,6 +2114,7 @@ git commit -m "feat: 코드값 사전의 우변을 크기로 고른 테이블에
   - `public static bool EvidenceQuoteMatcher.QuoteExistsIn(string sectionBody, string quote)`
   - `public const string PolicySectionContract.TableHeader = "| ID | 업무 규칙 | 근거 | 코드값 |"`
   - `public static string PolicySectionContract.IdPrefixFor(int stageNumber)` → `"S{n}"`
+  - `public static int PolicySectionContract.EffectiveStageNumber(string heading, int stageIndex)` — 제목에 번호가 있으면 그것을, 없으면 `stageIndex + 1`. **단계 번호를 유도하는 유일한 자리다.**
   - `public static bool PolicySectionContract.TryParseEvidence(string? raw, out PolicyEvidenceReference reference)`
   - `public sealed record PolicyEvidenceReference(string Label, string Heading, string Quote)`
   - `public sealed record PolicyRule(string StageHeading, int StageNumber, string Id, string Text, string EvidenceRaw, string CodeValue, int LineNumber)`
@@ -3399,6 +3400,7 @@ Expected: `GenerateSettlementPolicyRulebookAsync`를 부르던 자리
   - `public sealed class PolicyRosterBlockedException : Exception` — `IReadOnlyList<RosterDefect> Defects`, `string RosterPath`
   - `public static string PolicyReportBanner.Build(IReadOnlyList<PolicyDefect> defects, int translated, int unmatched, int skippedShort, bool profilingRan)`
   - `public const int SettlementPolicyService.StageSpecCharWarningThreshold = 120_000`
+  - **단계 번호는 반드시 `PolicySectionContract.EffectiveStageNumber(stage.Title, i)` 로만 구하라.** 이 폴백을 손수 다시 쓰면(`... is var n and > 0 ? n : i + 1`) 파서·검증기와 갈라진다 — 실제로 그 갈라짐이 있었고 번호 없는 단계 제목에서 옳은 `S1-01` 이 `S0-` 를 기대받아 오탐으로 고발됐다(2026-09-06, T7 리뷰).
   - `Task<PolicyDerivationOutcome> ISettlementPolicyService.GenerateAsync(string outputRoot, ICodeTableProfiler? profiler, string? effort, CancellationToken cancellationToken = default)`
   - `public static string PolicyDocumentAssembler.Assemble(string overview, IReadOnlyList<string> stageBodies, SettlementCodebook codebook, SettlementProcessRoster roster)`
   - `public static string VerificationDocumentFormatter.FormatUnverifiedDocument(string body, IReadOnlyDictionary<string, int> sourceStatusCounts, string provider, string modelName, string? effort, DateTime timestamp)`
@@ -3923,7 +3925,7 @@ namespace ReSet.Core.Services
             for (var i = 0; i < roster.Stages.Count; i++)
             {
                 var stage = roster.Stages[i];
-                var stageNumber = PolicySectionContract.StageNumberOf(stage.Title) is var n and > 0 ? n : i + 1;
+                var stageNumber = PolicySectionContract.EffectiveStageNumber(stage.Title, i);
 
                 var stageSources = stage.Procedures
                     .Select(p => stagedSources.First(s =>
