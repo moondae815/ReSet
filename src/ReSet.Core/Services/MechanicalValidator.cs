@@ -8485,6 +8485,26 @@ namespace ReSet.Core.Services
         /// 코퍼스 실측에서 오탐 18 대 진짜 2 로 되돌려져 `7845ab36` 위에는 없다.
         /// 이 검사(Task 3)만 그 위에 혼자 선다 - <see cref="SpecLocalVariable"/>에
         /// `InitialValue`가 없는 것은 그 되돌림의 흔적이다.
+        ///
+        /// [단계당 재발화 - 리뷰 Minor, 2026-09-06] 이 검사는 <see cref="ValidateBatchStep"/>
+        /// 시그니처대로 **단계 하나마다** 판정한다. 명세서 소멸은 SP 하나에 벌어지는
+        /// 문서 수준 사건 1건인데, 그 SP 가 여러 단계·여러 Job 에 걸쳐 쓰이면 오류도
+        /// 그만큼 늘어난다. 실측(2026-09-06, `grep -l "이름" output/Jobs/*/agent/steps/*.md`):
+        /// `UP_UTIL_SETTLE_EXCEPTION_PROC`는 서로 다른 Job 18 개에, `UP_UTIL_SETTLE_PROC_ETC`는
+        /// 15 개에 걸쳐 각 1 단계씩 등장한다 - 표 소멸 1 건이 되돌림 피드백에 최대 18 개
+        /// 메시지로 실릴 수 있다는 뜻이다. 이 파일에서 단계를 넘어 SP 단위로 합쳐 세지
+        /// 않는다 - 검사 시그니처 자체가 단계 단위라 여기서 고칠 수 없다. **고치지 않고
+        /// 못박아 둔다** - 다음 사람이 "발화 수"를 그대로 "결함 수"로 읽지 않게 하기 위해서다.
+        ///
+        /// [이 검사가 못 보는 침묵 둘 - 리뷰 Minor, 2026-09-06] 위 XML 요약의 "그 침묵을
+        /// 발화로 바꾼다"는 표만 사라지고 파일은 파싱되는 경우 하나에 한정된다. 이 검사는
+        /// <c>namedFacts</c>(<see cref="ValidateBatchStep"/>:520-523의
+        /// <c>Where(nf =&gt; nf.Facts != null)</c>)를 받는데, 그 SP 항목이 애초에 없으면
+        /// 루프에 들어오지 않아 여전히 침묵한다. 항목이 없어지는 길은 둘이다 -
+        /// (1) Spec.md 자체가 없거나 비었을 때(<see cref="SpecStatementFactsExtractor.Extract"/>의
+        /// <c>IsNullOrWhiteSpace</c> 가지), (2) 그 추출기가 예외를 만나 `catch`로 SP 항목
+        /// 전체를 건너뛸 때. 둘 다 "재료 자체가 없으면 귀속할 수 없다"는 이 파일의 기존
+        /// 원칙과 일치하는 정당한 침묵이지만, 전량 보증으로 오독되면 안 된다.
         /// </summary>
         private static void CheckLocalVariableTableDidNotVanish(
             IReadOnlyList<(string Name, SpecStatementFacts Facts)> namedFacts,
@@ -8500,9 +8520,10 @@ namespace ReSet.Core.Services
                 result.Errors.Add(
                     $"{step.Code} 섹션의 레거시 `{bare}` 명세서에 지역 변수 기계 표가 없습니다. " +
                     "이 SP 는 원본에 지역 변수가 있어 그 표를 가져야 합니다 — 명세서가 재생성되면서 " +
-                    "표가 사라졌을 수 있습니다. 표가 없으면 타입·초기값을 보는 검사가 침묵하고, " +
-                    "그 침묵은 「통과」로 오독됩니다. 명세서를 다시 생성하거나, 이 SP 가 정말 " +
-                    "지역 변수를 갖지 않게 되었다면 `SpecsThatMustDeclareLocalVariables` 에서 빼십시오.");
+                    "표가 사라졌을 수 있습니다. 표가 없으면 선언 누락과 타입 표기를 보는 검사 " +
+                    "(CheckSpecLocalVariablesDeclared)가 침묵하고, 그 침묵은 「통과」로 오독됩니다. " +
+                    "명세서를 다시 생성하거나, 이 SP 가 정말 지역 변수를 갖지 않게 되었다면 " +
+                    "`SpecsThatMustDeclareLocalVariables` 에서 빼십시오.");
             }
         }
 
