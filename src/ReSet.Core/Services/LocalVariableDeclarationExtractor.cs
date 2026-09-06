@@ -139,8 +139,18 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// `SET @x = …`와 `SELECT @x = …` 양쪽을 본다. 한쪽만 보면 누산기가 상수로
-        /// 분류된다.
+        /// `SET @x = …`·`SELECT @x = …`·`FETCH … INTO @x` 셋 다 본다.
+        ///
+        /// [셋인 이유는 전부 실측이다] `SET`만 보면 `UP_UTIL_SETTLE_SUMMARY_EXTRA`의
+        /// `@v_strReqYMD`(`SELECT @v_strReqYMD = MIN(ReqYMD)` 하나뿐, `SET`은 0건)가
+        /// 상수로 샌다. 거기에 `SELECT`까지 봐도 `UP_UTIL_SETTLE_PROC_ETC`의
+        /// `@v_intCLTotal`·`@v_intCLComm`·`@v_intCLVT`(`MONEY = 0`로 선언, 대입은
+        /// 66·143행 `FETCH NEXT FROM Cur_SettlePost INTO …`뿐 - `SET`/`SELECT` 0건)가
+        /// 샌다. 코퍼스 14편에서 FETCH 갈래 하나가 29건 중 20건을 가른다.
+        ///
+        /// [이 셋이 지금 코퍼스를 덮는다는 뜻이지 전부라는 뜻이 아니다]
+        /// `EXEC @x = …`·대입형 `UPDATE … SET @x = …`는 아직 안 본다 - 현 코퍼스에
+        /// 없어서다(실측). 원본이 넓어지면 같은 방식으로 갈래를 늘려야 한다.
         /// </summary>
         private sealed class ReassignmentVisitor : TSqlFragmentVisitor
         {
@@ -156,6 +166,16 @@ namespace ReSet.Core.Services
             {
                 var name = node.Variable?.Name;
                 if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+            }
+
+            public override void Visit(FetchCursorStatement node)
+            {
+                if (node.IntoVariables == null) return;
+                foreach (var variable in node.IntoVariables)
+                {
+                    var name = variable?.Name;
+                    if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+                }
             }
         }
 

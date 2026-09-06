@@ -91,7 +91,13 @@ END";
         {
             // 부분 파스 결과가 기계 확정 표에 섞이면 표 전체의 신뢰가 무너진다
             // (SetAssignmentExtractor와 같은 정책).
-            var facts = LocalVariableDeclarationExtractor.Extract("CREATE PROCEDURE ((( AS");
+            //
+            // [픽스처가 부분 AST를 실제로 만들어야 한다] 앞서 쓰던
+            // "CREATE PROCEDURE ((( AS"는 오류도 1이지만 선언도 0이라, 에러 가드를
+            // 지워도 결과가 빈 목록이라 이 단언이 통과했다 - 이름만 정책을 주장하고
+            // 아무것도 잠그지 않는 진공 테스트였다. 아래 입력은 오류 1과 함께
+            // `@v_a`를 담은 부분 AST를 실제로 내므로, 가드를 지우면 이 단언이 깨진다.
+            var facts = LocalVariableDeclarationExtractor.Extract("DECLARE @v_a INT = 7; SELECT (((");
 
             Assert.Empty(facts);
         }
@@ -152,6 +158,32 @@ END";
         }
 
         [Fact]
+        public void ExtractConstants_ExcludesVariableReassignedByFetchInto()
+        {
+            // PROC_ETC 실물의 모양이다 - @v_intCLTotal 은 `SET`/`SELECT` 대입이 한 번도
+            // 없고 `FETCH NEXT ... INTO` 로만 값이 들어온다(실측: 29~31 행 선언,
+            // 66·143 행 FETCH). 이 갈래를 안 보면 누산기가 상수로 분류된다 - 이 클래스의
+            // 문서 블록이 애초에 지목한 실물 사례가 바로 그 FETCH 대상 변수다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_TEST
+AS
+BEGIN
+    DECLARE @v_intCLTotal MONEY = 0;
+    DECLARE @v_valIncVat DECIMAL(2,1) = 1.1;
+    DECLARE Cur_SettlePost CURSOR FOR SELECT CLTotal FROM dbo.T;
+    OPEN Cur_SettlePost;
+    FETCH NEXT FROM Cur_SettlePost INTO @v_intCLTotal;
+    CLOSE Cur_SettlePost;
+    DEALLOCATE Cur_SettlePost;
+END";
+
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants(ddl);
+
+            var fact = Assert.Single(facts);
+            Assert.Equal("@v_valIncVat", fact.Name);
+        }
+
+        [Fact]
         public void ExtractConstants_ExcludesProcedureParameters()
         {
             var facts = LocalVariableDeclarationExtractor.ExtractConstants(
@@ -163,7 +195,12 @@ END";
         [Fact]
         public void ExtractConstants_OnUnparsableDdl_IsEmptyNotPartial()
         {
-            var facts = LocalVariableDeclarationExtractor.ExtractConstants("CREATE PROCEDURE (((");
+            // 이름이 「빈 목록이지 부분 결과가 아니다」라고 주장하므로 픽스처도 그
+            // 구분을 실제로 시험해야 한다. "CREATE PROCEDURE ((("는 오류 1·선언 0이라
+            // 에러 가드를 지워도 통과하는 진공 입력이었다. 이 입력은 오류 1과 함께
+            // `@v_a`(초기값 7, 재대입 0)를 담은 부분 AST를 내므로, 가드가 없으면
+            // 상수 하나가 새어 나와 이 단언이 깨진다.
+            var facts = LocalVariableDeclarationExtractor.ExtractConstants("DECLARE @v_a INT = 7; SELECT (((");
 
             Assert.Empty(facts);
         }
